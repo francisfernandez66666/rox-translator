@@ -1,0 +1,18 @@
+#!/bin/bash
+DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$DIR"
+xattr -cr "$DIR" 2>/dev/null
+chmod +x "$DIR/翻译助手" 2>/dev/null
+
+"./翻译助手" &
+APP_PID=$!
+
+for i in $(seq 1 30); do
+    if curl -sf http://127.0.0.1:8000/api/health > /dev/null 2>&1; then
+        open "http://localhost:8000"
+        break
+    fi
+    sleep 1
+done
+
+wait $APP_PID 2>/dev/null
