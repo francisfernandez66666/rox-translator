@@ -55,6 +55,8 @@ class BaseSkill(ABC):
     def keywords(self) -> list[str]:
         """
         触发这个技能的关键词列表（小写）
+
+        用于路由匹配：用户输入中包含任一关键词时，该技能被触发。
         """
         ...
 
@@ -84,6 +86,15 @@ class BaseSkill(ABC):
     def can_handle(self, user_input: str) -> float:
         """
         判断这个技能能否处理用户输入，返回置信度 0.0~1.0
+
+        默认实现：如果用户输入包含任一关键词，返回 0.8 高置信度；
+        否则返回 0.0。子类可覆盖此方法实现更精细的匹配逻辑。
+
+        Args:
+            user_input: 用户的输入文本
+
+        Returns:
+            置信度分数（0.0 ~ 1.0）
         """
         text_lower = user_input.lower()
         for kw in self.keywords:
@@ -92,7 +103,12 @@ class BaseSkill(ABC):
         return 0.0
 
     def info(self) -> dict:
-        """返回技能的元信息"""
+        """
+        返回技能的元信息
+
+        Returns:
+            包含 name、description、keywords 的字典
+        """
         return {
             "name": self.name,
             "description": self.description,
@@ -104,6 +120,8 @@ class BaseSkill(ABC):
     def _save_file(self, content: str, name: str, ext: str = ".md", subdir: str = "") -> str:
         """
         保存文本内容到文件
+
+        封装了 services.file_service.save_text_file，子类无需关心文件保存细节。
 
         Args:
             content: 文件内容
@@ -120,6 +138,8 @@ class BaseSkill(ABC):
     def _save_docx(self, md_content: str, name: str, subdir: str = "") -> str:
         """
         Markdown 内容转 Word 文档并保存（三层保障：专业→简单→纯文本兜底）
+
+        封装了 services.file_service.save_docx，子类无需关心 Word 转换细节。
 
         Args:
             md_content: Markdown 格式内容

@@ -17,7 +17,7 @@ export const useChatStore = defineStore('chat', () => {
   let abortController: AbortController | null = null
 
   /** 选中的翻译模型 */
-  const selectedModel = ref(localStorage.getItem('translateModel') || 'THUDM/GLM-4-9B-0414')
+  const selectedModel = ref(localStorage.getItem('translateModel') || 'tencent/Hunyuan-MT-7B')
 
   function stopGeneration() {
     if (abortController) {

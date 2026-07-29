@@ -529,6 +529,16 @@ const OTHER_LANG_OPTIONS = ref<Record<string, { label: string; flag: string }>>(
   my:  { label: '缅甸语',   flag: '🇲🇲' },
   km:  { label: '柬埔寨语', flag: '🇰🇭' },
   lo:  { label: '老挝语',   flag: '🇱🇦' },
+  tl:  { label: '菲律宾语', flag: '🇵🇭' },
+  gu:  { label: '古吉拉特语', flag: '🇮🇳' },
+  ur:  { label: '乌尔都语', flag: '🇵🇰' },
+  te:  { label: '泰卢固语', flag: '🇮🇳' },
+  mr:  { label: '马拉地语', flag: '🇮🇳' },
+  bn:  { label: '孟加拉语', flag: '🇧🇩' },
+  ta:  { label: '泰米尔语', flag: '🇮🇳' },
+  bo:  { label: '藏语',     flag: '🇨🇳' },
+  ug:  { label: '维吾尔语', flag: '🇨🇳' },
+  yue: { label: '粤语',     flag: '🇨🇳' },
 })
 
 // ★ 扁平化的其他语言列表（供 v-for 遍历，响应式）

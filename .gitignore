@@ -5,3 +5,14 @@ build/
 __pycache__/
 .DS_Store
 .env
+# PyInstaller 构建产物
+*.spec
+*.pyz
+__pycache__/
+frontend/dist/
+backend/data/_uploads/
+backend/data/_output/
+*.egg-info/
+*.manifest
+*.spec.backup
+backend/.deps_installed
