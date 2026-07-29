@@ -31,7 +31,8 @@
             <label>翻译模型</label>
             <select v-model="currentModel" @change="onModelChange">
               <optgroup label="硅基流动 SiliconFlow">
-                <option value="THUDM/GLM-4-9B-0414">GLM-4-9B-0414 (推荐，快+强)</option>
+                <option value="tencent/Hunyuan-MT-7B">Hunyuan-MT-7B (推荐，33语专用)</option>
+                <option value="THUDM/GLM-4-9B-0414">GLM-4-9B-0414 (备用)</option>
                 <option value="Qwen/Qwen2.5-7B-Instruct">Qwen2.5-7B</option>
               </optgroup>
               <optgroup label="智谱 Zhipu">

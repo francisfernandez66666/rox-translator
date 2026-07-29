@@ -21,34 +21,53 @@ from pathlib import Path
 import numpy as np
 import requests
 
-# ==================== 在线模型 API 配置 ====================
-# ★ 模块级常量仅作默认值；实际调用时用 _get_online_config() 实时读取环境变量
-# ★ config.json 优先级高于环境变量
-ONLINE_API_BASE = os.getenv("ONLINE_API_BASE", "https://open.bigmodel.cn/api/paas/v4")
-ONLINE_API_KEY = os.getenv("ONLINE_API_KEY", "")
-ONLINE_MODEL = os.getenv("ONLINE_MODEL", "THUDM/GLM-4-9B-0414")
-ONLINE_TIMEOUT = int(os.getenv("ONLINE_TIMEOUT", "120"))
+# ====================================================================
+# 模型与 API 配置
+# 所有配置优先从环境变量读取，其次使用模块级默认值
+# ====================================================================
+ONLINE_API_BASE = os.getenv("SILICONFLOW_API_BASE", "https://api.siliconflow.cn/v1")  # SiliconFlow API 地址
+ONLINE_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")                                  # API 密钥（空=未配置）
+ONLINE_MODEL = os.getenv("ONLINE_MODEL", "tencent/Hunyuan-MT-7B")                      # 默认翻译模型
+ONLINE_TIMEOUT = int(os.getenv("ONLINE_TIMEOUT", "120"))                                # API 请求超时秒数
 
-# ★ 复查专用模型配置（独立于翻译模型，可单独配更强的模型）
-REVIEW_API_BASE = os.getenv("REVIEW_API_BASE", "")
-REVIEW_API_KEY = os.getenv("REVIEW_API_KEY", "")
-REVIEW_MODEL = os.getenv("REVIEW_MODEL", "")
-# ★ 复查开关：设为 false 可跳过复查阶段，加快翻译速度
-REVIEW_ENABLED = os.getenv("REVIEW_ENABLED", "true").lower() in ("true", "1", "yes")
+HUNYUAN_MT_MODEL = "tencent/Hunyuan-MT-7B"        # Hunyuan-MT 专用翻译模型（支持33语）
+HUNYUAN_FALLBACK_MODEL = "THUDM/GLM-4-9B-0414"    # 当目标语言不在Hunyuan支持范围内时的降级模型
 
-# ★ 代理配置（境外API需要，智谱国内直达无需代理）
-PROXY_URL = os.getenv("PROXY_URL", "")  # 例: http://127.0.0.1:7890
+# Hunyuan-MT 官方支持的33种语言代码集合
+# 超出此范围的语言会自动降级到 HUNYUAN_FALLBACK_MODEL
+HUNYUAN_MT_LANGS = {
+    "zh","en","fr","pt","es","ja","tr","ru","ar","ko",
+    "th","it","de","vi","ms","id","tl","hi","zh_hant",
+    "pl","cs","nl","km","my","fa","gu","ur","te","mr",
+    "he","bn","ta","uk","bo","kk","mn","ug","yue",
+}
 
-# ★ Embedding API 配置（智谱在线 embedding，替代本地 Ollama）
-EMBED_MODEL = "embedding-2"
+HUNYUAN_TEMP = 0.7                                          # Hunyuan-MT 模型的温度参数
+HUNYUAN_TOP_P = 0.6                                         # Hunyuan-MT 的 top_p 采样参数
+HUNYUAN_TOP_K = 20                                          # Hunyuan-MT 的 top_k 采样参数
+HUNYUAN_REPETITION_PENALTY = 1.05                            # Hunyuan-MT 的重复惩罚系数
+FALLBACK_TEMP = 0.1                                          # 降级模型的温度参数（更低=更确定性）
+
+PROXY_URL = os.getenv("PROXY_URL", "")                       # 代理地址（可选）
+
+EMBED_MODEL = "embedding-2"                                  # 智谱 embedding 模型名（仅智谱支持）
 
 def _load_config_json():
-    """加载 config.json（可执行文件同级 > 打包内置 > 环境变量）"""
+    """加载 config.json 配置文件。
+
+    搜索优先级：可执行文件同级目录 > PyInstaller 打包内置目录 > 环境变量。
+    仅在打包后的可执行文件中走前两条路径，开发环境下走项目根目录。
+
+    Returns:
+        dict: 配置文件内容，未找到则返回空字典
+    """
     search_paths = []
     if getattr(sys, 'frozen', False):
+        # PyInstaller 打包的可执行文件
         search_paths.append(Path(sys.executable).parent / "config.json")
         search_paths.append(Path(sys._MEIPASS) / "config.json")
     else:
+        # 开发环境：从项目根目录加载
         search_paths.append(Path(__file__).resolve().parent.parent.parent.parent / "config.json")
     for config_path in search_paths:
         try:
@@ -59,64 +78,76 @@ def _load_config_json():
             pass
     return {}
 
-def _is_zhipu_model(model: str) -> bool:
-    return model.startswith("glm-")
-
 def _get_embed_config():
-    """Embedding 专用配置，始终使用智谱 API（embedding-2 仅智谱支持）"""
+    """获取 Embedding 专用 API 配置。
+
+    注意：embedding-2 模型仅智谱 API 支持，因此始终指向智谱的 API 地址。
+    如果环境变量设置了 ONLINE_API_BASE，也会用该值覆盖 base_url。
+
+    Returns:
+        dict: 包含 base_url, api_key, timeout 的配置字典
+    """
     return {
         "base_url": os.getenv("ONLINE_API_BASE", "https://open.bigmodel.cn/api/paas/v4"),
-        "api_key": os.getenv("ONLINE_API_KEY", ONLINE_API_KEY),
+        "api_key": os.getenv("ONLINE_API_KEY", ""),
         "timeout": 30,
     }
 
-def _get_online_config():
-    """实时读取在线API配置（config.json > 环境变量 > 模块级默认值）
-    支持多 provider：硅基流动(SiliconFlow)和智谱(Zhipu)
+def _is_hunyuan_mt_model(model: str) -> bool:
+    """判断模型名称是否为 Hunyuan-MT 翻译专用模型。
+
+    Args:
+        model: 模型名称字符串
+
+    Returns:
+        bool: True 表示是 Hunyuan-MT 模型
+    """
+    return model == HUNYUAN_MT_MODEL
+
+def _get_online_config(target_lang: str = None):
+    """实时读取在线翻译 API 配置。
+
+    配置加载优先级：config.json > 环境变量 > 模块级默认值。
+    如果指定了 target_lang 且目标语言不在 Hunyuan-MT 支持范围内，
+    自动降级到回退模型。
+
+    Args:
+        target_lang: 目标语言代码，用于判断是否需要模型降级
+
+    Returns:
+        dict: 包含 base_url, api_key, model, timeout 的配置字典
     """
     cfg = _load_config_json()
     model = cfg.get("model") or os.getenv("ONLINE_MODEL", ONLINE_MODEL)
 
-    if _is_zhipu_model(model):
-        base = os.getenv("ONLINE_API_BASE", ONLINE_API_BASE)
-        key = os.getenv("ONLINE_API_KEY", ONLINE_API_KEY)
-    else:
-        base = os.getenv("SILICONFLOW_API_BASE", "https://api.siliconflow.cn/v1")
-        key = os.getenv("SILICONFLOW_API_KEY", "")
+    # 如果目标语言不在 Hunyuan 支持范围内，自动降级到回退模型
+    if _is_hunyuan_mt_model(model) and target_lang and target_lang not in HUNYUAN_MT_LANGS:
+        model = HUNYUAN_FALLBACK_MODEL
+        print(f"[模型路由] {target_lang} 不在Hunyuan-33语范围内，降级到 {model}")
+
+    base = os.getenv("SILICONFLOW_API_BASE", "https://api.siliconflow.cn/v1")
+    key = os.getenv("SILICONFLOW_API_KEY", "")
 
     return {
         "base_url": base,
         "api_key": key,
         "model": model,
         "timeout": int(os.getenv("ONLINE_TIMEOUT", str(ONLINE_TIMEOUT))),
-        "is_zhipu": _is_zhipu_model(model),
     }
 
-def _get_review_config():
-    """读取复查专用模型配置（未单独配置则回退到翻译模型配置）"""
-    cfg = _load_config_json()
-    model = os.getenv("REVIEW_MODEL", REVIEW_MODEL) or cfg.get("model") or os.getenv("ONLINE_MODEL", ONLINE_MODEL)
-
-    if _is_zhipu_model(model):
-        base = os.getenv("REVIEW_API_BASE", REVIEW_API_BASE) or os.getenv("ONLINE_API_BASE", ONLINE_API_BASE)
-        key = os.getenv("REVIEW_API_KEY", REVIEW_API_KEY) or os.getenv("ONLINE_API_KEY", ONLINE_API_KEY)
-    else:
-        base = os.getenv("SILICONFLOW_API_BASE", "https://api.siliconflow.cn/v1")
-        key = os.getenv("SILICONFLOW_API_KEY", "")
-    proxy = os.getenv("PROXY_URL", PROXY_URL)
-    proxies = {"http": proxy, "https": proxy} if proxy else None
-    return {
-        "base_url": base,
-        "api_key": key,
-        "model": model,
-        "timeout": int(os.getenv("ONLINE_TIMEOUT", str(ONLINE_TIMEOUT))),
-        "proxies": proxies,
-    }
 
 def _extract_content(resp_json: dict) -> str:
-    """从 API 返回的 choices 中安全提取 content。
-    推理模型（如 GLM-4.7-Flash）会额外返回 reasoning_content，
-    正常情况下 content 不为空；若为空则打印警告。
+    """从 OpenAI 兼容格式的 API 返回体中安全提取 content 字段。
+
+    推理模型（如 GLM-4.7-Flash）可能额外返回 reasoning_content，
+    正常情况下 content 不为空；若 content 为空但 reasoning_content 有内容，
+    说明可能是 max_tokens 不足导致截断，返回空字符串让上层重试。
+
+    Args:
+        resp_json: API 返回的 JSON 字典
+
+    Returns:
+        str: 提取到的 content 文本，提取失败则返回空字符串
     """
     msg = resp_json.get("choices", [{}])[0].get("message", {})
     content = msg.get("content", "") or ""
@@ -130,10 +161,20 @@ def _extract_content(resp_json: dict) -> str:
     return content.strip()
 
 
-# ==================== 语言 ====================
+# ====================================================================
+# 语言配置
+# 定义支持的语言代码、中文名称以及翻译目标语言列表
+# ====================================================================
+
+# 翻译目标语言（9种核心语言，知识库完整覆盖）
 TRANSLATE_LANGS = ["en", "ru", "ar", "es", "pt", "fr", "kk", "de", "zh_hant"]
+
+# 全部支持的语言（包括扩展语言，部分仅在在线翻译模式下可用）
 ALL_LANGS = TRANSLATE_LANGS + ["ms", "id_lang", "th", "tr", "it", "pl", "sv"]
 
+# 语言代码 → 中文名称映射表
+# 注：KB 中的语言只有 TRANSLATE_LANGS 的9种，
+# 其他语言的中文名用于构造翻译提示词，避免模型不认识语言代码导致翻成英语
 LANG_NAMES = {
     "en": "英语", "ru": "俄语", "ar": "阿拉伯语", "es": "西班牙语", "pt": "葡萄牙语",
     "fr": "法语", "kk": "哈萨克语", "de": "德语", "zh_hant": "繁体中文", "ms": "马来语",
@@ -145,149 +186,29 @@ LANG_NAMES = {
     "mn": "蒙古语", "vi": "越南语", "id": "印尼语", "nl": "荷兰语", "uk": "乌克兰语",
     "hi": "印地语", "fa": "波斯语", "he": "希伯来语", "el": "希腊语",
     "my": "缅甸语", "km": "柬埔寨语", "lo": "老挝语",
+    "tl": "菲律宾语", "gu": "古吉拉特语", "ur": "乌尔都语",
+    "te": "泰卢固语", "mr": "马拉地语", "bn": "孟加拉语",
+    "ta": "泰米尔语", "bo": "藏语", "ug": "维吾尔语", "yue": "粤语",
 }
 
-# ==================== 常量 ====================
-HIGH_SIM = 0.90
-FUZZY_SIM = 0.88
-MED_SIM = 0.75
-TOP_K = 4
-TOP_FUZZY = 3
+# ====================================================================
+# 常量定义
+# 相似度阈值和搜索结果数量控制
+# ====================================================================
+HIGH_SIM = 0.90    # 高相似度阈值：直接复用知识库条目
+FUZZY_SIM = 0.88   # 模糊相似度阈值
+MED_SIM = 0.75     # 中等相似度阈值：可用于参考例句
+TOP_K = 4          # 语义搜索返回的最多结果数
+TOP_FUZZY = 3      # 模糊子串匹配返回的最多结果数
 
-SYSTEM_PROMPT = """\
-你是极石ROX车机UI文案的专业本地化翻译专家。
-- 只翻车机界面短句（按钮、提示、告警），简洁，不啰嗦、不意译发挥。
-- 保留原文占位符：%1$s、{0}、<xliff:g ...> 等，不译不删。
-- 保留数字、单位、专有名词（ROX、TSP）不译。
-- 若给"参考例句"，严格沿用其术语和风格，保持全车机术语统一。
-- 中文省略成分补全+精简+语法自查：翻译遵循五步——①理解中文完整含义 ②总结核心意思 ③翻译时补齐缺失语法成分（如"需要完成注册"→"You need to complete registration"）④精简译文：去掉冗余展开，保持车机UI文案的简洁风格，不写小作文 ⑤语法复查：输出前检查精简后译文是否存在语法错误，重点检查：①介词冗余（shift to online→shift online，online是副词无需to；go to online→go online；discuss about→discuss）②介词缺失（depend the weather→depend on the weather）③冗余介词（contact with→contact，contact是及物动词）④中式外语。如有错误必须修正后重新输出完整译文
-- 保持换行结构：若原文含换行符（\\n），说明是PPT等排版断句，译文必须保持相同数量的换行符，每段对应翻译，使翻译结果能正确拆回原位置。先通读全文理解完整语义，再按行对应输出。
-- 输出格式：每行 "语言代码: 翻译"，9 语全出，不要 JSON、不要 markdown、不要解释。\
-"""
+# 系统提示词已移除（改用极简 user prompt）
 
-# ★ 在线模型专用 system prompt：支持长文本，明确禁止输出中文
-SYSTEM_PROMPT_ONLINE = """\
-你是极石ROX（ROX Motors）的专业本地化翻译专家，负责将中文内容翻译为多种语言。
 
-翻译规则：
-1. 只输出翻译结果本身，不要在前面加语言名称（如"俄语："、"English:"、"ru:"等）
-2. 目标语言输出中【绝对禁止】出现任何中文字符（繁体中文 zh_hant 除外）。即使是原文中的中文词也必须翻译为目标语言，绝不能原样保留
-3. 保留原文占位符：%1$s、{0}、<xliff:g ...> 等，不译不删
-4. 保留数字、单位、专有名词（ROX、TSP）不译
-5. 若给"参考例句"，严格沿用其术语和风格，保持全车机术语统一
-6. 长文本翻译时保留原文的段落结构，用换行符分隔段落
-7. 翻译要自然流畅，符合目标语言的表达习惯，不要生硬直译
-8. 极石汽车统一译为 ROX，不要译为 Jishi 或其他变体
-9. 再次强调：除繁体中文外，其他语言的翻译结果中不能包含哪怕一个汉字
-10. 中文省略成分补全+精简+语法自查：翻译遵循五步——①理解中文完整含义 ②总结核心意思 ③翻译时补齐缺失语法成分（如"需要完成注册"→"You need to complete registration"）④精简译文：去掉冗余展开，保持车机UI文案的简洁风格，不写小作文 ⑤语法复查：输出前检查精简后译文是否存在语法错误，重点检查：①介词冗余（shift to online→shift online，online是副词无需to；go to online→go online；discuss about→discuss）②介词缺失（depend the weather→depend on the weather）③冗余介词（contact with→contact，contact是及物动词）④中式外语。如有错误必须修正后重新输出完整译文
-11. 保持换行结构：若原文含换行符（\\n），说明是PPT等排版断行，译文必须保持相同数量的换行符，每段对应翻译，使结果能正确拆回原位置。先通读全文理解完整语义，再按行对应输出\
-"""
+# ====================================================================
+# 语言识别与别名系统
+# 支持多种输入写法（中文全称、英文名、语言代码等），统一映射到标准语言代码
+# ====================================================================
 
-# ★ 单语翻译专用 prompt（绝不提"多种语言"，避免模型输出多语）
-SYSTEM_PROMPT_ONLINE_SINGLE = """\
-你是专业本地化翻译专家，负责将中文内容翻译为【一种】指定语言。
-
-【核心翻译流程——必须严格执行】
-你必须按以下五步完成翻译，这不是建议而是强制要求：
-
-第一步：理解中文完整含义
-- 通读全文，理解每个词句的完整语义，特别注意省略的主语、宾语、介词
-- 例："预留专属高端活动名额"→理解为"为会员预留参加高端活动的专属名额"
-
-第二步：总结核心意思
-- 用一句话概括原文要传达的核心信息
-- 例："加入ROX成为极石精英会员，尊享专属福利"→核心：邀请用户加入会员享受专属权益
-
-第三步：翻译并补齐缺失语法成分
-- 中文常省略主语、冠词、介词，翻译时必须按目标语言语法补齐
-- 例："需要完成注册"→"You need to complete registration"（补主语You）
-- 例："预留专属名额"→"Exclusive reserved spots"（不是Reserved exclusive）
-- 例："深度参与"→"Active engagement"（不是Deeply participate，英语不说deeply participate）
-- 例："影响力孵化"→"Influencer incubation"（不是influence incubation，孵化的是人不是影响力）
-
-第四步：精简译文
-- 去掉冗余展开，保持车机UI文案的简洁风格，不写小作文
-- 同义词不堆叠：shopping and consumption→shopping privileges（shopping和consumption语义重复）
-- 用更地道的表达：slots→spots, deeply participate→actively engage, rights→privileges
-
-第五步：语法复查（输出前必须检查）
-逐条检查以下语法错误，发现即修正：
-- 介词冗余：shift to online→shift online（online已是副词无需to）；go to online→go online；discuss about→discuss
-- 介词缺失：depend the weather→depend on the weather
-- 冗余介词：contact with→contact（contact是及物动词）
-- 中式外语：Deeply participate→Actively engage；Reserved exclusive→Exclusive reserved
-- 修饰语堆叠：Reserved exclusive high-end event slots→Exclusive reserved spots for premium events
-- 词性误用：名词当动词、形容词当副词等
-- 如有语法错误，必须修正后输出完整译文
-
-【格式规则】
-1. 只输出目标语言的翻译结果，不要输出其他任何语言
-2. 输出中【绝对禁止】出现任何中文字符（包括汉字、中文标点）
-3. 不要在翻译前加语言名称前缀（如"俄语："、"English:"等）
-4. 保留原文占位符：%1$s、{0}、<xliff:g ...> 等，不译不删
-5. 保留数字、单位、专有名词（ROX、TSP）不译
-6. 极石汽车统一译为 ROX
-7. 保留原文段落换行结构
-8. 若原文含换行符（\\n），说明是排版断行，译文必须保持相同数量的换行符，每段对应翻译\
-"""
-
-# ★ 精简版系统提示词——用于文本翻译（翻译+校对两步，节省token避免截断）
-SYSTEM_PROMPT_TEXT_SIMPLE = """\
-你是专业本地化翻译专家，负责将中文内容翻译为【一种】指定语言。
-
-【翻译要求】
-1. 翻译时补齐中文省略的主语、冠词、介词等语法成分
-2. 译文必须地道自然，符合目标语言母语者表达习惯，禁止逐词直译、禁止中式外语
-3. 时间/数量表达必须完整准确：「一年多」=超过1年（不是一年半/1.5年），「近一年」=大约1年。中文句首的时间状语（如「最近一年多」）应整体译为时间介词短语放在句首或句末，不要拆散
-4. 中文口语/俗语必须意译为对应语言的母语表达，禁止保留中文的词序和搭配方式。例：「直线攀升」不是把"直线"和"攀升"分别直译再拼，而是用目标语言中形容"快速增长"的自然说法；「惹眼」不是直译为"eye-catching/目を引く"，而是用目标语言中形容"薪资很高很吸引人"的说法
-5. 翻译完成后自我校对，逐句自问：目标语言母语者日常会这样写/这样说吗？如果不会，改写为更自然的表达
-
-【格式规则】
-1. 只输出目标语言的翻译结果，不要输出其他任何语言
-2. 输出中【绝对禁止】出现任何中文字符（包括汉字、中文标点）
-3. 不要在翻译前加语言名称前缀
-4. 保留原文占位符：%1$s、{0}、<xliff:g ...> 等，不译不删
-5. 保留数字、单位、专有名词（ROX、TSP）不译
-6. 极石汽车统一译为 ROX
-7. 保留原文段落换行结构\
-"""
-
-# ★ 两步法提示词（文本翻译：先理解关键词→再基于理解翻译）
-_UNDERSTAND_PROMPT_LIB = """\
-你是一个中文语义分析助手。你的任务是分析中文原文中容易误译的关键词和表达，输出它们的准确含义。
-
-【分析要求】
-1. 找出原文中所有口语、俗语、行业术语、省略表达、数量时间词
-2. 对每个关键词，用JSON格式输出：原文→准确含义→常见误译（要避免的）
-3. 特别注意：
-   - 数量/时间词必须精确：一年多=超过1年（不是1.5年/一年半），近一年=大约1年（不是1.5年）
-   - 口语不能直译：逛网站=浏览，大卖=大卖家（不是巨头），专业出身=该专业毕业（不是专家）
-   - 省略成分要补全
-
-【输出格式】只输出JSON数组，不要解释，不要markdown代码块：
-[{"\u539f\u6587":"\u4e00\u5e74\u591a","\u542b\u4e49":"\u8d85\u8fc7\u4e00\u5e74\uff0c1\u5e74\u591a","\u8bef\u8bd1":"a year and a half/\u4e00\u5e74\u534a/1.5\u5e74"},{"\u539f\u6587":"\u901b","\u542b\u4e49":"\u6d4f\u89c8\uff08\u7f51\u7ad9\uff09","\u8bef\u8bd1":"walk/stroll/\u6b69\u304f"}]
-"""
-
-_TRANSLATE_WITH_CONTEXT_PROMPT_LIB = """\
-你是专业本地化翻译专家。你会收到：1)中文原文 2)关键词语义分析。
-你必须严格按照语义分析中的含义来翻译，绝对不能犯误译中列出的错误。
-
-【翻译规则】
-1. 严格按照关键词语义分析翻译，关键词必须按含义列的理解来译，绝不能按误译来译
-2. 翻译时补齐中文省略的主语、冠词、介词等语法成分
-3. 译文必须地道自然，符合目标语言母语者表达习惯
-4. 自我校对：翻译完成后逐句检查，确认没有误译和语法错误
-
-【格式规则】
-1. 只输出目标语言的翻译结果，不要输出其他任何语言
-2. 输出中绝对禁止出现任何中文字符（繁体中文除外）
-3. 不要在翻译前加语言名称前缀
-4. 保留原文占位符：%1$s、{0}、<xliff:g ...> 等，不译不删
-5. 保留数字、单位、专有名词（ROX、TSP）不译
-6. 极石汽车统一译为 ROX
-7. 保留原文段落换行结构"""
-
-# ==================== 语言识别 ====================
 # 语言名称映射（支持多种写法）
 LANG_ALIASES = {}
 for _lc, _name in LANG_NAMES.items():
@@ -311,7 +232,18 @@ for _lc, _aliases in _EN_NAMES.items():
         LANG_ALIASES[_a.lower()] = _lc
 
 def _strip_lang_prefix(text: str, lc: str = "") -> str:
-    """清洗模型输出中的语言名称前缀，如 "俄语: текст" → "текст" """
+    """清洗模型输出中的语言名称前缀，如 "俄语: текст" → "текст"。
+
+    模型有时会在翻译结果前加上语言名称或代码（如 "俄语：xxx"、"English: xxx"），
+    此函数移除这些前缀，只保留实际翻译内容。
+
+    Args:
+        text: 待清洗的文本
+        lc: 目标语言代码，优先匹配该语言的名称前缀
+
+    Returns:
+        str: 去除语言名前缀后的文本
+    """
     if not text:
         return text
     # 匹配 "语言名：" 或 "语言名:" 或 "语言代码:" 前缀
@@ -336,11 +268,18 @@ def _strip_lang_prefix(text: str, lc: str = "") -> str:
 
 def _extract_single_lang(text: str, target_lang: str) -> str:
     """从模型输出中提取目标语言的翻译内容。
-    
+
     ★ v2.12 改造：单语模式下模型已被明确指示只输出一种语言，
     大多数情况下输出就是干净的。因此采用保守策略：
     - 有明确语言前缀行（如 "英语:" "Russian:"）→ 提取目标语言段
     - 无语言前缀 → 直接保留，不做段落级截断（防止误删多段落翻译）
+
+    Args:
+        text: 模型原始输出文本
+        target_lang: 目标语言代码
+
+    Returns:
+        str: 提取后的目标语言翻译内容
     """
     if not text:
         return text
@@ -414,14 +353,22 @@ def _extract_single_lang(text: str, target_lang: str) -> str:
 
 def _strip_foreign_paragraphs(text: str, target_lang: str) -> str:
     """段落级语言检测：移除目标语言之外的外语段落。
-    
+
     典型场景：模型输出 "葡萄牙语内容\n\nEnglish content here\n\n俄语内容"
     没有语言名前缀，但段落明显是其他语言。
-    
+
     策略：
     - 对每个段落，检测其字符组成（CJK/西里尔/阿拉伯/拉丁等）
     - 根据目标语言的字符特征判断是否属于目标语言
     - 移除明显不属于目标语言的段落
+    - 拉丁字母系语言（en/es/pt/fr/de）因无法仅靠字符区分，走 _strip_lang_name_sections
+
+    Args:
+        text: 待清洗的文本
+        target_lang: 目标语言代码
+
+    Returns:
+        str: 清洗后的文本
     """
     if not text:
         return text
@@ -438,7 +385,14 @@ def _strip_foreign_paragraphs(text: str, target_lang: str) -> str:
     GREEK_RE = re.compile(r'[\u0370-\u03ff\u1f00-\u1fff]')    # 希腊文
     
     def _para_script_score(para: str) -> dict:
-        """统计段落中各类书写系统字符的占比，返回 {script: ratio}"""
+        """统计段落中各类书写系统字符的占比。
+
+        Args:
+            para: 待统计的段落文本
+
+        Returns:
+            dict: {书写系统名称: 占比}，如 {'cyrillic': 0.6, 'cjk': 0.4}
+        """
         if not para.strip():
             return {}
         total = len(para.strip())
@@ -537,12 +491,22 @@ def _strip_foreign_paragraphs(text: str, target_lang: str) -> str:
 
 def _strip_lang_name_sections(text: str, target_lang: str) -> str:
     """对拉丁字母系语言（en/es/pt/fr/de），通过语言名关键词行截断多语输出。
-    
+
     模型输出如：
     "Se voce ama... [葡语翻译]\n\nEnglish:\nWe look forward to you...\n\nRussian:\nМы..."
-    
+
     策略：扫描每行，如果发现非目标语言的名称行（如 "English:"、"俄语："、"Russian:"），
     截掉该行及之后所有内容。
+
+    拉丁字母系语言无法通过字符编码区分（都使用拉丁字母），
+    只能通过语言名称关键词行来判断是否进入了其他语言区域。
+
+    Args:
+        text: 待清洗的文本
+        target_lang: 目标语言代码
+
+    Returns:
+        str: 截断后的文本
     """
     if not text:
         return text
@@ -595,7 +559,9 @@ def _strip_lang_name_sections(text: str, target_lang: str) -> str:
     return _strip_lang_prefix(result, target_lang)
 
 
-# ★★ 语言→书写系统映射（全局，供清洗逻辑使用） ★★
+# ====================================================================
+# 语言 → 书写系统映射（全局，供清洗逻辑使用）
+# ====================================================================
 # 设计原则：
 #   CJK统一汉字(U+4E00-U+9FFF)不是中文专属——日语(kanji)、韩语(hanja)也使用。
 #   粗暴删除CJK字符会误杀这些语言的正常内容（如日语汉字全被删掉只剩假名碎片）。
@@ -641,12 +607,12 @@ _SCRIPT_LANG_MAP = {
 
 def _strip_chinese_in_non_zh(text: str, lang_code: str) -> str:
     """清洗非目标语言输出中泄漏的中文字符。
-    
+
     glm-4-flash 长文本翻译时偶尔会在俄语/西语等输出中混入中文片段，
     如 "если вы 擅长 организовать" → 清洗为 "если вы организовать"
-    
+
     ★★ 通用规则（基于书写系统映射，适配全球语言）：
-    
+
     情况1 — 目标语言使用CJK书写系统（ja/ko/zh_hant）：
       → CJK汉字是该语言的正常输出，不能删除。
       → 改用"中文标点检测"识别真正的中文泄漏：
@@ -654,10 +620,17 @@ def _strip_chinese_in_non_zh(text: str, lang_code: str) -> str:
         但连续出现"中文标点+CJK词组"且无目标语言特有字符（假名/谚文）时，
         很可能是中文泄漏段落，可安全移除。
       → 孤立的CJK词组（无中文标点包围）一律保留——宁可漏清不可误杀。
-    
+
     情况2 — 目标语言不使用CJK书写系统（ru/ar/es/en等）：
       → CJK汉字一定是中文泄漏，直接删除整个CJK词组。
       → 这对全球绝大多数语言都是安全的。
+
+    Args:
+        text: 待清洗的文本
+        lang_code: 目标语言代码
+
+    Returns:
+        str: 清洗后的文本
     """
     if not text:
         return text
@@ -680,18 +653,24 @@ def _strip_chinese_in_non_zh(text: str, lang_code: str) -> str:
 
 
 def _strip_chinese_leaks_by_punctuation(text: str, lang_code: str) -> str:
-    """
-    ★ 对使用CJK书写系统的语言（ja/ko/zh_hant），用"中文标点"识别中文泄漏。
-    
+    """对使用CJK书写系统的语言（ja/ko/zh_hant），用"中文标点"识别中文泄漏。
+
     核心思路：CJK汉字本身不能区分中文和日文汉字，但"中文标点+CJK词组"
     的组合在日语/韩语输出中几乎不会自然出现，大概率是中文泄漏片段。
-    
+
     检测规则：
     1. 中文特有标点（。？！、）+ 紧邻的CJK词组 → 视为中文泄漏，删除
     2. 日语/韩语也用的标点（「」【】等） → 不作为泄漏信号，保留
     3. 纯CJK词组（无中文标点） → 一律保留，宁可漏清不可误杀
-    
+
     对 zh_hant：不清洗（中文是其正确输出）
+
+    Args:
+        text: 待清洗的文本
+        lang_code: 目标语言代码（ja/ko/zh_hant）
+
+    Returns:
+        str: 清洗后的文本
     """
     # 繁体中文不清洗
     if lang_code == "zh_hant":
@@ -819,12 +798,21 @@ def _strip_chinese_leaks_by_punctuation(text: str, lang_code: str) -> str:
 
 def parse_target_langs(user_input: str) -> list[str] | None:
     """从用户输入中识别目标语言。
-    返回 None 表示未指定（全语种输出），返回列表表示指定了语言。
-    识别规则：
+
+    支持多种输入格式：
     - "翻成英文/英语" → ["en"]
     - "翻译成英文和俄语" → ["en", "ru"]
     - "帮我翻英语、西语" → ["en", "es"]
     - "极石汽车"（无语言关键词）→ None
+
+    短别名（≤2字符）使用词边界匹配防止误匹配，
+    结果按在用户输入中首次出现的顺序排序。
+
+    Args:
+        user_input: 用户输入文本
+
+    Returns:
+        list[str] | None: 语言代码列表，未指定任何语言则返回 None
     """
     import re
     found = []
@@ -855,27 +843,56 @@ def parse_target_langs(user_input: str) -> list[str] | None:
     return found
 
 
-# ==================== 路径 ====================
-# ★ 使用绝对路径，避免因 CWD 不同导致找不到数据库文件
-# lib.py 在 skills/translation/ 下，parent.parent = backend/，data/ 在 backend/ 下
-_LIB_DIR = Path(__file__).resolve().parent          # skills/translation/
-_BACKEND_DIR = _LIB_DIR.parent.parent                 # backend/  (lib.py在skills/translation/下，需要两级parent)
-DATA_DIR = _BACKEND_DIR / "data"                     # backend/data/
-DB_PATH = str(DATA_DIR / "tm.sqlite3")
-EMB_PATH = str(DATA_DIR / "tm_embeddings.npz")
-INDEX_STAMP = DATA_DIR / ".index_stamp"
+# ====================================================================
+# 路径配置
+# 优先使用用户数据目录（避免 App Translocation 只读问题）
+# ====================================================================
+_USER_DATA_DIR = os.getenv("USER_DATA_DIR")
+if _USER_DATA_DIR:
+    DATA_DIR = Path(_USER_DATA_DIR)
+else:
+    DATA_DIR = Path.home() / "Library" / "Application Support" / "翻译助手"
+DB_PATH = str(DATA_DIR / "tm.sqlite3")                # 翻译记忆库 SQLite 文件路径
+EMB_PATH = str(DATA_DIR / "tm_embeddings.npz")        # 向量索引文件路径
+INDEX_STAMP = DATA_DIR / ".index_stamp"               # 索引时间戳文件（用于增量更新检测）
 
 
-# ==================== 底层 ====================
+# ====================================================================
+# 底层数据库与向量操作
+# ====================================================================
 def get_db():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+    """获取 SQLite 数据库连接（单例模式，check_same_thread=False 支持多线程访问）。
+
+    Returns:
+        sqlite3.Connection: 数据库连接对象
+    """
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    init_segment_db(conn)
+    return conn
 
 def ollama_is_up() -> bool:
-    """改用在线 embedding API，有 API Key 即表示可用"""
+    """检查 Ollama 服务是否可用。
+
+    注意：现在改用在线 embedding API，有 API Key 即表示可用。
+    此函数保留是为了兼容旧代码调用。
+
+    Returns:
+        bool: True 表示在线 embedding API 已配置
+    """
     return online_api_is_configured()
 
 def embed(text: str) -> np.ndarray:
-    """智谱 embedding-2 在线向量化"""
+    """智谱 embedding-2 在线向量化（单条文本）。
+
+    调用智谱 API 的 embeddings 接口，将文本转为 1024 维向量并归一化。
+    空文本返回零向量。
+
+    Args:
+        text: 待向量化的文本
+
+    Returns:
+        np.ndarray: 归一化的 1024 维向量
+    """
     text = str(text).strip()
     if not text:
         return np.zeros(1024, dtype=np.float32)
@@ -891,7 +908,18 @@ def embed(text: str) -> np.ndarray:
     return v / np.linalg.norm(v)
 
 def embed_batch(texts: list[str], batch_size: int = 32) -> np.ndarray:
-    """智谱 embedding-2 批量在线向量化"""
+    """智谱 embedding-2 批量在线向量化。
+
+    将文本列表分批发送到智谱 API，每批最多 batch_size 条。
+    所有向量结果拼接为一个 numpy 数组返回。
+
+    Args:
+        texts: 待向量化的文本列表
+        batch_size: 每批处理的文本数，默认 32
+
+    Returns:
+        np.ndarray: 形状为 (len(texts), 1024) 的归一化向量数组
+    """
     cfg = _get_embed_config()
     all_vecs = []
     for i in range(0, len(texts), batch_size):
@@ -911,12 +939,30 @@ def embed_batch(texts: list[str], batch_size: int = 32) -> np.ndarray:
     return np.array(all_vecs, dtype=np.float32)
 
 def load_index():
+    """从 npz 文件中加载向量索引。
+
+    Returns:
+        tuple: (ids: np.ndarray, vecs: np.ndarray)
+                ids 为 int64 数组，vecs 为 float32 二维数组
+                索引文件不存在时返回空数组
+    """
     if not os.path.exists(EMB_PATH):
         return np.array([]), np.array([])
     data = np.load(EMB_PATH)
     return data["ids"], data["vecs"]
 
 def search(query_vec: np.ndarray, ids: np.ndarray, vecs: np.ndarray, k: int = TOP_K):
+    """向量相似度搜索（余弦相似度，使用点积替代因向量已归一化）。
+
+    Args:
+        query_vec: 查询向量（已归一化）
+        ids: 所有条目的 ID 数组
+        vecs: 所有条目的向量数组
+        k: 返回的最相近结果数
+
+    Returns:
+        list[tuple]: [(id, similarity), ...]，按相似度降序排列
+    """
     if len(ids) == 0:
         return []
     sims = vecs @ query_vec
@@ -924,13 +970,36 @@ def search(query_vec: np.ndarray, ids: np.ndarray, vecs: np.ndarray, k: int = TO
     return [(int(ids[i]), float(sims[i])) for i in order]
 
 
-# ==================== 业务 ====================
+# ====================================================================
+# 业务操作：知识库数据读取和模糊匹配
+# ====================================================================
 def fetch_row(conn, rid: int) -> dict:
+    """从 tm_segments 表中根据 ID 获取完整记录。
+
+    Args:
+        conn: SQLite 数据库连接
+        rid: 记录 ID
+
+    Returns:
+        dict: 包含所有列的字典（id, zh, module + 所有语言列）
+    """
     cols = ["id", "zh", "module"] + ALL_LANGS
     r = conn.execute(f"SELECT {','.join(cols)} FROM tm_segments WHERE id=?", (rid,)).fetchone()
     return dict(zip(cols, r))
 
 def fuzzy_substring_hits(conn, zh_short: str) -> list[dict]:
+    """模糊子串匹配：在知识库中查找包含输入文本子串的条目。
+
+    使用 LIKE '%输入%' 进行子串匹配，然后过滤长度差不超过30的条目，
+    按长度差升序排列，取前 TOP_FUZZY 条作为候选。
+
+    Args:
+        conn: SQLite 数据库连接
+        zh_short: 输入的中文文本（通常较短）
+
+    Returns:
+        list[dict]: 匹配到的完整条目列表（含所有语言列）
+    """
     cur = conn.execute(
         "SELECT id, zh FROM tm_segments WHERE zh LIKE '%' || ? || '%'",
         (zh_short,),
@@ -947,15 +1016,31 @@ def fuzzy_substring_hits(conn, zh_short: str) -> list[dict]:
     return [fetch_row(conn, rid) for _, rid, _ in tagged[:TOP_FUZZY]]
 
 
-# ==================== 在线模型翻译（★ 新增）====================
+# ====================================================================
+# 在线模型翻译（★ 新增）
+# 所有和在线 API 通信的逻辑集中在此
+# ====================================================================
 def online_api_is_configured() -> bool:
-    """检查在线模型API是否已配置（实时读环境变量）"""
+    """检查在线模型 API 是否已配置（实时读取环境变量）。
+
+    Returns:
+        bool: True 表示 API Key 和 Base URL 都已配置
+    """
     cfg = _get_online_config()
     return bool(cfg["api_key"] and cfg["base_url"])
 
 def detect_source_lang(text: str) -> str:
-    """检测文本主要语言，返回 'zh' / 'en'
-    CJK 字符占比 > 30% → zh；否则 → en
+    """检测文本的主要语言（仅区分中文/非中文）。
+
+    通过统计 CJK 统一汉字字符占比来判断：
+    - CJK 字符占比 > 30% → 中文（zh）
+    - 否则 → 英文（en）
+
+    Args:
+        text: 待检测的文本
+
+    Returns:
+        str: "zh" 或 "en"
     """
     if not text or not text.strip():
         return "zh"
@@ -966,11 +1051,25 @@ def detect_source_lang(text: str) -> str:
     return "zh" if cjk_count / max(len(text), 1) > 0.3 else "en"
 
 def get_source_name(lang: str) -> str:
+    """获取源语言的中文名称。
+
+    Args:
+        lang: 语言代码（"zh" 或 "en"）
+
+    Returns:
+        str: 中文名称
+    """
     return {"zh": "中文", "en": "英文"}.get(lang, "原文")
 
 def check_online_api_available() -> bool:
-    """检查在线模型API是否可用（轻量探测，实时读环境变量）
-    ★ v2.14: 探测失败返回False——断网时不再假装可用
+    """检查在线模型 API 是否可访问（轻量探测）。
+
+    ★ v2.14: 探测失败返回 False——断网时不再假装可用。
+    使用 GET /models 端点探测，超时 5 秒。
+    只有状态码 < 500 才算可用。
+
+    Returns:
+        bool: True 表示 API 可正常访问
     """
     cfg = _get_online_config()
     if not (cfg["api_key"] and cfg["base_url"]):
@@ -986,7 +1085,27 @@ def check_online_api_available() -> bool:
         return False  # ★ 探测失败=不可达，不再返回True
 
 def call_online_llm(zh_text: str, examples: list[dict], retries: int = 2, on_step=None) -> dict:
-    """调用在线模型API（OpenAI兼容格式）进行翻译兜底，返回格式: {lang_code: translation}"""
+    """调用在线模型 API（OpenAI 兼容格式）进行多语翻译兜底。
+
+    将中文文本一次性翻译为 TRANSLATE_LANGS 中的全部 9 种语言。
+    输出格式为 JSON 对象，key 为语言代码，value 为对应翻译文本。
+
+    ★ 在线模式用 JSON 格式输出，彻底解决多段落解析问题。
+    ★ 动态 max_tokens：短文 2048，长文按输入长度估算。
+
+    Args:
+        zh_text: 待翻译的中文文本
+        examples: 参考例句列表（可选，用于术语和风格参考）
+        retries: 失败重试次数
+        on_step: 进度回调函数（未使用，保留兼容性）
+
+    Returns:
+        dict: {lang_code: translation_text, ...}
+        对所有 TRANSLATE_LANGS 中的语言都有值
+
+    Raises:
+        所有重试用尽后抛出最后一次异常
+    """
     cfg = _get_online_config()
     # ★ 在线模式用 JSON 格式输出，彻底解决多段落解析问题
     lang_list = ", ".join(f'"{c}" ({LANG_NAMES.get(c, c)})' for c in TRANSLATE_LANGS)
@@ -1024,7 +1143,6 @@ def call_online_llm(zh_text: str, examples: list[dict], retries: int = 2, on_ste
     payload = {
         "model": cfg["model"],
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT_ONLINE},
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.1,
@@ -1097,7 +1215,24 @@ def call_online_llm(zh_text: str, examples: list[dict], retries: int = 2, on_ste
 
 
 def call_online_llm_batch(segments: list[str], examples: list[dict], retries: int = 1) -> list[dict]:
-    """在线模型批量翻译，返回格式: list[dict]"""
+    """在线模型批量翻译：一次调用翻译多个段落的全部目标语言。
+
+    适用于需要在单次请求中翻译多个句段的场景。
+    输出格式为每行 "语言代码: 翻译"，句段间用 "---" 分隔。
+
+    解析策略：
+    1. 优先按行解析语言代码前缀行
+    2. 不足时按 "---" 分隔符切分
+    3. 最后尝试 JSON 数组解析
+
+    Args:
+        segments: 待翻译的中文文本列表
+        examples: 参考例句列表（可选）
+        retries: 失败重试次数
+
+    Returns:
+        list[dict]: 每个元素为 {lang_code: translation} 的列表，与 segments 等长
+    """
     cfg = _get_online_config()
     if not segments:
         return []
@@ -1140,10 +1275,9 @@ es: Compruebe la presión de los neumáticos
     payload = {
         "model": cfg["model"],
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.1,
+        "temperature": FALLBACK_TEMP,
         "max_tokens": 2048,
     }
 
@@ -1217,9 +1351,104 @@ es: Compruebe la presión de los neumáticos
     return final_result
 
 
-# ==================== translate_one（★ v2.18: 统一在线模型翻译）====================
+# ====================================================================
+# translate_one（★ v2.18: 统一在线模型翻译）
+# 核心翻译入口，实现三级匹配策略
+# ====================================================================
+def _detect_translation_lang(text: str) -> str | None:
+    """检测翻译文本实际属于哪种语言（通过字符编码特征）。
+
+    用于验证知识库中各语言列的内容是否确实和列名匹配，
+    检测到列错位时可以进行纠正。
+
+    Args:
+        text: 待检测的文本
+
+    Returns:
+        str | None: 检测到的语言代码，无法确定返回 None
+    """
+    if not text:
+        return None
+    has_arabic = bool(re.search(r'[\u0600-\u06FF]', text))
+
+    # 哈萨克语特有的西里尔字母（区别于俄语）
+    has_kazakh = bool(re.search(r'[ӘәҒғҚқҢңӨөҰұҮүҺһІі]', text))
+    has_cyrillic = bool(re.search(r'[\u0400-\u04FF]', text))
+    has_cjk = bool(re.search(r'[\u4e00-\u9fff]', text))
+
+    if has_arabic:
+        return "ar"
+    if has_kazakh:
+        return "kk"
+    if has_cyrillic:
+        return "ru"
+    if has_cjk:
+        return "zh_hant"
+    return None
+
+def _assign_kb_translations(raw: dict, out_langs: list[str]) -> tuple[dict, list]:
+    """从知识库原始数据中分配翻译结果，处理语言列错位问题。
+
+    两遍分配策略：
+    1. 第一遍：文本语言匹配该列的，直接使用
+    2. 第二遍：语言不匹配的，互换或填入正确位置
+
+    Args:
+        raw: 从数据库读取的原始 {lang_code: text} 字典
+        out_langs: 要输出的语言代码列表
+
+    Returns:
+        tuple: (kb_trans: dict, missing: list[str])
+               kb_trans 是分配后的翻译字典
+               missing 是仍缺失的语言代码列表
+    """
+    kb_trans = {}
+    # 第一遍：文本语言匹配该列的，直接使用
+    for lc in out_langs:
+        val = raw.get(lc, "")
+        if not val:
+            continue
+        actual = _detect_translation_lang(val)
+        if actual and actual != lc and actual in out_langs:
+            continue
+        kb_trans[lc] = val
+    # 第二遍：语言不匹配的，互换或填入正确位置
+    for lc in out_langs:
+        val = raw.get(lc, "")
+        if not val:
+            continue
+        actual = _detect_translation_lang(val)
+        if actual and actual != lc and actual in out_langs:
+            if actual in kb_trans:
+                existing = kb_trans[actual]
+                kb_trans[actual] = val
+                if lc not in kb_trans:
+                    kb_trans[lc] = existing
+                print(f"[KB] {lc}↔{actual}: 互换错位翻译")
+            else:
+                kb_trans[actual] = val
+                print(f"[KB] {lc}→{actual}: 填入缺失位置")
+    _missing = [lc for lc in out_langs if lc not in kb_trans]
+    return kb_trans, _missing
+
+
 def _fill_missing_langs(conn, ids, vecs, zh_text: str, kb_trans: dict, missing: list[str]) -> dict:
-    """知识库命中后，对缺失的语言走在线模型兜底翻译补上。"""
+    """知识库命中后，对缺失的语言走在线模型兜底翻译补上。
+
+    当知识库匹配到了中文文本但某些目标语言列没有翻译时，
+    调用在线模型逐语言翻译缺失的部分。
+
+    Args:
+        conn: SQLite 数据库连接
+        ids: 向量索引 ID 数组
+        vecs: 向量数组
+        zh_text: 中文原文
+        kb_trans: 已有的知识库翻译字典
+        missing: 需要模型补全的语言代码列表
+
+    Returns:
+        dict: 补全后的完整翻译字典
+    """
     qvec = embed(zh_text)
     examples = []
     hits = search(qvec, ids, vecs, k=TOP_K) if len(ids) > 0 else []
@@ -1236,10 +1465,35 @@ def _fill_missing_langs(conn, ids, vecs, zh_text: str, kb_trans: dict, missing: 
     return kb_trans
 
 def translate_one(conn, ids, vecs, zh_text: str, target_langs: list[str] | None = None) -> dict:
-    """翻译入口，三级匹配：精确命中 → 模糊匹配 → 模型兜底
-    target_langs: 指定只输出哪些语言（如 ["en","ru"]），None=全语种
-    ★ v2.18: 统一在线模型翻译，不再降级本地Ollama
-    ★ 非中文输入直接走模型翻译（KB 只含中文）
+    """翻译入口，三级匹配：精确命中 → 模糊匹配 → 模型兜底。
+
+    ★ v2.18: 统一在线模型翻译，不再降级本地 Ollama。
+    ★ 非中文输入直接走模型翻译（KB 只含中文）。
+
+    匹配流程：
+    1. 第一级：精确命中（本地知识库的 zh 完全匹配）
+    2. 第二级：模糊子串匹配（输入是知识库条目的子串）
+    3. 语义相似度匹配（向量搜索 ≥ HIGH_SIM）
+    4. 第三级：segment_base 段匹配
+    5. 第四级：模型兜底（在线模型逐语言翻译）
+
+    Args:
+        conn: SQLite 数据库连接
+        ids: 向量索引 ID 数组
+        vecs: 向量数组
+        zh_text: 中文原文
+        target_langs: 指定只输出哪些语言（如 ["en","ru"]），None=全语种
+
+    Returns:
+        dict: {
+            "mode": str,           # 匹配模式描述
+            "matched_zh": str|None, # 匹配到的中文
+            "similarity": float,   # 相似度
+            "translations": dict,  # {lang_code: text}
+            "candidates": list|None, # 候选条目
+            "target_langs": list,  # 目标语言列表
+            "need_model": list,    # 需要模型兜底的语言
+        }
     """
     out_langs = target_langs if target_langs else TRANSLATE_LANGS
     source_lang = detect_source_lang(zh_text)
@@ -1267,9 +1521,8 @@ def translate_one(conn, ids, vecs, zh_text: str, target_langs: list[str] | None 
     if exact:
         cols = [d[0] for d in conn.execute("SELECT * FROM tm_segments LIMIT 1").description]
         row = dict(zip(cols, exact))
-        kb_trans = {lc: row.get(lc, "") for lc in out_langs}
-        # ★ 知识库缺失的语言，走模型兜底补上
-        _missing = [lc for lc in out_langs if not kb_trans.get(lc)]
+        raw = {lc: row.get(lc, "") for lc in out_langs}
+        kb_trans, _missing = _assign_kb_translations(raw, out_langs)
         if _missing:
             kb_trans = _fill_missing_langs(conn, ids, vecs, zh_text, kb_trans, _missing)
         return {
@@ -1287,9 +1540,8 @@ def translate_one(conn, ids, vecs, zh_text: str, target_langs: list[str] | None 
             pick = fuzzies[0]; mode = "模糊子串-复用长句译文"
         else:
             pick = max(fuzzies, key=lambda r: len(r["zh"])); mode = f"模糊子串-多候选({len(fuzzies)})"
-        kb_trans = {lc: pick.get(lc, "") for lc in out_langs}
-        # ★ 知识库缺失的语言，走模型兜底补上
-        _missing = [lc for lc in out_langs if not kb_trans.get(lc)]
+        raw = {lc: pick.get(lc, "") for lc in out_langs}
+        kb_trans, _missing = _assign_kb_translations(raw, out_langs)
         if _missing:
             kb_trans = _fill_missing_langs(conn, ids, vecs, zh_text, kb_trans, _missing)
         return {
@@ -1306,9 +1558,8 @@ def translate_one(conn, ids, vecs, zh_text: str, target_langs: list[str] | None 
     top_id, top_sim = hits[0] if hits else (None, 0.0)
     if top_id is not None and top_sim >= HIGH_SIM:
         row = fetch_row(conn, top_id)
-        kb_trans = {lc: row.get(lc, "") for lc in out_langs}
-        # ★ 知识库缺失的语言，走模型兜底补上
-        _missing = [lc for lc in out_langs if not kb_trans.get(lc)]
+        raw = {lc: row.get(lc, "") for lc in out_langs}
+        kb_trans, _missing = _assign_kb_translations(raw, out_langs)
         if _missing:
             kb_trans = _fill_missing_langs(conn, ids, vecs, zh_text, kb_trans, _missing)
         return {
@@ -1319,7 +1570,55 @@ def translate_one(conn, ids, vecs, zh_text: str, target_langs: list[str] | None 
             "need_model": _missing,
         }
 
-    # ★ 第三级：模型兜底（在线模型逐语翻译）
+    # ★ 第三级：segment_base 段匹配（新增）
+    seg_total = {lc: {"matched": [], "remaining": ""} for lc in out_langs}
+
+    for lc in out_langs:
+        lang_pair = f"zh-{lc.replace('_lang', '')}"
+        matched, remaining = match_segments(conn, zh_text, lang_pair)
+        seg_total[lc] = {"matched": matched, "remaining": remaining}
+
+    all_full = all(not s["remaining"] for s in seg_total.values())
+    any_partial = any(s["matched"] for s in seg_total.values())
+
+    if all_full:
+        seg_result = {}
+        for lc in out_langs:
+            seg_result[lc] = reassemble_translation(seg_total[lc]["matched"], "", zh_text)
+        return {
+            "mode": "段匹配-全命中", "matched_zh": zh_text, "similarity": 0.0,
+            "translations": seg_result, "candidates": None,
+            "target_langs": out_langs, "need_model": [],
+        }
+
+    if any_partial:
+        seg_result = {}
+        _need_model = []
+        for lc in out_langs:
+            if seg_total[lc]["matched"] and not seg_total[lc]["remaining"]:
+                seg_result[lc] = reassemble_translation(seg_total[lc]["matched"], "", zh_text)
+            elif seg_total[lc]["matched"] and seg_total[lc]["remaining"]:
+                try:
+                    model_part = call_online_llm_single_lang(seg_total[lc]["remaining"], lc, [], source_lang=source_lang)
+                except Exception:
+                    model_part = ""
+                seg_result[lc] = reassemble_translation(seg_total[lc]["matched"], model_part, zh_text)
+            else:
+                _need_model.append(lc)
+        if _need_model:
+            for lc in _need_model:
+                try:
+                    seg_result[lc] = call_online_llm_single_lang(zh_text, lc, [], source_lang=source_lang)
+                except Exception as e:
+                    print(f"[warn] 在线翻译 {lc} 失败: {e}")
+                    seg_result[lc] = ""
+        return {
+            "mode": "段匹配-部分命中", "matched_zh": zh_text, "similarity": 0.0,
+            "translations": seg_result, "candidates": None,
+            "target_langs": out_langs, "need_model": [],
+        }
+
+    # ★ 第四级：模型兜底（在线模型逐语翻译）
     examples = []
     if top_id is not None and top_sim >= MED_SIM:
         order = np.argsort(-(vecs @ qvec))[:TOP_K]
@@ -1328,26 +1627,42 @@ def translate_one(conn, ids, vecs, zh_text: str, target_langs: list[str] | None 
     result = {}
     for lc in out_langs:
         try:
-            result[lc] = call_online_llm_single_lang(zh_text, lc, examples, use_simple_prompt=True, source_lang=source_lang)
+            result[lc] = call_online_llm_single_lang(zh_text, lc, [], source_lang=source_lang)
             if not result[lc]:
                 result[lc] = ""
         except Exception as e:
             print(f"[warn] 在线翻译 {lc} 失败: {e}")
             result[lc] = ""
 
-    mode = f"参考{len(examples)}条例句-在线模型生成" if examples else "全新句子-在线模型生成"
+    mode = f"段匹配-全不命中-在线模型生成"
 
     return {
-        "mode": mode, "matched_zh": examples[0]["zh"] if examples else None,
+        "mode": mode, "matched_zh": None,
         "similarity": top_sim, "translations": result, "candidates": None,
         "target_langs": out_langs,
         "need_model": out_langs,
     }
 
-# ==================== save_back / tm_stats ====================
+# ====================================================================
+# save_back / tm_stats — 知识库写入与统计
+# ====================================================================
 def save_back(conn, zh_text: str, translations: dict, module: str | None = None) -> int:
-    """保存翻译到知识库（SQLite），返回行ID。
-    注意：此函数只写DB，不更新向量索引。调用方需再调 rebuild_embeddings_for_entry() 完成向量层更新。
+    """保存翻译到知识库（SQLite），返回行 ID。
+
+    使用中文文本的 MD5 哈希值作为唯一键（zh_hash），
+    支持 UPSERT 语义：存在则更新，不存在则插入。
+
+    注意：此函数只写 DB，不更新向量索引。
+    调用方需再调 rebuild_embeddings_for_entry() 完成向量层更新。
+
+    Args:
+        conn: SQLite 数据库连接
+        zh_text: 中文原文
+        translations: {lang_code: text} 翻译字典
+        module: 模块名称（可选，用于分类）
+
+    Returns:
+        int: 插入/更新的行 ID，失败返回 -1
     """
     zh_hash = hashlib.md5(zh_text.encode("utf-8")).hexdigest()
     now = datetime.now().isoformat(timespec="seconds")
@@ -1369,9 +1684,17 @@ def save_back(conn, zh_text: str, translations: dict, module: str | None = None)
 
 
 def rebuild_embeddings_for_entry(zh_text: str, row_id: int) -> bool:
-    """为新增/更新的条目计算embedding并写入npz向量索引文件。
-    需要 Ollama 运行（用于本地embedding模型）。
-    返回 True=成功, False=失败（Ollama不可用等）
+    """为新增/更新的条目计算 embedding 并写入 npz 向量索引文件。
+
+    从 npz 文件中读取现有索引，添加或更新该条目的向量，
+    然后写回 npz 文件并更新时间戳文件。
+
+    Args:
+        zh_text: 中文文本
+        row_id: 对应的数据库行 ID
+
+    Returns:
+        bool: True=成功, False=失败（Ollama不可用等）
     """
     if not ollama_is_up():
         print("[warn] rebuild_embeddings_for_entry: Ollama未运行，跳过向量更新")
@@ -1404,6 +1727,11 @@ def rebuild_embeddings_for_entry(zh_text: str, row_id: int) -> bool:
         return False
 
 def tm_stats(conn) -> dict:
+    """获取翻译记忆库的统计信息。
+
+    Returns:
+        dict: {"total": 总条目数, "per_lang": {语言代码: 非空条目数}}
+    """
     total = conn.execute("SELECT COUNT(*) FROM tm_segments").fetchone()[0]
     per = {}
     for lc in ALL_LANGS:
@@ -1411,25 +1739,10 @@ def tm_stats(conn) -> dict:
     return {"total": total, "per_lang": per}
 
 
-# ★ 按语言记录翻译结果元信息：{lang_code: {"is_47_direct": bool}}
-#   is_47_direct=True 表示4.7-flash直翻（质量高，复查/清洗可跳过）
-#   is_47_direct=False 表示429降级到4-flash（质量较低，需要复查/清洗）
-# ★ 替代旧的 _last_two_step_ok 单布尔值，避免多语言翻译时跨语言污染
-_last_result_meta: dict = {}
-
-# ★★★ v2.17 429降级理解缓存 ★★★
-# 当429降级时，理解步的结果按原文缓存，多语言只需理解一次
-# 格式: {zh_text_hash: {"keywords": str, "summary": str}}
-# - keywords: 两步法的关键词分析结果
-# - summary: 五步法的理解+补齐结果
-_429_understand_cache: dict = {}
-
-def _cache_key(zh_text: str) -> str:
-    """生成原文的缓存键（用前200字符+长度，避免超长文本做hash）"""
-    return f"{zh_text[:200]}|{len(zh_text)}"
-
-
-# ==================== v2.16 截断自修复 ====================
+# ====================================================================
+# v2.16 截断自修复
+# GLM-4.7-flash 的模型级 bug：finish_reason=stop 但实际截断
+# ====================================================================
 
 def _is_translation_incomplete(result: str, zh_text: str, target_lang: str) -> bool:
     """检测翻译结果是否不完整（GLM-4.7-flash 的模型级bug：finish_reason=stop 但实际截断）
@@ -1497,10 +1810,21 @@ def _is_translation_incomplete(result: str, zh_text: str, target_lang: str) -> b
 
 
 def _auto_complete_translation(result: str, zh_text: str, target_lang: str, cfg: dict, url: str, headers: dict) -> str:
-    """翻译截断自修复：检测到不完整时，自动续翻补全
+    """翻译截断自修复：检测到不完整时，自动续翻补全。
 
-    策略：先尝试"续翻"（基于已有结果继续），如果续翻也失败则"全量重翻"（加强提示词）
-    ★ 续翻优先：保留已有翻译的前半段，只补后半段，避免全量重翻质量波动
+    策略：先尝试"续翻"（基于已有结果继续），如果续翻也失败则"全量重翻"（加强提示词）。
+    ★ 续翻优先：保留已有翻译的前半段，只补后半段，避免全量重翻质量波动。
+
+    Args:
+        result: 当前不完整的翻译结果
+        zh_text: 中文原文
+        target_lang: 目标语言代码
+        cfg: API 配置字典
+        url: API 请求 URL
+        headers: 请求头
+
+    Returns:
+        str: 修复后的完整翻译文本，若所有尝试都失败则返回原始结果
     """
     lang_name = LANG_NAMES.get(target_lang, target_lang)
     max_retries = 2  # 最多2次尝试（1次续翻 + 1次全量重翻）
@@ -1527,10 +1851,9 @@ def _auto_complete_translation(result: str, zh_text: str, target_lang: str, cfg:
             payload = {
                 "model": cfg["model"],
                 "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT_TEXT_SIMPLE},
                     {"role": "user", "content": user_content},
                 ],
-                "temperature": 0.1,
+                "temperature": FALLBACK_TEMP,
                 "max_tokens": max(4096, len(zh_text) * 6),  # ★ 给充足空间
             }
 
@@ -1576,9 +1899,18 @@ def _auto_complete_translation(result: str, zh_text: str, target_lang: str, cfg:
 
 
 def _merge_continuation(original: str, continuation: str, target_lang: str) -> str:
-    """将续翻结果与原始翻译合并，去除重复部分
+    """将续翻结果与原始翻译合并，去除重复部分。
 
-    模型续翻时经常会重复原文的最后几个词，需要智能去重
+    模型续翻时经常会重复原文的最后几个词，需要智能去重。
+    去重策略：从 original 末尾取不同长度的重叠片段，检查 continuation 是否以该片段开头。
+
+    Args:
+        original: 原始翻译（前半段）
+        continuation: 续翻结果（后半段，可能包含了重复）
+        target_lang: 目标语言（用于语言特定去重，暂未使用）
+
+    Returns:
+        str: 合并后的完整翻译
     """
     if not continuation:
         return original
@@ -1605,24 +1937,35 @@ def _merge_continuation(original: str, continuation: str, target_lang: str) -> s
     return original + ' ' + continuation
 
 def call_online_llm_single_lang(zh_text: str, target_lang: str, examples: list[dict], retries: int = 1, on_step=None, use_simple_prompt: bool = False, lang_instruction_override: str | None = None, source_lang: str = "zh") -> str:
-    """调用在线模型翻译为单种语言
-    ★ source_lang: 源语言代码（zh/en），影响提示词中'中文原文'等措辞
-    """
-    global _last_result_meta
-    _last_result_meta[target_lang] = {"is_47_direct": True}
+    """调用在线模型翻译单条文本到单种语言。
 
-    cfg = _get_online_config()
+    这是最基本的在线翻译调用函数，支持：
+    - 根据目标语言自动选择翻译指令（zh_hant→简繁转换，ja/ko→特殊要求）
+    - Hunyuan-MT 模型的专有参数设置
+    - 429 限流时自动降级到回退模型
+    - finish_reason="length" 时自动增大 max_tokens 重试
+    - 重试机制和指数退避
+
+    Args:
+        zh_text: 待翻译的中文文本
+        target_lang: 目标语言代码
+        examples: 参考例句列表（可选）
+        retries: 失败重试次数
+        on_step: 进度回调函数 on_step("translate", lang_code, lang_name)
+        use_simple_prompt: 是否使用极简提示词（无例句，仅翻译指令）
+        lang_instruction_override: 自定义翻译指令（覆盖自动生成）
+        source_lang: 源语言代码，默认 "zh"
+
+    Returns:
+        str: 翻译后的文本
+
+    Raises:
+        所有重试用尽后抛出最后一次异常
+    """
+    cfg = _get_online_config(target_lang=target_lang)
     lang_name = LANG_NAMES.get(target_lang, target_lang)
     src_name = get_source_name(source_lang)
-
-    example_block = ""
-    if examples:
-        example_block = f"参考例句（{lang_name}部分，沿用其术语和风格）：\n"
-        for ex in examples:
-            example_block += f"- {src_name}：{ex['zh']}\n"
-            if ex.get(target_lang):
-                example_block += f"  {lang_name}：{ex[target_lang]}\n"
-        example_block += "\n"
+    is_hunyuan = (cfg["model"] == HUNYUAN_MT_MODEL)
 
     url = f"{cfg['base_url'].rstrip('/')}/chat/completions"
     headers = {
@@ -1630,215 +1973,97 @@ def call_online_llm_single_lang(zh_text: str, target_lang: str, examples: list[d
         "Content-Type": "application/json",
     }
 
-    # ★ 文本翻译策略：默认 glm-4.7-flash 一步直翻；429限流时降级 glm-4-flash
-    keywords_context = ""  # ★ 429降级两步法后的关键词上下文
-    # ★ 清洗判断已迁移到 _last_result_meta[target_lang]["is_47_direct"]，不再用局部变量
-    _fallback_to_flash = False  # ★ 标记是否因429降级到了glm-4-flash
-
-    # ★ max_tokens按文本长度和行数动态计算，防止多段落翻译被截断
     line_count = zh_text.count('\n') + 1
     base_tokens = max(2048, len(zh_text) * 4)
-    max_tokens = max(base_tokens, 2048 + line_count * 384)
-    max_tokens = min(max_tokens, 8192)
+    max_tokens = min(max(base_tokens, 2048 + line_count * 384), 8192)
 
-    # ★ 语言指令构造：优先使用调用方传入的专属指令 → 内置语言指令 → 通用指令
-    if lang_instruction_override:
-        lang_instruction = lang_instruction_override
-    elif target_lang == "zh_hant":
-        lang_instruction = f"请将以下{src_name}转换为繁体中文，只输出繁体中文结果" if source_lang == "zh" else f"请将以下{src_name}翻译为繁体中文，只输出繁体中文结果"
+    if target_lang == "zh_hant":
+        translate_instruction = f"把下面的{src_name}转换为繁体中文，只输出繁体中文结果"
     elif target_lang == "ja":
-        lang_instruction = (
-            f"请将以下{src_name}翻译为日语。"
-            "必须使用规范的日语汉字+假名混合书写（常用词必须写汉字），不要只用假名。只输出日语翻译结果"
-        )
+        translate_instruction = f"把下面的{src_name}翻译为日语。必须使用规范的日语汉字+假名混合书写，不要只用假名。只输出日语翻译结果"
     elif target_lang == "ko":
-        lang_instruction = (
-            f"请将以下{src_name}翻译为韩语（한국어）。"
-            "必须使用韩语谚文（한글）书写，禁止输出日语。"
-            "人名或专业术语必要时可用汉字。只输出韩语翻译结果"
-        )
+        translate_instruction = f"把下面的{src_name}翻译为韩语（한국어）。必须使用韩语谚文书写，禁止输出日语。只输出韩语翻译结果"
     else:
-        lang_instruction = f"请将以下{src_name}翻译为{lang_name}，只输出{lang_name}翻译结果"
+        translate_instruction = f"把下面的{src_name}翻译为{lang_name}，不要额外解释"
 
-    user_prompt = (
-        f"{example_block}"
-        f"{lang_instruction}。不要输出其他语言的翻译，不要加语言名称前缀，不要解释。保留原文的段落换行结构。\n\n"
-        f"{src_name}原文：\n{zh_text}"
-    )
-    # ★ 4.7-flash 一步直翻统一用精简版提示词（质量已够，五步法提示词反而让模型走流程浪费时间）
-    # use_simple_prompt 只影响429降级路径：True→降级走两步法，False→降级走五步法
-    system_content = SYSTEM_PROMPT_TEXT_SIMPLE
+    user_prompt = f"{translate_instruction}\n\n{zh_text}"
 
-    payload = {
-        "model": cfg["model"],
-        "messages": [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.1,
-        "max_tokens": max_tokens,
-        # ★ 关闭思考模式——GLM系列默认开启reasoning，reasoning_tokens会吃光max_tokens导致content为空
-    }
+    if is_hunyuan:
+        payload = {
+            "model": cfg["model"],
+            "messages": [{"role": "user", "content": user_prompt}],
+            "temperature": HUNYUAN_TEMP,
+            "top_p": HUNYUAN_TOP_P,
+            "top_k": HUNYUAN_TOP_K,
+            "repetition_penalty": HUNYUAN_REPETITION_PENALTY,
+            "max_tokens": max_tokens,
+        }
+    else:
+        payload = {
+            "model": cfg["model"],
+            "messages": [{"role": "user", "content": user_prompt}],
+            "temperature": FALLBACK_TEMP,
+            "max_tokens": max_tokens,
+        }
 
-    # ★ 进度回调：开始翻译
     if on_step:
         on_step("translate", target_lang, lang_name)
 
+    _fallback_used = False
     last_error = None
     for attempt in range(retries + 1):
         try:
-            print(f"[在线单语] {target_lang}({lang_name}) 调用 {cfg['model']} (尝试{attempt+1})")
+            print(f"[翻译] {target_lang}({lang_name}) 调用 {cfg['model']} (尝试{attempt+1})")
             r = requests.post(url, headers=headers, json=payload, timeout=cfg["timeout"])
             r.raise_for_status()
             r_json = r.json()
             content = _extract_content(r_json)
-            # ★ 检查 finish_reason：如果输出因 max_tokens 被截断，自动加倍重试
+
             finish_reason = ""
             try:
                 finish_reason = r_json.get("choices", [{}])[0].get("finish_reason", "")
             except (IndexError, KeyError):
                 pass
+
             if finish_reason == "length":
-                print(f"[在线单语] {target_lang} finish_reason=length（输出被截断），加倍max_tokens重试")
-                if attempt < retries + 2:  # 额外允许2次截断重试
+                if attempt < retries + 2:
                     payload["max_tokens"] = min(payload.get("max_tokens", 1024) * 2, 8192)
                     import time; time.sleep(1)
                     continue
-            if not content:
-                # content为空可能是推理模型reasoning吃光额度，加倍max_tokens重试
-                if attempt < retries:
-                    payload["max_tokens"] = min(payload.get("max_tokens", 1024) * 2, 8192)
-                    print(f"[在线单语] {target_lang} content为空，加倍max_tokens={payload['max_tokens']}重试")
-                    import time; time.sleep(1)
-                    continue
-                else:
-                    print(f"[在线单语] {target_lang} content为空，重试耗尽")
-            print(f"[在线单语] {target_lang} 返回成功，长度={len(content)}，finish_reason={finish_reason}")
-            # ★ 两重清洗：提取目标语言段 → 清洗泄漏的中文
-            # v2.12: _extract_single_lang 已改为保守策略，无语言前缀时直接保留不截断
-            result = _extract_single_lang(content.strip(), target_lang)
-            # ★ 4.7-flash 直翻时跳过清洗——直翻质量高不会泄漏中文，清洗反而会误删日语汉字词
-            # 只有降级到4-flash时才需要清洗（4-flash偶尔混入中文片段）
-            is_47_direct = _last_result_meta.get(target_lang, {}).get("is_47_direct", True)
-            if is_47_direct:
-                print(f"[在线单语] {target_lang} 4.7直翻成功，跳过中文清洗")
+
+            if not content and attempt < retries:
+                payload["max_tokens"] = min(payload.get("max_tokens", 1024) * 2, 8192)
+                import time; time.sleep(1)
+                continue
+
+            if content:
+                result = content.strip()
             else:
-                result = _strip_chinese_in_non_zh(result, target_lang)
+                result = ""
 
-            # ★★★ v2.16 截断自修复：GLM-4.7-flash 有模型级bug ★★★
-            # finish_reason=stop 但翻译实际不完整（模型自以为写完了但漏了后半段）
-            # 典型：翻译到 "the summary is" 就停了，finish_reason=stop，但原文还有内容
-            if _is_translation_incomplete(result, zh_text, target_lang):
-                print(f"[在线单语] {target_lang} ⚠️ 检测到翻译不完整，自动续翻（result长度={len(result)}）")
-                result = _auto_complete_translation(result, zh_text, target_lang, cfg, url, headers)
-
+            result = post_process_translation(result, target_lang)
+            print(f"[翻译] {target_lang} 返回成功，长度={len(result)}")
             return result
+
         except Exception as e:
             last_error = e
             err_str = str(e)
-            print(f"[在线单语] {target_lang} 尝试{attempt+1}失败: {e}")
-            # ★★★ v2.17 429限流降级策略 ★★★
-            # 核心原则：理解步按原文缓存（多语言只理解一次），翻译步按语言走
-            # 两步法：理解关键词（共享）→ 基于理解翻译该语言
-            # 五步法：阅读+理解补齐（共享）→ 翻译该语言 → 浓缩该语言 → 语法验证该语言
-            if "429" in err_str or "速率限制" in err_str or "rate" in err_str.lower():
-                if not _fallback_to_flash and "4.7" in cfg["model"]:
-                    payload["model"] = "glm-4-flash"
-                    _fallback_to_flash = True
-                    _last_result_meta[target_lang] = {"is_47_direct": False}
+            print(f"[翻译] {target_lang} 尝试{attempt+1}失败: {e}")
 
-                    ckey = _cache_key(zh_text)
-                    if use_simple_prompt:
-                        # ★★★ 两步法降级 ★★★
-                        print(f"[在线单语] {target_lang} ⚠️ 429限流，降级 glm-4-flash + 两步法")
-                        # 步骤1：理解关键词（共享，多语言只做一次）
-                        if ckey in _429_understand_cache and _429_understand_cache[ckey].get("keywords"):
-                            kctx = _429_understand_cache[ckey]["keywords"]
-                            print(f"[在线单语] {target_lang} 复用已缓存的理解结果")
-                        else:
-                            try:
-                                understand_payload = {
-                                    "model": "glm-4-flash",
-                                    "messages": [
-                                        {"role": "system", "content": _UNDERSTAND_PROMPT_LIB},
-                                        {"role": "user", "content": zh_text},
-                                    ],
-                                }
-                                r_u = requests.post(url, headers=headers, json=understand_payload, timeout=30)
-                                r_u.raise_for_status()
-                                kctx = _extract_content(r_u.json()) or ""
-                                if kctx:
-                                    # ★ 缓存理解结果，后续语言直接复用
-                                    _429_understand_cache[ckey] = _429_understand_cache.get(ckey, {})
-                                    _429_understand_cache[ckey]["keywords"] = kctx
-                                    print(f"[在线单语] {target_lang} 理解成功并缓存：{kctx[:80]}")
-                            except Exception as eu:
-                                print(f"[在线单语] {target_lang} 降级两步法理解失败: {eu}")
-                                kctx = ""
+            if ("429" in err_str or "rate" in err_str.lower()) and not _fallback_used:
+                _fallback_used = True
+                fallback_model = HUNYUAN_FALLBACK_MODEL if is_hunyuan else HUNYUAN_FALLBACK_MODEL
+                payload["model"] = fallback_model
+                payload.pop("top_p", None)
+                payload.pop("top_k", None)
+                payload.pop("repetition_penalty", None)
+                payload["temperature"] = FALLBACK_TEMP
+                print(f"[翻译] {target_lang} 429降级到 {fallback_model}")
+                import time; time.sleep(2)
+                continue
 
-                        # 步骤2：基于理解翻译该语言
-                        if kctx:
-                            payload["messages"] = [
-                                {"role": "system", "content": _TRANSLATE_WITH_CONTEXT_PROMPT_LIB},
-                                {"role": "user", "content": f"{example_block}{lang_instruction}。不要输出其他语言的翻译，不要加语言名称前缀，不要解释。保留原文的段落换行结构。\n\n【关键词语义分析】\n{kctx}\n\n中文原文：\n{zh_text}"},
-                            ]
-                    else:
-                        # ★★★ 五步法降级 ★★★
-                        # 步骤1-2：阅读原文+理解补齐原文（共享，多语言只做一次）
-                        print(f"[在线单语] {target_lang} ⚠️ 429限流，降级 glm-4-flash + 五步法")
-                        if ckey in _429_understand_cache and _429_understand_cache[ckey].get("summary"):
-                            summary_ctx = _429_understand_cache[ckey]["summary"]
-                            print(f"[在线单语] {target_lang} 复用已缓存的理解补齐结果")
-                        else:
-                            try:
-                                # 步骤1：阅读原文
-                                # 步骤2：理解原文并补齐原文（用模型理解省略、口语、俗语的真实含义）
-                                _FIVE_STEP_READ_PROMPT = (
-                                    "你是一个中文语义分析专家。请仔细阅读以下中文原文，完成两件事：\n"
-                                    "1. 逐句理解原文的完整语义，特别注意省略的主语、宾语、介词、时间、数量\n"
-                                    "2. 用一段话补齐原文的所有省略成分和隐含含义，使语义完全明确\n\n"
-                                    "【分析要求】\n"
-                                    "- 口语/俗语必须解释为标准表达：逛网站=浏览网站，大卖=大卖家/头部卖家，惹眼=非常引人注目/很有吸引力\n"
-                                    "- 数量/时间必须精确：一年多=超过1年（不是1.5年），近一年=大约1年\n"
-                                    "- 省略成分要补全：专业出身=该专业毕业，招聘挂出=发布招聘信息\n\n"
-                                    "只输出理解补齐后的完整语义描述，不要翻译，不要解释分析过程。"
-                                )
-                                read_payload = {
-                                    "model": "glm-4-flash",
-                                    "messages": [
-                                        {"role": "system", "content": _FIVE_STEP_READ_PROMPT},
-                                        {"role": "user", "content": zh_text},
-                                    ],
-                                }
-                                r_r = requests.post(url, headers=headers, json=read_payload, timeout=30)
-                                r_r.raise_for_status()
-                                summary_ctx = _extract_content(r_r.json()) or ""
-                                if summary_ctx:
-                                    _429_understand_cache[ckey] = _429_understand_cache.get(ckey, {})
-                                    _429_understand_cache[ckey]["summary"] = summary_ctx
-                                    print(f"[在线单语] {target_lang} 理解补齐成功并缓存：{summary_ctx[:80]}")
-                            except Exception as er:
-                                print(f"[在线单语] {target_lang} 五步法理解补齐失败: {er}")
-                                summary_ctx = ""
-
-                        # 步骤3-5：基于理解→翻译该语言→浓缩该语言→语法验证该语言
-                        # 用五步法提示词 + 注入理解结果
-                        if summary_ctx:
-                            payload["messages"] = [
-                                {"role": "system", "content": SYSTEM_PROMPT_ONLINE_SINGLE},
-                                {"role": "user", "content": f"{lang_instruction}。不要输出其他语言的翻译，不要加语言名称前缀，不要解释。保留原文的段落换行结构。\n\n【原文语义补齐】\n{summary_ctx}\n\n中文原文：\n{zh_text}"},
-                            ]
-                        else:
-                            # 理解失败，仍用原五步法提示词
-                            payload["messages"] = [
-                                {"role": "system", "content": SYSTEM_PROMPT_ONLINE_SINGLE},
-                                {"role": "user", "content": user_prompt},
-                            ]
-                    import time; time.sleep(2)
-                    continue
             if attempt < retries:
-                import time
-                time.sleep(2)
+                import time; time.sleep(2)
             else:
                 raise last_error
 
@@ -1846,7 +2071,10 @@ def call_online_llm_single_lang(zh_text: str, target_lang: str, examples: list[d
 
 
 
-# ==================== 批量单语翻译（★ v2.20: 并发3批 + 延迟兜底）====================
+# ====================================================================
+# 批量单语翻译（★ v2.20: 并发2批 + 延迟兜底）
+# 将多条文本合并为一次API调用，翻译为同一目标语言
+# ====================================================================
 
 def _translate_one_batch(
     batch_idx: int, batch: list[str], start: int,
@@ -1855,8 +2083,27 @@ def _translate_one_batch(
     batch_size: int,
 ) -> dict:
     """翻译单个批次，返回 {start+i: translation}。
-    ★ 内部函数，供并发调用。
-    失败返回空dict，由调用方统一兜底。
+
+    使用 <sN>...</sN> 标记构建输入，让模型按标记对应输出。
+    如果标记解析失败（解析率<10%），尝试按行解析兜底。
+
+    ★ 内部函数，供并发调用。失败返回空 dict，由调用方统一兜底。
+
+    Args:
+        batch_idx: 批次索引（0-based）
+        batch: 本批待翻译的中文文本列表
+        start: 本批在全局列表中的起始索引
+        target_lang: 目标语言代码
+        lang_name: 目标语言中文名
+        lang_instruction: 翻译指令字符串
+        example_block: 参考例句区块
+        cfg: API 配置字典
+        url: API 请求 URL
+        headers: 请求头
+        batch_size: 批大小
+
+    Returns:
+        dict: {全局索引: 翻译文本}，失败条目不包含在字典中
     """
     # ★ 构造带标记的输入
     numbered_input = ""
@@ -1877,10 +2124,9 @@ def _translate_one_batch(
     payload = {
         "model": cfg["model"],
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT_TEXT_SIMPLE},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.1,
+        "temperature": FALLBACK_TEMP,
         "max_tokens": max_tokens,
     }
 
@@ -1958,25 +2204,30 @@ def call_online_llm_single_lang_batch(
     batch_size: int = 15,
     on_batch_done=None,
 ) -> list[str]:
-    """批量翻译：将多条中文文本合并为一次API调用，翻译为同一目标语言。
-    ★ v2.20: 并发3批同时请求 + 延迟兜底（未解析的集中再翻译，不逐条调API）
+    """批量翻译：将多条中文文本合并为一次 API 调用，翻译为同一目标语言。
 
-    参数:
+    ★ v2.20: 并发2批同时请求 + 延迟兜底（未解析的集中再翻译，不逐条调 API）。
+
+    流程：
+    1. 动态分批：根据平均文本长度调整每批数量
+    2. 自适应并发：初始2批并发，429 时降级为串行
+    3. 集中兜底：未解析条目合并为一个补批
+    4. 逐条兜底（极少情况）：仍有缺失的逐条调用
+
+    Args:
         zh_texts: 待翻译的中文文本列表
-        target_lang: 目标语言代码（如 mn, ja, ko 等）
-        examples: 参考例句（可选，翻译术语参考）
-        batch_size: 每批文本数量（默认15，短文本可调大到20-30）
-        on_batch_done: 回调函数 on_batch_done(batch_idx, total_batches, done_count, total_count)
+        target_lang: 目标语言代码
+        examples: 参考例句列表（可选）
+        batch_size: 基础批大小，会根据文本长度动态调整
+        on_batch_done: 回调 on_batch_done(batch_idx, total_batches, done_count, total_count)
 
-    返回: list[str]，与 zh_texts 等长，失败的条目为 "[翻译失败]"
+    Returns:
+        list[str]: 与 zh_texts 等长的翻译结果列表，失败条目为 "[翻译失败]"
     """
     if not zh_texts:
         return []
 
-    global _last_result_meta
-    _last_result_meta[target_lang] = {"is_47_direct": True}
-
-    cfg = _get_online_config()
+    cfg = _get_online_config(target_lang=target_lang)
     if not cfg.get("api_key"):
         return ["[翻译失败]"] * len(zh_texts)
 
@@ -1989,15 +2240,14 @@ def call_online_llm_single_lang_batch(
         "Content-Type": "application/json",
     }
 
-    # ★ 语言指令
     if target_lang == "zh_hant":
-        lang_instruction = f"请将以下{src_name}转换为繁体中文，只输出繁体中文结果" if source_lang == "zh" else f"请将以下{src_name}翻译为繁体中文，只输出繁体中文结果"
+        lang_instruction = f"把下面的{src_name}转换为繁体中文，只输出繁体中文结果" if source_lang == "zh" else f"把下面的{src_name}翻译为繁体中文，只输出繁体中文结果"
     elif target_lang == "ja":
-        lang_instruction = f"请将以下{src_name}翻译为日语。必须使用规范的日语汉字+假名混合书写，不要只用假名。只输出日语翻译结果"
+        lang_instruction = f"把下面的{src_name}翻译为日语。必须使用规范的日语汉字+假名混合书写，不要只用假名。只输出日语翻译结果"
     elif target_lang == "ko":
-        lang_instruction = f"请将以下{src_name}翻译为韩语（한국어）。必须使用韩语谚文书写，禁止输出日语。只输出韩语翻译结果"
+        lang_instruction = f"把下面的{src_name}翻译为韩语（한국어）。必须使用韩语谚文书写，禁止输出日语。只输出韩语翻译结果"
     else:
-        lang_instruction = f"请将以下{src_name}翻译为{lang_name}，只输出{lang_name}翻译结果"
+        lang_instruction = f"把下面的{src_name}翻译为{lang_name}，不要额外解释"
 
     example_block = ""
     if examples:
@@ -2087,10 +2337,9 @@ def call_online_llm_single_lang_batch(
             payload = {
                 "model": cfg["model"],
                 "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT_TEXT_SIMPLE},
                     {"role": "user", "content": comp_prompt},
                 ],
-                "temperature": 0.1,
+                "temperature": FALLBACK_TEMP,
                 "max_tokens": max_tokens,
             }
 
@@ -2109,7 +2358,6 @@ def call_online_llm_single_lang_batch(
                 except Exception as e:
                     if "429" in str(e) and "4.7" in cfg["model"]:
                         payload["model"] = "glm-4-flash"
-                        _last_result_meta[target_lang] = {"is_47_direct": False}
                     import time; time.sleep(2)
 
         # ★ 最终仍有缺失的，逐条兜底（极少情况）
@@ -2135,8 +2383,18 @@ def call_online_llm_single_lang_batch(
 
 
 def _parse_batch_by_line(content: str, expected_count: int, target_lang: str) -> dict:
-    """当标记解析失败时的兜底行解析。尝试从模型输出中按行提取翻译结果。
-    返回: dict[int, str]，key为0-based索引
+    """当标记解析失败时的兜底行解析。
+
+    尝试从模型输出中按行提取翻译结果，支持多种编号前缀格式：
+    - "1. text" / "1、text" / "[1] text" / "1：text"
+
+    Args:
+        content: 模型输出文本
+        expected_count: 期望的条目数
+        target_lang: 目标语言代码（用于清洗语言前缀）
+
+    Returns:
+        dict: {0-based索引: 翻译文本}
     """
     parsed = {}
     lines = [l.strip() for l in content.splitlines() if l.strip()]
@@ -2160,180 +2418,27 @@ def _parse_batch_by_line(content: str, expected_count: int, target_lang: str) ->
     
     return parsed
 
-def review_translation_grammar(zh_text: str, translated: str, target_lang: str) -> str:
-    """复查译文：语义准确性 + 语法正确性。第二次调用复查模型，检查并修正错误。
-    如译文正确则原样返回，如有错误则返回修正后的译文。
-    ★ 始终返回 str，绝不返回 dict。
-    """
-    if not translated or not isinstance(translated, str):
-        return translated
-    cfg = _get_review_config()
-    if not cfg.get("api_key"):
-        return translated
-    lang_name = LANG_NAMES.get(target_lang, target_lang)
-
-    review_prompt = (
-        f"你是{lang_name}母语级别的翻译复查专家。请逐句仔细复查以下翻译，检查语义准确性和语法正确性。\n\n"
-        f"【复查步骤——必须严格执行】\n"
-        f"第一步：语义准确性检查（最重要！）\n"
-        f"逐句比对中文原文与{lang_name}译文，确认译文是否准确传达了原文含义：\n"
-        f"  - 中文口语/俗语是否被逐词直译而非意译？例如：\n"
-        f"    ·「逛网站」= 浏览网站（browsing），不是在网站上走/散步\n"
-        f"    ·「大卖」= 大卖家/头部卖家（top sellers），不是巨头(giants)也不是卖得好\n"
-        f"    ·「一年多」= 超过一年（more than a year），不是一年半(a year and a half)\n"
-        f"    ·「专业出身」= 该专业毕业（graduated in），不是专家(expert)\n"
-        f"  - 中文的省略、隐含意思是否在译文中得到正确表达？\n"
-        f"  - 译文是否存在改变原文语义的误译？\n\n"
-        f"第二步：数量、时间、程度必须严格对应原文\n"
-        f"  - 「一年多」=超过1年，不是1.5年/一年半\n"
-        f"  - 「近一年」=过去大约1年，不是1.5年\n"
-        f"  - 数字、数量、时间、程度词不得随意更改：原文说「多」不能译成「半」，原文说「近」不能译成「超过」\n"
-        f"  - 检查译文中每个数字和时间表达是否与原文完全一致\n\n"
-        f"第三步：语法正确性检查\n"
-        f"  - 介词冗余/缺失\n"
-        f"  - 词性误用、主谓不一致\n"
-        f"  - 冠词误用/缺失\n"
-        f"  - 时态错误\n"
-        f"  - 中式外语表达\n\n"
-        f"第四步：自然度检查\n"
-        f"  - 译文是否像母语者写的？不像机器翻译？\n"
-        f"  - 是否有逐词直译导致的不自然表达？\n\n"
-        f"中文原文：{zh_text}\n"
-        f"{lang_name}译文：{translated}\n\n"
-        f"无论是否需要修改，都请输出完整的{lang_name}译文。\n"
-        f"无需修改则原样输出，有错误则输出修正后完整译文。\n"
-        f"禁止输出OK、禁止解释、禁止加前缀，只输出译文本身。"
-    )
-
-    url = cfg["base_url"].rstrip("/") + "/chat/completions"
-    headers = {
-        "Authorization": "Bearer " + cfg["api_key"],
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": cfg["model"],
-        "messages": [
-            {"role": "system", "content": "你是翻译复查专家。重点检查：1)语义是否准确（有无误译、逐词直译）2)语法是否正确 3)表达是否自然。始终输出完整的修正后译文，无需修改则原样输出。禁止输出OK，禁止解释。"},
-            {"role": "user", "content": review_prompt},
-        ],
-        "temperature": 0.0,
-        "max_tokens": 4096,
-        # ★ 关闭思考模式——GLM系列默认开启reasoning，reasoning_tokens会吃光max_tokens导致content为空
-    }
-
-    try:
-        print(f"[语法复查] {target_lang}({lang_name}) 检查译文语法")
-        # ★ 推理模型可能因 reasoning_tokens 耗尽 max_tokens 导致 content 为空，最多重试2次并加倍 max_tokens
-        _retry_max = 2
-        _current_max_tokens = payload["max_tokens"]
-        for _retry in range(_retry_max + 1):
-            payload["max_tokens"] = _current_max_tokens
-            r = requests.post(url, headers=headers, json=payload, timeout=cfg["timeout"], proxies=cfg.get("proxies"))
-            r.raise_for_status()
-            resp_json = r.json()
-            result = _extract_content(resp_json)
-            if result:
-                break  # content 非空，成功
-            # content 为空，检查是否 reasoning 吃光了额度
-            msg = resp_json.get("choices", [{}])[0].get("message", {})
-            rc = msg.get("reasoning_content", "")
-            if rc and _retry < _retry_max:
-                _current_max_tokens = min(_current_max_tokens * 2, 8192)
-                print(f"[语法复查] {target_lang} content为空(reasoning占{len(rc)}字符)，"
-                      f"重试({_retry+1}/{_retry_max}) max_tokens={_current_max_tokens}")
-            else:
-                break  # 非推理原因或已到重试上限
-        # ★ 复查结果只做轻量清洗，不走翻译的多语截取管线（避免清洗过度导致为空）
-        if not result:
-            print(f"[语法复查] {target_lang} 模型content为空，保持原译文")
-            return translated
-        # 去掉可能的语言名前缀（如"英语："、"English:"）
-        cleaned = _strip_lang_prefix(result, target_lang)
-        # 去掉非目标语言的中文（仅非中文语言）
-        if target_lang != "zh_hant":
-            cleaned = _strip_chinese_in_non_zh(cleaned, target_lang)
-        cleaned = cleaned.strip()
-        # 归一化比较：去除首尾空白和标点差异
-        orig_norm = translated.strip()
-        cleaned_norm = cleaned.strip()
-        if cleaned_norm and cleaned_norm == orig_norm:
-            print(f"[语法复查] {target_lang} 语法正确，无需修正")
-            return translated
-        else:
-            if cleaned_norm:
-                # ★ 防截断保护：复查结果行数或长度明显少于原译文，保持原译文
-                orig_lines = [l for l in orig_norm.split('\n') if l.strip()]
-                cleaned_lines = [l for l in cleaned_norm.split('\n') if l.strip()]
-                if len(cleaned_lines) < len(orig_lines):
-                    print(f"[语法复查] {target_lang} 复查后行数减少({len(orig_lines)}→{len(cleaned_lines)})，保持原译文防截断")
-                    return translated
-                if len(cleaned_norm) < len(orig_norm) * 0.6:
-                    print(f"[语法复查] {target_lang} 复查后长度不足原译文60%({len(orig_norm)}→{len(cleaned_norm)})，保持原译文防截断")
-                    return translated
-                print(f"[语法复查] {target_lang} 语法已修正")
-                return cleaned
-            else:
-                print(f"[语法复查] {target_lang} 清洗后为空，保持原译文")
-                return translated
-    except Exception as e:
-        print(f"[语法复查] {target_lang} 检查失败，返回原译文: {e}")
-        return translated
-
-
-def review_translations_batch(all_translations: dict, target_langs: list, zh_texts: list, on_step=None) -> dict:
-    """批量复查所有译文语法：全部翻译完成后统一复查，不再逐条穿插。
-
-    Args:
-        all_translations: {原文: {lc: 译文}}
-        target_langs: 目标语言列表
-        zh_texts: 原文列表（保持顺序）
-        on_step: 回调 fn(step_name, current, total)
-
-    Returns:
-        修正后的 all_translations（原地修改并返回）
-    """
-    cfg = _get_online_config()
-    if not online_api_is_configured():
-        return all_translations
-
-    # 统计需要复查的条目数
-    review_items = []
-    for text in zh_texts:
-        trans_dict = all_translations.get(text, {})
-        for lc in target_langs:
-            val = trans_dict.get(lc, "")
-            if val and not val.startswith("[翻译失败"):
-                review_items.append((text, lc, val))
-
-    total = len(review_items)
-    if total == 0:
-        return all_translations
-
-    print(f"[语法复查] 开始批量复查，共 {total} 条译文")
-
-    for idx, (text, lc, val) in enumerate(review_items):
-        try:
-            corrected = review_translation_grammar(text, val, lc)
-            if corrected and corrected != val:
-                all_translations[text][lc] = corrected
-        except Exception as e:
-            print(f"[语法复查] {lc} 复查异常，保持原译文: {e}")
-
-        if on_step:
-            on_step("review", idx + 1, total)
-
-    print(f"[语法复查] 批量复查完成")
-    return all_translations
-
 def strip_lang_instruction(user_input: str) -> tuple[str, list[str] | None]:
     """从用户输入中分离翻译指令和实际文本。
-    返回 (clean_text, target_langs)
-    
-    示例：
+
+    支持多种输入格式：
     - "翻成英文和俄语：极石汽车" → ("极石汽车", ["en", "ru"])
     - "翻译成英文 极石汽车" → ("极石汽车", ["en"])
     - "英文：极石汽车" → ("极石汽车", ["en"])
     - "极石汽车" → ("极石汽车", None)
+
+    使用三种策略依次尝试分离：
+    1. 冒号分隔符切分（最可靠）
+    2. 指令动词 + 语言关键词剥离
+    3. 语言名 + 连接词开头剥离
+
+    Args:
+        user_input: 用户输入的原始文本
+
+    Returns:
+        tuple: (clean_text, target_langs)
+               clean_text 是去除指令后的纯文本
+               target_langs 是语言代码列表或 None
     """
     target_langs = parse_target_langs(user_input)
     if not target_langs:
@@ -2423,20 +2528,32 @@ def strip_lang_instruction(user_input: str) -> tuple[str, list[str] | None]:
 
 
 def translate_one_prepare(conn, ids, vecs, zh_text: str, target_langs: list[str] | None = None) -> dict:
-    """分步翻译的第一步：知识库匹配（即时完成），返回已命中的翻译 + 待模型补全的语言列表。
-    
-    返回:
-    {
-        "mode": str,              # 匹配模式
-        "matched_zh": str|None,   # 匹配到的中文
-        "similarity": float,
-        "translations": dict,     # 已有的翻译（知识库命中或空）
-        "candidates": list|None,
-        "target_langs": list,     # 要输出的语言
-        "need_model": list[str],  # 需要模型兜底的语言代码列表
-        "examples": list[dict],   # 参考例句（传给模型用）
-        "is_kb_full_hit": bool,   # 知识库全部命中，不需要模型
-    }
+    """分步翻译的第一步：知识库匹配（即时完成）。
+
+    返回已命中的翻译和待模型补全的语言列表，供调用方决定何时调用模型翻译。
+    此函数是 translate_one 的"纯知识库"版本，不触发模型调用。
+
+    匹配顺序：精确命中 → 模糊匹配 → 语义相似度匹配。
+
+    Args:
+        conn: SQLite 数据库连接
+        ids: 向量索引 ID 数组
+        vecs: 向量数组
+        zh_text: 中文原文
+        target_langs: 目标语言列表，None=全语种
+
+    Returns:
+        dict: {
+            "mode": str,             # 匹配模式
+            "matched_zh": str|None,  # 匹配到的中文
+            "similarity": float,
+            "translations": dict,    # 已有的翻译（知识库命中或空）
+            "candidates": list|None,
+            "target_langs": list,
+            "need_model": list[str], # 需要模型兜底的语言代码列表
+            "examples": list[dict],  # 参考例句
+            "is_kb_full_hit": bool,  # 知识库是否全部命中
+        }
     """
     out_langs = target_langs if target_langs else TRANSLATE_LANGS
     need_model_langs = list(out_langs)
@@ -2514,12 +2631,24 @@ def translate_one_prepare(conn, ids, vecs, zh_text: str, target_langs: list[str]
     }
 
 
-# ==================== 文件翻译（v2.8 新增）====================
+# ====================================================================
+# 文件翻译（v2.8 新增）
+# 支持 DOCX、PPTX、XLSX 格式的文本提取和翻译写入
 # 前端 app.py 和 Agent 调用版 translate_file.py 共用
+# ====================================================================
 
 def _ends_sentence(text):
     """判断文本是否以句末标点结尾（。！？.!?:），即是否是一个完整句子。
-    不以句末标点结尾的段落通常是PPT美观换行产生的断句片段。"""
+
+    不以句末标点结尾的段落通常是PPT美观换行产生的断句片段。
+    此函数用于 PPTX 合并断句片段时的判断依据。
+
+    Args:
+        text: 待判断的文本
+
+    Returns:
+        bool: True 表示以句末标点结尾
+    """
     if not text:
         return True
     last = text.rstrip()[-1]
@@ -2527,23 +2656,19 @@ def _ends_sentence(text):
 
 def file_extract_texts(filepath, ext=None, pptx_merge_fragments=True):
     """从办公文件中提取文本列表（去重保序）。
-    
+
+    PPTX 特殊处理：合并同 shape 内连续不以句末标点结尾的段落，
+    避免逐段翻译产生机翻感。
+
     Args:
         filepath: 文件路径
         ext: 文件扩展名（如 .docx），不传则自动从路径取
         pptx_merge_fragments: PPTX是否合并同shape内的断句片段（默认True）
             PPT中经常为美观把一句话拆成多段，逐段翻译会产生机翻感。
             开启后，同shape内连续不以句末标点结尾的段落会被合并为一条翻译单元。
-    
+
     Returns:
         list[str]: 提取到的文本列表（PPTX合并后含\\n分隔的合并段）
-    
-    Args:
-        filepath: 文件路径
-        ext: 文件扩展名（如 .docx），不传则自动从路径取
-    
-    Returns:
-        list[str]: 提取到的文本列表
     """
     if ext is None:
         ext = Path(filepath).suffix.lower()
@@ -2626,24 +2751,23 @@ def file_extract_texts(filepath, ext=None, pptx_merge_fragments=True):
 
 
 def _estimate_text_overflow(text, shape_w_emu, shape_h_emu, font_size_pt, line_spacing=1.15):
-    """估算文本是否溢出文本框。返回 (是否溢出, 建议字号, 建议行间距)。
-    
+    """估算文本是否溢出文本框，返回适配后的字号和行间距。
+
     估算逻辑：
-    - 拉丁/西里尔/阿拉伯字符平均宽度约 0.55em，CJK 约 1.0em
-    - 每行可容纳字符数 = shape_width / (avg_char_w × font_size_emu)
-    - 估算行数 = ceil(text_length / chars_per_line)
-    - 总高度 = 行数 × line_height
-    - 如果总高度 > shape_height，则溢出，尝试缩小字号
-    
+    1. 计算文本的平均字符宽度比例（拉丁≈0.55em，CJK≈1.0em）
+    2. 从原始字号向下尝试，找到不溢出的最大字号
+    3. 最小字号也放不下时，收紧行间距
+    4. 仍放不下则返回最小字号 + 最紧行间距
+
     Args:
         text: 译文文本
         shape_w_emu: 文本框宽度（EMU）
         shape_h_emu: 文本框高度（EMU）
         font_size_pt: 原始字号（pt）
         line_spacing: 行间距倍数，默认 1.15
-    
+
     Returns:
-        (fitted_size_pt, fitted_line_spacing)
+        (fitted_size_pt, fitted_line_spacing): 适配后的字号和行间距
     """
     if not text or not shape_w_emu or not shape_h_emu:
         return font_size_pt, line_spacing
@@ -2699,7 +2823,19 @@ def _estimate_text_overflow(text, shape_w_emu, shape_h_emu, font_size_pt, line_s
 
 
 def _frange(start, stop, step):
-    """浮点 range"""
+    """浮点数版本的 range 生成器。
+
+    生成从 start 到 stop（含），步长为 step 的浮点数序列。
+    支持正步长和负步长。
+
+    Args:
+        start: 起始值
+        stop: 终止值（含）
+        step: 步长
+
+    Returns:
+        list[float]: 浮点数序列
+    """
     vals = []
     v = start
     if step > 0:
@@ -2714,15 +2850,18 @@ def _frange(start, stop, step):
 
 
 def _fit_pptx_shape_text(shape, all_para_texts, orig_size_pt):
-    """对整个shape的所有段落做统一的字号+行距适配。
-    
+    """对整个 shape 的所有段落做统一的字号 + 行距适配。
+
+    将 shape 中所有已翻译段落的文本合并计算溢出，
+    然后统一缩小字号和行间距。
+
     Args:
         shape: pptx shape 对象
         all_para_texts: [(para, translated_text), ...] 所有需要适配的段落及译文
         orig_size_pt: 原始字号（pt）
-    
+
     Returns:
-        (fit_size_pt, fit_line_spacing) 适配后的字号和行距
+        (fit_size_pt, fit_line_spacing): 适配后的字号和行距
     """
     from pptx.util import Pt
     from pptx.oxml.ns import qn
@@ -2757,7 +2896,14 @@ def _fit_pptx_shape_text(shape, all_para_texts, orig_size_pt):
 
 
 def _apply_size_and_spacing_to_para(para, fit_size_pt, fit_spacing, orig_size_pt):
-    """将适配后的字号和行距应用到单个段落。"""
+    """将适配后的字号和行距应用到单个段落。
+
+    Args:
+        para: python-pptx Paragraph 对象
+        fit_size_pt: 适配后的字号（pt）
+        fit_spacing: 适配后的行间距倍数
+        orig_size_pt: 原始字号（pt），仅当 fit < orig 时才应用
+    """
     from pptx.util import Pt
     from pptx.oxml.ns import qn
     
@@ -2783,11 +2929,11 @@ def _apply_size_and_spacing_to_para(para, fit_size_pt, fit_spacing, orig_size_pt
 
 
 def _apply_pptx_paragraph(para, orig_text, translated_text, shape):
-    """将翻译文本写入PPTX段落，保留格式。
-    
-    注意：字号和行距的自适应改由 _fit_pptx_shape_text + _apply_size_and_spacing_to_para 
-    在shape级别统一处理。此函数只负责写入文本。
-    
+    """将翻译文本写入 PPTX 段落，保留格式。
+
+    注意：字号和行距的自适应改由 _fit_pptx_shape_text + _apply_size_and_spacing_to_para
+    在 shape 级别统一处理。此函数只负责写入文本。
+
     Args:
         para: python-pptx Paragraph 对象
         orig_text: 原文文本
@@ -2841,7 +2987,13 @@ def _apply_pptx_paragraph(para, orig_text, translated_text, shape):
 
 def _set_pptx_autofit(shape):
     """将 PPTX shape 的文本框设为自动缩小（AutoFit）。
-    如果 python-pptx 支持，直接设置 XML 属性；否则跳过。"""
+
+    设置 XML 属性 autofit="shrink"，让 PowerPoint 在打开文件时自动缩小字号。
+    如果 python-pptx 不支持，静默跳过。
+
+    Args:
+        shape: pptx shape 对象
+    """
     try:
         from pptx.oxml.ns import qn
         txBody = shape._element.find(qn('p:txBody'))
@@ -2858,16 +3010,18 @@ def _set_pptx_autofit(shape):
 
 def file_apply_translations(input_path, output_path, translations, ext=None):
     """将翻译结果写回文件，保持原格式版式，译文超长时自动缩小字号。
-    
+
     Args:
         input_path: 原始文件路径
         output_path: 输出文件路径
         translations: dict，{原文: 译文}
         ext: 文件扩展名，不传则自动取
-    
+
     ★ 格式保持策略：保留第一个run的格式属性，清空其余run，译文写入第一个run。
     ★ 自适应字号：译文写入后，估算文本是否溢出文本框，溢出则逐步缩小字号+收紧行间距。
     ★ PPTX额外：设置 autofit="shrink"，让 PowerPoint 在打开时也能自动缩小。
+        对 DOCX：译文长度 > 原文1.5倍时按比例缩小字号。
+        对 XLSX：译文长度 > 原文1.3倍时缩小字号 + 自动调整列宽。
     """
     if ext is None:
         ext = Path(input_path).suffix.lower()
@@ -3111,8 +3265,15 @@ def file_apply_translations(input_path, output_path, translations, ext=None):
 
 
 def translate_file_texts(texts, target_langs, use_online=True, conn=None, ids=None, vecs=None, on_step=None):
-    """批量翻译文件文本列表，走知识库+模型完整链路。
-    
+    """批量翻译文件文本列表，走知识库 + 模型完整链路。
+
+    两部流程：
+    1. 先做 KB 匹配，收集所有需要模型翻译的条目
+    2. 按语言分组，每语言批量调用 call_online_llm_single_lang_batch
+
+    这避免了旧逻辑中逐条文本逐语言串行调用的低效问题
+    （580条×9语言=5220次API → 9语言×39批=351次API）。
+
     Args:
         texts: 待翻译的文本列表
         target_langs: 目标语言代码列表，如 ["en", "ru"]
@@ -3120,10 +3281,10 @@ def translate_file_texts(texts, target_langs, use_online=True, conn=None, ids=No
         conn: 知识库SQLite连接
         ids: 向量索引IDs
         vecs: 向量索引vecs
-    
+
     Yields:
         (all_translations, kb_hits, model_hits, done, total) 每翻译一条输出一次进度
-    
+
     Returns (最后一次yield):
         all_translations: {原文: {lc: 译文}}
         kb_hits: KB命中次数
@@ -3136,8 +3297,7 @@ def translate_file_texts(texts, target_langs, use_online=True, conn=None, ids=No
     model_hits = 0
     translate_total = len(texts) * len(target_langs)
     # ★ total 包含翻译 + 复查两个阶段
-    will_review = online_api_is_configured() and REVIEW_ENABLED
-    total = translate_total * 2 if will_review else translate_total
+    total = translate_total
     done = 0
     all_examples = []
     
@@ -3219,53 +3379,25 @@ def translate_file_texts(texts, target_langs, use_online=True, conn=None, ids=No
                 # ★ yield 进度
                 yield all_translations, kb_hits, model_hits, done, total
 
-    # ★★★ 全部翻译完成后，批量复查语法 ★★★
-    if will_review:
-        if on_step:
-            on_step("review_start", 0, translate_total)
-        # 复查时逐条更新 done 并 yield 进度
-        review_items = []
-        for text in texts:
-            trans_dict = all_translations.get(text, {})
-            for lc in target_langs:
-                val = trans_dict.get(lc, "")
-                if not val or val.startswith("[翻译失败"):
-                    continue
-                # ★ 4.7-flash 直翻时跳过复查（质量已够，复查可能改坏正确译文）
-                lang_meta = _last_result_meta.get(lc, {})
-                if lang_meta.get("is_47_direct", True):
-                    continue
-                review_items.append((text, lc, val))
-
-        for idx, (text, lc, val) in enumerate(review_items):
-            try:
-                corrected = review_translation_grammar(text, val, lc)
-                if corrected and corrected != val:
-                    all_translations[text][lc] = corrected
-            except Exception as e:
-                print(f"[语法复查] {lc} 复查异常，保持原译文: {e}")
-            done += 1
-            if on_step:
-                on_step("review", idx + 1, len(review_items))
-            yield all_translations, kb_hits, model_hits, done, total
-
-        if on_step:
-            on_step("review_done", 0, 0)
-
-
-# ==================== 文件纠错（v2.9 重构）====================
+# ====================================================================
+# 文件纠错（v2.9 重构）
+# PPTX：红字批注识别；DOCX/XLSX：位置对齐比对
+# ====================================================================
 
 def parse_correction_note(note_text):
     """从纠错批注中提取修正后的翻译文本。
-    
-    常见模式：
+
+    常见纠错批注模式：
     - "改为：XXX" / "改为XXX"
     - "第一行改为：XXX"
     - "应该/可以写XXX" / "应该/可以翻译成XXX"
-    - "改成XXX"
-    
+    - "改成XXX" / "修改为XXX" / "修正为XXX"
+
+    Args:
+        note_text: 批注文本
+
     Returns:
-        str | None: 提取到的修正文本，无法解析则返回None
+        str | None: 提取到的修正文本，无法解析则返回 None
     """
     import re
     patterns = [
@@ -3287,8 +3419,13 @@ def parse_correction_note(note_text):
 
 
 def extract_pptx_red_annotations(filepath):
-    """提取PPTX中红色字体的批注文本，并关联到同页最近的非红色文本。
-    
+    """提取 PPTX 中红色字体的批注文本，并关联到同页最近的非红色文本。
+
+    纠错文件的特点：原文翻译仍保留，旁边用红字批注标注怎么改。
+    因此不能用位置对齐，而要提取红字批注并关联到附近的原文翻译。
+
+    关联策略：计算红字 shape 和普通文本 shape 的中心点距离，取最近者。
+
     Returns:
         list[dict]: 每项含 slide_idx, red_text, nearby_original
     """
@@ -3296,7 +3433,17 @@ def extract_pptx_red_annotations(filepath):
     from pptx.dml.color import RGBColor
     
     def _is_red(run):
-        """判断 run 是否为红色字体"""
+        """判断 run 是否为红色字体。
+
+        检测逻辑：检查 run 的字体颜色是否为纯红（FF0000）或偏红
+        （R通道高，G/B通道低）。
+
+        Args:
+            run: python-pptx Run 对象
+
+        Returns:
+            bool: True 表示为红色字体
+        """
         try:
             color = run.font.color
             if color is None:
@@ -3380,14 +3527,30 @@ def extract_pptx_red_annotations(filepath):
 
 
 def _pptx_correct_compare(original_path, corrected_path, lang_code, conn, ids, vecs):
-    """PPTX纠错：提取红色批注→解析修正文本→匹配KB→保存。
-    
-    PPTX纠错文件的特点：原文翻译仍保留，旁边用红字批注标注怎么改。
-    所以不能用位置对齐，而要：
+    """PPTX 纠错：提取红色批注 → 解析修正文本 → 匹配 KB → 保存。
+
+    PPTX 纠错文件的特点：原文翻译仍保留，旁边用红字批注标注怎么改。
+    所以不能用位置对齐，而要用语义匹配：
+
+    流程：
     1. 提取红字批注和附近的原文翻译
     2. 从批注中解析出修正文本（如"改为：XXX"）
     3. 用附近原文翻译在KB中反查中文源文
-    4. 更新KB
+       - 3a. 精确匹配 KB 的语言列
+       - 3b. LIKE 模糊匹配
+       - 3c. 用中文原文列表 + KB 匹配
+    4. 有差异则更新 KB
+
+    Args:
+        original_path: 原始文件路径（中文原文）
+        corrected_path: 纠错后文件路径（含红字批注）
+        lang_code: 目标语言代码
+        conn: SQLite 数据库连接
+        ids: 向量索引 ID 数组
+        vecs: 向量数组
+
+    Returns:
+        tuple: (results: list[dict], summary: dict)
     """
     lang_name = LANG_NAMES.get(lang_code, "")
     annotations = extract_pptx_red_annotations(corrected_path)
@@ -3531,7 +3694,23 @@ def _pptx_correct_compare(original_path, corrected_path, lang_code, conn, ids, v
 
 
 def _position_correct_compare(original_path, corrected_path, lang_code, conn, ids, vecs, ext):
-    """DOCX/XLSX纠错：位置对齐比对（原逻辑）"""
+    """DOCX/XLSX 纠错：位置对齐比对。
+
+    对 DOCX 和 XLSX 文件，文本提取后按位置一一对应比较。
+    相同位置的原文 → 译文对照，有差异则更新知识库。
+
+    Args:
+        original_path: 原始文件路径
+        corrected_path: 纠错后文件路径
+        lang_code: 目标语言代码
+        conn: SQLite 数据库连接
+        ids: 向量索引 ID 数组
+        vecs: 向量数组
+        ext: 文件扩展名
+
+    Returns:
+        tuple: (results: list[dict], summary: dict)
+    """
     zh_texts = file_extract_texts(original_path, ext)
     corrected_texts = file_extract_texts(corrected_path, ext)
 
@@ -3602,11 +3781,365 @@ def _position_correct_compare(original_path, corrected_path, lang_code, conn, id
     return results, summary
 
 
+# ====================================================================
+# Phase 1: segment_base 结构化知识库
+# 将翻译记忆库中的条目拆解为可复用的语义片段（术语、短语、句式模板等）
+# ====================================================================
+
+# 语义片段类型枚举
+# 用于 segment_base 表，标识每一条片段的语义类别
+SEGMENT_TYPES = {
+    "term",        # 原子术语（如"极石汽车→ROX"）
+    "phrase",      # 固定短语（如"了解更多→Learn More"）
+    "position",    # 位置词（如"左前→Left Front"）
+    "component",   # 部件名（如"轮胎→Tire"）
+    "status",      # 状态词（如"异常→Abnormal"）
+    "negation",    # 否定结构（如"不{verb}→Not {verb}ed"）
+    "pattern",     # 句式模板（如"{pos}{comp}{status}→{pos} {comp} {status}"）
+    "syntax",      # 语法结构（如"为{某人}预留{某物}→Reserve {sth} for {sb}"）
+    "cond_result", # 条件结果（如"{cond}，请{action}→Please {action} if {cond}"）
+    "action_guide",# 操作引导（如"请{action}→Please {action}"）
+    "product_frame", # 产品框架（如"产品描述：{desc}→Product Description: {desc}"）
+    "value_unit",  # 数值单位（如"约{num}{unit}→Approx. {num} {unit}"）
+    "enumeration", # 列表编号（如"{n}. {item}→{n}. {item}"）
+    "disclaimer",  # 免责句式（如"如{cond}不承担{liability}→Not liable for {liability} if {cond}"）
+}
+
+def init_segment_db(conn):
+    """初始化 segment_base 表（如果不存在）。
+
+    创建存储语义片段的数据库表，包含类型、语言对、原文/译文、变量等字段。
+    同时建立 lang_pair、seg_type、segment_hash 三个索引加速查询。
+
+    Args:
+        conn: SQLite 数据库连接
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS segment_base (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id   INTEGER,
+            seg_type    TEXT NOT NULL,
+            lang_pair   TEXT NOT NULL,
+            source_text TEXT NOT NULL,
+            target_text TEXT NOT NULL,
+            variables   TEXT DEFAULT '[]',
+            tag         TEXT DEFAULT '',
+            segment_hash TEXT UNIQUE,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sb_lang_pair ON segment_base(lang_pair)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sb_seg_type ON segment_base(seg_type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sb_hash ON segment_base(segment_hash)")
+    conn.commit()
+
+def _segment_hash(source_text: str, lang_pair: str) -> str:
+    """计算语义片段的唯一哈希值。
+
+    Args:
+        source_text: 原文文本
+        lang_pair: 语言对（如 "zh-en"）
+
+    Returns:
+        str: MD5 哈希值
+    """
+    return hashlib.md5(f"{source_text}||{lang_pair}".encode()).hexdigest()
+
+def build_segment_base(conn):
+    """遍历 tm_segments，用 LLM 提取语义段，去重写入 segment_base。
+
+    对每条翻译记忆条目，调用在线模型分析中文→英文翻译，
+    提取所有可复用的语义片段（术语、短语、句式模板等），
+    写入 segment_base 表供后续段匹配使用。
+
+    Args:
+        conn: SQLite 数据库连接
+
+    Returns:
+        int: 提取到的语义片段总数
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    init_segment_db(conn)
+
+    rows = conn.execute("SELECT id, zh, en, ru, ar, es, pt, fr, kk, de, zh_hant, ms, id_lang, th, tr, it, pl, sv, module FROM tm_segments WHERE zh IS NOT NULL AND zh != ''").fetchall()
+    lang_cols = ["en", "ru", "ar", "es", "pt", "fr", "kk", "de", "zh_hant", "ms", "id_lang", "th", "tr", "it", "pl", "sv"]
+
+    extract_prompt = """分析以下中文→英文翻译条目，提取所有可复用的翻译片段。
+
+原文: {zh}
+译文: {en}
+
+从以下14种类别中识别本条包含哪些，输出JSON数组：
+- term（原子术语，如"极石汽车→ROX"）
+- phrase（固定短语，如"了解更多→Learn More"）
+- position（位置词，如"左前→Left Front"）
+- component（部件名，如"轮胎→Tire"）
+- status（状态词，如"异常→Abnormal"）
+- negation（否定结构，如"不{verb}→Not {verb}ed"）
+- pattern（句式模板，如"{pos}{comp}{status}→{pos} {comp} {status}"）
+- syntax（语法结构，如"为{某人}预留{某物}→Reserve {sth} for {sb}"）
+- cond_result（条件结果，如"{cond}，请{action}→Please {action} if {cond}"）
+- action_guide（操作引导，如"请{action}→Please {action}"）
+- product_frame（产品框架，如"产品描述：{desc}→Product Description: {desc}"）
+- value_unit（数值单位，如"约{num}{unit}→Approx. {num} {unit}"）
+- enumeration（列表编号，如"{n}. {item}→{n}. {item}"）
+- disclaimer（免责句式，如"如{cond}不承担{liability}→Not liable for {liability} if {cond}"）
+
+规则：
+- 每段 source_text 必须在原文中能找到连续匹配
+- 模板类用 {var} 标记变量
+- 输出纯JSON数组，不要markdown不要解释
+- 若无任何可提取片段则输出 []
+"""
+
+    batch = []
+    batch_size = 20
+    total_segments = 0
+
+    for row in rows:
+        zh_text = row[1]
+        en_text = row[2]
+        if not zh_text or not en_text:
+            continue
+        batch.append((row[0], zh_text, en_text))
+
+    for i in range(0, len(batch), batch_size):
+        chunk = batch[i:i+batch_size]
+        for sid, zh, en in chunk:
+            try:
+                prompt = extract_prompt.format(zh=zh, en=en)
+                payload = {
+                    "model": os.getenv("ONLINE_MODEL", "tencent/Hunyuan-MT-7B"),
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "max_tokens": 2048,
+                }
+                cfg = _get_online_config()
+                url = f"{cfg['base_url'].rstrip('/')}/chat/completions"
+                headers = {"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"}
+                r = requests.post(url, headers=headers, json=payload, timeout=120)
+                r.raise_for_status()
+                content = _extract_content(r.json())
+                content = content.replace("```json", "").replace("```", "").strip()
+                segments = json.loads(content) if content else []
+                if not isinstance(segments, list):
+                    continue
+                for seg in segments:
+                    st = seg.get("seg_type", "")
+                    stext = seg.get("source_text", "").strip()
+                    ttext = seg.get("target_text", "").strip()
+                    if st not in SEGMENT_TYPES or not stext or not ttext:
+                        continue
+                    h = _segment_hash(stext, "zh-en")
+                    try:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO segment_base (source_id, seg_type, lang_pair, source_text, target_text, tag, segment_hash) VALUES (?,?,?,?,?,?,?)",
+                            (sid, st, "zh-en", stext, ttext, "", h)
+                        )
+                        conn.commit()
+                        total_segments += 1
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"[segment_base] 提取失败 row={sid}: {e}")
+                continue
+
+        print(f"[segment_base] 进度 {min(i+batch_size, len(batch))}/{len(batch)}，已提取 {total_segments} 段")
+
+    print(f"[segment_base] 完成：从 {len(batch)} 条TM中提取 {total_segments} 个片段")
+    return total_segments
+
+
+def match_segments(conn, zh_text: str, lang_pair: str) -> tuple[list[dict], str]:
+    """对输入文本做 segment_base 匹配。
+
+    从 segment_base 中加载指定语言对的所有片段，按原文长度降序排列。
+    在输入文本中查找匹配的片段（支持重叠检测，已占用的位置不再匹配）。
+    返回匹配到的片段列表和未匹配的剩余文本。
+
+    Args:
+        conn: SQLite 数据库连接
+        zh_text: 中文原文
+        lang_pair: 语言对（如 "zh-en"）
+
+    Returns:
+        tuple: (matched_segments: list[dict], remaining_text: str)
+               matched_segments 按原文中的起始位置排序
+               remaining_text 是未被任何片段覆盖的文本
+    """
+    if not zh_text or not zh_text.strip():
+        return [], zh_text
+
+    rows = conn.execute(
+        "SELECT seg_type, source_text, target_text FROM segment_base WHERE lang_pair=? ORDER BY length(source_text) DESC",
+        (lang_pair,)
+    ).fetchall()
+
+    segments = [(r[0], r[1], r[2]) for r in rows]
+
+    matched = []
+    remaining = list(zh_text)
+    used = [False] * len(zh_text)
+
+    for seg_type, src, tgt in segments:
+        if not src:
+            continue
+        pos = zh_text.find(src)
+        if pos >= 0:
+            all_free = all(not used[p] for p in range(pos, pos + len(src)))
+            if all_free:
+                for p in range(pos, pos + len(src)):
+                    used[p] = True
+                matched.append({
+                    "seg_type": seg_type,
+                    "source": src,
+                    "target": tgt,
+                    "start": pos,
+                    "end": pos + len(src),
+                })
+
+    remaining_text = ""
+    i = 0
+    while i < len(zh_text):
+        if not used[i]:
+            remaining_text += zh_text[i]
+            i += 1
+        else:
+            if remaining_text and not remaining_text[-1].isspace():
+                remaining_text += " "
+            i += 1
+
+    matched.sort(key=lambda x: x["start"])
+    remaining_text = remaining_text.strip()
+
+    return matched, remaining_text
+
+
+def reassemble_translation(matched_segments: list[dict], model_translated: str, original_text: str) -> str:
+    """将 segment_base 匹配结果按原文位置重组，未匹配部分用模型翻译填充。
+
+    策略：
+    1. 按原文位置排序匹配到的片段
+    2. 找出未被片段覆盖的文本区间
+    3. 将模型翻译的段落按顺序填入未覆盖区间
+    4. 返回完整翻译
+
+    Args:
+        matched_segments: 匹配到的片段列表
+        model_translated: 模型翻译的剩余部分文本
+        original_text: 原始中文文本
+
+    Returns:
+        str: 重组后的完整翻译
+    """
+    if not matched_segments:
+        return model_translated
+    if not model_translated and matched_segments:
+        return " ".join(m["target"] for m in matched_segments)
+
+    matched_segments.sort(key=lambda x: x["start"])
+
+    unused_ranges = []
+    prev_end = 0
+    for m in matched_segments:
+        if m["start"] > prev_end:
+            unused_ranges.append((prev_end, m["start"]))
+        prev_end = m["end"]
+    if prev_end < len(original_text):
+        unused_ranges.append((prev_end, len(original_text)))
+
+    model_parts = model_translated.split("\n") if "\n" in model_translated else model_translated.split(". ")
+    model_idx = 0
+
+    result_parts = []
+    text_pos = 0
+    for m in matched_segments:
+        while text_pos < m["start"]:
+            src_frag = original_text[text_pos:m["start"]].strip()
+            if src_frag and model_idx < len(model_parts):
+                result_parts.append(model_parts[model_idx].strip())
+                model_idx += 1
+            text_pos = m["start"]
+        result_parts.append(m["target"])
+        text_pos = m["end"]
+
+    if text_pos < len(original_text):
+        src_frag = original_text[text_pos:].strip()
+        if src_frag and model_idx < len(model_parts):
+            remaining = " ".join(model_parts[model_idx:])
+            if remaining.strip():
+                result_parts.append(remaining.strip())
+
+    return " ".join(result_parts)
+
+
+def post_process_translation(text: str, target_lang: str) -> str:
+    """硬编码风格后处理——所有翻译路径必须走此函数。
+
+    包括：
+    1. 品牌名统一：Jishi/jishi → ROX
+    2. 英语特定修正：非规范搭配替换（如 "shift to online" → "shift online"）
+    3. 非CJK语言中删除残余的中文字符（日语/韩语除外）
+
+    Args:
+        text: 翻译后的文本
+        target_lang: 目标语言代码
+
+    Returns:
+        str: 后处理后的文本
+    """
+    if not text:
+        return text
+
+    text = text.strip()
+
+    text = text.replace("Jishi", "ROX").replace("jishi", "ROX")
+
+    if target_lang == "en":
+        fixups = [
+            (r'\bshift to online\b', 'shift online'),
+            (r'\bgo to online\b', 'go online'),
+            (r'\bdiscuss about\b', 'discuss'),
+            (r'\bcontact with\b', 'contact'),
+            (r'\bdeeply participate\b', 'actively engage'),
+            (r'\breserved exclusive\b', 'exclusive reserved'),
+        ]
+        for pat, repl in fixups:
+            text = re.sub(pat, repl, text, flags=re.IGNORECASE)
+
+    if target_lang != "zh_hant":
+        cjk = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf]')
+        if target_lang in ("ja", "ko"):
+            pass
+        else:
+            text = re.sub(r'[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef]+', '', text)
+            text = re.sub(r' {2,}', ' ', text)
+            text = re.sub(r'\n{3,}', '\n\n', text)
+
+    text = text.strip()
+    return text
+
+
 def file_correct_compare(original_path, corrected_path, lang_code, conn, ids, vecs, ext=None):
     """比对原文文件和纠错后文件，提取差异，保存纠错结果到知识库。
-    
-    PPTX → 红字批注识别（extract_pptx_red_annotations + parse_correction_note）
-    DOCX/XLSX → 位置对齐比对
+
+    根据文件类型选择不同的纠错策略：
+    - PPTX → 红字批注识别（提取红色字体 → 解析修正文本 → 匹配 KB → 保存）
+    - DOCX/XLSX → 位置对齐比对（逐行对比 → 有差异则更新 KB）
+
+    Args:
+        original_path: 原始文件路径（含中文原文）
+        corrected_path: 纠错后文件路径（含修正内容）
+        lang_code: 目标语言代码
+        conn: SQLite 数据库连接
+        ids: 向量索引 ID 数组
+        vecs: 向量数组
+        ext: 文件扩展名
+
+    Returns:
+        tuple: (results: list[dict], summary: dict)
+               results 包含每个纠错点的详细结果
+               summary 包含统计信息（total, changed, saved, failed 等）
     """
     if ext is None:
         ext = Path(corrected_path).suffix.lower()

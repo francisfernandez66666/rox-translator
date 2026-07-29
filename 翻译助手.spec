@@ -1,4 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
+# ============================================================================
+# 翻译助手.spec — PyInstaller 构建配置
+# 使用方式: pyinstaller --clean 翻译助手.spec
+# 构建前需先执行: cd frontend && npm run build
+# ============================================================================
 a = Analysis(
     ['backend/main.py'],
     pathex=[],
@@ -57,18 +62,4 @@ coll = COLLECT(
     name='翻译助手',
 )
 
-app = BUNDLE(
-    coll,
-    name='翻译助手.app',
-    icon=None,
-    bundle_identifier='com.rox.translator',
-    info_plist={
-        'NSHighResolutionCapable': True,
-        'CFBundleShortVersionString': '1.0.0',
-        'CFBundleVersion': '1',
-        'CFBundleDisplayName': '翻译助手',
-        'LSMinimumSystemVersion': '10.15',
-    },
-    codesign_identity='-',
-    entitlements_file=None,
-)
+# .app 由 build.sh 构建，此处不再通过 BUNDLE 创建

@@ -12,6 +12,7 @@
 #   7. ★ KB上传+自动向量化：上传CSV/Excel扩充知识库，自动重建索引
 # ============================================================================
 
+# ---- 标准库导入 ----
 import os
 import sys
 import re
@@ -19,14 +20,17 @@ import json
 from typing import Optional
 
 # ---- 路径配置 ----
+# 将当前脚本所在目录加入 sys.path，以便导入同目录下的模块
 _SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
+# 将 backend 父目录加入 sys.path，以便导入 base_skill 等模块
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
+# 导入基础技能类
 from base_skill import BaseSkill
 
 # ---- ★ 懒加载：启动时不 import lib，避免 numpy 等重型依赖拖慢启动 ----
@@ -39,13 +43,19 @@ _index_vecs = None    # 向量索引缓存
 # _OTHER_LANG_SYSTEM_PROMPT、_UNDERSTAND_PROMPT、_TRANSLATE_WITH_CONTEXT_PROMPT
 # 所有翻译（KB语言+其他语言）统一走 lib.call_online_llm_single_lang()，
 # 不再在 skill.py 里重复实现API调用逻辑
-# lib.py 中的对应提示词：SYSTEM_PROMPT_TEXT_SIMPLE（直翻）、_UNDERSTAND_PROMPT_LIB + _TRANSLATE_WITH_CONTEXT_PROMPT_LIB（429降级两步法）
+# 旧 system prompt 常量（SYSTEM_PROMPT_TEXT_SIMPLE 等）已全部从 lib.py 中删除，
+# 改用极简 user message 格式，由 post_process_translation() 统一做风格后处理。
 
 
 def _ensure_lib():
     """
     懒加载翻译引擎 lib.py
+
     ★ 直接从文件系统加载，不依赖 sys.path，兼容所有打包模式
+    搜索顺序：同目录 → PyInstaller 打包路径 → 标准 import
+
+    Returns:
+        module | None: 加载成功返回 lib 模块，失败返回 None
     """
     global _lib
     if _lib is not None:
@@ -70,7 +80,7 @@ def _ensure_lib():
             _candidates.append(os.path.join(_exe_dir, "_internal", "skills", "translation", "lib.py"))
             _candidates.append(os.path.join(_exe_dir, "..", "_internal", "skills", "translation", "lib.py"))
 
-    # 去重 + 验证
+    # 去重 + 验证：遍历候选路径，找到第一个有效文件并加载
     _seen = set()
     for p in _candidates:
         rp = os.path.realpath(p)
@@ -100,6 +110,7 @@ def _ensure_lib():
     except Exception:
         pass
 
+    # 所有路径均失败，打印诊断信息
     print(f"  ❌ 翻译引擎 lib.py 加载失败，搜索路径:")
     for p in _candidates:
         print(f"     {'✅' if os.path.isfile(os.path.realpath(p)) else '❌'} {p}")
@@ -109,8 +120,16 @@ def _ensure_lib():
 def _get_cached_resources():
     """
     获取缓存的 DB 连接和向量索引
-    首次调用时初始化，后续复用（避免每次请求都重新 load_index）
-    返回 (lib, conn, ids, vecs) 或 (None, None, None, None)
+
+    首次调用时初始化 DB 连接和向量索引，后续调用复用缓存，
+    避免每次请求都重新 load_index。
+
+    Returns:
+        tuple: (lib, conn, ids, vecs)
+            - lib: lib 模块引用，加载失败为 None
+            - conn: SQLite 数据库连接，无数据库文件时为 None
+            - ids: 向量索引 ID 数组，无缓存时为 None
+            - vecs: 向量索引向量数组，无缓存时为 None
     """
     global _db_conn, _index_ids, _index_vecs
 
@@ -124,6 +143,7 @@ def _get_cached_resources():
             _db_conn = l.get_db()
             print("  ✅ 翻译知识库 DB 已连接（缓存）")
         else:
+            # 数据库文件不存在，仅返回 lib 模块
             return l, None, None, None
 
     # ---- 缓存向量索引 ----
@@ -145,15 +165,18 @@ class TranslationSkill(BaseSkill):
 
     @property
     def name(self) -> str:
+        """返回技能名称标识"""
         return "translation"
 
     @property
     def description(self) -> str:
+        """返回技能描述文本，用于前端展示"""
         return "多语言翻译：支持9种知识库语言+任意其他语言AI翻译，支持文本和文件翻译"
 
     # ★ 知识库支持的语言列表（有翻译记忆库和向量索引的语言）
     @property
     def kb_langs(self) -> list[str]:
+        """获取当前知识库支持的语言代码列表"""
         l = _ensure_lib()
         if l is None:
             return []
@@ -162,6 +185,7 @@ class TranslationSkill(BaseSkill):
     # ★ 语言名称映射
     @property
     def lang_names(self) -> dict:
+        """获取语言代码 → 中文名的映射字典"""
         l = _ensure_lib()
         if l is None:
             return {}
@@ -169,6 +193,7 @@ class TranslationSkill(BaseSkill):
 
     @property
     def keywords(self) -> list[str]:
+        """返回触发该技能的关键词列表，用于意图识别"""
         return [
             "翻译", "译成", "翻成", "translate",
             "多语言", "九语", "9语", "本地化",
@@ -176,11 +201,24 @@ class TranslationSkill(BaseSkill):
         ]
 
     def can_handle(self, user_input: str) -> float:
+        """
+        判断是否能够处理用户输入
+
+        规则：包含关键词返回 0.9；短文本且非闲聊内容返回 0.5；否则返回 0.0
+
+        Args:
+            user_input: 用户输入的文本
+
+        Returns:
+            float: 0.0 ~ 1.0 的置信度评分
+        """
         text = user_input.strip()
         text_lower = text.lower()
+        # 关键词匹配：高置信度
         for kw in self.keywords:
             if kw in text_lower:
                 return 0.9
+        # 短文本非闲聊兜底：含中文字符且不是常见聊天用语
         if len(text) <= 20:
             chat_words = ["你好", "在吗", "谢谢", "再见", "嗨", "hi", "hello", "你是谁"]
             if not any(w in text_lower for w in chat_words):
@@ -189,6 +227,19 @@ class TranslationSkill(BaseSkill):
         return 0.0
 
     def handle(self, params: dict) -> dict:
+        """
+        技能入口：根据参数分派文本翻译或文件翻译
+
+        Args:
+            params: 请求参数字典，包含以下可选键：
+                - message: 用户输入文本
+                - files: 文件路径列表
+                - options: 选项字典（target_langs 等）
+                - on_progress: 进度回调函数
+
+        Returns:
+            dict: 翻译结果（含 skill 名称、reply 文本、data 数据、files 文件列表等）
+        """
         l = _ensure_lib()
         if l is None:
             return {
@@ -241,16 +292,25 @@ class TranslationSkill(BaseSkill):
     def _parse_other_lang_from_prompt(self, text: str) -> tuple[list[str], str]:
         """
         ★ 从用户 prompt 中解析目标语言（支持多语言，如"翻译成日语、韩语"）
-        返回 (lang_codes列表, cleaned_text)
 
         匹配模式：
         1. "翻译成泰语：xxx" / "翻成日语、韩语xxx"
         2. "用泰语翻译：xxx"
         3. "translate to thai: xxx"
         4. "泰语：xxx"（语言名开头+冒号）
+        5. 纯英文语言名+冒号
+
+        Args:
+            text: 用户输入的文本
+
+        Returns:
+            tuple: (lang_codes列表, cleaned_text)
+                - lang_codes: 解析到的语言代码列表，为空列表表示未解析到
+                - cleaned_text: 移除语言指令后的纯文本
         """
         # ---- 辅助：单个语言名 → 代码 ----
         def _resolve_one(hint: str) -> Optional[str]:
+            """将单个语言名转换为语言代码，使用别名表+LLM兜底"""
             hint = hint.strip().rstrip("语") + "语" if hint.strip() in self._LANG_ALIAS_MAP and not hint.strip().endswith("语") else hint.strip()
             # 别名表
             code = self._LANG_ALIAS_MAP.get(hint)
@@ -353,7 +413,17 @@ class TranslationSkill(BaseSkill):
         return [], text
 
     def _llm_parse_lang(self, lang_hint: str) -> Optional[str]:
-        """用LLM辅助识别语言名，返回ISO 639-1代码"""
+        """
+        用LLM辅助识别语言名，返回ISO 639-1代码
+
+        当别名表无法匹配时，调用在线LLM作为兜底方案。
+
+        Args:
+            lang_hint: 用户输入的语言名称（如"泰语"、"thai"等）
+
+        Returns:
+            Optional[str]: ISO 639-1 两字母语言代码，无法识别返回 None
+        """
         l = _ensure_lib()
         if l is None or not l.online_api_is_configured():
             return None
@@ -398,8 +468,18 @@ class TranslationSkill(BaseSkill):
     def _translate_other_lang(self, l, zh_text: str, target_lang: str, lang_display: str) -> str:
         """
         ★ "其他语言"专用翻译——统一走 lib.call_online_llm_single_lang()
+
         ★ 不再重复实现API调用/重试/429降级/清洗逻辑，所有语言翻译归一
         ★ lib.py 内置了 ja/ko 的专属指令，也可通过 lang_instruction_override 覆盖
+
+        Args:
+            l: lib 模块引用
+            zh_text: 待翻译的中文文本
+            target_lang: 目标语言代码（如 "th", "vi" 等）
+            lang_display: 语言显示名称（用于日志/报错）
+
+        Returns:
+            str: 翻译后的文本，失败时返回含 "[翻译失败" 的错误信息
         """
         # ★ 构造语言专属指令覆盖（lib.py 内置了 ja/ko 指令，这里只处理 lib 没覆盖的）
         lang_instruction_override = None
@@ -418,20 +498,6 @@ class TranslationSkill(BaseSkill):
         except Exception as e:
             return f"[翻译失败: {str(e)}]"
 
-        # ★ 复查：4.7直翻时跳过（复查可能改坏正确译文）
-        if l.REVIEW_ENABLED and result and not result.startswith("[翻译失败"):
-            lang_meta = l._last_result_meta.get(target_lang, {})
-            if not lang_meta.get("is_47_direct", True):
-                # 降级模式（4-flash）才复查
-                try:
-                    reviewed = l.review_translation_grammar(zh_text, result, target_lang)
-                    if reviewed and reviewed.strip():
-                        result = reviewed.strip()
-                except Exception as e:
-                    print(f"  [其他语言翻译] {target_lang} 复查失败（保持原译文）: {e}")
-            else:
-                print(f"  [其他语言翻译] {target_lang} 4.7直翻成功，跳过复查")
-
         return result
 
     # ==================== 文本翻译 ====================
@@ -439,7 +505,21 @@ class TranslationSkill(BaseSkill):
     def _handle_text_translate(self, text: str, options: dict, on_progress=None) -> dict:
         """
         文本翻译：知识库匹配 + 在线模型
+
+        支持两种目标语言指定方式：
+        - 方式1（前端子选单）：target_langs 含语言代码（如 ["en", "ja"]）
+        - 方式2（手写兜底）：target_langs 含 "other"，从 prompt 中解析语言
+
         ★ target_langs 中的 "other" → 从 prompt 解析语言 → 纯模型翻译
+        ★ 直接传入的非KB语言代码（如 ja, ko, th）→ 自动走纯模型翻译
+
+        Args:
+            text: 待翻译的文本
+            options: 选项字典，包含 target_langs 等
+            on_progress: 进度回调函数，格式为 (message, current, total)
+
+        Returns:
+            dict: 翻译结果，包含 reply、data（translations、translations_source 等）
         """
         if not text.strip():
             return {"skill": self.name, "reply": "请输入要翻译的中文文本"}
@@ -455,6 +535,7 @@ class TranslationSkill(BaseSkill):
         # 解析目标语言
         target_langs = options.get("target_langs")
         if not target_langs:
+            # 从文本中自动解析语言指令（如"翻译成英语：xxx"）
             clean_text, parsed_langs = l.strip_lang_instruction(text)
             if parsed_langs:
                 target_langs = parsed_langs
@@ -549,25 +630,6 @@ class TranslationSkill(BaseSkill):
                     else:
                         other_result[code] = "[翻译失败: 需要在线模型支持]"
 
-            # ---- ★ KB 语言复查步（4.7直翻时跳过——复查可能改坏正确译文）----
-            if kb_target and l.REVIEW_ENABLED and l.online_api_is_configured():
-                for lang in kb_target:
-                    trans = kb_result.get(lang, "")
-                    if not trans or trans.startswith("[翻译失败"):
-                        continue
-                    # ★ 按语言代码检查该语言的翻译方式（修复：旧版用模块级 _last_two_step_ok 会跨语言污染）
-                    lang_meta = l._last_result_meta.get(lang, {})
-                    is_47_direct = lang_meta.get("is_47_direct", True)
-                    if is_47_direct:
-                        print(f"  [KB复查] {lang} 4.7直翻成功，跳过复查")
-                        continue
-                    try:
-                        reviewed = l.review_translation_grammar(text, trans, lang)
-                        if reviewed and reviewed.strip():
-                            kb_result[lang] = reviewed.strip()
-                    except Exception as e:
-                        print(f"  [KB复查] {lang} 复查失败（保持原译文）: {e}")
-
             # 合并结果
             all_translations = {**kb_result, **other_result}
 
@@ -638,13 +700,22 @@ class TranslationSkill(BaseSkill):
     def _handle_file_translate(self, files: list[str], options: dict, on_progress=None) -> dict:
         """
         文件翻译5步流程：
+
         1. 理解文件 — 提取文本，分析结构
-        2. 总结+补齐 — 总结语义，补齐省略成分
-        3. 翻译文件 — 逐条翻译（KB语言走知识库，其他语言走5步提示词+模型）
-        4. 简练译文 — 去冗余，保持简洁
-        5. 语法复查 — 检查+修正错误
-        最后：写回文件 + 修正排版
+        2. 翻译文件 — 逐条翻译（KB语言走知识库，其他语言走5步提示词+模型）
+        3. 简练译文 — 去冗余，保持简洁
+
+        ★ v2.16 合并了旧版5步为3步（理解→翻译→简练+复查）
+        ★ v2.20 支持多语言并发翻译
         ★ target_langs 中的 "other" → 从 options 的 message 中解析语言
+
+        Args:
+            files: 文件路径列表（仅取第一个文件）
+            options: 选项字典，包含 target_langs、message 等
+            on_progress: 进度回调函数
+
+        Returns:
+            dict: 包含翻译结果、输出文件路径、统计信息等
         """
         if not files:
             return {"skill": self.name, "reply": "请上传文件"}
@@ -675,6 +746,7 @@ class TranslationSkill(BaseSkill):
         other_lang_names = {}
 
         def _get_lang_cn(code: str) -> str:
+            """反查语言中文名：别名表 → LANG_NAMES → 代码回退"""
             for cn_name, c in self._LANG_ALIAS_MAP.items():
                 if c == code:
                     return cn_name
@@ -720,6 +792,7 @@ class TranslationSkill(BaseSkill):
             if on_progress:
                 on_progress("第1步/3：理解文件结构...", 1, 3)
 
+            # 调用 lib 层提取文件中的可翻译文本
             texts = l.file_extract_texts(filepath, ext)
             if not texts:
                 return {"skill": self.name, "reply": "❌ 文件中没有可翻译的文本"}
@@ -797,7 +870,7 @@ class TranslationSkill(BaseSkill):
                     )
                     return (ocode, batch_results)
 
-                # ★ 多语言并发（ThreadPoolExecutor，最多3种语言同时翻译）
+                # ★ 多语言并发（ThreadPoolExecutor，最多2种语言同时翻译）
                 from concurrent.futures import ThreadPoolExecutor, as_completed
                 _lang_results = {}
                 with ThreadPoolExecutor(max_workers=min(len(other_lang_codes), 2)) as executor:
@@ -840,43 +913,12 @@ class TranslationSkill(BaseSkill):
             if on_progress:
                 on_progress("第3步/3：简练译文+语法复查...", 3, 3)
 
-            # 先清洗语言名前缀
+            # 先清洗语言名前缀（如"英文：xxx" → "xxx"）
             for text_key, trans_dict in final_translations.items():
                 for lang, trans in trans_dict.items():
                     if trans and not trans.startswith("[翻译失败"):
                         trans = self._strip_lang_prefix(trans, lang)
                         final_translations[text_key][lang] = trans
-
-            # ★ 语法复查：4.7-flash 直翻跳过（is_47_direct=True 时质量已够）
-            review_count = 0
-            if l.online_api_is_configured() and l.REVIEW_ENABLED:
-                review_items = []
-                for text_key, trans_dict in final_translations.items():
-                    for lang, trans in trans_dict.items():
-                        if trans and not trans.startswith("[翻译失败"):
-                            # ★ v2.16: 4.7-flash 直翻跳过复查（复查可能改坏正确译文）
-                            lang_meta = l._last_result_meta.get(lang, {})
-                            is_47_direct = lang_meta.get("is_47_direct", True)
-                            if is_47_direct:
-                                continue
-                            review_items.append((text_key, lang, trans))
-
-                if review_items:
-                    print(f"  [文件复查] 需复查 {len(review_items)} 条（4.7直翻已跳过）")
-                    for idx, (text_key, lang, trans) in enumerate(review_items):
-                        try:
-                            corrected = l.review_translation_grammar(text_key, trans, lang)
-                            if corrected and corrected != trans:
-                                final_translations[text_key][lang] = corrected
-                                review_count += 1
-                        except Exception as e:
-                            print(f"  [复查] {lang} 异常: {e}")
-
-                        if on_progress:
-                            pct = int((idx + 1) / len(review_items) * 100)
-                            on_progress(f"第3步/3：语法复查（{idx+1}/{len(review_items)}）{pct}%", 3, 3)
-                else:
-                    print(f"  [文件复查] 全部4.7直翻，跳过复查")
 
             # =====================================================
             # 写回文件 + 修正排版
@@ -888,6 +930,7 @@ class TranslationSkill(BaseSkill):
             base_name = os.path.splitext(os.path.basename(filepath))[0]
             output_dir = os.path.join(os.path.dirname(filepath), "translated")
 
+            # 为每种语言生成独立的翻译文件
             for lang in final_langs:
                 lang_trans = {}
                 for text_key, trans_dict in final_translations.items():
@@ -912,8 +955,7 @@ class TranslationSkill(BaseSkill):
                 f"✅ 文件翻译完成！\n"
                 f"  📄 共 {total_texts} 条文本\n"
                 f"  🌐 {len(final_langs)} 种语言：{lang_names}\n"
-                f"  ✅ 知识库命中 {kb_hits} 条，模型翻译 {model_hits} 条\n"
-                f"  🔍 语法复查 {review_count} 条\n\n"
+                f"  ✅ 知识库命中 {kb_hits} 条，模型翻译 {model_hits} 条\n\n"
                 f"点击下方链接下载："
             )
 
@@ -934,7 +976,6 @@ class TranslationSkill(BaseSkill):
                     "lang_names": all_lang_names,
                     "kb_hits": kb_hits,
                     "model_hits": model_hits,
-                    "review_count": review_count,
                     "file_context": file_context[:200] if file_context else "",
                 },
                 "files": output_files,
@@ -948,7 +989,18 @@ class TranslationSkill(BaseSkill):
     # ==================== 辅助方法 ====================
 
     def _summarize_file_context(self, texts: list[str]) -> str:
-        """用在线模型总结文件内容和语境"""
+        """
+        用在线模型总结文件内容和语境
+
+        将文件前50条文本拼接后发给LLM，获取1~2句话的核心主题总结，
+        用于帮助用户了解文件整体语境。
+
+        Args:
+            texts: 文件中的文本片段列表
+
+        Returns:
+            str: 总结文本，失败时返回空字符串
+        """
         if not texts:
             return ""
         l = _ensure_lib()
@@ -996,7 +1048,19 @@ class TranslationSkill(BaseSkill):
         return ""
 
     def _strip_lang_prefix(self, text: str, lang: str) -> str:
-        """去除译文前的语言名前缀"""
+        """
+        去除译文前的语言名前缀
+
+        有些LLM会在译文前自动加上语言名（如"英文：Hello"），
+        此函数通过正则匹配去除这类前缀。
+
+        Args:
+            text: 译文文本
+            lang: 语言代码
+
+        Returns:
+            str: 去除前缀后的文本
+        """
         import re
         l = _ensure_lib()
         lang_name = l.LANG_NAMES.get(lang, "") if l else ""
@@ -1007,10 +1071,12 @@ class TranslationSkill(BaseSkill):
                     lang_name = cn_name
                     break
 
+        # 构建中文语言名前缀匹配模式
         patterns = [
             rf'^{re.escape(lang_name)}\s*[：:]\s*',
             rf'^{re.escape(lang_name)}\s+',
         ]
+        # 常见语言的本土名称/英文名称前缀
         en_names = {
             "en": ["English", "english", "Eng"],
             "ru": ["Russian", "russian", "Русский"],
@@ -1046,7 +1112,14 @@ class TranslationSkill(BaseSkill):
     def upload_knowledge_base(self, filepath: str) -> dict:
         """
         上传翻译知识库文件（CSV/Excel），解析后写入 SQLite 并重建向量索引。
+
         ★ 保留旧接口兼容，内部拆为 recognize + import 两步
+
+        Args:
+            filepath: 知识库文件路径
+
+        Returns:
+            dict: 包含 success、message、added 等字段的结果字典
         """
         rec = self.recognize_kb(filepath)
         if not rec.get("success"):
@@ -1056,8 +1129,21 @@ class TranslationSkill(BaseSkill):
     def recognize_kb(self, filepath: str) -> dict:
         """
         ★ 第一步：识别翻译知识库文件，解析预览但不写入数据库。
-        返回: {"success": bool, "message": str, "total": int, "lang_cols": list,
-               "new_langs": list, "temp_id": str, "preview": list}
+
+        解析文件内容，识别语言列，生成预览数据，并将元信息缓存到临时文件。
+
+        Args:
+            filepath: 知识库文件路径
+
+        Returns:
+            dict: 包含以下字段：
+                - success: bool，是否识别成功
+                - message: str，提示信息
+                - total: int，数据行数
+                - lang_cols: list，识别到的语言列名
+                - new_langs: list，新增的语言（还不存在于 TRANSLATE_LANGS）
+                - temp_id: str，临时缓存ID（供 import_kb 使用）
+                - preview: list，预览数据（前5条）
         """
         l = _ensure_lib()
         if l is None:
@@ -1110,7 +1196,15 @@ class TranslationSkill(BaseSkill):
     def import_kb(self, temp_id: str) -> dict:
         """
         ★ 第二步：将已识别的翻译数据导入知识库（写入SQLite + 向量化 + 建索引）。
-        带 SSE 进度推送，通过 on_progress 回调返回进度。
+
+        从临时缓存读取元信息，解析原始文件，将每行数据写入 SQLite，
+        重建向量索引，并动态更新 TRANSLATE_LANGS。
+
+        Args:
+            temp_id: recognize_kb 返回的临时缓存 ID
+
+        Returns:
+            dict: 包含 success、message、added、kb_langs、new_langs、lang_cols 等字段
         """
         import json, tempfile
         l = _ensure_lib()
@@ -1160,6 +1254,7 @@ class TranslationSkill(BaseSkill):
             _index_ids = None
             _index_vecs = None
 
+            # 如果有新增语言，动态更新 TRANSLATE_LANGS
             if new_langs:
                 updated_kb_langs = list(l.TRANSLATE_LANGS) + new_langs
                 l.TRANSLATE_LANGS = updated_kb_langs
@@ -1198,11 +1293,18 @@ class TranslationSkill(BaseSkill):
     def _is_language_col(col_name: str) -> bool:
         """
         ★ 判断标准化后的列名是否为语言代码。
+
         规则：
         - 2字母ASCII小写 = ISO 639-1 语言代码（en, ru, id 等），不限语种
         - 3字母ASCII小写 = ISO 639-2 语言代码，但排除 _NON_LANG_3LETTER 黑名单
         - zh_hant / zh-hant 等特殊变体代码
         - 其他非语言列名（如"模块"、"分类"、"备注"、"序号"等）返回 False
+
+        Args:
+            col_name: 列名字符串（可能含空格）
+
+        Returns:
+            bool: 是否为语言列
         """
         c = col_name.strip().lower()
         # 2字母ASCII小写 = ISO 639-1 语言代码（全部是真实语言，直接放行）
@@ -1274,7 +1376,18 @@ class TranslationSkill(BaseSkill):
     def _normalize_col_names(self, headers: list[str]) -> tuple[list[str], dict[str, str]]:
         """
         ★ 标准化列名：把中文别名、大写代码等映射为标准语言代码。
-        返回: (标准化后的列名列表, 映射记录 {原名: 标准名})
+
+        处理步骤：
+        1. 精确匹配 _COL_ALIAS_MAP
+        2. 已是标准2~3字母小写代码，保留
+        3. zh_hant 特殊变体处理
+        4. 不匹配的，原样保留
+
+        Args:
+            headers: 原始列名列表
+
+        Returns:
+            tuple: (标准化后的列名列表, 映射记录 {原名: 标准名})
         """
         result = []
         mapping = {}
@@ -1298,7 +1411,16 @@ class TranslationSkill(BaseSkill):
         return result, mapping
 
     def _parse_kb_file(self, filepath: str, ext: str) -> list[dict]:
-        """解析 CSV / Excel 文件，返回字典列表（列名自动标准化）"""
+        """
+        解析 CSV / Excel 文件，返回字典列表（列名自动标准化）
+
+        Args:
+            filepath: 文件路径
+            ext: 文件扩展名（.csv / .xlsx / .xls）
+
+        Returns:
+            list[dict]: 解析后的行数据，每行为 {标准化列名: 值} 的字典
+        """
         if ext == ".csv":
             import csv
             with open(filepath, "r", encoding="utf-8-sig") as f:
@@ -1348,7 +1470,16 @@ class TranslationSkill(BaseSkill):
                 return []
 
     def _rebuild_index(self, l, conn):
-        """重建向量索引（需要 Ollama 运行；不可用时跳过，仅更新 DB）"""
+        """
+        重建向量索引
+
+        从 tm_segments 表读取所有中文文本，调用 embedding 模型生成向量，
+        保存到 .npz 文件并更新时间戳。需要 Ollama 运行；不可用时跳过，仅更新 DB。
+
+        Args:
+            l: lib 模块引用
+            conn: SQLite 数据库连接
+        """
         if not l.ollama_is_up():
             print("  [KB上传] Ollama 未运行，跳过向量索引重建（仅更新 DB）")
             return
@@ -1370,3 +1501,56 @@ class TranslationSkill(BaseSkill):
 
         except Exception as e:
             print(f"  [KB上传] 向量索引重建失败: {e}")
+
+    # ==================== ★ 结构化知识库（segment_base）管理 ====================
+
+    def build_segments(self) -> dict:
+        """
+        遍历 tm_segments，用 LLM 提取语义段构建 segment_base。
+
+        调用 lib.build_segment_base 对翻译记忆库中的中文文本进行语义分段，
+        将整句拆解为更细粒度的语义片段，提高知识库匹配精度。
+
+        Returns:
+            dict: 包含 success、total_segments、message 字段的结果字典
+        """
+        l = _ensure_lib()
+        conn = _get_cached_resources()[1]
+        if l is None or conn is None:
+            return {"success": False, "total_segments": 0, "message": "❌ 翻译引擎或数据库未加载"}
+        try:
+            total = l.build_segment_base(conn)
+            return {"success": True, "total_segments": total, "message": f"✅ segment_base 构建完成，共提取 {total} 个片段"}
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "total_segments": 0, "message": f"❌ 构建失败: {str(e)}"}
+
+    def kb_stats(self) -> dict:
+        """
+        获取知识库统计信息：TM 条目数、各语言条目数、segment_base 片段数。
+
+        用于前端展示知识库的健康状态和数据量。
+
+        Returns:
+            dict: 包含 success、tm（各语言条目数详情）、segment_base（片段数）的统计字典
+        """
+        l = _ensure_lib()
+        conn = _get_cached_resources()[1]
+        if l is None or conn is None:
+            return {"success": False, "message": "❌ 翻译引擎或数据库未加载"}
+
+        stats = {"success": True}
+        try:
+            tm = l.tm_stats(conn)
+            stats["tm"] = tm
+        except Exception as e:
+            stats["tm"] = {"error": str(e)}
+
+        try:
+            seg_count = conn.execute("SELECT COUNT(*) FROM segment_base").fetchone()[0]
+            stats["segment_base"] = seg_count
+        except Exception:
+            stats["segment_base"] = 0
+
+        return stats
