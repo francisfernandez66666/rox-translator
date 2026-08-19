@@ -1506,25 +1506,26 @@ class TranslationSkill(BaseSkill):
 
     def build_segments(self) -> dict:
         """
-        遍历 tm_segments，用 LLM 提取语义段构建 segment_base。
+        遍历 tm_segments，用 LLM 将长句拆解为独立短句并写入知识库。
 
-        调用 lib.build_segment_base 对翻译记忆库中的中文文本进行语义分段，
-        将整句拆解为更细粒度的语义片段，提高知识库匹配精度。
+        调用 lib.split_long_entries 对翻译记忆库中的长句进行拆分，
+        将可拆解的句子拆为多个独立短句（含对应的多语言翻译），
+        审计通过后写入 tm_segments，提高知识库复用率。
 
         Returns:
-            dict: 包含 success、total_segments、message 字段的结果字典
+            dict: 包含 success、total_added、total_failed、message 字段的结果字典
         """
         l = _ensure_lib()
         conn = _get_cached_resources()[1]
         if l is None or conn is None:
-            return {"success": False, "total_segments": 0, "message": "❌ 翻译引擎或数据库未加载"}
+            return {"success": False, "total_added": 0, "message": "❌ 翻译引擎或数据库未加载"}
         try:
-            total = l.build_segment_base(conn)
-            return {"success": True, "total_segments": total, "message": f"✅ segment_base 构建完成，共提取 {total} 个片段"}
+            result = l.split_long_entries(conn)
+            return result
         except Exception as e:
             import traceback
             traceback.print_exc()
-            return {"success": False, "total_segments": 0, "message": f"❌ 构建失败: {str(e)}"}
+            return {"success": False, "total_added": 0, "message": f"❌ 拆分失败: {str(e)}"}
 
     def kb_stats(self) -> dict:
         """
