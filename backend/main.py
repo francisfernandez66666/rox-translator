@@ -36,7 +36,7 @@ load_dotenv()
 # 硅基流动 SiliconFlow（默认翻译模型）
 # 若环境变量未设置，使用内置默认值（编译打包后供用户直接使用）
 if not os.getenv("SILICONFLOW_API_KEY"):
-    os.environ["SILICONFLOW_API_KEY"] = "sk-ugkqobwooolhdmykmycxuxyizcsnysudgmvuhkpinetuuxvq"
+    os.environ["SILICONFLOW_API_KEY"] = "sk-nzgxxrtmytwscaddsovnxqxnqxqiccmdxvxheomybmqqswoh"
 if not os.getenv("SILICONFLOW_API_BASE"):
     os.environ["SILICONFLOW_API_BASE"] = "https://api.siliconflow.cn/v1"
 # 智谱（embedding + 备用翻译模型）
@@ -889,16 +889,17 @@ async def import_translation_kb(body: dict):
 @app.post("/api/translation/build-segments")
 async def build_translation_segments():
     """
-    构建结构化知识库接口（POST /api/translation/build-segments）
+    拆分长句知识库接口（POST /api/translation/build-segments）
 
-    遍历翻译记忆（TM）条目，使用 LLM 提取可复用的翻译片段。
-    构建 segment_base，用于提高翻译匹配和上下文利用效率。
+    遍历翻译记忆（TM）条目，使用 LLM 将长句拆解为独立短句，
+    同时拆分对应的多语言翻译，审计后写入 tm_segments。
 
     返回:
         dict: {
             "success": bool,
-            "total_segments": int,  -- 提取的片段总数
-            "message": str          -- 处理结果描述
+            "total_added": int,      -- 成功新增的短句数
+            "total_failed": int,     -- 审计失败的片段数
+            "message": str           -- 处理结果描述
         }
     """
     skill = registry.get("translation")

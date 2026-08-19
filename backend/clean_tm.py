@@ -42,7 +42,7 @@ ACTIVE_COLS = ['en', 'ru', 'ar', 'es', 'pt', 'fr', 'kk', 'de', 'zh_hant', 'id_la
 # ─── API配置（与main.py保持一致） ───
 # 如果没有设置环境变量，使用默认值
 if not os.getenv("SILICONFLOW_API_KEY"):
-    os.environ["SILICONFLOW_API_KEY"] = "sk-ugkqobwooolhdmykmycxuxyizcsnysudgmvuhkpinetuuxvq"
+    os.environ["SILICONFLOW_API_KEY"] = "sk-nzgxxrtmytwscaddsovnxqxnqxqiccmdxvxheomybmqqswoh"
 if not os.getenv("SILICONFLOW_API_BASE"):
     os.environ["SILICONFLOW_API_BASE"] = "https://api.siliconflow.cn/v1"
 if not os.getenv("ONLINE_MODEL"):

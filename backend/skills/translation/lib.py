@@ -31,7 +31,7 @@ ONLINE_MODEL = os.getenv("ONLINE_MODEL", "tencent/Hunyuan-MT-7B")               
 ONLINE_TIMEOUT = int(os.getenv("ONLINE_TIMEOUT", "120"))                                # API 请求超时秒数
 
 HUNYUAN_MT_MODEL = "tencent/Hunyuan-MT-7B"        # Hunyuan-MT 专用翻译模型（支持33语）
-HUNYUAN_FALLBACK_MODEL = "THUDM/GLM-4-9B-0414"    # 当目标语言不在Hunyuan支持范围内时的降级模型
+HUNYUAN_FALLBACK_MODEL = "THUDM/GLM-Z1-9B-0414"    # 当目标语言不在Hunyuan支持范围内时的降级模型
 
 # Hunyuan-MT 官方支持的33种语言代码集合
 # 超出此范围的语言会自动降级到 HUNYUAN_FALLBACK_MODEL
@@ -203,6 +203,35 @@ TOP_FUZZY = 3      # 模糊子串匹配返回的最多结果数
 
 # 系统提示词已移除（改用极简 user prompt）
 
+# ====================================================================
+# CJK 汉字提取与标点无关匹配
+# ====================================================================
+_CJK_RE = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf]')
+_zh_cjk_cache = None
+
+def extract_cjk(text: str) -> str:
+    if not text:
+        return ''
+    return ''.join(_CJK_RE.findall(text))
+
+def _get_zh_cjk_cache(conn):
+    global _zh_cjk_cache
+    if _zh_cjk_cache is not None:
+        return _zh_cjk_cache
+    _zh_cjk_cache = {}
+    rows = conn.execute("SELECT id, zh FROM tm_segments").fetchall()
+    for rid, zh in rows:
+        if not zh:
+            continue
+        cjk = extract_cjk(zh)
+        if cjk and cjk not in _zh_cjk_cache:
+            _zh_cjk_cache[cjk] = (rid, zh)
+    print(f"  ✅ CJK 缓存已构建（{len(_zh_cjk_cache)} 条）")
+    return _zh_cjk_cache
+
+def _invalidate_zh_cjk_cache():
+    global _zh_cjk_cache
+    _zh_cjk_cache = None
 
 # ====================================================================
 # 语言识别与别名系统
@@ -1032,9 +1061,8 @@ def online_api_is_configured() -> bool:
 def detect_source_lang(text: str) -> str:
     """检测文本的主要语言（仅区分中文/非中文）。
 
-    通过统计 CJK 统一汉字字符占比来判断：
-    - CJK 字符占比 > 30% → 中文（zh）
-    - 否则 → 英文（en）
+    通过统计 CJK 统一汉字字符占比来判断。先用 extract_cjk
+    提取实际 CJK 内容，再按非空白字符计算占比，避免标点空格干扰。
 
     Args:
         text: 待检测的文本
@@ -1044,11 +1072,11 @@ def detect_source_lang(text: str) -> str:
     """
     if not text or not text.strip():
         return "zh"
-    cjk_count = 0
-    for ch in text:
-        if '\u4e00' <= ch <= '\u9fff' or '\u3400' <= ch <= '\u4dbf':
-            cjk_count += 1
-    return "zh" if cjk_count / max(len(text), 1) > 0.3 else "en"
+    cjk = extract_cjk(text)
+    if not cjk:
+        return "en"
+    non_space = text.replace(' ', '').replace('\t', '').replace('\n', '').replace('\r', '')
+    return "zh" if len(cjk) / max(len(non_space), 1) > 0.25 else "en"
 
 def get_source_name(lang: str) -> str:
     """获取源语言的中文名称。
@@ -1451,7 +1479,7 @@ def _fill_missing_langs(conn, ids, vecs, zh_text: str, kb_trans: dict, missing: 
     """
     qvec = embed(zh_text)
     examples = []
-    hits = search(qvec, ids, vecs, k=TOP_K) if len(ids) > 0 else []
+    hits = search(qvec, ids, vecs, k=TOP_K) if ids is not None and len(ids) > 0 else []
     if hits:
         order = np.argsort(-(vecs @ qvec))[:TOP_K]
         examples = [fetch_row(conn, int(ids[o])) for o in order if (vecs @ qvec)[o] >= MED_SIM]
@@ -1518,6 +1546,16 @@ def translate_one(conn, ids, vecs, zh_text: str, target_langs: list[str] | None 
 
     # ★ 第一级：精确命中（本地知识库）
     exact = conn.execute("SELECT * FROM tm_segments WHERE zh=?", (zh_text,)).fetchone()
+
+    # ★ 第1.5级：CJK 标点无关精确匹配
+    if not exact:
+        zh_cjk = extract_cjk(zh_text)
+        if zh_cjk:
+            cache = _get_zh_cjk_cache(conn)
+            if zh_cjk in cache:
+                rid, matched_zh = cache[zh_cjk]
+                exact = conn.execute("SELECT * FROM tm_segments WHERE id=?", (rid,)).fetchone()
+
     if exact:
         cols = [d[0] for d in conn.execute("SELECT * FROM tm_segments LIMIT 1").description]
         row = dict(zip(cols, exact))
@@ -1664,6 +1702,7 @@ def save_back(conn, zh_text: str, translations: dict, module: str | None = None)
     Returns:
         int: 插入/更新的行 ID，失败返回 -1
     """
+    _invalidate_zh_cjk_cache()
     zh_hash = hashlib.md5(zh_text.encode("utf-8")).hexdigest()
     now = datetime.now().isoformat(timespec="seconds")
     cols = ["zh_hash", "zh"] + ALL_LANGS + ["updated_at"]
@@ -3948,6 +3987,275 @@ def build_segment_base(conn):
 
     print(f"[segment_base] 完成：从 {len(batch)} 条TM中提取 {total_segments} 个片段")
     return total_segments
+
+
+def split_long_entries(conn, limit: int = 0):
+    """
+    用 LLM 将长句拆解为独立短句，审计后写入 tm_segments。
+
+    对每条翻译记忆条目，调用在线模型将其拆分为多个独立短句，
+    同时拆分对应的多语言翻译。审计通过后写入 tm_segments。
+
+    Args:
+        limit: 最多处理条数（0=不限）
+    """
+    lang_cols = ["en", "ru", "ar", "es", "pt", "fr", "kk", "de", "zh_hant"]
+
+    sql = (
+        f"SELECT id, zh, module, {','.join(f'\"{c}\"' for c in lang_cols)} "
+        "FROM tm_segments WHERE zh IS NOT NULL AND zh != ''"
+    )
+    if limit > 0:
+        sql += f" LIMIT {limit}"
+    rows = conn.execute(sql).fetchall()
+
+    total_added = 0
+    total_failed = 0
+    total_no_split = 0
+    total_entries = len(rows)
+
+    cfg = _get_online_config()
+    url = f"{cfg['base_url'].rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"}
+
+    # ── 拆句 prompt（使用通用指令模型，不含翻译内容，只拆中文）──
+    # ★ 先拆中文，再逐语言匹配翻译内容
+    split_prompt = """将以下中文文本按独立语义单位拆分为多个短句。
+拆分点包括：句号、叹号、问号、分号、换行。
+逗号位置如果不是并列结构也拆分。
+
+中文原文：
+{zh}
+
+输出 JSON 字符串数组，每个元素是一个短句。
+如果整句是单一语义单位不可拆分，输出 [原文全文]（即一个元素的数组）。
+只输出 JSON，不要其他文字。"""
+
+    # ★ 拆句用 GLM-4-9B（指令理解好），提取用 GLM-4-9B
+    split_cfg = {**cfg, "model": HUNYUAN_FALLBACK_MODEL}
+    split_url = f"{split_cfg['base_url'].rstrip('/')}/chat/completions"
+    extract_cfg = split_cfg
+    extract_url = split_url
+
+    for idx, row in enumerate(rows):
+        row_id = row[0]
+        zh_text = row[1]
+        module_tag = row[2]
+        lang_texts = {lang_cols[i]: (row[3 + i] or "").strip() for i in range(len(lang_cols))}
+
+        # 统一引号避免 LLM JSON 输出被破坏
+        _smart_repl = str.maketrans({
+            '\u201c': '"', '\u201d': '"', '\u201e': '"', '\u201f': '"',
+            '\u2018': "'", '\u2019': "'", '\u201a': "'", '\u201b': "'",
+        })
+        zh_text = zh_text.translate(_smart_repl)
+        for lc in lang_cols:
+            if lang_texts.get(lc):
+                lang_texts[lc] = lang_texts[lc].translate(_smart_repl)
+
+        # 去掉列表前缀（* / - / • / 数字.）让提取更准确
+        _bullet_re = re.compile(r'^[\*\-•·]\s*|\d+\.\s*', re.MULTILINE)
+        zh_text = _bullet_re.sub('', zh_text)
+        for lc in lang_cols:
+            if lang_texts.get(lc):
+                lang_texts[lc] = _bullet_re.sub('', lang_texts[lc])
+
+        zh_cjk = extract_cjk(zh_text)
+        if len(zh_cjk) <= 8:
+            total_no_split += 1
+            continue
+
+        if not any(c in zh_text for c in '，；。、\n'):
+            total_no_split += 1
+            continue
+
+        # ── 第1步：拆中文（用 GLM-4-9B）──
+        split_user = split_prompt.format(zh=zh_text)
+        zh_segments = _call_llm_json(split_user, split_cfg, split_url, headers)
+        if not zh_segments or len(zh_segments) <= 1:
+            total_no_split += 1
+            continue
+
+        # 限制最多 10 段，避免提取时 prompt 过长导致 JSON 出错
+        if len(zh_segments) > 10:
+            zh_segments = zh_segments[:10]
+
+        # ── 第2步：对所有语言，批量提取每段的多语言翻译 ──
+        added = 0
+        batch_extract_tpl = (
+            "中文全文：{zh_full}\n"
+            "已将中文拆分为以下片段：\n{seg_list}\n\n"
+            "{lang_name}翻译全文：{lang_trans}\n\n"
+            "请找出每个中文片段在{lang_name}翻译中对应的部分。\n"
+            "输出 JSON 字符串数组，长度={seg_count}，第N个元素对应第N个中文片段。\n"
+            "如果某片段无明确对应，用空字符串。\n"
+            "只输出 JSON 数组，不要其他文字。"
+        )
+
+        all_parts = {}
+        extract_failed = False
+        for lc in lang_cols:
+            lt = lang_texts.get(lc, "")
+            if not lt:
+                all_parts[lc] = [""] * len(zh_segments)
+                continue
+            numbered_segs = "\n".join(f"[{i+1}] {s}" for i, s in enumerate(zh_segments))
+            bp = batch_extract_tpl.format(
+                zh_full=zh_text,
+                seg_list=numbered_segs,
+                lang_name=LANG_NAMES.get(lc, lc),
+                lang_trans=lt,
+                seg_count=len(zh_segments),
+            )
+            parts = _call_llm_json(bp, extract_cfg, extract_url, headers)
+            if not parts or len(parts) != len(zh_segments):
+                extract_failed = True
+                break
+            flat = []
+            for p in parts:
+                if isinstance(p, (list, tuple)):
+                    p = p[0] if p else ""
+                if not isinstance(p, str):
+                    p = str(p) if p is not None else ""
+                flat.append(p.strip() if p else "")
+            all_parts[lc] = flat
+
+        if extract_failed:
+            total_failed += 1
+            continue
+
+        # ── 第3步：写入每段（GLM-4-9B 提取质量可靠，不做 LLM 审计）──
+        for i, seg_zh_str in enumerate(zh_segments):
+            if isinstance(seg_zh_str, dict):
+                seg_zh_str = seg_zh_str.get("zh", "")
+            seg_zh_str = (seg_zh_str or "").strip()
+            if not seg_zh_str:
+                continue
+            seg_cjk = extract_cjk(seg_zh_str)
+            if seg_cjk == zh_cjk or not seg_cjk:
+                total_no_split += 1
+                continue
+
+            seg_translations = {lc: all_parts[lc][i] for lc in lang_cols}
+
+            has_any = any(bool(v) for v in seg_translations.values())
+            if not has_any:
+                total_failed += 1
+                continue
+
+            sid = save_back(conn, seg_zh_str, seg_translations, module_tag)
+            if sid > 0:
+                try:
+                    rebuild_embeddings_for_entry(seg_zh_str, sid)
+                except Exception:
+                    pass
+                added += 1
+
+        if added:
+            print(f"[split] id={row_id}: +{added} segments")
+
+    _invalidate_zh_cjk_cache()
+    print(f"[split] 完成：新增 {total_added} 条，提取失败 {total_failed} 条，{total_no_split} 条无需拆分")
+    return {
+        "success": True,
+        "total_added": total_added,
+        "total_failed": total_failed,
+        "total_no_split": total_no_split,
+        "message": f"拆分完成：新增 {total_added} 条短句，{total_failed} 条提取失败，{total_no_split} 条无需拆分",
+    }
+
+
+def _call_llm_json(user_prompt: str, cfg: dict, url: str, headers: dict) -> list | None:
+    """调用 LLM 并解析 JSON 返回"""
+    payload = {
+        "model": cfg["model"],
+        "messages": [{"role": "user", "content": user_prompt}],
+        "temperature": 0.1,
+        "max_tokens": 4096,
+    }
+    for attempt in range(3):
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=120)
+            r.raise_for_status()
+            content = _extract_content(r.json())
+            content = content.replace("```json", "").replace("```", "").strip()
+            if content:
+                content = re.sub(r',\s*}', '}', content)
+                content = re.sub(r',\s*]', ']', content)
+                try:
+                    result = json.loads(content)
+                    if isinstance(result, list):
+                        return result
+                except json.JSONDecodeError:
+                    bracket = content.find('[')
+                    if bracket >= 0:
+                        cbracket = content.rfind(']')
+                        if cbracket > bracket:
+                            sub = content[bracket:cbracket+1]
+                            sub = re.sub(r',\s*}', '}', sub)
+                            sub = re.sub(r',\s*]', ']', sub)
+                            result = json.loads(sub)
+                            if isinstance(result, list):
+                                return result
+            return None
+        except Exception as e:
+            if attempt < 2:
+                import time
+                time.sleep(3)
+            else:
+                raw_preview = content[:300] if 'content' in locals() and content else '(no content)'
+                print(f"  [split] LLM JSON 调用失败: {e} | raw={raw_preview!r}")
+                return None
+
+
+def _call_llm_audit(user_prompt: str, cfg: dict, url: str, headers: dict) -> bool:
+    """调用 LLM 审计翻译对齐，返回是否通过"""
+    payload = {
+        "model": cfg["model"],
+        "messages": [{"role": "user", "content": user_prompt}],
+        "temperature": 0.0,
+        "max_tokens": 20,
+    }
+    for attempt in range(3):
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=60)
+            r.raise_for_status()
+            content = _extract_content(r.json())
+            if content and content.strip().lower() == "pass":
+                return True
+            return False
+        except Exception as e:
+            if attempt < 2:
+                import time
+                time.sleep(2)
+            else:
+                print(f"  [split] 审计调用失败: {e}")
+                return False
+
+
+def _call_llm_extract(user_prompt: str, cfg: dict, url: str, headers: dict) -> str | None:
+    """调用 LLM 从翻译中提取对应片段的文本"""
+    payload = {
+        "model": cfg["model"],
+        "messages": [{"role": "user", "content": user_prompt}],
+        "temperature": 0.1,
+        "max_tokens": 1024,
+    }
+    for attempt in range(3):
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=60)
+            r.raise_for_status()
+            content = _extract_content(r.json())
+            if content:
+                return content.strip()
+            return None
+        except Exception as e:
+            if attempt < 2:
+                import time
+                time.sleep(2)
+            else:
+                print(f"  [split] 提取调用失败: {e}")
+                return None
 
 
 def match_segments(conn, zh_text: str, lang_pair: str) -> tuple[list[dict], str]:

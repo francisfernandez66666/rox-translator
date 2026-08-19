@@ -1,9 +1,20 @@
 <template>
-  <div id="app-root" :class="isMobile ? 'device-mobile' : 'device-desktop'">
+  <!-- 会话恢复中（避免闪现登录页再跳转） -->
+  <div v-if="restoring" class="restore-screen"><div class="restore-spinner"></div></div>
+
+  <!-- 未登录 → 统一登录页（按路径区分前台/后台） -->
+  <Login v-else-if="!authUser" :mode="isAdminRoute ? 'admin' : 'home'" @ok="onLogin" />
+
+  <!-- 管理后台 /admin -->
+  <AdminDashboard v-else-if="isAdminRoute" :user="authUser" @logout="onLogout" />
+
+  <!-- 翻译工作台（登录后） -->
+  <div v-else id="app-root" :class="isMobile ? 'device-mobile' : 'device-desktop'">
     <header class="app-header">
       <div class="header-left">
         <span class="header-icon">🌐</span>
         <span class="header-title">翻译助手</span>
+        <span class="header-user">{{ authUser.display_name || authUser.username }}</span>
       </div>
       <div class="header-right">
         <span class="status-indicator" :class="store.isBackendOnline ? 'online' : 'offline'">
@@ -11,6 +22,7 @@
           {{ store.isBackendOnline ? '在线' : '离线' }}
         </span>
         <button class="gear-btn" @click="showSettings = true" title="设置">⚙️</button>
+        <button class="gear-btn" @click="logout" title="退出登录">⎋</button>
       </div>
     </header>
 
@@ -32,7 +44,7 @@
             <select v-model="currentModel" @change="onModelChange">
               <optgroup label="硅基流动 SiliconFlow">
                 <option value="tencent/Hunyuan-MT-7B">Hunyuan-MT-7B (推荐，33语专用)</option>
-                <option value="THUDM/GLM-4-9B-0414">GLM-4-9B-0414 (备用)</option>
+                <option value="THUDM/GLM-Z1-9B-0414">GLM-Z1-9B-0414 (备用)</option>
                 <option value="Qwen/Qwen2.5-7B-Instruct">Qwen2.5-7B</option>
               </optgroup>
               <optgroup label="智谱 Zhipu">
@@ -49,18 +61,71 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import ChatWindow from './components/ChatWindow.vue'
+import Login from './components/Login.vue'
+import AdminDashboard from './components/AdminDashboard.vue'
+import { getAuthToken, setAuthToken, authMe, type AuthUser } from '@/api'
 
 const store = useChatStore()
 const showSettings = ref(false)
 const currentModel = ref(store.selectedModel)
 
+const isAdminRoute = computed(() => window.location.pathname.startsWith('/admin'))
+// 当前登录用户（null 表示未登录，显示登录页）
+const authUser = ref<AuthUser | null>(null)
+// 会话恢复中标记：避免刷新时闪现登录页
+const restoring = ref(true)
+
+// 角色等级：普通用户(1) < 租户管理员(2) < 超级管理员(3)，兼容旧值 approver/admin
+function roleLevel(r?: string): number {
+  if (r === 'super_admin' || r === 'admin') return 3
+  if (r === 'tenant_admin' || r === 'approver') return 2
+  return 1
+}
+
+// 恢复会话：本地有 token 则向后端校验，管理后台仅放行租户管理员及以上
+async function restoreSession() {
+  try {
+    if (getAuthToken()) {
+      const r = await authMe()
+      if (r.success && r.user) {
+        if (isAdminRoute.value && roleLevel(r.user.role) < 2) {
+          authUser.value = null
+          return
+        }
+        authUser.value = r.user
+      } else {
+        authUser.value = null
+      }
+    }
+  } finally {
+    restoring.value = false
+  }
+}
+
+// 登录成功回调：写入当前用户
+function onLogin(user: unknown) {
+  authUser.value = user as AuthUser
+}
+
+// 退出登录：清空用户与 token
+function onLogout() {
+  authUser.value = null
+  setAuthToken('')
+}
+
+function logout() {
+  onLogout()
+}
+
+// 切换翻译模型
 function onModelChange() {
   store.setSelectedModel(currentModel.value)
 }
 
+// 响应式：检测移动端布局
 const windowWidth = ref(window.innerWidth)
 const isMobile = ref(windowWidth.value <= 768)
 
@@ -69,8 +134,10 @@ function onResize() {
   isMobile.value = windowWidth.value <= 768
 }
 
+// 初始化：恢复登录态 + 检测后端在线状态
 onMounted(async () => {
   window.addEventListener('resize', onResize)
+  await restoreSession()
   await store.checkBackendHealth()
 })
 
@@ -90,6 +157,16 @@ body {
 }
 
 #app-root { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+
+/* 会话恢复中 */
+.restore-screen {
+  height: 100vh; display: flex; align-items: center; justify-content: center; background: #f5f7fb;
+}
+.restore-spinner {
+  width: 40px; height: 40px; border: 4px solid #e0e0e0; border-top-color: #1a237e; border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .app-header {
   display: flex; align-items: center; justify-content: space-between;
