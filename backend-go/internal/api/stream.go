@@ -82,9 +82,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	}
 	if res.Error != "" {
 		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": res.Error}))
+		s.metrics.countTranslate("text", false)
 	} else {
 		// ★ 计量：按源文本字符数记入用量（强制计费模式会扣余额）
 		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Message))))
+		s.metrics.countTranslate("text", true)
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
 	}
 }
@@ -173,9 +175,11 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	}
 	if res.Error != "" {
 		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": res.Error}))
+		s.metrics.countTranslate("file", false)
 	} else {
 		// ★ 计量：按提取段数计量文件翻译用量（强制计费模式会扣余额）
 		s.meterUsage(r, tid, "translate", int64(res.Data.TotalTexts))
+		s.metrics.countTranslate("file", true)
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
 	}
 }
@@ -199,9 +203,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if res.Error != "" {
 		res.Skill = "translation"
 		res.Reply = "❌ 处理出错: " + res.Error
+		s.metrics.countTranslate("text", false)
 	} else {
 		// ★ 计量
 		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Message))))
+		s.metrics.countTranslate("text", true)
 	}
 	writeJSON(w, 200, res)
 }
@@ -261,6 +267,9 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	if res.Error == "" {
 		// ★ 计量：按提取段数计量文件翻译用量
 		s.meterUsage(r, tid, "translate", int64(res.Data.TotalTexts))
+		s.metrics.countTranslate("file", true)
+	} else {
+		s.metrics.countTranslate("file", false)
 	}
 	writeJSON(w, 200, res)
 }
