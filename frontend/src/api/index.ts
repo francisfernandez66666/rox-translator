@@ -132,9 +132,10 @@ export async function translateFileStream(
   formData.append('use_online', String(useOnline))
   if (userMessage) formData.append('message', userMessage)
 
+  // 文件上传用登录令牌认证头（不带租户头），与后端文件翻译接口对齐
   const response = await fetch(`${API_BASE}/api/translate/stream`, {
     method: 'POST',
-    headers: tenantHeaders(),
+    headers: authHeaders(),
     body: formData,
     signal,
   })

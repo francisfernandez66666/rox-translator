@@ -116,9 +116,7 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 			clean = append(clean, l)
 		}
 	}
-	if len(clean) == 0 {
-		clean = []string{"en"}
-	}
+	// 不在此默认 en：由 HandleFile 内部解析 message 语言，再兜底 en
 	options := map[string]interface{}{"target_langs": clean}
 	if message != "" {
 		options["message"] = message
@@ -209,9 +207,7 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 			clean = append(clean, l)
 		}
 	}
-	if len(clean) == 0 {
-		clean = []string{"en"}
-	}
+	// 不在此默认 en：由 HandleFile 内部解析 message 语言，再兜底 en
 	options := map[string]interface{}{"target_langs": clean}
 	if message != "" {
 		options["message"] = message

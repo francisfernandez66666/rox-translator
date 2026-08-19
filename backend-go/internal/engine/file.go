@@ -50,12 +50,24 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	}
 
 	langsRaw := TargetLangsFromOptions(options)
-	if len(langsRaw) == 0 {
-		langsRaw = []string{"en"}
+	kbLangs, directOther, hasOther := SplitOptions(langsRaw)
+
+	// ★ 文件翻译也支持"更多语言"：target_langs 为空或选了 other 时，从 message 解析语言名
+	if hasOther || (len(kbLangs) == 0 && len(directOther) == 0) {
+		if msg, _ := options["message"].(string); msg != "" {
+			parsed, _ := e.parseOtherLangsFromPrompt(ctx, msg)
+			if len(parsed) > 0 {
+				kbLangs = append(kbLangs, parsed...)
+			}
+		}
 	}
-	kbLangs, directOther, _ := SplitOptions(langsRaw)
 	finalLangs := append([]string{}, kbLangs...)
 	finalLangs = append(finalLangs, directOther...)
+	// 仍未解析出语言 → 兜底英文（放回 kbLangs 走 KB 翻译路径）
+	if len(finalLangs) == 0 {
+		kbLangs = []string{"en"}
+		finalLangs = []string{"en"}
+	}
 
 	// 第1步：理解文件结构
 	prog("第1步/3：理解文件结构...", 1, 3)
@@ -245,8 +257,8 @@ func (e *Engine) parseOtherLangsFromPrompt(ctx context.Context, text string) ([]
 				cleaned = strings.TrimSpace(rest)
 				cleaned = strings.TrimPrefix(cleaned, "：")
 				cleaned = strings.TrimSpace(cleaned)
-				if cleaned == "" {
-					cleaned = m[2]
+				if cleaned == "" && len(m) > 2 {
+					cleaned = strings.TrimSpace(m[2])
 				}
 				return []string{code}, cleaned
 			}

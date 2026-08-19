@@ -170,22 +170,37 @@ func ApplyDocx(path, outPath string, translations map[string]string) error {
 
 // translateDocxXML 在 XML 级别替换段落文本：找到所有 w:p 内第一个 w:r/w:t，替换内容
 func translateDocxXML(data []byte, translations map[string]string) []byte {
-	// 按 <w:p>...</w:p> 切分处理段落
+	// 按 <w:p>...</w:p> 切分处理段落（兼容带属性的 <w:p ...>）
 	s := string(data)
 	var out strings.Builder
 	idx := 0
 	for {
-		start := strings.Index(s[idx:], "<w:p>")
-		startEnd := start + 5 // "<w:p>" 长度
-		end := strings.Index(s[idx+startEnd:], "</w:p>")
-		if start < 0 || end < 0 {
+		start := strings.Index(s[idx:], "<w:p")
+		if start < 0 {
 			break
 		}
-		absStart := idx + start
-		absEnd := idx + startEnd + end + len("</w:p>")
-		para := s[absStart:absEnd]
+		start += idx
+		// 跳过属性直到标签结束（忽略自闭合 <w:p/> 与无内容段落）
+		tagEnd := strings.IndexAny(s[start:], ">")
+		if tagEnd < 0 {
+			break
+		}
+		tagEnd += start
+		closeTag := s[tagEnd-1]
+		if closeTag == '/' {
+			out.WriteString(s[idx : tagEnd+1])
+			idx = tagEnd + 1
+			continue
+		}
+		startEnd := tagEnd + 1
+		end := strings.Index(s[startEnd:], "</w:p>")
+		if end < 0 {
+			break
+		}
+		absEnd := startEnd + end + len("</w:p>")
+		para := s[start:absEnd]
 		translated := translateDocxParagraph(para, translations)
-		out.WriteString(s[idx:absStart])
+		out.WriteString(s[idx:start])
 		out.WriteString(translated)
 		idx = absEnd
 	}
@@ -193,58 +208,71 @@ func translateDocxXML(data []byte, translations map[string]string) []byte {
 	return []byte(out.String())
 }
 
-var wTextRe = regexp.MustCompile(`<w:t[^>]*>([^<]*)</w:t>`)
-
 // translateDocxParagraph 取段落原文，匹配译文，若命中则替换第一个 w:t 内容，清空其余
 func translateDocxParagraph(para string, translations map[string]string) string {
-	// 提取纯文本（去掉所有标签）
-	var plain strings.Builder
-	for _, m := range wTextRe.FindAllStringSubmatch(para, -1) {
-		plain.WriteString(m[1])
-	}
-	original := strings.TrimSpace(plain.String())
+	// 提取纯文本（去掉所有标签；跳过 w:hyperlink 内文本，与 ExtractTexts 提取逻辑一致）
+	plain, firstIdx := paragraphRunText(para)
+	original := strings.TrimSpace(plain)
 	if original == "" {
 		return para
 	}
 	translated, ok := translations[original]
-	if !ok {
+	if !ok || firstIdx < 0 {
 		return para
 	}
-	// 替换第一个 w:t 文本为译文，其余 w:t 置空
-	matches := wTextRe.FindAllStringSubmatchIndex(para, -1)
-	if len(matches) == 0 {
+	// 定位第一个 w:t 的闭合标签起始位置（保留 </w:t> 标签本身）
+	closeStart := strings.Index(para[firstIdx:], "</w:t>")
+	if closeStart < 0 {
 		return para
 	}
-	first := matches[0]
-	// 译文过长时缩小字号（简化：交给前端/不处理）
-	_ = first
-	newPara := replaceFirstText(para, first, translated)
-	// 清空其余
-	rest := matches[1:]
-	for _, m := range rest {
-		contentStart := m[2]
-		contentEnd := m[3]
-		if contentStart < contentEnd && contentEnd <= len(newPara) {
-			// 位置因前面替换可能变化，这里用简化方式：重建
+	closeStart += firstIdx
+	// 替换第一个 w:t 内容为译文（保留其闭合标签）
+	newPara := para[:firstIdx] + translated + para[closeStart:]
+	// 清空第一个 w:t 之后所有 w:t 的内容（含 hyperlink 内文本）
+	after := newPara[firstIdx+len(translated):]
+	cleaned := emptyWTextRe.ReplaceAllString(after, `${1}${3}`)
+	return newPara[:firstIdx+len(translated)] + cleaned
+}
+
+// paragraphRunText 提取段落中非 hyperlink 内的 w:t 文本，返回拼接文本及第一个 w:t 内容起点。
+// hyperlink 内的文本不计入原文，与 extractDocx 的 paragraphText 保持一致。
+func paragraphRunText(para string) (string, int) {
+	var plain strings.Builder
+	firstIdx := -1
+	i := 0
+	for i < len(para) {
+		hidx := strings.Index(para[i:], "<w:hyperlink")
+		tidx := strings.Index(para[i:], "<w:t")
+		if tidx < 0 {
+			break
 		}
+		if hidx >= 0 && hidx < tidx {
+			// 跳过整个 hyperlink 块
+			openEnd := i + hidx + strings.Index(para[i+hidx:], ">") + 1
+			closeIdx := strings.Index(para[openEnd:], "</w:hyperlink>")
+			if closeIdx < 0 {
+				break
+			}
+			i = openEnd + closeIdx + len("</w:hyperlink>")
+			continue
+		}
+		// 定位 w:t 内容
+		openStart := i + tidx
+		contentStart := strings.Index(para[openStart:], ">") + openStart + 1
+		closeIdx := strings.Index(para[contentStart:], "</w:t>")
+		if closeIdx < 0 {
+			break
+		}
+		text := para[contentStart : contentStart+closeIdx]
+		if firstIdx < 0 && strings.TrimSpace(text) != "" {
+			firstIdx = contentStart
+		}
+		plain.WriteString(text)
+		i = contentStart + closeIdx + len("</w:t>")
 	}
-	// 简化：重新处理——只保留第一个 run，其余 run 清空
-	return clearExtraRuns(newPara, translated)
+	return plain.String(), firstIdx
 }
 
-func replaceFirstText(para string, m []int, replacement string) string {
-	// m = [start, end, contentStart, contentEnd]
-	return para[:m[2]] + replacement + para[m[3]:]
-}
+// emptyWTextRe 匹配 <w:t>..</w:t>，用于清空内容
+var emptyWTextRe = regexp.MustCompile(`(<w:t[^>]*>)([^<]*)(</w:t>)`)
 
-// clearExtraRuns 把除第一个 w:t 外的所有 w:t 置空
-func clearExtraRuns(para string, first string) string {
-	re := regexp.MustCompile(`(<w:t[^>]*>)([^<]*)(</w:t>)`)
-	firstEnd := strings.Index(para, "</w:t>")
-	if firstEnd < 0 {
-		return para
-	}
-	after := para[firstEnd+len("</w:t>"):]
-	after = re.ReplaceAllString(after, `${1}${3}`)
-	return para[:firstEnd+len("</w:t>")] + after
-}

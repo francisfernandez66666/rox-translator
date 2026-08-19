@@ -466,7 +466,7 @@ function addCustomLang() {
     const key = part.toLowerCase()
     const code = _LANG_NAME_TO_CODE[key] || _LANG_NAME_TO_CODE[part]
     if (code && !store.selectedLangs.includes(code)) {
-      // 已知语言代码 → 直接加到 selectedLangs
+      // 已知语言代码 → 直接加到 selectedLangs（文件/文本翻译都会带上）
       store.selectedLangs.push(code)
     } else if (!code) {
       // 未知语言 → 存入 customLangs，发送时拼入消息让后端解析
@@ -746,7 +746,12 @@ async function handleSend(e?: Event) {
     for (const file of attachedFiles.value) {
       // ★ 文件翻译时拼入自定义语言提示词 + 输入框内容
       const msg = customLangPrefix + inputText.value.trim()
-      await store.sendFile(file, [...store.selectedLangs], msg)
+      // 把自定义语言名解析成代码并入 target_langs；解析不出的保留在 message 由后端解析
+      const customCodes = customLangs.value
+        .map(cl => _LANG_NAME_TO_CODE[cl.toLowerCase()] || _LANG_NAME_TO_CODE[cl])
+        .filter((c): c is string => !!c)
+      const langs = [...new Set([...store.selectedLangs.filter(l => l !== 'other'), ...customCodes])]
+      await store.sendFile(file, langs.length > 0 ? langs : undefined, msg)
     }
     attachedFiles.value = []
     inputText.value = ''
