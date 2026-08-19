@@ -8,12 +8,71 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"translator/internal/engine"
 	"translator/internal/kb"
 )
+
+// ============ KB 批量导入（租户自服务） ============
+
+// handleKBEntriesImport 批量导入 KB 条目（JSON 数组，租户管理员）。
+// 支持单条 {source_text, target_lang, target_text, layer?, module?} 或
+// 多语言 {source_text, translations:{en:"..",ru:".."}, layer?, module?} 两种格式。
+func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		PackageID int64           `json:"package_id"`
+		Entries   []kbImportEntry `json:"entries"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	if req.PackageID <= 0 || len(req.Entries) == 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "package_id 与 entries 不能为空"})
+		return
+	}
+	tid := s.effTenant(r, u)
+	added, skipped := 0, 0
+	for _, e := range req.Entries {
+		src := strings.TrimSpace(e.SourceText)
+		if src == "" {
+			skipped++
+			continue
+		}
+		if e.Layer == 0 {
+			e.Layer = 2
+		}
+		if e.TargetLang == "" {
+			e.TargetLang = "en"
+		}
+		if _, err := s.Store.SaveEntry(tid, req.PackageID, e.Layer, "zh", src, e.TargetLang, e.TargetText, e.Module); err != nil {
+			skipped++
+			continue
+		}
+		added++
+	}
+	s.Store.LogAudit(tid, u.ID, "kb_entries_import", "kb_entries", strconv.Itoa(added))
+	writeJSON(w, 200, map[string]interface{}{
+		"success": true, "message": "批量导入完成", "added": added, "skipped": skipped,
+	})
+}
+
+// kbImportEntry 单条批量导入条目
+type kbImportEntry struct {
+	SourceText string `json:"source_text"`
+	TargetLang string `json:"target_lang"`
+	TargetText string `json:"target_text"`
+	Layer      int    `json:"layer"`
+	Module     string `json:"module"`
+}
 
 // ============ KB 识别/导入 ============
 

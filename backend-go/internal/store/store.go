@@ -126,6 +126,8 @@ func (s *Store) migrate() error {
 			tenant_id INTEGER NOT NULL DEFAULT 1,
 			user_id INTEGER NOT NULL DEFAULT 0,
 			task_type TEXT NOT NULL DEFAULT '',      -- translate/review/evals/gate
+			provider TEXT NOT NULL DEFAULT '',       -- LLM 供应商（成本核算维度）
+			model TEXT NOT NULL DEFAULT '',          -- LLM 模型名
 			quantity INTEGER NOT NULL DEFAULT 0,     -- 字符数或句数
 			unit_price INTEGER NOT NULL DEFAULT 0,   -- 每单位 token
 			cost INTEGER NOT NULL DEFAULT 0,         -- 扣减 token
@@ -137,6 +139,7 @@ func (s *Store) migrate() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			task_type TEXT NOT NULL DEFAULT 'translate',
 			lang TEXT NOT NULL DEFAULT '*',
+			provider TEXT NOT NULL DEFAULT '*',      -- 供应商（* 表示全局通用）
 			unit_price INTEGER NOT NULL DEFAULT 1,   -- token / 字符
 			multiplier REAL NOT NULL DEFAULT 1.0,    -- 高膨胀语种倍率
 			updated_at TEXT
@@ -199,6 +202,8 @@ func (s *Store) migrate() error {
 			action TEXT NOT NULL DEFAULT '',
 			resource TEXT NOT NULL DEFAULT '',
 			detail TEXT NOT NULL DEFAULT '',
+			before_val TEXT NOT NULL DEFAULT '',     -- 操作前值（JSON 字符串，结构化轨迹）
+			after_val TEXT NOT NULL DEFAULT '',      -- 操作后值（JSON 字符串，结构化轨迹）
 			created_at TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_logs(tenant_id, created_at)`,
@@ -208,11 +213,48 @@ func (s *Store) migrate() error {
 			value TEXT NOT NULL DEFAULT '',
 			updated_at TEXT
 		)`,
+		// ---------- invite_codes 自助注册邀请码 ----------
+		`CREATE TABLE IF NOT EXISTS invite_codes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			code TEXT NOT NULL UNIQUE,
+			used INTEGER NOT NULL DEFAULT 0,          -- 0 未使用 / 1 已使用
+			tenant_id INTEGER NOT NULL DEFAULT 0,    -- 指定绑定租户（0=新建独立租户）
+			used_by TEXT NOT NULL DEFAULT '',
+			created_at TEXT,
+			used_at TEXT NOT NULL DEFAULT ''
+		)`,
+		// ---------- invoices 发票 ----------
+		`CREATE TABLE IF NOT EXISTS invoices (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id INTEGER NOT NULL DEFAULT 1,
+			order_id INTEGER NOT NULL DEFAULT 0,
+			invoice_no TEXT NOT NULL DEFAULT '',
+			amount_money REAL NOT NULL DEFAULT 0,
+			title TEXT NOT NULL DEFAULT '',          -- 发票抬头
+			tax_no TEXT NOT NULL DEFAULT '',         -- 税号
+			status TEXT NOT NULL DEFAULT 'pending',  -- pending/issued/cancelled
+			created_at TEXT
+		)`,
+		// ---------- alerts 监控告警 ----------
+		`CREATE TABLE IF NOT EXISTS alerts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id INTEGER NOT NULL DEFAULT 0,
+			level TEXT NOT NULL DEFAULT 'info',      -- info/warning/critical
+			kind TEXT NOT NULL DEFAULT '',            -- balance/model/error_rate
+			message TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'open',      -- open/resolved
+			created_at TEXT,
+			resolved_at TEXT NOT NULL DEFAULT ''
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
 			return fmt.Errorf("建表失败: %w\nSQL: %s", err, stmt)
 		}
+	}
+	// 迁移：老库补充新列（SQLite 无 IF NOT EXISTS 的 ALTER，需先查列）
+	if err := s.migrateColumns(); err != nil {
+		return err
 	}
 	// 初始化默认单价表（幂等）
 	if err := s.seedRateCard(); err != nil {
@@ -225,10 +267,41 @@ func (s *Store) migrate() error {
 	return nil
 }
 
+// migrateColumns 为老库补充新增列（SQLite 3.35+ 才支持 ADD COLUMN IF NOT EXISTS，这里手工判断）
+func (s *Store) migrateColumns() error {
+	type colDef struct {
+		table string
+		col   string
+		ddl   string
+	}
+	cols := []colDef{
+		{"usage_ledger", "provider", "ALTER TABLE usage_ledger ADD COLUMN provider TEXT NOT NULL DEFAULT ''"},
+		{"usage_ledger", "model", "ALTER TABLE usage_ledger ADD COLUMN model TEXT NOT NULL DEFAULT ''"},
+		{"rate_card", "provider", "ALTER TABLE rate_card ADD COLUMN provider TEXT NOT NULL DEFAULT '*'"},
+		{"audit_logs", "before_val", "ALTER TABLE audit_logs ADD COLUMN before_val TEXT NOT NULL DEFAULT ''"},
+		{"audit_logs", "after_val", "ALTER TABLE audit_logs ADD COLUMN after_val TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, c := range cols {
+		// 判断列是否存在
+		rows, err := s.db.Query(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, c.table, c.col)
+		if err != nil {
+			return err
+		}
+		has := rows.Next()
+		rows.Close()
+		if !has {
+			if _, err := s.db.Exec(c.ddl); err != nil {
+				return fmt.Errorf("迁移失败(%s.%s): %w", c.table, c.col, err)
+			}
+		}
+	}
+	return nil
+}
+
 // seedRateCard 初始化默认单价表
 func (s *Store) seedRateCard() error {
-	_, err := s.db.Exec(`INSERT OR IGNORE INTO rate_card (task_type, lang, unit_price, multiplier, updated_at) VALUES
-		('translate', '*', 1, 1.0, ''), ('review', '*', 1, 1.0, ''),
-		('evals', '*', 1, 0.5, ''), ('gate', '*', 0, 0, '')`)
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO rate_card (task_type, lang, provider, unit_price, multiplier, updated_at) VALUES
+		('translate', '*', '*', 1, 1.0, ''), ('review', '*', '*', 1, 1.0, ''),
+		('evals', '*', '*', 1, 0.5, ''), ('gate', '*', '*', 0, 0, '')`)
 	return err
 }

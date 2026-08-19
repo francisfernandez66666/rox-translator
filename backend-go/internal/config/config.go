@@ -6,6 +6,15 @@ import (
 	"path/filepath"
 )
 
+// ProviderConfig LLM 供应商路由项（模型路由策略）
+type ProviderConfig struct {
+	Provider string `json:"provider"` // 供应商标识（用于计量成本核算）
+	APIBase  string `json:"api_base"`
+	APIKey   string `json:"api_key"`
+	Model    string `json:"model"`
+	Weight   int    `json:"weight"` // 权重，越高越优先（0 表示仅作 fallback）
+}
+
 // Config 保存运行时配置（等价于 Python lib.py 的模块级配置）
 type Config struct {
 	// 翻译 LLM（SiliconFlow）
@@ -13,6 +22,9 @@ type Config struct {
 	OnlineAPIKey  string
 	OnlineModel   string
 	OnlineTimeout int
+
+	// 模型路由策略：按权重选主模型，失败后按顺序降级。空则用 Online* 单供应商。
+	ModelRoutes []ProviderConfig
 
 	// Embedding（智谱）
 	EmbedAPIBase string

@@ -60,6 +60,22 @@ func (q *Quota) setConcurrent(v int) {
 	q.concurrentMax = v
 }
 
+// QPS 返回租户 QPS 上限（admin 读取用）
+func (s *Service) QPS(tid int64) int {
+	q := getQuota(tid)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.qpsMax
+}
+
+// Concurrent 返回租户并发上限（admin 读取用）
+func (s *Service) Concurrent(tid int64) int {
+	q := getQuota(tid)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.concurrentMax
+}
+
 // TryAcquire 尝试获取并发名额；返回是否允许继续
 func (s *Service) TryAcquire(tid int64) bool {
 	q := getQuota(tid)
@@ -111,6 +127,34 @@ type Service struct {
 // NewService 创建计费服务
 func NewService(st *store.Store) *Service {
 	return &Service{Store: st}
+}
+
+// Enabled 是否强制计费（扣余额 + 余额不足停服）。默认关闭，仅留痕计量。
+// 由系统配置 billing_enforced=1 开启（用于 SaaS 销售模式）。
+func (s *Service) Enabled() bool {
+	if s.Store == nil {
+		return false
+	}
+	v, _ := s.Store.GetConfig("billing_enforced")
+	return v == "1"
+}
+
+// Meter 计量一次用量。强制计费时扣余额；否则仅记录 usage_ledger 留痕。
+// 返回 error（强制计费且余额不足时返回）。provider/model 用于多供应商成本核算。
+func (s *Service) Meter(tid, userID int64, taskType, provider, model string, quantity int64) error {
+	if s.Store == nil || quantity <= 0 {
+		return nil
+	}
+	if s.Enabled() {
+		_, err := s.Store.RecordUsage(tid, userID, taskType, provider, model, quantity)
+		return err
+	}
+	return s.Store.LogUsage(tid, userID, taskType, provider, model, quantity)
+}
+
+// MeterDeferred 计量失败不阻断业务（记录后返回错误供日志，但调用方按需忽略）。
+func (s *Service) MeterDeferred(tid, userID int64, taskType, provider, model string, quantity int64) error {
+	return s.Meter(tid, userID, taskType, provider, model, quantity)
 }
 
 // CheckDailyQuota 检查每日 token 上限（来自租户 permissions.max_daily_chars）

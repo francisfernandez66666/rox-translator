@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
@@ -121,6 +122,17 @@ func main() {
 	}
 	if st != nil {
 		eng.Evals = evals.New(cfg, llm.NewClient(cfg), st, judgeKey)
+	}
+
+	// 加载模型路由策略（system_config.model_routes，admin 可热更新）
+	if st != nil {
+		if v, err := st.GetConfig("model_routes"); err == nil && v != "" {
+			var routes []config.ProviderConfig
+			if json.Unmarshal([]byte(v), &routes) == nil && len(routes) > 0 {
+				cfg.ModelRoutes = routes
+				log.Printf("模型路由策略已加载: %d 条", len(routes))
+			}
+		}
 	}
 
 	srv := api.NewServer(cfg, eng, db, distDir, st, ts)

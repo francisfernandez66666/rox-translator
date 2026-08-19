@@ -51,6 +51,16 @@ func (s *Store) GetAPIKeyByHash(hash string) (*APIKey, error) {
 	return &k, nil
 }
 
+// GetAPIKey 按 ID+租户查询（用于管理端轮换）
+func (s *Store) GetAPIKey(id, tid int64) (*APIKey, error) {
+	row := s.db.QueryRow("SELECT id, tenant_id, key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count FROM api_keys WHERE id=? AND tenant_id=?", id, tid)
+	var k APIKey
+	if err := row.Scan(&k.ID, &k.TenantID, &k.KeyHash, &k.KeyPrefix, &k.Name, &k.Perms, &k.Status, &k.CreatedAt, &k.LastUsedAt, &k.CallCount); err != nil {
+		return nil, err
+	}
+	return &k, nil
+}
+
 // ListAPIKeys 租户 API Key 列表
 func (s *Store) ListAPIKeys(tid int64) ([]*APIKey, error) {
 	rows, err := s.db.Query("SELECT id, tenant_id, key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count FROM api_keys WHERE tenant_id=? ORDER BY id DESC", tid)

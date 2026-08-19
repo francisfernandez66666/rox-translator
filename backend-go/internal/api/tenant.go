@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"translator/internal/auth"
 	"translator/internal/store"
@@ -156,4 +157,63 @@ func (s *Server) handleTenantDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleTenantExport 导出租户全部数据（数据主权，super_admin）
+func (s *Server) handleTenantExport(w http.ResponseWriter, r *http.Request) {
+	_, err := s.requireAdminUser(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	if s.Store == nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
+		return
+	}
+	data, err := s.Store.ExportTenantData(req.ID)
+	if err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	b, _ := json.MarshalIndent(data, "", "  ")
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", `attachment; filename=tenant_`+strconv.FormatInt(req.ID, 10)+`_export.json`)
+	_, _ = w.Write(b)
+}
+
+// handleTenantErase 清除租户全部业务数据（GDPR 删除权，super_admin；删除前先导出备份）
+func (s *Server) handleTenantErase(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireAdminUser(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	if req.ID == 1 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "默认租户不可清除"})
+		return
+	}
+	if s.Store == nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
+		return
+	}
+	if err := s.Store.EraseTenantData(req.ID); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "tenant_erase", "tenants", strconv.FormatInt(req.ID, 10))
+	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "租户业务数据已清除"})
 }
