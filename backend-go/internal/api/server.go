@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"translator/internal/auth"
+	"translator/internal/billing"
 	"translator/internal/config"
 	"translator/internal/engine"
 	"translator/internal/kb"
@@ -20,6 +21,7 @@ type Server struct {
 	DB     *kb.KBDatabase
 	Ten    *tenant.Store
 	Store  *store.Store
+	Bill   *billing.Service
 	Dist   string
 	mux    *http.ServeMux
 }
@@ -27,8 +29,12 @@ type Server struct {
 // NewServer 创建服务
 func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist string, st *store.Store, ts *tenant.Store) *Server {
 	s := &Server{Cfg: cfg, Engine: eng, DB: db, Ten: ts, Store: st, Dist: dist}
+	if st != nil {
+		s.Bill = billing.NewService(st)
+	}
 	s.mux = http.NewServeMux()
 	s.routes()
+	s.startWatchdog()
 	return s
 }
 
@@ -50,15 +56,20 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/tenant/update", s.handleTenantUpdate)
 	s.mux.HandleFunc("/api/tenant/status", s.handleTenantStatus)
 	s.mux.HandleFunc("/api/tenant/delete", s.handleTenantDelete)
+	s.mux.HandleFunc("/api/tenant/export", s.handleTenantExport)
+	s.mux.HandleFunc("/api/tenant/erase", s.handleTenantErase)
 
 	// ★ 认证与用户
 	s.mux.HandleFunc("/api/auth/login", s.handleLogin)
+	s.mux.HandleFunc("/api/auth/register", s.handleRegister)
 	s.mux.HandleFunc("/api/auth/me", s.handleMe)
 	s.mux.HandleFunc("/api/auth/change-password", s.handleChangePassword)
 	s.mux.HandleFunc("/api/admin/users", s.handleAdminUsers)
 	s.mux.HandleFunc("/api/admin/users/create", s.handleAdminUserCreate)
 	s.mux.HandleFunc("/api/admin/users/update", s.handleAdminUserUpdate)
 	s.mux.HandleFunc("/api/admin/users/reset-password", s.handleAdminUserResetPassword)
+	s.mux.HandleFunc("/api/admin/invite-codes", s.handleInviteCodes)
+	s.mux.HandleFunc("/api/admin/invite-codes/create", s.handleInviteCodeCreate)
 
 	// ★ 工单 + 审批
 	s.mux.HandleFunc("/api/tickets", s.handleTickets)
@@ -75,6 +86,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/kb-packages/delete", s.handleKBPackageDelete)
 	s.mux.HandleFunc("/api/admin/kb-entries", s.handleKBEntries)
 	s.mux.HandleFunc("/api/admin/kb-entries/add", s.handleKBEntryAdd)
+	s.mux.HandleFunc("/api/admin/kb-entries/import", s.handleKBEntriesImport)
 	s.mux.HandleFunc("/api/admin/kb-entries/delete", s.handleKBEntryDelete)
 	s.mux.HandleFunc("/api/admin/safety-phrases", s.handleSafetyPhrases)
 	s.mux.HandleFunc("/api/admin/safety-phrases/add", s.handleSafetyPhraseAdd)
@@ -88,6 +100,8 @@ func (s *Server) routes() {
 	// ★ 模型/策略配置
 	s.mux.HandleFunc("/api/admin/models", s.handleModels)
 	s.mux.HandleFunc("/api/admin/models/save", s.handleModelsSave)
+	s.mux.HandleFunc("/api/admin/models/routes", s.handleModelRoutes)
+	s.mux.HandleFunc("/api/admin/models/routes/save", s.handleModelRoutesSave)
 	s.mux.HandleFunc("/api/admin/policy", s.handlePolicy)
 	s.mux.HandleFunc("/api/admin/policy/save", s.handlePolicySave)
 
@@ -97,23 +111,36 @@ func (s *Server) routes() {
 	// ★ 系统健康
 	s.mux.HandleFunc("/api/system/health", s.handleSystemHealth)
 	s.mux.HandleFunc("/api/system/audit", s.handleSystemAudit)
+	s.mux.HandleFunc("/api/system/alerts", s.handleAlerts)
+	s.mux.HandleFunc("/api/system/alerts/resolve", s.handleAlertResolve)
 
 	// ★ 计费/充值/用量
 	s.mux.HandleFunc("/api/billing/balance", s.handleBalance)
 	s.mux.HandleFunc("/api/billing/usage", s.handleUsage)
 	s.mux.HandleFunc("/api/billing/orders", s.handleOrders)
+	s.mux.HandleFunc("/api/billing/config", s.handleBillingConfig)
+	s.mux.HandleFunc("/api/billing/config/save", s.handleBillingConfigSave)
+	s.mux.HandleFunc("/api/billing/quota", s.handleTenantQuota)
+	s.mux.HandleFunc("/api/billing/quota/save", s.handleTenantQuotaSave)
 	s.mux.HandleFunc("/api/admin/orders/create", s.handleOrderCreate)
 	s.mux.HandleFunc("/api/admin/orders/pay", s.handleOrderPay)
 	s.mux.HandleFunc("/api/admin/orders/refund", s.handleOrderRefund)
+	s.mux.HandleFunc("/api/billing/invoices", s.handleInvoices)
+	s.mux.HandleFunc("/api/billing/invoices/create", s.handleInvoiceCreate)
 
 	// ★ 租户开放 API Key
 	s.mux.HandleFunc("/api/apikeys", s.handleAPIKeys)
 	s.mux.HandleFunc("/api/apikeys/create", s.handleAPIKeyCreate)
 	s.mux.HandleFunc("/api/apikeys/status", s.handleAPIKeyStatus)
+	s.mux.HandleFunc("/api/apikeys/rotate", s.handleAPIKeyRotate)
 	s.mux.HandleFunc("/api/apikeys/delete", s.handleAPIKeyDelete)
 
 	// ★ 开放 API（API Key 鉴权）
 	s.mux.HandleFunc("/openapi/v1/translate", s.handleOpenAPITranslate)
+	s.mux.HandleFunc("/openapi/v1/kb/stats", s.handleOpenAPIKBStats)
+	s.mux.HandleFunc("/openapi/v1/billing/usage", s.handleOpenAPIUsage)
+	s.mux.HandleFunc("/openapi/v1/apikey/rotate", s.handleOpenAPIKeyRotate)
+	s.mux.HandleFunc("/openapi/docs", s.handleOpenAPIDocs)
 
 	s.mux.HandleFunc("/", s.handleSPA)
 }
@@ -124,23 +151,38 @@ func (s *Server) Handler() http.Handler {
 }
 
 // withTenant 解析请求租户并注入 context。
-// 优先级：登录态（Authorization Bearer JWT 中的 tenant_id）> X-Tenant-ID 头 > 默认租户 1（rox）。
-// 超级管理员为平台级（tenant_id=0），其生效租户由 X-Tenant-ID 指定（后台租户切换器），默认 rox。
+// 优先级：登录态（Authorization Bearer JWT 中的 tenant_id）> API Key 所属租户 > X-Tenant-ID 头 > 默认租户 1（rox）。
+// 安全约束：
+//   - 已登录普通用户：租户取自 JWT，无法越权指定其他租户。
+//   - 未登录请求：仅信任 API Key（开放 API）或默认租户 1；X-Tenant-ID 头一律忽略（防伪造越权）。
+//   - 超级管理员（平台级 tenant_id=0）：生效租户由 X-Tenant-ID 指定（后台租户切换器），默认 rox。
 func (s *Server) withTenant(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		// 1. 登录用户：租户取自 JWT，普通用户无法越权指定其他租户
-		if u := s.authUser(r); u != nil && u.TenantID > 0 {
-			ctx = tenant.WithTenant(ctx, u.TenantID)
+		if u := s.authUser(r); u != nil {
+			if u.TenantID > 0 {
+				ctx = tenant.WithTenant(ctx, u.TenantID)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			// 2. 超级管理员（平台级）：X-Tenant-ID 切换生效租户（后台租户切换器）
+			if v := r.Header.Get("X-Tenant-ID"); v != "" {
+				if id, err := strconv.ParseInt(v, 10, 64); err == nil && id > 0 {
+					ctx = tenant.WithTenant(ctx, id)
+				}
+			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		// 2. 未登录或超管：兼容 X-Tenant-ID 头（开放 API / 超管后台切换租户）
-		if v := r.Header.Get("X-Tenant-ID"); v != "" {
-			if id, err := strconv.ParseInt(v, 10, 64); err == nil && id > 0 {
-				ctx = tenant.WithTenant(ctx, id)
-			}
+		// 3. 未登录：仅信任 API Key 所属租户（开放 API 路径）
+		if ak, ok := s.authenticateAPIKey(r); ok && ak.TenantID > 0 {
+			ctx = tenant.WithTenant(ctx, ak.TenantID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
 		}
+		// 4. 其余未登录请求：强制默认租户 1（rox），忽略 X-Tenant-ID 防伪造
+		ctx = tenant.WithTenant(ctx, 1)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

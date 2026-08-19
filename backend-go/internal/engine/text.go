@@ -85,6 +85,8 @@ func SplitOptions(langs []string) (kbTarget, directOther []string, hasOther bool
 
 // HandleText 文本翻译主流程（复刻 skill.py _handle_text_translate）
 func (e *Engine) HandleText(ctx context.Context, text string, options map[string]interface{}, prog Progress) *TextTranslateResult {
+	// 注入请求级用量记录器（供计量成本核算）
+	ctx = e.WithUsageRecorder(ctx)
 	if prog == nil {
 		prog = func(string, int, int) {}
 	}

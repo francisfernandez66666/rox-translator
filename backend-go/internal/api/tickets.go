@@ -76,6 +76,13 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不存在"})
 		return
 	}
+	// ★ 配额闸门
+	tid, release, gateErr := s.gateUsage(r)
+	defer release()
+	if gateErr != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": gateErr.Error()})
+		return
+	}
 	wf := s.workflow()
 	if wf == nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工作流未初始化"})
@@ -88,6 +95,8 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error(), "ticket": t})
 		return
 	}
+	// ★ 计量：工单翻译按源文本字符数计量（含驳回重翻，每次运行都计量）
+	s.meterUsage(r, tid, "translate", int64(len([]rune(t.SourceText))))
 	// 驳回重翻循环结束：清空驳回意见，避免下次运行重复重翻
 	if t.RejectReason != "" {
 		t.RejectReason = ""

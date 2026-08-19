@@ -2,11 +2,14 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"translator/internal/auth"
+	"translator/internal/config"
+	"translator/internal/engine"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -204,6 +207,78 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "model_save", "tenants", req.Model)
 	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleModelRoutes 读取模型路由策略（super_admin）
+func (s *Server) handleModelRoutes(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireAdminUser(r); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var routes []config.ProviderConfig
+	if s.Store != nil {
+		if v, err := s.Store.GetConfig("model_routes"); err == nil && v != "" {
+			_ = json.Unmarshal([]byte(v), &routes)
+		}
+	}
+	if routes == nil {
+		routes = []config.ProviderConfig{}
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "routes": routes})
+}
+
+// handleModelRoutesSave 保存模型路由策略（super_admin）
+// 覆盖式保存：全量提交，空数组表示清空路由回退单供应商 Online* 配置。
+func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireAdminUser(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		Routes []config.ProviderConfig `json:"routes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	// 校验：非空时必须每条含 api_base/model/api_key
+	for i, rt := range req.Routes {
+		if rt.APIBase == "" || rt.Model == "" {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": fmt.Sprintf("第 %d 条路由缺少 api_base/model", i+1)})
+			return
+		}
+		if rt.Provider == "" {
+			req.Routes[i].Provider = "global"
+		}
+	}
+	// 掩码密钥不覆盖：保留原值
+	if len(req.Routes) > 0 {
+		if v, err := s.Store.GetConfig("model_routes"); err == nil && v != "" {
+			var old []config.ProviderConfig
+			if json.Unmarshal([]byte(v), &old) == nil {
+				for i := range req.Routes {
+					if hasMask(req.Routes[i].APIKey) {
+						for _, o := range old {
+							if o.APIBase == req.Routes[i].APIBase && o.Model == req.Routes[i].Model {
+								req.Routes[i].APIKey = o.APIKey
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	b, _ := json.Marshal(req.Routes)
+	if err := s.Store.SetConfig("model_routes", string(b)); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	// 同步到运行配置（引擎热生效）
+	s.Cfg.ModelRoutes = req.Routes
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "model_routes_save", "system", fmt.Sprintf("%d 条", len(req.Routes)))
+	writeJSON(w, 200, map[string]interface{}{"success": true, "routes": req.Routes})
 }
 
 func hasMask(k string) bool { return strings.Contains(k, "****") }
@@ -552,22 +627,130 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 		"usage":              usage,
 		"flow_steps_enabled": enabled,
 		"flow_steps_total":   len(steps),
+		"breaker_open":       s.Engine != nil && s.Engine.BreakerOpen(),
+		"llm_error_rate":     llmErrorRateStr(s.Engine),
 	}})
 }
 
-// handleSystemAudit 审计日志
+// llmErrorRateStr 生成 LLM 错误率展示字符串（无样本显示 0.0%）
+func llmErrorRateStr(eng *engine.Engine) string {
+	if eng == nil {
+		return "0.0%"
+	}
+	return fmt.Sprintf("%.1f%%", eng.ErrorRate()*100)
+}
+
+// handleSystemAudit 审计日志（支持 action/resource/user/time 过滤；export=csv 导出）
 func (s *Server) handleSystemAudit(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	logs, err := s.Store.ListAudit(s.effTenant(r, u), 100)
+	q := r.URL.Query()
+	logs, err := s.Store.ListAuditFilter(
+		s.effTenant(r, u),
+		q.Get("action"),
+		q.Get("resource"),
+		atol(q.Get("user_id")),
+		q.Get("from"),
+		q.Get("to"),
+		atoiDef(q.Get("limit"), 100),
+	)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// CSV 导出（ISO 17100 审计留痕）
+	if q.Get("export") == "csv" {
+		s.exportAuditCSV(w, logs)
+		return
+	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "logs": logs})
+}
+
+// handleAlerts 告警列表（租户管理员看本租户，超管看全平台）
+func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	tid := s.effTenant(r, u)
+	if u.Role == "super_admin" || u.Role == "admin" {
+		tid = 0 // 超管看全平台
+	}
+	q := r.URL.Query()
+	status := q.Get("status")
+	alerts, err := s.Store.ListAlerts(tid, status, atoiDef(q.Get("limit"), 100))
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "alerts": alerts})
+}
+
+// handleAlertResolve 关闭告警
+func (s *Server) handleAlertResolve(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	if err := s.Store.ResolveAlert(req.ID); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "alert_resolve", "alerts", strconv.FormatInt(req.ID, 10))
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// exportAuditCSV 导出审计日志为 CSV
+func (s *Server) exportAuditCSV(w http.ResponseWriter, logs []*store.AuditLog) {
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=audit.csv")
+	var sb strings.Builder
+	sb.WriteString("\xEF\xBB\xBF") // UTF-8 BOM（Excel 兼容）
+	sb.WriteString("id,tenant_id,user_id,action,resource,detail,before_val,after_val,created_at\n")
+	for _, a := range logs {
+		sb.WriteString(fmt.Sprintf("%d,%d,%d,%s,%s,%s,%s,%s,%s\n",
+			a.ID, a.TenantID, a.UserID, csvEscape(a.Action), csvEscape(a.Resource), csvEscape(a.Detail),
+			csvEscape(a.BeforeVal), csvEscape(a.AfterVal), csvEscape(a.CreatedAt)))
+	}
+	_, _ = w.Write([]byte(sb.String()))
+}
+
+// csvEscape CSV 字段转义（逗号/引号/换行）
+func csvEscape(s string) string {
+	if strings.ContainsAny(s, ",\"\n\r") {
+		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+	}
+	return s
+}
+
+// atol 解析 int64（非法返回 0）
+func atol(s string) int64 {
+	n, _ := strconv.ParseInt(s, 10, 64)
+	return n
+}
+
+// atoiDef 解析 int，非法返回默认值
+func atoiDef(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }
 
 // ============ 计费/充值/用量 ============
@@ -599,7 +782,25 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "usage": usage, "total": total})
+	// 多供应商成本核算：按 provider 拆分用量（平台超管可查看全平台汇总）
+	providerUsage, err := s.Store.UsageStatsByProvider(s.effTenant(r, u))
+	if err != nil {
+		providerUsage = map[string]int64{}
+	}
+	// 用量趋势（最近 7 天）
+	trend, err := s.Store.UsageTrend(s.effTenant(r, u), 7)
+	if err != nil {
+		trend = map[string]int64{}
+	}
+	// 用量明细（分页）
+	ledger, err := s.Store.UsageLedgerList(s.effTenant(r, u), atoiDef(r.URL.Query().Get("limit"), 50), int(atol(r.URL.Query().Get("offset"))))
+	if err != nil {
+		ledger = []*store.UsageLedger{}
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"success": true, "usage": usage, "total": total,
+		"provider_usage": providerUsage, "trend": trend, "ledger": ledger,
+	})
 }
 
 // handleOrders 订单列表
@@ -617,9 +818,9 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "orders": orders})
 }
 
-// handleOrderCreate 创建充值订单（super_admin）
+// handleOrderCreate 创建充值订单（super_admin 为任意租户 / tenant_admin 为本租户自助充值）
 func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireAdminUser(r)
+	u, err := s.requireTenantAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -636,10 +837,21 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 	if req.TenantID <= 0 {
 		req.TenantID = s.effTenant(r, u)
 	}
+	// 租户管理员只能为自己租户提交充值申请（super_admin 可代任意租户）
+	if !auth.IsSuperAdmin(u) && req.TenantID != s.effTenant(r, u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：只能为本租户充值"})
+		return
+	}
 	o, err := s.Store.CreateOrder(req.TenantID, req.Tokens, req.Money, u.ID)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
+	}
+	// 自助充值即时到账模式：system_config auto_charge=1 时创建订单即确认到账（内网/测试模式）
+	if v, _ := s.Store.GetConfig("auto_charge"); v == "1" {
+		if err := s.Store.MarkOrderPaid(o.ID, req.TenantID); err == nil {
+			o.Status = "paid"
+		}
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_create", "orders", o.OrderNo)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "order": o})
@@ -695,6 +907,48 @@ func (s *Server) handleOrderRefund(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_refund", "orders", "")
 	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// ============ 发票 ============
+
+// handleInvoices 发票列表（租户管理员）
+func (s *Server) handleInvoices(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	inv, err := s.Store.ListInvoices(s.effTenant(r, u))
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "invoices": inv})
+}
+
+// handleInvoiceCreate 为已支付订单开具发票（租户管理员，限本租户已支付订单）
+func (s *Server) handleInvoiceCreate(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		OrderID int64  `json:"order_id"`
+		Title   string `json:"title"`
+		TaxNo   string `json:"tax_no"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OrderID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请提供订单 id"})
+		return
+	}
+	inv, err := s.Store.CreateInvoice(s.effTenant(r, u), req.OrderID, req.Title, req.TaxNo)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "开票失败（需订单已支付）: " + err.Error()})
+		return
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "invoice_create", "billing", inv.InvoiceNo)
+	writeJSON(w, 200, map[string]interface{}{"success": true, "invoice": inv})
 }
 
 // ============ 开放 API Key ============
@@ -760,6 +1014,39 @@ func (s *Server) handleAPIKeyStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
+// handleAPIKeyRotate 轮换 API Key（本租户，旧 Key 立即失效）
+func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	tid := s.effTenant(r, u)
+	old, err := s.Store.GetAPIKey(req.ID, tid)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "Key 不存在"})
+		return
+	}
+	if err := s.Store.DeleteAPIKey(req.ID, tid); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	plain, err := s.Store.CreateAPIKey(tid, old.Name, old.Perms)
+	if err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(tid, u.ID, "apikey_rotate", "api_keys", old.Name)
+	writeJSON(w, 200, map[string]interface{}{"success": true, "api_key": plain, "note": "旧 Key 已失效，新 Key 仅显示一次"})
+}
+
 // handleAPIKeyDelete 删除
 func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
@@ -783,9 +1070,35 @@ func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 
 // ============ 开放 API（API Key 鉴权） ============
 
+// handleOpenAPIDocs 开放 API 文档（静态 HTML）
+func (s *Server) handleOpenAPIDocs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(`<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<title>翻译平台开放 API 文档</title>
+<style>body{font-family:-apple-system,Segoe UI,sans-serif;max-width:900px;margin:30px auto;padding:0 20px;color:#222}
+h1{border-bottom:2px solid #1a237e;padding-bottom:8px}code{background:#f0f0f0;padding:2px 6px;border-radius:4px}
+pre{background:#f6f8fa;padding:12px;border-radius:8px;overflow:auto}
+table{border-collapse:collapse;width:100%;margin:10px 0}th,td{border:1px solid #ddd;padding:8px;text-align:left;font-size:14px}th{background:#fafbfd}
+.badge{display:inline-block;background:#e8eaf6;color:#1a237e;border-radius:4px;padding:2px 8px;font-size:12px}</style></head><body>
+<h1>翻译平台开放 API</h1>
+<p>所有接口使用 <code>Authorization: Bearer &lt;API_KEY&gt;</code> 认证，API Key 在管理后台「API Key」面板签发。</p>
+<table><tr><th>方法</th><th>路径</th><th>权限</th><th>说明</th></tr>
+<tr><td>POST</td><td>/openapi/v1/translate</td><td class="badge">translate/all</td><td>文本翻译</td></tr>
+<tr><td>GET</td><td>/openapi/v1/kb/stats</td><td class="badge">kb/all</td><td>知识库条目统计</td></tr>
+<tr><td>GET</td><td>/openapi/v1/billing/usage</td><td class="badge">billing/all</td><td>用量与余额</td></tr>
+<tr><td>POST</td><td>/openapi/v1/apikey/rotate</td><td class="badge">all</td><td>轮换 API Key（旧 Key 立即失效）</td></tr>
+</table>
+<h2>翻译请求示例</h2>
+<pre>curl -X POST https://<span>域名</span>/openapi/v1/translate \
+  -H "Authorization: Bearer &lt;API_KEY&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"请检查制动系统","target_langs":["en","de"]}'</pre>
+<p>响应：<code>translations</code> 为目标语言→译文映射，<code>sources</code> 标记来源（kb/ai）。</p>
+</body></html>`))
+}
+
 // handleOpenAPITranslate 开放翻译接口
 func (s *Server) handleOpenAPITranslate(w http.ResponseWriter, r *http.Request) {
-	// 用 openapi 中间件鉴权（需挂载在独立 mux）
 	ak, ok := s.authenticateAPIKey(r)
 	if !ok {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "API Key 无效"})
@@ -806,13 +1119,96 @@ func (s *Server) handleOpenAPITranslate(w http.ResponseWriter, r *http.Request) 
 	if len(req.TargetLangs) == 0 {
 		req.TargetLangs = []string{"en"}
 	}
+	// ★ 配额闸门（openapi 请求租户来自 API Key）
+	tid, release, gateErr := s.gateUsage(r)
+	defer release()
+	if gateErr != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": gateErr.Error()})
+		return
+	}
 	res := s.Engine.HandleText(r.Context(), req.Text, map[string]interface{}{"target_langs": req.TargetLangs}, nil)
+	if res.Error == "" {
+		// ★ 计量：开放 API 翻译按源文本字符数计量
+		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Text))))
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true,
 		"translations": res.Data.Translations,
 		"sources":      res.Data.TranslationsSource,
 		"mode":         res.Data.Mode,
 		"reply":        res.Reply,
+	})
+}
+
+// handleOpenAPIKBStats 开放接口：查询本租户知识库统计（需要 kb/all 权限）
+func (s *Server) handleOpenAPIKBStats(w http.ResponseWriter, r *http.Request) {
+	ak, ok := s.authenticateAPIKey(r)
+	if !ok {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "API Key 无效"})
+		return
+	}
+	if ak.Perms != "all" && ak.Perms != "kb" {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "API Key 无知识库权限"})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"success":  true,
+		"tenant_id": ak.TenantID,
+		"kb_entries": s.kbStats(ak.TenantID),
+	})
+}
+
+// kbStats 统计租户知识库条目数（安全封装：DB 为 nil 时返回 0）
+func (s *Server) kbStats(tid int64) int64 {
+	if s.DB == nil {
+		return 0
+	}
+	total, _, _, _ := s.DB.Stats(tid)
+	return total
+}
+
+// handleOpenAPIUsage 开放接口：查询本租户用量与余额（需要 billing/all 权限）
+func (s *Server) handleOpenAPIUsage(w http.ResponseWriter, r *http.Request) {
+	ak, ok := s.authenticateAPIKey(r)
+	if !ok {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "API Key 无效"})
+		return
+	}
+	if ak.Perms != "all" && ak.Perms != "billing" {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "API Key 无计费权限"})
+		return
+	}
+	usage, total, _ := s.Store.UsageStats(ak.TenantID)
+	balance, _ := s.Store.GetBalance(ak.TenantID)
+	writeJSON(w, 200, map[string]interface{}{
+		"success":  true,
+		"tenant_id": ak.TenantID,
+		"usage":    usage,
+		"total":    total,
+		"balance":  balance,
+	})
+}
+
+// handleOpenAPIKeyRotate 开放接口：轮换本租户 API Key（传入旧 key 换取新 key）
+func (s *Server) handleOpenAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
+	ak, ok := s.authenticateAPIKey(r)
+	if !ok {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "API Key 无效"})
+		return
+	}
+	// 轮换：删除旧 key 并签发同权限新 key
+	if err := s.Store.DeleteAPIKey(ak.ID, ak.TenantID); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	newKey, err := s.Store.CreateAPIKey(ak.TenantID, ak.Name, ak.Perms)
+	if err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"success": true, "message": "API Key 已轮换，旧 Key 立即失效",
+		"api_key": newKey, "name": ak.Name, "perms": ak.Perms,
 	})
 }
 

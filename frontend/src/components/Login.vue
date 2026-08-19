@@ -7,6 +7,20 @@
       <input v-model="password" type="password" placeholder="密码" class="login-input" autocomplete="current-password" @keydown.enter="doLogin" />
       <div v-if="error" class="login-error">{{ error }}</div>
       <button class="login-btn" :disabled="loading" @click="doLogin">{{ loading ? '登录中…' : '登 录' }}</button>
+      <button v-if="mode === 'home'" class="login-reg" @click="showReg = !showReg">{{ showReg ? '返回登录' : '没有账号？自助注册试用' }}</button>
+    </div>
+
+    <!-- 自助注册面板（仅前台 home 模式） -->
+    <div v-if="showReg && mode === 'home'" class="login-card">
+      <div class="login-logo">🌐 自助注册试用</div>
+      <div class="login-sub">填写邀请码可加入已有团队；留空则创建新租户并获得试用额度</div>
+      <input v-model="reg.username" placeholder="用户名" class="login-input" />
+      <input v-model="reg.password" type="password" placeholder="密码（至少 6 位）" class="login-input" />
+      <input v-model="reg.code" placeholder="租户编码（新建租户时必填）" class="login-input" />
+      <input v-model="reg.name" placeholder="租户名称（新建租户时必填）" class="login-input" />
+      <input v-model="reg.invite" placeholder="邀请码（可选）" class="login-input" />
+      <div v-if="regMsg" class="login-error">{{ regMsg }}</div>
+      <button class="login-btn" :disabled="loading" @click="doRegister">{{ loading ? '注册中…' : '注册并登录' }}</button>
     </div>
   </div>
 </template>
@@ -14,7 +28,7 @@
 <script setup lang="ts">
 // 登录组件：mode=home 前台登录，mode=admin 后台登录（需租户管理员及以上角色）
 import { ref } from 'vue'
-import { login, setAuthToken } from '@/api'
+import { login, authRegister, setAuthToken } from '@/api'
 
 const props = defineProps<{ mode: 'home' | 'admin' }>()
 const emit = defineEmits<{ ok: [user: unknown] }>()
@@ -24,6 +38,39 @@ const username = ref('')
 const password = ref('')
 const error = ref('')
 const loading = ref(false)
+const showReg = ref(false)
+const regMsg = ref('')
+const reg = ref({ username: '', password: '', code: '', name: '', invite: '' })
+
+// 注册成功后自动登录进入工作台
+async function doRegister() {
+  if (!reg.value.username || !reg.value.password) {
+    regMsg.value = '请输入用户名和密码'
+    return
+  }
+  if (reg.value.password.length < 6) {
+    regMsg.value = '密码至少 6 位'
+    return
+  }
+  loading.value = true
+  regMsg.value = ''
+  const resp = await authRegister({
+    username: reg.value.username,
+    password: reg.value.password,
+    code: reg.value.code || undefined,
+    name: reg.value.name || undefined,
+    invite: reg.value.invite || undefined,
+  })
+  loading.value = false
+  if (!resp.success) {
+    regMsg.value = resp.message || '注册失败'
+    return
+  }
+  username.value = reg.value.username
+  password.value = reg.value.password
+  showReg.value = false
+  await doLogin()
+}
 
 // 角色等级：普通用户(1) < 租户管理员(2) < 超级管理员(3)，兼容旧值 approver/admin
 function roleLevel(r?: string): number {
@@ -76,5 +123,10 @@ async function doLogin() {
   background: #1a237e; color: #fff; font-size: 15px; cursor: pointer; margin-top: 6px;
 }
 .login-btn:disabled { opacity: 0.6; }
+.login-reg {
+  width: 100%; padding: 10px; border: none; border-radius: 10px; background: #f5f5f5;
+  color: #3949ab; font-size: 13px; cursor: pointer; margin-top: 10px;
+}
+.login-reg:hover { background: #e8eaf6; }
 .login-error { color: #c62828; font-size: 13px; margin: 8px 0; }
 </style>

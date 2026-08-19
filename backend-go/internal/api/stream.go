@@ -50,6 +50,17 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ★ 配额闸门：QPS/并发/每日上限/余额校验（不通过则拒绝本次翻译）
+	tid, release, gateErr := s.gateUsage(r)
+	defer release()
+	if gateErr != nil {
+		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": gateErr.Error()}))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
+	}
+
 	prog := func(step string, done, total int) {
 		percent := 0
 		if total > 0 {
@@ -72,6 +83,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	if res.Error != "" {
 		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": res.Error}))
 	} else {
+		// ★ 计量：按源文本字符数记入用量（强制计费模式会扣余额）
+		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Message))))
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
 	}
 }
@@ -126,6 +139,17 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	sseHeaders(w)
 	flusher, _ := w.(http.Flusher)
 
+	// ★ 配额闸门：QPS/并发/每日上限/余额校验（不通过则拒绝本次文件翻译）
+	tid, release, gateErr := s.gateUsage(r)
+	defer release()
+	if gateErr != nil {
+		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": gateErr.Error()}))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
+	}
+
 	prog := func(step string, done, total int) {
 		percent := 0
 		if total > 0 {
@@ -150,6 +174,8 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	if res.Error != "" {
 		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": res.Error}))
 	} else {
+		// ★ 计量：按提取段数计量文件翻译用量（强制计费模式会扣余额）
+		s.meterUsage(r, tid, "translate", int64(res.Data.TotalTexts))
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
 	}
 }
@@ -162,10 +188,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "请求格式错误"})
 		return
 	}
+	// ★ 配额闸门
+	tid, release, gateErr := s.gateUsage(r)
+	defer release()
+	if gateErr != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "error": gateErr.Error()})
+		return
+	}
 	res := s.Engine.HandleText(r.Context(), req.Message, req.Options, nil)
 	if res.Error != "" {
 		res.Skill = "translation"
 		res.Reply = "❌ 处理出错: " + res.Error
+	} else {
+		// ★ 计量
+		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Message))))
 	}
 	writeJSON(w, 200, res)
 }
@@ -213,8 +249,19 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 		options["message"] = message
 		options["_prompt"] = message
 	}
+	// ★ 配额闸门
+	tid, release, gateErr := s.gateUsage(r)
+	defer release()
+	if gateErr != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "error": gateErr.Error()})
+		return
+	}
 	res := s.Engine.HandleFile(r.Context(), savePath, options, nil)
 	os.Remove(savePath)
+	if res.Error == "" {
+		// ★ 计量：按提取段数计量文件翻译用量
+		s.meterUsage(r, tid, "translate", int64(res.Data.TotalTexts))
+	}
 	writeJSON(w, 200, res)
 }
 

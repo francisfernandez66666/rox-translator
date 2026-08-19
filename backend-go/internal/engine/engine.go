@@ -33,6 +33,11 @@ type Engine struct {
 
 	// ★ 主模型熔断恢复：Hunyuan 连续失败超阈值 → 直接降级；冷却后自动恢复
 	breaker *Breaker
+
+	// ★ 错误率监控：记录最近 N 次 LLM 调用成败（看门狗/告警用）
+	errMu       sync.Mutex
+	errRing     []bool // true=成功 false=失败
+	errRingCap  int
 }
 
 // tenantID 从 ctx 取租户 id；未指定时回退默认租户 rox（id=1）
@@ -41,6 +46,82 @@ func (e *Engine) tenantID(ctx context.Context) int64 {
 		return id
 	}
 	return 1
+}
+
+// usageCtxKey 请求级"实际使用的 LLM 供应商/模型"记录键（供计量成本核算）
+type usageCtxKey struct{}
+
+// usageRecord 可变的请求级记录（context 存指针，跨调用共享）
+type usageRecord struct {
+	provider string
+	model    string
+	used     bool
+}
+
+// WithUsageRecorder 向 ctx 注入用量记录器（API 层在进入翻译前调用）
+func (e *Engine) WithUsageRecorder(ctx context.Context) context.Context {
+	return context.WithValue(ctx, usageCtxKey{}, &usageRecord{})
+}
+
+// NoteUsageModel 记录本次实际使用的供应商与模型（单语翻译成功路径调用）
+func (e *Engine) NoteUsageModel(ctx context.Context, provider, model string) {
+	if rec, ok := ctx.Value(usageCtxKey{}).(*usageRecord); ok {
+		rec.provider = provider
+		rec.model = model
+		rec.used = true
+	}
+}
+
+// UsageModel 返回本次请求实际使用的供应商与模型；未记录时回退租户配置/全局默认
+func (e *Engine) UsageModel(ctx context.Context) (provider, model string) {
+	if rec, ok := ctx.Value(usageCtxKey{}).(*usageRecord); ok && rec.used {
+		return rec.provider, rec.model
+	}
+	// 未记录：租户配置优先，其次全局（路由策略主模型）
+	if e.Ten != nil {
+		if mc, err := e.Ten.GetModelConfig(e.tenantID(ctx)); err == nil && mc.Model != "" {
+			return "tenant", mc.Model
+		}
+	}
+	if len(e.Cfg.ModelRoutes) > 0 {
+		p := e.pickPrimaryRoute()
+		return p.Provider, p.Model
+	}
+	return "global", e.Cfg.OnlineModel
+}
+
+// BreakerOpen 主模型是否处于熔断状态（监控告警用）
+func (e *Engine) BreakerOpen() bool {
+	return e.breaker.IsOpen()
+}
+
+// NoteLLMResult 记录一次 LLM 调用结果（成功/失败），用于错误率监控
+func (e *Engine) NoteLLMResult(ok bool) {
+	e.errMu.Lock()
+	defer e.errMu.Unlock()
+	if e.errRingCap == 0 {
+		e.errRingCap = 100
+	}
+	e.errRing = append(e.errRing, ok)
+	if len(e.errRing) > e.errRingCap {
+		e.errRing = e.errRing[len(e.errRing)-e.errRingCap:]
+	}
+}
+
+// ErrorRate 返回最近窗口内 LLM 调用错误率（0.0~1.0）；无样本返回 0
+func (e *Engine) ErrorRate() float64 {
+	e.errMu.Lock()
+	defer e.errMu.Unlock()
+	if len(e.errRing) == 0 {
+		return 0
+	}
+	fails := 0
+	for _, ok := range e.errRing {
+		if !ok {
+			fails++
+		}
+	}
+	return float64(fails) / float64(len(e.errRing))
 }
 
 // tenantOK 校验租户是否可用（存在且未禁用/未过期）。返回错误信息；nil 表示可用。
@@ -529,19 +610,52 @@ func buildExamplesPrompt(zhText, targetLang string, examples []*kb.Row) string {
 	return sb.String()
 }
 
-// resolveModel 解析当前租户的模型配置；未配置租户级时回退全局默认
+// resolveModel 解析当前租户的模型配置；未配置租户级时回退全局默认。
+// 若配置了 ModelRoutes 路由策略，则按权重选取主模型，失败后调用方按 resolveRouteFallbacks 降级。
 func (e *Engine) resolveModel(ctx context.Context) (base, key, model string) {
-	base = e.Cfg.OnlineAPIBase
-	key = e.Cfg.OnlineAPIKey
-	model = e.Cfg.OnlineModel
 	if e.Ten != nil {
 		if mc, err := e.Ten.GetModelConfig(e.tenantID(ctx)); err == nil && mc.Model != "" && mc.APIBase != "" {
-			base = mc.APIBase
-			key = mc.APIKey
-			model = mc.Model
+			return mc.APIBase, mc.APIKey, mc.Model
 		}
 	}
-	return
+	if len(e.Cfg.ModelRoutes) > 0 {
+		p := e.pickPrimaryRoute()
+		return p.APIBase, p.APIKey, p.Model
+	}
+	return e.Cfg.OnlineAPIBase, e.Cfg.OnlineAPIKey, e.Cfg.OnlineModel
+}
+
+// pickPrimaryRoute 按权重选取主路由（权重最高者；全为 0 时取第一个）
+func (e *Engine) pickPrimaryRoute() config.ProviderConfig {
+	rs := e.Cfg.ModelRoutes
+	if len(rs) == 0 {
+		return config.ProviderConfig{}
+	}
+	best, bestW := rs[0], rs[0].Weight
+	for _, r := range rs[1:] {
+		if r.Weight > bestW {
+			best, bestW = r, r.Weight
+		}
+	}
+	return best
+}
+
+// resolveRouteFallbacks 返回按权重降序的备用路由（排除主路由），用于主模型失败时降级
+func (e *Engine) resolveRouteFallbacks(primary config.ProviderConfig) []config.ProviderConfig {
+	out := []config.ProviderConfig{}
+	for _, r := range e.Cfg.ModelRoutes {
+		if r.APIBase == primary.APIBase && r.Model == primary.Model {
+			continue
+		}
+		out = append(out, r)
+	}
+	// 按权重降序
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j].Weight > out[j-1].Weight; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
 }
 
 // resolvePolicy 解析当前租户策略参数（high_sim/med_sim），未配置回退全局默认
@@ -589,6 +703,13 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 
 	base, key, model := e.resolveModel(ctx)
 
+	// 模型路由策略：配置了多供应商时，主模型失败按权重降序逐一降级
+	var routeFallbacks []config.ProviderConfig
+	if len(e.Cfg.ModelRoutes) > 0 {
+		primary := e.pickPrimaryRoute()
+		routeFallbacks = e.resolveRouteFallbacks(primary)
+	}
+
 	// Hunyuan-MT 不支持的语种 → 降级模型
 	hunyuan := strings.HasPrefix(model, "tencent/Hunyuan-MT")
 	if hunyuan && !cfg.HunyuanMTLangCode[targetLang] {
@@ -611,21 +732,42 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 
 	// Hunyuan 主模型首次调用用短超时（熔断开启时不尝试主模型）
 	content, finishReason, err := e.tryMainModel(ctx, cfg, base, key, model, messages, maxTokens, hunyuan, mainOpen)
+	e.NoteLLMResult(err == nil)
 
 	// 主模型失败 → 记录熔断计数并降级到 fallback 模型
 	if err != nil && (isRateLimited(err) || isNetworkError(err)) {
 		if hunyuan && !mainOpen {
 			e.breaker.Fail(err.Error())
 		}
-		fallback := cfg.HunyuanFallbackModel
-		if isRateLimited(err) {
-			time.Sleep(2 * time.Second)
+		// 优先尝试多供应商路由降级链
+		if len(routeFallbacks) > 0 {
+			for _, r := range routeFallbacks {
+				if isRateLimited(err) {
+					time.Sleep(2 * time.Second)
+				}
+				content, finishReason, err = e.LLM.CallChat(ctx, r.APIBase, r.APIKey, r.Model, messages, maxTokens, false, cfg.FallbackTemp)
+				if err == nil {
+					model = r.Model
+					base = r.APIBase
+					break
+				}
+			}
 		}
-		content, finishReason, err = e.LLM.CallChat(ctx, base, key, fallback, messages, maxTokens, false, cfg.FallbackTemp)
+		// 路由链全部失败或无路由配置 → 原有单 fallback
+		if err != nil {
+			fallback := cfg.HunyuanFallbackModel
+			if isRateLimited(err) {
+				time.Sleep(2 * time.Second)
+			}
+			content, finishReason, err = e.LLM.CallChat(ctx, base, key, fallback, messages, maxTokens, false, cfg.FallbackTemp)
+			e.NoteLLMResult(err == nil)
+		}
 	}
 	if err != nil {
 		return "", err
 	}
+	// 记录本次实际使用的供应商与模型（用于计量成本核算）
+	e.NoteUsageModel(ctx, usageProvider(base), model)
 	// 主模型成功 → 重置熔断计数
 	if hunyuan && !mainOpen {
 		e.breaker.Reset()
@@ -668,6 +810,23 @@ func (e *Engine) tryMainModel(ctx context.Context, cfg *config.Config, base, key
 		defer firstCancel()
 	}
 	return e.LLM.CallChat(firstCtx, base, key, model, messages, maxTokens, hunyuan, cfg.FallbackTemp)
+}
+
+// usageProvider 根据 base URL 推断供应商标识（成本核算分组用）
+func usageProvider(base string) string {
+	switch {
+	case strings.Contains(base, "siliconflow"):
+		return "siliconflow"
+	case strings.Contains(base, "bigmodel"):
+		return "bigmodel"
+	case strings.Contains(base, "openai"):
+		return "openai"
+	case strings.Contains(base, "volces"):
+		return "volcengine"
+	case strings.Contains(base, "aliyun") || strings.Contains(base, "dashscope"):
+		return "aliyun"
+	}
+	return "global"
 }
 
 // isTranslationIncomplete 判断翻译是否截断

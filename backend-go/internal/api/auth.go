@@ -65,7 +65,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.TouchLogin(u.ID)
-	s.Store.LogAudit(tid, u.ID, "login", "auth", "用户登录")
+	// 登录审计归属实际登录租户（平台超管 tenant_id=0 归默认租户 1）
+	auditTID := u.TenantID
+	if auditTID <= 0 {
+		auditTID = 1
+	}
+	s.Store.LogAudit(auditTID, u.ID, "login", "auth", "用户登录")
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "token": tok,
 		"user": map[string]interface{}{
@@ -210,11 +215,19 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.Store.UpdateUser(req.ID, s.effTenant(r, u), req.DisplayName, req.Role, req.Status); err != nil {
+	tid := s.effTenant(r, u)
+	// 结构化变更轨迹：记录角色/状态前后值（先取更新前值）
+	before := map[string]string{}
+	if target, err := s.Store.GetUser(req.ID, tid); err == nil {
+		before = map[string]string{"role": target.Role, "status": target.Status, "display_name": target.DisplayName}
+	}
+	beforeJSON, _ := json.Marshal(before)
+	if err := s.Store.UpdateUser(req.ID, tid, req.DisplayName, req.Role, req.Status); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	s.Store.LogAudit(u.TenantID, u.ID, "user_update", "users", "")
+	afterJSON, _ := json.Marshal(map[string]string{"role": req.Role, "status": req.Status, "display_name": req.DisplayName})
+	s.Store.LogAuditDiff(tid, u.ID, "user_update", "users", before["display_name"], string(beforeJSON), string(afterJSON))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 

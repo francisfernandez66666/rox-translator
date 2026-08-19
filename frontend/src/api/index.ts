@@ -2,6 +2,7 @@ import type { ChatResponse, HealthResponse, ProgressEvent } from '@/types'
 
 // ---- 后端地址配置 ----
 const API_BASE = import.meta.env.VITE_API_BASE || ''
+export { API_BASE }
 
 // 登录态：所有请求自动带 Authorization Bearer，租户由后端从 JWT 解析
 let authToken = localStorage.getItem('auth_token') || ''
@@ -247,6 +248,15 @@ export async function tenantDelete(id: number): Promise<TenantResp> {
   })
 }
 
+// 租户数据导出（数据主权）/ 清除（GDPR 删除权，super_admin）
+export async function tenantExport(id: number): Promise<AdminResp> {
+  return request('/api/tenant/export', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+}
+
+export async function tenantErase(id: number): Promise<AdminResp> {
+  return request('/api/tenant/erase', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+}
+
 // ==================== 认证（JWT 后台） ====================
 
 export interface AuthUser {
@@ -379,6 +389,11 @@ export async function kbEntryDelete(id: number): Promise<AdminResp> {
   return request('/api/admin/kb-entries/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
 
+// 批量导入 KB 条目（租户管理员）
+export async function kbEntriesImport(data: { package_id: number; entries: { source_text: string; target_lang: string; target_text: string; layer?: number; module?: string }[] }): Promise<AdminResp> {
+  return request('/api/admin/kb-entries/import', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
 // 流程引擎
 export interface FlowStepItem {
   key: string
@@ -403,6 +418,15 @@ export async function adminModelsSave(data: { api_base: string; api_key: string;
   return request('/api/admin/models/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
+// 模型路由策略（super_admin）
+export async function modelRoutes(): Promise<AdminResp> {
+  return request('/api/admin/models/routes', { headers: authHeaders() })
+}
+
+export async function modelRoutesSave(data: { routes: { provider: string; api_base: string; api_key: string; model: string; weight: number }[] }): Promise<AdminResp> {
+  return request('/api/admin/models/routes/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
 export async function adminPolicy(): Promise<AdminResp> {
   return request('/api/admin/policy', { headers: authHeaders() })
 }
@@ -418,6 +442,16 @@ export async function systemHealth(): Promise<AdminResp> {
 
 export async function systemAudit(): Promise<AdminResp> {
   return request('/api/system/audit', { headers: authHeaders() })
+}
+
+// 监控告警
+export async function systemAlerts(status?: string): Promise<AdminResp> {
+  const q = status ? `?status=${status}` : ''
+  return request(`/api/system/alerts${q}`, { headers: authHeaders() })
+}
+
+export async function alertResolve(id: number): Promise<AdminResp> {
+  return request('/api/system/alerts/resolve', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
 
 export async function evalsList(): Promise<AdminResp> {
@@ -458,6 +492,55 @@ export async function apiKeyStatus(id: number, status: string): Promise<AdminRes
   return request('/api/apikeys/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, status }) })
 }
 
+export async function apiKeyRotate(id: number): Promise<AdminResp> {
+  return request('/api/apikeys/rotate', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+}
+
 export async function apiKeyDelete(id: number): Promise<AdminResp> {
   return request('/api/apikeys/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+}
+
+// 开放 API 文档地址（同源）
+export function openAPIDocsUrl(): string {
+  return `${API_BASE}/openapi/docs`
+}
+
+// 自助注册/邀请码
+export async function authRegister(data: { username: string; password: string; code?: string; name?: string; invite?: string }): Promise<AdminResp> {
+  return request('/api/auth/register', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
+export async function inviteCodes(): Promise<AdminResp> {
+  return request('/api/admin/invite-codes', { headers: authHeaders() })
+}
+
+export async function inviteCodeCreate(data: { code: string; tenant_id: number }): Promise<AdminResp> {
+  return request('/api/admin/invite-codes/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
+// 计费配置（super_admin）
+export async function billingConfig(): Promise<AdminResp> {
+  return request('/api/billing/config', { headers: authHeaders() })
+}
+
+export async function billingConfigSave(data: { billing_enforced: boolean }): Promise<AdminResp> {
+  return request('/api/billing/config/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
+// 租户配额（QPS/并发/每日上限）
+export async function billingQuota(): Promise<AdminResp> {
+  return request('/api/billing/quota', { headers: authHeaders() })
+}
+
+export async function billingQuotaSave(data: { qps: number; concurrent: number; max_daily_chars: number }): Promise<AdminResp> {
+  return request('/api/billing/quota/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
+// 发票
+export async function billingInvoices(): Promise<AdminResp> {
+  return request('/api/billing/invoices', { headers: authHeaders() })
+}
+
+export async function billingInvoiceCreate(data: { order_id: number; title: string; tax_no: string }): Promise<AdminResp> {
+  return request('/api/billing/invoices/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
