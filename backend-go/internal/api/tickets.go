@@ -93,10 +93,12 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 	err = wf.Executor.Execute(r.Context(), t, func(step string, ok bool, errMsg string) {})
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error(), "ticket": t})
+		s.metrics.countTranslate("ticket", false)
 		return
 	}
 	// ★ 计量：工单翻译按源文本字符数计量（含驳回重翻，每次运行都计量）
 	s.meterUsage(r, tid, "translate", int64(len([]rune(t.SourceText))))
+	s.metrics.countTranslate("ticket", true)
 	// 驳回重翻循环结束：清空驳回意见，避免下次运行重复重翻
 	if t.RejectReason != "" {
 		t.RejectReason = ""

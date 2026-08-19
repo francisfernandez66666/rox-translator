@@ -28,11 +28,14 @@
         <h2>系统看板</h2>
         <button class="ad-btn" @click="loadDash">刷新</button>
         <button class="ad-btn ad-btn-green" style="margin-left: 8px" @click="exportAuditCSV">导出审计 CSV</button>
+        <button class="ad-btn" style="margin-left: 8px" @click="openMetrics">📊 Prometheus 指标</button>
         <div v-if="health" class="ad-cards">
           <div class="ad-card"><b>{{ health.kb_entries }}</b><span>知识库条目</span></div>
           <div class="ad-card"><b>{{ health.balance?.balance }}</b><span>租户余额 (token)</span></div>
           <div class="ad-card"><b>{{ health.flow_steps_enabled }}/{{ health.flow_steps_total }}</b><span>流程步骤启用</span></div>
           <div class="ad-card"><b>{{ health.usage ? Object.keys(health.usage).length : 0 }}</b><span>用量类型</span></div>
+          <div class="ad-card"><b>{{ health.breaker_open ? '🔴 熔断' : '🟢 正常' }}</b><span>主模型状态</span></div>
+          <div class="ad-card"><b>{{ health.llm_error_rate }}</b><span>LLM 错误率</span></div>
         </div>
         <div v-if="audit && audit.length" class="ad-audit">
           <h3>最近审计日志</h3>
@@ -331,36 +334,53 @@
           <div class="ad-card"><b>{{ usageData.total }}</b><span>累计用量 (token)</span></div>
           <div class="ad-card"><b>{{ usageData.provider_count }}</b><span>使用供应商数</span></div>
         </div>
-        <h3 style="margin-top:16px">按任务类型</h3>
-        <table class="ad-table">
-          <tbody>
-            <tr v-for="(v, k) in usageData?.usage || {}" :key="k"><td>{{ k }}</td><td>{{ v }} token</td></tr>
-          </tbody>
-        </table>
-        <h3 style="margin-top:16px">按供应商/模型（成本核算）</h3>
-        <table class="ad-table">
-          <tbody>
-            <tr v-for="(v, k) in usageData?.provider_usage || {}" :key="k"><td>{{ k }}</td><td>{{ v }} token</td></tr>
-            <tr v-if="!Object.keys(usageData?.provider_usage || {}).length"><td colspan="2" style="color:#999">暂无供应商数据</td></tr>
-          </tbody>
-        </table>
-        <h3 style="margin-top:16px">近 7 日趋势</h3>
-        <table class="ad-table">
-          <tbody>
-            <tr v-for="(v, k) in usageData?.trend || {}" :key="k"><td>{{ k }}</td><td>{{ v }} token</td></tr>
-          </tbody>
-        </table>
-        <h3 style="margin-top:16px">用量明细</h3>
-        <table class="ad-table">
-          <thead><tr><th>时间</th><th>类型</th><th>供应商</th><th>模型</th><th>量</th><th>单价</th><th>消耗</th></tr></thead>
-          <tbody>
-            <tr v-for="l in usageData?.ledger || []" :key="l.id">
-              <td>{{ fmtTime(l.created_at) }}</td><td>{{ l.task_type }}</td><td>{{ l.provider || '—' }}</td>
-              <td>{{ l.model || '—' }}</td><td>{{ l.quantity }}</td><td>{{ l.unit_price }}</td><td>{{ l.cost }}</td>
-            </tr>
-            <tr v-if="!((usageData?.ledger || []).length)"><td colspan="7" style="color:#999">暂无明细</td></tr>
-          </tbody>
-        </table>
+
+        <div v-if="usageData && trendItems.length" class="ad-chart-card">
+          <h3>近 7 日用量趋势</h3>
+          <div class="ad-chart-bars">
+            <div v-for="t in trendItems" :key="t.key" class="ad-chart-col" :title="`${t.key}: ${t.val} token`">
+              <div class="ad-chart-bar" :style="{ height: barHeight(t.val, trendMax) }"></div>
+              <span class="ad-chart-label">{{ t.key.slice(5) }}</span>
+            </div>
+          </div>
+          <p class="ad-hint" style="text-align:center">峰值 {{ trendMax }} token</p>
+        </div>
+
+        <div v-if="usageData" class="ad-chart-grid">
+          <div class="ad-chart-card">
+            <h3>按任务类型</h3>
+            <div v-for="item in usageItems" :key="item.key" class="ad-hbar">
+              <span class="ad-hbar-label">{{ item.key }}</span>
+              <div class="ad-hbar-track"><div class="ad-hbar-fill" :style="{ width: barHeight(item.val, usageMax) }"></div></div>
+              <span class="ad-hbar-val">{{ item.val }}</span>
+            </div>
+            <p v-if="!usageItems.length" class="ad-hint">暂无用量</p>
+          </div>
+
+          <div class="ad-chart-card">
+            <h3>按供应商/模型（成本核算）</h3>
+            <div v-for="item in providerItems" :key="item.key" class="ad-hbar">
+              <span class="ad-hbar-label" :title="item.key">{{ item.short }}</span>
+              <div class="ad-hbar-track"><div class="ad-hbar-fill fill-2" :style="{ width: barHeight(item.val, providerMax) }"></div></div>
+              <span class="ad-hbar-val">{{ item.val }}</span>
+            </div>
+            <p v-if="!providerItems.length" class="ad-hint">暂无供应商数据</p>
+          </div>
+        </div>
+
+        <div class="ad-chart-card">
+          <h3>用量明细</h3>
+          <table class="ad-table">
+            <thead><tr><th>时间</th><th>类型</th><th>供应商</th><th>模型</th><th>量</th><th>单价</th><th>消耗</th></tr></thead>
+            <tbody>
+              <tr v-for="l in usageData?.ledger || []" :key="l.id">
+                <td>{{ fmtTime(l.created_at) }}</td><td>{{ l.task_type }}</td><td>{{ l.provider || '—' }}</td>
+                <td>{{ l.model || '—' }}</td><td>{{ l.quantity }}</td><td>{{ l.unit_price }}</td><td>{{ l.cost }}</td>
+              </tr>
+              <tr v-if="!((usageData?.ledger || []).length)"><td colspan="7" style="color:#999">暂无明细</td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <!-- ===== 充值/余额 ===== -->
@@ -922,6 +942,34 @@ async function loadUsage() {
     }
   }
 }
+
+// ---- 用量图表数据（纯 CSS 条形图，零依赖） ----
+const trendItems = computed(() => {
+  const trend = usageData.value?.trend || {}
+  const keys = Object.keys(trend).sort()
+  return keys.map((k) => ({ key: k, val: Number(trend[k]) || 0 }))
+})
+const trendMax = computed(() => Math.max(1, ...trendItems.value.map((t) => t.val)))
+const usageItems = computed(() => {
+  const u = usageData.value?.usage || {}
+  return Object.keys(u).map((k) => ({ key: k, val: Number(u[k]) || 0 }))
+})
+const usageMax = computed(() => Math.max(1, ...usageItems.value.map((t) => t.val)))
+const providerItems = computed(() => {
+  const p = usageData.value?.provider_usage || {}
+  return Object.keys(p).map((k) => ({
+    key: k,
+    short: k.length > 28 ? k.slice(0, 26) + '…' : k,
+    val: Number(p[k]) || 0,
+  }))
+})
+const providerMax = computed(() => Math.max(1, ...providerItems.value.map((t) => t.val)))
+// 条形高度/宽度：取 8% 下限保证可见，最高 100%
+function barHeight(val: number, max: number) {
+  if (!val || !max) return '8%'
+  const pct = Math.max(8, Math.round((val / max) * 100))
+  return pct + '%'
+}
 async function createOrder() {
   const r = await adminOrderCreate({ tenant_id: 1, tokens: Number(oForm.value.tokens), money: oForm.value.money })
   if (!r.success) { alert(r.message); return }
@@ -968,6 +1016,9 @@ async function rotateKey(k: any) {
 }
 function openDocs() {
   window.open(openAPIDocsUrl(), '_blank')
+}
+function openMetrics() {
+  window.open(`${API_BASE}/metrics`, '_blank')
 }
 
 // ---- 计费配置 ----
@@ -1123,4 +1174,17 @@ onMounted(async () => {
 .ad-bulk .ad-btn { margin-right: 8px; }
 .ad-route-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
 .ad-diff { color: #2e7d32; font-size: 12px; background: #e8f5e9; padding: 2px 6px; border-radius: 4px; }
+.ad-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
+.ad-chart-card { background: #fff; border: 1px solid #eee; border-radius: 10px; padding: 16px; margin-top: 16px; }
+.ad-chart-card h3 { font-size: 14px; color: #1a237e; margin-bottom: 12px; }
+.ad-chart-bars { display: flex; align-items: flex-end; gap: 8px; height: 140px; padding: 8px 4px 0; }
+.ad-chart-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; min-width: 0; }
+.ad-chart-bar { width: 70%; max-width: 42px; min-height: 6px; background: linear-gradient(180deg, #3949ab, #1a237e); border-radius: 4px 4px 0 0; }
+.ad-chart-label { font-size: 11px; color: #888; margin-top: 6px; }
+.ad-hbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.ad-hbar-label { width: 120px; font-size: 12px; color: #555; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ad-hbar-track { flex: 1; background: #f0f0f5; border-radius: 6px; height: 16px; overflow: hidden; }
+.ad-hbar-fill { height: 100%; background: linear-gradient(90deg, #3949ab, #5c6bc0); border-radius: 6px; min-width: 6px; }
+.ad-hbar-fill.fill-2 { background: linear-gradient(90deg, #2e7d32, #66bb6a); }
+.ad-hbar-val { width: 64px; text-align: right; font-size: 12px; color: #333; }
 </style>

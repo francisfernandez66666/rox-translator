@@ -60,6 +60,8 @@ func (s *Server) meterUsage(r *http.Request, tid int64, taskType string, quantit
 		userID = u.ID
 	}
 	provider, model := s.usageModel(r, tid)
+	// 系统级指标：累计计量 token
+	s.metrics.addUsage(quantity)
 	// 强制计费模式下计量失败返回错误，交给调用方决定是否提示
 	_ = s.Bill.MeterDeferred(tid, userID, taskType, provider, model, quantity)
 }

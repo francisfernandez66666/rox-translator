@@ -24,11 +24,13 @@ type Server struct {
 	Bill   *billing.Service
 	Dist   string
 	mux    *http.ServeMux
+	// 系统级指标收集器（Prometheus /metrics）
+	metrics *Metrics
 }
 
 // NewServer 创建服务
 func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist string, st *store.Store, ts *tenant.Store) *Server {
-	s := &Server{Cfg: cfg, Engine: eng, DB: db, Ten: ts, Store: st, Dist: dist}
+	s := &Server{Cfg: cfg, Engine: eng, DB: db, Ten: ts, Store: st, Dist: dist, metrics: newMetrics()}
 	if st != nil {
 		s.Bill = billing.NewService(st)
 	}
@@ -39,6 +41,7 @@ func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist s
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	s.mux.HandleFunc("/api/health", s.handleHealth)
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
 	s.mux.HandleFunc("/api/chat/stream", s.handleChatStream)
@@ -147,7 +150,15 @@ func (s *Server) routes() {
 
 // Handler 返回 http.Handler
 func (s *Server) Handler() http.Handler {
-	return s.withTenant(withCORS(s.mux))
+	return s.withMetrics(s.withTenant(withCORS(s.mux)))
+}
+
+// withMetrics 记录 HTTP 请求指标（按路径标签）
+func (s *Server) withMetrics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.metrics.countHTTP(r.URL.Path)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // withTenant 解析请求租户并注入 context。

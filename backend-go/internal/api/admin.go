@@ -1130,6 +1130,9 @@ func (s *Server) handleOpenAPITranslate(w http.ResponseWriter, r *http.Request) 
 	if res.Error == "" {
 		// ★ 计量：开放 API 翻译按源文本字符数计量
 		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Text))))
+		s.metrics.countTranslate("openapi", true)
+	} else {
+		s.metrics.countTranslate("openapi", false)
 	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true,
