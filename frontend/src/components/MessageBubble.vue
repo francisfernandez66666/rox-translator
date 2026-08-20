@@ -187,6 +187,7 @@ const props = defineProps<{ message: ChatMessage }>()
 // 移动端标记：窗口宽度 ≤ 768px 时启用移动端样式
 const isMobile = ref(window.innerWidth <= 768)
 onMounted(() => {
+  // onResize 监听窗口尺寸变化，实时更新移动端标记（窄屏切换紧凑布局）
   const onResize = () => { isMobile.value = window.innerWidth <= 768 }
   window.addEventListener('resize', onResize)
 })

@@ -32,6 +32,7 @@ import { activeTenantId } from './store'
 import { fmtTime } from './ui'
 
 const alerts = ref<any[]>([])
+// 告警状态过滤条件（空=全部，open=未解决，resolved=已解决）
 const alertStatus = ref('')
 // 按状态加载告警列表
 async function loadAlerts() {

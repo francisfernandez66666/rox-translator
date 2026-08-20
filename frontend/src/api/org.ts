@@ -15,6 +15,7 @@ export interface OrgInfo {
   updated_at: string
 }
 
+// OrgResp 组织接口统一响应结构：orgs 为组织列表、org 为单个对象、tenant_id 为归属租户。
 export interface OrgResp {
   success: boolean
   message?: string

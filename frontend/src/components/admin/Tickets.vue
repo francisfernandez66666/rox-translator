@@ -62,6 +62,7 @@ import { prettyJSON } from './ui'
 
 const tickets = ref<Ticket[]>([])
 const ticketDetail = ref<any>(null)
+// 新建工单表单：标题/源文本/目标语言
 const tkForm = ref({ title: '', source_text: '', target_langs: 'en' })
 const approvalTickets = ref<any[]>([])
 

@@ -101,6 +101,7 @@ const orgs = ref<OrgInfo[]>([])
 const selectedOrg = ref(0)
 // 新建子组织的父组织
 const parentId = ref(0)
+// 新建组织的名称输入
 const newName = ref('')
 // 根组织下全部用户（用于根节点计数）
 const allUsers = ref<any[]>([])
@@ -109,6 +110,7 @@ const orgUserList = ref<any[]>([])
 
 // 开通用户表单
 const creating = ref(false)
+// 新用户信息：用户名/密码/显示名/角色
 const nu = ref({ username: '', password: '', display_name: '', role: 'user' })
 
 // 当前生效租户名称（展示根组织）
@@ -124,6 +126,7 @@ const flatTree = computed(() => {
     (byParent[o.parent_id] = byParent[o.parent_id] || []).push(o)
   }
   const out: (OrgInfo & { _depth: number })[] = []
+  // walk 深度优先遍历组织树：按父级分组递归收集节点并记录层级深度
   const walk = (pid: number, depth: number) => {
     for (const o of byParent[pid] || []) {
       ;(o as any)._depth = depth
@@ -161,6 +164,8 @@ async function loadOrgUsers() {
   if (r.success) orgUserList.value = r.users || []
 }
 
+// selectOrg 选择组织：更新选中态并加载该组织的用户列表。
+// 参数 id: 目标组织 ID；无返回。
 function selectOrg(id: number) {
   selectedOrg.value = id
   loadOrgUsers()

@@ -44,6 +44,7 @@ import { loadTenants as refreshTenantStore } from './store'
 import { statusLabel } from './ui'
 
 const tenants = ref<any[]>([])
+// 新建租户表单：编码/名称/过期时间/权限 JSON/超管用户名密码
 const tForm = ref({ code: '', name: '', expires: '', permissions: '{}', adminUser: '', adminPass: '' })
 
 // 加载租户列表（与共享 store 同步，供壳组件租户切换器使用）
@@ -83,6 +84,7 @@ async function chargeTenant(t: any) {
   if (!tokens || Number(tokens) <= 0) return
   const r = await adminOrderCreate({ tenant_id: t.id, tokens: Number(tokens), money: 0 })
   if (!r.success) { alert(r.message); return }
+  // 下单成功后自动模拟支付（mock 渠道），完成充值入账
   const o = (r as any).order
   await adminOrderPay(o.id)
   alert(`已充值 ${tokens} token`)

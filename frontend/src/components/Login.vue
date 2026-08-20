@@ -70,6 +70,7 @@ const emit = defineEmits<{ ok: [user: unknown] }>()
 
 // ===== 登录表单状态 =====
 const username = ref('')
+// 登录密码
 const password = ref('')
 // 登录错误提示
 const error = ref('')
@@ -84,8 +85,11 @@ const reg = ref({ username: '', password: '', code: '', name: '', invite: '', em
 
 // ===== 忘记密码表单状态 =====
 const showForgot = ref(false)
+// 忘记密码流程的错误/提示信息
 const forgotMsg = ref('')
+// 验证码是否已发送（控制切换到输入验证码+新密码面板）
 const forgotSent = ref(false)
+// 忘记密码表单：用户名/绑定邮箱/验证码/新密码
 const forgot = ref({ username: '', email: '', code: '', newPassword: '' })
 
 // 发送验证码（忘记密码）
@@ -173,6 +177,8 @@ function roleLevel(r?: string): number {
   return 1
 }
 
+// doLogin 执行登录：校验输入 → 调用登录接口 → 校验角色权限 → 写入 token 并通知父组件。
+// 后台模式（admin）要求角色不低于租户管理员；无返回，通过 emit('ok') 通知父组件登录成功。
 async function doLogin() {
   if (!username.value || !password.value) {
     error.value = '请输入用户名和密码'

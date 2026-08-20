@@ -382,6 +382,7 @@ const inputText = ref('')
 const messagesContainer = ref<HTMLElement>()
 const inputRef = ref<HTMLInputElement>()
 const fileInputRef = ref<HTMLInputElement>()
+// 语言下拉框是否展开（点击切换显隐）
 const langDropdownOpen = ref(false)
 // ★ "更多语言"自定义输入
 const customLangText = ref('')
@@ -496,11 +497,16 @@ const kbFileInputRef = ref<HTMLInputElement>()
 const showKbModal = ref(false)
 const kbStep = ref(1)           // 当前步骤 1/2/3
 const kbFile = ref<File | null>(null)
+// 拖拽文件悬停标记（高亮上传区）
 const kbDragging = ref(false)
+// 识别中状态（控制进度条）
 const kbRecognizing = ref(false)
 const kbRecognized = ref<any>(null)  // 识别结果
+// 导入中状态（控制进度条与按钮禁用）
 const kbImporting = ref(false)
+// 导入进度（0-100，前端模拟推进）
 const kbImportProgress = ref(0)
+// 导入结果（成功/失败提示文案）
 const kbImportResult = ref<any>(null)
 
 // ---- 语言配置 ----
@@ -577,6 +583,9 @@ const langBtnLabel = computed(() => {
 
 // ---- 响应式判断 ----
 const isMobile = ref(window.innerWidth <= 768)
+
+// onResize 监听窗口尺寸变化，实时更新移动端标记（窄屏时折叠侧栏）。
+// 无参数无返回，由窗口 resize 事件触发。
 function onResize() { isMobile.value = window.innerWidth <= 768 }
 
 const inputPlaceholder = computed(() => {
@@ -601,6 +610,8 @@ const loadingText = computed(() => {
 // ---- 文件上传 ----
 function triggerFileUpload() { fileInputRef.value?.click() }
 
+// handleFileSelect 处理文件选择事件：将选中的文件加入待翻译列表（按文件名去重）。
+// 参数 e: 文件输入框 change 事件；无返回。
 function handleFileSelect(e: Event) {
   const target = e.target as HTMLInputElement
   if (!target.files) return
@@ -612,6 +623,8 @@ function handleFileSelect(e: Event) {
   target.value = ''
 }
 
+// removeFile 从待翻译列表中移除指定下标的文件。
+// 参数 idx: 文件下标；无返回。
 function removeFile(idx: number) { attachedFiles.value.splice(idx, 1) }
 
 // ---- KB知识库导入弹窗 ----
@@ -684,6 +697,8 @@ async function startRecognize() {
 }
 
 /** ★ 第3步：导入数据 */
+// startImport 第3步：导入已识别的知识库数据（含模拟进度条与结果提示）。
+// 无参数无返回；导入成功后刷新知识库统计并提示导入结果。
 async function startImport() {
   if (!kbRecognized.value?.temp_id) return
   kbImporting.value = true
@@ -828,6 +843,8 @@ onUnmounted(() => {
 })
 
 /** ★ 从后端加载翻译语言列表（仅KB语言，"其他语言"统一为一个选项） */
+// loadTranslationLangs 加载知识库支持的语言列表，并同步到语言选择区（新语言升级到 KB 区）。
+// 无参数无返回；接口失败时静默跳过，保留内置语言选项。
 async function loadTranslationLangs() {
   try {
     const resp = await fetch('/api/translation/langs')

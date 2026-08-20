@@ -39,7 +39,9 @@ import { apiKeys, apiKeyCreate, apiKeyStatus, apiKeyDelete, apiKeyRotate, openAP
 import { activeTenantId } from './store'
 
 const keys = ref<any[]>([])
+// 新建成功后展示一次的完整 API Key（仅创建时返回）
 const newKey = ref('')
+// 新建 Key 表单：名称/权限（默认 translate）
 const kForm = ref({ name: '', perms: 'translate' })
 
 async function loadKeys() {
@@ -70,6 +72,9 @@ async function rotateKey(k: any) {
   newKey.value = (r as any).api_key || ''
   await loadKeys()
 }
+
+// openDocs 新窗口打开开放 API 文档页（/openapi/docs）。
+// 无参数无返回，由「查看文档」按钮触发。
 function openDocs() {
   window.open(openAPIDocsUrl(), '_blank')
 }

@@ -139,6 +139,8 @@ function onLogout() {
   store.reset()
 }
 
+// logout 退出登录：清除本地 token 与用户状态并跳转登录页。
+// 无参数无返回，由顶栏退出按钮触发。
 function logout() {
   onLogout()
 }

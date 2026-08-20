@@ -49,6 +49,9 @@ func SetQPS(tid int64, qps int) {
 	}
 	getQuota(tid).setQPS(qps)
 }
+
+// setQPS 设置租户 QPS 上限（加锁写，供 SetQPS 调用）。
+// 参数 v: 目标 QPS 值；无返回。
 func (q *Quota) setQPS(v int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -62,6 +65,9 @@ func SetConcurrent(tid int64, n int) {
 	}
 	getQuota(tid).setConcurrent(n)
 }
+
+// setConcurrent 设置租户并发上限（加锁写，供 SetConcurrent 调用）。
+// 参数 v: 目标并发值；无返回。
 func (q *Quota) setConcurrent(v int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -194,4 +200,5 @@ func (s *Service) CheckBalance(tid int64) error {
 
 type quotaErr struct{ s string } // 配额类错误（含今日用量超限/余额不足）
 
+// Error 实现 error 接口：返回配额错误描述信息。
 func (e *quotaErr) Error() string { return e.s }

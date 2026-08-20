@@ -31,6 +31,8 @@ import (
 // 未设置则使用内置默认值（本地开发用；生产务必通过环境变量覆盖，避免密钥泄露被伪造 JWT）
 var Secret = "trans-platform-jwt-secret-2026"
 
+// init 包初始化：从环境变量 JWT_SECRET 读取签名密钥（生产必须设置）。
+// 无返回值；若环境变量为空则沿用内置默认值（仅限本地开发，生产需显式覆盖）。
 func init() {
 	if v := os.Getenv("JWT_SECRET"); v != "" {
 		Secret = v
@@ -70,9 +72,13 @@ func WithUser(ctx context.Context, u *store.User) context.Context {
 }
 
 // b64 编码/解码
+// b64Encode 将字节切片编码为 URL 安全的 Base64 字符串（无填充）。
 func b64Encode(b []byte) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
+
+// b64Decode 将 URL 安全的 Base64 字符串解码为原始字节。
+// 参数 s: 待解码字符串；返回: (解码结果, 错误)。非法输入返回错误。
 func b64Decode(s string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(s)
 }

@@ -56,6 +56,7 @@ import { fmtTime } from './ui'
 
 const users = ref<any[]>([])
 const orgs = ref<OrgInfo[]>([])
+// 新建用户表单：用户名/密码/显示名/角色/归属租户与组织
 const uForm = ref({ username: '', password: '', display_name: '', role: 'user', tenant_id: 1, org_id: 0 })
 
 // 组织下拉选项：根组织 + 全部子组织

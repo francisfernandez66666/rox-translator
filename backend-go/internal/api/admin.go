@@ -45,15 +45,21 @@ var errNotLogin = &apiErr{"未登录"}
 
 type apiErr struct{ s string } // s: 错误描述信息（用于返回给前端的错误消息）
 
+// Error 实现 error 接口：返回错误描述信息。
 func (e *apiErr) Error() string { return e.s }
 
 // ============ 通用工具 ============
+// maskKey 对密钥类字符串脱敏展示：保留首尾各 4 位，中间以 **** 遮盖。
+// 参数 k: 原始密钥；返回: 脱敏后的字符串（长度不足 8 时整体替换为 ****）。
 func maskKey(k string) string {
 	if len(k) <= 8 {
 		return "****"
 	}
 	return k[:4] + "****" + k[len(k)-4:]
 }
+
+// hasMask 判断字符串是否已含脱敏标记 ****（用于避免对已脱敏值重复处理）。
+// 参数 k: 待检查字符串；返回: true=已脱敏。
 func hasMask(k string) bool { return strings.Contains(k, "****") }
 
 // atol 解析 int64（非法返回 0）
