@@ -4,24 +4,24 @@
    ============================================================================ -->
 <template>
   <section class="ad-section">
-    <h2>账户管理</h2>
+    <h2>{{ t('users.title') }}</h2>
     <div class="ad-row">
-      <input v-model="uForm.username" placeholder="用户名" class="ad-input" />
-      <input v-model="uForm.password" placeholder="初始密码" class="ad-input" />
-      <input v-model="uForm.display_name" placeholder="显示名称" class="ad-input" />
+      <input v-model="uForm.username" :placeholder="t('users.usernamePlaceholder')" class="ad-input" />
+      <input v-model="uForm.password" :placeholder="t('users.passPlaceholder')" class="ad-input" />
+      <input v-model="uForm.display_name" :placeholder="t('users.displayNamePlaceholder')" class="ad-input" />
       <select v-model="uForm.role" class="ad-input">
-        <option v-for="r in roleOptions" :key="r" :value="r">{{ r }}</option>
+        <option v-for="r in roleOptions" :key="r" :value="r">{{ t('users.role.' + r) }}</option>
       </select>
       <select v-if="isSuper" v-model="uForm.tenant_id" class="ad-input">
-        <option v-for="t in tenantList" :key="t.id" :value="t.id">组织 {{ t.id }} ({{ t.code }})</option>
+        <option v-for="t in tenantList" :key="t.id" :value="t.id">{{ tpl('users.orgItem', { id: t.id, code: t.code }) }}</option>
       </select>
       <select v-model="uForm.org_id" class="ad-input">
         <option v-for="o in orgOptions" :key="o.id" :value="o.id">{{ o.name }}</option>
       </select>
-      <button class="ad-btn" @click="createUser">创建</button>
+      <button class="ad-btn" @click="createUser">{{ t('users.create') }}</button>
     </div>
     <table class="ad-table">
-      <thead><tr><th>ID</th><th>用户名</th><th>名称</th><th>组织</th><th>角色</th><th>状态</th><th>最近登录</th><th>操作</th></tr></thead>
+      <thead><tr><th>{{ t('users.colId') }}</th><th>{{ t('users.colUsername') }}</th><th>{{ t('users.colName') }}</th><th>{{ t('users.colOrg') }}</th><th>{{ t('users.colRole') }}</th><th>{{ t('users.colStatus') }}</th><th>{{ t('users.colLastLogin') }}</th><th>{{ t('users.colActions') }}</th></tr></thead>
       <tbody>
         <tr v-for="u in users" :key="u.id">
           <td>{{ u.id }}</td><td>{{ u.username }}</td>
@@ -33,14 +33,14 @@
           </td>
           <td>
             <select :value="u.role" class="ad-mini" @change="editUser(u, 'role', ($event.target as HTMLSelectElement).value)">
-              <option v-for="r in roleOptions" :key="r" :value="r">{{ r }}</option>
+              <option v-for="r in roleOptions" :key="r" :value="r">{{ t('users.role.' + r) }}</option>
             </select>
           </td>
-          <td>{{ u.status }}</td>
+          <td>{{ u.status === 'active' ? t('users.enable') : u.status === 'disabled' ? t('users.disable') : u.status }}</td>
           <td>{{ fmtTime(u.last_login_at) }}</td>
           <td class="ad-td">
-            <button class="ad-btn-sm" @click="resetPwd(u)">重置密码</button>
-            <button class="ad-btn-sm ad-btn-red" @click="toggleUser(u)">{{ u.status === 'active' ? '停用' : '启用' }}</button>
+            <button class="ad-btn-sm" @click="resetPwd(u)">{{ t('users.resetPwd') }}</button>
+            <button class="ad-btn-sm ad-btn-red" @click="toggleUser(u)">{{ u.status === 'active' ? t('users.disable') : t('users.enable') }}</button>
           </td>
         </tr>
       </tbody>
@@ -50,6 +50,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { t, tpl } from '@/i18n'
 import { adminUsers, adminUserCreate, adminUserUpdate, adminUserResetPassword, orgList, type OrgInfo } from '@/api'
 import { activeTenantId, tenantList, isSuper, roleOptions } from './store'
 import { fmtTime } from './ui'
@@ -61,7 +62,7 @@ const uForm = ref({ username: '', password: '', display_name: '', role: 'user', 
 
 // 组织下拉选项：根组织 + 全部子组织
 const orgOptions = computed(() => {
-  const root = [{ id: 0, name: '根组织（未分配）' }]
+  const root = [{ id: 0, name: t('users.rootOrgOption') }]
   const children = orgs.value.map(o => ({ id: o.id, name: orgPath(o) }))
   return [...root, ...children]
 })
@@ -75,8 +76,8 @@ function orgPath(o: OrgInfo): string {
 
 // 用户所属组织名（表格展示；0=根组织）
 function userOrgName(orgId: number): string {
-  if (!orgId) return '根组织'
-  return orgs.value.find(o => o.id === orgId)?.name || `组织 #${orgId}`
+  if (!orgId) return t('users.rootOrg')
+  return orgs.value.find(o => o.id === orgId)?.name || tpl('users.orgHash', { id: orgId })
 }
 
 // 加载用户列表（当前生效租户）
@@ -93,7 +94,7 @@ async function loadOrgs() {
 
 // 创建用户（用户名/密码必填；可选角色/租户(超管)/所属组织）
 async function createUser() {
-  if (!uForm.value.username || !uForm.value.password) { alert('用户名和密码必填'); return }
+  if (!uForm.value.username || !uForm.value.password) { alert(t('users.required')); return }
   const r = await adminUserCreate({ ...uForm.value })
   if (!r.success) { alert(r.message); return }
   uForm.value = { username: '', password: '', display_name: '', role: 'user', tenant_id: activeTenantId.value || 1, org_id: 0 }
@@ -119,7 +120,7 @@ async function toggleUser(u: any) {
 
 // 重置指定用户密码（弹窗输入新密码）
 async function resetPwd(u: any) {
-  const pwd = prompt(`为 ${u.username} 设置新密码：`)
+  const pwd = prompt(tpl('users.resetPwdPrompt', { name: u.username }))
   if (!pwd) return
   const r = await adminUserResetPassword(u.id, pwd)
   if (!r.success) alert(r.message)

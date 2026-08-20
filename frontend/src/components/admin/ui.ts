@@ -3,11 +3,15 @@
 // 职责：各面板通用的格式化/渲染辅助函数（时间、状态、JSON、图表条高等）
 // ============================================================================
 
+import { t } from '@/i18n'
+
 // 时间格式化：ISO → "YYYY-MM-DD HH:MM:SS"，空值返回占位符
 export function fmtTime(s?: string) { return s ? s.replace('T', ' ').slice(0, 19) : '—' }
 
-// 租户状态中文标签
-export function statusLabel(s: string) { return s === 'active' ? '启用' : s === 'disabled' ? '停用' : '已过期' }
+// 租户状态标签（i18n）
+export function statusLabel(s: string) {
+  return s === 'active' ? t('common.active') : s === 'disabled' ? t('common.disabled') : t('common.expired')
+}
 
 // JSON 美化打印（解析失败则原样返回）
 export function prettyJSON(s?: string) {

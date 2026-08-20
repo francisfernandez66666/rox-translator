@@ -97,7 +97,7 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 		prog = func(string, int, int) {}
 	}
 	if strings.TrimSpace(text) == "" {
-		return &TextTranslateResult{Skill: "translation", Reply: "请输入要翻译的中文文本"}
+		return &TextTranslateResult{Skill: "translation", Reply: "请输入要翻译的文本"}
 	}
 	// ★ 租户可用性校验
 	if err := e.tenantOK(ctx); err != nil {
@@ -107,6 +107,11 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 	langs := TargetLangsFromOptions(options)
 	kbTarget, directOther, hasOther := SplitOptions(langs)
 	cleanText := text
+	// 实际源语言：优先用户显式指定（source_lang），否则自动检测
+	srcLang := DetectSourceLang(cleanText)
+	if sl, ok := options["source_lang"].(string); ok && sl != "" {
+		srcLang = sl
+	}
 
 	// 未指定语言 → 从 prompt 解析
 	if len(kbTarget) == 0 && len(directOther) == 0 {
@@ -180,7 +185,7 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 					return
 				}
 				defer func() { <-sem }()
-				tr, _ := e.TranslateOtherLang(ctx, cleanText, lc)
+				tr, _ := e.TranslateOtherLang(ctx, cleanText, lc, srcLang)
 				mu.Lock()
 				otherTr[lc] = tr
 				mu.Unlock()

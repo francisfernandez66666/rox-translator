@@ -49,10 +49,10 @@
       >
         <!-- 匹配模式指示（精确命中/模糊匹配/语义相似/在线翻译） -->
         <div v-if="message.data.mode" class="translation-mode">
-          <span v-if="message.data.mode.includes('精确命中')" class="mode-badge mode-exact">✅ 精确命中</span>
-          <span v-else-if="message.data.mode.includes('模糊')" class="mode-badge mode-fuzzy">🔄 模糊匹配</span>
-          <span v-else-if="message.data.mode.includes('语义高相似')" class="mode-badge mode-semantic">🔍 语义相似</span>
-          <span v-else class="mode-badge mode-model">🤖 在线翻译</span>
+          <span v-if="message.data.mode.includes('精确命中')" class="mode-badge mode-exact">{{ t('msg.exactHit') }}</span>
+          <span v-else-if="message.data.mode.includes('模糊')" class="mode-badge mode-fuzzy">{{ t('msg.fuzzy') }}</span>
+          <span v-else-if="message.data.mode.includes('语义高相似')" class="mode-badge mode-semantic">{{ t('msg.semantic') }}</span>
+          <span v-else class="mode-badge mode-model">{{ t('msg.online') }}</span>
           <span v-if="message.data.matched_zh" class="mode-match-text">「{{ message.data.matched_zh }}」</span>
         </div>
         <div
@@ -67,7 +67,7 @@
             class="source-badge"
             :class="message.data.translations_source[lang] === 'kb' ? 'source-kb' : 'source-model'"
           >
-            {{ message.data.translations_source[lang] === 'kb' ? '📚 知识库' : '🤖 AI翻译' }}
+            {{ message.data.translations_source[lang] === 'kb' ? t('msg.kb') : t('msg.ai') }}
           </span>
         </div>
       </div>
@@ -84,7 +84,7 @@
         v-if="message.data?.match_report && message.data.match_report.length > 0"
         class="match-report"
       >
-        <div class="report-title">📊 术语匹配</div>
+        <div class="report-title">{{ t('msg.termReport') }}</div>
         <div class="report-grid">
           <div
             v-for="item in message.data.match_report"
@@ -109,7 +109,7 @@
               @click="openImage(getDownloadUrl(file))"
             />
             <a :href="getDownloadUrl(file)" class="image-download-btn" target="_blank" download>
-              📥 下载图片
+              {{ t('msg.downloadImage') }}
             </a>
           </div>
           <!-- 非图片文件：下载卡片 -->
@@ -129,7 +129,7 @@
             <div class="card-info">
               <div class="card-filename">{{ getFileName(file) }}</div>
               <div class="card-meta">
-                {{ getFileTypeLabel(file) }} · 点击下载
+                {{ getFileTypeLabel(file) }} {{ t('msg.clickDownload') }}
               </div>
             </div>
             <a :href="getDownloadUrl(file)" class="card-btn" target="_blank" download>
@@ -142,7 +142,7 @@
 
     <!-- 用户头像 -->
     <div v-if="message.role === 'user'" class="avatar avatar-user">
-      <span class="avatar-text">我</span>
+      <span class="avatar-text">{{ t('msg.me') }}</span>
     </div>
   </div>
 </template>
@@ -154,31 +154,20 @@ import { computed, ref, onMounted } from 'vue'
 import SkillBadge from './SkillBadge.vue'
 // API：获取文件下载 URL
 import { getDownloadUrl } from '@/api'
+// 国际化取词
+import { t } from '@/i18n'
 // 类型定义
 import type { ChatMessage } from '@/types'
 
-// 语言代码 → 中文名本地映射（渲染翻译结果时展示语言名）
-const LANG_NAMES: Record<string, string> = {
-  // KB语言
-  en: '英语', ru: '俄语', ar: '阿拉伯语', es: '西班牙语',
-  pt: '葡萄牙语', fr: '法语', kk: '哈萨克语', de: '德语',
-  zh_hant: '繁体中文',
-  // ★ 其他常见语言（持续扩展，避免前端显示代码缩写）
-  ja: '日语', ko: '韩语', th: '泰语', vi: '越南语', ms: '马来语',
-  id: '印尼语', it: '意大利语', pl: '波兰语', sv: '瑞典语', nl: '荷兰语',
-  uk: '乌克兰语', el: '希腊语', cs: '捷克语', ro: '罗马尼亚语',
-  hu: '匈牙利语', fi: '芬兰语', da: '丹麦语', no: '挪威语',
-  tr: '土耳其语', he: '希伯来语', fa: '波斯语', hi: '印地语',
-  ur: '乌尔都语', bn: '孟加拉语', ta: '泰米尔语', mn: '蒙语',
-  my: '缅甸语', km: '柬埔寨语', lo: '老挝语', fil: '菲律宾语',
-}
+// 语言显示名统一走 i18n（t('lang.<code>')），此处不再维护本地映射
 
-/** ★ 获取语言中文名：优先后端返回的 lang_names，否则查本地 LANG_NAMES，最后回退为语言代码 */
+/** ★ 获取语言名：优先后端返回的 lang_names，否则走 i18n，最后回退为语言代码 */
 function getLangName(lang: string): string {
   // 后端返回的 lang_names 映射最权威（包含动态解析的"其他语言"中文名）
   const dataNames = props.message.data?.lang_names as Record<string, string> | undefined
   if (dataNames && dataNames[lang]) return dataNames[lang]
-  return LANG_NAMES[lang] || lang
+  const localized = t(`lang.${lang}`)
+  return localized !== `lang.${lang}` ? localized : lang
 }
 
 // 组件入参：需要渲染的单条聊天消息
@@ -192,18 +181,12 @@ onMounted(() => {
   window.addEventListener('resize', onResize)
 })
 
-// ★ 根据文件扩展名获取文件类型描述
+// ★ 根据文件扩展名获取文件类型描述（i18n 文案）
 function getFileTypeLabel(path: string): string {
   const ext = path.split('.').pop()?.toLowerCase() || ''
-  const typeMap: Record<string, string> = {
-    docx: 'Word 文档', doc: 'Word 文档',
-    pptx: 'PPT 演示文稿', ppt: 'PPT 演示文稿',
-    xlsx: 'Excel 表格', xls: 'Excel 表格', csv: 'CSV 表格',
-    pdf: 'PDF 文档',
-    md: 'Markdown 文件', txt: '文本文件',
-    png: '图片', jpg: '图片', jpeg: '图片', gif: '图片', webp: '图片',
-  }
-  return typeMap[ext] || '文件'
+  const key = `msg.type.${ext}`
+  const v = t(key)
+  return v !== key ? v : t('msg.file')
 }
 
 // ★ 获取文件图标

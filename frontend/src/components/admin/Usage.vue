@@ -4,57 +4,57 @@
    ============================================================================ -->
 <template>
   <section class="ad-section">
-    <h2>用量看板</h2>
-    <button class="ad-btn" @click="loadUsage">刷新</button>
+    <h2>{{ t('usage.title') }}</h2>
+    <button class="ad-btn" @click="loadUsage">{{ t('usage.refresh') }}</button>
     <div v-if="usageData" class="ad-cards">
-      <div class="ad-card"><b>{{ usageData.balance?.balance ?? '—' }}</b><span>当前余额 (token)</span></div>
-      <div class="ad-card"><b>{{ usageData.total }}</b><span>累计用量 (token)</span></div>
-      <div class="ad-card"><b>{{ usageData.provider_count }}</b><span>使用供应商数</span></div>
+      <div class="ad-card"><b>{{ usageData.balance?.balance ?? '—' }}</b><span>{{ t('usage.currentBalance') }}</span></div>
+      <div class="ad-card"><b>{{ usageData.total }}</b><span>{{ t('usage.totalUsage') }}</span></div>
+      <div class="ad-card"><b>{{ usageData.provider_count }}</b><span>{{ t('usage.providerCount') }}</span></div>
     </div>
 
     <div v-if="usageData && trendItems.length" class="ad-chart-card">
-      <h3>近 7 日用量趋势</h3>
+      <h3>{{ t('usage.trendTitle') }}</h3>
       <div class="ad-chart-bars">
-        <div v-for="t in trendItems" :key="t.key" class="ad-chart-col" :title="`${t.key}: ${t.val} token`">
+        <div v-for="t in trendItems" :key="t.key" class="ad-chart-col" :title="tpl('usage.trendTip', { date: t.key, val: t.val })">
           <div class="ad-chart-bar" :style="{ height: barHeight(t.val, trendMax) }"></div>
           <span class="ad-chart-label">{{ t.key.slice(5) }}</span>
         </div>
       </div>
-      <p class="ad-hint" style="text-align:center">峰值 {{ trendMax }} token</p>
+      <p class="ad-hint" style="text-align:center">{{ tpl('usage.peak', { max: trendMax }) }}</p>
     </div>
 
     <div v-if="usageData" class="ad-chart-grid">
       <div class="ad-chart-card">
-        <h3>按任务类型</h3>
+        <h3>{{ t('usage.byTaskType') }}</h3>
         <div v-for="item in usageItems" :key="item.key" class="ad-hbar">
           <span class="ad-hbar-label">{{ item.key }}</span>
           <div class="ad-hbar-track"><div class="ad-hbar-fill" :style="{ width: barHeight(item.val, usageMax) }"></div></div>
           <span class="ad-hbar-val">{{ item.val }}</span>
         </div>
-        <p v-if="!usageItems.length" class="ad-hint">暂无用量</p>
+        <p v-if="!usageItems.length" class="ad-hint">{{ t('usage.noUsage') }}</p>
       </div>
 
       <div class="ad-chart-card">
-        <h3>按供应商/模型（成本核算）</h3>
+        <h3>{{ t('usage.byProvider') }}</h3>
         <div v-for="item in providerItems" :key="item.key" class="ad-hbar">
           <span class="ad-hbar-label" :title="item.key">{{ item.short }}</span>
           <div class="ad-hbar-track"><div class="ad-hbar-fill fill-2" :style="{ width: barHeight(item.val, providerMax) }"></div></div>
           <span class="ad-hbar-val">{{ item.val }}</span>
         </div>
-        <p v-if="!providerItems.length" class="ad-hint">暂无供应商数据</p>
+        <p v-if="!providerItems.length" class="ad-hint">{{ t('usage.noProviderData') }}</p>
       </div>
     </div>
 
     <div class="ad-chart-card">
-      <h3>用量明细</h3>
+      <h3>{{ t('usage.ledgerTitle') }}</h3>
       <table class="ad-table">
-        <thead><tr><th>时间</th><th>类型</th><th>供应商</th><th>模型</th><th>量</th><th>单价</th><th>消耗</th></tr></thead>
+        <thead><tr><th>{{ t('usage.colTime') }}</th><th>{{ t('usage.colType') }}</th><th>{{ t('usage.colProvider') }}</th><th>{{ t('usage.colModel') }}</th><th>{{ t('usage.colQuantity') }}</th><th>{{ t('usage.colUnitPrice') }}</th><th>{{ t('usage.colCost') }}</th></tr></thead>
         <tbody>
           <tr v-for="l in usageData?.ledger || []" :key="l.id">
             <td>{{ fmtTime(l.created_at) }}</td><td>{{ l.task_type }}</td><td>{{ l.provider || '—' }}</td>
             <td>{{ l.model || '—' }}</td><td>{{ l.quantity }}</td><td>{{ l.unit_price }}</td><td>{{ l.cost }}</td>
           </tr>
-          <tr v-if="!((usageData?.ledger || []).length)"><td colspan="7" style="color:#999">暂无明细</td></tr>
+          <tr v-if="!((usageData?.ledger || []).length)"><td colspan="7" style="color:#999">{{ t('usage.noLedger') }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -66,6 +66,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { billingUsage, billingBalance } from '@/api'
 import { activeTenantId } from './store'
 import { fmtTime, barHeight } from './ui'
+import { t, tpl } from '@/i18n'
 
 const usageData = ref<any>(null)
 // 加载用量看板数据（用量 + 余额，并统计供应商数）

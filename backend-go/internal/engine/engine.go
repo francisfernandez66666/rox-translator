@@ -329,15 +329,16 @@ func (e *Engine) TranslateOne(ctx context.Context, zhText string, targetLangs []
 		TargetLangs:  targetLangs,
 	}
 	tid := e.tenantID(ctx)
+	srcLang := DetectSourceLang(zhText) // 检测实际源语言（zh/en），供指令与 KB 匹配使用
 
 	// 非中文源 → 逐语言模型直翻
-	if DetectSourceLang(zhText) != "zh" {
+	if srcLang != "zh" {
 		res.Mode = "纯模型翻译"
 		res.NeedModel = targetLangs
 		if langOnly {
 			return res, nil
 		}
-		e.translateLangsConcurrent(ctx, zhText, targetLangs, res.Examples, res.Translations)
+		e.translateLangsConcurrent(ctx, zhText, targetLangs, res.Examples, res.Translations, srcLang)
 		return res, nil
 	}
 
@@ -447,16 +448,20 @@ func (e *Engine) TranslateOne(ctx context.Context, zhText string, targetLangs []
 			e.OnPhase("ai_generating")
 		}
 	}
-	e.translateLangsConcurrent(ctx, zhText, targetLangs, res.Examples, res.Translations)
+	e.translateLangsConcurrent(ctx, zhText, targetLangs, res.Examples, res.Translations, srcLang)
 	res.NeedModel = nil
 	return res, nil
 }
 
 // translateLangsConcurrent 并发翻译多个目标语言（跳过已翻译的）
-// 用信号量限制并发，避免打爆 LLM API；结果写入 out（map 并发写由内部加锁保护）
-func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, langs []string, examples []*kb.Row, out map[string]string) {
+// 用信号量限制并发，避免打爆 LLM API；结果写入 out（map 并发写由内部加锁保护）。
+// 参数 sourceLang: 实际源语言代码（默认 "zh"），透传至单语翻译指令。
+func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, langs []string, examples []*kb.Row, out map[string]string, sourceLang string) {
 	if len(langs) == 0 {
 		return
+	}
+	if sourceLang == "" {
+		sourceLang = "zh"
 	}
 	// 需要翻译的语言（跳过已有值）
 	need := make([]string, 0, len(langs))
@@ -486,7 +491,7 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 			}
 			defer func() { <-sem }()
 
-			tr, err := e.SingleLangTranslate(ctx, zhText, lang, examples)
+			tr, err := e.SingleLangTranslate(ctx, zhText, lang, examples, sourceLang)
 			if err != nil {
 				tr = ""
 			}
@@ -514,9 +519,10 @@ func (e *Engine) assignKB(row *kb.Row, targetLangs []string, needModel *[]string
 	return out
 }
 
-// TranslateLangsInto 并发翻译缺失语言，写入 out/sources（供 workflow 初翻用）
-func (e *Engine) TranslateLangsInto(ctx context.Context, zhText string, langs []string, out map[string]string, sources map[string]string) {
-	e.translateLangsConcurrent(ctx, zhText, langs, nil, out)
+// TranslateLangsInto 并发翻译缺失语言，写入 out/sources（供 workflow 初翻用）。
+// 参数 sourceLang: 实际源语言代码（默认 "zh"）；out/sources 为译文与来源映射。
+func (e *Engine) TranslateLangsInto(ctx context.Context, zhText string, langs []string, out map[string]string, sources map[string]string, sourceLang string) {
+	e.translateLangsConcurrent(ctx, zhText, langs, nil, out, sourceLang)
 	for _, lc := range langs {
 		if sources != nil && out[lc] != "" {
 			sources[lc] = "model"
@@ -562,21 +568,45 @@ func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, tar
 
 // ============ 单语翻译 ============
 
-// translateInstruction 按语言定制翻译指令
-func translateInstruction(source, target string) string {
-	switch target {
+// srcName 源语言代码 → 提示用语言名（未知语言回退 "文本"）。
+// 参数 code: 语言代码（如 zh/en/fr）；返回可读语言名（中文/英语/法语…）。
+func srcName(code string) string {
+	switch code {
+	case "zh":
+		return "中文"
+	case "en":
+		return "英语"
 	case "zh_hant":
-		return fmt.Sprintf("把下面的%s转换为繁体中文，只输出繁体中文结果", source)
+		return "繁体中文"
+	}
+	if code != "" {
+		if n := config.LangNames[code]; n != "" {
+			return n
+		}
+	}
+	return "文本"
+}
+
+// translateInstruction 按源语言+目标语言定制翻译指令（支持任意方向互译）。
+// 参数 source: 源语言代码；target: 目标语言代码。
+// 返回: 模型翻译指令（不臆断源语言名称，未知源回退 "文本"）。
+func translateInstruction(source, target string) string {
+	src := srcName(source)
+	switch target {
+	case "zh":
+		return fmt.Sprintf("把下面的%s翻译为简体中文，只输出简体中文结果", src)
+	case "zh_hant":
+		return fmt.Sprintf("把下面的%s转换为繁体中文，只输出繁体中文结果", src)
 	case "ja":
-		return "翻译为日语。必须使用规范的日语汉字+假名混合书写，不要只用假名"
+		return fmt.Sprintf("把下面的%s翻译为日语，必须使用规范的日语汉字+假名混合书写，不要只用假名", src)
 	case "ko":
-		return "翻译为韩语（한국어）。必须使用韩语谚文书写，禁止输出日语"
+		return fmt.Sprintf("把下面的%s翻译为韩语（한국어），必须使用韩语谚文书写，禁止输出日语", src)
 	default:
 		cn := config.LangNames[target]
 		if cn == "" {
 			cn = target
 		}
-		return fmt.Sprintf("把下面的%s翻译为%s，不要额外解释", source, cn)
+		return fmt.Sprintf("把下面的%s翻译为%s，不要额外解释", src, cn)
 	}
 }
 
@@ -686,9 +716,13 @@ func (e *Engine) resolvePolicy(ctx context.Context) (high, med float64) {
 	return
 }
 
-// SingleLangTranslate 单语翻译（含 429 降级、finish_reason=length 重试、截断自修复）
-func (e *Engine) SingleLangTranslate(ctx context.Context, zhText, targetLang string, examples []*kb.Row) (string, error) {
-	return e.singleLang(ctx, zhText, targetLang, examples, "zh", 0)
+// SingleLangTranslate 单语翻译（含 429 降级、finish_reason=length 重试、截断自修复）。
+// 参数 sourceLang: 实际源语言代码（默认 "zh"）。
+func (e *Engine) SingleLangTranslate(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang string) (string, error) {
+	if sourceLang == "" {
+		sourceLang = "zh"
+	}
+	return e.singleLang(ctx, zhText, targetLang, examples, sourceLang, 0)
 }
 
 // singleLang 单语翻译核心实现（SingleLangTranslate 的实际逻辑）。
@@ -803,7 +837,7 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 
 	// 截断自修复
 	if e.isTranslationIncomplete(content, zhText, targetLang) {
-		completed := e.autoCompleteTranslation(ctx, zhText, targetLang, content, base, key, model)
+		completed := e.autoCompleteTranslation(ctx, zhText, targetLang, content, base, key, model, sourceLang)
 		if completed != "" {
 			content = completed
 		}
@@ -881,8 +915,8 @@ func isEndPunct(s string) bool {
 	return strings.Contains("。！？.!?:：;；…", last)
 }
 
-// autoCompleteTranslation 续翻 + 全量重翻
-func (e *Engine) autoCompleteTranslation(ctx context.Context, zhText, targetLang, partial, base, key, model string) string {
+// autoCompleteTranslation 续翻 + 全量重翻（sourceLang 透传保证互译方向正确）
+func (e *Engine) autoCompleteTranslation(ctx context.Context, zhText, targetLang, partial, base, key, model, sourceLang string) string {
 	// 续翻
 	cont := fmt.Sprintf("你之前的翻译被截断了，请从断点继续，不要重复已经翻译的内容：\n%s\n\n继续翻译：", partial)
 	messages := []map[string]string{{"role": "user", "content": cont}}
@@ -894,7 +928,7 @@ func (e *Engine) autoCompleteTranslation(ctx context.Context, zhText, targetLang
 		}
 	}
 	// 全量重翻
-	instruction := translateInstruction("zh", targetLang)
+	instruction := translateInstruction(sourceLang, targetLang)
 	full := fmt.Sprintf("%s。必须完整翻译，不要省略任何内容，不要被截断：\n\n%s", instruction, zhText)
 	messages = []map[string]string{{"role": "user", "content": full}}
 	content, _, err = e.LLM.CallChat(ctx, base, key, model, messages, 8192, false, e.Cfg.FallbackTemp)
@@ -1134,9 +1168,13 @@ func parseBatchOutput(content string, n int) []string {
 
 // ============ 其他语言翻译（前端子选单直接传非 KB 语言） ============
 
-// TranslateOtherLang 纯模型翻译单条（"其他语言"）
-func (e *Engine) TranslateOtherLang(ctx context.Context, zhText, langCode string) (string, error) {
-	tr, err := e.singleLang(ctx, zhText, langCode, nil, "zh", 0)
+// TranslateOtherLang 纯模型翻译单条（"其他语言"，支持任意源语言互译）。
+// 参数 zhText: 源文本；langCode: 目标语言代码；sourceLang: 实际源语言代码（默认 "zh"）。
+func (e *Engine) TranslateOtherLang(ctx context.Context, zhText, langCode, sourceLang string) (string, error) {
+	if sourceLang == "" {
+		sourceLang = "zh"
+	}
+	tr, err := e.singleLang(ctx, zhText, langCode, nil, sourceLang, 0)
 	if err != nil {
 		return "", err
 	}

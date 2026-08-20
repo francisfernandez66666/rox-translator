@@ -4,26 +4,26 @@
    ============================================================================ -->
 <template>
   <section class="ad-section">
-    <h2>Webhook 回调</h2>
-    <p class="ad-hint">翻译完成后自动 POST 到回调 URL（携带 X-Signature 签名），失败自动重试 3 次。</p>
+    <h2>{{ t('webhooks.title') }}</h2>
+    <p class="ad-hint">{{ t('webhooks.hint') }}</p>
     <div class="ad-row">
-      <input v-model="wForm.url" placeholder="回调 URL，如 https://example.com/webhook" class="ad-input" style="flex:1" />
-      <input v-model="wForm.secret" placeholder="签名密钥（可留空）" class="ad-input" style="width:200px" />
+      <input v-model="wForm.url" :placeholder="t('webhooks.urlPlaceholder')" class="ad-input" style="flex:1" />
+      <input v-model="wForm.secret" :placeholder="t('webhooks.secretPlaceholder')" class="ad-input" style="width:200px" />
     </div>
     <div class="ad-row">
-      <input v-model="wForm.events" placeholder="订阅事件（默认 translation.completed）" class="ad-input" style="flex:1" />
-      <button class="ad-btn" @click="saveWebhook">保存配置</button>
+      <input v-model="wForm.events" :placeholder="t('webhooks.eventsPlaceholder')" class="ad-input" style="flex:1" />
+      <button class="ad-btn" @click="saveWebhook">{{ t('webhooks.saveConfig') }}</button>
     </div>
     <table class="ad-table">
-      <thead><tr><th>ID</th><th>URL</th><th>事件</th><th>状态</th><th>操作</th></tr></thead>
+      <thead><tr><th>{{ t('webhooks.colId') }}</th><th>{{ t('webhooks.colUrl') }}</th><th>{{ t('webhooks.colEvents') }}</th><th>{{ t('webhooks.colStatus') }}</th><th>{{ t('webhooks.colActions') }}</th></tr></thead>
       <tbody>
         <tr v-for="w in hooks" :key="w.id">
           <td>{{ w.id }}</td><td style="word-break:break-all">{{ w.url }}</td><td>{{ w.events }}</td>
-          <td>{{ w.enabled ? '启用' : '停用' }}</td>
+          <td>{{ w.enabled ? t('webhooks.enable') : t('webhooks.disable') }}</td>
           <td class="ad-td">
-            <button class="ad-btn-sm" @click="testWebhook(w)">测试</button>
-            <button class="ad-btn-sm" @click="toggleWebhook(w)">{{ w.enabled ? '停用' : '启用' }}</button>
-            <button class="ad-btn-sm ad-btn-red" @click="deleteWebhook(w)">删除</button>
+            <button class="ad-btn-sm" @click="testWebhook(w)">{{ t('webhooks.test') }}</button>
+            <button class="ad-btn-sm" @click="toggleWebhook(w)">{{ w.enabled ? t('webhooks.disable') : t('webhooks.enable') }}</button>
+            <button class="ad-btn-sm ad-btn-red" @click="deleteWebhook(w)">{{ t('webhooks.delete') }}</button>
           </td>
         </tr>
       </tbody>
@@ -35,6 +35,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { webhooks, webhookSave, webhookDelete, webhookTest } from '@/api'
 import { activeTenantId } from './store'
+import { t } from '@/i18n'
 
 const hooks = ref<any[]>([])
 // 新增/编辑 webhook 表单：回调 URL、签名密钥、订阅事件（逗号分隔）
@@ -45,7 +46,7 @@ async function loadHooks() {
   if (r.success) hooks.value = (r as any).webhooks || []
 }
 async function saveWebhook() {
-  if (!wForm.value.url) { alert('回调 URL 必填'); return }
+  if (!wForm.value.url) { alert(t('webhooks.urlRequired')); return }
   const r = await webhookSave({ url: wForm.value.url, secret: wForm.value.secret, events: wForm.value.events })
   if (!r.success) { alert(r.message); return }
   wForm.value = { url: '', secret: '', events: 'translation.completed' }
@@ -56,13 +57,13 @@ async function toggleWebhook(w: any) {
   await loadHooks()
 }
 async function deleteWebhook(w: any) {
-  if (!confirm('删除该 Webhook 配置？')) return
+  if (!confirm(t('webhooks.confirmDelete'))) return
   await webhookDelete(w.id)
   await loadHooks()
 }
 async function testWebhook(w: any) {
   const r = await webhookTest(w.id)
-  alert(r.message || (r.success ? '已发送' : '发送失败'))
+  alert(r.message || (r.success ? t('webhooks.testSent') : t('webhooks.testFailed')))
 }
 
 onMounted(loadHooks)

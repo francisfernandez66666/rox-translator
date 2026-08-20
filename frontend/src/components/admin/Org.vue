@@ -7,17 +7,17 @@
    ============================================================================ -->
 <template>
   <section class="ad-section">
-    <h2>组织结构</h2>
-    <p class="ad-hint">根组织即当前租户，可在其下创建子组织/部门；删除组织时其下用户将回收至根组织。</p>
+    <h2>{{ t('org.title') }}</h2>
+    <p class="ad-hint">{{ t('org.treeHint') }}</p>
 
     <!-- ===== 新建子组织 ===== -->
     <div class="ad-row">
       <select v-model="parentId" class="ad-input">
-        <option :value="0">根组织（租户下）</option>
+        <option :value="0">{{ t('org.rootOption') }}</option>
         <option v-for="o in orgs" :key="o.id" :value="o.id">{{ orgPath(o) }}</option>
       </select>
-      <input v-model="newName" placeholder="组织/部门名称" class="ad-input" @keydown.enter="createOrg" />
-      <button class="ad-btn" @click="createOrg">新建组织</button>
+      <input v-model="newName" :placeholder="t('org.namePlaceholder')" class="ad-input" @keydown.enter="createOrg" />
+      <button class="ad-btn" @click="createOrg">{{ t('org.create') }}</button>
     </div>
 
     <!-- ===== 左树右表：组织树 + 组织下用户 ===== -->
@@ -25,8 +25,8 @@
       <!-- 组织树 -->
       <div class="ad-org-tree">
         <div class="ad-tree-item ad-tree-root" @click="selectOrg(0)">
-          <span>🏢 {{ tenantName }}（根组织）</span>
-          <span class="ad-tree-count">{{ allUsers.length }} 人</span>
+          <span>🏢 {{ tenantName }}（{{ t('org.rootOrg') }}）</span>
+          <span class="ad-tree-count">{{ tpl('org.userCount', { n: allUsers.length }) }}</span>
         </div>
         <div
           v-for="o in flatTree"
@@ -37,50 +37,50 @@
         >
           <span>📁 {{ o.name }}</span>
           <span class="ad-tree-actions">
-            <button class="ad-btn-xs" title="新建子组织" @click.stop="setParent(o.id)">+</button>
-            <button class="ad-btn-xs" title="重命名" @click.stop="renameOrg(o)">✎</button>
-            <button class="ad-btn-xs ad-btn-red" title="删除" @click.stop="deleteOrg(o)">✕</button>
+            <button class="ad-btn-xs" :title="t('org.addChild')" @click.stop="setParent(o.id)">+</button>
+            <button class="ad-btn-xs" :title="t('org.rename')" @click.stop="renameOrg(o)">✎</button>
+            <button class="ad-btn-xs ad-btn-red" :title="t('org.delete')" @click.stop="deleteOrg(o)">✕</button>
           </span>
         </div>
       </div>
 
       <!-- 组织下用户（含子孙组织归集） -->
       <div class="ad-org-users">
-        <h3>{{ selectedOrg === 0 ? '全部用户（根组织）' : `「${selectedOrgName}」及其子组织用户` }}</h3>
-        <div class="ad-hint">开通用户后，该账号将归属于当前选中组织，可用用户名/密码登录。</div>
+        <h3>{{ selectedOrg === 0 ? t('org.allUsersRoot') : tpl('org.usersInChildren', { name: selectedOrgName }) }}</h3>
+        <div class="ad-hint">{{ t('org.usersHint') }}</div>
         <table class="ad-table">
-          <thead><tr><th>ID</th><th>用户名</th><th>名称</th><th>所属组织</th><th>角色</th><th>最近登录</th><th>操作</th></tr></thead>
+          <thead><tr><th>{{ t('org.colId') }}</th><th>{{ t('org.colUsername') }}</th><th>{{ t('org.colName') }}</th><th>{{ t('org.colOrg') }}</th><th>{{ t('org.colRole') }}</th><th>{{ t('org.colLastLogin') }}</th><th>{{ t('org.colActions') }}</th></tr></thead>
           <tbody>
             <tr v-for="u in orgUserList" :key="u.id">
               <td>{{ u.id }}</td>
               <td>{{ u.username }}</td>
               <td>{{ u.display_name }}</td>
-              <td>{{ u.org_name || '根组织' }}</td>
-              <td>{{ roleName(u.role) }}</td>
+              <td>{{ u.org_name || t('org.rootOrg') }}</td>
+              <td>{{ u.role === 'super_admin' || u.role === 'admin' ? t('org.roleSuper') : u.role === 'tenant_admin' || u.role === 'approver' ? t('org.roleTenantAdmin') : t('org.roleUser') }}</td>
               <td>{{ fmtTime(u.last_login_at) }}</td>
               <td class="ad-td">
-                <button class="ad-btn-sm" @click="resetPwd(u)">重置密码</button>
-                <button v-if="u.status === 'disabled'" class="ad-btn-sm" @click="setStatus(u, 'active')">启用</button>
-                <button v-else class="ad-btn-sm ad-btn-red" @click="setStatus(u, 'disabled')">停用</button>
+                <button class="ad-btn-sm" @click="resetPwd(u)">{{ t('org.resetPwd') }}</button>
+                <button v-if="u.status === 'disabled'" class="ad-btn-sm" @click="setStatus(u, 'active')">{{ t('org.enable') }}</button>
+                <button v-else class="ad-btn-sm ad-btn-red" @click="setStatus(u, 'disabled')">{{ t('org.disable') }}</button>
               </td>
             </tr>
-            <tr v-if="!orgUserList.length"><td colspan="7" class="ad-empty">该组织下暂无用户</td></tr>
+            <tr v-if="!orgUserList.length"><td colspan="7" class="ad-empty">{{ t('org.noUsers') }}</td></tr>
           </tbody>
         </table>
 
         <!-- 开通用户 -->
         <div class="ad-chart-card" style="margin-top:16px">
-          <h3>开通用户（归属：{{ selectedOrg === 0 ? '根组织' : selectedOrgName }}）</h3>
+          <h3>{{ tpl('org.addUser', { org: selectedOrg === 0 ? t('org.rootOrg') : selectedOrgName }) }}</h3>
           <div class="ad-row">
-            <input v-model="nu.username" placeholder="用户名" class="ad-input ad-mini-w" />
-            <input v-model="nu.password" placeholder="初始密码（≥6位）" class="ad-input" />
-            <input v-model="nu.display_name" placeholder="显示名称" class="ad-input" />
+            <input v-model="nu.username" :placeholder="t('org.usernamePlaceholder')" class="ad-input ad-mini-w" />
+            <input v-model="nu.password" :placeholder="t('org.passPlaceholder')" class="ad-input" />
+            <input v-model="nu.display_name" :placeholder="t('org.displayNamePlaceholder')" class="ad-input" />
             <select v-model="nu.role" class="ad-input">
-              <option value="user">普通用户</option>
-              <option value="tenant_admin">组织管理员</option>
-              <option v-if="isSuper" value="super_admin">超级管理员</option>
+              <option value="user">{{ t('org.roleUser') }}</option>
+              <option value="tenant_admin">{{ t('org.roleTenantAdmin') }}</option>
+              <option v-if="isSuper" value="super_admin">{{ t('org.roleSuper') }}</option>
             </select>
-            <button class="ad-btn ad-btn-green" :disabled="creating" @click="createUser">{{ creating ? '开通中…' : '开通用户' }}</button>
+            <button class="ad-btn ad-btn-green" :disabled="creating" @click="createUser">{{ creating ? t('org.creating') : t('org.addUserBtn') }}</button>
           </div>
         </div>
       </div>
@@ -90,9 +90,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { t, tpl } from '@/i18n'
 import { orgList, orgCreate, orgRename, orgDelete, orgUsers, type OrgInfo } from '@/api'
 import { adminUserCreate, adminUserUpdate, adminUserResetPassword } from '@/api'
-import { activeTenantId, tenantList, roleName, isSuper } from './store'
+import { activeTenantId, tenantList, isSuper } from './store'
 import { fmtTime } from './ui'
 
 // 组织扁平列表（用于下拉与组装树）
@@ -116,7 +117,7 @@ const nu = ref({ username: '', password: '', display_name: '', role: 'user' })
 // 当前生效租户名称（展示根组织）
 const tenantName = computed(() => {
   const t = tenantList.value.find(x => x.id === activeTenantId.value)
-  return t?.name || `组织 #${activeTenantId.value}`
+  return t?.name || tpl('org.orgHash', { id: activeTenantId.value })
 })
 
 // 组装树形结构（递归计算深度）
@@ -174,7 +175,7 @@ function selectOrg(id: number) {
 // 开通用户：在选中组织下创建账号（根组织=租户直属）
 async function createUser() {
   if (!nu.value.username.trim() || nu.value.password.length < 6) {
-    alert('请输入用户名和至少 6 位密码')
+    alert(t('org.userValidation'))
     return
   }
   creating.value = true
@@ -187,7 +188,7 @@ async function createUser() {
       org_id: selectedOrg.value || undefined,
     })
     if (!r.success) { alert(r.message); return }
-    alert(`用户「${nu.value.username}」已开通`)
+    alert(tpl('org.userCreated', { name: nu.value.username }))
     nu.value = { username: '', password: '', display_name: '', role: 'user' }
     await loadAll()
   } finally {
@@ -197,11 +198,11 @@ async function createUser() {
 
 // 重置用户密码
 async function resetPwd(u: any) {
-  const pwd = prompt(`为用户「${u.username}」设置新密码：`)
-  if (!pwd || pwd.length < 6) { alert('密码至少 6 位'); return }
+  const pwd = prompt(tpl('org.resetPwdPrompt', { name: u.username }))
+  if (!pwd || pwd.length < 6) { alert(t('org.pwdMinLength')); return }
   const r = await adminUserResetPassword(u.id, pwd)
   if (!r.success) { alert(r.message); return }
-  alert('密码已重置')
+  alert(t('org.pwdReset'))
 }
 
 // 启用/停用用户
@@ -218,7 +219,7 @@ function setParent(id: number) {
 }
 
 async function createOrg() {
-  if (!newName.value.trim()) { alert('请输入组织名称'); return }
+  if (!newName.value.trim()) { alert(t('org.nameRequired')); return }
   const r = await orgCreate({ name: newName.value.trim(), parent_id: parentId.value })
   if (!r.success) { alert(r.message); return }
   newName.value = ''
@@ -226,7 +227,7 @@ async function createOrg() {
 }
 
 async function renameOrg(o: OrgInfo) {
-  const name = prompt(`重命名「${o.name}」为：`, o.name)
+  const name = prompt(tpl('org.renamePrompt', { name: o.name }), o.name)
   if (!name || !name.trim()) return
   const r = await orgRename(o.id, name.trim())
   if (!r.success) { alert(r.message); return }
@@ -234,7 +235,7 @@ async function renameOrg(o: OrgInfo) {
 }
 
 async function deleteOrg(o: OrgInfo) {
-  if (!confirm(`确认删除组织「${o.name}」？其子孙组织将上移，组织下用户将回收至根组织。`)) return
+  if (!confirm(tpl('org.deleteConfirm', { name: o.name }))) return
   const r = await orgDelete(o.id)
   if (!r.success) { alert(r.message); return }
   if (selectedOrg.value === o.id) selectedOrg.value = 0

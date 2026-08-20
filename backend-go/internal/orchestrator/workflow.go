@@ -122,10 +122,11 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 	}
 	p := &ticketPayload{SourceText: t.SourceText, TargetLangs: langs, Translations: map[string]string{}, Sources: map[string]string{}}
 	tid := t.TenantID
+	srcLang := engine.DetectSourceLang(t.SourceText) // 检测实际源语言（zh/en），用于 KB 匹配与初翻
 
-	// 1. 平台 KB 包四层查找（企业包优先，按层排序）
+	// 1. 平台 KB 包四层查找（企业包优先，按层排序，按实际源语言匹配）
 	if w.Store != nil {
-		if entries, err := w.Store.FindEntriesBySource(tid, "zh", t.SourceText); err == nil {
+		if entries, err := w.Store.FindEntriesBySource(tid, srcLang, t.SourceText); err == nil {
 			for _, ent := range entries {
 				if _, ok := p.Translations[ent.TargetLang]; ok {
 					continue // 高优包/高层已命中
@@ -166,6 +167,7 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 	}
 	tid := t.TenantID
 	ctx = tenant.WithTenant(ctx, tid)
+	srcLang := engine.DetectSourceLang(t.SourceText) // 源语言（用于初翻指令方向）
 
 	// 驳回重翻循环：按驳回意见重新翻译全部语言
 	if strings.TrimSpace(t.RejectReason) != "" {
@@ -191,7 +193,7 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 		}
 	}
 	if len(need) > 0 {
-		w.Engine.TranslateLangsInto(ctx, t.SourceText, need, p.Translations, p.Sources)
+		w.Engine.TranslateLangsInto(ctx, t.SourceText, need, p.Translations, p.Sources, srcLang)
 	}
 	w.savePayload(t, p)
 	return nil

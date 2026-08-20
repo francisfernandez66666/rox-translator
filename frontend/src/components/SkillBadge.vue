@@ -4,8 +4,12 @@
    ============================================================================ -->
 <template>
   <!-- 技能徽章：翻译 -->
-  <span class="skill-badge">🌐 翻译</span>
+  <span class="skill-badge">🌐 {{ t('chat.skillLabel') }}</span>
 </template>
+
+<script setup lang="ts">
+import { t } from '@/i18n'
+</script>
 
 <style scoped>
 /* 技能徽章样式：绿色圆角小标签 */

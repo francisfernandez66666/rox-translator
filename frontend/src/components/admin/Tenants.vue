@@ -4,32 +4,32 @@
    ============================================================================ -->
 <template>
   <section class="ad-section">
-    <h2>组织管理</h2>
+    <h2>{{ t('tenants.title') }}</h2>
     <div class="ad-row">
-      <input v-model="tForm.code" placeholder="编码 (如 bmw)" class="ad-input" />
-      <input v-model="tForm.name" placeholder="名称" class="ad-input" />
+      <input v-model="tForm.code" :placeholder="t('tenants.codePlaceholder')" class="ad-input" />
+      <input v-model="tForm.name" :placeholder="t('tenants.namePlaceholder')" class="ad-input" />
       <input v-model="tForm.expires" type="date" class="ad-input" />
-      <button class="ad-btn" @click="createTenant">开通组织</button>
+      <button class="ad-btn" @click="createTenant">{{ t('tenants.create') }}</button>
     </div>
     <div class="ad-row">
-      <input v-model="tForm.adminUser" placeholder="组织管理员用户名" class="ad-input" />
-      <input v-model="tForm.adminPass" type="password" placeholder="初始密码" class="ad-input" />
+      <input v-model="tForm.adminUser" :placeholder="t('tenants.adminUserPlaceholder')" class="ad-input" />
+      <input v-model="tForm.adminPass" type="password" :placeholder="t('tenants.initPassPlaceholder')" class="ad-input" />
     </div>
-    <div class="ad-hint">权限 JSON（langs 允许语言，max_daily_chars 日字符上限）</div>
+    <div class="ad-hint">{{ t('tenants.permissionsHint') }}</div>
     <input v-model="tForm.permissions" placeholder='{"langs":["de","en"],"max_daily_chars":100000}' class="ad-input ad-wide" />
     <table class="ad-table">
-      <thead><tr><th>ID</th><th>编码</th><th>名称</th><th>状态</th><th>有效期</th><th>操作</th></tr></thead>
+      <thead><tr><th>{{ t('tenants.colId') }}</th><th>{{ t('tenants.colCode') }}</th><th>{{ t('tenants.colName') }}</th><th>{{ t('tenants.colStatus') }}</th><th>{{ t('tenants.colExpires') }}</th><th>{{ t('tenants.colActions') }}</th></tr></thead>
       <tbody>
-        <tr v-for="t in tenants" :key="t.id">
-          <td>{{ t.id }}</td><td>{{ t.code }}</td><td>{{ t.name }}</td>
-          <td>{{ statusLabel(t.status) }}</td>
-          <td>{{ t.expires_at || '永久' }}</td>
+        <tr v-for="row in tenants" :key="row.id">
+          <td>{{ row.id }}</td><td>{{ row.code }}</td><td>{{ row.name }}</td>
+          <td>{{ row.status === 'active' ? t('tenants.enable') : row.status === 'disabled' ? t('tenants.disable') : t('tenants.expired') }}</td>
+          <td>{{ row.expires_at || t('tenants.forever') }}</td>
           <td class="ad-td">
-            <button class="ad-btn-sm" @click="toggleTenant(t)">{{ t.status === 'active' ? '停用' : '启用' }}</button>
-            <button v-if="t.id !== 1" class="ad-btn-sm ad-btn-red" @click="removeTenant(t)">删除</button>
-            <button class="ad-btn-sm" @click="chargeTenant(t)">充值</button>
-            <button class="ad-btn-sm" @click="exportTenant(t)">导出数据</button>
-            <button v-if="t.id !== 1" class="ad-btn-sm ad-btn-red" @click="eraseTenant(t)">清除数据</button>
+            <button class="ad-btn-sm" @click="toggleTenant(row)">{{ row.status === 'active' ? t('tenants.disable') : t('tenants.enable') }}</button>
+            <button v-if="row.id !== 1" class="ad-btn-sm ad-btn-red" @click="removeTenant(row)">{{ t('tenants.delete') }}</button>
+            <button class="ad-btn-sm" @click="chargeTenant(row)">{{ t('tenants.charge') }}</button>
+            <button class="ad-btn-sm" @click="exportTenant(row)">{{ t('tenants.exportData') }}</button>
+            <button v-if="row.id !== 1" class="ad-btn-sm ad-btn-red" @click="eraseTenant(row)">{{ t('tenants.eraseData') }}</button>
           </td>
         </tr>
       </tbody>
@@ -39,9 +39,9 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { t, tpl } from '@/i18n'
 import { tenantList as apiTenantList, tenantCreate, tenantSetStatus, tenantDelete, tenantExport, tenantErase, adminOrderCreate, adminOrderPay, API_BASE, getAuthToken } from '@/api'
 import { loadTenants as refreshTenantStore } from './store'
-import { statusLabel } from './ui'
 
 const tenants = ref<any[]>([])
 // 新建租户表单：编码/名称/过期时间/权限 JSON/超管用户名密码
@@ -55,7 +55,7 @@ async function loadTenants() {
 }
 
 async function createTenant() {
-  if (!tForm.value.code) { alert('组织编码必填'); return }
+  if (!tForm.value.code) { alert(t('tenants.codeRequired')); return }
   const r = await tenantCreate({
     code: tForm.value.code, name: tForm.value.name,
     expires_at: tForm.value.expires, permissions: tForm.value.permissions,
@@ -73,26 +73,26 @@ async function toggleTenant(t: any) {
 }
 
 async function removeTenant(t: any) {
-  if (!confirm(`确认删除组织「${t.name}」？其数据一并删除。`)) return
+  if (!confirm(tpl('tenants.deleteConfirm', { name: t.name }))) return
   const r = await tenantDelete(t.id)
   if (!r.success) alert(r.message)
   await loadTenants()
 }
 
 async function chargeTenant(t: any) {
-  const tokens = prompt(`为「${t.name}」充值 token 数量：`)
+  const tokens = prompt(tpl('tenants.chargePrompt', { name: t.name }))
   if (!tokens || Number(tokens) <= 0) return
   const r = await adminOrderCreate({ tenant_id: t.id, tokens: Number(tokens), money: 0 })
   if (!r.success) { alert(r.message); return }
   // 下单成功后自动模拟支付（mock 渠道），完成充值入账
   const o = (r as any).order
   await adminOrderPay(o.id)
-  alert(`已充值 ${tokens} token`)
+  alert(tpl('tenants.charged', { tokens }))
 }
 
 // 组织数据主权：导出 / GDPR 清除
 async function exportTenant(t: any) {
-  if (!confirm(`导出组织「${t.name}」全部数据（JSON）？`)) return
+  if (!confirm(tpl('tenants.exportConfirm', { name: t.name }))) return
   const url = `${API_BASE}/api/tenant/export`
   const xhr = new XMLHttpRequest()
   xhr.open('POST', url, true)
@@ -100,7 +100,7 @@ async function exportTenant(t: any) {
   if (getAuthToken()) xhr.setRequestHeader('Authorization', `Bearer ${getAuthToken()}`)
   xhr.responseType = 'blob'
   xhr.onload = () => {
-    if (xhr.status !== 200) { alert('导出失败'); return }
+    if (xhr.status !== 200) { alert(t('tenants.exportFailed')); return }
     const a = document.createElement('a')
     a.href = URL.createObjectURL(xhr.response)
     a.download = `tenant_${t.id}_${t.code}.json`
@@ -111,11 +111,11 @@ async function exportTenant(t: any) {
 }
 
 async function eraseTenant(t: any) {
-  if (!confirm(`确认清除组织「${t.name}」的全部业务数据？此操作不可恢复，请先导出备份。`)) return
-  if (!confirm(`再次确认：${t.name} 的用户/订单/用量/审计/KB 将全部删除。`)) return
+  if (!confirm(tpl('tenants.eraseConfirm', { name: t.name }))) return
+  if (!confirm(tpl('tenants.eraseConfirm2', { name: t.name }))) return
   const r = await tenantErase(t.id)
   if (!r.success) { alert(r.message); return }
-  alert('组织业务数据已清除')
+  alert(t('tenants.erased'))
   await loadTenants()
 }
 

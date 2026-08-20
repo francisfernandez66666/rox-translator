@@ -1,12 +1,29 @@
 // ============================================================================
-// i18n.ts — 前端国际化（中英）
+// i18n/index.ts — 前端国际化（中英）
 // 职责：集中维护界面文案字典，提供 t(key) 取词与当前语言切换。
-// 覆盖范围：本轮覆盖登录页与管理后台关键导航；翻译工作台文案次轮接入。
-// 用法：import { t, setLang, lang } from '@/i18n'
+// 结构：base 字典（通用+登录+导航）+ 各面板字典（panels/*.ts）合并。
+// 用法：import { t, setLang, toggleLang, lang } from '@/i18n'
 //       模板中 {{ t('login.title') }}，切换语言后响应式更新。
 // ============================================================================
 
 import { ref } from 'vue'
+
+// 面板字典合并（各面板独立文件，避免大文件冲突）
+import * as pOverview from './panels/overview'
+import * as pTenants from './panels/tenants'
+import * as pOrg from './panels/org'
+import * as pUsers from './panels/users'
+import * as pKb from './panels/kb'
+import * as pModels from './panels/models'
+import * as pWorkflow from './panels/workflow'
+import * as pApiKeys from './panels/apikeys'
+import * as pWebhooks from './panels/webhooks'
+import * as pTickets from './panels/tickets'
+import * as pBilling from './panels/billing'
+import * as pUsage from './panels/usage'
+import * as pAlerts from './panels/alerts'
+import * as pInvites from './panels/invites'
+import * as pChat from './panels/chat'
 
 // Lang 支持的语言类型：zh=中文（默认）、en=英文
 export type Lang = 'zh' | 'en'
@@ -14,9 +31,11 @@ export type Lang = 'zh' | 'en'
 // 当前语言（持久化到 localStorage，默认中文）
 export const lang = ref<Lang>((localStorage.getItem('app_lang') as Lang) || 'zh')
 
-// 中英文案字典
+// 文案字典类型
 type Dict = Record<string, string>
-const zh: Dict = {
+
+// ---- base 字典（通用 / 登录页 / 后台导航） ----
+const baseZh: Dict = {
   // ---- 通用 ----
   'common.online': '在线',
   'common.offline': '离线',
@@ -27,6 +46,61 @@ const zh: Dict = {
   'common.cancel': '取消',
   'common.confirm': '确认',
   'common.operations': '操作',
+  'common.active': '启用',
+  'common.disabled': '停用',
+  'common.expired': '已过期',
+
+  // ---- 应用工作台 ----
+  'app.title': '翻译助手',
+  'app.starting': '翻译引擎启动中…',
+  'app.modelLabel': '翻译模型',
+  'app.modelRec33': '(推荐，33语专用)',
+  'app.modelBackup': '(备用)',
+  'app.modelFast': '(快+强)',
+  'app.modelFallback': '(降级用)',
+  'app.langs': '语言',
+
+  // ---- 语言名 ----
+  'lang.zh': '中文',
+  'lang.en': '英语',
+  'lang.zhHant': '繁体中文',
+  'lang.ru': '俄语',
+  'lang.ar': '阿拉伯语',
+  'lang.es': '西班牙语',
+  'lang.pt': '葡萄牙语',
+  'lang.fr': '法语',
+  'lang.kk': '哈萨克语',
+  'lang.de': '德语',
+  'lang.ja': '日语',
+  'lang.ko': '韩语',
+  'lang.th': '泰语',
+  'lang.vi': '越南语',
+  'lang.mn': '蒙语',
+  'lang.ms': '马来语',
+  'lang.id': '印尼语',
+  'lang.it': '意大利语',
+  'lang.pl': '波兰语',
+  'lang.nl': '荷兰语',
+  'lang.sv': '瑞典语',
+  'lang.uk': '乌克兰语',
+  'lang.tr': '土耳其语',
+  'lang.hi': '印地语',
+  'lang.fa': '波斯语',
+  'lang.he': '希伯来语',
+  'lang.el': '希腊语',
+  'lang.my': '缅甸语',
+  'lang.km': '柬埔寨语',
+  'lang.lo': '老挝语',
+  'lang.tl': '菲律宾语',
+  'lang.gu': '古吉拉特语',
+  'lang.ur': '乌尔都语',
+  'lang.te': '泰卢固语',
+  'lang.mr': '马拉地语',
+  'lang.bn': '孟加拉语',
+  'lang.ta': '泰米尔语',
+  'lang.bo': '藏语',
+  'lang.ug': '维吾尔语',
+  'lang.yue': '粤语',
 
   // ---- 登录页 ----
   'login.platformAdmin': '🏢 翻译平台管理后台',
@@ -97,7 +171,7 @@ const zh: Dict = {
   'admin.gdpr': '🛡️ 数据合规',
 }
 
-const en: Dict = {
+const baseEn: Dict = {
   // ---- Common ----
   'common.online': 'Online',
   'common.offline': 'Offline',
@@ -108,6 +182,61 @@ const en: Dict = {
   'common.cancel': 'Cancel',
   'common.confirm': 'Confirm',
   'common.operations': 'Actions',
+  'common.active': 'Active',
+  'common.disabled': 'Disabled',
+  'common.expired': 'Expired',
+
+  // ---- Workspace ----
+  'app.title': 'Translation Assistant',
+  'app.starting': 'Starting translation engine…',
+  'app.modelLabel': 'Translation model',
+  'app.modelRec33': '(Recommended, 33 langs)',
+  'app.modelBackup': '(Fallback)',
+  'app.modelFast': '(Fast & strong)',
+  'app.modelFallback': '(Fallback)',
+  'app.langs': 'Languages',
+
+  // ---- Language names ----
+  'lang.zh': 'Chinese',
+  'lang.en': 'English',
+  'lang.zhHant': 'Traditional Chinese',
+  'lang.ru': 'Russian',
+  'lang.ar': 'Arabic',
+  'lang.es': 'Spanish',
+  'lang.pt': 'Portuguese',
+  'lang.fr': 'French',
+  'lang.kk': 'Kazakh',
+  'lang.de': 'German',
+  'lang.ja': 'Japanese',
+  'lang.ko': 'Korean',
+  'lang.th': 'Thai',
+  'lang.vi': 'Vietnamese',
+  'lang.mn': 'Mongolian',
+  'lang.ms': 'Malay',
+  'lang.id': 'Indonesian',
+  'lang.it': 'Italian',
+  'lang.pl': 'Polish',
+  'lang.nl': 'Dutch',
+  'lang.sv': 'Swedish',
+  'lang.uk': 'Ukrainian',
+  'lang.tr': 'Turkish',
+  'lang.hi': 'Hindi',
+  'lang.fa': 'Persian',
+  'lang.he': 'Hebrew',
+  'lang.el': 'Greek',
+  'lang.my': 'Burmese',
+  'lang.km': 'Khmer',
+  'lang.lo': 'Lao',
+  'lang.tl': 'Filipino',
+  'lang.gu': 'Gujarati',
+  'lang.ur': 'Urdu',
+  'lang.te': 'Telugu',
+  'lang.mr': 'Marathi',
+  'lang.bn': 'Bengali',
+  'lang.ta': 'Tamil',
+  'lang.bo': 'Tibetan',
+  'lang.ug': 'Uyghur',
+  'lang.yue': 'Cantonese',
 
   // ---- Login ----
   'login.platformAdmin': '🏢 Translation Admin',
@@ -178,11 +307,57 @@ const en: Dict = {
   'admin.gdpr': '🛡️ Data Compliance',
 }
 
+// 合并全部面板字典
+const zh: Dict = {
+  ...baseZh,
+  ...pOverview.zh,
+  ...pTenants.zh,
+  ...pOrg.zh,
+  ...pUsers.zh,
+  ...pKb.zh,
+  ...pModels.zh,
+  ...pWorkflow.zh,
+  ...pApiKeys.zh,
+  ...pWebhooks.zh,
+  ...pTickets.zh,
+  ...pBilling.zh,
+  ...pUsage.zh,
+  ...pAlerts.zh,
+  ...pInvites.zh,
+  ...pChat.zh,
+}
+
+const en: Dict = {
+  ...baseEn,
+  ...pOverview.en,
+  ...pTenants.en,
+  ...pOrg.en,
+  ...pUsers.en,
+  ...pKb.en,
+  ...pModels.en,
+  ...pWorkflow.en,
+  ...pApiKeys.en,
+  ...pWebhooks.en,
+  ...pTickets.en,
+  ...pBilling.en,
+  ...pUsage.en,
+  ...pAlerts.en,
+  ...pInvites.en,
+  ...pChat.en,
+}
+
 const dicts: Record<Lang, Dict> = { zh, en }
 
 // 取词：按当前语言返回文案；缺失时回退中文再回退键名
 export function t(key: string): string {
   return dicts[lang.value][key] || dicts.zh[key] || key
+}
+
+// 带参数取词：{name} 占位符替换（用于含动态数值/用户输入的文案）
+export function tpl(key: string, vars: Record<string, string | number> = {}): string {
+  let s = t(key)
+  for (const k in vars) s = s.split(`{${k}}`).join(String(vars[k]))
+  return s
 }
 
 // 切换语言并持久化
