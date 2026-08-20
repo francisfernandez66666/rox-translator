@@ -1,13 +1,17 @@
 // ============ 本文件职责中文说明 ============
 // 运行时配置：定义 LLM 供应商路由（ProviderConfig / ModelRoutes 多模型路由权重策略）、
 // 翻译/Embedding 模型、模型降级（Hunyuan fallback、首调用超时、熔断阈值）、
-// 相似度阈值、目录路径、采样参数等；提供 Default() 带内置 Key 的默认配置，
+// 相似度阈值、目录路径、采样参数等；提供 Default() 默认配置（密钥全部来自环境变量，
+// 未配置时生成随机临时值并打告警，不泄露任何硬编码密钥），
 // 以及从 config.json / 环境变量覆盖配置的加载逻辑。
 // ========================================
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,7 +125,7 @@ var Flags = map[string]string{
 	"fr": "🇫🇷", "kk": "🇰🇿", "de": "🇩🇪", "zh_hant": "🇹🇼",
 }
 
-// Default 返回默认配置（带内置硬编码 Key）
+// Default 返回默认配置（密钥一律从环境变量读取，未配置时生成随机临时值并告警）
 func Default() *Config {
 	c := &Config{
 		OnlineAPIBase:          "https://api.siliconflow.cn/v1",
@@ -146,20 +150,28 @@ func Default() *Config {
 		TopK:                   4,
 		TopFuzzy:               3,
 		SemHitCharOverlap:      0.55,
-		AdminToken:             "rox-admin-2026",
+		AdminToken:             "",
 		// 默认仅允许本地开发来源；生产同源部署（Caddy 反代）不受影响
 		CORSOrigins: []string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8080"},
 	}
 
-	// 内置默认 Key（编译进二进制）
+	// ★ 密钥安全：不再内置任何硬编码密钥。
+	// 未配置环境变量时生成随机临时值，保证进程可用但不泄露真实凭证；
+	// 随机 Key 调用外部 LLM 会鉴权失败，属预期行为（提示通过环境变量配置）。
 	if c.OnlineAPIKey == "" {
-		c.OnlineAPIKey = "sk-nzgxxrtmytwscaddsovnxqxnqxqiccmdxvxheomybmqqswoh"
+		c.OnlineAPIKey = "sk-" + randHex(16) // 随机占位，避免硬编码
+		log.Println("[config] 警告: 未配置 SILICONFLOW_API_KEY，已生成随机占位 Key（LLM 调用将失败）")
 	}
 	if c.EmbedAPIKey == "" {
-		c.EmbedAPIKey = "223ea45fe00b4bdcb465efc2b1ddd3aa.SVrMeynGY1tw2juA"
+		c.EmbedAPIKey = randHex(24) // 随机占位
+		log.Println("[config] 警告: 未配置 ONLINE_API_KEY，已生成随机占位 Key（Embedding 调用将失败）")
 	}
 	if v := os.Getenv("ADMIN_TOKEN"); v != "" {
 		c.AdminToken = v
+	} else {
+		// 未配置时随机生成管理凭证，避免默认值泄露
+		c.AdminToken = randHex(24)
+		log.Println("[config] 警告: 未配置 ADMIN_TOKEN，已生成随机管理凭证（回调校验将无法通过）")
 	}
 	if v := os.Getenv("CORS_ALLOWED_ORIGINS"); v != "" {
 		// 逗号分隔的来源列表；空项剔除
@@ -217,4 +229,14 @@ func (c *Config) LoadConfigFromJSON(exeDir string) {
 		}
 		return
 	}
+}
+
+// randHex 生成 n 字节随机数并以十六进制字符串返回（密钥占位 / 临时凭证生成）。
+func randHex(n int) string {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		// 随机源不可用时回退固定值（仅用于占位，不用于安全边界）
+		return strings.Repeat("0", n*2)
+	}
+	return hex.EncodeToString(buf)
 }

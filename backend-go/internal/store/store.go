@@ -310,6 +310,12 @@ func (s *Store) migrateColumns() error {
 		{"audit_logs", "after_val", "ALTER TABLE audit_logs ADD COLUMN after_val TEXT NOT NULL DEFAULT ''"},
 		// 组织归属：用户挂到组织（0=未分配/根组织）
 		{"users", "org_id", "ALTER TABLE users ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
+		// 在线支付：订单渠道与支付凭证
+		{"orders", "channel", "ALTER TABLE orders ADD COLUMN channel TEXT NOT NULL DEFAULT 'offline'"},
+		{"orders", "prepay_id", "ALTER TABLE orders ADD COLUMN prepay_id TEXT NOT NULL DEFAULT ''"},
+		{"orders", "qr_content", "ALTER TABLE orders ADD COLUMN qr_content TEXT NOT NULL DEFAULT ''"},
+		// 联系邮箱：找回密码验证码接收地址
+		{"users", "email", "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, c := range cols {
 		// 判断列是否存在

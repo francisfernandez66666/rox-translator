@@ -7,6 +7,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type User struct {
 	CreatedBy    int64  `json:"created_by"`    // 创建者用户 ID（0 表示系统创建）
 	LastLoginAt  string `json:"last_login_at"` // 最近登录时间（空表示从未登录）
 	OrgID        int64  `json:"org_id"`        // 所属组织 ID（0=未分配/根组织）
+	Email        string `json:"email"`         // 联系邮箱（找回密码验证码接收地址）
 	CreatedAt    string `json:"created_at"`    // 创建时间（RFC3339 字符串）
 	UpdatedAt    string `json:"updated_at"`    // 更新时间（RFC3339 字符串）
 }
@@ -43,7 +45,7 @@ const (
 )
 
 // userCols 用户表查询列清单（统一使用，避免遗漏新增列）
-const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, created_at, updated_at"
+const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at"
 
 // CreateUser 创建用户（初始状态为 active）。
 // 参数：tid=租户 ID，username=用户名，passHash=密码哈希，displayName=显示名，
@@ -69,7 +71,7 @@ func (s *Store) GetUser(id, tid int64) (*User, error) {
 		id, tid)
 	var u User
 	err := row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.CreatedAt, &u.UpdatedAt)
+		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -84,11 +86,33 @@ func (s *Store) GetUserByUsername(tid int64, username string) (*User, error) {
 		username, tid)
 	var u User
 	err := row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.CreatedAt, &u.UpdatedAt)
+		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &u, nil
+}
+
+// GetUserByEmail 按邮箱查询用户（跨租户，找回密码用）。
+// 参数：email=联系邮箱（小写归一化）；返回第一个匹配用户。
+func (s *Store) GetUserByEmail(email string) (*User, error) {
+	row := s.db.QueryRow(
+		"SELECT "+userCols+" FROM users WHERE lower(email)=? ORDER BY tenant_id LIMIT 1",
+		strings.ToLower(strings.TrimSpace(email)))
+	var u User
+	err := row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
+		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// SetUserEmail 设置用户联系邮箱（用于找回密码验证码接收）。
+// 参数：id=用户主键 ID，tid=租户 ID，email=新邮箱；返回错误。
+func (s *Store) SetUserEmail(id, tid int64, email string) error {
+	_, err := s.db.Exec("UPDATE users SET email=? WHERE id=? AND tenant_id=?", email, id, tid)
+	return err
 }
 
 // GetSuperAdminByUsername 按用户名查询超级管理员（平台级，不挂租户）。
@@ -99,7 +123,7 @@ func (s *Store) GetSuperAdminByUsername(username string) (*User, error) {
 		username)
 	var u User
 	err := row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.CreatedAt, &u.UpdatedAt)
+		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +144,7 @@ func (s *Store) GetUserByUsernameGlobal(username string) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &u)
@@ -141,7 +165,7 @@ func (s *Store) ListUsers(tid int64) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		u.PasswordHash = "" // 列表接口脱敏：清除密码哈希
@@ -199,7 +223,7 @@ func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		u.PasswordHash = "" // 列表接口脱敏：清除密码哈希

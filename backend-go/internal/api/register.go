@@ -45,6 +45,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Code     string `json:"code"`     // 租户编码（无邀请码时必填）
 		Name     string `json:"name"`     // 租户名称
 		Invite   string `json:"invite"`   // 邀请码（可选）
+		Email    string `json:"email"`    // 联系邮箱（找回密码验证码接收）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -140,6 +141,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "用户创建失败: " + err.Error()})
 		return
+	}
+	// 绑定联系邮箱（用于找回密码）
+	if req.Email != "" {
+		_ = s.Store.SetUserEmail(nu.ID, inviteTenantID, strings.TrimSpace(req.Email))
+		nu.Email = strings.TrimSpace(req.Email)
 	}
 	// 清空密码哈希后返回
 	nu.PasswordHash = ""

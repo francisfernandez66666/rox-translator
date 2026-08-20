@@ -11,16 +11,34 @@ package api
 //   - 所有写操作均写入审计日志（含变更前后值 diff）
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
+	"os"
+	"sync"
 	"time"
 
 	"translator/internal/auth"
+	"translator/internal/mail"
 	"translator/internal/store"
 )
 
 // ============ 认证 ============
+
+// 忘记密码验证码存储（内存实现；单实例部署足够）。
+// 键：用户 ID；值：验证码与过期时间。获取验证码时自动清理过期项。
+var resetCodes = struct {
+	sync.Mutex
+	m map[int64]resetCode // 用户 ID → 验证码信息
+}{m: map[int64]resetCode{}}
+
+// resetCode 验证码信息。
+type resetCode struct {
+	Code      string    // 6 位数字验证码
+	ExpiresAt time.Time // 过期时间（10 分钟）
+}
 
 // handleLogin 登录接口：校验用户名密码并签发 JWT，返回 token + 用户信息。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {username, password}）。
@@ -181,6 +199,131 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
+// ============ 忘记密码（验证码方式） ============
+
+// handleForgotPassword 忘记密码接口：按用户名或邮箱定位用户，生成验证码并发送。
+// 安全要点：无论用户是否存在统一返回 success=true（防用户名枚举）；
+// 验证码通过邮件发送（SMTP 未配置时打印日志，前端提示测试模式）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {username, email}）。
+// 返回: success=true 表示已发送验证码（或进入测试模式）。
+func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"` // 用户名（二选一）
+		Email    string `json:"email"`    // 联系邮箱（二选一）
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	// 定位用户：优先用户名（跨租户匹配），其次邮箱
+	var u *store.User
+	if req.Username != "" {
+		if matches, err := s.Store.GetUserByUsernameGlobal(req.Username); err == nil && len(matches) == 1 {
+			u = matches[0]
+		} else if err == nil && len(matches) > 1 {
+			// 多租户重名：需提供邮箱精确定位
+			u = nil
+		}
+	}
+	if u == nil && req.Email != "" {
+		if found, err := s.Store.GetUserByEmail(req.Email); err == nil {
+			u = found
+		}
+	}
+	// 用户不存在或未绑定邮箱：统一返回成功（防枚举），但无法发送
+	if u == nil || u.Email == "" {
+		writeJSON(w, 200, map[string]interface{}{"success": true, "message": "如果账号存在且绑定了邮箱，验证码已发送"})
+		return
+	}
+	// 校验账号状态：停用账号不发送
+	if u.Status != store.UserActive {
+		writeJSON(w, 200, map[string]interface{}{"success": true, "message": "如果账号存在且绑定了邮箱，验证码已发送"})
+		return
+	}
+	// 生成 6 位数字验证码
+	code, err := genResetCode()
+	if err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "生成验证码失败"})
+		return
+	}
+	// 存储验证码（覆盖旧码，10 分钟有效）
+	resetCodes.Lock()
+	resetCodes.m[u.ID] = resetCode{Code: code, ExpiresAt: time.Now().Add(10 * time.Minute)}
+	resetCodes.Unlock()
+	// 发送邮件（Noop 模式打印日志）
+	s.mailer().Send(&mail.Message{
+		To:      u.Email,
+		Subject: "【翻译助手】密码重置验证码",
+		Body:    mail.BuildVerificationBody(code),
+	})
+	s.Store.LogAudit(u.TenantID, u.ID, "forgot_password", "auth", "请求重置密码验证码")
+	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "验证码已发送到绑定邮箱"})
+}
+
+// handleResetPassword 重置密码接口：校验验证码后更新密码。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {username, code, new_password}）。
+// 返回: success=true 表示重置成功；验证码错误/过期返回 success=false。
+func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username    string `json:"username"`     // 用户名（用于定位验证码归属）
+		Code        string `json:"code"`         // 6 位验证码
+		NewPassword string `json:"new_password"` // 新密码
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" || req.Code == "" || req.NewPassword == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	// 定位用户
+	var u *store.User
+	if matches, err := s.Store.GetUserByUsernameGlobal(req.Username); err == nil && len(matches) == 1 {
+		u = matches[0]
+	}
+	if u == nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误或已过期"})
+		return
+	}
+	// 校验验证码（一次性：仅验证通过后作废，防止错误尝试耗尽验证码）
+	resetCodes.Lock()
+	rc, ok := resetCodes.m[u.ID]
+	resetCodes.Unlock()
+	if !ok || rc.Code != req.Code || time.Now().After(rc.ExpiresAt) {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误或已过期"})
+		return
+	}
+	// 验证通过：作废该验证码并更新密码
+	resetCodes.Lock()
+	delete(resetCodes.m, u.ID)
+	resetCodes.Unlock()
+	// 更新密码
+	if err := s.Store.ResetPassword(u.ID, u.TenantID, auth.PasswordHash(req.NewPassword)); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(u.TenantID, u.ID, "reset_password", "auth", "通过验证码重置密码")
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// genResetCode 生成 6 位数字验证码（密码学安全随机）。
+func genResetCode() (string, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%06d", n.Int64()), nil
+}
+
+// mailer 创建邮件发送器（按环境变量 MAIL_ENABLED / SMTP_* 惰性构建）。
+func (s *Server) mailer() mail.Sender {
+	return mail.NewSender(&mail.Config{
+		Enabled: os.Getenv("MAIL_ENABLED") == "1",
+		Host:    os.Getenv("SMTP_HOST"),
+		Port:    os.Getenv("SMTP_PORT"),
+		User:    os.Getenv("SMTP_USER"),
+		Pass:    os.Getenv("SMTP_PASS"),
+		From:    os.Getenv("SMTP_FROM"),
+	})
+}
+
 // ============ 用户管理（tenant_admin + super_admin） ============
 
 // handleAdminUsers 用户列表接口：列出当前生效租户下的全部用户。
@@ -217,6 +360,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		Role        string `json:"role"`         // 角色：user/tenant_admin/super_admin/approver/admin
 		TenantID    int64  `json:"tenant_id"`    // 归属租户（仅超管可指定，默认生效租户）
 		OrgID       int64  `json:"org_id"`       // 所属组织 ID（0=根组织/未分配）
+		Email       string `json:"email"`        // 联系邮箱（找回密码验证码接收）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" || req.Password == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -256,6 +400,11 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + err.Error()})
 		return
+	}
+	// 绑定联系邮箱（用于找回密码）
+	if req.Email != "" {
+		_ = s.Store.SetUserEmail(nu.ID, tid, req.Email)
+		nu.Email = req.Email
 	}
 	// 返回前清空密码哈希，避免泄露
 	nu.PasswordHash = ""

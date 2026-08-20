@@ -55,3 +55,20 @@ export async function billingInvoices(): Promise<AdminResp> {
 export async function billingInvoiceCreate(data: { order_id: number; title: string; tax_no: string }): Promise<AdminResp> {
   return request('/api/billing/invoices/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
+
+// ==================== 在线支付 ====================
+
+// 发起在线支付下单：为当前租户创建充值订单并返回收款二维码
+export async function payCreate(data: { tokens: number; channel: string }): Promise<AdminResp> {
+  return request('/api/pay/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
+// 查询订单支付状态（收银台轮询）
+export async function payStatus(orderId: number): Promise<AdminResp> {
+  return request(`/api/pay/status?order_id=${orderId}`, { headers: authHeaders() })
+}
+
+// 模拟支付到账（仅 mock 模式测试用）
+export async function paySimulate(orderId: number): Promise<AdminResp> {
+  return request('/api/pay/simulate', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ order_id: orderId }) })
+}

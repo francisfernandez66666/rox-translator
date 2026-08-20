@@ -66,7 +66,10 @@ type Order struct {
 	AmountTokens int64   `json:"amount_tokens"` // 充值 token 数
 	AmountMoney  float64 `json:"amount_money"`  // 充值金额（货币）
 	Status       string  `json:"status"`        // 订单状态：pending / paid / refunded / cancelled
-	PayMethod    string  `json:"pay_method"`    // 支付方式（本系统为 offline 线下转账）
+	PayMethod    string  `json:"pay_method"`    // 支付方式（offline 线下转账 / online 在线支付）
+	Channel      string  `json:"channel"`       // 在线支付渠道（mock / wechat / alipay）
+	PrepayID     string  `json:"prepay_id"`     // 渠道预支付 ID（回调对账）
+	QRContent    string  `json:"qr_content"`    // 收款二维码内容（在线支付）
 	CreatedBy    int64   `json:"created_by"`    // 创建订单的用户 ID
 	CreatedAt    string  `json:"created_at"`    // 创建时间（RFC3339 字符串）
 	PaidAt       string  `json:"paid_at"`       // 支付确认时间（空表示未支付）
@@ -318,23 +321,46 @@ func (s *Store) DailyUsage(tid int64) (int64, error) {
 // 参数：tid=租户 ID，tokens=充值 token 数，money=充值金额，createdBy=创建者 ID。
 // 返回：新订单对象（含生成的订单号）。
 func (s *Store) CreateOrder(tid int64, tokens int64, money float64, createdBy int64) (*Order, error) {
+	return s.CreateOrderChannel(tid, tokens, money, createdBy, "offline", "")
+}
+
+// CreateOrderChannel 创建充值订单并指定支付渠道。
+// 参数：tid=租户 ID，tokens=充值 token 数，money=充值金额，createdBy=创建者 ID，
+// channel=支付渠道（offline / mock / wechat / alipay），qrContent=渠道二维码内容。
+// 返回：新订单对象。
+func (s *Store) CreateOrderChannel(tid int64, tokens int64, money float64, createdBy int64, channel, qrContent string) (*Order, error) {
 	orderNo := "RO" + time.Now().Format("20060102150405") + randSuffix(4) // 生成唯一订单号
-	res, err := s.db.Exec(
-		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, created_by, created_at) VALUES (?,?,?,?, 'pending', 'offline', ?, ?)",
-		tid, orderNo, tokens, money, createdBy, time.Now().Format(time.RFC3339))
+	payMethod := "offline"
+	if channel != "offline" {
+		payMethod = "online"
+	}
+	_, err := s.db.Exec(
+		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, qr_content, created_by, created_at) VALUES (?,?,?,?, 'pending', ?, ?, ?, ?, ?)",
+		tid, orderNo, tokens, money, payMethod, channel, qrContent, createdBy, time.Now().Format(time.RFC3339))
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
-	return s.GetOrder(id, tid)
+	return s.GetOrderByOrderNo(orderNo, tid)
+}
+
+// GetOrderByOrderNo 按订单号查询订单（回调对账用，租户隔离校验）。
+// 参数：orderNo=订单号，tid=租户 ID；返回订单对象。
+func (s *Store) GetOrderByOrderNo(orderNo string, tid int64) (*Order, error) {
+	var o Order
+	err := s.db.QueryRow("SELECT id, tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, prepay_id, qr_content, created_by, created_at, COALESCE(paid_at,'') FROM orders WHERE order_no=? AND tenant_id=?", orderNo, tid).
+		Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.CreatedBy, &o.CreatedAt, &o.PaidAt)
+	if err != nil {
+		return nil, err
+	}
+	return &o, nil
 }
 
 // GetOrder 按 ID+租户查询订单（租户隔离校验）。
 // 参数：id=订单主键 ID，tid=租户 ID；返回订单对象。
 func (s *Store) GetOrder(id, tid int64) (*Order, error) {
 	var o Order
-	err := s.db.QueryRow("SELECT id, tenant_id, order_no, amount_tokens, amount_money, status, pay_method, created_by, created_at, COALESCE(paid_at,'') FROM orders WHERE id=? AND tenant_id=?", id, tid).
-		Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.CreatedBy, &o.CreatedAt, &o.PaidAt)
+	err := s.db.QueryRow("SELECT id, tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, prepay_id, qr_content, created_by, created_at, COALESCE(paid_at,'') FROM orders WHERE id=? AND tenant_id=?", id, tid).
+		Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.CreatedBy, &o.CreatedAt, &o.PaidAt)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +370,7 @@ func (s *Store) GetOrder(id, tid int64) (*Order, error) {
 // ListOrders 列出租户全部订单（按 ID 倒序）。
 // 参数：tid=租户 ID；返回订单列表。
 func (s *Store) ListOrders(tid int64) ([]*Order, error) {
-	rows, err := s.db.Query("SELECT id, tenant_id, order_no, amount_tokens, amount_money, status, pay_method, created_by, created_at, COALESCE(paid_at,'') FROM orders WHERE tenant_id=? ORDER BY id DESC", tid)
+	rows, err := s.db.Query("SELECT id, tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, prepay_id, qr_content, created_by, created_at, COALESCE(paid_at,'') FROM orders WHERE tenant_id=? ORDER BY id DESC", tid)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +378,7 @@ func (s *Store) ListOrders(tid int64) ([]*Order, error) {
 	var out []*Order
 	for rows.Next() {
 		var o Order
-		if err := rows.Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.CreatedBy, &o.CreatedAt, &o.PaidAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.CreatedBy, &o.CreatedAt, &o.PaidAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &o)
@@ -382,6 +408,38 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 	}
 	// 到账：给租户充值等额 token
 	return s.Charge(tid, tokens)
+}
+
+// FindOrderByOrderNo 按订单号查找订单（跨租户，支付回调对账用）。
+// 参数：orderNo=渠道回调的订单号；返回订单对象。
+func (s *Store) FindOrderByOrderNo(orderNo string) (*Order, error) {
+	var o Order
+	err := s.db.QueryRow("SELECT id, tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, prepay_id, qr_content, created_by, created_at, COALESCE(paid_at,'') FROM orders WHERE order_no=? LIMIT 1", orderNo).
+		Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.CreatedBy, &o.CreatedAt, &o.PaidAt)
+	if err != nil {
+		return nil, err
+	}
+	return &o, nil
+}
+
+// UpdateOrderPrepay 更新订单支付凭证（prepay_id / 二维码），供下单后回填。
+// 参数：orderNo=订单号，prepayID=渠道预支付 ID，qrContent=二维码内容。
+func (s *Store) UpdateOrderPrepay(orderNo, prepayID, qrContent string) error {
+	_, err := s.db.Exec("UPDATE orders SET prepay_id=?, qr_content=? WHERE order_no=?", prepayID, qrContent, orderNo)
+	return err
+}
+
+// MarkOrderPaidByOrderNo 支付回调确认到账：按订单号置 paid 并充值（幂等）。
+// 参数：orderNo=订单号；返回错误。已支付订单重复回调不重复充值。
+func (s *Store) MarkOrderPaidByOrderNo(orderNo string) error {
+	o, err := s.FindOrderByOrderNo(orderNo)
+	if err != nil {
+		return err
+	}
+	if o.Status == "paid" {
+		return nil // 幂等：已支付直接返回
+	}
+	return s.MarkOrderPaid(o.ID, o.TenantID)
 }
 
 // RefundOrder 退款：订单置 refunded 并从租户余额扣除等额 token。
