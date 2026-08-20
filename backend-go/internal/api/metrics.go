@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -21,6 +22,8 @@ import (
 
 // Metrics 进程内指标计数器（原子递增，/metrics 时快照输出）。
 type Metrics struct {
+	// mu 保护以下三个计数映射（惰性初始化 + 遍历需加锁，防 concurrent map writes 崩溃）
+	mu sync.RWMutex
 	// HTTP 请求计数：path → 计数（按请求路径标签聚合）
 	httpReqs map[string]*int64
 	// 翻译成功/失败计数：kind(text/file/openapi/ticket) → count
@@ -44,17 +47,19 @@ func newMetrics() *Metrics {
 }
 
 // countHTTP 记录一次 HTTP 请求（按路径标签聚合计数）。
-// 参数 path: 请求路径；无返回。并发安全（原子递增）。
+// 参数 path: 请求路径；无返回。并发安全（写锁 + 原子递增）。
 func (m *Metrics) countHTTP(path string) {
 	if m == nil {
 		return
 	}
-	// 惰性初始化该路径的计数器（先取后增，避免热点锁）
+	// 惰性初始化该路径的计数器（加写锁，避免 concurrent map writes 崩溃）
+	m.mu.Lock()
 	v, ok := m.httpReqs[path]
 	if !ok {
 		v = new(int64)
 		m.httpReqs[path] = v
 	}
+	m.mu.Unlock()
 	atomic.AddInt64(v, 1)
 }
 
@@ -64,6 +69,8 @@ func (m *Metrics) countTranslate(kind string, ok bool) {
 	if m == nil {
 		return
 	}
+	// 加写锁防 map 并发写；计数仍用原子递增
+	m.mu.Lock()
 	var v *int64
 	var m2 map[string]*int64
 	// 按结果选择成功或失败计数映射
@@ -77,6 +84,7 @@ func (m *Metrics) countTranslate(kind string, ok bool) {
 		v = new(int64)
 		m2[kind] = v
 	}
+	m.mu.Unlock()
 	atomic.AddInt64(v, 1)
 }
 
@@ -116,6 +124,7 @@ func (s *Server) metricsText() string {
 
 	// HTTP 请求：按路径排序输出，保证指标文本稳定
 	sb.WriteString("# HELP translator_http_requests_total HTTP 请求总数\n# TYPE translator_http_requests_total counter\n")
+	m.mu.RLock()
 	paths := make([]string, 0, len(m.httpReqs))
 	for p := range m.httpReqs {
 		paths = append(paths, p)
@@ -127,6 +136,7 @@ func (s *Server) metricsText() string {
 
 	// 翻译计数：合并成功/失败 key 集合，按 kind + result 输出
 	sb.WriteString("# HELP translator_translations_total 翻译调用总数\n# TYPE translator_translations_total counter\n")
+	m.mu.RLock()
 	kinds := map[string]bool{}
 	for k := range m.translationsOK {
 		kinds[k] = true
@@ -151,6 +161,7 @@ func (s *Server) metricsText() string {
 		sb.WriteString(fmt.Sprintf("translator_translations_total{kind=%q,result=\"ok\"} %d\n", k, okN))
 		sb.WriteString(fmt.Sprintf("translator_translations_total{kind=%q,result=\"fail\"} %d\n", k, failN))
 	}
+	m.mu.RUnlock()
 
 	// 计量 token：累计计量量（成本口径）
 	sb.WriteString("# HELP translator_usage_tokens_total 累计计量 token（成本口径）\n# TYPE translator_usage_tokens_total counter\n")
