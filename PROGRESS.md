@@ -29,6 +29,17 @@
 | `ce2961d` | 组织层级+租户改名+P0 安全+串号修复：orgs 树表+用户 org_id、组织 CRUD/下钻 API、前端「租户」→「组织」+组织结构面板+切换器下钻、注册返回完整租户信息、登录暴力破解限流、CORS 白名单+请求体限制、登出重置聊天 store |
 | `a596df4` | 文档：PROGRESS 更新提交历史与关键决策（组织层级/暴力破解限流已上线，移除已完成待办） |
 | `6555d5b` | 注释补全：ratelimit_test.go 文件头职责说明、Users.vue 账户管理各函数中文注释 |
+| `60ea8c9` | 阶段一：在线支付（pay 三渠道适配器+下单/状态/模拟/通知 API+Billing 收银台）+ 找回密码（邮件验证码）+ 密钥安全加固（env 全覆盖+随机占位） |
+| `73b3160` | 阶段一：组织管理「开通用户」：在选中组织下创建账号（支持组织归属/角色/重置密码/启停用） |
+| `72d06ff` | 阶段二：上传安全加固：统一扩展名白名单+大小上限 |
+| `7ca48dc` | 阶段二：数据库定时自动备份（VACUUM INTO 在线快照+旧备份清理） |
+| `e6c611a` | 阶段二：优雅停机（signal.Notify+server.Shutdown）+ 结构化访问日志（每请求 JSON） |
+| `4d66e8b` | 阶段二：前端健康检查超时（10s）+ 离线重试按钮 |
+| `0943311` | 阶段二：OOM 内存监控（运行时采样+系统压力阈值告警+可疑进程 TOP5） |
+| `a9f7492` | 阶段三：Webhook 回调（webhooks 表+管理 API+HMAC 签名+重试指数退避+翻译完成事件投递+UI 面板） |
+| `dd8e597` | 阶段三：补充测试（支付网关+上传校验单测，修复 parseAmount/parseUpload 两处真实缺陷） |
+| `81fad7e` | 阶段四：商业物料+定价页（/pricing + /docs/terms、sla、privacy + /api/pricing）+ i18n 中英（登录/后台导航/工作台顶栏） |
+| `31058cc` | 阶段四：关键告警邮件通知（余额耗尽/模型熔断 → alert_email 收件人） |
 
 ## 已完成 · 全部阶段 ✅
 
@@ -75,6 +86,23 @@
 - [x] 租户隔离验证：租户 A 无法访问租户 B 的数据
 - [x] 生产健康验证：0 panic，错误率 0%，翻译/用量/metrics 正常
 
+### 阶段 10：商业化补齐（REFACTOR_PLAN 六阶段，全部完成）
+- [x] 阶段一·在线支付：`internal/payment/` 三渠道适配器（mock/wechat/alipay 骨架）+ `/api/pay/create|status|simulate|notify` + `Billing.vue` 收银台（QR 码/订单历史/对账）；`pay_mode` 配置切换
+- [x] 阶段一·找回密码：`internal/mail/`（Sender 接口 + Noop/SMTP 实现）+ `/api/auth/forgot|reset` + 登录页两步面板；验证码 10 分钟一次性
+- [x] 阶段一·密钥安全加固：config 去硬编码，`SILICONFLOW_API_KEY`/`ONLINE_API_KEY`/`ADMIN_TOKEN`/`ADMIN_INIT_PASSWORD`/`JWT_SECRET` env 全覆盖 + 随机占位 + 告警日志
+- [x] 阶段一·组织开通用户：Org.vue 开通用户表单（org_id 归属/角色/初始密码/重置密码/启停用）
+- [x] 阶段二·上传限制：`parseUpload` 扩展名白名单 + 50MB 上限（MaxBytesReader 硬性拦截）
+- [x] 阶段二·自动备份：`Store.Backup`（SQLite `VACUUM INTO` 在线快照）+ `PruneBackups` 保留 N 份；启动即备份 + 每 24h（`backup_interval_hours`，0=关）
+- [x] 阶段二·优雅停机+结构化日志：signal.Notify + `http.Server.Shutdown`（10s 超时）+ `withAccessLog` 每请求 JSON
+- [x] 阶段二·健康检查：前端 10s 超时 + 离线重试按钮
+- [x] 阶段二·OOM 监控：`startMemoryMonitor` 运行时采样（Heap/goroutine/峰值）+ `/proc/meminfo` 压力阈值告警 + TOP5 进程（`mem_monitor_interval_sec`/`mem_pressure_pct`）
+- [x] 阶段三·Webhook：webhooks 表 + 管理 API + HMAC-SHA256 签名 + 异步投递重试 3 次指数退避 + 翻译完成事件（text/file 四路径）+ 前端面板
+- [x] 阶段三·补充测试：payment 9 单测 + upload 5 单测；修复 parseAmount（元/分启发式）与 parseUpload（大文件未硬性拦截）两处真实缺陷
+- [x] 阶段四·商业物料：/pricing 定价页 + /docs/terms、/docs/sla、/docs/privacy（中英双语内嵌页）+ /api/pricing 公开单价 API
+- [x] 阶段四·i18n：`frontend/src/i18n.ts` 中英双字典（登录/后台导航/工作台顶栏）+ 语言切换按钮
+- [x] 阶段四·邮件通知：余额耗尽/模型熔断 critical 告警 → `alert_email` 收件人（Noop/SMTP）
+- [x] 阶段五·全量回归：后端 4 包单测 + 前端 build + 21 项端到端冒烟（公开页/注册/登录/SSE/计费/Webhook/鉴权/优雅停机）全通过
+
 ## 关键决策记录
 
 | 日期 | 决策 | 说明 |
@@ -94,15 +122,19 @@
 | 2026-08-20 | /metrics 无鉴权 | 仅聚合指标，不涉租户数据 |
 | 2026-08-20 | 组织=管理结构展示层 | 根组织=租户本身（parent_id=0 不建行），子组织/部门树展示与归集；数据隔离仍以租户为边界 |
 | 2026-08-20 | 暴力破解限流 | 同一 IP 5 次失败/300s 窗口 → 冷却 300s（HTTP 429）；登录成功清零 |
+| 2026-08-20 | 支付渠道 | `pay_mode` 配置（默认 mock）；`/api/pay/simulate` 仅 mock 可用；真实渠道需商户号 |
+| 2026-08-20 | 备份策略 | `VACUUM INTO` 在线快照，启动即备 + 每 24h；保留最近 7 份（可配） |
+| 2026-08-20 | 告警通知 | 余额耗尽/模型熔断 → 邮件（alert_email 收件人）+ 全部写 alerts 表 |
+| 2026-08-20 | Webhook 安全 | HMAC-SHA256 签名（X-Signature 头）+ 异步投递重试 3 次指数退避 |
 
 ## 待办（剩余，见 COMMERCIAL_TODO.md）
 
-- [ ] 二期在线支付（支付宝/微信）—— 当前 MVP 线下转账 + admin 充值
-- [ ] 翻译完成 webhook 回调（客户 TMS/CI 集成）
-- [ ] 优雅停机（signal.Notify + server.Shutdown）
-- [ ] i18n 界面中英切换
-- [ ] 商业物料（LICENSE/SLA/定价卡/DPA）
-- [ ] 生产管理员/超管密钥轮换与审计
+- [x] 二期在线支付（支付宝/微信）—— 已接入适配器骨架 + mock 完整流程；真实商户号接入后启用
+- [x] 翻译完成 webhook 回调（客户 TMS/CI 集成）—— 已上线，支持 HMAC 签名校验
+- [x] 优雅停机（signal.Notify + server.Shutdown）—— 已上线
+- [x] i18n 界面中英切换 —— 已上线（登录/后台导航/工作台顶栏；翻译工作台内部文案次轮接入）
+- [x] 商业物料（LICENSE/SLA/定价卡/DPA）—— 已上线（/docs/terms、sla、privacy + /pricing）
+- [ ] 生产管理员/超管密钥轮换与审计 —— 需在部署时设置随机 JWT_SECRET/ADMIN_TOKEN 并轮换
 
 ## 问题与风险记录
 
