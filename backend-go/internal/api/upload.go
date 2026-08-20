@@ -45,6 +45,9 @@ func validateUploadExt(filename string, whitelist map[string]bool) bool {
 // 参数 r: HTTP 请求；maxBytes: 上传大小上限；whitelist: 扩展名白名单。
 // 返回: 解析成功返回 nil；失败返回错误（已含中文提示）。
 func parseUpload(r *http.Request, maxBytes int64, whitelist map[string]bool) error {
+	// 用 MaxBytesReader 硬性限制请求体大小（ParseMultipartForm 超限部分会落临时文件，
+	// 并不会报错，因此必须用 MaxBytesReader 拦截超大上传，防止撑爆磁盘/内存）
+	r.Body = http.MaxBytesReader(nil, r.Body, maxBytes)
 	if err := r.ParseMultipartForm(maxBytes); err != nil {
 		return &apiErr{"文件过大（超过上限）"}
 	}

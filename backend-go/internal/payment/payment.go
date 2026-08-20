@@ -254,13 +254,14 @@ func extractJSONStr(body, key string) string {
 	return ""
 }
 
-// parseAmount 解析金额：优先取「分」整数值；无则尝试 JSON/表单中的数值字段。
+// parseAmount 解析金额（统一为「分」）：
+//   - 表单整数值：整数视为分，小数（如 1.00 元）按元换算为分
+//   - JSON 数值：同上，整数分 / 小数元
+//
+// 该启发式与各渠道约定一致（mock/wechat 报分为整数；alipay total_amount 报元为小数）。
 func parseAmount(fieldVal, body string) int64 {
 	if fieldVal != "" {
-		var amt float64
-		if _, err := fmt.Sscanf(fieldVal, "%f", &amt); err == nil {
-			return int64(amt) // 单位分（整数）或元（小数时按元换算）
-		}
+		return toFen(fieldVal)
 	}
 	v := extractJSONNum(body, "amount")
 	if v == "" {
@@ -269,11 +270,19 @@ func parseAmount(fieldVal, body string) int64 {
 	if v == "" {
 		return 0
 	}
+	return toFen(v)
+}
+
+// toFen 把金额字符串统一换算为「分」：含小数点按元×100，否则视为整数分。
+func toFen(s string) int64 {
 	var f float64
-	if _, err := fmt.Sscanf(v, "%f", &f); err == nil {
-		return int64(f * 100) // 元 → 分
+	if _, err := fmt.Sscanf(s, "%f", &f); err != nil {
+		return 0
 	}
-	return 0
+	if strings.Contains(s, ".") {
+		return int64(f * 100) // 小数 → 元 → 分
+	}
+	return int64(f) // 整数 → 分
 }
 
 // extractJSONNum 从 JSON 报文提取数值字段（支持字符串或纯数值两种写法）。
