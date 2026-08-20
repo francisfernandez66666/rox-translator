@@ -229,7 +229,7 @@ func (s *Server) routesOpenAPI() {
 // Handler 返回完整的 http.Handler（依次包裹指标/租户/CORS 中间件）。
 // 返回: 可交给 http.ListenAndServe 使用的 http.Handler。
 func (s *Server) Handler() http.Handler {
-	return s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.mux))))
+	return s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.withAccessLog(s.mux)))))
 }
 
 // maxJSONBody 非 multipart 请求体上限（JSON 接口防超大请求；文件上传走 multipart 不受限）
