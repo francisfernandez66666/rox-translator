@@ -1,6 +1,12 @@
 // Package openapi 提供租户开放 API：API Key 鉴权、调用统计、开放接口能力。
 package openapi
 
+// ============ 本文件职责中文说明 ============
+// 开放 API 鉴权：为外部集成方提供基于 API Key（Authorization: Bearer rk_xxx）的
+// 鉴权中间件（校验哈希、检查状态为 active、更新最后调用时间并注入 context），
+// 以及 API Key 权限校验（RequirePerm，支持 all 通配或精确权限名）。
+// ========================================
+
 import (
 	"context"
 	"errors"
@@ -9,12 +15,12 @@ import (
 	"translator/internal/store"
 )
 
-// ctxKey 类型
+// ctxKey context 存取 API Key 信息的键类型
 type ctxKey struct{}
 
 // APIKeyCtx 注入 context 的 API Key 信息
 type APIKeyCtx struct {
-	APIKey *store.APIKey
+	APIKey *store.APIKey // 当前请求对应的 API Key 记录
 }
 
 // FromContext 从 context 取 API Key 信息

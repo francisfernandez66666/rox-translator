@@ -1,6 +1,12 @@
 // Package billing 提供租户配额限流（QPS / 并发 / 每日 token / 余额停服）与用量计量。
 package billing
 
+// ============ 本文件职责中文说明 ============
+// 计费与配额：租户维度的内存实时限流（1 秒 QPS 滑动窗口、并发名额计数），
+// 强制计费开关（billing_enforced=1 时扣余额、余额不足停服，否则仅 usage_ledger 留痕）、
+// 用量计量（Meter，含供应商/模型维度的成本核算）、每日 token 上限与余额充足性检查。
+// ========================================
+
 import (
 	"sync"
 	"time"
@@ -10,19 +16,21 @@ import (
 
 // Quota 租户配额（内存实时窗口）
 type Quota struct {
-	mu sync.Mutex
+	mu sync.Mutex // 保护配额字段的互斥锁
 
 	// QPS 滑动窗口（1 秒）
-	qpsWindow   []time.Time
-	qpsMax      int
+	qpsWindow []time.Time // 近 1 秒内的时间戳窗口（用于 QPS 计数）
+	qpsMax    int         // QPS 上限（默认 10）
 	// 并发计数
-	concurrent  int
-	concurrentMax int
+	concurrent    int // 当前并发调用数
+	concurrentMax int // 并发上限（默认 3）
 }
 
+// quotaByTenant 租户 ID → 配额对象（内存缓存）
 var quotaByTenant = map[int64]*Quota{}
-var quotaMu sync.Mutex
+var quotaMu sync.Mutex // 保护 quotaByTenant 的互斥锁
 
+// getQuota 获取指定租户的配额对象（不存在则用默认上限创建）
 func getQuota(tid int64) *Quota {
 	quotaMu.Lock()
 	defer quotaMu.Unlock()
@@ -121,7 +129,7 @@ func (s *Service) TryQPS(tid int64) bool {
 
 // Service 计费服务
 type Service struct {
-	Store *store.Store
+	Store *store.Store // 持久化存储（读余额/记录用量/配置开关）
 }
 
 // NewService 创建计费服务
@@ -184,6 +192,6 @@ func (s *Service) CheckBalance(tid int64) error {
 	return nil
 }
 
-type quotaErr struct{ s string }
+type quotaErr struct{ s string } // 配额类错误（含今日用量超限/余额不足）
 
 func (e *quotaErr) Error() string { return e.s }

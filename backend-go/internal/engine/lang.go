@@ -1,3 +1,8 @@
+// ============ 本文件职责中文说明 ============
+// 语言解析与指令剥离：维护语言代码 → 中文/英文别名的映射（KB 语言 + 其他语言两类），
+// 从用户自然语言输入中识别目标语言（ParseTargetLangs / StripLangInstruction /
+// LangCodeFromName），并把"翻译成英语：xxx"这类指令从正文中剥离干净。
+// ========================================
 package engine
 
 import (
@@ -22,28 +27,28 @@ var langAliases = map[string][]string{
 
 // 其他语言别名（前端子选单或 prompt 解析用）
 var otherLangAliases = map[string][]string{
-	"ja": {"ja", "japanese", "日语", "日文", "日本"},
-	"ko": {"ko", "korean", "韩语", "韩文", "韩国"},
-	"th": {"th", "thai", "泰语", "泰文", "泰国"},
-	"vi": {"vi", "vietnamese", "越南语", "越南"},
-	"ms": {"ms", "malay", "马来语", "马来"},
-	"id": {"id", "indonesian", "印尼语", "印尼"},
-	"tr": {"tr", "turkish", "土耳其语", "土耳其"},
-	"it": {"it", "italian", "意大利语", "意大利"},
-	"pl": {"pl", "polish", "波兰语", "波兰"},
-	"sv": {"sv", "swedish", "瑞典语", "瑞典"},
-	"hi": {"hi", "hindi", "印地语", "印地"},
-	"fa": {"fa", "persian", "farsi", "波斯语", "波斯"},
-	"he": {"he", "hebrew", "希伯来语"},
-	"el": {"el", "greek", "希腊语", "希腊"},
-	"uk": {"uk", "ukrainian", "乌克兰语"},
-	"mn": {"mn", "mongolian", "蒙古语", "蒙古"},
-	"my": {"my", "burmese", "缅甸语"},
-	"km": {"km", "khmer", "柬埔寨语"},
-	"lo": {"lo", "lao", "老挝语"},
-	"tl": {"tl", "filipino", "tagalog", "菲律宾语"},
-	"bo": {"bo", "tibetan", "藏语"},
-	"ug": {"ug", "uyghur", "维吾尔语"},
+	"ja":  {"ja", "japanese", "日语", "日文", "日本"},
+	"ko":  {"ko", "korean", "韩语", "韩文", "韩国"},
+	"th":  {"th", "thai", "泰语", "泰文", "泰国"},
+	"vi":  {"vi", "vietnamese", "越南语", "越南"},
+	"ms":  {"ms", "malay", "马来语", "马来"},
+	"id":  {"id", "indonesian", "印尼语", "印尼"},
+	"tr":  {"tr", "turkish", "土耳其语", "土耳其"},
+	"it":  {"it", "italian", "意大利语", "意大利"},
+	"pl":  {"pl", "polish", "波兰语", "波兰"},
+	"sv":  {"sv", "swedish", "瑞典语", "瑞典"},
+	"hi":  {"hi", "hindi", "印地语", "印地"},
+	"fa":  {"fa", "persian", "farsi", "波斯语", "波斯"},
+	"he":  {"he", "hebrew", "希伯来语"},
+	"el":  {"el", "greek", "希腊语", "希腊"},
+	"uk":  {"uk", "ukrainian", "乌克兰语"},
+	"mn":  {"mn", "mongolian", "蒙古语", "蒙古"},
+	"my":  {"my", "burmese", "缅甸语"},
+	"km":  {"km", "khmer", "柬埔寨语"},
+	"lo":  {"lo", "lao", "老挝语"},
+	"tl":  {"tl", "filipino", "tagalog", "菲律宾语"},
+	"bo":  {"bo", "tibetan", "藏语"},
+	"ug":  {"ug", "uyghur", "维吾尔语"},
 	"yue": {"yue", "cantonese", "粤语"},
 }
 
@@ -97,6 +102,7 @@ func ParseTargetLangs(userInput string) []string {
 	return found
 }
 
+// isASCIIWord 判断字符串是否仅由 ASCII 字母/数字组成（用于区分词边界匹配与 contains 匹配）
 func isASCIIWord(s string) bool {
 	for _, c := range s {
 		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {

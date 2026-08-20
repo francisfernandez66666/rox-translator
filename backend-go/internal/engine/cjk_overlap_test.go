@@ -43,8 +43,8 @@ func TestBuildExamplesPrompt(t *testing.T) {
 	rows := []*kb.Row{
 		{Zh: "蓝牙钥匙", Langs: map[string]string{"de": "Bluetooth-Schlüssel", "en": "Bluetooth key"}},
 		{Zh: "激活蓝牙钥匙", Langs: map[string]string{"de": "Bluetooth-Schlüssel aktivieren"}},
-		{Zh: "蓝牙钥匙", Langs: map[string]string{"de": "重复行"}}, // 应去重
-		{Zh: "无译文行", Langs: map[string]string{"en": "no de"}}, // de 缺失，应跳过
+		{Zh: "蓝牙钥匙", Langs: map[string]string{"de": "重复行"}},                                       // 应去重
+		{Zh: "无译文行", Langs: map[string]string{"en": "no de"}},                                     // de 缺失，应跳过
 		{Zh: "4.点击车控页面“蓝牙钥匙”功能入口,按照指引激活蓝牙钥匙,激活后手机即是车钥匙。", Langs: map[string]string{"de": "长流程句"}}, // 超 30 字，应跳过
 	}
 	out := buildExamplesPrompt(zh, "de", rows)

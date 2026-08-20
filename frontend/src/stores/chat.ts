@@ -1,24 +1,44 @@
+// ============================================================================
+// stores/chat.ts — 聊天全局状态 Store（Pinia）
+// 职责：管理消息列表、加载状态、目标语言、后端健康状态、翻译模型等
+// 提供：文本翻译 / 文件翻译 / 示例消息 / 停止生成 / 清除消息等操作
+// ============================================================================
+
+// Pinia 状态定义
 import { defineStore } from 'pinia'
+// Vue 响应式
 import { ref } from 'vue'
+// API：流式聊天 / 流式文件翻译 / 健康检查
 import { chatStream, translateFileStream, healthCheck } from '@/api'
+// 类型定义
 import type { ChatMessage, ProgressEvent } from '@/types'
 
+// 生成唯一消息 ID（时间戳 + 随机串）
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
 }
 
+// 聊天 Store 定义（组合式写法）
 export const useChatStore = defineStore('chat', () => {
+  // 消息列表（用户 + AI 对话记录）
   const messages = ref<ChatMessage[]>([])
+  // 是否正在生成（发送中）
   const isLoading = ref(false)
+  // 已选目标语言列表
   const selectedLangs = ref<string[]>(['en'])
+  // 后端是否在线
   const isBackendOnline = ref(false)
+  // 后端是否仍在启动加载中
   const isBackendLoading = ref(true)
+  // 全局错误信息
   const errorMessage = ref('')
+  // 中止控制器（用于取消进行中的 SSE 请求）
   let abortController: AbortController | null = null
 
-  /** 选中的翻译模型 */
+  /** 选中的翻译模型（持久化到 localStorage） */
   const selectedModel = ref(localStorage.getItem('translateModel') || 'tencent/Hunyuan-MT-7B')
 
+  // 停止生成：中止请求并清理进度
   function stopGeneration() {
     if (abortController) {
       abortController.abort()
@@ -34,17 +54,20 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // 更新指定消息的翻译进度
   function updateProgress(messageId: string, step: string, percent: number) {
     const msg = messages.value.find(m => m.id === messageId)
     if (msg) msg.progress = { step, percent }
   }
 
+  // 发送文本翻译消息（SSE 流式接收进度与结果）
   async function sendMessage(text: string, options: Record<string, unknown> = {}) {
     if (!text.trim() || isLoading.value) return
     errorMessage.value = ''
 
     abortController = new AbortController()
 
+    // 生成用户消息并加入列表
     const userMsg: ChatMessage = {
       id: generateId(),
       role: 'user',
@@ -53,6 +76,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     messages.value.push(userMsg)
 
+    // 生成占位的 AI 消息（带初始进度）
     const assistantId = generateId()
     const assistantMsg: ChatMessage = {
       id: assistantId,
@@ -66,11 +90,13 @@ export const useChatStore = defineStore('chat', () => {
 
     isLoading.value = true
     try {
+      // 调用流式聊天接口，携带当前所选模型
       const allOptions = { ...options, model: selectedModel.value }
       const response = await chatStream(text, 'translation', allOptions, (event: ProgressEvent) => {
         updateProgress(assistantId, event.step || '翻译中...', event.percent || 0)
       }, abortController.signal)
 
+      // 写入最终结果到 AI 消息
       const msg = messages.value.find(m => m.id === assistantId)
       if (msg) {
         msg.content = response.reply
@@ -80,7 +106,9 @@ export const useChatStore = defineStore('chat', () => {
         msg.progress = undefined
       }
     } catch (error) {
+      // 主动中止：静默返回
       if (error instanceof DOMException && error.name === 'AbortError') return
+      // 其余错误：写入错误消息
       const errMsg = error instanceof Error ? error.message : '未知错误'
       errorMessage.value = errMsg
       const msg = messages.value.find(m => m.id === assistantId)
@@ -95,12 +123,14 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // 发送文件翻译消息（流式上传 + 进度）
   async function sendFile(file: File, targetLangs: string[] = [], userMessage: string = "") {
     if (isLoading.value) return
     errorMessage.value = ''
 
     abortController = new AbortController()
 
+    // 生成"上传文件"用户消息
     const userMsg: ChatMessage = {
       id: generateId(),
       role: 'user',
@@ -109,6 +139,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     messages.value.push(userMsg)
 
+    // 生成占位的 AI 消息（带初始进度）
     const assistantId = generateId()
     const assistantMsg: ChatMessage = {
       id: assistantId,
@@ -122,6 +153,7 @@ export const useChatStore = defineStore('chat', () => {
 
     isLoading.value = true
     try {
+      // 调用流式文件翻译接口
       const response = await translateFileStream(
         file,
         targetLangs.length > 0 ? targetLangs : undefined,
@@ -133,6 +165,7 @@ export const useChatStore = defineStore('chat', () => {
         userMessage,
       )
 
+      // 写入最终结果到 AI 消息
       const msg = messages.value.find(m => m.id === assistantId)
       if (msg) {
         msg.content = response.reply
@@ -142,7 +175,9 @@ export const useChatStore = defineStore('chat', () => {
         msg.progress = undefined
       }
     } catch (error) {
+      // 主动中止：静默返回
       if (error instanceof DOMException && error.name === 'AbortError') return
+      // 其余错误：写入错误消息
       const errMsg = error instanceof Error ? error.message : '未知错误'
       errorMessage.value = errMsg
       const msg = messages.value.find(m => m.id === assistantId)
@@ -157,10 +192,12 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // 发送示例问题（携带当前所选语言）
   function sendExample(text: string) {
     sendMessage(text, { target_langs: [...selectedLangs.value] })
   }
 
+  // 轮询后端健康状态（最多 30 次，每次间隔 1 秒）
   async function checkBackendHealth() {
     isBackendLoading.value = true
     const maxRetries = 30
@@ -179,16 +216,19 @@ export const useChatStore = defineStore('chat', () => {
     isBackendOnline.value = false
   }
 
+  // 清空所有消息与错误
   function clearMessages() {
     messages.value = []
     errorMessage.value = ''
   }
 
+  // 切换翻译模型并持久化
   function setSelectedModel(model: string) {
     selectedModel.value = model
     localStorage.setItem('translateModel', model)
   }
 
+  // 对外暴露的状态与操作
   return {
     messages,
     isLoading,

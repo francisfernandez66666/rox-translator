@@ -1,3 +1,9 @@
+// ============ 本文件职责中文说明 ============
+// 运行时配置：定义 LLM 供应商路由（ProviderConfig / ModelRoutes 多模型路由权重策略）、
+// 翻译/Embedding 模型、模型降级（Hunyuan fallback、首调用超时、熔断阈值）、
+// 相似度阈值、目录路径、采样参数等；提供 Default() 带内置 Key 的默认配置，
+// 以及从 config.json / 环境变量覆盖配置的加载逻辑。
+// ========================================
 package config
 
 import (
@@ -9,64 +15,64 @@ import (
 // ProviderConfig LLM 供应商路由项（模型路由策略）
 type ProviderConfig struct {
 	Provider string `json:"provider"` // 供应商标识（用于计量成本核算）
-	APIBase  string `json:"api_base"`
-	APIKey   string `json:"api_key"`
-	Model    string `json:"model"`
-	Weight   int    `json:"weight"` // 权重，越高越优先（0 表示仅作 fallback）
+	APIBase  string `json:"api_base"` // 供应商 API 基地址
+	APIKey   string `json:"api_key"`  // 供应商 API 密钥
+	Model    string `json:"model"`    // 该供应商下使用的模型名
+	Weight   int    `json:"weight"`   // 权重，越高越优先（0 表示仅作 fallback）
 }
 
 // Config 保存运行时配置（等价于 Python lib.py 的模块级配置）
 type Config struct {
 	// 翻译 LLM（SiliconFlow）
-	OnlineAPIBase string
-	OnlineAPIKey  string
-	OnlineModel   string
-	OnlineTimeout int
+	OnlineAPIBase string // 在线翻译 API 基地址
+	OnlineAPIKey  string // 在线翻译 API 密钥
+	OnlineModel   string // 在线翻译默认模型
+	OnlineTimeout int    // 在线调用超时秒数
 
 	// 模型路由策略：按权重选主模型，失败后按顺序降级。空则用 Online* 单供应商。
-	ModelRoutes []ProviderConfig
+	ModelRoutes []ProviderConfig // 多供应商路由列表（权重路由/降级链）
 
 	// Embedding（智谱）
-	EmbedAPIBase string
-	EmbedAPIKey  string
+	EmbedAPIBase string // Embedding API 基地址
+	EmbedAPIKey  string // Embedding API 密钥
 
 	// 模型降级
-	HunyuanMTModel       string
-	HunyuanFallbackModel string
-	HunyuanMTLangCode    map[string]bool
+	HunyuanMTModel       string          // Hunyuan 多语翻译模型名
+	HunyuanFallbackModel string          // Hunyuan 不支持语种或失败时的降级模型
+	HunyuanMTLangCode    map[string]bool // Hunyuan 支持的目标语言代码集合
 	// HunyuanFirstTimeoutSec Hunyuan 主模型首次调用超时秒数；超时立即降级到 fallback
 	HunyuanFirstTimeoutSec int
 
 	// 主模型熔断恢复
-	BreakerThreshold  int // 连续失败多少次触发熔断（默认 5）
+	BreakerThreshold   int // 连续失败多少次触发熔断（默认 5）
 	BreakerCoolDownSec int // 熔断冷却秒数（默认 1800）
 
 	// 用户数据目录
-	UserDataDir string
-	DBPath      string
-	EmbPath     string
-	IndexStamp  string
+	UserDataDir string // 用户数据根目录
+	DBPath      string // 知识库 SQLite 路径
+	EmbPath     string // 向量文件路径（npz）
+	IndexStamp  string // 索引时间戳文件路径
 
 	// 上传/输出目录
-	UploadDir string
-	OutputDir string
+	UploadDir string // 上传文件目录
+	OutputDir string // 输出文件目录
 
 	// 采样参数
-	HunyuanTemp      float64
-	HunyuanTopP      float64
-	HunyuanTopK      int
-	HunyuanRepetition float64
-	FallbackTemp     float64
+	HunyuanTemp       float64 // 主模型温度
+	HunyuanTopP       float64 // 主模型 top_p
+	HunyuanTopK       int     // 主模型 top_k
+	HunyuanRepetition float64 // 主模型重复惩罚
+	FallbackTemp      float64 // 降级模型温度（低温度保证确定性）
 
 	// 相似度阈值
-	HighSim  float64
-	MedSim   float64
-	TopK     int
-	TopFuzzy int
+	HighSim  float64 // 语义命中高相似阈值（默认 0.90）
+	MedSim   float64 // 参考例句中等相似阈值（默认 0.75）
+	TopK     int     // 语义检索返回条数
+	TopFuzzy int     // 模糊匹配返回条数
 
 	// 语义命中要求命中行中文与输入达到的 CJK 字符重叠率；
 	// 低于该值视为"语义相近但非同一句"，不直接替换翻译，改走模型
-	SemHitCharOverlap float64
+	SemHitCharOverlap float64 // CJK 字符重叠率下限（默认 0.55）
 
 	// 管理后台访问凭证（租户管理接口鉴权）
 	AdminToken string
@@ -114,29 +120,29 @@ var Flags = map[string]string{
 // Default 返回默认配置（带内置硬编码 Key）
 func Default() *Config {
 	c := &Config{
-		OnlineAPIBase:      "https://api.siliconflow.cn/v1",
-		OnlineAPIKey:       os.Getenv("SILICONFLOW_API_KEY"),
-		OnlineModel:        "tencent/Hunyuan-MT-7B",
-		OnlineTimeout:      120,
-		EmbedAPIBase:       "https://open.bigmodel.cn/api/paas/v4",
-		EmbedAPIKey:        os.Getenv("ONLINE_API_KEY"),
-		HunyuanMTModel:      "tencent/Hunyuan-MT-7B",
-		HunyuanFallbackModel: "THUDM/GLM-4-9B-0414",
+		OnlineAPIBase:          "https://api.siliconflow.cn/v1",
+		OnlineAPIKey:           os.Getenv("SILICONFLOW_API_KEY"),
+		OnlineModel:            "tencent/Hunyuan-MT-7B",
+		OnlineTimeout:          120,
+		EmbedAPIBase:           "https://open.bigmodel.cn/api/paas/v4",
+		EmbedAPIKey:            os.Getenv("ONLINE_API_KEY"),
+		HunyuanMTModel:         "tencent/Hunyuan-MT-7B",
+		HunyuanFallbackModel:   "THUDM/GLM-4-9B-0414",
 		HunyuanFirstTimeoutSec: 30,
 		BreakerThreshold:       5,
 		BreakerCoolDownSec:     1800,
-		HunyuanMTLangCode:  HunyuanMTLangSet(),
-		HunyuanTemp:        0.7,
-		HunyuanTopP:        0.6,
-		HunyuanTopK:        20,
-		HunyuanRepetition:  1.05,
-		FallbackTemp:       0.1,
-		HighSim:            0.90,
-		MedSim:             0.75,
-		TopK:               4,
-		TopFuzzy:           3,
-		SemHitCharOverlap:  0.55,
-		AdminToken:         "rox-admin-2026",
+		HunyuanMTLangCode:      HunyuanMTLangSet(),
+		HunyuanTemp:            0.7,
+		HunyuanTopP:            0.6,
+		HunyuanTopK:            20,
+		HunyuanRepetition:      1.05,
+		FallbackTemp:           0.1,
+		HighSim:                0.90,
+		MedSim:                 0.75,
+		TopK:                   4,
+		TopFuzzy:               3,
+		SemHitCharOverlap:      0.55,
+		AdminToken:             "rox-admin-2026",
 	}
 
 	// 内置默认 Key（编译进二进制）

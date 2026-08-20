@@ -1,5 +1,16 @@
+<!-- ============================================================================
+   components/AdminDashboard.vue — 管理后台主界面
+   职责：以左侧导航 + 右侧面板组织全部后台功能
+   - 按角色等级（2=租户管理员 / 3=超级管理员）过滤可见面板
+   - 超管可通过租户切换器以 X-Tenant-ID 切换到任意租户进行操作
+   - 面板：系统看板 / 监控告警 / 账户管理 / 租户管理 / 行业管理(KB) / 流程引擎 /
+           模型配置 / 模型路由 / 策略参数 / evals 看板 / 工单 / 审批 / 充值 /
+           用量看板 / API Key / 计费配置 / 配额设置 / 发票 / 邀请码
+   ============================================================================ -->
 <template>
+  <!-- ===== 后台整体布局：左侧栏 + 主内容区 ===== -->
   <div class="ad-wrap">
+    <!-- ===== 左侧侧边栏：品牌 / 租户切换 / 导航 / 用户信息 ===== -->
     <aside class="ad-side">
       <div class="ad-brand">🏢 管理后台</div>
       <div v-if="isSuper && tenantList" class="ad-tenant-switch">
@@ -20,7 +31,9 @@
       </div>
     </aside>
 
+    <!-- ===== 主内容区：按选中面板切换显示对应管理模块 ===== -->
     <main class="ad-main">
+      <!-- 无权限提示 -->
       <div v-if="!isAdmin" class="ad-forbid">当前账号无管理权限，请使用管理员账号登录。</div>
 
       <!-- ===== 系统看板 ===== -->
@@ -504,7 +517,9 @@
 </template>
 
 <script setup lang="ts">
+// Vue 核心组合式 API（响应式、生命周期、计算属性）
 import { ref, onMounted, computed } from 'vue'
+// API 封装：认证/token/租户切换/地址，以及全部后台管理接口
 import {
   setAuthToken, getAuthToken, setActiveTenantId, getActiveTenantId, API_BASE,
   adminUsers, adminUserCreate, adminUserUpdate, adminUserResetPassword,
@@ -523,9 +538,12 @@ import {
   type AuthUser, type Ticket, type FlowStepItem,
 } from '@/api'
 
+// 组件事件：退出登录
 const emit = defineEmits<{ logout: [] }>()
+// 组件入参：当前登录用户
 const props = defineProps<{ user: AuthUser | null }>()
 
+// 当前激活的面板 key
 const active = ref('dash')
 // 后台面板清单：min 为所需角色等级（2=租户管理员，3=超级管理员）
 const allTabs = [
@@ -590,23 +608,28 @@ function logout() {
 }
 
 // ---- 看板 ----
+// 系统健康数据 / 审计日志
 const health = ref<any>(null)
 const audit = ref<any[]>([])
+// 加载系统看板数据（健康状态 + 审计日志）
 async function loadDash() {
   const h = await systemHealth()
   if (h.success) health.value = (h as any).health
   const a = await systemAudit()
   if (a.success) audit.value = (a as any).logs
 }
+// 审计日志别名加载（复用 loadDash）
 async function loadAudit() { await loadDash() }
 
 // ---- 监控告警 ----
 const alerts = ref<any[]>([])
 const alertStatus = ref('')
+// 按状态加载告警列表
 async function loadAlerts() {
   const r = await systemAlerts(alertStatus.value || undefined)
   if (r.success) alerts.value = (r as any).alerts || []
 }
+// 解决告警并刷新
 async function resolveAlert(a: any) {
   await alertResolve(a.id)
   await loadAlerts()
@@ -632,12 +655,15 @@ function exportAuditCSV() {
 }
 
 // ---- 用户 ----
+// 用户列表数据 / 创建用户表单
 const users = ref<any[]>([])
 const uForm = ref({ username: '', password: '', display_name: '', role: 'user', tenant_id: 1 })
+// 加载用户列表
 async function loadUsers() {
   const r = await adminUsers()
   if (r.success) users.value = (r as any).users
 }
+// 创建用户并刷新列表
 async function createUser() {
   if (!uForm.value.username || !uForm.value.password) { alert('用户名和密码必填'); return }
   const r = await adminUserCreate({ ...uForm.value })
@@ -645,6 +671,7 @@ async function createUser() {
   uForm.value = { username: '', password: '', display_name: '', role: 'user', tenant_id: activeTenantId || 1 }
   await loadUsers()
 }
+// 行内编辑用户字段（显示名称/角色）
 async function editUser(u: any, field: string, val: string) {
   const data = { display_name: u.display_name, role: u.role, status: u.status }
   ;(data as any)[field] = val
@@ -652,11 +679,13 @@ async function editUser(u: any, field: string, val: string) {
   if (!r.success) alert(r.message)
   await loadUsers()
 }
+// 启用/停用用户
 async function toggleUser(u: any) {
   const r = await adminUserUpdate(u.id, { display_name: u.display_name, role: u.role, status: u.status === 'active' ? 'disabled' : 'active' })
   if (!r.success) alert(r.message)
   await loadUsers()
 }
+// 重置用户密码（弹窗输入新密码）
 async function resetPwd(u: any) {
   const pwd = prompt(`为 ${u.username} 设置新密码：`)
   if (!pwd) return
@@ -670,6 +699,7 @@ const tenants = ref<any[]>([])
 const activeTenantId = ref(getActiveTenantId() || 1)
 const tenantList = computed(() => tenants.value)
 const tForm = ref({ code: '', name: '', expires: '', permissions: '{}', adminUser: '', adminPass: '' })
+// 加载租户列表，并处理超管默认/回退生效租户
 async function loadTenants() {
   const r = await tenantList()
   if (r.success) tenants.value = r.tenants || []
@@ -688,6 +718,7 @@ function switchTenant(tid: number) {
   activeTenantId.value = tid
   Promise.all([loadDash(), loadAlerts(), loadUsers(), loadPackages(), loadFlow(), loadModels(), loadRoutes(), loadPolicy(), loadEvals(), loadTickets(), loadApproval(), loadOrders(), loadUsage(), loadKeys(), loadQuota(), loadInvoices()])
 }
+// 开通新租户（可附带租户管理员账号）
 async function createTenant() {
   if (!tForm.value.code) { alert('租户编码必填'); return }
   const r = await tenantCreate({
@@ -699,17 +730,20 @@ async function createTenant() {
   tForm.value = { code: '', name: '', expires: '', permissions: '{}', adminUser: '', adminPass: '' }
   await loadTenants()
 }
+// 启用/停用租户
 async function toggleTenant(t: any) {
   const r = await tenantSetStatus(t.id, t.status === 'active' ? 'disabled' : 'active')
   if (!r.success) alert(r.message)
   await loadTenants()
 }
+// 删除租户（二次确认后连同数据删除）
 async function removeTenant(t: any) {
   if (!confirm(`确认删除租户「${t.name}」？其数据一并删除。`)) return
   const r = await tenantDelete(t.id)
   if (!r.success) alert(r.message)
   await loadTenants()
 }
+// 为租户充值 token（创建订单并立即确认收款）
 async function chargeTenant(t: any) {
   const tokens = prompt(`为「${t.name}」充值 token 数量：`)
   if (!tokens || Number(tokens) <= 0) return
@@ -756,7 +790,9 @@ const pForm = ref({ code: '', name: '', pack_type: 'industry' })
 const eForm = ref({ source_text: '', layer: 2, target_lang: 'en', target_text: '', module: '' })
 const entriesMap = ref<Record<number, number>>({})
 
+// 获取某个包的条目数量
 function entryCount(id: number) { return entriesMap.value[id] || 0 }
+// 加载全部行业包及其条目计数
 async function loadPackages() {
   const r = await kbPackages()
   if (r.success) {
@@ -768,6 +804,7 @@ async function loadPackages() {
     }
   }
 }
+// 创建行业包
 async function createPackage() {
   if (!pForm.value.code || !pForm.value.name) { alert('编码和名称必填'); return }
   const r = await kbPackageCreate({ ...pForm.value, role: 'source' })
@@ -775,12 +812,14 @@ async function createPackage() {
   pForm.value = { code: '', name: '', pack_type: 'industry' }
   await loadPackages()
 }
+// 删除行业包（连同全部条目）
 async function removePackage(p: any) {
   if (!confirm(`删除包「${p.name}」及全部条目？`)) return
   const r = await kbPackageDelete(p.id)
   if (!r.success) alert(r.message)
   await loadPackages()
 }
+// 展开/收起某个包的条目列表
 async function loadEntries(p: any) {
   selectedPkg.value = selectedPkg.value === p.id ? null : p.id
   if (selectedPkg.value === p.id) {
@@ -788,6 +827,7 @@ async function loadEntries(p: any) {
     entries.value = (r as any).entries || []
   }
 }
+// 添加 KB 条目
 async function addEntry(pkgId: number) {
   if (!eForm.value.source_text) { alert('源句必填'); return }
   const r = await kbEntryAdd({ package_id: pkgId, ...eForm.value })
@@ -796,6 +836,7 @@ async function addEntry(pkgId: number) {
   await loadEntries({ id: pkgId })
   await loadPackages()
 }
+// 删除 KB 条目
 async function removeEntry(e: any) {
   const r = await kbEntryDelete(e.id)
   if (!r.success) alert(r.message)
@@ -806,6 +847,7 @@ async function removeEntry(e: any) {
 // 批量导入：每行 "中文|语言|译文"（可含层号：中文|en|译文|2）
 const bulkText = ref('')
 const bulkMsg = ref('')
+// 解析多行文本并批量导入条目
 async function bulkImport(pkgId: number) {
   const entries: any[] = []
   for (const line of bulkText.value.split('\n')) {
@@ -829,10 +871,12 @@ async function bulkImport(pkgId: number) {
 
 // ---- 流程引擎 ----
 const flowSteps = ref<FlowStepItem[]>([])
+// 加载流程引擎配置
 async function loadFlow() {
   const r = await flowConfig()
   if (r.success) flowSteps.value = (r as any).steps
 }
+// 保存流程引擎配置
 async function saveFlow() {
   const r = await flowSave(flowSteps.value)
   if (!r.success) { alert(r.message); return }
@@ -842,19 +886,23 @@ async function saveFlow() {
 // ---- 模型/策略 ----
 const mForm = ref({ api_base: '', api_key: '', model: '' })
 const pForm2 = ref({ high_sim: 0.9, med_sim: 0.75, evals_pass_threshold: 75 })
+// 加载在线模型配置
 async function loadModels() {
   const r = await adminModels()
   if (r.success) mForm.value = (r as any).model
 }
+// 保存在线模型配置
 async function saveModels() {
   const r = await adminModelsSave(mForm.value)
   if (!r.success) { alert(r.message); return }
   alert('模型配置已保存')
 }
+// 加载匹配策略参数
 async function loadPolicy() {
   const r = await adminPolicy()
   if (r.success) pForm2.value = (r as any).policy
 }
+// 保存匹配策略参数
 async function savePolicy() {
   const r = await adminPolicySave(pForm2.value)
   if (!r.success) { alert(r.message); return }
@@ -863,10 +911,12 @@ async function savePolicy() {
 
 // ---- 模型路由 ----
 const routeForm = ref<any[]>([])
+// 加载模型路由策略
 async function loadRoutes() {
   const r = await modelRoutes()
   if (r.success) routeForm.value = (r as any).routes || []
 }
+// 保存路由策略（仅保留填写了 api_base 与 model 的有效行）
 async function saveRoutes() {
   const valid = routeForm.value.filter((rt: any) => rt.api_base && rt.model)
   const r = await modelRoutesSave({ routes: valid })
@@ -877,6 +927,7 @@ async function saveRoutes() {
 
 // ---- evals ----
 const evals = ref<any[]>([])
+// 加载 evals 评估记录
 async function loadEvals() {
   const r = await evalsList()
   if (r.success) evals.value = (r as any).records
@@ -886,10 +937,12 @@ async function loadEvals() {
 const tickets = ref<Ticket[]>([])
 const ticketDetail = ref<any>(null)
 const tkForm = ref({ title: '', source_text: '', target_langs: 'en' })
+// 加载工单列表
 async function loadTickets() {
   const r = await ticketList(false)
   if (r.success) tickets.value = r.tickets || []
 }
+// 创建工单
 async function createTicket() {
   if (!tkForm.value.source_text) { alert('源文本必填'); return }
   const r = await ticketCreate(tkForm.value)
@@ -897,12 +950,14 @@ async function createTicket() {
   tkForm.value = { title: '', source_text: '', target_langs: 'en' }
   await loadTickets()
 }
+// 运行工单翻译流程
 async function runTicket(t: Ticket) {
   const r = await ticketRun(t.id)
   if (!r.success) { alert(r.message); return }
   await loadTickets()
   alert(`工单 ${t.ticket_no} 流程执行完成`)
 }
+// 打开工单详情（含流程各步骤状态）
 async function openTicket(t: Ticket) {
   const r = await ticketDetail(t.id)
   if (r.success) ticketDetail.value = { ...r.ticket, states: r.states }
@@ -910,10 +965,12 @@ async function openTicket(t: Ticket) {
 
 // ---- 审批 ----
 const approvalTickets = ref<any[]>([])
+// 加载待审批工单
 async function loadApproval() {
   const r = await approveList()
   if (r.success) approvalTickets.value = (r as any).tickets || []
 }
+// 执行审批：批准或驳回
 async function doApprove(t: any, action: 'approve' | 'reject') {
   const r = await approveAction(t.id, action, t._reason || '', t._suggestion || '', '')
   if (!r.success) { alert(r.message); return }
@@ -927,10 +984,12 @@ async function doApprove(t: any, action: 'approve' | 'reject') {
 const orders = ref<any[]>([])
 const usageData = ref<any>(null)
 const oForm = ref({ tokens: 1000, money: 0 })
+// 加载充值订单列表
 async function loadOrders() {
   const r = await billingOrders()
   if (r.success) orders.value = (r as any).orders || []
 }
+// 加载用量看板数据（用量 + 余额，并统计供应商数）
 async function loadUsage() {
   const [u, b] = await Promise.all([billingUsage(), billingBalance()])
   if (u.success) {
@@ -970,11 +1029,13 @@ function barHeight(val: number, max: number) {
   const pct = Math.max(8, Math.round((val / max) * 100))
   return pct + '%'
 }
+// 创建充值订单（默认当前生效租户）
 async function createOrder() {
   const r = await adminOrderCreate({ tenant_id: 1, tokens: Number(oForm.value.tokens), money: oForm.value.money })
   if (!r.success) { alert(r.message); return }
   await loadOrders()
 }
+// 确认收款并刷新订单与看板
 async function payOrder(o: any) {
   const r = await adminOrderPay(o.id)
   if (!r.success) { alert(r.message); return }
@@ -986,10 +1047,12 @@ async function payOrder(o: any) {
 const keys = ref<any[]>([])
 const newKey = ref('')
 const kForm = ref({ name: '', perms: 'translate' })
+// 加载 API Key 列表
 async function loadKeys() {
   const r = await apiKeys()
   if (r.success) keys.value = (r as any).keys || []
 }
+// 签发新 API Key
 async function createKey() {
   if (!kForm.value.name) { alert('名称必填'); return }
   const r = await apiKeyCreate(kForm.value)
@@ -998,15 +1061,18 @@ async function createKey() {
   kForm.value = { name: '', perms: 'translate' }
   await loadKeys()
 }
+// 启用/停用 API Key
 async function toggleKey(k: any) {
   await apiKeyStatus(k.id, k.status === 'active' ? 'disabled' : 'active')
   await loadKeys()
 }
+// 删除 API Key
 async function deleteKey(k: any) {
   if (!confirm('删除该 API Key？')) return
   await apiKeyDelete(k.id)
   await loadKeys()
 }
+// 轮换 API Key（旧 Key 立即失效）
 async function rotateKey(k: any) {
   if (!confirm(`确认轮换「${k.name}」？旧 Key 将立即失效。`)) return
   const r = await apiKeyRotate(k.id)
@@ -1014,19 +1080,23 @@ async function rotateKey(k: any) {
   newKey.value = (r as any).api_key || ''
   await loadKeys()
 }
+// 打开开放 API 文档
 function openDocs() {
   window.open(openAPIDocsUrl(), '_blank')
 }
+// 打开 Prometheus 指标页
 function openMetrics() {
   window.open(`${API_BASE}/metrics`, '_blank')
 }
 
 // ---- 计费配置 ----
 const billingEnforced = ref(false)
+// 加载计费配置（是否强制计费）
 async function loadBillingConfig() {
   const r = await billingConfig()
   if (r.success) billingEnforced.value = (r as any).billing_enforced === true
 }
+// 保存计费配置
 async function saveBillingConfig() {
   const r = await billingConfigSave({ billing_enforced: billingEnforced.value })
   if (!r.success) { alert(r.message); billingEnforced.value = !billingEnforced.value }
@@ -1034,6 +1104,7 @@ async function saveBillingConfig() {
 
 // ---- 配额设置 ----
 const quotaForm = ref({ qps: 10, concurrent: 3, max_daily_chars: 0 })
+// 加载当前租户配额
 async function loadQuota() {
   const r = await billingQuota()
   if (r.success) {
@@ -1044,6 +1115,7 @@ async function loadQuota() {
     }
   }
 }
+// 保存配额（QPS/并发下限为 1，每日上限下限为 0）
 async function saveQuota() {
   const r = await billingQuotaSave({
     qps: Math.max(1, quotaForm.value.qps),
@@ -1057,6 +1129,7 @@ async function saveQuota() {
 
 // ---- 发票 ----
 const invoices = ref<any[]>([])
+// 加载发票列表
 async function loadInvoices() {
   const r = await billingInvoices()
   if (r.success) invoices.value = (r as any).invoices || []
@@ -1065,10 +1138,12 @@ async function loadInvoices() {
 // ---- 邀请码 ----
 const invites = ref<any[]>([])
 const invForm = ref({ code: '', tenant_id: 0 })
+// 加载邀请码列表
 async function loadInvites() {
   const r = await inviteCodes()
   if (r.success) invites.value = (r as any).codes || []
 }
+// 生成邀请码
 async function createInvite() {
   if (!invForm.value.code) { alert('邀请码必填'); return }
   const r = await inviteCodeCreate(invForm.value)
@@ -1077,6 +1152,7 @@ async function createInvite() {
   await loadInvites()
 }
 
+// 组件挂载：超管先加载租户列表，再并行加载全部面板数据
 onMounted(async () => {
   if (myLevel.value >= 3) await loadTenants()
   const jobs: Promise<any>[] = [loadDash(), loadAlerts(), loadUsers(), loadPackages(), loadFlow(), loadModels(), loadRoutes(), loadPolicy(), loadEvals(), loadTickets(), loadApproval(), loadOrders(), loadUsage(), loadKeys(), loadBillingConfig(), loadQuota(), loadInvoices(), loadInvites()]
@@ -1085,13 +1161,18 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* ===== 整体布局：左侧栏 + 主内容区，横向 Flex ===== */
 .ad-wrap { display: flex; min-height: 100vh; background: #f5f7fb; }
+/* 左侧侧边栏：深蓝背景，固定高度可滚动 */
 .ad-side {
   width: 230px; background: #1a237e; color: #fff; display: flex; flex-direction: column;
   flex-shrink: 0; position: sticky; top: 0; height: 100vh; overflow: auto;
 }
+/* 品牌标题 */
 .ad-brand { padding: 20px 18px; font-size: 18px; font-weight: 700; border-bottom: 1px solid rgba(255,255,255,0.12); }
+/* 导航容器 */
 .ad-nav { flex: 1; padding: 12px 10px; }
+/* 导航项 */
 .ad-nav-item {
   display: block; width: 100%; text-align: left; padding: 10px 14px; margin-bottom: 4px;
   background: none; border: none; border-radius: 8px; color: rgba(255,255,255,0.8);
@@ -1099,6 +1180,7 @@ onMounted(async () => {
 }
 .ad-nav-item:hover { background: rgba(255,255,255,0.08); }
 .ad-nav-item.on { background: #3949ab; color: #fff; font-weight: 600; }
+/* 侧边栏底部：用户信息 + 返回/退出 */
 .ad-side-foot { padding: 14px 16px; border-top: 1px solid rgba(255,255,255,0.12); font-size: 13px; }
 .ad-user { color: rgba(255,255,255,0.9); margin-bottom: 8px; }
 .ad-back { color: rgba(255,255,255,0.7); text-decoration: none; display: block; margin-bottom: 8px; }
@@ -1107,8 +1189,10 @@ onMounted(async () => {
   background: rgba(255,255,255,0.15); border: none; color: #fff; padding: 6px 14px;
   border-radius: 6px; cursor: pointer; font-size: 13px;
 }
+/* 主内容区 */
 .ad-main { flex: 1; padding: 28px 32px; overflow: auto; }
 .ad-section h2 { font-size: 20px; margin-bottom: 18px; color: #1a237e; }
+/* 常用工具行 / 输入框 / 按钮等通用样式 */
 .ad-row { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
 .ad-input { padding: 9px 12px; border: 1px solid #dcdcdc; border-radius: 8px; font-size: 13px; }
 .ad-wide { width: 100%; box-sizing: border-box; }
@@ -1125,11 +1209,13 @@ onMounted(async () => {
 .ad-btn-red.ad-btn-sm { background: #fce4ec; color: #c62828; }
 .ad-hint { font-size: 12px; color: #888; margin-bottom: 10px; }
 .ad-label { display: block; font-size: 13px; color: #666; margin: 10px 0 4px; }
+/* 通用数据表格 */
 .ad-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
 .ad-table th, .ad-table td { border: 1px solid #eee; padding: 8px 10px; text-align: left; }
 .ad-table th { background: #fafbfd; }
 .ad-td { white-space: nowrap; }
 .ad-ellipsis { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 看板统计卡片 */
 .ad-cards { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
 .ad-card {
   background: #fff; border-radius: 12px; padding: 18px 22px; box-shadow: 0 2px 10px rgba(0,0,0,0.06);
@@ -1139,13 +1225,16 @@ onMounted(async () => {
 .ad-card span { font-size: 12px; color: #888; }
 .ad-audit { margin-top: 20px; }
 .ad-audit h3 { margin-bottom: 10px; font-size: 15px; }
+/* 行业包卡片 */
 .ad-pkg { background: #fff; border: 1px solid #e8e8e8; border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
 .ad-pkg-head { padding: 12px 16px; display: flex; align-items: center; gap: 10px; background: #fafbfd; }
 .ad-pkg-role { padding: 2px 8px; background: #e8eaf6; border-radius: 12px; font-size: 11px; color: #1a237e; }
 .ad-pkg-entries { padding: 14px; border-top: 1px solid #eee; }
+/* 流程引擎行 */
 .ad-flow-row { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px solid #f0f0f0; }
 .ad-flow-name { font-size: 14px; }
 .ad-flow-key { color: #999; font-size: 12px; }
+/* 开关（Switch）样式 */
 .ad-switch { position: relative; display: inline-block; width: 42px; height: 22px; }
 .ad-switch input { opacity: 0; width: 0; height: 0; }
 .ad-switch span {
@@ -1174,13 +1263,16 @@ onMounted(async () => {
 .ad-bulk .ad-btn { margin-right: 8px; }
 .ad-route-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
 .ad-diff { color: #2e7d32; font-size: 12px; background: #e8f5e9; padding: 2px 6px; border-radius: 4px; }
+/* ===== 用量图表：CSS 条形图（近7日趋势 / 按类型 / 按供应商） ===== */
 .ad-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
 .ad-chart-card { background: #fff; border: 1px solid #eee; border-radius: 10px; padding: 16px; margin-top: 16px; }
 .ad-chart-card h3 { font-size: 14px; color: #1a237e; margin-bottom: 12px; }
+/* 竖排柱状图 */
 .ad-chart-bars { display: flex; align-items: flex-end; gap: 8px; height: 140px; padding: 8px 4px 0; }
 .ad-chart-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; min-width: 0; }
 .ad-chart-bar { width: 70%; max-width: 42px; min-height: 6px; background: linear-gradient(180deg, #3949ab, #1a237e); border-radius: 4px 4px 0 0; }
 .ad-chart-label { font-size: 11px; color: #888; margin-top: 6px; }
+/* 横向条形图 */
 .ad-hbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .ad-hbar-label { width: 120px; font-size: 12px; color: #555; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ad-hbar-track { flex: 1; background: #f0f0f5; border-radius: 6px; height: 16px; overflow: hidden; }

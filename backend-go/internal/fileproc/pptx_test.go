@@ -12,8 +12,8 @@ func TestTranslatePptxXML(t *testing.T) {
 </p:spTree></p:sld>`
 
 	translations := map[string]string{
-		"刹车系统故障指示灯":   "Brake system malfunction indicator light is now illuminated on the dashboard",
-		"请立即联系售后服务":   "Please contact the after-sales service department immediately",
+		"刹车系统故障指示灯": "Brake system malfunction indicator light is now illuminated on the dashboard",
+		"请立即联系售后服务": "Please contact the after-sales service department immediately",
 	}
 
 	out := translatePptxXML([]byte(slide), translations)

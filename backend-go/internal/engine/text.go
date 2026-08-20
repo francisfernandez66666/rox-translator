@@ -1,3 +1,9 @@
+// ============ 本文件职责中文说明 ============
+// 文本翻译主流程（复刻 skill.py _handle_text_translate）：面向对话/文本翻译入口。
+// 从 options 与用户 prompt 解析目标语言（KB 语言 + 其他语言），
+// 知识库语言走 TranslateOne 四段匹配（命中标注 kb 来源），其他语言走纯模型并发翻译，
+// 最终合并所有语言译文、构建展示 reply 与结构化 TextTranslateData 返回。
+// ========================================
 package engine
 
 import (
@@ -9,30 +15,30 @@ import (
 	"translator/internal/config"
 )
 
-// Progress 进度回调
+// Progress 进度回调（step=阶段描述，done/total=当前/总步数）
 type Progress func(step string, done, total int)
 
 // TextTranslateResult 文本翻译结果（ChatResponse 契约）
 type TextTranslateResult struct {
-	Skill string            `json:"skill"`
-	Reply string            `json:"reply"`
-	Data  TextTranslateData `json:"data"`
-	Files []string          `json:"files"`
-	Error string            `json:"error"`
+	Skill string            `json:"skill"` // 能力标识（固定 "translation"）
+	Reply string            `json:"reply"` // 面向用户的完成话术（含译文与模式说明）
+	Data  TextTranslateData `json:"data"`  // 结构化翻译数据
+	Files []string          `json:"files"` // 关联文件（文本翻译通常为空）
+	Error string            `json:"error"` // 失败原因（成功时为空）
 }
 
 // TextTranslateData 文本翻译结构化数据
 type TextTranslateData struct {
-	Translations       map[string]string `json:"translations"`
-	TranslationsSource map[string]string `json:"translations_source"`
-	LangNames          map[string]string `json:"lang_names"`
-	KBLangs            []string          `json:"kb_langs"`
-	OtherLangs         []string          `json:"other_langs"`
-	SourceText         string            `json:"source_text"`
-	Mode               string            `json:"mode"`
-	Similarity         *float64          `json:"similarity"`
-	MatchedZH          string            `json:"matched_zh"`
-	TargetLangs        []string          `json:"target_langs"`
+	Translations       map[string]string `json:"translations"`        // 目标语言 → 译文
+	TranslationsSource map[string]string `json:"translations_source"` // 目标语言 → 来源（kb/model）
+	LangNames          map[string]string `json:"lang_names"`          // 目标语言代码 → 中文名
+	KBLangs            []string          `json:"kb_langs"`            // 走知识库翻译的目标语言
+	OtherLangs         []string          `json:"other_langs"`         // 走纯模型翻译的其他语言
+	SourceText         string            `json:"source_text"`         // 实际被翻译的原文（剥离指令后）
+	Mode               string            `json:"mode"`                // 命中模式描述（精确命中/纯模型等）
+	Similarity         *float64          `json:"similarity"`          // 语义命中的相似度（未命中为 nil）
+	MatchedZH          string            `json:"matched_zh"`          // 命中的知识库中文原文
+	TargetLangs        []string          `json:"target_langs"`        // 全部目标语言（KB + 其他）
 }
 
 // TargetLangsFromOptions 从 options 提取语言列表
@@ -159,6 +165,7 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 		prog(fmt.Sprintf("AI翻译%s...", name), 2+i, 4+len(directOther))
 	}
 	if len(directOther) > 0 {
+		// 并发限制（信号量）：最多 3 路并发调用其他语言模型翻译，避免打爆 LLM API
 		const maxConcurrent = 3
 		sem := make(chan struct{}, maxConcurrent)
 		var mu sync.Mutex

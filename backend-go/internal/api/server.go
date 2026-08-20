@@ -1,5 +1,18 @@
 package api
 
+// ============ 本文件职责中文说明 ============
+// 本文件实现 HTTP 服务核心：服务结构体、路由注册、中间件与基础接口。
+//   - Server 结构体：聚合配置/引擎/知识库/租户存储/平台存储/计费服务/指标收集器
+//   - NewServer：创建服务、初始化计费与指标、注册路由、启动看门狗
+//   - routes：注册全部 REST 路由（指标/翻译/租户/认证/工单/KB/模型/计费/开放 API 等）
+//   - 中间件：withMetrics（HTTP 指标）、withTenant（租户解析与隔离）、withCORS（跨域）
+//   - 租户解析优先级：登录 JWT > API Key 所属租户 > X-Tenant-ID（仅超管）> 默认租户 1
+//   - 基础接口：健康检查 / 技能列表 / 语言列表 / KB 统计
+// 安全要点：
+//   - 普通用户租户取自 JWT，无法越权指定其他租户（防越权）
+//   - 未登录请求仅信任 API Key 或默认租户 1，X-Tenant-ID 头一律忽略（防伪造越权）
+//   - 超级管理员（tenant_id=0）可通过 X-Tenant-ID 切换后台生效租户
+
 import (
 	"encoding/json"
 	"net/http"
@@ -14,33 +27,41 @@ import (
 	"translator/internal/tenant"
 )
 
-// Server HTTP 服务
+// Server HTTP 服务：聚合平台各子系统并对外提供 HTTP 接口。
 type Server struct {
-	Cfg    *config.Config
-	Engine *engine.Engine
-	DB     *kb.KBDatabase
-	Ten    *tenant.Store
-	Store  *store.Store
-	Bill   *billing.Service
-	Dist   string
-	mux    *http.ServeMux
+	Cfg    *config.Config   // 全局配置（模型/上传目录/策略参数等）
+	Engine *engine.Engine   // 翻译引擎（文本/文件处理、LLM 调用与熔断）
+	DB     *kb.KBDatabase   // 知识库数据库（-kb 加载，用于匹配与统计）
+	Ten    *tenant.Store    // 租户存储（租户增删改查、权限与模型配置）
+	Store  *store.Store     // 平台存储（用户/工单/审计/计费/API Key 等）
+	Bill   *billing.Service // 计费服务（QPS/并发限流、每日配额、余额扣减）
+	Dist   string           // 前端 dist 目录（SPA 静态资源根目录）
+	mux    *http.ServeMux   // 路由分发器
 	// 系统级指标收集器（Prometheus /metrics）
 	metrics *Metrics
 }
 
-// NewServer 创建服务
+// NewServer 创建 HTTP 服务：初始化计费服务、注册路由并启动看门狗。
+// 参数 cfg: 全局配置；eng: 翻译引擎（可 nil）；db: 知识库（可 nil）；dist: 前端目录；
+// st: 平台存储（可 nil）；ts: 租户存储（可 nil）。
+// 返回: 组装完成的 *Server 实例。
 func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist string, st *store.Store, ts *tenant.Store) *Server {
 	s := &Server{Cfg: cfg, Engine: eng, DB: db, Ten: ts, Store: st, Dist: dist, metrics: newMetrics()}
+	// 平台存储就绪时初始化计费服务（限流/配额/余额）
 	if st != nil {
 		s.Bill = billing.NewService(st)
 	}
 	s.mux = http.NewServeMux()
 	s.routes()
+	// 启动监控看门狗（后台巡检余额/模型健康）
 	s.startWatchdog()
 	return s
 }
 
+// routes 注册全部 HTTP 路由：指标/基础接口/翻译/租户/认证/工单/KB/模型/系统/计费/API Key/开放 API。
+// 无参数无返回；所有 Handler 均挂载到 s.mux。
 func (s *Server) routes() {
+	// 指标与基础接口
 	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	s.mux.HandleFunc("/api/health", s.handleHealth)
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
@@ -145,39 +166,46 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/openapi/v1/apikey/rotate", s.handleOpenAPIKeyRotate)
 	s.mux.HandleFunc("/openapi/docs", s.handleOpenAPIDocs)
 
+	// 兜底路由：前端 SPA 静态资源
 	s.mux.HandleFunc("/", s.handleSPA)
 }
 
-// Handler 返回 http.Handler
+// Handler 返回完整的 http.Handler（依次包裹指标/租户/CORS 中间件）。
+// 返回: 可交给 http.ListenAndServe 使用的 http.Handler。
 func (s *Server) Handler() http.Handler {
 	return s.withMetrics(s.withTenant(withCORS(s.mux)))
 }
 
-// withMetrics 记录 HTTP 请求指标（按路径标签）
+// withMetrics 记录 HTTP 请求指标中间件（按路径标签计数）。
+// 参数 next: 下一层 Handler。返回: 包装后的 Handler。
 func (s *Server) withMetrics(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 每个请求按路径计数（供 /metrics 输出）
 		s.metrics.countHTTP(r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
 }
 
-// withTenant 解析请求租户并注入 context。
+// withTenant 解析请求租户并注入 context 的中间件。
 // 优先级：登录态（Authorization Bearer JWT 中的 tenant_id）> API Key 所属租户 > X-Tenant-ID 头 > 默认租户 1（rox）。
 // 安全约束：
 //   - 已登录普通用户：租户取自 JWT，无法越权指定其他租户。
 //   - 未登录请求：仅信任 API Key（开放 API）或默认租户 1；X-Tenant-ID 头一律忽略（防伪造越权）。
 //   - 超级管理员（平台级 tenant_id=0）：生效租户由 X-Tenant-ID 指定（后台租户切换器），默认 rox。
+//
+// 参数 next: 下一层 Handler。返回: 包装后的 Handler（已把租户写入 request context）。
 func (s *Server) withTenant(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		// 1. 登录用户：租户取自 JWT，普通用户无法越权指定其他租户
 		if u := s.authUser(r); u != nil {
 			if u.TenantID > 0 {
+				// 普通登录用户：强制使用 JWT 中的租户（防越权）
 				ctx = tenant.WithTenant(ctx, u.TenantID)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
-			// 2. 超级管理员（平台级）：X-Tenant-ID 切换生效租户（后台租户切换器）
+			// 2. 超级管理员（平台级 tenant_id=0）：X-Tenant-ID 切换生效租户（后台租户切换器）
 			if v := r.Header.Get("X-Tenant-ID"); v != "" {
 				if id, err := strconv.ParseInt(v, 10, 64); err == nil && id > 0 {
 					ctx = tenant.WithTenant(ctx, id)
@@ -198,8 +226,9 @@ func (s *Server) withTenant(next http.Handler) http.Handler {
 	})
 }
 
-// effTenant 当前请求生效租户。
-// 超级管理员（平台级，tenant_id=0）使用请求上下文所选租户；其余用户固定自身租户。
+// effTenant 计算当前请求生效租户。
+// 超级管理员（平台级，tenant_id=0）使用请求上下文所选租户（X-Tenant-ID 切换）；其余用户固定自身租户。
+// 参数 r: HTTP 请求；u: 当前用户。返回: 生效租户 ID。
 func (s *Server) effTenant(r *http.Request, u *store.User) int64 {
 	if auth.IsSuperAdmin(u) {
 		return s.currentTenant(r)
@@ -210,11 +239,15 @@ func (s *Server) effTenant(r *http.Request, u *store.User) int64 {
 	return 1
 }
 
+// withCORS 跨域中间件：允许任意来源访问（前后端分离部署）。
+// 参数 next: 下一层 Handler。返回: 包装后的 Handler（OPTIONS 预检直接返回 200）。
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 允许任意来源与常用方法/请求头（含租户切换与后台 Token 头）
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-ID, X-Admin-Token")
+		// 预检请求直接返回，不进入业务 Handler
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -223,19 +256,24 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
-// authUser 从请求提取当前用户（JWT）。未登录返回 nil。
+// authUser 从请求提取当前用户（JWT 校验）。未登录或 Token 无效返回 nil。
+// 参数 r: HTTP 请求。返回: 当前登录用户对象（*store.User）或 nil。
 func (s *Server) authUser(r *http.Request) *store.User {
+	// 平台存储未初始化无法查用户
 	if s.Store == nil {
 		return nil
 	}
+	// 提取 Bearer Token
 	tok := auth.BearerToken(r)
 	if tok == "" {
 		return nil
 	}
+	// JWT 验签与解析
 	claims, err := auth.Verify(tok)
 	if err != nil {
 		return nil
 	}
+	// 校验用户存在且处于激活状态（按 JWT 中的 user_id + tenant_id）
 	u, err := s.Store.GetUser(claims.UserID, claims.TenantID)
 	if err != nil || u.Status != store.UserActive {
 		return nil
@@ -243,21 +281,26 @@ func (s *Server) authUser(r *http.Request) *store.User {
 	return u
 }
 
+// writeJSON 写入 JSON 响应（统一设置 Content-Type）。
+// 参数 w: HTTP 响应写入器；status: HTTP 状态码；v: 待序列化的响应对象。
+// 无返回。
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
 
-// ChatRequest 聊天请求
+// ChatRequest 聊天请求。
 type ChatRequest struct {
-	Message string                 `json:"message"`
-	Skill   string                 `json:"skill"`
-	Options map[string]interface{} `json:"options"`
+	Message string                 `json:"message"` // 用户输入消息（待翻译文本）
+	Skill   string                 `json:"skill"`   // 技能标识（当前固定 translation）
+	Options map[string]interface{} `json:"options"` // 附加选项（如 target_langs 等）
 }
 
 // ============ 基础接口 ============
 
+// handleHealth 健康检查接口（/api/health）：返回服务状态与版本。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求。返回 status/version/skills。
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{
 		"status":  "ok",
@@ -266,6 +309,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleSkills 技能列表接口（/api/skills）：返回平台可用技能。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求。返回 translation 技能的描述与关键词。
 func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{
 		"skills": []map[string]interface{}{
@@ -278,8 +323,11 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleTranslationLangs 语言列表接口（/api/translation/langs）：返回知识库支持的语言代码/名称/旗帜。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求。返回 kb_langs 数组。
 func (s *Server) handleTranslationLangs(w http.ResponseWriter, r *http.Request) {
 	langs := make([]map[string]string, 0, len(config.TranslateLangs))
+	// 遍历全局语言配置组装语言元信息
 	for _, code := range config.TranslateLangs {
 		langs = append(langs, map[string]string{
 			"code": code,
@@ -290,11 +338,15 @@ func (s *Server) handleTranslationLangs(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, 200, map[string]interface{}{"kb_langs": langs})
 }
 
+// handleKBStats 知识库统计接口（/api/translation/kb-stats）：返回当前租户的 KB 条目统计。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求。返回 total_tm_entries/lang_stats/total_segments/tenant_id。
 func (s *Server) handleKBStats(w http.ResponseWriter, r *http.Request) {
+	// 知识库未加载时返回提示
 	if s.DB == nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "翻译技能未加载"})
 		return
 	}
+	// 按当前租户维度统计（租户隔离：只统计本租户 KB 数据）
 	tid := s.currentTenant(r)
 	total, perLang, seg, err := s.DB.Stats(tid)
 	if err != nil {
@@ -307,7 +359,8 @@ func (s *Server) handleKBStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// currentTenant 从请求 context 取租户；无则默认 1
+// currentTenant 从请求 context 取租户；无则默认 1。
+// 参数 r: HTTP 请求。返回: 当前请求租户 ID（默认 1 = rox）。
 func (s *Server) currentTenant(r *http.Request) int64 {
 	if id := tenant.FromContext(r.Context()); id > 0 {
 		return id

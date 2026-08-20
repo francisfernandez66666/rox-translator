@@ -1,15 +1,23 @@
+// ============================================================================
+// types/index.ts — 前端共享 TypeScript 类型定义
+// 职责：集中定义聊天 / 流式进度 / 健康检查等数据结构的类型
+// ============================================================================
+
+// 技能信息：技能名称 + 描述 + 触发关键词（供后端技能路由与前端展示用）
 export interface SkillInfo {
   name: string
   description: string
   keywords: string[]
 }
 
+// 匹配报告单项：某个语言在术语库中的匹配状态与说明
 export interface MatchReportItem {
   lang: string
   status: string
   detail: string
 }
 
+// 聊天接口响应：技能名 + 回复文本 + 结构化数据（翻译结果/匹配报告等） + 附件文件
 export interface ChatResponse {
   skill: string
   reply: string
@@ -30,6 +38,7 @@ export interface ChatResponse {
   error?: string
 }
 
+// SSE 流式事件：翻译进度更新 / 完成 / 出错
 export interface ProgressEvent {
   type: 'progress' | 'done' | 'error'
   step?: string
@@ -40,6 +49,7 @@ export interface ProgressEvent {
   error?: string
 }
 
+// 聊天消息：用户提问或 AI 回复，附带技能 / 数据 / 文件 / 翻译进度
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
@@ -54,6 +64,7 @@ export interface ChatMessage {
   }
 }
 
+// 健康检查响应：后端状态 + 版本 + 已启用的技能列表
 export interface HealthResponse {
   status: string
   version: string

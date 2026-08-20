@@ -1,3 +1,11 @@
+// ============ 本文件职责中文说明 ============
+// 翻译引擎核心：复刻 Python lib.py 的 translate_one 主流程，负责
+// 多租户翻译的完整调度链路——知识库(KB)四段匹配（精确命中 / CJK标点无关精确 /
+// 模糊子串 / 语义高相似+例句参考）、模型路由（按权重选主模型并按权重降序降级）、
+// 主模型熔断降级与冷却自动恢复、429/网络错误降级重试、并发逐语言翻译、
+// 批量翻译（文件用，<sN> 标记解析）、审校/驳回重译、截断自修复、
+// 以及请求级实际用量（供应商/模型）计量记录与错误率监控。
+// ========================================
 package engine
 
 import (
@@ -17,16 +25,16 @@ import (
 
 // Engine 翻译引擎（复刻 lib.py translate_one 核心流程）
 type Engine struct {
-	Cfg   *config.Config
-	LLM   *llm.Client
-	DB    *kb.KBDatabase
-	Index *kb.Index
-	Ten   *tenant.Store
-	Evals *evals.Evaluator
+	Cfg   *config.Config   // 全局配置（模型/路由/相似度阈值/目录等）
+	LLM   *llm.Client      // LLM 客户端（Chat 对话 / Embed 向量调用）
+	DB    *kb.KBDatabase   // 知识库数据库（精确/模糊/译文对/多租户行查询）
+	Index *kb.Index        // 语义检索索引（向量 + 目标语言过滤 + 租户隔离）
+	Ten   *tenant.Store    // 租户存储（查询租户级模型配置与策略阈值）
+	Evals *evals.Evaluator // 评估器（质量评估用，可选）
 
-	cjkCache         map[string]int64                    // 兼容旧字段（保留）
-	cjkCacheByTenant map[int64]map[string]int64          // tenant → cjk → row id
-	cjkMu            sync.Mutex
+	cjkCache         map[string]int64           // 兼容旧字段（保留）：默认租户 CJK→rowID 缓存
+	cjkCacheByTenant map[int64]map[string]int64 // 租户 → CJK 字符串 → row id（按租户懒加载）
+	cjkMu            sync.Mutex                 // 保护 CJK 缓存的并发读写锁
 
 	// OnPhase 阶段回调（可选）：KB 匹配完成 → 进入 AI 生成前触发 "ai_generating"
 	OnPhase func(phase string)
@@ -35,9 +43,9 @@ type Engine struct {
 	breaker *Breaker
 
 	// ★ 错误率监控：记录最近 N 次 LLM 调用成败（看门狗/告警用）
-	errMu       sync.Mutex
-	errRing     []bool // true=成功 false=失败
-	errRingCap  int
+	errMu      sync.Mutex
+	errRing    []bool // true=成功 false=失败
+	errRingCap int
 }
 
 // tenantID 从 ctx 取租户 id；未指定时回退默认租户 rox（id=1）
@@ -53,9 +61,9 @@ type usageCtxKey struct{}
 
 // usageRecord 可变的请求级记录（context 存指针，跨调用共享）
 type usageRecord struct {
-	provider string
-	model    string
-	used     bool
+	provider string // 实际使用的供应商标识（如 siliconflow/volcengine）
+	model    string // 实际使用的模型名
+	used     bool   // 是否已记录过实际用量（避免回退默认）
 }
 
 // WithUsageRecorder 向 ctx 注入用量记录器（API 层在进入翻译前调用）
@@ -144,13 +152,13 @@ func (e *Engine) tenantOK(ctx context.Context) error {
 
 // Breaker 主模型熔断器（全局共享，跨请求生效）
 type Breaker struct {
-	mu            sync.Mutex
-	failures      int
-	open          bool
-	openedAt      time.Time
-	threshold     int
-	coolDown      time.Duration
-	tripReason    string
+	mu         sync.Mutex    // 保护熔断状态的互斥锁
+	failures   int           // 当前连续失败计数
+	open       bool          // 是否处于熔断状态
+	openedAt   time.Time     // 熔断开启时刻（用于计算冷却剩余时间）
+	threshold  int           // 触发熔断的连续失败阈值
+	coolDown   time.Duration // 熔断后冷却时长，冷却结束后进入半开试探
+	tripReason string        // 触发熔断时的原因（便于排查）
 }
 
 // NewBreaker 创建熔断器。threshold=触发熔断的连续失败数；coolDown=熔断后冷却时间
@@ -216,14 +224,14 @@ func (b *Breaker) Stats() (open bool, failures, threshold int, reason string, le
 
 // TranslateResult 单条翻译结果
 type TranslateResult struct {
-	Mode         string
-	MatchedZH    string
-	Similarity   float64
-	Translations map[string]string
-	Candidates   []*kb.Row
-	TargetLangs  []string
-	NeedModel    []string
-	Examples     []*kb.Row
+	Mode         string            // 本次命中模式（精确命中/模糊匹配/语义命中/纯模型翻译等）
+	MatchedZH    string            // 命中的知识库中文原文（未命中时为空）
+	Similarity   float64           // 语义命中的相似度得分（未命中为 0）
+	Translations map[string]string // 各目标语言 → 译文（KB 命中部分 + 模型生成部分）
+	Candidates   []*kb.Row         // 模糊/语义检索候选行（供展示或例句参考）
+	TargetLangs  []string          // 请求的目标语言列表
+	NeedModel    []string          // 仍需要模型生成的目标语言（KB 未覆盖的部分）
+	Examples     []*kb.Row         // 参考例句（语义相近但非同一句时收集）
 }
 
 // NewEngine 创建引擎
@@ -376,9 +384,11 @@ func (e *Engine) TranslateOne(ctx context.Context, zhText string, targetLangs []
 
 	// 3. 语义高相似（≥0.90）——按目标语言过滤，只检索含目标语言的行
 	if e.Index != nil && len(e.Index.Vecs) > 0 {
+		// 先把中文转成嵌入向量，再在向量索引中做余弦相似检索
 		vec, err := e.LLM.Embed(ctx, zhText)
 		if err == nil && len(vec) > 0 {
 			highSim, _ := e.resolvePolicy(ctx)
+			// 检索返回 TopK 个语义相似行（按目标语言 + 租户双重过滤）
 			results := e.Index.Search(vec, e.Cfg.TopK, targetLangs, tid)
 			if len(results) > 0 && results[0].Sim >= highSim {
 				res.Similarity = results[0].Sim
@@ -632,6 +642,7 @@ func (e *Engine) pickPrimaryRoute() config.ProviderConfig {
 		return config.ProviderConfig{}
 	}
 	best, bestW := rs[0], rs[0].Weight
+	// 线性扫描取权重最高者（权重相等时优先前面的配置）
 	for _, r := range rs[1:] {
 		if r.Weight > bestW {
 			best, bestW = r, r.Weight
@@ -649,7 +660,7 @@ func (e *Engine) resolveRouteFallbacks(primary config.ProviderConfig) []config.P
 		}
 		out = append(out, r)
 	}
-	// 按权重降序
+	// 按权重降序（插入排序：将高权重路由排到前面，供降级链按优先级使用）
 	for i := 1; i < len(out); i++ {
 		for j := i; j > 0 && out[j].Weight > out[j-1].Weight; j-- {
 			out[j], out[j-1] = out[j-1], out[j]
@@ -680,6 +691,13 @@ func (e *Engine) SingleLangTranslate(ctx context.Context, zhText, targetLang str
 	return e.singleLang(ctx, zhText, targetLang, examples, "zh", 0)
 }
 
+// singleLang 单语翻译核心实现（SingleLangTranslate 的实际逻辑）。
+// 流程：组装指令+术语参考 → 解析主模型（租户级/路由/全局）→ 检测 Hunyuan 语言支持度
+// → 计算 max_tokens → 熔断检查 → 主模型短超时调用 → 失败时记录熔断并沿路由链降级 /
+// 单 fallback 兜底（429 前 sleep 2s）→ 记录实际用量 → 成功则重置熔断
+// → finish_reason=length 或空内容翻倍 max_tokens 递归重试（最多 2 次）
+// → 后处理 + 截断自修复。参数：sourceLang 源语言（默认 "zh"），attempt 当前重试次数。
+// 返回译文内容与错误（失败时返回 ""）。
 func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang string, attempt int) (string, error) {
 	cfg := e.Cfg
 	instruction := translateInstruction(sourceLang, targetLang)
@@ -852,6 +870,8 @@ func (e *Engine) isTranslationIncomplete(result, zhText, targetLang string) bool
 	return false
 }
 
+// isEndPunct 判断文本末尾是否以中文/西文结束标点收尾
+// （用于判断长文本是否被截断：正常译文应带结束标点）
 func isEndPunct(s string) bool {
 	t := strings.TrimSpace(s)
 	if t == "" {
@@ -904,6 +924,7 @@ func mergeContinuation(original, continuation string) string {
 	return original + " " + continuation
 }
 
+// equalWords 逐词比较两个字符串切片是否完全相等（用于续翻拼接时的重叠检测）
 func equalWords(a, b []string) bool {
 	for i := range a {
 		if a[i] != b[i] {
@@ -913,6 +934,7 @@ func equalWords(a, b []string) bool {
 	return true
 }
 
+// isRateLimited 判断错误是否为 429 限流（限流时应 sleep 后重试而非直接判定失败）
 func isRateLimited(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "429")
 }
@@ -1005,6 +1027,7 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 			}
 
 			content, _, err := e.LLM.CallChat(ctx, cfg.OnlineAPIBase, cfg.OnlineAPIKey, model, messages, maxTokens, hunyuan, cfg.FallbackTemp)
+			// 429/网络错误 → 429 先 sleep 5s 避峰，再用 fallback 模型重试一次
 			if err != nil && (isRateLimited(err) || isNetworkError(err)) {
 				if isRateLimited(err) {
 					time.Sleep(5 * time.Second)
@@ -1041,6 +1064,9 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 	return result
 }
 
+// parseBatchOutput 解析批量翻译结果。返回与 n 等长的译文切片。
+// 方式1：手工配对 <sN>...</sN> 标记（Go 正则不支持反向引用，故手工扫描）；
+// 命中率 ≥ 9/10 即采用。否则方式2：按行解析 "1." / "[1]" / "1：" 等编号前缀。
 func parseBatchOutput(content string, n int) []string {
 	out := make([]string, n)
 	// 方式1：<sN>...</sN>（手工配对，规避 Go 正则不支持反向引用）

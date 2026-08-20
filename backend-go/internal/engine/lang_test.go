@@ -25,10 +25,10 @@ func TestStrip(t *testing.T) {
 func TestParse(t *testing.T) {
 	cases := map[string][]string{
 		`把"你好，世界"翻译成英语`: {"en"},
-		`翻译成英语：你好`:        {"en"},
-		`ru: hello`:           {"ru"},
-		`你好，世界`:            nil,
-		`把"你好"翻译成日语`:       {"ja"},
+		`翻译成英语：你好`:      {"en"},
+		`ru: hello`:     {"ru"},
+		`你好，世界`:         nil,
+		`把"你好"翻译成日语`:    {"ja"},
 	}
 	for in, want := range cases {
 		got := ParseTargetLangs(in)

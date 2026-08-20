@@ -1,3 +1,10 @@
+// ============ 本文件职责中文说明 ============
+// 翻译后处理清洗链（复刻 Python lib.py）：所有翻译路径的最终清洗入口。
+// 包括：去除开头语言名前缀、非 CJK 目标语删除残留中文字符、
+// 按书写系统过滤非目标语言段落（拉丁系按"语言名独占一行"截断）、
+// 品牌替换（Jishi→ROX）、en 专属短语修正，以及源语言检测（DetectSourceLang）
+// 与汉字抽取（ExtractCJK）等工具函数。
+// ========================================
 package engine
 
 import (
@@ -13,14 +20,14 @@ var (
 
 	// 语言名称前缀（strip_lang_prefix）
 	langPrefixRe = map[string]*regexp.Regexp{
-		"en": regexp.MustCompile(`(?i)^\s*(en|english|英语|英文)\s*[：:]\s*`),
-		"ru": regexp.MustCompile(`(?i)^\s*(ru|russian|俄语|俄文|俄)\s*[：:]\s*`),
-		"ar": regexp.MustCompile(`(?i)^\s*(ar|arabic|阿拉伯语|阿拉伯|阿语)\s*[：:]\s*`),
-		"es": regexp.MustCompile(`(?i)^\s*(es|spanish|西班牙语|西语|西文)\s*[：:]\s*`),
-		"pt": regexp.MustCompile(`(?i)^\s*(pt|portuguese|葡萄牙语|葡语|葡文)\s*[：:]\s*`),
-		"fr": regexp.MustCompile(`(?i)^\s*(fr|french|法语|法文|法)\s*[：:]\s*`),
-		"kk": regexp.MustCompile(`(?i)^\s*(kk|kazakh|哈萨克语|哈语)\s*[：:]\s*`),
-		"de": regexp.MustCompile(`(?i)^\s*(de|german|德语|德文|德)\s*[：:]\s*`),
+		"en":      regexp.MustCompile(`(?i)^\s*(en|english|英语|英文)\s*[：:]\s*`),
+		"ru":      regexp.MustCompile(`(?i)^\s*(ru|russian|俄语|俄文|俄)\s*[：:]\s*`),
+		"ar":      regexp.MustCompile(`(?i)^\s*(ar|arabic|阿拉伯语|阿拉伯|阿语)\s*[：:]\s*`),
+		"es":      regexp.MustCompile(`(?i)^\s*(es|spanish|西班牙语|西语|西文)\s*[：:]\s*`),
+		"pt":      regexp.MustCompile(`(?i)^\s*(pt|portuguese|葡萄牙语|葡语|葡文)\s*[：:]\s*`),
+		"fr":      regexp.MustCompile(`(?i)^\s*(fr|french|法语|法文|法)\s*[：:]\s*`),
+		"kk":      regexp.MustCompile(`(?i)^\s*(kk|kazakh|哈萨克语|哈语)\s*[：:]\s*`),
+		"de":      regexp.MustCompile(`(?i)^\s*(de|german|德语|德文|德)\s*[：:]\s*`),
 		"zh_hant": regexp.MustCompile(`(?i)^\s*(zh[-_]hant|繁体|繁体中文|tc)\s*[：:]\s*`),
 	}
 
@@ -96,6 +103,8 @@ func StripForeignParagraphs(text, langCode string) string {
 	return strings.Join(kept, "\n")
 }
 
+// lineBelongsToScript 判断某行是否属于目标语言书写系统（按各书写系统正则检查；
+// 西里尔/阿拉伯语额外要求不含汉字，CJK 允许含谚文）
 func lineBelongsToScript(line, script string) bool {
 	switch script {
 	case "cyrillic":
@@ -121,6 +130,9 @@ var latinLangNameLines = map[string][]string{
 	"en": {"英语", "英文", "俄语", "俄文", "阿拉伯语", "西班牙语", "葡萄牙语", "法语", "德语"},
 }
 
+// stripLangNameSections 拉丁系语言截断处理：逐行遍历，若某行是纯"语言名"行
+// （如"英语""俄语"）且非目标语言，则视为模型输出的多余开头，截断至此；
+// 目标语言名行则跳过。用于清理模型额外输出的语言名称。
 func stripLangNameSections(text, langCode string) string {
 	// 简单实现：遍历行，若某行是"语言名"且非目标语言，截断于此
 	names := latinLangNameLines[langCode]

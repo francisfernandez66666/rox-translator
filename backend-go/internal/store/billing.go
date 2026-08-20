@@ -1,3 +1,9 @@
+// ============ 本文件职责中文说明 ============
+// 计费域数据访问层：租户余额账本（balance_accounts）、用量明细（usage_ledger）、
+// 单价表（rate_card）、充值订单（orders/payments）与发票（invoices）。
+// 核心业务逻辑：充值/扣减余额（不足抛 ErrInsufficientBalance）、按单价计量并扣费、
+// 订单支付确认、退款、开具发票等。
+// =============================================
 package store
 
 import (
@@ -7,83 +13,85 @@ import (
 
 // Balance 租户余额
 type Balance struct {
-	ID        int64  `json:"id"`
-	TenantID  int64  `json:"tenant_id"`
-	Balance   int64  `json:"balance"`
-	Currency  string `json:"currency"`
-	UpdatedAt string `json:"updated_at"`
+	ID        int64  `json:"id"`         // 余额账户主键 ID
+	TenantID  int64  `json:"tenant_id"`  // 所属租户 ID
+	Balance   int64  `json:"balance"`    // 当前剩余 token 数
+	Currency  string `json:"currency"`   // 货币/计量单位（本系统为 tokens）
+	UpdatedAt string `json:"updated_at"` // 最近变更时间（RFC3339 字符串）
 }
 
 // UsageRecord 用量明细
 type UsageRecord struct {
-	ID        int64  `json:"id"`
-	TenantID  int64  `json:"tenant_id"`
-	UserID    int64  `json:"user_id"`
-	TaskType  string `json:"task_type"`
-	Provider  string `json:"provider"`
-	Model     string `json:"model"`
-	Quantity  int64  `json:"quantity"`
-	UnitPrice int64  `json:"unit_price"`
-	Cost      int64  `json:"cost"`
-	CreatedAt string `json:"created_at"`
+	ID        int64  `json:"id"`         // 用量记录主键 ID
+	TenantID  int64  `json:"tenant_id"`  // 所属租户 ID
+	UserID    int64  `json:"user_id"`    // 发起用量的用户 ID
+	TaskType  string `json:"task_type"`  // 任务类型：translate/review/evals/gate
+	Provider  string `json:"provider"`   // LLM 供应商（多供应商成本核算维度）
+	Model     string `json:"model"`      // 使用的模型名
+	Quantity  int64  `json:"quantity"`   // 用量单位数（字符数或句数）
+	UnitPrice int64  `json:"unit_price"` // 每单位价格（token）
+	Cost      int64  `json:"cost"`       // 本笔总费用（扣减 token 数）
+	CreatedAt string `json:"created_at"` // 用量发生时间（RFC3339 字符串）
 }
 
 // UsageLedger 用量明细记录（usage_ledger 表）
 type UsageLedger struct {
-	ID        int64  `json:"id"`
-	TenantID  int64  `json:"tenant_id"`
-	UserID    int64  `json:"user_id"`
-	TaskType  string `json:"task_type"`
-	Provider  string `json:"provider"`
-	Model     string `json:"model"`
-	Quantity  int64  `json:"quantity"`
-	UnitPrice int64  `json:"unit_price"`
-	Cost      int64  `json:"cost"`
-	CreatedAt string `json:"created_at"`
+	ID        int64  `json:"id"`         // 用量明细主键 ID
+	TenantID  int64  `json:"tenant_id"`  // 所属租户 ID
+	UserID    int64  `json:"user_id"`    // 发起用量的用户 ID
+	TaskType  string `json:"task_type"`  // 任务类型：translate/review/evals/gate
+	Provider  string `json:"provider"`   // LLM 供应商（成本核算维度）
+	Model     string `json:"model"`      // 使用的模型名
+	Quantity  int64  `json:"quantity"`   // 用量单位数（字符数或句数）
+	UnitPrice int64  `json:"unit_price"` // 每单位价格（token）
+	Cost      int64  `json:"cost"`       // 本笔总费用（扣减 token 数）
+	CreatedAt string `json:"created_at"` // 用量发生时间（RFC3339 字符串）
 }
 
 // RateCard 单价表
 type RateCard struct {
-	ID         int64   `json:"id"`
-	TaskType   string  `json:"task_type"`
-	Lang       string  `json:"lang"`
-	UnitPrice  int64   `json:"unit_price"`
-	Multiplier float64 `json:"multiplier"`
-	UpdatedAt  string  `json:"updated_at"`
+	ID         int64   `json:"id"`         // 单价规则主键 ID
+	TaskType   string  `json:"task_type"`  // 任务类型：translate/review/evals/gate
+	Lang       string  `json:"lang"`       // 目标语言（* 表示全局通用）
+	UnitPrice  int64   `json:"unit_price"` // 每单位价格（token）
+	Multiplier float64 `json:"multiplier"` // 高膨胀语种倍率（乘以 UnitPrice）
+	UpdatedAt  string  `json:"updated_at"` // 最近更新时间（RFC3339 字符串）
 }
 
 // Order 充值订单
 type Order struct {
-	ID           int64   `json:"id"`
-	TenantID     int64   `json:"tenant_id"`
-	OrderNo      string  `json:"order_no"`
-	AmountTokens int64   `json:"amount_tokens"`
-	AmountMoney  float64 `json:"amount_money"`
-	Status       string  `json:"status"` // pending/paid/refunded/cancelled
-	PayMethod    string  `json:"pay_method"`
-	CreatedBy    int64   `json:"created_by"`
-	CreatedAt    string  `json:"created_at"`
-	PaidAt       string  `json:"paid_at"`
+	ID           int64   `json:"id"`            // 订单主键 ID
+	TenantID     int64   `json:"tenant_id"`     // 所属租户 ID
+	OrderNo      string  `json:"order_no"`      // 订单号（RO + 时间戳 + 随机后缀）
+	AmountTokens int64   `json:"amount_tokens"` // 充值 token 数
+	AmountMoney  float64 `json:"amount_money"`  // 充值金额（货币）
+	Status       string  `json:"status"`        // 订单状态：pending / paid / refunded / cancelled
+	PayMethod    string  `json:"pay_method"`    // 支付方式（本系统为 offline 线下转账）
+	CreatedBy    int64   `json:"created_by"`    // 创建订单的用户 ID
+	CreatedAt    string  `json:"created_at"`    // 创建时间（RFC3339 字符串）
+	PaidAt       string  `json:"paid_at"`       // 支付确认时间（空表示未支付）
 }
 
 // ============ 余额 ============
 
-// EnsureBalance 确保租户余额账户存在
+// EnsureBalance 确保租户余额账户存在：不存在则创建初始为 0 的账户（幂等）。
+// 参数：tid=租户 ID；返回错误（存在则直接返回 nil）。
 func (s *Store) EnsureBalance(tid int64) error {
 	var id int64
 	err := s.db.QueryRow("SELECT id FROM balance_accounts WHERE tenant_id=?", tid).Scan(&id)
 	if err == nil {
-		return nil
+		return nil // 账户已存在
 	}
 	if err != sql.ErrNoRows {
-		return err
+		return err // 查询异常而非"无记录"
 	}
 	_, err = s.db.Exec("INSERT INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
 		tid, time.Now().Format(time.RFC3339))
 	return err
 }
 
-// GetBalance 查询租户余额
+// GetBalance 查询租户余额（内部先确保账户存在）。
+// 参数：tid=租户 ID；返回租户余额结构体。
 func (s *Store) GetBalance(tid int64) (*Balance, error) {
 	if err := s.EnsureBalance(tid); err != nil {
 		return nil, err
@@ -97,30 +105,34 @@ func (s *Store) GetBalance(tid int64) (*Balance, error) {
 	return &b, nil
 }
 
-// Charge 充值（增加余额，幂等 by 订单）
+// Charge 充值：增加租户余额（幂等，按订单触发）。
+// 参数：tid=租户 ID，tokens=充值 token 数；返回错误。
 func (s *Store) Charge(tid int64, tokens int64) error {
 	if err := s.EnsureBalance(tid); err != nil {
 		return err
 	}
+	// 余额累加充值 token 数
 	_, err := s.db.Exec(
 		"UPDATE balance_accounts SET balance=balance+?, updated_at=? WHERE tenant_id=?",
 		tokens, time.Now().Format(time.RFC3339), tid)
 	return err
 }
 
-// Deduct 扣减余额（不足时返回 ErrInsufficientBalance）
+// Deduct 扣减余额；余额不足时返回 ErrInsufficientBalance。
+// 参数：tid=租户 ID，tokens=待扣减 token 数；返回错误。
 var ErrInsufficientBalance = &errTxt{"余额不足"}
 
 func (s *Store) Deduct(tid int64, tokens int64) error {
 	if err := s.EnsureBalance(tid); err != nil {
 		return err
 	}
+	// 先读当前余额再扣减（单机 SQLite，未用事务亦可接受，保证余额不转负）
 	var bal int64
 	if err := s.db.QueryRow("SELECT balance FROM balance_accounts WHERE tenant_id=?", tid).Scan(&bal); err != nil {
 		return err
 	}
 	if bal < tokens {
-		return ErrInsufficientBalance
+		return ErrInsufficientBalance // 余额不足，拒绝扣减
 	}
 	_, err := s.db.Exec(
 		"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=?",
@@ -131,14 +143,16 @@ func (s *Store) Deduct(tid int64, tokens int64) error {
 // ============ 用量 ============
 
 // RecordUsage 计量一条用量（并扣减余额）。provider/model 用于多供应商成本核算。
+// 参数：tid/userID=租户与用户，taskType=任务类型，provider/model=供应商与模型，quantity=用量数。
+// 返回：新写入 usage_ledger 记录 ID；余额不足时返回 ErrInsufficientBalance。
 func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model string, quantity int64) (int64, error) {
 	price, mult := s.unitPrice(taskType, provider)
-	cost := int64(float64(quantity*price) * mult)
+	cost := int64(float64(quantity*price) * mult) // 费用 = 用量 × 单价 × 语种倍率
 	if cost < 0 {
-		cost = 0
+		cost = 0 // 兜底：费用不可能为负
 	}
 	if err := s.Deduct(tid, cost); err != nil {
-		return 0, err
+		return 0, err // 先扣余额，失败则不再落账
 	}
 	res, err := s.db.Exec(
 		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -149,12 +163,13 @@ func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model string,
 	return res.LastInsertId()
 }
 
-// LogUsage 只记录用量、不扣余额（billing 未强制计费时用于留痕计量）
+// LogUsage 只记录用量、不扣余额（billing 未强制计费时用于留痕计量）。
+// 参数：同 RecordUsage；仅返回错误。
 func (s *Store) LogUsage(tid, userID int64, taskType, provider, model string, quantity int64) error {
 	price, mult := s.unitPrice(taskType, provider)
-	cost := int64(float64(quantity*price) * mult)
+	cost := int64(float64(quantity*price) * mult) // 费用 = 用量 × 单价 × 语种倍率
 	if cost < 0 {
-		cost = 0
+		cost = 0 // 兜底：费用不可能为负
 	}
 	_, err := s.db.Exec(
 		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -162,26 +177,30 @@ func (s *Store) LogUsage(tid, userID int64, taskType, provider, model string, qu
 	return err
 }
 
-// unitPrice 读取单价：优先供应商专属价，未配置回退全局 '*'
+// unitPrice 读取单价：优先供应商专属价，未配置回退全局 '*'。
+// 参数：taskType=任务类型，provider=供应商；返回单价与倍率（无配置默认 1 / 1.0）。
 func (s *Store) unitPrice(taskType, provider string) (int64, float64) {
 	var price int64
 	var mult float64
+	// 第一次查询：任务+供应商专属价格
 	err := s.db.QueryRow("SELECT unit_price, multiplier FROM rate_card WHERE task_type=? AND lang='*' AND provider=?", taskType, provider).
 		Scan(&price, &mult)
 	if err != nil {
+		// 回退查询：任务全局价格（provider='*'）
 		err = s.db.QueryRow("SELECT unit_price, multiplier FROM rate_card WHERE task_type=? AND lang='*' AND provider='*'", taskType).
 			Scan(&price, &mult)
 	}
 	if err != nil {
-		return 1, 1.0
+		return 1, 1.0 // 都未配置则按 1 token/单位 计费
 	}
 	if mult == 0 {
-		mult = 1.0
+		mult = 1.0 // 倍率 0 视为 1（防止免费乘数导致费用为 0）
 	}
 	return price, mult
 }
 
-// UsageStats 租户用量汇总（按任务类型）
+// UsageStats 租户用量汇总（按任务类型分组统计费用）。
+// 参数：tid=租户 ID；返回 map[任务类型]=总费用 与 全部费用合计。
 func (s *Store) UsageStats(tid int64) (map[string]int64, int64, error) {
 	rows, err := s.db.Query("SELECT task_type, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? GROUP BY task_type", tid)
 	if err != nil {
@@ -196,18 +215,20 @@ func (s *Store) UsageStats(tid int64) (map[string]int64, int64, error) {
 		if err := rows.Scan(&tt, &cost); err != nil {
 			continue
 		}
-		out[tt] = cost
-		total += cost
+		out[tt] = cost // 按任务类型累计
+		total += cost  // 全局合计
 	}
 	return out, total, nil
 }
 
-// UsageStatsByProvider 用量按供应商/模型拆分（多供应商成本核算）。tid<=0 时统计全平台。
+// UsageStatsByProvider 用量按供应商/模型拆分统计（多供应商成本核算）。tid<=0 时统计全平台。
+// 参数：tid=租户 ID（<=0 表示全平台）；返回 map["供应商 / 模型"]=总费用。
 func (s *Store) UsageStatsByProvider(tid int64) (map[string]int64, error) {
+	// 把空供应商归为 global，空模型归为 ?，拼接成展示键
 	q := "SELECT COALESCE(NULLIF(provider,''),'global') || ' / ' || COALESCE(NULLIF(model,''),'?'), COALESCE(SUM(cost),0) FROM usage_ledger WHERE provider!=''"
 	args := []interface{}{}
 	if tid > 0 {
-		q += " AND tenant_id=?"
+		q += " AND tenant_id=?" // 租户过滤（tid<=0 查全平台）
 		args = append(args, tid)
 	}
 	q += " GROUP BY provider, model"
@@ -228,11 +249,14 @@ func (s *Store) UsageStatsByProvider(tid int64) (map[string]int64, error) {
 	return out, nil
 }
 
-// UsageTrend 租户按日用量趋势（最近 N 天）
+// UsageTrend 租户按日用量趋势（最近 N 天）。
+// 参数：tid=租户 ID，days=最近天数（默认 7，最大 90）。
+// 返回：map[日期YYYY-MM-DD]=当日总费用。
 func (s *Store) UsageTrend(tid int64, days int) (map[string]int64, error) {
 	if days <= 0 || days > 90 {
-		days = 7
+		days = 7 // 非法天数收敛到 7
 	}
+	// 计算起始日期（不含今天，往前 days-1 天）
 	start := time.Now().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
 	rows, err := s.db.Query(
 		"SELECT substr(created_at,1,10) AS day, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=? GROUP BY day ORDER BY day",
@@ -248,15 +272,17 @@ func (s *Store) UsageTrend(tid int64, days int) (map[string]int64, error) {
 		if err := rows.Scan(&day, &cost); err != nil {
 			continue
 		}
-		out[day] = cost
+		out[day] = cost // 按日期累计
 	}
 	return out, nil
 }
 
-// UsageLedgerList 用量明细（租户隔离，分页）
+// UsageLedgerList 用量明细列表（租户隔离，分页）。
+// 参数：tid=租户 ID，limit=每页条数（默认 50，最大 500），offset=偏移量。
+// 返回：用量明细列表，按 ID 倒序。
 func (s *Store) UsageLedgerList(tid int64, limit, offset int) ([]*UsageLedger, error) {
 	if limit <= 0 || limit > 500 {
-		limit = 50
+		limit = 50 // 非法 limit 收敛到 50
 	}
 	rows, err := s.db.Query(
 		"SELECT id, tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, created_at FROM usage_ledger WHERE tenant_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
@@ -269,26 +295,30 @@ func (s *Store) UsageLedgerList(tid int64, limit, offset int) ([]*UsageLedger, e
 	for rows.Next() {
 		var u UsageLedger
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.UserID, &u.TaskType, &u.Provider, &u.Model, &u.Quantity, &u.UnitPrice, &u.Cost, &u.CreatedAt); err != nil {
-			continue
+			continue // 单行解析失败跳过
 		}
 		out = append(out, &u)
 	}
 	return out, nil
 }
 
-// DailyUsage 租户当日用量
+// DailyUsage 租户当日用量总费用。
+// 参数：tid=租户 ID；返回今天累计扣费 token 数。
 func (s *Store) DailyUsage(tid int64) (int64, error) {
 	day := time.Now().Format("2006-01-02")
 	var cost int64
+	// 用 LIKE 前缀匹配当日所有记录（created_at 以 日期 开头）
 	err := s.db.QueryRow("SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at LIKE ?", tid, day+"%").Scan(&cost)
 	return cost, err
 }
 
 // ============ 订单 ============
 
-// CreateOrder 创建充值订单
+// CreateOrder 创建充值订单（线下转账，初始状态 pending）。
+// 参数：tid=租户 ID，tokens=充值 token 数，money=充值金额，createdBy=创建者 ID。
+// 返回：新订单对象（含生成的订单号）。
 func (s *Store) CreateOrder(tid int64, tokens int64, money float64, createdBy int64) (*Order, error) {
-	orderNo := "RO" + time.Now().Format("20060102150405") + randSuffix(4)
+	orderNo := "RO" + time.Now().Format("20060102150405") + randSuffix(4) // 生成唯一订单号
 	res, err := s.db.Exec(
 		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, created_by, created_at) VALUES (?,?,?,?, 'pending', 'offline', ?, ?)",
 		tid, orderNo, tokens, money, createdBy, time.Now().Format(time.RFC3339))
@@ -299,7 +329,8 @@ func (s *Store) CreateOrder(tid int64, tokens int64, money float64, createdBy in
 	return s.GetOrder(id, tid)
 }
 
-// GetOrder 查询订单
+// GetOrder 按 ID+租户查询订单（租户隔离校验）。
+// 参数：id=订单主键 ID，tid=租户 ID；返回订单对象。
 func (s *Store) GetOrder(id, tid int64) (*Order, error) {
 	var o Order
 	err := s.db.QueryRow("SELECT id, tenant_id, order_no, amount_tokens, amount_money, status, pay_method, created_by, created_at, COALESCE(paid_at,'') FROM orders WHERE id=? AND tenant_id=?", id, tid).
@@ -310,7 +341,8 @@ func (s *Store) GetOrder(id, tid int64) (*Order, error) {
 	return &o, nil
 }
 
-// ListOrders 租户订单列表
+// ListOrders 列出租户全部订单（按 ID 倒序）。
+// 参数：tid=租户 ID；返回订单列表。
 func (s *Store) ListOrders(tid int64) ([]*Order, error) {
 	rows, err := s.db.Query("SELECT id, tenant_id, order_no, amount_tokens, amount_money, status, pay_method, created_by, created_at, COALESCE(paid_at,'') FROM orders WHERE tenant_id=? ORDER BY id DESC", tid)
 	if err != nil {
@@ -321,16 +353,18 @@ func (s *Store) ListOrders(tid int64) ([]*Order, error) {
 	for rows.Next() {
 		var o Order
 		if err := rows.Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.CreatedBy, &o.CreatedAt, &o.PaidAt); err != nil {
-			continue
+			continue // 单行解析失败跳过
 		}
 		out = append(out, &o)
 	}
 	return out, nil
 }
 
-// MarkOrderPaid 订单支付确认（线下转账 admin 手动确认）
+// MarkOrderPaid 订单支付确认（线下转账 admin 手动确认）：置 paid、记支付流水并充值余额。
+// 参数：orderID=订单主键 ID，tid=租户 ID；返回错误。
 func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 	var tokens int64
+	// 仅允许 pending 状态的订单被确认（防止重复支付）
 	err := s.db.QueryRow("SELECT amount_tokens FROM orders WHERE id=? AND tenant_id=? AND status='pending'", orderID, tid).Scan(&tokens)
 	if err != nil {
 		return err
@@ -340,17 +374,21 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		time.Now().Format(time.RFC3339), orderID, tid); err != nil {
 		return err
 	}
+	// 写入支付流水（payments 表）
 	if _, err := s.db.Exec(
 		"INSERT INTO payments (order_id, tenant_id, amount_tokens, amount_money, status, created_at) VALUES (?,?,?,?, 'paid', ?)",
 		orderID, tid, tokens, 0, time.Now().Format(time.RFC3339)); err != nil {
 		return err
 	}
+	// 到账：给租户充值等额 token
 	return s.Charge(tid, tokens)
 }
 
-// RefundOrder 退款（扣除等额余额）
+// RefundOrder 退款：订单置 refunded 并从租户余额扣除等额 token。
+// 参数：orderID=订单主键 ID，tid=租户 ID；余额不足时返回 ErrInsufficientBalance。
 func (s *Store) RefundOrder(orderID, tid int64) error {
 	var tokens int64
+	// 仅允许已支付订单退款
 	err := s.db.QueryRow("SELECT amount_tokens FROM orders WHERE id=? AND tenant_id=? AND status='paid'", orderID, tid).Scan(&tokens)
 	if err != nil {
 		return err
@@ -358,36 +396,41 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	if _, err := s.db.Exec("UPDATE orders SET status='refunded' WHERE id=? AND tenant_id=?", orderID, tid); err != nil {
 		return err
 	}
-	return s.Deduct(tid, tokens)
+	return s.Deduct(tid, tokens) // 扣回等额余额完成退款
 }
 
+// errTxt 自定义错误类型：仅保存一条错误消息文本。
 type errTxt struct{ s string }
 
+// Error 实现 error 接口，返回错误消息文本。
 func (e *errTxt) Error() string { return e.s }
 
 // ============ 发票 ============
 
 // Invoice 发票
 type Invoice struct {
-	ID         int64   `json:"id"`
-	TenantID   int64   `json:"tenant_id"`
-	OrderID    int64   `json:"order_id"`
-	InvoiceNo  string  `json:"invoice_no"`
-	AmountMoney float64 `json:"amount_money"`
-	Title      string  `json:"title"`
-	TaxNo      string  `json:"tax_no"`
-	Status     string  `json:"status"`
-	CreatedAt  string  `json:"created_at"`
+	ID          int64   `json:"id"`           // 发票主键 ID
+	TenantID    int64   `json:"tenant_id"`    // 所属租户 ID
+	OrderID     int64   `json:"order_id"`     // 关联订单 ID
+	InvoiceNo   string  `json:"invoice_no"`   // 发票号（INV + 时间戳 + 随机后缀）
+	AmountMoney float64 `json:"amount_money"` // 开票金额
+	Title       string  `json:"title"`        // 发票抬头
+	TaxNo       string  `json:"tax_no"`       // 税号
+	Status      string  `json:"status"`       // 发票状态：pending / issued / cancelled
+	CreatedAt   string  `json:"created_at"`   // 开票时间（RFC3339 字符串）
 }
 
-// CreateInvoice 为已支付订单开具发票
+// CreateInvoice 为已支付订单开具发票。
+// 参数：tid=租户 ID，orderID=已支付订单 ID，title=抬头，taxNo=税号。
+// 返回：新发票对象（金额取自订单 amount_money）。
 func (s *Store) CreateInvoice(tid, orderID int64, title, taxNo string) (*Invoice, error) {
 	var money float64
+	// 仅允许对已支付订单开票，金额取订单金额
 	err := s.db.QueryRow("SELECT amount_money FROM orders WHERE id=? AND tenant_id=? AND status='paid'", orderID, tid).Scan(&money)
 	if err != nil {
 		return nil, err
 	}
-	no := "INV" + time.Now().Format("20060102150405") + randSuffix(4)
+	no := "INV" + time.Now().Format("20060102150405") + randSuffix(4) // 生成唯一发票号
 	now := time.Now().Format(time.RFC3339)
 	res, err := s.db.Exec(
 		"INSERT INTO invoices (tenant_id, order_id, invoice_no, amount_money, title, tax_no, status, created_at) VALUES (?,?,?,?,?,?,'issued',?)",
@@ -399,7 +442,8 @@ func (s *Store) CreateInvoice(tid, orderID int64, title, taxNo string) (*Invoice
 	return s.GetInvoice(id, tid)
 }
 
-// GetInvoice 查询发票
+// GetInvoice 按 ID+租户查询发票（租户隔离校验）。
+// 参数：id=发票主键 ID，tid=租户 ID；返回发票对象。
 func (s *Store) GetInvoice(id, tid int64) (*Invoice, error) {
 	row := s.db.QueryRow(
 		"SELECT id, tenant_id, order_id, invoice_no, amount_money, COALESCE(title,''), COALESCE(tax_no,''), status, COALESCE(created_at,'') FROM invoices WHERE id=? AND tenant_id=?", id, tid)
@@ -411,7 +455,8 @@ func (s *Store) GetInvoice(id, tid int64) (*Invoice, error) {
 	return &inv, nil
 }
 
-// ListInvoices 租户发票列表
+// ListInvoices 列出租户全部发票（按 ID 倒序）。
+// 参数：tid=租户 ID；返回发票列表。
 func (s *Store) ListInvoices(tid int64) ([]*Invoice, error) {
 	rows, err := s.db.Query(
 		"SELECT id, tenant_id, order_id, invoice_no, amount_money, COALESCE(title,''), COALESCE(tax_no,''), status, COALESCE(created_at,'') FROM invoices WHERE tenant_id=? ORDER BY id DESC", tid)
@@ -423,20 +468,22 @@ func (s *Store) ListInvoices(tid int64) ([]*Invoice, error) {
 	for rows.Next() {
 		var inv Invoice
 		if err := rows.Scan(&inv.ID, &inv.TenantID, &inv.OrderID, &inv.InvoiceNo, &inv.AmountMoney, &inv.Title, &inv.TaxNo, &inv.Status, &inv.CreatedAt); err != nil {
-			continue
+			continue // 单行解析失败跳过
 		}
 		out = append(out, &inv)
 	}
 	return out, nil
 }
 
+// randSuffix 生成 n 位由大写字母和数字组成的随机后缀（用于订单号/发票号/API Key 唯一性）。
+// 参数：n=随机字符个数；返回随机字符串（基于线性同余伪随机，无需 crypto/rand）。
 func randSuffix(n int) string {
 	const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, n)
 	seed := time.Now().UnixNano()
 	for i := range b {
-		seed = seed*6364136223846793005 + 1442695040888963407
-		b[i] = letters[uint64(seed)%uint64(len(letters))]
+		seed = seed*6364136223846793005 + 1442695040888963407 // LCG 线性同余发生器迭代
+		b[i] = letters[uint64(seed)%uint64(len(letters))]     // 取模映射到字母表
 	}
 	return string(b)
 }

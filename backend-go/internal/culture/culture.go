@@ -2,6 +2,14 @@
 // 反查译文：是否符合语言表达习惯、是否触发政治文化避雷词、度量衡/数字格式/语气是否合规。
 package culture
 
+// ============ 本文件职责中文说明 ============
+// 语言文化包输出闸门（软/硬校验组合）：对目标语言译文执行反向质检——
+// ① 政治文化避雷词反查（命中租户配置的译文侧避雷词即打回）；
+// ② 数字格式（全角数字需改半角）；
+// ③ 语气合规（含明显粗鲁词则打回）；
+// ④ 表达习惯（译文非空）。任一不通过则 Pass=false 并附 Reasons 打回原因。
+// ========================================
+
 import (
 	"strings"
 
@@ -10,16 +18,16 @@ import (
 
 // CultureResult 闸门检查结果
 type CultureResult struct {
-	Pass    bool     `json:"pass"`
-	Checks  []Check  `json:"checks"`
-	Reasons []string `json:"reasons"` // 打回原因
+	Pass    bool     `json:"pass"`    // 是否全部通过
+	Checks  []Check  `json:"checks"`  // 各单项检查明细
+	Reasons []string `json:"reasons"` // 打回原因（供上游提示用户）
 }
 
 // Check 单项检查
 type Check struct {
-	Name   string `json:"name"`
-	Pass   bool   `json:"pass"`
-	Detail string `json:"detail"`
+	Name   string `json:"name"`   // 检查项名称（如 政治文化避雷/数字格式/语气合规）
+	Pass   bool   `json:"pass"`   // 该项是否通过
+	Detail string `json:"detail"` // 失败时的详情（如命中的避雷词）
 }
 
 // Run 执行语言文化包输出闸门反查
