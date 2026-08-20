@@ -5,7 +5,10 @@
    ============================================================================ */
 
 /* ===== 整体布局：左侧栏 + 主内容区，横向 Flex ===== */
-.ad-wrap { display: flex; min-height: 100vh; background: #f5f7fb; }
+/* ★ 高度锁定为视口高度（App.vue 全局 html/body overflow:hidden）：
+   用 height:100vh 而非 min-height，保证 .ad-main 的 overflow:auto 真正生效，
+   面板内容超高时在主内容区内部滚动，而不是撑高页面被裁切 */
+.ad-wrap { display: flex; height: 100vh; background: #f5f7fb; overflow: hidden; }
 /* 左侧侧边栏：深蓝背景，固定高度可滚动 */
 .ad-side {
   width: 230px; background: #1a237e; color: #fff; display: flex; flex-direction: column;
