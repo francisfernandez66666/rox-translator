@@ -12,9 +12,12 @@ package api
 import (
 	"fmt"
 	"log"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
+	"translator/internal/store"
 	"translator/internal/tenant"
 )
 
@@ -44,7 +47,49 @@ func (s *Server) startWatchdog() {
 			s.runWatchdogCheck()
 		}
 	}()
+	// 数据库定时备份（默认每 24 小时，可配置 backup_interval_hours；0=关闭）
+	go func() {
+		backupHours := 24
+		if v, _ := s.Store.GetConfig("backup_interval_hours"); v != "" {
+			if n, err := parseInt(v); err == nil && n >= 0 {
+				backupHours = n
+			}
+		}
+		if backupHours <= 0 {
+			log.Println("数据库定时备份已关闭（backup_interval_hours=0）")
+			return
+		}
+		backupDir := filepath.Join(s.Cfg.UserDataDir, "backups")
+		if v, _ := s.Store.GetConfig("backup_dir"); v != "" {
+			backupDir = v
+		}
+		keep := 7
+		if v, _ := s.Store.GetConfig("backup_keep"); v != "" {
+			if n, err := parseInt(v); err == nil && n > 0 {
+				keep = n
+			}
+		}
+		ticker := time.NewTicker(time.Duration(backupHours) * time.Hour)
+		defer ticker.Stop()
+		// 启动后先备份一次，再按周期备份
+		s.runBackup(backupDir, keep)
+		for range ticker.C {
+			s.runBackup(backupDir, keep)
+		}
+	}()
 	log.Println("监控看门狗已启动")
+}
+
+// runBackup 执行一次数据库备份并清理旧备份。
+func (s *Server) runBackup(backupDir string, keep int) {
+	dest, err := s.Store.Backup(backupDir, s.Cfg.DBPath)
+	if err != nil {
+		log.Printf("数据库备份失败: %v", err)
+		return
+	}
+	// 清理旧备份，仅保留最近 keep 份
+	store.PruneBackups(backupDir, strings.TrimSuffix(filepath.Base(s.Cfg.DBPath), filepath.Ext(s.Cfg.DBPath)), keep)
+	log.Printf("数据库已备份: %s（保留最近 %d 份）", dest, keep)
 }
 
 // runWatchdogCheck 执行一轮检查：余额阈值 / 模型熔断 / 错误率三项告警巡检。
