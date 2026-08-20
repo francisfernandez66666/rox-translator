@@ -77,6 +77,8 @@ func (s *Server) startWatchdog() {
 			s.runBackup(backupDir, keep)
 		}
 	}()
+	// OOM 内存监控（默认每 60 秒采样，可配置 mem_monitor_interval_sec；0=关闭）
+	s.startMemoryMonitor()
 	log.Println("监控看门狗已启动")
 }
 
