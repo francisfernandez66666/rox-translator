@@ -271,6 +271,18 @@ func (s *Store) migrate() error {
 		)`,
 		// 组织树按租户查询索引
 		`CREATE INDEX IF NOT EXISTS idx_orgs_tenant ON orgs(tenant_id, parent_id)`,
+		// ---------- webhooks 租户回调配置（翻译完成通知客户 TMS/CI） ----------
+		`CREATE TABLE IF NOT EXISTS webhooks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id INTEGER NOT NULL DEFAULT 1,
+			url TEXT NOT NULL DEFAULT '',              -- 回调 URL
+			secret TEXT NOT NULL DEFAULT '',           -- 签名密钥（HMAC-SHA256）
+			events TEXT NOT NULL DEFAULT 'translation.completed', -- 订阅事件（逗号分隔）
+			enabled INTEGER NOT NULL DEFAULT 1,        -- 1=启用 0=停用
+			created_at TEXT,
+			updated_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_webhooks_tenant ON webhooks(tenant_id, enabled)`,
 	}
 	for _, stmt := range stmts {
 		// 逐条幂等执行建表语句，失败即中止迁移

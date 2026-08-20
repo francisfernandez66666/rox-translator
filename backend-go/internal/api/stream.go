@@ -115,7 +115,25 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Message))))
 		s.metrics.countTranslate("text", true)
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
+		// Webhook：翻译完成事件回调租户配置的 URL（异步投递，不阻塞 SSE 返回）
+		s.dispatchTranslateWebhook(tid, "text", req.Message, res)
 	}
+}
+
+// dispatchTranslateWebhook 投递翻译完成 webhook 事件（text/file 通用）。
+// 参数：tid=租户 ID，kind=任务类型（text/file），source=源文本或文件名，res=引擎结果。
+func (s *Server) dispatchTranslateWebhook(tid int64, kind, source string, res interface{}) {
+	if s.Store == nil {
+		return
+	}
+	s.Store.DispatchWebhook(tid, "translation.completed", map[string]interface{}{
+		"event":     "translation.completed",
+		"tenant_id": tid,
+		"type":      kind,
+		"source":    source,
+		"result":    res,
+		"time":      nowRFC3339(),
+	})
 }
 
 // ============ 流式文件翻译 ============
@@ -221,6 +239,8 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 		s.meterUsage(r, tid, "translate", int64(res.Data.TotalTexts))
 		s.metrics.countTranslate("file", true)
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
+		// Webhook：翻译完成事件回调（异步投递）
+		s.dispatchTranslateWebhook(tid, "file", header.Filename, res)
 	}
 }
 
@@ -253,6 +273,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// 成功：按源文本字符数计量
 		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Message))))
 		s.metrics.countTranslate("text", true)
+		// Webhook：翻译完成事件回调（异步投递）
+		s.dispatchTranslateWebhook(tid, "text", req.Message, res)
 	}
 	writeJSON(w, 200, res)
 }
@@ -322,6 +344,8 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 		// 成功：按提取段数计量文件翻译用量
 		s.meterUsage(r, tid, "translate", int64(res.Data.TotalTexts))
 		s.metrics.countTranslate("file", true)
+		// Webhook：翻译完成事件回调（异步投递）
+		s.dispatchTranslateWebhook(tid, "file", header.Filename, res)
 	} else {
 		s.metrics.countTranslate("file", false)
 	}

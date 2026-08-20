@@ -80,6 +80,7 @@ import Kb from './admin/Kb.vue'
 import Models from './admin/Models.vue'
 import Workflow from './admin/Workflow.vue'
 import ApiKeys from './admin/ApiKeys.vue'
+import Webhooks from './admin/Webhooks.vue'
 import Tickets from './admin/Tickets.vue'
 // 共享样式（非 scoped，供全部面板使用）
 import './admin/admin.css'
@@ -129,6 +130,7 @@ const categories = [
     key: 'open', label: '开放',
     panels: [
       { key: 'apikeys', label: '🔑 API Key', comp: ApiKeys, min: 2 },
+      { key: 'webhooks', label: '🔔 Webhook', comp: Webhooks, min: 2 },
       { key: 'tickets', label: '📝 工单/审批', comp: Tickets, min: 2 },
     ],
   },
