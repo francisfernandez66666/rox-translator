@@ -65,27 +65,32 @@ const orgOptions = computed(() => {
   return [...root, ...children]
 })
 
-// 组织路径（父级前缀）
+// 组织路径（父级前缀，下拉中展示层级）
 function orgPath(o: OrgInfo): string {
   if (o.parent_id === 0) return o.name
   const parent = orgs.value.find(x => x.id === o.parent_id)
   return parent ? `${orgPath(parent)} / ${o.name}` : o.name
 }
 
-// 用户所属组织名（展示）
+// 用户所属组织名（表格展示；0=根组织）
 function userOrgName(orgId: number): string {
   if (!orgId) return '根组织'
   return orgs.value.find(o => o.id === orgId)?.name || `组织 #${orgId}`
 }
 
+// 加载用户列表（当前生效租户）
 async function loadUsers() {
   const r = await adminUsers()
   if (r.success) users.value = (r as any).users
 }
+
+// 加载组织树（供创建/编辑用户时归属选择）
 async function loadOrgs() {
   const r = await orgList()
   if (r.success) orgs.value = r.orgs || []
 }
+
+// 创建用户（用户名/密码必填；可选角色/租户(超管)/所属组织）
 async function createUser() {
   if (!uForm.value.username || !uForm.value.password) { alert('用户名和密码必填'); return }
   const r = await adminUserCreate({ ...uForm.value })
@@ -93,6 +98,8 @@ async function createUser() {
   uForm.value = { username: '', password: '', display_name: '', role: 'user', tenant_id: activeTenantId.value || 1, org_id: 0 }
   await loadUsers()
 }
+
+// 行内编辑：更新指定字段（org_id 转为数字提交，其余原样）
 async function editUser(u: any, field: string, val: string) {
   const data: any = { display_name: u.display_name, role: u.role, status: u.status, org_id: u.org_id || 0 }
   if (field === 'org_id') data.org_id = Number(val)
@@ -101,11 +108,15 @@ async function editUser(u: any, field: string, val: string) {
   if (!r.success) alert(r.message)
   await loadUsers()
 }
+
+// 启停用户（active ⇄ disabled）
 async function toggleUser(u: any) {
   const r = await adminUserUpdate(u.id, { display_name: u.display_name, role: u.role, status: u.status === 'active' ? 'disabled' : 'active', org_id: u.org_id || 0 })
   if (!r.success) alert(r.message)
   await loadUsers()
 }
+
+// 重置指定用户密码（弹窗输入新密码）
 async function resetPwd(u: any) {
   const pwd = prompt(`为 ${u.username} 设置新密码：`)
   if (!pwd) return
@@ -113,6 +124,7 @@ async function resetPwd(u: any) {
   if (!r.success) alert(r.message)
 }
 
+// 挂载与租户切换时加载
 onMounted(() => { loadUsers(); loadOrgs() })
 watch(activeTenantId, () => { loadUsers(); loadOrgs() })
 </script>

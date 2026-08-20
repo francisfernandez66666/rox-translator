@@ -1,3 +1,9 @@
+// ============ 本文件职责中文说明 ============
+// 登录暴力破解限流器的单元测试：
+//   - TestLoginLimiter：阈值前后行为（未达阈值不封锁、达到阈值进入冷却、无关 IP 不受影响、clear 解除封锁）
+//   - TestLoginLimiterWindowExpiry：窗口内计数累计（blocked 不应在未达阈值时清除计数）
+//
+// =============================================
 package api
 
 import "testing"
