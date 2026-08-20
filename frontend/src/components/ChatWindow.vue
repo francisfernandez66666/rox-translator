@@ -22,7 +22,14 @@
 
     <!-- ===== 离线提示条 ===== -->
     <div v-if="!store.isBackendOnline" class="offline-bar">
-      ⚠️ 后端服务未连接，请检查网络连接
+      <span>⚠️ 后端服务未连接，请检查网络连接</span>
+      <button
+        class="retry-btn"
+        :disabled="store.isBackendChecking"
+        @click="store.retryBackend()"
+      >
+        {{ store.isBackendChecking ? '检查中…' : '重试' }}
+      </button>
     </div>
 
     <!-- ===== 消息列表区域 ===== -->
@@ -881,7 +888,15 @@ async function loadTranslationLangs() {
 .offline-bar {
   padding: 8px 16px; background: #fff3e0; color: #e65100;
   text-align: center; font-size: 13px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
 }
+.retry-btn {
+  border: 1px solid #e65100; background: #fff; color: #e65100;
+  font-size: 12px; padding: 2px 12px; border-radius: 6px; cursor: pointer;
+  transition: background 0.2s;
+}
+.retry-btn:hover { background: #ffe0b2; }
+.retry-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* ==================== 消息列表区域：滚动容器 ==================== */
 .messages-area {

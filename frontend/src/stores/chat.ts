@@ -30,6 +30,8 @@ export const useChatStore = defineStore('chat', () => {
   const isBackendOnline = ref(false)
   // 后端是否仍在启动加载中
   const isBackendLoading = ref(true)
+  // 后端健康检查进行中（重试按钮点击后禁用，防重复并发检查）
+  const isBackendChecking = ref(false)
   // 全局错误信息
   const errorMessage = ref('')
   // 中止控制器（用于取消进行中的 SSE 请求）
@@ -197,8 +199,11 @@ export const useChatStore = defineStore('chat', () => {
     sendMessage(text, { target_langs: [...selectedLangs.value] })
   }
 
-  // 轮询后端健康状态（最多 30 次，每次间隔 1 秒）
+  // 轮询后端健康状态（最多 30 次，每次间隔 1 秒；单次请求 10 秒超时）
+  // 后端挂起时不会无限等待：超时后立即标记离线，供用户点击「重试」再次检查
   async function checkBackendHealth() {
+    if (isBackendChecking.value) return
+    isBackendChecking.value = true
     isBackendLoading.value = true
     const maxRetries = 30
     for (let i = 0; i < maxRetries; i++) {
@@ -207,6 +212,7 @@ export const useChatStore = defineStore('chat', () => {
         if (result.status === 'ok') {
           isBackendOnline.value = true
           isBackendLoading.value = false
+          isBackendChecking.value = false
           return
         }
       } catch {}
@@ -214,6 +220,12 @@ export const useChatStore = defineStore('chat', () => {
     }
     isBackendLoading.value = false
     isBackendOnline.value = false
+    isBackendChecking.value = false
+  }
+
+  // 手动重试后端连接（离线状态栏「重试」按钮）
+  function retryBackend() {
+    checkBackendHealth()
   }
 
   // 清空所有消息与错误
@@ -247,6 +259,7 @@ export const useChatStore = defineStore('chat', () => {
     selectedLangs,
     isBackendOnline,
     isBackendLoading,
+    isBackendChecking,
     errorMessage,
     selectedModel,
     stopGeneration,
@@ -254,6 +267,7 @@ export const useChatStore = defineStore('chat', () => {
     sendFile,
     sendExample,
     checkBackendHealth,
+    retryBackend,
     clearMessages,
     reset,
     setSelectedModel,
