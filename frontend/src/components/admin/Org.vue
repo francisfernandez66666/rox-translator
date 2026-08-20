@@ -47,8 +47,9 @@
       <!-- 组织下用户（含子孙组织归集） -->
       <div class="ad-org-users">
         <h3>{{ selectedOrg === 0 ? '全部用户（根组织）' : `「${selectedOrgName}」及其子组织用户` }}</h3>
+        <div class="ad-hint">开通用户后，该账号将归属于当前选中组织，可用用户名/密码登录。</div>
         <table class="ad-table">
-          <thead><tr><th>ID</th><th>用户名</th><th>名称</th><th>所属组织</th><th>角色</th><th>最近登录</th></tr></thead>
+          <thead><tr><th>ID</th><th>用户名</th><th>名称</th><th>所属组织</th><th>角色</th><th>最近登录</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="u in orgUserList" :key="u.id">
               <td>{{ u.id }}</td>
@@ -57,10 +58,31 @@
               <td>{{ u.org_name || '根组织' }}</td>
               <td>{{ roleName(u.role) }}</td>
               <td>{{ fmtTime(u.last_login_at) }}</td>
+              <td class="ad-td">
+                <button class="ad-btn-sm" @click="resetPwd(u)">重置密码</button>
+                <button v-if="u.status === 'disabled'" class="ad-btn-sm" @click="setStatus(u, 'active')">启用</button>
+                <button v-else class="ad-btn-sm ad-btn-red" @click="setStatus(u, 'disabled')">停用</button>
+              </td>
             </tr>
-            <tr v-if="!orgUserList.length"><td colspan="6" class="ad-empty">该组织下暂无用户</td></tr>
+            <tr v-if="!orgUserList.length"><td colspan="7" class="ad-empty">该组织下暂无用户</td></tr>
           </tbody>
         </table>
+
+        <!-- 开通用户 -->
+        <div class="ad-chart-card" style="margin-top:16px">
+          <h3>开通用户（归属：{{ selectedOrg === 0 ? '根组织' : selectedOrgName }}）</h3>
+          <div class="ad-row">
+            <input v-model="nu.username" placeholder="用户名" class="ad-input ad-mini-w" />
+            <input v-model="nu.password" placeholder="初始密码（≥6位）" class="ad-input" />
+            <input v-model="nu.display_name" placeholder="显示名称" class="ad-input" />
+            <select v-model="nu.role" class="ad-input">
+              <option value="user">普通用户</option>
+              <option value="tenant_admin">组织管理员</option>
+              <option v-if="isSuper" value="super_admin">超级管理员</option>
+            </select>
+            <button class="ad-btn ad-btn-green" :disabled="creating" @click="createUser">{{ creating ? '开通中…' : '开通用户' }}</button>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -69,7 +91,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { orgList, orgCreate, orgRename, orgDelete, orgUsers, type OrgInfo } from '@/api'
-import { activeTenantId, tenantList, roleName } from './store'
+import { adminUserCreate, adminUserUpdate, adminUserResetPassword } from '@/api'
+import { activeTenantId, tenantList, roleName, isSuper } from './store'
 import { fmtTime } from './ui'
 
 // 组织扁平列表（用于下拉与组装树）
@@ -83,6 +106,10 @@ const newName = ref('')
 const allUsers = ref<any[]>([])
 // 当前选中组织下用户
 const orgUserList = ref<any[]>([])
+
+// 开通用户表单
+const creating = ref(false)
+const nu = ref({ username: '', password: '', display_name: '', role: 'user' })
 
 // 当前生效租户名称（展示根组织）
 const tenantName = computed(() => {
@@ -137,6 +164,46 @@ async function loadOrgUsers() {
 function selectOrg(id: number) {
   selectedOrg.value = id
   loadOrgUsers()
+}
+
+// 开通用户：在选中组织下创建账号（根组织=租户直属）
+async function createUser() {
+  if (!nu.value.username.trim() || nu.value.password.length < 6) {
+    alert('请输入用户名和至少 6 位密码')
+    return
+  }
+  creating.value = true
+  try {
+    const r = await adminUserCreate({
+      username: nu.value.username.trim(),
+      password: nu.value.password,
+      display_name: nu.value.display_name.trim() || nu.value.username.trim(),
+      role: nu.value.role,
+      org_id: selectedOrg.value || undefined,
+    })
+    if (!r.success) { alert(r.message); return }
+    alert(`用户「${nu.value.username}」已开通`)
+    nu.value = { username: '', password: '', display_name: '', role: 'user' }
+    await loadAll()
+  } finally {
+    creating.value = false
+  }
+}
+
+// 重置用户密码
+async function resetPwd(u: any) {
+  const pwd = prompt(`为用户「${u.username}」设置新密码：`)
+  if (!pwd || pwd.length < 6) { alert('密码至少 6 位'); return }
+  const r = await adminUserResetPassword(u.id, pwd)
+  if (!r.success) { alert(r.message); return }
+  alert('密码已重置')
+}
+
+// 启用/停用用户
+async function setStatus(u: any, status: string) {
+  const r = await adminUserUpdate(u.id, { display_name: u.display_name, role: u.role, status })
+  if (!r.success) { alert(r.message); return }
+  await loadAll()
 }
 
 // 快捷：选中某组织作为新建子组织的父级

@@ -11,7 +11,7 @@ export async function adminUsers(): Promise<AdminResp> {
 }
 
 // 创建用户
-export async function adminUserCreate(data: { username: string; password: string; display_name: string; role: string }): Promise<AdminResp> {
+export async function adminUserCreate(data: { username: string; password: string; display_name: string; role: string; org_id?: number; email?: string }): Promise<AdminResp> {
   return request('/api/admin/users/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
