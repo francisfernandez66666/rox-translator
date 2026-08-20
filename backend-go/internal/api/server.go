@@ -58,13 +58,29 @@ func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist s
 	return s
 }
 
-// routes 注册全部 HTTP 路由：指标/基础接口/翻译/租户/认证/工单/KB/模型/系统/计费/API Key/开放 API。
+// routes 注册全部 HTTP 路由，按业务域分组调用各分组注册函数。
 // 无参数无返回；所有 Handler 均挂载到 s.mux。
 func (s *Server) routes() {
 	// 指标与基础接口
 	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	s.mux.HandleFunc("/api/health", s.handleHealth)
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
+	// 翻译核心（聊天/文件/下载/语言/KB 统计）
+	s.routesTranslate()
+	// ★ SaaS 租户管理（管理后台）
+	s.routesTenant()
+	// ★ 认证与用户
+	s.routesAuth()
+	// ★ 工单 + 审批
+	s.routesTickets()
+	// ★ 管理后台（KB/流程/模型/策略/evals/系统健康/计费/API Key/开放 API）
+	s.routesAdmin()
+	// 兜底路由：前端 SPA 静态资源
+	s.mux.HandleFunc("/", s.handleSPA)
+}
+
+// routesTranslate 注册翻译核心路由：聊天（文本/SSE）、文件（翻译/SSE/下载）、语言与 KB 统计。
+func (s *Server) routesTranslate() {
 	s.mux.HandleFunc("/api/chat/stream", s.handleChatStream)
 	s.mux.HandleFunc("/api/translate/stream", s.handleTranslateFileStream)
 	s.mux.HandleFunc("/api/chat", s.handleChat)
@@ -74,7 +90,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/translation/recognize-kb", s.handleRecognizeKB)
 	s.mux.HandleFunc("/api/translation/import-kb", s.handleImportKB)
 	s.mux.HandleFunc("/api/translation/kb-stats", s.handleKBStats)
-	// ★ SaaS 租户管理（管理后台）
+}
+
+// routesTenant 注册租户管理路由（管理后台）。
+func (s *Server) routesTenant() {
 	s.mux.HandleFunc("/api/tenant/list", s.handleTenantList)
 	s.mux.HandleFunc("/api/tenant/create", s.handleTenantCreate)
 	s.mux.HandleFunc("/api/tenant/update", s.handleTenantUpdate)
@@ -82,8 +101,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/tenant/delete", s.handleTenantDelete)
 	s.mux.HandleFunc("/api/tenant/export", s.handleTenantExport)
 	s.mux.HandleFunc("/api/tenant/erase", s.handleTenantErase)
+}
 
-	// ★ 认证与用户
+// routesAuth 注册认证与用户管理路由。
+func (s *Server) routesAuth() {
 	s.mux.HandleFunc("/api/auth/login", s.handleLogin)
 	s.mux.HandleFunc("/api/auth/register", s.handleRegister)
 	s.mux.HandleFunc("/api/auth/me", s.handleMe)
@@ -94,16 +115,32 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/users/reset-password", s.handleAdminUserResetPassword)
 	s.mux.HandleFunc("/api/admin/invite-codes", s.handleInviteCodes)
 	s.mux.HandleFunc("/api/admin/invite-codes/create", s.handleInviteCodeCreate)
+}
 
-	// ★ 工单 + 审批
+// routesTickets 注册工单与审批路由。
+func (s *Server) routesTickets() {
 	s.mux.HandleFunc("/api/tickets", s.handleTickets)
 	s.mux.HandleFunc("/api/tickets/create", s.handleTicketCreate)
 	s.mux.HandleFunc("/api/tickets/run", s.handleTicketRun)
 	s.mux.HandleFunc("/api/tickets/detail", s.handleTicketDetail)
 	s.mux.HandleFunc("/api/approve/list", s.handleApproveList)
 	s.mux.HandleFunc("/api/approve/action", s.handleApproveAction)
+}
 
-	// ★ KB 包管理（行业包）
+// routesAdmin 注册管理后台全部路由：KB 包/条目/安全句、流程引擎、模型/策略、
+// evals 看板、系统健康/审计/告警、计费/充值/用量/发票、开放 API Key、开放 API 与文档。
+func (s *Server) routesAdmin() {
+	s.routesAdminKB()
+	s.routesAdminFlow()
+	s.routesAdminModels()
+	s.routesAdminSystem()
+	s.routesBilling()
+	s.routesAPIKeys()
+	s.routesOpenAPI()
+}
+
+// routesAdminKB 注册知识库包/条目/安全句管理路由。
+func (s *Server) routesAdminKB() {
 	s.mux.HandleFunc("/api/admin/kb-packages", s.handleKBPackages)
 	s.mux.HandleFunc("/api/admin/kb-packages/create", s.handleKBPackageCreate)
 	s.mux.HandleFunc("/api/admin/kb-packages/update", s.handleKBPackageUpdate)
@@ -115,30 +152,36 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/safety-phrases", s.handleSafetyPhrases)
 	s.mux.HandleFunc("/api/admin/safety-phrases/add", s.handleSafetyPhraseAdd)
 	s.mux.HandleFunc("/api/admin/safety-phrases/delete", s.handleSafetyPhraseDelete)
+}
 
-	// ★ 流程引擎设置
+// routesAdminFlow 注册流程引擎设置路由。
+func (s *Server) routesAdminFlow() {
 	s.mux.HandleFunc("/api/admin/flow", s.handleFlowConfig)
 	s.mux.HandleFunc("/api/admin/flow/save", s.handleFlowSave)
 	s.mux.HandleFunc("/api/admin/flow/run", s.handleFlowRunTicket)
+}
 
-	// ★ 模型/策略配置
+// routesAdminModels 注册模型/模型路由/策略参数配置路由。
+func (s *Server) routesAdminModels() {
 	s.mux.HandleFunc("/api/admin/models", s.handleModels)
 	s.mux.HandleFunc("/api/admin/models/save", s.handleModelsSave)
 	s.mux.HandleFunc("/api/admin/models/routes", s.handleModelRoutes)
 	s.mux.HandleFunc("/api/admin/models/routes/save", s.handleModelRoutesSave)
 	s.mux.HandleFunc("/api/admin/policy", s.handlePolicy)
 	s.mux.HandleFunc("/api/admin/policy/save", s.handlePolicySave)
+}
 
-	// ★ evals 看板
+// routesAdminSystem 注册 evals 看板与系统健康/审计/告警路由。
+func (s *Server) routesAdminSystem() {
 	s.mux.HandleFunc("/api/evals/list", s.handleEvalsList)
-
-	// ★ 系统健康
 	s.mux.HandleFunc("/api/system/health", s.handleSystemHealth)
 	s.mux.HandleFunc("/api/system/audit", s.handleSystemAudit)
 	s.mux.HandleFunc("/api/system/alerts", s.handleAlerts)
 	s.mux.HandleFunc("/api/system/alerts/resolve", s.handleAlertResolve)
+}
 
-	// ★ 计费/充值/用量
+// routesBilling 注册计费/充值/用量/配额/发票路由。
+func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/billing/balance", s.handleBalance)
 	s.mux.HandleFunc("/api/billing/usage", s.handleUsage)
 	s.mux.HandleFunc("/api/billing/orders", s.handleOrders)
@@ -151,23 +194,24 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/orders/refund", s.handleOrderRefund)
 	s.mux.HandleFunc("/api/billing/invoices", s.handleInvoices)
 	s.mux.HandleFunc("/api/billing/invoices/create", s.handleInvoiceCreate)
+}
 
-	// ★ 租户开放 API Key
+// routesAPIKeys 注册租户开放 API Key 管理路由。
+func (s *Server) routesAPIKeys() {
 	s.mux.HandleFunc("/api/apikeys", s.handleAPIKeys)
 	s.mux.HandleFunc("/api/apikeys/create", s.handleAPIKeyCreate)
 	s.mux.HandleFunc("/api/apikeys/status", s.handleAPIKeyStatus)
 	s.mux.HandleFunc("/api/apikeys/rotate", s.handleAPIKeyRotate)
 	s.mux.HandleFunc("/api/apikeys/delete", s.handleAPIKeyDelete)
+}
 
-	// ★ 开放 API（API Key 鉴权）
+// routesOpenAPI 注册开放 API（API Key 鉴权）与文档路由。
+func (s *Server) routesOpenAPI() {
 	s.mux.HandleFunc("/openapi/v1/translate", s.handleOpenAPITranslate)
 	s.mux.HandleFunc("/openapi/v1/kb/stats", s.handleOpenAPIKBStats)
 	s.mux.HandleFunc("/openapi/v1/billing/usage", s.handleOpenAPIUsage)
 	s.mux.HandleFunc("/openapi/v1/apikey/rotate", s.handleOpenAPIKeyRotate)
 	s.mux.HandleFunc("/openapi/docs", s.handleOpenAPIDocs)
-
-	// 兜底路由：前端 SPA 静态资源
-	s.mux.HandleFunc("/", s.handleSPA)
 }
 
 // Handler 返回完整的 http.Handler（依次包裹指标/租户/CORS 中间件）。
