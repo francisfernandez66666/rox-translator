@@ -14,7 +14,9 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"translator/internal/api"
@@ -161,10 +163,26 @@ func main() {
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 30 * time.Second, // 请求头读取超时防慢速攻击
 	}
+
+	// 优雅停机：监听 SIGTERM/SIGINT，先停止接收新请求并等待在途请求完成（最多 10 秒）再退出。
+	// 保障：systemd restart / 手动重启时正在进行的翻译任务不会被强行掐断，SQLite 数据一致。
+	go func() {
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+		sig := <-quit
+		log.Printf("收到退出信号 %v，正在优雅停机…", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := s.Shutdown(ctx); err != nil {
+			log.Printf("优雅停机超时，强制退出: %v", err)
+			s.Close()
+		}
+		log.Println("服务已安全退出")
+	}()
+
 	if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("HTTP 服务启动失败: %v", err)
 	}
-	_ = context.Background()
 }
 
 // genRandomPass 生成 n 位随机密码（大写+小写+数字混合，初始密码临时用）。
