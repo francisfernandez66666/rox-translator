@@ -15,7 +15,14 @@
   flex-shrink: 0; position: sticky; top: 0; height: 100vh; overflow: auto;
 }
 /* 品牌标题 */
-.ad-brand { padding: 20px 18px; font-size: 18px; font-weight: 700; border-bottom: 1px solid rgba(255,255,255,0.12); }
+.ad-brand { padding: 20px 18px 10px; font-size: 18px; font-weight: 700; border-bottom: 1px solid rgba(255,255,255,0.12); }
+/* 语言切换 */
+.ad-lang-switch { padding: 8px 18px; }
+.ad-lang-btn {
+  background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2); color: #fff;
+  padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;
+}
+.ad-lang-btn:hover { background: rgba(255,255,255,0.2); }
 /* 导航容器 */
 .ad-nav { flex: 1; padding: 12px 10px; }
 /* 导航项 */
