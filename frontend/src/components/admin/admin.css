@@ -1,0 +1,138 @@
+/* ============================================================================
+   components/admin/admin.css — 管理后台全局共享样式（非 scoped，供所有面板使用）
+   职责：后台壳 + 各面板共用的 UI 原子样式（卡片/表格/按钮/开关/图表等）
+   命名约定：ad- 前缀，来自原 AdminDashboard.vue 的样式表
+   ============================================================================ */
+
+/* ===== 整体布局：左侧栏 + 主内容区，横向 Flex ===== */
+.ad-wrap { display: flex; min-height: 100vh; background: #f5f7fb; }
+/* 左侧侧边栏：深蓝背景，固定高度可滚动 */
+.ad-side {
+  width: 230px; background: #1a237e; color: #fff; display: flex; flex-direction: column;
+  flex-shrink: 0; position: sticky; top: 0; height: 100vh; overflow: auto;
+}
+/* 品牌标题 */
+.ad-brand { padding: 20px 18px; font-size: 18px; font-weight: 700; border-bottom: 1px solid rgba(255,255,255,0.12); }
+/* 导航容器 */
+.ad-nav { flex: 1; padding: 12px 10px; }
+/* 导航项 */
+.ad-nav-item {
+  display: block; width: 100%; text-align: left; padding: 10px 14px; margin-bottom: 4px;
+  background: none; border: none; border-radius: 8px; color: rgba(255,255,255,0.8);
+  font-size: 14px; cursor: pointer;
+}
+.ad-nav-item:hover { background: rgba(255,255,255,0.08); }
+.ad-nav-item.on { background: #3949ab; color: #fff; font-weight: 600; }
+/* 一级分类页签行 */
+.ad-cats { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 10px 4px; }
+.ad-cat-btn {
+  flex: 1 1 40%; padding: 8px 10px; border: none; border-radius: 8px; background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.75); font-size: 13px; cursor: pointer;
+}
+.ad-cat-btn:hover { background: rgba(255,255,255,0.15); }
+.ad-cat-btn.on { background: #ffb74d; color: #1a237e; font-weight: 700; }
+/* 分组面板列表标题 */
+.ad-group-title { font-size: 11px; color: rgba(255,255,255,0.4); padding: 10px 14px 4px; letter-spacing: 1px; }
+/* 侧边栏底部：用户信息 + 返回/退出 */
+.ad-side-foot { padding: 14px 16px; border-top: 1px solid rgba(255,255,255,0.12); font-size: 13px; }
+.ad-user { color: rgba(255,255,255,0.9); margin-bottom: 8px; }
+.ad-back { color: rgba(255,255,255,0.7); text-decoration: none; display: block; margin-bottom: 8px; }
+.ad-back:hover { color: #fff; }
+.ad-logout {
+  background: rgba(255,255,255,0.15); border: none; color: #fff; padding: 6px 14px;
+  border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+/* 租户切换器 */
+.ad-tenant-switch { padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,0.12); }
+.ad-tenant-switch label { display: block; font-size: 12px; color: rgba(255,255,255,0.6); margin-bottom: 6px; }
+.ad-tenant-switch select { width: 100%; box-sizing: border-box; }
+/* 主内容区 */
+.ad-main { flex: 1; padding: 28px 32px; overflow: auto; }
+.ad-section h2 { font-size: 20px; margin-bottom: 18px; color: #1a237e; }
+/* 常用工具行 / 输入框 / 按钮等通用样式 */
+.ad-row { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+.ad-input { padding: 9px 12px; border: 1px solid #dcdcdc; border-radius: 8px; font-size: 13px; }
+.ad-wide { width: 100%; box-sizing: border-box; }
+.ad-mini-w { width: 100px; }
+.ad-textarea { width: 100%; min-height: 60px; resize: vertical; }
+.ad-mini { padding: 6px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 12px; }
+.ad-btn {
+  padding: 9px 16px; border: none; border-radius: 8px; background: #1a237e; color: #fff;
+  font-size: 13px; cursor: pointer;
+}
+.ad-btn-green { background: #2e7d32; }
+.ad-btn-red { background: #c62828; }
+.ad-btn-sm { padding: 4px 10px; font-size: 12px; border: none; border-radius: 6px; background: #e8eaf6; color: #1a237e; cursor: pointer; margin-right: 4px; }
+.ad-btn-red.ad-btn-sm { background: #fce4ec; color: #c62828; }
+.ad-hint { font-size: 12px; color: #888; margin-bottom: 10px; }
+.ad-label { display: block; font-size: 13px; color: #666; margin: 10px 0 4px; }
+/* 通用数据表格 */
+.ad-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+.ad-table th, .ad-table td { border: 1px solid #eee; padding: 8px 10px; text-align: left; }
+.ad-table th { background: #fafbfd; }
+.ad-td { white-space: nowrap; }
+.ad-ellipsis { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 看板统计卡片 */
+.ad-cards { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+.ad-card {
+  background: #fff; border-radius: 12px; padding: 18px 22px; box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+  min-width: 150px;
+}
+.ad-card b { display: block; font-size: 24px; color: #1a237e; }
+.ad-card span { font-size: 12px; color: #888; }
+.ad-audit { margin-top: 20px; }
+.ad-audit h3 { margin-bottom: 10px; font-size: 15px; }
+/* 行业包卡片 */
+.ad-pkg { background: #fff; border: 1px solid #e8e8e8; border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+.ad-pkg-head { padding: 12px 16px; display: flex; align-items: center; gap: 10px; background: #fafbfd; }
+.ad-pkg-role { padding: 2px 8px; background: #e8eaf6; border-radius: 12px; font-size: 11px; color: #1a237e; }
+.ad-pkg-entries { padding: 14px; border-top: 1px solid #eee; }
+/* 流程引擎行 */
+.ad-flow-row { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px solid #f0f0f0; }
+.ad-flow-name { font-size: 14px; }
+.ad-flow-key { color: #999; font-size: 12px; }
+/* 开关（Switch）样式 */
+.ad-switch { position: relative; display: inline-block; width: 42px; height: 22px; }
+.ad-switch input { opacity: 0; width: 0; height: 0; }
+.ad-switch span {
+  position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+  background: #ccc; border-radius: 22px; transition: 0.3s;
+}
+.ad-switch span:before {
+  content: ''; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px;
+  background: #fff; border-radius: 50%; transition: 0.3s;
+}
+.ad-switch input:checked + span { background: #1a237e; }
+.ad-switch input:checked + span:before { transform: translateX(20px); }
+.ad-ticket-detail { margin-top: 20px; background: #fff; border-radius: 10px; padding: 16px; border: 1px solid #eee; }
+.ad-ticket-detail pre { font-size: 12px; white-space: pre-wrap; background: #f8f9fc; padding: 12px; border-radius: 8px; }
+.ad-states { margin-top: 10px; }
+.ad-state { font-size: 12px; padding: 4px 0; color: #555; }
+.ad-approval { background: #fff; border: 1px solid #eee; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+.ad-approval-head { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+.ad-approval-src { font-size: 13px; color: #555; margin-bottom: 8px; }
+.ad-newkey { background: #fff3e0; border: 1px solid #ffcc80; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; }
+.ad-forbid { color: #c62828; font-size: 16px; padding: 40px; }
+.ad-td .ad-btn-sm { margin-bottom: 2px; }
+.ad-bulk { margin: 10px 0; background: #fafbfd; border: 1px solid #eee; border-radius: 8px; padding: 10px 12px; }
+.ad-bulk summary { cursor: pointer; font-size: 13px; color: #1a237e; font-weight: 600; }
+.ad-bulk textarea { margin: 8px 0; display: block; }
+.ad-bulk .ad-btn { margin-right: 8px; }
+.ad-route-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.ad-diff { color: #2e7d32; font-size: 12px; background: #e8f5e9; padding: 2px 6px; border-radius: 4px; }
+/* ===== 用量图表：CSS 条形图（近7日趋势 / 按类型 / 按供应商） ===== */
+.ad-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
+.ad-chart-card { background: #fff; border: 1px solid #eee; border-radius: 10px; padding: 16px; margin-top: 16px; }
+.ad-chart-card h3 { font-size: 14px; color: #1a237e; margin-bottom: 12px; }
+/* 竖排柱状图 */
+.ad-chart-bars { display: flex; align-items: flex-end; gap: 8px; height: 140px; padding: 8px 4px 0; }
+.ad-chart-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; min-width: 0; }
+.ad-chart-bar { width: 70%; max-width: 42px; min-height: 6px; background: linear-gradient(180deg, #3949ab, #1a237e); border-radius: 4px 4px 0 0; }
+.ad-chart-label { font-size: 11px; color: #888; margin-top: 6px; }
+/* 横向条形图 */
+.ad-hbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.ad-hbar-label { width: 120px; font-size: 12px; color: #555; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ad-hbar-track { flex: 1; background: #f0f0f5; border-radius: 6px; height: 16px; overflow: hidden; }
+.ad-hbar-fill { height: 100%; background: linear-gradient(90deg, #3949ab, #5c6bc0); border-radius: 6px; min-width: 6px; }
+.ad-hbar-fill.fill-2 { background: linear-gradient(90deg, #2e7d32, #66bb6a); }
+.ad-hbar-val { width: 64px; text-align: right; font-size: 12px; color: #333; }
