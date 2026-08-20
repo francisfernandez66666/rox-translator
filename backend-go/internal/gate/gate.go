@@ -2,6 +2,13 @@
 // 校验译文：与源文对照，确认没有漏译、空译、非目标语言、乱码、超长压缩等硬性问题。
 package gate
 
+// ============ 本文件职责中文说明 ============
+// 译文约束闸门（硬校验）：对模型产出的译文执行 8 项硬性检查——非空、
+// 不应残留源语言（中文）、无乱码、数字保持、长度合理（不得压缩过半）、
+// 无回环复读、无批量 <sN> 残留标记、目标语言书写系统合理性。
+// 任一项不通过即整体 Pass=false（用于质控打回）。
+// ========================================
+
 import (
 	"regexp"
 	"strings"
@@ -10,22 +17,22 @@ import (
 
 // 8 项校验结果
 type GateResult struct {
-	Pass   bool     `json:"pass"`
-	Checks []Check  `json:"checks"`
+	Pass   bool    `json:"pass"`   // 是否全部通过
+	Checks []Check `json:"checks"` // 各单项校验明细
 }
 
 // Check 单项校验
 type Check struct {
-	Name   string `json:"name"`
-	Pass   bool   `json:"pass"`
-	Detail string `json:"detail"`
+	Name   string `json:"name"`   // 校验项名称（如 非空/无乱码/数字保持）
+	Pass   bool   `json:"pass"`   // 该项是否通过
+	Detail string `json:"detail"` // 失败时的详情说明
 }
 
 var (
-	reCJK      = regexp.MustCompile(`\p{Han}`)
-	reGarbled  = regexp.MustCompile(`[\x{FFFD}]|(\?{4,})`)
-	reDigits   = regexp.MustCompile(`[0-9]+`)
-	reNumbers  = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?`)
+	reCJK     = regexp.MustCompile(`\p{Han}`)             // 匹配汉字（检测残留源语言）
+	reGarbled = regexp.MustCompile(`[\x{FFFD}]|(\?{4,})`) // 匹配替换符乱码或连续问号
+	reDigits  = regexp.MustCompile(`[0-9]+`)              // 匹配数字（预留）
+	reNumbers = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?`) // 匹配整数/小数（数字保持校验用）
 )
 
 // Run 执行 8 项硬校验
@@ -108,6 +115,7 @@ func Run(source, target, translation string) *GateResult {
 	return res
 }
 
+// contains 判断字符串列表中是否包含指定值（数字保持校验辅助）
 func contains(list []string, v string) bool {
 	for _, x := range list {
 		if x == v {

@@ -1,3 +1,9 @@
+// ============ 本文件职责中文说明 ============
+// 文件翻译：面向 docx/pptx/xlsx 的整文件翻译主流程（复刻 skill.py _handle_file_translate）。
+// 支持 KB 语言（先 KB 直配、未命中批量模型补漏）与"其他语言"（纯批量模型），
+// 从用户 prompt 中解析"其他语言"（正则 + LLM 语言识别兜底），
+// 翻译完成后按语言分别写回 translated/ 目录下独立文件并统计 KB/模型命中数。
+// ========================================
 package engine
 
 import (
@@ -15,21 +21,21 @@ import (
 
 // FileTranslateResult 文件翻译结果
 type FileTranslateResult struct {
-	Skill string            `json:"skill"`
-	Reply string            `json:"reply"`
-	Data  FileTranslateData `json:"data"`
-	Files []string          `json:"files"`
-	Error string            `json:"error"`
+	Skill string            `json:"skill"` // 能力标识（固定 "translation"）
+	Reply string            `json:"reply"` // 面向用户的完成话术（含统计信息）
+	Data  FileTranslateData `json:"data"`  // 结构化翻译数据（文本数/语言/命中统计等）
+	Files []string          `json:"files"` // 生成的翻译文件绝对路径列表
+	Error string            `json:"error"` // 失败原因（成功时为空）
 }
 
 // FileTranslateData 文件翻译数据
 type FileTranslateData struct {
-	TotalTexts  int               `json:"total_texts"`
-	TargetLangs []string          `json:"target_langs"`
-	LangNames   map[string]string `json:"lang_names"`
-	KBHits      int               `json:"kb_hits"`
-	ModelHits   int               `json:"model_hits"`
-	FileContext string            `json:"file_context"`
+	TotalTexts  int               `json:"total_texts"`  // 从文件中提取的总文本段数
+	TargetLangs []string          `json:"target_langs"` // 目标语言代码列表（最终确定）
+	LangNames   map[string]string `json:"lang_names"`   // 目标语言代码 → 中文名
+	KBHits      int               `json:"kb_hits"`      // 知识库命中段数
+	ModelHits   int               `json:"model_hits"`   // 模型翻译段数
+	FileContext string            `json:"file_context"` // 文件内容摘要/上下文（预留）
 }
 
 // HandleFile 文件翻译主流程（复刻 skill.py _handle_file_translate）
@@ -231,9 +237,13 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 // ============ 从 prompt 解析"其他语言" ============
 
 var otherLangRegexes = []*regexp.Regexp{
+	// 中文指令：翻译成/译为/翻译为 + 语言名 + 冒号
 	regexp.MustCompile(`(?:翻译成|翻成|译成|翻译为|翻为|译为)\s*(.+?)\s*[：:]\s*`),
+	// 中文指令：用 + 语言名 + 翻译
 	regexp.MustCompile(`用\s*(.+?)\s*翻译\s*[：:，,]?\s*`),
+	// 英文指令：translate to / translation in + 语言名
 	regexp.MustCompile(`(?i)(?:translate\s+to|translat(?:e|ion)\s+in)\s+(.+?)\s*[：:，,]?\s*`),
+	// 开头句式："XX语：正文"
 	regexp.MustCompile(`^(\S+语)\s*[：:]\s*(.+)$`),
 }
 

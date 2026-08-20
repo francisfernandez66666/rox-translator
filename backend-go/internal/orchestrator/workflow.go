@@ -1,3 +1,9 @@
+// ============ 本文件职责中文说明 ============
+// 工单翻译工作流实现：把各业务步骤（知识库匹配→AI 初翻→评估→审校→Gate 校验→
+// 语言文化闸门→人工审批→自迭代写库）绑定到 FlowDef 执行器。
+// 中间结果以 JSON 存于工单 FinalResult（ticketPayload），供各步骤读取/更新；
+// 支持驳回后按意见重翻全部语言。
+// =============================================
 package orchestrator
 
 import (
@@ -17,14 +23,16 @@ import (
 
 // Workflow 工单翻译工作流：把各业务步骤绑定到 FlowDef 执行器
 type Workflow struct {
-	Executor *Executor
-	Engine   *engine.Engine
-	Store    *store.Store
-	Tenant   *tenant.Store
-	KB       *kb.KBDatabase
+	Executor *Executor      // 流程执行器
+	Engine   *engine.Engine // 翻译引擎（初翻/审校/语义检索）
+	Store    *store.Store   // 平台存储
+	Tenant   *tenant.Store  // 租户存储
+	KB       *kb.KBDatabase // 知识库（自迭代写库）
 }
 
-// NewWorkflow 创建工作流并注册全部步骤执行器
+// NewWorkflow 创建工作流并注册全部步骤执行器。
+// 参数：st=平台存储，eng=翻译引擎，ts=租户存储，kbdb=知识库。
+// 返回：工作流实例。
 func NewWorkflow(st *store.Store, eng *engine.Engine, ts *tenant.Store, kbdb *kb.KBDatabase) *Workflow {
 	w := &Workflow{
 		Executor: NewExecutor(st),
@@ -33,12 +41,12 @@ func NewWorkflow(st *store.Store, eng *engine.Engine, ts *tenant.Store, kbdb *kb
 		Tenant:   ts,
 		KB:       kbdb,
 	}
-	w.Executor.Ten = ts
+	w.Executor.Ten = ts // 执行器需要租户存储读取流程配置
 	w.registerSteps()
 	return w
 }
 
-// registerSteps 注册各流程步骤执行函数
+// registerSteps 注册各流程步骤执行函数。
 func (w *Workflow) registerSteps() {
 	ex := w.Executor
 
@@ -72,17 +80,18 @@ func (w *Workflow) registerSteps() {
 
 // 工单翻译中间结果（存于 ticket state payload）
 type ticketPayload struct {
-	SourceText  string            `json:"source_text"`
-	TargetLangs []string          `json:"target_langs"`
-	Translations map[string]string `json:"translations"`
-	Sources     map[string]string `json:"sources"`
-	Mode        string            `json:"mode"`
-	EvalScores  map[string]float64 `json:"eval_scores"`
-	Gate        *gate.GateResult  `json:"gate"`
-	Culture     *culture.CultureResult `json:"culture"`
+	SourceText   string                 `json:"source_text"`  // 源文本
+	TargetLangs  []string               `json:"target_langs"` // 目标语言列表
+	Translations map[string]string      `json:"translations"` // 语言 → 译文
+	Sources      map[string]string      `json:"sources"`      // 语言 → 来源（kb/model）
+	Mode         string                 `json:"mode"`         // 匹配模式标识
+	EvalScores   map[string]float64     `json:"eval_scores"`  // 语言 → 评估总分
+	Gate         *gate.GateResult       `json:"gate"`         // Gate 校验结果
+	Culture      *culture.CultureResult `json:"culture"`      // 语言文化闸门结果
 }
 
-// parseTicketLang 从 target_langs 解析语言列表
+// parseTicketLang 从 target_langs 逗号分隔字符串解析语言列表。
+// 参数：s=目标语言串（如 "en,zh_hant"）；返回语言代码切片。
 func parseTicketLang(s string) []string {
 	var out []string
 	for _, p := range strings.Split(s, ",") {
@@ -94,19 +103,22 @@ func parseTicketLang(s string) []string {
 	return out
 }
 
+// savePayload 把中间结果 JSON 序列化写入工单 FinalResult 并落库。
+// 参数：t=工单对象，p=中间结果结构体。
 func (w *Workflow) savePayload(t *store.Ticket, p *ticketPayload) {
 	data, _ := json.Marshal(p)
 	t.FinalResult = string(data)
 	_ = w.Store.UpdateTicket(t)
 }
 
-// runKBMatch 知识库匹配
+// runKBMatch 知识库匹配。
 // 四层查找：先查 kb_packages/kb_entries（企业包→行业包按层 L1术语>L2 TM>L3安全句>L4碎片），
-// 再交给 engine 的 npz 语义库兜底，缺失语言由模型补齐
+// 再交给 engine 的 npz 语义库兜底，缺失语言由模型补齐。
+// 参数：ctx=上下文，t=工单对象。
 func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 	langs := parseTicketLang(t.TargetLangs)
 	if len(langs) == 0 {
-		langs = []string{"en"}
+		langs = []string{"en"} // 无目标语言默认英语
 	}
 	p := &ticketPayload{SourceText: t.SourceText, TargetLangs: langs, Translations: map[string]string{}, Sources: map[string]string{}}
 	tid := t.TenantID
@@ -119,23 +131,23 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 					continue // 高优包/高层已命中
 				}
 				if strings.TrimSpace(ent.TargetText) == "" {
-					continue
+					continue // 空译文跳过
 				}
 				p.Translations[ent.TargetLang] = ent.TargetText
-				p.Sources[ent.TargetLang] = "kb"
+				p.Sources[ent.TargetLang] = "kb" // 标记来源为知识库
 			}
 		}
 	}
 
 	// 2. engine 兜底（npz 语义库），只取 KB 命中结果
-	ctx = tenant.WithTenant(ctx, tid)
+	ctx = tenant.WithTenant(ctx, tid) // 注入租户上下文供引擎租户隔离
 	res, _ := w.Engine.TranslateOne(ctx, t.SourceText, langs, true)
 	for lc, v := range res.Translations {
 		if strings.TrimSpace(v) == "" {
 			continue
 		}
 		if _, ok := p.Translations[lc]; ok {
-			continue
+			continue // 已有 KB 命中不覆盖
 		}
 		p.Translations[lc] = v
 		p.Sources[lc] = "kb"
@@ -145,7 +157,8 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 	return nil
 }
 
-// runAIInitial AI 初翻（对缺失语言模型翻译；被驳回工单则按驳回意见重翻全部）
+// runAIInitial AI 初翻（对缺失语言模型翻译；被驳回工单则按驳回意见重翻全部）。
+// 参数：ctx=上下文，t=工单对象。
 func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 	p := w.loadPayload(t)
 	if p == nil {
@@ -163,13 +176,14 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 			rev := w.Engine.TranslateWithFeedback(ctx, p.SourceText, lc, t.RejectReason)
 			if rev != "" {
 				p.Translations[lc] = rev
-				p.Sources[lc] = "model"
+				p.Sources[lc] = "model" // 来源标记为模型
 			}
 		}
 		w.savePayload(t, p)
 		return nil
 	}
 
+	// 正常流程：只翻译缺失语言
 	var need []string
 	for _, lc := range p.TargetLangs {
 		if strings.TrimSpace(p.Translations[lc]) == "" {
@@ -183,14 +197,15 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 	return nil
 }
 
-// runEvalsInitial 初翻评估
+// runEvalsInitial 初翻评估。
+// 参数：ctx=上下文，t=工单对象；对每语言译文调用 Judge 评分并保存记录。
 func (w *Workflow) runEvalsInitial(ctx context.Context, t *store.Ticket) error {
 	p := w.loadPayload(t)
 	if p == nil {
 		return nil
 	}
 	if w.Engine.Evals == nil {
-		return nil
+		return nil // 未初始化评估器则跳过
 	}
 	for lc, tr := range p.Translations {
 		if tr == "" {
@@ -201,7 +216,7 @@ func (w *Workflow) runEvalsInitial(ctx context.Context, t *store.Ticket) error {
 			p.EvalScores = map[string]float64{}
 		}
 		if err == nil {
-			p.EvalScores[lc] = total
+			p.EvalScores[lc] = total // 记录总分
 			_, _ = w.Engine.Evals.SaveRecord(ctx, t.TenantID, t.CreatedBy, t.ID, "translate", lc, p.SourceText, tr, scores, total, "passed")
 		}
 	}
@@ -209,7 +224,8 @@ func (w *Workflow) runEvalsInitial(ctx context.Context, t *store.Ticket) error {
 	return nil
 }
 
-// runReview 审校 Agent（对已有译文用 LLM 审校，修正术语/语法）
+// runReview 审校 Agent（对已有译文用 LLM 审校，修正术语/语法）。
+// 参数：ctx=上下文，t=工单对象。
 func (w *Workflow) runReview(ctx context.Context, t *store.Ticket) error {
 	p := w.loadPayload(t)
 	if p == nil {
@@ -221,19 +237,21 @@ func (w *Workflow) runReview(ctx context.Context, t *store.Ticket) error {
 		}
 		revised := w.Engine.ReviewTranslation(ctx, p.SourceText, tr, lc)
 		if revised != "" {
-			p.Translations[lc] = revised
+			p.Translations[lc] = revised // 用审校结果覆盖
 		}
 	}
 	w.savePayload(t, p)
 	return nil
 }
 
-// runEvalsReview 审校评估
+// runEvalsReview 审校评估（复用初翻评估逻辑）。
+// 参数：ctx=上下文，t=工单对象。
 func (w *Workflow) runEvalsReview(ctx context.Context, t *store.Ticket) error {
 	return w.runEvalsInitial(ctx, t)
 }
 
-// runGate 8 项硬校验
+// runGate 8 项硬校验。
+// 参数：ctx=上下文，t=工单对象；任一语言校验不通过则返回错误。
 func (w *Workflow) runGate(ctx context.Context, t *store.Ticket) error {
 	p := w.loadPayload(t)
 	if p == nil {
@@ -245,19 +263,21 @@ func (w *Workflow) runGate(ctx context.Context, t *store.Ticket) error {
 		}
 		g := gate.Run(p.SourceText, lc, tr)
 		if !g.Pass {
+			// 校验失败：返回首条失败项的详情
 			return fmt.Errorf("Gate 校验失败 [%s]: %s", lc, firstFail(g.Checks))
 		}
 	}
 	return nil
 }
 
-// runCultureGate 语言文化包输出闸门（反查译文）
+// runCultureGate 语言文化包输出闸门（反查译文）。
+// 参数：ctx=上下文，t=工单对象；译文命中安全句则打回。
 func (w *Workflow) runCultureGate(ctx context.Context, t *store.Ticket) error {
 	p := w.loadPayload(t)
 	if p == nil {
 		return nil
 	}
-	safety, _ := w.Store.ListSafetyPhrases(t.TenantID)
+	safety, _ := w.Store.ListSafetyPhrases(t.TenantID) // 读取租户安全句
 	for lc, tr := range p.Translations {
 		if tr == "" {
 			continue
@@ -270,19 +290,21 @@ func (w *Workflow) runCultureGate(ctx context.Context, t *store.Ticket) error {
 	return nil
 }
 
-// runApproval 转人工审批
+// runApproval 转人工审批。
+// 参数：ctx=上下文，t=工单对象；已批准/已完成则直接返回，否则置为待审批。
 func (w *Workflow) runApproval(ctx context.Context, t *store.Ticket) error {
 	if t.Status == store.TicketApproved || t.Status == store.TicketCompleted {
-		return nil
+		return nil // 已被批准/完成则跳过审批
 	}
 	t.Status = store.TicketPendingAppr
 	return w.Store.UpdateTicket(t)
 }
 
-// runFeedback 审批批准后自迭代写库（按企业包写入）
+// runFeedback 审批批准后自迭代写库（按企业包写入 tm_segments）。
+// 参数：ctx=上下文，t=工单对象；仅在工单已批准时执行。
 func (w *Workflow) runFeedback(ctx context.Context, t *store.Ticket) error {
 	if t.Status != store.TicketApproved {
-		return nil
+		return nil // 未批准不回写
 	}
 	p := w.loadPayload(t)
 	if p == nil || w.KB == nil {
@@ -295,11 +317,13 @@ func (w *Workflow) runFeedback(ctx context.Context, t *store.Ticket) error {
 		}
 		_, _ = w.KB.SaveBack(p.SourceText, map[string]string{lc: tr}, "approved", t.TenantID)
 	}
-	t.Status = store.TicketCompleted
+	t.Status = store.TicketCompleted // 写库完成置工单为已完成
 	_ = w.Store.UpdateTicket(t)
 	return nil
 }
 
+// loadPayload 从工单 FinalResult 解析中间结果 JSON。
+// 参数：t=工单对象；返回中间结果结构体（无结果/解析失败返回 nil）。
 func (w *Workflow) loadPayload(t *store.Ticket) *ticketPayload {
 	if t.FinalResult == "" {
 		return nil
@@ -311,6 +335,8 @@ func (w *Workflow) loadPayload(t *store.Ticket) *ticketPayload {
 	return &p
 }
 
+// firstFail 返回校验列表中的首个失败项描述。
+// 参数：checks=Gate 校验项列表；返回首个失败项的 "名称: 详情"。
 func firstFail(checks []gate.Check) string {
 	for _, c := range checks {
 		if !c.Pass {

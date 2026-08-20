@@ -1,3 +1,8 @@
+// ============ 本文件职责中文说明 ============
+// 服务入口：解析命令行参数（监听地址/前端目录/KB 索引/KB 缓存库）、加载配置、
+// 依次初始化术语数据库、租户存储、SaaS 平台存储（admin 账号/默认三级包/余额账户）、
+// 知识库向量索引、翻译引擎、评估器与模型路由策略，最后启动 HTTP 服务。
+// =============================================
 package main
 
 import (
@@ -21,7 +26,9 @@ import (
 	"translator/internal/tenant"
 )
 
+// main 服务启动入口。
 func main() {
+	// 命令行参数：监听地址、前端静态目录、KB 向量索引与 KB 缓存库路径
 	addr := flag.String("addr", ":8787", "HTTP 监听地址")
 	frontend := flag.String("frontend", "", "前端 dist 目录（默认相对路径 ./frontend/dist）")
 	kbNpz := flag.String("kb", "", "知识库 .npz 文件路径；留空则不加载")
@@ -33,14 +40,15 @@ func main() {
 	exeDir, _ := filepath.Abs(filepath.Dir(os.Args[0]))
 	cfg.LoadConfigFromJSON(exeDir)
 	uploadDir, _ := filepath.Abs(cfg.UploadDir)
-	os.MkdirAll(uploadDir, 0o755)
+	os.MkdirAll(uploadDir, 0o755) // 确保上传目录存在
 	cfg.UploadDir = uploadDir
 
+	// 解析前端 dist 目录（默认 ../frontend/dist，存在 index.html 才启用）
 	distDir := *frontend
 	if distDir == "" {
 		distDir, _ = filepath.Abs(filepath.Join("..", "frontend", "dist"))
 		if _, err := os.Stat(filepath.Join(distDir, "index.html")); err != nil {
-			distDir = ""
+			distDir = "" // dist 不存在则禁用静态托管
 		}
 	} else {
 		abs, err := filepath.Abs(distDir)
@@ -55,11 +63,12 @@ func main() {
 	// 打开术语数据库
 	dbPath := *kbDB
 	if dbPath == "" {
-		dbPath = cfg.DBPath
+		dbPath = cfg.DBPath // 回退配置默认路径
 	}
 	var openErr error
 	db, openErr = kb.Open(dbPath)
 	if openErr != nil {
+		// 打开失败仅告警，不阻塞启动（后续功能受限）
 		log.Printf("警告: 术语数据库打开失败: %v", openErr)
 		db = nil
 	} else {
@@ -73,7 +82,7 @@ func main() {
 	// ★ 租户存储（含默认租户 rox）
 	var ts *tenant.Store
 	if db != nil {
-		ts, _ = tenant.NewStore(db.RawDB())
+		ts, _ = tenant.NewStore(db.RawDB()) // 共享同一 SQLite 连接
 		if ts != nil {
 			if id, err := ts.EnsureDefault(); err != nil {
 				log.Printf("警告: 默认租户初始化失败: %v", err)
@@ -113,12 +122,13 @@ func main() {
 		}
 	}
 
+	// 创建翻译引擎（挂载 DB 与向量索引）
 	eng := engine.NewEngine(cfg, db, kbIndex, ts)
 
 	// ★ evals 评估器（Judge 用 Online Key；可用 EVALS_JUDGE_KEY 覆盖）
 	judgeKey := cfg.OnlineAPIKey
 	if v := os.Getenv("EVALS_JUDGE_KEY"); v != "" {
-		judgeKey = v
+		judgeKey = v // 环境变量优先覆盖
 	}
 	if st != nil {
 		eng.Evals = evals.New(cfg, llm.NewClient(cfg), st, judgeKey)
@@ -129,19 +139,20 @@ func main() {
 		if v, err := st.GetConfig("model_routes"); err == nil && v != "" {
 			var routes []config.ProviderConfig
 			if json.Unmarshal([]byte(v), &routes) == nil && len(routes) > 0 {
-				cfg.ModelRoutes = routes
+				cfg.ModelRoutes = routes // 覆盖默认路由策略
 				log.Printf("模型路由策略已加载: %d 条", len(routes))
 			}
 		}
 	}
 
+	// 创建 HTTP 服务
 	srv := api.NewServer(cfg, eng, db, distDir, st, ts)
 
 	log.Printf("翻译助手 v2.0.0-go 服务已启动: http://localhost%s", *addr)
 	s := &http.Server{
 		Addr:              *addr,
 		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 30 * time.Second,
+		ReadHeaderTimeout: 30 * time.Second, // 请求头读取超时防慢速攻击
 	}
 	if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("HTTP 服务启动失败: %v", err)

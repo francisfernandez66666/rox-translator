@@ -1,5 +1,21 @@
 package api
 
+// ============ 本文件职责中文说明 ============
+// 本文件实现管理后台（Admin Dashboard）的配置与运营类接口：
+//   - 权限鉴权助手：requireAdminUser（super_admin 超管）/ requireTenantAdmin（租户管理员及以上）
+//   - 流程引擎设置：读取/保存租户流程步骤启停（handleFlowConfig / handleFlowSave）、直接触发工单流程（handleFlowRunTicket）
+//   - 模型配置：读取/保存租户模型（handleModels / handleModelsSave）、全局模型路由策略（handleModelRoutes / handleModelRoutesSave，super_admin）
+//   - 策略参数：读取/保存租户相似度阈值与评估通过线（handlePolicy / handlePolicySave）
+//   - KB 包管理（行业包）：包与条目的增删改查、安全句维护（handleKBPackages / handleKBEntries / handleSafetyPhrases 系列）
+//   - evals 看板：评估记录列表（handleEvalsList）
+//   - 系统健康：健康看板 / 审计日志（含 CSV 导出）/ 告警管理（handleSystemHealth / handleSystemAudit / handleAlerts 系列）
+//   - 计费/充值/用量：余额查询、用量统计、订单（充值/支付/退款）、发票开具
+//   - 开放 API Key：签发 / 启停 / 轮换 / 删除（handleAPIKeys 系列）
+//   - 开放 API（API Key 鉴权）：翻译 / KB 统计 / 用量查询 / Key 轮换 / 文档（handleOpenAPI 系列）
+// 安全要点：
+//   - 所有写操作均记录审计日志（LogAudit）；API Key 密钥仅明文返回一次，前端立即保存
+//   - 模型路由与策略配置读取时回退全局默认；API Key 掩码显示/掩码提交不覆盖原密钥
+
 import (
 	"encoding/json"
 	"fmt"
@@ -40,7 +56,7 @@ func (s *Server) requireTenantAdmin(r *http.Request) (*store.User, error) {
 
 var errNotLogin = &apiErr{"未登录"}
 
-type apiErr struct{ s string }
+type apiErr struct{ s string } // s: 错误描述信息（用于返回给前端的错误消息）
 
 func (e *apiErr) Error() string { return e.s }
 
@@ -82,7 +98,7 @@ func (s *Server) handleFlowSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Steps []store.FlowStep `json:"steps"`
+		Steps []store.FlowStep `json:"steps"` // 流程步骤启停配置数组（含 key/name/enable）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -112,7 +128,7 @@ func (s *Server) handleFlowRunTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID int64 `json:"id"`
+		ID int64 `json:"id"` // 待执行流程的工单 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少工单 id"})
@@ -179,9 +195,9 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		APIBase string `json:"api_base"`
-		APIKey  string `json:"api_key"`
-		Model   string `json:"model"`
+		APIBase string `json:"api_base"` // 模型 API 基础地址（可为空=不修改）
+		APIKey  string `json:"api_key"`  // 模型 API Key（掩码值不覆盖原密钥）
+		Model   string `json:"model"`    // 模型名称（必填）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Model == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "model 不能为空"})
@@ -236,7 +252,7 @@ func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Routes []config.ProviderConfig `json:"routes"`
+		Routes []config.ProviderConfig `json:"routes"` // 模型路由全量配置（空数组=清空路由回退单供应商）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -309,8 +325,8 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 		evals = 75
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "policy": map[string]float64{
-		"high_sim": high,
-		"med_sim":  med,
+		"high_sim":             high,
+		"med_sim":              med,
 		"evals_pass_threshold": evals,
 	}})
 }
@@ -323,7 +339,7 @@ func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Policy map[string]float64 `json:"policy"`
+		Policy map[string]float64 `json:"policy"` // 策略参数映射（high_sim/med_sim/evals_pass_threshold）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -377,10 +393,10 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Code     string `json:"code"`
-		Name     string `json:"name"`
-		PackType string `json:"pack_type"`
-		Role     string `json:"role"`
+		Code     string `json:"code"`      // 包编码（唯一标识，必填）
+		Name     string `json:"name"`      // 包名称（必填）
+		PackType string `json:"pack_type"` // 包类型（industry 行业包，默认）
+		Role     string `json:"role"`      // 包角色（source 源语言包，默认）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" || req.Name == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code/name 不能为空"})
@@ -409,8 +425,8 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID   int64  `json:"id"`
-		Name string `json:"name"`
+		ID   int64  `json:"id"`   // 目标包 ID
+		Name string `json:"name"` // 新包名称
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -432,7 +448,7 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID int64 `json:"id"`
+		ID int64 `json:"id"` // 待删除包 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -470,12 +486,12 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		PackageID int64  `json:"package_id"`
-		Layer     int    `json:"layer"`
-		SourceText string `json:"source_text"`
-		TargetLang string `json:"target_lang"`
-		TargetText string `json:"target_text"`
-		Module     string `json:"module"`
+		PackageID  int64  `json:"package_id"`  // 所属包 ID
+		Layer      int    `json:"layer"`       // 层级（0 时默认 TM 术语层）
+		SourceText string `json:"source_text"` // 源文本（中文，必填）
+		TargetLang string `json:"target_lang"` // 目标语言代码（默认 en）
+		TargetText string `json:"target_text"` // 目标译文
+		Module     string `json:"module"`      // 所属模块
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SourceText == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "source_text 不能为空"})
@@ -504,7 +520,7 @@ func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID int64 `json:"id"`
+		ID int64 `json:"id"` // 待删除条目 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -541,9 +557,9 @@ func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		PackageID int64  `json:"package_id"`
-		Lang      string `json:"lang"`
-		Phrase    string `json:"phrase"`
+		PackageID int64  `json:"package_id"` // 所属包 ID
+		Lang      string `json:"lang"`       // 安全句语言代码（默认 en）
+		Phrase    string `json:"phrase"`     // 安全句内容（必填）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Phrase == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "phrase 不能为空"})
@@ -569,7 +585,7 @@ func (s *Server) handleSafetyPhraseDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req struct {
-		ID int64 `json:"id"`
+		ID int64 `json:"id"` // 待删除安全句 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -698,7 +714,7 @@ func (s *Server) handleAlertResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID int64 `json:"id"`
+		ID int64 `json:"id"` // 待关闭告警 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -826,9 +842,9 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		TenantID int64   `json:"tenant_id"`
-		Tokens   int64   `json:"tokens"`
-		Money    float64 `json:"money"`
+		TenantID int64   `json:"tenant_id"` // 充值目标租户（0=当前生效租户）
+		Tokens   int64   `json:"tokens"`    // 充值 token 数量（必填，>0）
+		Money    float64 `json:"money"`     // 充值金额（元，可选记录）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Tokens <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "tokens 必须大于 0"})
@@ -865,8 +881,8 @@ func (s *Server) handleOrderPay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID       int64 `json:"id"`
-		TenantID int64 `json:"tenant_id"`
+		ID       int64 `json:"id"`        // 待确认支付订单 ID
+		TenantID int64 `json:"tenant_id"` // 订单归属租户（0=当前生效租户）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -891,8 +907,8 @@ func (s *Server) handleOrderRefund(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID       int64 `json:"id"`
-		TenantID int64 `json:"tenant_id"`
+		ID       int64 `json:"id"`        // 待退款订单 ID
+		TenantID int64 `json:"tenant_id"` // 订单归属租户（0=当前生效租户）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -934,9 +950,9 @@ func (s *Server) handleInvoiceCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		OrderID int64  `json:"order_id"`
-		Title   string `json:"title"`
-		TaxNo   string `json:"tax_no"`
+		OrderID int64  `json:"order_id"` // 已支付订单 ID（仅限本租户）
+		Title   string `json:"title"`    // 发票抬头
+		TaxNo   string `json:"tax_no"`   // 税号
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OrderID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请提供订单 id"})
@@ -976,8 +992,8 @@ func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name  string `json:"name"`
-		Perms string `json:"perms"`
+		Name  string `json:"name"`  // Key 名称（便于管理识别）
+		Perms string `json:"perms"` // 权限范围（all/translate/kb/billing）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "name 不能为空"})
@@ -1000,8 +1016,8 @@ func (s *Server) handleAPIKeyStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID     int64  `json:"id"`
-		Status string `json:"status"`
+		ID     int64  `json:"id"`     // 目标 API Key ID
+		Status string `json:"status"` // 目标状态：active（启用）/ disabled（停用）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -1022,7 +1038,7 @@ func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID int64 `json:"id"`
+		ID int64 `json:"id"` // 待轮换 API Key ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -1055,7 +1071,7 @@ func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID int64 `json:"id"`
+		ID int64 `json:"id"` // 待删除 API Key ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -1109,8 +1125,8 @@ func (s *Server) handleOpenAPITranslate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		Text        string   `json:"text"`
-		TargetLangs []string `json:"target_langs"`
+		Text        string   `json:"text"`         // 待翻译源文本（必填）
+		TargetLangs []string `json:"target_langs"` // 目标语言列表（默认 ["en"]）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Text == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "text 不能为空"})
@@ -1135,7 +1151,7 @@ func (s *Server) handleOpenAPITranslate(w http.ResponseWriter, r *http.Request) 
 		s.metrics.countTranslate("openapi", false)
 	}
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true,
+		"success":      true,
 		"translations": res.Data.Translations,
 		"sources":      res.Data.TranslationsSource,
 		"mode":         res.Data.Mode,
@@ -1155,8 +1171,8 @@ func (s *Server) handleOpenAPIKBStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{
-		"success":  true,
-		"tenant_id": ak.TenantID,
+		"success":    true,
+		"tenant_id":  ak.TenantID,
 		"kb_entries": s.kbStats(ak.TenantID),
 	})
 }
@@ -1184,11 +1200,11 @@ func (s *Server) handleOpenAPIUsage(w http.ResponseWriter, r *http.Request) {
 	usage, total, _ := s.Store.UsageStats(ak.TenantID)
 	balance, _ := s.Store.GetBalance(ak.TenantID)
 	writeJSON(w, 200, map[string]interface{}{
-		"success":  true,
+		"success":   true,
 		"tenant_id": ak.TenantID,
-		"usage":    usage,
-		"total":    total,
-		"balance":  balance,
+		"usage":     usage,
+		"total":     total,
+		"balance":   balance,
 	})
 }
 

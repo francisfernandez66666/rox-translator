@@ -1,15 +1,24 @@
+<!-- ============================================================================
+   App.vue — 应用根组件
+   职责：负责全局路由分发与页面切换
+   - 会话恢复中 → 显示恢复画面
+   - 未登录 → 展示登录页（按路径区分前台 /admin 后台）
+   - /admin 路径且已登录 → 渲染管理后台 AdminDashboard
+   - 其余情况 → 渲染翻译工作台（顶部栏 + 聊天窗口 + 设置弹窗）
+   ============================================================================ -->
 <template>
-  <!-- 会话恢复中（避免闪现登录页再跳转） -->
+  <!-- ===== 顶层路由分发：会话恢复中（避免刷新时闪现登录页再跳转） ===== -->
   <div v-if="restoring" class="restore-screen"><div class="restore-spinner"></div></div>
 
-  <!-- 未登录 → 统一登录页（按路径区分前台/后台） -->
+  <!-- ===== 未登录 → 统一登录页（按路径区分前台/后台） ===== -->
   <Login v-else-if="!authUser" :mode="isAdminRoute ? 'admin' : 'home'" @ok="onLogin" />
 
-  <!-- 管理后台 /admin -->
+  <!-- ===== 管理后台 /admin（已登录且路径以 /admin 开头） ===== -->
   <AdminDashboard v-else-if="isAdminRoute" :user="authUser" @logout="onLogout" />
 
-  <!-- 翻译工作台（登录后） -->
+  <!-- ===== 翻译工作台（登录后） ===== -->
   <div v-else id="app-root" :class="isMobile ? 'device-mobile' : 'device-desktop'">
+    <!-- ===== 顶部导航栏：品牌信息 + 在线状态 + 设置/退出按钮 ===== -->
     <header class="app-header">
       <div class="header-left">
         <span class="header-icon">🌐</span>
@@ -26,6 +35,7 @@
       </div>
     </header>
 
+    <!-- ===== 主内容区：翻译引擎启动加载屏 / 聊天窗口 ===== -->
     <main class="chat-main">
       <div v-if="store.isBackendLoading" class="loading-screen">
         <div class="loading-spinner"></div>
@@ -34,7 +44,7 @@
       <ChatWindow v-else />
     </main>
 
-    <!-- 设置弹窗 -->
+    <!-- ===== 设置弹窗：翻译模型选择（Teleport 到 body） ===== -->
     <Teleport to="body">
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="settings-panel">
@@ -61,17 +71,25 @@
 </template>
 
 <script setup lang="ts">
+// Vue 核心组合式 API（响应式、生命周期）
 import { ref, onMounted, onUnmounted, computed } from 'vue'
+// 全局聊天状态 Store
 import { useChatStore } from '@/stores/chat'
+// 子组件：聊天窗口 / 登录页 / 管理后台
 import ChatWindow from './components/ChatWindow.vue'
 import Login from './components/Login.vue'
 import AdminDashboard from './components/AdminDashboard.vue'
+// API：token 读写与用户信息查询
 import { getAuthToken, setAuthToken, authMe, type AuthUser } from '@/api'
 
+// 全局聊天 Store 实例
 const store = useChatStore()
+// 设置弹窗显隐
 const showSettings = ref(false)
+// 当前选中的翻译模型（与 Store 保持同步）
 const currentModel = ref(store.selectedModel)
 
+// 是否处于管理后台路由（/admin）
 const isAdminRoute = computed(() => window.location.pathname.startsWith('/admin'))
 // 当前登录用户（null 表示未登录，显示登录页）
 const authUser = ref<AuthUser | null>(null)
@@ -125,30 +143,34 @@ function onModelChange() {
   store.setSelectedModel(currentModel.value)
 }
 
-// 响应式：检测移动端布局
+// 响应式：检测移动端布局（宽度 ≤ 768px 判定为移动端）
 const windowWidth = ref(window.innerWidth)
 const isMobile = ref(windowWidth.value <= 768)
 
+// 窗口尺寸变化回调：更新移动端标记
 function onResize() {
   windowWidth.value = window.innerWidth
   isMobile.value = windowWidth.value <= 768
 }
 
-// 初始化：恢复登录态 + 检测后端在线状态
+// 初始化：恢复登录态 + 检测后端在线状态 + 监听窗口尺寸
 onMounted(async () => {
   window.addEventListener('resize', onResize)
   await restoreSession()
   await store.checkBackendHealth()
 })
 
+// 组件卸载：移除窗口尺寸监听
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
 })
 </script>
 
 <style>
+/* 全局样式重置：清除默认边距并统一盒模型 */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; overflow: hidden; }
+/* 全局基础样式：字体栈 / 背景色 / 文字颜色 / 抗锯齿 */
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   background: #f5f5f5;
@@ -156,9 +178,10 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* 工作台根容器：撑满视口，纵向 Flex 布局 */
 #app-root { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 
-/* 会话恢复中 */
+/* 会话恢复中加载画面 */
 .restore-screen {
   height: 100vh; display: flex; align-items: center; justify-content: center; background: #f5f7fb;
 }
@@ -168,6 +191,7 @@ body {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* 顶部导航栏：品牌 + 状态 + 操作按钮 */
 .app-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 20px; background: #2e7d32; color: #fff; flex-shrink: 0;
@@ -177,6 +201,7 @@ body {
 .header-title { font-size: 18px; font-weight: 600; }
 .header-right { display: flex; align-items: center; gap: 12px; }
 
+/* 设置/退出按钮 */
 .gear-btn {
   border: none; background: rgba(255,255,255,0.15); color: #fff;
   font-size: 18px; cursor: pointer; padding: 6px 10px; border-radius: 8px;
@@ -184,14 +209,16 @@ body {
 }
 .gear-btn:hover { background: rgba(255,255,255,0.25); }
 
+/* 后端在线状态指示器 */
 .status-indicator { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .status-indicator.online .status-dot { background: #69f0ae; box-shadow: 0 0 6px rgba(105,240,174,0.6); }
 .status-indicator.offline .status-dot { background: #ff5252; box-shadow: 0 0 6px rgba(255,82,82,0.5); }
 
+/* 聊天主区域：占据剩余高度 */
 .chat-main { flex: 1; display: flex; flex-direction: column; background: #fff; overflow: hidden; min-width: 0; }
 
-/* 设置弹窗 */
+/* ===== 设置弹窗遮罩层（半透明黑色背景） ===== */
 .modal-overlay {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;
   background: rgba(0,0,0,0.4);
@@ -200,6 +227,7 @@ body {
 }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
+/* 设置面板卡片 */
 .settings-panel {
   background: #fff; border-radius: 16px; padding: 28px;
   width: 380px; max-width: 90vw;
@@ -220,14 +248,14 @@ body {
 }
 .settings-close:hover { background: #1b5e20; }
 
-/* 移动端适配 */
+/* ===== 移动端适配 ===== */
 @media (max-width: 768px) {
   .app-header { padding: 10px 16px; }
   .header-title { font-size: 16px; }
   .device-mobile .chat-main { background: #fff; }
 }
 
-/* ==================== 加载屏 ==================== */
+/* ===== 翻译引擎加载屏（等待后端启动） ===== */
 .loading-screen {
   flex: 1; display: flex; flex-direction: column;
   align-items: center; justify-content: center;

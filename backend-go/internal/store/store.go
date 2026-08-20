@@ -1,3 +1,10 @@
+// ============ 本文件职责中文说明 ============
+// SaaS 平台数据层核心：Store 结构体定义与数据库迁移。
+// 职责：基于 SQLite（共享 tm.sqlite3 同一连接）管理全部平台业务表
+// （用户/工单/KB包/计费/审计/系统配置等），含幂等建表、老库列迁移、
+// 默认单价初始化与超级管理员租户归属迁移。
+// =============================================
+
 // Package store 提供 SaaS 平台数据层：所有平台业务表（用户/工单/KB包/计费/审计/系统配置等）。
 // 基于 SQLite（共享 tm.sqlite3 同一连接），与 internal/kb、internal/tenant 共用。
 package store
@@ -12,24 +19,26 @@ import (
 
 // Store 平台存储
 type Store struct {
-	db *sql.DB
+	db *sql.DB // 底层 SQLite 连接（与 kb/tenant 共享）
 
-	mu sync.Mutex
+	mu sync.Mutex // 互斥锁：保护并发写操作（SQLite 单写者模型）
 }
 
-// New 创建 Store 并确保全部表存在（幂等迁移）
+// New 创建 Store 并确保全部表存在（幂等迁移）。
+// 参数：db=已打开的 SQLite 连接；返回可用的 Store 实例。
 func New(db *sql.DB) (*Store, error) {
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
-		return nil, err
+		return nil, err // 迁移失败则返回错误
 	}
 	return s, nil
 }
 
-// DB 返回底层连接（供需要跨表事务的调用方）
+// DB 返回底层连接（供需要跨表事务的调用方）。
 func (s *Store) DB() *sql.DB { return s.db }
 
-// migrate 顺序执行建表（幂等）
+// migrate 顺序执行建表（幂等）。
+// 步骤：① 全部 CREATE TABLE IF NOT EXISTS 建表；② 老库补列迁移；③ 初始化默认单价；④ 超级管理员提租户。
 func (s *Store) migrate() error {
 	stmts := []string{
 		// ---------- users 用户体系 ----------
@@ -65,6 +74,7 @@ func (s *Store) migrate() error {
 			created_at TEXT,
 			updated_at TEXT
 		)`,
+		// 工单状态轨迹表：记录每一步骤的运行快照（Projector 物化）
 		`CREATE TABLE IF NOT EXISTS ticket_state (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			ticket_id INTEGER NOT NULL,
@@ -102,6 +112,7 @@ func (s *Store) migrate() error {
 			created_at TEXT,
 			updated_at TEXT
 		)`,
+		// 为按包+语言检索建立的索引
 		`CREATE INDEX IF NOT EXISTS idx_kb_entries_pkg ON kb_entries(package_id, source_lang, target_lang)`,
 		// ---------- kb_safety_phrases 安全句锁死串库 ----------
 		`CREATE TABLE IF NOT EXISTS kb_safety_phrases (
@@ -133,6 +144,7 @@ func (s *Store) migrate() error {
 			cost INTEGER NOT NULL DEFAULT 0,         -- 扣减 token
 			created_at TEXT
 		)`,
+		// 按租户+时间查询用量的索引
 		`CREATE INDEX IF NOT EXISTS idx_usage_tenant ON usage_ledger(tenant_id, created_at)`,
 		// ---------- rate_card 单价表 ----------
 		`CREATE TABLE IF NOT EXISTS rate_card (
@@ -157,6 +169,7 @@ func (s *Store) migrate() error {
 			created_at TEXT,
 			paid_at TEXT NOT NULL DEFAULT ''
 		)`,
+		// 支付流水表：记录每次订单支付确认
 		`CREATE TABLE IF NOT EXISTS payments (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			order_id INTEGER NOT NULL DEFAULT 0,
@@ -206,6 +219,7 @@ func (s *Store) migrate() error {
 			after_val TEXT NOT NULL DEFAULT '',      -- 操作后值（JSON 字符串，结构化轨迹）
 			created_at TEXT
 		)`,
+		// 审计日志按租户+时间查询索引
 		`CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_logs(tenant_id, created_at)`,
 		// ---------- system_config 系统配置（热更新） ----------
 		`CREATE TABLE IF NOT EXISTS system_config (
@@ -248,6 +262,7 @@ func (s *Store) migrate() error {
 		)`,
 	}
 	for _, stmt := range stmts {
+		// 逐条幂等执行建表语句，失败即中止迁移
 		if _, err := s.db.Exec(stmt); err != nil {
 			return fmt.Errorf("建表失败: %w\nSQL: %s", err, stmt)
 		}
@@ -267,17 +282,19 @@ func (s *Store) migrate() error {
 	return nil
 }
 
-// migrateColumns 为老库补充新增列（SQLite 3.35+ 才支持 ADD COLUMN IF NOT EXISTS，这里手工判断）
+// migrateColumns 为老库补充新增列（SQLite 3.35+ 才支持 ADD COLUMN IF NOT EXISTS，这里手工判断）。
+// 实现：用 pragma_table_info 检查列是否存在，缺失才执行 ALTER TABLE ADD COLUMN。
 func (s *Store) migrateColumns() error {
 	type colDef struct {
-		table string
-		col   string
-		ddl   string
+		table string // 目标表名
+		col   string // 目标列名
+		ddl   string // 补列的 ALTER 语句
 	}
 	cols := []colDef{
+		// 老库可能缺少的列：供应商/模型/审计前后值
 		{"usage_ledger", "provider", "ALTER TABLE usage_ledger ADD COLUMN provider TEXT NOT NULL DEFAULT ''"},
 		{"usage_ledger", "model", "ALTER TABLE usage_ledger ADD COLUMN model TEXT NOT NULL DEFAULT ''"},
-		{"rate_card", "provider", "ALTER TABLE rate_card ADD COLUMN provider TEXT NOT NULL DEFAULT '*'"},
+		{"rate_card", "provider", "ALTER TABLE rate_card ADD COLUMN provider TEXT NOT NULL DEFAULT '*"},
 		{"audit_logs", "before_val", "ALTER TABLE audit_logs ADD COLUMN before_val TEXT NOT NULL DEFAULT ''"},
 		{"audit_logs", "after_val", "ALTER TABLE audit_logs ADD COLUMN after_val TEXT NOT NULL DEFAULT ''"},
 	}
@@ -287,9 +304,10 @@ func (s *Store) migrateColumns() error {
 		if err != nil {
 			return err
 		}
-		has := rows.Next()
+		has := rows.Next() // 有结果行说明列已存在
 		rows.Close()
 		if !has {
+			// 列不存在才补列迁移
 			if _, err := s.db.Exec(c.ddl); err != nil {
 				return fmt.Errorf("迁移失败(%s.%s): %w", c.table, c.col, err)
 			}
@@ -298,7 +316,8 @@ func (s *Store) migrateColumns() error {
 	return nil
 }
 
-// seedRateCard 初始化默认单价表
+// seedRateCard 初始化默认单价表（幂等）。
+// 用 INSERT OR IGNORE 保证重复执行不产生重复行；设置四类任务的全局单价。
 func (s *Store) seedRateCard() error {
 	_, err := s.db.Exec(`INSERT OR IGNORE INTO rate_card (task_type, lang, provider, unit_price, multiplier, updated_at) VALUES
 		('translate', '*', '*', 1, 1.0, ''), ('review', '*', '*', 1, 1.0, ''),

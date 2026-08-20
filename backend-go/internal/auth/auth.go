@@ -1,6 +1,12 @@
 // Package auth 提供 JWT 签发/校验 + RBAC 角色校验 + 登录/改密。
 package auth
 
+// ============ 本文件职责中文说明 ============
+// 认证与鉴权：JWT（HS256）的签发（Sign）与校验（Verify）、从 context 存取当前用户、
+// 基于角色的权限等级校验（user < tenant_admin < super_admin，含旧值兼容）、
+// 密码哈希（HMAC-SHA256 + salt）与校验、Authorization Bearer Token 提取。
+// ========================================
+
 import (
 	"context"
 	"crypto/hmac"
@@ -21,13 +27,14 @@ var Secret = "trans-platform-jwt-secret-2026"
 
 // Claims JWT 载荷
 type Claims struct {
-	UserID   int64  `json:"uid"`
-	TenantID int64  `json:"tid"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
-	Exp      int64  `json:"exp"`
+	UserID   int64  `json:"uid"`      // 用户 ID
+	TenantID int64  `json:"tid"`      // 所属租户 ID
+	Username string `json:"username"` // 用户名
+	Role     string `json:"role"`     // 角色（user/tenant_admin/super_admin 等）
+	Exp      int64  `json:"exp"`      // 过期时间（Unix 秒）
 }
 
+// ctxUserKey context 存取当前用户的键类型
 type ctxUserKey struct{}
 
 // UserFromContext 从 context 取当前用户
@@ -69,6 +76,7 @@ func Sign(u *store.User, ttl time.Duration) (string, error) {
 	return signingInput + "." + b64Encode(sig), nil
 }
 
+// signHS256 用 HMAC-SHA256 对指定输入计算签名（JWT 第三段签名部分的底层实现）
 func signHS256(input, secret string) []byte {
 	m := hmac.New(sha256.New, []byte(secret))
 	m.Write([]byte(input))
@@ -134,6 +142,7 @@ func RequireRole(u *store.User, required int) error {
 	return nil
 }
 
+// roleName 角色等级 → 中文角色名（用于权限不足错误提示）
 func roleName(level int) string {
 	switch level {
 	case 3:

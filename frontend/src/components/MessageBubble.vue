@@ -11,20 +11,21 @@
 // ============================================================================
 
 <template>
+  <!-- ===== 单条消息行：靠左（AI）或靠右（用户） ===== -->
   <div class="message-row" :class="[message.role, { 'msg-mobile': isMobile }]">
-    <!-- AI头像 -->
+    <!-- AI 头像 -->
     <div v-if="message.role === 'assistant'" class="avatar avatar-ai">
       <span class="avatar-text">AI</span>
     </div>
 
-    <!-- 气泡内容 -->
+    <!-- ===== 气泡主体内容 ===== -->
     <div class="bubble" :class="message.role">
       <!-- 技能徽章 -->
       <div v-if="message.role === 'assistant' && message.skill" class="bubble-badge">
         <SkillBadge :skill="message.skill" />
       </div>
 
-      <!-- ★ 翻译进度条 -->
+      <!-- ===== 翻译进度条：实时步骤 + 百分比 ===== -->
       <div
         v-if="message.role === 'assistant' && message.progress && message.progress.percent < 100"
         class="progress-area"
@@ -41,12 +42,12 @@
         </div>
       </div>
 
-      <!-- 翻译结果：多语言表格展示 -->
+      <!-- ===== 翻译结果：多语言表格展示 ===== -->
       <div
         v-if="message.role === 'assistant' && message.data?.translations"
         class="translation-results"
       >
-        <!-- 匹配模式指示 -->
+        <!-- 匹配模式指示（精确命中/模糊匹配/语义相似/在线翻译） -->
         <div v-if="message.data.mode" class="translation-mode">
           <span v-if="message.data.mode.includes('精确命中')" class="mode-badge mode-exact">✅ 精确命中</span>
           <span v-else-if="message.data.mode.includes('模糊')" class="mode-badge mode-fuzzy">🔄 模糊匹配</span>
@@ -96,7 +97,7 @@
         </div>
       </div>
 
-      <!-- ★ 图片内联展示（出图技能生成的图片） -->
+      <!-- ===== 附件文件展示：图片内联 + 非图片下载卡片 ===== -->
       <div v-if="message.files && message.files.length > 0" class="file-downloads">
         <template v-for="file in message.files" :key="file">
           <!-- 图片文件：内联展示 + 点击放大 -->
@@ -147,11 +148,16 @@
 </template>
 
 <script setup lang="ts">
+// Vue 响应式与生命周期
 import { computed, ref, onMounted } from 'vue'
+// 技能徽章组件
 import SkillBadge from './SkillBadge.vue'
+// API：获取文件下载 URL
 import { getDownloadUrl } from '@/api'
+// 类型定义
 import type { ChatMessage } from '@/types'
 
+// 语言代码 → 中文名本地映射（渲染翻译结果时展示语言名）
 const LANG_NAMES: Record<string, string> = {
   // KB语言
   en: '英语', ru: '俄语', ar: '阿拉伯语', es: '西班牙语',
@@ -175,8 +181,10 @@ function getLangName(lang: string): string {
   return LANG_NAMES[lang] || lang
 }
 
+// 组件入参：需要渲染的单条聊天消息
 const props = defineProps<{ message: ChatMessage }>()
 
+// 移动端标记：窗口宽度 ≤ 768px 时启用移动端样式
 const isMobile = ref(window.innerWidth <= 768)
 onMounted(() => {
   const onResize = () => { isMobile.value = window.innerWidth <= 768 }
@@ -311,19 +319,21 @@ function renderMarkdown(text: string): string {
   return text
 }
 
+// 计算属性：将消息内容经 Markdown 转换器渲染为 HTML
 const formattedContent = computed(() => {
   const text = props.message.content
   if (!text) return ''
   return renderMarkdown(text)
 })
 
+// 从文件路径中提取文件名（去掉目录部分）
 function getFileName(path: string): string {
   return path.split('/').pop() || path
 }
 </script>
 
 <style scoped>
-/* ==================== 消息行布局 ==================== */
+/* ===== 消息行布局：Flex 行，用户消息反向排列（靠右） ===== */
 .message-row {
   display: flex;
   align-items: flex-start;
@@ -333,7 +343,7 @@ function getFileName(path: string): string {
 }
 .message-row.user { flex-direction: row-reverse; }
 
-/* ==================== 头像 ==================== */
+/* ===== 头像：AI 蓝色 / 用户灰色 ===== */
 .avatar {
   width: 36px; height: 36px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
@@ -342,7 +352,7 @@ function getFileName(path: string): string {
 .avatar-user { background: #5f6368; }
 .avatar-text { color: white; font-size: 12px; font-weight: 600; }
 
-/* ==================== 气泡 ==================== */
+/* ===== 气泡主体：用户蓝色靠右 / AI 灰色靠左 ===== */
 .bubble {
   max-width: 70%;
   padding: 12px 16px;

@@ -10,6 +10,7 @@
 // ============================================================================
 
 <template>
+  <!-- ===== 聊天窗口整体容器（响应式移动端样式） ===== -->
   <div class="chat-window" :class="{ 'chat-mobile': isMobile }">
     <!-- ===== 顶部标题栏 ===== -->
     <header class="chat-header" :class="{ 'chat-mobile-header': isMobile }" style="border-bottom-color: #2e7d32;">
@@ -26,7 +27,7 @@
 
     <!-- ===== 消息列表区域 ===== -->
     <div class="messages-area" ref="messagesContainer">
-      <!-- 没有消息时：欢迎页 + 示例 -->
+      <!-- ===== 空状态：没有消息时显示欢迎页 + 示例问题 ===== -->
       <div v-if="store.messages.length === 0" class="empty-state">
         <div class="empty-icon">{{ skillConfig.icon }}</div>
         <div class="empty-title">{{ skillConfig.welcome }}</div>
@@ -42,14 +43,14 @@
         </div>
       </div>
 
-      <!-- 对话消息列表 -->
+      <!-- ===== 对话消息列表（渲染每条消息气泡） ===== -->
       <MessageBubble
         v-for="msg in store.messages"
         :key="msg.id"
         :message="msg"
       />
 
-      <!-- 加载动画（非翻译进度时显示） -->
+      <!-- ===== 加载动画（非翻译进度时显示"正在翻译"点动画） ===== -->
       <div v-if="store.isLoading && !hasActiveProgress" class="loading-indicator">
         <div class="loading-dots">
           <span></span><span></span><span></span>
@@ -60,7 +61,7 @@
 
     <!-- ===== 底部输入区域 ===== -->
     <div class="input-area" :class="{ 'input-mobile': isMobile }">
-      <!-- 已选文件/语言标签行 -->
+      <!-- ===== 已选文件 / 语言标签行（可逐个移除） ===== -->
       <div v-if="attachedFiles.length > 0 || store.selectedLangs.length > 0" class="tags-row">
         <span
           v-for="(f, idx) in attachedFiles"
@@ -107,10 +108,10 @@
         </span>
       </div>
 
-      <!-- 输入行 -->
+      <!-- ===== 输入行：上传 / 语言选择 / 文本框 / 导入 / 发送 ===== -->
       <div class="input-row">
         <div class="input-actions">
-          <!-- 📎 文件上传按钮 -->
+          <!-- ===== 文件上传按钮（docx/pptx/xlsx） ===== -->
           <button
             class="action-btn"
             title="上传文件翻译（docx/pptx/xlsx）"
@@ -126,7 +127,7 @@
             @change="handleFileSelect"
           />
 
-          <!-- 🌐 语言选择下拉 -->
+          <!-- ===== 语言选择下拉（知识库语言 + 其他 AI 翻译语言） ===== -->
           <div class="lang-selector" :class="{ open: langDropdownOpen }">
             <button class="action-btn lang-btn" @click="langDropdownOpen = !langDropdownOpen" title="选择目标语言">
               🌐 {{ langBtnLabel }}
@@ -349,10 +350,14 @@
 </template>
 
 <script setup lang="ts">
+// Vue 核心组合式 API（响应式、计算、DOM 更新、监听、生命周期）
 import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
+// 全局聊天状态 Store
 import { useChatStore } from '@/stores/chat'
+// 子组件：消息气泡
 import MessageBubble from './MessageBubble.vue'
 
+// 全局聊天 Store 实例
 const store = useChatStore()
 
 // ---- 技能配置 ----
@@ -477,6 +482,7 @@ function addCustomLang() {
   }
   customLangText.value = ''
 }
+// 已附加的待翻译文件列表
 const attachedFiles = ref<File[]>([])
 const kbFileInputRef = ref<HTMLInputElement>()
 // ★ KB导入弹窗状态
@@ -796,6 +802,7 @@ watch(
   { deep: true }
 )
 
+// 滚动消息列表到底部（新消息或进度更新时调用）
 function scrollToBottom() {
   if (messagesContainer.value) {
     messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
@@ -837,6 +844,7 @@ async function loadTranslationLangs() {
 </script>
 
 <style scoped>
+/* ===== 聊天窗口整体：纵向 Flex，占满父容器高度 ===== */
 .chat-window {
   display: flex;
   flex-direction: column;
@@ -875,13 +883,13 @@ async function loadTranslationLangs() {
   text-align: center; font-size: 13px; flex-shrink: 0;
 }
 
-/* ==================== 消息列表区域 ==================== */
+/* ==================== 消息列表区域：滚动容器 ==================== */
 .messages-area {
   flex: 1; overflow-y: auto; padding: 16px 0;
   -webkit-overflow-scrolling: touch;
 }
 
-/* ==================== 空状态 ==================== */
+/* ==================== 空状态：欢迎页 + 示例问题 ==================== */
 .empty-state {
   display: flex; flex-direction: column; align-items: center;
   justify-content: center; padding: 40px 20px;
@@ -919,7 +927,7 @@ async function loadTranslationLangs() {
   40% { transform: scale(1); opacity: 1; }
 }
 
-/* ==================== 底部输入区域 ==================== */
+/* ==================== 底部输入区域：标签行 + 输入行 ==================== */
 .input-area {
   border-top: 1px solid #e0e0e0; padding: 8px 16px;
   background: #fafafa; flex-shrink: 0;
