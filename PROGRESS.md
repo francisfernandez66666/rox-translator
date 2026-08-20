@@ -1,10 +1,11 @@
 # 改造进度跟踪（PROGRESS）
 
-> 更新：2026-08-20 ｜ 状态：**全部完成并上线生产** ｜ 关联文档：PLAN.md / SAAS_GAP.md / COMMERCIAL_TODO.md
+> 更新：2026-08-20 ｜ 状态：**全部完成并上线生产** ｜ 关联文档：PLAN.md / SAAS_GAP.md / COMMERCIAL_TODO.md / SAAS_ROADMAP.md
 
 ## 当前状态总览
 
 - **阶段**：P0 MVP + SaaS 基础层全部完成，生产已上线（`https://translator.quant-trading.top`）
+- **规划中**：彻底 SaaS 化 10 项（语言互译/全量 i18n/模型分阶段/商业包/分级看板/静态码支付/KB 后台化/注册行业等），见 **SAAS_ROADMAP.md**（6 个阶段，待实施）
 - **代码**：`backend-go/`（Go 单二进制）+ `frontend/`（Vue3 + TS），已全部加中文注释
 - **数据库**：SQLite（单文件 WAL，19 张业务表 + 幂等迁移）
 - **部署**：阿里云 43.108.86.140 `/opt/translator/`，systemd `translator.service`，Caddy 反代
