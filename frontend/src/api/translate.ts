@@ -63,9 +63,9 @@ export async function chatStream(
   return finalResult
 }
 
-/** 健康检查 */
+/** 健康检查（10 秒超时：后端挂起时快速判定离线，不无限等待） */
 export async function healthCheck(): Promise<HealthResponse> {
-  return request('/api/health')
+  return request('/api/health', { timeoutMs: 10000 })
 }
 
 /** SSE 流式文件翻译 */

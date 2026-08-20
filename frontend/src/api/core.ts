@@ -44,12 +44,23 @@ export function authHeaders(): Record<string, string> {
 }
 
 // 通用 JSON 请求封装：自动附带认证头，非 2xx 抛出错误，返回解析后的 JSON
-export async function request<T>(url: string, options?: RequestInit): Promise<T> {
+// 支持 options.timeoutMs 设置请求超时（默认 30 秒），超时自动 Abort 并抛出明确错误
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const fullUrl = `${API_BASE}${url}`
+  // 组装 AbortController：外部 signal 与超时信号合并，任一触发即中断
+  const timeoutMs = options?.timeoutMs ?? 30000
+  const controller = new AbortController()
+  const externalSignal = options?.signal
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort()
+    else externalSignal.addEventListener('abort', () => controller.abort())
+  }
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const response = await fetch(fullUrl, {
       headers: { 'Content-Type': 'application/json', ...authHeaders(), ...options?.headers },
       ...options,
+      signal: controller.signal,
     })
     if (!response.ok) {
       const errorText = await response.text()
@@ -57,10 +68,17 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
     }
     return await response.json()
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      if (externalSignal?.aborted) throw error
+      throw new Error('请求超时，请检查后端服务是否正常')
+    }
     if (error instanceof TypeError && error.message.includes('fetch')) {
       throw new Error('无法连接后端服务')
     }
     throw error
+  } finally {
+    clearTimeout(timer)
+    externalSignal?.removeEventListener('abort', () => controller.abort())
   }
 }
 
