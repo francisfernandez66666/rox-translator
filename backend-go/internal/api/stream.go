@@ -125,9 +125,9 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 // 事件流：progress 进度事件 → done（携带 result）或 error 事件。
 // 流程：保存上传文件 → 解析语言参数 → 配额闸门 → 引擎流式处理 → 计量 → 清理文件。
 func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Request) {
-	// 解析 multipart 表单（最大 200MB）
-	if err := r.ParseMultipartForm(200 << 20); err != nil {
-		writeJSON(w, 400, map[string]string{"error": "文件上传失败"})
+	// 解析 multipart 表单（上限 50MB，仅允许 docx/pptx/xlsx/pdf）
+	if err := parseUpload(r, translateUploadMax, translateExtWhitelist); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
 	// 取上传文件
@@ -261,9 +261,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（multipart：file + target_langs + message）。
 // 返回: 引擎处理结果对象（JSON）；成功时已计量。
 func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
-	// 解析 multipart 表单（最大 200MB）
-	if err := r.ParseMultipartForm(200 << 20); err != nil {
-		writeJSON(w, 400, map[string]string{"error": "文件上传失败"})
+	// 解析 multipart 表单（上限 50MB，仅允许 docx/pptx/xlsx/pdf）
+	if err := parseUpload(r, translateUploadMax, translateExtWhitelist); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
 	file, header, err := r.FormFile("file")

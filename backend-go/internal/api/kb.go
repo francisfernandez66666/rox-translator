@@ -108,6 +108,10 @@ func (s *Server) kbTempDir() string {
 // 参数 r: HTTP 请求（含 "file" 表单字段）。返回: 保存后的文件路径或错误。
 // 文件名按 kb_<唯一名> 命名避免冲突。
 func (s *Server) saveUploadedFile(r *http.Request) (string, error) {
+	// 解析 multipart 表单（上限 20MB，仅允许 xlsx/xls/csv）
+	if err := parseUpload(r, kbUploadMax, kbExtWhitelist); err != nil {
+		return "", err
+	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		return "", err
