@@ -40,6 +40,8 @@
 | `dd8e597` | 阶段三：补充测试（支付网关+上传校验单测，修复 parseAmount/parseUpload 两处真实缺陷） |
 | `81fad7e` | 阶段四：商业物料+定价页（/pricing + /docs/terms、sla、privacy + /api/pricing）+ i18n 中英（登录/后台导航/工作台顶栏） |
 | `31058cc` | 阶段四：关键告警邮件通知（余额耗尽/模型熔断 → alert_email 收件人） |
+| `48afb94` | 修复生产级竞态：metrics 计数映射并发读写崩溃（concurrent map writes），RWMutex + 并发压测验证 |
+| `6c0ae58` | 全量补齐中文注释（前后端）：后端 5 文件 + 前端 22 文件（Vue/TS），0 缺注释函数/定义 |
 
 ## 已完成 · 全部阶段 ✅
 
