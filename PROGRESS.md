@@ -4,8 +4,8 @@
 
 ## 当前状态总览
 
-- **阶段**：P0 MVP + SaaS 基础层全部完成，生产已上线（`https://translator.quant-trading.top`）
-- **规划中**：彻底 SaaS 化 10 项（语言互译/全量 i18n/模型分阶段/商业包/分级看板/静态码支付/KB 后台化/注册行业等），见 **SAAS_ROADMAP.md**（6 个阶段，待实施）
+- **阶段**：P0 MVP + SaaS 基础层全部完成，生产已上线（`https://translator.quant-trading.top`）；SaaS 化 6 阶段路线图已启动，**阶段一（语言互译 + 全量 i18n）已完成**
+- **规划中**：彻底 SaaS 化后续 5 阶段（模型分阶段/商业包/分级看板/KB 后台化/静态码支付），见 **SAAS_ROADMAP.md**
 - **代码**：`backend-go/`（Go 单二进制）+ `frontend/`（Vue3 + TS），已全部加中文注释
 - **数据库**：SQLite（单文件 WAL，19 张业务表 + 幂等迁移）
 - **部署**：阿里云 43.108.86.140 `/opt/translator/`，systemd `translator.service`，Caddy 反代
@@ -43,6 +43,7 @@
 | `31058cc` | 阶段四：关键告警邮件通知（余额耗尽/模型熔断 → alert_email 收件人） |
 | `48afb94` | 修复生产级竞态：metrics 计数映射并发读写崩溃（concurrent map writes），RWMutex + 并发压测验证 |
 | `6c0ae58` | 全量补齐中文注释（前后端）：后端 5 文件 + 前端 22 文件（Vue/TS），0 缺注释函数/定义 |
+| `f767444` | **SaaS 阶段一**：语言互译（Req10）+ 全量 i18n（Req9）——后端全链路 sourceLang 透传（translateInstruction 支持 en→zh、workflow KB 按实际源语言匹配）+ 前端 i18n 重构为 i18n/ 分面板字典（530+ 中英文案键，全量覆盖工作台+12 管理面板）+ ChatWindow 源语言选择器 |
 
 ## 已完成 · 全部阶段 ✅
 
@@ -103,6 +104,8 @@
 - [x] 阶段三·补充测试：payment 9 单测 + upload 5 单测；修复 parseAmount（元/分启发式）与 parseUpload（大文件未硬性拦截）两处真实缺陷
 - [x] 阶段四·商业物料：/pricing 定价页 + /docs/terms、/docs/sla、/docs/privacy（中英双语内嵌页）+ /api/pricing 公开单价 API
 - [x] 阶段四·i18n：`frontend/src/i18n.ts` 中英双字典（登录/后台导航/工作台顶栏）+ 语言切换按钮
+- [x] SaaS 阶段一·语言互译：后端 sourceLang 自动检测/显式指定全链路透传，任意语言互译（en→zh/zh→fr/…）；`translateInstruction` 支持全部方向
+- [x] SaaS 阶段一·全量 i18n：`i18n.ts` 重构为 `frontend/src/i18n/`（index.ts 合并 + panels/*.ts 分面板字典 + `tpl()` 插值）；覆盖登录/导航/工作台/MessageBubble/App + 12 个 admin 面板 + 共享工具函数，共 530+ 文案键（中英成对）；ChatWindow 新增源语言选择器
 - [x] 阶段四·邮件通知：余额耗尽/模型熔断 critical 告警 → `alert_email` 收件人（Noop/SMTP）
 - [x] 阶段五·全量回归：后端 4 包单测 + 前端 build + 21 项端到端冒烟（公开页/注册/登录/SSE/计费/Webhook/鉴权/优雅停机）全通过
 
@@ -135,7 +138,7 @@
 - [x] 二期在线支付（支付宝/微信）—— 已接入适配器骨架 + mock 完整流程；真实商户号接入后启用
 - [x] 翻译完成 webhook 回调（客户 TMS/CI 集成）—— 已上线，支持 HMAC 签名校验
 - [x] 优雅停机（signal.Notify + server.Shutdown）—— 已上线
-- [x] i18n 界面中英切换 —— 已上线（登录/后台导航/工作台顶栏；翻译工作台内部文案次轮接入）
+- [x] i18n 界面中英切换 —— 已上线（登录/后台导航/工作台顶栏；翻译工作台内部文案次轮接入）→ **全量 i18n 已在 SaaS 阶段一完成（含工作台与全部管理面板）**
 - [x] 商业物料（LICENSE/SLA/定价卡/DPA）—— 已上线（/docs/terms、sla、privacy + /pricing）
 - [ ] 生产管理员/超管密钥轮换与审计 —— 需在部署时设置随机 JWT_SECRET/ADMIN_TOKEN 并轮换
 
