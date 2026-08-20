@@ -7,9 +7,11 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"flag"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -97,8 +99,13 @@ func main() {
 	if db != nil {
 		st, _ = store.New(db.RawDB())
 		if st != nil {
-			// 初始 admin 账号（admin/admin123）与默认三级包
-			if err := st.EnsureAdmin(1, "admin", auth.PasswordHash("admin123"), "系统管理员"); err != nil {
+			// 初始 admin 账号（密码来自 ADMIN_INIT_PASSWORD，未配置则随机生成并打印）
+			initPwd := os.Getenv("ADMIN_INIT_PASSWORD")
+			if initPwd == "" {
+				initPwd = genRandomPass(12)
+				log.Printf("[init] 未配置 ADMIN_INIT_PASSWORD，已生成随机初始密码: %s（请登录后立即修改）", initPwd)
+			}
+			if err := st.EnsureAdmin(1, "admin", auth.PasswordHash(initPwd), "系统管理员"); err != nil {
 				log.Printf("警告: admin 账号初始化失败: %v", err)
 			}
 			if err := st.EnsureDefaultPackages(1); err != nil {
@@ -158,4 +165,22 @@ func main() {
 		log.Fatalf("HTTP 服务启动失败: %v", err)
 	}
 	_ = context.Background()
+}
+
+// genRandomPass 生成 n 位随机密码（大写+小写+数字混合，初始密码临时用）。
+func genRandomPass(n int) string {
+	if n < 8 {
+		n = 8
+	}
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	out := make([]byte, n)
+	for i := range out {
+		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			out[i] = 'a'
+			continue
+		}
+		out[i] = charset[idx.Int64()]
+	}
+	return string(out)
 }

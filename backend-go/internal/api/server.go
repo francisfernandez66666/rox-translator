@@ -114,6 +114,8 @@ func (s *Server) routesAuth() {
 	s.mux.HandleFunc("/api/auth/register", s.handleRegister)
 	s.mux.HandleFunc("/api/auth/me", s.handleMe)
 	s.mux.HandleFunc("/api/auth/change-password", s.handleChangePassword)
+	s.mux.HandleFunc("/api/auth/forgot-password", s.handleForgotPassword)
+	s.mux.HandleFunc("/api/auth/reset-password", s.handleResetPassword)
 	s.mux.HandleFunc("/api/admin/users", s.handleAdminUsers)
 	s.mux.HandleFunc("/api/admin/users/create", s.handleAdminUserCreate)
 	s.mux.HandleFunc("/api/admin/users/update", s.handleAdminUserUpdate)
@@ -199,6 +201,11 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/admin/orders/refund", s.handleOrderRefund)
 	s.mux.HandleFunc("/api/billing/invoices", s.handleInvoices)
 	s.mux.HandleFunc("/api/billing/invoices/create", s.handleInvoiceCreate)
+	// 在线支付：下单 / 状态轮询 / 模拟支付 / 渠道回调
+	s.mux.HandleFunc("/api/pay/create", s.handlePayCreate)
+	s.mux.HandleFunc("/api/pay/status", s.handlePayStatus)
+	s.mux.HandleFunc("/api/pay/simulate", s.handlePaySimulate)
+	s.mux.HandleFunc("/api/pay/notify/", s.handlePayNotify)
 }
 
 // routesAPIKeys 注册租户开放 API Key 管理路由。

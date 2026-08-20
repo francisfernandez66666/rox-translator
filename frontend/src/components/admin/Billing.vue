@@ -39,17 +39,35 @@
         <button class="ad-btn" @click="createOrder">创建充值订单</button>
       </div>
       <table class="ad-table">
-        <thead><tr><th>单号</th><th>tokens</th><th>金额</th><th>状态</th><th>时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>单号</th><th>tokens</th><th>金额</th><th>状态</th><th>渠道</th><th>时间</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="o in orders" :key="o.id">
             <td>{{ o.order_no }}</td><td>{{ o.amount_tokens }}</td><td>{{ o.amount_money }} 元</td>
-            <td>{{ o.status }}</td><td>{{ fmtTime(o.created_at) }}</td>
+            <td>{{ o.status }}</td><td>{{ channelLabel(o.channel) }}</td><td>{{ fmtTime(o.created_at) }}</td>
             <td class="ad-td">
               <button v-if="o.status === 'pending'" class="ad-btn-sm ad-btn-green" @click="payOrder(o)">确认收款</button>
             </td>
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- 在线充值（自助收银台） -->
+    <div class="ad-chart-card">
+      <h3>在线充值</h3>
+      <div class="ad-hint">选择充值 token 数量，扫码（或点击模拟支付）即可到账。渠道：微信支付 / 支付宝 / 模拟。</div>
+      <div class="ad-row">
+        <select v-model="chForm.channel" class="ad-input">
+          <option value="mock">模拟支付（测试）</option>
+          <option value="wechat">微信支付</option>
+          <option value="alipay">支付宝</option>
+        </select>
+        <input v-model.number="chForm.tokens" type="number" placeholder="token 数量" class="ad-input" />
+        <button class="ad-btn" :disabled="chLoading" @click="openCheckout">{{ chLoading ? '下单中…' : '去支付' }}</button>
+      </div>
+      <p v-if="curOrder && curOrder.status === 'pending'" class="ad-hint" style="color:#1a237e">
+        当前订单 {{ curOrder.order_no }}：待支付 {{ curOrder.amount_tokens }} token
+      </p>
     </div>
 
     <!-- 发票管理 -->
@@ -67,12 +85,51 @@
         </tbody>
       </table>
     </div>
+
+    <!-- 收银台弹窗（扫码支付） -->
+    <div v-if="showCheckout" class="pay-overlay" @click.self="closeCheckout">
+      <div class="pay-modal">
+        <div class="pay-modal-header">
+          <h3>收银台</h3>
+          <button class="pay-modal-close" @click="closeCheckout">✕</button>
+        </div>
+        <div class="pay-modal-body">
+          <div v-if="curOrder" class="pay-order-info">
+            <p class="pay-amount"><b>{{ curOrder.amount_tokens }}</b> token</p>
+            <p class="pay-no">订单号：{{ curOrder.order_no }}</p>
+            <p class="pay-no">渠道：{{ channelLabel(curOrder.channel) }} · 状态：{{ statusLabel(curOrder.status) }}</p>
+          </div>
+
+          <!-- 支付成功 -->
+          <div v-if="curOrder && curOrder.status === 'paid'" class="pay-done">
+            <div class="pay-done-icon">✓</div>
+            <p>支付成功，{{ curOrder.amount_tokens }} token 已到账</p>
+            <button class="ad-btn ad-btn-green" @click="closeCheckout">完成</button>
+          </div>
+
+          <!-- 待支付：展示收款码 + 操作 -->
+          <div v-else>
+            <div class="pay-qr-box" v-if="curOrder">
+              <div class="pay-qr-tip">{{ curOrder.channel === 'wechat' ? '微信扫码支付' : curOrder.channel === 'alipay' ? '支付宝扫码支付' : '模拟支付（测试模式）' }}</div>
+              <pre class="pay-qr-content">{{ curOrder.qr_content }}</pre>
+            </div>
+            <div class="pay-actions">
+              <button v-if="curOrder && curOrder.channel === 'mock'" class="ad-btn ad-btn-green" :disabled="chLoading" @click="simulatePay">
+                {{ chLoading ? '处理中…' : '模拟支付到账' }}
+              </button>
+              <button v-if="curOrder" class="ad-btn" :disabled="chLoading" @click="checkStatus">刷新状态</button>
+            </div>
+            <p class="ad-hint" style="text-align:center">支付后请点击「刷新状态」确认到账（或等待自动轮询）</p>
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
-import { billingConfig, billingConfigSave, billingQuota, billingQuotaSave, billingOrders, adminOrderCreate, adminOrderPay, billingInvoices } from '@/api'
+import { ref, onMounted, watch, onBeforeUnmount } from 'vue'
+import { billingConfig, billingConfigSave, billingQuota, billingQuotaSave, billingOrders, adminOrderCreate, adminOrderPay, billingInvoices, payCreate, payStatus, paySimulate } from '@/api'
 import { activeTenantId, isSuper } from './store'
 import { fmtTime } from './ui'
 
@@ -134,6 +191,77 @@ async function loadInvoices() {
   const r = await billingInvoices()
   if (r.success) invoices.value = (r as any).invoices || []
 }
+
+// ==================== 在线充值（收银台） ====================
+
+// 收银台状态
+const chForm = ref({ channel: 'mock', tokens: 1000 })
+const showCheckout = ref(false)
+const chLoading = ref(false)
+const curOrder = ref<any>(null)
+let payTimer: ReturnType<typeof setInterval> | null = null
+
+// 渠道与状态中文标签
+function channelLabel(c: string) {
+  return { offline: '线下转账', mock: '模拟', wechat: '微信', alipay: '支付宝' }[c || 'offline'] || c || '线下'
+}
+function statusLabel(s: string) {
+  return { pending: '待支付', paid: '已到账', refunded: '已退款', cancelled: '已取消' }[s || 'pending'] || s
+}
+
+// 打开收银台：发起下单并展示收款码
+async function openCheckout() {
+  if (chForm.value.tokens <= 0) { alert('请输入 token 数量'); return }
+  chLoading.value = true
+  try {
+    const r = await payCreate({ tokens: chForm.value.tokens, channel: chForm.value.channel })
+    if (!r.success) { alert(r.message); return }
+    curOrder.value = (r as any).order
+    showCheckout.value = true
+    startPolling()
+  } finally {
+    chLoading.value = false
+  }
+}
+
+// 关闭收银台
+function closeCheckout() {
+  showCheckout.value = false
+  stopPolling()
+  if (curOrder.value && curOrder.value.status === 'paid') loadOrders()
+}
+
+// 轮询支付状态（每 3 秒，到账即停）
+function startPolling() {
+  stopPolling()
+  payTimer = setInterval(checkStatus, 3000)
+}
+function stopPolling() {
+  if (payTimer) { clearInterval(payTimer); payTimer = null }
+}
+async function checkStatus() {
+  if (!curOrder.value) return
+  const r = await payStatus(curOrder.value.id)
+  if (r.success) {
+    curOrder.value = (r as any).order
+    if (curOrder.value.status === 'paid') stopPolling()
+  }
+}
+
+// 模拟支付（mock 渠道测试用）
+async function simulatePay() {
+  if (!curOrder.value) return
+  chLoading.value = true
+  try {
+    const r = await paySimulate(curOrder.value.id)
+    if (!r.success) { alert(r.message); return }
+    await checkStatus()
+  } finally {
+    chLoading.value = false
+  }
+}
+
+onBeforeUnmount(stopPolling)
 
 // 挂载与租户切换时加载
 async function loadAll() {
