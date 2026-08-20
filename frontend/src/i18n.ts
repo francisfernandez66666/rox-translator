@@ -8,6 +8,7 @@
 
 import { ref } from 'vue'
 
+// Lang 支持的语言类型：zh=中文（默认）、en=英文
 export type Lang = 'zh' | 'en'
 
 // 当前语言（持久化到 localStorage，默认中文）

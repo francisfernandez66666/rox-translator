@@ -60,10 +60,14 @@ import { activeTenantId } from './store'
 const packages = ref<any[]>([])
 const entries = ref<any[]>([])
 const selectedPkg = ref<number | null>(null)
+// 新建知识库包表单：编码/名称/包类型（industry/enterprise 等）
 const pForm = ref({ code: '', name: '', pack_type: 'industry' })
+// 新建词条表单：源文本/分层/目标语言/目标文本/所属模块
 const eForm = ref({ source_text: '', layer: 2, target_lang: 'en', target_text: '', module: '' })
 const entriesMap = ref<Record<number, number>>({})
 
+// entryCount 查询指定知识库包的条目数量（来自 entriesMap 预加载计数）。
+// 参数 id: 知识库包 ID；返回: 条目数（未加载时为 0）。
 function entryCount(id: number) { return entriesMap.value[id] || 0 }
 // 加载全部行业包及其条目计数
 async function loadPackages() {
@@ -114,6 +118,7 @@ async function removeEntry(e: any) {
 
 // 批量导入：每行 "中文|语言|译文"（可含层号：中文|en|译文|2）
 const bulkText = ref('')
+// 批量导入结果提示（成功/失败信息）
 const bulkMsg = ref('')
 async function bulkImport(pkgId: number) {
   const entries: any[] = []

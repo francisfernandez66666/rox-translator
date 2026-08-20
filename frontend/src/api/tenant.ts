@@ -17,6 +17,7 @@ export interface TenantInfo {
   updated_at: string
 }
 
+// TenantResp 租户接口统一响应结构：success 标记结果，tenants 为列表、tenant 为单个对象。
 export interface TenantResp {
   success: boolean
   message?: string

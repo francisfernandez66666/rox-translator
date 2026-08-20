@@ -15,6 +15,7 @@ export interface AuthUser {
   [key: string]: unknown
 }
 
+// LoginResp 登录接口响应结构：token 为 JWT 凭证、user 为当前用户信息。
 export interface LoginResp {
   success: boolean
   message?: string

@@ -35,6 +35,7 @@ import { activeTenantId, tenantList } from './store'
 import { fmtTime } from './ui'
 
 const invites = ref<any[]>([])
+// 新建邀请码表单：邀请码内容/绑定租户 ID
 const invForm = ref({ code: '', tenant_id: 0 })
 async function loadInvites() {
   const r = await inviteCodes()

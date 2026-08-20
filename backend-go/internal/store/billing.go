@@ -126,6 +126,8 @@ func (s *Store) Charge(tid int64, tokens int64) error {
 // 参数：tid=租户 ID，tokens=待扣减 token 数；返回错误。
 var ErrInsufficientBalance = &errTxt{"余额不足"}
 
+// Deduct 扣减租户余额：先校验余额充足，再原子扣减（单机 SQLite 保证余额不转负）。
+// 参数 tid: 租户 ID；tokens: 待扣减 token 数。返回 nil 表示扣减成功，否则返回错误。
 func (s *Store) Deduct(tid int64, tokens int64) error {
 	if err := s.EnsureBalance(tid); err != nil {
 		return err

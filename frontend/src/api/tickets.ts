@@ -24,6 +24,7 @@ export interface Ticket {
   updated_at: string
 }
 
+// TicketResp 工单接口统一响应结构：tickets 为列表、ticket 为单个对象、states 为流程状态历史。
 export interface TicketResp {
   success: boolean
   message?: string

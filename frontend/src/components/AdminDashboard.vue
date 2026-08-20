@@ -146,6 +146,7 @@ const categories = [
 
 // 当前激活的一级分类与面板
 const activeCategory = ref(categories[0].key)
+// 当前激活的面板 key（默认第一个分类下的第一个面板）
 const activePanel = ref(categories[0].panels[0].key)
 
 // 可见分类（该分类下至少有一个面板对当前角色开放）

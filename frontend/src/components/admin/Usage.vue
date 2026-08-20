@@ -87,11 +87,13 @@ const trendItems = computed(() => {
   const keys = Object.keys(trend).sort()
   return keys.map((k) => ({ key: k, val: Number(trend[k]) || 0 }))
 })
+// 趋势柱状图的最大值（保证至少为 1，避免 0 高度）
 const trendMax = computed(() => Math.max(1, ...trendItems.value.map((t) => t.val)))
 const usageItems = computed(() => {
   const u = usageData.value?.usage || {}
   return Object.keys(u).map((k) => ({ key: k, val: Number(u[k]) || 0 }))
 })
+// 任务类型条形图最大值
 const usageMax = computed(() => Math.max(1, ...usageItems.value.map((t) => t.val)))
 const providerItems = computed(() => {
   const p = usageData.value?.provider_usage || {}
@@ -101,6 +103,7 @@ const providerItems = computed(() => {
     val: Number(p[k]) || 0,
   }))
 })
+// 供应商条形图最大值（过长的供应商名截断展示）
 const providerMax = computed(() => Math.max(1, ...providerItems.value.map((t) => t.val)))
 
 onMounted(loadUsage)

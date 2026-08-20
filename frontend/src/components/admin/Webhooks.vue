@@ -37,6 +37,7 @@ import { webhooks, webhookSave, webhookDelete, webhookTest } from '@/api'
 import { activeTenantId } from './store'
 
 const hooks = ref<any[]>([])
+// 新增/编辑 webhook 表单：回调 URL、签名密钥、订阅事件（逗号分隔）
 const wForm = ref({ url: '', secret: '', events: 'translation.completed' })
 
 async function loadHooks() {

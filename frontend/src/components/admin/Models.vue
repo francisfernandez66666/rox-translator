@@ -52,8 +52,11 @@ import { ref, onMounted, watch } from 'vue'
 import { adminModels, adminModelsSave, modelRoutes, modelRoutesSave, adminPolicy, adminPolicySave } from '@/api'
 import { activeTenantId, isSuper } from './store'
 
+// 主模型配置表单：API 基地址/密钥/模型名
 const mForm = ref({ api_base: '', api_key: '', model: '' })
+// 翻译策略参数：高/中相似度阈值、评测通过分
 const pForm2 = ref({ high_sim: 0.9, med_sim: 0.75, evals_pass_threshold: 75 })
+// 多供应商路由表（权重路由/降级链）
 const routeForm = ref<any[]>([])
 
 async function loadModels() {

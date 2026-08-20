@@ -247,6 +247,9 @@ var otherLangRegexes = []*regexp.Regexp{
 	regexp.MustCompile(`^(\S+语)\s*[：:]\s*(.+)$`),
 }
 
+// parseOtherLangsFromPrompt 从用户提示语中解析非中英目标语言及其余文本。
+// 参数 ctx: 上下文；text: 用户输入的提示语。
+// 返回: (识别出的语言码列表, 剥离语言提示后的剩余文本)。识别不到语言时返回空列表与原文。
 func (e *Engine) parseOtherLangsFromPrompt(ctx context.Context, text string) ([]string, string) {
 	clean := text
 	for _, re := range otherLangRegexes {

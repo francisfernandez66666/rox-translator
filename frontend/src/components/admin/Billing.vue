@@ -169,6 +169,7 @@ async function saveQuota() {
 
 // 充值订单
 const orders = ref<any[]>([])
+// 后台充值表单：token 数/金额（线下转账或 mock 渠道）
 const oForm = ref({ tokens: 1000, money: 0 })
 async function loadOrders() {
   const r = await billingOrders()
@@ -196,8 +197,11 @@ async function loadInvoices() {
 
 // 收银台状态
 const chForm = ref({ channel: 'mock', tokens: 1000 })
+// 是否展示收银台弹窗
 const showCheckout = ref(false)
+// 下单请求进行中（禁用按钮）
 const chLoading = ref(false)
+// 当前正在支付的订单（用于展示二维码与轮询状态）
 const curOrder = ref<any>(null)
 let payTimer: ReturnType<typeof setInterval> | null = null
 
@@ -205,6 +209,9 @@ let payTimer: ReturnType<typeof setInterval> | null = null
 function channelLabel(c: string) {
   return { offline: '线下转账', mock: '模拟', wechat: '微信', alipay: '支付宝' }[c || 'offline'] || c || '线下'
 }
+
+// statusLabel 将订单状态代码转换为中文展示文案。
+// 参数 s: 订单状态码（pending/paid/refunded/cancelled）；返回: 对应中文标签，未知状态原样返回。
 function statusLabel(s: string) {
   return { pending: '待支付', paid: '已到账', refunded: '已退款', cancelled: '已取消' }[s || 'pending'] || s
 }
@@ -236,6 +243,9 @@ function startPolling() {
   stopPolling()
   payTimer = setInterval(checkStatus, 3000)
 }
+
+// stopPolling 停止支付状态轮询定时器（收银台关闭或支付完成时调用）。
+// 无参数无返回；未启动轮询时静默跳过。
 function stopPolling() {
   if (payTimer) { clearInterval(payTimer); payTimer = null }
 }
