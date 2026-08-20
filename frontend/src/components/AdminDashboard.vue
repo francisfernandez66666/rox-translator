@@ -10,14 +10,19 @@
   <div class="ad-wrap">
     <!-- ===== 左侧侧边栏：品牌 / 租户切换 / 一级分类 / 面板列表 / 用户信息 ===== -->
     <aside class="ad-side">
-      <div class="ad-brand">🏢 管理后台</div>
+      <div class="ad-brand">🏢 {{ t('admin.console') }}</div>
 
       <!-- 租户切换器（仅超管，前端统称"组织"） -->
       <div v-if="isSuper && tenantList.length" class="ad-tenant-switch">
-        <label>当前组织</label>
+        <label>{{ t('admin.currentOrg') }}</label>
         <select :value="activeTenantId" class="ad-input" @change="switchTenant(Number(($event.target as HTMLSelectElement).value))">
           <option v-for="t in tenantList" :key="t.id" :value="t.id">[{{ t.id }}] {{ t.name }} ({{ t.code }})</option>
         </select>
+      </div>
+
+      <!-- 语言切换 -->
+      <div class="ad-lang-switch">
+        <button class="ad-lang-btn" @click="toggleLang()">{{ lang === 'zh' ? 'English' : '中文' }}</button>
       </div>
 
       <!-- ===== 顶部一级分类 ===== -->
@@ -28,33 +33,33 @@
           :class="['ad-cat-btn', activeCategory === cat.key ? 'on' : '']"
           @click="activeCategory = cat.key"
         >
-          {{ cat.label }}
+          {{ t(cat.label) }}
         </button>
       </div>
 
       <!-- ===== 组内左侧面板列表 ===== -->
       <nav class="ad-nav">
-        <div class="ad-group-title">{{ currentCategoryLabel }}</div>
+        <div class="ad-group-title">{{ t(currentCategoryLabel) }}</div>
         <button
           v-for="p in visiblePanels"
           :key="p.key"
           :class="['ad-nav-item', activePanel === p.key ? 'on' : '']"
           @click="activePanel = p.key"
         >
-          {{ p.label }}
+          {{ t(p.label) }}
         </button>
       </nav>
 
       <div class="ad-side-foot">
         <div class="ad-user">{{ user?.display_name || user?.username }} ({{ roleName(user?.role) }})</div>
-        <a href="/" class="ad-back">← 翻译工作台</a>
-        <button class="ad-logout" @click="logout">退出登录</button>
+        <a href="/" class="ad-back">← {{ t('admin.backWorkspace') }}</a>
+        <button class="ad-logout" @click="logout">{{ t('common.logout') }}</button>
       </div>
     </aside>
 
     <!-- ===== 主内容区：动态渲染当前面板 ===== -->
     <main class="ad-main">
-      <div v-if="!isAdmin" class="ad-forbid">当前账号无管理权限，请使用管理员账号登录。</div>
+      <div v-if="!isAdmin" class="ad-forbid">{{ t('admin.forbid') }}</div>
       <component :is="currentPanelComponent" v-else />
     </main>
   </div>
@@ -84,6 +89,8 @@ import Webhooks from './admin/Webhooks.vue'
 import Tickets from './admin/Tickets.vue'
 // 共享样式（非 scoped，供全部面板使用）
 import './admin/admin.css'
+// 国际化：文案取词 + 语言切换
+import { t, lang, toggleLang } from '@/i18n'
 
 // 组件事件：退出登录
 const emit = defineEmits<{ logout: [] }>()
@@ -94,44 +101,45 @@ const props = defineProps<{ user: AuthUser | null }>()
 user.value = props.user
 
 // ---- 一级分类 + 面板编排（min 为所需角色等级：2=租户管理员，3=超级管理员） ----
+// label 为 i18n key（经 t() 渲染），中文与英文自动切换
 const categories = [
   {
-    key: 'ops', label: '经营',
+    key: 'ops', label: 'admin.ops',
     panels: [
-      { key: 'overview', label: '📊 系统看板', comp: Overview, min: 2 },
-      { key: 'alerts', label: '🚨 监控告警', comp: Alerts, min: 2 },
-      { key: 'usage', label: '📈 用量看板', comp: Usage, min: 2 },
-      { key: 'billing', label: '💰 计费/配额/发票', comp: Billing, min: 2 },
+      { key: 'overview', label: 'admin.overview', comp: Overview, min: 2 },
+      { key: 'alerts', label: 'admin.alerts', comp: Alerts, min: 2 },
+      { key: 'usage', label: 'admin.usage', comp: Usage, min: 2 },
+      { key: 'billing', label: 'admin.billing', comp: Billing, min: 2 },
     ],
   },
   {
-    key: 'org', label: '组织',
+    key: 'org', label: 'admin.org',
     panels: [
-      { key: 'users', label: '👤 账户管理', comp: Users, min: 2 },
-      { key: 'org', label: '🏬 组织结构', comp: Org, min: 2 },
-      { key: 'tenants', label: '🏢 组织管理', comp: Tenants, min: 3 },
-      { key: 'invites', label: '🎟️ 邀请码', comp: Invites, min: 3 },
+      { key: 'users', label: 'admin.users', comp: Users, min: 2 },
+      { key: 'org', label: 'admin.orgs', comp: Org, min: 2 },
+      { key: 'tenants', label: 'admin.tenants', comp: Tenants, min: 3 },
+      { key: 'invites', label: 'admin.invites', comp: Invites, min: 3 },
     ],
   },
   {
-    key: 'content', label: '内容',
+    key: 'content', label: 'admin.content',
     panels: [
-      { key: 'kb', label: '📚 行业管理', comp: Kb, min: 2 },
+      { key: 'kb', label: 'admin.kb', comp: Kb, min: 2 },
     ],
   },
   {
-    key: 'engine', label: '引擎',
+    key: 'engine', label: 'admin.engine',
     panels: [
-      { key: 'models', label: '🧠 模型/路由/策略', comp: Models, min: 2 },
-      { key: 'workflow', label: '⚙️ 流程/evals', comp: Workflow, min: 2 },
+      { key: 'models', label: 'admin.models', comp: Models, min: 2 },
+      { key: 'workflow', label: 'admin.workflow', comp: Workflow, min: 2 },
     ],
   },
   {
-    key: 'open', label: '开放',
+    key: 'open', label: 'admin.open',
     panels: [
-      { key: 'apikeys', label: '🔑 API Key', comp: ApiKeys, min: 2 },
-      { key: 'webhooks', label: '🔔 Webhook', comp: Webhooks, min: 2 },
-      { key: 'tickets', label: '📝 工单/审批', comp: Tickets, min: 2 },
+      { key: 'apikeys', label: 'admin.apikeys', comp: ApiKeys, min: 2 },
+      { key: 'webhooks', label: 'admin.webhooks', comp: Webhooks, min: 2 },
+      { key: 'tickets', label: 'admin.tickets', comp: Tickets, min: 2 },
     ],
   },
 ]
@@ -147,7 +155,7 @@ const visiblePanels = computed(() => {
   const cat = categories.find(c => c.key === activeCategory.value)
   return (cat ? cat.panels : []).filter(p => myLevel.value >= p.min)
 })
-// 当前分类中文名
+// 当前分类 i18n key
 const currentCategoryLabel = computed(() => categories.find(c => c.key === activeCategory.value)?.label || '')
 // 当前渲染的面板组件
 const currentPanelComponent = computed(() => {

@@ -53,6 +53,7 @@ type RateCard struct {
 	ID         int64   `json:"id"`         // 单价规则主键 ID
 	TaskType   string  `json:"task_type"`  // 任务类型：translate/review/evals/gate
 	Lang       string  `json:"lang"`       // 目标语言（* 表示全局通用）
+	Provider   string  `json:"provider"`   // 供应商（* 表示全局通用）
 	UnitPrice  int64   `json:"unit_price"` // 每单位价格（token）
 	Multiplier float64 `json:"multiplier"` // 高膨胀语种倍率（乘以 UnitPrice）
 	UpdatedAt  string  `json:"updated_at"` // 最近更新时间（RFC3339 字符串）
@@ -200,6 +201,25 @@ func (s *Store) unitPrice(taskType, provider string) (int64, float64) {
 		mult = 1.0 // 倍率 0 视为 1（防止免费乘数导致费用为 0）
 	}
 	return price, mult
+}
+
+// ListRateCards 返回全部单价配置（公开定价页展示用）。
+// 返回: 全部 rate_card 行（按 task_type/provider/lang 排序）。
+func (s *Store) ListRateCards() ([]*RateCard, error) {
+	rows, err := s.db.Query("SELECT id, task_type, lang, provider, unit_price, multiplier, COALESCE(updated_at,'') FROM rate_card ORDER BY task_type, provider, lang")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*RateCard
+	for rows.Next() {
+		var r RateCard
+		if err := rows.Scan(&r.ID, &r.TaskType, &r.Lang, &r.Provider, &r.UnitPrice, &r.Multiplier, &r.UpdatedAt); err != nil {
+			continue
+		}
+		out = append(out, &r)
+	}
+	return out, nil
 }
 
 // UsageStats 租户用量汇总（按任务类型分组统计费用）。

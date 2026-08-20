@@ -7,46 +7,49 @@
 <template>
   <!-- ===== 登录面板容器 ===== -->
   <div class="login-wrap">
+    <!-- 语言切换 -->
+    <div class="login-lang"><button @click="toggleLang()">{{ lang === 'zh' ? 'English' : '中文' }}</button></div>
+
     <!-- ===== 登录卡片：前台/后台标题随模式变化 ===== -->
     <div class="login-card">
-      <div class="login-logo">{{ mode === 'admin' ? '🏢 翻译平台管理后台' : '🌐 翻译平台' }}</div>
-      <div class="login-sub">{{ mode === 'admin' ? '仅限管理员账号登录' : '登录后进入翻译工作台' }}</div>
-      <input v-model="username" placeholder="用户名" class="login-input" autocomplete="username" @keydown.enter="doLogin" />
-      <input v-model="password" type="password" placeholder="密码" class="login-input" autocomplete="current-password" @keydown.enter="doLogin" />
+      <div class="login-logo">{{ mode === 'admin' ? t('login.platformAdmin') : t('login.platform') }}</div>
+      <div class="login-sub">{{ mode === 'admin' ? t('login.adminOnly') : t('login.enterWorkspace') }}</div>
+      <input v-model="username" :placeholder="t('login.username')" class="login-input" autocomplete="username" @keydown.enter="doLogin" />
+      <input v-model="password" type="password" :placeholder="t('login.password')" class="login-input" autocomplete="current-password" @keydown.enter="doLogin" />
       <div v-if="error" class="login-error">{{ error }}</div>
-      <button class="login-btn" :disabled="loading" @click="doLogin">{{ loading ? '登录中…' : '登 录' }}</button>
-      <button class="login-reg" @click="showForgot = true">忘记密码？</button>
-      <button v-if="mode === 'home'" class="login-reg" @click="showReg = !showReg">{{ showReg ? '返回登录' : '没有账号？自助注册试用' }}</button>
+      <button class="login-btn" :disabled="loading" @click="doLogin">{{ loading ? t('login.signingIn') : t('login.signIn') }}</button>
+      <button class="login-reg" @click="showForgot = true">{{ t('login.forgot') }}</button>
+      <button v-if="mode === 'home'" class="login-reg" @click="showReg = !showReg">{{ showReg ? t('login.backToLogin') : t('login.selfRegister') }}</button>
     </div>
 
     <!-- ===== 自助注册面板（仅前台 home 模式显示） ===== -->
     <div v-if="showReg && mode === 'home'" class="login-card">
-      <div class="login-logo">🌐 自助注册试用</div>
-      <div class="login-sub">填写邀请码可加入已有组织；留空则创建新组织并获得试用额度</div>
-      <input v-model="reg.username" placeholder="用户名" class="login-input" />
-      <input v-model="reg.password" type="password" placeholder="密码（至少 6 位）" class="login-input" />
-      <input v-model="reg.email" placeholder="联系邮箱（找回密码用，可选）" class="login-input" />
-      <input v-model="reg.code" placeholder="组织编码（新建组织时必填）" class="login-input" />
-      <input v-model="reg.name" placeholder="组织名称（新建组织时必填）" class="login-input" />
-      <input v-model="reg.invite" placeholder="邀请码（可选）" class="login-input" />
+      <div class="login-logo">{{ t('login.selfRegisterTitle') }}</div>
+      <div class="login-sub">{{ t('login.selfRegisterSub') }}</div>
+      <input v-model="reg.username" :placeholder="t('login.username')" class="login-input" />
+      <input v-model="reg.password" type="password" :placeholder="t('login.password')" class="login-input" />
+      <input v-model="reg.email" :placeholder="t('login.emailPlaceholder')" class="login-input" />
+      <input v-model="reg.code" :placeholder="t('login.orgCode')" class="login-input" />
+      <input v-model="reg.name" :placeholder="t('login.orgName')" class="login-input" />
+      <input v-model="reg.invite" :placeholder="t('login.invite')" class="login-input" />
       <div v-if="regMsg" class="login-error">{{ regMsg }}</div>
-      <button class="login-btn" :disabled="loading" @click="doRegister">{{ loading ? '注册中…' : '注册并登录' }}</button>
+      <button class="login-btn" :disabled="loading" @click="doRegister">{{ loading ? t('login.registering') : t('login.registerAndLogin') }}</button>
     </div>
 
     <!-- ===== 忘记密码面板 ===== -->
     <div v-if="showForgot" class="login-card">
-      <div class="login-logo">🔑 找回密码</div>
-      <div class="login-sub">输入用户名或绑定邮箱，验证码将发送到邮箱</div>
-      <input v-model="forgot.username" placeholder="用户名" class="login-input" />
-      <input v-model="forgot.email" placeholder="绑定邮箱" class="login-input" />
+      <div class="login-logo">{{ t('login.forgotTitle') }}</div>
+      <div class="login-sub">{{ t('login.forgotSub') }}</div>
+      <input v-model="forgot.username" :placeholder="t('login.username')" class="login-input" />
+      <input v-model="forgot.email" :placeholder="t('login.boundEmail')" class="login-input" />
       <div v-if="forgotMsg" class="login-error">{{ forgotMsg }}</div>
-      <button v-if="!forgotSent" class="login-btn" :disabled="loading" @click="doForgot">{{ loading ? '发送中…' : '发送验证码' }}</button>
+      <button v-if="!forgotSent" class="login-btn" :disabled="loading" @click="doForgot">{{ loading ? t('login.signingIn') : t('login.sendCode') }}</button>
       <template v-else>
-        <input v-model="forgot.code" placeholder="6 位验证码" class="login-input" />
-        <input v-model="forgot.newPassword" type="password" placeholder="新密码（至少 6 位）" class="login-input" />
-        <button class="login-btn" :disabled="loading" @click="doReset">{{ loading ? '重置中…' : '重置密码' }}</button>
+        <input v-model="forgot.code" :placeholder="t('login.verificationCode')" class="login-input" />
+        <input v-model="forgot.newPassword" type="password" :placeholder="t('login.newPassword')" class="login-input" />
+        <button class="login-btn" :disabled="loading" @click="doReset">{{ loading ? t('login.resetting') : t('login.resetPassword') }}</button>
       </template>
-      <button class="login-reg" @click="closeForgot">返回登录</button>
+      <button class="login-reg" @click="closeForgot">{{ t('login.backToLogin') }}</button>
     </div>
   </div>
 </template>
@@ -57,6 +60,8 @@
 import { ref } from 'vue'
 // API：登录 / 自助注册 / 写入 token
 import { login, authRegister, forgotPassword, resetPassword, setAuthToken } from '@/api'
+// 国际化：文案取词 + 语言切换
+import { t, lang, toggleLang } from '@/i18n'
 
 // 组件入参：登录模式（home 前台 / admin 后台）
 const props = defineProps<{ mode: 'home' | 'admin' }>()
@@ -197,6 +202,13 @@ async function doLogin() {
   min-height: 100vh; display: flex; align-items: center; justify-content: center;
   background: linear-gradient(135deg, #1a237e 0%, #3949ab 50%, #2e7d32 100%);
 }
+/* 语言切换按钮 */
+.login-lang { position: fixed; top: 18px; right: 24px; }
+.login-lang button {
+  border: 1px solid rgba(255,255,255,.5); background: rgba(255,255,255,.12); color: #fff;
+  padding: 6px 14px; border-radius: 8px; font-size: 13px; cursor: pointer;
+}
+.login-lang button:hover { background: rgba(255,255,255,.25); }
 /* 登录卡片主体 */
 .login-card {
   background: #fff; border-radius: 18px; padding: 40px 36px; width: 380px;

@@ -28,8 +28,9 @@
       <div class="header-right">
         <span class="status-indicator" :class="store.isBackendOnline ? 'online' : 'offline'">
           <span class="status-dot"></span>
-          {{ store.isBackendOnline ? '在线' : '离线' }}
+          {{ store.isBackendOnline ? t('common.online') : t('common.offline') }}
         </span>
+        <button class="gear-btn" @click="toggleLang()" :title="lang === 'zh' ? 'English' : '中文'">{{ lang === 'zh' ? 'EN' : '中' }}</button>
         <button class="gear-btn" @click="showSettings = true" title="设置">⚙️</button>
         <button class="gear-btn" @click="logout" title="退出登录">⎋</button>
       </div>
@@ -81,6 +82,8 @@ import Login from './components/Login.vue'
 import AdminDashboard from './components/AdminDashboard.vue'
 // API：token 读写与用户信息查询
 import { getAuthToken, setAuthToken, authMe, type AuthUser } from '@/api'
+// 国际化：文案取词 + 语言切换
+import { t, lang, toggleLang } from '@/i18n'
 
 // 全局聊天 Store 实例
 const store = useChatStore()
