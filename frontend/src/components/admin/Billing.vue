@@ -4,48 +4,48 @@
    ============================================================================ -->
 <template>
   <section class="ad-section">
-    <h2>计费管理</h2>
+    <h2>{{ t('billing.title') }}</h2>
 
     <!-- 计费配置（超管） -->
     <div v-if="isSuper" class="ad-chart-card">
-      <h3>计费配置</h3>
-      <div class="ad-hint">开启强制计费后，所有翻译请求按用量扣减租户余额，余额不足将被拒绝服务。</div>
+      <h3>{{ t('billing.config') }}</h3>
+      <div class="ad-hint">{{ t('billing.configHint') }}</div>
       <label class="ad-switch" style="margin-right: 14px">
         <input type="checkbox" v-model="billingEnforced" @change="saveBillingConfig" />
         <span></span>
       </label>
-      <span :style="{ color: billingEnforced ? '#2e7d32' : '#888', fontWeight: 600 }">{{ billingEnforced ? '强制计费已开启' : '强制计费已关闭（仅记录用量不扣费）' }}</span>
+      <span :style="{ color: billingEnforced ? '#2e7d32' : '#888', fontWeight: 600 }">{{ billingEnforced ? t('billing.enforcedOn') : t('billing.enforcedOff') }}</span>
     </div>
 
     <!-- 配额设置 -->
     <div class="ad-chart-card">
-      <h3>配额设置（当前组织）</h3>
-      <div class="ad-hint">QPS 每秒请求上限、并发同时翻译任务数、每日累计字符上限（0=不限）。</div>
+      <h3>{{ t('billing.quotaTitle') }}</h3>
+      <div class="ad-hint">{{ t('billing.quotaHint') }}</div>
       <div class="ad-row">
-        <input v-model.number="quotaForm.qps" type="number" placeholder="QPS" class="ad-input ad-mini-w" />
-        <input v-model.number="quotaForm.concurrent" type="number" placeholder="并发" class="ad-input ad-mini-w" />
-        <input v-model.number="quotaForm.max_daily_chars" type="number" placeholder="每日字符上限" class="ad-input" />
-        <button class="ad-btn" @click="saveQuota">保存配额</button>
+        <input v-model.number="quotaForm.qps" type="number" :placeholder="t('billing.quotaQps')" class="ad-input ad-mini-w" />
+        <input v-model.number="quotaForm.concurrent" type="number" :placeholder="t('billing.quotaConcurrent')" class="ad-input ad-mini-w" />
+        <input v-model.number="quotaForm.max_daily_chars" type="number" :placeholder="t('billing.quotaDailyChars')" class="ad-input" />
+        <button class="ad-btn" @click="saveQuota">{{ t('billing.saveQuota') }}</button>
       </div>
-      <p class="ad-hint">当前：QPS {{ quotaForm.qps }}，并发 {{ quotaForm.concurrent }}，每日上限 {{ quotaForm.max_daily_chars }} 字符</p>
+      <p class="ad-hint">{{ tpl('billing.currentQuota', { qps: quotaForm.qps, concurrent: quotaForm.concurrent, daily: quotaForm.max_daily_chars }) }}</p>
     </div>
 
     <!-- 充值管理（超管） -->
     <div v-if="isSuper" class="ad-chart-card">
-      <h3>充值管理</h3>
+      <h3>{{ t('billing.topUpMgmt') }}</h3>
       <div class="ad-row">
-        <input v-model="oForm.tokens" type="number" placeholder="token 数量" class="ad-input" />
-        <input v-model.number="oForm.money" type="number" step="0.01" placeholder="金额 (元)" class="ad-input" />
-        <button class="ad-btn" @click="createOrder">创建充值订单</button>
+        <input v-model="oForm.tokens" type="number" :placeholder="t('billing.tokenCount')" class="ad-input" />
+        <input v-model.number="oForm.money" type="number" step="0.01" :placeholder="t('billing.amountYuan')" class="ad-input" />
+        <button class="ad-btn" @click="createOrder">{{ t('billing.createOrder') }}</button>
       </div>
       <table class="ad-table">
-        <thead><tr><th>单号</th><th>tokens</th><th>金额</th><th>状态</th><th>渠道</th><th>时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>{{ t('billing.colOrderNo') }}</th><th>{{ t('billing.colTokens') }}</th><th>{{ t('billing.colAmount') }}</th><th>{{ t('billing.colStatus') }}</th><th>{{ t('billing.colChannel') }}</th><th>{{ t('billing.colTime') }}</th><th>{{ t('common.operations') }}</th></tr></thead>
         <tbody>
           <tr v-for="o in orders" :key="o.id">
-            <td>{{ o.order_no }}</td><td>{{ o.amount_tokens }}</td><td>{{ o.amount_money }} 元</td>
+            <td>{{ o.order_no }}</td><td>{{ o.amount_tokens }}</td><td>{{ tpl('billing.yuan', { amount: o.amount_money }) }}</td>
             <td>{{ o.status }}</td><td>{{ channelLabel(o.channel) }}</td><td>{{ fmtTime(o.created_at) }}</td>
             <td class="ad-td">
-              <button v-if="o.status === 'pending'" class="ad-btn-sm ad-btn-green" @click="payOrder(o)">确认收款</button>
+              <button v-if="o.status === 'pending'" class="ad-btn-sm ad-btn-green" @click="payOrder(o)">{{ t('billing.confirmPayment') }}</button>
             </td>
           </tr>
         </tbody>
@@ -54,34 +54,34 @@
 
     <!-- 在线充值（自助收银台） -->
     <div class="ad-chart-card">
-      <h3>在线充值</h3>
-      <div class="ad-hint">选择充值 token 数量，扫码（或点击模拟支付）即可到账。渠道：微信支付 / 支付宝 / 模拟。</div>
+      <h3>{{ t('billing.onlineTopUp') }}</h3>
+      <div class="ad-hint">{{ t('billing.onlineTopUpHint') }}</div>
       <div class="ad-row">
         <select v-model="chForm.channel" class="ad-input">
-          <option value="mock">模拟支付（测试）</option>
-          <option value="wechat">微信支付</option>
-          <option value="alipay">支付宝</option>
+          <option value="mock">{{ t('billing.chMock') }}</option>
+          <option value="wechat">{{ t('billing.chWechat') }}</option>
+          <option value="alipay">{{ t('billing.chAlipay') }}</option>
         </select>
-        <input v-model.number="chForm.tokens" type="number" placeholder="token 数量" class="ad-input" />
-        <button class="ad-btn" :disabled="chLoading" @click="openCheckout">{{ chLoading ? '下单中…' : '去支付' }}</button>
+        <input v-model.number="chForm.tokens" type="number" :placeholder="t('billing.tokenCount')" class="ad-input" />
+        <button class="ad-btn" :disabled="chLoading" @click="openCheckout">{{ chLoading ? t('billing.ordering') : t('billing.goPay') }}</button>
       </div>
       <p v-if="curOrder && curOrder.status === 'pending'" class="ad-hint" style="color:#1a237e">
-        当前订单 {{ curOrder.order_no }}：待支付 {{ curOrder.amount_tokens }} token
+        {{ tpl('billing.currentOrder', { orderNo: curOrder.order_no, amount: curOrder.amount_tokens }) }}
       </p>
     </div>
 
     <!-- 发票管理 -->
     <div class="ad-chart-card">
-      <h3>发票管理</h3>
-      <div class="ad-hint">仅可对本租户已支付订单开票。开票后金额不可修改。</div>
+      <h3>{{ t('billing.invoiceMgmt') }}</h3>
+      <div class="ad-hint">{{ t('billing.invoiceHint') }}</div>
       <table class="ad-table">
-        <thead><tr><th>发票号</th><th>关联订单</th><th>抬头</th><th>税号</th><th>金额(元)</th><th>开票时间</th></tr></thead>
+        <thead><tr><th>{{ t('billing.colInvoiceNo') }}</th><th>{{ t('billing.colOrder') }}</th><th>{{ t('billing.colTitle') }}</th><th>{{ t('billing.colTaxNo') }}</th><th>{{ t('billing.colAmountYuan') }}</th><th>{{ t('billing.colInvoiceTime') }}</th></tr></thead>
         <tbody>
           <tr v-for="inv in invoices" :key="inv.id">
             <td>{{ inv.invoice_no }}</td><td>{{ inv.order_no }}</td><td>{{ inv.title }}</td><td>{{ inv.tax_no }}</td>
             <td>{{ inv.amount_money }}</td><td>{{ fmtTime(inv.created_at) }}</td>
           </tr>
-          <tr v-if="!invoices.length"><td colspan="6" style="text-align:center;color:#999">暂无发票</td></tr>
+          <tr v-if="!invoices.length"><td colspan="6" style="text-align:center;color:#999">{{ t('billing.noInvoices') }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -90,36 +90,36 @@
     <div v-if="showCheckout" class="pay-overlay" @click.self="closeCheckout">
       <div class="pay-modal">
         <div class="pay-modal-header">
-          <h3>收银台</h3>
+          <h3>{{ t('billing.checkout') }}</h3>
           <button class="pay-modal-close" @click="closeCheckout">✕</button>
         </div>
         <div class="pay-modal-body">
           <div v-if="curOrder" class="pay-order-info">
             <p class="pay-amount"><b>{{ curOrder.amount_tokens }}</b> token</p>
-            <p class="pay-no">订单号：{{ curOrder.order_no }}</p>
-            <p class="pay-no">渠道：{{ channelLabel(curOrder.channel) }} · 状态：{{ statusLabel(curOrder.status) }}</p>
+            <p class="pay-no">{{ tpl('billing.orderNo', { orderNo: curOrder.order_no }) }}</p>
+            <p class="pay-no">{{ tpl('billing.channelStatus', { channel: channelLabel(curOrder.channel), status: statusLabel(curOrder.status) }) }}</p>
           </div>
 
           <!-- 支付成功 -->
           <div v-if="curOrder && curOrder.status === 'paid'" class="pay-done">
             <div class="pay-done-icon">✓</div>
-            <p>支付成功，{{ curOrder.amount_tokens }} token 已到账</p>
-            <button class="ad-btn ad-btn-green" @click="closeCheckout">完成</button>
+            <p>{{ tpl('billing.paySuccess', { amount: curOrder.amount_tokens }) }}</p>
+            <button class="ad-btn ad-btn-green" @click="closeCheckout">{{ t('billing.done') }}</button>
           </div>
 
           <!-- 待支付：展示收款码 + 操作 -->
           <div v-else>
             <div class="pay-qr-box" v-if="curOrder">
-              <div class="pay-qr-tip">{{ curOrder.channel === 'wechat' ? '微信扫码支付' : curOrder.channel === 'alipay' ? '支付宝扫码支付' : '模拟支付（测试模式）' }}</div>
+              <div class="pay-qr-tip">{{ curOrder.channel === 'wechat' ? t('billing.scanWechat') : curOrder.channel === 'alipay' ? t('billing.scanAlipay') : t('billing.mockPay') }}</div>
               <pre class="pay-qr-content">{{ curOrder.qr_content }}</pre>
             </div>
             <div class="pay-actions">
               <button v-if="curOrder && curOrder.channel === 'mock'" class="ad-btn ad-btn-green" :disabled="chLoading" @click="simulatePay">
-                {{ chLoading ? '处理中…' : '模拟支付到账' }}
+                {{ chLoading ? t('billing.processing') : t('billing.mockCredit') }}
               </button>
-              <button v-if="curOrder" class="ad-btn" :disabled="chLoading" @click="checkStatus">刷新状态</button>
+              <button v-if="curOrder" class="ad-btn" :disabled="chLoading" @click="checkStatus">{{ t('billing.refreshStatus') }}</button>
             </div>
-            <p class="ad-hint" style="text-align:center">支付后请点击「刷新状态」确认到账（或等待自动轮询）</p>
+            <p class="ad-hint" style="text-align:center">{{ t('billing.payHint') }}</p>
           </div>
         </div>
       </div>
@@ -132,6 +132,7 @@ import { ref, onMounted, watch, onBeforeUnmount } from 'vue'
 import { billingConfig, billingConfigSave, billingQuota, billingQuotaSave, billingOrders, adminOrderCreate, adminOrderPay, billingInvoices, payCreate, payStatus, paySimulate } from '@/api'
 import { activeTenantId, isSuper } from './store'
 import { fmtTime } from './ui'
+import { t, tpl } from '@/i18n'
 
 // 计费配置（是否强制计费）
 const billingEnforced = ref(false)
@@ -163,7 +164,7 @@ async function saveQuota() {
     max_daily_chars: Math.max(0, quotaForm.value.max_daily_chars),
   })
   if (!r.success) { alert(r.message); return }
-  alert('配额已保存')
+  alert(t('billing.quotaSaved'))
   await loadQuota()
 }
 
@@ -207,18 +208,18 @@ let payTimer: ReturnType<typeof setInterval> | null = null
 
 // 渠道与状态中文标签
 function channelLabel(c: string) {
-  return { offline: '线下转账', mock: '模拟', wechat: '微信', alipay: '支付宝' }[c || 'offline'] || c || '线下'
+  return { offline: t('billing.channelOffline'), mock: t('billing.channelMock'), wechat: t('billing.channelWechat'), alipay: t('billing.channelAlipay') }[c || 'offline'] || c || t('billing.channelFallback')
 }
 
 // statusLabel 将订单状态代码转换为中文展示文案。
 // 参数 s: 订单状态码（pending/paid/refunded/cancelled）；返回: 对应中文标签，未知状态原样返回。
 function statusLabel(s: string) {
-  return { pending: '待支付', paid: '已到账', refunded: '已退款', cancelled: '已取消' }[s || 'pending'] || s
+  return { pending: t('billing.stPending'), paid: t('billing.stPaid'), refunded: t('billing.stRefunded'), cancelled: t('billing.stCancelled') }[s || 'pending'] || s
 }
 
 // 打开收银台：发起下单并展示收款码
 async function openCheckout() {
-  if (chForm.value.tokens <= 0) { alert('请输入 token 数量'); return }
+  if (chForm.value.tokens <= 0) { alert(t('billing.enterTokenCount')); return }
   chLoading.value = true
   try {
     const r = await payCreate({ tokens: chForm.value.tokens, channel: chForm.value.channel })

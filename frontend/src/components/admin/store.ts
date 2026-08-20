@@ -6,6 +6,7 @@
 
 import { ref, computed, type Ref } from 'vue'
 import { getActiveTenantId, setActiveTenantId, tenantList as apiTenantList, type AuthUser, type TenantInfo } from '@/api'
+import { t } from '@/i18n'
 
 // ---- 共享响应式状态 ----
 // 当前登录用户（由壳组件注入）
@@ -22,11 +23,11 @@ export function roleLevel(r?: string): number {
   return 1
 }
 
-// 角色中文名（后台侧边栏展示）
+// 角色名（后台侧边栏展示，i18n）
 export function roleName(r?: string) {
-  if (r === 'super_admin' || r === 'admin') return '超级管理员'
-  if (r === 'tenant_admin' || r === 'approver') return '组织管理员'
-  return '普通用户'
+  if (r === 'super_admin' || r === 'admin') return t('users.role.super_admin')
+  if (r === 'tenant_admin' || r === 'approver') return t('users.role.tenant_admin')
+  return t('users.role.user')
 }
 
 // 当前用户角色等级

@@ -4,46 +4,46 @@
    ============================================================================ -->
 <template>
   <section class="ad-section">
-    <h2>行业管理（KB 包）</h2>
+    <h2>{{ t('kb.title') }}</h2>
     <div class="ad-row">
-      <input v-model="pForm.code" placeholder="编码 (如 auto)" class="ad-input" />
-      <input v-model="pForm.name" placeholder="名称 (如 汽车行业包)" class="ad-input" />
+      <input v-model="pForm.code" :placeholder="t('kb.codePlaceholder')" class="ad-input" />
+      <input v-model="pForm.name" :placeholder="t('kb.namePlaceholder')" class="ad-input" />
       <select v-model="pForm.pack_type" class="ad-input">
-        <option value="tenant">企业包</option><option value="industry">行业包</option><option value="locale">语言文化包</option>
+        <option value="tenant">{{ t('kb.typeTenant') }}</option><option value="industry">{{ t('kb.typeIndustry') }}</option><option value="locale">{{ t('kb.typeLocale') }}</option>
       </select>
-      <button class="ad-btn" @click="createPackage">创建包</button>
+      <button class="ad-btn" @click="createPackage">{{ t('kb.createPackage') }}</button>
     </div>
-    <div class="ad-hint">包内条目: 层 L1术语 / L2 TM / L3 安全句 / L4 碎片；源=中文，目标语言代码 (en/de/fr…)</div>
+    <div class="ad-hint">{{ t('kb.entriesHint') }}</div>
     <div v-for="p in packages" :key="p.id" class="ad-pkg">
       <div class="ad-pkg-head">
         <b>[{{ p.pack_type }}] {{ p.name }}</b>
         <span class="ad-pkg-role">{{ p.role }}</span>
-        <button class="ad-btn-sm ad-btn-red" @click="removePackage(p)">删除包</button>
-        <button class="ad-btn-sm" @click="loadEntries(p)">查看条目 ({{ entryCount(p.id) }})</button>
+        <button class="ad-btn-sm ad-btn-red" @click="removePackage(p)">{{ t('kb.deletePackage') }}</button>
+        <button class="ad-btn-sm" @click="loadEntries(p)">{{ tpl('kb.viewEntries', { count: entryCount(p.id) }) }}</button>
       </div>
       <div v-if="selectedPkg === p.id" class="ad-pkg-entries">
         <div class="ad-row">
-          <input v-model="eForm.source_text" placeholder="中文源句" class="ad-input" />
+          <input v-model="eForm.source_text" :placeholder="t('kb.sourcePlaceholder')" class="ad-input" />
           <select v-model="eForm.layer" class="ad-input">
-            <option :value="1">L1 术语</option><option :value="2">L2 TM</option><option :value="3">L3 安全句</option><option :value="4">L4 碎片</option>
+            <option :value="1">{{ t('kb.layer1') }}</option><option :value="2">{{ t('kb.layer2') }}</option><option :value="3">{{ t('kb.layer3') }}</option><option :value="4">{{ t('kb.layer4') }}</option>
           </select>
-          <input v-model="eForm.target_lang" placeholder="目标语言 (en)" class="ad-input ad-mini-w" />
-          <input v-model="eForm.target_text" placeholder="译文" class="ad-input" />
-          <button class="ad-btn" @click="addEntry(p.id)">添加</button>
+          <input v-model="eForm.target_lang" :placeholder="t('kb.targetLangPlaceholder')" class="ad-input ad-mini-w" />
+          <input v-model="eForm.target_text" :placeholder="t('kb.translationPlaceholder')" class="ad-input" />
+          <button class="ad-btn" @click="addEntry(p.id)">{{ t('kb.add') }}</button>
         </div>
         <details class="ad-bulk">
-          <summary>批量导入（每行一条：中文|语言|译文，可多行）</summary>
-          <textarea v-model="bulkText" class="ad-input ad-wide ad-textarea" placeholder="制动系统|en|Brake system&#10;点火开关|en|Ignition switch" />
-          <button class="ad-btn" @click="bulkImport(p.id)">批量导入</button>
+          <summary>{{ t('kb.bulkImportSummary') }}</summary>
+          <textarea v-model="bulkText" class="ad-input ad-wide ad-textarea" :placeholder="t('kb.bulkPlaceholder')" />
+          <button class="ad-btn" @click="bulkImport(p.id)">{{ t('kb.bulkImport') }}</button>
           <span class="ad-hint" style="margin-left: 10px">{{ bulkMsg }}</span>
         </details>
         <table class="ad-table">
-          <thead><tr><th>ID</th><th>层</th><th>源句</th><th>语言</th><th>译文</th><th></th></tr></thead>
+          <thead><tr><th>{{ t('kb.colId') }}</th><th>{{ t('kb.colLayer') }}</th><th>{{ t('kb.colSource') }}</th><th>{{ t('kb.colLang') }}</th><th>{{ t('kb.colTranslation') }}</th><th></th></tr></thead>
           <tbody>
             <tr v-for="e in entries" :key="e.id">
               <td>{{ e.id }}</td><td>L{{ e.layer }}</td><td>{{ e.source_text }}</td>
               <td>{{ e.target_lang }}</td><td>{{ e.target_text }}</td>
-              <td><button class="ad-btn-sm ad-btn-red" @click="removeEntry(e)">删</button></td>
+              <td><button class="ad-btn-sm ad-btn-red" @click="removeEntry(e)">{{ t('kb.delete') }}</button></td>
             </tr>
           </tbody>
         </table>
@@ -56,6 +56,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { kbPackages, kbPackageCreate, kbPackageDelete, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport } from '@/api'
 import { activeTenantId } from './store'
+import { t, tpl } from '@/i18n'
 
 const packages = ref<any[]>([])
 const entries = ref<any[]>([])
@@ -82,14 +83,14 @@ async function loadPackages() {
   }
 }
 async function createPackage() {
-  if (!pForm.value.code || !pForm.value.name) { alert('编码和名称必填'); return }
+  if (!pForm.value.code || !pForm.value.name) { alert(t('kb.errorCodeNameRequired')); return }
   const r = await kbPackageCreate({ ...pForm.value, role: 'source' })
   if (!r.success) { alert(r.message); return }
   pForm.value = { code: '', name: '', pack_type: 'industry' }
   await loadPackages()
 }
 async function removePackage(p: any) {
-  if (!confirm(`删除包「${p.name}」及全部条目？`)) return
+  if (!confirm(tpl('kb.confirmDeletePackage', { name: p.name }))) return
   const r = await kbPackageDelete(p.id)
   if (!r.success) alert(r.message)
   await loadPackages()
@@ -102,7 +103,7 @@ async function loadEntries(p: any) {
   }
 }
 async function addEntry(pkgId: number) {
-  if (!eForm.value.source_text) { alert('源句必填'); return }
+  if (!eForm.value.source_text) { alert(t('kb.errorSourceRequired')); return }
   const r = await kbEntryAdd({ package_id: pkgId, ...eForm.value })
   if (!r.success) { alert(r.message); return }
   eForm.value = { source_text: '', layer: 2, target_lang: 'en', target_text: '', module: '' }
@@ -132,10 +133,10 @@ async function bulkImport(pkgId: number) {
       layer: parts.length >= 4 && Number(parts[3]) ? Number(parts[3]) : 2,
     })
   }
-  if (!entries.length) { alert('没有有效行（每行：中文|语言|译文）'); return }
+  if (!entries.length) { alert(t('kb.errorNoValidLine')); return }
   const r = await kbEntriesImport({ package_id: pkgId, entries })
   if (!r.success) { alert(r.message); return }
-  bulkMsg.value = `✅ 导入 ${r.added} 条，跳过 ${r.skipped} 条`
+  bulkMsg.value = tpl('kb.bulkResult', { added: r.added, skipped: r.skipped })
   bulkText.value = ''
   await loadEntries({ id: pkgId })
   await loadPackages()

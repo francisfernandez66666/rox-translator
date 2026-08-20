@@ -14,21 +14,21 @@
   <div class="chat-window" :class="{ 'chat-mobile': isMobile }">
     <!-- ===== 顶部标题栏 ===== -->
     <header class="chat-header" :class="{ 'chat-mobile-header': isMobile }" style="border-bottom-color: #2e7d32;">
-      <span>🌐 翻译</span>
-      <button class="clear-btn" @click="store.clearMessages()" title="清空对话">
+      <span>{{ t('chat.title') }}</span>
+      <button class="clear-btn" @click="store.clearMessages()" :title="t('chat.clearChat')">
         🗑️
       </button>
     </header>
 
     <!-- ===== 离线提示条 ===== -->
     <div v-if="!store.isBackendOnline" class="offline-bar">
-      <span>⚠️ 后端服务未连接，请检查网络连接</span>
+      <span>{{ t('chat.offline') }}</span>
       <button
         class="retry-btn"
         :disabled="store.isBackendChecking"
         @click="store.retryBackend()"
       >
-        {{ store.isBackendChecking ? '检查中…' : '重试' }}
+        {{ store.isBackendChecking ? t('chat.checking') : t('chat.retry') }}
       </button>
     </div>
 
@@ -84,7 +84,7 @@
           :key="'l'+lang"
           class="tag tag-lang"
         >
-          {{ LANG_OPTIONS[lang]?.flag || '🌐' }} {{ LANG_OPTIONS[lang]?.label || lang }}
+{{ LANG_OPTIONS[lang]?.flag || '🌐' }} {{ langLabel(lang, LANG_OPTIONS[lang]?.label) }}
           <button class="tag-remove" @click="toggleLang(lang)">✕</button>
         </span>
         <!-- ★ 非KB语言标签（如 ja/ko/th 等直接勾选的） -->
@@ -93,7 +93,7 @@
           :key="'ol'+lang"
           class="tag tag-other-lang"
         >
-          🤖 {{ OTHER_LANG_OPTIONS[lang]?.label || lang }}
+          🤖 {{ langLabel(lang, OTHER_LANG_OPTIONS[lang]?.label) }}
           <button class="tag-remove" @click="toggleLang(lang)">✕</button>
         </span>
         <!-- ★ "其他语言"手写标签（自定义语言名，不在任何列表中的） -->
@@ -101,7 +101,7 @@
           v-if="store.selectedLangs.includes('other')"
           class="tag tag-other-lang"
         >
-          🤖 其他
+          🤖 {{ t('chat.otherTag') }}
           <button class="tag-remove" @click="toggleLang('other')">✕</button>
         </span>
         <!-- ★ 自定义语言标签（从"更多语言"输入框添加的） -->
@@ -121,7 +121,7 @@
           <!-- ===== 文件上传按钮（docx/pptx/xlsx） ===== -->
           <button
             class="action-btn"
-            title="上传文件翻译（docx/pptx/xlsx）"
+            :title="t('chat.uploadFile')"
             @click="triggerFileUpload"
           >
             ＋
@@ -136,12 +136,24 @@
 
           <!-- ===== 语言选择下拉（知识库语言 + 其他 AI 翻译语言） ===== -->
           <div class="lang-selector" :class="{ open: langDropdownOpen }">
-            <button class="action-btn lang-btn" @click="langDropdownOpen = !langDropdownOpen" title="选择目标语言">
+            <button class="action-btn lang-btn" @click="langDropdownOpen = !langDropdownOpen" :title="t('chat.selectTargetLang')">
               🌐 {{ langBtnLabel }}
             </button>
             <div v-if="langDropdownOpen" class="lang-dropdown">
+              <!-- ★ 源语言选择（互译方向；auto=自动检测） -->
+              <div class="lang-section-title">{{ t('chat.sourceLang') }}</div>
+              <div class="source-lang-row">
+                <button
+                  v-for="opt in sourceLangOptions"
+                  :key="opt.code"
+                  class="source-lang-btn"
+                  :class="{ active: sourceLang === opt.code }"
+                  @click="sourceLang = opt.code"
+                >{{ opt.flag }} {{ t(opt.labelKey) }}</button>
+              </div>
+              <div class="lang-divider"></div>
               <!-- ★ 知识库语言区 -->
-              <div class="lang-section-title">📚 知识库语言</div>
+              <div class="lang-section-title">{{ t('chat.kbLangs') }}</div>
               <label
                 v-for="lang in kbLangs"
                 :key="lang"
@@ -158,7 +170,7 @@
               <div class="lang-divider"></div>
 
               <!-- ★ 其他语言：子选单直接勾选 + 手写兜底 -->
-              <div class="lang-section-title">🤖 其他语言（AI翻译）</div>
+              <div class="lang-section-title">{{ t('chat.otherLangs') }}</div>
               <label
                 v-for="olang in otherLangList"
                 :key="olang.code"
@@ -169,7 +181,7 @@
                   :checked="store.selectedLangs.includes(olang.code)"
                   @change="toggleLang(olang.code)"
                 />
-                <span>{{ olang.flag }} {{ olang.label }}</span>
+                <span>{{ olang.flag }} {{ langLabel(olang.code, olang.label) }}</span>
               </label>
               <div class="lang-divider" style="margin: 4px 0"></div>
               <label class="lang-option lang-option-other">
@@ -178,7 +190,7 @@
                   :checked="store.selectedLangs.includes('other')"
                   @change="toggleLang('other')"
                 />
-                <span>🌐 更多语言…</span>
+                <span>{{ t('chat.moreLangs') }}</span>
               </label>
               <!-- ★ "更多语言"输入框：选了"更多语言"后展开，用户直接输入语言名 -->
               <div v-if="store.selectedLangs.includes('other')" class="lang-custom-input-wrap">
@@ -186,7 +198,7 @@
                   ref="customLangInputRef"
                   v-model="customLangText"
                   class="lang-custom-input"
-                  placeholder="输入语言名，如：僧伽罗语、Sinhala"
+                  :placeholder="t('chat.customLangPlaceholder')"
                   @keydown.enter.prevent="addCustomLang"
                 />
                 <button class="lang-custom-add-btn" @click="addCustomLang" :disabled="!customLangText.trim()">＋</button>
@@ -209,7 +221,7 @@
         <!-- 📚 导入新翻译按钮 -->
         <button
           class="action-btn kb-upload-btn"
-          title="导入新翻译"
+          :title="t('chat.importKb')"
           @click="resetKbModal(); showKbModal = true"
         >
           📚
@@ -220,7 +232,7 @@
           class="send-btn stop-btn"
           :style="{ background: '#d93025' }"
           @click="store.stopGeneration()"
-          title="停止生成"
+          :title="t('chat.stop')"
         >
           ■
         </button>
@@ -230,7 +242,7 @@
           :disabled="!canSend"
           :style="{ background: canSend ? '#2e7d32' : '#e0e0e0' }"
           @click="handleSend"
-          title="发送"
+          :title="t('chat.send')"
         >
           ➤
         </button>
@@ -241,7 +253,7 @@
     <div v-if="showKbModal" class="kb-modal-overlay" @click.self="showKbModal = false">
       <div class="kb-modal">
         <div class="kb-modal-header">
-          <h3>📚 导入新翻译</h3>
+          <h3>{{ t('chat.importKbTitle') }}</h3>
           <button class="kb-modal-close" @click="showKbModal = false">✕</button>
         </div>
 
@@ -250,7 +262,7 @@
           <div class="kb-step" :class="{ active: kbStep === 1, done: kbStep > 1 }">
             <div class="kb-step-header">
               <span class="kb-step-num">1</span>
-              <span class="kb-step-title">上传文件</span>
+              <span class="kb-step-title">{{ t('chat.kbStep1') }}</span>
               <span v-if="kbStep > 1" class="kb-step-check">✅</span>
             </div>
             <div class="kb-step-content" v-if="kbStep >= 1">
@@ -265,12 +277,12 @@
                 <input ref="kbFileInputRef" type="file" accept=".csv,.xlsx,.xls" style="display:none" @change="handleKbFileSelect" />
                 <template v-if="!kbFile">
                   <div class="kb-drop-icon">📄</div>
-                  <div>{{ kbDragging ? '松开即可上传' : '拖拽文件到此处，或点击选择' }}</div>
-                  <div class="kb-drop-hint">支持 CSV / Excel（首行需含 zh 列名）</div>
+                  <div>{{ kbDragging ? t('chat.kbDropRelease') : t('chat.kbDropClick') }}</div>
+                  <div class="kb-drop-hint">{{ t('chat.kbDropHint') }}</div>
                 </template>
                 <template v-else>
                   <div class="kb-file-info">📎 {{ kbFile.name }}</div>
-                  <button class="kb-file-remove" @click.stop="kbFile = null; kbRecognized = null">✕ 移除</button>
+                  <button class="kb-file-remove" @click.stop="kbFile = null; kbRecognized = null">{{ t('chat.kbRemove') }}</button>
                 </template>
               </div>
             </div>
@@ -280,7 +292,7 @@
           <div class="kb-step" :class="{ active: kbStep === 2, done: kbStep > 2, disabled: kbStep < 2 }">
             <div class="kb-step-header">
               <span class="kb-step-num">2</span>
-              <span class="kb-step-title">识别数据</span>
+              <span class="kb-step-title">{{ t('chat.kbStep2') }}</span>
               <span v-if="kbStep > 2" class="kb-step-check">✅</span>
             </div>
             <div class="kb-step-content" v-if="kbStep >= 2">
@@ -288,26 +300,25 @@
                 <div class="kb-progress-bar">
                   <div class="kb-progress-fill kb-progress-animated"></div>
                 </div>
-                <div class="kb-progress-text">正在识别数据...</div>
+                <div class="kb-progress-text">{{ t('chat.kbRecognizing') }}</div>
               </div>
               <template v-else-if="kbRecognized">
                 <div class="kb-recognized-info">
                   <div class="kb-recognized-stat">
-                    📊 共 <strong>{{ kbRecognized.total }}</strong> 条数据，
-                    <strong>{{ kbRecognized.lang_cols?.length }}</strong> 种语言
+                    {{ tpl('chat.kbTotal', { total: kbRecognized.total, n: kbRecognized.lang_cols?.length || 0 }) }}
                   </div>
                   <div class="kb-recognized-langs">
-                    语言列：<span v-for="lang in kbRecognized.lang_cols" :key="lang" class="kb-lang-tag">{{ lang }}</span>
+                    {{ t('chat.kbLangCols') }}<span v-for="lang in kbRecognized.lang_cols" :key="lang" class="kb-lang-tag">{{ lang }}</span>
                   </div>
                   <div v-if="kbRecognized.new_langs?.length" class="kb-recognized-new">
-                    🆕 新增语言：<span v-for="lang in kbRecognized.new_langs" :key="lang" class="kb-lang-tag new">{{ lang }}</span>
+                    {{ t('chat.kbNewLangs') }}<span v-for="lang in kbRecognized.new_langs" :key="lang" class="kb-lang-tag new">{{ lang }}</span>
                   </div>
                   <!-- 预览表 -->
                   <div class="kb-preview" v-if="kbRecognized.preview?.length">
-                    <div class="kb-preview-title">预览前 {{ kbRecognized.preview.length }} 条：</div>
+                    <div class="kb-preview-title">{{ tpl('chat.kbPreview', { n: kbRecognized.preview.length }) }}</div>
                     <div class="kb-preview-table">
                       <div class="kb-preview-row kb-preview-header">
-                        <span>中文</span><span v-for="lang in kbRecognized.lang_cols" :key="lang">{{ lang }}</span>
+                        <span>{{ t('chat.kbChinese') }}</span><span v-for="lang in kbRecognized.lang_cols" :key="lang">{{ lang }}</span>
                       </div>
                       <div class="kb-preview-row" v-for="(row, idx) in kbRecognized.preview" :key="idx">
                         <span>{{ row.zh }}</span>
@@ -317,11 +328,11 @@
                   </div>
                 </div>
                 <button class="kb-action-btn" @click="startRecognize" :disabled="true">
-                  ✅ 识别完成
+                  {{ t('chat.kbRecognized') }}
                 </button>
               </template>
               <button v-else class="kb-action-btn" @click="startRecognize" :disabled="!kbFile">
-                🔍 识别数据
+                {{ t('chat.kbRecognize') }}
               </button>
             </div>
           </div>
@@ -330,14 +341,14 @@
           <div class="kb-step" :class="{ active: kbStep === 3, disabled: kbStep < 3 }">
             <div class="kb-step-header">
               <span class="kb-step-num">3</span>
-              <span class="kb-step-title">导入数据</span>
+              <span class="kb-step-title">{{ t('chat.kbStep3') }}</span>
             </div>
             <div class="kb-step-content" v-if="kbStep >= 3">
               <div v-if="kbImporting" class="kb-progress">
                 <div class="kb-progress-bar">
                   <div class="kb-progress-fill kb-progress-animated" :style="{ width: kbImportProgress + '%' }"></div>
                 </div>
-                <div class="kb-progress-text">{{ kbImportProgress < 50 ? '正在写入数据库...' : '正在建立向量索引...' }} {{ kbImportProgress }}%</div>
+                <div class="kb-progress-text">{{ kbImportProgress < 50 ? t('chat.kbWriting') : t('chat.kbIndexing') }} {{ kbImportProgress }}%</div>
               </div>
               <template v-else-if="kbImportResult">
                 <div :class="kbImportResult.success ? 'kb-result-success' : 'kb-result-error'">
@@ -345,7 +356,7 @@
                 </div>
               </template>
               <button v-else class="kb-action-btn primary" @click="startImport" :disabled="!kbRecognized?.temp_id">
-                📥 导入数据
+                {{ t('chat.kbImport') }}
               </button>
             </div>
           </div>
@@ -361,6 +372,8 @@
 import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
 // 全局聊天状态 Store
 import { useChatStore } from '@/stores/chat'
+// 国际化取词
+import { t, tpl } from '@/i18n'
 // 子组件：消息气泡
 import MessageBubble from './MessageBubble.vue'
 
@@ -368,14 +381,14 @@ import MessageBubble from './MessageBubble.vue'
 const store = useChatStore()
 
 // ---- 技能配置 ----
-const skillConfig = {
+const skillConfig = computed(() => ({
   icon: '🌐',
-  label: '翻译',
+  label: t('chat.skillLabel'),
   color: '#2e7d32',
-  placeholder: '输入要翻译的中文，或点＋上传文件',
-  welcome: '输入中文文本翻译，或上传文件批量翻译',
-  examples: ['检查胎压', '紧急呼叫已激活', '车辆已解锁', '自动驾驶模式已开启']
-}
+  placeholder: t('chat.placeholder'),
+  welcome: t('chat.welcome'),
+  examples: [t('chat.example1'), t('chat.example2'), t('chat.example3'), t('chat.example4')]
+}))
 
 // ---- 本地状态 ----
 const inputText = ref('')
@@ -389,6 +402,14 @@ const customLangText = ref('')
 const customLangInputRef = ref<HTMLInputElement>()
 // ★ 已添加的自定义语言列表（语言名数组，发送时拼入消息）
 const customLangs = ref<string[]>([])
+// ★ 源语言（互译方向；auto=自动检测，发送时非 auto 则带上 source_lang）
+const sourceLang = ref('auto')
+const sourceLangOptions = [
+  { code: 'auto', flag: '🤖', labelKey: 'chat.sourceAuto' },
+  { code: 'zh', flag: '🇨🇳', labelKey: 'lang.zh' },
+  { code: 'en', flag: '🇬🇧', labelKey: 'lang.en' },
+  { code: 'zh_hant', flag: '🇹🇼', labelKey: 'lang.zhHant' },
+]
 
 // ★ 语言名→代码的本地映射（常见语言中文名/英文名→ISO代码）
 const _LANG_NAME_TO_CODE: Record<string, string> = {
@@ -528,6 +549,7 @@ const LANG_OPTIONS: Record<string, { label: string; flag: string }> = {
 
 // ★ "其他语言"子选单（非KB语言，AI翻译，直接勾选无需手写提示词）
 const OTHER_LANG_OPTIONS = ref<Record<string, { label: string; flag: string }>>({
+  zh:  { label: '中文',     flag: '🇨🇳' },
   ja:  { label: '日语',     flag: '🇯🇵' },
   ko:  { label: '韩语',     flag: '🇰🇷' },
   th:  { label: '泰语',     flag: '🇹🇭' },
@@ -565,20 +587,26 @@ const otherLangList = computed(() =>
   Object.entries(OTHER_LANG_OPTIONS.value).map(([code, info]) => ({ code, ...info }))
 )
 
+// ★ 语言显示名：优先 i18n（lang.<code>），缺失回退本地 label
+function langLabel(code: string, fallback?: string): string {
+  const v = t(`lang.${code}`)
+  return v !== `lang.${code}` ? v : (fallback || code)
+}
+
 // ★ 语言按钮标签
 const langBtnLabel = computed(() => {
   const sel = store.selectedLangs
-  if (sel.length === 0) return '0语'
+  if (sel.length === 0) return t('chat.langZero')
   if (sel.length <= 2) {
-    // 1-2种语言直接显示中文名
+    // 1-2种语言直接显示名称
     const names = sel.map(l => {
-      if (l === 'other') return '其他…'
-      return LANG_OPTIONS[l]?.label || OTHER_LANG_OPTIONS.value[l]?.label || l
+      if (l === 'other') return t('chat.langOther')
+      return langLabel(l, LANG_OPTIONS[l]?.label || OTHER_LANG_OPTIONS.value[l]?.label)
     })
     return names.join('+')
   }
   // 3种以上只显示数量
-  return `${sel.length}语`
+  return tpl('chat.langCount', { n: sel.length })
 })
 
 // ---- 响应式判断 ----
@@ -589,8 +617,8 @@ const isMobile = ref(window.innerWidth <= 768)
 function onResize() { isMobile.value = window.innerWidth <= 768 }
 
 const inputPlaceholder = computed(() => {
-  if (attachedFiles.value.length > 0) return '点击发送翻译文件...'
-  return skillConfig.placeholder
+  if (attachedFiles.value.length > 0) return t('chat.sendFile')
+  return skillConfig.value.placeholder
 })
 
 const canSend = computed(() => {
@@ -604,7 +632,7 @@ const hasActiveProgress = computed(() => {
 
 // ---- 加载提示 ----
 const loadingText = computed(() => {
-  return attachedFiles.value.length > 0 ? '翻译文件中...' : '翻译中...'
+  return attachedFiles.value.length > 0 ? t('chat.translatingFile') : t('chat.translating')
 })
 
 // ---- 文件上传 ----
@@ -662,7 +690,7 @@ function handleKbDrop(e: DragEvent) {
   if (!file) return
   const ext = file.name.split('.').pop()?.toLowerCase()
   if (!['csv', 'xlsx', 'xls'].includes(ext || '')) {
-    alert('只支持 CSV / Excel 文件')
+    alert(t('chat.kbOnlyCsv'))
     return
   }
   kbFile.value = file
@@ -687,10 +715,10 @@ async function startRecognize() {
       kbRecognized.value = data
       kbStep.value = 3
     } else {
-      alert(data.message || '识别失败')
+      alert(data.message || t('chat.kbRecognizeFailed'))
     }
   } catch (err: any) {
-    alert(`识别失败：${err.message || '网络错误'}`)
+    alert(tpl('chat.kbRecognizeErr', { msg: err.message || t('chat.kbNetworkErr') }))
   } finally {
     kbRecognizing.value = false
   }
@@ -731,7 +759,7 @@ async function startImport() {
   } catch (err: any) {
     clearInterval(progressTimer)
     kbImportProgress.value = 0
-    kbImportResult.value = { success: false, message: `导入失败：${err.message || '网络错误'}` }
+    kbImportResult.value = { success: false, message: tpl('chat.kbImportErr', { msg: err.message || t('chat.kbNetworkErr') }) }
   } finally {
     kbImporting.value = false
   }
@@ -766,7 +794,7 @@ async function handleSend(e?: Event) {
 
   // ★ 拼接自定义语言提示词（从"更多语言"输入框添加的）
   const customLangPrefix = customLangs.value.length > 0
-    ? '翻译成' + customLangs.value.join('、') + '：'
+    ? tpl('chat.customLangPrefix', { l: customLangs.value.join('、') })
     : ''
 
   // 文件翻译
@@ -796,9 +824,10 @@ async function handleSend(e?: Event) {
   customLangs.value = []
   nextTick(() => { autoResizeInput() })
 
-  // ★ 翻译技能带上选中的语言
+  // ★ 翻译技能带上选中的语言与源语言
   const options: Record<string, unknown> = {}
   options.target_langs = [...store.selectedLangs]
+  if (sourceLang.value !== 'auto') options.source_lang = sourceLang.value
   store.sendMessage(text, options)
 }
 
@@ -1024,6 +1053,18 @@ async function loadTranslationLangs() {
   font-size: 10px; font-weight: 400; color: #999;
   background: #f0f0f0; padding: 1px 6px; border-radius: 8px; margin-left: 4px;
 }
+
+/* ★ 源语言选择行 */
+.source-lang-row {
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 16px 8px;
+}
+.source-lang-btn {
+  padding: 4px 10px; border: 1px solid #dadce0; border-radius: 14px;
+  background: #fff; font-size: 12px; color: #5f6368; cursor: pointer;
+  transition: all 0.15s;
+}
+.source-lang-btn:hover { background: #f1f3f4; }
+.source-lang-btn.active { background: #e8f0fe; border-color: #1a73e8; color: #1a73e8; font-weight: 600; }
 
 /* ★ "其他语言"选项提示 */
 .lang-option-other { font-weight: 500; }

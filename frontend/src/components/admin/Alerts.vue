@@ -4,22 +4,22 @@
    ============================================================================ -->
 <template>
   <section class="ad-section">
-    <h2>监控告警</h2>
+    <h2>{{ t('alerts.title') }}</h2>
     <div class="ad-row">
-      <button class="ad-btn" @click="loadAlerts">刷新</button>
+      <button class="ad-btn" @click="loadAlerts">{{ t('alerts.refresh') }}</button>
       <select v-model="alertStatus" class="ad-input" @change="loadAlerts">
-        <option value="">全部</option><option value="open">未处理</option><option value="resolved">已解决</option>
+        <option value="">{{ t('alerts.all') }}</option><option value="open">{{ t('alerts.open') }}</option><option value="resolved">{{ t('alerts.resolved') }}</option>
       </select>
     </div>
     <table class="ad-table">
-      <thead><tr><th>级别</th><th>类型</th><th>组织</th><th>内容</th><th>状态</th><th>时间</th><th></th></tr></thead>
+      <thead><tr><th>{{ t('alerts.colLevel') }}</th><th>{{ t('alerts.colKind') }}</th><th>{{ t('alerts.colTenant') }}</th><th>{{ t('alerts.colContent') }}</th><th>{{ t('alerts.colStatus') }}</th><th>{{ t('alerts.colTime') }}</th><th></th></tr></thead>
       <tbody>
         <tr v-for="a in alerts" :key="a.id">
           <td>{{ a.level }}</td><td>{{ a.kind }}</td><td>#{{ a.tenant_id }}</td><td>{{ a.message }}</td>
-          <td>{{ a.status === 'open' ? '未处理' : '已解决' }}</td><td>{{ fmtTime(a.created_at) }}</td>
-          <td><button v-if="a.status === 'open'" class="ad-btn-sm" @click="resolveAlert(a)">关闭</button></td>
+          <td>{{ a.status === 'open' ? t('alerts.open') : t('alerts.resolved') }}</td><td>{{ fmtTime(a.created_at) }}</td>
+          <td><button v-if="a.status === 'open'" class="ad-btn-sm" @click="resolveAlert(a)">{{ t('alerts.close') }}</button></td>
         </tr>
-        <tr v-if="!alerts.length"><td colspan="7" style="text-align:center;color:#999">暂无告警</td></tr>
+        <tr v-if="!alerts.length"><td colspan="7" style="text-align:center;color:#999">{{ t('alerts.empty') }}</td></tr>
       </tbody>
     </table>
   </section>
@@ -30,6 +30,7 @@ import { ref, onMounted, watch } from 'vue'
 import { systemAlerts, alertResolve } from '@/api'
 import { activeTenantId } from './store'
 import { fmtTime } from './ui'
+import { t } from '@/i18n'
 
 const alerts = ref<any[]>([])
 // 告警状态过滤条件（空=全部，open=未解决，resolved=已解决）

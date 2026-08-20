@@ -4,8 +4,8 @@
    ============================================================================ -->
 <template>
   <section class="ad-section">
-    <h2>流程引擎设置</h2>
-    <p class="ad-hint">工单翻译流程步骤启停。关闭某步则跳过（审批关闭后工单翻译完成后直接完成）。</p>
+    <h2>{{ t('workflow.title') }}</h2>
+    <p class="ad-hint">{{ t('workflow.hint') }}</p>
     <div v-for="st in flowSteps" :key="st.key" class="ad-flow-row">
       <label class="ad-switch">
         <input type="checkbox" v-model="st.enable" />
@@ -14,12 +14,12 @@
       <span class="ad-flow-name">{{ st.name }}</span>
       <code class="ad-flow-key">{{ st.key }}</code>
     </div>
-    <button class="ad-btn" @click="saveFlow">保存流程配置</button>
+    <button class="ad-btn" @click="saveFlow">{{ t('workflow.saveFlow') }}</button>
 
-    <h2 style="margin-top: 32px">evals 评估看板</h2>
-    <button class="ad-btn" @click="loadEvals">刷新</button>
+    <h2 style="margin-top: 32px">{{ t('workflow.evalsTitle') }}</h2>
+    <button class="ad-btn" @click="loadEvals">{{ t('workflow.refresh') }}</button>
     <table class="ad-table">
-      <thead><tr><th>ID</th><th>任务</th><th>语言</th><th>总分</th><th>状态</th><th>时间</th><th>译文</th></tr></thead>
+      <thead><tr><th>{{ t('workflow.colId') }}</th><th>{{ t('workflow.colTask') }}</th><th>{{ t('workflow.colLang') }}</th><th>{{ t('workflow.colScore') }}</th><th>{{ t('workflow.colStatus') }}</th><th>{{ t('workflow.colTime') }}</th><th>{{ t('workflow.colOutput') }}</th></tr></thead>
       <tbody>
         <tr v-for="r in evals" :key="r.id">
           <td>{{ r.id }}</td><td>{{ r.task_type }}</td><td>{{ r.model }}</td>
@@ -37,6 +37,7 @@ import { ref, onMounted, watch } from 'vue'
 import { flowConfig, flowSave, evalsList, type FlowStepItem } from '@/api'
 import { activeTenantId } from './store'
 import { fmtTime } from './ui'
+import { t } from '@/i18n'
 
 const flowSteps = ref<FlowStepItem[]>([])
 async function loadFlow() {
@@ -46,7 +47,7 @@ async function loadFlow() {
 async function saveFlow() {
   const r = await flowSave(flowSteps.value)
   if (!r.success) { alert(r.message); return }
-  alert('流程配置已保存')
+  alert(t('workflow.savedFlow'))
 }
 
 const evals = ref<any[]>([])

@@ -22,7 +22,7 @@
     <header class="app-header">
       <div class="header-left">
         <span class="header-icon">🌐</span>
-        <span class="header-title">翻译助手</span>
+        <span class="header-title">{{ t('app.title') }}</span>
         <span class="header-user">{{ authUser.display_name || authUser.username }}</span>
       </div>
       <div class="header-right">
@@ -31,8 +31,8 @@
           {{ store.isBackendOnline ? t('common.online') : t('common.offline') }}
         </span>
         <button class="gear-btn" @click="toggleLang()" :title="lang === 'zh' ? 'English' : '中文'">{{ lang === 'zh' ? 'EN' : '中' }}</button>
-        <button class="gear-btn" @click="showSettings = true" title="设置">⚙️</button>
-        <button class="gear-btn" @click="logout" title="退出登录">⎋</button>
+        <button class="gear-btn" @click="showSettings = true" :title="t('common.settings')">⚙️</button>
+        <button class="gear-btn" @click="logout" :title="t('common.logout')">⎋</button>
       </div>
     </header>
 
@@ -40,7 +40,7 @@
     <main class="chat-main">
       <div v-if="store.isBackendLoading" class="loading-screen">
         <div class="loading-spinner"></div>
-        <p class="loading-text">翻译引擎启动中…</p>
+        <p class="loading-text">{{ t('app.starting') }}</p>
       </div>
       <ChatWindow v-else />
     </main>
@@ -49,22 +49,22 @@
     <Teleport to="body">
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="settings-panel">
-          <div class="settings-title">设置</div>
+          <div class="settings-title">{{ t('common.settings') }}</div>
           <div class="settings-item">
-            <label>翻译模型</label>
+            <label>{{ t('app.modelLabel') }}</label>
             <select v-model="currentModel" @change="onModelChange">
-              <optgroup label="硅基流动 SiliconFlow">
-                <option value="tencent/Hunyuan-MT-7B">Hunyuan-MT-7B (推荐，33语专用)</option>
-                <option value="THUDM/GLM-Z1-9B-0414">GLM-Z1-9B-0414 (备用)</option>
+              <optgroup label="SiliconFlow">
+                <option value="tencent/Hunyuan-MT-7B">Hunyuan-MT-7B {{ t('app.modelRec33') }}</option>
+                <option value="THUDM/GLM-Z1-9B-0414">GLM-Z1-9B-0414 {{ t('app.modelBackup') }}</option>
                 <option value="Qwen/Qwen2.5-7B-Instruct">Qwen2.5-7B</option>
               </optgroup>
-              <optgroup label="智谱 Zhipu">
-                <option value="glm-4.7-flash">GLM-4.7-Flash (快+强)</option>
-                <option value="glm-4-flash">GLM-4-Flash (降级用)</option>
+              <optgroup label="Zhipu">
+                <option value="glm-4.7-flash">GLM-4.7-Flash {{ t('app.modelFast') }}</option>
+                <option value="glm-4-flash">GLM-4-Flash {{ t('app.modelFallback') }}</option>
               </optgroup>
             </select>
           </div>
-          <button class="settings-close" @click="showSettings = false">关闭</button>
+          <button class="settings-close" @click="showSettings = false">{{ t('common.close') }}</button>
         </div>
       </div>
     </Teleport>
