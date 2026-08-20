@@ -10,20 +10,41 @@ package auth
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"translator/internal/store"
 )
 
-// Secret JWT 签名密钥（可用环境变量覆盖）
+// Secret JWT 签名密钥：优先读取环境变量 JWT_SECRET（生产必须设置），
+// 未设置则使用内置默认值（本地开发用；生产务必通过环境变量覆盖，避免密钥泄露被伪造 JWT）
 var Secret = "trans-platform-jwt-secret-2026"
+
+func init() {
+	if v := os.Getenv("JWT_SECRET"); v != "" {
+		Secret = v
+	}
+}
+
+// RandomSecret 生成随机 JWT 密钥（供初始化工具使用；长度 32 字节 → 64 位 hex）
+func RandomSecret() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return Secret
+	}
+	return hex.EncodeToString(b)
+}
 
 // Claims JWT 载荷
 type Claims struct {
@@ -154,16 +175,48 @@ func roleName(level int) string {
 	}
 }
 
-// PasswordHash 密码哈希（HMAC-SHA256 + salt）
+// PasswordHash 密码哈希（bcrypt，成本因子默认 10）。
+// 说明：历史版本使用 HMAC-SHA256（固定盐），CheckPassword 对两种格式均兼容，
+// 登录成功后通过 MaybeMigrateHash 自动升级为 bcrypt，保证存量账号平滑迁移。
 func PasswordHash(password string) string {
+	h, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		// bcrypt 仅对 >72 字节超长密码可能失败，兜底用 SHA-256 格式
+		return "$sha256$" + legacyHash(password)
+	}
+	return string(h)
+}
+
+// CheckPassword 校验密码：兼容 bcrypt（$2a/$2b/$2c）与历史 SHA-256（$sha256$ 前缀）两种格式。
+// 参数 hash: 存储的密码哈希；password: 明文密码。返回: 是否匹配。
+func CheckPassword(hash, password string) bool {
+	switch {
+	case strings.HasPrefix(hash, "$2a$") || strings.HasPrefix(hash, "$2b$") || strings.HasPrefix(hash, "$2c$"):
+		return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
+	case strings.HasPrefix(hash, "$sha256$"):
+		return legacyHash(password) == strings.TrimPrefix(hash, "$sha256$")
+	default:
+		// 极早期无前缀格式（base64 SHA-256）
+		return PasswordHashLegacy(password) == hash
+	}
+}
+
+// NeedMigrateHash 判断哈希是否需要升级为 bcrypt（返回 true 表示旧格式，登录成功后应重写）
+func NeedMigrateHash(hash string) bool {
+	return !(strings.HasPrefix(hash, "$2a$") || strings.HasPrefix(hash, "$2b$") || strings.HasPrefix(hash, "$2c$"))
+}
+
+// legacyHash 历史 SHA-256 摘要（供 $sha256$ 前缀格式与迁移兜底使用）
+func legacyHash(password string) string {
+	sum := sha256.Sum256([]byte(password))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// PasswordHashLegacy 兼容函数：历史版本使用的 HMAC-SHA256 + 固定盐哈希（仅校验旧数据用）
+func PasswordHashLegacy(password string) string {
 	s := "trans-salt:" + password
 	m := sha256.Sum256([]byte(s))
 	return base64.RawURLEncoding.EncodeToString(m[:])
-}
-
-// CheckPassword 校验密码
-func CheckPassword(hash, password string) bool {
-	return PasswordHash(password) == hash
 }
 
 // BearerToken 从请求头提取 token

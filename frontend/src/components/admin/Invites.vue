@@ -5,20 +5,20 @@
 <template>
   <section class="ad-section">
     <h2>邀请码管理</h2>
-    <div class="ad-hint">绑定租户的邀请码：受邀用户加入该租户（普通用户）；未绑定租户的邀请码：受邀用户自助新建租户。</div>
+    <div class="ad-hint">绑定组织的邀请码：受邀用户加入该组织（普通用户）；未绑定组织的邀请码：受邀用户自助新建组织。</div>
     <div class="ad-row">
       <input v-model="invForm.code" placeholder="邀请码" class="ad-input" />
       <select v-model.number="invForm.tenant_id" class="ad-input">
-        <option :value="0">(新建租户)</option>
+        <option :value="0">(新建组织)</option>
         <option v-for="t in tenantList" :key="t.id" :value="t.id">{{ t.name }} (#{{ t.id }})</option>
       </select>
       <button class="ad-btn" @click="createInvite">生成邀请码</button>
     </div>
     <table class="ad-table">
-      <thead><tr><th>邀请码</th><th>绑定租户</th><th>状态</th><th>使用者</th><th>创建时间</th><th>使用时间</th></tr></thead>
+      <thead><tr><th>邀请码</th><th>绑定组织</th><th>状态</th><th>使用者</th><th>创建时间</th><th>使用时间</th></tr></thead>
       <tbody>
         <tr v-for="c in invites" :key="c.id">
-          <td>{{ c.code }}</td><td>{{ c.tenant_id > 0 ? '#' + c.tenant_id : '新建租户' }}</td>
+          <td>{{ c.code }}</td><td>{{ c.tenant_id > 0 ? '#' + c.tenant_id : '新建组织' }}</td>
           <td>{{ c.used ? '已使用' : '未使用' }}</td><td>{{ c.used_by || '—' }}</td>
           <td>{{ fmtTime(c.created_at) }}</td><td>{{ fmtTime(c.used_at) }}</td>
         </tr>

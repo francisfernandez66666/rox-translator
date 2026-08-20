@@ -4,15 +4,15 @@
    ============================================================================ -->
 <template>
   <section class="ad-section">
-    <h2>租户管理</h2>
+    <h2>组织管理</h2>
     <div class="ad-row">
       <input v-model="tForm.code" placeholder="编码 (如 bmw)" class="ad-input" />
       <input v-model="tForm.name" placeholder="名称" class="ad-input" />
       <input v-model="tForm.expires" type="date" class="ad-input" />
-      <button class="ad-btn" @click="createTenant">开通租户</button>
+      <button class="ad-btn" @click="createTenant">开通组织</button>
     </div>
     <div class="ad-row">
-      <input v-model="tForm.adminUser" placeholder="租户管理员用户名" class="ad-input" />
+      <input v-model="tForm.adminUser" placeholder="组织管理员用户名" class="ad-input" />
       <input v-model="tForm.adminPass" type="password" placeholder="初始密码" class="ad-input" />
     </div>
     <div class="ad-hint">权限 JSON（langs 允许语言，max_daily_chars 日字符上限）</div>
@@ -54,7 +54,7 @@ async function loadTenants() {
 }
 
 async function createTenant() {
-  if (!tForm.value.code) { alert('租户编码必填'); return }
+  if (!tForm.value.code) { alert('组织编码必填'); return }
   const r = await tenantCreate({
     code: tForm.value.code, name: tForm.value.name,
     expires_at: tForm.value.expires, permissions: tForm.value.permissions,
@@ -72,7 +72,7 @@ async function toggleTenant(t: any) {
 }
 
 async function removeTenant(t: any) {
-  if (!confirm(`确认删除租户「${t.name}」？其数据一并删除。`)) return
+  if (!confirm(`确认删除组织「${t.name}」？其数据一并删除。`)) return
   const r = await tenantDelete(t.id)
   if (!r.success) alert(r.message)
   await loadTenants()
@@ -88,9 +88,9 @@ async function chargeTenant(t: any) {
   alert(`已充值 ${tokens} token`)
 }
 
-// 租户数据主权：导出 / GDPR 清除
+// 组织数据主权：导出 / GDPR 清除
 async function exportTenant(t: any) {
-  if (!confirm(`导出租户「${t.name}」全部数据（JSON）？`)) return
+  if (!confirm(`导出组织「${t.name}」全部数据（JSON）？`)) return
   const url = `${API_BASE}/api/tenant/export`
   const xhr = new XMLHttpRequest()
   xhr.open('POST', url, true)
@@ -109,11 +109,11 @@ async function exportTenant(t: any) {
 }
 
 async function eraseTenant(t: any) {
-  if (!confirm(`确认清除租户「${t.name}」的全部业务数据？此操作不可恢复，请先导出备份。`)) return
+  if (!confirm(`确认清除组织「${t.name}」的全部业务数据？此操作不可恢复，请先导出备份。`)) return
   if (!confirm(`再次确认：${t.name} 的用户/订单/用量/审计/KB 将全部删除。`)) return
   const r = await tenantErase(t.id)
   if (!r.success) { alert(r.message); return }
-  alert('租户业务数据已清除')
+  alert('组织业务数据已清除')
   await loadTenants()
 }
 

@@ -19,7 +19,7 @@
 
     <!-- 配额设置 -->
     <div class="ad-chart-card">
-      <h3>配额设置（当前租户）</h3>
+      <h3>配额设置（当前组织）</h3>
       <div class="ad-hint">QPS 每秒请求上限、并发同时翻译任务数、每日累计字符上限（0=不限）。</div>
       <div class="ad-row">
         <input v-model.number="quotaForm.qps" type="number" placeholder="QPS" class="ad-input ad-mini-w" />

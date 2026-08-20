@@ -21,11 +21,11 @@
     <!-- ===== 自助注册面板（仅前台 home 模式显示） ===== -->
     <div v-if="showReg && mode === 'home'" class="login-card">
       <div class="login-logo">🌐 自助注册试用</div>
-      <div class="login-sub">填写邀请码可加入已有团队；留空则创建新租户并获得试用额度</div>
+      <div class="login-sub">填写邀请码可加入已有组织；留空则创建新组织并获得试用额度</div>
       <input v-model="reg.username" placeholder="用户名" class="login-input" />
       <input v-model="reg.password" type="password" placeholder="密码（至少 6 位）" class="login-input" />
-      <input v-model="reg.code" placeholder="租户编码（新建租户时必填）" class="login-input" />
-      <input v-model="reg.name" placeholder="租户名称（新建租户时必填）" class="login-input" />
+      <input v-model="reg.code" placeholder="组织编码（新建组织时必填）" class="login-input" />
+      <input v-model="reg.name" placeholder="组织名称（新建组织时必填）" class="login-input" />
       <input v-model="reg.invite" placeholder="邀请码（可选）" class="login-input" />
       <div v-if="regMsg" class="login-error">{{ regMsg }}</div>
       <button class="login-btn" :disabled="loading" @click="doRegister">{{ loading ? '注册中…' : '注册并登录' }}</button>

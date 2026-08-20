@@ -12,9 +12,9 @@
     <aside class="ad-side">
       <div class="ad-brand">🏢 管理后台</div>
 
-      <!-- 租户切换器（仅超管） -->
+      <!-- 租户切换器（仅超管，前端统称"组织"） -->
       <div v-if="isSuper && tenantList.length" class="ad-tenant-switch">
-        <label>当前租户</label>
+        <label>当前组织</label>
         <select :value="activeTenantId" class="ad-input" @change="switchTenant(Number(($event.target as HTMLSelectElement).value))">
           <option v-for="t in tenantList" :key="t.id" :value="t.id">[{{ t.id }}] {{ t.name }} ({{ t.code }})</option>
         </select>
@@ -73,6 +73,7 @@ import Alerts from './admin/Alerts.vue'
 import Usage from './admin/Usage.vue'
 import Billing from './admin/Billing.vue'
 import Users from './admin/Users.vue'
+import Org from './admin/Org.vue'
 import Tenants from './admin/Tenants.vue'
 import Invites from './admin/Invites.vue'
 import Kb from './admin/Kb.vue'
@@ -106,7 +107,8 @@ const categories = [
     key: 'org', label: '组织',
     panels: [
       { key: 'users', label: '👤 账户管理', comp: Users, min: 2 },
-      { key: 'tenants', label: '🏢 租户管理', comp: Tenants, min: 3 },
+      { key: 'org', label: '🏬 组织结构', comp: Org, min: 2 },
+      { key: 'tenants', label: '🏢 组织管理', comp: Tenants, min: 3 },
       { key: 'invites', label: '🎟️ 邀请码', comp: Invites, min: 3 },
     ],
   },

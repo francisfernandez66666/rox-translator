@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ProviderConfig LLM 供应商路由项（模型路由策略）
@@ -76,6 +77,9 @@ type Config struct {
 
 	// 管理后台访问凭证（租户管理接口鉴权）
 	AdminToken string
+
+	// CORS 允许的跨域来源（同源部署无需配置；前后端分离时通过 CORS_ALLOWED_ORIGINS 环境变量指定，逗号分隔）
+	CORSOrigins []string
 }
 
 // HunyuanMTLangSet 返回支持的语言代码集合
@@ -143,6 +147,8 @@ func Default() *Config {
 		TopFuzzy:               3,
 		SemHitCharOverlap:      0.55,
 		AdminToken:             "rox-admin-2026",
+		// 默认仅允许本地开发来源；生产同源部署（Caddy 反代）不受影响
+		CORSOrigins: []string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8080"},
 	}
 
 	// 内置默认 Key（编译进二进制）
@@ -154,6 +160,16 @@ func Default() *Config {
 	}
 	if v := os.Getenv("ADMIN_TOKEN"); v != "" {
 		c.AdminToken = v
+	}
+	if v := os.Getenv("CORS_ALLOWED_ORIGINS"); v != "" {
+		// 逗号分隔的来源列表；空项剔除
+		var origins []string
+		for _, o := range strings.Split(v, ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				origins = append(origins, o)
+			}
+		}
+		c.CORSOrigins = origins
 	}
 	if v := os.Getenv("ONLINE_API_BASE"); v != "" {
 		c.EmbedAPIBase = v
