@@ -95,6 +95,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. 创建租户（无绑定租户时新建独立试用租户）
+	tenantInfo := map[string]interface{}{}
 	if inviteTenantID == 0 {
 		if req.Code == "" {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请提供租户编码"})
@@ -111,10 +112,22 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		inviteTenantID = t.ID
+		tenantInfo = map[string]interface{}{
+			"id": t.ID, "code": t.Code, "name": t.Name, "status": t.Status,
+			"expires_at": t.ExpiresAt, "permissions": t.Permissions,
+		}
 		// 发放试用余额：确保有余额账户记录后充值 trial_tokens
 		_ = s.Store.EnsureBalance(inviteTenantID)
 		if trialTokens > 0 {
 			_ = s.Store.Charge(inviteTenantID, trialTokens)
+		}
+	} else {
+		// 受邀加入已有租户：返回被加入租户信息
+		if t, err := s.Ten.GetByID(inviteTenantID); err == nil {
+			tenantInfo = map[string]interface{}{
+				"id": t.ID, "code": t.Code, "name": t.Name, "status": t.Status,
+				"expires_at": t.ExpiresAt, "permissions": t.Permissions,
+			}
 		}
 	}
 
@@ -123,7 +136,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if inviteTenantID > 0 && s.wasInviteBind(req.Invite) {
 		role = store.RoleUser
 	}
-	nu, err := s.Store.CreateUser(inviteTenantID, req.Username, auth.PasswordHash(req.Password), req.Username, role, 0)
+	nu, err := s.Store.CreateUser(inviteTenantID, req.Username, auth.PasswordHash(req.Password), req.Username, role, 0, 0)
 	if err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "用户创建失败: " + err.Error()})
 		return
@@ -137,6 +150,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		"message":   "注册成功，试用额度已发放",
 		"user":      nu,
 		"tenant_id": inviteTenantID,
+		"tenant":    tenantInfo,
 	})
 }
 

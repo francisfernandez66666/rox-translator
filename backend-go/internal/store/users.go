@@ -6,6 +6,7 @@
 package store
 
 import (
+	"database/sql"
 	"time"
 )
 
@@ -20,6 +21,7 @@ type User struct {
 	Status       string `json:"status"`        // 状态：active / disabled
 	CreatedBy    int64  `json:"created_by"`    // 创建者用户 ID（0 表示系统创建）
 	LastLoginAt  string `json:"last_login_at"` // 最近登录时间（空表示从未登录）
+	OrgID        int64  `json:"org_id"`        // 所属组织 ID（0=未分配/根组织）
 	CreatedAt    string `json:"created_at"`    // 创建时间（RFC3339 字符串）
 	UpdatedAt    string `json:"updated_at"`    // 更新时间（RFC3339 字符串）
 }
@@ -40,15 +42,18 @@ const (
 	UserDisabled = "disabled" // 停用
 )
 
+// userCols 用户表查询列清单（统一使用，避免遗漏新增列）
+const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, created_at, updated_at"
+
 // CreateUser 创建用户（初始状态为 active）。
 // 参数：tid=租户 ID，username=用户名，passHash=密码哈希，displayName=显示名，
-// role=角色，createdBy=创建者 ID。
+// role=角色，createdBy=创建者 ID，orgID=所属组织 ID（0=根组织）。
 // 返回：新用户对象。
-func (s *Store) CreateUser(tid int64, username, passHash, displayName, role string, createdBy int64) (*User, error) {
+func (s *Store) CreateUser(tid int64, username, passHash, displayName, role string, createdBy, orgID int64) (*User, error) {
 	now := time.Now().Format(time.RFC3339)
 	res, err := s.db.Exec(
-		"INSERT INTO users (tenant_id, username, password_hash, display_name, role, status, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-		tid, username, passHash, displayName, role, UserActive, createdBy, now, now)
+		"INSERT INTO users (tenant_id, username, password_hash, display_name, role, status, created_by, org_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+		tid, username, passHash, displayName, role, UserActive, createdBy, orgID, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -60,11 +65,11 @@ func (s *Store) CreateUser(tid int64, username, passHash, displayName, role stri
 // 参数：id=用户主键 ID，tid=租户 ID；返回用户对象。
 func (s *Store) GetUser(id, tid int64) (*User, error) {
 	row := s.db.QueryRow(
-		"SELECT id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, created_at, updated_at FROM users WHERE id=? AND tenant_id=?",
+		"SELECT "+userCols+" FROM users WHERE id=? AND tenant_id=?",
 		id, tid)
 	var u User
 	err := row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&u.CreatedBy, &u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt)
+		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -75,11 +80,11 @@ func (s *Store) GetUser(id, tid int64) (*User, error) {
 // 参数：tid=租户 ID，username=用户名；返回用户对象。
 func (s *Store) GetUserByUsername(tid int64, username string) (*User, error) {
 	row := s.db.QueryRow(
-		"SELECT id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, created_at, updated_at FROM users WHERE username=? AND tenant_id=?",
+		"SELECT "+userCols+" FROM users WHERE username=? AND tenant_id=?",
 		username, tid)
 	var u User
 	err := row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&u.CreatedBy, &u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt)
+		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -90,11 +95,11 @@ func (s *Store) GetUserByUsername(tid int64, username string) (*User, error) {
 // 参数：username=用户名；返回平台级管理员用户对象（role 为 admin 或 super_admin）。
 func (s *Store) GetSuperAdminByUsername(username string) (*User, error) {
 	row := s.db.QueryRow(
-		"SELECT id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, created_at, updated_at FROM users WHERE username=? AND role IN ('admin','super_admin') LIMIT 1",
+		"SELECT "+userCols+" FROM users WHERE username=? AND role IN ('admin','super_admin') LIMIT 1",
 		username)
 	var u User
 	err := row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&u.CreatedBy, &u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt)
+		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +111,7 @@ func (s *Store) GetSuperAdminByUsername(username string) (*User, error) {
 // 注意：保留 PasswordHash 供登录校验使用。
 func (s *Store) GetUserByUsernameGlobal(username string) ([]*User, error) {
 	rows, err := s.db.Query(
-		"SELECT id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, created_at, updated_at FROM users WHERE username=? ORDER BY tenant_id", username)
+		"SELECT "+userCols+" FROM users WHERE username=? ORDER BY tenant_id", username)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +120,7 @@ func (s *Store) GetUserByUsernameGlobal(username string) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &u)
@@ -127,7 +132,7 @@ func (s *Store) GetUserByUsernameGlobal(username string) ([]*User, error) {
 // 参数：tid=租户 ID；返回用户列表（按 ID 排序，PasswordHash 已清空脱敏）。
 func (s *Store) ListUsers(tid int64) ([]*User, error) {
 	rows, err := s.db.Query(
-		"SELECT id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, created_at, updated_at FROM users WHERE tenant_id=? ORDER BY id", tid)
+		"SELECT "+userCols+" FROM users WHERE tenant_id=? ORDER BY id", tid)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +141,7 @@ func (s *Store) ListUsers(tid int64) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		u.PasswordHash = "" // 列表接口脱敏：清除密码哈希
@@ -145,14 +150,62 @@ func (s *Store) ListUsers(tid int64) ([]*User, error) {
 	return out, nil
 }
 
-// UpdateUser 更新用户（显示名/角色/状态）。
-// 参数：id=用户主键 ID，tid=租户 ID，displayName=显示名，role=角色，status=状态。
-func (s *Store) UpdateUser(id, tid int64, displayName, role, status string) error {
+// UpdateUser 更新用户（显示名/角色/状态/组织）。
+// 参数：id=用户主键 ID，tid=租户 ID，displayName=显示名，role=角色，status=状态，orgID=所属组织 ID。
+func (s *Store) UpdateUser(id, tid int64, displayName, role, status string, orgID int64) error {
 	now := time.Now().Format(time.RFC3339)
 	_, err := s.db.Exec(
-		"UPDATE users SET display_name=?, role=?, status=?, updated_at=? WHERE id=? AND tenant_id=?",
-		displayName, role, status, now, id, tid)
+		"UPDATE users SET display_name=?, role=?, status=?, org_id=?, updated_at=? WHERE id=? AND tenant_id=?",
+		displayName, role, status, orgID, now, id, tid)
 	return err
+}
+
+// SetUserOrg 仅更新用户所属组织（组织树调整时用）。
+// 参数：id=用户主键 ID，tid=租户 ID，orgID=目标组织 ID（0=根组织）。
+func (s *Store) SetUserOrg(id, tid, orgID int64) error {
+	now := time.Now().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		"UPDATE users SET org_id=?, updated_at=? WHERE id=? AND tenant_id=?",
+		orgID, now, id, tid)
+	return err
+}
+
+// ListUsersByOrg 列出指定组织及其子孙组织内的全部用户（组织级数据归集）。
+// 参数：tid=租户 ID，orgIDs=目标组织及子孙组织 ID 集合；空集合表示不限组织（全部用户）。
+// 返回：用户列表（按 ID 排序，密码哈希已脱敏）。
+func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
+	var rows *sql.Rows
+	var err error
+	if len(orgIDs) == 0 {
+		rows, err = s.db.Query("SELECT "+userCols+" FROM users WHERE tenant_id=? ORDER BY id", tid)
+	} else {
+		// 构建 IN 占位符（仅限定给定组织 ID）
+		placeholders := ""
+		args := []interface{}{tid}
+		for i, id := range orgIDs {
+			if i > 0 {
+				placeholders += ","
+			}
+			placeholders += "?"
+			args = append(args, id)
+		}
+		rows, err = s.db.Query("SELECT "+userCols+" FROM users WHERE tenant_id=? AND org_id IN ("+placeholders+") ORDER BY id", args...)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			continue // 单行解析失败跳过
+		}
+		u.PasswordHash = "" // 列表接口脱敏：清除密码哈希
+		out = append(out, &u)
+	}
+	return out, nil
 }
 
 // ResetPassword 重置用户密码（写入新密码哈希）。
@@ -184,6 +237,6 @@ func (s *Store) EnsureAdmin(tid int64, username, passHash, displayName string) e
 		return nil
 	}
 	// 不存在则创建平台级管理员（tenant_id=0）
-	_, err := s.CreateUser(0, username, passHash, displayName, RoleAdmin, 0)
+	_, err := s.CreateUser(0, username, passHash, displayName, RoleAdmin, 0, 0)
 	return err
 }

@@ -123,15 +123,17 @@ async function restoreSession() {
   }
 }
 
-// 登录成功回调：写入当前用户
+// 登录成功回调：写入当前用户（切换账号时重置会话，防止串号）
 function onLogin(user: unknown) {
   authUser.value = user as AuthUser
+  store.reset()
 }
 
-// 退出登录：清空用户与 token
+// 退出登录：清空用户、token 与会话缓存
 function onLogout() {
   authUser.value = null
   setAuthToken('')
+  store.reset()
 }
 
 function logout() {

@@ -12,6 +12,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -25,6 +26,11 @@ import (
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {username, password}）。
 // 返回: success=true 时携带 token 与用户信息；失败返回 200 + success=false（统一不区分错误细节，防用户名枚举）。
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	// 暴力破解防护：同一 IP 连续失败超过阈值后进入冷却期
+	if s.loginLocked(r) {
+		writeJSON(w, 429, map[string]interface{}{"success": false, "message": "登录尝试过于频繁，请稍后再试"})
+		return
+	}
 	// 平台存储未初始化时拒绝登录
 	if s.Store == nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
@@ -71,11 +77,21 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "账号已停用"})
 		return
 	}
-	// 密码校验：比对存储的 bcrypt 哈希
+	// 密码校验：比对存储的 bcrypt 哈希（兼容历史 SHA-256）
 	if !auth.CheckPassword(u.PasswordHash, req.Password) {
+		// 暴力破解防护：记录失败次数
+		s.recordLoginFail(r)
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "用户名或密码错误"})
 		return
 	}
+	// 历史哈希自动升级：登录成功后若仍为 SHA-256 格式，改写为 bcrypt
+	if auth.NeedMigrateHash(u.PasswordHash) {
+		if err := s.Store.ResetPassword(u.ID, u.TenantID, auth.PasswordHash(req.Password)); err == nil {
+			u.PasswordHash = auth.PasswordHash(req.Password)
+		}
+	}
+	// 登录成功：清零失败计数
+	s.clearLoginFails(r)
 	// 签发有效期 24 小时的 JWT
 	tok, err := auth.Sign(u, 24*time.Hour)
 	if err != nil {
@@ -98,6 +114,27 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			"role": u.Role, "tenant_id": u.TenantID,
 		},
 	})
+}
+
+// loginLocked 判断当前请求 IP 是否处于登录冷却期。
+// 参数 r: HTTP 请求；返回 true 表示应拒绝登录（429）。
+func (s *Server) loginLocked(r *http.Request) bool {
+	return s.loginLimit.blocked(clientIP(r))
+}
+
+// recordLoginFail 记录当前请求 IP 一次登录失败。
+// 参数 r: HTTP 请求。
+func (s *Server) recordLoginFail(r *http.Request) {
+	if s.loginLimit == nil {
+		s.loginLimit = newLoginLimiter()
+	}
+	s.loginLimit.fail(clientIP(r))
+}
+
+// clearLoginFails 登录成功后清零当前请求 IP 的失败记录。
+// 参数 r: HTTP 请求。
+func (s *Server) clearLoginFails(r *http.Request) {
+	s.loginLimit.clear(clientIP(r))
 }
 
 // handleMe 当前用户信息接口：返回登录用户完整信息。
@@ -179,6 +216,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		DisplayName string `json:"display_name"` // 显示名称
 		Role        string `json:"role"`         // 角色：user/tenant_admin/super_admin/approver/admin
 		TenantID    int64  `json:"tenant_id"`    // 归属租户（仅超管可指定，默认生效租户）
+		OrgID       int64  `json:"org_id"`       // 所属组织 ID（0=根组织/未分配）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" || req.Password == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -207,7 +245,14 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	} else if auth.IsSuperAdmin(u) && req.TenantID > 0 {
 		tid = req.TenantID
 	}
-	nu, err := s.Store.CreateUser(tid, req.Username, auth.PasswordHash(req.Password), req.DisplayName, req.Role, u.ID)
+	// 组织归属校验：非平台级用户组织必须属于归属租户
+	if tid > 0 {
+		if err := s.validateOrg(tid, req.OrgID); err != nil {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+	}
+	nu, err := s.Store.CreateUser(tid, req.Username, auth.PasswordHash(req.Password), req.DisplayName, req.Role, u.ID, req.OrgID)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + err.Error()})
 		return
@@ -232,6 +277,7 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 		DisplayName string `json:"display_name"` // 显示名称（可为空=不修改）
 		Role        string `json:"role"`         // 目标角色（可为空=不修改）
 		Status      string `json:"status"`       // 状态：active/disabled
+		OrgID       *int64 `json:"org_id"`       // 所属组织 ID（nil=不修改，0=根组织）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -254,13 +300,27 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	tid := s.effTenant(r, u)
+	// 组织归属校验：非超管不能把用户移出本租户组织（租户隔离，仅校验组织存在性）
+	if req.OrgID != nil {
+		if err := s.validateOrg(tid, *req.OrgID); err != nil {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+	}
 	// 结构化变更轨迹：先取更新前值，再执行更新，记录 before/after diff
 	before := map[string]string{}
 	if target, err := s.Store.GetUser(req.ID, tid); err == nil {
 		before = map[string]string{"role": target.Role, "status": target.Status, "display_name": target.DisplayName}
 	}
 	beforeJSON, _ := json.Marshal(before)
-	if err := s.Store.UpdateUser(req.ID, tid, req.DisplayName, req.Role, req.Status); err != nil {
+	// 获取当前组织值用于保留未指定字段
+	orgID := int64(0)
+	if req.OrgID != nil {
+		orgID = *req.OrgID
+	} else if target, err := s.Store.GetUser(req.ID, tid); err == nil {
+		orgID = target.OrgID
+	}
+	if err := s.Store.UpdateUser(req.ID, tid, req.DisplayName, req.Role, req.Status, orgID); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
@@ -268,6 +328,23 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 	// 写入审计 diff（审计留痕：记录角色/状态变更前后值）
 	s.Store.LogAuditDiff(tid, u.ID, "user_update", "users", before["display_name"], string(beforeJSON), string(afterJSON))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// validateOrg 校验组织归属：组织必须属于指定租户（防越权挂到其他租户组织）。
+// 参数 tid: 租户 ID；orgID: 组织 ID（0=根组织，直接合法）。
+// 返回: nil 表示合法。
+func (s *Server) validateOrg(tid, orgID int64) error {
+	if orgID <= 0 {
+		return nil // 0=根组织/未分配，始终合法
+	}
+	org, err := s.Store.GetOrgByID(orgID)
+	if err != nil {
+		return fmt.Errorf("组织不存在")
+	}
+	if org.TenantID != tid {
+		return fmt.Errorf("组织不属于当前租户")
+	}
+	return nil
 }
 
 // handleAdminUserResetPassword 重置密码接口（仅本租户范围内）。

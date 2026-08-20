@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"translator/internal/auth"
 	"translator/internal/billing"
@@ -39,6 +40,8 @@ type Server struct {
 	mux    *http.ServeMux   // 路由分发器
 	// 系统级指标收集器（Prometheus /metrics）
 	metrics *Metrics
+	// 登录失败限流器（暴力破解防护）
+	loginLimit *loginLimiter
 }
 
 // NewServer 创建 HTTP 服务：初始化计费服务、注册路由并启动看门狗。
@@ -46,7 +49,7 @@ type Server struct {
 // st: 平台存储（可 nil）；ts: 租户存储（可 nil）。
 // 返回: 组装完成的 *Server 实例。
 func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist string, st *store.Store, ts *tenant.Store) *Server {
-	s := &Server{Cfg: cfg, Engine: eng, DB: db, Ten: ts, Store: st, Dist: dist, metrics: newMetrics()}
+	s := &Server{Cfg: cfg, Engine: eng, DB: db, Ten: ts, Store: st, Dist: dist, metrics: newMetrics(), loginLimit: newLoginLimiter()}
 	// 平台存储就绪时初始化计费服务（限流/配额/余额）
 	if st != nil {
 		s.Bill = billing.NewService(st)
@@ -75,6 +78,8 @@ func (s *Server) routes() {
 	s.routesTickets()
 	// ★ 管理后台（KB/流程/模型/策略/evals/系统健康/计费/API Key/开放 API）
 	s.routesAdmin()
+	// ★ 组织层级管理（管理结构展示层）
+	s.routesOrgs()
 	// 兜底路由：前端 SPA 静态资源
 	s.mux.HandleFunc("/", s.handleSPA)
 }
@@ -217,7 +222,22 @@ func (s *Server) routesOpenAPI() {
 // Handler 返回完整的 http.Handler（依次包裹指标/租户/CORS 中间件）。
 // 返回: 可交给 http.ListenAndServe 使用的 http.Handler。
 func (s *Server) Handler() http.Handler {
-	return s.withMetrics(s.withTenant(withCORS(s.mux)))
+	return s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.mux))))
+}
+
+// maxJSONBody 非 multipart 请求体上限（JSON 接口防超大请求；文件上传走 multipart 不受限）
+const maxJSONBody = 16 << 20 // 16MB
+
+// withBodyLimit 限制非 multipart 请求体大小（防滥用超大 JSON）。
+// 参数 next: 下一层 Handler。返回: 包装后的 Handler（超出上限时解码方返回错误）。
+func (s *Server) withBodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// multipart 文件上传由各 handler 自行控制大小，此处跳过
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "multipart/") {
+			r.Body = http.MaxBytesReader(w, r.Body, maxJSONBody)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // withMetrics 记录 HTTP 请求指标中间件（按路径标签计数）。
@@ -283,14 +303,19 @@ func (s *Server) effTenant(r *http.Request, u *store.User) int64 {
 	return 1
 }
 
-// withCORS 跨域中间件：允许任意来源访问（前后端分离部署）。
+// withCORS 跨域中间件：按白名单校验来源（同源部署天然放行；跨域仅允许配置的来源）。
 // 参数 next: 下一层 Handler。返回: 包装后的 Handler（OPTIONS 预检直接返回 200）。
-func withCORS(next http.Handler) http.Handler {
+func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 允许任意来源与常用方法/请求头（含租户切换与后台 Token 头）
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// 请求方法/头（含租户切换与后台 Token 头）
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-ID, X-Admin-Token")
+		// 来源校验：无 Origin 头（同源导航/非浏览器）直接放行
+		origin := r.Header.Get("Origin")
+		if origin == "" || s.corsAllowed(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
+		}
 		// 预检请求直接返回，不进入业务 Handler
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
@@ -298,6 +323,21 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// corsAllowed 判断请求来源是否在 CORS 白名单内。
+// 参数 origin: 请求 Origin 头值；返回 true 表示允许该跨域来源。
+func (s *Server) corsAllowed(origin string) bool {
+	// 无白名单配置时默认放行（保持向后兼容）
+	if s.Cfg == nil || len(s.Cfg.CORSOrigins) == 0 {
+		return true
+	}
+	for _, o := range s.Cfg.CORSOrigins {
+		if o == origin {
+			return true
+		}
+	}
+	return false
 }
 
 // authUser 从请求提取当前用户（JWT 校验）。未登录或 Token 无效返回 nil。

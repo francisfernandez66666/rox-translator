@@ -81,7 +81,7 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// 创建该租户的初始租户管理员账号（挂到新租户下；仅当提供了用户名/密码时）
 	if s.Store != nil && req.AdminUser != "" && req.AdminPass != "" {
-		if _, err := s.Store.CreateUser(t.ID, req.AdminUser, auth.PasswordHash(req.AdminPass), req.AdminUser+" 管理员", store.RoleTenantAdmin, u.ID); err != nil {
+		if _, err := s.Store.CreateUser(t.ID, req.AdminUser, auth.PasswordHash(req.AdminPass), req.AdminUser+" 管理员", store.RoleTenantAdmin, u.ID, 0); err != nil {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户已创建，但管理员账号创建失败: " + err.Error()})
 			return
 		}

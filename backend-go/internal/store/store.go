@@ -260,6 +260,17 @@ func (s *Store) migrate() error {
 			created_at TEXT,
 			resolved_at TEXT NOT NULL DEFAULT ''
 		)`,
+		// ---------- orgs 组织层级（管理结构展示层，根组织=租户） ----------
+		`CREATE TABLE IF NOT EXISTS orgs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id INTEGER NOT NULL DEFAULT 1,
+			parent_id INTEGER NOT NULL DEFAULT 0,    -- 0 = 根组织（对应租户本身）
+			name TEXT NOT NULL DEFAULT '',
+			created_at TEXT,
+			updated_at TEXT
+		)`,
+		// 组织树按租户查询索引
+		`CREATE INDEX IF NOT EXISTS idx_orgs_tenant ON orgs(tenant_id, parent_id)`,
 	}
 	for _, stmt := range stmts {
 		// 逐条幂等执行建表语句，失败即中止迁移
@@ -297,6 +308,8 @@ func (s *Store) migrateColumns() error {
 		{"rate_card", "provider", "ALTER TABLE rate_card ADD COLUMN provider TEXT NOT NULL DEFAULT '*"},
 		{"audit_logs", "before_val", "ALTER TABLE audit_logs ADD COLUMN before_val TEXT NOT NULL DEFAULT ''"},
 		{"audit_logs", "after_val", "ALTER TABLE audit_logs ADD COLUMN after_val TEXT NOT NULL DEFAULT ''"},
+		// 组织归属：用户挂到组织（0=未分配/根组织）
+		{"users", "org_id", "ALTER TABLE users ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, c := range cols {
 		// 判断列是否存在

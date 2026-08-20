@@ -222,6 +222,18 @@ export const useChatStore = defineStore('chat', () => {
     errorMessage.value = ''
   }
 
+  // 重置全部会话状态（登出/切换账号时调用，防止上个账户的翻译结果泄露）
+  function reset() {
+    if (abortController) {
+      abortController.abort()
+      abortController = null
+    }
+    messages.value = []
+    errorMessage.value = ''
+    isLoading.value = false
+    selectedLangs.value = ['en']
+  }
+
   // 切换翻译模型并持久化
   function setSelectedModel(model: string) {
     selectedModel.value = model
@@ -243,6 +255,7 @@ export const useChatStore = defineStore('chat', () => {
     sendExample,
     checkBackendHealth,
     clearMessages,
+    reset,
     setSelectedModel,
   }
 })

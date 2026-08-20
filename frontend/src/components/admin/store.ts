@@ -25,7 +25,7 @@ export function roleLevel(r?: string): number {
 // 角色中文名（后台侧边栏展示）
 export function roleName(r?: string) {
   if (r === 'super_admin' || r === 'admin') return '超级管理员'
-  if (r === 'tenant_admin' || r === 'approver') return '租户管理员'
+  if (r === 'tenant_admin' || r === 'approver') return '组织管理员'
   return '普通用户'
 }
 

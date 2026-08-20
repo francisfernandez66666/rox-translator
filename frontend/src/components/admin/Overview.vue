@@ -10,7 +10,7 @@
     <button class="ad-btn" style="margin-left: 8px" @click="openMetrics">📊 Prometheus 指标</button>
     <div v-if="health" class="ad-cards">
       <div class="ad-card"><b>{{ health.kb_entries }}</b><span>知识库条目</span></div>
-      <div class="ad-card"><b>{{ health.balance?.balance }}</b><span>租户余额 (token)</span></div>
+      <div class="ad-card"><b>{{ health.balance?.balance }}</b><span>组织余额 (token)</span></div>
       <div class="ad-card"><b>{{ health.flow_steps_enabled }}/{{ health.flow_steps_total }}</b><span>流程步骤启用</span></div>
       <div class="ad-card"><b>{{ health.usage ? Object.keys(health.usage).length : 0 }}</b><span>用量类型</span></div>
       <div class="ad-card"><b>{{ health.breaker_open ? '🔴 熔断' : '🟢 正常' }}</b><span>主模型状态</span></div>

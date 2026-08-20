@@ -12,7 +12,7 @@
       </select>
     </div>
     <table class="ad-table">
-      <thead><tr><th>级别</th><th>类型</th><th>租户</th><th>内容</th><th>状态</th><th>时间</th><th></th></tr></thead>
+      <thead><tr><th>级别</th><th>类型</th><th>组织</th><th>内容</th><th>状态</th><th>时间</th><th></th></tr></thead>
       <tbody>
         <tr v-for="a in alerts" :key="a.id">
           <td>{{ a.level }}</td><td>{{ a.kind }}</td><td>#{{ a.tenant_id }}</td><td>{{ a.message }}</td>
