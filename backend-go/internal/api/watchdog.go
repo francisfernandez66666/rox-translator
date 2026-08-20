@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"translator/internal/mail"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -118,7 +119,10 @@ func (s *Server) runWatchdogCheck() {
 				}
 				// 余额耗尽 → critical 级告警；低于阈值 → warning 级告警
 				if bal.Balance <= 0 {
-					_ = s.Store.CreateAlert(t.ID, "critical", "balance", "租户余额已耗尽，翻译服务将被暂停")
+					msg := "租户余额已耗尽，翻译服务将被暂停"
+					if s.Store.CreateAlert(t.ID, "critical", "balance", msg) == nil {
+						s.notifyAlert("余额耗尽告警（租户 #"+strconv.FormatInt(t.ID, 10)+"）", msg)
+					}
 				} else if bal.Balance < threshold {
 					_ = s.Store.CreateAlert(t.ID, "warning", "balance", "租户余额低于阈值")
 				}
@@ -129,7 +133,10 @@ func (s *Server) runWatchdogCheck() {
 	// 2. 模型可用性告警：主模型熔断状态检查
 	if s.Engine != nil && s.Engine.BreakerOpen() {
 		// 熔断中：创建 critical 级模型告警
-		_ = s.Store.CreateAlert(0, "critical", "model", "主翻译模型已熔断，正在使用备用模型")
+		msg := "主翻译模型已熔断，正在使用备用模型"
+		if s.Store.CreateAlert(0, "critical", "model", msg) == nil {
+			s.notifyAlert("翻译模型熔断告警", msg)
+		}
 	} else {
 		// 熔断已恢复 → 自动关闭历史 model 告警（避免重复堆积）
 		alerts, _ := s.Store.ListAlerts(0, "open", 100)
@@ -170,4 +177,25 @@ func parseInt(s string) (int, error) {
 func parseInt64(s string) (int64, error) {
 	n, err := strconv.ParseInt(s, 10, 64)
 	return n, err
+}
+
+// notifyAlert 关键告警邮件通知：向配置的收件人（系统配置 alert_email）发送告警邮件。
+// 收件人未配置时跳过（告警仍写入 alerts 表，后台可见）；邮件走 mail.Sender（未配置
+// SMTP 时为 Noop 打印日志，配置后发送真实邮件）。
+// 参数：subject=邮件主题，body=告警内容。
+func (s *Server) notifyAlert(subject, body string) {
+	recipients := ""
+	if v, _ := s.Store.GetConfig("alert_email"); v != "" {
+		recipients = v
+	}
+	if recipients == "" {
+		return // 未配置告警收件人，不发送
+	}
+	for _, to := range strings.Split(recipients, ",") {
+		to = strings.TrimSpace(to)
+		if to == "" {
+			continue
+		}
+		_ = s.mailer().Send(&mail.Message{To: to, Subject: subject, Body: body})
+	}
 }
