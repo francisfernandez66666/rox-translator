@@ -162,6 +162,13 @@ const baseZh: Dict = {
   'org.orgLabel': '归属部门',
   'org.roleLabel': '账号角色',
   'org.cascadeHint': '角色选项随所选部门自动收窄',
+  'audit.title': '审计日志',
+  'audit.hint': '本租户全部关键操作记录（登录/账号/组织/知识库/模型/订阅）',
+  'audit.allActions': '全部动作',
+  'audit.export': '导出 CSV',
+  'audit.operator': '操作者',
+  'audit.empty': '暂无审计记录',
+  'audit.tenant': '租户',
   'org.disableTenantConfirm': '确定停用租户「{name}」？该企业全部用户将无法登录。',
   'org.enableTenantConfirm': '确定启用租户「{name}」？',
   'org.deleteUserConfirm': '确定删除账号 {name}？该操作不可恢复。',
@@ -206,6 +213,7 @@ const baseZh: Dict = {
   'admin.globalModels': '🧠 全局模型',
   'admin.subscription': '💳 套餐详情',
   'admin.payOrders': '💳 套餐详情',
+  'admin.auditPanel': '📋 审计日志',
 }
 
 const baseEn: Dict = {
@@ -336,6 +344,13 @@ const baseEn: Dict = {
   'org.cascadeHint': 'Role options narrow by selected department',
   'org.disableTenantConfirm': 'Disable tenant "{name}"? All its users will be unable to sign in.',
   'org.enableTenantConfirm': 'Enable tenant "{name}"?',
+  'audit.title': 'Audit Log',
+  'audit.hint': 'All key operations of this tenant (login/account/org/KB/model/billing)',
+  'audit.allActions': 'All actions',
+  'audit.export': 'Export CSV',
+  'audit.operator': 'Operator',
+  'audit.empty': 'No audit records',
+  'audit.tenant': 'Tenant',
   'org.deleteUserConfirm': 'Delete account {name}? This cannot be undone.',
   'admin.backWorkspace': 'Translation Workspace',
   'admin.forbid': 'No admin permission. Please sign in with an admin account.',
@@ -378,6 +393,7 @@ const baseEn: Dict = {
   'admin.globalModels': '🧠 Global Models',
   'admin.subscription': '💳 Plan Details',
   'admin.payOrders': '💳 Plan Details',
+  'admin.auditPanel': '📋 Audit Log',
 }
 
 // 合并全部面板字典

@@ -19,10 +19,10 @@
     <div v-if="audit && audit.length" class="ad-audit">
       <h3>{{ t('overview.recentAudit') }}</h3>
       <table class="ad-table">
-        <thead><tr><th>{{ t('overview.colTime') }}</th><th>{{ t('overview.colAction') }}</th><th>{{ t('overview.colResource') }}</th><th>{{ t('overview.colDetail') }}</th><th>{{ t('overview.colChange') }}</th></tr></thead>
+        <thead><tr><th>{{ t('overview.colTime') }}</th><th>{{ t('audit.tenant') }}</th><th>{{ t('overview.colAction') }}</th><th>{{ t('overview.colResource') }}</th><th>{{ t('overview.colDetail') }}</th><th>{{ t('overview.colChange') }}</th></tr></thead>
         <tbody>
           <tr v-for="l in audit" :key="l.id">
-            <td>{{ fmtTime(l.created_at) }}</td><td>{{ l.action }}</td><td>{{ l.resource }}</td><td>{{ l.detail }}</td>
+            <td>{{ fmtTime(l.created_at) }}</td><td>{{ l.tenant_name || '—' }}<span v-if="l.username" class="ad-hint">@{{ l.username }}</span></td><td>{{ l.action }}</td><td>{{ l.resource }}</td><td>{{ l.detail }}</td>
             <td class="ad-td">
               <span v-if="l.before_val && l.after_val" class="ad-diff">{{ tpl('overview.diffOldNew', { old: shortJSON(l.before_val), new: shortJSON(l.after_val) }) }}</span>
               <span v-else>—</span>
