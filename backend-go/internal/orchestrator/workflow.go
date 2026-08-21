@@ -87,6 +87,7 @@ type ticketPayload struct {
 	Sources      map[string]string      `json:"sources"`      // 语言 → 来源（kb/model）
 	Mode         string                 `json:"mode"`         // 匹配模式标识
 	EvalScores   map[string]float64     `json:"eval_scores"`  // 语言 → 评估总分
+	ReviewEvalScores map[string]float64 `json:"review_eval_scores,omitempty"` // 语言 → 校对评估总分
 	Gate         *gate.GateResult       `json:"gate"`         // Gate 校验结果
 	Culture      *culture.CultureResult `json:"culture"`      // 语言文化闸门结果
 }
@@ -247,10 +248,31 @@ func (w *Workflow) runReview(ctx context.Context, t *store.Ticket) error {
 	return nil
 }
 
-// runEvalsReview 审校评估（复用初翻评估逻辑）。
+// runEvalsReview 校对评估（与初翻评估同流程，但 taskType=review → 使用校对 Evals 模型）。
 // 参数：ctx=上下文，t=工单对象。
 func (w *Workflow) runEvalsReview(ctx context.Context, t *store.Ticket) error {
-	return w.runEvalsInitial(ctx, t)
+	p := w.loadPayload(t)
+	if p == nil {
+		return nil
+	}
+	if w.Engine.Evals == nil {
+		return nil
+	}
+	for lc, tr := range p.Translations {
+		if tr == "" {
+			continue
+		}
+		total, scores, err := w.Engine.Evals.Evaluate(ctx, p.SourceText, tr, lc, "review")
+		if err == nil && p.ReviewEvalScores == nil {
+			p.ReviewEvalScores = map[string]float64{}
+		}
+		if err == nil {
+			p.ReviewEvalScores[lc] = total
+			_, _ = w.Engine.Evals.SaveRecord(ctx, t.TenantID, t.CreatedBy, t.ID, "review", lc, p.SourceText, tr, scores, total, "passed")
+		}
+	}
+	w.savePayload(t, p)
+	return nil
 }
 
 // runGate 8 项硬校验。

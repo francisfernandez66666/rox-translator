@@ -295,9 +295,9 @@ func (s *Server) handleStageModels(w http.ResponseWriter, r *http.Request) {
 			_ = json.Unmarshal([]byte(v), &stages)
 		}
 	}
-	// 掩码所有 API Key 再返回（密钥仅保存后返回一次）
+	// 掩码所有 API Key 再返回（密钥仅保存后返回一次）；输出业务五阶段
 	out := config.StageModels{}
-	for _, k := range []string{config.StageKBMatch, config.StageAIInitial, config.StageEvals, config.StageReview} {
+	for _, k := range []string{config.StageAIInitial, config.StageKBEmbed, config.StageInitialEvals, config.StageReview, config.StageReviewEvals} {
 		sm := stages[k]
 		out[k] = config.StageModel{
 			Provider: sm.Provider,

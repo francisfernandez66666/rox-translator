@@ -6,8 +6,37 @@
   <section class="ad-section">
     <h2>{{ t('models.title') }}</h2>
 
-    <!-- 单模型配置（租户 BYOK + 超管全局） -->
-    <div class="ad-chart-card">
+    <!-- 超管：业务五阶段模型配置（每卡带供应商预设模板） -->
+    <template v-if="isSuper">
+      <div v-for="st in stageCards" :key="st.key" class="ad-chart-card">
+        <h3>{{ st.title }}</h3>
+        <div class="ad-hint">{{ st.hint }}</div>
+        <div class="ad-row" style="margin-bottom:8px">
+          <select v-model="stForm[st.key].preset" class="ad-input ad-mini-w" @change="applyStagePreset(st.key)">
+            <option value="">{{ t('models.presetPlaceholder') }}</option>
+            <option value="openai">OpenAI (ChatGPT)</option>
+            <option value="gemini">Google Gemini</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="siliconflow">SiliconFlow</option>
+            <option value="zhipu">Zhipu GLM</option>
+          </select>
+          <span v-if="stActive(st.key)" class="ad-hint" style="color:#1a7f37">✓ {{ t('models.stageConfigured') }}</span>
+        </div>
+        <label class="ad-label">{{ t('models.apiBase') }}</label>
+        <input v-model="stForm[st.key].api_base" class="ad-input ad-wide" :placeholder="t('models.apiBasePlaceholder')" />
+        <label class="ad-label">{{ t('models.apiKey') }}</label>
+        <input v-model="stForm[st.key].api_key" class="ad-input ad-wide" :placeholder="t('models.stageApiKeyKeep')" />
+        <label class="ad-label">{{ t('models.modelName') }}</label>
+        <input v-model="stForm[st.key].model" class="ad-input ad-wide" :placeholder="t('models.modelNamePlaceholder')" />
+      </div>
+      <div class="ad-row">
+        <button class="ad-btn ad-btn-green" @click="saveStages">{{ t('models.saveStages') }}</button>
+        <span class="ad-hint">{{ stageHint }}</span>
+      </div>
+    </template>
+
+    <!-- 租户 BYOK 单模型配置 -->
+    <div v-if="!isSuper" class="ad-chart-card">
       <h3>{{ t('models.onlineTitle') }}</h3>
       <div class="ad-hint">{{ t('models.onlineHint') }}</div>
       <div class="ad-row">
@@ -29,8 +58,8 @@
       <button class="ad-btn" @click="saveModels">{{ t('models.saveModel') }}</button>
     </div>
 
-    <!-- 多供应商路由（租户 BYOK + 超管全局）：ChatGPT/Gemini 等 OpenAI 兼容端点 -->
-    <div class="ad-chart-card">
+    <!-- 多供应商路由（租户 BYOK）：ChatGPT/Gemini 等 OpenAI 兼容端点 -->
+    <div v-if="!isSuper" class="ad-chart-card">
       <h3>{{ t('models.routingTitle') }}</h3>
       <div class="ad-hint">{{ t('models.routingHint') }}</div>
       <div class="ad-row" style="margin-bottom:8px">
@@ -56,22 +85,6 @@
         <button class="ad-btn ad-btn-green" @click="saveRoutes">{{ t('models.saveRoutes') }}</button>
       </div>
       <p class="ad-hint">{{ routeForm.length ? tpl('models.routesActive', { count: routeForm.length, main: (routeForm.find(r => r.weight > 0)?.model || routeForm[0]?.model || '—') }) : t('models.routesNone') }}</p>
-    </div>
-
-    <div v-if="isSuper" class="ad-chart-card">
-      <h3>{{ t('models.stageTitle') }}</h3>
-      <div class="ad-hint">{{ t('models.stageHint') }}</div>
-      <div v-for="(label, k) in stageDefs" :key="k" class="ad-stage-card">
-        <div class="ad-stage-title">{{ label }}</div>
-        <input v-model="stageForm[k]!.provider" :placeholder="t('models.stageProvider')" class="ad-input ad-wide" />
-        <div class="ad-row">
-          <input v-model="stageForm[k]!.api_base" :placeholder="t('models.stageApiBasePlaceholder')" class="ad-input" style="flex:1" />
-          <input v-model="stageForm[k]!.model" :placeholder="t('models.stageModelPlaceholder')" class="ad-input" style="flex:1" />
-        </div>
-        <input v-model="stageForm[k]!.api_key" :placeholder="t('models.stageApiKeyPlaceholder')" class="ad-input ad-wide" />
-      </div>
-      <p class="ad-hint">{{ stageActiveCount ? tpl('models.stageActive', { count: stageActiveCount }) : t('models.stageNone') }}</p>
-      <button class="ad-btn ad-btn-green" @click="saveStages">{{ t('models.saveStages') }}</button>
     </div>
 
     <div class="ad-chart-card">
@@ -128,18 +141,35 @@ function applyRoutePreset() {
   }
 }
 
-// 分阶段模型：kb_match/ai_initial/evals/review
-const stageDefs: Record<string, string> = {
-  kb_match: t('models.stageKbMatch'),
-  ai_initial: t('models.stageAiInitial'),
-  evals: t('models.stageEvals'),
-  review: t('models.stageReview'),
+// 业务五阶段（面向翻译流程的模型配置；每阶段独立端点/密钥/模型）
+const stageCards = [
+  { key: 'ai_initial', title: t('models.s5Initial'), hint: t('models.s5InitialHint') },
+  { key: 'kb_embed', title: t('models.s5Embed'), hint: t('models.s5EmbedHint') },
+  { key: 'initial_evals', title: t('models.s5InitialEvals'), hint: t('models.s5InitialEvalsHint') },
+  { key: 'review', title: t('models.s5Review'), hint: t('models.s5ReviewHint') },
+  { key: 'review_evals', title: t('models.s5ReviewEvals'), hint: t('models.s5ReviewEvalsHint') },
+]
+interface StageCfg { preset: string; provider: string; api_base: string; api_key: string; model: string }
+const stForm = ref<Record<string, StageCfg>>({})
+for (const c of stageCards) {
+  stForm.value[c.key] = { preset: '', provider: c.key, api_base: '', api_key: '', model: '' }
 }
-const stageForm = ref<Record<string, { provider: string; api_base: string; api_key: string; model: string }>>({})
-for (const k of Object.keys(stageDefs)) {
-  stageForm.value[k] = { provider: '', api_base: '', api_key: '', model: '' }
+// 应用供应商预设：自动填 API 地址 + 模型名（Key 留给用户填）
+function applyStagePreset(key: string) {
+  const p = providerPresets[stForm.value[key].preset]
+  if (p) {
+    stForm.value[key].api_base = p.api_base
+    stForm.value[key].model = key === 'kb_embed' ? 'embedding-2' : p.model
+  }
 }
-const stageActiveCount = computed(() => Object.values(stageForm.value).filter((s: any) => s.api_base && s.model).length)
+// 阶段是否已配置（有地址+模型名）
+function stActive(key: string) {
+  return !!(stForm.value[key].api_base && stForm.value[key].model)
+}
+const stageHint = computed(() => {
+  const n = stageCards.filter(c => stActive(c.key)).length
+  return n ? tpl('models.stageActive', { count: n }) : t('models.stageNone')
+})
 
 async function loadModels() {
   const r = await adminModels()
@@ -170,17 +200,26 @@ async function saveRoutes() {
   alert(t('models.savedRoutes'))
   await loadModels()
 }
+// 加载五阶段配置（掩码 Key 回显；preset 字段不落库）
 async function loadStages() {
   const r = await stageModels()
   if (r.success) {
     const st = (r as any).stages || {}
-    for (const k of Object.keys(stageDefs)) {
-      stageForm.value[k] = { provider: st[k]?.provider || '', api_base: st[k]?.api_base || '', api_key: st[k]?.api_key || '', model: st[k]?.model || '' }
+    for (const c of stageCards) {
+      const s = st[c.key] || {}
+      stForm.value[c.key] = { preset: '', provider: c.key, api_base: s.api_base || '', api_key: s.api_key || '', model: s.model || '' }
     }
   }
 }
+// 保存五阶段：剥离前端专有字段，仅提交 provider/api_base/api_key/model
 async function saveStages() {
-  const r = await stageModelsSave(stageForm.value)
+  const payload: Record<string, any> = {}
+  for (const c of stageCards) {
+    const { preset, ...rest } = stForm.value[c.key]
+    void preset
+    payload[c.key] = rest
+  }
+  const r = await stageModelsSave(payload)
   if (!r.success) { alert(r.message); return }
   alert(t('models.savedStages'))
   await loadStages()

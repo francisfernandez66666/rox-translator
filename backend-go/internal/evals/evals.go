@@ -52,12 +52,25 @@ func (e *Evaluator) ShouldSample() bool {
 	return e.SampleRate >= 1.0 // 当前实现：仅 100% 抽样才评估
 }
 
-// resolveJudge 解析 Judge 模型的 base/key/model（优先级：stage_models.evals → ModelRoutes → Online*）。
-func (e *Evaluator) resolveJudge() (base, key, model string) {
+// resolveJudge 解析 Judge 模型的 base/key/model。
+// 优先级：stage_models[初翻评估/校对评估] → stage_models.evals（旧键兼容）→ ModelRoutes → Online*。
+// 参数 taskType: "translate"=初翻评估（initial_evals），"review"=校对评估（review_evals）。
+func (e *Evaluator) resolveJudge(taskType string) (base, key, model string) {
+	stage := config.StageInitialEvals
+	if taskType == "review" {
+		stage = config.StageReviewEvals
+	}
 	if e.Store != nil {
 		if raw, err := e.Store.GetConfig("stage_models"); err == nil && raw != "" {
 			var m config.StageModels
 			if json.Unmarshal([]byte(raw), &m) == nil {
+				if sm, ok := m[stage]; ok && sm.APIBase != "" && sm.Model != "" {
+					if sm.APIKey != "" {
+						return sm.APIBase, sm.APIKey, sm.Model
+					}
+					return sm.APIBase, e.Cfg.OnlineAPIKey, sm.Model
+				}
+				// 旧键兜底：未区分初翻/校对评估时共用 evals 阶段配置
 				if sm, ok := m[config.StageEvals]; ok && sm.APIBase != "" && sm.Model != "" {
 					if sm.APIKey != "" {
 						return sm.APIBase, sm.APIKey, sm.Model
@@ -108,7 +121,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, source, translation, targetLan
 		source, targetLang, translation)
 
 	messages := []map[string]string{{"role": "user", "content": prompt}}
-	base, key, model := e.resolveJudge()
+	base, key, model := e.resolveJudge(taskType)
 	content, _, err := e.LLM.CallChat(ctx, base, key, model, messages, 200, false, 0.0)
 	if err != nil {
 		return 0, nil, err

@@ -30,8 +30,13 @@ type ProviderConfig struct {
 const (
 	StageKBMatch   = "kb_match"   // 知识库匹配兜底翻译
 	StageAIInitial = "ai_initial" // 初翻
-	StageEvals     = "evals"      // LLM-as-Judge 评估
+	StageEvals     = "evals"      // LLM-as-Judge 评估（旧键，兼容保留）
 	StageReview    = "review"     // 审校
+
+	// 业务五阶段（面向流程的模型配置）
+	StageKBEmbed      = "kb_embed"       // 知识库 Embed 向量模型
+	StageInitialEvals = "initial_evals"  // 初翻 Evals 评估模型
+	StageReviewEvals  = "review_evals"   // 校对 Evals 评估模型
 )
 
 // StageModel 单个流程阶段的模型配置（stage_models 中的一项）
