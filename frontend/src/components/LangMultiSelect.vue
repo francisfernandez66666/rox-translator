@@ -68,6 +68,7 @@ const customText = ref('')
 const rootRef = ref<HTMLElement | null>(null)
 
 // 切换勾选（other 为「更多语言」开关位，不入数组）
+// toggle 勾选/取消语言（other 为「更多语言」开关位，不入数组）
 function toggle(lang: string) {
   if (lang === 'other') return
   const sel = props.modelValue.includes(lang)
@@ -77,6 +78,7 @@ function toggle(lang: string) {
 }
 
 // 添加自定义语言
+// addCustom 添加手输的自定义语言代码/名称
 function addCustom() {
   const raw = customText.value.trim()
   if (!raw) return
@@ -87,6 +89,7 @@ function addCustom() {
 }
 
 // 显示名：优先 i18n lang.<code>，回退本地映射
+// langLabel 显示名：优先 i18n lang.<code>，回退本地映射
 function langLabel(code: string, fallback?: string): string {
   const v = t(`lang.${code}`)
   return v !== `lang.${code}` ? v : (fallback || code)
@@ -107,6 +110,7 @@ const btnLabel = computed(() => {
 })
 
 // 从后端加载 KB 支持的语言（新语言升级进 KB 区）
+// loadTranslationLangs 从后端加载 KB 支持的语言（新语言升级进 KB 区）
 async function loadTranslationLangs() {
   try {
     const resp = await fetch('/api/translation/langs')
@@ -124,6 +128,7 @@ async function loadTranslationLangs() {
 }
 
 // 点击外部关闭下拉
+// onClickOutside 点击外部关闭下拉
 function onClickOutside(e: MouseEvent) {
   if (rootRef.value && !rootRef.value.contains(e.target as Node)) open.value = false
 }

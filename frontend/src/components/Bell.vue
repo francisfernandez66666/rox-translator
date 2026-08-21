@@ -30,12 +30,14 @@ import { notifications, notificationsUnread, notificationRead, notificationsRead
 import { t } from '@/i18n'
 import { fmtTime } from './admin/ui'
 
+// 下拉显隐 / 未读数 / 列表数据
 const open = ref(false)
 const unread = ref(0)
 const list = ref<any[]>([])
 let timer: number | undefined
 
 // 拉取未读数（轮询）
+// poll 轮询未读数（30s 周期）
 async function poll() {
   try {
     const r = await notificationsUnread()
@@ -44,12 +46,14 @@ async function poll() {
 }
 
 // 拉取列表
+// load 拉取站内信列表
 async function load() {
   const r = await notifications()
   if (r.success) list.value = (r as any).notifications || []
 }
 
 // 单条已读
+// readOne 点击条目标记已读（未读才请求）
 async function readOne(n: any) {
   if (!n.read_at) {
     await notificationRead(n.id)
@@ -59,6 +63,7 @@ async function readOne(n: any) {
 }
 
 // 全部已读
+// readAll 全部标记已读并刷新
 async function readAll() {
   await notificationsReadAll()
   await Promise.all([load(), poll()])
