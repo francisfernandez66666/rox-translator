@@ -705,11 +705,26 @@ func buildExamplesPrompt(zhText, targetLang string, examples []*kb.Row) string {
 }
 
 // resolveModel 解析当前租户的模型配置；未配置租户级时回退全局默认。
+// 优先级：租户多供应商路由（BYOK）→ 租户单模型 → 全局 ModelRoutes → 全局默认。
 // 若配置了 ModelRoutes 路由策略，则按权重选取主模型，失败后调用方按 resolveRouteFallbacks 降级。
 func (e *Engine) resolveModel(ctx context.Context) (base, key, model string) {
 	if e.Ten != nil {
-		if mc, err := e.Ten.GetModelConfig(e.tenantID(ctx)); err == nil && mc.Model != "" && mc.APIBase != "" {
-			return mc.APIBase, mc.APIKey, mc.Model
+		if mc, err := e.Ten.GetModelConfig(e.tenantID(ctx)); err == nil {
+			// 租户 BYOK 多供应商路由优先（ChatGPT/Gemini 等 OpenAI 兼容端点）
+			if len(mc.Routes) > 0 {
+				best, bestW := mc.Routes[0], mc.Routes[0].Weight
+				for _, r := range mc.Routes[1:] {
+					if r.Weight > bestW {
+						best, bestW = r, r.Weight
+					}
+				}
+				if best.APIBase != "" && best.Model != "" {
+					return best.APIBase, best.APIKey, best.Model
+				}
+			}
+			if mc.Model != "" && mc.APIBase != "" {
+				return mc.APIBase, mc.APIKey, mc.Model
+			}
 		}
 	}
 	if len(e.Cfg.ModelRoutes) > 0 {
@@ -717,6 +732,16 @@ func (e *Engine) resolveModel(ctx context.Context) (base, key, model string) {
 		return p.APIBase, p.APIKey, p.Model
 	}
 	return e.Cfg.OnlineAPIBase, e.Cfg.OnlineAPIKey, e.Cfg.OnlineModel
+}
+
+// resolveTenantRoutes 返回租户 BYOK 多供应商路由（供降级链使用）；无则返回全局路由。
+func (e *Engine) resolveTenantRoutes(ctx context.Context) []tenant.Route {
+	if e.Ten != nil {
+		if mc, err := e.Ten.GetModelConfig(e.tenantID(ctx)); err == nil && len(mc.Routes) > 0 {
+			return mc.Routes
+		}
+	}
+	return nil
 }
 
 // resolveStageModel 解析指定流程阶段的独立模型配置（system_config.stage_models，超管维护）。
@@ -847,9 +872,28 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 
 	// 模型路由策略：配置了多供应商时，主模型失败按权重降序逐一降级（阶段模型独立时不走路由链）
 	var routeFallbacks []config.ProviderConfig
-	if !stageActive && len(e.Cfg.ModelRoutes) > 0 {
-		primary := e.pickPrimaryRoute()
-		routeFallbacks = e.resolveRouteFallbacks(primary)
+	if !stageActive {
+		// 租户 BYOK 多供应商路由优先（ChatGPT/Gemini 等 OpenAI 兼容端点）
+		if tr := e.resolveTenantRoutes(ctx); len(tr) > 0 {
+			seen := map[string]bool{}
+			for _, r := range tr {
+				key := r.APIBase + "|" + r.Model
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				routeFallbacks = append(routeFallbacks, config.ProviderConfig{Provider: r.Provider, APIBase: r.APIBase, APIKey: r.APIKey, Model: r.Model, Weight: r.Weight})
+			}
+			// 按权重降序（与全局路由降级链语义一致）
+			for i := 1; i < len(routeFallbacks); i++ {
+				for j := i; j > 0 && routeFallbacks[j].Weight > routeFallbacks[j-1].Weight; j-- {
+					routeFallbacks[j], routeFallbacks[j-1] = routeFallbacks[j-1], routeFallbacks[j]
+				}
+			}
+		} else if len(e.Cfg.ModelRoutes) > 0 {
+			primary := e.pickPrimaryRoute()
+			routeFallbacks = e.resolveRouteFallbacks(primary)
+		}
 	}
 
 	// Hunyuan-MT 不支持的语种 → 降级模型

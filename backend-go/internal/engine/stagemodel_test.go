@@ -14,6 +14,7 @@ import (
 
 	"translator/internal/config"
 	"translator/internal/store"
+	"translator/internal/tenant"
 )
 
 func newTestStore(t *testing.T) *store.Store {
@@ -86,5 +87,64 @@ func TestResolveStageModelKeyInherit(t *testing.T) {
 	_, key, model, ok := e.resolveStageModel(ctx, config.StageEvals)
 	if !ok || key != "global-key" || model != "judge" {
 		t.Fatalf("密钥继承结果不符: key=%s model=%s ok=%v", key, model, ok)
+	}
+}
+
+// TestResolveModelTenantRoutes 租户 BYOK 多供应商路由优先于单模型/全局（Req1 扩展：ChatGPT/Gemini 等）。
+func TestResolveModelTenantRoutes(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("打开内存数据库失败: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE tenants (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		"code" TEXT UNIQUE NOT NULL,
+		"name" TEXT NOT NULL DEFAULT '',
+		"status" TEXT NOT NULL DEFAULT 'active',
+		"expires_at" TEXT NOT NULL DEFAULT '',
+		"permissions" TEXT NOT NULL DEFAULT '{}',
+		"created_at" TEXT,
+		"updated_at" TEXT
+	)`); err != nil {
+		t.Fatalf("建 tenants 表失败: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO tenants (code,name,status,expires_at,permissions) VALUES ('t1','T1','active','','{}')`); err != nil {
+		t.Fatalf("插入租户失败: %v", err)
+	}
+	ts, err := tenant.NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore 失败: %v", err)
+	}
+	// 全局默认（不配 ModelRoutes）
+	cfg := config.Default()
+	e := &Engine{Ten: ts, Cfg: cfg}
+	ctx := tenant.WithTenant(context.Background(), 1)
+
+	// 1. 未配置租户模型 → 回退全局默认
+	base, key, model := e.resolveModel(ctx)
+	if model != cfg.OnlineModel {
+		t.Fatalf("未配置租户时回退全局失败: %s", model)
+	}
+
+	// 2. 租户配置多供应商路由（BYOK）→ 优先租户路由（取权重最高）
+	err = ts.SetModelConfig(1, tenant.ModelConfig{
+		APIBase: "https://single.example", APIKey: "sk-single", Model: "single-model",
+		Routes: []tenant.Route{
+			{Provider: "openai", APIBase: "https://api.openai.com/v1", APIKey: "sk-openai", Model: "gpt-4o-mini", Weight: 2},
+			{Provider: "gemini", APIBase: "https://generativelanguage.googleapis.com/v1beta/openai", APIKey: "gem-key", Model: "gemini-1.5-flash", Weight: 1},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SetModelConfig 失败: %v", err)
+	}
+	base, key, model = e.resolveModel(ctx)
+	if base != "https://api.openai.com/v1" || key != "sk-openai" || model != "gpt-4o-mini" {
+		t.Fatalf("租户路由未优先: base=%s key=%s model=%s", base, key, model)
+	}
+	// 租户路由降级链应返回全部路由（按权重降序）
+	tr := e.resolveTenantRoutes(ctx)
+	if len(tr) != 2 || tr[0].Model != "gpt-4o-mini" {
+		t.Fatalf("resolveTenantRoutes 异常: %+v", tr)
 	}
 }

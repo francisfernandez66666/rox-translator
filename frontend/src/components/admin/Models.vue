@@ -6,8 +6,20 @@
   <section class="ad-section">
     <h2>{{ t('models.title') }}</h2>
 
-    <div v-if="isSuper" class="ad-chart-card">
+    <!-- 单模型配置（租户 BYOK + 超管全局） -->
+    <div class="ad-chart-card">
       <h3>{{ t('models.onlineTitle') }}</h3>
+      <div class="ad-hint">{{ t('models.onlineHint') }}</div>
+      <div class="ad-row">
+        <select v-model="preset" class="ad-input ad-mini-w" @change="applyPreset">
+          <option value="">{{ t('models.presetPlaceholder') }}</option>
+          <option value="openai">OpenAI (ChatGPT)</option>
+          <option value="gemini">Google Gemini</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="siliconflow">SiliconFlow</option>
+          <option value="zhipu">Zhipu GLM</option>
+        </select>
+      </div>
       <label class="ad-label">{{ t('models.apiBase') }}</label>
       <input v-model="mForm.api_base" class="ad-input ad-wide" />
       <label class="ad-label">{{ t('models.apiKey') }}</label>
@@ -17,9 +29,20 @@
       <button class="ad-btn" @click="saveModels">{{ t('models.saveModel') }}</button>
     </div>
 
-    <div v-if="isSuper" class="ad-chart-card">
+    <!-- 多供应商路由（租户 BYOK + 超管全局）：ChatGPT/Gemini 等 OpenAI 兼容端点 -->
+    <div class="ad-chart-card">
       <h3>{{ t('models.routingTitle') }}</h3>
       <div class="ad-hint">{{ t('models.routingHint') }}</div>
+      <div class="ad-row" style="margin-bottom:8px">
+        <select v-model="routePreset" class="ad-input ad-mini-w" @change="applyRoutePreset">
+          <option value="">{{ t('models.presetPlaceholder') }}</option>
+          <option value="openai">OpenAI (ChatGPT)</option>
+          <option value="gemini">Google Gemini</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="siliconflow">SiliconFlow</option>
+          <option value="zhipu">Zhipu GLM</option>
+        </select>
+      </div>
       <div v-for="(r, i) in routeForm" :key="i" class="ad-route-row">
         <input v-model="r.provider" :placeholder="t('models.providerPlaceholder')" class="ad-input" />
         <input v-model="r.api_base" :placeholder="t('models.apiBasePlaceholder')" class="ad-input" style="flex:1" />
@@ -66,7 +89,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { adminModels, adminModelsSave, modelRoutes, modelRoutesSave, adminPolicy, adminPolicySave, stageModels, stageModelsSave } from '@/api'
+import { adminModels, adminModelsSave, adminPolicy, adminPolicySave, stageModels, stageModelsSave } from '@/api'
 import { activeTenantId, isSuper } from './store'
 import { t, tpl } from '@/i18n'
 
@@ -74,8 +97,36 @@ import { t, tpl } from '@/i18n'
 const mForm = ref({ api_base: '', api_key: '', model: '' })
 // 翻译策略参数：高/中相似度阈值、评测通过分
 const pForm2 = ref({ high_sim: 0.9, med_sim: 0.75, evals_pass_threshold: 75 })
-// 多供应商路由表（权重路由/降级链）
+// 多供应商路由表（权重路由/降级链；租户 BYOK + 超管全局）
 const routeForm = ref<any[]>([])
+// 常用 LLM 供应商预设（OpenAI 兼容格式，含 ChatGPT/Gemini）
+const providerPresets: Record<string, { api_base: string; model: string }> = {
+  openai: { api_base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  gemini: { api_base: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-1.5-flash' },
+  deepseek: { api_base: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  siliconflow: { api_base: 'https://api.siliconflow.cn/v1', model: 'tencent/Hunyuan-MT-7B' },
+  zhipu: { api_base: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
+}
+// 单模型预设选择器
+const preset = ref('')
+const routePreset = ref('')
+
+// 应用单模型预设：填入 api_base 与 model（Key 留空由用户填）
+function applyPreset() {
+  const p = providerPresets[preset.value]
+  if (p) {
+    mForm.value.api_base = p.api_base
+    mForm.value.model = p.model
+  }
+}
+// 应用路由预设：追加一条供应商路由（Key 留空由用户填）
+function applyRoutePreset() {
+  const p = providerPresets[routePreset.value]
+  if (p) {
+    routeForm.value.push({ provider: routePreset.value, api_base: p.api_base, api_key: '', model: p.model, weight: 0 })
+    routePreset.value = ''
+  }
+}
 
 // 分阶段模型：kb_match/ai_initial/evals/review
 const stageDefs: Record<string, string> = {
@@ -92,12 +143,16 @@ const stageActiveCount = computed(() => Object.values(stageForm.value).filter((s
 
 async function loadModels() {
   const r = await adminModels()
-  if (r.success) mForm.value = (r as any).model
+  if (r.success) {
+    mForm.value = (r as any).model
+    routeForm.value = (r as any).routes || []
+  }
 }
 async function saveModels() {
-  const r = await adminModelsSave(mForm.value)
+  const r = await adminModelsSave({ ...mForm.value, routes: routeForm.value })
   if (!r.success) { alert(r.message); return }
   alert(t('models.savedModels'))
+  await loadModels()
 }
 async function loadPolicy() {
   const r = await adminPolicy()
@@ -108,16 +163,12 @@ async function savePolicy() {
   if (!r.success) { alert(r.message); return }
   alert(t('models.savedPolicy'))
 }
-async function loadRoutes() {
-  const r = await modelRoutes()
-  if (r.success) routeForm.value = (r as any).routes || []
-}
 async function saveRoutes() {
   const valid = routeForm.value.filter((rt: any) => rt.api_base && rt.model)
-  const r = await modelRoutesSave({ routes: valid })
+  const r = await adminModelsSave({ routes: valid })
   if (!r.success) { alert(r.message); return }
   alert(t('models.savedRoutes'))
-  await loadRoutes()
+  await loadModels()
 }
 async function loadStages() {
   const r = await stageModels()
@@ -137,8 +188,10 @@ async function saveStages() {
 
 async function loadAll() {
   await loadPolicy()
+  // 单模型 + 多供应商路由：租户管理员（BYOK）与超管都可配置
+  await loadModels()
   if (isSuper.value) {
-    await Promise.all([loadModels(), loadRoutes(), loadStages()])
+    await loadStages()
   }
 }
 onMounted(loadAll)

@@ -10,8 +10,11 @@ export async function adminModels(): Promise<AdminResp> {
   return request('/api/admin/models', { headers: authHeaders() })
 }
 
-// 保存在线模型配置
-export async function adminModelsSave(data: { api_base: string; api_key: string; model: string }): Promise<AdminResp> {
+// 保存在线模型配置（租户 BYOK：单模型 + 多供应商路由）
+export async function adminModelsSave(data: {
+  api_base?: string; api_key?: string; model?: string;
+  routes?: { provider: string; api_base: string; api_key: string; model: string; weight: number }[]
+}): Promise<AdminResp> {
   return request('/api/admin/models/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
