@@ -1,18 +1,21 @@
 <!-- ============================================================================
-   components/AdminDashboard.vue — 管理后台壳组件
+   components/AdminDashboard.vue — 管理后台壳组件（按角色分工作台）
    职责：仅负责布局与导航编排，不做任何业务数据加载
-   - 顶部一级分类（经营/组织/内容/引擎/开放）+ 组内左侧面板列表 + <component :is> 渲染
-   - 租户切换器（超管）+ 用户信息 + 退出登录
+   - 三种工作台按角色自动切换（扁平导航，无二级分类）：
+     · 超管（L4）平台运营：租户/套餐/订单/组织架构/行业包/全局模型/告警
+     · 租管（L3）企业管理：总览/用量/组织/成员/知识库/模型接入/订阅/开放能力
+     · 部门管理员（L2）部门管理：部门总览/用量/成员/部门知识库/工单
    - 面板业务逻辑全部下沉到 components/admin/*.vue 子面板组件
    ============================================================================ -->
 <template>
   <!-- ===== 后台整体布局：左侧栏 + 主内容区 ===== -->
   <div class="ad-wrap">
-    <!-- ===== 左侧侧边栏：品牌 / 租户切换 / 一级分类 / 面板列表 / 用户信息 ===== -->
+    <!-- ===== 左侧侧边栏：品牌 / 工作台标识 / 导航 / 用户信息 ===== -->
     <aside class="ad-side">
       <div class="ad-brand">🏢 {{ t('admin.console') }}</div>
+      <div class="ad-ws-tag">{{ t(currentWorkspace?.label || '') }}</div>
 
-      <!-- 租户切换器（仅超管，前端统称"组织"） -->
+      <!-- 租户切换器（仅超管） -->
       <div v-if="isSuper && tenantList.length" class="ad-tenant-switch">
         <label>{{ t('admin.currentOrg') }}</label>
         <select :value="activeTenantId" class="ad-input" @change="switchTenant(Number(($event.target as HTMLSelectElement).value))">
@@ -25,21 +28,8 @@
         <button class="ad-lang-btn" @click="toggleLang()">{{ lang === 'zh' ? 'English' : '中文' }}</button>
       </div>
 
-      <!-- ===== 顶部一级分类 ===== -->
-      <div class="ad-cats">
-        <button
-          v-for="cat in visibleCategories"
-          :key="cat.key"
-          :class="['ad-cat-btn', activeCategory === cat.key ? 'on' : '']"
-          @click="activeCategory = cat.key"
-        >
-          {{ t(cat.label) }}
-        </button>
-      </div>
-
-      <!-- ===== 组内左侧面板列表 ===== -->
+      <!-- ===== 扁平导航（当前工作台的全部面板） ===== -->
       <nav class="ad-nav">
-        <div class="ad-group-title">{{ t(currentCategoryLabel) }}</div>
         <button
           v-for="p in visiblePanels"
           :key="p.key"
@@ -101,82 +91,72 @@ const props = defineProps<{ user: AuthUser | null }>()
 // 同步用户到共享 store（供各面板复用角色等级判断）
 user.value = props.user
 
-// ---- 一级分类 + 面板编排（min 为所需角色等级：2=租户管理员，3=超级管理员） ----
-// label 为 i18n key（经 t() 渲染），中文与英文自动切换
-const categories = [
-  {
-    key: 'ops', label: 'admin.ops',
-    panels: [
-      { key: 'overview', label: 'admin.overview', comp: Overview, min: 2 },
-      { key: 'alerts', label: 'admin.alerts', comp: Alerts, min: 3 },
-      { key: 'usage', label: 'admin.usage', comp: Usage, min: 2 },
-      { key: 'billing', label: 'admin.billing', comp: Billing, min: 3 },
-      { key: 'packages', label: 'admin.packages', comp: Packages, min: 4 },
-    ],
-  },
-  {
-    key: 'org', label: 'admin.org',
-    panels: [
-      { key: 'users', label: 'admin.users', comp: Users, min: 2 },
-      { key: 'org', label: 'admin.orgs', comp: Org, min: 2 },
-      { key: 'tenants', label: 'admin.tenants', comp: Tenants, min: 4 },
-      { key: 'invites', label: 'admin.invites', comp: Invites, min: 3 },
-    ],
-  },
-  {
-    key: 'content', label: 'admin.content',
-    panels: [
-      { key: 'kb', label: 'admin.kb', comp: Kb, min: 2 },
-    ],
-  },
-  {
-    key: 'engine', label: 'admin.engine',
-    panels: [
-      { key: 'models', label: 'admin.models', comp: Models, min: 3 },
-      { key: 'workflow', label: 'admin.workflow', comp: Workflow, min: 3 },
-    ],
-  },
-  {
-    key: 'open', label: 'admin.open',
-    panels: [
-      { key: 'apikeys', label: 'admin.apikeys', comp: ApiKeys, min: 3 },
-      { key: 'webhooks', label: 'admin.webhooks', comp: Webhooks, min: 3 },
-      { key: 'tickets', label: 'admin.tickets', comp: Tickets, min: 2 },
-    ],
-  },
-]
+interface PanelDef { key: string; label: string; comp: any }
+interface WorkspaceDef { label: string; panels: PanelDef[] }
 
-// 当前激活的一级分类与面板
-const activeCategory = ref(categories[0].key)
-// 当前激活的面板 key（默认第一个分类下的第一个面板）
-const activePanel = ref(categories[0].panels[0].key)
+// ---- 三种角色工作台（按角色等级自动匹配，扁平导航） ----
+// L4 超管 = 平台运营视角；L3 租管 = 企业管理视角；L2 部门管理员 = 部门管理视角
+const workspaces: Record<number, WorkspaceDef> = {
+  // 平台运营（超级管理员）
+  4: {
+    label: 'admin.wsPlatform',
+    panels: [
+      { key: 'overview', label: 'admin.platformOverview', comp: Overview },
+      { key: 'tenants', label: 'admin.tenants', comp: Tenants },
+      { key: 'packages', label: 'admin.packages', comp: Packages },
+      { key: 'billing', label: 'admin.payOrders', comp: Billing },
+      { key: 'org', label: 'admin.orgs', comp: Org },
+      { key: 'kb', label: 'admin.industryKb', comp: Kb },
+      { key: 'models', label: 'admin.globalModels', comp: Models },
+      { key: 'alerts', label: 'admin.alerts', comp: Alerts },
+    ],
+  },
+  // 企业管理（租户管理员）
+  3: {
+    label: 'admin.wsCompany',
+    panels: [
+      { key: 'overview', label: 'admin.companyOverview', comp: Overview },
+      { key: 'usage', label: 'admin.usage', comp: Usage },
+      { key: 'org', label: 'admin.orgs', comp: Org },
+      { key: 'users', label: 'admin.users', comp: Users },
+      { key: 'kb', label: 'admin.kbPack', comp: Kb },
+      { key: 'models', label: 'admin.byokModels', comp: Models },
+      { key: 'billing', label: 'admin.subscription', comp: Billing },
+      { key: 'invites', label: 'admin.invites', comp: Invites },
+      { key: 'apikeys', label: 'admin.apikeys', comp: ApiKeys },
+      { key: 'webhooks', label: 'admin.webhooks', comp: Webhooks },
+      { key: 'workflow', label: 'admin.workflow', comp: Workflow },
+      { key: 'tickets', label: 'admin.tickets', comp: Tickets },
+    ],
+  },
+  // 部门管理（部门管理员）
+  2: {
+    label: 'admin.wsDept',
+    panels: [
+      { key: 'overview', label: 'admin.deptOverview', comp: Overview },
+      { key: 'usage', label: 'admin.usage', comp: Usage },
+      { key: 'users', label: 'admin.deptUsers', comp: Users },
+      { key: 'kb', label: 'admin.deptKb', comp: Kb },
+      { key: 'tickets', label: 'admin.tickets', comp: Tickets },
+    ],
+  },
+}
 
-// 可见分类（该分类下至少有一个面板对当前角色开放）
-const visibleCategories = computed(() => categories.filter(c => c.panels.some(p => myLevel.value >= p.min)))
-// 当前分类下可见面板
-const visiblePanels = computed(() => {
-  const cat = categories.find(c => c.key === activeCategory.value)
-  return (cat ? cat.panels : []).filter(p => myLevel.value >= p.min)
-})
-// 当前分类 i18n key
-const currentCategoryLabel = computed(() => categories.find(c => c.key === activeCategory.value)?.label || '')
-// 当前渲染的面板组件
-const currentPanelComponent = computed(() => {
-  const cat = categories.find(c => c.key === activeCategory.value)
-  const p = cat?.panels.find(x => x.key === activePanel.value)
-  return p?.comp
-})
+// 当前角色对应的工作台（无管理权限则为 null）
+const currentWorkspace = computed(() => workspaces[myLevel.value] || null)
+// 当前工作台下可见面板
+const visiblePanels = computed(() => currentWorkspace.value?.panels || [])
+// 当前激活的面板 key
+const activePanel = ref('')
 
-// 切换分类时自动落到该分类第一个可见面板
-watch(activeCategory, () => {
-  if (visiblePanels.value.length) activePanel.value = visiblePanels.value[0].key
-})
-// 角色变化（如被降权）时确保当前面板仍可见
+// 角色加载/变化时：默认选中该工作台第一个面板；当前面板不可见时回退第一个
 watch(visiblePanels, (list) => {
-  if (list.length && !list.some(p => p.key === activePanel.value)) {
-    activePanel.value = list[0].key
-  }
-})
+  if (!list.length) { activePanel.value = ''; return }
+  if (!list.some(p => p.key === activePanel.value)) activePanel.value = list[0].key
+}, { immediate: true })
+
+// 当前渲染的面板组件
+const currentPanelComponent = computed(() => visiblePanels.value.find(p => p.key === activePanel.value)?.comp)
 
 // 退出登录：清空 token 并通知父组件
 function logout() {
@@ -189,3 +169,17 @@ onMounted(() => {
   if (isSuper.value) loadTenants()
 })
 </script>
+
+<style scoped>
+/* 工作台标识（侧边栏品牌下方，标明当前视角） */
+.ad-ws-tag {
+  margin: 4px 14px 10px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(64, 128, 255, 0.12);
+  color: #4a7dff;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+</style>

@@ -179,7 +179,7 @@ func (s *Server) orgTenant(r *http.Request, u *store.User, orgID int64) (int64, 
 // parent_id=0 表示挂在根组织下；type 空则按 parent 推断（根下=组织，否则=部门）。
 // 超管平台视图：parent_id 归属某租户则自动解析该租户；parent_id=0 时用 tenant_id 指定。
 func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -196,6 +196,21 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	tid := s.effTenant(r, u)
+	// 部门管理员：只能在本部门子树内建子部门/子组织，不能建根级节点
+	if auth.RoleLevel(u.Role) == 2 {
+		if u.OrgID <= 0 {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "部门管理员未绑定部门，无法创建"})
+			return
+		}
+		if req.ParentID <= 0 {
+			req.ParentID = u.OrgID // 缺省挂本部门下
+		}
+		inTree, e := s.Store.IsOrgInSubtree(tid, u.OrgID, req.ParentID)
+		if e != nil || !inTree {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权在非本部门范围下创建子部门"})
+			return
+		}
+	}
 	// 超管平台视图：优先按 parent 归属租户解析；parent=0 且指定 tenant_id 时用该租户
 	if auth.IsSuperAdmin(u) {
 		if req.ParentID > 0 {
@@ -239,7 +254,7 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 id/name）。
 // 返回: success=true 表示重命名成功。
 func (s *Server) handleOrgRename(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -260,6 +275,18 @@ func (s *Server) handleOrgRename(w http.ResponseWriter, r *http.Request) {
 	if err := s.validateOrg(tid, req.ID); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
 		return
+	}
+	// 部门管理员：仅可重命名本部门子树内的节点
+	if auth.RoleLevel(u.Role) == 2 {
+		if u.OrgID <= 0 {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "部门管理员未绑定部门，无法操作"})
+			return
+		}
+		inTree, e := s.Store.IsOrgInSubtree(tid, u.OrgID, req.ID)
+		if e != nil || !inTree {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权重命名非本部门的组织"})
+			return
+		}
 	}
 	if err := s.Store.RenameOrg(req.ID, strings.TrimSpace(req.Name)); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
