@@ -108,7 +108,7 @@ func (s *Store) ListPackages(tid int64) ([]*KBPackage, error) {
 	var out []*KBPackage
 	for rows.Next() {
 		var p KBPackage
-		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &p)

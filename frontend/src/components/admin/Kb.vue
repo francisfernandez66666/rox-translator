@@ -42,9 +42,10 @@
     </div>
     <div class="ad-hint">{{ t('kb.entriesHint') }}</div>
     <div v-for="p in packages" :key="p.id" class="ad-pkg">
-      <div class="ad-pkg-head">
+      <div class="ad-pkg-head" :style="p.enabled === 0 ? 'opacity:.55' : ''">
         <b>[{{ p.pack_type }}] {{ p.name }}</b>
         <span class="ad-pkg-role">{{ p.role }}</span>
+        <button class="ad-btn-sm" @click="togglePackage(p)">{{ p.enabled === 0 ? t('kb.enablePack') : t('kb.disablePack') }}</button>
         <button class="ad-btn-sm ad-btn-red" @click="removePackage(p)">{{ t('kb.deletePackage') }}</button>
         <button class="ad-btn-sm" @click="loadEntries(p)">{{ tpl('kb.viewEntries', { count: entryCount(p.id) }) }}</button>
       </div>
@@ -81,7 +82,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { kbPackages, kbPackageCreate, kbPackageDelete, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport, kbRecognizeFile, kbImportFile } from '@/api'
+import { kbPackages, kbPackageCreate, kbPackageDelete, kbPackageStatus, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport, kbRecognizeFile, kbImportFile } from '@/api'
 import { activeTenantId, isSuper, myLevel } from './store'
 import { t, tpl } from '@/i18n'
 
@@ -139,6 +140,13 @@ async function createPackage() {
   const r = await kbPackageCreate({ ...pForm.value, role: 'source' })
   if (!r.success) { alert(r.message); return }
   pForm.value = { code: '', name: '', pack_type: 'industry' }
+  await loadPackages()
+}
+// 启用/停用包：停用后不参与翻译命中（条目保留，可随时启用）
+async function togglePackage(p: any) {
+  const next = p.enabled === 0 ? 1 : 0
+  const r = await kbPackageStatus(p.id, next)
+  if (!r.success) { alert(r.message); return }
   await loadPackages()
 }
 async function removePackage(p: any) {
