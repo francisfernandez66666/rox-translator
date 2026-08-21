@@ -68,9 +68,18 @@
             <tr v-for="u in orgUserList" :key="u.id">
               <td>{{ u.id }}</td>
               <td>{{ u.username }}</td>
-              <td>{{ u.display_name }}</td>
-              <td>{{ u.org_name || t('org.rootOrg') }}</td>
-              <td>{{ roleName(u.role) }}</td>
+              <td><input :value="u.display_name" class="ad-mini" @change="editUser(u, 'display_name', ($event.target as HTMLInputElement).value)" /></td>
+              <td>
+                <select :value="u.org_id || 0" class="ad-mini" @change="editUser(u, 'org_id', ($event.target as HTMLSelectElement).value)">
+                  <option :value="0">{{ t('org.rootOption') }}</option>
+                  <option v-for="o in flatTree" :key="o.id" :value="o.id">{{ orgPath(o) }}</option>
+                </select>
+              </td>
+              <td>
+                <select :value="u.role" class="ad-mini" @change="editUser(u, 'role', ($event.target as HTMLSelectElement).value)">
+                  <option v-for="r in roleOptions" :key="r" :value="r">{{ t('users.role.' + r) }}</option>
+                </select>
+              </td>
               <td>{{ fmtTime(u.last_login_at) }}</td>
               <td class="ad-td">
                 <button class="ad-btn-sm" @click="resetPwd(u)">{{ t('org.resetPwd') }}</button>
@@ -262,6 +271,16 @@ async function resetPwd(u: any) {
 // 启用/停用用户
 async function setStatus(u: any, status: string) {
   const r = await adminUserUpdate(u.id, { display_name: u.display_name, role: u.role, status })
+  if (!r.success) { alert(r.message); return }
+  await loadAll()
+}
+
+// 行内编辑用户字段（display_name/org_id/role），org_id 转数字提交
+async function editUser(u: any, field: string, val: string) {
+  const data: any = { display_name: u.display_name, role: u.role, status: u.status, org_id: u.org_id || 0 }
+  data[field] = field === 'org_id' ? Number(val) : val
+  if (field === 'display_name' && !String(val).trim()) return
+  const r = await adminUserUpdate(u.id, data)
   if (!r.success) { alert(r.message); return }
   await loadAll()
 }
