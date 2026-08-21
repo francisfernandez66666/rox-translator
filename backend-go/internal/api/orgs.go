@@ -292,6 +292,12 @@ func (s *Server) handleOrgRename(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 根组织改名同步租户名（保持组织树与租户列表一致）
+	if org, e := s.Store.GetOrgByID(req.ID); e == nil && org.Type == store.OrgTypeRoot && org.TenantID > 0 && s.Ten != nil {
+		if tn, e2 := s.Ten.GetByID(org.TenantID); e2 == nil && tn != nil {
+			_ = s.Ten.Update(org.TenantID, strings.TrimSpace(req.Name), tn.ExpiresAt, tn.Permissions)
+		}
+	}
 	s.Store.LogAudit(tid, u.ID, "org_rename", "orgs", req.Name)
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }

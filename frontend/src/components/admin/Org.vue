@@ -31,7 +31,7 @@
           @drop.prevent="onDropRoot"
         >
           <span>{{ rootOrgIcon }} {{ rootOrgName }}（{{ isPlatformView || isSuper ? t('org.typePlatform') : t('org.typeRoot') }}）</span>
-          <span class="ad-tree-actions" v-if="myLevel >= 3 && !isPlatformView">
+          <span class="ad-tree-actions" v-if="myLevel >= 3">
             <button class="ad-btn-xs" :title="t('org.renameRoot')" @click.stop="renameRootOrg">✎</button>
           </span>
         </div>
@@ -52,7 +52,7 @@
           <span>{{ orgIcon(o) }} {{ o.name }}</span>
           <span class="ad-tree-actions">
             <button class="ad-btn-xs" :title="t('org.addChild')" @click.stop="setParent(o.id)">+</button>
-            <button v-if="o.type !== 'root'" class="ad-btn-xs" :title="t('org.rename')" @click.stop="renameOrg(o)">✎</button>
+            <button v-if="o.type !== 'root' || myLevel >= 3" class="ad-btn-xs" :title="t('org.rename')" @click.stop="renameOrg(o)">✎</button>
             <button v-if="o.type !== 'root' && myLevel >= 3" class="ad-btn-xs ad-btn-red" :title="t('org.delete')" @click.stop="deleteOrg(o)">✕</button>
           </span>
         </div>
@@ -126,7 +126,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { t, tpl } from '@/i18n'
 import { orgList, orgCreate, orgRename, orgMove, orgDelete, orgUsers, type OrgInfo } from '@/api'
 import { adminUserCreate, adminUserUpdate, adminUserResetPassword, adminUserDelete } from '@/api'
-import { activeTenantId, tenantList, isSuper, myLevel, roleOptions, roleName } from './store'
+import { activeTenantId, tenantList, isSuper, myLevel, roleOptions, roleName, loadTenants } from './store'
 import { fmtTime } from './ui'
 
 // 组织扁平列表（用于下拉与组装树）
@@ -250,6 +250,7 @@ async function renameRootOrg() {
   if (!name || !name.trim()) return
   const r = await orgRename(rootOrg.value.id, name.trim())
   if (!r.success) { alert(r.message); return }
+  if (isSuper.value) loadTenants()
   await loadAll()
 }
 
@@ -345,6 +346,7 @@ async function renameOrg(o: OrgInfo) {
   if (!name || !name.trim()) return
   const r = await orgRename(o.id, name.trim())
   if (!r.success) { alert(r.message); return }
+  if (isSuper.value && o.type === 'root') loadTenants()
   await loadAll()
 }
 
