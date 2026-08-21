@@ -2,6 +2,11 @@
    components/admin/Audit.vue — 审计日志（租户管理员：本租户全部关键操作）
    超管的全量视图（含租户名/操作者）在平台总览 Overview 中展示。
    ============================================================================ -->
+<!--
+  components/admin/Audit.vue — 审计日志面板（租户管理员）
+  职责：展示本租户全部关键操作记录（登录/账号/组织/知识库/模型/订阅），
+  支持按动作与时间范围过滤、CSV 导出；超管的全量视图（含租户名）在平台总览 Overview。
+-->
 <template>
   <section class="ad-section">
     <h2>{{ t('audit.title') }}</h2>
@@ -43,6 +48,7 @@ import { systemAudit, API_BASE, getAuthToken } from '@/api'
 import { t, tpl } from '@/i18n'
 import { fmtTime } from './ui'
 
+// 日志列表与过滤条件（动作枚举/起止日期）
 const logs = ref<any[]>([])
 const fAction = ref('')
 const fFrom = ref('')
@@ -52,6 +58,7 @@ const actions = ['login', 'user_create', 'user_update', 'user_delete', 'user_res
   'org_create', 'org_rename', 'org_delete', 'kb_package_create', 'kb_package_status',
   'kb_entries_import', 'model_save', 'stage_models_save', 'package_subscribe']
 
+// load 拉取审计日志（接口已支持 action 参数；时间范围前端兜底过滤）
 async function load() {
   const qs = new URLSearchParams()
   if (fAction.value) qs.set('action', fAction.value)
@@ -69,6 +76,7 @@ async function load() {
   }
 }
 
+// shortJSON 压缩 before/after JSON 为「k=v,k=v…」摘要（最多 3 键）
 function shortJSON(s: string): string {
   try {
     const o = JSON.parse(s)
@@ -77,6 +85,7 @@ function shortJSON(s: string): string {
   } catch { return s.length > 24 ? s.slice(0, 24) + '…' : s }
 }
 
+// exportCsv 导出当前审计为 CSV（走后端 export=csv 接口）
 function exportCsv() {
   const url = `${API_BASE}/api/system/audit?export=csv`
   const a = document.createElement('a')
