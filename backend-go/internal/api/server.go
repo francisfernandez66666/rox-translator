@@ -151,6 +151,7 @@ func (s *Server) routesAuth() {
 func (s *Server) routesTickets() {
 	s.mux.HandleFunc("/api/tickets", s.handleTickets)
 	s.mux.HandleFunc("/api/tickets/create", s.handleTicketCreate)
+	s.mux.HandleFunc("/api/tickets/create-file", s.handleTicketCreateFile)
 	s.mux.HandleFunc("/api/tickets/run", s.handleTicketRun)
 	s.mux.HandleFunc("/api/tickets/detail", s.handleTicketDetail)
 	s.mux.HandleFunc("/api/tickets/download", s.handleTicketDownload)

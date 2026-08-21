@@ -11,6 +11,7 @@ package api
 //   - 工单操作均写入审计；工单查询全部限定生效租户（租户隔离）
 
 import (
+	"io"
 	"fmt"
 	"github.com/xuri/excelize/v2"
 	"time"
@@ -79,8 +80,78 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	// 创建工单审计
+	// 创建工单审计 + 自动入队执行
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_create", "tickets", t.TicketNo)
+	if s.TicketSvc != nil {
+		t.Status = store.TicketQueued
+		_ = s.Store.UpdateTicket(t)
+		_, _ = s.TicketSvc.EnqueueTicketRun(r.Context(), t.ID)
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t})
+}
+
+// handleTicketCreateFile 文件工单创建（multipart：file/title/target_langs）。
+// 文件保存至上传目录 tickets/ 子目录；创建后自动入队，worker 走原格式回写流水线。
+func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	// 10MB 上传上限与 multipart 解析
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文件解析失败或超过 10MB 上限"})
+		return
+	}
+	file, hdr, ferr := r.FormFile("file")
+	if ferr != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少文件"})
+		return
+	}
+	defer file.Close()
+	// 扩展名白名单（与文件翻译支持的格式一致）
+	ext := strings.ToLower(filepath.Ext(hdr.Filename))
+	allowed := map[string]bool{".docx": true, ".xlsx": true, ".pptx": true, ".pdf": true, ".txt": true, ".csv": true}
+	if !allowed[ext] {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "仅支持 docx/xlsx/pptx/pdf/txt/csv"})
+		return
+	}
+	title := r.FormValue("title")
+	targetLangs := r.FormValue("target_langs")
+	if targetLangs == "" {
+		targetLangs = "en"
+	}
+	// 保存到 上传目录/tickets/
+	dir := filepath.Join(s.Cfg.UploadDir, "tickets")
+	_ = os.MkdirAll(dir, 0o755)
+	saveName := fmt.Sprintf("%d_%s", time.Now().UnixNano(), filepath.Base(hdr.Filename))
+	savePath := filepath.Join(dir, saveName)
+	out, cerr := os.Create(savePath)
+	if cerr != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "保存文件失败"})
+		return
+	}
+	if _, cerr = io.Copy(out, file); cerr != nil {
+		out.Close()
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "写入文件失败"})
+		return
+	}
+	out.Close()
+	if title == "" {
+		title = hdr.Filename
+	}
+	t, err := s.Store.CreateTicket(s.effTenant(r, u), u.ID, title, "", savePath, targetLangs)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_create_file", "tickets", t.TicketNo)
+	if s.TicketSvc != nil {
+		t.Status = store.TicketQueued
+		_ = s.Store.UpdateTicket(t)
+		_, _ = s.TicketSvc.EnqueueTicketRun(r.Context(), t.ID)
+	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t})
 }
 

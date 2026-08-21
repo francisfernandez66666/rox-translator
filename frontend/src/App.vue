@@ -23,9 +23,15 @@
       <div class="header-left">
         <span class="header-icon">🌐</span>
         <span class="header-title">{{ t('app.title') }}</span>
+        <!-- 前台双 Tab：翻译工作台 / 翻译工单 -->
+        <nav class="front-tabs">
+          <button :class="['front-tab', frontTab === 'workbench' ? 'on' : '']" @click="switchFrontTab('workbench')">💬 {{ t('app.tabWorkbench') }}</button>
+          <button :class="['front-tab', frontTab === 'tickets' ? 'on' : '']" @click="switchFrontTab('tickets')">📋 {{ t('app.tabTickets') }}</button>
+        </nav>
         <span class="header-user">{{ authUser.display_name || authUser.username }}</span>
       </div>
       <div class="header-right">
+        <Bell />
         <span class="status-indicator" :class="store.isBackendOnline ? 'online' : 'offline'">
           <span class="status-dot"></span>
           {{ store.isBackendOnline ? t('common.online') : t('common.offline') }}
@@ -37,11 +43,12 @@
     </header>
 
     <!-- ===== 主内容区：翻译引擎启动加载屏 / 聊天窗口 ===== -->
-    <main class="chat-main">
+    <main class="chat-main" :style="frontTab === 'tickets' ? 'overflow:auto' : ''">
       <div v-if="store.isBackendLoading" class="loading-screen">
         <div class="loading-spinner"></div>
         <p class="loading-text">{{ t('app.starting') }}</p>
       </div>
+      <TicketsPage v-else-if="frontTab === 'tickets'" />
       <ChatWindow v-else />
     </main>
 
@@ -78,6 +85,8 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useChatStore } from '@/stores/chat'
 // 子组件：聊天窗口 / 登录页 / 管理后台
 import ChatWindow from './components/ChatWindow.vue'
+import TicketsPage from './components/TicketsPage.vue'
+import Bell from './components/Bell.vue'
 import Login from './components/Login.vue'
 import AdminDashboard from './components/AdminDashboard.vue'
 // API：token 读写与用户信息查询
@@ -94,6 +103,17 @@ const currentModel = ref(store.selectedModel)
 
 // 是否处于管理后台路由（/admin）
 const isAdminRoute = computed(() => window.location.pathname.startsWith('/admin'))
+// 前台 Tab：工作台 / 工单（URL 同步为 /tickets，刷新保持）
+const frontTab = ref(window.location.pathname.startsWith('/tickets') ? 'tickets' : 'workbench')
+function switchFrontTab(tab: string) {
+  frontTab.value = tab
+  const path = tab === 'tickets' ? '/tickets' : '/'
+  window.history.pushState({}, '', path)
+}
+// 浏览器前进后退同步
+window.addEventListener('popstate', () => {
+  frontTab.value = window.location.pathname.startsWith('/tickets') ? 'tickets' : 'workbench'
+})
 // 当前登录用户（null 表示未登录，显示登录页）
 const authUser = ref<AuthUser | null>(null)
 // 会话恢复中标记：避免刷新时闪现登录页
@@ -273,4 +293,13 @@ body {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-text { font-size: 16px; color: #5f6368; }
+
+/* 前台双 Tab 导航 */
+.front-tabs { display: flex; gap: 4px; margin-left: 18px; }
+.front-tab {
+  border: none; background: transparent; cursor: pointer;
+  padding: 6px 14px; border-radius: 8px; font-size: 14px; color: #e8eef5;
+}
+.front-tab:hover { background: rgba(255,255,255,.12); }
+.front-tab.on { background: rgba(255,255,255,.18); font-weight: 600; }
 </style>
