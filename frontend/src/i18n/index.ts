@@ -204,8 +204,8 @@ const baseZh: Dict = {
   'admin.deptUsers': '👤 部门成员',
   'admin.byokModels': '🧠 模型接入',
   'admin.globalModels': '🧠 全局模型',
-  'admin.subscription': '💳 订阅账单',
-  'admin.payOrders': '💰 订单支付',
+  'admin.subscription': '💳 套餐详情',
+  'admin.payOrders': '💳 套餐详情',
 }
 
 const baseEn: Dict = {
@@ -376,8 +376,8 @@ const baseEn: Dict = {
   'admin.deptUsers': '👤 Members',
   'admin.byokModels': '🧠 Model Access',
   'admin.globalModels': '🧠 Global Models',
-  'admin.subscription': '💳 Subscription & Billing',
-  'admin.payOrders': '💰 Orders & Payment',
+  'admin.subscription': '💳 Plan Details',
+  'admin.payOrders': '💳 Plan Details',
 }
 
 // 合并全部面板字典
