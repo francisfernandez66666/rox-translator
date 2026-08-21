@@ -112,6 +112,13 @@ func (s *Server) meterSentences(r *http.Request, tid int64, sourceText string, o
 	if s.Store == nil || sourceText == "" {
 		return
 	}
+	// 强制计费未开启：不扣减、不校验（余额仅在商业包句数模式下有意义）
+	if v, _ := s.Store.GetConfig("sentence_enforced"); v != "1" {
+		return
+	}
+	if tid <= 0 {
+		return // 平台上下文无计费
+	}
 	sents := countSentences(sourceText) * targetLangCount(options)
 	if sents <= 0 {
 		return
@@ -126,6 +133,13 @@ func (s *Server) meterSentences(r *http.Request, tid int64, sourceText string, o
 // 参数 r: HTTP 请求；tid: 生效租户 ID；segments: 文件提取的文本段数；options: 请求选项。
 func (s *Server) meterFileSentences(r *http.Request, tid int64, segments int, options map[string]interface{}) {
 	if s.Store == nil || segments <= 0 {
+		return
+	}
+	// 强制计费未开启：不扣减（同 meterSentences）
+	if v, _ := s.Store.GetConfig("sentence_enforced"); v != "1" {
+		return
+	}
+	if tid <= 0 {
 		return
 	}
 	sents := int64(segments) * targetLangCount(options)
