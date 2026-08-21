@@ -128,6 +128,7 @@ func (s *Server) routesAuth() {
 	s.mux.HandleFunc("/api/admin/users/create", s.handleAdminUserCreate)
 	s.mux.HandleFunc("/api/admin/users/update", s.handleAdminUserUpdate)
 	s.mux.HandleFunc("/api/admin/users/reset-password", s.handleAdminUserResetPassword)
+	s.mux.HandleFunc("/api/admin/users/delete", s.handleAdminUserDelete)
 	s.mux.HandleFunc("/api/admin/invite-codes", s.handleInviteCodes)
 	s.mux.HandleFunc("/api/admin/invite-codes/create", s.handleInviteCodeCreate)
 }

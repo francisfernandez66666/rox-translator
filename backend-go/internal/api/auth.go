@@ -379,8 +379,13 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		OrgID       int64  `json:"org_id"`       // 所属组织 ID（0=根组织/未分配）
 		Email       string `json:"email"`        // 联系邮箱（找回密码验证码接收）
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" || req.Password == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+	decErr := json.NewDecoder(r.Body).Decode(&req)
+	if decErr != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": fmt.Sprintf("请求格式错误: %v", decErr)})
+		return
+	}
+	if req.Username == "" || req.Password == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "用户名和密码不能为空"})
 		return
 	}
 	// 角色默认普通用户
@@ -407,8 +412,16 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	tid := s.effTenant(r, u)
 	if req.Role == store.RoleSuperAdmin || req.Role == store.RoleAdmin {
 		tid = 0
-	} else if auth.IsSuperAdmin(u) && req.TenantID > 0 {
-		tid = req.TenantID
+	} else if auth.IsSuperAdmin(u) {
+		// 超管开通账号的租户解析优先级：所属组织归属租户 > 显式 tenant_id > 生效租户
+		// 平台树展示所有租户的组织，账号必须跟随所选组织归属其租户（闭环，防跨租户错挂）
+		if req.OrgID > 0 {
+			if org, e := s.Store.GetOrgByID(req.OrgID); e == nil && org.TenantID > 0 {
+				tid = org.TenantID
+			}
+		} else if req.TenantID > 0 {
+			tid = req.TenantID
+		}
 	}
 	// 组织归属校验：非平台级用户组织必须属于归属租户
 	if tid > 0 {
@@ -601,5 +614,71 @@ func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Req
 		return
 	}
 	s.Store.LogAudit(u.TenantID, u.ID, "user_reset_pwd", "users", "")
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleAdminUserDelete 删除用户账号（部门管理员及以上）。
+// 权限：非超管不能删超管；部门管理员仅能删本部门子树内账号；不能删除自己。
+func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireDeptAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	if req.ID == u.ID {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "不能删除自己的账号"})
+		return
+	}
+	tid := s.effTenant(r, u)
+	target, err := s.Store.GetUser(req.ID, tid)
+	if err != nil {
+		// 平台上下文（tid=0）下按用户实际归属租户定位
+		if tid <= 0 {
+			if matches, e := s.Store.GetUserByUsernameGlobal(""); e == nil {
+				_ = matches
+			}
+			all, le := s.Store.ListAllUsers()
+			if le == nil {
+				for _, uu := range all {
+					if uu.ID == req.ID {
+						tid = uu.TenantID
+						target = uu
+						break
+					}
+				}
+			}
+		}
+		if target == nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "用户不存在"})
+			return
+		}
+	}
+	if auth.IsSuperAdmin(target) && !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：不能操作超级管理员"})
+		return
+	}
+	if auth.RoleLevel(u.Role) == 2 {
+		if u.OrgID <= 0 || target.OrgID <= 0 || target.TenantID != tid {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权删除非本部门账号"})
+			return
+		}
+		inTree, e := s.Store.IsOrgInSubtree(tid, u.OrgID, target.OrgID)
+		if e != nil || !inTree {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权删除非本部门账号"})
+			return
+		}
+	}
+	if err := s.Store.DeleteUser(req.ID, tid); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(u.TenantID, u.ID, "user_delete", "users", target.Username)
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }

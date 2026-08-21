@@ -377,3 +377,54 @@ func (s *Store) IsOrgInSubtree(tid, rootOrgID, targetOrgID int64) (bool, error) 
 	}
 	return false, nil
 }
+// ListAllUsers 列出全部租户（含平台 0）的所有用户（超管平台根视图用）。
+// 返回：用户列表（按 tenant_id,id 排序，密码哈希脱敏）。
+func (s *Store) ListAllUsers() ([]*User, error) {
+	rows, err := s.db.Query("SELECT " + userCols + " FROM users ORDER BY tenant_id, id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			continue
+		}
+		u.PasswordHash = ""
+		out = append(out, &u)
+	}
+	return out, nil
+}
+
+// OrgNameMap 全部组织 ID→名称映射（跨租户展示所属组织用）。
+func (s *Store) OrgNameMap() (map[int64]string, error) {
+	rows, err := s.db.Query("SELECT id, name FROM orgs")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := map[int64]string{}
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			continue
+		}
+		m[id] = name
+	}
+	return m, nil
+}
+
+// DeleteUser 删除用户账号。
+func (s *Store) DeleteUser(id, tid int64) error {
+	res, err := s.db.Exec("DELETE FROM users WHERE id=? AND tenant_id=?", id, tid)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("用户不存在")
+	}
+	return nil
+}

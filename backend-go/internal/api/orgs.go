@@ -391,6 +391,29 @@ func (s *Server) handleOrgUsers(w http.ResponseWriter, r *http.Request) {
 			tid = t
 		}
 	}
+	// 超管平台根视图（未选具体组织）：跨租户列出全部账号
+	if auth.IsSuperAdmin(u) && tid <= 0 && orgID <= 0 {
+		users, err := s.Store.ListAllUsers()
+		if err != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+		nameMap, _ := s.Store.OrgNameMap()
+		type orgUser struct {
+			*store.User
+			OrgName string `json:"org_name"`
+		}
+		out := make([]orgUser, 0, len(users))
+		for _, usr := range users {
+			on := nameMap[usr.OrgID]
+			if on == "" {
+				on = "平台"
+			}
+			out = append(out, orgUser{User: usr, OrgName: on})
+		}
+		writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": 0})
+		return
+	}
 	// 计算组织及其子孙 ID 集合
 	orgIDs := []int64{}
 	if orgID > 0 {

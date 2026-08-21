@@ -92,3 +92,17 @@ func (s *Store) TouchLogin(id int64) {
 func (s *Store) EnsureAdmin(tid int64, username, passHash, displayName string) error {
 	return s.iam.EnsureAdmin(tid, username, passHash, displayName)
 }
+// ListAllUsers 列出全部租户（含平台 0）的所有用户（超管平台根视图用）。委托 iam.Store。
+func (s *Store) ListAllUsers() ([]*User, error) {
+	return s.iam.ListAllUsers()
+}
+
+// OrgNameMap 全部组织 ID→名称映射。委托 iam.Store。
+func (s *Store) OrgNameMap() (map[int64]string, error) {
+	return s.iam.OrgNameMap()
+}
+
+// DeleteUser 删除用户账号。委托 iam.Store。
+func (s *Store) DeleteUser(id, tid int64) error {
+	return s.iam.DeleteUser(id, tid)
+}
