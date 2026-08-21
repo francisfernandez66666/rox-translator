@@ -93,6 +93,10 @@ func SplitOptions(langs []string) (kbTarget, directOther []string, hasOther bool
 func (e *Engine) HandleText(ctx context.Context, text string, options map[string]interface{}, prog Progress) *TextTranslateResult {
 	// 注入请求级用量记录器（供计量成本核算）
 	ctx = e.WithUsageRecorder(ctx)
+	// 界面语言（提示词语言跟随用户界面语言）：options["lang"] 缺省按中文
+	if l, ok := options["lang"].(string); ok && l != "" {
+		ctx = WithUILang(ctx, l)
+	}
 	if prog == nil {
 		prog = func(string, int, int) {}
 	}

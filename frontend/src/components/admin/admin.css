@@ -92,6 +92,10 @@
 .ad-tree-item:hover { background: #f5f6fa; }
 .ad-tree-item.on { background: #e8eaf6; border-left-color: #1a237e; font-weight: 600; }
 .ad-tree-root { color: #1a237e; font-weight: 600; }
+.ad-tree-item[draggable="true"] { cursor: grab; }
+.ad-tree-item[draggable="true"]:active { cursor: grabbing; }
+.ad-tree-item.drag-over { background: #e3f2fd; border-left-color: #1976d2; box-shadow: inset 0 0 0 1px #90caf9; }
+.drag-handle { color: #b0bec5; font-size: 13px; cursor: grab; }
 .ad-tree-count { font-size: 11px; color: #999; }
 .ad-tree-actions { display: flex; gap: 4px; visibility: hidden; }
 .ad-tree-item:hover .ad-tree-actions { visibility: visible; }

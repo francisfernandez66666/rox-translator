@@ -58,6 +58,22 @@ func (e *Engine) tenantID(ctx context.Context) int64 {
 	return 1
 }
 
+// uiLangKey 界面语言 context 键（提示词语言跟随用户界面语言）
+type uiLangKey struct{}
+
+// WithUILang 把界面语言写入 context（"zh"=中文提示词，其他=英文提示词）。
+func WithUILang(ctx context.Context, lang string) context.Context {
+	return context.WithValue(ctx, uiLangKey{}, lang)
+}
+
+// uiLangFromCtx 从 context 读取界面语言；未设置时返回 "zh"（默认中文提示词）。
+func uiLangFromCtx(ctx context.Context) string {
+	if v, ok := ctx.Value(uiLangKey{}).(string); ok && v != "" {
+		return v
+	}
+	return "zh"
+}
+
 // usageCtxKey 请求级"实际使用的 LLM 供应商/模型"记录键（供计量成本核算）
 type usageCtxKey struct{}
 
@@ -605,11 +621,31 @@ func srcName(code string) string {
 	return "文本"
 }
 
-// translateInstruction 按源语言+目标语言定制翻译指令（支持任意方向互译）。
-// 参数 source: 源语言代码；target: 目标语言代码。
+// translateInstruction 按源语言+目标语言+界面语言定制翻译指令（支持任意方向互译与中英文提示词）。
+// 参数 source: 源语言代码；target: 目标语言代码；uiLang: 界面语言（"zh"=中文提示词，其他/空=英文提示词）。
 // 返回: 模型翻译指令（不臆断源语言名称，未知源回退 "文本"）。
-func translateInstruction(source, target string) string {
+func translateInstruction(source, target, uiLang string) string {
 	src := srcName(source)
+	// 英文界面 → 英文提示词（模型自动识别源语言，不显式引用源语言名避免中英混排）
+	if uiLang != "" && uiLang != "zh" && uiLang != "zh_hant" {
+		switch target {
+		case "zh":
+			return "Translate the following text into Simplified Chinese. Output only the Simplified Chinese translation."
+		case "zh_hant":
+			return "Convert the following text into Traditional Chinese. Output only the Traditional Chinese translation."
+		case "ja":
+			return "Translate the following text into Japanese, using proper Kanji+Kana mixed writing (not only Kana). Output only the Japanese translation."
+		case "ko":
+			return "Translate the following text into Korean (한국어), using Hangul. Do not output Japanese. Output only the Korean translation."
+		default:
+			cn := config.LangNames[target]
+			if cn == "" {
+				cn = target
+			}
+			return "Translate the following text into " + cn + ". Output only the translation, without extra explanation."
+		}
+	}
+	// 中文界面 → 中文提示词
 	switch target {
 	case "zh":
 		return fmt.Sprintf("把下面的%s翻译为简体中文，只输出简体中文结果", src)
@@ -782,7 +818,7 @@ func (e *Engine) SingleLangTranslate(ctx context.Context, zhText, targetLang str
 // 返回译文内容与错误（失败时返回 ""）。
 func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang, stage string, attempt int) (string, error) {
 	cfg := e.Cfg
-	instruction := translateInstruction(sourceLang, targetLang)
+	instruction := translateInstruction(sourceLang, targetLang, uiLangFromCtx(ctx))
 	ref := buildExamplesPrompt(zhText, targetLang, examples)
 
 	// 术语参考放入 system 消息（模型不会复述 system 内容），user 只含指令+待翻译文本
@@ -982,7 +1018,7 @@ func (e *Engine) autoCompleteTranslation(ctx context.Context, zhText, targetLang
 		}
 	}
 	// 全量重翻
-	instruction := translateInstruction(sourceLang, targetLang)
+	instruction := translateInstruction(sourceLang, targetLang, uiLangFromCtx(ctx))
 	full := fmt.Sprintf("%s。必须完整翻译，不要省略任何内容，不要被截断：\n\n%s", instruction, zhText)
 	messages = []map[string]string{{"role": "user", "content": full}}
 	content, _, err = e.LLM.CallChat(ctx, base, key, model, messages, 8192, false, e.Cfg.FallbackTemp)
@@ -1098,7 +1134,7 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 			for i, t := range chunk {
 				sb.WriteString(fmt.Sprintf("<s%d>%s</s%d>\n", i+1, t, i+1))
 			}
-			instruction := translateInstruction("zh", targetLang)
+			instruction := translateInstruction("zh", targetLang, uiLangFromCtx(ctx))
 			userPrompt := instruction + "\n\n请按编号逐条翻译，用 <sN>...</sN> 包裹每条翻译结果：\n\n" + sb.String()
 			messages := []map[string]string{{"role": "user", "content": userPrompt}}
 

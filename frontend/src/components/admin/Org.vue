@@ -24,7 +24,13 @@
     <div class="ad-split">
       <!-- 组织树 -->
       <div class="ad-org-tree">
-        <div class="ad-tree-item ad-tree-root" @click="selectRoot">
+        <div
+          class="ad-tree-item ad-tree-root"
+          :class="{ 'drag-over': dragOrgId !== null }"
+          @click="selectRoot"
+          @dragover.prevent="dragOverId = 0"
+          @drop.prevent="onDropRoot"
+        >
           <span>{{ rootOrgIcon }} {{ rootOrgName }}（{{ t('org.typeRoot') }}）</span>
           <span class="ad-tree-actions">
             <button class="ad-btn-xs" :title="t('org.renameRoot')" @click.stop="renameRootOrg">✎</button>
@@ -33,13 +39,20 @@
         <div
           v-for="o in flatTree"
           :key="o.id"
-          :class="['ad-tree-item', selectedOrg === o.id ? 'on' : '']"
+          :class="['ad-tree-item', selectedOrg === o.id ? 'on' : '', dragOverId === o.id ? 'drag-over' : '']"
           :style="{ paddingLeft: (8 + o._depth * 18) + 'px' }"
           @click="selectOrg(o.id)"
+          draggable="true"
+          @dragstart="startDrag(o, $event)"
+          @dragend="dragOrgId = null; dragOverId = null"
+          @dragover.prevent="onDragOver(o)"
+          @dragleave="dragOverId = null"
+          @drop.prevent="onDropTo(o)"
         >
+          <span class="drag-handle">⠿</span>
           <span>{{ o.type === 'dept' ? '🗂️' : '📁' }} {{ o.name }}</span>
           <span class="ad-tree-actions">
-            <button class="ad-btn-xs" :title="o.type === 'dept' ? t('org.addChild') : t('org.addChild')" @click.stop="setParent(o.id)">+</button>
+            <button class="ad-btn-xs" :title="t('org.addChild')" @click.stop="setParent(o.id)">+</button>
             <button class="ad-btn-xs" :title="t('org.rename')" @click.stop="renameOrg(o)">✎</button>
             <button class="ad-btn-xs ad-btn-red" :title="t('org.delete')" @click.stop="deleteOrg(o)">✕</button>
           </span>
@@ -93,7 +106,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { t, tpl } from '@/i18n'
-import { orgList, orgCreate, orgRename, orgDelete, orgUsers, type OrgInfo } from '@/api'
+import { orgList, orgCreate, orgRename, orgMove, orgDelete, orgUsers, type OrgInfo } from '@/api'
 import { adminUserCreate, adminUserUpdate, adminUserResetPassword } from '@/api'
 import { activeTenantId, tenantList, isSuper } from './store'
 import { fmtTime } from './ui'
@@ -266,6 +279,44 @@ async function deleteOrg(o: OrgInfo) {
   const r = await orgDelete(o.id)
   if (!r.success) { alert(r.message); return }
   if (selectedOrg.value === o.id) selectedOrg.value = 0
+  await loadAll()
+}
+
+// ---- 拖拽调整层级（把组织/部门拖到另一节点下） ----
+const dragOrgId = ref<number | null>(null) // 正在拖拽的节点 ID
+const dragOverId = ref<number | null>(null) // 悬停高亮的目标节点 ID
+
+// startDrag 记录被拖拽节点。
+function startDrag(o: OrgInfo, e: DragEvent) {
+  dragOrgId.value = o.id
+  dragOverId.value = null
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+
+// onDragOver 高亮可放置的目标节点。
+function onDragOver(o: OrgInfo) {
+  if (dragOrgId.value !== null && dragOrgId.value !== o.id) dragOverId.value = o.id
+}
+
+// onDropTo 把被拖节点移到目标节点下。
+async function onDropTo(o: OrgInfo) {
+  const id = dragOrgId.value
+  dragOrgId.value = null
+  dragOverId.value = null
+  if (id === null || id === o.id) return
+  const r = await orgMove(id, o.id)
+  if (!r.success) { alert(r.message); return }
+  await loadAll()
+}
+
+// onDropRoot 把被拖节点移回根组织下。
+async function onDropRoot() {
+  const id = dragOrgId.value
+  dragOrgId.value = null
+  dragOverId.value = null
+  if (id === null) return
+  const r = await orgMove(id, 0)
+  if (!r.success) { alert(r.message); return }
   await loadAll()
 }
 

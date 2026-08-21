@@ -23,6 +23,7 @@ func (s *Server) routesOrgs() {
 	s.mux.HandleFunc("/api/admin/orgs", s.handleOrgList)
 	s.mux.HandleFunc("/api/admin/orgs/create", s.handleOrgCreate)
 	s.mux.HandleFunc("/api/admin/orgs/rename", s.handleOrgRename)
+	s.mux.HandleFunc("/api/admin/orgs/move", s.handleOrgMove)
 	s.mux.HandleFunc("/api/admin/orgs/delete", s.handleOrgDelete)
 	s.mux.HandleFunc("/api/admin/orgs/users", s.handleOrgUsers)
 }
@@ -64,7 +65,8 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 // handleOrgCreate 创建组织/部门接口。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 name/parent_id/type）。
 // 返回: success=true 时携带新建组织对象。
-// 类型规则：parent_id=0（根组织下）默认组织(org)；parent_id>0（组织下）默认部门(dept)；可显式指定。
+// 类型规则：支持任意深度层级——组织(org)下可再建组织(org)或部门(dept)；
+// parent_id=0 表示挂在根组织下；type 空则按 parent 推断（根下=组织，否则=部门）。
 func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
@@ -73,7 +75,7 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Name     string `json:"name"`      // 组织/部门名称（必填）
-		ParentID int64  `json:"parent_id"` // 父组织 ID（0=根组织下）
+		ParentID int64  `json:"parent_id"` // 父节点 ID（0=根组织下）
 		Type     string `json:"type"`      // 类型：org(组织)/dept(部门)，空则按 parent 推断
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
@@ -82,7 +84,7 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	tid := s.effTenant(r, u)
-	// 父组织归属校验（非根时父组织必须属于本租户）
+	// 父节点归属校验（非根时父节点必须属于本租户）
 	if req.ParentID > 0 {
 		if err := s.validateOrg(tid, req.ParentID); err != nil {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
@@ -100,15 +102,6 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if orgType != store.OrgTypeOrg && orgType != store.OrgTypeDept {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "组织类型仅支持 org(组织)/dept(部门)"})
-		return
-	}
-	// 组织(org)只能建在根组织下；部门(dept)必须挂在一个组织下
-	if orgType == store.OrgTypeOrg && req.ParentID != 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "组织只能建在根组织下"})
-		return
-	}
-	if orgType == store.OrgTypeDept && req.ParentID == 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "部门必须挂在组织下"})
 		return
 	}
 	org, err := s.Store.CreateOrg(tid, req.ParentID, req.Name, orgType)
@@ -147,6 +140,32 @@ func (s *Server) handleOrgRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "org_rename", "orgs", req.Name)
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleOrgMove 调整组织/部门层级接口（拖拽改父级）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 id/parent_id）。
+// 返回: success=true 表示移动成功（含成环/根组织/租户归属校验）。
+func (s *Server) handleOrgMove(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		ID       int64 `json:"id"`        // 被移动组织 ID
+		ParentID int64 `json:"parent_id"` // 目标父节点 ID（0=根组织下）
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "参数错误"})
+		return
+	}
+	tid := s.effTenant(r, u)
+	if err := s.Store.MoveOrg(tid, req.ID, req.ParentID); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(tid, u.ID, "org_move", "orgs", "")
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 

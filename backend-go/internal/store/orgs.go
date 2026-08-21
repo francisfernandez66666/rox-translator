@@ -116,6 +116,45 @@ func (s *Store) RenameOrg(id int64, name string) error {
 	return err
 }
 
+// MoveOrg 把组织/部门移动到新的父节点下（调整层级）。不允许移动根组织。
+// 参数：tid=租户 ID，id=被移动节点，parentID=目标父节点（0=根组织下）。
+// 返回错误；含成环校验（不能把节点移到自身或其子孙下）。
+func (s *Store) MoveOrg(tid, id, parentID int64) error {
+	org, err := s.GetOrgByID(id)
+	if err != nil {
+		return err
+	}
+	if org.TenantID != tid {
+		return fmt.Errorf("组织不属于当前租户")
+	}
+	if org.Type == OrgTypeRoot {
+		return fmt.Errorf("根组织不可移动")
+	}
+	// 目标父节点归属校验（非根时须属本租户）
+	if parentID != 0 {
+		p, err := s.GetOrgByID(parentID)
+		if err != nil {
+			return fmt.Errorf("目标组织不存在")
+		}
+		if p.TenantID != tid {
+			return fmt.Errorf("目标组织不属于当前租户")
+		}
+		// 成环校验：目标不能是被移动节点自身或其子孙
+		desc, err := s.OrgDescendantIDs(tid, id)
+		if err != nil {
+			return err
+		}
+		for _, d := range desc {
+			if d == parentID {
+				return fmt.Errorf("不能把组织移动到其自身或其子组织下")
+			}
+		}
+	}
+	_, err = s.db.Exec("UPDATE orgs SET parent_id=?, updated_at=? WHERE id=?",
+		parentID, time.Now().Format(time.RFC3339), id)
+	return err
+}
+
 // DeleteOrg 删除组织：先回收其下用户到根组织（org_id=0），再把子组织挂到父组织下（防止孤儿），最后删除本组织。
 // 不允许删除根组织（type='root'）。
 // 参数：id=组织 ID；返回错误。
