@@ -24,6 +24,7 @@ import * as pUsage from './panels/usage'
 import * as pAlerts from './panels/alerts'
 import * as pInvites from './panels/invites'
 import * as pChat from './panels/chat'
+import * as pPackages from './panels/packages'
 
 // Lang 支持的语言类型：zh=中文（默认）、en=英文
 export type Lang = 'zh' | 'en'
@@ -136,6 +137,7 @@ const baseZh: Dict = {
   'login.successReset': '密码已重置，请使用新密码登录',
   'login.forgotSent': '验证码已发送到绑定邮箱（未配置邮件时请在服务端日志查看）',
   'login.regSuccess': '注册成功，正在登录…',
+  'login.selectIndustry': '所属行业（新组织注册时必选）',
 
   // ---- 后台导航 ----
   'admin.console': '管理后台',
@@ -272,6 +274,7 @@ const baseEn: Dict = {
   'login.successReset': 'Password reset. Sign in with the new password.',
   'login.forgotSent': 'Code sent to bound email (check server log if mail is not configured)',
   'login.regSuccess': 'Registered. Signing in…',
+  'login.selectIndustry': 'Industry (required when creating a new org)',
 
   // ---- Admin nav ----
   'admin.console': 'Admin Console',
@@ -325,6 +328,7 @@ const zh: Dict = {
   ...pAlerts.zh,
   ...pInvites.zh,
   ...pChat.zh,
+  ...pPackages.zh,
 }
 
 const en: Dict = {
@@ -344,6 +348,7 @@ const en: Dict = {
   ...pAlerts.en,
   ...pInvites.en,
   ...pChat.en,
+  ...pPackages.en,
 }
 
 const dicts: Record<Lang, Dict> = { zh, en }

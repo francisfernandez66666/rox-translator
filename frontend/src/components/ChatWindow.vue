@@ -15,6 +15,7 @@
     <!-- ===== 顶部标题栏 ===== -->
     <header class="chat-header" :class="{ 'chat-mobile-header': isMobile }" style="border-bottom-color: #2e7d32;">
       <span>{{ t('chat.title') }}</span>
+      <span class="chat-balance" :title="t('chat.balanceTip')">🟢 {{ tpl('chat.balance', { n: sentenceBalance ?? '—' }) }}</span>
       <button class="clear-btn" @click="store.clearMessages()" :title="t('chat.clearChat')">
         🗑️
       </button>
@@ -250,11 +251,25 @@ import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { useChatStore } from '@/stores/chat'
 // 国际化取词
 import { t, tpl, lang } from '@/i18n'
+// 我的包接口（剩余句数展示）
+import { myPackage } from '@/api'
 // 子组件：消息气泡
 import MessageBubble from './MessageBubble.vue'
 
 // 全局聊天 Store 实例
 const store = useChatStore()
+
+// 剩余句数（个人级消耗看板；从 /api/me/package 读取）
+const sentenceBalance = ref<number | null>(null)
+async function loadBalance() {
+  try {
+    const r = await myPackage()
+    if (r.success) sentenceBalance.value = (r as any).sentence_balance ?? null
+  } catch { sentenceBalance.value = null }
+}
+// 挂载与每次翻译完成后刷新剩余句数
+onMounted(() => { loadBalance() })
+watch(() => store.messages.length, () => { if (store.messages.length) loadBalance() })
 
 // ---- 技能配置 ----
 const skillConfig = computed(() => ({
@@ -665,6 +680,11 @@ async function loadTranslationLangs() {
   border-bottom: 2px solid #e0e0e0;
   flex-shrink: 0;
   background: #fff;
+}
+.chat-balance {
+  font-size: 12px; color: #2e7d32; background: #e8f5e9;
+  padding: 4px 10px; border-radius: 20px; margin-left: auto; margin-right: 10px;
+  white-space: nowrap; cursor: default;
 }
 .header-left {
   display: flex;

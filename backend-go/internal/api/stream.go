@@ -113,6 +113,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// 成功：计量（按源文本字符数；强制计费模式会扣余额）并推送结果
 		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Message))))
+		// 商业包句数计量：按源句数 × 目标语言数扣减句数余额
+		s.meterSentences(r, tid, req.Message, req.Options)
 		s.metrics.countTranslate("text", true)
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
 		// Webhook：翻译完成事件回调租户配置的 URL（异步投递，不阻塞 SSE 返回）
@@ -237,6 +239,8 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	} else {
 		// 成功：按提取段数计量（强制计费模式会扣余额）并推送结果
 		s.meterUsage(r, tid, "translate", int64(res.Data.TotalTexts))
+		// 商业包句数计量：文件按「提取段数 × 目标语言数」扣减句数余额
+		s.meterFileSentences(r, tid, res.Data.TotalTexts, options)
 		s.metrics.countTranslate("file", true)
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
 		// Webhook：翻译完成事件回调（异步投递）
@@ -272,6 +276,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// 成功：按源文本字符数计量
 		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Message))))
+		// 商业包句数计量：按源句数 × 目标语言数扣减句数余额
+		s.meterSentences(r, tid, req.Message, req.Options)
 		s.metrics.countTranslate("text", true)
 		// Webhook：翻译完成事件回调（异步投递）
 		s.dispatchTranslateWebhook(tid, "text", req.Message, res)
@@ -343,6 +349,8 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	if res.Error == "" {
 		// 成功：按提取段数计量文件翻译用量
 		s.meterUsage(r, tid, "translate", int64(res.Data.TotalTexts))
+		// 商业包句数计量：文件按「提取段数 × 目标语言数」扣减句数余额
+		s.meterFileSentences(r, tid, res.Data.TotalTexts, options)
 		s.metrics.countTranslate("file", true)
 		// Webhook：翻译完成事件回调（异步投递）
 		s.dispatchTranslateWebhook(tid, "file", header.Filename, res)

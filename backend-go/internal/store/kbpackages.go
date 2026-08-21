@@ -168,6 +168,33 @@ func (s *Store) EnsureDefaultPackages(tid int64) error {
 	return nil
 }
 
+// FindIndustryByCode 在默认租户（tenant 1，超管维护行业包的租户）中按 code 查找行业包。
+// 参数：code=行业包编码；返回行业包对象（供注册行业校验与名称引用）。
+func (s *Store) FindIndustryByCode(code string) (*KBPackage, error) {
+	var p KBPackage
+	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=1 AND pack_type=? AND code=?", PackIndustry, code).
+		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// EnsureIndustryPackage 确保新租户存在指定行业包（按 code 幂等）。
+// 参数：tid=租户 ID，code=行业包编码，name=行业包名称；返回错误。
+func (s *Store) EnsureIndustryPackage(tid int64, code, name string) error {
+	if code == "" {
+		return nil
+	}
+	var cnt int
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM kb_packages WHERE tenant_id=? AND code=?", tid, code).Scan(&cnt)
+	if cnt > 0 {
+		return nil // 已存在同 code 行业包
+	}
+	_, err := s.CreateKBPackage(tid, 0, code, name, PackIndustry, PackRoleSource)
+	return err
+}
+
 // ============ 条目 ============
 
 // SaveEntry 新增/更新 KB 条目：同租户+包内按 (源语言, 源文本, 目标语言) 判重，命中则更新。

@@ -2,6 +2,8 @@
 export const zh: Record<string, string> = {
   'chat.title': '🌐 翻译',
   'chat.clearChat': '清空对话',
+  'chat.balance': '剩余 {n} 句',
+  'chat.balanceTip': '我的剩余翻译句数（源句 × 目标语言数计）',
   'chat.offline': '⚠️ 后端服务未连接，请检查网络连接',
   'chat.checking': '检查中…',
   'chat.retry': '重试',
@@ -86,6 +88,8 @@ export const zh: Record<string, string> = {
 export const en: Record<string, string> = {
   'chat.title': '🌐 Translate',
   'chat.clearChat': 'Clear chat',
+  'chat.balance': '{n} left',
+  'chat.balanceTip': 'My remaining translation sentences (source sentences × target languages)',
   'chat.offline': '⚠️ Backend offline, check your connection',
   'chat.checking': 'Checking…',
   'chat.retry': 'Retry',

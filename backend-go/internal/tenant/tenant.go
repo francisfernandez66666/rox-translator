@@ -30,6 +30,10 @@ type Tenant struct {
 type Perms struct {
 	Langs         []string `json:"langs,omitempty"`           // 允许翻译的语言代码；空=全部
 	MaxDailyChars int64    `json:"max_daily_chars,omitempty"` // 每日字符上限；0=不限
+	// 商业包（句数制）字段：
+	SentenceBalance int64  `json:"sentence_balance,omitempty"` // 剩余翻译句数（源句×目标语言数累计）
+	PackageCode     string `json:"package_code,omitempty"`     // 当前订阅的付费包编码（空=无订阅）
+	SubscribedAt    string `json:"subscribed_at,omitempty"`    // 最近订阅时间（RFC3339）
 }
 
 // 租户状态常量

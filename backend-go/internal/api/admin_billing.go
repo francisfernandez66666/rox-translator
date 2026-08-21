@@ -62,6 +62,22 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleManualConfirmOrders 待人工确认订单列表（super_admin）：静态码支付用户点「我已付费」后待审核。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求。
+// 返回: success=true 时携带 orders 数组（仅 manual 渠道 + manual_confirm=1 + pending）。
+func (s *Server) handleManualConfirmOrders(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireAdminUser(r); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	orders, err := s.Store.ListManualConfirmOrders()
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "orders": orders})
+}
+
 // handleOrders 订单列表
 func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)

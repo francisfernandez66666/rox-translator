@@ -110,17 +110,31 @@ th{background:#e8f5e9;color:var(--green)}
 <div class="wrap">
 <div class="card">
 <h1>定价 Pricing</h1>
-<p>按 token 计量，先用后付，余额不足自动暂停服务。充值 / 用量明细请在<a href="/admin">管理后台</a>查看。</p>
+<p>新用户注册即送免费体验句数；按套餐订阅或按 token 计量。充值 / 用量明细请在<a href="/admin">管理后台</a>查看。</p>
+<h2>商业套餐 Plans</h2>
+<div id="plansBox"><p>加载中…</p></div>
+<div class="note">💡 句数口径：每源句 × 每个目标语言 = 消耗 1 句。句数用尽后可订阅付费包或购买增量包。</div>
 <h2>Token 单价表</h2>
 <div id="rateTable"><p>加载中…</p></div>
 <div class="note">💡 计费说明：高膨胀语种（如日语/韩语）按倍率 × 基础单价计费；具体扣费以每次翻译明细为准。</div>
 <h2>常见问题</h2>
 <p><b>Q：token 如何计量？</b> 文本翻译按源文本字符数计量，文件翻译按提取段数计量。</p>
-<p><b>Q：余额用完后怎么办？</b> 翻译服务自动暂停，充值到账后立即恢复。</p>
-<p><b>Q：支持哪些支付方式？</b> 支持微信 / 支付宝在线支付（对接中），当前可使用线下转账 + 管理员充值。</p>
+<p><b>Q：句数用完后怎么办？</b> 可订阅付费包（包月 X 句）或购买增量包，到账后立即恢复。</p>
+<p><b>Q：支持哪些支付方式？</b> 支持微信 / 支付宝在线支付（对接中），静态二维码扫码 + 人工确认，当前可使用线下转账 + 管理员充值。</p>
 </div></div>
 <div class="footer">© 2026 翻译助手 · ROX 多语翻译知识库</div>
 <script>
+fetch('/api/plans').then(r=>r.json()).then(d=>{
+  const types={free:'免费体验',paid:'付费包',increment:'增量包'};
+  const cards=(d.plans||[]).map(p=>{
+    return '<div style="border:1px solid #e0e0e0;border-radius:12px;padding:16px;margin:10px 10px 10px 0;display:inline-block;min-width:220px;vertical-align:top">'+
+      '<b>'+p.name+'</b><br><span style="color:#5f6368">'+p.sentences+' 句 · '+(types[p.ptype]||p.ptype)+'</span><br>'+
+      '<span style="color:#2e7d32;font-weight:600">¥'+p.price_money+'</span> / '+(p.duration_days||'—')+'天<br>'+
+      (p.ptype==='free' ? '<span style="color:#5f6368">注册即送</span>' : '<span style="color:#5f6368">订阅后生效</span>')+
+      '</div>';
+  }).join('');
+  document.getElementById('plansBox').innerHTML=cards || '<p>暂无上架套餐，请联系管理员</p>';
+}).catch(()=>{document.getElementById('plansBox').innerHTML='<p>套餐加载失败</p>'});
 fetch('/api/pricing').then(r=>r.json()).then(d=>{
   const rows=(d.rate_cards||[]).map(c=>{
     const task={translate:'翻译',review:'审校',evals:'评测',gate:'校验'}[c.task_type]||c.task_type;

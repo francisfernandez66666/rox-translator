@@ -46,6 +46,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name"`     // 租户名称
 		Invite   string `json:"invite"`   // 邀请码（可选）
 		Email    string `json:"email"`    // 联系邮箱（找回密码验证码接收）
+		Industry string `json:"industry"` // 所属行业（新租户注册时必填，来自行业包 code）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -72,6 +73,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if v, _ := s.Store.GetConfig("trial_tokens"); v != "" {
 		if tv, err := strconv.ParseInt(v, 10, 64); err == nil && tv > 0 {
 			trialTokens = tv
+		}
+	}
+	// 试用句数（可配置）：默认 500 句（每源句 × 目标语言数）
+	trialSentences := int64(500)
+	if v, _ := s.Store.GetConfig("trial_sentences"); v != "" {
+		if sv, err := strconv.ParseInt(v, 10, 64); err == nil && sv > 0 {
+			trialSentences = sv
 		}
 	}
 
@@ -105,7 +113,18 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		if req.Name == "" {
 			req.Name = req.Code
 		}
-		perms := &tenant.Perms{MaxDailyChars: 20000} // 试用每日上限 2 万字符
+		// Req8：完全新租户注册需选择行业（来自超管创建的行业包），用于开通对应行业包
+		if req.Industry == "" {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请选择所属行业"})
+			return
+		}
+		// 校验行业包存在（来自默认租户 tenant 1 的行业包）
+		industryPkg, ipErr := s.Store.FindIndustryByCode(req.Industry)
+		if ipErr != nil {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "行业不存在，请重新选择"})
+			return
+		}
+		perms := &tenant.Perms{MaxDailyChars: 20000, SentenceBalance: trialSentences, PackageCode: "trial"} // 试用每日上限 2 万字符 + 试用句数
 		pb, _ := json.Marshal(perms)
 		t, err := s.Ten.Create(req.Code, req.Name, "", string(pb))
 		if err != nil {
@@ -117,6 +136,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			"id": t.ID, "code": t.Code, "name": t.Name, "status": t.Status,
 			"expires_at": t.ExpiresAt, "permissions": t.Permissions,
 		}
+		// 初始化租户：默认三级 KB 包 + 行业包 + 余额账户
+		_ = s.Store.EnsureDefaultPackages(inviteTenantID)
+		// 开通所选行业包（在租户内创建与默认租户同 code/name 的行业包）
+		_ = s.Store.EnsureIndustryPackage(inviteTenantID, industryPkg.Code, industryPkg.Name)
 		// 发放试用余额：确保有余额账户记录后充值 trial_tokens
 		_ = s.Store.EnsureBalance(inviteTenantID)
 		if trialTokens > 0 {
