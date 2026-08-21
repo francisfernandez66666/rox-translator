@@ -29,7 +29,7 @@ func (s *Server) routesOrgs() {
 
 // handleOrgList 组织列表接口（扁平列表，前端组装树）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（需租户管理员及以上）。
-// 返回: success=true 时携带 orgs 数组（含租户信息）。
+// 返回: success=true 时携带 orgs 数组、root（根组织行，名称可自定义）与 tenant_id。
 func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
@@ -37,17 +37,34 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.effTenant(r, u)
+	// 确保根组织行存在（首次或迁移后），名称默认租户名
+	root, err := s.Store.GetRootOrg(tid)
+	if err != nil {
+		rootName := ""
+		if s.Ten != nil {
+			if tn, e := s.Ten.GetByID(tid); e == nil {
+				rootName = tn.Name
+			}
+		}
+		if rootName == "" {
+			rootName = "组织"
+		}
+		if r, e := s.Store.EnsureRootOrg(tid, rootName); e == nil {
+			root = r
+		}
+	}
 	orgs, err := s.Store.ListOrgs(tid)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "orgs": orgs, "tenant_id": tid})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "orgs": orgs, "root": root, "tenant_id": tid})
 }
 
-// handleOrgCreate 创建子组织/部门接口。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 name/parent_id）。
+// handleOrgCreate 创建组织/部门接口。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 name/parent_id/type）。
 // 返回: success=true 时携带新建组织对象。
+// 类型规则：parent_id=0（根组织下）默认组织(org)；parent_id>0（组织下）默认部门(dept)；可显式指定。
 func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
@@ -57,6 +74,7 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name     string `json:"name"`      // 组织/部门名称（必填）
 		ParentID int64  `json:"parent_id"` // 父组织 ID（0=根组织下）
+		Type     string `json:"type"`      // 类型：org(组织)/dept(部门)，空则按 parent 推断
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "组织名称不能为空"})
@@ -71,7 +89,29 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	org, err := s.Store.CreateOrg(tid, req.ParentID, req.Name)
+	// 类型推断与校验
+	orgType := req.Type
+	if orgType == "" {
+		if req.ParentID == 0 {
+			orgType = store.OrgTypeOrg
+		} else {
+			orgType = store.OrgTypeDept
+		}
+	}
+	if orgType != store.OrgTypeOrg && orgType != store.OrgTypeDept {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "组织类型仅支持 org(组织)/dept(部门)"})
+		return
+	}
+	// 组织(org)只能建在根组织下；部门(dept)必须挂在一个组织下
+	if orgType == store.OrgTypeOrg && req.ParentID != 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "组织只能建在根组织下"})
+		return
+	}
+	if orgType == store.OrgTypeDept && req.ParentID == 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "部门必须挂在组织下"})
+		return
+	}
+	org, err := s.Store.CreateOrg(tid, req.ParentID, req.Name, orgType)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + err.Error()})
 		return

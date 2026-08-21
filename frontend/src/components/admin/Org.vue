@@ -10,23 +10,25 @@
     <h2>{{ t('org.title') }}</h2>
     <p class="ad-hint">{{ t('org.treeHint') }}</p>
 
-    <!-- ===== 新建子组织 ===== -->
+    <!-- ===== 新建组织/部门 ===== -->
     <div class="ad-row">
       <select v-model="parentId" class="ad-input">
         <option :value="0">{{ t('org.rootOption') }}</option>
         <option v-for="o in orgs" :key="o.id" :value="o.id">{{ orgPath(o) }}</option>
       </select>
       <input v-model="newName" :placeholder="t('org.namePlaceholder')" class="ad-input" @keydown.enter="createOrg" />
-      <button class="ad-btn" @click="createOrg">{{ t('org.create') }}</button>
+      <button class="ad-btn" @click="createOrg">{{ parentId === 0 ? t('org.create') : t('org.createDept') }}</button>
     </div>
 
     <!-- ===== 左树右表：组织树 + 组织下用户 ===== -->
     <div class="ad-split">
       <!-- 组织树 -->
       <div class="ad-org-tree">
-        <div class="ad-tree-item ad-tree-root" @click="selectOrg(0)">
-          <span>🏢 {{ tenantName }}（{{ t('org.rootOrg') }}）</span>
-          <span class="ad-tree-count">{{ tpl('org.userCount', { n: allUsers.length }) }}</span>
+        <div class="ad-tree-item ad-tree-root" @click="selectRoot">
+          <span>{{ rootOrgIcon }} {{ rootOrgName }}（{{ t('org.typeRoot') }}）</span>
+          <span class="ad-tree-actions">
+            <button class="ad-btn-xs" :title="t('org.renameRoot')" @click.stop="renameRootOrg">✎</button>
+          </span>
         </div>
         <div
           v-for="o in flatTree"
@@ -35,9 +37,9 @@
           :style="{ paddingLeft: (8 + o._depth * 18) + 'px' }"
           @click="selectOrg(o.id)"
         >
-          <span>📁 {{ o.name }}</span>
+          <span>{{ o.type === 'dept' ? '🗂️' : '📁' }} {{ o.name }}</span>
           <span class="ad-tree-actions">
-            <button class="ad-btn-xs" :title="t('org.addChild')" @click.stop="setParent(o.id)">+</button>
+            <button class="ad-btn-xs" :title="o.type === 'dept' ? t('org.addChild') : t('org.addChild')" @click.stop="setParent(o.id)">+</button>
             <button class="ad-btn-xs" :title="t('org.rename')" @click.stop="renameOrg(o)">✎</button>
             <button class="ad-btn-xs ad-btn-red" :title="t('org.delete')" @click.stop="deleteOrg(o)">✕</button>
           </span>
@@ -98,6 +100,8 @@ import { fmtTime } from './ui'
 
 // 组织扁平列表（用于下拉与组装树）
 const orgs = ref<OrgInfo[]>([])
+// 根组织行（type='root'，名称可自定义）
+const rootOrg = ref<OrgInfo | null>(null)
 // 选中组织（0=根组织）
 const selectedOrg = ref(0)
 // 新建子组织的父组织
@@ -114,11 +118,14 @@ const creating = ref(false)
 // 新用户信息：用户名/密码/显示名/角色
 const nu = ref({ username: '', password: '', display_name: '', role: 'user' })
 
-// 当前生效租户名称（展示根组织）
-const tenantName = computed(() => {
+// 根组织名称（优先用根组织行的自定义名称，回退租户名）
+const rootOrgName = computed(() => {
+  if (rootOrg.value?.name) return rootOrg.value.name
   const t = tenantList.value.find(x => x.id === activeTenantId.value)
   return t?.name || tpl('org.orgHash', { id: activeTenantId.value })
 })
+// 根组织图标
+const rootOrgIcon = computed(() => '🏢')
 
 // 组装树形结构（递归计算深度）
 const flatTree = computed(() => {
@@ -154,9 +161,28 @@ const selectedOrgName = computed(() => {
 // 加载组织 + 用户
 async function loadAll() {
   const [r, ru] = await Promise.all([orgList(), orgUsers()])
-  if (r.success) orgs.value = r.orgs || []
+  if (r.success) {
+    // 根组织行单独取 root，orgs 列表排除 root（根组织单独显示在根节点）
+    orgs.value = (r.orgs || []).filter((o: any) => o.type !== 'root')
+    rootOrg.value = r.root || null
+  }
   if (ru.success) allUsers.value = ru.users || []
   await loadOrgUsers()
+}
+
+// selectRoot 选中根组织（加载根组织下全部用户）。
+function selectRoot() {
+  selectOrg(0)
+}
+
+// renameRootOrg 重命名根组织。
+async function renameRootOrg() {
+  if (!rootOrg.value) return
+  const name = prompt(t('org.renameRoot'), rootOrg.value.name)
+  if (!name || !name.trim()) return
+  const r = await orgRename(rootOrg.value.id, name.trim())
+  if (!r.success) { alert(r.message); return }
+  await loadAll()
 }
 
 // 按选中组织加载用户（含子孙归集）
@@ -220,7 +246,8 @@ function setParent(id: number) {
 
 async function createOrg() {
   if (!newName.value.trim()) { alert(t('org.nameRequired')); return }
-  const r = await orgCreate({ name: newName.value.trim(), parent_id: parentId.value })
+  // 父=根组织(0) → 组织；父=组织/部门 → 部门
+  const r = await orgCreate({ name: newName.value.trim(), parent_id: parentId.value, type: parentId.value === 0 ? 'org' : 'dept' })
   if (!r.success) { alert(r.message); return }
   newName.value = ''
   await loadAll()

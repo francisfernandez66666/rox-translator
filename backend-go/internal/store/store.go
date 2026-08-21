@@ -260,12 +260,13 @@ func (s *Store) migrate() error {
 			created_at TEXT,
 			resolved_at TEXT NOT NULL DEFAULT ''
 		)`,
-		// ---------- orgs 组织层级（管理结构展示层，根组织=租户） ----------
+		// ---------- orgs 组织层级（管理结构展示层：根组织=租户） ----------
 		`CREATE TABLE IF NOT EXISTS orgs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			tenant_id INTEGER NOT NULL DEFAULT 1,
 			parent_id INTEGER NOT NULL DEFAULT 0,    -- 0 = 根组织（对应租户本身）
 			name TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL DEFAULT 'org',        -- root(根组织)/org(组织)/dept(部门)
 			created_at TEXT,
 			updated_at TEXT
 		)`,
@@ -328,6 +329,8 @@ func (s *Store) migrateColumns() error {
 		{"orders", "qr_content", "ALTER TABLE orders ADD COLUMN qr_content TEXT NOT NULL DEFAULT ''"},
 		// 联系邮箱：找回密码验证码接收地址
 		{"users", "email", "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''"},
+		// 组织类型：root(根组织)/org(组织)/dept(部门)
+		{"orgs", "type", "ALTER TABLE orgs ADD COLUMN type TEXT NOT NULL DEFAULT 'org'"},
 	}
 	for _, c := range cols {
 		// 判断列是否存在
