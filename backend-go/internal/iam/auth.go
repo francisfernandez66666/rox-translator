@@ -1,3 +1,9 @@
+// ============ 本文件职责中文说明 ============
+// 认证与鉴权：JWT（HS256）签发与校验、当前用户的 context 存取、
+// 四级角色等级换算与权限断言（IsSuperAdmin/IsTenantAdmin/IsDeptAdmin/RequireRole）、
+// 密码哈希（bcrypt，兼容历史 SHA-256/HMAC 格式并支持登录时自动升级）。
+// 密钥来源：环境变量 JWT_SECRET（生产必须设置），未设置时使用内置默认值（仅限本地开发）。
+// =============================================
 package iam
 
 import (
