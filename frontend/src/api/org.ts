@@ -11,26 +11,28 @@ export interface OrgInfo {
   tenant_id: number
   parent_id: number
   name: string
+  type: string // root(根组织)/org(组织)/dept(部门)
   created_at: string
   updated_at: string
 }
 
-// OrgResp 组织接口统一响应结构：orgs 为组织列表、org 为单个对象、tenant_id 为归属租户。
+// OrgResp 组织接口统一响应结构：orgs 为组织列表、org 为单个对象、root 为根组织行、tenant_id 为归属租户。
 export interface OrgResp {
   success: boolean
   message?: string
   orgs?: OrgInfo[]
   org?: OrgInfo
+  root?: OrgInfo
   tenant_id?: number
 }
 
-// 组织列表（扁平，前端组装树）
+// 组织列表（扁平，前端组装树；含根组织行 root）
 export async function orgList(): Promise<OrgResp> {
   return request('/api/admin/orgs', { headers: authHeaders() })
 }
 
-// 创建子组织/部门（parent_id=0 为根组织下）
-export async function orgCreate(data: { name: string; parent_id: number }): Promise<OrgResp> {
+// 创建组织/部门（parent_id=0 为根组织下=组织；parent_id>0=部门）
+export async function orgCreate(data: { name: string; parent_id: number; type?: string }): Promise<OrgResp> {
   return request('/api/admin/orgs/create', {
     method: 'POST',
     headers: authHeaders(),
