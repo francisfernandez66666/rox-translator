@@ -15,10 +15,11 @@
       <div class="ad-brand">🏢 {{ t('admin.console') }}</div>
       <div class="ad-ws-tag">{{ t(currentWorkspace?.label || '') }}</div>
 
-      <!-- 租户切换器（仅超管） -->
+      <!-- 租户切换器（仅超管）：0=平台根组织「翻译助手」 -->
       <div v-if="isSuper && tenantList.length" class="ad-tenant-switch">
         <label>{{ t('admin.currentOrg') }}</label>
         <select :value="activeTenantId" class="ad-input" @change="switchTenant(Number(($event.target as HTMLSelectElement).value))">
+          <option :value="0">🏠 {{ t('admin.platformRoot') }}</option>
           <option v-for="t in tenantList" :key="t.id" :value="t.id">[{{ t.id }}] {{ t.name }} ({{ t.code }})</option>
         </select>
       </div>

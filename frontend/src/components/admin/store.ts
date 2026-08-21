@@ -12,7 +12,7 @@ import { t } from '@/i18n'
 // 当前登录用户（由壳组件注入）
 export const user: Ref<AuthUser | null> = ref(null)
 // 生效租户 ID（超管切换，租户管理员固定在自身租户）
-export const activeTenantId = ref<number>(getActiveTenantId() || 1)
+export const activeTenantId = ref<number>(getActiveTenantId() ?? 0)
 // 租户列表（超管可见）
 export const tenantList = ref<TenantInfo[]>([])
 
@@ -63,15 +63,12 @@ export function switchTenant(tid: number) {
 export async function loadTenants() {
   const r = await apiTenantList()
   if (r.success) tenantList.value = r.tenants || []
-  // 超管首次进入：默认生效第一个租户
-  if (isSuper.value && activeTenantId.value === 1 && !localStorage.getItem('active_tenant_id')) {
-    if (tenantList.value.length) setActiveTenantId(tenantList.value[0].id)
+  // 超管默认平台上下文（0=翻译助手根组织）；仅当存储了已删除的租户 id 时才回退
+  const stored = getActiveTenantId()
+  if (stored > 0 && !tenantList.value.some(t => t.id === stored) && tenantList.value.length) {
+    setActiveTenantId(0)
   }
-  // 若已选租户被删除，回退到第一个可用租户
-  if (!tenantList.value.some(t => t.id === activeTenantId.value) && tenantList.value.length) {
-    setActiveTenantId(tenantList.value[0].id)
-  }
-  activeTenantId.value = getActiveTenantId() || 1
+  activeTenantId.value = getActiveTenantId() ?? 0
 }
 
 // 退出登录：清空 token（清 token 由壳组件触发 UI 跳转）

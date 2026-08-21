@@ -63,7 +63,7 @@
 // Vue 响应式
 import { ref, onMounted } from 'vue'
 // API：登录 / 自助注册 / 写入 token
-import { login, authRegister, forgotPassword, resetPassword, setAuthToken, registerIndustries } from '@/api'
+import { login, authRegister, forgotPassword, resetPassword, setAuthToken, setActiveTenantId, registerIndustries } from '@/api'
 // 国际化：文案取词 + 语言切换
 import { t, lang, toggleLang } from '@/i18n'
 
@@ -213,6 +213,8 @@ async function doLogin() {
     return
   }
   setAuthToken(resp.token)
+  // 登录成功重置租户上下文：超管默认平台（0=翻译助手根组织），普通用户由后端按 JWT 归属
+  setActiveTenantId(0)
   emit('ok', resp.user)
 }
 
