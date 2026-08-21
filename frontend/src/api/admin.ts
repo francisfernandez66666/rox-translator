@@ -41,3 +41,7 @@ export async function adminOrderCreate(data: { tenant_id: number; tokens: number
 export async function adminOrderPay(id: number): Promise<AdminResp> {
   return request('/api/admin/orders/pay', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
+// 前台身份上下文：账号/租户/组织部门 + 可应用知识库包类型（登录后顶栏展示用）
+export async function meContext(): Promise<AdminResp> {
+  return request('/api/me/context', { headers: authHeaders() })
+}

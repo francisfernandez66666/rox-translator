@@ -11,7 +11,9 @@ export { API_BASE }
 // 登录态：所有请求自动带 Authorization Bearer，租户由后端从 JWT 解析
 let authToken = localStorage.getItem('auth_token') || ''
 // 超管生效租户：以 X-Tenant-ID 下发（仅超级管理员使用租户切换器）
-let activeTenantId = Number(localStorage.getItem('active_tenant_id') || 0)
+// 存储键 v2：v1 键作废（防历史残留把超管误挂到具体租户，导致前台误命中该租户知识库）
+const TENANT_KEY = 'active_tenant_id_v2'
+let activeTenantId = Number(localStorage.getItem(TENANT_KEY) || 0)
 
 // 设置登录 token 并持久化
 export function setAuthToken(token: string) {
@@ -27,7 +29,7 @@ export function getAuthToken(): string {
 // 设置生效租户 ID 并持久化（超管租户切换器使用）
 export function setActiveTenantId(tid: number) {
   activeTenantId = tid
-  try { localStorage.setItem('active_tenant_id', String(tid)) } catch {}
+  try { localStorage.setItem(TENANT_KEY, String(tid)) } catch {}
 }
 
 // 读取生效租户 ID
