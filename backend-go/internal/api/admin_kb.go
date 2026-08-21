@@ -9,8 +9,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"translator/internal/auth"
 	"translator/internal/store"
 )
+
+// canManagePackType 判断用户是否有权管理指定包类型的知识库包。
+// 超管可管理全部类型（tenant/industry/locale/department）；租户管理员仅可管理企业包与部门包。
+func canManagePackType(u *store.User, packType string) bool {
+	if u != nil && auth.IsSuperAdmin(u) {
+		return true
+	}
+	return packType == store.PackTenant || packType == store.PackDepartment
+}
 
 // ============ KB 包管理（行业包） ============
 
@@ -51,6 +61,11 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Role == "" {
 		req.Role = store.PackRoleSource
+	}
+	// 包类型权限校验：租户管理员仅可建企业/部门包；超管可建全部类型
+	if !canManagePackType(u, req.PackType) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权创建该类型的知识库包"})
+		return
 	}
 	p, err := s.Store.CreateKBPackage(s.effTenant(r, u), 0, req.Code, req.Name, req.PackType, req.Role)
 	if err != nil {
@@ -96,6 +111,16 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	// 包类型权限校验（删除同样校验）
+	pkg, gErr := s.Store.GetKBPackage(req.ID, s.effTenant(r, u))
+	if gErr != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		return
+	}
+	if !canManagePackType(u, pkg.PackType) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权删除该类型的知识库包"})
 		return
 	}
 	if err := s.Store.DeleteKBPackage(req.ID, s.effTenant(r, u)); err != nil {

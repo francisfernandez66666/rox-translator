@@ -25,6 +25,7 @@ import (
 
 	"translator/internal/engine"
 	"translator/internal/kb"
+	"translator/internal/store"
 )
 
 // ============ KB 批量导入（租户自服务） ============
@@ -251,6 +252,11 @@ type kbRecognizeMeta struct {
 // 返回: success=true 时携带 preview（预览 5 条）/columns（语言列）/new_langs（新语言）/temp_id。
 // 流程：保存文件 → kb.ParseKBFile 解析 → 识别源列与语言列 → 缓存文件生成 temp_id（供 import-kb 读取）。
 func (s *Server) handleRecognizeKB(w http.ResponseWriter, r *http.Request) {
+	// 鉴权：需租户管理员及以上（前台普通用户不再允许上传 KB）
+	if _, err := s.requireTenantAdmin(r); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
 	// 知识库未加载（未传入 -kb）时拒绝识别
 	if s.DB == nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "翻译技能未加载（未传入 -kb）"})
@@ -377,22 +383,44 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)[:n]
 }
 
-// handleImportKB 导入识别过的 KB 文件接口：前端仅提交 {temp_id}，从缓存读取之前保存的文件并写入 KB。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 temp_id）。
+// handleImportKB 导入识别过的 KB 文件接口：前端仅提交 {temp_id, package_id}，从缓存读取之前保存的文件并写入指定包。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 temp_id/package_id）。
 // 返回: success=true 时携带 added（新增数）/skipped（跳过数）。
-// 流程：读缓存元信息 → 重新解析文件 → 按源列/语言列写入当前租户 KB → 清理临时文件与元信息。
+// 流程：读缓存元信息 → 重新解析文件 → 按源列/语言列写入指定知识库包（按包隔离）→ 清理临时文件与元信息。
 func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
+	// 鉴权：需租户管理员及以上
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
 	// 知识库未加载时拒绝导入
 	if s.DB == nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "翻译技能未加载（未传入 -kb）"})
 		return
 	}
-	// 协议：前端仅提交 {temp_id}，从缓存读取之前保存的文件
+	// 协议：前端提交 {temp_id, package_id}，从缓存读取之前保存的文件
 	var req struct {
-		TempID string `json:"temp_id"` // 识别阶段返回的临时 ID
+		TempID    string `json:"temp_id"`    // 识别阶段返回的临时 ID
+		PackageID int64  `json:"package_id"` // 目标知识库包 ID（按包隔离写入）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TempID == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少 temp_id"})
+		return
+	}
+	if req.PackageID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少 package_id"})
+		return
+	}
+	tid := s.effTenant(r, u)
+	// 包归属 + 类型权限校验
+	pkg, gErr := s.Store.GetKBPackage(req.PackageID, tid)
+	if gErr != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		return
+	}
+	if !canManagePackType(u, pkg.PackType) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包导入"})
 		return
 	}
 
@@ -428,8 +456,6 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 
 	added := 0
 	skipped := 0
-	// 当前租户（租户隔离：导入到当前请求租户的 KB）
-	tid := s.currentTenant(r)
 	for _, rec := range records {
 		var src string
 		// 提取源列值
@@ -460,14 +486,17 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 			skipped++
 			continue
 		}
-		// 写入 KB（来源标记 "imported"）；单条失败跳过计数
-		if _, err := s.DB.SaveBack(src, translations, "imported", tid); err != nil {
-			skipped++
-			continue
+		// 按语言逐条写入指定包（来源标记 "imported"；单条失败跳过计数）
+		for lang, txt := range translations {
+			if _, err := s.Store.SaveEntry(tid, req.PackageID, store.LayerTM, "zh", src, lang, txt, "imported"); err != nil {
+				skipped++
+				continue
+			}
+			added++
 		}
-		added++
 	}
 
+	s.Store.LogAudit(tid, u.ID, "kb_file_import", "kb_entries", req.TempID)
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "message": "导入完成", "added": added, "skipped": skipped,
 	})
