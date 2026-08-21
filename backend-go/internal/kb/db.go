@@ -34,6 +34,7 @@ type Row struct {
 	Zh       string            // 中文原文
 	Module   string            // 来源模块（如 manual/approved）
 	TenantID int64             // 所属租户 ID
+	PackID   int64             // 归属知识库包 ID（0=历史无归属数据）
 	Langs    map[string]string // 语言代码 → 译文（缺失语言为空串）
 }
 
@@ -536,7 +537,7 @@ func (k *KBDatabase) AllTenantIDs() ([]int64, error) {
 // AllRowsWithTenant 遍历全部条目的 id + zh + tenant_id（构建租户映射用）。
 // 返回：全部精简行列表（跨租户）。
 func (k *KBDatabase) AllRowsWithTenant() ([]Row, error) {
-	rows, err := k.db.Query("SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1) FROM tm_segments")
+	rows, err := k.db.Query("SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1), COALESCE(pack_id,0) FROM tm_segments")
 	if err != nil {
 		return nil, err
 	}
@@ -544,7 +545,7 @@ func (k *KBDatabase) AllRowsWithTenant() ([]Row, error) {
 	var out []Row
 	for rows.Next() {
 		var r Row
-		if err := rows.Scan(&r.ID, &r.Zh, &r.Module, &r.TenantID); err != nil {
+		if err := rows.Scan(&r.ID, &r.Zh, &r.Module, &r.TenantID, &r.PackID); err != nil {
 			continue
 		}
 		out = append(out, r)

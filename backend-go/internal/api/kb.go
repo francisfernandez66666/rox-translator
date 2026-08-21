@@ -82,6 +82,7 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 	}
 	// 导入审计
 	s.Store.LogAudit(tid, u.ID, "kb_entries_import", "kb_entries", strconv.Itoa(added))
+	s.rebuildIndexAsync() // 异步重建向量索引（增量入库）
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "message": "批量导入完成", "added": added, "skipped": skipped,
 	})
@@ -510,6 +511,7 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Store.LogAudit(tid, u.ID, "kb_file_import", "kb_entries", req.TempID)
+	s.rebuildIndexAsync() // 异步重建向量索引（增量入库）
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "message": "导入完成", "added": added, "skipped": skipped,
 	})

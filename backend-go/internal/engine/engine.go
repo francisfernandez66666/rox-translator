@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"translator/internal/config"
@@ -48,6 +49,11 @@ type Engine struct {
 	errMu      sync.Mutex
 	errRing    []bool // true=成功 false=失败
 	errRingCap int
+
+	// ★ 知识库向量索引重建
+	NPZPath   string      // npz 文件路径（重建后写回）
+	indexMu   sync.Mutex  // 保护 Index 指针热替换与重建互斥
+	rebuilding atomic.Bool // 防并发重建
 }
 
 // tenantID 从 ctx 取租户 id；未指定时回退默认租户 rox（id=1）
@@ -269,8 +275,10 @@ func NewEngine(cfg *config.Config, db *kb.KBDatabase, idx *kb.Index, ts *tenant.
 		}
 		if rows, err := db.AllRowsWithTenant(); err == nil {
 			idx.IDTenants = map[int64]int64{}
+			idx.IDPacks = map[int64]int64{}
 			for _, r := range rows {
 				idx.IDTenants[r.ID] = r.TenantID
+				idx.IDPacks[r.ID] = r.PackID
 			}
 		}
 	}
@@ -416,7 +424,8 @@ func (e *Engine) TranslateOne(ctx context.Context, zhText string, targetLangs []
 		if err == nil && len(vec) > 0 {
 			highSim, _ := e.resolvePolicy(ctx)
 			// 检索返回 TopK 个语义相似行（按目标语言 + 租户双重过滤）
-			results := e.Index.Search(vec, e.Cfg.TopK, targetLangs, tid)
+			allow := e.applicablePacks(tid)
+			results := e.Index.ScopedSearch(vec, e.Cfg.TopK, targetLangs, tid, allow)
 			if len(results) > 0 && results[0].Sim >= highSim {
 				res.Similarity = results[0].Sim
 				if r, err := e.DB.FetchRowTenant(results[0].ID, tid); err == nil {
@@ -1357,3 +1366,83 @@ func (e *Engine) LLMParseLang(ctx context.Context, hint string) string {
 }
 
 var _ = json.Marshal
+
+// applicablePacks 计算租户可应用的知识库包白名单（向量检索用）。
+// 规则：本租户全部包 + 语言文化包（全系统）+ 注册行业匹配的行业包。
+// St 不可用或查询失败时返回 nil（= 不过滤，退化为按租户隔离）。
+func (e *Engine) applicablePacks(tid int64) map[int64]bool {
+	if e.St == nil || tid <= 0 {
+		return nil
+	}
+	m, err := e.St.ApplicablePackIDs(tid)
+	if err != nil {
+		return nil
+	}
+	return m
+}
+
+// RebuildKBIndex 全量重建向量索引：读 tm_segments 全部中文原文 → bge-m3 嵌入 → 写回 npz 并热替换。
+// 返回成功嵌入的行数。并发调用安全（同一时刻仅一个重建）。
+func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
+	if e == nil || e.DB == nil || e.Index == nil || e.NPZPath == "" {
+		return 0, fmt.Errorf("向量索引未初始化")
+	}
+	if !e.rebuilding.CompareAndSwap(false, true) {
+		return 0, fmt.Errorf("重建正在进行中")
+	}
+	defer e.rebuilding.Store(false)
+
+	// 知识库 Embed 阶段配置优先（stage_models.kb_embed）
+	if eb, ek, em, ok := e.resolveStageModel(ctx, config.StageKBEmbed); ok {
+		e.LLM.SetEmbedOverride(eb, ek, em)
+	}
+
+	rows, err := e.DB.AllRowsWithTenant()
+	if err != nil {
+		return 0, err
+	}
+	idLangs, _ := e.DB.AllRowLangs(0)
+
+	newIdx := &kb.Index{IDs: make([]int64, 0, len(rows)), Vecs: make([][]float32, 0, len(rows)),
+		IDLangs: idLangs, IDTenants: map[int64]int64{}, IDPacks: map[int64]int64{}}
+	const batch = 32
+	done := 0
+	for i := 0; i < len(rows); i += batch {
+		end := i + batch
+		if end > len(rows) {
+			end = len(rows)
+		}
+		texts := make([]string, 0, end-i)
+		for _, r := range rows[i:end] {
+			texts = append(texts, r.Zh)
+		}
+		vecs, err := e.LLM.EmbedBatch(ctx, texts)
+		if err != nil {
+			return done, fmt.Errorf("第 %d-%d 批嵌入失败: %w", i, end, err)
+		}
+		for j, r := range rows[i:end] {
+			if j >= len(vecs) || len(vecs[j]) == 0 {
+				continue
+			}
+			newIdx.IDs = append(newIdx.IDs, r.ID)
+			newIdx.Vecs = append(newIdx.Vecs, vecs[j])
+			newIdx.IDTenants[r.ID] = r.TenantID
+			newIdx.IDPacks[r.ID] = r.PackID
+			done++
+		}
+	}
+	if done == 0 {
+		return 0, fmt.Errorf("无有效向量生成")
+	}
+	// 写盘 + 热替换
+	if err := kb.SaveNPZ(e.NPZPath, newIdx.IDs, newIdx.Vecs); err != nil {
+		return done, err
+	}
+	e.indexMu.Lock()
+	e.Index = newIdx
+	e.indexMu.Unlock()
+	return done, nil
+}
+
+// Rebuilding 是否正在重建向量索引。
+func (e *Engine) Rebuilding() bool { return e.rebuilding.Load() }

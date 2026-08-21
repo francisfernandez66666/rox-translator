@@ -159,6 +159,7 @@ func (s *Server) routesAdmin() {
 // routesAdminKB 注册知识库包/条目/安全句管理路由。
 func (s *Server) routesAdminKB() {
 	s.mux.HandleFunc("/api/admin/kb-packages/status", s.handleKBPackageStatus)
+	s.mux.HandleFunc("/api/admin/kb-index/rebuild", s.handleKBIndexRebuild)
 	s.mux.HandleFunc("/api/admin/kb-packages", s.handleKBPackages)
 	s.mux.HandleFunc("/api/admin/kb-packages/create", s.handleKBPackageCreate)
 	s.mux.HandleFunc("/api/admin/kb-packages/update", s.handleKBPackageUpdate)

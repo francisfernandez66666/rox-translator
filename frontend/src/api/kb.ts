@@ -62,3 +62,8 @@ export async function kbImportFile(data: { temp_id: string; package_id: number }
 export async function kbPackageStatus(id: number, enabled: number): Promise<AdminResp> {
   return request('/api/admin/kb-packages/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, enabled }) })
 }
+
+// 手动触发向量索引全量重建（超管；使用知识库 Embed 阶段模型）
+export async function kbIndexRebuild(): Promise<AdminResp> {
+  return request('/api/admin/kb-index/rebuild', { method: 'POST', headers: authHeaders() })
+}

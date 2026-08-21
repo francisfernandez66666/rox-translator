@@ -40,6 +40,10 @@
       </select>
       <button class="ad-btn" @click="createPackage">{{ t('kb.createPackage') }}</button>
     </div>
+    <div class="ad-row" style="justify-content:space-between">
+      <div class="ad-hint" style="margin:0">{{ t('kb.entriesHint') }}</div>
+      <button v-if="isSuper" class="ad-btn-sm" :disabled="rebuilding" @click="rebuildIndex">{{ rebuilding ? t('kb.rebuilding') : t('kb.rebuildIndex') }}</button>
+    </div>
     <div class="ad-hint">{{ t('kb.entriesHint') }}</div>
     <div v-for="p in packages" :key="p.id" class="ad-pkg">
       <div class="ad-pkg-head" :style="p.enabled === 0 ? 'opacity:.55' : ''">
@@ -82,7 +86,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { kbPackages, kbPackageCreate, kbPackageDelete, kbPackageStatus, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport, kbRecognizeFile, kbImportFile } from '@/api'
+import { kbPackages, kbPackageCreate, kbPackageDelete, kbPackageStatus, kbIndexRebuild, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport, kbRecognizeFile, kbImportFile } from '@/api'
 import { activeTenantId, isSuper, myLevel } from './store'
 import { t, tpl } from '@/i18n'
 
@@ -141,6 +145,19 @@ async function createPackage() {
   if (!r.success) { alert(r.message); return }
   pForm.value = { code: '', name: '', pack_type: 'industry' }
   await loadPackages()
+}
+// 重建向量索引（超管）：全量重新嵌入并热替换
+const rebuilding = ref(false)
+async function rebuildIndex() {
+  if (!confirm(t('kb.rebuildConfirm'))) return
+  rebuilding.value = true
+  try {
+    const r = await kbIndexRebuild()
+    if (!r.success) { alert(r.message); return }
+    alert(tpl('kb.rebuildDone', { n: (r as any).embedded ?? 0 }))
+  } finally {
+    rebuilding.value = false
+  }
 }
 // 启用/停用包：停用后不参与翻译命中（条目保留，可随时启用）
 async function togglePackage(p: any) {

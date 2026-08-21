@@ -133,6 +133,7 @@ func main() {
 
 	// 创建翻译引擎（挂载 DB 与向量索引）
 	eng := engine.NewEngine(cfg, db, kbIndex, ts)
+	eng.NPZPath = npzPath // 向量索引文件路径（重建时写回）
 	if st != nil {
 		eng.St = st
 	}

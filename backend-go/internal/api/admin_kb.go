@@ -6,7 +6,9 @@ package api
 // ========================================
 
 import (
+	"context"
 	"fmt"
+	"time"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -258,6 +260,7 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_entry_add", "kb_entries", req.SourceText)
+	s.rebuildIndexAsync()
 	writeJSON(w, 200, map[string]interface{}{"success": true, "id": id})
 }
 
@@ -384,4 +387,43 @@ func (s *Server) handleKBPackageStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.LogAudit(tid, u.ID, "kb_package_status", "kb_packages", fmt.Sprintf("pkg=%d enabled=%d", req.ID, req.Enabled))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleKBIndexRebuild 手动触发向量索引全量重建（超管）。
+// 使用知识库 Embed 阶段模型（stage_models.kb_embed，建议 BAAI/bge-m3）嵌入全部中文原文。
+func (s *Server) handleKBIndexRebuild(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireAdminUser(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	_ = u
+	if s.Engine == nil || s.Engine.DB == nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "向量索引未初始化"})
+		return
+	}
+	if s.Engine.Rebuilding() {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "重建正在进行中，请稍候"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	n, err := s.Engine.RebuildKBIndex(ctx)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": fmt.Sprintf("重建失败（已嵌入 %d 行）: %v", n, err)})
+		return
+	}
+	s.Store.LogAudit(1, u.ID, "kb_index_rebuild", "kb", fmt.Sprintf("%d 行向量已重建", n))
+	writeJSON(w, 200, map[string]interface{}{"success": true, "embedded": n})
+}
+// rebuildIndexAsync 知识库变更后异步重建向量索引（导入条目/文件后自动触发；进行中则跳过）。
+func (s *Server) rebuildIndexAsync() {
+	if s.Engine == nil || s.Engine.DB == nil || s.Engine.NPZPath == "" || s.Engine.Rebuilding() {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		_, _ = s.Engine.RebuildKBIndex(ctx)
+	}()
 }
