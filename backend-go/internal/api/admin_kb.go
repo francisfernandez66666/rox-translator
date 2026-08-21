@@ -6,6 +6,7 @@ package api
 // ========================================
 
 import (
+	"fmt"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -344,5 +345,43 @@ func (s *Server) handleSafetyPhraseDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_delete", "kb_safety_phrases", "")
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleKBPackageStatus 启用/停用知识库包（租户管理员及以上，部门管理员限本部门子树）。
+// 停用：从翻译检索层（tm_segments）摘除该包条目（kb_entries 保留）；启用：按优先级重新写回。
+func (s *Server) handleKBPackageStatus(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireDeptAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		ID      int64 `json:"id"`
+		Enabled int   `json:"enabled"` // 1=启用 0=停用
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || (req.Enabled != 0 && req.Enabled != 1) {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	tid := s.kbTenant(r, u)
+	pkg, gErr := s.Store.GetKBPackage(req.ID, tid)
+	if gErr != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		return
+	}
+	if !canManagePackType(u, pkg.PackType) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作该类型的知识库包"})
+		return
+	}
+	if err := s.deptKBScope(u, tid, pkg); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	if err := s.Store.SetKBPackageEnabled(req.ID, req.Enabled); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(tid, u.ID, "kb_package_status", "kb_packages", fmt.Sprintf("pkg=%d enabled=%d", req.ID, req.Enabled))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }

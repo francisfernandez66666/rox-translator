@@ -357,8 +357,22 @@ func (s *Store) migrateColumns() error {
 		{"orders", "manual_confirm", "ALTER TABLE orders ADD COLUMN manual_confirm INTEGER NOT NULL DEFAULT 0"},
 		// 知识库包归属部门（0=租户级；部门管理员创建部门包时挂本部门）
 		{"kb_packages", "org_id", "ALTER TABLE kb_packages ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
+		// 知识库应用优先级：部门包(0) > 组织包(1) > 行业包(2) > 语言文化包(3)；旧数据默认 9
+		{"tm_segments", "priority", "ALTER TABLE tm_segments ADD COLUMN priority INTEGER NOT NULL DEFAULT 9"},
+		// 知识库包启停状态（停用后不参与翻译命中）
+		{"kb_packages", "enabled", "ALTER TABLE kb_packages ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"},
 	}
 	for _, c := range cols {
+		// 判断表是否存在（tm_segments 等表由 kb 模块延迟建表，缺表时跳过）
+		trows, err := s.db.Query(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`, c.table)
+		if err != nil {
+			return err
+		}
+		tableExists := trows.Next()
+		trows.Close()
+		if !tableExists {
+			continue
+		}
 		// 判断列是否存在
 		rows, err := s.db.Query(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, c.table, c.col)
 		if err != nil {

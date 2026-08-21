@@ -296,18 +296,21 @@ func scanRow(row *sql.Row) (*Row, error) {
 
 // FetchRowTenant 按 id 查询整行（并校验属于指定租户）。
 // 参数：id=条目主键 ID，tenantID=租户 ID；返回该行记录。
+// FetchRowTenant 按 id 查询整行（允许本租户或共享宿主租户1 的行业/语言文化包条目）。
 func (k *KBDatabase) FetchRowTenant(id, tenantID int64) (*Row, error) {
 	row := k.db.QueryRow(fmt.Sprintf(
-		"SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1), %s FROM tm_segments WHERE id=? AND tenant_id=?",
+		"SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1), %s FROM tm_segments WHERE id=? AND tenant_id IN (?,1)",
 		langCols), id, tenantID)
 	return scanRow(row)
 }
 
 // FindExact 精确命中：按中文原文精确查询（指定租户）。
 // 参数：zh=中文原文，tenantID=租户 ID；返回命中的行。
+// FindExact 精确命中（应用知识库优先级链：部门包0 > 组织包1 > 行业包2 > 语言文化包3）。
+// 查询范围 = 本租户 + 租户1（行业包/语言文化包的共享宿主），按 priority 升序取最优命中。
 func (k *KBDatabase) FindExact(zh string, tenantID int64) (*Row, error) {
 	row := k.db.QueryRow(fmt.Sprintf(
-		"SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1), %s FROM tm_segments WHERE zh=? AND tenant_id=?",
+		"SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1), %s FROM tm_segments WHERE zh=? AND tenant_id IN (?,1) ORDER BY priority ASC, id ASC LIMIT 1",
 		langCols), zh, tenantID)
 	return scanRow(row)
 }
@@ -316,7 +319,8 @@ func (k *KBDatabase) FindExact(zh string, tenantID int64) (*Row, error) {
 // 参数：zhShort=查询子串，limit=返回条数上限，tenantID=租户 ID。
 // 返回：命中的行列表（按原文长度差由近到远排序）。
 func (k *KBDatabase) FuzzyHits(zhShort string, limit int, tenantID int64) ([]*Row, error) {
-	rows, err := k.db.Query("SELECT id, zh FROM tm_segments WHERE zh LIKE ? AND tenant_id=?", "%"+zhShort+"%", tenantID)
+	// 优先级链排序：部门包 > 组织包 > 行业包 > 语言文化包（共享宿主=租户1）
+	rows, err := k.db.Query("SELECT id, zh FROM tm_segments WHERE zh LIKE ? AND tenant_id IN (?,1) ORDER BY priority ASC, id ASC LIMIT ?", "%"+zhShort+"%", tenantID, limit)
 	if err != nil {
 		return nil, err
 	}

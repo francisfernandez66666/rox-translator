@@ -3,10 +3,12 @@ export const zh: Record<string, string> = {
   'kb.title': '行业管理（KB 包）',
   'kb.codePlaceholder': '编码 (如 auto)',
   'kb.namePlaceholder': '名称 (如 汽车行业包)',
-  'kb.typeTenant': '企业包',
-  'kb.typeIndustry': '行业包',
-  'kb.typeLocale': '语言文化包',
-  'kb.typeDepartment': '部门包',
+  'kb.typeTenant': '组织包（本企业）',
+  'kb.enablePack': '启用',
+  'kb.disablePack': '停用',
+  'kb.typeIndustry': '行业包（同行业共享）',
+  'kb.typeLocale': '语言文化包（全系统）',
+  'kb.typeDepartment': '部门包（本部门）',
   'kb.createPackage': '创建包',
   'kb.entriesHint': '包内条目: 层 L1术语 / L2 TM / L3 安全句 / L4 碎片；源=中文，目标语言代码 (en/de/fr…)',
   'kb.deletePackage': '删除包',
@@ -48,6 +50,8 @@ export const zh: Record<string, string> = {
 }
 
 export const en: Record<string, string> = {
+  'kb.enablePack': 'Enable',
+  'kb.disablePack': 'Disable',
   'kb.title': 'Industry Management (KB Packs)',
   'kb.codePlaceholder': 'Code (e.g. auto)',
   'kb.namePlaceholder': 'Name (e.g. Auto Industry Pack)',

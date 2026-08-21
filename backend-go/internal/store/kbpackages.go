@@ -6,6 +6,9 @@
 package store
 
 import (
+	"fmt"
+	"crypto/md5"
+	"encoding/hex"
 	"time"
 )
 
@@ -19,6 +22,7 @@ type KBPackage struct {
 	PackType  string `json:"pack_type"`  // 包类型：tenant(企业) / industry(行业) / locale(语言文化) / department(部门)
 	Role      string `json:"role"`       // 包角色：source(匹配来源) / gate(输出闸门)
 	OrgID     int64  `json:"org_id"`     // 归属部门组织 ID（0=租户级）
+	Enabled   int    `json:"enabled"`    // 启用状态：1=启用（参与翻译命中）0=停用
 	SortOrder int    `json:"sort_order"` // 同级排序权重（升序）
 	CreatedAt string `json:"created_at"` // 创建时间（RFC3339 字符串）
 	UpdatedAt string `json:"updated_at"` // 更新时间（RFC3339 字符串）
@@ -72,7 +76,7 @@ const (
 )
 
 // kbPkgCols 知识库包查询列清单（统一使用，避免遗漏新增列）
-const kbPkgCols = "id, tenant_id, parent_id, code, name, pack_type, role, org_id, sort_order, created_at, updated_at"
+const kbPkgCols = "id, tenant_id, parent_id, code, name, pack_type, role, org_id, COALESCE(enabled,1), sort_order, created_at, updated_at"
 
 // placeholders 生成 n 个 ? 占位符（逗号分隔），用于 IN 查询。
 func placeholders(n int) string {
@@ -140,7 +144,7 @@ func (s *Store) ListDeptPackages(tid int64, orgIDs []int64) ([]*KBPackage, error
 	var out []*KBPackage
 	for rows.Next() {
 		var p KBPackage
-		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			continue
 		}
 		out = append(out, &p)
@@ -153,7 +157,7 @@ func (s *Store) ListDeptPackages(tid int64, orgIDs []int64) ([]*KBPackage, error
 func (s *Store) GetKBPackage(id, tid int64) (*KBPackage, error) {
 	var p KBPackage
 	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, sort_order, created_at, updated_at FROM kb_packages WHERE id=? AND tenant_id=?", id, tid).
-		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +175,7 @@ func (s *Store) ListKBPackages(tid int64) ([]*KBPackage, error) {
 	var out []*KBPackage
 	for rows.Next() {
 		var p KBPackage
-		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &p)
@@ -233,7 +237,7 @@ func (s *Store) EnsureDefaultPackages(tid int64) error {
 func (s *Store) FindIndustryByCode(code string) (*KBPackage, error) {
 	var p KBPackage
 	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=1 AND pack_type=? AND code=?", PackIndustry, code).
-		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +282,31 @@ func (s *Store) SaveEntry(tid, pkgID int64, layer int, srcLang, srcText, tgtLang
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, _ = res.LastInsertId()
+	// ★ 写通翻译检索层（tm_segments）：按包类型落优先级与宿主租户
+	// 部门包(0)/组织包(1) → 本租户；行业包(2)/语言文化包(3) → 租户1（共享宿主）
+	var packType string
+	if e2 := s.db.QueryRow("SELECT pack_type FROM kb_packages WHERE id=?", pkgID).Scan(&packType); e2 == nil {
+		prio := 9
+		host := tid
+		switch packType {
+		case "department":
+			prio, host = 0, tid
+		case "tenant":
+			prio, host = 1, tid
+		case "industry":
+			prio, host = 2, 1
+		case "locale":
+			prio, host = 3, 1
+		}
+		sum := md5.Sum([]byte(srcText))
+		hash := hex.EncodeToString(sum[:])
+		_, _ = s.db.Exec(
+			"INSERT INTO tm_segments (zh_hash, zh, tenant_id, priority, "+tgtLang+", module, updated_at) VALUES (?,?,?,?,?,?,?) "+
+				"ON CONFLICT(zh_hash, tenant_id) DO UPDATE SET "+tgtLang+"=excluded."+tgtLang+", priority=excluded.priority, updated_at=excluded.updated_at",
+			hash, srcText, host, prio, tgtText, module, now)
+	}
+	return id, nil
 }
 
 // ListEntries 列出包内全部条目（按层、ID 排序，最多 2000 条）。
@@ -370,5 +398,62 @@ func (s *Store) ListSafetyPhrases(tid int64) ([]*KBSafetyPhrase, error) {
 // 参数：id=安全句主键 ID，tid=租户 ID；返回错误。
 func (s *Store) DeleteSafetyPhrase(id, tid int64) error {
 	_, err := s.db.Exec("DELETE FROM kb_safety_phrases WHERE id=? AND tenant_id=?", id, tid)
+	return err
+}
+
+// SetKBPackageEnabled 启用/停用知识库包，并联动翻译检索层（tm_segments）。
+// 停用：从 tm_segments 摘除该包条目（module 前缀 pkg:<id>| 标识）；启用：按包优先级重新写回。
+func (s *Store) SetKBPackageEnabled(id int64, enabled int) error {
+	var tid, orgID int64
+	var packType string
+	if err := s.db.QueryRow("SELECT tenant_id, COALESCE(org_id,0), pack_type FROM kb_packages WHERE id=?", id).Scan(&tid, &orgID, &packType); err != nil {
+		return err
+	}
+	prio := 9
+	host := tid
+	switch packType {
+	case "department":
+		prio, host = 0, tid
+	case "tenant":
+		prio, host = 1, tid
+	case "industry":
+		prio, host = 2, 1
+	case "locale":
+		prio, host = 3, 1
+	}
+	marker := fmt.Sprintf("pkg:%d|", id)
+	now := time.Now().Format("2006-01-02T15:04:05")
+	if enabled == 0 {
+		if _, err := s.db.Exec("DELETE FROM tm_segments WHERE module LIKE ?", marker+"%"); err != nil {
+			return err
+		}
+	} else {
+		// 从 kb_entries 重写回检索层
+		rows, err := s.db.Query("SELECT source_text, target_lang, target_text, COALESCE(module,'') FROM kb_entries WHERE package_id=? AND target_lang<>'' AND target_text<>''", id)
+		if err != nil {
+			return err
+		}
+		type ent struct{ src, lang, txt, module string }
+		var ents []ent
+		for rows.Next() {
+			var e ent
+			if err := rows.Scan(&e.src, &e.lang, &e.txt, &e.module); err == nil {
+				ents = append(ents, e)
+			}
+		}
+		rows.Close()
+		for _, e := range ents {
+			sum := md5.Sum([]byte(e.src))
+			hash := hex.EncodeToString(sum[:])
+			mod := marker + e.module
+			if _, err := s.db.Exec(
+				"INSERT INTO tm_segments (zh_hash, zh, tenant_id, priority, "+e.lang+", module, updated_at) VALUES (?,?,?,?,?,?,?) "+
+					"ON CONFLICT(zh_hash, tenant_id) DO UPDATE SET "+e.lang+"=excluded."+e.lang+", priority=excluded.priority, module=excluded.module, updated_at=excluded.updated_at",
+				hash, e.src, host, prio, e.txt, mod, now); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := s.db.Exec("UPDATE kb_packages SET enabled=?, updated_at=? WHERE id=?", enabled, time.Now().Format(time.RFC3339), id)
 	return err
 }

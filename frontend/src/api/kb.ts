@@ -58,3 +58,7 @@ export async function kbRecognizeFile(file: File): Promise<AdminResp> {
 export async function kbImportFile(data: { temp_id: string; package_id: number }): Promise<AdminResp> {
   return request('/api/translation/import-kb', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
+// 启用/停用知识库包（停用后不参与翻译命中）
+export async function kbPackageStatus(id: number, enabled: number): Promise<AdminResp> {
+  return request('/api/admin/kb-packages/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, enabled }) })
+}
