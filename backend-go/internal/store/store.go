@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"sync"
 
+	"translator/internal/iam"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -21,13 +23,15 @@ import (
 type Store struct {
 	db *sql.DB // 底层 SQLite 连接（与 kb/tenant 共享）
 
+	iam *iam.Store // 用户/组织数据访问层（独立子模块）
+
 	mu sync.Mutex // 互斥锁：保护并发写操作（SQLite 单写者模型）
 }
 
 // New 创建 Store 并确保全部表存在（幂等迁移）。
 // 参数：db=已打开的 SQLite 连接；返回可用的 Store 实例。
 func New(db *sql.DB) (*Store, error) {
-	s := &Store{db: db}
+	s := &Store{db: db, iam: iam.NewStore(db)}
 	if err := s.migrate(); err != nil {
 		return nil, err // 迁移失败则返回错误
 	}
@@ -351,6 +355,8 @@ func (s *Store) migrateColumns() error {
 		{"orders", "package_id", "ALTER TABLE orders ADD COLUMN package_id INTEGER NOT NULL DEFAULT 0"},
 		// 静态码支付人工确认标记（用户点「我已付费」后置 1，超管确认到账后清零）
 		{"orders", "manual_confirm", "ALTER TABLE orders ADD COLUMN manual_confirm INTEGER NOT NULL DEFAULT 0"},
+		// 知识库包归属部门（0=租户级；部门管理员创建部门包时挂本部门）
+		{"kb_packages", "org_id", "ALTER TABLE kb_packages ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, c := range cols {
 		// 判断列是否存在

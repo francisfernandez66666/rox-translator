@@ -16,10 +16,11 @@ export const activeTenantId = ref<number>(getActiveTenantId() || 1)
 // 租户列表（超管可见）
 export const tenantList = ref<TenantInfo[]>([])
 
-// 角色等级：普通用户(1) < 租户管理员(2) < 超级管理员(3)，兼容旧值 approver/admin
+// 角色等级：普通用户(1) < 部门管理员(2) < 租户管理员(3) < 超级管理员(4)，兼容旧值 approver/admin
 export function roleLevel(r?: string): number {
-  if (r === 'super_admin' || r === 'admin') return 3
-  if (r === 'tenant_admin' || r === 'approver') return 2
+  if (r === 'super_admin' || r === 'admin') return 4
+  if (r === 'tenant_admin' || r === 'approver') return 3
+  if (r === 'dept_admin') return 2
   return 1
 }
 
@@ -27,21 +28,29 @@ export function roleLevel(r?: string): number {
 export function roleName(r?: string) {
   if (r === 'super_admin' || r === 'admin') return t('users.role.super_admin')
   if (r === 'tenant_admin' || r === 'approver') return t('users.role.tenant_admin')
+  if (r === 'dept_admin') return t('users.role.dept_admin')
   return t('users.role.user')
 }
 
 // 当前用户角色等级
 export const myLevel = computed(() => roleLevel(user.value?.role))
 
-// 是否具备管理权限（租户管理员及以上）
+// 是否具备管理权限（部门管理员及以上）
 export const isAdmin = computed(() => myLevel.value >= 2)
 // 是否超级管理员
-export const isSuper = computed(() => myLevel.value >= 3)
+export const isSuper = computed(() => myLevel.value >= 4)
+// 是否租户管理员（含超管）
+export const isTenantAdmin = computed(() => myLevel.value >= 3)
+// 是否部门管理员（含以上）
+export const isDeptAdmin = computed(() => myLevel.value >= 2)
 
-// 可选角色：超管可分配全部三级；租户管理员只能分配普通用户/租户管理员（防提权）
-export const roleOptions = computed(() =>
-  isSuper.value ? ['user', 'tenant_admin', 'super_admin'] : ['user', 'tenant_admin']
-)
+// 可选角色：超管可分配全部四级；租户管理员可分配 user/dept_admin/tenant_admin；部门管理员仅可分配 user
+export const roleOptions = computed(() => {
+  if (isSuper.value) return ['user', 'dept_admin', 'tenant_admin', 'super_admin']
+  if (isTenantAdmin.value) return ['user', 'dept_admin', 'tenant_admin']
+  if (isDeptAdmin.value) return ['user']
+  return []
+})
 
 // ---- 动作 ----
 // 切换生效租户：更新全局 X-Tenant-ID 并持久化

@@ -14,24 +14,68 @@ import (
 )
 
 // canManagePackType 判断用户是否有权管理指定包类型的知识库包。
-// 超管可管理全部类型（tenant/industry/locale/department）；租户管理员仅可管理企业包与部门包。
+// 超管可管理全部类型（tenant/industry/locale/department）；
+// 租户管理员可管理企业包与部门包；
+// 部门管理员仅可管理部门包（department）。
 func canManagePackType(u *store.User, packType string) bool {
 	if u != nil && auth.IsSuperAdmin(u) {
 		return true
 	}
+	if auth.RoleLevel(u.Role) == 2 {
+		// 部门管理员：仅部门包
+		return packType == store.PackDepartment
+	}
+	// 租户管理员及以上：企业包/部门包
 	return packType == store.PackTenant || packType == store.PackDepartment
+}
+
+// deptKBScope 校验部门管理员对指定 KB 包是否有权（包必须归属本部门及子部门）。
+// 非部门管理员直接放行（超管/租户管理员）。返回 nil 表示有权。
+// 参数：u=当前用户，tid=生效租户，pkg=目标包。
+func (s *Server) deptKBScope(u *store.User, tid int64, pkg *store.KBPackage) error {
+	if auth.RoleLevel(u.Role) != 2 {
+		return nil // 非部门管理员无需部门范围校验
+	}
+	if u.OrgID <= 0 || pkg.OrgID <= 0 {
+		return &apiErr{"无权操作非本部门的包"}
+	}
+	inTree, err := s.Store.IsOrgInSubtree(tid, u.OrgID, pkg.OrgID)
+	if err != nil || !inTree {
+		return &apiErr{"无权操作非本部门的包"}
+	}
+	return nil
 }
 
 // ============ KB 包管理（行业包） ============
 
-// handleKBPackages 列出知识库包
+// handleKBPackages 列出知识库包（部门管理员仅见本部门及子部门部门包）
 func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	pkgs, err := s.Store.ListKBPackages(s.effTenant(r, u))
+	tid := s.effTenant(r, u)
+	// 部门管理员：仅本部门及子部门下属部门包
+	if auth.RoleLevel(u.Role) == 2 {
+		if u.OrgID <= 0 {
+			writeJSON(w, 200, map[string]interface{}{"success": true, "packages": []*store.KBPackage{}})
+			return
+		}
+		orgIDs, err := s.Store.OrgDescendantIDs(tid, u.OrgID)
+		if err != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+		pkgs, err := s.Store.ListDeptPackages(tid, orgIDs)
+		if err != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]interface{}{"success": true, "packages": pkgs})
+		return
+	}
+	pkgs, err := s.Store.ListKBPackages(tid)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -39,9 +83,9 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "packages": pkgs})
 }
 
-// handleKBPackageCreate 创建包（行业包）
+// handleKBPackageCreate 创建包（行业包/企业包/部门包）
 func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -62,23 +106,34 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Role == "" {
 		req.Role = store.PackRoleSource
 	}
-	// 包类型权限校验：租户管理员仅可建企业/部门包；超管可建全部类型
+	// 包类型权限校验：租户管理员仅可建企业/部门包；部门管理员仅可建部门包；超管可建全部类型
 	if !canManagePackType(u, req.PackType) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权创建该类型的知识库包"})
 		return
 	}
-	p, err := s.Store.CreateKBPackage(s.effTenant(r, u), 0, req.Code, req.Name, req.PackType, req.Role)
+	tid := s.effTenant(r, u)
+	var p *store.KBPackage
+	// 部门管理员创建部门包：挂到本部门
+	if auth.RoleLevel(u.Role) == 2 {
+		if u.OrgID <= 0 {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "部门管理员未绑定部门，无法创建部门包"})
+			return
+		}
+		p, err = s.Store.CreateKBPackageForOrg(tid, 0, req.Code, req.Name, req.PackType, req.Role, u.OrgID)
+	} else {
+		p, err = s.Store.CreateKBPackage(tid, 0, req.Code, req.Name, req.PackType, req.Role)
+	}
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "kb_package_create", "kb_packages", req.Name)
+	s.Store.LogAudit(tid, u.ID, "kb_package_create", "kb_packages", req.Name)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "package": p})
 }
 
 // handleKBPackageUpdate 更新包
 func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -91,17 +146,31 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
-	if err := s.Store.UpdateKBPackage(req.ID, s.effTenant(r, u), req.Name); err != nil {
+	tid := s.effTenant(r, u)
+	pkg, gErr := s.Store.GetKBPackage(req.ID, tid)
+	if gErr != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		return
+	}
+	if !canManagePackType(u, pkg.PackType) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权更新该类型的知识库包"})
+		return
+	}
+	if err := s.deptKBScope(u, tid, pkg); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	if err := s.Store.UpdateKBPackage(req.ID, tid, req.Name); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "kb_package_update", "kb_packages", "")
+	s.Store.LogAudit(tid, u.ID, "kb_package_update", "kb_packages", "")
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
 // handleKBPackageDelete 删除包
 func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -133,7 +202,7 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 
 // handleKBEntries 列出包内条目
 func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -149,7 +218,7 @@ func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 
 // handleKBEntryAdd 新增条目
 func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -183,7 +252,7 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 
 // handleKBEntryDelete 删除条目
 func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -205,7 +274,7 @@ func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 
 // handleSafetyPhrases 安全句列表
 func (s *Server) handleSafetyPhrases(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -220,7 +289,7 @@ func (s *Server) handleSafetyPhrases(w http.ResponseWriter, r *http.Request) {
 
 // handleSafetyPhraseAdd 新增安全句
 func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -248,7 +317,7 @@ func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 
 // handleSafetyPhraseDelete 删除安全句
 func (s *Server) handleSafetyPhraseDelete(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
