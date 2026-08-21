@@ -140,6 +140,12 @@ const rootOrgName = computed(() => {
 })
 // 根组织图标
 const rootOrgIcon = computed(() => '🏢')
+// 组织节点图标（按类型：根=🏢 组织=🏬 部门=🏷️）
+function orgIcon(o: OrgInfo): string {
+  if (o.type === 'dept') return '🏷️'
+  if (o.type === 'org') return '🏬'
+  return '🏢'
+}
 
 // 组装树形结构（递归计算深度）
 // 平台视图：从平台根 ID 开始遍历（各租户根组织的 parent_id 已被后端改写为平台根 ID）；
