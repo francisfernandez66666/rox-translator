@@ -58,3 +58,35 @@ func TestOrgHierarchy(t *testing.T) {
 		t.Fatalf("删除组织失败: %v", err)
 	}
 }
+
+func TestOrgMove(t *testing.T) {
+	s := newTestStore(t)
+	root, _ := s.EnsureRootOrg(1, "测试租户")
+	orgA, _ := s.CreateOrg(1, 0, "组织A", OrgTypeOrg)
+	orgB, _ := s.CreateOrg(1, 0, "组织B", OrgTypeOrg)
+	dept, _ := s.CreateOrg(1, orgA.ID, "部门A", OrgTypeDept)
+
+	// 把组织A移动到组织B下（组织嵌套组织）
+	if err := s.MoveOrg(1, orgA.ID, orgB.ID); err != nil {
+		t.Fatalf("移动组织A到B下失败: %v", err)
+	}
+	got, _ := s.GetOrgByID(orgA.ID)
+	if got.ParentID != orgB.ID {
+		t.Fatalf("移动后 parent 错误: %d != %d", got.ParentID, orgB.ID)
+	}
+
+	// 根组织不可移动
+	if err := s.MoveOrg(1, root.ID, orgB.ID); err == nil {
+		t.Fatalf("根组织不应可移动")
+	}
+
+	// 成环校验：不能把组织B移动到它的子孙(组织A)下
+	if err := s.MoveOrg(1, orgB.ID, dept.ID); err == nil {
+		t.Fatalf("移动到自身子孙下应报错(成环)")
+	}
+
+	// 移到根组织下（parent_id=0）
+	if err := s.MoveOrg(1, dept.ID, 0); err != nil {
+		t.Fatalf("移动部门到根下失败: %v", err)
+	}
+}

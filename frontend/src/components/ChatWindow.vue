@@ -249,7 +249,7 @@ import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
 // 全局聊天状态 Store
 import { useChatStore } from '@/stores/chat'
 // 国际化取词
-import { t, tpl } from '@/i18n'
+import { t, tpl, lang } from '@/i18n'
 // 子组件：消息气泡
 import MessageBubble from './MessageBubble.vue'
 
@@ -574,10 +574,11 @@ async function handleSend(e?: Event) {
   customLangs.value = []
   nextTick(() => { autoResizeInput() })
 
-  // ★ 翻译技能带上选中的语言与源语言
+  // ★ 翻译技能带上选中的语言与源语言；并带上界面语言（提示词语言跟随界面语言）
   const options: Record<string, unknown> = {}
   options.target_langs = [...store.selectedLangs]
   if (sourceLang.value !== 'auto') options.source_lang = sourceLang.value
+  options.lang = lang.value
   store.sendMessage(text, options)
 }
 

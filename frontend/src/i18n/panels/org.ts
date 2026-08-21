@@ -1,7 +1,7 @@
 // org 面板文案字典
 export const zh: Record<string, string> = {
   'org.title': '组织结构',
-  'org.treeHint': '层级：根组织 → 组织 → 部门；根组织与组织、部门均可自定义名称。删除组织/部门时其下用户将回收至根组织。',
+  'org.treeHint': '层级：根组织 → 组织 → 部门（支持任意深度）；可直接拖拽组织/部门节点调整层级（拖到另一节点下，或拖到根组织）。根组织与组织、部门均可自定义名称。删除组织/部门时其下用户将回收至根组织。',
   'org.rootOption': '根组织下新建组织',
   'org.namePlaceholder': '组织/部门名称',
   'org.create': '新建组织',
@@ -51,7 +51,7 @@ export const zh: Record<string, string> = {
 
 export const en: Record<string, string> = {
   'org.title': 'Org Structure',
-  'org.treeHint': 'Hierarchy: Root Org → Org → Department. Root org, orgs and departments can all have custom names. When an org/department is deleted its users are moved back to the root org.',
+  'org.treeHint': 'Hierarchy: Root Org → Org → Department (any depth supported). Drag an org/department node onto another node (or onto the root org) to adjust the hierarchy. Root org, orgs and departments can all have custom names. When an org/department is deleted its users are moved back to the root org.',
   'org.rootOption': 'New org under root',
   'org.namePlaceholder': 'Org/department name',
   'org.create': 'New Org',

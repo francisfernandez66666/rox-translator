@@ -49,6 +49,15 @@ export async function orgRename(id: number, name: string): Promise<OrgResp> {
   })
 }
 
+// 移动组织/部门到新父节点下（拖拽调整层级；parent_id=0 为根组织下）
+export async function orgMove(id: number, parentId: number): Promise<OrgResp> {
+  return request('/api/admin/orgs/move', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ id, parent_id: parentId }),
+  })
+}
+
 // 删除组织（子孙上移、用户回收至根组织）
 export async function orgDelete(id: number): Promise<OrgResp> {
   return request('/api/admin/orgs/delete', {
