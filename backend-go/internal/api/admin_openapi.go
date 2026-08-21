@@ -62,20 +62,37 @@ func (s *Server) handleOpenAPITranslate(w http.ResponseWriter, r *http.Request) 
 	if len(req.TargetLangs) == 0 {
 		req.TargetLangs = []string{"en"}
 	}
-	// ★ 配额闸门（openapi 请求租户来自 API Key）
+	// ★ 强制计费前置校验（句数模式）：余额不足直接拒绝，错误码 sentence_exhausted
 	tid, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": gateErr.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "code": gateErr.Error(), "message": gateErr.Error()})
 		return
 	}
+	enforced := false
+	var balanceBefore int64
+	if v, _ := s.Store.GetConfig("sentence_enforced"); v == "1" {
+		enforced = true
+		balanceBefore, _ = s.Store.GetSentenceBalance(tid)
+		if balanceBefore <= 0 {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "code": "sentence_exhausted",
+				"message": "句数余额不足，请购买套餐后重试"})
+			return
+		}
+	}
 	res := s.Engine.HandleText(r.Context(), req.Text, map[string]interface{}{"target_langs": req.TargetLangs}, nil)
+	var balanceAfter int64 = -1
 	if res.Error == "" {
 		// ★ 计量：开放 API 翻译按源文本字符数计量
 		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Text))))
+		// ★ 句数扣减（与前台同链路：源句数 × 目标语言数，受强制计费门控）
+		s.meterSentences(r, tid, req.Text, map[string]interface{}{"target_langs": toAnySlice(req.TargetLangs)})
 		s.metrics.countTranslate("openapi", true)
 	} else {
 		s.metrics.countTranslate("openapi", false)
+	}
+	if enforced {
+		balanceAfter, _ = s.Store.GetSentenceBalance(tid)
 	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success":      true,
@@ -83,6 +100,7 @@ func (s *Server) handleOpenAPITranslate(w http.ResponseWriter, r *http.Request) 
 		"sources":      res.Data.TranslationsSource,
 		"mode":         res.Data.Mode,
 		"reply":        res.Reply,
+		"sentence_balance": balanceAfter,
 	})
 }
 
@@ -174,4 +192,13 @@ func (s *Server) authenticateAPIKey(r *http.Request) (*store.APIKey, bool) {
 	}
 	s.Store.TouchAPIKey(ak.ID)
 	return ak, true
+}
+
+// toAnySlice 字符串切片转 interface 切片（meterSentences options 兼容）。
+func toAnySlice(in []string) []interface{} {
+	out := make([]interface{}, 0, len(in))
+	for _, v := range in {
+		out = append(out, v)
+	}
+	return out
 }

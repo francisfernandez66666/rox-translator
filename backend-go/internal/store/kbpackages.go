@@ -6,6 +6,7 @@
 package store
 
 import (
+	"fmt"
 	"crypto/md5"
 	"encoding/hex"
 	"time"
@@ -58,12 +59,16 @@ type KBEntry struct {
 
 // KBSafetyPhrase 安全句锁死串库
 type KBSafetyPhrase struct {
-	ID        int64  `json:"id"`         // 安全句主键 ID
-	TenantID  int64  `json:"tenant_id"`  // 所属租户 ID
-	PackageID int64  `json:"package_id"` // 所属包 ID
-	Lang      string `json:"lang"`       // 语言代码
-	Phrase    string `json:"phrase"`     // 锁死的安全句（禁止出现在输出中）
-	CreatedAt string `json:"created_at"` // 创建时间（RFC3339 字符串）
+	ID          int64  `json:"id"`                   // 安全句主键 ID
+	TenantID    int64  `json:"tenant_id"`            // 所属租户 ID
+	PackageID   int64  `json:"package_id"`           // 所属包 ID（语言文化包）
+	Lang        string `json:"lang"`                 // 目标语言代码
+	Phrase      string `json:"phrase"`               // 规则内容：style=规范文本 / forbidden=禁用词 / replace=原词
+	Kind        string `json:"kind"`                 // 类型：style(风格规范)/forbidden(禁用词)/replace(替换对)
+	Replacement string `json:"replacement,omitempty"` // 替换词（仅 replace 类型；译文中命中 Phrase 时替换为该值）
+	Status      string `json:"status"`               // 审核状态：pending/approved/rejected（仅 approved 生效）
+	Source      string `json:"source"`               // 来源：manual(人工)/llm(LLM 投喂)
+	CreatedAt   string `json:"created_at"`           // 创建时间（RFC3339 字符串）
 }
 
 // 层常量
@@ -369,6 +374,20 @@ func (s *Store) FindEntriesBySource(tid int64, srcLang, srcText string) ([]*KBEn
 // SaveSafetyPhrase 新增一条安全句。
 // 参数：tid=租户 ID，pkgID=包 ID，lang=语言代码，phrase=锁死的安全句。
 // 返回：新安全句 ID。
+// SaveSafetyPhraseEx 结构化保存安全句（含类型/替换词；默认 approved+manual）。
+func (s *Store) SaveSafetyPhraseEx(tid, pkgID int64, lang, phrase, kind, replacement string) (int64, error) {
+	if kind == "" {
+		kind = "style"
+	}
+	now := time.Now().Format(time.RFC3339)
+	var id int64
+	err := s.db.QueryRow(
+		"INSERT INTO kb_safety_phrases (tenant_id, package_id, lang, phrase, kind, replacement, status, source, created_at) VALUES (?,?,?,?,?,?, 'approved','manual',?) RETURNING id",
+		tid, pkgID, lang, phrase, kind, replacement, now).Scan(&id)
+	return id, err
+}
+
+// SaveSafetyPhrase 兼容入口（等价 style 类型）。
 func (s *Store) SaveSafetyPhrase(tid, pkgID int64, lang, phrase string) (int64, error) {
 	res, err := s.db.Exec("INSERT INTO kb_safety_phrases (tenant_id, package_id, lang, phrase, created_at) VALUES (?,?,?,?,?)",
 		tid, pkgID, lang, phrase, time.Now().Format(time.RFC3339))
@@ -381,7 +400,19 @@ func (s *Store) SaveSafetyPhrase(tid, pkgID int64, lang, phrase string) (int64, 
 // ListSafetyPhrases 列出租户全部安全句（按 ID 排序）。
 // 参数：tid=租户 ID；返回安全句列表。
 func (s *Store) ListSafetyPhrases(tid int64) ([]*KBSafetyPhrase, error) {
-	rows, err := s.db.Query("SELECT id, tenant_id, package_id, lang, phrase, created_at FROM kb_safety_phrases WHERE tenant_id=? ORDER BY id", tid)
+	return s.ListSafetyPhrasesFilter(tid, "")
+}
+
+// ListSafetyPhrasesFilter 按审核状态过滤列出安全句（status 空=全部）。
+func (s *Store) ListSafetyPhrasesFilter(tid int64, status string) ([]*KBSafetyPhrase, error) {
+	q := "SELECT id, tenant_id, package_id, lang, phrase, COALESCE(kind,'style'), COALESCE(replacement,''), COALESCE(status,'approved'), COALESCE(source,'manual'), created_at FROM kb_safety_phrases WHERE tenant_id=?"
+	args := []interface{}{tid}
+	if status != "" {
+		q += " AND COALESCE(status,'approved')=?"
+		args = append(args, status)
+	}
+	q += " ORDER BY id DESC"
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -389,12 +420,57 @@ func (s *Store) ListSafetyPhrases(tid int64) ([]*KBSafetyPhrase, error) {
 	var out []*KBSafetyPhrase
 	for rows.Next() {
 		var p KBSafetyPhrase
-		if err := rows.Scan(&p.ID, &p.TenantID, &p.PackageID, &p.Lang, &p.Phrase, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.PackageID, &p.Lang, &p.Phrase, &p.Kind, &p.Replacement, &p.Status, &p.Source, &p.CreatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &p)
 	}
 	return out, nil
+}
+
+// SetSafetyPhraseStatus 审核安全句（通过/驳回）；仅 pending 状态可流转，approved/rejected 可人工改判。
+func (s *Store) SetSafetyPhraseStatus(id int64, status string) error {
+	if status != "pending" && status != "approved" && status != "rejected" {
+		return fmt.Errorf("非法状态: %s", status)
+	}
+	res, err := s.db.Exec("UPDATE kb_safety_phrases SET status=?, created_at=created_at WHERE id=?", status, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("记录不存在")
+	}
+	return nil
+}
+
+// BulkImportSafetyPhrases LLM 投喂批量导入：统一落 pending+llm，逐条跳过完全重复项。
+// 返回：新增条数。
+func (s *Store) BulkImportSafetyPhrases(tid, pkgID int64, items []*KBSafetyPhrase) (int, error) {
+	now := time.Now().Format(time.RFC3339)
+	added := 0
+	for _, it := range items {
+		if it.Lang == "" || it.Phrase == "" {
+			continue
+		}
+		kind := it.Kind
+		if kind != "style" && kind != "forbidden" && kind != "replace" {
+			kind = "style"
+		}
+		var cnt int
+		_ = s.db.QueryRow(
+			"SELECT COUNT(*) FROM kb_safety_phrases WHERE tenant_id=? AND package_id=? AND lang=? AND phrase=? AND kind=?",
+			tid, pkgID, it.Lang, it.Phrase, kind).Scan(&cnt)
+		if cnt > 0 {
+			continue
+		}
+		if _, err := s.db.Exec(
+			"INSERT INTO kb_safety_phrases (tenant_id, package_id, lang, phrase, kind, replacement, status, source, created_at) VALUES (?,?,?,?,?,'pending','llm',?)",
+			tid, pkgID, it.Lang, it.Phrase, kind, it.Replacement, now); err != nil {
+			return added, err
+		}
+		added++
+	}
+	return added, nil
 }
 
 // DeleteSafetyPhrase 删除单条安全句（租户隔离校验）。

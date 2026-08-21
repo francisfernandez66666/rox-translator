@@ -81,12 +81,81 @@
         </table>
       </div>
     </div>
+  <!-- ===== 语言文化规范（安全句 / Gate 闸门） ===== -->
+    <div class="ad-chart-card" style="margin-top:16px">
+      <h3>{{ t('kb.safetyTitle') }}</h3>
+      <div class="ad-hint">{{ t('kb.safetyHint') }}</div>
+
+      <!-- 语言文化包选择 + 状态过滤 -->
+      <div class="ad-row" style="margin-bottom:8px">
+        <select v-model="safetyPkgId" class="ad-input">
+          <option v-for="p in localePackages" :key="p.id" :value="p.id">[{{ p.pack_type }}] {{ p.name }}</option>
+        </select>
+        <select v-model="safetyStatusFilter" class="ad-input ad-mini-w" @change="loadSafety">
+          <option value="">{{ t('kb.allStatus') }}</option>
+          <option value="pending">{{ t('kb.pending') }}</option>
+          <option value="approved">{{ t('kb.approved') }}</option>
+          <option value="rejected">{{ t('kb.rejected') }}</option>
+        </select>
+        <span class="ad-hint">{{ t('kb.safetyScopeHint') }}</span>
+      </div>
+
+      <!-- 结构化录入 -->
+      <div class="ad-row" style="margin-bottom:8px">
+        <select v-model="sf.lang" class="ad-input ad-mini-w">
+          <option value="en">en</option><option value="ar">ar</option><option value="de">de</option>
+          <option value="es">es</option><option value="fr">fr</option><option value="id_lang">id</option>
+          <option value="kk">kk</option><option value="pt">pt</option><option value="ru">ru</option>
+          <option value="th">th</option><option value="tr">tr</option><option value="zh_hant">zh-Hant</option>
+        </select>
+        <select v-model="sf.kind" class="ad-input ad-mini-w">
+          <option value="style">{{ t('kb.kindStyle') }}</option>
+          <option value="forbidden">{{ t('kb.kindForbidden') }}</option>
+          <option value="replace">{{ t('kb.kindReplace') }}</option>
+        </select>
+        <input v-model="sf.phrase" :placeholder="phrasePlaceholder" class="ad-input" style="flex:1" />
+        <input v-if="sf.kind === 'replace'" v-model="sf.replacement" :placeholder="t('kb.replacementPlaceholder')" class="ad-input" style="flex:1" />
+        <button class="ad-btn ad-btn-green" :disabled="!safetyPkgId || !sf.phrase.trim()" @click="addSafety">{{ t('users.create') }}</button>
+      </div>
+
+      <!-- LLM 投喂批量导入 -->
+      <div class="ad-row" style="margin-bottom:8px">
+        <input v-model="bulkJson" :placeholder="t('kb.bulkPlaceholder')" class="ad-input" style="flex:1" />
+        <button class="ad-btn" :disabled="!safetyPkgId || !bulkJson.trim()" @click="importSafety">{{ t('kb.bulkImport') }}</button>
+      </div>
+
+      <!-- 列表 -->
+      <table class="ad-table">
+        <thead><tr>
+          <th>{{ t('org.colLang') }}</th><th>{{ t('kb.colKind') }}</th><th>{{ t('kb.colRule') }}</th>
+          <th v-if="hasReplace">{{ t('kb.colReplacement') }}</th>
+          <th>{{ t('kb.colStatus') }}</th><th>{{ t('kb.colSource') }}</th><th>{{ t('org.colActions') }}</th>
+        </tr></thead>
+        <tbody>
+          <tr v-for="sp in filteredSafety" :key="sp.id">
+            <td>{{ sp.lang }}</td>
+            <td>{{ kindLabel(sp.kind) }}</td>
+            <td style="max-width:280px;word-break:break-all">{{ sp.phrase }}</td>
+            <td v-if="hasReplace">{{ sp.kind === 'replace' ? (sp.replacement || '—') : '' }}</td>
+            <td><span :class="'kb-status-' + (sp.status || 'approved')">{{ statusLabel(sp.status) }}</span></td>
+            <td>{{ sp.source === 'llm' ? 'LLM' : t('kb.srcManual') }}</td>
+            <td class="ad-td">
+              <button v-if="(sp.status || 'approved') !== 'approved'" class="ad-btn-sm" @click="setSafetyStatus(sp, 'approved')">{{ t('kb.approve') }}</button>
+              <button v-if="(sp.status || 'approved') === 'pending'" class="ad-btn-sm ad-btn-red" @click="setSafetyStatus(sp, 'rejected')">{{ t('kb.reject') }}</button>
+              <button class="ad-btn-sm ad-btn-red" @click="removeSafety(sp)">✕</button>
+            </td>
+          </tr>
+          <tr v-if="!filteredSafety.length"><td colspan="7" class="ad-empty">{{ t('kb.noSafety') }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+
   </section>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { kbPackages, kbPackageCreate, kbPackageDelete, kbPackageStatus, kbIndexRebuild, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport, kbRecognizeFile, kbImportFile } from '@/api'
+import { kbPackages, kbPackageCreate, kbPackageDelete, kbPackageStatus, kbIndexRebuild, safetyPhrases, safetyPhraseAdd, safetyPhraseDelete, safetyPhraseStatus, safetyBulkImport, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport, kbRecognizeFile, kbImportFile } from '@/api'
 import { activeTenantId, isSuper, myLevel } from './store'
 import { t, tpl } from '@/i18n'
 
@@ -146,6 +215,91 @@ async function createPackage() {
   pForm.value = { code: '', name: '', pack_type: 'industry' }
   await loadPackages()
 }
+// ---- 语言文化规范（安全句 / Gate）----
+const safetyPkgId = ref<number>(0)
+const safetyStatusFilter = ref('')
+const safetyList = ref<any[]>([])
+const bulkJson = ref('')
+// 录入表单：语言/类型/内容/替换词
+const sf = ref({ lang: 'en', kind: 'style', phrase: '', replacement: '' })
+
+// 语言文化包列表（仅 pack_type=locale）
+const localePackages = computed(() => packages.value.filter((p: any) => p.pack_type === 'locale'))
+// 是否存在替换对条目（控制表格替换词列显隐）
+const hasReplace = computed(() => filteredSafety.value.some((s: any) => s.kind === 'replace'))
+// 按所选状态过滤后的安全句（并限定所选语言文化包）
+const filteredSafety = computed(() =>
+  safetyList.value.filter((s: any) => (!safetyPkgId.value || s.package_id === safetyPkgId.value))
+)
+
+// 加载安全句列表
+async function loadSafety() {
+  const r = await safetyPhrases()
+  if (r.success) {
+    safetyList.value = (r as any).phrases || []
+    if (!safetyPkgId.value && localePackages.value.length) safetyPkgId.value = localePackages.value[0].id
+  }
+}
+
+// 新增结构化安全句
+async function addSafety() {
+  if (!safetyPkgId.value || !sf.value.phrase.trim()) return
+  const r = await safetyPhraseAdd({
+    package_id: safetyPkgId.value,
+    lang: sf.value.lang,
+    phrase: sf.value.phrase.trim(),
+    kind: sf.value.kind,
+    replacement: sf.value.kind === 'replace' ? sf.value.replacement.trim() : '',
+  })
+  if (!r.success) { alert(r.message); return }
+  sf.value.phrase = ''
+  sf.value.replacement = ''
+  await loadSafety()
+}
+
+// 审核：通过/驳回
+async function setSafetyStatus(sp: any, status: string) {
+  const r = await safetyPhraseStatus(sp.id, status)
+  if (!r.success) { alert(r.message); return }
+  await loadSafety()
+}
+
+// 删除安全句
+async function removeSafety(sp: any) {
+  if (!confirm(t('kb.deleteConfirm'))) return
+  const r = await safetyPhraseDelete(sp.id)
+  if (!r.success) { alert(r.message); return }
+  await loadSafety()
+}
+
+// LLM 投喂批量导入：粘贴 JSON 数组 [{lang,phrase,kind,replacement}]
+async function importSafety() {
+  let items: any[]
+  try {
+    items = JSON.parse(bulkJson.value)
+  } catch { alert(t('kb.bulkInvalid')); return }
+  if (!Array.isArray(items) || !items.length) { alert(t('kb.bulkInvalid')); return }
+  const r = await safetyBulkImport(safetyPkgId.value, items)
+  if (!r.success) { alert(r.message); return }
+  alert(tpl('kb.bulkDone', { n: (r as any).added ?? 0 }))
+  bulkJson.value = ''
+  await loadSafety()
+}
+
+// 类型/状态的中文标签
+function kindLabel(k?: string) {
+  return k === 'forbidden' ? t('kb.kindForbidden') : k === 'replace' ? t('kb.kindReplace') : t('kb.kindStyle')
+}
+function statusLabel(s?: string) {
+  return s === 'pending' ? t('kb.pending') : s === 'rejected' ? t('kb.rejected') : t('kb.approved')
+}
+// 录入占位符随类型变化
+const phrasePlaceholder = computed(() => {
+  if (sf.value.kind === 'forbidden') return t('kb.phraseForbidden')
+  if (sf.value.kind === 'replace') return t('kb.phraseReplace')
+  return t('kb.phraseStyle')
+})
+
 // 重建向量索引（超管）：全量重新嵌入并热替换
 const rebuilding = ref(false)
 async function rebuildIndex() {
@@ -219,7 +373,7 @@ async function bulkImport(pkgId: number) {
   await loadPackages()
 }
 
-onMounted(loadPackages)
+onMounted(() => { loadPackages(); loadSafety() })
 watch(activeTenantId, loadPackages)
 
 // ---- KB 文件上传：识别 → 导入到所选包 ----

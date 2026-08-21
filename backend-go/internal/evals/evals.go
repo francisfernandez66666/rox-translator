@@ -52,6 +52,18 @@ func (e *Evaluator) ShouldSample() bool {
 	return e.SampleRate >= 1.0 // 当前实现：仅 100% 抽样才评估
 }
 
+// judgeKeyUsable 判断解析出的 Judge Key 是否可用（非空、非掩码、非启动占位符）。
+func (e *Evaluator) judgeKeyUsable(key string) bool {
+	if key == "" || strings.Contains(key, "****") {
+		return false
+	}
+	// 启动生成的随机占位符无法调用外部 API，视为不可用
+	if e.Cfg != nil && e.Cfg.OnlineAPIKeyIsPlaceholder && key == e.Cfg.OnlineAPIKey {
+		return false
+	}
+	return true
+}
+
 // resolveJudge 解析 Judge 模型的 base/key/model。
 // 优先级：stage_models[初翻评估/校对评估] → stage_models.evals（旧键兼容）→ ModelRoutes → Online*。
 // 参数 taskType: "translate"=初翻评估（initial_evals），"review"=校对评估（review_evals）。
@@ -120,8 +132,12 @@ func (e *Evaluator) Evaluate(ctx context.Context, source, translation, targetLan
 只输出 JSON，格式: {"term":0,"grammar":0,"semantic":0,"numunit":0,"style":0,"total":0}`,
 		source, targetLang, translation)
 
-	messages := []map[string]string{{"role": "user", "content": prompt}}
 	base, key, model := e.resolveJudge(taskType)
+	// 动态可用性判定：占位/掩码 Key 直接跳过，避免必失败的空转调用
+	if !e.judgeKeyUsable(key) {
+		return 0, nil, fmt.Errorf("evals 未启用（Judge Key 缺失或为占位符）")
+	}
+	messages := []map[string]string{{"role": "user", "content": prompt}}
 	content, _, err := e.LLM.CallChat(ctx, base, key, model, messages, 200, false, 0.0)
 	if err != nil {
 		return 0, nil, err

@@ -57,6 +57,10 @@ type Config struct {
 	OnlineAPIBase string // 在线翻译 API 基地址
 	OnlineAPIKey  string // 在线翻译 API 密钥
 	OnlineModel   string // 在线翻译默认模型
+
+	// OnlineAPIKeyIsPlaceholder 标记 OnlineAPIKey 是否为启动时生成的随机占位值
+	//（环境变量未配置）。占位 Key 调用外部 LLM 必失败，依赖方（如 Evals）应据此禁用。
+	OnlineAPIKeyIsPlaceholder bool
 	OnlineTimeout int    // 在线调用超时秒数
 
 	// 模型路由策略：按权重选主模型，失败后按顺序降级。空则用 Online* 单供应商。
@@ -185,6 +189,7 @@ func Default() *Config {
 	// 随机 Key 调用外部 LLM 会鉴权失败，属预期行为（提示通过环境变量配置）。
 	if c.OnlineAPIKey == "" {
 		c.OnlineAPIKey = "sk-" + randHex(16) // 随机占位，避免硬编码
+		c.OnlineAPIKeyIsPlaceholder = true
 		log.Println("[config] 警告: 未配置 SILICONFLOW_API_KEY，已生成随机占位 Key（LLM 调用将失败）")
 	}
 	if c.EmbedAPIKey == "" {
