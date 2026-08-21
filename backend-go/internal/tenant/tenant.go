@@ -23,6 +23,7 @@ type Tenant struct {
 	Status      string `json:"status"`      // 状态：active / disabled / expired（disabled 与 expired 由 effectiveStatus 计算）
 	ExpiresAt   string `json:"expires_at"`  // 有效期（空=永久），格式 2006-01-02 或 RFC3339
 	Permissions string `json:"permissions"` // JSON 权限字符串（解码见 Perms）
+	Industry    string `json:"industry"`    // 注册行业编码（关联共享行业包的载入过滤）
 	CreatedAt   string `json:"created_at"`  // 创建时间（RFC3339 字符串）
 	UpdatedAt   string `json:"updated_at"`  // 更新时间（RFC3339 字符串）
 }
@@ -108,7 +109,18 @@ func (s *Store) ensureTable() error {
 			return err
 		}
 	}
+	if !have["industry"] {
+		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN industry TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// SetIndustry 设置租户注册行业编码（行业包共享载入的过滤依据）。
+func (s *Store) SetIndustry(id int64, code string) error {
+	_, err := s.db.Exec("UPDATE tenants SET industry=?, updated_at=? WHERE id=?", code, nowStr(), id)
+	return err
 }
 
 // nowStr 生成当前 RFC3339 格式时间字符串。
@@ -161,7 +173,7 @@ func (s *Store) Create(code, name, expiresAt, permissions string) (*Tenant, erro
 // List 列出所有租户（含计算后的有效状态）。
 // 返回：租户列表（按 ID 排序）。
 func (s *Store) List() ([]*Tenant, error) {
-	rows, err := s.db.Query("SELECT id, code, name, status, expires_at, permissions, created_at, updated_at FROM tenants ORDER BY id")
+	rows, err := s.db.Query("SELECT id, code, name, status, expires_at, permissions, COALESCE(industry,''), created_at, updated_at FROM tenants ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +181,7 @@ func (s *Store) List() ([]*Tenant, error) {
 	var out []*Tenant
 	for rows.Next() {
 		var t Tenant
-		if err := rows.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		t.Status = effectiveStatus(t.Status, t.ExpiresAt) // 结合有效期刷新实际状态
@@ -181,9 +193,9 @@ func (s *Store) List() ([]*Tenant, error) {
 // GetByID 按 id 查询租户。
 // 参数：id=租户主键 ID；返回租户对象（含计算后的有效状态）。
 func (s *Store) GetByID(id int64) (*Tenant, error) {
-	row := s.db.QueryRow("SELECT id, code, name, status, expires_at, permissions, created_at, updated_at FROM tenants WHERE id=?", id)
+	row := s.db.QueryRow("SELECT id, code, name, status, expires_at, permissions, COALESCE(industry,''), created_at, updated_at FROM tenants WHERE id=?", id)
 	var t Tenant
-	if err := row.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	if err := row.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
 	t.Status = effectiveStatus(t.Status, t.ExpiresAt)
@@ -193,9 +205,9 @@ func (s *Store) GetByID(id int64) (*Tenant, error) {
 // GetByCode 按租户编码查询。
 // 参数：code=租户编码；返回租户对象（含计算后的有效状态）。
 func (s *Store) GetByCode(code string) (*Tenant, error) {
-	row := s.db.QueryRow("SELECT id, code, name, status, expires_at, permissions, created_at, updated_at FROM tenants WHERE code=?", code)
+	row := s.db.QueryRow("SELECT id, code, name, status, expires_at, permissions, COALESCE(industry,''), created_at, updated_at FROM tenants WHERE code=?", code)
 	var t Tenant
-	if err := row.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	if err := row.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
 	t.Status = effectiveStatus(t.Status, t.ExpiresAt)

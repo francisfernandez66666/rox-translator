@@ -217,6 +217,10 @@ func (s *Store) EnsureDefaultPackages(tid int64) error {
 		{"department", "部门包", PackDepartment, PackRoleSource},
 	}
 	for _, d := range defs {
+		// 行业包单轨制：内容只在共享宿主（租户1）维护，其他租户不建行业包壳
+		if d.packType == PackIndustry && tid != 1 {
+			continue
+		}
 		// 幂等判断：已存在同 code 包则跳过
 		var cnt int
 		_ = s.db.QueryRow("SELECT COUNT(*) FROM kb_packages WHERE tenant_id=? AND code=?", tid, d.code).Scan(&cnt)

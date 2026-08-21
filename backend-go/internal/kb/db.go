@@ -299,7 +299,9 @@ func scanRow(row *sql.Row) (*Row, error) {
 // FetchRowTenant 按 id 查询整行（允许本租户或共享宿主租户1 的行业/语言文化包条目）。
 func (k *KBDatabase) FetchRowTenant(id, tenantID int64) (*Row, error) {
 	row := k.db.QueryRow(fmt.Sprintf(
-		"SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1), %s FROM tm_segments WHERE id=? AND tenant_id IN (?,1)",
+		"SELECT tm.id, tm.zh, COALESCE(tm.module,''), COALESCE(tm.tenant_id,1), %s FROM tm_segments tm "+
+			"LEFT JOIN kb_packages pkg ON pkg.id = tm.pack_id "+
+			"WHERE tm.id=? AND (tm.tenant_id=? OR (tm.tenant_id=1 AND tm.priority>=2 AND pkg.pack_type IN ('industry','locale')))",
 		langCols), id, tenantID)
 	return scanRow(row)
 }
@@ -308,10 +310,13 @@ func (k *KBDatabase) FetchRowTenant(id, tenantID int64) (*Row, error) {
 // 参数：zh=中文原文，tenantID=租户 ID；返回命中的行。
 // FindExact 精确命中（应用知识库优先级链：部门包0 > 组织包1 > 行业包2 > 语言文化包3）。
 // 查询范围 = 本租户 + 租户1（行业包/语言文化包的共享宿主），按 priority 升序取最优命中。
+// 共享过滤子句：租户1 行仅限 语言文化包(全放行) + 本租户注册行业的行业包（防组织包泄漏）
+const sharedFilterSQL = "OR (tm.tenant_id=1 AND tm.priority>=2 AND EXISTS(SELECT 1 FROM kb_packages pkg WHERE pkg.id=tm.pack_id AND (pkg.pack_type='locale' OR (pkg.pack_type='industry' AND pkg.code=(SELECT industry FROM tenants WHERE id=?)))))"
+
 func (k *KBDatabase) FindExact(zh string, tenantID int64) (*Row, error) {
 	row := k.db.QueryRow(fmt.Sprintf(
-		"SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1), %s FROM tm_segments WHERE zh=? AND tenant_id IN (?,1) ORDER BY priority ASC, id ASC LIMIT 1",
-		langCols), zh, tenantID)
+		"SELECT tm.id, tm.zh, COALESCE(tm.module,''), COALESCE(tm.tenant_id,1), "+langCols+" FROM tm_segments tm WHERE tm.zh=? AND (tm.tenant_id=? "+sharedFilterSQL+") ORDER BY tm.priority ASC, tm.id ASC LIMIT 1"),
+		zh, tenantID, tenantID)
 	return scanRow(row)
 }
 
@@ -320,7 +325,8 @@ func (k *KBDatabase) FindExact(zh string, tenantID int64) (*Row, error) {
 // 返回：命中的行列表（按原文长度差由近到远排序）。
 func (k *KBDatabase) FuzzyHits(zhShort string, limit int, tenantID int64) ([]*Row, error) {
 	// 优先级链排序：部门包 > 组织包 > 行业包 > 语言文化包（共享宿主=租户1）
-	rows, err := k.db.Query("SELECT id, zh FROM tm_segments WHERE zh LIKE ? AND tenant_id IN (?,1) ORDER BY priority ASC, id ASC LIMIT ?", "%"+zhShort+"%", tenantID, limit)
+	rows, err := k.db.Query("SELECT tm.id, tm.zh FROM tm_segments tm WHERE tm.zh LIKE ? AND (tm.tenant_id=? " +
+		sharedFilterSQL + ") ORDER BY tm.priority ASC, tm.id ASC LIMIT ?", "%"+zhShort+"%", tenantID, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}

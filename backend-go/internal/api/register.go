@@ -136,10 +136,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			"id": t.ID, "code": t.Code, "name": t.Name, "status": t.Status,
 			"expires_at": t.ExpiresAt, "permissions": t.Permissions,
 		}
-		// 初始化租户：默认三级 KB 包 + 行业包 + 余额账户
+		// 初始化租户：默认 KB 包（组织包/部门包/语言文化包）+ 余额账户
 		_ = s.Store.EnsureDefaultPackages(inviteTenantID)
-		// 开通所选行业包（在租户内创建与默认租户同 code/name 的行业包）
-		_ = s.Store.EnsureIndustryPackage(inviteTenantID, industryPkg.Code, industryPkg.Name)
+		// 行业包单轨制：仅记录注册所选行业编码，内容从共享宿主（租户1）按行业载入，不再建空壳包
+		_ = s.Ten.SetIndustry(inviteTenantID, industryPkg.Code)
 		// 发放试用余额：确保有余额账户记录后充值 trial_tokens
 		_ = s.Store.EnsureBalance(inviteTenantID)
 		if trialTokens > 0 {
