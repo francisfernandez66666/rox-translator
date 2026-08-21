@@ -9,8 +9,8 @@
     <h2>{{ t('org.title') }}</h2>
     <p class="ad-hint">{{ t('org.treeHint') }}</p>
 
-    <!-- ===== 新建组织/部门（部门管理员及以上） ===== -->
-    <div class="ad-row" v-if="myLevel >= 2">
+    <!-- ===== 新建组织/部门（租户管理员及以上；层级设置=超管+租管） ===== -->
+    <div class="ad-row" v-if="myLevel >= 3">
       <select v-model="parentId" class="ad-input">
         <option :value="0" v-if="myLevel >= 3">{{ t('org.rootOption') }}</option>
         <option v-for="o in flatTree" :key="o.id" :value="o.id">{{ orgPath(o) }}</option>
@@ -51,8 +51,9 @@
           <span class="drag-handle" v-if="canDrag">⠿</span>
           <span>{{ orgIcon(o) }} {{ o.name }}</span>
           <span class="ad-tree-actions">
+            <button v-if="isSuper && o.type === 'root'" class="ad-btn-xs" :class="{ 'ad-btn-red': tenantStatusOf(o.tenant_id) === 'active' }" @click.stop="toggleTenantByOrg(o)">{{ tenantStatusOf(o.tenant_id) === 'active' ? t('tenants.disable') : t('tenants.enable') }}</button>
             <button class="ad-btn-xs" :title="t('org.addChild')" @click.stop="setParent(o.id)">+</button>
-            <button v-if="o.type !== 'root' || myLevel >= 3" class="ad-btn-xs" :title="t('org.rename')" @click.stop="renameOrg(o)">✎</button>
+            <button v-if="myLevel >= 3" class="ad-btn-xs" :title="t('org.rename')" @click.stop="renameOrg(o)">✎</button>
             <button v-if="o.type !== 'root' && myLevel >= 3" class="ad-btn-xs ad-btn-red" :title="t('org.delete')" @click.stop="deleteOrg(o)">✕</button>
           </span>
         </div>
@@ -125,7 +126,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { t, tpl } from '@/i18n'
 import { orgList, orgCreate, orgRename, orgMove, orgDelete, orgUsers, type OrgInfo } from '@/api'
-import { adminUserCreate, adminUserUpdate, adminUserResetPassword, adminUserDelete } from '@/api'
+import { adminUserCreate, adminUserUpdate, adminUserResetPassword, adminUserDelete, tenantSetStatus } from '@/api'
 import { activeTenantId, tenantList, isSuper, myLevel, roleOptions, roleName, loadTenants } from './store'
 import { fmtTime } from './ui'
 
@@ -305,6 +306,22 @@ async function resetPwd(u: any) {
 async function setStatus(u: any, status: string) {
   const r = await adminUserUpdate(u.id, { display_name: u.display_name, role: u.role, status })
   if (!r.success) { alert(r.message); return }
+  await loadAll()
+}
+
+// 查询组织所属租户状态（平台视图根节点停用/启用展示用）
+function tenantStatusOf(tid: number): string {
+  return tenantList.value.find(t => t.id === tid)?.status || 'active'
+}
+
+// 超管在组织树上停用/启用租户根（联动租户状态）
+async function toggleTenantByOrg(o: OrgInfo) {
+  const cur = tenantStatusOf(o.tenant_id)
+  const next = cur === 'active' ? 'disabled' : 'active'
+  if (!confirm(next === 'disabled' ? tpl('org.disableTenantConfirm', { name: o.name }) : tpl('org.enableTenantConfirm', { name: o.name }))) return
+  const r = await tenantSetStatus(o.tenant_id, next)
+  if (!r.success) { alert(r.message); return }
+  await loadTenants()
   await loadAll()
 }
 
