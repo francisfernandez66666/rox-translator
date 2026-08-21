@@ -13,55 +13,76 @@ import (
 	"translator/internal/tenant"
 )
 
-// ============ 模型配置 ============
+// ============ 模型配置（租户 BYOK + 超管全局） ============
 
-// handleModels 读取租户模型配置（super_admin；未配置时回退全局默认）
+// handleModels 读取模型配置（租户管理员及以上）：
+// 租户管理员读取本租户 BYOK 配置（未配置回退全局默认）；超管读取所选租户/全局。
+// 返回 model 单模型 + routes 多供应商路由。
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireAdminUser(r)
+	u, err := s.requireTenantAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	tid := s.effTenant(r, u)
 	base := s.Cfg.OnlineAPIBase
 	key := s.Cfg.OnlineAPIKey
 	model := s.Cfg.OnlineModel
+	var routes []tenant.Route
 	if s.Ten != nil {
-		if mc, err := s.Ten.GetModelConfig(s.effTenant(r, u)); err == nil && mc.Model != "" {
-			if mc.APIBase != "" {
-				base = mc.APIBase
+		if mc, err := s.Ten.GetModelConfig(tid); err == nil {
+			routes = mc.Routes
+			if mc.Model != "" {
+				if mc.APIBase != "" {
+					base = mc.APIBase
+				}
+				if mc.APIKey != "" {
+					key = mc.APIKey
+				}
+				model = mc.Model
 			}
-			if mc.APIKey != "" {
-				key = mc.APIKey
-			}
-			model = mc.Model
 		}
 	}
+	if routes == nil {
+		routes = []tenant.Route{}
+	}
+	// 掩码所有密钥
+	maskedRoutes := make([]tenant.Route, 0, len(routes))
+	for _, rt := range routes {
+		rt.APIKey = maskKey(rt.APIKey)
+		maskedRoutes = append(maskedRoutes, rt)
+	}
 	writeJSON(w, 200, map[string]interface{}{"success": true,
-		"model": map[string]string{"api_base": base, "api_key": maskKey(key), "model": model}})
+		"model":  map[string]interface{}{"api_base": base, "api_key": maskKey(key), "model": model},
+		"routes": maskedRoutes})
 }
 
-// handleModelsSave 保存租户模型配置（super_admin）
+// handleModelsSave 保存模型配置（租户管理员及以上，BYOK）：
+// 租户管理员保存本租户模型配置；超管保存所选租户（X-Tenant-ID）。
+// 支持单模型 + 多供应商路由（ChatGPT/Gemini 等 OpenAI 兼容端点）。
 func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireAdminUser(r)
+	u, err := s.requireTenantAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
 	var req struct {
-		APIBase string `json:"api_base"` // 模型 API 基础地址（可为空=不修改）
-		APIKey  string `json:"api_key"`  // 模型 API Key（掩码值不覆盖原密钥）
-		Model   string `json:"model"`    // 模型名称（必填）
+		APIBase string         `json:"api_base"` // 模型 API 基础地址（可为空=不修改）
+		APIKey  string         `json:"api_key"`  // 模型 API Key（掩码值不覆盖原密钥）
+		Model   string         `json:"model"`    // 模型名称
+		Routes  []tenant.Route `json:"routes"`   // 多供应商路由（可为空=清空；ChatGPT/Gemini 等）
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Model == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "model 不能为空"})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
 	if s.Ten == nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
 		return
 	}
+	tid := s.effTenant(r, u)
 	// 保留现有配置中未修改的字段（APIKey 掩码时不覆盖）
-	cur, _ := s.Ten.GetModelConfig(s.effTenant(r, u))
+	cur, _ := s.Ten.GetModelConfig(tid)
 	mc := cur
 	if req.APIBase != "" {
 		mc.APIBase = req.APIBase
@@ -69,8 +90,27 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	if req.APIKey != "" && !hasMask(req.APIKey) {
 		mc.APIKey = req.APIKey
 	}
-	mc.Model = req.Model
-	if err := s.Ten.SetModelConfig(s.effTenant(r, u), mc); err != nil {
+	if req.Model != "" {
+		mc.Model = req.Model
+	}
+	// 多供应商路由：全量覆盖，掩码密钥保留原值
+	if req.Routes != nil {
+		mc.Routes = req.Routes
+		if v, err := s.Ten.GetModelConfig(tid); err == nil {
+			oldRoutes := v.Routes
+			for i := range mc.Routes {
+				if hasMask(mc.Routes[i].APIKey) {
+					for _, o := range oldRoutes {
+						if o.APIBase == mc.Routes[i].APIBase && o.Model == mc.Routes[i].Model {
+							mc.Routes[i].APIKey = o.APIKey
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+	if err := s.Ten.SetModelConfig(tid, mc); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}

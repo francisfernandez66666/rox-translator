@@ -222,11 +222,21 @@ func (s *Store) SetStatus(id int64, status string) error {
 	return err
 }
 
-// ModelConfig 租户级模型配置
+// ModelConfig 租户级模型配置（BYOK，租户管理员维护）
 type ModelConfig struct {
-	APIBase string `json:"api_base"` // 模型 API 基础地址
-	APIKey  string `json:"api_key"`  // 模型 API Key
-	Model   string `json:"model"`    // 模型名
+	APIBase string  `json:"api_base"`         // 模型 API 基础地址（OpenAI 兼容，如 /v1 结尾）
+	APIKey  string  `json:"api_key"`          // 模型 API Key
+	Model   string  `json:"model"`            // 模型名
+	Routes  []Route `json:"routes,omitempty"` // 多供应商路由（可选，兼容 ChatGPT/Gemini 等 OpenAI 兼容端点）
+}
+
+// Route 单条多供应商路由（与 config.ProviderConfig 同构，避免包循环依赖）
+type Route struct {
+	Provider string `json:"provider"` // 供应商标识（如 openai/gemini/deepseek）
+	APIBase  string `json:"api_base"` // API 基地址（OpenAI 兼容）
+	APIKey   string `json:"api_key"`  // API Key
+	Model    string `json:"model"`    // 模型名
+	Weight   int    `json:"weight"`   // 权重，越高越优先（0=兜底）
 }
 
 // GetModelConfig 读取租户模型配置；未配置返回空值（调用方回退全局默认）。

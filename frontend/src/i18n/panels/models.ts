@@ -40,6 +40,8 @@ export const zh: Record<string, string> = {
   'models.savedStages': '分阶段模型已保存并生效',
   'models.stageActive': '已配置 {count} 个阶段独立模型',
   'models.stageNone': '未配置任何阶段独立模型，全部使用全局/路由',
+  'models.onlineHint': '租户管理员可配置本租户自己的模型（BYOK）；超管配置平台全局。支持任意 OpenAI 兼容端点（ChatGPT/Gemini/DeepSeek 等）。',
+  'models.presetPlaceholder': '选择常用供应商预设…',
 }
 
 export const en: Record<string, string> = {
@@ -83,4 +85,6 @@ export const en: Record<string, string> = {
   'models.savedStages': 'Stage models saved and applied',
   'models.stageActive': '{count} stage(s) with independent model',
   'models.stageNone': 'No independent stage models configured; all use global/routing',
+  'models.onlineHint': 'Tenant admins can configure their own model (BYOK); super admins configure platform global. Supports any OpenAI-compatible endpoint (ChatGPT/Gemini/DeepSeek, etc.).',
+  'models.presetPlaceholder': 'Pick a provider preset…',
 }
