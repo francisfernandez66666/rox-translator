@@ -234,7 +234,8 @@ func (s *Store) GetPlatformRootOrg() (*Org, error) {
 }
 
 func (s *Store) ListPlatformOrgs(platformRootID int64) ([]*Org, error) {
-	rows, err := s.db.Query("SELECT " + orgCols + " FROM orgs WHERE tenant_id>0 ORDER BY tenant_id, CASE type WHEN 'root' THEN 0 ELSE 1 END, parent_id, id")
+	// INNER JOIN tenants：已删除租户的孤儿组织不再出现在平台树
+	rows, err := s.db.Query("SELECT o.id, o.tenant_id, o.parent_id, o.name, o.type, o.created_at, o.updated_at FROM orgs o INNER JOIN tenants t ON o.tenant_id=t.id WHERE o.tenant_id>0 ORDER BY o.tenant_id, CASE o.type WHEN 'root' THEN 0 ELSE 1 END, o.parent_id, o.id")
 	if err != nil {
 		return nil, err
 	}
