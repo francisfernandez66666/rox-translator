@@ -149,19 +149,72 @@ echo "   ✅ .app 封装完成"
 # ---- 5. Ad-hoc 代码签名 ----
 echo ""
 echo "[5/5] 代码签名..."
-find "$APP_BUNDLE/Contents/Resources" -type f \( -name "*.dylib" -o -name "*.so" \) -print0 2>/dev/null | while IFS= read -r -d '' f; do
-    codesign --force --deep --sign - --timestamp=none "$f" 2>/dev/null || true
-done
-codesign --force --deep --sign - --timestamp=none "$APP_BUNDLE/Contents/Resources/翻译助手" 2>/dev/null || true
-codesign --force --deep --sign - --timestamp=none "$APP_BUNDLE" 2>/dev/null || true
-echo "   ✅ 签名完成"
+# ★ 关键：若项目位于 iCloud 同步目录（如 ~/Desktop 桌面同步），codesign 处理
+#   .app 时会被 fileprovider 实时打上 com.apple.FinderInfo 属性，导致签名永远失败。
+#   解决办法：复制到非同步临时目录签名，成功后再移回。
+TMP_SIGN_DIR="$(mktemp -d "/tmp/翻译助手_sign_XXXXXX")"
+TMP_APP="$TMP_SIGN_DIR/$APP_NAME.app"
 
-# ---- 6. 打包成 zip ----
-echo ""
-echo "打包成 zip..."
-cd "$DIST_DIR"
-rm -f "$APP_NAME.zip"
-zip -ry "$APP_NAME.zip" "$APP_NAME.app" -x "*.DS_Store" "._*" 2>/dev/null
+cp -a "$APP_BUNDLE" "$TMP_APP"
+find "$TMP_APP" -name ".DS_Store" -delete 2>/dev/null || true
+find "$TMP_APP" -name "._*" -delete 2>/dev/null || true
+
+# ★ 强力清除所有扩展属性（FinderInfo / fileprovider 等，xattr -cr 清不干净）
+TMP_APP_PATH="$TMP_APP" python3 - <<'PYEOF'
+import os, subprocess
+root = os.environ["TMP_APP_PATH"]
+for dp, dn, fn in os.walk(root):
+    for n in fn + dn:
+        p = os.path.join(dp, n)
+        for a in subprocess.run(["xattr", p], capture_output=True, text=True).stdout.split():
+            subprocess.run(["xattr", "-d", a, p], capture_output=True)
+PYEOF
+
+# 签名顺序很重要：先签最内层，再逐层向外，最后签整个 .app
+SIG_LOG="$TMP_SIGN_DIR/sign_err.log"
+# 1. 所有 .dylib / .so 动态库
+find "$TMP_APP/Contents/Resources" -type f \( -name "*.dylib" -o -name "*.so" \) -print0 2>/dev/null | while IFS= read -r -d '' f; do
+    codesign --force --deep --sign - --timestamp=none "$f" 2>>"$SIG_LOG" || true
+done
+# 2. Python.framework 内部二进制 + framework 本体（★ 漏签这里会被 Gatekeeper 拦截闪退）
+PY_FW="$TMP_APP/Contents/Resources/_internal/Python.framework"
+if [ -d "$PY_FW" ]; then
+    for v in "$PY_FW"/Versions/*/Python; do
+        codesign --force --sign - --timestamp=none "$v" 2>>"$SIG_LOG" || true
+    done
+    codesign --force --deep --sign - --timestamp=none "$PY_FW" 2>>"$SIG_LOG" || true
+fi
+# 3. 主可执行文件（Resources/翻译助手）
+codesign --force --sign - --timestamp=none "$TMP_APP/Contents/Resources/翻译助手" 2>>"$SIG_LOG" || true
+# 4. .app 启动脚本 launcher（CFBundleExecutable，必须签名）
+codesign --force --sign - --timestamp=none "$TMP_APP/Contents/MacOS/launcher" 2>>"$SIG_LOG" || true
+# 5. 整个 .app（★ 必须用 --deep 递归签所有子宿主）
+codesign --force --deep --sign - --timestamp=none "$TMP_APP" 2>>"$SIG_LOG" || true
+
+# 6. 验证签名；失败则中止构建（避免发出无法运行的包）
+if codesign --verify --deep --strict "$TMP_APP" 2>/dev/null; then
+    echo "   ✅ 签名完成，验证通过"
+    # 在临时目录直接打 zip（★ 避免移回 dist 后 iCloud 重新打 FinderInfo 属性污染包）
+    cd "$TMP_SIGN_DIR"
+    rm -f "$APP_NAME.zip"
+    zip -ry "$APP_NAME.zip" "$APP_NAME.app" -x "*.DS_Store" "._*" 2>/dev/null
+    # 把 zip 和 app 移回 dist
+    cd "$DIST_DIR"
+    rm -rf "$APP_NAME.app"
+    rm -f "$APP_NAME.zip"
+    mv "$TMP_SIGN_DIR/$APP_NAME.app" "$DIST_DIR/"
+    mv "$TMP_SIGN_DIR/$APP_NAME.zip" "$DIST_DIR/"
+    rm -rf "$TMP_SIGN_DIR"
+else
+    echo "   ❌ 签名验证失败，中止构建"
+    echo "--- 签名过程错误日志 ---"
+    cat "$SIG_LOG" 2>/dev/null | head -10
+    echo "--- 验证详情 ---"
+    codesign --verify --deep --strict --verbose=2 "$TMP_APP" 2>&1 | tail -3
+    rm -rf "$TMP_SIGN_DIR"
+    exit 1
+fi
+
 echo "   ✅ 打包完成"
 
 echo ""
