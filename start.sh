@@ -35,7 +35,9 @@ if ! command -v node &>/dev/null; then
 fi
 
 # ---- 安装后端依赖 ----
-if [ ! -f "$BACKEND_DIR/.deps_installed" ]; then
+# 检测核心依赖（dotenv/fastapi）是否真正可用，而非依赖 .deps_installed 标记文件
+# （标记文件若随源码一起发送会误判已安装，导致 Missing 'dotenv' 报错）
+if ! "$PYTHON" -c "import dotenv, fastapi" >/dev/null 2>&1; then
     echo "[安装] 后端依赖..."
     "$PYTHON" -m pip install -r "$BACKEND_DIR/requirements.txt" -q
     touch "$BACKEND_DIR/.deps_installed"
