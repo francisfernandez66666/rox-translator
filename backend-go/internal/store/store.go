@@ -361,6 +361,11 @@ func (s *Store) migrateColumns() error {
 		{"tm_segments", "priority", "ALTER TABLE tm_segments ADD COLUMN priority INTEGER NOT NULL DEFAULT 9"},
 		// 检索条目归属知识库包（0=无归属/历史兜底数据）；停用/启用/统计按此精确摘除与回写
 		{"tm_segments", "pack_id", "ALTER TABLE tm_segments ADD COLUMN pack_id INTEGER NOT NULL DEFAULT 0"},
+		// 安全句结构化字段（Gate 闸门）：类型/替换词/审核状态/来源
+		{"kb_safety_phrases", "kind", "ALTER TABLE kb_safety_phrases ADD COLUMN kind TEXT NOT NULL DEFAULT 'style'"},
+		{"kb_safety_phrases", "replacement", "ALTER TABLE kb_safety_phrases ADD COLUMN replacement TEXT NOT NULL DEFAULT ''"},
+		{"kb_safety_phrases", "status", "ALTER TABLE kb_safety_phrases ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'"},
+		{"kb_safety_phrases", "source", "ALTER TABLE kb_safety_phrases ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"},
 		// 知识库包启停状态（停用后不参与翻译命中）
 		{"kb_packages", "enabled", "ALTER TABLE kb_packages ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"},
 	}

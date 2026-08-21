@@ -67,3 +67,44 @@ export async function kbPackageStatus(id: number, enabled: number): Promise<Admi
 export async function kbIndexRebuild(): Promise<AdminResp> {
   return request('/api/admin/kb-index/rebuild', { method: 'POST', headers: authHeaders() })
 }
+
+// ==================== 语言文化规范（安全句 / Gate 闸门） ====================
+
+// 安全句实体（kind: style 风格规范/forbidden 禁用词/replace 替换对；status: pending/approved/rejected）
+export interface SafetyPhrase {
+  id: number
+  tenant_id: number
+  package_id: number
+  lang: string
+  phrase: string
+  kind?: string
+  replacement?: string
+  status?: string
+  source?: string
+  created_at: string
+}
+
+// 列出安全句（可按语言文化包过滤）
+export async function safetyPhrases(): Promise<AdminResp> {
+  return request('/api/admin/safety-phrases', { headers: authHeaders() })
+}
+
+// 新增安全句（结构化：类型+替换词）
+export async function safetyPhraseAdd(data: { package_id: number; lang: string; phrase: string; kind?: string; replacement?: string }): Promise<AdminResp> {
+  return request('/api/admin/safety-phrases/add', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
+// 删除安全句
+export async function safetyPhraseDelete(id: number): Promise<AdminResp> {
+  return request('/api/admin/safety-phrases/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+}
+
+// 审核安全句（approved 通过 / rejected 驳回 / pending 回退待审）
+export async function safetyPhraseStatus(id: number, status: string): Promise<AdminResp> {
+  return request('/api/admin/safety-phrases/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, status }) })
+}
+
+// LLM 投喂批量导入（统一落 pending 待人工审核）
+export async function safetyBulkImport(packageId: number, items: { lang: string; phrase: string; kind: string; replacement?: string }[]): Promise<AdminResp> {
+  return request('/api/admin/safety-phrases/bulk-import', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ package_id: packageId, items }) })
+}

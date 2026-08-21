@@ -171,6 +171,8 @@ func (s *Server) routesAdminKB() {
 	s.mux.HandleFunc("/api/admin/safety-phrases", s.handleSafetyPhrases)
 	s.mux.HandleFunc("/api/admin/safety-phrases/add", s.handleSafetyPhraseAdd)
 	s.mux.HandleFunc("/api/admin/safety-phrases/delete", s.handleSafetyPhraseDelete)
+	s.mux.HandleFunc("/api/admin/safety-phrases/bulk-import", s.handleSafetyPhraseBulkImport)
+	s.mux.HandleFunc("/api/admin/safety-phrases/status", s.handleSafetyPhraseStatus)
 }
 
 // routesAdminFlow 注册流程引擎设置路由。

@@ -54,6 +54,25 @@ type Engine struct {
 	NPZPath   string      // npz 文件路径（重建后写回）
 	indexMu   sync.Mutex  // 保护 Index 指针热替换与重建互斥
 	rebuilding atomic.Bool // 防并发重建
+
+	// ★ 语言文化规范缓存（Gate L1）：key= tid|lang，TTL 60s
+	cultureMu      sync.Mutex
+	cultureCache   map[string]cultureEntry
+	cultureEntries map[string][]cultureRule // 同 key 的结构化条目（L2 用）
+}
+
+// cultureRule 单条语言文化规则（来自语言文化包安全句，approved 才生效）。
+type cultureRule struct {
+	Kind        string // style/forbidden/replace
+	Phrase      string
+	Replacement string
+}
+
+// cultureEntry 缓存条目。
+type cultureEntry struct {
+	Text     string        // 渲染后的提示词块（L1 注入用）
+	Rules    []cultureRule // 结构化条目（L2 硬过滤用）
+	ExpiresAt time.Time
 }
 
 // tenantID 从 ctx 取租户 id；未指定时回退默认租户 rox（id=1）
@@ -256,6 +275,9 @@ type TranslateResult struct {
 	TargetLangs  []string          // 请求的目标语言列表
 	NeedModel    []string          // 仍需要模型生成的目标语言（KB 未覆盖的部分）
 	Examples     []*kb.Row         // 参考例句（语义相近但非同一句时收集）
+
+	// GateViolations L2 硬闸门违规：目标语言 → 命中的禁用词列表（replace 已自动替换不在此列）
+	GateViolations map[string][]string `json:"gate_violations,omitempty"`
 }
 
 // NewEngine 创建引擎
@@ -350,7 +372,43 @@ func cjkOverlap(a, b string) float64 {
 // TranslateOne 翻译单条文本（四段匹配），等价 lib.translate_one
 // langOnly=true 时只用 KB（translate_file 第一遍用）；否则 KB+模型兜底。
 // 参数 stage: 流程阶段（KB 兜底翻译默认 config.StageKBMatch）。
+// TranslateOne 翻译单条入口（含 L2 语言文化硬闸门：替换对自动替换、禁用词记录违规）。
 func (e *Engine) TranslateOne(ctx context.Context, zhText string, targetLangs []string, langOnly bool, stage string) (*TranslateResult, error) {
+	res, err := e.translateOneInner(ctx, zhText, targetLangs, langOnly, stage)
+	if res == nil || len(res.Translations) == 0 {
+		return res, err
+	}
+	tid := tenant.FromContext(ctx)
+	if tid <= 0 {
+		return res, err // 平台上下文无文化规则
+	}
+	enforced := false
+	if e.St != nil {
+		if v, _ := e.St.GetConfig("locale_gate_enforced"); v == "1" {
+			enforced = true
+		}
+	}
+	for lang, text := range res.Translations {
+		fixed, violations := e.applyCultureGate(ctx, tid, lang, text)
+		if fixed != text {
+			res.Translations[lang] = fixed
+		}
+		if len(violations) > 0 {
+			if res.GateViolations == nil {
+				res.GateViolations = map[string][]string{}
+			}
+			res.GateViolations[lang] = violations
+			if enforced {
+				// 拦截模式：命中禁用词的语言回退为待模型重译（由上层决定是否重试）
+				delete(res.Translations, lang)
+			}
+		}
+	}
+	return res, err
+}
+
+// translateOneInner 翻译单条核心实现（原 TranslateOne 主体）。
+func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLangs []string, langOnly bool, stage string) (*TranslateResult, error) {
 	res := &TranslateResult{
 		Translations: map[string]string{},
 		TargetLangs:  targetLangs,
@@ -586,9 +644,13 @@ func (e *Engine) TranslateWithFeedback(ctx context.Context, zhText, targetLang, 
 	if langName == "" {
 		langName = targetLang
 	}
+	culture := ""
+	if tid := tenant.FromContext(ctx); tid > 0 {
+		culture, _ = e.cultureRules(ctx, tid, targetLang)
+	}
 	prompt := fmt.Sprintf(
-		"你是资深%s翻译。前一次翻译被审校驳回，驳回意见如下：%s。请严格按照意见修正重译。\n\n【原文】%s\n\n只输出修正后的%s译文：",
-		langName, feedback, zhText, langName)
+		"你是资深%s翻译。前一次翻译被审校驳回，驳回意见如下：%s。请严格按照意见修正重译。%s\n\n【原文】%s\n\n只输出修正后的%s译文：",
+		langName, feedback, culture, zhText, langName)
 	messages := []map[string]string{{"role": "user", "content": prompt}}
 	base, key, model := e.resolveModel(ctx)
 	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {
@@ -604,13 +666,17 @@ func (e *Engine) TranslateWithFeedback(ctx context.Context, zhText, targetLang, 
 // ReviewTranslation 审校译文（LLM 修正术语/语法/表达，返回修正后译文；失败返回原文）。
 // 参数 stage: 流程阶段（默认 config.StageReview）。
 func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, targetLang, stage string) string {
+	culture := ""
+	if tid := tenant.FromContext(ctx); tid > 0 {
+		culture, _ = e.cultureRules(ctx, tid, targetLang)
+	}
 	langName := config.LangNames[targetLang]
 	if langName == "" {
 		langName = targetLang
 	}
 	prompt := fmt.Sprintf(
-		"你是资深翻译审校。请审校以下%s译文，仅修正术语准确性和语法错误，保持原意与风格，不要改写结构。\n\n【原文】%s\n【待审校译文】%s\n\n只输出审校后的译文：",
-		langName, source, translation)
+		"你是资深翻译审校。请审校以下%s译文，仅修正术语准确性和语法错误，保持原意与风格，不要改写结构。%s\n\n【原文】%s\n【待审校译文】%s\n\n只输出审校后的译文：",
+		langName, culture, source, translation)
 	messages := []map[string]string{{"role": "user", "content": prompt}}
 	base, key, model := e.resolveModel(ctx)
 	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {
@@ -870,6 +936,15 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 	ref := buildExamplesPrompt(zhText, targetLang, examples)
 
 	// 术语参考放入 system 消息（模型不会复述 system 内容），user 只含指令+待翻译文本
+	// ★ Gate L1：语言文化规范注入（approved 安全句按目标语言，60s 缓存）
+	cultureBlock := ""
+	if tid := tenant.FromContext(ctx); tid > 0 {
+		cultureBlock, _ = e.cultureRules(ctx, tid, targetLang)
+	}
+	sysNote := "翻译时请沿用以上参考中的专有词/术语译法，但只输出待翻译文本的翻译结果，不得输出或复述参考内容。"
+	if cultureBlock != "" {
+		sysNote += cultureBlock
+	}
 	var messages []map[string]string
 	if ref != "" {
 		langName := config.LangNames[targetLang]
@@ -877,8 +952,12 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 			langName = targetLang
 		}
 		messages = []map[string]string{
-			{"role": "system", "content": ref +
-				"\n翻译时请沿用以上参考中的专有词/术语译法，但只输出待翻译文本的翻译结果，不得输出或复述参考内容。"},
+			{"role": "system", "content": ref + "\n" + sysNote},
+			{"role": "user", "content": instruction + "\n\n" + zhText},
+		}
+	} else if cultureBlock != "" {
+		messages = []map[string]string{
+			{"role": "system", "content": strings.TrimPrefix(sysNote, "翻译时请沿用以上参考中的专有词/术语译法，但只输出待翻译文本的翻译结果，不得输出或复述参考内容。\n")},
 			{"role": "user", "content": instruction + "\n\n" + zhText},
 		}
 	} else {
@@ -1456,3 +1535,78 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 
 // Rebuilding 是否正在重建向量索引。
 func (e *Engine) Rebuilding() bool { return e.rebuilding.Load() }
+
+// cultureRules 加载租户可应用语言文化包中指定目标语言的已审核规则（60s 缓存）。
+// 返回渲染后的提示词块（L1）与结构化规则（L2 硬过滤）；无规则返回空。
+func (e *Engine) cultureRules(ctx context.Context, tid int64, targetLang string) (string, []cultureRule) {
+	if e.St == nil || tid <= 0 || targetLang == "" {
+		return "", nil
+	}
+	key := fmt.Sprintf("%d|%s", tid, targetLang)
+	e.cultureMu.Lock()
+	defer e.cultureMu.Unlock()
+	if e.cultureCache == nil {
+		e.cultureCache = map[string]cultureEntry{}
+		e.cultureEntries = map[string][]cultureRule{}
+	}
+	if ce, ok := e.cultureCache[key]; ok && time.Now().Before(ce.ExpiresAt) {
+		return ce.Text, ce.Rules
+	}
+	rows, err := e.St.DB().Query(`
+		SELECT sp.phrase, COALESCE(sp.kind,'style'), COALESCE(sp.replacement,'')
+		FROM kb_safety_phrases sp
+		JOIN kb_packages pkg ON pkg.id = sp.package_id
+		WHERE COALESCE(sp.status,'approved')='approved' AND sp.lang=?
+		  AND COALESCE(pkg.enabled,1)=1 AND pkg.pack_type='locale'
+		  AND pkg.tenant_id IN (?, 1)`, targetLang, tid)
+	if err != nil {
+		return "", nil
+	}
+	defer rows.Close()
+	var rules []cultureRule
+	for rows.Next() {
+		var r cultureRule
+		if err := rows.Scan(&r.Phrase, &r.Kind, &r.Replacement); err == nil && r.Phrase != "" {
+			rules = append(rules, r)
+		}
+	}
+	rows.Close()
+	var sb strings.Builder
+	if len(rules) > 0 {
+		sb.WriteString("\n【语言文化规范（必须遵守，违反将被拒绝）】\n")
+		for _, r := range rules {
+			switch r.Kind {
+			case "style":
+				sb.WriteString("· 写作规范：" + r.Phrase + "\n")
+			case "forbidden":
+				sb.WriteString("· 严禁在译文中出现：" + r.Phrase + "\n")
+			case "replace":
+				sb.WriteString("· 用词替换：译文中的「" + r.Phrase + "」必须写作「" + r.Replacement + "」\n")
+			}
+		}
+	}
+	text := sb.String()
+	e.cultureCache[key] = cultureEntry{Text: text, Rules: rules, ExpiresAt: time.Now().Add(60 * time.Second)}
+	e.cultureEntries[key] = rules
+	return text, rules
+}
+
+// applyCultureGate L2 硬闸门：replace 对自动替换；forbidden 命中记录违规。
+// 返回处理后的文本与违规列表。违规始终记录；是否拦截由调用方按 locale_gate_enforced 决定。
+func (e *Engine) applyCultureGate(ctx context.Context, tid int64, targetLang, text string) (string, []string) {
+	_, rules := e.cultureRules(ctx, tid, targetLang)
+	var violations []string
+	for _, r := range rules {
+		switch r.Kind {
+		case "replace":
+			if r.Replacement != "" && strings.Contains(text, r.Phrase) {
+				text = strings.ReplaceAll(text, r.Phrase, r.Replacement)
+			}
+		case "forbidden":
+			if strings.Contains(strings.ToLower(text), strings.ToLower(r.Phrase)) {
+				violations = append(violations, r.Phrase)
+			}
+		}
+	}
+	return text, violations
+}

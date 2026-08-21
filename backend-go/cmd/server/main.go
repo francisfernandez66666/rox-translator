@@ -6,6 +6,7 @@
 package main
 
 import (
+	"strings"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -138,15 +139,6 @@ func main() {
 		eng.St = st
 	}
 
-	// ★ evals 评估器（Judge 用 Online Key；可用 EVALS_JUDGE_KEY 覆盖）
-	judgeKey := cfg.OnlineAPIKey
-	if v := os.Getenv("EVALS_JUDGE_KEY"); v != "" {
-		judgeKey = v // 环境变量优先覆盖
-	}
-	if st != nil {
-		eng.Evals = evals.New(cfg, llm.NewClient(cfg), st, judgeKey)
-	}
-
 	// 加载模型路由策略（system_config.model_routes，admin 可热更新）
 	if st != nil {
 		if v, err := st.GetConfig("model_routes"); err == nil && v != "" {
@@ -156,6 +148,31 @@ func main() {
 				log.Printf("模型路由策略已加载: %d 条", len(routes))
 			}
 		}
+		// ★ 启动水合：全局 Key 为占位符且主路由带真实密钥时回填，
+		// 修复「面板保存过真实 Key 但引擎兜底仍用占位符」的断链
+		if cfg.OnlineAPIKeyIsPlaceholder || cfg.OnlineAPIKey == "" {
+			for _, r := range cfg.ModelRoutes {
+				if r.APIKey != "" && !strings.HasPrefix(r.APIKey, "sk-****") {
+					cfg.OnlineAPIKey = r.APIKey
+					cfg.OnlineAPIKeyIsPlaceholder = false
+					log.Printf("全局 API Key 已从主路由水合（provider=%s model=%s）", r.Provider, r.Model)
+					break
+				}
+			}
+		}
+	}
+
+	// ★ evals 评估器（Judge 用 Online Key；可用 EVALS_JUDGE_KEY 覆盖）。
+	// 占位 Key 传空 → 评估器自动禁用，避免必失败的空转调用。
+	judgeKey := cfg.OnlineAPIKey
+	if cfg.OnlineAPIKeyIsPlaceholder {
+		judgeKey = ""
+	}
+	if v := os.Getenv("EVALS_JUDGE_KEY"); v != "" {
+		judgeKey = v // 环境变量优先覆盖
+	}
+	if st != nil {
+		eng.Evals = evals.New(cfg, llm.NewClient(cfg), st, judgeKey)
 	}
 
 	// 创建 HTTP 服务

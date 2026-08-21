@@ -309,9 +309,11 @@ func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		PackageID int64  `json:"package_id"` // 所属包 ID
-		Lang      string `json:"lang"`       // 安全句语言代码（默认 en）
-		Phrase    string `json:"phrase"`     // 安全句内容（必填）
+		PackageID   int64  `json:"package_id"`   // 所属包 ID（语言文化包）
+		Lang        string `json:"lang"`         // 目标语言代码（默认 en）
+		Phrase      string `json:"phrase"`       // 规则内容（必填）
+		Kind        string `json:"kind"`         // 类型：style(默认)/forbidden/replace
+		Replacement string `json:"replacement"`  // 替换词（仅 replace 类型）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Phrase == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "phrase 不能为空"})
@@ -320,7 +322,10 @@ func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 	if req.Lang == "" {
 		req.Lang = "en"
 	}
-	id, err := s.Store.SaveSafetyPhrase(s.kbTenant(r, u), req.PackageID, req.Lang, req.Phrase)
+	if req.Kind == "" {
+		req.Kind = "style"
+	}
+	id, err := s.Store.SaveSafetyPhraseEx(s.kbTenant(r, u), req.PackageID, req.Lang, req.Phrase, req.Kind, req.Replacement)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -426,4 +431,53 @@ func (s *Server) rebuildIndexAsync() {
 		defer cancel()
 		_, _ = s.Engine.RebuildKBIndex(ctx)
 	}()
+}
+
+// handleSafetyPhraseBulkImport LLM 投喂批量导入安全句（租管及以上）。
+// body: {package_id, items:[{lang, phrase, kind, replacement}]}；统一落 pending+llm，人工审核后生效。
+func (s *Server) handleSafetyPhraseBulkImport(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireDeptAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		PackageID int64                    `json:"package_id"`
+		Items     []*store.KBSafetyPhrase  `json:"items"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Items) == 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "items 不能为空"})
+		return
+	}
+	tid := s.kbTenant(r, u)
+	added, err := s.Store.BulkImportSafetyPhrases(tid, req.PackageID, req.Items)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(tid, u.ID, "safety_bulk_import", "kb_safety_phrases", fmt.Sprintf("imported=%d pending_review", added))
+	writeJSON(w, 200, map[string]interface{}{"success": true, "added": added})
+}
+
+// handleSafetyPhraseStatus 审核安全句（通过/驳回/回退待审）。
+func (s *Server) handleSafetyPhraseStatus(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireDeptAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		ID     int64  `json:"id"`
+		Status string `json:"status"` // pending/approved/rejected
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	if err := s.Store.SetSafetyPhraseStatus(req.ID, req.Status); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_status", "kb_safety_phrases", req.Status)
+	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
