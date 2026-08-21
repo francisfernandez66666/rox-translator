@@ -240,15 +240,25 @@ func (s *Store) ListPlatformOrgs(platformRootID int64) ([]*Org, error) {
 	}
 	defer rows.Close()
 	var out []*Org
+	tenantRoot := map[int64]int64{} // tenant_id → 该租户根组织 ID
 	for rows.Next() {
 		var o Org
 		if err := rows.Scan(&o.ID, &o.TenantID, &o.ParentID, &o.Name, &o.Type, &o.CreatedAt, &o.UpdatedAt); err != nil {
 			continue
 		}
 		if o.Type == OrgTypeRoot {
-			o.ParentID = platformRootID
+			tenantRoot[o.TenantID] = o.ID
+			o.ParentID = platformRootID // 租户根视图上挂在平台根下
 		}
 		out = append(out, &o)
+	}
+	// 关键：租户内直属根的组织（parent_id=0）重挂到本租户根组织下，否则平台树断链
+	for _, o := range out {
+		if o.Type != OrgTypeRoot && o.ParentID == 0 {
+			if rid, ok := tenantRoot[o.TenantID]; ok {
+				o.ParentID = rid
+			}
+		}
 	}
 	return out, nil
 }
