@@ -5,6 +5,7 @@
 package store
 
 import (
+	"database/sql"
 	"crypto/sha256"
 	"encoding/hex"
 	"time"
@@ -73,7 +74,19 @@ func (s *Store) GetAPIKey(id, tid int64) (*APIKey, error) {
 // ListAPIKeys 列出租户全部 API Key（按 ID 倒序）。
 // 参数：tid=租户 ID；返回该租户的 Key 列表。
 func (s *Store) ListAPIKeys(tid int64) ([]*APIKey, error) {
-	rows, err := s.db.Query("SELECT id, tenant_id, key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count FROM api_keys WHERE tenant_id=? ORDER BY id DESC", tid)
+	// tid<=0：跨租户全量（超管平台视角聚合）
+	q := "SELECT id, tenant_id, key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count FROM api_keys"
+	if tid > 0 {
+		q += " WHERE tenant_id=?"
+	}
+	q += " ORDER BY id DESC"
+	var rows *sql.Rows
+	var err error
+	if tid > 0 {
+		rows, err = s.db.Query(q, tid)
+	} else {
+		rows, err = s.db.Query(q)
+	}
 	if err != nil {
 		return nil, err
 	}

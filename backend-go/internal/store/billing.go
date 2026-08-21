@@ -487,7 +487,17 @@ func (s *Store) GetOrder(id, tid int64) (*Order, error) {
 // ListOrders 列出租户全部订单（按 ID 倒序）。
 // 参数：tid=租户 ID；返回订单列表。
 func (s *Store) ListOrders(tid int64) ([]*Order, error) {
+	// tid<=0：跨租户全量（超管平台视角聚合）
+	if tid <= 0 {
+		rows, err := s.db.Query("SELECT " + orderCols + " FROM orders ORDER BY id DESC")
+		return scanOrders(rows, err)
+	}
 	rows, err := s.db.Query("SELECT "+orderCols+" FROM orders WHERE tenant_id=? ORDER BY id DESC", tid)
+	return scanOrders(rows, err)
+}
+
+// scanOrders 扫描订单行集（ListOrders 共用）。
+func scanOrders(rows *sql.Rows, err error) ([]*Order, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -704,4 +714,22 @@ func randSuffix(n int) string {
 		b[i] = letters[uint64(seed)%uint64(len(letters))]     // 取模映射到字母表
 	}
 	return string(b)
+}
+
+// UsageAllByUser 跨租户聚合每用户用量（超管平台视角）。
+// 返回：用户 ID → 累计消耗。
+func (s *Store) UsageAllByUser() (map[int64]int64, error) {
+	rows, err := s.db.Query("SELECT user_id, COALESCE(SUM(quantity),0) FROM usage_ledger GROUP BY user_id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]int64{}
+	for rows.Next() {
+		var uid, q int64
+		if err := rows.Scan(&uid, &q); err == nil {
+			out[uid] = q
+		}
+	}
+	return out, nil
 }

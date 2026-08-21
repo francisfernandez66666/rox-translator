@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -13,6 +14,21 @@ const orgCols = "id, tenant_id, parent_id, name, type, created_at, updated_at"
 // Store IAM 数据访问层（用户 + 组织）
 type Store struct {
 	db *sql.DB
+	mu sync.Mutex // 写操作互斥：SQLite 单写者模型下降低并发 SQLITE_BUSY 概率
+}
+
+// write 串行化执行写操作（事务/Exec 统一入口）。
+func (s *Store) write(fn func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fn()
+}
+
+// execW 互斥执行单条写 SQL。
+func (s *Store) execW(query string, args ...interface{}) (sql.Result, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.db.Exec(query, args...)
 }
 
 func NewStore(db *sql.DB) *Store {
@@ -33,7 +49,7 @@ func scanUser(row *sql.Row) (*User, error) {
 
 func (s *Store) CreateUser(tid int64, username, passHash, displayName, role string, createdBy, orgID int64) (*User, error) {
 	now := time.Now().Format(time.RFC3339)
-	res, err := s.db.Exec(
+	res, err := s.execW(
 		"INSERT INTO users (tenant_id, username, password_hash, display_name, role, status, created_by, org_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
 		tid, username, passHash, displayName, role, UserActive, createdBy, orgID, now, now)
 	if err != nil {
@@ -56,7 +72,7 @@ func (s *Store) GetUserByEmail(email string) (*User, error) {
 }
 
 func (s *Store) SetUserEmail(id, tid int64, email string) error {
-	_, err := s.db.Exec("UPDATE users SET email=? WHERE id=? AND tenant_id=?", email, id, tid)
+	_, err := s.execW("UPDATE users SET email=? WHERE id=? AND tenant_id=?", email, id, tid)
 	return err
 }
 
@@ -103,7 +119,7 @@ func (s *Store) ListUsers(tid int64) ([]*User, error) {
 
 func (s *Store) UpdateUser(id, tid int64, displayName, role, status string, orgID int64) error {
 	now := time.Now().Format(time.RFC3339)
-	_, err := s.db.Exec(
+	_, err := s.execW(
 		"UPDATE users SET display_name=?, role=?, status=?, org_id=?, updated_at=? WHERE id=? AND tenant_id=?",
 		displayName, role, status, orgID, now, id, tid)
 	return err
@@ -111,7 +127,7 @@ func (s *Store) UpdateUser(id, tid int64, displayName, role, status string, orgI
 
 func (s *Store) SetUserOrg(id, tid, orgID int64) error {
 	now := time.Now().Format(time.RFC3339)
-	_, err := s.db.Exec("UPDATE users SET org_id=?, updated_at=? WHERE id=? AND tenant_id=?", orgID, now, id, tid)
+	_, err := s.execW("UPDATE users SET org_id=?, updated_at=? WHERE id=? AND tenant_id=?", orgID, now, id, tid)
 	return err
 }
 
@@ -151,12 +167,12 @@ func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
 
 func (s *Store) ResetPassword(id, tid int64, passHash string) error {
 	now := time.Now().Format(time.RFC3339)
-	_, err := s.db.Exec("UPDATE users SET password_hash=?, updated_at=? WHERE id=? AND tenant_id=?", passHash, now, id, tid)
+	_, err := s.execW("UPDATE users SET password_hash=?, updated_at=? WHERE id=? AND tenant_id=?", passHash, now, id, tid)
 	return err
 }
 
 func (s *Store) TouchLogin(id int64) {
-	_, _ = s.db.Exec("UPDATE users SET last_login_at=? WHERE id=?", time.Now().Format(time.RFC3339), id)
+	_, _ = s.execW("UPDATE users SET last_login_at=? WHERE id=?", time.Now().Format(time.RFC3339), id)
 }
 
 func (s *Store) EnsureAdmin(tid int64, username, passHash, displayName string) error {
@@ -164,7 +180,7 @@ func (s *Store) EnsureAdmin(tid int64, username, passHash, displayName string) e
 		return nil
 	}
 	if u, err := s.GetUserByUsername(tid, username); err == nil && u != nil {
-		_, _ = s.db.Exec("UPDATE users SET tenant_id=0, role=? WHERE id=?", RoleAdmin, u.ID)
+		_, _ = s.execW("UPDATE users SET tenant_id=0, role=? WHERE id=?", RoleAdmin, u.ID)
 		return nil
 	}
 	_, err := s.CreateUser(0, username, passHash, displayName, RoleAdmin, 0, 0)
@@ -178,7 +194,7 @@ func (s *Store) CreateOrg(tid, parentID int64, name, orgType string) (*Org, erro
 		orgType = OrgTypeOrg
 	}
 	now := time.Now().Format(time.RFC3339)
-	res, err := s.db.Exec("INSERT INTO orgs (tenant_id, parent_id, name, type, created_at, updated_at) VALUES (?,?,?,?,?,?)", tid, parentID, name, orgType, now, now)
+	res, err := s.execW("INSERT INTO orgs (tenant_id, parent_id, name, type, created_at, updated_at) VALUES (?,?,?,?,?,?)", tid, parentID, name, orgType, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +298,7 @@ func (s *Store) ListOrgs(tid int64) ([]*Org, error) {
 }
 
 func (s *Store) RenameOrg(id int64, name string) error {
-	_, err := s.db.Exec("UPDATE orgs SET name=?, updated_at=? WHERE id=?", name, time.Now().Format(time.RFC3339), id)
+	_, err := s.execW("UPDATE orgs SET name=?, updated_at=? WHERE id=?", name, time.Now().Format(time.RFC3339), id)
 	return err
 }
 
@@ -315,7 +331,7 @@ func (s *Store) MoveOrg(tid, id, parentID int64) error {
 			}
 		}
 	}
-	_, err = s.db.Exec("UPDATE orgs SET parent_id=?, updated_at=? WHERE id=?", parentID, time.Now().Format(time.RFC3339), id)
+	_, err = s.execW("UPDATE orgs SET parent_id=?, updated_at=? WHERE id=?", parentID, time.Now().Format(time.RFC3339), id)
 	return err
 }
 
@@ -333,6 +349,11 @@ func (s *Store) DeleteOrg(id int64) error {
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec("UPDATE users SET org_id=0 WHERE org_id=?", id); err != nil {
+		return err
+	}
+	// 部门删除保护：被回收的部门管理员失去管理范围，自动降级为普通用户（防"幽灵管理员"）
+	if _, err := tx.Exec("UPDATE users SET role=?, updated_at=? WHERE org_id=0 AND role=? AND tenant_id=?",
+		RoleUser, time.Now().Format(time.RFC3339), RoleDeptAdmin, org.TenantID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec("UPDATE orgs SET parent_id=?, updated_at=? WHERE parent_id=?", org.ParentID, time.Now().Format(time.RFC3339), id); err != nil {
@@ -420,7 +441,7 @@ func (s *Store) OrgNameMap() (map[int64]string, error) {
 
 // DeleteUser 删除用户账号。
 func (s *Store) DeleteUser(id, tid int64) error {
-	res, err := s.db.Exec("DELETE FROM users WHERE id=? AND tenant_id=?", id, tid)
+	res, err := s.execW("DELETE FROM users WHERE id=? AND tenant_id=?", id, tid)
 	if err != nil {
 		return err
 	}
