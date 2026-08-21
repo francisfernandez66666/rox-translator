@@ -25,9 +25,10 @@ type KBPackage struct {
 
 // 包类型常量
 const (
-	PackTenant   = "tenant"   // 企业包
-	PackIndustry = "industry" // 行业包
-	PackLocale   = "locale"   // 语言文化习惯包
+	PackTenant     = "tenant"     // 企业包
+	PackIndustry   = "industry"   // 行业包
+	PackLocale     = "locale"     // 语言文化习惯包
+	PackDepartment = "department" // 部门包
 )
 
 // 包角色常量
@@ -150,6 +151,7 @@ func (s *Store) EnsureDefaultPackages(tid int64) error {
 		{"tenant", "企业包", PackTenant, PackRoleSource},
 		{"industry", "行业包", PackIndustry, PackRoleSource},
 		{"locale", "语言文化习惯包", PackLocale, PackRoleGate},
+		{"department", "部门包", PackDepartment, PackRoleSource},
 	}
 	for _, d := range defs {
 		// 幂等判断：已存在同 code 包则跳过
