@@ -332,11 +332,16 @@ func (s *Server) withTenant(next http.Handler) http.Handler {
 }
 
 // effTenant 计算当前请求生效租户。
-// 超级管理员（平台级，tenant_id=0）使用请求上下文所选租户（X-Tenant-ID 切换）；其余用户固定自身租户。
+// 超级管理员（平台级，tenant_id=0）：X-Tenant-ID 显式指定（>0）时用该租户；
+// 未指定或为 0 时默认平台上下文（tid=0，即「翻译助手」根组织视角）。
+// 其余用户固定自身租户。
 // 参数 r: HTTP 请求；u: 当前用户。返回: 生效租户 ID。
 func (s *Server) effTenant(r *http.Request, u *store.User) int64 {
 	if auth.IsSuperAdmin(u) {
-		return s.currentTenant(r)
+		if id := tenant.FromContext(r.Context()); id > 0 {
+			return id
+		}
+		return 0 // 平台上下文
 	}
 	if u != nil && u.TenantID > 0 {
 		return u.TenantID

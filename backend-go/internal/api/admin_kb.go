@@ -48,6 +48,16 @@ func (s *Server) deptKBScope(u *store.User, tid int64, pkg *store.KBPackage) err
 
 // ============ KB 包管理（行业包） ============
 
+
+// kbTenant 知识库生效租户：超管平台上下文（tid=0）时行业包宿主为租户 1，其余同 effTenant。
+func (s *Server) kbTenant(r *http.Request, u *store.User) int64 {
+	tid := s.kbTenant(r, u)
+	if auth.IsSuperAdmin(u) && tid <= 0 {
+		return 1
+	}
+	return tid
+}
+
 // handleKBPackages 列出知识库包（部门管理员仅见本部门及子部门部门包）
 func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
@@ -55,7 +65,7 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	tid := s.effTenant(r, u)
+	tid := s.kbTenant(r, u)
 	// 部门管理员：仅本部门及子部门下属部门包
 	if auth.RoleLevel(u.Role) == 2 {
 		if u.OrgID <= 0 {
@@ -111,7 +121,7 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权创建该类型的知识库包"})
 		return
 	}
-	tid := s.effTenant(r, u)
+	tid := s.kbTenant(r, u)
 	var p *store.KBPackage
 	// 部门管理员创建部门包：挂到本部门
 	if auth.RoleLevel(u.Role) == 2 {
@@ -146,7 +156,7 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
-	tid := s.effTenant(r, u)
+	tid := s.kbTenant(r, u)
 	pkg, gErr := s.Store.GetKBPackage(req.ID, tid)
 	if gErr != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
@@ -183,7 +193,7 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 包类型权限校验（删除同样校验）
-	pkg, gErr := s.Store.GetKBPackage(req.ID, s.effTenant(r, u))
+	pkg, gErr := s.Store.GetKBPackage(req.ID, s.kbTenant(r, u))
 	if gErr != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
 		return
@@ -192,11 +202,11 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权删除该类型的知识库包"})
 		return
 	}
-	if err := s.Store.DeleteKBPackage(req.ID, s.effTenant(r, u)); err != nil {
+	if err := s.Store.DeleteKBPackage(req.ID, s.kbTenant(r, u)); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "kb_package_delete", "kb_packages", "")
+	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_package_delete", "kb_packages", "")
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -208,7 +218,7 @@ func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pkgID, _ := strconv.ParseInt(r.URL.Query().Get("package_id"), 10, 64)
-	entries, err := s.Store.ListEntries(s.effTenant(r, u), pkgID)
+	entries, err := s.Store.ListEntries(s.kbTenant(r, u), pkgID)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -241,12 +251,12 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 	if req.TargetLang == "" {
 		req.TargetLang = "en"
 	}
-	id, err := s.Store.SaveEntry(s.effTenant(r, u), req.PackageID, req.Layer, "zh", req.SourceText, req.TargetLang, req.TargetText, req.Module)
+	id, err := s.Store.SaveEntry(s.kbTenant(r, u), req.PackageID, req.Layer, "zh", req.SourceText, req.TargetLang, req.TargetText, req.Module)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "kb_entry_add", "kb_entries", req.SourceText)
+	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_entry_add", "kb_entries", req.SourceText)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "id": id})
 }
 
@@ -264,11 +274,11 @@ func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
-	if err := s.Store.DeleteEntry(req.ID, s.effTenant(r, u)); err != nil {
+	if err := s.Store.DeleteEntry(req.ID, s.kbTenant(r, u)); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "kb_entry_delete", "kb_entries", "")
+	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_entry_delete", "kb_entries", "")
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -279,7 +289,7 @@ func (s *Server) handleSafetyPhrases(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	phrases, err := s.Store.ListSafetyPhrases(s.effTenant(r, u))
+	phrases, err := s.Store.ListSafetyPhrases(s.kbTenant(r, u))
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -306,12 +316,12 @@ func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 	if req.Lang == "" {
 		req.Lang = "en"
 	}
-	id, err := s.Store.SaveSafetyPhrase(s.effTenant(r, u), req.PackageID, req.Lang, req.Phrase)
+	id, err := s.Store.SaveSafetyPhrase(s.kbTenant(r, u), req.PackageID, req.Lang, req.Phrase)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "safety_add", "kb_safety_phrases", req.Phrase)
+	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_add", "kb_safety_phrases", req.Phrase)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "id": id})
 }
 
@@ -329,10 +339,10 @@ func (s *Server) handleSafetyPhraseDelete(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
-	if err := s.Store.DeleteSafetyPhrase(req.ID, s.effTenant(r, u)); err != nil {
+	if err := s.Store.DeleteSafetyPhrase(req.ID, s.kbTenant(r, u)); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "safety_delete", "kb_safety_phrases", "")
+	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_delete", "kb_safety_phrases", "")
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
