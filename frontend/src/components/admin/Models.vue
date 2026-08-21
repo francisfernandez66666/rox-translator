@@ -61,14 +61,14 @@
     <div v-if="isSuper" class="ad-chart-card">
       <h3>{{ t('models.stageTitle') }}</h3>
       <div class="ad-hint">{{ t('models.stageHint') }}</div>
-      <div v-for="(k, label) in stageDefs" :key="k" class="ad-stage-card">
+      <div v-for="(label, k) in stageDefs" :key="k" class="ad-stage-card">
         <div class="ad-stage-title">{{ label }}</div>
-        <input v-model="stageForm[k].provider" :placeholder="t('models.stageProvider')" class="ad-input ad-wide" />
+        <input v-model="stageForm[k]!.provider" :placeholder="t('models.stageProvider')" class="ad-input ad-wide" />
         <div class="ad-row">
-          <input v-model="stageForm[k].api_base" :placeholder="t('models.stageApiBasePlaceholder')" class="ad-input" style="flex:1" />
-          <input v-model="stageForm[k].model" :placeholder="t('models.stageModelPlaceholder')" class="ad-input" style="flex:1" />
+          <input v-model="stageForm[k]!.api_base" :placeholder="t('models.stageApiBasePlaceholder')" class="ad-input" style="flex:1" />
+          <input v-model="stageForm[k]!.model" :placeholder="t('models.stageModelPlaceholder')" class="ad-input" style="flex:1" />
         </div>
-        <input v-model="stageForm[k].api_key" :placeholder="t('models.stageApiKeyPlaceholder')" class="ad-input ad-wide" />
+        <input v-model="stageForm[k]!.api_key" :placeholder="t('models.stageApiKeyPlaceholder')" class="ad-input ad-wide" />
       </div>
       <p class="ad-hint">{{ stageActiveCount ? tpl('models.stageActive', { count: stageActiveCount }) : t('models.stageNone') }}</p>
       <button class="ad-btn ad-btn-green" @click="saveStages">{{ t('models.saveStages') }}</button>
