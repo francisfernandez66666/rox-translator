@@ -6,7 +6,6 @@
 package store
 
 import (
-	"fmt"
 	"crypto/md5"
 	"encoding/hex"
 	"time"
@@ -156,7 +155,7 @@ func (s *Store) ListDeptPackages(tid int64, orgIDs []int64) ([]*KBPackage, error
 // 参数：id=包主键 ID，tid=租户 ID；返回包对象。
 func (s *Store) GetKBPackage(id, tid int64) (*KBPackage, error) {
 	var p KBPackage
-	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, sort_order, created_at, updated_at FROM kb_packages WHERE id=? AND tenant_id=?", id, tid).
+	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, COALESCE(enabled,1) as enabled, sort_order, created_at, updated_at FROM kb_packages WHERE id=? AND tenant_id=?", id, tid).
 		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -167,7 +166,7 @@ func (s *Store) GetKBPackage(id, tid int64) (*KBPackage, error) {
 // ListKBPackages 列出租户全部包（按包类型、排序权重、ID 排序）。
 // 参数：tid=租户 ID；返回包列表。
 func (s *Store) ListKBPackages(tid int64) ([]*KBPackage, error) {
-	rows, err := s.db.Query("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=? ORDER BY pack_type, sort_order, id", tid)
+	rows, err := s.db.Query("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, COALESCE(enabled,1) as enabled, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=? ORDER BY pack_type, sort_order, id", tid)
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +235,7 @@ func (s *Store) EnsureDefaultPackages(tid int64) error {
 // 参数：code=行业包编码；返回行业包对象（供注册行业校验与名称引用）。
 func (s *Store) FindIndustryByCode(code string) (*KBPackage, error) {
 	var p KBPackage
-	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=1 AND pack_type=? AND code=?", PackIndustry, code).
+	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, COALESCE(enabled,1) as enabled, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=1 AND pack_type=? AND code=?", PackIndustry, code).
 		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -302,9 +301,9 @@ func (s *Store) SaveEntry(tid, pkgID int64, layer int, srcLang, srcText, tgtLang
 		sum := md5.Sum([]byte(srcText))
 		hash := hex.EncodeToString(sum[:])
 		_, _ = s.db.Exec(
-			"INSERT INTO tm_segments (zh_hash, zh, tenant_id, priority, "+tgtLang+", module, updated_at) VALUES (?,?,?,?,?,?,?) "+
-				"ON CONFLICT(zh_hash, tenant_id) DO UPDATE SET "+tgtLang+"=excluded."+tgtLang+", priority=excluded.priority, updated_at=excluded.updated_at",
-			hash, srcText, host, prio, tgtText, module, now)
+			"INSERT INTO tm_segments (zh_hash, zh, tenant_id, priority, pack_id, "+tgtLang+", module, updated_at) VALUES (?,?,?,?,?,?,?,?) "+
+				"ON CONFLICT(zh_hash, tenant_id) DO UPDATE SET "+tgtLang+"=excluded."+tgtLang+", priority=excluded.priority, pack_id=excluded.pack_id, updated_at=excluded.updated_at",
+			hash, srcText, host, prio, pkgID, tgtText, module, now)
 	}
 	return id, nil
 }
@@ -421,10 +420,10 @@ func (s *Store) SetKBPackageEnabled(id int64, enabled int) error {
 	case "locale":
 		prio, host = 3, 1
 	}
-	marker := fmt.Sprintf("pkg:%d|", id)
 	now := time.Now().Format("2006-01-02T15:04:05")
 	if enabled == 0 {
-		if _, err := s.db.Exec("DELETE FROM tm_segments WHERE module LIKE ?", marker+"%"); err != nil {
+		// 按 pack_id 精确摘除该包在检索层的全部条目
+		if _, err := s.db.Exec("DELETE FROM tm_segments WHERE pack_id=?", id); err != nil {
 			return err
 		}
 	} else {
@@ -445,11 +444,11 @@ func (s *Store) SetKBPackageEnabled(id int64, enabled int) error {
 		for _, e := range ents {
 			sum := md5.Sum([]byte(e.src))
 			hash := hex.EncodeToString(sum[:])
-			mod := marker + e.module
+			mod := e.module
 			if _, err := s.db.Exec(
-				"INSERT INTO tm_segments (zh_hash, zh, tenant_id, priority, "+e.lang+", module, updated_at) VALUES (?,?,?,?,?,?,?) "+
-					"ON CONFLICT(zh_hash, tenant_id) DO UPDATE SET "+e.lang+"=excluded."+e.lang+", priority=excluded.priority, module=excluded.module, updated_at=excluded.updated_at",
-				hash, e.src, host, prio, e.txt, mod, now); err != nil {
+				"INSERT INTO tm_segments (zh_hash, zh, tenant_id, priority, pack_id, "+e.lang+", module, updated_at) VALUES (?,?,?,?,?,?,?,?) "+
+					"ON CONFLICT(zh_hash, tenant_id) DO UPDATE SET "+e.lang+"=excluded."+e.lang+", priority=excluded.priority, pack_id=excluded.pack_id, updated_at=excluded.updated_at",
+				hash, e.src, host, prio, id, e.txt, mod, now); err != nil {
 				return err
 			}
 		}

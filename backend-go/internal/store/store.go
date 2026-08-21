@@ -359,6 +359,8 @@ func (s *Store) migrateColumns() error {
 		{"kb_packages", "org_id", "ALTER TABLE kb_packages ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
 		// 知识库应用优先级：部门包(0) > 组织包(1) > 行业包(2) > 语言文化包(3)；旧数据默认 9
 		{"tm_segments", "priority", "ALTER TABLE tm_segments ADD COLUMN priority INTEGER NOT NULL DEFAULT 9"},
+		// 检索条目归属知识库包（0=无归属/历史兜底数据）；停用/启用/统计按此精确摘除与回写
+		{"tm_segments", "pack_id", "ALTER TABLE tm_segments ADD COLUMN pack_id INTEGER NOT NULL DEFAULT 0"},
 		// 知识库包启停状态（停用后不参与翻译命中）
 		{"kb_packages", "enabled", "ALTER TABLE kb_packages ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"},
 	}
