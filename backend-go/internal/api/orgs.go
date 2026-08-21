@@ -97,7 +97,7 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 	// 超级管理员：平台组织树（所有租户）
 	if auth.IsSuperAdmin(u) {
 		// 确保平台根组织存在
-		root, err := s.Store.EnsurePlatformRootOrg("平台")
+		root, err := s.Store.EnsurePlatformRootOrg("翻译助手")
 		if err != nil {
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 			return
