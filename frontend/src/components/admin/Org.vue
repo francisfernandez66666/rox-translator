@@ -99,16 +99,20 @@
             <input v-model="nu.username" :placeholder="t('org.usernamePlaceholder')" class="ad-input ad-mini-w" />
             <input v-model="nu.password" :placeholder="t('org.passPlaceholder')" class="ad-input" />
             <input v-model="nu.display_name" :placeholder="t('org.displayNamePlaceholder')" class="ad-input" />
-            <select v-model="nu.role" class="ad-input">
-              <option v-for="r in roleOptions" :key="r" :value="r">{{ t('users.role.' + r) }}</option>
-            </select>
           </div>
           <div class="ad-row" style="margin-top:8px">
-            <select v-model.number="nuOrgId" class="ad-input" style="flex:1">
+            <span class="ad-label" style="margin:0">{{ t('org.orgLabel') }}</span>
+            <select v-model.number="nuOrgId" class="ad-input" style="flex:1" @change="onNuOrgChange">
               <option :value="0">{{ isPlatformView ? t('admin.platformRoot') : t('org.rootOption') }}</option>
               <option v-for="o in flatTree" :key="o.id" :value="o.id">{{ orgPath(o) }}</option>
             </select>
-            <span class="ad-hint">{{ t('org.orgHint') }}</span>
+          </div>
+          <div class="ad-row" style="margin-top:8px">
+            <span class="ad-label" style="margin:0">{{ t('org.roleLabel') }}</span>
+            <select v-model="nu.role" class="ad-input">
+              <option v-for="r in nuRoleOptions" :key="r" :value="r">{{ t('users.role.' + r) }}</option>
+            </select>
+            <span class="ad-hint" style="flex:1">{{ t('org.cascadeHint') }}</span>
             <button class="ad-btn ad-btn-green" :disabled="creating" @click="createUser">{{ creating ? t('org.creating') : t('org.addUserBtn') }}</button>
           </div>
         </div>
@@ -150,6 +154,23 @@ const creating = ref(false)
 const nu = ref({ username: '', password: '', display_name: '', role: 'user' })
 // 新用户归属组织（0=根组织/平台；默认跟随当前选中节点）
 const nuOrgId = ref(0)
+// 级联角色选项：由所选组织层级决定（平台根=超管；租户根=租管/部门管理/用户；部门=部门管理/用户）
+const nuRoleOptions = computed(() => {
+  const oid = nuOrgId.value
+  if (!oid) {
+    if (isPlatformView.value) return myLevel.value >= 4 ? ['super_admin'] : []
+    return myLevel.value >= 3 ? ['tenant_admin', 'dept_admin', 'user'] : ['user']
+  }
+  const org = orgs.value.find(x => x.id === oid)
+  if (org && org.type === 'root') return myLevel.value >= 3 ? ['tenant_admin', 'dept_admin', 'user'] : ['user']
+  return myLevel.value >= 2 ? ['dept_admin', 'user'] : ['user']
+})
+// 切换归属组织时：若当前角色不在新范围内则回退为第一个可选角色
+function onNuOrgChange() {
+  if (!nuRoleOptions.value.includes(nu.value.role)) {
+    nu.value.role = nuRoleOptions.value[0] || 'user'
+  }
+}
 
 // 根组织名称（优先用根组织行的自定义名称，回退租户名）
 const rootOrgName = computed(() => {
