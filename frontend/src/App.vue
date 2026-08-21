@@ -99,12 +99,8 @@ const authUser = ref<AuthUser | null>(null)
 // 会话恢复中标记：避免刷新时闪现登录页
 const restoring = ref(true)
 
-// 角色等级：普通用户(1) < 租户管理员(2) < 超级管理员(3)，兼容旧值 approver/admin
-function roleLevel(r?: string): number {
-  if (r === 'super_admin' || r === 'admin') return 3
-  if (r === 'tenant_admin' || r === 'approver') return 2
-  return 1
-}
+// 角色等级（统一取自 admin/store，四级：user<dept_admin<tenant_admin<super_admin）
+import { roleLevel } from './components/admin/store'
 
 // 恢复会话：本地有 token 则向后端校验，管理后台仅放行租户管理员及以上
 async function restoreSession() {
