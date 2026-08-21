@@ -14,6 +14,8 @@ package api
 //   - 超级管理员（tenant_id=0）可通过 X-Tenant-ID 切换后台生效租户
 
 import (
+	"context"
+	"log"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -21,6 +23,8 @@ import (
 
 	"translator/internal/auth"
 	"translator/internal/billing"
+	"translator/internal/queue"
+	"translator/internal/service"
 	"translator/internal/config"
 	"translator/internal/engine"
 	"translator/internal/kb"
@@ -36,6 +40,7 @@ type Server struct {
 	Ten    *tenant.Store    // 租户存储（租户增删改查、权限与模型配置）
 	Store  *store.Store     // 平台存储（用户/工单/审计/计费/API Key 等）
 	Bill   *billing.Service // 计费服务（QPS/并发限流、每日配额、余额扣减）
+	TicketSvc *service.TicketService // 工单服务（入队/worker/通知）
 	Dist   string           // 前端 dist 目录（SPA 静态资源根目录）
 	mux    *http.ServeMux   // 路由分发器
 	// 系统级指标收集器（Prometheus /metrics）
@@ -53,6 +58,15 @@ func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist s
 	// 平台存储就绪时初始化计费服务（限流/配额/余额）
 	if st != nil {
 		s.Bill = billing.NewService(st)
+	}
+	// 工单服务装配：direct 队列（jobs 表）+ worker 池；启动时回收中断任务
+	if st != nil && eng != nil {
+		q := queue.NewDirect(st.DB())
+		if n, err := q.RecoverStale(context.Background()); err == nil && n > 0 {
+			log.Printf("[worker] 启动回收中断任务: %d 个已重新入队", n)
+		}
+		s.TicketSvc = service.NewTicketService(st, eng, ts, db, q, s.Bill)
+		s.TicketSvc.StartWorkers(2) // WORKER_CONCURRENCY 可后续配置化
 	}
 	s.mux = http.NewServeMux()
 	s.routes()
@@ -139,6 +153,11 @@ func (s *Server) routesTickets() {
 	s.mux.HandleFunc("/api/tickets/create", s.handleTicketCreate)
 	s.mux.HandleFunc("/api/tickets/run", s.handleTicketRun)
 	s.mux.HandleFunc("/api/tickets/detail", s.handleTicketDetail)
+	s.mux.HandleFunc("/api/tickets/download", s.handleTicketDownload)
+	s.mux.HandleFunc("/api/notifications", s.handleNotifications)
+	s.mux.HandleFunc("/api/notifications/unread", s.handleNotificationsUnread)
+	s.mux.HandleFunc("/api/notifications/read", s.handleNotificationsRead)
+	s.mux.HandleFunc("/api/notifications/read-all", s.handleNotificationsReadAll)
 	s.mux.HandleFunc("/api/approve/list", s.handleApproveList)
 	s.mux.HandleFunc("/api/approve/action", s.handleApproveAction)
 }

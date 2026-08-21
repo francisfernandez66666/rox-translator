@@ -86,8 +86,6 @@ export const en: Record<string, string> = {
   'kb.rebuilding': 'Rebuilding…',
   'kb.rebuildConfirm': 'Re-embed all KB sources (calls Embedding API). Continue?',
   'kb.rebuildDone': 'Vector index rebuilt: {n} rows',
-  'kb.enablePack': 'Enable',
-  'kb.disablePack': 'Disable',
   'kb.title': 'Industry Management (KB Packs)',
   'kb.codePlaceholder': 'Code (e.g. auto)',
   'kb.namePlaceholder': 'Name (e.g. Auto Industry Pack)',

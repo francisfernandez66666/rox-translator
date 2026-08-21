@@ -23,10 +23,21 @@
         📚 {{ packLabel(p.pack_type) }}
       </span>
       <span v-if="billingEnforced" class="chat-balance" :title="t('chat.balanceTip')">🟢 {{ tpl('chat.balance', { n: sentenceBalance ?? '—' }) }}</span>
+      <button class="clear-btn" style="position:relative;margin-left:auto" :title="t('tk.entry')" @click="showTickets = !showTickets">📋</button>
+      <Bell />
       <button class="clear-btn" @click="store.clearMessages()" :title="t('chat.clearChat')">
         🗑️
       </button>
     </header>
+
+    <!-- 工单抽屉（创建/我的工单/下载） -->
+    <div v-if="showTickets" class="tk-drawer">
+      <div class="ad-row" style="justify-content:space-between;border-bottom:1px solid #eee;padding-bottom:6px">
+        <b>📋 {{ t('tk.entry') }}</b>
+        <button class="clear-btn" @click="showTickets = false">✕</button>
+      </div>
+      <TicketsPanel />
+    </div>
 
     <!-- ===== 离线提示条 ===== -->
     <div v-if="!store.isBackendOnline" class="offline-bar">
@@ -260,6 +271,11 @@ import { useChatStore } from '@/stores/chat'
 import { t, tpl, lang } from '@/i18n'
 // 我的包接口（剩余句数展示）
 import { myPackage, meContext } from '@/api'
+import TicketsPanel from './TicketsPanel.vue'
+import Bell from './Bell.vue'
+
+// 工单抽屉显隐
+const showTickets = ref(false)
 // 子组件：消息气泡
 import MessageBubble from './MessageBubble.vue'
 
@@ -710,6 +726,11 @@ async function loadTranslationLangs() {
   border-bottom: 2px solid #e0e0e0;
   flex-shrink: 0;
   background: #fff;
+}
+.tk-drawer {
+  position: absolute; right: 12px; top: 52px; width: min(520px, 92vw);
+  background: #fff; border: 1px solid #e3e3e3; border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.15); padding: 12px; z-index: 60;
 }
 .chat-balance {
   font-size: 12px; color: #2e7d32; background: #e8f5e9;
