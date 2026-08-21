@@ -46,21 +46,32 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.effTenant(r, u)
-	perms, err := s.Store.GetTenantPerms(tid)
-	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
-		return
+	enforced := false
+	balance := int64(0)
+	var pkgCode, subAt string
+	// 平台上下文（tid<=0）无计费概念：强制计费视为关闭、余额不返回
+	if tid > 0 {
+		if v, _ := s.Store.GetConfig("sentence_enforced"); v == "1" {
+			enforced = true
+		}
+		perms, err := s.Store.GetTenantPerms(tid)
+		if err == nil {
+			balance = perms.SentenceBalance
+			pkgCode = perms.PackageCode
+			subAt = perms.SubscribedAt
+		}
 	}
 	payMode := "mock"
 	if v, _ := s.Store.GetConfig("pay_mode"); v != "" {
 		payMode = v
 	}
 	writeJSON(w, 200, map[string]interface{}{
-		"success":          true,
-		"sentence_balance": perms.SentenceBalance,
-		"package_code":     perms.PackageCode,
-		"subscribed_at":    perms.SubscribedAt,
-		"pay_mode":         payMode,
+		"success":           true,
+		"sentence_enforced": enforced,
+		"sentence_balance":  balance,
+		"package_code":      pkgCode,
+		"subscribed_at":     subAt,
+		"pay_mode":          payMode,
 	})
 }
 

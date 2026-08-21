@@ -15,7 +15,7 @@
     <!-- ===== 顶部标题栏 ===== -->
     <header class="chat-header" :class="{ 'chat-mobile-header': isMobile }" style="border-bottom-color: #2e7d32;">
       <span>{{ t('chat.title') }}</span>
-      <span class="chat-balance" :title="t('chat.balanceTip')">🟢 {{ tpl('chat.balance', { n: sentenceBalance ?? '—' }) }}</span>
+      <span v-if="billingEnforced" class="chat-balance" :title="t('chat.balanceTip')">🟢 {{ tpl('chat.balance', { n: sentenceBalance ?? '—' }) }}</span>
       <button class="clear-btn" @click="store.clearMessages()" :title="t('chat.clearChat')">
         🗑️
       </button>
@@ -260,12 +260,17 @@ import MessageBubble from './MessageBubble.vue'
 const store = useChatStore()
 
 // 剩余句数（个人级消耗看板；从 /api/me/package 读取）
+// 仅当后台开启强制计费（sentence_enforced=1）时才展示余额徽标
 const sentenceBalance = ref<number | null>(null)
+const billingEnforced = ref(false)
 async function loadBalance() {
   try {
     const r = await myPackage()
-    if (r.success) sentenceBalance.value = (r as any).sentence_balance ?? null
-  } catch { sentenceBalance.value = null }
+    if (r.success) {
+      sentenceBalance.value = (r as any).sentence_balance ?? null
+      billingEnforced.value = !!(r as any).sentence_enforced
+    }
+  } catch { billingEnforced.value = false }
 }
 // 挂载与每次翻译完成后刷新剩余句数
 onMounted(() => { loadBalance() })
