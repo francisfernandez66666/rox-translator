@@ -1,0 +1,51 @@
+# ============================================================================
+# 兼容 Caddyfile：同时服务 quant-trading.top（另一个项目，8080）与
+# translator.quant-trading.top（翻译助手，8787，独立 conf 引入）。
+#
+# 兼容要点（不影响另一个项目）：
+#   1. quant-trading.top 站点块保持与另一个项目 deploy_seoul.sh 的模板一致，
+#      其 sed 替换（BCRYPT_HASH_PLACEHOLDER / YOUR_DOMAIN_HERE.com）仍可正常生效。
+#   2. translator 站点通过 `import /etc/caddy/translator.conf` 引入，配置独立于本文件。
+#      即使另一个项目用 `mv /tmp/Caddyfile /etc/caddy/Caddyfile` 覆盖本文件，
+#      只要其模板末尾保留了 import 行，translator 配置就不会丢失。
+#   3. 若另一个项目模板未含 import 行，请在其 deploy/Caddyfile 末尾追加：
+#      import /etc/caddy/translator.conf
+#   4. 部署 translator.conf：
+#      cp deploy/caddy/translator.conf /etc/caddy/translator.conf
+#      chown root:root /etc/caddy/translator.conf && chmod 644 /etc/caddy/translator.conf
+#   5. 重载：systemctl restart caddy
+# ============================================================================
+
+quant-trading.top {
+	# 传输安全与压缩
+	encode gzip
+
+	# 后端 API / SSE（handle 精确匹配 /api 前缀，剥离后反代）
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	# 前端静态资源（其余所有路径）
+	handle {
+		root * /var/www/quant-web
+		file_server
+	}
+
+	# 请求体上限（新闻原文/LLM 咨询可能较大）
+	request_body {
+		max_size 10MB
+	}
+
+	# 日志（可关）
+	log {
+		output file /var/log/caddy/quant.access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}
+
+# 说明：如无需外部日志，可把整个 log 块删掉。
+
+# ===== 翻译助手（独立 conf，见 deploy/caddy/translator.conf） =====
+import /etc/caddy/translator.conf
