@@ -16,3 +16,6 @@ backend/data/_output/
 *.manifest
 *.spec.backup
 backend/.deps_installed
+
+# 项目文档仅保留本地，不入仓库
+/*.md
