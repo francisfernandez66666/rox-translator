@@ -171,6 +171,21 @@ const baseZh: Dict = {
   'admin.invites': '✉️ 邀请码',
   'admin.self': '☁️ 开放 API 文档',
   'admin.gdpr': '🛡️ 数据合规',
+  // ---- 角色工作台（按角色自动切换的导航） ----
+  'admin.wsPlatform': '平台运营',
+  'admin.wsCompany': '企业管理',
+  'admin.wsDept': '部门管理',
+  'admin.platformOverview': '📊 平台总览',
+  'admin.companyOverview': '📊 企业总览',
+  'admin.deptOverview': '📊 部门总览',
+  'admin.kbPack': '📚 知识库',
+  'admin.industryKb': '📚 行业包',
+  'admin.deptKb': '📚 部门知识库',
+  'admin.deptUsers': '👤 部门成员',
+  'admin.byokModels': '🧠 模型接入',
+  'admin.globalModels': '🧠 全局模型',
+  'admin.subscription': '💳 订阅账单',
+  'admin.payOrders': '💰 订单支付',
 }
 
 const baseEn: Dict = {
@@ -308,6 +323,21 @@ const baseEn: Dict = {
   'admin.invites': '✉️ Invite Codes',
   'admin.self': '☁️ Open API Docs',
   'admin.gdpr': '🛡️ Data Compliance',
+  // ---- Role workspaces ----
+  'admin.wsPlatform': 'Platform Ops',
+  'admin.wsCompany': 'Company Mgmt',
+  'admin.wsDept': 'Department',
+  'admin.platformOverview': '📊 Platform Overview',
+  'admin.companyOverview': '📊 Company Overview',
+  'admin.deptOverview': '📊 Dept Overview',
+  'admin.kbPack': '📚 Knowledge Base',
+  'admin.industryKb': '📚 Industry Packs',
+  'admin.deptKb': '📚 Dept Knowledge Base',
+  'admin.deptUsers': '👤 Members',
+  'admin.byokModels': '🧠 Model Access',
+  'admin.globalModels': '🧠 Global Models',
+  'admin.subscription': '💳 Subscription & Billing',
+  'admin.payOrders': '💰 Orders & Payment',
 }
 
 // 合并全部面板字典

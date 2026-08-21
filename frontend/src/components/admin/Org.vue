@@ -9,11 +9,11 @@
     <h2>{{ t('org.title') }}</h2>
     <p class="ad-hint">{{ t('org.treeHint') }}</p>
 
-    <!-- ===== 新建组织/部门 ===== -->
-    <div class="ad-row">
+    <!-- ===== 新建组织/部门（部门管理员及以上） ===== -->
+    <div class="ad-row" v-if="myLevel >= 2">
       <select v-model="parentId" class="ad-input">
-        <option :value="0">{{ t('org.rootOption') }}</option>
-        <option v-for="o in orgs" :key="o.id" :value="o.id">{{ orgPath(o) }}</option>
+        <option :value="0" v-if="myLevel >= 3">{{ t('org.rootOption') }}</option>
+        <option v-for="o in flatTree" :key="o.id" :value="o.id">{{ orgPath(o) }}</option>
       </select>
       <input v-model="newName" :placeholder="t('org.namePlaceholder')" class="ad-input" @keydown.enter="createOrg" />
       <button class="ad-btn" @click="createOrg">{{ parentId === 0 ? t('org.create') : t('org.createDept') }}</button>
@@ -25,13 +25,13 @@
       <div class="ad-org-tree">
         <div
           class="ad-tree-item ad-tree-root"
-          :class="{ 'drag-over': dragOrgId !== null }"
+          :class="{ 'drag-over': canDrag && dragOrgId !== null }"
           @click="selectRoot"
-          @dragover.prevent="dragOverId = 0"
+          @dragover.prevent="canDrag && (dragOverId = 0)"
           @drop.prevent="onDropRoot"
         >
-          <span>{{ rootOrgIcon }} {{ rootOrgName }}（{{ isSuper ? t('org.typePlatform') : t('org.typeRoot') }}）</span>
-          <span class="ad-tree-actions" v-if="!isSuper">
+          <span>{{ rootOrgIcon }} {{ rootOrgName }}（{{ isPlatformView || isSuper ? t('org.typePlatform') : t('org.typeRoot') }}）</span>
+          <span class="ad-tree-actions" v-if="myLevel >= 3 && !isPlatformView">
             <button class="ad-btn-xs" :title="t('org.renameRoot')" @click.stop="renameRootOrg">✎</button>
           </span>
         </div>
@@ -41,19 +41,19 @@
           :class="['ad-tree-item', selectedOrg === o.id ? 'on' : '', dragOverId === o.id ? 'drag-over' : '']"
           :style="{ paddingLeft: (8 + o._depth * 18) + 'px' }"
           @click="selectOrg(o)"
-          draggable="true"
+          :draggable="canDrag ? 'true' : 'false'"
           @dragstart="startDrag(o, $event)"
           @dragend="dragOrgId = null; dragOverId = null"
           @dragover.prevent="onDragOver(o)"
           @dragleave="dragOverId = null"
           @drop.prevent="onDropTo(o)"
         >
-          <span class="drag-handle">⠿</span>
+          <span class="drag-handle" v-if="canDrag">⠿</span>
           <span>{{ orgIcon(o) }} {{ o.name }}</span>
           <span class="ad-tree-actions">
             <button class="ad-btn-xs" :title="t('org.addChild')" @click.stop="setParent(o.id)">+</button>
             <button v-if="o.type !== 'root'" class="ad-btn-xs" :title="t('org.rename')" @click.stop="renameOrg(o)">✎</button>
-            <button v-if="o.type !== 'root'" class="ad-btn-xs ad-btn-red" :title="t('org.delete')" @click.stop="deleteOrg(o)">✕</button>
+            <button v-if="o.type !== 'root' && myLevel >= 3" class="ad-btn-xs ad-btn-red" :title="t('org.delete')" @click.stop="deleteOrg(o)">✕</button>
           </span>
         </div>
       </div>
@@ -70,7 +70,7 @@
               <td>{{ u.username }}</td>
               <td>{{ u.display_name }}</td>
               <td>{{ u.org_name || t('org.rootOrg') }}</td>
-              <td>{{ u.role === 'super_admin' || u.role === 'admin' ? t('org.roleSuper') : u.role === 'tenant_admin' || u.role === 'approver' ? t('org.roleTenantAdmin') : t('org.roleUser') }}</td>
+              <td>{{ roleName(u.role) }}</td>
               <td>{{ fmtTime(u.last_login_at) }}</td>
               <td class="ad-td">
                 <button class="ad-btn-sm" @click="resetPwd(u)">{{ t('org.resetPwd') }}</button>
@@ -90,9 +90,7 @@
             <input v-model="nu.password" :placeholder="t('org.passPlaceholder')" class="ad-input" />
             <input v-model="nu.display_name" :placeholder="t('org.displayNamePlaceholder')" class="ad-input" />
             <select v-model="nu.role" class="ad-input">
-              <option value="user">{{ t('org.roleUser') }}</option>
-              <option value="tenant_admin">{{ t('org.roleTenantAdmin') }}</option>
-              <option v-if="isSuper" value="super_admin">{{ t('org.roleSuper') }}</option>
+              <option v-for="r in roleOptions" :key="r" :value="r">{{ t('users.role.' + r) }}</option>
             </select>
             <button class="ad-btn ad-btn-green" :disabled="creating" @click="createUser">{{ creating ? t('org.creating') : t('org.addUserBtn') }}</button>
           </div>
@@ -107,13 +105,17 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { t, tpl } from '@/i18n'
 import { orgList, orgCreate, orgRename, orgMove, orgDelete, orgUsers, type OrgInfo } from '@/api'
 import { adminUserCreate, adminUserUpdate, adminUserResetPassword } from '@/api'
-import { activeTenantId, tenantList, isSuper } from './store'
+import { activeTenantId, tenantList, isSuper, myLevel, roleOptions, roleName } from './store'
 import { fmtTime } from './ui'
 
 // 组织扁平列表（用于下拉与组装树）
 const orgs = ref<OrgInfo[]>([])
-// 根组织行（type='root'，名称可自定义）
+// 根组织行（type='root'，名称可自定义；平台视图=平台根）
 const rootOrg = ref<OrgInfo | null>(null)
+// 是否平台视图（超管：平台根 → 各租户根 → 组织/部门）
+const isPlatformView = ref(false)
+// 拖拽权限：仅租户管理员及以上可拖拽调整层级
+const canDrag = computed(() => myLevel.value >= 3 && !isPlatformView.value)
 // 选中组织（0=根组织）
 const selectedOrg = ref(0)
 // 新建子组织的父组织
@@ -140,6 +142,8 @@ const rootOrgName = computed(() => {
 const rootOrgIcon = computed(() => '🏢')
 
 // 组装树形结构（递归计算深度）
+// 平台视图：从平台根 ID 开始遍历（各租户根组织的 parent_id 已被后端改写为平台根 ID）；
+// 租户视图：从 0 开始（根下直属组织 parent_id=0）。
 const flatTree = computed(() => {
   const byParent: Record<number, OrgInfo[]> = {}
   for (const o of orgs.value) {
@@ -154,7 +158,7 @@ const flatTree = computed(() => {
       walk(o.id, depth + 1)
     }
   }
-  walk(0, 0)
+  walk(isPlatformView.value ? (rootOrg.value?.id || 0) : 0, 0)
   return out
 })
 
@@ -174,9 +178,15 @@ const selectedOrgName = computed(() => {
 async function loadAll() {
   const [r, ru] = await Promise.all([orgList(), orgUsers()])
   if (r.success) {
-    // 根组织行单独取 root，orgs 列表排除 root（根组织单独显示在根节点）
-    orgs.value = (r.orgs || []).filter((o: any) => o.type !== 'root')
+    isPlatformView.value = !!(r as any).platform
     rootOrg.value = r.root || null
+    if (isPlatformView.value) {
+      // 平台视图：保留各租户根组织（type=root），仅剔除平台根本身（它单独显示为根节点）
+      orgs.value = (r.orgs || []).filter((o: any) => !(o.type === 'root' && rootOrg.value && o.id === rootOrg.value.id))
+    } else {
+      // 租户/部门视图：根组织行单独显示，列表排除全部 root 行
+      orgs.value = (r.orgs || []).filter((o: any) => o.type !== 'root')
+    }
   }
   if (ru.success) allUsers.value = ru.users || []
   await loadOrgUsers()
