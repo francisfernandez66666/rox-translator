@@ -1,6 +1,6 @@
 # 改造进度跟踪（PROGRESS）
 
-> 更新：2026-08-21（晚）｜ 状态：**SaaS 化 6 阶段完成 + IAM/知识库包体系/计费/审计 六批次重构落地** ｜ 关联文档：PLAN.md / 重构方案.md / SAAS_GAP.md / COMMERCIAL_TODO.md
+> 更新：2026-08-21（深夜）｜ 状态：**一期重构 + 二期（工单队列/Gate/OpenAPI/通知中心）全部落地** ｜ 关联文档：重构方案.md / 重构方案二期.md ｜ 关联文档：PLAN.md / 重构方案.md / SAAS_GAP.md / COMMERCIAL_TODO.md
 
 ## 当前状态总览
 
@@ -153,8 +153,14 @@
 | 2026-08-21 | 平台上下文语义 | tid≤0：管理面板=跨租户聚合；前台翻译=平台直翻无知识库（超管不挂任何租户包） |
 | 2026-08-21 | 审计分级 | 超管全量带租户名/操作者；租管工作台独立审计面板（本租户+过滤+CSV） |
 | 2026-08-21 | Caddy 缓存策略 | index.html no-cache（部署即生效）；/assets/* immutable 一年 |
+| 2026-08-21 | 队列选型 | direct 单实现（goroutine池+jobs表持久化），Kafka 仅文档登记触发条件不写死代码；Queue 接口留单文件接入位 |
+| 2026-08-21 | 工单隐私 | 非超管一律只看自己创建的工单（涉及用户隐私，租管亦然） |
+| 2026-08-21 | Gate 架构 | 安全词=知识库 Agent 的参考知识（注入上下文为主路径）；「闸门」专指译后机械硬过滤 |
+| 2026-08-21 | 安全句来源 | LLM 挖掘批量投喂→pending→人工审核→approved 生效；结构化 kind/replacement/status/source 字段 |
+| 2026-08-21 | PDF 工单降级 | 本期输出 xlsx 对照表；PDF 原格式排版回写列后续迭代 |
 
 | `cad0e4d…cd2bd17` | **IAM/权限/知识库/计费六批次重构**（2026-08-21 晚，约 20 个提交）：IAM 子系统拆分 internal/iam/ + 四级角色（user<dept_admin<tenant_admin<super_admin）+ 部门管理员部门子树范围；前端角色化工作台（平台运营/企业管理/部门管理三视图）+ 开户「先部门后角色」级联；知识库包体系（pack_id 归属、启停、行业单轨制 tenants.industry、跨租户泄漏修复）；向量索引 BAAI/bge-m3 全量重建(3348行)+导入自动增量入库+ScopedSearch 包过滤；模型面板按业务五阶段重构（初翻/Embed/初翻Evals/校对/校对Evals，超管移除单模型冗余）；句数扣减受强制计费门控；审计日志分级（超管全量带租户名/租管本租户独立面板）；平台视角跨租户聚合（订单/APIKey/Webhook/用量）；删除部门自动降级其管理员；前台身份栏（账号·组织·部门·包类型）+ 超管平台直翻隔离（修复误命中租户KB）；Caddy 缓存策略（HTML no-cache/assets immutable）；构建脚本 iCloud 目录签名修复
+| `42eacbb` | **二期重构**（2026-08-21 深夜）：三层解耦（API/编排器/存储）+ internal/queue 接缝（direct 执行器=goroutine池+jobs账本+租约超时回收+启动自愈，Kafka 列迭代补充）；工单异步化（入队即返 ticket_no，隐私隔离非超管仅自己）+ 下载 docx/xlsx/pptx 原格式回写、文本/PDF 降级 xlsx；Gate 两层闸门（approved 安全句按目标语言注入 agent 上下文 + L2 硬过滤默认关 locale_gate_enforced）+ LLM 批量投喂审核流；OpenAPI 句数闭环（sentence_exhausted 错误码+余额回传）；通用通知中心（notifications+铃铛+已读流转）；批次零修复 /metrics 路由与 Evals 占位 Key 空转 |
 
 ## 待办（剩余，见 COMMERCIAL_TODO.md）
 
@@ -184,3 +190,6 @@
 | 2026-08-21 | execW 自递归死锁 | 已修复 | 批量替换误改函数体调用自身；单测抓出并修复 |
 | 2026-08-21 | 删租户残留孤儿组织 | 已修复 | 删除级联清理主/业务数据；平台树 INNER JOIN 防御 |
 | 2026-08-21 | 部署后浏览器旧资源 | 已修复 | Caddy 增加 HTML no-cache / assets immutable 缓存头 |
+| 2026-08-21 | /metrics 点击打开翻译页 | 已修复 | Caddy 未代理 /metrics 落入 SPA 兜底；新增 handle /metrics 反代 |
+| 2026-08-21 | Evals 占位 Key 空转 | 已修复 | 占位标记+主路由 Key 启动水合+Evaluate 动态可用性判定 |
+| 2026-08-21 | 批量替换引入 execW 自递归 | 已修复 | 函数体被误改调用自身致死锁，测试超时抓出 |
