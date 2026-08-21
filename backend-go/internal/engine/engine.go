@@ -407,6 +407,10 @@ func (e *Engine) TranslateOne(ctx context.Context, zhText string, targetLangs []
 
 	// 3. 语义高相似（≥0.90）——按目标语言过滤，只检索含目标语言的行
 	if e.Index != nil && len(e.Index.Vecs) > 0 {
+		// 知识库 Embed 阶段覆盖（stage_models.kb_embed）：配置了独立 Embed 模型则热应用
+		if eb, ek, em, eok := e.resolveStageModel(ctx, config.StageKBEmbed); eok {
+			e.LLM.SetEmbedOverride(eb, ek, em)
+		}
 		// 先把中文转成嵌入向量，再在向量索引中做余弦相似检索
 		vec, err := e.LLM.Embed(ctx, zhText)
 		if err == nil && len(vec) > 0 {

@@ -33,10 +33,18 @@ type Client struct {
 	// ★ 全局共享信号量：所有 LLM API 调用（chat/embed）统一限流，
 	// 多用户/多语言并发共享同一上限，超过的调用排队等待，不无限叠加。
 	sem chan struct{}
+
+	// 知识库 Embed 阶段覆盖（stage_models.kb_embed；空=用全局 Embed 配置）
+	embedBase, embedKey, embedModel string
 }
 
 // NewClient 创建客户端：解析代理、设置全局 120s 超时与并发信号量。
 // 参数：cfg=全局配置；返回可用的 LLM 客户端。
+// SetEmbedOverride 设置知识库 Embed 阶段覆盖端点（stage_models.kb_embed，超管维护）。
+func (c *Client) SetEmbedOverride(base, key, model string) {
+	c.embedBase, c.embedKey, c.embedModel = base, key, model
+}
+
 func NewClient(cfg *config.Config) *Client {
 	tr := &http.Transport{}
 	if p := getenvAny("PROXY_URL", "HTTPS_PROXY", "HTTP_PROXY"); p != "" {
@@ -251,18 +259,23 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string, batchSize ...in
 // embedChunk 实际执行一批文本的嵌入请求并做 L2 归一化。
 // 参数：texts=单批文本；返回归一化向量列表。
 func (c *Client) embedChunk(ctx context.Context, texts []string) ([][]float32, error) {
+	// 阶段覆盖（kb_embed）：超管在分阶段模型里配置的 Embed 端点优先
+	base, key, model := c.cfg.EmbedAPIBase, c.cfg.EmbedAPIKey, "embedding-2"
+	if c.embedBase != "" && c.embedModel != "" {
+		base, key, model = c.embedBase, c.embedKey, c.embedModel
+	}
 	payload := map[string]interface{}{
-		"model": "embedding-2", // 智谱 embedding-2 模型
+		"model": model,
 		"input": texts,
 	}
 	body, _ := json.Marshal(payload)
-	endpoint := strings.TrimRight(c.cfg.EmbedAPIBase, "/") + "/embeddings"
+	endpoint := strings.TrimRight(base, "/") + "/embeddings"
 	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.cfg.EmbedAPIKey)
+	req.Header.Set("Authorization", "Bearer "+key)
 
 	// 嵌入请求单次 60s 超时
 	timeout := 60 * time.Second
