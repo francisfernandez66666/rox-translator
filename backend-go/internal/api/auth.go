@@ -326,17 +326,34 @@ func (s *Server) mailer() mail.Sender {
 
 // ============ 用户管理（tenant_admin + super_admin） ============
 
-// handleAdminUsers 用户列表接口：列出当前生效租户下的全部用户。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（需 tenant_admin 及以上权限）。
+// handleAdminUsers 用户列表接口：列出当前生效租户下的用户。
+// 权限：部门管理员及以上；部门管理员仅可见本部门及其子部门下用户，租户管理员及以上可见全部。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（需 dept_admin 及以上权限）。
 // 返回: success=true 时携带 users 数组。
 func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	tid := s.effTenant(r, u)
+	// 部门管理员：仅本部门及其子部门下用户（部门树归集）；租户管理员及以上：租户全部用户
+	if auth.RoleLevel(u.Role) == 2 && u.OrgID > 0 {
+		orgIDs, err := s.Store.OrgDescendantIDs(tid, u.OrgID)
+		if err != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+		users, err := s.Store.ListUsersByOrg(tid, orgIDs)
+		if err != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]interface{}{"success": true, "users": users})
+		return
+	}
 	// 租户隔离：仅列出生效租户（超管可切换）下的用户
-	users, err := s.Store.ListUsers(s.effTenant(r, u))
+	users, err := s.Store.ListUsers(tid)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -344,11 +361,11 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "users": users})
 }
 
-// handleAdminUserCreate 创建用户接口（超管可指定归属租户；租户管理员限本租户）。
+// handleAdminUserCreate 创建用户接口（超管可指定归属租户；租户管理员限本租户；部门管理员限本部门子树）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 username/password/display_name/role/tenant_id）。
 // 返回: success=true 时携带新用户（密码哈希已置空）。
 func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -370,16 +387,20 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Role == "" {
 		req.Role = store.RoleUser
 	}
-	// 角色白名单校验
+	// 角色白名单校验（四级：user/dept_admin/tenant_admin/super_admin + 兼容旧值）
 	switch req.Role {
-	case store.RoleUser, store.RoleTenantAdmin, store.RoleSuperAdmin, store.RoleApprover, store.RoleAdmin:
+	case store.RoleUser, store.RoleDeptAdmin, store.RoleTenantAdmin, store.RoleSuperAdmin, store.RoleApprover, store.RoleAdmin:
 	default:
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "角色无效"})
 		return
 	}
-	// 权限校验：仅超级管理员可创建超级管理员/管理员等高权限角色
-	if auth.RoleLevel(req.Role) >= 3 && !auth.IsSuperAdmin(u) {
+	// 权限校验：仅超级管理员可创建超级管理员/管理员等高权限角色；租户管理员可创建部门管理员/普通用户
+	if auth.RoleLevel(req.Role) >= 4 && !auth.IsSuperAdmin(u) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅超级管理员可分配该角色"})
+		return
+	}
+	if auth.RoleLevel(req.Role) >= 3 && !auth.IsTenantAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅租户管理员及以上可分配该角色"})
 		return
 	}
 	// 归属租户判定：超管创建超管时平台级(0)；否则租户管理员限本租户、超管用所选/指定租户
@@ -394,6 +415,20 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		if err := s.validateOrg(tid, req.OrgID); err != nil {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
 			return
+		}
+	}
+	// 部门管理员范围：目标组织必须在其本部门及子部门树内（否则拒绝创建）
+	if auth.RoleLevel(u.Role) == 2 {
+		if u.OrgID <= 0 {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "部门管理员未绑定部门，无法开通账号"})
+			return
+		}
+		if req.OrgID > 0 {
+			inTree, e := s.Store.IsOrgInSubtree(tid, u.OrgID, req.OrgID)
+			if e != nil || !inTree {
+				writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权在非本部门下开通账号"})
+				return
+			}
 		}
 	}
 	nu, err := s.Store.CreateUser(tid, req.Username, auth.PasswordHash(req.Password), req.DisplayName, req.Role, u.ID, req.OrgID)
@@ -416,7 +451,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 id/display_name/role/status）。
 // 返回: success=true 表示更新成功。
 func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -443,17 +478,44 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 非超管不能把用户提升为超管级角色
-		if req.Role != "" && auth.RoleLevel(req.Role) >= 3 && !auth.IsSuperAdmin(u) {
+		if req.Role != "" && auth.RoleLevel(req.Role) >= 4 && !auth.IsSuperAdmin(u) {
 			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅超级管理员可分配该角色"})
+			return
+		}
+		// 非租户管理员不能分配租户管理员级角色
+		if req.Role != "" && auth.RoleLevel(req.Role) >= 3 && !auth.IsTenantAdmin(u) {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅租户管理员及以上可分配该角色"})
 			return
 		}
 	}
 	tid := s.effTenant(r, u)
+	// 部门管理员范围：目标用户必须在本部门及子部门树内
+	if auth.RoleLevel(u.Role) == 2 {
+		if u.OrgID <= 0 {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "部门管理员未绑定部门，无法操作"})
+			return
+		}
+		if target, e := s.Store.GetUser(req.ID, tid); e == nil && target.OrgID > 0 {
+			inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, target.OrgID)
+			if e2 != nil || !inTree {
+				writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作非本部门下账号"})
+				return
+			}
+		}
+	}
 	// 组织归属校验：非超管不能把用户移出本租户组织（租户隔离，仅校验组织存在性）
 	if req.OrgID != nil {
 		if err := s.validateOrg(tid, *req.OrgID); err != nil {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
 			return
+		}
+		// 部门管理员：目标组织也须在本部门子树内
+		if auth.RoleLevel(u.Role) == 2 {
+			inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, *req.OrgID)
+			if e2 != nil || !inTree {
+				writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权把用户移出本部门范围"})
+				return
+			}
 		}
 	}
 	// 结构化变更轨迹：先取更新前值，再执行更新，记录 before/after diff
@@ -496,11 +558,11 @@ func (s *Server) validateOrg(tid, orgID int64) error {
 	return nil
 }
 
-// handleAdminUserResetPassword 重置密码接口（仅本租户范围内）。
+// handleAdminUserResetPassword 重置密码接口（部门管理员限本部门子树内）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 id/password）。
-// 返回: success=true 表示重置成功；租户管理员不能重置超管密码。
+// 返回: success=true 表示重置成功；非超管不能重置超管密码。
 func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -513,13 +575,28 @@ func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Req
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
-	// 权限校验：租户管理员不能重置超管密码（防越权）
-	if target, err := s.Store.GetUser(req.ID, s.effTenant(r, u)); err == nil && auth.IsSuperAdmin(target) && !auth.IsSuperAdmin(u) {
+	tid := s.effTenant(r, u)
+	// 权限校验：非超管不能重置超管密码（防越权）
+	if target, err := s.Store.GetUser(req.ID, tid); err == nil && auth.IsSuperAdmin(target) && !auth.IsSuperAdmin(u) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：不能操作超级管理员"})
 		return
 	}
+	// 部门管理员范围：目标用户须在本部门子树内
+	if auth.RoleLevel(u.Role) == 2 {
+		if u.OrgID <= 0 {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "部门管理员未绑定部门，无法操作"})
+			return
+		}
+		if target, e := s.Store.GetUser(req.ID, tid); e == nil && target.OrgID > 0 {
+			inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, target.OrgID)
+			if e2 != nil || !inTree {
+				writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作非本部门下账号"})
+				return
+			}
+		}
+	}
 	// 租户隔离：仅重置生效租户下的用户
-	if err := s.Store.ResetPassword(req.ID, s.effTenant(r, u), auth.PasswordHash(req.Password)); err != nil {
+	if err := s.Store.ResetPassword(req.ID, tid, auth.PasswordHash(req.Password)); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}

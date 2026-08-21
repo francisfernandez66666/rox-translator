@@ -108,10 +108,10 @@ const categories = [
     key: 'ops', label: 'admin.ops',
     panels: [
       { key: 'overview', label: 'admin.overview', comp: Overview, min: 2 },
-      { key: 'alerts', label: 'admin.alerts', comp: Alerts, min: 2 },
+      { key: 'alerts', label: 'admin.alerts', comp: Alerts, min: 3 },
       { key: 'usage', label: 'admin.usage', comp: Usage, min: 2 },
-      { key: 'billing', label: 'admin.billing', comp: Billing, min: 2 },
-      { key: 'packages', label: 'admin.packages', comp: Packages, min: 3 },
+      { key: 'billing', label: 'admin.billing', comp: Billing, min: 3 },
+      { key: 'packages', label: 'admin.packages', comp: Packages, min: 4 },
     ],
   },
   {
@@ -119,7 +119,7 @@ const categories = [
     panels: [
       { key: 'users', label: 'admin.users', comp: Users, min: 2 },
       { key: 'org', label: 'admin.orgs', comp: Org, min: 2 },
-      { key: 'tenants', label: 'admin.tenants', comp: Tenants, min: 3 },
+      { key: 'tenants', label: 'admin.tenants', comp: Tenants, min: 4 },
       { key: 'invites', label: 'admin.invites', comp: Invites, min: 3 },
     ],
   },
@@ -132,15 +132,15 @@ const categories = [
   {
     key: 'engine', label: 'admin.engine',
     panels: [
-      { key: 'models', label: 'admin.models', comp: Models, min: 2 },
-      { key: 'workflow', label: 'admin.workflow', comp: Workflow, min: 2 },
+      { key: 'models', label: 'admin.models', comp: Models, min: 3 },
+      { key: 'workflow', label: 'admin.workflow', comp: Workflow, min: 3 },
     ],
   },
   {
     key: 'open', label: 'admin.open',
     panels: [
-      { key: 'apikeys', label: 'admin.apikeys', comp: ApiKeys, min: 2 },
-      { key: 'webhooks', label: 'admin.webhooks', comp: Webhooks, min: 2 },
+      { key: 'apikeys', label: 'admin.apikeys', comp: ApiKeys, min: 3 },
+      { key: 'webhooks', label: 'admin.webhooks', comp: Webhooks, min: 3 },
       { key: 'tickets', label: 'admin.tickets', comp: Tickets, min: 2 },
     ],
   },

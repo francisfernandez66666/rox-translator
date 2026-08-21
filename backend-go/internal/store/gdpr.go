@@ -100,7 +100,7 @@ func (s *Store) EraseTenantData(tid int64) error {
 // ListPackages 租户 KB 包列表。
 // 参数：tid=租户 ID；返回该租户全部知识库包（KBPackage 定义于 kbpackages.go）。
 func (s *Store) ListPackages(tid int64) ([]*KBPackage, error) {
-	rows, err := s.db.Query("SELECT id, tenant_id, parent_id, code, name, pack_type, role, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=?", tid)
+	rows, err := s.db.Query("SELECT "+kbPkgCols+" FROM kb_packages WHERE tenant_id=?", tid)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,7 @@ func (s *Store) ListPackages(tid int64) ([]*KBPackage, error) {
 	var out []*KBPackage
 	for rows.Next() {
 		var p KBPackage
-		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &p)

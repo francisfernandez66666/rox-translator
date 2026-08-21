@@ -82,7 +82,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { kbPackages, kbPackageCreate, kbPackageDelete, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport, kbRecognizeFile, kbImportFile } from '@/api'
-import { activeTenantId, isSuper } from './store'
+import { activeTenantId, isSuper, myLevel } from './store'
 import { t, tpl } from '@/i18n'
 
 const packages = ref<any[]>([])
@@ -103,8 +103,11 @@ const kbImportPkg = ref(0)
 const kbImporting = ref(false)
 const kbImportResult = ref<any>(null)
 
-// 可选的包类型：超管可建全部；租户管理员仅企业包/部门包
+// 可选的包类型：超管可建全部；租户管理员仅企业包/部门包；部门管理员仅部门包
 const packTypeOptions = computed(() => {
+  if (myLevel.value <= 2) {
+    return [{ value: 'department', label: t('kb.typeDepartment') }]
+  }
   const base = [
     { value: 'tenant', label: t('kb.typeTenant') },
     { value: 'department', label: t('kb.typeDepartment') },

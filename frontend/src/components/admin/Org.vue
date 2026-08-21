@@ -1,9 +1,8 @@
 <!-- ============================================================================
    components/admin/Org.vue — 组织 · 组织结构
-   职责：组织/部门树 CRUD + 按组织下钻查看用户（管理结构展示层，根组织=租户）
-   - 树形展示：租户（根）→ 子组织/部门 → 孙组织
-   - 创建子组织 / 重命名 / 删除（子孙上移、用户回收至根组织）
-   - 点击组织节点 → 右侧列出该组织及其子孙组织下的用户
+   职责：组织/部门树 CRUD + 按组织下钻查看用户（管理结构展示层）
+   - 超管：平台树（平台根 → 各租户根组织 → 组织/部门 → 用户）
+   - 租户管理员：本租户树（租户根 → 组织/部门 → 用户）
    ============================================================================ -->
 <template>
   <section class="ad-section">
@@ -31,8 +30,8 @@
           @dragover.prevent="dragOverId = 0"
           @drop.prevent="onDropRoot"
         >
-          <span>{{ rootOrgIcon }} {{ rootOrgName }}（{{ t('org.typeRoot') }}）</span>
-          <span class="ad-tree-actions">
+          <span>{{ rootOrgIcon }} {{ rootOrgName }}（{{ isSuper ? t('org.typePlatform') : t('org.typeRoot') }}）</span>
+          <span class="ad-tree-actions" v-if="!isSuper">
             <button class="ad-btn-xs" :title="t('org.renameRoot')" @click.stop="renameRootOrg">✎</button>
           </span>
         </div>
@@ -41,7 +40,7 @@
           :key="o.id"
           :class="['ad-tree-item', selectedOrg === o.id ? 'on' : '', dragOverId === o.id ? 'drag-over' : '']"
           :style="{ paddingLeft: (8 + o._depth * 18) + 'px' }"
-          @click="selectOrg(o.id)"
+          @click="selectOrg(o)"
           draggable="true"
           @dragstart="startDrag(o, $event)"
           @dragend="dragOrgId = null; dragOverId = null"
@@ -50,11 +49,11 @@
           @drop.prevent="onDropTo(o)"
         >
           <span class="drag-handle">⠿</span>
-          <span>{{ o.type === 'dept' ? '🗂️' : '📁' }} {{ o.name }}</span>
+          <span>{{ orgIcon(o) }} {{ o.name }}</span>
           <span class="ad-tree-actions">
             <button class="ad-btn-xs" :title="t('org.addChild')" @click.stop="setParent(o.id)">+</button>
-            <button class="ad-btn-xs" :title="t('org.rename')" @click.stop="renameOrg(o)">✎</button>
-            <button class="ad-btn-xs ad-btn-red" :title="t('org.delete')" @click.stop="deleteOrg(o)">✕</button>
+            <button v-if="o.type !== 'root'" class="ad-btn-xs" :title="t('org.rename')" @click.stop="renameOrg(o)">✎</button>
+            <button v-if="o.type !== 'root'" class="ad-btn-xs ad-btn-red" :title="t('org.delete')" @click.stop="deleteOrg(o)">✕</button>
           </span>
         </div>
       </div>

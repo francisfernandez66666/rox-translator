@@ -9,15 +9,16 @@ import (
 	"time"
 )
 
-// KBPackage 知识库包（三级分层：企业包>行业包>语言文化习惯包，树形继承）
+// KBPackage 知识库包（三级分层：企业包>行业包>语言文化习惯包，树形继承；部门包归属部门）
 type KBPackage struct {
 	ID        int64  `json:"id"`         // 包主键 ID
 	TenantID  int64  `json:"tenant_id"`  // 所属租户 ID
 	ParentID  int64  `json:"parent_id"`  // 父包 ID（0 表示根节点）
 	Code      string `json:"code"`       // 包编码（唯一标识，如 tenant/industry/locale）
 	Name      string `json:"name"`       // 包名称（如 企业包/行业包/语言文化习惯包）
-	PackType  string `json:"pack_type"`  // 包类型：tenant(企业) / industry(行业) / locale(语言文化)
+	PackType  string `json:"pack_type"`  // 包类型：tenant(企业) / industry(行业) / locale(语言文化) / department(部门)
 	Role      string `json:"role"`       // 包角色：source(匹配来源) / gate(输出闸门)
+	OrgID     int64  `json:"org_id"`     // 归属部门组织 ID（0=租户级）
 	SortOrder int    `json:"sort_order"` // 同级排序权重（升序）
 	CreatedAt string `json:"created_at"` // 创建时间（RFC3339 字符串）
 	UpdatedAt string `json:"updated_at"` // 更新时间（RFC3339 字符串）
@@ -70,6 +71,24 @@ const (
 	LayerFrag   = 4 // L4 AI 碎片
 )
 
+// kbPkgCols 知识库包查询列清单（统一使用，避免遗漏新增列）
+const kbPkgCols = "id, tenant_id, parent_id, code, name, pack_type, role, org_id, sort_order, created_at, updated_at"
+
+// placeholders 生成 n 个 ? 占位符（逗号分隔），用于 IN 查询。
+func placeholders(n int) string {
+	if n <= 0 {
+		return "0"
+	}
+	s := ""
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			s += ","
+		}
+		s += "?"
+	}
+	return s
+}
+
 // ============ 包 ============
 
 // CreateKBPackage 创建知识库包。
@@ -79,7 +98,7 @@ const (
 func (s *Store) CreateKBPackage(tid int64, parentID int64, code, name, packType, role string) (*KBPackage, error) {
 	now := time.Now().Format(time.RFC3339)
 	res, err := s.db.Exec(
-		"INSERT INTO kb_packages (tenant_id, parent_id, code, name, pack_type, role, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,0,?,?)",
+		"INSERT INTO kb_packages (tenant_id, parent_id, code, name, pack_type, role, org_id, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,0,0,?,?)",
 		tid, parentID, code, name, packType, role, now, now)
 	if err != nil {
 		return nil, err
@@ -88,12 +107,53 @@ func (s *Store) CreateKBPackage(tid int64, parentID int64, code, name, packType,
 	return s.GetKBPackage(id, tid)
 }
 
+// CreateKBPackageForOrg 创建归属指定部门的包（部门管理员创建部门包时使用）。
+// 参数：tid=租户 ID，parentID=父包 ID（0=根），code/name/packType/role 同 CreateKBPackage，
+// orgID=归属部门组织 ID。
+// 返回：新包对象。
+func (s *Store) CreateKBPackageForOrg(tid, parentID int64, code, name, packType, role string, orgID int64) (*KBPackage, error) {
+	now := time.Now().Format(time.RFC3339)
+	res, err := s.db.Exec(
+		"INSERT INTO kb_packages (tenant_id, parent_id, code, name, pack_type, role, org_id, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,0,?,?)",
+		tid, parentID, code, name, packType, role, orgID, now, now)
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	return s.GetKBPackage(id, tid)
+}
+
+// ListDeptPackages 列出部门可管理的包（部门管理员视角）：本部门及子部门下属的部门包 + 租户级企业包。
+// 参数：tid=租户 ID，orgIDs=本部门及子部门组织 ID 集合。
+// 返回：包列表（部门包 org_id 命中，或租户级企业包）。
+func (s *Store) ListDeptPackages(tid int64, orgIDs []int64) ([]*KBPackage, error) {
+	q := "SELECT " + kbPkgCols + " FROM kb_packages WHERE tenant_id=? AND (pack_type='department' AND org_id IN (" + placeholders(len(orgIDs)) + ")) ORDER BY sort_order, id"
+	args := []interface{}{tid}
+	for _, oid := range orgIDs {
+		args = append(args, oid)
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*KBPackage
+	for rows.Next() {
+		var p KBPackage
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			continue
+		}
+		out = append(out, &p)
+	}
+	return out, nil
+}
+
 // GetKBPackage 按 ID+租户查询包（租户隔离校验）。
 // 参数：id=包主键 ID，tid=租户 ID；返回包对象。
 func (s *Store) GetKBPackage(id, tid int64) (*KBPackage, error) {
 	var p KBPackage
-	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, sort_order, created_at, updated_at FROM kb_packages WHERE id=? AND tenant_id=?", id, tid).
-		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, sort_order, created_at, updated_at FROM kb_packages WHERE id=? AND tenant_id=?", id, tid).
+		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +163,7 @@ func (s *Store) GetKBPackage(id, tid int64) (*KBPackage, error) {
 // ListKBPackages 列出租户全部包（按包类型、排序权重、ID 排序）。
 // 参数：tid=租户 ID；返回包列表。
 func (s *Store) ListKBPackages(tid int64) ([]*KBPackage, error) {
-	rows, err := s.db.Query("SELECT id, tenant_id, parent_id, code, name, pack_type, role, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=? ORDER BY pack_type, sort_order, id", tid)
+	rows, err := s.db.Query("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=? ORDER BY pack_type, sort_order, id", tid)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +171,7 @@ func (s *Store) ListKBPackages(tid int64) ([]*KBPackage, error) {
 	var out []*KBPackage
 	for rows.Next() {
 		var p KBPackage
-		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &p)
@@ -172,8 +232,8 @@ func (s *Store) EnsureDefaultPackages(tid int64) error {
 // 参数：code=行业包编码；返回行业包对象（供注册行业校验与名称引用）。
 func (s *Store) FindIndustryByCode(code string) (*KBPackage, error) {
 	var p KBPackage
-	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=1 AND pack_type=? AND code=?", PackIndustry, code).
-		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=1 AND pack_type=? AND code=?", PackIndustry, code).
+		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

@@ -17,8 +17,20 @@ import (
 	"translator/internal/store"
 )
 
-// requireAdminUser 超管鉴权（super_admin）
+// requireAdminUser 超管鉴权（super_admin，等级 4）
 func (s *Server) requireAdminUser(r *http.Request) (*store.User, error) {
+	u := s.authUser(r)
+	if u == nil {
+		return nil, errNotLogin
+	}
+	if err := auth.RequireRole(u, 4); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// requireTenantAdmin 租户管理员鉴权（tenant_admin 及以上，等级 3）
+func (s *Server) requireTenantAdmin(r *http.Request) (*store.User, error) {
 	u := s.authUser(r)
 	if u == nil {
 		return nil, errNotLogin
@@ -29,8 +41,8 @@ func (s *Server) requireAdminUser(r *http.Request) (*store.User, error) {
 	return u, nil
 }
 
-// requireTenantAdmin 租户管理员鉴权（tenant_admin 及以上）
-func (s *Server) requireTenantAdmin(r *http.Request) (*store.User, error) {
+// requireDeptAdmin 部门管理员鉴权（dept_admin 及以上，等级 2）
+func (s *Server) requireDeptAdmin(r *http.Request) (*store.User, error) {
 	u := s.authUser(r)
 	if u == nil {
 		return nil, errNotLogin

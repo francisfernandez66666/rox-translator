@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"translator/internal/auth"
 	"translator/internal/engine"
 	"translator/internal/kb"
 	"translator/internal/store"
@@ -37,7 +38,7 @@ import (
 // 返回: success=true 时携带 added（新增数）/skipped（跳过数）。
 func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需租户管理员及以上权限
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -253,7 +254,7 @@ type kbRecognizeMeta struct {
 // 流程：保存文件 → kb.ParseKBFile 解析 → 识别源列与语言列 → 缓存文件生成 temp_id（供 import-kb 读取）。
 func (s *Server) handleRecognizeKB(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需租户管理员及以上（前台普通用户不再允许上传 KB）
-	if _, err := s.requireTenantAdmin(r); err != nil {
+	if _, err := s.requireDeptAdmin(r); err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
@@ -389,7 +390,7 @@ func randHex(n int) string {
 // 流程：读缓存元信息 → 重新解析文件 → 按源列/语言列写入指定知识库包（按包隔离）→ 清理临时文件与元信息。
 func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需租户管理员及以上
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -422,6 +423,18 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	if !canManagePackType(u, pkg.PackType) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包导入"})
 		return
+	}
+	// 部门管理员：目标包必须在本部门及子部门内（org_id 归属）
+	if auth.RoleLevel(u.Role) == 2 {
+		if u.OrgID <= 0 || pkg.OrgID <= 0 {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向非本部门的包导入"})
+			return
+		}
+		inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, pkg.OrgID)
+		if e2 != nil || !inTree {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向非本部门的包导入"})
+			return
+		}
 	}
 
 	// 读取缓存元信息文件
