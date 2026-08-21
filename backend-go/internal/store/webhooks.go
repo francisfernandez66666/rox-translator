@@ -9,6 +9,7 @@
 package store
 
 import (
+	"database/sql"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -75,7 +76,19 @@ func (s *Store) UpsertWebhook(w *Webhook) error {
 // ListWebhooks 查询租户的 webhook 配置列表。
 // 参数：tid=租户 ID；返回 webhook 列表（按 ID 升序）。
 func (s *Store) ListWebhooks(tid int64) ([]*Webhook, error) {
-	rows, err := s.db.Query("SELECT "+webhookCols+" FROM webhooks WHERE tenant_id=? ORDER BY id", tid)
+	// tid<=0：跨租户全量（超管平台视角聚合）
+	q := "SELECT " + webhookCols + " FROM webhooks"
+	if tid > 0 {
+		q += " WHERE tenant_id=?"
+	}
+	q += " ORDER BY id"
+	var rows *sql.Rows
+	var err error
+	if tid > 0 {
+		rows, err = s.db.Query(q, tid)
+	} else {
+		rows, err = s.db.Query(q)
+	}
 	if err != nil {
 		return nil, err
 	}

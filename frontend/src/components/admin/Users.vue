@@ -9,14 +9,15 @@
       <input v-model="uForm.username" :placeholder="t('users.usernamePlaceholder')" class="ad-input" />
       <input v-model="uForm.password" :placeholder="t('users.passPlaceholder')" class="ad-input" />
       <input v-model="uForm.display_name" :placeholder="t('users.displayNamePlaceholder')" class="ad-input" />
-      <select v-model="uForm.role" class="ad-input">
-        <option v-for="r in roleOptions" :key="r" :value="r">{{ t('users.role.' + r) }}</option>
-      </select>
-      <select v-if="isSuper" v-model="uForm.tenant_id" class="ad-input">
+      <select v-if="isSuper" v-model.number="uForm.tenant_id" class="ad-input" @change="onCascadeChange">
         <option v-for="t in tenantList" :key="t.id" :value="t.id">{{ tpl('users.orgItem', { id: t.id, code: t.code }) }}</option>
       </select>
-      <select v-model="uForm.org_id" class="ad-input">
-        <option v-for="o in orgOptions" :key="o.id" :value="o.id">{{ o.name }}</option>
+      <select v-model.number="uForm.org_id" class="ad-input" @change="onCascadeChange">
+        <option value="0">{{ t('org.rootOption') }}</option>
+        <option v-for="o in cascadeOrgs" :key="o.id" :value="o.id">{{ o.type === 'root' ? '🏢 ' : '' }}{{ o.name }}</option>
+      </select>
+      <select v-model="uForm.role" class="ad-input">
+        <option v-for="r in cascadeRoles" :key="r" :value="r">{{ t('users.role.' + r) }}</option>
       </select>
       <button class="ad-btn" @click="createUser">{{ t('users.create') }}</button>
     </div>
@@ -52,7 +53,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { t, tpl } from '@/i18n'
 import { adminUsers, adminUserCreate, adminUserUpdate, adminUserResetPassword, orgList, type OrgInfo } from '@/api'
-import { activeTenantId, tenantList, isSuper, roleOptions } from './store'
+import { activeTenantId, tenantList, isSuper, myLevel } from './store'
 import { fmtTime } from './ui'
 
 const users = ref<any[]>([])
@@ -99,6 +100,32 @@ async function createUser() {
   if (!r.success) { alert(r.message); return }
   uForm.value = { username: '', password: '', display_name: '', role: 'user', tenant_id: activeTenantId.value || 1, org_id: 0 }
   await loadUsers()
+}
+
+// 级联：可选部门随超管所选租户过滤；角色选项随部门层级收窄（与组织架构面板一致）
+const cascadeOrgs = computed(() => {
+  if (!isSuper.value) return orgs.value
+  const tid = Number(uForm.value.tenant_id || 0)
+  return orgs.value.filter((o: any) => o.tenant_id === tid)
+})
+const cascadeRoles = computed<string[]>(() => {
+  const oid = Number(uForm.value.org_id || 0)
+  if (!oid) {
+    // 根级：租管及以上可任命租户管理员
+    return myLevel.value >= 3 ? ['tenant_admin', 'dept_admin', 'user'] : ['user']
+  }
+  const org = orgs.value.find((x: any) => x.id === oid)
+  if (org && org.type === 'root') {
+    return myLevel.value >= 3 ? ['tenant_admin', 'dept_admin', 'user'] : ['user']
+  }
+  // 部门/子组织：部门管理员或普通用户
+  return myLevel.value >= 2 ? ['dept_admin', 'user'] : ['user']
+})
+// 切换归属后校正角色
+function onCascadeChange() {
+  if (!cascadeRoles.value.includes(uForm.value.role)) {
+    uForm.value.role = cascadeRoles.value[cascadeRoles.value.length - 1] || 'user'
+  }
 }
 
 // 行内编辑：更新指定字段（org_id 转为数字提交，其余原样）

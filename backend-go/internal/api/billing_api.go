@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"translator/internal/auth"
 	"translator/internal/billing"
 	"translator/internal/store"
 	"translator/internal/tenant"
@@ -366,6 +367,38 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.effTenant(r, u)
+	// 超管平台视角（tid<=0）：跨租户聚合全部用户用量
+	if auth.IsSuperAdmin(u) && tid <= 0 {
+		users, uerr := s.Store.ListAllUsers()
+		if uerr != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": uerr.Error()})
+			return
+		}
+		costByUser, cerr := s.Store.UsageAllByUser()
+		if cerr != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": cerr.Error()})
+			return
+		}
+		nameMap, _ := s.Store.OrgNameMap()
+		type orgUsage struct {
+			*store.User
+			OrgName string `json:"org_name"`
+			Cost    int64  `json:"cost"`
+		}
+		out := make([]orgUsage, 0, len(users))
+		var total int64
+		for _, usr := range users {
+			c := costByUser[usr.ID]
+			total += c
+			on := nameMap[usr.OrgID]
+			if on == "" {
+				on = "平台"
+			}
+			out = append(out, orgUsage{User: usr, OrgName: on, Cost: c})
+		}
+		writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": 0, "total": total})
+		return
+	}
 	orgID := int64(0)
 	if v := r.URL.Query().Get("org_id"); v != "" {
 		if oid, perr := parseInt64(v); perr == nil && oid > 0 {
