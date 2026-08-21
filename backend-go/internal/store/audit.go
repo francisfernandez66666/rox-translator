@@ -19,7 +19,9 @@ type AuditLog struct {
 	Detail    string `json:"detail"`     // 操作详情描述（人类可读）
 	BeforeVal string `json:"before_val"` // 操作前值（JSON 字符串，用于变更轨迹比对）
 	AfterVal  string `json:"after_val"`  // 操作后值（JSON 字符串，用于变更轨迹比对）
-	CreatedAt string `json:"created_at"` // 日志创建时间（RFC3339 字符串）
+	CreatedAt   string `json:"created_at"`   // 日志创建时间（RFC3339 字符串）
+	TenantName string `json:"tenant_name,omitempty"` // 归属租户名（超管全量视图 JOIN 填充）
+	Username   string `json:"username,omitempty"`    // 操作者用户名（JOIN users 填充）
 }
 
 // LogAudit 记录审计日志（不含前后值快照的便捷入口）。
@@ -46,8 +48,17 @@ func (s *Store) ListAuditFilter(tid int64, action, resource string, userID int64
 	if limit <= 0 || limit > 1000 {
 		limit = 100 // 非法 limit 收敛到默认 100
 	}
-	query := "SELECT id, tenant_id, user_id, action, resource, detail, before_val, after_val, created_at FROM audit_logs WHERE tenant_id=?"
-	args := []interface{}{tid}
+	var query string
+	var args []interface{}
+	if tid <= 0 {
+		// 平台全量视图（超管）：附租户名与操作者用户名
+		query = "SELECT a.id, a.tenant_id, a.user_id, a.action, a.resource, a.detail, a.before_val, a.after_val, a.created_at, COALESCE(t.name,'平台'), COALESCE(u.username,'') " +
+			"FROM audit_logs a LEFT JOIN tenants t ON t.id=a.tenant_id LEFT JOIN users u ON u.id=a.user_id WHERE 1=1"
+	} else {
+		query = "SELECT a.id, a.tenant_id, a.user_id, a.action, a.resource, a.detail, a.before_val, a.after_val, a.created_at, '', '' " +
+			"FROM audit_logs a WHERE a.tenant_id=?"
+		args = append(args, tid)
+	}
 	if action != "" {
 		query += " AND action=?" // 按动作过滤
 		args = append(args, action)
@@ -78,7 +89,7 @@ func (s *Store) ListAuditFilter(tid int64, action, resource string, userID int64
 	var out []*AuditLog
 	for rows.Next() {
 		var a AuditLog
-		if err := rows.Scan(&a.ID, &a.TenantID, &a.UserID, &a.Action, &a.Resource, &a.Detail, &a.BeforeVal, &a.AfterVal, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.UserID, &a.Action, &a.Resource, &a.Detail, &a.BeforeVal, &a.AfterVal, &a.CreatedAt, &a.TenantName, &a.Username); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &a)
