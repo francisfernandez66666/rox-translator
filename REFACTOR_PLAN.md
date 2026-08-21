@@ -1,6 +1,8 @@
 # 后台结构调整 + 商业化补齐 · 执行计划（REFACTOR_PLAN）
 
-> 创建：2026-08-20 ｜ 状态：待执行 ｜ 关联：PLAN.md / COMMERCIAL_TODO.md / PROGRESS.md
+> 创建：2026-08-20 ｜ 状态：**已完成并归档** ｜ 关联：PLAN.md / COMMERCIAL_TODO.md / PROGRESS.md
+>
+> ⚠️ **已归档（2026-08-22）**：本计划已全部执行完成。后续演进见 `重构方案.md`（一期）与 `重构方案二期.md`（二期）。
 
 ## 一、背景与目标
 
