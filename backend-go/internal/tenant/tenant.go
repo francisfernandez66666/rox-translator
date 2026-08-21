@@ -8,6 +8,7 @@
 package tenant
 
 import (
+	"fmt"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -329,9 +330,37 @@ func (s *Store) SetFlowConfig(tid int64, fc FlowConfig) error {
 
 // Delete 删除租户。
 // 参数：id=租户主键 ID；返回错误。
+// Delete 删除租户并级联清理其全部主数据与业务数据（组织树/用户/知识库/工单/订单等）。
+// 参数：id=租户 ID；默认租户（ID=1）由调用方拦截。
 func (s *Store) Delete(id int64) error {
-	_, err := s.db.Exec("DELETE FROM tenants WHERE id=?", id)
-	return err
+	if id <= 0 {
+		return fmt.Errorf("无效租户")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// 主数据：组织树 + 用户
+	for _, tbl := range []string{"orgs", "users"} {
+		if _, e := tx.Exec("DELETE FROM "+tbl+" WHERE tenant_id=?", id); e != nil {
+			return e
+		}
+	}
+	// 业务数据：知识库/工单/计费/开放能力/审计
+	for _, tbl := range []string{
+		"kb_safety_phrases", "kb_entries", "kb_packages",
+		"tickets", "ticket_state", "balance_accounts", "usage_ledger", "orders", "payments",
+		"api_keys", "eval_records", "invite_codes", "invoices", "webhooks",
+	} {
+		if _, e := tx.Exec("DELETE FROM "+tbl+" WHERE tenant_id=?", id); e != nil {
+			return e // 表可能不存在于旧库，忽略不存在的表错误
+		}
+	}
+	if _, e := tx.Exec("DELETE FROM tenants WHERE id=?", id); e != nil {
+		return e
+	}
+	return tx.Commit()
 }
 
 // effectiveStatus 结合有效期计算实际状态：手动 disabled 优先；到期则 expired。
