@@ -460,3 +460,28 @@ func (s *Store) SetKBPackageEnabled(id int64, enabled int) error {
 	_, err := s.db.Exec("UPDATE kb_packages SET enabled=?, updated_at=? WHERE id=?", enabled, time.Now().Format(time.RFC3339), id)
 	return err
 }
+
+// ApplicablePackIDs 计算租户可应用的知识库包集合（向量检索白名单）。
+// 规则：本租户全部包 + 全部语言文化包（共享宿主）+ 注册行业匹配的行业包（共享宿主）。
+// 返回：包 ID 集合。
+func (s *Store) ApplicablePackIDs(tid int64) (map[int64]bool, error) {
+	out := map[int64]bool{}
+	rows, err := s.db.Query(`
+		SELECT id FROM kb_packages WHERE tenant_id=?
+		UNION
+		SELECT id FROM kb_packages WHERE pack_type='locale'
+		UNION
+		SELECT id FROM kb_packages WHERE pack_type='industry'
+			AND code=(SELECT COALESCE(NULLIF(industry,''),'') FROM tenants WHERE id=?)`, tid, tid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err == nil {
+			out[id] = true
+		}
+	}
+	return out, nil
+}

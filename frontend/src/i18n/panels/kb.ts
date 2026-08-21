@@ -6,6 +6,10 @@ export const zh: Record<string, string> = {
   'kb.typeTenant': '组织包（本企业）',
   'kb.enablePack': '启用',
   'kb.disablePack': '停用',
+  'kb.rebuildIndex': '🔄 重建向量索引',
+  'kb.rebuilding': '重建中…',
+  'kb.rebuildConfirm': '将全量重新嵌入知识库原文（调用 Embed API，耗时取决于条目数），确定继续？',
+  'kb.rebuildDone': '向量索引已重建：{n} 行',
   'kb.typeIndustry': '行业包（同行业共享）',
   'kb.typeLocale': '语言文化包（全系统）',
   'kb.typeDepartment': '部门包（本部门）',
@@ -50,6 +54,12 @@ export const zh: Record<string, string> = {
 }
 
 export const en: Record<string, string> = {
+  'kb.enablePack': 'Enable',
+  'kb.disablePack': 'Disable',
+  'kb.rebuildIndex': '🔄 Rebuild Vector Index',
+  'kb.rebuilding': 'Rebuilding…',
+  'kb.rebuildConfirm': 'Re-embed all KB sources (calls Embedding API). Continue?',
+  'kb.rebuildDone': 'Vector index rebuilt: {n} rows',
   'kb.enablePack': 'Enable',
   'kb.disablePack': 'Disable',
   'kb.title': 'Industry Management (KB Packs)',

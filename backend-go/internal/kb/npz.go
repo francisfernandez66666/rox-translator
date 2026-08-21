@@ -29,6 +29,9 @@ type Index struct {
 
 	// IDTenants rowID → 所属租户 id。语义检索按租户过滤。
 	IDTenants map[int64]int64
+
+	// IDPacks rowID → 归属知识库包 id（0=历史兜底）。语义检索按可应用包过滤。
+	IDPacks map[int64]int64
 }
 
 // SearchResult 相似度搜索结果
@@ -294,6 +297,12 @@ func parseNPYInt64(data []byte) ([]int64, error) {
 // tenantID=租户过滤（>0 时只检索该租户的行，0 表示不过滤）。
 // 返回：按相似度降序的搜索结果列表。
 func (idx *Index) Search(query []float32, k int, wantLangs []string, tenantID int64) []SearchResult {
+	return idx.ScopedSearch(query, k, wantLangs, tenantID, nil)
+}
+
+// ScopedSearch 带知识库包白名单的相似度检索：allowPacks 非 nil 时仅检索归属其中的行
+//（部门包>组织包>行业包>语言文化包 的应用范围由引擎按租户+注册行业计算）。
+func (idx *Index) ScopedSearch(query []float32, k int, wantLangs []string, tenantID int64, allowPacks map[int64]bool) []SearchResult {
 	if len(query) == 0 || len(idx.Vecs) == 0 {
 		return nil // 无查询向量或无索引数据直接返回
 	}
@@ -310,6 +319,12 @@ func (idx *Index) Search(query []float32, k int, wantLangs []string, tenantID in
 		if tenantID > 0 && idx.IDTenants != nil {
 			if idx.IDTenants[idx.IDs[i]] != tenantID {
 				continue // 非目标租户的行跳过
+			}
+		}
+		// 按知识库包白名单过滤（优先级链的应用范围）
+		if allowPacks != nil && idx.IDPacks != nil {
+			if !allowPacks[idx.IDPacks[idx.IDs[i]]] && idx.IDPacks[idx.IDs[i]] != 0 {
+				continue // 不在可应用包内的行跳过（pack_id=0 的历史行保留兜底）
 			}
 		}
 		// 按目标语言过滤：该行不含任一目标语言则跳过，不参与检索
