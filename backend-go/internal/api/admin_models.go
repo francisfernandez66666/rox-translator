@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"translator/internal/auth"
 	"translator/internal/config"
 	"translator/internal/tenant"
 )
@@ -16,7 +17,9 @@ import (
 // ============ 模型配置（租户 BYOK + 超管全局） ============
 
 // handleModels 读取模型配置（租户管理员及以上）：
-// 租户管理员读取本租户 BYOK 配置（未配置回退全局默认）；超管读取所选租户/全局。
+//   - 超级管理员：读全局配置（全局默认单模型 + system_config.model_routes 全局路由）
+//   - 租户管理员：读本租户 BYOK 配置（未配置回退全局默认展示）
+//
 // 返回 model 单模型 + routes 多供应商路由。
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
@@ -24,6 +27,36 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 超级管理员：读全局配置
+	if auth.IsSuperAdmin(u) {
+		base := s.Cfg.OnlineAPIBase
+		key := s.Cfg.OnlineAPIKey
+		model := s.Cfg.OnlineModel
+		var routes []tenant.Route
+		if s.Store != nil {
+			if v, e := s.Store.GetConfig("model_routes"); e == nil && v != "" {
+				var rs []config.ProviderConfig
+				if json.Unmarshal([]byte(v), &rs) == nil {
+					for _, rt := range rs {
+						routes = append(routes, tenant.Route{Provider: rt.Provider, APIBase: rt.APIBase, APIKey: rt.APIKey, Model: rt.Model, Weight: rt.Weight})
+					}
+				}
+			}
+		}
+		if routes == nil {
+			routes = []tenant.Route{}
+		}
+		maskedRoutes := make([]tenant.Route, 0, len(routes))
+		for _, rt := range routes {
+			rt.APIKey = maskKey(rt.APIKey)
+			maskedRoutes = append(maskedRoutes, rt)
+		}
+		writeJSON(w, 200, map[string]interface{}{"success": true,
+			"model":  map[string]interface{}{"api_base": base, "api_key": maskKey(key), "model": model},
+			"routes": maskedRoutes})
+		return
+	}
+	// 租户管理员：读本租户 BYOK
 	tid := s.effTenant(r, u)
 	base := s.Cfg.OnlineAPIBase
 	key := s.Cfg.OnlineAPIKey
@@ -57,9 +90,12 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		"routes": maskedRoutes})
 }
 
-// handleModelsSave 保存模型配置（租户管理员及以上，BYOK）：
-// 租户管理员保存本租户模型配置；超管保存所选租户（X-Tenant-ID）。
-// 支持单模型 + 多供应商路由（ChatGPT/Gemini 等 OpenAI 兼容端点）。
+// handleModelsSave 保存模型配置（租户管理员及以上）：
+//   - 超级管理员：保存全局配置——单模型字段（api_base+model）作为主路由合并写入 model_routes，
+//     并热更新运行配置；routes 全量覆盖全局路由。
+//   - 租户管理员：保存本租户 BYOK 配置（单模型 + 路由，存 tenants.model_config）。
+//
+// 支持多供应商路由（ChatGPT/Gemini 等 OpenAI 兼容端点）。
 func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
@@ -76,6 +112,60 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
+	// 超级管理员：保存全局配置
+	if auth.IsSuperAdmin(u) {
+		if s.Store == nil {
+			writeJSON(w, 500, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
+			return
+		}
+		// 读取现有全局路由（保留掩码密钥）
+		oldRoutes := []config.ProviderConfig{}
+		if v, e := s.Store.GetConfig("model_routes"); e == nil && v != "" {
+			_ = json.Unmarshal([]byte(v), &oldRoutes)
+		}
+		// 构建新路由列表：单模型字段优先作为主路由（api_base+model 非空），其余来自 routes
+		merged := make([]config.ProviderConfig, 0, len(req.Routes)+1)
+		if req.APIBase != "" && req.Model != "" {
+			merged = append(merged, config.ProviderConfig{
+				Provider: "global", APIBase: req.APIBase, APIKey: req.APIKey, Model: req.Model, Weight: 100,
+			})
+		}
+		for _, rt := range req.Routes {
+			merged = append(merged, config.ProviderConfig{Provider: rt.Provider, APIBase: rt.APIBase, APIKey: rt.APIKey, Model: rt.Model, Weight: rt.Weight})
+		}
+		// 掩码密钥保留原值
+		for i := range merged {
+			if hasMask(merged[i].APIKey) {
+				for _, o := range oldRoutes {
+					if o.APIBase == merged[i].APIBase && o.Model == merged[i].Model {
+						merged[i].APIKey = o.APIKey
+						break
+					}
+				}
+			}
+		}
+		b, _ := json.Marshal(merged)
+		if err := s.Store.SetConfig("model_routes", string(b)); err != nil {
+			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+		// 热同步到运行配置（引擎即时生效）
+		s.Cfg.ModelRoutes = merged
+		// 若单模型字段非空，同时更新全局默认单模型（引擎回退链的最终兜底）
+		if req.APIBase != "" {
+			s.Cfg.OnlineAPIBase = req.APIBase
+		}
+		if req.APIKey != "" && !hasMask(req.APIKey) {
+			s.Cfg.OnlineAPIKey = req.APIKey
+		}
+		if req.Model != "" {
+			s.Cfg.OnlineModel = req.Model
+		}
+		s.Store.LogAudit(s.effTenant(r, u), u.ID, "model_save", "system", fmt.Sprintf("%d 条全局路由", len(merged)))
+		writeJSON(w, 200, map[string]interface{}{"success": true})
+		return
+	}
+	// 租户管理员：保存本租户 BYOK
 	if s.Ten == nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
 		return
