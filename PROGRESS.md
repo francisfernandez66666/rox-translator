@@ -1,6 +1,6 @@
 # 改造进度跟踪（PROGRESS）
 
-> 更新：2026-08-21 ｜ 状态：**SaaS 化 6 阶段全部完成** ｜ 关联文档：PLAN.md / SAAS_GAP.md / COMMERCIAL_TODO.md / SAAS_ROADMAP.md
+> 更新：2026-08-21（晚）｜ 状态：**SaaS 化 6 阶段完成 + IAM/知识库包体系/计费/审计 六批次重构落地** ｜ 关联文档：PLAN.md / 重构方案.md / SAAS_GAP.md / COMMERCIAL_TODO.md
 
 ## 当前状态总览
 
@@ -9,6 +9,7 @@
 - **代码**：`backend-go/`（Go 单二进制）+ `frontend/`（Vue3 + TS），已全部加中文注释
 - **数据库**：SQLite（单文件 WAL，20 张业务表 + 幂等迁移）
 - **部署**：阿里云 43.108.86.140 `/opt/translator/`，systemd `translator.service`，Caddy 反代
+- **重构落地**（详见 `重构方案.md`）：四级角色体系 + IAM 子系统拆分（`internal/iam/`）+ 角色化工作台；知识库包优先级链（部门>组织>行业>语言文化，tm_segments.pack_id）；向量索引 BAAI/bge-m3 全量重建+增量入库；行业包单轨制（tenants.industry，堵组织包跨租户泄漏）；审计日志分级；句数计费门控；平台上下文语义（tid≤0 聚合视图/平台直翻无知识库）
 - **Git**：`github.com:francisfernandez66666/rox-translator.git`（main 分支）
 
 ## Git 提交历史（里程碑）
@@ -145,6 +146,15 @@
 | 2026-08-20 | 告警通知 | 余额耗尽/模型熔断 → 邮件（alert_email 收件人）+ 全部写 alerts 表 |
 | 2026-08-20 | Webhook 安全 | HMAC-SHA256 签名（X-Signature 头）+ 异步投递重试 3 次指数退避 |
 | 2026-08-21 | 阶段模型 | 各流程阶段（kb_match/ai_initial/evals/review）经 `stage_models` 独立配置；api_key 留空继承全局；未配置阶段回退全局/路由；租户模型配置收归超管 |
+| 2026-08-21 | 四级角色体系 | user(1)<dept_admin(2)<tenant_admin(3)<super_admin(4)；部门管理员限本部门子树管成员与部门包；结构操作仅超管+租管 |
+| 2026-08-21 | IAM 子系统 | 组织与账户拆分 internal/iam/（models/store/auth），旧包薄委托；代码内聚不物理分库 |
+| 2026-08-21 | 知识库优先级链 | 部门包(0)>组织包(1)>行业包(2)>语言文化包(3)；tm_segments.pack_id 归属；共享宿主=租户1，行业按 tenants.industry 过滤 |
+| 2026-08-21 | 向量模型 | BAAI/bge-m3（SiliconFlow）替代智谱 embedding-2；stage_models.kb_embed 配置；导入后自动增量重建 |
+| 2026-08-21 | 平台上下文语义 | tid≤0：管理面板=跨租户聚合；前台翻译=平台直翻无知识库（超管不挂任何租户包） |
+| 2026-08-21 | 审计分级 | 超管全量带租户名/操作者；租管工作台独立审计面板（本租户+过滤+CSV） |
+| 2026-08-21 | Caddy 缓存策略 | index.html no-cache（部署即生效）；/assets/* immutable 一年 |
+
+| `cad0e4d…cd2bd17` | **IAM/权限/知识库/计费六批次重构**（2026-08-21 晚，约 20 个提交）：IAM 子系统拆分 internal/iam/ + 四级角色（user<dept_admin<tenant_admin<super_admin）+ 部门管理员部门子树范围；前端角色化工作台（平台运营/企业管理/部门管理三视图）+ 开户「先部门后角色」级联；知识库包体系（pack_id 归属、启停、行业单轨制 tenants.industry、跨租户泄漏修复）；向量索引 BAAI/bge-m3 全量重建(3348行)+导入自动增量入库+ScopedSearch 包过滤；模型面板按业务五阶段重构（初翻/Embed/初翻Evals/校对/校对Evals，超管移除单模型冗余）；句数扣减受强制计费门控；审计日志分级（超管全量带租户名/租管本租户独立面板）；平台视角跨租户聚合（订单/APIKey/Webhook/用量）；删除部门自动降级其管理员；前台身份栏（账号·组织·部门·包类型）+ 超管平台直翻隔离（修复误命中租户KB）；Caddy 缓存策略（HTML no-cache/assets immutable）；构建脚本 iCloud 目录签名修复
 
 ## 待办（剩余，见 COMMERCIAL_TODO.md）
 
@@ -156,6 +166,8 @@
 - [x] 商业包 + 静态码支付 —— 已上线（阶段三 + 阶段六）
 - [ ] 真实支付商户号接入（微信/支付宝 SDK）
 - [ ] 生产管理员/超管密钥轮换与审计 —— 需在部署时设置随机 JWT_SECRET/ADMIN_TOKEN 并轮换
+- [ ] 语言文化包 gate 闸门逻辑 —— 输出前强制套用语言文化规则（pack role=gate 已有字段未消费）
+- [ ] Evals 占位 Key 空转处理 —— 全局 key 为随机占位符时 Evaluator 应自动 Enabled=false
 
 ## 问题与风险记录
 
@@ -166,3 +178,9 @@
 | 2026-08-19 | 本地错误率=1（假路由残留） | 已修复 | 清空测试库 model_routes，重测为 0 |
 | 2026-08-19 | 登录审计归错租户（超管 tenant 0） | 已修复 | 改用 JWT 用户 tenant_id |
 | 2026-08-19 | user_update 审计归错租户 | 已修复 | 改用有效租户 tid + before/after 轨迹 |
+| 2026-08-21 | 超管前台误命中租户知识库 | 已修复 | engine.tenantID 兜底返回1所致；TranslateOne 直读 context，tid≤0 平台直翻 |
+| 2026-08-21 | 组织包数据跨租户泄漏 | 已修复 | 共享检索 JOIN kb_packages 校验类型+注册行业，租户1仅行业/语言文化包可共享 |
+| 2026-08-21 | Models/Org 面板白板崩溃 | 已修复 | v-for 变量名反转 + orgIcon 未定义；用户控制台报错直击根因 |
+| 2026-08-21 | execW 自递归死锁 | 已修复 | 批量替换误改函数体调用自身；单测抓出并修复 |
+| 2026-08-21 | 删租户残留孤儿组织 | 已修复 | 删除级联清理主/业务数据；平台树 INNER JOIN 防御 |
+| 2026-08-21 | 部署后浏览器旧资源 | 已修复 | Caddy 增加 HTML no-cache / assets immutable 缓存头 |
