@@ -77,6 +77,7 @@ import Overview from './admin/Overview.vue'
 import Alerts from './admin/Alerts.vue'
 import Usage from './admin/Usage.vue'
 import Billing from './admin/Billing.vue'
+import Packages from './admin/Packages.vue'
 import Users from './admin/Users.vue'
 import Org from './admin/Org.vue'
 import Tenants from './admin/Tenants.vue'
@@ -110,6 +111,7 @@ const categories = [
       { key: 'alerts', label: 'admin.alerts', comp: Alerts, min: 2 },
       { key: 'usage', label: 'admin.usage', comp: Usage, min: 2 },
       { key: 'billing', label: 'admin.billing', comp: Billing, min: 2 },
+      { key: 'packages', label: 'admin.packages', comp: Packages, min: 3 },
     ],
   },
   {

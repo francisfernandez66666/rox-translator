@@ -6,6 +6,29 @@
   <section class="ad-section">
     <h2>{{ t('billing.title') }}</h2>
 
+    <!-- 当前包 + 剩余句数（所有人可见） -->
+    <div class="ad-chart-card">
+      <h3>{{ t('billing.myPackageTitle') }}</h3>
+      <div class="ad-row">
+        <div class="ad-hint">{{ tpl('billing.myPackageBalance', { balance: pkg.sentence_balance ?? '—' }) }}</div>
+        <div v-if="pkg.package_code" class="ad-hint" style="margin-left: 16px">
+          {{ tpl('billing.myPackageCode', { code: pkg.package_code }) }}
+        </div>
+      </div>
+      <button v-if="!isSuper" class="ad-btn" style="margin-top: 8px" @click="showSubscribe = !showSubscribe">{{ t('billing.subscribe') }}</button>
+
+      <!-- 订阅套餐（租户管理员自助） -->
+      <div v-if="showSubscribe" class="ad-sub-pkgs" style="margin-top: 12px">
+        <div v-for="pl in planList" :key="pl.id" class="ad-chart-card" style="display:inline-block;margin:6px 12px 6px 0;padding:14px;min-width:200px">
+          <div style="font-weight:600">{{ pl.name }}</div>
+          <div class="ad-hint">{{ t('packages.type.' + pl.ptype) }}</div>
+          <div class="ad-hint">{{ tpl('billing.pkgSentences', { n: pl.sentences }) }} · {{ tpl('billing.pkgPrice', { p: pl.price_money }) }} 元</div>
+          <button class="ad-btn ad-btn-green" style="margin-top:8px" @click="subscribe(pl)">{{ t('billing.subscribeNow') }}</button>
+        </div>
+        <p v-if="!planList.length" class="ad-hint">{{ t('billing.noPlans') }}</p>
+      </div>
+    </div>
+
     <!-- 计费配置（超管） -->
     <div v-if="isSuper" class="ad-chart-card">
       <h3>{{ t('billing.config') }}</h3>
@@ -58,9 +81,11 @@
       <div class="ad-hint">{{ t('billing.onlineTopUpHint') }}</div>
       <div class="ad-row">
         <select v-model="chForm.channel" class="ad-input">
+          <option value="auto">{{ tpl('billing.payModeAuto', { mode: payModeLabel }) }}</option>
+          <option v-if="payMode === 'static_qr'" value="manual">{{ t('billing.chStaticQR') }}</option>
+          <option v-if="payMode === 'sdk'" value="wechat">{{ t('billing.chWechat') }}</option>
+          <option v-if="payMode === 'sdk'" value="alipay">{{ t('billing.chAlipay') }}</option>
           <option value="mock">{{ t('billing.chMock') }}</option>
-          <option value="wechat">{{ t('billing.chWechat') }}</option>
-          <option value="alipay">{{ t('billing.chAlipay') }}</option>
         </select>
         <input v-model.number="chForm.tokens" type="number" :placeholder="t('billing.tokenCount')" class="ad-input" />
         <button class="ad-btn" :disabled="chLoading" @click="openCheckout">{{ chLoading ? t('billing.ordering') : t('billing.goPay') }}</button>
@@ -68,6 +93,24 @@
       <p v-if="curOrder && curOrder.status === 'pending'" class="ad-hint" style="color:#1a237e">
         {{ tpl('billing.currentOrder', { orderNo: curOrder.order_no, amount: curOrder.amount_tokens }) }}
       </p>
+    </div>
+
+    <!-- 待人工确认订单（超管审核开通静态码支付） -->
+    <div v-if="isSuper" class="ad-chart-card">
+      <h3>{{ t('billing.manualOrders') }}</h3>
+      <div class="ad-hint">{{ t('billing.manualOrdersHint') }}</div>
+      <table class="ad-table">
+        <thead><tr><th>{{ t('billing.colOrderNo') }}</th><th>{{ t('billing.colTokens') }}</th><th>{{ t('billing.colTenant') }}</th><th>{{ t('billing.colTime') }}</th><th>{{ t('common.operations') }}</th></tr></thead>
+        <tbody>
+          <tr v-for="o in manualOrders" :key="o.id">
+            <td>{{ o.order_no }}</td><td>{{ o.amount_tokens }}</td><td>#{{ o.tenant_id }}</td><td>{{ fmtTime(o.created_at) }}</td>
+            <td class="ad-td">
+              <button class="ad-btn-sm ad-btn-green" @click="confirmManual(o)">{{ t('billing.confirmPayment') }}</button>
+            </td>
+          </tr>
+          <tr v-if="!manualOrders.length"><td colspan="5" style="text-align:center;color:#999">{{ t('billing.noManualOrders') }}</td></tr>
+        </tbody>
+      </table>
     </div>
 
     <!-- 发票管理 -->
@@ -110,16 +153,28 @@
           <!-- 待支付：展示收款码 + 操作 -->
           <div v-else>
             <div class="pay-qr-box" v-if="curOrder">
-              <div class="pay-qr-tip">{{ curOrder.channel === 'wechat' ? t('billing.scanWechat') : curOrder.channel === 'alipay' ? t('billing.scanAlipay') : t('billing.mockPay') }}</div>
-              <pre class="pay-qr-content">{{ curOrder.qr_content }}</pre>
+              <!-- 静态码模式：展示超管配置的收款码图片 -->
+              <template v-if="curOrder.channel === 'manual'">
+                <div class="pay-qr-tip">{{ t('billing.staticQR') }}</div>
+                <img v-if="isImageContent(curOrder.qr_content)" :src="curOrder.qr_content" alt="static-qr" class="pay-qr-img" />
+                <pre v-else class="pay-qr-content">{{ curOrder.qr_content }}</pre>
+              </template>
+              <template v-else>
+                <div class="pay-qr-tip">{{ curOrder.channel === 'wechat' ? t('billing.scanWechat') : curOrder.channel === 'alipay' ? t('billing.scanAlipay') : t('billing.mockPay') }}</div>
+                <pre class="pay-qr-content">{{ curOrder.qr_content }}</pre>
+              </template>
             </div>
             <div class="pay-actions">
+              <button v-if="curOrder && curOrder.channel === 'manual'" class="ad-btn ad-btn-green" :disabled="chLoading" @click="manualConfirm">
+                {{ chLoading ? t('billing.processing') : t('billing.iPaid') }}
+              </button>
               <button v-if="curOrder && curOrder.channel === 'mock'" class="ad-btn ad-btn-green" :disabled="chLoading" @click="simulatePay">
                 {{ chLoading ? t('billing.processing') : t('billing.mockCredit') }}
               </button>
               <button v-if="curOrder" class="ad-btn" :disabled="chLoading" @click="checkStatus">{{ t('billing.refreshStatus') }}</button>
             </div>
-            <p class="ad-hint" style="text-align:center">{{ t('billing.payHint') }}</p>
+            <p v-if="curOrder && curOrder.channel === 'manual'" class="ad-hint" style="text-align:center">{{ t('billing.manualHint') }}</p>
+            <p v-else class="ad-hint" style="text-align:center">{{ t('billing.payHint') }}</p>
           </div>
         </div>
       </div>
@@ -128,11 +183,62 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch, onBeforeUnmount } from 'vue'
-import { billingConfig, billingConfigSave, billingQuota, billingQuotaSave, billingOrders, adminOrderCreate, adminOrderPay, billingInvoices, payCreate, payStatus, paySimulate } from '@/api'
+import { ref, computed, onMounted, watch, onBeforeUnmount } from 'vue'
+import { billingConfig, billingConfigSave, billingQuota, billingQuotaSave, billingOrders, adminOrderCreate, adminOrderPay, billingInvoices, payCreate, payStatus, paySimulate, payManualConfirm, manualConfirmOrders, myPackage, plans, packageSubscribe } from '@/api'
 import { activeTenantId, isSuper } from './store'
 import { fmtTime } from './ui'
 import { t, tpl } from '@/i18n'
+
+// ==================== 当前包 + 订阅 ====================
+
+// 我的包信息（剩余句数/包编码）
+const pkg = ref<any>({ sentence_balance: null, package_code: '', subscribed_at: '' })
+// 上架套餐列表（公开定价页）
+const planList = ref<any[]>([])
+// 是否展开订阅面板
+const showSubscribe = ref(false)
+// 支付模式（mock/sdk/static_qr，来自 myPackage 响应）
+const payMode = ref('mock')
+const payModeLabel = computed(() => ({ mock: t('billing.chMock'), sdk: t('billing.chSdk'), static_qr: t('billing.chStaticQR') }[payMode.value] || payMode.value))
+// 待人工确认订单（超管）
+const manualOrders = ref<any[]>([])
+
+async function loadPackage() {
+  const r = await myPackage()
+  if (r.success) {
+    pkg.value = (r as any)
+    if ((r as any).pay_mode) payMode.value = (r as any).pay_mode
+  }
+  const p = await plans()
+  if (p.success) planList.value = (p as any).plans || []
+}
+
+async function loadManualOrders() {
+  if (!isSuper.value) return
+  const r = await manualConfirmOrders()
+  if (r.success) manualOrders.value = (r as any).orders || []
+}
+
+async function confirmManual(o: any) {
+  const r = await adminOrderPay(o.id)
+  if (!r.success) { alert(r.message); return }
+  alert(t('billing.manualConfirmed'))
+  await Promise.all([loadManualOrders(), loadOrders()])
+}
+
+// 判断二维码内容是否为图片（base64 或 http(s) 图片）
+function isImageContent(s: string): boolean {
+  if (!s) return false
+  return s.startsWith('data:image') || s.startsWith('http://') || s.startsWith('https://') || /\.(png|jpe?g|gif|webp)/i.test(s)
+}
+
+async function subscribe(pl: any) {
+  if (!confirm(tpl('billing.confirmSubscribe', { name: pl.name, p: pl.price_money }))) return
+  const r = await packageSubscribe(pl.code)
+  if (!r.success) { alert(r.message); return }
+  alert(t('billing.subscribeDone'))
+  await loadPackage()
+}
 
 // 计费配置（是否强制计费）
 const billingEnforced = ref(false)
@@ -197,7 +303,7 @@ async function loadInvoices() {
 // ==================== 在线充值（收银台） ====================
 
 // 收银台状态
-const chForm = ref({ channel: 'mock', tokens: 1000 })
+const chForm = ref({ channel: 'auto', tokens: 1000 })
 // 是否展示收银台弹窗
 const showCheckout = ref(false)
 // 下单请求进行中（禁用按钮）
@@ -222,11 +328,14 @@ async function openCheckout() {
   if (chForm.value.tokens <= 0) { alert(t('billing.enterTokenCount')); return }
   chLoading.value = true
   try {
-    const r = await payCreate({ tokens: chForm.value.tokens, channel: chForm.value.channel })
+    // 传 'auto'：后端按 pay_mode 自动决定渠道（static_qr→manual，sdk→wechat，默认 mock）
+    const channel = chForm.value.channel === 'auto' ? '' : chForm.value.channel
+    const r = await payCreate({ tokens: chForm.value.tokens, channel })
     if (!r.success) { alert(r.message); return }
     curOrder.value = (r as any).order
     showCheckout.value = true
-    startPolling()
+    // 静态码人工确认无需轮询到账（等待超管开通），其余渠道轮询
+    if (curOrder.value.channel !== 'manual') startPolling()
   } finally {
     chLoading.value = false
   }
@@ -272,12 +381,27 @@ async function simulatePay() {
   }
 }
 
+// 静态码「我已付费」：通知超管审核开通
+async function manualConfirm() {
+  if (!curOrder.value) return
+  chLoading.value = true
+  try {
+    const r = await payManualConfirm(curOrder.value.id)
+    if (!r.success) { alert(r.message); return }
+    alert(t('billing.manualNotify'))
+    stopPolling()
+    closeCheckout()
+  } finally {
+    chLoading.value = false
+  }
+}
+
 onBeforeUnmount(stopPolling)
 
 // 挂载与租户切换时加载
 async function loadAll() {
-  if (isSuper.value) await Promise.all([loadBillingConfig(), loadOrders()])
-  await Promise.all([loadQuota(), loadInvoices()])
+  if (isSuper.value) await Promise.all([loadBillingConfig(), loadOrders(), loadManualOrders()])
+  await Promise.all([loadQuota(), loadInvoices(), loadPackage()])
 }
 onMounted(loadAll)
 watch(activeTenantId, loadAll)

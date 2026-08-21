@@ -1,7 +1,7 @@
 # 彻底 SaaS 化改造路线图（10 项）
 
 > 创建：2026-08-20 ｜ 来源：用户十项需求评审 + 代码库现状调研 + 四项关键决策
-> 状态：**阶段一（互译+i18n）与阶段二（模型分阶段+超管维护）已完成，阶段三起待实施** ｜ 关联文档：PLAN.md / SAAS_GAP.md / COMMERCIAL_TODO.md / PROGRESS.md / 部署指南.md
+> 状态：**阶段一（互译+i18n）、阶段二（模型分阶段+超管维护）、阶段三（商业包+注册行业）、阶段四（分级用量看板）、阶段五（KB 后台化）已完成，阶段六（支付改造）完成** ｜ 关联文档：PLAN.md / SAAS_GAP.md / COMMERCIAL_TODO.md / PROGRESS.md / 部署指南.md
 
 ---
 
@@ -105,48 +105,51 @@
 
 ---
 
-## 六、阶段三：商业包 + 注册行业（Req 2 + Req 8）
+## 六、阶段三：商业包 + 注册行业（Req 2 + Req 8）✅ 已完成
 
 ### 后端
 - **新表 `packages`**：`id / code / name / ptype(free|paid|increment) / sentences / price_money / duration_days / enabled / sort / created_at / updated_at`
-- **`tenants.permissions` 扩展**（JSON）：`package_code` / `subscribed_at` / `sentence_balance`（剩余句数）
-- **句子计量**：`api/stream.go` / `api/upload.go` 按源句（换行/句号切分）× 目标语言数计句，写入 `usage_ledger`（新增 `sentences` 或沿用 quantity 语义）
-- **额度校验**：免费体验（`trial_sentences` 默认 500 句，`system_config` 可配）；付费包（包月 X 句）；增量包（购买 X 句追加 `sentence_balance`）；超限返回「额度耗尽」提示
+- **`tenants.permissions` 扩展**（JSON）：`sentence_balance`（剩余句数）/ `package_code` / `subscribed_at`
+- **句子计量**：`api/stream.go` / `api/upload.go` 按源句（换行/句末标点切分）× 目标语言数计句，写入租户句数余额；`meterSentences` / `meterFileSentences`
+- **额度校验**：`sentence_enforced=1` 时 `gateUsage` 校验剩余句数，用尽返回「翻译句数已用尽，请购买套餐或增量包」；免费体验（`trial_sentences` 默认 500 句，`system_config` 可配）；付费包（包月 X 句）；增量包（购买 X 句追加 `sentence_balance`）
 - 接口：
-  - `GET/POST /api/admin/packages`（超管 CRUD + 启停）
+  - `GET/POST /api/admin/packages`（超管 CRUD + 启停 + 全局设置 `sentence_enforced/trial_sentences/pay_mode/static_qr_image`）
   - `GET /api/plans`（公开定价页）
-  - `GET /api/me/package`（当前包与剩余句数）
-  - `POST /api/package/subscribe`（订阅/兑换包）
-  - `GET /api/register/industries`（行业列表，来自 `pack_type=industry` 的行业包）
-- 注册 `handleRegister`：无邀请码新建租户时 **industry 必填** → 自动创建/关联对应行业包 + 发放免费体验句
+  - `GET /api/me/package`（当前包与剩余句数 + pay_mode）
+  - `POST /api/package/subscribe`（订阅/兑换包：free 直发，paid/increment 走订单 + 支付）
+  - `GET /api/register/industries`（行业列表，来自 tenant 1 的 `industry` 行业包）
+- 注册 `handleRegister`：无邀请码新建租户时 **industry 必填** → 校验行业包存在 → 创建租户时开通对应行业包（`EnsureIndustryPackage`）+ 发放免费体验句数
+- 订单 `orders` 表新增 `package_id` / `manual_confirm` 列；`MarkOrderPaid` 对商业包订单发放句数而非 token
 
 ### 前端
 - 登录注册表单：无邀请码时显示行业下拉（数据来自 `/api/register/industries`）
-- 定价页 `/pricing`：展示免费体验/付费包/增量包（数据来自 `/api/plans`）
-- 超管新增「商业包管理」面板：包 CRUD、句数、价格、启停
-- `admin/Billing.vue` 显示当前包 + 剩余句数
+- 定价页 `/pricing`：展示商业套餐（免费体验/付费包/增量包）
+- 超管新增「商业包」面板（`admin/Packages.vue`）：包 CRUD、句数强制开关、试用句数、支付模式 + 静态码配置
+- `admin/Billing.vue` 显示当前包 + 剩余句数 + 订阅套餐；`ChatWindow` 顶栏显示个人剩余句数
+- 句数计量口径：**每源句 × 每个目标语言 = 消耗句数**（已决策）
 
 ### DB
-- 新建 `packages` 表；`tenants.permissions` 扩展（幂等迁移）
+- 新建 `packages` 表；`tenants.permissions` 扩展（幂等迁移）；`orders.package_id` / `orders.manual_confirm` 列迁移
 
 ### 验证
-- 新租户注册选行业 → 拿到行业包 + 体验句；免费句用完被拦；超管建付费包/增量包 → 订阅 → 句数增加
+- 新租户注册选行业 → 拿到行业包 + 500 试用句；未选行业被拦；`sentence_balance` 扣减正确（`你好，世界。Hello world!` → 2 源句 × 2 目标语言 = 4 句）
+- 超管建付费包/增量包 → mock 订阅自动到账 / 静态码人工确认 → 句数增加；单测 `TestPackageCRUD` / `TestSentenceBalance` / `TestIndustryPackage` / `TestPackageOrderManualConfirm`
 
 ---
 
-## 七、阶段四：分级用量看板（Req 4）
+## 七、阶段四：分级用量看板（Req 4）✅ 已完成
 
 ### 后端
-- `GET /api/billing/usage/me`（普通用户个人：按 `user_id` 过滤 ledger + 汇总）
+- `GET /api/billing/usage/me`（普通用户个人：按 `user_id` 过滤 ledger + 汇总累计/当日/笔数 + 剩余句数）
 - `GET /api/billing/usage/org`（租户管理员：`usage_ledger JOIN users.org_id`，支持 `org_id` 下钻出该组织用户明细，组织→子组织→用户）
-- `GET /api/billing/usage/cost`（超管：全平台 `provider`/`model` 维度 SUM(cost) + token/句数聚合，模型成本核算）
+- `GET /api/billing/usage/cost`（超管：全平台 `provider`/`model` 维度 SUM(cost) + quantity 聚合，模型成本核算）
 - `store/billing.go` 新增查询：`UsageByUser` / `UsageByOrg` / `CostByModel`
 
 ### 前端
 - `admin/Usage.vue` 改造：按角色显示三个层级
-  - 超管：模型成本卡片（provider/model/token/成本）
-  - 租户管理员：组织树 → 子组织 → 用户下钻
-  - 普通用户（工作台）：个人消耗小卡片（本月句数/剩余/余额）
+  - 超管：模型成本卡片（provider/model/quantity/token 成本）+ 原看板
+  - 租户管理员：组织树下拉 → 组织→子组织→用户下钻 + 原看板
+  - 普通用户（工作台）：ChatWindow 顶栏个人剩余句数小卡片（`/api/me/package`）
 
 ### 验证
 - 三种角色登录看到对应粒度看板；超管成本与各模型 route 用量一致
@@ -173,21 +176,22 @@
 
 ---
 
-## 九、阶段六：支付改造（Req 5）
+## 九、阶段六：支付改造（Req 5）✅ 已完成
 
 ### 后端
-- `system_config pay_mode` 扩展为 `sdk` / `static_qr` / `mock`；新增 `static_qr_image`（图片 URL 或 base64）与可选 `static_qr_amount`
-- SDK 模式：走现有 `wechat`/`alipay` 适配器（`payment/payment.go` 已有协议骨架，配置商户号后启用）
-- 静态码模式：`pay create` 返回配置的静态二维码图片；订单 `pay_method=manual`、状态 `pending`（待人工确认）
-- 新增 `POST /api/pay/manual-confirm`：用户扫码后点「我已付费」→ 标记订单待人工确认 + 写 `system_alerts` 告警 + 邮件通知超管（复用 `watchdog.go` 的 `notifyAlert` / `alert_email` 机制）
-- 超管在 Billing 面板确认到账（复用 `handleOrderPay`）→ 发放句包/token
+- `system_config pay_mode` 扩展为 `sdk` / `static_qr` / `mock`；新增 `static_qr_image`（图片 URL 或 base64）
+- SDK 模式：`pay_mode=sdk` 映射到 `wechat`/`alipay` 适配器（`payment/payment.go` 已有协议骨架，配置商户号后启用）
+- 静态码模式：`pay create` / `package subscribe` 返回配置的静态二维码图片；订单 `channel=manual`、状态 `pending`（待人工确认）
+- 新增 `POST /api/pay/manual-confirm`：用户扫码后点「我已付费」→ 订单 `manual_confirm=1` + 写 `system_alerts` critical 告警（kind=pay_manual）+ 邮件通知超管（复用 `notifyAlert` / `alert_email`）
+- 新增 `GET /api/admin/orders/manual`：超管查看待人工确认订单；确认复用 `handleOrderPay` → 发放句包/token（商业包订单发句数）
 
 ### 前端
-- `admin/Billing.vue` 收银台：按 `pay_mode` 切换形态——SDK 码 / 静态二维码；静态码模式加「我已付费」按钮 → 提交后提示「已通知管理员审核开通」
-- 超管 Billing 面板：待人工确认订单列表（`manual` 类型）快速确认
+- `admin/Billing.vue` 收银台：按 `pay_mode` 切换形态——SDK 码 / 静态二维码（图片或文本）；静态码模式加「我已付费」按钮 → 提交后提示「已通知管理员审核开通」
+- 超管 Billing 面板：待人工确认订单列表（`manual` 类型）快速确认到账
+- `admin/Packages.vue` 增加支付模式配置（sdk/static_qr/mock 切换 + 静态收款码 URL/base64 配置）
 
 ### 验证
-- 切 `pay_mode=static_qr` + 配置二维码图 → 下单显示静态码 → 点「我已付费」 → 超管收到告警+邮件 → 确认后句数/余额到账
+- 切 `pay_mode=static_qr` + 配置二维码图 → 订阅生成静态码订单 → 点「我已付费」 → 超管收到告警（alerts 表）+ 确认后句数到账；端到端 curl 冒烟通过
 
 ---
 

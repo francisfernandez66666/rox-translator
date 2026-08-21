@@ -68,12 +68,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	s.mux.HandleFunc("/api/health", s.handleHealth)
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
-	// 公开商业页面（无需登录）：定价 / 条款 / SLA / 隐私
+	// 公开商业页面（无需登录）：定价 / 条款 / SLA / 隐私 / 套餐 / 注册行业
 	s.mux.HandleFunc("/api/pricing", s.handlePublicPricingAPI)
 	s.mux.HandleFunc("/pricing", s.handlePublicPricing)
 	s.mux.HandleFunc("/docs/terms", s.handlePublicTerms)
 	s.mux.HandleFunc("/docs/sla", s.handlePublicSLA)
 	s.mux.HandleFunc("/docs/privacy", s.handlePublicPrivacy)
+	s.mux.HandleFunc("/api/plans", s.handlePlans)
+	s.mux.HandleFunc("/api/register/industries", s.handleRegisterIndustries)
 	// 翻译核心（聊天/文件/下载/语言/KB 统计）
 	s.routesTranslate()
 	// ★ SaaS 租户管理（管理后台）
@@ -196,10 +198,13 @@ func (s *Server) routesAdminSystem() {
 	s.mux.HandleFunc("/api/system/alerts/resolve", s.handleAlertResolve)
 }
 
-// routesBilling 注册计费/充值/用量/配额/发票路由。
+// routesBilling 注册计费/充值/用量/配额/发票/商业包路由。
 func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/billing/balance", s.handleBalance)
 	s.mux.HandleFunc("/api/billing/usage", s.handleUsage)
+	s.mux.HandleFunc("/api/billing/usage/me", s.handleUsageMe)
+	s.mux.HandleFunc("/api/billing/usage/org", s.handleUsageOrg)
+	s.mux.HandleFunc("/api/billing/usage/cost", s.handleUsageCost)
 	s.mux.HandleFunc("/api/billing/orders", s.handleOrders)
 	s.mux.HandleFunc("/api/billing/config", s.handleBillingConfig)
 	s.mux.HandleFunc("/api/billing/config/save", s.handleBillingConfigSave)
@@ -210,11 +215,23 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/admin/orders/refund", s.handleOrderRefund)
 	s.mux.HandleFunc("/api/billing/invoices", s.handleInvoices)
 	s.mux.HandleFunc("/api/billing/invoices/create", s.handleInvoiceCreate)
-	// 在线支付：下单 / 状态轮询 / 模拟支付 / 渠道回调
+	// 商业包：我的包 / 订阅 / 超管管理
+	s.mux.HandleFunc("/api/me/package", s.handleMyPackage)
+	s.mux.HandleFunc("/api/package/subscribe", s.handlePackageSubscribe)
+	s.mux.HandleFunc("/api/admin/packages", s.handleAdminPackages)
+	s.mux.HandleFunc("/api/admin/packages/create", s.handleAdminPackageCreate)
+	s.mux.HandleFunc("/api/admin/packages/update", s.handleAdminPackageUpdate)
+	s.mux.HandleFunc("/api/admin/packages/delete", s.handleAdminPackageDelete)
+	s.mux.HandleFunc("/api/admin/packages/settings", s.handleAdminPackageSettings)
+	s.mux.HandleFunc("/api/admin/packages/settings/save", s.handleAdminPackageSettingsSave)
+	// 在线支付：下单 / 状态轮询 / 模拟支付 / 我已付费（静态码人工确认）/ 渠道回调
 	s.mux.HandleFunc("/api/pay/create", s.handlePayCreate)
 	s.mux.HandleFunc("/api/pay/status", s.handlePayStatus)
 	s.mux.HandleFunc("/api/pay/simulate", s.handlePaySimulate)
+	s.mux.HandleFunc("/api/pay/manual-confirm", s.handlePayManualConfirm)
 	s.mux.HandleFunc("/api/pay/notify/", s.handlePayNotify)
+	// 待人工确认订单（超管审核开通）
+	s.mux.HandleFunc("/api/admin/orders/manual", s.handleManualConfirmOrders)
 }
 
 // routesAPIKeys 注册租户开放 API Key 管理路由。

@@ -21,6 +21,17 @@ export const zh: Record<string, string> = {
   'usage.colUnitPrice': '单价',
   'usage.colCost': '消耗',
   'usage.noLedger': '暂无明细',
+  'usage.costTotal': '全平台模型成本 (token)',
+  'usage.modelCount': '模型/供应商组合数',
+  'usage.costByModel': '模型 Token 成本核算',
+  'usage.noCost': '暂无成本数据',
+  'usage.orgTitle': '组织用量下钻',
+  'usage.orgHint': '选择组织查看其下（含子组织/部门）全部用户的翻译用量。',
+  'usage.allOrg': '全部组织（租户内全部用户）',
+  'usage.orgTotal': '本层累计：{total} token',
+  'usage.colUser': '用户',
+  'usage.colOrg': '组织/部门',
+  'usage.noUsers': '该组织下暂无用户用量',
 }
 
 export const en: Record<string, string> = {
@@ -45,4 +56,15 @@ export const en: Record<string, string> = {
   'usage.colUnitPrice': 'Unit price',
   'usage.colCost': 'Cost',
   'usage.noLedger': 'No records',
+  'usage.costTotal': 'Platform model cost (token)',
+  'usage.modelCount': 'Model/provider combos',
+  'usage.costByModel': 'Model token cost',
+  'usage.noCost': 'No cost data',
+  'usage.orgTitle': 'Org usage drill-down',
+  'usage.orgHint': 'Pick an org to view usage of all users below it (incl. sub-orgs/departments).',
+  'usage.allOrg': 'All orgs (all users in tenant)',
+  'usage.orgTotal': 'Subtotal: {total} token',
+  'usage.colUser': 'User',
+  'usage.colOrg': 'Org/Dept',
+  'usage.noUsers': 'No user usage in this org',
 }

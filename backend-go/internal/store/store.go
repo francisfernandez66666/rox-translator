@@ -284,6 +284,22 @@ func (s *Store) migrate() error {
 			updated_at TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_webhooks_tenant ON webhooks(tenant_id, enabled)`,
+		// ---------- packages 商业包（免费体验/付费包/增量包） ----------
+		`CREATE TABLE IF NOT EXISTS packages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			code TEXT NOT NULL UNIQUE,
+			name TEXT NOT NULL DEFAULT '',
+			ptype TEXT NOT NULL DEFAULT 'paid',       -- free(免费体验) / paid(付费包) / increment(增量包)
+			sentences INTEGER NOT NULL DEFAULT 0,     -- 包内含翻译句数
+			price_money REAL NOT NULL DEFAULT 0,      -- 售价（元）
+			duration_days INTEGER NOT NULL DEFAULT 30, -- 有效期（天，包月=30）
+			enabled INTEGER NOT NULL DEFAULT 1,       -- 1=上架 0=下架
+			sort_order INTEGER NOT NULL DEFAULT 0,    -- 展示排序（升序）
+			created_at TEXT,
+			updated_at TEXT
+		)`,
+		// 订单关联商业包（订阅付费包/增量包时使用）
+		`CREATE INDEX IF NOT EXISTS idx_packages_code ON packages(code, enabled)`,
 	}
 	for _, stmt := range stmts {
 		// 逐条幂等执行建表语句，失败即中止迁移
@@ -331,6 +347,10 @@ func (s *Store) migrateColumns() error {
 		{"users", "email", "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''"},
 		// 组织类型：root(根组织)/org(组织)/dept(部门)
 		{"orgs", "type", "ALTER TABLE orgs ADD COLUMN type TEXT NOT NULL DEFAULT 'org'"},
+		// 订单关联商业包（订阅付费包/增量包）
+		{"orders", "package_id", "ALTER TABLE orders ADD COLUMN package_id INTEGER NOT NULL DEFAULT 0"},
+		// 静态码支付人工确认标记（用户点「我已付费」后置 1，超管确认到账后清零）
+		{"orders", "manual_confirm", "ALTER TABLE orders ADD COLUMN manual_confirm INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, c := range cols {
 		// 判断列是否存在

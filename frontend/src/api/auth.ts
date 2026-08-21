@@ -33,8 +33,8 @@ export async function authMe(): Promise<LoginResp> {
   return request('/api/auth/me', { headers: authHeaders() })
 }
 
-// 自助注册（可带邀请码/租户信息）
-export async function authRegister(data: { username: string; password: string; code?: string; name?: string; invite?: string; email?: string }): Promise<AdminResp> {
+// 自助注册（可带邀请码/租户信息/行业）
+export async function authRegister(data: { username: string; password: string; code?: string; name?: string; invite?: string; email?: string; industry?: string }): Promise<AdminResp> {
   return request('/api/auth/register', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
@@ -46,4 +46,9 @@ export async function forgotPassword(data: { username?: string; email?: string }
 // 重置密码：校验验证码并设置新密码
 export async function resetPassword(data: { username: string; code: string; new_password: string }): Promise<AdminResp> {
   return request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify(data) })
+}
+
+// 注册行业列表（无需登录，来自超管维护的行业包）
+export async function registerIndustries(): Promise<AdminResp> {
+  return request('/api/register/industries')
 }

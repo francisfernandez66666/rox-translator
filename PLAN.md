@@ -1,8 +1,8 @@
 # 车企智能翻译平台 · 实施计划（P0 MVP + SaaS 化）
 
-> 文档版本：v2.0 ｜ 更新：2026-08-20
-> 状态：**P0 MVP + SaaS 基础层已全部完成并上线**（阶段 1-9 + SaaS 补充项全部完成，见 PROGRESS.md）
-> 下一阶段：彻底 SaaS 化 10 项需求与实施计划见 **SAAS_ROADMAP.md**
+> 文档版本：v2.1 ｜ 更新：2026-08-21
+> 状态：**P0 MVP + SaaS 基础层已全部完成并上线**（阶段 1-9 + SaaS 补充项全部完成，见 PROGRESS.md）；**彻底 SaaS 化 10 项需求已全部完成**（见 SAAS_ROADMAP.md）
+> 下一阶段：真实支付商户号接入 + 商业化运营
 > 代码基础：`backend-go/`（Go 后端，单二进制）＋ `frontend/`（Vue3 + TS）
 > 数据库：**SQLite**（单文件，WAL，内置多租户），知识库 `tm.sqlite3` + 向量 `tm_embeddings.npz`
 > 部署目标：阿里云首尔服务器 43.108.86.140（`/opt/translator/`，与旧项目 quant 完全隔离）

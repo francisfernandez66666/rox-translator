@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"translator/internal/billing"
+	"translator/internal/store"
 	"translator/internal/tenant"
 )
 
@@ -25,6 +26,7 @@ import (
 //   - 租户 QPS + 并发（滑动窗口）
 //   - 每日字符上限（租户 permissions.max_daily_chars，0=不限）
 //   - 强制计费模式（billing_enforced=1）下校验余额，不足则拒绝
+//   - 商业包句数模式（sentence_enforced=1）下校验剩余句数，用尽则提示购买
 //
 // 返回 (租户ID, 释放函数, 错误)。释放函数必须 defer 调用归还并发名额。
 // 参数 r: HTTP 请求（用于解析当前租户）。返回 tid: 生效租户 ID；release: 归还并发名额的函数；错误: 闸门校验失败原因。
@@ -61,7 +63,78 @@ func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 			return tid, release, err
 		}
 	}
+	// 商业包句数模式（sentence_enforced=1）下校验剩余句数：用尽则拒绝并提示购买
+	if v, _ := s.Store.GetConfig("sentence_enforced"); v == "1" {
+		if bal, err := s.Store.GetSentenceBalance(tid); err == nil && bal <= 0 {
+			return tid, release, store.ErrSentenceExhausted
+		}
+	}
 	return tid, release, nil
+}
+
+// countSentences 统计文本的源句数（按换行与中英文句末标点切分，空段忽略）。
+// 参数 text: 源文本；返回句子数量（至少 1，保证计量非零）。
+func countSentences(text string) int64 {
+	// 用换行与句末标点统一替换为分隔符，再按分隔符切分
+	repl := strings.NewReplacer("\n", "。", "\r", "。", "。", "。", "！", "。", "？", "。",
+		".", "。", "!", "。", "?", "。", ";", "。", "；", "。")
+	segs := strings.Split(repl.Replace(text), "。")
+	n := int64(0)
+	for _, seg := range segs {
+		if strings.TrimSpace(seg) != "" {
+			n++
+		}
+	}
+	if n < 1 {
+		n = 1 // 空文本兜底为 1 句
+	}
+	return n
+}
+
+// targetLangCount 解析请求目标语言数量（options.target_langs 数组长度；缺省按 1 计）。
+// 参数 options: 引擎请求选项；返回目标语言个数（至少 1）。
+func targetLangCount(options map[string]interface{}) int64 {
+	if options == nil {
+		return 1
+	}
+	if langs, ok := options["target_langs"].([]interface{}); ok {
+		if len(langs) > 0 {
+			return int64(len(langs))
+		}
+	}
+	return 1
+}
+
+// meterSentences 计量句数：按「源句数 × 目标语言数」从租户句数余额扣减。
+// 失败仅记录日志不阻断（与 token 计量一致）。
+// 参数 r: HTTP 请求；tid: 生效租户 ID；sourceText: 源文本；options: 请求选项。
+func (s *Server) meterSentences(r *http.Request, tid int64, sourceText string, options map[string]interface{}) {
+	if s.Store == nil || sourceText == "" {
+		return
+	}
+	sents := countSentences(sourceText) * targetLangCount(options)
+	if sents <= 0 {
+		return
+	}
+	if _, err := s.Store.DeductSentences(tid, sents); err != nil {
+		// 句数不足：仅记录（已在前置闸门拦截，此处为并发兜底）
+		return
+	}
+}
+
+// meterFileSentences 计量文件翻译句数：按「文件提取段数 × 目标语言数」扣减句数余额。
+// 参数 r: HTTP 请求；tid: 生效租户 ID；segments: 文件提取的文本段数；options: 请求选项。
+func (s *Server) meterFileSentences(r *http.Request, tid int64, segments int, options map[string]interface{}) {
+	if s.Store == nil || segments <= 0 {
+		return
+	}
+	sents := int64(segments) * targetLangCount(options)
+	if sents <= 0 {
+		return
+	}
+	if _, err := s.Store.DeductSentences(tid, sents); err != nil {
+		return // 句数不足：仅记录
+	}
 }
 
 // meterUsage 计量一次用量（成功路径调用；失败仅记日志不阻断）。
@@ -245,6 +318,101 @@ func (s *Server) quotaDaily(tid int64) int64 {
 		return tenant.ParsePerms(t.Permissions).MaxDailyChars
 	}
 	return 0
+}
+
+// ============ 分级用量看板（Req 4） ============
+
+// handleUsageMe 个人用量看板（普通用户个人级）：当前登录用户的累计/当日费用与剩余句数。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求。
+// 返回: success=true 时携带 total（累计费用）/today（当日费用）/count（笔数）/sentence_balance。
+func (s *Server) handleUsageMe(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	total, today, cnt, err := s.Store.UsageByUser(u.TenantID, u.ID)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	bal, _ := s.Store.GetSentenceBalance(u.TenantID)
+	writeJSON(w, 200, map[string]interface{}{
+		"success": true, "total": total, "today": today, "count": cnt, "sentence_balance": bal,
+	})
+}
+
+// handleUsageOrg 组织用量看板（租户管理员）：组织→子组织→用户下钻。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（query: org_id；0/缺省=根组织全部用户）。
+// 返回: success=true 时携带 users 数组（各用户用量，含 org_name）与 org_id。
+func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	tid := s.effTenant(r, u)
+	orgID := int64(0)
+	if v := r.URL.Query().Get("org_id"); v != "" {
+		if oid, perr := parseInt64(v); perr == nil && oid > 0 {
+			orgID = oid
+		}
+	}
+	// 计算组织及其子孙 ID（0=根组织=租户全部用户）
+	orgIDs := []int64{}
+	if orgID > 0 {
+		if err := s.validateOrg(tid, orgID); err != nil {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+		if ids, derr := s.Store.OrgDescendantIDs(tid, orgID); derr == nil {
+			orgIDs = ids
+		}
+	}
+	costByUser, err := s.Store.UsageByOrg(tid, orgIDs)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	// 组装用户明细（含组织名与用量）
+	users, err := s.Store.ListUsersByOrg(tid, orgIDs)
+	if err != nil {
+		users = []*store.User{}
+	}
+	orgs, _ := s.Store.ListOrgs(tid)
+	orgName := map[int64]string{}
+	for _, o := range orgs {
+		orgName[o.ID] = o.Name
+	}
+	type orgUsage struct {
+		*store.User
+		OrgName string `json:"org_name"`
+		Cost    int64  `json:"cost"`
+	}
+	out := make([]orgUsage, 0, len(users))
+	var orgTotal int64
+	for _, usr := range users {
+		c := costByUser[usr.ID]
+		orgTotal += c
+		out = append(out, orgUsage{User: usr, OrgName: orgName[usr.OrgID], Cost: c})
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": orgID, "total": orgTotal})
+}
+
+// handleUsageCost 全平台模型成本核算看板（超级管理员）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求。
+// 返回: success=true 时携带 costs（map[provider/model]=cost）与 quants（map[provider/model]=quantity）。
+func (s *Server) handleUsageCost(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireAdminUser(r); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	costs, quants, err := s.Store.CostByModel()
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "costs": costs, "quants": quants})
 }
 
 var _ = strings.TrimSpace

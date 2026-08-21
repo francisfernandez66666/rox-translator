@@ -31,6 +31,10 @@
       <input v-model="reg.email" :placeholder="t('login.emailPlaceholder')" class="login-input" />
       <input v-model="reg.code" :placeholder="t('login.orgCode')" class="login-input" />
       <input v-model="reg.name" :placeholder="t('login.orgName')" class="login-input" />
+      <select v-model="reg.industry" class="login-input">
+        <option value="">{{ t('login.selectIndustry') }}</option>
+        <option v-for="ind in industries" :key="ind.code" :value="ind.code">{{ ind.name }}</option>
+      </select>
       <input v-model="reg.invite" :placeholder="t('login.invite')" class="login-input" />
       <div v-if="regMsg" class="login-error">{{ regMsg }}</div>
       <button class="login-btn" :disabled="loading" @click="doRegister">{{ loading ? t('login.registering') : t('login.registerAndLogin') }}</button>
@@ -57,9 +61,9 @@
 <script setup lang="ts">
 // 登录组件：mode=home 前台登录，mode=admin 后台登录（需租户管理员及以上角色）
 // Vue 响应式
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 // API：登录 / 自助注册 / 写入 token
-import { login, authRegister, forgotPassword, resetPassword, setAuthToken } from '@/api'
+import { login, authRegister, forgotPassword, resetPassword, setAuthToken, registerIndustries } from '@/api'
 // 国际化：文案取词 + 语言切换
 import { t, lang, toggleLang } from '@/i18n'
 
@@ -67,6 +71,16 @@ import { t, lang, toggleLang } from '@/i18n'
 const props = defineProps<{ mode: 'home' | 'admin' }>()
 // 组件事件：登录成功后向父组件返回用户对象
 const emit = defineEmits<{ ok: [user: unknown] }>()
+
+// 注册行业列表（来自超管维护的行业包）
+const industries = ref<{ code: string; name: string }[]>([])
+// 加载注册行业列表（前台注册面板展示）
+async function loadIndustries() {
+  try {
+    const r = await registerIndustries()
+    if (r.success) industries.value = (r as any).industries || []
+  } catch { industries.value = [] }
+}
 
 // ===== 登录表单状态 =====
 const username = ref('')
@@ -81,7 +95,7 @@ const showReg = ref(false)
 // 注册错误/提示信息
 const regMsg = ref('')
 // 自助注册表单
-const reg = ref({ username: '', password: '', code: '', name: '', invite: '', email: '' })
+const reg = ref({ username: '', password: '', code: '', name: '', invite: '', email: '', industry: '' })
 
 // ===== 忘记密码表单状态 =====
 const showForgot = ref(false)
@@ -158,6 +172,7 @@ async function doRegister() {
     name: reg.value.name || undefined,
     invite: reg.value.invite || undefined,
     email: reg.value.email || undefined,
+    industry: reg.value.industry || undefined,
   })
   loading.value = false
   if (!resp.success) {
@@ -200,6 +215,9 @@ async function doLogin() {
   setAuthToken(resp.token)
   emit('ok', resp.user)
 }
+
+// 挂载：预加载注册行业列表（前台）
+onMounted(loadIndustries)
 </script>
 
 <style scoped>

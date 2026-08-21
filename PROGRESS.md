@@ -1,13 +1,13 @@
 # 改造进度跟踪（PROGRESS）
 
-> 更新：2026-08-20 ｜ 状态：**全部完成并上线生产** ｜ 关联文档：PLAN.md / SAAS_GAP.md / COMMERCIAL_TODO.md / SAAS_ROADMAP.md
+> 更新：2026-08-21 ｜ 状态：**SaaS 化 6 阶段全部完成** ｜ 关联文档：PLAN.md / SAAS_GAP.md / COMMERCIAL_TODO.md / SAAS_ROADMAP.md
 
 ## 当前状态总览
 
-- **阶段**：P0 MVP + SaaS 基础层全部完成，生产已上线（`https://translator.quant-trading.top`）；SaaS 化 6 阶段路线图已启动，**阶段一（语言互译 + 全量 i18n）、阶段二（模型分阶段 + 超管统一维护）已完成，阶段五·KB 后台化（Req6）已完成**；另完成组织架构三级自定义名称
-- **规划中**：彻底 SaaS 化后续 4 阶段（商业包/分级看板/KB 后台化/静态码支付），见 **SAAS_ROADMAP.md**
+- **阶段**：P0 MVP + SaaS 基础层全部完成，生产已上线（`https://translator.quant-trading.top`）；SaaS 化 6 阶段路线图**全部完成**：阶段一（语言互译 + 全量 i18n）、阶段二（模型分阶段 + 超管统一维护）、阶段三（商业包 + 注册行业）、阶段四（分级用量看板）、阶段五（KB 后台化 + 组织架构）、阶段六（静态码/SDK 支付 + 人工确认）
+- **规划中**：真实支付商户号接入（微信/支付宝 SDK 需商户资质）；商业包定价策略
 - **代码**：`backend-go/`（Go 单二进制）+ `frontend/`（Vue3 + TS），已全部加中文注释
-- **数据库**：SQLite（单文件 WAL，19 张业务表 + 幂等迁移）
+- **数据库**：SQLite（单文件 WAL，20 张业务表 + 幂等迁移）
 - **部署**：阿里云 43.108.86.140 `/opt/translator/`，systemd `translator.service`，Caddy 反代
 - **Git**：`github.com:francisfernandez66666/rox-translator.git`（main 分支）
 
@@ -47,6 +47,8 @@
 | `dd6d76f` | **SaaS 阶段二**：模型分阶段配置（Req1）+ 超管统一维护模型（Req3）——`system_config.stage_models` 支持知识库/初翻/evals/审校各自独立模型；引擎 `resolveStageModel(ctx,stage)` 按阶段解析（未配置回退全局/路由）；evals 去硬编码 `Cfg.OnlineModel` 改 `resolveJudge`；租户模型配置收归超管（`handleModels/Save` 仅超管）；新增 `GET/POST /api/admin/models/stage`；前端 Models.vue 增加分阶段模型卡片 + i18n |
 | `1f7ab0c` | **SaaS 阶段五·Req6（KB 后台化）**：前台 ChatWindow 移除 KB 导入弹窗；后台 Kb.vue 增加文件上传（识别→选包→导入）；`recognize-kb`/`import-kb` 加 `requireTenantAdmin` + `package_id` 按包写入（SaveEntry）；包类型权限按角色过滤（租管仅企业/部门包，超管全类型）；新增 `department` 部门包 + 单测 |
 | `e2fbc72` | **组织架构**：根组织/组织/部门三级自定义名称 + 部门层级——`orgs` 表新增 `type` 字段（root/org/dept）迁移；根组织独立建行可重命名（EnsureRootOrg/GetRootOrg/ListOrgs 根优先）；CreateOrg 支持类型（组织=根组织下，部门=组织下）；根组织删除保护；前端 Org.vue 支持根组织重命名+组织/部门图标+按父级推断类型 + 单测 |
+| `040e17c` | 翻译提示词跟随界面语言 + 组织拖拽层级管理——前端传 lang 给后端，translateInstruction 按界面语言生成中/英提示词；组织放开任意深度嵌套，新增 orgs/move 改父级接口（成环校验），Org.vue 支持拖拽调整层级+清晰显示组织/部门 |
+| `ed87c91` | 部署：兼容 Caddyfile（独立 conf + import 行）——translator 站点配置独立于 /etc/caddy/translator.conf，主 Caddyfile 用 import 引入；不受 quant-trading-v2 部署脚本 mv 覆盖影响；部署指南记录兼容方案与日志权限注意事项 |
 
 ## 已完成 · 全部阶段 ✅
 
@@ -115,6 +117,9 @@
 - [x] 组织架构三级自定义名称：`orgs` 表新增 `type` 字段（root/org/dept，幂等迁移）；根组织独立建行（`EnsureRootOrg`/`GetRootOrg`/`ListOrgs` 根优先）可重命名；`CreateOrg` 支持类型（组织=根组织下，部门=组织下）；根组织删除保护；`handleOrgList` 返回 `root` 行；前端 Org.vue 支持根组织重命名 + 组织/部门图标 + 按父级推断类型；单测 `TestOrgHierarchy`
 - [x] 阶段四·邮件通知：余额耗尽/模型熔断 critical 告警 → `alert_email` 收件人（Noop/SMTP）
 - [x] 阶段五·全量回归：后端 4 包单测 + 前端 build + 21 项端到端冒烟（公开页/注册/登录/SSE/计费/Webhook/鉴权/优雅停机）全通过
+- [x] SaaS 阶段三·商业包（Req2）+ 注册行业（Req8）：`packages` 表（free/paid/increment + 句数/价格/有效期/启停）；`tenants.permissions` 扩展 sentence_balance/package_code/subscribed_at；句数计量（源句×目标语言数）`meterSentences`/`meterFileSentences` + `sentence_enforced` 闸门；超管包 CRUD + 全局设置（sentence_enforced/trial_sentences/pay_mode/static_qr_image）；公开定价 `/api/plans` + `/api/me/package` + `/api/package/subscribe`（mock 自动到账 / 静态码人工确认）；注册行业必填 + 开通行业包（FindIndustryByCode/EnsureIndustryPackage）+ 试用句数；订单 `package_id` 列 + `MarkOrderPaid` 商业包发句数；前端注册行业下拉、定价页套餐卡、超管 Packages.vue 面板、Billing 订阅 + 个人句数卡（ChatWindow）；单测 TestPackageCRUD/TestSentenceBalance/TestIndustryPackage/TestPackageOrderManualConfirm
+- [x] SaaS 阶段四·分级用量看板（Req4）：`/api/billing/usage/me`（个人累计/当日/剩余句数）、`/api/billing/usage/org`（组织→子组织→用户下钻）、`/api/billing/usage/cost`（超管 provider/model 成本核算）；store UsageByUser/UsageByOrg/CostByModel；前端 Usage.vue 按角色三档 + ChatWindow 顶栏个人剩余句数
+- [x] SaaS 阶段六·支付改造（Req5）：`pay_mode` 扩展 sdk/static_qr/mock + `static_qr_image`；静态码订单 channel=manual + 收款码回填；`/api/pay/manual-confirm`（「我已付费」→ manual_confirm=1 + critical 告警 + 邮件通知超管）；`/api/admin/orders/manual` 待确认订单 + 超管确认发放；前端收银台按模式切换（图片/文本二维码 + 我已付费按钮）+ 超管待确认列表 + Packages.vue 支付模式配置
 
 ## 关键决策记录
 
@@ -143,11 +148,13 @@
 
 ## 待办（剩余，见 COMMERCIAL_TODO.md）
 
-- [x] 二期在线支付（支付宝/微信）—— 已接入适配器骨架 + mock 完整流程；真实商户号接入后启用
+- [x] 二期在线支付（支付宝/微信）—— 已接入适配器骨架 + mock 完整流程 + 静态码人工确认；真实商户号接入后启用 SDK
 - [x] 翻译完成 webhook 回调（客户 TMS/CI 集成）—— 已上线，支持 HMAC 签名校验
 - [x] 优雅停机（signal.Notify + server.Shutdown）—— 已上线
 - [x] i18n 界面中英切换 —— 已上线（登录/后台导航/工作台顶栏；翻译工作台内部文案次轮接入）→ **全量 i18n 已在 SaaS 阶段一完成（含工作台与全部管理面板）**
 - [x] 商业物料（LICENSE/SLA/定价卡/DPA）—— 已上线（/docs/terms、sla、privacy + /pricing）
+- [x] 商业包 + 静态码支付 —— 已上线（阶段三 + 阶段六）
+- [ ] 真实支付商户号接入（微信/支付宝 SDK）
 - [ ] 生产管理员/超管密钥轮换与审计 —— 需在部署时设置随机 JWT_SECRET/ADMIN_TOKEN 并轮换
 
 ## 问题与风险记录

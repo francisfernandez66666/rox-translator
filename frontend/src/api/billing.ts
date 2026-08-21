@@ -15,6 +15,22 @@ export async function billingUsage(): Promise<AdminResp> {
   return request('/api/billing/usage', { headers: authHeaders() })
 }
 
+// 个人用量看板（普通用户个人级）
+export async function usageMe(): Promise<AdminResp> {
+  return request('/api/billing/usage/me', { headers: authHeaders() })
+}
+
+// 组织用量看板（租户管理员：组织→子组织→用户下钻）
+export async function usageOrg(orgId?: number): Promise<AdminResp> {
+  const q = orgId ? `?org_id=${orgId}` : ''
+  return request(`/api/billing/usage/org${q}`, { headers: authHeaders() })
+}
+
+// 全平台模型成本核算（超级管理员）
+export async function usageCost(): Promise<AdminResp> {
+  return request('/api/billing/usage/cost', { headers: authHeaders() })
+}
+
 // 充值订单列表
 export async function billingOrders(): Promise<AdminResp> {
   return request('/api/billing/orders', { headers: authHeaders() })
@@ -71,4 +87,69 @@ export async function payStatus(orderId: number): Promise<AdminResp> {
 // 模拟支付到账（仅 mock 模式测试用）
 export async function paySimulate(orderId: number): Promise<AdminResp> {
   return request('/api/pay/simulate', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ order_id: orderId }) })
+}
+
+// 静态码支付「我已付费」（人工确认，通知超管审核开通）
+export async function payManualConfirm(orderId: number): Promise<AdminResp> {
+  return request('/api/pay/manual-confirm', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ order_id: orderId }) })
+}
+
+// 待人工确认订单列表（超管审核开通）
+export async function manualConfirmOrders(): Promise<AdminResp> {
+  return request('/api/admin/orders/manual', { headers: authHeaders() })
+}
+
+// ==================== 商业包（套餐） ====================
+
+// 公开定价页：列出上架中的商业包（无需登录）
+export async function plans(): Promise<AdminResp> {
+  return request('/api/plans')
+}
+
+// 我的包信息：当前包 + 剩余句数（登录用户）
+export async function myPackage(): Promise<AdminResp> {
+  return request('/api/me/package', { headers: authHeaders() })
+}
+
+// 订阅/兑换商业包（创建待支付订单或直接发放免费包）
+export async function packageSubscribe(code: string): Promise<AdminResp> {
+  return request('/api/package/subscribe', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ code }) })
+}
+
+// ==================== 商业包管理（super_admin） ====================
+
+// 列出全部商业包（含下架）
+export async function adminPackages(): Promise<AdminResp> {
+  return request('/api/admin/packages', { headers: authHeaders() })
+}
+
+// 创建商业包
+export async function adminPackageCreate(data: {
+  code: string; name: string; ptype: string; sentences: number; price_money?: number; duration_days?: number; sort_order?: number
+}): Promise<AdminResp> {
+  return request('/api/admin/packages/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
+// 更新商业包（改名/调价/改句数/启停）
+export async function adminPackageUpdate(data: {
+  id: number; name?: string; ptype?: string; sentences?: number; price_money?: number; duration_days?: number; enabled?: number; sort_order?: number
+}): Promise<AdminResp> {
+  return request('/api/admin/packages/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
+// 删除商业包
+export async function adminPackageDelete(id: number): Promise<AdminResp> {
+  return request('/api/admin/packages/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+}
+
+// 读取商业包全局设置（句数强制开关/试用句数/支付模式/静态码）
+export async function adminPackageSettings(): Promise<AdminResp> {
+  return request('/api/admin/packages/settings', { headers: authHeaders() })
+}
+
+// 保存商业包全局设置
+export async function adminPackageSettingsSave(data: {
+  sentence_enforced?: string; trial_sentences?: number; pay_mode?: string; static_qr_image?: string
+}): Promise<AdminResp> {
+  return request('/api/admin/packages/settings/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
