@@ -304,6 +304,32 @@ func (s *Store) migrate() error {
 		)`,
 		// 订单关联商业包（订阅付费包/增量包时使用）
 		`CREATE INDEX IF NOT EXISTS idx_packages_code ON packages(code, enabled)`,
+		// ---------- jobs 异步任务账本（direct 执行器 / 未来 kafka 驱动共用） ----------
+		`CREATE TABLE IF NOT EXISTS jobs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			type TEXT NOT NULL DEFAULT '',                -- 任务类型（ticket_run 等）
+			payload TEXT NOT NULL DEFAULT '{}',           -- JSON 载荷（如 {"ticket_id":1}）
+			status TEXT NOT NULL DEFAULT 'queued',        -- queued/running/done/failed/dead
+			attempts INTEGER NOT NULL DEFAULT 0,          -- 已尝试次数
+			max_attempts INTEGER NOT NULL DEFAULT 3,      -- 最大尝试次数（超限进 dead）
+			leased_by TEXT NOT NULL DEFAULT '',           -- 占用 worker 标识
+			leased_at TEXT NOT NULL DEFAULT '',           -- 占用时间（可见性超时判定）
+			timeout_sec INTEGER NOT NULL DEFAULT 1800,    -- 租约超时秒数
+			error TEXT NOT NULL DEFAULT '',               -- 最近一次失败原因
+			created_at TEXT,
+			updated_at TEXT
+		)`,
+		// ---------- notifications 站内信（通用通知中心） ----------
+		`CREATE TABLE IF NOT EXISTS notifications (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL DEFAULT 0,           -- 接收用户 ID
+			title TEXT NOT NULL DEFAULT '',               -- 标题
+			body TEXT NOT NULL DEFAULT '',                -- 正文
+			ref_type TEXT NOT NULL DEFAULT '',            -- 关联类型（ticket/alert...）
+			ref_id INTEGER NOT NULL DEFAULT 0,            -- 关联 ID
+			read_at TEXT NOT NULL DEFAULT '',             -- 已读时间（空=未读）
+			created_at TEXT
+		)`,
 	}
 	for _, stmt := range stmts {
 		// 逐条幂等执行建表语句，失败即中止迁移
@@ -361,6 +387,8 @@ func (s *Store) migrateColumns() error {
 		{"tm_segments", "priority", "ALTER TABLE tm_segments ADD COLUMN priority INTEGER NOT NULL DEFAULT 9"},
 		// 检索条目归属知识库包（0=无归属/历史兜底数据）；停用/启用/统计按此精确摘除与回写
 		{"tm_segments", "pack_id", "ALTER TABLE tm_segments ADD COLUMN pack_id INTEGER NOT NULL DEFAULT 0"},
+		// 工单结果文件路径（原格式回写产物或 xlsx 对照表）
+		{"tickets", "result_path", "ALTER TABLE tickets ADD COLUMN result_path TEXT NOT NULL DEFAULT ''"},
 		// 安全句结构化字段（Gate 闸门）：类型/替换词/审核状态/来源
 		{"kb_safety_phrases", "kind", "ALTER TABLE kb_safety_phrases ADD COLUMN kind TEXT NOT NULL DEFAULT 'style'"},
 		{"kb_safety_phrases", "replacement", "ALTER TABLE kb_safety_phrases ADD COLUMN replacement TEXT NOT NULL DEFAULT ''"},

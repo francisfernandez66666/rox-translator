@@ -3,7 +3,7 @@
 // 职责：翻译工单 CRUD、运行流程、详情、审批（批准/驳回）
 // ============================================================================
 
-import { request, authHeaders } from './core'
+import { request, authHeaders, API_BASE, type AdminResp } from './core'
 
 // 翻译工单信息
 export interface Ticket {
@@ -39,19 +39,10 @@ export async function ticketList(mine?: boolean): Promise<TicketResp> {
 }
 
 // 创建翻译工单
-export async function ticketCreate(data: { title: string; source_text: string; target_langs: string }): Promise<TicketResp> {
-  return request('/api/tickets/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
-}
 
 // 运行工单翻译流程
-export async function ticketRun(id: number): Promise<TicketResp> {
-  return request('/api/tickets/run', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
-}
 
 // 工单详情
-export async function ticketDetail(id: number): Promise<TicketResp> {
-  return request(`/api/tickets/detail?id=${id}`, { headers: authHeaders() })
-}
 
 // ==================== 审批 ====================
 
@@ -66,4 +57,65 @@ export async function approveAction(id: number, action: 'approve' | 'reject', re
     method: 'POST', headers: authHeaders(),
     body: JSON.stringify({ id, action, reason, suggestion, approved_text: approvedText }),
   })
+}
+// ==================== 异步工单（队列模式）+ 通知中心 ====================
+
+// 我的工单列表（隐私隔离：非超管仅返回自己创建的）
+export async function myTickets(): Promise<TicketResp> {
+  return request('/api/tickets', { headers: authHeaders() })
+}
+
+// 创建文本翻译工单（入队即返回 ticket_no）
+export async function ticketCreate(data: { title: string; source_text: string; target_langs: string }): Promise<TicketResp> {
+  return request('/api/tickets/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
+// 运行工单（异步入队执行五步编排）
+export async function ticketRun(id: number): Promise<TicketResp> {
+  return request('/api/tickets/run', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+}
+
+// 工单详情（含步骤状态轨迹）
+export async function ticketDetail(id: number): Promise<TicketResp> {
+  return request(`/api/tickets/detail?id=${id}`, { headers: authHeaders() })
+}
+
+// 工单结果下载地址（需带鉴权头，用 fetch→blob 触发保存）
+export async function ticketDownload(id: number): Promise<void> {
+  const r = await fetch(`${API_BASE}/api/tickets/download?id=${id}`, { headers: authHeaders() })
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`
+    try { msg = (await r.json()).message || msg } catch {}
+    throw new Error(msg)
+  }
+  // 从 Content-Disposition 提取文件名；无则用默认名
+  const cd = r.headers.get('Content-Disposition') || ''
+  const m = cd.match(/filename="?([^";]+)"?/)
+  const blob = await r.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = m ? m[1] : `ticket_${id}.xlsx`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// 我的站内信列表
+export async function notifications(): Promise<AdminResp> {
+  return request('/api/notifications', { headers: authHeaders() })
+}
+
+// 未读数量
+export async function notificationsUnread(): Promise<AdminResp> {
+  return request('/api/notifications/unread', { headers: authHeaders() })
+}
+
+// 标记单条已读
+export async function notificationRead(id: number): Promise<AdminResp> {
+  return request('/api/notifications/read', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+}
+
+// 全部已读
+export async function notificationsReadAll(): Promise<AdminResp> {
+  return request('/api/notifications/read-all', { method: 'POST', headers: authHeaders(), body: JSON.stringify({}) })
 }

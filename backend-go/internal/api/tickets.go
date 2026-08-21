@@ -11,6 +11,12 @@ package api
 //   - 工单操作均写入审计；工单查询全部限定生效租户（租户隔离）
 
 import (
+	"fmt"
+	"github.com/xuri/excelize/v2"
+	"time"
+	"sort"
+	"path/filepath"
+	"os"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -27,14 +33,14 @@ import (
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（查询参数 mine=1 仅显示本人创建的工单）。
 // 返回: success=true 时携带 tickets 数组。
 func (s *Server) handleTickets(w http.ResponseWriter, r *http.Request) {
-	// 鉴权：需租户管理员及以上权限
-	u, err := s.requireTenantAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	// 鉴权：登录用户即可查看工单（隐私：非超管强制仅自己的工单）
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
-	// 查询参数：mine=1 仅列出当前用户创建的工单
-	onlyMine := r.URL.Query().Get("mine") == "1"
+	// 隐私隔离：除超管外，一律只返回当前用户创建的工单（涉及用户隐私）
+	onlyMine := !auth.IsSuperAdmin(u)
 	// 租户隔离：仅查询生效租户下的工单
 	tickets, err := s.Store.ListTickets(s.effTenant(r, u), u.ID, onlyMine)
 	if err != nil {
@@ -48,10 +54,10 @@ func (s *Server) handleTickets(w http.ResponseWriter, r *http.Request) {
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 title/source_text/target_langs）。
 // 返回: success=true 时携带新工单对象。
 func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
-	// 鉴权：需租户管理员及以上权限
-	u, err := s.requireTenantAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	// 鉴权：登录用户即可创建工单（隐私隔离：仅创建者可见）
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
 	var req struct {
@@ -83,10 +89,10 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 // 返回: success=true 时携带运行后的工单对象（含流程结果）。
 // 流程：取工单 → 配额闸门 → 置为进行中 → 执行编排 → 计量 → 清空驳回意见。
 func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
-	// 鉴权：需租户管理员及以上权限
-	u, err := s.requireTenantAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	// 鉴权：登录用户；隐私：仅创建者或超管可运行
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
 	var req struct {
@@ -102,50 +108,41 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不存在"})
 		return
 	}
+	// 隐私校验：非创建者且非超管禁止运行他人工单
+	if t.CreatedBy != u.ID && !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作他人工单"})
+		return
+	}
 	// 配额闸门：QPS/并发/每日上限/余额校验（不通过则拒绝运行）
-	tid, release, gateErr := s.gateUsage(r)
+	_, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": gateErr.Error()})
 		return
 	}
-	wf := s.workflow()
-	if wf == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工作流未初始化"})
+	// ★ 异步入队：立即返回 ticket_no，worker 后台执行五步编排（大文件不阻塞 HTTP）
+	if s.TicketSvc == nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单服务未初始化"})
 		return
 	}
-	// 置为进行中状态
-	t.Status = store.TicketInProgress
+	t.Status = store.TicketQueued
 	_ = s.Store.UpdateTicket(t)
-	// 执行流程编排（FlowDef 定义的各步骤）
-	err = wf.Executor.Execute(r.Context(), t, func(step string, ok bool, errMsg string) {})
-	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error(), "ticket": t})
-		// 失败计入指标（ticket 类型失败）
-		s.metrics.countTranslate("ticket", false)
+	if _, err := s.TicketSvc.EnqueueTicketRun(r.Context(), t.ID); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "入队失败: " + err.Error()})
 		return
 	}
-	// 计量：工单翻译按源文本字符数计量（含驳回重翻，每次运行都计量）
-	s.meterUsage(r, tid, "translate", int64(len([]rune(t.SourceText))))
-	s.metrics.countTranslate("ticket", true)
-	// 驳回重翻循环结束：清空驳回意见，避免下次运行重复重翻
-	if t.RejectReason != "" {
-		t.RejectReason = ""
-		_ = s.Store.UpdateTicket(t)
-	}
-	// 运行审计
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_run", "tickets", t.TicketNo)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t})
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_enqueue", "tickets", t.TicketNo)
+	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t, "queued": true})
 }
 
 // handleTicketDetail 工单详情接口（含状态轨迹，tenant_admin 及以上）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（查询参数 id）。
 // 返回: success=true 时携带 ticket（工单）与 states（状态轨迹数组）。
 func (s *Server) handleTicketDetail(w http.ResponseWriter, r *http.Request) {
-	// 鉴权：需租户管理员及以上权限
-	u, err := s.requireTenantAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	// 鉴权：登录用户；隐私=创建者或超管
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
 	// 解析工单 ID（来自查询参数）
@@ -161,9 +158,118 @@ func (s *Server) handleTicketDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不存在"})
 		return
 	}
+	// 隐私校验：非创建者且非超管不可见他人工单详情
+	if t.CreatedBy != u.ID && !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权查看他人工单"})
+		return
+	}
 	// 附带状态轨迹（流程步骤执行历史）
 	states, _ := s.Store.TicketStates(id)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t, "states": states})
+}
+
+// handleTicketDownload 下载工单翻译结果（创建者或超管）。
+// 文件工单：流式返回原格式回写产物（docx/xlsx/pptx）；
+// 纯文本工单：动态生成 xlsx 对照表（源文+各语言列）。
+func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	idStr := r.URL.Query().Get("id")
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+	if id <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少工单 id"})
+		return
+	}
+	t, err := s.Store.GetTicket(id, s.effTenant(r, u))
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不存在"})
+		return
+	}
+	if t.CreatedBy != u.ID && !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权下载他人工单结果"})
+		return
+	}
+	if t.Status != store.TicketCompleted {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单尚未完成"})
+		return
+	}
+	baseName := t.TicketNo
+	if baseName == "" {
+		baseName = fmt.Sprintf("ticket_%d", t.ID)
+	}
+	// ① 原格式回写产物直接流式返回
+	if t.ResultPath != "" {
+		f, ferr := os.Open(t.ResultPath)
+		if ferr == nil {
+			defer f.Close()
+			w.Header().Set("Content-Disposition", `attachment; filename="`+baseName+filepath.Ext(t.ResultPath)+`"`)
+			http.ServeContent(w, r, filepath.Base(t.ResultPath), time.Now(), f)
+			return
+		}
+		// 结果文件丢失 → 落入 xlsx 对照表兜底
+	}
+	// ② 纯文本工单：从 FinalResult 解析译文生成 xlsx 对照表
+	var payload struct {
+		Translations map[string]string `json:"translations"`
+	}
+	_ = json.Unmarshal([]byte(t.FinalResult), &payload)
+	if len(payload.Translations) == 0 {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "暂无可下载的翻译结果"})
+		return
+	}
+	f := excelize.NewFile()
+	sheet := "Sheet1"
+	langs := make([]string, 0, len(payload.Translations))
+	for lc := range payload.Translations {
+		langs = append(langs, lc)
+	}
+	sort.Strings(langs)
+	_ = f.SetSheetName(sheet, sheet)
+	headers := []string{"source_text"}
+	for _, lc := range langs {
+		headers = append(headers, lc)
+	}
+	for i, h := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		_ = f.SetCellValue(sheet, cell, h)
+	}
+	// 源文可能多段（换行分隔），逐段成行；单段则一行
+	srcLines := strings.Split(t.SourceText, "\n")
+	row := 2
+	for _, line := range srcLines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		_ = f.SetCellValue(sheet, cellName(1, row), line)
+		for i, lc := range langs {
+			_ = f.SetCellValue(sheet, cellName(i+2, row), payload.Translations[lc])
+		}
+		row++
+	}
+	if row == 2 {
+		_ = f.SetCellValue(sheet, cellName(1, 2), t.SourceText)
+		for i, lc := range langs {
+			_ = f.SetCellValue(sheet, cellName(i+2, 2), payload.Translations[lc])
+		}
+	}
+	buf, err := f.WriteToBuffer()
+	if err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "生成 xlsx 失败"})
+		return
+	}
+	w.Header().Set("Content-Disposition", `attachment; filename="`+baseName+`.xlsx"`)
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	_, _ = w.Write(buf.Bytes())
+}
+
+// cellName 行列号转单元格名（excelize.CoordinatesToCellName 的本地简写）。
+func cellName(col, row int) string {
+	n, _ := excelize.CoordinatesToCellName(col, row)
+	return n
 }
 
 // ============ 审批（approver + admin） ============
