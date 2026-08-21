@@ -39,7 +39,7 @@
 
       <div class="tp-row">
         <label>{{ t('tk.langsLabel') }}</label>
-        <input v-model="form.langs" :placeholder="t('tk.langsPlaceholder')" class="ad-input tp-langs" />
+        <LangMultiSelect v-model="selectedLangs" />
         <button class="ad-btn ad-btn-green tp-submit" :disabled="creating" @click="create">
           {{ creating ? t('tk.submitting') : t('tk.create') }}
         </button>
@@ -90,15 +90,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import LangMultiSelect from './LangMultiSelect.vue'
 import { myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail, ticketDownload } from '@/api'
 import { t } from '@/i18n'
 import { fmtTime } from './admin/ui'
 
 // 创建表单与模式
 const mode = ref<'text' | 'file'>('text')
-const form = ref({ title: '', text: '', langs: 'en' })
+const form = ref({ title: '', text: '' })
+// 目标语言（与工作台同款多选选择器；默认 en）
+const selectedLangs = ref<string[]>(['en'])
 const file = ref<File | null>(null)
+// 提交用语言串（逗号分隔）
+const langsJoined = computed(() => (selectedLangs.value.length ? selectedLangs.value.join(',') : 'en'))
 const creating = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 
@@ -122,18 +127,18 @@ async function create() {
       r = await ticketCreate({
         title: form.value.title.trim() || t('tk.defaultTitle'),
         source_text: form.value.text,
-        target_langs: form.value.langs,
+        target_langs: langsJoined.value,
       })
     } else {
       if (!file.value) return
       r = await ticketCreateFile(file.value, {
         title: form.value.title.trim(),
-        target_langs: form.value.langs,
+        target_langs: langsJoined.value,
       })
     }
     if (!r.success) { alert(r.message); return }
     // 重置表单
-    form.value = { title: '', text: '', langs: form.value.langs }
+    form.value = { title: '', text: '' }
     file.value = null
     if (fileInput.value) fileInput.value.value = ''
     await load()
