@@ -4,8 +4,8 @@
 
 ## 当前状态总览
 
-- **阶段**：P0 MVP + SaaS 基础层全部完成，生产已上线（`https://translator.quant-trading.top`）；SaaS 化 6 阶段路线图已启动，**阶段一（语言互译 + 全量 i18n）已完成**
-- **规划中**：彻底 SaaS 化后续 5 阶段（模型分阶段/商业包/分级看板/KB 后台化/静态码支付），见 **SAAS_ROADMAP.md**
+- **阶段**：P0 MVP + SaaS 基础层全部完成，生产已上线（`https://translator.quant-trading.top`）；SaaS 化 6 阶段路线图已启动，**阶段一（语言互译 + 全量 i18n）与阶段二（模型分阶段 + 超管统一维护）已完成**
+- **规划中**：彻底 SaaS 化后续 4 阶段（商业包/分级看板/KB 后台化/静态码支付），见 **SAAS_ROADMAP.md**
 - **代码**：`backend-go/`（Go 单二进制）+ `frontend/`（Vue3 + TS），已全部加中文注释
 - **数据库**：SQLite（单文件 WAL，19 张业务表 + 幂等迁移）
 - **部署**：阿里云 43.108.86.140 `/opt/translator/`，systemd `translator.service`，Caddy 反代
@@ -44,6 +44,7 @@
 | `48afb94` | 修复生产级竞态：metrics 计数映射并发读写崩溃（concurrent map writes），RWMutex + 并发压测验证 |
 | `6c0ae58` | 全量补齐中文注释（前后端）：后端 5 文件 + 前端 22 文件（Vue/TS），0 缺注释函数/定义 |
 | `f767444` | **SaaS 阶段一**：语言互译（Req10）+ 全量 i18n（Req9）——后端全链路 sourceLang 透传（translateInstruction 支持 en→zh、workflow KB 按实际源语言匹配）+ 前端 i18n 重构为 i18n/ 分面板字典（530+ 中英文案键，全量覆盖工作台+12 管理面板）+ ChatWindow 源语言选择器 |
+| `dd6d76f` | **SaaS 阶段二**：模型分阶段配置（Req1）+ 超管统一维护模型（Req3）——`system_config.stage_models` 支持知识库/初翻/evals/审校各自独立模型；引擎 `resolveStageModel(ctx,stage)` 按阶段解析（未配置回退全局/路由）；evals 去硬编码 `Cfg.OnlineModel` 改 `resolveJudge`；租户模型配置收归超管（`handleModels/Save` 仅超管）；新增 `GET/POST /api/admin/models/stage`；前端 Models.vue 增加分阶段模型卡片 + i18n |
 
 ## 已完成 · 全部阶段 ✅
 
@@ -106,6 +107,8 @@
 - [x] 阶段四·i18n：`frontend/src/i18n.ts` 中英双字典（登录/后台导航/工作台顶栏）+ 语言切换按钮
 - [x] SaaS 阶段一·语言互译：后端 sourceLang 自动检测/显式指定全链路透传，任意语言互译（en→zh/zh→fr/…）；`translateInstruction` 支持全部方向
 - [x] SaaS 阶段一·全量 i18n：`i18n.ts` 重构为 `frontend/src/i18n/`（index.ts 合并 + panels/*.ts 分面板字典 + `tpl()` 插值）；覆盖登录/导航/工作台/MessageBubble/App + 12 个 admin 面板 + 共享工具函数，共 530+ 文案键（中英成对）；ChatWindow 新增源语言选择器
+- [x] SaaS 阶段二·模型分阶段：`system_config.stage_models` JSON（kb_match/ai_initial/evals/review 各 {provider,api_base,api_key,model}）；引擎 `resolveStageModel(ctx,stage)` 按阶段解析、未配置回退 `resolveModel`、api_key 留空继承全局；`TranslateOne`(kb_match)/`TranslateLangsInto`/`TranslateOtherLang`/`TranslateWithFeedback`/批量兜底(ai_initial)/`ReviewTranslation`(review)/evals(evals) 全链路传阶段；阶段模型独立时不走路由降级链
+- [x] SaaS 阶段二·超管统一维护：`handleModels`/`handleModelsSave` 改 `requireAdminUser`（收掉租户管理员模型配置权限，策略参数仍租管可配）；新增 `handleStageModels`/`handleStageModelsSave`（`GET/POST /api/admin/models/stage`，掩码密钥）；前端 Models.vue 增加「分阶段模型」卡片（超管可见）+ i18n 词条；单测 `TestResolveStageModel`/`TestResolveStageModelKeyInherit`
 - [x] 阶段四·邮件通知：余额耗尽/模型熔断 critical 告警 → `alert_email` 收件人（Noop/SMTP）
 - [x] 阶段五·全量回归：后端 4 包单测 + 前端 build + 21 项端到端冒烟（公开页/注册/登录/SSE/计费/Webhook/鉴权/优雅停机）全通过
 
@@ -132,6 +135,7 @@
 | 2026-08-20 | 备份策略 | `VACUUM INTO` 在线快照，启动即备 + 每 24h；保留最近 7 份（可配） |
 | 2026-08-20 | 告警通知 | 余额耗尽/模型熔断 → 邮件（alert_email 收件人）+ 全部写 alerts 表 |
 | 2026-08-20 | Webhook 安全 | HMAC-SHA256 签名（X-Signature 头）+ 异步投递重试 3 次指数退避 |
+| 2026-08-21 | 阶段模型 | 各流程阶段（kb_match/ai_initial/evals/review）经 `stage_models` 独立配置；api_key 留空继承全局；未配置阶段回退全局/路由；租户模型配置收归超管 |
 
 ## 待办（剩余，见 COMMERCIAL_TODO.md）
 

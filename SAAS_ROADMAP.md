@@ -1,7 +1,7 @@
 # 彻底 SaaS 化改造路线图（10 项）
 
 > 创建：2026-08-20 ｜ 来源：用户十项需求评审 + 代码库现状调研 + 四项关键决策
-> 状态：**规划完成，待实施** ｜ 关联文档：PLAN.md / SAAS_GAP.md / COMMERCIAL_TODO.md / PROGRESS.md / 部署指南.md
+> 状态：**阶段一（互译+i18n）与阶段二（模型分阶段+超管维护）已完成，阶段三起待实施** ｜ 关联文档：PLAN.md / SAAS_GAP.md / COMMERCIAL_TODO.md / PROGRESS.md / 部署指南.md
 
 ---
 
@@ -76,7 +76,7 @@
 
 ---
 
-## 五、阶段二：模型分阶段配置 + 超管统一维护（Req 1 + Req 3）
+## 五、阶段二：模型分阶段配置 + 超管统一维护（Req 1 + Req 3）✅ 已完成
 
 ### 后端
 - 新增 `system_config stage_models`（JSON）：
