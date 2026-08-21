@@ -85,6 +85,7 @@
                 <button class="ad-btn-sm" @click="resetPwd(u)">{{ t('org.resetPwd') }}</button>
                 <button v-if="u.status === 'disabled'" class="ad-btn-sm" @click="setStatus(u, 'active')">{{ t('org.enable') }}</button>
                 <button v-else class="ad-btn-sm ad-btn-red" @click="setStatus(u, 'disabled')">{{ t('org.disable') }}</button>
+                <button class="ad-btn-sm ad-btn-red" @click="deleteUser(u)">✕</button>
               </td>
             </tr>
             <tr v-if="!orgUserList.length"><td colspan="7" class="ad-empty">{{ t('org.noUsers') }}</td></tr>
@@ -93,7 +94,7 @@
 
         <!-- 开通用户 -->
         <div class="ad-chart-card" style="margin-top:16px">
-          <h3>{{ tpl('org.addUser', { org: selectedOrg === 0 ? t('org.rootOrg') : selectedOrgName }) }}</h3>
+          <h3>{{ tpl('org.addUser', { org: nuOrgId === 0 ? (isPlatformView ? t('admin.platformRoot') : t('org.rootOrg')) : (orgs.find(x => x.id === nuOrgId)?.name || '') }) }}</h3>
           <div class="ad-row">
             <input v-model="nu.username" :placeholder="t('org.usernamePlaceholder')" class="ad-input ad-mini-w" />
             <input v-model="nu.password" :placeholder="t('org.passPlaceholder')" class="ad-input" />
@@ -101,6 +102,13 @@
             <select v-model="nu.role" class="ad-input">
               <option v-for="r in roleOptions" :key="r" :value="r">{{ t('users.role.' + r) }}</option>
             </select>
+          </div>
+          <div class="ad-row" style="margin-top:8px">
+            <select v-model.number="nuOrgId" class="ad-input" style="flex:1">
+              <option :value="0">{{ isPlatformView ? t('admin.platformRoot') : t('org.rootOption') }}</option>
+              <option v-for="o in flatTree" :key="o.id" :value="o.id">{{ orgPath(o) }}</option>
+            </select>
+            <span class="ad-hint">{{ t('org.orgHint') }}</span>
             <button class="ad-btn ad-btn-green" :disabled="creating" @click="createUser">{{ creating ? t('org.creating') : t('org.addUserBtn') }}</button>
           </div>
         </div>
@@ -113,7 +121,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { t, tpl } from '@/i18n'
 import { orgList, orgCreate, orgRename, orgMove, orgDelete, orgUsers, type OrgInfo } from '@/api'
-import { adminUserCreate, adminUserUpdate, adminUserResetPassword } from '@/api'
+import { adminUserCreate, adminUserUpdate, adminUserResetPassword, adminUserDelete } from '@/api'
 import { activeTenantId, tenantList, isSuper, myLevel, roleOptions, roleName } from './store'
 import { fmtTime } from './ui'
 
@@ -140,6 +148,8 @@ const orgUserList = ref<any[]>([])
 const creating = ref(false)
 // 新用户信息：用户名/密码/显示名/角色
 const nu = ref({ username: '', password: '', display_name: '', role: 'user' })
+// 新用户归属组织（0=根组织/平台；默认跟随当前选中节点）
+const nuOrgId = ref(0)
 
 // 根组织名称（优先用根组织行的自定义名称，回退租户名）
 const rootOrgName = computed(() => {
@@ -232,6 +242,7 @@ async function loadOrgUsers() {
 // 参数 id: 目标组织 ID；无返回。
 function selectOrg(id: number) {
   selectedOrg.value = id
+  nuOrgId.value = id
   loadOrgUsers()
 }
 
@@ -248,7 +259,7 @@ async function createUser() {
       password: nu.value.password,
       display_name: nu.value.display_name.trim() || nu.value.username.trim(),
       role: nu.value.role,
-      org_id: selectedOrg.value || undefined,
+      org_id: nuOrgId.value || undefined,
     })
     if (!r.success) { alert(r.message); return }
     alert(tpl('org.userCreated', { name: nu.value.username }))
@@ -271,6 +282,14 @@ async function resetPwd(u: any) {
 // 启用/停用用户
 async function setStatus(u: any, status: string) {
   const r = await adminUserUpdate(u.id, { display_name: u.display_name, role: u.role, status })
+  if (!r.success) { alert(r.message); return }
+  await loadAll()
+}
+
+// 删除用户账号（不可删自己；超管受保护）
+async function deleteUser(u: any) {
+  if (!confirm(tpl('org.deleteUserConfirm', { name: u.username }))) return
+  const r = await adminUserDelete(u.id)
   if (!r.success) { alert(r.message); return }
   await loadAll()
 }

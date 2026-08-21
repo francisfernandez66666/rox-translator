@@ -20,6 +20,11 @@ export async function adminUserUpdate(id: number, data: { display_name: string; 
   return request('/api/admin/users/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, ...data }) })
 }
 
+// 删除用户账号（超管/租管/部门管理员按范围）
+export async function adminUserDelete(id: number): Promise<AdminResp> {
+  return request('/api/admin/users/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+}
+
 // 重置用户密码
 export async function adminUserResetPassword(id: number, password: string): Promise<AdminResp> {
   return request('/api/admin/users/reset-password', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, password }) })
