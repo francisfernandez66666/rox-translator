@@ -27,6 +27,25 @@ export async function modelRoutesSave(data: { routes: { provider: string; api_ba
   return request('/api/admin/models/routes/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
+// ==================== 各流程阶段模型配置（super_admin） ====================
+
+export interface StageModelConfig {
+  provider: string
+  api_base: string
+  api_key: string
+  model: string
+}
+
+// 读取各流程阶段模型配置（kb_match/ai_initial/evals/review）
+export async function stageModels(): Promise<AdminResp> {
+  return request('/api/admin/models/stage', { headers: authHeaders() })
+}
+
+// 保存各流程阶段模型配置（全量提交；某项 api_base/model 为空=清空该阶段）
+export async function stageModelsSave(stages: Record<string, StageModelConfig>): Promise<AdminResp> {
+  return request('/api/admin/models/stage/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ stages }) })
+}
+
 // 读取匹配策略参数
 export async function adminPolicy(): Promise<AdminResp> {
   return request('/api/admin/policy', { headers: authHeaders() })

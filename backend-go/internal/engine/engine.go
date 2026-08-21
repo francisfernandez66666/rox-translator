@@ -20,6 +20,7 @@ import (
 	"translator/internal/evals"
 	"translator/internal/kb"
 	"translator/internal/llm"
+	"translator/internal/store"
 	"translator/internal/tenant"
 )
 
@@ -30,6 +31,7 @@ type Engine struct {
 	DB    *kb.KBDatabase   // 知识库数据库（精确/模糊/译文对/多租户行查询）
 	Index *kb.Index        // 语义检索索引（向量 + 目标语言过滤 + 租户隔离）
 	Ten   *tenant.Store    // 租户存储（查询租户级模型配置与策略阈值）
+	St    *store.Store     // 平台存储（读取 system_config：模型路由/阶段模型，可选）
 	Evals *evals.Evaluator // 评估器（质量评估用，可选）
 
 	cjkCache         map[string]int64           // 兼容旧字段（保留）：默认租户 CJK→rowID 缓存
@@ -322,14 +324,18 @@ func cjkOverlap(a, b string) float64 {
 }
 
 // TranslateOne 翻译单条文本（四段匹配），等价 lib.translate_one
-// langOnly=true 时只用 KB（translate_file 第一遍用）；否则 KB+模型兜底
-func (e *Engine) TranslateOne(ctx context.Context, zhText string, targetLangs []string, langOnly bool) (*TranslateResult, error) {
+// langOnly=true 时只用 KB（translate_file 第一遍用）；否则 KB+模型兜底。
+// 参数 stage: 流程阶段（KB 兜底翻译默认 config.StageKBMatch）。
+func (e *Engine) TranslateOne(ctx context.Context, zhText string, targetLangs []string, langOnly bool, stage string) (*TranslateResult, error) {
 	res := &TranslateResult{
 		Translations: map[string]string{},
 		TargetLangs:  targetLangs,
 	}
 	tid := e.tenantID(ctx)
 	srcLang := DetectSourceLang(zhText) // 检测实际源语言（zh/en），供指令与 KB 匹配使用
+	if stage == "" {
+		stage = config.StageKBMatch
+	}
 
 	// 非中文源 → 逐语言模型直翻
 	if srcLang != "zh" {
@@ -338,7 +344,7 @@ func (e *Engine) TranslateOne(ctx context.Context, zhText string, targetLangs []
 		if langOnly {
 			return res, nil
 		}
-		e.translateLangsConcurrent(ctx, zhText, targetLangs, res.Examples, res.Translations, srcLang)
+		e.translateLangsConcurrent(ctx, zhText, targetLangs, res.Examples, res.Translations, srcLang, stage)
 		return res, nil
 	}
 
@@ -448,15 +454,15 @@ func (e *Engine) TranslateOne(ctx context.Context, zhText string, targetLangs []
 			e.OnPhase("ai_generating")
 		}
 	}
-	e.translateLangsConcurrent(ctx, zhText, targetLangs, res.Examples, res.Translations, srcLang)
+	e.translateLangsConcurrent(ctx, zhText, targetLangs, res.Examples, res.Translations, srcLang, stage)
 	res.NeedModel = nil
 	return res, nil
 }
 
 // translateLangsConcurrent 并发翻译多个目标语言（跳过已翻译的）
 // 用信号量限制并发，避免打爆 LLM API；结果写入 out（map 并发写由内部加锁保护）。
-// 参数 sourceLang: 实际源语言代码（默认 "zh"），透传至单语翻译指令。
-func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, langs []string, examples []*kb.Row, out map[string]string, sourceLang string) {
+// 参数 sourceLang: 实际源语言代码（默认 "zh"）；stage: 流程阶段，透传至单语翻译指令与模型解析。
+func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, langs []string, examples []*kb.Row, out map[string]string, sourceLang, stage string) {
 	if len(langs) == 0 {
 		return
 	}
@@ -491,7 +497,7 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 			}
 			defer func() { <-sem }()
 
-			tr, err := e.SingleLangTranslate(ctx, zhText, lang, examples, sourceLang)
+			tr, err := e.SingleLangTranslate(ctx, zhText, lang, examples, sourceLang, stage)
 			if err != nil {
 				tr = ""
 			}
@@ -520,9 +526,13 @@ func (e *Engine) assignKB(row *kb.Row, targetLangs []string, needModel *[]string
 }
 
 // TranslateLangsInto 并发翻译缺失语言，写入 out/sources（供 workflow 初翻用）。
-// 参数 sourceLang: 实际源语言代码（默认 "zh"）；out/sources 为译文与来源映射。
-func (e *Engine) TranslateLangsInto(ctx context.Context, zhText string, langs []string, out map[string]string, sources map[string]string, sourceLang string) {
-	e.translateLangsConcurrent(ctx, zhText, langs, nil, out, sourceLang)
+// 参数 sourceLang: 实际源语言代码（默认 "zh"）；stage: 流程阶段（初翻默认 config.StageAIInitial）；
+// out/sources 为译文与来源映射。
+func (e *Engine) TranslateLangsInto(ctx context.Context, zhText string, langs []string, out map[string]string, sources map[string]string, sourceLang, stage string) {
+	if stage == "" {
+		stage = config.StageAIInitial
+	}
+	e.translateLangsConcurrent(ctx, zhText, langs, nil, out, sourceLang, stage)
 	for _, lc := range langs {
 		if sources != nil && out[lc] != "" {
 			sources[lc] = "model"
@@ -530,8 +540,9 @@ func (e *Engine) TranslateLangsInto(ctx context.Context, zhText string, langs []
 	}
 }
 
-// TranslateWithFeedback 带驳回意见重译（初翻 Agent 修正，用于被驳回工单重跑）
-func (e *Engine) TranslateWithFeedback(ctx context.Context, zhText, targetLang, feedback string) string {
+// TranslateWithFeedback 带驳回意见重译（初翻 Agent 修正，用于被驳回工单重跑）。
+// 参数 stage: 流程阶段（默认 config.StageAIInitial）。
+func (e *Engine) TranslateWithFeedback(ctx context.Context, zhText, targetLang, feedback, stage string) string {
 	langName := config.LangNames[targetLang]
 	if langName == "" {
 		langName = targetLang
@@ -541,6 +552,9 @@ func (e *Engine) TranslateWithFeedback(ctx context.Context, zhText, targetLang, 
 		langName, feedback, zhText, langName)
 	messages := []map[string]string{{"role": "user", "content": prompt}}
 	base, key, model := e.resolveModel(ctx)
+	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {
+		base, key, model = b2, k2, m2
+	}
 	content, _, err := e.LLM.CallChat(ctx, base, key, model, messages, 2048, false, e.Cfg.FallbackTemp)
 	if err != nil || strings.TrimSpace(content) == "" {
 		return ""
@@ -548,8 +562,9 @@ func (e *Engine) TranslateWithFeedback(ctx context.Context, zhText, targetLang, 
 	return PostProcessTranslation(content, targetLang)
 }
 
-// ReviewTranslation 审校译文（LLM 修正术语/语法/表达，返回修正后译文；失败返回原文）
-func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, targetLang string) string {
+// ReviewTranslation 审校译文（LLM 修正术语/语法/表达，返回修正后译文；失败返回原文）。
+// 参数 stage: 流程阶段（默认 config.StageReview）。
+func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, targetLang, stage string) string {
 	langName := config.LangNames[targetLang]
 	if langName == "" {
 		langName = targetLang
@@ -559,6 +574,9 @@ func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, tar
 		langName, source, translation)
 	messages := []map[string]string{{"role": "user", "content": prompt}}
 	base, key, model := e.resolveModel(ctx)
+	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {
+		base, key, model = b2, k2, m2
+	}
 	content, _, err := e.LLM.CallChat(ctx, base, key, model, messages, 2048, false, e.Cfg.FallbackTemp)
 	if err != nil || strings.TrimSpace(content) == "" {
 		return ""
@@ -665,6 +683,33 @@ func (e *Engine) resolveModel(ctx context.Context) (base, key, model string) {
 	return e.Cfg.OnlineAPIBase, e.Cfg.OnlineAPIKey, e.Cfg.OnlineModel
 }
 
+// resolveStageModel 解析指定流程阶段的独立模型配置（system_config.stage_models，超管维护）。
+// 参数 stage: 流程阶段标识（config.StageKBMatch / StageAIInitial / StageEvals / StageReview）。
+// 返回 base/key/model 与是否命中；未配置该阶段或缺 model/api_base 时 ok=false（调用方回退 resolveModel）。
+// APIKey 为空时继承全局默认密钥（租户/路由/全局），便于阶段模型复用同一供应商密钥。
+func (e *Engine) resolveStageModel(ctx context.Context, stage string) (base, key, model string, ok bool) {
+	if e.St == nil {
+		return "", "", "", false
+	}
+	raw, err := e.St.GetConfig("stage_models")
+	if err != nil || raw == "" {
+		return "", "", "", false
+	}
+	var m config.StageModels
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return "", "", "", false
+	}
+	sm, exists := m[stage]
+	if !exists || sm.APIBase == "" || sm.Model == "" {
+		return "", "", "", false
+	}
+	if sm.APIKey != "" {
+		return sm.APIBase, sm.APIKey, sm.Model, true
+	}
+	_, gKey, _ := e.resolveModel(ctx) // 阶段模型未填密钥 → 继承全局默认密钥
+	return sm.APIBase, gKey, sm.Model, true
+}
+
 // pickPrimaryRoute 按权重选取主路由（权重最高者；全为 0 时取第一个）
 func (e *Engine) pickPrimaryRoute() config.ProviderConfig {
 	rs := e.Cfg.ModelRoutes
@@ -717,22 +762,25 @@ func (e *Engine) resolvePolicy(ctx context.Context) (high, med float64) {
 }
 
 // SingleLangTranslate 单语翻译（含 429 降级、finish_reason=length 重试、截断自修复）。
-// 参数 sourceLang: 实际源语言代码（默认 "zh"）。
-func (e *Engine) SingleLangTranslate(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang string) (string, error) {
+// 参数 sourceLang: 实际源语言代码（默认 "zh"）；stage: 流程阶段（config.Stage*，默认 ai_initial）。
+func (e *Engine) SingleLangTranslate(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang, stage string) (string, error) {
 	if sourceLang == "" {
 		sourceLang = "zh"
 	}
-	return e.singleLang(ctx, zhText, targetLang, examples, sourceLang, 0)
+	if stage == "" {
+		stage = config.StageAIInitial
+	}
+	return e.singleLang(ctx, zhText, targetLang, examples, sourceLang, stage, 0)
 }
 
 // singleLang 单语翻译核心实现（SingleLangTranslate 的实际逻辑）。
-// 流程：组装指令+术语参考 → 解析主模型（租户级/路由/全局）→ 检测 Hunyuan 语言支持度
+// 流程：组装指令+术语参考 → 解析主模型（阶段模型 → 租户级/路由/全局）→ 检测 Hunyuan 语言支持度
 // → 计算 max_tokens → 熔断检查 → 主模型短超时调用 → 失败时记录熔断并沿路由链降级 /
 // 单 fallback 兜底（429 前 sleep 2s）→ 记录实际用量 → 成功则重置熔断
 // → finish_reason=length 或空内容翻倍 max_tokens 递归重试（最多 2 次）
-// → 后处理 + 截断自修复。参数：sourceLang 源语言（默认 "zh"），attempt 当前重试次数。
+// → 后处理 + 截断自修复。参数：sourceLang 源语言（默认 "zh"），stage 流程阶段，attempt 当前重试次数。
 // 返回译文内容与错误（失败时返回 ""）。
-func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang string, attempt int) (string, error) {
+func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang, stage string, attempt int) (string, error) {
 	cfg := e.Cfg
 	instruction := translateInstruction(sourceLang, targetLang)
 	ref := buildExamplesPrompt(zhText, targetLang, examples)
@@ -754,10 +802,16 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 	}
 
 	base, key, model := e.resolveModel(ctx)
+	// 阶段独立模型：配置了该阶段（stage_models）则优先使用；未配置回退 resolveModel
+	stageActive := false
+	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {
+		base, key, model = b2, k2, m2
+		stageActive = true
+	}
 
-	// 模型路由策略：配置了多供应商时，主模型失败按权重降序逐一降级
+	// 模型路由策略：配置了多供应商时，主模型失败按权重降序逐一降级（阶段模型独立时不走路由链）
 	var routeFallbacks []config.ProviderConfig
-	if len(e.Cfg.ModelRoutes) > 0 {
+	if !stageActive && len(e.Cfg.ModelRoutes) > 0 {
 		primary := e.pickPrimaryRoute()
 		routeFallbacks = e.resolveRouteFallbacks(primary)
 	}
@@ -830,7 +884,7 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 		if maxTokens*2 <= 8192 {
 			maxTokens *= 2
 		}
-		return e.singleLang(ctx, zhText, targetLang, examples, sourceLang, attempt+1)
+		return e.singleLang(ctx, zhText, targetLang, examples, sourceLang, stage, attempt+1)
 	}
 
 	content = PostProcessTranslation(content, targetLang)
@@ -1087,7 +1141,7 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 	// 兜底：未译出的逐条翻译
 	for i, tr := range result {
 		if strings.TrimSpace(tr) == "" {
-			s, err := e.singleLang(ctx, texts[i], targetLang, nil, "zh", 0)
+			s, err := e.singleLang(ctx, texts[i], targetLang, nil, "zh", config.StageAIInitial, 0)
 			if err != nil || s == "" {
 				result[i] = "[翻译失败]"
 			} else {
@@ -1169,12 +1223,16 @@ func parseBatchOutput(content string, n int) []string {
 // ============ 其他语言翻译（前端子选单直接传非 KB 语言） ============
 
 // TranslateOtherLang 纯模型翻译单条（"其他语言"，支持任意源语言互译）。
-// 参数 zhText: 源文本；langCode: 目标语言代码；sourceLang: 实际源语言代码（默认 "zh"）。
-func (e *Engine) TranslateOtherLang(ctx context.Context, zhText, langCode, sourceLang string) (string, error) {
+// 参数 zhText: 源文本；langCode: 目标语言代码；sourceLang: 实际源语言代码（默认 "zh"）；
+// stage: 流程阶段（默认 config.StageAIInitial）。
+func (e *Engine) TranslateOtherLang(ctx context.Context, zhText, langCode, sourceLang, stage string) (string, error) {
 	if sourceLang == "" {
 		sourceLang = "zh"
 	}
-	tr, err := e.singleLang(ctx, zhText, langCode, nil, sourceLang, 0)
+	if stage == "" {
+		stage = config.StageAIInitial
+	}
+	tr, err := e.singleLang(ctx, zhText, langCode, nil, sourceLang, stage, 0)
 	if err != nil {
 		return "", err
 	}

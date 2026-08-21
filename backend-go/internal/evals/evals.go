@@ -52,6 +52,35 @@ func (e *Evaluator) ShouldSample() bool {
 	return e.SampleRate >= 1.0 // 当前实现：仅 100% 抽样才评估
 }
 
+// resolveJudge 解析 Judge 模型的 base/key/model（优先级：stage_models.evals → ModelRoutes → Online*）。
+func (e *Evaluator) resolveJudge() (base, key, model string) {
+	if e.Store != nil {
+		if raw, err := e.Store.GetConfig("stage_models"); err == nil && raw != "" {
+			var m config.StageModels
+			if json.Unmarshal([]byte(raw), &m) == nil {
+				if sm, ok := m[config.StageEvals]; ok && sm.APIBase != "" && sm.Model != "" {
+					if sm.APIKey != "" {
+						return sm.APIBase, sm.APIKey, sm.Model
+					}
+					return sm.APIBase, e.Cfg.OnlineAPIKey, sm.Model
+				}
+			}
+		}
+	}
+	if len(e.Cfg.ModelRoutes) > 0 {
+		best := e.Cfg.ModelRoutes[0]
+		for _, r := range e.Cfg.ModelRoutes[1:] {
+			if r.Weight > best.Weight {
+				best = r
+			}
+		}
+		if best.APIBase != "" && best.Model != "" {
+			return best.APIBase, best.APIKey, best.Model
+		}
+	}
+	return e.Cfg.OnlineAPIBase, e.Cfg.OnlineAPIKey, e.Cfg.OnlineModel
+}
+
 // Evaluate LLM-as-Judge 5 维评分；返回总分（0-100）与各维分数。
 // 参数：source=原文，translation=译文，targetLang=目标语言，taskType=任务类型。
 // 返回：加权总分、各维分数 map（term/grammar/semantic/numunit/style）与错误。
@@ -79,7 +108,8 @@ func (e *Evaluator) Evaluate(ctx context.Context, source, translation, targetLan
 		source, targetLang, translation)
 
 	messages := []map[string]string{{"role": "user", "content": prompt}}
-	content, _, err := e.LLM.CallChat(ctx, e.Cfg.OnlineAPIBase, e.Cfg.OnlineAPIKey, e.Cfg.OnlineModel, messages, 200, false, 0.0)
+	base, key, model := e.resolveJudge()
+	content, _, err := e.LLM.CallChat(ctx, base, key, model, messages, 200, false, 0.0)
 	if err != nil {
 		return 0, nil, err
 	}

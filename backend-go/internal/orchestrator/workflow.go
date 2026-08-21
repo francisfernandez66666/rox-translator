@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 
+	"translator/internal/config"
 	"translator/internal/culture"
 	"translator/internal/engine"
 	"translator/internal/gate"
@@ -142,7 +143,7 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 
 	// 2. engine 兜底（npz 语义库），只取 KB 命中结果
 	ctx = tenant.WithTenant(ctx, tid) // 注入租户上下文供引擎租户隔离
-	res, _ := w.Engine.TranslateOne(ctx, t.SourceText, langs, true)
+	res, _ := w.Engine.TranslateOne(ctx, t.SourceText, langs, true, config.StageKBMatch)
 	for lc, v := range res.Translations {
 		if strings.TrimSpace(v) == "" {
 			continue
@@ -175,7 +176,7 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 			if strings.TrimSpace(p.Translations[lc]) == "" {
 				continue
 			}
-			rev := w.Engine.TranslateWithFeedback(ctx, p.SourceText, lc, t.RejectReason)
+			rev := w.Engine.TranslateWithFeedback(ctx, p.SourceText, lc, t.RejectReason, config.StageAIInitial)
 			if rev != "" {
 				p.Translations[lc] = rev
 				p.Sources[lc] = "model" // 来源标记为模型
@@ -193,7 +194,7 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 		}
 	}
 	if len(need) > 0 {
-		w.Engine.TranslateLangsInto(ctx, t.SourceText, need, p.Translations, p.Sources, srcLang)
+		w.Engine.TranslateLangsInto(ctx, t.SourceText, need, p.Translations, p.Sources, srcLang, config.StageAIInitial)
 	}
 	w.savePayload(t, p)
 	return nil
@@ -237,7 +238,7 @@ func (w *Workflow) runReview(ctx context.Context, t *store.Ticket) error {
 		if tr == "" {
 			continue
 		}
-		revised := w.Engine.ReviewTranslation(ctx, p.SourceText, tr, lc)
+		revised := w.Engine.ReviewTranslation(ctx, p.SourceText, tr, lc, config.StageReview)
 		if revised != "" {
 			p.Translations[lc] = revised // 用审校结果覆盖
 		}

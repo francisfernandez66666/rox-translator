@@ -141,7 +141,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				// 第一遍：KB 匹配
 				needModelIdx := []int{}
 				for i, t := range texts {
-					r, _ := e.TranslateOne(ctx, t, []string{lc}, true)
+					r, _ := e.TranslateOne(ctx, t, []string{lc}, true, config.StageKBMatch)
 					if v, ok := r.Translations[lc]; ok && v != "" {
 						addTrans(lc, t, v)
 						addKBHit()

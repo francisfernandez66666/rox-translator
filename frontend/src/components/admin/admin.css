@@ -147,6 +147,8 @@
 .ad-bulk textarea { margin: 8px 0; display: block; }
 .ad-bulk .ad-btn { margin-right: 8px; }
 .ad-route-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.ad-stage-card { border: 1px solid #eef0f4; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: #fafbfd; }
+.ad-stage-title { font-size: 13px; color: #1a237e; font-weight: 600; margin-bottom: 8px; }
 .ad-diff { color: #2e7d32; font-size: 12px; background: #e8f5e9; padding: 2px 6px; border-radius: 4px; }
 /* ===== 用量图表：CSS 条形图（近7日趋势 / 按类型 / 按供应商） ===== */
 .ad-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }

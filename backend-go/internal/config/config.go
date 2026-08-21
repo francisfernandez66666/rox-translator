@@ -26,6 +26,26 @@ type ProviderConfig struct {
 	Weight   int    `json:"weight"`   // 权重，越高越优先（0 表示仅作 fallback）
 }
 
+// 流程阶段标识（stage_models 的键）
+const (
+	StageKBMatch   = "kb_match"   // 知识库匹配兜底翻译
+	StageAIInitial = "ai_initial" // 初翻
+	StageEvals     = "evals"      // LLM-as-Judge 评估
+	StageReview    = "review"     // 审校
+)
+
+// StageModel 单个流程阶段的模型配置（stage_models 中的一项）
+type StageModel struct {
+	Provider string `json:"provider"` // 供应商标识（计量分组用，可为空自动推断）
+	APIBase  string `json:"api_base"` // 该阶段 LLM API 基地址（必填才启用该阶段独立模型）
+	APIKey   string `json:"api_key"`  // 该阶段 API 密钥（为空继承全局默认密钥）
+	Model    string `json:"model"`    // 该阶段使用的模型名（必填才启用该阶段独立模型）
+}
+
+// StageModels 各流程阶段模型配置映射（system_config 键 "stage_models"）
+// 键为流程阶段标识（kb_match / ai_initial / evals / review）。
+type StageModels map[string]StageModel
+
 // Config 保存运行时配置（等价于 Python lib.py 的模块级配置）
 type Config struct {
 	// 翻译 LLM（SiliconFlow）
