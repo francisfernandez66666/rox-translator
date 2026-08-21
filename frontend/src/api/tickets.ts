@@ -119,3 +119,12 @@ export async function notificationRead(id: number): Promise<AdminResp> {
 export async function notificationsReadAll(): Promise<AdminResp> {
   return request('/api/notifications/read-all', { method: 'POST', headers: authHeaders(), body: JSON.stringify({}) })
 }
+
+// 文件工单创建（multipart 上传，≤10MB；支持 docx/xlsx/pptx/pdf/txt/csv）
+export async function ticketCreateFile(file: File, meta: { title: string; target_langs: string }): Promise<TicketResp> {
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('title', meta.title)
+  fd.append('target_langs', meta.target_langs)
+  return request('/api/tickets/create-file', { method: 'POST', headers: authHeaders(), body: fd })
+}
