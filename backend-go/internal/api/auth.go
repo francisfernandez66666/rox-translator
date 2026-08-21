@@ -167,6 +167,41 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "user": u})
 }
 
+// handleMeContext 前台身份上下文：账号/所属租户/组织部门 + 可应用知识库包类型。
+// 前台登录后调用一次，用于顶栏展示「账号 · 组织 · 部门 · 知识库包类型」；
+// 平台级账号（tenant_id=0）不返回任何知识库包（平台直翻无知识库）。
+func (s *Server) handleMeContext(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	orgName := ""
+	if u.OrgID > 0 {
+		if o, e := s.Store.GetOrgByID(u.OrgID); e == nil {
+			orgName = o.Name
+		}
+	}
+	tenantName := ""
+	if u.TenantID > 0 && s.Ten != nil {
+		if t, e := s.Ten.GetByID(u.TenantID); e == nil {
+			tenantName = t.Name
+		}
+	}
+	packs, _ := s.Store.ListApplicablePacks(u.TenantID)
+	writeJSON(w, 200, map[string]interface{}{
+		"success":     true,
+		"username":    u.Username,
+		"display_name": u.DisplayName,
+		"role":        u.Role,
+		"tenant_id":   u.TenantID,
+		"tenant_name": tenantName,
+		"org_id":      u.OrgID,
+		"org_name":    orgName,
+		"kb_packs":    packs,
+	})
+}
+
 // handleChangePassword 修改密码接口：校验原密码后更新为 bcrypt 哈希。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {old_password, new_password}）。
 // 返回: success=true 表示修改成功；原密码错误或存储失败返回 success=false。

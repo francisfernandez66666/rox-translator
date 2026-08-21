@@ -15,6 +15,13 @@
     <!-- ===== 顶部标题栏 ===== -->
     <header class="chat-header" :class="{ 'chat-mobile-header': isMobile }" style="border-bottom-color: #2e7d32;">
       <span>{{ t('chat.title') }}</span>
+      <!-- 身份栏：登录账号 · 所属组织/租户 · 部门 · 可应用知识库包类型 -->
+      <span v-if="me.display_name" class="chat-balance" style="background:rgba(46,125,50,.08)" :title="t('chat.identityTip')">
+        👤 {{ me.display_name }}<template v-if="me.tenant_name"> · 🏢 {{ me.tenant_name }}</template><template v-if="me.org_name"> / {{ me.org_name }}</template>
+      </span>
+      <span v-for="p in me.kb_packs" :key="p.id" class="chat-balance" style="background:rgba(33,90,154,.10);color:#215a9a" :title="t('chat.kbPackTip')">
+        📚 {{ packLabel(p.pack_type) }}
+      </span>
       <span v-if="billingEnforced" class="chat-balance" :title="t('chat.balanceTip')">🟢 {{ tpl('chat.balance', { n: sentenceBalance ?? '—' }) }}</span>
       <button class="clear-btn" @click="store.clearMessages()" :title="t('chat.clearChat')">
         🗑️
@@ -252,7 +259,7 @@ import { useChatStore } from '@/stores/chat'
 // 国际化取词
 import { t, tpl, lang } from '@/i18n'
 // 我的包接口（剩余句数展示）
-import { myPackage } from '@/api'
+import { myPackage, meContext } from '@/api'
 // 子组件：消息气泡
 import MessageBubble from './MessageBubble.vue'
 
@@ -272,8 +279,26 @@ async function loadBalance() {
     }
   } catch { billingEnforced.value = false }
 }
+// 前台身份上下文（账号/租户/部门/知识库包类型；平台级账号无知识库包）
+const me = ref<any>({})
+async function loadMe() {
+  try {
+    const r = await meContext()
+    if (r.success) me.value = r as any
+  } catch { me.value = {} }
+}
+// 包类型 → 中文短标签（与后台包体系一致：部门>组织>行业>语言文化）
+function packLabel(t2: string): string {
+  switch (t2) {
+    case 'department': return '部门包'
+    case 'tenant': return '组织包'
+    case 'industry': return '行业包'
+    case 'locale': return '语言文化包'
+    default: return t2
+  }
+}
 // 挂载与每次翻译完成后刷新剩余句数
-onMounted(() => { loadBalance() })
+onMounted(() => { loadBalance(); loadMe() })
 watch(() => store.messages.length, () => { if (store.messages.length) loadBalance() })
 
 // ---- 技能配置 ----

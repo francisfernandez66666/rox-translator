@@ -220,6 +220,7 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/billing/invoices/create", s.handleInvoiceCreate)
 	// 商业包：我的包 / 订阅 / 超管管理
 	s.mux.HandleFunc("/api/me/package", s.handleMyPackage)
+	s.mux.HandleFunc("/api/me/context", s.handleMeContext)
 	s.mux.HandleFunc("/api/package/subscribe", s.handlePackageSubscribe)
 	s.mux.HandleFunc("/api/admin/packages", s.handleAdminPackages)
 	s.mux.HandleFunc("/api/admin/packages/create", s.handleAdminPackageCreate)

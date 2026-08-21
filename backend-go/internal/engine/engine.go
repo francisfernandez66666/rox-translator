@@ -355,10 +355,20 @@ func (e *Engine) TranslateOne(ctx context.Context, zhText string, targetLangs []
 		Translations: map[string]string{},
 		TargetLangs:  targetLangs,
 	}
-	tid := e.tenantID(ctx)
+	// ★ 平台上下文隔离：直接读 context 原始租户（不经兜底）。
+	// 超管等平台级账号（tenant_id=0 且未显式切换租户）context 无租户 → tid=0，
+	// 只归属平台根组织、不挂任何租户知识库——跳过精确/模糊/向量全部命中，纯模型翻译，
+	// 杜绝超管误用具体租户（如 ROX极石汽车）的知识库数据。
+	tid := tenant.FromContext(ctx)
 	srcLang := DetectSourceLang(zhText) // 检测实际源语言（zh/en），供指令与 KB 匹配使用
 	if stage == "" {
 		stage = config.StageKBMatch
+	}
+	if tid <= 0 {
+		res.Mode = "平台直翻（无知识库）"
+		res.NeedModel = append(res.NeedModel, targetLangs...)
+		e.translateLangsConcurrent(ctx, zhText, targetLangs, res.Examples, res.Translations, srcLang, stage)
+		return res, nil
 	}
 
 	// 非中文源 → 逐语言模型直翻

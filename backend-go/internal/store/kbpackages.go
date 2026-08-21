@@ -485,3 +485,40 @@ func (s *Store) ApplicablePackIDs(tid int64) (map[int64]bool, error) {
 	}
 	return out, nil
 }
+
+// PackBrief 包简要信息（前台身份栏展示用）。
+type PackBrief struct {
+	ID       int64  `json:"id"`        // 包 ID
+	PackType string `json:"pack_type"` // 包类型：department/tenant/industry/locale
+	Name     string `json:"name"`      // 包名称
+	Enabled  int    `json:"enabled"`   // 启用状态（停用包不展示为生效）
+}
+
+// ListApplicablePacks 列出租户用户实际可应用的知识库包（按优先级链排序）。
+// 范围：本租户全部包 + 语言文化包（全系统）+ 注册行业匹配的行业包；仅返回启用中的包。
+// 参数：tid=租户 ID（<=0 返回空，平台上下文无知识库）。
+func (s *Store) ListApplicablePacks(tid int64) ([]*PackBrief, error) {
+	if tid <= 0 {
+		return []*PackBrief{}, nil
+	}
+	rows, err := s.db.Query(`
+		SELECT id, pack_type, name, COALESCE(enabled,1) FROM kb_packages
+		WHERE COALESCE(enabled,1)=1 AND (
+			tenant_id=?
+			OR pack_type='locale'
+			OR (pack_type='industry' AND code=(SELECT COALESCE(NULLIF(industry,''),'~none~') FROM tenants WHERE id=?))
+		)
+		ORDER BY CASE pack_type WHEN 'department' THEN 0 WHEN 'tenant' THEN 1 WHEN 'industry' THEN 2 ELSE 3 END, id`, tid, tid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*PackBrief
+	for rows.Next() {
+		var p PackBrief
+		if err := rows.Scan(&p.ID, &p.PackType, &p.Name, &p.Enabled); err == nil {
+			out = append(out, &p)
+		}
+	}
+	return out, nil
+}
