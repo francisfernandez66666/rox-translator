@@ -97,7 +97,7 @@ import { t } from '@/i18n'
 import { fmtTime } from './admin/ui'
 
 // 创建表单与模式
-const mode = ref<'text' | 'file'>('text')
+// 创建模式：text=粘贴文本 / file=上传文件
 const form = ref({ title: '', text: '' })
 // 目标语言（与工作台同款多选选择器；默认 en）
 const selectedLangs = ref<string[]>(['en'])
@@ -112,12 +112,14 @@ const tickets = ref<any[]>([])
 const detail = ref<any>(null)
 
 // 选择文件
+// onFileSelect 记录用户选择的文件
 function onFileSelect(e: Event) {
   const f = (e.target as HTMLInputElement).files?.[0]
   if (f) file.value = f
 }
 
 // 创建工单：文本走 JSON，文件走 multipart；成功自动入队并刷新
+// create 创建工单：文本走 JSON，文件走 multipart；成功自动入队并刷新列表
 async function create() {
   creating.value = true
   try {
@@ -149,6 +151,7 @@ async function create() {
 
 
 // 运行草稿工单
+// run 运行草稿工单（入队）
 async function run(tk: any) {
   const r = await ticketRun(tk.id)
   if (!r.success) { alert(r.message); return }
@@ -156,11 +159,13 @@ async function run(tk: any) {
 }
 
 // 下载结果
+// download 下载结果文件（blob 触发保存）
 async function download(tk: any) {
   try { await ticketDownload(tk.id) } catch (e: any) { alert(e?.message || 'download failed') }
 }
 
 // 展开/收起步骤进度
+// toggleDetail 展开/收起步骤进度轨迹
 async function toggleDetail(tk: any) {
   if (detail.value && detail.value.ticket?.id === tk.id) { detail.value = null; return }
   const r = await ticketDetail(tk.id)
@@ -168,6 +173,7 @@ async function toggleDetail(tk: any) {
 }
 
 // 加载我的工单；进行中每 5s 自动刷新
+// load 加载我的工单；进行中的每 5s 自动刷新进度
 async function load() {
   const r = await myTickets()
   if (r.success) tickets.value = (r as any).tickets || []
@@ -176,6 +182,7 @@ onMounted(load)
 setInterval(() => { if (tickets.value.some(x => ['queued', 'in_progress'].includes(x.status))) load() }, 5000)
 
 // 状态中文标签
+// statusLabel 工单状态 → 中文标签
 function statusLabel(s: string): string {
   switch (s) {
     case 'queued': return t('tk.stQueued')
