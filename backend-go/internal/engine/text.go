@@ -147,7 +147,7 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 				prog("AI生成中...", 2, 4)
 			}
 		}
-		kbResult, _ = e.TranslateOne(ctx, cleanText, kbTarget, false)
+		kbResult, _ = e.TranslateOne(ctx, cleanText, kbTarget, false, config.StageKBMatch)
 		e.OnPhase = prevOnPhase
 		for lc := range kbResult.Translations {
 			src := "model"
@@ -185,7 +185,7 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 					return
 				}
 				defer func() { <-sem }()
-				tr, _ := e.TranslateOtherLang(ctx, cleanText, lc, srcLang)
+				tr, _ := e.TranslateOtherLang(ctx, cleanText, lc, srcLang, config.StageAIInitial)
 				mu.Lock()
 				otherTr[lc] = tr
 				mu.Unlock()

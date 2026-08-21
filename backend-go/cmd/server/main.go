@@ -133,6 +133,9 @@ func main() {
 
 	// 创建翻译引擎（挂载 DB 与向量索引）
 	eng := engine.NewEngine(cfg, db, kbIndex, ts)
+	if st != nil {
+		eng.St = st
+	}
 
 	// ★ evals 评估器（Judge 用 Online Key；可用 EVALS_JUDGE_KEY 覆盖）
 	judgeKey := cfg.OnlineAPIKey

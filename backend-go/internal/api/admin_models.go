@@ -15,9 +15,9 @@ import (
 
 // ============ 模型配置 ============
 
-// handleModels 读取当前租户的模型配置（未配置时回退全局默认）
+// handleModels 读取租户模型配置（super_admin；未配置时回退全局默认）
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -40,9 +40,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		"model": map[string]string{"api_base": base, "api_key": maskKey(key), "model": model}})
 }
 
-// handleModelsSave 保存当前租户的模型配置
+// handleModelsSave 保存租户模型配置（super_admin）
 func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -148,6 +148,91 @@ func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 	s.Cfg.ModelRoutes = req.Routes
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "model_routes_save", "system", fmt.Sprintf("%d 条", len(req.Routes)))
 	writeJSON(w, 200, map[string]interface{}{"success": true, "routes": req.Routes})
+}
+
+// ============ 各流程阶段模型配置（super_admin） ============
+
+// handleStageModels 读取各流程阶段模型配置（super_admin）。
+// 返回 4 个阶段（kb_match/ai_initial/evals/review）的模型配置；未配置的返回空项以便前端渲染。
+func (s *Server) handleStageModels(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireAdminUser(r); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	stages := config.StageModels{}
+	if s.Store != nil {
+		if v, err := s.Store.GetConfig("stage_models"); err == nil && v != "" {
+			_ = json.Unmarshal([]byte(v), &stages)
+		}
+	}
+	// 掩码所有 API Key 再返回（密钥仅保存后返回一次）
+	out := config.StageModels{}
+	for _, k := range []string{config.StageKBMatch, config.StageAIInitial, config.StageEvals, config.StageReview} {
+		sm := stages[k]
+		out[k] = config.StageModel{
+			Provider: sm.Provider,
+			APIBase:  sm.APIBase,
+			APIKey:   maskKey(sm.APIKey),
+			Model:    sm.Model,
+		}
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "stages": out})
+}
+
+// handleStageModelsSave 保存各流程阶段模型配置（super_admin）。
+// 覆盖式保存：全量提交；某项 api_base/model 为空表示清空该阶段独立模型（回退全局/路由）。
+func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireAdminUser(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		Stages config.StageModels `json:"stages"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	if s.Store == nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
+		return
+	}
+	// 读取旧配置，掩码密钥保留原值
+	old := config.StageModels{}
+	if v, err := s.Store.GetConfig("stage_models"); err == nil && v != "" {
+		_ = json.Unmarshal([]byte(v), &old)
+	}
+	for k := range req.Stages {
+		sm := req.Stages[k]
+		if sm.APIBase == "" && sm.Model == "" {
+			// 清空该阶段 → 删除键
+			delete(req.Stages, k)
+			continue
+		}
+		if sm.APIBase == "" || sm.Model == "" {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": fmt.Sprintf("阶段 %s 缺少 api_base 或 model", k)})
+			return
+		}
+		if sm.Provider == "" {
+			req.Stages[k] = config.StageModel{Provider: "stage_" + k, APIBase: sm.APIBase, APIKey: sm.APIKey, Model: sm.Model}
+			sm = req.Stages[k]
+		}
+		if hasMask(sm.APIKey) {
+			if o, ok := old[k]; ok {
+				req.Stages[k] = config.StageModel{Provider: sm.Provider, APIBase: sm.APIBase, APIKey: o.APIKey, Model: sm.Model}
+			} else {
+				req.Stages[k] = config.StageModel{Provider: sm.Provider, APIBase: sm.APIBase, APIKey: "", Model: sm.Model}
+			}
+		}
+	}
+	b, _ := json.Marshal(req.Stages)
+	if err := s.Store.SetConfig("stage_models", string(b)); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "stage_models_save", "system", fmt.Sprintf("%d 阶段", len(req.Stages)))
+	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
 // ============ 策略参数 ============

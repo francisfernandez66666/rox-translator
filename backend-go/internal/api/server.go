@@ -181,6 +181,8 @@ func (s *Server) routesAdminModels() {
 	s.mux.HandleFunc("/api/admin/models/save", s.handleModelsSave)
 	s.mux.HandleFunc("/api/admin/models/routes", s.handleModelRoutes)
 	s.mux.HandleFunc("/api/admin/models/routes/save", s.handleModelRoutesSave)
+	s.mux.HandleFunc("/api/admin/models/stage", s.handleStageModels)
+	s.mux.HandleFunc("/api/admin/models/stage/save", s.handleStageModelsSave)
 	s.mux.HandleFunc("/api/admin/policy", s.handlePolicy)
 	s.mux.HandleFunc("/api/admin/policy/save", s.handlePolicySave)
 }
