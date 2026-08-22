@@ -72,7 +72,7 @@ func (s *Store) GetTicketFile(id int64) (*TicketFile, error) {
 
 // SetTicketFileResult 写入单个文件的产物路径（error 清空）。
 func (s *Store) SetTicketFileResult(id int64, resultPath string) error {
-	_, err := s.db.Exec("UPDATE ticket_files SET result_path=?, error='' WHERE id=?", resultPath)
+	_, err := s.db.Exec("UPDATE ticket_files SET result_path=?, error='' WHERE id=?", resultPath, id)
 	return err
 }
 

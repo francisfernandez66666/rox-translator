@@ -36,6 +36,9 @@ type FileTranslateData struct {
 	KBHits      int               `json:"kb_hits"`      // 知识库命中段数
 	ModelHits   int               `json:"model_hits"`   // 模型翻译段数
 	FileContext string            `json:"file_context"` // 文件内容摘要/上下文（预留）
+	// Translations 原文→译文映射（语言维度），供工单执行器回写 tm_segments 长期沉淀；
+	// 不序列化进 SSE/HTTP 响应（体量大且前端无需）。
+	Translations map[string]map[string]string `json:"-"`
 }
 
 // HandleFile 文件翻译主流程（复刻 skill.py _handle_file_translate）
@@ -232,11 +235,12 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		Skill: "translation",
 		Reply: reply,
 		Data: FileTranslateData{
-			TotalTexts:  len(texts),
-			TargetLangs: finalLangs,
-			LangNames:   langNames,
-			KBHits:      kbHits,
-			ModelHits:   modelHits,
+			TotalTexts:   len(texts),
+			TargetLangs:  finalLangs,
+			LangNames:    langNames,
+			KBHits:       kbHits,
+			ModelHits:    modelHits,
+			Translations: langTranslations, // 原文→译文（不序列化），工单执行器回写 TM
 		},
 		Files: filesOut,
 	}
