@@ -323,7 +323,7 @@ onMounted(() => { loadIndustries(); loadRegisterConfig() })
 /* ===== 登录页容器：渐变背景 + 垂直水平居中 ===== */
 .login-wrap {
   min-height: 100vh; display: flex; align-items: center; justify-content: center;
-  background: linear-gradient(135deg, #1a237e 0%, #3949ab 50%, #2e7d32 100%);
+  background: linear-gradient(135deg, #1a237e 0%, #3949ab 50%, #1557b0 100%);
 }
 /* 语言切换按钮 */
 .login-lang { position: fixed; top: 18px; right: 24px; }
