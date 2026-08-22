@@ -98,6 +98,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/register/industries", s.handleRegisterIndustries)
 	s.mux.HandleFunc("/office/manifest.xml", s.handleOfficeManifest)
 	s.mux.HandleFunc("/office/taskpane.html", s.handleOfficeTaskPane)
+	s.mux.HandleFunc("/api/admin/memleak/capture", s.handleMemLeakCapture)
+	s.mux.HandleFunc("/api/admin/memleak/log", s.handleMemLeakLog)
 	// 翻译核心（聊天/文件/下载/语言/KB 统计）
 	s.routesTranslate()
 	// ★ SaaS 租户管理（管理后台）

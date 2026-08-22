@@ -101,6 +101,15 @@ func (s *Server) startWatchdog() {
 			s.runTicketRetentionScan()
 		}
 	}()
+	// 泄漏日志（每日一轮：RSS/堆/goroutine 采样 + heap 快照留存；启动即采一次）
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		s.runMemLeakCapture()
+		for range ticker.C {
+			s.runMemLeakCapture()
+		}
+	}()
 	log.Println("监控看门狗已启动")
 }
 
