@@ -5,6 +5,7 @@
 //   - StartWorkers：goroutine 工作池，循环 Reserve → 分发执行 → Ack/Fail
 //   - runTicket：按工单类型执行——纯文本走五步编排流水线；文件走提取→翻译→原格式回写
 //   - 完成后投递站内信（通知中心）
+//
 // 队列接缝：仅依赖 queue.Queue 接口（当前 direct 实现；未来 kafka driver 单文件接入）。
 // =============================================
 package service
@@ -12,6 +13,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,8 +36,8 @@ type TicketService struct {
 	Queue  queue.Queue
 	Bill   *billing.Service // 计费服务（用量流水；可 nil）
 
-	stopCh chan struct{}
-	mu     sync.Mutex
+	stopCh  chan struct{}
+	mu      sync.Mutex
 	started bool
 }
 
@@ -148,9 +150,23 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	}
 	t.Status = store.TicketCompleted
 	_ = s.Store.UpdateTicket(t)
+	// 产物保留期打点：ticket_retention_days（默认 14 天；0=永久）。到期由后台每日扫描清理文件，
+	// 核心译文不受影响——文本工单存 final_result、文件工单回写 tm_segments 长期沉淀。
+	retentionDays := 14
+	if v, _ := s.Store.GetConfig("ticket_retention_days"); v != "" {
+		if n, perr := strconv.Atoi(v); perr == nil && n >= 0 {
+			retentionDays = n
+		}
+	}
+	expireHint := "结果文件长期保留"
+	if retentionDays > 0 {
+		exp := time.Now().AddDate(0, 0, retentionDays)
+		_ = s.Store.SetTicketExpiry(t.ID, exp.Format(time.RFC3339))
+		expireHint = fmt.Sprintf("结果文件保留 %d 天（至 %s），请尽快下载", retentionDays, exp.Format("2006-01-02"))
+	}
 	_ = s.Store.CreateNotification(t.CreatedBy,
 		fmt.Sprintf("翻译工单完成：%s", t.Title),
-		fmt.Sprintf("工单号 %s 翻译完成，请前往工单页下载结果。", t.TicketNo),
+		fmt.Sprintf("工单号 %s 翻译完成。%s；译文已沉淀至翻译记忆长期有效。", t.TicketNo, expireHint),
 		"ticket", t.ID)
 	return nil
 }
@@ -192,6 +208,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 			_ = s.Store.SetTicketFileResult(f.ID, res.Files[0])
 			segTotal += int64(res.Data.TotalTexts)
 			okCount++
+			s.persistTicketTM(t.TenantID, res.Data.Translations)
 		}
 		// 计量按成功文件累计
 		nl := int64(len(langs))
@@ -214,7 +231,27 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	nl := int64(len(res.Data.TargetLangs))
 	s.meterUsage(t.TenantID, t.CreatedBy, seg*nl)
 	s.meterSentences(t.TenantID, "", seg, res.Data.TargetLangs)
+	s.persistTicketTM(t.TenantID, res.Data.Translations)
 	return nil
+}
+
+// persistTicketTM 把文件工单的段级译文回写租户翻译记忆（tm_segments，module=file_ticket），
+// 实现「核心结果存租户后端」：产物文件过保留期清理后，译文仍可供 TM 命中与数据迭代。
+// 参数 tid=租户 ID；translations=语言 → (原文 → 译文)。
+func (s *TicketService) persistTicketTM(tid int64, translations map[string]map[string]string) {
+	if s.DB == nil || len(translations) == 0 || tid <= 0 {
+		return
+	}
+	for lc, m := range translations {
+		for src, tgt := range m {
+			src = strings.TrimSpace(src)
+			tgt = strings.TrimSpace(tgt)
+			if src == "" || tgt == "" {
+				continue
+			}
+			_, _ = s.DB.SaveBack(src, map[string]string{lc: tgt}, "file_ticket", tid)
+		}
+	}
 }
 
 // parseLangs 解析逗号分隔语言串。

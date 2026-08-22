@@ -12,6 +12,8 @@ package api
 import (
 	"fmt"
 	"log"
+	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -90,7 +92,63 @@ func (s *Server) startWatchdog() {
 			s.runSubscriptionScan()
 		}
 	}()
+	// 工单产物留存扫描（每日一轮：剩余 7/3/1 天提醒下载；到期清理文件，译文已入 TM 不受影响）
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		s.runTicketRetentionScan()
+		for range ticker.C {
+			s.runTicketRetentionScan()
+		}
+	}()
 	log.Println("监控看门狗已启动")
+}
+
+// runTicketRetentionScan 工单产物保留期扫描（每日执行）：
+//   - 剩余 ≤7/3/1 天 → 通知中心提醒创建者尽快下载（expire_notify 档位标记去重）
+//   - 已过期 → 删除产物文件（主产物+多文件表各产物）、清空路径字段并通知；
+//     核心译文已沉淀 tm_segments/final_result，不受清理影响
+func (s *Server) runTicketRetentionScan() {
+	if s.Store == nil {
+		return
+	}
+	rows, err := s.Store.ListTicketsForRetention()
+	if err != nil {
+		return
+	}
+	for _, r := range rows {
+		exp, perr := time.Parse(time.RFC3339, r.ResultExpiresAt)
+		if perr != nil {
+			continue
+		}
+		daysLeft := int(math.Ceil(time.Until(exp).Hours() / 24))
+		// 已过期：清理产物
+		if daysLeft <= 0 {
+			paths, cerr := s.Store.CleanupTicketResults(r.ID)
+			if cerr == nil {
+				for _, p := range paths {
+					_ = os.Remove(p)
+				}
+				_ = s.Store.CreateNotification(r.CreatedBy, "工单产物已过保留期",
+					fmt.Sprintf("工单号 %s 的结果文件超过 %s 保留期已被清理；译文仍保留在翻译记忆中，可重新发起工单复用。", r.TicketNo, exp.Format("2006-01-02")),
+					"ticket", r.ID)
+				s.Store.LogAudit(r.TenantID, 0, "ticket_result_cleanup", "tickets", r.TicketNo)
+			}
+			continue
+		}
+		// 分档提醒：7/3/1 天（每档一次）
+		for _, tier := range []int{7, 3, 1} {
+			tierStr := strconv.Itoa(tier)
+			if daysLeft <= tier && !s.Store.TicketExpireMarked(r.ID, tierStr) {
+				if err := s.Store.MarkTicketExpireNotify(r.ID, tierStr); err == nil {
+					_ = s.Store.CreateNotification(r.CreatedBy, "工单结果即将过期",
+						fmt.Sprintf("工单号 %s 的结果文件将在 %d 天后（%s）清理，请尽快下载；译文长期有效。",
+							r.TicketNo, daysLeft, exp.Format("2006-01-02")),
+						"ticket", r.ID)
+				}
+			}
+		}
+	}
 }
 
 // runSubscriptionScan 订阅到期扫描（每日执行）：
