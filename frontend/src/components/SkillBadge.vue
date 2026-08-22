@@ -19,7 +19,7 @@ import { t } from '@/i18n'
   border-radius: 6px;
   font-size: 11px;
   background: rgba(46, 125, 50, 0.12);
-  color: #2e7d32;
+  color: #1a73e8;
   font-weight: 500;
 }
 </style>

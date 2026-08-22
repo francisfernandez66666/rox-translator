@@ -487,7 +487,7 @@ function getFileName(path: string): string {
   font-size: 11px; padding: 1px 6px; border-radius: 4px;
   font-weight: 500; flex-shrink: 0; white-space: nowrap;
 }
-.source-kb { background: #e8f5e9; color: #2e7d32; }
+.source-kb { background: #e8f0fe; color: #1a73e8; }
 .source-model { background: #e3f2fd; color: #1565c0; }
 
 /* 匹配模式指示 */
@@ -496,7 +496,7 @@ function getFileName(path: string): string {
   padding-bottom: 6px; border-bottom: 1px solid #e8e8e8;
 }
 .mode-badge { font-size: 12px; padding: 2px 8px; border-radius: 4px; font-weight: 500; }
-.mode-exact { background: #e8f5e9; color: #2e7d32; }
+.mode-exact { background: #e8f0fe; color: #1a73e8; }
 .mode-fuzzy { background: #fff3e0; color: #e65100; }
 .mode-semantic { background: #f3e5f5; color: #6a1b9a; }
 .mode-model { background: #e3f2fd; color: #1565c0; }

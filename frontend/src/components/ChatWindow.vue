@@ -13,7 +13,7 @@
   <!-- ===== 聊天窗口整体容器（响应式移动端样式） ===== -->
   <div class="chat-window" :class="{ 'chat-mobile': isMobile }">
     <!-- ===== 顶部标题栏 ===== -->
-    <header class="chat-header" :class="{ 'chat-mobile-header': isMobile }" style="border-bottom-color: #2e7d32;">
+    <header class="chat-header" :class="{ 'chat-mobile-header': isMobile }" style="border-bottom-color: #1a73e8;">
       <span>{{ t('chat.title') }}</span>
       <!-- 身份栏：登录账号 · 所属组织/租户 · 部门 · 可应用知识库包类型 -->
       <span v-if="me.display_name" class="chat-balance" style="background:rgba(46,125,50,.08)" :title="t('chat.identityTip')">
@@ -245,7 +245,7 @@
           v-else
           class="send-btn"
           :disabled="!canSend || estimateBlocked"
-          :style="{ background: canSend && !estimateBlocked ? '#2e7d32' : '#e0e0e0' }"
+          :style="{ background: canSend && !estimateBlocked ? '#1a73e8' : '#e0e0e0' }"
           @click="handleSend"
           :title="t('chat.send')"
         >
@@ -315,7 +315,7 @@ watch(() => store.messages.length, () => { if (store.messages.length) loadBalanc
 const skillConfig = computed(() => ({
   icon: '🌐',
   label: t('chat.skillLabel'),
-  color: '#2e7d32',
+  color: '#1a73e8',
   placeholder: t('chat.placeholder'),
   welcome: t('chat.welcome'),
   examples: [t('chat.example1'), t('chat.example2'), t('chat.example3'), t('chat.example4')]
@@ -749,7 +749,7 @@ async function loadTranslationLangs() {
   background: #fff;
 }
 .chat-balance {
-  font-size: 12px; color: #2e7d32; background: #e8f5e9;
+  font-size: 12px; color: #1a73e8; background: #e8f0fe;
   padding: 4px 10px; border-radius: 20px; margin-left: auto; margin-right: 10px;
   white-space: nowrap; cursor: default;
 }
