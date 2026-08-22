@@ -215,8 +215,13 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		case ".xlsx":
 			aerr = fileproc.ApplyXlsx(filePath, outPath, tr)
 		default:
-			// 无原格式回写能力的格式（pdf/txt/csv/srt/vtt/md/json/yaml）：
-			// 统一降级生成「源文→该语言」xlsx 对照表作为产物
+			// PDF：译文版式重建（内置 CJK 字体）；其余格式与 PDF 失败时统一降级 xlsx 对照表
+			if ext == ".pdf" {
+				if perr := fileproc.WriteTranslatedPDF(outPath, texts, tr); perr == nil {
+					filesOut = append(filesOut, outPath)
+					continue
+				}
+			}
 			aerr = fileproc.WriteComparisonXlsx(outPath+".xlsx", texts, tr)
 			if aerr == nil {
 				filesOut = append(filesOut, outPath+".xlsx")

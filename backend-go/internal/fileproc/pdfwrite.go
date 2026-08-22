@@ -1,0 +1,137 @@
+// ============ 本文件职责中文说明 ============
+// PDF 译文排版回写：把翻译后的文本按阅读版式重建为 PDF（go-pdf/fpdf 纯 Go 实现，无外部依赖）。
+//   - 版式策略：A4 页面；首段启发式标题（≤60 字符时加大居左）；正文段落流式排版自动分页；页脚页码
+//   - 字体解析顺序（ResolvePDFFont）：system_config/env pdf_font_path → 常见系统 TTF → 内置
+//     assets/fonts/DroidSansFallbackFull.ttf（Apache 2.0，覆盖中日韩英）
+//   - 说明：PDF 原生内容流无法安全替换文字（字体子集/CID 编码），业界通行做法即版式重建；
+//     产物为可读性优先的译文 PDF，源文对照另有 xlsx 通道兜底
+// =============================================
+package fileproc
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+
+	"github.com/go-pdf/fpdf"
+)
+
+// 常见系统 CJK TTF 候选（ttc 字体集合 fpdf 不支持，仅列单文件 TTF）
+var systemFontCandidates = []string{
+	"/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf", // Debian/Ubuntu fonts-droid-fallback
+	"/usr/share/fonts/droid/DroidSansFallbackFull.ttf",
+	"/System/Library/Fonts/Supplemental/Songti.ttc", // macOS（ttc 会失败，占位提示用）
+	"C:/Windows/Fonts/msyh.ttc",
+}
+
+// bundledFontProbe 测试注入点：非空时覆盖内置字体路径（单测模拟无字体环境置空串无效，用专用变量控制）。
+var bundledFontProbe = "" // 置 "skip" 时跳过内置字体探测
+
+// bundledFontPath 内置字体路径（编译期相对本文件定位，随二进制分发无需安装）。
+func bundledFontPath() string {
+	if bundledFontProbe == "skip" {
+		return ""
+	}
+	_, self, _, _ := runtime.Caller(0)
+	if self != "" && !strings.HasPrefix(self, "/") && !strings.Contains(self, ":\\") {
+		self = "/" + self // 部分构建环境 Caller 丢失根斜杠
+	}
+	return filepath.Join(filepath.Dir(self), "assets", "fonts", "DroidSansFallbackFull.ttf")
+}
+
+// ResolvePDFFont 解析可用 CJK 字体：
+//  1. 环境变量 PDF_FONT_PATH（优先级最高，指向任意可嵌入的 TTF）
+//  2. 常见系统路径逐个探测
+//  3. 内置 DroidSansFallbackFull.ttf
+//
+// 返回空串表示无可用字体（调用方应降级 xlsx 对照表）。
+func ResolvePDFFont() string {
+	if p := os.Getenv("PDF_FONT_PATH"); p != "" {
+		if isUsableTTF(p) {
+			return p
+		}
+	}
+	for _, p := range systemFontCandidates {
+		if isUsableTTF(p) && !strings.HasSuffix(strings.ToLower(p), ".ttc") {
+			return p
+		}
+	}
+	if p := bundledFontPath(); isUsableTTF(p) {
+		return p
+	}
+	return ""
+}
+
+// isUsableTTF 判断字体文件存在且非 ttc 集合（fpdf 仅支持单 TTF）。
+func isUsableTTF(p string) bool {
+	if p == "" || strings.HasSuffix(strings.ToLower(p), ".ttc") {
+		return false
+	}
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir() && st.Size() > 1024
+}
+
+// WriteTranslatedPDF 生成译文 PDF（版式重建）。
+// 参数：outPath=输出文件路径；srcTexts=按阅读顺序排列的源文段落；translations=原文→译文映射
+// （与引擎 langTranslations 同构：未命中的段落回退显示原文）。
+// 返回错误：无可用字体或写出失败；调用方应降级 xlsx 对照表。
+func WriteTranslatedPDF(outPath string, srcTexts []string, translations map[string]string) error {
+	fontPath := ResolvePDFFont()
+	if fontPath == "" {
+		return fmt.Errorf("无可用 CJK TTF 字体（可配置环境变量 PDF_FONT_PATH 指向 .ttf 文件）")
+	}
+
+	pdf := fpdf.New("P", "mm", "A4", "")
+	pdf.SetMargins(18, 18, 18)
+	pdf.SetAutoPageBreak(true, 20)
+	// 字体以字节流注入：绕开 fpdf 对 fontDir 的路径拼接（其与绝对路径组合在部分环境会丢失根斜杠）
+	fontBytes, err := os.ReadFile(fontPath)
+	if err != nil {
+		return fmt.Errorf("读取字体失败 %s: %w", fontPath, err)
+	}
+	pdf.AddUTF8FontFromBytes("cjk", "", fontBytes)
+	pdf.AddPage()
+	pdf.SetFooterFunc(func() {
+		pdf.SetY(-14)
+		pdf.SetFont("cjk", "", 8)
+		pdf.SetTextColor(130, 130, 130)
+		pdf.CellFormat(0, 8, fmt.Sprintf("%d / %d", pdf.PageNo(), pdf.PageCount()), "", 0, "C", false, 0, "")
+	})
+
+	const (
+		titleSize = 15.0
+		bodySize  = 10.5
+		lineGap   = 6.2 // MultiCell 行高（mm），约 1.7 倍行距
+	)
+
+	first := true
+	for _, src := range srcTexts {
+		src = strings.TrimSpace(src)
+		if src == "" {
+			continue
+		}
+		text := src
+		if t := strings.TrimSpace(translations[src]); t != "" {
+			text = t // 命中译文的段落输出译文；未命中的保留原文（避免内容丢失）
+		}
+		// 标题启发：首段且足够短 → 大字号 + 段后加距
+		if first && len([]rune(src)) <= 60 {
+			pdf.SetFont("cjk", "", titleSize)
+			pdf.MultiCell(0, titleSize*0.62, text, "", "L", false)
+			pdf.Ln(3.5)
+			first = false
+			continue
+		}
+		first = false
+		pdf.SetFont("cjk", "", bodySize)
+		pdf.MultiCell(0, lineGap, text, "", "L", false)
+		pdf.Ln(1.6) // 段间距
+	}
+
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return err
+	}
+	return pdf.OutputFileAndClose(outPath)
+}

@@ -1,0 +1,4 @@
+DroidSansFallbackFull.ttf
+来源：AOSP platform_frameworks_base（oreo-release 分支 data/fonts/）
+许可证：Apache License 2.0（http://www.apache.org/licenses/LICENSE-2.0）
+用途：PDF 译文排版回写的内嵌 CJK 字体（fpdf AddUTF8Font）。
