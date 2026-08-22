@@ -30,11 +30,15 @@
         class="tp-textarea"
       ></textarea>
 
-      <!-- 文件模式 -->
+      <!-- 文件模式（支持多选） -->
       <div v-else class="tp-filezone" @click="($refs.fileInput as HTMLInputElement).click()">
-        <input ref="fileInput" type="file" hidden accept=".docx,.xlsx,.pptx,.pdf,.txt,.csv,.srt,.vtt,.md,.json,.yaml,.yml" @change="onFileSelect" />
-        <div v-if="!file" class="tp-file-hint">📎 {{ t('tk.fileHint') }}</div>
-        <div v-else class="tp-file-name">{{ file.name }}（{{ (file.size / 1024).toFixed(0) }} KB）</div>
+        <input ref="fileInput" type="file" multiple hidden accept=".docx,.xlsx,.pptx,.pdf,.txt,.csv,.srt,.vtt,.md,.json,.yaml,.yml" @change="onFileSelect" />
+        <div v-if="!files.length" class="tp-file-hint">📎 {{ t('tk.fileHint') }}<br /><span style="font-size:12px">{{ t('tk.multiHint') }}</span></div>
+        <div v-else class="tp-file-name">
+          {{ files.length > 1 ? tpl('tk.filesCount', { n: files.length }) : files[0].name }}
+          （{{ filesTotalKB }} KB）
+          <button class="ad-btn-sm" style="margin-left:8px" @click.stop="clearFiles">{{ t('users.colActions')==='操作' ? '重选' : 'Reselect' }}</button>
+        </div>
       </div>
 
       <div class="tp-row">
@@ -109,16 +113,19 @@ import { t, tpl } from '@/i18n'
 import { fmtTime } from './admin/ui'
 
 // 创建表单与模式
-// 创建模式：text=粘贴文本 / file=上传文件
+// 创建模式：text=粘贴文本 / file=上传文件（支持混合类型多选：pdf+word+ppt+excel 等任意组合）
 const mode = ref<'text' | 'file'>('text')
 const form = ref({ title: '', text: '' })
 // 目标语言（与工作台同款多选选择器；默认 en）
 const selectedLangs = ref<string[]>(['en'])
-const file = ref<File | null>(null)
 // 提交用语言串（逗号分隔）
 const langsJoined = computed(() => (selectedLangs.value.length ? selectedLangs.value.join(',') : 'en'))
 const creating = ref(false)
+// 多文件选择：逐文件独立走各自提取/回写管道，互不影响
+const files = ref<File[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
+// 已选文件总大小（KB 展示）
+const filesTotalKB = computed(() => (files.value.reduce((a, f) => a + f.size, 0) / 1024).toFixed(0))
 
 // ---- 报价预览（文本模式实时预估；强制计费且未开通时禁提交） ----
 const estimate = ref<any>(null)
@@ -156,11 +163,20 @@ const qaSummary = computed<any | null>(() => {
 const tickets = ref<any[]>([])
 const detail = ref<any>(null)
 
-// 选择文件
-// onFileSelect 记录用户选择的文件
+// onFileSelect 记录用户选择的多文件（追加式：可多次选择累积；过滤重复文件名）
 function onFileSelect(e: Event) {
-  const f = (e.target as HTMLInputElement).files?.[0]
-  if (f) file.value = f
+  const list = Array.from((e.target as HTMLInputElement).files || [])
+  if (!list.length) return
+  const exist = new Set(files.value.map(f => f.name + f.size))
+  for (const f of list) {
+    const key = f.name + f.size
+    if (!exist.has(key)) { files.value.push(f); exist.add(key) }
+  }
+}
+// clearFiles 清空已选文件
+function clearFiles() {
+  files.value = []
+  if (fileInput.value) fileInput.value.value = ''
 }
 
 // 创建工单：文本走 JSON，文件走 multipart；成功自动入队并刷新
@@ -177,8 +193,9 @@ async function create() {
         target_langs: langsJoined.value,
       })
     } else {
-      if (!file.value) return
-      r = await ticketCreateFile(file.value, {
+      if (!files.value.length) return
+      // 多文件提交：混合类型（pdf/word/ppt/excel…）逐文件独立处理，产物打包下载
+      r = await ticketCreateFile([...files.value], {
         title: form.value.title.trim(),
         target_langs: langsJoined.value,
       })
@@ -186,8 +203,7 @@ async function create() {
     if (!r.success) { alert(r.message); return }
     // 重置表单
     form.value = { title: '', text: '' }
-    file.value = null
-    if (fileInput.value) fileInput.value.value = ''
+    clearFiles()
     await load()
   } finally {
     creating.value = false

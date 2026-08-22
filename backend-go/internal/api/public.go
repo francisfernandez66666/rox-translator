@@ -73,9 +73,9 @@ table{width:100%;border-collapse:collapse;margin:14px 0}
 th,td{border:1px solid #e0e0e0;padding:10px 12px;text-align:left;font-size:14px}
 th{background:#e8f5e9;color:var(--green)}
 </style></head><body>
-<div class="header"><div class="brand">🌐 翻译助手</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">条款 Terms</a><a href="/docs/sla">SLA</a><a href="/docs/privacy">隐私 Privacy</a></div></div>
+<div class="header"><div class="brand">🌐 翻译助手</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">条款 Terms</a><a href="/docs/sla">SLA</a><a href="/status">状态 Status</a><a href="/docs/privacy">隐私 Privacy</a></div></div>
 <div class="wrap"><div class="card">` + body + `</div></div>
-<div class="footer">© 2026 翻译助手 · ROX 多语翻译知识库 · <a href="/admin">管理后台</a></div>
+<div class="footer">© 2026 翻译助手 · ROX 多语翻译知识库 · <a href="/status">服务状态</a> · <a href="/admin">管理后台</a></div>
 </body></html>`
 }
 

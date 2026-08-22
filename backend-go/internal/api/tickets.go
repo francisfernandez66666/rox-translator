@@ -11,8 +11,10 @@ package api
 //   - 工单操作均写入审计；工单查询全部限定生效租户（租户隔离）
 
 import (
+	"archive/zip"
 	"io"
 	"fmt"
+	"mime/multipart"
 	"github.com/xuri/excelize/v2"
 	"time"
 	"sort"
@@ -99,59 +101,90 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
-	// 10MB 上传上限与 multipart 解析
+	// 10MB 上传上限与 multipart 解析（多文件共享 10MB 总上限）
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文件解析失败或超过 10MB 上限"})
 		return
 	}
-	file, hdr, ferr := r.FormFile("file")
-	if ferr != nil {
+	// 多文件：优先取 "files" 字段（可重复）；兼容旧单文件字段 "file"
+	var headers []*multipart.FileHeader
+	if r.MultipartForm != nil {
+		headers = append(headers, r.MultipartForm.File["files"]...)
+		if len(headers) == 0 {
+			headers = append(headers, r.MultipartForm.File["file"]...)
+		}
+	}
+	if len(headers) == 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少文件"})
 		return
 	}
-	defer file.Close()
-	// 扩展名白名单（与 fileproc.ExtractTexts 支持的格式一致）
-	ext := strings.ToLower(filepath.Ext(hdr.Filename))
+	// 扩展名白名单（与 fileproc.ExtractTexts 支持的格式一致；逐文件校验）
 	allowed := map[string]bool{
 		".docx": true, ".xlsx": true, ".pptx": true, ".pdf": true,
 		".txt": true, ".csv": true, ".srt": true, ".vtt": true,
 		".md": true, ".json": true, ".yaml": true, ".yml": true,
 	}
-	if !allowed[ext] {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "仅支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml"})
-		return
+	for _, hdr := range headers {
+		ext := strings.ToLower(filepath.Ext(hdr.Filename))
+		if !allowed[ext] {
+			writeJSON(w, 400, map[string]interface{}{"success": false,
+				"message": "不支持的格式: " + hdr.Filename + "（仅支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml）"})
+			return
+		}
 	}
 	title := r.FormValue("title")
 	targetLangs := r.FormValue("target_langs")
 	if targetLangs == "" {
 		targetLangs = "en"
 	}
-	// 保存到 上传目录/tickets/
+	// 逐个保存到 上传目录/tickets/
 	dir := filepath.Join(s.Cfg.UploadDir, "tickets")
 	_ = os.MkdirAll(dir, 0o755)
-	saveName := fmt.Sprintf("%d_%s", time.Now().UnixNano(), filepath.Base(hdr.Filename))
-	savePath := filepath.Join(dir, saveName)
-	out, cerr := os.Create(savePath)
-	if cerr != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "保存文件失败"})
-		return
-	}
-	if _, cerr = io.Copy(out, file); cerr != nil {
+	saved := make([]struct{ path, name string }, 0, len(headers))
+	for _, hdr := range headers {
+		saveName := fmt.Sprintf("%d_%s", time.Now().UnixNano(), filepath.Base(hdr.Filename))
+		savePath := filepath.Join(dir, saveName)
+		src, ferr := hdr.Open()
+		if ferr != nil {
+			writeJSON(w, 500, map[string]interface{}{"success": false, "message": "读取文件失败: " + hdr.Filename})
+			return
+		}
+		out, cerr := os.Create(savePath)
+		if cerr != nil {
+			src.Close()
+			writeJSON(w, 500, map[string]interface{}{"success": false, "message": "保存文件失败"})
+			return
+		}
+		if _, cerr = io.Copy(out, src); cerr != nil {
+			out.Close()
+			src.Close()
+			writeJSON(w, 500, map[string]interface{}{"success": false, "message": "写入文件失败"})
+			return
+		}
 		out.Close()
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "写入文件失败"})
-		return
+		src.Close()
+		saved = append(saved, struct{ path, name string }{savePath, hdr.Filename})
 	}
-	out.Close()
 	if title == "" {
-		title = hdr.Filename
+		title = saved[0].name + fmt.Sprintf(" 等 %d 个文件", len(saved))
+		if len(saved) == 1 {
+			title = saved[0].name
+		}
 	}
-	t, err := s.Store.CreateTicket(s.effTenant(r, u), u.ID, title, "", savePath, targetLangs)
+	// 创建工单（file_path 记首个文件，兼容旧列表展示；全部文件入 ticket_files 表）
+	t, err := s.Store.CreateTicket(s.effTenant(r, u), u.ID, title, "", saved[0].path, targetLangs)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_create_file", "tickets", t.TicketNo)
+	tid := s.effTenant(r, u)
+	for _, f := range saved {
+		_, _ = s.Store.AddTicketFile(&store.TicketFile{
+			TenantID: tid, TicketID: t.ID, FileName: f.name, FilePath: f.path,
+		})
+	}
+	s.Store.LogAudit(tid, u.ID, "ticket_create_file", "tickets", fmt.Sprintf("%s (%d files)", t.TicketNo, len(saved)))
 	if s.TicketSvc != nil {
 		t.Status = store.TicketQueued
 		_ = s.Store.UpdateTicket(t)
@@ -276,7 +309,64 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 	if baseName == "" {
 		baseName = fmt.Sprintf("ticket_%d", t.ID)
 	}
-	// ① 原格式回写产物直接流式返回
+	// ⓪ 多文件工单：?file_id= 取单个文件产物；否则把全部产物打包 zip 返回
+	tfiles, _ := s.Store.TicketFiles(t.ID)
+	if len(tfiles) > 0 {
+		// 单文件下载（可选 file_id 指定）
+		if fidStr := r.URL.Query().Get("file_id"); fidStr != "" {
+			fid, _ := strconv.ParseInt(fidStr, 10, 64)
+			for _, f := range tfiles {
+				if f.ID == fid && f.ResultPath != "" {
+					if fh, oerr := os.Open(f.ResultPath); oerr == nil {
+						defer fh.Close()
+						w.Header().Set("Content-Disposition", `attachment; filename="`+mimeEscape(f.FileName)+`"`)
+						http.ServeContent(w, r, f.FileName, time.Now(), fh)
+						return
+					}
+				}
+			}
+			writeJSON(w, 404, map[string]interface{}{"success": false, "message": "该文件的产物不存在"})
+			return
+		}
+		// 全部产物打包 zip（跳过未生成/失败的文件）
+		var paths []string
+		var names []string
+		for _, f := range tfiles {
+			if f.ResultPath != "" {
+				if _, serr := os.Stat(f.ResultPath); serr == nil {
+					paths = append(paths, f.ResultPath)
+					names = append(names, resultFileName(f))
+				}
+			}
+		}
+		if len(paths) == 1 {
+			fh, oerr := os.Open(paths[0])
+			if oerr == nil {
+				defer fh.Close()
+				w.Header().Set("Content-Disposition", `attachment; filename="`+names[0]+`"`)
+				http.ServeContent(w, r, names[0], time.Now(), fh)
+				return
+			}
+		}
+		if len(paths) > 1 {
+			w.Header().Set("Content-Disposition", `attachment; filename="`+baseName+`.zip"`)
+			w.Header().Set("Content-Type", "application/zip")
+			zw := zip.NewWriter(w)
+			for i, p := range paths {
+				data, rerr := os.ReadFile(p)
+				if rerr != nil {
+					continue
+				}
+				fe, _ := zw.Create(names[i])
+				_, _ = fe.Write(data)
+			}
+			_ = zw.Close()
+			return
+		}
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "暂无已生成的产物（部分文件可能处理失败）"})
+		return
+	}
+	// ① 原格式回写产物直接流式返回（旧单文件工单）
 	if t.ResultPath != "" {
 		f, ferr := os.Open(t.ResultPath)
 		if ferr == nil {
@@ -470,4 +560,23 @@ func (s *Server) workflow() *orchestrator.Workflow {
 		return nil
 	}
 	return orchestrator.NewWorkflow(s.Store, s.Engine, s.Ten, s.DB)
+}
+
+// resultFileName 生成多文件工单产物在 zip 中的文件名（原文件名 + 语言后缀 + 原产物扩展名）。
+// 参数 f: 工单文件行；返回形如 "报告_zh.docx"。
+func resultFileName(f *store.TicketFile) string {
+	base := f.FileName
+	if base == "" {
+		base = fmt.Sprintf("file_%d", f.ID)
+	}
+	ext := filepath.Ext(f.ResultPath)
+	if ext == "" {
+		ext = filepath.Ext(base)
+	}
+	return strings.TrimSuffix(base, filepath.Ext(base)) + ext
+}
+
+// mimeEscape Content-Disposition 文件名兜底转义（非 ASCII 场景由前端 zip 名承担）。
+func mimeEscape(name string) string {
+	return strings.ReplaceAll(name, `"`, `_`)
 }

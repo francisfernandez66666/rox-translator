@@ -97,9 +97,10 @@ interface PanelDef { key: string; label: string; comp: any }
 interface WorkspaceDef { label: string; panels: PanelDef[] }
 
 // ---- 三种角色工作台（按角色等级自动匹配，扁平导航） ----
-// L4 超管 = 平台运营视角；L3 租管 = 企业管理视角；L2 部门管理员 = 部门管理视角
+// L4 超管 = 全部权限：平台运营面板 + 企业管理全部面板（跨租户聚合视角）
+// L3 租管 = 企业管理视角；L2 部门管理员 = 部门管理视角
 const workspaces: Record<number, WorkspaceDef> = {
-  // 平台运营（超级管理员）
+  // 平台运营（超级管理员，全量菜单）
   4: {
     label: 'admin.wsPlatform',
     panels: [
@@ -108,8 +109,16 @@ const workspaces: Record<number, WorkspaceDef> = {
       { key: 'packages', label: 'admin.packages', comp: Packages },
       { key: 'billing', label: 'admin.payOrders', comp: Billing },
       { key: 'org', label: 'admin.orgs', comp: Org },
+      { key: 'users', label: 'admin.users', comp: Users },
+      { key: 'usage', label: 'admin.usage', comp: Usage },
       { key: 'kb', label: 'admin.industryKb', comp: Kb },
       { key: 'models', label: 'admin.globalModels', comp: Models },
+      { key: 'invites', label: 'admin.invites', comp: Invites },
+      { key: 'apikeys', label: 'admin.apikeys', comp: ApiKeys },
+      { key: 'webhooks', label: 'admin.webhooks', comp: Webhooks },
+      { key: 'workflow', label: 'admin.workflow', comp: Workflow },
+      { key: 'tickets', label: 'admin.tickets', comp: Tickets },
+      { key: 'audit', label: 'admin.auditPanel', comp: Audit },
       { key: 'alerts', label: 'admin.alerts', comp: Alerts },
     ],
   },

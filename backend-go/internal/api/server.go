@@ -124,6 +124,7 @@ func (s *Server) routesTranslate() {
 	s.mux.HandleFunc("/api/translation/recognize-kb", s.handleRecognizeKB)
 	s.mux.HandleFunc("/api/translation/import-kb", s.handleImportKB)
 	s.mux.HandleFunc("/api/translation/import-bitext", s.handleImportBitext)
+	s.mux.HandleFunc("/api/translation/import-tmx", s.handleImportTMX)
 	s.mux.HandleFunc("/api/translation/kb-stats", s.handleKBStats)
 }
 
