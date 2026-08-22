@@ -27,7 +27,7 @@ func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	trial := int64(500)
+	trial := int64(100)
 	if v, _ := s.Store.GetConfig("trial_sentences"); v != "" {
 		if n, e := parseInt64(v); e == nil && n > 0 {
 			trial = n

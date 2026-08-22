@@ -96,6 +96,42 @@
         <img v-if="isImageContent(staticQRImage)" :src="staticQRImage" alt="static-qr" style="max-width:200px;margin-top:10px;border:1px solid #e0e0e0;border-radius:8px" />
       </div>
     </div>
+
+    <!-- 注册与触达（超管）：邮箱验证 / 注册审核 / 人机验证 / 群机器人 -->
+    <div class="ad-chart-card">
+      <h3>{{ t('packages.regNotifyTitle') }}</h3>
+      <div class="ad-hint">{{ t('packages.regNotifyHint') }}</div>
+      <div class="ad-row" style="margin-top: 8px">
+        <label class="ad-switch"><input type="checkbox" v-model="regCfg.email_verify_enabled" /><span></span></label>
+        <span class="ad-hint">{{ t('packages.emailVerify') }}</span>
+      </div>
+      <div class="ad-row">
+        <label class="ad-switch"><input type="checkbox" v-model="regCfg.email_notify_enabled" /><span></span></label>
+        <span class="ad-hint">{{ t('packages.emailNotify') }}</span>
+      </div>
+      <div class="ad-row">
+        <label class="ad-switch"><input type="checkbox" v-model="regCfg.registration_review" /><span></span></label>
+        <span class="ad-hint">{{ t('packages.regReview') }}</span>
+      </div>
+      <div class="ad-row">
+        <span class="ad-hint">{{ t('packages.captchaProvider') }}</span>
+        <select v-model="regCfg.captcha_provider" class="ad-input ad-mini-w">
+          <option value="">{{ t('packages.captchaOff') }}</option>
+          <option value="turnstile">Turnstile</option>
+        </select>
+      </div>
+      <div class="ad-row" v-if="regCfg.captcha_provider === 'turnstile'">
+        <input v-model="regCfg.captcha_site_key" :placeholder="t('packages.captchaSiteKey')" class="ad-input ad-wide" />
+        <input v-model="regCfg.captcha_secret_key" type="password" :placeholder="t('packages.captchaSecretKey')" class="ad-input ad-wide" />
+      </div>
+      <div class="ad-row">
+        <input v-model="regCfg.wecom_webhook_url" :placeholder="t('packages.wecomWebhook')" class="ad-input ad-wide" />
+      </div>
+      <div class="ad-row">
+        <input v-model="regCfg.dingtalk_webhook_url" :placeholder="t('packages.dingtalkWebhook')" class="ad-input ad-wide" />
+      </div>
+      <button class="ad-btn ad-btn-green" style="margin-top: 8px" @click="saveRegCfg">{{ t('common.save') }}</button>
+    </div>
   </section>
 </template>
 
@@ -106,8 +142,20 @@ import { t } from '@/i18n'
 
 const pkgs = ref<any[]>([])
 const sentenceEnforced = ref(false)
-const trialSentences = ref(500)
+const trialSentences = ref(100)
 const payMode = ref('mock')
+
+// 注册与触达配置（三期）：开关用 "1"/"0" 字符串与后端 system_config 对齐
+const regCfg = ref<Record<string, string>>({
+  email_verify_enabled: '0',
+  email_notify_enabled: '0',
+  registration_review: '0',
+  captcha_provider: '',
+  captcha_site_key: '',
+  captcha_secret_key: '',
+  wecom_webhook_url: '',
+  dingtalk_webhook_url: '',
+})
 const staticQRImage = ref('')
 const form = ref({ code: '', name: '', ptype: 'paid', sentences: 1000, price_money: 0, duration_days: 30 })
 
@@ -132,7 +180,28 @@ async function loadAll() {
     if ((cfg as any).trial_sentences) trialSentences.value = Number((cfg as any).trial_sentences)
     if ((cfg as any).pay_mode) payMode.value = (cfg as any).pay_mode
     if ((cfg as any).static_qr_image) staticQRImage.value = (cfg as any).static_qr_image
+    // 回填注册与触达配置（captcha_secret_key 后端不回显，保持输入框为空表示不修改）
+    const c = cfg as any
+    for (const k of ['email_verify_enabled', 'email_notify_enabled', 'registration_review',
+      'captcha_provider', 'captcha_site_key', 'wecom_webhook_url', 'dingtalk_webhook_url']) {
+      if (c[k] !== undefined && c[k] !== '') regCfg.value[k] = c[k]
+    }
   }
+}
+
+// saveRegCfg 保存注册与触达配置（开关转 "1"/"0"；secret_key 留空则不提交=不修改）
+async function saveRegCfg() {
+  const payload: Record<string, string> = {}
+  for (const k of ['email_verify_enabled', 'email_notify_enabled', 'registration_review']) {
+    payload[k] = regCfg.value[k] === '1' || regCfg.value[k] === true ? '1' : '0'
+  }
+  for (const k of ['captcha_provider', 'captcha_site_key', 'wecom_webhook_url', 'dingtalk_webhook_url']) {
+    payload[k] = regCfg.value[k] || ''
+  }
+  if (regCfg.value.captcha_secret_key) payload.captcha_secret_key = regCfg.value.captcha_secret_key
+  const r = await adminPackageSettingsSave(payload)
+  if (!r.success) { alert(r.message); return }
+  alert(t('packages.saved'))
 }
 
 // savePayMode 保存支付模式（mock/sdk/static_qr）

@@ -6,7 +6,6 @@
 package main
 
 import (
-	"strings"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -14,9 +13,11 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	httppprof "net/http/pprof" // 注册 pprof Handler（仅经下方独立回环监听器暴露，外网不可达）
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -200,6 +201,29 @@ func main() {
 		}
 		log.Println("服务已安全退出")
 	}()
+
+	// pprof 诊断端点（三期）：仅绑定本机回环地址，外网/反代不可达。
+	// 用途：内存增长定位（curl 127.0.0.1:18787/debug/pprof/heap > heap.out 后 go tool pprof 分析）。
+	// 端口可经 PPROF_ADDR 覆盖；设为 off 关闭。
+	pprofAddr := os.Getenv("PPROF_ADDR")
+	if pprofAddr == "" {
+		pprofAddr = "127.0.0.1:18787"
+	}
+	if pprofAddr != "off" {
+		go func() {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/debug/pprof/", httppprof.Index)
+			mux.HandleFunc("/debug/pprof/cmdline", httppprof.Cmdline)
+			mux.HandleFunc("/debug/pprof/profile", httppprof.Profile)
+			mux.HandleFunc("/debug/pprof/symbol", httppprof.Symbol)
+			mux.HandleFunc("/debug/pprof/trace", httppprof.Trace)
+			srv := &http.Server{Addr: pprofAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+			log.Printf("pprof 诊断端点已启动（仅本机）: http://%s/debug/pprof/", pprofAddr)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("pprof 端点启动失败（不影响主服务）: %v", err)
+			}
+		}()
+	}
 
 	if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("HTTP 服务启动失败: %v", err)

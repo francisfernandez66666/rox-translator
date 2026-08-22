@@ -101,7 +101,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// 试用句数（可配置）：默认 500 句（每源句 × 目标语言数）
-	trialSentences := int64(500)
+	trialSentences := int64(100)
 	if v, _ := s.Store.GetConfig("trial_sentences"); v != "" {
 		if sv, err := strconv.ParseInt(v, 10, 64); err == nil && sv > 0 {
 			trialSentences = sv
@@ -277,7 +277,7 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 读取发放配置（与注册路径同一套配置键）
-	trialSentences := int64(500)
+	trialSentences := int64(100)
 	if v, _ := s.Store.GetConfig("trial_sentences"); v != "" {
 		if sv, perr := strconv.ParseInt(v, 10, 64); perr == nil && sv > 0 {
 			trialSentences = sv

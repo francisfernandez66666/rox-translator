@@ -150,7 +150,7 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	trial := int64(500)
+	trial := int64(100)
 	if v, _ := s.Store.GetConfig("trial_sentences"); v != "" {
 		if n, e := parseInt64(v); e == nil && n > 0 {
 			trial = n
@@ -168,9 +168,18 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 	if v, _ := s.Store.GetConfig("static_qr_image"); v != "" {
 		staticQR = v
 	}
+	// 三期注册与触达配置：邮箱验证 / 注册审核 / 人机验证 / 群机器人（secret_key 只写不回显）
+	getCfg := func(k string) string { v, _ := s.Store.GetConfig(k); return v }
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "sentence_enforced": enforced, "trial_sentences": trial,
 		"pay_mode": payMode, "static_qr_image": staticQR,
+		"email_verify_enabled": getCfg("email_verify_enabled"),
+		"email_notify_enabled": getCfg("email_notify_enabled"),
+		"registration_review":  getCfg("registration_review"),
+		"captcha_provider":     getCfg("captcha_provider"),
+		"captcha_site_key":     getCfg("captcha_site_key"),
+		"wecom_webhook_url":    getCfg("wecom_webhook_url"),
+		"dingtalk_webhook_url": getCfg("dingtalk_webhook_url"),
 	})
 }
 
@@ -188,6 +197,15 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		TrialSentences   *int64  `json:"trial_sentences"`   // 试用句数
 		PayMode          *string `json:"pay_mode"`          // mock / sdk / static_qr
 		StaticQRImage    *string `json:"static_qr_image"`   // 静态收款码图片 URL 或 base64
+		// 三期注册与触达配置（均可选，传了才更新；secret_key 只写不回显）
+		EmailVerifyEnabled *string `json:"email_verify_enabled"` // "1"=注册需邮箱验证码
+		EmailNotifyEnabled *string `json:"email_notify_enabled"` // "1"=站内通知同步邮件触达租户管理员
+		RegistrationReview *string `json:"registration_review"`  // "1"=新试用租户需超管发放额度
+		CaptchaProvider    *string `json:"captcha_provider"`     // 空/none=关闭；turnstile
+		CaptchaSiteKey     *string `json:"captcha_site_key"`     // Turnstile 站点 key（公开下发）
+		CaptchaSecretKey   *string `json:"captcha_secret_key"`   // Turnstile 服务端密钥（只写）
+		WecomWebhookURL    *string `json:"wecom_webhook_url"`    // 企业微信群机器人地址
+		DingtalkWebhookURL *string `json:"dingtalk_webhook_url"` // 钉钉群机器人地址
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -217,6 +235,29 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	}
 	if req.StaticQRImage != nil {
 		if err := s.Store.SetConfig("static_qr_image", *req.StaticQRImage); err != nil {
+			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+	}
+	// 三期注册与触达配置保存（键名白名单直传；空串=清除配置）
+	cfgKeys := []struct {
+		key string
+		val *string
+	}{
+		{"email_verify_enabled", req.EmailVerifyEnabled},
+		{"email_notify_enabled", req.EmailNotifyEnabled},
+		{"registration_review", req.RegistrationReview},
+		{"captcha_provider", req.CaptchaProvider},
+		{"captcha_site_key", req.CaptchaSiteKey},
+		{"captcha_secret_key", req.CaptchaSecretKey},
+		{"wecom_webhook_url", req.WecomWebhookURL},
+		{"dingtalk_webhook_url", req.DingtalkWebhookURL},
+	}
+	for _, kv := range cfgKeys {
+		if kv.val == nil {
+			continue
+		}
+		if err := s.Store.SetConfig(kv.key, *kv.val); err != nil {
 			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 			return
 		}
