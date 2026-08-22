@@ -217,7 +217,7 @@ body {
 /* 顶部导航栏：品牌 + 状态 + 操作按钮 */
 .app-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 20px; background: #2e7d32; color: #fff; flex-shrink: 0;
+  padding: 12px 20px; background: #1a73e8; color: #fff; flex-shrink: 0;
 }
 .header-left { display: flex; align-items: center; gap: 10px; }
 .header-icon { font-size: 24px; }
@@ -263,13 +263,13 @@ body {
   width: 100%; padding: 10px 12px; border: 1px solid #e0e0e0; border-radius: 10px;
   font-size: 14px; background: #f8f9fa; cursor: pointer;
 }
-.settings-item select:focus { outline: none; border-color: #2e7d32; }
+.settings-item select:focus { outline: none; border-color: #1a73e8; }
 .settings-close {
   width: 100%; padding: 10px; border: none; border-radius: 10px;
-  background: #2e7d32; color: #fff; font-size: 15px; cursor: pointer;
+  background: #1a73e8; color: #fff; font-size: 15px; cursor: pointer;
   transition: background 0.2s;
 }
-.settings-close:hover { background: #1b5e20; }
+.settings-close:hover { background: #1557b0; }
 
 /* ===== 移动端适配 ===== */
 @media (max-width: 768px) {
@@ -287,7 +287,7 @@ body {
 .loading-spinner {
   width: 48px; height: 48px;
   border: 4px solid #e0e0e0;
-  border-top-color: #2e7d32;
+  border-top-color: #1a73e8;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
