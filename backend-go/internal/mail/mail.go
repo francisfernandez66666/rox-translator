@@ -10,6 +10,7 @@
 package mail
 
 import (
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net/smtp"
@@ -92,12 +93,41 @@ func (s *SMTPSender) Send(m *Message) error {
 		"MIME-Version: 1.0\r\n" +
 		"Content-Type: text/plain; charset=UTF-8\r\n" +
 		"\r\n" + m.Body
-	// ★ 真实接入点：587 用 smtp.SendMail（STARTTLS 自动协商）；
-	//   465 需显式 TLS 拨号（crypto/tls），当前以 587 为主实现。
-	if s.port == "465" {
-		return fmt.Errorf("465 隐式 TLS 暂未启用，请配置 587 端口")
-	}
+	// ★ 发送通道：465 用隐式 TLS 直连（crypto/tls）；587 用 smtp.SendMail（STARTTLS 自动协商）
 	auth := smtp.PlainAuth("", s.user, s.pass, s.host)
+	if s.port == "465" {
+		conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: s.host})
+		if err != nil {
+			return fmt.Errorf("SMTP TLS 连接失败: %w", err)
+		}
+		defer conn.Close()
+		c, err := smtp.NewClient(conn, s.host)
+		if err != nil {
+			return fmt.Errorf("SMTP 客户端创建失败: %w", err)
+		}
+		defer c.Close()
+		if aerr := c.Auth(auth); aerr != nil {
+			return fmt.Errorf("SMTP 认证失败: %w", aerr)
+		}
+		if aerr := c.Mail(s.from); aerr != nil {
+			return fmt.Errorf("设置发件人失败: %w", aerr)
+		}
+		if aerr := c.Rcpt(m.To); aerr != nil {
+			return fmt.Errorf("设置收件人失败: %w", aerr)
+		}
+		w, werr := c.Data()
+		if werr != nil {
+			return fmt.Errorf("打开数据通道失败: %w", werr)
+		}
+		if _, werr = w.Write([]byte(msg)); werr != nil {
+			w.Close()
+			return fmt.Errorf("写入邮件内容失败: %w", werr)
+		}
+		if werr = w.Close(); werr != nil {
+			return fmt.Errorf("提交邮件失败: %w", werr)
+		}
+		return c.Quit()
+	}
 	return smtp.SendMail(addr, auth, s.from, []string{m.To}, []byte(msg))
 }
 

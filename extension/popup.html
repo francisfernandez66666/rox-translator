@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<!-- popup.html — 插件设置页：服务地址 / API Key / 默认目标语言 -->
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { width: 300px; margin: 0; padding: 16px; font: 13px/1.6 system-ui, sans-serif; }
+    h1 { font-size: 15px; margin: 0 0 10px; color: #1a237e; }
+    label { display: block; margin: 10px 0 4px; color: #555; }
+    input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; }
+    button { margin-top: 14px; width: 100%; padding: 9px; border: none; border-radius: 8px; background: #1a237e; color: #fff; cursor: pointer; }
+    button:hover { background: #3949ab; }
+    .hint { color: #999; font-size: 12px; margin-top: 10px; }
+    .ok { color: #2e7d32; display: none; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <h1>翻译助手 · 划词翻译</h1>
+  <label>服务地址</label>
+  <input id="baseUrl" placeholder="https://translator.example.com" />
+  <label>API Key（管理后台签发）</label>
+  <input id="apiKey" placeholder="tk_..." />
+  <label>目标语言（逗号分隔，如 en,ja）</label>
+  <input id="langs" placeholder="en" />
+  <button id="save">保存</button>
+  <div class="ok" id="ok">已保存 ✓ 选中网页文字即可翻译</div>
+  <div class="hint">选中文字 → 点「译」按钮 → 气泡显示结果。句数按企业套餐计费。</div>
+  <script src="popup.js"></script>
+</body>
+</html>

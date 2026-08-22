@@ -45,7 +45,8 @@ func endsSentence(s string) bool {
 }
 
 // ExtractTexts 提取文本，按扩展名分发。
-// 参数：filepath=文件路径；支持 .docx/.pptx/.xlsx；返回提取的文本片段列表。
+// 参数：filepath=文件路径；支持 .docx/.pptx/.xlsx/.pdf/.txt/.csv/.srt/.vtt/.md/.json/.yaml/.yml；
+// 返回提取的文本片段列表。
 func ExtractTexts(filepath string) ([]string, error) {
 	ext := strings.ToLower(filepathExt(filepath))
 	e := &Extractor{}
@@ -57,6 +58,18 @@ func ExtractTexts(filepath string) ([]string, error) {
 		err = extractPptx(filepath, e) // 解析 pptx
 	case ".xlsx":
 		err = extractXlsx(filepath, e) // 解析 xlsx
+	case ".pdf":
+		err = extractPdfText(filepath, e) // pdf（降级路径见 pdf.go）
+	case ".txt", ".csv":
+		err = extractLines(filepath, e, func(l string) string { return strings.TrimSpace(l) }) // 整行入库
+	case ".srt", ".vtt":
+		err = extractSubtitle(filepath, e) // 字幕块
+	case ".md":
+		err = extractMarkdown(filepath, e) // Markdown 正文
+	case ".json":
+		err = extractJSON(filepath, e) // JSON 字符串值
+	case ".yaml", ".yml":
+		err = extractYAML(filepath, e) // YAML 标量值
 	default:
 		return nil, fmt.Errorf("不支持的格式: %s", ext)
 	}

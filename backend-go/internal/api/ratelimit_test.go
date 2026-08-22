@@ -8,6 +8,7 @@ package api
 
 import "testing"
 
+// TestLoginLimiter 登录限流主流程：失败累计→冷却封锁→成功清零。
 func TestLoginLimiter(t *testing.T) {
 	l := newLoginLimiter()
 	// 初始不封锁
@@ -37,6 +38,7 @@ func TestLoginLimiter(t *testing.T) {
 	}
 }
 
+// TestLoginLimiterWindowExpiry 窗口过期后失败计数重置、封锁解除。
 func TestLoginLimiterWindowExpiry(t *testing.T) {
 	l := newLoginLimiter()
 	// 模拟窗口过期：首次失败后，未达阈值时 blocked 不应清除计数

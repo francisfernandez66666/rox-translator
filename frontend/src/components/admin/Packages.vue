@@ -111,15 +111,18 @@ const payMode = ref('mock')
 const staticQRImage = ref('')
 const form = ref({ code: '', name: '', ptype: 'paid', sentences: 1000, price_money: 0, duration_days: 30 })
 
+// typeLabel 套餐类型转中文标签
 function typeLabel(p: string) {
   return { free: t('packages.type.free'), paid: t('packages.type.paid'), increment: t('packages.type.increment') }[p] || p
 }
 
+// isImageContent 判断二维码内容是否为图片（base64 或 http(s) 图片链接）
 function isImageContent(s: string): boolean {
   if (!s) return false
   return s.startsWith('data:image') || s.startsWith('http://') || s.startsWith('https://') || /\.(png|jpe?g|gif|webp)/i.test(s)
 }
 
+// loadAll 加载套餐列表与全局套餐设置（强制安全句/试用额度/支付方式/静态码）
 async function loadAll() {
   const r = await adminPackages()
   if (r.success) pkgs.value = (r as any).packages || []
@@ -132,18 +135,21 @@ async function loadAll() {
   }
 }
 
+// savePayMode 保存支付模式（mock/sdk/static_qr）
 async function savePayMode() {
   const r = await adminPackageSettingsSave({ pay_mode: payMode.value })
   if (!r.success) { alert(r.message); return }
   alert(t('packages.saved'))
 }
 
+// saveStaticQR 保存静态收款二维码图片内容
 async function saveStaticQR() {
   const r = await adminPackageSettingsSave({ static_qr_image: staticQRImage.value })
   if (!r.success) { alert(r.message); return }
   alert(t('packages.saved'))
 }
 
+// createPkg 校验必填项后创建套餐并重置表单、刷新列表
 async function createPkg() {
   if (!form.value.code || !form.value.name || form.value.sentences <= 0) { alert(t('packages.fillRequired')); return }
   const r = await adminPackageCreate(form.value)
@@ -152,12 +158,14 @@ async function createPkg() {
   await loadAll()
 }
 
+// togglePkg 切换指定套餐启用/停用状态并刷新列表
 async function togglePkg(p: any) {
   const r = await adminPackageUpdate({ id: p.id, enabled: p.enabled ? 0 : 1 })
   if (!r.success) { alert(r.message); return }
   await loadAll()
 }
 
+// deletePkg 弹确认后删除指定套餐并刷新列表
 async function deletePkg(p: any) {
   if (!confirm(t('packages.confirmDelete'))) return
   const r = await adminPackageDelete(p.id)
@@ -165,11 +173,13 @@ async function deletePkg(p: any) {
   await loadAll()
 }
 
+// saveEnforce 保存是否强制安全句检查开关
 async function saveEnforce() {
   const r = await adminPackageSettingsSave({ sentence_enforced: sentenceEnforced.value ? '1' : '0' })
   if (!r.success) { alert(r.message); return }
 }
 
+// saveTrial 保存试用翻译句数额度
 async function saveTrial() {
   const r = await adminPackageSettingsSave({ trial_sentences: trialSentences.value })
   if (!r.success) { alert(r.message); return }

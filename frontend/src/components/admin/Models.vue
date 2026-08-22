@@ -171,6 +171,7 @@ const stageHint = computed(() => {
   return n ? tpl('models.stageActive', { count: n }) : t('models.stageNone')
 })
 
+// loadModels 加载单模型与多供应商路由配置
 async function loadModels() {
   const r = await adminModels()
   if (r.success) {
@@ -178,21 +179,25 @@ async function loadModels() {
     routeForm.value = (r as any).routes || []
   }
 }
+// saveModels 保存单模型与路由配置并回读刷新
 async function saveModels() {
   const r = await adminModelsSave({ ...mForm.value, routes: routeForm.value })
   if (!r.success) { alert(r.message); return }
   alert(t('models.savedModels'))
   await loadModels()
 }
+// loadPolicy 加载模型策略配置
 async function loadPolicy() {
   const r = await adminPolicy()
   if (r.success) pForm2.value = (r as any).policy
 }
+// savePolicy 保存模型策略配置
 async function savePolicy() {
   const r = await adminPolicySave(pForm2.value)
   if (!r.success) { alert(r.message); return }
   alert(t('models.savedPolicy'))
 }
+// saveRoutes 过滤无效路由后仅保存多供应商路由列表
 async function saveRoutes() {
   const valid = routeForm.value.filter((rt: any) => rt.api_base && rt.model)
   const r = await adminModelsSave({ routes: valid })
@@ -225,6 +230,7 @@ async function saveStages() {
   await loadStages()
 }
 
+// loadAll 依次加载策略与单模型/路由，超管额外加载五阶段配置
 async function loadAll() {
   await loadPolicy()
   // 单模型 + 多供应商路由：租户管理员（BYOK）与超管都可配置

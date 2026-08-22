@@ -10,11 +10,14 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"translator/internal/auth"
+	"translator/internal/mail"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -39,14 +42,36 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "注册已关闭，请联系管理员开通"})
 		return
 	}
+	// 注册频率护栏：同 IP 24h 内注册次数上限 + 最小间隔（防脚本批量薅试用额度）
+	ip := clientIP(r)
+	dailyLimit := 3
+	if v, _ := s.Store.GetConfig("register_ip_daily_limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			dailyLimit = n
+		}
+	}
+	minInterval := 60
+	if v, _ := s.Store.GetConfig("register_ip_min_interval_sec"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			minInterval = n
+		}
+	}
+	if ok, wait := s.regGuard.allow(ip, dailyLimit, minInterval); !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(wait))
+		writeJSON(w, 429, map[string]interface{}{"success": false,
+			"message": fmt.Sprintf("注册过于频繁，请 %d 秒后再试", wait)})
+		return
+	}
 	var req struct {
-		Username string `json:"username"` // 注册用户名
-		Password string `json:"password"` // 注册密码（至少 6 位）
-		Code     string `json:"code"`     // 租户编码（无邀请码时必填）
-		Name     string `json:"name"`     // 租户名称
-		Invite   string `json:"invite"`   // 邀请码（可选）
-		Email    string `json:"email"`    // 联系邮箱（找回密码验证码接收）
-		Industry string `json:"industry"` // 所属行业（新租户注册时必填，来自行业包 code）
+		Username  string `json:"username"`      // 注册用户名
+		Password  string `json:"password"`      // 密码（至少 6 位）
+		Code      string `json:"code"`          // 租户编码（无邀请码时必填）
+		Name      string `json:"name"`          // 租户名称
+		Invite    string `json:"invite"`        // 邀请码（可选）
+		Email     string `json:"email"`         // 联系邮箱（找回密码验证码接收）
+		EmailCode string `json:"email_code"`    // 邮箱验证码（email_verify_enabled=1 时必填）
+		Captcha   string `json:"captcha_token"` // 人机验证 token（captcha_provider=turnstile 时必填）
+		Industry  string `json:"industry"`      // 所属行业（新租户注册时必填，来自行业包 code）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -85,6 +110,32 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	// 1. 处理邀请码（可选）：校验有效且未使用，标记为已使用
 	inviteTenantID := int64(0)
+	// 注册审核开关（registration_review=1）：新建试用租户暂不发放体验额度，
+	// 由超管审核后经 /api/admin/tenants/grant-trial 手动发放（受邀加入不受影响）
+	reviewMode := false
+	if v, _ := s.Store.GetConfig("registration_review"); v == "1" {
+		reviewMode = true
+	}
+	// 邮箱验证开关（email_verify_enabled=1）：自助注册必须先验证邮箱归属（受邀加入不受影响）
+	verifyOn := false
+	if v, _ := s.Store.GetConfig("email_verify_enabled"); v == "1" {
+		verifyOn = true
+	}
+	if verifyOn && req.Invite == "" {
+		if strings.TrimSpace(req.Email) == "" || strings.TrimSpace(req.EmailCode) == "" {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请填写邮箱并输入验证码"})
+			return
+		}
+		if !verifyEmailCode(req.Email, req.EmailCode) {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱验证码错误或已过期"})
+			return
+		}
+	}
+	// 人机验证（captcha_provider=turnstile 时校验；自助注册与受邀加入均拦截）
+	if err := s.verifyCaptcha(r, req.Captcha); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
 	if req.Invite != "" {
 		inv, err := s.Store.GetInviteCodeByCode(strings.TrimSpace(req.Invite))
 		if err != nil || inv.Used == 1 {
@@ -124,7 +175,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "行业不存在，请重新选择"})
 			return
 		}
-		perms := &tenant.Perms{MaxDailyChars: 20000, SentenceBalance: trialSentences, PackageCode: "trial"} // 试用每日上限 2 万字符 + 试用句数
+		// 权限：试用每日上限 2 万字符；审核模式下不预发试用句数（package_code 留空=未开通）
+		perms := &tenant.Perms{MaxDailyChars: 20000}
+		if !reviewMode {
+			perms.SentenceBalance = trialSentences
+			perms.PackageCode = "trial"
+		}
 		pb, _ := json.Marshal(perms)
 		t, err := s.Ten.Create(req.Code, req.Name, "", string(pb))
 		if err != nil {
@@ -140,9 +196,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		_ = s.Store.EnsureDefaultPackages(inviteTenantID)
 		// 行业包单轨制：仅记录注册所选行业编码，内容从共享宿主（租户1）按行业载入，不再建空壳包
 		_ = s.Ten.SetIndustry(inviteTenantID, industryPkg.Code)
-		// 发放试用余额：确保有余额账户记录后充值 trial_tokens
+		// 发放试用余额：确保有余额账户记录后充值 trial_tokens（审核模式下暂不充值）
 		_ = s.Store.EnsureBalance(inviteTenantID)
-		if trialTokens > 0 {
+		if trialTokens > 0 && !reviewMode {
 			_ = s.Store.Charge(inviteTenantID, trialTokens)
 		}
 	} else {
@@ -174,13 +230,124 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	nu.PasswordHash = ""
 	// 注册审计
 	s.Store.LogAudit(inviteTenantID, nu.ID, "register", "auth", "自助注册")
+	// 登记注册成功（推进同 IP 频率窗口）
+	s.regGuard.record(ip)
+	// 成功提示：审核模式下提示等待发放
+	msg := "注册成功，试用额度已发放"
+	if reviewMode && req.Invite == "" {
+		msg = "注册成功，账号已创建；管理员审核后将发放试用额度"
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success":   true,
-		"message":   "注册成功，试用额度已发放",
+		"message":   msg,
 		"user":      nu,
 		"tenant_id": inviteTenantID,
 		"tenant":    tenantInfo,
 	})
+}
+
+// handleGrantTrial 超管向待审核租户发放试用额度（幂等）：
+//   - 幂等校验：租户已有 package_code（已开通/已订阅）时拒绝重复发放
+//   - 发放内容：trial_sentences 句数 + trial_tokens 余额，并置 package_code="trial"
+//
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 tenant_id，需 super_admin）。
+// 返回: success=true 时携带发放后的句数余额。
+func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireAdminUser(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		TenantID int64 `json:"tenant_id"` // 待发放的租户 ID
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TenantID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "无效的租户 ID"})
+		return
+	}
+	t, err := s.Ten.GetByID(req.TenantID)
+	if err != nil {
+		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "租户不存在"})
+		return
+	}
+	// 幂等：已有任何包身份（含 trial）即拒绝重复发放
+	perms := tenant.ParsePerms(t.Permissions)
+	if perms.PackageCode != "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该租户已开通试用或已订阅商业包，无需重复发放"})
+		return
+	}
+	// 读取发放配置（与注册路径同一套配置键）
+	trialSentences := int64(500)
+	if v, _ := s.Store.GetConfig("trial_sentences"); v != "" {
+		if sv, perr := strconv.ParseInt(v, 10, 64); perr == nil && sv > 0 {
+			trialSentences = sv
+		}
+	}
+	trialTokens := int64(50000)
+	if v, _ := s.Store.GetConfig("trial_tokens"); v != "" {
+		if tv, perr := strconv.ParseInt(v, 10, 64); perr == nil && tv > 0 {
+			trialTokens = tv
+		}
+	}
+	// 发放句数并置试用包身份
+	perms.SentenceBalance = trialSentences
+	perms.PackageCode = "trial"
+	perms.SubscribedAt = time.Now().Format(time.RFC3339)
+	pb, _ := json.Marshal(perms)
+	if err := s.Ten.Update(t.ID, t.Name, t.ExpiresAt, string(pb)); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	// 充值 token 余额
+	_ = s.Store.EnsureBalance(t.ID)
+	if trialTokens > 0 {
+		_ = s.Store.Charge(t.ID, trialTokens)
+	}
+	// 审计 + 通知租户管理员
+	s.Store.LogAuditDiff(s.effTenant(r, u), u.ID, "grant_trial", "tenant", strconv.FormatInt(t.ID, 10),
+		`{"package_code":""}`, `{"package_code":"trial","sentences":`+strconv.FormatInt(trialSentences, 10)+`}`)
+	s.notifyTenantAdmins(t.ID, "试用额度已发放", "您的企业工作台已开通，试用句数 "+strconv.FormatInt(trialSentences, 10)+" 句已到账。")
+	writeJSON(w, 200, map[string]interface{}{"success": true, "sentence_balance": perms.SentenceBalance})
+}
+
+// notifyTenantAdmins 向指定租户的全部租户管理员发送站内通知；email_notify_enabled=1 时
+// 同时向其绑定邮箱发送邮件触达（找回密码同链路，SMTP 未配置时 Noop 打印日志）。
+// 参数 tid: 租户 ID；title/body: 通知标题与正文。
+func (s *Server) notifyTenantAdmins(tid int64, title, body string) {
+	users, err := s.Store.ListUsers(tid)
+	if err != nil {
+		return
+	}
+	emailOn, _ := s.Store.GetConfig("email_notify_enabled")
+	for _, usr := range users {
+		if usr.Role != store.RoleTenantAdmin {
+			continue
+		}
+		_ = s.Store.CreateNotification(usr.ID, title, body, "tenant", tid)
+		if emailOn == "1" && usr.Email != "" {
+			go func(to string) {
+				_ = s.mailer().Send(&mail.Message{
+					To:      to,
+					Subject: "【翻译助手】" + title,
+					Body:    body,
+				})
+			}(usr.Email)
+		}
+	}
+}
+
+// hasOpenAlert 判断租户是否存在指定类型的未处理告警（邮件触达去重依据）。
+func (s *Server) hasOpenAlert(tid int64, kind string) bool {
+	alerts, err := s.Store.ListAlerts(tid, "open", 50)
+	if err != nil {
+		return false
+	}
+	for _, a := range alerts {
+		if a.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // wasInviteBind 判断是否通过绑定租户的邀请码加入（用于角色判定）。

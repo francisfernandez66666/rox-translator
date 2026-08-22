@@ -40,10 +40,12 @@ import { fmtTime } from './ui'
 import { t } from '@/i18n'
 
 const flowSteps = ref<FlowStepItem[]>([])
+// loadFlow 加载工单流水线步骤启停配置
 async function loadFlow() {
   const r = await flowConfig()
   if (r.success) flowSteps.value = (r as any).steps
 }
+// saveFlow 保存流程步骤启停配置（热生效，免重启）
 async function saveFlow() {
   const r = await flowSave(flowSteps.value)
   if (!r.success) { alert(r.message); return }
@@ -51,11 +53,13 @@ async function saveFlow() {
 }
 
 const evals = ref<any[]>([])
+// loadEvals 加载翻译质量评估记录列表
 async function loadEvals() {
   const r = await evalsList()
   if (r.success) evals.value = (r as any).records
 }
 
+// loadAll 并发加载流程配置与评估记录（挂载入口）
 async function loadAll() {
   await Promise.all([loadFlow(), loadEvals()])
 }

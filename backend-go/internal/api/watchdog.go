@@ -12,6 +12,7 @@ package api
 import (
 	"fmt"
 	"log"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -80,10 +81,75 @@ func (s *Server) startWatchdog() {
 	}()
 	// OOM 内存监控（默认每 60 秒采样，可配置 mem_monitor_interval_sec；0=关闭）
 	s.startMemoryMonitor()
+	// 订阅到期扫描（每日一轮：启动即扫一次；到期摘除 + 7/1 天前提醒）
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		s.runSubscriptionScan()
+		for range ticker.C {
+			s.runSubscriptionScan()
+		}
+	}()
 	log.Println("监控看门狗已启动")
 }
 
-// runBackup 执行一次数据库备份并清理旧备份。
+// runSubscriptionScan 订阅到期扫描（每日执行）：
+//   - 已到期（now ≥ package_expires_at）：摘除订阅身份（ExpirePackage），句数余额保留，
+//     写审计（actor=system）并通知租户管理员
+//   - 剩余 ≤7 天 / ≤1 天：分别发送一次通知中心提醒（NotifiedExp7/NotifiedExp1 标记去重）
+func (s *Server) runSubscriptionScan() {
+	if s.Store == nil || s.Ten == nil {
+		return
+	}
+	tenants, err := s.Ten.List()
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, t := range tenants {
+		// 跳过平台宿主租户（租户 1）与无效 ID
+		if t.ID <= 1 {
+			continue
+		}
+		perms := tenant.ParsePerms(t.Permissions)
+		if perms.PackageCode == "" || perms.PackageCode == "trial" || perms.PackageExpires == "" {
+			continue // 无订阅 / 试用包 / 不限期：不参与到期扫描
+		}
+		exp, perr := time.Parse(time.RFC3339, perms.PackageExpires)
+		if perr != nil {
+			continue
+		}
+		// 已到期：摘除订阅身份并通知
+		if !now.Before(exp) {
+			if code, err := s.Store.ExpirePackage(t.ID); err == nil {
+				s.Store.LogAuditDiff(t.ID, 0, "package_expire", "tenant", strconv.FormatInt(t.ID, 10),
+					`{"package_code":"`+code+`"}`, `{"package_code":""}`)
+				s.notifyTenantAdmins(t.ID, "订阅已到期",
+					"商业包「"+code+"」已到期，订阅身份已移除；剩余句数仍可正常使用，续订后即时生效。")
+				s.notifyBots("订阅到期摘除",
+					"租户 #"+strconv.FormatInt(t.ID, 10)+"（"+t.Name+"）商业包「"+code+"」已到期，订阅身份已摘除。")
+			}
+			continue
+		}
+		// 未到期：按剩余天数分档提醒（每档只发一次）
+		daysLeft := int(time.Until(exp).Hours() / 24)
+		expDate := exp.Format("2006-01-02")
+		if daysLeft <= 7 && !perms.NotifiedExp7 {
+			perms.NotifiedExp7 = true
+			_ = s.Store.SaveTenantPerms(t.ID, perms)
+			s.notifyTenantAdmins(t.ID, "订阅即将到期",
+				"商业包「"+perms.PackageCode+"」将于 "+expDate+" 到期（剩 "+strconv.Itoa(daysLeft+1)+" 天），请及时续订。")
+		}
+		if daysLeft < 1 && !perms.NotifiedExp1 {
+			perms.NotifiedExp1 = true
+			_ = s.Store.SaveTenantPerms(t.ID, perms)
+			s.notifyTenantAdmins(t.ID, "订阅今日到期",
+				"商业包「"+perms.PackageCode+"」将于今日到期，续订请前往管理后台订阅页。")
+		}
+	}
+}
+
+// runBackup 执行一次数据库备份并清理旧备份；成功后按 backup_remote_cmd 推送异地（容灾）。
 func (s *Server) runBackup(backupDir string, keep int) {
 	dest, err := s.Store.Backup(backupDir, s.Cfg.DBPath)
 	if err != nil {
@@ -93,6 +159,18 @@ func (s *Server) runBackup(backupDir string, keep int) {
 	// 清理旧备份，仅保留最近 keep 份
 	store.PruneBackups(backupDir, strings.TrimSuffix(filepath.Base(s.Cfg.DBPath), filepath.Ext(s.Cfg.DBPath)), keep)
 	log.Printf("数据库已备份: %s（保留最近 %d 份）", dest, keep)
+	// 异地推送钩子：backup_remote_cmd 配置 shell 命令，{path} 替换为本份备份路径
+	// （示例：rclone copy {path} remote:translator-backups）；失败仅告警不阻断主流程
+	if cmdStr, _ := s.Store.GetConfig("backup_remote_cmd"); cmdStr != "" {
+		full := strings.ReplaceAll(cmdStr, "{path}", dest)
+		out, cerr := exec.Command("/bin/sh", "-c", full).CombinedOutput()
+		if cerr != nil {
+			log.Printf("异地备份推送失败: %v, 输出: %s", cerr, string(out))
+			_ = s.Store.CreateAlert(0, "warning", "backup", "异地备份推送失败: "+cerr.Error())
+		} else {
+			log.Printf("异地备份已推送: %s", dest)
+		}
+	}
 }
 
 // runWatchdogCheck 执行一轮检查：余额阈值 / 模型熔断 / 错误率三项告警巡检。
@@ -120,8 +198,14 @@ func (s *Server) runWatchdogCheck() {
 				// 余额耗尽 → critical 级告警；低于阈值 → warning 级告警
 				if bal.Balance <= 0 {
 					msg := "租户余额已耗尽，翻译服务将被暂停"
-					if s.Store.CreateAlert(t.ID, "critical", "balance", msg) == nil {
+					existed := s.hasOpenAlert(t.ID, "balance") // 邮件触达去重：仅新告警时发信
+					_ = s.Store.CreateAlert(t.ID, "critical", "balance", msg)
+					if !existed {
 						s.notifyAlert("余额耗尽告警（租户 #"+strconv.FormatInt(t.ID, 10)+"）", msg)
+						s.notifyTenantAdmins(t.ID, "余额已耗尽",
+							"您的企业翻译额度余额已耗尽，翻译服务即将暂停。请前往管理后台订阅套餐或联系管理员充值。")
+						s.notifyBots("租户余额耗尽",
+							"租户 #"+strconv.FormatInt(t.ID, 10)+"（"+t.Name+"）翻译额度余额已耗尽，服务暂停中。")
 					}
 				} else if bal.Balance < threshold {
 					_ = s.Store.CreateAlert(t.ID, "warning", "balance", "租户余额低于阈值")
@@ -134,8 +218,11 @@ func (s *Server) runWatchdogCheck() {
 	if s.Engine != nil && s.Engine.BreakerOpen() {
 		// 熔断中：创建 critical 级模型告警
 		msg := "主翻译模型已熔断，正在使用备用模型"
-		if s.Store.CreateAlert(0, "critical", "model", msg) == nil {
+		existed := s.hasOpenAlert(0, "model")
+		_ = s.Store.CreateAlert(0, "critical", "model", msg)
+		if !existed {
 			s.notifyAlert("翻译模型熔断告警", msg)
+			s.notifyBots("翻译模型熔断", msg)
 		}
 	} else {
 		// 熔断已恢复 → 自动关闭历史 model 告警（避免重复堆积）

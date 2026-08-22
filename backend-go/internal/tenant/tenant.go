@@ -36,6 +36,9 @@ type Perms struct {
 	SentenceBalance int64  `json:"sentence_balance,omitempty"` // 剩余翻译句数（源句×目标语言数累计）
 	PackageCode     string `json:"package_code,omitempty"`     // 当前订阅的付费包编码（空=无订阅）
 	SubscribedAt    string `json:"subscribed_at,omitempty"`    // 最近订阅时间（RFC3339）
+	PackageExpires  string `json:"package_expires_at,omitempty"` // 订阅到期时间（RFC3339，空=不限期；到期由后台扫描摘除）
+	NotifiedExp7    bool   `json:"notified_exp7,omitempty"`      // 到期提醒 7 天档已发送（去重标记）
+	NotifiedExp1    bool   `json:"notified_exp1,omitempty"`      // 到期提醒 1 天档已发送（去重标记）
 }
 
 // 租户状态常量

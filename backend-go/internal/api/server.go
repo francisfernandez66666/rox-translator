@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"translator/internal/auth"
 	"translator/internal/billing"
@@ -47,6 +48,10 @@ type Server struct {
 	metrics *Metrics
 	// 登录失败限流器（暴力破解防护）
 	loginLimit *loginLimiter
+	// 注册频率护栏（防脚本批量薅试用额度）
+	regGuard *registerGuard
+	// 服务启动时间（/status 与 uptime 展示）
+	startedAt time.Time
 }
 
 // NewServer 创建 HTTP 服务：初始化计费服务、注册路由并启动看门狗。
@@ -54,7 +59,7 @@ type Server struct {
 // st: 平台存储（可 nil）；ts: 租户存储（可 nil）。
 // 返回: 组装完成的 *Server 实例。
 func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist string, st *store.Store, ts *tenant.Store) *Server {
-	s := &Server{Cfg: cfg, Engine: eng, DB: db, Ten: ts, Store: st, Dist: dist, metrics: newMetrics(), loginLimit: newLoginLimiter()}
+	s := &Server{Cfg: cfg, Engine: eng, DB: db, Ten: ts, Store: st, Dist: dist, metrics: newMetrics(), loginLimit: newLoginLimiter(), regGuard: newRegisterGuard(), startedAt: time.Now()}
 	// 平台存储就绪时初始化计费服务（限流/配额/余额）
 	if st != nil {
 		s.Bill = billing.NewService(st)
@@ -80,6 +85,7 @@ func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist s
 func (s *Server) routes() {
 	// 指标与基础接口
 	s.mux.HandleFunc("/metrics", s.handleMetrics)
+	s.mux.HandleFunc("/status", s.handlePublicStatus)
 	s.mux.HandleFunc("/api/health", s.handleHealth)
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
 	// 公开商业页面（无需登录）：定价 / 条款 / SLA / 隐私 / 套餐 / 注册行业
@@ -114,8 +120,10 @@ func (s *Server) routesTranslate() {
 	s.mux.HandleFunc("/api/translate", s.handleTranslateFile)
 	s.mux.HandleFunc("/api/download/", s.handleDownload)
 	s.mux.HandleFunc("/api/translation/langs", s.handleTranslationLangs)
+	s.mux.HandleFunc("/api/translation/estimate", s.handleTranslationEstimate)
 	s.mux.HandleFunc("/api/translation/recognize-kb", s.handleRecognizeKB)
 	s.mux.HandleFunc("/api/translation/import-kb", s.handleImportKB)
+	s.mux.HandleFunc("/api/translation/import-bitext", s.handleImportBitext)
 	s.mux.HandleFunc("/api/translation/kb-stats", s.handleKBStats)
 }
 
@@ -128,6 +136,7 @@ func (s *Server) routesTenant() {
 	s.mux.HandleFunc("/api/tenant/delete", s.handleTenantDelete)
 	s.mux.HandleFunc("/api/tenant/export", s.handleTenantExport)
 	s.mux.HandleFunc("/api/tenant/erase", s.handleTenantErase)
+	s.mux.HandleFunc("/api/admin/tenants/grant-trial", s.handleGrantTrial)
 }
 
 // routesAuth 注册认证与用户管理路由。
@@ -138,6 +147,8 @@ func (s *Server) routesAuth() {
 	s.mux.HandleFunc("/api/auth/change-password", s.handleChangePassword)
 	s.mux.HandleFunc("/api/auth/forgot-password", s.handleForgotPassword)
 	s.mux.HandleFunc("/api/auth/reset-password", s.handleResetPassword)
+	s.mux.HandleFunc("/api/auth/email-code", s.handleEmailCode)
+	s.mux.HandleFunc("/api/auth/register-config", s.handleRegisterConfig)
 	s.mux.HandleFunc("/api/admin/users", s.handleAdminUsers)
 	s.mux.HandleFunc("/api/admin/users/create", s.handleAdminUserCreate)
 	s.mux.HandleFunc("/api/admin/users/update", s.handleAdminUserUpdate)

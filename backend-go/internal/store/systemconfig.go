@@ -75,6 +75,7 @@ var DefaultFlowSteps = []FlowStep{
 	{Key: "evals_review", Name: "审校评估", Enable: true},
 	{Key: "gate", Name: "ConstraintGate 硬校验", Enable: true},
 	{Key: "culture_gate", Name: "语言文化包输出闸门", Enable: true},
+	{Key: "qa", Name: "QA 确定性检查", Enable: true},
 	{Key: "approval", Name: "人工审批", Enable: true},
 	{Key: "feedback", Name: "自迭代写库", Enable: true},
 }

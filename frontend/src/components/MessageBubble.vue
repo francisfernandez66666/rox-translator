@@ -220,6 +220,7 @@ function openImage(url: string) {
 // ★ 轻量 Markdown → HTML 转换器
 // ============================================================================
 
+// renderMarkdown 轻量 Markdown→HTML 转换：先转义，再依次处理引用块/标题/分隔线/列表/段落/行内格式
 function renderMarkdown(text: string): string {
   // ---- 0. HTML转义 ----
   text = text

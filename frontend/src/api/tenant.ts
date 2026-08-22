@@ -81,3 +81,8 @@ export async function tenantExport(id: number): Promise<AdminResp> {
 export async function tenantErase(id: number): Promise<AdminResp> {
   return request('/api/tenant/erase', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
+
+// 向待审核租户发放试用额度（super_admin，幂等：已开通则拒绝）
+export async function tenantGrantTrial(id: number): Promise<AdminResp> {
+  return request('/api/admin/tenants/grant-trial', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ tenant_id: id }) })
+}

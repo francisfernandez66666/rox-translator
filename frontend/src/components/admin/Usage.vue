@@ -134,6 +134,7 @@ const costData = ref<any>({})
 const costQuants = ref<any>({})
 const costKeys = computed(() => Object.keys(costData.value || {}))
 const costTotal = computed(() => costKeys.value.reduce((s, k) => s + (Number(costData.value[k]) || 0), 0))
+// loadCost 加载超管模型成本核算数据（各模型成本与调用量）
 async function loadCost() {
   const r = await usageCost()
   if (r.success) {
@@ -158,6 +159,7 @@ function buildOrgTree(orgs: any[]) {
   walk(0, 0)
   return out
 }
+// loadOrgs 加载组织树（组织维度用量下钻的左侧选择数据）
 async function loadOrgs() {
   const r = await orgList()
   if (r.success) {
@@ -165,6 +167,7 @@ async function loadOrgs() {
     orgTree.value = buildOrgTree(list)
   }
 }
+// loadOrg 按所选组织加载用户级用量汇总与合计
 async function loadOrg() {
   const r = await usageOrg(selectedOrg.value || undefined)
   if (r.success) {

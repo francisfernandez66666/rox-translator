@@ -25,6 +25,7 @@
           <td>{{ row.status === 'active' ? t('tenants.enable') : row.status === 'disabled' ? t('tenants.disable') : t('tenants.expired') }}</td>
           <td>{{ row.expires_at || t('tenants.forever') }}</td>
           <td class="ad-td">
+            <button v-if="!pkgOf(row)" class="ad-btn-sm" @click="grantTrial(row)">{{ t('tenants.grantTrial') }}</button>
             <button class="ad-btn-sm" @click="toggleTenant(row)">{{ row.status === 'active' ? t('tenants.disable') : t('tenants.enable') }}</button>
             <button v-if="row.id !== 1" class="ad-btn-sm ad-btn-red" @click="removeTenant(row)">{{ t('tenants.delete') }}</button>
             <button class="ad-btn-sm" @click="chargeTenant(row)">{{ t('tenants.charge') }}</button>
@@ -40,7 +41,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { t, tpl } from '@/i18n'
-import { tenantList as apiTenantList, tenantCreate, tenantSetStatus, tenantDelete, tenantExport, tenantErase, adminOrderCreate, adminOrderPay, API_BASE, getAuthToken } from '@/api'
+import { tenantList as apiTenantList, tenantCreate, tenantSetStatus, tenantDelete, tenantExport, tenantErase, tenantGrantTrial, adminOrderCreate, adminOrderPay, API_BASE, getAuthToken } from '@/api'
 import { loadTenants as refreshTenantStore } from './store'
 
 const tenants = ref<any[]>([])
@@ -54,6 +55,7 @@ async function loadTenants() {
   await refreshTenantStore()
 }
 
+// createTenant 校验编码后创建租户（含超管账号）并重置表单、刷新列表
 async function createTenant() {
   if (!tForm.value.code) { alert(t('tenants.codeRequired')); return }
   const r = await tenantCreate({
@@ -66,12 +68,28 @@ async function createTenant() {
   await loadTenants()
 }
 
+// toggleTenant 切换指定租户启用/停用状态并刷新列表
 async function toggleTenant(t: any) {
   const r = await tenantSetStatus(t.id, t.status === 'active' ? 'disabled' : 'active')
   if (!r.success) alert(r.message)
   await loadTenants()
 }
 
+// pkgOf 解析租户 permissions JSON，返回 package_code（空=未开通，可发试用）
+function pkgOf(row: any): string {
+  try { return (JSON.parse(row.permissions || '{}') as any).package_code || '' } catch { return '' }
+}
+
+// grantTrial 向待审核租户发放试用额度（审核注册模式下的超管操作）
+async function grantTrial(t: any) {
+  if (!confirm(tpl('tenants.grantTrialConfirm', { name: t.name }))) return
+  const r = await tenantGrantTrial(t.id)
+  if (!r.success) { alert(r.message); return }
+  alert(t('tenants.grantTrialDone'))
+  await loadTenants()
+}
+
+// removeTenant 弹确认后删除指定租户并刷新列表
 async function removeTenant(t: any) {
   if (!confirm(tpl('tenants.deleteConfirm', { name: t.name }))) return
   const r = await tenantDelete(t.id)
@@ -79,6 +97,7 @@ async function removeTenant(t: any) {
   await loadTenants()
 }
 
+// chargeTenant 输入 token 数创建充值订单并自动模拟支付完成入账
 async function chargeTenant(t: any) {
   const tokens = prompt(tpl('tenants.chargePrompt', { name: t.name }))
   if (!tokens || Number(tokens) <= 0) return
@@ -110,6 +129,7 @@ async function exportTenant(t: any) {
   xhr.send(JSON.stringify({ id: t.id }))
 }
 
+// eraseTenant 双重确认后 GDPR 清除指定租户全部数据
 async function eraseTenant(t: any) {
   if (!confirm(tpl('tenants.eraseConfirm', { name: t.name }))) return
   if (!confirm(tpl('tenants.eraseConfirm2', { name: t.name }))) return

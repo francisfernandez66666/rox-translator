@@ -68,6 +68,30 @@ export async function healthCheck(): Promise<HealthResponse> {
   return request('/api/health', { timeoutMs: 10000 })
 }
 
+/** 翻译前报价预估（只读不扣减）：text 或 segment_count 二选一，与计量同口径 */
+export async function translationEstimate(
+  data: { text?: string; segment_count?: number; target_langs?: string[] },
+): Promise<EstimateResp> {
+  return request('/api/translation/estimate', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(data),
+  })
+}
+
+/** 报价预估响应结构 */
+export interface EstimateResp {
+  success: boolean
+  message?: string
+  sentences: number // 源句数（文本实时计算或文件段数）
+  langs: number     // 目标语言数
+  cost: number      // 预计消耗句数 = sentences × langs
+  balance: number   // 当前句数余额（-1=平台上下文不限）
+  sentence_enforced: boolean
+  activated: boolean // 租户是否已开通额度
+  hint?: string      // 未开通时的提示文案
+}
+
 /** SSE 流式文件翻译 */
 export async function translateFileStream(
   file: File,

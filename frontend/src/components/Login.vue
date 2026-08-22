@@ -29,6 +29,14 @@
       <input v-model="reg.username" :placeholder="t('login.username')" class="login-input" />
       <input v-model="reg.password" type="password" :placeholder="t('login.password')" class="login-input" />
       <input v-model="reg.email" :placeholder="t('login.emailPlaceholder')" class="login-input" />
+      <!-- 邮箱验证码（服务端 email_verify_enabled=1 时显示） -->
+      <div v-if="emailVerifyOn" class="login-code-row">
+        <input v-model="reg.emailCode" :placeholder="t('login.emailCode')" class="login-input login-code-input" />
+        <button class="login-reg login-code-btn" :disabled="codeCooldown > 0 || !reg.email" @click="doSendCode">
+          {{ codeCooldown > 0 ? tpl('login.codeResend', { n: codeCooldown }) : t('login.sendCode') }}
+        </button>
+      </div>
+      <div v-if="codeMsg" :class="codeMsgOk ? 'login-ok-hint' : 'login-error'">{{ codeMsg }}</div>
       <input v-model="reg.code" :placeholder="t('login.orgCode')" class="login-input" />
       <input v-model="reg.name" :placeholder="t('login.orgName')" class="login-input" />
       <select v-model="reg.industry" class="login-input">
@@ -36,6 +44,8 @@
         <option v-for="ind in industries" :key="ind.code" :value="ind.code">{{ ind.name }}</option>
       </select>
       <input v-model="reg.invite" :placeholder="t('login.invite')" class="login-input" />
+      <!-- 人机验证组件（服务端 captcha_provider=turnstile 时显示） -->
+      <div v-if="captchaOn" :id="tsWidgetId" class="ts-box"></div>
       <div v-if="regMsg" class="login-error">{{ regMsg }}</div>
       <button class="login-btn" :disabled="loading" @click="doRegister">{{ loading ? t('login.registering') : t('login.registerAndLogin') }}</button>
     </div>
@@ -63,9 +73,9 @@
 // Vue 响应式
 import { ref, onMounted } from 'vue'
 // API：登录 / 自助注册 / 写入 token
-import { login, authRegister, forgotPassword, resetPassword, setAuthToken, setActiveTenantId, registerIndustries } from '@/api'
+import { login, authRegister, forgotPassword, resetPassword, setAuthToken, setActiveTenantId, registerIndustries, sendEmailCode, registerConfig } from '@/api'
 // 国际化：文案取词 + 语言切换
-import { t, lang, toggleLang } from '@/i18n'
+import { t, tpl, lang, toggleLang } from '@/i18n'
 
 // 组件入参：登录模式（home 前台 / admin 后台）
 const props = defineProps<{ mode: 'home' | 'admin' }>()
@@ -95,7 +105,82 @@ const showReg = ref(false)
 // 注册错误/提示信息
 const regMsg = ref('')
 // 自助注册表单
-const reg = ref({ username: '', password: '', code: '', name: '', invite: '', email: '', industry: '' })
+const reg = ref({ username: '', password: '', code: '', name: '', invite: '', email: '', emailCode: '', industry: '' })
+
+// ===== 注册邮箱验证码状态 =====
+// 服务端是否开启邮箱验证（email_verify_enabled=1 时显示验证码输入行）
+const emailVerifyOn = ref(false)
+// 验证码发送冷却倒计时（秒）
+const codeCooldown = ref(0)
+// 发码提示与成功标记
+const codeMsg = ref('')
+const codeMsgOk = ref(false)
+let cooldownTimer: ReturnType<typeof setInterval> | null = null
+
+// 加载注册配置：显隐验证码输入 + 人机验证组件
+const captchaOn = ref(false)
+const captchaSiteKey = ref('')
+const captchaToken = ref('')
+const tsWidgetId = 'ts-widget-' + Math.random().toString(36).slice(2, 8)
+// loadRegisterConfig 拉取注册配置：邮箱验证码显隐与人机验证开关/站点Key，开启人机验证时渲染 Turnstile
+async function loadRegisterConfig() {
+  try {
+    const r: any = await registerConfig()
+    if (r.success) {
+      emailVerifyOn.value = !!r.email_verify_enabled
+      captchaOn.value = !!(r as any).captcha_enabled
+      captchaSiteKey.value = (r as any).captcha_site_key || ''
+    }
+  } catch { emailVerifyOn.value = false }
+  if (captchaOn.value) renderTurnstile()
+}
+
+// renderTurnstile 动态加载 Cloudflare Turnstile 脚本并渲染组件（token 回调写入 captchaToken）
+function renderTurnstile() {
+  const mount = () => {
+    const el = document.getElementById(tsWidgetId)
+    const ts = (window as any).turnstile
+    if (!el || !ts) return
+    if (el.childElementCount > 0) return // 已渲染防重复
+    ts.render(el, {
+      sitekey: captchaSiteKey.value,
+      callback: (tk: string) => { captchaToken.value = tk },
+      'expired-callback': () => { captchaToken.value = '' },
+    })
+  }
+  if ((window as any).turnstile) { mount(); return }
+  const s = document.createElement('script')
+  s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
+  s.async = true
+  s.onload = mount
+  document.head.appendChild(s)
+}
+
+// doSendCode 发送注册验证码：校验邮箱 → 调接口 → 60s 冷却倒计时
+async function doSendCode() {
+  const email = reg.value.email.trim()
+  if (!email) return
+  if (captchaOn.value && !captchaToken.value) {
+    codeMsg.value = '请先完成人机验证'; codeMsgOk.value = false
+    return
+  }
+  codeMsg.value = ''
+  loading.value = true
+  const r: any = await sendEmailCode(email, captchaToken.value || undefined)
+  loading.value = false
+  codeMsgOk.value = !!r.success
+  codeMsg.value = r.message || (r.success ? '已发送' : '发送失败')
+  // 测试模式提示（服务端未配置 SMTP，验证码打印在日志）
+  if (r.success && r.noop) codeMsg.value += '（测试模式：请查看服务端日志）'
+  if (r.success) {
+    codeCooldown.value = 60
+    if (cooldownTimer) clearInterval(cooldownTimer)
+    cooldownTimer = setInterval(() => {
+      codeCooldown.value--
+      if (codeCooldown.value <= 0 && cooldownTimer) { clearInterval(cooldownTimer); cooldownTimer = null }
+    }, 1000)
+  }
+}
 
 // ===== 忘记密码表单状态 =====
 const showForgot = ref(false)
@@ -163,6 +248,16 @@ async function doRegister() {
     regMsg.value = '密码至少 6 位'
     return
   }
+  // 邮箱验证开启时：校验验证码已填写
+  if (emailVerifyOn.value && !reg.value.invite && (!reg.value.emailCode || !reg.value.email)) {
+    regMsg.value = '请填写邮箱并输入验证码'
+    return
+  }
+  // 人机验证开启时：必须先完成验证
+  if (captchaOn.value && !captchaToken.value) {
+    regMsg.value = '请先完成人机验证'
+    return
+  }
   loading.value = true
   regMsg.value = ''
   const resp = await authRegister({
@@ -172,6 +267,8 @@ async function doRegister() {
     name: reg.value.name || undefined,
     invite: reg.value.invite || undefined,
     email: reg.value.email || undefined,
+    email_code: reg.value.emailCode || undefined,
+    captcha_token: captchaToken.value || undefined,
     industry: reg.value.industry || undefined,
   })
   loading.value = false
@@ -218,8 +315,8 @@ async function doLogin() {
   emit('ok', resp.user)
 }
 
-// 挂载：预加载注册行业列表（前台）
-onMounted(loadIndustries)
+// 挂载：预加载注册行业列表与注册配置（前台）
+onMounted(() => { loadIndustries(); loadRegisterConfig() })
 </script>
 
 <style scoped>
@@ -262,4 +359,16 @@ onMounted(loadIndustries)
 .login-reg:hover { background: #e8eaf6; }
 /* 错误提示文字 */
 .login-error { color: #c62828; font-size: 13px; margin: 8px 0; }
+/* 成功提示文字（验证码已发送） */
+.login-ok-hint { color: #2e7d32; font-size: 13px; margin: 8px 0; }
+/* 验证码行：输入框 + 发码按钮横排 */
+.login-code-row { display: flex; gap: 8px; align-items: stretch; margin-bottom: 12px; }
+.login-code-input { flex: 1; margin-bottom: 0; min-width: 0; }
+.login-code-btn {
+  width: 110px; padding: 0 10px; border: none; border-radius: 10px;
+  background: #e8eaf6; color: #3949ab; font-size: 13px; cursor: pointer; margin-top: 0;
+}
+.login-code-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+/* Turnstile 人机验证容器（居中） */
+.ts-box { margin-bottom: 12px; display: flex; justify-content: center; }
 </style>

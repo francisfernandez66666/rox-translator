@@ -30,6 +30,9 @@ export const zh: Record<string, string> = {
   'tenants.eraseConfirm': '确认清除组织「{name}」的全部业务数据？此操作不可恢复，请先导出备份。',
   'tenants.eraseConfirm2': '再次确认：{name} 的用户/订单/用量/审计/KB 将全部删除。',
   'tenants.erased': '组织业务数据已清除',
+  'tenants.grantTrial': '发放试用',
+  'tenants.grantTrialConfirm': '向「{name}」发放试用额度（试用句数+余额）？',
+  'tenants.grantTrialDone': '试用额度已发放',
 }
 
 export const en: Record<string, string> = {
@@ -63,4 +66,7 @@ export const en: Record<string, string> = {
   'tenants.eraseConfirm': 'Erase all business data of org "{name}"? This cannot be undone. Please export a backup first.',
   'tenants.eraseConfirm2': 'Confirm again: all users/orders/usage/audit/KB data of {name} will be deleted.',
   'tenants.erased': 'Org business data erased',
+  'tenants.grantTrial': 'Grant trial',
+  'tenants.grantTrialConfirm': 'Grant trial quota (sentences + balance) to "{name}"?',
+  'tenants.grantTrialDone': 'Trial quota granted',
 }

@@ -32,7 +32,7 @@
 
       <!-- 文件模式 -->
       <div v-else class="tp-filezone" @click="($refs.fileInput as HTMLInputElement).click()">
-        <input ref="fileInput" type="file" hidden accept=".docx,.xlsx,.pptx,.pdf,.txt,.csv" @change="onFileSelect" />
+        <input ref="fileInput" type="file" hidden accept=".docx,.xlsx,.pptx,.pdf,.txt,.csv,.srt,.vtt,.md,.json,.yaml,.yml" @change="onFileSelect" />
         <div v-if="!file" class="tp-file-hint">📎 {{ t('tk.fileHint') }}</div>
         <div v-else class="tp-file-name">{{ file.name }}（{{ (file.size / 1024).toFixed(0) }} KB）</div>
       </div>
@@ -40,7 +40,12 @@
       <div class="tp-row">
         <label>{{ t('tk.langsLabel') }}</label>
         <LangMultiSelect v-model="selectedLangs" />
-        <button class="ad-btn ad-btn-green tp-submit" :disabled="creating" @click="create">
+        <!-- 报价预览：预计消耗与余额 -->
+        <span v-if="estimate && estimate.sentence_enforced" class="tp-estimate" :class="{ warn: !estimate.activated }">
+          <template v-if="!estimate.activated">⚠️ {{ estimate.hint || t('tk.estUnavailable') }}</template>
+          <template v-else>{{ tpl('tk.estimateLine', { cost: estimate.cost, balance: estimate.balance }) }}</template>
+        </span>
+        <button class="ad-btn ad-btn-green tp-submit" :disabled="creating || estimateBlocked" @click="create">
           {{ creating ? t('tk.submitting') : t('tk.create') }}
         </button>
       </div>
@@ -84,20 +89,28 @@
           </li>
         </ul>
         <p class="ad-hint" v-if="!(detail.states || []).length">{{ t('tk.noSteps') }}</p>
+        <!-- QA 质检摘要（存在报告时展示） -->
+        <p class="tp-estimate" :class="{ warn: qaSummary && !qaSummary.pass }" v-if="qaSummary">
+          🧪 QA — {{ tpl('tk.qaSummary', { errors: qaSummary.errors, warnings: qaSummary.warnings }) }}
+          <template v-if="!qaSummary.pass">
+            <span v-for="(iss, i) in (qaSummary.issues || []).slice(0, 5)" :key="i"><br />{{ iss.level === 'error' ? '✖' : '⚠' }} [{{ iss.lang }}/{{ iss.rule }}] {{ iss.detail }}</span>
+          </template>
+        </p>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import LangMultiSelect from './LangMultiSelect.vue'
-import { myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail, ticketDownload } from '@/api'
-import { t } from '@/i18n'
+import { myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail, ticketDownload, translationEstimate } from '@/api'
+import { t, tpl } from '@/i18n'
 import { fmtTime } from './admin/ui'
 
 // 创建表单与模式
 // 创建模式：text=粘贴文本 / file=上传文件
+const mode = ref<'text' | 'file'>('text')
 const form = ref({ title: '', text: '' })
 // 目标语言（与工作台同款多选选择器；默认 en）
 const selectedLangs = ref<string[]>(['en'])
@@ -106,6 +119,38 @@ const file = ref<File | null>(null)
 const langsJoined = computed(() => (selectedLangs.value.length ? selectedLangs.value.join(',') : 'en'))
 const creating = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+
+// ---- 报价预览（文本模式实时预估；强制计费且未开通时禁提交） ----
+const estimate = ref<any>(null)
+let estimateTimer: ReturnType<typeof setTimeout> | null = null
+// 输入文本或目标语言变化后 500ms 防抖刷新报价预估
+watch([() => form.value.text, selectedLangs], () => {
+  if (estimateTimer) clearTimeout(estimateTimer)
+  estimateTimer = setTimeout(refreshEstimate, 500)
+})
+// refreshEstimate 请求文本翻译预估报价（空文本清空预览，失败时静默置空）
+async function refreshEstimate() {
+  const text = form.value.text.trim()
+  if (!text) { estimate.value = null; return }
+  try {
+    const r: any = await translationEstimate({ text, target_langs: [...selectedLangs.value] })
+    if (r.success) estimate.value = r
+  } catch { estimate.value = null }
+}
+// estimateBlocked 强制按句计费且账号未开通额度时禁止提交工单
+const estimateBlocked = computed(() => {
+  if (!estimate.value || !estimate.value.sentence_enforced) return false
+  return !estimate.value.activated
+})
+
+// QA 质检摘要（从工单 final_result 解析 qa_report）
+const qaSummary = computed<any | null>(() => {
+  const raw = detail.value?.ticket?.final_result
+  if (!raw) return null
+  try {
+    return (JSON.parse(raw) as any).qa_report || null
+  } catch { return null }
+})
 
 // 列表与详情
 const tickets = ref<any[]>([])
@@ -216,6 +261,8 @@ function statusLabel(s: string): string {
 .tp-row label { font-size: 13px; color: #555; white-space: nowrap; }
 .tp-langs { width: 260px; }
 .tp-submit { margin-left: auto; }
+.tp-estimate { font-size: 12px; color: #5f6368; white-space: nowrap; }
+.tp-estimate.warn { color: #e8710a; font-weight: 600; }
 .tp-detail { border-top: 1px dashed #ddd; margin-top: 10px; padding-top: 8px; }
 .tp-steps { list-style: none; padding-left: 10px; }
 .tp-steps li { padding: 3px 0; font-size: 13px; }

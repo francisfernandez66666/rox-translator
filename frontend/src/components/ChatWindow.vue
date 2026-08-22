@@ -137,7 +137,7 @@
           <input
             ref="fileInputRef"
             type="file"
-            accept=".docx,.pptx,.xlsx"
+            accept=".docx,.pptx,.xlsx,.pdf,.txt,.csv,.srt,.vtt,.md,.json,.yaml,.yml"
             style="display:none"
             @change="handleFileSelect"
           />
@@ -226,6 +226,12 @@
           @focus="langDropdownOpen = false"
         ></textarea>
 
+        <!-- 报价预览：预计消耗与余额（强制计费且未开通时禁发并提示） -->
+        <div v-if="estimate && estimate.sentence_enforced" class="estimate-hint" :class="{ 'estimate-warn': estimateBlocked }">
+          <template v-if="!estimate.activated">⚠️ {{ estimate.hint || '额度不可用' }}</template>
+          <template v-else>{{ tpl('chat.estimateLine', { cost: estimate.cost, balance: estimate.balance }) }}</template>
+        </div>
+
         <button
           v-if="store.isLoading"
           class="send-btn stop-btn"
@@ -238,8 +244,8 @@
         <button
           v-else
           class="send-btn"
-          :disabled="!canSend"
-          :style="{ background: canSend ? '#2e7d32' : '#e0e0e0' }"
+          :disabled="!canSend || estimateBlocked"
+          :style="{ background: canSend && !estimateBlocked ? '#2e7d32' : '#e0e0e0' }"
           @click="handleSend"
           :title="t('chat.send')"
         >
@@ -259,7 +265,7 @@ import { useChatStore } from '@/stores/chat'
 // 国际化取词
 import { t, tpl, lang } from '@/i18n'
 // 我的包接口（剩余句数展示）
-import { myPackage, meContext } from '@/api'
+import { myPackage, meContext, translationEstimate } from '@/api'
 
 // 子组件：消息气泡
 import MessageBubble from './MessageBubble.vue'
@@ -271,6 +277,7 @@ const store = useChatStore()
 // 仅当后台开启强制计费（sentence_enforced=1）时才展示余额徽标
 const sentenceBalance = ref<number | null>(null)
 const billingEnforced = ref(false)
+// loadBalance 拉取剩余句数与强制计费开关（接口失败时视为未开启计费）
 async function loadBalance() {
   try {
     const r = await myPackage()
@@ -282,6 +289,7 @@ async function loadBalance() {
 }
 // 前台身份上下文（账号/租户/部门/知识库包类型；平台级账号无知识库包）
 const me = ref<any>({})
+// loadMe 拉取前台身份上下文（账号/租户/部门/知识库包类型），失败时重置为空对象
 async function loadMe() {
   try {
     const r = await meContext()
@@ -300,6 +308,7 @@ function packLabel(t2: string): string {
 }
 // 挂载与每次翻译完成后刷新剩余句数
 onMounted(() => { loadBalance(); loadMe() })
+// 每轮翻译结束（消息数变化）后重新拉取剩余句数
 watch(() => store.messages.length, () => { if (store.messages.length) loadBalance() })
 
 // ---- 技能配置 ----
@@ -314,6 +323,30 @@ const skillConfig = computed(() => ({
 
 // ---- 本地状态 ----
 const inputText = ref('')
+
+// ---- 翻译前报价预览（与后端计量同口径，只读不扣减） ----
+const estimate = ref<any>(null)
+let estimateTimer: ReturnType<typeof setTimeout> | null = null
+// 输入文本/目标语言变化后 500ms 防抖请求预估
+watch([inputText, () => store.selectedLangs], () => {
+  if (estimateTimer) clearTimeout(estimateTimer)
+  estimateTimer = setTimeout(refreshEstimate, 500)
+})
+// refreshEstimate 请求翻译预估报价（空输入清空预览，失败时静默置空）
+async function refreshEstimate() {
+  const text = inputText.value.trim()
+  if (!text) { estimate.value = null; return }
+  try {
+    const r: any = await translationEstimate({ text, target_langs: [...store.selectedLangs] })
+    if (r.success) estimate.value = r
+  } catch { estimate.value = null }
+}
+// 强制计费且未开通额度时禁止发送
+const estimateBlocked = computed(() => {
+  if (!estimate.value || !estimate.value.sentence_enforced) return false
+  return !estimate.value.activated
+})
+
 const messagesContainer = ref<HTMLElement>()
 const inputRef = ref<HTMLInputElement>()
 const fileInputRef = ref<HTMLInputElement>()
@@ -522,11 +555,13 @@ const isMobile = ref(window.innerWidth <= 768)
 // 无参数无返回，由窗口 resize 事件触发。
 function onResize() { isMobile.value = window.innerWidth <= 768 }
 
+// inputPlaceholder 输入框占位提示：有待翻译文件时提示文件翻译，否则使用技能默认占位
 const inputPlaceholder = computed(() => {
   if (attachedFiles.value.length > 0) return t('chat.sendFile')
   return skillConfig.value.placeholder
 })
 
+// canSend 是否可发送：输入框有文本或已附加待翻译文件
 const canSend = computed(() => {
   return inputText.value.trim().length > 0 || attachedFiles.value.length > 0
 })
@@ -641,6 +676,7 @@ watch(() => store.messages.length, async () => {
   scrollToBottom()
 })
 
+// 翻译进度百分比变化时同步滚动到底部（长任务期间持续跟随最新内容）
 watch(
   () => store.messages.map(m => m.progress?.percent),
   async () => {
@@ -906,6 +942,13 @@ async function loadTranslationLangs() {
   max-height: 120px; font-family: inherit;
 }
 .message-input:focus { border-color: #1a73e8; }
+
+/* 报价预览提示行：正常=灰绿，额度不可用=警示橙 */
+.estimate-hint {
+  font-size: 12px; color: #5f6368; padding: 2px 16px 0;
+  text-align: right; user-select: none;
+}
+.estimate-hint.estimate-warn { color: #e8710a; font-weight: 600; }
 
 .send-btn {
   width: 42px; height: 42px; border: none; border-radius: 50%;

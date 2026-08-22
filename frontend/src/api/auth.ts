@@ -33,9 +33,19 @@ export async function authMe(): Promise<LoginResp> {
   return request('/api/auth/me', { headers: authHeaders() })
 }
 
-// 自助注册（可带邀请码/租户信息/行业）
-export async function authRegister(data: { username: string; password: string; code?: string; name?: string; invite?: string; email?: string; industry?: string }): Promise<AdminResp> {
+// 自助注册（可带邀请码/租户信息/行业/邮箱验证码/人机验证 token）
+export async function authRegister(data: { username: string; password: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string }): Promise<AdminResp> {
   return request('/api/auth/register', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
+// 发送注册邮箱验证码（noop=true 表示服务端邮件未配置，验证码打印在服务端日志）
+export async function sendEmailCode(email: string, captchaToken?: string): Promise<AdminResp & { noop?: boolean }> {
+  return request('/api/auth/email-code', { method: 'POST', body: JSON.stringify({ email, captcha_token: captchaToken }) })
+}
+
+// 公开注册配置（email_verify_enabled / registration_review，前端显隐验证码输入）
+export async function registerConfig(): Promise<AdminResp & { email_verify_enabled?: boolean; registration_review?: boolean }> {
+  return request('/api/auth/register-config')
 }
 
 // 忘记密码：发送验证码到绑定邮箱

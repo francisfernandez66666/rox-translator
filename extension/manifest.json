@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "翻译助手 · 划词翻译",
+  "version": "1.0.0",
+  "description": "选中文字即翻：调用企业自建翻译助手开放 API，术语与翻译记忆全量生效。",
+  "permissions": ["storage"],
+  "host_permissions": [],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "翻译助手设置"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

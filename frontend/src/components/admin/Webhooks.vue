@@ -41,10 +41,12 @@ const hooks = ref<any[]>([])
 // 新增/编辑 webhook 表单：回调 URL、签名密钥、订阅事件（逗号分隔）
 const wForm = ref({ url: '', secret: '', events: 'translation.completed' })
 
+// loadHooks 加载当前租户的 webhook 回调配置列表
 async function loadHooks() {
   const r = await webhooks()
   if (r.success) hooks.value = (r as any).webhooks || []
 }
+// saveWebhook 新建/保存回调配置（URL 必填），成功后刷新列表
 async function saveWebhook() {
   if (!wForm.value.url) { alert(t('webhooks.urlRequired')); return }
   const r = await webhookSave({ url: wForm.value.url, secret: wForm.value.secret, events: wForm.value.events })
@@ -52,15 +54,18 @@ async function saveWebhook() {
   wForm.value = { url: '', secret: '', events: 'translation.completed' }
   await loadHooks()
 }
+// toggleWebhook 启用/停用指定回调（翻转 enabled 后整体回存）
 async function toggleWebhook(w: any) {
   await webhookSave({ id: w.id, url: w.url, secret: w.secret, events: w.events, enabled: w.enabled ? 0 : 1 })
   await loadHooks()
 }
+// deleteWebhook 删除回调配置（带确认）
 async function deleteWebhook(w: any) {
   if (!confirm(t('webhooks.confirmDelete'))) return
   await webhookDelete(w.id)
   await loadHooks()
 }
+// testWebhook 发送 ping 测试事件验证回调可达性并提示结果
 async function testWebhook(w: any) {
   const r = await webhookTest(w.id)
   alert(r.message || (r.success ? t('webhooks.testSent') : t('webhooks.testFailed')))
