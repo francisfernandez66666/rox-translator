@@ -170,9 +170,39 @@ func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) erro
 	return nil
 }
 
-// runFileTicket 文件工单：提取→逐段翻译→原格式回写（docx/xlsx/pptx）；pdf 降级 xlsx 对照表。
+// runFileTicket 文件工单：提取→逐段翻译→原格式回写（docx/xlsx/pptx/pdf）。
+// 多文件工单（ticket_files 表有行）：逐文件处理，各自记录产物/失败原因；
+// 全部失败才置工单失败。单文件旧工单走 tickets.file_path 历史路径。
 func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) error {
 	langs := parseLangs(t.TargetLangs)
+	// 多文件模式：逐个处理并回写各自产物
+	files, _ := s.Store.TicketFiles(t.ID)
+	if len(files) > 0 {
+		var segTotal, okCount int64
+		var firstErr string
+		for _, f := range files {
+			res := s.Engine.HandleFile(ctx, f.FilePath, map[string]interface{}{"target_langs": langs}, func(step string, done, total int) {})
+			if res.Error != "" || len(res.Files) == 0 {
+				_ = s.Store.SetTicketFileError(f.ID, res.Error)
+				if firstErr == "" {
+					firstErr = f.FileName + ": " + res.Error
+				}
+				continue
+			}
+			_ = s.Store.SetTicketFileResult(f.ID, res.Files[0])
+			segTotal += int64(res.Data.TotalTexts)
+			okCount++
+		}
+		// 计量按成功文件累计
+		nl := int64(len(langs))
+		s.meterUsage(t.TenantID, t.CreatedBy, segTotal*nl)
+		s.meterSentences(t.TenantID, "", segTotal, langs)
+		if okCount == 0 && firstErr != "" {
+			return fmt.Errorf("%s", firstErr)
+		}
+		return nil // 部分成功也放行（下载页可见各文件成败）
+	}
+	// 旧单文件路径
 	res := s.Engine.HandleFile(ctx, t.FilePath, map[string]interface{}{"target_langs": langs}, func(step string, done, total int) {})
 	if res.Error != "" {
 		return fmt.Errorf("%s", res.Error)

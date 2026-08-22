@@ -62,6 +62,10 @@ func (s *Store) CreateUser(tid int64, username, passHash, displayName, role stri
 		"INSERT INTO users (tenant_id, username, password_hash, display_name, role, status, created_by, org_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
 		tid, username, passHash, displayName, role, UserActive, createdBy, orgID, now, now)
 	if err != nil {
+		// 同租户用户名唯一索引命中：返回可读错误（idx_users_tid_username）
+		if strings.Contains(err.Error(), "idx_users_tid_username") || strings.Contains(err.Error(), "UNIQUE constraint failed: users.tenant_id, users.username") {
+			return nil, fmt.Errorf("同租户下用户名已存在: %s", username)
+		}
 		return nil, err
 	}
 	id, _ := res.LastInsertId()

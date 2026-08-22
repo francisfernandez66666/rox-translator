@@ -45,8 +45,9 @@ export const isTenantAdmin = computed(() => myLevel.value >= 3)
 export const isDeptAdmin = computed(() => myLevel.value >= 2)
 
 // 可选角色：超管可分配全部四级；租户管理员可分配 user/dept_admin/tenant_admin；部门管理员仅可分配 user
+// （超管角色统一命名 admin，兼容历史 super_admin 值）
 export const roleOptions = computed(() => {
-  if (isSuper.value) return ['user', 'dept_admin', 'tenant_admin', 'super_admin']
+  if (isSuper.value) return ['user', 'dept_admin', 'tenant_admin', 'admin']
   if (isTenantAdmin.value) return ['user', 'dept_admin', 'tenant_admin']
   if (isDeptAdmin.value) return ['user']
   return []

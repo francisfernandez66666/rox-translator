@@ -36,8 +36,14 @@
         <button class="ad-btn" @click="startBitextImport" :disabled="!bitextFile || bitextImporting">
           {{ bitextImporting ? t('kb.bitextImporting') : t('kb.bitextImport') }}
         </button>
+        <!-- TMX 标准格式导入 -->
+        <input ref="tmxInputRef" type="file" accept=".tmx,.xml" class="ad-input" style="flex:1;margin-left:8px" @change="handleTmxSelect" />
+        <button class="ad-btn" @click="startTmxImport" :disabled="!tmxFile || tmxImporting">
+          {{ tmxImporting ? t('kb.tmxImporting') : t('kb.tmxImport') }}
+        </button>
       </div>
       <div v-if="bitextMsg" class="kb-import-result" :class="bitextOk ? 'ok' : 'err'">{{ bitextMsg }}</div>
+      <div v-if="tmxMsg" class="kb-import-result" :class="tmxOk ? 'ok' : 'err'">{{ tmxMsg }}</div>
     </div>
 
     <div class="ad-row">
@@ -163,7 +169,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { kbPackages, kbPackageCreate, kbPackageDelete, kbPackageStatus, kbIndexRebuild, safetyPhrases, safetyPhraseAdd, safetyPhraseDelete, safetyPhraseStatus, safetyBulkImport, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport, kbRecognizeFile, kbImportFile, bitextImport } from '@/api'
+import { kbPackages, kbPackageCreate, kbPackageDelete, kbPackageStatus, kbIndexRebuild, safetyPhrases, safetyPhraseAdd, safetyPhraseDelete, safetyPhraseStatus, safetyBulkImport, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport, kbRecognizeFile, kbImportFile, bitextImport, tmxImport } from '@/api'
 import { activeTenantId, isSuper, myLevel } from './store'
 import { t, tpl } from '@/i18n'
 
@@ -430,6 +436,36 @@ async function startBitextImport() {
     }
   } finally {
     bitextImporting.value = false
+  }
+}
+
+// ---- TMX 标准格式导入：解析 tu/tuv → 写入 TM 库（module=tmx）----
+const tmxFile = ref<File | null>(null)
+const tmxInputRef = ref<HTMLInputElement | null>(null)
+const tmxImporting = ref(false)
+const tmxMsg = ref('')
+const tmxOk = ref(false)
+// handleTmxSelect 记录用户选择的 TMX 文件
+function handleTmxSelect(e: Event) {
+  tmxFile.value = (e.target as HTMLInputElement).files?.[0] || null
+  tmxMsg.value = ''
+}
+// startTmxImport 上传并导入 TMX，展示单元/写入/跳过计数
+async function startTmxImport() {
+  if (!tmxFile.value) return
+  tmxImporting.value = true
+  try {
+    const r = await tmxImport(tmxFile.value)
+    tmxOk.value = !!r.success
+    tmxMsg.value = r.success
+      ? `${t('kb.tmxTus', { n: r.tus ?? 0 })} · ${t('kb.bitextDone')} +${r.added ?? 0} / ${t('kb.bitextSkipped')} ${r.skipped ?? 0}`
+      : r.message || '导入失败'
+    if (r.success) {
+      tmxFile.value = null
+      if (tmxInputRef.value) tmxInputRef.value.value = ''
+    }
+  } finally {
+    tmxImporting.value = false
   }
 }
 

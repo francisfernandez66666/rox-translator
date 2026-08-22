@@ -66,6 +66,18 @@ export async function bitextImport(file: File): Promise<AdminResp & { added?: nu
   return resp.json()
 }
 
+// TMX 翻译记忆标准格式导入（xml），写入翻译记忆库
+export async function tmxImport(file: File): Promise<AdminResp & { tus?: number; added?: number; skipped?: number }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const resp = await fetch(`${API_BASE}/api/translation/import-tmx`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: formData,
+  })
+  return resp.json()
+}
+
 // 导入已识别的 KB 文件到指定包（按包隔离写入）
 export async function kbImportFile(data: { temp_id: string; package_id: number }): Promise<AdminResp> {
   return request('/api/translation/import-kb', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })

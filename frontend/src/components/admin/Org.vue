@@ -155,11 +155,11 @@ const creating = ref(false)
 const nu = ref({ username: '', password: '', display_name: '', role: 'user' })
 // 新用户归属组织（0=根组织/平台；默认跟随当前选中节点）
 const nuOrgId = ref(0)
-// 级联角色选项：由所选组织层级决定（平台根=超管；租户根=租管/部门管理/用户；部门=部门管理/用户）
+// 级联角色选项：由所选组织层级决定（平台根=超管[统一命名 admin]；租户根=租管/部门管理/用户；部门=部门管理/用户）
 const nuRoleOptions = computed(() => {
   const oid = nuOrgId.value
   if (!oid) {
-    if (isPlatformView.value) return myLevel.value >= 4 ? ['super_admin'] : []
+    if (isPlatformView.value) return myLevel.value >= 4 ? ['admin'] : []
     return myLevel.value >= 3 ? ['tenant_admin', 'dept_admin', 'user'] : ['user']
   }
   const org = orgs.value.find(x => x.id === oid)

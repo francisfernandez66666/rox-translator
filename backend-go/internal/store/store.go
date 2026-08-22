@@ -12,6 +12,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"sync"
 
 	"translator/internal/iam"
@@ -87,6 +88,17 @@ func (s *Store) migrate() error {
 			payload TEXT NOT NULL DEFAULT '',        -- JSON 轨迹快照
 			version INTEGER NOT NULL DEFAULT 1,
 			updated_at TEXT
+		)`,
+		// 工单多文件表：一个文件工单可挂多个源文件，各自记录产物路径（三期·多文件上传）
+		`CREATE TABLE IF NOT EXISTS ticket_files (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id INTEGER NOT NULL DEFAULT 1,
+			ticket_id INTEGER NOT NULL,
+			file_name TEXT NOT NULL DEFAULT '',      -- 原始文件名（下载打包用）
+			file_path TEXT NOT NULL DEFAULT '',      -- 上传保存路径
+			result_path TEXT NOT NULL DEFAULT '',    -- 该文件的翻译产物路径
+			error TEXT NOT NULL DEFAULT '',          -- 单文件处理失败原因（不影响其他文件）
+			created_at TEXT
 		)`,
 		// ---------- kb_packages 知识库三级包 ----------
 		`CREATE TABLE IF NOT EXISTS kb_packages (
@@ -349,6 +361,11 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(`UPDATE users SET tenant_id=0 WHERE role IN ('admin','super_admin')`); err != nil {
 		return err
 	}
+	// 约束：同租户下用户名唯一（三期）。容错执行——存量库若已有重名数据，
+	// 建索引失败仅记日志不阻断启动；清理重名后重启自动补建。
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tid_username ON users(tenant_id, username)`); err != nil {
+		log.Printf("[migrate] 同租户用户名唯一索引创建失败（存在重名数据，请清理后重启）: %v", err)
+	}
 	return nil
 }
 
@@ -389,6 +406,10 @@ func (s *Store) migrateColumns() error {
 		{"tm_segments", "pack_id", "ALTER TABLE tm_segments ADD COLUMN pack_id INTEGER NOT NULL DEFAULT 0"},
 		// 工单结果文件路径（原格式回写产物或 xlsx 对照表）
 		{"tickets", "result_path", "ALTER TABLE tickets ADD COLUMN result_path TEXT NOT NULL DEFAULT ''"},
+		// 工单产物保留期：完成时间 + N 天（到期由后台扫描清理文件；核心译文已入 tm_segments 长期保留）
+		{"tickets", "result_expires_at", "ALTER TABLE tickets ADD COLUMN result_expires_at TEXT NOT NULL DEFAULT ''"},
+		// 产物过期提醒档位去重标记（逗号分隔：14,7,3,1）
+		{"tickets", "expire_notify", "ALTER TABLE tickets ADD COLUMN expire_notify TEXT NOT NULL DEFAULT ''"},
 		// 安全句结构化字段（Gate 闸门）：类型/替换词/审核状态/来源
 		{"kb_safety_phrases", "kind", "ALTER TABLE kb_safety_phrases ADD COLUMN kind TEXT NOT NULL DEFAULT 'style'"},
 		{"kb_safety_phrases", "replacement", "ALTER TABLE kb_safety_phrases ADD COLUMN replacement TEXT NOT NULL DEFAULT ''"},

@@ -121,9 +121,11 @@ export async function notificationsReadAll(): Promise<AdminResp> {
 }
 
 // 文件工单创建（multipart 上传，≤10MB；支持 docx/xlsx/pptx/pdf/txt/csv）
-export async function ticketCreateFile(file: File, meta: { title: string; target_langs: string }): Promise<TicketResp> {
+// 文件建单：支持多文件（files 字段可重复），共享 10MB 上限
+export async function ticketCreateFile(files: File | File[], meta: { title: string; target_langs: string }): Promise<TicketResp> {
   const fd = new FormData()
-  fd.append('file', file)
+  const list = Array.isArray(files) ? files : [files]
+  for (const f of list) fd.append('files', f)
   fd.append('title', meta.title)
   fd.append('target_langs', meta.target_langs)
   return request('/api/tickets/create-file', { method: 'POST', headers: authHeaders(), body: fd })
