@@ -12,12 +12,20 @@ import (
 	"strings"
 )
 
-// 翻译文件支持的类型白名单（与 engine/file.go 提取逻辑一致）
+// 翻译文件支持的类型白名单（与 fileproc.ExtractTexts 提取逻辑一致）
 var translateExtWhitelist = map[string]bool{
-	".docx": true,
-	".pptx": true,
-	".xlsx": true,
-	".pdf":  true,
+	".docx":  true,
+	".pptx":  true,
+	".xlsx":  true,
+	".pdf":   true, // 提取后产物降级 xlsx 对照表
+	".txt":   true,
+	".csv":   true,
+	".srt":   true,
+	".vtt":   true,
+	".md":    true,
+	".json":  true,
+	".yaml":  true,
+	".yml":   true,
 }
 
 // kbExtWhitelist 知识库导入支持的类型白名单（与 kb/parse.go 解析逻辑一致）

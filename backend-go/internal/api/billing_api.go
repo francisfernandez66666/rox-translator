@@ -70,6 +70,14 @@ func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 			return tid, release, store.ErrSentenceExhausted
 		}
 	}
+	// 注册审核模式兜底：registration_review=1 时，未开通额度（无包身份且零句数）的租户一律拒绝，
+	// 与句数强制开关解耦（防止 review 模式在 sentence_enforced=0 时被绕过烧 token）
+	if rv, _ := s.Store.GetConfig("registration_review"); rv == "1" && tid > 0 {
+		perms, perr := s.Store.GetTenantPerms(tid)
+		if perr == nil && perms.PackageCode == "" && perms.SentenceBalance <= 0 {
+			return tid, release, &apiErr{"账号尚未开通翻译额度，请等待管理员审核发放试用额度"}
+		}
+	}
 	return tid, release, nil
 }
 

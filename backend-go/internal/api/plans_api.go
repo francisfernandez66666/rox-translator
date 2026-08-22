@@ -48,7 +48,7 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 	tid := s.effTenant(r, u)
 	enforced := false
 	balance := int64(0)
-	var pkgCode, subAt string
+	var pkgCode, subAt, pkgExpires string
 	// 平台上下文（tid<=0）无计费概念：强制计费视为关闭、余额不返回
 	if tid > 0 {
 		if v, _ := s.Store.GetConfig("sentence_enforced"); v == "1" {
@@ -59,6 +59,7 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 			balance = perms.SentenceBalance
 			pkgCode = perms.PackageCode
 			subAt = perms.SubscribedAt
+			pkgExpires = perms.PackageExpires
 		}
 	}
 	payMode := "mock"
@@ -71,6 +72,7 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		"sentence_balance":  balance,
 		"package_code":      pkgCode,
 		"subscribed_at":     subAt,
+		"package_expires":   pkgExpires,
 		"pay_mode":          payMode,
 	})
 }

@@ -67,10 +67,12 @@ const ticketDetail = ref<any>(null)
 const tkForm = ref({ title: '', source_text: '', target_langs: 'en' })
 const approvalTickets = ref<any[]>([])
 
+// loadTickets 加载工单列表
 async function loadTickets() {
   const r = await ticketList(false)
   if (r.success) tickets.value = r.tickets || []
 }
+// createTicket 校验源文本后创建翻译工单并重置表单、刷新列表
 async function createTicket() {
   if (!tkForm.value.source_text) { alert(t('tickets.errorSourceRequired')); return }
   const r = await ticketCreate(tkForm.value)
@@ -78,21 +80,25 @@ async function createTicket() {
   tkForm.value = { title: '', source_text: '', target_langs: 'en' }
   await loadTickets()
 }
+// runTicket 执行指定工单的翻译流程并提示完成
 async function runTicket(t: Ticket) {
   const r = await ticketRun(t.id)
   if (!r.success) { alert(r.message); return }
   await loadTickets()
   alert(tpl('tickets.runDone', { no: t.ticket_no }))
 }
+// openTicket 拉取工单详情与状态流转记录展示
 async function openTicket(t: Ticket) {
   const r = await ticketDetail(t.id)
   if (r.success) ticketDetail.value = { ...r.ticket, states: r.states }
 }
 
+// loadApproval 加载待审批工单列表
 async function loadApproval() {
   const r = await approveList()
   if (r.success) approvalTickets.value = (r as any).tickets || []
 }
+// doApprove 提交通过/驳回意见（含原因/建议）并刷新审批与工单列表
 async function doApprove(t: any, action: 'approve' | 'reject') {
   const r = await approveAction(t.id, action, t._reason || '', t._suggestion || '', '')
   if (!r.success) { alert(r.message); return }
@@ -102,6 +108,7 @@ async function doApprove(t: any, action: 'approve' | 'reject') {
   await loadTickets()
 }
 
+// loadAll 并行加载工单列表与待审批列表
 async function loadAll() {
   await Promise.all([loadTickets(), loadApproval()])
 }

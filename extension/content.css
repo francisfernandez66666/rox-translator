@@ -1,0 +1,33 @@
+/* content.css — 划词翻译按钮与气泡样式（shadow DOM 外，选择器加前缀防冲突） */
+#__trz_btn__ {
+  position: fixed;
+  z-index: 2147483647;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #1a237e;
+  color: #fff;
+  font: 600 14px/28px system-ui, sans-serif;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  display: none;
+  user-select: none;
+}
+#__trz_btn__:hover { background: #3949ab; }
+
+#__trz_bubble__ {
+  position: fixed;
+  z-index: 2147483647;
+  max-height: 260px;
+  overflow-y: auto;
+  background: #fff;
+  color: #202124;
+  border: 1px solid #dadce0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: 13px/1.6 system-ui, sans-serif;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}

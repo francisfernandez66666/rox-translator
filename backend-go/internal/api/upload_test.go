@@ -92,7 +92,8 @@ func TestParseUploadTooBig(t *testing.T) {
 // whitelistKeys：返回非空扩展名列表（错误提示用）。
 func TestWhitelistKeys(t *testing.T) {
 	keys := whitelistKeys(translateExtWhitelist)
-	if len(keys) != 4 {
-		t.Fatalf("翻译白名单应有 4 个扩展名, got %d", len(keys))
+	// 三期扩容：docx/pptx/xlsx/pdf/txt/csv/srt/vtt/md/json/yaml/yml = 12 个
+	if len(keys) != 12 {
+		t.Fatalf("翻译白名单应有 12 个扩展名, got %d", len(keys))
 	}
 }

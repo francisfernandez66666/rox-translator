@@ -9,6 +9,7 @@ import (
 	"translator/internal/store"
 )
 
+// TestCanManagePackType 校验各角色对知识库包类型的管理权限边界。
 func TestCanManagePackType(t *testing.T) {
 	super := &store.User{Role: "super_admin"}
 	tenantAdmin := &store.User{Role: "tenant_admin"}

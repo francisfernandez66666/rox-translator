@@ -219,8 +219,8 @@ func (s *Store) DeductSentences(tid, n int64) (int64, error) {
 var ErrSentenceExhausted = &errTxt{"翻译句数已用尽，请购买套餐或增量包"}
 
 // GrantPackageSentences 向租户发放商业包句数：
-//   - paid（付费包）：设置订阅包编码/到期时间，并发放包内含句数
-//   - increment（增量包）：在现有句数余额上追加包内含句数
+//   - paid（付费包）：设置订阅包编码/到期时间（DurationDays>0 时计算 PackageExpires），并发放包内含句数
+//   - increment（增量包）：在现有句数余额上追加包内含句数（不改订阅状态与到期）
 //
 // 参数：tid=租户 ID，pkg=商业包对象；返回发放后的句数余额。
 func (s *Store) GrantPackageSentences(tid int64, pkg *Package) (int64, error) {
@@ -229,18 +229,41 @@ func (s *Store) GrantPackageSentences(tid int64, pkg *Package) (int64, error) {
 		return 0, err
 	}
 	if pkg.PType == PackageIncrement {
-		// 增量包：追加句数，不改变订阅状态
+		// 增量包：追加句数，不改变订阅状态（买断资产无到期概念）
 		perms.SentenceBalance += pkg.Sentences
 	} else {
-		// 付费包（含免费体验包）：覆盖订阅并发放句数
+		// 付费包（含免费体验包）：覆盖订阅并发放句数；续费时清除旧到期提醒标记
 		perms.PackageCode = pkg.Code
 		perms.SubscribedAt = time.Now().Format(time.RFC3339)
 		perms.SentenceBalance += pkg.Sentences
+		if pkg.DurationDays > 0 {
+			perms.PackageExpires = time.Now().AddDate(0, 0, pkg.DurationDays).Format(time.RFC3339)
+		} else {
+			perms.PackageExpires = "" // 不限期
+		}
+		perms.NotifiedExp7 = false
+		perms.NotifiedExp1 = false
 	}
 	if err := s.SaveTenantPerms(tid, perms); err != nil {
 		return 0, err
 	}
 	return perms.SentenceBalance, nil
+}
+
+// ExpirePackage 摘除租户订阅身份（订阅到期由后台扫描调用）：
+// 清空 package_code/package_expires_at 与提醒标记；句数余额保留（已购句数为买断资产）。
+// 参数：tid=租户 ID，expiredPkg=被摘除的包编码（审计留痕用）；返回错误。
+func (s *Store) ExpirePackage(tid int64) (code string, err error) {
+	perms, err := s.GetTenantPerms(tid)
+	if err != nil {
+		return "", err
+	}
+	code = perms.PackageCode
+	perms.PackageCode = ""
+	perms.PackageExpires = ""
+	perms.NotifiedExp7 = false
+	perms.NotifiedExp1 = false
+	return code, s.SaveTenantPerms(tid, perms)
 }
 
 // SaveTenantPerms 持久化租户权限 JSON（整体覆盖 tenants.permissions 列）。

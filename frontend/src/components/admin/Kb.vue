@@ -30,6 +30,14 @@
         </div>
         <div v-if="kbImportResult" class="kb-import-result" :class="kbImportResult.success ? 'ok' : 'err'">{{ kbImportResult.message }}</div>
       </div>
+      <!-- 双语语料对齐导入：直接写入翻译记忆库（TM），冷启动提升命中率 -->
+      <div class="ad-row" style="margin-top:8px;border-top:1px dashed #e0e0e0;padding-top:10px">
+        <input ref="bitextInputRef" type="file" accept=".csv,.xlsx,.xls" class="ad-input" style="flex:1" @change="handleBitextSelect" />
+        <button class="ad-btn" @click="startBitextImport" :disabled="!bitextFile || bitextImporting">
+          {{ bitextImporting ? t('kb.bitextImporting') : t('kb.bitextImport') }}
+        </button>
+      </div>
+      <div v-if="bitextMsg" class="kb-import-result" :class="bitextOk ? 'ok' : 'err'">{{ bitextMsg }}</div>
     </div>
 
     <div class="ad-row">
@@ -155,7 +163,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { kbPackages, kbPackageCreate, kbPackageDelete, kbPackageStatus, kbIndexRebuild, safetyPhrases, safetyPhraseAdd, safetyPhraseDelete, safetyPhraseStatus, safetyBulkImport, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport, kbRecognizeFile, kbImportFile } from '@/api'
+import { kbPackages, kbPackageCreate, kbPackageDelete, kbPackageStatus, kbIndexRebuild, safetyPhrases, safetyPhraseAdd, safetyPhraseDelete, safetyPhraseStatus, safetyBulkImport, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport, kbRecognizeFile, kbImportFile, bitextImport } from '@/api'
 import { activeTenantId, isSuper, myLevel } from './store'
 import { t, tpl } from '@/i18n'
 
@@ -208,6 +216,7 @@ async function loadPackages() {
     }
   }
 }
+// createPackage 校验编码/名称后创建知识库包（源语言角色）并刷新列表
 async function createPackage() {
   if (!pForm.value.code || !pForm.value.name) { alert(t('kb.errorCodeNameRequired')); return }
   const r = await kbPackageCreate({ ...pForm.value, role: 'source' })
@@ -290,6 +299,7 @@ async function importSafety() {
 function kindLabel(k?: string) {
   return k === 'forbidden' ? t('kb.kindForbidden') : k === 'replace' ? t('kb.kindReplace') : t('kb.kindStyle')
 }
+// statusLabel 安全句审核状态转中文标签（pending/rejected/approved）
 function statusLabel(s?: string) {
   return s === 'pending' ? t('kb.pending') : s === 'rejected' ? t('kb.rejected') : t('kb.approved')
 }
@@ -302,6 +312,7 @@ const phrasePlaceholder = computed(() => {
 
 // 重建向量索引（超管）：全量重新嵌入并热替换
 const rebuilding = ref(false)
+// rebuildIndex 弹确认后重建向量索引（超管），完成后提示嵌入条数
 async function rebuildIndex() {
   if (!confirm(t('kb.rebuildConfirm'))) return
   rebuilding.value = true
@@ -320,12 +331,14 @@ async function togglePackage(p: any) {
   if (!r.success) { alert(r.message); return }
   await loadPackages()
 }
+// removePackage 弹确认后删除知识库包并刷新列表
 async function removePackage(p: any) {
   if (!confirm(tpl('kb.confirmDeletePackage', { name: p.name }))) return
   const r = await kbPackageDelete(p.id)
   if (!r.success) alert(r.message)
   await loadPackages()
 }
+// loadEntries 展开/收起包条目面板，展开时加载该包条目列表
 async function loadEntries(p: any) {
   selectedPkg.value = selectedPkg.value === p.id ? null : p.id
   if (selectedPkg.value === p.id) {
@@ -333,6 +346,7 @@ async function loadEntries(p: any) {
     entries.value = (r as any).entries || []
   }
 }
+// addEntry 校验原文后向指定包新增词条，清空表单并刷新条目与计数
 async function addEntry(pkgId: number) {
   if (!eForm.value.source_text) { alert(t('kb.errorSourceRequired')); return }
   const r = await kbEntryAdd({ package_id: pkgId, ...eForm.value })
@@ -341,6 +355,7 @@ async function addEntry(pkgId: number) {
   await loadEntries({ id: pkgId })
   await loadPackages()
 }
+// removeEntry 删除指定词条并刷新当前展开包的条目列表
 async function removeEntry(e: any) {
   const r = await kbEntryDelete(e.id)
   if (!r.success) alert(r.message)
@@ -352,6 +367,7 @@ async function removeEntry(e: any) {
 const bulkText = ref('')
 // 批量导入结果提示（成功/失败信息）
 const bulkMsg = ref('')
+// bulkImport 按行解析"中文|语言|译文"文本批量导入词条，展示成功/跳过计数
 async function bulkImport(pkgId: number) {
   const entries: any[] = []
   for (const line of bulkText.value.split('\n')) {
@@ -385,6 +401,36 @@ function handleKbFileSelect(e: Event) {
   kbRecognized.value = null
   kbImportResult.value = null
   kbImportPkg.value = 0
+}
+
+// ---- 双语语料对齐导入：选择文件 → 直接写入 TM 库（module=bitext）----
+const bitextFile = ref<File | null>(null)
+const bitextInputRef = ref<HTMLInputElement | null>(null)
+const bitextImporting = ref(false)
+const bitextMsg = ref('')
+const bitextOk = ref(false)
+// handleBitextSelect 记录用户选择的双语对照文件
+function handleBitextSelect(e: Event) {
+  bitextFile.value = (e.target as HTMLInputElement).files?.[0] || null
+  bitextMsg.value = ''
+}
+// startBitextImport 上传并导入双语语料，展示写入/跳过计数
+async function startBitextImport() {
+  if (!bitextFile.value) return
+  bitextImporting.value = true
+  try {
+    const r = await bitextImport(bitextFile.value)
+    bitextOk.value = !!r.success
+    bitextMsg.value = r.success
+      ? `${t('kb.bitextDone')} +${r.added ?? 0} / ${t('kb.bitextSkipped')} ${r.skipped ?? 0}`
+      : r.message || '导入失败'
+    if (r.success) {
+      bitextFile.value = null
+      if (bitextInputRef.value) bitextInputRef.value.value = ''
+    }
+  } finally {
+    bitextImporting.value = false
+  }
 }
 
 // startRecognize 识别上传文件：调用 recognize-kb，返回预览/语言列/temp_id。

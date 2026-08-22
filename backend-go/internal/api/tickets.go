@@ -25,6 +25,7 @@ import (
 
 	"translator/internal/auth"
 	"translator/internal/orchestrator"
+	"translator/internal/qa"
 	"translator/internal/store"
 )
 
@@ -110,11 +111,15 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer file.Close()
-	// 扩展名白名单（与文件翻译支持的格式一致）
+	// 扩展名白名单（与 fileproc.ExtractTexts 支持的格式一致）
 	ext := strings.ToLower(filepath.Ext(hdr.Filename))
-	allowed := map[string]bool{".docx": true, ".xlsx": true, ".pptx": true, ".pdf": true, ".txt": true, ".csv": true}
+	allowed := map[string]bool{
+		".docx": true, ".xlsx": true, ".pptx": true, ".pdf": true,
+		".txt": true, ".csv": true, ".srt": true, ".vtt": true,
+		".md": true, ".json": true, ".yaml": true, ".yml": true,
+	}
 	if !allowed[ext] {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "仅支持 docx/xlsx/pptx/pdf/txt/csv"})
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "仅支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml"})
 		return
 	}
 	title := r.FormValue("title")
@@ -285,6 +290,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 	// ② 纯文本工单：从 FinalResult 解析译文生成 xlsx 对照表
 	var payload struct {
 		Translations map[string]string `json:"translations"`
+		QAReport     *qa.Report        `json:"qa_report"`
 	}
 	_ = json.Unmarshal([]byte(t.FinalResult), &payload)
 	if len(payload.Translations) == 0 {
@@ -302,6 +308,11 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 	headers := []string{"source_text"}
 	for _, lc := range langs {
 		headers = append(headers, lc)
+	}
+	// QA 列：存在质检报告时追加（error 级前缀 ✖，warning 级 ⚠）
+	hasQA := payload.QAReport != nil && len(payload.QAReport.Issues) > 0
+	if hasQA {
+		headers = append(headers, "QA")
 	}
 	for i, h := range headers {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
@@ -326,6 +337,20 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 		for i, lc := range langs {
 			_ = f.SetCellValue(sheet, cellName(i+2, 2), payload.Translations[lc])
 		}
+	}
+	// QA 汇总写入 QA 列首行数据行（整单一份报告，写在第 2 行末列）
+	if hasQA {
+		q := payload.QAReport
+		var b strings.Builder
+		fmt.Fprintf(&b, "pass=%v errors=%d warnings=%d", q.Pass, q.Errors, q.Warnings)
+		for _, iss := range q.Issues {
+			mark := "⚠"
+			if iss.Level == "error" {
+				mark = "✖"
+			}
+			fmt.Fprintf(&b, "\n%s [%s/%s] %s", mark, iss.Lang, iss.Rule, iss.Detail)
+		}
+		_ = f.SetCellValue(sheet, cellName(len(headers), 2), b.String())
 	}
 	buf, err := f.WriteToBuffer()
 	if err != nil {

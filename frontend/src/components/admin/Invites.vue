@@ -38,10 +38,12 @@ import { t } from '@/i18n'
 const invites = ref<any[]>([])
 // 新建邀请码表单：邀请码内容/绑定租户 ID
 const invForm = ref({ code: '', tenant_id: 0 })
+// loadInvites 加载邀请码列表
 async function loadInvites() {
   const r = await inviteCodes()
   if (r.success) invites.value = (r as any).codes || []
 }
+// createInvite 校验码值后创建邀请码并重置表单、刷新列表
 async function createInvite() {
   if (!invForm.value.code) { alert(t('invites.codeRequired')); return }
   const r = await inviteCodeCreate(invForm.value)

@@ -85,8 +85,9 @@ func TestPeakHeapMonotonic(t *testing.T) {
 	prev := peakHeapBytes
 	s1 := sampleSelfMemory()
 	s2 := sampleSelfMemory()
-	if s1.PeakHeapMB != s2.PeakHeapMB {
-		t.Fatalf("两次采样峰值应一致: %.1f vs %.1f", s1.PeakHeapMB, s2.PeakHeapMB)
+	// 两次采样之间测试进程自身可能产生新分配，峰值允许增长但不允许下降
+	if s2.PeakHeapMB < s1.PeakHeapMB {
+		t.Fatalf("第二次采样峰值不应低于第一次: %.3f vs %.3f", s1.PeakHeapMB, s2.PeakHeapMB)
 	}
 	if peakHeapBytes < prev {
 		t.Fatal("峰值堆内存不应回退")

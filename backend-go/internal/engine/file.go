@@ -211,6 +211,14 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			aerr = fileproc.ApplyPptx(filePath, outPath, tr)
 		case ".xlsx":
 			aerr = fileproc.ApplyXlsx(filePath, outPath, tr)
+		default:
+			// 无原格式回写能力的格式（pdf/txt/csv/srt/vtt/md/json/yaml）：
+			// 统一降级生成「源文→该语言」xlsx 对照表作为产物
+			aerr = fileproc.WriteComparisonXlsx(outPath+".xlsx", texts, tr)
+			if aerr == nil {
+				filesOut = append(filesOut, outPath+".xlsx")
+				continue
+			}
 		}
 		if aerr == nil {
 			filesOut = append(filesOut, outPath)

@@ -54,6 +54,18 @@ export async function kbRecognizeFile(file: File): Promise<AdminResp> {
   return resp.json()
 }
 
+// 双语语料对齐导入：xlsx/csv 两列以上（源文+各语言列），直接写入翻译记忆库
+export async function bitextImport(file: File): Promise<AdminResp & { added?: number; skipped?: number }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const resp = await fetch(`${API_BASE}/api/translation/import-bitext`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: formData,
+  })
+  return resp.json()
+}
+
 // 导入已识别的 KB 文件到指定包（按包隔离写入）
 export async function kbImportFile(data: { temp_id: string; package_id: number }): Promise<AdminResp> {
   return request('/api/translation/import-kb', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })

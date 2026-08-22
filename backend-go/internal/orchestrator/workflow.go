@@ -18,6 +18,7 @@ import (
 	"translator/internal/gate"
 	"translator/internal/kb"
 	"translator/internal/llm"
+	"translator/internal/qa"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -72,6 +73,9 @@ func (w *Workflow) registerSteps() {
 	// culture_gate：语言文化包输出闸门（反查译文）
 	ex.Register("culture_gate", w.runCultureGate)
 
+	// qa：确定性质检（数字/占位符/漏翻等纯规则，报告写入 payload，不阻断流程）
+	ex.Register("qa", w.runQA)
+
 	// approval：人工审批（工单转为待审批；由审批台决定批准/驳回）
 	ex.Register("approval", w.runApproval)
 
@@ -90,6 +94,7 @@ type ticketPayload struct {
 	ReviewEvalScores map[string]float64 `json:"review_eval_scores,omitempty"` // 语言 → 校对评估总分
 	Gate         *gate.GateResult       `json:"gate"`         // Gate 校验结果
 	Culture      *culture.CultureResult `json:"culture"`      // 语言文化闸门结果
+	QAReport     *qa.Report             `json:"qa_report,omitempty"` // 确定性 QA 质检报告
 }
 
 // parseTicketLang 从 target_langs 逗号分隔字符串解析语言列表。
@@ -312,6 +317,19 @@ func (w *Workflow) runCultureGate(ctx context.Context, t *store.Ticket) error {
 			return fmt.Errorf("语言文化闸门打回 [%s]: %s", lc, strings.Join(c.Reasons, ";"))
 		}
 	}
+	return nil
+}
+
+// runQA 确定性质检：对最终译文跑纯规则检查（数字/占位符/漏翻等），
+// 报告写入 payload 的 qa_report 供下载对照表与审批参考；不阻断流程（error 由人工审批环节裁决）。
+// 参数：ctx=上下文，t=工单对象。
+func (w *Workflow) runQA(ctx context.Context, t *store.Ticket) error {
+	p := w.loadPayload(t)
+	if p == nil || len(p.Translations) == 0 {
+		return nil
+	}
+	p.QAReport = qa.Check(p.SourceText, p.Translations)
+	w.savePayload(t, p)
 	return nil
 }
 

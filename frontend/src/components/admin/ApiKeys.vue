@@ -45,10 +45,12 @@ const newKey = ref('')
 // 新建 Key 表单：名称/权限（默认 translate）
 const kForm = ref({ name: '', perms: 'translate' })
 
+// loadKeys 加载 API Key 列表
 async function loadKeys() {
   const r = await apiKeys()
   if (r.success) keys.value = (r as any).keys || []
 }
+// createKey 校验名称后签发 API Key，展示一次性完整密钥并重置表单、刷新列表
 async function createKey() {
   if (!kForm.value.name) { alert(t('apikeys.nameRequired')); return }
   const r = await apiKeyCreate(kForm.value)
@@ -57,15 +59,18 @@ async function createKey() {
   kForm.value = { name: '', perms: 'translate' }
   await loadKeys()
 }
+// toggleKey 切换指定 Key 启用/禁用状态并刷新列表
 async function toggleKey(k: any) {
   await apiKeyStatus(k.id, k.status === 'active' ? 'disabled' : 'active')
   await loadKeys()
 }
+// deleteKey 弹确认后删除指定 Key 并刷新列表
 async function deleteKey(k: any) {
   if (!confirm(t('apikeys.confirmDelete'))) return
   await apiKeyDelete(k.id)
   await loadKeys()
 }
+// rotateKey 弹确认后轮换指定 Key，展示新密钥并刷新列表
 async function rotateKey(k: any) {
   if (!confirm(tpl('apikeys.confirmRotate', { name: k.name }))) return
   const r = await apiKeyRotate(k.id)

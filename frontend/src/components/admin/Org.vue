@@ -349,6 +349,7 @@ function setParent(id: number) {
   newName.value = ''
 }
 
+// createOrg 校验名称后在所选父级下创建组织/部门并刷新树
 async function createOrg() {
   if (!newName.value.trim()) { alert(t('org.nameRequired')); return }
   // 父=根组织(0) → 组织；父=组织/部门 → 部门
@@ -358,6 +359,7 @@ async function createOrg() {
   await loadAll()
 }
 
+// renameOrg 弹输入框重命名组织/部门，根组织改名时同步刷新租户列表
 async function renameOrg(o: OrgInfo) {
   const name = prompt(tpl('org.renamePrompt', { name: o.name }), o.name)
   if (!name || !name.trim()) return
@@ -367,6 +369,7 @@ async function renameOrg(o: OrgInfo) {
   await loadAll()
 }
 
+// deleteOrg 弹确认后删除组织/部门并刷新树
 async function deleteOrg(o: OrgInfo) {
   if (!confirm(tpl('org.deleteConfirm', { name: o.name }))) return
   const r = await orgDelete(o.id)
