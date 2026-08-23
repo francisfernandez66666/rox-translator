@@ -153,7 +153,7 @@
 
 <script setup lang="ts">
 // Vue 响应式与生命周期
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 // 技能徽章组件
 import SkillBadge from './SkillBadge.vue'
 // API：获取文件下载 URL
@@ -182,11 +182,10 @@ defineEmits<{ feedback: [message: ChatMessage] }>()
 
 // 移动端标记：窗口宽度 ≤ 768px 时启用移动端样式
 const isMobile = ref(window.innerWidth <= 768)
-onMounted(() => {
-  // onResize 监听窗口尺寸变化，实时更新移动端标记（窄屏切换紧凑布局）
-  const onResize = () => { isMobile.value = window.innerWidth <= 768 }
-  window.addEventListener('resize', onResize)
-})
+// onResize 窗口尺寸回调（保存引用以便卸载时移除，防监听器随消息数无限累积泄漏）
+const onResize = () => { isMobile.value = window.innerWidth <= 768 }
+onMounted(() => window.addEventListener('resize', onResize))
+onUnmounted(() => window.removeEventListener('resize', onResize))
 
 // ★ 根据文件扩展名获取文件类型描述（i18n 文案）
 function getFileTypeLabel(path: string): string {

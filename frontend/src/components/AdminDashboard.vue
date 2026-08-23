@@ -24,6 +24,11 @@
         </select>
       </div>
 
+      <!-- ★ 消息通知中心（复用前台铃铛：未读轮询+下拉列表） -->
+      <div class="ad-bell-slot" style="margin:4px 14px 10px; text-align:center">
+        <Bell />
+      </div>
+
       <!-- 语言切换 -->
       <div class="ad-lang-switch">
         <button class="ad-lang-btn" @click="toggleLang()">{{ lang === 'zh' ? 'English' : '中文' }}</button>
@@ -80,6 +85,8 @@ import ApiKeys from './admin/ApiKeys.vue'
 import Webhooks from './admin/Webhooks.vue'
 import Tickets from './admin/Tickets.vue'
 import Audit from './admin/Audit.vue'
+// ★ 站内信铃铛：后台消息通知中心（工单完成/反馈/告警等站内信）
+import Bell from '../components/Bell.vue'
 import Feedback from './admin/Feedback.vue'
 // 共享样式（非 scoped，供全部面板使用）
 import './admin/admin.css'

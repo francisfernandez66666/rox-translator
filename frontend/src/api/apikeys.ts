@@ -29,3 +29,29 @@ export async function apiKeyRotate(id: number): Promise<AdminResp> {
 export async function apiKeyDelete(id: number): Promise<AdminResp> {
   return request('/api/apikeys/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
+// ============================================================================
+// 开放 API 文档在线维护（仅超管）
+// ============================================================================
+
+/** getOpenAPIDocs 读取当前生效的文档 MD 源码（is_default=true 表示内置默认未改过）。 */
+export async function getOpenAPIDocs(): Promise<AdminResp & { md?: string; is_default?: boolean }> {
+  return request('/api/admin/openapi-docs', { headers: authHeaders() })
+}
+
+/** saveOpenAPIDocs 保存文档 MD 源码（传空串=恢复内置默认）。 */
+export async function saveOpenAPIDocs(md: string): Promise<AdminResp> {
+  return request('/api/admin/openapi-docs/save', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ md }),
+  })
+}
+
+/** previewOpenAPIDocs 预览渲染结果（不落库），返回完整 HTML。 */
+export async function previewOpenAPIDocs(md: string): Promise<AdminResp & { html?: string }> {
+  return request('/api/admin/openapi-docs/preview', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ md }),
+  })
+}

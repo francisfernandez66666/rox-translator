@@ -37,6 +37,9 @@ export const useChatStore = defineStore('chat', () => {
   // 中止控制器（用于取消进行中的 SSE 请求）
   let abortController: AbortController | null = null
 
+  // 消息历史上限：超出后裁剪最旧消息（防长会话内存无界增长）
+  const MAX_MESSAGES = 200
+
   /** 选中的翻译模型（持久化到 localStorage） */
   const selectedModel = ref(localStorage.getItem('translateModel') || 'tencent/Hunyuan-MT-7B')
 
@@ -57,6 +60,13 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // 更新指定消息的翻译进度
+  // trimMessages 超限裁剪：保留最近 MAX_MESSAGES 条（从头部丢弃最旧）
+  function trimMessages() {
+    if (messages.value.length > MAX_MESSAGES) {
+      messages.value.splice(0, messages.value.length - MAX_MESSAGES)
+    }
+  }
+
   function updateProgress(messageId: string, step: string, percent: number) {
     const msg = messages.value.find(m => m.id === messageId)
     if (msg) msg.progress = { step, percent }

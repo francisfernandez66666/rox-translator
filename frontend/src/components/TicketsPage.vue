@@ -120,7 +120,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import LangMultiSelect from './LangMultiSelect.vue'
 import FeedbackModal from './FeedbackModal.vue'
 import { myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail, ticketDownload, translationEstimate } from '@/api'
@@ -272,7 +272,13 @@ async function load() {
   if (r.success) tickets.value = (r as any).tickets || []
 }
 onMounted(load)
-setInterval(() => { if (tickets.value.some(x => ['queued', 'in_progress'].includes(x.status))) load() }, 5000)
+// 工单进行中每 5s 轮询刷新（★ 卸载时清理，防止多次进出页面叠加轮询器）
+const pollTimer: ReturnType<typeof setInterval> = setInterval(pollActive, 5000)
+function pollActive() {
+  if (document.hidden) return // 页面不可见时跳过，省资源
+  if (tickets.value.some(x => ['queued', 'in_progress'].includes(x.status))) load()
+}
+onUnmounted(() => clearInterval(pollTimer))
 
 // 状态中文标签
 // statusLabel 工单状态 → 中文标签

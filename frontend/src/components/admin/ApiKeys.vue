@@ -7,6 +7,31 @@
     <h2>{{ t('apikeys.title') }}</h2>
     <div class="ad-row">
       <a class="ad-btn" href="#" @click.prevent="openDocs">📄 {{ t('apikeys.docs') }}</a>
+      <button class="ad-btn" style="margin-left:8px" @click="docsCardOpen = !docsCardOpen">{{ docsCardOpen ? '▲' : '▼' }} {{ t('docsEdit.title') }}</button>
+    </div>
+
+    <!-- ★ API 文档在线维护（Markdown 源码编辑，仅超管） -->
+    <div v-if="docsCardOpen" class="ad-chart-card" style="margin-top:12px">
+      <h3>{{ t('docsEdit.title') }}</h3>
+      <div class="ad-hint">{{ t('docsEdit.hint') }}</div>
+      <textarea
+        v-model="docsMD"
+        class="ad-input docs-editor"
+        rows="16"
+        spellcheck="false"
+        :placeholder="t('docsEdit.placeholder')"
+      ></textarea>
+      <div class="ad-row" style="margin-top:8px">
+        <button class="ad-btn ad-btn-green" :disabled="docsSaving || !docsMD.trim()" @click="saveDocs">💾 {{ docsSaving ? t('docsEdit.saving') : t('common.save') }}</button>
+        <button class="ad-btn" :disabled="!docsMD.trim()" @click="previewDocs">👁 {{ t('docsEdit.preview') }}</button>
+        <label class="ad-btn" style="cursor:pointer">
+          📂 {{ t('docsEdit.import') }}
+          <input type="file" accept=".md,.markdown,.txt" hidden @change="importDocs" />
+        </label>
+        <button class="ad-btn" :disabled="!docsMD.trim()" @click="exportDocs">⬇️ {{ t('docsEdit.export') }}</button>
+        <button class="ad-btn ad-btn-red" @click="resetDocs">↺ {{ t('docsEdit.reset') }}</button>
+        <span v-if="docsDefaultBadge" class="ad-hint">{{ t('docsEdit.isDefault') }}</span>
+      </div>
     </div>
     <div class="ad-row">
       <input v-model="kForm.name" :placeholder="t('apikeys.keyName')" class="ad-input" />
@@ -35,7 +60,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
-import { apiKeys, apiKeyCreate, apiKeyStatus, apiKeyDelete, apiKeyRotate, openAPIDocsUrl } from '@/api'
+import { apiKeys, apiKeyCreate, apiKeyStatus, apiKeyDelete, apiKeyRotate, openAPIDocsUrl, getOpenAPIDocs, saveOpenAPIDocs, previewOpenAPIDocs } from '@/api'
 import { activeTenantId } from './store'
 import { t, tpl } from '@/i18n'
 
@@ -85,6 +110,91 @@ function openDocs() {
   window.open(openAPIDocsUrl(), '_blank')
 }
 
+// ---- ★ API 文档在线维护（仅超管；MD 源码存 system_config，公开页实时生效）----
+const docsCardOpen = ref(false)
+const docsMD = ref('')
+const docsSaving = ref(false)
+const docsDefaultBadge = ref(false)
+const docsLoaded = ref(false)
+
+// loadDocs 拉取当前生效源码（卡片首次展开时加载一次）
+async function loadDocs() {
+  if (docsLoaded.value) return
+  try {
+    const r: any = await getOpenAPIDocs()
+    if (r.success) {
+      docsMD.value = r.md || ''
+      docsDefaultBadge.value = !!r.is_default
+      docsLoaded.value = true
+    }
+  } catch { /* 非超管或网络失败：静默 */ }
+}
+// 卡片展开时触发加载（watch 由模板切换驱动）
+import { watch as vueWatch } from 'vue'
+vueWatch(docsCardOpen, (v) => { if (v) loadDocs() })
+
+// saveDocs 保存 MD 源码并发布（空串=恢复内置默认）
+async function saveDocs() {
+  if (!confirm(t('docsEdit.confirmSave'))) return
+  docsSaving.value = true
+  try {
+    const r = await saveOpenAPIDocs(docsMD.value)
+    if (!r.success) { alert(r.message); return }
+    alert(t('docsEdit.saved'))
+    await refreshDocsState()
+  } finally { docsSaving.value = false }
+}
+
+// previewDocs 后端渲染预览（新窗口写 HTML，隔离样式）
+async function previewDocs() {
+  try {
+    const r: any = await previewOpenAPIDocs(docsMD.value)
+    if (!r.success) { alert(r.message); return }
+    const w = window.open('', '_blank')
+    if (w) { w.document.open(); w.document.write(r.html); w.document.close() }
+  } catch (e) { alert(e instanceof Error ? e.message : String(e)) }
+}
+
+// importDocs 本地 .md 导入编辑框（FileReader 纯前端）
+function importDocs(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => { docsMD.value = String(reader.result || '') }
+  reader.readAsText(file)
+  ;(e.target as HTMLInputElement).value = ''
+}
+
+// exportDocs 导出当前源码为 .md
+function exportDocs() {
+  const blob = new Blob([docsMD.value], { type: 'text/markdown;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = 'openapi-docs.md'
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+// resetDocs 恢复内置默认（清空存储键）
+async function resetDocs() {
+  if (!confirm(t('docsEdit.confirmReset'))) return
+  const r = await saveOpenAPIDocs('')
+  if (!r.success) { alert(r.message); return }
+  docsMD.value = ''
+  await refreshDocsState()
+  alert(t('docsEdit.resetDone'))
+}
+
+// refreshDocsState 重读服务端状态（保存/重置后同步徽标）
+async function refreshDocsState() {
+  docsLoaded.value = false
+  await loadDocs()
+}
+
 onMounted(loadKeys)
 watch(activeTenantId, loadKeys)
 </script>
+<style scoped>
+/* ★ API 文档 MD 编辑器 */
+.docs-editor { width: 100%; box-sizing: border-box; font-family: SFMono-Regular, Consolas, 'Courier New', monospace; font-size: 12.5px; line-height: 1.55; resize: vertical; }
+</style>

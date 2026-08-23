@@ -1,5 +1,19 @@
 // apikeys 面板文案字典
 export const zh: Record<string, string> = {
+  // ---- API 文档在线维护 ----
+  'docsEdit.title': 'API 文档维护',
+  'docsEdit.hint': 'Markdown 源码编辑，保存后公开页 /openapi/docs 立即生效；留空保存可恢复内置默认。仅超级管理员可见。',
+  'docsEdit.placeholder': '# 翻译平台开放 API',
+  'docsEdit.saving': '发布中…',
+  'docsEdit.preview': '预览',
+  'docsEdit.import': '导入 .md',
+  'docsEdit.export': '导出 .md',
+  'docsEdit.reset': '恢复默认',
+  'docsEdit.isDefault': '当前为内置默认文档',
+  'docsEdit.confirmSave': '确认发布？公开页将立即更新。',
+  'docsEdit.saved': '已发布，公开页立即生效',
+  'docsEdit.confirmReset': '确认恢复内置默认文档？当前自定义内容将被清除。',
+  'docsEdit.resetDone': '已恢复内置默认文档',
   'apikeys.title': '开放 API Key',
   'apikeys.docs': '📄 查看 API 文档',
   'apikeys.keyName': 'Key 名称',
@@ -22,6 +36,20 @@ export const zh: Record<string, string> = {
 }
 
 export const en: Record<string, string> = {
+  // ---- OpenAPI docs editor ----
+  'docsEdit.title': 'API Docs Editor',
+  'docsEdit.hint': 'Edit Markdown source; the public page /openapi/docs updates instantly on save. Save empty to restore built-in default. Super admin only.',
+  'docsEdit.placeholder': '# Translation Platform Open API',
+  'docsEdit.saving': 'Publishing…',
+  'docsEdit.preview': 'Preview',
+  'docsEdit.import': 'Import .md',
+  'docsEdit.export': 'Export .md',
+  'docsEdit.reset': 'Reset to default',
+  'docsEdit.isDefault': 'Built-in default document in use',
+  'docsEdit.confirmSave': 'Publish now? The public page updates immediately.',
+  'docsEdit.saved': 'Published — live on the public page',
+  'docsEdit.confirmReset': 'Restore built-in default? Custom content will be cleared.',
+  'docsEdit.resetDone': 'Built-in default restored',
   'apikeys.title': 'Open API Keys',
   'apikeys.docs': '📄 View API Docs',
   'apikeys.keyName': 'Key name',

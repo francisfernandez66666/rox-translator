@@ -740,6 +740,8 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
   document.removeEventListener('click', onClickOutside)
+  // ★ 离开工作台即中止进行中的翻译流（防后台连接与结果继续写入内存）
+  store.stopGeneration()
 })
 
 /** ★ 从后端加载翻译语言列表（仅KB语言，"其他语言"统一为一个选项） */

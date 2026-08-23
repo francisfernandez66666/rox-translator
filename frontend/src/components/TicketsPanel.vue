@@ -51,7 +51,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { myTickets, ticketCreate, ticketRun, ticketDetail, ticketDownload } from '@/api'
 import { t, tpl } from '@/i18n'
 
@@ -120,7 +120,13 @@ async function load() {
   if (r.success) tickets.value = (r as any).tickets || []
 }
 onMounted(load)
-setInterval(() => { if (tickets.value.some(x => ['queued', 'in_progress'].includes(x.status))) load() }, 5000)
+// 工单进行中每 5s 轮询刷新（★ 卸载时清理，防止多次进出页面叠加轮询器）
+const pollTimer: ReturnType<typeof setInterval> = setInterval(pollActive, 5000)
+function pollActive() {
+  if (document.hidden) return // 页面不可见时跳过，省资源
+  if (tickets.value.some(x => ['queued', 'in_progress'].includes(x.status))) load()
+}
+onUnmounted(() => clearInterval(pollTimer))
 </script>
 
 <style scoped>

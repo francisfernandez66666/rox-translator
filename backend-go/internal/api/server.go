@@ -106,6 +106,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/feedback", s.handleFeedbackCreate)
 	s.mux.HandleFunc("/api/admin/feedbacks", s.handleAdminFeedbacks)
 	s.mux.HandleFunc("/api/admin/feedbacks/resolve", s.handleAdminFeedbackResolve)
+	// ★ 开放 API 文档在线维护（仅超管）
+	s.mux.HandleFunc("/api/admin/openapi-docs", s.handleAdminOpenAPIDocsGet)
+	s.mux.HandleFunc("/api/admin/openapi-docs/save", s.handleAdminOpenAPIDocsSave)
+	s.mux.HandleFunc("/api/admin/openapi-docs/preview", s.handleAdminOpenAPIDocsPreview)
 	// 翻译核心（聊天/文件/下载/语言/KB 统计）
 	s.routesTranslate()
 	// ★ SaaS 租户管理（管理后台）
