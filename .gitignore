@@ -1,21 +1,20 @@
-node_modules/
-dist/
-build/
-*.pyc
+
 __pycache__/
 .DS_Store
 .env
-# PyInstaller 构建产物
-*.spec
-*.pyz
-__pycache__/
-frontend/dist/
-backend/data/_uploads/
-backend/data/_output/
 *.egg-info/
 *.manifest
+*.pyc
+*.pyz
+*.spec
 *.spec.backup
-backend/.deps_installed
-
-# 项目文档仅保留本地，不入仓库
 /*.md
+# PyInstaller 构建产物
+# 项目文档仅保留本地，不入仓库
+backend/.deps_installed
+backend/data/_output/
+backend/data/_uploads/
+build/
+dist/
+frontend/dist/
+node_modules/
