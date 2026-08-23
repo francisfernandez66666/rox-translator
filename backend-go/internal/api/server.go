@@ -15,8 +15,8 @@ package api
 
 import (
 	"context"
-	"log"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,26 +24,26 @@ import (
 
 	"translator/internal/auth"
 	"translator/internal/billing"
-	"translator/internal/queue"
-	"translator/internal/service"
 	"translator/internal/config"
 	"translator/internal/engine"
 	"translator/internal/kb"
+	"translator/internal/queue"
+	"translator/internal/service"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
 
 // Server HTTP 服务：聚合平台各子系统并对外提供 HTTP 接口。
 type Server struct {
-	Cfg    *config.Config   // 全局配置（模型/上传目录/策略参数等）
-	Engine *engine.Engine   // 翻译引擎（文本/文件处理、LLM 调用与熔断）
-	DB     *kb.KBDatabase   // 知识库数据库（-kb 加载，用于匹配与统计）
-	Ten    *tenant.Store    // 租户存储（租户增删改查、权限与模型配置）
-	Store  *store.Store     // 平台存储（用户/工单/审计/计费/API Key 等）
-	Bill   *billing.Service // 计费服务（QPS/并发限流、每日配额、余额扣减）
+	Cfg       *config.Config         // 全局配置（模型/上传目录/策略参数等）
+	Engine    *engine.Engine         // 翻译引擎（文本/文件处理、LLM 调用与熔断）
+	DB        *kb.KBDatabase         // 知识库数据库（-kb 加载，用于匹配与统计）
+	Ten       *tenant.Store          // 租户存储（租户增删改查、权限与模型配置）
+	Store     *store.Store           // 平台存储（用户/工单/审计/计费/API Key 等）
+	Bill      *billing.Service       // 计费服务（QPS/并发限流、每日配额、余额扣减）
 	TicketSvc *service.TicketService // 工单服务（入队/worker/通知）
-	Dist   string           // 前端 dist 目录（SPA 静态资源根目录）
-	mux    *http.ServeMux   // 路由分发器
+	Dist      string                 // 前端 dist 目录（SPA 静态资源根目录）
+	mux       *http.ServeMux         // 路由分发器
 	// 系统级指标收集器（Prometheus /metrics）
 	metrics *Metrics
 	// 登录失败限流器（暴力破解防护）
@@ -291,6 +291,7 @@ func (s *Server) routesAPIKeys() {
 	s.mux.HandleFunc("/api/apikeys", s.handleAPIKeys)
 	s.mux.HandleFunc("/api/apikeys/create", s.handleAPIKeyCreate)
 	s.mux.HandleFunc("/api/apikeys/status", s.handleAPIKeyStatus)
+	s.mux.HandleFunc("/api/apikeys/limit", s.handleAPIKeyLimit)
 	s.mux.HandleFunc("/api/apikeys/rotate", s.handleAPIKeyRotate)
 	s.mux.HandleFunc("/api/apikeys/delete", s.handleAPIKeyDelete)
 }
@@ -306,10 +307,10 @@ func (s *Server) routesWebhooks() {
 // routesOpenAPI 注册开放 API（API Key 鉴权）与文档路由。
 // ★ 翻译统一异步任务模型：创建任务→工单 ID→轮询（文本 15s/文件 60s）→产物下载。
 func (s *Server) routesOpenAPI() {
-	s.mux.HandleFunc("/openapi/v1/tasks", s.handleOpenAPITaskCreate)          // 创建任务（POST）
-	s.mux.HandleFunc("/openapi/v1/tasks/status", s.handleOpenAPITaskStatus)   // 轮询状态（GET ?id=）
+	s.mux.HandleFunc("/openapi/v1/tasks", s.handleOpenAPITaskCreate)            // 创建任务（POST）
+	s.mux.HandleFunc("/openapi/v1/tasks/status", s.handleOpenAPITaskStatus)     // 轮询状态（GET ?id=）
 	s.mux.HandleFunc("/openapi/v1/tasks/download", s.handleOpenAPITaskDownload) // 产物下载
-	s.mux.HandleFunc("/openapi/v1/balance", s.handleOpenAPIBalance)           // 余额查询
+	s.mux.HandleFunc("/openapi/v1/balance", s.handleOpenAPIBalance)             // 余额查询
 	s.mux.HandleFunc("/openapi/v1/kb/stats", s.handleOpenAPIKBStats)
 	s.mux.HandleFunc("/openapi/v1/billing/usage", s.handleOpenAPIUsage)
 	s.mux.HandleFunc("/openapi/v1/apikey/rotate", s.handleOpenAPIKeyRotate)
@@ -376,7 +377,7 @@ func (s *Server) withTenant(next http.Handler) http.Handler {
 			return
 		}
 		// 3. 未登录：仅信任 API Key 所属租户（开放 API 路径）
-		if ak, ok := s.authenticateAPIKey(r); ok && ak.TenantID > 0 {
+		if ak, authErr := s.authenticateAPIKey(r); authErr == "" && ak != nil && ak.TenantID > 0 {
 			ctx = tenant.WithTenant(ctx, ak.TenantID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return

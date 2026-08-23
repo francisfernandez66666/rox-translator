@@ -38,18 +38,22 @@
       <select v-model="kForm.perms" class="ad-input">
         <option value="translate">translate</option><option value="kb">kb</option><option value="all">all</option>
       </select>
+      <!-- ★ R4 Key 级每日配额（0/留空=不限） -->
+      <input v-model.number="kForm.daily_call_limit" type="number" min="0" class="ad-input" style="width:110px" :placeholder="t('apikeys.limitPlaceholder')" :title="t('apikeys.limitTitle')" />
       <button class="ad-btn" @click="createKey">{{ t('apikeys.create') }}</button>
     </div>
     <div v-if="newKey" class="ad-newkey">{{ t('apikeys.newKeyOnce') }}：<code>{{ newKey }}</code></div>
     <table class="ad-table">
-      <thead><tr><th>{{ t('apikeys.colId') }}</th><th>{{ t('apikeys.colPrefix') }}</th><th>{{ t('apikeys.colName') }}</th><th>{{ t('apikeys.colPerms') }}</th><th>{{ t('apikeys.colStatus') }}</th><th>{{ t('apikeys.colCalls') }}</th><th>{{ t('apikeys.colActions') }}</th></tr></thead>
+      <thead><tr><th>{{ t('apikeys.colId') }}</th><th>{{ t('apikeys.colPrefix') }}</th><th>{{ t('apikeys.colName') }}</th><th>{{ t('apikeys.colPerms') }}</th><th>{{ t('apikeys.colStatus') }}</th><th>{{ t('apikeys.colCalls') }}</th><th>{{ t('apikeys.colTodayLimit') }}</th><th>{{ t('apikeys.colActions') }}</th></tr></thead>
       <tbody>
         <tr v-for="k in keys" :key="k.id">
           <td>{{ k.id }}</td><td>{{ k.key_prefix }}…</td><td>{{ k.name }}</td><td>{{ k.perms }}</td>
-          <td>{{ k.status }}</td><td>{{ k.call_count }}</td>
+          <td>{{ k.status }}</td>
+          <td :style="{ color: isKeyOverQuota(k) ? '#c62828' : '' }">{{ fmtToday(k) }}</td>
           <td class="ad-td">
             <button class="ad-btn-sm" @click="toggleKey(k)">{{ k.status === 'active' ? t('apikeys.disable') : t('apikeys.enable') }}</button>
             <button class="ad-btn-sm" @click="rotateKey(k)">{{ t('apikeys.rotate') }}</button>
+            <button class="ad-btn-sm" @click="setLimit(k)">📐 {{ t('apikeys.setLimit') }}</button>
             <button class="ad-btn-sm ad-btn-red" @click="deleteKey(k)">{{ t('apikeys.delete') }}</button>
           </td>
         </tr>
@@ -68,7 +72,7 @@ const keys = ref<any[]>([])
 // 新建成功后展示一次的完整 API Key（仅创建时返回）
 const newKey = ref('')
 // 新建 Key 表单：名称/权限（默认 translate）
-const kForm = ref({ name: '', perms: 'translate' })
+const kForm = ref({ name: '', perms: 'translate', daily_call_limit: undefined as number | undefined })
 
 // loadKeys 加载 API Key 列表
 async function loadKeys() {
@@ -81,7 +85,7 @@ async function createKey() {
   const r = await apiKeyCreate(kForm.value)
   if (!r.success) { alert(r.message); return }
   newKey.value = (r as any).api_key || ''
-  kForm.value = { name: '', perms: 'translate' }
+  kForm.value = { name: '', perms: 'translate', daily_call_limit: undefined }
   await loadKeys()
 }
 // toggleKey 切换指定 Key 启用/禁用状态并刷新列表
@@ -173,6 +177,32 @@ function exportDocs() {
   a.download = 'openapi-docs.md'
   a.click()
   URL.revokeObjectURL(a.href)
+}
+
+// isKeyOverQuota 今日次数是否已达上限（红色警示）
+function isKeyOverQuota(k: any): boolean {
+  if (!k.daily_call_limit || k.daily_call_limit <= 0) return false
+  const today = new Date().toISOString().slice(0, 10)
+  const used = k.calls_today_date === today ? k.calls_today : 0
+  return used >= k.daily_call_limit
+}
+// fmtToday 「今日/上限」单元格展示
+function fmtToday(k: any): string {
+  const limit = k.daily_call_limit && k.daily_call_limit > 0 ? k.daily_call_limit : '∞'
+  const today = new Date().toISOString().slice(0, 10)
+  const used = k.calls_today_date === today ? k.calls_today : 0
+  return `${used}/${limit}`
+}
+
+// setLimit 设置指定 Key 的每日调用上限
+async function setLimit(k: any) {
+  const input = prompt(tpl('apikeys.limitPrompt', { name: k.name, cur: k.daily_call_limit || 0 }))
+  if (input === null) return
+  const n = Number(input)
+  if (!Number.isFinite(n) || n < 0) { alert(t('apikeys.limitInvalid')); return }
+  const r = await apiKeyLimit(k.id, Math.floor(n))
+  if (!r.success) { alert(r.message); return }
+  await loadKeys()
 }
 
 // resetDocs 恢复内置默认（清空存储键）

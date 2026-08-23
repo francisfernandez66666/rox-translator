@@ -7,11 +7,11 @@ package api
 
 import (
 	"context"
-	"fmt"
-	"time"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 	"translator/internal/auth"
 	"translator/internal/store"
 )
@@ -50,7 +50,6 @@ func (s *Server) deptKBScope(u *store.User, tid int64, pkg *store.KBPackage) err
 }
 
 // ============ KB 包管理（行业包） ============
-
 
 // kbTenant 知识库生效租户：超管平台上下文（tid=0）时行业包宿主为租户 1，其余同 effTenant。
 func (s *Server) kbTenant(r *http.Request, u *store.User) int64 {
@@ -309,11 +308,11 @@ func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		PackageID   int64  `json:"package_id"`   // 所属包 ID（语言文化包）
-		Lang        string `json:"lang"`         // 目标语言代码（默认 en）
-		Phrase      string `json:"phrase"`       // 规则内容（必填）
-		Kind        string `json:"kind"`         // 类型：style(默认)/forbidden/replace
-		Replacement string `json:"replacement"`  // 替换词（仅 replace 类型）
+		PackageID   int64  `json:"package_id"`  // 所属包 ID（语言文化包）
+		Lang        string `json:"lang"`        // 目标语言代码（默认 en）
+		Phrase      string `json:"phrase"`      // 规则内容（必填）
+		Kind        string `json:"kind"`        // 类型：style(默认)/forbidden/replace
+		Replacement string `json:"replacement"` // 替换词（仅 replace 类型）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Phrase == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "phrase 不能为空"})
@@ -421,6 +420,7 @@ func (s *Server) handleKBIndexRebuild(w http.ResponseWriter, r *http.Request) {
 	s.Store.LogAudit(1, u.ID, "kb_index_rebuild", "kb", fmt.Sprintf("%d 行向量已重建", n))
 	writeJSON(w, 200, map[string]interface{}{"success": true, "embedded": n})
 }
+
 // rebuildIndexAsync 知识库变更后异步重建向量索引（导入条目/文件后自动触发；进行中则跳过）。
 func (s *Server) rebuildIndexAsync() {
 	if s.Engine == nil || s.Engine.DB == nil || s.Engine.NPZPath == "" || s.Engine.Rebuilding() {
@@ -442,8 +442,8 @@ func (s *Server) handleSafetyPhraseBulkImport(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var req struct {
-		PackageID int64                    `json:"package_id"`
-		Items     []*store.KBSafetyPhrase  `json:"items"`
+		PackageID int64                   `json:"package_id"`
+		Items     []*store.KBSafetyPhrase `json:"items"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Items) == 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "items 不能为空"})

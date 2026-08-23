@@ -96,6 +96,7 @@ func (s *Store) TouchLogin(id int64) {
 func (s *Store) EnsureAdmin(tid int64, username, passHash, displayName string) error {
 	return s.iam.EnsureAdmin(tid, username, passHash, displayName)
 }
+
 // ListAllUsers 列出全部租户（含平台 0）的所有用户（超管平台根视图用）。委托 iam.Store。
 func (s *Store) ListAllUsers() ([]*User, error) {
 	return s.iam.ListAllUsers()

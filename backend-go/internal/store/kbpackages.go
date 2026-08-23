@@ -6,9 +6,9 @@
 package store
 
 import (
-	"fmt"
 	"crypto/md5"
 	"encoding/hex"
+	"fmt"
 	"time"
 )
 
@@ -59,16 +59,16 @@ type KBEntry struct {
 
 // KBSafetyPhrase 安全句锁死串库
 type KBSafetyPhrase struct {
-	ID          int64  `json:"id"`                   // 安全句主键 ID
-	TenantID    int64  `json:"tenant_id"`            // 所属租户 ID
-	PackageID   int64  `json:"package_id"`           // 所属包 ID（语言文化包）
-	Lang        string `json:"lang"`                 // 目标语言代码
-	Phrase      string `json:"phrase"`               // 规则内容：style=规范文本 / forbidden=禁用词 / replace=原词
-	Kind        string `json:"kind"`                 // 类型：style(风格规范)/forbidden(禁用词)/replace(替换对)
+	ID          int64  `json:"id"`                    // 安全句主键 ID
+	TenantID    int64  `json:"tenant_id"`             // 所属租户 ID
+	PackageID   int64  `json:"package_id"`            // 所属包 ID（语言文化包）
+	Lang        string `json:"lang"`                  // 目标语言代码
+	Phrase      string `json:"phrase"`                // 规则内容：style=规范文本 / forbidden=禁用词 / replace=原词
+	Kind        string `json:"kind"`                  // 类型：style(风格规范)/forbidden(禁用词)/replace(替换对)
 	Replacement string `json:"replacement,omitempty"` // 替换词（仅 replace 类型；译文中命中 Phrase 时替换为该值）
-	Status      string `json:"status"`               // 审核状态：pending/approved/rejected（仅 approved 生效）
-	Source      string `json:"source"`               // 来源：manual(人工)/llm(LLM 投喂)
-	CreatedAt   string `json:"created_at"`           // 创建时间（RFC3339 字符串）
+	Status      string `json:"status"`                // 审核状态：pending/approved/rejected（仅 approved 生效）
+	Source      string `json:"source"`                // 来源：manual(人工)/llm(LLM 投喂)
+	CreatedAt   string `json:"created_at"`            // 创建时间（RFC3339 字符串）
 }
 
 // 层常量

@@ -11,15 +11,15 @@ import (
 
 // AuditLog 审计日志
 type AuditLog struct {
-	ID        int64  `json:"id"`         // 审计日志主键 ID
-	TenantID  int64  `json:"tenant_id"`  // 所属租户 ID（0 表示平台级操作）
-	UserID    int64  `json:"user_id"`    // 操作者用户 ID（0 表示系统/未登录操作）
-	Action    string `json:"action"`     // 操作动作，如 create/update/delete/login
-	Resource  string `json:"resource"`   // 操作资源类型，如 user/ticket/kb_package/order
-	Detail    string `json:"detail"`     // 操作详情描述（人类可读）
-	BeforeVal string `json:"before_val"` // 操作前值（JSON 字符串，用于变更轨迹比对）
-	AfterVal  string `json:"after_val"`  // 操作后值（JSON 字符串，用于变更轨迹比对）
-	CreatedAt   string `json:"created_at"`   // 日志创建时间（RFC3339 字符串）
+	ID         int64  `json:"id"`                    // 审计日志主键 ID
+	TenantID   int64  `json:"tenant_id"`             // 所属租户 ID（0 表示平台级操作）
+	UserID     int64  `json:"user_id"`               // 操作者用户 ID（0 表示系统/未登录操作）
+	Action     string `json:"action"`                // 操作动作，如 create/update/delete/login
+	Resource   string `json:"resource"`              // 操作资源类型，如 user/ticket/kb_package/order
+	Detail     string `json:"detail"`                // 操作详情描述（人类可读）
+	BeforeVal  string `json:"before_val"`            // 操作前值（JSON 字符串，用于变更轨迹比对）
+	AfterVal   string `json:"after_val"`             // 操作后值（JSON 字符串，用于变更轨迹比对）
+	CreatedAt  string `json:"created_at"`            // 日志创建时间（RFC3339 字符串）
 	TenantName string `json:"tenant_name,omitempty"` // 归属租户名（超管全量视图 JOIN 填充）
 	Username   string `json:"username,omitempty"`    // 操作者用户名（JOIN users 填充）
 }

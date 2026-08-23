@@ -59,7 +59,7 @@ func TestCleanupTicketResults(t *testing.T) {
 	s := newTestStoreWithTenants(t)
 	id := seedCompletedTicket(t, s, "清理工单")
 	tf, _ := s.AddTicketFile(&TicketFile{TenantID: 1, TicketID: id, FileName: "b.pdf", FilePath: "/tmp/x/b.pdf"})
-	_ = s.SetTicketFileResult(tf.ID, "/tmp/out/b_en.pdf") // 产物由执行器回填
+	_ = s.SetTicketFileResult(tf.ID, "/tmp/out/b_en.pdf")                      // 产物由执行器回填
 	_ = s.SetTicketExpiry(id, time.Now().Add(-time.Hour).Format(time.RFC3339)) // 已过期
 
 	paths, err := s.CleanupTicketResults(id)

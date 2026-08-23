@@ -3,6 +3,7 @@
 // 规则：
 //   - 同一 IP 在 24 小时滑动窗口内最多注册 N 个账号（register_ip_daily_limit，默认 3）
 //   - 同一 IP 两次注册的最小间隔（register_ip_min_interval_sec，默认 60 秒）
+//
 // 用途：注册接口在进入业务逻辑前调用 allowRegister 拦截，成功后 recordRegister 计数。
 // 计数仅存内存，重启清零——防脚本批量薅试用额度足够，无需持久化。
 // =============================================
@@ -15,9 +16,9 @@ import (
 
 // regAttempt 单 IP 的注册计数状态
 type regAttempt struct {
-	count    int       // 24h 窗口内注册次数
-	firstAt  time.Time // 窗口起始时间
-	lastAt   time.Time // 最近一次注册时间（最小间隔判断）
+	count   int       // 24h 窗口内注册次数
+	firstAt time.Time // 窗口起始时间
+	lastAt  time.Time // 最近一次注册时间（最小间隔判断）
 }
 
 // registerGuard 注册限流器（并发安全）

@@ -78,8 +78,13 @@ func normalizeTaskMode(m string) string {
 
 // handleOpenAPITaskCreate 创建翻译任务（文本 JSON / 文件 multipart 二选一）。
 func (s *Server) handleOpenAPITaskCreate(w http.ResponseWriter, r *http.Request) {
-	ak, ok := s.authenticateAPIKey(r)
-	if !ok {
+	ak, authErr := s.authenticateAPIKey(r)
+	if authErr != "" {
+		if authErr == "key_quota_exceeded" {
+			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
+				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			return
+		}
 		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": "invalid_api_key", "message": "API Key 无效"})
 		return
 	}
@@ -278,8 +283,13 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 
 // handleOpenAPITaskStatus 轮询任务状态（未完成给 processing 出参；完成按类型回结果）。
 func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request) {
-	ak, ok := s.authenticateAPIKey(r)
-	if !ok {
+	ak, authErr := s.authenticateAPIKey(r)
+	if authErr != "" {
+		if authErr == "key_quota_exceeded" {
+			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
+				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			return
+		}
 		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": "invalid_api_key", "message": "API Key 无效"})
 		return
 	}
@@ -377,8 +387,13 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 
 // handleOpenAPITaskDownload 下载文件任务产物（file_id 可选，缺省单文件直返/多文件打 zip）。
 func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Request) {
-	ak, ok := s.authenticateAPIKey(r)
-	if !ok {
+	ak, authErr := s.authenticateAPIKey(r)
+	if authErr != "" {
+		if authErr == "key_quota_exceeded" {
+			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
+				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			return
+		}
 		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": "invalid_api_key", "message": "API Key 无效"})
 		return
 	}
@@ -478,8 +493,13 @@ func (s *Server) ticketExpiry(ticketID int64) (string, bool) {
 
 // handleOpenAPIBalance 查询租户 token 余额与 ≈句数（任意权限的有效 Key 均可查询）。
 func (s *Server) handleOpenAPIBalance(w http.ResponseWriter, r *http.Request) {
-	ak, ok := s.authenticateAPIKey(r)
-	if !ok {
+	ak, authErr := s.authenticateAPIKey(r)
+	if authErr != "" {
+		if authErr == "key_quota_exceeded" {
+			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
+				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			return
+		}
 		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": "invalid_api_key", "message": "API Key 无效"})
 		return
 	}

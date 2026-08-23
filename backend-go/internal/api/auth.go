@@ -190,15 +190,15 @@ func (s *Server) handleMeContext(w http.ResponseWriter, r *http.Request) {
 	}
 	packs, _ := s.Store.ListApplicablePacks(u.TenantID)
 	writeJSON(w, 200, map[string]interface{}{
-		"success":     true,
-		"username":    u.Username,
+		"success":      true,
+		"username":     u.Username,
 		"display_name": u.DisplayName,
-		"role":        u.Role,
-		"tenant_id":   u.TenantID,
-		"tenant_name": tenantName,
-		"org_id":      u.OrgID,
-		"org_name":    orgName,
-		"kb_packs":    packs,
+		"role":         u.Role,
+		"tenant_id":    u.TenantID,
+		"tenant_name":  tenantName,
+		"org_id":       u.OrgID,
+		"org_name":     orgName,
+		"kb_packs":     packs,
 	})
 }
 

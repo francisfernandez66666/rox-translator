@@ -11,7 +11,7 @@ export async function apiKeys(): Promise<AdminResp> {
 }
 
 // 签发新 API Key
-export async function apiKeyCreate(data: { name: string; perms: string }): Promise<AdminResp> {
+export async function apiKeyCreate(data: { name: string; perms: string; daily_call_limit?: number }): Promise<AdminResp> {
   return request('/api/apikeys/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
@@ -53,5 +53,14 @@ export async function previewOpenAPIDocs(md: string): Promise<AdminResp & { html
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({ md }),
+  })
+}
+
+/** apiKeyLimit 设置 Key 每日调用上限（0=不限，R4 Key 级配额）。 */
+export async function apiKeyLimit(id: number, dailyCallLimit: number): Promise<AdminResp> {
+  return request('/api/apikeys/limit', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ id, daily_call_limit: dailyCallLimit }),
   })
 }

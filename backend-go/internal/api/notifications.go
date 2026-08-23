@@ -4,6 +4,7 @@
 //   - GET  /api/notifications/unread    未读数量
 //   - POST /api/notifications/read      单条已读 {id}
 //   - POST /api/notifications/read-all  全部已读
+//
 // 全部按当前登录用户隔离。
 package api
 

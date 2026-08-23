@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
@@ -241,8 +242,13 @@ balance_sentences_approx（≈句数）。额度不足将返回错误码 insuffi
 
 // handleOpenAPIKBStats 开放接口：查询本租户知识库统计（需要 kb/all 权限）。
 func (s *Server) handleOpenAPIKBStats(w http.ResponseWriter, r *http.Request) {
-	ak, ok := s.authenticateAPIKey(r)
-	if !ok {
+	ak, authErr := s.authenticateAPIKey(r)
+	if authErr != "" {
+		if authErr == "key_quota_exceeded" {
+			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
+				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			return
+		}
 		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": "invalid_api_key", "message": "API Key 无效"})
 		return
 	}
@@ -268,8 +274,13 @@ func (s *Server) kbStats(tid int64) int64 {
 
 // handleOpenAPIUsage 开放接口：查询本租户用量与余额（需要 billing/all 权限）。
 func (s *Server) handleOpenAPIUsage(w http.ResponseWriter, r *http.Request) {
-	ak, ok := s.authenticateAPIKey(r)
-	if !ok {
+	ak, authErr := s.authenticateAPIKey(r)
+	if authErr != "" {
+		if authErr == "key_quota_exceeded" {
+			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
+				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			return
+		}
 		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": "invalid_api_key", "message": "API Key 无效"})
 		return
 	}
@@ -295,8 +306,13 @@ func (s *Server) handleOpenAPIUsage(w http.ResponseWriter, r *http.Request) {
 
 // handleOpenAPIKeyRotate 开放接口：轮换本租户 API Key（传入旧 key 换取新 key）。
 func (s *Server) handleOpenAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
-	ak, ok := s.authenticateAPIKey(r)
-	if !ok {
+	ak, authErr := s.authenticateAPIKey(r)
+	if authErr != "" {
+		if authErr == "key_quota_exceeded" {
+			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
+				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			return
+		}
 		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": "invalid_api_key", "message": "API Key 无效"})
 		return
 	}
@@ -305,7 +321,7 @@ func (s *Server) handleOpenAPIKeyRotate(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 500, map[string]interface{}{"success": false, "error_code": "internal", "message": err.Error()})
 		return
 	}
-	newKey, err := s.Store.CreateAPIKey(ak.TenantID, ak.Name, ak.Perms)
+	newKey, err := s.Store.CreateAPIKey(ak.TenantID, ak.Name, ak.Perms, ak.DailyCallLimit)
 	if err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "error_code": "internal", "message": err.Error()})
 		return
@@ -317,20 +333,32 @@ func (s *Server) handleOpenAPIKeyRotate(w http.ResponseWriter, r *http.Request) 
 }
 
 // authenticateAPIKey 从 Authorization 头解析并校验 API Key（Bearer tk_xxx）。
-// 校验通过时顺带刷新最近调用时间。返回: Key 对象与是否有效。
-func (s *Server) authenticateAPIKey(r *http.Request) (*store.APIKey, bool) {
+// 校验通过时刷新最近使用时间与今日计数，并执行 R4 Key 级每日配额判定。
+// 返回: (Key 对象, 错误码)。""=通过；"invalid_api_key"；"key_quota_exceeded"=当日限额已满。
+func (s *Server) authenticateAPIKey(r *http.Request) (*store.APIKey, string) {
 	if s.Store == nil {
-		return nil, false
+		return nil, "invalid_api_key"
 	}
 	h := r.Header.Get("Authorization")
 	if len(h) < 8 || h[:7] != "Bearer " {
-		return nil, false
+		return nil, "invalid_api_key"
 	}
 	key := h[7:]
 	ak, err := s.Store.GetAPIKeyByHash(store.HashAPIKey(key))
 	if err != nil || ak.Status != "active" {
-		return nil, false
+		return nil, "invalid_api_key"
+	}
+	// ★ R4 Key 级每日配额：limit>0 且跨日计数已重置后的今日次数 ≥ 上限 → 拒绝
+	today := time.Now().Format("2006-01-02")
+	if ak.DailyCallLimit > 0 {
+		used := ak.CallsToday
+		if ak.CallsTodayDate != today {
+			used = 0 // 跨日自动清零
+		}
+		if used >= ak.DailyCallLimit {
+			return ak, "key_quota_exceeded"
+		}
 	}
 	s.Store.TouchAPIKey(ak.ID)
-	return ak, true
+	return ak, ""
 }

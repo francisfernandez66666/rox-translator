@@ -7,6 +7,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 )
 
@@ -35,14 +36,15 @@ func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name  string `json:"name"`  // Key 名称（便于管理识别）
-		Perms string `json:"perms"` // 权限范围（all/translate/kb/billing）
+		Name       string `json:"name"`             // Key 名称（便于管理识别）
+		Perms      string `json:"perms"`            // 权限范围（all/translate/kb/billing）
+		DailyLimit int64  `json:"daily_call_limit"` // 每日调用上限（0=不限，R4 Key 级配额）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "name 不能为空"})
 		return
 	}
-	plain, err := s.Store.CreateAPIKey(s.effTenant(r, u), req.Name, req.Perms)
+	plain, err := s.Store.CreateAPIKey(s.effTenant(r, u), req.Name, req.Perms, req.DailyLimit)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -97,7 +99,7 @@ func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	plain, err := s.Store.CreateAPIKey(tid, old.Name, old.Perms)
+	plain, err := s.Store.CreateAPIKey(tid, old.Name, old.Perms, old.DailyCallLimit) // 轮换继承旧限额
 	if err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -124,5 +126,31 @@ func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleAPIKeyLimit 设置 API Key 每日调用上限（R4 Key 级配额；0=不限）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 id 与 daily_call_limit，租户管理员及以上）。
+func (s *Server) handleAPIKeyLimit(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		ID    int64 `json:"id"`               // Key 主键 ID
+		Limit int64 `json:"daily_call_limit"` // 每日上限（0=不限）
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || req.Limit < 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	tid := s.effTenant(r, u)
+	if err := s.Store.SetAPIKeyDailyLimit(req.ID, tid, req.Limit); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "Key 不存在"})
+		return
+	}
+	s.Store.LogAudit(tid, u.ID, "apikey_set_limit", "api_keys",
+		fmt.Sprintf("%d limit=%d", req.ID, req.Limit))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
