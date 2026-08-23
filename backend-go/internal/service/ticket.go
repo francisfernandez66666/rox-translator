@@ -164,11 +164,12 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 			"ticket", t.ID)
 		return runErr
 	}
-	t.Status = store.TicketCompleted
-	_ = s.Store.UpdateTicket(t)
 	// ★ Token 实费计费：聚合本工单全链路真实 token × 均摊系数（强制计费时扣余额；
 	// 扣减失败仅告警不回滚——翻译成果已产出，欠费由告警跟进）
-	s.chargeTokens(ctx, t)
+	billed := s.chargeTokens(ctx, t)
+	t.TokensBilled = billed
+	t.Status = store.TicketCompleted
+	_ = s.Store.UpdateTicket(t)
 	// 产物保留期打点：ticket_retention_days（默认 14 天；0=永久）。到期由后台每日扫描清理文件，
 	// 核心译文不受影响——文本工单存 final_result、文件工单回写 tm_segments 长期沉淀。
 	retentionDays := 14
@@ -194,14 +195,14 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 
 // chargeTokens 工单级 Token 实费扣费：读取 ctx 收集器累计的真实 token × 均摊系数。
 // 强制计费关闭时仅留痕。扣减失败写 critical 告警（欠费跟进），不阻断完成态。
-func (s *TicketService) chargeTokens(ctx context.Context, t *store.Ticket) {
+func (s *TicketService) chargeTokens(ctx context.Context, t *store.Ticket) int64 {
 	if s.Bill == nil || s.Engine == nil || s.Store == nil {
-		return
+		return 0
 	}
 	prompt, completion := s.Engine.UsageTokens(ctx)
 	total := prompt + completion
 	if total <= 0 {
-		return // 无 LLM 调用（纯 KB 命中等）
+		return 0 // 无 LLM 调用（纯 KB 命中等）
 	}
 	m := 1.5 // 默认均摊系数
 	if v, _ := s.Store.GetConfig("billing_markup_multiplier"); v != "" {
@@ -218,6 +219,7 @@ func (s *TicketService) chargeTokens(ctx context.Context, t *store.Ticket) {
 		_ = s.Store.CreateAlert(t.TenantID, "critical", "billing",
 			fmt.Sprintf("工单 %s 计费失败（余额不足）：应扣 %d token，请充值或升级套餐", t.TicketNo, billed))
 	}
+	return billed
 }
 
 // dispatchCompletedWebhook 投递工单完成 webhook 事件（OpenAPI 任务完成推送）。

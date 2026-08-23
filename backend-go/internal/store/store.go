@@ -427,6 +427,8 @@ func (s *Store) migrateColumns() error {
 		// 翻译模式：fast 快速（无KB/初翻+校对）/ pro 专业校对（全流水线）；空=pro
 		{"tickets", "mode", "ALTER TABLE tickets ADD COLUMN mode TEXT NOT NULL DEFAULT ''"},
 		// R4 Key 级配额：每日调用上限（0=不限）与今日计数（跨日自动清零）
+		// 四期：工单实费计费 token 数（完成时按真实用量×均摊系数写入）
+		{"tickets", "tokens_billed", "ALTER TABLE tickets ADD COLUMN tokens_billed INTEGER NOT NULL DEFAULT 0"},
 		{"api_keys", "daily_call_limit", "ALTER TABLE api_keys ADD COLUMN daily_call_limit INTEGER NOT NULL DEFAULT 0"},
 		{"api_keys", "calls_today", "ALTER TABLE api_keys ADD COLUMN calls_today INTEGER NOT NULL DEFAULT 0"},
 		{"api_keys", "calls_today_date", "ALTER TABLE api_keys ADD COLUMN calls_today_date TEXT NOT NULL DEFAULT ''"},

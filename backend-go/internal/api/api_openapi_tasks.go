@@ -349,6 +349,7 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 	resp["status"] = status
 	switch status {
 	case "completed":
+		resp["tokens_used"] = t.TokensBilled
 		if isFile {
 			tfiles, _ := s.Store.TicketFiles(t.ID)
 			files := make([]map[string]interface{}, 0, len(tfiles))
