@@ -27,6 +27,7 @@ func (s *Server) routesOrgs() {
 	s.mux.HandleFunc("/api/admin/orgs/rename", s.handleOrgRename)
 	s.mux.HandleFunc("/api/admin/orgs/move", s.handleOrgMove)
 	s.mux.HandleFunc("/api/admin/orgs/token-limit", s.handleOrgTokenLimit) // ★ 部门预算分配（四期）
+	s.mux.HandleFunc("/api/admin/org-budget", s.handleOrgBudgetSummary)    // ★ 预算总览（∑部门预算=总预算）
 	s.mux.HandleFunc("/api/admin/orgs/delete", s.handleOrgDelete)
 	s.mux.HandleFunc("/api/admin/orgs/users", s.handleOrgUsers)
 }
