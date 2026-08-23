@@ -52,8 +52,10 @@ func (s *Server) deptKBScope(u *store.User, tid int64, pkg *store.KBPackage) err
 // ============ KB 包管理（行业包） ============
 
 // kbTenant 知识库生效租户：超管平台上下文（tid=0）时行业包宿主为租户 1，其余同 effTenant。
+// ⚠️ 历史事故（2026-08-21~23）：本函数曾误写为调用自身导致无限递归栈溢出，
+// 任何打开知识库面板的请求都会击穿进程（fatal error: stack overflow），已修复。
 func (s *Server) kbTenant(r *http.Request, u *store.User) int64 {
-	tid := s.kbTenant(r, u)
+	tid := s.effTenant(r, u) // ★ 修复点：原误写 s.kbTenant 自递归
 	if auth.IsSuperAdmin(u) && tid <= 0 {
 		return 1
 	}
