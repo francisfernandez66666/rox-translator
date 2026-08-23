@@ -53,8 +53,16 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		return &FileTranslateResult{Skill: "translation", Error: err.Error()}
 	}
 	ext := strings.ToLower(filepath.Ext(filePath))
-	if ext != ".docx" && ext != ".pptx" && ext != ".xlsx" {
-		return &FileTranslateResult{Skill: "translation", Error: "仅支持 docx/pptx/xlsx 文件"}
+	// ★ 格式白名单与工单管道对齐（三期格式补齐）：Office 原格式回写；PDF 版式重建；
+	// 其余文本类（txt/csv/srt/vtt/md/json/yaml）统一降级 xlsx 对照表产物
+	allowedExt := map[string]bool{
+		".docx": true, ".pptx": true, ".xlsx": true, ".pdf": true,
+		".txt": true, ".csv": true, ".srt": true, ".vtt": true,
+		".md": true, ".json": true, ".yaml": true, ".yml": true,
+	}
+	if !allowedExt[ext] {
+		return &FileTranslateResult{Skill: "translation",
+			Error: "不支持的格式（支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml）"}
 	}
 	if _, err := os.Stat(filePath); err != nil {
 		return &FileTranslateResult{Skill: "translation", Error: "文件不存在或无法读取"}
