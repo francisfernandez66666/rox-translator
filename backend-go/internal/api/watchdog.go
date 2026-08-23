@@ -7,12 +7,16 @@ package api
 //       1) 余额阈值告警：遍历所有启用租户，余额为 0 或低于阈值（alert_balance_threshold，默认 1000 token）
 //       2) 模型可用性告警：主翻译模型熔断时告警，熔断恢复后自动关闭历史 model 告警
 //       3) 错误率告警：LLM 调用窗口错误率 > 40% 时告警，恢复后自动关闭
+//       4) 自检探活（R3）：周期性请求本机 /status，连续超时判定「请求挂起不自愈」——
+//          先写 critical 告警触达管理员；开启 watchdog_selfcheck_restart=1 后自动退出进程，
+//          由 systemd（Restart=always）拉起恢复，根治整机受压时的锁饥饿卡死。
 // 告警数据由管理后台「系统告警」页面展示。
 
 import (
 	"fmt"
 	"log"
 	"math"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,19 +40,58 @@ func (s *Server) startWatchdog() {
 	if s.Store == nil {
 		return
 	}
-	go func() {
-		// 读取检查周期配置，默认 300 秒
-		interval := 300
-		if v, _ := s.Store.GetConfig("alert_interval_sec"); v != "" {
-			if n, err := parseInt(v); err == nil && n > 0 {
-				interval = n
-			}
+	// 检查周期（默认 300 秒；自检探活也引用此值，故提升到函数作用域）
+	interval := 300
+	if v, _ := s.Store.GetConfig("alert_interval_sec"); v != "" {
+		if n, err := parseInt(v); err == nil && n > 0 {
+			interval = n
 		}
+	}
+	go func() {
 		ticker := time.NewTicker(time.Duration(interval) * time.Second)
 		defer ticker.Stop()
 		// 定时触发一轮检查
 		for range ticker.C {
 			s.runWatchdogCheck()
+		}
+	}()
+	// ★ R3 自检探活：本机 /status 连续超时 → critical 告警；可选自动退出由 systemd 拉起。
+	// 背景：2026-08-23 生产事故——整机内存受压导致 25 个 goroutine 阻塞在互斥锁上，
+	// 所有 HTTP 请求永久挂起且无法自愈，只能人工重启。此检查把该场景的恢复时间从
+	// 「人工发现」缩短到一个周期内。开关：watchdog_selfcheck_restart=1 启用自动重启。
+	go func() {
+		checkInterval := time.Duration(interval) * time.Second
+		if interval > 60 {
+			checkInterval = 60 * time.Second // 探活频率上限 1 分钟，比主检查更勤
+		}
+		failStreak := 0
+		const failThreshold = 3 // 连续 3 次超时才判定挂起（防单次抖动误杀）
+		for {
+			time.Sleep(checkInterval)
+			client := &http.Client{Timeout: 10 * time.Second}
+			resp, err := client.Get("http://127.0.0.1:8787/status")
+			if err == nil {
+				resp.Body.Close()
+				if failStreak >= failThreshold && s.Store != nil {
+					_ = s.Store.CreateAlert(0, "info", "selfcheck", "服务探活已恢复正常")
+				}
+				failStreak = 0
+				continue
+			}
+			failStreak++
+			log.Printf("[watchdog-selfcheck] 本机探活失败 %d/%d: %v", failStreak, failThreshold, err)
+			if failStreak == failThreshold && s.Store != nil {
+				_ = s.Store.CreateAlert(0, "critical", "selfcheck",
+					fmt.Sprintf("服务连续 %d 次探活超时，疑似请求挂起锁死", failThreshold))
+			}
+			if failStreak >= failThreshold {
+				if v, _ := s.Store.GetConfig("watchdog_selfcheck_restart"); v == "1" {
+					log.Printf("[watchdog-selfcheck] 自动重启触发（watchdog_selfcheck_restart=1）")
+					_ = s.Store.CreateAlert(0, "critical", "selfcheck", "服务无响应，自动重启以恢复")
+					// os.Exit 触发 systemd Restart=always 拉起新进程
+					os.Exit(1)
+				}
+			}
 		}
 	}()
 	// 数据库定时备份（默认每 24 小时，可配置 backup_interval_hours；0=关闭）

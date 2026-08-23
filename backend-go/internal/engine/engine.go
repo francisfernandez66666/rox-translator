@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1621,4 +1622,73 @@ func (e *Engine) applyCultureGate(ctx context.Context, tid int64, targetLang, te
 		}
 	}
 	return text, violations
+}
+
+// ReviewTranslationBatch 批量审校：一次 LLM 调用审校同一目标语言的多段译文。
+// 编号契约：输入按 1..N 编号列出【原文】/【译文】，要求模型严格按「编号. 审校后译文」逐行输出；
+// 仅当编号可解析时应用修正，解析失败或行数不符的段落原样保留（宁缺毋滥）。
+// 参数 ctx=上下文（含租户/用量收集器），sources=源文列表，translations=待审校译文列表，
+// targetLang=目标语言代码，stage=阶段模型标识（review）。
+// 返回: 与 translations 等长的审校结果数组（未修正项保持原值）。
+func (e *Engine) ReviewTranslationBatch(ctx context.Context, sources, translations []string, targetLang, stage string) []string {
+	out := make([]string, len(translations))
+	copy(out, translations) // 缺省回退原值
+	if len(sources) == 0 || len(sources) != len(translations) {
+		return out
+	}
+	culture := ""
+	if tid := tenant.FromContext(ctx); tid > 0 {
+		culture, _ = e.cultureRules(ctx, tid, targetLang)
+	}
+	langName := config.LangNames[targetLang]
+	if langName == "" {
+		langName = targetLang
+	}
+	// 拼接编号清单（单段截断 800 字符，防提示词爆炸）
+	var list strings.Builder
+	for i := range sources {
+		fmt.Fprintf(&list, "%d.\n【原文】%s\n【译文】%s\n", i+1,
+			truncateStr(sources[i], 800), truncateStr(translations[i], 800))
+	}
+	prompt := fmt.Sprintf(
+		"你是资深翻译审校。下面是 %d 条%s译文（已编号），请逐条审校：仅修正术语准确性和语法错误，保持原意与风格，不改写结构。%s\n\n%s\n严格按以下格式输出，共 %d 行，每行一条，不要输出任何其他内容：\n编号. 审校后的完整译文",
+		len(sources), langName, culture, list.String(), len(sources))
+	messages := []map[string]string{{"role": "user", "content": prompt}}
+	base, key, model := e.resolveModel(ctx)
+	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {
+		base, key, model = b2, k2, m2
+	}
+	content, _, err := e.LLM.CallChat(ctx, base, key, model, messages, 4096, false, e.Cfg.FallbackTemp)
+	if err != nil {
+		return out // 审校失败：整体回退原值
+	}
+	applied := 0
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		dot := strings.Index(line, ".")
+		if dot <= 0 {
+			continue
+		}
+		idx, perr := strconv.Atoi(strings.TrimSpace(line[:dot]))
+		if perr != nil || idx < 1 || idx > len(out) {
+			continue
+		}
+		if revised := strings.TrimSpace(line[dot+1:]); revised != "" {
+			out[idx-1] = PostProcessTranslation(revised, targetLang)
+			applied++
+		}
+	}
+	if applied == 0 {
+		return out // 输出格式不符：全部回退原值（不冒险应用）
+	}
+	return out
+}
+
+// truncateStr 按 rune 截断字符串（超长追加省略号）。
+func truncateStr(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }

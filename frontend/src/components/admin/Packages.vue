@@ -73,6 +73,14 @@
         <input v-model.number="trialSentences" type="number" class="ad-input ad-mini-w" />
         <button class="ad-btn" @click="saveTrial">{{ t('common.save') }}</button>
       </div>
+      <!-- ★ Token 实费参数：均摊系数 + 句↔token 换算率（四期，超管可调） -->
+      <div class="ad-row" style="margin-top: 12px">
+        <span class="ad-hint">{{ t('packages.markupLabel') }}</span>
+        <input v-model.number="markupMultiplier" type="number" step="0.1" min="1" class="ad-input ad-mini-w" />
+        <span class="ad-hint" style="margin-left:12px">{{ t('packages.rateLabel') }}</span>
+        <input v-model.number="tokensPerSentence" type="number" min="1" class="ad-input ad-mini-w" />
+        <button class="ad-btn ad-btn-green" @click="saveBillingParams">{{ t('common.save') }}</button>
+      </div>
     </div>
 
     <!-- 支付模式（超管）：sdk / 静态码 / mock + 静态收款码配置 -->
@@ -143,6 +151,9 @@ import { t } from '@/i18n'
 const pkgs = ref<any[]>([])
 const billingEnforced = ref(false) // ★ 强制计费总开关（billing_enforced：token 实费扣减唯一开关）
 const trialSentences = ref(100)
+// ★ Token 实费参数（四期）：对外扣费=真实 token×均摊系数；≈句数=token÷换算率
+const markupMultiplier = ref(1.5)
+const tokensPerSentence = ref(500)
 const payMode = ref('mock')
 
 // 注册与触达配置（三期）：开关用 "1"/"0" 字符串与后端 system_config 对齐
@@ -178,6 +189,8 @@ async function loadAll() {
   if (cfg.success) {
     billingEnforced.value = (cfg as any).billing_enforced === '1'
     if ((cfg as any).trial_sentences) trialSentences.value = Number((cfg as any).trial_sentences)
+    if (typeof (cfg as any).billing_markup_multiplier === 'number') markupMultiplier.value = (cfg as any).billing_markup_multiplier
+    if ((cfg as any).estimate_tokens_per_sentence) tokensPerSentence.value = Number((cfg as any).estimate_tokens_per_sentence)
     if ((cfg as any).pay_mode) payMode.value = (cfg as any).pay_mode
     if ((cfg as any).static_qr_image) staticQRImage.value = (cfg as any).static_qr_image
     // 回填注册与触达配置（captcha_secret_key 后端不回显，保持输入框为空表示不修改）
@@ -253,6 +266,17 @@ async function saveTrial() {
   const r = await adminPackageSettingsSave({ trial_sentences: trialSentences.value })
   if (!r.success) { alert(r.message); return }
   alert(t('packages.saved'))
+}
+// saveBillingParams 保存 Token 实费计费参数（均摊系数 + 换算率）
+async function saveBillingParams() {
+  if (!(markupMultiplier.value >= 1)) { alert(t('packages.markupInvalid')); return }
+  if (!(tokensPerSentence.value > 0)) { alert(t('packages.rateInvalid')); return }
+  const r = await adminPackageSettingsSave({
+    billing_markup_multiplier: markupMultiplier.value,
+    estimate_tokens_per_sentence: tokensPerSentence.value,
+  })
+  if (!r.success) { alert(r.message); return }
+  alert(t('common.saved'))
 }
 
 onMounted(loadAll)

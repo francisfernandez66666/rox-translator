@@ -167,6 +167,10 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 						needTexts[i] = texts[idx]
 					}
 					batch := e.BatchTranslate(ctx, needTexts, lc, 15, nil)
+					// ★ pro 模式批量审校：本块一次 LLM 调用逐条修正，失败/不符原样保留
+					if !fast {
+						batch = e.reviewBatchSafe(ctx, needTexts, batch, lc)
+					}
 					for i, idx := range needModelIdx {
 						if batch[i] != "" && batch[i] != "[翻译失败]" {
 							addTrans(lc, texts[idx], batch[i])
@@ -184,6 +188,10 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		go func(lc string) {
 			defer wg.Done()
 			batch := e.BatchTranslate(ctx, texts, lc, 15, nil)
+			// ★ pro 模式批量审校（同上：整块一次调用）
+			if !fast {
+				batch = e.reviewBatchSafe(ctx, texts, batch, lc)
+			}
 			for i, t := range texts {
 				if batch[i] != "" && batch[i] != "[翻译失败]" {
 					addTrans(lc, t, batch[i])
@@ -312,4 +320,31 @@ func (e *Engine) parseOtherLangsFromPrompt(ctx context.Context, text string) ([]
 		}
 	}
 	return nil, clean
+}
+
+// reviewBatchSafe 批量审校安全包装：过滤空译文与占位失败项，仅审校有效对；
+// 审校结果不改变成功/失败判定（审校输出为空时保留原译文）。
+func (e *Engine) reviewBatchSafe(ctx context.Context, sources, translations []string, lang string) []string {
+	idxs := make([]int, 0, len(sources))
+	var srcs, tgts []string
+	for i, tr := range translations {
+		if tr == "" || tr == "[翻译失败]" {
+			continue
+		}
+		idxs = append(idxs, i)
+		srcs = append(srcs, sources[i])
+		tgts = append(tgts, tr)
+	}
+	if len(idxs) < 2 { // 单段走常规逐段审校收益低，跳过
+		return translations
+	}
+	rev := e.ReviewTranslationBatch(ctx, srcs, tgts, lang, config.StageReview)
+	out := make([]string, len(translations))
+	copy(out, translations)
+	for j, i := range idxs {
+		if rev[j] != "" {
+			out[i] = rev[j]
+		}
+	}
+	return out
 }

@@ -168,6 +168,14 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 	if v, _ := s.Store.GetConfig("static_qr_image"); v != "" {
 		staticQR = v
 	}
+	// ★ Token 实费参数：均摊系数（默认 1.5）与句↔token 换算率（默认 500）
+	markup := 1.5
+	if v, _ := s.Store.GetConfig("billing_markup_multiplier"); v != "" {
+		if f, perr := strconv.ParseFloat(v, 64); perr == nil && f >= 1.0 {
+			markup = f
+		}
+	}
+	tokenRate := s.Store.TokenSentenceRate()
 	// 三期注册与触达配置：邮箱验证 / 注册审核 / 人机验证 / 群机器人（secret_key 只写不回显）
 	getCfg := func(k string) string { v, _ := s.Store.GetConfig(k); return v }
 	writeJSON(w, 200, map[string]interface{}{
@@ -180,6 +188,9 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 		"captcha_site_key":     getCfg("captcha_site_key"),
 		"wecom_webhook_url":    getCfg("wecom_webhook_url"),
 		"dingtalk_webhook_url": getCfg("dingtalk_webhook_url"),
+		// ★ Token 实费参数（四期）：均摊系数与句↔token 换算率
+		"billing_markup_multiplier":    markup,
+		"estimate_tokens_per_sentence": tokenRate,
 	})
 }
 
@@ -193,10 +204,12 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		return
 	}
 	var req struct {
-		BillingEnforced *string `json:"billing_enforced"` // 强制计费开关："1"/"0"
-		TrialSentences   *int64  `json:"trial_sentences"`   // 试用句数
-		PayMode          *string `json:"pay_mode"`          // mock / sdk / static_qr
-		StaticQRImage    *string `json:"static_qr_image"`   // 静态收款码图片 URL 或 base64
+		BillingEnforced   *string  `json:"billing_enforced"`             // 强制计费开关："1"/"0"
+		TrialSentences    *int64   `json:"trial_sentences"`              // 试用句数
+		MarkupMultiplier  *float64 `json:"billing_markup_multiplier"`    // 成本均摊系数（≥1.0）
+		TokensPerSentence *int64   `json:"estimate_tokens_per_sentence"` // 句↔token 换算率（>0）
+		PayMode           *string  `json:"pay_mode"`                     // mock / sdk / static_qr
+		StaticQRImage     *string  `json:"static_qr_image"`              // 静态收款码图片 URL 或 base64
 		// 三期注册与触达配置（均可选，传了才更新；secret_key 只写不回显）
 		EmailVerifyEnabled *string `json:"email_verify_enabled"` // "1"=注册需邮箱验证码
 		EmailNotifyEnabled *string `json:"email_notify_enabled"` // "1"=站内通知同步邮件触达租户管理员
@@ -263,6 +276,28 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		}
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_settings_save", "system", "")
+
+	// ★ 计费参数（Token 实费体系）：均摊系数与换算率，超管可调
+	if req.MarkupMultiplier != nil {
+		if *req.MarkupMultiplier < 1.0 {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "均摊系数不能小于 1.0"})
+			return
+		}
+		if err := s.Store.SetConfig("billing_markup_multiplier", strconv.FormatFloat(*req.MarkupMultiplier, 'f', 2, 64)); err != nil {
+			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+	}
+	if req.TokensPerSentence != nil {
+		if *req.TokensPerSentence <= 0 {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "换算率必须大于 0"})
+			return
+		}
+		if err := s.Store.SetConfig("estimate_tokens_per_sentence", strconv.FormatInt(*req.TokensPerSentence, 10)); err != nil {
+			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 

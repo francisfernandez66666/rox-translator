@@ -12,23 +12,23 @@ import (
 
 // Ticket 工单
 type Ticket struct {
-	ID           int64  `json:"id"`            // 工单主键 ID
-	TenantID     int64  `json:"tenant_id"`     // 所属租户 ID
-	TicketNo     string `json:"ticket_no"`     // 工单号（T + 时间戳 + 随机后缀）
-	Title        string `json:"title"`         // 工单标题
-	Status       string `json:"status"`        // 状态：draft/in_progress/pending_approval/approved/rejected/completed
-	SourceText   string `json:"source_text"`   // 待翻译源文本
-	FilePath     string `json:"file_path"`     // 关联上传文件路径（空表示纯文本）
-	TargetLangs  string `json:"target_langs"`  // 目标语言列表（逗号分隔）
-	CreatedBy    int64  `json:"created_by"`    // 创建者用户 ID
-	Mode         string `json:"mode"`          // 翻译模式：fast 快速 / pro 专业校对（空=pro）
-	ApproverID   int64  `json:"approver_id"`   // 审批人用户 ID（0 表示未分配）
-	ReviewerID   int64  `json:"reviewer_id"`   // 审校人用户 ID（0 表示未分配）
-	RejectReason string `json:"reject_reason"` // 驳回原因（被驳回时填写，重翻时使用）
-	FinalResult  string `json:"final_result"`  // 最终结果（JSON：含各语言译文及中间轨迹）
+	ID           int64  `json:"id"`                    // 工单主键 ID
+	TenantID     int64  `json:"tenant_id"`             // 所属租户 ID
+	TicketNo     string `json:"ticket_no"`             // 工单号（T + 时间戳 + 随机后缀）
+	Title        string `json:"title"`                 // 工单标题
+	Status       string `json:"status"`                // 状态：draft/in_progress/pending_approval/approved/rejected/completed
+	SourceText   string `json:"source_text"`           // 待翻译源文本
+	FilePath     string `json:"file_path"`             // 关联上传文件路径（空表示纯文本）
+	TargetLangs  string `json:"target_langs"`          // 目标语言列表（逗号分隔）
+	CreatedBy    int64  `json:"created_by"`            // 创建者用户 ID
+	Mode         string `json:"mode"`                  // 翻译模式：fast 快速 / pro 专业校对（空=pro）
+	ApproverID   int64  `json:"approver_id"`           // 审批人用户 ID（0 表示未分配）
+	ReviewerID   int64  `json:"reviewer_id"`           // 审校人用户 ID（0 表示未分配）
+	RejectReason string `json:"reject_reason"`         // 驳回原因（被驳回时填写，重翻时使用）
+	FinalResult  string `json:"final_result"`          // 最终结果（JSON：含各语言译文及中间轨迹）
 	ResultPath   string `json:"result_path,omitempty"` // 结果文件路径（原格式回写产物/xlsx 对照表；空=未生成）
-	CreatedAt    string `json:"created_at"`    // 创建时间（RFC3339 字符串）
-	UpdatedAt    string `json:"updated_at"`    // 更新时间（RFC3339 字符串）
+	CreatedAt    string `json:"created_at"`            // 创建时间（RFC3339 字符串）
+	UpdatedAt    string `json:"updated_at"`            // 更新时间（RFC3339 字符串）
 }
 
 // TicketState 工单状态轨迹（Projector 物化）
@@ -105,7 +105,6 @@ func (s *Store) SetTicketResultPath(id int64, path string) error {
 	_, err := s.db.Exec("UPDATE tickets SET result_path=?, updated_at=? WHERE id=?", path, time.Now().Format(time.RFC3339), id)
 	return err
 }
-
 
 // ListTickets 工单列表（租户隔离；onlyMine=true 时只返回当前用户创建的）。
 // 参数：tid=租户 ID，userID=用户 ID，onlyMine=是否仅我的工单。
@@ -193,7 +192,6 @@ func (s *Store) TicketStates(ticketID int64) ([]*TicketState, error) {
 	}
 	return out, nil
 }
-
 
 // scanTicketFull 扫描全列工单行（GetTicketGlobal 专用，含 result_path）。
 func scanTicketFull(row *sql.Row) (*Ticket, error) {
