@@ -11,6 +11,8 @@ package queue
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -48,27 +50,32 @@ func (q *DirectQueue) Reserve(ctx context.Context, workerID string, leaseSec int
 	now := Now()
 	nowStr := now.Format(time.RFC3339)
 	leaseUntil := now.Add(-time.Duration(leaseSec) * time.Second).Format(time.RFC3339)
-	// 单条 UPDATE 完成领取（依赖 SQLite 写锁保证原子性）
+	// 单条 UPDATE 完成领取（依赖 SQLite 写锁保证原子性）。
+	// ⚠️ 历史缺陷（2026-08-23 E2E 发现）：占位符 4 个仅绑定 3 个参数（updated_at 被误绑
+	// 租约时间、子查询无参可绑），驱动报参数不足 → Reserve 永远空手 → 工单永久滞留 queued。
+	// 已修正为按序绑定：leased_by / leased_at / updated_at / 租约阈值。
 	res, err := q.db.ExecContext(ctx, `
 		UPDATE jobs SET status='running', leased_by=?, leased_at=?, attempts=attempts+1, updated_at=?
 		WHERE id = (
 			SELECT id FROM jobs
 			WHERE status='queued' OR (status='running' AND leased_at<=?)
 			ORDER BY id LIMIT 1
-		)`, workerID, nowStr, leaseUntil)
+		)`, workerID, nowStr, nowStr, leaseUntil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reserve claim: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return nil, nil // 无可执行任务
 	}
 	var j Job
+	var payload string // modernc/sqlite TEXT 返回 string；json.RawMessage 直接扫描会报 unsupported Scan
 	err = q.db.QueryRow("SELECT "+jobCols+" FROM jobs WHERE leased_by=? AND status='running' ORDER BY id DESC LIMIT 1", workerID).
-		Scan(&j.ID, &j.Type, &j.Payload, &j.Status, &j.Attempts, &j.MaxAttempts, &j.Error)
+		Scan(&j.ID, &j.Type, &payload, &j.Status, &j.Attempts, &j.MaxAttempts, &j.Error)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reserve scan: %w", err)
 	}
+	j.Payload = json.RawMessage(payload)
 	return &j, nil
 }
 
