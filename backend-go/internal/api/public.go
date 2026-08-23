@@ -1,7 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 公开商业页面：无需登录即可访问的产品介绍与合规文档。
-//   - /api/pricing 公开单价数据（读 rate_card，供前端定价页渲染）
-//   - /pricing 定价页（token 单价表 + 常见问题）
+//   - /pricing 定价页（商业套餐展示 + 常见问题；内部计价参数不对公网暴露）
 //   - /docs/terms 服务条款、/docs/sla 服务等级协议、/docs/privacy 数据保护条款（DPA）
 //
 // 实现：直接由后端渲染内嵌 HTML（与 SPA 无关，public 无需登录），
@@ -15,17 +14,6 @@ import (
 	"fmt"
 	"net/http"
 )
-
-// handlePublicPricingAPI 公开单价数据接口（读 rate_card）。
-// 无鉴权，供前端定价页 /pricing 动态渲染 token 单价表。
-func (s *Server) handlePublicPricingAPI(w http.ResponseWriter, r *http.Request) {
-	cards, err := s.Store.ListRateCards()
-	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "读取单价失败"})
-		return
-	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "rate_cards": cards})
-}
 
 // handlePublicPricing 定价页：token 单价表 + 充值说明。
 func (s *Server) handlePublicPricing(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +72,7 @@ func publicDocPage(title, body string) string {
 	return publicLayout(title, `<h1>`+title+`</h1>`+body)
 }
 
-// pricingHTML 定价页正文（单价表由前端 fetch /api/pricing 动态渲染）。
+// pricingHTML 定价页正文（套餐卡片由前端 fetch /api/plans 动态渲染）。
 const pricingHTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>定价 - 翻译助手</title>
@@ -113,13 +101,10 @@ th{background:#e8f5e9;color:var(--green)}
 <p>新用户注册即送免费体验句数；按套餐订阅或按 token 计量。充值 / 用量明细请在<a href="/admin">管理后台</a>查看。</p>
 <h2>商业套餐 Plans</h2>
 <div id="plansBox"><p>加载中…</p></div>
-<div class="note">💡 句数口径：每源句 × 每个目标语言 = 消耗 1 句。句数用尽后可订阅付费包或购买增量包。</div>
-<h2>Token 单价表</h2>
-<div id="rateTable"><p>加载中…</p></div>
-<div class="note">💡 计费说明：高膨胀语种（如日语/韩语）按倍率 × 基础单价计费；具体扣费以每次翻译明细为准。</div>
+<div class="note">💡 翻译按实际用量计费；套餐内额度以平台统一规则折算，具体以用量明细为准。</div>
 <h2>常见问题</h2>
-<p><b>Q：token 如何计量？</b> 文本翻译按源文本字符数计量，文件翻译按提取段数计量。</p>
-<p><b>Q：句数用完后怎么办？</b> 可订阅付费包（包月 X 句）或购买增量包，到账后立即恢复。</p>
+<p><b>Q：如何计费？</b> 按每次翻译任务的实际消耗计费，专业校对模式包含知识库匹配与多轮质量保障环节。</p>
+<p><b>Q：额度用完后怎么办？</b> 可订阅付费包或购买增量包，到账后立即恢复；也可联系管理员充值。</p>
 <p><b>Q：支持哪些支付方式？</b> 支持微信 / 支付宝在线支付（对接中），静态二维码扫码 + 人工确认，当前可使用线下转账 + 管理员充值。</p>
 </div></div>
 <div class="footer">© 2026 翻译助手 · ROX 多语翻译知识库</div>
@@ -135,16 +120,6 @@ fetch('/api/plans').then(r=>r.json()).then(d=>{
   }).join('');
   document.getElementById('plansBox').innerHTML=cards || '<p>暂无上架套餐，请联系管理员</p>';
 }).catch(()=>{document.getElementById('plansBox').innerHTML='<p>套餐加载失败</p>'});
-fetch('/api/pricing').then(r=>r.json()).then(d=>{
-  const rows=(d.rate_cards||[]).map(c=>{
-    const task={translate:'翻译',review:'审校',evals:'评测',gate:'校验'}[c.task_type]||c.task_type;
-    const prov=c.provider==='*'?'全部供应商':c.provider;
-    const lang=c.lang==='*'?'所有语言':c.lang;
-    const price=c.multiplier>1? c.unit_price+' ×'+c.multiplier : c.unit_price;
-    return '<tr><td>'+task+'</td><td>'+prov+'</td><td>'+lang+'</td><td>'+price+' token/单位</td></tr>';
-  }).join('');
-  document.getElementById('rateTable').innerHTML='<table><thead><tr><th>任务</th><th>供应商</th><th>语言</th><th>单价</th></tr></thead><tbody>'+(rows||'<tr><td colspan="4">暂无单价配置</td></tr>')+'</tbody></table>';
-}).catch(()=>{document.getElementById('rateTable').innerHTML='<p>单价加载失败</p>'});
 </script>
 </body></html>`
 

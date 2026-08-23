@@ -92,7 +92,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/health", s.handleHealth)
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
 	// 公开商业页面（无需登录）：定价 / 条款 / SLA / 隐私 / 套餐 / 注册行业
-	s.mux.HandleFunc("/api/pricing", s.handlePublicPricingAPI)
 	s.mux.HandleFunc("/pricing", s.handlePublicPricing)
 	s.mux.HandleFunc("/docs/terms", s.handlePublicTerms)
 	s.mux.HandleFunc("/docs/sla", s.handlePublicSLA)

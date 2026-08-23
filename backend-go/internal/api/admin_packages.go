@@ -144,7 +144,7 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 
 // handleAdminPackageSettings 读取商业包全局设置（super_admin）：句数强制开关 / 试用句数 / 支付模式 / 静态码配置。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。
-// 返回: success=true 时携带 sentence_enforced / trial_sentences / pay_mode / static_qr_image。
+// 返回: success=true 时携带 billing_enforced / trial_sentences / pay_mode / static_qr_image。
 func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
@@ -157,7 +157,7 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	enforced := "0"
-	if v, _ := s.Store.GetConfig("sentence_enforced"); v != "" {
+	if v, _ := s.Store.GetConfig("billing_enforced"); v != "" {
 		enforced = v
 	}
 	payMode := "mock"
@@ -171,7 +171,7 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 	// 三期注册与触达配置：邮箱验证 / 注册审核 / 人机验证 / 群机器人（secret_key 只写不回显）
 	getCfg := func(k string) string { v, _ := s.Store.GetConfig(k); return v }
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "sentence_enforced": enforced, "trial_sentences": trial,
+		"success": true, "billing_enforced": enforced, "trial_sentences": trial,
 		"pay_mode": payMode, "static_qr_image": staticQR,
 		"email_verify_enabled": getCfg("email_verify_enabled"),
 		"email_notify_enabled": getCfg("email_notify_enabled"),
@@ -184,7 +184,7 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 }
 
 // handleAdminPackageSettingsSave 保存商业包全局设置（super_admin）。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 sentence_enforced/trial_sentences/pay_mode/static_qr_image 可选字段）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 billing_enforced/trial_sentences/pay_mode/static_qr_image 可选字段）。
 // 返回: success=true 表示保存成功。
 func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
@@ -193,7 +193,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		return
 	}
 	var req struct {
-		SentenceEnforced *string `json:"sentence_enforced"` // "1"/"0"
+		BillingEnforced *string `json:"billing_enforced"` // 强制计费开关："1"/"0"
 		TrialSentences   *int64  `json:"trial_sentences"`   // 试用句数
 		PayMode          *string `json:"pay_mode"`          // mock / sdk / static_qr
 		StaticQRImage    *string `json:"static_qr_image"`   // 静态收款码图片 URL 或 base64
@@ -211,8 +211,8 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
-	if req.SentenceEnforced != nil {
-		if err := s.Store.SetConfig("sentence_enforced", *req.SentenceEnforced); err != nil {
+	if req.BillingEnforced != nil {
+		if err := s.Store.SetConfig("billing_enforced", *req.BillingEnforced); err != nil {
 			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 			return
 		}

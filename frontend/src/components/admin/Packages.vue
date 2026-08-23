@@ -61,11 +61,11 @@
       <div class="ad-hint">{{ t('packages.enforceHint') }}</div>
       <div class="ad-row">
         <label class="ad-switch" style="margin-right: 14px">
-          <input type="checkbox" v-model="sentenceEnforced" @change="saveEnforce" />
+          <input type="checkbox" v-model="billingEnforced" @change="saveEnforce" />
           <span></span>
         </label>
-        <span :style="{ color: sentenceEnforced ? '#2e7d32' : '#888', fontWeight: 600 }">
-          {{ sentenceEnforced ? t('packages.enforceOn') : t('packages.enforceOff') }}
+        <span :style="{ color: billingEnforced ? '#2e7d32' : '#888', fontWeight: 600 }">
+          {{ billingEnforced ? t('packages.enforceOn') : t('packages.enforceOff') }}
         </span>
       </div>
       <div class="ad-row" style="margin-top: 12px">
@@ -141,7 +141,7 @@ import { adminPackages, adminPackageCreate, adminPackageUpdate, adminPackageDele
 import { t } from '@/i18n'
 
 const pkgs = ref<any[]>([])
-const sentenceEnforced = ref(false)
+const billingEnforced = ref(false) // ★ 强制计费总开关（billing_enforced：token 实费扣减唯一开关）
 const trialSentences = ref(100)
 const payMode = ref('mock')
 
@@ -176,7 +176,7 @@ async function loadAll() {
   if (r.success) pkgs.value = (r as any).packages || []
   const cfg = await adminPackageSettings()
   if (cfg.success) {
-    sentenceEnforced.value = (cfg as any).sentence_enforced === '1'
+    billingEnforced.value = (cfg as any).billing_enforced === '1'
     if ((cfg as any).trial_sentences) trialSentences.value = Number((cfg as any).trial_sentences)
     if ((cfg as any).pay_mode) payMode.value = (cfg as any).pay_mode
     if ((cfg as any).static_qr_image) staticQRImage.value = (cfg as any).static_qr_image
@@ -244,7 +244,7 @@ async function deletePkg(p: any) {
 
 // saveEnforce 保存是否强制安全句检查开关
 async function saveEnforce() {
-  const r = await adminPackageSettingsSave({ sentence_enforced: sentenceEnforced.value ? '1' : '0' })
+  const r = await adminPackageSettingsSave({ billing_enforced: billingEnforced.value ? '1' : '0' })
   if (!r.success) { alert(r.message); return }
 }
 

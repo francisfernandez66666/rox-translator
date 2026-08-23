@@ -26,6 +26,15 @@ func RunTokenMigration(st *store.Store) {
 	if st == nil {
 		return
 	}
+	// ★ 开关接续回填（幂等，独立于迁移标记）：老「句数强制计费」开关值一次性
+	// 搬运到新「billing_enforced」，随后清空旧键——此后后台套餐面板的唯一
+	// 强制计费开关即 billing_enforced。仅当 billing_enforced 从未设置时执行。
+	if v, _ := st.GetConfig("billing_enforced"); v == "" {
+		if old, _ := st.GetConfig("sentence_enforced"); old == "1" {
+			_ = st.SetConfig("billing_enforced", "1")
+		}
+		_ = st.SetConfig("sentence_enforced", "0") // 旧键封存
+	}
 	// 幂等闸：已迁移过则跳过
 	if v, _ := st.GetConfig("billing_token_migrated"); v == "1" {
 		return

@@ -27,7 +27,6 @@ import (
 //   - 租户 QPS + 并发（滑动窗口）
 //   - 每日字符上限（租户 permissions.max_daily_chars，0=不限）
 //   - 强制计费模式（billing_enforced=1）下校验余额，不足则拒绝
-//   - 商业包句数模式（sentence_enforced=1）下校验剩余句数，用尽则提示购买
 //
 // 返回 (租户ID, 释放函数, 错误)。释放函数必须 defer 调用归还并发名额。
 // 参数 r: HTTP 请求（用于解析当前租户）。返回 tid: 生效租户 ID；release: 归还并发名额的函数；错误: 闸门校验失败原因。
@@ -162,52 +161,6 @@ func targetLangCount(options map[string]interface{}) int64 {
 		}
 	}
 	return 1
-}
-
-// meterSentences 计量句数：按「源句数 × 目标语言数」从租户句数余额扣减。
-// 失败仅记录日志不阻断（与 token 计量一致）。
-// 参数 r: HTTP 请求；tid: 生效租户 ID；sourceText: 源文本；options: 请求选项。
-func (s *Server) meterSentences(r *http.Request, tid int64, sourceText string, options map[string]interface{}) {
-	if s.Store == nil || sourceText == "" {
-		return
-	}
-	// 强制计费未开启：不扣减、不校验（余额仅在商业包句数模式下有意义）
-	if v, _ := s.Store.GetConfig("sentence_enforced"); v != "1" {
-		return
-	}
-	if tid <= 0 {
-		return // 平台上下文无计费
-	}
-	sents := countSentences(sourceText) * targetLangCount(options)
-	if sents <= 0 {
-		return
-	}
-	if _, err := s.Store.DeductSentences(tid, sents); err != nil {
-		// 句数不足：仅记录（已在前置闸门拦截，此处为并发兜底）
-		return
-	}
-}
-
-// meterFileSentences 计量文件翻译句数：按「文件提取段数 × 目标语言数」扣减句数余额。
-// 参数 r: HTTP 请求；tid: 生效租户 ID；segments: 文件提取的文本段数；options: 请求选项。
-func (s *Server) meterFileSentences(r *http.Request, tid int64, segments int, options map[string]interface{}) {
-	if s.Store == nil || segments <= 0 {
-		return
-	}
-	// 强制计费未开启：不扣减（同 meterSentences）
-	if v, _ := s.Store.GetConfig("sentence_enforced"); v != "1" {
-		return
-	}
-	if tid <= 0 {
-		return
-	}
-	sents := int64(segments) * targetLangCount(options)
-	if sents <= 0 {
-		return
-	}
-	if _, err := s.Store.DeductSentences(tid, sents); err != nil {
-		return // 句数不足：仅记录
-	}
 }
 
 // meterUsage 计量一次用量（成功路径调用；失败仅记日志不阻断）。

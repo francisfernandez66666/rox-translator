@@ -143,20 +143,16 @@ func NewService(st *store.Store) *Service {
 	return &Service{Store: st}
 }
 
-// Enabled 是否强制计费（扣余额 + 余额不足停服）。
-// 触发条件（任一满足）：billing_enforced=1 或已完成 token 迁移（billing_token_migrated=1）。
-// Token 计费主线：迁移完成后系统自动进入「按实际 token 扣费」模式。
+// Enabled 是否强制计费（扣余额 + 余额不足停服）。唯一开关：billing_enforced=1。
+// 注意：token 迁移标记（billing_token_migrated）仅用于迁移幂等，
+// 不得参与本判断——否则后台关闭强制计费后将不生效。
+// 迁移时的开关接续见 migrate.go：老句数强制开启会一次性搬运到 billing_enforced。
 func (s *Service) Enabled() bool {
 	if s.Store == nil {
 		return false
 	}
-	if v, _ := s.Store.GetConfig("billing_enforced"); v == "1" {
-		return true
-	}
-	if v, _ := s.Store.GetConfig("billing_token_migrated"); v == "1" {
-		return true
-	}
-	return false
+	v, _ := s.Store.GetConfig("billing_enforced")
+	return v == "1"
 }
 
 // Meter 计量一次用量。强制计费时扣余额；否则仅记录 usage_ledger 留痕。

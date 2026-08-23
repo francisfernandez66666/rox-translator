@@ -61,10 +61,10 @@ table{border-collapse:collapse;width:100%;margin:10px 0}th,td{border:1px solid #
 <tr><td class="err">daily_quota_exceeded</td><td>达到当日用量上限</td></tr>
 <tr><td class="err">bad_request / not_found / forbidden / invalid_api_key / task_failed / not_ready / no_result</td><td>参数/权限/状态类错误</td></tr>
 </table>
-<h2>计费说明</h2>
-<p>按任务全链路<b>真实 LLM token 消耗 × 均摊系数（默认 1.5）</b>从余额扣减；
-专业模式包含知识库匹配、双评估与文化闸门调用，token 消耗高于快速模式。
-响应中 <code>balance_tokens</code> 为当前余额，<code>balance_sentences_approx</code> 为按换算率折算的≈句数。</p>
+<h2>余额与计费</h2>
+<p>翻译按实际用量从账户余额扣减；每次响应携带 <code>balance_tokens</code>（当前余额）与
+<code>balance_sentences_approx</code>（≈句数）。额度不足将返回错误码 <code class="err">insufficient_balance</code>，
+请充值或升级套餐。具体计费规则由平台管理员配置。</p>
 </body></html>`))
 }
 
