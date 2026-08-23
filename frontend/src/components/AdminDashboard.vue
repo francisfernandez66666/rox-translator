@@ -123,6 +123,7 @@ const workspaces: Record<number, WorkspaceDef> = {
     ],
   },
   // 企业管理（租户管理员）
+  // 权限边界：租户管理/商业包/全局模型/流程evals/审计日志/系统告警 仅超管可见（后端接口同步收紧）
   3: {
     label: 'admin.wsCompany',
     panels: [
@@ -131,14 +132,11 @@ const workspaces: Record<number, WorkspaceDef> = {
       { key: 'org', label: 'admin.orgs', comp: Org },
       { key: 'users', label: 'admin.users', comp: Users },
       { key: 'kb', label: 'admin.kbPack', comp: Kb },
-      { key: 'models', label: 'admin.byokModels', comp: Models },
       { key: 'billing', label: 'admin.subscription', comp: Billing },
       { key: 'invites', label: 'admin.invites', comp: Invites },
       { key: 'apikeys', label: 'admin.apikeys', comp: ApiKeys },
       { key: 'webhooks', label: 'admin.webhooks', comp: Webhooks },
-      { key: 'workflow', label: 'admin.workflow', comp: Workflow },
       { key: 'tickets', label: 'admin.tickets', comp: Tickets },
-      { key: 'audit', label: 'admin.auditPanel', comp: Audit },
     ],
   },
   // 部门管理（部门管理员）

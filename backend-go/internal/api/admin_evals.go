@@ -2,7 +2,8 @@ package api
 
 // ============ 本文件职责中文说明 ============
 // evals 看板 / 系统健康 / 审计（含 CSV 导出）/ 告警管理（handleEvalsList / handleSystemHealth / handleSystemAudit / handleAlerts 系列）
-// 安全要点：所有写操作均记录审计日志（LogAudit）；API Key 密钥仅明文返回一次，前端立即保存。
+// 安全要点：evals 看板、审计日志、系统告警仅超管可访问（requireAdminUser）；
+// 系统健康看板（handleSystemHealth）保留租户管理员及以上（总览页三角色共用，数据按生效租户隔离）。
 // ========================================
 
 import (
@@ -17,9 +18,9 @@ import (
 
 // ============ evals 看板 ============
 
-// handleEvalsList 评估记录列表
+// handleEvalsList 评估记录列表（仅超管）
 func (s *Server) handleEvalsList(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -72,9 +73,9 @@ func llmErrorRateStr(eng *engine.Engine) string {
 	return fmt.Sprintf("%.1f%%", eng.ErrorRate()*100)
 }
 
-// handleSystemAudit 审计日志（支持 action/resource/user/time 过滤；export=csv 导出）
+// handleSystemAudit 审计日志（仅超管；支持 action/resource/user/time 过滤；export=csv 导出）
 func (s *Server) handleSystemAudit(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -101,9 +102,9 @@ func (s *Server) handleSystemAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "logs": logs})
 }
 
-// handleAlerts 告警列表（租户管理员看本租户，超管看全平台）
+// handleAlerts 告警列表（仅超管，看全平台）
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -122,9 +123,9 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "alerts": alerts})
 }
 
-// handleAlertResolve 关闭告警
+// handleAlertResolve 关闭告警（仅超管）
 func (s *Server) handleAlertResolve(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return

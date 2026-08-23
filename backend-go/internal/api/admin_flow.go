@@ -2,7 +2,8 @@ package api
 
 // ============ 本文件职责中文说明 ============
 // 流程引擎设置（handleFlowConfig / handleFlowSave / handleFlowRunTicket）
-// 安全要点：所有写操作均记录审计日志（LogAudit）；API Key 密钥仅明文返回一次，前端立即保存。
+// 安全要点：全部接口仅超管可访问（requireAdminUser）；流程编排属平台级配置，
+// 租户管理员无权查看/修改（含工单手动执行流程入口）。
 // ========================================
 
 import (
@@ -14,9 +15,9 @@ import (
 
 // ============ 流程引擎设置 ============
 
-// handleFlowConfig 读取当前租户流程步骤配置（未配置回退默认定义）
+// handleFlowConfig 读取流程步骤配置（仅超管；经 X-Tenant-ID 切换生效租户，未配置回退默认定义）
 func (s *Server) handleFlowConfig(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -42,9 +43,9 @@ func flowStepsForTenant(ts *tenant.Store, tid int64) []store.FlowStep {
 	return out
 }
 
-// handleFlowSave 保存当前租户流程步骤启停
+// handleFlowSave 保存流程步骤启停（仅超管）
 func (s *Server) handleFlowSave(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -72,9 +73,9 @@ func (s *Server) handleFlowSave(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
-// handleFlowRunTicket 直接对指定工单执行流程（admin 触发）
+// handleFlowRunTicket 直接对指定工单执行流程（仅超管触发）
 func (s *Server) handleFlowRunTicket(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return

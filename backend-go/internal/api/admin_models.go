@@ -2,84 +2,47 @@ package api
 
 // ============ 本文件职责中文说明 ============
 // 模型配置 / 模型路由策略 / 策略参数（handleModels / handleModelRoutes / handlePolicy 系列）
-// 安全要点：所有写操作均记录审计日志（LogAudit）；API Key 密钥仅明文返回一次，前端立即保存。
+// 安全要点：全部接口仅超管可访问（requireAdminUser）；模型与策略属平台级配置，
+// 租户管理员无权读写。所有写操作均记录审计日志（LogAudit）。
 // ========================================
 
 import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"translator/internal/auth"
 	"translator/internal/config"
 	"translator/internal/tenant"
 )
 
-// ============ 模型配置（租户 BYOK + 超管全局） ============
+// ============ 模型配置（仅超管） ============
 
-// handleModels 读取模型配置（租户管理员及以上）：
-//   - 超级管理员：读全局配置（全局默认单模型 + system_config.model_routes 全局路由）
-//   - 租户管理员：读本租户 BYOK 配置（未配置回退全局默认展示）
+// handleModels 读取模型配置（仅超管）：
+// 读取全局配置（全局默认单模型 + system_config.model_routes 全局路由）。
 //
 // 返回 model 单模型 + routes 多供应商路由。
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
-	if err != nil {
+	if _, err := s.requireAdminUser(r); err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	// 超级管理员：读全局配置
-	if auth.IsSuperAdmin(u) {
-		base := s.Cfg.OnlineAPIBase
-		key := s.Cfg.OnlineAPIKey
-		model := s.Cfg.OnlineModel
-		var routes []tenant.Route
-		if s.Store != nil {
-			if v, e := s.Store.GetConfig("model_routes"); e == nil && v != "" {
-				var rs []config.ProviderConfig
-				if json.Unmarshal([]byte(v), &rs) == nil {
-					for _, rt := range rs {
-						routes = append(routes, tenant.Route{Provider: rt.Provider, APIBase: rt.APIBase, APIKey: rt.APIKey, Model: rt.Model, Weight: rt.Weight})
-					}
-				}
-			}
-		}
-		if routes == nil {
-			routes = []tenant.Route{}
-		}
-		maskedRoutes := make([]tenant.Route, 0, len(routes))
-		for _, rt := range routes {
-			rt.APIKey = maskKey(rt.APIKey)
-			maskedRoutes = append(maskedRoutes, rt)
-		}
-		writeJSON(w, 200, map[string]interface{}{"success": true,
-			"model":  map[string]interface{}{"api_base": base, "api_key": maskKey(key), "model": model},
-			"routes": maskedRoutes})
-		return
-	}
-	// 租户管理员：读本租户 BYOK
-	tid := s.effTenant(r, u)
+	// 读全局配置
 	base := s.Cfg.OnlineAPIBase
 	key := s.Cfg.OnlineAPIKey
 	model := s.Cfg.OnlineModel
 	var routes []tenant.Route
-	if s.Ten != nil {
-		if mc, err := s.Ten.GetModelConfig(tid); err == nil {
-			routes = mc.Routes
-			if mc.Model != "" {
-				if mc.APIBase != "" {
-					base = mc.APIBase
+	if s.Store != nil {
+		if v, e := s.Store.GetConfig("model_routes"); e == nil && v != "" {
+			var rs []config.ProviderConfig
+			if json.Unmarshal([]byte(v), &rs) == nil {
+				for _, rt := range rs {
+					routes = append(routes, tenant.Route{Provider: rt.Provider, APIBase: rt.APIBase, APIKey: rt.APIKey, Model: rt.Model, Weight: rt.Weight})
 				}
-				if mc.APIKey != "" {
-					key = mc.APIKey
-				}
-				model = mc.Model
 			}
 		}
 	}
 	if routes == nil {
 		routes = []tenant.Route{}
 	}
-	// 掩码所有密钥
 	maskedRoutes := make([]tenant.Route, 0, len(routes))
 	for _, rt := range routes {
 		rt.APIKey = maskKey(rt.APIKey)
@@ -90,14 +53,13 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		"routes": maskedRoutes})
 }
 
-// handleModelsSave 保存模型配置（租户管理员及以上）：
-//   - 超级管理员：保存全局配置——单模型字段（api_base+model）作为主路由合并写入 model_routes，
-//     并热更新运行配置；routes 全量覆盖全局路由。
-//   - 租户管理员：保存本租户 BYOK 配置（单模型 + 路由，存 tenants.model_config）。
+// handleModelsSave 保存模型配置（仅超管）：
+// 保存全局配置——单模型字段（api_base+model）作为主路由合并写入 model_routes，
+// 并热更新运行配置；routes 全量覆盖全局路由。
 //
 // 支持多供应商路由（ChatGPT/Gemini 等 OpenAI 兼容端点）。
 func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -112,99 +74,55 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
-	// 超级管理员：保存全局配置
-	if auth.IsSuperAdmin(u) {
-		if s.Store == nil {
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
-			return
-		}
-		// 读取现有全局路由（保留掩码密钥）
-		oldRoutes := []config.ProviderConfig{}
-		if v, e := s.Store.GetConfig("model_routes"); e == nil && v != "" {
-			_ = json.Unmarshal([]byte(v), &oldRoutes)
-		}
-		// 构建新路由列表：单模型字段优先作为主路由（api_base+model 非空），其余来自 routes
-		merged := make([]config.ProviderConfig, 0, len(req.Routes)+1)
-		if req.APIBase != "" && req.Model != "" {
-			merged = append(merged, config.ProviderConfig{
-				Provider: "global", APIBase: req.APIBase, APIKey: req.APIKey, Model: req.Model, Weight: 100,
-			})
-		}
-		for _, rt := range req.Routes {
-			merged = append(merged, config.ProviderConfig{Provider: rt.Provider, APIBase: rt.APIBase, APIKey: rt.APIKey, Model: rt.Model, Weight: rt.Weight})
-		}
-		// 掩码密钥保留原值
-		for i := range merged {
-			if hasMask(merged[i].APIKey) {
-				for _, o := range oldRoutes {
-					if o.APIBase == merged[i].APIBase && o.Model == merged[i].Model {
-						merged[i].APIKey = o.APIKey
-						break
-					}
+	// 保存全局配置
+	if s.Store == nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
+		return
+	}
+	// 读取现有全局路由（保留掩码密钥）
+	oldRoutes := []config.ProviderConfig{}
+	if v, e := s.Store.GetConfig("model_routes"); e == nil && v != "" {
+		_ = json.Unmarshal([]byte(v), &oldRoutes)
+	}
+	// 构建新路由列表：单模型字段优先作为主路由（api_base+model 非空），其余来自 routes
+	merged := make([]config.ProviderConfig, 0, len(req.Routes)+1)
+	if req.APIBase != "" && req.Model != "" {
+		merged = append(merged, config.ProviderConfig{
+			Provider: "global", APIBase: req.APIBase, APIKey: req.APIKey, Model: req.Model, Weight: 100,
+		})
+	}
+	for _, rt := range req.Routes {
+		merged = append(merged, config.ProviderConfig{Provider: rt.Provider, APIBase: rt.APIBase, APIKey: rt.APIKey, Model: rt.Model, Weight: rt.Weight})
+	}
+	// 掩码密钥保留原值
+	for i := range merged {
+		if hasMask(merged[i].APIKey) {
+			for _, o := range oldRoutes {
+				if o.APIBase == merged[i].APIBase && o.Model == merged[i].Model {
+					merged[i].APIKey = o.APIKey
+					break
 				}
 			}
 		}
-		b, _ := json.Marshal(merged)
-		if err := s.Store.SetConfig("model_routes", string(b)); err != nil {
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
-			return
-		}
-		// 热同步到运行配置（引擎即时生效）
-		s.Cfg.ModelRoutes = merged
-		// 若单模型字段非空，同时更新全局默认单模型（引擎回退链的最终兜底）
-		if req.APIBase != "" {
-			s.Cfg.OnlineAPIBase = req.APIBase
-		}
-		if req.APIKey != "" && !hasMask(req.APIKey) {
-			s.Cfg.OnlineAPIKey = req.APIKey
-		}
-		if req.Model != "" {
-			s.Cfg.OnlineModel = req.Model
-		}
-		s.Store.LogAudit(s.effTenant(r, u), u.ID, "model_save", "system", fmt.Sprintf("%d 条全局路由", len(merged)))
-		writeJSON(w, 200, map[string]interface{}{"success": true})
+	}
+	b, _ := json.Marshal(merged)
+	if err := s.Store.SetConfig("model_routes", string(b)); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	// 租户管理员：保存本租户 BYOK
-	if s.Ten == nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
-		return
-	}
-	tid := s.effTenant(r, u)
-	// 保留现有配置中未修改的字段（APIKey 掩码时不覆盖）
-	cur, _ := s.Ten.GetModelConfig(tid)
-	mc := cur
+	// 热同步到运行配置（引擎即时生效）
+	s.Cfg.ModelRoutes = merged
+	// 若单模型字段非空，同时更新全局默认单模型（引擎回退链的最终兜底）
 	if req.APIBase != "" {
-		mc.APIBase = req.APIBase
+		s.Cfg.OnlineAPIBase = req.APIBase
 	}
 	if req.APIKey != "" && !hasMask(req.APIKey) {
-		mc.APIKey = req.APIKey
+		s.Cfg.OnlineAPIKey = req.APIKey
 	}
 	if req.Model != "" {
-		mc.Model = req.Model
+		s.Cfg.OnlineModel = req.Model
 	}
-	// 多供应商路由：全量覆盖，掩码密钥保留原值
-	if req.Routes != nil {
-		mc.Routes = req.Routes
-		if v, err := s.Ten.GetModelConfig(tid); err == nil {
-			oldRoutes := v.Routes
-			for i := range mc.Routes {
-				if hasMask(mc.Routes[i].APIKey) {
-					for _, o := range oldRoutes {
-						if o.APIBase == mc.Routes[i].APIBase && o.Model == mc.Routes[i].Model {
-							mc.Routes[i].APIKey = o.APIKey
-							break
-						}
-					}
-				}
-			}
-		}
-	}
-	if err := s.Ten.SetModelConfig(tid, mc); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
-		return
-	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "model_save", "tenants", req.Model)
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "model_save", "system", fmt.Sprintf("%d 条全局路由", len(merged)))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -226,7 +144,7 @@ func (s *Server) handleModelRoutes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "routes": routes})
 }
 
-// handleModelRoutesSave 保存模型路由策略（super_admin）
+// handleModelRoutesSave 保存模型路由策略（仅超管）
 // 覆盖式保存：全量提交，空数组表示清空路由回退单供应商 Online* 配置。
 func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
@@ -280,9 +198,9 @@ func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "routes": req.Routes})
 }
 
-// ============ 各流程阶段模型配置（super_admin） ============
+// ============ 各流程阶段模型配置（仅超管） ============
 
-// handleStageModels 读取各流程阶段模型配置（super_admin）。
+// handleStageModels 读取各流程阶段模型配置（仅超管）。
 // 返回 4 个阶段（kb_match/ai_initial/evals/review）的模型配置；未配置的返回空项以便前端渲染。
 func (s *Server) handleStageModels(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
@@ -309,7 +227,7 @@ func (s *Server) handleStageModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "stages": out})
 }
 
-// handleStageModelsSave 保存各流程阶段模型配置（super_admin）。
+// handleStageModelsSave 保存各流程阶段模型配置（仅超管）。
 // 覆盖式保存：全量提交；某项 api_base/model 为空表示清空该阶段独立模型（回退全局/路由）。
 func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
@@ -365,11 +283,11 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
-// ============ 策略参数 ============
+// ============ 策略参数（仅超管） ============
 
-// handlePolicy 读取当前租户策略参数（未配置回退全局默认）
+// handlePolicy 读取翻译策略参数（仅超管；经 X-Tenant-ID 切换生效租户，未配置回退全局默认）
 func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -397,9 +315,9 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
-// handlePolicySave 保存当前租户策略参数
+// handlePolicySave 保存翻译策略参数（仅超管）
 func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireTenantAdmin(r)
+	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
