@@ -88,7 +88,8 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		"package_expires":          pkgExpires,
 		"pay_mode":                 payMode,
 	}
-	// ★ 部门预算进度（用户归属启用预算的部门时返回，前台徽标数据源）
+	// ★ 部门预算进度（四期增强；前台「🏢 部门预算 used/limit」徽标数据源）：
+	// 仅当用户归属的部门启用了预算（token_limit>0）时返回 org_budget 与租户总预算
 	if tid > 0 && u.OrgID > 0 {
 		if sum, err := s.Store.GetOrgBudgetSummary(tid); err == nil {
 			for _, d := range sum.Depts {
