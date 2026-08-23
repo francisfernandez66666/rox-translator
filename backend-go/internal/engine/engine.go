@@ -51,8 +51,8 @@ type Engine struct {
 	errRingCap int
 
 	// ★ 知识库向量索引重建
-	NPZPath   string      // npz 文件路径（重建后写回）
-	indexMu   sync.Mutex  // 保护 Index 指针热替换与重建互斥
+	NPZPath    string      // npz 文件路径（重建后写回）
+	indexMu    sync.Mutex  // 保护 Index 指针热替换与重建互斥
 	rebuilding atomic.Bool // 防并发重建
 
 	// ★ 语言文化规范缓存（Gate L1）：key= tid|lang，TTL 60s
@@ -70,8 +70,8 @@ type cultureRule struct {
 
 // cultureEntry 缓存条目。
 type cultureEntry struct {
-	Text     string        // 渲染后的提示词块（L1 注入用）
-	Rules    []cultureRule // 结构化条目（L2 硬过滤用）
+	Text      string        // 渲染后的提示词块（L1 注入用）
+	Rules     []cultureRule // 结构化条目（L2 硬过滤用）
 	ExpiresAt time.Time
 }
 
@@ -109,9 +109,21 @@ type usageRecord struct {
 	used     bool   // 是否已记录过实际用量（避免回退默认）
 }
 
-// WithUsageRecorder 向 ctx 注入用量记录器（API 层在进入翻译前调用）
+// WithUsageRecorder 向 ctx 注入用量记录器（API 层在进入翻译前调用）。
+// 同时注入 llm.UsageCollector：全链路（初翻/校对/Judge/文化闸门/embedding）
+// 的真实 token 用量自动归集，供按实际费用计费。
 func (e *Engine) WithUsageRecorder(ctx context.Context) context.Context {
+	ctx = llm.WithUsageCollector(ctx, &llm.UsageCollector{})
 	return context.WithValue(ctx, usageCtxKey{}, &usageRecord{})
+}
+
+// UsageTokens 返回本次请求累计的真实 token 用量（输入, 输出）；
+// 未注入收集器时返回 (0,0)。
+func (e *Engine) UsageTokens(ctx context.Context) (int64, int64) {
+	if uc := llm.CollectorFrom(ctx); uc != nil {
+		return uc.Totals()
+	}
+	return 0, 0
 }
 
 // NoteUsageModel 记录本次实际使用的供应商与模型（单语翻译成功路径调用）

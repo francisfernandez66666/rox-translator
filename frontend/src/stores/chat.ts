@@ -94,6 +94,8 @@ export const useChatStore = defineStore('chat', () => {
     try {
       // 调用流式聊天接口，携带当前所选模型
       const allOptions = { ...options, model: selectedModel.value }
+      // ★ 双模式：快速/专业校对随请求透传（localStorage 记忆，默认 pro）
+      allOptions.mode = localStorage.getItem('translate_mode') || 'pro'
       const response = await chatStream(text, 'translation', allOptions, (event: ProgressEvent) => {
         updateProgress(assistantId, event.step || '翻译中...', event.percent || 0)
       }, abortController.signal)
@@ -165,6 +167,7 @@ export const useChatStore = defineStore('chat', () => {
         },
         abortController.signal,
         userMessage,
+        localStorage.getItem('translate_mode') || 'pro',
       )
 
       // 写入最终结果到 AI 消息

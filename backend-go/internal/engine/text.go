@@ -75,6 +75,15 @@ func TargetLangsFromOptions(options map[string]interface{}) []string {
 	return nil
 }
 
+// ModeFromOptions 从 options 提取翻译模式："fast"=快速模式；""/"pro"=专业校对模式。
+func ModeFromOptions(options map[string]interface{}) string {
+	if options == nil {
+		return ""
+	}
+	m, _ := options["mode"].(string)
+	return strings.ToLower(strings.TrimSpace(m))
+}
+
 // SplitOptions 分离 KB / other / directOther
 func SplitOptions(langs []string) (kbTarget, directOther []string, hasOther bool) {
 	for _, lc := range langs {
@@ -138,6 +147,13 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 		}
 		directOther = parsed
 		cleanText = cleaned
+	}
+
+	// ★ 双模式：fast 快速模式跳过知识库匹配——全部目标语言并入纯模型直翻
+	fast := ModeFromOptions(options) == "fast"
+	if fast && len(kbTarget) > 0 {
+		directOther = append(directOther, kbTarget...)
+		kbTarget = nil
 	}
 
 	// KB 翻译
@@ -212,6 +228,35 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 		allSrc[lc] = "model"
 	}
 
+	// ★ 校对 Agent：初翻结果逐语言审校修正（fast/pro 均含校对环节；3 路并发限流）
+	if len(allTr) > 0 {
+		prog("AI 校对中...", 3, 4)
+		sem := make(chan struct{}, 3)
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for lc, tr := range allTr {
+			if strings.TrimSpace(tr) == "" {
+				continue
+			}
+			wg.Add(1)
+			go func(lc, tr string) {
+				defer wg.Done()
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-sem }()
+				if revised := e.ReviewTranslation(ctx, cleanText, tr, lc, config.StageReview); strings.TrimSpace(revised) != "" {
+					mu.Lock()
+					allTr[lc] = revised
+					mu.Unlock()
+				}
+			}(lc, tr)
+		}
+		wg.Wait()
+	}
+
 	langNames := map[string]string{}
 	for lc := range allTr {
 		langNames[lc] = config.LangNames[lc]
@@ -253,6 +298,12 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 	}
 	if kbHitName != "" {
 		mode = mode + " | " + kbHitName + " 命中知识库"
+	}
+	// ★ 模式标注（前台徽标与 OpenAPI 出参用）
+	if fast {
+		mode += " | ⚡快速模式（AI初翻+校对）"
+	} else {
+		mode += " | 🎓专业校对模式"
 	}
 	sb.WriteString("\n📊 模式：" + mode)
 

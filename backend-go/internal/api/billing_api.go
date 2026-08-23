@@ -58,27 +58,77 @@ func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 	if err := s.Bill.CheckDailyQuota(tid, maxDaily); err != nil {
 		return tid, release, err
 	}
-	// 强制计费模式（billing_enforced=1）下校验余额，不足则拒绝
+	// 强制计费模式（billing_enforced=1 或已完成 token 迁移）下校验 token 余额，不足则拒绝
 	if s.Bill.Enabled() {
 		if err := s.Bill.CheckBalance(tid); err != nil {
-			return tid, release, err
+			return tid, release, &apiErr{"余额不足，请充值或升级套餐"}
 		}
 	}
-	// 商业包句数模式（sentence_enforced=1）下校验剩余句数：用尽则拒绝并提示购买
-	if v, _ := s.Store.GetConfig("sentence_enforced"); v == "1" {
-		if bal, err := s.Store.GetSentenceBalance(tid); err == nil && bal <= 0 {
-			return tid, release, store.ErrSentenceExhausted
-		}
-	}
-	// 注册审核模式兜底：registration_review=1 时，未开通额度（无包身份且零句数）的租户一律拒绝，
-	// 与句数强制开关解耦（防止 review 模式在 sentence_enforced=0 时被绕过烧 token）
+	// 注册审核模式兜底：registration_review=1 时，未开通额度（无包身份且零 token 余额）的租户一律拒绝
 	if rv, _ := s.Store.GetConfig("registration_review"); rv == "1" && tid > 0 {
 		perms, perr := s.Store.GetTenantPerms(tid)
-		if perr == nil && perms.PackageCode == "" && perms.SentenceBalance <= 0 {
+		bal, berr := s.Store.GetBalance(tid)
+		if perr == nil && perms.PackageCode == "" && (berr != nil || bal == nil || bal.Balance <= 0) {
 			return tid, release, &apiErr{"账号尚未开通翻译额度，请等待管理员审核发放试用额度"}
 		}
 	}
 	return tid, release, nil
+}
+
+// ============ Token 实费计费辅助 ============
+
+// markupMultiplier 成本均摊系数（billing_markup_multiplier，默认 1.5）。
+// 对外扣费 = 真实 LLM token 消耗 × 该系数；后台可调。
+func (s *Server) markupMultiplier() float64 {
+	m := 1.5
+	if v, _ := s.Store.GetConfig("billing_markup_multiplier"); v != "" {
+		if f, perr := strconv.ParseFloat(v, 64); perr == nil && f >= 1.0 {
+			m = f
+		}
+	}
+	return m
+}
+
+// chargeTaskTokens 任务级 Token 实费计费：聚合本次请求全链路（初翻/校对/Judge/文化闸门/
+// embedding）的真实 token 用量 × 均摊系数，一次性写入 usage_ledger 并扣减余额。
+// 强制计费关闭时仅留痕计量。失败不阻断业务。
+// 参数 r: HTTP 请求（取 ctx 收集器与用户）；tid: 生效租户；taskType: 任务类型。
+// 返回: 本次计费的 token 数（未启用收集器时为 0）。
+func (s *Server) chargeTaskTokens(r *http.Request, tid int64, taskType string) int64 {
+	if s.Engine == nil || s.Bill == nil || s.Store == nil {
+		return 0
+	}
+	prompt, completion := s.Engine.UsageTokens(r.Context())
+	total := prompt + completion
+	if total <= 0 {
+		return 0 // 无 LLM 调用（如纯 KB 命中）
+	}
+	billed := int64(float64(total) * s.markupMultiplier())
+	if billed < total {
+		billed = total // 系数异常兜底：至少按真实消耗计
+	}
+	userID := int64(0)
+	if u := s.authUser(r); u != nil {
+		userID = u.ID
+	}
+	provider, model := s.usageModel(r, tid)
+	s.metrics.addUsage(billed)
+	_ = s.Bill.MeterDeferred(tid, userID, taskType, provider, model, billed)
+	return billed
+}
+
+// balancePayload 组装余额出参（token 主单位 + ≈句数换算）。
+// 返回: tokens=当前余额；approx=按换算率折算的句数（向下取整）。
+func (s *Server) balancePayload(tid int64) (tokens, approx int64) {
+	b, err := s.Store.GetBalance(tid)
+	if err != nil || b == nil {
+		return 0, 0
+	}
+	rate := s.Store.TokenSentenceRate()
+	if rate <= 0 {
+		rate = 500
+	}
+	return b.Balance, b.Balance / rate
 }
 
 // countSentences 统计文本的源句数（按换行与中英文句末标点切分，空段忽略）。

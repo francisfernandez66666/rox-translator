@@ -11,6 +11,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -94,10 +95,18 @@ func (e *Executor) GetFlow(tid int64) *FlowDef {
 
 // Execute 执行整个流程；ticket 状态按步骤推进。
 // 某步失败且可补偿 → 自动重试（≤ maxRetries）；仍失败返回错误。
+// ★ 模式覆盖（在租户 flow_config 之上）：
+//   - ticket.Mode=="fast"：强制精简为「初翻+校对+QA」——关闭 kb_match / evals×2 /
+//     gate / culture_gate / feedback；保留租户对 ai_initial/review/qa 的启停配置
+//   - ticket.CreatedBy==0（OpenAPI 自动任务）：强制跳过 approval / feedback，
+//     保证全自动闭环不停人工审批台
+//
 // 参数：ctx=上下文，ticket=工单对象，onStep=步骤进度回调（step 标识、是否成功、错误信息）。
 func (e *Executor) Execute(ctx context.Context, ticket *store.Ticket, onStep func(step string, ok bool, err string)) error {
 	flow := e.GetFlow(ticket.TenantID)
 	tid := ticket.TenantID
+
+	applyModeOverride(flow, ticket)
 
 	for _, step := range flow.Steps {
 		if ctx.Err() != nil {
@@ -184,6 +193,32 @@ func (e *Executor) runner(key string) (RunFunc, bool) {
 	defer e.mu.Unlock()
 	fn, ok := e.Runs[key]
 	return fn, ok
+}
+
+// applyModeOverride 按工单模式就地覆盖流程步骤启停（不落库，仅本次执行生效）。
+// 规则见 Execute 注释：fast 精简流水线；API 自动任务（CreatedBy=0）跳过审批与自迭代。
+func applyModeOverride(flow *FlowDef, ticket *store.Ticket) {
+	fast := strings.EqualFold(ticket.Mode, "fast")
+	apiTask := ticket.CreatedBy == 0
+	if !fast && !apiTask {
+		return
+	}
+	for _, st := range flow.Steps {
+		if fast {
+			switch st.Key {
+			case "kb_match", "evals_initial", "evals_review", "gate", "culture_gate", "feedback":
+				st.Enabled = false // 快速模式：无知识库/无评估/无硬闸/无文化闸/不自迭代
+			case "ai_initial", "review", "qa":
+				st.Enabled = true // 快速模式语义保证：初翻+校对+质检 必开
+			}
+		}
+		if apiTask {
+			switch st.Key {
+			case "approval", "feedback":
+				st.Enabled = false // API 任务全自动闭环：不停人工审批台、不做未审自迭代
+			}
+		}
+	}
 }
 
 // skipper 取步骤跳过判断（加锁读 map）。

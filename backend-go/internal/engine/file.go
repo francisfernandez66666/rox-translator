@@ -80,6 +80,14 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		finalLangs = []string{"en"}
 	}
 
+	// ★ 双模式：fast 快速模式跳过知识库直配——全部语言并入批量模型直翻
+	fast := ModeFromOptions(options) == "fast"
+	if fast && len(kbLangs) > 0 {
+		directOther = append(directOther, kbLangs...)
+		kbLangs = nil
+		finalLangs = append([]string{}, directOther...)
+	}
+
 	// 第1步：理解文件结构
 	prog("第1步/3：理解文件结构...", 1, 3)
 	texts, err := fileproc.ExtractTexts(filePath)

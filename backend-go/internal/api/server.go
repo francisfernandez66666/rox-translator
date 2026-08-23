@@ -63,6 +63,9 @@ func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist s
 	// 平台存储就绪时初始化计费服务（限流/配额/余额）
 	if st != nil {
 		s.Bill = billing.NewService(st)
+		// ★ Token 计费一次性迁移（幂等）：存量句数余额按换算率折算充入 token 账户，
+		// 完成后置 billing_token_migrated=1，系统自动进入实费计费模式
+		billing.RunTokenMigration(st)
 	}
 	// 工单服务装配：direct 队列（jobs 表）+ worker 池；启动时回收中断任务
 	if st != nil && eng != nil {
@@ -100,6 +103,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/office/taskpane.html", s.handleOfficeTaskPane)
 	s.mux.HandleFunc("/api/admin/memleak/capture", s.handleMemLeakCapture)
 	s.mux.HandleFunc("/api/admin/memleak/log", s.handleMemLeakLog)
+	// ★ 用户反馈：前台提交 + 超管管理
+	s.mux.HandleFunc("/api/feedback", s.handleFeedbackCreate)
+	s.mux.HandleFunc("/api/admin/feedbacks", s.handleAdminFeedbacks)
+	s.mux.HandleFunc("/api/admin/feedbacks/resolve", s.handleAdminFeedbackResolve)
 	// 翻译核心（聊天/文件/下载/语言/KB 统计）
 	s.routesTranslate()
 	// ★ SaaS 租户管理（管理后台）
@@ -294,8 +301,12 @@ func (s *Server) routesWebhooks() {
 }
 
 // routesOpenAPI 注册开放 API（API Key 鉴权）与文档路由。
+// ★ 翻译统一异步任务模型：创建任务→工单 ID→轮询（文本 15s/文件 60s）→产物下载。
 func (s *Server) routesOpenAPI() {
-	s.mux.HandleFunc("/openapi/v1/translate", s.handleOpenAPITranslate)
+	s.mux.HandleFunc("/openapi/v1/tasks", s.handleOpenAPITaskCreate)          // 创建任务（POST）
+	s.mux.HandleFunc("/openapi/v1/tasks/status", s.handleOpenAPITaskStatus)   // 轮询状态（GET ?id=）
+	s.mux.HandleFunc("/openapi/v1/tasks/download", s.handleOpenAPITaskDownload) // 产物下载
+	s.mux.HandleFunc("/openapi/v1/balance", s.handleOpenAPIBalance)           // 余额查询
 	s.mux.HandleFunc("/openapi/v1/kb/stats", s.handleOpenAPIKBStats)
 	s.mux.HandleFunc("/openapi/v1/billing/usage", s.handleOpenAPIUsage)
 	s.mux.HandleFunc("/openapi/v1/apikey/rotate", s.handleOpenAPIKeyRotate)

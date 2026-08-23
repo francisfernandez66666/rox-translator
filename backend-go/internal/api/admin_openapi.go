@@ -6,14 +6,13 @@ package api
 // ========================================
 
 import (
-	"encoding/json"
 	"net/http"
 	"translator/internal/store"
 )
 
 // ============ 开放 API（API Key 鉴权） ============
 
-// handleOpenAPIDocs 开放 API 文档（静态 HTML）
+// handleOpenAPIDocs 开放 API 文档（静态 HTML；任务模型契约说明）
 func (s *Server) handleOpenAPIDocs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(`<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
@@ -22,86 +21,51 @@ func (s *Server) handleOpenAPIDocs(w http.ResponseWriter, r *http.Request) {
 h1{border-bottom:2px solid #1a237e;padding-bottom:8px}code{background:#f0f0f0;padding:2px 6px;border-radius:4px}
 pre{background:#f6f8fa;padding:12px;border-radius:8px;overflow:auto}
 table{border-collapse:collapse;width:100%;margin:10px 0}th,td{border:1px solid #ddd;padding:8px;text-align:left;font-size:14px}th{background:#fafbfd}
-.badge{display:inline-block;background:#e8eaf6;color:#1a237e;border-radius:4px;padding:2px 8px;font-size:12px}</style></head><body>
+.badge{display:inline-block;background:#e8eaf6;color:#1a237e;border-radius:4px;padding:2px 8px;font-size:12px}
+.err{color:#c62828}</style></head><body>
 <h1>翻译平台开放 API</h1>
 <p>所有接口使用 <code>Authorization: Bearer &lt;API_KEY&gt;</code> 认证，API Key 在管理后台「API Key」面板签发。</p>
+<p><b>翻译采用异步任务模型</b>：提交后立即返回 <code>task_id</code>，按建议间隔轮询直至终态
+（仅 <code>completed / failed</code> 为终态；未完成时 <code>status</code> 返回 <code>queued / processing</code>）。
+文本任务建议 <b>15s</b> 轮询一次，文件任务建议 <b>60s</b> 轮询一次。</p>
 <table><tr><th>方法</th><th>路径</th><th>权限</th><th>说明</th></tr>
-<tr><td>POST</td><td>/openapi/v1/translate</td><td class="badge">translate/all</td><td>文本翻译</td></tr>
+<tr><td>POST</td><td>/openapi/v1/tasks</td><td class="badge">translate/all</td><td>创建任务：JSON=文本；multipart=文件批量（≤20个/30MB）</td></tr>
+<tr><td>GET</td><td>/openapi/v1/tasks/status?id=</td><td class="badge">translate/all</td><td>轮询状态与结果</td></tr>
+<tr><td>GET</td><td>/openapi/v1/tasks/download?id=&amp;file_id=</td><td class="badge">translate/all</td><td>文件产物下载（缺省 zip 全部）</td></tr>
+<tr><td>GET</td><td>/openapi/v1/balance</td><td class="badge">*</td><td>查询 token 余额与 ≈句数</td></tr>
 <tr><td>GET</td><td>/openapi/v1/kb/stats</td><td class="badge">kb/all</td><td>知识库条目统计</td></tr>
-<tr><td>GET</td><td>/openapi/v1/billing/usage</td><td class="badge">billing/all</td><td>用量与余额</td></tr>
+<tr><td>GET</td><td>/openapi/v1/billing/usage</td><td class="badge">billing/all</td><td>用量明细</td></tr>
 <tr><td>POST</td><td>/openapi/v1/apikey/rotate</td><td class="badge">all</td><td>轮换 API Key（旧 Key 立即失效）</td></tr>
 </table>
-<h2>翻译请求示例</h2>
-<pre>curl -X POST https://<span>域名</span>/openapi/v1/translate \
+<h2>① 创建文本任务</h2>
+<pre>curl -X POST https://<span>域名</span>/openapi/v1/tasks \
+  -H "Authorization: Bearer &lt;API_KEY&gt;" -H "Content-Type: application/json" \
+  -d '{"text":"请检查制动系统","target_langs":["en","de"],"mode":"pro"}'
+# ← 202 {"success":true,"task_id":123,"ticket_no":"T...","status":"queued",
+#        "mode":"pro","poll_interval_sec":15,"balance_tokens":12500000,...}</pre>
+<h2>② 创建文件批量任务（mode=fast 快速 / pro 专业校对，默认 pro）</h2>
+<pre>curl -X POST https://<span>域名</span>/openapi/v1/tasks \
   -H "Authorization: Bearer &lt;API_KEY&gt;" \
-  -H "Content-Type: application/json" \
-  -d '{"text":"请检查制动系统","target_langs":["en","de"]}'</pre>
-<p>响应：<code>translations</code> 为目标语言→译文映射，<code>sources</code> 标记来源（kb/ai）。</p>
+  -F "files=@手册.docx" -F "files=@清单.xlsx" -F "target_langs=en,de" -F "mode=fast"</pre>
+<h2>③ 轮询状态（文本 15s / 文件 60s）</h2>
+<pre>curl "https://<span>域名</span>/openapi/v1/tasks/status?id=123" -H "Authorization: Bearer &lt;API_KEY&gt;"
+# 处理中 → {"status":"processing","steps":[...]}
+# 文本完成 → {"status":"completed","translations":{"en":"Check the brake system."},"tokens_used":1832}
+# 文件完成 → {"status":"completed","files":[...],"download":"/openapi/v1/tasks/download?id=123"}
+# 失败     → {"status":"failed","error_code":"insufficient_balance","message":"余额不足，请充值或升级套餐"}</pre>
+<h2>错误码（独立出参 error_code）</h2>
+<table>
+<tr><th>error_code</th><th>含义</th></tr>
+<tr><td class="err">insufficient_balance</td><td>余额不足——请充值或升级套餐</td></tr>
+<tr><td class="err">rate_limited</td><td>请求过于频繁，稍后重试</td></tr>
+<tr><td class="err">daily_quota_exceeded</td><td>达到当日用量上限</td></tr>
+<tr><td class="err">bad_request / not_found / forbidden / invalid_api_key / task_failed / not_ready / no_result</td><td>参数/权限/状态类错误</td></tr>
+</table>
+<h2>计费说明</h2>
+<p>按任务全链路<b>真实 LLM token 消耗 × 均摊系数（默认 1.5）</b>从余额扣减；
+专业模式包含知识库匹配、双评估与文化闸门调用，token 消耗高于快速模式。
+响应中 <code>balance_tokens</code> 为当前余额，<code>balance_sentences_approx</code> 为按换算率折算的≈句数。</p>
 </body></html>`))
-}
-
-// handleOpenAPITranslate 开放翻译接口
-func (s *Server) handleOpenAPITranslate(w http.ResponseWriter, r *http.Request) {
-	ak, ok := s.authenticateAPIKey(r)
-	if !ok {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "API Key 无效"})
-		return
-	}
-	if ak.Perms != "all" && ak.Perms != "translate" {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "API Key 无翻译权限"})
-		return
-	}
-	var req struct {
-		Text        string   `json:"text"`         // 待翻译源文本（必填）
-		TargetLangs []string `json:"target_langs"` // 目标语言列表（默认 ["en"]）
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Text == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "text 不能为空"})
-		return
-	}
-	if len(req.TargetLangs) == 0 {
-		req.TargetLangs = []string{"en"}
-	}
-	// ★ 强制计费前置校验（句数模式）：余额不足直接拒绝，错误码 sentence_exhausted
-	tid, release, gateErr := s.gateUsage(r)
-	defer release()
-	if gateErr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "code": gateErr.Error(), "message": gateErr.Error()})
-		return
-	}
-	enforced := false
-	var balanceBefore int64
-	if v, _ := s.Store.GetConfig("sentence_enforced"); v == "1" {
-		enforced = true
-		balanceBefore, _ = s.Store.GetSentenceBalance(tid)
-		if balanceBefore <= 0 {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "code": "sentence_exhausted",
-				"message": "句数余额不足，请购买套餐后重试"})
-			return
-		}
-	}
-	res := s.Engine.HandleText(r.Context(), req.Text, map[string]interface{}{"target_langs": req.TargetLangs}, nil)
-	var balanceAfter int64 = -1
-	if res.Error == "" {
-		// ★ 计量：开放 API 翻译按源文本字符数计量
-		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Text))))
-		// ★ 句数扣减（与前台同链路：源句数 × 目标语言数，受强制计费门控）
-		s.meterSentences(r, tid, req.Text, map[string]interface{}{"target_langs": toAnySlice(req.TargetLangs)})
-		s.metrics.countTranslate("openapi", true)
-	} else {
-		s.metrics.countTranslate("openapi", false)
-	}
-	if enforced {
-		balanceAfter, _ = s.Store.GetSentenceBalance(tid)
-	}
-	writeJSON(w, 200, map[string]interface{}{
-		"success":      true,
-		"translations": res.Data.Translations,
-		"sources":      res.Data.TranslationsSource,
-		"mode":         res.Data.Mode,
-		"reply":        res.Reply,
-		"sentence_balance": balanceAfter,
-	})
 }
 
 // handleOpenAPIKBStats 开放接口：查询本租户知识库统计（需要 kb/all 权限）
@@ -192,13 +156,4 @@ func (s *Server) authenticateAPIKey(r *http.Request) (*store.APIKey, bool) {
 	}
 	s.Store.TouchAPIKey(ak.ID)
 	return ak, true
-}
-
-// toAnySlice 字符串切片转 interface 切片（meterSentences options 兼容）。
-func toAnySlice(in []string) []interface{} {
-	out := make([]interface{}, 0, len(in))
-	for _, v := range in {
-		out = append(out, v)
-	}
-	return out
 }

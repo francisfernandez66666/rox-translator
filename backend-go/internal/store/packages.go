@@ -13,6 +13,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"translator/internal/tenant"
@@ -218,24 +219,29 @@ func (s *Store) DeductSentences(tid, n int64) (int64, error) {
 // ErrSentenceExhausted 句数额度耗尽错误（免费体验句/付费包句数用完后提示购买）。
 var ErrSentenceExhausted = &errTxt{"翻译句数已用尽，请购买套餐或增量包"}
 
-// GrantPackageSentences 向租户发放商业包句数：
+// GrantPackageSentences 向租户发放商业包句数（句包外壳）：
 //   - paid（付费包）：设置订阅包编码/到期时间（DurationDays>0 时计算 PackageExpires），并发放包内含句数
 //   - increment（增量包）：在现有句数余额上追加包内含句数（不改订阅状态与到期）
 //
-// 参数：tid=租户 ID，pkg=商业包对象；返回发放后的句数余额。
+// ★ Token 计费主线：发放句数的同时，按换算率（estimate_tokens_per_sentence，默认 500）
+// 折算为等值 token 充入租户余额账户——余额与扣费的唯一底层单位是 token，
+// 句数字段仅作订阅身份与展示镜像。
+//
+// 参数：tid=租户 ID，pkg=商业包对象；返回发放后的句数余额（镜像值）。
 func (s *Store) GrantPackageSentences(tid int64, pkg *Package) (int64, error) {
 	perms, err := s.GetTenantPerms(tid)
 	if err != nil {
 		return 0, err
 	}
+	granted := pkg.Sentences
 	if pkg.PType == PackageIncrement {
 		// 增量包：追加句数，不改变订阅状态（买断资产无到期概念）
-		perms.SentenceBalance += pkg.Sentences
+		perms.SentenceBalance += granted
 	} else {
 		// 付费包（含免费体验包）：覆盖订阅并发放句数；续费时清除旧到期提醒标记
 		perms.PackageCode = pkg.Code
 		perms.SubscribedAt = time.Now().Format(time.RFC3339)
-		perms.SentenceBalance += pkg.Sentences
+		perms.SentenceBalance += granted
 		if pkg.DurationDays > 0 {
 			perms.PackageExpires = time.Now().AddDate(0, 0, pkg.DurationDays).Format(time.RFC3339)
 		} else {
@@ -247,7 +253,25 @@ func (s *Store) GrantPackageSentences(tid int64, pkg *Package) (int64, error) {
 	if err := s.SaveTenantPerms(tid, perms); err != nil {
 		return 0, err
 	}
+	// ★ 句数折算 token 入账（句包外壳→token 底层的唯一兑换点）
+	if granted > 0 {
+		rate := s.TokenSentenceRate()
+		if tokens := granted * rate; tokens > 0 {
+			_ = s.Charge(tid, tokens)
+		}
+	}
 	return perms.SentenceBalance, nil
+}
+
+// TokenSentenceRate 返回句↔token 展示换算率（estimate_tokens_per_sentence，默认 500）。
+// 用途：句包发放折算、前台「≈句数」展示。后台可调。
+func (s *Store) TokenSentenceRate() int64 {
+	if v, err := s.GetConfig("estimate_tokens_per_sentence"); err == nil && v != "" {
+		if n, perr := strconv.ParseInt(v, 10, 64); perr == nil && n > 0 {
+			return n
+		}
+	}
+	return 500
 }
 
 // ExpirePackage 摘除租户订阅身份（订阅到期由后台扫描调用）：

@@ -111,10 +111,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": res.Error}))
 		s.metrics.countTranslate("text", false)
 	} else {
-		// 成功：计量（按源文本字符数；强制计费模式会扣余额）并推送结果
-		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Message))))
-		// 商业包句数计量：按源句数 × 目标语言数扣减句数余额
-		s.meterSentences(r, tid, req.Message, req.Options)
+		// ★ Token 实费计费：聚合本次全链路真实 token × 均摊系数（强制计费时扣余额）
+		s.chargeTaskTokens(r, tid, "translate")
 		s.metrics.countTranslate("text", true)
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
 		// Webhook：翻译完成事件回调租户配置的 URL（异步投递，不阻塞 SSE 返回）
@@ -237,10 +235,8 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": res.Error}))
 		s.metrics.countTranslate("file", false)
 	} else {
-		// 成功：按提取段数计量（强制计费模式会扣余额）并推送结果
-		s.meterUsage(r, tid, "translate", int64(res.Data.TotalTexts))
-		// 商业包句数计量：文件按「提取段数 × 目标语言数」扣减句数余额
-		s.meterFileSentences(r, tid, res.Data.TotalTexts, options)
+		// ★ Token 实费计费：聚合本次全链路真实 token × 均摊系数（强制计费时扣余额）
+		s.chargeTaskTokens(r, tid, "translate")
 		s.metrics.countTranslate("file", true)
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
 		// Webhook：翻译完成事件回调（异步投递）
@@ -274,10 +270,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		res.Reply = "❌ 处理出错: " + res.Error
 		s.metrics.countTranslate("text", false)
 	} else {
-		// 成功：按源文本字符数计量
-		s.meterUsage(r, tid, "translate", int64(len([]rune(req.Message))))
-		// 商业包句数计量：按源句数 × 目标语言数扣减句数余额
-		s.meterSentences(r, tid, req.Message, req.Options)
+		// ★ Token 实费计费：聚合本次全链路真实 token × 均摊系数（强制计费时扣余额）
+		s.chargeTaskTokens(r, tid, "translate")
 		s.metrics.countTranslate("text", true)
 		// Webhook：翻译完成事件回调（异步投递）
 		s.dispatchTranslateWebhook(tid, "text", req.Message, res)
@@ -347,10 +341,8 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	// 处理完成后删除临时文件
 	os.Remove(savePath)
 	if res.Error == "" {
-		// 成功：按提取段数计量文件翻译用量
-		s.meterUsage(r, tid, "translate", int64(res.Data.TotalTexts))
-		// 商业包句数计量：文件按「提取段数 × 目标语言数」扣减句数余额
-		s.meterFileSentences(r, tid, res.Data.TotalTexts, options)
+		// ★ Token 实费计费：聚合本次全链路真实 token × 均摊系数（强制计费时扣余额）
+		s.chargeTaskTokens(r, tid, "translate")
 		s.metrics.countTranslate("file", true)
 		// Webhook：翻译完成事件回调（异步投递）
 		s.dispatchTranslateWebhook(tid, "file", header.Filename, res)

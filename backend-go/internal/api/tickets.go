@@ -68,6 +68,7 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 		Title       string `json:"title"`        // 工单标题
 		SourceText  string `json:"source_text"`  // 待翻译源文本（必填）
 		TargetLangs string `json:"target_langs"` // 目标语言列表（逗号分隔，默认 en）
+		Mode        string `json:"mode"`         // 翻译模式：fast | pro（默认 pro）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SourceText == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请提供源文本"})
@@ -83,6 +84,7 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	t.Mode = normalizeTaskMode(req.Mode)
 	// 创建工单审计 + 自动入队执行
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_create", "tickets", t.TicketNo)
 	if s.TicketSvc != nil {
@@ -178,6 +180,7 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	t.Mode = normalizeTaskMode(r.FormValue("mode"))
 	tid := s.effTenant(r, u)
 	for _, f := range saved {
 		_, _ = s.Store.AddTicketFile(&store.TicketFile{

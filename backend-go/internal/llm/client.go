@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"translator/internal/config"
@@ -97,6 +98,67 @@ type ChatResponse struct {
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"` // 结束原因（如 stop / length）
 	} `json:"choices"`
+	Usage Usage `json:"usage"` // 本次调用真实 token 用量（OpenAI 兼容 usage 字段）
+}
+
+// Usage 单次 LLM 调用的真实 token 用量（按实际费用计费的数据来源）
+type Usage struct {
+	PromptTokens     int64 `json:"prompt_tokens"`     // 输入 token 数
+	CompletionTokens int64 `json:"completion_tokens"` // 输出 token 数
+}
+
+// Total 返回输入+输出合计 token 数。
+func (u Usage) Total() int64 { return u.PromptTokens + u.CompletionTokens }
+
+// ============ Token 用量收集器（ctx 传播，计费聚合用） ============
+
+// UsageCollector 并发安全的 token 用量累计器：随 ctx 注入并自动传播到全部下游
+// LLM 调用（初翻/校对/Judge/文化闸门/embedding），任务结束时一次性读取汇总值计费。
+type UsageCollector struct {
+	mu         sync.Mutex // 保护并发累加（多语言并发翻译同时写）
+	prompt     int64      // 累计输入 token
+	completion int64      // 累计输出 token
+}
+
+// Add 累加一次调用的 token 用量。
+func (c *UsageCollector) Add(prompt, completion int64) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.prompt += prompt
+	c.completion += completion
+	c.mu.Unlock()
+}
+
+// Totals 返回累计的（输入, 输出）token 数。
+func (c *UsageCollector) Totals() (int64, int64) {
+	if c == nil {
+		return 0, 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.prompt, c.completion
+}
+
+// Total 返回累计的输入+输出合计 token 数。
+func (c *UsageCollector) Total() int64 {
+	p, n := c.Totals()
+	return p + n
+}
+
+// usageCollectorKey ctx 存取键（私有类型防碰撞）
+type usageCollectorKey struct{}
+
+// WithUsageCollector 向 ctx 注入用量收集器（引擎/API 层在进入翻译前调用）。
+func WithUsageCollector(ctx context.Context, uc *UsageCollector) context.Context {
+	return context.WithValue(ctx, usageCollectorKey{}, uc)
+}
+
+// CollectorFrom 从 ctx 取收集器；未注入返回 nil（调用方判空）。
+func CollectorFrom(ctx context.Context) *UsageCollector {
+	uc, _ := ctx.Value(usageCollectorKey{}).(*UsageCollector)
+	return uc
 }
 
 // chatPayload 请求体（map 以便按模型附加参数）
@@ -202,6 +264,10 @@ func (c *Client) doChat(ctx context.Context, endpoint, apiKey string, payload ch
 	if len(cr.Choices) == 0 {
 		return "", "", fmt.Errorf("LLM 无 choices")
 	}
+	// ★ 真实 token 用量归集：ctx 注入收集器时累加（供按实际费用计费）
+	if uc := CollectorFrom(ctx); uc != nil {
+		uc.Add(cr.Usage.PromptTokens, cr.Usage.CompletionTokens)
+	}
 	return strings.TrimSpace(cr.Choices[0].Message.Content), cr.Choices[0].FinishReason, nil
 }
 
@@ -216,6 +282,7 @@ type EmbedResponse struct {
 	Data []struct {
 		Embedding []float64 `json:"embedding"` // 嵌入向量（float64 数组）
 	} `json:"data"`
+	Usage Usage `json:"usage"` // 嵌入调用 token 用量（KB 匹配成本归集）
 }
 
 // Embed 单条文本嵌入（智谱 embedding-2，1024 维），返回归一化向量。
@@ -302,6 +369,10 @@ func (c *Client) embedChunk(ctx context.Context, texts []string) ([][]float32, e
 	var er EmbedResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&er); err != nil {
 		return nil, err
+	}
+	// ★ embedding token 用量归集（KB 匹配成本计入租户账单）
+	if uc := CollectorFrom(ctx2); uc != nil {
+		uc.Add(er.Usage.PromptTokens, er.Usage.CompletionTokens)
 	}
 	// 转 float32 并做 L2 归一化（除以向量模长，便于余弦相似度点积检索）
 	out := make([][]float32, len(er.Data))

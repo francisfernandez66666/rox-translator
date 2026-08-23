@@ -44,10 +44,15 @@
       <div class="tp-row">
         <label>{{ t('tk.langsLabel') }}</label>
         <LangMultiSelect v-model="selectedLangs" />
-        <!-- 报价预览：预计消耗与余额 -->
-        <span v-if="estimate && estimate.sentence_enforced" class="tp-estimate" :class="{ warn: !estimate.activated }">
-          <template v-if="!estimate.activated">⚠️ {{ estimate.hint || t('tk.estUnavailable') }}</template>
-          <template v-else>{{ tpl('tk.estimateLine', { cost: estimate.cost, balance: estimate.balance }) }}</template>
+        <!-- ★ 翻译模式：⚡快速（无知识库·初翻+校对）/ 🎓专业校对（全流水线） -->
+        <select v-model="qualityMode" class="ad-input" style="width:auto" :title="t('tk.modeTip')">
+          <option value="pro">🎓 {{ t('tk.modePro') }}</option>
+          <option value="fast">⚡ {{ t('tk.modeFast') }}</option>
+        </select>
+        <!-- 报价预览：token 区间 + ≈句数 + 余额 -->
+        <span v-if="estimate" class="tp-estimate" :class="{ warn: !estimate.sufficient }">
+          <template v-if="!estimate.sufficient">⚠️ {{ estimate.hint || t('tk.estUnavailable') }}</template>
+          <template v-else>{{ tpl('tk.estimateTokens', { min: fmtNum(estimate.tokens_min), max: fmtNum(estimate.tokens_max), s: fmtNum(estimate.cost_sentences_approx), bal: fmtNum(estimate.balance_tokens) }) }}</template>
         </span>
         <button class="ad-btn ad-btn-green tp-submit" :disabled="creating || estimateBlocked" @click="create">
           {{ creating ? t('tk.submitting') : t('tk.create') }}
@@ -76,6 +81,7 @@
             <td class="ad-td">
               <button v-if="tk.status === 'draft'" class="ad-btn-sm" @click="run(tk)">{{ t('tk.run') }}</button>
               <button v-if="tk.status === 'completed'" class="ad-btn-sm ad-btn-green" @click="download(tk)">⬇ {{ t('tk.download') }}</button>
+              <button v-if="tk.status === 'completed'" class="ad-btn-sm" @click="openFeedback(tk)">💬 {{ t('fb.entry') }}</button>
               <button class="ad-btn-sm" @click="toggleDetail(tk)">{{ t('tk.detail') }}</button>
             </td>
           </tr>
@@ -102,12 +108,21 @@
         </p>
       </div>
     </div>
+
+    <!-- ★ 用户反馈弹窗（已完成工单 → 超管） -->
+    <FeedbackModal
+      v-if="feedbackTarget"
+      :target="feedbackTarget"
+      @close="feedbackTarget = null"
+      @submitted="onFeedbackSubmitted"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import LangMultiSelect from './LangMultiSelect.vue'
+import FeedbackModal from './FeedbackModal.vue'
 import { myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail, ticketDownload, translationEstimate } from '@/api'
 import { t, tpl } from '@/i18n'
 import { fmtTime } from './admin/ui'
@@ -115,6 +130,20 @@ import { fmtTime } from './admin/ui'
 // 创建表单与模式
 // 创建模式：text=粘贴文本 / file=上传文件（支持混合类型多选：pdf+word+ppt+excel 等任意组合）
 const mode = ref<'text' | 'file'>('text')
+// ★ 翻译模式：fast 快速 / pro 专业校对（默认 pro；随创建请求透传）
+const qualityMode = ref(localStorage.getItem('translate_mode') || 'pro')
+// fmtNum 千分位格式化（报价展示用）
+function fmtNum(n: number): string {
+  return new Intl.NumberFormat().format(Math.max(0, Math.floor(n || 0)))
+}
+// ★ 反馈弹窗目标（已完成工单）
+const feedbackTarget = ref<any>(null)
+function openFeedback(tk: any) {
+  feedbackTarget.value = { type: 'ticket', ticket_id: tk.id, mode: tk.mode || 'pro' }
+}
+function onFeedbackSubmitted() {
+  alert(t('fb.done'))
+}
 const form = ref({ title: '', text: '' })
 // 目标语言（与工作台同款多选选择器；默认 en）
 const selectedLangs = ref<string[]>(['en'])
@@ -140,14 +169,15 @@ async function refreshEstimate() {
   const text = form.value.text.trim()
   if (!text) { estimate.value = null; return }
   try {
-    const r: any = await translationEstimate({ text, target_langs: [...selectedLangs.value] })
+    const r: any = await translationEstimate({ text, target_langs: [...selectedLangs.value], mode: qualityMode.value })
     if (r.success) estimate.value = r
   } catch { estimate.value = null }
 }
-// estimateBlocked 强制按句计费且账号未开通额度时禁止提交工单
+// estimateBlocked 强制计费且额度不足/未开通时禁止提交工单
 const estimateBlocked = computed(() => {
-  if (!estimate.value || !estimate.value.sentence_enforced) return false
-  return !estimate.value.activated
+  if (!estimate.value) return false
+  if (estimate.value.sufficient === false) return true
+  return estimate.value.activated === false
 })
 
 // QA 质检摘要（从工单 final_result 解析 qa_report）
@@ -191,6 +221,7 @@ async function create() {
         title: form.value.title.trim() || t('tk.defaultTitle'),
         source_text: form.value.text,
         target_langs: langsJoined.value,
+        mode: qualityMode.value,
       })
     } else {
       if (!files.value.length) return
@@ -198,6 +229,7 @@ async function create() {
       r = await ticketCreateFile([...files.value], {
         title: form.value.title.trim(),
         target_langs: langsJoined.value,
+        mode: qualityMode.value,
       })
     }
     if (!r.success) { alert(r.message); return }

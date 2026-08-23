@@ -80,6 +80,7 @@ import ApiKeys from './admin/ApiKeys.vue'
 import Webhooks from './admin/Webhooks.vue'
 import Tickets from './admin/Tickets.vue'
 import Audit from './admin/Audit.vue'
+import Feedback from './admin/Feedback.vue'
 // 共享样式（非 scoped，供全部面板使用）
 import './admin/admin.css'
 // 国际化：文案取词 + 语言切换
@@ -120,6 +121,7 @@ const workspaces: Record<number, WorkspaceDef> = {
       { key: 'tickets', label: 'admin.tickets', comp: Tickets },
       { key: 'audit', label: 'admin.auditPanel', comp: Audit },
       { key: 'alerts', label: 'admin.alerts', comp: Alerts },
+      { key: 'feedbacks', label: 'admin.feedbackPanel', comp: Feedback },
     ],
   },
   // 企业管理（租户管理员）

@@ -85,16 +85,16 @@ func (w *Workflow) registerSteps() {
 
 // 工单翻译中间结果（存于 ticket state payload）
 type ticketPayload struct {
-	SourceText   string                 `json:"source_text"`  // 源文本
-	TargetLangs  []string               `json:"target_langs"` // 目标语言列表
-	Translations map[string]string      `json:"translations"` // 语言 → 译文
-	Sources      map[string]string      `json:"sources"`      // 语言 → 来源（kb/model）
-	Mode         string                 `json:"mode"`         // 匹配模式标识
-	EvalScores   map[string]float64     `json:"eval_scores"`  // 语言 → 评估总分
-	ReviewEvalScores map[string]float64 `json:"review_eval_scores,omitempty"` // 语言 → 校对评估总分
-	Gate         *gate.GateResult       `json:"gate"`         // Gate 校验结果
-	Culture      *culture.CultureResult `json:"culture"`      // 语言文化闸门结果
-	QAReport     *qa.Report             `json:"qa_report,omitempty"` // 确定性 QA 质检报告
+	SourceText       string                 `json:"source_text"`                  // 源文本
+	TargetLangs      []string               `json:"target_langs"`                 // 目标语言列表
+	Translations     map[string]string      `json:"translations"`                 // 语言 → 译文
+	Sources          map[string]string      `json:"sources"`                      // 语言 → 来源（kb/model）
+	Mode             string                 `json:"mode"`                         // 匹配模式标识
+	EvalScores       map[string]float64     `json:"eval_scores"`                  // 语言 → 评估总分
+	ReviewEvalScores map[string]float64     `json:"review_eval_scores,omitempty"` // 语言 → 校对评估总分
+	Gate             *gate.GateResult       `json:"gate"`                         // Gate 校验结果
+	Culture          *culture.CultureResult `json:"culture"`                      // 语言文化闸门结果
+	QAReport         *qa.Report             `json:"qa_report,omitempty"`          // 确定性 QA 质检报告
 }
 
 // parseTicketLang 从 target_langs 逗号分隔字符串解析语言列表。

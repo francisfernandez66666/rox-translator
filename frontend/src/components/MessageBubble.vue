@@ -70,6 +70,10 @@
             {{ message.data.translations_source[lang] === 'kb' ? t('msg.kb') : t('msg.ai') }}
           </span>
         </div>
+        <!-- ★ 反馈入口：对翻译结果提交意见（直达超管） -->
+        <div class="msg-feedback-row">
+          <button class="feedback-btn" @click="$emit('feedback', message)" :title="t('fb.entryTip')">💬 {{ t('fb.entry') }}</button>
+        </div>
       </div>
 
       <!-- ★ 普通文本内容（Markdown渲染） -->
@@ -172,6 +176,9 @@ function getLangName(lang: string): string {
 
 // 组件入参：需要渲染的单条聊天消息
 const props = defineProps<{ message: ChatMessage }>()
+
+// 组件事件：feedback——用户点击翻译结果的「反馈」按钮，携带整条消息供父组件组装上下文
+defineEmits<{ feedback: [message: ChatMessage] }>()
 
 // 移动端标记：窗口宽度 ≤ 768px 时启用移动端样式
 const isMobile = ref(window.innerWidth <= 768)
@@ -742,4 +749,9 @@ function getFileName(path: string): string {
   height: 32px;
   font-size: 14px;
 }
+
+/* ★ 反馈入口行：翻译结果下方的小按钮 */
+.msg-feedback-row { margin-top: 6px; display: flex; justify-content: flex-end; }
+.feedback-btn { border: none; background: transparent; color: #5f6368; font-size: 12px; cursor: pointer; padding: 2px 8px; border-radius: 10px; }
+.feedback-btn:hover { background: rgba(26,115,232,.08); color: #1a73e8; }
 </style>

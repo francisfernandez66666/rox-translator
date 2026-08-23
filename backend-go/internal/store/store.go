@@ -342,6 +342,24 @@ func (s *Store) migrate() error {
 			read_at TEXT NOT NULL DEFAULT '',             -- 已读时间（空=未读）
 			created_at TEXT
 		)`,
+		// ---------- feedbacks 用户反馈（前台翻译结果 → 超管） ----------
+		`CREATE TABLE IF NOT EXISTS feedbacks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id INTEGER NOT NULL DEFAULT 0,         -- 所属租户 ID
+			user_id INTEGER NOT NULL DEFAULT 0,           -- 反馈用户 ID
+			target_type TEXT NOT NULL DEFAULT 'text',     -- 反馈对象：text | ticket
+			ticket_id INTEGER NOT NULL DEFAULT 0,         -- 工单 ID（text 类型为 0）
+			source_text TEXT NOT NULL DEFAULT '',         -- 源文本上下文（勾选同意才存）
+			translations TEXT NOT NULL DEFAULT '',        -- 译文 JSON 上下文（勾选同意才存）
+			target_langs TEXT NOT NULL DEFAULT '',        -- 目标语言列表
+			mode TEXT NOT NULL DEFAULT '',                -- 翻译模式：fast | pro
+			content TEXT NOT NULL,                        -- 反馈意见（必填）
+			with_context INTEGER NOT NULL DEFAULT 0,      -- 是否同意附带上下文：1=是
+			status TEXT NOT NULL DEFAULT 'open',          -- 处理状态：open | resolved
+			handle_note TEXT NOT NULL DEFAULT '',         -- 超管处理备注
+			created_at TEXT,
+			handled_at TEXT
+		)`,
 	}
 	for _, stmt := range stmts {
 		// 逐条幂等执行建表语句，失败即中止迁移
@@ -406,6 +424,8 @@ func (s *Store) migrateColumns() error {
 		{"tm_segments", "pack_id", "ALTER TABLE tm_segments ADD COLUMN pack_id INTEGER NOT NULL DEFAULT 0"},
 		// 工单结果文件路径（原格式回写产物或 xlsx 对照表）
 		{"tickets", "result_path", "ALTER TABLE tickets ADD COLUMN result_path TEXT NOT NULL DEFAULT ''"},
+		// 翻译模式：fast 快速（无KB/初翻+校对）/ pro 专业校对（全流水线）；空=pro
+		{"tickets", "mode", "ALTER TABLE tickets ADD COLUMN mode TEXT NOT NULL DEFAULT ''"},
 		// 工单产物保留期：完成时间 + N 天（到期由后台扫描清理文件；核心译文已入 tm_segments 长期保留）
 		{"tickets", "result_expires_at", "ALTER TABLE tickets ADD COLUMN result_expires_at TEXT NOT NULL DEFAULT ''"},
 		// 产物过期提醒档位去重标记（逗号分隔：14,7,3,1）

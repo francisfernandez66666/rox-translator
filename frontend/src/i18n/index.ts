@@ -25,6 +25,7 @@ import * as pAlerts from './panels/alerts'
 import * as pInvites from './panels/invites'
 import * as pChat from './panels/chat'
 import * as pPackages from './panels/packages'
+import * as pFeedback from './panels/feedback'
 
 // Lang 支持的语言类型：zh=中文（默认）、en=英文
 export type Lang = 'zh' | 'en'
@@ -186,6 +187,9 @@ const baseZh: Dict = {
   'tk.langsPlaceholder': '目标语言，逗号分隔（默认 en）',
   'tk.create': '创建并入队', 'tk.submitting': '提交中…',
   'tk.estimateLine': '预计消耗 {cost} 句 · 余额 {balance} 句', 'tk.estUnavailable': '额度不可用',
+  'tk.modeFast': '⚡ 快速（无知识库）', 'tk.modePro': '🎓 专业校对',
+  'tk.modeTip': '⚡快速：AI初翻+校对，十秒级｜🎓专业校对：知识库+评估+硬闸全流水线',
+  'tk.estimateTokens': '预计消耗 ≈{min}~{max} token（约 {s} 句）· 余额 {bal}',
   'tk.qaSummary': '{errors} 处错误 / {warnings} 处警告',
   'tk.createHint': '创建后进入异步队列，完成后站内信通知下载；大文件翻译请使用此模式',
   'tk.myTickets': '我的工单',
@@ -392,6 +396,9 @@ const baseEn: Dict = {
   'tk.langsPlaceholder': 'Target langs, comma separated (default en)',
   'tk.create': 'Create & Queue', 'tk.submitting': 'Submitting…',
   'tk.estimateLine': 'Est. {cost} sentences · balance {balance}', 'tk.estUnavailable': 'Quota unavailable',
+  'tk.modeFast': '⚡ Fast (no KB)', 'tk.modePro': '🎓 Pro Review',
+  'tk.modeTip': '⚡ Fast: AI draft + review, ~seconds | 🎓 Pro: full pipeline with KB + evals + hard gate',
+  'tk.estimateTokens': 'Est. {min}~{max} tokens (≈ {s} sentences) · Balance {bal}',
   'tk.qaSummary': '{errors} errors / {warnings} warnings',
   'tk.createHint': 'Queued for async processing; you will be notified on completion. Use this mode for large files.',
   'tk.myTickets': 'My Jobs',
@@ -472,7 +479,7 @@ const zh: Dict = {
   ...pAlerts.zh,
   ...pInvites.zh,
   ...pChat.zh,
-  ...pPackages.zh,
+  ...pPackages.zh, ...pFeedback.zh,
 }
 
 const en: Dict = {
@@ -492,7 +499,7 @@ const en: Dict = {
   ...pAlerts.en,
   ...pInvites.en,
   ...pChat.en,
-  ...pPackages.en,
+  ...pPackages.en, ...pFeedback.en,
 }
 
 const dicts: Record<Lang, Dict> = { zh, en }

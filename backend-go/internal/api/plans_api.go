@@ -38,7 +38,9 @@ func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 
 // handleMyPackage 当前租户包信息接口（登录用户）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。
-// 返回: success=true 时携带 sentence_balance（剩余句数）/package_code/subscribed_at/pay_mode。
+// 返回: success=true 时携带 balance_tokens（token 余额，主单位）/balance_sentences_approx（≈句数）/
+//
+//	package_code/subscribed_at/package_expires/pay_mode；旧字段 sentence_balance 兼容保留。
 func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
@@ -46,20 +48,17 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.effTenant(r, u)
-	enforced := false
-	balance := int64(0)
 	var pkgCode, subAt, pkgExpires string
-	// 平台上下文（tid<=0）无计费概念：强制计费视为关闭、余额不返回
+	tokens, approx := int64(0), int64(0)
+	sentenceMirror := int64(0)
+	// 平台上下文（tid<=0）无计费概念：余额返回 0
 	if tid > 0 {
-		if v, _ := s.Store.GetConfig("sentence_enforced"); v == "1" {
-			enforced = true
-		}
-		perms, err := s.Store.GetTenantPerms(tid)
-		if err == nil {
-			balance = perms.SentenceBalance
+		tokens, approx = s.balancePayload(tid)
+		if perms, err := s.Store.GetTenantPerms(tid); err == nil {
 			pkgCode = perms.PackageCode
 			subAt = perms.SubscribedAt
 			pkgExpires = perms.PackageExpires
+			sentenceMirror = perms.SentenceBalance
 		}
 	}
 	payMode := "mock"
@@ -67,13 +66,14 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		payMode = v
 	}
 	writeJSON(w, 200, map[string]interface{}{
-		"success":           true,
-		"sentence_enforced": enforced,
-		"sentence_balance":  balance,
-		"package_code":      pkgCode,
-		"subscribed_at":     subAt,
-		"package_expires":   pkgExpires,
-		"pay_mode":          payMode,
+		"success":                  true,
+		"balance_tokens":           tokens,
+		"balance_sentences_approx": approx,
+		"sentence_balance":         sentenceMirror, // 兼容字段：历史句数镜像
+		"package_code":             pkgCode,
+		"subscribed_at":            subAt,
+		"package_expires":          pkgExpires,
+		"pay_mode":                 payMode,
 	})
 }
 

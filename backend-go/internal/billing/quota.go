@@ -143,14 +143,20 @@ func NewService(st *store.Store) *Service {
 	return &Service{Store: st}
 }
 
-// Enabled 是否强制计费（扣余额 + 余额不足停服）。默认关闭，仅留痕计量。
-// 由系统配置 billing_enforced=1 开启（用于 SaaS 销售模式）。
+// Enabled 是否强制计费（扣余额 + 余额不足停服）。
+// 触发条件（任一满足）：billing_enforced=1 或已完成 token 迁移（billing_token_migrated=1）。
+// Token 计费主线：迁移完成后系统自动进入「按实际 token 扣费」模式。
 func (s *Service) Enabled() bool {
 	if s.Store == nil {
 		return false
 	}
-	v, _ := s.Store.GetConfig("billing_enforced")
-	return v == "1"
+	if v, _ := s.Store.GetConfig("billing_enforced"); v == "1" {
+		return true
+	}
+	if v, _ := s.Store.GetConfig("billing_token_migrated"); v == "1" {
+		return true
+	}
+	return false
 }
 
 // Meter 计量一次用量。强制计费时扣余额；否则仅记录 usage_ledger 留痕。

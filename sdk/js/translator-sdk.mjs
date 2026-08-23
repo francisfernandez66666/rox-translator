@@ -1,22 +1,35 @@
 // ============================================================================
 // translator-sdk.mjs — 翻译助手开放 API JavaScript SDK（零依赖，fetch/Node18+/浏览器通用）
-// 对接端点：/openapi/v1/translate · /openapi/v1/kb/stats ·
-//          /openapi/v1/billing/usage · /openapi/v1/apikey/rotate
+// 对接端点（异步任务模型）：
+//   POST /openapi/v1/tasks           创建任务（JSON=文本；multipart=文件批量）
+//   GET  /openapi/v1/tasks/status    轮询状态
+//   GET  /openapi/v1/tasks/download  文件产物下载
+//   GET  /openapi/v1/balance         查询 token 余额与 ≈句数
 // 用法示例：
 //   import { TranslatorClient } from "./translator-sdk.mjs";
 //   const cli = new TranslatorClient("https://translator.example.com", "tk_xxx");
-//   const r = await cli.translate("蓝牙钥匙已激活", ["en", "ja"]);
+//
+//   // 文本翻译：提交 → 自动轮询（15s）→ 译文
+//   const r = await cli.translateAndWait("蓝牙钥匙已激活", ["en", "ja"]);
 //   console.log(r.translations);
+//
+//   // 文件批量：提交 → 轮询（60s）→ 下载产物
+//   const t = await cli.createFileTask(files, ["en"], "pro");
+//   await cli.waitTask(t.task_id);
+//   await cli.downloadFile(t.task_id, "./out.zip");
 // ============================================================================
 
 export class TranslatorError extends Error {
   constructor(message, status, body) {
     super(message);
     this.name = "TranslatorError";
-    this.status = status; // HTTP 状态码或业务错误码（如 sentence_exhausted）
+    this.status = status;
+    this.errorCode = body?.error_code || null; // 如 insufficient_balance
     this.body = body;
   }
 }
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class TranslatorClient {
   /**
@@ -30,19 +43,15 @@ export class TranslatorClient {
     this.timeoutMs = timeoutMs;
   }
 
-  /** @internal 统一 POST */
-  async #post(path, payload) {
+  /** @internal 统一 fetch（JSON 响应 + 错误码提取） */
+  async #fetch(path, init) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
     let resp;
     try {
       resp = await fetch(this.base + path, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify(payload),
+        ...init,
+        headers: { Authorization: `Bearer ${this.apiKey}`, ...(init.headers || {}) },
         signal: ctrl.signal,
       });
     } catch (e) {
@@ -55,60 +64,103 @@ export class TranslatorClient {
     try {
       data = JSON.parse(text);
     } catch {
-      throw new TranslatorError(`HTTP ${resp.status}: ${text}`, resp.status, text);
+      if (!resp.ok) throw new TranslatorError(`HTTP ${resp.status}: ${text}`, resp.status, text);
+      return text; // 二进制/文本响应由调用方处理（download 单独走 raw 分支）
     }
-    if (!resp.ok) throw new TranslatorError(data.message || `HTTP ${resp.status}`, resp.status, data);
+    if (data && data.success === false) {
+      throw new TranslatorError(data.message || `HTTP ${resp.status}`, resp.status, data);
+    }
     return data;
   }
 
-  /**
-   * 翻译文本
-   * @param {string} text 源文本（必填）
-   * @param {string[]} [targetLangs] 目标语言代码列表，缺省 ["en"]
-   * @returns {Promise<{success:boolean, translations:Record<string,string>, sources?:object, mode?:string, sentence_balance?:number}>}
-   */
-  async translate(text, targetLangs) {
-    const body = { text };
-    if (targetLangs && targetLangs.length) body.target_langs = targetLangs;
-    const r = await this.#post("/openapi/v1/translate", body);
-    if (!r.success) throw new TranslatorError(r.message || "翻译失败", r.code, r);
+  #postJson(path, payload) {
+    return this.#fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // ---------- 任务创建 ----------
+  /** 创建文本翻译任务。mode: "pro"(默认)/"fast"。返回 {task_id, poll_interval_sec, balance_tokens...} */
+  createTask(text, targetLangs, mode = "pro", title = "") {
+    const body = { text, mode };
+    if (targetLangs) body.target_langs = targetLangs;
+    if (title) body.title = title;
+    return this.#postJson("/openapi/v1/tasks", body);
+  }
+
+  /** 创建文件批量翻译任务（≤20 个 / ≤30MB）。files: File|Blob[]（带 name）。 */
+  async createFileTask(files, targetLangs, mode = "pro", title = "") {
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f, f.name || `file-${Date.now()}`);
+    fd.append("target_langs", (targetLangs || []).join(",") || "en");
+    fd.append("mode", mode);
+    if (title) fd.append("title", title);
+    const r = await this.#fetch("/openapi/v1/tasks", { method: "POST", body: fd });
+    if (!r.success) throw new TranslatorError(r.message, 200, r);
     return r;
   }
 
-  /** 批量翻译：逐条调用，返回 [{text, result|error}]；stopOnError=true 时遇错抛出 */
-  async translateBatch(texts, targetLangs, stopOnError = false) {
-    const out = [];
-    for (const t of texts) {
-      try {
-        out.push({ text: t, result: await this.translate(t, targetLangs) });
-      } catch (e) {
-        if (stopOnError) throw e;
-        out.push({ text: t, error: e });
-      }
+  /** 查询任务状态。status ∈ queued/processing/completed/failed（失败带 error_code）。 */
+  getTask(taskId) {
+    return this.#fetch(`/openapi/v1/tasks/status?id=${taskId}`);
+  }
+
+  /** 阻塞轮询直至终态；interval 缺省用服务端建议值（文本 15s / 文件 60s）。 */
+  async waitTask(taskId, interval = null, timeoutMs = 30 * 60 * 1000) {
+    const deadline = Date.now() + timeoutMs;
+    let gap = interval;
+    for (;;) {
+      const r = await this.getTask(taskId);
+      if (r.status === "completed") return r;
+      if (r.status === "failed") throw new TranslatorError(r.error || "任务失败", 200, r);
+      if (Date.now() > deadline) throw new TranslatorError("轮询超时，任务仍在处理");
+      gap = gap || r.poll_interval_sec * 1000 || 15000;
+      await sleep(gap);
     }
-    return out;
   }
 
-  /** 知识库统计（需 Key 具备 kb/all 权限） */
-  async kbStats() {
-    const r = await this.#post("/openapi/v1/kb/stats", {});
-    if (!r.success) throw new TranslatorError(r.message || "查询失败", undefined, r);
-    return r;
+  /** 一站式文本翻译：提交 + 等待完成，返回含 translations 的响应。 */
+  async translateAndWait(text, targetLangs, mode = "pro", timeoutMs) {
+    const created = await this.createTask(text, targetLangs, mode);
+    return this.waitTask(created.task_id, created.poll_interval_sec * 1000, timeoutMs);
   }
 
-  /** 用量汇总（需 Key 具备 billing/all 权限） */
-  async usage() {
-    const r = await this.#post("/openapi/v1/billing/usage", {});
-    if (!r.success) throw new TranslatorError(r.message || "查询失败", undefined, r);
-    return r;
+  /** 下载文件任务产物（fileId 缺省打包 zip），保存为 Blob 由调用方落地。 */
+  async downloadFile(taskId, fileId = null) {
+    const qs = `/openapi/v1/tasks/download?id=${taskId}` + (fileId ? `&file_id=${fileId}` : "");
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs * 10); // 大文件放宽超时
+    try {
+      const resp = await fetch(this.base + qs, {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+        signal: ctrl.signal,
+      });
+      if (!resp.ok) throw new TranslatorError(`下载失败 HTTP ${resp.status}`, resp.status);
+      return await resp.blob();
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
-  /** 轮换当前 API Key（旧 Key 立即失效） */
-  async rotateApiKey() {
-    const r = await this.#post("/openapi/v1/apikey/rotate", {});
-    if (!r.success) throw new TranslatorError(r.message || "轮换失败", undefined, r);
-    return r;
+  /** 查询 token 余额与 ≈句数：{balance_tokens, balance_sentences_approx}。 */
+  balance() {
+    return this.#fetch("/openapi/v1/balance");
+  }
+
+  /** 知识库统计（需 kb/all 权限）。 */
+  kbStats() {
+    return this.#postJson("/openapi/v1/kb/stats", {});
+  }
+
+  /** 用量汇总（需 billing/all 权限）。 */
+  usage() {
+    return this.#postJson("/openapi/v1/billing/usage", {});
+  }
+
+  /** 轮换当前 Key（旧 Key 立即失效）。 */
+  rotateApiKey() {
+    return this.#postJson("/openapi/v1/apikey/rotate", {});
   }
 }
-
-export default TranslatorClient;

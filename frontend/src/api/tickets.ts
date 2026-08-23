@@ -66,7 +66,7 @@ export async function myTickets(): Promise<TicketResp> {
 }
 
 // 创建文本翻译工单（入队即返回 ticket_no）
-export async function ticketCreate(data: { title: string; source_text: string; target_langs: string }): Promise<TicketResp> {
+export async function ticketCreate(data: { title: string; source_text: string; target_langs: string; mode?: string }): Promise<TicketResp> {
   return request('/api/tickets/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
@@ -122,7 +122,7 @@ export async function notificationsReadAll(): Promise<AdminResp> {
 
 // 文件工单创建（multipart 上传，≤10MB；支持 docx/xlsx/pptx/pdf/txt/csv）
 // 文件建单：支持多文件（files 字段可重复），共享 10MB 上限
-export async function ticketCreateFile(files: File | File[], meta: { title: string; target_langs: string }): Promise<TicketResp> {
+export async function ticketCreateFile(files: File | File[], meta: { title: string; target_langs: string; mode?: string }): Promise<TicketResp> {
   const fd = new FormData()
   const list = Array.isArray(files) ? files : [files]
   for (const f of list) fd.append('files', f)

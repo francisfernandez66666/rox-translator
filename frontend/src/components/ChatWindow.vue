@@ -22,7 +22,12 @@
       <span v-for="p in me.kb_packs" :key="p.id" class="chat-balance" style="background:rgba(33,90,154,.10);color:#215a9a" :title="t('chat.kbPackTip')">
         📚 {{ packLabel(p.pack_type) }}
       </span>
-      <span v-if="billingEnforced" class="chat-balance" :title="t('chat.balanceTip')">🟢 {{ tpl('chat.balance', { n: sentenceBalance ?? '—' }) }}</span>
+      <span v-if="balanceInfo" class="chat-balance" :title="t('chat.balanceTip')">🟢 {{ tpl('chat.balanceTokens', { n: fmtNum(balanceInfo.tokens), s: fmtNum(balanceInfo.approx) }) }}</span>
+      <!-- ★ 双模式切换：⚡快速（无知识库·初翻+校对）/ 🎓专业校对（全流水线） -->
+      <div class="mode-switch" :title="t('chat.modeTip')">
+        <button :class="['mode-btn', translateMode === 'fast' ? 'on' : '']" @click="setMode('fast')">⚡ {{ t('chat.modeFast') }}</button>
+        <button :class="['mode-btn', translateMode !== 'fast' ? 'on' : '']" @click="setMode('pro')">🎓 {{ t('chat.modePro') }}</button>
+      </div>
       <button class="clear-btn" style="margin-left:auto" @click="store.clearMessages()" :title="t('chat.clearChat')">
         🗑️
       </button>
@@ -63,6 +68,7 @@
         v-for="msg in store.messages"
         :key="msg.id"
         :message="msg"
+        @feedback="openFeedback"
       />
 
       <!-- ===== 加载动画（非翻译进度时显示"正在翻译"点动画） ===== -->
@@ -227,9 +233,9 @@
         ></textarea>
 
         <!-- 报价预览：预计消耗与余额（强制计费且未开通时禁发并提示） -->
-        <div v-if="estimate && estimate.sentence_enforced" class="estimate-hint" :class="{ 'estimate-warn': estimateBlocked }">
-          <template v-if="!estimate.activated">⚠️ {{ estimate.hint || '额度不可用' }}</template>
-          <template v-else>{{ tpl('chat.estimateLine', { cost: estimate.cost, balance: estimate.balance }) }}</template>
+        <div v-if="estimate" class="estimate-hint" :class="{ 'estimate-warn': estimateBlocked }">
+          <template v-if="!estimate.sufficient">⚠️ {{ estimate.hint || '额度不足，请充值或升级套餐' }}</template>
+          <template v-else>{{ tpl('chat.estimateTokens', { min: fmtNum(estimate.tokens_min), max: fmtNum(estimate.tokens_max), s: fmtNum(estimate.cost_sentences_approx), bal: fmtNum(estimate.balance_tokens) }) }}</template>
         </div>
 
         <button
@@ -254,6 +260,13 @@
       </div>
     </div>
 
+    <!-- ★ 用户反馈弹窗（翻译结果 → 超管） -->
+    <FeedbackModal
+      v-if="feedbackTarget"
+      :target="feedbackTarget"
+      @close="feedbackTarget = null"
+      @submitted="onFeedbackSubmitted"
+    />
   </div>
 </template>
 
@@ -273,19 +286,20 @@ import MessageBubble from './MessageBubble.vue'
 // 全局聊天 Store 实例
 const store = useChatStore()
 
-// 剩余句数（个人级消耗看板；从 /api/me/package 读取）
-// 仅当后台开启强制计费（sentence_enforced=1）时才展示余额徽标
-const sentenceBalance = ref<number | null>(null)
-const billingEnforced = ref(false)
-// loadBalance 拉取剩余句数与强制计费开关（接口失败时视为未开启计费）
+// Token 余额（个人级消耗看板；从 /api/me/package 读取，展示 token 主单位 + ≈句数）
+const balanceInfo = ref<{ tokens: number; approx: number } | null>(null)
+// fmtNum 千分位格式化（模板展示用）
+function fmtNum(n: number): string {
+  return new Intl.NumberFormat().format(Math.max(0, Math.floor(n || 0)))
+}
+// loadBalance 拉取 token 余额与 ≈句数换算（接口失败时不展示徽标）
 async function loadBalance() {
   try {
-    const r = await myPackage()
-    if (r.success) {
-      sentenceBalance.value = (r as any).sentence_balance ?? null
-      billingEnforced.value = !!(r as any).sentence_enforced
+    const r: any = await myPackage()
+    if (r.success && typeof r.balance_tokens === 'number') {
+      balanceInfo.value = { tokens: r.balance_tokens, approx: r.balance_sentences_approx ?? Math.floor(r.balance_tokens / 500) }
     }
-  } catch { billingEnforced.value = false }
+  } catch { balanceInfo.value = null }
 }
 // 前台身份上下文（账号/租户/部门/知识库包类型；平台级账号无知识库包）
 const me = ref<any>({})
@@ -324,6 +338,29 @@ const skillConfig = computed(() => ({
 // ---- 本地状态 ----
 const inputText = ref('')
 
+// ★ 双模式：⚡快速 / 🎓专业校对（localStorage 记忆；发送时经 chat store 随请求透传）
+const translateMode = ref(localStorage.getItem('translate_mode') || 'pro')
+function setMode(m: string) {
+  translateMode.value = m
+  localStorage.setItem('translate_mode', m)
+}
+
+// ★ 反馈弹窗目标（文本气泡/工单详情触发）
+const feedbackTarget = ref<any>(null)
+// openFeedback 组装文本气泡的反馈上下文（源文/译文/语言/模式）
+function openFeedback(msg: any) {
+  feedbackTarget.value = {
+    type: 'text',
+    source_text: msg?.data?.source_text || '',
+    translations: msg?.data?.translations || {},
+    mode: (localStorage.getItem('translate_mode') || 'pro'),
+  }
+}
+// onFeedbackSubmitted 提交成功提示
+function onFeedbackSubmitted() {
+  alert(t('fb.done'))
+}
+
 // ---- 翻译前报价预览（与后端计量同口径，只读不扣减） ----
 const estimate = ref<any>(null)
 let estimateTimer: ReturnType<typeof setTimeout> | null = null
@@ -337,14 +374,15 @@ async function refreshEstimate() {
   const text = inputText.value.trim()
   if (!text) { estimate.value = null; return }
   try {
-    const r: any = await translationEstimate({ text, target_langs: [...store.selectedLangs] })
+    const r: any = await translationEstimate({ text, target_langs: [...store.selectedLangs], mode: translateMode.value })
     if (r.success) estimate.value = r
   } catch { estimate.value = null }
 }
-// 强制计费且未开通额度时禁止发送
+// 额度不足或未开通时禁止发送
 const estimateBlocked = computed(() => {
-  if (!estimate.value || !estimate.value.sentence_enforced) return false
-  return !estimate.value.activated
+  if (!estimate.value) return false
+  if (estimate.value.sufficient === false) return true
+  return estimate.value.activated === false
 })
 
 const messagesContainer = ref<HTMLElement>()
@@ -982,4 +1020,9 @@ async function loadTranslationLangs() {
 .chat-mobile .send-btn { width: 38px; height: 38px; }
 .chat-mobile .tag { font-size: 11px; padding: 3px 8px; }
 .chat-mobile .lang-dropdown { left: -10px; min-width: 180px; }
+
+/* ★ 双模式切换（头部）：分段按钮 ⚡快速 / 🎓专业 */
+.mode-switch { display: inline-flex; background: rgba(26,115,232,.06); border-radius: 14px; padding: 2px; gap: 2px; }
+.mode-btn { border: none; background: transparent; color: #5f6368; font-size: 12px; padding: 3px 10px; border-radius: 12px; cursor: pointer; white-space: nowrap; }
+.mode-btn.on { background: #1a73e8; color: #fff; }
 </style>

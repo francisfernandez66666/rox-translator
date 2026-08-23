@@ -118,6 +118,9 @@ func (s *TicketService) processJob(ctx context.Context, job *queue.Job) error {
 	}
 }
 
+// 工单失败错误码前缀：余额不足（OpenAPI 状态接口据此返回独立出参 error_code）
+const errInsufficientCode = "insufficient_balance"
+
 // runTicket 执行单个工单的翻译流程并投递通知。
 func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	t, err := s.Store.GetTicketGlobal(ticketID)
@@ -128,8 +131,21 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	if t.Status == store.TicketCompleted {
 		return nil
 	}
+	// ★ 余额预检（强制计费时）：余额不足快速失败，单独错误码提示充值/升级套餐
+	if s.Bill != nil && s.Bill.Enabled() {
+		if b, berr := s.Store.GetBalance(t.TenantID); berr == nil && b != nil && b.Balance <= 0 {
+			t.Status = store.TicketRejected
+			t.RejectReason = errInsufficientCode + ": 余额不足，请充值或升级套餐"
+			_ = s.Store.UpdateTicket(t)
+			return fmt.Errorf("%s: 余额不足，请充值或升级套餐", errInsufficientCode)
+		}
+	}
 	t.Status = store.TicketInProgress
 	_ = s.Store.UpdateTicket(t)
+
+	// ★ 注入用量收集器：本工单全链路（初翻/校对/Judge/文化闸门/embedding）
+	// 的真实 token 用量自动归集，完成后按实费计费。
+	ctx = s.Engine.WithUsageRecorder(ctx)
 
 	var runErr error
 	if t.FilePath != "" {
@@ -150,6 +166,9 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	}
 	t.Status = store.TicketCompleted
 	_ = s.Store.UpdateTicket(t)
+	// ★ Token 实费计费：聚合本工单全链路真实 token × 均摊系数（强制计费时扣余额；
+	// 扣减失败仅告警不回滚——翻译成果已产出，欠费由告警跟进）
+	s.chargeTokens(ctx, t)
 	// 产物保留期打点：ticket_retention_days（默认 14 天；0=永久）。到期由后台每日扫描清理文件，
 	// 核心译文不受影响——文本工单存 final_result、文件工单回写 tm_segments 长期沉淀。
 	retentionDays := 14
@@ -168,10 +187,58 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 		fmt.Sprintf("翻译工单完成：%s", t.Title),
 		fmt.Sprintf("工单号 %s 翻译完成。%s；译文已沉淀至翻译记忆长期有效。", t.TicketNo, expireHint),
 		"ticket", t.ID)
+	// ★ Webhook 完成回调（OpenAPI 轮询之外的推送通道）：带 task_id 与 token 消耗
+	s.dispatchCompletedWebhook(ctx, t)
 	return nil
 }
 
-// runTextTicket 纯文本工单：五步编排流水线（kb_match→初翻→评估→审校→gate）。
+// chargeTokens 工单级 Token 实费扣费：读取 ctx 收集器累计的真实 token × 均摊系数。
+// 强制计费关闭时仅留痕。扣减失败写 critical 告警（欠费跟进），不阻断完成态。
+func (s *TicketService) chargeTokens(ctx context.Context, t *store.Ticket) {
+	if s.Bill == nil || s.Engine == nil || s.Store == nil {
+		return
+	}
+	prompt, completion := s.Engine.UsageTokens(ctx)
+	total := prompt + completion
+	if total <= 0 {
+		return // 无 LLM 调用（纯 KB 命中等）
+	}
+	m := 1.5 // 默认均摊系数
+	if v, _ := s.Store.GetConfig("billing_markup_multiplier"); v != "" {
+		if f, perr := strconv.ParseFloat(v, 64); perr == nil && f >= 1.0 {
+			m = f
+		}
+	}
+	billed := int64(float64(total) * m)
+	if billed < total {
+		billed = total
+	}
+	provider, model := s.Engine.UsageModel(ctx)
+	if err := s.Bill.MeterDeferred(t.TenantID, t.CreatedBy, "translate", provider, model, billed); err != nil {
+		_ = s.Store.CreateAlert(t.TenantID, "critical", "billing",
+			fmt.Sprintf("工单 %s 计费失败（余额不足）：应扣 %d token，请充值或升级套餐", t.TicketNo, billed))
+	}
+}
+
+// dispatchCompletedWebhook 投递工单完成 webhook 事件（OpenAPI 任务完成推送）。
+func (s *TicketService) dispatchCompletedWebhook(ctx context.Context, t *store.Ticket) {
+	if s.Store == nil {
+		return
+	}
+	prompt, completion := s.Engine.UsageTokens(ctx)
+	s.Store.DispatchWebhook(t.TenantID, "translation.completed", map[string]interface{}{
+		"event":       "translation.completed",
+		"tenant_id":   t.TenantID,
+		"task_id":     t.ID,
+		"ticket_no":   t.TicketNo,
+		"type":        map[bool]string{true: "files", false: "text"}[t.FilePath != ""],
+		"title":       t.Title,
+		"tokens_used": prompt + completion,
+		"time":        time.Now().Format(time.RFC3339),
+	})
+}
+
+// runTextTicket 纯文本工单：编排流水线（pro=全步骤；fast=初翻+校对，见 orchestrator 模式覆盖）。
 func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) error {
 	wf := orchestrator.NewWorkflow(s.Store, s.Engine, s.Ten, s.DB)
 	if wf == nil {
@@ -181,23 +248,24 @@ func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) erro
 	if err != nil {
 		return err
 	}
-	s.meterUsage(t.TenantID, t.CreatedBy, int64(len([]rune(t.SourceText))))
-	s.meterSentences(t.TenantID, t.SourceText, 0, parseLangs(t.TargetLangs))
+	// 计费统一在 runTicket 完成态按真实 token 聚合扣减（chargeTokens）
 	return nil
 }
 
 // runFileTicket 文件工单：提取→逐段翻译→原格式回写（docx/xlsx/pptx/pdf）。
 // 多文件工单（ticket_files 表有行）：逐文件处理，各自记录产物/失败原因；
 // 全部失败才置工单失败。单文件旧工单走 tickets.file_path 历史路径。
+// mode 透传：fast 模式跳过 KB 匹配（纯模型直翻），pro 保持知识库链路。
 func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) error {
 	langs := parseLangs(t.TargetLangs)
+	mode := t.Mode // fast | pro（空=pro）
 	// 多文件模式：逐个处理并回写各自产物
 	files, _ := s.Store.TicketFiles(t.ID)
 	if len(files) > 0 {
-		var segTotal, okCount int64
+		var okCount int64
 		var firstErr string
 		for _, f := range files {
-			res := s.Engine.HandleFile(ctx, f.FilePath, map[string]interface{}{"target_langs": langs}, func(step string, done, total int) {})
+			res := s.Engine.HandleFile(ctx, f.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode}, func(step string, done, total int) {})
 			if res.Error != "" || len(res.Files) == 0 {
 				_ = s.Store.SetTicketFileError(f.ID, res.Error)
 				if firstErr == "" {
@@ -206,31 +274,22 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				continue
 			}
 			_ = s.Store.SetTicketFileResult(f.ID, res.Files[0])
-			segTotal += int64(res.Data.TotalTexts)
 			okCount++
 			s.persistTicketTM(t.TenantID, res.Data.Translations)
 		}
-		// 计量按成功文件累计
-		nl := int64(len(langs))
-		s.meterUsage(t.TenantID, t.CreatedBy, segTotal*nl)
-		s.meterSentences(t.TenantID, "", segTotal, langs)
 		if okCount == 0 && firstErr != "" {
 			return fmt.Errorf("%s", firstErr)
 		}
 		return nil // 部分成功也放行（下载页可见各文件成败）
 	}
 	// 旧单文件路径
-	res := s.Engine.HandleFile(ctx, t.FilePath, map[string]interface{}{"target_langs": langs}, func(step string, done, total int) {})
+	res := s.Engine.HandleFile(ctx, t.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode}, func(step string, done, total int) {})
 	if res.Error != "" {
 		return fmt.Errorf("%s", res.Error)
 	}
 	if len(res.Files) > 0 {
 		_ = s.Store.SetTicketResultPath(t.ID, res.Files[0])
 	}
-	seg := int64(res.Data.TotalTexts)
-	nl := int64(len(res.Data.TargetLangs))
-	s.meterUsage(t.TenantID, t.CreatedBy, seg*nl)
-	s.meterSentences(t.TenantID, "", seg, res.Data.TargetLangs)
 	s.persistTicketTM(t.TenantID, res.Data.Translations)
 	return nil
 }
@@ -282,52 +341,6 @@ func splitComma(s string) []string {
 	}
 	out = append(out, cur)
 	return out
-}
-
-// meterUsage 写入用量流水（字符/段数口径；Bill 未装配时跳过）。
-func (s *TicketService) meterUsage(tid, userID int64, quantity int64) {
-	if s.Bill == nil || quantity <= 0 {
-		return
-	}
-	_ = s.Bill.MeterDeferred(tid, userID, "translate", "", "", quantity)
-}
-
-// countSentences 统计源句数（与 api 层同规则：换行+句末标点切分，至少 1）。
-func countSentencesSvc(text string) int64 {
-	repl := strings.NewReplacer("\n", "。", "\r", "。", "。", "。", "！", "。", "？", "。", ".", "。", "!", "。", "?", "。", ";", "。", "；", "。")
-	segs := strings.Split(repl.Replace(text), "。")
-	n := int64(0)
-	for _, sg := range segs {
-		if strings.TrimSpace(sg) != "" {
-			n++
-		}
-	}
-	if n < 1 {
-		n = 1
-	}
-	return n
-}
-
-// meterSentences 句数扣减（受强制计费门控；sourceText 为空时用 segments 段数）。
-func (s *TicketService) meterSentences(tid int64, sourceText string, segments int64, langs []string) {
-	if s.Store == nil || tid <= 0 {
-		return
-	}
-	if v, _ := s.Store.GetConfig("sentence_enforced"); v != "1" {
-		return
-	}
-	n := int64(len(langs))
-	if n <= 0 {
-		n = 1
-	}
-	if sourceText != "" {
-		n = countSentencesSvc(sourceText) * n
-	} else if segments > 0 {
-		n = segments * n
-	} else {
-		return
-	}
-	_, _ = s.Store.DeductSentences(tid, n)
 }
 
 var _ = kb.KBDatabase{} // 保持 DB 字段类型引用

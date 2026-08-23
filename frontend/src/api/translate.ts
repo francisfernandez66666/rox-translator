@@ -100,6 +100,7 @@ export async function translateFileStream(
   onProgress?: (event: ProgressEvent) => void,
   signal?: AbortSignal,
   userMessage: string = "",
+  mode?: string,
 ): Promise<ChatResponse> {
   const formData = new FormData()
   formData.append('file', file)
@@ -108,6 +109,8 @@ export async function translateFileStream(
   }
   formData.append('use_online', String(useOnline))
   if (userMessage) formData.append('message', userMessage)
+  // ★ 双模式：fast 快速（无KB）/ pro 专业校对；随表单透传后端
+  if (mode) formData.append('mode', mode)
 
   // 文件上传用登录令牌认证头（不带租户头），与后端文件翻译接口对齐
   const response = await fetch(`${API_BASE}/api/translate/stream`, {

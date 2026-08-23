@@ -21,6 +21,7 @@ type Ticket struct {
 	FilePath     string `json:"file_path"`     // 关联上传文件路径（空表示纯文本）
 	TargetLangs  string `json:"target_langs"`  // 目标语言列表（逗号分隔）
 	CreatedBy    int64  `json:"created_by"`    // 创建者用户 ID
+	Mode         string `json:"mode"`          // 翻译模式：fast 快速 / pro 专业校对（空=pro）
 	ApproverID   int64  `json:"approver_id"`   // 审批人用户 ID（0 表示未分配）
 	ReviewerID   int64  `json:"reviewer_id"`   // 审校人用户 ID（0 表示未分配）
 	RejectReason string `json:"reject_reason"` // 驳回原因（被驳回时填写，重翻时使用）
@@ -85,8 +86,8 @@ func (s *Store) CreateTicket(tid, userID int64, title, sourceText, filePath, tar
 // 参数：id=工单主键 ID，tid=租户 ID；返回工单对象。
 func (s *Store) GetTicket(id, tid int64) (*Ticket, error) {
 	var t Ticket
-	err := s.db.QueryRow("SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), created_at, updated_at FROM tickets WHERE id=? AND tenant_id=?", id, tid).
-		Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.CreatedAt, &t.UpdatedAt)
+	err := s.db.QueryRow("SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, created_at, updated_at FROM tickets WHERE id=? AND tenant_id=?", id, tid).
+		Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.Mode, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +96,7 @@ func (s *Store) GetTicket(id, tid int64) (*Ticket, error) {
 
 // GetTicketGlobal 按 ID 查询工单（不带租户过滤，worker 异步上下文用）。
 func (s *Store) GetTicketGlobal(id int64) (*Ticket, error) {
-	row := s.db.QueryRow("SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), created_at, updated_at FROM tickets WHERE id=?", id)
+	row := s.db.QueryRow("SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, created_at, updated_at FROM tickets WHERE id=?", id)
 	return scanTicketFull(row)
 }
 
@@ -110,7 +111,7 @@ func (s *Store) SetTicketResultPath(id int64, path string) error {
 // 参数：tid=租户 ID，userID=用户 ID，onlyMine=是否仅我的工单。
 // 返回：工单列表（最多 200 条，按 ID 倒序）。
 func (s *Store) ListTickets(tid, userID int64, onlyMine bool) ([]*Ticket, error) {
-	q := "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), created_at, updated_at FROM tickets WHERE tenant_id=?"
+	q := "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, created_at, updated_at FROM tickets WHERE tenant_id=?"
 	args := []interface{}{tid}
 	if onlyMine {
 		q += " AND created_by=?" // 只看自己创建的
@@ -125,7 +126,7 @@ func (s *Store) ListTickets(tid, userID int64, onlyMine bool) ([]*Ticket, error)
 	var out []*Ticket
 	for rows.Next() {
 		var t Ticket
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.Mode, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &t)
@@ -136,7 +137,7 @@ func (s *Store) ListTickets(tid, userID int64, onlyMine bool) ([]*Ticket, error)
 // ListPendingApproval 待审批工单列表（供 approver/admin 审批台使用）。
 // 参数：tid=租户 ID；返回状态为 pending_approval/approved/rejected 的工单。
 func (s *Store) ListPendingApproval(tid int64) ([]*Ticket, error) {
-	rows, err := s.db.Query("SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), created_at, updated_at FROM tickets WHERE tenant_id=? AND status IN ('pending_approval','approved','rejected') ORDER BY id DESC LIMIT 200", tid)
+	rows, err := s.db.Query("SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, created_at, updated_at FROM tickets WHERE tenant_id=? AND status IN ('pending_approval','approved','rejected') ORDER BY id DESC LIMIT 200", tid)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +145,7 @@ func (s *Store) ListPendingApproval(tid int64) ([]*Ticket, error) {
 	var out []*Ticket
 	for rows.Next() {
 		var t Ticket
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.Mode, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &t)
@@ -156,8 +157,8 @@ func (s *Store) ListPendingApproval(tid int64) ([]*Ticket, error) {
 // 参数：t=待更新工单对象（以 ID+TenantID 定位）；返回错误。
 func (s *Store) UpdateTicket(t *Ticket) error {
 	_, err := s.db.Exec(
-		"UPDATE tickets SET title=?, status=?, target_langs=?, approver_id=?, reviewer_id=?, reject_reason=?, final_result=?, updated_at=? WHERE id=? AND tenant_id=?",
-		t.Title, t.Status, t.TargetLangs, t.ApproverID, t.ReviewerID, t.RejectReason, t.FinalResult,
+		"UPDATE tickets SET title=?, status=?, target_langs=?, approver_id=?, reviewer_id=?, reject_reason=?, final_result=?, mode=?, updated_at=? WHERE id=? AND tenant_id=?",
+		t.Title, t.Status, t.TargetLangs, t.ApproverID, t.ReviewerID, t.RejectReason, t.FinalResult, t.Mode,
 		time.Now().Format(time.RFC3339), t.ID, t.TenantID)
 	return err
 }
@@ -197,7 +198,7 @@ func (s *Store) TicketStates(ticketID int64) ([]*TicketState, error) {
 // scanTicketFull 扫描全列工单行（GetTicketGlobal 专用，含 result_path）。
 func scanTicketFull(row *sql.Row) (*Ticket, error) {
 	var t Ticket
-	err := row.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.CreatedAt, &t.UpdatedAt)
+	err := row.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.Mode, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
