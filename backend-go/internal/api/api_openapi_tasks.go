@@ -349,6 +349,7 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 	resp["status"] = status
 	switch status {
 	case "completed":
+		// ★ 用量出参：本单实费计费 token 数（真实用量×均摊系数，完成时落库 tickets.tokens_billed）
 		resp["tokens_used"] = t.TokensBilled
 		if isFile {
 			tfiles, _ := s.Store.TicketFiles(t.ID)
