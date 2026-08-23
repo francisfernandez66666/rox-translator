@@ -170,7 +170,19 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 	p := w.loadPayload(t)
 	if p == nil {
-		return fmt.Errorf("缺少 KB 匹配结果")
+		// ★ kb_match 步骤被跳过时（fast 模式 / 租户关闭该步）由此自建空载荷，
+		// 初翻对全部目标语言生效——不再硬性依赖前置 KB 步骤。
+		langs := parseTicketLang(t.TargetLangs)
+		if len(langs) == 0 {
+			langs = []string{"en"}
+		}
+		p = &ticketPayload{
+			SourceText:   t.SourceText,
+			TargetLangs:  langs,
+			Translations: map[string]string{},
+			Sources:      map[string]string{},
+			Mode:         "无知识库直翻",
+		}
 	}
 	tid := t.TenantID
 	ctx = tenant.WithTenant(ctx, tid)
