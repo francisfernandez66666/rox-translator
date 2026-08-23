@@ -26,6 +26,7 @@ func (s *Server) routesOrgs() {
 	s.mux.HandleFunc("/api/admin/orgs/create", s.handleOrgCreate)
 	s.mux.HandleFunc("/api/admin/orgs/rename", s.handleOrgRename)
 	s.mux.HandleFunc("/api/admin/orgs/move", s.handleOrgMove)
+	s.mux.HandleFunc("/api/admin/orgs/token-limit", s.handleOrgTokenLimit) // ★ 部门预算分配（四期）
 	s.mux.HandleFunc("/api/admin/orgs/delete", s.handleOrgDelete)
 	s.mux.HandleFunc("/api/admin/orgs/users", s.handleOrgUsers)
 }
@@ -437,4 +438,51 @@ func findOrgByID(orgs []*store.Org, id int64) *store.Org {
 		}
 	}
 	return nil
+}
+
+// handleOrgTokenLimit 设置部门月度 token 预算（租户管理员及以上；0=关闭该部门的部门墙）。
+// 约束：∑部门预算 = 租户总预算由面板语义保证（每次调整即重排构成），后端仅做非负校验。
+func (s *Server) handleOrgTokenLimit(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		OrgID int64 `json:"org_id"` // 组织 ID
+		Limit int64 `json:"limit"`  // 月度 token 预算（≥0）
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OrgID <= 0 || req.Limit < 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	o, oerr := s.Store.GetOrgByID(req.OrgID)
+	if oerr != nil || o.TenantID != s.effTenant(r, u) {
+		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "组织不存在"})
+		return
+	}
+	if err := s.Store.SetOrgTokenLimit(req.OrgID, req.Limit); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "org_token_limit", "orgs",
+		fmt.Sprintf("%d limit=%d", req.OrgID, req.Limit))
+	// 同步预算总览给前端（总预算=∑部门预算、全租户本月已用）
+	sum, _ := s.Store.GetOrgBudgetSummary(s.effTenant(r, u))
+	writeJSON(w, 200, map[string]interface{}{"success": true, "summary": sum})
+}
+
+// handleOrgBudgetSummary 部门预算总览接口（租管面板展示：各部门预算/已用 + 总预算）。
+func (s *Server) handleOrgBudgetSummary(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	sum, err := s.Store.GetOrgBudgetSummary(s.effTenant(r, u))
+	if err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "summary": sum})
 }

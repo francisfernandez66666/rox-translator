@@ -22,6 +22,14 @@
       <span v-for="p in me.kb_packs" :key="p.id" class="chat-balance" style="background:rgba(33,90,154,.10);color:#215a9a" :title="t('chat.kbPackTip')">
         📚 {{ packLabel(p.pack_type) }}
       </span>
+      <!-- ★ 四期体验增强：无论是否计费，均显示实际消耗（今日 token ≈ 句单语言），让用户感知用量 -->
+      <span v-if="usageInfo" class="chat-balance" style="background:rgba(255,152,0,.10);color:#e65100"
+            :title="t('chat.usedTip')">⚡ {{ tpl('chat.usedTokens', { n: fmtNum(usageInfo.today), s: fmtNum(usageInfo.todaySentences) }) }}</span>
+      <span v-if="orgBudget && orgBudget.limit > 0" class="chat-balance"
+            :class="{ 'budget-over': orgBudget.used >= orgBudget.limit }"
+            :title="tpl('chat.orgBudgetTip', { name: orgBudget.name })">
+        🏢 {{ tpl('chat.orgBudget', { n: fmtNum(orgBudget.used), l: fmtNum(orgBudget.limit) }) }}
+      </span>
       <span v-if="balanceInfo" class="chat-balance" :title="t('chat.balanceTip')">🟢 {{ tpl('chat.balanceTokens', { n: fmtNum(balanceInfo.tokens), s: fmtNum(balanceInfo.approx) }) }}</span>
       <!-- ★ 双模式切换：⚡快速（无知识库·初翻+校对）/ 🎓专业校对（全流水线） -->
       <div class="mode-switch" :title="t('chat.modeTip')">
@@ -286,8 +294,12 @@ import MessageBubble from './MessageBubble.vue'
 // 全局聊天 Store 实例
 const store = useChatStore()
 
-// Token 余额（个人级消耗看板；从 /api/me/package 读取，展示 token 主单位 + ≈句数）
+// Token 余额（强制计费时展示扣减视角）
 const balanceInfo = ref<{ tokens: number; approx: number } | null>(null)
+const balanceEnforced = ref(false)
+// ★ 实际消耗感知（四期体验增强）：今日消耗 token 常显 + 部门预算进度
+const usageInfo = ref<{ today: number; todaySentences: number } | null>(null)
+const orgBudget = ref<{ limit: number; used: number; name: string } | null>(null)
 // fmtNum 千分位格式化（模板展示用）
 function fmtNum(n: number): string {
   return new Intl.NumberFormat().format(Math.max(0, Math.floor(n || 0)))
@@ -296,8 +308,21 @@ function fmtNum(n: number): string {
 async function loadBalance() {
   try {
     const r: any = await myPackage()
-    if (r.success && typeof r.balance_tokens === 'number') {
-      balanceInfo.value = { tokens: r.balance_tokens, approx: r.balance_sentences_approx ?? Math.floor(r.balance_tokens / 500) }
+    if (r.success) {
+      if (typeof r.balance_tokens === 'number') {
+        balanceInfo.value = { tokens: r.balance_tokens, approx: r.balance_sentences_approx ?? Math.floor(r.balance_tokens / 500) }
+      }
+      // ★ 今日消耗（含不计费场景——账本始终留痕，让用户感受真实用量）
+      const today = typeof r.tokens_used_today === 'number' ? r.tokens_used_today : null
+      if (today !== null) {
+        usageInfo.value = { today, todaySentences: Math.floor(today / (r.estimate_rate || 500)) }
+      }
+      // ★ 部门预算进度（归属启用预算的部门时）
+      if (r.org_budget && r.org_budget.limit > 0) {
+        orgBudget.value = { limit: r.org_budget.limit, used: r.org_budget.used_this_month, name: r.org_budget.name }
+      } else {
+        orgBudget.value = null
+      }
     }
   } catch { balanceInfo.value = null }
 }

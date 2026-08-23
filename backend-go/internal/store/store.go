@@ -412,6 +412,8 @@ func (s *Store) migrateColumns() error {
 		{"users", "email", "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''"},
 		// 组织类型：root(根组织)/org(组织)/dept(部门)
 		{"orgs", "type", "ALTER TABLE orgs ADD COLUMN type TEXT NOT NULL DEFAULT 'org'"},
+		// ★ 部门预算（四期）：部门月度 token 预算上限；∑部门预算=租户总预算（双预算墙之部门墙）
+		{"orgs", "token_limit", "ALTER TABLE orgs ADD COLUMN token_limit INTEGER NOT NULL DEFAULT 0"},
 		// 订单关联商业包（订阅付费包/增量包）
 		{"orders", "package_id", "ALTER TABLE orders ADD COLUMN package_id INTEGER NOT NULL DEFAULT 0"},
 		// 静态码支付人工确认标记（用户点「我已付费」后置 1，超管确认到账后清零）

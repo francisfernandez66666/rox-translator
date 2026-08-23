@@ -57,10 +57,18 @@ func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 	if err := s.Bill.CheckDailyQuota(tid, maxDaily); err != nil {
 		return tid, release, err
 	}
-	// 强制计费模式（billing_enforced=1 或已完成 token 迁移）下校验 token 余额，不足则拒绝
+	// 强制计费模式（billing_enforced=1 或已完成 token 迁移）下校验 token 余额：
+	// 组织墙文案（四期增强）：余额即组织总预算的可用部分
 	if s.Bill.Enabled() {
 		if err := s.Bill.CheckBalance(tid); err != nil {
-			return tid, release, &apiErr{"余额不足，请充值或升级套餐"}
+			return tid, release, &apiErr{"组织 token 已耗尽，请联系管理员及时充值"}
+		}
+	}
+	// ★ 双预算墙之部门墙/组织月度总预算墙（四期增强；独立于强制计费开关——
+	//   仅计量不扣减时预算约束照常生效，让体验包用户感知用量边界）
+	if u := s.authUser(r); u != nil && s.Store != nil {
+		if hit := s.Store.CheckBudgetWalls(tid, u.ID); hit != nil {
+			return tid, release, &apiErr{hit.Msg}
 		}
 	}
 	// 注册审核模式兜底：registration_review=1 时，未开通额度（无包身份且零 token 余额）的租户一律拒绝

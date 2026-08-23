@@ -190,7 +190,7 @@ const baseZh: Dict = {
   'tk.estimateLine': '预计消耗 {cost} 句 · 余额 {balance} 句', 'tk.estUnavailable': '额度不可用',
   'tk.modeFast': '⚡ 快速（无知识库）', 'tk.modePro': '🎓 专业校对',
   'tk.modeTip': '⚡快速：AI初翻+校对，十秒级｜🎓专业校对：知识库+评估+硬闸全流水线',
-  'tk.estimateTokens': '预计消耗 ≈{min}~{max} token（约 {s} 句）· 余额 {bal}',
+  'tk.estimateTokens': '预计消耗 ≈{min}~{max} token（约 {s} 句单语言）· 余额 {bal}',
   'tk.qaSummary': '{errors} 处错误 / {warnings} 处警告',
   'tk.createHint': '创建后进入异步队列，完成后站内信通知下载；大文件翻译请使用此模式',
   'tk.myTickets': '我的工单',

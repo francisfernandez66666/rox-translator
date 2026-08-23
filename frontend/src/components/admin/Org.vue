@@ -50,6 +50,14 @@
         >
           <span class="drag-handle" v-if="canDrag">⠿</span>
           <span>{{ orgIcon(o) }} {{ o.name }}</span>
+          <!-- ★ 部门预算（四期）：徽标 + 分配入口（租管及以上；根组织不参与） -->
+          <span v-if="o.type !== 'root' && myLevel >= 3" class="ad-btn-xs budget-badge"
+                :class="{ 'budget-over': isOverBudget(o) }"
+                :title="t('org.budgetTip')">
+            💰 {{ budgetText(o) }}
+            <button class="ad-btn-xs" style="margin-left:4px;border:none;background:transparent;cursor:pointer"
+                    :title="t('org.budgetSet')" @click.stop="setBudget(o)">✎</button>
+          </span>
           <span class="ad-tree-actions">
             <button v-if="isSuper && o.type === 'root'" class="ad-btn-xs" :class="{ 'ad-btn-red': tenantStatusOf(o.tenant_id) === 'active' }" @click.stop="toggleTenantByOrg(o)">{{ tenantStatusOf(o.tenant_id) === 'active' ? t('tenants.disable') : t('tenants.enable') }}</button>
             <button class="ad-btn-xs" :title="t('org.addChild')" @click.stop="setParent(o.id)">+</button>
@@ -127,11 +135,51 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { t, tpl } from '@/i18n'
 import { orgList, orgCreate, orgRename, orgMove, orgDelete, orgUsers, type OrgInfo } from '@/api'
 import { adminUserCreate, adminUserUpdate, adminUserResetPassword, adminUserDelete, tenantSetStatus } from '@/api'
+import { orgBudgetSummary, orgTokenLimit } from '@/api'
 import { activeTenantId, tenantList, isSuper, myLevel, roleOptions, roleName, loadTenants } from './store'
 import { fmtTime } from './ui'
 
 // 组织扁平列表（用于下拉与组装树）
 const orgs = ref<OrgInfo[]>([])
+// ★ 部门预算（四期）：org_id → {limit, used}，来自 /api/admin/org-budget 总览
+const budgetMap = ref<Record<number, { limit: number; used: number }>>({})
+// budgetText 预算徽标文案（未启用显示「未设」）
+function budgetText(o: any): string {
+  const b = budgetMap.value[o.id]
+  if (!b || !(b.limit > 0)) return t('org.budgetUnset')
+  return `${fmtNumShort(b.used)}/${fmtNumShort(b.limit)}`
+}
+function isOverBudget(o: any): boolean {
+  const b = budgetMap.value[o.id]
+  return !!b && b.limit > 0 && b.used >= b.limit
+}
+function fmtNumShort(n: number): string {
+  if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + 'w'
+  return String(n)
+}
+// setBudget 弹窗分配部门月度 token 预算（0=关闭该部门的部门墙）
+async function setBudget(o: any) {
+  const cur = budgetMap.value[o.id]?.limit || 0
+  const input = prompt(tpl('org.budgetPrompt', { name: o.name, cur }), String(cur))
+  if (input === null) return
+  const n = Number(input)
+  if (!Number.isFinite(n) || n < 0) { alert(t('org.budgetInvalid')); return }
+  try {
+    const r: any = await orgTokenLimit(o.id, Math.floor(n))
+    if (!r.success) { alert(r.message); return }
+    await loadBudget()
+  } catch (e) { alert(e instanceof Error ? e.message : String(e)) }
+}
+async function loadBudget() {
+  try {
+    const r: any = await orgBudgetSummary()
+    if (r.success) {
+      const m: Record<number, { limit: number; used: number }> = {}
+      for (const d of r.summary?.depts || []) m[d.org_id] = { limit: d.token_limit, used: d.used_this_month }
+      budgetMap.value = m
+    }
+  } catch { /* 非租管静默 */ }
+}
 // 根组织行（type='root'，名称可自定义；平台视图=平台根）
 const rootOrg = ref<OrgInfo | null>(null)
 // 是否平台视图（超管：平台根 → 各租户根 → 组织/部门）
@@ -416,7 +464,8 @@ async function onDropRoot() {
   await loadAll()
 }
 
-onMounted(loadAll)
+onMounted(() => { loadAll(); loadBudget() })
+watch(activeTenantId, () => loadBudget())
 watch(activeTenantId, () => {
   selectedOrg.value = 0
   loadAll()

@@ -16,7 +16,7 @@ import (
 )
 
 const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at"
-const orgCols = "id, tenant_id, parent_id, name, type, created_at, updated_at"
+const orgCols = "id, tenant_id, parent_id, name, type, COALESCE(token_limit,0), created_at, updated_at"
 
 // Store IAM 数据访问层（用户 + 组织）
 type Store struct {
@@ -236,7 +236,7 @@ func (s *Store) CreateOrg(tid, parentID int64, name, orgType string) (*Org, erro
 func (s *Store) GetOrgByID(id int64) (*Org, error) {
 	row := s.db.QueryRow("SELECT "+orgCols+" FROM orgs WHERE id=?", id)
 	var o Org
-	if err := row.Scan(&o.ID, &o.TenantID, &o.ParentID, &o.Name, &o.Type, &o.CreatedAt, &o.UpdatedAt); err != nil {
+	if err := row.Scan(&o.ID, &o.TenantID, &o.ParentID, &o.Name, &o.Type, &o.TokenLimit, &o.CreatedAt, &o.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &o, nil
@@ -258,7 +258,7 @@ func (s *Store) EnsureRootOrg(tid int64, name string) (*Org, error) {
 func (s *Store) GetRootOrg(tid int64) (*Org, error) {
 	row := s.db.QueryRow("SELECT "+orgCols+" FROM orgs WHERE tenant_id=? AND type='root' ORDER BY id LIMIT 1", tid)
 	var o Org
-	if err := row.Scan(&o.ID, &o.TenantID, &o.ParentID, &o.Name, &o.Type, &o.CreatedAt, &o.UpdatedAt); err != nil {
+	if err := row.Scan(&o.ID, &o.TenantID, &o.ParentID, &o.Name, &o.Type, &o.TokenLimit, &o.CreatedAt, &o.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &o, nil
@@ -294,7 +294,7 @@ func (s *Store) ListPlatformOrgs(platformRootID int64) ([]*Org, error) {
 	tenantRoot := map[int64]int64{} // tenant_id → 该租户根组织 ID
 	for rows.Next() {
 		var o Org
-		if err := rows.Scan(&o.ID, &o.TenantID, &o.ParentID, &o.Name, &o.Type, &o.CreatedAt, &o.UpdatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.TenantID, &o.ParentID, &o.Name, &o.Type, &o.TokenLimit, &o.CreatedAt, &o.UpdatedAt); err != nil {
 			continue
 		}
 		if o.Type == OrgTypeRoot {
@@ -324,7 +324,7 @@ func (s *Store) ListOrgs(tid int64) ([]*Org, error) {
 	var out []*Org
 	for rows.Next() {
 		var o Org
-		if err := rows.Scan(&o.ID, &o.TenantID, &o.ParentID, &o.Name, &o.Type, &o.CreatedAt, &o.UpdatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.TenantID, &o.ParentID, &o.Name, &o.Type, &o.TokenLimit, &o.CreatedAt, &o.UpdatedAt); err != nil {
 			continue
 		}
 		out = append(out, &o)

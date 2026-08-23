@@ -14,6 +14,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"translator/internal/store"
 )
@@ -65,8 +66,20 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 	if v, _ := s.Store.GetConfig("pay_mode"); v != "" {
 		payMode = v
 	}
-	writeJSON(w, 200, map[string]interface{}{
+	// ★ 四期体验增强：无论是否强制计费，均透出实际消耗（今日/本月）与部门预算进度
+	usedToday, usedMonth := int64(0), int64(0)
+	if tid > 0 {
+		ms := time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)
+		_ = s.Store.DB().QueryRow(
+			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=?", tid, ms).Scan(&usedMonth)
+		_ = s.Store.DB().QueryRow(
+			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at>=?",
+			tid, u.ID, ms).Scan(&usedToday)
+	}
+	resp := map[string]interface{}{
 		"success":                  true,
+		"tokens_used_today":        usedToday,
+		"tokens_used_month":        usedMonth,
 		"balance_tokens":           tokens,
 		"balance_sentences_approx": approx,
 		"sentence_balance":         sentenceMirror, // 兼容字段：历史句数镜像
@@ -74,7 +87,22 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		"subscribed_at":            subAt,
 		"package_expires":          pkgExpires,
 		"pay_mode":                 payMode,
-	})
+	}
+	// ★ 部门预算进度（用户归属启用预算的部门时返回，前台徽标数据源）
+	if tid > 0 && u.OrgID > 0 {
+		if sum, err := s.Store.GetOrgBudgetSummary(tid); err == nil {
+			for _, d := range sum.Depts {
+				if d.OrgID == u.OrgID {
+					resp["org_budget"] = map[string]interface{}{
+						"org_id": d.OrgID, "name": d.Name,
+						"limit": d.TokenLimit, "used_this_month": d.UsedThisMonth,
+					}
+				}
+			}
+			resp["tenant_budget_total"] = sum.TotalLimit
+		}
+	}
+	writeJSON(w, 200, resp)
 }
 
 // handlePackageSubscribe 订阅/兑换商业包（登录用户）：创建待支付订单并走支付流程。
