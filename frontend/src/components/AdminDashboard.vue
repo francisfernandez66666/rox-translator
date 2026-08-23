@@ -121,7 +121,7 @@ const workspaces: Record<number, WorkspaceDef> = {
       { key: 'tickets', label: 'admin.tickets', comp: Tickets },
       { key: 'audit', label: 'admin.auditPanel', comp: Audit },
       { key: 'alerts', label: 'admin.alerts', comp: Alerts },
-      { key: 'feedbacks', label: 'admin.feedbackPanel', comp: Feedback },
+      { key: 'feedbacks', label: 'admin.feedbackPanel', comp: Feedback }, // ★ 用户反馈（四期新增，仅超管工作台）
     ],
   },
   // 企业管理（租户管理员）

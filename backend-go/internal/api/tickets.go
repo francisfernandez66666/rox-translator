@@ -12,18 +12,18 @@ package api
 
 import (
 	"archive/zip"
-	"io"
-	"fmt"
-	"mime/multipart"
-	"github.com/xuri/excelize/v2"
-	"time"
-	"sort"
-	"path/filepath"
-	"os"
 	"encoding/json"
+	"fmt"
+	"github.com/xuri/excelize/v2"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"translator/internal/auth"
 	"translator/internal/orchestrator"
@@ -84,6 +84,7 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// ★ 翻译模式随创建请求落库（fast=快速 / pro=专业校对；空值归一化为 pro）
 	t.Mode = normalizeTaskMode(req.Mode)
 	// 创建工单审计 + 自动入队执行
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_create", "tickets", t.TicketNo)
@@ -180,6 +181,7 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// ★ 文件任务模式落库（multipart mode 字段；空=pro）
 	t.Mode = normalizeTaskMode(r.FormValue("mode"))
 	tid := s.effTenant(r, u)
 	for _, f := range saved {
