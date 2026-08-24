@@ -154,62 +154,40 @@ function onLogout() {
 }
 
 // logout 退出登录：清除本地 token 与用户状态并跳转登录页。
-// 无参数无返回，由顶栏退出按钮触发。
+// 无参数无返回，由页眉退出按钮触发。
 function logout() {
-// ★ 下拉菜单与余额行（四期页眉整合）：打开时实时拉取最新余额
+  setAuthToken('')
+  store.clearMessages()
+  onLogout()
+}
+
+// ★ 下拉菜单余额行：打开菜单时实时拉取最新数据
 const pkgLine = ref('')
-// ★ 自助修改密码（内联表单，复用邮箱验证码通道）
+
+// ★ 自助修改密码弹窗状态（独立 Teleport 弹窗，邮箱验证码流程）
+const pwdOpen = ref(false)
 const pwdEmail = ref('')
-const pwdCode = ref('')
-const pwdNew = ref('')
-const pwdMsg = ref('')
-const pwdMsgOk = ref(false)
-const pwdBusy = ref(false)
-const pwdCooldown = ref(0)
-let pwdTimer: ReturnType<typeof setInterval> | undefined
 
-// sendPwdCodeAction 发送验证码到绑定邮箱（username 定位；防枚举文案由服务端统一）
-async function sendPwdCodeAction() {
+// refreshPkgLine 拉取剩余 token 与 ≈句数（页眉徽标数据源）
+async function refreshPkgLine() {
   try {
-    const r = await sendPwdCode({ username: authUser.value.username, email: pwdEmail.value.trim() })
-    pwdMsgOk.value = true
-    pwdMsg.value = r.message || t('pwd.codeSent')
-    pwdCooldown.value = 60
-    if (pwdTimer) clearInterval(pwdTimer)
-    pwdTimer = setInterval(() => {
-      pwdCooldown.value--
-      if (pwdCooldown.value <= 0 && pwdTimer) clearInterval(pwdTimer)
-    }, 1000)
-  } catch (e) {
-    pwdMsgOk.value = false
-    pwdMsg.value = e instanceof Error ? e.message : String(e)
-  }
+    const r: any = await myPackage()
+    if (r.success && typeof r.balance_tokens === 'number') {
+      const approx = r.balance_sentences_approx ?? Math.floor(r.balance_tokens / 500)
+      pkgLine.value = `${new Intl.NumberFormat().format(r.balance_tokens)} token ≈ ${new Intl.NumberFormat().format(approx)} 句单语言`
+    }
+  } catch { pkgLine.value = '' }
 }
 
-// submitPwdChange 校验并提交新密码
-async function submitPwdChange() {
-  if (pwdNew.value.length < 6) { pwdMsgOk.value=false; pwdMsg.value=t('pwd.tooShort'); return }
-  try {
-    const r = await submitNewPassword({ username: authUser.value.username, code: pwdCode.value.trim(), new_password: pwdNew.value })
-    if (!r.success) { pwdMsgOk.value=false; pwdMsg.value=r.message||t('pwd.codeBad'); return }
-    pwdMsgOk.value = true
-    pwdMsg.value = t('pwd.done')
-    pwdCode.value=''; pwdNew.value=''
-  } catch (e) {
-    pwdMsgOk.value=false
-    pwdMsg.value = e instanceof Error ? e.message : String(e)
-  }
-}
-
-// 打开账号菜单时预填绑定邮箱（me/context 含 email 字段）
-async function prefillEmail() {
+// openPwd 打开改密弹窗：收起账号菜单、立即弹出，随后异步补填绑定邮箱
+async function openPwd() {
+  const d = document.querySelector('details.account-menu')
+  if (d) d.removeAttribute('open')
+  pwdOpen.value = true
   try {
     const r: any = await meContext()
     pwdEmail.value = r?.email || ''
-  } catch { /* 静默 */ }
-}
-
-  onLogout()
+  } catch { pwdEmail.value = '' }
 }
 
 // 切换翻译模型

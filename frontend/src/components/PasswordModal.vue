@@ -5,6 +5,7 @@
    ============================================================================ -->
 
 <template>
+  <Teleport to="body">
   <div class="fb-mask" @click.self="$emit('close')">
     <div class="fb-modal">
       <h3>🔒 {{ t('pwd.title') }}</h3>
@@ -29,6 +30,7 @@
       </div>
     </div>
   </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
