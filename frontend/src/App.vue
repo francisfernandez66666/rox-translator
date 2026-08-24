@@ -36,22 +36,34 @@
         <Bell />
         <!-- 语言切换（显性） -->
         <button class="gear-btn" @click="toggleLang()" :title="lang === 'zh' ? 'Switch to English' : '切换为中文'">{{ lang === 'zh' ? 'EN' : '中' }}</button>
-        <!-- ★ 自助修改密码（独立显性按钮，与铃铛/齿轮同一交互模式确保可用） -->
-        <button class="gear-btn" @click="openPwd" title="修改密码">🔒</button>
         <!-- ★ 账号菜单：原生 details 折叠（零 JS 可靠开合） -->
         <details class="account-menu">
-          <summary title="账号菜单">☰</summary>
+          <summary title="账号菜单" @click="prefillEmail">☰</summary>
           <div class="menu-drop">
             <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
-            <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
+            <!-- ★ 修改密码：内联二级折叠表单（无弹窗/层级依赖，展开即用） -->
+            <details class="pwd-sub">
+              <summary class="menu-item">🔒 {{ t('pwd.title') }}</summary>
+              <div class="pwd-inline">
+                <input v-model="pwdEmail" :placeholder="t('login.boundEmail')" class="menu-input" />
+                <div class="pwd-code-row">
+                  <input v-model="pwdCode" :placeholder="t('login.verificationCode')" class="menu-input" />
+                  <button class="ad-btn-sm" :disabled="pwdCooldown > 0 || (!pwdEmail && !authUser.username)" @click="sendPwdCodeAction">
+                    {{ pwdCooldown > 0 ? tpl('login.codeResend', { n: pwdCooldown }) : t('login.sendCode') }}
+                  </button>
+                </div>
+                <input v-model="pwdNew" type="password" :placeholder="t('login.newPassword')" class="menu-input" />
+                <button class="ad-btn-sm ad-btn-green" style="width:100%" :disabled="pwdBusy || !pwdCode || !pwdNew" @click="submitPwdChange">
+                  {{ pwdBusy ? t('pwd.submitting') : t('pwd.submit') }}
+                </button>
+                <div v-if="pwdMsg" class="pwd-msg" :class="{ ok: pwdMsgOk }">{{ pwdMsg }}</div>
+              </div>
+            </details>
             <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
           </div>
         </details>
       </div>
     </header>
-
-    <!-- ★ 修改密码弹窗（邮箱验证码流程） -->
-    <PasswordModal v-if="pwdOpen" :username="authUser.username" :email="pwdEmail" @close="pwdOpen = false" @done="onPwdDone" />
 
     <!-- ===== 主内容区：翻译引擎启动加载屏 / 聊天窗口 ===== -->
     <main class="chat-main" :style="frontTab === 'tickets' ? 'overflow:auto' : ''">
@@ -78,8 +90,7 @@ import Bell from './components/Bell.vue'
 import Login from './components/Login.vue'
 import AdminDashboard from './components/AdminDashboard.vue'
 // API：token 读写与用户信息查询
-import { getAuthToken, setAuthToken, authMe, myPackage, meContext, type AuthUser } from '@/api'
-import PasswordModal from './components/PasswordModal.vue'
+import { getAuthToken, setAuthToken, authMe, myPackage, meContext, sendPwdCode, submitNewPassword, type AuthUser } from '@/api'
 // 国际化：文案取词 + 语言切换
 import { t, lang, toggleLang } from '@/i18n'
 
@@ -147,39 +158,55 @@ function onLogout() {
 function logout() {
 // ★ 下拉菜单与余额行（四期页眉整合）：打开时实时拉取最新余额
 const pkgLine = ref('')
-const pwdOpen = ref(false)
+// ★ 自助修改密码（内联表单，复用邮箱验证码通道）
 const pwdEmail = ref('')
+const pwdCode = ref('')
+const pwdNew = ref('')
+const pwdMsg = ref('')
+const pwdMsgOk = ref(false)
+const pwdBusy = ref(false)
+const pwdCooldown = ref(0)
+let pwdTimer: ReturnType<typeof setInterval> | undefined
 
-// openMenu 展开菜单并刷新余额（token 余额 + ≈句单语言）
-async function refreshPkgLine() {
+// sendPwdCodeAction 发送验证码到绑定邮箱（username 定位；防枚举文案由服务端统一）
+async function sendPwdCodeAction() {
   try {
-    const r: any = await myPackage()
-    if (r.success && typeof r.balance_tokens === 'number') {
-      const rate = 500
-      const approx = r.balance_sentences_approx ?? Math.floor(r.balance_tokens / rate)
-      pkgLine.value = `${new Intl.NumberFormat().format(r.balance_tokens)} token ≈ ${new Intl.NumberFormat().format(approx)} 句单语言`
-    }
-  } catch { pkgLine.value = '' }
+    const r = await sendPwdCode({ username: authUser.value.username, email: pwdEmail.value.trim() })
+    pwdMsgOk.value = true
+    pwdMsg.value = r.message || t('pwd.codeSent')
+    pwdCooldown.value = 60
+    if (pwdTimer) clearInterval(pwdTimer)
+    pwdTimer = setInterval(() => {
+      pwdCooldown.value--
+      if (pwdCooldown.value <= 0 && pwdTimer) clearInterval(pwdTimer)
+    }, 1000)
+  } catch (e) {
+    pwdMsgOk.value = false
+    pwdMsg.value = e instanceof Error ? e.message : String(e)
+  }
 }
-// ★ 剩余 token 显性展示：挂载即拉取，之后每 60s 静默刷新一次
-onMounted(() => refreshPkgLine())
-setInterval(refreshPkgLine, 60 * 1000)
 
-// openPwd 打开改密弹窗（预填绑定邮箱）
-async function openPwd() {
-  // 收起账号菜单并立即打开弹窗（邮箱随后异步补填，不阻塞交互反馈）
-  const d = document.querySelector('details.account-menu')
-  if (d) d.removeAttribute('open')
-  pwdOpen.value = true
+// submitPwdChange 校验并提交新密码
+async function submitPwdChange() {
+  if (pwdNew.value.length < 6) { pwdMsgOk.value=false; pwdMsg.value=t('pwd.tooShort'); return }
+  try {
+    const r = await submitNewPassword({ username: authUser.value.username, code: pwdCode.value.trim(), new_password: pwdNew.value })
+    if (!r.success) { pwdMsgOk.value=false; pwdMsg.value=r.message||t('pwd.codeBad'); return }
+    pwdMsgOk.value = true
+    pwdMsg.value = t('pwd.done')
+    pwdCode.value=''; pwdNew.value=''
+  } catch (e) {
+    pwdMsgOk.value=false
+    pwdMsg.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+// 打开账号菜单时预填绑定邮箱（me/context 含 email 字段）
+async function prefillEmail() {
   try {
     const r: any = await meContext()
     pwdEmail.value = r?.email || ''
-  } catch { pwdEmail.value = '' }
-}
-
-// onPwdDone 改密成功提示
-function onPwdDone() {
-  alert(t('pwd.done'))
+  } catch { /* 静默 */ }
 }
 
   onLogout()
@@ -346,4 +373,13 @@ body {
 .app-header { position: relative; z-index: 50; }
 .header-right { position: relative; z-index: 51; display: flex; align-items: center; gap: 8px; }
 .menu-drop { z-index: 100; }
+
+/* ★ 内联改密表单 */
+.pwd-sub[open] .menu-item { color: #1a73e8; }
+.pwd-inline { padding: 6px 14px 10px; border-top: 1px solid #f0f2f5; }
+.menu-input { width: 100%; box-sizing: border-box; border: 1px solid #d8dee6; border-radius: 8px; padding: 7px 8px; font-size: 13px; margin-bottom: 6px; }
+.pwd-code-row { display: flex; gap: 6px; margin-bottom: 6px; }
+.pwd-code-row .menu-input { flex: 1; margin-bottom: 0; }
+.pwd-msg { font-size: 12.5px; margin-top: 4px; color: #c62828; }
+.pwd-msg.ok { color: #2e7d32; }
 </style>
