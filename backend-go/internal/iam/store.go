@@ -386,7 +386,8 @@ func (s *Store) DeleteOrg(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec("UPDATE users SET org_id=0 WHERE org_id=?", id); err != nil {
+	// ★ 用户回收至上级组织（非根组织）：保持层级归属语义
+	if _, err := tx.Exec("UPDATE users SET org_id=? WHERE org_id=?", org.ParentID, id); err != nil {
 		return err
 	}
 	// 部门删除保护：被回收的部门管理员失去管理范围，自动降级为普通用户（防"幽灵管理员"）

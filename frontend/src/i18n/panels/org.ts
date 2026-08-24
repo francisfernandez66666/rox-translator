@@ -17,7 +17,7 @@ export const zh: Record<string, string> = {
   'org.inviteNeedCode': '请输入邀请码',
 
   'org.title': '组织结构',
-  'org.treeHint': '层级：根组织 → 组织 → 部门（支持任意深度）；可直接拖拽组织/部门节点调整层级（拖到另一节点下，或拖到根组织）。根组织与组织、部门均可自定义名称。删除组织/部门时其下用户将回收至根组织。',
+  'org.treeHint': '层级：根组织 → 组织 → 部门（支持任意深度）；可直接拖拽组织/部门节点调整层级（拖到另一节点下，或拖到根组织）。根组织与组织、部门均可自定义名称。删除组织/部门时其下用户将回收至上级组织。',
   'org.rootOption': '根组织下新建组织',
   'org.namePlaceholder': '组织/部门名称',
   'org.create': '新建组织',
@@ -62,7 +62,7 @@ export const zh: Record<string, string> = {
   'org.pwdReset': '密码已重置',
   'org.nameRequired': '请输入组织名称',
   'org.renamePrompt': '重命名「{name}」为：',
-  'org.deleteConfirm': '确认删除组织「{name}」？其子孙组织将上移，组织下用户将回收至根组织。',
+  'org.deleteConfirm': '确认删除组织「{name}」？其子孙组织将上移，组织下用户将回收至上级组织。',
 }
 
 export const en: Record<string, string> = {
