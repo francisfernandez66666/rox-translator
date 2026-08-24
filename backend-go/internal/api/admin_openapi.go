@@ -312,16 +312,49 @@ curl "https://域名/openapi/v1/tasks/status?id=123" -H "Authorization: Bearer <
 
 target_langs 传语言代码数组；缺省 ["en"]。
 
-| 代码 | 语言 | 代码 | 语言 |
-|------|------|------|------|
-| en | 英语 | ru | 俄语 |
-| de | 德语 | fr | 法语 |
-| es | 西班牙语 | pt | 葡萄牙语 |
-| ar | 阿拉伯语 | kk | 哈萨克语 |
-| zh_hant | 繁体中文 | ja | 日语 |
-| ko | 韩语 | th | 泰语 |
+## 支持的语言与计费规则
 
-ja/ko/th 等小语种为 AI 直翻（无知识库匹配），九语外同样支持。完整代码见 /api/translation/langs。
+target_langs 传语言代码数组；缺省 ["en"]。支持以下 34 种语言（Hunyuan-MT 全量）：
+
+| 代码 | 语言 | 翻译范围 |
+|------|------|----------|
+| en | 英语 | 知识库匹配+AI |
+| ru | 俄语 | 知识库匹配+AI |
+| ar | 阿拉伯语 | 知识库匹配+AI |
+| es | 西班牙语 | 知识库匹配+AI |
+| pt | 葡萄牙语 | 知识库匹配+AI |
+| fr | 法语 | 知识库匹配+AI |
+| kk | 哈萨克语 | 知识库匹配+AI |
+| de | 德语 | 知识库匹配+AI |
+| zh_hant | 繁体中文 | 知识库匹配+AI |
+| ja | 日语 | AI 直翻 |
+| ko | 韩语 | AI 直翻 |
+| th | 泰语 | AI 直翻 |
+| tr | 土耳其语 | AI 直翻 |
+| it | 意大利语 | AI 直翻 |
+| pl | 波兰语 | AI 直翻 |
+| sv | 瑞典语 | AI 直翻 |
+| ms | 马来语 | AI 直翻 |
+| id_lang | 印尼语 | AI 直翻 |
+| vi | 越南语 | AI 直翻 |
+| mn | 蒙古语 | AI 直翻 |
+| nl | 荷兰语 | AI 直翻 |
+| uk | 乌克兰语 | AI 直翻 |
+| hi | 印地语 | AI 直翻 |
+| fa | 波斯语 | AI 直翻 |
+| he | 希伯来语 | AI 直翻 |
+| el | 希腊语 | AI 直翻 |
+| my | 缅甸语 | AI 直翻 |
+| km | 高棉语 | AI 直翻 |
+| lo | 老挝语 | AI 直翻 |
+| tl | 菲律宾语 | AI 直翻 |
+| gu | 古吉拉特语 | AI 直翻 |
+| ur | 乌尔都语 | AI 直翻 |
+| te | 泰卢固语 | AI 直翻 |
+| mr | 马拉地语 | AI 直翻 |
+
+**计费口径**：消耗句数 = 源句数 × 目标语言数（多语言按倍数累增）；token ≈ 句 × 500 × 均摊系数。
+mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
 
 **计费口径**：消耗句数 = 源句数 × 目标语言数（多语言按倍数累增）；token ≈ 句 × 500 × 均摊系数。
 mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
@@ -398,16 +431,48 @@ failed     -> {"status":"failed","error_code":"insufficient_balance"}
 
 target_langs takes an array of language codes; defaults to ["en"].
 
-| Code | Language | Code | Language |
-|------|----------|------|----------|
-| en | English | ru | Russian |
-| de | German | fr | French |
-| es | Spanish | pt | Portuguese |
-| ar | Arabic | kk | Kazakh |
-| zh_hant | Traditional Chinese | ja* | Japanese |
-| ko* | Korean | th* | Thai |
+## Supported languages & billing rules
 
-Asterisked languages are AI-direct (no KB matching); all others use the nine-language knowledge base. Full list: /api/translation/langs.
+target_langs takes an array of language codes; defaults to ["en"]. Supported: 34 languages (Hunyuan-MT full set):
+
+| Code | Language | Scope |
+|------|----------|-------|
+| en | English | Knowledge base + AI |
+| ru | Russian | Knowledge base + AI |
+| ar | Arabic | Knowledge base + AI |
+| es | Spanish | Knowledge base + AI |
+| pt | Portuguese | Knowledge base + AI |
+| fr | French | Knowledge base + AI |
+| kk | Kazakh | Knowledge base + AI |
+| de | German | Knowledge base + AI |
+| zh_hant | Traditional Chinese | Knowledge base + AI |
+| ja | Japanese | AI direct |
+| ko | Korean | AI direct |
+| th | Thai | AI direct |
+| tr | Turkish | AI direct |
+| it | Italian | AI direct |
+| pl | Polish | AI direct |
+| sv | Swedish | AI direct |
+| ms | Malay | AI direct |
+| id_lang | Indonesian | AI direct |
+| vi | Vietnamese | AI direct |
+| mn | Mongolian | AI direct |
+| nl | Dutch | AI direct |
+| uk | Ukrainian | AI direct |
+| hi | Hindi | AI direct |
+| fa | Persian | AI direct |
+| he | Hebrew | AI direct |
+| el | Greek | AI direct |
+| my | Burmese | AI direct |
+| km | Khmer | AI direct |
+| lo | Lao | AI direct |
+| tl | Filipino | AI direct |
+| gu | Gujarati | AI direct |
+| ur | Urdu | AI direct |
+| te | Telugu | AI direct |
+| mr | Marathi | AI direct |
+
+**Billing**: sentences consumed = source sentences × target language count (multi-target multiplies). tokens ≈ sentences × 500 × markup factor. mode=pro includes KB matching and full review pipeline, consuming more than fast.
 
 **Billing**: sentences consumed = source sentences × target language count (multi-target multiplies). tokens ≈ sentences × 500 × markup factor. mode=pro includes KB matching and full review pipeline, consuming more than fast.
 

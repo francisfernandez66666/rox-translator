@@ -266,6 +266,9 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	if len(files) > 0 {
 		var okCount int64
 		var firstErr string
+		// ★ 进度轨迹：文件工单也写入状态步骤（修复「尚未开始执行」观感）
+		s.Store.SetTicketState(t.ID, "file_extract", "running",
+			fmt.Sprintf("total=%d mode=%s", len(files), normalizeMode(mode)))
 		for _, f := range files {
 			res := s.Engine.HandleFile(ctx, f.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode}, func(step string, done, total int) {})
 			if res.Error != "" || len(res.Files) == 0 {
@@ -278,13 +281,17 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 			_ = s.Store.SetTicketFileResult(f.ID, res.Files[0])
 			okCount++
 			s.persistTicketTM(t.TenantID, res.Data.Translations)
+			s.Store.SetTicketState(t.ID, "file_translate", "running",
+				fmt.Sprintf("progress=%d/%d", okCount+failedCount(s.Store, t.ID), len(files)))
 		}
+		s.Store.SetTicketState(t.ID, "file_extract", "success", "")
 		if okCount == 0 && firstErr != "" {
 			return fmt.Errorf("%s", firstErr)
 		}
 		return nil // 部分成功也放行（下载页可见各文件成败）
 	}
 	// 旧单文件路径
+	s.Store.SetTicketState(t.ID, "file_translate", "running", "single")
 	res := s.Engine.HandleFile(ctx, t.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode}, func(step string, done, total int) {})
 	if res.Error != "" {
 		return fmt.Errorf("%s", res.Error)
@@ -294,6 +301,27 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	}
 	s.persistTicketTM(t.TenantID, res.Data.Translations)
 	return nil
+}
+
+
+// failedCount 统计工单内处理失败的文件数。
+func failedCount(s *store.Store, ticketID int64) int64 {
+	files, _ := s.TicketFiles(ticketID)
+	var n int64
+	for _, f := range files {
+		if f.Error != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// normalizeMode 模式归一化（轨迹展示用）。
+func normalizeMode(m string) string {
+	if m == "fast" {
+		return "fast"
+	}
+	return "pro"
 }
 
 // persistTicketTM 把文件工单的段级译文回写租户翻译记忆（tm_segments，module=file_ticket），

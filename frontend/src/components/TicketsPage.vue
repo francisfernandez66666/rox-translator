@@ -102,6 +102,15 @@
             <template v-if="st.error"> ⚠️ {{ st.error }}</template>
           </li>
         </ul>
+        <!-- ★ 文件清单（多文件工单）：逐文件状态与产物就绪标记 -->
+        <div v-if="(detail.files || []).length" class="tp-files-detail">
+          <div v-for="f in detail.files" :key="f.id" class="tp-file-row"
+               :class="{ err: f.error }">
+            📄 {{ f.file_name }}
+            <span v-if="f.result_path" class="tp-file-ok">{{ t('tk.fileReady') }}</span>
+            <span v-else-if="f.error" class="tp-file-err">{{ f.error }}</span>
+          </div>
+        </div>
         <p class="ad-hint" v-if="!(detail.states || []).length">{{ t('tk.noSteps') }}</p>
         <!-- QA 质检摘要（存在报告时展示） -->
         <p class="tp-estimate" :class="{ warn: qaSummary && !qaSummary.pass }" v-if="qaSummary">
@@ -350,4 +359,11 @@ function statusLabel(s: string): string {
 .tp-chip-remove { border: none; background: transparent; cursor: pointer; color: #c62828; font-size: 12px; padding: 0 2px; }
 .tp-chip-remove:hover { color: #e53935; }
 .tp-chip-total { width: 100%; font-size: 12px; color: #888; }
+
+/* ★ 文件清单行 */
+.tp-files-detail { margin-top: 8px; }
+.tp-file-row { font-size: 12.5px; padding: 3px 0; color: #444; }
+.tp-file-row.err { color: #c62828; }
+.tp-file-ok { color: #2e7d32; margin-left: 8px; }
+.tp-file-err { margin-left: 8px; }
 </style>

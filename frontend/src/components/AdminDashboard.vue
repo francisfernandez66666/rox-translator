@@ -16,14 +16,17 @@
       <div class="adm-top-right">
         <!-- 消息中心（复用前台铃铛） -->
         <Bell />
-        <!-- 登录账号 -->
-        <span class="adm-user">👤 {{ user?.display_name || user?.username }}</span>
         <!-- 语言切换 -->
-        <button class="gear-btn adm-gear" @click="toggleLang()">{{ lang === 'zh' ? 'EN' : '中' }}</button>
-        <!-- 返回前台 -->
-        <a class="adm-top-link" href="/">{{ t('admin.backWorkspace') }}</a>
-        <!-- 退出 -->
-        <button class="gear-btn adm-gear" @click="logout" :title="t('common.logout')">⎋</button>
+        <button class="adm-gear" @click="toggleLang()">{{ lang === 'zh' ? 'EN' : '中' }}</button>
+        <!-- ☰ 账号下拉：修改密码（独立弹窗）/ 退出 -->
+        <details class="account-menu">
+          <summary title="账号菜单">👤 {{ user?.display_name || user?.username }}</summary>
+          <div class="menu-drop">
+            <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
+            <a class="menu-item" href="/">{{ t('admin.backWorkspace') }}</a>
+            <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
+          </div>
+        </details>
       </div>
     </header>
 
@@ -71,7 +74,7 @@
 // Vue 核心组合式 API
 import { ref, computed, watch, onMounted } from 'vue'
 // API：token 读写 + 用户类型
-import { setAuthToken, type AuthUser } from '@/api'
+import { setAuthToken, type AuthUser , meContext } from '@/api'
 // 后台共享状态（用户/租户/角色等级）
 import { user, activeTenantId, tenantList, myLevel, isAdmin, isSuper, roleName, switchTenant, loadTenants } from './admin/store'
 // 子面板组件
@@ -94,6 +97,7 @@ import Audit from './admin/Audit.vue'
 // ★ 站内信铃铛：后台消息通知中心（工单完成/反馈/告警等站内信）
 import Bell from '../components/Bell.vue'
 import Feedback from './admin/Feedback.vue'
+import PasswordModal from '../components/PasswordModal.vue'
 // ★ 套餐详情合并面板（四期：商业包+订阅收银合一；非超管只读）
 import PlansPanel from './admin/PlansPanel.vue'
 // 共享样式（非 scoped，供全部面板使用）
@@ -191,6 +195,27 @@ function logout() {
   emit('logout')
 }
 
+
+// ★ 自助修改密码弹窗状态
+const pwdOpen = ref(false)
+const pwdEmail = ref('')
+
+// openPwd 打开改密弹窗并异步预填绑定邮箱
+async function openPwd() {
+  const d = document.querySelector('details.account-menu')
+  if (d) d.removeAttribute('open')
+  pwdOpen.value = true
+  try {
+    const r: any = await meContext()
+    pwdEmail.value = r?.email || ''
+  } catch { pwdEmail.value = '' }
+}
+
+// onPwdDone 改密成功提示
+function onPwdDone() {
+  alert(t('pwd.done'))
+}
+
 // 挂载：超管加载租户列表（供租户切换器使用）
 onMounted(() => {
   if (isSuper.value) loadTenants()
@@ -222,4 +247,14 @@ onMounted(() => {
 .adm-gear:hover { background: rgba(255,255,255,.18); }
 .adm-top-link { color: #fff; text-decoration: none; font-size: 13px; opacity: .95; }
 .adm-top-link:hover { text-decoration: underline; }
+
+/* ★ 壳层布局修正：抵消 admin.css 中 .ad-side 100vh/sticky 造成的挤压 */
+.ad-shell .ad-side { position: relative; top: auto; height: auto; }
+.ad-shell .ad-main { overflow: auto; }
+
+/* ★ 顶栏配色统一为侧栏色（用户反馈两种颜色） */
+.adm-topbar { background: #1a237e; }
+.adm-gear:hover { background: rgba(255,255,255,.18); }
+
+/* ★ 账号下拉内修改密码项（打开独立弹窗） */
 </style>

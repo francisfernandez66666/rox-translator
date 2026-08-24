@@ -279,7 +279,9 @@ func (s *Server) handleTicketDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	// 附带状态轨迹（流程步骤执行历史）
 	states, _ := s.Store.TicketStates(id)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t, "states": states})
+	// ★ 文件工单附带各文件处理状态（前端进度面板渲染用）
+	tfiles, _ := s.Store.TicketFiles(id)
+	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t, "states": states, "files": tfiles})
 }
 
 // handleTicketDownload 下载工单翻译结果（创建者或超管）。
