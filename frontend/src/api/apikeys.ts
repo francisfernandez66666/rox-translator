@@ -39,3 +39,30 @@ export async function apiKeyLimit(id: number, dailyCallLimit: number): Promise<A
 export async function apiKeyReveal(id: number): Promise<AdminResp & { api_key?: string }> {
   return request('/api/apikeys/reveal', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
+
+// ============================================================================
+// 开放 API 文档在线维护（仅超管）
+// ============================================================================
+
+/** getOpenAPIDocs 读取中英双语文档源码 */
+export async function getOpenAPIDocs(): Promise<AdminResp & { md_zh?: string; md_en?: string; default_zh?: boolean; default_en?: boolean }> {
+  return request('/api/admin/openapi-docs', { headers: authHeaders() })
+}
+
+/** saveOpenAPIDocs 保存指定语言的文档源码（空串=恢复该语言内置默认） */
+export async function saveOpenAPIDocs(data: { lang: string; md: string }): Promise<AdminResp> {
+  return request('/api/admin/openapi-docs/save', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(data),
+  })
+}
+
+/** previewOpenAPIDocs 预览渲染结果 */
+export async function previewOpenAPIDocs(data: { lang?: string; md: string }): Promise<AdminResp & { html?: string }> {
+  return request('/api/admin/openapi-docs/preview', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(data),
+  })
+}
