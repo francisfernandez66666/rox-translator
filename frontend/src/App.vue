@@ -40,8 +40,8 @@
         <button class="gear-btn" @click="showSettings = true" :title="t('common.settings')">⚙️</button>
         <!-- ☰ 账号下拉：修改密码 / 退出 -->
         <div class="menu-wrap">
-          <button class="gear-btn" @click.stop="menuOpen = !menuOpen" title="账号菜单">☰</button>
-          <div v-if="menuOpen" class="menu-drop">
+          <button class="gear-btn" @click.stop="toggleMenu" title="账号菜单">☰</button>
+          <div v-show="menuOpen" class="menu-drop">
             <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
             <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
             <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
@@ -188,6 +188,9 @@ async function refreshPkgLine() {
   } catch { pkgLine.value = '' }
 }
 watch(menuOpen, (v) => { if (v) refreshPkgLine() })
+// ★ 剩余 token 显性展示：挂载即拉取，之后每 60s 静默刷新一次
+onMounted(() => refreshPkgLine())
+setInterval(refreshPkgLine, 60 * 1000)
 
 // openPwd 打开改密弹窗（预填绑定邮箱）
 async function openPwd() {
@@ -230,6 +233,10 @@ onMounted(async () => {
 })
 
 // 组件卸载：移除窗口尺寸监听
+// toggleMenu 账号下拉开合
+function toggleMenu() {
+  menuOpen.value = !menuOpen.value
+}
 // 点击下拉外部时收起账号菜单
 function onDocClick(e: MouseEvent) {
   if (!(e.target as HTMLElement).closest('.menu-wrap')) menuOpen.value = false
@@ -369,4 +376,9 @@ body {
 
 /* ★ 剩余 token 显性徽标 */
 .header-balance { background: rgba(255,152,0,.14); color: #e65100; font-size: 12.5px; padding: 4px 10px; border-radius: 12px; margin-right: 6px; white-space: nowrap; }
+
+/* ★ 层级保险：确保页眉交互元素不被遮挡 */
+.app-header { position: relative; z-index: 50; }
+.header-right { position: relative; z-index: 51; display: flex; align-items: center; gap: 8px; }
+.menu-drop { z-index: 100; }
 </style>

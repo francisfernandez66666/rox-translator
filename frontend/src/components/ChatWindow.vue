@@ -60,15 +60,6 @@
       </div>
     </div>
 
-    <!-- ★ 翻译模式切换 + 清空对话（页眉整合后置于输入区上方） -->
-    <div class="chat-tools">
-      <div class="mode-switch">
-        <button :class="['mode-btn', translateMode !== 'fast' ? 'on' : '']" @click="setMode('pro')">🎓 {{ t('chat.modePro') }}</button>
-        <button :class="['mode-btn', translateMode === 'fast' ? 'on' : '']" @click="setMode('fast')">⚡ {{ t('chat.modeFast') }}</button>
-      </div>
-      <button class="clear-btn" @click="store.clearMessages()" :title="t('chat.clearChat')">🗑️</button>
-    </div>
-
     <!-- ===== 底部输入区域 ===== -->
     <div class="input-area" :class="{ 'input-mobile': isMobile }">
       <!-- ===== 已选文件 / 语言标签行（可逐个移除） ===== -->
@@ -226,6 +217,13 @@
           <template v-if="!estimate.sufficient">⚠️ {{ estimate.hint || '额度不足，请充值或升级套餐' }}</template>
           <template v-else>{{ tpl('chat.estimateTokens', { min: fmtNum(estimate.tokens_min), max: fmtNum(estimate.tokens_max), s: fmtNum(estimate.cost_sentences_approx), bal: fmtNum(estimate.balance_tokens) }) }}</template>
         </div>
+
+        <!-- ★ 翻译模式切换（发送按钮左侧）：🎓专业校对 / ⚡快速 -->
+        <div class="mode-switch send-adjacent">
+          <button :class="['mode-btn', translateMode !== 'fast' ? 'on' : '']" @click="setMode('pro')" :title="t('chat.modeTip')">🎓</button>
+          <button :class="['mode-btn', translateMode === 'fast' ? 'on' : '']" @click="setMode('fast')" :title="t('chat.modeTip')">⚡</button>
+        </div>
+        <button class="clear-btn" style="margin-left:6px" @click="store.clearMessages()" :title="t('chat.clearChat')">🗑️</button>
 
         <button
           v-if="store.isLoading"
@@ -1054,4 +1052,9 @@ async function loadTranslationLangs() {
 .chat-tools { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px 0; }
 .chat-tools .mode-btn { border: 1px solid #d8dee6; background: #fff; color: #555; font-size: 12px; padding: 4px 10px; cursor: pointer; }
 .chat-tools .mode-btn.on { background: #1a73e8; border-color: #1a73e8; color: #fff; }
+
+/* ★ 发送按钮旁的模式切换（紧凑图标版） */
+.mode-switch.send-adjacent { display: inline-flex; gap: 2px; margin-right: 6px; }
+.mode-switch.send-adjacent .mode-btn { border: 1px solid #d8dee6; background: #fff; font-size: 14px; padding: 6px 9px; cursor: pointer; color: #777; }
+.mode-switch.send-adjacent .mode-btn.on { background: #1a73e8; border-color: #1a73e8; color: #fff; }
 </style>
