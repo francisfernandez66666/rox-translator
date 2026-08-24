@@ -60,6 +60,15 @@
       </div>
     </div>
 
+    <!-- ★ 翻译模式切换 + 清空对话（页眉整合后置于输入区上方） -->
+    <div class="chat-tools">
+      <div class="mode-switch">
+        <button :class="['mode-btn', translateMode !== 'fast' ? 'on' : '']" @click="setMode('pro')">🎓 {{ t('chat.modePro') }}</button>
+        <button :class="['mode-btn', translateMode === 'fast' ? 'on' : '']" @click="setMode('fast')">⚡ {{ t('chat.modeFast') }}</button>
+      </div>
+      <button class="clear-btn" @click="store.clearMessages()" :title="t('chat.clearChat')">🗑️</button>
+    </div>
+
     <!-- ===== 底部输入区域 ===== -->
     <div class="input-area" :class="{ 'input-mobile': isMobile }">
       <!-- ===== 已选文件 / 语言标签行（可逐个移除） ===== -->

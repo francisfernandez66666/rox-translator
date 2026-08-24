@@ -19,23 +19,30 @@
   <!-- ===== 翻译工作台（登录后） ===== -->
   <div v-else id="app-root" :class="isMobile ? 'device-mobile' : 'device-desktop'">
     <!-- ===== 顶部导航栏：品牌信息 + 在线状态 + 设置/退出按钮 ===== -->
-    <!-- ★ 单页眉（四期体验增强）：品牌 + 右侧聚合下拉（导航/余额/语言/消息/改密/退出） -->
+    <!-- ★ 单页眉：品牌 | 即时翻译/工单 Tabs（显性）| 余额/语言/模型设置/☰账号下拉 -->
     <header class="app-header">
       <div class="header-left">
         <span class="header-icon">🌐</span>
         <span class="header-title">{{ t('app.title') }}</span>
+        <nav class="front-tabs">
+          <button :class="['front-tab', frontTab === 'workbench' ? 'on' : '']" @click="switchFrontTab('workbench')">💬 {{ t('app.tabWorkbench') }}</button>
+          <button :class="['front-tab', frontTab === 'tickets' ? 'on' : '']" @click="switchFrontTab('tickets')">📋 {{ t('app.tabTickets') }}</button>
+        </nav>
       </div>
       <div class="header-right">
+        <!-- 剩余 token 显性徽标 -->
+        <span v-if="pkgLine" class="header-balance" title="剩余 token ≈ 句单语言">🪙 {{ pkgLine }}</span>
+        <!-- 消息中心 -->
+        <Bell />
+        <!-- 语言切换（显性） -->
+        <button class="gear-btn" @click="toggleLang()" :title="lang === 'zh' ? 'Switch to English' : '切换为中文'">{{ lang === 'zh' ? 'EN' : '中' }}</button>
+        <!-- 翻译模型设置 -->
+        <button class="gear-btn" @click="showSettings = true" :title="t('common.settings')">⚙️</button>
+        <!-- ☰ 账号下拉：修改密码 / 退出 -->
         <div class="menu-wrap">
-          <button class="gear-btn" @click.stop="menuOpen = !menuOpen" :title="t('common.settings')">☰</button>
-          <div v-if="menuOpen" class="menu-drop" @click.stop>
+          <button class="gear-btn" @click.stop="menuOpen = !menuOpen" title="账号菜单">☰</button>
+          <div v-if="menuOpen" class="menu-drop">
             <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
-            <button class="menu-item" @click="switchFrontTab('workbench'); menuOpen = false">💬 {{ t('app.tabWorkbench') }}</button>
-            <button class="menu-item" @click="switchFrontTab('tickets'); menuOpen = false">📋 {{ t('app.tabTickets') }}</button>
-            <div v-if="pkgLine" class="menu-info">🪙 {{ pkgLine }}</div>
-            <div class="menu-sep"></div>
-            <div class="menu-item bell-row"><Bell /></div>
-            <button class="menu-item" @click="toggleLang()">{{ lang === 'zh' ? '🌐 English' : '🌐 中文' }}</button>
             <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
             <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
           </div>
@@ -223,6 +230,13 @@ onMounted(async () => {
 })
 
 // 组件卸载：移除窗口尺寸监听
+// 点击下拉外部时收起账号菜单
+function onDocClick(e: MouseEvent) {
+  if (!(e.target as HTMLElement).closest('.menu-wrap')) menuOpen.value = false
+}
+document.addEventListener('click', onDocClick)
+onUnmounted(() => document.removeEventListener('click', onDocClick))
+
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
 })
@@ -352,4 +366,7 @@ body {
 .menu-sep { height: 1px; background: #f0f2f5; margin: 4px 0; }
 .menu-logout { color: #c62828; }
 .bell-row { position: relative; padding: 6px 14px; }
+
+/* ★ 剩余 token 显性徽标 */
+.header-balance { background: rgba(255,152,0,.14); color: #e65100; font-size: 12.5px; padding: 4px 10px; border-radius: 12px; margin-right: 6px; white-space: nowrap; }
 </style>
