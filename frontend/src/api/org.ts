@@ -3,7 +3,7 @@
 // 职责：组织/部门树的 CRUD、组织下用户视图（超管/租户管理员按组织下钻）
 // ============================================================================
 
-import { request, authHeaders } from './core'
+import { request, authHeaders, type AdminResp } from './core'
 
 // 组织实体
 export interface OrgInfo {

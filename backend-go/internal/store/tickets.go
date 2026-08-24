@@ -7,6 +7,7 @@ package store
 
 import (
 	"database/sql"
+	"os"
 	"time"
 )
 
@@ -202,4 +203,48 @@ func scanTicketFull(row *sql.Row) (*Ticket, error) {
 		return nil, err
 	}
 	return &t, nil
+}
+
+// DeleteTicketWithFiles 删除工单及其关联数据（文件记录/状态轨迹/产物文件）。
+// 物理删除磁盘上的产物文件和上传文件（如果存在）。
+// 参数：id=工单 ID，tid=租户 ID。返回错误。
+func (s *Store) DeleteTicketWithFiles(id, tid int64) error {
+	t, err := s.GetTicket(id, tid)
+	if err != nil {
+		return err
+	}
+	// 收集需清理的磁盘文件路径
+	var diskPaths []string
+	if t.FilePath != "" {
+		diskPaths = append(diskPaths, t.FilePath)
+	}
+	if t.ResultPath != "" {
+		diskPaths = append(diskPaths, t.ResultPath)
+	}
+	tfs, _ := s.TicketFiles(id)
+	for _, tf := range tfs {
+		if tf.FilePath != "" {
+			diskPaths = append(diskPaths, tf.FilePath)
+		}
+		if tf.ResultPath != "" {
+			diskPaths = append(diskPaths, tf.ResultPath)
+		}
+	}
+	// 删除 DB 记录（ticket_files → ticket_state → tickets）
+	if _, err := s.db.Exec("DELETE FROM ticket_files WHERE ticket_id=?", id); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec("DELETE FROM ticket_state WHERE ticket_id=?", id); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec("DELETE FROM tickets WHERE id=? AND tenant_id=?", id, tid); err != nil {
+		return err
+	}
+	// 异步清理磁盘文件（不阻塞主流程）
+	go func() {
+		for _, p := range diskPaths {
+			os.Remove(p)
+		}
+	}()
+	return nil
 }

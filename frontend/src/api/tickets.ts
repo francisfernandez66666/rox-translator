@@ -131,3 +131,8 @@ export async function ticketCreateFile(files: File | File[], meta: { title: stri
   fd.append('target_langs', meta.target_langs)
   return request('/api/tickets/create-file', { method: 'POST', headers: authHeaders(), body: fd })
 }
+
+/** ticketDelete 删除已完成工单及其关联文件 */
+export async function ticketDelete(id: number): Promise<AdminResp> {
+  return request("/api/tickets/delete", { method: "POST", headers: authHeaders(), body: JSON.stringify({ id }) })
+}

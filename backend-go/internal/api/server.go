@@ -189,6 +189,7 @@ func (s *Server) routesTickets() {
 	s.mux.HandleFunc("/api/tickets/run", s.handleTicketRun)
 	s.mux.HandleFunc("/api/tickets/detail", s.handleTicketDetail)
 	s.mux.HandleFunc("/api/tickets/download", s.handleTicketDownload)
+	s.mux.HandleFunc("/api/tickets/delete", s.handleTicketDelete)
 	s.mux.HandleFunc("/api/notifications", s.handleNotifications)
 	s.mux.HandleFunc("/api/notifications/unread", s.handleNotificationsUnread)
 	s.mux.HandleFunc("/api/notifications/read", s.handleNotificationsRead)

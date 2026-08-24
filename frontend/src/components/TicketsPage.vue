@@ -86,6 +86,7 @@
               <button v-if="tk.status === 'draft'" class="ad-btn-sm" @click="run(tk)">{{ t('tk.run') }}</button>
               <button v-if="tk.status === 'completed'" class="ad-btn-sm ad-btn-green" @click="download(tk)">⬇ {{ t('tk.download') }}</button>
               <button v-if="tk.status === 'completed'" class="ad-btn-sm" @click="openFeedback(tk)">💬 {{ t('fb.entry') }}</button>
+              <button v-if="tk.status === 'completed'" class="ad-btn-sm ad-btn-red" @click="deleteTicket(tk)">🗑 {{ t('common.delete') }}</button>
               <button class="ad-btn-sm" @click="toggleDetail(tk)">{{ t('tk.detail') }}</button>
             </td>
           </tr>
@@ -318,6 +319,14 @@ async function create() {
 // run 运行草稿工单（入队）
 async function run(tk: any) {
   const r = await ticketRun(tk.id)
+  if (!r.success) { alert(r.message); return }
+  await load()
+}
+
+// deleteTicket 删除已完成工单及其关联文件（需确认）
+async function deleteTicket(tk: any) {
+  if (!confirm(tpl('tk.deleteConfirm', { no: tk.ticket_no }))) return
+  const r = await ticketDelete(tk.id)
   if (!r.success) { alert(r.message); return }
   await load()
 }

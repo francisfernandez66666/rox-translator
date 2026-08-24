@@ -587,3 +587,38 @@ func resultFileName(f *store.TicketFile) string {
 func mimeEscape(name string) string {
 	return strings.ReplaceAll(name, `"`, `_`)
 }
+
+// handleTicketDelete 删除已完成工单及其关联文件（创建者或超管；弹窗确认由前端负责）。
+func (s *Server) handleTicketDelete(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	t, err := s.Store.GetTicket(req.ID, s.effTenant(r, u))
+	if err != nil {
+		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "工单不存在"})
+		return
+	}
+	if t.CreatedBy != u.ID && !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权删除他人工单"})
+		return
+	}
+	if t.Status == store.TicketInProgress || t.Status == store.TicketQueued {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "工单正在翻译中，无法删除"})
+		return
+	}
+	if err := s.Store.DeleteTicketWithFiles(req.ID, s.effTenant(r, u)); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_delete", "tickets", t.TicketNo)
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
