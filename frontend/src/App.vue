@@ -185,7 +185,6 @@ async function refreshPkgLine() {
     }
   } catch { pkgLine.value = '' }
 }
-watch(menuOpen, (v) => { if (v) refreshPkgLine() })
 // ★ 剩余 token 显性展示：挂载即拉取，之后每 60s 静默刷新一次
 onMounted(() => refreshPkgLine())
 setInterval(refreshPkgLine, 60 * 1000)
@@ -233,8 +232,6 @@ onMounted(async () => {
 
 // 组件卸载：移除窗口尺寸监听
 // 点击下拉外部时收起账号菜单
-document.addEventListener('click', onDocClick)
-onUnmounted(() => document.removeEventListener('click', onDocClick))
 
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
