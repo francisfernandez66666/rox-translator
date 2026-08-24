@@ -1,5 +1,6 @@
 // ============ 本文件职责中文说明 ============
-// PDF 文本提取：基于 ledongthuc/pdf（纯 Go，无 CGO）逐页读取文本。
+// PDF 文本提取：优先使用 pdftotext CLI（poppler-utils，完美支持 CJK）；
+// CLI 不可用时回退 ledongthuc/pdf（纯 Go，无 CGO）逐页读取文本。
 // PDF 无原格式回写能力，翻译产物由引擎层统一降级为 xlsx 对照表（见 engine/file.go 第3步）。
 // 加密/扫描件（图片型）无法提取文本时返回可读错误。
 // =============================================
@@ -9,19 +10,49 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	ledong "github.com/ledongthuc/pdf"
 )
 
-// extractPdfText 提取 PDF 全文文本：逐页取纯文本，按行入提取器。
-// 参数：path=PDF 文件路径，e=提取器；返回错误（加密/空文档等）。
+// extractPdfText 提取 PDF 全文文本。
+// 策略：优先 pdftotext CLI（poppler-utils），CJK 支持完善；
+//
+//	CLI 不可用或提取为空时回退 ledongthuc/pdf 逐页读取。
 func extractPdfText(path string, e *Extractor) error {
+	if _, lookErr := exec.LookPath("pdftotext"); lookErr == nil {
+		return extractPdfTextCLI(path, e)
+	}
+	return extractPdfTextLib(path, e)
+}
+
+// extractPdfTextCLI 通过 poppler-utils 的 pdftotext 命令行工具提取全文。
+// CJK 字体编码支持远优于纯 Go 方案；-layout 保持原始排版便于段落切分。
+func extractPdfTextCLI(path string, e *Extractor) error {
+	out, err := exec.Command("pdftotext", "-layout", "-enc", "UTF-8", path, "-").Output()
+	if err != nil {
+		return fmt.Errorf("pdftotext 执行失败: %w", err)
+	}
+	txt := string(out)
+	if strings.TrimSpace(txt) == "" {
+		return fmt.Errorf("pdftotext 未提取到文本")
+	}
+	for _, line := range strings.Split(txt, "\n") {
+		line = strings.TrimSpace(strings.TrimRight(line, "\r"))
+		if line != "" && line != "\f" {
+			e.add(line)
+		}
+	}
+	return nil
+}
+
+// extractPdfTextLib ledongthuc/pdf 回退方案（CLI 不可用时使用）。
+func extractPdfTextLib(path string, e *Extractor) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	// NewParser 要求未加密的原始字节；ReadAll 拉平全部页面文本
 	r, err := ledong.NewReader(bytes.NewReader(b), int64(len(b)))
 	if err != nil {
 		return fmt.Errorf("PDF 解析失败（可能已加密）: %w", err)
@@ -33,7 +64,7 @@ func extractPdfText(path string, e *Extractor) error {
 		}
 		txt, err := p.GetPlainText(nil)
 		if err != nil {
-			continue // 单页失败跳过（如该页为纯图）
+			continue
 		}
 		for _, line := range strings.Split(txt, "\n") {
 			line = strings.TrimSpace(strings.TrimRight(line, "\r"))
