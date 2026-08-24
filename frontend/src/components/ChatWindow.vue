@@ -247,15 +247,6 @@
       </div>
     </div>
 
-    <!-- ★ 自助修改密码弹窗（邮箱验证码流程） -->
-    <PasswordModal
-      v-if="pwdOpen"
-      :username="me.username || ''"
-      :email="me.email || ''"
-      @close="pwdOpen = false"
-      @done="onPwdDone"
-    />
-
     <!-- ★ 用户反馈弹窗（翻译结果 → 超管） -->
     <FeedbackModal
       v-if="feedbackTarget"
@@ -374,12 +365,6 @@ function onFeedbackSubmitted() {
   alert(t('fb.done'))
 }
 
-// ★ 自助修改密码弹窗
-const pwdOpen = ref(false)
-// onPwdDone 改密成功提示（下次登录使用新密码）
-function onPwdDone() {
-  alert(t('pwd.done'))
-}
 
 // ---- 翻译前报价预览（与后端计量同口径，只读不扣减） ----
 const estimate = ref<any>(null)

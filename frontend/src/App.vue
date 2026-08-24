@@ -38,32 +38,25 @@
         <button class="gear-btn" @click="toggleLang()" :title="lang === 'zh' ? 'Switch to English' : '切换为中文'">{{ lang === 'zh' ? 'EN' : '中' }}</button>
         <!-- ★ 账号菜单：原生 details 折叠（零 JS 可靠开合） -->
         <details class="account-menu">
-          <summary title="账号菜单" @click="prefillEmail">☰</summary>
+          <summary title="账号菜单">☰</summary>
           <div class="menu-drop">
             <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
-            <!-- ★ 修改密码：内联二级折叠表单（无弹窗/层级依赖，展开即用） -->
-            <details class="pwd-sub">
-              <summary class="menu-item">🔒 {{ t('pwd.title') }}</summary>
-              <div class="pwd-inline">
-                <input v-model="pwdEmail" :placeholder="t('login.boundEmail')" class="menu-input" />
-                <div class="pwd-code-row">
-                  <input v-model="pwdCode" :placeholder="t('login.verificationCode')" class="menu-input" />
-                  <button class="ad-btn-sm" :disabled="pwdCooldown > 0 || (!pwdEmail && !authUser.username)" @click="sendPwdCodeAction">
-                    {{ pwdCooldown > 0 ? tpl('login.codeResend', { n: pwdCooldown }) : t('login.sendCode') }}
-                  </button>
-                </div>
-                <input v-model="pwdNew" type="password" :placeholder="t('login.newPassword')" class="menu-input" />
-                <button class="ad-btn-sm ad-btn-green" style="width:100%" :disabled="pwdBusy || !pwdCode || !pwdNew" @click="submitPwdChange">
-                  {{ pwdBusy ? t('pwd.submitting') : t('pwd.submit') }}
-                </button>
-                <div v-if="pwdMsg" class="pwd-msg" :class="{ ok: pwdMsgOk }">{{ pwdMsg }}</div>
-              </div>
-            </details>
+            <!-- ★ 修改密码：独立 Teleport 弹窗（邮箱验证码流程） -->
+            <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
             <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
           </div>
         </details>
       </div>
     </header>
+
+    <!-- ★ 自助修改密码弹窗（Teleport 挂载 body，居中遮罩） -->
+    <PasswordModal
+      v-if="pwdOpen"
+      :username="authUser.username"
+      :email="pwdEmail"
+      @close="pwdOpen = false"
+      @done="onPwdDone"
+    />
 
     <!-- ===== 主内容区：翻译引擎启动加载屏 / 聊天窗口 ===== -->
     <main class="chat-main" :style="frontTab === 'tickets' ? 'overflow:auto' : ''">
@@ -189,6 +182,12 @@ async function openPwd() {
     pwdEmail.value = r?.email || ''
   } catch { pwdEmail.value = '' }
 }
+
+// onPwdDone 改密成功提示
+function onPwdDone() {
+  alert(t('pwd.done'))
+}
+
 
 // 切换翻译模型
 
@@ -353,7 +352,6 @@ body {
 .menu-drop { z-index: 100; }
 
 /* ★ 内联改密表单 */
-.pwd-sub[open] .menu-item { color: #1a73e8; }
 .pwd-inline { padding: 6px 14px 10px; border-top: 1px solid #f0f2f5; }
 .menu-input { width: 100%; box-sizing: border-box; border: 1px solid #d8dee6; border-radius: 8px; padding: 7px 8px; font-size: 13px; margin-bottom: 6px; }
 .pwd-code-row { display: flex; gap: 6px; margin-bottom: 6px; }
