@@ -30,23 +30,22 @@
         </nav>
       </div>
       <div class="header-right">
-        <!-- 剩余 token 显性徽标 -->
-        <span v-if="pkgLine" class="header-balance" title="剩余 token ≈ 句单语言">🪙 {{ pkgLine }}</span>
+        <!-- 剩余 token（常驻渲染：无数据时显示占位，便于定位） -->
+        <span class="header-balance" title="剩余 token ≈ 句单语言">🪙 {{ pkgLine || '…' }}</span>
         <!-- 消息中心 -->
         <Bell />
         <!-- 语言切换（显性） -->
         <button class="gear-btn" @click="toggleLang()" :title="lang === 'zh' ? 'Switch to English' : '切换为中文'">{{ lang === 'zh' ? 'EN' : '中' }}</button>
-        <!-- 翻译模型设置 -->
-        <button class="gear-btn" @click="showSettings = true" :title="t('common.settings')">⚙️</button>
-        <!-- ☰ 账号下拉：修改密码 / 退出 -->
-        <div class="menu-wrap">
-          <button class="gear-btn" @click.stop="toggleMenu" title="账号菜单">☰</button>
-          <div v-show="menuOpen" class="menu-drop">
+        <!-- ★ 账号菜单：原生 details 折叠（零 JS 可靠开合） -->
+        <details class="account-menu">
+          <summary title="账号菜单">☰</summary>
+          <div class="menu-drop">
             <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
+            <button class="menu-item" @click="showSettings = true">⚙️ {{ t('common.settings') }}</button>
             <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
             <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
           </div>
-        </div>
+        </details>
       </div>
     </header>
 
@@ -171,7 +170,6 @@ function onLogout() {
 // 无参数无返回，由顶栏退出按钮触发。
 function logout() {
 // ★ 下拉菜单与余额行（四期页眉整合）：打开时实时拉取最新余额
-const menuOpen = ref(false)
 const pkgLine = ref('')
 const pwdOpen = ref(false)
 const pwdEmail = ref('')
@@ -194,7 +192,8 @@ setInterval(refreshPkgLine, 60 * 1000)
 
 // openPwd 打开改密弹窗（预填绑定邮箱）
 async function openPwd() {
-  menuOpen.value = false
+  const d = document.querySelector('details.account-menu')
+  if (d) d.removeAttribute('open')
   try {
     const r: any = await meContext()
     pwdEmail.value = r?.email || ''
@@ -233,14 +232,7 @@ onMounted(async () => {
 })
 
 // 组件卸载：移除窗口尺寸监听
-// toggleMenu 账号下拉开合
-function toggleMenu() {
-  menuOpen.value = !menuOpen.value
-}
 // 点击下拉外部时收起账号菜单
-function onDocClick(e: MouseEvent) {
-  if (!(e.target as HTMLElement).closest('.menu-wrap')) menuOpen.value = false
-}
 document.addEventListener('click', onDocClick)
 onUnmounted(() => document.removeEventListener('click', onDocClick))
 
@@ -364,8 +356,10 @@ body {
 .front-tab.on { background: rgba(255,255,255,.18); font-weight: 600; }
 
 /* ★ 页眉整合：聚合下拉菜单 */
-.menu-wrap { position: relative; }
-.menu-drop { position: absolute; right: 0; top: 40px; width: 240px; background: #fff; border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.16); padding: 6px 0; z-index: 60; overflow: hidden; }
+.account-menu { position: relative; }
+.account-menu summary { list-style: none; cursor: pointer; font-size: 16px; }
+.account-menu summary::-webkit-details-marker { display: none; }
+.menu-drop { position: absolute; right: 0; top: 40px; width: 220px; background: #fff; border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 6px 0; z-index: 100; overflow: hidden; }
 .menu-user { padding: 10px 14px; font-size: 13px; color: #333; border-bottom: 1px solid #f0f2f5; font-weight: 600; }
 .menu-item { display: block; width: 100%; text-align: left; background: transparent; border: none; padding: 9px 14px; font-size: 13.5px; cursor: pointer; color: #333; }
 .menu-item:hover { background: rgba(26,115,232,.06); color: #1a73e8; }
