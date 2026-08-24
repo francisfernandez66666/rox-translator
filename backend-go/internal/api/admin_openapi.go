@@ -136,6 +136,18 @@ a{color:#1a73e8}
 <div class="doc-lang show" data-l="zh">` + zhBody + `</div>
 <div class="doc-lang" data-l="en">` + enBody + `</div>
 <script>
+// 为每个 pre 块添加复制按钮（零依赖，直接写入剪贴板避免引号转换）
+document.querySelectorAll('pre').forEach(function(pre){
+  var btn=document.createElement('button');
+  btn.textContent='📋 复制';
+  btn.style.cssText='position:absolute;right:8px;top:6px;background:#e8eaf6;color:#1a237e;border:none;border-radius:4px;padding:3px 10px;font-size:12px;cursor:pointer';
+  pre.style.position='relative';
+  btn.onclick=function(){
+    var text=pre.querySelector('code')?pre.querySelector('code').textContent:pre.textContent;
+    navigator.clipboard.writeText(text).then(function(){btn.textContent='✅ 已复制';setTimeout(function(){btn.textContent='📋 复制'},1500)});
+  };
+  pre.parentNode.insertBefore(btn,pre);
+});
 function setLang(l){
   document.querySelectorAll('.doc-lang').forEach(function(e){e.classList.toggle('show', e.getAttribute('data-l')===l)});
   document.querySelectorAll('.lang-btn').forEach(function(b){b.classList.toggle('on', b.getAttribute('data-l')===l)});

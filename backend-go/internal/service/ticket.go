@@ -11,10 +11,13 @@
 package service
 
 import (
+"path/filepath"
+"archive/zip"
 	"context"
 	"fmt"
 	"strconv"
 	"strings"
+	"os"
 	"sync"
 	"time"
 
@@ -290,7 +293,15 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 					}
 					return
 				}
-				_ = s.Store.SetTicketFileResult(tf.ID, res.Files[0])
+				// ★ 多语言产物打包 zip 存入 result_path
+				zipPath := ""
+				if len(res.Files) > 1 {
+					zp, zerr := zipOutputs(res.Files, strings.TrimSuffix(filepath.Base(tf.FilePath), filepath.Ext(tf.FilePath))+"_translated.zip")
+					if zerr == nil { zipPath = zp }
+				}
+				storePath := zipPath
+				if storePath == "" && len(res.Files) > 0 { storePath = res.Files[0] }
+				_ = s.Store.SetTicketFileResult(tf.ID, storePath)
 				okCount++
 				doneN := okCount + failedCount(s.Store, t.ID)
 				mu.Unlock()
@@ -313,7 +324,15 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	if res.Error != "" {
 		return fmt.Errorf("%s", res.Error)
 	}
-	if len(res.Files) > 0 {
+	// ★ 多语言产物打包 zip
+	zipPath := ""
+	if len(res.Files) > 1 {
+		zp, zerr := zipOutputs(res.Files, t.TicketNo+"_translated.zip")
+		if zerr == nil { zipPath = zp }
+	}
+	if zipPath != "" {
+		_ = s.Store.SetTicketResultPath(t.ID, zipPath)
+	} else if len(res.Files) > 0 {
 		_ = s.Store.SetTicketResultPath(t.ID, res.Files[0])
 	}
 	s.persistTicketTM(t.TenantID, res.Data.Translations)
@@ -330,6 +349,28 @@ func failedCount(s *store.Store, ticketID int64) int64 {
 		}
 	}
 	return n
+}
+
+// zipOutputs 将多个产物文件打包为一个 zip（供下载一次获取全部语言版本）。
+func zipOutputs(paths []string, zipName string) (string, error) {
+	outDir := filepath.Dir(paths[0])
+	zipPath := filepath.Join(outDir, zipName)
+	f, err := os.Create(zipPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	w := zip.NewWriter(f)
+	defer w.Close()
+	for _, p := range paths {
+		data, rerr := os.ReadFile(p)
+		if rerr != nil {
+			continue
+		}
+		fe, _ := w.Create(filepath.Base(p))
+		_, _ = fe.Write(data)
+	}
+	return zipPath, w.Close()
 }
 
 // normalizeMode 模式归一化（轨迹展示用）。

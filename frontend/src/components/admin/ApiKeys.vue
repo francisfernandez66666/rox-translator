@@ -14,6 +14,11 @@
     <div v-if="isSuper && docsCardOpen" class="ad-chart-card" style="margin-top:12px">
       <h3>{{ t('docsEdit.title') }}</h3>
       <div class="ad-hint">{{ t('docsEdit.hint') }}</div>
+      <!-- 语言 Tab -->
+      <div style="display:flex;gap:6px;margin-bottom:8px">
+        <button :class="['ad-btn-sm', docsLang==='zh' ? 'on' : '']" @click="docsLang='zh'" :style="docsLang==='zh' ? 'background:#1a73e8;color:#fff' : ''">中文</button>
+        <button :class="['ad-btn-sm', docsLang==='en' ? 'on' : '']" @click="docsLang='en'" :style="docsLang==='en' ? 'background:#1a73e8;color:#fff' : ''">English</button>
+      </div>
       <textarea
         v-model="docsMD"
         class="ad-input docs-editor"
@@ -68,7 +73,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { apiKeys, apiKeyCreate, apiKeyStatus, apiKeyDelete, apiKeyRotate, openAPIDocsUrl, getOpenAPIDocs, saveOpenAPIDocs, previewOpenAPIDocs, apiKeyReveal } from '@/api'
 import { activeTenantId } from './store'
 import { t, tpl } from '@/i18n'
@@ -151,19 +156,28 @@ function openDocs() {
 
 // ---- ★ API 文档在线维护（仅超管；MD 源码存 system_config，公开页实时生效）----
 const docsCardOpen = ref(false)
-const docsMD = ref('')
+const docsLang = ref<'zh'|'en'>('zh')
+const docsMDZh = ref('')
+const docsMDEn = ref('')
 const docsSaving = ref(false)
 const docsDefaultBadge = ref(false)
 const docsLoaded = ref(false)
 
-// loadDocs 拉取当前生效源码（卡片首次展开时加载一次）
+// 当前 Tab 对应的 MD 内容（textarea 双向绑定）
+const docsMD = computed({
+  get: () => docsLang.value === 'en' ? docsMDEn.value : docsMDZh.value,
+  set: (v: string) => { if (docsLang.value === 'en') docsMDEn.value = v; else docsMDZh.value = v },
+})
+
+// loadDocs 拉取双语文档（卡片首次展开时加载一次）
 async function loadDocs() {
   if (docsLoaded.value) return
   try {
     const r: any = await getOpenAPIDocs()
     if (r.success) {
-      docsMD.value = r.md || ''
-      docsDefaultBadge.value = !!r.is_default
+      docsMDZh.value = r.md_zh || ''
+      docsMDEn.value = r.md_en || ''
+      docsDefaultBadge.value = !!r.default_zh && !!r.default_en
       docsLoaded.value = true
     }
   } catch { /* 非超管或网络失败：静默 */ }
@@ -177,7 +191,7 @@ async function saveDocs() {
   if (!confirm(t('docsEdit.confirmSave'))) return
   docsSaving.value = true
   try {
-    const r = await saveOpenAPIDocs(docsMD.value)
+    const r = await saveOpenAPIDocs({ lang: docsLang.value, md: docsMD.value })
     if (!r.success) { alert(r.message); return }
     alert(t('docsEdit.saved'))
     await refreshDocsState()
