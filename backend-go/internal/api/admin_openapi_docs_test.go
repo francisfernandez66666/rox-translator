@@ -38,23 +38,27 @@ func TestRenderDocsHeadingAndCode(t *testing.T) {
 	}
 }
 
-// TestCurrentDocsMDFallback config 为空时回退内置默认文档；保存后读取自定义值。
-func TestCurrentDocsMDFallback(t *testing.T) {
+// TestGetDocsMDFallback 双语回退链：对应语言 config 为空时回退该语言内置默认；
+// 保存后读取自定义值；互不影响。
+func TestGetDocsMDFallback(t *testing.T) {
 	s := newCaptchaTestServer(t)
-	// 初始：无自定义 → 回退内置默认
-	if got := s.currentDocsMD(); got != defaultDocsMD {
-		t.Fatalf("空配置应回退内置默认文档")
+	if got := s.getDocsMD("zh"); got != defaultDocsMDZh {
+		t.Fatalf("zh 空配置应回退内置默认")
 	}
-	// 保存自定义 → 读取到自定义值
-	if err := s.Store.SetConfig(openAPIDocsConfigKey, "# 自定义文档"); err != nil {
+	if got := s.getDocsMD("en"); got != defaultDocsMDEn {
+		t.Fatalf("en 空配置应回退内置默认")
+	}
+	if err := s.Store.SetConfig(openAPIDocsConfigKeyZh, "# 自定义中文"); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.currentDocsMD(); got != "# 自定义文档" {
-		t.Fatalf("应读到自定义文档，实得: %q", got)
+	if got := s.getDocsMD("zh"); got != "# 自定义中文" {
+		t.Fatalf("应读到自定义中文，实得 %q", got)
 	}
-	// 恢复默认（存空串）→ 再次回退
-	_ = s.Store.SetConfig(openAPIDocsConfigKey, "")
-	if got := s.currentDocsMD(); got != defaultDocsMD {
-		t.Fatalf("清空配置应再次回退内置默认")
+	if got := s.getDocsMD("en"); got != defaultDocsMDEn {
+		t.Fatalf("en 不应受影响")
+	}
+	_ = s.Store.SetConfig(openAPIDocsConfigKeyZh, "")
+	if got := s.getDocsMD("zh"); got != defaultDocsMDZh {
+		t.Fatalf("清空后应再次回退内置默认")
 	}
 }
