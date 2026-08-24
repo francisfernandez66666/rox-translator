@@ -13,7 +13,7 @@ import (
 	"net/http"
 )
 
-const officeOrigin = "https://translator.quant-trading.top"
+const officeOrigin = "https://langcross.lexicorn.cn"
 
 // handleOfficeManifest 返回 Word 加载项侧加载清单。
 func (s *Server) handleOfficeManifest(w http.ResponseWriter, r *http.Request) {

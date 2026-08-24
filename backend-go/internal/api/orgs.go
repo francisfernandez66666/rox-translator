@@ -96,9 +96,35 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": true, "orgs": filtered, "root": root, "tenant_id": tid, "platform": false})
 		return
 	}
-	// 超级管理员：平台组织树（所有租户）
+	// 超级管理员：按生效租户切分为「平台视图」或「该租户视图」
 	if auth.IsSuperAdmin(u) {
-		// 确保平台根组织存在
+		tid := s.effTenant(r, u)
+		if tid > 0 {
+			// 指定租户→展示该租户的组织树（同租管视图）
+			root, err := s.Store.GetRootOrg(tid)
+			if err != nil {
+				rootName := ""
+				if s.Ten != nil {
+					if tn, e := s.Ten.GetByID(tid); e == nil {
+						rootName = tn.Name
+					}
+				}
+				if rootName == "" {
+					rootName = "组织"
+				}
+				if r, e := s.Store.EnsureRootOrg(tid, rootName); e == nil {
+					root = r
+				}
+			}
+			orgs, err := s.Store.ListOrgs(tid)
+			if err != nil {
+				writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+				return
+			}
+			writeJSON(w, 200, map[string]interface{}{"success": true, "orgs": orgs, "root": root, "tenant_id": tid, "platform": false})
+			return
+		}
+		// 平台上下文（tid=0）→ 展示平台组织树（所有租户）
 		root, err := s.Store.EnsurePlatformRootOrg("翻译助手")
 		if err != nil {
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})

@@ -246,7 +246,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			case ".pptx":
 				aerr = fileproc.ApplyPptx(filePath, outPath, tr)
 			case ".pdf":
-				if perr := fileproc.WriteTranslatedPDF(outPath, texts, tr); perr == nil {
+				if perr := fileproc.WriteTranslatedPDFviaDocx(outPath, filePath, tr, lc); perr == nil {
 					filesOut = append(filesOut, outPath)
 					continue
 				}

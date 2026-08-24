@@ -9,8 +9,10 @@
 package fileproc
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -64,9 +66,9 @@ func ResolvePDFFont() string {
 	return ""
 }
 
-// isUsableTTF 判断字体文件存在且非 ttc 集合（fpdf 仅支持单 TTF）。
+// isUsableTTF 判断字体文件存在且可用（Python fpdf2 支持 TTC，Go fpdf 仅支持单 TTF）。
 func isUsableTTF(p string) bool {
-	if p == "" || strings.HasSuffix(strings.ToLower(p), ".ttc") {
+	if p == "" {
 		return false
 	}
 	st, err := os.Stat(p)
@@ -82,11 +84,57 @@ func WriteTranslatedPDF(outPath string, srcTexts []string, translations map[stri
 	if fontPath == "" {
 		return fmt.Errorf("无可用 CJK TTF 字体（可配置环境变量 PDF_FONT_PATH 指向 .ttf 文件）")
 	}
+	// 优先使用 Python fpdf2（更稳定地支持 CJK 字体嵌入）
+	if err := writePDFViaPython(outPath, fontPath, srcTexts, translations); err == nil {
+		return nil
+	}
+	// 回退 Go fpdf
+	return writePDFViaGoFpdf(outPath, fontPath, srcTexts, translations)
+}
 
+// WriteTranslatedPDFviaDocx PDF→DOCX→翻译→DOCX→PDF（保留排版+图表+图片OCR）
+func WriteTranslatedPDFviaDocx(outPath, inPath string, translations map[string]string, lang string) error {
+	pyBin := "python3"
+	if _, err := os.Stat("/opt/translator/.venv/bin/python3"); err == nil {
+		pyBin = "/opt/translator/.venv/bin/python3"
+	}
+	scriptPath := filepath.Join(filepath.Dir(os.Args[0]), "docx_translate.py")
+	payload, _ := json.Marshal(map[string]interface{}{
+		"translations": translations,
+	})
+	cmd := exec.Command(pyBin, scriptPath, inPath, outPath, lang)
+	cmd.Stdin = strings.NewReader(string(payload))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docx_translate 失败: %w\n%s", err, string(output))
+	}
+	return nil
+}
+
+func writePDFViaPython(outPath string, fontPath string, srcTexts []string, translations map[string]string) error {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"srcTexts":     srcTexts,
+		"translations": translations,
+	})
+	// 优先使用 venv 内的 Python（fpdf2 安装于虚拟环境）
+	pyBin := "python3"
+	if _, err := os.Stat("/opt/translator/.venv/bin/python3"); err == nil {
+		pyBin = "/opt/translator/.venv/bin/python3"
+	}
+	scriptPath := filepath.Join(filepath.Dir(os.Args[0]), "pdfwrite.py")
+	cmd := exec.Command(pyBin, scriptPath, outPath, fontPath)
+	cmd.Stdin = strings.NewReader(string(payload))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("python pdfwrite 失败: %w\n%s", err, string(output))
+	}
+	return nil
+}
+
+func writePDFViaGoFpdf(outPath string, fontPath string, srcTexts []string, translations map[string]string) error {
 	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(18, 18, 18)
 	pdf.SetAutoPageBreak(true, 20)
-	// 字体以字节流注入：绕开 fpdf 对 fontDir 的路径拼接（其与绝对路径组合在部分环境会丢失根斜杠）
 	fontBytes, err := os.ReadFile(fontPath)
 	if err != nil {
 		return fmt.Errorf("读取字体失败 %s: %w", fontPath, err)
@@ -103,7 +151,7 @@ func WriteTranslatedPDF(outPath string, srcTexts []string, translations map[stri
 	const (
 		titleSize = 15.0
 		bodySize  = 10.5
-		lineGap   = 6.2 // MultiCell 行高（mm），约 1.7 倍行距
+		lineGap   = 6.2
 	)
 
 	first := true
@@ -114,9 +162,8 @@ func WriteTranslatedPDF(outPath string, srcTexts []string, translations map[stri
 		}
 		text := src
 		if t := strings.TrimSpace(translations[src]); t != "" {
-			text = t // 命中译文的段落输出译文；未命中的保留原文（避免内容丢失）
+			text = t
 		}
-		// 标题启发：首段且足够短 → 大字号 + 段后加距
 		if first && len([]rune(src)) <= 60 {
 			pdf.SetFont("cjk", "", titleSize)
 			pdf.MultiCell(0, titleSize*0.62, text, "", "L", false)
@@ -127,7 +174,7 @@ func WriteTranslatedPDF(outPath string, srcTexts []string, translations map[stri
 		first = false
 		pdf.SetFont("cjk", "", bodySize)
 		pdf.MultiCell(0, lineGap, text, "", "L", false)
-		pdf.Ln(1.6) // 段间距
+		pdf.Ln(1.6)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
