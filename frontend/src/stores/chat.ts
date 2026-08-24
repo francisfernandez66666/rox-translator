@@ -52,8 +52,7 @@ export const useChatStore = defineStore('chat', () => {
   // 消息历史上限：超出后裁剪最旧消息（防长会话内存无界增长）
   const MAX_MESSAGES = 200
 
-  /** 选中的翻译模型（持久化到 localStorage） */
-  const selectedModel = ref(localStorage.getItem('translateModel') || 'tencent/Hunyuan-MT-7B')
+  // ★ 模型选择已从前台下线：路由/阶段模型全部由服务端配置（超管维护），前端不再指定
 
   // 停止生成：中止请求并清理进度
   function stopGeneration() {
@@ -127,7 +126,7 @@ export const useChatStore = defineStore('chat', () => {
     isLoading.value = true
     try {
       // 调用流式聊天接口，携带当前所选模型
-      const allOptions = { ...options, model: selectedModel.value }
+      const allOptions = { ...options } // 不再传 model：由服务端路由与阶段模型决定
       // ★ 双模式：快速/专业校对随请求透传（localStorage 记忆，默认 pro）
       allOptions.mode = localStorage.getItem('translate_mode') || 'pro'
       const response = await chatStream(text, 'translation', allOptions, (event: ProgressEvent) => {
@@ -285,10 +284,6 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // 切换翻译模型并持久化
-  function setSelectedModel(model: string) {
-    selectedModel.value = model
-    localStorage.setItem('translateModel', model)
-  }
 
   // 对外暴露的状态与操作
   return {
@@ -299,7 +294,6 @@ export const useChatStore = defineStore('chat', () => {
     isBackendLoading,
     isBackendChecking,
     errorMessage,
-    selectedModel,
     stopGeneration,
     sendMessage,
     sendFile,
@@ -308,6 +302,5 @@ export const useChatStore = defineStore('chat', () => {
     retryBackend,
     clearMessages,
     reset,
-    setSelectedModel,
   }
 })

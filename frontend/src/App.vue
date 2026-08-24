@@ -41,7 +41,6 @@
           <summary title="账号菜单">☰</summary>
           <div class="menu-drop">
             <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
-            <button class="menu-item" @click="showSettings = true">⚙️ {{ t('common.settings') }}</button>
             <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
             <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
           </div>
@@ -62,29 +61,6 @@
       <ChatWindow v-else />
     </main>
 
-    <!-- ===== 设置弹窗：翻译模型选择（Teleport 到 body） ===== -->
-    <Teleport to="body">
-      <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
-        <div class="settings-panel">
-          <div class="settings-title">{{ t('common.settings') }}</div>
-          <div class="settings-item">
-            <label>{{ t('app.modelLabel') }}</label>
-            <select v-model="currentModel" @change="onModelChange">
-              <optgroup label="SiliconFlow">
-                <option value="tencent/Hunyuan-MT-7B">Hunyuan-MT-7B {{ t('app.modelRec33') }}</option>
-                <option value="THUDM/GLM-Z1-9B-0414">GLM-Z1-9B-0414 {{ t('app.modelBackup') }}</option>
-                <option value="Qwen/Qwen2.5-7B-Instruct">Qwen2.5-7B</option>
-              </optgroup>
-              <optgroup label="Zhipu">
-                <option value="glm-4.7-flash">GLM-4.7-Flash {{ t('app.modelFast') }}</option>
-                <option value="glm-4-flash">GLM-4-Flash {{ t('app.modelFallback') }}</option>
-              </optgroup>
-            </select>
-          </div>
-          <button class="settings-close" @click="showSettings = false">{{ t('common.close') }}</button>
-        </div>
-      </div>
-    </Teleport>
   </div>
 </template>
 
@@ -108,9 +84,7 @@ import { t, lang, toggleLang } from '@/i18n'
 // 全局聊天 Store 实例
 const store = useChatStore()
 // 设置弹窗显隐
-const showSettings = ref(false)
 // 当前选中的翻译模型（与 Store 保持同步）
-const currentModel = ref(store.selectedModel)
 
 // 是否处于管理后台路由（/admin）
 const isAdminRoute = computed(() => window.location.pathname.startsWith('/admin'))
@@ -209,9 +183,6 @@ function onPwdDone() {
 }
 
 // 切换翻译模型
-function onModelChange() {
-  store.setSelectedModel(currentModel.value)
-}
 
 // 响应式：检测移动端布局（宽度 ≤ 768px 判定为移动端）
 const windowWidth = ref(window.innerWidth)
