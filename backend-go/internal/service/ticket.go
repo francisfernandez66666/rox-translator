@@ -261,34 +261,51 @@ func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) erro
 func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) error {
 	langs := parseLangs(t.TargetLangs)
 	mode := t.Mode // fast | pro（空=pro）
-	// 多文件模式：逐个处理并回写各自产物
+	// 多文件模式：并行处理（信号量限制同时 3 个，避免打爆 LLM API）
 	files, _ := s.Store.TicketFiles(t.ID)
 	if len(files) > 0 {
-		var okCount int64
+		var mu sync.Mutex
+		var okCount, failCount int64
 		var firstErr string
-		// ★ 进度轨迹：文件工单也写入状态步骤（修复「尚未开始执行」观感）
 		s.Store.SetTicketState(t.ID, "file_extract", "running",
 			fmt.Sprintf("total=%d mode=%s", len(files), normalizeMode(mode)))
+		sem := make(chan struct{}, 3) // 同时最多 3 个文件在翻译
+		var wg sync.WaitGroup
 		for _, f := range files {
-			res := s.Engine.HandleFile(ctx, f.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode}, func(step string, done, total int) {})
-			if res.Error != "" || len(res.Files) == 0 {
-				_ = s.Store.SetTicketFileError(f.ID, res.Error)
-				if firstErr == "" {
-					firstErr = f.FileName + ": " + res.Error
+			wg.Add(1)
+			go func(tf *store.TicketFile) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				res := s.Engine.HandleFile(ctx, tf.FilePath,
+					map[string]interface{}{"target_langs": langs, "mode": mode},
+					func(step string, done, total int) {})
+				mu.Lock()
+				defer mu.Unlock()
+				if res.Error != "" || len(res.Files) == 0 {
+					_ = s.Store.SetTicketFileError(tf.ID, res.Error)
+					failCount++
+					if firstErr == "" {
+						firstErr = tf.FileName + ": " + res.Error
+					}
+					return
 				}
-				continue
-			}
-			_ = s.Store.SetTicketFileResult(f.ID, res.Files[0])
-			okCount++
-			s.persistTicketTM(t.TenantID, res.Data.Translations)
-			s.Store.SetTicketState(t.ID, "file_translate", "running",
-				fmt.Sprintf("progress=%d/%d", okCount+failedCount(s.Store, t.ID), len(files)))
+				_ = s.Store.SetTicketFileResult(tf.ID, res.Files[0])
+				okCount++
+				doneN := okCount + failedCount(s.Store, t.ID)
+				mu.Unlock()
+				s.Store.SetTicketState(t.ID, "file_translate", "running",
+					fmt.Sprintf("progress=%d/%d", doneN, len(files)))
+				mu.Lock()
+				s.persistTicketTM(t.TenantID, res.Data.Translations)
+			}(f)
 		}
+		wg.Wait()
 		s.Store.SetTicketState(t.ID, "file_extract", "success", "")
-		if okCount == 0 && firstErr != "" {
+		if okCount == 0 && failCount == int64(len(files)) && firstErr != "" {
 			return fmt.Errorf("%s", firstErr)
 		}
-		return nil // 部分成功也放行（下载页可见各文件成败）
+		return nil
 	}
 	// 旧单文件路径
 	s.Store.SetTicketState(t.ID, "file_translate", "running", "single")
@@ -302,7 +319,6 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	s.persistTicketTM(t.TenantID, res.Data.Translations)
 	return nil
 }
-
 
 // failedCount 统计工单内处理失败的文件数。
 func failedCount(s *store.Store, ticketID int64) int64 {

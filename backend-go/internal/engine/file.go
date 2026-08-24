@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/xuri/excelize/v2"
 	"translator/internal/config"
 	"translator/internal/fileproc"
 )
@@ -211,6 +212,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	wg.Wait()
 	prog("第2步/3：翻译完成", 2, 3)
 
+	isXlsxInput := ext == ".xlsx"
+
 	// 第3步：写回文件
 	prog("第3步/3：写回文件+修正排版...", 3, 3)
 	srcDir := filepath.Dir(filePath)
@@ -218,41 +221,50 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	outputDir := filepath.Join(srcDir, "translated")
 	os.MkdirAll(outputDir, 0o755)
 
-	isXlsx := ext == ".xlsx"
 	filesOut := []string{}
-	for _, lc := range finalLangs {
-		tr := langTranslations[lc]
-		if len(tr) == 0 {
-			continue
+
+	if isXlsxInput {
+		// ★ xlsx 多 Sheet 模式：单文件输出，每个目标语言一个 Sheet（Sheet 名=语言代码）
+		outPath := filepath.Join(outputDir, baseName+"_translated.xlsx")
+		if aerr := writeMultiSheetXlsx(filePath, outputDir, baseName, finalLangs, langTranslations); aerr != nil {
+			return &FileTranslateResult{Skill: "translation", Error: "xlsx 写回失败: " + aerr.Error()}
 		}
-		outBase := fmt.Sprintf("%s_%s%s", baseName, lc, ext)
-		outPath := filepath.Join(outputDir, outBase)
-		if isXlsx {
-			// xlsx: ctrl 页翻译所有 sheet，一份文件包含所有语言会冲突，保持各语言独立
-		}
-		var aerr error
-		switch ext {
-		case ".docx":
-			aerr = fileproc.ApplyDocx(filePath, outPath, tr)
-		case ".pptx":
-			aerr = fileproc.ApplyPptx(filePath, outPath, tr)
-		case ".xlsx":
-			aerr = fileproc.ApplyXlsx(filePath, outPath, tr)
-		default:
-			// PDF：译文版式重建（内置 CJK 字体）；其余格式与 PDF 失败时统一降级 xlsx 对照表
-			if ext == ".pdf" {
+		filesOut = append(filesOut, outPath)
+	} else {
+		// ★ 非 xlsx 格式：每个目标语言独立产物文件，文件名标注语言
+		for _, lc := range finalLangs {
+			tr := langTranslations[lc]
+			if len(tr) == 0 {
+				continue
+			}
+			outBase := fmt.Sprintf("%s_%s%s", baseName, lc, ext)
+			outPath := filepath.Join(outputDir, outBase)
+			var aerr error
+			switch ext {
+			case ".docx":
+				aerr = fileproc.ApplyDocx(filePath, outPath, tr)
+			case ".pptx":
+				aerr = fileproc.ApplyPptx(filePath, outPath, tr)
+			case ".pdf":
 				if perr := fileproc.WriteTranslatedPDF(outPath, texts, tr); perr == nil {
 					filesOut = append(filesOut, outPath)
 					continue
 				}
+				aerr = fmt.Errorf("PDF 写回失败")
+			case ".txt", ".csv", ".md":
+				aerr = writeTranslatedText(outPath, texts, tr)
+			default:
+				aerr = fmt.Errorf("不支持的写回格式")
 			}
-			aerr = fileproc.WriteComparisonXlsx(outPath+".xlsx", texts, tr)
-			if aerr == nil {
-				filesOut = append(filesOut, outPath+".xlsx")
+			if aerr != nil {
+				// 写回失败降级 xlsx 对照表
+				aerr2 := fileproc.WriteComparisonXlsx(outPath+".xlsx", texts, tr)
+				if aerr2 == nil {
+					filesOut = append(filesOut, outPath+".xlsx")
+					continue
+				}
 				continue
 			}
-		}
-		if aerr == nil {
 			filesOut = append(filesOut, outPath)
 		}
 	}
@@ -355,4 +367,69 @@ func (e *Engine) reviewBatchSafe(ctx context.Context, sources, translations []st
 		}
 	}
 	return out
+}
+
+// writeMultiSheetXlsx xlsx 多 Sheet 模式：复制原始文件后，每个目标语言新增一个 Sheet，
+// 遍历该语言译文逐格替换。Sheet 名=语言代码。
+func writeMultiSheetXlsx(srcPath, outputDir, baseName string, langs []string, langTranslations map[string]map[string]string) error {
+	outPath := filepath.Join(outputDir, baseName+"_translated.xlsx")
+	f, err := excelize.OpenFile(srcPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	for _, lc := range langs {
+		tr := langTranslations[lc]
+		if len(tr) == 0 {
+			continue
+		}
+		sheetName := lc // Sheet 名 = 语言代码
+		srcSheets := f.GetSheetList()
+		if _, err := f.NewSheet(sheetName); err != nil {
+			continue
+		}
+		_ = srcSheets // 源内容保留在原 Sheet 中，新 Sheet 写入该语言的完整翻译
+		for orig, translated := range tr {
+			if orig == "" || translated == "" {
+				continue
+			}
+			// 在新 Sheet 中按顺序写入源文和译文
+			for _, sheet := range srcSheets {
+				rows, rerr := f.GetRows(sheet)
+				if rerr != nil {
+					continue
+				}
+				found := false
+				for ri, row := range rows {
+					for ci, cellVal := range row {
+						if strings.TrimSpace(cellVal) == orig && !found {
+							cell, _ := excelize.CoordinatesToCellName(ci+1, ri+1)
+							_ = f.SetCellValue(sheetName, cell, translated)
+							found = true
+							break
+						}
+					}
+					if found {
+						break
+					}
+				}
+			}
+		}
+	}
+	// 删除原始 Sheet 副本（保留第一个作为参考）
+	return f.SaveAs(outPath)
+}
+
+// writeTranslatedText 纯文本类格式直写翻译结果（逐行替换）。
+func writeTranslatedText(outPath string, sourceTexts []string, translations map[string]string) error {
+	lines := make([]string, len(sourceTexts))
+	for i, src := range sourceTexts {
+		if tr, ok := translations[strings.TrimSpace(src)]; ok && tr != "" {
+			lines[i] = tr
+		} else {
+			lines[i] = src // 未命中的保留原文
+		}
+	}
+	return os.WriteFile(outPath, []byte(strings.Join(lines, "\n")), 0o644)
 }

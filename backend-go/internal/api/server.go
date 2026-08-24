@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -74,7 +75,14 @@ func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist s
 			log.Printf("[worker] 启动回收中断任务: %d 个已重新入队", n)
 		}
 		s.TicketSvc = service.NewTicketService(st, eng, ts, db, q, s.Bill)
-		s.TicketSvc.StartWorkers(2) // WORKER_CONCURRENCY 可后续配置化
+		// ★ 并发增强：worker 数量从环境变量 WORKER_CONCURRENCY 读取（默认 4）
+		workerCount := 4
+		if v := os.Getenv("WORKER_CONCURRENCY"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				workerCount = n
+			}
+		}
+		s.TicketSvc.StartWorkers(workerCount)
 	}
 	s.mux = http.NewServeMux()
 	s.routes()
