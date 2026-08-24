@@ -30,15 +30,19 @@
         class="tp-textarea"
       ></textarea>
 
-      <!-- 文件模式（支持多选） -->
+      <!-- 文件模式（支持多选）：已选文件平铺为独立 item，可单个移除 -->
       <div v-else class="tp-filezone" @click="($refs.fileInput as HTMLInputElement).click()">
         <input ref="fileInput" type="file" multiple hidden accept=".docx,.xlsx,.pptx,.pdf,.txt,.csv,.srt,.vtt,.md,.json,.yaml,.yml" @change="onFileSelect" />
-        <div v-if="!files.length" class="tp-file-hint">📎 {{ t('tk.fileHint') }}<br /><span style="font-size:12px">{{ t('tk.multiHint') }}</span></div>
-        <div v-else class="tp-file-name">
-          {{ files.length > 1 ? tpl('tk.filesCount', { n: files.length }) : files[0].name }}
-          （{{ filesTotalKB }} KB）
-          <button class="ad-btn-sm" style="margin-left:8px" @click.stop="clearFiles">{{ t('users.colActions')==='操作' ? '重选' : 'Reselect' }}</button>
+        <div class="tp-file-hint">📎 {{ t('tk.fileHint') }}<br /><span style="font-size:12px">{{ t('tk.multiHint') }}</span></div>
+      </div>
+      <!-- 已选文件平铺列表：每个文件独立 item，✕ 单独移除 -->
+      <div v-if="files.length" class="tp-chip-list">
+        <div v-for="(f, idx) in files" :key="f.name + f.size" class="tp-file-chip" :title="f.name">
+          <span class="tp-chip-name">📄 {{ f.name }}</span>
+          <span class="tp-chip-size">{{ fmtKB(f.size) }}</span>
+          <button class="tp-chip-remove" :title="t('org.delete')" @click.stop="removeFileAt(idx)">✕</button>
         </div>
+        <div class="tp-chip-total">{{ tpl('tk.filesCount', { n: files.length }) }} · {{ filesTotalKB }} KB</div>
       </div>
 
       <div class="tp-row">
@@ -203,6 +207,16 @@ function onFileSelect(e: Event) {
     if (!exist.has(key)) { files.value.push(f); exist.add(key) }
   }
 }
+// removeFileAt 移除单个已选文件（按索引）
+function removeFileAt(i: number) {
+  files.value.splice(i, 1)
+}
+// fmtKB 字节数转 KB 展示（保留 1 位小数，整数省略）
+function fmtKB(bytes: number): string {
+  const kb = bytes / 1024
+  return kb >= 1024 ? (kb / 1024).toFixed(1) + 'MB' : kb.toFixed(kb % 1 ? 1 : 0) + 'KB'
+}
+
 // clearFiles 清空已选文件
 function clearFiles() {
   files.value = []
@@ -327,4 +341,13 @@ function statusLabel(s: string): string {
 .st-success { color: #1a7f37; }
 .st-failed { color: #c0392b; }
 .st-running { color: #1e6fd9; }
+
+/* ★ 已选文件平铺 chips */
+.tp-chip-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; align-items: center; }
+.tp-file-chip { display: inline-flex; align-items: center; gap: 6px; background: #f5f7fb; border: 1px solid #d8dee6; border-radius: 14px; padding: 3px 10px; font-size: 12.5px; max-width: 320px; }
+.tp-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-chip-size { color: #999; font-size: 11.5px; }
+.tp-chip-remove { border: none; background: transparent; cursor: pointer; color: #c62828; font-size: 12px; padding: 0 2px; }
+.tp-chip-remove:hover { color: #e53935; }
+.tp-chip-total { width: 100%; font-size: 12px; color: #888; }
 </style>
