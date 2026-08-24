@@ -194,7 +194,7 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	if len(headers) == 0 {
-		writeTaskError(w, "bad_request", "缺少文件（字段名 files，可重复）")
+		writeTaskError(w, "bad_request", "缺少文件：multipart 字段名 files，curl 请使用 -F \"files=@本地路径\"（注意 @ 前缀）")
 		return
 	}
 	if len(headers) > openAPITaskMaxFiles {
@@ -305,24 +305,16 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	isFile := t.FilePath != ""
+	targetLangs := strings.Split(t.TargetLangs, ",")
 	resp := map[string]interface{}{
 		"success":           true,
 		"task_id":           t.ID,
 		"ticket_no":         t.TicketNo,
 		"type":              map[bool]string{true: "files", false: "text"}[isFile],
 		"mode":              normalizeTaskMode(t.Mode),
-		"title":             t.Title,
-		"created_at":        t.CreatedAt,
+		"status":            "",
+		"target_langs":      targetLangs,
 		"poll_interval_sec": pollIntervalSec(isFile),
-	}
-	// 步骤轨迹（进度细粒度参考）
-	states, _ := s.Store.TicketStates(t.ID)
-	if len(states) > 0 {
-		steps := make([]map[string]string, 0, len(states))
-		for _, st := range states {
-			steps = append(steps, map[string]string{"step": st.Step, "status": st.Status})
-		}
-		resp["steps"] = steps
 	}
 	// 状态映射：queued→queued；in_progress/pending_approval/approved→processing；
 	// completed→completed；rejected/failed→failed
@@ -379,7 +371,7 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 		}
 	case "failed":
 		resp["error_code"] = errCode
-		resp["error"] = errMsg
+		resp["message"] = errMsg
 	}
 	for k, v := range s.balanceOut(ak.TenantID) {
 		resp[k] = v

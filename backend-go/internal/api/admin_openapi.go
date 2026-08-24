@@ -308,6 +308,32 @@ curl "https://域名/openapi/v1/tasks/status?id=123" -H "Authorization: Bearer <
 # 失败     → {"status":"failed","error_code":"insufficient_balance","message":"余额不足，请充值或升级套餐"}
 ~~~
 
+## 支持的语言与计费规则
+
+target_langs 传语言代码数组；缺省 ["en"]。
+
+| 代码 | 语言 | 代码 | 语言 |
+|------|------|------|------|
+| en | 英语 | ru | 俄语 |
+| de | 德语 | fr | 法语 |
+| es | 西班牙语 | pt | 葡萄牙语 |
+| ar | 阿拉伯语 | kk | 哈萨克语 |
+| zh_hant | 繁体中文 | ja | 日语 |
+| ko | 韩语 | th | 泰语 |
+
+ja/ko/th 等小语种为 AI 直翻（无知识库匹配），九语外同样支持。完整代码见 /api/translation/langs。
+
+**计费口径**：消耗句数 = 源句数 × 目标语言数（多语言按倍数累增）；token ≈ 句 × 500 × 均摊系数。
+mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
+
+## 文件批量任务要点
+
+- multipart 字段名必须为 **files**，本地路径前**必须加 @**：
+  curl -F "files=@/path/手册.docx" -F "files=@/path/清单.xlsx"
+- 单次 ≤20 个文件、总量 ≤30MB
+- 支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml
+- 完成后经 download 接口下载；产物保留 14 天，请及时下载
+
 ## 错误码（独立出参 error_code）
 
 | error_code | 含义 |
@@ -367,6 +393,31 @@ text done  -> {"status":"completed","translations":{"en":"..."},"tokens_used":18
 files done -> {"status":"completed","files":[...],"download":"/openapi/v1/tasks/download?id=123"}
 failed     -> {"status":"failed","error_code":"insufficient_balance"}
 ~~~
+
+## Supported languages & billing rules
+
+target_langs takes an array of language codes; defaults to ["en"].
+
+| Code | Language | Code | Language |
+|------|----------|------|----------|
+| en | English | ru | Russian |
+| de | German | fr | French |
+| es | Spanish | pt | Portuguese |
+| ar | Arabic | kk | Kazakh |
+| zh_hant | Traditional Chinese | ja* | Japanese |
+| ko* | Korean | th* | Thai |
+
+Asterisked languages are AI-direct (no KB matching); all others use the nine-language knowledge base. Full list: /api/translation/langs.
+
+**Billing**: sentences consumed = source sentences × target language count (multi-target multiplies). tokens ≈ sentences × 500 × markup factor. mode=pro includes KB matching and full review pipeline, consuming more than fast.
+
+## Batch file task notes
+
+- The multipart field must be named **files**, and local paths **must be prefixed with @**:
+  curl -F "files=@/path/manual.docx" -F "files=@/path/list.xlsx"
+- Up to 20 files, 30MB total per request
+- Accepted: docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml
+- Download via the download endpoint when completed; artifacts are kept for 14 days
 
 ## Error codes (dedicated error_code field)
 
