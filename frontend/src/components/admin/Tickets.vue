@@ -14,12 +14,12 @@
     <table class="ad-table">
       <thead><tr><th>{{ t('tickets.colNo') }}</th><th>{{ t('tickets.colTitle') }}</th><th>{{ t('tickets.colStatus') }}</th><th>{{ t('tickets.colSource') }}</th><th>{{ t('tickets.colTarget') }}</th><th>{{ t('tickets.colOps') }}</th></tr></thead>
       <tbody>
-        <tr v-for="t in tickets" :key="t.id">
-          <td>{{ t.ticket_no }}</td><td>{{ t.title }}</td><td>{{ t.status }}</td>
-          <td class="ad-ellipsis">{{ t.source_text }}</td><td>{{ t.target_langs }}</td>
+        <tr v-for="tk in tickets" :key="tk.id">
+          <td>{{ tk.ticket_no }}</td><td>{{ tk.title }}</td><td>{{ tk.status }}</td>
+          <td class="ad-ellipsis">{{ tk.source_text }}</td><td>{{ tk.target_langs }}</td>
           <td class="ad-td">
-            <button class="ad-btn-sm" @click="runTicket(t)">{{ t('tickets.run') }}</button>
-            <button class="ad-btn-sm" @click="openTicket(t)">{{ t('tickets.detail') }}</button>
+            <button class="ad-btn-sm" @click="runTicket(tk)">{{ t('tickets.run') }}</button>
+            <button class="ad-btn-sm" @click="openTicket(tk)">{{ t('tickets.detail') }}</button>
           </td>
         </tr>
       </tbody>
@@ -56,7 +56,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
-import { ticketList, ticketCreate, ticketRun, ticketDetail, approveList, approveAction, type Ticket } from '@/api'
+import { ticketList, ticketCreate, ticketRun, ticketDetail as fetchTicketDetail, approveList, approveAction, type Ticket } from '@/api'
 import { activeTenantId } from './store'
 import { prettyJSON } from './ui'
 import { t, tpl } from '@/i18n'
@@ -89,7 +89,7 @@ async function runTicket(t: Ticket) {
 }
 // openTicket 拉取工单详情与状态流转记录展示
 async function openTicket(t: Ticket) {
-  const r = await ticketDetail(t.id)
+  const r = await fetchTicketDetail(t.id)
   if (r.success) ticketDetail.value = { ...r.ticket, states: r.states }
 }
 

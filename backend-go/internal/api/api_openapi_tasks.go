@@ -157,15 +157,10 @@ func (s *Server) openAPITaskCreateText(w http.ResponseWriter, r *http.Request, t
 		return
 	}
 	s.enqueueAPITask(t, mode)
-	resp := map[string]interface{}{
-		"success": true, "task_id": t.ID, "ticket_no": t.TicketNo,
-		"type": "text", "status": "queued", "mode": mode,
-		"poll_interval_sec": pollIntervalSec(false),
-	}
-	for k, v := range s.balanceOut(tid) {
-		resp[k] = v
-	}
-	writeJSON(w, 202, resp)
+	writeJSON(w, 202, map[string]interface{}{
+		"task_id": t.ID, "mode": mode,
+		"type": "text", "status": "queued",
+	})
 }
 
 // enqueueAPITask 置模式/入队并写审计（文本与文件任务共用收尾）。
@@ -269,16 +264,11 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		})
 	}
 	s.enqueueAPITask(t, mode)
-	resp := map[string]interface{}{
-		"success": true, "task_id": t.ID, "ticket_no": t.TicketNo,
-		"type": "files", "status": "queued", "mode": mode,
-		"poll_interval_sec": pollIntervalSec(true),
-		"file_count":        len(saved),
-	}
-	for k, v := range s.balanceOut(tid) {
-		resp[k] = v
-	}
-	writeJSON(w, 202, resp)
+	writeJSON(w, 202, map[string]interface{}{
+		"task_id": t.ID, "mode": mode,
+		"type": "files", "status": "queued",
+		"file_count": len(saved),
+	})
 }
 
 // handleOpenAPITaskStatus 轮询任务状态（未完成给 processing 出参；完成按类型回结果）。
@@ -305,16 +295,11 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	isFile := t.FilePath != ""
-	targetLangs := strings.Split(t.TargetLangs, ",")
 	resp := map[string]interface{}{
-		"success":           true,
-		"task_id":           t.ID,
-		"ticket_no":         t.TicketNo,
-		"type":              map[bool]string{true: "files", false: "text"}[isFile],
-		"mode":              normalizeTaskMode(t.Mode),
-		"status":            "",
-		"target_langs":      targetLangs,
-		"poll_interval_sec": pollIntervalSec(isFile),
+		"task_id":  t.ID,
+		"type":     map[bool]string{true: "files", false: "text"}[isFile],
+		"mode":     normalizeTaskMode(t.Mode),
+		"status":   "",
 	}
 	// 状态映射：queued→queued；in_progress/pending_approval/approved→processing；
 	// completed→completed；rejected/failed→failed
