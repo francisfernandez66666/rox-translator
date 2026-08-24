@@ -36,6 +36,8 @@
         <Bell />
         <!-- 语言切换（显性） -->
         <button class="gear-btn" @click="toggleLang()" :title="lang === 'zh' ? 'Switch to English' : '切换为中文'">{{ lang === 'zh' ? 'EN' : '中' }}</button>
+        <!-- ★ 自助修改密码（独立显性按钮，与铃铛/齿轮同一交互模式确保可用） -->
+        <button class="gear-btn" @click="openPwd" title="修改密码">🔒</button>
         <!-- ★ 账号菜单：原生 details 折叠（零 JS 可靠开合） -->
         <details class="account-menu">
           <summary title="账号菜单">☰</summary>
