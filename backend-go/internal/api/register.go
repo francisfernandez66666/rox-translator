@@ -401,7 +401,7 @@ func (s *Server) wasInviteBind(invite string) bool {
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（需 admin 权限）。
 // 返回: success=true 时携带 codes 数组。
 func (s *Server) handleInviteCodes(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireAdminUser(r); err != nil {
+	if _, err := s.requireTenantAdmin(r); err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
@@ -417,7 +417,7 @@ func (s *Server) handleInviteCodes(w http.ResponseWriter, r *http.Request) {
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 code/tenant_id）。
 // 返回: success=true 时携带新建邀请码对象。
 func (s *Server) handleInviteCodeCreate(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireAdminUser(r)
+	u, err := s.requireTenantAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
