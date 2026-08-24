@@ -4,6 +4,7 @@
 //   - 部门墙：某部门（含子树）本月消耗 ≥ 该部门预算 → 拦截并首次提醒部门管理员
 //   - 组织墙：全租户本月消耗 ∑部门预算 且 >0 → 拦截并首次提醒租户管理员
 //   - 月度口径：自然月（每月 1 日重置）；消耗取 usage_ledger.quantity（已含均摊系数）
+//
 // 两堵墙独立于强制计费开关——即使仅计量不扣减，预算墙照常生效（体验包用户也能感知约束）。
 // =============================================
 package store
@@ -60,17 +61,17 @@ func (s *Store) TenantTokensUsedThisMonth(tid int64) (int64, error) {
 // OrgBudgetSummary 组织预算总览：∑部门预算 / 全租户本月已用。
 // 总预算即各部门预算之和（分配时由面板保证语义：调整任一部门预算即调整总额的构成）。
 type OrgBudgetSummary struct {
-	TotalLimit    int64           `json:"total_limit"`    // 租户总预算 = ∑部门预算
+	TotalLimit    int64           `json:"total_limit"`     // 租户总预算 = ∑部门预算
 	UsedThisMonth int64           `json:"used_this_month"` // 全租户本月已消耗 token
 	Depts         []OrgBudgetItem `json:"depts"`
 }
 
 // OrgBudgetItem 单个部门预算项。
 type OrgBudgetItem struct {
-	OrgID         int64 `json:"org_id"`
+	OrgID         int64  `json:"org_id"`
 	Name          string `json:"name"`
-	TokenLimit    int64 `json:"token_limit"`     // 部门预算（0=未启用）
-	UsedThisMonth int64 `json:"used_this_month"` // 部门（含子树）本月消耗
+	TokenLimit    int64  `json:"token_limit"`     // 部门预算（0=未启用）
+	UsedThisMonth int64  `json:"used_this_month"` // 部门（含子树）本月消耗
 }
 
 // GetOrgBudgetSummary 汇总租户预算面板数据（含每个启用了预算的部门及其月度消耗）。
@@ -121,34 +122,36 @@ func (s *Store) CheckBudgetWalls(tid int64, userID int64) *QuotaWallHit {
 		return nil
 	}
 	u, err := s.GetUser(userID, tid)
-	if err != nil || u.OrgID <= 0 {
+	if err != nil {
 		return nil
 	}
-	// 找到用户所属组织及其父链上最近一个启用了预算的组织（子部门共享上级预算）
-	org, err := s.GetOrgByID(u.OrgID)
-	if err != nil || org == nil || org.TenantID != tid {
-		return nil
-	}
-	cur := org
-	for cur != nil && cur.ID > 0 {
-		if cur.TokenLimit > 0 {
-			used, uerr := s.OrgTokensUsedThisMonth(tid, cur.ID)
-			if uerr == nil && used >= cur.TokenLimit {
-				s.notifyDeptQuota(tid, cur, used)
-				return &QuotaWallHit{Wall: "dept", Limit: cur.TokenLimit, Used: used, OrgID: cur.ID,
-					Msg: fmt.Sprintf("部门「%s」token 已耗尽，请联系管理员及时充值", cur.Name)}
+	// 部门墙：仅当用户归属组织时沿父链找最近启用预算的组织
+	if u.OrgID > 0 {
+		org, oerr := s.GetOrgByID(u.OrgID)
+		if oerr == nil && org != nil && org.TenantID == tid {
+			cur := org
+			for cur != nil && cur.ID > 0 {
+				if cur.TokenLimit > 0 {
+					used, uerr := s.OrgTokensUsedThisMonth(tid, cur.ID)
+					if uerr == nil && used >= cur.TokenLimit {
+						s.notifyDeptQuota(tid, cur, used)
+						return &QuotaWallHit{Wall: "dept", Limit: cur.TokenLimit, Used: used, OrgID: cur.ID,
+							Msg: fmt.Sprintf("部门「%s」token 已耗尽，请联系管理员及时充值", cur.Name)}
+					}
+					break // 最近启用预算的祖先未超，则更远祖先亦无需检查（预算互不嵌套扣减）
+				}
+				if cur.ParentID <= 0 {
+					break
+				}
+				parent, perr := s.GetOrgByID(cur.ParentID)
+				if perr != nil {
+					break
+				}
+				cur = parent
 			}
-			break // 最近启用预算的祖先未超，则更远祖先亦无需检查（预算互不嵌套扣减）
 		}
-		if cur.ParentID <= 0 {
-			break
-		}
-		parent, perr := s.GetOrgByID(cur.ParentID)
-		if perr != nil {
-			break
-		}
-		cur = parent
 	}
+	// 组织墙：对全部用户生效（含未分配部门的直属用户）
 	// 组织墙：总预算>0（存在部门预算）且全租户本月消耗≥总预算
 	sum, err := s.GetOrgBudgetSummary(tid)
 	if err == nil && sum.TotalLimit > 0 && sum.UsedThisMonth >= sum.TotalLimit {

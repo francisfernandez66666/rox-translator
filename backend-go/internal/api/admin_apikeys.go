@@ -8,6 +8,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 )
 
@@ -153,4 +154,20 @@ func (s *Server) handleAPIKeyLimit(w http.ResponseWriter, r *http.Request) {
 	s.Store.LogAudit(tid, u.ID, "apikey_set_limit", "api_keys",
 		fmt.Sprintf("%d limit=%d", req.ID, req.Limit))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// issueDefaultAPIKey 为新建租户签发默认开放 API Key（translate 权限、不限量）。
+// 最佳努力语义：签发失败仅记日志，不阻断租户创建/注册主流程。
+// 返回: 明文 Key（仅此一次返回；空串表示签发失败或存储未就绪）。
+func (s *Server) issueDefaultAPIKey(tid int64, name string) string {
+	if s.Store == nil || tid <= 0 {
+		return ""
+	}
+	plain, err := s.Store.CreateAPIKey(tid, name, "translate", 0)
+	if err != nil {
+		log.Printf("[tenant-default-key] 租户 %d 默认 API Key 签发失败: %v", tid, err)
+		return ""
+	}
+	s.Store.LogAudit(tid, 0, "apikey_issue_default", "api_keys", name)
+	return plain
 }

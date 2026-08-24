@@ -86,7 +86,14 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "tenant": t})
+	// ★ 默认分配一个开放 API Key（translate 权限、不限量；明文仅此一次随响应返回）
+	defaultKey := s.issueDefaultAPIKey(t.ID, "默认 Key")
+	resp := map[string]interface{}{"success": true, "tenant": t}
+	if defaultKey != "" {
+		resp["api_key"] = defaultKey
+		resp["message"] = "创建成功（已附带默认 API Key，请立即保存，仅显示一次）"
+	}
+	writeJSON(w, 200, resp)
 }
 
 // handleTenantUpdate 更新租户接口（super_admin）：更新名称/到期时间/权限。

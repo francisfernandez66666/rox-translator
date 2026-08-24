@@ -94,6 +94,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 试用额度（可配置）：默认 50000 token
+	defaultKey := "" // 新租户默认 API Key（明文，仅注册响应返回一次）
 	trialTokens := int64(50000)
 	if v, _ := s.Store.GetConfig("trial_tokens"); v != "" {
 		if tv, err := strconv.ParseInt(v, 10, 64); err == nil && tv > 0 {
@@ -197,6 +198,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		// 行业包单轨制：仅记录注册所选行业编码，内容从共享宿主（租户1）按行业载入，不再建空壳包
 		_ = s.Ten.SetIndustry(inviteTenantID, industryPkg.Code)
 		// 发放试用余额：确保有余额账户记录后充值 trial_tokens（审核模式下暂不充值）
+		// ★ 新租户默认分配一个开放 API Key（translate 权限；响应一次性返回明文）
+		defaultKey = s.issueDefaultAPIKey(inviteTenantID, "默认 Key")
 		_ = s.Store.EnsureBalance(inviteTenantID)
 		if trialTokens > 0 && !reviewMode {
 			_ = s.Store.Charge(inviteTenantID, trialTokens)
@@ -237,13 +240,18 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if reviewMode && req.Invite == "" {
 		msg = "注册成功，账号已创建；管理员审核后将发放试用额度"
 	}
-	writeJSON(w, 200, map[string]interface{}{
+	regResp := map[string]interface{}{
 		"success":   true,
 		"message":   msg,
 		"user":      nu,
 		"tenant_id": inviteTenantID,
 		"tenant":    tenantInfo,
-	})
+	}
+	// ★ 新租户默认 API Key：明文仅此一次随注册响应返回（受邀加入为空串）
+	if defaultKey != "" {
+		regResp["api_key"] = defaultKey
+	}
+	writeJSON(w, 200, regResp)
 }
 
 // handleGrantTrial 超管向待审核租户发放试用额度（幂等）：
