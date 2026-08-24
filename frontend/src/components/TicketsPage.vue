@@ -96,17 +96,22 @@
       <!-- 步骤进度展开区 -->
       <div v-if="detail" class="tp-detail">
         <h4>{{ detail.ticket?.title }} · {{ t('tk.progress') }}</h4>
-        <!-- ★ 百分比进度条：减少等待焦虑 -->
-        <div v-if="ticketProgress !== null" class="tp-progress-bar-wrap">
+        <!-- ★ 百分比进度条 + 当前步骤名 -->
+        <div v-if="ticketProgress !== null" class="tp-progress-wrap">
           <div class="tp-progress-bar"><div class="tp-progress-fill" :style="{ width: ticketProgress + '%' }"></div></div>
           <span class="tp-progress-text">{{ ticketProgress }}%</span>
+          <span v-if="currentStepLabel" class="tp-step-label">{{ currentStepLabel }}</span>
         </div>
-        <ul class="tp-steps">
+        <!-- 步骤明细（折叠展示） -->
+        <details class="tp-steps-detail">
+          <summary>{{ t('tk.detail') }}</summary>
+          <ul class="tp-steps">
           <li v-for="st in detail.states || []" :key="st.id">
             <b>{{ st.step }}</b> — <span :class="'st-' + st.status">{{ st.status }}</span>
             <template v-if="st.error"> ⚠️ {{ st.error }}</template>
           </li>
         </ul>
+        </details>
         <!-- ★ 文件清单（多文件工单）：逐文件状态与产物就绪标记 -->
         <div v-if="(detail.files || []).length" class="tp-files-detail">
           <div v-for="f in detail.files" :key="f.id" class="tp-file-row"
@@ -196,6 +201,28 @@ const estimateBlocked = computed(() => {
   if (!estimate.value) return false
   if (estimate.value.sufficient === false) return true
   return estimate.value.activated === false
+})
+
+// 步骤 key → 用户友好名称（中文）
+const stepNames: Record<string,string> = {
+  kb_match:'知识库匹配', ai_initial:'AI 初翻', evals_initial:'质量评估',
+  review:'专业校对', evals_review:'校对评估', gate:'硬闸校验',
+  culture_gate:'文化检查', qa:'质检', file_extract:'文件解析',
+  file_translate:'文件翻译', approval:'审批', feedback:'反馈',
+}
+
+// currentStepLabel 当前正在执行的步骤名（第一个 running 状态的步骤）
+const currentStepLabel = computed<string>(() => {
+  const st = detail.value?.states || []
+  const running = st.find((x:any) => x.status==='running')
+  if (running) return stepNames[running.step] || running.step
+  // 文件工单：按产物就绪比例显示
+  const fs = detail.value?.files || []
+  if (fs.length) {
+    const done = fs.filter((f:any)=>f.result_path||f.error).length
+    return `已完成 ${done}/${fs.length} 个文件`
+  }
+  return ''
 })
 
 // ★ 工单进度百分比：文本按步骤完成数、文件按产物就绪数
@@ -393,4 +420,12 @@ function statusLabel(s: string): string {
 .tp-progress-bar { flex: 1; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; }
 .tp-progress-fill { height: 100%; background: linear-gradient(90deg,#1a73e8,#4a90d9); border-radius: 4px; transition: width .6s ease; }
 .tp-progress-text { font-size: 13px; font-weight: 600; color: #1a73e8; min-width: 36px; }
+
+/* ★ 进度条 + 当前步骤名 */
+.tp-progress-wrap { display: flex; align-items: center; gap: 10px; margin: 10px 0 6px; }
+.tp-progress-bar { flex: 1; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; }
+.tp-progress-fill { height: 100%; background: linear-gradient(90deg,#1a73e8,#4a90d9); border-radius: 4px; transition: width .6s ease; }
+.tp-progress-text { font-size: 14px; font-weight: 700; color: #1a73e8; min-width: 42px; }
+.tp-step-label { font-size: 12.5px; color: #666; }
+.tp-steps-detail summary { cursor: pointer; color: #999; font-size: 12px; margin-top: 6px; }
 </style>

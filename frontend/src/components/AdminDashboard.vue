@@ -259,3 +259,13 @@ onMounted(() => {
 
 /* ★ 账号下拉内修改密码项（打开独立弹窗） */
 </style>
+
+<style>
+/* ★ 壳层布局（unscoped：需要覆盖 admin.css 全局规则） */
+.ad-shell { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
+.ad-shell > .adm-topbar { flex-shrink: 0; }
+.ad-shell > .ad-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.ad-shell .ad-side { width: 230px; background: #1a237e; color: #fff; display: flex; flex-direction: column;
+  flex-shrink: 0; overflow-y: auto; }
+.ad-shell .ad-main { flex: 1; padding: 28px 32px; overflow: auto; }
+</style>
