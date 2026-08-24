@@ -9,6 +9,7 @@
 package fileproc
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/go-pdf/fpdf"
 )
@@ -94,19 +96,73 @@ func WriteTranslatedPDF(outPath string, srcTexts []string, translations map[stri
 
 // WriteTranslatedPDFviaDocx PDF→DOCX→翻译→DOCX→PDF（保留排版+图表+图片OCR）
 func WriteTranslatedPDFviaDocx(outPath, inPath string, translations map[string]string, lang string) error {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"translations": translations,
+	})
+	return runDocxScriptStdin([]string{"legacy", inPath, outPath, lang}, payload)
+}
+
+// ExtractTextsPdfDocx 经 pdf2docx 提取段落文本（键与替换目标完全一致，表格必中）。
+// 返回文本列表与缓存的 DOCX 路径（供后续 apply 复用，调用方负责删除）。
+func ExtractTextsPdfDocx(pdfPath string) ([]string, string, error) {
+	cache := filepath.Join(os.TempDir(), fmt.Sprintf("pdfdocx_%d.docx", time.Now().UnixNano()))
+	out, err := runDocxScript([]string{"extract", pdfPath, cache})
+	if err != nil {
+		return nil, "", err
+	}
+	var r struct {
+		Success bool     `json:"success"`
+		Texts   []string `json:"texts"`
+	}
+	if err := json.Unmarshal(out, &r); err != nil {
+		return nil, "", err
+	}
+	if !r.Success || len(r.Texts) == 0 {
+		return nil, "", fmt.Errorf("extract 无文本")
+	}
+	return r.Texts, cache, nil
+}
+
+// ApplyTranslatedPdfFromDocx 在已缓存 DOCX 副本上应用译文并转 PDF（含图片 OCR）。
+func ApplyTranslatedPdfFromDocx(outPath, cacheDocx string, translations map[string]string, lang string) error {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"translations": translations,
+	})
+	return runDocxScriptStdin([]string{"apply", cacheDocx, outPath, lang}, payload)
+}
+
+func docxScriptPath() string {
+	return filepath.Join(filepath.Dir(os.Args[0]), "docx_translate.py")
+}
+
+func runDocxScript(args []string) ([]byte, error) {
 	pyBin := "python3"
 	if _, err := os.Stat("/opt/translator/.venv/bin/python3"); err == nil {
 		pyBin = "/opt/translator/.venv/bin/python3"
 	}
-	scriptPath := filepath.Join(filepath.Dir(os.Args[0]), "docx_translate.py")
-	payload, _ := json.Marshal(map[string]interface{}{
-		"translations": translations,
-	})
-	cmd := exec.Command(pyBin, scriptPath, inPath, outPath, lang)
-	cmd.Stdin = strings.NewReader(string(payload))
+	cmd := exec.Command(pyBin, append([]string{docxScriptPath()}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("docx_translate %v 失败: %w\n%s", args, err, string(out))
+	}
+	// extract 的 stdout 是 JSON；CombinedOutput 可能混入 stderr 日志，取最后一行 JSON
+	idx := bytes.LastIndexByte(out, '{')
+	if idx >= 0 {
+		return out[idx:], nil
+	}
+	return out, nil
+}
+
+func runDocxScriptStdin(args []string, payload []byte) error {
+	pyBin := "python3"
+	if _, err := os.Stat("/opt/translator/.venv/bin/python3"); err == nil {
+		pyBin = "/opt/translator/.venv/bin/python3"
+	}
+	cmd := exec.Command(pyBin, append([]string{docxScriptPath()}, args...)...)
+	cmd.Stdin = bytes.NewReader(payload)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("docx_translate 失败: %w\n%s", err, string(output))
+		return fmt.Errorf("docx_translate %v 失败: %w\n%s", args[0], err, string(output))
 	}
 	return nil
 }

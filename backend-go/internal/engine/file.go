@@ -103,6 +103,16 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	if err != nil || len(texts) == 0 {
 		return &FileTranslateResult{Skill: "translation", Error: "无法从文件提取文本或文件为空"}
 	}
+	// ★ PDF：改用 pdf2docx 提取段落（键与写回目标一致，表格/短文本必中），
+	//   缓存 DOCX 供多语言写回复用；失败回退 pdftotext 键。
+	var pdfCacheDocx string
+	if strings.EqualFold(filepath.Ext(filePath), ".pdf") {
+		if t2, cache, e2 := fileproc.ExtractTextsPdfDocx(filePath); e2 == nil && len(t2) > 0 {
+			texts = t2
+			pdfCacheDocx = cache
+			defer os.Remove(cache)
+		}
+	}
 
 	// 语言名映射
 	langNames := map[string]string{}
@@ -246,6 +256,13 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			case ".pptx":
 				aerr = fileproc.ApplyPptx(filePath, outPath, tr)
 			case ".pdf":
+				// 优先两阶段：复用提取期缓存 DOCX（键对齐，含图片OCR）
+				if pdfCacheDocx != "" {
+					if perr := fileproc.ApplyTranslatedPdfFromDocx(outPath, pdfCacheDocx, tr, lc); perr == nil {
+						filesOut = append(filesOut, outPath)
+						continue
+					}
+				}
 				if perr := fileproc.WriteTranslatedPDFviaDocx(outPath, filePath, tr, lc); perr == nil {
 					filesOut = append(filesOut, outPath)
 					continue
