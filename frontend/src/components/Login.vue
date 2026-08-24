@@ -26,6 +26,15 @@
     <div v-if="showReg && mode === 'home'" class="login-card">
       <div class="login-logo">{{ t('login.selfRegisterTitle') }}</div>
       <div class="login-sub">{{ t('login.selfRegisterSub') }}</div>
+      <!-- ★ 角色选择（四期体验增强）：管理员=创建企业；普通用户=邀请码加入 -->
+      <div class="reg-role-row">
+        <button type="button" :class="['reg-role-btn', reg.role_choice !== 'user' ? 'on' : '']" @click="reg.role_choice = 'admin'">
+          🏢 {{ t('login.roleAdmin') }}<span class="reg-role-desc">{{ t('login.roleAdminDesc') }}</span>
+        </button>
+        <button type="button" :class="['reg-role-btn', reg.role_choice === 'user' ? 'on' : '']" @click="reg.role_choice = 'user'">
+          👤 {{ t('login.roleUser') }}<span class="reg-role-desc">{{ t('login.roleUserDesc') }}</span>
+        </button>
+      </div>
       <input v-model="reg.username" :placeholder="t('login.username')" class="login-input" />
       <input v-model="reg.password" type="password" :placeholder="t('login.password')" class="login-input" />
       <input v-model="reg.email" :placeholder="t('login.emailPlaceholder')" class="login-input" />
@@ -37,13 +46,18 @@
         </button>
       </div>
       <div v-if="codeMsg" :class="codeMsgOk ? 'login-ok-hint' : 'login-error'">{{ codeMsg }}</div>
-      <input v-model="reg.code" :placeholder="t('login.orgCode')" class="login-input" />
-      <input v-model="reg.name" :placeholder="t('login.orgName')" class="login-input" />
-      <select v-model="reg.industry" class="login-input">
-        <option value="">{{ t('login.selectIndustry') }}</option>
-        <option v-for="ind in industries" :key="ind.code" :value="ind.code">{{ ind.name }}</option>
-      </select>
-      <input v-model="reg.invite" :placeholder="t('login.invite')" class="login-input" />
+      <!-- 管理员路径：企业编码/名称/行业 -->
+      <template v-if="reg.role_choice !== 'user'">
+        <input v-model="reg.code" :placeholder="t('login.orgCode')" class="login-input" />
+        <input v-model="reg.name" :placeholder="t('login.orgName')" class="login-input" />
+        <select v-model="reg.industry" class="login-input">
+          <option value="">{{ t('login.selectIndustry') }}</option>
+          <option v-for="ind in industries" :key="ind.code" :value="ind.code">{{ ind.name }}</option>
+        </select>
+      </template>
+      <!-- 普通用户路径：邀请码必填 -->
+      <input v-if="reg.role_choice === 'user'" v-model="reg.invite" :placeholder="t('login.inviteRequired')" class="login-input" />
+      <input v-else v-model="reg.invite" :placeholder="t('login.invite')" class="login-input" />
       <!-- 人机验证组件（服务端 captcha_provider=turnstile 时显示） -->
       <div v-if="captchaOn" :id="tsWidgetId" class="ts-box"></div>
       <div v-if="regMsg" class="login-error">{{ regMsg }}</div>
@@ -105,7 +119,7 @@ const showReg = ref(false)
 // 注册错误/提示信息
 const regMsg = ref('')
 // 自助注册表单
-const reg = ref({ username: '', password: '', code: '', name: '', invite: '', email: '', emailCode: '', industry: '' })
+const reg = ref({ username: '', password: '', code: '', name: '', invite: '', email: '', emailCode: '', industry: '', role_choice: 'admin' })
 
 // ===== 注册邮箱验证码状态 =====
 // 服务端是否开启邮箱验证（email_verify_enabled=1 时显示验证码输入行）
@@ -249,6 +263,10 @@ async function doRegister() {
     return
   }
   // 邮箱验证开启时：校验验证码已填写
+  // ★ 角色规则：普通用户必须凭邀请码加入企业
+  if (reg.value.role_choice === 'user' && !reg.value.invite.trim()) {
+    regMsg.value = t('login.userNeedsInvite'); return
+  }
   if (emailVerifyOn.value && !reg.value.invite && (!reg.value.emailCode || !reg.value.email)) {
     regMsg.value = '请填写邮箱并输入验证码'
     return
@@ -371,4 +389,10 @@ onMounted(() => { loadIndustries(); loadRegisterConfig() })
 .login-code-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 /* Turnstile 人机验证容器（居中） */
 .ts-box { margin-bottom: 12px; display: flex; justify-content: center; }
+
+/* ★ 注册角色选择 */
+.reg-role-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.reg-role-btn { flex: 1; border: 1px solid #d8dee6; background: #fff; border-radius: 10px; padding: 8px 6px; cursor: pointer; font-size: 13px; color: #444; display: flex; flex-direction: column; gap: 2px; }
+.reg-role-btn.on { border-color: #1a73e8; background: rgba(26,115,232,.06); color: #1a73e8; font-weight: 600; }
+.reg-role-desc { font-size: 11px; color: #999; font-weight: 400; }
 </style>

@@ -34,7 +34,7 @@ export async function authMe(): Promise<LoginResp> {
 }
 
 // 自助注册（可带邀请码/租户信息/行业/邮箱验证码/人机验证 token）
-export async function authRegister(data: { username: string; password: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string }): Promise<AdminResp> {
+export async function authRegister(data: { username: string; password: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string; role_choice?: string }): Promise<AdminResp> {
   return request('/api/auth/register', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
@@ -61,4 +61,18 @@ export async function resetPassword(data: { username: string; code: string; new_
 // 注册行业列表（无需登录，来自超管维护的行业包）
 export async function registerIndustries(): Promise<AdminResp> {
   return request('/api/register/industries')
+}
+
+// ============================================================================
+// 自助修改密码（邮箱校验流程，复用找回密码通道）
+// ============================================================================
+
+/** sendPwdCode 向账号绑定邮箱发送改密验证码（username/email 二选一定位）。 */
+export async function sendPwdCode(data: { username?: string; email?: string }): Promise<AdminResp> {
+  return forgotPassword(data)
+}
+
+/** submitNewPassword 校验验证码并设置新密码。 */
+export async function submitNewPassword(data: { username: string; code: string; new_password: string }): Promise<AdminResp> {
+  return resetPassword(data)
 }

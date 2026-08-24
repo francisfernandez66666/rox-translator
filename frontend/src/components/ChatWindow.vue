@@ -36,6 +36,8 @@
         <button :class="['mode-btn', translateMode === 'fast' ? 'on' : '']" @click="setMode('fast')">⚡ {{ t('chat.modeFast') }}</button>
         <button :class="['mode-btn', translateMode !== 'fast' ? 'on' : '']" @click="setMode('pro')">🎓 {{ t('chat.modePro') }}</button>
       </div>
+      <!-- ★ 自助修改密码（邮箱校验流程） -->
+      <button class="clear-btn" @click="pwdOpen = true" :title="t('pwd.entryTip')">🔒</button>
       <button class="clear-btn" style="margin-left:auto" @click="store.clearMessages()" :title="t('chat.clearChat')">
         🗑️
       </button>
@@ -268,6 +270,15 @@
       </div>
     </div>
 
+    <!-- ★ 自助修改密码弹窗（邮箱验证码流程） -->
+    <PasswordModal
+      v-if="pwdOpen"
+      :username="me.username || ''"
+      :email="me.email || ''"
+      @close="pwdOpen = false"
+      @done="onPwdDone"
+    />
+
     <!-- ★ 用户反馈弹窗（翻译结果 → 超管） -->
     <FeedbackModal
       v-if="feedbackTarget"
@@ -384,6 +395,13 @@ function openFeedback(msg: any) {
 // onFeedbackSubmitted 提交成功提示
 function onFeedbackSubmitted() {
   alert(t('fb.done'))
+}
+
+// ★ 自助修改密码弹窗
+const pwdOpen = ref(false)
+// onPwdDone 改密成功提示（下次登录使用新密码）
+function onPwdDone() {
+  alert(t('pwd.done'))
 }
 
 // ---- 翻译前报价预览（与后端计量同口径，只读不扣减） ----

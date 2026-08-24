@@ -72,6 +72,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		EmailCode string `json:"email_code"`    // 邮箱验证码（email_verify_enabled=1 时必填）
 		Captcha   string `json:"captcha_token"` // 人机验证 token（captcha_provider=turnstile 时必填）
 		Industry  string `json:"industry"`      // 所属行业（新租户注册时必填，来自行业包 code）
+	RoleChoice string `json:"role_choice"` // 角色选择：admin=我是管理员(建企业) / user=我是普通用户(邀请码加入)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -136,6 +137,19 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if err := s.verifyCaptcha(r, req.Captcha); err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
+	}
+	// ★ 角色选择（四期体验增强）：
+	//   admin（默认，兼容旧客户端）= 创建新企业并成为租户管理员；
+	//   user = 必须凭有效邀请码加入已有企业成为普通用户。
+	switch strings.ToLower(strings.TrimSpace(req.RoleChoice)) {
+	case "user":
+		if req.Invite == "" {
+			writeJSON(w, 400, map[string]interface{}{"success": false,
+				"message": "普通用户注册需通过邀请码加入企业；如需创建企业请选择「我是管理员」"})
+			return
+		}
+	case "admin":
+		req.Invite = "" // 管理员路径不接受邀请码混入（避免语义冲突降级为普通用户）
 	}
 	if req.Invite != "" {
 		inv, err := s.Store.GetInviteCodeByCode(strings.TrimSpace(req.Invite))
@@ -232,7 +246,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// 清空密码哈希后返回
 	nu.PasswordHash = ""
 	// 注册审计
-	s.Store.LogAudit(inviteTenantID, nu.ID, "register", "auth", "自助注册")
+	auditRole := "user"
+	if inviteTenantID == 0 || !s.wasInviteBind(req.Invite) {
+		auditRole = "admin"
+	}
+	s.Store.LogAudit(inviteTenantID, nu.ID, "register", "auth", "自助注册 role="+auditRole)
 	// 登记注册成功（推进同 IP 频率窗口）
 	s.regGuard.record(ip)
 	// 成功提示：审核模式下提示等待发放

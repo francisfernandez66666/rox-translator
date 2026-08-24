@@ -193,6 +193,7 @@ func (s *Server) handleMeContext(w http.ResponseWriter, r *http.Request) {
 		"success":      true,
 		"username":     u.Username,
 		"display_name": u.DisplayName,
+		"email":        u.Email,
 		"role":         u.Role,
 		"tenant_id":    u.TenantID,
 		"tenant_name":  tenantName,

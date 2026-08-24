@@ -96,6 +96,17 @@ export const zh: Record<string, string> = {
 }
 
 export const en: Record<string, string> = {
+  'pwd.title': 'Change Password',
+  'pwd.hint': 'Account "{user}"; a code will be emailed to your bound address (valid 10 min)',
+  'pwd.entryTip': 'Change password via email verification',
+  'pwd.submit': 'Update password',
+  'pwd.submitting': 'Updating…',
+  'pwd.codeSent': 'Code sent to your bound email',
+  'pwd.tooShort': 'New password must be at least 6 characters',
+  'pwd.mismatch': 'Passwords do not match',
+  'pwd.codeBad': 'Invalid or expired code',
+  'pwd.done': 'Password updated — use the new one next login',
+  'pwd.confirmPlaceholder': 'Repeat new password',
   'chat.title': '🌐 Translate',
   'chat.clearChat': 'Clear chat',
   'chat.balance': '{n} left',
