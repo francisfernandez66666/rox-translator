@@ -165,13 +165,14 @@ setInterval(refreshPkgLine, 60 * 1000)
 
 // openPwd 打开改密弹窗（预填绑定邮箱）
 async function openPwd() {
+  // 收起账号菜单并立即打开弹窗（邮箱随后异步补填，不阻塞交互反馈）
   const d = document.querySelector('details.account-menu')
   if (d) d.removeAttribute('open')
+  pwdOpen.value = true
   try {
     const r: any = await meContext()
     pwdEmail.value = r?.email || ''
   } catch { pwdEmail.value = '' }
-  pwdOpen.value = true
 }
 
 // onPwdDone 改密成功提示
