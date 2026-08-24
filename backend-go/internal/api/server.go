@@ -292,6 +292,7 @@ func (s *Server) routesAPIKeys() {
 	s.mux.HandleFunc("/api/apikeys/create", s.handleAPIKeyCreate)
 	s.mux.HandleFunc("/api/apikeys/status", s.handleAPIKeyStatus)
 	s.mux.HandleFunc("/api/apikeys/limit", s.handleAPIKeyLimit)
+	s.mux.HandleFunc("/api/apikeys/reveal", s.handleAPIKeyReveal)
 	s.mux.HandleFunc("/api/apikeys/rotate", s.handleAPIKeyRotate)
 	s.mux.HandleFunc("/api/apikeys/delete", s.handleAPIKeyDelete)
 }

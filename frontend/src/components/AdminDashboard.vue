@@ -9,10 +9,27 @@
    ============================================================================ -->
 <template>
   <!-- ===== 后台整体布局：左侧栏 + 主内容区 ===== -->
-  <div class="ad-wrap">
-    <!-- ===== 左侧侧边栏：品牌 / 工作台标识 / 导航 / 用户信息 ===== -->
+  <div class="ad-shell">
+    <!-- ★ 固定页眉（四期体验增强）：品牌 | 消息中心 | 账号 | 语言切换 | 退出 -->
+    <header class="adm-topbar">
+      <span class="adm-brand">🏢 {{ t('admin.console') }}</span>
+      <div class="adm-top-right">
+        <!-- 消息中心（复用前台铃铛） -->
+        <Bell />
+        <!-- 登录账号 -->
+        <span class="adm-user">👤 {{ user?.display_name || user?.username }}</span>
+        <!-- 语言切换 -->
+        <button class="gear-btn adm-gear" @click="toggleLang()">{{ lang === 'zh' ? 'EN' : '中' }}</button>
+        <!-- 返回前台 -->
+        <a class="adm-top-link" href="/">{{ t('admin.backWorkspace') }}</a>
+        <!-- 退出 -->
+        <button class="gear-btn adm-gear" @click="logout" :title="t('common.logout')">⎋</button>
+      </div>
+    </header>
+
+    <div class="ad-body">
+    <!-- ===== 左侧侧边栏：工作台标识 / 租户切换 / 导航 ===== -->
     <aside class="ad-side">
-      <div class="ad-brand">🏢 {{ t('admin.console') }}</div>
       <div class="ad-ws-tag">{{ t(currentWorkspace?.label || '') }}</div>
 
       <!-- 租户切换器（仅超管）：0=平台根组织「翻译助手」 -->
@@ -22,16 +39,6 @@
           <option :value="0">🏠 {{ t('admin.platformRoot') }}</option>
           <option v-for="t in tenantList" :key="t.id" :value="t.id">[{{ t.id }}] {{ t.name }} ({{ t.code }})</option>
         </select>
-      </div>
-
-      <!-- ★ 消息通知中心（复用前台铃铛：未读轮询+下拉列表） -->
-      <div class="ad-bell-slot" style="margin:4px 14px 10px; text-align:center">
-        <Bell />
-      </div>
-
-      <!-- 语言切换 -->
-      <div class="ad-lang-switch">
-        <button class="ad-lang-btn" @click="toggleLang()">{{ lang === 'zh' ? 'English' : '中文' }}</button>
       </div>
 
       <!-- ===== 扁平导航（当前工作台的全部面板） ===== -->
@@ -47,9 +54,7 @@
       </nav>
 
       <div class="ad-side-foot">
-        <div class="ad-user">{{ user?.display_name || user?.username }} ({{ roleName(user?.role) }})</div>
         <a href="/" class="ad-back">← {{ t('admin.backWorkspace') }}</a>
-        <button class="ad-logout" @click="logout">{{ t('common.logout') }}</button>
       </div>
     </aside>
 
@@ -58,6 +63,7 @@
       <div v-if="!isAdmin" class="ad-forbid">{{ t('admin.forbid') }}</div>
       <component :is="currentPanelComponent" v-else />
     </main>
+    </div><!-- /ad-body -->
   </div>
 </template>
 
@@ -203,4 +209,17 @@ onMounted(() => {
   font-weight: 600;
   text-align: center;
 }
+
+/* ★ 固定页眉（四期体验增强）：品牌 | 消息中心/账号/语言/退出 */
+.adm-shell { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+.ad-shell .ad-wrap { flex: 1; min-height: 0; }
+.adm-topbar { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 16px; background: #1a73e8; color: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.12); z-index: 40; }
+.adm-brand { font-size: 15px; font-weight: 600; }
+.adm-top-right { display: flex; align-items: center; gap: 10px; }
+.adm-user { font-size: 13px; opacity: .95; }
+.adm-gear { background: transparent; border: none; color: #fff; font-size: 14px; cursor: pointer; padding: 4px 6px; border-radius: 8px; }
+.adm-gear:hover { background: rgba(255,255,255,.18); }
+.adm-top-link { color: #fff; text-decoration: none; font-size: 13px; opacity: .95; }
+.adm-top-link:hover { text-decoration: underline; }
 </style>

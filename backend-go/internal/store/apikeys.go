@@ -23,6 +23,7 @@ type APIKey struct {
 	CreatedAt      string `json:"created_at"`       // 签发时间（RFC3339 字符串）
 	LastUsedAt     string `json:"last_used_at"`     // 最近一次调用时间（空表示从未调用）
 	CallCount      int64  `json:"call_count"`       // 累计调用次数
+	KeyEnc         string `json:"-"`                // 明文 Key 的静态加密结果（AES-256-GCM，支持任意时刻复制）
 	DailyCallLimit int64  `json:"daily_call_limit"` // 每日调用上限（0=不限；R4 Key 级配额）
 	CallsToday     int64  `json:"calls_today"`      // 今日已调用次数
 	CallsTodayDate string `json:"calls_today_date"` // 今日计数归属日期（YYYY-MM-DD，跨日自动清零）
@@ -44,8 +45,8 @@ func (s *Store) CreateAPIKey(tid int64, name, perms string, dailyLimit int64) (s
 		perms = "translate" // 默认只给翻译权限，最小权限原则
 	}
 	_, err := s.db.Exec(
-		"INSERT INTO api_keys (tenant_id, key_hash, key_prefix, name, perms, status, created_at, daily_call_limit) VALUES (?,?,?,?,?, 'active', ?, ?)",
-		tid, HashAPIKey(plain), plain[:10], name, perms, time.Now().Format(time.RFC3339), dailyLimit)
+		"INSERT INTO api_keys (tenant_id, key_hash, key_prefix, name, perms, status, created_at, daily_call_limit, key_enc) VALUES (?,?,?,?,?, 'active', ?, ?, ?)",
+		tid, HashAPIKey(plain), plain[:10], name, perms, time.Now().Format(time.RFC3339), dailyLimit, EncryptPlain(plain))
 	if err != nil {
 		return "", err
 	}
@@ -61,9 +62,9 @@ func (s *Store) SetAPIKeyDailyLimit(id, tid, limit int64) error {
 // GetAPIKeyByHash 按哈希查询 API Key（用于开放 API 鉴权：把请求携带的 Key 哈希后精确匹配）。
 // 参数：hash=SHA-256 哈希；返回匹配的 API Key 记录。
 func (s *Store) GetAPIKeyByHash(hash string) (*APIKey, error) {
-	row := s.db.QueryRow("SELECT id, tenant_id, key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count, COALESCE(daily_call_limit,0), COALESCE(calls_today,0), COALESCE(calls_today_date,'') FROM api_keys WHERE key_hash=?", hash)
+	row := s.db.QueryRow("SELECT id, tenant_id, key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count, COALESCE(daily_call_limit,0), COALESCE(calls_today,0), COALESCE(calls_today_date,''), COALESCE(key_enc,'') FROM api_keys WHERE key_hash=?", hash)
 	var k APIKey
-	if err := row.Scan(&k.ID, &k.TenantID, &k.KeyHash, &k.KeyPrefix, &k.Name, &k.Perms, &k.Status, &k.CreatedAt, &k.LastUsedAt, &k.CallCount, &k.DailyCallLimit, &k.CallsToday, &k.CallsTodayDate); err != nil {
+	if err := row.Scan(&k.ID, &k.TenantID, &k.KeyHash, &k.KeyPrefix, &k.Name, &k.Perms, &k.Status, &k.CreatedAt, &k.LastUsedAt, &k.CallCount, &k.DailyCallLimit, &k.CallsToday, &k.CallsTodayDate, &k.KeyEnc); err != nil {
 		return nil, err
 	}
 	return &k, nil
@@ -72,9 +73,9 @@ func (s *Store) GetAPIKeyByHash(hash string) (*APIKey, error) {
 // GetAPIKey 按 ID+租户查询 API Key（用于管理端轮换：必须同时校验租户归属，防止越权访问）。
 // 参数：id=Key 主键 ID，tid=租户 ID。
 func (s *Store) GetAPIKey(id, tid int64) (*APIKey, error) {
-	row := s.db.QueryRow("SELECT id, tenant_id, key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count, COALESCE(daily_call_limit,0), COALESCE(calls_today,0), COALESCE(calls_today_date,'') FROM api_keys WHERE id=? AND tenant_id=?", id, tid)
+	row := s.db.QueryRow("SELECT id, tenant_id, key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count, COALESCE(daily_call_limit,0), COALESCE(calls_today,0), COALESCE(calls_today_date,''), COALESCE(key_enc,'') FROM api_keys WHERE id=? AND tenant_id=?", id, tid)
 	var k APIKey
-	if err := row.Scan(&k.ID, &k.TenantID, &k.KeyHash, &k.KeyPrefix, &k.Name, &k.Perms, &k.Status, &k.CreatedAt, &k.LastUsedAt, &k.CallCount, &k.DailyCallLimit, &k.CallsToday, &k.CallsTodayDate); err != nil {
+	if err := row.Scan(&k.ID, &k.TenantID, &k.KeyHash, &k.KeyPrefix, &k.Name, &k.Perms, &k.Status, &k.CreatedAt, &k.LastUsedAt, &k.CallCount, &k.DailyCallLimit, &k.CallsToday, &k.CallsTodayDate, &k.KeyEnc); err != nil {
 		return nil, err
 	}
 	return &k, nil
@@ -84,7 +85,7 @@ func (s *Store) GetAPIKey(id, tid int64) (*APIKey, error) {
 // 参数：tid=租户 ID；返回该租户的 Key 列表。
 func (s *Store) ListAPIKeys(tid int64) ([]*APIKey, error) {
 	// tid<=0：跨租户全量（超管平台视角聚合）
-	q := "SELECT id, tenant_id, key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count, COALESCE(daily_call_limit,0), COALESCE(calls_today,0), COALESCE(calls_today_date,'') FROM api_keys"
+	q := "SELECT id, tenant_id, key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count, COALESCE(daily_call_limit,0), COALESCE(calls_today,0), COALESCE(calls_today_date,''), COALESCE(key_enc,'') FROM api_keys"
 	if tid > 0 {
 		q += " WHERE tenant_id=?"
 	}
@@ -103,7 +104,7 @@ func (s *Store) ListAPIKeys(tid int64) ([]*APIKey, error) {
 	var out []*APIKey
 	for rows.Next() {
 		var k APIKey
-		if err := rows.Scan(&k.ID, &k.TenantID, &k.KeyHash, &k.KeyPrefix, &k.Name, &k.Perms, &k.Status, &k.CreatedAt, &k.LastUsedAt, &k.CallCount, &k.DailyCallLimit, &k.CallsToday, &k.CallsTodayDate); err != nil {
+		if err := rows.Scan(&k.ID, &k.TenantID, &k.KeyHash, &k.KeyPrefix, &k.Name, &k.Perms, &k.Status, &k.CreatedAt, &k.LastUsedAt, &k.CallCount, &k.DailyCallLimit, &k.CallsToday, &k.CallsTodayDate, &k.KeyEnc); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &k)
@@ -133,4 +134,14 @@ func (s *Store) TouchAPIKey(id int64) {
 		calls_today = CASE WHEN calls_today_date=? THEN calls_today+1 ELSE 1 END,
 		calls_today_date=?
 		WHERE id=?`, time.Now().Format(time.RFC3339), today, today, id)
+}
+
+// GetAPIKeyPlain 解密返回 Key 明文（租户隔离校验；供「固定复制」能力使用）。
+func (s *Store) GetAPIKeyPlain(id, tid int64) (string, error) {
+	var enc string
+	err := s.db.QueryRow("SELECT COALESCE(key_enc,'') FROM api_keys WHERE id=? AND tenant_id=?", id, tid).Scan(&enc)
+	if err != nil {
+		return "", err
+	}
+	return DecryptPlain(enc), nil
 }

@@ -171,3 +171,26 @@ func (s *Server) issueDefaultAPIKey(tid int64, name string) string {
 	s.Store.LogAudit(tid, 0, "apikey_issue_default", "api_keys", name)
 	return plain
 }
+
+// handleAPIKeyReveal 解密返回 Key 明文（固定复制能力：前端只复制不展示）。
+// 鉴权：租户管理员及以上 + 租户隔离。
+func (s *Server) handleAPIKeyReveal(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		ID int64 `json:"id"` // Key 主键 ID
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	plain, err := s.Store.GetAPIKeyPlain(req.ID, s.effTenant(r, u))
+	if err != nil || plain == "" {
+		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "Key 不存在或未存储可复制密文"})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "api_key": plain})
+}

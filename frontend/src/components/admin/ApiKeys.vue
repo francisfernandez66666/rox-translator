@@ -7,11 +7,11 @@
     <h2>{{ t('apikeys.title') }}</h2>
     <div class="ad-row">
       <a class="ad-btn" href="#" @click.prevent="openDocs">📄 {{ t('apikeys.docs') }}</a>
-      <button class="ad-btn" style="margin-left:8px" @click="docsCardOpen = !docsCardOpen">{{ docsCardOpen ? '▲' : '▼' }} {{ t('docsEdit.title') }}</button>
+      <button v-if="isSuper" class="ad-btn" style="margin-left:8px" @click="docsCardOpen = !docsCardOpen">{{ docsCardOpen ? '▲' : '▼' }} {{ t('docsEdit.title') }}</button>
     </div>
 
     <!-- ★ API 文档在线维护（Markdown 源码编辑，仅超管） -->
-    <div v-if="docsCardOpen" class="ad-chart-card" style="margin-top:12px">
+    <div v-if="isSuper && docsCardOpen" class="ad-chart-card" style="margin-top:12px">
       <h3>{{ t('docsEdit.title') }}</h3>
       <div class="ad-hint">{{ t('docsEdit.hint') }}</div>
       <textarea
@@ -57,6 +57,7 @@
           <td class="ad-td">
             <button class="ad-btn-sm" @click="toggleKey(k)">{{ k.status === 'active' ? t('apikeys.disable') : t('apikeys.enable') }}</button>
             <button class="ad-btn-sm" @click="rotateKey(k)">{{ t('apikeys.rotate') }}</button>
+            <button class="ad-btn-sm" @click="copyKey(k)" :title="t('apikeys.copy')">📋</button>
             <button class="ad-btn-sm" @click="setLimit(k)">📐 {{ t('apikeys.setLimit') }}</button>
             <button class="ad-btn-sm ad-btn-red" @click="deleteKey(k)">{{ t('apikeys.delete') }}</button>
           </td>
@@ -68,7 +69,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
-import { apiKeys, apiKeyCreate, apiKeyStatus, apiKeyDelete, apiKeyRotate, openAPIDocsUrl, getOpenAPIDocs, saveOpenAPIDocs, previewOpenAPIDocs } from '@/api'
+import { apiKeys, apiKeyCreate, apiKeyStatus, apiKeyDelete, apiKeyRotate, openAPIDocsUrl, getOpenAPIDocs, saveOpenAPIDocs, previewOpenAPIDocs, apiKeyReveal } from '@/api'
 import { activeTenantId } from './store'
 import { t, tpl } from '@/i18n'
 
@@ -89,6 +90,22 @@ async function copyNewKey() {
     setTimeout(() => (copied.value = false), 2000)
   } catch {
     alert(t('apikeys.copyFail'))
+  }
+}
+
+// copiedId 当前已复制的 Key 行 ID（2 秒后恢复）
+const copiedId = ref(0)
+
+// copyKey 解密取回明文并直接写入剪贴板（不展示明文，满足“只能复制不能看”）
+async function copyKey(k: any) {
+  try {
+    const r: any = await apiKeyReveal(k.id)
+    if (!r.success) { alert(r.message); return }
+    await navigator.clipboard.writeText(r.api_key || '')
+    copiedId.value = k.id
+    setTimeout(() => (copiedId.value = 0), 2000)
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e))
   }
 }
 

@@ -64,3 +64,12 @@ export async function apiKeyLimit(id: number, dailyCallLimit: number): Promise<A
     body: JSON.stringify({ id, daily_call_limit: dailyCallLimit }),
   })
 }
+
+/** apiKeyReveal 解密返回 Key 明文（固定复制能力；前端仅写入剪贴板，不展示）。 */
+export async function apiKeyReveal(id: number): Promise<AdminResp & { api_key?: string }> {
+  return request('/api/apikeys/reveal', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ id }),
+  })
+}

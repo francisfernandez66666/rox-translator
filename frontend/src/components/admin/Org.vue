@@ -50,14 +50,15 @@
         >
           <span class="drag-handle" v-if="canDrag">⠿</span>
           <span>{{ orgIcon(o) }} {{ o.name }}</span>
-          <!-- ★ 部门预算（四期）：徽标 + 分配入口（租管及以上；根组织不参与） -->
+          <!-- ★ 部门预算：点击徽标弹窗设置/查看 -->
           <span v-if="o.type !== 'root' && myLevel >= 3" class="ad-btn-xs budget-badge"
                 :class="{ 'budget-over': isOverBudget(o) }"
-                :title="t('org.budgetTip')">
+                :title="t('org.budgetSet')" @click.stop="openBudget(o)">
             💰 {{ budgetText(o) }}
-            <button class="ad-btn-xs" style="margin-left:4px;border:none;background:transparent;cursor:pointer"
-                    :title="t('org.budgetSet')" @click.stop="setBudget(o)">✎</button>
           </span>
+          <!-- ★ 邀请码入口：点击弹窗生成/查看该组织邀请码 -->
+          <button v-if="o.type !== 'root' && myLevel >= 3" class="ad-btn-xs"
+                  :title="t('org.inviteEntry')" @click.stop="openInvites(o)">🎟️</button>
           <span class="ad-tree-actions">
             <button v-if="isSuper && o.type === 'root'" class="ad-btn-xs" :class="{ 'ad-btn-red': tenantStatusOf(o.tenant_id) === 'active' }" @click.stop="toggleTenantByOrg(o)">{{ tenantStatusOf(o.tenant_id) === 'active' ? t('tenants.disable') : t('tenants.enable') }}</button>
             <button class="ad-btn-xs" :title="t('org.addChild')" @click.stop="setParent(o.id)">+</button>
@@ -65,27 +66,6 @@
             <button v-if="o.type !== 'root' && myLevel >= 3" class="ad-btn-xs ad-btn-red" :title="t('org.delete')" @click.stop="deleteOrg(o)">✕</button>
           </span>
         </div>
-      </div>
-
-      <!-- ★ 邀请码（四期并入组织架构）：哪个组织生成的，受邀者进哪个组织层级 -->
-      <div class="ad-chart-card" style="margin-top:16px">
-        <h3>🎟️ {{ t('org.invitesTitle') }}</h3>
-        <div class="ad-hint">{{ tpl('org.invitesHint', { name: selectedOrgName }) }}</div>
-        <div class="tp-row">
-          <input v-model="inviteCodeInput" class="ad-input" style="width:200px" :placeholder="t('org.invitePlaceholder')" />
-          <button class="ad-btn ad-btn-green" @click="createInvite">{{ t('org.inviteCreate') }}</button>
-        </div>
-        <table class="ad-table" style="margin-top:8px">
-          <thead><tr><th>{{ t('org.colCode') }}</th><th>{{ t('org.inviteUsed') }}</th><th>{{ t('overview.colTime') }}</th></tr></thead>
-          <tbody>
-            <tr v-for="inv in invites" :key="inv.id">
-              <td><code>{{ inv.code }}</code></td>
-              <td>{{ inv.used === 1 ? t('org.inviteUsedYes') : t('org.inviteUsedNo') }}</td>
-              <td>{{ fmtTime(inv.created_at) }}</td>
-            </tr>
-            <tr v-if="!invites.length"><td colspan="3" class="ad-empty">{{ t('org.invitesEmpty') }}</td></tr>
-          </tbody>
-        </table>
       </div>
 
       <!-- 组织下用户（含子孙组织归集） -->
@@ -179,35 +159,52 @@ function fmtNumShort(n: number): string {
   if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + 'w'
   return String(n)
 }
-// setBudget 弹窗分配部门月度 token 预算（0=关闭该部门的部门墙）
-async function setBudget(o: any) {
-  const cur = budgetMap.value[o.id]?.limit || 0
-  const input = prompt(tpl('org.budgetPrompt', { name: o.name, cur }), String(cur))
-  if (input === null) return
-  const n = Number(input)
-  if (!Number.isFinite(n) || n < 0) { alert(t('org.budgetInvalid')); return }
+// ★ 部门预算弹窗：查看本月已用 + 设置月度上限（0=关闭部门墙）
+const budgetModal = ref<{ id: number; name: string; limit: number; used: number } | null>(null)
+const budgetInput = ref(0)
+
+function openBudget(o: any) {
+  const b = budgetMap.value[o.id]
+  budgetModal.value = { id: o.id, name: o.name, limit: b?.limit || 0, used: b?.used || 0 }
+  budgetInput.value = budgetModal.value.limit
+}
+
+// saveBudget 保存预算并刷新徽标数据
+async function saveBudget() {
+  if (!budgetModal.value) return
+  if (!(budgetInput.value >= 0)) { alert(t('org.budgetInvalid')); return }
   try {
-    const r: any = await orgTokenLimit(o.id, Math.floor(n))
+    const r: any = await orgTokenLimit(budgetModal.value.id, Math.floor(budgetInput.value))
     if (!r.success) { alert(r.message); return }
-    await loadBudget()
+    budgetMap.value[budgetModal.value.id] = { limit: budgetInput.value, used: budgetModal.value.used }
+    budgetModal.value = null
   } catch (e) { alert(e instanceof Error ? e.message : String(e)) }
 }
-// ★ 邀请码（并入组织架构）：生成绑定当前选中组织；列表按该组织过滤
-const invites = ref<any[]>([])
+// ★ 邀请码弹窗（四期）：绑定组织层级；受邀用户归入该组织
+const invites = ref<any[]>([])          // 全部邀请码（租户级拉取，弹窗内按 org 过滤）
+const inviteModal = ref<{ id: number; name: string } | null>(null)
+const inviteItems = ref<any[]>([])
 const inviteCodeInput = ref('')
-async function loadInvites() {
+
+// openInvites 打开指定组织的邀请码弹窗并加载列表（仅显示绑定到该组织的码）
+async function openInvites(o: any) {
+  inviteModal.value = { id: o.id, name: o.name }
+  inviteItems.value = []
   try {
     const r: any = await listInvites()
-    if (r.success) invites.value = (r.codes || []).filter((x: any) => !x.org_id || x.org_id === selectedOrg.value)
-  } catch { invites.value = [] }
+    if (r.success) inviteItems.value = (r.codes || []).filter((x: any) => x.org_id === o.id)
+  } catch { inviteItems.value = [] }
 }
+
+// createInvite 为当前弹窗组织生成邀请码
 async function createInvite() {
+  if (!inviteModal.value) return
   const code = inviteCodeInput.value.trim()
   if (!code) { alert(t('org.inviteNeedCode')); return }
-  const r = await inviteCodeCreate({ code, tenant_id: activeTenantId.value || 1, org_id: selectedOrg.value })
+  const r = await inviteCodeCreate({ code, tenant_id: inviteModal.value.id, org_id: inviteModal.value.id })
   if (!r.success) { alert(r.message); return }
   inviteCodeInput.value = ''
-  await loadBudget(); await loadInvites()
+  await openInvites({ id: inviteModal.value.id, name: inviteModal.value.name })
 }
 
 async function loadBudget() {
@@ -506,7 +503,6 @@ async function onDropRoot() {
 
 onMounted(() => { loadAll(); loadBudget(); loadInvites() })
 watch(activeTenantId, () => { loadBudget(); loadInvites() })
-watch(selectedOrg, () => loadInvites())
 watch(activeTenantId, () => {
   selectedOrg.value = 0
   loadAll()

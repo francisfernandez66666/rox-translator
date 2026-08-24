@@ -433,6 +433,8 @@ func (s *Store) migrateColumns() error {
 		{"tickets", "tokens_billed", "ALTER TABLE tickets ADD COLUMN tokens_billed INTEGER NOT NULL DEFAULT 0"},
 		{"api_keys", "daily_call_limit", "ALTER TABLE api_keys ADD COLUMN daily_call_limit INTEGER NOT NULL DEFAULT 0"},
 		{"api_keys", "calls_today", "ALTER TABLE api_keys ADD COLUMN calls_today INTEGER NOT NULL DEFAULT 0"},
+		// ★ Key 静态加密存储：支持任意时刻复制（明文不出库、不回显）
+		{"api_keys", "key_enc", "ALTER TABLE api_keys ADD COLUMN key_enc TEXT NOT NULL DEFAULT ''"},
 		{"api_keys", "calls_today_date", "ALTER TABLE api_keys ADD COLUMN calls_today_date TEXT NOT NULL DEFAULT ''"},
 		// ★ 邀请码绑定组织（四期）：受邀用户归入该组织层级
 		{"invite_codes", "org_id", "ALTER TABLE invite_codes ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},

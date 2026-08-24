@@ -26,8 +26,11 @@ import (
 	"translator/internal/store"
 )
 
-// openAPIDocsConfigKey 文档 MD 源码在 system_config 中的存储键
-const openAPIDocsConfigKey = "openapi_docs_md"
+// 开放 API 文档双语存储键（四期体验增强：中英两份独立维护）
+const (
+	openAPIDocsConfigKeyZh = "openapi_docs_md_zh"
+	openAPIDocsConfigKeyEn = "openapi_docs_md_en"
+)
 
 // openAPIDocsMaxBytes 文档源码上限（256KB，防超大内容写库）
 const openAPIDocsMaxBytes = 256 << 10
@@ -73,33 +76,101 @@ func htmlEscapeText(s string) string {
 	return r.Replace(s)
 }
 
-// currentDocsMD 返回当前生效的文档 MD 源码：system_config 优先，空则内置默认。
-func (s *Server) currentDocsMD() string {
-	if v, _ := s.Store.GetConfig(openAPIDocsConfigKey); strings.TrimSpace(v) != "" {
+// getDocsMD 取指定语言的生效源码（lang: "zh"|"en"）：对应 config 非空用之，否则回退该语言内置默认。
+func (s *Server) getDocsMD(lang string) string {
+	key := openAPIDocsConfigKeyZh
+	def := defaultDocsMDZh
+	if lang == "en" {
+		key = openAPIDocsConfigKeyEn
+		def = defaultDocsMDEn
+	}
+	if v, _ := s.Store.GetConfig(key); strings.TrimSpace(v) != "" {
 		return v
 	}
-	return defaultDocsMD
+	return def
 }
 
-// handleOpenAPIDocs 开放 API 文档公开页：当前生效 MD 渲染为 HTML。
+// extractBodyInner 提取 HTML 文档 <body> 内部内容（双语容器嵌入复用）。
+func extractBodyInner(htmlDoc string) string {
+	low := strings.ToLower(htmlDoc)
+	i := strings.Index(low, "<body>")
+	j := strings.LastIndex(low, "</body>")
+	if i == -1 || j == -1 || j <= i {
+		return htmlDoc
+	}
+	return htmlDoc[i+len("<body>") : j]
+}
+
+// handleOpenAPIDocs 开放 API 文档公开页：中英双容器渲染 + 右上角语言切换
+// （默认语言按浏览器 navigator.language 自动选择；切换结果记忆到 localStorage）。
 func (s *Server) handleOpenAPIDocs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(renderDocsHTML(s.currentDocsMD())))
+	zhBody := extractBodyInner(renderDocsHTML(s.getDocsMD("zh")))
+	enBody := extractBodyInner(renderDocsHTML(s.getDocsMD("en")))
+	page := `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>翻译平台开放 API 文档</title>
+<style>
+body{font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;max-width:900px;margin:30px auto;padding:0 20px;color:#222;line-height:1.7}
+h1{border-bottom:2px solid #1a237e;padding-bottom:8px;font-size:24px}
+h2{font-size:19px;margin-top:26px;border-bottom:1px solid #e0e0e0;padding-bottom:4px}
+code{background:#f0f0f0;padding:2px 6px;border-radius:4px;font-size:13px}
+pre{background:#f6f8fa;padding:12px;border-radius:8px;overflow:auto;font-size:13px}
+pre code{background:transparent;padding:0}
+table{border-collapse:collapse;width:100%;margin:10px 0}
+th,td{border:1px solid #ddd;padding:8px 10px;text-align:left;font-size:14px}
+th{background:#fafbfd}
+.badge{display:inline-block;background:#e8eaf6;color:#1a237e;border-radius:4px;padding:2px 8px;font-size:12px}
+.err{color:#c62828}
+blockquote{border-left:4px solid #1a73e8;margin:10px 0;padding:4px 14px;background:#f5f9ff;color:#455}
+a{color:#1a73e8}
+.lang-switch{position:fixed;top:14px;right:18px;display:flex;gap:6px}
+.lang-btn{border:1px solid #1a73e8;background:#fff;color:#1a73e8;border-radius:14px;padding:3px 12px;font-size:12.5px;cursor:pointer}
+.lang-btn.on{background:#1a73e8;color:#fff}
+.doc-lang{display:none}.doc-lang.show{display:block}
+</style></head><body>
+<div class="lang-switch">
+  <button class="lang-btn on" data-l="zh" onclick="setLang('zh')">中文</button>
+  <button class="lang-btn" data-l="en" onclick="setLang('en')">English</button>
+</div>
+<div class="doc-lang show" data-l="zh">` + zhBody + `</div>
+<div class="doc-lang" data-l="en">` + enBody + `</div>
+<script>
+function setLang(l){
+  document.querySelectorAll('.doc-lang').forEach(function(e){e.classList.toggle('show', e.getAttribute('data-l')===l)});
+  document.querySelectorAll('.lang-btn').forEach(function(b){b.classList.toggle('on', b.getAttribute('data-l')===l)});
+  try{localStorage.setItem('docs_lang',l)}catch(e){}
+}
+(function(){
+  var l=null;try{l=localStorage.getItem('docs_lang')}catch(e){}
+  if(!l){l=(navigator.language||'zh').toLowerCase().indexOf('zh')===0?'zh':'en'}
+  setLang(l);
+})();
+</script>
+</body></html>`
+	_, _ = w.Write([]byte(page))
 }
 
-// handleAdminOpenAPIDocsGet 超管读取当前生效的文档 MD 源码。
+// handleAdminOpenAPIDocsGet 超管读取中英两份文档源码与默认标记。
 func (s *Server) handleAdminOpenAPIDocsGet(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	md := s.currentDocsMD()
-	s.Store.LogAudit(0, u.ID, "openapi_docs_view", "system_config", openAPIDocsConfigKey)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "md": md, "is_default": md == defaultDocsMD})
+	mdZh := s.getDocsMD("zh")
+	mdEn := s.getDocsMD("en")
+	s.Store.LogAudit(0, u.ID, "openapi_docs_view", "system_config", openAPIDocsConfigKeyZh+"/"+openAPIDocsConfigKeyEn)
+	writeJSON(w, 200, map[string]interface{}{
+		"success":    true,
+		"md_zh":      mdZh,
+		"md_en":      mdEn,
+		"default_zh": mdZh == defaultDocsMDZh,
+		"default_en": mdEn == defaultDocsMDEn,
+	})
 }
 
-// handleAdminOpenAPIDocsSave 超管保存文档 MD 源码（空串=恢复内置默认）。
+// handleAdminOpenAPIDocsSave 超管保存指定语言的文档源码（空串=恢复该语言内置默认）。
 func (s *Server) handleAdminOpenAPIDocsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
@@ -107,17 +178,27 @@ func (s *Server) handleAdminOpenAPIDocsSave(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req struct {
-		MD string `json:"md"` // Markdown 源码（空串=恢复内置默认）
+		Lang string `json:"lang"` // zh | en
+		MD   string `json:"md"`   // Markdown 源码（空串=恢复该语言内置默认）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	lang := strings.ToLower(strings.TrimSpace(req.Lang))
+	if lang != "zh" && lang != "en" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "lang 必须为 zh 或 en"})
 		return
 	}
 	if len(req.MD) > openAPIDocsMaxBytes {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文档内容超过 256KB 上限"})
 		return
 	}
-	if err := s.Store.SetConfig(openAPIDocsConfigKey, req.MD); err != nil {
+	key := openAPIDocsConfigKeyZh
+	if lang == "en" {
+		key = openAPIDocsConfigKeyEn
+	}
+	if err := s.Store.SetConfig(key, req.MD); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
@@ -125,19 +206,20 @@ func (s *Server) handleAdminOpenAPIDocsSave(w http.ResponseWriter, r *http.Reque
 	if strings.TrimSpace(req.MD) == "" {
 		note = "已恢复内置默认文档"
 	}
-	s.Store.LogAuditDiff(0, u.ID, "openapi_docs_save", "system_config", openAPIDocsConfigKey,
+	s.Store.LogAuditDiff(0, u.ID, "openapi_docs_save", "system_config", key+"("+lang+")",
 		`{"action":"save"}`, `{"bytes":`+itoaApi(len(req.MD))+`,"note":"`+note+`"}`)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "message": note})
 }
 
-// handleAdminOpenAPIDocsPreview 超管预览渲染结果（不落库）。
+// handleAdminOpenAPIDocsPreview 超管预览渲染结果（不落库；lang 缺省 zh）。
 func (s *Server) handleAdminOpenAPIDocsPreview(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
 	var req struct {
-		MD string `json:"md"` // 待预览的 Markdown 源码
+		Lang string `json:"lang"` // zh | en（缺省 zh）
+		MD   string `json:"md"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -147,7 +229,11 @@ func (s *Server) handleAdminOpenAPIDocsPreview(w http.ResponseWriter, r *http.Re
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文档内容超过 256KB 上限"})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "html": renderDocsHTML(req.MD)})
+	lang := strings.ToLower(strings.TrimSpace(req.Lang))
+	if lang == "" {
+		lang = "zh"
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "html": renderDocsHTML(req.MD), "lang": lang})
 }
 
 // itoaApi 整数转字符串（审计明细用）。
@@ -174,7 +260,7 @@ func itoaApi(n int) string {
 }
 
 // defaultDocsMD 内置默认文档（Markdown 源码；openapi_docs_md 为空时使用）。
-const defaultDocsMD = `# 翻译平台开放 API
+const defaultDocsMDZh = `# 翻译平台开放 API
 
 所有接口使用 \Authorization: Bearer <API_KEY>\ 认证，API Key 在管理后台「API Key」面板签发。
 
@@ -236,6 +322,64 @@ curl "https://域名/openapi/v1/tasks/status?id=123" -H "Authorization: Bearer <
 翻译按实际用量从账户余额扣减；每次响应携带 balance_tokens（当前余额）与
 balance_sentences_approx（≈句数）。额度不足将返回错误码 insufficient_balance，
 请充值或升级套餐。具体计费规则由平台管理员配置。
+`
+
+// defaultDocsMDEn 英文默认文档。
+const defaultDocsMDEn = `# Translation Platform Open API
+
+All endpoints authenticate with **Authorization: Bearer YOUR_API_KEY**. Issue keys in the admin console "API Key" panel.
+
+**Async task model**: submitting returns a task_id immediately; poll until a terminal state (only completed / failed are terminal; while pending, status is queued / processing). Poll text tasks every **15s**, file tasks every **60s**.
+
+## Endpoints
+
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| POST | /openapi/v1/tasks | translate/all | Create task: JSON = text; multipart = batch files (up to 20 files / 30MB) |
+| GET | /openapi/v1/tasks/status?id= | translate/all | Poll status & result |
+| GET | /openapi/v1/tasks/download?id=&file_id= | translate/all | Download artifacts (zip when omitted) |
+| GET | /openapi/v1/balance | * | Token balance & sentence conversion |
+| GET | /openapi/v1/kb/stats | kb/all | Knowledge base statistics |
+| GET | /openapi/v1/billing/usage | billing/all | Usage details |
+| POST | /openapi/v1/apikey/rotate | all | Rotate API Key (old key invalidates immediately) |
+
+## Create a text task
+
+~~~json
+POST https://host/openapi/v1/tasks
+{"text":"Check the brake system.","target_langs":["en","de"],"mode":"pro"}
+~~~
+
+Response (202): {"task_id":123,"status":"queued","poll_interval_sec":15,"balance_tokens":12500000}
+
+## Create a batch file task (mode=fast / pro, default pro)
+
+~~~bash
+curl -X POST https://host/openapi/v1/tasks -H "Authorization: Bearer YOUR_API_KEY" -F "files=@manual.docx" -F "files=@list.xlsx" -F "target_langs=en,de" -F "mode=fast"
+~~~
+
+## Poll status
+
+~~~json
+GET /openapi/v1/tasks/status?id=123
+pending    -> {"status":"processing","steps":[...]}
+text done  -> {"status":"completed","translations":{"en":"..."},"tokens_used":1832}
+files done -> {"status":"completed","files":[...],"download":"/openapi/v1/tasks/download?id=123"}
+failed     -> {"status":"failed","error_code":"insufficient_balance"}
+~~~
+
+## Error codes (dedicated error_code field)
+
+| error_code | Meaning |
+|------------|---------|
+| insufficient_balance | Balance exhausted — top up or upgrade your plan |
+| rate_limited | Too many requests, retry later |
+| daily_quota_exceeded | Daily usage cap reached |
+| bad_request / not_found / forbidden / invalid_api_key / task_failed / not_ready / no_result | Parameter / permission / state errors |
+
+## Balance & Billing
+
+Usage is deducted from your account balance based on actual consumption; every response carries balance_tokens and balance_sentences_approx. Billing rules are configured by platform administrators.
 `
 
 // ============ 开放 API 辅助接口（KB 统计 / 用量 / Key 轮换） ============
