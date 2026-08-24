@@ -34,9 +34,9 @@ const (
 	StageReview    = "review"     // 审校
 
 	// 业务五阶段（面向流程的模型配置）
-	StageKBEmbed      = "kb_embed"       // 知识库 Embed 向量模型
-	StageInitialEvals = "initial_evals"  // 初翻 Evals 评估模型
-	StageReviewEvals  = "review_evals"   // 校对 Evals 评估模型
+	StageKBEmbed      = "kb_embed"      // 知识库 Embed 向量模型
+	StageInitialEvals = "initial_evals" // 初翻 Evals 评估模型
+	StageReviewEvals  = "review_evals"  // 校对 Evals 评估模型
 )
 
 // StageModel 单个流程阶段的模型配置（stage_models 中的一项）
@@ -61,7 +61,7 @@ type Config struct {
 	// OnlineAPIKeyIsPlaceholder 标记 OnlineAPIKey 是否为启动时生成的随机占位值
 	//（环境变量未配置）。占位 Key 调用外部 LLM 必失败，依赖方（如 Evals）应据此禁用。
 	OnlineAPIKeyIsPlaceholder bool
-	OnlineTimeout int    // 在线调用超时秒数
+	OnlineTimeout             int // 在线调用超时秒数
 
 	// 模型路由策略：按权重选主模型，失败后按顺序降级。空则用 Online* 单供应商。
 	ModelRoutes []ProviderConfig // 多供应商路由列表（权重路由/降级链）

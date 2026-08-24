@@ -5,6 +5,7 @@
 //     assets/fonts/DroidSansFallbackFull.ttf（Apache 2.0，覆盖中日韩英）
 //   - 说明：PDF 原生内容流无法安全替换文字（字体子集/CID 编码），业界通行做法即版式重建；
 //     产物为可读性优先的译文 PDF，源文对照另有 xlsx 通道兜底
+//
 // =============================================
 package fileproc
 

@@ -53,7 +53,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { t, tpl } from '@/i18n'
 import { adminUsers, adminUserCreate, adminUserUpdate, adminUserResetPassword, orgList, type OrgInfo } from '@/api'
-import { activeTenantId, tenantList, isSuper, myLevel } from './store'
+import { activeTenantId, tenantList, isSuper, myLevel, roleOptions } from './store'
 import { fmtTime } from './ui'
 
 const users = ref<any[]>([])
@@ -140,7 +140,7 @@ async function editUser(u: any, field: string, val: string) {
 
 // 启停用户（active ⇄ disabled）
 async function toggleUser(u: any) {
-  const r = await adminUserUpdate(u.id, { display_name: u.display_name, role: u.role, status: u.status === 'active' ? 'disabled' : 'active', org_id: u.org_id || 0 })
+  const r = await adminUserUpdate(u.id, { display_name: u.display_name, role: u.role, status: u.status === 'active' ? 'disabled' : 'active', org_id: u.org_id || 0 } as any)
   if (!r.success) alert(r.message)
   await loadUsers()
 }

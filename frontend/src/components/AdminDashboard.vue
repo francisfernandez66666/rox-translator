@@ -68,6 +68,7 @@
     </main>
     </div><!-- /ad-body -->
   </div>
+  <PasswordModal v-if="pwdOpen" :username="user?.username || ''" :email="pwdEmail" @close="pwdOpen = false" @done="onPwdDone" />
 </template>
 
 <script setup lang="ts">

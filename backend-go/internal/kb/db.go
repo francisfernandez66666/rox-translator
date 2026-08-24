@@ -314,6 +314,7 @@ func (k *KBDatabase) FetchRowTenant(id, tenantID int64) (*Row, error) {
 // 共享过滤子句：租户1 行仅限 语言文化包(全放行) + 本租户注册行业的行业包（防组织包泄漏）
 const sharedFilterSQL = "OR (tm.tenant_id=1 AND tm.priority>=2 AND EXISTS(SELECT 1 FROM kb_packages pkg WHERE pkg.id=tm.pack_id AND (pkg.pack_type='locale' OR (pkg.pack_type='industry' AND pkg.code=(SELECT industry FROM tenants WHERE id=?)))))"
 
+// FindExact 业务逻辑实现，详见函数体与调用处注释。
 func (k *KBDatabase) FindExact(zh string, tenantID int64) (*Row, error) {
 	row := k.db.QueryRow(fmt.Sprintf(
 		"SELECT tm.id, tm.zh, COALESCE(tm.module,''), COALESCE(tm.tenant_id,1), "+langCols+" FROM tm_segments tm WHERE tm.zh=? AND (tm.tenant_id=? "+sharedFilterSQL+") ORDER BY tm.priority ASC, tm.id ASC LIMIT 1"),
@@ -326,8 +327,8 @@ func (k *KBDatabase) FindExact(zh string, tenantID int64) (*Row, error) {
 // 返回：命中的行列表（按原文长度差由近到远排序）。
 func (k *KBDatabase) FuzzyHits(zhShort string, limit int, tenantID int64) ([]*Row, error) {
 	// 优先级链排序：部门包 > 组织包 > 行业包 > 语言文化包（共享宿主=租户1）
-	rows, err := k.db.Query("SELECT tm.id, tm.zh FROM tm_segments tm WHERE tm.zh LIKE ? AND (tm.tenant_id=? " +
-		sharedFilterSQL + ") ORDER BY tm.priority ASC, tm.id ASC LIMIT ?", "%"+zhShort+"%", tenantID, tenantID, limit)
+	rows, err := k.db.Query("SELECT tm.id, tm.zh FROM tm_segments tm WHERE tm.zh LIKE ? AND (tm.tenant_id=? "+
+		sharedFilterSQL+") ORDER BY tm.priority ASC, tm.id ASC LIMIT ?", "%"+zhShort+"%", tenantID, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}

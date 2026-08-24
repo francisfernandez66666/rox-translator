@@ -74,7 +74,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { apiKeys, apiKeyCreate, apiKeyStatus, apiKeyDelete, apiKeyRotate, openAPIDocsUrl, getOpenAPIDocs, saveOpenAPIDocs, previewOpenAPIDocs, apiKeyReveal } from '@/api'
+import { isSuper } from './store'
+import { apiKeys, apiKeyCreate, apiKeyStatus, apiKeyDelete, apiKeyRotate, openAPIDocsUrl, getOpenAPIDocs, saveOpenAPIDocs, previewOpenAPIDocs, apiKeyLimit, apiKeyReveal } from '@/api'
 import { activeTenantId } from './store'
 import { t, tpl } from '@/i18n'
 
@@ -201,7 +202,7 @@ async function saveDocs() {
 // previewDocs 后端渲染预览（新窗口写 HTML，隔离样式）
 async function previewDocs() {
   try {
-    const r: any = await previewOpenAPIDocs(docsMD.value)
+    const r: any = await previewOpenAPIDocs({ lang: docsLang.value, md: docsMD.value })
     if (!r.success) { alert(r.message); return }
     const w = window.open('', '_blank')
     if (w) { w.document.open(); w.document.write(r.html); w.document.close() }
@@ -257,7 +258,7 @@ async function setLimit(k: any) {
 // resetDocs 恢复内置默认（清空存储键）
 async function resetDocs() {
   if (!confirm(t('docsEdit.confirmReset'))) return
-  const r = await saveOpenAPIDocs('')
+  const r = await saveOpenAPIDocs({ lang: docsLang.value, md: '' })
   if (!r.success) { alert(r.message); return }
   docsMD.value = ''
   await refreshDocsState()

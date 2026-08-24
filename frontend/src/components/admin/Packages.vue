@@ -146,6 +146,7 @@
 import { ref, onMounted } from 'vue'
 import { adminPackages, adminPackageCreate, adminPackageUpdate, adminPackageDelete, adminPackageSettings, adminPackageSettingsSave } from '@/api'
 import { t } from '@/i18n'
+import { isSuper } from './store'
 
 const pkgs = ref<any[]>([])
 const billingEnforced = ref(false) // ★ 强制计费总开关（billing_enforced：token 实费扣减唯一开关）
@@ -156,7 +157,7 @@ const tokensPerSentence = ref(500)
 const payMode = ref('mock')
 
 // 注册与触达配置（三期）：开关用 "1"/"0" 字符串与后端 system_config 对齐
-const regCfg = ref<Record<string, string>>({
+const regCfg = ref<Record<string, string | boolean>>({
   email_verify_enabled: '0',
   email_notify_enabled: '0',
   registration_review: '0',
@@ -205,12 +206,12 @@ async function loadAll() {
 async function saveRegCfg() {
   const payload: Record<string, string> = {}
   for (const k of ['email_verify_enabled', 'email_notify_enabled', 'registration_review']) {
-    payload[k] = regCfg.value[k] === '1' || regCfg.value[k] === true ? '1' : '0'
+    payload[k] = String(regCfg.value[k]) === 'true' || regCfg.value[k] === '1' ? '1' : '0'
   }
   for (const k of ['captcha_provider', 'captcha_site_key', 'wecom_webhook_url', 'dingtalk_webhook_url']) {
-    payload[k] = regCfg.value[k] || ''
+    payload[k] = String(regCfg.value[k] || '')
   }
-  if (regCfg.value.captcha_secret_key) payload.captcha_secret_key = regCfg.value.captcha_secret_key
+  if (regCfg.value.captcha_secret_key) payload.captcha_secret_key = String(regCfg.value.captcha_secret_key)
   const r = await adminPackageSettingsSave(payload)
   if (!r.success) { alert(r.message); return }
   alert(t('packages.saved'))
@@ -256,7 +257,7 @@ async function deletePkg(p: any) {
 
 // saveEnforce 保存是否强制安全句检查开关
 async function saveEnforce() {
-  const r = await adminPackageSettingsSave({ billing_enforced: billingEnforced.value ? '1' : '0' })
+  const r = await adminPackageSettingsSave({ billing_enforced: billingEnforced.value ? '1' : '0' } as any)
   if (!r.success) { alert(r.message); return }
 }
 
@@ -273,7 +274,7 @@ async function saveBillingParams() {
   const r = await adminPackageSettingsSave({
     billing_markup_multiplier: markupMultiplier.value,
     estimate_tokens_per_sentence: tokensPerSentence.value,
-  })
+  } as any)
   if (!r.success) { alert(r.message); return }
   alert(t('common.saved'))
 }

@@ -301,7 +301,7 @@ func (idx *Index) Search(query []float32, k int, wantLangs []string, tenantID in
 }
 
 // ScopedSearch 带知识库包白名单的相似度检索：allowPacks 非 nil 时仅检索归属其中的行
-//（部门包>组织包>行业包>语言文化包 的应用范围由引擎按租户+注册行业计算）。
+// （部门包>组织包>行业包>语言文化包 的应用范围由引擎按租户+注册行业计算）。
 func (idx *Index) ScopedSearch(query []float32, k int, wantLangs []string, tenantID int64, allowPacks map[int64]bool) []SearchResult {
 	if len(query) == 0 || len(idx.Vecs) == 0 {
 		return nil // 无查询向量或无索引数据直接返回

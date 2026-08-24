@@ -40,7 +40,7 @@
           :key="o.id"
           :class="['ad-tree-item', selectedOrg === o.id ? 'on' : '', dragOverId === o.id ? 'drag-over' : '']"
           :style="{ paddingLeft: (8 + o._depth * 18) + 'px' }"
-          @click="selectOrg(o)"
+          @click="selectOrg(o.id)"
           :draggable="canDrag ? 'true' : 'false'"
           @dragstart="startDrag(o, $event)"
           @dragend="dragOrgId = null; dragOverId = null"
@@ -128,6 +128,49 @@
         </div>
       </div>
     </div>
+
+    <!-- ===== 预算弹窗 ===== -->
+    <Teleport to="body">
+    <div v-if="budgetModal" class="fb-mask" @click.self="budgetModal = null">
+      <div class="fb-modal">
+        <h3>💰 {{ t('org.budgetTitle') }} · {{ budgetModal.name }}</h3>
+        <p class="fb-hint">{{ tpl('org.budgetHint', { used: fmtNumShort(budgetModal.used) }) }}</p>
+        <label class="fb-label">{{ t('org.budgetLimit') }}</label>
+        <input v-model.number="budgetInput" type="number" min="0" class="fb-input" :placeholder="t('org.budgetPlaceholder')" />
+        <div class="fb-actions">
+          <button class="ad-btn" @click="budgetModal = null">{{ t('common.cancel') }}</button>
+          <button class="ad-btn ad-btn-green" @click="saveBudget">💾 {{ t('common.save') }}</button>
+        </div>
+      </div>
+    </div>
+    </Teleport>
+
+    <!-- ===== 邀请码弹窗 ===== -->
+    <Teleport to="body">
+    <div v-if="inviteModal" class="fb-mask" @click.self="inviteModal = null">
+      <div class="fb-modal">
+        <h3>🎟️ {{ t('org.inviteTitle') }} · {{ inviteModal.name }}</h3>
+        <p class="fb-hint">{{ t('org.inviteHint') }}</p>
+        <div class="ad-row">
+          <input v-model="inviteCodeInput" :placeholder="t('org.inviteInputPlaceholder')" class="fb-input" style="flex:1" />
+          <button class="ad-btn ad-btn-green" :disabled="!inviteCodeInput.trim()" @click="createInvite">➕ {{ t('org.inviteCreate') }}</button>
+        </div>
+        <table class="ad-table" style="margin-top:8px" v-if="inviteItems.length">
+          <thead><tr><th>{{ t('org.inviteCode') }}</th><th>{{ t('org.inviteStatus') }}</th></tr></thead>
+          <tbody>
+            <tr v-for="c in inviteItems" :key="c.id">
+              <td><code>{{ c.code }}</code></td>
+              <td>{{ c.used_count > 0 ? tpl('org.inviteUsed', { n: c.used_count }) : t('org.inviteUnused') }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="ad-hint" style="margin-top:8px">{{ t('org.inviteNoCodes') }}</p>
+        <div class="fb-actions">
+          <button class="ad-btn" @click="inviteModal = null">{{ t('common.close') }}</button>
+        </div>
+      </div>
+    </div>
+    </Teleport>
   </section>
 </template>
 
@@ -501,6 +544,11 @@ async function onDropRoot() {
   await loadAll()
 }
 
+// loadInvites 加载邀请码（供 onMounted 调用，当前无额外初始化逻辑）
+async function loadInvites() {
+  // 预留：如有需要可在加载时同步刷新弹窗内列表
+}
+
 onMounted(() => { loadAll(); loadBudget(); loadInvites() })
 watch(activeTenantId, () => { loadBudget(); loadInvites() })
 watch(activeTenantId, () => {
@@ -508,3 +556,14 @@ watch(activeTenantId, () => {
   loadAll()
 })
 </script>
+
+<style scoped>
+/* 弹窗遮罩与面板（复用 PasswordModal 样式但不依赖其 scoped） */
+.fb-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 999; }
+.fb-modal { background: #fff; border-radius: 12px; padding: 18px 20px; width: min(440px, 92vw); box-shadow: 0 8px 32px rgba(0,0,0,.2); }
+.fb-hint { margin: 0 0 10px; font-size: 12px; color: #888; }
+.fb-input { width: 100%; box-sizing: border-box; border: 1px solid #d0d7de; border-radius: 8px; padding: 8px; font-size: 13px; margin-bottom: 8px; }
+.fb-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.fb-label { display: block; margin-bottom: 4px; font-size: 12px; color: #555; }
+.ad-row { display: flex; gap: 8px; align-items: center; }
+</style>

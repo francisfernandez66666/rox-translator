@@ -38,6 +38,7 @@ func (s *Store) execW(query string, args ...interface{}) (sql.Result, error) {
 	return s.db.Exec(query, args...)
 }
 
+// NewStore 构造函数：初始化并返回实例。
 func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
@@ -440,6 +441,7 @@ func (s *Store) IsOrgInSubtree(tid, rootOrgID, targetOrgID int64) (bool, error) 
 	}
 	return false, nil
 }
+
 // ListAllUsers 列出全部租户（含平台 0）的所有用户（超管平台根视图用）。
 // 返回：用户列表（按 tenant_id,id 排序，密码哈希脱敏）。
 // ListAllUsers 跨全部租户列出所有用户（超管平台根视图聚合用，脱敏）。

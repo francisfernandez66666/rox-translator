@@ -1,3 +1,6 @@
+// ============ register.go · 职责说明 ============
+// api 包内部实现文件。
+// =============================================
 package api
 
 // ============ 本文件职责中文说明 ============
@@ -63,16 +66,16 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Username  string `json:"username"`      // 注册用户名
-		Password  string `json:"password"`      // 密码（至少 6 位）
-		Code      string `json:"code"`          // 租户编码（无邀请码时必填）
-		Name      string `json:"name"`          // 租户名称
-		Invite    string `json:"invite"`        // 邀请码（可选）
-		Email     string `json:"email"`         // 联系邮箱（找回密码验证码接收）
-		EmailCode string `json:"email_code"`    // 邮箱验证码（email_verify_enabled=1 时必填）
-		Captcha   string `json:"captcha_token"` // 人机验证 token（captcha_provider=turnstile 时必填）
-		Industry  string `json:"industry"`      // 所属行业（新租户注册时必填，来自行业包 code）
-	RoleChoice string `json:"role_choice"` // 角色选择：admin=我是管理员(建企业) / user=我是普通用户(邀请码加入)
+		Username   string `json:"username"`      // 注册用户名
+		Password   string `json:"password"`      // 密码（至少 6 位）
+		Code       string `json:"code"`          // 租户编码（无邀请码时必填）
+		Name       string `json:"name"`          // 租户名称
+		Invite     string `json:"invite"`        // 邀请码（可选）
+		Email      string `json:"email"`         // 联系邮箱（找回密码验证码接收）
+		EmailCode  string `json:"email_code"`    // 邮箱验证码（email_verify_enabled=1 时必填）
+		Captcha    string `json:"captcha_token"` // 人机验证 token（captcha_provider=turnstile 时必填）
+		Industry   string `json:"industry"`      // 所属行业（新租户注册时必填，来自行业包 code）
+		RoleChoice string `json:"role_choice"`   // 角色选择：admin=我是管理员(建企业) / user=我是普通用户(邀请码加入)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})

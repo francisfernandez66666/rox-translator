@@ -8,10 +8,10 @@
 package tenant
 
 import (
-	"fmt"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -33,9 +33,9 @@ type Perms struct {
 	Langs         []string `json:"langs,omitempty"`           // 允许翻译的语言代码；空=全部
 	MaxDailyChars int64    `json:"max_daily_chars,omitempty"` // 每日字符上限；0=不限
 	// 商业包（句数制）字段：
-	SentenceBalance int64  `json:"sentence_balance,omitempty"` // 剩余翻译句数（源句×目标语言数累计）
-	PackageCode     string `json:"package_code,omitempty"`     // 当前订阅的付费包编码（空=无订阅）
-	SubscribedAt    string `json:"subscribed_at,omitempty"`    // 最近订阅时间（RFC3339）
+	SentenceBalance int64  `json:"sentence_balance,omitempty"`   // 剩余翻译句数（源句×目标语言数累计）
+	PackageCode     string `json:"package_code,omitempty"`       // 当前订阅的付费包编码（空=无订阅）
+	SubscribedAt    string `json:"subscribed_at,omitempty"`      // 最近订阅时间（RFC3339）
 	PackageExpires  string `json:"package_expires_at,omitempty"` // 订阅到期时间（RFC3339，空=不限期；到期由后台扫描摘除）
 	NotifiedExp7    bool   `json:"notified_exp7,omitempty"`      // 到期提醒 7 天档已发送（去重标记）
 	NotifiedExp1    bool   `json:"notified_exp1,omitempty"`      // 到期提醒 1 天档已发送（去重标记）

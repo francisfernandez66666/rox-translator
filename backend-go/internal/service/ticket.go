@@ -11,13 +11,13 @@
 package service
 
 import (
-"path/filepath"
-"archive/zip"
+	"archive/zip"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
-	"os"
 	"sync"
 	"time"
 
@@ -297,10 +297,14 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				zipPath := ""
 				if len(res.Files) > 1 {
 					zp, zerr := zipOutputs(res.Files, strings.TrimSuffix(filepath.Base(tf.FilePath), filepath.Ext(tf.FilePath))+"_translated.zip")
-					if zerr == nil { zipPath = zp }
+					if zerr == nil {
+						zipPath = zp
+					}
 				}
 				storePath := zipPath
-				if storePath == "" && len(res.Files) > 0 { storePath = res.Files[0] }
+				if storePath == "" && len(res.Files) > 0 {
+					storePath = res.Files[0]
+				}
 				_ = s.Store.SetTicketFileResult(tf.ID, storePath)
 				okCount++
 				doneN := okCount + failedCount(s.Store, t.ID)
@@ -328,7 +332,9 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	zipPath := ""
 	if len(res.Files) > 1 {
 		zp, zerr := zipOutputs(res.Files, t.TicketNo+"_translated.zip")
-		if zerr == nil { zipPath = zp }
+		if zerr == nil {
+			zipPath = zp
+		}
 	}
 	if zipPath != "" {
 		_ = s.Store.SetTicketResultPath(t.ID, zipPath)

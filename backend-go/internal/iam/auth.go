@@ -32,6 +32,7 @@ func init() {
 	}
 }
 
+// RandomSecret 业务逻辑实现，详见函数体与调用处注释。
 func RandomSecret() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -50,11 +51,13 @@ type Claims struct {
 
 type ctxUserKey struct{}
 
+// UserFromContext 业务逻辑实现，详见函数体与调用处注释。
 func UserFromContext(ctx context.Context) *User {
 	v, _ := ctx.Value(ctxUserKey{}).(*User)
 	return v
 }
 
+// WithUser 业务逻辑实现，详见函数体与调用处注释。
 func WithUser(ctx context.Context, u *User) context.Context {
 	return context.WithValue(ctx, ctxUserKey{}, u)
 }
@@ -67,6 +70,7 @@ func b64Decode(s string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(s)
 }
 
+// Sign 业务逻辑实现，详见函数体与调用处注释。
 func Sign(u *User, ttl time.Duration) (string, error) {
 	claims := Claims{
 		UserID:   u.ID,
@@ -92,6 +96,7 @@ func signHS256(input, secret string) []byte {
 	return m.Sum(nil)
 }
 
+// Verify 业务逻辑实现，详见函数体与调用处注释。
 func Verify(token string) (*Claims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -118,6 +123,7 @@ func Verify(token string) (*Claims, error) {
 
 // ============ 角色等级 ============
 
+// RoleLevel 业务逻辑实现，详见函数体与调用处注释。
 func RoleLevel(role string) int {
 	switch role {
 	case RoleSuperAdmin, RoleAdmin:
@@ -131,18 +137,22 @@ func RoleLevel(role string) int {
 	}
 }
 
+// IsSuperAdmin 判断性谓词，返回布尔值。
 func IsSuperAdmin(u *User) bool {
 	return u != nil && RoleLevel(u.Role) >= 4
 }
 
+// IsTenantAdmin 判断性谓词，返回布尔值。
 func IsTenantAdmin(u *User) bool {
 	return u != nil && RoleLevel(u.Role) >= 3
 }
 
+// IsDeptAdmin 判断性谓词，返回布尔值。
 func IsDeptAdmin(u *User) bool {
 	return u != nil && RoleLevel(u.Role) >= 2
 }
 
+// RequireRole 业务逻辑实现，详见函数体与调用处注释。
 func RequireRole(u *User, required int) error {
 	if u == nil {
 		return errors.New("未登录")
@@ -168,6 +178,7 @@ func roleName(level int) string {
 
 // ============ 密码 ============
 
+// PasswordHash 业务逻辑实现，详见函数体与调用处注释。
 func PasswordHash(password string) string {
 	h, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -176,6 +187,7 @@ func PasswordHash(password string) string {
 	return string(h)
 }
 
+// CheckPassword 业务逻辑实现，详见函数体与调用处注释。
 func CheckPassword(hash, password string) bool {
 	switch {
 	case strings.HasPrefix(hash, "$2a$") || strings.HasPrefix(hash, "$2b$") || strings.HasPrefix(hash, "$2c$"):
@@ -187,6 +199,7 @@ func CheckPassword(hash, password string) bool {
 	}
 }
 
+// NeedMigrateHash 业务逻辑实现，详见函数体与调用处注释。
 func NeedMigrateHash(hash string) bool {
 	return !(strings.HasPrefix(hash, "$2a$") || strings.HasPrefix(hash, "$2b$") || strings.HasPrefix(hash, "$2c$"))
 }
@@ -196,12 +209,14 @@ func legacyHash(password string) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
+// PasswordHashLegacy 业务逻辑实现，详见函数体与调用处注释。
 func PasswordHashLegacy(password string) string {
 	s := "trans-salt:" + password
 	m := sha256.Sum256([]byte(s))
 	return base64.RawURLEncoding.EncodeToString(m[:])
 }
 
+// BearerToken 业务逻辑实现，详见函数体与调用处注释。
 func BearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	if strings.HasPrefix(h, "Bearer ") {

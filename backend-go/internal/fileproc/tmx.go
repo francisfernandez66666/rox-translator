@@ -2,6 +2,7 @@
 // TMX（Translation Memory eXchange，翻译记忆交换标准 XML 格式）导入：
 //   - ParseTMX：流式解析 TMX 文件 → 双语记录 []TMXTU（每个 tu 的 语言→译文 映射）
 //   - xml:lang 归一化：zh-CN/zh_CN/zh-Hans → zh，en-US → en 等（与 KB 语言码对齐）
+//
 // 导入目标：tm_segments 翻译记忆库（module=tmx），与双语 xlsx/csv 导入同一落库链路。
 // =============================================
 package fileproc
@@ -32,7 +33,7 @@ type tmxTU struct {
 	Tuvs []struct {
 		Lang string `xml:"lang,attr"`
 		Seg  struct {
-			Text string `xml:",chardata"`
+			Text  string `xml:",chardata"`
 			Inner string `xml:",innerxml"`
 		} `xml:"seg"`
 	} `xml:"tuv"`

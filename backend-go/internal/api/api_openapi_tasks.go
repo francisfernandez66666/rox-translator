@@ -1,3 +1,6 @@
+// ============ api_openapi_tasks.go · 职责说明 ============
+// api 包内部实现文件。
+// =============================================
 package api
 
 // ============ 本文件职责中文说明 ============
@@ -296,10 +299,10 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 	}
 	isFile := t.FilePath != ""
 	resp := map[string]interface{}{
-		"task_id":  t.ID,
-		"type":     map[bool]string{true: "files", false: "text"}[isFile],
-		"mode":     normalizeTaskMode(t.Mode),
-		"status":   "",
+		"task_id": t.ID,
+		"type":    map[bool]string{true: "files", false: "text"}[isFile],
+		"mode":    normalizeTaskMode(t.Mode),
+		"status":  "",
 	}
 	// 状态映射：queued→queued；in_progress/pending_approval/approved→processing；
 	// completed→completed；rejected/failed→failed

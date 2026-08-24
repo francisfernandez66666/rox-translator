@@ -87,50 +87,36 @@
               <button v-if="tk.status === 'completed'" class="ad-btn-sm ad-btn-green" @click="download(tk)">⬇ {{ t('tk.download') }}</button>
               <button v-if="tk.status === 'completed'" class="ad-btn-sm" @click="openFeedback(tk)">💬 {{ t('fb.entry') }}</button>
               <button v-if="tk.status === 'completed'" class="ad-btn-sm ad-btn-red" @click="deleteTicket(tk)">🗑 {{ t('common.delete') }}</button>
-              <button class="ad-btn-sm" @click="toggleDetail(tk)">{{ t('tk.detail') }}</button>
+              <button class="ad-btn-sm" @click.stop="toggleDetail(tk, $event)">{{ t('tk.detail') }}</button>
             </td>
           </tr>
           <tr v-if="!tickets.length"><td colspan="6" class="ad-empty">{{ t('tk.empty') }}</td></tr>
         </tbody>
       </table>
 
-      <!-- 步骤进度展开区 -->
-      <div v-if="detail" class="tp-detail">
-        <h4>{{ detail.ticket?.title }} · {{ t('tk.progress') }}</h4>
-        <!-- ★ 百分比进度条 + 当前步骤名 -->
-        <div v-if="ticketProgress !== null" class="tp-progress-wrap">
-          <div class="tp-progress-bar"><div class="tp-progress-fill" :style="{ width: ticketProgress + '%' }"></div></div>
-          <span class="tp-progress-text">{{ ticketProgress }}%</span>
-          <span v-if="currentStepLabel" class="tp-step-label">{{ currentStepLabel }}</span>
-        </div>
-        <!-- 步骤明细（折叠展示） -->
-        <details class="tp-steps-detail">
-          <summary>{{ t('tk.detail') }}</summary>
-          <ul class="tp-steps">
-          <li v-for="st in detail.states || []" :key="st.id">
-            <b>{{ st.step }}</b> — <span :class="'st-' + st.status">{{ st.status }}</span>
-            <template v-if="st.error"> ⚠️ {{ st.error }}</template>
-          </li>
-        </ul>
-        </details>
-        <!-- ★ 文件清单（多文件工单）：逐文件状态与产物就绪标记 -->
-        <div v-if="(detail.files || []).length" class="tp-files-detail">
-          <div v-for="f in detail.files" :key="f.id" class="tp-file-row"
-               :class="{ err: f.error }">
-            📄 {{ f.file_name }}
-            <span v-if="f.result_path" class="tp-file-ok">{{ t('tk.fileReady') }}</span>
-            <span v-else-if="f.error" class="tp-file-err">{{ f.error }}</span>
+      <!-- 进度气泡：点击按钮后弹出，再次点击气泡外任意位置关闭 -->
+      <Teleport to="body">
+      <div v-if="detail" class="tp-backdrop" @click="detail = null"></div>
+      <div v-if="detail" class="tp-popover" :style="popoverStyle">
+        <div :class="['tp-popover-arrow', arrowDir === 'up' ? 'arr-up' : 'arr-down']"></div>
+        <div class="tp-popover-inner">
+          <div class="tp-popover-title">{{ detail.ticket?.title || t('tk.progress') }}</div>
+          <div v-if="ticketProgress !== null" class="tp-progress-wrap">
+            <div class="tp-progress-bar"><div class="tp-progress-fill" :style="{ width: ticketProgress + '%' }"></div></div>
+            <span class="tp-progress-text">{{ ticketProgress }}%</span>
+            <span v-if="currentStepLabel" class="tp-step-label">{{ currentStepLabel }}</span>
           </div>
+          <div v-if="(detail.states || []).length" class="tp-steps-mini">
+            <div v-for="st in detail.states" :key="st.id" class="tp-step-row" :class="'st-' + st.status">
+              <span class="tp-step-name">{{ st.step }}</span>
+              <span class="tp-step-status">{{ st.status }}</span>
+              <span v-if="st.error" class="tp-step-err">⚠️ {{ st.error }}</span>
+            </div>
+          </div>
+          <p class="ad-hint" v-if="!(detail.states || []).length">{{ t('tk.noSteps') }}</p>
         </div>
-        <p class="ad-hint" v-if="!(detail.states || []).length">{{ t('tk.noSteps') }}</p>
-        <!-- QA 质检摘要（存在报告时展示） -->
-        <p class="tp-estimate" :class="{ warn: qaSummary && !qaSummary.pass }" v-if="qaSummary">
-          🧪 QA — {{ tpl('tk.qaSummary', { errors: qaSummary.errors, warnings: qaSummary.warnings }) }}
-          <template v-if="!qaSummary.pass">
-            <span v-for="(iss, i) in (qaSummary.issues || []).slice(0, 5)" :key="i"><br />{{ iss.level === 'error' ? '✖' : '⚠' }} [{{ iss.lang }}/{{ iss.rule }}] {{ iss.detail }}</span>
-          </template>
-        </p>
       </div>
+      </Teleport>
     </div>
 
     <!-- ★ 用户反馈弹窗（已完成工单 → 超管） -->
@@ -147,7 +133,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import LangMultiSelect from './LangMultiSelect.vue'
 import FeedbackModal from './FeedbackModal.vue'
-import { myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail, ticketDownload, translationEstimate } from '@/api'
+import { myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail, ticketDownload, ticketDelete, translationEstimate } from '@/api'
 import { t, tpl } from '@/i18n'
 import { fmtTime } from './admin/ui'
 
@@ -254,6 +240,14 @@ const qaSummary = computed<any | null>(() => {
 // 列表与详情
 const tickets = ref<any[]>([])
 const detail = ref<any>(null)
+const detailPos = ref({ top: 0, left: 0 })
+const arrowDir = ref('up')
+
+const popoverStyle = computed(() => ({
+  position: 'fixed' as const,
+  top: detailPos.value.top + 'px',
+  left: detailPos.value.left + 'px',
+}))
 
 // onFileSelect 记录用户选择的多文件（追加式：可多次选择累积；过滤重复文件名）
 function onFileSelect(e: Event) {
@@ -338,11 +332,26 @@ async function download(tk: any) {
 }
 
 // 展开/收起步骤进度
-// toggleDetail 展开/收起步骤进度轨迹
-async function toggleDetail(tk: any) {
+// toggleDetail 展开/收起步骤进度气泡（优先按钮上方，空间不足则下方）
+async function toggleDetail(tk: any, e?: MouseEvent) {
   if (detail.value && detail.value.ticket?.id === tk.id) { detail.value = null; return }
   const r = await ticketDetail(tk.id)
-  if (r.success) detail.value = r
+  if (r.success) {
+    detail.value = r
+    if (e?.target instanceof HTMLElement) {
+      const rect = e.target.getBoundingClientRect()
+      const popH = 200
+      const gap = 4
+      const left = Math.max(8, rect.left + rect.width / 2 - 130)
+      if (rect.top > popH + gap) {
+        detailPos.value = { top: rect.top - popH - gap, left }
+        arrowDir.value = 'down'
+      } else {
+        detailPos.value = { top: rect.bottom + gap, left }
+        arrowDir.value = 'up'
+      }
+    }
+  }
 }
 
 // 加载我的工单；进行中每 5s 自动刷新
@@ -397,7 +406,21 @@ function statusLabel(s: string): string {
 .tp-submit { margin-left: auto; }
 .tp-estimate { font-size: 12px; color: #5f6368; white-space: nowrap; }
 .tp-estimate.warn { color: #e8710a; font-weight: 600; }
-.tp-detail { border-top: 1px dashed #ddd; margin-top: 10px; padding-top: 8px; }
+.tp-backdrop { position: fixed; inset: 0; z-index: 199; background: transparent; }
+.tp-popover { position: fixed; z-index: 200; min-width: 260px; max-width: 360px; }
+.tp-popover-arrow { position: absolute; left: 80px; width: 12px; height: 12px; background: #fff; z-index: 201; }
+.tp-popover-arrow.arr-up { top: -6px; border-left: 1px solid #d0d7de; border-top: 1px solid #d0d7de; transform: rotate(45deg); }
+.tp-popover-arrow.arr-down { bottom: -6px; border-right: 1px solid #d0d7de; border-bottom: 1px solid #d0d7de; transform: rotate(45deg); }
+.tp-popover-inner { background: #fff; border: 1px solid #d0d7de; border-radius: 10px; padding: 12px 14px; box-shadow: 0 4px 16px rgba(0,0,0,.12); }
+.tp-popover-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #333; }
+.tp-steps-mini { margin-top: 8px; max-height: 160px; overflow-y: auto; }
+.tp-step-row { display: flex; gap: 6px; align-items: center; font-size: 12px; padding: 3px 0; }
+.tp-step-name { flex: 1; color: #555; }
+.tp-step-status { font-size: 11px; padding: 1px 6px; border-radius: 4px; }
+.tp-step-row.st-completed .tp-step-status { background: #e6f4ea; color: #2e7d32; }
+.tp-step-row.st-in_progress .tp-step-status { background: #e8f0fe; color: #1a73e8; }
+.tp-step-row.st-error .tp-step-status { background: #fce8e6; color: #c5221f; }
+.tp-step-err { color: #c5221f; font-size: 11px; }
 .tp-steps { list-style: none; padding-left: 10px; }
 .tp-steps li { padding: 3px 0; font-size: 13px; }
 .tk-status-queued { color: #b8860b; }

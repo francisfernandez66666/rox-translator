@@ -70,7 +70,7 @@ export async function healthCheck(): Promise<HealthResponse> {
 
 /** 翻译前报价预估（只读不扣减）：text 或 segment_count 二选一，与计量同口径 */
 export async function translationEstimate(
-  data: { text?: string; segment_count?: number; target_langs?: string[] },
+  data: { text?: string; segment_count?: number; target_langs?: string[]; mode?: string },
 ): Promise<EstimateResp> {
   return request('/api/translation/estimate', {
     method: 'POST',

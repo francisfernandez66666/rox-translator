@@ -389,7 +389,7 @@ async function bulkImport(pkgId: number) {
   if (!entries.length) { alert(t('kb.errorNoValidLine')); return }
   const r = await kbEntriesImport({ package_id: pkgId, entries })
   if (!r.success) { alert(r.message); return }
-  bulkMsg.value = tpl('kb.bulkResult', { added: r.added, skipped: r.skipped })
+  bulkMsg.value = tpl('kb.bulkResult', { added: r.added as number, skipped: r.skipped as number })
   bulkText.value = ''
   await loadEntries({ id: pkgId })
   await loadPackages()
@@ -458,7 +458,7 @@ async function startTmxImport() {
     const r = await tmxImport(tmxFile.value)
     tmxOk.value = !!r.success
     tmxMsg.value = r.success
-      ? `${t('kb.tmxTus', { n: r.tus ?? 0 })} · ${t('kb.bitextDone')} +${r.added ?? 0} / ${t('kb.bitextSkipped')} ${r.skipped ?? 0}`
+      ? `${tpl('kb.tmxTus', { n: (r.tus as number) ?? 0 })} · ${t('kb.bitextDone')} +${(r.added as number) ?? 0} / ${t('kb.bitextSkipped')} ${(r.skipped as number) ?? 0}`
       : r.message || '导入失败'
     if (r.success) {
       tmxFile.value = null

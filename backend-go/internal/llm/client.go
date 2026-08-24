@@ -46,6 +46,7 @@ func (c *Client) SetEmbedOverride(base, key, model string) {
 	c.embedBase, c.embedKey, c.embedModel = base, key, model
 }
 
+// NewClient 构造函数：初始化并返回实例。
 func NewClient(cfg *config.Config) *Client {
 	tr := &http.Transport{}
 	if p := getenvAny("PROXY_URL", "HTTPS_PROXY", "HTTP_PROXY"); p != "" {

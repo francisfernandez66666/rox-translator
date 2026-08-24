@@ -47,17 +47,17 @@ const (
 // Org 组织实体（orgs 表一行），构成「根组织 → 组织 → 部门」的树形管理结构。
 // 平台根组织（tenant_id=0）是超管的独立管理空间，各租户根组织在视图上挂其下。
 type Org struct {
-	ID        int64  `json:"id"`         // 组织主键 ID
-	TenantID  int64  `json:"tenant_id"`  // 所属租户 ID（0=平台根组织专属）
-	ParentID  int64  `json:"parent_id"`  // 父组织 ID（0=挂根组织下；平台视图下租户根指向平台根 ID）
-	Name      string `json:"name"`       // 组织名称（根组织可改名并同步租户名）
-	Type      string `json:"type"`       // 类型：root(根组织) / org(组织) / dept(部门)
+	ID       int64  `json:"id"`        // 组织主键 ID
+	TenantID int64  `json:"tenant_id"` // 所属租户 ID（0=平台根组织专属）
+	ParentID int64  `json:"parent_id"` // 父组织 ID（0=挂根组织下；平台视图下租户根指向平台根 ID）
+	Name     string `json:"name"`      // 组织名称（根组织可改名并同步租户名）
+	Type     string `json:"type"`      // 类型：root(根组织) / org(组织) / dept(部门)
 	// ★ 部门预算（四期增强）：租管为每个部门分配月度 token 预算，∑部门预算=租户总预算；
 	//   部门月用量达到预算即触发「部门墙」拦截并提醒部门管理员
-	TokenLimit     int64  `json:"token_limit"`      // 月度 token 预算上限（0=未启用部门墙）
-	UsedThisMonth  int64  `json:"used_this_month"`  // 本月已消耗（动态计算，非落库字段）
-	CreatedAt string `json:"created_at"` // 创建时间（RFC3339 字符串）
-	UpdatedAt string `json:"updated_at"` // 更新时间（RFC3339 字符串）
+	TokenLimit    int64  `json:"token_limit"`     // 月度 token 预算上限（0=未启用部门墙）
+	UsedThisMonth int64  `json:"used_this_month"` // 本月已消耗（动态计算，非落库字段）
+	CreatedAt     string `json:"created_at"`      // 创建时间（RFC3339 字符串）
+	UpdatedAt     string `json:"updated_at"`      // 更新时间（RFC3339 字符串）
 }
 
 // 组织类型常量。
