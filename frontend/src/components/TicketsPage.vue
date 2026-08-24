@@ -96,6 +96,11 @@
       <!-- 步骤进度展开区 -->
       <div v-if="detail" class="tp-detail">
         <h4>{{ detail.ticket?.title }} · {{ t('tk.progress') }}</h4>
+        <!-- ★ 百分比进度条：减少等待焦虑 -->
+        <div v-if="ticketProgress !== null" class="tp-progress-bar-wrap">
+          <div class="tp-progress-bar"><div class="tp-progress-fill" :style="{ width: ticketProgress + '%' }"></div></div>
+          <span class="tp-progress-text">{{ ticketProgress }}%</span>
+        </div>
         <ul class="tp-steps">
           <li v-for="st in detail.states || []" :key="st.id">
             <b>{{ st.step }}</b> — <span :class="'st-' + st.status">{{ st.status }}</span>
@@ -191,6 +196,22 @@ const estimateBlocked = computed(() => {
   if (!estimate.value) return false
   if (estimate.value.sufficient === false) return true
   return estimate.value.activated === false
+})
+
+// ★ 工单进度百分比：文本按步骤完成数、文件按产物就绪数
+const ticketProgress = computed<number | null>(() => {
+  if (!detail.value) return null
+  const st = detail.value.states || []
+  const fs = detail.value.files || []
+  if (fs.length > 0) {
+    // 文件工单：按产物就绪比例
+    const done = fs.filter((f: any) => f.result_path || f.error).length
+    return Math.round(done / fs.length * 100)
+  }
+  if (st.length === 0) return null
+  // 文本工单：按步骤 success/skipped 占比
+  const done = st.filter((x: any) => ['success','skipped'].includes(x.status)).length
+  return Math.round(done / st.length * 100)
 })
 
 // QA 质检摘要（从工单 final_result 解析 qa_report）
@@ -366,4 +387,10 @@ function statusLabel(s: string): string {
 .tp-file-row.err { color: #c62828; }
 .tp-file-ok { color: #2e7d32; margin-left: 8px; }
 .tp-file-err { margin-left: 8px; }
+
+/* ★ 工单进度条 */
+.tp-progress-bar-wrap { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.tp-progress-bar { flex: 1; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; }
+.tp-progress-fill { height: 100%; background: linear-gradient(90deg,#1a73e8,#4a90d9); border-radius: 4px; transition: width .6s ease; }
+.tp-progress-text { font-size: 13px; font-weight: 600; color: #1a73e8; min-width: 36px; }
 </style>

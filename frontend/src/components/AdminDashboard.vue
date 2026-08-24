@@ -248,8 +248,9 @@ onMounted(() => {
 .adm-top-link { color: #fff; text-decoration: none; font-size: 13px; opacity: .95; }
 .adm-top-link:hover { text-decoration: underline; }
 
-/* ★ 壳层布局修正：抵消 admin.css 中 .ad-side 100vh/sticky 造成的挤压 */
-.ad-shell .ad-side { position: relative; top: auto; height: auto; }
+/* ★ 壳层布局修正：抵消 admin.css 中 .ad-wrap/.ad-side 的 100vh/sticky */
+.ad-shell > .ad-wrap { flex: 1; min-height: 0; height: auto !important; overflow: hidden; }
+.ad-shell .ad-side { position: relative; top: auto; height: 100%; overflow-y: auto; }
 .ad-shell .ad-main { overflow: auto; }
 
 /* ★ 顶栏配色统一为侧栏色（用户反馈两种颜色） */

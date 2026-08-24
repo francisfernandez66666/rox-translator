@@ -31,6 +31,7 @@ export interface TicketResp {
   tickets?: Ticket[]
   ticket?: Ticket
   states?: unknown[]
+  files?: { id: number; file_name: string; result_path: string; error: string }[]
 }
 
 // 工单列表（mine=true 仅查看自己的）
