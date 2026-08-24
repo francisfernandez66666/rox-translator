@@ -1,5 +1,21 @@
 // org 面板文案字典
 export const zh: Record<string, string> = {
+  'org.budgetTip': '部门月度 token 预算（本月已用/上限）；∑部门预算=租户总预算',
+  'org.budgetUnset': '未设预算',
+  'org.budgetSet': '分配月度预算',
+  'org.budgetPrompt': '为「{name}」分配月度 token 预算（当前 {cur}，0=关闭部门墙）：',
+  'org.budgetInvalid': '请输入不小于 0 的整数',
+  'org.invitesTitle': '🎟️ 邀请码',
+  'org.invitesHint': '为「{name}」生成邀请码；受邀用户将加入该组织层级',
+  'org.invitePlaceholder': '自定义邀请码',
+  'org.inviteCreate': '生成邀请码',
+  'org.colCode': '邀请码',
+  'org.inviteUsed': '状态',
+  'org.inviteUsedYes': '已使用',
+  'org.inviteUsedNo': '未使用',
+  'org.invitesEmpty': '该组织暂无邀请码',
+  'org.inviteNeedCode': '请输入邀请码',
+
   'org.title': '组织结构',
   'org.treeHint': '层级：根组织 → 组织 → 部门（支持任意深度）；可直接拖拽组织/部门节点调整层级（拖到另一节点下，或拖到根组织）。根组织与组织、部门均可自定义名称。删除组织/部门时其下用户将回收至根组织。',
   'org.rootOption': '根组织下新建组织',

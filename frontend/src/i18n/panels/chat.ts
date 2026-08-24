@@ -1,5 +1,17 @@
 // ChatWindow 翻译工作台文案字典（中英）
 export const zh: Record<string, string> = {
+  'pwd.title': '修改密码',
+  'pwd.hint': '账号「{user}」；验证码将发送到绑定邮箱，10 分钟内有效',
+  'pwd.entryTip': '自助修改密码（邮箱验证）',
+  'pwd.submit': '确认修改',
+  'pwd.submitting': '提交中…',
+  'pwd.codeSent': '验证码已发送到绑定邮箱',
+  'pwd.tooShort': '新密码至少 6 位',
+  'pwd.mismatch': '两次输入的新密码不一致',
+  'pwd.codeBad': '验证码错误或已过期',
+  'pwd.done': '密码已更新，下次登录请使用新密码',
+  'pwd.confirmPlaceholder': '再次输入新密码',
+
   'chat.title': '🌐 翻译',
   'chat.clearChat': '清空对话',
   'chat.balance': '剩余 {n} 句',

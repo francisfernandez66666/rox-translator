@@ -84,4 +84,8 @@ export const en: Record<string, string> = {
   'apikeys.nameRequired': 'Name is required',
   'apikeys.confirmDelete': 'Delete this API key?',
   'apikeys.confirmRotate': 'Rotate key "{name}"? The old key will be revoked immediately.',
+
+  'apikeys.copy': 'Copy',
+  'apikeys.copied': 'Copied',
+  'apikeys.copyFail': 'Copy failed — select and copy manually',
 }
