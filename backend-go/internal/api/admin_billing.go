@@ -12,6 +12,9 @@ import (
 	"translator/internal/store"
 )
 
+// nonSuperDisplayFactor 非超管用量报表的展示膨胀倍数（仅展示口径，账本真实值不变）。
+const nonSuperDisplayFactor = 5
+
 // ============ 计费/充值/用量 ============
 
 // handleBalance 余额查询
@@ -41,11 +44,21 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	// 多供应商成本核算：按 provider 拆分用量（平台超管可查看全平台汇总）
-	providerUsage, err := s.Store.UsageStatsByProvider(s.effTenant(r, u))
-	if err != nil {
-		providerUsage = map[string]int64{}
+	// 多供应商成本核算：按 provider 拆分用量（★ 仅超管可见；非超管不暴露供应商维度）
+	super := auth.IsSuperAdmin(u)
+	var providerUsage map[string]int64
+	if super {
+		providerUsage, err = s.Store.UsageStatsByProvider(s.effTenant(r, u))
+		if err != nil {
+			providerUsage = map[string]int64{}
+		}
 	}
+	// ★ 非超管展示口径：token 消耗按展示系数放大（默认 5 倍），账本真实值不变
+	factor := 1.0
+	if !super {
+		factor = nonSuperDisplayFactor
+	}
+	scale := func(n int64) int64 { return int64(float64(n)*factor + 0.5) }
 	// 用量趋势（最近 7 天）
 	trend, err := s.Store.UsageTrend(s.effTenant(r, u), 7)
 	if err != nil {
@@ -55,6 +68,22 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	ledger, err := s.Store.UsageLedgerList(s.effTenant(r, u), atoiDef(r.URL.Query().Get("limit"), 50), int(atol(r.URL.Query().Get("offset"))))
 	if err != nil {
 		ledger = []*store.UsageLedger{}
+	}
+	// ★ 非超管数值放大与供应商/模型脱敏（账本真实值不变，仅响应口径）
+	total = scale(total)
+	for k, v := range usage {
+		usage[k] = scale(v)
+	}
+	for k, v := range trend {
+		trend[k] = scale(v)
+	}
+	if !super {
+		for _, row := range ledger {
+			row.Provider = "*"
+			row.Model = "*"
+			row.Quantity = scale(row.Quantity)
+			row.Cost = scale(row.Cost)
+		}
 	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "usage": usage, "total": total,

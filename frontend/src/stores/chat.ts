@@ -7,7 +7,7 @@
 // Pinia 状态定义
 import { defineStore } from 'pinia'
 // Vue 响应式
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 // API：流式聊天 / 流式文件翻译 / 健康检查
 import { chatStream, translateFileStream, healthCheck } from '@/api'
 // 类型定义
@@ -21,11 +21,23 @@ function generateId(): string {
 // 聊天 Store 定义（组合式写法）
 export const useChatStore = defineStore('chat', () => {
   // 消息列表（用户 + AI 对话记录）
-  const messages = ref<ChatMessage[]>([])
+  // ★ 本地缓存：刷新不丢——初始化时从 localStorage 恢复，变更后写回（上限内裁剪）
+  const messages = ref<ChatMessage[]>((() => {
+    try {
+      const raw = localStorage.getItem('chat_msgs_v1')
+      if (raw) {
+        const arr = JSON.parse(raw) as ChatMessage[]
+        if (Array.isArray(arr)) return arr.slice(-200)
+      }
+    } catch { /* 损坏则忽略 */ }
+    return [] as ChatMessage[]
+  })())
   // 是否正在生成（发送中）
   const isLoading = ref(false)
-  // 已选目标语言列表
-  const selectedLangs = ref<string[]>(['en'])
+  // 已选目标语言列表（本地缓存恢复）
+  const selectedLangs = ref<string[]>((() => {
+    try { return JSON.parse(localStorage.getItem('chat_langs') || '["en"]') } catch { return ['en'] }
+  })())
   // 后端是否在线
   const isBackendOnline = ref(false)
   // 后端是否仍在启动加载中
@@ -66,6 +78,18 @@ export const useChatStore = defineStore('chat', () => {
       messages.value.splice(0, messages.value.length - MAX_MESSAGES)
     }
   }
+
+  // persistChat 消息与语言选择写回 localStorage（体积保护：>2MB 时仅保留最近 50 条再存）
+  function persistChat() {
+    try {
+      let arr = messages.value
+      if (arr.length > 50 && JSON.stringify(arr).length > 2 * 1024 * 1024) arr = arr.slice(-50)
+      localStorage.setItem('chat_msgs_v1', JSON.stringify(arr.map(m => ({ ...m, progress: undefined }))))
+    } catch { /* 存储满静默 */ }
+    localStorage.setItem('chat_langs', JSON.stringify(selectedLangs.value))
+  }
+  watch(messages, persistChat, { deep: true })
+  watch(selectedLangs, persistChat, { deep: true })
 
   function updateProgress(messageId: string, step: string, percent: number) {
     const msg = messages.value.find(m => m.id === messageId)
@@ -244,6 +268,7 @@ export const useChatStore = defineStore('chat', () => {
   // 清空所有消息与错误
   function clearMessages() {
     messages.value = []
+    localStorage.removeItem('chat_msgs_v1')
     errorMessage.value = ''
   }
 

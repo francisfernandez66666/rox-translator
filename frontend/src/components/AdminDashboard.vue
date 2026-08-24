@@ -88,6 +88,8 @@ import Audit from './admin/Audit.vue'
 // ★ 站内信铃铛：后台消息通知中心（工单完成/反馈/告警等站内信）
 import Bell from '../components/Bell.vue'
 import Feedback from './admin/Feedback.vue'
+// ★ 套餐详情合并面板（四期：商业包+订阅收银合一；非超管只读）
+import PlansPanel from './admin/PlansPanel.vue'
 // 共享样式（非 scoped，供全部面板使用）
 import './admin/admin.css'
 // 国际化：文案取词 + 语言切换
@@ -114,14 +116,14 @@ const workspaces: Record<number, WorkspaceDef> = {
     panels: [
       { key: 'overview', label: 'admin.platformOverview', comp: Overview },
       { key: 'tenants', label: 'admin.tenants', comp: Tenants },
-      { key: 'packages', label: 'admin.packages', comp: Packages },
-      { key: 'billing', label: 'admin.payOrders', comp: Billing },
+
+      { key: 'plans', label: 'admin.plansDetail', comp: PlansPanel },
       { key: 'org', label: 'admin.orgs', comp: Org },
-      { key: 'users', label: 'admin.users', comp: Users },
+
       { key: 'usage', label: 'admin.usage', comp: Usage },
       { key: 'kb', label: 'admin.industryKb', comp: Kb },
       { key: 'models', label: 'admin.globalModels', comp: Models },
-      { key: 'invites', label: 'admin.invites', comp: Invites },
+
       { key: 'apikeys', label: 'admin.apikeys', comp: ApiKeys },
       { key: 'webhooks', label: 'admin.webhooks', comp: Webhooks },
       { key: 'workflow', label: 'admin.workflow', comp: Workflow },
@@ -139,10 +141,10 @@ const workspaces: Record<number, WorkspaceDef> = {
       { key: 'overview', label: 'admin.companyOverview', comp: Overview },
       { key: 'usage', label: 'admin.usage', comp: Usage },
       { key: 'org', label: 'admin.orgs', comp: Org },
-      { key: 'users', label: 'admin.users', comp: Users },
+
       { key: 'kb', label: 'admin.kbPack', comp: Kb },
-      { key: 'billing', label: 'admin.subscription', comp: Billing },
-      { key: 'invites', label: 'admin.invites', comp: Invites },
+      { key: 'plans', label: 'admin.plansDetail', comp: PlansPanel },
+
       { key: 'apikeys', label: 'admin.apikeys', comp: ApiKeys },
       { key: 'webhooks', label: 'admin.webhooks', comp: Webhooks },
       { key: 'tickets', label: 'admin.tickets', comp: Tickets },

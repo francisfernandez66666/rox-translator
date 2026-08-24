@@ -42,7 +42,11 @@
       <input v-model.number="kForm.daily_call_limit" type="number" min="0" class="ad-input" style="width:110px" :placeholder="t('apikeys.limitPlaceholder')" :title="t('apikeys.limitTitle')" />
       <button class="ad-btn" @click="createKey">{{ t('apikeys.create') }}</button>
     </div>
-    <div v-if="newKey" class="ad-newkey">{{ t('apikeys.newKeyOnce') }}：<code>{{ newKey }}</code></div>
+    <div v-if="newKey" class="ad-newkey">{{ t('apikeys.newKeyOnce') }}：<code>{{ newKey }}</code>
+      <!-- ★ 一键复制（clipboard API，失败降级提示手选复制） -->
+      <button class="ad-btn-sm" style="margin-left:8px" @click="copyNewKey">📋 {{ t('apikeys.copy') }}</button>
+      <span v-if="copied" class="ad-hint">{{ t('apikeys.copied') }}</span>
+    </div>
     <table class="ad-table">
       <thead><tr><th>{{ t('apikeys.colId') }}</th><th>{{ t('apikeys.colPrefix') }}</th><th>{{ t('apikeys.colName') }}</th><th>{{ t('apikeys.colPerms') }}</th><th>{{ t('apikeys.colStatus') }}</th><th>{{ t('apikeys.colCalls') }}</th><th>{{ t('apikeys.colTodayLimit') }}</th><th>{{ t('apikeys.colActions') }}</th></tr></thead>
       <tbody>
@@ -73,6 +77,20 @@ const keys = ref<any[]>([])
 const newKey = ref('')
 // 新建 Key 表单：名称/权限（默认 translate）
 const kForm = ref({ name: '', perms: 'translate', daily_call_limit: undefined as number | undefined })
+
+// copied 复制成功提示状态
+const copied = ref(false)
+
+// copyNewKey 一键复制新签发的明文 Key
+async function copyNewKey() {
+  try {
+    await navigator.clipboard.writeText(newKey.value)
+    copied.value = true
+    setTimeout(() => (copied.value = false), 2000)
+  } catch {
+    alert(t('apikeys.copyFail'))
+  }
+}
 
 // loadKeys 加载 API Key 列表
 async function loadKeys() {

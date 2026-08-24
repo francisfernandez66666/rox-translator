@@ -50,6 +50,21 @@ export const zh: Record<string, string> = {
 }
 
 export const en: Record<string, string> = {
+  'org.invitesTitle': '🎟️ Invite Codes',
+  'org.invitesHint': 'Generate codes for "{name}"; invitees join this org level',
+  'org.invitePlaceholder': 'Custom invite code',
+  'org.inviteCreate': 'Generate',
+  'org.colCode': 'Code',
+  'org.inviteUsed': 'Status',
+  'org.inviteUsedYes': 'Used',
+  'org.inviteUsedNo': 'Unused',
+  'org.invitesEmpty': 'No invite codes for this org',
+  'org.inviteNeedCode': 'Enter an invite code',
+  'org.budgetTip': 'Monthly department token budget (used/limit); sum of departments = tenant total',
+  'org.budgetUnset': 'No budget',
+  'org.budgetSet': 'Allocate monthly budget',
+  'org.budgetPrompt': 'Allocate monthly token budget for "{name}" (current {cur}, 0 = disable dept wall):',
+  'org.budgetInvalid': 'Enter an integer ≥ 0',
   'org.title': 'Org Structure',
   'org.treeHint': 'Hierarchy: Root Org → Org → Department (any depth supported). Drag an org/department node onto another node (or onto the root org) to adjust the hierarchy. Root org, orgs and departments can all have custom names. When an org/department is deleted its users are moved back to the root org.',
   'org.rootOption': 'New org under root',

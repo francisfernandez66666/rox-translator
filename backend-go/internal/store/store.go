@@ -434,6 +434,8 @@ func (s *Store) migrateColumns() error {
 		{"api_keys", "daily_call_limit", "ALTER TABLE api_keys ADD COLUMN daily_call_limit INTEGER NOT NULL DEFAULT 0"},
 		{"api_keys", "calls_today", "ALTER TABLE api_keys ADD COLUMN calls_today INTEGER NOT NULL DEFAULT 0"},
 		{"api_keys", "calls_today_date", "ALTER TABLE api_keys ADD COLUMN calls_today_date TEXT NOT NULL DEFAULT ''"},
+		// ★ 邀请码绑定组织（四期）：受邀用户归入该组织层级
+		{"invite_codes", "org_id", "ALTER TABLE invite_codes ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
 		// 工单产物保留期：完成时间 + N 天（到期由后台扫描清理文件；核心译文已入 tm_segments 长期保留）
 		{"tickets", "result_expires_at", "ALTER TABLE tickets ADD COLUMN result_expires_at TEXT NOT NULL DEFAULT ''"},
 		// 产物过期提醒档位去重标记（逗号分隔：14,7,3,1）

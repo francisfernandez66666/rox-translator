@@ -7,8 +7,8 @@
     <h2>{{ t('packages.title') }}</h2>
     <p class="ad-hint">{{ t('packages.hint') }}</p>
 
-    <!-- 新建商业包 -->
-    <div class="ad-chart-card">
+    <!-- 新建商业包（仅超管） -->
+    <div v-if="isSuper" class="ad-chart-card">
       <h3>{{ t('packages.createTitle') }}</h3>
       <div class="ad-row">
         <input v-model="form.code" :placeholder="t('packages.code')" class="ad-input ad-mini-w" />
@@ -55,8 +55,8 @@
       </table>
     </div>
 
-    <!-- 句数强制开关 + 试用句数配置（超管） -->
-    <div class="ad-chart-card">
+    <!-- ★ 设置区仅超管可见（非超管只读查看套餐与订阅） -->
+    <div v-if="isSuper" class="ad-chart-card">
       <h3>{{ t('packages.enforceTitle') }}</h3>
       <div class="ad-hint">{{ t('packages.enforceHint') }}</div>
       <div class="ad-row">
@@ -83,8 +83,7 @@
       </div>
     </div>
 
-    <!-- 支付模式（超管）：sdk / 静态码 / mock + 静态收款码配置 -->
-    <div class="ad-chart-card">
+    <div v-if="isSuper" class="ad-chart-card">
       <h3>{{ t('packages.payModeTitle') }}</h3>
       <div class="ad-hint">{{ t('packages.payModeHint') }}</div>
       <div class="ad-row">

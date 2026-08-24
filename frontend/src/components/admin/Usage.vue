@@ -95,11 +95,13 @@
     <div class="ad-chart-card">
       <h3>{{ t('usage.ledgerTitle') }}</h3>
       <table class="ad-table">
-        <thead><tr><th>{{ t('usage.colTime') }}</th><th>{{ t('usage.colType') }}</th><th>{{ t('usage.colProvider') }}</th><th>{{ t('usage.colModel') }}</th><th>{{ t('usage.colQuantity') }}</th><th>{{ t('usage.colUnitPrice') }}</th><th>{{ t('usage.colCost') }}</th></tr></thead>
+        <thead><tr><th>{{ t('usage.colTime') }}</th><th>{{ t('usage.colType') }}</th><th v-if="isSuper">{{ t('usage.colProvider') }}</th><th v-if="isSuper">{{ t('usage.colModel') }}</th><th>{{ t('usage.colQuantity') }}</th><th>{{ t('usage.colUnitPrice') }}</th><th>{{ t('usage.colCost') }}</th></tr></thead>
         <tbody>
           <tr v-for="l in usageData?.ledger || []" :key="l.id">
-            <td>{{ fmtTime(l.created_at) }}</td><td>{{ l.task_type }}</td><td>{{ l.provider || '—' }}</td>
-            <td>{{ l.model || '—' }}</td><td>{{ l.quantity }}</td><td>{{ l.unit_price }}</td><td>{{ l.cost }}</td>
+            <td>{{ fmtTime(l.created_at) }}</td><td>{{ l.task_type }}</td>
+            <td v-if="isSuper">{{ l.provider || '—' }}</td>
+            <td v-if="isSuper">{{ l.model || '—' }}</td>
+            <td>{{ l.quantity }}</td><td>{{ l.unit_price }}</td><td>{{ l.cost }}</td>
           </tr>
           <tr v-if="!((usageData?.ledger || []).length)"><td colspan="7" style="color:#999">{{ t('usage.noLedger') }}</td></tr>
         </tbody>

@@ -67,6 +67,27 @@
         </div>
       </div>
 
+      <!-- ★ 邀请码（四期并入组织架构）：哪个组织生成的，受邀者进哪个组织层级 -->
+      <div class="ad-chart-card" style="margin-top:16px">
+        <h3>🎟️ {{ t('org.invitesTitle') }}</h3>
+        <div class="ad-hint">{{ tpl('org.invitesHint', { name: selectedOrgName }) }}</div>
+        <div class="tp-row">
+          <input v-model="inviteCodeInput" class="ad-input" style="width:200px" :placeholder="t('org.invitePlaceholder')" />
+          <button class="ad-btn ad-btn-green" @click="createInvite">{{ t('org.inviteCreate') }}</button>
+        </div>
+        <table class="ad-table" style="margin-top:8px">
+          <thead><tr><th>{{ t('org.colCode') }}</th><th>{{ t('org.inviteUsed') }}</th><th>{{ t('overview.colTime') }}</th></tr></thead>
+          <tbody>
+            <tr v-for="inv in invites" :key="inv.id">
+              <td><code>{{ inv.code }}</code></td>
+              <td>{{ inv.used === 1 ? t('org.inviteUsedYes') : t('org.inviteUsedNo') }}</td>
+              <td>{{ fmtTime(inv.created_at) }}</td>
+            </tr>
+            <tr v-if="!invites.length"><td colspan="3" class="ad-empty">{{ t('org.invitesEmpty') }}</td></tr>
+          </tbody>
+        </table>
+      </div>
+
       <!-- 组织下用户（含子孙组织归集） -->
       <div class="ad-org-users">
         <h3>{{ selectedOrg === 0 ? t('org.allUsersRoot') : tpl('org.usersInChildren', { name: selectedOrgName }) }}</h3>
@@ -136,6 +157,7 @@ import { t, tpl } from '@/i18n'
 import { orgList, orgCreate, orgRename, orgMove, orgDelete, orgUsers, type OrgInfo } from '@/api'
 import { adminUserCreate, adminUserUpdate, adminUserResetPassword, adminUserDelete, tenantSetStatus } from '@/api'
 import { orgBudgetSummary, orgTokenLimit } from '@/api'
+import { inviteCodes as listInvites, inviteCodeCreate } from '@/api'
 import { activeTenantId, tenantList, isSuper, myLevel, roleOptions, roleName, loadTenants } from './store'
 import { fmtTime } from './ui'
 
@@ -170,6 +192,24 @@ async function setBudget(o: any) {
     await loadBudget()
   } catch (e) { alert(e instanceof Error ? e.message : String(e)) }
 }
+// ★ 邀请码（并入组织架构）：生成绑定当前选中组织；列表按该组织过滤
+const invites = ref<any[]>([])
+const inviteCodeInput = ref('')
+async function loadInvites() {
+  try {
+    const r: any = await listInvites()
+    if (r.success) invites.value = (r.codes || []).filter((x: any) => !x.org_id || x.org_id === selectedOrg.value)
+  } catch { invites.value = [] }
+}
+async function createInvite() {
+  const code = inviteCodeInput.value.trim()
+  if (!code) { alert(t('org.inviteNeedCode')); return }
+  const r = await inviteCodeCreate({ code, tenant_id: activeTenantId.value || 1, org_id: selectedOrg.value })
+  if (!r.success) { alert(r.message); return }
+  inviteCodeInput.value = ''
+  await loadBudget(); await loadInvites()
+}
+
 async function loadBudget() {
   try {
     const r: any = await orgBudgetSummary()
@@ -464,8 +504,9 @@ async function onDropRoot() {
   await loadAll()
 }
 
-onMounted(() => { loadAll(); loadBudget() })
-watch(activeTenantId, () => loadBudget())
+onMounted(() => { loadAll(); loadBudget(); loadInvites() })
+watch(activeTenantId, () => { loadBudget(); loadInvites() })
+watch(selectedOrg, () => loadInvites())
 watch(activeTenantId, () => {
   selectedOrg.value = 0
   loadAll()

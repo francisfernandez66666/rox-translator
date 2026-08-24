@@ -18,16 +18,21 @@ type InviteCode struct {
 	UsedBy    string `json:"used_by"`    // 使用者的标识（用户名或邮箱，未使用为空）
 	CreatedAt string `json:"created_at"` // 生成时间（RFC3339 字符串）
 	UsedAt    string `json:"used_at"`    // 使用时间（未使用为空字符串）
+	OrgID     int64  `json:"org_id"`     // ★ 绑定组织（四期）：受邀用户归入该组织层级（0=不绑定）
 }
 
 // CreateInviteCode 生成一条邀请码记录。
 // 参数：code=邀请码字符串，tenantID=绑定租户 ID（0=新建独立租户）。
 // 返回：新邀请码对象。
-func (s *Store) CreateInviteCode(code string, tenantID int64) (*InviteCode, error) {
+func (s *Store) CreateInviteCode(code string, tenantID int64, orgID ...int64) (*InviteCode, error) {
 	now := time.Now().Format(time.RFC3339)
+	org := int64(0)
+	if len(orgID) > 0 {
+		org = orgID[0]
+	}
 	res, err := s.db.Exec(
-		"INSERT INTO invite_codes (code, used, tenant_id, created_at) VALUES (?,0,?,?)",
-		code, tenantID, now)
+		"INSERT INTO invite_codes (code, used, tenant_id, org_id, created_at) VALUES (?,0,?,?,?)",
+		code, tenantID, org, now)
 	if err != nil {
 		return nil, err
 	}
@@ -39,9 +44,9 @@ func (s *Store) CreateInviteCode(code string, tenantID int64) (*InviteCode, erro
 // 参数：id=邀请码主键 ID；返回邀请码对象。
 func (s *Store) GetInviteCode(id int64) (*InviteCode, error) {
 	row := s.db.QueryRow(
-		"SELECT id, code, used, tenant_id, COALESCE(used_by,''), COALESCE(created_at,''), COALESCE(used_at,'') FROM invite_codes WHERE id=?", id)
+		"SELECT id, code, used, tenant_id, COALESCE(used_by,''), COALESCE(created_at,''), COALESCE(used_at,''), COALESCE(org_id,0) FROM invite_codes WHERE id=?", id)
 	var c InviteCode
-	err := row.Scan(&c.ID, &c.Code, &c.Used, &c.TenantID, &c.UsedBy, &c.CreatedAt, &c.UsedAt)
+	err := row.Scan(&c.ID, &c.Code, &c.Used, &c.TenantID, &c.UsedBy, &c.CreatedAt, &c.UsedAt, &c.OrgID)
 	if err != nil {
 		return nil, err
 	}
@@ -52,9 +57,9 @@ func (s *Store) GetInviteCode(id int64) (*InviteCode, error) {
 // 参数：code=邀请码字符串；返回邀请码对象。
 func (s *Store) GetInviteCodeByCode(code string) (*InviteCode, error) {
 	row := s.db.QueryRow(
-		"SELECT id, code, used, tenant_id, COALESCE(used_by,''), COALESCE(created_at,''), COALESCE(used_at,'') FROM invite_codes WHERE code=?", code)
+		"SELECT id, code, used, tenant_id, COALESCE(used_by,''), COALESCE(created_at,''), COALESCE(used_at,''), COALESCE(org_id,0) FROM invite_codes WHERE code=?", code)
 	var c InviteCode
-	err := row.Scan(&c.ID, &c.Code, &c.Used, &c.TenantID, &c.UsedBy, &c.CreatedAt, &c.UsedAt)
+	err := row.Scan(&c.ID, &c.Code, &c.Used, &c.TenantID, &c.UsedBy, &c.CreatedAt, &c.UsedAt, &c.OrgID)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +80,7 @@ func (s *Store) MarkInviteCodeUsed(id int64, usedBy string) error {
 // 返回：邀请码列表。
 func (s *Store) ListInviteCodes() ([]*InviteCode, error) {
 	rows, err := s.db.Query(
-		"SELECT id, code, used, tenant_id, COALESCE(used_by,''), COALESCE(created_at,''), COALESCE(used_at,'') FROM invite_codes ORDER BY id DESC")
+		"SELECT id, code, used, tenant_id, COALESCE(used_by,''), COALESCE(created_at,''), COALESCE(used_at,''), COALESCE(org_id,0) FROM invite_codes ORDER BY id DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +88,7 @@ func (s *Store) ListInviteCodes() ([]*InviteCode, error) {
 	var out []*InviteCode
 	for rows.Next() {
 		var c InviteCode
-		if err := rows.Scan(&c.ID, &c.Code, &c.Used, &c.TenantID, &c.UsedBy, &c.CreatedAt, &c.UsedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Code, &c.Used, &c.TenantID, &c.UsedBy, &c.CreatedAt, &c.UsedAt, &c.OrgID); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &c)

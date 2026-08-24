@@ -19,28 +19,32 @@
   <!-- ===== 翻译工作台（登录后） ===== -->
   <div v-else id="app-root" :class="isMobile ? 'device-mobile' : 'device-desktop'">
     <!-- ===== 顶部导航栏：品牌信息 + 在线状态 + 设置/退出按钮 ===== -->
+    <!-- ★ 单页眉（四期体验增强）：品牌 + 右侧聚合下拉（导航/余额/语言/消息/改密/退出） -->
     <header class="app-header">
       <div class="header-left">
         <span class="header-icon">🌐</span>
         <span class="header-title">{{ t('app.title') }}</span>
-        <!-- 前台双 Tab：翻译工作台 / 翻译工单 -->
-        <nav class="front-tabs">
-          <button :class="['front-tab', frontTab === 'workbench' ? 'on' : '']" @click="switchFrontTab('workbench')">💬 {{ t('app.tabWorkbench') }}</button>
-          <button :class="['front-tab', frontTab === 'tickets' ? 'on' : '']" @click="switchFrontTab('tickets')">📋 {{ t('app.tabTickets') }}</button>
-        </nav>
-        <span class="header-user">{{ authUser.display_name || authUser.username }}</span>
       </div>
       <div class="header-right">
-        <Bell />
-        <span class="status-indicator" :class="store.isBackendOnline ? 'online' : 'offline'">
-          <span class="status-dot"></span>
-          {{ store.isBackendOnline ? t('common.online') : t('common.offline') }}
-        </span>
-        <button class="gear-btn" @click="toggleLang()" :title="lang === 'zh' ? 'English' : '中文'">{{ lang === 'zh' ? 'EN' : '中' }}</button>
-        <button class="gear-btn" @click="showSettings = true" :title="t('common.settings')">⚙️</button>
-        <button class="gear-btn" @click="logout" :title="t('common.logout')">⎋</button>
+        <div class="menu-wrap">
+          <button class="gear-btn" @click.stop="menuOpen = !menuOpen" :title="t('common.settings')">☰</button>
+          <div v-if="menuOpen" class="menu-drop" @click.stop>
+            <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
+            <button class="menu-item" @click="switchFrontTab('workbench'); menuOpen = false">💬 {{ t('app.tabWorkbench') }}</button>
+            <button class="menu-item" @click="switchFrontTab('tickets'); menuOpen = false">📋 {{ t('app.tabTickets') }}</button>
+            <div v-if="pkgLine" class="menu-info">🪙 {{ pkgLine }}</div>
+            <div class="menu-sep"></div>
+            <div class="menu-item bell-row"><Bell /></div>
+            <button class="menu-item" @click="toggleLang()">{{ lang === 'zh' ? '🌐 English' : '🌐 中文' }}</button>
+            <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
+            <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
+          </div>
+        </div>
       </div>
     </header>
+
+    <!-- ★ 修改密码弹窗（邮箱验证码流程） -->
+    <PasswordModal v-if="pwdOpen" :username="authUser.username" :email="pwdEmail" @close="pwdOpen = false" @done="onPwdDone" />
 
     <!-- ===== 主内容区：翻译引擎启动加载屏 / 聊天窗口 ===== -->
     <main class="chat-main" :style="frontTab === 'tickets' ? 'overflow:auto' : ''">
@@ -80,7 +84,7 @@
 
 <script setup lang="ts">
 // Vue 核心组合式 API（响应式、生命周期）
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 // 全局聊天状态 Store
 import { useChatStore } from '@/stores/chat'
 // 子组件：聊天窗口 / 登录页 / 管理后台
@@ -90,7 +94,8 @@ import Bell from './components/Bell.vue'
 import Login from './components/Login.vue'
 import AdminDashboard from './components/AdminDashboard.vue'
 // API：token 读写与用户信息查询
-import { getAuthToken, setAuthToken, authMe, type AuthUser } from '@/api'
+import { getAuthToken, setAuthToken, authMe, myPackage, meContext, type AuthUser } from '@/api'
+import PasswordModal from './components/PasswordModal.vue'
 // 国际化：文案取词 + 语言切换
 import { t, lang, toggleLang } from '@/i18n'
 
@@ -158,6 +163,40 @@ function onLogout() {
 // logout 退出登录：清除本地 token 与用户状态并跳转登录页。
 // 无参数无返回，由顶栏退出按钮触发。
 function logout() {
+// ★ 下拉菜单与余额行（四期页眉整合）：打开时实时拉取最新余额
+const menuOpen = ref(false)
+const pkgLine = ref('')
+const pwdOpen = ref(false)
+const pwdEmail = ref('')
+
+// openMenu 展开菜单并刷新余额（token 余额 + ≈句单语言）
+async function refreshPkgLine() {
+  try {
+    const r: any = await myPackage()
+    if (r.success && typeof r.balance_tokens === 'number') {
+      const rate = 500
+      const approx = r.balance_sentences_approx ?? Math.floor(r.balance_tokens / rate)
+      pkgLine.value = `${new Intl.NumberFormat().format(r.balance_tokens)} token ≈ ${new Intl.NumberFormat().format(approx)} 句单语言`
+    }
+  } catch { pkgLine.value = '' }
+}
+watch(menuOpen, (v) => { if (v) refreshPkgLine() })
+
+// openPwd 打开改密弹窗（预填绑定邮箱）
+async function openPwd() {
+  menuOpen.value = false
+  try {
+    const r: any = await meContext()
+    pwdEmail.value = r?.email || ''
+  } catch { pwdEmail.value = '' }
+  pwdOpen.value = true
+}
+
+// onPwdDone 改密成功提示
+function onPwdDone() {
+  alert(t('pwd.done'))
+}
+
   onLogout()
 }
 
@@ -302,4 +341,15 @@ body {
 }
 .front-tab:hover { background: rgba(255,255,255,.12); }
 .front-tab.on { background: rgba(255,255,255,.18); font-weight: 600; }
+
+/* ★ 页眉整合：聚合下拉菜单 */
+.menu-wrap { position: relative; }
+.menu-drop { position: absolute; right: 0; top: 40px; width: 240px; background: #fff; border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.16); padding: 6px 0; z-index: 60; overflow: hidden; }
+.menu-user { padding: 10px 14px; font-size: 13px; color: #333; border-bottom: 1px solid #f0f2f5; font-weight: 600; }
+.menu-item { display: block; width: 100%; text-align: left; background: transparent; border: none; padding: 9px 14px; font-size: 13.5px; cursor: pointer; color: #333; }
+.menu-item:hover { background: rgba(26,115,232,.06); color: #1a73e8; }
+.menu-info { padding: 8px 14px; font-size: 12.5px; color: #e65100; background: rgba(255,152,0,.07); }
+.menu-sep { height: 1px; background: #f0f2f5; margin: 4px 0; }
+.menu-logout { color: #c62828; }
+.bell-row { position: relative; padding: 6px 14px; }
 </style>

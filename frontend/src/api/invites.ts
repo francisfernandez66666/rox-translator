@@ -11,6 +11,6 @@ export async function inviteCodes(): Promise<AdminResp> {
 }
 
 // 生成邀请码（绑定租户或留空新建租户）
-export async function inviteCodeCreate(data: { code: string; tenant_id: number }): Promise<AdminResp> {
+export async function inviteCodeCreate(data: { code: string; tenant_id: number; org_id?: number }): Promise<AdminResp> {
   return request('/api/admin/invite-codes/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }

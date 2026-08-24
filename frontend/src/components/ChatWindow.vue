@@ -12,36 +12,6 @@
 <template>
   <!-- ===== 聊天窗口整体容器（响应式移动端样式） ===== -->
   <div class="chat-window" :class="{ 'chat-mobile': isMobile }">
-    <!-- ===== 顶部标题栏 ===== -->
-    <header class="chat-header" :class="{ 'chat-mobile-header': isMobile }" style="border-bottom-color: #1a73e8;">
-      <span>{{ t('chat.title') }}</span>
-      <!-- 身份栏：登录账号 · 所属组织/租户 · 部门 · 可应用知识库包类型 -->
-      <span v-if="me.display_name" class="chat-balance" style="background:rgba(46,125,50,.08)" :title="t('chat.identityTip')">
-        👤 {{ me.display_name }}<template v-if="me.tenant_name"> · 🏢 {{ me.tenant_name }}</template><template v-if="me.org_name"> / {{ me.org_name }}</template>
-      </span>
-      <span v-for="p in me.kb_packs" :key="p.id" class="chat-balance" style="background:rgba(33,90,154,.10);color:#215a9a" :title="t('chat.kbPackTip')">
-        📚 {{ packLabel(p.pack_type) }}
-      </span>
-      <!-- ★ 四期体验增强：无论是否计费，均显示实际消耗（今日 token ≈ 句单语言），让用户感知用量 -->
-      <span v-if="usageInfo" class="chat-balance" style="background:rgba(255,152,0,.10);color:#e65100"
-            :title="t('chat.usedTip')">⚡ {{ tpl('chat.usedTokens', { n: fmtNum(usageInfo.today), s: fmtNum(usageInfo.todaySentences) }) }}</span>
-      <span v-if="orgBudget && orgBudget.limit > 0" class="chat-balance"
-            :class="{ 'budget-over': orgBudget.used >= orgBudget.limit }"
-            :title="tpl('chat.orgBudgetTip', { name: orgBudget.name })">
-        🏢 {{ tpl('chat.orgBudget', { n: fmtNum(orgBudget.used), l: fmtNum(orgBudget.limit) }) }}
-      </span>
-      <span v-if="balanceInfo" class="chat-balance" :title="t('chat.balanceTip')">🟢 {{ tpl('chat.balanceTokens', { n: fmtNum(balanceInfo.tokens), s: fmtNum(balanceInfo.approx) }) }}</span>
-      <!-- ★ 双模式切换：⚡快速（无知识库·初翻+校对）/ 🎓专业校对（全流水线） -->
-      <div class="mode-switch" :title="t('chat.modeTip')">
-        <button :class="['mode-btn', translateMode === 'fast' ? 'on' : '']" @click="setMode('fast')">⚡ {{ t('chat.modeFast') }}</button>
-        <button :class="['mode-btn', translateMode !== 'fast' ? 'on' : '']" @click="setMode('pro')">🎓 {{ t('chat.modePro') }}</button>
-      </div>
-      <!-- ★ 自助修改密码（邮箱校验流程） -->
-      <button class="clear-btn" @click="pwdOpen = true" :title="t('pwd.entryTip')">🔒</button>
-      <button class="clear-btn" style="margin-left:auto" @click="store.clearMessages()" :title="t('chat.clearChat')">
-        🗑️
-      </button>
-    </header>
 
     <!-- ===== 离线提示条 ===== -->
     <div v-if="!store.isBackendOnline" class="offline-bar">
@@ -1070,4 +1040,9 @@ async function loadTranslationLangs() {
 .mode-switch { display: inline-flex; background: rgba(26,115,232,.06); border-radius: 14px; padding: 2px; gap: 2px; }
 .mode-btn { border: none; background: transparent; color: #5f6368; font-size: 12px; padding: 3px 10px; border-radius: 12px; cursor: pointer; white-space: nowrap; }
 .mode-btn.on { background: #1a73e8; color: #fff; }
+
+/* ★ 工具行：模式切换 + 清空对话（输入区上方） */
+.chat-tools { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px 0; }
+.chat-tools .mode-btn { border: 1px solid #d8dee6; background: #fff; color: #555; font-size: 12px; padding: 4px 10px; cursor: pointer; }
+.chat-tools .mode-btn.on { background: #1a73e8; border-color: #1a73e8; color: #fff; }
 </style>

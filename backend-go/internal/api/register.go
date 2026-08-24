@@ -233,7 +233,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if inviteTenantID > 0 && s.wasInviteBind(req.Invite) {
 		role = store.RoleUser
 	}
-	nu, err := s.Store.CreateUser(inviteTenantID, req.Username, auth.PasswordHash(req.Password), req.Username, role, 0, 0)
+	// ★ 邀请码绑定组织：受邀用户归入邀请码指定的组织层级（四期）
+	inviteOrgID := int64(0)
+	if req.Invite != "" {
+		if inv, err := s.Store.GetInviteCodeByCode(strings.TrimSpace(req.Invite)); err == nil {
+			inviteOrgID = inv.OrgID
+		}
+	}
+	nu, err := s.Store.CreateUser(inviteTenantID, req.Username, auth.PasswordHash(req.Password), req.Username, role, 0, inviteOrgID)
 	if err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "用户创建失败: " + err.Error()})
 		return
