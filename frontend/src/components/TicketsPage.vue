@@ -108,7 +108,7 @@
           </div>
           <div v-if="(detail.states || []).length" class="tp-steps-mini">
             <div v-for="st in detail.states" :key="st.id" class="tp-step-row" :class="'st-' + st.status">
-              <span class="tp-step-name">{{ st.step }}</span>
+              <span class="tp-step-name">{{ stepNames[st.step] || st.step }}</span>
               <span class="tp-step-status">{{ st.status }}</span>
               <span v-if="st.error" class="tp-step-err">⚠️ {{ st.error }}</span>
             </div>
@@ -216,6 +216,8 @@ const currentStepLabel = computed<string>(() => {
 // ★ 工单进度百分比：文本按步骤完成数、文件按产物就绪数
 const ticketProgress = computed<number | null>(() => {
   if (!detail.value) return null
+  // ★ 后端唯一真源：detail.progress（列表行也带 tk.progress）
+  if (typeof detail.value.progress === 'number') return detail.value.progress
   const st = detail.value.states || []
   const fs = detail.value.files || []
   const tk = detail.value.ticket || {}
@@ -344,11 +346,29 @@ async function download(tk: any) {
 }
 
 // 展开/收起步骤进度
+// 进度气泡轮询：打开期间对运行中工单每 3s 刷新详情（流式百分比）
+let detailTimer: ReturnType<typeof setInterval> | undefined
+function startDetailPoll() {
+  stopDetailPoll()
+  detailTimer = setInterval(async () => {
+    if (!detail.value) { stopDetailPoll(); return }
+    const id = detail.value.ticket?.id
+    if (!id || document.hidden) return
+    const r = await ticketDetail(id)
+    if (r.success) detail.value = r
+    const stt = detail.value?.ticket?.status
+    if (stt && !['queued', 'in_progress'].includes(stt)) stopDetailPoll()
+  }, 3000)
+}
+function stopDetailPoll() { if (detailTimer) { clearInterval(detailTimer); detailTimer = undefined } }
+onUnmounted(stopDetailPoll)
+
 // toggleDetail 展开/收起步骤进度气泡（优先按钮上方，空间不足则下方）
 async function toggleDetail(tk: any, e?: MouseEvent) {
-  if (detail.value && detail.value.ticket?.id === tk.id) { detail.value = null; return }
+  if (detail.value && detail.value.ticket?.id === tk.id) { detail.value = null; stopDetailPoll(); return }
   const r = await ticketDetail(tk.id)
   if (r.success) {
+    startDetailPoll()
     detail.value = r
     if (e?.target instanceof HTMLElement) {
       const rect = e.target.getBoundingClientRect()

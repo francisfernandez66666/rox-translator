@@ -54,7 +54,30 @@ func (s *Server) handleTickets(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "tickets": tickets})
+	// ★ 运行中工单附实时进度百分比（后端唯一真源；仅运行中才查状态，避免全量 N+1）
+	type ticketWithProgress struct {
+		*store.Ticket
+		Progress int `json:"progress"`
+	}
+	out := make([]ticketWithProgress, 0, len(tickets))
+	for _, t := range tickets {
+		if t.Status != "queued" && t.Status != "in_progress" {
+			p := 0
+			if t.Status == "completed" || t.Status == "rejected" {
+				p = 100
+			}
+			out = append(out, ticketWithProgress{t, p})
+			continue
+		}
+		states, _ := s.Store.TicketStates(t.ID)
+		tfiles, _ := s.Store.TicketFiles(t.ID)
+		pct := 10
+		if t.Status == "in_progress" {
+			pct = ticketProgressPct(t, states, tfiles)
+		}
+		out = append(out, ticketWithProgress{t, pct})
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "tickets": out})
 }
 
 // handleTicketCreate 创建工单接口（tenant_admin 及以上）。
@@ -252,6 +275,63 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t, "queued": true})
 }
 
+
+// ticketProgressPct 工单进度百分比（步骤锚点阶梯，唯一真源）：
+// 排队10 → 提取20 → 初翻40 → 校对60 → 回写80 → 完成100。
+func ticketProgressPct(t *store.Ticket, states []*store.TicketState, files []*store.TicketFile) int {
+	if t == nil {
+		return 0
+	}
+	switch t.Status {
+	case "completed":
+		return 100
+	case "rejected":
+		return 100
+	case "", "draft", "queued", "pending_approval":
+		if t.Status == "queued" {
+			return 10
+		}
+		return 5
+	}
+	pct := 5
+	W := map[string]int{
+		"upload": 20, "file_extract": 20, "extract": 20,
+		"translate": 40, "file_translate": 40, "init_translation": 40,
+		"proofread": 60, "qa": 60, "file_qa": 60, "quality_check": 60,
+		"writeback": 80, "file_writeback": 80, "package": 80,
+	}
+	for _, x := range states {
+		w, ok := W[x.Step]
+		if !ok {
+			continue
+		}
+		if x.Status == "success" || x.Status == "skipped" {
+			if w > pct {
+				pct = w
+			}
+		} else if x.Status == "running" {
+			r := w - 10
+			if r < w && r > pct {
+				pct = r
+			} else if r <= 10 && w > pct {
+				pct = w
+			}
+		}
+	}
+	for _, f := range files {
+		if f.ResultPath != "" || f.Error != "" {
+			if pct < 80 {
+				pct = 80
+			}
+			break
+		}
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	return pct
+}
+
 // handleTicketDetail 工单详情接口（含状态轨迹，tenant_admin 及以上）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（查询参数 id）。
 // 返回: success=true 时携带 ticket（工单）与 states（状态轨迹数组）。
@@ -284,7 +364,7 @@ func (s *Server) handleTicketDetail(w http.ResponseWriter, r *http.Request) {
 	states, _ := s.Store.TicketStates(id)
 	// ★ 文件工单附带各文件处理状态（前端进度面板渲染用）
 	tfiles, _ := s.Store.TicketFiles(id)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t, "states": states, "files": tfiles})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t, "states": states, "files": tfiles, "progress": ticketProgressPct(t, states, tfiles)})
 }
 
 // handleTicketDownload 下载工单翻译结果（创建者或超管）。
