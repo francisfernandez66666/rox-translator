@@ -127,7 +127,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { approveList, approveAction } from '@/api'
 import { feedbackList, feedbackReply, resolveFeedback, createFeedback, type FeedbackRecord } from '@/api/feedback'
-import { activeTenantId, isSuper } from './store'
+import { activeTenantId, isSuper, pendingFeedbackId } from './store'
 import { t, tpl } from '@/i18n'
 
 // ===== 反馈工作台状态 =====
@@ -199,6 +199,15 @@ async function doApprove(t: any, action: 'approve' | 'reject') {
   await loadApproval()
 }
 onMounted(() => { loadFeedbacks(); loadApproval() })
+// ★ 铃铛通知点击 → 定位并打开对应反馈详情
+watch(pendingFeedbackId, async fid => {
+  if (!fid) return
+  statusFilter.value = ''
+  await loadFeedbacks()
+  const f = feedbacks.value.find(x => x.id === fid)
+  if (f) openDetail(f)
+  pendingFeedbackId.value = 0
+})
 watch(activeTenantId, () => { loadFeedbacks(); loadApproval() })
 </script>
 

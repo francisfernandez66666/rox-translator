@@ -13,7 +13,7 @@
         <button class="ad-btn-sm" @click="readAll">{{ t('bell.readAll') }}</button>
       </div>
       <div class="bell-list">
-        <div v-for="n in list" :key="n.id" :class="['bell-item', n.read_at ? '' : 'unread']" @click="readOne(n)">
+        <div v-for="n in list" :key="n.id" :class="['bell-item', n.read_at ? '' : 'unread']" @click="onItemClick(n)">
           <b style="font-size:13px">{{ n.title }}</b>
           <div class="ad-hint" style="margin:2px 0 0">{{ n.body }}</div>
           <div class="ad-hint" style="font-size:11px">{{ fmtTime(n.created_at) }}</div>
@@ -25,6 +25,7 @@
 </template>
 
 <script setup lang="ts">
+import { gotoFeedbackPanel } from './admin/store'
 import { ref, onMounted, onUnmounted } from 'vue'
 import { notifications, notificationsUnread, notificationRead, notificationsReadAll } from '@/api'
 import { t } from '@/i18n'
@@ -52,15 +53,17 @@ async function load() {
   if (r.success) list.value = (r as any).notifications || []
 }
 
-// 单条已读
-// readOne 点击条目标记已读（未读才请求）
+// 单条已读 + 反馈类跳转问题反馈面板
 async function readOne(n: any) {
   if (!n.read_at) {
     await notificationRead(n.id)
     n.read_at = new Date().toISOString()
     unread.value = Math.max(0, unread.value - 1)
   }
+  // ★ feedback 类通知 → 跳转「问题反馈」面板并定位该条
+  if (n.ref_type === 'feedback') gotoFeedbackPanel(n.ref_id)
 }
+function onItemClick(n: any) { readOne(n); open.value = false }
 
 // 全部已读
 // readAll 全部标记已读并刷新

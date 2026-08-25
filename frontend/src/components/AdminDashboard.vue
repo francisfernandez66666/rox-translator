@@ -77,7 +77,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 // API：token 读写 + 用户类型
 import { setAuthToken, type AuthUser , meContext } from '@/api'
 // 后台共享状态（用户/租户/角色等级）
-import { user, activeTenantId, tenantList, myLevel, isAdmin, isSuper, roleName, switchTenant, loadTenants } from './admin/store'
+import { user, activeTenantId, tenantList, myLevel, isAdmin, isSuper, roleName, switchTenant, loadTenants, pendingPanel } from './admin/store'
 // 子面板组件
 import Overview from './admin/Overview.vue'
 import Alerts from './admin/Alerts.vue'
@@ -178,6 +178,8 @@ const currentWorkspace = computed(() => workspaces[myLevel.value] || null)
 const visiblePanels = computed(() => currentWorkspace.value?.panels || [])
 // 当前激活的面板 key
 const activePanel = ref('')
+// ★ 消息中心跳转：pendingPanel 信号 → 切到目标面板（问题反馈）
+watch(pendingPanel, v => { if (v) { activePanel.value = v; pendingPanel.value = '' } })
 
 // 角色加载/变化时：默认选中该工作台第一个面板；当前面板不可见时回退第一个
 watch(visiblePanels, (list) => {
