@@ -43,9 +43,9 @@
             <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
             <!-- ★ 修改密码：独立 Teleport 弹窗（邮箱验证码流程） -->
             <button v-if="canEnterAdmin" class="menu-item" @click="enterAdmin">🛠 {{ t('menu.adminConsole') }}</button>
-            <button class="menu-item" @click.stop="openPwd">🔒 {{ t('pwd.title') }}</button>
-            <button class="menu-item" @click.stop="openEmailEdit">📧 {{ t('menu.changeEmail') }}</button>
-            <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
+            <button class="menu-item" @click.stop="openPwd" @pointerup.stop="openPwd">🔒 {{ t('pwd.title') }}</button>
+            <button class="menu-item" @click.stop="openEmailEdit" @pointerup.stop="openEmailEdit">📧 {{ t('menu.changeEmail') }}</button>
+            <button class="menu-item menu-logout" @click="logout" @pointerup="logout">⎋ {{ t('common.logout') }}</button>
           </div>
         </details>
       </div>
@@ -179,11 +179,14 @@ function onEmailBound(addr: string) { emailMissing.value = false; emailEditOpen.
 // openEmailEdit 汉堡入口：拉最新上下文预填当前邮箱
 const emailEditOpen = ref(false)
 let curEmail = ''
+let _emBusy = false
 async function openEmailEdit() {
+  if (_emBusy) return
+  _emBusy = true
   try {
     const r: any = await meContext()
     curEmail = r?.email || ''
-  } catch { curEmail = '' }
+  } catch { curEmail = '' } finally { setTimeout(() => (_emBusy = false), 300) }
   emailEditOpen.value = true
 }
 const pwdEmail = ref('')
@@ -199,15 +202,19 @@ async function refreshPkgLine() {
   } catch { pkgLine.value = '' }
 }
 
-// openPwd 打开改密弹窗：收起账号菜单、立即弹出，随后异步补填绑定邮箱
+let _pwdBusy = false
 async function openPwd() {
-  const d = document.querySelector('details.account-menu')
-  if (d) d.removeAttribute('open')
-  pwdOpen.value = true
+  if (_pwdBusy) return
+  _pwdBusy = true
   try {
-    const r: any = await meContext()
-    pwdEmail.value = r?.email || ''
-  } catch { pwdEmail.value = '' }
+    const d = document.querySelector('details.account-menu')
+    if (d) d.removeAttribute('open')
+    pwdOpen.value = true
+    try {
+      const r: any = await meContext()
+      pwdEmail.value = r?.email || ''
+    } catch { pwdEmail.value = '' }
+  } finally { setTimeout(() => (_pwdBusy = false), 300) }
 }
 
 // onPwdDone 改密成功提示
