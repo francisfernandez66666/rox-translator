@@ -301,8 +301,8 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": "not_found", "message": "任务不存在"})
 		return
 	}
-	// ★ 用户级归属校验：Key 绑定用户且任务已盖印时不匹配即 404（不泄露存在性）
-	if ak.UserID > 0 && t.APIUserID != 0 && t.APIUserID != ak.UserID {
+	// ★ 用户级归属校验（强绑定无旁路）：租户匹配 + Key用户==任务盖印用户，否则 404 不泄露存在性
+	if t.APIUserID != ak.UserID {
 		writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": "not_found", "message": "任务不存在"})
 		return
 	}
@@ -402,8 +402,8 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": "not_found", "message": "任务不存在"})
 		return
 	}
-	// ★ 用户级归属校验：Key 绑定用户且任务已盖印时不匹配即 404（不泄露存在性）
-	if ak.UserID > 0 && t.APIUserID != 0 && t.APIUserID != ak.UserID {
+	// ★ 用户级归属校验（强绑定无旁路）：租户匹配 + Key用户==任务盖印用户，否则 404 不泄露存在性
+	if t.APIUserID != ak.UserID {
 		writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": "not_found", "message": "任务不存在"})
 		return
 	}

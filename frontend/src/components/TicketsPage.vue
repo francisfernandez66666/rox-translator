@@ -87,6 +87,7 @@
               <button v-if="tk.status === 'completed'" class="ad-btn-sm ad-btn-green" :disabled="downloadingId === tk.id" @click="download(tk)">{{ downloadingId === tk.id ? '⏳' : '⬇' }} {{ downloadingId === tk.id ? '下载中…' : t('tk.download') }}</button>
               <button v-if="tk.status === 'completed'" class="ad-btn-sm" @click="openFeedback(tk)">💬 {{ t('fb.entry') }}</button>
               <button v-if="tk.status === 'completed'" class="ad-btn-sm ad-btn-red" @click="deleteTicket(tk)">🗑 {{ t('common.delete') }}</button>
+              <button v-if="['queued','in_progress'].includes(tk.status)" class="ad-btn-sm ad-btn-red" @click.stop="cancelTicket(tk)">✕ {{ t('tk.cancel') }}</button>
               <button class="ad-btn-sm" @click.stop="toggleDetail(tk, $event)">{{ t('tk.detail') }}</button>
             </td>
           </tr>
@@ -133,7 +134,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import LangMultiSelect from './LangMultiSelect.vue'
 import FeedbackModal from './FeedbackModal.vue'
-import { myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail, ticketDownload, ticketDelete, translationEstimate } from '@/api'
+import { myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail, ticketDownload, ticketDelete, ticketCancel, translationEstimate } from '@/api'
 import { t, tpl } from '@/i18n'
 import { fmtTime } from './admin/ui'
 
@@ -331,6 +332,14 @@ async function run(tk: any) {
   await load()
 }
 
+// cancelTicket 取消进行中的工单（确认后调用，刷新列表）
+async function cancelTicket(tk: any) {
+  if (!confirm(tpl('tk.cancelConfirm', { no: tk.ticket_no || tk.id }))) return
+  const r = await ticketCancel(tk.id)
+  if (!r.success) { alert(r.message); return }
+  await load()
+}
+
 // deleteTicket 删除已完成工单及其关联文件（需确认）
 async function deleteTicket(tk: any) {
   if (!confirm(tpl('tk.deleteConfirm', { no: tk.ticket_no }))) return
@@ -415,6 +424,7 @@ function statusLabel(s: string): string {
     case 'approved': return t('tk.stApproved')
     case 'rejected': return t('tk.stRejected')
     case 'completed': return t('tk.stCompleted')
+    case 'cancelled': return t('tk.stCancelled')
     default: return s || '—'
   }
 }

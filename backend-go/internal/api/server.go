@@ -118,7 +118,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/feedback/list", s.handleFeedbackList)
 	s.mux.HandleFunc("/api/feedback/reply", s.handleFeedbackReply)
 	s.mux.HandleFunc("/api/feedback/get", s.handleFeedbackGet)
-	s.mux.HandleFunc("/api/admin/feedbacks", s.handleAdminFeedbacks)
 	s.mux.HandleFunc("/api/admin/feedbacks/resolve", s.handleAdminFeedbackResolve)
 	// ★ 开放 API 文档在线维护（仅超管）
 	s.mux.HandleFunc("/api/admin/openapi-docs", s.handleAdminOpenAPIDocsGet)
@@ -196,6 +195,7 @@ func (s *Server) routesTickets() {
 	s.mux.HandleFunc("/api/tickets/detail", s.handleTicketDetail)
 	s.mux.HandleFunc("/api/tickets/download", s.handleTicketDownload)
 	s.mux.HandleFunc("/api/tickets/delete", s.handleTicketDelete)
+	s.mux.HandleFunc("/api/tickets/cancel", s.handleTicketCancel)
 	s.mux.HandleFunc("/api/notifications", s.handleNotifications)
 	s.mux.HandleFunc("/api/notifications/unread", s.handleNotificationsUnread)
 	s.mux.HandleFunc("/api/notifications/read", s.handleNotificationsRead)

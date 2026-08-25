@@ -119,9 +119,14 @@ func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	// 告警触达超管：复用告警面板/邮件/群机器人链路
+	// 告警触达（复用告警面板/邮件/群机器人链路）
 	s.Store.CreateAlert(f.TenantID, "warning", "feedback",
 		fmt.Sprintf("收到用户 #%d 的%s反馈：%s", u.ID, map[string]string{"text": "文本翻译", "ticket": "工单"}[targetType], truncateRunes(content, 80)))
+	// ★ 站内通知超管（问题反馈入口）：通知 platform 超管（tenant_id=0, role=admin）
+	for _, sa := range s.Store.ListUsersByRole(0, "admin") {
+		_ = s.Store.CreateNotification(sa.ID, "收到新的问题反馈",
+			fmt.Sprintf("%s：%s", u.DisplayName, truncateRunes(content, 60)), "feedback", f.ID)
+	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "id": f.ID})
 }
 
@@ -134,19 +139,6 @@ func truncateRunes(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-// handleAdminFeedbacks 超管查看反馈列表（?status=open|resolved|空=全部）。
-func (s *Server) handleAdminFeedbacks(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
-		return
-	}
-	list, err := s.Store.ListFeedbacks(r.URL.Query().Get("status"))
-	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
-		return
-	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "feedbacks": list})
-}
 
 // handleAdminFeedbackResolve 超管标记反馈已处理。
 func (s *Server) handleAdminFeedbackResolve(w http.ResponseWriter, r *http.Request) {
@@ -241,6 +233,7 @@ func (s *Server) handleFeedbackList(w http.ResponseWriter, r *http.Request) {
 			"target_type": f.TargetType, "ticket_id": f.TicketID,
 			"content": f.Content, "target_langs": f.TargetLangs, "mode": f.Mode,
 			"with_context": f.WithContext, "source_text": srcCtx,
+			"translations_json": func() string { if f.WithContext { return f.Translations }; return "" }(),
 			"status": f.Status, "replies": json.RawMessage(f.Replies),
 			"created_at": f.CreatedAt, "handled_at": f.HandledAt,
 		})
@@ -285,6 +278,16 @@ func (s *Server) handleFeedbackReply(w http.ResponseWriter, r *http.Request) {
 	if aerr != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": aerr.Error()})
 		return
+	}
+	// ★ 回复提醒对方：超管回复→通知提交者；提交者补充→再通知超管
+	if auth.IsSuperAdmin(u) {
+		_ = s.Store.CreateNotification(f.UserID, "你的问题反馈有新回复",
+			truncateRunes(content, 60), "feedback", f.ID)
+	} else {
+		for _, sa := range s.Store.ListUsersByRole(0, "admin") {
+			_ = s.Store.CreateNotification(sa.ID, "问题反馈有新回复",
+				fmt.Sprintf("%s：%s", u.DisplayName, truncateRunes(content, 60)), "feedback", f.ID)
+		}
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "replies": json.RawMessage(thread)})
 }

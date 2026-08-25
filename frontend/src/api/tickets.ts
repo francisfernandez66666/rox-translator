@@ -136,3 +136,8 @@ export async function ticketCreateFile(files: File | File[], meta: { title: stri
 export async function ticketDelete(id: number): Promise<AdminResp> {
   return request("/api/tickets/delete", { method: "POST", headers: authHeaders(), body: JSON.stringify({ id }) })
 }
+
+/** ticketCancel 取消工单（排队中/翻译中；仅创建者或超管） */
+export async function ticketCancel(id: number): Promise<AdminResp> {
+  return request("/api/tickets/cancel", { method: "POST", headers: authHeaders(), body: JSON.stringify({ id }) })
+}

@@ -626,6 +626,9 @@ func (s *Server) authenticateAPIKey(r *http.Request) (*store.APIKey, string) {
 	if err != nil || ak.Status != "active" {
 		return nil, "invalid_api_key"
 	}
+	if ak.UserID <= 0 {
+		return nil, "invalid_api_key" // 强绑定：无归属用户的 Key 一律无效
+	}
 	// ★ R4 Key 级每日配额：limit>0 且跨日计数已重置后的今日次数 ≥ 上限 → 拒绝
 	today := time.Now().Format("2006-01-02")
 	if ak.DailyCallLimit > 0 {

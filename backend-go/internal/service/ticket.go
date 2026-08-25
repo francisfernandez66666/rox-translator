@@ -167,6 +167,10 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 			"ticket", t.ID)
 		return runErr
 	}
+	// ★ 用户取消：收尾前复查状态——已 cancelled 则放弃计费/完成态/通知（产物留档不下载）
+	if cur, ge := s.Store.GetTicketGlobal(t.ID); ge == nil && cur != nil && cur.Status == "cancelled" {
+		return nil
+	}
 	// ★ Token 实费计费：聚合本工单全链路真实 token × 均摊系数（强制计费时扣余额；
 	// 扣减失败仅告警不回滚——翻译成果已产出，欠费由告警跟进）
 	billed := s.chargeTokens(ctx, t)

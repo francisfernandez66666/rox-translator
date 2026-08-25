@@ -111,3 +111,24 @@ func (s *Store) OrgNameMap() (map[int64]string, error) {
 func (s *Store) DeleteUser(id, tid int64) error {
 	return s.iam.DeleteUser(id, tid)
 }
+
+// ListUsersByRole 按租户+角色列出活跃用户（通知投递用；tid=0 表示平台层超管）。
+func (s *Store) ListUsersByRole(tid int64, role string) []*User {
+	rows, err := s.db.Query(
+		"SELECT id, tenant_id, username, password_hash, display_name, role, status, created_by, COALESCE(last_login_at,''), COALESCE(org_id,0), COALESCE(email,''), created_at, updated_at FROM users WHERE tenant_id=? AND role=? AND status='active'",
+		tid, role)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []*User{}
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName,
+			&u.Role, &u.Status, &u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			continue
+		}
+		out = append(out, &u)
+	}
+	return out
+}

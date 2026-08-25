@@ -705,3 +705,40 @@ func (s *Server) handleTicketDelete(w http.ResponseWriter, r *http.Request) {
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_delete", "tickets", t.TicketNo)
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
+
+// handleTicketCancel 用户取消工单：仅创建者或超管；排队中/翻译中可取消。
+// 取消为标记式：worker 收尾前复查状态，已取消则放弃计费/完成态/通知。
+func (s *Server) handleTicketCancel(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少工单 id"})
+		return
+	}
+	t, err := s.Store.GetTicket(req.ID, s.effTenant(r, u))
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不存在"})
+		return
+	}
+	if t.CreatedBy != u.ID && !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权取消他人工单"})
+		return
+	}
+	if t.Status != store.TicketQueued && t.Status != store.TicketInProgress {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "当前状态不可取消（仅排队中/翻译中）"})
+		return
+	}
+	if err := s.Store.CancelTicket(req.ID); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_cancel", "tickets", t.TicketNo)
+	s.Store.SetTicketState(t.ID, "cancel", "success", "by user")
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}

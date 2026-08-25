@@ -37,6 +37,7 @@ func New(db *sql.DB) (*Store, error) {
 		return nil, err // 迁移失败则返回错误
 	}
 	s.feedbackMigrate() // 老库补 replies 列（幂等，BBS 回复线程）
+	s.backfillAPIOwnership() // ★ 历史 Key/任务强绑定回填（幂等）
 	return s, nil
 }
 
@@ -489,4 +490,19 @@ func (s *Store) seedRateCard() error {
 		('translate', '*', '*', 1, 1.0, ''), ('review', '*', '*', 1, 1.0, ''),
 		('evals', '*', '*', 1, 0.5, ''), ('gate', '*', '*', 0, 0, '')`)
 	return err
+}
+
+// backfillAPIOwnership 历史数据强绑定回填（幂等，启动执行）：
+// ① user_id=0 的 API Key → 归属本租户最早的 admin/tenant_admin；
+// ② created_by=0 且 api_user_id=0 的 API 任务 → 同上。
+// 使 status/download 的「租户+用户」双重校验对全部存量生效，杜绝跨用户越权。
+func (s *Store) backfillAPIOwnership() {
+	s.db.Exec(`UPDATE api_keys SET user_id=(
+		SELECT MIN(u.id) FROM users u
+		WHERE u.tenant_id=api_keys.tenant_id AND u.role IN ('admin','tenant_admin'))
+	WHERE COALESCE(user_id,0)=0`)
+	s.db.Exec(`UPDATE tickets SET api_user_id=(
+		SELECT MIN(u.id) FROM users u
+		WHERE u.tenant_id=tickets.tenant_id AND u.role IN ('admin','tenant_admin'))
+	WHERE created_by=0 AND COALESCE(api_user_id,0)=0`)
 }

@@ -7,6 +7,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"time"
 )
@@ -53,7 +54,8 @@ const (
 	TicketPendingAppr = "pending_approval" // 待审批
 	TicketApproved    = "approved"         // 已批准
 	TicketRejected    = "rejected"         // 已驳回
-	TicketCompleted   = "completed"        // 已完成
+	TicketCompleted   = "completed"
+	TicketCancelled = "cancelled"        // 用户取消（翻译中/排队中可取消）
 )
 
 // CreateTicket 创建工单（初始状态为草稿）。
@@ -254,4 +256,19 @@ func (s *Store) DeleteTicketWithFiles(id, tid int64) error {
 func (s *Store) StampTicketAPIUser(id, userID int64) error {
 	_, err := s.db.Exec("UPDATE tickets SET api_user_id=? WHERE id=?", userID, id)
 	return err
+}
+
+// CancelTicket 用户取消：仅排队中/翻译中可置为 cancelled（幂等安全）。
+func (s *Store) CancelTicket(id int64) error {
+	res, err := s.db.Exec(
+		"UPDATE tickets SET status='cancelled', updated_at=? WHERE id=? AND status IN ('queued','in_progress')",
+		time.Now().Format(time.RFC3339), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("工单不在可取消状态")
+	}
+	return nil
 }

@@ -97,7 +97,6 @@ import Tickets from './admin/Tickets.vue'
 import Audit from './admin/Audit.vue'
 // ★ 站内信铃铛：后台消息通知中心（工单完成/反馈/告警等站内信）
 import Bell from '../components/Bell.vue'
-import Feedback from './admin/Feedback.vue'
 import PasswordModal from '../components/PasswordModal.vue'
 // ★ 套餐详情合并面板（四期：商业包+订阅收银合一；非超管只读）
 import PlansPanel from './admin/PlansPanel.vue'
@@ -141,7 +140,6 @@ const workspaces: Record<number, WorkspaceDef> = {
       { key: 'tickets', label: 'admin.tickets', comp: Tickets },
       { key: 'audit', label: 'admin.auditPanel', comp: Audit },
       { key: 'alerts', label: 'admin.alerts', comp: Alerts },
-      { key: 'feedbacks', label: 'admin.feedbackPanel', comp: Feedback }, // ★ 用户反馈（四期新增，仅超管工作台）
     ],
   },
   // 企业管理（租户管理员）
