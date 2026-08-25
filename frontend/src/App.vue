@@ -44,6 +44,7 @@
             <!-- ★ 修改密码：独立 Teleport 弹窗（邮箱验证码流程） -->
             <button v-if="canEnterAdmin" class="menu-item" @click="enterAdmin">🛠 {{ t('menu.adminConsole') }}</button>
             <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
+            <button class="menu-item" @click="openEmailEdit">📧 {{ t('menu.changeEmail') }}</button>
             <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
           </div>
         </details>
@@ -51,7 +52,7 @@
     </header>
 
     <!-- ★ 自助修改密码弹窗（Teleport 挂载 body，居中遮罩） -->
-    <EmailBindModal v-if="emailMissing" @done="onEmailBound" />
+    <EmailBindModal v-if="emailMissing || emailEditOpen" :dismissible="emailEditOpen && !emailMissing" :current-email="curEmail" @done="onEmailBound" @close="emailEditOpen = false" />
     <PasswordModal
       v-if="pwdOpen"
       :username="authUser.username"
@@ -173,7 +174,17 @@ async function checkEmailBinding() {
     emailMissing.value = !!r && !r.email
   } catch { emailMissing.value = false }
 }
-function onEmailBound(addr: string) { emailMissing.value = false; checkEmailBinding() }
+function onEmailBound(addr: string) { emailMissing.value = false; emailEditOpen.value = false }
+// openEmailEdit 汉堡入口：拉最新上下文预填当前邮箱
+const emailEditOpen = ref(false)
+let curEmail = ''
+async function openEmailEdit() {
+  try {
+    const r: any = await meContext()
+    curEmail = r?.email || ''
+  } catch { curEmail = '' }
+  emailEditOpen.value = true
+}
 const pwdEmail = ref('')
 
 // refreshPkgLine 拉取剩余 token 与 ≈句数（页眉徽标数据源）

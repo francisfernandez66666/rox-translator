@@ -77,7 +77,12 @@ export async function submitNewPassword(data: { username: string; code: string; 
   return resetPassword(data)
 }
 
-/** updateEmail 登录用户自助绑定/修改邮箱（全局唯一校验在服务端） */
-export async function updateEmail(email: string): Promise<AdminResp> {
-  return request('/api/me/update-email', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ email }) })
+/** meEmailCode 向新邮箱发送变更验证码（需登录） */
+export async function meEmailCode(email: string): Promise<AdminResp & { noop?: boolean }> {
+  return request('/api/me/email-code', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ email }) })
+}
+
+/** updateEmail 登录用户自助绑定/修改邮箱（需携带发往新邮箱的验证码） */
+export async function updateEmail(email: string, code: string): Promise<AdminResp> {
+  return request('/api/me/update-email', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ email, code }) })
 }

@@ -23,6 +23,7 @@
           <summary title="账号菜单">👤 {{ user?.display_name || user?.username }}</summary>
           <div class="menu-drop">
             <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
+            <button class="menu-item" @click="openEmailEdit">📧 {{ t('menu.changeEmail') }}</button>
             <a class="menu-item" href="/">{{ t('admin.backWorkspace') }}</a>
             <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
           </div>
@@ -68,7 +69,7 @@
     </main>
     </div><!-- /ad-body -->
   </div>
-  <EmailBindModal v-if="emailMissing" @done="onEmailBound" />
+  <EmailBindModal v-if="emailMissing || emailEditOpen" :dismissible="emailEditOpen && !emailMissing" :current-email="curEmail" @done="onEmailBound" @close="emailEditOpen = false" />
       <PasswordModal v-if="pwdOpen" :username="user?.username || ''" :email="pwdEmail" @close="pwdOpen = false" @done="onPwdDone" />
 </template>
 
@@ -203,16 +204,29 @@ function logout() {
 const pwdOpen = ref(false)
 // ★ 登录后强制维护邮箱：meContext 无 email 即弹出（不可关闭），绑定成功自动消失
 const emailMissing = ref(false)
+const emailEditOpen = ref(false)
 async function checkEmailBinding() {
   try {
     const r: any = await meContext()
     emailMissing.value = !!r && !r.email
+    curEmail = r?.email || ''
     if (!r?.email) pwdEmail.value = ''
   } catch { /* 未登录等场景忽略 */ }
 }
+let curEmail = ''
 function onEmailBound(addr: string) {
   emailMissing.value = false
+  emailEditOpen.value = false
+  curEmail = addr
   pwdEmail.value = addr
+}
+// openEmailEdit 从最新上下文取当前邮箱后打开修改弹窗
+async function openEmailEdit() {
+  try {
+    const r: any = await meContext()
+    curEmail = r?.email || ''
+  } catch { curEmail = '' }
+  emailEditOpen.value = true
 }
 const pwdEmail = ref('')
 

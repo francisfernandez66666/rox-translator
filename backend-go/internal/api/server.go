@@ -286,6 +286,7 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/me/package", s.handleMyPackage)
 	s.mux.HandleFunc("/api/me/context", s.handleMeContext)
 	s.mux.HandleFunc("/api/me/update-email", s.handleUpdateEmail)
+	s.mux.HandleFunc("/api/me/email-code", s.handleMeEmailCode)
 	s.mux.HandleFunc("/api/package/subscribe", s.handlePackageSubscribe)
 	s.mux.HandleFunc("/api/admin/packages", s.handleAdminPackages)
 	s.mux.HandleFunc("/api/admin/packages/create", s.handleAdminPackageCreate)

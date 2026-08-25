@@ -169,3 +169,35 @@ func (s *Server) handleRegisterConfig(w http.ResponseWriter, r *http.Request) {
 
 // itoaInt int 转字符串（本文件内使用的简短别名）。
 func itoaInt(n int) string { return fmt.Sprintf("%d", n) }
+
+// handleMeEmailCode 登录用户向「新邮箱」发送变更验证码（修改邮箱专用，需登录）。
+// 与注册发码共用存储/冷却/有效期；不做人机验证（已登录态），但受 60s 冷却与日上限约束。
+func (s *Server) handleMeEmailCode(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	email := strings.TrimSpace(req.Email)
+	if !emailRe.MatchString(email) {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱格式不正确"})
+		return
+	}
+	if other, err := s.Store.GetUserByEmail(email); err == nil && other != nil && other.ID != u.ID {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "该邮箱已被其他账号绑定"})
+		return
+	}
+	ok, msg, noop := s.sendEmailCode(clientIP(r), email)
+	status := 200
+	if !ok && strings.Contains(msg, "频繁") {
+		status = 429
+	}
+	writeJSON(w, status, map[string]interface{}{"success": ok, "message": msg, "noop": noop && ok})
+}

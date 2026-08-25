@@ -738,6 +738,7 @@ func (s *Server) handleUpdateEmail(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Email string `json:"email"`
+		Code  string `json:"code"` // 发往新邮箱的验证码（防劫持：必须证明对新邮箱的支配权）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -746,6 +747,14 @@ func (s *Server) handleUpdateEmail(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if emailRe.MatchString(email) == false {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱格式不正确"})
+		return
+	}
+	if strings.TrimSpace(req.Code) == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请输入邮箱验证码"})
+		return
+	}
+	if !verifyEmailCode(email, req.Code) {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误或已过期"})
 		return
 	}
 	if other, err := s.Store.GetUserByEmail(email); err == nil && other != nil && other.ID != u.ID {

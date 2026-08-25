@@ -179,10 +179,6 @@ def translate_docx_text(docx_path: str, translations: dict):
 
 # ---------- 字体归一化 ----------
 # OCR 识别语言：源文档可能中英混排，固定多语组合；提取与应用两侧必须一致
-OCR_LANGS = "chi_sim+chi_tra+eng"
-
-_FONT_CACHE = None
-
 def resolve_cjk_font() -> str:
     """解析输出用 CJK 字体（结果缓存）：
     ① 环境变量 CJK_FONT_NAME 显式指定；
@@ -269,242 +265,11 @@ def _pil_font(size: int):
             return ImageFont.truetype(cand, size)
     return ImageFont.load_default()
 
-# ---------- 图片 OCR 翻译 ----------
-def _ocr_lines(img, lang: str):
-    """OCR 并按行分组：返回 [(text, x, y, w, h)]，行文本=词序拼接"""
-    import pytesseract
-    data = pytesseract.image_to_data(img, lang=OCR_LANGS,
-                                     output_type=pytesseract.Output.DICT)
-    groups = {}
-    for i in range(len(data["text"])):
-        w = (data["text"][i] or "").strip()
-        if not w:
-            continue
-        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
-        groups.setdefault(key, []).append(
-            (data["left"][i], data["top"][i], data["width"][i], data["height"][i], w))
-    lines = []
-    for key in sorted(groups):
-        ws = sorted(groups[key], key=lambda t: t[0])
-        text = " ".join(t[4] for t in ws)
-        x0 = min(t[0] for t in ws); y0 = min(t[1] for t in ws)
-        x1 = max(t[0]+t[2] for t in ws); y1 = max(t[1]+t[3] for t in ws)
-        lines.append((text, x0, y0, x1-x0, y1-y0))
-    return lines
-
-def ocr_and_translate_image(img_bytes: bytes, translations: dict, lang: str) -> bytes | None:
-    from PIL import Image, ImageDraw, ImageFont
-    img = Image.open(io.BytesIO(img_bytes))
-    if img.mode != "RGB":
-        img = img.convert("RGB")
-    w, h = img.size
-    if w < 40 or h < 20:
-        return None
-    lk = { _norm(k): v for k, v in translations.items() }
-    draw = ImageDraw.Draw(img)
-    hit = False
-    for text, x, y, bw, bh in _ocr_lines(img, lang):
-        trans = None
-        nk = _norm(text)
-        if nk in lk:
-            trans = lk[nk]
-        else:
-            for k, v in lk.items():
-                if len(k) >= 4 and k in nk:
-                    trans = v  # 行内子串命中→整行替换
-                    break
-        if not trans or trans == text:
-            continue
-        hit = True
-        fs = max(8, int(bh * 0.72))
-        font = _pil_font(fs)
-        draw.rectangle([x, y, x + bw, y + bh], fill="white")
-        draw.text((x, y), trans[:80], fill=(20, 20, 20), font=font)
-    return buf_ret(img) if hit else None
-
-def buf_ret(img):
-    buf = io.BytesIO(); img.save(buf, format="PNG"); return buf.getvalue()
-
-def translate_docx_images(docx_path: str, translations: dict, lang: str):
-    from docx import Document
-    try:
-        doc = Document(docx_path)
-    except Exception:
-        return
-    n = 0
-    for rel in list(doc.part.rels.values()):
-        if "image" not in rel.reltype:
-            continue
-        blob = rel.target_part.blob
-        if len(blob) < 3000:  # 忽略图标/装饰小图
-            continue
-        try:
-            nb = ocr_and_translate_image(blob, translations, lang)
-            if nb:
-                rel.target_part._blob = nb
-                n += 1
-        except Exception:
-            continue
-    if n:
-        try:
-            doc.save(docx_path)
-        except Exception:
-            pass
-
-
 # ---------- 整页 OCR 模式（图形化/扫描版 PDF 兜底） ----------
 PAGE_TEXT_MIN = 200  # 平均每页文本层字符低于此值视为图形化文档
 
-def page_is_graphical(pdf_path: str) -> bool:
-    """图形化判定（以 pdftotext 为准，与引擎提取同源）：
-    平均每页文本层字符 < 60 且未显式开启 FORCE_PAGE_OCR 时按普通文档走 docx 管线。
-    整页 OCR 会把页面变图片，违背『图片遗留不动』的产品要求，故仅显式开启才启用。"""
-    import os as _os, subprocess as _sp
-    if _os.environ.get("FORCE_PAGE_OCR", "").strip() == "1":
-        return True
-    try:
-        out = _sp.run(["pdftotext", "-layout", pdf_path, "-"],
-                      capture_output=True, timeout=60)
-        chars = len(out.stdout.decode("utf-8", "ignore").strip())
-        pages = 1
-        try:
-            info = _sp.run(["pdfinfo", pdf_path], capture_output=True, text=True, timeout=15)
-            for ln in info.stdout.splitlines():
-                if ln.startswith("Pages:"):
-                    pages = max(1, int(ln.split(":")[1].strip()))
-        except Exception:
-            pass
-        return chars / pages < 60
-    except Exception:
-        return False
-
-def pageocr_collect(pdf_path: str):
-    """整页栅格化并 OCR 行键收集。返回 (keys, [(page_idx, img_bytes, lines)])"""
-    import pymupdf
-    from PIL import Image as PILImage
-    import io as _io
-    d = pymupdf.open(pdf_path)
-    keys, seen, pages = [], set(), []
-    for pi in range(len(d)):
-        pix = d[pi].get_pixmap(matrix=pymupdf.Matrix(2, 2))  # ~144dpi
-        img = PILImage.open(_io.BytesIO(pix.tobytes("png"))).convert("RGB")
-        buf = _io.BytesIO(); img.save(buf, format="PNG")
-        b = buf.getvalue()
-        lines = _ocr_lines(img, OCR_LANGS)
-        pages.append((pi, b, lines))
-        for text, *_ in lines:
-            k = _norm(text)
-            if len(k) >= 2 and k not in seen:
-                seen.add(k); keys.append(text)
-    return keys, pages
-
-def cmd_pageocr_apply(pdf_path: str, out_path: str, lang: str, translations: dict):
-    """整页模式回写：命中的行白底覆盖写译文，页图重组为 PDF（版式像素级保真）。"""
-    import pymupdf
-    from PIL import Image, ImageDraw
-    import io as _io
-    lk = {}
-    for k, v in translations.items():
-        nk = _norm(k)
-        if len(nk) >= 2:
-            lk[nk] = v
-    d = pymupdf.open(pdf_path)
-    out = pymupdf.open()
-    total_hit = 0
-    for pi in range(len(d)):
-        pix = d[pi].get_pixmap(matrix=pymupdf.Matrix(2, 2))
-        img = Image.open(_io.BytesIO(pix.tobytes("png"))).convert("RGB")
-        draw = ImageDraw.Draw(img)
-        for text, x, y, bw, bh in _ocr_lines(img, OCR_LANGS):
-            nk = _norm(text)
-            trans = lk.get(nk)
-            if not trans and len(nk) >= 6:
-                for k, v in lk.items():
-                    if len(k) >= 6 and k in nk:
-                        trans = v  # 兜底：行内包含某长键（OCR 断行差异）
-                        break
-            if not trans:
-                continue
-            fs = max(9, int(bh * 0.72))
-            font = _pil_font(fs)
-            draw.rectangle([x - 1, y - 1, x + bw + 1, y + bh + 1], fill="white")
-            draw.text((x, y), trans[:120], fill=(20, 20, 20), font=font)
-            total_hit += 1
-        w, h = img.size
-        pg = out.new_page(width=w * 72 / 144, height=h * 72 / 144)
-        pg.insert_image(pg.rect, stream=_io.BytesIO(buf_ret(img)))
-        d.close() if False else None
-    out.save(out_path)
-    print(f"OK pageocr hits={total_hit}: {out_path}")
-
-
-# ---------- 表格自适应 ----------
-def normalize_tables(docx_path: str):
-    """所有表格：layout=autofit（列宽随内容自适应）+ 总宽100%。
-    译文与原文长度差异大，固定列宽会导致溢出/换行崩坏。"""
-    from docx import Document
-    from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
-    doc = Document(docx_path)
-    n = 0
-    for tbl in doc.element.body.iter(qn('w:tbl')):
-        tblPr = tbl.find(qn('w:tblPr'))
-        if tblPr is None:
-            tblPr = OxmlElement('w:tblPr')
-            tbl.insert(0, tblPr)
-        layout = tblPr.find(qn('w:tblLayout'))
-        if layout is None:
-            layout = OxmlElement('w:tblLayout')
-            tblPr.append(layout)
-        layout.set(qn('w:type'), 'autofit')
-        tw = tblPr.find(qn('w:tblW'))
-        if tw is None:
-            tw = OxmlElement('w:tblW')
-            tblPr.append(tw)
-        tw.set(qn('w:w'), '5000')
-        tw.set(qn('w:type'), 'pct')  # 总宽 100%
-        n += 1
-    # 行高：pdf2docx 写死 exact/atLeast 的像素值，译文变长会被裁剪 → 统一 atLeast 允许撑开
-    for trPr in doc.element.body.iter(qn('w:trPr')):
-        for h in trPr.findall(qn('w:trHeight')):
-            h.set(qn('w:hRule'), 'atLeast')
-    # 单元格固定宽删除：交给 autofit 按内容自适应分配列宽
-    for tcW in list(doc.element.body.iter(qn('w:tcW'))):
-        tcW.getparent().remove(tcW)
-    doc.save(docx_path)
-
-# ---------- 段内字号统一 ----------
-def normalize_font_sizes(docx_path: str):
-    """每段落内以出现最多的字号为准对齐 w:sz/w:szCs。
-    pdf2docx 常给同一视觉段落的行打不同 sz，导致译文版式忽大忽小。"""
-    from docx import Document
-    from collections import Counter
-    doc = Document(docx_path)
-    fixed = 0
-    for para in iter_all_paragraphs(doc):
-        szs = []
-        for el in para._p.iter(W_NS + 'sz'):
-            v = el.get(W_NS + 'val')
-            if v and v.isdigit():
-                szs.append(v)
-        if len(set(szs)) <= 1:
-            continue
-        dominant = Counter(szs).most_common(1)[0][0]
-        for tag in ('sz', 'szCs'):
-            for el in para._p.iter(W_NS + tag):
-                v = el.get(W_NS + 'val')
-                if v and v != dominant:
-                    el.set(W_NS + 'val', dominant)
-                    fixed += 1
-    doc.save(docx_path)
-    return fixed
 # ---------- extract / apply ----------
 def cmd_extract(pdf_path: str, cache_docx: str):
-    # 图形化文档（文本层稀薄）：跳过 docx 重建，直接整页 OCR 收集行键
-    if page_is_graphical(pdf_path):
-        keys, _pages = pageocr_collect(pdf_path)
-        print(json.dumps({"success": True, "mode": "pageocr", "texts": keys}, ensure_ascii=False))
-        return
     pdf_to_docx(pdf_path, cache_docx)
     from docx import Document
     doc = Document(cache_docx)
@@ -518,33 +283,6 @@ def cmd_extract(pdf_path: str, cache_docx: str):
             continue
         seen.add(k)
         texts.append(txt)
-    # ★ 图片 OCR 行键：让 LLM 连图内文字一并翻译（apply 阶段按行精确命中）
-    try:
-        from docx import Document as _Doc
-        from PIL import Image as _Image
-        import io as _io, pytesseract as _pt
-        d2 = _Doc(cache_docx)
-        for rel in d2.part.rels.values():
-            if "image" not in rel.reltype:
-                continue
-            blob = rel.target_part.blob
-            if len(blob) < 3000:
-                continue
-            try:
-                im = _Image.open(_io.BytesIO(blob))
-                if im.mode != "RGB":
-                    im = im.convert("RGB")
-                if im.size[0] < 40 or im.size[1] < 20:
-                    continue
-                for ln_text, *_ in _ocr_lines(im, OCR_LANGS):
-                    k2 = _norm(ln_text)
-                    if len(k2) >= 2 and k2 not in seen:
-                        seen.add(k2)
-                        texts.append(ln_text)
-            except Exception:
-                continue
-    except Exception:
-        pass
     print(json.dumps({"success": True, "mode": "docx", "texts": texts}, ensure_ascii=False))
 
 def cmd_apply(cache_docx: str, out_path: str, lang: str, translations: dict):
@@ -557,7 +295,6 @@ def cmd_apply(cache_docx: str, out_path: str, lang: str, translations: dict):
             normalize_fonts(work)   # 字体兜底：未装字族→默认CJK（普惠体），汉字不回退
             normalize_font_sizes(work)  # ★ 段内字号统一（治同段忽大忽小）
             normalize_tables(work)      # ★ 表格自适应：列宽自动布局+表宽100%
-            # 图片内嵌 OCR 翻译暂时停用（产品决策 2026-08-25）：避免半译状态破坏观感
         docx_to_pdf(work, out_path)
         print(f"OK: {out_path}")
     finally:
@@ -586,13 +323,6 @@ def main():
     mode = argv[0]
     if mode == "extract" and len(argv) >= 3:
         cmd_extract(argv[1], argv[2]); return
-    if mode == "pageocr" and len(argv) >= 4:
-        raw = sys.stdin.read()
-        try:
-            data = json.loads(raw)
-        except Exception:
-            data = {}
-        cmd_pageocr_apply(argv[1], argv[2], argv[3], data.get("translations", {})); return
     if mode == "apply" and len(argv) >= 4:
         raw = sys.stdin.read()
         try:
