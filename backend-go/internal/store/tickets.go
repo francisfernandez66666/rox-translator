@@ -272,3 +272,17 @@ func (s *Store) CancelTicket(id int64) error {
 	}
 	return nil
 }
+
+// RequeueStalledTickets 将超时无进展的 in_progress 工单重置为 queued（断点续传）。
+// 返回受影响行数。updated_at 由各步骤写入持续刷新，故“20 分钟未动”即视为卡死。
+func (s *Store) RequeueStalledTickets(stale time.Duration) (int64, error) {
+	cut := time.Now().Add(-stale).Format(time.RFC3339)
+	res, err := s.db.Exec(
+		"UPDATE tickets SET status='queued', updated_at=? WHERE status='in_progress' AND updated_at < ?",
+		time.Now().Format(time.RFC3339), cut)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}

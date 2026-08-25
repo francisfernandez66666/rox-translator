@@ -9,6 +9,7 @@
 package engine
 
 import (
+	"log"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1248,6 +1249,11 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 	if len(texts) == 0 {
 		return result
 	}
+
+	log.Printf("[llm-batch] start lang=%s segs=%d", targetLang, len(texts))
+	defer func(t0 time.Time) {
+		log.Printf("[llm-batch] done  lang=%s segs=%d took=%s", targetLang, len(texts), time.Since(t0).Round(time.Millisecond))
+	}(time.Now())
 
 	// 动态批大小
 	avgLen := 0

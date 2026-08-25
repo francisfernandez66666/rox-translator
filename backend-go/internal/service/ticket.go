@@ -265,6 +265,25 @@ func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) erro
 // 多文件工单（ticket_files 表有行）：逐文件处理，各自记录产物/失败原因；
 // 全部失败才置工单失败。单文件旧工单走 tickets.file_path 历史路径。
 // mode 透传：fast 模式跳过 KB 匹配（纯模型直翻），pro 保持知识库链路。
+
+// StartStallSweep 卡死工单巡检：每 5 分钟扫描 in_progress 且 updated_at 超过 20 分钟的工单，
+// 重置为 queued 触发断点续传（worker 收尾前已有取消复查，重排安全）。防信号量饿死类静默卡死。
+func (s *TicketService) StartStallSweep() {
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		for range t.C {
+			n, err := s.Store.RequeueStalledTickets(20 * time.Minute)
+			if err != nil {
+				continue
+			}
+			if n > 0 {
+				s.Store.CreateAlert(0, "warning", "stall",
+					fmt.Sprintf("检测到 %d 个翻译卡死工单（>20min 无进展），已自动重新排队续跑", n))
+			}
+		}
+	}()
+}
+
 func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) error {
 	langs := parseLangs(t.TargetLangs)
 	mode := t.Mode // fast | pro（空=pro）
