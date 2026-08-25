@@ -11,7 +11,7 @@
       <h3>🔒 {{ t('pwd.title') }}</h3>
       <p class="fb-hint">{{ tpl('pwd.hint', { user: username }) }}</p>
 
-      <input v-model="email" :placeholder="t('login.boundEmail')" class="fb-input" />
+      <input v-model="email" :readonly="!!props.email" :title="props.email ? t('pwd.emailBound') : ''" :placeholder="t('login.boundEmail')" class="fb-input" />
       <div class="pwd-code-row">
         <input v-model="code" :placeholder="t('login.verificationCode')" class="fb-input pwd-code-input" />
         <button class="ad-btn" :disabled="cooldown > 0 || !canSend" @click="sendCode">

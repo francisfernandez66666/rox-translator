@@ -7,6 +7,7 @@
 package engine
 
 import (
+	"time"
 	"log"
 	"context"
 	"fmt"
@@ -268,7 +269,11 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		}
 		// ★ 硬闸重试（方案语义）：对缺失段「重启 LLM 翻译」——每段独立全新调用
         //    初翻模型（绕过 KB/缓存），最多 2 轮；仍回显则保留原文并计入告警。
-		for attempt := 1; attempt <= 2; attempt++ {
+		// ★ 不设轮数上限：直到全部译出或任务超时/取消为止（硬闸语义）
+		for attempt := 1; ; attempt++ {
+			if ctx.Err() != nil {
+				break
+			}
 			still := []string{}
 			for _, t := range texts {
 				if _, ok := langTranslations[lc][t]; !ok {
@@ -279,6 +284,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				break
 			}
 			log.Printf("[tm-hardgate] lang=%s round=%d 重启LLM重译 %d 段", lc, attempt, len(still))
+			time.Sleep(500 * time.Millisecond) // 轮间间隔，防高频打爆供应商
 			for _, m := range still {
 				r, err := e.TranslateOne(ctx, m, []string{lc}, false, config.StageAIInitial)
 				if err != nil {

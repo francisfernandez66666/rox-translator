@@ -136,6 +136,8 @@ const baseZh: Dict = {
   'login.forgotSub': '输入用户名或绑定邮箱，验证码将发送到邮箱',
   'login.boundEmail': '绑定邮箱',
   'login.sendCode': '发送验证码',
+  'pwd.emailBound': '已绑定邮箱（自动带入，不可修改）',
+  'pwd.emailBoundEn': '',
   'login.emailCode': '邮箱验证码',
   'login.codeResend': '{n}s 后重发',
   'login.verificationCode': '6 位验证码',
