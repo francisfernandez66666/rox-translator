@@ -49,10 +49,6 @@
       </div>
     </header>
 
-    <!-- ⚠️ 临时调试条（验证后删除） -->
-    <div style="position:fixed;top:0;left:0;z-index:99999;background:#e53935;color:#fff;font-size:12px;padding:3px 8px;border-radius:0 0 6px 0">
-      DEBUG pwdOpen={{ pwdOpen }} emailMissing={{ emailMissing }} edit={{ emailEditOpen }}
-    </div>
     <!-- ★ 自助修改密码弹窗（Teleport 挂载 body，居中遮罩） -->
     <EmailBindModal v-if="emailMissing || emailEditOpen" :teleport="false" :dismissible="emailEditOpen && !emailMissing" :current-email="curEmail" @done="onEmailBound" @close="emailEditOpen = false" />
     <PasswordModal
