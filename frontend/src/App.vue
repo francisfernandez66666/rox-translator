@@ -43,9 +43,9 @@
             <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
             <!-- ★ 修改密码：独立 Teleport 弹窗（邮箱验证码流程） -->
             <button v-if="canEnterAdmin" class="menu-item" @click="enterAdmin">🛠 {{ t('menu.adminConsole') }}</button>
-            <button class="menu-item" @click="openPwd" @pointerup="openPwd">🔒 {{ t('pwd.title') }}</button>
-            <button class="menu-item" @click="openEmailEdit" @pointerup="openEmailEdit">📧 {{ t('menu.changeEmail') }}</button>
-            <button class="menu-item menu-logout" @click="logout" @pointerup="logout">⎋ {{ t('common.logout') }}</button>
+            <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
+            <button class="menu-item" @click="openEmailEdit">📧 {{ t('menu.changeEmail') }}</button>
+            <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
           </div>
         </details>
       </div>
@@ -179,14 +179,12 @@ function onEmailBound(addr: string) { emailMissing.value = false; emailEditOpen.
 // openEmailEdit 汉堡入口：拉最新上下文预填当前邮箱
 const emailEditOpen = ref(false)
 let curEmail = ''
-let _emBusy = false
 async function openEmailEdit() {
-  if (_emBusy) return
-  _emBusy = true
+  console.debug('[menu] openEmailEdit fired')
   try {
     const r: any = await meContext()
     curEmail = r?.email || ''
-  } catch { curEmail = '' } finally { setTimeout(() => (_emBusy = false), 300) }
+  } catch { curEmail = '' }
   emailEditOpen.value = true
 }
 const pwdEmail = ref('')
@@ -202,19 +200,15 @@ async function refreshPkgLine() {
   } catch { pkgLine.value = '' }
 }
 
-let _pwdBusy = false
 async function openPwd() {
-  if (_pwdBusy) return
-  _pwdBusy = true
+  console.debug('[menu] openPwd fired')
+  const d = document.querySelector('details.account-menu')
+  if (d) d.removeAttribute('open')
+  pwdOpen.value = true
   try {
-    const d = document.querySelector('details.account-menu')
-    if (d) d.removeAttribute('open')
-    pwdOpen.value = true
-    try {
-      const r: any = await meContext()
-      pwdEmail.value = r?.email || ''
-    } catch { pwdEmail.value = '' }
-  } finally { setTimeout(() => (_pwdBusy = false), 300) }
+    const r: any = await meContext()
+    pwdEmail.value = r?.email || ''
+  } catch { pwdEmail.value = '' }
 }
 
 // onPwdDone 改密成功提示

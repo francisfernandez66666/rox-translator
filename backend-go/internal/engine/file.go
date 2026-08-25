@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/xuri/excelize/v2"
 	"translator/internal/config"
@@ -171,21 +172,46 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			idx  int
 			text string
 		}
+		var kbDoneC int64
 		for _, lc := range kbLangs {
 			wg.Add(1)
 			go func(lc string) {
 				defer wg.Done()
-				// 第一遍：KB 匹配
-				needModelIdx := []int{}
+				// 第一遍：KB 匹配（★ 并行 8 路：长文档逐段串行是耗时大头）
+				kbHitIdx := make([]bool, len(texts))
+				kbVal := make([]string, len(texts))
+								semKB := make(chan struct{}, 8)
+				var wgKB sync.WaitGroup
 				for i, t := range texts {
-					r, _ := e.TranslateOne(ctx, t, []string{lc}, true, config.StageKBMatch)
-					if v, ok := r.Translations[lc]; ok && v != "" {
-						addTrans(lc, t, v)
+					wgKB.Add(1)
+					go func(i int, t string) {
+						defer wgKB.Done()
+						semKB <- struct{}{}
+						defer func() { <-semKB }()
+						r, err := e.TranslateOne(ctx, t, []string{lc}, true, config.StageKBMatch)
+						if err == nil {
+							if v, ok := r.Translations[lc]; ok && v != "" {
+								kbHitIdx[i] = true
+								kbVal[i] = v
+							}
+						}
+						done := atomic.AddInt64(&kbDoneC, 1)
+						if done%20 == 1 || int(done) == len(texts) {
+							log.Printf("[kb-match] lang=%s progress=%d/%d", lc, done, len(texts))
+						}
+					}(i, t)
+				}
+				wgKB.Wait()
+				needModelIdx := []int{}
+				for i := range texts {
+					if kbHitIdx[i] {
+						addTrans(lc, texts[i], kbVal[i])
 						addKBHit()
 					} else {
 						needModelIdx = append(needModelIdx, i)
 					}
 				}
+				log.Printf("[kb-match] lang=%s 命中=%d 走模型=%d", lc, len(texts)-len(needModelIdx), len(needModelIdx))
 				// 第二遍：批量模型补漏
 				if len(needModelIdx) > 0 {
 					needTexts := make([]string, len(needModelIdx))
