@@ -444,6 +444,10 @@ func (s *TicketService) persistTicketTM(tid int64, translations map[string]map[s
 			if src == "" || tgt == "" {
 				continue
 			}
+			// ★ 防污染闸门：原文==译文 的“翻译”是失败产物，入 TM 会被后续 KB 命中回灌成中文残留
+			if src == tgt {
+				continue
+			}
 			_, _ = s.DB.SaveBack(src, map[string]string{lc: tgt}, "file_ticket", tid)
 		}
 	}
