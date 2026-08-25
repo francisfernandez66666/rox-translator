@@ -737,8 +737,9 @@ func (s *Server) handleUpdateEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Email string `json:"email"`
-		Code  string `json:"code"` // 发往新邮箱的验证码（防劫持：必须证明对新邮箱的支配权）
+		Email   string `json:"email"`    // 新邮箱
+		NewCode string `json:"new_code"` // 发往新邮箱的验证码（证明对新邮箱支配权）
+		OldCode string `json:"old_code"` // 发往原绑定邮箱的验证码（防劫持：证明对旧邮箱支配权）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -749,12 +750,22 @@ func (s *Server) handleUpdateEmail(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱格式不正确"})
 		return
 	}
-	if strings.TrimSpace(req.Code) == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请输入邮箱验证码"})
+	if strings.TrimSpace(req.NewCode) == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请输入新邮箱验证码"})
 		return
 	}
-	if !verifyEmailCode(email, req.Code) {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误或已过期"})
+	// ★ 已绑定过邮箱的账号：还需校验「原邮箱」验证码，双重确认防止账号邮箱被单点劫持
+	oldEmail := strings.ToLower(strings.TrimSpace(u.Email))
+	if oldEmail != "" && strings.TrimSpace(req.OldCode) == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请输入原邮箱验证码"})
+		return
+	}
+	if oldEmail != "" && !verifyEmailCode(oldEmail, req.OldCode) {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "原邮箱验证码错误或已过期"})
+		return
+	}
+	if !verifyEmailCode(email, req.NewCode) {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "新邮箱验证码错误或已过期"})
 		return
 	}
 	if other, err := s.Store.GetUserByEmail(email); err == nil && other != nil && other.ID != u.ID {

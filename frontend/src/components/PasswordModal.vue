@@ -107,6 +107,7 @@ async function submit() {
 
 <style scoped>
 .pwd-code-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.fb-input[readonly] { background: #f0f2f5; color: #909399; cursor: not-allowed; }
 .pwd-code-input { flex: 1; }
 .fb-input { width: 100%; box-sizing: border-box; border: 1px solid #d0d7de; border-radius: 8px; padding: 8px; font-size: 13px; margin-bottom: 8px; }
 .fb-msg { margin-top: 6px; font-size: 12.5px; }

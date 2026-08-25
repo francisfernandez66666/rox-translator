@@ -83,6 +83,6 @@ export async function meEmailCode(email: string): Promise<AdminResp & { noop?: b
 }
 
 /** updateEmail 登录用户自助绑定/修改邮箱（需携带发往新邮箱的验证码） */
-export async function updateEmail(email: string, code: string): Promise<AdminResp> {
-  return request('/api/me/update-email', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ email, code }) })
+export async function updateEmail(email: string, code: string, oldCode = ''): Promise<AdminResp> {
+  return request('/api/me/update-email', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ email, new_code: code, old_code: oldCode }) })
 }
