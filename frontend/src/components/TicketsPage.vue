@@ -50,8 +50,8 @@
         <LangMultiSelect v-model="selectedLangs" />
         <!-- ★ 翻译模式：⚡快速（无知识库·初翻+校对）/ 🎓专业校对（全流水线） -->
         <select v-model="qualityMode" class="ad-input" style="width:auto" :title="t('tk.modeTip')">
-          <option value="pro">🎓 {{ t('tk.modePro') }}</option>
-          <option value="fast">⚡ {{ t('tk.modeFast') }}</option>
+          <option value="pro">🎓 {{ t('tk.modeProShort') }}</option>
+          <option value="fast">⚡ {{ t('tk.modeFastShort') }}</option>
         </select>
         <!-- 报价预览：token 区间 + ≈句数 + 余额 -->
         <span v-if="estimate" class="tp-estimate" :class="{ warn: !estimate.sufficient }">
