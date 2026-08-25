@@ -86,7 +86,7 @@
               <button v-if="tk.status === 'draft'" class="ad-btn-sm" @click="run(tk)">{{ t('tk.run') }}</button>
               <button v-if="tk.status === 'completed'" class="ad-btn-sm ad-btn-green" :disabled="downloadingId === tk.id" @click="download(tk)">{{ downloadingId === tk.id ? '⏳' : '⬇' }} {{ downloadingId === tk.id ? '下载中…' : t('tk.download') }}</button>
               <button v-if="tk.status === 'completed'" class="ad-btn-sm" @click="openFeedback(tk)">💬 {{ t('fb.entry') }}</button>
-              <button v-if="tk.status === 'completed'" class="ad-btn-sm ad-btn-red" @click="deleteTicket(tk)">🗑 {{ t('common.delete') }}</button>
+              <button v-if="['completed', 'cancelled'].includes(tk.status)" class="ad-btn-sm ad-btn-red" @click="deleteTicket(tk)">🗑 {{ t('common.delete') }}</button>
               <button v-if="['queued','in_progress'].includes(tk.status)" class="ad-btn-sm ad-btn-red" @click.stop="cancelTicket(tk)">✕ {{ t('tk.cancel') }}</button>
               <button class="ad-btn-sm" @click.stop="toggleDetail(tk, $event)">{{ t('tk.detail') }}</button>
             </td>
