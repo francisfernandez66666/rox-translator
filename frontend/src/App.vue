@@ -179,7 +179,6 @@ function onEmailBound(addr: string) { emailMissing.value = false; emailEditOpen.
 const emailEditOpen = ref(false)
 let curEmail = ''
 async function openEmailEdit() {
-  alert('openEmailEdit')
   console.debug('[menu] openEmailEdit fired')
   menuOpen.value = false
   try {
@@ -202,7 +201,6 @@ async function refreshPkgLine() {
 }
 
 async function openPwd() {
-  alert('openPwd')
   console.debug('[menu] openPwd fired')
   menuOpen.value = false
   const d = document.querySelector('details.account-menu')
