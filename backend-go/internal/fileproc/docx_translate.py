@@ -178,22 +178,71 @@ def translate_docx_text(docx_path: str, translations: dict):
     doc.save(docx_path)
 
 # ---------- 字体归一化 ----------
-CJK_FONT = "Noto Sans CJK SC"
 # OCR 识别语言：源文档可能中英混排，固定多语组合；提取与应用两侧必须一致
 OCR_LANGS = "chi_sim+chi_tra+eng"
 
+_FONT_CACHE = None
+
+def resolve_cjk_font() -> str:
+    """解析输出用 CJK 字体（结果缓存）：
+    ① 环境变量 CJK_FONT_NAME 显式指定；
+    ② 候选链按序取 fontconfig 已安装且覆盖汉字的第一个：
+       苹方(PingFang SC) → Noto Sans CJK SC → 任一 :lang=zh 字体；
+    ③ 兜底 Noto Sans CJK SC。
+    只输出「确实已安装」的字族名，杜绝 LibreOffice 回退到无汉字字体。"""
+    global _FONT_CACHE
+    if _FONT_CACHE:
+        return _FONT_CACHE
+    import os as _os, subprocess as _sp
+    name = _os.environ.get("CJK_FONT_NAME", "").strip()
+    if name and _font_installed(name):
+        _FONT_CACHE = name
+        return name
+    for cand in ("PingFang SC", "PingFang TC", "Noto Sans CJK SC", "Noto Sans CJK JP"):
+        if _font_installed(cand):
+            _FONT_CACHE = cand
+            return cand
+    try:
+        out = _sp.run(["fc-list", ":lang=zh", "family"], capture_output=True, text=True, timeout=10)
+        for ln in out.stdout.splitlines():
+            fam = ln.split(",")[0].strip()
+            if fam:
+                _FONT_CACHE = fam
+                return fam
+    except Exception:
+        pass
+    _FONT_CACHE = "Noto Sans CJK SC"
+    return _FONT_CACHE
+
+def _font_installed(family: str) -> bool:
+    import subprocess as _sp
+    try:
+        r = _sp.run(["fc-list", family, "family"], capture_output=True, text=True, timeout=10)
+        return family.lower() in (r.stdout or "").lower()
+    except Exception:
+        return False
+
 def normalize_fonts(docx_path: str):
-    """把 DOCX 内全部 rFonts（含样式表默认）重写为服务器已装的 CJK 字体。
-    否则 LibreOffice 对未装字体回退 DejaVuSans（无汉字字形），列宽/行高全崩。"""
+    """还原文件时的字体兜底规则：
+    原文声明的字族若服务器未安装且文件未内嵌该字体（pdf2docx 重建的 DOCX
+    一律不携带内嵌字体，故判定条件即「未安装」），则统一改写为 resolve_cjk_font()
+    解析出的默认 CJK 字体（苹方优先，其次 Noto Sans CJK SC）。
+    已安装的字体原样保留；确保任何汉字都不会落入无字形回退路径（方框）。"""
     from docx import Document
+    font = resolve_cjk_font()
     doc = Document(docx_path)
     def rewrite(el):
         n = 0
         for rf in el.iter(W_NS + 'rFonts'):
             for attr in ('ascii', 'hAnsi', 'eastAsia', 'cs'):
                 q = W_NS + attr
-                if rf.get(q):
-                    rf.set(q, CJK_FONT); n += 1
+                cur = rf.get(q)
+                if not cur:
+                    continue
+                if _font_installed(cur):
+                    continue  # 已安装：保留原文体
+                rf.set(q, font)
+                n += 1
         return n
     n = rewrite(doc.element.body)
     try:
@@ -201,6 +250,24 @@ def normalize_fonts(docx_path: str):
     except Exception:
         pass
     doc.save(docx_path)
+
+def _pil_font(size: int):
+    """为 PIL 绘制解析 CJK 字体文件路径（跟随 resolve_cjk_font 的结果）。"""
+    from PIL import ImageFont
+    import subprocess as _sp
+    fam = resolve_cjk_font()
+    try:
+        r = _sp.run(["fc-match", "-f", "%{file}", fam],
+                    capture_output=True, text=True, timeout=10)
+        path = (r.stdout or "").strip()
+        if path and os.path.exists(path):
+            return ImageFont.truetype(path, size)
+    except Exception:
+        pass
+    for cand in ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",):
+        if os.path.exists(cand):
+            return ImageFont.truetype(cand, size)
+    return ImageFont.load_default()
 
 # ---------- 图片 OCR 翻译 ----------
 def _ocr_lines(img, lang: str):
@@ -250,10 +317,7 @@ def ocr_and_translate_image(img_bytes: bytes, translations: dict, lang: str) -> 
             continue
         hit = True
         fs = max(8, int(bh * 0.72))
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", fs)
-        except Exception:
-            font = ImageFont.load_default()
+        font = _pil_font(fs)
         draw.rectangle([x, y, x + bw, y + bh], fill="white")
         draw.text((x, y), trans[:80], fill=(20, 20, 20), font=font)
     return buf_ret(img) if hit else None
