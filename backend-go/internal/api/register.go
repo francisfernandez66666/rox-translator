@@ -121,6 +121,16 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if v, _ := s.Store.GetConfig("registration_review"); v == "1" {
 		reviewMode = true
 	}
+	// ★ 邮箱必填：所有自助注册路径（含受邀加入）都必须提供邮箱——验证码收件与找回密码依赖
+	if strings.TrimSpace(req.Email) == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱为必填项"})
+		return
+	}
+	// 邮箱全局唯一（他人已绑定则拒绝）
+	if other, oerr := s.Store.GetUserByEmail(strings.TrimSpace(req.Email)); oerr == nil && other != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该邮箱已被其他账号绑定"})
+		return
+	}
 	// 邮箱验证开关（email_verify_enabled=1）：自助注册必须先验证邮箱归属（受邀加入不受影响）
 	verifyOn := false
 	if v, _ := s.Store.GetConfig("email_verify_enabled"); v == "1" {

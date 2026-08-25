@@ -26,7 +26,7 @@
           </div>
         </template>
         <!-- 新邮箱 + 验证码 -->
-        <input v-model="email" :placeholder="t('login.emailPlaceholder')"
+        <input v-model="email" :placeholder="t('emailBind.newEmailPlaceholder')"
                class="fb-input" type="email" @keydown.enter="save" />
         <div class="eb-code-row">
           <input v-model="code" :placeholder="t('login.verificationCode')" class="fb-input eb-code-input" @keydown.enter="save" />

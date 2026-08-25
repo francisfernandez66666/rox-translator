@@ -11,7 +11,15 @@
       <h3>🔒 {{ t('pwd.title') }}</h3>
       <p class="fb-hint">{{ tpl('pwd.hint', { user: username }) }}</p>
 
-      <input v-model="email" :readonly="!!props.email" :title="props.email ? t('pwd.emailBound') : ''" :placeholder="t('login.boundEmail')" class="fb-input" />
+      <!-- 已绑定：原绑定邮箱 + 地址（只读灰样式，同修改邮箱弹窗视觉） -->
+      <template v-if="props.email">
+        <div class="eb-old-row">
+          <span class="eb-old-label">{{ t('emailBind.oldEmail') }}</span>
+          <input v-model="email" readonly :title="t('pwd.emailBound')" class="fb-input fb-readonly" />
+        </div>
+      </template>
+      <!-- 未绑定：可输入 -->
+      <input v-else v-model="email" :placeholder="t('login.boundEmail')" class="fb-input" />
       <div class="pwd-code-row">
         <input v-model="code" :placeholder="t('login.verificationCode')" class="fb-input pwd-code-input" />
         <button class="ad-btn" :disabled="cooldown > 0 || !canSend" @click="sendCode">
@@ -108,6 +116,9 @@ async function submit() {
 <style scoped>
 .pwd-code-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .fb-input[readonly] { background: #f0f2f5; color: #909399; cursor: not-allowed; }
+.eb-old-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.eb-old-label { font-size: 12px; color: #666; white-space: nowrap; }
+.fb-readonly { flex: 1; }
 .pwd-code-input { flex: 1; }
 .fb-input { width: 100%; box-sizing: border-box; border: 1px solid #d0d7de; border-radius: 8px; padding: 8px; font-size: 13px; margin-bottom: 8px; }
 .fb-msg { margin-top: 6px; font-size: 12.5px; }

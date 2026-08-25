@@ -271,6 +271,11 @@ async function doRegister() {
     regMsg.value = '请填写邮箱并输入验证码'
     return
   }
+  // ★ 邮箱必填（验证码收件与找回密码依赖）
+  if (!reg.value.email.trim()) {
+    regMsg.value = t('login.emailPlaceholder')
+    return
+  }
   // 人机验证开启时：必须先完成验证
   if (captchaOn.value && !captchaToken.value) {
     regMsg.value = '请先完成人机验证'
