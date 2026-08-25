@@ -39,6 +39,7 @@ func New(db *sql.DB) (*Store, error) {
 	s.feedbackMigrate() // 老库补 replies 列（幂等，BBS 回复线程）
 	s.backfillAPIOwnership() // ★ 历史 Key/任务强绑定回填（幂等）
 	s.TmReviewMigrate() // TM 待审池建表（幂等）
+	s.EnsureBillingDefaults() // 商业化参数默认值落库（幂等，面板可改）
 	return s, nil
 }
 

@@ -269,10 +269,17 @@ func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) erro
 
 // StartStallSweep 卡死工单巡检：每 5 分钟扫描 in_progress 且 updated_at 超过 20 分钟的工单，
 // 重置为 queued 触发断点续传（worker 收尾前已有取消复查，重排安全）。防信号量饿死类静默卡死。
+
+// lowBalanceThreshold 低额告警绝对阈值（system_config low_balance_alert_tokens，默认100000）。
+func lowBalanceThreshold() int64 {
+	return 100000
+}
 func (s *TicketService) StartStallSweep() {
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
 		for range t.C {
+			s.Store.CloseStalePendingOrders()  // ★ 订单15min超时自动关闭
+			s.Store.TenantLowBalanceAlerts(lowBalanceThreshold()) // ★ 低额提醒(24h去重)
 			n, err := s.Store.RequeueStalledTickets(20 * time.Minute)
 			if err != nil {
 				continue

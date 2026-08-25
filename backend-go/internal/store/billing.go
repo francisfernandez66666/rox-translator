@@ -7,6 +7,8 @@
 package store
 
 import (
+	"strconv"
+	"fmt"
 	"database/sql"
 	"time"
 )
@@ -732,4 +734,77 @@ func (s *Store) UsageAllByUser() (map[int64]int64, error) {
 		}
 	}
 	return out, nil
+}
+
+// ============ 商业化参数与巡检（Commit B） ============
+
+// EnsureBillingDefaults 商业化参数默认值落库（幂等；后台面板可改）。
+func (s *Store) EnsureBillingDefaults() {
+	defaults := [][2]string{
+		{"free_trial_tokens", "300000"},
+		{"free_trial_days", "14"},
+		{"order_pending_timeout_min", "15"},
+		{"low_balance_alert_tokens", "100000"},
+	}
+	for _, kv := range defaults {
+		s.db.Exec("INSERT INTO system_config (key,value) SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM system_config WHERE key=?)", kv[0], kv[1], kv[0])
+	}
+}
+
+// CloseStalePendingOrders 关闭超时未支付订单：pending 超过 order_pending_timeout_min 自动 cancelled。
+func (s *Store) CloseStalePendingOrders() int64 {
+	minutes := int64(15)
+	if v, _ := s.GetConfig("order_pending_timeout_min"); v != "" {
+		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+			minutes = x
+		}
+	}
+	cut := time.Now().Add(-time.Duration(minutes) * time.Minute).Format(time.RFC3339)
+	res, err := s.db.Exec("UPDATE orders SET status='cancelled' WHERE status='pending' AND created_at < ?", cut)
+	if err != nil {
+		return 0
+	}
+	n, _ := res.RowsAffected()
+	return n
+}
+
+// TenantLowBalanceAlerts 低额提醒：enforced 租户剩余合计（台账+永久）低于阈值时告警（24h 去重）。
+func (s *Store) TenantLowBalanceAlerts(threshold int64) {
+	enforced := false
+	if v, _ := s.GetConfig("billing_enforced"); v == "1" {
+		enforced = true
+	}
+	rows, err := s.db.Query(`SELECT ba.tenant_id,
+		COALESCE(ba.balance,0) + COALESCE((SELECT SUM(g.left) FROM quota_grants g
+			WHERE g.tenant_id=ba.tenant_id AND g.left>0 AND g.expires_at > ?),0) AS remain
+		FROM balance_accounts ba WHERE ba.tenant_id>0`,
+		time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	type row struct {
+		tid, remain int64
+	}
+	dayAgo := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
+	var list []row
+	for rows.Next() {
+		var r row
+		if rows.Scan(&r.tid, &r.remain) == nil {
+			list = append(list, r)
+		}
+	}
+	for _, r := range list {
+		if r.remain >= threshold {
+			continue
+		}
+		var cnt int
+		s.db.QueryRow(`SELECT COUNT(*) FROM alerts WHERE tenant_id=? AND type='low_balance'
+			AND created_at>?`, r.tid, dayAgo).Scan(&cnt)
+		if cnt == 0 {
+			s.CreateAlert(r.tid, "warning", "low_balance",
+				fmt.Sprintf("额度即将耗尽：当前剩余 %d token，请及时充值或续订套餐", r.remain))
+		}
+	}
+	_ = enforced // 预留：灰度期同样提醒，仅不停服
 }
