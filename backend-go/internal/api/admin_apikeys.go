@@ -48,7 +48,12 @@ func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "name 不能为空"})
 		return
 	}
-	plain, err := s.Store.CreateAPIKey(s.effTenant(r, u), u.ID, req.Name, req.Perms, req.DailyLimit)
+	tidForKey := s.effTenant(r, u)
+	if tidForKey <= 0 {
+		// ★ 平台上下文签发的 Key 必须落到具体租户：取首个活跃租户（否则任务归属悬空导致回读404）
+		tidForKey = s.Store.FirstActiveTenantID()
+	}
+	plain, err := s.Store.CreateAPIKey(tidForKey, u.ID, req.Name, req.Perms, req.DailyLimit)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return

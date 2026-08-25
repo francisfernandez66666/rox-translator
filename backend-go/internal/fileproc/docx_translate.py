@@ -179,6 +179,9 @@ def translate_docx_text(docx_path: str, translations: dict):
 
 # ---------- 字体归一化 ----------
 # OCR 识别语言：源文档可能中英混排，固定多语组合；提取与应用两侧必须一致
+# 字体解析结果缓存（进程级）
+_FONT_CACHE = None
+
 def resolve_cjk_font() -> str:
     """解析输出用 CJK 字体（结果缓存）：
     ① 环境变量 CJK_FONT_NAME 显式指定；
@@ -265,8 +268,63 @@ def _pil_font(size: int):
             return ImageFont.truetype(cand, size)
     return ImageFont.load_default()
 
+
+# ---------- 段内字号统一 ----------
+def normalize_font_sizes(docx_path: str) -> int:
+    """每段以出现最多的字号为准对齐 w:sz/w:szCs，治同段忽大忽小。"""
+    from docx import Document
+    from collections import Counter
+    doc = Document(docx_path)
+    fixed = 0
+    for para in iter_all_paragraphs(doc):
+        szs = [el.get(W_NS + 'val') for el in para._p.iter(W_NS + 'sz')]
+        szs = [v for v in szs if v and v.isdigit()]
+        if len(set(szs)) <= 1:
+            continue
+        dominant = Counter(szs).most_common(1)[0][0]
+        for tag in ('sz', 'szCs'):
+            for el in para._p.iter(W_NS + tag):
+                v = el.get(W_NS + 'val')
+                if v and v != dominant:
+                    el.set(W_NS + 'val', dominant)
+                    fixed += 1
+    doc.save(docx_path)
+    return fixed
+
 # ---------- 整页 OCR 模式（图形化/扫描版 PDF 兜底） ----------
 PAGE_TEXT_MIN = 200  # 平均每页文本层字符低于此值视为图形化文档
+
+
+# ---------- 表格自适应 ----------
+def normalize_tables(docx_path: str):
+    """表格自适应：总宽100% + layout=autofit；行高统一 atLeast（可撑开）；
+    删除单元格固定宽 tcW（交由 autofit 依内容分配），治译文裁剪/溢出。"""
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    doc = Document(docx_path)
+    for tbl in doc.element.body.iter(qn('w:tbl')):
+        tblPr = tbl.find(qn('w:tblPr'))
+        if tblPr is None:
+            tblPr = OxmlElement('w:tblPr')
+            tbl.insert(0, tblPr)
+        layout = tblPr.find(qn('w:tblLayout'))
+        if layout is None:
+            layout = OxmlElement('w:tblLayout')
+            tblPr.append(layout)
+        layout.set(qn('w:type'), 'autofit')
+        tw = tblPr.find(qn('w:tblW'))
+        if tw is None:
+            tw = OxmlElement('w:tblW')
+            tblPr.append(tw)
+        tw.set(qn('w:w'), '5000')
+        tw.set(qn('w:type'), 'pct')
+    for trPr in doc.element.body.iter(qn('w:trPr')):
+        for h in trPr.findall(qn('w:trHeight')):
+            h.set(qn('w:hRule'), 'atLeast')
+    for tcW in list(doc.element.body.iter(qn('w:tcW'))):
+        tcW.getparent().remove(tcW)
+    doc.save(docx_path)
 
 # ---------- extract / apply ----------
 def cmd_extract(pdf_path: str, cache_docx: str):
