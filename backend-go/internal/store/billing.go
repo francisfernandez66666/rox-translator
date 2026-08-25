@@ -542,6 +542,15 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		if err != nil {
 			return err
 		}
+		// ★ 按包类型分流（白皮书 §4.1）：
+		if pkg.PType == "paid" {
+			// 付费订阅：入台账，t+30 天滚动
+			return s.CreateQuotaGrant(tid, "plan", tokens, time.Now().Add(30*24*time.Hour), "order", orderID)
+		}
+		if pkg.PType == "increment" {
+			// 充值包：入永久余额
+			return s.Charge(tid, tokens)
+		}
 		_, err = s.GrantPackageSentences(tid, pkg)
 		return err
 	}
