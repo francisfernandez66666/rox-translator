@@ -24,15 +24,17 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// jwtSecret JWT 签名密钥默认值；init 中允许 JWT_SECRET 环境变量覆盖（多实例部署需一致）。
 var jwtSecret = "trans-platform-jwt-secret-2026"
 
+// init 启动时读取 JWT_SECRET 环境变量覆盖默认签名密钥。
 func init() {
 	if v := os.Getenv("JWT_SECRET"); v != "" {
 		jwtSecret = v
 	}
 }
 
-// RandomSecret 业务逻辑实现，详见函数体与调用处注释。
+// RandomSecret 生成 32 字节随机数的 hex 字符串（API Key 等高熵凭证用）；随机源不可用时回退 jwtSecret。
 func RandomSecret() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -41,6 +43,7 @@ func RandomSecret() string {
 	return hex.EncodeToString(b)
 }
 
+// Claims JWT 载荷：uid=用户 ID、tid=租户 ID、username/role 冗余供无库鉴权、exp=过期时间戳（秒）。
 type Claims struct {
 	UserID   int64  `json:"uid"`
 	TenantID int64  `json:"tid"`
@@ -49,23 +52,26 @@ type Claims struct {
 	Exp      int64  `json:"exp"`
 }
 
+// ctxUserKey context 键类型（私有，防跨包碰撞），承载当前登录用户。
 type ctxUserKey struct{}
 
-// UserFromContext 业务逻辑实现，详见函数体与调用处注释。
+// UserFromContext 从请求上下文取当前登录用户（中间件注入；未登录返回 nil）。
 func UserFromContext(ctx context.Context) *User {
 	v, _ := ctx.Value(ctxUserKey{}).(*User)
 	return v
 }
 
-// WithUser 业务逻辑实现，详见函数体与调用处注释。
+// WithUser 将登录用户写入 context（登录中间件使用）。
 func WithUser(ctx context.Context, u *User) context.Context {
 	return context.WithValue(ctx, ctxUserKey{}, u)
 }
 
+// b64Encode base64url 编码（无填充，JWT 标准段格式）。
 func b64Encode(b []byte) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+// b64Decode base64url 解码（对应 b64Encode）。
 func b64Decode(s string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(s)
 }
@@ -90,13 +96,15 @@ func Sign(u *User, ttl time.Duration) (string, error) {
 	return signingInput + "." + b64Encode(sig), nil
 }
 
+// signHS256 计算 HMAC-SHA256 签名（JWT 第三段）。
+// 参数：input=待签名内容（header.payload）；secret=签名密钥。
 func signHS256(input, secret string) []byte {
 	m := hmac.New(sha256.New, []byte(secret))
 	m.Write([]byte(input))
 	return m.Sum(nil)
 }
 
-// Verify 业务逻辑实现，详见函数体与调用处注释。
+// Verify 校验 JWT：三段式结构→HMAC 签名比对（恒定时间）→载荷解析→过期检查；任一失败返回错误。
 func Verify(token string) (*Claims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -123,7 +131,7 @@ func Verify(token string) (*Claims, error) {
 
 // ============ 角色等级 ============
 
-// RoleLevel 业务逻辑实现，详见函数体与调用处注释。
+// RoleLevel 角色→权限等级映射：超管/admin=4、租管/approver=3、部门管理=2、普通用户=1。
 func RoleLevel(role string) int {
 	switch role {
 	case RoleSuperAdmin, RoleAdmin:
@@ -152,7 +160,7 @@ func IsDeptAdmin(u *User) bool {
 	return u != nil && RoleLevel(u.Role) >= 2
 }
 
-// RequireRole 业务逻辑实现，详见函数体与调用处注释。
+// RequireRole 权限闸门：未登录报错；角色等级低于 required 时返回「权限不足」中文错误。
 func RequireRole(u *User, required int) error {
 	if u == nil {
 		return errors.New("未登录")
@@ -163,6 +171,7 @@ func RequireRole(u *User, required int) error {
 	return nil
 }
 
+// roleName 权限等级→中文角色名（错误提示用）。
 func roleName(level int) string {
 	switch level {
 	case 4:
@@ -178,7 +187,7 @@ func roleName(level int) string {
 
 // ============ 密码 ============
 
-// PasswordHash 业务逻辑实现，详见函数体与调用处注释。
+// PasswordHash 密码哈希：bcrypt（DefaultCost）；bcrypt 异常时回退带 $sha256$ 前缀的旧哈希（保证可校验）。
 func PasswordHash(password string) string {
 	h, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -187,7 +196,7 @@ func PasswordHash(password string) string {
 	return string(h)
 }
 
-// CheckPassword 业务逻辑实现，详见函数体与调用处注释。
+// CheckPassword 校验密码：按哈希前缀分派——bcrypt($2a/$2b/$2c) / $sha256$ 旧格式 / 无前缀最早期 salt 格式。
 func CheckPassword(hash, password string) bool {
 	switch {
 	case strings.HasPrefix(hash, "$2a$") || strings.HasPrefix(hash, "$2b$") || strings.HasPrefix(hash, "$2c$"):
@@ -199,24 +208,25 @@ func CheckPassword(hash, password string) bool {
 	}
 }
 
-// NeedMigrateHash 业务逻辑实现，详见函数体与调用处注释。
+// NeedMigrateHash 判断密码哈希是否需要升级为 bcrypt（非 $2 开头即旧格式，登录成功后应重哈希）。
 func NeedMigrateHash(hash string) bool {
 	return !(strings.HasPrefix(hash, "$2a$") || strings.HasPrefix(hash, "$2b$") || strings.HasPrefix(hash, "$2c$"))
 }
 
+// legacyHash 旧版无盐 SHA256→base64（$sha256$ 前缀格式的内容体）。
 func legacyHash(password string) string {
 	sum := sha256.Sum256([]byte(password))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-// PasswordHashLegacy 业务逻辑实现，详见函数体与调用处注释。
+// PasswordHashLegacy 最早期 salt+SHA256 哈希（仅用于存量账号校验，新密码一律 bcrypt）。
 func PasswordHashLegacy(password string) string {
 	s := "trans-salt:" + password
 	m := sha256.Sum256([]byte(s))
 	return base64.RawURLEncoding.EncodeToString(m[:])
 }
 
-// BearerToken 业务逻辑实现，详见函数体与调用处注释。
+// BearerToken 从 Authorization 头提取 Bearer token（无前缀或不匹配返回空串）。
 func BearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	if strings.HasPrefix(h, "Bearer ") {

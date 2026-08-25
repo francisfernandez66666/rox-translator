@@ -391,6 +391,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 
 // ============ 从 prompt 解析"其他语言" ============
 
+// otherLangRegexes 从用户 prompt 中识别「目标语言指令」的正则集合（中英文常见句式），
+// 命中后捕获组即目标语言名，用于无显式语言参数时推断输出语言。
 var otherLangRegexes = []*regexp.Regexp{
 	// 中文指令：翻译成/译为/翻译为 + 语言名 + 冒号
 	regexp.MustCompile(`(?:翻译成|翻成|译成|翻译为|翻为|译为)\s*(.+?)\s*[：:]\s*`),

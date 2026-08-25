@@ -56,9 +56,11 @@ func (s *Server) requireDeptAdmin(r *http.Request) (*store.User, error) {
 	return u, nil
 }
 
+// errNotLogin 预置的「未登录」错误（各鉴权入口复用，避免重复构造）。
 var errNotLogin = &apiErr{"未登录"}
 
-type apiErr struct{ s string } // s: 错误描述信息（用于返回给前端的错误消息）
+// apiErr 携带中文描述的轻量错误类型。s: 错误描述信息（用于返回给前端的错误消息）。
+type apiErr struct{ s string }
 
 // Error 实现 error 接口：返回错误描述信息。
 func (e *apiErr) Error() string { return e.s }

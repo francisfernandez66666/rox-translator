@@ -153,9 +153,11 @@ function fmtNum(n: number): string {
 }
 // ★ 反馈弹窗目标（已完成工单）
 const feedbackTarget = ref<any>(null)
+// openFeedback 打开针对指定工单的反馈弹窗（携带工单 ID 与翻译模式）
 function openFeedback(tk: any) {
   feedbackTarget.value = { type: 'ticket', ticket_id: tk.id, mode: tk.mode || 'pro' }
 }
+// onFeedbackSubmitted 反馈提交成功提示
 function onFeedbackSubmitted() {
   alert(t('fb.done'))
 }
@@ -367,6 +369,7 @@ async function download(tk: any) {
 // 展开/收起步骤进度
 // 进度气泡轮询：打开期间对运行中工单每 3s 刷新详情（流式百分比）
 let detailTimer: ReturnType<typeof setInterval> | undefined
+// startDetailPoll 开启详情轮询：打开期间对运行中工单每 3s 刷新（页面隐藏时跳过，完成自动停止）
 function startDetailPoll() {
   stopDetailPoll()
   detailTimer = setInterval(async () => {
@@ -379,6 +382,7 @@ function startDetailPoll() {
     if (stt && !['queued', 'in_progress'].includes(stt)) stopDetailPoll()
   }, 3000)
 }
+// stopDetailPoll 停止详情轮询（关闭气泡/工单完成时调用；卸载兜底防泄漏）
 function stopDetailPoll() { if (detailTimer) { clearInterval(detailTimer); detailTimer = undefined } }
 onUnmounted(stopDetailPoll)
 
@@ -414,6 +418,7 @@ async function load() {
 onMounted(load)
 // 工单进行中每 5s 轮询刷新（★ 卸载时清理，防止多次进出页面叠加轮询器）
 const pollTimer: ReturnType<typeof setInterval> = setInterval(pollActive, 5000)
+// pollActive 列表轮询体：页面可见且存在排队/进行中工单时刷新列表
 function pollActive() {
   if (document.hidden) return // 页面不可见时跳过，省资源
   if (tickets.value.some(x => ['queued', 'in_progress'].includes(x.status))) load()

@@ -31,6 +31,7 @@ type Check struct {
 	Detail string `json:"detail"` // 失败时的详情说明
 }
 
+// 硬校验用正则集合（包级复用，避免每次编译）。
 var (
 	reCJK     = regexp.MustCompile(`\p{Han}`)             // 匹配汉字（检测残留源语言）
 	reGarbled = regexp.MustCompile(`[\x{FFFD}]|(\?{4,})`) // 匹配替换符乱码或连续问号

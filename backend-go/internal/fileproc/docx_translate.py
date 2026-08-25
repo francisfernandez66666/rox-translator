@@ -1,23 +1,14 @@
 #!/usr/bin/env python3
-"""docx_translate.py — PDF→DOCX→翻译→DOCX→PDF（保留排版/图片；图片内文字OCR翻译）
+"""docx_translate.py — PDF→DOCX→翻译→DOCX→PDF（保留排版/图片）
 
 子命令：
   extract <pdf> <cache_docx>          转换一次并输出段落文本JSON（供LLM翻译的键，与替换目标完全一致）
-  apply   <cache_docx> <out_pdf> <lang>  从stdin读translations JSON，在缓存DOCX副本上替换（含图片OCR）后转PDF
+  apply   <cache_docx> <out_pdf> <lang>  从stdin读translations JSON，在缓存DOCX副本上替换后转PDF
   legacy  <in_path> <out_path> <lang>    单阶段直通模式（回退用）
 """
 import sys, os, io, json, re, subprocess, tempfile, shutil
 from pathlib import Path
 
-TESS_LANG_MAP = {
-    "zh": "chi_sim+chi_tra", "en": "eng", "ja": "jpn", "ko": "kor",
-    "fr": "fra", "de": "deu", "es": "spa", "ru": "rus", "ar": "ara",
-    "pt": "por", "it": "ita", "nl": "nld", "pl": "pol", "tr": "tur",
-    "th": "tha", "vi": "vie", "hi": "hin",
-}
-
-def tess_lang(code: str) -> str:
-    return TESS_LANG_MAP.get((code or "")[:2].lower(), "eng")
 
 def run(cmd: list, timeout=180):
     subprocess.run(cmd, check=True, timeout=timeout, capture_output=True)
@@ -178,7 +169,6 @@ def translate_docx_text(docx_path: str, translations: dict):
     doc.save(docx_path)
 
 # ---------- 字体归一化 ----------
-# OCR 识别语言：源文档可能中英混排，固定多语组合；提取与应用两侧必须一致
 # 字体解析结果缓存（进程级）
 _FONT_CACHE = None
 
@@ -290,10 +280,6 @@ def normalize_font_sizes(docx_path: str) -> int:
                     fixed += 1
     doc.save(docx_path)
     return fixed
-
-# ---------- 整页 OCR 模式（图形化/扫描版 PDF 兜底） ----------
-PAGE_TEXT_MIN = 200  # 平均每页文本层字符低于此值视为图形化文档
-
 
 # ---------- 表格自适应 ----------
 def normalize_tables(docx_path: str):

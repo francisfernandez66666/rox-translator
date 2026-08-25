@@ -15,7 +15,9 @@ import (
 	"time"
 )
 
+// userCols 用户表查询列清单（Scan 顺序契约；email 为老库可空列，COALESCE 兜底）。
 const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at"
+// orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
 const orgCols = "id, tenant_id, parent_id, name, type, COALESCE(token_limit,0), created_at, updated_at"
 
 // Store IAM 数据访问层（用户 + 组织）

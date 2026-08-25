@@ -13,7 +13,10 @@ import (
 	"time"
 )
 
-// ReferralMigrate 列迁移（幂等）。
+// ReferralMigrate 邀请裂变库表迁移（幂等，随 Store.New 调用）：
+//   - users 表补 ref_code（个人邀请码，非空唯一）/ referred_by（邀请人 UID，0=未绑定）两列
+//   - referral_rewards 奖励流水表：type=trial_stack(体验叠加)/paid_perm(付费永久奖励)
+//   - idx_rr_pair 支撑同对(邀请人,被邀人,类型)去重查询
 func (s *Store) ReferralMigrate() {
 	s.db.Exec("ALTER TABLE users ADD COLUMN ref_code TEXT DEFAULT ''")
 	s.db.Exec("ALTER TABLE users ADD COLUMN referred_by INTEGER DEFAULT 0")
@@ -27,7 +30,9 @@ func (s *Store) ReferralMigrate() {
 	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_rr_pair ON referral_rewards(inviter_uid, invitee_uid, type)")
 }
 
-// EnsureRefCode 确保用户拥有个人邀请码。
+// EnsureRefCode 确保用户拥有个人邀请码（懒生成：首次调用时分配）。
+// 生成规则：4 字节随机数→8 位 hex；唯一索引冲突则重新生成直至可用。
+// 参数：uid=用户 ID；返回：该用户的个人邀请码（空值不可能出现，除非用户不存在）。
 func (s *Store) EnsureRefCode(uid int64) string {
 	var code string
 	s.db.QueryRow("SELECT COALESCE(ref_code,'') FROM users WHERE id=?", uid).Scan(&code)
@@ -147,17 +152,19 @@ func (s *Store) ReferralPaidReward(inviteeUID int64) {
 	_ = s.RewardPaidPermanent(inviteeUID, tokens)
 }
 
-// ListReferrals 我的邀请记录（含状态推导）。
+// ReferralRecord 一条邀请奖励记录（ListReferrals 行结构）。
 type ReferralRecord struct {
-	InviteeUID  int64  `json:"invitee_uid"`
-	InviteeName string `json:"invitee_name"`
-	Type        string `json:"type"`
-	Tokens      int64  `json:"tokens"`
-	Days        int64  `json:"days"`
-	Paid        bool   `json:"paid"`
-	CreatedAt   string `json:"created_at"`
+	InviteeUID  int64  `json:"invitee_uid"`  // 被邀人用户 ID
+	InviteeName string `json:"invitee_name"` // 被邀人显示名（无则 #）
+	Type        string `json:"type"`         // 奖励类型：trial_stack=体验叠加 / paid_perm=付费永久奖励
+	Tokens      int64  `json:"tokens"`       // 奖励 token 数
+	Days        int64  `json:"days"`         // 叠加天数（仅体验类有值）
+	Paid        bool   `json:"paid"`         // 被邀人是否已产生付费奖励（状态推导用）
+	CreatedAt   string `json:"created_at"`   // 发放时间
 }
 
+// ListReferrals 我的邀请记录（最新在前，最多 100 条）。
+// 参数：inviterUID=邀请人用户 ID；返回：奖励记录列表（查询失败返回 nil，前端按空态处理）。
 func (s *Store) ListReferrals(inviterUID int64) []*ReferralRecord {
 	rows, err := s.db.Query(`SELECT r.invitee_uid, COALESCE(u.display_name,u.username,'#'), r.type, r.tokens, r.days, r.created_at
 		FROM referral_rewards r LEFT JOIN users u ON u.id=r.invitee_uid
@@ -175,6 +182,3 @@ func (s *Store) ListReferrals(inviterUID int64) []*ReferralRecord {
 	}
 	return out
 }
-
-var _ = sql.ErrNoRows
-var _ = time.Now

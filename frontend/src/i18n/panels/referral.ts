@@ -21,6 +21,7 @@ export const zh: Record<string, string> = {
   'referral.empty': '暂无邀请记录，快去邀请好友吧',
 }
 
+// 英文字典（与上方 zh 同键一一对应）
 export const en: Record<string, string> = {
   'admin.referral': '🔗 Referrals',
   'referral.title': 'Invite Friends · Earn More',

@@ -29,8 +29,10 @@ type TmReview struct {
 	CreatedAt  string `json:"created_at"`
 }
 
+// tmReviewCols TM 待审池查询列清单（Scan 顺序契约；hit_count/reviewer/reviewed_at 为可空列，COALESCE 兜底）。
 const tmReviewCols = "id, tenant_id, zh, lang, trans, source, ref_type, ref_id, COALESCE(hit_count,0), status, COALESCE(reviewer,''), COALESCE(reviewed_at,''), created_at"
 
+// tmHash 原文指纹（SHA256 前 8 字节 hex）：同句去重与 hit_count 累加键。
 func tmHash(v string) string { h := sha256.Sum256([]byte(v)); return hex.EncodeToString(h[:8]) }
 
 // TmReviewMigrate 建表（幂等）。

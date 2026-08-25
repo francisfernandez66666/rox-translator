@@ -81,7 +81,9 @@ export function clearAuth() {
 
 // ★ 跨面板导航信号：消息中心点击 feedback 类通知 → 跳转问题反馈面板并打开对应详情
 export const pendingPanel = ref<string>('')
+// 待打开的反馈详情 ID（Feedback.vue 挂载时消费后清零）
 export const pendingFeedbackId = ref<number>(0)
+// gotoFeedbackPanel 发起跳转：置目标面板为问题反馈并携带待打开的反馈 ID
 export function gotoFeedbackPanel(fid: number) {
   pendingPanel.value = 'tickets'
   pendingFeedbackId.value = fid

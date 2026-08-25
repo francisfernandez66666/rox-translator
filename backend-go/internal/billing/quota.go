@@ -31,7 +31,8 @@ type Quota struct {
 
 // quotaByTenant 租户 ID → 配额对象（内存缓存）
 var quotaByTenant = map[int64]*Quota{}
-var quotaMu sync.Mutex // 保护 quotaByTenant 的互斥锁
+// quotaMu 保护 quotaByTenant 的互斥锁（并发取配额对象时防竞态）。
+var quotaMu sync.Mutex
 
 // getQuota 获取指定租户的配额对象（不存在则用默认上限创建）
 func getQuota(tid int64) *Quota {
@@ -203,7 +204,8 @@ func (s *Service) CheckBalance(tid int64) error {
 	return nil
 }
 
-type quotaErr struct{ s string } // 配额类错误（含今日用量超限/余额不足）
+// quotaErr 配额类错误（含今日用量超限/余额不足）。s: 面向用户的中文错误描述。
+type quotaErr struct{ s string }
 
 // Error 实现 error 接口：返回配额错误描述信息。
 func (e *quotaErr) Error() string { return e.s }

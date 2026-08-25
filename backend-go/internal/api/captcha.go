@@ -20,6 +20,7 @@ import (
 	"time"
 )
 
+// turnstileVerifyURL Cloudflare Turnstile 服务端校验端点（captcha_provider=turnstile 时启用）。
 const turnstileVerifyURL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 
 // captchaProvider 读取当前人机验证提供方（小写归一化；空/none 均视为关闭）。

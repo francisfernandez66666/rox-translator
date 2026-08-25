@@ -484,4 +484,5 @@ func (s *Server) handleUsageCost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "costs": costs, "quants": quants})
 }
 
+// 编译期引用占位：保留 strings 导入（模板片段按构建标签条件编译时使用）。
 var _ = strings.TrimSpace

@@ -19,6 +19,7 @@ const (
 	RoleAdmin       = iam.RoleAdmin
 )
 
+// 用户状态常量别名（透传 iam 包：active=启用 / disabled=停用）。
 const (
 	UserActive   = iam.UserActive
 	UserDisabled = iam.UserDisabled

@@ -17,6 +17,8 @@ import (
 	"translator/internal/store"
 )
 
+// requireSuperJSON 超管鉴权（JSON 响应风格）：未登录 401 / 非超管 403，均返回 (nil,false) 终止后续处理。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求；返回: 当前用户与是否放行。
 func (s *Server) requireSuperJSON(w http.ResponseWriter, r *http.Request) (*store.User, bool) {
 	u := s.authUser(r)
 	if u == nil {

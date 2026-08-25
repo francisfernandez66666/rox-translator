@@ -209,6 +209,7 @@ const pwdOpen = ref(false)
 // ★ 登录后强制维护邮箱：meContext 无 email 即弹出（不可关闭），绑定成功自动消失
 const emailMissing = ref(false)
 const emailEditOpen = ref(false)
+// checkEmailBinding 拉取最新上下文：无 email 置强制绑定标记，并同步改密/改邮弹窗预填邮箱
 async function checkEmailBinding() {
   try {
     const r: any = await meContext()
@@ -218,6 +219,7 @@ async function checkEmailBinding() {
   } catch { /* 未登录等场景忽略 */ }
 }
 let curEmail = ''
+// onEmailBound 邮箱绑定/修改成功回调：解除强制弹窗、更新本地缓存地址
 function onEmailBound(addr: string) {
   emailMissing.value = false
   emailEditOpen.value = false

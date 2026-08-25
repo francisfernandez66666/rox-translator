@@ -185,11 +185,14 @@ const submitting = ref(false)
 const fbTab = ref<'feedback' | 'review'>('feedback')
 const reviews = ref<TmReviewItem[]>([])
 const rvFilter = ref('pending')
+// loadReviews 拉取 TM 待审候选（按状态过滤）
 async function loadReviews() {
   const r = await listTmReview(rvFilter.value)
   if (r.success) reviews.value = (r.candidates || []) as any
 }
+// switchReview 切到「记忆审核」子视图并刷新候选
 function switchReview() { fbTab.value = 'review'; loadReviews() }
+// srcLabel 候选来源→中文名
 function srcLabel(src: string) {
   return src === 'bitext' ? '双语文本' : src === 'tmx' ? 'TMX 导入' : src === 'feedback' ? '用户反馈修正' : '次数达标'
 }
@@ -208,11 +211,13 @@ watch(pendingFeedbackId, async fid => {
 })
 // 审核台跳反馈详情：先切回面板信号归零避免循环
 watch(pendingPanel, v => { if (v) pendingPanel.value = '' })
+// doApproveReview 审核通过候选：正式落库为翻译记忆后刷新列表
 async function doApproveReview(c: TmReviewItem) {
   const r = await approveTmReview(c.id)
   if (!r.success) { alert(r.message); return }
   await loadReviews()
 }
+// doRejectReview 驳回候选：废弃不落库后刷新列表
 async function doRejectReview(c: TmReviewItem) {
   const r = await rejectTmReview(c.id)
   if (!r.success) { alert(r.message); return }
@@ -268,10 +273,12 @@ function fmtAt(iso: string): string {
 
 // ===== 审批台（保留） =====
 const approvalTickets = ref<any[]>([])
+// loadApproval 拉取待审批工单列表（审批台）
 async function loadApproval() {
   const r = await approveList()
   if (r.success) approvalTickets.value = (r as any).tickets || []
 }
+// doApprove 执行审批动作：approve=通过 / reject=驳回（附驳回理由与修改建议），成功后刷新
 async function doApprove(t: any, action: 'approve' | 'reject') {
   const r = await approveAction(t.id, action, t._reason || '', t._suggestion || '', '')
   if (!r.success) { alert(r.message); return }

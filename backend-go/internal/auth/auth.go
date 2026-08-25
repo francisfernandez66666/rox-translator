@@ -13,6 +13,7 @@ import (
 	"translator/internal/store"
 )
 
+// Secret JWT 签名密钥（部署侧可用 JWT_SECRET 环境变量覆盖；与 iam 包共享同一来源）。
 var Secret = "trans-platform-jwt-secret-2026"
 
 // Claims JWT 载荷结构（别名 iam.Claims）。

@@ -146,10 +146,13 @@ func ApplyTranslatedPdfFromDocx(outPath, cacheDocx string, translations map[stri
 	return runDocxScriptStdin([]string{"apply", cacheDocx, outPath, lang}, payload)
 }
 
+// docxScriptPath 定位 docx_translate.py 脚本路径（与可执行文件同目录）。
 func docxScriptPath() string {
 	return filepath.Join(filepath.Dir(os.Args[0]), "docx_translate.py")
 }
 
+// runDocxScript 调用 Python docx 管线脚本（子进程方式，优先 venv 内解释器）。
+// 参数：args=脚本子命令与参数；返回：stdout 内容（extract 子命令为 JSON，取最后一个 '{' 之后的部分）与错误。
 func runDocxScript(args []string) ([]byte, error) {
 	pyBin := "python3"
 	if _, err := os.Stat("/opt/translator/.venv/bin/python3"); err == nil {
@@ -168,6 +171,8 @@ func runDocxScript(args []string) ([]byte, error) {
 	return out, nil
 }
 
+// runDocxScriptStdin 以 stdin 传入大 payload（docx 字节流等）调用 docx 管线脚本，规避命令行长度限制。
+// 参数：args=脚本子命令与参数；payload=经 stdin 写入的字节流；返回错误（失败时附 stderr 输出）。
 func runDocxScriptStdin(args []string, payload []byte) error {
 	pyBin := "python3"
 	if _, err := os.Stat("/opt/translator/.venv/bin/python3"); err == nil {
@@ -182,6 +187,8 @@ func runDocxScriptStdin(args []string, payload []byte) error {
 	return nil
 }
 
+// writePDFViaPython 走 Python(fpdf2) 管线写出 PDF：payload 含源句与译文映射，脚本路径与可执行文件同目录。
+// 参数：outPath=输出 PDF 路径；fontPath=CJK 字体路径；srcTexts=源句序列；translations=句→译文映射；返回错误。
 func writePDFViaPython(outPath string, fontPath string, srcTexts []string, translations map[string]string) error {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"srcTexts":     srcTexts,
@@ -202,6 +209,8 @@ func writePDFViaPython(outPath string, fontPath string, srcTexts []string, trans
 	return nil
 }
 
+// writePDFViaGoFpdf 纯 Go(fpdf) 兜底写出 PDF（Python 管线不可用时）：注册 CJK UTF8 字体逐段排版。
+// 参数：outPath=输出 PDF 路径；fontPath=CJK 字体路径；srcTexts=源句序列；translations=句→译文映射；返回错误。
 func writePDFViaGoFpdf(outPath string, fontPath string, srcTexts []string, translations map[string]string) error {
 	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(18, 18, 18)

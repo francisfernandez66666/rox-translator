@@ -194,10 +194,12 @@ function budgetText(o: any): string {
   if (!b || !(b.limit > 0)) return t('org.budgetUnset')
   return `${fmtNumShort(b.used)}/${fmtNumShort(b.limit)}`
 }
+// isOverBudget 判断组织本月用量是否已达预算上限（触发红色预警展示）
 function isOverBudget(o: any): boolean {
   const b = budgetMap.value[o.id]
   return !!b && b.limit > 0 && b.used >= b.limit
 }
+// fmtNumShort 数字缩写：≥1万 显示为 x.xw，其余原样
 function fmtNumShort(n: number): string {
   if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + 'w'
   return String(n)
@@ -206,6 +208,7 @@ function fmtNumShort(n: number): string {
 const budgetModal = ref<{ id: number; name: string; limit: number; used: number } | null>(null)
 const budgetInput = ref(0)
 
+// openBudget 打开部门预算弹窗：带入该组织当前上限与本月用量
 function openBudget(o: any) {
   const b = budgetMap.value[o.id]
   budgetModal.value = { id: o.id, name: o.name, limit: b?.limit || 0, used: b?.used || 0 }
@@ -250,6 +253,7 @@ async function createInvite() {
   await openInvites({ id: inviteModal.value.id, name: inviteModal.value.name })
 }
 
+// loadBudget 拉取部门预算总览（各部门上限+本月已用），构建 org→预算 映射供列表徽标使用
 async function loadBudget() {
   try {
     const r: any = await orgBudgetSummary()

@@ -267,13 +267,14 @@ func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) erro
 // 全部失败才置工单失败。单文件旧工单走 tickets.file_path 历史路径。
 // mode 透传：fast 模式跳过 KB 匹配（纯模型直翻），pro 保持知识库链路。
 
-// StartStallSweep 卡死工单巡检：每 5 分钟扫描 in_progress 且 updated_at 超过 20 分钟的工单，
-// 重置为 queued 触发断点续传（worker 收尾前已有取消复查，重排安全）。防信号量饿死类静默卡死。
-
 // lowBalanceThreshold 低额告警绝对阈值（system_config low_balance_alert_tokens，默认100000）。
 func lowBalanceThreshold() int64 {
 	return 100000
 }
+
+// StartStallSweep 卡死工单巡检：每 5 分钟扫描 in_progress 且 updated_at 超过 20 分钟的工单，
+// 重置为 queued 触发断点续传（worker 收尾前已有取消复查，重排安全）。防信号量饿死类静默卡死。
+// ★ 同周期顺带执行商业化巡检：订单15min超时自动关闭（CloseStalePendingOrders）+ 低额提醒（24h去重）。
 func (s *TicketService) StartStallSweep() {
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
@@ -292,6 +293,9 @@ func (s *TicketService) StartStallSweep() {
 	}()
 }
 
+// runFileTicket 文件翻译工单执行主流程：解析目标语言→按模式(fast/pro)驱动引擎管线→
+// 阶段进度回调（提取20/初翻40/校对60/回写80）→产物落盘与工单状态推进。
+// 参数：ctx=取消/超时上下文（暂停与硬闸重试依赖）；t=工单对象；返回错误（含回显重试语义）。
 func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) error {
 	langs := parseLangs(t.TargetLangs)
 	mode := t.Mode // fast | pro（空=pro）
@@ -499,6 +503,7 @@ func splitComma(s string) []string {
 	return out
 }
 
+// 编译期引用占位：保持 KBDatabase 字段类型引用（跨构建标签保留导入）。
 var _ = kb.KBDatabase{} // 保持 DB 字段类型引用
 
 // BootResume 启动断点续跑：把上次进程退出时遗留的 in_progress 工单重置为 queued，

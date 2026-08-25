@@ -1473,6 +1473,7 @@ func (e *Engine) LLMParseLang(ctx context.Context, hint string) string {
 	return content
 }
 
+// 编译期引用占位：保留 encoding/json 导入（条件编译路径使用）。
 var _ = json.Marshal
 
 // applicablePacks 计算租户可应用的知识库包白名单（向量检索用）。

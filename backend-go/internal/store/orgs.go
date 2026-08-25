@@ -9,6 +9,7 @@ import "translator/internal/iam"
 // Org 组织实体（类型别名，实际定义在 iam 包）
 type Org = iam.Org
 
+// 组织类型常量别名（透传 iam 包：root=平台根 / org=组织 / dept=部门）。
 const (
 	OrgTypeRoot = iam.OrgTypeRoot
 	OrgTypeOrg  = iam.OrgTypeOrg
@@ -55,12 +56,12 @@ func (s *Store) ListOrgs(tid int64) ([]*Org, error) {
 	return s.iam.ListOrgs(tid)
 }
 
-// RenameOrg 业务逻辑实现，详见函数体与调用处注释。
+// RenameOrg 组织重命名（跨租户按 ID 直改，调用方需先做租户归属校验）。
 func (s *Store) RenameOrg(id int64, name string) error {
 	return s.iam.RenameOrg(id, name)
 }
 
-// MoveOrg 业务逻辑实现，详见函数体与调用处注释。
+// MoveOrg 移动组织节点到新父级（tid 用于父级合法性校验，防跨租户挂载）。
 func (s *Store) MoveOrg(tid, id, parentID int64) error {
 	return s.iam.MoveOrg(tid, id, parentID)
 }
@@ -70,12 +71,12 @@ func (s *Store) DeleteOrg(id int64) error {
 	return s.iam.DeleteOrg(id)
 }
 
-// OrgDescendantIDs 业务逻辑实现，详见函数体与调用处注释。
+// OrgDescendantIDs 取组织子树全部后代 ID（含自身；部门预算聚合/数据范围过滤用）。
 func (s *Store) OrgDescendantIDs(tid, orgID int64) ([]int64, error) {
 	return s.iam.OrgDescendantIDs(tid, orgID)
 }
 
-// IsOrgInSubtree 判断性谓词，返回布尔值。
+// IsOrgInSubtree 判断 targetOrgID 是否位于 rootOrgID 子树内（层级越权防护）。
 func (s *Store) IsOrgInSubtree(tid, rootOrgID, targetOrgID int64) (bool, error) {
 	return s.iam.IsOrgInSubtree(tid, rootOrgID, targetOrgID)
 }

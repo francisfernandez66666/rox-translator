@@ -16,6 +16,7 @@ import (
 	"net/http"
 )
 
+// officeOrigin Word 加载项（Office Add-in）的固定来源域，用于 CORS 放行与回跳校验。
 const officeOrigin = "https://langcross.lexicorn.cn"
 
 // handleOfficeManifest 返回 Word 加载项侧加载清单。

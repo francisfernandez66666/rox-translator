@@ -320,7 +320,8 @@ func (k *KBDatabase) FetchRowTenant(id, tenantID int64) (*Row, error) {
 // 共享过滤子句：租户1 行仅限 语言文化包(全放行) + 本租户注册行业的行业包（防组织包泄漏）
 const sharedFilterSQL = "OR (tm.tenant_id=1 AND tm.priority>=2 AND EXISTS(SELECT 1 FROM kb_packages pkg WHERE pkg.id=tm.pack_id AND (pkg.pack_type='locale' OR (pkg.pack_type='industry' AND pkg.code=(SELECT industry FROM tenants WHERE id=?)))))"
 
-// FindExact 业务逻辑实现，详见函数体与调用处注释。
+// FindExact 精确命中查询：按原文全等匹配术语，应用知识库优先级链（部门包0 > 组织包1 > 行业包2 > 语言文化包3）。
+// 查询范围 = 本租户 + 租户1 共享过滤子句；返回最优一行（priority 最小），无命中返回 sql.ErrNoRows。
 func (k *KBDatabase) FindExact(zh string, tenantID int64) (*Row, error) {
 	row := k.db.QueryRow(fmt.Sprintf(
 		"SELECT tm.id, tm.zh, COALESCE(tm.module,''), COALESCE(tm.tenant_id,1), "+langCols+" FROM tm_segments tm WHERE tm.zh=? AND (tm.tenant_id=? "+sharedFilterSQL+") ORDER BY tm.priority ASC, tm.id ASC LIMIT 1"),

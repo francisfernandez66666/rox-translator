@@ -67,6 +67,7 @@ export const zh: Record<string, string> = {
   'org.deleteConfirm': '确认删除组织「{name}」？其子孙组织将上移，组织下用户将回收至上级组织。',
 }
 
+// 英文字典（与上方 zh 同键一一对应）
 export const en: Record<string, string> = {
   'org.invitesTitle': '🎟️ Invite Codes',
   'org.invitesHint': 'Generate codes for "{name}"; invitees join this org level',

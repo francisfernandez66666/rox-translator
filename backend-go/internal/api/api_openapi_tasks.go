@@ -80,6 +80,11 @@ func singleQuotedJSON(body []byte) []byte {
 		return append([]byte(`"`), append([]byte(inner), '"')...)
 	})
 }
+// handleOpenAPITaskCreate 开放 API 创建翻译任务接口（API Key 鉴权，非登录态）：
+//   - 校验 Key 有效性/权限/当日配额（超限返回 429 + error_code=key_quota_exceeded）
+//   - 受理文本任务并异步执行；轮询查询走 /api/openapi/tasks/{id}
+//
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（Header 带 Authorization: Bearer <api_key>）。
 func (s *Server) handleOpenAPITaskCreate(w http.ResponseWriter, r *http.Request) {
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {
@@ -127,6 +132,8 @@ var openAPITaskExtWhitelist = map[string]bool{
 	".md": true, ".json": true, ".yaml": true, ".yml": true,
 }
 
+// gateErrorCode 把底层配额/计费错误归一为对外 error_code（key_quota_exceeded / insufficient_balance 等），
+// 供开放 API 响应体使用；未命中已知关键词时返回空串（调用方按通用失败处理）。
 func gateErrorCode(err error) string {
 	msg := err.Error()
 	switch {

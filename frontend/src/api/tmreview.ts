@@ -4,6 +4,7 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+// TmReviewItem TM 待审池候选条目（对应后端 store.TmReview）
 export interface TmReviewItem {
   id: number
   tenant_id: number
@@ -20,15 +21,19 @@ export interface TmReviewItem {
   created_at: string
 }
 
+// listTmReview 拉取待审候选列表（status=pending/approved/rejected，空=全部）
 export async function listTmReview(status = ''): Promise<AdminResp & { candidates?: TmReviewItem[] }> {
   return request(`/api/admin/tm-review/list${status ? '?status=' + encodeURIComponent(status) : ''}`, { headers: authHeaders() })
 }
+// approveTmReview 审核通过：候选条目落库为正式翻译记忆（tm_segments, module=manual）
 export async function approveTmReview(id: number): Promise<AdminResp> {
   return request('/api/admin/tm-review/approve', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
+// rejectTmReview 驳回：候选条目废弃不落库
 export async function rejectTmReview(id: number): Promise<AdminResp> {
   return request('/api/admin/tm-review/reject', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
+// adoptFeedbackTranslation 反馈修正采纳：从用户反馈中提取修正译文生成候选（zh/lang/trans 由反馈内容带出）
 export async function adoptFeedbackTranslation(feedbackId: number, zh: string, lang: string, trans: string): Promise<AdminResp> {
   return request('/api/admin/tm-review/adopt', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ feedback_id: feedbackId, zh, lang, trans }) })
 }

@@ -30,6 +30,7 @@ type Feedback struct {
 	HandledAt    string `json:"handled_at"`   // 处理时间（空=未处理）
 }
 
+// feedbackCols 反馈表查询列清单（Scan 顺序契约；replies/handled_at 为老库可空列，COALESCE 兜底）。
 const feedbackCols = "id, tenant_id, user_id, target_type, ticket_id, source_text, translations, target_langs, mode, content, with_context, status, handle_note, COALESCE(replies,'[]'), created_at, COALESCE(handled_at,'')"
 
 // CreateFeedback 写入一条用户反馈。

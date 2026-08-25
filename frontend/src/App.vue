@@ -98,6 +98,7 @@ const store = useChatStore()
 const isAdminRoute = computed(() => window.location.pathname.startsWith('/admin'))
 // 前台 Tab：工作台 / 工单（URL 同步为 /tickets，刷新保持）
 const frontTab = ref(window.location.pathname.startsWith('/tickets') ? 'tickets' : 'workbench')
+// switchFrontTab 切换前台主视图（工作台/工单）并同步浏览器地址（pushState，刷新保持所在 Tab）
 function switchFrontTab(tab: string) {
   frontTab.value = tab
   const path = tab === 'tickets' ? '/tickets' : '/'
@@ -167,6 +168,7 @@ const menuOpen = ref(false)
 const pwdOpen = ref(false)
 // ★ 前台登录用户强制维护邮箱（同后台策略）
 const emailMissing = ref(false)
+// checkEmailBinding 登录态下拉邮箱维护检查：meContext 无 email 即弹出强制绑定（未登录跳过）
 async function checkEmailBinding() {
   if (!getAuthToken()) { emailMissing.value = false; return }
   try {
@@ -174,6 +176,7 @@ async function checkEmailBinding() {
     emailMissing.value = !!r && !r.email
   } catch { emailMissing.value = false }
 }
+// onEmailBound 绑定成功回调：关闭弹窗与汉堡菜单
 function onEmailBound(addr: string) { emailMissing.value = false; emailEditOpen.value = false }
 // openEmailEdit 汉堡入口：拉最新上下文预填当前邮箱
 const emailEditOpen = ref(false)
@@ -199,6 +202,7 @@ async function refreshPkgLine() {
   } catch { pkgLine.value = '' }
 }
 
+// openPwd 打开改密弹窗（先收起汉堡菜单，避免遮罩叠加）
 async function openPwd() {
   menuOpen.value = false
   const d = document.querySelector('details.account-menu')

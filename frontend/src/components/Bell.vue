@@ -63,6 +63,7 @@ async function readOne(n: any) {
   // ★ feedback 类通知 → 跳转「问题反馈」面板并定位该条
   if (n.ref_type === 'feedback') gotoFeedbackPanel(n.ref_id)
 }
+// onItemClick 点击单条通知：标记已读并收起下拉
 function onItemClick(n: any) { readOne(n); open.value = false }
 
 // 全部已读
