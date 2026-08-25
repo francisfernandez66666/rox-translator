@@ -50,7 +50,7 @@ import { updateEmail, meEmailCode } from '@/api'
 
 const props = defineProps<{ teleport?: boolean;  dismissible?: boolean; currentEmail?: string }>()
 const emit = defineEmits<{ done: [email: string]; close: [] }>()
-const email = ref(props.currentEmail || '')
+const email = ref('') // 新邮箱默认置空（不带入老邮箱）
 const msg = ref('')
 const ok = ref(false)
 const code = ref('')
