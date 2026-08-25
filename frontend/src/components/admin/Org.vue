@@ -12,7 +12,7 @@
     <!-- ===== 新建组织/部门（租户管理员及以上；层级设置=超管+租管） ===== -->
     <div class="ad-row" v-if="myLevel >= 3">
       <select v-model="parentId" class="ad-input">
-        <option :value="0" v-if="myLevel >= 3">{{ t('org.rootOption') }}</option>
+        <option :value="0" v-if="myLevel >= 3">{{ tpl('org.rootOptionTpl', { name: rootOrgName }) }}</option>
         <option v-for="o in flatTree" :key="o.id" :value="o.id">{{ orgPath(o) }}</option>
       </select>
       <input v-model="newName" :placeholder="t('org.namePlaceholder')" class="ad-input" @keydown.enter="createOrg" />
@@ -70,7 +70,7 @@
 
       <!-- 组织下用户（含子孙组织归集） -->
       <div class="ad-org-users">
-        <h3>{{ selectedOrg === 0 ? t('org.allUsersRoot') : tpl('org.usersInChildren', { name: selectedOrgName }) }}</h3>
+        <h3>{{ selectedOrg === 0 ? tpl('org.allUsersRootTpl', { name: rootOrgName }) : tpl('org.usersInChildren', { name: selectedOrgName }) }}</h3>
         <div class="ad-hint">{{ t('org.usersHint') }}</div>
         <table class="ad-table">
           <thead><tr><th>{{ t('org.colId') }}</th><th>{{ t('org.colUsername') }}</th><th>{{ t('org.colName') }}</th><th>{{ t('org.colOrg') }}</th><th>{{ t('org.colRole') }}</th><th>{{ t('org.colLastLogin') }}</th><th>{{ t('org.colActions') }}</th></tr></thead>
@@ -81,7 +81,7 @@
               <td><input :value="u.display_name" class="ad-mini" @change="editUser(u, 'display_name', ($event.target as HTMLInputElement).value)" /></td>
               <td>
                 <select :value="u.org_id || 0" class="ad-mini" @change="editUser(u, 'org_id', ($event.target as HTMLSelectElement).value)">
-                  <option :value="0">{{ t('org.rootOption') }}</option>
+                  <option :value="0">{{ rootOrgName }}</option>
                   <option v-for="o in flatTree" :key="o.id" :value="o.id">{{ orgPath(o) }}</option>
                 </select>
               </td>
@@ -104,7 +104,7 @@
 
         <!-- 开通用户 -->
         <div class="ad-chart-card" style="margin-top:16px">
-          <h3>{{ tpl('org.addUser', { org: nuOrgId === 0 ? (isPlatformView ? t('admin.platformRoot') : t('org.rootOrg')) : (orgs.find(x => x.id === nuOrgId)?.name || '') }) }}</h3>
+          <h3>{{ tpl('org.addUser', { org: nuOrgId === 0 ? (isPlatformView ? t('admin.platformRoot') : rootOrgName) : (orgs.find(x => x.id === nuOrgId)?.name || '') }) }}</h3>
           <div class="ad-row">
             <input v-model="nu.username" :placeholder="t('org.usernamePlaceholder')" class="ad-input ad-mini-w" />
             <input v-model="nu.password" :placeholder="t('org.passPlaceholder')" class="ad-input" />
