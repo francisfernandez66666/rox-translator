@@ -5,7 +5,7 @@
    ============================================================================ -->
 
 <template>
-  <Teleport to="body">
+  <Teleport to="body" :disabled="!props.teleport">
   <div class="fb-mask" @click.self="$emit('close')">
     <div class="fb-modal">
       <h3>🔒 {{ t('pwd.title') }}</h3>
@@ -38,7 +38,7 @@ import { ref, computed, onUnmounted } from 'vue'
 import { t, tpl } from '@/i18n'
 import { sendPwdCode, submitNewPassword } from '@/api'
 
-const props = defineProps<{ username: string; email?: string }>()
+const props = defineProps<{ username: string; email?: string; teleport?: boolean }>()
 const emit = defineEmits<{ close: []; done: [] }>()
 
 // 表单状态

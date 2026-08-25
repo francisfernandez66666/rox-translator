@@ -4,7 +4,7 @@
    用途：验证码收件地址（注册验证/找回密码/通知），未绑邮箱则关键自助流程不可用
    ============================================================================ -->
 <template>
-  <Teleport to="body">
+  <Teleport to="body" :disabled="!teleport">
     <div class="eb-mask">
       <div class="eb-modal">
         <h3>
@@ -34,7 +34,7 @@ import { ref, computed } from 'vue'
 import { t, tpl } from '@/i18n'
 import { updateEmail, meEmailCode } from '@/api'
 
-const props = defineProps<{ dismissible?: boolean; currentEmail?: string }>()
+const props = defineProps<{ teleport?: boolean;  dismissible?: boolean; currentEmail?: string }>()
 const emit = defineEmits<{ done: [email: string]; close: [] }>()
 const email = ref(props.currentEmail || '')
 const msg = ref('')

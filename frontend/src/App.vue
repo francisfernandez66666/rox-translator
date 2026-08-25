@@ -52,9 +52,10 @@
     </header>
 
     <!-- ★ 自助修改密码弹窗（Teleport 挂载 body，居中遮罩） -->
-    <EmailBindModal v-if="emailMissing || emailEditOpen" :dismissible="emailEditOpen && !emailMissing" :current-email="curEmail" @done="onEmailBound" @close="emailEditOpen = false" />
+    <EmailBindModal v-if="emailMissing || emailEditOpen" :teleport="false" :dismissible="emailEditOpen && !emailMissing" :current-email="curEmail" @done="onEmailBound" @close="emailEditOpen = false" />
     <PasswordModal
       v-if="pwdOpen"
+      :teleport="false"
       :username="authUser.username"
       :email="pwdEmail"
       @done="onPwdDone"
