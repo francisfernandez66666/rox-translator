@@ -36,18 +36,16 @@
         <Bell />
         <!-- 语言切换（显性） -->
         <button class="gear-btn" @click="toggleLang()" :title="lang === 'zh' ? 'Switch to English' : '切换为中文'">{{ lang === 'zh' ? 'EN' : '中' }}</button>
-        <!-- ★ 账号菜单：原生 details 折叠（零 JS 可靠开合） -->
-        <details class="account-menu">
-          <summary title="账号菜单">☰</summary>
-          <div class="menu-drop">
-            <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
-            <!-- ★ 修改密码：独立 Teleport 弹窗（邮箱验证码流程） -->
-            <button v-if="canEnterAdmin" class="menu-item" @click="enterAdmin">🛠 {{ t('menu.adminConsole') }}</button>
-            <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
-            <button class="menu-item" @click="openEmailEdit">📧 {{ t('menu.changeEmail') }}</button>
-            <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
-          </div>
-        </details>
+        <!-- ★ 账号菜单：受控下拉（弃用原生 details 排除浏览器行为差异） -->
+        <button class="gear-btn" title="账号菜单" @click.stop="menuOpen = !menuOpen">☰</button>
+        <div v-if="menuOpen" class="menu-drop">
+          <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
+          <button v-if="canEnterAdmin" class="menu-item" @click="enterAdmin(); menuOpen = false">🛠 {{ t('menu.adminConsole') }}</button>
+          <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
+          <button class="menu-item" @click="openEmailEdit">📧 {{ t('menu.changeEmail') }}</button>
+          <button class="menu-item menu-logout" @click="logout(); menuOpen = false">⎋ {{ t('common.logout') }}</button>
+        </div>
+        <div v-if="menuOpen" class="menu-backdrop" @click="menuOpen = false"></div>
       </div>
     </header>
 
@@ -165,6 +163,7 @@ const pkgLine = ref('')
 const canEnterAdmin = computed(() => !!authUser.value && roleLevel(authUser.value.role) >= 2)
 // enterAdmin 跳转管理后台（同源路径 /admin，携带现有 token 即可）
 function enterAdmin() { window.location.href = '/admin' }
+const menuOpen = ref(false)
 const pwdOpen = ref(false)
 // ★ 前台登录用户强制维护邮箱（同后台策略）
 const emailMissing = ref(false)
@@ -180,7 +179,9 @@ function onEmailBound(addr: string) { emailMissing.value = false; emailEditOpen.
 const emailEditOpen = ref(false)
 let curEmail = ''
 async function openEmailEdit() {
+  alert('openEmailEdit')
   console.debug('[menu] openEmailEdit fired')
+  menuOpen.value = false
   try {
     const r: any = await meContext()
     curEmail = r?.email || ''
@@ -201,7 +202,9 @@ async function refreshPkgLine() {
 }
 
 async function openPwd() {
+  alert('openPwd')
   console.debug('[menu] openPwd fired')
+  menuOpen.value = false
   const d = document.querySelector('details.account-menu')
   if (d) d.removeAttribute('open')
   pwdOpen.value = true
@@ -360,7 +363,8 @@ body {
 .front-tab.on { background: rgba(255,255,255,.18); font-weight: 600; }
 
 /* ★ 页眉整合：聚合下拉菜单 */
-.account-menu { position: relative; }
+.menu-backdrop { position: fixed; inset: 0; z-index: 90; background: transparent; }
+.account-menu { display: contents; }
 .account-menu summary { list-style: none; cursor: pointer; font-size: 16px; }
 .account-menu summary::-webkit-details-marker { display: none; }
 .menu-drop { position: absolute; right: 0; top: 40px; width: 220px; background: #fff; border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 6px 0; z-index: 100; overflow: hidden; }
