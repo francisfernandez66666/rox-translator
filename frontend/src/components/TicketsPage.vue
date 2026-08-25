@@ -12,7 +12,11 @@
 
     <!-- ===== 创建工单 ===== -->
     <div class="ad-chart-card">
-      <h3>{{ t('tk.createTitle') }}</h3>
+      <h3><div v-if="imageHeavyHint" class="ad-hint" style="background:#fff8e1;border:1px solid #f0c674;border-radius:8px;padding:8px 12px;margin-bottom:8px">
+      ⚠️ {{ t('tk.imageHeavyHint') }}
+      <button class="ad-btn-sm" style="margin-left:8px" @click="imageHeavyHint = false">✕</button>
+    </div>
+    {{ t('tk.createTitle') }}</h3>
       <!-- 模式切换：文本 / 文件 -->
       <div class="tp-mode">
         <button :class="['tp-mode-btn', mode === 'text' ? 'on' : '']" @click="mode = 'text'">📝 {{ t('tk.modeText') }}</button>
@@ -165,6 +169,8 @@ const creating = ref(false)
 const files = ref<File[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
 // 已选文件总大小（KB 展示）
+// ★ 图片型 PDF 提示（后端判定回传）
+const imageHeavyHint = ref(false)
 const filesTotalKB = computed(() => (files.value.reduce((a, f) => a + f.size, 0) / 1024).toFixed(0))
 
 // ---- 报价预览（文本模式实时预估；强制计费且未开通时禁提交） ----
