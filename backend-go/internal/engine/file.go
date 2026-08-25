@@ -197,7 +197,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 						batch = e.reviewBatchSafe(ctx, needTexts, batch, lc)
 					}
 					for i, idx := range needModelIdx {
-						if batch[i] != "" && batch[i] != "[翻译失败]" {
+						// ★ 回显检测：模型原样返回源文 = 未翻译，视为缺失走重试
+						if batch[i] != "" && batch[i] != "[翻译失败]" && batch[i] != texts[idx] {
 							addTrans(lc, texts[idx], batch[i])
 							addModelHit()
 						}
@@ -240,7 +241,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		}
 		batch := e.BatchTranslate(ctx, missing, lc, 10, nil)
 		for i, m := range missing {
-			if i < len(batch) && batch[i] != "" && batch[i] != "[翻译失败]" {
+			// ★ 重试仍回显则放弃（保留原文，不再静默写中文）
+			if i < len(batch) && batch[i] != "" && batch[i] != "[翻译失败]" && batch[i] != m {
 				addTrans(lc, m, batch[i])
 			}
 		}
