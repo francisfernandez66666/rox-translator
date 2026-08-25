@@ -380,7 +380,7 @@ mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
 ## 文件批量任务要点
 
 - multipart 字段名必须为 **files**，本地路径前**必须加 @**：
-  curl -F "files=@/path/手册.docx" -F "files=@/path/清单.xlsx"
+  curl -F 'files=@/path/手册.docx' -F 'files=@/path/清单.xlsx'
 - 单次 ≤20 个文件、总量 ≤30MB
 - 支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml
 - 完成后经 download 接口下载；产物保留 14 天，请及时下载
@@ -497,7 +497,7 @@ target_langs takes an array of language codes; defaults to ["en"]. Supported: 34
 ## Batch file task notes
 
 - The multipart field must be named **files**, and local paths **must be prefixed with @**:
-  curl -F "files=@/path/manual.docx" -F "files=@/path/list.xlsx"
+  curl -F 'files=@/path/manual.docx' -F 'files=@/path/list.xlsx'
 - Up to 20 files, 30MB total per request
 - Accepted: docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml
 - Download via the download endpoint when completed; artifacts are kept for 14 days

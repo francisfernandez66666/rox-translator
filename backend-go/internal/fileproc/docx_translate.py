@@ -462,8 +462,15 @@ def normalize_tables(docx_path: str):
             tw = OxmlElement('w:tblW')
             tblPr.append(tw)
         tw.set(qn('w:w'), '5000')
-        tw.set(qn('w:type'), 'pct')  # 100%
+        tw.set(qn('w:type'), 'pct')  # 总宽 100%
         n += 1
+    # 行高：pdf2docx 写死 exact/atLeast 的像素值，译文变长会被裁剪 → 统一 atLeast 允许撑开
+    for trPr in doc.element.body.iter(qn('w:trPr')):
+        for h in trPr.findall(qn('w:trHeight')):
+            h.set(qn('w:hRule'), 'atLeast')
+    # 单元格固定宽删除：交给 autofit 按内容自适应分配列宽
+    for tcW in list(doc.element.body.iter(qn('w:tcW'))):
+        tcW.getparent().remove(tcW)
     doc.save(docx_path)
 
 # ---------- 段内字号统一 ----------

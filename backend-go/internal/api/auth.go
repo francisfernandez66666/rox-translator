@@ -14,6 +14,7 @@ package api
 //   - 所有写操作均写入审计日志（含变更前后值 diff）
 
 import (
+	"log"
 	"strings"
 	"crypto/rand"
 	"encoding/json"
@@ -290,12 +291,16 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	resetCodes.Lock()
 	resetCodes.m[u.ID] = resetCode{Code: code, ExpiresAt: time.Now().Add(10 * time.Minute)}
 	resetCodes.Unlock()
-	// 发送邮件（Noop 模式打印日志）
-	s.mailer().Send(&mail.Message{
+	// 发送邮件（失败不再静默：明确告知用户稍后重试）
+	if serr := s.mailer().Send(&mail.Message{
 		To:      u.Email,
 		Subject: "【翻译助手】密码重置验证码",
 		Body:    mail.BuildVerificationBody(code),
-	})
+	}); serr != nil {
+		log.Printf("[mail] 密码重置验证码发送失败 to=%s err=%v", u.Email, serr)
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "邮件发送失败，请稍后重试或联系管理员"})
+		return
+	}
 	s.Store.LogAudit(u.TenantID, u.ID, "forgot_password", "auth", "请求重置密码验证码")
 	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "验证码已发送到绑定邮箱"})
 }
