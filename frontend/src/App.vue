@@ -43,8 +43,8 @@
             <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
             <!-- ★ 修改密码：独立 Teleport 弹窗（邮箱验证码流程） -->
             <button v-if="canEnterAdmin" class="menu-item" @click="enterAdmin">🛠 {{ t('menu.adminConsole') }}</button>
-            <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
-            <button class="menu-item" @click="openEmailEdit">📧 {{ t('menu.changeEmail') }}</button>
+            <button class="menu-item" @click.stop="openPwd">🔒 {{ t('pwd.title') }}</button>
+            <button class="menu-item" @click.stop="openEmailEdit">📧 {{ t('menu.changeEmail') }}</button>
             <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
           </div>
         </details>
@@ -57,8 +57,8 @@
       v-if="pwdOpen"
       :username="authUser.username"
       :email="pwdEmail"
-      @close="pwdOpen = false"
       @done="onPwdDone"
+      @close="pwdOpen = false"
     />
 
     <!-- ===== 主内容区：翻译引擎启动加载屏 / 聊天窗口 ===== -->

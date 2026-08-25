@@ -298,20 +298,20 @@ const defaultDocsMDZh = `# 翻译平台开放 API
 ## ① 创建文本任务（heredoc 传 JSON：复制即用，免疫引号/换行问题）
 
 ~~~
-curl -sS -X POST https://域名/openapi/v1/tasks \
+curl -sS -X POST https://langcross.lexicorn.cn/openapi/v1/tasks \
   -H 'Authorization: Bearer <API_KEY>' \
   -H 'Content-Type: application/json' \
   --data @- <<'EOF'
-{"text":"请检查制动系统","target_langs":["en","de"],"mode":"pro"}
+{'text':'请检查制动系统','target_langs':['en','de'],'mode':'pro'}
 EOF
-# ← 202 {"success":true,"task_id":123,"ticket_no":"T...","status":"queued",
-#        "mode":"pro","poll_interval_sec":15,"balance_tokens":12500000,...}
+# ← 202 {'success':true,'task_id':123,'ticket_no':'T...','status':'queued',
+#        'mode':'pro','poll_interval_sec':15,'balance_tokens':12500000,...}
 ~~~
 
 ## ② 创建文件批量任务（mode=fast 快速 / pro 专业校对，默认 pro）
 
 ~~~
-curl -X POST https://域名/openapi/v1/tasks \
+curl -X POST https://langcross.lexicorn.cn/openapi/v1/tasks \
   -H 'Authorization: Bearer <API_KEY>' \
   -F 'files=@手册.docx' -F 'files=@清单.xlsx' -F 'target_langs=en,de' -F 'mode=fast' 
 ~~~
@@ -321,11 +321,11 @@ curl -X POST https://域名/openapi/v1/tasks \
 > 说明：响应为标准 JSON，键名的双引号是 JSON 语法要求，请勿将响应示例粘贴到终端执行。请求示例已用 heredoc/单引号包裹，可直接复制运行。
 
 ~~~
-curl 'https://域名/openapi/v1/tasks/status?id=123' -H 'Authorization: Bearer <API_KEY>'
-# 处理中 → {"status":"processing","steps":[...]}
-# 文本完成 → {"status":"completed","translations":{"en":"Check the brake system."},"tokens_used":1832}
-# 文件完成 → {"status":"completed","files":[...],"download":"/openapi/v1/tasks/download?id=123"}
-# 失败     → {"status":"failed","error_code":"insufficient_balance","message":"余额不足，请充值或升级套餐"}
+curl 'https://langcross.lexicorn.cn/openapi/v1/tasks/status?id=123' -H 'Authorization: Bearer <API_KEY>'
+# 处理中 → {'status':'processing','steps':[...]}
+# 文本完成 → {'status':'completed','translations':{'en':'Check the brake system.'},'tokens_used':1832}
+# 文件完成 → {'status':'completed','files':[...],'download':'/openapi/v1/tasks/download?id=123'}
+# 失败     → {'status':'failed','error_code':'insufficient_balance','message':'余额不足，请充值或升级套餐'}
 ~~~
 
 ## 支持的语言与计费规则
@@ -347,31 +347,31 @@ target_langs 传语言代码数组；缺省 ["en"]。支持以下 34 种语言�
 | kk | 哈萨克语 | 知识库匹配+AI |
 | de | 德语 | 知识库匹配+AI |
 | zh_hant | 繁体中文 | 知识库匹配+AI |
-| ja | 日语 | AI 直翻 |
-| ko | 韩语 | AI 直翻 |
-| th | 泰语 | AI 直翻 |
-| tr | 土耳其语 | AI 直翻 |
-| it | 意大利语 | AI 直翻 |
-| pl | 波兰语 | AI 直翻 |
-| sv | 瑞典语 | AI 直翻 |
-| ms | 马来语 | AI 直翻 |
-| id_lang | 印尼语 | AI 直翻 |
-| vi | 越南语 | AI 直翻 |
-| mn | 蒙古语 | AI 直翻 |
-| nl | 荷兰语 | AI 直翻 |
-| uk | 乌克兰语 | AI 直翻 |
-| hi | 印地语 | AI 直翻 |
-| fa | 波斯语 | AI 直翻 |
-| he | 希伯来语 | AI 直翻 |
-| el | 希腊语 | AI 直翻 |
-| my | 缅甸语 | AI 直翻 |
-| km | 高棉语 | AI 直翻 |
-| lo | 老挝语 | AI 直翻 |
-| tl | 菲律宾语 | AI 直翻 |
-| gu | 古吉拉特语 | AI 直翻 |
-| ur | 乌尔都语 | AI 直翻 |
-| te | 泰卢固语 | AI 直翻 |
-| mr | 马拉地语 | AI 直翻 |
+| ja | 日语 | 知识库+AI |
+| ko | 韩语 | 知识库+AI |
+| th | 泰语 | 知识库+AI |
+| tr | 土耳其语 | 知识库+AI |
+| it | 意大利语 | 知识库+AI |
+| pl | 波兰语 | 知识库+AI |
+| sv | 瑞典语 | 知识库+AI |
+| ms | 马来语 | 知识库+AI |
+| id_lang | 印尼语 | 知识库+AI |
+| vi | 越南语 | 知识库+AI |
+| mn | 蒙古语 | 知识库+AI |
+| nl | 荷兰语 | 知识库+AI |
+| uk | 乌克兰语 | 知识库+AI |
+| hi | 印地语 | 知识库+AI |
+| fa | 波斯语 | 知识库+AI |
+| he | 希伯来语 | 知识库+AI |
+| el | 希腊语 | 知识库+AI |
+| my | 缅甸语 | 知识库+AI |
+| km | 高棉语 | 知识库+AI |
+| lo | 老挝语 | 知识库+AI |
+| tl | 菲律宾语 | 知识库+AI |
+| gu | 古吉拉特语 | 知识库+AI |
+| ur | 乌尔都语 | 知识库+AI |
+| te | 泰卢固语 | 知识库+AI |
+| mr | 马拉地语 | 知识库+AI |
 
 **计费口径**：消耗句数 = 源句数 × 目标语言数（多语言按倍数累增）；token ≈ 句 × 500 × 均摊系数。
 mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
@@ -425,8 +425,8 @@ All endpoints authenticate with **Authorization: Bearer YOUR_API_KEY**. Issue ke
 ## Create a text task
 
 ~~~json
-POST https://host/openapi/v1/tasks
-{"text":"Check the brake system.","target_langs":["en","de"],"mode":"pro"}
+POST https://langcross.lexicorn.cn/openapi/v1/tasks
+{'text':'Check the brake system.','target_langs':['en','de'],'mode':'pro'}
 ~~~
 
 Response (202): {"task_id":123,"status":"queued","poll_interval_sec":15,"balance_tokens":12500000}
@@ -434,17 +434,17 @@ Response (202): {"task_id":123,"status":"queued","poll_interval_sec":15,"balance
 ## Create a batch file task (mode=fast / pro, default pro)
 
 ~~~bash
-curl -X POST https://host/openapi/v1/tasks -H 'Authorization: Bearer YOUR_API_KEY' -F 'files=@manual.docx' -F 'files=@list.xlsx' -F 'target_langs=en,de' -F 'mode=fast'
+curl -X POST https://langcross.lexicorn.cn/openapi/v1/tasks -H 'Authorization: Bearer YOUR_API_KEY' -F 'files=@manual.docx' -F 'files=@list.xlsx' -F 'target_langs=en,de' -F 'mode=fast'
 ~~~
 
 ## Poll status
 
 ~~~json
 GET /openapi/v1/tasks/status?id=123
-pending    -> {"status":"processing","steps":[...]}
-text done  -> {"status":"completed","translations":{"en":"..."},"tokens_used":1832}
-files done -> {"status":"completed","files":[...],"download":"/openapi/v1/tasks/download?id=123"}
-failed     -> {"status":"failed","error_code":"insufficient_balance"}
+pending    -> {'status':'processing','steps':[...]}
+text done  -> {'status':'completed','translations':{'en':'...'},'tokens_used':1832}
+files done -> {'status':'completed','files':[...],'download':'/openapi/v1/tasks/download?id=123'}
+failed     -> {'status':'failed','error_code':'insufficient_balance'}
 ~~~
 
 ## Supported languages & billing rules

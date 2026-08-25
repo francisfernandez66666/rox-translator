@@ -19,6 +19,7 @@ package api
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -34,7 +36,6 @@ import (
 	"translator/internal/fileproc"
 	"translator/internal/store"
 )
-
 
 // pollIntervalSec 按任务类型给出建议轮询间隔（秒）：文本 15s、文件 60s
 func pollIntervalSec(isFile bool) int {
@@ -66,6 +67,19 @@ func normalizeTaskMode(m string) string {
 }
 
 // handleOpenAPITaskCreate 创建翻译任务（文本 JSON / 文件 multipart 二选一）。
+
+// singleQuotedJSON 宽松兼容：文档示例使用单引号 JSON（便于 shell 复制），
+// 服务端在解码前规范化为标准双引号。仅在未检测到双引号时启用，避免破坏正常负载。
+func singleQuotedJSON(body []byte) []byte {
+	if bytes.Contains(body, []byte(`"`)) {
+		return body
+	}
+	re := regexp.MustCompile(`'([^']*)'`)
+	return re.ReplaceAllFunc(body, func(m []byte) []byte {
+		inner := strings.ReplaceAll(string(m[1:len(m)-1]), `"`, `\"`)
+		return append([]byte(`"`), append([]byte(inner), '"')...)
+	})
+}
 func (s *Server) handleOpenAPITaskCreate(w http.ResponseWriter, r *http.Request) {
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {
@@ -137,6 +151,8 @@ func (s *Server) openAPITaskCreateText(w http.ResponseWriter, r *http.Request, t
 		Title       string   `json:"title"`        // 自定义标题（可选）
 		Mode        string   `json:"mode"`         // fast | pro（默认 pro）
 	}
+	rawBody, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(singleQuotedJSON(rawBody)))
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Text) == "" {
 		writeTaskError(w, "bad_request", "text 不能为空")
 		return

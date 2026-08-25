@@ -60,7 +60,7 @@
         <!-- 报价预览：token 区间 + ≈句数 + 余额 -->
         <span v-if="estimate" class="tp-estimate" :class="{ warn: !estimate.sufficient }">
           <template v-if="!estimate.sufficient">⚠️ {{ estimate.hint || t('tk.estUnavailable') }}</template>
-          <template v-else>{{ tpl('tk.estimateTokens', { min: fmtNum(estimate.tokens_min), max: fmtNum(estimate.tokens_max), s: fmtNum(estimate.cost_sentences_approx), bal: fmtNum(estimate.balance_tokens) }) }}</template>
+          <template v-else>{{ tpl('tk.estimateTokens', { min: fmtNum(Math.round(estimate.tokens_min / 5)), max: fmtNum(Math.round(estimate.tokens_max / 5)), bal: fmtNum(estimate.balance_tokens) }) }}</template>
         </span>
         <button class="ad-btn ad-btn-green tp-submit" :disabled="creating || estimateBlocked" @click="create">
           {{ creating ? t('tk.submitting') : t('tk.create') }}
