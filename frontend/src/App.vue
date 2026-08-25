@@ -42,6 +42,7 @@
           <div class="menu-drop">
             <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
             <!-- ★ 修改密码：独立 Teleport 弹窗（邮箱验证码流程） -->
+            <button v-if="canEnterAdmin" class="menu-item" @click="enterAdmin">🛠 {{ t('menu.adminConsole') }}</button>
             <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
             <button class="menu-item menu-logout" @click="logout">⎋ {{ t('common.logout') }}</button>
           </div>
@@ -159,6 +160,9 @@ function logout() {
 const pkgLine = ref('')
 
 // ★ 自助修改密码弹窗状态（独立 Teleport 弹窗，邮箱验证码流程）
+const canEnterAdmin = computed(() => !!authUser.value && roleLevel(authUser.value.role) >= 2)
+// enterAdmin 跳转管理后台（同源路径 /admin，携带现有 token 即可）
+function enterAdmin() { window.location.href = '/admin' }
 const pwdOpen = ref(false)
 // ★ 前台登录用户强制维护邮箱（同后台策略）
 const emailMissing = ref(false)

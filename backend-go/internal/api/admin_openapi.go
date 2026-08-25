@@ -318,6 +318,8 @@ curl -X POST https://域名/openapi/v1/tasks \
 
 ## ③ 轮询状态（文本 15s / 文件 60s）
 
+> 说明：响应为标准 JSON，键名的双引号是 JSON 语法要求，请勿将响应示例粘贴到终端执行。请求示例已用 heredoc/单引号包裹，可直接复制运行。
+
 ~~~
 curl 'https://域名/openapi/v1/tasks/status?id=123' -H 'Authorization: Bearer <API_KEY>'
 # 处理中 → {"status":"processing","steps":[...]}
