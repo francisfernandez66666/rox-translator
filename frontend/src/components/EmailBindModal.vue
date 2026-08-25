@@ -78,7 +78,7 @@ async function save() {
 </script>
 
 <style scoped>
-.eb-mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 1200; }
+.eb-mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 3000; }
 .eb-modal { background: #fff; border-radius: 12px; padding: 22px 24px; width: min(420px, 92vw); box-shadow: 0 10px 40px rgba(0,0,0,.25); }
 .eb-hint { font-size: 12.5px; color: #888; margin: 8px 0 12px; }
 .fb-input { width: 100%; box-sizing: border-box; border: 1px solid #d0d7de; border-radius: 8px; padding: 9px; font-size: 13px; }

@@ -112,7 +112,7 @@ async function submit() {
 .fb-msg { margin-top: 6px; font-size: 12.5px; }
 
 /* ★ 弹窗骨架样式（scoped 隔离，需在本组件内完整定义） */
-.fb-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 999; }
+.fb-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 3000; }
 .fb-modal { background: #fff; border-radius: 12px; padding: 18px 20px; width: min(440px, 92vw); box-shadow: 0 8px 32px rgba(0,0,0,.2); }
 .fb-hint { margin: 0 0 10px; font-size: 12px; color: #888; }
 .fb-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }

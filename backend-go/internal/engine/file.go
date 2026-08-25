@@ -7,6 +7,7 @@
 package engine
 
 import (
+	"log"
 	"context"
 	"fmt"
 	"os"
@@ -239,11 +240,27 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		if len(missing) == 0 {
 			continue
 		}
-		batch := e.BatchTranslate(ctx, missing, lc, 10, nil)
-		for i, m := range missing {
-			// ★ 重试仍回显则放弃（保留原文，不再静默写中文）
-			if i < len(batch) && batch[i] != "" && batch[i] != "[翻译失败]" && batch[i] != m {
-				addTrans(lc, m, batch[i])
+		// ★ 硬闸重试（方案语义）：对缺失段「重启 LLM 翻译」——每段独立全新调用
+        //    初翻模型（绕过 KB/缓存），最多 2 轮；仍回显则保留原文并计入告警。
+		for attempt := 1; attempt <= 2; attempt++ {
+			still := []string{}
+			for _, t := range texts {
+				if _, ok := langTranslations[lc][t]; !ok {
+					still = append(still, t)
+				}
+			}
+			if len(still) == 0 {
+				break
+			}
+			log.Printf("[tm-hardgate] lang=%s round=%d 重启LLM重译 %d 段", lc, attempt, len(still))
+			for _, m := range still {
+				r, err := e.TranslateOne(ctx, m, []string{lc}, false, config.StageAIInitial)
+				if err != nil {
+					continue
+				}
+				if v, ok := r.Translations[lc]; ok && v != "" && v != "[翻译失败]" && v != m {
+					addTrans(lc, m, v)
+				}
 			}
 		}
 	}
