@@ -99,7 +99,18 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	// 试用额度（可配置）：默认 50000 token
 	defaultKey := "" // 新租户默认 API Key（明文，仅注册响应返回一次）
-	trialTokens := int64(50000)
+	trialTokens := int64(300000)
+	trialDays := 14
+	if v, _ := s.Store.GetConfig("free_trial_tokens"); v != "" {
+		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+			trialTokens = x
+		}
+	}
+	if v, _ := s.Store.GetConfig("free_trial_days"); v != "" {
+		if x, e := strconv.Atoi(v); e == nil && x > 0 {
+			trialDays = x
+		}
+	}
 	if v, _ := s.Store.GetConfig("trial_tokens"); v != "" {
 		if tv, err := strconv.ParseInt(v, 10, 64); err == nil && tv > 0 {
 			trialTokens = tv
@@ -229,7 +240,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		defaultKey = s.issueDefaultAPIKey(inviteTenantID, "默认 Key")
 		_ = s.Store.EnsureBalance(inviteTenantID)
 		if trialTokens > 0 && !reviewMode {
-			_ = s.Store.Charge(inviteTenantID, trialTokens)
+			if gerr := s.Store.CreateQuotaGrant(inviteTenantID, "trial", trialTokens, time.Now().Add(time.Duration(trialDays)*24*time.Hour), "register", 0); gerr != nil {
+				_ = s.Store.Charge(inviteTenantID, trialTokens) // 台账失败兜底旧通道
+			}
 		}
 	} else {
 		// 受邀加入已有租户：返回被加入租户信息
@@ -329,10 +342,16 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 			trialSentences = sv
 		}
 	}
-	trialTokens := int64(50000)
-	if v, _ := s.Store.GetConfig("trial_tokens"); v != "" {
+	trialTokens := int64(300000)
+	if v, _ := s.Store.GetConfig("free_trial_tokens"); v != "" {
 		if tv, perr := strconv.ParseInt(v, 10, 64); perr == nil && tv > 0 {
 			trialTokens = tv
+		}
+	}
+	trialDays := 14
+	if v, _ := s.Store.GetConfig("free_trial_days"); v != "" {
+		if d2, perr := strconv.Atoi(v); perr == nil && d2 > 0 {
+			trialDays = d2
 		}
 	}
 	// 发放句数并置试用包身份
@@ -347,7 +366,9 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 	// 充值 token 余额
 	_ = s.Store.EnsureBalance(t.ID)
 	if trialTokens > 0 {
-		_ = s.Store.Charge(t.ID, trialTokens)
+		if gerr := s.Store.CreateQuotaGrant(t.ID, "trial", trialTokens, time.Now().Add(time.Duration(trialDays)*24*time.Hour), "register", 0); gerr != nil {
+			_ = s.Store.Charge(t.ID, trialTokens)
+		}
 	}
 	// 审计 + 通知租户管理员
 	s.Store.LogAuditDiff(s.effTenant(r, u), u.ID, "grant_trial", "tenant", strconv.FormatInt(t.ID, 10),

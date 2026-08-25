@@ -162,7 +162,7 @@ func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model string,
 	if cost < 0 {
 		cost = 0 // 兜底：费用不可能为负
 	}
-	if err := s.Deduct(tid, cost); err != nil {
+	if err := s.DeductWithGrants(tid, cost); err != nil { // ★ 双部分顺序扣减（台账→永久）
 		return 0, err // 先扣余额，失败则不再落账
 	}
 	res, err := s.db.Exec(
