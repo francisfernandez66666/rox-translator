@@ -403,7 +403,13 @@ def cmd_pageocr_apply(pdf_path: str, out_path: str, lang: str, translations: dic
         img = Image.open(_io.BytesIO(pix.tobytes("png"))).convert("RGB")
         draw = ImageDraw.Draw(img)
         for text, x, y, bw, bh in _ocr_lines(img, OCR_LANGS):
-            trans = lk.get(_norm(text))
+            nk = _norm(text)
+            trans = lk.get(nk)
+            if not trans and len(nk) >= 6:
+                for k, v in lk.items():
+                    if len(k) >= 6 and k in nk:
+                        trans = v  # 兜底：行内包含某长键（OCR 断行差异）
+                        break
             if not trans:
                 continue
             fs = max(9, int(bh * 0.72))
@@ -418,6 +424,34 @@ def cmd_pageocr_apply(pdf_path: str, out_path: str, lang: str, translations: dic
     out.save(out_path)
     print(f"OK pageocr hits={total_hit}: {out_path}")
 
+
+# ---------- 表格自适应 ----------
+def normalize_tables(docx_path: str):
+    """所有表格：layout=autofit（列宽随内容自适应）+ 总宽100%。
+    译文与原文长度差异大，固定列宽会导致溢出/换行崩坏。"""
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    doc = Document(docx_path)
+    n = 0
+    for tbl in doc.element.body.iter(qn('w:tbl')):
+        tblPr = tbl.find(qn('w:tblPr'))
+        if tblPr is None:
+            tblPr = OxmlElement('w:tblPr')
+            tbl.insert(0, tblPr)
+        layout = tblPr.find(qn('w:tblLayout'))
+        if layout is None:
+            layout = OxmlElement('w:tblLayout')
+            tblPr.append(layout)
+        layout.set(qn('w:type'), 'autofit')
+        tw = tblPr.find(qn('w:tblW'))
+        if tw is None:
+            tw = OxmlElement('w:tblW')
+            tblPr.append(tw)
+        tw.set(qn('w:w'), '5000')
+        tw.set(qn('w:type'), 'pct')  # 100%
+        n += 1
+    doc.save(docx_path)
 # ---------- extract / apply ----------
 def cmd_extract(pdf_path: str, cache_docx: str):
     # 图形化文档（文本层稀薄）：跳过 docx 重建，直接整页 OCR 收集行键
@@ -474,8 +508,9 @@ def cmd_apply(cache_docx: str, out_path: str, lang: str, translations: dict):
         shutil.copy2(cache_docx, work)
         if translations:
             translate_docx_text(work, translations)
-            normalize_fonts(work)   # 统一为 Noto CJK，防 LibreOffice 回退 DejaVu 版式崩坏
-            translate_docx_images(work, translations, lang)
+            normalize_fonts(work)   # 字体兜底：未装字族→默认CJK（普惠体），汉字不回退
+            normalize_tables(work)  # ★ 表格自适应：列宽自动布局+表宽100%，防译文溢出错位
+            # 图片内嵌 OCR 翻译暂时停用（产品决策 2026-08-25）：避免半译状态破坏观感
         docx_to_pdf(work, out_path)
         print(f"OK: {out_path}")
     finally:

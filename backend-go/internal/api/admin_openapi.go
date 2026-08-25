@@ -295,12 +295,15 @@ const defaultDocsMDZh = `# 翻译平台开放 API
 | GET | /openapi/v1/billing/usage | billing/all | 用量明细 |
 | POST | /openapi/v1/apikey/rotate | all | 轮换 API Key（旧 Key 立即失效） |
 
-## ① 创建文本任务
+## ① 创建文本任务（heredoc 传 JSON：复制即用，免疫引号/换行问题）
 
 ~~~
-curl -X POST https://域名/openapi/v1/tasks \
-  -H "Authorization: Bearer <API_KEY>" -H "Content-Type: application/json" \
-  -d '{"text":"请检查制动系统","target_langs":["en","de"],"mode":"pro"}'
+curl -sS -X POST https://域名/openapi/v1/tasks \
+  -H 'Authorization: Bearer <API_KEY>' \
+  -H 'Content-Type: application/json' \
+  --data @- <<'EOF'
+{"text":"请检查制动系统","target_langs":["en","de"],"mode":"pro"}
+EOF
 # ← 202 {"success":true,"task_id":123,"ticket_no":"T...","status":"queued",
 #        "mode":"pro","poll_interval_sec":15,"balance_tokens":12500000,...}
 ~~~
@@ -309,14 +312,14 @@ curl -X POST https://域名/openapi/v1/tasks \
 
 ~~~
 curl -X POST https://域名/openapi/v1/tasks \
-  -H "Authorization: Bearer <API_KEY>" \
-  -F "files=@手册.docx" -F "files=@清单.xlsx" -F "target_langs=en,de" -F "mode=fast"
+  -H 'Authorization: Bearer <API_KEY>' \
+  -F 'files=@手册.docx' -F 'files=@清单.xlsx' -F 'target_langs=en,de' -F 'mode=fast' 
 ~~~
 
 ## ③ 轮询状态（文本 15s / 文件 60s）
 
 ~~~
-curl "https://域名/openapi/v1/tasks/status?id=123" -H "Authorization: Bearer <API_KEY>"
+curl 'https://域名/openapi/v1/tasks/status?id=123' -H 'Authorization: Bearer <API_KEY>'
 # 处理中 → {"status":"processing","steps":[...]}
 # 文本完成 → {"status":"completed","translations":{"en":"Check the brake system."},"tokens_used":1832}
 # 文件完成 → {"status":"completed","files":[...],"download":"/openapi/v1/tasks/download?id=123"}
@@ -429,7 +432,7 @@ Response (202): {"task_id":123,"status":"queued","poll_interval_sec":15,"balance
 ## Create a batch file task (mode=fast / pro, default pro)
 
 ~~~bash
-curl -X POST https://host/openapi/v1/tasks -H "Authorization: Bearer YOUR_API_KEY" -F "files=@manual.docx" -F "files=@list.xlsx" -F "target_langs=en,de" -F "mode=fast"
+curl -X POST https://host/openapi/v1/tasks -H 'Authorization: Bearer YOUR_API_KEY' -F 'files=@manual.docx' -F 'files=@list.xlsx' -F 'target_langs=en,de' -F 'mode=fast'
 ~~~
 
 ## Poll status
