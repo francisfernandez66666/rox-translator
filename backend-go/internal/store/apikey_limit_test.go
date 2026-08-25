@@ -10,7 +10,7 @@ import (
 // TestAPIKeyDailyLimitFlow 带每日上限签发 → 触摸计数跨日归集 → 调整限额。
 func TestAPIKeyDailyLimitFlow(t *testing.T) {
 	s := newTestStoreWithTenants(t)
-	plain, err := s.CreateAPIKey(1, "配额测试", "translate", 3)
+	plain, err := s.CreateAPIKey(1, 0, "配额测试", "translate", 3)
 	if err != nil {
 		t.Fatal(err)
 	}

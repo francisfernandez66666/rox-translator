@@ -36,6 +36,7 @@ func New(db *sql.DB) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		return nil, err // 迁移失败则返回错误
 	}
+	s.feedbackMigrate() // 老库补 replies 列（幂等，BBS 回复线程）
 	return s, nil
 }
 
@@ -449,6 +450,9 @@ func (s *Store) migrateColumns() error {
 		{"kb_safety_phrases", "source", "ALTER TABLE kb_safety_phrases ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"},
 		// 知识库包启停状态（停用后不参与翻译命中）
 		{"kb_packages", "enabled", "ALTER TABLE kb_packages ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"},
+		// ★ OpenAPI 安全绑定：Key 归属签发用户；API 任务盖印创建者用户 ID（回读校验防跨用户/租户越权）
+		{"api_keys", "user_id", "ALTER TABLE api_keys ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0"},
+		{"tickets", "api_user_id", "ALTER TABLE tickets ADD COLUMN api_user_id INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, c := range cols {
 		// 判断表是否存在（tm_segments 等表由 kb 模块延迟建表，缺表时跳过）

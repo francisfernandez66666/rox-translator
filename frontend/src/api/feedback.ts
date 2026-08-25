@@ -55,3 +55,44 @@ export async function resolveFeedback(id: number, note = ''): Promise<AdminResp>
     body: JSON.stringify({ id, note }),
   })
 }
+
+// FeedbackReply BBS 回复线程元素
+export interface FeedbackReply {
+  u: number
+  name: string
+  role: string
+  content: string
+  at: string
+}
+
+// FeedbackDetail 反馈记录（列表视图，含线程）
+export interface FeedbackRecord {
+  id: number
+  user_id: number
+  user_name: string
+  target_type: string
+  ticket_id: number
+  content: string
+  target_langs: string
+  mode: string
+  with_context: boolean
+  source_text: string
+  status: string            // open=反馈中 | resolved=已完成
+  replies: FeedbackReply[]
+  created_at: string
+  handled_at: string
+}
+
+// feedbackList 反馈列表（角色化）：超管=全部，其他用户=本人提交。
+export async function feedbackList(status = ''): Promise<AdminResp & { feedbacks?: FeedbackRecord[] }> {
+  return request(`/api/feedback/list${status ? '?status=' + encodeURIComponent(status) : ''}`, { headers: authHeaders() })
+}
+
+// feedbackReply 追加回复（超管或提交者本人；已完成禁止）。
+export async function feedbackReply(id: number, content: string): Promise<AdminResp & { replies?: FeedbackReply[] }> {
+  return request('/api/feedback/reply', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ id, content }),
+  })
+}

@@ -34,21 +34,6 @@ import (
 	"translator/internal/store"
 )
 
-// errInsufficientCode 余额不足错误码（与 service 包同值：worker 失败原因前缀匹配用）
-const errInsufficientCode = "insufficient_balance"
-
-// openAPITaskMaxFiles 单次文件任务数量上限
-const openAPITaskMaxFiles = 20
-
-// openAPITaskMaxBytes 单次文件任务总体积上限（30MB；Caddy 该路径放宽至 35MB）
-const openAPITaskMaxBytes = 30 << 20
-
-// openAPITaskExtWhitelist 文件任务扩展名白名单（与内部文件工单一致）
-var openAPITaskExtWhitelist = map[string]bool{
-	".docx": true, ".xlsx": true, ".pptx": true, ".pdf": true,
-	".txt": true, ".csv": true, ".srt": true, ".vtt": true,
-	".md": true, ".json": true, ".yaml": true, ".yml": true,
-}
 
 // pollIntervalSec 按任务类型给出建议轮询间隔（秒）：文本 15s、文件 60s
 func pollIntervalSec(isFile bool) int {
@@ -104,13 +89,29 @@ func (s *Server) handleOpenAPITaskCreate(w http.ResponseWriter, r *http.Request)
 	}
 	ct := r.Header.Get("Content-Type")
 	if strings.HasPrefix(ct, "application/json") {
-		s.openAPITaskCreateText(w, r, tid)
+		s.openAPITaskCreateText(w, r, tid, ak)
 		return
 	}
-	s.openAPITaskCreateFiles(w, r, tid)
+	s.openAPITaskCreateFiles(w, r, tid, ak)
 }
 
 // gateErrorCode 将闸门错误映射为稳定错误码（OpenAPI 出参）。
+// errInsufficientCode 余额不足错误码（与 service 包同值：worker 失败原因前缀匹配用）
+const errInsufficientCode = "insufficient_balance"
+
+// openAPITaskMaxFiles 单次文件任务数量上限
+const openAPITaskMaxFiles = 20
+
+// openAPITaskMaxBytes 单次文件任务总体积上限（30MB；Caddy 该路径放宽至 35MB）
+const openAPITaskMaxBytes = 30 << 20
+
+// openAPITaskExtWhitelist 文件任务扩展名白名单（与内部文件工单一致）
+var openAPITaskExtWhitelist = map[string]bool{
+	".docx": true, ".xlsx": true, ".pptx": true, ".pdf": true,
+	".txt": true, ".csv": true, ".srt": true, ".vtt": true,
+	".md": true, ".json": true, ".yaml": true, ".yml": true,
+}
+
 func gateErrorCode(err error) string {
 	msg := err.Error()
 	switch {
@@ -128,7 +129,7 @@ func gateErrorCode(err error) string {
 }
 
 // openAPITaskCreateText 创建文本任务（JSON body）。
-func (s *Server) openAPITaskCreateText(w http.ResponseWriter, r *http.Request, tid int64) {
+func (s *Server) openAPITaskCreateText(w http.ResponseWriter, r *http.Request, tid int64, ak *store.APIKey) {
 	var req struct {
 		Text        string   `json:"text"`         // 待翻译源文本（必填）
 		TargetLangs []string `json:"target_langs"` // 目标语言列表（默认 ["en"]）
@@ -159,7 +160,7 @@ func (s *Server) openAPITaskCreateText(w http.ResponseWriter, r *http.Request, t
 		writeTaskError(w, "internal", err.Error())
 		return
 	}
-	s.enqueueAPITask(t, mode)
+	s.enqueueAPITask(t, mode, ak)
 	writeJSON(w, 202, map[string]interface{}{
 		"task_id": t.ID, "mode": mode,
 		"type": "text", "status": "queued",
@@ -167,9 +168,12 @@ func (s *Server) openAPITaskCreateText(w http.ResponseWriter, r *http.Request, t
 }
 
 // enqueueAPITask 置模式/入队并写审计（文本与文件任务共用收尾）。
-func (s *Server) enqueueAPITask(t *store.Ticket, mode string) {
+func (s *Server) enqueueAPITask(t *store.Ticket, mode string, ak *store.APIKey) {
 	t.Mode = mode
 	t.Status = store.TicketQueued
+	if ak != nil && ak.UserID > 0 {
+		_ = s.Store.StampTicketAPIUser(t.ID, ak.UserID) // ★ 归属盖印：回读时校验 Key→用户
+	}
 	_ = s.Store.UpdateTicket(t)
 	if s.TicketSvc != nil {
 		_, _ = s.TicketSvc.EnqueueTicketRun(context.Background(), t.ID)
@@ -178,7 +182,7 @@ func (s *Server) enqueueAPITask(t *store.Ticket, mode string) {
 }
 
 // openAPITaskCreateFiles 创建文件批量任务（multipart）。
-func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, tid int64) {
+func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, tid int64, ak *store.APIKey) {
 	r.Body = http.MaxBytesReader(w, r.Body, openAPITaskMaxBytes)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeTaskError(w, "bad_request", "文件解析失败或超过 30MB 总量上限")
@@ -266,7 +270,7 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 			TenantID: tid2, TicketID: t.ID, FileName: f.name, FilePath: f.path,
 		})
 	}
-	s.enqueueAPITask(t, mode)
+	s.enqueueAPITask(t, mode, ak)
 	writeJSON(w, 202, map[string]interface{}{
 		"task_id": t.ID, "mode": mode,
 		"type": "files", "status": "queued",
@@ -294,6 +298,11 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 	// 租户隔离 + 仅限 API 任务（CreatedBy=0），跨租户/内部工单一律 404
 	t, err := s.Store.GetTicket(id, ak.TenantID)
 	if err != nil || t.CreatedBy != 0 {
+		writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": "not_found", "message": "任务不存在"})
+		return
+	}
+	// ★ 用户级归属校验：Key 绑定用户且任务已盖印时不匹配即 404（不泄露存在性）
+	if ak.UserID > 0 && t.APIUserID != 0 && t.APIUserID != ak.UserID {
 		writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": "not_found", "message": "任务不存在"})
 		return
 	}
@@ -390,6 +399,11 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 	}
 	t, err := s.Store.GetTicket(id, ak.TenantID)
 	if err != nil || t.CreatedBy != 0 {
+		writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": "not_found", "message": "任务不存在"})
+		return
+	}
+	// ★ 用户级归属校验：Key 绑定用户且任务已盖印时不匹配即 404（不泄露存在性）
+	if ak.UserID > 0 && t.APIUserID != 0 && t.APIUserID != ak.UserID {
 		writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": "not_found", "message": "任务不存在"})
 		return
 	}

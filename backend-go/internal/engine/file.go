@@ -226,6 +226,25 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		}(lc)
 	}
 	wg.Wait()
+	// ★ 复核补漏（文件工单复核第1层）：扫描各语言未命中段落，重试一次批量模型。
+	// 治「有的中文还没翻译就贴上来」：首翻失败的段不再静默缺失。
+	for _, lc := range finalLangs {
+		missing := []string{}
+		for _, t := range texts {
+			if _, ok := langTranslations[lc][t]; !ok {
+				missing = append(missing, t)
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		batch := e.BatchTranslate(ctx, missing, lc, 10, nil)
+		for i, m := range missing {
+			if i < len(batch) && batch[i] != "" && batch[i] != "[翻译失败]" {
+				addTrans(lc, m, batch[i])
+			}
+		}
+	}
 	prog("第2步/3：翻译完成", 2, 3)
 
 	isXlsxInput := ext == ".xlsx"

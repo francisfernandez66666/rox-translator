@@ -23,13 +23,14 @@ type Feedback struct {
 	Mode         string `json:"mode"`         // 翻译模式：fast | pro
 	Content      string `json:"content"`      // 反馈意见
 	WithContext  bool   `json:"with_context"` // 是否附带上下文
-	Status       string `json:"status"`       // open | resolved
+	Replies      string `json:"replies"`      // BBS 回复线程 JSON：[{u,role,content,at}]
+	Status       string `json:"status"`       // open(反馈中) | resolved(已完成)
 	HandleNote   string `json:"handle_note"`  // 超管处理备注
 	CreatedAt    string `json:"created_at"`   // 反馈时间
 	HandledAt    string `json:"handled_at"`   // 处理时间（空=未处理）
 }
 
-const feedbackCols = "id, tenant_id, user_id, target_type, ticket_id, source_text, translations, target_langs, mode, content, with_context, status, handle_note, created_at, COALESCE(handled_at,'')"
+const feedbackCols = "id, tenant_id, user_id, target_type, ticket_id, source_text, translations, target_langs, mode, content, with_context, status, handle_note, COALESCE(replies,'[]'), created_at, COALESCE(handled_at,'')"
 
 // CreateFeedback 写入一条用户反馈。
 // 参数：f=反馈对象（Content 必填）；返回错误。
@@ -90,7 +91,7 @@ func scanFeedback(row feedbackScanner) (*Feedback, error) {
 	var ctxInt int
 	if err := row.Scan(&f.ID, &f.TenantID, &f.UserID, &f.TargetType, &f.TicketID,
 		&f.SourceText, &f.Translations, &f.TargetLangs, &f.Mode, &f.Content,
-		&ctxInt, &f.Status, &f.HandleNote, &f.CreatedAt, &f.HandledAt); err != nil {
+		&ctxInt, &f.Status, &f.HandleNote, &f.Replies, &f.CreatedAt, &f.HandledAt); err != nil {
 		return nil, err
 	}
 	f.WithContext = ctxInt == 1
@@ -118,4 +119,51 @@ func (s *Store) CountFeedbacksToday(userID int64) int64 {
 	_ = s.db.QueryRow(
 		"SELECT COUNT(*) FROM feedbacks WHERE user_id=? AND created_at>=?", userID, day+"T00:00:00").Scan(&n)
 	return n
+}
+
+// feedbackMigrate 老库补 replies 列（幂等）。
+func (s *Store) feedbackMigrate() {
+	_, _ = s.db.Exec("ALTER TABLE feedbacks ADD COLUMN replies TEXT NOT NULL DEFAULT '[]'")
+}
+
+// ListFeedbacksByUser 查询某用户提交的全部反馈（BBS 我的反馈视图）。status 为空=全部。
+func (s *Store) ListFeedbacksByUser(userID int64, status string) ([]*Feedback, error) {
+	q := "SELECT " + feedbackCols + " FROM feedbacks WHERE user_id=?"
+	args := []interface{}{userID}
+	if status != "" {
+		q += " AND status=?"
+		args = append(args, status)
+	}
+	q += " ORDER BY id DESC LIMIT 200"
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Feedback
+	for rows.Next() {
+		f, perr := scanFeedback(rows)
+		if perr != nil {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out, nil
+}
+
+// AppendFeedbackReply 向回复线程追加一条（BBS 模式；超管与提交者均可写）。
+// 参数：id=反馈 ID；replyJSON=完整线程 JSON（调用方读改写，避免并发覆盖场景复杂化——当前量级可接受）。
+func (s *Store) AppendFeedbackReply(id int64, replyJSON string) error {
+	_, err := s.db.Exec("UPDATE feedbacks SET replies=? WHERE id=?", replyJSON, id)
+	return err
+}
+
+// GetFeedback 按 ID 取单条反馈（不存在返回 nil, err）。
+func (s *Store) GetFeedback(id int64) (*Feedback, error) {
+	row := s.db.QueryRow("SELECT " + feedbackCols + " FROM feedbacks WHERE id=?", id)
+	f, err := scanFeedback(row)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
 }

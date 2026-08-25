@@ -115,6 +115,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/memleak/log", s.handleMemLeakLog)
 	// ★ 用户反馈：前台提交 + 超管管理
 	s.mux.HandleFunc("/api/feedback", s.handleFeedbackCreate)
+	s.mux.HandleFunc("/api/feedback/list", s.handleFeedbackList)
+	s.mux.HandleFunc("/api/feedback/reply", s.handleFeedbackReply)
+	s.mux.HandleFunc("/api/feedback/get", s.handleFeedbackGet)
 	s.mux.HandleFunc("/api/admin/feedbacks", s.handleAdminFeedbacks)
 	s.mux.HandleFunc("/api/admin/feedbacks/resolve", s.handleAdminFeedbackResolve)
 	// ★ 开放 API 文档在线维护（仅超管）

@@ -599,7 +599,7 @@ func (s *Server) handleOpenAPIKeyRotate(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 500, map[string]interface{}{"success": false, "error_code": "internal", "message": err.Error()})
 		return
 	}
-	newKey, err := s.Store.CreateAPIKey(ak.TenantID, ak.Name, ak.Perms, ak.DailyCallLimit)
+	newKey, err := s.Store.CreateAPIKey(ak.TenantID, ak.UserID, ak.Name, ak.Perms, ak.DailyCallLimit) // 轮换保留原归属用户
 	if err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "error_code": "internal", "message": err.Error()})
 		return

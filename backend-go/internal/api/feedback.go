@@ -16,7 +16,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
+
+	"translator/internal/auth"
 
 	"translator/internal/store"
 )
@@ -165,4 +169,142 @@ func (s *Server) handleAdminFeedbackResolve(w http.ResponseWriter, r *http.Reque
 	}
 	s.Store.LogAudit(0, u.ID, "feedback_resolve", "feedbacks", fmt.Sprintf("%d", req.ID))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// feedbackReplyItem BBS 回复线程元素
+type feedbackReplyItem struct {
+	U       int64  `json:"u"`       // 回复人用户 ID
+	Name    string `json:"name"`    // 显示名
+	Role    string `json:"role"`    // admin | tenant_admin | dept_admin | user
+	Content string `json:"content"` // 回复内容
+	At      string `json:"at"`      // 时间 RFC3339
+}
+
+// appendReply 读取→追加→写回回复线程（当前量级下读改写可接受）。
+func (s *Server) appendReply(f *store.Feedback, u *store.User, content string) (string, error) {
+	items := []feedbackReplyItem{}
+	if f.Replies != "" {
+		_ = json.Unmarshal([]byte(f.Replies), &items)
+	}
+	items = append(items, feedbackReplyItem{
+		U: u.ID, Name: u.DisplayName, Role: u.Role,
+		Content: content, At: time.Now().Format(time.RFC3339),
+	})
+	b, _ := json.Marshal(items)
+	return string(b), s.Store.AppendFeedbackReply(f.ID, string(b))
+}
+
+// handleFeedbackList 反馈列表（角色化）：超管=平台全部；其他登录用户=本人提交。
+// 查询参数 status=open|resolved|空。附带提交者显示名。
+func (s *Server) handleFeedbackList(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	status := r.URL.Query().Get("status")
+	var (
+		list []*store.Feedback
+		err  error
+	)
+	if auth.IsSuperAdmin(u) {
+		list, err = s.Store.ListFeedbacks(status)
+	} else {
+		list, err = s.Store.ListFeedbacksByUser(u.ID, status)
+	}
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	if list == nil {
+		list = []*store.Feedback{}
+	}
+	nameOf := map[int64]string{}
+	tidOf := map[int64]int64{}
+	for _, f := range list {
+		nameOf[f.UserID] = ""
+		tidOf[f.UserID] = f.TenantID
+	}
+	for uid, tid := range tidOf {
+		if usr, e := s.Store.GetUser(uid, tid); e == nil && usr != nil {
+			nameOf[uid] = usr.DisplayName
+		}
+	}
+	out := make([]map[string]interface{}, 0, len(list))
+	for _, f := range list {
+		srcCtx := ""
+		if f.WithContext {
+			srcCtx = f.SourceText
+		}
+		out = append(out, map[string]interface{}{
+			"id": f.ID, "user_id": f.UserID, "user_name": nameOf[f.UserID],
+			"target_type": f.TargetType, "ticket_id": f.TicketID,
+			"content": f.Content, "target_langs": f.TargetLangs, "mode": f.Mode,
+			"with_context": f.WithContext, "source_text": srcCtx,
+			"status": f.Status, "replies": json.RawMessage(f.Replies),
+			"created_at": f.CreatedAt, "handled_at": f.HandledAt,
+		})
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "feedbacks": out})
+}
+
+// handleFeedbackReply 回复反馈（BBS 模式）：超管或提交者本人；已完成禁止回复。
+func (s *Server) handleFeedbackReply(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	var req struct {
+		ID      int64  `json:"id"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	content := strings.TrimSpace(req.Content)
+	if content == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请填写回复内容"})
+		return
+	}
+	f, err := s.Store.GetFeedback(req.ID)
+	if err != nil || f == nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "反馈不存在"})
+		return
+	}
+	if !auth.IsSuperAdmin(u) && f.UserID != u.ID {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管或提交者可回复"})
+		return
+	}
+	if f.Status == "resolved" {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "反馈已完成，不可再回复"})
+		return
+	}
+	thread, aerr := s.appendReply(f, u, content)
+	if aerr != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": aerr.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "replies": json.RawMessage(thread)})
+}
+
+// handleFeedbackGet 单条反馈详情（超管或提交者）。
+func (s *Server) handleFeedbackGet(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	f, err := s.Store.GetFeedback(id)
+	if err != nil || f == nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "反馈不存在"})
+		return
+	}
+	if !auth.IsSuperAdmin(u) && f.UserID != u.ID {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权查看"})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "feedback": f})
 }

@@ -48,7 +48,7 @@ func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "name 不能为空"})
 		return
 	}
-	plain, err := s.Store.CreateAPIKey(s.effTenant(r, u), req.Name, req.Perms, req.DailyLimit)
+	plain, err := s.Store.CreateAPIKey(s.effTenant(r, u), u.ID, req.Name, req.Perms, req.DailyLimit)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -103,7 +103,7 @@ func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	plain, err := s.Store.CreateAPIKey(tid, old.Name, old.Perms, old.DailyCallLimit) // 轮换继承旧限额
+	plain, err := s.Store.CreateAPIKey(tid, old.UserID, old.Name, old.Perms, old.DailyCallLimit) // 轮换继承旧限额与归属用户
 	if err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -166,7 +166,7 @@ func (s *Server) issueDefaultAPIKey(tid int64, name string) string {
 	if s.Store == nil || tid <= 0 {
 		return ""
 	}
-	plain, err := s.Store.CreateAPIKey(tid, name, "translate", 0)
+	plain, err := s.Store.CreateAPIKey(tid, 0, name, "translate", 0) // 租户默认 Key：无签发个人，租户级
 	if err != nil {
 		log.Printf("[tenant-default-key] 租户 %d 默认 API Key 签发失败: %v", tid, err)
 		return ""
