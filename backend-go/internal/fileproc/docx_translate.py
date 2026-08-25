@@ -187,7 +187,7 @@ def resolve_cjk_font() -> str:
     """解析输出用 CJK 字体（结果缓存）：
     ① 环境变量 CJK_FONT_NAME 显式指定；
     ② 候选链按序取 fontconfig 已安装且覆盖汉字的第一个：
-       苹方(PingFang SC) → Noto Sans CJK SC → 任一 :lang=zh 字体；
+       阿里巴巴普惠体(Alibaba PuHuiTi，默认) → 苹方 → Noto Sans CJK SC → 任一 :lang=zh；
     ③ 兜底 Noto Sans CJK SC。
     只输出「确实已安装」的字族名，杜绝 LibreOffice 回退到无汉字字体。"""
     global _FONT_CACHE
@@ -198,7 +198,7 @@ def resolve_cjk_font() -> str:
     if name and _font_installed(name):
         _FONT_CACHE = name
         return name
-    for cand in ("PingFang SC", "PingFang TC", "Noto Sans CJK SC", "Noto Sans CJK JP"):
+    for cand in ("Alibaba PuHuiTi", "PingFang SC", "Noto Sans CJK SC", "Noto Sans CJK JP"):
         if _font_installed(cand):
             _FONT_CACHE = cand
             return cand
