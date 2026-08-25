@@ -6,6 +6,7 @@
 package llm
 
 import (
+	"crypto/tls"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -48,7 +49,12 @@ func (c *Client) SetEmbedOverride(base, key, model string) {
 
 // NewClient 构造函数：初始化并返回实例。
 func NewClient(cfg *config.Config) *Client {
-	tr := &http.Transport{}
+	tr := &http.Transport{
+		// ★ 禁用 HTTP/2：siliconflow 偶发 h2 流挂起（roundTrip 2min+ 无响应），
+		//   HTTP/1.1 下未观测到该问题；同时缩短整体超时快速失败。
+		TLSClientConfig: &tls.Config{NextProtos: []string{"http/1.1"}},
+		ForceAttemptHTTP2: false,
+	}
 	if p := getenvAny("PROXY_URL", "HTTPS_PROXY", "HTTP_PROXY"); p != "" {
 		// 配置 HTTP 代理（用于公司内网/受限网络访问 LLM API）
 		if u, err := url.Parse(p); err == nil {
@@ -58,7 +64,7 @@ func NewClient(cfg *config.Config) *Client {
 	return &Client{
 		cfg: cfg,
 		// ★ 全局超时兜底：防止 LLM API 卡住时请求无限挂起
-		http: &http.Client{Transport: tr, Timeout: 120 * time.Second},
+		http: &http.Client{Transport: tr, Timeout: 45 * time.Second},
 		// ★ 全局并发信号量（超过 3 路排队等待，不加大并发）
 		sem: make(chan struct{}, MaxLLMConcurrent),
 	}

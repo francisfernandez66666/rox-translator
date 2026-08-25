@@ -284,5 +284,12 @@ func (s *Store) RequeueStalledTickets(stale time.Duration) (int64, error) {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
+	// ★ 同步释放 jobs 表租约：否则 direct 队列仍认为任务在途，worker 永远领不到（卡死假象）
+	if n > 0 {
+		s.db.Exec(`UPDATE jobs SET status='queued', leased_by='', leased_at=0
+			WHERE type='ticket' AND status='running'
+			  AND CAST(json_extract(payload,'$.ticket_id') AS INTEGER) IN
+			  (SELECT id FROM tickets WHERE status='queued')`)
+	}
 	return n, nil
 }

@@ -11,6 +11,7 @@
 package service
 
 import (
+	"log"
 	"archive/zip"
 	"context"
 	"fmt"
@@ -492,3 +493,16 @@ func splitComma(s string) []string {
 }
 
 var _ = kb.KBDatabase{} // 保持 DB 字段类型引用
+
+// BootResume 启动断点续跑：把上次进程退出时遗留的 in_progress 工单重置为 queued，
+// worker 立即接管（配合各步骤幂等：提取/翻译/回写均可安全重来）。
+func (s *TicketService) BootResume() {
+	// ★ 启动即强制释放所有在途 ticket 任务：上一进程必然已死，剩余租约无意义。
+	//   不释放则新 worker 需等满租约（默认 30min）才能接管，表现为「卡死」。
+	if s.DB != nil {
+		s.DB.RawDB().Exec("UPDATE jobs SET status='queued', leased_by='', leased_at=0 WHERE type='ticket' AND status='running'")
+	}
+	if n, err := s.Store.RequeueStalledTickets(0); err == nil && n > 0 {
+		log.Printf("[boot-resume] 已重新排队 %d 个中断工单", n)
+	}
+}

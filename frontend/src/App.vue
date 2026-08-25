@@ -43,8 +43,8 @@
             <div class="menu-user">👤 {{ authUser.display_name || authUser.username }}</div>
             <!-- ★ 修改密码：独立 Teleport 弹窗（邮箱验证码流程） -->
             <button v-if="canEnterAdmin" class="menu-item" @click="enterAdmin">🛠 {{ t('menu.adminConsole') }}</button>
-            <button class="menu-item" @click.stop="openPwd" @pointerup.stop="openPwd">🔒 {{ t('pwd.title') }}</button>
-            <button class="menu-item" @click.stop="openEmailEdit" @pointerup.stop="openEmailEdit">📧 {{ t('menu.changeEmail') }}</button>
+            <button class="menu-item" @click="openPwd" @pointerup="openPwd">🔒 {{ t('pwd.title') }}</button>
+            <button class="menu-item" @click="openEmailEdit" @pointerup="openEmailEdit">📧 {{ t('menu.changeEmail') }}</button>
             <button class="menu-item menu-logout" @click="logout" @pointerup="logout">⎋ {{ t('common.logout') }}</button>
           </div>
         </details>
