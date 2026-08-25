@@ -735,7 +735,12 @@ func (s *Server) handleTicketCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.CancelTicket(req.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		msg := err.Error()
+		// ★ 用户友好映射：底层并发锁冲突对用户表现为「系统繁忙」
+		if strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked") {
+			msg = "系统繁忙，工单取消未成功，请稍候重试"
+		}
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": msg})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_cancel", "tickets", t.TicketNo)

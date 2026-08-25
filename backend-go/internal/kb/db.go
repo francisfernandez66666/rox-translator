@@ -57,7 +57,13 @@ func MD5Hex(s string) string {
 // Open 打开数据库并确保表存在。
 // 参数：dbPath=SQLite 文件路径；返回知识库对象（含已建立的连接与表结构）。
 func Open(dbPath string) (*KBDatabase, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// ★ SQLite 并发加固：busy_timeout 等待锁而非立刻报错；WAL 读写不互斥；
+	//   synchronous=NORMAL 在 WAL 下安全且更快。经 DSN 下发，池内每个新连接自动携带。
+	dsn := "file:" + dbPath +
+		"?_pragma=busy_timeout(5000)" +
+		"&_pragma=journal_mode(WAL)" +
+		"&_pragma=synchronous(NORMAL)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
