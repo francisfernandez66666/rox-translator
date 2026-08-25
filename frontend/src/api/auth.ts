@@ -76,3 +76,8 @@ export async function sendPwdCode(data: { username?: string; email?: string }): 
 export async function submitNewPassword(data: { username: string; code: string; new_password: string }): Promise<AdminResp> {
   return resetPassword(data)
 }
+
+/** updateEmail 登录用户自助绑定/修改邮箱（全局唯一校验在服务端） */
+export async function updateEmail(email: string): Promise<AdminResp> {
+  return request('/api/me/update-email', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ email }) })
+}

@@ -50,6 +50,7 @@
     </header>
 
     <!-- ★ 自助修改密码弹窗（Teleport 挂载 body，居中遮罩） -->
+    <EmailBindModal v-if="emailMissing" @done="onEmailBound" />
     <PasswordModal
       v-if="pwdOpen"
       :username="authUser.username"
@@ -159,6 +160,16 @@ const pkgLine = ref('')
 
 // ★ 自助修改密码弹窗状态（独立 Teleport 弹窗，邮箱验证码流程）
 const pwdOpen = ref(false)
+// ★ 前台登录用户强制维护邮箱（同后台策略）
+const emailMissing = ref(false)
+async function checkEmailBinding() {
+  if (!getAuthToken()) { emailMissing.value = false; return }
+  try {
+    const r: any = await meContext()
+    emailMissing.value = !!r && !r.email
+  } catch { emailMissing.value = false }
+}
+function onEmailBound(addr: string) { emailMissing.value = false; checkEmailBinding() }
 const pwdEmail = ref('')
 
 // refreshPkgLine 拉取剩余 token 与 ≈句数（页眉徽标数据源）
@@ -214,6 +225,7 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
 })
+onMounted(checkEmailBinding)
 </script>
 
 <style>

@@ -14,6 +14,7 @@ package api
 //   - 所有写操作均写入审计日志（含变更前后值 diff）
 
 import (
+	"strings"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -719,5 +720,37 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.LogAudit(u.TenantID, u.ID, "user_delete", "users", target.Username)
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleUpdateEmail 登录用户自助绑定/修改邮箱（强提醒维护策略的数据入口）。
+// 校验：格式合法 + 全局唯一（他人已绑定则拒绝）；成功后立即可接收验证码。
+func (s *Server) handleUpdateEmail(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if emailRe.MatchString(email) == false {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱格式不正确"})
+		return
+	}
+	if other, err := s.Store.GetUserByEmail(email); err == nil && other != nil && other.ID != u.ID {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "该邮箱已被其他账号绑定"})
+		return
+	}
+	if err := s.Store.SetUserEmail(u.ID, u.TenantID, email); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(u.TenantID, u.ID, "update_email", "users", email)
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }

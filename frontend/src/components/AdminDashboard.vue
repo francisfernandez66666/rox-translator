@@ -68,7 +68,8 @@
     </main>
     </div><!-- /ad-body -->
   </div>
-  <PasswordModal v-if="pwdOpen" :username="user?.username || ''" :email="pwdEmail" @close="pwdOpen = false" @done="onPwdDone" />
+  <EmailBindModal v-if="emailMissing" @done="onEmailBound" />
+      <PasswordModal v-if="pwdOpen" :username="user?.username || ''" :email="pwdEmail" @close="pwdOpen = false" @done="onPwdDone" />
 </template>
 
 <script setup lang="ts">
@@ -98,6 +99,7 @@ import Audit from './admin/Audit.vue'
 // ★ 站内信铃铛：后台消息通知中心（工单完成/反馈/告警等站内信）
 import Bell from '../components/Bell.vue'
 import PasswordModal from '../components/PasswordModal.vue'
+import EmailBindModal from '../components/EmailBindModal.vue'
 // ★ 套餐详情合并面板（四期：商业包+订阅收银合一；非超管只读）
 import PlansPanel from './admin/PlansPanel.vue'
 // 共享样式（非 scoped，供全部面板使用）
@@ -199,6 +201,19 @@ function logout() {
 
 // ★ 自助修改密码弹窗状态
 const pwdOpen = ref(false)
+// ★ 登录后强制维护邮箱：meContext 无 email 即弹出（不可关闭），绑定成功自动消失
+const emailMissing = ref(false)
+async function checkEmailBinding() {
+  try {
+    const r: any = await meContext()
+    emailMissing.value = !!r && !r.email
+    if (!r?.email) pwdEmail.value = ''
+  } catch { /* 未登录等场景忽略 */ }
+}
+function onEmailBound(addr: string) {
+  emailMissing.value = false
+  pwdEmail.value = addr
+}
 const pwdEmail = ref('')
 
 // openPwd 打开改密弹窗并异步预填绑定邮箱
@@ -220,6 +235,7 @@ function onPwdDone() {
 // 挂载：超管加载租户列表（供租户切换器使用）
 onMounted(() => {
   if (isSuper.value) loadTenants()
+  checkEmailBinding()
 })
 </script>
 
