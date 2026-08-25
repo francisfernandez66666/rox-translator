@@ -84,7 +84,7 @@
             <td>{{ fmtTime(tk.created_at) }}</td>
             <td class="ad-td">
               <button v-if="tk.status === 'draft'" class="ad-btn-sm" @click="run(tk)">{{ t('tk.run') }}</button>
-              <button v-if="tk.status === 'completed'" class="ad-btn-sm ad-btn-green" @click="download(tk)">⬇ {{ t('tk.download') }}</button>
+              <button v-if="tk.status === 'completed'" class="ad-btn-sm ad-btn-green" :disabled="downloadingId === tk.id" @click="download(tk)">{{ downloadingId === tk.id ? '⏳' : '⬇' }} {{ downloadingId === tk.id ? '下载中…' : t('tk.download') }}</button>
               <button v-if="tk.status === 'completed'" class="ad-btn-sm" @click="openFeedback(tk)">💬 {{ t('fb.entry') }}</button>
               <button v-if="tk.status === 'completed'" class="ad-btn-sm ad-btn-red" @click="deleteTicket(tk)">🗑 {{ t('common.delete') }}</button>
               <button class="ad-btn-sm" @click.stop="toggleDetail(tk, $event)">{{ t('tk.detail') }}</button>
@@ -341,8 +341,12 @@ async function deleteTicket(tk: any) {
 
 // 下载结果
 // download 下载结果文件（blob 触发保存）
+const downloadingId = ref<number | null>(null)
+// download 流式下载产物（按钮带加载态：大文件耗时可见，防重复点击）
 async function download(tk: any) {
-  try { await ticketDownload(tk.id) } catch (e: any) { alert(e?.message || 'download failed') }
+  if (downloadingId.value !== null) return
+  downloadingId.value = tk.id
+  try { await ticketDownload(tk.id) } catch (e: any) { alert(e?.message || 'download failed') } finally { downloadingId.value = null }
 }
 
 // 展开/收起步骤进度

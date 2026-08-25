@@ -356,12 +356,25 @@ def translate_docx_images(docx_path: str, translations: dict, lang: str):
 PAGE_TEXT_MIN = 200  # 平均每页文本层字符低于此值视为图形化文档
 
 def page_is_graphical(pdf_path: str) -> bool:
+    """图形化判定（以 pdftotext 为准，与引擎提取同源）：
+    平均每页文本层字符 < 60 且未显式开启 FORCE_PAGE_OCR 时按普通文档走 docx 管线。
+    整页 OCR 会把页面变图片，违背『图片遗留不动』的产品要求，故仅显式开启才启用。"""
+    import os as _os, subprocess as _sp
+    if _os.environ.get("FORCE_PAGE_OCR", "").strip() == "1":
+        return True
     try:
-        import pymupdf
-        d = pymupdf.open(pdf_path)
-        n = max(1, len(d))
-        chars = len("".join(p.get_text() for p in d).strip())
-        return chars / n < PAGE_TEXT_MIN
+        out = _sp.run(["pdftotext", "-layout", pdf_path, "-"],
+                      capture_output=True, timeout=60)
+        chars = len(out.stdout.decode("utf-8", "ignore").strip())
+        pages = 1
+        try:
+            info = _sp.run(["pdfinfo", pdf_path], capture_output=True, text=True, timeout=15)
+            for ln in info.stdout.splitlines():
+                if ln.startswith("Pages:"):
+                    pages = max(1, int(ln.split(":")[1].strip()))
+        except Exception:
+            pass
+        return chars / pages < 60
     except Exception:
         return False
 
@@ -452,6 +465,32 @@ def normalize_tables(docx_path: str):
         tw.set(qn('w:type'), 'pct')  # 100%
         n += 1
     doc.save(docx_path)
+
+# ---------- 段内字号统一 ----------
+def normalize_font_sizes(docx_path: str):
+    """每段落内以出现最多的字号为准对齐 w:sz/w:szCs。
+    pdf2docx 常给同一视觉段落的行打不同 sz，导致译文版式忽大忽小。"""
+    from docx import Document
+    from collections import Counter
+    doc = Document(docx_path)
+    fixed = 0
+    for para in iter_all_paragraphs(doc):
+        szs = []
+        for el in para._p.iter(W_NS + 'sz'):
+            v = el.get(W_NS + 'val')
+            if v and v.isdigit():
+                szs.append(v)
+        if len(set(szs)) <= 1:
+            continue
+        dominant = Counter(szs).most_common(1)[0][0]
+        for tag in ('sz', 'szCs'):
+            for el in para._p.iter(W_NS + tag):
+                v = el.get(W_NS + 'val')
+                if v and v != dominant:
+                    el.set(W_NS + 'val', dominant)
+                    fixed += 1
+    doc.save(docx_path)
+    return fixed
 # ---------- extract / apply ----------
 def cmd_extract(pdf_path: str, cache_docx: str):
     # 图形化文档（文本层稀薄）：跳过 docx 重建，直接整页 OCR 收集行键
@@ -509,7 +548,8 @@ def cmd_apply(cache_docx: str, out_path: str, lang: str, translations: dict):
         if translations:
             translate_docx_text(work, translations)
             normalize_fonts(work)   # 字体兜底：未装字族→默认CJK（普惠体），汉字不回退
-            normalize_tables(work)  # ★ 表格自适应：列宽自动布局+表宽100%，防译文溢出错位
+            normalize_font_sizes(work)  # ★ 段内字号统一（治同段忽大忽小）
+            normalize_tables(work)      # ★ 表格自适应：列宽自动布局+表宽100%
             # 图片内嵌 OCR 翻译暂时停用（产品决策 2026-08-25）：避免半译状态破坏观感
         docx_to_pdf(work, out_path)
         print(f"OK: {out_path}")
