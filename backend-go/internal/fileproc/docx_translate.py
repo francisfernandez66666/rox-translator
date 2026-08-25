@@ -177,9 +177,55 @@ def translate_docx_text(docx_path: str, translations: dict):
                 run.text = new
     doc.save(docx_path)
 
+# ---------- 字体归一化 ----------
+CJK_FONT = "Noto Sans CJK SC"
+# OCR 识别语言：源文档可能中英混排，固定多语组合；提取与应用两侧必须一致
+OCR_LANGS = "chi_sim+chi_tra+eng"
+
+def normalize_fonts(docx_path: str):
+    """把 DOCX 内全部 rFonts（含样式表默认）重写为服务器已装的 CJK 字体。
+    否则 LibreOffice 对未装字体回退 DejaVuSans（无汉字字形），列宽/行高全崩。"""
+    from docx import Document
+    doc = Document(docx_path)
+    def rewrite(el):
+        n = 0
+        for rf in el.iter(W_NS + 'rFonts'):
+            for attr in ('ascii', 'hAnsi', 'eastAsia', 'cs'):
+                q = W_NS + attr
+                if rf.get(q):
+                    rf.set(q, CJK_FONT); n += 1
+        return n
+    n = rewrite(doc.element.body)
+    try:
+        n += rewrite(doc.styles.element)
+    except Exception:
+        pass
+    doc.save(docx_path)
+
 # ---------- 图片 OCR 翻译 ----------
-def ocr_and_translate_image(img_bytes: bytes, translations: dict, lang: str) -> bytes | None:
+def _ocr_lines(img, lang: str):
+    """OCR 并按行分组：返回 [(text, x, y, w, h)]，行文本=词序拼接"""
     import pytesseract
+    data = pytesseract.image_to_data(img, lang=OCR_LANGS,
+                                     output_type=pytesseract.Output.DICT)
+    groups = {}
+    for i in range(len(data["text"])):
+        w = (data["text"][i] or "").strip()
+        if not w:
+            continue
+        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+        groups.setdefault(key, []).append(
+            (data["left"][i], data["top"][i], data["width"][i], data["height"][i], w))
+    lines = []
+    for key in sorted(groups):
+        ws = sorted(groups[key], key=lambda t: t[0])
+        text = " ".join(t[4] for t in ws)
+        x0 = min(t[0] for t in ws); y0 = min(t[1] for t in ws)
+        x1 = max(t[0]+t[2] for t in ws); y1 = max(t[1]+t[3] for t in ws)
+        lines.append((text, x0, y0, x1-x0, y1-y0))
+    return lines
+
+def ocr_and_translate_image(img_bytes: bytes, translations: dict, lang: str) -> bytes | None:
     from PIL import Image, ImageDraw, ImageFont
     img = Image.open(io.BytesIO(img_bytes))
     if img.mode != "RGB":
@@ -187,33 +233,33 @@ def ocr_and_translate_image(img_bytes: bytes, translations: dict, lang: str) -> 
     w, h = img.size
     if w < 40 or h < 20:
         return None
-    data = pytesseract.image_to_data(img, lang=tess_lang(lang),
-                                     output_type=pytesseract.Output.DICT)
+    lk = { _norm(k): v for k, v in translations.items() }
     draw = ImageDraw.Draw(img)
     hit = False
-    for i in range(len(data["text"])):
-        word = (data["text"][i] or "").strip()
-        if not word:
-            continue
-        trans = apply_translations_to_text(word, translations)
-        if trans == word:
-            # 词级未命中：试整行合并由调用方段落级处理，这里跳过
+    for text, x, y, bw, bh in _ocr_lines(img, lang):
+        trans = None
+        nk = _norm(text)
+        if nk in lk:
+            trans = lk[nk]
+        else:
+            for k, v in lk.items():
+                if len(k) >= 4 and k in nk:
+                    trans = v  # 行内子串命中→整行替换
+                    break
+        if not trans or trans == text:
             continue
         hit = True
-        x, y, bw, bh = data["left"][i], data["top"][i], data["width"][i], data["height"][i]
         fs = max(8, int(bh * 0.72))
         try:
-            font = ImageFont.truetype(
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", fs)
+            font = ImageFont.truetype("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", fs)
         except Exception:
             font = ImageFont.load_default()
         draw.rectangle([x, y, x + bw, y + bh], fill="white")
-        draw.text((x, y), trans[:64], fill=(20, 20, 20), font=font)
-    if not hit:
-        return None
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+        draw.text((x, y), trans[:80], fill=(20, 20, 20), font=font)
+    return buf_ret(img) if hit else None
+
+def buf_ret(img):
+    buf = io.BytesIO(); img.save(buf, format="PNG"); return buf.getvalue()
 
 def translate_docx_images(docx_path: str, translations: dict, lang: str):
     from docx import Document
@@ -256,6 +302,33 @@ def cmd_extract(pdf_path: str, cache_docx: str):
             continue
         seen.add(k)
         texts.append(txt)
+    # ★ 图片 OCR 行键：让 LLM 连图内文字一并翻译（apply 阶段按行精确命中）
+    try:
+        from docx import Document as _Doc
+        from PIL import Image as _Image
+        import io as _io, pytesseract as _pt
+        d2 = _Doc(cache_docx)
+        for rel in d2.part.rels.values():
+            if "image" not in rel.reltype:
+                continue
+            blob = rel.target_part.blob
+            if len(blob) < 3000:
+                continue
+            try:
+                im = _Image.open(_io.BytesIO(blob))
+                if im.mode != "RGB":
+                    im = im.convert("RGB")
+                if im.size[0] < 40 or im.size[1] < 20:
+                    continue
+                for ln_text, *_ in _ocr_lines(im, OCR_LANGS):
+                    k2 = _norm(ln_text)
+                    if len(k2) >= 2 and k2 not in seen:
+                        seen.add(k2)
+                        texts.append(ln_text)
+            except Exception:
+                continue
+    except Exception:
+        pass
     print(json.dumps({"success": True, "texts": texts}, ensure_ascii=False))
 
 def cmd_apply(cache_docx: str, out_path: str, lang: str, translations: dict):
@@ -265,6 +338,7 @@ def cmd_apply(cache_docx: str, out_path: str, lang: str, translations: dict):
         shutil.copy2(cache_docx, work)
         if translations:
             translate_docx_text(work, translations)
+            normalize_fonts(work)   # 统一为 Noto CJK，防 LibreOffice 回退 DejaVu 版式崩坏
             translate_docx_images(work, translations, lang)
         docx_to_pdf(work, out_path)
         print(f"OK: {out_path}")
