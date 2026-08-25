@@ -7,6 +7,7 @@
 package orchestrator
 
 import (
+	"strconv"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -115,6 +116,19 @@ func parseTicketLang(s string) []string {
 func (w *Workflow) savePayload(t *store.Ticket, p *ticketPayload) {
 	data, _ := json.Marshal(p)
 	t.FinalResult = string(data)
+	// ★ TM 自闭环计数：模型/审校产出的最终译文按 (原文,语言,译文) 累计，达阈值进待审池
+	if w.Store != nil && len(p.Translations) > 0 && t.SourceText != "" {
+		th := int64(100)
+		if v, _ := w.Store.GetConfig("tm_review_threshold"); v != "" {
+			if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+				th = x
+			}
+		}
+		for lc, tr := range p.Translations {
+			if _, _, e := w.Store.BumpTmHit(t.TenantID, t.SourceText, lc, tr, th); e == nil {
+			}
+		}
+	}
 	_ = w.Store.UpdateTicket(t)
 }
 

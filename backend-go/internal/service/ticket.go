@@ -345,7 +345,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				s.Store.SetTicketState(t.ID, "file_translate", "running",
 					fmt.Sprintf("progress=%d/%d", doneN, len(files)))
 				mu.Lock()
-				s.persistTicketTM(t.TenantID, res.Data.Translations)
+				s.bumpTmHitsFromTranslations(t.TenantID, res.Data.Translations) // ★ 自闭环计数（不自动入库）
 			}(f)
 		}
 		wg.Wait()
@@ -384,7 +384,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 		_ = s.Store.SetTicketResultPath(t.ID, res.Files[0])
 	}
 	s.Store.SetTicketState(t.ID, "file_writeback", "success", "")
-	s.persistTicketTM(t.TenantID, res.Data.Translations)
+	s.bumpTmHitsFromTranslations(t.TenantID, res.Data.Translations) // ★ 自闭环计数（不自动入库）
 	return nil
 }
 
@@ -430,29 +430,37 @@ func normalizeMode(m string) string {
 	return "pro"
 }
 
-// persistTicketTM 把文件工单的段级译文回写租户翻译记忆（tm_segments，module=file_ticket），
-// 实现「核心结果存租户后端」：产物文件过保留期清理后，译文仍可供 TM 命中与数据迭代。
-// 参数 tid=租户 ID；translations=语言 → (原文 → 译文)。
-func (s *TicketService) persistTicketTM(tid int64, translations map[string]map[string]string) {
-	if s.DB == nil || len(translations) == 0 || tid <= 0 {
+
+
+// bumpTmHitsFromTranslations TM 自闭环计数：模型最终译文按 (原文,语言,译文) 累计；
+// 达到 tm_review_threshold（默认100）自动生成待审候选并告警提醒超管。绝不直接写入正式 TM。
+func (s *TicketService) bumpTmHitsFromTranslations(tid int64, translations map[string]map[string]string) {
+	if s.DB == nil || s.Store == nil || len(translations) == 0 || tid <= 0 {
 		return
+	}
+	th := int64(100)
+	if v, _ := s.Store.GetConfig("tm_review_threshold"); v != "" {
+		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+			th = x
+		}
 	}
 	for lc, m := range translations {
 		for src, tgt := range m {
-			src = strings.TrimSpace(src)
-			tgt = strings.TrimSpace(tgt)
-			if src == "" || tgt == "" {
+			n, created, err := s.Store.BumpTmHit(tid, src, lc, tgt, th)
+			if err != nil {
 				continue
 			}
-			// ★ 防污染闸门：原文==译文 的“翻译”是失败产物，入 TM 会被后续 KB 命中回灌成中文残留
-			if src == tgt {
-				continue
+			if created {
+				preview := src
+				if len([]rune(preview)) > 50 {
+					preview = string([]rune(preview)[:50]) + "…"
+				}
+				s.Store.CreateAlert(tid, "warning", "tm_review",
+					fmt.Sprintf("相同翻译累计达 %d 次，已生成待审候选：%s", n, preview))
 			}
-			_, _ = s.DB.SaveBack(src, map[string]string{lc: tgt}, "file_ticket", tid)
 		}
 	}
 }
-
 // parseLangs 解析逗号分隔语言串。
 func parseLangs(s string) []string {
 	var out []string

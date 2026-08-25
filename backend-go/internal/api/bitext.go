@@ -13,6 +13,7 @@ package api
 // =============================================
 
 import (
+	"translator/internal/store"
 	"net/http"
 	"os"
 	"strconv"
@@ -89,7 +90,7 @@ func (s *Server) handleImportBitext(w http.ResponseWriter, r *http.Request) {
 			skipped++
 			continue
 		}
-		if _, err := s.DB.SaveBack(src, trans, "bitext", tid); err != nil {
+		if err := s.Store.CreateTmReview(&store.TmReview{TenantID: tid, Zh: src, Lang: firstLang(trans), Trans: firstVal(trans), Source: "bitext", RefType: "import"}); err != nil {
 			skipped++
 			continue
 		}
@@ -161,7 +162,7 @@ func (s *Server) handleImportTMX(w http.ResponseWriter, r *http.Request) {
 				trans[lc] = v
 			}
 		}
-		if _, err := s.DB.SaveBack(src, trans, "tmx", tid); err != nil {
+		if err := s.Store.CreateTmReview(&store.TmReview{TenantID: tid, Zh: src, Lang: firstLang(trans), Trans: firstVal(trans), Source: "tmx", RefType: "import"}); err != nil {
 			skipped++
 			continue
 		}
@@ -172,3 +173,9 @@ func (s *Server) handleImportTMX(w http.ResponseWriter, r *http.Request) {
 		"success": true, "tus": len(tus), "added": added, "skipped": skipped,
 	})
 }
+
+// firstLang 取译文映射的首个语言键（导入场景单语言为主）。
+func firstLang(m map[string]string) string { for k := range m { return k }; return "en" }
+
+// firstVal 取译文映射的首个值。
+func firstVal(m map[string]string) string { for _, v := range m { return v }; return "" }

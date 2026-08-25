@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -251,4 +252,24 @@ func writePDFViaGoFpdf(outPath string, fontPath string, srcTexts []string, trans
 		return err
 	}
 	return pdf.OutputFileAndClose(outPath)
+}
+
+// PdfImageHeavy 判定图片型 PDF：平均每页文本层字符 < 200（引导用户改传 Word 源文件）。
+func PdfImageHeavy(pdfPath string) bool {
+	out, err := exec.Command("pdftotext", pdfPath, "-").Output()
+	if err != nil {
+		return false
+	}
+	pages := 1
+	if info, ierr := exec.Command("pdfinfo", pdfPath).Output(); ierr == nil {
+		for _, ln := range strings.Split(string(info), "\n") {
+			if strings.HasPrefix(ln, "Pages:") {
+				if v, e := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(ln, "Pages:"))); e == nil && v > 0 {
+					pages = v
+				}
+			}
+		}
+	}
+	chars := len(strings.TrimSpace(string(out)))
+	return chars/pages < 200
 }

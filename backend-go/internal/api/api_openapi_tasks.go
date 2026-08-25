@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"translator/internal/fileproc"
 	"translator/internal/store"
 )
 
@@ -271,11 +272,18 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		})
 	}
 	s.enqueueAPITask(t, mode, ak)
-	writeJSON(w, 202, map[string]interface{}{
+	respBody := map[string]interface{}{
 		"task_id": t.ID, "mode": mode,
 		"type": "files", "status": "queued",
 		"file_count": len(saved),
-	})
+	}
+	for _, f := range saved {
+		if strings.EqualFold(filepath.Ext(f.name), ".pdf") && fileproc.PdfImageHeavy(f.path) {
+			respBody["image_heavy"] = true
+			break
+		}
+	}
+	writeJSON(w, 202, respBody)
 }
 
 // handleOpenAPITaskStatus 轮询任务状态（未完成给 processing 出参；完成按类型回结果）。

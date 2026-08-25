@@ -31,13 +31,10 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { t } from '@/i18n'
+import { t, tpl } from '@/i18n'
 import { updateEmail, meEmailCode } from '@/api'
 
 const props = defineProps<{ dismissible?: boolean; currentEmail?: string }>()
-import { onUnmounted } from 'vue'
-import { t as _t, tpl as _tpl } from '@/i18n'
-const t = _t; const tpl = _tpl
 const emit = defineEmits<{ done: [email: string]; close: [] }>()
 const email = ref(props.currentEmail || '')
 const msg = ref('')

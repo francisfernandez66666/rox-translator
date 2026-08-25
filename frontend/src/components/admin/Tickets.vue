@@ -11,6 +11,47 @@
   <section class="ad-section">
     <h2>{{ t('fb.workbench') }}</h2>
     <p class="ad-hint">{{ isSuper ? t('fb.superHint') : t('fb.userHint') }}</p>
+    <div v-if="isSuper" class="ad-row" style="margin-bottom:12px">
+      <button class="ad-btn-sm" :class="{ 'ad-btn-green': fbTab === 'feedback' }" @click="fbTab = 'feedback'">💬 {{ t('fb.tabFeedback') }}</button>
+      <button class="ad-btn-sm" :class="{ 'ad-btn-green': fbTab === 'review' }" @click="switchReview">📚 {{ t('fb.tabReview') }}</button>
+    </div>
+
+    <!-- ===== 记忆审核子视图（超管） ===== -->
+    <template v-if="isSuper && fbTab === 'review'">
+      <div class="ad-row">
+        <select v-model="rvFilter" class="ad-input ad-mini-w" @change="loadReviews">
+          <option value="pending">{{ t('tmr.pending') }}</option>
+          <option value="approved">{{ t('tmr.approved') }}</option>
+          <option value="rejected">{{ t('tmr.rejected') }}</option>
+        </select>
+        <button class="ad-btn-sm" @click="loadReviews">{{ t('tickets.refresh') }}</button>
+      </div>
+      <table class="ad-table">
+        <thead><tr><th>#</th><th>{{ t('tmr.zh') }}</th><th>{{ t('tmr.trans') }}</th><th>{{ t('tk.colLangs') }}</th><th>{{ t('tmr.source') }}</th><th>{{ t('tmr.hits') }}</th><th>{{ t('users.colStatus') }}</th><th>{{ t('org.colActions') }}</th></tr></thead>
+        <tbody>
+          <tr v-for="c in reviews" :key="c.id">
+            <td>{{ c.id }}</td>
+            <td class="ad-ellipsis" style="max-width:220px" :title="c.zh">{{ c.zh }}</td>
+            <td class="ad-ellipsis" style="max-width:220px" :title="c.trans">{{ c.trans }}</td>
+            <td>{{ c.lang }}</td>
+            <td>{{ srcLabel(c.source) }}<template v-if="c.ref_type === 'feedback'"> · <a href="#" @click.prevent="jumpFeedback(c.ref_id)">{{ t('tmr.linkFb') }}#{{ c.ref_id }}</a></template></td>
+            <td>{{ c.hit_count }}</td>
+            <td><span class="fb-status" :class="c.status === 'approved' ? 'resolved' : c.status === 'pending' ? 'open' : ''">
+              {{ c.status === 'approved' ? t('tmr.approved') : c.status === 'rejected' ? t('tmr.rejected') : t('tmr.pending') }}</span></td>
+            <td class="ad-td">
+              <template v-if="c.status === 'pending'">
+                <button class="ad-btn-sm ad-btn-green" @click="doApproveReview(c)">✔</button>
+                <button class="ad-btn-sm ad-btn-red" @click="doRejectReview(c)">✘</button>
+              </template>
+            </td>
+          </tr>
+          <tr v-if="!reviews.length"><td colspan="8" class="ad-empty">{{ t('fb.empty') }}</td></tr>
+        </tbody>
+      </table>
+    </template>
+
+    <!-- ===== 用户反馈子视图 ===== -->
+    <template v-else>
 
     <!-- ===== 详情视图 ===== -->
     <div v-if="selected" class="ad-chart-card">
@@ -102,6 +143,8 @@
       </table>
     </template>
 
+    </template>
+
     <!-- ===== 审批台（pro 文本工单，保留） ===== -->
     <h2 style="margin-top:32px">{{ t('tickets.approvalTitle') }}</h2>
     <button class="ad-btn" @click="loadApproval">{{ t('tickets.refresh') }}</button>
@@ -127,7 +170,8 @@
 import { ref, onMounted, watch } from 'vue'
 import { approveList, approveAction } from '@/api'
 import { feedbackList, feedbackReply, resolveFeedback, createFeedback, type FeedbackRecord } from '@/api/feedback'
-import { activeTenantId, isSuper, pendingFeedbackId } from './store'
+import { activeTenantId, isSuper, pendingFeedbackId, pendingPanel } from './store'
+import { listTmReview, approveTmReview, rejectTmReview, type TmReviewItem } from '@/api/tmreview'
 import { t, tpl } from '@/i18n'
 
 // ===== 反馈工作台状态 =====
@@ -137,6 +181,43 @@ const selected = ref<any>(null)
 const replyDraft = ref('')
 const newContent = ref('')
 const submitting = ref(false)
+// ===== 记忆审核（超管子视图）=====
+const fbTab = ref<'feedback' | 'review'>('feedback')
+const reviews = ref<TmReviewItem[]>([])
+const rvFilter = ref('pending')
+async function loadReviews() {
+  const r = await listTmReview(rvFilter.value)
+  if (r.success) reviews.value = (r.candidates || []) as any
+}
+function switchReview() { fbTab.value = 'review'; loadReviews() }
+function srcLabel(src: string) {
+  return src === 'bitext' ? '双语文本' : src === 'tmx' ? 'TMX 导入' : src === 'feedback' ? '用户反馈修正' : '次数达标'
+}
+// 联动：铃铛通知 / 审核台「关联反馈」跳转
+async function jumpFeedback(fid: number) {
+  fbTab.value = 'feedback'
+  statusFilter.value = ''
+  await loadFeedbacks()
+  const f = feedbacks.value.find(x => x.id === fid)
+  if (f) openDetail(f)
+}
+watch(pendingFeedbackId, async fid => {
+  if (!fid) return
+  await jumpFeedback(fid)
+  pendingFeedbackId.value = 0
+})
+// 审核台跳反馈详情：先切回面板信号归零避免循环
+watch(pendingPanel, v => { if (v) pendingPanel.value = '' })
+async function doApproveReview(c: TmReviewItem) {
+  const r = await approveTmReview(c.id)
+  if (!r.success) { alert(r.message); return }
+  await loadReviews()
+}
+async function doRejectReview(c: TmReviewItem) {
+  const r = await rejectTmReview(c.id)
+  if (!r.success) { alert(r.message); return }
+  await loadReviews()
+}
 
 // loadFeedbacks 按过滤条件加载列表（超管=全部，其他=本人）
 async function loadFeedbacks() {

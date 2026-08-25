@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"translator/internal/auth"
+	"translator/internal/fileproc"
 	"translator/internal/orchestrator"
 	"translator/internal/qa"
 	"translator/internal/store"
@@ -272,7 +273,11 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_enqueue", "tickets", t.TicketNo)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t, "queued": true})
+	resp := map[string]interface{}{"success": true, "ticket": t, "queued": true}
+	if strings.EqualFold(filepath.Ext(t.FilePath), ".pdf") && fileproc.PdfImageHeavy(t.FilePath) {
+		resp["image_heavy"] = true
+	}
+	writeJSON(w, 200, resp)
 }
 
 
