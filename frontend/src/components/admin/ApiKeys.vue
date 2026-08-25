@@ -62,7 +62,6 @@
           <td class="ad-td">
             <button class="ad-btn-sm" @click="toggleKey(k)">{{ k.status === 'active' ? t('apikeys.disable') : t('apikeys.enable') }}</button>
             <button class="ad-btn-sm" @click="rotateKey(k)">{{ t('apikeys.rotate') }}</button>
-            <button class="ad-btn-sm" @click="copyKey(k)" :title="t('apikeys.copy')">📋</button>
             <button class="ad-btn-sm" @click="setLimit(k)">📐 {{ t('apikeys.setLimit') }}</button>
             <button class="ad-btn-sm ad-btn-red" @click="deleteKey(k)">{{ t('apikeys.delete') }}</button>
           </td>
@@ -99,21 +98,7 @@ async function copyNewKey() {
   }
 }
 
-// copiedId 当前已复制的 Key 行 ID（2 秒后恢复）
-const copiedId = ref(0)
 
-// copyKey 解密取回明文并直接写入剪贴板（不展示明文，满足“只能复制不能看”）
-async function copyKey(k: any) {
-  try {
-    const r: any = await apiKeyReveal(k.id)
-    if (!r.success) { alert(r.message); return }
-    await navigator.clipboard.writeText(r.api_key || '')
-    copiedId.value = k.id
-    setTimeout(() => (copiedId.value = 0), 2000)
-  } catch (e) {
-    alert(e instanceof Error ? e.message : String(e))
-  }
-}
 
 // loadKeys 加载 API Key 列表
 async function loadKeys() {
