@@ -5,7 +5,7 @@
    ============================================================================ -->
 <template>
   <Teleport to="body" :disabled="!teleport">
-    <div class="eb-mask">
+    <div class="eb-mask" style="position:fixed;top:0;left:0;width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);z-index:2147483000">
       <div class="eb-modal">
         <h3>
           {{ props.dismissible ? t('emailBind.changeTitle') : t('emailBind.title') }}

@@ -18,4 +18,10 @@ const app = createApp(App)
 app.use(createPinia())
 
 // 挂载到 HTML 的 #app 元素
+// ★ 全局注册关键弹窗：根治任何按文件作用域解析失败导致的「原始标签渲染」问题
+import PasswordModal from './components/PasswordModal.vue'
+import EmailBindModal from './components/EmailBindModal.vue'
+app.component('PasswordModal', PasswordModal)
+app.component('EmailBindModal', EmailBindModal)
+
 app.mount('#app')

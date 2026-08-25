@@ -6,7 +6,7 @@
 
 <template>
   <Teleport to="body" :disabled="!props.teleport">
-  <div class="fb-mask" @click.self="$emit('close')">
+  <div class="fb-mask" style="position:fixed;top:0;left:0;width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);z-index:2147483000" @click.self="$emit('close')">
     <div class="fb-modal">
       <h3>🔒 {{ t('pwd.title') }}</h3>
       <p class="fb-hint">{{ tpl('pwd.hint', { user: username }) }}</p>
