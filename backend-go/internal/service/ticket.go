@@ -264,6 +264,17 @@ func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) erro
 func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) error {
 	langs := parseLangs(t.TargetLangs)
 	mode := t.Mode // fast | pro（空=pro）
+	// ★ 进度阶梯回调：把引擎内部阶段映射为步骤状态（前端锚点：提取20/初翻40/校对60/回写80）
+	progFn := func(step string, done, total int) {
+		switch {
+		case strings.Contains(step, "第1步"):
+			s.Store.SetTicketState(t.ID, "file_extract", "running", "")
+		case strings.Contains(step, "第2步"):
+			s.Store.SetTicketState(t.ID, "file_translate", "running", "")
+		case strings.Contains(step, "第3步"):
+			s.Store.SetTicketState(t.ID, "file_writeback", "running", "")
+		}
+	}
 	// 多文件模式：并行处理（信号量限制同时 3 个，避免打爆 LLM API）
 	files, _ := s.Store.TicketFiles(t.ID)
 	if len(files) > 0 {
@@ -281,8 +292,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				sem <- struct{}{}
 				defer func() { <-sem }()
 				res := s.Engine.HandleFile(ctx, tf.FilePath,
-					map[string]interface{}{"target_langs": langs, "mode": mode},
-					func(step string, done, total int) {})
+					map[string]interface{}{"target_langs": langs, "mode": mode}, progFn)
 				mu.Lock()
 				defer mu.Unlock()
 				if res.Error != "" || len(res.Files) == 0 {
@@ -317,6 +327,12 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 		}
 		wg.Wait()
 		s.Store.SetTicketState(t.ID, "file_extract", "success", "")
+		if okCount > 0 {
+			// 校对（pro 流水线内含 QA，此处为阶梯标记）与回写完成
+			s.Store.SetTicketState(t.ID, "file_qa", "success",
+				fmt.Sprintf("ok=%d fail=%d", okCount, failCount))
+			s.Store.SetTicketState(t.ID, "file_writeback", "success", "")
+		}
 		if okCount == 0 && failCount == int64(len(files)) && firstErr != "" {
 			return fmt.Errorf("%s", firstErr)
 		}
@@ -324,10 +340,13 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	}
 	// 旧单文件路径
 	s.Store.SetTicketState(t.ID, "file_translate", "running", "single")
-	res := s.Engine.HandleFile(ctx, t.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode}, func(step string, done, total int) {})
+	res := s.Engine.HandleFile(ctx, t.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode}, progFn)
 	if res.Error != "" {
 		return fmt.Errorf("%s", res.Error)
 	}
+	// 翻译完成 → 校对标记 → 进入回写阶段
+	s.Store.SetTicketState(t.ID, "file_qa", "success", "")
+	s.Store.SetTicketState(t.ID, "file_writeback", "running", "")
 	// ★ 多语言产物打包 zip
 	zipPath := ""
 	if len(res.Files) > 1 {
@@ -341,6 +360,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	} else if len(res.Files) > 0 {
 		_ = s.Store.SetTicketResultPath(t.ID, res.Files[0])
 	}
+	s.Store.SetTicketState(t.ID, "file_writeback", "success", "")
 	s.persistTicketTM(t.TenantID, res.Data.Translations)
 	return nil
 }

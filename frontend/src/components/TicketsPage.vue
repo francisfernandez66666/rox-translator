@@ -194,8 +194,9 @@ const estimateBlocked = computed(() => {
 const stepNames: Record<string,string> = {
   kb_match:'知识库匹配', ai_initial:'AI 初翻', evals_initial:'质量评估',
   review:'专业校对', evals_review:'校对评估', gate:'硬闸校验',
-  culture_gate:'文化检查', qa:'质检', file_extract:'文件解析',
-  file_translate:'文件翻译', approval:'审批', feedback:'反馈',
+  culture_gate:'文化检查', qa:'校对', file_extract:'解析提取',
+  file_translate:'初翻', approval:'审批', feedback:'反馈',
+  file_qa:'校对', file_writeback:'回写文件', writeback:'回写文件',
 }
 
 // currentStepLabel 当前正在执行的步骤名（第一个 running 状态的步骤）
@@ -217,16 +218,27 @@ const ticketProgress = computed<number | null>(() => {
   if (!detail.value) return null
   const st = detail.value.states || []
   const fs = detail.value.files || []
-  if (fs.length > 0) {
-    // 文件工单：按产物就绪比例
-    const done = fs.filter((f: any) => f.result_path || f.error).length
-    return Math.round(done / fs.length * 100)
+  const tk = detail.value.ticket || {}
+  // ★ 步骤锚点阶梯：排队10 → 提取20 → 初翻40 → 校对60 → 回写80 → 完成100
+  if ((tk.status || '') === 'completed') return 100
+  let pct = (tk.status || '') === 'queued' ? 10 : 5
+  const W: Record<string, number> = {
+    upload: 20, file_extract: 20, extract: 20,
+    translate: 40, file_translate: 40, init_translation: 40,
+    proofread: 60, qa: 60, file_qa: 60, quality_check: 60,
+    writeback: 80, file_writeback: 80, package: 80,
   }
-  if (st.length === 0) return null
-  // 文本工单：按步骤 success/skipped 占比
-  const done = st.filter((x: any) => ['success','skipped'].includes(x.status)).length
-  return Math.round(done / st.length * 100)
+  for (const x of st) {
+    const w = W[x.step]
+    if (!w) continue
+    if (x.status === 'success' || x.status === 'skipped') pct = Math.max(pct, w)
+    else if (x.status === 'running') pct = Math.max(pct, w - 10 > 10 ? w - 10 : w) // 运行中显示到达档位
+  }
+  // 任一文件已有产物/错误 → 至少进入回写档
+  if (fs.some((f: any) => f.result_path || f.error)) pct = Math.max(pct, 80)
+  return Math.min(100, Math.max(0, pct))
 })
+
 
 // QA 质检摘要（从工单 final_result 解析 qa_report）
 const qaSummary = computed<any | null>(() => {
