@@ -107,7 +107,10 @@ func (p *MockProvider) CreateOrder(req *PayRequest) (*PayResult, error) {
 	return &PayResult{Channel: "mock", QRContent: content}, nil
 }
 
-// VerifyNotify mock 回调验签：按约定 JSON 解析，签名校验弱化为「金额 > 0」。
+// VerifyNotify mock 回调验签：按约定 JSON 解析。
+// ⚠️ 安全面提示（2026-08-26 复核注释）：本适配器为测试骨架，签名校验仅为
+// 「金额 > 0 且订单号存在」——真实防线在 API 层 handlePayNotify 的三道闸
+// （X-Admin-Token 必填 / 渠道一致 / 金额与订单应收一致），勿单独依赖本函数。
 func (p *MockProvider) VerifyNotify(rawBody []byte, _ map[string]string) (*Notify, error) {
 	body := strings.TrimSpace(string(rawBody))
 	// 兼容表单（k=v&k=v）与 JSON 两种报文

@@ -253,7 +253,9 @@ func translateDocxParagraph(para string, translations map[string]string) string 
 	}
 	closeStart += firstIdx
 	// 替换第一个 w:t 内容为译文（保留其闭合标签）
-	newPara := para[:firstIdx] + translated + para[closeStart:]
+	// ★ XML 转义（2026-08-26 P1-g）：译文来自 LLM 自由文本，可能含 & < > " '，
+	//   裸拼进 document.xml 会产出非法 XML（Office 报「文件损坏」），必须先转义。
+	newPara := para[:firstIdx] + EscapeXML(translated) + para[closeStart:]
 	// 清空第一个 w:t 之后所有 w:t 的内容（含 hyperlink 内文本）
 	after := newPara[firstIdx+len(translated):]
 	cleaned := emptyWTextRe.ReplaceAllString(after, `${1}${3}`)
@@ -294,7 +296,10 @@ func paragraphRunText(para string) (string, int) {
 		if firstIdx < 0 && strings.TrimSpace(text) != "" {
 			firstIdx = contentStart // 记录首个非空 w:t 内容起点
 		}
-		plain.WriteString(text)
+		// ★ 实体对齐（2026-08-26 P1-g）：扫描器拿到的是含实体原始串（"R&amp;D"），
+		//   提取侧 encoding/xml 输出已反转义文本（"R&D"）——此处必须反转义后拼接，
+		//   否则两侧匹配键不一致，含特殊字符段落永不命中译文。
+		plain.WriteString(UnescapeXMLText(text))
 		i = contentStart + closeIdx + len("</w:t>")
 	}
 	return plain.String(), firstIdx

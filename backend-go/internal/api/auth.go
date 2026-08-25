@@ -14,14 +14,14 @@ package api
 //   - 所有写操作均写入审计日志（含变更前后值 diff）
 
 import (
-	"log"
-	"strings"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,16 +33,21 @@ import (
 // ============ 认证 ============
 
 // 忘记密码验证码存储（内存实现；单实例部署足够）。
-// 键：用户 ID；值：验证码与过期时间。获取验证码时自动清理过期项。
+// 键：用户 ID；值：验证码、过期时间与已错误尝试次数。获取验证码时自动清理过期项。
 var resetCodes = struct {
 	sync.Mutex
 	m map[int64]resetCode // 用户 ID → 验证码信息
 }{m: map[int64]resetCode{}}
 
+// resetCodeMaxTries 单个重置码的最大错误尝试次数（≥5 作废防爆破；对齐 email_verify 口径）。
+// 2026-08-26 P0-3 止血：此前无尝试上限，6 位码可在 10 分钟窗口内被脚本穷举 → 任意账号接管。
+const resetCodeMaxTries = 5
+
 // resetCode 验证码信息。
 type resetCode struct {
 	Code      string    // 6 位数字验证码
 	ExpiresAt time.Time // 过期时间（10 分钟）
+	Attempts  int       // 已错误尝试次数（≥resetCodeMaxTries 作废该码，2026-08-26 补充）
 }
 
 // handleLogin 登录接口：校验用户名密码并签发 JWT，返回 token + 用户信息。
@@ -248,6 +253,14 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {username, email}）。
 // 返回: success=true 表示已发送验证码（或进入测试模式）。
 func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
+	// ★ IP 限流（2026-08-26 P0-3 止血）：复用注册护栏窗口逻辑，独立计数键。
+	//   日上限 10 次 + 最小间隔 30s——防止「无限发码骚扰 + 配合爆破」的组合滥用。
+	ip := clientIP(r)
+	if ok, wait := s.regGuard.allow("pwd-forgot:"+ip, 10, 30); !ok {
+		w.Header().Set("Retry-After", itoaInt(wait))
+		writeJSON(w, 429, map[string]interface{}{"success": false, "message": "请求过于频繁，请稍后再试"})
+		return
+	}
 	var req struct {
 		Username string `json:"username"` // 用户名（二选一）
 		Email    string `json:"email"`    // 联系邮箱（二选一）
@@ -301,6 +314,7 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "邮件发送失败，请稍后重试或联系管理员"})
 		return
 	}
+	s.regGuard.record("pwd-forgot:" + ip) // 业务成功才计数（与 email-code 同款 allow/record 模式）
 	s.Store.LogAudit(u.TenantID, u.ID, "forgot_password", "auth", "请求重置密码验证码")
 	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "验证码已发送到绑定邮箱"})
 }
@@ -309,6 +323,14 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {username, code, new_password}）。
 // 返回: success=true 表示重置成功；验证码错误/过期返回 success=false。
 func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	// ★ IP 限流（2026-08-26 P0-3 止血）：验证码校验接口的爆破主战场，
+	//   与 forgot 限流独立计数；日 20 次 + 最小间隔 10s（正常用户重试绰绰有余）。
+	ip := clientIP(r)
+	if ok, wait := s.regGuard.allow("pwd-reset:"+ip, 20, 10); !ok {
+		w.Header().Set("Retry-After", itoaInt(wait))
+		writeJSON(w, 429, map[string]interface{}{"success": false, "message": "请求过于频繁，请稍后再试"})
+		return
+	}
 	var req struct {
 		Username    string `json:"username"`     // 用户名（用于定位验证码归属）
 		Code        string `json:"code"`         // 6 位验证码
@@ -327,14 +349,32 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误或已过期"})
 		return
 	}
-	// 校验验证码（一次性：仅验证通过后作废，防止错误尝试耗尽验证码）
+	// 校验验证码（一次性 + 防爆破，2026-08-26 P0-3 止血）：
+	//   ① 单次加锁内完成「读码→比对→错计/销毁」，消除旧实现两次 Lock 分离的竞态窗口；
+	//   ② 错误尝试 ≥resetCodeMaxTries(5) 即作废该码——6 位数字码若无次数限制，
+	//      攻击者可在 10 分钟有效期内脚本穷举（10^6 空间）→ 任意账号接管。
 	resetCodes.Lock()
 	rc, ok := resetCodes.m[u.ID]
-	resetCodes.Unlock()
-	if !ok || rc.Code != req.Code || time.Now().After(rc.ExpiresAt) {
+	if !ok || time.Now().After(rc.ExpiresAt) {
+		resetCodes.Unlock()
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误或已过期"})
 		return
 	}
+	if rc.Attempts >= resetCodeMaxTries {
+		// 超限作废：直接删除该码，即使后续答对也不放行
+		delete(resetCodes.m, u.ID)
+		resetCodes.Unlock()
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误次数过多，请重新获取"})
+		return
+	}
+	if rc.Code != req.Code {
+		rc.Attempts++
+		resetCodes.m[u.ID] = rc // 回写累计错误次数
+		resetCodes.Unlock()
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误或已过期"})
+		return
+	}
+	resetCodes.Unlock()
 	// 验证通过：作废该验证码并更新密码
 	resetCodes.Lock()
 	delete(resetCodes.m, u.ID)
@@ -344,6 +384,7 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	s.regGuard.record("pwd-reset:" + ip) // 重置成功才计数（限流窗口按成功动作推进）
 	s.Store.LogAudit(u.TenantID, u.ID, "reset_password", "auth", "通过验证码重置密码")
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }

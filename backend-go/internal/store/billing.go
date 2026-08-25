@@ -87,18 +87,29 @@ const orderCols = "id, tenant_id, order_no, amount_tokens, amount_money, status,
 
 // EnsureBalance 确保租户余额账户存在：不存在则创建初始为 0 的账户（幂等）。
 // 参数：tid=租户 ID；返回错误（存在则直接返回 nil）。
+//
+// ★ 并发安全（2026-08-26 P0-8 止血）：由原「先查后插」两步改为单条
+//
+//	INSERT OR IGNORE——依赖 BalanceAccountMigrate 建立的 tenant_id 唯一索引，
+//	并发首次访问不会产生重复账户行（旧行为会插入两行，导致展示与实扣不一致）。
 func (s *Store) EnsureBalance(tid int64) error {
-	var id int64
-	err := s.db.QueryRow("SELECT id FROM balance_accounts WHERE tenant_id=?", tid).Scan(&id)
-	if err == nil {
-		return nil // 账户已存在
-	}
-	if err != sql.ErrNoRows {
-		return err // 查询异常而非"无记录"
-	}
-	_, err = s.db.Exec("INSERT INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
+	_, err := s.db.Exec(
+		"INSERT OR IGNORE INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
 		tid, time.Now().Format(time.RFC3339))
 	return err
+}
+
+// BalanceAccountMigrate 余额账户表迁移（幂等，Store.New 迁移链调用，2026-08-26 P0-8 止血）：
+//
+//	① 先去重历史重复账户行（保留最小 id 一行）；
+//	② 再建 tenant_id 唯一索引——此后 EnsureBalance 的 INSERT OR IGNORE 才有约束兜底。
+//	   注意顺序不能颠倒：存量已有重复行时建唯一索引会失败。
+func (s *Store) BalanceAccountMigrate() {
+	// 去重：同租户多行时仅保留 id 最小的一行（历史余额取首行口径）
+	s.db.Exec(`DELETE FROM balance_accounts WHERE id NOT IN
+		(SELECT MIN(id) FROM balance_accounts GROUP BY tenant_id)`)
+	// 唯一索引：并发 INSERT OR IGNORE 的正确性前提
+	s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_balance_tid ON balance_accounts(tenant_id)`)
 }
 
 // GetBalance 查询租户余额（内部先确保账户存在）。
@@ -517,24 +528,35 @@ func scanOrders(rows *sql.Rows, err error) ([]*Order, error) {
 
 // MarkOrderPaid 订单支付确认（线下转账 admin 手动确认 / 静态码人工确认）：置 paid、记支付流水并发放权益。
 // 参数：orderID=订单主键 ID，tid=租户 ID；返回错误。
+//
+// ★ 原子确认（2026-08-26 P0-5 止血）：先执行带 status='pending' 条件的单条 UPDATE，
+//
+//	以 RowsAffected 判定是否抢到确认权——并发双请求（回调 + 超管确认）只有一个能成功，
+//	从根上消除「权益双发/重复流水」竞态；条件更新失败直接报「已处理」，天然幂等。
 func (s *Store) MarkOrderPaid(orderID, tid int64) error {
-	var tokens int64
-	var pkgID int64
-	var createdBy int64
-	// 仅允许 pending 状态的订单被确认（防止重复支付）
-	err := s.db.QueryRow("SELECT amount_tokens, package_id, COALESCE(created_by,0) FROM orders WHERE id=? AND tenant_id=? AND status='pending'", orderID, tid).Scan(&tokens, &pkgID, &createdBy)
+	// 第一步：原子抢占确认权（仅 pending 可被置 paid；重复调用影响行数为 0）
+	res, err := s.db.Exec(
+		"UPDATE orders SET status='paid', paid_at=?, manual_confirm=0 WHERE id=? AND tenant_id=? AND status='pending'",
+		time.Now().Format(time.RFC3339), orderID, tid)
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(
-		"UPDATE orders SET status='paid', paid_at=?, manual_confirm=0 WHERE id=? AND tenant_id=?",
-		time.Now().Format(time.RFC3339), orderID, tid); err != nil {
+	if n, _ := res.RowsAffected(); n == 0 {
+		return &errTxt{"订单不存在或已处理"}
+	}
+	// 第二步：读取订单字段，按包类型分流发放权益
+	var tokens int64
+	var pkgID int64
+	var createdBy int64
+	err = s.db.QueryRow("SELECT amount_tokens, package_id, COALESCE(created_by,0) FROM orders WHERE id=? AND tenant_id=?", orderID, tid).
+		Scan(&tokens, &pkgID, &createdBy)
+	if err != nil {
 		return err
 	}
-	// 写入支付流水（payments 表）
+	// 写入支付流水（payments 表；★ amount_money 记真实应收分=tokens×10，修正对账原料失真）
 	if _, err := s.db.Exec(
 		"INSERT INTO payments (order_id, tenant_id, amount_tokens, amount_money, status, created_at) VALUES (?,?,?,?, 'paid', ?)",
-		orderID, tid, tokens, 0, time.Now().Format(time.RFC3339)); err != nil {
+		orderID, tid, tokens, tokens*10, time.Now().Format(time.RFC3339)); err != nil {
 		return err
 	}
 	// 商业包订单（订阅付费/增量包）：按包类型分流发放（白皮书 §4.1）
@@ -575,16 +597,22 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 
 // MarkOrderManualConfirm 静态码支付人工确认：用户扫码付款后点「我已付费」，置 manual_confirm=1（待超管审核）。
 // 参数：orderID=订单主键 ID，tid=租户 ID；返回错误（仅允许 manual 渠道且未支付的订单）。
+//
+// ★ 原子化（2026-08-26 P0-7 止血）：UPDATE 携带 manual_confirm=0 AND status='pending'
+//
+//	条件并以 RowsAffected 判定，消除「查询+更新」两步间被并发重复确认的窗口。
 func (s *Store) MarkOrderManualConfirm(orderID, tid int64) error {
-	// 校验订单归属、渠道为 manual、状态仍为 pending（防止重复确认）
-	var ch string
-	var status string
-	err := s.db.QueryRow("SELECT channel, status FROM orders WHERE id=? AND tenant_id=?", orderID, tid).Scan(&ch, &status)
-	if err != nil || ch != "manual" || status != "pending" {
+	// 条件更新：仅 manual 渠道、未确认、未支付的订单可被标记
+	res, err := s.db.Exec(
+		"UPDATE orders SET manual_confirm=1 WHERE id=? AND tenant_id=? AND channel='manual' AND manual_confirm=0 AND status='pending'",
+		orderID, tid)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
 		return &errTxt{"订单不存在或已处理"}
 	}
-	_, err = s.db.Exec("UPDATE orders SET manual_confirm=1 WHERE id=? AND tenant_id=?", orderID, tid)
-	return err
+	return nil
 }
 
 // ListManualConfirmOrders 列出待人工确认的订单（超管 Billing 面板）：manual 渠道 + manual_confirm=1 + pending。
@@ -627,6 +655,8 @@ func (s *Store) UpdateOrderPrepay(orderNo, prepayID, qrContent string) error {
 
 // MarkOrderPaidByOrderNo 支付回调确认到账：按订单号置 paid 并充值（幂等）。
 // 参数：orderNo=订单号；返回错误。已支付订单重复回调不重复充值。
+// 幂等实现说明（2026-08-26 P0-5）：不再依赖此处 status 早退，统一由
+// MarkOrderPaid 内部「条件更新 + RowsAffected」保证——并发双回调仅一笔生效。
 func (s *Store) MarkOrderPaidByOrderNo(orderNo string) error {
 	o, err := s.FindOrderByOrderNo(orderNo)
 	if err != nil {
@@ -640,17 +670,44 @@ func (s *Store) MarkOrderPaidByOrderNo(orderNo string) error {
 
 // RefundOrder 退款：订单置 refunded 并从租户余额扣除等额 token。
 // 参数：orderID=订单主键 ID，tid=租户 ID；余额不足时返回 ErrInsufficientBalance。
+//
+// ★ 原子退款（2026-08-26 P0-7 止血）：整体包在 BEGIN IMMEDIATE 事务内——
+//
+//	① 条件更新扣回余额（balance>=? 守卫，不足即整体失败）；
+//	② 订单置 refunded（AND status='paid' 条件 + RowsAffected 判定）。
+//	并发双退款只有一个能成功；余额不足以扣回时订单保持 paid（不出现「退了款单还在」或反向）。
+//	注：套餐类订单的台账/订阅身份回收属后续《商业化闭环方案》范围，本函数维持仅退 amount_tokens。
 func (s *Store) RefundOrder(orderID, tid int64) error {
-	var tokens int64
-	// 仅允许已支付订单退款
-	err := s.db.QueryRow("SELECT amount_tokens FROM orders WHERE id=? AND tenant_id=? AND status='paid'", orderID, tid).Scan(&tokens)
+	// 开启写事务（DSN _txlock=immediate ⇒ BEGIN IMMEDIATE，事务内自洽）
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.Exec("UPDATE orders SET status='refunded' WHERE id=? AND tenant_id=?", orderID, tid); err != nil {
+	defer tx.Rollback()
+	// 读取待退 token 数（仅已支付订单）
+	var tokens int64
+	if err := tx.QueryRow("SELECT amount_tokens FROM orders WHERE id=? AND tenant_id=? AND status='paid'", orderID, tid).Scan(&tokens); err != nil {
 		return err
 	}
-	return s.Deduct(tid, tokens) // 扣回等额余额完成退款
+	// 第一步：守卫式扣回余额（影响行数为 0 = 余额不足 → 回滚报错）
+	res, err := tx.Exec(
+		"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
+		tokens, time.Now().Format(time.RFC3339), tid, tokens)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrInsufficientBalance
+	}
+	// 第二步：条件置 refunded（并发下第二个请求此处影响 0 行 → 整体回滚，不会双扣）
+	res2, err := tx.Exec("UPDATE orders SET status='refunded' WHERE id=? AND tenant_id=? AND status='paid'", orderID, tid)
+	if err != nil {
+		return err
+	}
+	if n, _ := res2.RowsAffected(); n == 0 {
+		return &errTxt{"订单不存在或已退款"}
+	}
+	return tx.Commit()
 }
 
 // errTxt 自定义错误类型：仅保存一条错误消息文本。
@@ -780,6 +837,11 @@ func (s *Store) EnsureBillingDefaults() {
 }
 
 // CloseStalePendingOrders 关闭超时未支付订单：pending 超过 order_pending_timeout_min 自动 cancelled。
+//
+// ★ 人工确认豁免（2026-08-26 P0-6 止血）：channel='manual' 且 manual_confirm=1 的订单
+//
+//	表示用户已扫码付款并点了「我已付费」，正在等待超管核实——这类单不受 15 分钟限制，
+//	否则会出现「用户钱付了、订单被自动取消、超管确认失败」的资损事故。
 func (s *Store) CloseStalePendingOrders() int64 {
 	minutes := int64(15)
 	if v, _ := s.GetConfig("order_pending_timeout_min"); v != "" {
@@ -788,7 +850,9 @@ func (s *Store) CloseStalePendingOrders() int64 {
 		}
 	}
 	cut := time.Now().Add(-time.Duration(minutes) * time.Minute).Format(time.RFC3339)
-	res, err := s.db.Exec("UPDATE orders SET status='cancelled' WHERE status='pending' AND created_at < ?", cut)
+	res, err := s.db.Exec(`UPDATE orders SET status='cancelled'
+		WHERE status='pending' AND created_at < ?
+		  AND NOT (channel='manual' AND manual_confirm=1)`, cut)
 	if err != nil {
 		return 0
 	}
@@ -796,12 +860,14 @@ func (s *Store) CloseStalePendingOrders() int64 {
 	return n
 }
 
-// TenantLowBalanceAlerts 低额提醒：enforced 租户剩余合计（台账+永久）低于阈值时告警（24h 去重）。
+// TenantLowBalanceAlerts 低额提醒：租户剩余合计（台账+永久）低于阈值时告警（24h 去重）。
+//
+// ★ 修复记录（2026-08-26 P1-a）：去重查询列名由 type 更正为 alerts 表实际列名 kind
+//
+//	（旧代码 Scan 错误被吞、cnt 恒 0，24h 去重完全失效）。
+//	语义说明：灰度期（billing_enforced=0）同样提醒——提前触达优于突然停服，
+//	「只提醒不拦截」正是灰度设计的本意。
 func (s *Store) TenantLowBalanceAlerts(threshold int64) {
-	enforced := false
-	if v, _ := s.GetConfig("billing_enforced"); v == "1" {
-		enforced = true
-	}
 	rows, err := s.db.Query(`SELECT ba.tenant_id,
 		COALESCE(ba.balance,0) + COALESCE((SELECT SUM(g.left) FROM quota_grants g
 			WHERE g.tenant_id=ba.tenant_id AND g.left>0 AND g.expires_at > ?),0) AS remain
@@ -827,12 +893,11 @@ func (s *Store) TenantLowBalanceAlerts(threshold int64) {
 			continue
 		}
 		var cnt int
-		s.db.QueryRow(`SELECT COUNT(*) FROM alerts WHERE tenant_id=? AND type='low_balance'
+		s.db.QueryRow(`SELECT COUNT(*) FROM alerts WHERE tenant_id=? AND kind='low_balance'
 			AND created_at>?`, r.tid, dayAgo).Scan(&cnt)
 		if cnt == 0 {
 			s.CreateAlert(r.tid, "warning", "low_balance",
 				fmt.Sprintf("额度即将耗尽：当前剩余 %d token，请及时充值或续订套餐", r.remain))
 		}
 	}
-	_ = enforced // 预留：灰度期同样提醒，仅不停服
 }

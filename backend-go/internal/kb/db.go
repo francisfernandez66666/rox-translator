@@ -59,10 +59,14 @@ func MD5Hex(s string) string {
 func Open(dbPath string) (*KBDatabase, error) {
 	// ★ SQLite 并发加固：busy_timeout 等待锁而非立刻报错；WAL 读写不互斥；
 	//   synchronous=NORMAL 在 WAL 下安全且更快。经 DSN 下发，池内每个新连接自动携带。
+	// ★ _txlock=immediate（2026-08-26 安全止血）：所有事务升级为 BEGIN IMMEDIATE，
+	//   写事务在 BEGIN 时即获取写锁——消除「先 SELECT 快照、后 UPDATE 落库」类
+	//   check-then-write 在并发下的双花/重复发放竞态（计费扣减、订单确认等均依赖此保证）。
 	dsn := "file:" + dbPath +
 		"?_pragma=busy_timeout(5000)" +
 		"&_pragma=journal_mode(WAL)" +
-		"&_pragma=synchronous(NORMAL)"
+		"&_pragma=synchronous(NORMAL)" +
+		"&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err

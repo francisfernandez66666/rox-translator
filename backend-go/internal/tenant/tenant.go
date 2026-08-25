@@ -238,48 +238,11 @@ func (s *Store) SetStatus(id int64, status string) error {
 	return err
 }
 
-// ModelConfig 租户级模型配置（BYOK，租户管理员维护）
-type ModelConfig struct {
-	APIBase string  `json:"api_base"`         // 模型 API 基础地址（OpenAI 兼容，如 /v1 结尾）
-	APIKey  string  `json:"api_key"`          // 模型 API Key
-	Model   string  `json:"model"`            // 模型名
-	Routes  []Route `json:"routes,omitempty"` // 多供应商路由（可选，兼容 ChatGPT/Gemini 等 OpenAI 兼容端点）
-}
-
-// Route 单条多供应商路由（与 config.ProviderConfig 同构，避免包循环依赖）
-type Route struct {
-	Provider string `json:"provider"` // 供应商标识（如 openai/gemini/deepseek）
-	APIBase  string `json:"api_base"` // API 基地址（OpenAI 兼容）
-	APIKey   string `json:"api_key"`  // API Key
-	Model    string `json:"model"`    // 模型名
-	Weight   int    `json:"weight"`   // 权重，越高越优先（0=兜底）
-}
-
-// GetModelConfig 读取租户模型配置；未配置返回空值（调用方回退全局默认）。
-// 参数：tid=租户 ID；返回租户级模型配置结构体。
-func (s *Store) GetModelConfig(tid int64) (ModelConfig, error) {
-	var raw string
-	err := s.db.QueryRow("SELECT model_config FROM tenants WHERE id=?", tid).Scan(&raw)
-	// 未配置或空 JSON 视为无覆盖，返回零值结构体
-	if err != nil || raw == "" || raw == "{}" {
-		return ModelConfig{}, nil
-	}
-	var mc ModelConfig
-	if err := json.Unmarshal([]byte(raw), &mc); err != nil {
-		return ModelConfig{}, nil // 解析失败按未配置处理
-	}
-	return mc, nil
-}
-
-// SetModelConfig 保存租户模型配置（整体覆盖写入 model_config JSON 列）。
-// 参数：tid=租户 ID，mc=模型配置结构体。
-func (s *Store) SetModelConfig(tid int64, mc ModelConfig) error {
-	b, _ := json.Marshal(mc)
-	_, err := s.db.Exec(
-		"UPDATE tenants SET model_config=?, updated_at=? WHERE id=?",
-		string(b), nowStr(), tid)
-	return err
-}
+// ★ BYOK 下线说明（2026-08-26，决策人定稿「所有 LLM 一律走平台网关」）：
+//   原租户级模型配置能力（ModelConfig/Route/GetModelConfig/SetModelConfig）已整体删除，
+//   引擎解析优先级收敛为「全局 ModelRoutes → 全局默认」。数据库 tenants.model_config 列
+//   保留不删（避免迁移风险），代码不再读写；如需清理历史数据可执行：
+//   UPDATE tenants SET model_config='{}';
 
 // PolicyConfig 租户级策略参数
 type PolicyConfig struct {

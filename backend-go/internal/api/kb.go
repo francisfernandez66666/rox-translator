@@ -61,6 +61,30 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 	}
 	// 生效租户（租户隔离：只能写入自己的包）
 	tid := s.effTenant(r, u)
+	// ★ 归属三重校验（2026-08-26 P1-e 越权止血，对齐 handleImportKB 同款口径）：
+	//   ① 包存在且属于本租户；② 操作者角色可管理该包类型；③ 部门管理员仅限本部门子树内的包。
+	//   旧实现只校验了租户 ID，dept_admin 可向同租户任意类型包（含行业包/文化包）注入条目，
+	//   污染后会影响全租户译文（横向越权）。
+	pkg, gErr := s.Store.GetKBPackage(req.PackageID, tid)
+	if gErr != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		return
+	}
+	if !canManagePackType(u, pkg.PackType) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包导入"})
+		return
+	}
+	if auth.RoleLevel(u.Role) == 2 {
+		if u.OrgID <= 0 || pkg.OrgID <= 0 {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向非本部门的包导入"})
+			return
+		}
+		inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, pkg.OrgID)
+		if e2 != nil || !inTree {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向非本部门的包导入"})
+			return
+		}
+	}
 	added, skipped := 0, 0
 	// 逐条导入：空源文跳过；默认层 2、默认目标语言 en
 	for _, e := range req.Entries {

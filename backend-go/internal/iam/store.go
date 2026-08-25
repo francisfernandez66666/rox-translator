@@ -17,6 +17,7 @@ import (
 
 // userCols 用户表查询列清单（Scan 顺序契约；email 为老库可空列，COALESCE 兜底）。
 const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at"
+
 // orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
 const orgCols = "id, tenant_id, parent_id, name, type, COALESCE(token_limit,0), created_at, updated_at"
 
@@ -288,7 +289,9 @@ func (s *Store) GetPlatformRootOrg() (*Org, error) {
 // 租户根挂到平台根下、直属组织重挂到本租户根（修复断链），供前端组装平台树。
 func (s *Store) ListPlatformOrgs(platformRootID int64) ([]*Org, error) {
 	// INNER JOIN tenants：已删除租户的孤儿组织不再出现在平台树
-	rows, err := s.db.Query("SELECT o.id, o.tenant_id, o.parent_id, o.name, o.type, o.created_at, o.updated_at FROM orgs o INNER JOIN tenants t ON o.tenant_id=t.id WHERE o.tenant_id>0 ORDER BY o.tenant_id, CASE o.type WHEN 'root' THEN 0 ELSE 1 END, o.parent_id, o.id")
+	// ★ 修复（2026-08-26 P1-b）：SELECT 补第 8 列 token_limit——旧 SQL 只查 7 列却 Scan
+	//   8 个目标，每行 Scan 报错被 continue 吞掉，导致平台组织树恒为空。
+	rows, err := s.db.Query("SELECT o.id, o.tenant_id, o.parent_id, o.name, o.type, COALESCE(o.token_limit,0), o.created_at, o.updated_at FROM orgs o INNER JOIN tenants t ON o.tenant_id=t.id WHERE o.tenant_id>0 ORDER BY o.tenant_id, CASE o.type WHEN 'root' THEN 0 ELSE 1 END, o.parent_id, o.id")
 	if err != nil {
 		return nil, err
 	}

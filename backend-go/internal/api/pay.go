@@ -21,6 +21,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -237,17 +238,35 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 }
 
 // handlePayNotify 支付渠道异步回调：验签后确认订单到账（幂等）。
+//
+// ★ 安全止血（2026-08-26 P0-2，三层防御，商户号官方验签落地前的兜底闸门）：
+//
+//	① 凭证必填——X-Admin-Token 头缺失或不符合 AdminToken 一律 403。
+//	   此前「带头才校验」等于匿名可确认任意订单（免费充值漏洞）。
+//	   渠道服务器无法携带该头的问题由反代注入解决（见部署指南 Caddy 片段），
+//	   后续接入微信/支付宝官方验签后可移除本要求；
+//	② 渠道一致性——回调 channel 必须与订单落库 channel 匹配；manual 单只认人工确认流程；
+//	③ mock 封禁——pay_mode≠mock 时 mock 渠道回调直接拒绝（生产防呆）。
+//
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（path 含 :channel，body 为渠道报文）。
 // 返回: 渠道约定格式（成功返回 success 字符串，微信返回 204）。
 func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
-	// 校验管理员凭证（回调地址仅内部/配置的渠道服务访问）
-	if tok := r.Header.Get("X-Admin-Token"); tok != "" {
-		if tok != s.Cfg.AdminToken {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "拒绝访问"})
-			return
-		}
+	// ① 凭证必填：头缺失 = 匿名请求，直接拒绝（不再「可选校验」）
+	tok := r.Header.Get("X-Admin-Token")
+	if tok == "" || tok != s.Cfg.AdminToken {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "拒绝访问"})
+		return
 	}
 	channel := strings.TrimPrefix(r.URL.Path, "/api/pay/notify/")
+	// ③ mock 生产封禁：非 mock 模式下 mock 渠道回调一律拒绝（与 handlePaySimulate 同口径）
+	payMode := ""
+	if v, _ := s.Store.GetConfig("pay_mode"); v != "" {
+		payMode = v
+	}
+	if channel == "mock" && payMode != "" && payMode != "mock" {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "当前支付模式下禁止 mock 回调"})
+		return
+	}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	headers := map[string]string{
 		"Content-Type": r.Header.Get("Content-Type"),
@@ -264,6 +283,28 @@ func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 	}
 	if !nt.Verified {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "回调签名校验未通过"})
+		return
+	}
+	// ② 渠道一致性 + 金额一致性预检：先查单核对，再确认到账
+	o, oerr := s.Store.FindOrderByOrderNo(nt.OrderNo)
+	if oerr != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "订单不存在"})
+		return
+	}
+	// 渠道匹配：mock 单只接受 mock 回调；wechat/alipay 单只接受同渠道回调；
+	// manual（静态码人工确认）单不走任何回调通道，只能由超管在后台核实开通
+	expectChannel := channel
+	if channel == "sdk" { // sdk 为 wechat/alipay 的历史别名
+		expectChannel = "wechat"
+	}
+	if o.Channel != expectChannel {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "回调渠道与订单渠道不符"})
+		return
+	}
+	// 金额一致：应收分 = token 数 × 10（与下单口径一致）；回调金额为 0 或不一致即拒绝
+	if expectFen := o.AmountTokens * 10; nt.Amount <= 0 || nt.Amount != expectFen {
+		writeJSON(w, 400, map[string]interface{}{"success": false,
+			"message": fmt.Sprintf("回调金额不符：期望 %d 分，实收 %d 分", expectFen, nt.Amount)})
 		return
 	}
 	if err := s.Store.MarkOrderPaidByOrderNo(nt.OrderNo); err != nil {

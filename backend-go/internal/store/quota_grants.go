@@ -52,14 +52,22 @@ func (s *Store) SumActiveGrants(tid int64) int64 {
 }
 
 // DeductWithGrants 双部分顺序扣减（事务）：
-//  ① 未过期 grants 按 expires_at ASC 逐行核销（可拆分多行）
-//  ② 不足部分从永久余额原子扣减
+//
+//	① 未过期 grants 按 expires_at ASC 逐行核销（可拆分多行）
+//	② 不足部分从永久余额原子扣减
+//
 // 任一环节不足 → 回滚返回 ErrInsufficientBalance。
+//
+// ★ 并发安全（2026-08-26 P0-4 止血）：
+//   - 连接 DSN 已启用 _txlock=immediate：本事务 BEGIN 时即持有写锁，
+//     SELECT 快照与后续 UPDATE 之间不可能有其他写事务提交，拆行核销基于一致视图；
+//   - 每条核销 UPDATE 额外携带 AND left>=? 守卫 + RowsAffected 校验，
+//     即使未来有人回退事务锁模式，也不会把台账扣成负数（双保险）。
 func (s *Store) DeductWithGrants(tid int64, tokens int64) error {
 	if err := s.EnsureBalance(tid); err != nil {
 		return err
 	}
-	tx, err := s.db.Begin()
+	tx, err := s.db.Begin() // DSN _txlock=immediate ⇒ 实际为 BEGIN IMMEDIATE
 	if err != nil {
 		return err
 	}
@@ -93,8 +101,14 @@ func (s *Store) DeductWithGrants(tid int64, tokens int64) error {
 		if use > need {
 			use = need
 		}
-		if _, err := tx.Exec("UPDATE quota_grants SET left=left-? WHERE id=?", use, g.id); err != nil {
+		// ★ 守卫式核销：AND left>=use 保证不扣负；影响行数为 0 说明并发下该行余额
+		//   已发生变化（理论上是防御性分支，IMMEDIATE 锁下不应触发），整体回滚报余额不足。
+		res, err := tx.Exec("UPDATE quota_grants SET left=left-? WHERE id=? AND left>=?", use, g.id, use)
+		if err != nil {
 			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrInsufficientBalance
 		}
 		need -= use
 	}

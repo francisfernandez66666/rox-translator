@@ -40,6 +40,7 @@ func New(db *sql.DB) (*Store, error) {
 	s.backfillAPIOwnership() // ★ 历史 Key/任务强绑定回填（幂等）
 	s.TmReviewMigrate() // TM 待审池建表（幂等）
 	s.QuotaGrantMigrate() // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
+	s.BalanceAccountMigrate() // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
 	s.ReferralMigrate()   // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
 	s.EnsureBillingDefaults() // 商业化参数默认值落库（幂等，面板可改）
 	return s, nil

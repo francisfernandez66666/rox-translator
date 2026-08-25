@@ -14,7 +14,6 @@ import (
 
 	"translator/internal/config"
 	"translator/internal/store"
-	"translator/internal/tenant"
 )
 
 func newTestStore(t *testing.T) *store.Store {
@@ -90,61 +89,35 @@ func TestResolveStageModelKeyInherit(t *testing.T) {
 	}
 }
 
-// TestResolveModelTenantRoutes 租户 BYOK 多供应商路由优先于单模型/全局（Req1 扩展：ChatGPT/Gemini 等）。
-func TestResolveModelTenantRoutes(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("打开内存数据库失败: %v", err)
-	}
-	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE tenants (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		"code" TEXT UNIQUE NOT NULL,
-		"name" TEXT NOT NULL DEFAULT '',
-		"status" TEXT NOT NULL DEFAULT 'active',
-		"expires_at" TEXT NOT NULL DEFAULT '',
-		"permissions" TEXT NOT NULL DEFAULT '{}',
-		"created_at" TEXT,
-		"updated_at" TEXT
-	)`); err != nil {
-		t.Fatalf("建 tenants 表失败: %v", err)
-	}
-	if _, err := db.Exec(`INSERT INTO tenants (code,name,status,expires_at,permissions) VALUES ('t1','T1','active','','{}')`); err != nil {
-		t.Fatalf("插入租户失败: %v", err)
-	}
-	ts, err := tenant.NewStore(db)
-	if err != nil {
-		t.Fatalf("NewStore 失败: %v", err)
-	}
-	// 全局默认（不配 ModelRoutes）
+// TestResolveModelGlobalRoutes 全局多供应商路由（平台统一网关）按权重选主模型。
+// ★ 2026-08-26 BYOK 移除改造：原「租户路由优先」用例随租户模型配置能力一并退役，
+//
+//	现验证超管全局 ModelRoutes 的主路由选择与回退链语义。
+func TestResolveModelGlobalRoutes(t *testing.T) {
+	// 全局默认（不配 ModelRoutes）→ 回退全局默认模型
 	cfg := config.Default()
-	e := &Engine{Ten: ts, Cfg: cfg}
-	ctx := tenant.WithTenant(context.Background(), 1)
+	e := &Engine{Cfg: cfg}
+	ctx := context.Background()
 
-	// 1. 未配置租户模型 → 回退全局默认
 	base, key, model := e.resolveModel(ctx)
-	if model != cfg.OnlineModel {
-		t.Fatalf("未配置租户时回退全局失败: %s", model)
+	if model != cfg.OnlineModel || base != cfg.OnlineAPIBase || key != cfg.OnlineAPIKey {
+		t.Fatalf("未配置路由时未回退全局默认: base=%s model=%s", base, model)
 	}
 
-	// 2. 租户配置多供应商路由（BYOK）→ 优先租户路由（取权重最高）
-	err = ts.SetModelConfig(1, tenant.ModelConfig{
-		APIBase: "https://single.example", APIKey: "sk-single", Model: "single-model",
-		Routes: []tenant.Route{
-			{Provider: "openai", APIBase: "https://api.openai.com/v1", APIKey: "sk-openai", Model: "gpt-4o-mini", Weight: 2},
-			{Provider: "gemini", APIBase: "https://generativelanguage.googleapis.com/v1beta/openai", APIKey: "gem-key", Model: "gemini-1.5-flash", Weight: 1},
-		},
-	})
-	if err != nil {
-		t.Fatalf("SetModelConfig 失败: %v", err)
+	// 配置两条全局路由 → 取权重最高者为主路由
+	cfg.ModelRoutes = []config.ProviderConfig{
+		{Provider: "openai", APIBase: "https://api.openai.com/v1", APIKey: "sk-openai", Model: "gpt-4o-mini", Weight: 2},
+		{Provider: "gemini", APIBase: "https://generativelanguage.googleapis.com/v1beta/openai", APIKey: "gem-key", Model: "gemini-1.5-flash", Weight: 1},
 	}
+	e.Cfg = cfg
 	base, key, model = e.resolveModel(ctx)
 	if base != "https://api.openai.com/v1" || key != "sk-openai" || model != "gpt-4o-mini" {
-		t.Fatalf("租户路由未优先: base=%s key=%s model=%s", base, key, model)
+		t.Fatalf("全局主路由选择错误: base=%s key=%s model=%s", base, key, model)
 	}
-	// 租户路由降级链应返回全部路由（按权重降序）
-	tr := e.resolveTenantRoutes(ctx)
-	if len(tr) != 2 || tr[0].Model != "gpt-4o-mini" {
-		t.Fatalf("resolveTenantRoutes 异常: %+v", tr)
+
+	// 降级链应排除主路由、按权重降序仅剩备用路由
+	fb := e.resolveRouteFallbacks(cfg.ModelRoutes[0])
+	if len(fb) != 1 || fb[0].Model != "gemini-1.5-flash" {
+		t.Fatalf("全局降级链异常: %+v", fb)
 	}
 }

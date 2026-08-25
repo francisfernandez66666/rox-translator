@@ -80,6 +80,7 @@ func singleQuotedJSON(body []byte) []byte {
 		return append([]byte(`"`), append([]byte(inner), '"')...)
 	})
 }
+
 // handleOpenAPITaskCreate 开放 API 创建翻译任务接口（API Key 鉴权，非登录态）：
 //   - 校验 Key 有效性/权限/当日配额（超限返回 429 + error_code=key_quota_exceeded）
 //   - 受理文本任务并异步执行；轮询查询走 /api/openapi/tasks/{id}
@@ -539,4 +540,92 @@ func (s *Server) handleOpenAPIBalance(w http.ResponseWriter, r *http.Request) {
 		resp[k] = v
 	}
 	writeJSON(w, 200, resp)
+}
+
+// ============ 同步翻译端点（划译插件 / Office taskpane 专用通道） ============
+//
+// ★ 2026-08-26 新增（断链修复）：浏览器划译插件 extension/content.js 与 Office
+//   taskpane（office.go 内嵌 JS）此前调用的 POST /openapi/v1translate 端点不存在，
+//   请求落入 SPA 兜底返回 HTML，两代划译客户端实际全部失效。本端点补齐同步短文
+//   翻译能力：内部直接复用引擎 HandleText + 实费计量，与异步任务共用鉴权/闸门口径。
+
+// syncTranslateMaxChars 同步翻译源文本长度上限（字符）：划译场景为选区短文本，
+// 同步等待返回，超长请走异步任务接口 /openapi/v1/tasks。
+const syncTranslateMaxChars = 5000
+
+// handleOpenAPITranslateSync 同步文本翻译接口（API Key 鉴权）：
+//   - 请求体：{"text": "待翻译文本", "target_langs": ["en"], "mode": "fast"|"pro"}
+//   - 响应体：{"success": true, "translations": {"en": "..."}, "source_text": "...",
+//     "mode": "...", "tokens_used": N}
+//   - 错误码与任务接口同口径：invalid_api_key / key_quota_exceeded /
+//     forbidden / insufficient_balance / text_too_long
+func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Request) {
+	// ① Key 鉴权：有效性 + 当日配额（复用 authenticateAPIKey，含 TouchAPIKey 计数）
+	ak, authErr := s.authenticateAPIKey(r)
+	if authErr != "" {
+		if authErr == "key_quota_exceeded" {
+			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
+				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			return
+		}
+		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": "invalid_api_key", "message": "API Key 无效"})
+		return
+	}
+	// ② 权限校验：需 translate 或 all 权限
+	if ak.Perms != "all" && ak.Perms != "translate" {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "error_code": "forbidden", "message": "API Key 无翻译权限"})
+		return
+	}
+	// ③ 配额闸门：QPS/并发/每日上限/token 余额校验（余额不足 → insufficient_balance）
+	tid, release, gateErr := s.gateUsage(r)
+	defer release()
+	if gateErr != nil {
+		writeTaskError(w, gateErrorCode(gateErr), gateErr.Error()+"。如余额不足请充值或升级套餐")
+		return
+	}
+	// ④ 解析请求体
+	var req struct {
+		Text        string   `json:"text"`         // 待翻译源文本（必填）
+		TargetLangs []string `json:"target_langs"` // 目标语言代码列表（缺省 ["en"]）
+		Mode        string   `json:"mode"`         // fast=快速；pro=专业校对（缺省 fast，划译求快）
+	}
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err := json.Unmarshal(singleQuotedJSON(body), &req); err != nil || strings.TrimSpace(req.Text) == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "error_code": "bad_request", "message": "text 不能为空"})
+		return
+	}
+	if n := len([]rune(req.Text)); n > syncTranslateMaxChars {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "error_code": "text_too_long",
+			"message": fmt.Sprintf("同步翻译单次上限 %d 字符（当前 %d），长文本请使用 POST /openapi/v1/tasks 异步任务", syncTranslateMaxChars, n)})
+		return
+	}
+	langCount := len(req.TargetLangs)
+	if langCount == 0 {
+		req.TargetLangs = []string{"en"} // 与任务接口缺省口径一致
+	}
+	if langCount > 5 { // 划译场景防滥用：最多 5 个目标语言
+		req.TargetLangs = req.TargetLangs[:5]
+	}
+	options := map[string]interface{}{
+		"target_langs": req.TargetLangs,
+		"mode":         normalizeTaskMode(req.Mode),
+	}
+	// ⑤ 调用引擎同步翻译（HandleText 内部已注入用量收集器；无进度回调）
+	res := s.Engine.HandleText(r.Context(), req.Text, options, nil)
+	if res.Error != "" {
+		s.metrics.countTranslate("text", false)
+		writeTaskError(w, "task_failed", res.Error)
+		return
+	}
+	// ⑥ Token 实费计费：聚合本次全链路真实消耗 × 均摊系数（强制计费时扣余额）
+	charged := s.chargeTaskTokens(r, tid, "translate")
+	s.metrics.countTranslate("text", true)
+	// ⑦ 组装响应
+	writeJSON(w, 200, map[string]interface{}{
+		"success":      true,
+		"translations": res.Data.Translations,
+		"source_text":  res.Data.SourceText,
+		"mode":         res.Data.Mode,
+		"tokens_used":  charged,
+	})
 }

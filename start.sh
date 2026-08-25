@@ -1,100 +1,59 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ============================================================================
-# start.sh — 一键启动翻译助手（开发模式）
-# 同时启动：
-#   后端 FastAPI (uvicorn) → http://127.0.0.1:8000
-#   前端 Vite 开发服务器  → http://127.0.0.1:5173（自动代理 /api 到后端）
+# start.sh — 本地开发环境一键启动（2026-08-26 重写，Go 单栈）
+# 旧脚本说明：原版本启动 Python 后端（backend/main.py @ :8000），该栈已按
+#   《旧Python后端下线与构建链收敛方案》整体退役；前端 vite 代理指向 Go :8787。
+#
+# 用法：
+#   ./start.sh            # 编译并启动 Go 后端（127.0.0.1:8787）
+#   ./start.sh -f         # 额外前台启动 vite dev server（:5173，API 代理到 8787）
+#   ./start.sh -b         # 启动前先执行一次前端构建（frontend/dist 不存在时也会自动构建）
 # ============================================================================
-set -e
 
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BACKEND_DIR="$PROJECT_DIR/backend"
-FRONTEND_DIR="$PROJECT_DIR/frontend"
+set -euo pipefail
+cd "$(dirname "$0")"
 
-echo "============================================"
-echo "  翻译助手 — 一键启动"
-echo "============================================"
+FRONTEND_DIST="frontend/dist"
+NEED_FRONTEND_BUILD=0
 
-# ---- 检查 Python ----
-PYTHON=""
-for cmd in python3 python; do
-    if command -v "$cmd" &>/dev/null; then
-        PYTHON="$cmd"
-        break
-    fi
-done
-if [ -z "$PYTHON" ]; then
-    echo "[错误] 未找到 Python3，请先安装"
-    exit 1
-fi
-
-# ---- 检查 Node.js ----
-if ! command -v node &>/dev/null; then
-    echo "[错误] 未找到 Node.js，请先安装"
-    exit 1
-fi
-
-# ---- 安装后端依赖 ----
-# 检测核心依赖（dotenv/fastapi）是否真正可用，而非依赖 .deps_installed 标记文件
-# （标记文件若随源码一起发送会误判已安装，导致 Missing 'dotenv' 报错）
-if ! "$PYTHON" -c "import dotenv, fastapi" >/dev/null 2>&1; then
-    echo "[安装] 后端依赖..."
-    "$PYTHON" -m pip install -r "$BACKEND_DIR/requirements.txt" -q
-    touch "$BACKEND_DIR/.deps_installed"
-fi
-
-# ---- 安装前端依赖 ----
-if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
-    echo "[安装] 前端依赖..."
-    cd "$FRONTEND_DIR" && npm install --silent
-fi
-
-# ---- 启动后端 ----
-echo "[启动] 后端 FastAPI (http://127.0.0.1:8000)"
-cd "$BACKEND_DIR"
-"$PYTHON" main.py &
-BACKEND_PID=$!
-echo "   PID: $BACKEND_PID"
-
-# ---- 启动前端 ----
-echo "[启动] 前端 Vite (http://127.0.0.1:5173)"
-cd "$FRONTEND_DIR"
-npx vite --host 127.0.0.1 &
-FRONTEND_PID=$!
-echo "   PID: $FRONTEND_PID"
-
-echo ""
-echo "============================================"
-echo "  后端: http://127.0.0.1:8000"
-echo "  前端: http://127.0.0.1:5173"
-echo "  按 Ctrl+C 停止所有服务"
-echo "============================================"
-
-# ---- 等待后端就绪后自动打开浏览器 ----
-echo "[等待] 后端启动中..."
-for i in $(seq 1 30); do
-    if curl -s http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
-        echo "[就绪] 后端已启动"
-        break
-    fi
-    sleep 1
+# ---------- 参数解析 ----------
+RUN_VITE=0
+for arg in "$@"; do
+  case "$arg" in
+    -f) RUN_VITE=1 ;;          # -f：前台起 vite dev（热更新开发模式）
+    -b) NEED_FRONTEND_BUILD=1 ;; # -b：强制重建前端 dist
+  esac
 done
 
-echo "[打开] 浏览器 http://127.0.0.1:5173"
-if command -v open &>/dev/null; then
-    open http://127.0.0.1:5173
+# ---------- 前端构建（缺失或强制时） ----------
+if [ "$NEED_FRONTEND_BUILD" = "1" ] || [ ! -f "$FRONTEND_DIST/index.html" ]; then
+  echo "==> 构建前端 (npm run build) ..."
+  (cd frontend && npm install --silent && npm run build)
 fi
 
-cleanup() {
-    echo ""
-    echo "[停止] 正在关闭服务..."
-    kill "$BACKEND_PID" 2>/dev/null
-    kill "$FRONTEND_PID" 2>/dev/null
-    wait "$BACKEND_PID" 2>/dev/null
-    wait "$FRONTEND_PID" 2>/dev/null
-    echo "[停止] 已退出"
-}
+# ---------- 编译 Go 后端 ----------
+echo "==> 编译后端 (go build) ..."
+(cd backend-go && go build -o /tmp/translator-server-dbg ./cmd/server)
 
-trap cleanup EXIT INT TERM
+# ---------- 启动参数说明 ----------
+#   -addr     仅监听回环地址（本地开发不暴露公网）
+#   -frontend 前端静态资源目录（Go 内嵌托管，浏览器直接访问 http://127.0.0.1:8787）
+#   -kb       知识库向量文件（data/tm_embeddings.npz；缺失则以无向量模式运行）
+#   -kbdb     知识库 SQLite 路径（首次运行自动建库 + 初始化超管 admin/admin123）
+echo "==> 启动服务 http://127.0.0.1:8787 （默认账号 admin / admin123）"
+(cd backend-go && /tmp/translator-server-dbg \
+  -addr 127.0.0.1:8787 \
+  -frontend "../$FRONTEND_DIST" \
+  -kb ../data/tm_embeddings.npz \
+  -kbdb data/dev.db) &
+SERVER_PID=$!
+trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
 
-wait
+# ---------- 可选：vite dev（热更新） ----------
+if [ "$RUN_VITE" = "1" ]; then
+  echo "==> 启动 vite dev http://localhost:5173 （API 已代理至 :8787）"
+  (cd frontend && npx vite)
+else
+  echo "==> 就绪。打开 http://127.0.0.1:8787 ；Ctrl+C 退出"
+  wait $SERVER_PID
+fi

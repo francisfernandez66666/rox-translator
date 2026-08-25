@@ -360,7 +360,20 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 // handleDownload 文件下载接口（/api/download/，按扩展名推断 Content-Type）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（查询参数 path 或路径中 /api/download/ 之后的文件名）。
 // 返回: 文件内容（attachment 下载），支持图片/Office/PDF 等类型。
+//
+// ★ 安全止血（2026-08-26 P0-1，最高危）：本接口此前无任何鉴权、无目录白名单，
+//
+//	`?path=/etc/passwd` 即可拖走任意文件乃至整库。现加固为：
+//	① 必须携带有效 JWT（authUser 校验，401 拒绝）；
+//	② 路径白名单：仅允许「上传目录 UploadDir」与「工单产物目录 _output」两处，
+//	   filepath.Clean 规范化后做前缀匹配，越界一律 404（不泄露存在性）。
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+	// ① 鉴权：匿名请求直接拒绝
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]string{"error": "未登录或登录已过期"})
+		return
+	}
 	// 解析文件路径：优先取查询参数 path，否则从 URL 路径提取
 	filePath := r.URL.Query().Get("path")
 	if filePath == "" {
@@ -370,6 +383,16 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "文件不存在"})
 		return
 	}
+	// ② 目录白名单校验：Clean 后必须落在允许的基础目录内
+	safePath, ok := resolveSafePath([]string{
+		s.Cfg.UploadDir, // 上传临时目录（上传件预览）
+		filepath.Join(s.Cfg.UploadDir, "_output"), // 工单产物输出目录
+	}, filePath)
+	if !ok {
+		writeJSON(w, 404, map[string]string{"error": "文件不存在"})
+		return
+	}
+	filePath = safePath
 	// 打开文件并校验存在性
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -406,10 +429,48 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 // uniqueName 生成带时间戳的唯一文件名（避免上传同名冲突）。
 // 参数 name: 原始文件名。返回: "<base>_<纳秒时间戳><ext>" 格式的唯一文件名。
+//
+// ★ 安全加固（2026-08-26 P1-d）：入口先 filepath.Base 剥离任何目录成分——
+//
+//	multipart filename 可被恶意构造为 "../../evil.csv"，旧实现会把 ../ 带进
+//	filepath.Join 造成上传目录外的路径穿越写。Base 清洗后仅保留纯文件名。
 func uniqueName(name string) string {
+	name = filepath.Base(strings.ReplaceAll(name, "\\", "/")) // 统一斜杠后取纯文件名（兼容 Windows 风格路径）
 	ext := filepath.Ext(name)
 	base := strings.TrimSuffix(name, ext)
 	return fmt.Sprintf("%s_%d%s", base, timeNow(), ext)
+}
+
+// resolveSafePath 路径白名单解析：将请求路径规范化后校验是否落在任一基础目录内。
+// 参数 baseDirs: 允许访问的基础目录列表；p: 请求传入的相对/绝对路径。
+// 返回: 规范化后的安全绝对路径与是否放行（false 时调用方应返回 404）。
+// 实现要点：
+//   - filepath.Clean 消解 "../" 等穿越成分；
+//   - 相对路径按各基础目录逐一尝试拼接（保持旧行为兼容：?path=xxx 相对 UploadDir）；
+//   - 最终结果必须带分隔符前缀命中某一基础目录，杜绝 "base_evil" 这类前缀误匹配。
+func resolveSafePath(baseDirs []string, p string) (string, bool) {
+	cleaned := filepath.Clean(p)
+	candidates := []string{cleaned}
+	if !filepath.IsAbs(cleaned) {
+		// 相对路径：分别以每个基础目录为根尝试
+		for _, bd := range baseDirs {
+			candidates = append(candidates, filepath.Join(bd, cleaned))
+		}
+	}
+	for _, cand := range candidates {
+		for _, bd := range baseDirs {
+			absBase, err1 := filepath.Abs(bd)
+			absCand, err2 := filepath.Abs(cand)
+			if err1 != nil || err2 != nil {
+				continue
+			}
+			// 带分隔符前缀匹配：既允许恰好等于目录内文件，也排除同前缀名目录的混淆
+			if absCand == absBase || strings.HasPrefix(absCand, absBase+string(filepath.Separator)) {
+				return absCand, true
+			}
+		}
+	}
+	return "", false
 }
 
 // timeNow 返回当前纳秒时间戳（用于唯一文件名）。

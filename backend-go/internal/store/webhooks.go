@@ -16,7 +16,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -38,6 +40,11 @@ const webhookCols = "id, tenant_id, url, secret, events, enabled, COALESCE(creat
 
 // UpsertWebhook 新增或更新租户 webhook 配置。
 // 参数：w=webhook 配置（ID<=0 时新增，否则按 ID+租户更新）。
+//
+// ★ SSRF 防护（2026-08-26 P1-f 止血）：保存时即校验 URL 合法性——
+//
+//	仅允许 http/https 且解析结果不得命中内网/环回/链路本地地址
+//	（此前零校验，租户管理员可配置 169.254.169.254 云元数据等内网地址探测）。
 func (s *Store) UpsertWebhook(w *Webhook) error {
 	if w.TenantID <= 0 {
 		w.TenantID = 1
@@ -47,6 +54,9 @@ func (s *Store) UpsertWebhook(w *Webhook) error {
 	}
 	if w.URL == "" {
 		return fmt.Errorf("回调 URL 不能为空")
+	}
+	if err := validateWebhookURL(w.URL); err != nil {
+		return err
 	}
 	now := time.Now().Format(time.RFC3339)
 	if w.ID > 0 {
@@ -178,7 +188,53 @@ func (s *Store) DispatchWebhookForce(tid int64, event string, payload interface{
 	s.postWebhooks(hooks, event, payload)
 }
 
+// validateWebhookURL 回调 URL 安全校验（SSRF 防护核心，2026-08-26 P1-f）。
+// 规则：
+//
+//	① scheme 仅允许 http/https；
+//	② 域名必须可解析（DNS 失败视为无效，避免保存死链）；
+//	③ 解析出的全部 IP 一旦命中黑名单类别即拒绝：环回(127/::1)、私网(RFC1918/ULA)、
+//	   链路本地(169.254 云元数据)、未指定(0.0.0.0)、组播/广播。
+func validateWebhookURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("回调 URL 格式不合法")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("回调 URL 仅支持 http/https")
+	}
+	host := u.Hostname() // 去掉端口
+	// 纯 IP 形式直接校验；域名先解析再逐 IP 校验（防 DNS 指向内网）
+	ips := []net.IP{net.ParseIP(host)}
+	if ips[0] == nil {
+		resolved, err := net.LookupHost(host)
+		if err != nil || len(resolved) == 0 {
+			return fmt.Errorf("回调域名无法解析: %s", host)
+		}
+		ips = make([]net.IP, 0, len(resolved))
+		for _, s := range resolved {
+			if ip := net.ParseIP(s); ip != nil {
+				ips = append(ips, ip)
+			}
+		}
+	}
+	for _, ip := range ips {
+		if ip == nil {
+			continue
+		}
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+			ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+			return fmt.Errorf("回调地址不允许指向内网/保留地址: %s", ip.String())
+		}
+	}
+	return nil
+}
+
 // postWebhooks 实际投递：对每个 webhook 起 goroutine 发送（带签名与重试）。
+//
+// ★ 投递前二次校验（2026-08-26 P1-f）：DNS 记录可能在保存后被篡改指向内网
+//
+//	（DNS rebinding），每次投递前重新执行同一白名单校验，不合法直接跳过该目标。
 func (s *Store) postWebhooks(hooks []*Webhook, event string, payload interface{}) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -189,6 +245,10 @@ func (s *Store) postWebhooks(hooks []*Webhook, event string, payload interface{}
 		// 拷贝循环变量（goroutine 延迟执行）
 		hook := h
 		go func() {
+			// 投递前 SSRF 二次校验：保存后 DNS 漂移/内网地址一律跳过
+			if validateWebhookURL(hook.URL) != nil {
+				return
+			}
 			for attempt := 1; attempt <= 3; attempt++ {
 				req, err := http.NewRequest(http.MethodPost, hook.URL, strings.NewReader(string(body)))
 				if err != nil {

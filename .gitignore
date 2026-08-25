@@ -1,20 +1,25 @@
-
+# ============ 通用忽略 ============
 __pycache__/
 .DS_Store
 .env
+
+# ============ 构建产物 / 运行数据（不入仓库） ============
+build/
+dist/
+frontend/dist/
+node_modules/
+data/            # 本地知识库向量与开发库（tm_embeddings.npz / dev.db）
+
+# ============ Python 旧栈遗留（栈已退役，规则保留防复发） ============
 *.egg-info/
 *.manifest
 *.pyc
 *.pyz
 *.spec
 *.spec.backup
-/*.md
-# PyInstaller 构建产物
-# 项目文档仅保留本地，不入仓库
 backend/.deps_installed
 backend/data/_output/
 backend/data/_uploads/
-build/
-dist/
-frontend/dist/
-node_modules/
+
+# ============ 项目文档仅保留本地，不入仓库 ============
+/*.md

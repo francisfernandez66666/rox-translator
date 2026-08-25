@@ -59,11 +59,11 @@ func TestUpsertWebhookEmptyURL(t *testing.T) {
 // 更新已有 webhook（不改 events 时保持原值）。
 func TestUpsertWebhookUpdate(t *testing.T) {
 	s := newTestStore(t)
-	w := &Webhook{TenantID: 1, URL: "https://a.com", Events: "translation.completed"}
+	w := &Webhook{TenantID: 1, URL: "https://8.8.8.8/hook-a", Events: "translation.completed"}
 	if err := s.UpsertWebhook(w); err != nil {
 		t.Fatal(err)
 	}
-	w.URL = "https://b.com"
+	w.URL = "https://8.8.4.4/hook-b"
 	w.Enabled = 0
 	if err := s.UpsertWebhook(w); err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestUpsertWebhookUpdate(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("更新后仍应只有 1 条, got %d", len(list))
 	}
-	if list[0].URL != "https://b.com" || list[0].Enabled != 0 {
+	if list[0].URL != "https://8.8.4.4/hook-b" || list[0].Enabled != 0 {
 		t.Fatalf("更新未生效: %+v", list[0])
 	}
 }
@@ -80,9 +80,9 @@ func TestUpsertWebhookUpdate(t *testing.T) {
 // 事件订阅过滤：匹配订阅事件返回，未订阅不返回，空事件返回全部启用项。
 func TestGetEnabledWebhooksFilter(t *testing.T) {
 	s := newTestStore(t)
-	a := &Webhook{TenantID: 1, URL: "https://a.com", Events: "translation.completed"}
+	a := &Webhook{TenantID: 1, URL: "https://8.8.8.8/hook-a", Events: "translation.completed"}
 	_ = s.UpsertWebhook(a)
-	b := &Webhook{TenantID: 1, URL: "https://b.com", Events: "other.event"}
+	b := &Webhook{TenantID: 1, URL: "https://8.8.4.4/hook-b", Events: "other.event"}
 	_ = s.UpsertWebhook(b)
 	// 将 b 停用（新增时默认启用，更新关闭）
 	b.Enabled = 0
@@ -122,7 +122,7 @@ func TestSignWebhook(t *testing.T) {
 // 删除 webhook：跨租户删除应被拒绝（越权防护）。
 func TestDeleteWebhookTenantGuard(t *testing.T) {
 	s := newTestStore(t)
-	_ = s.UpsertWebhook(&Webhook{TenantID: 1, URL: "https://a.com"})
+	_ = s.UpsertWebhook(&Webhook{TenantID: 1, URL: "https://8.8.8.8/hook-a"})
 	list, _ := s.ListWebhooks(1)
 	if len(list) != 1 {
 		t.Fatal("应存在 1 条 webhook")

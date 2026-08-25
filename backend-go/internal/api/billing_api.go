@@ -195,8 +195,9 @@ func (s *Server) meterUsage(r *http.Request, tid int64, taskType string, quantit
 }
 
 // usageModel 解析本次请求实际使用的 LLM 供应商与模型（多供应商成本核算）。
-// 优先取引擎请求级记录（单语翻译成功路径记录的真实模型），否则回退租户配置/全局默认。
-// 参数 r: HTTP 请求；tid: 租户 ID。返回 provider: 供应商标识(global/tenant 或路由名)；model: 模型名。
+// 优先取引擎请求级记录（单语翻译成功路径记录的真实模型），否则回退全局路由/全局默认。
+// ★ 2026-08-26 BYOK 移除：租户级模型配置读取链删除，provider 口径统一为路由名/global。
+// 参数 r: HTTP 请求；tid: 租户 ID。返回 provider: 供应商标识；model: 模型名。
 func (s *Server) usageModel(r *http.Request, tid int64) (provider, model string) {
 	// 优先取引擎请求级记录：单语翻译成功路径会记录真实使用的模型
 	if s.Engine != nil {
@@ -204,13 +205,8 @@ func (s *Server) usageModel(r *http.Request, tid int64) (provider, model string)
 			return p, m
 		}
 	}
-	// 回退：先全局默认，再取租户模型配置
+	// 回退：全局默认（统一网关，无租户级覆盖）
 	provider, model = "global", s.Cfg.OnlineModel
-	if s.Ten != nil {
-		if mc, err := s.Ten.GetModelConfig(tid); err == nil && mc.Model != "" {
-			provider, model = "tenant", mc.Model
-		}
-	}
 	return
 }
 

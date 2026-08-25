@@ -11,10 +11,10 @@
 package service
 
 import (
-	"log"
 	"archive/zip"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -279,7 +279,7 @@ func (s *TicketService) StartStallSweep() {
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
 		for range t.C {
-			s.Store.CloseStalePendingOrders()  // ★ 订单15min超时自动关闭
+			s.Store.CloseStalePendingOrders()                     // ★ 订单15min超时自动关闭
 			s.Store.TenantLowBalanceAlerts(lowBalanceThreshold()) // ★ 低额提醒(24h去重)
 			n, err := s.Store.RequeueStalledTickets(20 * time.Minute)
 			if err != nil {
@@ -442,8 +442,6 @@ func normalizeMode(m string) string {
 	return "pro"
 }
 
-
-
 // bumpTmHitsFromTranslations TM 自闭环计数：模型最终译文按 (原文,语言,译文) 累计；
 // 达到 tm_review_threshold（默认100）自动生成待审候选并告警提醒超管。绝不直接写入正式 TM。
 func (s *TicketService) bumpTmHitsFromTranslations(tid int64, translations map[string]map[string]string) {
@@ -473,6 +471,7 @@ func (s *TicketService) bumpTmHitsFromTranslations(tid int64, translations map[s
 		}
 	}
 }
+
 // parseLangs 解析逗号分隔语言串。
 func parseLangs(s string) []string {
 	var out []string
@@ -511,8 +510,10 @@ var _ = kb.KBDatabase{} // 保持 DB 字段类型引用
 func (s *TicketService) BootResume() {
 	// ★ 启动即强制释放所有在途 ticket 任务：上一进程必然已死，剩余租约无意义。
 	//   不释放则新 worker 需等满租约（默认 30min）才能接管，表现为「卡死」。
+	// ★ 修复（2026-08-26 P1-c）：入队类型是 ticket_run，旧 SQL 的 type='ticket' 永远匹配 0 行，
+	//   断点续跑的租约释放形同虚设——统一更正为 ticket_run。
 	if s.DB != nil {
-		s.DB.RawDB().Exec("UPDATE jobs SET status='queued', leased_by='', leased_at=0 WHERE type='ticket' AND status='running'")
+		s.DB.RawDB().Exec("UPDATE jobs SET status='queued', leased_by='', leased_at=0 WHERE type='ticket_run' AND status='running'")
 	}
 	if n, err := s.Store.RequeueStalledTickets(0); err == nil && n > 0 {
 		log.Printf("[boot-resume] 已重新排队 %d 个中断工单", n)

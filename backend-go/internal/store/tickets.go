@@ -55,7 +55,7 @@ const (
 	TicketApproved    = "approved"         // 已批准
 	TicketRejected    = "rejected"         // 已驳回
 	TicketCompleted   = "completed"
-	TicketCancelled = "cancelled"        // 用户取消（翻译中/排队中可取消）
+	TicketCancelled   = "cancelled" // 用户取消（翻译中/排队中可取消）
 )
 
 // CreateTicket 创建工单（初始状态为草稿）。
@@ -285,11 +285,11 @@ func (s *Store) RequeueStalledTickets(stale time.Duration) (int64, error) {
 	}
 	n, _ := res.RowsAffected()
 	// ★ 同步释放 jobs 表租约：否则 direct 队列仍认为任务在途，worker 永远领不到（卡死假象）
-	if n > 0 {
-		s.db.Exec(`UPDATE jobs SET status='queued', leased_by='', leased_at=0
-			WHERE type='ticket' AND status='running'
-			  AND CAST(json_extract(payload,'$.ticket_id') AS INTEGER) IN
-			  (SELECT id FROM tickets WHERE status='queued')`)
-	}
+	// ★ 修复（2026-08-26 P1-c）：任务入队类型为 ticket_run（service/ticket.go EnqueueTicketRun），
+	//   旧 SQL 写 type='ticket' 永远匹配 0 行 → 租约最长要等 30 分钟过期才能被重新领取。
+	s.db.Exec(`UPDATE jobs SET status='queued', leased_by='', leased_at=0
+		WHERE type='ticket_run' AND status='running'
+		  AND CAST(json_extract(payload,'$.ticket_id') AS INTEGER) IN
+		  (SELECT id FROM tickets WHERE status='queued')`)
 	return n, nil
 }

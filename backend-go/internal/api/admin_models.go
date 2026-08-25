@@ -32,21 +32,21 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	base := s.Cfg.OnlineAPIBase
 	key := s.Cfg.OnlineAPIKey
 	model := s.Cfg.OnlineModel
-	var routes []tenant.Route
+	var routes []config.ProviderConfig
 	if s.Store != nil {
 		if v, e := s.Store.GetConfig("model_routes"); e == nil && v != "" {
 			var rs []config.ProviderConfig
 			if json.Unmarshal([]byte(v), &rs) == nil {
 				for _, rt := range rs {
-					routes = append(routes, tenant.Route{Provider: rt.Provider, APIBase: rt.APIBase, APIKey: rt.APIKey, Model: rt.Model, Weight: rt.Weight})
+					routes = append(routes, config.ProviderConfig{Provider: rt.Provider, APIBase: rt.APIBase, APIKey: rt.APIKey, Model: rt.Model, Weight: rt.Weight})
 				}
 			}
 		}
 	}
 	if routes == nil {
-		routes = []tenant.Route{}
+		routes = []config.ProviderConfig{}
 	}
-	maskedRoutes := make([]tenant.Route, 0, len(routes))
+	maskedRoutes := make([]config.ProviderConfig, 0, len(routes))
 	for _, rt := range routes {
 		rt.APIKey = maskKey(rt.APIKey)
 		maskedRoutes = append(maskedRoutes, rt)
@@ -68,10 +68,10 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		APIBase string         `json:"api_base"` // 模型 API 基础地址（可为空=不修改）
-		APIKey  string         `json:"api_key"`  // 模型 API Key（掩码值不覆盖原密钥）
-		Model   string         `json:"model"`    // 模型名称
-		Routes  []tenant.Route `json:"routes"`   // 多供应商路由（可为空=清空；ChatGPT/Gemini 等）
+		APIBase string                  `json:"api_base"` // 模型 API 基础地址（可为空=不修改）
+		APIKey  string                  `json:"api_key"`  // 模型 API Key（掩码值不覆盖原密钥）
+		Model   string                  `json:"model"`    // 模型名称
+		Routes  []config.ProviderConfig `json:"routes"`   // 多供应商路由（可为空=清空；平台统一网关多供应商调度）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -97,15 +97,15 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	for _, rt := range req.Routes {
 		merged = append(merged, config.ProviderConfig{Provider: rt.Provider, APIBase: rt.APIBase, APIKey: rt.APIKey, Model: rt.Model, Weight: rt.Weight})
 	}
-	// 掩码密钥保留原值
+	// 掩码密钥回填（★ 2026-08-26 修复脆弱匹配）：
+	//   旧逻辑按「api_base+model 双字段相等」找旧路由——管理员只改 model 名即匹配失败，
+	//   掩码串（如 sk-a****xyz）会被当真实 Key 入库，路由静默坏死。
+	//   新规则：掩码 = 未修改 ⇒ 按位置对齐回填。合并列表结构与库内一致
+	//   （[0]=单模型主路由(可省)，其后为 routes 全量），同一下标即同一条路由，
+	//   前端整表回传时顺序天然保持。
 	for i := range merged {
-		if hasMask(merged[i].APIKey) {
-			for _, o := range oldRoutes {
-				if o.APIBase == merged[i].APIBase && o.Model == merged[i].Model {
-					merged[i].APIKey = o.APIKey
-					break
-				}
-			}
+		if hasMask(merged[i].APIKey) && i < len(oldRoutes) {
+			merged[i].APIKey = oldRoutes[i].APIKey
 		}
 	}
 	b, _ := json.Marshal(merged)

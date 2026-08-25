@@ -337,15 +337,20 @@ func replacePptxParagraph(para, translated string) string {
 	closeEnd += len("</a:t>")
 	rest := tail[closeEnd:]
 	cleaned := aTextRe.ReplaceAllString(rest, `${1}${3}`) // 清空其余 a:t 内容
-	return head + translated + tail[:closeEnd] + cleaned
+	// ★ XML 转义（2026-08-26 P1-g）：LLM 译文可能含 & < > " '，裸拼进 slideN.xml
+	//   会产出非法 XML（PowerPoint/WPS 报「文件损坏」），写入前必须转义。
+	return head + EscapeXML(translated) + tail[:closeEnd] + cleaned
 }
 
 // rawPptxText 拼接段落全部 a:t 文本。
 // 参数：para=段落 XML；返回拼接后的纯文本。
+//
+// ★ 实体对齐（2026-08-26 P1-g）：与 docx 侧同理，扫描器截取的原始内文含实体，
+//   必须 UnescapeXMLText 后返回，保证与翻译请求原文键一致。
 func rawPptxText(para string) string {
 	var sb strings.Builder
 	for _, m := range aTextRe.FindAllStringSubmatch(para, -1) {
-		sb.WriteString(m[2])
+		sb.WriteString(UnescapeXMLText(m[2]))
 	}
 	return sb.String()
 }
