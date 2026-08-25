@@ -104,7 +104,8 @@ func WriteTranslatedPDFviaDocx(outPath, inPath string, translations map[string]s
 }
 
 // ExtractTextsPdfDocx 经 pdf2docx 提取段落文本（键与替换目标完全一致，表格必中）。
-// 返回文本列表与缓存的 DOCX 路径（供后续 apply 复用，调用方负责删除）。
+// 图形化文档（文本层稀薄）自动切换整页 OCR 模式：返回文本行键且 cacheDocx 为空，
+// 写回须走 ApplyTranslatedPdfPageOcr。调用方负责删除缓存 DOCX。
 func ExtractTextsPdfDocx(pdfPath string) ([]string, string, error) {
 	cache := filepath.Join(os.TempDir(), fmt.Sprintf("pdfdocx_%d.docx", time.Now().UnixNano()))
 	out, err := runDocxScript([]string{"extract", pdfPath, cache})
@@ -113,6 +114,7 @@ func ExtractTextsPdfDocx(pdfPath string) ([]string, string, error) {
 	}
 	var r struct {
 		Success bool     `json:"success"`
+		Mode    string   `json:"mode"`
 		Texts   []string `json:"texts"`
 	}
 	if err := json.Unmarshal(out, &r); err != nil {
@@ -121,7 +123,18 @@ func ExtractTextsPdfDocx(pdfPath string) ([]string, string, error) {
 	if !r.Success || len(r.Texts) == 0 {
 		return nil, "", fmt.Errorf("extract 无文本")
 	}
+	if r.Mode == "pageocr" {
+		return r.Texts, "", nil // 整页模式：无 DOCX 缓存
+	}
 	return r.Texts, cache, nil
+}
+
+// ApplyTranslatedPdfPageOcr 整页 OCR 模式回写：页栅格化→命中行白底覆盖译文→重组 PDF。
+func ApplyTranslatedPdfPageOcr(outPath, inPDF string, translations map[string]string, lang string) error {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"translations": translations,
+	})
+	return runDocxScriptStdin([]string{"pageocr", inPDF, outPath, lang}, payload)
 }
 
 // ApplyTranslatedPdfFromDocx 在已缓存 DOCX 副本上应用译文并转 PDF（含图片 OCR）。

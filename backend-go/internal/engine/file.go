@@ -105,12 +105,18 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	}
 	// ★ PDF：改用 pdf2docx 提取段落（键与写回目标一致，表格/短文本必中），
 	//   缓存 DOCX 供多语言写回复用；失败回退 pdftotext 键。
+	//   图形化文档（文本层稀薄）自动切整页 OCR 模式（pdfPageOcrMode）。
 	var pdfCacheDocx string
+	var pdfPageOcrMode bool
 	if strings.EqualFold(filepath.Ext(filePath), ".pdf") {
 		if t2, cache, e2 := fileproc.ExtractTextsPdfDocx(filePath); e2 == nil && len(t2) > 0 {
 			texts = t2
-			pdfCacheDocx = cache
-			defer os.Remove(cache)
+			if cache == "" {
+				pdfPageOcrMode = true
+			} else {
+				pdfCacheDocx = cache
+				defer os.Remove(cache)
+			}
 		}
 	}
 
@@ -256,18 +262,27 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			case ".pptx":
 				aerr = fileproc.ApplyPptx(filePath, outPath, tr)
 			case ".pdf":
-				// 优先两阶段：复用提取期缓存 DOCX（键对齐，含图片OCR）
-				if pdfCacheDocx != "" {
+				// 整页 OCR 模式（图形化文档）：直接在源 PDF 上回写
+				if pdfPageOcrMode {
+					if perr := fileproc.ApplyTranslatedPdfPageOcr(outPath, filePath, tr, lc); perr == nil {
+						filesOut = append(filesOut, outPath)
+						continue
+					}
+					aerr = fmt.Errorf("整页 OCR 回写失败")
+				} else if pdfCacheDocx != "" {
+					// 两阶段：复用提取期缓存 DOCX（键对齐，含图片OCR）
 					if perr := fileproc.ApplyTranslatedPdfFromDocx(outPath, pdfCacheDocx, tr, lc); perr == nil {
 						filesOut = append(filesOut, outPath)
 						continue
 					}
+					if perr := fileproc.WriteTranslatedPDFviaDocx(outPath, filePath, tr, lc); perr == nil {
+						filesOut = append(filesOut, outPath)
+						continue
+					}
+					aerr = fmt.Errorf("PDF 写回失败")
+				} else {
+					aerr = fmt.Errorf("PDF 写回失败")
 				}
-				if perr := fileproc.WriteTranslatedPDFviaDocx(outPath, filePath, tr, lc); perr == nil {
-					filesOut = append(filesOut, outPath)
-					continue
-				}
-				aerr = fmt.Errorf("PDF 写回失败")
 			case ".txt", ".csv", ".md":
 				aerr = writeTranslatedText(outPath, texts, tr)
 			default:

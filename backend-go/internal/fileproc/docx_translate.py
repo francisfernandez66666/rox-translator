@@ -351,8 +351,80 @@ def translate_docx_images(docx_path: str, translations: dict, lang: str):
         except Exception:
             pass
 
+
+# ---------- 整页 OCR 模式（图形化/扫描版 PDF 兜底） ----------
+PAGE_TEXT_MIN = 200  # 平均每页文本层字符低于此值视为图形化文档
+
+def page_is_graphical(pdf_path: str) -> bool:
+    try:
+        import pymupdf
+        d = pymupdf.open(pdf_path)
+        n = max(1, len(d))
+        chars = len("".join(p.get_text() for p in d).strip())
+        return chars / n < PAGE_TEXT_MIN
+    except Exception:
+        return False
+
+def pageocr_collect(pdf_path: str):
+    """整页栅格化并 OCR 行键收集。返回 (keys, [(page_idx, img_bytes, lines)])"""
+    import pymupdf
+    from PIL import Image as PILImage
+    import io as _io
+    d = pymupdf.open(pdf_path)
+    keys, seen, pages = [], set(), []
+    for pi in range(len(d)):
+        pix = d[pi].get_pixmap(matrix=pymupdf.Matrix(2, 2))  # ~144dpi
+        img = PILImage.open(_io.BytesIO(pix.tobytes("png"))).convert("RGB")
+        buf = _io.BytesIO(); img.save(buf, format="PNG")
+        b = buf.getvalue()
+        lines = _ocr_lines(img, OCR_LANGS)
+        pages.append((pi, b, lines))
+        for text, *_ in lines:
+            k = _norm(text)
+            if len(k) >= 2 and k not in seen:
+                seen.add(k); keys.append(text)
+    return keys, pages
+
+def cmd_pageocr_apply(pdf_path: str, out_path: str, lang: str, translations: dict):
+    """整页模式回写：命中的行白底覆盖写译文，页图重组为 PDF（版式像素级保真）。"""
+    import pymupdf
+    from PIL import Image, ImageDraw
+    import io as _io
+    lk = {}
+    for k, v in translations.items():
+        nk = _norm(k)
+        if len(nk) >= 2:
+            lk[nk] = v
+    d = pymupdf.open(pdf_path)
+    out = pymupdf.open()
+    total_hit = 0
+    for pi in range(len(d)):
+        pix = d[pi].get_pixmap(matrix=pymupdf.Matrix(2, 2))
+        img = Image.open(_io.BytesIO(pix.tobytes("png"))).convert("RGB")
+        draw = ImageDraw.Draw(img)
+        for text, x, y, bw, bh in _ocr_lines(img, OCR_LANGS):
+            trans = lk.get(_norm(text))
+            if not trans:
+                continue
+            fs = max(9, int(bh * 0.72))
+            font = _pil_font(fs)
+            draw.rectangle([x - 1, y - 1, x + bw + 1, y + bh + 1], fill="white")
+            draw.text((x, y), trans[:120], fill=(20, 20, 20), font=font)
+            total_hit += 1
+        w, h = img.size
+        pg = out.new_page(width=w * 72 / 144, height=h * 72 / 144)
+        pg.insert_image(pg.rect, stream=_io.BytesIO(buf_ret(img)))
+        d.close() if False else None
+    out.save(out_path)
+    print(f"OK pageocr hits={total_hit}: {out_path}")
+
 # ---------- extract / apply ----------
 def cmd_extract(pdf_path: str, cache_docx: str):
+    # 图形化文档（文本层稀薄）：跳过 docx 重建，直接整页 OCR 收集行键
+    if page_is_graphical(pdf_path):
+        keys, _pages = pageocr_collect(pdf_path)
+        print(json.dumps({"success": True, "mode": "pageocr", "texts": keys}, ensure_ascii=False))
+        return
     pdf_to_docx(pdf_path, cache_docx)
     from docx import Document
     doc = Document(cache_docx)
@@ -393,7 +465,7 @@ def cmd_extract(pdf_path: str, cache_docx: str):
                 continue
     except Exception:
         pass
-    print(json.dumps({"success": True, "texts": texts}, ensure_ascii=False))
+    print(json.dumps({"success": True, "mode": "docx", "texts": texts}, ensure_ascii=False))
 
 def cmd_apply(cache_docx: str, out_path: str, lang: str, translations: dict):
     tmp = tempfile.mkdtemp()
@@ -432,6 +504,13 @@ def main():
     mode = argv[0]
     if mode == "extract" and len(argv) >= 3:
         cmd_extract(argv[1], argv[2]); return
+    if mode == "pageocr" and len(argv) >= 4:
+        raw = sys.stdin.read()
+        try:
+            data = json.loads(raw)
+        except Exception:
+            data = {}
+        cmd_pageocr_apply(argv[1], argv[2], argv[3], data.get("translations", {})); return
     if mode == "apply" and len(argv) >= 4:
         raw = sys.stdin.read()
         try:
