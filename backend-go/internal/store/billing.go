@@ -7,9 +7,9 @@
 package store
 
 import (
-	"strconv"
-	"fmt"
 	"database/sql"
+	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -520,8 +520,9 @@ func scanOrders(rows *sql.Rows, err error) ([]*Order, error) {
 func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 	var tokens int64
 	var pkgID int64
+	var createdBy int64
 	// 仅允许 pending 状态的订单被确认（防止重复支付）
-	err := s.db.QueryRow("SELECT amount_tokens, package_id FROM orders WHERE id=? AND tenant_id=? AND status='pending'", orderID, tid).Scan(&tokens, &pkgID)
+	err := s.db.QueryRow("SELECT amount_tokens, package_id, COALESCE(created_by,0) FROM orders WHERE id=? AND tenant_id=? AND status='pending'", orderID, tid).Scan(&tokens, &pkgID, &createdBy)
 	if err != nil {
 		return err
 	}
@@ -536,20 +537,34 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		orderID, tid, tokens, 0, time.Now().Format(time.RFC3339)); err != nil {
 		return err
 	}
-	// 商业包订单（订阅付费/增量包）：向租户发放包内含句数，不充值 token
+	// 商业包订单（订阅付费/增量包）：按包类型分流发放（白皮书 §4.1）
 	if pkgID > 0 {
 		pkg, err := s.GetPackage(pkgID)
 		if err != nil {
 			return err
 		}
+		// ★ 套餐订单 amount_tokens=0，权益额度按「包内句数×换算率」折算 token
+		pkgTokens := pkg.Sentences * s.TokenSentenceRate()
 		// ★ 按包类型分流（白皮书 §4.1）：
 		if pkg.PType == "paid" {
-			// 付费订阅：入台账，t+30 天滚动
-			return s.CreateQuotaGrant(tid, "plan", tokens, time.Now().Add(30*24*time.Hour), "order", orderID)
+			// 订阅身份与句数镜像照常落租户权限（不含 token）
+			if _, err := s.ApplyPaidPackageIdentity(tid, pkg); err != nil {
+				return err
+			}
+			// 付费订阅：token 入台账，t+30 天滚动；台账失败兜底旧通道（永久余额）
+			if err := s.CreateQuotaGrant(tid, "plan", pkgTokens, time.Now().Add(30*24*time.Hour), "order", orderID); err != nil {
+				_ = s.Charge(tid, pkgTokens)
+			}
+			// ★ 邀请裂变（白皮书 §5.2）：受邀者首笔付费套餐到账→邀请者永久 token（按对去重，仅首笔；续费/充值包不触发）
+			s.ReferralPaidReward(createdBy)
+			return nil
 		}
 		if pkg.PType == "increment" {
-			// 充值包：入永久余额
-			return s.Charge(tid, tokens)
+			// 充值包：句数镜像追加 + 等值 token 入永久余额（买断无到期）
+			if _, err := s.ApplyIncrementMirror(tid, pkg); err != nil {
+				return err
+			}
+			return s.Charge(tid, pkgTokens)
 		}
 		_, err = s.GrantPackageSentences(tid, pkg)
 		return err
@@ -754,6 +769,10 @@ func (s *Store) EnsureBillingDefaults() {
 		{"free_trial_days", "14"},
 		{"order_pending_timeout_min", "15"},
 		{"low_balance_alert_tokens", "100000"},
+		// ★ 邀请裂变参数（白皮书 §5.2 计奖矩阵，面板可改）
+		{"invite_reward_tokens", "300000"},       // 每邀 1 人·邀请者体验增量
+		{"invite_extend_days", "14"},             // 每邀 1 人·邀请者时长叠加天数
+		{"inviter_paid_reward_tokens", "500000"}, // 受邀者首笔付费套餐→邀请者永久 token
 	}
 	for _, kv := range defaults {
 		s.db.Exec("INSERT INTO system_config (key,value) SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM system_config WHERE key=?)", kv[0], kv[1], kv[0])

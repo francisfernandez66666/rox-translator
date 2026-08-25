@@ -186,6 +186,8 @@ func (s *Server) routesAuth() {
 	s.mux.HandleFunc("/api/admin/users/delete", s.handleAdminUserDelete)
 	s.mux.HandleFunc("/api/admin/invite-codes", s.handleInviteCodes)
 	s.mux.HandleFunc("/api/admin/invite-codes/create", s.handleInviteCodeCreate)
+	// ★ 邀请裂变（白皮书 §五）：我的邀请码/记录 + 二维码
+	s.registerReferralRoutes()
 }
 
 // routesTickets 注册工单与审批路由。

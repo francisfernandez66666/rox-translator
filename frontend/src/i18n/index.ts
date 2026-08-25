@@ -26,6 +26,7 @@ import * as pInvites from './panels/invites'
 import * as pChat from './panels/chat'
 import * as pPackages from './panels/packages'
 import * as pFeedback from './panels/feedback'
+import * as pReferral from './panels/referral'
 
 // Lang 支持的语言类型：zh=中文（默认）、en=英文
 export type Lang = 'zh' | 'en'
@@ -597,6 +598,7 @@ const zh: Dict = {
   ...pInvites.zh,
   ...pChat.zh,
   ...pPackages.zh, ...pFeedback.zh,
+  ...pReferral.zh,
 }
 
 const en: Dict = {
@@ -617,6 +619,7 @@ const en: Dict = {
   ...pInvites.en,
   ...pChat.en,
   ...pPackages.en, ...pFeedback.en,
+  ...pReferral.en,
 }
 
 const dicts: Record<Lang, Dict> = { zh, en }

@@ -33,8 +33,8 @@ export async function authMe(): Promise<LoginResp> {
   return request('/api/auth/me', { headers: authHeaders() })
 }
 
-// 自助注册（可带邀请码/租户信息/行业/邮箱验证码/人机验证 token）
-export async function authRegister(data: { username: string; password: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string; role_choice?: string }): Promise<AdminResp> {
+// 自助注册（可带邀请码/租户信息/行业/邮箱验证码/人机验证 token；ref=邀请裂变个人码）
+export async function authRegister(data: { username: string; password: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string; role_choice?: string; ref?: string }): Promise<AdminResp> {
   return request('/api/auth/register', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 

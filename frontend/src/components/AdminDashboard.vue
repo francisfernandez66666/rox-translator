@@ -103,6 +103,8 @@ import PasswordModal from '../components/PasswordModal.vue'
 import EmailBindModal from '../components/EmailBindModal.vue'
 // ★ 套餐详情合并面板（四期：商业包+订阅收银合一；非超管只读）
 import PlansPanel from './admin/PlansPanel.vue'
+// ★ 邀请裂变面板（白皮书 §五：邀请码/链接/二维码/记录）
+import Referral from './admin/Referral.vue'
 // 共享样式（非 scoped，供全部面板使用）
 import './admin/admin.css'
 // 国际化：文案取词 + 语言切换
@@ -131,6 +133,7 @@ const workspaces: Record<number, WorkspaceDef> = {
       { key: 'tenants', label: 'admin.tenants', comp: Tenants },
 
       { key: 'plans', label: 'admin.plansDetail', comp: PlansPanel },
+      { key: 'referral', label: 'admin.referral', comp: Referral },
       { key: 'org', label: 'admin.orgs', comp: Org },
 
       { key: 'usage', label: 'admin.usage', comp: Usage },
@@ -156,6 +159,7 @@ const workspaces: Record<number, WorkspaceDef> = {
 
       { key: 'kb', label: 'admin.kbPack', comp: Kb },
       { key: 'plans', label: 'admin.plansDetail', comp: PlansPanel },
+      { key: 'referral', label: 'admin.referral', comp: Referral },
 
       { key: 'apikeys', label: 'admin.apikeys', comp: ApiKeys },
       { key: 'webhooks', label: 'admin.webhooks', comp: Webhooks },

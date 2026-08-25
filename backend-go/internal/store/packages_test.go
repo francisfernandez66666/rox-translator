@@ -187,12 +187,16 @@ func TestPackageOrderManualConfirm(t *testing.T) {
 	if len(list) != 1 || list[0].ID != o.ID {
 		t.Fatalf("待确认订单列表异常: %+v", list)
 	}
-	// 超管确认到账 → 发放句数
+	// 超管确认到账 → ★ CommitC 分流：付费包（ptype=paid）入 t+30 台账（quota_grants），不发句数
 	if err := s.MarkOrderPaid(o.ID, 1); err != nil {
 		t.Fatalf("MarkOrderPaid 失败: %v", err)
 	}
-	if bal, _ := s.GetSentenceBalance(1); bal != 500 {
-		t.Fatalf("确认后句数应为 500，实际 %d", bal)
+	// 句数镜像照常记录（订阅身份+展示镜像）；token 走台账通道
+	if bal, _ := s.GetSentenceBalance(1); bal != paid.Sentences {
+		t.Fatalf("确认后句数镜像应为 %d，实际 %d", paid.Sentences, bal)
+	}
+	if g := s.SumActiveGrants(1); g != paid.Sentences*s.TokenSentenceRate() {
+		t.Fatalf("确认后台账额度应为 %d，实际 %d", paid.Sentences*s.TokenSentenceRate(), g)
 	}
 	// 确认后不再出现在待确认列表
 	list, _ = s.ListManualConfirmOrders()

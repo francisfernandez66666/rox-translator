@@ -39,6 +39,8 @@ func New(db *sql.DB) (*Store, error) {
 	s.feedbackMigrate() // 老库补 replies 列（幂等，BBS 回复线程）
 	s.backfillAPIOwnership() // ★ 历史 Key/任务强绑定回填（幂等）
 	s.TmReviewMigrate() // TM 待审池建表（幂等）
+	s.QuotaGrantMigrate() // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
+	s.ReferralMigrate()   // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
 	s.EnsureBillingDefaults() // 商业化参数默认值落库（幂等，面板可改）
 	return s, nil
 }

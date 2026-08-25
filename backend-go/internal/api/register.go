@@ -76,6 +76,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Captcha    string `json:"captcha_token"` // 人机验证 token（captcha_provider=turnstile 时必填）
 		Industry   string `json:"industry"`      // 所属行业（新租户注册时必填，来自行业包 code）
 		RoleChoice string `json:"role_choice"`   // 角色选择：admin=我是管理员(建企业) / user=我是普通用户(邀请码加入)
+		Ref        string `json:"ref"`           // 个人邀请码（可选，邀请裂变：?ref=<个人码> 链接携带）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -275,6 +276,26 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if req.Email != "" {
 		_ = s.Store.SetUserEmail(nu.ID, inviteTenantID, strings.TrimSpace(req.Email))
 		nu.Email = strings.TrimSpace(req.Email)
+	}
+	// ★ 邀请裂变首绑（白皮书 §5）：携带个人邀请码注册→写入 referred_by（首绑闸门），
+	//   绑定成功即给邀请人叠加体验奖励：+invite_reward_tokens、时长 +invite_extend_days（与既有体验到期取大后叠加，按对去重）
+	if strings.TrimSpace(req.Ref) != "" {
+		if inviterUID, inviterTID, ok := s.Store.BindReferral(nu.ID, strings.TrimSpace(req.Ref)); ok {
+			refTokens := int64(300000)
+			if v, _ := s.Store.GetConfig("invite_reward_tokens"); v != "" {
+				if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+					refTokens = x
+				}
+			}
+			refDays := 14
+			if v, _ := s.Store.GetConfig("invite_extend_days"); v != "" {
+				if x, e := strconv.Atoi(v); e == nil && x > 0 {
+					refDays = x
+				}
+			}
+			_ = s.Store.GrantTrialStack(inviterUID, inviterTID, nu.ID, refTokens, refDays)
+			s.Store.LogAudit(inviteTenantID, nu.ID, "referral_bind", "user", fmt.Sprintf("受邀绑定邀请人 uid=%d", inviterUID))
+		}
 	}
 	// 清空密码哈希后返回
 	nu.PasswordHash = ""

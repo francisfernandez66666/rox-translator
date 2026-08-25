@@ -263,6 +263,44 @@ func (s *Store) GrantPackageSentences(tid int64, pkg *Package) (int64, error) {
 	return perms.SentenceBalance, nil
 }
 
+// ApplyPaidPackageIdentity 仅落付费包订阅身份与句数镜像（不折算 token）。
+// 供订单确认分流使用：token 部分由 t+30 台账（CreateQuotaGrant）负责，避免双通道重复入账。
+// 参数：tid=租户 ID，pkg=付费包对象；返回发放后的句数余额（镜像值）。
+func (s *Store) ApplyPaidPackageIdentity(tid int64, pkg *Package) (int64, error) {
+	perms, err := s.GetTenantPerms(tid)
+	if err != nil {
+		return 0, err
+	}
+	perms.PackageCode = pkg.Code
+	perms.SubscribedAt = time.Now().Format(time.RFC3339)
+	perms.SentenceBalance += pkg.Sentences
+	if pkg.DurationDays > 0 {
+		perms.PackageExpires = time.Now().AddDate(0, 0, pkg.DurationDays).Format(time.RFC3339)
+	} else {
+		perms.PackageExpires = ""
+	}
+	perms.NotifiedExp7 = false
+	perms.NotifiedExp1 = false
+	if err := s.SaveTenantPerms(tid, perms); err != nil {
+		return 0, err
+	}
+	return perms.SentenceBalance, nil
+}
+
+// ApplyIncrementMirror 仅追加增量包句数镜像（不改订阅状态与到期，不折算 token）。
+// token 部分由永久余额通道（Charge）负责。参数：tid=租户 ID，pkg=增量包对象。
+func (s *Store) ApplyIncrementMirror(tid int64, pkg *Package) (int64, error) {
+	perms, err := s.GetTenantPerms(tid)
+	if err != nil {
+		return 0, err
+	}
+	perms.SentenceBalance += pkg.Sentences
+	if err := s.SaveTenantPerms(tid, perms); err != nil {
+		return 0, err
+	}
+	return perms.SentenceBalance, nil
+}
+
 // TokenSentenceRate 返回句↔token 展示换算率（estimate_tokens_per_sentence，默认 500）。
 // 用途：句包发放折算、前台「≈句数」展示。后台可调。
 func (s *Store) TokenSentenceRate() int64 {

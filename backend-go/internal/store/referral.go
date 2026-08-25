@@ -8,6 +8,8 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"os"
+	"strconv"
 	"time"
 )
 
@@ -99,13 +101,20 @@ func (s *Store) GrantTrialStack(inviterUID, inviterTID, inviteeUID, tokens int64
 	return err
 }
 
-// RewardPaidPermanent 受邀者首笔付费套餐→邀请者永久 token（全局每被邀人一次）。
-func (s *Store) RewardPaidPermanent(inviteeUID, tokens int64, s2 *Store) error {
-	var inviterUID, inviterTID int64
-	err := s.db.QueryRow("SELECT referred_by, tenant_id FROM users WHERE id=?", inviteeUID).Scan(&inviterUID, &inviterTID)
+// RewardPaidPermanent 受邀者首笔付费套餐→邀请者永久 token（每对仅一次，即每被邀人一次）。
+// 参数：inviteeUID=受邀人用户 ID；tokens=奖励 token 数；返回错误（非邀请来源静默返回 nil）。
+func (s *Store) RewardPaidPermanent(inviteeUID, tokens int64) error {
+	var inviterUID int64
+	err := s.db.QueryRow("SELECT referred_by FROM users WHERE id=?", inviteeUID).Scan(&inviterUID)
 	if err != nil || inviterUID <= 0 {
 		return nil // 非邀请来源或历史数据：无奖励
 	}
+	// ★ 邀请人的租户 ID 必须取自邀请人本人记录（此前误用被邀人租户，已修正）
+	var inviterTID int64
+	if err := s.db.QueryRow("SELECT tenant_id FROM users WHERE id=?", inviterUID).Scan(&inviterTID); err != nil || inviterTID <= 0 {
+		return nil
+	}
+	_ = s.EnsureBalance(inviterTID)
 	if s.PairRewardExists(inviterUID, inviteeUID, "paid_perm") {
 		return nil // 仅首笔付费触发
 	}
@@ -117,15 +126,36 @@ func (s *Store) RewardPaidPermanent(inviteeUID, tokens int64, s2 *Store) error {
 	return err
 }
 
+// ReferralPaidReward 付费奖励入口（MarkOrderPaid 成功确认 paid 套餐后调用）：
+// 奖励金额取值优先级：system_config inviter_paid_reward_tokens（后台可调）→ env INVITER_PAID_REWARD_TOKENS → 默认 50 万。
+// 内部按对去重，重复调用幂等；非邀请来源静默跳过。参数 inviteeUID=下单用户 ID。
+func (s *Store) ReferralPaidReward(inviteeUID int64) {
+	if inviteeUID <= 0 {
+		return
+	}
+	tokens := int64(500000)
+	if v := os.Getenv("INVITER_PAID_REWARD_TOKENS"); v != "" {
+		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+			tokens = x
+		}
+	}
+	if v, _ := s.GetConfig("inviter_paid_reward_tokens"); v != "" {
+		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+			tokens = x
+		}
+	}
+	_ = s.RewardPaidPermanent(inviteeUID, tokens)
+}
+
 // ListReferrals 我的邀请记录（含状态推导）。
 type ReferralRecord struct {
-	InviteeUID   int64  `json:"invitee_uid"`
-	InviteeName  string `json:"invitee_name"`
-	Type         string `json:"type"`
-	Tokens       int64  `json:"tokens"`
-	Days         int64  `json:"days"`
-	Paid         bool   `json:"paid"`
-	CreatedAt    string `json:"created_at"`
+	InviteeUID  int64  `json:"invitee_uid"`
+	InviteeName string `json:"invitee_name"`
+	Type        string `json:"type"`
+	Tokens      int64  `json:"tokens"`
+	Days        int64  `json:"days"`
+	Paid        bool   `json:"paid"`
+	CreatedAt   string `json:"created_at"`
 }
 
 func (s *Store) ListReferrals(inviterUID int64) []*ReferralRecord {

@@ -118,8 +118,10 @@ const loading = ref(false)
 const showReg = ref(false)
 // 注册错误/提示信息
 const regMsg = ref('')
-// 自助注册表单
-const reg = ref({ username: '', password: '', code: '', name: '', invite: '', email: '', emailCode: '', industry: '', role_choice: 'admin' })
+// 自助注册表单（ref=邀请裂变个人码，来自 ?ref= 链接参数，随注册载荷提交）
+const reg = ref({ username: '', password: '', code: '', name: '', invite: '', email: '', emailCode: '', industry: '', role_choice: 'admin', ref: '' })
+// ★ 邀请裂变：进入页面即捕获 URL 中的 ?ref=<个人码>（专属邀请链接载体）
+try { reg.value.ref = new URLSearchParams(window.location.search).get('ref')?.trim() || '' } catch { reg.value.ref = '' }
 
 // ===== 注册邮箱验证码状态 =====
 // 服务端是否开启邮箱验证（email_verify_enabled=1 时显示验证码输入行）
@@ -293,6 +295,7 @@ async function doRegister() {
     email_code: reg.value.emailCode || undefined,
     captcha_token: captchaToken.value || undefined,
     industry: reg.value.industry || undefined,
+    ref: reg.value.ref || undefined,
   })
   loading.value = false
   if (!resp.success) {
