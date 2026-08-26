@@ -42,6 +42,7 @@ func New(db *sql.DB) (*Store, error) {
 	s.QuotaGrantMigrate()     // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
 	s.BalanceAccountMigrate() // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
 	s.BillingIndexMigrate()   // ★ 整改 B5：订单号唯一索引 + Key 哈希检索索引（幂等，撞重复降级告警）
+	s.PackagesTenantMigrate() // ★ 商业包租户化：packages 加 tenant_id 并改 (tenant_id, code) 复合唯一（幂等）
 	s.ReferralMigrate()       // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
 	s.OneidMigrate()          // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
 	s.EnsureBillingDefaults() // 商业化参数默认值落库（幂等，面板可改）
@@ -314,7 +315,8 @@ func (s *Store) migrate() error {
 		// ---------- packages 商业包（免费体验/付费包/增量包） ----------
 		`CREATE TABLE IF NOT EXISTS packages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			code TEXT NOT NULL UNIQUE,
+			tenant_id INTEGER NOT NULL DEFAULT 0,
+			code TEXT NOT NULL,
 			name TEXT NOT NULL DEFAULT '',
 			ptype TEXT NOT NULL DEFAULT 'paid',       -- free(免费体验) / paid(付费包) / increment(增量包)
 			sentences INTEGER NOT NULL DEFAULT 0,     -- 包内含翻译句数
@@ -323,7 +325,8 @@ func (s *Store) migrate() error {
 			enabled INTEGER NOT NULL DEFAULT 1,       -- 1=上架 0=下架
 			sort_order INTEGER NOT NULL DEFAULT 0,    -- 展示排序（升序）
 			created_at TEXT,
-			updated_at TEXT
+			updated_at TEXT,
+			UNIQUE(tenant_id, code)
 		)`,
 		// 订单关联商业包（订阅付费包/增量包时使用）
 		`CREATE INDEX IF NOT EXISTS idx_packages_code ON packages(code, enabled)`,

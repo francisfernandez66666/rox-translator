@@ -22,6 +22,7 @@ import (
 // Package 商业包实体（packages 表）
 type Package struct {
 	ID           int64   `json:"id"`            // 包主键 ID
+	TenantID     int64   `json:"tenant_id"`     // 租户 ID（0=平台）
 	Code         string  `json:"code"`          // 包编码（唯一，如 trial/monthly_1000/inc_500）
 	Name         string  `json:"name"`          // 包名称（如 包月 1000 句）
 	PType        string  `json:"ptype"`         // 包类型：free(免费体验) / paid(付费包) / increment(增量包)
@@ -44,15 +45,15 @@ const (
 // ============ 商业包 CRUD ============
 
 // packageCols packages 表查询列清单（统一使用，避免遗漏）
-const packageCols = "id, code, name, ptype, sentences, price_money, duration_days, enabled, sort_order, created_at, updated_at"
+const packageCols = "id, tenant_id, code, name, ptype, sentences, price_money, duration_days, enabled, sort_order, created_at, updated_at"
 
 // CreatePackage 创建商业包（超管）。
 // 参数：pkg=待创建的包对象（code/name/ptype 必填）；返回新包对象。
 func (s *Store) CreatePackage(pkg *Package) (*Package, error) {
 	now := time.Now().Format(time.RFC3339)
 	res, err := s.db.Exec(
-		"INSERT INTO packages (code, name, ptype, sentences, price_money, duration_days, enabled, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-		pkg.Code, pkg.Name, pkg.PType, pkg.Sentences, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, now, now)
+		"INSERT INTO packages (tenant_id, code, name, ptype, sentences, price_money, duration_days, enabled, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+		pkg.TenantID, pkg.Code, pkg.Name, pkg.PType, pkg.Sentences, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +66,7 @@ func (s *Store) CreatePackage(pkg *Package) (*Package, error) {
 func (s *Store) GetPackage(id int64) (*Package, error) {
 	var p Package
 	err := s.db.QueryRow("SELECT "+packageCols+" FROM packages WHERE id=?", id).
-		Scan(&p.ID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -74,10 +75,10 @@ func (s *Store) GetPackage(id int64) (*Package, error) {
 
 // GetPackageByCode 按编码查询商业包。
 // 参数：code=包编码；返回包对象。
-func (s *Store) GetPackageByCode(code string) (*Package, error) {
+func (s *Store) GetPackageByCode(tenantID int64, code string) (*Package, error) {
 	var p Package
-	err := s.db.QueryRow("SELECT "+packageCols+" FROM packages WHERE code=?", code).
-		Scan(&p.ID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+	err := s.db.QueryRow("SELECT "+packageCols+" FROM packages WHERE tenant_id=? AND code=?", tenantID, code).
+		Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +96,7 @@ func (s *Store) ListCommercialPackages() ([]*Package, error) {
 	var out []*Package
 	for rows.Next() {
 		var p Package
-		if err := rows.Scan(&p.ID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &p)
@@ -114,7 +115,7 @@ func (s *Store) ListEnabledCommercialPackages() ([]*Package, error) {
 	var out []*Package
 	for rows.Next() {
 		var p Package
-		if err := rows.Scan(&p.ID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &p)
@@ -126,8 +127,8 @@ func (s *Store) ListEnabledCommercialPackages() ([]*Package, error) {
 // 参数：pkg=待更新的包对象（全部字段整体覆盖）；返回错误。
 func (s *Store) UpdatePackage(pkg *Package) error {
 	_, err := s.db.Exec(
-		"UPDATE packages SET name=?, ptype=?, sentences=?, price_money=?, duration_days=?, enabled=?, sort_order=?, updated_at=? WHERE id=?",
-		pkg.Name, pkg.PType, pkg.Sentences, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, time.Now().Format(time.RFC3339), pkg.ID)
+		"UPDATE packages SET tenant_id=?, name=?, ptype=?, sentences=?, price_money=?, duration_days=?, enabled=?, sort_order=?, updated_at=? WHERE id=?",
+		pkg.TenantID, pkg.Name, pkg.PType, pkg.Sentences, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, time.Now().Format(time.RFC3339), pkg.ID)
 	return err
 }
 
@@ -136,6 +137,95 @@ func (s *Store) UpdatePackage(pkg *Package) error {
 func (s *Store) DeletePackage(id int64) error {
 	_, err := s.db.Exec("DELETE FROM packages WHERE id=?", id)
 	return err
+}
+
+// PackagesTenantMigrate 将 packages 表从「code 全局唯一」迁移为「(tenant_id, code) 租户级唯一」。
+// 幂等：新库直接创建复合唯一；老库补 tenant_id 列后重建表完成约束替换。
+func (s *Store) PackagesTenantMigrate() {
+	// ① 补 tenant_id 列（老库没有）
+	cols, err := s.db.Query("PRAGMA table_info(packages)")
+	if err != nil {
+		return
+	}
+	hasTenant := false
+	for cols.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt interface{}
+		if err := cols.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			continue
+		}
+		if name == "tenant_id" {
+			hasTenant = true
+		}
+	}
+	cols.Close()
+	if !hasTenant {
+		s.db.Exec("ALTER TABLE packages ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 0")
+	}
+
+	// ② 检测当前唯一约束是否仅为 code 单列；若是则重建表换为复合唯一。
+	idxRows, err := s.db.Query("PRAGMA index_list(packages)")
+	if err != nil {
+		return
+	}
+	needRebuild := false
+	for idxRows.Next() {
+		var seq, unique, partial int
+		var name, origin string
+		if err := idxRows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			continue
+		}
+		if unique != 1 {
+			continue
+		}
+		irows, err := s.db.Query("PRAGMA index_info(?)", name)
+		if err != nil {
+			continue
+		}
+		cols := []string{}
+		for irows.Next() {
+			var seqno, cid int
+			var colName string
+			if err := irows.Scan(&seqno, &cid, &colName); err == nil {
+				cols = append(cols, colName)
+			}
+		}
+		irows.Close()
+		if len(cols) == 1 && cols[0] == "code" {
+			needRebuild = true
+			break
+		}
+	}
+	idxRows.Close()
+	if !needRebuild {
+		return
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	tx.Exec(`CREATE TABLE packages_new (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		tenant_id INTEGER NOT NULL DEFAULT 0,
+		code TEXT NOT NULL,
+		name TEXT NOT NULL DEFAULT '',
+		ptype TEXT NOT NULL DEFAULT 'paid',
+		sentences INTEGER NOT NULL DEFAULT 0,
+		price_money REAL NOT NULL DEFAULT 0,
+		duration_days INTEGER NOT NULL DEFAULT 30,
+		enabled INTEGER NOT NULL DEFAULT 1,
+		sort_order INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT,
+		updated_at TEXT,
+		UNIQUE(tenant_id, code))`)
+	tx.Exec(`INSERT INTO packages_new (id, tenant_id, code, name, ptype, sentences, price_money, duration_days, enabled, sort_order, created_at, updated_at)
+		SELECT id, 0, code, name, ptype, sentences, price_money, duration_days, enabled, sort_order, created_at, updated_at FROM packages`)
+	tx.Exec(`DROP TABLE packages`)
+	tx.Exec(`ALTER TABLE packages_new RENAME TO packages`)
+	tx.Commit()
 }
 
 // ============ 租户句数余额 ============

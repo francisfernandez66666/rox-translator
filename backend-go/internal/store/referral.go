@@ -29,7 +29,8 @@ import (
 func (s *Store) ReferralMigrate() {
 	s.db.Exec("ALTER TABLE users ADD COLUMN ref_code TEXT DEFAULT ''")
 	s.db.Exec("ALTER TABLE users ADD COLUMN referred_by INTEGER DEFAULT 0")
-	s.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_ref_code ON users(ref_code) WHERE ref_code<>''")
+	s.db.Exec("DROP INDEX IF EXISTS idx_users_ref_code")
+	s.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_ref_code ON users(tenant_id, ref_code) WHERE ref_code<>''")
 	s.db.Exec(`CREATE TABLE IF NOT EXISTS referral_rewards (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		inviter_uid INTEGER, inviter_tid INTEGER,
@@ -55,7 +56,8 @@ func (s *Store) ReferralMigrate() {
 // 参数：uid=用户 ID；返回：该用户的个人邀请码（空值不可能出现，除非用户不存在）。
 func (s *Store) EnsureRefCode(uid int64) string {
 	var code string
-	s.db.QueryRow("SELECT COALESCE(ref_code,'') FROM users WHERE id=?", uid).Scan(&code)
+	var tid int64
+	s.db.QueryRow("SELECT tenant_id, COALESCE(ref_code,'') FROM users WHERE id=?", uid).Scan(&tid, &code)
 	if code != "" {
 		return code
 	}
@@ -64,7 +66,7 @@ func (s *Store) EnsureRefCode(uid int64) string {
 	code = hex.EncodeToString(b)
 	for {
 		var exists string
-		err := s.db.QueryRow("SELECT ref_code FROM users WHERE ref_code=?", code).Scan(&exists)
+		err := s.db.QueryRow("SELECT ref_code FROM users WHERE ref_code=? AND tenant_id=?", code, tid).Scan(&exists)
 		if err == sql.ErrNoRows {
 			break
 		}
@@ -77,12 +79,12 @@ func (s *Store) EnsureRefCode(uid int64) string {
 }
 
 // BindReferral 注册时首绑：仅当被邀人 referred_by 为空才写入（首绑唯一，重复无效）。
-func (s *Store) BindReferral(inviteeUID int64, refCode string) (inviterUID, inviterTID int64, ok bool) {
-	if refCode == "" || inviteeUID <= 0 {
+func (s *Store) BindReferral(inviteeUID, tenantID int64, refCode string) (inviterUID, inviterTID int64, ok bool) {
+	if refCode == "" || inviteeUID <= 0 || tenantID <= 0 {
 		return 0, 0, false
 	}
-	err := s.db.QueryRow("SELECT id, tenant_id FROM users WHERE ref_code=? AND role IN ('admin','tenant_admin','dept_admin','user')",
-		refCode).Scan(&inviterUID, &inviterTID)
+	err := s.db.QueryRow("SELECT id, tenant_id FROM users WHERE ref_code=? AND tenant_id=? AND role IN ('admin','tenant_admin','dept_admin','user')",
+		refCode, tenantID).Scan(&inviterUID, &inviterTID)
 	if err != nil || inviterUID == inviteeUID {
 		return 0, 0, false
 	}
