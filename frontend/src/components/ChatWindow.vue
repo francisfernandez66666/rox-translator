@@ -212,12 +212,6 @@
           @focus="langDropdownOpen = false"
         ></textarea>
 
-        <!-- 报价预览：预计消耗与余额（强制计费且未开通时禁发并提示） -->
-        <div v-if="estimate" class="estimate-hint" :class="{ 'estimate-warn': estimateBlocked }">
-          <template v-if="!estimate.sufficient">⚠️ {{ estimate.hint || '额度不足，请充值或升级套餐' }}</template>
-          <template v-else>{{ tpl('chat.estimateTokens', { min: fmtNum(estimate.tokens_min), max: fmtNum(estimate.tokens_max), s: fmtNum(estimate.cost_sentences_approx), bal: fmtNum(estimate.balance_tokens) }) }}</template>
-        </div>
-
         <!-- ★ 翻译模式切换（发送按钮左侧）：🎓专业校对 / ⚡快速 -->
         <div class="mode-switch send-adjacent">
           <button :class="['mode-btn', translateMode !== 'fast' ? 'on' : '']" @click="setMode('pro')" :title="t('chat.modeTip')">🎓</button>
@@ -237,8 +231,8 @@
         <button
           v-else
           class="send-btn"
-          :disabled="!canSend || estimateBlocked"
-          :style="{ background: canSend && !estimateBlocked ? '#1a73e8' : '#e0e0e0' }"
+          :disabled="!canSend"
+          :style="{ background: canSend ? '#1a73e8' : '#e0e0e0' }"
           @click="handleSend"
           :title="t('chat.send')"
         >
@@ -265,7 +259,7 @@ import { useChatStore } from '@/stores/chat'
 // 国际化取词
 import { t, tpl, lang } from '@/i18n'
 // 我的包接口（剩余句数展示）
-import { myPackage, meContext, translationEstimate } from '@/api'
+import { myPackage, meContext } from '@/api'
 
 // 子组件：消息气泡
 import MessageBubble from './MessageBubble.vue'
@@ -365,30 +359,6 @@ function onFeedbackSubmitted() {
   alert(t('fb.done'))
 }
 
-
-// ---- 翻译前报价预览（与后端计量同口径，只读不扣减） ----
-const estimate = ref<any>(null)
-let estimateTimer: ReturnType<typeof setTimeout> | null = null
-// 输入文本/目标语言变化后 500ms 防抖请求预估
-watch([inputText, () => store.selectedLangs], () => {
-  if (estimateTimer) clearTimeout(estimateTimer)
-  estimateTimer = setTimeout(refreshEstimate, 500)
-})
-// refreshEstimate 请求翻译预估报价（空输入清空预览，失败时静默置空）
-async function refreshEstimate() {
-  const text = inputText.value.trim()
-  if (!text) { estimate.value = null; return }
-  try {
-    const r: any = await translationEstimate({ text, target_langs: [...store.selectedLangs], mode: translateMode.value })
-    if (r.success) estimate.value = r
-  } catch { estimate.value = null }
-}
-// 额度不足或未开通时禁止发送
-const estimateBlocked = computed(() => {
-  if (!estimate.value) return false
-  if (estimate.value.sufficient === false) return true
-  return estimate.value.activated === false
-})
 
 const messagesContainer = ref<HTMLElement>()
 const inputRef = ref<HTMLInputElement>()
@@ -987,13 +957,6 @@ async function loadTranslationLangs() {
   max-height: 120px; font-family: inherit;
 }
 .message-input:focus { border-color: #1a73e8; }
-
-/* 报价预览提示行：正常=灰绿，额度不可用=警示橙 */
-.estimate-hint {
-  font-size: 12px; color: #5f6368; padding: 2px 16px 0;
-  text-align: right; user-select: none;
-}
-.estimate-hint.estimate-warn { color: #e8710a; font-weight: 600; }
 
 .send-btn {
   width: 42px; height: 42px; border: none; border-radius: 50%;

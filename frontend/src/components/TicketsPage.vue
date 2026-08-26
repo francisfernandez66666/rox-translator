@@ -57,12 +57,7 @@
           <option value="pro">🎓 {{ t('tk.modeProShort') }}</option>
           <option value="fast">⚡ {{ t('tk.modeFastShort') }}</option>
         </select>
-        <!-- 报价预览：token 区间 + ≈句数 + 余额 -->
-        <span v-if="estimate" class="tp-estimate" :class="{ warn: !estimate.sufficient }">
-          <template v-if="!estimate.sufficient">⚠️ {{ estimate.hint || t('tk.estUnavailable') }}</template>
-          <template v-else>{{ tpl('tk.estimateTokens', { min: fmtNum(Math.round(estimate.tokens_min / 5)), max: fmtNum(Math.round(estimate.tokens_max / 5)), bal: fmtNum(estimate.balance_tokens) }) }}</template>
-        </span>
-        <button class="ad-btn ad-btn-green tp-submit" :disabled="creating || estimateBlocked" @click="create">
+        <button class="ad-btn ad-btn-green tp-submit" :disabled="creating" @click="create">
           {{ creating ? t('tk.submitting') : t('tk.create') }}
         </button>
       </div>
@@ -138,7 +133,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import LangMultiSelect from './LangMultiSelect.vue'
 import FeedbackModal from './FeedbackModal.vue'
-import { myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail, ticketDownload, ticketDelete, ticketCancel, translationEstimate } from '@/api'
+import { myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail, ticketDownload, ticketDelete, ticketCancel } from '@/api'
 import { t, tpl } from '@/i18n'
 import { fmtTime } from './admin/ui'
 
@@ -174,30 +169,6 @@ const fileInput = ref<HTMLInputElement | null>(null)
 // ★ 图片型 PDF 提示（后端判定回传）
 const imageHeavyHint = ref(false)
 const filesTotalKB = computed(() => (files.value.reduce((a, f) => a + f.size, 0) / 1024).toFixed(0))
-
-// ---- 报价预览（文本模式实时预估；强制计费且未开通时禁提交） ----
-const estimate = ref<any>(null)
-let estimateTimer: ReturnType<typeof setTimeout> | null = null
-// 输入文本或目标语言变化后 500ms 防抖刷新报价预估
-watch([() => form.value.text, selectedLangs], () => {
-  if (estimateTimer) clearTimeout(estimateTimer)
-  estimateTimer = setTimeout(refreshEstimate, 500)
-})
-// refreshEstimate 请求文本翻译预估报价（空文本清空预览，失败时静默置空）
-async function refreshEstimate() {
-  const text = form.value.text.trim()
-  if (!text) { estimate.value = null; return }
-  try {
-    const r: any = await translationEstimate({ text, target_langs: [...selectedLangs.value], mode: qualityMode.value })
-    if (r.success) estimate.value = r
-  } catch { estimate.value = null }
-}
-// estimateBlocked 强制计费且额度不足/未开通时禁止提交工单
-const estimateBlocked = computed(() => {
-  if (!estimate.value) return false
-  if (estimate.value.sufficient === false) return true
-  return estimate.value.activated === false
-})
 
 // 步骤 key → 用户友好名称（中文）
 const stepNames: Record<string,string> = {
@@ -461,8 +432,6 @@ function statusLabel(s: string): string {
 .tp-row label { font-size: 13px; color: #555; white-space: nowrap; }
 .tp-langs { width: 260px; }
 .tp-submit { margin-left: auto; }
-.tp-estimate { font-size: 12px; color: #5f6368; white-space: nowrap; }
-.tp-estimate.warn { color: #e8710a; font-weight: 600; }
 .tp-backdrop { position: fixed; inset: 0; z-index: 199; background: transparent; }
 .tp-popover { position: fixed; z-index: 200; min-width: 260px; max-width: 360px; }
 .tp-popover-arrow { position: absolute; left: 80px; width: 12px; height: 12px; background: #fff; z-index: 201; }
