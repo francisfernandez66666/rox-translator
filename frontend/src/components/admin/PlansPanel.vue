@@ -426,10 +426,23 @@ watch(activeTenantId, loadAll)
 </script>
 
 <style scoped>
-/* ===== 分区锚点 ===== */
-.pl-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; position: sticky; top: 56px; z-index: 5; background: inherit; padding: 4px 0; }
-.pl-chip { border: none; background: #eef2f7; color: #33475b; border-radius: 16px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
+<style scoped>
+/* ===== 分区锚点导航 =====
+   ★ 悬浮底座修复（2026-08-26 线上反馈）：sticky 相对滚动容器 .ad-main 吸附于 top:0，
+   负 margin 抵消其 padding(28px 32px) 铺满整行；实底色 + 毛玻璃 + 投影，
+   杜绝此前 background:inherit 透明导致下滑时内容从锚点条底下透出 */
+.pl-nav {
+  position: sticky; top: 0; z-index: 30;
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin: -28px -32px 16px; padding: 12px 32px;
+  background: rgba(245, 247, 251, .96);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 4px 14px rgba(16, 24, 40, .08);
+}
+.pl-chip { border: none; background: #eef2f7; color: #33475b; border-radius: 16px; padding: 6px 14px; font-size: 13px; cursor: pointer; white-space: nowrap; }
 .pl-chip:hover { background: #e0e7f0; }
+/* 锚点跳转落点预留吸附条高度，防止目标卡片标题被遮 */
+.pl-nav + .ad-chart-card, [id^="sec-"] { scroll-margin-top: 64px; }
 /* ===== 当前套餐卡片 ===== */
 .pl-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .pl-card { background: #f7f9fc; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
