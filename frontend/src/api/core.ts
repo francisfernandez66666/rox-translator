@@ -53,9 +53,13 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   const timeoutMs = options?.timeoutMs ?? 30000
   const controller = new AbortController()
   const externalSignal = options?.signal
+  // ★ 修复（2026-08-26 全仓评审 D4）：保存 handler 引用——旧实现 removeEventListener
+  //   传入新建箭头函数，与 addEventListener 的不是同一引用，监听器永远移除不掉，
+  //   每个带外部 signal 的请求泄漏一个 AbortSignal 监听器。
+  const onExternalAbort = () => controller.abort()
   if (externalSignal) {
     if (externalSignal.aborted) controller.abort()
-    else externalSignal.addEventListener('abort', () => controller.abort())
+    else externalSignal.addEventListener('abort', onExternalAbort)
   }
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
@@ -80,7 +84,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     throw error
   } finally {
     clearTimeout(timer)
-    externalSignal?.removeEventListener('abort', () => controller.abort())
+    externalSignal?.removeEventListener('abort', onExternalAbort)
   }
 }
 

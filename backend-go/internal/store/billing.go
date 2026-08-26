@@ -146,24 +146,28 @@ func (s *Store) Charge(tid int64, tokens int64) error {
 // 参数：tid=租户 ID，tokens=待扣减 token 数；返回错误。
 var ErrInsufficientBalance = &errTxt{"余额不足"}
 
-// Deduct 扣减租户余额：先校验余额充足，再原子扣减（单机 SQLite 保证余额不转负）。
-// 参数 tid: 租户 ID；tokens: 待扣减 token 数。返回 nil 表示扣减成功，否则返回错误。
+// Deduct 扣减租户余额：余额不足时返回 ErrInsufficientBalance。
+//
+// Deprecated: 新代码一律使用 DeductWithGrants（双桶顺序扣减）。
+//
+// ★ 并发安全（2026-08-26 全仓评审 B4）：改为单条条件更新（balance>=? 守卫 +
+// RowsAffected 判定）——旧实现「先 SELECT 再无条件 UPDATE」在并发下可双双通过
+// 检查把余额扣成负数，原注释「单机 SQLite 未用事务亦可接受」不成立。
+// 参数 tid: 租户 ID；tokens: 待扣减 token 数。返回 nil 表示扣减成功。
 func (s *Store) Deduct(tid int64, tokens int64) error {
 	if err := s.EnsureBalance(tid); err != nil {
 		return err
 	}
-	// 先读当前余额再扣减（单机 SQLite，未用事务亦可接受，保证余额不转负）
-	var bal int64
-	if err := s.db.QueryRow("SELECT balance FROM balance_accounts WHERE tenant_id=?", tid).Scan(&bal); err != nil {
+	res, err := s.db.Exec(
+		"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
+		tokens, time.Now().Format(time.RFC3339), tid, tokens)
+	if err != nil {
 		return err
 	}
-	if bal < tokens {
-		return ErrInsufficientBalance // 余额不足，拒绝扣减
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrInsufficientBalance // 余额不足（或并发抢占失败），拒绝扣减
 	}
-	_, err := s.db.Exec(
-		"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=?",
-		tokens, time.Now().Format(time.RFC3339), tid)
-	return err
+	return nil
 }
 
 // ============ 用量 ============
@@ -730,6 +734,11 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	if err := tx.QueryRow(
 		"SELECT package_id, amount_tokens FROM orders WHERE id=? AND tenant_id=? AND status='paid'",
 		orderID, tid).Scan(&pkgID, &tokens); err != nil {
+		// ★ UAT 缺陷修复（2026-08-26）：pending/refunded/不存在此前把裸
+		//   sql.ErrNoRows 文案直接返回给用户——统一为友好提示
+		if err == sql.ErrNoRows {
+			return &errTxt{"订单不存在或状态不允许退款"}
+		}
 		return err
 	}
 	// 反推应扣 token 与包类型
@@ -788,11 +797,20 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	if n, _ := res2.RowsAffected(); n == 0 {
 		return &errTxt{"订单不存在或已退款"}
 	}
-	if revokedGrants > 0 || permClaw > 0 {
-		s.CreateAlert(tid, "info", "refund_revoke",
-			fmt.Sprintf("订单 %d 退款完成：作废订阅台账 %d token，扣回永久余额 %d token", orderID, revokedGrants, permClaw))
+	// ★ UAT 缺陷修复（2026-08-26）：告警写入必须移到事务提交之后——
+	//   原实现在本事务持有 IMMEDIATE 写锁期间经独立连接执行 CreateAlert，
+	//   撞 busy_timeout 后错误被吞，导致 refund_revoke 告警从未落库（UAT 实测捕获）。
+	if err := tx.Commit(); err != nil {
+		return err
 	}
-	return tx.Commit()
+	if revokedGrants > 0 || permClaw > 0 {
+		summary := fmt.Sprintf("订单 %d 退款完成：作废订阅台账 %d token，扣回永久余额 %d token", orderID, revokedGrants, permClaw)
+		s.CreateAlert(tid, "info", "refund_revoke", summary)
+		// ★ UAT 补充（2026-08-26）：alerts 同 kind+open 幂等去重会吞掉后续退款明细，
+		//   审计日志不去重——逐笔明细以 audit_logs 为准（对账链完整）
+		s.LogAudit(tid, 0, "refund_revoke", "orders", summary)
+	}
+	return nil
 }
 
 // errTxt 自定义错误类型：仅保存一条错误消息文本。

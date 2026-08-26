@@ -86,14 +86,26 @@ function shortJSON(s: string): string {
 }
 
 // exportCsv 导出当前审计为 CSV（走后端 export=csv 接口）
-function exportCsv() {
-  const url = `${API_BASE}/api/system/audit?export=csv`
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `audit_${new Date().toISOString().slice(0, 10)}.csv`
-  a.click()
+// ★ 修复（2026-08-26 全仓评审 D4）：改 fetch+blob 携带 Authorization 头——
+//   旧实现裸 <a href> 下载无法带鉴权头，生产 JWT 鉴权下必然 401；
+//   与 Overview.vue 的 XHR 下载对齐（同一功能此前两种实现）。
+async function exportCsv() {
+  try {
+    const resp = await fetch(`${API_BASE}/api/system/audit?export=csv`, {
+      headers: { Authorization: `Bearer ${getAuthToken()}` },
+    })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const blob = await resp.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `audit_${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e: any) {
+    alert(t('audit.exportFail') || `导出失败：${e?.message || e}`)
+  }
 }
 
 onMounted(load)
-void getAuthToken
 </script>

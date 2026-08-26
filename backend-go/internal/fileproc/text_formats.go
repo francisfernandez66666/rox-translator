@@ -191,4 +191,5 @@ func WriteComparisonXlsx(outPath string, sourceTexts []string, translations map[
 
 // cellNameA/cellNameB 第 A/B 列指定行的单元格名（对照表固定两列）。
 func cellNameA(row int) string { return "A" + strconv.Itoa(row) }
+// cellNameB 生成第 row 行 B 列的单元格坐标名（xlsx 对照表输出用）。
 func cellNameB(row int) string { return "B" + strconv.Itoa(row) }

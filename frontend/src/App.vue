@@ -189,6 +189,7 @@ function onEmailBound(addr: string) { emailMissing.value = false; emailEditOpen.
 // openEmailEdit 汉堡入口：拉最新上下文预填当前邮箱
 const emailEditOpen = ref(false)
 let curEmail = ''
+// openEmailEdit 打开邮箱换绑弹窗：先拉取最新身份上下文预填当前绑定邮箱
 async function openEmailEdit() {
   menuOpen.value = false
   try {

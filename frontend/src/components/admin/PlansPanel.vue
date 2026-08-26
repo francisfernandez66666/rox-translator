@@ -357,7 +357,9 @@ onBeforeUnmount(stopPolling)
 const quotaForm = ref<any>({ qps: 10, concurrent: 3, max_daily_chars: 0, max_daily_tokens: 0 })
 async function loadQuota() {
   const r = await billingQuota()
-  if (r.success) quotaForm.value = { qps: (r as any).qps || 10, concurrent: (r as any).concurrent || 3, max_daily_chars: (r as any).max_daily_chars || 0 }
+  // ★ 修复（2026-08-26 全仓评审 D4）：恢复配额时补 max_daily_tokens 字段——
+  //   旧实现漏掉该键，保存时 Math.max(0, undefined) 得 NaN，JSON 序列化为 null 提交后端
+  if (r.success) quotaForm.value = { qps: (r as any).qps || 10, concurrent: (r as any).concurrent || 3, max_daily_chars: (r as any).max_daily_chars || 0, max_daily_tokens: (r as any).max_daily_tokens ?? 0 }
 }
 async function saveQuota() {
   await billingQuotaSave({
@@ -431,11 +433,12 @@ watch(activeTenantId, loadAll)
 </script>
 
 <style scoped>
-<style scoped>
 /* ===== 分区锚点导航 =====
    ★ 悬浮底座修复（2026-08-26 线上反馈）：sticky 相对滚动容器 .ad-main 吸附于 top:0，
    负 margin 抵消其 padding(28px 32px) 铺满整行；实底色 + 毛玻璃 + 投影，
    杜绝此前 background:inherit 透明导致下滑时内容从锚点条底下透出 */
+/* ★ 修复（2026-08-26 全仓评审 D4）：原文件此处 <style scoped> 标签连写两次，
+   SFC 结构损坏，删除多余的一个 */
 .pl-nav {
   position: sticky; top: 0; z-index: 30;
   display: flex; flex-wrap: wrap; gap: 8px;

@@ -104,11 +104,15 @@ func uiLangFromCtx(ctx context.Context) string {
 // usageCtxKey 请求级"实际使用的 LLM 供应商/模型"记录键（供计量成本核算）
 type usageCtxKey struct{}
 
-// usageRecord 可变的请求级记录（context 存指针，跨调用共享）
+// usageRecord 可变的请求级记录（context 存指针，跨调用共享）。
+//
+// ★ 并发安全（2026-08-26 全仓评审 B7）：translateLangsConcurrent 的多语言 goroutine
+//   会在各自 singleLang 成功路径并发调用 NoteUsageModel 写本结构，字段读写必须持锁。
 type usageRecord struct {
-	provider string // 实际使用的供应商标识（如 siliconflow/volcengine）
-	model    string // 实际使用的模型名
-	used     bool   // 是否已记录过实际用量（避免回退默认）
+	mu       sync.Mutex // 保护以下字段的并发读写
+	provider string     // 实际使用的供应商标识（如 siliconflow/volcengine）
+	model    string     // 实际使用的模型名
+	used     bool       // 是否已记录过实际用量（避免回退默认）
 }
 
 // WithUsageRecorder 向 ctx 注入用量记录器（API 层在进入翻译前调用）。
@@ -131,17 +135,24 @@ func (e *Engine) UsageTokens(ctx context.Context) (int64, int64) {
 // NoteUsageModel 记录本次实际使用的供应商与模型（单语翻译成功路径调用）
 func (e *Engine) NoteUsageModel(ctx context.Context, provider, model string) {
 	if rec, ok := ctx.Value(usageCtxKey{}).(*usageRecord); ok {
+		rec.mu.Lock()
 		rec.provider = provider
 		rec.model = model
 		rec.used = true
+		rec.mu.Unlock()
 	}
 }
 
 // UsageModel 返回本次请求实际使用的供应商与模型；未记录时回退全局路由/全局默认
 // （★ 2026-08-26 BYOK 移除：不再出现 "tenant" 供应商标识，成本核算口径统一）
 func (e *Engine) UsageModel(ctx context.Context) (provider, model string) {
-	if rec, ok := ctx.Value(usageCtxKey{}).(*usageRecord); ok && rec.used {
-		return rec.provider, rec.model
+	if rec, ok := ctx.Value(usageCtxKey{}).(*usageRecord); ok {
+		rec.mu.Lock()
+		p, m, used := rec.provider, rec.model, rec.used
+		rec.mu.Unlock()
+		if used {
+			return p, m
+		}
 	}
 	if len(e.Cfg.ModelRoutes) > 0 {
 		p := e.pickPrimaryRoute()
@@ -1296,7 +1307,14 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 		bs = batchSize
 	}
 
-	model := cfg.OnlineModel
+	// ★ 统一网关接入（2026-08-26 全仓评审 B6）：批量主路与单语路径共用同一套
+	//   「全局路由（按权重选主）→ 全局默认」解析与 ai_initial 阶段模型覆盖——
+	//   此前直用 cfg.Online* 常量，使文件管线（主力负载）完全绕过
+	//   多供应商路由/降级链，与 BYOK 移除后「平台统一调度」的商业口径冲突。
+	base, key, model := e.resolveModel(ctx)
+	if b2, k2, m2, ok := e.resolveStageModel(ctx, config.StageAIInitial); ok {
+		base, key, model = b2, k2, m2
+	}
 	hunyuan := strings.HasPrefix(model, "tencent/Hunyuan-MT")
 	if hunyuan && !cfg.HunyuanMTLangCode[targetLang] {
 		model = cfg.HunyuanFallbackModel
@@ -1330,13 +1348,18 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 			maxTokens = 8192
 		}
 
-		content, _, err := e.LLM.CallChat(ctx, cfg.OnlineAPIBase, cfg.OnlineAPIKey, model, messages, maxTokens, hunyuan, cfg.FallbackTemp)
+		content, _, err := e.LLM.CallChat(ctx, base, key, model, messages, maxTokens, hunyuan, cfg.FallbackTemp)
 		// 429/网络错误 → 429 先 sleep 5s 避峰，再用 fallback 模型重试一次
+		//（base/key 沿用解析结果，不再回退 cfg.Online* 常量）
 		if err != nil && (isRateLimited(err) || isNetworkError(err)) {
 			if isRateLimited(err) {
 				time.Sleep(5 * time.Second)
 			}
-			content, _, err = e.LLM.CallChat(ctx, cfg.OnlineAPIBase, cfg.OnlineAPIKey, cfg.HunyuanFallbackModel, messages, maxTokens, false, cfg.FallbackTemp)
+			content, _, err = e.LLM.CallChat(ctx, base, key, cfg.HunyuanFallbackModel, messages, maxTokens, false, cfg.FallbackTemp)
+		}
+		if err == nil {
+			// 记录批量路径实际使用的供应商与模型（usageRecord 已加锁，多 chunk 并发安全）
+			e.NoteUsageModel(ctx, usageProvider(base), model)
 		}
 
 		parsed := parseBatchOutput(content, len(chunk))

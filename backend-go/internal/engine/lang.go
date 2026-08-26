@@ -8,6 +8,7 @@ package engine
 import (
 	"regexp"
 	"strings"
+	"sync"
 
 	"translator/internal/config"
 )
@@ -112,11 +113,20 @@ func isASCIIWord(s string) bool {
 	return len(s) > 0
 }
 
-var wordBoundaryCache = map[string]*regexp.Regexp{}
+// wordBoundaryCache 语言别名 → 词边界正则缓存（进程级复用）。
+//
+// ★ 并发安全（2026-08-26 全仓评审 A5）：chat/SSE 会并发触发 ParseTargetLangs，
+// 此前为裸 map 并发读写，存在 `concurrent map writes` panic 面，现以互斥锁保护读改写。
+var (
+	wordBoundaryMu    sync.Mutex
+	wordBoundaryCache = map[string]*regexp.Regexp{}
+)
 
 // wordBoundaryRe 返回 `(?i)\b<alias>\b`（RE2 支持词边界，不支持 lookbehind）
 func wordBoundaryRe(alias string) *regexp.Regexp {
 	aliasLower := strings.ToLower(alias)
+	wordBoundaryMu.Lock()
+	defer wordBoundaryMu.Unlock()
 	if re, ok := wordBoundaryCache[aliasLower]; ok {
 		return re
 	}

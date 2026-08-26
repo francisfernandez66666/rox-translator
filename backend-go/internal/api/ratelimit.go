@@ -9,6 +9,8 @@ package api
 import (
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -92,9 +94,26 @@ func (l *loginLimiter) clear(ip string) {
 	delete(l.data, ip)
 }
 
+// trustProxyXFF 是否信任反向代理注入的 X-Forwarded-For（env TRUST_PROXY_XFF=1）。
+// 惰性读取一次；仅在 Caddy/Nginx 反代部署时开启——直连暴露场景下开启会被
+// 伪造头绕过限流，故默认关闭保持旧行为（评审 C4）。
+var trustProxyXFF = os.Getenv("TRUST_PROXY_XFF") == "1"
+
 // clientIP 提取客户端 IP（去掉端口；无则返回空串）。
-// 参数 r: HTTP 请求。返回: 客户端 IP 字符串。
+//
+// ★ 反代适配（2026-08-26 全仓评审 C4）：TRUST_PROXY_XFF=1 时取 X-Forwarded-For
+//   第一跳（最左侧客户端地址，由可信反代追加）。此前恒用 RemoteAddr，Caddy 反代后
+//   全体用户共享 127.0.0.1——一人爆破登录/注册，全站连坐进入冷却。
 func clientIP(r *http.Request) string {
+	if trustProxyXFF {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			// XFF 格式："client, proxy1, proxy2"——第一跳即真实客户端
+			first := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
+			if first != "" {
+				return first
+			}
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

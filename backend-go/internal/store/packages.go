@@ -171,53 +171,92 @@ func (s *Store) GetTenantPerms(tid int64) (*tenant.Perms, error) {
 
 // SetSentenceBalance 整体写入租户句数余额（覆盖 sentence_balance 字段，保留其余权限）。
 // 参数：tid=租户 ID，balance=新句数余额；返回错误。
+//
+// ★ 并发安全（2026-08-26 全仓评审 B3）：读-改-写包进 IMMEDIATE 事务——
+//   DSN _txlock=immediate 下 BEGIN 即持写锁，单写者库内与其他写者天然互斥，
+//   消除「SELECT permissions → 内存改 → 整体覆盖」与并发写者的丢失更新窗口。
 func (s *Store) SetSentenceBalance(tid int64, balance int64) error {
-	perms, err := s.GetTenantPerms(tid)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	perms, err := getTenantPermsTx(tx, tid)
 	if err != nil {
 		return err
 	}
 	perms.SentenceBalance = balance
-	return s.SaveTenantPerms(tid, perms)
+	b, _ := json.Marshal(perms)
+	if _, err := tx.Exec("UPDATE tenants SET permissions=?, updated_at=? WHERE id=?", string(b), time.Now().Format(time.RFC3339), tid); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // AddSentences 增加租户句数余额（增量包购买/付费包发放时调用）。
 // 参数：tid=租户 ID，n=待增加句数（需为正数）；返回新余额。
+//
+// ★ 并发安全（2026-08-26 全仓评审 B3）：改为 json_set 单语句原子自增，
+// 不再整体覆盖 permissions JSON——并发发放/扣减不再互相踩掉对方写入。
 func (s *Store) AddSentences(tid, n int64) (int64, error) {
 	if n <= 0 {
 		cur, _ := s.GetSentenceBalance(tid)
 		return cur, nil
 	}
-	perms, err := s.GetTenantPerms(tid)
-	if err != nil {
+	if _, err := s.db.Exec(
+		"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$.sentence_balance', COALESCE(json_extract(permissions,'$.sentence_balance'),0)+?), updated_at=? WHERE id=?",
+		n, time.Now().Format(time.RFC3339), tid); err != nil {
 		return 0, err
 	}
-	perms.SentenceBalance += n
-	if err := s.SaveTenantPerms(tid, perms); err != nil {
-		return 0, err
-	}
-	return perms.SentenceBalance, nil
+	return s.GetSentenceBalance(tid)
 }
 
 // DeductSentences 扣减租户句数余额（每次翻译按「源句×目标语言数」扣减）。
 // 参数：tid=租户 ID，n=待扣减句数；余额不足时返回 ErrSentenceExhausted。
 // 返回：扣减后的剩余句数。
+//
+// ★ 并发安全（2026-08-26 全仓评审 B3）：json_set 单语句原子自减 + WHERE 余额守卫，
+// RowsAffected==0 即余额不足（或租户不存在）——守卫式核销与 DeductWithGrants 同款双保险。
 func (s *Store) DeductSentences(tid, n int64) (int64, error) {
-	perms, err := s.GetTenantPerms(tid)
+	res, err := s.db.Exec(
+		"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$.sentence_balance', COALESCE(json_extract(permissions,'$.sentence_balance'),0)-?), updated_at=? WHERE id=? AND COALESCE(json_extract(permissions,'$.sentence_balance'),0)>=?",
+		n, time.Now().Format(time.RFC3339), tid, n)
 	if err != nil {
 		return 0, err
 	}
-	if perms.SentenceBalance < n {
+	if cnt, _ := res.RowsAffected(); cnt == 0 {
 		return 0, ErrSentenceExhausted
 	}
-	perms.SentenceBalance -= n
-	if err := s.SaveTenantPerms(tid, perms); err != nil {
-		return 0, err
-	}
-	return perms.SentenceBalance, nil
+	return s.GetSentenceBalance(tid)
 }
 
 // ErrSentenceExhausted 句数额度耗尽错误（免费体验句/付费包句数用完后提示购买）。
 var ErrSentenceExhausted = &errTxt{"翻译句数已用尽，请购买套餐或增量包"}
+
+// getTenantPermsTx 事务作用域的租户权限读取（GetTenantPerms 的 tx 变体）。
+func getTenantPermsTx(tx *sql.Tx, tid int64) (*tenant.Perms, error) {
+	p := &tenant.Perms{}
+	var raw string
+	err := tx.QueryRow("SELECT permissions FROM tenants WHERE id=?", tid).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return p, nil
+	}
+	if err != nil {
+		return p, err
+	}
+	if raw == "" {
+		return p, nil
+	}
+	_ = json.Unmarshal([]byte(raw), p)
+	return p, nil
+}
+
+// saveTenantPermsTx 事务作用域的租户权限写入（SaveTenantPerms 的 tx 变体）。
+func saveTenantPermsTx(tx *sql.Tx, tid int64, perms *tenant.Perms) error {
+	b, _ := json.Marshal(perms)
+	_, err := tx.Exec("UPDATE tenants SET permissions=?, updated_at=? WHERE id=?", string(b), time.Now().Format(time.RFC3339), tid)
+	return err
+}
 
 // GrantPackageSentences 向租户发放商业包句数（句包外壳）：
 //   - paid（付费包）：设置订阅包编码/到期时间（DurationDays>0 时计算 PackageExpires），并发放包内含句数
@@ -228,8 +267,16 @@ var ErrSentenceExhausted = &errTxt{"翻译句数已用尽，请购买套餐或�
 // 句数字段仅作订阅身份与展示镜像。
 //
 // 参数：tid=租户 ID，pkg=商业包对象；返回发放后的句数余额（镜像值）。
+//
+// ★ 并发安全（2026-08-26 全仓评审 B3）：句数镜像写入与 token 入账包进同一
+// IMMEDIATE 事务，消除「镜像覆盖丢失」与「镜像已加、token 未到账」的中间态。
 func (s *Store) GrantPackageSentences(tid int64, pkg *Package) (int64, error) {
-	perms, err := s.GetTenantPerms(tid)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	perms, err := getTenantPermsTx(tx, tid)
 	if err != nil {
 		return 0, err
 	}
@@ -250,15 +297,29 @@ func (s *Store) GrantPackageSentences(tid int64, pkg *Package) (int64, error) {
 		perms.NotifiedExp7 = false
 		perms.NotifiedExp1 = false
 	}
-	if err := s.SaveTenantPerms(tid, perms); err != nil {
+	if err := saveTenantPermsTx(tx, tid, perms); err != nil {
 		return 0, err
 	}
 	// ★ 句数折算 token 入账（句包外壳→token 底层的唯一兑换点）
 	if granted > 0 {
 		rate := s.TokenSentenceRate()
 		if tokens := granted * rate; tokens > 0 {
-			_ = s.Charge(tid, tokens)
+			// 事务内先确保余额账户行存在（等价 Charge 的 EnsureBalance 语义），
+			// 再原子累加——避免账户行缺失时 UPDATE 影响 0 行导致 token 静默丢失。
+			if _, err := tx.Exec(
+				"INSERT OR IGNORE INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
+				tid, time.Now().Format(time.RFC3339)); err != nil {
+				return 0, err
+			}
+			if _, err := tx.Exec(
+				"UPDATE balance_accounts SET balance=balance+?, updated_at=? WHERE tenant_id=?",
+				tokens, time.Now().Format(time.RFC3339), tid); err != nil {
+				return 0, err
+			}
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
 	}
 	return perms.SentenceBalance, nil
 }
@@ -266,8 +327,15 @@ func (s *Store) GrantPackageSentences(tid int64, pkg *Package) (int64, error) {
 // ApplyPaidPackageIdentity 仅落付费包订阅身份与句数镜像（不折算 token）。
 // 供订单确认分流使用：token 部分由 t+30 台账（CreateQuotaGrant）负责，避免双通道重复入账。
 // 参数：tid=租户 ID，pkg=付费包对象；返回发放后的句数余额（镜像值）。
+//
+// ★ 并发安全（2026-08-26 全仓评审 B3）：读-改-写包进 IMMEDIATE 事务。
 func (s *Store) ApplyPaidPackageIdentity(tid int64, pkg *Package) (int64, error) {
-	perms, err := s.GetTenantPerms(tid)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	perms, err := getTenantPermsTx(tx, tid)
 	if err != nil {
 		return 0, err
 	}
@@ -281,7 +349,10 @@ func (s *Store) ApplyPaidPackageIdentity(tid int64, pkg *Package) (int64, error)
 	}
 	perms.NotifiedExp7 = false
 	perms.NotifiedExp1 = false
-	if err := s.SaveTenantPerms(tid, perms); err != nil {
+	if err := saveTenantPermsTx(tx, tid, perms); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return perms.SentenceBalance, nil
@@ -289,16 +360,17 @@ func (s *Store) ApplyPaidPackageIdentity(tid int64, pkg *Package) (int64, error)
 
 // ApplyIncrementMirror 仅追加增量包句数镜像（不改订阅状态与到期，不折算 token）。
 // token 部分由永久余额通道（Charge）负责。参数：tid=租户 ID，pkg=增量包对象。
+//
+// ★ 并发安全（2026-08-26 全仓评审 B3）：改为 json_set 单语句原子自增。
 func (s *Store) ApplyIncrementMirror(tid int64, pkg *Package) (int64, error) {
-	perms, err := s.GetTenantPerms(tid)
-	if err != nil {
-		return 0, err
+	if pkg.Sentences > 0 {
+		if _, err := s.db.Exec(
+			"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$.sentence_balance', COALESCE(json_extract(permissions,'$.sentence_balance'),0)+?), updated_at=? WHERE id=?",
+			pkg.Sentences, time.Now().Format(time.RFC3339), tid); err != nil {
+			return 0, err
+		}
 	}
-	perms.SentenceBalance += pkg.Sentences
-	if err := s.SaveTenantPerms(tid, perms); err != nil {
-		return 0, err
-	}
-	return perms.SentenceBalance, nil
+	return s.GetSentenceBalance(tid)
 }
 
 // TokenSentenceRate 返回句↔token 展示换算率（estimate_tokens_per_sentence，默认 500）。

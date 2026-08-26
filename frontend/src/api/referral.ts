@@ -9,6 +9,7 @@ import { request, authHeaders, type AdminResp } from './core'
 export interface ReferralRecord {
   invitee_uid: number
   invitee_name: string
+  invitee_email?: string // 被邀人注册邮箱快照（2026-08-26 前台记录需求）
   type: string // trial_stack=体验叠加 | paid_perm=付费永久奖励
   tokens: number
   days: number

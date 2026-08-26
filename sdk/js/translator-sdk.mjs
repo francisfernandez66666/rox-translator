@@ -82,7 +82,7 @@ export class TranslatorClient {
   }
 
   // ---------- 任务创建 ----------
-  /** 创建文本翻译任务。mode: "pro"(默认)/"fast"。返回 {task_id, poll_interval_sec, balance_tokens...} */
+  /** 创建文本翻译任务。mode: "pro"(默认)/"fast"。返回 {task_id, mode, type:"text", status:"queued"}（202）。 */
   createTask(text, targetLangs, mode = "pro", title = "") {
     const body = { text, mode };
     if (targetLangs) body.target_langs = targetLangs;
@@ -98,33 +98,38 @@ export class TranslatorClient {
     fd.append("mode", mode);
     if (title) fd.append("title", title);
     const r = await this.#fetch("/openapi/v1/tasks", { method: "POST", body: fd });
-    if (!r.success) throw new TranslatorError(r.message, 200, r);
+    // ★ 契约对齐（2026-08-26 全仓评审 D1）：成功响应无 success 字段，以 task_id 为准
+    //  （业务错误已由 #fetch 的 success===false 分支抛出）
+    if (!r || r.task_id == null) throw new TranslatorError(r?.message || "创建任务失败", 200, r);
     return r;
   }
 
-  /** 查询任务状态。status ∈ queued/processing/completed/failed（失败带 error_code）。 */
+  /** 查询任务状态。status ∈ queued/processing/completed/failed（失败带 error_code/message）。 */
   getTask(taskId) {
     return this.#fetch(`/openapi/v1/tasks/status?id=${taskId}`);
   }
 
-  /** 阻塞轮询直至终态；interval 缺省用服务端建议值（文本 15s / 文件 60s）。 */
+  /** 阻塞轮询直至终态；interval 毫秒，缺省按任务类型（文本 15s / 文件 60s，与后端口径一致）。 */
   async waitTask(taskId, interval = null, timeoutMs = 30 * 60 * 1000) {
     const deadline = Date.now() + timeoutMs;
-    let gap = interval;
+    let gapMs = interval;
     for (;;) {
       const r = await this.getTask(taskId);
       if (r.status === "completed") return r;
-      if (r.status === "failed") throw new TranslatorError(r.error || "任务失败", 200, r);
+      if (r.status === "failed") {
+        // ★ 契约对齐（D1）：失败出参字段为 message/error_code（无 error 字段）
+        throw new TranslatorError(r.message || "任务失败", 200, r);
+      }
       if (Date.now() > deadline) throw new TranslatorError("轮询超时，任务仍在处理");
-      gap = gap || r.poll_interval_sec * 1000 || 15000;
-      await sleep(gap);
+      if (!gapMs) gapMs = r.type === "files" ? 60000 : 15000;
+      await sleep(gapMs);
     }
   }
 
   /** 一站式文本翻译：提交 + 等待完成，返回含 translations 的响应。 */
   async translateAndWait(text, targetLangs, mode = "pro", timeoutMs) {
     const created = await this.createTask(text, targetLangs, mode);
-    return this.waitTask(created.task_id, created.poll_interval_sec * 1000, timeoutMs);
+    return this.waitTask(created.task_id, null, timeoutMs);
   }
 
   /** 下载文件任务产物（fileId 缺省打包 zip），保存为 Blob 由调用方落地。 */

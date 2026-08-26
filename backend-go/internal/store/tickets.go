@@ -305,10 +305,14 @@ func (s *Store) RequeueStalledTickets(stale time.Duration) (int64, error) {
 	if n == 0 {
 		return 0, nil
 	}
-	// 兜底释放：历史遗留的 running 租约（对应工单已不在 in_progress）不再阻塞领取
-	s.db.Exec(`UPDATE jobs SET status='queued', leased_by='', leased_at=''
-		WHERE type='ticket_run' AND status='running'
-		  AND CAST(json_extract(payload,'$.ticket_id') AS INTEGER) IN
-		  (SELECT id FROM tickets WHERE status IN ('queued','cancelled','rejected','completed'))`)
+	// ★ 兜底释放已删除（2026-08-26 全仓评审 B2）：原实现对「工单已 queued/cancelled」的
+	//   running 租约无条件清空、不看租约年龄——而入队顺序是「置工单 queued → 建 job →
+	//   worker 认领(running) → 才翻 in_progress」，认领窗口内 sweep 触发会把活跃租约
+	//   直接释放，第二个 worker 立即可再领取同一 job，造成同工单双副本执行（双扣费）。
+	//   职责边界澄清：
+	//   ① 活跃 worker 保护 = 第一段 NOT EXISTS(jobs running)；
+	//   ② 过期租约回收 = DirectQueue.Reserve 的 leased_at<=? 判定（唯一合法回收点）；
+	//   ③ 进程重启的全量释放 = service.BootResume 显式执行；
+	//   ④ 取消场景的重复执行防护 = runTicket 收尾守卫（cancelled 即放弃计费/完成态）。
 	return n, nil
 }

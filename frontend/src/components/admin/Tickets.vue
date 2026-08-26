@@ -148,18 +148,21 @@
     <!-- ===== 审批台（pro 文本工单，保留） ===== -->
     <h2 style="margin-top:32px">{{ t('tickets.approvalTitle') }}</h2>
     <button class="ad-btn" @click="loadApproval">{{ t('tickets.refresh') }}</button>
-    <div v-for="t in approvalTickets" :key="t.id" class="ad-approval">
+    <div v-for="tk in approvalTickets" :key="tk.id" class="ad-approval">
       <div class="ad-approval-head">
-        <b>{{ t.ticket_no }} — {{ t.title }}</b>
-        <span class="ad-pkg-role">{{ t.status }}</span>
+        <b>{{ tk.ticket_no }} — {{ tk.title }}</b>
+        <span class="ad-pkg-role">{{ tk.status }}</span>
       </div>
-      <p class="ad-approval-src">{{ t.source_text }}</p>
-      <textarea :value="t.final_result" class="ad-input ad-textarea" readonly />
+      <p class="ad-approval-src">{{ tk.source_text }}</p>
+      <textarea :value="tk.final_result" class="ad-input ad-textarea" readonly />
       <div class="ad-row">
-        <button class="ad-btn ad-btn-green" @click="doApprove(t, 'approve')">{{ t('tickets.approve') }}</button>
-        <input v-model="t._reason" :placeholder="t('tickets.reasonPlaceholder')" class="ad-input" />
-        <input v-model="t._suggestion" :placeholder="t('tickets.suggestionPlaceholder')" class="ad-input" />
-        <button class="ad-btn ad-btn-red" @click="doApprove(t, 'reject')">{{ t('tickets.reject') }}</button>
+        <!-- ★ 修复（2026-08-26 全仓评审 D2）：循环变量原别名 t 遮蔽 i18n 函数 t，
+             本区块内 {{ t('tickets.approve') }} 会把工单对象当函数调用 → 渲染即 TypeError；
+             统一改名为 tk。 -->
+        <button class="ad-btn ad-btn-green" @click="doApprove(tk, 'approve')">{{ t('tickets.approve') }}</button>
+        <input v-model="tk._reason" :placeholder="t('tickets.reasonPlaceholder')" class="ad-input" />
+        <input v-model="tk._suggestion" :placeholder="t('tickets.suggestionPlaceholder')" class="ad-input" />
+        <button class="ad-btn ad-btn-red" @click="doApprove(tk, 'reject')">{{ t('tickets.reject') }}</button>
       </div>
     </div>
     <div v-if="!approvalTickets.length" class="ad-hint">{{ t('tickets.noApproval') }}</div>

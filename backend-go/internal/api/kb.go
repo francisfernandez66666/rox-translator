@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +32,10 @@ import (
 	"translator/internal/kb"
 	"translator/internal/store"
 )
+
+// tempIDRe 识别临时 ID 合法格式（randHex(12) 生成的 24 位小写 hex）。
+// 导入阶段据此校验请求载荷，杜绝把元信息文件路径指向上传目录之外（评审 A3）。
+var tempIDRe = regexp.MustCompile(`^[0-9a-f]{24}$`)
 
 // ============ KB 批量导入（租户自服务） ============
 
@@ -438,6 +443,13 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少 temp_id"})
 		return
 	}
+	// ★ 格式白名单（2026-08-26 全仓评审 A3）：temp_id 由识别阶段 randHex(12) 生成
+	//  （24 位 hex）。不校验格式时，"../../x" 类载荷可把元信息文件路径指到任意位置
+	//  （读 oracle + 借 FilePath 字段间接打开/删除任意文件），必须在此卡死。
+	if !tempIDRe.MatchString(req.TempID) {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "temp_id 无效"})
+		return
+	}
 	if req.PackageID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少 package_id"})
 		return
@@ -475,6 +487,13 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	}
 	var meta kbRecognizeMeta
 	if err := json.Unmarshal(metaBytes, &meta); err != nil || meta.FilePath == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "识别数据无效，请重新上传"})
+		return
+	}
+	// ★ 路径白名单（2026-08-26 全仓评审 A3 双重闸）：元信息内的 FilePath 必须落在
+	//   上传目录内——即使 temp_id 校验被绕过或元信息文件被替换，也不允许解析/
+	//   删除上传目录之外的任意文件。复用 stream.go 的 resolveSafePath。
+	if _, ok := resolveSafePath([]string{s.Cfg.UploadDir}, meta.FilePath); !ok {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "识别数据无效，请重新上传"})
 		return
 	}

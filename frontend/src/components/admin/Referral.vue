@@ -28,18 +28,34 @@
       <img v-if="inviteUrl" :src="qrImgUrl" alt="QR" class="ref-qr" />
     </div>
 
-    <!-- 邀请记录 -->
+    <!-- 邀请记录（2026-08-26 需求增强：被邀人ID/邮箱 + 邀请状态 + 支付状态 + 奖励明细） -->
     <table class="ad-table" style="margin-top:16px">
-      <thead><tr><th>{{ t('referral.colInvitee') }}</th><th>{{ t('referral.colReward') }}</th><th>{{ t('referral.colTokens') }}</th><th>{{ t('referral.colDays') }}</th><th>{{ t('referral.colTime') }}</th></tr></thead>
+      <thead><tr>
+        <th>{{ t('referral.colInvitee') }}</th>
+        <th>{{ t('referral.colEmail') }}</th>
+        <th>{{ t('referral.colInviteStatus') }}</th>
+        <th>{{ t('referral.colPayStatus') }}</th>
+        <th>{{ t('referral.colReward') }}</th>
+        <th>{{ t('referral.colTime') }}</th>
+      </tr></thead>
       <tbody>
         <tr v-for="(r, i) in records" :key="i">
           <td>{{ r.invitee_name }} (#{{ r.invitee_uid }})</td>
-          <td>{{ r.type === 'trial_stack' ? t('referral.rwTrial') : t('referral.rwPaid') }}</td>
-          <td>{{ r.tokens || '—' }}</td>
-          <td>{{ r.days ? '+' + r.days : '—' }}</td>
+          <td>{{ r.invitee_email || '—' }}</td>
+          <td><span class="ref-ok">✅ {{ t('referral.invSuccess') }}</span></td>
+          <td>
+            <span v-if="r.paid" class="ref-ok">✅ {{ t('referral.payYes') }}</span>
+            <span v-else class="ref-no">⏳ {{ t('referral.payNo') }}</span>
+          </td>
+          <td>
+            <template v-if="r.type === 'trial_stack'">
+              +{{ fmtNum(r.tokens) }} token<template v-if="r.days"> / +{{ r.days }} {{ t('referral.daysUnit') }}</template>
+            </template>
+            <template v-else>+{{ fmtNum(r.tokens) }} token</template>
+          </td>
           <td>{{ fmtTime(r.created_at) }}</td>
         </tr>
-        <tr v-if="!records.length"><td colspan="5" style="text-align:center;color:#999">{{ t('referral.empty') }}</td></tr>
+        <tr v-if="!records.length"><td colspan="6" style="text-align:center;color:#999">{{ t('referral.empty') }}</td></tr>
       </tbody>
     </table>
   </section>
@@ -78,6 +94,11 @@ async function load() {
   } catch { /* 未登录等场景忽略 */ }
 }
 
+// fmtNum 千分位格式化（奖励 token 展示）
+function fmtNum(n: number): string {
+  return n ? n.toLocaleString('en-US') : '0'
+}
+
 // copyLink 复制专属邀请链接到剪贴板
 async function copyLink() {
   if (!inviteUrl.value) return
@@ -104,4 +125,6 @@ onMounted(load)
 .ref-code { font-size: 22px; font-weight: 700; letter-spacing: 2px; color: #1a237e; margin-top: 2px; }
 .ref-stats { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; color: #555; }
 .ref-qr { width: 150px; height: 150px; border-radius: 10px; border: 1px solid #e3e6ef; background: #fff; }
+.ref-ok { color: #1b8a3f; font-weight: 600; }
+.ref-no { color: #b26a00; }
 </style>

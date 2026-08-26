@@ -37,6 +37,13 @@ const (
 	PackIndustry   = "industry"   // 行业包
 	PackLocale     = "locale"     // 语言文化习惯包
 	PackDepartment = "department" // 部门包
+
+	// GeneralIndustryCode 通用行业兜底包编码（2026-08-26 UAT 产品决策）：
+	// 注册缺选/错选行业时回落到本行业，不再拒绝注册——注册漏斗每多一步都是流失。
+	// 包由 EnsureDefaultPackages 在共享宿主（租户1）幂等创建。
+	GeneralIndustryCode = "general"
+	// GeneralIndustryName 通用行业展示名。
+	GeneralIndustryName = "通用行业"
 )
 
 // 包角色常量
@@ -221,6 +228,9 @@ func (s *Store) EnsureDefaultPackages(tid int64) error {
 	}{
 		{"tenant", "企业包", PackTenant, PackRoleSource},
 		{"industry", "行业包", PackIndustry, PackRoleSource},
+		// ★ 通用行业兜底包（2026-08-26 UAT 产品决策）：注册行业缺选/错选时的回落目标，
+		//   仅在共享宿主（租户1）创建（下方 industry 跳过逻辑同样适用）
+		{GeneralIndustryCode, GeneralIndustryName, PackIndustry, PackRoleSource},
 		{"locale", "语言文化习惯包", PackLocale, PackRoleGate},
 		{"department", "部门包", PackDepartment, PackRoleSource},
 	}
@@ -272,11 +282,31 @@ func (s *Store) EnsureIndustryPackage(tid int64, code, name string) error {
 
 // ============ 条目 ============
 
+// isValidLangColumn 校验语言码是否属于 tm_segments 的固定语言白名单列。
+// 用途：所有把语言码拼进 SQL 列名位置的写入点（SaveEntry / 包启停重写回）必须先过此闸，
+// 杜绝标识符注入（2026-08-26 全仓评审 A2）。
+func isValidLangColumn(lang string) bool {
+	if lang == "" {
+		return false
+	}
+	for _, l := range kb.AllLangs {
+		if l == lang {
+			return true
+		}
+	}
+	return false
+}
+
 // SaveEntry 新增/更新 KB 条目：同租户+包内按 (源语言, 源文本, 目标语言) 判重，命中则更新。
 // 参数：tid=租户 ID，pkgID=包 ID，layer=条目层，srcLang/srcText=源语言与文本，
 // tgtLang/tgtText=目标语言与译文，module=来源模块。
 // 返回：条目 ID 或错误。
 func (s *Store) SaveEntry(tid, pkgID int64, layer int, srcLang, srcText, tgtLang, tgtText, module string) (int64, error) {
+	// ★ 语言码白名单（2026-08-26 全仓评审 A2）：tgtLang 会被拼进 tm_segments 列名
+	//  （SQL 标识符位置），必须限定在固定语言列集合内，否则构成标识符注入。
+	if !isValidLangColumn(tgtLang) {
+		return 0, fmt.Errorf("不支持的目标语言: %s", tgtLang)
+	}
 	now := time.Now().Format(time.RFC3339)
 	var id int64
 	// 先按唯一键查找已有条目
@@ -432,15 +462,20 @@ func (s *Store) ListSafetyPhrasesFilter(tid int64, status string) ([]*KBSafetyPh
 }
 
 // SetSafetyPhraseStatus 审核安全句（通过/驳回）；仅 pending 状态可流转，approved/rejected 可人工改判。
-func (s *Store) SetSafetyPhraseStatus(id int64, status string) error {
+//
+// ★ 租户隔离（2026-08-26 全仓评审 A1）：SQL 必须携带 tenant_id 条件——
+//   此前仅 WHERE id=?，任一租户的部门管理员可遍历自增 ID 改判其他租户的安全句
+//  （approved 即生效于该租户的文化闸门拦截逻辑），构成跨租户越权写。
+func (s *Store) SetSafetyPhraseStatus(id, tid int64, status string) error {
 	if status != "pending" && status != "approved" && status != "rejected" {
 		return fmt.Errorf("非法状态: %s", status)
 	}
-	res, err := s.db.Exec("UPDATE kb_safety_phrases SET status=?, created_at=created_at WHERE id=?", status, id)
+	res, err := s.db.Exec("UPDATE kb_safety_phrases SET status=?, created_at=created_at WHERE id=? AND tenant_id=?", status, id, tid)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		// 不区分「不存在」与「他租记录」：一律报不存在，不泄露跨租户存在性
 		return fmt.Errorf("记录不存在")
 	}
 	return nil
@@ -525,6 +560,11 @@ func (s *Store) SetKBPackageEnabled(id int64, enabled int) error {
 		}
 		rows.Close()
 		for _, e := range ents {
+			// ★ 白名单守卫（A2 纵深防御）：kb_entries.target_lang 属于历史落库数据，
+			//   若存在被污染的非白名单语言码，跳过该条（不中断整个包的重写回）。
+			if !isValidLangColumn(e.lang) {
+				continue
+			}
 			sum := md5.Sum([]byte(e.src))
 			hash := hex.EncodeToString(sum[:])
 			mod := e.module

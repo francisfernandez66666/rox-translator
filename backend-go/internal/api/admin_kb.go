@@ -548,7 +548,7 @@ func (s *Server) handleSafetyPhraseStatus(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
-	if err := s.Store.SetSafetyPhraseStatus(req.ID, req.Status); err != nil {
+	if err := s.Store.SetSafetyPhraseStatus(req.ID, s.kbTenant(r, u), req.Status); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}

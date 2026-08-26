@@ -260,6 +260,12 @@ func (s *Server) handleBillingConfigSave(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
+	// ★ 审计 before 值必须在写入之前读取（2026-08-26 全仓评审 C3）——
+	//   旧实现在 SetConfig 之后回读，diff 恒为「before==after」，开关变更轨迹失真
+	before := "off"
+	if v, err := s.Store.GetConfig("billing_enforced"); err == nil && v == "1" {
+		before = "on"
+	}
 	// 布尔转字符串配置值（"1"/"0"）
 	val := "0"
 	if req.BillingEnforced {
@@ -271,10 +277,6 @@ func (s *Server) handleBillingConfigSave(w http.ResponseWriter, r *http.Request)
 	}
 	// 审计：记录开关变更前后值（on/off）
 	u := s.authUser(r)
-	before := "off"
-	if v, err := s.Store.GetConfig("billing_enforced"); err == nil && v == "1" {
-		before = "on"
-	}
 	s.Store.LogAuditDiff(s.effTenant(r, u), u.ID, "billing_config_save", "system", val, `{"billing_enforced":"`+before+`"}`, `{"billing_enforced":"`+val+`"}`)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "billing_enforced": req.BillingEnforced})
 }
@@ -317,6 +319,9 @@ func (s *Server) handleTenantQuotaSave(w http.ResponseWriter, r *http.Request) {
 	if s.Bill != nil {
 		billing.SetQPS(tid, req.QPS)
 		billing.SetConcurrent(tid, req.Concurrent)
+		// ★ 持久化（2026-08-26 全仓评审 C2）：此前只写内存，重启即回默认 10/3——
+		//   现同步落 system_config（tenant_quota_<tid>），启动时由 NewServer 回放
+		_ = s.Store.SaveTenantQuotaCfg(tid, req.QPS, req.Concurrent)
 	}
 	// 每日字符上限写入租户 permissions（与 tenant 配置共用）
 	if s.Ten != nil {

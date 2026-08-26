@@ -5,9 +5,11 @@
 package store
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"time"
 )
 
@@ -37,11 +39,29 @@ func HashAPIKey(key string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// CreateAPIKey 签发 API Key：生成明文（rk_ 前缀 + 24 位随机串），仅此一次返回明文。
-// 参数：tid=租户 ID，name=Key 名称，perms=权限范围（为空默认 translate），dailyLimit=每日调用上限（0=不限）。
+// randToken 生成 n 字节密码学随机数的十六进制串（API Key 明文专用）。
+//
+// ★ 安全（2026-08-26 全仓评审 A4）：Key 是鉴权凭证，必须用 crypto/rand——
+//   此前复用 randSuffix（UnixNano 种子的线性同余伪随机，服务于订单号可读性），
+//   其输出空间与种子可预测性不满足凭证强度要求。
+func randToken(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		// 随机源不可用时拒绝签发（宁可失败也不落弱密钥）
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
+
+// CreateAPIKey 签发 API Key：生成明文（rk_ 前缀 + 40 位密码学随机 hex），仅此一次返回明文。
+// 参数：tid=租户 ID，userID=归属用户 ID，name=Key 名称，perms=权限范围（为空默认 translate），dailyLimit=每日调用上限（0=不限）。
 // 返回：明文 Key（调用方需立即展示，之后只能查哈希）与错误。
 func (s *Store) CreateAPIKey(tid, userID int64, name, perms string, dailyLimit int64) (string, error) {
-	plain := "rk_" + randSuffix(24) // 生成随机明文 Key
+	token := randToken(20) // 20 字节 = 160bit 熵
+	if token == "" {
+		return "", fmt.Errorf("随机源不可用，已拒绝签发 API Key") // 显式失败，不落弱密钥
+	}
+	plain := "rk_" + token
 	if perms == "" {
 		perms = "translate" // 默认只给翻译权限，最小权限原则
 	}

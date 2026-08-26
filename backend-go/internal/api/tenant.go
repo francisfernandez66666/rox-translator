@@ -263,8 +263,8 @@ func (s *Server) handleTenantErase(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
 		return
 	}
-	// 清除租户全部业务数据（GDPR 删除权）
-	if err := s.Store.EraseTenantData(req.ID); err != nil {
+	// 清除租户全部业务数据（GDPR 删除权；★ C5：含磁盘产物清理的完整版入口）
+	if err := s.Store.EraseTenantDataFull(req.ID); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}

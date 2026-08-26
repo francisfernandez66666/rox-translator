@@ -131,9 +131,13 @@ func (s *Store) DeleteUser(id, tid int64) error {
 }
 
 // ListUsersByRole 按租户+角色列出活跃用户（通知投递用；tid=0 表示平台层超管）。
+//
+// ★ 修复（2026-08-26 全仓评审 C1）：SELECT 补第 14 列 COALESCE(deactivate_at,'')——
+//   此前 SELECT 13 列却 Scan 14 目标，每行 Scan 必败被 continue 吞掉，
+//   函数恒返回空列表 → 超管通知链路（反馈回复/告警触达）整体静默失效。
 func (s *Store) ListUsersByRole(tid int64, role string) []*User {
 	rows, err := s.db.Query(
-		"SELECT id, tenant_id, username, password_hash, display_name, role, status, created_by, COALESCE(last_login_at,''), COALESCE(org_id,0), COALESCE(email,''), created_at, updated_at FROM users WHERE tenant_id=? AND role=? AND status='active'",
+		"SELECT id, tenant_id, username, password_hash, display_name, role, status, created_by, COALESCE(last_login_at,''), COALESCE(org_id,0), COALESCE(email,''), created_at, updated_at, COALESCE(deactivate_at,'') FROM users WHERE tenant_id=? AND role=? AND status='active'",
 		tid, role)
 	if err != nil {
 		return nil

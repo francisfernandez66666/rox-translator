@@ -338,6 +338,7 @@ const inputText = ref('')
 
 // ★ 双模式：⚡快速 / 🎓专业校对（localStorage 记忆；发送时经 chat store 随请求透传）
 const translateMode = ref(localStorage.getItem('translate_mode') || 'pro')
+// setMode 切换翻译模式并持久化（下次进入沿用上次选择）
 function setMode(m: string) {
   translateMode.value = m
   localStorage.setItem('translate_mode', m)

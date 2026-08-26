@@ -204,16 +204,22 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		if req.Name == "" {
 			req.Name = req.Code
 		}
-		// Req8：完全新租户注册需选择行业（来自超管创建的行业包），用于开通对应行业包
-		if req.Industry == "" {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请选择所属行业"})
-			return
+		// Req8（2026-08-26 UAT 产品决策修订）：行业不再拒绝注册——
+		//   缺选 → 通用行业兜底；错选(不存在) → 通用行业兜底；通用包也缺失(异常部署)
+		//   → 跳过行业载入不阻塞注册。行业仅决定共享行业包的载入范围。
+		industryCode := strings.TrimSpace(req.Industry)
+		if industryCode == "" {
+			industryCode = store.GeneralIndustryCode
 		}
-		// 校验行业包存在（来自默认租户 tenant 1 的行业包）
-		industryPkg, ipErr := s.Store.FindIndustryByCode(req.Industry)
+		industryPkg, ipErr := s.Store.FindIndustryByCode(industryCode)
 		if ipErr != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "行业不存在，请重新选择"})
-			return
+			industryPkg, ipErr = s.Store.FindIndustryByCode(store.GeneralIndustryCode)
+		}
+		if ipErr != nil {
+			// 极端兜底：连通用包都缺失（部署异常）——置 nil，下方跳过 SetIndustry
+			industryPkg = nil
+			s.Store.LogAudit(0, 0, "register_industry_missing", "kb_packages",
+				"通用行业包缺失，注册未载入行业(租户编码:"+req.Code+")")
 		}
 		// 权限：试用每日上限 2 万字符 + 2 万 token（D4 token 口径优先）；审核模式下不预发
 		perms := &tenant.Perms{MaxDailyChars: 20000, MaxDailyTokens: 20000}
@@ -234,8 +240,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		// 初始化租户：默认 KB 包（组织包/部门包/语言文化包）+ 余额账户
 		_ = s.Store.EnsureDefaultPackages(inviteTenantID)
-		// 行业包单轨制：仅记录注册所选行业编码，内容从共享宿主（租户1）按行业载入，不再建空壳包
-		_ = s.Ten.SetIndustry(inviteTenantID, industryPkg.Code)
+		// 行业包单轨制：仅记录注册所选行业编码（含通用兜底），内容从共享宿主（租户1）
+		// 按行业载入，不再建空壳包；industryPkg=nil（异常部署）时跳过
+		if industryPkg != nil {
+			_ = s.Ten.SetIndustry(inviteTenantID, industryPkg.Code)
+		}
 		_ = s.Store.EnsureBalance(inviteTenantID)
 		if trialTokens > 0 && !reviewMode {
 			if gerr := s.Store.CreateQuotaGrant(inviteTenantID, "trial", trialTokens, time.Now().Add(time.Duration(trialDays)*24*time.Hour), "register", 0); gerr != nil {

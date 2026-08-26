@@ -8,6 +8,9 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -123,4 +126,49 @@ func (s *Store) StepEnabled(key string) bool {
 		}
 	}
 	return true // 未知步骤默认启用
+}
+
+// ============ 租户 QPS/并发配额持久化（2026-08-26 全仓评审 C2） ============
+
+// TenantQuotaCfg 租户限流配额（QPS / 并发上限）。
+// 此前仅写进程内存（重启即回默认 10/3），现落 system_config 持久化。
+type TenantQuotaCfg struct {
+	QPS        int `json:"qps"`        // 每秒请求数上限
+	Concurrent int `json:"concurrent"` // 并发请求数上限
+}
+
+// tenantQuotaKey 生成租户配额的配置键。
+func tenantQuotaKey(tid int64) string { return fmt.Sprintf("tenant_quota_%d", tid) }
+
+// SaveTenantQuotaCfg 持久化租户限流配额（upsert）。
+func (s *Store) SaveTenantQuotaCfg(tid int64, qps, concurrent int) error {
+	b, _ := json.Marshal(TenantQuotaCfg{QPS: qps, Concurrent: concurrent})
+	return s.SetConfig(tenantQuotaKey(tid), string(b))
+}
+
+// LoadTenantQuotaConfigs 加载全部租户限流配额（服务启动时回放用）。
+// 返回：map[租户ID]=配额；解析失败的行跳过。
+func (s *Store) LoadTenantQuotaConfigs() map[int64]TenantQuotaCfg {
+	out := map[int64]TenantQuotaCfg{}
+	rows, err := s.db.Query("SELECT key, value FROM system_config WHERE key LIKE 'tenant_quota_%'")
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			continue
+		}
+		tidStr := strings.TrimPrefix(k, "tenant_quota_")
+		tid, perr := strconv.ParseInt(tidStr, 10, 64)
+		if perr != nil || tid <= 0 {
+			continue
+		}
+		var cfg TenantQuotaCfg
+		if json.Unmarshal([]byte(v), &cfg) == nil && cfg.QPS > 0 {
+			out[tid] = cfg
+		}
+	}
+	return out
 }

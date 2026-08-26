@@ -90,6 +90,10 @@ import { ref, onMounted } from 'vue'
 import { login, authRegister, forgotPassword, resetPassword, setAuthToken, setActiveTenantId, registerIndustries, sendEmailCode, registerConfig } from '@/api'
 // 国际化：文案取词 + 语言切换
 import { t, tpl, lang, toggleLang } from '@/i18n'
+// ★ roleLevel 统一单一来源（2026-08-26 全仓评审 D3）：改用 admin/store 的四级实现——
+//   本组件原有的三级本地版把 dept_admin 落到 1，导致部门管理员在后台登录页被误拒
+//  （「该账号无管理权限」），而刷新恢复会话（走 store 版）却放行，同一账号两种命运。
+import { roleLevel } from './admin/store'
 
 // 组件入参：登录模式（home 前台 / admin 后台）
 const props = defineProps<{ mode: 'home' | 'admin' }>()
@@ -308,12 +312,7 @@ async function doRegister() {
   await doLogin()
 }
 
-// 角色等级：普通用户(1) < 租户管理员(2) < 超级管理员(3)，兼容旧值 approver/admin
-function roleLevel(r?: string): number {
-  if (r === 'super_admin' || r === 'admin') return 3
-  if (r === 'tenant_admin' || r === 'approver') return 2
-  return 1
-}
+// （roleLevel 已删除本地三级实现：统一引用 ./admin/store 的四级版本，见文件头 D3 注释）
 
 // doLogin 执行登录：校验输入 → 调用登录接口 → 校验角色权限 → 写入 token 并通知父组件。
 // 后台模式（admin）要求角色不低于租户管理员；无返回，通过 emit('ok') 通知父组件登录成功。

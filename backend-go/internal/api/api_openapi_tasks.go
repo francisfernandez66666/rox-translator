@@ -144,17 +144,20 @@ var openAPITaskExtWhitelist = map[string]bool{
 
 // gateErrorCode 把底层配额/计费错误归一为对外 error_code（key_quota_exceeded / insufficient_balance 等），
 // 供开放 API 响应体使用；未命中已知关键词时返回空串（调用方按通用失败处理）。
+//
+// ★ UAT 缺陷修复（2026-08-26）：强制计费闸门文案「组织 token 已耗尽…充值」此前
+//   未命中任何关键词 → 返回泛化 rejected，违反 OpenAPI 契约
+//  （余额类拒绝必须统一 insufficient_balance）。现补「耗尽/充值」映射。
 func gateErrorCode(err error) string {
 	msg := err.Error()
 	switch {
-	case strings.Contains(msg, "余额"):
+	case strings.Contains(msg, "余额"), strings.Contains(msg, "额度"),
+		strings.Contains(msg, "耗尽"), strings.Contains(msg, "充值"):
 		return "insufficient_balance"
 	case strings.Contains(msg, "频繁"), strings.Contains(msg, "并发"):
 		return "rate_limited"
 	case strings.Contains(msg, "上限"):
 		return "daily_quota_exceeded"
-	case strings.Contains(msg, "额度"):
-		return "insufficient_balance"
 	default:
 		return "rejected"
 	}
@@ -177,9 +180,12 @@ func (s *Server) openAPITaskCreateText(w http.ResponseWriter, r *http.Request, t
 	if len(req.TargetLangs) == 0 {
 		req.TargetLangs = []string{"en"}
 	}
-	// 余额预检：强制计费时零余额直接拒绝（worker 内还有二次快速失败兜底）
+	// 余额预检（★ 双桶口径，2026-08-26 全仓评审 B1）：强制计费时「未过期台账+永久余额」
+	// 合计为零才拒绝——此前误用单桶 GetBalance，仅有体验台账的新租户会被这道
+	// 重复预检误拒（gateUsage 已放行），与 DeductWithGrants 实扣口径分裂。
+	// worker 内还有二次快速失败兜底
 	if s.Bill.Enabled() {
-		if b, err := s.Store.GetBalance(tid); err == nil && b.Balance <= 0 {
+		if grants, permanent, err := s.Store.TenantRemainTotal(tid); err == nil && grants+permanent <= 0 {
 			writeTaskError(w, "insufficient_balance", "余额不足，请充值或升级套餐")
 			return
 		}
@@ -251,9 +257,9 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 	mode := normalizeTaskMode(r.FormValue("mode"))
 	title := r.FormValue("title")
 
-	// 余额预检（同文本任务）
+	// 余额预检（★ 双桶口径，同文本任务；2026-08-26 全仓评审 B1）
 	if s.Bill.Enabled() {
-		if b, err := s.Store.GetBalance(tid); err == nil && b.Balance <= 0 {
+		if grants, permanent, err := s.Store.TenantRemainTotal(tid); err == nil && grants+permanent <= 0 {
 			writeTaskError(w, "insufficient_balance", "余额不足，请充值或升级套餐")
 			return
 		}

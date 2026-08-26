@@ -240,19 +240,26 @@ func (s *Store) CountInviterRewardsToday(inviterUID int64) int64 {
 
 // ReferralRecord 一条邀请奖励记录（ListReferrals 行结构）。
 type ReferralRecord struct {
-	InviteeUID  int64  `json:"invitee_uid"`  // 被邀人用户 ID
-	InviteeName string `json:"invitee_name"` // 被邀人显示名（无则 #）
-	Type        string `json:"type"`         // 奖励类型：trial_stack=体验叠加 / paid_perm=付费永久奖励
-	Tokens      int64  `json:"tokens"`       // 奖励 token 数
-	Days        int64  `json:"days"`         // 叠加天数（仅体验类有值）
-	Paid        bool   `json:"paid"`         // 被邀人是否已产生付费奖励（状态推导用）
-	CreatedAt   string `json:"created_at"`   // 发放时间
+	InviteeUID   int64  `json:"invitee_uid"`   // 被邀人用户 ID
+	InviteeName  string `json:"invitee_name"`  // 被邀人显示名（无则 #）
+	InviteeEmail string `json:"invitee_email"` // 被邀人注册邮箱快照（2026-08-26 前台记录需求）
+	Type         string `json:"type"`          // 奖励类型：trial_stack=体验叠加 / paid_perm=付费永久奖励
+	Tokens       int64  `json:"tokens"`        // 奖励 token 数
+	Days         int64  `json:"days"`          // 叠加天数（仅体验类有值）
+	Paid         bool   `json:"paid"`          // 该被邀人是否已完成首笔付费套餐（paid_perm 行存在即 true）
+	CreatedAt    string `json:"created_at"`    // 发放时间
 }
 
 // ListReferrals 我的邀请记录（最新在前，最多 100 条）。
+//
+// ★ 2026-08-26 前台记录需求增强：补 invitee_email 快照与 paid 标记——
+//   每行即一条「邀请成功」记录（行存在=绑定+注册完成）；
+//   paid 列由同被邀人是否存在 paid_perm 行推导（首笔付费是否成功）。
 // 参数：inviterUID=邀请人用户 ID；返回：奖励记录列表（查询失败返回 nil，前端按空态处理）。
 func (s *Store) ListReferrals(inviterUID int64) []*ReferralRecord {
-	rows, err := s.db.Query(`SELECT r.invitee_uid, COALESCE(u.display_name,u.username,'#'), r.type, r.tokens, r.days, r.created_at
+	rows, err := s.db.Query(`SELECT r.invitee_uid, COALESCE(u.display_name,u.username,'#'),
+		COALESCE(r.invitee_email,''), r.type, r.tokens, r.days, r.created_at,
+		EXISTS(SELECT 1 FROM referral_rewards p WHERE p.invitee_uid=r.invitee_uid AND p.type='paid_perm')
 		FROM referral_rewards r LEFT JOIN users u ON u.id=r.invitee_uid
 		WHERE r.inviter_uid=? ORDER BY r.id DESC LIMIT 100`, inviterUID)
 	if err != nil {
@@ -262,7 +269,7 @@ func (s *Store) ListReferrals(inviterUID int64) []*ReferralRecord {
 	out := []*ReferralRecord{}
 	for rows.Next() {
 		var it ReferralRecord
-		if rows.Scan(&it.InviteeUID, &it.InviteeName, &it.Type, &it.Tokens, &it.Days, &it.CreatedAt) == nil {
+		if rows.Scan(&it.InviteeUID, &it.InviteeName, &it.InviteeEmail, &it.Type, &it.Tokens, &it.Days, &it.CreatedAt, &it.Paid) == nil {
 			out = append(out, &it)
 		}
 	}

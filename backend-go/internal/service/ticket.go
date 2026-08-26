@@ -156,25 +156,46 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 			return fmt.Errorf("%s: 余额不足，请充值或升级套餐", errInsufficientCode)
 		}
 	}
+	// ★ 认领防覆盖（UAT 修复②）：仅当仍为 queued 才翻 in_progress——
+	//   用户在认领窗口内已取消时尊重取消态，静默退出（job 由 MarkDone 收尾），
+	//   消除「cancel 先写 cancelled、认领后写 in_progress 覆盖之」的时序竞态。
+	if cur, ge := s.Store.GetTicketGlobal(t.ID); ge == nil && cur != nil && cur.Status == store.TicketCancelled {
+		return nil
+	}
 	t.Status = store.TicketInProgress
 	_ = s.Store.UpdateTicket(t)
 
 	// ★ 心跳保活（评审整改 R3）：长翻译阶段内业务状态不变化，60s 触碰一次 updated_at，
 	//   防止卡死巡检把仍在运行的工单误判重排（重复执行/双扣费的根源）。
+	// ★ 取消传播（2026-08-26 UAT 缺陷修复②）：此前用户取消仅改库内状态，
+	//   执行中的 goroutine 无感知——继续消耗 LLM token 直到自然结束；
+	//   且与「认领方回写 in_progress」存在覆盖竞态。现以 3s 轮询监视取消态，
+	//   命中即取消执行 ctx，LLM 调用链随 ctx 立即中断。
 	hbStop := make(chan struct{})
 	defer close(hbStop)
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
 	go func() {
 		tk := time.NewTicker(60 * time.Second)
+		wt := time.NewTicker(3 * time.Second)
 		defer tk.Stop()
+		defer wt.Stop()
 		for {
 			select {
 			case <-tk.C:
 				_ = s.Store.TouchTicket(t.ID)
+			case <-wt.C:
+				if cur, gerr := s.Store.GetTicketGlobal(t.ID); gerr == nil && cur != nil &&
+					(cur.Status == "cancelled") {
+					runCancel()
+					return
+				}
 			case <-hbStop:
 				return
 			}
 		}
 	}()
+	ctx = runCtx
 
 	// ★ 注入用量收集器：本工单全链路（初翻/校对/Judge/文化闸门/embedding）
 	// 的真实 token 用量自动归集，完成后按实费计费。
@@ -188,6 +209,13 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	}
 
 	if runErr != nil {
+		// ★ 取消语义（UAT 修复②配套）：ctx 被取消监视器触发时，状态已是 cancelled——
+		//   保持之，不再覆盖为 rejected、不投失败通知。
+		if ctx.Err() != nil {
+			if cur, ge := s.Store.GetTicketGlobal(t.ID); ge == nil && cur != nil && cur.Status == "cancelled" {
+				return nil
+			}
+		}
 		t.Status = store.TicketRejected
 		t.RejectReason = runErr.Error()
 		_ = s.Store.UpdateTicket(t)

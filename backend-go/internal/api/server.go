@@ -67,6 +67,12 @@ func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist s
 	// 平台存储就绪时初始化计费服务（限流/配额/余额）
 	if st != nil {
 		s.Bill = billing.NewService(st)
+		// ★ 租户限流配额回放（2026-08-26 全仓评审 C2）：QPS/并发此前仅存进程内存，
+		//   重启即回默认 10/3——启动时从 system_config(tenant_quota_<tid>) 恢复
+		for tid, qc := range st.LoadTenantQuotaConfigs() {
+			billing.SetQPS(tid, qc.QPS)
+			billing.SetConcurrent(tid, qc.Concurrent)
+		}
 		// ★ Token 计费一次性迁移（幂等）：存量句数余额按换算率折算充入 token 账户，
 		// 完成后置 billing_token_migrated=1，系统自动进入实费计费模式
 		billing.RunTokenMigration(st)

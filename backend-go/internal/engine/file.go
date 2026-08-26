@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -263,6 +264,13 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	wg.Wait()
 	// ★ 复核补漏（文件工单复核第1层）：扫描各语言未命中段落，重试一次批量模型。
 	// 治「有的中文还没翻译就贴上来」：首翻失败的段不再静默缺失。
+	// ★ 硬闸重试（方案语义）：对缺失段「重启 LLM 翻译」——每段独立全新调用
+	//        初翻模型（绕过 KB/缓存）；仍回显则保留原文并计入告警。
+	// ★ 不设轮数上限：直到全部译出或任务超时/取消为止（硬闸语义）。
+	// ★ 成本预算护栏（2026-08-26 全仓评审 B5，不改变上述语义本体）：
+	//   ① 墙钟预算 FILE_HARDGATE_MAX_SEC（默认 600s）：超时即停，防「模型持续失败 ×
+	//      无限轮次」把实费计费烧成账单雪球；
+	//   ② 零进展熔断：连续 2 轮缺失数不减 → 判定模型稳定回显/失败，退出循环。
 	for _, lc := range finalLangs {
 		missing := []string{}
 		for _, t := range texts {
@@ -273,11 +281,16 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		if len(missing) == 0 {
 			continue
 		}
-		// ★ 硬闸重试（方案语义）：对缺失段「重启 LLM 翻译」——每段独立全新调用
-        //    初翻模型（绕过 KB/缓存），最多 2 轮；仍回显则保留原文并计入告警。
-		// ★ 不设轮数上限：直到全部译出或任务超时/取消为止（硬闸语义）
+		budget := hardGateBudget()
+		loopStart := time.Now()
+		prevMissing := -1
+		zeroProgressRounds := 0
 		for attempt := 1; ; attempt++ {
 			if ctx.Err() != nil {
+				break
+			}
+			if elapsed := time.Since(loopStart); elapsed > budget {
+				log.Printf("[tm-hardgate] lang=%s 预算耗尽（%s），剩余未译段保留原文", lc, elapsed.Round(time.Second))
 				break
 			}
 			still := []string{}
@@ -289,6 +302,16 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			if len(still) == 0 {
 				break
 			}
+			if prevMissing >= 0 && len(still) >= prevMissing {
+				zeroProgressRounds++
+				if zeroProgressRounds >= 2 {
+					log.Printf("[tm-hardgate] lang=%s 连续 %d 轮零进展（缺失 %d 段），停止重试", lc, zeroProgressRounds, len(still))
+					break
+				}
+			} else {
+				zeroProgressRounds = 0
+			}
+			prevMissing = len(still)
 			log.Printf("[tm-hardgate] lang=%s round=%d 重启LLM重译 %d 段", lc, attempt, len(still))
 			time.Sleep(500 * time.Millisecond) // 轮间间隔，防高频打爆供应商
 			for _, m := range still {
@@ -470,6 +493,18 @@ func (e *Engine) reviewBatchSafe(ctx context.Context, sources, translations []st
 		}
 	}
 	return out
+}
+
+// hardGateBudget 硬闸补漏循环的墙钟预算（FILE_HARDGATE_MAX_SEC，默认 600s）。
+// 用途：限制「无限轮次重试 × 实费计费」的成本上限（评审 B5）；产品语义（尽力译出全部
+// 段落）在预算内不变，超预算后剩余段保留原文。
+func hardGateBudget() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("FILE_HARDGATE_MAX_SEC")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 10 * time.Minute
 }
 
 // writeMultiSheetXlsx xlsx 多 Sheet 模式：复制原始文件后，每个目标语言新增一个 Sheet，

@@ -97,7 +97,7 @@ class TranslatorClient:
         :param text: 源文本（必填）
         :param target_langs: 目标语言代码列表，缺省 ["en"]
         :param mode: "pro" 专业校对（默认）/ "fast" 快速（无知识库）
-        :return: {task_id, ticket_no, status:"queued", poll_interval_sec, balance_tokens, ...}
+        :return: {task_id, mode, type:"text", status:"queued"}（202 响应）
         """
         body = {"text": text, "mode": mode}
         if target_langs:
@@ -105,7 +105,10 @@ class TranslatorClient:
         if title:
             body["title"] = title
         r = self._post_json("/openapi/v1/tasks", body)
-        if not r.get("success"):
+        # ★ 契约对齐（2026-08-26 全仓评审 D1）：后端成功响应为 202 且不含 success 字段，
+        #   出参为 {task_id, mode, type, status:"queued"}——以 task_id 存在为准；
+        #   业务错误（余额不足等）为 HTTP 200 + {success:false, error_code, message}。
+        if "task_id" not in r:
             raise TranslatorError(r.get("message", "创建任务失败"),
                                   error_code=r.get("error_code"), body=r)
         return r
@@ -141,7 +144,8 @@ class TranslatorClient:
         body = b"\r\n".join(lines)
         r = self._request("POST", "/openapi/v1/tasks", body,
                           f"multipart/form-data; boundary={boundary}")
-        if not r.get("success"):
+        # ★ 契约对齐（D1）：同 create_task——成功响应无 success 字段，以 task_id 为准
+        if "task_id" not in r:
             raise TranslatorError(r.get("message", "创建任务失败"),
                                   error_code=r.get("error_code"), body=r)
         return r
@@ -149,9 +153,11 @@ class TranslatorClient:
     # ---------- 任务轮询 / 结果 / 下载 ----------
     def get_task(self, task_id: int) -> dict:
         """查询任务状态。status ∈ queued / processing / completed / failed；
-        失败时响应携带 error_code（如 insufficient_balance）。"""
+        失败时响应携带 error_code（如 insufficient_balance）与 message。"""
         r = self._get(f"/openapi/v1/tasks/status?id={task_id}")
-        if not r.get("success"):
+        # ★ 契约对齐（D1）：轮询成功响应无 success 字段，以 status 存在为准
+        #  （404/401 等已在 _request 层以 HTTPError 抛出）
+        if "status" not in r:
             raise TranslatorError(r.get("message", "查询失败"),
                                   error_code=r.get("error_code"), body=r)
         return r
@@ -160,7 +166,8 @@ class TranslatorClient:
                   timeout: int = 1800) -> dict:
         """阻塞轮询直至终态（completed / failed）。
 
-        :param interval: 轮询间隔秒数；缺省按服务端建议（文本 15s / 文件 60s）
+        :param interval: 轮询间隔秒数；缺省按任务类型取值（文本 15s / 文件 60s，
+          与后端建议口径一致；后端暂不在响应中下发 poll_interval_sec）
         :param timeout: 总超时秒数（默认 30 分钟），超时抛 TranslatorError
         """
         deadline = time.time() + timeout
@@ -171,20 +178,21 @@ class TranslatorClient:
             if st == "completed":
                 return r
             if st == "failed":
-                raise TranslatorError(r.get("error") or "任务失败",
+                # ★ 契约对齐（D1）：失败出参字段为 message/error_code（无 error 字段）
+                raise TranslatorError(r.get("message") or "任务失败",
                                       error_code=r.get("error_code"), body=r)
             if time.time() > deadline:
                 raise TranslatorError(f"轮询超时（{timeout}s），任务仍在处理")
-            gap = gap or r.get("poll_interval_sec") or 15
+            if not gap:
+                # 首轮按任务类型定默认间隔（文件任务产物大，60s 更合理）
+                gap = 60 if r.get("type") == "files" else 15
             time.sleep(gap)
 
     def translate_and_wait(self, text: str, target_langs=None,
                            mode: str = "pro", timeout: int = 1800) -> dict:
         """一站式文本翻译：提交任务并阻塞等待完成，返回含 translations 的响应。"""
         created = self.create_task(text, target_langs, mode)
-        return self.wait_task(created["task_id"],
-                              interval=created.get("poll_interval_sec"),
-                              timeout=timeout)
+        return self.wait_task(created["task_id"], timeout=timeout)
 
     def download_file(self, task_id: int, save_path: str, file_id: int = None):
         """下载文件任务的翻译产物（file_id 缺省时多文件打包 zip）。
