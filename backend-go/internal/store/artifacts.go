@@ -22,74 +22,16 @@ type Artifact struct {
 
 // ArtifactsMigrate 建表与唯一索引（幂等，Store.New 迁移链调用）。
 func (s *Store) ArtifactsMigrate() {
-	var tableExists int
-	if err := s.db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='output_artifacts'`).Scan(&tableExists); err != nil {
-		tableExists = 0
-	}
-	needRebuild := false
-	if tableExists == 1 {
-		rows, err := s.db.Query(`PRAGMA index_list('output_artifacts')`)
-		if err == nil {
-			for rows.Next() {
-				var seq, unique, partial int
-				var name, origin string
-				if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
-					continue
-				}
-				if unique != 1 {
-					continue
-				}
-				irows, err := s.db.Query(`PRAGMA index_info(?)`, name)
-				if err != nil {
-					continue
-				}
-				cols := []string{}
-				for irows.Next() {
-					var seqno, cid int
-					var colName string
-					if err := irows.Scan(&seqno, &cid, &colName); err == nil {
-						cols = append(cols, colName)
-					}
-				}
-				irows.Close()
-				if len(cols) == 1 && cols[0] == "path" {
-					needRebuild = true
-					break
-				}
-			}
-			rows.Close()
-		}
-	}
-	if needRebuild {
-		tx, err := s.db.Begin()
-		if err != nil {
-			return
-		}
-		tx.Exec(`CREATE TABLE output_artifacts_new (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			path TEXT NOT NULL,
-			tenant_id INTEGER NOT NULL DEFAULT 0,
-			user_id INTEGER NOT NULL DEFAULT 0,
-			ticket_id INTEGER NOT NULL DEFAULT 0,
-			created_at TEXT,
-			UNIQUE(tenant_id, path))`)
-		tx.Exec(`INSERT INTO output_artifacts_new SELECT * FROM output_artifacts`)
-		tx.Exec(`DROP TABLE output_artifacts`)
-		tx.Exec(`ALTER TABLE output_artifacts_new RENAME TO output_artifacts`)
-		tx.Commit()
-		return
-	}
 	s.db.Exec(`CREATE TABLE IF NOT EXISTS output_artifacts (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		path TEXT NOT NULL,
+		path TEXT NOT NULL UNIQUE,
 		tenant_id INTEGER NOT NULL DEFAULT 0,
 		user_id INTEGER NOT NULL DEFAULT 0,
 		ticket_id INTEGER NOT NULL DEFAULT 0,
-		created_at TEXT,
-		UNIQUE(tenant_id, path))`)
+		created_at TEXT)`)
 }
 
-// RegisterArtifact 写入点登记（幂等：同租户内同 path 重复登记忽略）。
+// RegisterArtifact 写入点登记（幂等：同 path 重复登记忽略）。
 // 参数：path=产物/上传件绝对路径；tid=归属租户；uid=归属用户；ticketID=关联工单（可 0）。
 func (s *Store) RegisterArtifact(path string, tid, uid, ticketID int64) {
 	if path == "" {

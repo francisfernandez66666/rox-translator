@@ -128,8 +128,7 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code 不能为空"})
 		return
 	}
-	tid := s.effTenant(r, u)
-	pkg, err := s.Store.GetPackageByCode(tid, req.Code)
+	pkg, err := s.Store.GetPackageByCode(req.Code)
 	if err != nil || pkg.Enabled != 1 {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "套餐不存在或已下架"})
 		return
@@ -145,6 +144,7 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// 付费包/增量包：创建订单（含 package_id 与售价），按支付模式走不同渠道
+	tid := s.effTenant(r, u)
 	// 支付模式：sdk / static_qr / mock（默认 mock）
 	payMode := "mock"
 	if v, _ := s.Store.GetConfig("pay_mode"); v != "" {

@@ -1600,29 +1600,24 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("向量索引未初始化")
 	}
 	// ★ Embed 成本计量（评审整改 E3）：全量重建的 embedding 用量进入 usage_ledger——
-	//   按知识库包类型分摊到各租户；行业/语言文化等全局包免费，租户/部门包按字符比例计费。
+	//   发起者带租户上下文且强制计费时实扣，平台上下文（tid<=0）只留痕不扣费。
 	ctx = e.WithUsageRecorder(ctx)
-
-	// 预加载所有知识库包类型，用于判断当前行是否属于全局包。
-	packType := map[int64]string{}
-	if e.St != nil {
-		rows, err := e.St.DB().Query("SELECT id, pack_type FROM kb_packages")
-		if err == nil {
-			for rows.Next() {
-				var id int64
-				var pt string
-				if err := rows.Scan(&id, &pt); err == nil {
-					packType[id] = pt
-				}
-			}
-			rows.Close()
+	defer func() {
+		if e.St == nil {
+			return
 		}
-	}
-	isGlobalPack := func(pid int64) bool {
-		pt := packType[pid]
-		return pt == store.PackIndustry || pt == store.PackLocale
-	}
-
+		prompt, completion := e.UsageTokens(ctx)
+		if total := prompt + completion; total > 0 {
+			tid := tenant.FromContext(ctx)
+			provider, model := "bigmodel", "embedding-rebuild"
+			enforced, _ := e.St.GetConfig("billing_enforced")
+			if tid > 0 && enforced == "1" {
+				_, _ = e.St.RecordUsage(tid, 0, "evals", provider, model, total, "", "")
+			} else {
+				_ = e.St.LogUsage(tid, 0, "evals", provider, model, total, "", "")
+			}
+		}
+	}()
 	if !e.rebuilding.CompareAndSwap(false, true) {
 		return 0, fmt.Errorf("重建正在进行中")
 	}
@@ -1643,7 +1638,6 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 		IDLangs: idLangs, IDTenants: map[int64]int64{}, IDPacks: map[int64]int64{}}
 	const batch = 32
 	done := 0
-	usageByTenant := map[int64]int64{} // 各租户累计 embedding token
 	for i := 0; i < len(rows); i += batch {
 		end := i + batch
 		if end > len(rows) {
@@ -1653,39 +1647,10 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 		for _, r := range rows[i:end] {
 			texts = append(texts, r.Zh)
 		}
-		// 按调用前后用量差计算本批次实际消耗的 token。
-		beforePrompt, beforeComp := e.UsageTokens(ctx)
 		vecs, err := e.LLM.EmbedBatch(ctx, texts)
 		if err != nil {
 			return done, fmt.Errorf("第 %d-%d 批嵌入失败: %w", i, end, err)
 		}
-		afterPrompt, afterComp := e.UsageTokens(ctx)
-		deltaTotal := (afterPrompt + afterComp) - (beforePrompt + beforeComp)
-
-		// 按租户累计字符数；全局包或平台行免费，不计入分摊。
-		charsByTenant := map[int64]int64{}
-		var totalChars int64
-		for _, r := range rows[i:end] {
-			if isGlobalPack(r.PackID) || r.TenantID <= 0 {
-				continue
-			}
-			chars := int64(len(strings.TrimSpace(r.Zh)))
-			if chars <= 0 {
-				continue
-			}
-			charsByTenant[r.TenantID] += chars
-			totalChars += chars
-		}
-		// 将本批次 token 按字符比例分摊给各租户。
-		if deltaTotal > 0 && totalChars > 0 {
-			for tid, chars := range charsByTenant {
-				share := deltaTotal * chars / totalChars
-				if share > 0 {
-					usageByTenant[tid] += share
-				}
-			}
-		}
-
 		for j, r := range rows[i:end] {
 			if j >= len(vecs) || len(vecs[j]) == 0 {
 				continue
@@ -1707,23 +1672,6 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 	e.indexMu.Lock()
 	e.Index = newIdx
 	e.indexMu.Unlock()
-
-	// 统一计费：强制计费时扣余额，否则仅留痕。
-	if e.St != nil {
-		enforced, _ := e.St.GetConfig("billing_enforced")
-		provider, model := "bigmodel", "embedding-rebuild"
-		for tid, tokens := range usageByTenant {
-			if tokens <= 0 || tid <= 0 {
-				continue
-			}
-			if enforced == "1" {
-				_, _ = e.St.RecordUsage(tid, 0, "kb_embed", provider, model, tokens, "kb", "index")
-			} else {
-				_ = e.St.LogUsage(tid, 0, "kb_embed", provider, model, tokens, "kb", "index")
-			}
-		}
-	}
-
 	return done, nil
 }
 
