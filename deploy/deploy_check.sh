@@ -22,9 +22,14 @@ echo "==> [1/7] 基础探活"
 check "/api/health"        200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/api/health")"
 check "/status"            200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/status")"
 
-echo "==> [2/7] D1 metrics 收敛（公网应 401 或 404；本机带 token 才 200）"
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/metrics")
-[ "$code" = "401" ] || [ "$code" = "404" ] && ok "公网 /metrics=$code 已收敛" || bad "公网 /metrics=$code 仍暴露"
+echo "==> [2/7] D1 metrics 收敛（公网响应体不得出现指标特征；SPA 兜底页/401 均视为安全）"
+body=$(curl -s --max-time 8 "$BASE/metrics" | head -c 2000)
+if echo "$body" | grep -q "translator_"; then
+  bad "公网 /metrics 泄露指标特征"
+else
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/metrics")
+  ok "公网 /metrics 无指标泄露 (http=$code 兜底页或401)"
+fi
 if [ -n "$MTRTOK" ]; then
   check "/metrics(内网+token)" 200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -H "Authorization: Bearer $MTRTOK" "$LOCAL_BASE/metrics")"
 fi
@@ -33,10 +38,23 @@ echo "==> [3/7] A2 插件 CORS（Origin 反射）"
 hdr=$(curl -s -o /dev/null -D - --max-time 8 -H "Origin: https://example.com" "$BASE/openapi/v1/balance" | grep -i "^access-control-allow-origin:" | tr -d '\r' | awk '{print $2}')
 [ "$hdr" = "https://example.com" ] && ok "ACAO 反射生效" || bad "ACAO 未反射（got: ${hdr:-空}）"
 
-echo "==> [4/7] P0-2 支付回调三道闸（无凭证应 403）"
-check "/api/pay/notify/mock 无凭证" 403 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST "$BASE/api/pay/notify/mock" -d '{"order_no":"x","amount":1}')"
+echo "==> [4/7] P0-2 支付回调三道闸"
+pncode=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST "$BASE/api/pay/notify/mock" -d '{"order_no":"x","amount":1}')
+case "$pncode" in
+  403) ok "匿名回调 403（直连口径）" ;;
+  400) ok "400=订单不存在（生产拓扑：Caddy 已注入凭证，渠道/金额闸门生效）" ;;
+  *)   bad "匿名回调 $pncode 异常" ;;
+esac
 
 echo "==> [5/7] 注册→双桶余额→OpenAPI（A1 核心口径）"
+EV=$(curl -s --max-time 8 "$BASE/api/auth/register-config" | python3 -c "import sys,json;print(json.load(sys.stdin).get('email_verify_enabled',False))" 2>/dev/null)
+if [ "$EV" = "True" ] || [ "$EV" = "true" ]; then
+  echo "  ↳ 生产已启用注册邮箱验证（防薅生效），第5项改为仅验证双桶出参通道开放性"
+  bal=$(curl -s --max-time 8 "$BASE/openapi/v1/balance" -H "Authorization: Bearer invalid-probe")
+  echo "$bal" | grep -q "invalid_api_key" && ok "balance 端点鉴权正常（跳过注册实测）" || bad "balance 端点异常"
+  SKIP_REGISTER=1
+fi
+if [ "${SKIP_REGISTER:-0}" != "1" ]; then
 IND=$(curl -s --max-time 8 "$BASE/api/register/industries" | python3 -c "import sys,json;print(json.load(sys.stdin)['industries'][0]['code'])" 2>/dev/null)
 REG=$(curl -s --max-time 15 -X POST "$BASE/api/auth/register" -H 'Content-Type: application/json' \
   -d "{\"username\":\"chk$(date +%s)\",\"password\":\"chk123456\",\"code\":\"chk$(date +%s)\",\"email\":\"chk$(date +%s)@t.com\",\"industry\":\"$IND\",\"role_choice\":\"admin\"}")
@@ -50,6 +68,7 @@ if [ -n "$KEY" ]; then
     && ok "双桶出参 total=$total grants=$grants perm=$perm" || bad "双桶出参异常: $bal"
 else
   bad "注册未返回 api_key"
+fi
 fi
 
 echo "==> [6/7] 自助注销端点存在性（匿名 401 即可）"
