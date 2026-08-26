@@ -5,6 +5,7 @@
 //   - POST /api/admin/tm-review/reject  {id}   驳回
 //   - POST /api/admin/tm-review/adopt   {feedback_id, zh, lang, trans}
 //     反馈修正采纳：建候选即通过（超管点击通过即人工审核），关联反馈可溯源
+//
 // =============================================
 package api
 
@@ -71,6 +72,7 @@ func (s *Server) handleTmReviewApprove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	s.invKB() // ★ KB 内容变更：失效引擎 CJK 精确缓存（新术语立即可命中）
 	_ = s.Store.SetTmReviewStatus(cr.ID, "approved", u.DisplayName)
 	s.Store.LogAudit(cr.TenantID, u.ID, "tm_review_approve", "tm_review", cr.Zh)
 	writeJSON(w, 200, map[string]interface{}{"success": true})
@@ -123,6 +125,7 @@ func (s *Server) handleTmReviewAdopt(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	s.invKB() // ★ KB 内容变更：失效引擎 CJK 精确缓存（新术语立即可命中）
 	_ = s.Store.SetTmReviewStatus(cr.ID, "approved", u.DisplayName)
 	s.Store.LogAudit(cr.TenantID, u.ID, "tm_review_adopt", "tm_review", cr.Zh)
 	writeJSON(w, 200, map[string]interface{}{"success": true})

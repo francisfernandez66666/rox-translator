@@ -87,6 +87,14 @@
       <input v-model.number="pForm2.med_sim" type="number" step="0.01" class="ad-input" />
       <label class="ad-label">{{ t('models.evalsThreshold') }}</label>
       <input v-model.number="pForm2.evals_pass_threshold" type="number" class="ad-input" />
+      <!-- ★ KB 继承链（2026-08-26）：租户级「跨部门降级检索」开关——
+           开启后链内精确零命中可回退到其他「愿意共享」的部门包（结果打标来源）；
+           模糊/语义命中仅作例句参考，绝不直接采用 -->
+      <label class="ad-label">{{ t('models.crossDeptFallback') }}</label>
+      <select v-model="pForm2.cross_dept_fallback" class="ad-input ad-mini-w">
+        <option :value="true">{{ t('models.crossOn') }}</option>
+        <option :value="false">{{ t('models.crossOff') }}</option>
+      </select>
       <button class="ad-btn" @click="savePolicy">{{ t('models.savePolicy') }}</button>
     </div>
   </section>
@@ -104,8 +112,8 @@ import { t, tpl } from '@/i18n'
 
 // 主模型配置表单：API 基地址/密钥/模型名（对应全局主路由）
 const mForm = ref({ api_base: '', api_key: '', model: '' })
-// 翻译策略参数：高/中相似度阈值、评测通过分
-const pForm2 = ref({ high_sim: 0.9, med_sim: 0.75, evals_pass_threshold: 75 })
+// 翻译策略参数：高/中相似度阈值、评测通过分、跨部门降级检索开关（默认开）
+const pForm2 = ref<any>({ high_sim: 0.9, med_sim: 0.75, evals_pass_threshold: 75, cross_dept_fallback: true })
 // 多供应商备用路由表（权重降序构成主模型失败后的降级链）
 const routeForm = ref<any[]>([])
 // 常用 LLM 供应商预设（OpenAI 兼容格式，含 ChatGPT/Gemini）
@@ -182,14 +190,15 @@ async function saveRoutes() {
   alert(t('models.savedRoutes'))
   await loadModels()
 }
-// loadPolicy 加载匹配策略参数
+// loadPolicy 加载匹配策略参数（含跨部门开关布尔）
 async function loadPolicy() {
   const r = await adminPolicy()
   if (r.success) pForm2.value = (r as any).policy
 }
-// savePolicy 保存匹配策略参数
+// savePolicy 保存匹配策略参数（数值域走 policy 映射；开关单独字段传输）
 async function savePolicy() {
-  const r = await adminPolicySave(pForm2.value)
+  const cross = !!pForm2.value.cross_dept_fallback
+  const r = await adminPolicySave(pForm2.value, cross)
   if (!r.success) { alert(r.message); return }
   alert(t('models.savedPolicy'))
 }

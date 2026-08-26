@@ -32,6 +32,9 @@ export const zh: Record<string, string> = {
   'kb.typeTenant': '组织包（本企业）',
   'kb.enablePack': '启用',
   'kb.disablePack': '停用',
+  // ★ KB 继承链（2026-08-26）：部门包跨部门共享开关
+  'kb.shareOn': '跨部门共享·开',
+  'kb.shareOff': '跨部门共享·关',
   'kb.rebuildIndex': '🔄 重建向量索引',
   'kb.rebuilding': '重建中…',
   'kb.rebuildConfirm': '将全量重新嵌入知识库原文（调用 Embed API，耗时取决于条目数），确定继续？',
@@ -89,6 +92,9 @@ export const zh: Record<string, string> = {
 export const en: Record<string, string> = {
   'kb.enablePack': 'Enable',
   'kb.disablePack': 'Disable',
+  // KB inheritance chain (2026-08-26): department pack cross-dept share toggle
+  'kb.shareOn': 'Cross-dept: On',
+  'kb.shareOff': 'Cross-dept: Off',
   'kb.rebuildIndex': '🔄 Rebuild Vector Index',
   'kb.rebuilding': 'Rebuilding…',
   'kb.rebuildConfirm': 'Re-embed all KB sources (calls Embedding API). Continue?',

@@ -65,6 +65,14 @@ func (s *Server) kbTenant(r *http.Request, u *store.User) int64 {
 	return tid
 }
 
+// invKB 失效引擎 CJK 精确缓存的统一入口（KB 内容/结构变更后必须调用，
+// 否则同句翻译在缓存存活期内看不到新术语；Engine 未装配时静默跳过）。
+func (s *Server) invKB() {
+	if s.Engine != nil {
+		s.Engine.InvalidateKBCaches()
+	}
+}
+
 // handleKBPackages 列出知识库包（部门管理员仅见本部门及子部门部门包）
 func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
@@ -108,10 +116,11 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Code     string `json:"code"`      // 包编码（唯一标识，必填）
-		Name     string `json:"name"`      // 包名称（必填）
-		PackType string `json:"pack_type"` // 包类型（industry 行业包，默认）
-		Role     string `json:"role"`      // 包角色（source 源语言包，默认）
+		Code           string `json:"code"`             // 包编码（唯一标识，必填）
+		Name           string `json:"name"`             // 包名称（必填）
+		PackType       string `json:"pack_type"`        // 包类型（industry 行业包，默认）
+		Role           string `json:"role"`             // 包角色（source 源语言包，默认）
+		ShareCrossDept *int   `json:"share_cross_dept"` // ★ 可选：部门包跨部门共享初始态（1=共享默认 / 0=退出）；nil=不设置
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" || req.Name == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code/name 不能为空"})
@@ -144,6 +153,12 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// ★ 部门包创建时携带跨部门共享初始态（可选；仅 department 类型有意义）
+	if req.ShareCrossDept != nil && p.PackType == store.PackDepartment {
+		if serr := s.Store.SetKBPackageCrossDeptShare(p.ID, tid, *req.ShareCrossDept); serr == nil {
+			p.ShareCrossDept = *req.ShareCrossDept
+		}
+	}
 	s.Store.LogAudit(tid, u.ID, "kb_package_create", "kb_packages", req.Name)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "package": p})
 }
@@ -156,8 +171,9 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID   int64  `json:"id"`   // 目标包 ID
-		Name string `json:"name"` // 新包名称
+		ID             int64  `json:"id"`               // 目标包 ID
+		Name           string `json:"name"`             // 新包名称
+		ShareCrossDept *int   `json:"share_cross_dept"` // ★ 可选：同步调整跨部门共享开关（nil=不修改）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -180,6 +196,14 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.UpdateKBPackage(req.ID, tid, req.Name); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
+	}
+	// ★ 可选：同请求内调整跨部门共享开关（复用独立 setter，权限已在上方校验）
+	if req.ShareCrossDept != nil {
+		if serr := s.Store.SetKBPackageCrossDeptShare(req.ID, tid, *req.ShareCrossDept); serr != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": serr.Error()})
+			return
+		}
+		s.invKB() // 共享集合变化：一致性起见同刷缓存
 	}
 	s.Store.LogAudit(tid, u.ID, "kb_package_update", "kb_packages", "")
 	writeJSON(w, 200, map[string]interface{}{"success": true})
@@ -214,6 +238,7 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_package_delete", "kb_packages", "")
+	s.invKB() // ★ 删除包及条目：失效 CJK 缓存
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -264,6 +289,7 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_entry_add", "kb_entries", req.SourceText)
+	s.invKB() // ★ 条目写通 tm_segments：失效 CJK 缓存
 	s.rebuildIndexAsync()
 	writeJSON(w, 200, map[string]interface{}{"success": true, "id": id})
 }
@@ -287,6 +313,7 @@ func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_entry_delete", "kb_entries", "")
+	s.invKB() // ★ 摘除条目：失效 CJK 缓存
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -395,6 +422,48 @@ func (s *Server) handleKBPackageStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "kb_package_status", "kb_packages", fmt.Sprintf("pkg=%d enabled=%d", req.ID, req.Enabled))
+	s.invKB() // ★ 启停重写检索层：失效 CJK 缓存
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleKBPackageShare 部门包跨部门共享开关（包级 opt-out，2026-08-26 KB继承链改造）。
+// 语义：share=1（默认）该部门包可参与其他部门的「跨部门降级检索」；
+//
+//	share=0 本包仅限归属链内用户可见。校验口径与启停接口完全一致。
+func (s *Server) handleKBPackageShare(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireDeptAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		ID    int64 `json:"id"`
+		Share int   `json:"share"` // 1=共享给跨部门检索 0=仅限归属链
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || (req.Share != 0 && req.Share != 1) {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	tid := s.kbTenant(r, u)
+	pkg, gErr := s.Store.GetKBPackage(req.ID, tid)
+	if gErr != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		return
+	}
+	if !canManagePackType(u, pkg.PackType) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作该类型的知识库包"})
+		return
+	}
+	if err := s.deptKBScope(u, tid, pkg); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	if err := s.Store.SetKBPackageCrossDeptShare(req.ID, tid, req.Share); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(tid, u.ID, "kb_package_share", "kb_packages", fmt.Sprintf("pkg=%d share=%d", req.ID, req.Share))
+	s.invKB() // ★ 共享状态变更：一致性起见同刷缓存（幂等廉价）
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 

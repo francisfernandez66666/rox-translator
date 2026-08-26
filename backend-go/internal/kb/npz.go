@@ -36,8 +36,9 @@ type Index struct {
 
 // SearchResult 相似度搜索结果
 type SearchResult struct {
-	ID  int64   // 命中的行 ID
-	Sim float64 // 相似度分数（余弦相似度/点积，越高越相似）
+	ID      int64   // 命中的行 ID
+	Sim     float64 // 相似度分数（余弦相似度/点积，越高越相似）
+	InChain bool    // ★ 是否属于用户链内直接采用域（链内部门包/企业/历史行/共享层）；false=跨部门回退（仅例句参考）
 }
 
 // LoadNPZ 解析 numpy .npz 文件（zip 容器内是 .npy 格式）。
@@ -511,4 +512,92 @@ func (idx *Index) GetVec(id int64) []float32 {
 		}
 	}
 	return nil
+}
+
+// ============ 组织继承链 Scoped 向量检索（2026-08-26《KB组织继承链与部门隔离改造方案》） ============
+
+// ScopedSearchScope 按 PackScope 可见范围的向量检索（ScopedSearch 的继承链版）。
+// ★ 修复审计 #10：旧实现按「行租户==请求租户」一刀切，宿主在租户1 的共享行业/文化包
+//   永远不可召回——现改为 scope 集合判定：
+//     直接采用域(InChain=true)：本租户的 历史行0/企业包/链内部门包 + 共享行业/文化包
+//     跨部门回退域(InChain=false)：租户开关开时的其他部门共享包（调用方仅可作例句）
+func (idx *Index) ScopedSearchScope(query []float32, k int, wantLangs []string, tenantID int64, scope *PackScope) []SearchResult {
+	if len(query) == 0 || len(idx.Vecs) == 0 {
+		return nil // 无查询向量或无索引数据直接返回
+	}
+	type scored struct {
+		id      int64
+		sim     float64
+		inChain bool
+	}
+	results := make([]scored, 0, len(idx.Vecs))
+	for i, v := range idx.Vecs {
+		if len(v) != len(query) {
+			continue // 维度不一致跳过
+		}
+		rowID := idx.IDs[i]
+		pack := int64(0)
+		if idx.IDPacks != nil {
+			pack = idx.IDPacks[rowID]
+		}
+		rowTenant := tenantID
+		if idx.IDTenants != nil {
+			rowTenant = idx.IDTenants[rowID]
+		}
+		// ★ 可见性三选一（scope=nil 时退化为旧租户相等口径）
+		inChain := false
+		visible := false
+		if scope == nil {
+			visible = tenantID <= 0 || rowTenant == tenantID
+			inChain = visible
+		} else {
+			_, chainOK := scope.ChainPacks[pack]
+			switch {
+			case rowTenant == tenantID && (pack == 0 || scope.TenantPackIDs[pack] || chainOK):
+				visible, inChain = true, true // 直接采用域
+			case scope.SharedPackIDs[pack]:
+				visible, inChain = true, true // 共享层同属采用域
+			case scope.AllowCrossDept && func() bool { _, ok := scope.CrossDeptPacks[pack]; return ok }():
+				visible = true // 跨部门回退域（仅例句参考）
+			}
+		}
+		if !visible {
+			continue
+		}
+		// 按目标语言过滤：该行不含任一目标语言则跳过
+		if len(wantLangs) > 0 && idx.IDLangs != nil {
+			has := false
+			for _, lc := range wantLangs {
+				if idx.IDLangs[rowID][lc] {
+					has = true
+					break
+				}
+			}
+			if !has {
+				continue
+			}
+		}
+		// 计算点积（归一化向量点积即余弦相似度）
+		var dot float32
+		for j := range query {
+			dot += v[j] * query[j]
+		}
+		results = append(results, scored{id: rowID, sim: float64(dot), inChain: inChain})
+	}
+	// 排序策略：链内优先于跨部门；同层按相似度降序——保证链内弱相似候选仍排在
+	// 跨部门强相似之前（隔离语义在排序层的最后防线），引擎侧再按阈值分流。
+	sort.Slice(results, func(a, b int) bool {
+		if results[a].inChain != results[b].inChain {
+			return results[a].inChain
+		}
+		return results[a].sim > results[b].sim
+	})
+	if k > len(results) {
+		k = len(results)
+	}
+	out := make([]SearchResult, k)
+	for i := 0; i < k; i++ {
+		out[i] = SearchResult{ID: results[i].id, Sim: results[i].sim, InChain: results[i].inChain}
+	}
+	return out
 }

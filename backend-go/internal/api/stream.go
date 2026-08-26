@@ -15,6 +15,7 @@ package api
 //   - 上传文件保存到 UploadDir（uniqueName 保证文件名唯一），处理完成后删除
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +24,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"translator/internal/engine"
 )
 
 // ============ SSE 工具 ============
@@ -103,7 +106,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 调用引擎处理文本翻译（流式回调进度）
-	res := s.Engine.HandleText(r.Context(), req.Message, req.Options, prog)
+	// ★ 注入用户组织（2026-08-26 KB继承链）：部门包按「本部门→祖先链」可见性命中
+	res := s.Engine.HandleText(s.userOrgCtx(r), req.Message, req.Options, prog)
 	// 推送完成进度
 	fmt.Fprint(w, sseEvent("progress", map[string]interface{}{"step": "完成", "done": 1, "total": 1, "percent": 100}))
 	if flusher != nil {
@@ -224,7 +228,8 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 调用引擎处理文件翻译
-	res := s.Engine.HandleFile(r.Context(), savePath, options, prog)
+	// ★ 注入用户组织（2026-08-26 KB继承链）
+	res := s.Engine.HandleFile(s.userOrgCtx(r), savePath, options, prog)
 	// 处理完成后删除临时文件
 	os.Remove(savePath)
 
@@ -266,7 +271,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 调用引擎处理文本翻译（非流式，无进度回调）
-	res := s.Engine.HandleText(r.Context(), req.Message, req.Options, nil)
+	// ★ 注入用户组织（2026-08-26 KB继承链）
+	res := s.Engine.HandleText(s.userOrgCtx(r), req.Message, req.Options, nil)
 	if res.Error != "" {
 		// 失败：填充错误回复并计入失败指标
 		res.Skill = "translation"
@@ -340,7 +346,8 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 调用引擎处理文件翻译（非流式）
-	res := s.Engine.HandleFile(r.Context(), savePath, options, nil)
+	// ★ 注入用户组织（2026-08-26 KB继承链）
+	res := s.Engine.HandleFile(s.userOrgCtx(r), savePath, options, nil)
 	// 处理完成后删除临时文件
 	os.Remove(savePath)
 	if res.Error == "" {
@@ -477,4 +484,14 @@ func resolveSafePath(baseDirs []string, p string) (string, bool) {
 // 返回: UnixNano 纳秒时间戳。
 func timeNow() int64 {
 	return time.Now().UnixNano()
+}
+
+// userOrgCtx 组装带用户组织的请求上下文（KB 部门包祖先链继承依据，2026-08-26）。
+// 已登录用户取其 org_id；匿名/超管平台上下文返回原 ctx（org=0 → 仅企业/共享层）。
+func (s *Server) userOrgCtx(r *http.Request) context.Context {
+	ctx := r.Context()
+	if u := s.authUser(r); u != nil && u.OrgID > 0 {
+		return engine.WithUserOrg(ctx, u.OrgID)
+	}
+	return ctx
 }

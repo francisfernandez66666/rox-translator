@@ -224,6 +224,7 @@ func (s *Server) routesAdmin() {
 // routesAdminKB 注册知识库包/条目/安全句管理路由。
 func (s *Server) routesAdminKB() {
 	s.mux.HandleFunc("/api/admin/kb-packages/status", s.handleKBPackageStatus)
+	s.mux.HandleFunc("/api/admin/kb-packages/share", s.handleKBPackageShare) // ★ 部门包跨部门共享开关（2026-08-26 KB继承链）
 	s.mux.HandleFunc("/api/admin/kb-index/rebuild", s.handleKBIndexRebuild)
 	s.mux.HandleFunc("/api/admin/kb-packages", s.handleKBPackages)
 	s.mux.HandleFunc("/api/admin/kb-packages/create", s.handleKBPackageCreate)

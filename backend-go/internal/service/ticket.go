@@ -135,6 +135,17 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	if t.Status == store.TicketCompleted {
 		return nil
 	}
+	// ★ 注入创建人组织（2026-08-26 KB继承链）：异步工单按「发起用户当前所在部门」
+	//   的祖先链决定部门包可见范围；OpenAPI 任务（CreatedBy=0）回退其归属用户 APIUserID。
+	creatorUID := t.CreatedBy
+	if creatorUID <= 0 && t.APIUserID > 0 {
+		creatorUID = t.APIUserID
+	}
+	if creatorUID > 0 {
+		if cu, uerr := s.Store.GetUser(creatorUID, t.TenantID); uerr == nil && cu != nil && cu.OrgID > 0 {
+			ctx = engine.WithUserOrg(ctx, cu.OrgID)
+		}
+	}
 	// ★ 余额预检（强制计费时）：余额不足快速失败，单独错误码提示充值/升级套餐
 	if s.Bill != nil && s.Bill.Enabled() {
 		if b, berr := s.Store.GetBalance(t.TenantID); berr == nil && b != nil && b.Balance <= 0 {

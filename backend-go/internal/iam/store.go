@@ -433,6 +433,38 @@ func (s *Store) OrgDescendantIDs(tid, orgID int64) ([]int64, error) {
 	return result, nil
 }
 
+// OrgAncestorIDs 计算组织祖先链（自底向上）：返回 [自身, 父, 祖父, ..., 根] 有序切片。
+// 用途：KB 部门包继承链——用户可见的部门包 = 祖先链上所有 org_id 的部门包，
+// 距离（切片下标）越近优先级越高（2026-08-26《KB组织继承链与部门隔离改造方案》）。
+// 防御：环检测（parent_id 数据异常成环时截断）+ 深度上限 20（防脏数据死循环）。
+// 参数：tid=租户 ID，orgID=起始组织 ID（<=0 返回空链=未挂组织用户）。
+func (s *Store) OrgAncestorIDs(tid, orgID int64) ([]int64, error) {
+	if orgID <= 0 {
+		return []int64{}, nil // 未挂组织：空链，仅见企业/行业/文化层
+	}
+	all, err := s.ListOrgs(tid)
+	if err != nil {
+		return nil, err
+	}
+	parent := map[int64]int64{} // 组织 ID → 父 ID
+	for _, o := range all {
+		parent[o.ID] = o.ParentID
+	}
+	const maxDepth = 20
+	chain := make([]int64, 0, 8)
+	cur := orgID
+	seen := map[int64]bool{}
+	for cur > 0 && len(chain) < maxDepth {
+		if seen[cur] {
+			break // 环检测：数据异常成环立即截断，避免死循环
+		}
+		seen[cur] = true
+		chain = append(chain, cur)
+		cur = parent[cur]
+	}
+	return chain, nil
+}
+
 // IsOrgInSubtree 判断目标组织是否在根组织子树内（部门管理员范围校验用）。
 func (s *Store) IsOrgInSubtree(tid, rootOrgID, targetOrgID int64) (bool, error) {
 	desc, err := s.OrgDescendantIDs(tid, rootOrgID)

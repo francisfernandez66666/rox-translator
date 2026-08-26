@@ -38,7 +38,7 @@ type Engine struct {
 	Evals *evals.Evaluator // 评估器（质量评估用，可选）
 
 	cjkCache         map[string]int64           // 兼容旧字段（保留）：默认租户 CJK→rowID 缓存
-	cjkCacheByTenant map[int64]map[string]int64 // 租户 → CJK 字符串 → row id（按租户懒加载）
+	cjkCacheByTenant map[string]map[string]int64 // ★ 2026-08-26 继承链改造：键=「租户|组织链指纹|跨部门开关」→ CJK字符 → row id
 	cjkMu            sync.Mutex                 // 保护 CJK 缓存的并发读写锁
 
 	// OnPhase 阶段回调（可选）：KB 匹配完成 → 进入 AI 生成前触发 "ai_generating"
@@ -319,25 +319,32 @@ func NewEngine(cfg *config.Config, db *kb.KBDatabase, idx *kb.Index, ts *tenant.
 		DB:               db,
 		Index:            idx,
 		Ten:              ts,
-		cjkCacheByTenant: map[int64]map[string]int64{},
+		cjkCacheByTenant: map[string]map[string]int64{},
 		breaker:          NewBreaker(threshold, coolDown),
 	}
 }
 
-// getCJKCache 构建指定租户的 CJK → rowID 缓存（按租户懒加载）
-func (e *Engine) getCJKCache(tenantID int64) map[string]int64 {
+// getCJKCache 构建指定作用域的 CJK → rowID 缓存（按「租户|组织链|开关」懒加载）。
+// ★ 2026-08-26 继承链改造：缓存内容随可见范围变化——同一租户不同组织链/开关各自独立，
+// 键含链指纹与开关态，组织移动或开关切换自动走新键（旧键惰性留存，InvalidateKBCaches 可全清）。
+func (e *Engine) getCJKCache(scope *kb.PackScope) map[string]int64 {
+	key := cjkCacheScopeKey(scope)
 	e.cjkMu.Lock()
 	defer e.cjkMu.Unlock()
 	if e.cjkCache == nil {
 		e.cjkCache = map[string]int64{}
 	}
-	if _, ok := e.cjkCacheByTenant[tenantID]; ok {
-		return e.cjkCacheByTenant[tenantID]
+	if m, ok := e.cjkCacheByTenant[key]; ok {
+		return m
 	}
 	m := map[string]int64{}
 	if e.DB != nil {
-		if rows, err := e.DB.GetAllRows(tenantID); err == nil {
+		if rows, err := e.DB.GetAllRows(scope.TenantID); err == nil {
 			for _, r := range rows {
+				// 只缓存当前 scope 可见的行（隔离语义在缓存层同样成立）
+				if !scopeVisibleID(scope, r.PackID, r.TenantID) {
+					continue
+				}
 				cjk := ExtractCJK(r.Zh)
 				if cjk != "" {
 					m[cjk] = r.ID
@@ -345,8 +352,26 @@ func (e *Engine) getCJKCache(tenantID int64) map[string]int64 {
 			}
 		}
 	}
-	e.cjkCacheByTenant[tenantID] = m
+	e.cjkCacheByTenant[key] = m
 	return m
+}
+
+// scopeVisibleID 判断行是否落在 scope 直接采用域内（CJK 缓存过滤用；
+// 跨部门回退层不进 CJK 缓存——它只在精确段二按需查询）。
+func scopeVisibleID(scope *kb.PackScope, packID, rowTenant int64) bool {
+	if scope == nil {
+		return true
+	}
+	if _, chainOK := scope.ChainPacks[packID]; chainOK {
+		return true // 链内部门包
+	}
+	if packID == 0 {
+		return rowTenant == scope.TenantID // 历史无主行按企业层（限本租户）
+	}
+	if scope.TenantPackIDs[packID] {
+		return true // 企业包
+	}
+	return scope.SharedPackIDs[packID] // 共享行业/文化包
 }
 
 // cjkOverlap 计算两条中文的 CJK 字符 Jaccard 重叠率（0~1）
@@ -449,17 +474,26 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 		return res, nil
 	}
 
-	// 1. 精确命中
+	// ★ 组装本次请求的知识库可见范围（2026-08-26 继承链改造）：
+	// 链内部门包(就近覆盖) > 企业包/历史行 > 共享行业/文化包；跨部门回退层由两段式按需触发。
+	scope := e.userScope(ctx, tid)
+	// 跨部门精确命中的来源包名（打标用；空=未发生跨部门命中）
+	crossFrom := ""
+
+	// 1. 精确命中（两段式：链内优先，零命中且开关开时才查跨部门共享包）
 	var matched *kb.Row
 	if e.DB != nil {
-		if r, err := e.DB.FindExact(zhText, tid); err == nil {
+		if r, src, err := e.DB.FindExactScoped(zhText, tid, scope); err == nil {
 			matched = r
+			if src == "cross" {
+				crossFrom = scope.CrossName(r.PackID) // 记录来源部门包名用于打标
+			}
 		}
-		// CJK 标点无关精确
+		// CJK 标点无关精确（缓存键含组织链指纹与开关态）
 		if matched == nil {
 			cjk := ExtractCJK(zhText)
-			if id, ok := e.getCJKCache(tid)[cjk]; ok {
-				if r, err := e.DB.FetchRowTenant(id, tid); err == nil {
+			if id, ok := e.getCJKCache(scope)[cjk]; ok {
+				if r, err := e.DB.FetchRowTenant(id, tid, scope); err == nil {
 					matched = r
 				}
 			}
@@ -467,6 +501,10 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 	}
 	if matched != nil {
 		res.Mode = "精确命中"
+		if crossFrom != "" {
+			// 保留「精确命中」子串：前台徽标按 includes('精确命中') 判定，追加而非替换
+			res.Mode = "精确命中 | 🌐跨部门（来自" + crossFrom + "）"
+		}
 		res.MatchedZH = matched.Zh
 		res.Translations = e.assignKB(matched, targetLangs, &res.NeedModel)
 		if len(res.NeedModel) == 0 {
@@ -474,12 +512,14 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 		}
 	}
 
-	// 2. 模糊子串
+	// 2. 模糊子串（★ 隔离语义：仅链内命中可整句采用；跨部门命中只降级为例句参考）
+	crossExamples := []*kb.Row{} // 跨部门例句池（模糊+语义回退统一收集，最终补位进 res.Examples）
 	if matched == nil && e.DB != nil {
-		hits, _ := e.DB.FuzzyHits(zhText, e.Cfg.TopFuzzy, tid)
-		if len(hits) > 0 {
-			best := hits[0]
-			res.Candidates = hits
+		chainHits, crossHits, _ := e.DB.FuzzyHitsScoped(zhText, e.Cfg.TopFuzzy, tid, scope)
+		crossExamples = append(crossExamples, crossHits...) // 跨部门模糊 → 例句候选（不采用）
+		if len(chainHits) > 0 {
+			best := chainHits[0]
+			res.Candidates = chainHits
 			res.Mode = "模糊匹配"
 			res.MatchedZH = best.Zh
 			res.Translations = e.assignKB(best, targetLangs, &res.NeedModel)
@@ -490,7 +530,7 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 		}
 	}
 
-	// 3. 语义高相似（≥0.90）——按目标语言过滤，只检索含目标语言的行
+	// 3. 语义检索（scope 化：链内高相似可整句采用；跨部门与低相似一律降级为例句）
 	if e.Index != nil && len(e.Index.Vecs) > 0 {
 		// 知识库 Embed 阶段覆盖（stage_models.kb_embed）：配置了独立 Embed 模型则热应用
 		if eb, ek, em, eok := e.resolveStageModel(ctx, config.StageKBEmbed); eok {
@@ -499,39 +539,53 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 		// 先把中文转成嵌入向量，再在向量索引中做余弦相似检索
 		vec, err := e.LLM.Embed(ctx, zhText)
 		if err == nil && len(vec) > 0 {
-			highSim, _ := e.resolvePolicy(ctx)
-			// 检索返回 TopK 个语义相似行（按目标语言 + 租户双重过滤）
-			allow := e.applicablePacks(tid)
-			results := e.Index.ScopedSearch(vec, e.Cfg.TopK, targetLangs, tid, allow)
-			if len(results) > 0 && results[0].Sim >= highSim {
-				res.Similarity = results[0].Sim
-				if r, err := e.DB.FetchRowTenant(results[0].ID, tid); err == nil {
-					// ★ 只采用与输入为"同一句"的语义命中（CJK 字符重叠足够高）；
-					// 语义相近但非同一句（如带编号的流程条目）不得整句替换，降级走模型
-					overlap := cjkOverlap(zhText, r.Zh)
-					if overlap >= e.Cfg.SemHitCharOverlap {
-						res.MatchedZH = r.Zh
-						res.Mode = "语义命中"
-						res.Translations = e.assignKB(r, targetLangs, &res.NeedModel)
-						if len(res.NeedModel) == 0 {
-							return res, nil
-						}
-					} else {
-						res.Examples = append(res.Examples, r)
-						res.Mode = "语义相近（非同一句）-在线模型生成"
-					}
+			highSim, medSim := e.resolvePolicy(ctx)
+			// 检索返回 TopK（结果已按 InChain 优先 + 相似度排序；InChain=false=跨部门仅参考）
+			results := e.Index.ScopedSearchScope(vec, e.Cfg.TopK, targetLangs, tid, scope)
+			semAdopted := false
+			anyChainExample := false
+			for _, sr := range results {
+				r, ferr := e.DB.FetchRowTenant(sr.ID, tid, scope)
+				if ferr != nil {
+					continue // 不可见/不存在：跳过（不泄露）
+				}
+				if !sr.InChain {
+					// ★ 跨部门语义命中：无论相似度多高都只作例句参考（隔离语义硬约束）
+					crossExamples = append(crossExamples, r)
+					continue
+				}
+				if !semAdopted && sr.Sim >= highSim && cjkOverlap(zhText, r.Zh) >= e.Cfg.SemHitCharOverlap && matched == nil {
+					// ★ 只采用与输入为"同一句"的链内语义命中（CJK 字符重叠足够高）；
+					// 语义相近但非同一句不得整句替换
+					semAdopted = true
+					res.MatchedZH = r.Zh
+					res.Mode = "语义命中"
+					res.Similarity = sr.Sim
+					res.Translations = e.assignKB(r, targetLangs, &res.NeedModel)
+					continue
+				}
+				if sr.Sim >= medSim {
+					res.Examples = append(res.Examples, r) // 链内例句（优先填充）
+					anyChainExample = true
 				}
 			}
-			// 4. 参考例句（≥MED_SIM 且未命中时收集）
-			_, medSim := e.resolvePolicy(ctx)
-			if matched == nil && len(results) > 0 && results[0].Sim >= medSim {
-				for _, s := range results {
-					if r, err := e.DB.FetchRowTenant(s.ID, tid); err == nil {
-						res.Examples = append(res.Examples, r)
-					}
-				}
+			if semAdopted && len(res.NeedModel) == 0 {
+				return res, nil
+			}
+			if anyChainExample {
 				res.Mode = "段匹配-全不命中-在线模型生成"
+			} else if semAdopted {
+				res.Mode = "语义命中"
 			}
+		}
+	}
+
+	// ★ 例句池补位：链内候选优先（buildExamplesPrompt 截取前 5 条），
+	//   名额不满时以跨部门模糊/语义候选垫底——参考价值保留、污染风险最低。
+	if len(crossExamples) > 0 {
+		res.Examples = append(res.Examples, crossExamples...)
+		if res.Mode == "模型翻译（无知识库）" || res.Mode == "" {
+			res.Mode = "段匹配-全不命中-在线模型生成"
 		}
 	}
 
@@ -1429,20 +1483,6 @@ func (e *Engine) LLMParseLang(ctx context.Context, hint string) string {
 
 // 编译期引用占位：保留 encoding/json 导入（条件编译路径使用）。
 var _ = json.Marshal
-
-// applicablePacks 计算租户可应用的知识库包白名单（向量检索用）。
-// 规则：本租户全部包 + 语言文化包（全系统）+ 注册行业匹配的行业包。
-// St 不可用或查询失败时返回 nil（= 不过滤，退化为按租户隔离）。
-func (e *Engine) applicablePacks(tid int64) map[int64]bool {
-	if e.St == nil || tid <= 0 {
-		return nil
-	}
-	m, err := e.St.ApplicablePackIDs(tid)
-	if err != nil {
-		return nil
-	}
-	return m
-}
 
 // RebuildKBIndex 全量重建向量索引：读 tm_segments 全部中文原文 → bge-m3 嵌入 → 写回 npz 并热替换。
 // 返回成功嵌入的行数。并发调用安全（同一时刻仅一个重建）。

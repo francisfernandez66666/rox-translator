@@ -22,6 +22,10 @@ export const zh: Record<string, string> = {
   'models.highSim': '相似度阈值 high_sim',
   'models.medSim': '相似度阈值 med_sim',
   'models.evalsThreshold': 'evals 通过阈值',
+  // ★ KB 继承链（2026-08-26）：跨部门降级检索开关文案
+  'models.crossDeptFallback': '跨部门降级检索（KB）',
+  'models.crossOn': '开启：链内零命中时可用兄弟部门共享术语',
+  'models.crossOff': '关闭：严格部门隔离',
   'models.savePolicy': '保存策略',
   'models.savedModels': '模型配置已保存',
   'models.savedPolicy': '策略已保存',
@@ -67,6 +71,10 @@ export const en: Record<string, string> = {
   'models.highSim': 'Similarity threshold high_sim',
   'models.medSim': 'Similarity threshold med_sim',
   'models.evalsThreshold': 'Evals pass threshold',
+  // KB inheritance chain (2026-08-26): cross-dept fallback toggle copy
+  'models.crossDeptFallback': 'Cross-dept KB fallback',
+  'models.crossOn': 'On: fall back to shared sibling-dept terms when chain misses',
+  'models.crossOff': 'Off: strict department isolation',
   'models.savePolicy': 'Save Policy',
   'models.savedModels': 'Model configuration saved',
   'models.savedPolicy': 'Policy saved',

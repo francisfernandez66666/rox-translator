@@ -249,6 +249,10 @@ type PolicyConfig struct {
 	HighSim            float64 `json:"high_sim,omitempty"`             // 高相似度阈值（TM 命中判断）
 	MedSim             float64 `json:"med_sim,omitempty"`              // 中等相似度阈值
 	EvalsPassThreshold float64 `json:"evals_pass_threshold,omitempty"` // 评估通过阈值
+	// ★ 跨部门降级检索开关（2026-08-26 KB继承链改造）：指针三态——
+	//   nil=旧配置未显式设置（默认开启）/ 0=显式关闭 / 1=显式开启。
+	//   开启时：链内精确零命中可回退到其他部门「愿意共享」的部门包（share_cross_dept=1）。
+	CrossDeptFallback *int `json:"cross_dept_fallback,omitempty"`
 }
 
 // GetPolicyConfig 读取租户策略参数。

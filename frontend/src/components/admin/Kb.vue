@@ -64,6 +64,15 @@
         <b>[{{ p.pack_type }}] {{ p.name }}</b>
         <span class="ad-pkg-role">{{ p.role }}</span>
         <button class="ad-btn-sm" @click="togglePackage(p)">{{ p.enabled === 0 ? t('kb.enablePack') : t('kb.disablePack') }}</button>
+        <!-- ★ 部门包专属：跨部门共享开关（2026-08-26 KB继承链）——
+             share_cross_dept=1 时其他部门可在「链内零命中」时经跨部门回退命中本包精确条目；
+             仅部门包显示（企业/行业/文化包本就全局或全租户，无此概念） -->
+        <button
+          v-if="p.pack_type === 'department'"
+          class="ad-btn-sm"
+          :style="(p.share_cross_dept ?? 1) === 1 ? 'color:#1a7f37;border-color:#1a7f37' : 'color:#888'"
+          @click="toggleShare(p)"
+        >{{ (p.share_cross_dept ?? 1) === 1 ? t('kb.shareOn') : t('kb.shareOff') }}</button>
         <button class="ad-btn-sm ad-btn-red" @click="removePackage(p)">{{ t('kb.deletePackage') }}</button>
         <button class="ad-btn-sm" @click="loadEntries(p)">{{ tpl('kb.viewEntries', { count: entryCount(p.id) }) }}</button>
       </div>
@@ -169,7 +178,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { kbPackages, kbPackageCreate, kbPackageDelete, kbPackageStatus, kbIndexRebuild, safetyPhrases, safetyPhraseAdd, safetyPhraseDelete, safetyPhraseStatus, safetyBulkImport, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport, kbRecognizeFile, kbImportFile, bitextImport, tmxImport } from '@/api'
+import { kbPackages, kbPackageCreate, kbPackageDelete, kbPackageStatus, kbPackageShare, kbIndexRebuild, safetyPhrases, safetyPhraseAdd, safetyPhraseDelete, safetyPhraseStatus, safetyBulkImport, kbEntries, kbEntryAdd, kbEntryDelete, kbEntriesImport, kbRecognizeFile, kbImportFile, bitextImport, tmxImport } from '@/api'
 import { activeTenantId, isSuper, myLevel } from './store'
 import { t, tpl } from '@/i18n'
 
@@ -334,6 +343,15 @@ async function rebuildIndex() {
 async function togglePackage(p: any) {
   const next = p.enabled === 0 ? 1 : 0
   const r = await kbPackageStatus(p.id, next)
+  if (!r.success) { alert(r.message); return }
+  await loadPackages()
+}
+// ★ 切换部门包「跨部门共享」开关（2026-08-26 KB继承链）：
+//   开=其他部门链内零命中时可经跨部门回退命中本包精确条目（结果打标来源）；
+//   关=本包仅限归属链内用户可见（包级 opt-out）。切换后刷新列表回显状态。
+async function toggleShare(p: any) {
+  const next = (p.share_cross_dept ?? 1) === 1 ? 0 : 1
+  const r = await kbPackageShare(p.id, next)
   if (!r.success) { alert(r.message); return }
   await loadPackages()
 }

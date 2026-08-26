@@ -10,22 +10,25 @@ import (
 	"encoding/hex"
 	"fmt"
 	"time"
+
+	"translator/internal/kb"
 )
 
 // KBPackage 知识库包（三级分层：企业包>行业包>语言文化习惯包，树形继承；部门包归属部门）
 type KBPackage struct {
-	ID        int64  `json:"id"`         // 包主键 ID
-	TenantID  int64  `json:"tenant_id"`  // 所属租户 ID
-	ParentID  int64  `json:"parent_id"`  // 父包 ID（0 表示根节点）
-	Code      string `json:"code"`       // 包编码（唯一标识，如 tenant/industry/locale）
-	Name      string `json:"name"`       // 包名称（如 企业包/行业包/语言文化习惯包）
-	PackType  string `json:"pack_type"`  // 包类型：tenant(企业) / industry(行业) / locale(语言文化) / department(部门)
-	Role      string `json:"role"`       // 包角色：source(匹配来源) / gate(输出闸门)
-	OrgID     int64  `json:"org_id"`     // 归属部门组织 ID（0=租户级）
-	Enabled   int    `json:"enabled"`    // 启用状态：1=启用（参与翻译命中）0=停用
-	SortOrder int    `json:"sort_order"` // 同级排序权重（升序）
-	CreatedAt string `json:"created_at"` // 创建时间（RFC3339 字符串）
-	UpdatedAt string `json:"updated_at"` // 更新时间（RFC3339 字符串）
+	ID             int64  `json:"id"`               // 包主键 ID
+	TenantID       int64  `json:"tenant_id"`        // 所属租户 ID
+	ParentID       int64  `json:"parent_id"`        // 父包 ID（0 表示根节点）
+	Code           string `json:"code"`             // 包编码（唯一标识，如 tenant/industry/locale）
+	Name           string `json:"name"`             // 包名称（如 企业包/行业包/语言文化习惯包）
+	PackType       string `json:"pack_type"`        // 包类型：tenant(企业) / industry(行业) / locale(语言文化) / department(部门)
+	Role           string `json:"role"`             // 包角色：source(匹配来源) / gate(输出闸门)
+	OrgID          int64  `json:"org_id"`           // 归属部门组织 ID（0=租户级）
+	Enabled        int    `json:"enabled"`          // 启用状态：1=启用（参与翻译命中）0=停用
+	ShareCrossDept int    `json:"share_cross_dept"` // ★ 跨部门共享开关（2026-08-26 KB继承链）：1=愿意参与跨部门降级检索（默认）0=仅限归属链内用户可见（包级 opt-out）；仅对部门包有意义
+	SortOrder      int    `json:"sort_order"`       // 同级排序权重（升序）
+	CreatedAt      string `json:"created_at"`       // 创建时间（RFC3339 字符串）
+	UpdatedAt      string `json:"updated_at"`       // 更新时间（RFC3339 字符串）
 }
 
 // 包类型常量
@@ -80,7 +83,7 @@ const (
 )
 
 // kbPkgCols 知识库包查询列清单（统一使用，避免遗漏新增列）
-const kbPkgCols = "id, tenant_id, parent_id, code, name, pack_type, role, org_id, COALESCE(enabled,1), sort_order, created_at, updated_at"
+const kbPkgCols = "id, tenant_id, parent_id, code, name, pack_type, role, org_id, COALESCE(enabled,1), COALESCE(share_cross_dept,1), sort_order, created_at, updated_at"
 
 // placeholders 生成 n 个 ? 占位符（逗号分隔），用于 IN 查询。
 func placeholders(n int) string {
@@ -148,7 +151,7 @@ func (s *Store) ListDeptPackages(tid int64, orgIDs []int64) ([]*KBPackage, error
 	var out []*KBPackage
 	for rows.Next() {
 		var p KBPackage
-		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.ShareCrossDept, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			continue
 		}
 		out = append(out, &p)
@@ -160,8 +163,8 @@ func (s *Store) ListDeptPackages(tid int64, orgIDs []int64) ([]*KBPackage, error
 // 参数：id=包主键 ID，tid=租户 ID；返回包对象。
 func (s *Store) GetKBPackage(id, tid int64) (*KBPackage, error) {
 	var p KBPackage
-	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, COALESCE(enabled,1) as enabled, sort_order, created_at, updated_at FROM kb_packages WHERE id=? AND tenant_id=?", id, tid).
-		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, COALESCE(enabled,1) as enabled, COALESCE(share_cross_dept,1) as share_cross_dept, sort_order, created_at, updated_at FROM kb_packages WHERE id=? AND tenant_id=?", id, tid).
+		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.ShareCrossDept, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +174,7 @@ func (s *Store) GetKBPackage(id, tid int64) (*KBPackage, error) {
 // ListKBPackages 列出租户全部包（按包类型、排序权重、ID 排序）。
 // 参数：tid=租户 ID；返回包列表。
 func (s *Store) ListKBPackages(tid int64) ([]*KBPackage, error) {
-	rows, err := s.db.Query("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, COALESCE(enabled,1) as enabled, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=? ORDER BY pack_type, sort_order, id", tid)
+	rows, err := s.db.Query("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, COALESCE(enabled,1) as enabled, COALESCE(share_cross_dept,1) as share_cross_dept, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=? ORDER BY pack_type, sort_order, id", tid)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +182,7 @@ func (s *Store) ListKBPackages(tid int64) ([]*KBPackage, error) {
 	var out []*KBPackage
 	for rows.Next() {
 		var p KBPackage
-		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.ShareCrossDept, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &p)
@@ -244,8 +247,8 @@ func (s *Store) EnsureDefaultPackages(tid int64) error {
 // 参数：code=行业包编码；返回行业包对象（供注册行业校验与名称引用）。
 func (s *Store) FindIndustryByCode(code string) (*KBPackage, error) {
 	var p KBPackage
-	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, COALESCE(enabled,1) as enabled, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=1 AND pack_type=? AND code=?", PackIndustry, code).
-		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+	err := s.db.QueryRow("SELECT id, tenant_id, parent_id, code, name, pack_type, role, org_id, COALESCE(enabled,1) as enabled, COALESCE(share_cross_dept,1) as share_cross_dept, sort_order, created_at, updated_at FROM kb_packages WHERE tenant_id=1 AND pack_type=? AND code=?", PackIndustry, code).
+		Scan(&p.ID, &p.TenantID, &p.ParentID, &p.Code, &p.Name, &p.PackType, &p.Role, &p.OrgID, &p.Enabled, &p.ShareCrossDept, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +314,7 @@ func (s *Store) SaveEntry(tid, pkgID int64, layer int, srcLang, srcText, tgtLang
 		hash := hex.EncodeToString(sum[:])
 		_, _ = s.db.Exec(
 			"INSERT INTO tm_segments (zh_hash, zh, tenant_id, priority, pack_id, "+tgtLang+", module, updated_at) VALUES (?,?,?,?,?,?,?,?) "+
-				"ON CONFLICT(zh_hash, tenant_id) DO UPDATE SET "+tgtLang+"=excluded."+tgtLang+", priority=excluded.priority, pack_id=excluded.pack_id, updated_at=excluded.updated_at",
+				"ON CONFLICT(zh_hash, tenant_id, pack_id) DO UPDATE SET "+tgtLang+"=excluded."+tgtLang+", priority=excluded.priority, pack_id=excluded.pack_id, updated_at=excluded.updated_at",
 			hash, srcText, host, prio, pkgID, tgtText, module, now)
 	}
 	return id, nil
@@ -527,7 +530,7 @@ func (s *Store) SetKBPackageEnabled(id int64, enabled int) error {
 			mod := e.module
 			if _, err := s.db.Exec(
 				"INSERT INTO tm_segments (zh_hash, zh, tenant_id, priority, pack_id, "+e.lang+", module, updated_at) VALUES (?,?,?,?,?,?,?,?) "+
-					"ON CONFLICT(zh_hash, tenant_id) DO UPDATE SET "+e.lang+"=excluded."+e.lang+", priority=excluded.priority, pack_id=excluded.pack_id, updated_at=excluded.updated_at",
+					"ON CONFLICT(zh_hash, tenant_id, pack_id) DO UPDATE SET "+e.lang+"=excluded."+e.lang+", priority=excluded.priority, pack_id=excluded.pack_id, updated_at=excluded.updated_at",
 				hash, e.src, host, prio, id, e.txt, mod, now); err != nil {
 				return err
 			}
@@ -597,4 +600,115 @@ func (s *Store) ListApplicablePacks(tid int64) ([]*PackBrief, error) {
 		}
 	}
 	return out, nil
+}
+
+// ============ 组织继承链可见范围（2026-08-26《KB组织继承链与部门隔离改造方案》） ============
+
+// BuildPackScope 按用户组织祖先链组装知识库可见范围（检索三路径统一消费）。
+// 装配规则（与方案 §一语义总图一一对应）：
+//   链内部门包   pack_type='department' 且 org_id ∈ chain → ChainPacks[包ID]=距离(下标)
+//   企业包       pack_type='tenant'                      → TenantPackIDs
+//   历史无主行   tm_segments.pack_id=0                    → 检索层按企业层对待（无需登记）
+//   行业包       平台共享且 code=租户注册行业              → SharedPackIDs
+//   语言文化包   平台共享                                 → SharedPackIDs
+//   跨部门候选   本租户其余 department 包且 share_cross_dept=1 → CrossDeptPacks（仅开关开时装配）
+// 参数：tid=租户 ID；chain=OrgAncestorIDs 输出（空链=未挂组织用户，只见企业/共享层）。
+// 返回：kb.PackScope（store→kb 单向依赖：kb 不反向 import store）。
+func (s *Store) BuildPackScope(tid int64, chain []int64, allowCross bool) (*kb.PackScope, error) {
+	scope := &kb.PackScope{
+		TenantID:       tid,
+		Chain:          chain,
+		ChainPacks:     map[int64]int{},
+		TenantPackIDs:  map[int64]bool{},
+		SharedPackIDs:  map[int64]bool{},
+		CrossDeptPacks: map[int64]string{},
+		AllowCrossDept: allowCross,
+	}
+	// 祖先距离映射：chain[0]=本部门(0)、chain[1]=父(1)…
+	dist := map[int64]int{}
+	for i, orgID := range chain {
+		if _, dup := dist[orgID]; !dup {
+			dist[orgID] = i
+		}
+	}
+	// 租户注册行业（共享行业包匹配键）
+	industry := ""
+	_ = s.db.QueryRow("SELECT COALESCE(industry,'') FROM tenants WHERE id=?", tid).Scan(&industry)
+	rows, err := s.db.Query(
+		"SELECT id, pack_type, COALESCE(org_id,0), code, name, COALESCE(share_cross_dept,1) FROM kb_packages WHERE tenant_id=? AND COALESCE(enabled,1)=1", tid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var ptype, code, name string
+		var orgID int64
+		var share int
+		if err := rows.Scan(&id, &ptype, &orgID, &code, &name, &share); err != nil {
+			continue
+		}
+		switch ptype {
+		case PackDepartment:
+			if d, ok := dist[orgID]; ok {
+				scope.ChainPacks[id] = d // ① 链内部门包（就近覆盖；本链可见性与 share 无关）
+			} else if allowCross && len(chain) > 0 && share == 1 {
+				// ④ 跨部门候选：需同时满足 租户开关开 + 包级未退出(share_cross_dept=1)。
+				// ★ 空链守卫：未挂组织/匿名用户不装配跨部门集——回退层的语义是
+				// 「有链而链内没有」，无链用户只享企业/共享层，不见任何部门包。
+				scope.CrossDeptPacks[id] = name
+			}
+		case PackTenant:
+			scope.TenantPackIDs[id] = true // ② 企业包
+		case PackIndustry:
+			// 行业包本应宿主在租户1（平台共享）；本租户自建的行业包同样纳入共享判定
+			if industry != "" && (tid == 1 || code == industry) {
+				scope.SharedPackIDs[id] = true
+			}
+		case PackLocale:
+			scope.SharedPackIDs[id] = true
+		}
+	}
+	// 平台宿主租户1 的共享行业/文化包（全租户可见；行业码校验与 sharedFilterSQL 口径一致）
+	hostRows, err := s.db.Query(
+		"SELECT id, pack_type, code FROM kb_packages WHERE tenant_id=1 AND COALESCE(enabled,1)=1 AND pack_type IN ('industry','locale')")
+	if err != nil {
+		return scope, nil // 宿主查询失败不阻断：链内/企业层已装配
+	}
+	defer hostRows.Close()
+	for hostRows.Next() {
+		var id int64
+		var ptype, code string
+		if err := hostRows.Scan(&id, &ptype, &code); err != nil {
+			continue
+		}
+		switch ptype {
+		case PackIndustry:
+			if industry != "" && code == industry {
+				scope.SharedPackIDs[id] = true
+			}
+		case PackLocale:
+			scope.SharedPackIDs[id] = true
+		}
+	}
+	return scope, nil
+}
+
+// SetKBPackageCrossDeptShare 设置部门包的跨部门共享开关（包级 opt-out）。
+// 参数：id=包 ID，tid=租户 ID（越权防护），share=1 共享 / 0 退出。
+// 仅对 department 包生效（其他类型本就全局/全租户，无操作意义）。
+func (s *Store) SetKBPackageCrossDeptShare(id, tid int64, share int) error {
+	var ptype string
+	if err := s.db.QueryRow("SELECT pack_type FROM kb_packages WHERE id=? AND tenant_id=?", id, tid).Scan(&ptype); err != nil {
+		return fmt.Errorf("包不存在或无权操作")
+	}
+	if ptype != PackDepartment {
+		return fmt.Errorf("仅部门包支持跨部门共享设置")
+	}
+	if share != 0 {
+		share = 1
+	}
+	_, err := s.db.Exec("UPDATE kb_packages SET share_cross_dept=?, updated_at=? WHERE id=? AND tenant_id=?",
+		share, time.Now().Format(time.RFC3339), id, tid)
+	return err
 }

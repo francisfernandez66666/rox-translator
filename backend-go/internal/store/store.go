@@ -427,6 +427,9 @@ func (s *Store) migrateColumns() error {
 		{"orders", "manual_confirm", "ALTER TABLE orders ADD COLUMN manual_confirm INTEGER NOT NULL DEFAULT 0"},
 		// 知识库包归属部门（0=租户级；部门管理员创建部门包时挂本部门）
 		{"kb_packages", "org_id", "ALTER TABLE kb_packages ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
+		// ★ 跨部门共享开关（2026-08-26 KB继承链改造）：1=愿意参与跨部门降级检索（默认），
+		//   0=本包仅限归属链内用户可见（包级 opt-out）；对企业/行业/文化包无意义（本就全局/全租户）
+		{"kb_packages", "share_cross_dept", "ALTER TABLE kb_packages ADD COLUMN share_cross_dept INTEGER NOT NULL DEFAULT 1"},
 		// 知识库应用优先级：部门包(0) > 组织包(1) > 行业包(2) > 语言文化包(3)；旧数据默认 9
 		{"tm_segments", "priority", "ALTER TABLE tm_segments ADD COLUMN priority INTEGER NOT NULL DEFAULT 9"},
 		// 检索条目归属知识库包（0=无归属/历史兜底数据）；停用/启用/统计按此精确摘除与回写

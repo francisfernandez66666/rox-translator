@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"translator/internal/engine"
 	"translator/internal/fileproc"
 	"translator/internal/store"
 )
@@ -611,7 +612,12 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 		"mode":         normalizeTaskMode(req.Mode),
 	}
 	// ⑤ 调用引擎同步翻译（HandleText 内部已注入用量收集器；无进度回调）
-	res := s.Engine.HandleText(r.Context(), req.Text, options, nil)
+	// ★ 注入 Key 归属用户组织（2026-08-26 KB继承链）：OpenAPI 调用与站内同租户同权
+	syncCtx := r.Context()
+	if cu, uerr := s.Store.GetUser(ak.UserID, ak.TenantID); uerr == nil && cu != nil && cu.OrgID > 0 {
+		syncCtx = engine.WithUserOrg(syncCtx, cu.OrgID)
+	}
+	res := s.Engine.HandleText(syncCtx, req.Text, options, nil)
 	if res.Error != "" {
 		s.metrics.countTranslate("text", false)
 		writeTaskError(w, "task_failed", res.Error)

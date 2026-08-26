@@ -311,10 +311,16 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 	if evals <= 0 {
 		evals = 75
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "policy": map[string]float64{
+	// ★ 跨部门降级检索开关（2026-08-26 KB继承链）：nil=默认开；输出解析后的布尔供前端渲染
+	cross := true
+	if pc.CrossDeptFallback != nil {
+		cross = *pc.CrossDeptFallback == 1
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "policy": map[string]interface{}{
 		"high_sim":             high,
 		"med_sim":              med,
 		"evals_pass_threshold": evals,
+		"cross_dept_fallback":  cross,
 	}})
 }
 
@@ -326,7 +332,8 @@ func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Policy map[string]float64 `json:"policy"` // 策略参数映射（high_sim/med_sim/evals_pass_threshold）
+		Policy            map[string]float64 `json:"policy"`              // 策略参数映射（high_sim/med_sim/evals_pass_threshold）
+		CrossDeptFallback *bool              `json:"cross_dept_fallback"` // ★ 跨部门降级检索开关（可选；nil=不修改）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -346,6 +353,14 @@ func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
 	}
 	if v, ok := req.Policy["evals_pass_threshold"]; ok && v > 0 {
 		pc.EvalsPassThreshold = v
+	}
+	// ★ 跨部门开关：显式传入才修改（bool→*int 三态存储）
+	if req.CrossDeptFallback != nil {
+		v := 0
+		if *req.CrossDeptFallback {
+			v = 1
+		}
+		pc.CrossDeptFallback = &v
 	}
 	if err := s.Ten.SetPolicyConfig(s.effTenant(r, u), pc); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})

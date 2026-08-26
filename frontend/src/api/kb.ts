@@ -87,6 +87,11 @@ export async function kbPackageStatus(id: number, enabled: number): Promise<Admi
   return request('/api/admin/kb-packages/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, enabled }) })
 }
 
+// ★ 部门包跨部门共享开关（2026-08-26 KB继承链）：share=1 共享 / 0 仅限归属链内
+export async function kbPackageShare(id: number, share: number): Promise<AdminResp> {
+  return request('/api/admin/kb-packages/share', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, share }) })
+}
+
 // 手动触发向量索引全量重建（超管；使用知识库 Embed 阶段模型）
 export async function kbIndexRebuild(): Promise<AdminResp> {
   return request('/api/admin/kb-index/rebuild', { method: 'POST', headers: authHeaders() })

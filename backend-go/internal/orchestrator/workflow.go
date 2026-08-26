@@ -7,10 +7,10 @@
 package orchestrator
 
 import (
-	"strconv"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"translator/internal/config"
@@ -385,6 +385,9 @@ func (w *Workflow) runFeedback(ctx context.Context, t *store.Ticket) error {
 			continue
 		}
 		_, _ = w.KB.SaveBack(p.SourceText, map[string]string{lc: tr}, "approved", t.TenantID)
+		if w.Engine != nil {
+			w.Engine.InvalidateKBCaches() // ★ 审批译文入正式 TM：失效 CJK 缓存保即时可见
+		}
 	}
 	t.Status = store.TicketCompleted // 写库完成置工单为已完成
 	_ = w.Store.UpdateTicket(t)

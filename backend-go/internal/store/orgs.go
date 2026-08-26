@@ -76,6 +76,11 @@ func (s *Store) OrgDescendantIDs(tid, orgID int64) ([]int64, error) {
 	return s.iam.OrgDescendantIDs(tid, orgID)
 }
 
+// OrgAncestorIDs 取组织祖先链（自底向上 [自身,...,根]；KB 部门包继承链用，2026-08-26）。
+func (s *Store) OrgAncestorIDs(tid, orgID int64) ([]int64, error) {
+	return s.iam.OrgAncestorIDs(tid, orgID)
+}
+
 // IsOrgInSubtree 判断 targetOrgID 是否位于 rootOrgID 子树内（层级越权防护）。
 func (s *Store) IsOrgInSubtree(tid, rootOrgID, targetOrgID int64) (bool, error) {
 	return s.iam.IsOrgInSubtree(tid, rootOrgID, targetOrgID)
