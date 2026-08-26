@@ -286,11 +286,11 @@ func (s *Server) handleBillingConfigSave(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleTenantQuota(w http.ResponseWriter, r *http.Request) {
 	tid := s.currentTenant(r)
 	writeJSON(w, 200, map[string]interface{}{
-		"success":         true,
-		"tenant_id":       tid,
-		"qps":             s.quotaQPS(tid),
-		"concurrent":      s.quotaConcurrent(tid),
-		"max_daily_chars": s.quotaDaily(tid),
+		"success":          true,
+		"tenant_id":        tid,
+		"qps":              s.quotaQPS(tid),
+		"concurrent":       s.quotaConcurrent(tid),
+		"max_daily_chars":  s.quotaDaily(tid),
 		"max_daily_tokens": s.quotaDailyTokens(tid),
 	})
 }
@@ -300,21 +300,53 @@ func (s *Server) handleTenantQuota(w http.ResponseWriter, r *http.Request) {
 // 返回: success=true 表示保存成功；带审计 diff。
 func (s *Server) handleTenantQuotaSave(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 tenant_admin 及以上权限
-	if _, err := s.requireTenantAdmin(r); err != nil {
+	au, err := s.requireTenantAdmin(r)
+	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
 	var req struct {
-		QPS           int   `json:"qps"`             // 每秒请求数上限
-		Concurrent    int   `json:"concurrent"`      // 并发请求数上限
-		MaxDailyChars int64  `json:"max_daily_chars"` // 每日字符上限（0=不限，旧口径）
+		QPS            int    `json:"qps"`              // 每秒请求数上限
+		Concurrent     int    `json:"concurrent"`       // 并发请求数上限
+		MaxDailyChars  int64  `json:"max_daily_chars"`  // 每日字符上限（0=不限，旧口径）
 		MaxDailyTokens *int64 `json:"max_daily_tokens"` // ★ 每日 token 上限（D4；nil=不修改）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
-	tid := s.currentTenant(r)
+	// ★ 整改 B6：tid 语义修正——超管未带 X-Tenant-ID 时 effTenant=0，此前用 currentTenant
+	//   兜底成 1 会把「平台视角的保存」误写到租户 1 头上；现显式要求切换目标租户。
+	tid := s.effTenant(r, au)
+	if tid <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请先通过租户切换器选择目标租户再保存配额"})
+		return
+	}
+	// ★ 整改 B6：入参收敛——租户管理员此前可把本租户 QPS/并发自调成任意值（自我提权），
+	//   绕过平台公平性。上限仅超管可经 system_config 调整（quota_max_qps / quota_max_concurrent）。
+	maxQPS, maxConc := int64(100), int64(50)
+	if v, _ := s.Store.GetConfig("quota_max_qps"); v != "" {
+		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+			maxQPS = x
+		}
+	}
+	if v, _ := s.Store.GetConfig("quota_max_concurrent"); v != "" {
+		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+			maxConc = x
+		}
+	}
+	if req.QPS < 0 {
+		req.QPS = 0
+	}
+	if int64(req.QPS) > maxQPS {
+		req.QPS = int(maxQPS)
+	}
+	if req.Concurrent < 1 {
+		req.Concurrent = 1
+	}
+	if int64(req.Concurrent) > maxConc {
+		req.Concurrent = int(maxConc)
+	}
 	// QPS/并发写入内存计费服务（限流器热生效）
 	if s.Bill != nil {
 		billing.SetQPS(tid, req.QPS)

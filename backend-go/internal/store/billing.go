@@ -7,8 +7,10 @@
 package store
 
 import (
+	cryptorand "crypto/rand"
 	"database/sql"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 )
@@ -177,19 +179,30 @@ func (s *Store) Deduct(tid int64, tokens int64) error {
 // 历史数据两列为空串，前端按「—」展示。
 // 参数：tid/userID=租户与用户，taskType=任务类型，provider/model=供应商与模型，quantity=用量数。
 // 返回：新写入 usage_ledger 记录 ID；余额不足时返回 ErrInsufficientBalance。
+//
+// ★ 整改 B4：扣减与台账落账合并同一 IMMEDIATE 事务——此前 DeductWithGrants 独立提交后
+// ledger INSERT 失败即产生「扣了钱无流水」的对账单向缺口。单价预读仍在事务外完成。
 func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model string, quantity int64, bizKind, bizMode string) (int64, error) {
-	price, mult := s.unitPrice(taskType, provider)
-	cost := int64(float64(quantity*price) * mult) // 费用 = 用量 × 单价 × 语种倍率
+	price, mult := s.unitPrice(taskType, provider) // 事务外预读定价
+	cost := int64(float64(quantity*price) * mult)  // 费用 = 用量 × 单价 × 语种倍率
 	if cost < 0 {
 		cost = 0 // 兜底：费用不可能为负
 	}
-	if err := s.DeductWithGrants(tid, cost); err != nil { // ★ 双部分顺序扣减（台账→永久）
-		return 0, err // 先扣余额，失败则不再落账
+	tx, err := s.db.Begin() // DSN _txlock=immediate ⇒ BEGIN IMMEDIATE
+	if err != nil {
+		return 0, err
 	}
-	res, err := s.db.Exec(
+	defer tx.Rollback()
+	if err := deductWithGrantsTx(tx, tid, cost); err != nil {
+		return 0, err // 扣减失败（含余额不足）→ 整体回滚，不落半条
+	}
+	res, err := tx.Exec(
 		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
 		tid, userID, taskType, provider, model, quantity, price, cost, bizKind, bizMode, time.Now().Format(time.RFC3339))
 	if err != nil {
+		return 0, err // 落账失败 → 扣减一并回滚（修复「扣钱无流水」）
+	}
+	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
@@ -563,79 +576,191 @@ func (s *Store) orderMoneyBackfill() {
 		float64(rate))
 }
 
+// ===== 订单确认事务内原语（★ 整改 B2）=====
+// 约束：以下 *_Tx 函数只能接收 MarkOrderPaid 持有的 IMMEDIATE 事务连接；
+// 严禁在事务内调用任何 s.db 直连方法（SQLite 单写者下第二连接写入必撞 busy_timeout，
+// UAT-2 已有事故先例）。定价/套餐等只读预读一律在 Begin 之前完成。
+
+// ensureBalanceTx 确保余额账户行存在（tx 版 EnsureBalance，INSERT OR IGNORE 依赖唯一索引）。
+func ensureBalanceTx(tx *sql.Tx, tid int64) error {
+	_, err := tx.Exec(
+		"INSERT OR IGNORE INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
+		tid, time.Now().Format(time.RFC3339))
+	return err
+}
+
+// chargePermanentTx 永久余额入账（tx 版 Charge）。
+func chargePermanentTx(tx *sql.Tx, tid int64, tokens int64) error {
+	if tokens <= 0 {
+		return nil
+	}
+	if err := ensureBalanceTx(tx, tid); err != nil {
+		return err
+	}
+	_, err := tx.Exec(
+		"UPDATE balance_accounts SET balance=balance+?, updated_at=? WHERE tenant_id=?",
+		tokens, time.Now().Format(time.RFC3339), tid)
+	return err
+}
+
+// createQuotaGrantTx 台账发放（tx 版 CreateQuotaGrant）。
+func createQuotaGrantTx(tx *sql.Tx, tid int64, kind string, total int64, expires time.Time, source string, refID int64) error {
+	_, err := tx.Exec(
+		"INSERT INTO quota_grants (tenant_id, kind, total, left, expires_at, source, ref_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
+		tid, kind, total, total, expires.UTC().Format(time.RFC3339), source, refID, time.Now().Format(time.RFC3339))
+	return err
+}
+
+// applyIncrementMirrorTx 增量包句数镜像追加（tx 版 ApplyIncrementMirror，json_set 原子自增）。
+func applyIncrementMirrorTx(tx *sql.Tx, tid int64, sentences int64) error {
+	if sentences <= 0 {
+		return nil
+	}
+	_, err := tx.Exec(
+		"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), "+
+			"'$.sentence_balance', COALESCE(json_extract(permissions,'$.sentence_balance'),0)+?), updated_at=? WHERE id=?",
+		sentences, time.Now().Format(time.RFC3339), tid)
+	return err
+}
+
 // MarkOrderPaid 订单支付确认（线下转账 admin 手动确认 / 静态码人工确认）：置 paid、记支付流水并发放权益。
 // 参数：orderID=订单主键 ID，tid=租户 ID；返回错误。
 //
-// ★ 原子确认（2026-08-26 P0-5 止血）：先执行带 status='pending' 条件的单条 UPDATE，
+// ★ 整改 B2（2026-08-26）：全链路单 IMMEDIATE 事务化——此前「条件抢占→流水→发放」
+// 三段各自自动提交，任一中途失败即产生不可重试的半完成态：
+//   - 置 paid 后 GetPackage 失败 ⇒ 收钱零发放且 MarkOrderPaidByOrderNo 幂等早退无法补发；
+//   - 台账失败兜底 Charge 的错误被 `_` 丢弃 ⇒ 静默零到账；
+//   - payments 先写、权益后发 ⇒ 「有流水无权益」。
 //
-//	以 RowsAffected 判定是否抢到确认权——并发双请求（回调 + 超管确认）只有一个能成功，
-//	从根上消除「权益双发/重复流水」竞态；条件更新失败直接报「已处理」，天然幂等。
+// 现在：① 定价/套餐等只读在事务外预读（预读失败时订单仍 pending 可重试）；
+// ② 抢占/流水/身份/台账/余额全部同一事务，全有或全无；③ 邀请付费奖励移至提交后执行。
+//
+// 并发幂等语义不变：带 status='pending' 条件的单条 UPDATE 以 RowsAffected 判定抢占权，
+// 并发双请求仅一笔生效。
 func (s *Store) MarkOrderPaid(orderID, tid int64) error {
-	// 第一步：原子抢占确认权（仅 pending 可被置 paid；重复调用影响行数为 0）
-	res, err := s.db.Exec(
+	nowStr := time.Now().Format(time.RFC3339)
+	// ① 事务外预读（失败不产生任何写副作用）
+	var tokens, pkgID, createdBy int64
+	var money float64
+	if err := s.db.QueryRow(
+		"SELECT amount_tokens, package_id, COALESCE(created_by,0), COALESCE(amount_money,0) FROM orders WHERE id=? AND tenant_id=?",
+		orderID, tid).Scan(&tokens, &pkgID, &createdBy, &money); err != nil {
+		return &errTxt{"订单不存在"}
+	}
+	sentenceRate := s.TokenSentenceRate()
+	priceFen := s.PriceFenPerToken()
+	pkgTokens := int64(0)
+	pType := ""
+	pkgSentences := int64(0)
+	pkgCode := ""
+	pkgDays := 0
+	if pkgID > 0 {
+		p, err := s.GetPackage(pkgID)
+		if err != nil {
+			return fmt.Errorf("套餐缺失(order=%d pkg=%d)：%w；订单保持待支付可重试", orderID, pkgID, err)
+		}
+		pType = p.PType
+		pkgSentences = p.Sentences
+		pkgCode = p.Code
+		pkgDays = p.DurationDays
+		pkgTokens = pkgSentences * sentenceRate
+	}
+	// 应收金额转分：套餐单取包售价，纯充值单按 tokens×定价兜底
+	payFen := int64(money*100 + 0.5)
+	if payFen <= 0 {
+		payFen = tokens * priceFen
+	}
+	// ② 单事务：确认权抢占 → 支付流水 → 权益发放（全有或全无）
+	tx, err := s.db.Begin() // DSN _txlock=immediate ⇒ BEGIN IMMEDIATE
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(
 		"UPDATE orders SET status='paid', paid_at=?, manual_confirm=0 WHERE id=? AND tenant_id=? AND status='pending'",
-		time.Now().Format(time.RFC3339), orderID, tid)
+		nowStr, orderID, tid)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return &errTxt{"订单不存在或已处理"}
+		return &errTxt{"订单不存在或已处理"} // 幂等：重复调用/并发双回调仅一笔生效
 	}
-	// 第二步：读取订单字段，按包类型分流发放权益
-	var tokens int64
-	var pkgID int64
-	var createdBy int64
-	var money float64
-	err = s.db.QueryRow("SELECT amount_tokens, package_id, COALESCE(created_by,0), COALESCE(amount_money,0) FROM orders WHERE id=? AND tenant_id=?", orderID, tid).
-		Scan(&tokens, &pkgID, &createdBy, &money)
-	if err != nil {
-		return err
-	}
-	// 写入支付流水（payments 表；★ amount_money 记真实应收分——充值单按订单落库金额，
-	// 历史未回填单兜底 tokens×定价；套餐单记真实售价（评审整改 B2，修复套餐流水恒 0 失真））
-	payFen := int64(money*100 + 0.5)
-	if payFen <= 0 {
-		payFen = tokens * s.PriceFenPerToken()
-	}
-	if _, err := s.db.Exec(
+	// 支付流水与权益同事务：消除「有流水无权益」中间态（整改 B2）
+	if _, err := tx.Exec(
 		"INSERT INTO payments (order_id, tenant_id, amount_tokens, amount_money, status, created_at) VALUES (?,?,?,?, 'paid', ?)",
-		orderID, tid, tokens, payFen, time.Now().Format(time.RFC3339)); err != nil {
+		orderID, tid, tokens, payFen, nowStr); err != nil {
 		return err
 	}
-	// 商业包订单（订阅付费/增量包）：按包类型分流发放（白皮书 §4.1）
-	if pkgID > 0 {
-		pkg, err := s.GetPackage(pkgID)
-		if err != nil {
+	// 按订单类型分流发放权益：纯充值 / 订阅付费 / 增量包 / 其他（免费体验等）
+	switch {
+	case pkgID == 0:
+		// 纯充值单：token 入永久余额
+		if err := chargePermanentTx(tx, tid, tokens); err != nil {
 			return err
 		}
-		// ★ 套餐订单 amount_tokens=0，权益额度按「包内句数×换算率」折算 token
-		pkgTokens := pkg.Sentences * s.TokenSentenceRate()
-		// ★ 按包类型分流（白皮书 §4.1）：
-		if pkg.PType == "paid" {
-			// 订阅身份与句数镜像照常落租户权限（不含 token）
-			if _, err := s.ApplyPaidPackageIdentity(tid, pkg); err != nil {
-				return err
-			}
-			// 付费订阅：token 入台账，t+30 天滚动；台账失败兜底旧通道（永久余额）
-			if err := s.CreateQuotaGrant(tid, "plan", pkgTokens, time.Now().Add(30*24*time.Hour), "order", orderID); err != nil {
-				_ = s.Charge(tid, pkgTokens)
-			}
-			// ★ 邀请裂变（白皮书 §5.2）：受邀者首笔付费套餐到账→邀请者永久 token（按对去重，仅首笔；续费/充值包不触发）
-			s.ReferralPaidReward(createdBy)
-			return nil
+	case pType == "paid":
+		// ★ 订阅付费包（白皮书 §4.1）：订阅身份+句数镜像照常落租户权限（不含 token 入余额），
+		//   token 走 t+30 天滚动台账；台账行 ref_id 关联本订单供退款精确作废
+		perms, gerr := getTenantPermsTx(tx, tid)
+		if gerr != nil {
+			return gerr
 		}
-		if pkg.PType == "increment" {
-			// 充值包：句数镜像追加 + 等值 token 入永久余额（买断无到期）
-			if _, err := s.ApplyIncrementMirror(tid, pkg); err != nil {
-				return err
-			}
-			return s.Charge(tid, pkgTokens)
+		perms.PackageCode = pkgCode
+		perms.SubscribedAt = nowStr
+		perms.SentenceBalance += pkgSentences
+		if pkgDays > 0 {
+			perms.PackageExpires = time.Now().AddDate(0, 0, pkgDays).Format(time.RFC3339)
+		} else {
+			perms.PackageExpires = ""
 		}
-		_, err = s.GrantPackageSentences(tid, pkg)
+		perms.NotifiedExp7 = false
+		perms.NotifiedExp1 = false
+		if serr := saveTenantPermsTx(tx, tid, perms); serr != nil {
+			return serr
+		}
+		if cerr := createQuotaGrantTx(tx, tid, "plan", pkgTokens, time.Now().Add(30*24*time.Hour), "order", orderID); cerr != nil {
+			return cerr
+		}
+	case pType == "increment":
+		// 充值包：句数镜像追加（json_set 原子）+ token 入永久余额（买断无到期）
+		if merr := applyIncrementMirrorTx(tx, tid, pkgSentences); merr != nil {
+			return merr
+		}
+		if cerr := chargePermanentTx(tx, tid, pkgTokens); cerr != nil {
+			return cerr
+		}
+	default:
+		// 免费体验包等其他类型：与 GrantPackageSentences 同语义——句数镜像 + 订阅身份 + 折算入账
+		perms, gerr := getTenantPermsTx(tx, tid)
+		if gerr != nil {
+			return gerr
+		}
+		perms.PackageCode = pkgCode
+		perms.SubscribedAt = nowStr
+		perms.SentenceBalance += pkgSentences
+		if pkgDays > 0 {
+			perms.PackageExpires = time.Now().AddDate(0, 0, pkgDays).Format(time.RFC3339)
+		} else {
+			perms.PackageExpires = ""
+		}
+		perms.NotifiedExp7 = false
+		perms.NotifiedExp1 = false
+		if serr := saveTenantPermsTx(tx, tid, perms); serr != nil {
+			return serr
+		}
+		if cerr := chargePermanentTx(tx, tid, pkgSentences*sentenceRate); cerr != nil {
+			return cerr
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return err
 	}
-	// 到账：给租户充值等额 token
-	return s.Charge(tid, tokens)
+	// ③ 提交后副作用：邀请裂变「受邀人首笔付费→邀请者永久 token」（幂等按对去重；
+	//    失败仅损失一次奖励，不影响本单权益到账，故置于事务外）
+	if createdBy > 0 && pType == "paid" {
+		s.ReferralPaidReward(createdBy)
+	}
+	return nil
 }
 
 // MarkOrderManualConfirm 静态码支付人工确认：用户扫码付款后点「我已付费」，置 manual_confirm=1（待超管审核）。
@@ -711,104 +836,145 @@ func (s *Store) MarkOrderPaidByOrderNo(orderNo string) error {
 	return s.MarkOrderPaid(o.ID, o.TenantID)
 }
 
-// RefundOrder 退款：订单置 refunded 并按订单类型回收等额权益。
-// 参数：orderID=订单主键 ID，tid=租户 ID；余额不足以扣回时返回 ErrInsufficientBalance。
+// RefundOrder 退款（★ 2026-08-26 口径定稿·决策人拍板）：仅退未消耗部分，按消耗比例折算。
 //
-// ★ 权益全额回收（2026-08-26 评审整改 B3）：此前仅扣回 amount_tokens，而套餐/增量单
-//
-//	该字段恒 0——出现「退了钱、额度照用」。现统一反推应扣 token：
-//	  ① 套餐单(package_id>0)：按「包内句数×换算率」反推；
-//	    paid 订阅 → 作废本订单发放且仍有剩余的 plan 台账行（不占永久桶）；
-//	    increment → 从永久余额守卫式扣回；
-//	  ② 纯充值单 → 维持原 amount_tokens 永久桶扣回。
-//	商业规则（决策人确认默认）：退款=全额退款+权益全额作废，已消耗部分不追讨差额。
-//	订阅身份（PackageCode）清理由 API 层在退款成功后执行（tenants 归属 tenant 包）。
+//	剩余率 r = 剩余token / 发放总量（clamp [0,1]）
+//	  ① 订阅单(package ptype=paid)：剩余 = SUM(quota_grants.left WHERE source='order'
+//	     AND ref_id=本订单 AND kind='plan')——台账天然携带 per-order 剩余，精确；
+//	  ② 非订阅单(纯充值/increment)：剩余 = 发放总量 − 该租户自订单 paid_at 起
+//	     usage_ledger.quantity 合计。⚠️ 近似口径：usage_ledger 为租户级流水，跨订单混池，
+//	     折算结果供商业折让使用；paid_at 缺失的历史单按未消耗处理。
+//	应退金额 = ROUND(amount_money × r, 2)（r≤0 仅作废权益不退款）；
+//	权益收回：
+//	  订阅单 → 作废本单全部剩余台账行（left=0，即收回「剩余」）；
+//	  非订阅单 → 从永久余额守卫式扣回 min(剩余, 当前余额)；余额不足的差额不再整体拒绝
+//	  退款（修复旧实现与「已消耗不追讨」注释的矛盾），差额 CreateAlert 转人工核对。
+//	orders.refund_money 列记录实退金额（审计/对账）；订阅身份清理由 API 层在退款成功后执行。
 func (s *Store) RefundOrder(orderID, tid int64) error {
+	sentenceRate := s.TokenSentenceRate()
+	if sentenceRate <= 0 {
+		sentenceRate = 500 // 配置异常时按默认 500 token/句 折算，避免除零
+	}
 	tx, err := s.db.Begin() // DSN _txlock=immediate ⇒ BEGIN IMMEDIATE
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	// 读取订单（仅已支付可退）：package_id / amount_tokens
+	// 读取订单（仅已支付可退）：包类型/发放总量/应收金额/支付时间
 	var pkgID, tokens int64
+	var money float64
+	var paidAt string
 	if err := tx.QueryRow(
-		"SELECT package_id, amount_tokens FROM orders WHERE id=? AND tenant_id=? AND status='paid'",
-		orderID, tid).Scan(&pkgID, &tokens); err != nil {
-		// ★ UAT 缺陷修复（2026-08-26）：pending/refunded/不存在此前把裸
-		//   sql.ErrNoRows 文案直接返回给用户——统一为友好提示
+		"SELECT package_id, amount_tokens, COALESCE(amount_money,0), COALESCE(paid_at,'') FROM orders WHERE id=? AND tenant_id=? AND status='paid'",
+		orderID, tid).Scan(&pkgID, &tokens, &money, &paidAt); err != nil {
 		if err == sql.ErrNoRows {
 			return &errTxt{"订单不存在或状态不允许退款"}
 		}
 		return err
 	}
-	// 反推应扣 token 与包类型
-	clawTokens := tokens
-	pkgPaid := false
+	// 反推发放总量与剩余量
+	granted := tokens
+	remain := tokens // 非订阅单默认全额未耗（paid_at 缺失时保守按全退）
+	isSub := false
 	if pkgID > 0 {
 		var ptype string
 		var sentences int64
 		if err := tx.QueryRow("SELECT ptype, sentences FROM packages WHERE id=?", pkgID).Scan(&ptype, &sentences); err != nil {
 			return err
 		}
-		pkgPaid = ptype == "paid"
-		rate := s.TokenSentenceRate()
-		if rate <= 0 {
-			rate = 500
+		granted = sentences * sentenceRate
+		if granted <= 0 {
+			granted = tokens
 		}
-		if sentences > 0 {
-			clawTokens = sentences * rate // 套餐单 amount_tokens 恒 0，按句数折算
+		if ptype == "paid" {
+			isSub = true
+			// 订阅单：台账剩余精确可查
+			if err := tx.QueryRow(
+				"SELECT COALESCE(SUM(left),0) FROM quota_grants WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND left>0",
+				tid, orderID).Scan(&remain); err != nil {
+				return err
+			}
+		} else if paidAt != "" {
+			// 充值/increment：自支付时刻起的租户级消耗近似折算
+			var consumed int64
+			if err := tx.QueryRow(
+				"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=?",
+				tid, paidAt).Scan(&consumed); err != nil {
+				return err
+			}
+			remain = granted - consumed
 		}
 	}
-	// paid 订阅：作废本订单发放且仍有剩余的 plan 台账行（先记回收量供审计口径）
-	revokedGrants := int64(0)
-	if pkgPaid {
-		if err := tx.QueryRow(
-			"SELECT COALESCE(SUM(left),0) FROM quota_grants WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND left>0",
-			tid, orderID).Scan(&revokedGrants); err != nil {
-			return err
-		}
+	if remain < 0 {
+		remain = 0
+	}
+	if remain > granted {
+		remain = granted
+	}
+	// 按剩余率折算应退金额（分），r≤0 时仅作废权益不退款
+	ratio := 1.0
+	if granted > 0 {
+		ratio = float64(remain) / float64(granted)
+	}
+	moneyFen := int64(money*100 + 0.5)
+	refundFen := int64(float64(moneyFen)*ratio + 0.5)
+	if ratio <= 0 || refundFen < 0 {
+		refundFen = 0
+	}
+	// 权益收回
+	clawed := int64(0)
+	clawDiff := int64(0)
+	if isSub {
+		// 订阅单：作废本单全部剩余台账行（即收回「剩余」，已消耗部分无从收回）
 		if _, err := tx.Exec(
 			"UPDATE quota_grants SET left=0 WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND left>0",
 			tid, orderID); err != nil {
 			return err
 		}
-	}
-	// 非订阅类（纯充值/increment）：从永久余额守卫式扣回（影响 0 行 = 余额不足 → 整体失败）
-	if !pkgPaid && clawTokens > 0 {
-		res, err := tx.Exec(
-			"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
-			clawTokens, time.Now().Format(time.RFC3339), tid, clawTokens)
-		if err != nil {
+		clawed = remain
+	} else if remain > 0 {
+		// 非订阅单：从永久余额守卫式扣回 min(剩余, 当前余额)——不足部分转人工，不阻塞退款
+		var bal int64
+		if err := tx.QueryRow("SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=?", tid).Scan(&bal); err != nil && err != sql.ErrNoRows {
 			return err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return ErrInsufficientBalance
+		clawed = remain
+		if bal < clawed {
+			clawDiff = clawed - bal
+			clawed = bal
+		}
+		if clawed > 0 {
+			if _, err := tx.Exec(
+				"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
+				clawed, time.Now().Format(time.RFC3339), tid, clawed); err != nil {
+				return err
+			}
 		}
 	}
-	permClaw := clawTokens
-	if pkgPaid {
-		permClaw = 0 // 订阅退款只作废台账，不动永久桶
-	}
-	// 条件置 refunded（并发双退款只有一个能成功 → 整体回滚，不会双扣）
-	res2, err := tx.Exec("UPDATE orders SET status='refunded' WHERE id=? AND tenant_id=? AND status='paid'", orderID, tid)
+	// 条件置 refunded + 记录实退金额（并发双退款只有一个能成功 → 整体回滚，不会双扣）
+	res2, err := tx.Exec(
+		"UPDATE orders SET status='refunded', refund_money=? WHERE id=? AND tenant_id=? AND status='paid'",
+		float64(refundFen)/100.0, orderID, tid)
 	if err != nil {
 		return err
 	}
 	if n, _ := res2.RowsAffected(); n == 0 {
 		return &errTxt{"订单不存在或已退款"}
 	}
-	// ★ UAT 缺陷修复（2026-08-26）：告警写入必须移到事务提交之后——
-	//   原实现在本事务持有 IMMEDIATE 写锁期间经独立连接执行 CreateAlert，
-	//   撞 busy_timeout 后错误被吞，导致 refund_revoke 告警从未落库（UAT 实测捕获）。
+	// 提交后再写告警（历史教训：事务内经独立连接写库撞 busy_timeout 被吞，UAT-2 实测）
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	if revokedGrants > 0 || permClaw > 0 {
-		summary := fmt.Sprintf("订单 %d 退款完成：作废订阅台账 %d token，扣回永久余额 %d token", orderID, revokedGrants, permClaw)
+	summary := fmt.Sprintf("订单 %d 退款完成（比例折算）：剩余率 %.1f%%，应退 %d 分，权益收回 %d token",
+		orderID, ratio*100, refundFen, clawed)
+	if isSub && remain > 0 {
+		summary += fmt.Sprintf("，作废订阅台账 %d token", remain)
+	}
+	if clawDiff > 0 {
+		summary += fmt.Sprintf("；⚠️ 余额不足以收回全部剩余权益，缺口 %d token 请人工核对", clawDiff)
+		s.CreateAlert(tid, "warning", "refund_revoke", summary)
+	} else {
 		s.CreateAlert(tid, "info", "refund_revoke", summary)
-		// ★ UAT 补充（2026-08-26）：alerts 同 kind+open 幂等去重会吞掉后续退款明细，
-		//   审计日志不去重——逐笔明细以 audit_logs 为准（对账链完整）
-		s.LogAudit(tid, 0, "refund_revoke", "orders", summary)
 	}
 	return nil
 }
@@ -889,17 +1055,46 @@ func (s *Store) ListInvoices(tid int64) ([]*Invoice, error) {
 	return out, nil
 }
 
+// BillingIndexMigrate 计费域关键索引（幂等；整改 B5）：
+//   - orders.order_no 唯一索引：此前无约束+弱随机订单号，回调对账 FindOrderByOrderNo
+//     LIMIT 1 撞重复号可能入错账。存量若有重复号，唯一索引创建失败 → 降级普通索引并告警，
+//     由运维按日志核对后人工清理再重建唯一索引。
+//   - api_keys.key_hash 普通索引：GetAPIKeyByHash 是 OpenAPI 每次调用的热路径，
+//     此前全表扫描。
+func (s *Store) BillingIndexMigrate() {
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_no ON orders(order_no) WHERE order_no<>''`); err != nil {
+		log.Printf("[migrate] orders.order_no 唯一索引创建失败（疑存量重复单号，请人工核对）: %v", err)
+		if _, err2 := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_no ON orders(order_no) WHERE order_no<>''`); err2 != nil {
+			log.Printf("[migrate] orders.order_no 普通索引亦创建失败: %v", err2)
+		}
+	}
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_apikeys_hash ON api_keys(key_hash)`)
+}
+
 // randSuffix 生成 n 位由大写字母和数字组成的随机后缀（用于订单号/发票号/API Key 唯一性）。
-// 参数：n=随机字符个数；返回随机字符串（基于线性同余伪随机，无需 crypto/rand）。
+// ★ 整改 B5：换 crypto/rand——此前 UnixNano 种子的 LCG 可预测且高并发下易碰撞；
+// 订单号承担支付回调对账主键职责，必须不可预测。
 func randSuffix(n int) string {
 	const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, n)
-	seed := time.Now().UnixNano()
-	for i := range b {
-		seed = seed*6364136223846793005 + 1442695040888963407 // LCG 线性同余发生器迭代
-		b[i] = letters[uint64(seed)%uint64(len(letters))]     // 取模映射到字母表
+	const max = 252 // 36 的最大整数倍 ≤256，拒绝采样消除取模偏置
+	out := make([]byte, 0, n)
+	buf := make([]byte, n*2)
+	for len(out) < n {
+		if _, err := cryptorand.Read(buf); err != nil {
+			// 随机源不可用：拒绝生成而非降级弱随机（订单号可预测=资金风险）
+			log.Printf("[rand] crypto/rand 失败: %v", err)
+			return ""
+		}
+		for _, v := range buf {
+			if int(v) < max {
+				out = append(out, letters[int(v)%len(letters)])
+				if len(out) == n {
+					break
+				}
+			}
+		}
 	}
-	return string(b)
+	return string(out)
 }
 
 // UsageAllByUser 跨租户聚合每用户用量（超管平台视角）。

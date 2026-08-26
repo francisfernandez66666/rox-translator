@@ -4,13 +4,15 @@
 package api
 
 // ============ 本文件职责中文说明 ============
-// 开放 API 文档（/openapi/docs）+ 文档在线维护接口：
+// 开放 API 文档（/openapi/docs）+ 在线维护接口 + API Key 鉴权辅助：
 //   - 公开页：Markdown 源 → goldmark 渲染 HTML（GFM 表格/删除线，默认安全模式转义原始标签）
-//   - 内容来源：system_config.openapi_docs_md（超管在线编辑）优先；空则回退内置 defaultDocsMD
+//   - 内容来源：system_config.openapi_docs_md_zh/md_en（超管在线编辑）优先；空则回退内置双语默认
 //   - 维护接口（仅超管 requireAdminUser，写操作记审计）：
 //       GET  /api/admin/openapi-docs         读当前生效 MD 源码
 //       POST /api/admin/openapi-docs         保存 MD 源码（空串=恢复内置默认）
 //       POST /api/admin/openapi-docs/preview 预览渲染结果（不落库）
+//   - 辅助接口：KB 统计 / 用量 / Key 轮换（/openapi/v1/*，API Key 权限校验）
+//   - API Key 鉴权核心：authenticateAPIKey（计数入口）/ authenticateAPIKeyNoTouch（纯解析）/ validateAPIKey（校验核心）
 // 安全要点：MD 渲染走 goldmark 默认安全配置——调用方注入的原始 HTML 标签被转义，
 // 杜绝公开页脚本注入；内容上限 256KB。
 // ========================================
@@ -139,18 +141,6 @@ a{color:#1a73e8}
 <div class="doc-lang show" data-l="zh">` + zhBody + `</div>
 <div class="doc-lang" data-l="en">` + enBody + `</div>
 <script>
-// 为每个 pre 块添加复制按钮（零依赖，直接写入剪贴板避免引号转换）
-document.querySelectorAll('pre').forEach(function(pre){
-  var btn=document.createElement('button');
-  btn.textContent='📋 复制';
-  btn.style.cssText='position:absolute;right:8px;top:6px;background:#e8eaf6;color:#1a237e;border:none;border-radius:4px;padding:3px 10px;font-size:12px;cursor:pointer';
-  pre.style.position='relative';
-  btn.onclick=function(){
-    var text=pre.querySelector('code')?pre.querySelector('code').textContent:pre.textContent;
-    navigator.clipboard.writeText(text).then(function(){btn.textContent='✅ 已复制';setTimeout(function(){btn.textContent='📋 复制'},1500)});
-  };
-  pre.parentNode.insertBefore(btn,pre);
-});
 function setLang(l){
   document.querySelectorAll('.doc-lang').forEach(function(e){e.classList.toggle('show', e.getAttribute('data-l')===l)});
   document.querySelectorAll('.lang-btn').forEach(function(b){b.classList.toggle('on', b.getAttribute('data-l')===l)});
@@ -615,7 +605,30 @@ func (s *Server) handleOpenAPIKeyRotate(w http.ResponseWriter, r *http.Request) 
 // authenticateAPIKey 从 Authorization 头解析并校验 API Key（Bearer tk_xxx）。
 // 校验通过时刷新最近使用时间与今日计数，并执行 R4 Key 级每日配额判定。
 // 返回: (Key 对象, 错误码)。""=通过；"invalid_api_key"；"key_quota_exceeded"=当日限额已满。
+//
+// ★ 计数唯一入口（2026-08-26 整改 A3）：TouchAPIKey 只允许经本函数发生——
+//
+//	此前 withTenant 中间件与 openapi handler 各调一次导致每次调用 calls_today+2，
+//	DailyCallLimit=N 实际只放行 N/2。中间件侧一律改用 authenticateAPIKeyNoTouch。
 func (s *Server) authenticateAPIKey(r *http.Request) (*store.APIKey, string) {
+	ak, ec := s.validateAPIKey(r)
+	if ec == "" && ak != nil {
+		s.Store.TouchAPIKey(ak.ID)
+	}
+	return ak, ec
+}
+
+// authenticateAPIKeyNoTouch 仅解析校验 API Key、不产生计数副作用。
+// 专用场景：withTenant 中间件为匿名请求解析租户上下文——该次解析不代表一次业务调用，
+// 真正的调用计数由各 /openapi/v1 handler 内的 authenticateAPIKey 统一执行。
+func (s *Server) authenticateAPIKeyNoTouch(r *http.Request) (*store.APIKey, string) {
+	return s.validateAPIKey(r)
+}
+
+// validateAPIKey API Key 校验核心（无副作用）：存在性/状态/归属用户/R4 日配额预检。
+// 参数 r: HTTP 请求（需含 Authorization: Bearer <api_key>）。
+// 返回: (Key 对象, 错误码)。”“=通过；否则为 invalid_api_key 或 key_quota_exceeded。
+func (s *Server) validateAPIKey(r *http.Request) (*store.APIKey, string) {
 	if s.Store == nil {
 		return nil, "invalid_api_key"
 	}
@@ -642,6 +655,5 @@ func (s *Server) authenticateAPIKey(r *http.Request) (*store.APIKey, string) {
 			return ak, "key_quota_exceeded"
 		}
 	}
-	s.Store.TouchAPIKey(ak.ID)
 	return ak, ""
 }

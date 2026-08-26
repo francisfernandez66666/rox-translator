@@ -2,7 +2,7 @@
 // 工单翻译工作流实现：把各业务步骤（知识库匹配→AI 初翻→评估→审校→Gate 校验→
 // 语言文化闸门→人工审批→自迭代写库）绑定到 FlowDef 执行器。
 // 中间结果以 JSON 存于工单 FinalResult（ticketPayload），供各步骤读取/更新；
-// 支持驳回后按意见重翻全部语言。
+// 支持驳回后按意见重翻全部语言，以及已批准工单重跑时复用并保护人工终稿（C4）。
 // =============================================
 package orchestrator
 
@@ -141,16 +141,27 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 	if len(langs) == 0 {
 		langs = []string{"en"} // 无目标语言默认英语
 	}
-	p := &ticketPayload{SourceText: t.SourceText, TargetLangs: langs, Translations: map[string]string{}, Sources: map[string]string{}}
+	// ★ 整改 C4：优先复用既有载荷（含审批员终稿修订），仅对缺失语言做 KB 兜底——
+	//   此前无条件新建载荷覆写 FinalResult，审批修订在批准重跑时被静默丢弃。
+	p := w.loadPayload(t)
+	if p == nil || p.Translations == nil {
+		p = &ticketPayload{SourceText: t.SourceText, TargetLangs: langs, Translations: map[string]string{}, Sources: map[string]string{}}
+	}
+	if p.SourceText == "" {
+		p.SourceText = t.SourceText
+	}
+	if len(p.TargetLangs) == 0 {
+		p.TargetLangs = langs
+	}
 	tid := t.TenantID
 	srcLang := engine.DetectSourceLang(t.SourceText) // 检测实际源语言（zh/en），用于 KB 匹配与初翻
 
-	// 1. 平台 KB 包四层查找（企业包优先，按层排序，按实际源语言匹配）
+	// 1. 平台 KB 包四层查找（企业包优先，按层排序，按实际源语言匹配；已有译文不覆盖）
 	if w.Store != nil {
 		if entries, err := w.Store.FindEntriesBySource(tid, srcLang, t.SourceText); err == nil {
 			for _, ent := range entries {
 				if _, ok := p.Translations[ent.TargetLang]; ok {
-					continue // 高优包/高层已命中
+					continue // 高优包/高层/既有译文已命中
 				}
 				if strings.TrimSpace(ent.TargetText) == "" {
 					continue // 空译文跳过
@@ -161,20 +172,29 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 		}
 	}
 
-	// 2. engine 兜底（npz 语义库），只取 KB 命中结果
-	ctx = tenant.WithTenant(ctx, tid) // 注入租户上下文供引擎租户隔离
-	res, _ := w.Engine.TranslateOne(ctx, t.SourceText, langs, true, config.StageKBMatch)
-	for lc, v := range res.Translations {
-		if strings.TrimSpace(v) == "" {
-			continue
+	// 2. engine 兜底（npz 语义库），只对缺失语言取 KB 命中（langOnly=true 不调模型）
+	missing := []string{}
+	for _, lc := range langs {
+		if strings.TrimSpace(p.Translations[lc]) == "" {
+			missing = append(missing, lc)
 		}
-		if _, ok := p.Translations[lc]; ok {
-			continue // 已有 KB 命中不覆盖
-		}
-		p.Translations[lc] = v
-		p.Sources[lc] = "kb"
 	}
-	p.Mode = res.Mode
+	if len(missing) > 0 {
+		ctx = tenant.WithTenant(ctx, tid) // 注入租户上下文供引擎租户隔离
+		res, _ := w.Engine.TranslateOne(ctx, t.SourceText, missing, true, config.StageKBMatch)
+		for lc, v := range res.Translations {
+			if strings.TrimSpace(v) == "" || strings.TrimSpace(p.Translations[lc]) != "" {
+				continue // 空命中跳过 / 已有 KB 或人工译文不覆盖
+			}
+			p.Translations[lc] = v
+			p.Sources[lc] = "kb"
+		}
+		if p.Mode == "" {
+			p.Mode = res.Mode
+		}
+	} else if p.Mode == "" {
+		p.Mode = "知识库匹配"
+	}
 	w.savePayload(t, p)
 	return nil
 }

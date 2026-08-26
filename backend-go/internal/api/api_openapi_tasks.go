@@ -4,12 +4,14 @@
 package api
 
 // ============ 本文件职责中文说明 ============
-// 开放 API 异步任务化（API Key 鉴权）：翻译统一走「工单 ID + 轮询」模型。
+// 开放 API 任务接口（API Key 鉴权）：
 //   - POST /openapi/v1/tasks          创建任务：JSON=文本任务；multipart=文件批量任务
 //   - GET  /openapi/v1/tasks?id=      轮询状态：未完成返回 processing 出参；
 //                                     文本完成内联返回译文；文件完成返回产物清单+下载地址
 //   - GET  /openapi/v1/tasks/download 文件产物下载（file_id 可选，缺省 zip 全部）
 //   - GET  /openapi/v1/balance        查询租户 token 余额与 ≈句数
+//   - POST /openapi/v1/translate      同步短文翻译（划译插件 / Office taskpane 专用，2026-08-26 断链修复）
+// 业务要点：翻译统一走「工单 ID + 轮询」异步模型，同步端点为短文本快速通道。
 // 安全要点：
 //   - API 任务工单 CreatedBy=0、标题 [API] 前缀；仅开放接口可访问（内部用户不可见/不可操作）
 //   - 租户隔离：GetTicket(id, ak.TenantID)，跨租户查询一律 404 不泄露存在性
@@ -60,10 +62,10 @@ func writeTaskError(w http.ResponseWriter, code, message string) {
 func (s *Server) balanceOut(tid int64) map[string]interface{} {
 	grants, permanent, total, approx := s.balancePayload(tid)
 	return map[string]interface{}{
-		"balance_tokens":            total,
-		"balance_sentences_approx":  approx,
-		"sub_grants_left":           grants,
-		"permanent_balance":         permanent,
+		"balance_tokens":           total,
+		"balance_sentences_approx": approx,
+		"sub_grants_left":          grants,
+		"permanent_balance":        permanent,
 	}
 }
 
@@ -74,8 +76,6 @@ func normalizeTaskMode(m string) string {
 	}
 	return "pro"
 }
-
-// handleOpenAPITaskCreate 创建翻译任务（文本 JSON / 文件 multipart 二选一）。
 
 // singleQuotedJSON 宽松兼容：文档示例使用单引号 JSON（便于 shell 复制），
 // 服务端在解码前规范化为标准双引号。仅在未检测到双引号时启用，避免破坏正常负载。
@@ -146,8 +146,9 @@ var openAPITaskExtWhitelist = map[string]bool{
 // 供开放 API 响应体使用；未命中已知关键词时返回空串（调用方按通用失败处理）。
 //
 // ★ UAT 缺陷修复（2026-08-26）：强制计费闸门文案「组织 token 已耗尽…充值」此前
-//   未命中任何关键词 → 返回泛化 rejected，违反 OpenAPI 契约
-//  （余额类拒绝必须统一 insufficient_balance）。现补「耗尽/充值」映射。
+//
+//	 未命中任何关键词 → 返回泛化 rejected，违反 OpenAPI 契约
+//	（余额类拒绝必须统一 insufficient_balance）。现补「耗尽/充值」映射。
 func gateErrorCode(err error) string {
 	msg := err.Error()
 	switch {
@@ -622,9 +623,15 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 	if langCount > 5 { // 划译场景防滥用：最多 5 个目标语言
 		req.TargetLangs = req.TargetLangs[:5]
 	}
+	// ★ 整改 C3：划译求快——请求缺省 mode 时走快速流水线。此前 normalizeTaskMode("")=pro
+	//   与本端点注释「缺省 fast」自相矛盾，插件划词静默跑分钟级专业全流水线（体验与计费双输）。
+	mode := normalizeTaskMode(req.Mode)
+	if strings.TrimSpace(req.Mode) == "" {
+		mode = "fast"
+	}
 	options := map[string]interface{}{
 		"target_langs": req.TargetLangs,
-		"mode":         normalizeTaskMode(req.Mode),
+		"mode":         mode,
 	}
 	// ⑤ 调用引擎同步翻译（HandleText 内部已注入用量收集器；无进度回调）
 	// ★ 注入 Key 归属用户组织（2026-08-26 KB继承链）：OpenAPI 调用与站内同租户同权

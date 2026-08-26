@@ -63,6 +63,12 @@ func sseHeaders(w http.ResponseWriter) {
 // 事件流：progress 进度事件 → done（携带 result）或 error 事件。
 // 流程：解码请求 → 配额闸门 → 引擎流式处理 → 进度推送 → 计量 → 结果/错误事件。
 func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
+	// ★ 安全止血（2026-08-26 整改 A1）：翻译入口强制登录——此前匿名请求经 withTenant
+	//   兜底注入租户 1 白嫖平台 LLM 配额。必须在 SSE 头写出前返回 JSON 401。
+	if s.authUser(r) == nil {
+		writeJSON(w, 401, map[string]string{"error": "未登录或登录已过期"})
+		return
+	}
 	var req ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "请求格式错误"})
@@ -153,6 +159,11 @@ func (s *Server) dispatchTranslateWebhook(tid int64, kind, source string, res in
 // 事件流：progress 进度事件 → done（携带 result）或 error 事件。
 // 流程：保存上传文件 → 解析语言参数 → 配额闸门 → 引擎流式处理 → 计量 → 清理文件。
 func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Request) {
+	// ★ 安全止血（整改 A1）：强制登录（在解析 multipart 前拒绝，匿名零成本）
+	if s.authUser(r) == nil {
+		writeJSON(w, 401, map[string]string{"error": "未登录或登录已过期"})
+		return
+	}
 	// 解析 multipart 表单（上限 50MB，仅允许 docx/pptx/xlsx/pdf）
 	if err := parseUpload(r, translateUploadMax, translateExtWhitelist); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
@@ -169,21 +180,6 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	// 读取目标语言与提示语参数
 	targetLangs := r.FormValue("target_langs")
 	message := r.FormValue("message")
-
-	// 保存上传文件到 UploadDir（唯一文件名避免冲突）
-	os.MkdirAll(s.Cfg.UploadDir, 0o755)
-	savePath := filepath.Join(s.Cfg.UploadDir, uniqueName(header.Filename))
-	f, err := os.Create(savePath)
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "无法保存文件"})
-		return
-	}
-	if _, err := io.Copy(f, file); err != nil {
-		f.Close()
-		writeJSON(w, 500, map[string]string{"error": "写入失败"})
-		return
-	}
-	f.Close()
 
 	// 解析目标语言列表（逗号分隔，去空白）
 	langs := strings.Split(targetLangs, ",")
@@ -215,6 +211,30 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// ★ 整改 A2：闸门通过后再落盘——被限流/超额拒绝的请求不再产生孤儿文件；
+	//   创建成功即 defer 清理，任何提前返回路径都不会残留磁盘文件。
+	os.MkdirAll(s.Cfg.UploadDir, 0o755)
+	savePath := filepath.Join(s.Cfg.UploadDir, uniqueName(header.Filename))
+	f, err := os.Create(savePath)
+	if err != nil {
+		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": "无法保存文件"}))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
+	}
+	if _, err := io.Copy(f, file); err != nil {
+		f.Close()
+		os.Remove(savePath)
+		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": "写入失败"}))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
+	}
+	f.Close()
+	defer os.Remove(savePath)
+
 	// 进度回调：推送 progress 事件（与文本翻译一致，封顶 99%）
 	prog := func(step string, done, total int) {
 		percent := 0
@@ -233,8 +253,6 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	// 调用引擎处理文件翻译
 	// ★ 注入用户组织（2026-08-26 KB继承链）
 	res := s.Engine.HandleFile(s.userOrgCtx(r), savePath, options, prog)
-	// 处理完成后删除临时文件
-	os.Remove(savePath)
 
 	// 推送完成进度
 	fmt.Fprint(w, sseEvent("progress", map[string]interface{}{"step": "完成", "done": 1, "total": 1, "percent": 100}))
@@ -267,6 +285,11 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 ChatRequest）。
 // 返回: 引擎处理结果对象（JSON）；成功时已计量。
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	// ★ 安全止血（整改 A1）：强制登录
+	if s.authUser(r) == nil {
+		writeJSON(w, 401, map[string]string{"error": "未登录或登录已过期"})
+		return
+	}
 	var req ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "请求格式错误"})
@@ -301,6 +324,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（multipart：file + target_langs + message）。
 // 返回: 引擎处理结果对象（JSON）；成功时已计量。
 func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
+	// ★ 安全止血（整改 A1）：强制登录（在解析 multipart 前拒绝，匿名零成本）
+	if s.authUser(r) == nil {
+		writeJSON(w, 401, map[string]string{"error": "未登录或登录已过期"})
+		return
+	}
 	// 解析 multipart 表单（上限 50MB，仅允许 docx/pptx/xlsx/pdf）
 	if err := parseUpload(r, translateUploadMax, translateExtWhitelist); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
@@ -317,21 +345,6 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	targetLangs := r.FormValue("target_langs")
 	message := r.FormValue("message")
 
-	// 保存上传文件
-	os.MkdirAll(s.Cfg.UploadDir, 0o755)
-	savePath := filepath.Join(s.Cfg.UploadDir, uniqueName(header.Filename))
-	f, err := os.Create(savePath)
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "无法保存文件"})
-		return
-	}
-	if _, err := io.Copy(f, file); err != nil {
-		f.Close()
-		writeJSON(w, 500, map[string]string{"error": "写入失败"})
-		return
-	}
-	f.Close()
-
 	// 解析目标语言列表
 	langs := strings.Split(targetLangs, ",")
 	clean := []string{}
@@ -347,18 +360,32 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 		options["message"] = message
 		options["_prompt"] = message
 	}
-	// 配额闸门：QPS/并发/每日上限/余额校验
+	// 配额闸门：QPS/并发/每日上限/余额校验（不通过则拒绝本次文件翻译）
 	tid, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "error": gateErr.Error()})
 		return
 	}
+	// ★ 整改 A2：闸门通过后再落盘 + defer 兜底清理（拒绝路径零残留）
+	os.MkdirAll(s.Cfg.UploadDir, 0o755)
+	savePath := filepath.Join(s.Cfg.UploadDir, uniqueName(header.Filename))
+	f, err := os.Create(savePath)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "无法保存文件"})
+		return
+	}
+	if _, err := io.Copy(f, file); err != nil {
+		f.Close()
+		os.Remove(savePath)
+		writeJSON(w, 500, map[string]string{"error": "写入失败"})
+		return
+	}
+	f.Close()
+	defer os.Remove(savePath)
 	// 调用引擎处理文件翻译（非流式）
 	// ★ 注入用户组织（2026-08-26 KB继承链）
 	res := s.Engine.HandleFile(s.userOrgCtx(r), savePath, options, nil)
-	// 处理完成后删除临时文件
-	os.Remove(savePath)
 	if res.Error == "" {
 		// ★ Token 实费计费：聚合本次全链路真实 token × 均摊系数（强制计费时扣余额）
 		s.chargeTaskTokens(r, tid, "translate", "file", normalizeTaskMode(r.FormValue("mode")))

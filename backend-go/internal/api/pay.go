@@ -182,8 +182,9 @@ func (s *Server) handlePaySimulate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	// 仅 mock 模式开放（生产接入真实渠道后该接口自动失效）
-	if v, _ := s.Store.GetConfig("pay_mode"); v != "" && v != "mock" {
+	// 仅 mock 模式开放（★ 整改 A6：pay_mode 未显式配置为 mock 时一律拒绝——
+	// 此前「非空且≠mock 才拦」的写法让全新部署（空配置）处于可模拟充值状态）
+	if v, _ := s.Store.GetConfig("pay_mode"); v != "mock" {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "非 mock 模式禁止模拟支付"})
 		return
 	}
@@ -264,12 +265,10 @@ func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	channel := strings.TrimPrefix(r.URL.Path, "/api/pay/notify/")
-	// ③ mock 生产封禁：非 mock 模式下 mock 渠道回调一律拒绝（与 handlePaySimulate 同口径）
-	payMode := ""
-	if v, _ := s.Store.GetConfig("pay_mode"); v != "" {
-		payMode = v
-	}
-	if channel == "mock" && payMode != "" && payMode != "mock" {
+	// ③ mock 封禁（★ 整改 A6：与 handlePaySimulate 同口径收紧——pay_mode 未显式
+	//    配置为 mock 时，mock 渠道回调一律拒绝，堵住「空配置=可模拟充值」的默认放行）
+	payMode, _ := s.Store.GetConfig("pay_mode")
+	if channel == "mock" && payMode != "mock" {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "当前支付模式下禁止 mock 回调"})
 		return
 	}

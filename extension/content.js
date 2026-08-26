@@ -68,10 +68,14 @@
     showBubble(x, y, "翻译中…");
     const langs = (cfg.langs || "en").split(",").map(s => s.trim()).filter(Boolean);
     try {
+      // ★ C3：显式传 mode:"fast"——后端 normalizeTaskMode 缺省归一化为 pro（分钟级
+      //   全流水线），划译场景必须显式指定快速模式；★ 同时加 30s 中止防气泡永久卡死。
       const resp = await fetch(cfg.baseUrl.replace(/\/+$/, "") + "/openapi/v1/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + cfg.apiKey },
-        body: JSON.stringify({ text: selText, target_langs: langs }),
+        body: JSON.stringify({ text: selText, target_langs: langs, mode: "fast" }),
+        signal: (typeof AbortSignal !== "undefined" && AbortSignal.timeout)
+          ? AbortSignal.timeout(30000) : undefined,
       });
       const data = await resp.json();
       if (!data.success || !data.translations) {
@@ -81,7 +85,7 @@
       showBubble(x, y,
         Object.entries(data.translations).map(([lc, v]) => lc + ": " + v).join("\n"));
     } catch (e) {
-      showBubble(x, y, "网络错误：" + e.message);
+      showBubble(x, y, e.name === "TimeoutError" ? "翻译超时，请重试或缩短选区" : ("网络错误：" + e.message));
     }
   }
 

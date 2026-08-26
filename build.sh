@@ -22,7 +22,7 @@ APP="dist/$APP_NAME.app"
 CONTENTS="$APP/Contents"
 
 echo "==> [1/4] 构建前端 ..."
-(cd frontend && npm install --silent && npm run build)
+(cd frontend-react && npm install --silent && npm run build)
 
 echo "==> [2/4] 编译 Go 后端 (darwin/arm64 + amd64 通吃本机) ..."
 (cd backend-go && go build -ldflags "-s -w" -o /tmp/translator-server-mac ./cmd/server)
@@ -36,7 +36,7 @@ cp /tmp/translator-server-mac "$CONTENTS/MacOS/translator"
 chmod +x "$CONTENTS/MacOS/translator"
 
 # 前端静态资源
-cp -R frontend/dist "$CONTENTS/Resources/frontend/dist"
+cp -R frontend-react/dist "$CONTENTS/Resources/frontend/dist"
 
 # Info.plist：应用元信息（可执行文件名 / 标识符 / 版本）
 cat > "$CONTENTS/Info.plist" <<PLIST

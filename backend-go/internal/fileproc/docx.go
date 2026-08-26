@@ -2,6 +2,7 @@
 // docx 文件解析与写回：从 word/document.xml（正文段落+表格）及页眉页脚中提取文本，
 // 以及把译文写回 docx（XML 层面替换段落第一个 w:t 文本并清空其余 run）。
 // 提取与写回保持一致的文本规整规则：跳过 hyperlink 内文本，避免原文/译文不匹配。
+// 读取 zip 条目时带 64MB 解压上限（整改 D5），超限由调用方降级 xlsx 对照表。
 // =============================================
 package fileproc
 
@@ -118,17 +119,32 @@ func extractDocx(path string, e *Extractor) error {
 	return nil
 }
 
+// maxZipEntryBytes 单条目解压上限（★ 整改 D5：防高压缩比 zip 炸弹 OOM——
+// 50MB 上传可构造解压数 GB 的条目；64MB 覆盖一切合法 OOXML 部件）。
+const maxZipEntryBytes = 64 << 20
+
 // readZipEntry 从 zip 读取指定名称文件的全部字节。
 // 参数：zr=zip 读取器，name=zip 内文件路径；返回文件内容字节。
+// ★ 整改 D5：预检 UncompressedSize64 + LimitReader 双闸，超限报错由上层降级 xlsx 对照表。
 func readZipEntry(zr *zip.ReadCloser, name string) ([]byte, error) {
 	for _, f := range zr.File {
 		if f.Name == name {
+			if f.UncompressedSize64 > maxZipEntryBytes {
+				return nil, fmt.Errorf("zip 条目超限: %s (%d bytes > %d)", name, f.UncompressedSize64, maxZipEntryBytes)
+			}
 			rc, err := f.Open()
 			if err != nil {
 				return nil, err
 			}
 			defer rc.Close()
-			return io.ReadAll(rc)
+			data, err := io.ReadAll(io.LimitReader(rc, maxZipEntryBytes+1))
+			if err != nil {
+				return nil, err
+			}
+			if len(data) > maxZipEntryBytes {
+				return nil, fmt.Errorf("zip 条目超限(声明不符): %s", name)
+			}
+			return data, nil
 		}
 	}
 	return nil, fmt.Errorf("not found: %s", name)

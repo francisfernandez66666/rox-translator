@@ -3,17 +3,19 @@
 // 核心能力（2026-08-26 评审整改 R1/R6/R7）：
 //   - 三路独立信号量：chat 后台槽（LLM_CHAT_CONCURRENT，默认 2）+ 交互保留槽（1，
 //     仅带 Interactive 标记的请求可抢占，保证前台划译级请求不被批任务饿死）
-//     + embed 槽（LLM_EMBED_CONCURRENT，默认 6）——Chat 与 Embed 分属两家供应商、
+//   - embed 槽（LLM_EMBED_CONCURRENT，默认 6）——Chat 与 Embed 分属两家供应商、
 //     账号限额互不相干，此前共用一个 3 槽信号量是文件并翻卡顿的首要根因；
 //   - 排队观测：任一信号量等待 >1s 打 [llm-queue] 日志；
-//   - 单次调用超时兜底、429 触发降级模型重试、嵌入向量 L2 归一化。
+//   - 调用级 context 超时 + transport 层响应头/握手超时兜底（整改 D3）、
+//     429 触发降级模型重试、嵌入向量 L2 归一化。
+//
 // =============================================
 package llm
 
 import (
-	"crypto/tls"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -52,7 +54,7 @@ type Client struct {
 
 	// 知识库 Embed 阶段覆盖（stage_models.kb_embed；空=用全局 Embed 配置）。
 	// ★ R7：读改一律持锁——引擎每请求都可能调用 SetEmbedOverride，裸写字段是数据竞争。
-	embedMu             sync.Mutex
+	embedMu                         sync.Mutex
 	embedBase, embedKey, embedModel string
 
 	// inflight 当前在途 LLM 调用数（观测用，原子计数）
@@ -91,8 +93,11 @@ func NewClient(cfg *config.Config) *Client {
 	tr := &http.Transport{
 		// ★ 禁用 HTTP/2：siliconflow 偶发 h2 流挂起（roundTrip 2min+ 无响应），
 		//   HTTP/1.1 下未观测到该问题；同时缩短整体超时快速失败。
-		TLSClientConfig: &tls.Config{NextProtos: []string{"http/1.1"}},
-		ForceAttemptHTTP2: false,
+		TLSClientConfig:       &tls.Config{NextProtos: []string{"http/1.1"}},
+		ForceAttemptHTTP2:     false,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second, // 响应头兜底（体级超时仍由各调用 ctx 控制）
+		IdleConnTimeout:       90 * time.Second,
 	}
 	if p := getenvAny("PROXY_URL", "HTTPS_PROXY", "HTTP_PROXY"); p != "" {
 		// 配置 HTTP 代理（用于公司内网/受限网络访问 LLM API）
@@ -102,8 +107,11 @@ func NewClient(cfg *config.Config) *Client {
 	}
 	return &Client{
 		cfg: cfg,
-		// ★ 全局超时兜底：防止 LLM API 卡住时请求无限挂起
-		http: &http.Client{Transport: tr, Timeout: 45 * time.Second},
+		// ★ 整改 D3：移除 Client 级全局 45s Timeout——它会先于调用方 ctx（120s）触发，
+		//   使长输出（maxTokens=8192 全量重翻/大块批量）在慢供应商下被伪超时→降级链
+		//   双倍调用双倍计费。挂起防护改由 Transport 层（响应头 60s/握手 15s/空闲回收）
+		//   + 各调用点 context.WithTimeout 分级承担。
+		http: &http.Client{Transport: tr},
 		// ★ 三路信号量容量可经环境变量调整（评审整改 R1）
 		chatSem:  make(chan struct{}, envInt("LLM_CHAT_CONCURRENT", DefaultChatConcurrent)),
 		chatFast: make(chan struct{}, 1),

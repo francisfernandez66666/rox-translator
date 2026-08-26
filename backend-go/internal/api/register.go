@@ -190,8 +190,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		// 标记邀请码已使用（一次性）
-		_ = s.Store.MarkInviteCodeUsed(inv.ID, req.Username)
+		// 标记邀请码已使用（一次性；★ 整改 A4：抢占失败=被并发请求抢先，拒绝本次注册）
+		if claimed, merr := s.Store.MarkInviteCodeUsed(inv.ID, req.Username); merr != nil || !claimed {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邀请码无效或已使用"})
+			return
+		}
 	}
 
 	// 2. 创建租户（无绑定租户时新建独立试用租户）
@@ -291,7 +294,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 邀请裂变首绑（白皮书 §5）：携带个人邀请码注册→写入 referred_by（首绑闸门），
 	//   绑定成功即给邀请人叠加体验奖励：+invite_reward_tokens、时长 +invite_extend_days（与既有体验到期取大后叠加，按对去重）
-	if strings.TrimSpace(req.Ref) != "" {
+	//   ★ 总开关门禁（2026-08-26 U3）：referral_enabled=0 时跳过绑定与奖励发放
+	if strings.TrimSpace(req.Ref) != "" && s.Store.ReferralEnabled() {
 		if inviterUID, inviterTID, ok := s.Store.BindReferral(nu.ID, strings.TrimSpace(req.Ref)); ok {
 			refTokens := int64(300000)
 			if v, _ := s.Store.GetConfig("invite_reward_tokens"); v != "" {
@@ -305,21 +309,22 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 					refDays = x
 				}
 			}
-			_ = s.Store.GrantTrialStack(inviterUID, inviterTID, nu.ID, refTokens, refDays)
-			s.Store.LogAudit(inviteTenantID, nu.ID, "referral_bind", "user", fmt.Sprintf("受邀绑定邀请人 uid=%d", inviterUID))
-			// ★ oneid 级防刷观测（白皮书 §5.4）：同邀请人单日新增奖励 ≥5 笔触发人工复核告警
-			if n := s.Store.CountInviterRewardsToday(inviterUID); n >= 5 {
-				already := false
-				for _, a := range func() []*store.Alert { ls, _ := s.Store.ListAlerts(inviterTID, "open", 50); return ls }() {
-					if a.Kind == "referral_burst" {
-						already = true
-						break
-					}
+			// ★ 整改 A5：单邀请人日发放上限（referral_max_daily_rewards，默认 50 笔）——
+			//   把「换 IP 自邀刷奖励」的损失上限钉死为可配置常数；触顶升 critical 告警拒发。
+			//   配套 U3 总开关（referral_enabled=0 全量停发）构成两级防薅。
+			maxDaily := int64(50)
+			if v, _ := s.Store.GetConfig("referral_max_daily_rewards"); v != "" {
+				if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+					maxDaily = x
 				}
-				if !already {
-					s.Store.CreateAlert(inviterTID, "warning", "referral_burst",
-						fmt.Sprintf("邀请人 uid=%d 今日新增被邀奖励已达 %d 次（≥5），请人工复核是否真人邀请", inviterUID, n))
-				}
+			}
+			if n := s.Store.CountInviterRewardsToday(inviterUID); n >= maxDaily {
+				s.Store.CreateAlert(inviterTID, "critical", "referral_cap",
+					fmt.Sprintf("邀请人 uid=%d 今日奖励已达上限 %d 笔，本笔(+%d token/%d天)已拒发，请人工核实",
+						inviterUID, maxDaily, refTokens, refDays))
+			} else {
+				_ = s.Store.GrantTrialStack(inviterUID, inviterTID, nu.ID, refTokens, refDays)
+				s.Store.LogAudit(inviteTenantID, nu.ID, "referral_bind", "user", fmt.Sprintf("受邀绑定邀请人 uid=%d", inviterUID))
 			}
 		}
 	}

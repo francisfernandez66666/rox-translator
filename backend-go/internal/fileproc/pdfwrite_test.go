@@ -3,6 +3,7 @@
 package fileproc
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,7 +33,7 @@ func TestWriteTranslatedPDF(t *testing.T) {
 		"车辆用户手册": "Vehicle User Manual",
 		"激活蓝牙钥匙后，车辆将自动解锁并同步座椅记忆设置。请确保手机蓝牙已开启。": "After the Bluetooth key is activated, the vehicle will unlock automatically and sync seat memory settings.",
 	}
-	if err := WriteTranslatedPDF(out, srcs, tr); err != nil {
+	if err := WriteTranslatedPDF(context.Background(), out, srcs, tr); err != nil {
 		t.Fatalf("WriteTranslatedPDF: %v", err)
 	}
 	b, err := os.ReadFile(out)
@@ -63,7 +64,7 @@ func TestWriteTranslatedPDFNoFont(t *testing.T) {
 		systemFontCandidates = savedCandidates
 		bundledFontProbe = savedProbe
 	}()
-	err := WriteTranslatedPDF(filepath.Join(t.TempDir(), "o.pdf"), []string{"测试"}, nil)
+	err := WriteTranslatedPDF(context.Background(), filepath.Join(t.TempDir(), "o.pdf"), []string{"测试"}, nil)
 	if err == nil {
 		t.Fatal("无字体时应返回错误")
 	}

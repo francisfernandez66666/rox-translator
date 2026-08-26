@@ -1,0 +1,194 @@
+/* ============================================================================
+   theme.css — React 版主题（TDesign 之上补齐原 Vue 版的视觉个性）
+   仅保留三类规则：①登录页渐变 ②聊天气泡/文件卡 ③后台布局微调
+   ============================================================================ */
+
+/* ---- 登录页渐变背景（复刻 Login.vue） ---- */
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #1a237e 0%, #3949ab 50%, #1557b0 100%);
+  position: relative;
+}
+.login-card {
+  background: #fff;
+  border-radius: 18px;
+  padding: 40px 36px;
+  width: 400px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+.login-logo { font-size: 22px; font-weight: 700; color: #1a237e; margin-bottom: 6px; }
+.login-sub { font-size: 13px; color: #888; margin-bottom: 22px; }
+.login-lang { position: absolute; top: 18px; right: 24px; }
+
+/* ---- 前台工作台头部 ---- */
+.app-header {
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 20px; border-bottom: 1px solid #e7eaf0; background: #fff;
+  position: sticky; top: 0; z-index: 20;
+}
+.brand { font-weight: 800; color: #1a237e; font-size: 17px; }
+
+/* ---- 聊天区 ---- */
+.chat-scroll { flex: 1; overflow-y: auto; padding: 18px 6%; scroll-behavior: smooth; }
+.bubble-row { display: flex; margin-bottom: 16px; gap: 10px; }
+.bubble-row.user { flex-direction: row-reverse; }
+.avatar {
+  width: 34px; height: 34px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center; font-size: 13px; color: #fff;
+}
+.avatar-ai { background: #1a237e; }
+.avatar-user { background: #43a047; }
+.bubble {
+  max-width: 78%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.65;
+  background: #f4f6fa; color: #222; word-break: break-word;
+}
+.bubble-row.user .bubble { background: #e3f2fd; }
+.bubble .md pre { background: #27293d; color: #e6e6fa; padding: 10px; border-radius: 8px; overflow: auto; }
+.bubble .md code { background: rgba(26,35,126,.08); padding: 1px 5px; border-radius: 4px; }
+.bubble .md table { border-collapse: collapse; margin: 8px 0; }
+.bubble .md th, .bubble .md td { border: 1px solid #d8dee6; padding: 4px 8px; font-size: 13px; }
+
+.tr-translations { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.tr-translations td { border-top: 1px dashed #dfe4ee; padding: 6px 4px; vertical-align: top; font-size: 13.5px; }
+.tr-lang-chip {
+  display: inline-block; background: #e8eaf6; color: #1a237e; border-radius: 10px;
+  padding: 0 8px; font-size: 12px; line-height: 20px; margin-right: 6px; white-space: nowrap;
+}
+
+/* ---- 消息气泡（与 Vue MessageBubble 等价结构）---- */
+.message-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 16px; padding: 0 16px; }
+.message-row.user { flex-direction: row-reverse; }
+.bubble-badge { margin-bottom: 6px; }
+
+.skill-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11px;
+  background: rgba(46, 125, 50, 0.12); color: #1a73e8; font-weight: 500;
+}
+
+.bubble-text { word-break: break-word; overflow-wrap: break-word; }
+.bubble-text p { margin: 0 0 8px 0; line-height: 1.7; }
+.bubble-text p:last-child { margin-bottom: 0; }
+.bubble-text h1 { font-size: 18px; font-weight: 700; margin: 16px 0 8px 0; padding-bottom: 4px; border-bottom: 1px solid #dadce0; }
+.bubble-text h2 { font-size: 16px; font-weight: 700; margin: 14px 0 6px 0; padding-bottom: 3px; border-bottom: 1px solid #e8eaed; }
+.bubble-text h3 { font-size: 15px; font-weight: 600; margin: 12px 0 6px 0; }
+.bubble-text h4 { font-size: 14px; font-weight: 600; margin: 10px 0 4px 0; }
+.bubble-text h5, .bubble-text h6 { font-size: 13px; font-weight: 600; margin: 8px 0 4px 0; }
+.bubble-text ul, .bubble-text ol { margin: 4px 0 8px 0; padding-left: 20px; }
+.bubble-text li { margin-bottom: 2px; line-height: 1.6; }
+.bubble-text blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid #1a73e8; background: rgba(26,115,232,.05); color: #5f6368; border-radius: 0 4px 4px 0; }
+.bubble-text code { background: rgba(0,0,0,.06); padding: 1px 5px; border-radius: 3px; font-size: 13px; font-family: 'SF Mono', Menlo, Consolas, monospace; }
+.bubble-text hr { border: none; border-top: 1px solid #dadce0; margin: 12px 0; }
+.bubble-text strong { font-weight: 600; }
+.bubble-text em { font-style: italic; }
+
+/* 进度条 */
+.progress-area { margin-bottom: 10px; }
+.progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.progress-step { font-size: 13px; color: #5f6368; }
+.progress-percent { font-size: 13px; font-weight: 600; color: #1a73e8; font-family: 'SF Mono', Menlo, monospace; }
+.progress-bar-bg { width: 100%; height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden; }
+.progress-bar-fill { height: 100%; background: linear-gradient(90deg, #1a73e8, #4fc3f7); border-radius: 3px; transition: width .3s ease; }
+
+/* 翻译结果 */
+.translation-results { display: flex; flex-direction: column; gap: 8px; }
+.lang-row { display: flex; gap: 8px; align-items: baseline; }
+.lang-label { min-width: 56px; font-size: 12px; color: #5f6368; font-weight: 500; flex-shrink: 0; }
+.lang-text { font-size: 14px; color: #202124; line-height: 1.5; white-space: pre-wrap; flex: 1; }
+.source-badge { font-size: 11px; padding: 1px 6px; border-radius: 4px; font-weight: 500; flex-shrink: 0; white-space: nowrap; }
+.source-kb { background: #e8f0fe; color: #1a73e8; }
+.source-model { background: #e3f2fd; color: #1565c0; }
+.translation-mode { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid #e8e8e8; }
+.mode-badge { font-size: 12px; padding: 2px 8px; border-radius: 4px; font-weight: 500; }
+.mode-exact { background: #e8f0fe; color: #1a73e8; }
+.mode-fuzzy { background: #fff3e0; color: #e65100; }
+.mode-semantic { background: #f3e5f5; color: #6a1b9a; }
+.mode-model { background: #e3f2fd; color: #1565c0; }
+.mode-match-text { font-size: 12px; color: #9e9e9e; }
+
+/* 匹配度报告 */
+.match-report { margin-top: 10px; padding-top: 10px; border-top: 1px solid #e0e0e0; }
+.report-title { font-size: 12px; font-weight: 600; color: #5f6368; margin-bottom: 6px; }
+.report-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.report-item { display: flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 6px; background: #fff; border-radius: 4px; }
+.report-status { font-size: 12px; }
+.report-lang { color: #5f6368; }
+
+/* 反馈入口 */
+.msg-feedback-row { margin-top: 6px; display: flex; justify-content: flex-end; }
+.feedback-btn { border: none; background: transparent; color: #5f6368; font-size: 12px; cursor: pointer; padding: 2px 8px; border-radius: 10px; }
+.feedback-btn:hover { background: rgba(26,115,232,.08); color: #1a73e8; }
+
+/* 下载卡图标 */
+.card-icon { flex-shrink: 0; width: 42px; height: 42px; border-radius: 10px; display: flex; align-items: center; justify-content: center; }
+.icon-docx, .icon-pptx, .icon-xlsx { width: 42px; height: 42px; border-radius: 10px; color: #fff; font-size: 20px; font-weight: 800; font-family: 'Segoe UI', 'SF Pro', sans-serif; letter-spacing: -1px; }
+.icon-docx { background: #1a73e8; }
+.icon-pptx { background: #d4422e; }
+.icon-xlsx { background: #1e8e3e; }
+.icon-file { display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 10px; background: #f5f5f5; font-size: 22px; }
+.card-info { flex: 1; min-width: 0; }
+.card-filename { font-size: 14px; font-weight: 600; color: #202124; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-meta { font-size: 12px; color: #5f6368; margin-top: 2px; }
+.image-download-btn { display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px; border-radius: 8px; background: #f1f3f4; color: #5f6368; font-size: 13px; text-decoration: none; transition: all .2s; align-self: flex-start; }
+.image-download-btn:hover { background: #e8eaed; color: #202124; }
+
+.file-downloads { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.image-preview { position: relative; }
+.preview-img {
+  max-width: 320px; max-height: 220px; border-radius: 10px; cursor: zoom-in;
+  border: 1px solid #e3e6ef; object-fit: cover; background: #fff;
+  display: flex; align-items: center; justify-content: center; color: #99a;
+}
+.preview-loading { min-width: 120px; min-height: 80px; }
+.download-card {
+  display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid #e3e6ef;
+  border-radius: 12px; padding: 10px 12px; max-width: 340px;
+}
+.card-btn { font-size: 18px; cursor: pointer; text-decoration: none; }
+
+.chat-inputbar {
+  border-top: 1px solid #e7eaf0; background: #fff; padding: 12px 6% 16px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.lang-tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+/* ---- 后台布局 ---- */
+.admin-shell { display: flex; min-height: 100vh; background: #f4f6fa; }
+.admin-side { width: 232px; background: #fff; border-right: 1px solid #e7eaf0; padding: 14px 10px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.admin-main { flex: 1; padding: 18px 22px; min-width: 0; }
+.panel-card { background: #fff; border-radius: 12px; padding: 18px; border: 1px solid #eceff5; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat-card { background: #fff; border: 1px solid #eceff5; border-radius: 12px; padding: 14px 16px; }
+.stat-card b { font-size: 22px; color: #1a237e; }
+
+.ref-cfg { margin-top: 16px; background: rgba(255,152,0,.06); border: 1px solid rgba(255,152,0,.25); border-radius: 10px; padding: 14px 16px; max-width: 560px; }
+
+/* 工单进度气泡（Teleport 等价：fixed 定位） */
+.ticket-progress-float {
+  position: fixed; right: 26px; bottom: 26px; width: 300px; z-index: 60;
+  background: #fff; border: 1px solid #e3e6ef; border-radius: 14px; padding: 14px;
+  box-shadow: 0 10px 30px rgba(26,35,126,.15);
+}
+
+/* ---- 弹窗内字段（等价 Vue 各 Modal 的内联/局部类）---- */
+.fb-hint { margin: 0 0 10px; font-size: 12px; color: #888; }
+.eb-hint { font-size: 12.5px; color: #888; margin: 8px 0 12px; }
+.eb-old-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.eb-old-label { font-size: 12px; color: #666; white-space: nowrap; }
+.eb-old-addr { font-size: 13px; color: #555; word-break: break-all; }
+.fb-addr { font-size: 13px; color: #555; word-break: break-all; }
+.pwd-code-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.pwd-code-input { flex: 1; }
+.eb-code-row { display: flex; gap: 8px; margin-top: 8px; }
+.eb-code-input { flex: 1; }
+.fb-msg { margin-top: 6px; font-size: 12.5px; }
+.login-ok-hint { color: #2e7d32; font-size: 12.5px; margin-top: 6px; }
+.login-error { color: #c5221f; font-size: 12.5px; margin-top: 6px; }
+.eb-ok { color: #2e7d32; font-size: 12.5px; margin-top: 6px; }
+.eb-err { color: #c5221f; font-size: 12.5px; margin-top: 6px; }
+.fb-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.fb-check { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13px; color: #444; cursor: pointer; }
+.fb-ctx-preview { color: #999; font-size: 12px; }
+.fb-confirm-row { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: #333; margin: 6px 0 4px; }

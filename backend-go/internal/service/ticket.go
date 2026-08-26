@@ -3,8 +3,11 @@
 // 职责：
 //   - EnqueueTicketRun：工单入队（API 层调用，立即返回 ticket_no）
 //   - StartWorkers：goroutine 工作池，循环 Reserve → 分发执行 → Ack/Fail
+//   - safeProcessJob/processJob：按任务类型分发；捕获 panic 转为任务失败，避免击穿进程
 //   - runTicket：按工单类型执行——纯文本走五步编排流水线；文件走提取→翻译→原格式回写
-//   - 完成后投递站内信（通知中心）
+//   - chargeTokens/dispatchCompletedWebhook：完成时按真实 token 计费并推送 webhook
+//   - StartStallSweep/BootResume：卡死巡检重置 + 启动断点续跑
+//   - 文件翻译硬闸结束后对漏翻段落追加 warning 轨迹与站内通知
 //
 // 队列接缝：仅依赖 queue.Queue 接口（当前 direct 实现；未来 kafka driver 单文件接入）。
 // =============================================
@@ -17,6 +20,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,7 +102,7 @@ func (s *TicketService) workerLoop(workerID string) {
 			continue
 		}
 		jctx, jcancel := context.WithTimeout(context.Background(), 25*time.Minute)
-		perr := s.processJob(jctx, job)
+		perr := s.safeProcessJob(jctx, job)
 		jcancel()
 		if perr != nil {
 			_ = s.Queue.MarkFailed(context.Background(), job.ID, perr.Error())
@@ -106,6 +110,19 @@ func (s *TicketService) workerLoop(workerID string) {
 			_ = s.Queue.MarkDone(context.Background(), job.ID)
 		}
 	}
+}
+
+// safeProcessJob panic 防护（整改 D4）：worker goroutine 不在 net/http 的连接级
+// recover 保护内——引擎/KB/文件深处一次 panic 即击穿整个进程，任务滞留至租约超期。
+// 此处兜底把 panic 转为任务失败，交由 MarkFailed 的重试/死信机制收场。
+func (s *TicketService) safeProcessJob(ctx context.Context, job *queue.Job) (perr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			perr = fmt.Errorf("worker panic: %v", r)
+			log.Printf("[worker] panic recovered job=%d type=%s: %v\n%s", job.ID, job.Type, r, debug.Stack())
+		}
+	}()
+	return s.processJob(ctx, job)
 }
 
 // processJob 按任务类型分发执行。
@@ -333,11 +350,6 @@ func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) erro
 	return nil
 }
 
-// runFileTicket 文件工单：提取→逐段翻译→原格式回写（docx/xlsx/pptx/pdf）。
-// 多文件工单（ticket_files 表有行）：逐文件处理，各自记录产物/失败原因；
-// 全部失败才置工单失败。单文件旧工单走 tickets.file_path 历史路径。
-// mode 透传：fast 模式跳过 KB 匹配（纯模型直翻），pro 保持知识库链路。
-
 // lowBalanceThreshold 低额告警绝对阈值（system_config low_balance_alert_tokens，默认100000）。
 func lowBalanceThreshold() int64 {
 	return 100000
@@ -390,7 +402,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	files, _ := s.Store.TicketFiles(t.ID)
 	if len(files) > 0 {
 		var mu sync.Mutex
-		var okCount, failCount int64
+		var okCount, failCount, unTotal int64
 		var firstErr string
 		s.Store.SetTicketState(t.ID, "file_extract", "running",
 			fmt.Sprintf("total=%d mode=%s", len(files), normalizeMode(mode)))
@@ -435,6 +447,8 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 					fmt.Sprintf("progress=%d/%d", doneN, len(files)))
 				mu.Lock()
 				s.bumpTmHitsFromTranslations(t.TenantID, res.Data.Translations) // ★ 自闭环计数（不自动入库）
+				// ★ 漏翻可见性：聚合各文件未译出段数，收尾统一落轨迹+通知
+				unTotal += int64(untranslatedTotal(res.Data.Untranslated))
 			}(f)
 		}
 		wg.Wait()
@@ -444,6 +458,15 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 			s.Store.SetTicketState(t.ID, "file_qa", "success",
 				fmt.Sprintf("ok=%d fail=%d", okCount, failCount))
 			s.Store.SetTicketState(t.ID, "file_writeback", "success", "")
+		}
+		// ★ 漏翻可见性（2026-08-26）：硬闸结束后仍有缺失时，追加 warning 轨迹 + 通知创建人
+		if unTotal > 0 {
+			s.Store.SetTicketState(t.ID, "file_qa", "warning",
+				fmt.Sprintf("untranslated=%d（模型未能译出已保留原文，建议人工检查产物）", unTotal))
+			s.Store.CreateNotification(t.CreatedBy,
+				fmt.Sprintf("文件翻译完成但有 %d 段未译出：%s", unTotal, t.Title),
+				"部分段落模型未能译出已保留原文，请打开产物人工检查；必要时可重新发起工单。",
+				"ticket", t.ID)
 		}
 		if okCount == 0 && failCount == int64(len(files)) && firstErr != "" {
 			return fmt.Errorf("%s", firstErr)
@@ -459,6 +482,15 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	// 翻译完成 → 校对标记 → 进入回写阶段
 	s.Store.SetTicketState(t.ID, "file_qa", "success", "")
 	s.Store.SetTicketState(t.ID, "file_writeback", "running", "")
+	// ★ 漏翻可见性（2026-08-26）：硬闸结束后仍有缺失 → warning 轨迹 + 站内通知
+	if un := untranslatedTotal(res.Data.Untranslated); un > 0 {
+		s.Store.SetTicketState(t.ID, "file_qa", "warning",
+			fmt.Sprintf("untranslated=%d（模型未能译出已保留原文，建议人工检查产物）", un))
+		s.Store.CreateNotification(t.CreatedBy,
+			fmt.Sprintf("文件翻译完成但有 %d 段未译出：%s", un, t.Title),
+			"部分段落模型未能译出已保留原文，请打开产物人工检查；必要时可重新发起工单。",
+			"ticket", t.ID)
+	}
 	// ★ 多语言产物打包 zip
 	zipPath := ""
 	if len(res.Files) > 1 {
@@ -479,6 +511,15 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	s.Store.SetTicketState(t.ID, "file_writeback", "success", "")
 	s.bumpTmHitsFromTranslations(t.TenantID, res.Data.Translations) // ★ 自闭环计数（不自动入库）
 	return nil
+}
+
+// untranslatedTotal 汇总各语言未译出段数（引擎硬闸收尾统计，2026-08-26 漏翻可见性）。
+func untranslatedTotal(m map[string]int) int {
+	n := 0
+	for _, v := range m {
+		n += v
+	}
+	return n
 }
 
 // failedCount 统计工单内处理失败的文件数。

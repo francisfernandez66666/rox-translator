@@ -411,8 +411,10 @@ func (s *Server) withTenant(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		// 3. 未登录：仅信任 API Key 所属租户（开放 API 路径）
-		if ak, authErr := s.authenticateAPIKey(r); authErr == "" && ak != nil && ak.TenantID > 0 {
+		// 3. 未登录：仅信任 API Key 所属租户（开放 API 路径）。
+		//    ★ 整改 A3：用 NoTouch 变体——中间件解析不代表一次业务调用，
+		//    计数由 openapi handler 内 authenticateAPIKey 唯一执行，消除日配额双扣。
+		if ak, authErr := s.authenticateAPIKeyNoTouch(r); authErr == "" && ak != nil && ak.TenantID > 0 {
 			ctx = tenant.WithTenant(ctx, ak.TenantID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
@@ -448,15 +450,15 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		// 请求方法/头（含租户切换与后台 Token 头）
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-ID, X-Admin-Token")
-	// 来源校验：无 Origin 头（同源导航/非浏览器）直接放行。
-	// ★ /openapi/* 前缀无条件反射（评审整改 A2）：开放 API 全部为 Key 鉴权、
-	//   无 Cookie 会话面，CSRF 不成立——放行跨域以支持浏览器划词插件等第三方前端
-	//   （MV3 content script 即便持有 host_permissions，部分环境仍受页面 CORS 约束）。
-	origin := r.Header.Get("Origin")
-	if origin == "" || s.corsAllowed(origin) || strings.HasPrefix(r.URL.Path, "/openapi/") {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Add("Vary", "Origin")
-	}
+		// 来源校验：无 Origin 头（同源导航/非浏览器）直接放行。
+		// ★ /openapi/* 前缀无条件反射（评审整改 A2）：开放 API 全部为 Key 鉴权、
+		//   无 Cookie 会话面，CSRF 不成立——放行跨域以支持浏览器划词插件等第三方前端
+		//   （MV3 content script 即便持有 host_permissions，部分环境仍受页面 CORS 约束）。
+		origin := r.Header.Get("Origin")
+		if origin == "" || s.corsAllowed(origin) || strings.HasPrefix(r.URL.Path, "/openapi/") {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
+		}
 		// 预检请求直接返回，不进入业务 Handler
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)

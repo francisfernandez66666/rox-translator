@@ -2,7 +2,8 @@
 // 文本翻译主流程（复刻 skill.py _handle_text_translate）：面向对话/文本翻译入口。
 // 从 options 与用户 prompt 解析目标语言（KB 语言 + 其他语言），
 // 知识库语言走 TranslateOne 四段匹配（命中标注 kb 来源），其他语言走纯模型并发翻译，
-// 最终合并所有语言译文、构建展示 reply 与结构化 TextTranslateData 返回。
+// 支持 fast/pro 双模式与基于 ctx 的进度回调，最终合并所有语言译文、
+// 经 AI 校对后构建展示 reply 与结构化 TextTranslateData 返回。
 // ========================================
 package engine
 
@@ -161,14 +162,14 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 	kbSrc := map[string]string{}
 	if len(kbTarget) > 0 {
 		prog("知识库匹配中...", 1, 4)
-		prevOnPhase := e.OnPhase
-		e.OnPhase = func(phase string) {
+		// ★ 整改 D2：阶段回调经 ctx 传递（替代 Engine.OnPhase 单例字段——并发请求
+		//   共享字段读改写会竞争且回调串台，go test -race 必报）
+		kbCtx := WithProgressCallback(ctx, func(phase string) {
 			if phase == "ai_generating" {
 				prog("AI生成中...", 2, 4)
 			}
-		}
-		kbResult, _ = e.TranslateOne(ctx, cleanText, kbTarget, false, config.StageKBMatch)
-		e.OnPhase = prevOnPhase
+		})
+		kbResult, _ = e.TranslateOne(kbCtx, cleanText, kbTarget, false, config.StageKBMatch)
 		for lc := range kbResult.Translations {
 			src := "model"
 			if kbResult.MatchedZH != "" {
@@ -199,6 +200,7 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 			wg.Add(1)
 			go func(lc string) {
 				defer wg.Done()
+				defer recoverPipeline("chat_other:" + lc) // 整改 D4
 				select {
 				case sem <- struct{}{}:
 				case <-ctx.Done():
@@ -241,6 +243,7 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 			wg.Add(1)
 			go func(lc, tr string) {
 				defer wg.Done()
+				defer recoverPipeline("chat_review:" + lc) // 整改 D4
 				select {
 				case sem <- struct{}{}:
 				case <-ctx.Done():

@@ -2,7 +2,8 @@
 // direct 队列驱动：基于 jobs 表的进程内实现（SQLite 持久化）。
 // - Enqueue：INSERT queued
 // - Reserve：原子领取（queued 或 租约过期的 running → running + 刷新租约）
-// - MarkFailed：attempts<max 回 queued（延迟由 updated_at 排序天然实现），超限置 dead
+// - MarkDone/MarkFailed：完成置 done；失败用单条 CASE WHEN 原子更新，
+//   attempts<max 回 queued（延迟由 updated_at 排序天然实现），超限置 dead
 // - RecoverStale：启动/巡检时把租约过期的 running 重置回 queued（崩溃自愈）
 // 未来 Kafka 驱动：实现同一 Queue 接口；jobs 表仍作为状态账本共用。
 // =============================================
@@ -87,17 +88,14 @@ func (q *DirectQueue) MarkDone(ctx context.Context, jobID int64) error {
 }
 
 // MarkFailed 标记失败：未达上限回 queued（等待下轮领取），达上限置 dead 死信。
+// ★ 整改 D6：单条 CASE WHEN 条件 UPDATE——此前「SELECT attempts → 独立 UPDATE」
+// 两语句无事务，与巡检 RecoverStale/其他 worker 并发时基于过期计数决策，
+// 可能把该 dead 的毒丸反复回队或覆盖他方刚写入的状态。
 func (q *DirectQueue) MarkFailed(ctx context.Context, jobID int64, errMsg string) error {
-	var attempts, maxAttempts int
-	if err := q.db.QueryRow("SELECT attempts, max_attempts FROM jobs WHERE id=?", jobID).Scan(&attempts, &maxAttempts); err != nil {
-		return err
-	}
-	status := "queued"
-	if attempts >= maxAttempts {
-		status = "dead"
-	}
 	_, err := q.db.ExecContext(ctx,
-		"UPDATE jobs SET status=?, error=?, updated_at=? WHERE id=?", status, errMsg, Now().Format(time.RFC3339), jobID)
+		"UPDATE jobs SET status=(CASE WHEN attempts>=max_attempts THEN 'dead' ELSE 'queued' END), "+
+			"error=?, updated_at=? WHERE id=?",
+		errMsg, Now().Format(time.RFC3339), jobID)
 	return err
 }
 

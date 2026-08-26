@@ -1,0 +1,180 @@
+// ============================================================================
+// stores/admin.tsx — 后台上下文（对应 Vue 版 components/admin/store.ts）
+// 职责：后台用户视图、租户列表与切换器（X-Tenant-ID）、面板路由（无 vue-router，
+//       沿用 pathname 手搓路由语义）、gotoFeedbackPanel 跨组件跳转。
+// ============================================================================
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
+import { tenantList as apiTenantList, setActiveTenantId, getActiveTenantId } from '@/api'
+import type { TenantInfo } from '@/api'
+import { useAuth, roleLevel } from './auth'
+import { t } from '@/i18n'
+
+// 后台管理可用面板键名集合
+export type PanelKey =
+  | 'overview' | 'tenants' | 'plans' | 'referral' | 'org' | 'usage' | 'kb'
+  | 'models' | 'workflow' | 'apikeys' | 'webhooks' | 'tickets' | 'audit' | 'alerts' | 'users'
+
+// 角色名（后台侧边栏展示，i18n）
+// 根据角色 key 返回本地化展示名称；未知角色返回普通用户
+export function roleName(r?: string): string {
+  if (r === 'super_admin' || r === 'admin') return t('users.role.super_admin')
+  if (r === 'tenant_admin' || r === 'approver') return t('users.role.tenant_admin')
+  if (r === 'dept_admin') return t('users.role.dept_admin')
+  return t('users.role.user')
+}
+
+// AdminContext 对外暴露的状态与方法类型
+interface AdminCtx {
+  // 当前用户角色等级
+  myLevel: number
+  // 是否为管理员（等级≥2）
+  isAdmin: boolean
+  // 是否为部门管理员（等级≥2）
+  isDeptAdmin: boolean
+  // 是否为租户管理员（等级≥3）
+  isTenantAdmin: boolean
+  // 是否为超级管理员（等级≥4）
+  isSuper: boolean
+  // 当前用户可分配的角色选项
+  roleOptions: string[]
+  // 租户列表（仅超管需要）
+  tenants: TenantInfo[]
+  // 当前选中的租户 ID（0 表示平台根组织）
+  activeTenantId: number
+  // 切换当前租户上下文
+  switchTenant: (tid: number) => void
+  // 加载租户列表
+  loadTenants: () => Promise<void>
+  // 清除本地认证与租户信息
+  clearAuth: () => void
+  // 当前展示的后台面板
+  panel: PanelKey
+  // 切换后台面板
+  gotoPanel: (p: PanelKey) => void
+  // 跨组件跳转：消息中心点击 feedback 类通知 → 跳转问题反馈面板并打开对应详情
+  pendingFeedbackId: number
+  // 打开指定反馈详情并切到工单面板
+  openFeedback: (fid: number) => void
+  // 消费待处理反馈 ID（读取后清空）
+  consumeFeedback: () => number
+}
+
+const Ctx = createContext<AdminCtx>({
+  myLevel: 0, isAdmin: false, isDeptAdmin: false, isTenantAdmin: false, isSuper: false,
+  roleOptions: [], tenants: [], activeTenantId: 0,
+  switchTenant: () => {}, loadTenants: async () => {}, clearAuth: () => {},
+  panel: 'overview', gotoPanel: () => {}, pendingFeedbackId: 0,
+  openFeedback: () => {}, consumeFeedback: () => 0,
+})
+
+// 后台管理全局状态 Provider：租户、权限、面板路由、反馈跳转
+export function AdminProvider({ children }: { children: ReactNode }) {
+  // 从认证上下文获取当前用户
+  const { user } = useAuth()
+  // 当前用户角色等级
+  const myLevel = roleLevel(user?.role)
+  // 租户列表（仅超管加载）
+  const [tenants, setTenants] = useState<TenantInfo[]>([])
+  // 当前选中的租户 ID
+  const [activeTenantId, setActive] = useState<number>(getActiveTenantId())
+  // 当前展示的后台面板
+  const [panel, setPanel] = useState<PanelKey>('overview')
+  // 消息中心跳转而来的待处理反馈 ID
+  const [pendingFeedbackId, setPendingFeedbackId] = useState<number>(0)
+
+  // 是否为管理员/部门管理员（等级≥2）
+  const isAdmin = myLevel >= 2
+  const isDeptAdmin = myLevel >= 2
+  // 是否为租户管理员（等级≥3）
+  const isTenantAdmin = myLevel >= 3
+  // 是否为超级管理员（等级≥4）
+  const isSuper = myLevel >= 4
+  // 根据当前角色生成可分配角色选项
+  const roleOptions = useMemo(() => {
+    if (isSuper) return ['user', 'dept_admin', 'tenant_admin', 'admin']
+    if (isTenantAdmin) return ['user', 'dept_admin', 'tenant_admin']
+    if (isDeptAdmin) return ['user']
+    return []
+  }, [isSuper, isTenantAdmin, isDeptAdmin])
+
+  // 加载租户列表；若当前存储的租户 ID 已不存在则回退到平台上下文
+  const loadTenants = useCallback(async () => {
+    try {
+      const r = await apiTenantList()
+      if (r.success) {
+        const list = (r as unknown as { tenants?: TenantInfo[] }).tenants || []
+        setTenants(list)
+        // 超管默认平台上下文（0=翻译助手根组织）；仅当存储了已删除的租户 id 时才回退
+        const stored = getActiveTenantId()
+        if (stored > 0 && !list.some((t) => t.id === stored) && list.length) {
+          setActiveTenantId(0)
+        }
+        setActive(getActiveTenantId() ?? 0)
+      }
+    } catch { /* 忽略 */ }
+  }, [])
+
+  // 仅超管需要租户列表（切换器）；进入后台时拉取一次
+  useEffect(() => {
+    if (myLevel >= 4) void loadTenants()
+  }, [myLevel, loadTenants])
+
+  // 切换当前租户，写入 core 后所有请求自动带 X-Tenant-ID
+  const switchTenant = useCallback((tid: number) => {
+    setActiveTenantId(tid) // 写入 core（此后所有请求自动带 X-Tenant-ID）
+    setActive(tid)
+  }, [])
+
+  // 清除本地认证 token 与租户上下文
+  const clearAuth = useCallback(() => {
+    setActiveTenantId(0)
+    try {
+      localStorage.removeItem('auth_token')
+      localStorage.removeItem('active_tenant_id')
+    } catch { /* 忽略 */ }
+  }, [])
+
+  // 跨组件跳转入口（Bell → 反馈处理面板）
+  const gotoPanel = useCallback((p: PanelKey) => {
+    setPanel(p)
+    if (window.location.pathname !== '/admin') window.history.pushState({}, '', '/admin')
+  }, [])
+
+  // 打开指定反馈详情（消息中心跳转）
+  const openFeedback = useCallback((fid: number) => {
+    setPendingFeedbackId(fid)
+    setPanel('tickets')
+    if (window.location.pathname !== '/admin') window.history.pushState({}, '', '/admin')
+  }, [])
+
+  // 读取并清空待处理反馈 ID，供工单面板消费
+  const consumeFeedback = useCallback(() => {
+    const v = pendingFeedbackId
+    setPendingFeedbackId(0)
+    return v
+  }, [pendingFeedbackId])
+
+  // 前进/后退与 /admin 路径保持一致
+  useEffect(() => {
+    const onPop = () => {
+      if (window.location.pathname.startsWith('/admin')) setPanel('overview')
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  // 聚合后台所有状态与方法，缓存后注入 Provider
+  const value = useMemo<AdminCtx>(() => ({
+    myLevel, isAdmin, isDeptAdmin, isTenantAdmin, isSuper, roleOptions,
+    tenants, activeTenantId, switchTenant, loadTenants, clearAuth,
+    panel, gotoPanel, pendingFeedbackId, openFeedback, consumeFeedback,
+  }), [myLevel, isAdmin, isDeptAdmin, isTenantAdmin, isSuper, roleOptions,
+       tenants, activeTenantId, switchTenant, loadTenants, clearAuth,
+       panel, gotoPanel, pendingFeedbackId, openFeedback, consumeFeedback])
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>
+}
+
+// 在函数组件中读取后台管理上下文
+export function useAdmin() { return useContext(Ctx) }

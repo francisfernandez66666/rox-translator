@@ -1,6 +1,6 @@
-// ============ 本文件职责中文说明 ============
-// 认证薄委托包：向后兼容的旧导入路径，全部实现委托给 internal/iam。
+// Package auth 认证薄委托包：向后兼容的旧导入路径，全部实现委托给 internal/iam。
 // （IAM 子系统拆分后保留本包避免历史调用方大面积改 import。）
+// JWT 签名密钥唯一事实源在 iam.jwtSecret（JWT_SECRET 环境变量注入）。
 // =============================================
 package auth
 
@@ -12,9 +12,6 @@ import (
 	"translator/internal/iam"
 	"translator/internal/store"
 )
-
-// Secret JWT 签名密钥（部署侧可用 JWT_SECRET 环境变量覆盖；与 iam 包共享同一来源）。
-var Secret = "trans-platform-jwt-secret-2026"
 
 // Claims JWT 载荷结构（别名 iam.Claims）。
 type Claims = iam.Claims

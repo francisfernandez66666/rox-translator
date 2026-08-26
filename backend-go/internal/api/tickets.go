@@ -15,6 +15,7 @@ package api
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/xuri/excelize/v2"
@@ -105,6 +106,14 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 	if req.TargetLangs == "" {
 		req.TargetLangs = "en"
 	}
+	// ★ 整改 C6：建单即自动执行，必须先过配额闸门（此前闸门只在手动 run 存在，
+	//   自动入队路径使 QPS/日额/余额闸对建单入口形同虚设）
+	if _, release, gerr := s.gateUsage(r); gerr != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
+		return
+	} else {
+		release()
+	}
 	// 创建工单（归属生效租户）
 	t, err := s.Store.CreateTicket(s.effTenant(r, u), u.ID, req.Title, req.SourceText, "", req.TargetLangs)
 	if err != nil {
@@ -113,12 +122,13 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 翻译模式随创建请求落库（fast=快速 / pro=专业校对；空值归一化为 pro）
 	t.Mode = normalizeTaskMode(req.Mode)
-	// 创建工单审计 + 自动入队执行
+	// 创建工单审计 + 自动入队执行（★ 整改 C6：入队用 Background——请求 ctx 在响应返回后
+	// 即取消，异步任务不得绑定其生命周期）
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_create", "tickets", t.TicketNo)
 	if s.TicketSvc != nil {
 		t.Status = store.TicketQueued
 		_ = s.Store.UpdateTicket(t)
-		_, _ = s.TicketSvc.EnqueueTicketRun(r.Context(), t.ID)
+		_, _ = s.TicketSvc.EnqueueTicketRun(context.Background(), t.ID)
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t})
 }
@@ -202,6 +212,13 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 			title = saved[0].name
 		}
 	}
+	// ★ 整改 C6：建文件工单同样先过配额闸门（自动入队路径此前完全绕闸）
+	if _, release, gerr := s.gateUsage(r); gerr != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
+		return
+	} else {
+		release()
+	}
 	// 创建工单（file_path 记首个文件，兼容旧列表展示；全部文件入 ticket_files 表）
 	t, err := s.Store.CreateTicket(s.effTenant(r, u), u.ID, title, "", saved[0].path, targetLangs)
 	if err != nil {
@@ -221,7 +238,8 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 	if s.TicketSvc != nil {
 		t.Status = store.TicketQueued
 		_ = s.Store.UpdateTicket(t)
-		_, _ = s.TicketSvc.EnqueueTicketRun(r.Context(), t.ID)
+		// ★ 整改 C6：入队用 Background（请求 ctx 响应后即取消）
+		_, _ = s.TicketSvc.EnqueueTicketRun(context.Background(), t.ID)
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t})
 }
@@ -255,6 +273,16 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作他人工单"})
 		return
 	}
+	// ★ 整改 C5：状态机门槛——仅草稿/排队/被驳回可（重）跑。此前 completed 工单可被
+	//   置回 queued 重复执行重复计费，cancelled/approved/pending_approval 重跑语义非法。
+	switch t.Status {
+	case store.TicketDraft, store.TicketQueued, store.TicketRejected:
+		// 可执行状态
+	default:
+		writeJSON(w, 200, map[string]interface{}{"success": false,
+			"message": "当前状态不可执行：仅待处理/排队中/被驳回的工单可以运行"})
+		return
+	}
 	// 配额闸门：QPS/并发/每日上限/余额校验（不通过则拒绝运行）
 	_, release, gateErr := s.gateUsage(r)
 	defer release()
@@ -269,7 +297,8 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 	}
 	t.Status = store.TicketQueued
 	_ = s.Store.UpdateTicket(t)
-	if _, err := s.TicketSvc.EnqueueTicketRun(r.Context(), t.ID); err != nil {
+	// ★ 整改 C6：手动 run 的入队同样用 Background（与建单/审批路径口径统一）
+	if _, err := s.TicketSvc.EnqueueTicketRun(context.Background(), t.ID); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "入队失败: " + err.Error()})
 		return
 	}
@@ -280,7 +309,6 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, resp)
 }
-
 
 // ticketProgressPct 工单进度百分比（步骤锚点阶梯，唯一真源）：
 // 排队10 → 提取20 → 初翻40 → 校对60 → 回写80 → 完成100。
@@ -614,13 +642,20 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不在待审批状态"})
 		return
 	}
-	// 根据 action 更新工单状态与审批字段
+	// 根据action 更新工单状态与审批字段
 	switch req.Action {
 	case "approve":
 		t.Status = store.TicketApproved
 		t.ApproverID = u.ID
+		// ★ 整改 C4：终稿修订写回载荷 JSON（按语言定位合并覆盖），不再用裸文本整体替换
+		//   FinalResult——旧实现撑破 JSON 结构，重跑流水线时被新建载荷静默丢弃。
 		if req.ApprovedText != "" {
-			t.FinalResult = req.ApprovedText
+			if merged := applyApprovedTextOverride(t.FinalResult, req.ApprovedText); merged != "" {
+				t.FinalResult = merged
+				s.Store.LogAudit(s.effTenant(r, u), u.ID, "approve_edit", "tickets", t.TicketNo+" 审批终稿已并入载荷")
+			} else {
+				s.Store.LogAudit(s.effTenant(r, u), u.ID, "approve_edit_skip", "tickets", t.TicketNo+" 终稿无法定位语言，保留原载荷")
+			}
 		}
 	case "reject":
 		t.Status = store.TicketRejected
@@ -640,13 +675,57 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 	// 审批审计
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "approve_"+req.Action, "tickets", t.TicketNo)
 
-	// 批准 → 触发自迭代（feedback 步骤）：批准后自动执行一次流程做质量反馈
-	if req.Action == "approve" {
-		if wf := s.workflow(); wf != nil {
-			_ = wf.Executor.Execute(r.Context(), t, func(step string, ok bool, errMsg string) {})
+	// 批准 → 异步触发自迭代（feedback 步骤）。
+	// ★ 整改 C4：改为入队后台执行——此前在 HTTP 请求内同步重跑整条流水线，
+	//   客户端断连会让工单永久卡在 approved；配合 flow 层「approved 态仅 QA+feedback」
+	//   短路（见 orchestrator.applyModeOverride），二次质检失败也不会翻案人工结论。
+	if req.Action == "approve" && s.TicketSvc != nil {
+		if _, enqErr := s.TicketSvc.EnqueueTicketRun(context.Background(), t.ID); enqErr == nil {
+			writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t, "queued": true})
+			return
 		}
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t})
+}
+
+// applyApprovedTextOverride 把审批员修订的终稿合并进工单载荷 JSON。
+// 语言定位规则：① 与某语言现有译文完全一致 → 覆盖该语言；② 载荷仅一个语言 → 直接覆盖；
+// 无法定位时返回空串（调用方保持原载荷不动并留痕审计）。返回合并后的 FinalResult。
+func applyApprovedTextOverride(finalResult, approvedText string) string {
+	var p struct {
+		SourceText   string            `json:"source_text"`
+		TargetLangs  []string          `json:"target_langs"`
+		Translations map[string]string `json:"translations"`
+		Sources      map[string]string `json:"sources"`
+	}
+	if json.Unmarshal([]byte(finalResult), &p) != nil || len(p.Translations) == 0 {
+		return ""
+	}
+	hit := ""
+	for lc, v := range p.Translations {
+		if v == approvedText {
+			hit = lc
+			break
+		}
+	}
+	if hit == "" && len(p.Translations) == 1 {
+		for lc := range p.Translations {
+			hit = lc
+		}
+	}
+	if hit == "" {
+		return ""
+	}
+	p.Translations[hit] = approvedText
+	if p.Sources == nil {
+		p.Sources = map[string]string{}
+	}
+	p.Sources[hit] = "approved"
+	b, err := json.Marshal(p)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // workflow 构建工作流（惰性，需 Store+Engine+Tenant 齐备）。

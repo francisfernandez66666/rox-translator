@@ -68,12 +68,18 @@ func (s *Store) GetInviteCodeByCode(code string) (*InviteCode, error) {
 
 // MarkInviteCodeUsed 标记邀请码已使用（原子条件更新：仅当 used=0 时生效，防止并发重复使用）。
 // 参数：id=邀请码主键 ID，usedBy=使用者的标识。
-func (s *Store) MarkInviteCodeUsed(id int64, usedBy string) error {
+// 返回 (claimed, err)：claimed=true 表示成功占用；claimed=false 表示该码已被并发请求抢先占用——
+// 调用方必须据此拒绝本次注册（2026-08-26 整改 A4：此前返回值被丢弃，「先查后标」窗口内并发同码双双放行）。
+func (s *Store) MarkInviteCodeUsed(id int64, usedBy string) (bool, error) {
 	now := time.Now().Format(time.RFC3339)
-	_, err := s.db.Exec(
+	res, err := s.db.Exec(
 		"UPDATE invite_codes SET used=1, used_by=?, used_at=? WHERE id=? AND used=0",
 		usedBy, now, id)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // ListInviteCodes 列出全部邀请码（含已使用，按 ID 倒序）。

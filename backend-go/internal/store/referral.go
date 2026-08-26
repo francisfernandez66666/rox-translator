@@ -6,6 +6,7 @@
 //   - 奖励层：invitee_uid 与 invitee_email **双唯一**——同类型奖励对
 //     「(邀请人,被邀uid) 对」「被邀邮箱快照」任一维度历史碰撞即永久拒绝发放。
 //     治理场景：注销重注换新 uid 复用旧邮箱 / 换绑邮箱后旧账号再邀 —— 均撞库拦截。
+//
 // =============================================
 package store
 
@@ -123,7 +124,8 @@ func (s *Store) inviteeEmailOf(uid int64) string {
 
 // GrantTrialStack 邀请者体验叠加：+tokens、到期=max(当前最晚体验到期,now)+days。
 // ★ 发放顺序（2026-08-26 修正）：先「占用」奖励流水（含邮箱快照，双唯一索引拦截并发/撞库），
-//   占用成功才发放额度；台账失败回退永久余额通道，保证奖励不丢。
+//
+//	占用成功才发放额度；台账失败回退永久余额通道，保证奖励不丢。
 func (s *Store) GrantTrialStack(inviterUID, inviterTID, inviteeUID, tokens int64, days int) error {
 	const typ = "trial_stack"
 	if s.PairRewardExists(inviterUID, inviteeUID, typ) {
@@ -143,6 +145,7 @@ func (s *Store) GrantTrialStack(inviterUID, inviterTID, inviteeUID, tokens int64
 	_ = res
 	// 发放额度：台账（t+max(now,最晚到期)+days），失败兜底永久余额
 	var latest string
+	// 取邀请人当前所有未过期体验/订阅额度的最晚到期日，实现时长叠加
 	err = s.db.QueryRow("SELECT MAX(expires_at) FROM quota_grants WHERE tenant_id=? AND kind IN ('trial','plan') AND expires_at>?",
 		inviterTID, time.Now().UTC().Format(time.RFC3339)).Scan(&latest)
 	base := time.Now().UTC()
@@ -187,11 +190,24 @@ func (s *Store) RewardPaidPermanent(inviteeUID, tokens int64) error {
 	return err
 }
 
+// ReferralEnabled 邀请裂变总开关（system_config referral_enabled；仅显式 "0" 关闭，
+// 缺省/读取异常均视为开启，保证存量部署行为不变）。关闭后：注册绑定与两类奖励全部停发。
+func (s *Store) ReferralEnabled() bool {
+	if v, _ := s.GetConfig("referral_enabled"); v == "0" {
+		return false
+	}
+	return true
+}
+
 // ReferralPaidReward 付费奖励入口（MarkOrderPaid 成功确认 paid 套餐后调用）：
 // 奖励金额取值优先级：system_config inviter_paid_reward_tokens（后台可调）→ env INVITER_PAID_REWARD_TOKENS → 默认 50 万。
 // 内部按对去重，重复调用幂等；非邀请来源静默跳过。参数 inviteeUID=下单用户 ID。
 func (s *Store) ReferralPaidReward(inviteeUID int64) {
 	if inviteeUID <= 0 {
+		return
+	}
+	// ★ 总开关门禁（2026-08-26 U3）：后台关闭裂变后不再发放任何奖励
+	if !s.ReferralEnabled() {
 		return
 	}
 	tokens := int64(500000)
@@ -253,8 +269,10 @@ type ReferralRecord struct {
 // ListReferrals 我的邀请记录（最新在前，最多 100 条）。
 //
 // ★ 2026-08-26 前台记录需求增强：补 invitee_email 快照与 paid 标记——
-//   每行即一条「邀请成功」记录（行存在=绑定+注册完成）；
-//   paid 列由同被邀人是否存在 paid_perm 行推导（首笔付费是否成功）。
+//
+//	每行即一条「邀请成功」记录（行存在=绑定+注册完成）；
+//	paid 列由同被邀人是否存在 paid_perm 行推导（首笔付费是否成功）。
+//
 // 参数：inviterUID=邀请人用户 ID；返回：奖励记录列表（查询失败返回 nil，前端按空态处理）。
 func (s *Store) ListReferrals(inviterUID int64) []*ReferralRecord {
 	rows, err := s.db.Query(`SELECT r.invitee_uid, COALESCE(u.display_name,u.username,'#'),

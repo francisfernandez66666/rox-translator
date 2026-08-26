@@ -173,8 +173,9 @@ func (s *Store) GetTenantPerms(tid int64) (*tenant.Perms, error) {
 // 参数：tid=租户 ID，balance=新句数余额；返回错误。
 //
 // ★ 并发安全（2026-08-26 全仓评审 B3）：读-改-写包进 IMMEDIATE 事务——
-//   DSN _txlock=immediate 下 BEGIN 即持写锁，单写者库内与其他写者天然互斥，
-//   消除「SELECT permissions → 内存改 → 整体覆盖」与并发写者的丢失更新窗口。
+//
+//	DSN _txlock=immediate 下 BEGIN 即持写锁，单写者库内与其他写者天然互斥，
+//	消除「SELECT permissions → 内存改 → 整体覆盖」与并发写者的丢失更新窗口。
 func (s *Store) SetSentenceBalance(tid int64, balance int64) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -386,18 +387,42 @@ func (s *Store) TokenSentenceRate() int64 {
 
 // ExpirePackage 摘除租户订阅身份（订阅到期由后台扫描调用）：
 // 清空 package_code/package_expires_at 与提醒标记；句数余额保留（已购句数为买断资产）。
-// 参数：tid=租户 ID，expiredPkg=被摘除的包编码（审计留痕用）；返回错误。
+// 参数：tid=租户 ID，返回被摘除的包编码（审计留痕用）与错误。
+//
+// ★ 整改 B1（2026-08-26）：json_set 单语句只摘订阅身份四键——此前「读整包→内存改→
+// 整体覆盖」在 watchdog 扫描与用户并发购买/充值之间丢失更新（句数被旧快照抹掉）。
+// 句数余额 sentence_balance 等其余键原样保留，不再参与本次写入。
 func (s *Store) ExpirePackage(tid int64) (code string, err error) {
 	perms, err := s.GetTenantPerms(tid)
 	if err != nil {
 		return "", err
 	}
 	code = perms.PackageCode
-	perms.PackageCode = ""
-	perms.PackageExpires = ""
-	perms.NotifiedExp7 = false
-	perms.NotifiedExp1 = false
-	return code, s.SaveTenantPerms(tid, perms)
+	if code == "" {
+		return "", nil // 无订阅无需摘除
+	}
+	_, err = s.db.Exec(`UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'),
+		'$.package_code', '', '$.package_expires_at', '',
+		'$.notified_exp7', json('false'), '$.notified_exp1', json('false')),
+		updated_at=? WHERE id=?`,
+		time.Now().Format(time.RFC3339), tid)
+	if err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+// SetNotifiedExpFlag 订阅到期提醒去重标记位（★ 整改 B1：json_set 单字段原子更新，
+// 替代 watchdog「读整包→改一位→整体覆盖写回」的丢失更新窗口；flag 取
+// notified_exp7 / notified_exp1）。
+func (s *Store) SetNotifiedExpFlag(tid int64, flag string) error {
+	if flag != "notified_exp7" && flag != "notified_exp1" {
+		return &errTxt{"非法提醒标记: " + flag}
+	}
+	_, err := s.db.Exec(
+		"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$."+flag+"', json('true')), updated_at=? WHERE id=?",
+		time.Now().Format(time.RFC3339), tid)
+	return err
 }
 
 // SaveTenantPerms 持久化租户权限 JSON（整体覆盖 tenants.permissions 列）。

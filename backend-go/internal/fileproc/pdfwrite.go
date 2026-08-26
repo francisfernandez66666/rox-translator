@@ -1,8 +1,9 @@
 // ============ 本文件职责中文说明 ============
-// PDF 译文排版回写：把翻译后的文本按阅读版式重建为 PDF（go-pdf/fpdf 纯 Go 实现，无外部依赖）。
+// PDF 译文排版回写：优先通过 Python fpdf2/pdf2docx 子进程重建版式，回退 go-pdf/fpdf 纯 Go 实现。
 //   - 版式策略：A4 页面；首段启发式标题（≤60 字符时加大居左）；正文段落流式排版自动分页；页脚页码
 //   - 字体解析顺序（ResolvePDFFont）：system_config/env pdf_font_path → 常见系统 TTF → 内置
 //     assets/fonts/DroidSansFallbackFull.ttf（Apache 2.0，覆盖中日韩英）
+//   - 子进程控制：受 nice 低优先级 + 资源闸 + context 超时/取消约束（整改 D1/R4）
 //   - 说明：PDF 原生内容流无法安全替换文字（字体子集/CID 编码），业界通行做法即版式重建；
 //     产物为可读性优先的译文 PDF，源文对照另有 xlsx 通道兜底
 //
@@ -10,7 +11,7 @@
 package fileproc
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -80,36 +81,44 @@ func isUsableTTF(p string) bool {
 }
 
 // WriteTranslatedPDF 生成译文 PDF（版式重建）。
-// 参数：outPath=输出文件路径；srcTexts=按阅读顺序排列的源文段落；translations=原文→译文映射
-// （与引擎 langTranslations 同构：未命中的段落回退显示原文）。
+// 参数：ctx=上下文（子进程超时/取消）；outPath=输出文件路径；srcTexts=按阅读顺序排列的源文段落；
+// translations=原文→译文映射（与引擎 langTranslations 同构：未命中的段落回退显示原文）。
 // 返回错误：无可用字体或写出失败；调用方应降级 xlsx 对照表。
-func WriteTranslatedPDF(outPath string, srcTexts []string, translations map[string]string) error {
+func WriteTranslatedPDF(ctx context.Context, outPath string, srcTexts []string, translations map[string]string) error {
 	fontPath := ResolvePDFFont()
 	if fontPath == "" {
 		return fmt.Errorf("无可用 CJK TTF 字体（可配置环境变量 PDF_FONT_PATH 指向 .ttf 文件）")
 	}
 	// 优先使用 Python fpdf2（更稳定地支持 CJK 字体嵌入）
-	if err := writePDFViaPython(outPath, fontPath, srcTexts, translations); err == nil {
+	if err := writePDFViaPython(ctx, outPath, fontPath, srcTexts, translations); err == nil {
 		return nil
 	}
 	// 回退 Go fpdf
 	return writePDFViaGoFpdf(outPath, fontPath, srcTexts, translations)
 }
 
-// WriteTranslatedPDFviaDocx PDF→DOCX→翻译→DOCX→PDF（保留排版/图表；图片内容按产品策略不翻译）
-func WriteTranslatedPDFviaDocx(outPath, inPath string, translations map[string]string, lang string) error {
+// WriteTranslatedPDFviaDocx PDF→DOCX→翻译→DOCX→PDF（保留排版/图表；图片内容按产品策略不翻译）。
+// 参数：ctx=子进程超时/取消上下文；outPath=输出 PDF 路径；inPath=输入 PDF 路径；
+//       translations=原文→译文映射；lang=目标语言代码。
+// 返回错误：子进程失败时返回带尾部 stderr 详情的错误。
+func WriteTranslatedPDFviaDocx(ctx context.Context, outPath, inPath string, translations map[string]string, lang string) error {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"translations": translations,
 	})
-	return runDocxScriptStdin([]string{"legacy", inPath, outPath, lang}, payload)
+	bin, argv := wrapNice(pyBin(), append([]string{docxScriptPath()}, "legacy", inPath, outPath, lang))
+	_, _, err := runSubprocess(ctx, fileprocTimeout(), bin, argv, payload)
+	return err
 }
 
 // ExtractTextsPdfDocx 经 pdf2docx 提取段落文本（键与替换目标完全一致，表格必中）。
+// 参数：ctx=子进程超时/取消上下文；pdfPath=输入 PDF 路径。
 // 返回 (文本键列表, 缓存 DOCX 路径, 错误)；调用方负责删除缓存 DOCX。
 // 图片型文档按产品策略不做内容翻译——提取失败时由调用方降级 pdftotext/xlsx 对照表。
-func ExtractTextsPdfDocx(pdfPath string) ([]string, string, error) {
+// ★ 整改 D1：ctx 超时/取消贯通 + 创建缓存前清扫 >24h 崩溃残留。
+func ExtractTextsPdfDocx(ctx context.Context, pdfPath string) ([]string, string, error) {
+	sweepStalePdfDocxCache()
 	cache := filepath.Join(os.TempDir(), fmt.Sprintf("pdfdocx_%d.docx", time.Now().UnixNano()))
-	out, err := runDocxScript([]string{"extract", pdfPath, cache})
+	out, err := runDocxScript(ctx, []string{"extract", pdfPath, cache})
 	if err != nil {
 		return nil, "", err
 	}
@@ -127,11 +136,17 @@ func ExtractTextsPdfDocx(pdfPath string) ([]string, string, error) {
 }
 
 // ApplyTranslatedPdfFromDocx 在已缓存 DOCX 副本上应用译文并转 PDF（含图片 OCR）。
-func ApplyTranslatedPdfFromDocx(outPath, cacheDocx string, translations map[string]string, lang string) error {
+// 参数：ctx=子进程超时/取消上下文；outPath=输出 PDF 路径；cacheDocx=ExtractTextsPdfDocx 生成的缓存 DOCX；
+//       translations=原文→译文映射；lang=目标语言代码。
+// 返回错误：子进程失败时返回错误。
+func ApplyTranslatedPdfFromDocx(ctx context.Context, outPath, cacheDocx string, translations map[string]string, lang string) error {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"translations": translations,
 	})
-	return runDocxScriptStdin([]string{"apply", cacheDocx, outPath, lang}, payload)
+	if err := runDocxScriptStdin(ctx, []string{"apply", cacheDocx, outPath, lang}, payload); err != nil {
+		return err
+	}
+	return nil
 }
 
 // docxScriptPath 定位 docx_translate.py 脚本路径（与可执行文件同目录）。
@@ -139,71 +154,59 @@ func docxScriptPath() string {
 	return filepath.Join(filepath.Dir(os.Args[0]), "docx_translate.py")
 }
 
-// runDocxScript 调用 Python docx 管线脚本（子进程方式，优先 venv 内解释器）。
-// ★ 经资源闸串行化 + nice 低优先级（评审整改 R4）。
-// 参数：args=脚本子命令与参数；返回：stdout 内容（extract 子命令为 JSON，取最后一个 '{' 之后的部分）与错误。
-func runDocxScript(args []string) ([]byte, error) {
-	pyBin := "python3"
+// pyBin 解析 Python 解释器：优先生产 venv（fpdf2/pdf2docx 所在），回退 PATH python3。
+func pyBin() string {
 	if _, err := os.Stat("/opt/translator/.venv/bin/python3"); err == nil {
-		pyBin = "/opt/translator/.venv/bin/python3"
+		return "/opt/translator/.venv/bin/python3"
 	}
-	bin, argv := wrapNice(pyBin, append([]string{docxScriptPath()}, args...))
-	cmd := exec.Command(bin, argv...)
-	releaseProc := acquireProcGate()
-	out, err := cmd.CombinedOutput()
-	releaseProc()
-	if err != nil {
-		return out, fmt.Errorf("docx_translate %v 失败: %w\n%s", args, err, string(out))
-	}
-	// extract 的 stdout 是 JSON；CombinedOutput 可能混入 stderr 日志，取最后一行 JSON
-	idx := bytes.LastIndexByte(out, '{')
-	if idx >= 0 {
-		return out[idx:], nil
-	}
-	return out, nil
+	return "python3"
 }
 
-// runDocxScriptStdin 以 stdin 传入大 payload（docx 字节流等）调用 docx 管线脚本，规避命令行长度限制。
-// ★ 经资源闸串行化 + nice 低优先级（评审整改 R4）。
-// 参数：args=脚本子命令与参数；payload=经 stdin 写入的字节流；返回错误（失败时附 stderr 输出）。
-func runDocxScriptStdin(args []string, payload []byte) error {
-	pyBin := "python3"
-	if _, err := os.Stat("/opt/translator/.venv/bin/python3"); err == nil {
-		pyBin = "/opt/translator/.venv/bin/python3"
+// truncateTail 错误上下文取尾部 4KB（防超长 stderr 撑爆日志/错误字段）
+func truncateTail(b []byte) string {
+	s := string(b)
+	if len(s) > 4096 {
+		s = s[len(s)-4096:]
 	}
-	bin, argv := wrapNice(pyBin, append([]string{docxScriptPath()}, args...))
-	cmd := exec.Command(bin, argv...)
-	cmd.Stdin = bytes.NewReader(payload)
-	releaseProc := acquireProcGate()
-	output, err := cmd.CombinedOutput()
-	releaseProc()
+	return s
+}
+
+// runDocxScript 调用 Python docx 管线脚本（extract 子命令）。
+// ★ 经资源闸串行化 + nice 低优先级（评审整改 R4）；★ 整改 D1：runSubprocess 受控执行——
+// stdout/stderr 分离后 JSON 直接取自 stdout，不再依赖「最后一个 '{'」的脆弱启发式。
+// 参数：args=脚本子命令与参数；返回：stdout 内容（JSON）与错误。
+func runDocxScript(ctx context.Context, args []string) ([]byte, error) {
+	bin, argv := wrapNice(pyBin(), append([]string{docxScriptPath()}, args...))
+	stdout, stderr, err := runSubprocess(ctx, fileprocTimeout(), bin, argv, nil)
 	if err != nil {
-		return fmt.Errorf("docx_translate %v 失败: %w\n%s", args[0], err, string(output))
+		return stdout, fmt.Errorf("docx_translate %v 失败: %w\n%s", args, err, truncateTail(stderr))
+	}
+	return stdout, nil
+}
+
+// runDocxScriptStdin 以 stdin 传入大 payload（docx 字节流等）调用 docx 管线脚本，
+// 规避命令行长度限制。★ 资源闸 + nice（R4）+ 整改 D1 受控执行。
+func runDocxScriptStdin(ctx context.Context, args []string, payload []byte) error {
+	bin, argv := wrapNice(pyBin(), append([]string{docxScriptPath()}, args...))
+	_, stderr, err := runSubprocess(ctx, fileprocTimeout(), bin, argv, payload)
+	if err != nil {
+		return fmt.Errorf("docx_translate %s 失败: %w\n%s", args[0], err, truncateTail(stderr))
 	}
 	return nil
 }
 
 // writePDFViaPython 走 Python(fpdf2) 管线写出 PDF：payload 含源句与译文映射，脚本路径与可执行文件同目录。
-// 参数：outPath=输出 PDF 路径；fontPath=CJK 字体路径；srcTexts=源句序列；translations=句→译文映射；返回错误。
-func writePDFViaPython(outPath string, fontPath string, srcTexts []string, translations map[string]string) error {
+// ★ 资源闸 + nice（R4）+ 整改 D1 受控执行。
+func writePDFViaPython(ctx context.Context, outPath string, fontPath string, srcTexts []string, translations map[string]string) error {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"srcTexts":     srcTexts,
 		"translations": translations,
 	})
-	// 优先使用 venv 内的 Python（fpdf2 安装于虚拟环境）；★ 资源闸 + nice（评审整改 R4）
-	pyBin := "python3"
-	if _, err := os.Stat("/opt/translator/.venv/bin/python3"); err == nil {
-		pyBin = "/opt/translator/.venv/bin/python3"
-	}
 	scriptPath := filepath.Join(filepath.Dir(os.Args[0]), "pdfwrite.py")
-	bin, argv := wrapNice(pyBin, []string{scriptPath, outPath, fontPath})
-	cmd := exec.Command(bin, argv...)
-	cmd.Stdin = strings.NewReader(string(payload))
-	releaseProc := acquireProcGate()
-	output, err := cmd.CombinedOutput()
-	releaseProc()
+	bin, argv := wrapNice(pyBin(), []string{scriptPath, outPath, fontPath})
+	_, stderr, err := runSubprocess(ctx, fileprocTimeout(), bin, argv, payload)
 	if err != nil {
-		return fmt.Errorf("python pdfwrite 失败: %w\n%s", err, string(output))
+		return fmt.Errorf("python pdfwrite 失败: %w\n%s", err, truncateTail(stderr))
 	}
 	return nil
 }
@@ -263,13 +266,18 @@ func writePDFViaGoFpdf(outPath string, fontPath string, srcTexts []string, trans
 }
 
 // PdfImageHeavy 判定图片型 PDF：平均每页文本层字符 < 200（引导用户改传 Word 源文件）。
+// 参数：pdfPath=待检测 PDF 路径。
+// 返回 true 表示文本层稀薄，疑似扫描件/图片型 PDF。
+// ★ 整改 D1：外部工具调用加 30s 超时（FILEPROC_SUB_TIMEOUT_SEC 可调）。
 func PdfImageHeavy(pdfPath string) bool {
-	out, err := exec.Command("pdftotext", pdfPath, "-").Output()
+	sctx, scancel := context.WithTimeout(context.Background(), subTimeout())
+	defer scancel()
+	out, err := exec.CommandContext(sctx, "pdftotext", pdfPath, "-").Output()
 	if err != nil {
 		return false
 	}
 	pages := 1
-	if info, ierr := exec.Command("pdfinfo", pdfPath).Output(); ierr == nil {
+	if info, ierr := exec.CommandContext(sctx, "pdfinfo", pdfPath).Output(); ierr == nil {
 		for _, ln := range strings.Split(string(info), "\n") {
 			if strings.HasPrefix(ln, "Pages:") {
 				if v, e := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(ln, "Pages:"))); e == nil && v > 0 {

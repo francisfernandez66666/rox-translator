@@ -2,6 +2,7 @@
 // FlowDef 流程引擎：Step/Edge/Compensation 编排执行器。
 // 支持按租户 flow_config 动态启停步骤、条件跳过、失败自动补偿重试（≤2 次）、
 // 每步状态写入工单轨迹表（ticket_state），全部执行成功返回 nil。
+// 含已批准工单重跑保护（C4）：已批准工单重跑时仅执行 QA + TM 回写，不再改动人工终稿。
 // =============================================
 
 // Package orchestrator 提供 FlowDef 流程引擎（Step/Edge/Compensation 编排）。
@@ -197,7 +198,21 @@ func (e *Executor) runner(key string) (RunFunc, bool) {
 
 // applyModeOverride 按工单模式就地覆盖流程步骤启停（不落库，仅本次执行生效）。
 // 规则见 Execute 注释：fast 精简流水线；API 自动任务（CreatedBy=0）跳过审批与自迭代。
+// ★ 整改 C4：已批准工单重跑 = 仅 QA 复核 + TM 回写——生成/校对/闸门步骤全部短路，
+//
+//	任何自动化环节不得再改动人工终稿，从根上消除「审批后被机器翻案为 rejected」。
 func applyModeOverride(flow *FlowDef, ticket *store.Ticket) {
+	if ticket.Status == store.TicketApproved {
+		for _, st := range flow.Steps {
+			switch st.Key {
+			case "kb_match", "ai_initial", "evals_initial", "review", "evals_review", "gate", "culture_gate":
+				st.Enabled = false // 人工终稿保护：不再生成/校对/设闸
+			case "qa", "feedback":
+				st.Enabled = true // 仅质检刷新与 TM 回写
+			}
+		}
+		return
+	}
 	fast := strings.EqualFold(ticket.Mode, "fast")
 	apiTask := ticket.CreatedBy == 0
 	if !fast && !apiTask {

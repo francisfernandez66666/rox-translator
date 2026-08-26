@@ -248,14 +248,12 @@ func (s *Server) runSubscriptionScan() {
 		daysLeft := int(time.Until(exp).Hours() / 24)
 		expDate := exp.Format("2006-01-02")
 		if daysLeft <= 7 && !perms.NotifiedExp7 {
-			perms.NotifiedExp7 = true
-			_ = s.Store.SaveTenantPerms(t.ID, perms)
+			_ = s.Store.SetNotifiedExpFlag(t.ID, "notified_exp7") // ★ B1：单字段原子置位，不再整体覆盖
 			s.notifyTenantAdmins(t.ID, "订阅即将到期",
 				"商业包「"+perms.PackageCode+"」将于 "+expDate+" 到期（剩 "+strconv.Itoa(daysLeft+1)+" 天），请及时续订。")
 		}
 		if daysLeft < 1 && !perms.NotifiedExp1 {
-			perms.NotifiedExp1 = true
-			_ = s.Store.SaveTenantPerms(t.ID, perms)
+			_ = s.Store.SetNotifiedExpFlag(t.ID, "notified_exp1") // ★ B1
 			s.notifyTenantAdmins(t.ID, "订阅今日到期",
 				"商业包「"+perms.PackageCode+"」将于今日到期，续订请前往管理后台订阅页。")
 		}

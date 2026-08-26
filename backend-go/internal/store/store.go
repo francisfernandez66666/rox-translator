@@ -36,16 +36,17 @@ func New(db *sql.DB) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		return nil, err // 迁移失败则返回错误
 	}
-	s.feedbackMigrate() // 老库补 replies 列（幂等，BBS 回复线程）
-	s.backfillAPIOwnership() // ★ 历史 Key/任务强绑定回填（幂等）
-	s.TmReviewMigrate() // TM 待审池建表（幂等）
-	s.QuotaGrantMigrate() // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
+	s.feedbackMigrate()       // 老库补 replies 列（幂等，BBS 回复线程）
+	s.backfillAPIOwnership()  // ★ 历史 Key/任务强绑定回填（幂等）
+	s.TmReviewMigrate()       // TM 待审池建表（幂等）
+	s.QuotaGrantMigrate()     // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
 	s.BalanceAccountMigrate() // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
-	s.ReferralMigrate()   // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
-	s.OneidMigrate() // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
+	s.BillingIndexMigrate()   // ★ 整改 B5：订单号唯一索引 + Key 哈希检索索引（幂等，撞重复降级告警）
+	s.ReferralMigrate()       // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
+	s.OneidMigrate()          // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
 	s.EnsureBillingDefaults() // 商业化参数默认值落库（幂等，面板可改）
-	s.orderMoneyBackfill() // ★ 存量 pending 充值单应收回填（幂等；评审整改 B1，置于默认值落库后以读取到定价键）
-	s.ArtifactsMigrate() // ★ 产物归属登记表（幂等；评审整改 C1）
+	s.orderMoneyBackfill()    // ★ 存量 pending 充值单应收回填（幂等；评审整改 B1，置于默认值落库后以读取到定价键）
+	s.ArtifactsMigrate()      // ★ 产物归属登记表（幂等；评审整改 C1）
 	return s, nil
 }
 
@@ -433,6 +434,8 @@ func (s *Store) migrateColumns() error {
 		{"orders", "package_id", "ALTER TABLE orders ADD COLUMN package_id INTEGER NOT NULL DEFAULT 0"},
 		// 静态码支付人工确认标记（用户点「我已付费」后置 1，超管确认到账后清零）
 		{"orders", "manual_confirm", "ALTER TABLE orders ADD COLUMN manual_confirm INTEGER NOT NULL DEFAULT 0"},
+		// ★ 整改 B3：部分退款实退金额（比例折算口径），审计与对账依据
+		{"orders", "refund_money", "ALTER TABLE orders ADD COLUMN refund_money REAL NOT NULL DEFAULT 0"},
 		// 知识库包归属部门（0=租户级；部门管理员创建部门包时挂本部门）
 		{"kb_packages", "org_id", "ALTER TABLE kb_packages ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
 		// ★ 跨部门共享开关（2026-08-26 KB继承链改造）：1=愿意参与跨部门降级检索（默认），

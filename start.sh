@@ -7,13 +7,13 @@
 # 用法：
 #   ./start.sh            # 编译并启动 Go 后端（127.0.0.1:8787）
 #   ./start.sh -f         # 额外前台启动 vite dev server（:5173，API 代理到 8787）
-#   ./start.sh -b         # 启动前先执行一次前端构建（frontend/dist 不存在时也会自动构建）
+#   ./start.sh -b         # 启动前先执行一次前端构建（frontend-react/dist 不存在时也会自动构建）
 # ============================================================================
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-FRONTEND_DIST="frontend/dist"
+FRONTEND_DIST="frontend-react/dist"
 NEED_FRONTEND_BUILD=0
 
 # ---------- 参数解析 ----------
@@ -28,7 +28,7 @@ done
 # ---------- 前端构建（缺失或强制时） ----------
 if [ "$NEED_FRONTEND_BUILD" = "1" ] || [ ! -f "$FRONTEND_DIST/index.html" ]; then
   echo "==> 构建前端 (npm run build) ..."
-  (cd frontend && npm install --silent && npm run build)
+  (cd frontend-react && npm install --silent && npm run build)
 fi
 
 # ---------- 编译 Go 后端 ----------
@@ -52,7 +52,7 @@ trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
 # ---------- 可选：vite dev（热更新） ----------
 if [ "$RUN_VITE" = "1" ]; then
   echo "==> 启动 vite dev http://localhost:5173 （API 已代理至 :8787）"
-  (cd frontend && npx vite)
+  (cd frontend-react && npx vite)
 else
   echo "==> 就绪。打开 http://127.0.0.1:8787 ；Ctrl+C 退出"
   wait $SERVER_PID

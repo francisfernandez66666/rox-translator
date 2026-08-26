@@ -4,6 +4,7 @@
 // 模糊子串 / 语义高相似+例句参考）、模型路由（按权重选主模型并按权重降序降级）、
 // 主模型熔断降级与冷却自动恢复、429/网络错误降级重试、并发逐语言翻译、
 // 批量翻译（文件用，<sN> 标记解析）、审校/驳回重译、截断自修复、
+// 基于 ctx 的进度回调（替代单例字段，防并发串台）、goroutine panic 兜底恢复、
 // 以及请求级实际用量（供应商/模型）计量记录与错误率监控。
 // ========================================
 package engine
@@ -37,12 +38,13 @@ type Engine struct {
 	St    *store.Store     // 平台存储（读取 system_config：模型路由/阶段模型，可选）
 	Evals *evals.Evaluator // 评估器（质量评估用，可选）
 
-	cjkCache         map[string]int64           // 兼容旧字段（保留）：默认租户 CJK→rowID 缓存
+	cjkCache         map[string]int64            // 兼容旧字段（保留）：默认租户 CJK→rowID 缓存
 	cjkCacheByTenant map[string]map[string]int64 // ★ 2026-08-26 继承链改造：键=「租户|组织链指纹|跨部门开关」→ CJK字符 → row id
-	cjkMu            sync.Mutex                 // 保护 CJK 缓存的并发读写锁
+	cjkMu            sync.Mutex                  // 保护 CJK 缓存的并发读写锁
 
-	// OnPhase 阶段回调（可选）：KB 匹配完成 → 进入 AI 生成前触发 "ai_generating"
-	OnPhase func(phase string)
+	// ★ 整改 D2：原 OnPhase 全局回调字段已移除——Engine 为进程级单例，多请求并发
+	//   时对共享字段无锁读改写（进度事件串台/恢复错乱）。阶段回调改经 ctx 传递：
+	//   WithProgressCallback / progressCallbackFrom。
 
 	// ★ 主模型熔断恢复：Hunyuan 连续失败超阈值 → 直接降级；冷却后自动恢复
 	breaker *Breaker
@@ -107,7 +109,8 @@ type usageCtxKey struct{}
 // usageRecord 可变的请求级记录（context 存指针，跨调用共享）。
 //
 // ★ 并发安全（2026-08-26 全仓评审 B7）：translateLangsConcurrent 的多语言 goroutine
-//   会在各自 singleLang 成功路径并发调用 NoteUsageModel 写本结构，字段读写必须持锁。
+//
+//	会在各自 singleLang 成功路径并发调用 NoteUsageModel 写本结构，字段读写必须持锁。
 type usageRecord struct {
 	mu       sync.Mutex // 保护以下字段的并发读写
 	provider string     // 实际使用的供应商标识（如 siliconflow/volcengine）
@@ -414,10 +417,13 @@ func cjkOverlap(a, b string) float64 {
 	return float64(inter) / float64(union)
 }
 
-// TranslateOne 翻译单条文本（四段匹配），等价 lib.translate_one
-// langOnly=true 时只用 KB（translate_file 第一遍用）；否则 KB+模型兜底。
-// 参数 stage: 流程阶段（KB 兜底翻译默认 config.StageKBMatch）。
-// TranslateOne 翻译单条入口（含 L2 语言文化硬闸门：替换对自动替换、禁用词记录违规）。
+// TranslateOne 单条文本翻译入口，复刻 lib.translate_one 四段匹配流程：
+// 精确命中 → CJK 标点无关精确 → 模糊子串 → 语义高相似+例句参考，未命中则模型兜底。
+// 参数：zhText=源文本；targetLangs=目标语言列表；langOnly=true 时只用知识库
+//       （文件翻译第一遍用），false 时知识库未覆盖语言由模型补齐；
+//       stage=流程阶段标识（默认 config.StageKBMatch）。
+// 返回单条翻译结果与错误；返回前已应用 L2 语言文化硬闸门
+// （replace 规则自动替换、forbidden 规则记录违规并在强制模式下拦截）。
 func (e *Engine) TranslateOne(ctx context.Context, zhText string, targetLangs []string, langOnly bool, stage string) (*TranslateResult, error) {
 	res, err := e.translateOneInner(ctx, zhText, targetLangs, langOnly, stage)
 	if res == nil || len(res.Translations) == 0 {
@@ -627,8 +633,8 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 		res.Mode = "模型翻译（无知识库）"
 	}
 	res.NeedModel = targetLangs
-	// 还有语言需要模型生成 → 通知"AI生成中"
-	if e.OnPhase != nil {
+	// 还有语言需要模型生成 → 通知"AI生成中"（★ 整改 D2：回调经 ctx 传递，替代单例字段）
+	if cb := progressCallbackFrom(ctx); cb != nil {
 		need := make([]string, 0, len(res.NeedModel))
 		for _, lc := range res.NeedModel {
 			if v, ok := res.Translations[lc]; ok && strings.TrimSpace(v) != "" {
@@ -637,7 +643,7 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 			need = append(need, lc)
 		}
 		if len(need) > 0 {
-			e.OnPhase("ai_generating")
+			cb("ai_generating")
 		}
 	}
 	e.translateLangsConcurrent(ctx, zhText, targetLangs, res.Examples, res.Translations, srcLang, stage)
@@ -676,6 +682,7 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 		wg.Add(1)
 		go func(lang string) {
 			defer wg.Done()
+			defer recoverPipeline("translate_lang:" + lang) // 整改 D4
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
@@ -1388,6 +1395,7 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 		wg.Add(1)
 		go func(start int, chunk []string) {
 			defer wg.Done()
+			defer recoverPipeline("batch_chunk") // 整改 D4
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			hit := runChunk(start, chunk)
@@ -1397,7 +1405,7 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 				poorMu.Unlock()
 			}
 			if onBatchDone != nil {
-				onBatchDone(start + len(chunk), len(texts))
+				onBatchDone(start+len(chunk), len(texts))
 			}
 		}(start, chunk)
 	}
@@ -1426,6 +1434,7 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 			wg.Add(1)
 			go func(start int, chunk []string) {
 				defer wg.Done()
+				defer recoverPipeline("batch_retry_chunk") // 整改 D4
 				sem <- struct{}{}
 				defer func() { <-sem }()
 				runChunk(start, chunk)
@@ -1444,6 +1453,7 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
+			defer recoverPipeline("batch_fallback") // 整改 D4
 			fbSem <- struct{}{}
 			defer func() { <-fbSem }()
 			s2, err := e.singleLang(ctx, texts[i], targetLang, nil, "zh", config.StageAIInitial, 0)

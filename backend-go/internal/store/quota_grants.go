@@ -6,6 +6,7 @@
 package store
 
 import (
+	"database/sql"
 	"time"
 )
 
@@ -84,14 +85,28 @@ func (s *Store) TenantRemainTotal(tid int64) (grants, permanent int64, err error
 //   - 每条核销 UPDATE 额外携带 AND left>=? 守卫 + RowsAffected 校验，
 //     即使未来有人回退事务锁模式，也不会把台账扣成负数（双保险）。
 func (s *Store) DeductWithGrants(tid int64, tokens int64) error {
-	if err := s.EnsureBalance(tid); err != nil {
-		return err
-	}
 	tx, err := s.db.Begin() // DSN _txlock=immediate ⇒ 实际为 BEGIN IMMEDIATE
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := deductWithGrantsTx(tx, tid, tokens); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// deductWithGrantsTx 双部分顺序扣减核心（供外部事务复用，★ 整改 B4）：
+// RecordUsage 需把「扣减」与「台账落账」放进同一 IMMEDIATE 事务——此前扣减独立提交、
+// ledger INSERT 失败即产生「扣了钱无流水」的对账缺口。
+// 约束：tx 必须已由调用方 Begin（IMMEDIATE）；函数内禁止触碰 s.db。
+func deductWithGrantsTx(tx *sql.Tx, tid int64, tokens int64) error {
+	// 确保账户行存在（等价 EnsureBalance 的 tx 内联版）
+	if _, err := tx.Exec(
+		"INSERT OR IGNORE INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
+		tid, time.Now().Format(time.RFC3339)); err != nil {
+		return err
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := tx.Query(
 		"SELECT id, left FROM quota_grants WHERE tenant_id=? AND left>0 AND expires_at>? ORDER BY expires_at ASC",
@@ -142,5 +157,5 @@ func (s *Store) DeductWithGrants(tid int64, tokens int64) error {
 			return ErrInsufficientBalance
 		}
 	}
-	return tx.Commit()
+	return nil
 }

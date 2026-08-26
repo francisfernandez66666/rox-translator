@@ -1,16 +1,16 @@
 // ============ 本文件职责中文说明 ============
-// 文件翻译：面向 docx/pptx/xlsx 的整文件翻译主流程（复刻 skill.py _handle_file_translate）。
+// 文件翻译：面向 docx/pptx/xlsx/pdf 等格式的整文件翻译主流程（复刻 skill.py _handle_file_translate）。
 // 支持 KB 语言（先 KB 直配、未命中批量模型补漏）与"其他语言"（纯批量模型），
 // 从用户 prompt 中解析"其他语言"（正则 + LLM 语言识别兜底），
+// 含 pro 模式批量审校、硬闸补漏（墙钟预算+零进展熔断）与漏翻可见性（Untranslated），
 // 翻译完成后按语言分别写回 translated/ 目录下独立文件并统计 KB/模型命中数。
 // ========================================
 package engine
 
 import (
-	"time"
-	"log"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/xuri/excelize/v2"
 	"translator/internal/config"
@@ -41,6 +42,11 @@ type FileTranslateData struct {
 	KBHits      int               `json:"kb_hits"`      // 知识库命中段数
 	ModelHits   int               `json:"model_hits"`   // 模型翻译段数
 	FileContext string            `json:"file_context"` // 文件内容摘要/上下文（预留）
+	// Untranslated 硬闸结束后仍未译出的段数（按语言）。
+	// ★ 2026-08-26 漏翻可见性修复：此前预算耗尽/零进展熔断只写日志——「尾部表格漏翻」
+	//   在工单层面完全不可见，QA/审批无从发现。现随 Data 序列化进工单 payload，
+	//   审批台/QA 报告可据此提示人工补译。>0 时 Reply 亦追加告警文案。
+	Untranslated map[string]int `json:"untranslated,omitempty"`
 	// Translations 原文→译文映射（语言维度），供工单执行器回写 tm_segments 长期沉淀；
 	// 不序列化进 SSE/HTTP 响应（体量大且前端无需）。
 	Translations map[string]map[string]string `json:"-"`
@@ -112,7 +118,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	//   图片内容按产品策略不翻译（2026-08-25 OCR 已整体移除）。
 	var pdfCacheDocx string
 	if strings.EqualFold(filepath.Ext(filePath), ".pdf") {
-		if t2, cache, e2 := fileproc.ExtractTextsPdfDocx(filePath); e2 == nil && len(t2) > 0 && cache != "" {
+		if t2, cache, e2 := fileproc.ExtractTextsPdfDocx(ctx, filePath); e2 == nil && len(t2) > 0 && cache != "" {
 			texts = t2
 			pdfCacheDocx = cache
 			defer os.Remove(cache)
@@ -185,15 +191,17 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			wg.Add(1)
 			go func(lc string) {
 				defer wg.Done()
+				defer recoverPipeline("file_kb:" + lc) // 整改 D4
 				// 第一遍：KB 匹配（★ 并行 8 路：长文档逐段串行是耗时大头）
 				kbHitIdx := make([]bool, len(texts))
 				kbVal := make([]string, len(texts))
-								semKB := make(chan struct{}, 8)
+				semKB := make(chan struct{}, 8)
 				var wgKB sync.WaitGroup
 				for i, t := range texts {
 					wgKB.Add(1)
 					go func(i int, t string) {
 						defer wgKB.Done()
+						defer recoverPipeline("file_kb_seg") // 整改 D4
 						semKB <- struct{}{}
 						defer func() { <-semKB }()
 						r, err := e.TranslateOne(ctx, t, []string{lc}, true, config.StageKBMatch)
@@ -248,6 +256,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		wg.Add(1)
 		go func(lc string) {
 			defer wg.Done()
+			defer recoverPipeline("file_batch:" + lc) // 整改 D4
 			batch := e.BatchTranslate(ctx, texts, lc, 15, nil)
 			// ★ pro 模式批量审校（同上：整块一次调用）
 			if !fast {
@@ -264,21 +273,23 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	wg.Wait()
 	// ★ 复核补漏（文件工单复核第1层）：扫描各语言未命中段落，重试一次批量模型。
 	// 治「有的中文还没翻译就贴上来」：首翻失败的段不再静默缺失。
-	// ★ 硬闸重试（方案语义）：对缺失段「重启 LLM 翻译」——每段独立全新调用
-	//        初翻模型（绕过 KB/缓存）；仍回显则保留原文并计入告警。
-	// ★ 不设轮数上限：直到全部译出或任务超时/取消为止（硬闸语义）。
-	// ★ 成本预算护栏（2026-08-26 全仓评审 B5，不改变上述语义本体）：
-	//   ① 墙钟预算 FILE_HARDGATE_MAX_SEC（默认 600s）：超时即停，防「模型持续失败 ×
-	//      无限轮次」把实费计费烧成账单雪球；
-	//   ② 零进展熔断：连续 2 轮缺失数不减 → 判定模型稳定回显/失败，退出循环。
+	// ★ 硬闸重试（方案语义）：对缺失段「重启 LLM 翻译」；仍回显则保留原文并计入告警。
+	// ★ 成本预算护栏（不改变上述语义本体）：
+	//   ① 墙钟预算 FILE_HARDGATE_MAX_SEC（默认 600s）——2026-08-26 漏翻整改：
+	//      预算检查从「仅轮首」细化为「轮首+逐段之间」，防止一轮内部超支导致
+	//      尾部段落（如末尾表格的「无」）从未获得补翻机会；
+	//   ② 零进展熔断：连续 2 轮缺失数不减 → 判定模型稳定回显/失败，退出循环；
+	//   ③ 每轮先小批量（bs=10，<sN> 显式配对）重译——对超短段（「无/有/日期」）
+	//      的抗回显性显著优于逐段单发，且吞吐高一个量级；批量后仍缺的段再逐段兜底。
+	untranslated := map[string]int{} // 语言 → 硬闸结束后仍未译出段数（进 Data 供审批/QA 可见）
 	for _, lc := range finalLangs {
-		missing := []string{}
+		missing0 := []string{}
 		for _, t := range texts {
 			if _, ok := langTranslations[lc][t]; !ok {
-				missing = append(missing, t)
+				missing0 = append(missing0, t)
 			}
 		}
-		if len(missing) == 0 {
+		if len(missing0) == 0 {
 			continue
 		}
 		budget := hardGateBudget()
@@ -289,10 +300,6 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			if ctx.Err() != nil {
 				break
 			}
-			if elapsed := time.Since(loopStart); elapsed > budget {
-				log.Printf("[tm-hardgate] lang=%s 预算耗尽（%s），剩余未译段保留原文", lc, elapsed.Round(time.Second))
-				break
-			}
 			still := []string{}
 			for _, t := range texts {
 				if _, ok := langTranslations[lc][t]; !ok {
@@ -300,6 +307,10 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				}
 			}
 			if len(still) == 0 {
+				break
+			}
+			if elapsed := time.Since(loopStart); elapsed > budget {
+				log.Printf("[tm-hardgate] lang=%s 预算耗尽（%s），剩余 %d 段未译", lc, elapsed.Round(time.Second), len(still))
 				break
 			}
 			if prevMissing >= 0 && len(still) >= prevMissing {
@@ -313,8 +324,31 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			}
 			prevMissing = len(still)
 			log.Printf("[tm-hardgate] lang=%s round=%d 重启LLM重译 %d 段", lc, attempt, len(still))
-			time.Sleep(500 * time.Millisecond) // 轮间间隔，防高频打爆供应商
+			// 轮间间隔防打爆供应商；可被取消打断（不再无条件睡死 500ms）
+			select {
+			case <-ctx.Done():
+			case <-time.After(500 * time.Millisecond):
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			// 本轮第1优先：小批量重译（bs=10）。BatchTranslate 内部含动态批与低解析率二次收编，
+			// 对短段回显的纠正率高于逐段单发。
+			batch := e.BatchTranslate(ctx, still, lc, 10, nil)
+			for i, m := range still {
+				if v := batch[i]; v != "" && v != "[翻译失败]" && v != m {
+					addTrans(lc, m, v)
+				}
+			}
+			// 本轮第2优先：批量后仍缺失的段逐段兜底（全新调用，绕过 KB/缓存）。
+			// ★ 段粒度预算检查：每段之间复核剩余预算，保证尾部段落也能分到时间。
 			for _, m := range still {
+				if _, ok := langTranslations[lc][m]; ok {
+					continue
+				}
+				if time.Since(loopStart) > budget {
+					break
+				}
 				r, err := e.TranslateOne(ctx, m, []string{lc}, false, config.StageAIInitial)
 				if err != nil {
 					continue
@@ -323,6 +357,17 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					addTrans(lc, m, v)
 				}
 			}
+		}
+		// ★ 可见性收尾：无论因预算/零进展/取消退出，剩余缺失数必须浮出水面
+		remain := 0
+		for _, t := range texts {
+			if _, ok := langTranslations[lc][t]; !ok {
+				remain++
+			}
+		}
+		if remain > 0 {
+			log.Printf("[tm-hardgate] lang=%s 结束：仍有 %d/%d 段未译出（已写入工单 Untranslated 供人工补译）", lc, remain, len(texts))
+			untranslated[lc] = remain
 		}
 	}
 	prog("第2步/3：翻译完成", 2, 3)
@@ -363,11 +408,11 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			case ".pdf":
 				if pdfCacheDocx != "" {
 					// 两阶段：复用提取期缓存 DOCX（键对齐，图片/排版零破坏）
-					if perr := fileproc.ApplyTranslatedPdfFromDocx(outPath, pdfCacheDocx, tr, lc); perr == nil {
+					if perr := fileproc.ApplyTranslatedPdfFromDocx(ctx, outPath, pdfCacheDocx, tr, lc); perr == nil {
 						filesOut = append(filesOut, outPath)
 						continue
 					}
-					if perr := fileproc.WriteTranslatedPDFviaDocx(outPath, filePath, tr, lc); perr == nil {
+					if perr := fileproc.WriteTranslatedPDFviaDocx(ctx, outPath, filePath, tr, lc); perr == nil {
 						filesOut = append(filesOut, outPath)
 						continue
 					}
@@ -396,6 +441,16 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 
 	reply := fmt.Sprintf("✅ 文件翻译完成：共 %d 段文本，输出 %d 个文件（%s）",
 		len(texts), len(filesOut), strings.Join(finalLangs, "/"))
+	// ★ 漏翻可见性：存在未译出段时在完成话术与结构化数据中同时告警（审批/QA 可据此补译）
+	if len(untranslated) > 0 {
+		parts := make([]string, 0, len(untranslated))
+		for _, lc := range finalLangs {
+			if n := untranslated[lc]; n > 0 {
+				parts = append(parts, fmt.Sprintf("%s×%d", lc, n))
+			}
+		}
+		reply += fmt.Sprintf("；⚠️ 有 %d 段未能译出已保留原文（%s），请人工检查", len(parts), strings.Join(parts, ","))
+	}
 	return &FileTranslateResult{
 		Skill: "translation",
 		Reply: reply,
@@ -405,6 +460,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			LangNames:    langNames,
 			KBHits:       kbHits,
 			ModelHits:    modelHits,
+			Untranslated: untranslated,     // 语言→未译出段数（>0 时审批台可见）
 			Translations: langTranslations, // 原文→译文（不序列化），工单执行器回写 TM
 		},
 		Files: filesOut,
