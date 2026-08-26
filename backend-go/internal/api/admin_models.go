@@ -54,16 +54,23 @@ func encryptRoutes(rs []config.ProviderConfig) []config.ProviderConfig {
 	return out
 }
 
-// llmKeyState 返回某加密配置键是否已设置及其掩码展示（解密后脱敏）。
+// llmKeyState 查询某个以密文落库的密钥配置（如 embed_api_key）的当前状态。
+//   - 入参 key：system_config 中的配置键名（其值应为 store.EncryptSecret 产生的 enc:v1: 密文）。
+//   - 返回 (是否已设置, 脱敏后的掩码)：未配置/解密失败均返回 (false, "")。
+// 用途：在「全局模型」tab 的 GET 接口中向前端返回密钥是否已配置及掩码展示，
+//       避免将真实密钥明文回传到前端。
 func (s *Server) llmKeyState(key string) (bool, string) {
+	// 从 system_config 读取密文（为空或读取失败视为未配置）
 	v, err := s.Store.GetConfig(key)
 	if err != nil || v == "" {
 		return false, ""
 	}
+	// 解密（密钥派生自 JWT_SECRET；解密失败返回空串，同样视为未配置）
 	dec := store.DecryptSecret(v)
 	if dec == "" {
 		return false, ""
 	}
+	// 解密成功：对明文做掩码（仅首尾若干字符可见）后返回
 	return true, maskKey(dec)
 }
 
@@ -89,10 +96,15 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		rt.APIKey = maskKey(rt.APIKey)
 		maskedRoutes = append(maskedRoutes, rt)
 	}
+	// ★ LLM Key 合并：除原有的「在线模型」单模型与多供应商路由外，
+	//   本接口额外返回 Embedding 密钥（KB 向量重建用）的状态，供「全局模型」tab 渲染。
+	// 读取 embed_api_key 是否已配置及其掩码（库内为密文，这里解密后脱敏）。
 	embSet, embMask := s.llmKeyState("embed_api_key")
-	// 翻译密钥是否已真实配置（占位随机 Key 视为未配置）
+	// 翻译密钥是否已真实配置：占位随机 Key（未配置环境变量时生成的 sk-xxxx）视为「未配置」，
+	// 避免前端把占位 Key 误判为已生效，导致翻译实际失败却显示正常。
 	transSet := key != "" && !s.Cfg.OnlineAPIKeyIsPlaceholder
 	writeJSON(w, 200, map[string]interface{}{"success": true,
+		// model：在线翻译/工单任务密钥（api_key 已掩码；set 表示是否真实配置）
 		"model": map[string]interface{}{"api_base": base, "api_key": maskKey(key), "model": model, "set": transSet},
 		"embedding": map[string]interface{}{"set": embSet, "masked": embMask, "api_base": s.Cfg.EmbedAPIBase},
 		"routes":   maskedRoutes})
@@ -110,13 +122,16 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		APIBase      string                  `json:"api_base"`      // 模型 API 基础地址（可为空=不修改）
-		APIKey       string                  `json:"api_key"`       // 模型 API Key（掩码值不覆盖原密钥）
-		Model        string                  `json:"model"`         // 模型名称
+		APIBase      string                  `json:"api_base"`      // 模型 API 基础地址（在线翻译用；可为空=不修改）
+		APIKey       string                  `json:"api_key"`       // 在线翻译/工单任务 API Key（掩码值不覆盖原密钥）
+		Model        string                  `json:"model"`         // 在线翻译模型名称
 		Routes       []config.ProviderConfig `json:"routes"`        // 多供应商路由（可为空=清空；平台统一网关多供应商调度）
-		EmbedAPIKey  string                  `json:"embed_api_key"` // ★ KB 向量重建 Embedding Key（掩码值不覆盖）
-		EmbedAPIBase string                  `json:"embed_api_base"`
-		ClearKeys    []string                `json:"clear_keys"` // ★ 清空指定密钥作用域：["translation","embedding"]
+		// ★ LLM Key 合并（2026-08-27）：将原本独立的 /api/admin/llm-key 接口功能并入本接口
+		EmbedAPIKey  string `json:"embed_api_key"` // KB 向量重建用的 Embedding Key（掩码值不覆盖原密钥）
+		EmbedAPIBase string `json:"embed_api_base"` // Embedding 网关地址（如智谱 …/api/paas/v4）
+		// clear_keys：显式清空某个密钥作用域，取值 "translation"（在线翻译 Key）或 "embedding"（向量重建 Key）。
+		// 前端「清除」按钮即发送该字段，避免把空串误当作「清空」而误删。
+		ClearKeys []string `json:"clear_keys"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -168,10 +183,14 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	if req.Model != "" {
 		s.Cfg.OnlineModel = req.Model
 	}
-	// ★ 后台可配 LLM Key：覆盖环境变量、重启后水合生效（需求：翻译/工单任务 + KB 向量重建）
-	// 清空作用域优先（clear_keys 指定的密钥置回占位/删除）
+	// ★ LLM Key 合并后的持久化逻辑（2026-08-27）：
+	//   翻译/工单任务 Key 与 Embedding Key 均以 enc:v1: 密文落库到 system_config，
+	//   并热同步到运行配置 s.Cfg，使配置立即生效；同时 main.go 启动时再从库水合，
+	//   保证「后台设置优先于环境变量、重启后仍生效」。
+	// 清空作用域优先处理：clear_keys 指定的密钥直接置回占位/删除（先于写入，避免刚写又被清）。
 	for _, sc := range req.ClearKeys {
 		if sc == "translation" {
+			// 清除在线翻译 Key：库内三项（密钥/网关/模型）置空，运行配置恢复占位随机 Key
 			_ = s.Store.SetConfig("online_api_key", "")
 			_ = s.Store.SetConfig("online_api_base", "")
 			_ = s.Store.SetConfig("online_model", "")
@@ -179,12 +198,14 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 			s.Cfg.OnlineAPIKeyIsPlaceholder = true
 		}
 		if sc == "embedding" {
+			// 清除 Embedding Key：库内密钥/网关置空，运行配置清空
 			_ = s.Store.SetConfig("embed_api_key", "")
 			_ = s.Store.SetConfig("embed_api_base", "")
 			s.Cfg.EmbedAPIKey = ""
 		}
 	}
-	// 翻译 Key 持久化（仅在非空且非掩码时写入；掩码=未修改保留原值）
+	// 在线翻译 Key 持久化：仅在非空且非掩码时写入（掩码串表示前端未改动、保留原值）。
+	// 写入后同步清除占位标志，使 GET 的 set 标志即时变为 true。
 	if req.APIKey != "" && !hasMask(req.APIKey) {
 		_ = s.Store.SetConfig("online_api_key", store.EncryptSecret(req.APIKey))
 	}
@@ -194,7 +215,7 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	if req.Model != "" {
 		_ = s.Store.SetConfig("online_model", req.Model)
 	}
-	// Embedding Key 持久化（KB 向量重建）
+	// Embedding Key 持久化（KB 向量重建用）：同样仅在非空且非掩码时写入，密文落库 + 热同步运行配置。
 	if req.EmbedAPIKey != "" && !hasMask(req.EmbedAPIKey) {
 		s.Cfg.EmbedAPIKey = req.EmbedAPIKey
 		_ = s.Store.SetConfig("embed_api_key", store.EncryptSecret(req.EmbedAPIKey))

@@ -473,8 +473,12 @@ export function ModelsP() {
   const [pForm2, setPForm2] = useState<Any>({ high_sim: 0.9, med_sim: 0.75, evals_pass_threshold: 75, cross_dept_fallback: true, data_feedback_opt_out: false })
   // 分阶段模型配置
   const [stForm, setStForm] = useState<Any>({})
-  // ★ LLM 密钥（翻译/工单任务 + KB 向量重建，仅超管）
+  // ★ LLM 密钥（翻译/工单任务 + KB 向量重建，仅超管可配置）
+  // eForm：Embedding 密钥录入表单（api_key 录入后提交即清空，避免明文残留于前端状态）
   const [eForm, setEForm] = useState<Any>({ api_key: '', api_base: '' })
+  // keyState：从后端 GET /api/admin/models 回填的密钥状态，用于面板展示「已配置/未配置」与掩码
+  //   translation：在线翻译/工单任务密钥是否已真实配置
+  //   embedding / embeddingMasked / embeddingBase：Embedding 密钥状态、掩码、网关地址
   const [keyState, setKeyState] = useState<Any>({ translation: false, embedding: false, embeddingMasked: '', embeddingBase: '' })
 
   // 供应商预设：api_base 与默认模型
@@ -501,7 +505,9 @@ export function ModelsP() {
       const d = r as unknown as { model?: Any; embedding?: Any; routes?: Any[] }
       setMForm(d.model || {})
       setRouteForm(d.routes || [])
+      // Embedding 表单仅回填网关地址（api_base），密钥本身不入表单（避免明文残留）；api_key 留空待录入
       setEForm({ api_key: '', api_base: (d.embedding?.api_base as string) || '' })
+      // 回填密钥状态：translation 取 model.set（后端已区分占位 Key），embedding 取 embedding.set 与掩码
       setKeyState({ translation: !!(d.model && d.model.set), embedding: !!(d.embedding && d.embedding.set), embeddingMasked: (d.embedding?.masked as string) || '', embeddingBase: (d.embedding?.api_base as string) || '' })
     }
   }, [])
@@ -574,19 +580,20 @@ export function ModelsP() {
     if (!r.success) { MessagePlugin.error(r.message); return }
     MessagePlugin.success(t('models.savedPolicy'))
   }
-  // ★ 保存 Embedding 密钥（KB 向量重建）
+  // ★ 保存 Embedding 密钥（KB 向量重建用）：仅提交 embed_api_key / embed_api_base，
+  //   后端以密文落库并热同步；提交后重新拉取以刷新「已配置」状态与掩码展示。
   async function saveEmbed() {
     const r = await adminModelsSave({ embed_api_key: eForm.api_key, embed_api_base: eForm.api_base } as never)
     if (!r.success) { MessagePlugin.error(r.message); return }
     MessagePlugin.success(t('models.savedEmbed')); await loadModels()
   }
-  // ★ 清除 Embedding 密钥
+  // ★ 清除 Embedding 密钥：向后端发送 clear_keys:["embedding"]，由后端置空配置并刷新状态。
   async function clearEmbed() {
     const r = await adminModelsSave({ clear_keys: ['embedding'] } as never)
     if (!r.success) { MessagePlugin.error(r.message); return }
     MessagePlugin.success(t('models.clearedEmbed')); await loadModels()
   }
-  // ★ 清除翻译/工单任务密钥
+  // ★ 清除翻译/工单任务密钥：向后端发送 clear_keys:["translation"]，恢复占位 Key。
   async function clearTrans() {
     const r = await adminModelsSave({ clear_keys: ['translation'] } as never)
     if (!r.success) { MessagePlugin.error(r.message); return }
@@ -633,17 +640,20 @@ export function ModelsP() {
         </p>
       </Panel>
 
-      {/* ===== LLM 密钥（翻译/工单任务 + KB 向量重建，仅超管） ===== */}
+      {/* ===== LLM 密钥（翻译/工单任务 + KB 向量重建，仅超管，2026-08-27 由独立接口并入本 tab） ===== */}
       <Panel title={t('models.llmKeyTitle')}>
         <div style={{ fontSize: 12, color: '#667', marginBottom: 8 }}>{t('models.llmKeyHint')}</div>
+        {/* 在线翻译/工单任务密钥状态：复用本 tab 顶部「在线模型」api_key 字段，这里只展示是否已配置并支持一键清除 */}
         <div style={rowMt}>
           <span style={{ fontSize: 13 }}>{t('models.translationKeyLabel')}：{keyState.translation ? `✓ ${t('models.configured')}` : `✗ ${t('models.notConfigured')}`}</span>
           {keyState.translation && <Button size="small" theme="danger" variant="outline" onClick={() => void clearTrans()}>{t('models.clearTranslation')}</Button>}
         </div>
+        {/* Embedding 密钥：知识库向量重建专用，独立于翻译 Key，单独录入/保存/清除 */}
         <Field label={t('models.embedApiKey')}><Input type="password" value={String(eForm.api_key ?? '')} onChange={(v: any) => setEForm({ ...eForm, api_key: v })} placeholder={t('models.embedApiKeyPlaceholder')} /></Field>
         <Field label={t('models.embedApiBase')}><Input value={String(eForm.api_base ?? '')} onChange={(v: any) => setEForm({ ...eForm, api_base: v })} placeholder={t('models.embedApiBasePlaceholder')} /></Field>
         <div style={rowMt}>
           <Button onClick={() => void saveEmbed()}>{t('models.saveEmbed')}</Button>
+          {/* 已配置时才显示「清除」按钮与掩码，避免无意义操作 */}
           {keyState.embedding && <Button size="small" theme="danger" variant="outline" onClick={() => void clearEmbed()}>{t('models.clearEmbed')}</Button>}
           {keyState.embedding && <span style={{ fontSize: 12, color: '#1a7f37' }}>✓ {keyState.embeddingMasked}</span>}
         </div>

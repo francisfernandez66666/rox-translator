@@ -184,8 +184,10 @@ func main() {
 					log.Printf("全局 API Key 已从主路由水合（provider=%s model=%s）", r.Provider, r.Model)
 					break
 		}
-		// ★ 后台可配 LLM Key 水合（优先于 env 与 model_routes）：
-		//   使翻译/工单任务的 Key 可由后台随时设置并持久化，重启后仍生效。
+		// ★ 后台可配 LLM Key 启动水合（2026-08-27，并入「全局模型」tab 的一部分）：
+		//   后台在 /api/admin/models/save 中把翻译/向量密钥以密文落库到 system_config，
+		//   此处启动时优先读取这些库内配置并覆盖（环境变量与 model_routes 的）默认值，
+		//   实现「后台设置优先、重启后仍生效」。
 		if v, _ := st.GetConfig("online_api_key"); v != "" {
 			if dec := store.DecryptSecret(v); dec != "" {
 				cfg.OnlineAPIKey = dec
