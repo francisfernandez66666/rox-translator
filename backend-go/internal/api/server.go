@@ -260,10 +260,15 @@ func (s *Server) routesAdminModels() {
 	s.mux.HandleFunc("/api/admin/models/save", s.handleModelsSave)
 	s.mux.HandleFunc("/api/admin/models/routes", s.handleModelRoutes)
 	s.mux.HandleFunc("/api/admin/models/routes/save", s.handleModelRoutesSave)
+	// ★ 后台可配 LLM Key（翻译/工单任务 + KB 向量重建）
+	s.mux.HandleFunc("/api/admin/llm-key", s.handleAdminLLMKeyGet)
+	s.mux.HandleFunc("/api/admin/llm-key/save", s.handleAdminLLMKeySave)
+	s.mux.HandleFunc("/api/admin/llm-key/clear", s.handleAdminLLMKeyClear)
 	s.mux.HandleFunc("/api/admin/models/stage", s.handleStageModels)
 	s.mux.HandleFunc("/api/admin/models/stage/save", s.handleStageModelsSave)
 	s.mux.HandleFunc("/api/admin/policy", s.handlePolicy)
 	s.mux.HandleFunc("/api/admin/policy/save", s.handlePolicySave)
+
 }
 
 // routesAdminSystem 注册 evals 看板与系统健康/审计/告警路由。

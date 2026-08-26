@@ -183,8 +183,33 @@ func main() {
 					cfg.OnlineAPIKeyIsPlaceholder = false
 					log.Printf("全局 API Key 已从主路由水合（provider=%s model=%s）", r.Provider, r.Model)
 					break
-				}
+		}
+		// ★ 后台可配 LLM Key 水合（优先于 env 与 model_routes）：
+		//   使翻译/工单任务的 Key 可由后台随时设置并持久化，重启后仍生效。
+		if v, _ := st.GetConfig("online_api_key"); v != "" {
+			if dec := store.DecryptSecret(v); dec != "" {
+				cfg.OnlineAPIKey = dec
+				cfg.OnlineAPIKeyIsPlaceholder = false
+				log.Println("[llmkey] 已从后台配置水合 在线翻译 Key")
 			}
+		}
+		if v, _ := st.GetConfig("online_api_base"); v != "" {
+			cfg.OnlineAPIBase = v
+		}
+		if v, _ := st.GetConfig("online_model"); v != "" {
+			cfg.OnlineModel = v
+		}
+		if v, _ := st.GetConfig("embed_api_key"); v != "" {
+			if dec := store.DecryptSecret(v); dec != "" {
+				cfg.EmbedAPIKey = dec
+				log.Println("[llmkey] 已从后台配置水合 Embedding Key")
+			}
+		}
+		if v, _ := st.GetConfig("embed_api_base"); v != "" {
+			cfg.EmbedAPIBase = v
+		}
+	}
+
 		}
 	}
 
