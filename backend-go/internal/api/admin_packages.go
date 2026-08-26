@@ -46,6 +46,7 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req struct {
+		TenantID     int64   `json:"tenant_id"`     // 租户 ID（可选，默认 0=平台）
 		Code         string  `json:"code"`          // 包编码（唯一，必填）
 		Name         string  `json:"name"`          // 包名称（必填）
 		PType        string  `json:"ptype"`         // 包类型：free/paid/increment（默认 paid）
@@ -73,7 +74,7 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 		req.DurationDays = 30
 	}
 	p, err := s.Store.CreatePackage(&store.Package{
-		Code: req.Code, Name: req.Name, PType: req.PType, Sentences: req.Sentences,
+		TenantID: req.TenantID, Code: req.Code, Name: req.Name, PType: req.PType, Sentences: req.Sentences,
 		PriceMoney: req.PriceMoney, DurationDays: req.DurationDays, Enabled: 1, SortOrder: req.SortOrder,
 	})
 	if err != nil {
@@ -95,6 +96,7 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 	}
 	var req struct {
 		ID           int64   `json:"id"`            // 目标包 ID（必填）
+		TenantID     *int64  `json:"tenant_id"`     // 新租户 ID（nil=不修改）
 		Name         string  `json:"name"`          // 新名称（可为空=不修改）
 		PType        string  `json:"ptype"`         // 新类型（可为空=不修改）
 		Sentences    int64   `json:"sentences"`     // 新句数（<=0=不修改）
@@ -111,6 +113,9 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "包不存在"})
 		return
+	}
+	if req.TenantID != nil {
+		cur.TenantID = *req.TenantID
 	}
 	if req.Name != "" {
 		cur.Name = req.Name

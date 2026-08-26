@@ -466,7 +466,7 @@ func (s *Store) CreateOrder(tid int64, tokens int64, money float64, createdBy in
 // channel=支付渠道（offline / mock / wechat / alipay），qrContent=渠道二维码内容。
 // 返回：新订单对象。
 func (s *Store) CreateOrderChannel(tid int64, tokens int64, money float64, createdBy int64, channel, qrContent string) (*Order, error) {
-	orderNo := "RO" + time.Now().Format("20060102150405") + randSuffix(4) // 生成唯一订单号
+	orderNo := fmt.Sprintf("T%d-RO%s%s", tid, time.Now().Format("20060102150405"), randSuffix(4)) // 生成唯一订单号
 	payMethod := "offline"
 	if channel != "offline" {
 		payMethod = "online"
@@ -484,7 +484,7 @@ func (s *Store) CreateOrderChannel(tid int64, tokens int64, money float64, creat
 // 参数：tid=租户 ID，pkg=商业包对象，createdBy=创建者 ID，channel=支付渠道（mock/manual/wechat/alipay）。
 // 返回：新订单对象（初始状态 pending，待支付）。
 func (s *Store) CreatePackageOrder(tid int64, pkg *Package, createdBy int64, channel string) (*Order, error) {
-	orderNo := "RO" + time.Now().Format("20060102150405") + randSuffix(4) // 生成唯一订单号
+	orderNo := fmt.Sprintf("T%d-RO%s%s", tid, time.Now().Format("20060102150405"), randSuffix(4)) // 生成唯一订单号
 	_, err := s.db.Exec(
 		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, qr_content, package_id, created_by, created_at) VALUES (?,?,0,?, 'pending', 'online', ?, '', ?, ?, ?)",
 		tid, orderNo, pkg.PriceMoney, channel, pkg.ID, createdBy, time.Now().Format(time.RFC3339))
@@ -1062,9 +1062,10 @@ func (s *Store) ListInvoices(tid int64) ([]*Invoice, error) {
 //   - api_keys.key_hash 普通索引：GetAPIKeyByHash 是 OpenAPI 每次调用的热路径，
 //     此前全表扫描。
 func (s *Store) BillingIndexMigrate() {
-	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_no ON orders(order_no) WHERE order_no<>''`); err != nil {
+	s.db.Exec(`DROP INDEX IF EXISTS idx_orders_no`)
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_no ON orders(tenant_id, order_no) WHERE order_no<>''`); err != nil {
 		log.Printf("[migrate] orders.order_no 唯一索引创建失败（疑存量重复单号，请人工核对）: %v", err)
-		if _, err2 := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_no ON orders(order_no) WHERE order_no<>''`); err2 != nil {
+		if _, err2 := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_no ON orders(tenant_id, order_no) WHERE order_no<>''`); err2 != nil {
 			log.Printf("[migrate] orders.order_no 普通索引亦创建失败: %v", err2)
 		}
 	}

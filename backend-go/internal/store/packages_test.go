@@ -51,7 +51,7 @@ func TestPackageCRUD(t *testing.T) {
 		t.Fatalf("CreatePackage 返回异常: %+v", p)
 	}
 	// 查询
-	got, err := s.GetPackageByCode("monthly_100")
+	got, err := s.GetPackageByCode(0, "monthly_100")
 	if err != nil || got.Sentences != 100 {
 		t.Fatalf("GetPackageByCode 失败: %v", err)
 	}

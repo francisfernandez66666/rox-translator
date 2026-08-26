@@ -10,10 +10,7 @@ import (
 // 付费永久奖励入「邀请人」租户余额（幂等）→ 记录查询。
 func TestReferralFlow(t *testing.T) {
 	s := newTestStoreWithTenants(t)
-	// 第二个租户：被邀人注册后归属的独立试用租户
-	mustExec(t, s, `INSERT INTO tenants (code, name, status, expires_at, permissions) VALUES ('t2','被邀租户','active','','{}')`)
-	_ = s.EnsureBalance(2)
-	// 邀请人：租户1 管理员；被邀人：租户2 用户
+	// 邀请人与被邀人均在租户1（租户域 ref_code 仅同租户内有效）
 	u1, err := s.CreateUser(1, "inviter", "x", "邀请人", RoleTenantAdmin, 0, 0)
 	if err != nil {
 		t.Fatalf("创建邀请人失败: %v", err)
@@ -25,17 +22,17 @@ func TestReferralFlow(t *testing.T) {
 	if again := s.EnsureRefCode(u1.ID); again != code {
 		t.Fatalf("个人码应稳定: %s vs %s", code, again)
 	}
-	u2, err := s.CreateUser(2, "invitee", "x", "被邀人", RoleUser, 0, 0)
+	u2, err := s.CreateUser(1, "invitee", "x", "被邀人", RoleUser, 0, 0)
 	if err != nil {
 		t.Fatalf("创建被邀人失败: %v", err)
 	}
 	// 首绑绑定
-	iUID, iTID, ok := s.BindReferral(u2.ID, code)
+	iUID, iTID, ok := s.BindReferral(u2.ID, 1, code)
 	if !ok || iUID != u1.ID || iTID != 1 {
 		t.Fatalf("首绑应成功且指向邀请人: ok=%v uid=%d tid=%d", ok, iUID, iTID)
 	}
 	// 首绑闸门：再次绑定不同码无效
-	if _, _, ok := s.BindReferral(u2.ID, "zzzz"); ok {
+	if _, _, ok := s.BindReferral(u2.ID, 1, "zzzz"); ok {
 		t.Fatalf("已绑定的被邀人不应被二次绑定")
 	}
 	// 体验叠加：+10万/+14天，写入 trial_stack 奖励
@@ -96,7 +93,7 @@ func TestReferralOneidDualUnique(t *testing.T) {
 	codeX, codeY := st.EnsureRefCode(x.ID), st.EnsureRefCode(y.ID)
 
 	// ① A 被 X 邀请：首绑 + 体验叠加正常发放
-	if _, _, ok := st.BindReferral(a.ID, codeX); !ok {
+	if _, _, ok := st.BindReferral(a.ID, 1, codeX); !ok {
 		t.Fatal("A 首绑应成功")
 	}
 	if err := st.GrantTrialStack(x.ID, 1, a.ID, 300000, 14); err != nil {
@@ -115,7 +112,7 @@ func TestReferralOneidDualUnique(t *testing.T) {
 	if err := st.SetUserEmail(b.ID, 1, "swap@t.com"); err != nil {
 		t.Fatalf("B 接手邮箱: %v", err)
 	}
-	if _, _, ok := st.BindReferral(b.ID, codeY); !ok {
+	if _, _, ok := st.BindReferral(b.ID, 1, codeY); !ok {
 		t.Fatal("B 首绑应成功（绑定与奖励分离）")
 	}
 	if err := st.GrantTrialStack(y.ID, 1, b.ID, 300000, 14); err != nil {

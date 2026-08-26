@@ -296,7 +296,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	//   绑定成功即给邀请人叠加体验奖励：+invite_reward_tokens、时长 +invite_extend_days（与既有体验到期取大后叠加，按对去重）
 	//   ★ 总开关门禁（2026-08-26 U3）：referral_enabled=0 时跳过绑定与奖励发放
 	if strings.TrimSpace(req.Ref) != "" && s.Store.ReferralEnabled() {
-		if inviterUID, inviterTID, ok := s.Store.BindReferral(nu.ID, strings.TrimSpace(req.Ref)); ok {
+		if inviterUID, inviterTID, ok := s.Store.BindReferral(nu.ID, nu.TenantID, strings.TrimSpace(req.Ref)); ok {
 			refTokens := int64(300000)
 			if v, _ := s.Store.GetConfig("invite_reward_tokens"); v != "" {
 				if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
