@@ -42,7 +42,10 @@ func New(db *sql.DB) (*Store, error) {
 	s.QuotaGrantMigrate() // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
 	s.BalanceAccountMigrate() // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
 	s.ReferralMigrate()   // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
+	s.OneidMigrate() // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
 	s.EnsureBillingDefaults() // 商业化参数默认值落库（幂等，面板可改）
+	s.orderMoneyBackfill() // ★ 存量 pending 充值单应收回填（幂等；评审整改 B1，置于默认值落库后以读取到定价键）
+	s.ArtifactsMigrate() // ★ 产物归属登记表（幂等；评审整改 C1）
 	return s, nil
 }
 
@@ -406,6 +409,9 @@ func (s *Store) migrateColumns() error {
 		// 老库可能缺少的列：供应商/模型/审计前后值
 		{"usage_ledger", "provider", "ALTER TABLE usage_ledger ADD COLUMN provider TEXT NOT NULL DEFAULT ''"},
 		{"usage_ledger", "model", "ALTER TABLE usage_ledger ADD COLUMN model TEXT NOT NULL DEFAULT ''"},
+		// ★ 用量看板标注（2026-08-26 需求）：业务形态(text/file)与翻译模式(fast/pro)
+		{"usage_ledger", "biz_kind", "ALTER TABLE usage_ledger ADD COLUMN biz_kind TEXT NOT NULL DEFAULT ''"},
+		{"usage_ledger", "biz_mode", "ALTER TABLE usage_ledger ADD COLUMN biz_mode TEXT NOT NULL DEFAULT ''"},
 		{"rate_card", "provider", "ALTER TABLE rate_card ADD COLUMN provider TEXT NOT NULL DEFAULT '*"},
 		{"audit_logs", "before_val", "ALTER TABLE audit_logs ADD COLUMN before_val TEXT NOT NULL DEFAULT ''"},
 		{"audit_logs", "after_val", "ALTER TABLE audit_logs ADD COLUMN after_val TEXT NOT NULL DEFAULT ''"},
@@ -417,6 +423,8 @@ func (s *Store) migrateColumns() error {
 		{"orders", "qr_content", "ALTER TABLE orders ADD COLUMN qr_content TEXT NOT NULL DEFAULT ''"},
 		// 联系邮箱：找回密码验证码接收地址
 		{"users", "email", "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''"},
+		// ★ 自助注销请求日期（2026-08-26 需求）：当日宽限、次日起等效停用；数据保留不删除
+		{"users", "deactivate_at", "ALTER TABLE users ADD COLUMN deactivate_at TEXT NOT NULL DEFAULT ''"},
 		// 组织类型：root(根组织)/org(组织)/dept(部门)
 		{"orgs", "type", "ALTER TABLE orgs ADD COLUMN type TEXT NOT NULL DEFAULT 'org'"},
 		// ★ 部门预算（四期）：部门月度 token 预算上限；∑部门预算=租户总预算（双预算墙之部门墙）

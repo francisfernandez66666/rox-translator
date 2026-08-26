@@ -84,8 +84,6 @@ import { user, activeTenantId, tenantList, myLevel, isAdmin, isSuper, roleName, 
 import Overview from './admin/Overview.vue'
 import Alerts from './admin/Alerts.vue'
 import Usage from './admin/Usage.vue'
-import Billing from './admin/Billing.vue'
-import Packages from './admin/Packages.vue'
 import Users from './admin/Users.vue'
 import Org from './admin/Org.vue'
 import Tenants from './admin/Tenants.vue'

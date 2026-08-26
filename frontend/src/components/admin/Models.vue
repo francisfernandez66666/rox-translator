@@ -95,6 +95,12 @@
         <option :value="true">{{ t('models.crossOn') }}</option>
         <option :value="false">{{ t('models.crossOff') }}</option>
       </select>
+      <!-- ★ 数据回流开关（评审整改 D7，白皮书 §七.4）：关闭后该租户达标候选/导入候选不进平台审核池 -->
+      <label class="ad-label">{{ t('models.feedbackOptOut') }}</label>
+      <select v-model="pForm2.data_feedback_opt_out" class="ad-input ad-mini-w">
+        <option :value="true">{{ t('models.fbOff') }}</option>
+        <option :value="false">{{ t('models.fbOn') }}</option>
+      </select>
       <button class="ad-btn" @click="savePolicy">{{ t('models.savePolicy') }}</button>
     </div>
   </section>
@@ -113,7 +119,7 @@ import { t, tpl } from '@/i18n'
 // 主模型配置表单：API 基地址/密钥/模型名（对应全局主路由）
 const mForm = ref({ api_base: '', api_key: '', model: '' })
 // 翻译策略参数：高/中相似度阈值、评测通过分、跨部门降级检索开关（默认开）
-const pForm2 = ref<any>({ high_sim: 0.9, med_sim: 0.75, evals_pass_threshold: 75, cross_dept_fallback: true })
+const pForm2 = ref<any>({ high_sim: 0.9, med_sim: 0.75, evals_pass_threshold: 75, cross_dept_fallback: true, data_feedback_opt_out: false })
 // 多供应商备用路由表（权重降序构成主模型失败后的降级链）
 const routeForm = ref<any[]>([])
 // 常用 LLM 供应商预设（OpenAI 兼容格式，含 ChatGPT/Gemini）
@@ -198,7 +204,8 @@ async function loadPolicy() {
 // savePolicy 保存匹配策略参数（数值域走 policy 映射；开关单独字段传输）
 async function savePolicy() {
   const cross = !!pForm2.value.cross_dept_fallback
-  const r = await adminPolicySave(pForm2.value, cross)
+  const fbOut = !!pForm2.value.data_feedback_opt_out
+  const r = await adminPolicySave(pForm2.value, cross, fbOut)
   if (!r.success) { alert(r.message); return }
   alert(t('models.savedPolicy'))
 }

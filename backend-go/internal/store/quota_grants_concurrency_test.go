@@ -133,3 +133,38 @@ func TestDeductWithGrantsOverflow(t *testing.T) {
 		t.Fatalf("永久余额剩余不符: %d（期望 1000）", bal.Balance)
 	}
 }
+
+// TestTenantRemainTotal 双桶聚合口径（评审整改 A1）：
+// 台账 + 永久 = 可用总额；过期台账行不计入；CheckBalance 语义由总额判定。
+func TestTenantRemainTotal(t *testing.T) {
+	st := newConcurrentTestStore(t)
+	tid := int64(88)
+
+	if err := st.EnsureBalance(tid); err != nil {
+		t.Fatalf("EnsureBalance: %v", err)
+	}
+	// 初始：永久 1000、台账 0 → 总额 1000
+	if err := st.Charge(tid, 1000); err != nil {
+		t.Fatalf("Charge: %v", err)
+	}
+	g, p, err := st.TenantRemainTotal(tid)
+	if err != nil || g != 0 || p != 1000 {
+		t.Fatalf("初始聚合不符: grants=%d perm=%d err=%v", g, p, err)
+	}
+	// 发放台账 50000（14 天后过期）：仅台账租户不再被误判为耗尽
+	if err := st.CreateQuotaGrant(tid, "trial", 50000, time.Now().Add(14*24*time.Hour), "register", 0); err != nil {
+		t.Fatalf("CreateQuotaGrant: %v", err)
+	}
+	g, p, err = st.TenantRemainTotal(tid)
+	if err != nil || g != 50000 || p != 1000 {
+		t.Fatalf("双桶聚合不符: grants=%d perm=%d err=%v", g, p, err)
+	}
+	// 追加一条已过期台账：不得计入可用额度
+	if err := st.CreateQuotaGrant(tid, "trial", 7000, time.Now().Add(-1*time.Hour), "test", 0); err != nil {
+		t.Fatalf("CreateQuotaGrant(过期): %v", err)
+	}
+	g, p, _ = st.TenantRemainTotal(tid)
+	if g+p != 51000 {
+		t.Fatalf("过期行被计入可用额度: total=%d（期望 51000）", g+p)
+	}
+}

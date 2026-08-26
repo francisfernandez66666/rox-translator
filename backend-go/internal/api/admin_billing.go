@@ -11,8 +11,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+
 	"translator/internal/auth"
 	"translator/internal/store"
+	"translator/internal/tenant"
 )
 
 // nonSuperDisplayFactor 非超管用量报表的展示膨胀倍数（仅展示口径，账本真实值不变）。
@@ -20,19 +22,25 @@ const nonSuperDisplayFactor = 5
 
 // ============ 计费/充值/用量 ============
 
-// handleBalance 余额查询
+// handleBalance 余额查询（★ 双桶口径，评审整改 A1：balance 为永久余额，
+// 另附 sub_grants_left 未过期台账与 total_available 可用总额）
 func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	b, err := s.Store.GetBalance(s.effTenant(r, u))
+	tid := s.effTenant(r, u)
+	b, err := s.Store.GetBalance(tid)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "balance": b})
+	grants, _, _, _ := s.balancePayload(tid)
+	writeJSON(w, 200, map[string]interface{}{
+		"success": true, "balance": b,
+		"sub_grants_left": grants, "total_available": b.Balance + grants,
+	})
 }
 
 // handleUsage 用量统计
@@ -154,6 +162,12 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// ★ 未显式给金额时按定价回填（评审整改 B1）：发票/对账取数来源
+	if req.Money <= 0 && req.Tokens > 0 {
+		money := float64(req.Tokens*s.Store.PriceFenPerToken()) / 100.0
+		_ = s.Store.UpdateOrderMoney(o.OrderNo, money)
+		o.AmountMoney = money
+	}
 	// 自助充值即时到账模式：system_config auto_charge=1 时创建订单即确认到账（内网/测试模式）
 	if v, _ := s.Store.GetConfig("auto_charge"); v == "1" {
 		if err := s.Store.MarkOrderPaid(o.ID, req.TenantID); err == nil {
@@ -212,7 +226,19 @@ func (s *Server) handleOrderRefund(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_refund", "orders", "")
+	// ★ 订阅身份清理（评审整改 B3）：paid 套餐退款后撤销 PackageCode 镜像，
+	//   否则「钱退了、订阅身份还在」被到期摘除前的窗口期滥用。
+	if o, gerr := s.Store.GetOrder(req.ID, req.TenantID); gerr == nil && o.PackageID > 0 {
+		if pkg, perr := s.Store.GetPackage(o.PackageID); perr == nil && pkg.PType == "paid" {
+			if t, terr := s.Ten.GetByID(req.TenantID); terr == nil {
+				perms := tenant.ParsePerms(t.Permissions)
+				perms.PackageCode = ""
+				pb, _ := json.Marshal(perms)
+				_ = s.Ten.Update(t.ID, t.Name, t.ExpiresAt, string(pb))
+			}
+		}
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_refund", "orders", "权益已回收")
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 

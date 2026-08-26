@@ -102,6 +102,11 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// ★ 应收金额落库（评审整改 B1）：amount_money=token 数×定价（元）——
+	//   此前恒 0，导致回调核对无单一事实源、发票开出 0 元单。
+	money := float64(req.Tokens*s.Store.PriceFenPerToken()) / 100.0
+	_ = s.Store.UpdateOrderMoney(o.OrderNo, money)
+	o.AmountMoney = money
 	// 静态码模式：返回超管配置的静态收款码图片（不调用渠道）
 	if req.Channel == "manual" {
 		qrContent := ""
@@ -120,7 +125,8 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 调用渠道下单获取二维码（mock 直接生成；真实渠道需商户号）
-	amountFen := o.AmountTokens * 10 // 简化定价：1000 token = 1 元 = 100 分 → token 数 × 0.1 分 = token×10/100
+	// 定价单一事实源：应收分 = 订单落库 amount_money×100（B1 回填值）
+	amountFen := int64(money*100 + 0.5)
 	res, err := s.payProvider().CreateOrder(&payment.PayRequest{
 		OrderNo:  o.OrderNo,
 		Amount:   amountFen,
@@ -301,8 +307,13 @@ func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "回调渠道与订单渠道不符"})
 		return
 	}
-	// 金额一致：应收分 = token 数 × 10（与下单口径一致）；回调金额为 0 或不一致即拒绝
-	if expectFen := o.AmountTokens * 10; nt.Amount <= 0 || nt.Amount != expectFen {
+	// 金额一致：应收分 = 订单落库金额×100（B1 单一事实源）；历史未回填单兜底 tokens×定价。
+	// 回调金额为 0 或不一致即拒绝
+	expectFen := int64(o.AmountMoney*100 + 0.5)
+	if expectFen <= 0 {
+		expectFen = o.AmountTokens * s.Store.PriceFenPerToken()
+	}
+	if nt.Amount <= 0 || nt.Amount != expectFen {
 		writeJSON(w, 400, map[string]interface{}{"success": false,
 			"message": fmt.Sprintf("回调金额不符：期望 %d 分，实收 %d 分", expectFen, nt.Amount)})
 		return

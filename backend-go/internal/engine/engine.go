@@ -536,9 +536,24 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 		if eb, ek, em, eok := e.resolveStageModel(ctx, config.StageKBEmbed); eok {
 			e.LLM.SetEmbedOverride(eb, ek, em)
 		}
-		// 先把中文转成嵌入向量，再在向量索引中做余弦相似检索
-		vec, err := e.LLM.Embed(ctx, zhText)
-		if err == nil && len(vec) > 0 {
+		// ★ 嵌入三级查找（评审整改 R2）：管线预取向量表 → 进程缓存 → 回源单条调用。
+		//   此前「每段每语言」必发一次 Embed HTTP，是文件并翻卡顿的第二大根因。
+		var vec []float32
+		if lookup := EmbedLookupFrom(ctx); lookup != nil {
+			vec = lookup[embedShaKey(zhText)]
+		}
+		if len(vec) == 0 {
+			if v, ok := getCachedEmbed(zhText); ok {
+				vec = v
+			}
+		}
+		if len(vec) == 0 {
+			if v, err := e.LLM.Embed(ctx, zhText); err == nil && len(v) > 0 {
+				vec = v
+				putCachedEmbed(zhText, v)
+			}
+		}
+		if len(vec) > 0 {
 			highSim, medSim := e.resolvePolicy(ctx)
 			// 检索返回 TopK（结果已按 InChain 优先 + 相似度排序；InChain=false=跨部门仅参考）
 			results := e.Index.ScopedSearchScope(vec, e.Cfg.TopK, targetLangs, tid, scope)
@@ -889,6 +904,8 @@ func (e *Engine) resolveStageModel(ctx context.Context, stage string) (base, key
 	if !exists || sm.APIBase == "" || sm.Model == "" {
 		return "", "", "", false
 	}
+	// ★ 库内密文解密（评审整改 D3）：stage_models 的 api_key 以 enc:v1: 落库
+	sm.APIKey = store.DecryptSecret(sm.APIKey)
 	if sm.APIKey != "" {
 		return sm.APIBase, sm.APIKey, sm.Model, true
 	}
@@ -1290,6 +1307,55 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 2) // 初始 2 批并发
 
+	// runChunk 翻译一个段块并按 <sN> 标记解析写回 result[start:]；返回命中数。
+	runChunk := func(start int, chunk []string) int {
+		// 构造 <sN> 标记
+		var sb strings.Builder
+		for i, t := range chunk {
+			sb.WriteString(fmt.Sprintf("<s%d>%s</s%d>\n", i+1, t, i+1))
+		}
+		instruction := translateInstruction("zh", targetLang, uiLangFromCtx(ctx))
+		userPrompt := instruction + "\n\n请按编号逐条翻译，用 <sN>...</sN> 包裹每条翻译结果：\n\n" + sb.String()
+		messages := []map[string]string{{"role": "user", "content": userPrompt}}
+
+		maxTokens := 2048
+		totalChars := 0
+		for _, t := range chunk {
+			totalChars += len([]rune(t))
+		}
+		if totalChars*4 > maxTokens {
+			maxTokens = totalChars * 4
+		}
+		if maxTokens > 8192 {
+			maxTokens = 8192
+		}
+
+		content, _, err := e.LLM.CallChat(ctx, cfg.OnlineAPIBase, cfg.OnlineAPIKey, model, messages, maxTokens, hunyuan, cfg.FallbackTemp)
+		// 429/网络错误 → 429 先 sleep 5s 避峰，再用 fallback 模型重试一次
+		if err != nil && (isRateLimited(err) || isNetworkError(err)) {
+			if isRateLimited(err) {
+				time.Sleep(5 * time.Second)
+			}
+			content, _, err = e.LLM.CallChat(ctx, cfg.OnlineAPIBase, cfg.OnlineAPIKey, cfg.HunyuanFallbackModel, messages, maxTokens, false, cfg.FallbackTemp)
+		}
+
+		parsed := parseBatchOutput(content, len(chunk))
+		hit := 0
+		mu.Lock()
+		for i, tr := range parsed {
+			if i < len(chunk) && tr != "" {
+				result[start+i] = PostProcessTranslation(tr, targetLang)
+				hit++
+			}
+		}
+		mu.Unlock()
+		return hit
+	}
+
+	// 第一遍：动态批大小分块并发；解析率 <90% 的块记录待二次收编
+	type poorRange struct{ start, end int }
+	var poor []poorRange
+	var poorMu sync.Mutex
 	for start := 0; start < len(texts); start += bs {
 		end := start + bs
 		if end > len(texts) {
@@ -1301,63 +1367,73 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-
-			// 构造 <sN> 标记
-			var sb strings.Builder
-			for i, t := range chunk {
-				sb.WriteString(fmt.Sprintf("<s%d>%s</s%d>\n", i+1, t, i+1))
+			hit := runChunk(start, chunk)
+			if hit < len(chunk)*9/10 && len(chunk) > 5 {
+				poorMu.Lock()
+				poor = append(poor, poorRange{start: start, end: start + len(chunk)})
+				poorMu.Unlock()
 			}
-			instruction := translateInstruction("zh", targetLang, uiLangFromCtx(ctx))
-			userPrompt := instruction + "\n\n请按编号逐条翻译，用 <sN>...</sN> 包裹每条翻译结果：\n\n" + sb.String()
-			messages := []map[string]string{{"role": "user", "content": userPrompt}}
-
-			maxTokens := 2048
-			totalChars := 0
-			for _, t := range chunk {
-				totalChars += len([]rune(t))
-			}
-			if totalChars*4 > maxTokens {
-				maxTokens = totalChars * 4
-			}
-			if maxTokens > 8192 {
-				maxTokens = 8192
-			}
-
-			content, _, err := e.LLM.CallChat(ctx, cfg.OnlineAPIBase, cfg.OnlineAPIKey, model, messages, maxTokens, hunyuan, cfg.FallbackTemp)
-			// 429/网络错误 → 429 先 sleep 5s 避峰，再用 fallback 模型重试一次
-			if err != nil && (isRateLimited(err) || isNetworkError(err)) {
-				if isRateLimited(err) {
-					time.Sleep(5 * time.Second)
-				}
-				content, _, err = e.LLM.CallChat(ctx, cfg.OnlineAPIBase, cfg.OnlineAPIKey, cfg.HunyuanFallbackModel, messages, maxTokens, false, cfg.FallbackTemp)
-			}
-
-			parsed := parseBatchOutput(content, len(chunk))
-			mu.Lock()
-			for i, tr := range parsed {
-				if i < len(chunk) {
-					result[start+i] = PostProcessTranslation(tr, targetLang)
-				}
-			}
-			mu.Unlock()
 			if onBatchDone != nil {
-				onBatchDone(end, len(texts))
+				onBatchDone(start + len(chunk), len(texts))
 			}
 		}(start, chunk)
 	}
 	wg.Wait()
 
-	// 兜底：未译出的逐条翻译
-	for i, tr := range result {
-		if strings.TrimSpace(tr) == "" {
-			s, err := e.singleLang(ctx, texts[i], targetLang, nil, "zh", config.StageAIInitial, 0)
-			if err != nil || s == "" {
-				result[i] = "[翻译失败]"
-			} else {
-				result[i] = s
+	// ★ 二次收编（评审整改 R5）：低解析率块改用更小块(bs=5)重发一次，
+	//   把「批量格式漂移」就地修复，避免大段退化到逐段兜底。
+	for _, pr := range poor {
+		const sub = 5
+		for s0 := pr.start; s0 < pr.end; s0 += sub {
+			e0 := s0 + sub
+			if e0 > pr.end {
+				e0 = pr.end
 			}
+			allSet := true
+			for i := s0; i < e0; i++ {
+				if strings.TrimSpace(result[i]) == "" {
+					allSet = false
+					break
+				}
+			}
+			if allSet {
+				continue
+			}
+			chunk := texts[s0:e0]
+			wg.Add(1)
+			go func(start int, chunk []string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				runChunk(start, chunk)
+			}(s0, chunk)
 		}
 	}
+	wg.Wait()
+
+	// 兜底：仍未译出的段——★ 有界并行逐段翻译（评审整改 R5，原实现纯串行，
+	// 一段百句文档会退化为上百次串行往返）
+	fbSem := make(chan struct{}, 3)
+	for i, tr := range result {
+		if strings.TrimSpace(tr) != "" {
+			continue
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			fbSem <- struct{}{}
+			defer func() { <-fbSem }()
+			s2, err := e.singleLang(ctx, texts[i], targetLang, nil, "zh", config.StageAIInitial, 0)
+			out := "[翻译失败]"
+			if err == nil && strings.TrimSpace(s2) != "" {
+				out = s2
+			}
+			mu.Lock()
+			result[i] = out
+			mu.Unlock()
+		}(i)
+	}
+	wg.Wait()
 	return result
 }
 
@@ -1490,6 +1566,25 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 	if e == nil || e.DB == nil || e.Index == nil || e.NPZPath == "" {
 		return 0, fmt.Errorf("向量索引未初始化")
 	}
+	// ★ Embed 成本计量（评审整改 E3）：全量重建的 embedding 用量进入 usage_ledger——
+	//   发起者带租户上下文且强制计费时实扣，平台上下文（tid<=0）只留痕不扣费。
+	ctx = e.WithUsageRecorder(ctx)
+	defer func() {
+		if e.St == nil {
+			return
+		}
+		prompt, completion := e.UsageTokens(ctx)
+		if total := prompt + completion; total > 0 {
+			tid := tenant.FromContext(ctx)
+			provider, model := "bigmodel", "embedding-rebuild"
+			enforced, _ := e.St.GetConfig("billing_enforced")
+			if tid > 0 && enforced == "1" {
+				_, _ = e.St.RecordUsage(tid, 0, "evals", provider, model, total, "", "")
+			} else {
+				_ = e.St.LogUsage(tid, 0, "evals", provider, model, total, "", "")
+			}
+		}
+	}()
 	if !e.rebuilding.CompareAndSwap(false, true) {
 		return 0, fmt.Errorf("重建正在进行中")
 	}

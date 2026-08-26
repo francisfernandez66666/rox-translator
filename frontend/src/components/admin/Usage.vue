@@ -95,15 +95,18 @@
     <div class="ad-chart-card">
       <h3>{{ t('usage.ledgerTitle') }}</h3>
       <table class="ad-table">
-        <thead><tr><th>{{ t('usage.colTime') }}</th><th>{{ t('usage.colType') }}</th><th v-if="isSuper">{{ t('usage.colProvider') }}</th><th v-if="isSuper">{{ t('usage.colModel') }}</th><th>{{ t('usage.colQuantity') }}</th><th>{{ t('usage.colUnitPrice') }}</th><th>{{ t('usage.colCost') }}</th></tr></thead>
+        <thead><tr><th>{{ t('usage.colTime') }}</th><th>{{ t('usage.colType') }}</th><th>{{ t('usage.colBiz') }}</th><th>{{ t('usage.colMode') }}</th><th v-if="isSuper">{{ t('usage.colProvider') }}</th><th v-if="isSuper">{{ t('usage.colModel') }}</th><th>{{ t('usage.colQuantity') }}</th><th>{{ t('usage.colUnitPrice') }}</th><th>{{ t('usage.colCost') }}</th></tr></thead>
         <tbody>
           <tr v-for="l in usageData?.ledger || []" :key="l.id">
             <td>{{ fmtTime(l.created_at) }}</td><td>{{ l.task_type }}</td>
+            <!-- ★ 形态/模式标注（2026-08-26 需求）：历史数据为空显示 — -->
+            <td><span class="ad-badge" :class="l.biz_kind === 'file' ? 'ad-badge-file' : 'ad-badge-text'">{{ bizLabel(l.biz_kind) }}</span></td>
+            <td><span class="ad-badge" :class="l.biz_mode === 'fast' ? 'ad-badge-fast' : 'ad-badge-pro'">{{ modeLabel(l.biz_mode) }}</span></td>
             <td v-if="isSuper">{{ l.provider || '—' }}</td>
             <td v-if="isSuper">{{ l.model || '—' }}</td>
             <td>{{ l.quantity }}</td><td>{{ l.unit_price }}</td><td>{{ l.cost }}</td>
           </tr>
-          <tr v-if="!((usageData?.ledger || []).length)"><td colspan="7" style="color:#999">{{ t('usage.noLedger') }}</td></tr>
+          <tr v-if="!((usageData?.ledger || []).length)"><td colspan="9" style="color:#999">{{ t('usage.noLedger') }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -209,6 +212,20 @@ const providerItems = computed(() => {
 })
 // 供应商条形图最大值（过长的供应商名截断展示）
 const providerMax = computed(() => Math.max(1, ...providerItems.value.map((t) => t.val)))
+
+// ===== 形态/模式标注（2026-08-26 需求） =====
+// bizLabel 业务形态 → 展示文案；空（历史数据/非翻译类计量）显示 —
+function bizLabel(kind?: string): string {
+  if (kind === 'file') return t('usage.bizFile')
+  if (kind === 'text') return t('usage.bizText')
+  return '—'
+}
+// modeLabel 翻译模式 → 展示文案；空显示 —
+function modeLabel(mode?: string): string {
+  if (mode === 'fast') return t('usage.modeFast')
+  if (mode === 'pro') return t('usage.modePro')
+  return '—'
+}
 
 onMounted(loadAll)
 watch(activeTenantId, loadAll)

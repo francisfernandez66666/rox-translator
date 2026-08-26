@@ -8,6 +8,10 @@
 // =============================================
 package iam
 
+import (
+	"time"
+)
+
 // User 用户实体（users 表一行）。
 // JSON 序列化用于登录响应与后台账户列表；PasswordHash 标记 json:"-" 不对外暴露。
 type User struct {
@@ -24,6 +28,25 @@ type User struct {
 	Email        string `json:"email"`         // 联系邮箱（找回密码验证码接收地址）
 	CreatedAt    string `json:"created_at"`    // 创建时间（RFC3339 字符串）
 	UpdatedAt    string `json:"updated_at"`    // 更新时间（RFC3339 字符串）
+	// DeactivatedAt 自助注销请求日期（2006-01-02；空=未注销）。
+	// 宽限语义：请求当日仍可正常使用，次日起按 disabled 处理（数据保留不删除）。
+	DeactivatedAt string `json:"-"`
+}
+
+// EffectiveUserStatus 计算生效状态：deactivating（注销宽限期）在次日起降级为 disabled。
+// 参数：status=库内状态，deactivatedAt=注销请求日期（2006-01-02）；返回生效状态。
+func EffectiveUserStatus(status, deactivatedAt string) string {
+	if status != UserDeactivating {
+		return status
+	}
+	if t, err := time.Parse("2006-01-02", deactivatedAt); err == nil {
+		if time.Now().After(t.AddDate(0, 0, 1)) { // 进入次日即失效
+			return UserDisabled
+		}
+	} else if deactivatedAt != "" {
+		return UserDisabled // 日期异常视为已过宽限（防御性）
+	}
+	return status
 }
 
 // 角色常量（四级角色体系 + 旧值兼容）。
@@ -40,8 +63,9 @@ const (
 
 // 用户状态常量。
 const (
-	UserActive   = "active"   // 启用：可正常登录使用
-	UserDisabled = "disabled" // 停用：禁止登录（数据保留）
+	UserActive       = "active"       // 启用：可正常登录使用
+	UserDisabled     = "disabled"     // 停用：禁止登录（数据保留）
+	UserDeactivating = "deactivating" // 注销宽限期：当日仍可用，次日等效 disabled
 )
 
 // Org 组织实体（orgs 表一行），构成「根组织 → 组织 → 部门」的树形管理结构。

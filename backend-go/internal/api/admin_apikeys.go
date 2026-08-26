@@ -168,10 +168,15 @@ func (s *Server) handleAPIKeyLimit(w http.ResponseWriter, r *http.Request) {
 // 最佳努力语义：签发失败仅记日志，不阻断租户创建/注册主流程。
 // 返回: 明文 Key（仅此一次返回；空串表示签发失败或存储未就绪）。
 func (s *Server) issueDefaultAPIKey(tid int64, name string) string {
+	return s.issueDefaultAPIKeyFor(tid, 0, name)
+}
+
+// issueDefaultAPIKeyFor 指定归属用户签发租户默认 Key（uid>0 即时强绑定，免等重启回填）。
+func (s *Server) issueDefaultAPIKeyFor(tid, userID int64, name string) string {
 	if s.Store == nil || tid <= 0 {
 		return ""
 	}
-	plain, err := s.Store.CreateAPIKey(tid, 0, name, "translate", 0) // 租户默认 Key：无签发个人，租户级
+	plain, err := s.Store.CreateAPIKey(tid, userID, name, "translate", 0)
 	if err != nil {
 		log.Printf("[tenant-default-key] 租户 %d 默认 API Key 签发失败: %v", tid, err)
 		return ""

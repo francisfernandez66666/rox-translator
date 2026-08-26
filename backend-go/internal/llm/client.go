@@ -1,7 +1,12 @@
 // ============ 本文件职责中文说明 ============
 // LLM 客户端：OpenAI 兼容 chat/completions 与智谱 embedding-2 嵌入调用。
-// 核心能力：全局并发限流（信号量，上限 3 路排队等待）、单次调用超时兜底、
-// 429 触发降级模型重试、嵌入向量 L2 归一化（供余弦相似度检索使用）。
+// 核心能力（2026-08-26 评审整改 R1/R6/R7）：
+//   - 三路独立信号量：chat 后台槽（LLM_CHAT_CONCURRENT，默认 2）+ 交互保留槽（1，
+//     仅带 Interactive 标记的请求可抢占，保证前台划译级请求不被批任务饿死）
+//     + embed 槽（LLM_EMBED_CONCURRENT，默认 6）——Chat 与 Embed 分属两家供应商、
+//     账号限额互不相干，此前共用一个 3 槽信号量是文件并翻卡顿的首要根因；
+//   - 排队观测：任一信号量等待 >1s 打 [llm-queue] 日志；
+//   - 单次调用超时兜底、429 触发降级模型重试、嵌入向量 L2 归一化。
 // =============================================
 package llm
 
@@ -12,19 +17,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"translator/internal/config"
 )
 
-// MaxLLMConcurrent 全局 LLM 并发上限：超过此数量的调用在信号量处排队等待
-const MaxLLMConcurrent = 3
+// DefaultChatConcurrent chat 后台默认并发槽；DefaultEmbedConcurrent embed 默认并发槽。
+const (
+	DefaultChatConcurrent  = 2 // 交互另有 1 个保留槽，总 chat 上限=3（与历史口径一致）
+	DefaultEmbedConcurrent = 6
+)
 
 // Client LLM 客户端
 type Client struct {
@@ -32,19 +43,47 @@ type Client struct {
 	http  *http.Client   // HTTP 客户端（含代理与全局超时）
 	proxy *url.URL       // 代理地址（PROXY_URL/HTTPS_PROXY/HTTP_PROXY 环境变量解析结果）
 
-	// ★ 全局共享信号量：所有 LLM API 调用（chat/embed）统一限流，
-	// 多用户/多语言并发共享同一上限，超过的调用排队等待，不无限叠加。
-	sem chan struct{}
+	// ★ 三路独立信号量（评审整改 R1/R6）：超过容量的调用排队等待，不无限叠加。
+	//   chatSem：后台批任务共用；chatFast：交互保留槽（批任务不可占用）；
+	//   embSem：嵌入调用独立池（智谱侧额度与 SiliconFlow 无关）。
+	chatSem  chan struct{}
+	chatFast chan struct{}
+	embSem   chan struct{}
 
-	// 知识库 Embed 阶段覆盖（stage_models.kb_embed；空=用全局 Embed 配置）
+	// 知识库 Embed 阶段覆盖（stage_models.kb_embed；空=用全局 Embed 配置）。
+	// ★ R7：读改一律持锁——引擎每请求都可能调用 SetEmbedOverride，裸写字段是数据竞争。
+	embedMu             sync.Mutex
 	embedBase, embedKey, embedModel string
+
+	// inflight 当前在途 LLM 调用数（观测用，原子计数）
+	inflight atomic.Int64
 }
 
-// NewClient 创建客户端：解析代理、设置全局 120s 超时与并发信号量。
-// 参数：cfg=全局配置；返回可用的 LLM 客户端。
 // SetEmbedOverride 设置知识库 Embed 阶段覆盖端点（stage_models.kb_embed，超管维护）。
 func (c *Client) SetEmbedOverride(base, key, model string) {
+	c.embedMu.Lock()
+	defer c.embedMu.Unlock()
 	c.embedBase, c.embedKey, c.embedModel = base, key, model
+}
+
+// embedOverride 快照读取（持锁拷贝，消除竞态）。
+func (c *Client) embedOverride() (base, key, model string) {
+	c.embedMu.Lock()
+	defer c.embedMu.Unlock()
+	return c.embedBase, c.embedKey, c.embedModel
+}
+
+// Inflight 当前在途 LLM 调用数（/status 与排障观测用）。
+func (c *Client) Inflight() int64 { return c.inflight.Load() }
+
+// envInt 读整型环境变量（非法或缺省返回 def）。
+func envInt(key string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
 }
 
 // NewClient 构造函数：初始化并返回实例。
@@ -65,25 +104,100 @@ func NewClient(cfg *config.Config) *Client {
 		cfg: cfg,
 		// ★ 全局超时兜底：防止 LLM API 卡住时请求无限挂起
 		http: &http.Client{Transport: tr, Timeout: 45 * time.Second},
-		// ★ 全局并发信号量（超过 3 路排队等待，不加大并发）
-		sem: make(chan struct{}, MaxLLMConcurrent),
+		// ★ 三路信号量容量可经环境变量调整（评审整改 R1）
+		chatSem:  make(chan struct{}, envInt("LLM_CHAT_CONCURRENT", DefaultChatConcurrent)),
+		chatFast: make(chan struct{}, 1),
+		embSem:   make(chan struct{}, envInt("LLM_EMBED_CONCURRENT", DefaultEmbedConcurrent)),
 	}
 }
 
-// acquire 获取并发名额；ctx 取消时排队中的调用立即返回错误。
-// 参数：ctx=调用上下文；成功获取返回 nil，ctx 被取消返回 ctx.Err()。
-func (c *Client) acquire(ctx context.Context) error {
+// ============ 交互标记（QoS 保留槽判定，评审整改 R6） ============
+
+// interactiveKey ctx 存取键：交互式请求（前台 /api/chat* 与 OpenAPI 同步短文翻译）置位，
+// 使 doChat 可抢占 chatFast 保留槽，不被后台批量任务排队饿死。
+type interactiveKey struct{}
+
+// WithInteractive 标记本次请求为交互式（QoS 保留槽资格）。ctx 值随引擎内部包装链透传。
+func WithInteractive(ctx context.Context) context.Context {
+	return context.WithValue(ctx, interactiveKey{}, true)
+}
+
+// isInteractive 读取交互标记。
+func isInteractive(ctx context.Context) bool {
+	v, _ := ctx.Value(interactiveKey{}).(bool)
+	return v
+}
+
+// semSlot 一次成功 acquire 的凭据：Release 归还到「当初取得」的同一通道
+// （chat/chatFast 容量不同，错位归还会逐步污染两池容量）。
+type semSlot struct{ ch chan struct{} }
+
+// Release 归还名额（幂等保护：重复调用无效果）。
+func (s *semSlot) Release() {
+	if s == nil || s.ch == nil {
+		return
+	}
+	<-s.ch
+	s.ch = nil // 置空防二次释放
+}
+
+// acquireChat 获取 chat 并发名额：交互请求可使用后台槽+保留槽（先试后台、再双通道竞争），
+// 后台任务只能使用后台槽。等待超过 1s 打观测日志（评审整改 R7）。
+// 返回 (名额凭据, 错误)；ctx 取消时排队中的调用立即返回错误。
+func (c *Client) acquireChat(ctx context.Context) (*semSlot, error) {
+	start := time.Now()
+	if isInteractive(ctx) {
+		// 非阻塞优先取后台槽（避免保留槽被无关紧要地占用）
+		select {
+		case c.chatSem <- struct{}{}:
+			c.noteAcquired("chat", start)
+			return &semSlot{ch: c.chatSem}, nil
+		default:
+		}
+	}
+	var got chan struct{}
+	if isInteractive(ctx) {
+		// 双通道阻塞竞争（先到先用）
+		done := ctx.Done()
+		select {
+		case c.chatSem <- struct{}{}:
+			got = c.chatSem
+		case c.chatFast <- struct{}{}:
+			got = c.chatFast
+		case <-done:
+		}
+	} else {
+		select {
+		case c.chatSem <- struct{}{}:
+			got = c.chatSem
+		case <-ctx.Done():
+		}
+	}
+	if got == nil {
+		return nil, ctx.Err()
+	}
+	c.noteAcquired("chat", start)
+	return &semSlot{ch: got}, nil
+}
+
+// acquireEmbed 获取 embed 并发名额（独立池，不与 chat 抢占）。
+func (c *Client) acquireEmbed(ctx context.Context) (*semSlot, error) {
+	start := time.Now()
 	select {
-	case c.sem <- struct{}{}:
-		return nil // 取得名额
+	case c.embSem <- struct{}{}:
+		c.noteAcquired("embed", start)
+		return &semSlot{ch: c.embSem}, nil
 	case <-ctx.Done():
-		return ctx.Err() // 排队中被取消
+		return nil, ctx.Err()
 	}
 }
 
-// release 释放并发名额（acquire 成功后的配对调用）。
-func (c *Client) release() {
-	<-c.sem
+// noteAcquired 记录在途数并按需输出排队观测日志。
+func (c *Client) noteAcquired(kind string, start time.Time) {
+	c.inflight.Add(1)
+	if d := time.Since(start); d > time.Second {
+		log.Printf("[llm-queue] kind=%s waited=%s inflight=%d", kind, d.Round(10*time.Millisecond), c.inflight.Load())
+	}
 }
 
 // getenvAny 依次读取多个环境变量，返回首个非空值。
@@ -239,11 +353,13 @@ func (c *Client) doChat(ctx context.Context, endpoint, apiKey string, payload ch
 		req = req.WithContext(ctx)
 	}
 
-	// ★ 全局并发限流：超过 3 路并发时排队等待
-	if err := c.acquire(ctx); err != nil {
+	// ★ chat 并发限流：后台任务共用 chatSem，交互请求另可抢占保留槽（评审整改 R1/R6）
+	slot, err := c.acquireChat(ctx)
+	if err != nil {
 		return "", "", err
 	}
-	defer c.release()
+	defer c.inflight.Add(-1)
+	defer slot.Release()
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -333,10 +449,10 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string, batchSize ...in
 // embedChunk 实际执行一批文本的嵌入请求并做 L2 归一化。
 // 参数：texts=单批文本；返回归一化向量列表。
 func (c *Client) embedChunk(ctx context.Context, texts []string) ([][]float32, error) {
-	// 阶段覆盖（kb_embed）：超管在分阶段模型里配置的 Embed 端点优先
+	// 阶段覆盖（kb_embed）：超管在分阶段模型里配置的 Embed 端点优先（R7：持锁快照读取）
 	base, key, model := c.cfg.EmbedAPIBase, c.cfg.EmbedAPIKey, "embedding-2"
-	if c.embedBase != "" && c.embedModel != "" {
-		base, key, model = c.embedBase, c.embedKey, c.embedModel
+	if eb, ek, em := c.embedOverride(); eb != "" && em != "" {
+		base, key, model = eb, ek, em
 	}
 	payload := map[string]interface{}{
 		"model": model,
@@ -357,11 +473,13 @@ func (c *Client) embedChunk(ctx context.Context, texts []string) ([][]float32, e
 	defer cancel()
 	req = req.WithContext(ctx2)
 
-	// ★ 全局并发限流：超过 3 路并发时排队等待
-	if err := c.acquire(ctx2); err != nil {
+	// ★ embed 独立并发限流（评审整改 R1）：不与 chat 抢占——两家供应商额度本就独立
+	slot, err := c.acquireEmbed(ctx2)
+	if err != nil {
 		return nil, err
 	}
-	defer c.release()
+	defer c.inflight.Add(-1)
+	defer slot.Release()
 
 	resp, err := c.http.Do(req)
 	if err != nil {

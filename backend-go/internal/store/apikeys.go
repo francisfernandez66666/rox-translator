@@ -146,3 +146,15 @@ func (s *Store) GetAPIKeyPlain(id, tid int64) (string, error) {
 	}
 	return DecryptPlain(enc), nil
 }
+
+// DisableAPIKeysByUser 停用指定用户名下全部 API Key（自助注销联动，2026-08-26 需求）。
+// 注销即收回其签发 Key 的调用权限（status=disabled 即时生效）；账号恢复启用后
+// 可由管理员在 API Key 面板逐条重新启用。返回停用条数。
+func (s *Store) DisableAPIKeysByUser(tid, userID int64) int64 {
+	res, err := s.db.Exec("UPDATE api_keys SET status='disabled' WHERE tenant_id=? AND user_id=? AND status='active'", tid, userID)
+	if err != nil {
+		return 0
+	}
+	n, _ := res.RowsAffected()
+	return n
+}

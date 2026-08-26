@@ -51,6 +51,26 @@ func (s *Store) SumActiveGrants(tid int64) int64 {
 	return n
 }
 
+// TenantRemainTotal 双部分可用余额一次聚合（2026-08-26 评审整改 A1）：
+// 返回 (未过期台账合计, 永久余额)。全系统「可用额度」唯一口径——
+// 展示（balancePayload）、预检（CheckBalance / worker 快速失败）必须同时覆盖两桶，
+// 否则会出现「台账有 30 万体验 token、永久余额为 0 却被 fail-closed 拒绝」的口径分裂。
+func (s *Store) TenantRemainTotal(tid int64) (grants, permanent int64, err error) {
+	if err := s.EnsureBalance(tid); err != nil {
+		return 0, 0, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	err = s.db.QueryRow(`
+		SELECT b.balance,
+		       COALESCE((SELECT SUM(g.left) FROM quota_grants g
+		                 WHERE g.tenant_id=b.tenant_id AND g.left>0 AND g.expires_at>?),0)
+		FROM balance_accounts b WHERE b.tenant_id=?`, now, tid).Scan(&permanent, &grants)
+	if err != nil {
+		return 0, 0, err
+	}
+	return grants, permanent, nil
+}
+
 // DeductWithGrants 双部分顺序扣减（事务）：
 //
 //	① 未过期 grants 按 expires_at ASC 逐行核销（可拆分多行）

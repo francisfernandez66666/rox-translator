@@ -273,23 +273,42 @@ func (s *Store) CancelTicket(id int64) error {
 	return nil
 }
 
+// TouchTicket 工单心跳：仅刷新 updated_at（评审整改 R3）。
+// 长翻译阶段内业务状态不变，若无心跳，20 分钟卡死巡检会把仍在运行的工单误判重排，
+// 造成同工单双副本并发执行（双份 LLM 消耗 + 双份计费）。worker 每 60s 调用一次保活。
+func (s *Store) TouchTicket(id int64) error {
+	_, err := s.db.Exec("UPDATE tickets SET updated_at=? WHERE id=?", time.Now().Format(time.RFC3339), id)
+	return err
+}
+
 // RequeueStalledTickets 将超时无进展的 in_progress 工单重置为 queued（断点续传）。
-// 返回受影响行数。updated_at 由各步骤写入持续刷新，故“20 分钟未动”即视为卡死。
+// 返回受影响行数。updated_at 由 worker 心跳持续刷新，「20 分钟未动」即视为真卡死。
+//
+// ★ 重复执行防线（2026-08-26 评审整改 R3）：仅当该工单的 jobs 行不在
+// 「running（租约未过期）」状态时才允许重排——running 即代表本进程仍有活跃 goroutine
+// 在处理它；否则会双副本并发跑同一工单（双扣费/双通知）。租约过期的 running 由
+// direct 队列 Reserve 自行回收，无需此处越权释放。
 func (s *Store) RequeueStalledTickets(stale time.Duration) (int64, error) {
 	cut := time.Now().Add(-stale).Format(time.RFC3339)
 	res, err := s.db.Exec(
-		"UPDATE tickets SET status='queued', updated_at=? WHERE status='in_progress' AND updated_at < ?",
+		`UPDATE tickets SET status='queued', updated_at=?
+		 WHERE status='in_progress' AND updated_at < ?
+		   AND NOT EXISTS (
+		       SELECT 1 FROM jobs j
+		       WHERE j.type='ticket_run' AND j.status='running'
+		         AND CAST(json_extract(j.payload,'$.ticket_id') AS INTEGER) = tickets.id)`,
 		time.Now().Format(time.RFC3339), cut)
 	if err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
-	// ★ 同步释放 jobs 表租约：否则 direct 队列仍认为任务在途，worker 永远领不到（卡死假象）
-	// ★ 修复（2026-08-26 P1-c）：任务入队类型为 ticket_run（service/ticket.go EnqueueTicketRun），
-	//   旧 SQL 写 type='ticket' 永远匹配 0 行 → 租约最长要等 30 分钟过期才能被重新领取。
-	s.db.Exec(`UPDATE jobs SET status='queued', leased_by='', leased_at=0
+	if n == 0 {
+		return 0, nil
+	}
+	// 兜底释放：历史遗留的 running 租约（对应工单已不在 in_progress）不再阻塞领取
+	s.db.Exec(`UPDATE jobs SET status='queued', leased_by='', leased_at=''
 		WHERE type='ticket_run' AND status='running'
 		  AND CAST(json_extract(payload,'$.ticket_id') AS INTEGER) IN
-		  (SELECT id FROM tickets WHERE status='queued')`)
+		  (SELECT id FROM tickets WHERE status IN ('queued','cancelled','rejected','completed'))`)
 	return n, nil
 }

@@ -9,6 +9,9 @@ package store
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -53,8 +56,50 @@ func (s *Store) TmReviewMigrate() {
 		UNIQUE(tenant_id, zh_hash, lang, trans_hash))`)
 }
 
-// CreateTmReview 新增候选。
+// ============ 数据回流治理（评审整改 D7，白皮书 §七.4） ============
+
+// phoneRe 手机号正则（脱敏用）；maskPII 对原文/译文做最小侵入掩码后入审核池。
+var phoneRe = regexp.MustCompile(`1[3-9]\d{9}`)
+
+// maskPII 脱敏：手机号保留前三后二；邮箱本地域打码。
+func maskPII(s string) string {
+	if s == "" {
+		return s
+	}
+	s = phoneRe.ReplaceAllStringFunc(s, func(m string) string {
+		return m[:3] + "****" + m[len(m)-2:]
+	})
+	emailRe := regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+`)
+	s = emailRe.ReplaceAllStringFunc(s, func(m string) string {
+		at := len(m) - len(m[strings.LastIndexByte(m, '@'):])
+		return m[:min(2, at)] + "***" + m[strings.LastIndexByte(m, '@'):]
+	})
+	return s
+}
+
+// feedbackOptOut 读取租户 policy_config.data_feedback_opt_out（store 内联解析，
+// 避免 store→tenant 反向依赖）。true=该租户已关闭数据回流。
+func (s *Store) feedbackOptOut(tid int64) bool {
+	var raw string
+	if err := s.db.QueryRow("SELECT COALESCE(policy_config,'{}') FROM tenants WHERE id=?", tid).Scan(&raw); err != nil {
+		return false // 查询异常按「参与」处理（与默认开启语义一致）
+	}
+	var pc struct {
+		DataFeedbackOptOut *int `json:"data_feedback_opt_out,omitempty"`
+	}
+	if json.Unmarshal([]byte(raw), &pc) != nil {
+		return false
+	}
+	return pc.DataFeedbackOptOut != nil && *pc.DataFeedbackOptOut == 1
+}
+
+// CreateTmReview 新增候选。★ D7：opt_out 租户静默跳过（只计数不入池）；入库前 PII 脱敏。
 func (s *Store) CreateTmReview(r *TmReview) error {
+	if r.TenantID > 0 && s.feedbackOptOut(r.TenantID) {
+		return nil // 租户关闭回流：不进入平台审核池
+	}
+	r.Zh = maskPII(r.Zh)
+	r.Trans = maskPII(r.Trans)
 	if r.CreatedAt == "" {
 		r.CreatedAt = time.Now().Format(time.RFC3339)
 	}
@@ -121,10 +166,13 @@ func (s *Store) HasActiveTmReview(tid int64, zh, lang, trans string) bool {
 }
 
 // BumpTmHit 计数自增；达阈值自动建候选。返回 (计数, 是否新建候选)。
+// ★ D7：opt_out 租户只累计计数、不产生候选不入审核池（私有 TM 不受影响）。
 func (s *Store) BumpTmHit(tid int64, zh, lang, trans string, threshold int64) (int64, bool, error) {
 	if tid <= 0 || zh == "" || trans == "" || zh == trans {
 		return 0, false, nil
 	}
+	zh = maskPII(zh)
+	trans = maskPII(trans)
 	now := time.Now().Format(time.RFC3339)
 	if _, err := s.db.Exec(`INSERT INTO tm_hit_count (tenant_id, zh_hash, lang, trans_hash, zh, trans, n)
 		VALUES (?,?,?,?,?,?,1)
@@ -140,6 +188,9 @@ func (s *Store) BumpTmHit(tid int64, zh, lang, trans string, threshold int64) (i
 	_ = now
 	if n < threshold || s.HasActiveTmReview(tid, zh, lang, trans) {
 		return n, false, nil
+	}
+	if s.feedbackOptOut(tid) {
+		return n, false, nil // 关闭回流：只计数不产候选
 	}
 	cr := &TmReview{TenantID: tid, Zh: zh, Lang: lang, Trans: trans,
 		Source: "hit_threshold", RefType: "ticket", HitCount: n}

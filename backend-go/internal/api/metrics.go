@@ -13,6 +13,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"runtime"
 	"sort"
 	"strings"
@@ -126,7 +127,9 @@ func (s *Server) metricsText() string {
 	sb.WriteString(fmt.Sprintf("go_alloc_bytes %d\n", mem.TotalAlloc))
 
 	// HTTP 请求：按路径排序输出，保证指标文本稳定
-	sb.WriteString("# HELP translator_http_requests_total HTTP 请求总数\n# TYPE translator_http_requests_total counter\n")
+	// ★ 死锁修复（2026-08-26 冒烟暴露）：原实现 L131 与 L143 两次 RLock、仅一次
+	//   RUnlock——每次导出净泄漏一把读锁，此后 countHTTP 的写锁永久排队，
+	//   整个 HTTP 服务假死（Prometheus 首次抓取即引爆）。现合并为单次配对加解锁。
 	m.mu.RLock()
 	paths := make([]string, 0, len(m.httpReqs))
 	for p := range m.httpReqs {
@@ -139,7 +142,6 @@ func (s *Server) metricsText() string {
 
 	// 翻译计数：合并成功/失败 key 集合，按 kind + result 输出
 	sb.WriteString("# HELP translator_translations_total 翻译调用总数\n# TYPE translator_translations_total counter\n")
-	m.mu.RLock()
 	kinds := map[string]bool{}
 	for k := range m.translationsOK {
 		kinds[k] = true
@@ -213,9 +215,30 @@ func (s *Server) metricsText() string {
 	return sb.String()
 }
 
+// metricsToken 惰性读取 METRICS_TOKEN（评审整改 D1）：非空时 /metrics 要求
+// Authorization: Bearer <token>——生产经 Caddy 公网暴露的指标端点不再裸奔；
+// 未配置时保持无鉴权（本地开发/内网抓取友好）。
+var (
+	metricsTokenOnce sync.Once
+	metricsTokenVal  string
+)
+
+// metricsToken 惰性读取 METRICS_TOKEN 环境变量（仅解析一次）。
+func metricsToken() string {
+	metricsTokenOnce.Do(func() { metricsTokenVal = strings.TrimSpace(os.Getenv("METRICS_TOKEN")) })
+	return metricsTokenVal
+}
+
 // handleMetrics 导出 Prometheus 指标接口（/metrics）。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求。无鉴权（监控探针），仅暴露聚合指标不涉及租户数据。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求。配置 METRICS_TOKEN 后需 Bearer 鉴权。
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if tok := metricsToken(); tok != "" {
+		h := r.Header.Get("Authorization")
+		if h != "Bearer "+tok {
+			writeJSON(w, 401, map[string]string{"error": "未授权"})
+			return
+		}
+	}
 	// 输出 Prometheus 文本格式（指定版本 0.0.4）
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = w.Write([]byte(s.metricsText()))

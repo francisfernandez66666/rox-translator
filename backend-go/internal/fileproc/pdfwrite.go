@@ -96,7 +96,7 @@ func WriteTranslatedPDF(outPath string, srcTexts []string, translations map[stri
 	return writePDFViaGoFpdf(outPath, fontPath, srcTexts, translations)
 }
 
-// WriteTranslatedPDFviaDocx PDF→DOCX→翻译→DOCX→PDF（保留排版+图表+图片OCR）
+// WriteTranslatedPDFviaDocx PDF→DOCX→翻译→DOCX→PDF（保留排版/图表；图片内容按产品策略不翻译）
 func WriteTranslatedPDFviaDocx(outPath, inPath string, translations map[string]string, lang string) error {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"translations": translations,
@@ -105,8 +105,8 @@ func WriteTranslatedPDFviaDocx(outPath, inPath string, translations map[string]s
 }
 
 // ExtractTextsPdfDocx 经 pdf2docx 提取段落文本（键与替换目标完全一致，表格必中）。
-// 图形化文档（文本层稀薄）自动切换整页 OCR 模式：返回文本行键且 cacheDocx 为空，
-// 写回须走 ApplyTranslatedPdfPageOcr。调用方负责删除缓存 DOCX。
+// 返回 (文本键列表, 缓存 DOCX 路径, 错误)；调用方负责删除缓存 DOCX。
+// 图片型文档按产品策略不做内容翻译——提取失败时由调用方降级 pdftotext/xlsx 对照表。
 func ExtractTextsPdfDocx(pdfPath string) ([]string, string, error) {
 	cache := filepath.Join(os.TempDir(), fmt.Sprintf("pdfdocx_%d.docx", time.Now().UnixNano()))
 	out, err := runDocxScript([]string{"extract", pdfPath, cache})
@@ -115,7 +115,6 @@ func ExtractTextsPdfDocx(pdfPath string) ([]string, string, error) {
 	}
 	var r struct {
 		Success bool     `json:"success"`
-		Mode    string   `json:"mode"`
 		Texts   []string `json:"texts"`
 	}
 	if err := json.Unmarshal(out, &r); err != nil {
@@ -124,18 +123,7 @@ func ExtractTextsPdfDocx(pdfPath string) ([]string, string, error) {
 	if !r.Success || len(r.Texts) == 0 {
 		return nil, "", fmt.Errorf("extract 无文本")
 	}
-	if r.Mode == "pageocr" {
-		return r.Texts, "", nil // 整页模式：无 DOCX 缓存
-	}
 	return r.Texts, cache, nil
-}
-
-// ApplyTranslatedPdfPageOcr 整页 OCR 模式回写：页栅格化→命中行白底覆盖译文→重组 PDF。
-func ApplyTranslatedPdfPageOcr(outPath, inPDF string, translations map[string]string, lang string) error {
-	payload, _ := json.Marshal(map[string]interface{}{
-		"translations": translations,
-	})
-	return runDocxScriptStdin([]string{"pageocr", inPDF, outPath, lang}, payload)
 }
 
 // ApplyTranslatedPdfFromDocx 在已缓存 DOCX 副本上应用译文并转 PDF（含图片 OCR）。
@@ -152,14 +140,18 @@ func docxScriptPath() string {
 }
 
 // runDocxScript 调用 Python docx 管线脚本（子进程方式，优先 venv 内解释器）。
+// ★ 经资源闸串行化 + nice 低优先级（评审整改 R4）。
 // 参数：args=脚本子命令与参数；返回：stdout 内容（extract 子命令为 JSON，取最后一个 '{' 之后的部分）与错误。
 func runDocxScript(args []string) ([]byte, error) {
 	pyBin := "python3"
 	if _, err := os.Stat("/opt/translator/.venv/bin/python3"); err == nil {
 		pyBin = "/opt/translator/.venv/bin/python3"
 	}
-	cmd := exec.Command(pyBin, append([]string{docxScriptPath()}, args...)...)
+	bin, argv := wrapNice(pyBin, append([]string{docxScriptPath()}, args...))
+	cmd := exec.Command(bin, argv...)
+	releaseProc := acquireProcGate()
 	out, err := cmd.CombinedOutput()
+	releaseProc()
 	if err != nil {
 		return out, fmt.Errorf("docx_translate %v 失败: %w\n%s", args, err, string(out))
 	}
@@ -172,15 +164,19 @@ func runDocxScript(args []string) ([]byte, error) {
 }
 
 // runDocxScriptStdin 以 stdin 传入大 payload（docx 字节流等）调用 docx 管线脚本，规避命令行长度限制。
+// ★ 经资源闸串行化 + nice 低优先级（评审整改 R4）。
 // 参数：args=脚本子命令与参数；payload=经 stdin 写入的字节流；返回错误（失败时附 stderr 输出）。
 func runDocxScriptStdin(args []string, payload []byte) error {
 	pyBin := "python3"
 	if _, err := os.Stat("/opt/translator/.venv/bin/python3"); err == nil {
 		pyBin = "/opt/translator/.venv/bin/python3"
 	}
-	cmd := exec.Command(pyBin, append([]string{docxScriptPath()}, args...)...)
+	bin, argv := wrapNice(pyBin, append([]string{docxScriptPath()}, args...))
+	cmd := exec.Command(bin, argv...)
 	cmd.Stdin = bytes.NewReader(payload)
+	releaseProc := acquireProcGate()
 	output, err := cmd.CombinedOutput()
+	releaseProc()
 	if err != nil {
 		return fmt.Errorf("docx_translate %v 失败: %w\n%s", args[0], err, string(output))
 	}
@@ -194,15 +190,18 @@ func writePDFViaPython(outPath string, fontPath string, srcTexts []string, trans
 		"srcTexts":     srcTexts,
 		"translations": translations,
 	})
-	// 优先使用 venv 内的 Python（fpdf2 安装于虚拟环境）
+	// 优先使用 venv 内的 Python（fpdf2 安装于虚拟环境）；★ 资源闸 + nice（评审整改 R4）
 	pyBin := "python3"
 	if _, err := os.Stat("/opt/translator/.venv/bin/python3"); err == nil {
 		pyBin = "/opt/translator/.venv/bin/python3"
 	}
 	scriptPath := filepath.Join(filepath.Dir(os.Args[0]), "pdfwrite.py")
-	cmd := exec.Command(pyBin, scriptPath, outPath, fontPath)
+	bin, argv := wrapNice(pyBin, []string{scriptPath, outPath, fontPath})
+	cmd := exec.Command(bin, argv...)
 	cmd.Stdin = strings.NewReader(string(payload))
+	releaseProc := acquireProcGate()
 	output, err := cmd.CombinedOutput()
+	releaseProc()
 	if err != nil {
 		return fmt.Errorf("python pdfwrite 失败: %w\n%s", err, string(output))
 	}

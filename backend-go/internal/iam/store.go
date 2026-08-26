@@ -16,8 +16,9 @@ import (
 )
 
 // userCols 用户表查询列清单（Scan 顺序契约；email 为老库可空列，COALESCE 兜底）。
-const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at"
+const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at, COALESCE(deactivate_at,'')"
 
+// orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
 // orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
 const orgCols = "id, tenant_id, parent_id, name, type, COALESCE(token_limit,0), created_at, updated_at"
 
@@ -50,7 +51,7 @@ func NewStore(db *sql.DB) *Store {
 func scanUser(row *sql.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt)
+		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -91,8 +92,39 @@ func (s *Store) GetUserByEmail(email string) (*User, error) {
 	return scanUser(s.db.QueryRow("SELECT "+userCols+" FROM users WHERE lower(email)=? ORDER BY tenant_id LIMIT 1", strings.ToLower(strings.TrimSpace(email))))
 }
 
-// SetUserEmail 设置联系邮箱（找回密码验证码接收地址）。
+// DeactivateSelf 自助注销：仅普通用户且 active 可发起；置 deactivating + 请求日期。
+func (s *Store) DeactivateSelf(id, tid int64) error {
+	res, err := s.execW(
+		"UPDATE users SET status=?, deactivate_at=? WHERE id=? AND tenant_id=? AND role=? AND status=?",
+		UserDeactivating, time.Now().Format("2006-01-02"), id, tid, RoleUser, UserActive)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("仅普通用户可自助注销，且账号需处于启用状态")
+	}
+	return nil
+}
+
+// FinalizeDeactivation 宽限期届满后落停用态（幂等；登录/鉴权路径惰性触发，失败静默）。
+func (s *Store) FinalizeDeactivation(id, tid int64) {
+	s.execW("UPDATE users SET status=? WHERE id=? AND tenant_id=? AND status=?", UserDisabled, id, tid, UserDeactivating)
+}
+
+// SetUserEmail 设置联系邮箱。
+// ★ 账户体系语义（2026-08-26 修正）：id 为不可变主键；email 是「同一时刻全局唯一」的
+//   绑定属性——目标邮箱正被其他账号持有时拒绝（前置查重 + idx_users_email 部分唯一索引兜底）；
+//   本人换绑不受限（新旧邮箱双验证由 API 层完成）。空邮箱视为解绑，不做唯一校验。
 func (s *Store) SetUserEmail(id, tid int64, email string) error {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		_, err := s.execW("UPDATE users SET email='' WHERE id=? AND tenant_id=?", id, tid)
+		return err
+	}
+	var owner int64
+	if err := s.db.QueryRow("SELECT id FROM users WHERE email=?", email).Scan(&owner); err == nil && owner != id {
+		return fmt.Errorf("该邮箱已被其他账号绑定")
+	}
 	_, err := s.execW("UPDATE users SET email=? WHERE id=? AND tenant_id=?", email, id, tid)
 	return err
 }
@@ -113,7 +145,7 @@ func (s *Store) GetUserByUsernameGlobal(username string) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt); err != nil {
 			continue
 		}
 		out = append(out, &u)
@@ -132,7 +164,7 @@ func (s *Store) ListUsers(tid int64) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt); err != nil {
 			continue
 		}
 		u.PasswordHash = ""
@@ -183,7 +215,7 @@ func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt); err != nil {
 			continue
 		}
 		u.PasswordHash = ""
@@ -492,7 +524,7 @@ func (s *Store) ListAllUsers() ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt); err != nil {
 			continue
 		}
 		u.PasswordHash = ""

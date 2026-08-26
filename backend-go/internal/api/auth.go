@@ -100,8 +100,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// 账号状态校验：停用账号禁止登录
-	if u.Status != store.UserActive {
+	// 账号状态校验：停用账号禁止登录；注销宽限期内（deactivating 当日）仍可登录，
+	// 次日起惰性落停用态并拒绝（2026-08-26 自助注销需求）
+	effective := auth.EffectiveUserStatus(u.Status, u.DeactivatedAt)
+	if effective == store.UserDisabled || (u.Status == store.UserDeactivating && effective == store.UserDisabled) {
+		if u.Status == store.UserDeactivating {
+			s.Store.FinalizeDeactivation(u.ID, u.TenantID) // 宽限期届满：落停用态
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "账号已注销，如需恢复请联系管理员"})
+			return
+		}
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "账号已停用"})
 		return
 	}
@@ -289,8 +296,8 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": true, "message": "如果账号存在且绑定了邮箱，验证码已发送"})
 		return
 	}
-	// 校验账号状态：停用账号不发送
-	if u.Status != store.UserActive {
+	// 校验账号状态：停用账号不发送（注销宽限期内仍可发送——找回密码链路保持可用）
+	if iamEffectiveStatus(u) != store.UserActive {
 		writeJSON(w, 200, map[string]interface{}{"success": true, "message": "如果账号存在且绑定了邮箱，验证码已发送"})
 		return
 	}
@@ -396,6 +403,43 @@ func genResetCode() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%06d", n.Int64()), nil
+}
+
+// iamEffectiveStatus 计算用户生效状态（注销宽限期次日起等效停用）。
+func iamEffectiveStatus(u *store.User) string {
+	if u == nil {
+		return store.UserDisabled
+	}
+	return auth.EffectiveUserStatus(u.Status, u.DeactivatedAt)
+}
+
+// handleDeactivateAccount 自助注销接口（POST /api/me/deactivate，2026-08-26 需求）：
+//   - 仅普通用户（role=user）可自助注销；管理员账号请联系上级停用
+//   - 生效语义：当日仍可正常使用，次日起无法登录；后台数据保留不删除
+//   - 联动：立即停用该用户 id 名下签发的全部 API Key（收回开放 API 调用权限）
+//   - 撤回：管理员在「成员管理」把状态改回启用即可恢复
+func (s *Server) handleDeactivateAccount(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	if u.Role != store.RoleUser {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅普通用户支持自助注销；管理员账号请联系上级处理"})
+		return
+	}
+	if err := s.Store.DeactivateSelf(u.ID, u.TenantID); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	revoked := s.Store.DisableAPIKeysByUser(u.TenantID, u.ID) // ★ 连带停用名下全部 API Key
+	s.Store.LogAudit(u.TenantID, u.ID, "account_deactivate", "users",
+		fmt.Sprintf("自助注销生效（宽限至今日），停用 API Key %d 把", revoked))
+	writeJSON(w, 200, map[string]interface{}{
+		"success":       true,
+		"message":       "注销申请已生效：今日仍可使用，明日 00:00 起无法登录；名下 API Key 已全部停用。数据保留，如需撤回请联系管理员重新启用。",
+		"keys_disabled": revoked,
+	})
 }
 
 // mailer 创建邮件发送器（按环境变量 MAIL_ENABLED / SMTP_* 惰性构建）。
@@ -530,15 +574,24 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// ★ 邮箱唯一预检（oneid 账户体系）：管理员建号此前绕过全局判重——补齐。
+	//   目标邮箱正被其他账号持有则拒绝创建（避免建出无邮箱残号）。
+	if req.Email != "" {
+		if other, oerr := s.Store.GetUserByEmail(strings.ToLower(strings.TrimSpace(req.Email))); oerr == nil && other != nil {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该邮箱已被其他账号绑定"})
+			return
+		}
+	}
 	nu, err := s.Store.CreateUser(tid, req.Username, auth.PasswordHash(req.Password), req.DisplayName, req.Role, u.ID, req.OrgID)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + err.Error()})
 		return
 	}
-	// 绑定联系邮箱（用于找回密码）
+	// 绑定联系邮箱（用于找回密码；SetUserEmail 内含占用即拒绝的最终守卫）
 	if req.Email != "" {
-		_ = s.Store.SetUserEmail(nu.ID, tid, req.Email)
-		nu.Email = req.Email
+		if eerr := s.Store.SetUserEmail(nu.ID, tid, req.Email); eerr == nil {
+			nu.Email = req.Email
+		}
 	}
 	// 返回前清空密码哈希，避免泄露
 	nu.PasswordHash = ""
@@ -789,6 +842,12 @@ func (s *Server) handleUpdateEmail(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if emailRe.MatchString(email) == false {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱格式不正确"})
+		return
+	}
+	// ★ 新邮箱撞库预检（2026-08-26 需求）：目标邮箱出现在邀请奖励流水中即拒绝换绑——
+	//   从账户层入口杜绝「换到带奖励历史的邮箱 → 后续受邀零奖励」的死胡同。
+	if s.Store.EmailInRewardLedger(email) {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该邮箱已被用于邀请注册奖励，无法换绑"})
 		return
 	}
 	if strings.TrimSpace(req.NewCode) == "" {

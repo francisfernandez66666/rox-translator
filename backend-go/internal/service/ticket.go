@@ -146,9 +146,10 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 			ctx = engine.WithUserOrg(ctx, cu.OrgID)
 		}
 	}
-	// ★ 余额预检（强制计费时）：余额不足快速失败，单独错误码提示充值/升级套餐
+	// ★ 余额预检（强制计费时）：可用额度 = 未过期台账 + 永久余额（双桶口径，评审整改 A1），
+	//   与 gateUsage/CheckBalance/DeductWithGrants 保持一致；不足快速失败，单独错误码提示充值/升级套餐
 	if s.Bill != nil && s.Bill.Enabled() {
-		if b, berr := s.Store.GetBalance(t.TenantID); berr == nil && b != nil && b.Balance <= 0 {
+		if grants, perm, berr := s.Store.TenantRemainTotal(t.TenantID); berr == nil && grants+perm <= 0 {
 			t.Status = store.TicketRejected
 			t.RejectReason = errInsufficientCode + ": 余额不足，请充值或升级套餐"
 			_ = s.Store.UpdateTicket(t)
@@ -157,6 +158,23 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	}
 	t.Status = store.TicketInProgress
 	_ = s.Store.UpdateTicket(t)
+
+	// ★ 心跳保活（评审整改 R3）：长翻译阶段内业务状态不变化，60s 触碰一次 updated_at，
+	//   防止卡死巡检把仍在运行的工单误判重排（重复执行/双扣费的根源）。
+	hbStop := make(chan struct{})
+	defer close(hbStop)
+	go func() {
+		tk := time.NewTicker(60 * time.Second)
+		defer tk.Stop()
+		for {
+			select {
+			case <-tk.C:
+				_ = s.Store.TouchTicket(t.ID)
+			case <-hbStop:
+				return
+			}
+		}
+	}()
 
 	// ★ 注入用量收集器：本工单全链路（初翻/校对/Judge/文化闸门/embedding）
 	// 的真实 token 用量自动归集，完成后按实费计费。
@@ -179,8 +197,17 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 			"ticket", t.ID)
 		return runErr
 	}
-	// ★ 用户取消：收尾前复查状态——已 cancelled 则放弃计费/完成态/通知（产物留档不下载）
-	if cur, ge := s.Store.GetTicketGlobal(t.ID); ge == nil && cur != nil && cur.Status == "cancelled" {
+	// ★ 收尾守卫（评审整改 R3）：复查当前状态——
+	//   ① cancelled：用户已取消，放弃计费/完成态/通知（产物留档不下载）；
+	//   ② queued：被卡死巡检重排（说明另一副本已接管本工单），本副本退出，
+	//      杜绝双份 chargeTokens 扣费与重复通知。
+	//   注意不可扩大化：pending_approval/approved/completed 是流水线自身步骤写入的合法中间态。
+	if cur, ge := s.Store.GetTicketGlobal(t.ID); ge == nil && cur != nil &&
+		(cur.Status == "cancelled" || cur.Status == store.TicketQueued) {
+		if cur.Status == store.TicketQueued {
+			s.Store.LogAudit(t.TenantID, 0, "ticket_dup_exit", "tickets",
+				fmt.Sprintf("工单 %s 检测到已被巡检重排，本副本放弃收尾（防双扣费）", t.TicketNo))
+		}
 		return nil
 	}
 	// ★ Token 实费计费：聚合本工单全链路真实 token × 均摊系数（强制计费时扣余额；
@@ -234,7 +261,12 @@ func (s *TicketService) chargeTokens(ctx context.Context, t *store.Ticket) int64
 		billed = total
 	}
 	provider, model := s.Engine.UsageModel(ctx)
-	if err := s.Bill.MeterDeferred(t.TenantID, t.CreatedBy, "translate", provider, model, billed); err != nil {
+	// ★ 用量看板标注（2026-08-26 需求）：文件工单=file、文本工单=text；模式随工单落库值
+	bizKind := "text"
+	if t.FilePath != "" {
+		bizKind = "file"
+	}
+	if err := s.Bill.MeterDeferred(t.TenantID, t.CreatedBy, "translate", provider, model, billed, bizKind, normalizeMode(t.Mode)); err != nil {
 		_ = s.Store.CreateAlert(t.TenantID, "critical", "billing",
 			fmt.Sprintf("工单 %s 计费失败（余额不足）：应扣 %d token，请充值或升级套餐", t.TicketNo, billed))
 	}
@@ -310,6 +342,11 @@ func (s *TicketService) StartStallSweep() {
 func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) error {
 	langs := parseLangs(t.TargetLangs)
 	mode := t.Mode // fast | pro（空=pro）
+	// ★ 归属登记用创建者 ID（评审整改 C1）：OpenAPI 任务回退其归属用户
+	ownerUID := t.CreatedBy
+	if ownerUID <= 0 && t.APIUserID > 0 {
+		ownerUID = t.APIUserID
+	}
 	// ★ 进度阶梯回调：把引擎内部阶段映射为步骤状态（前端锚点：提取20/初翻40/校对60/回写80）
 	progFn := func(step string, done, total int) {
 		switch {
@@ -362,6 +399,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 					storePath = res.Files[0]
 				}
 				_ = s.Store.SetTicketFileResult(tf.ID, storePath)
+				s.Store.RegisterArtifact(storePath, t.TenantID, ownerUID, t.ID) // ★ 归属登记（C1）
 				okCount++
 				doneN := okCount + failedCount(s.Store, t.ID)
 				mu.Unlock()
@@ -403,8 +441,12 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	}
 	if zipPath != "" {
 		_ = s.Store.SetTicketResultPath(t.ID, zipPath)
+		s.Store.RegisterArtifact(zipPath, t.TenantID, ownerUID, t.ID) // ★ 归属登记（C1）
 	} else if len(res.Files) > 0 {
 		_ = s.Store.SetTicketResultPath(t.ID, res.Files[0])
+	}
+	for _, fp := range res.Files { // ★ 逐产物归属登记（C1）
+		s.Store.RegisterArtifact(fp, t.TenantID, ownerUID, t.ID)
 	}
 	s.Store.SetTicketState(t.ID, "file_writeback", "success", "")
 	s.bumpTmHitsFromTranslations(t.TenantID, res.Data.Translations) // ★ 自闭环计数（不自动入库）
@@ -524,7 +566,7 @@ func (s *TicketService) BootResume() {
 	// ★ 修复（2026-08-26 P1-c）：入队类型是 ticket_run，旧 SQL 的 type='ticket' 永远匹配 0 行，
 	//   断点续跑的租约释放形同虚设——统一更正为 ticket_run。
 	if s.DB != nil {
-		s.DB.RawDB().Exec("UPDATE jobs SET status='queued', leased_by='', leased_at=0 WHERE type='ticket_run' AND status='running'")
+		s.DB.RawDB().Exec("UPDATE jobs SET status='queued', leased_by='', leased_at='' WHERE type='ticket_run' AND status='running'")
 	}
 	if n, err := s.Store.RequeueStalledTickets(0); err == nil && n > 0 {
 		log.Printf("[boot-resume] 已重新排队 %d 个中断工单", n)

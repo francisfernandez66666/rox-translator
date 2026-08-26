@@ -62,7 +62,7 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 		// 专业模式叠加 Judge×2/文化反查/KB 检索：经验放大 ~2.5×
 		maxTokens = int64(float64(minTokens) * 2.5)
 	}
-	tokens, approxBal := s.balancePayload(s.effTenant(r, u))
+	_, _, tokens, approxBal := s.balancePayload(s.effTenant(r, u)) // tokens=双桶可用总额（A1）
 	tid := s.effTenant(r, u)
 	activated := true
 	hint := ""

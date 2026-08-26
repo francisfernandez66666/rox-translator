@@ -44,7 +44,7 @@ export async function adminPolicy(): Promise<AdminResp> {
   return request('/api/admin/policy', { headers: authHeaders() })
 }
 
-// 保存匹配策略参数（crossDeptFallback=★ 跨部门降级检索开关，2026-08-26 KB继承链）
-export async function adminPolicySave(policy: Record<string, number>, crossDeptFallback?: boolean): Promise<AdminResp> {
-  return request('/api/admin/policy/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ policy, cross_dept_fallback: crossDeptFallback }) })
+// 保存匹配策略参数（crossDeptFallback=跨部门降级检索；dataFeedbackOptOut=★ 数据回流关闭，D7）
+export async function adminPolicySave(policy: Record<string, number>, crossDeptFallback?: boolean, dataFeedbackOptOut?: boolean): Promise<AdminResp> {
+  return request('/api/admin/policy/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ policy, cross_dept_fallback: crossDeptFallback, data_feedback_opt_out: dataFeedbackOptOut }) })
 }

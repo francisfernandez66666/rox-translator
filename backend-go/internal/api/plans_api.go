@@ -53,11 +53,12 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 	}
 	tid := s.effTenant(r, u)
 	var pkgCode, subAt, pkgExpires string
-	tokens, approx := int64(0), int64(0)
+	grants, permanent, tokens, approx := int64(0), int64(0), int64(0), int64(0)
 	sentenceMirror := int64(0)
 	// 平台上下文（tid<=0）无计费概念：余额返回 0
 	if tid > 0 {
-		tokens, approx = s.balancePayload(tid)
+		// ★ 双桶出参（评审整改 A1）：tokens=台账+永久可用总额
+		grants, permanent, tokens, approx = s.balancePayload(tid)
 		if perms, err := s.Store.GetTenantPerms(tid); err == nil {
 			pkgCode = perms.PackageCode
 			subAt = perms.SubscribedAt
@@ -85,6 +86,8 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		"tokens_used_month":        usedMonth,
 		"balance_tokens":           tokens,
 		"balance_sentences_approx": approx,
+		"sub_grants_left":          grants,       // ★ 未过期台账合计（双桶明细）
+		"permanent_balance":        permanent,    // ★ 永久余额（双桶明细）
 		"sentence_balance":         sentenceMirror, // 兼容字段：历史句数镜像
 		"package_code":             pkgCode,
 		"subscribed_at":            subAt,

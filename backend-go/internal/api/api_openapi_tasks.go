@@ -35,6 +35,7 @@ import (
 
 	"translator/internal/engine"
 	"translator/internal/fileproc"
+	"translator/internal/llm"
 	"translator/internal/store"
 )
 
@@ -53,10 +54,17 @@ func writeTaskError(w http.ResponseWriter, code, message string) {
 	})
 }
 
-// balanceOut 组装余额出参字段（token 主单位 + ≈句数换算）。
+// balanceOut 组装余额出参字段（★ 双桶口径，评审整改 A1）：
+// balance_tokens=可用总额（台账+永久，主单位）；sub_grants_left/permanent_balance 为明细；
+// balance_sentences_approx 按总额折算。老调用方只读 balance_tokens 即获得正确总额。
 func (s *Server) balanceOut(tid int64) map[string]interface{} {
-	tokens, approx := s.balancePayload(tid)
-	return map[string]interface{}{"balance_tokens": tokens, "balance_sentences_approx": approx}
+	grants, permanent, total, approx := s.balancePayload(tid)
+	return map[string]interface{}{
+		"balance_tokens":            total,
+		"balance_sentences_approx":  approx,
+		"sub_grants_left":           grants,
+		"permanent_balance":         permanent,
+	}
 }
 
 // normalizeTaskMode 归一化模式参数："fast"=快速；其余一律 pro 专业校对。
@@ -295,6 +303,7 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		_, _ = s.Store.AddTicketFile(&store.TicketFile{
 			TenantID: tid2, TicketID: t.ID, FileName: f.name, FilePath: f.path,
 		})
+		s.Store.RegisterArtifact(f.path, tid2, ak.UserID, t.ID) // ★ 归属登记（评审整改 C1）
 	}
 	s.enqueueAPITask(t, mode, ak)
 	respBody := map[string]interface{}{
@@ -613,18 +622,19 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 	}
 	// ⑤ 调用引擎同步翻译（HandleText 内部已注入用量收集器；无进度回调）
 	// ★ 注入 Key 归属用户组织（2026-08-26 KB继承链）：OpenAPI 调用与站内同租户同权
+	// ★ 交互标记（评审整改 R6）：划译求快，允许抢占 LLM 保留槽
 	syncCtx := r.Context()
 	if cu, uerr := s.Store.GetUser(ak.UserID, ak.TenantID); uerr == nil && cu != nil && cu.OrgID > 0 {
 		syncCtx = engine.WithUserOrg(syncCtx, cu.OrgID)
 	}
-	res := s.Engine.HandleText(syncCtx, req.Text, options, nil)
+	res := s.Engine.HandleText(llm.WithInteractive(syncCtx), req.Text, options, nil)
 	if res.Error != "" {
 		s.metrics.countTranslate("text", false)
 		writeTaskError(w, "task_failed", res.Error)
 		return
 	}
 	// ⑥ Token 实费计费：聚合本次全链路真实消耗 × 均摊系数（强制计费时扣余额）
-	charged := s.chargeTaskTokens(r, tid, "translate")
+	charged := s.chargeTaskTokens(r, tid, "translate", "text", normalizeTaskMode(req.Mode))
 	s.metrics.countTranslate("text", true)
 	// ⑦ 组装响应
 	writeJSON(w, 200, map[string]interface{}{

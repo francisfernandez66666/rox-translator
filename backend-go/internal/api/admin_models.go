@@ -12,12 +12,47 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"strings"
+
 	"translator/internal/config"
+	"translator/internal/store"
 	"translator/internal/tenant"
 )
 
-// ============ 模型配置（仅超管） ============
+// ============ 密钥静态加密辅助（评审整改 D3） ============
+//
+// 库内 system_config.model_routes / stage_models 的 api_key 一律以 enc:v1: AES-GCM
+// 密文落库（密钥派生自 JWT_SECRET）；内存/热同步链路使用明文；前端只见过掩码。
+
+// loadRoutesDecrypted 读取 model_routes 并解密为明文副本。
+func (s *Server) loadRoutesDecrypted() []config.ProviderConfig {
+	rs := []config.ProviderConfig{}
+	if s.Store == nil {
+		return rs
+	}
+	if v, e := s.Store.GetConfig("model_routes"); e == nil && v != "" {
+		_ = json.Unmarshal([]byte(v), &rs)
+		for i := range rs {
+			rs[i].APIKey = store.DecryptSecret(rs[i].APIKey)
+			if rs[i].APIKey == "" && strings.HasPrefix(v, "enc:") {
+				log.Printf("[models] 路由 %s(%s) 密钥解密失败（疑 JWT_SECRET 轮换未同步），已跳过", rs[i].Provider, rs[i].Model)
+			}
+		}
+	}
+	return rs
+}
+
+// encryptRoutes 入库前加密副本的 api_key（不改原切片）。
+func encryptRoutes(rs []config.ProviderConfig) []config.ProviderConfig {
+	out := make([]config.ProviderConfig, len(rs))
+	copy(out, rs)
+	for i := range out {
+		out[i].APIKey = store.EncryptSecret(out[i].APIKey)
+	}
+	return out
+}
 
 // handleModels 读取模型配置（仅超管）：
 // 读取全局配置（全局默认单模型 + system_config.model_routes 全局路由）。
@@ -32,17 +67,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	base := s.Cfg.OnlineAPIBase
 	key := s.Cfg.OnlineAPIKey
 	model := s.Cfg.OnlineModel
-	var routes []config.ProviderConfig
-	if s.Store != nil {
-		if v, e := s.Store.GetConfig("model_routes"); e == nil && v != "" {
-			var rs []config.ProviderConfig
-			if json.Unmarshal([]byte(v), &rs) == nil {
-				for _, rt := range rs {
-					routes = append(routes, config.ProviderConfig{Provider: rt.Provider, APIBase: rt.APIBase, APIKey: rt.APIKey, Model: rt.Model, Weight: rt.Weight})
-				}
-			}
-		}
-	}
+	routes := s.loadRoutesDecrypted()
 	if routes == nil {
 		routes = []config.ProviderConfig{}
 	}
@@ -82,11 +107,8 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
 		return
 	}
-	// 读取现有全局路由（保留掩码密钥）
-	oldRoutes := []config.ProviderConfig{}
-	if v, e := s.Store.GetConfig("model_routes"); e == nil && v != "" {
-		_ = json.Unmarshal([]byte(v), &oldRoutes)
-	}
+	// 读取现有全局路由并解密（库内为 enc:v1: 密文或历史明文，回填需明文）
+	oldRoutes := s.loadRoutesDecrypted()
 	// 构建新路由列表：单模型字段优先作为主路由（api_base+model 非空），其余来自 routes
 	merged := make([]config.ProviderConfig, 0, len(req.Routes)+1)
 	if req.APIBase != "" && req.Model != "" {
@@ -105,16 +127,16 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	//   前端整表回传时顺序天然保持。
 	for i := range merged {
 		if hasMask(merged[i].APIKey) && i < len(oldRoutes) {
-			merged[i].APIKey = oldRoutes[i].APIKey
+			merged[i].APIKey = oldRoutes[i].APIKey // 回填明文旧值
 		}
 	}
-	b, _ := json.Marshal(merged)
+	// ★ 热同步用明文；入库前整体加密（评审整改 D3：库内不再存任何明文供应商 Key）
+	s.Cfg.ModelRoutes = merged
+	b, _ := json.Marshal(encryptRoutes(merged))
 	if err := s.Store.SetConfig("model_routes", string(b)); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	// 热同步到运行配置（引擎即时生效）
-	s.Cfg.ModelRoutes = merged
 	// 若单模型字段非空，同时更新全局默认单模型（引擎回退链的最终兜底）
 	if req.APIBase != "" {
 		s.Cfg.OnlineAPIBase = req.APIBase
@@ -129,22 +151,19 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
-// handleModelRoutes 读取模型路由策略（super_admin）
+// handleModelRoutes 读取模型路由策略（super_admin）。★ 输出掩码（评审整改 D3）
 func (s *Server) handleModelRoutes(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	var routes []config.ProviderConfig
-	if s.Store != nil {
-		if v, err := s.Store.GetConfig("model_routes"); err == nil && v != "" {
-			_ = json.Unmarshal([]byte(v), &routes)
-		}
+	routes := s.loadRoutesDecrypted()
+	masked := make([]config.ProviderConfig, len(routes))
+	for i, rt := range routes {
+		rt.APIKey = maskKey(rt.APIKey)
+		masked[i] = rt
 	}
-	if routes == nil {
-		routes = []config.ProviderConfig{}
-	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "routes": routes})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "routes": masked})
 }
 
 // handleModelRoutesSave 保存模型路由策略（仅超管）
@@ -172,33 +191,29 @@ func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 			req.Routes[i].Provider = "global"
 		}
 	}
-	// 掩码密钥不覆盖：保留原值
+	// 掩码密钥不覆盖：保留原值（旧库读出后先解密再回填）
 	if len(req.Routes) > 0 {
-		if v, err := s.Store.GetConfig("model_routes"); err == nil && v != "" {
-			var old []config.ProviderConfig
-			if json.Unmarshal([]byte(v), &old) == nil {
-				for i := range req.Routes {
-					if hasMask(req.Routes[i].APIKey) {
-						for _, o := range old {
-							if o.APIBase == req.Routes[i].APIBase && o.Model == req.Routes[i].Model {
-								req.Routes[i].APIKey = o.APIKey
-								break
-							}
-						}
+		old := s.loadRoutesDecrypted()
+		for i := range req.Routes {
+			if hasMask(req.Routes[i].APIKey) {
+				for _, o := range old {
+					if o.APIBase == req.Routes[i].APIBase && o.Model == req.Routes[i].Model {
+						req.Routes[i].APIKey = o.APIKey
+						break
 					}
 				}
 			}
 		}
 	}
-	b, _ := json.Marshal(req.Routes)
+	// ★ 热同步明文；入库加密（评审整改 D3）
+	s.Cfg.ModelRoutes = req.Routes
+	b, _ := json.Marshal(encryptRoutes(req.Routes))
 	if err := s.Store.SetConfig("model_routes", string(b)); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	// 同步到运行配置（引擎热生效）
-	s.Cfg.ModelRoutes = req.Routes
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "model_routes_save", "system", fmt.Sprintf("%d 条", len(req.Routes)))
-	writeJSON(w, 200, map[string]interface{}{"success": true, "routes": req.Routes})
+	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
 // ============ 各流程阶段模型配置（仅超管） ============
@@ -214,6 +229,12 @@ func (s *Server) handleStageModels(w http.ResponseWriter, r *http.Request) {
 	if s.Store != nil {
 		if v, err := s.Store.GetConfig("stage_models"); err == nil && v != "" {
 			_ = json.Unmarshal([]byte(v), &stages)
+			// ★ 库内密文 → 明文后再掩码输出（评审整改 D3）
+			for k := range stages {
+				sm := stages[k]
+				sm.APIKey = store.DecryptSecret(sm.APIKey)
+				stages[k] = sm
+			}
 		}
 	}
 	// 掩码所有 API Key 再返回（密钥仅保存后返回一次）；输出业务五阶段
@@ -249,10 +270,15 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
 		return
 	}
-	// 读取旧配置，掩码密钥保留原值
+	// 读取旧配置并解密，掩码密钥保留原值
 	old := config.StageModels{}
 	if v, err := s.Store.GetConfig("stage_models"); err == nil && v != "" {
 		_ = json.Unmarshal([]byte(v), &old)
+		for k := range old {
+			sm := old[k]
+			sm.APIKey = store.DecryptSecret(sm.APIKey)
+			old[k] = sm
+		}
 	}
 	for k := range req.Stages {
 		sm := req.Stages[k]
@@ -277,7 +303,13 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	b, _ := json.Marshal(req.Stages)
+	// ★ 入库前整体加密（评审整改 D3）；引擎读取侧 resolveStageModel 做对应解密
+	stored := config.StageModels{}
+	for k, sm := range req.Stages {
+		sm.APIKey = store.EncryptSecret(sm.APIKey)
+		stored[k] = sm
+	}
+	b, _ := json.Marshal(stored)
 	if err := s.Store.SetConfig("stage_models", string(b)); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -316,11 +348,14 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 	if pc.CrossDeptFallback != nil {
 		cross = *pc.CrossDeptFallback == 1
 	}
+	// ★ 数据回流开关（评审整改 D7）：默认参与共建
+	feedbackOut := pc.DataFeedbackOptOut != nil && *pc.DataFeedbackOptOut == 1
 	writeJSON(w, 200, map[string]interface{}{"success": true, "policy": map[string]interface{}{
 		"high_sim":             high,
 		"med_sim":              med,
 		"evals_pass_threshold": evals,
 		"cross_dept_fallback":  cross,
+		"data_feedback_opt_out": feedbackOut,
 	}})
 }
 
@@ -332,8 +367,9 @@ func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Policy            map[string]float64 `json:"policy"`              // 策略参数映射（high_sim/med_sim/evals_pass_threshold）
-		CrossDeptFallback *bool              `json:"cross_dept_fallback"` // ★ 跨部门降级检索开关（可选；nil=不修改）
+		Policy             map[string]float64 `json:"policy"`
+		CrossDeptFallback  *bool              `json:"cross_dept_fallback"`  // 跨部门降级检索（nil=不修改）
+		DataFeedbackOptOut *bool              `json:"data_feedback_opt_out"` // ★ 数据回流关闭开关（D7；nil=不修改）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -361,6 +397,13 @@ func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
 			v = 1
 		}
 		pc.CrossDeptFallback = &v
+	}
+	if req.DataFeedbackOptOut != nil {
+		v := 0
+		if *req.DataFeedbackOptOut {
+			v = 1
+		}
+		pc.DataFeedbackOptOut = &v
 	}
 	if err := s.Ten.SetPolicyConfig(s.effTenant(r, u), pc); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})

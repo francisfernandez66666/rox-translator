@@ -86,3 +86,8 @@ export async function meEmailCode(email: string): Promise<AdminResp & { noop?: b
 export async function updateEmail(email: string, code: string, oldCode = ''): Promise<AdminResp> {
   return request('/api/me/update-email', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ email, new_code: code, old_code: oldCode }) })
 }
+
+/** deactivateAccount 自助注销：当日宽限、次日失效；名下 API Key 立即停用；数据保留 */
+export async function deactivateAccount(): Promise<AdminResp> {
+  return request('/api/me/deactivate', { method: 'POST' })
+}

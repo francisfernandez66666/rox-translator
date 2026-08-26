@@ -290,6 +290,7 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/me/package", s.handleMyPackage)
 	s.mux.HandleFunc("/api/me/context", s.handleMeContext)
 	s.mux.HandleFunc("/api/me/update-email", s.handleUpdateEmail)
+	s.mux.HandleFunc("/api/me/deactivate", s.handleDeactivateAccount) // ★ 自助注销（2026-08-26 需求）
 	s.mux.HandleFunc("/api/me/email-code", s.handleMeEmailCode)
 	s.mux.HandleFunc("/api/admin/tm-review/list", s.handleTmReviewList)
 	s.mux.HandleFunc("/api/admin/tm-review/approve", s.handleTmReviewApprove)
@@ -441,12 +442,15 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		// 请求方法/头（含租户切换与后台 Token 头）
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-ID, X-Admin-Token")
-		// 来源校验：无 Origin 头（同源导航/非浏览器）直接放行
-		origin := r.Header.Get("Origin")
-		if origin == "" || s.corsAllowed(origin) {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Add("Vary", "Origin")
-		}
+	// 来源校验：无 Origin 头（同源导航/非浏览器）直接放行。
+	// ★ /openapi/* 前缀无条件反射（评审整改 A2）：开放 API 全部为 Key 鉴权、
+	//   无 Cookie 会话面，CSRF 不成立——放行跨域以支持浏览器划词插件等第三方前端
+	//   （MV3 content script 即便持有 host_permissions，部分环境仍受页面 CORS 约束）。
+	origin := r.Header.Get("Origin")
+	if origin == "" || s.corsAllowed(origin) || strings.HasPrefix(r.URL.Path, "/openapi/") {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Add("Vary", "Origin")
+	}
 		// 预检请求直接返回，不进入业务 Handler
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
@@ -488,9 +492,13 @@ func (s *Server) authUser(r *http.Request) *store.User {
 	if err != nil {
 		return nil
 	}
-	// 校验用户存在且处于激活状态（按 JWT 中的 user_id + tenant_id）
+	// 校验用户存在且处于激活状态（按 JWT 中的 user_id + tenant_id）。
+	// ★ 注销宽限语义（2026-08-26）：deactivating 当日视为可用（放行），次日起等效停用。
 	u, err := s.Store.GetUser(claims.UserID, claims.TenantID)
-	if err != nil || u.Status != store.UserActive {
+	if err != nil {
+		return nil
+	}
+	if s := auth.EffectiveUserStatus(u.Status, u.DeactivatedAt); s != store.UserActive && s != store.UserDeactivating {
 		return nil
 	}
 	return u

@@ -63,6 +63,11 @@ func CheckPassword(hash, password string) bool { return iam.CheckPassword(hash, 
 // NeedMigrateHash 判断哈希是否需透明升级为 bcrypt（委托 iam）。
 func NeedMigrateHash(hash string) bool { return iam.NeedMigrateHash(hash) }
 
+// EffectiveUserStatus 计算用户生效状态（注销宽限期次日起等效停用；委托 iam）。
+func EffectiveUserStatus(status, deactivatedAt string) string {
+	return iam.EffectiveUserStatus(status, deactivatedAt)
+}
+
 // PasswordHashLegacy 历史 SHA-256+固定盐 哈希（仅校验存量账号用，委托 iam）。
 func PasswordHashLegacy(password string) string { return iam.PasswordHashLegacy(password) }
 

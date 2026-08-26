@@ -215,6 +215,7 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		_, _ = s.Store.AddTicketFile(&store.TicketFile{
 			TenantID: tid, TicketID: t.ID, FileName: f.name, FilePath: f.path,
 		})
+		s.Store.RegisterArtifact(f.path, tid, u.ID, t.ID) // ★ 归属登记（评审整改 C1）
 	}
 	s.Store.LogAudit(tid, u.ID, "ticket_create_file", "tickets", fmt.Sprintf("%s (%d files)", t.TicketNo, len(saved)))
 	if s.TicketSvc != nil {

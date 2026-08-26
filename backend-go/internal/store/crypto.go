@@ -16,6 +16,7 @@ import (
 	"encoding/base64"
 	"io"
 	"os"
+	"strings"
 )
 
 // deriveAEADKey 由 JWT_SECRET 派生 32 字节 AES 密钥。
@@ -64,7 +65,38 @@ func DecryptPlain(enc string) string {
 	}
 	plain, err := gcm.Open(nil, raw[:ns], raw[ns:], nil)
 	if err != nil {
-		return ""
+		return string("") // 认证失败：静默返回空（调用方应告警）
 	}
 	return string(plain)
+}
+
+// SecretEncPrefix 静态加密密文前缀：区分「已加密」与「历史明文」，支持平滑迁移。
+const SecretEncPrefix = secretEncPrefix
+
+// secretEncPrefix 前缀常量本体。
+const secretEncPrefix = "enc:v1:"
+
+// EncryptSecret 带前缀的通用静态加密（评审整改 D3）：用于 model_routes 等配置内的供应商 Key。
+func EncryptSecret(plain string) string {
+	if plain == "" {
+		return ""
+	}
+	return secretEncPrefix + EncryptPlain(plain)
+}
+
+// DecryptSecret 与 EncryptSecret 配对；无前缀的输入按历史明文原样返回（兼容旧库）。
+// 解密失败返回空串——调用方应打告警并跳过该条目（典型原因：JWT_SECRET 轮换未同步重存）。
+func DecryptSecret(stored string) string {
+	if stored == "" {
+		return ""
+	}
+	if !strings.HasPrefix(stored, secretEncPrefix) {
+		return stored // 历史明文
+	}
+	return DecryptPlain(strings.TrimPrefix(stored, secretEncPrefix))
+}
+
+// IsSecretMasked 判断是否为前端掩码串（sk-**** 形态）——保存链路据此回填旧值。
+func IsSecretMasked(s string) bool {
+	return strings.Contains(s, "****")
 }

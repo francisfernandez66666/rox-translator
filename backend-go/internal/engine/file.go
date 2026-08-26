@@ -107,20 +107,26 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		return &FileTranslateResult{Skill: "translation", Error: "无法从文件提取文本或文件为空"}
 	}
 	// ★ PDF：改用 pdf2docx 提取段落（键与写回目标一致，表格/短文本必中），
-	//   缓存 DOCX 供多语言写回复用；失败回退 pdftotext 键。
-	//   图形化文档（文本层稀薄）自动切整页 OCR 模式（pdfPageOcrMode）。
+	//   缓存 DOCX 供多语言写回复用；失败回退 pdftotext 键（产物降级 xlsx 对照表）。
+	//   图片内容按产品策略不翻译（2026-08-25 OCR 已整体移除）。
 	var pdfCacheDocx string
-	var pdfPageOcrMode bool
 	if strings.EqualFold(filepath.Ext(filePath), ".pdf") {
-		if t2, cache, e2 := fileproc.ExtractTextsPdfDocx(filePath); e2 == nil && len(t2) > 0 {
+		if t2, cache, e2 := fileproc.ExtractTextsPdfDocx(filePath); e2 == nil && len(t2) > 0 && cache != "" {
 			texts = t2
-			if cache == "" {
-				pdfPageOcrMode = true
-			} else {
-				pdfCacheDocx = cache
-				defer os.Remove(cache)
-			}
+			pdfCacheDocx = cache
+			defer os.Remove(cache)
 		}
+	}
+
+	// ★ 嵌入管线级预取（评审整改 R2）：pro 模式且走 KB 语义检索时，
+	//   对去重后的全部源文一次 EmbedBatch 预热缓存并向 ctx 注入向量表——
+	//   Embed 调用量从「段数×语言数」降为「去重段数/32」，消除逐段逐语言回源。
+	if !fast && len(kbLangs) > 0 && e.Index != nil && len(e.Index.Vecs) > 0 {
+		eb, ek, em, eok := e.resolveStageModel(ctx, config.StageKBEmbed)
+		if !eok {
+			em = ""
+		}
+		ctx = e.prefetchEmbeddings(ctx, texts, eb, ek, em)
 	}
 
 	// 语言名映射
@@ -332,15 +338,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			case ".pptx":
 				aerr = fileproc.ApplyPptx(filePath, outPath, tr)
 			case ".pdf":
-				// 整页 OCR 模式（图形化文档）：直接在源 PDF 上回写
-				if pdfPageOcrMode {
-					if perr := fileproc.ApplyTranslatedPdfPageOcr(outPath, filePath, tr, lc); perr == nil {
-						filesOut = append(filesOut, outPath)
-						continue
-					}
-					aerr = fmt.Errorf("整页 OCR 回写失败")
-				} else if pdfCacheDocx != "" {
-					// 两阶段：复用提取期缓存 DOCX（键对齐，含图片OCR）
+				if pdfCacheDocx != "" {
+					// 两阶段：复用提取期缓存 DOCX（键对齐，图片/排版零破坏）
 					if perr := fileproc.ApplyTranslatedPdfFromDocx(outPath, pdfCacheDocx, tr, lc); perr == nil {
 						filesOut = append(filesOut, outPath)
 						continue

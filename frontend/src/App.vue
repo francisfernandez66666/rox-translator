@@ -43,6 +43,7 @@
           <button v-if="canEnterAdmin" class="menu-item" @click="enterAdmin(); menuOpen = false">🛠 {{ t('menu.adminConsole') }}</button>
           <button class="menu-item" @click="openPwd">🔒 {{ t('pwd.title') }}</button>
           <button class="menu-item" @click="openEmailEdit">📧 {{ t('menu.changeEmail') }}</button>
+          <button v-if="isPlainUser" class="menu-item menu-logout" @click="deactOpen = true; menuOpen = false">🗑 {{ t('menu.deactivate') }}</button>
           <button class="menu-item menu-logout" @click="logout(); menuOpen = false">⎋ {{ t('common.logout') }}</button>
         </div>
         <div v-if="menuOpen" class="menu-backdrop" @click="menuOpen = false"></div>
@@ -51,6 +52,12 @@
 
     <!-- ★ 自助修改密码弹窗（Teleport 挂载 body，居中遮罩） -->
     <EmailBindModal v-if="emailMissing || emailEditOpen" :teleport="false" :dismissible="emailEditOpen && !emailMissing" :current-email="curEmail" @done="onEmailBound" @close="emailEditOpen = false" />
+    <!-- ★ 自助注销确认弹窗（2026-08-26 需求：当日宽限/次日失效/API Key 停用/数据保留） -->
+    <DeactivateModal v-if="deactOpen" :teleport="false" @close="deactOpen = false" @done="deactDone = true" />
+    <!-- ★ 应用内轻提示（替代浏览器 alert） -->
+    <transition name="toast-fade">
+      <div v-if="toastMsg" class="app-toast">{{ toastMsg }}</div>
+    </transition>
     <PasswordModal
       v-if="pwdOpen"
       :teleport="false"
@@ -84,6 +91,7 @@ import TicketsPage from './components/TicketsPage.vue'
 import Bell from './components/Bell.vue'
 import Login from './components/Login.vue'
 import AdminDashboard from './components/AdminDashboard.vue'
+import DeactivateModal from './components/DeactivateModal.vue'
 // API：token 读写与用户信息查询
 import { getAuthToken, setAuthToken, authMe, myPackage, meContext, sendPwdCode, submitNewPassword, type AuthUser } from '@/api'
 // 国际化：文案取词 + 语言切换
@@ -214,10 +222,23 @@ async function openPwd() {
   } catch { pwdEmail.value = '' }
 }
 
-// onPwdDone 改密成功提示
+// onPwdDone 改密成功提示（评审整改 D6：以应用内 toast 取代 alert）
 function onPwdDone() {
-  alert(t('pwd.done'))
+  toastMsg.value = t('pwd.done')
+  clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => { toastMsg.value = '' }, 2200)
 }
+const toastMsg = ref('')
+let toastTimer = 0
+
+// ===== 自助注销（2026-08-26 需求） =====
+const deactOpen = ref(false)
+const deactDone = ref(false)
+// isPlainUser 仅普通用户展示注销入口（管理员账号由上级停用；后端同步拦截）
+const isPlainUser = computed(() => !!authUser.value && authUser.value.role === 'user')
+// watch 注销完成 → 关闭弹窗并本地登出（次日才真正无法登录，但本次会话即登出更符合直觉）？
+// 需求语义为「当日仍可使用」，故完成提示后不强制登出，仅关闭弹窗。
+watch(deactDone, v => { if (v) setTimeout(() => { deactOpen.value = false; deactDone.value = false }, 2500) })
 
 
 // 切换翻译模型
@@ -391,4 +412,9 @@ body {
 .pwd-code-row .menu-input { flex: 1; margin-bottom: 0; }
 .pwd-msg { font-size: 12.5px; margin-top: 4px; color: #c62828; }
 .pwd-msg.ok { color: #2e7d32; }
+
+/* ★ 应用内轻提示（D6） */
+.app-toast { position: fixed; left: 50%; transform: translateX(-50%); top: 72px; background: rgba(33,33,33,.92); color: #fff; padding: 10px 20px; border-radius: 10px; font-size: 13.5px; z-index: 4000; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+.toast-fade-enter-active, .toast-fade-leave-active { transition: opacity .2s ease; }
+.toast-fade-enter-from, .toast-fade-leave-to { opacity: 0; }
 </style>

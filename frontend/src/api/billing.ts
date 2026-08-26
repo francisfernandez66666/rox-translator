@@ -56,7 +56,7 @@ export async function billingQuota(): Promise<AdminResp> {
 }
 
 // 保存当前租户配额
-export async function billingQuotaSave(data: { qps: number; concurrent: number; max_daily_chars: number }): Promise<AdminResp> {
+export async function billingQuotaSave(data: { qps: number; concurrent: number; max_daily_chars: number; max_daily_tokens?: number }): Promise<AdminResp> {
   return request('/api/billing/quota/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 

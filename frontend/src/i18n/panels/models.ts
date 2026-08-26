@@ -24,6 +24,9 @@ export const zh: Record<string, string> = {
   'models.evalsThreshold': 'evals 通过阈值',
   // ★ KB 继承链（2026-08-26）：跨部门降级检索开关文案
   'models.crossDeptFallback': '跨部门降级检索（KB）',
+  'models.feedbackOptOut': '数据回流（行业记忆共建）',
+  'models.fbOff': '关闭：本租户译文不入平台审核池',
+  'models.fbOn': '参与：脱敏后供行业术语库迭代（默认）',
   'models.crossOn': '开启：链内零命中时可用兄弟部门共享术语',
   'models.crossOff': '关闭：严格部门隔离',
   'models.savePolicy': '保存策略',
@@ -73,6 +76,9 @@ export const en: Record<string, string> = {
   'models.evalsThreshold': 'Evals pass threshold',
   // KB inheritance chain (2026-08-26): cross-dept fallback toggle copy
   'models.crossDeptFallback': 'Cross-dept KB fallback',
+  'models.feedbackOptOut': 'Data feedback (industry KB co-build)',
+  'models.fbOff': 'Off: candidates stay out of the review pool',
+  'models.fbOn': 'On: masked data feeds industry KB (default)',
   'models.crossOn': 'On: fall back to shared sibling-dept terms when chain misses',
   'models.crossOff': 'Off: strict department isolation',
   'models.savePolicy': 'Save Policy',

@@ -160,21 +160,22 @@ func (s *Service) Enabled() bool {
 }
 
 // Meter 计量一次用量。强制计费时扣余额；否则仅记录 usage_ledger 留痕。
-// 返回 error（强制计费且余额不足时返回）。provider/model 用于多供应商成本核算。
-func (s *Service) Meter(tid, userID int64, taskType, provider, model string, quantity int64) error {
+// 返回 error（强制计费且余额不足时返回）。provider/model 用于多供应商成本核算；
+// bizKind=text|file、bizMode=fast|pro 用于用量看板标注（2026-08-26 需求）。
+func (s *Service) Meter(tid, userID int64, taskType, provider, model string, quantity int64, bizKind, bizMode string) error {
 	if s.Store == nil || quantity <= 0 {
 		return nil
 	}
 	if s.Enabled() {
-		_, err := s.Store.RecordUsage(tid, userID, taskType, provider, model, quantity)
+		_, err := s.Store.RecordUsage(tid, userID, taskType, provider, model, quantity, bizKind, bizMode)
 		return err
 	}
-	return s.Store.LogUsage(tid, userID, taskType, provider, model, quantity)
+	return s.Store.LogUsage(tid, userID, taskType, provider, model, quantity, bizKind, bizMode)
 }
 
 // MeterDeferred 计量失败不阻断业务（记录后返回错误供日志，但调用方按需忽略）。
-func (s *Service) MeterDeferred(tid, userID int64, taskType, provider, model string, quantity int64) error {
-	return s.Meter(tid, userID, taskType, provider, model, quantity)
+func (s *Service) MeterDeferred(tid, userID int64, taskType, provider, model string, quantity int64, bizKind, bizMode string) error {
+	return s.Meter(tid, userID, taskType, provider, model, quantity, bizKind, bizMode)
 }
 
 // CheckDailyQuota 检查每日 token 上限（来自租户 permissions.max_daily_chars）
@@ -192,14 +193,17 @@ func (s *Service) CheckDailyQuota(tid int64, maxDaily int64) error {
 	return nil
 }
 
-// CheckBalance 检查余额是否充足
+// CheckBalance 检查余额是否充足。
+// ★ 双桶口径（2026-08-26 评审整改 A1）：可用额度 = 未过期台账 + 永久余额——
+// 只看永久桶会把「仅有体验台账的新租户」误判为耗尽（fail-closed 误伤），
+// 与实扣入口 DeductWithGrants（台账→永久顺序扣减）口径保持一致。
 func (s *Service) CheckBalance(tid int64) error {
-	b, err := s.Store.GetBalance(tid)
+	grants, permanent, err := s.Store.TenantRemainTotal(tid)
 	if err != nil {
 		return err
 	}
-	if b.Balance <= 0 {
-		return &quotaErr{"余额不足，请充值"}
+	if grants+permanent <= 0 {
+		return &quotaErr{"额度不足，请充值"}
 	}
 	return nil
 }

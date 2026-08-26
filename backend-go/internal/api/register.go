@@ -215,8 +215,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "行业不存在，请重新选择"})
 			return
 		}
-		// 权限：试用每日上限 2 万字符；审核模式下不预发试用句数（package_code 留空=未开通）
-		perms := &tenant.Perms{MaxDailyChars: 20000}
+		// 权限：试用每日上限 2 万字符 + 2 万 token（D4 token 口径优先）；审核模式下不预发
+		perms := &tenant.Perms{MaxDailyChars: 20000, MaxDailyTokens: 20000}
 		if !reviewMode {
 			perms.SentenceBalance = trialSentences
 			perms.PackageCode = "trial"
@@ -236,9 +236,6 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		_ = s.Store.EnsureDefaultPackages(inviteTenantID)
 		// 行业包单轨制：仅记录注册所选行业编码，内容从共享宿主（租户1）按行业载入，不再建空壳包
 		_ = s.Ten.SetIndustry(inviteTenantID, industryPkg.Code)
-		// 发放试用余额：确保有余额账户记录后充值 trial_tokens（审核模式下暂不充值）
-		// ★ 新租户默认分配一个开放 API Key（translate 权限；响应一次性返回明文）
-		defaultKey = s.issueDefaultAPIKey(inviteTenantID, "默认 Key")
 		_ = s.Store.EnsureBalance(inviteTenantID)
 		if trialTokens > 0 && !reviewMode {
 			if gerr := s.Store.CreateQuotaGrant(inviteTenantID, "trial", trialTokens, time.Now().Add(time.Duration(trialDays)*24*time.Hour), "register", 0); gerr != nil {
@@ -277,6 +274,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		_ = s.Store.SetUserEmail(nu.ID, inviteTenantID, strings.TrimSpace(req.Email))
 		nu.Email = strings.TrimSpace(req.Email)
 	}
+	// ★ 新租户默认 API Key（2026-08-26 冒烟修复）：移到建号之后签发并强绑定创建人——
+	//   原「先发 Key 后建号」产生 user_id=0 的孤儿 Key，被 authenticateAPIKey
+	//   「Key 必须归属用户」闸门拦截，新注册租户的 Key 要重启服务（backfill）后才生效。
+	if inviteTenantID > 0 && req.Invite == "" {
+		defaultKey = s.issueDefaultAPIKeyFor(inviteTenantID, nu.ID, "默认 Key")
+	}
 	// ★ 邀请裂变首绑（白皮书 §5）：携带个人邀请码注册→写入 referred_by（首绑闸门），
 	//   绑定成功即给邀请人叠加体验奖励：+invite_reward_tokens、时长 +invite_extend_days（与既有体验到期取大后叠加，按对去重）
 	if strings.TrimSpace(req.Ref) != "" {
@@ -295,6 +298,20 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			}
 			_ = s.Store.GrantTrialStack(inviterUID, inviterTID, nu.ID, refTokens, refDays)
 			s.Store.LogAudit(inviteTenantID, nu.ID, "referral_bind", "user", fmt.Sprintf("受邀绑定邀请人 uid=%d", inviterUID))
+			// ★ oneid 级防刷观测（白皮书 §5.4）：同邀请人单日新增奖励 ≥5 笔触发人工复核告警
+			if n := s.Store.CountInviterRewardsToday(inviterUID); n >= 5 {
+				already := false
+				for _, a := range func() []*store.Alert { ls, _ := s.Store.ListAlerts(inviterTID, "open", 50); return ls }() {
+					if a.Kind == "referral_burst" {
+						already = true
+						break
+					}
+				}
+				if !already {
+					s.Store.CreateAlert(inviterTID, "warning", "referral_burst",
+						fmt.Sprintf("邀请人 uid=%d 今日新增被邀奖励已达 %d 次（≥5），请人工复核是否真人邀请", inviterUID, n))
+				}
+			}
 		}
 	}
 	// 清空密码哈希后返回

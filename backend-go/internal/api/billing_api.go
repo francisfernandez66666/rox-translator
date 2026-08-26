@@ -50,11 +50,17 @@ func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 	// 并发名额释放函数：翻译流程结束后必须调用归还
 	release := func() { s.Bill.Release(tid) }
 
-	// 每日字符上限校验：读取租户 permissions 中的 max_daily_chars（0=不限）
+	// ★ 日限额口径（评审整改 D4）：max_daily_tokens（token 成本口径）优先；
+	//   未配置时回退旧 max_daily_chars 字符口径（存量租户兼容）
 	maxDaily := int64(0)
 	if s.Ten != nil {
 		if t, err := s.Ten.GetByID(tid); err == nil {
-			maxDaily = tenant.ParsePerms(t.Permissions).MaxDailyChars
+			perms := tenant.ParsePerms(t.Permissions)
+			if perms.MaxDailyTokens > 0 {
+				maxDaily = perms.MaxDailyTokens
+			} else {
+				maxDaily = perms.MaxDailyChars
+			}
 		}
 	}
 	if err := s.Bill.CheckDailyQuota(tid, maxDaily); err != nil {
@@ -102,9 +108,10 @@ func (s *Server) markupMultiplier() float64 {
 // chargeTaskTokens 任务级 Token 实费计费：聚合本次请求全链路（初翻/校对/Judge/文化闸门/
 // embedding）的真实 token 用量 × 均摊系数，一次性写入 usage_ledger 并扣减余额。
 // 强制计费关闭时仅留痕计量。失败不阻断业务。
-// 参数 r: HTTP 请求（取 ctx 收集器与用户）；tid: 生效租户；taskType: 任务类型。
+// 参数 r: HTTP 请求（取 ctx 收集器与用户）；tid: 生效租户；taskType: 任务类型；
+// bizKind: text|file（业务形态）；bizMode: fast|pro（翻译模式，2026-08-26 看板标注需求）。
 // 返回: 本次计费的 token 数（未启用收集器时为 0）。
-func (s *Server) chargeTaskTokens(r *http.Request, tid int64, taskType string) int64 {
+func (s *Server) chargeTaskTokens(r *http.Request, tid int64, taskType, bizKind, bizMode string) int64 {
 	if s.Engine == nil || s.Bill == nil || s.Store == nil {
 		return 0
 	}
@@ -123,22 +130,24 @@ func (s *Server) chargeTaskTokens(r *http.Request, tid int64, taskType string) i
 	}
 	provider, model := s.usageModel(r, tid)
 	s.metrics.addUsage(billed)
-	_ = s.Bill.MeterDeferred(tid, userID, taskType, provider, model, billed)
+	_ = s.Bill.MeterDeferred(tid, userID, taskType, provider, model, billed, bizKind, bizMode)
 	return billed
 }
 
-// balancePayload 组装余额出参（token 主单位 + ≈句数换算）。
-// 返回: tokens=当前余额；approx=按换算率折算的句数（向下取整）。
-func (s *Server) balancePayload(tid int64) (tokens, approx int64) {
-	b, err := s.Store.GetBalance(tid)
-	if err != nil || b == nil {
-		return 0, 0
+// balancePayload 组装余额出参（★ 双桶口径，评审整改 A1）：
+// 返回 grants=未过期台账合计；permanent=永久余额；total=可用总额；approx=按换算率折算句数。
+// 《TOKEN双桶方案》§七承诺的 sub_grants_left/permanent_balance 出参由此落地。
+func (s *Server) balancePayload(tid int64) (grants, permanent, total, approx int64) {
+	grants, permanent, err := s.Store.TenantRemainTotal(tid)
+	if err != nil {
+		return 0, 0, 0, 0
 	}
 	rate := s.Store.TokenSentenceRate()
 	if rate <= 0 {
 		rate = 500
 	}
-	return b.Balance, b.Balance / rate
+	total = grants + permanent
+	return grants, permanent, total, total / rate
 }
 
 // countSentences 统计文本的源句数（按换行与中英文句末标点切分，空段忽略）。
@@ -174,6 +183,14 @@ func targetLangCount(options map[string]interface{}) int64 {
 	return 1
 }
 
+// optMode 从 ChatRequest options 提取归一化模式（fast|pro，空=pro）。
+func optMode(opts map[string]interface{}) string {
+	if m, ok := opts["mode"].(string); ok {
+		return normalizeTaskMode(m)
+	}
+	return "pro"
+}
+
 // meterUsage 计量一次用量（成功路径调用；失败仅记日志不阻断）。
 // 参数 r: HTTP 请求（提取用户 ID）；tid: 生效租户 ID；taskType: 任务类型；quantity: 用量数量。
 // 无返回；计量失败不阻断主流程。
@@ -191,7 +208,7 @@ func (s *Server) meterUsage(r *http.Request, tid int64, taskType string, quantit
 	// 系统级指标：累计计量 token
 	s.metrics.addUsage(quantity)
 	// 写入计费流水（强制计费模式下会扣余额）；失败仅忽略，由审计兜底
-	_ = s.Bill.MeterDeferred(tid, userID, taskType, provider, model, quantity)
+	_ = s.Bill.MeterDeferred(tid, userID, taskType, provider, model, quantity, "", "")
 }
 
 // usageModel 解析本次请求实际使用的 LLM 供应商与模型（多供应商成本核算）。
@@ -272,6 +289,7 @@ func (s *Server) handleTenantQuota(w http.ResponseWriter, r *http.Request) {
 		"qps":             s.quotaQPS(tid),
 		"concurrent":      s.quotaConcurrent(tid),
 		"max_daily_chars": s.quotaDaily(tid),
+		"max_daily_tokens": s.quotaDailyTokens(tid),
 	})
 }
 
@@ -287,7 +305,8 @@ func (s *Server) handleTenantQuotaSave(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		QPS           int   `json:"qps"`             // 每秒请求数上限
 		Concurrent    int   `json:"concurrent"`      // 并发请求数上限
-		MaxDailyChars int64 `json:"max_daily_chars"` // 每日翻译字符上限（0=不限）
+		MaxDailyChars int64  `json:"max_daily_chars"` // 每日字符上限（0=不限，旧口径）
+		MaxDailyTokens *int64 `json:"max_daily_tokens"` // ★ 每日 token 上限（D4；nil=不修改）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -304,8 +323,8 @@ func (s *Server) handleTenantQuotaSave(w http.ResponseWriter, r *http.Request) {
 		if t, err := s.Ten.GetByID(tid); err == nil {
 			perms := tenant.ParsePerms(t.Permissions)
 			perms.MaxDailyChars = req.MaxDailyChars
-			if req.MaxDailyChars == 0 {
-				perms.MaxDailyChars = 0
+			if req.MaxDailyTokens != nil {
+				perms.MaxDailyTokens = max(0, *req.MaxDailyTokens) // D4：token 口径优先于字符口径
 			}
 			b, _ := json.Marshal(perms)
 			_ = s.Ten.Update(t.ID, t.Name, t.ExpiresAt, string(b))
@@ -482,3 +501,15 @@ func (s *Server) handleUsageCost(w http.ResponseWriter, r *http.Request) {
 
 // 编译期引用占位：保留 strings 导入（模板片段按构建标签条件编译时使用）。
 var _ = strings.TrimSpace
+
+// quotaDailyTokens 租户每日 token 上限（permissions.max_daily_tokens，0=未配置）。
+func (s *Server) quotaDailyTokens(tid int64) int64 {
+	if s.Ten == nil {
+		return 0
+	}
+	t, err := s.Ten.GetByID(tid)
+	if err != nil {
+		return 0
+	}
+	return tenant.ParsePerms(t.Permissions).MaxDailyTokens
+}

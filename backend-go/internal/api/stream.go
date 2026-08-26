@@ -19,13 +19,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"translator/internal/auth"
 	"translator/internal/engine"
+	"translator/internal/llm"
 )
 
 // ============ SSE 工具 ============
@@ -106,8 +109,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 调用引擎处理文本翻译（流式回调进度）
-	// ★ 注入用户组织（2026-08-26 KB继承链）：部门包按「本部门→祖先链」可见性命中
-	res := s.Engine.HandleText(s.userOrgCtx(r), req.Message, req.Options, prog)
+	// ★ 注入用户组织（2026-08-26 KB继承链）+ 交互标记（评审整改 R6：可抢占 LLM 保留槽）
+	res := s.Engine.HandleText(llm.WithInteractive(s.userOrgCtx(r)), req.Message, req.Options, prog)
 	// 推送完成进度
 	fmt.Fprint(w, sseEvent("progress", map[string]interface{}{"step": "完成", "done": 1, "total": 1, "percent": 100}))
 	if flusher != nil {
@@ -119,7 +122,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		s.metrics.countTranslate("text", false)
 	} else {
 		// ★ Token 实费计费：聚合本次全链路真实 token × 均摊系数（强制计费时扣余额）
-		s.chargeTaskTokens(r, tid, "translate")
+		s.chargeTaskTokens(r, tid, "translate", "text", optMode(req.Options))
 		s.metrics.countTranslate("text", true)
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
 		// Webhook：翻译完成事件回调租户配置的 URL（异步投递，不阻塞 SSE 返回）
@@ -244,8 +247,14 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 		s.metrics.countTranslate("file", false)
 	} else {
 		// ★ Token 实费计费：聚合本次全链路真实 token × 均摊系数（强制计费时扣余额）
-		s.chargeTaskTokens(r, tid, "translate")
+		s.chargeTaskTokens(r, tid, "translate", "file", normalizeTaskMode(r.FormValue("mode")))
 		s.metrics.countTranslate("file", true)
+		// ★ 归属登记（评审整改 C1）：产物可被 /api/download 按 tenant/user 校验
+		if u := s.authUser(r); u != nil && s.Store != nil {
+			for _, fp := range res.Files {
+				s.Store.RegisterArtifact(fp, tid, u.ID, 0)
+			}
+		}
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
 		// Webhook：翻译完成事件回调（异步投递）
 		s.dispatchTranslateWebhook(tid, "file", header.Filename, res)
@@ -271,8 +280,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 调用引擎处理文本翻译（非流式，无进度回调）
-	// ★ 注入用户组织（2026-08-26 KB继承链）
-	res := s.Engine.HandleText(s.userOrgCtx(r), req.Message, req.Options, nil)
+	// ★ 注入用户组织（2026-08-26 KB继承链）+ 交互标记（评审整改 R6）
+	res := s.Engine.HandleText(llm.WithInteractive(s.userOrgCtx(r)), req.Message, req.Options, nil)
 	if res.Error != "" {
 		// 失败：填充错误回复并计入失败指标
 		res.Skill = "translation"
@@ -280,7 +289,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.metrics.countTranslate("text", false)
 	} else {
 		// ★ Token 实费计费：聚合本次全链路真实 token × 均摊系数（强制计费时扣余额）
-		s.chargeTaskTokens(r, tid, "translate")
+		s.chargeTaskTokens(r, tid, "translate", "text", optMode(req.Options))
 		s.metrics.countTranslate("text", true)
 		// Webhook：翻译完成事件回调（异步投递）
 		s.dispatchTranslateWebhook(tid, "text", req.Message, res)
@@ -352,8 +361,14 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	os.Remove(savePath)
 	if res.Error == "" {
 		// ★ Token 实费计费：聚合本次全链路真实 token × 均摊系数（强制计费时扣余额）
-		s.chargeTaskTokens(r, tid, "translate")
+		s.chargeTaskTokens(r, tid, "translate", "file", normalizeTaskMode(r.FormValue("mode")))
 		s.metrics.countTranslate("file", true)
+		// ★ 归属登记（评审整改 C1）
+		if u := s.authUser(r); u != nil && s.Store != nil {
+			for _, fp := range res.Files {
+				s.Store.RegisterArtifact(fp, tid, u.ID, 0)
+			}
+		}
 		// Webhook：翻译完成事件回调（异步投递）
 		s.dispatchTranslateWebhook(tid, "file", header.Filename, res)
 	} else {
@@ -400,6 +415,22 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filePath = safePath
+	// ③ 归属校验（评审整改 C1 Phase1）：登记行命中时按「同租户 + 本人（或租管以上）」判定；
+	//    未登记的历史产物灰度放行并留告警日志——一个产物保留周期（默认14天）后收紧为 404。
+	if s.Store != nil {
+		if art, aerr := s.Store.GetArtifactByPath(filePath); aerr == nil && art != nil {
+			if !auth.IsSuperAdmin(u) {
+				allowed := art.TenantID == u.TenantID &&
+					(art.UserID == u.ID || auth.IsTenantAdmin(u))
+				if !allowed {
+					writeJSON(w, 404, map[string]string{"error": "文件不存在"})
+					return
+				}
+			}
+		} else {
+			log.Printf("[download] 未登记产物放行（Phase1 过渡） path=%s uid=%d", filePath, u.ID)
+		}
+	}
 	// 打开文件并校验存在性
 	f, err := os.Open(filePath)
 	if err != nil {

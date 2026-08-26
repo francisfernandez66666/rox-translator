@@ -74,3 +74,54 @@ func TestReferralFlow(t *testing.T) {
 		t.Fatalf("非邀请来源应返回 nil，实际 %v", err)
 	}
 }
+
+// TestReferralOneidDualUnique 奖励双唯一回归（2026-08-26 修正定稿）：
+// 账户层 id 主键不可变、email 同一时刻唯一可换绑；奖励层 invitee_uid 与
+// invitee_email 快照任一历史碰撞即永久拒绝——换绑流转无法二次领取。
+func TestReferralOneidDualUnique(t *testing.T) {
+	st := newConcurrentTestStore(t)
+	x, err := st.CreateUser(1, "oneid_inv_x", "h", "X", "tenant_admin", 0, 0)
+	if err != nil {
+		t.Fatalf("建邀请人X: %v", err)
+	}
+	y, _ := st.CreateUser(1, "oneid_inv_y", "h", "Y", "user", 0, 0)
+	a, _ := st.CreateUser(1, "oneid_inv_a", "h", "A", "user", 0, 0)
+	b, _ := st.CreateUser(1, "oneid_inv_b", "h", "B", "user", 0, 0)
+	if err := st.SetUserEmail(a.ID, 1, "swap@t.com"); err != nil {
+		t.Fatalf("绑定邮箱A: %v", err)
+	}
+	if err := st.SetUserEmail(b.ID, 1, "b@t.com"); err != nil {
+		t.Fatalf("绑定邮箱B: %v", err)
+	}
+	codeX, codeY := st.EnsureRefCode(x.ID), st.EnsureRefCode(y.ID)
+
+	// ① A 被 X 邀请：首绑 + 体验叠加正常发放
+	if _, _, ok := st.BindReferral(a.ID, codeX); !ok {
+		t.Fatal("A 首绑应成功")
+	}
+	if err := st.GrantTrialStack(x.ID, 1, a.ID, 300000, 14); err != nil {
+		t.Fatalf("首次体验叠加: %v", err)
+	}
+	first := st.SumActiveGrants(1)
+	if first != 300000 {
+		t.Fatalf("台账应为 300000，实际 %d", first)
+	}
+
+	// ② 邮箱流转模拟：A 解绑 swap@t.com → B 接手该邮箱；B 被 Y 邀请
+	//    绑定本身可成立（绑定不等于奖励），但奖励因邮箱快照撞库被永久拒绝
+	if err := st.SetUserEmail(a.ID, 1, ""); err != nil {
+		t.Fatalf("A 解绑: %v", err)
+	}
+	if err := st.SetUserEmail(b.ID, 1, "swap@t.com"); err != nil {
+		t.Fatalf("B 接手邮箱: %v", err)
+	}
+	if _, _, ok := st.BindReferral(b.ID, codeY); !ok {
+		t.Fatal("B 首绑应成功（绑定与奖励分离）")
+	}
+	if err := st.GrantTrialStack(y.ID, 1, b.ID, 300000, 14); err != nil {
+		t.Fatalf("撞库调用不应报错（静默跳过）: %v", err)
+	}
+	if g := st.SumActiveGrants(1); g != first {
+		t.Fatalf("邮箱撞库必须拒绝发放: %d → %d", first, g)
+	}
+}

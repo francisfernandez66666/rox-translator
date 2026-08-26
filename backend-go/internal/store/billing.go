@@ -42,11 +42,13 @@ type UsageLedger struct {
 	TenantID  int64  `json:"tenant_id"`  // 所属租户 ID
 	UserID    int64  `json:"user_id"`    // 发起用量的用户 ID
 	TaskType  string `json:"task_type"`  // 任务类型：translate/review/evals/gate
-	Provider  string `json:"provider"`   // LLM 供应商（成本核算维度）
+	Provider  string `json:"provider"`   // LLM 供应商（多供应商成本核算维度）
 	Model     string `json:"model"`      // 使用的模型名
 	Quantity  int64  `json:"quantity"`   // 用量单位数（字符数或句数）
 	UnitPrice int64  `json:"unit_price"` // 每单位价格（token）
 	Cost      int64  `json:"cost"`       // 本笔总费用（扣减 token 数）
+	BizKind   string `json:"biz_kind"`   // 业务形态：text=文本翻译 / file=文件翻译（空=历史数据）
+	BizMode   string `json:"biz_mode"`   // 翻译模式：fast=快速 / pro=专业校对（空=历史数据）
 	CreatedAt string `json:"created_at"` // 用量发生时间（RFC3339 字符串）
 }
 
@@ -167,9 +169,11 @@ func (s *Store) Deduct(tid int64, tokens int64) error {
 // ============ 用量 ============
 
 // RecordUsage 计量一条用量（并扣减余额）。provider/model 用于多供应商成本核算。
+// bizKind=text|file（业务形态）；bizMode=fast|pro（翻译模式）——2026-08-26 用量看板标注需求新增，
+// 历史数据两列为空串，前端按「—」展示。
 // 参数：tid/userID=租户与用户，taskType=任务类型，provider/model=供应商与模型，quantity=用量数。
 // 返回：新写入 usage_ledger 记录 ID；余额不足时返回 ErrInsufficientBalance。
-func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model string, quantity int64) (int64, error) {
+func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model string, quantity int64, bizKind, bizMode string) (int64, error) {
 	price, mult := s.unitPrice(taskType, provider)
 	cost := int64(float64(quantity*price) * mult) // 费用 = 用量 × 单价 × 语种倍率
 	if cost < 0 {
@@ -179,8 +183,8 @@ func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model string,
 		return 0, err // 先扣余额，失败则不再落账
 	}
 	res, err := s.db.Exec(
-		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-		tid, userID, taskType, provider, model, quantity, price, cost, time.Now().Format(time.RFC3339))
+		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+		tid, userID, taskType, provider, model, quantity, price, cost, bizKind, bizMode, time.Now().Format(time.RFC3339))
 	if err != nil {
 		return 0, err
 	}
@@ -189,15 +193,15 @@ func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model string,
 
 // LogUsage 只记录用量、不扣余额（billing 未强制计费时用于留痕计量）。
 // 参数：同 RecordUsage；仅返回错误。
-func (s *Store) LogUsage(tid, userID int64, taskType, provider, model string, quantity int64) error {
+func (s *Store) LogUsage(tid, userID int64, taskType, provider, model string, quantity int64, bizKind, bizMode string) error {
 	price, mult := s.unitPrice(taskType, provider)
 	cost := int64(float64(quantity*price) * mult) // 费用 = 用量 × 单价 × 语种倍率
 	if cost < 0 {
 		cost = 0 // 兜底：费用不可能为负
 	}
 	_, err := s.db.Exec(
-		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-		tid, userID, taskType, provider, model, quantity, price, cost, time.Now().Format(time.RFC3339))
+		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+		tid, userID, taskType, provider, model, quantity, price, cost, bizKind, bizMode, time.Now().Format(time.RFC3339))
 	return err
 }
 
@@ -328,7 +332,7 @@ func (s *Store) UsageLedgerList(tid int64, limit, offset int) ([]*UsageLedger, e
 		limit = 50 // 非法 limit 收敛到 50
 	}
 	rows, err := s.db.Query(
-		"SELECT id, tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, created_at FROM usage_ledger WHERE tenant_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
+		"SELECT id, tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, COALESCE(biz_kind,''), COALESCE(biz_mode,''), created_at FROM usage_ledger WHERE tenant_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
 		tid, limit, offset)
 	if err != nil {
 		return nil, err
@@ -337,7 +341,7 @@ func (s *Store) UsageLedgerList(tid int64, limit, offset int) ([]*UsageLedger, e
 	var out []*UsageLedger
 	for rows.Next() {
 		var u UsageLedger
-		if err := rows.Scan(&u.ID, &u.TenantID, &u.UserID, &u.TaskType, &u.Provider, &u.Model, &u.Quantity, &u.UnitPrice, &u.Cost, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.TenantID, &u.UserID, &u.TaskType, &u.Provider, &u.Model, &u.Quantity, &u.UnitPrice, &u.Cost, &u.BizKind, &u.BizMode, &u.CreatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &u)
@@ -526,6 +530,35 @@ func scanOrders(rows *sql.Rows, err error) ([]*Order, error) {
 	return out, nil
 }
 
+// PriceFenPerToken 充值定价换算（分/token）：system_config price_fen_per_token。
+// 默认 10 = 现网实际执行口径（回调核对/payments 流水历史均按 tokens×10 分），
+// 面板可调；下单回填、回调金额核对、支付流水的单一事实源（评审整改 B1）。
+func (s *Store) PriceFenPerToken() int64 {
+	if v, _ := s.GetConfig("price_fen_per_token"); v != "" {
+		if n, e := strconv.ParseInt(v, 10, 64); e == nil && n > 0 {
+			return n
+		}
+	}
+	return 10
+}
+
+// UpdateOrderMoney 回填订单应收金额（元）——下单时按定价换算落库，
+// 作为回调核对、payments 流水与发票开具的统一取数来源（评审整改 B1）。
+func (s *Store) UpdateOrderMoney(orderNo string, money float64) error {
+	_, err := s.db.Exec("UPDATE orders SET amount_money=? WHERE order_no=?", money, orderNo)
+	return err
+}
+
+// orderMoneyBackfill 存量 pending 充值单应收回填（幂等，Store.New 迁移链调用，评审整改 B1）：
+// 历史在线充值单 amount_money 恒 0，导致回调核对兜底与开票金额失真；
+// 仅补 pending（paid 单以已发生的流水为准，不改历史）。
+func (s *Store) orderMoneyBackfill() {
+	rate := s.PriceFenPerToken()
+	s.db.Exec(`UPDATE orders SET amount_money=ROUND(amount_tokens * ? / 100.0, 2)
+		WHERE status='pending' AND package_id=0 AND COALESCE(amount_money,0)=0 AND amount_tokens>0`,
+		float64(rate))
+}
+
 // MarkOrderPaid 订单支付确认（线下转账 admin 手动确认 / 静态码人工确认）：置 paid、记支付流水并发放权益。
 // 参数：orderID=订单主键 ID，tid=租户 ID；返回错误。
 //
@@ -548,15 +581,21 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 	var tokens int64
 	var pkgID int64
 	var createdBy int64
-	err = s.db.QueryRow("SELECT amount_tokens, package_id, COALESCE(created_by,0) FROM orders WHERE id=? AND tenant_id=?", orderID, tid).
-		Scan(&tokens, &pkgID, &createdBy)
+	var money float64
+	err = s.db.QueryRow("SELECT amount_tokens, package_id, COALESCE(created_by,0), COALESCE(amount_money,0) FROM orders WHERE id=? AND tenant_id=?", orderID, tid).
+		Scan(&tokens, &pkgID, &createdBy, &money)
 	if err != nil {
 		return err
 	}
-	// 写入支付流水（payments 表；★ amount_money 记真实应收分=tokens×10，修正对账原料失真）
+	// 写入支付流水（payments 表；★ amount_money 记真实应收分——充值单按订单落库金额，
+	// 历史未回填单兜底 tokens×定价；套餐单记真实售价（评审整改 B2，修复套餐流水恒 0 失真））
+	payFen := int64(money*100 + 0.5)
+	if payFen <= 0 {
+		payFen = tokens * s.PriceFenPerToken()
+	}
 	if _, err := s.db.Exec(
 		"INSERT INTO payments (order_id, tenant_id, amount_tokens, amount_money, status, created_at) VALUES (?,?,?,?, 'paid', ?)",
-		orderID, tid, tokens, tokens*10, time.Now().Format(time.RFC3339)); err != nil {
+		orderID, tid, tokens, payFen, time.Now().Format(time.RFC3339)); err != nil {
 		return err
 	}
 	// 商业包订单（订阅付费/增量包）：按包类型分流发放（白皮书 §4.1）
@@ -668,44 +707,90 @@ func (s *Store) MarkOrderPaidByOrderNo(orderNo string) error {
 	return s.MarkOrderPaid(o.ID, o.TenantID)
 }
 
-// RefundOrder 退款：订单置 refunded 并从租户余额扣除等额 token。
-// 参数：orderID=订单主键 ID，tid=租户 ID；余额不足时返回 ErrInsufficientBalance。
+// RefundOrder 退款：订单置 refunded 并按订单类型回收等额权益。
+// 参数：orderID=订单主键 ID，tid=租户 ID；余额不足以扣回时返回 ErrInsufficientBalance。
 //
-// ★ 原子退款（2026-08-26 P0-7 止血）：整体包在 BEGIN IMMEDIATE 事务内——
+// ★ 权益全额回收（2026-08-26 评审整改 B3）：此前仅扣回 amount_tokens，而套餐/增量单
 //
-//	① 条件更新扣回余额（balance>=? 守卫，不足即整体失败）；
-//	② 订单置 refunded（AND status='paid' 条件 + RowsAffected 判定）。
-//	并发双退款只有一个能成功；余额不足以扣回时订单保持 paid（不出现「退了款单还在」或反向）。
-//	注：套餐类订单的台账/订阅身份回收属后续《商业化闭环方案》范围，本函数维持仅退 amount_tokens。
+//	该字段恒 0——出现「退了钱、额度照用」。现统一反推应扣 token：
+//	  ① 套餐单(package_id>0)：按「包内句数×换算率」反推；
+//	    paid 订阅 → 作废本订单发放且仍有剩余的 plan 台账行（不占永久桶）；
+//	    increment → 从永久余额守卫式扣回；
+//	  ② 纯充值单 → 维持原 amount_tokens 永久桶扣回。
+//	商业规则（决策人确认默认）：退款=全额退款+权益全额作废，已消耗部分不追讨差额。
+//	订阅身份（PackageCode）清理由 API 层在退款成功后执行（tenants 归属 tenant 包）。
 func (s *Store) RefundOrder(orderID, tid int64) error {
-	// 开启写事务（DSN _txlock=immediate ⇒ BEGIN IMMEDIATE，事务内自洽）
-	tx, err := s.db.Begin()
+	tx, err := s.db.Begin() // DSN _txlock=immediate ⇒ BEGIN IMMEDIATE
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	// 读取待退 token 数（仅已支付订单）
-	var tokens int64
-	if err := tx.QueryRow("SELECT amount_tokens FROM orders WHERE id=? AND tenant_id=? AND status='paid'", orderID, tid).Scan(&tokens); err != nil {
+	// 读取订单（仅已支付可退）：package_id / amount_tokens
+	var pkgID, tokens int64
+	if err := tx.QueryRow(
+		"SELECT package_id, amount_tokens FROM orders WHERE id=? AND tenant_id=? AND status='paid'",
+		orderID, tid).Scan(&pkgID, &tokens); err != nil {
 		return err
 	}
-	// 第一步：守卫式扣回余额（影响行数为 0 = 余额不足 → 回滚报错）
-	res, err := tx.Exec(
-		"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
-		tokens, time.Now().Format(time.RFC3339), tid, tokens)
-	if err != nil {
-		return err
+	// 反推应扣 token 与包类型
+	clawTokens := tokens
+	pkgPaid := false
+	if pkgID > 0 {
+		var ptype string
+		var sentences int64
+		if err := tx.QueryRow("SELECT ptype, sentences FROM packages WHERE id=?", pkgID).Scan(&ptype, &sentences); err != nil {
+			return err
+		}
+		pkgPaid = ptype == "paid"
+		rate := s.TokenSentenceRate()
+		if rate <= 0 {
+			rate = 500
+		}
+		if sentences > 0 {
+			clawTokens = sentences * rate // 套餐单 amount_tokens 恒 0，按句数折算
+		}
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrInsufficientBalance
+	// paid 订阅：作废本订单发放且仍有剩余的 plan 台账行（先记回收量供审计口径）
+	revokedGrants := int64(0)
+	if pkgPaid {
+		if err := tx.QueryRow(
+			"SELECT COALESCE(SUM(left),0) FROM quota_grants WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND left>0",
+			tid, orderID).Scan(&revokedGrants); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(
+			"UPDATE quota_grants SET left=0 WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND left>0",
+			tid, orderID); err != nil {
+			return err
+		}
 	}
-	// 第二步：条件置 refunded（并发下第二个请求此处影响 0 行 → 整体回滚，不会双扣）
+	// 非订阅类（纯充值/increment）：从永久余额守卫式扣回（影响 0 行 = 余额不足 → 整体失败）
+	if !pkgPaid && clawTokens > 0 {
+		res, err := tx.Exec(
+			"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
+			clawTokens, time.Now().Format(time.RFC3339), tid, clawTokens)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrInsufficientBalance
+		}
+	}
+	permClaw := clawTokens
+	if pkgPaid {
+		permClaw = 0 // 订阅退款只作废台账，不动永久桶
+	}
+	// 条件置 refunded（并发双退款只有一个能成功 → 整体回滚，不会双扣）
 	res2, err := tx.Exec("UPDATE orders SET status='refunded' WHERE id=? AND tenant_id=? AND status='paid'", orderID, tid)
 	if err != nil {
 		return err
 	}
 	if n, _ := res2.RowsAffected(); n == 0 {
 		return &errTxt{"订单不存在或已退款"}
+	}
+	if revokedGrants > 0 || permClaw > 0 {
+		s.CreateAlert(tid, "info", "refund_revoke",
+			fmt.Sprintf("订单 %d 退款完成：作废订阅台账 %d token，扣回永久余额 %d token", orderID, revokedGrants, permClaw))
 	}
 	return tx.Commit()
 }
@@ -830,6 +915,7 @@ func (s *Store) EnsureBillingDefaults() {
 		{"invite_reward_tokens", "300000"},       // 每邀 1 人·邀请者体验增量
 		{"invite_extend_days", "14"},             // 每邀 1 人·邀请者时长叠加天数
 		{"inviter_paid_reward_tokens", "500000"}, // 受邀者首笔付费套餐→邀请者永久 token
+		{"price_fen_per_token", "10"},            // ★ 充值定价（分/token，评审整改 B1 单一事实源）
 	}
 	for _, kv := range defaults {
 		s.db.Exec("INSERT INTO system_config (key,value) SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM system_config WHERE key=?)", kv[0], kv[1], kv[0])

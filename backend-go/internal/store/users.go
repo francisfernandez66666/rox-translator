@@ -53,6 +53,23 @@ func (s *Store) SetUserEmail(id, tid int64, email string) error {
 	return s.iam.SetUserEmail(id, tid, email)
 }
 
+// UserDeactivating 注销宽限期状态（当日仍可用，次日等效停用）。
+const UserDeactivating = iam.UserDeactivating
+
+// DeactivateSelf 自助注销（2026-08-26 需求）：
+// 仅普通用户（role=user）且当前为 active 可发起；置 deactivating 并记录请求日期。
+// 宽限语义：当日仍可登录使用，次日起按 disabled 处理；后台数据保留不删除。
+// 返回错误：非普通用户 / 状态不允许。
+func (s *Store) DeactivateSelf(id, tid int64) error {
+	return s.iam.DeactivateSelf(id, tid)
+}
+
+// FinalizeDeactivation 宽限期届满落停用态（幂等，登录路径惰性调用，best-effort）。
+func (s *Store) FinalizeDeactivation(id, tid int64) {
+	s.iam.FinalizeDeactivation(id, tid)
+}
+
+
 // GetSuperAdminByUsername 委托 iam.Store
 func (s *Store) GetSuperAdminByUsername(username string) (*User, error) {
 	return s.iam.GetSuperAdminByUsername(username)
@@ -126,7 +143,7 @@ func (s *Store) ListUsersByRole(tid int64, role string) []*User {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName,
-			&u.Role, &u.Status, &u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			&u.Role, &u.Status, &u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt); err != nil {
 			continue
 		}
 		out = append(out, &u)

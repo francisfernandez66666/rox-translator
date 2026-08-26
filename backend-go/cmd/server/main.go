@@ -42,6 +42,20 @@ func main() {
 	flag.Parse()
 
 	cfg := config.Default()
+	// ★ 生产密钥强校验（评审整改 D2）：REQUIRE_PROD_SECRETS=1 时（systemd drop-in 显式开启），
+	//   三把关键凭证任一缺失即拒绝启动——杜绝「随机兜底密钥」静默上线
+	//   （JWT 默认值可伪造 token；ADMIN_TOKEN 随机则支付回调头注入永远对不上）。
+	if os.Getenv("REQUIRE_PROD_SECRETS") == "1" {
+		var missing []string
+		for _, k := range []string{"JWT_SECRET", "ADMIN_INIT_PASSWORD", "ADMIN_TOKEN"} {
+			if os.Getenv(k) == "" {
+				missing = append(missing, k)
+			}
+		}
+		if len(missing) > 0 {
+			log.Fatalf("[init] 生产密钥强校验已开启（REQUIRE_PROD_SECRETS=1），缺少环境变量: %s；请参照部署指南 §六 配置后重启", strings.Join(missing, ", "))
+		}
+	}
 	// ★ 加载可执行目录 / 项目根的 config.json（model 字段）
 	exeDir, _ := filepath.Abs(filepath.Dir(os.Args[0]))
 	cfg.LoadConfigFromJSON(exeDir)
@@ -145,8 +159,19 @@ func main() {
 		if v, err := st.GetConfig("model_routes"); err == nil && v != "" {
 			var routes []config.ProviderConfig
 			if json.Unmarshal([]byte(v), &routes) == nil && len(routes) > 0 {
-				cfg.ModelRoutes = routes // 覆盖默认路由策略
-				log.Printf("模型路由策略已加载: %d 条", len(routes))
+				// ★ 库内为 enc:v1: 密文（评审整改 D3）：水合时解密；解密失败的路由打告警跳过
+				alive := make([]config.ProviderConfig, 0, len(routes))
+				for _, rt := range routes {
+					dec := store.DecryptSecret(rt.APIKey)
+					if dec == "" && strings.HasPrefix(rt.APIKey, store.SecretEncPrefix) {
+						log.Printf("[init] 路由 %s(%s) 密钥解密失败（疑 JWT_SECRET 轮换未同步），该路由停用", rt.Provider, rt.Model)
+						continue
+					}
+					rt.APIKey = dec
+					alive = append(alive, rt)
+				}
+				cfg.ModelRoutes = alive
+				log.Printf("模型路由策略已加载: %d 条", len(alive))
 			}
 		}
 		// ★ 启动水合：全局 Key 为占位符且主路由带真实密钥时回填，

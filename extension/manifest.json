@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "选中文字即翻：调用企业自建翻译助手开放 API，术语与翻译记忆全量生效。",
   "permissions": ["storage"],
-  "host_permissions": [],
+  "host_permissions": ["http://*/*", "https://*/*"],
   "action": {
     "default_popup": "popup.html",
     "default_title": "翻译助手设置"

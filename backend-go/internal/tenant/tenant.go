@@ -31,7 +31,11 @@ type Tenant struct {
 // Perms 租户权限（Permissions JSON 的解码结构）
 type Perms struct {
 	Langs         []string `json:"langs,omitempty"`           // 允许翻译的语言代码；空=全部
-	MaxDailyChars int64    `json:"max_daily_chars,omitempty"` // 每日字符上限；0=不限
+	MaxDailyChars int64    `json:"max_daily_chars,omitempty"` // 每日字符上限；0=不限（旧口径，兼容保留）
+	// ★ MaxDailyTokens 每日 token 上限（2026-08-26 评审整改 D4）：
+	//   与 DailyUsage（usage_ledger 成本 token 合计）同口径比较；>0 时优先生效，
+	//   修正旧「字符限额 vs token 计量」的语义错位；0=未配置（gateUsage 回退旧口径）
+	MaxDailyTokens int64 `json:"max_daily_tokens,omitempty"`
 	// 商业包（句数制）字段：
 	SentenceBalance int64  `json:"sentence_balance,omitempty"`   // 剩余翻译句数（源句×目标语言数累计）
 	PackageCode     string `json:"package_code,omitempty"`       // 当前订阅的付费包编码（空=无订阅）
@@ -253,6 +257,10 @@ type PolicyConfig struct {
 	//   nil=旧配置未显式设置（默认开启）/ 0=显式关闭 / 1=显式开启。
 	//   开启时：链内精确零命中可回退到其他部门「愿意共享」的部门包（share_cross_dept=1）。
 	CrossDeptFallback *int `json:"cross_dept_fallback,omitempty"`
+	// ★ 数据回流开关（2026-08-26 评审整改 D7，白皮书 §七.4）：
+	//   nil=默认参与行业记忆共建 / 1=该租户关闭回流——达标候选与导入候选不进入平台审核池，
+	//   私有 TM 与审批直入不受影响。指针三态语义与 CrossDeptFallback 一致。
+	DataFeedbackOptOut *int `json:"data_feedback_opt_out,omitempty"`
 }
 
 // GetPolicyConfig 读取租户策略参数。

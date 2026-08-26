@@ -222,3 +222,9 @@
   display: flex; align-items: center; justify-content: center;
 }
 .pay-done p { color: #2e7d32; font-weight: 600; margin-bottom: 16px; }
+/* ===== 用量看板：形态/模式徽标（2026-08-26 需求） ===== */
+.ad-badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; white-space: nowrap; }
+.ad-badge-text { background: rgba(26,115,232,.12); color: #1557b0; }
+.ad-badge-file { background: rgba(230,81,0,.12); color: #e65100; }
+.ad-badge-fast { background: rgba(2,136,209,.12); color: #0277bd; }
+.ad-badge-pro { background: rgba(106,27,154,.12); color: #6a1b9a; }
