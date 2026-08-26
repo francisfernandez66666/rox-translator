@@ -30,7 +30,12 @@ func (s *Store) ReferralMigrate() {
 	s.db.Exec("ALTER TABLE users ADD COLUMN ref_code TEXT DEFAULT ''")
 	s.db.Exec("ALTER TABLE users ADD COLUMN referred_by INTEGER DEFAULT 0")
 	s.db.Exec("DROP INDEX IF EXISTS idx_users_ref_code")
-	s.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_ref_code ON users(tenant_id, ref_code) WHERE ref_code<>''")
+	// ★ 个人邀请码升级为「全局唯一」：邀请裂变需跨租户解析——被邀人自建新租户时，
+	//   邀请人位于不同租户，原「(tenant_id, ref_code)」租户级唯一会导致跨租户首绑失效
+	//   （BindReferral 按 ref_code 跨租户查找邀请人）。升级前先清空跨租户重复的 ref_code
+	//   （每组保留最早一条 MIN(id)），避免全局唯一索引在既有重复数据上创建失败。
+	s.db.Exec(`UPDATE users SET ref_code='' WHERE ref_code<>'' AND ref_code IN (SELECT ref_code FROM users WHERE ref_code<>'' GROUP BY ref_code HAVING COUNT(*)>1) AND id NOT IN (SELECT MIN(id) FROM users WHERE ref_code<>'' GROUP BY ref_code)`)
+	s.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_ref_code ON users(ref_code) WHERE ref_code<>''")
 	s.db.Exec(`CREATE TABLE IF NOT EXISTS referral_rewards (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		inviter_uid INTEGER, inviter_tid INTEGER,
@@ -61,15 +66,16 @@ func (s *Store) EnsureRefCode(uid int64) string {
 	if code != "" {
 		return code
 	}
-	b := make([]byte, 4)
-	rand.Read(b)
-	code = hex.EncodeToString(b)
-	for {
-		var exists string
-		err := s.db.QueryRow("SELECT ref_code FROM users WHERE ref_code=? AND tenant_id=?", code, tid).Scan(&exists)
-		if err == sql.ErrNoRows {
-			break
-		}
+		b := make([]byte, 4)
+		rand.Read(b)
+		code = hex.EncodeToString(b)
+		for {
+			var exists string
+			// ★ ref_code 全局唯一（邀请裂变需跨租户解析），不再限定 tenant_id
+			err := s.db.QueryRow("SELECT ref_code FROM users WHERE ref_code=?", code).Scan(&exists)
+			if err == sql.ErrNoRows {
+				break
+			}
 		b = make([]byte, 4)
 		rand.Read(b)
 		code = hex.EncodeToString(b)
@@ -83,8 +89,9 @@ func (s *Store) BindReferral(inviteeUID, tenantID int64, refCode string) (invite
 	if refCode == "" || inviteeUID <= 0 || tenantID <= 0 {
 		return 0, 0, false
 	}
-	err := s.db.QueryRow("SELECT id, tenant_id FROM users WHERE ref_code=? AND tenant_id=? AND role IN ('admin','tenant_admin','dept_admin','user')",
-		refCode, tenantID).Scan(&inviterUID, &inviterTID)
+	// ★ 跨租户解析：按 ref_code 全局查找邀请人（被邀人可能位于不同租户）
+	err := s.db.QueryRow("SELECT id, tenant_id FROM users WHERE ref_code=? AND role IN ('admin','tenant_admin','dept_admin','user')",
+		refCode).Scan(&inviterUID, &inviterTID)
 	if err != nil || inviterUID == inviteeUID {
 		return 0, 0, false
 	}

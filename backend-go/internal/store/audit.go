@@ -79,7 +79,7 @@ func (s *Store) ListAuditFilter(tid int64, action, resource string, userID int64
 		query += " AND created_at<=?" // 截止时间上限（补足当日 23:59:59，覆盖整天）
 		args = append(args, to+"T23:59:59Z")
 	}
-	query += " ORDER BY id DESC LIMIT ?"
+	query += " ORDER BY a.id DESC LIMIT ?"
 	args = append(args, limit)
 	rows, err := s.db.Query(query, args...)
 	if err != nil {

@@ -10,7 +10,7 @@ import (
 // 付费永久奖励入「邀请人」租户余额（幂等）→ 记录查询。
 func TestReferralFlow(t *testing.T) {
 	s := newTestStoreWithTenants(t)
-	// 邀请人与被邀人均在租户1（租户域 ref_code 仅同租户内有效）
+	// 邀请人与被邀人均在租户1（ref_code 全局唯一，跨租户裂变亦可解析）
 	u1, err := s.CreateUser(1, "inviter", "x", "邀请人", RoleTenantAdmin, 0, 0)
 	if err != nil {
 		t.Fatalf("创建邀请人失败: %v", err)
