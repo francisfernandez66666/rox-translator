@@ -510,7 +510,7 @@ export function ReferralP() {
   const [trialCount, setTrialCount] = useState(0)
   const [trialTokens, setTrialTokens] = useState(0)
   const [paidTokens, setPaidTokens] = useState(0)
-  const [cfg, setCfg] = useState({ enabled: true, reward_tokens: 300000, paid_tokens: 500000 })
+  const [cfg, setCfg] = useState({ enabled: true, reward_tokens: 300000, paid_tokens: 500000, reward_days: 14, paid_days: 0 })
 
   // 加载邀请数据、二维码 blob、超管运营配置
   useEffect(() => {
@@ -532,7 +532,7 @@ export function ReferralP() {
       if (isSuper) {
         try {
           const c: Any = await referralConfigGet()
-          if (c.success) setCfg({ enabled: !!c.enabled, reward_tokens: c.reward_tokens ?? 300000, paid_tokens: c.paid_reward_tokens ?? 500000 })
+          if (c.success) setCfg({ enabled: !!c.enabled, reward_tokens: c.reward_tokens ?? 300000, paid_tokens: c.paid_reward_tokens ?? 500000, reward_days: c.reward_days ?? 14, paid_days: c.paid_reward_days ?? 0 })
         } catch { /* ignore */ }
       }
     })()
@@ -601,8 +601,18 @@ export function ReferralP() {
               <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgPaidTokens')}</span>
               <Input type="number" value={String(cfg.paid_tokens)} onChange={(v) => setCfg({ ...cfg, paid_tokens: Number(v) || 0 })} style={{ width: 200 }} />
             </div>
+            {/* 注册邀请奖励有效期（天）：控制体验叠加额度的到期时长，后台可调 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+              <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgRewardDays')}</span>
+              <Input type="number" value={String(cfg.reward_days)} onChange={(v) => setCfg({ ...cfg, reward_days: Number(v) || 0 })} style={{ width: 200 }} />
+            </div>
+            {/* 付费邀请奖励有效期（天）：0=永久（默认），>0=限时台账（按最早到期优先扣减） */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+              <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgPaidDays')}</span>
+              <Input type="number" value={String(cfg.paid_days)} onChange={(v) => setCfg({ ...cfg, paid_days: Number(v) || 0 })} style={{ width: 200 }} />
+            </div>
             <Button onClick={async () => {
-              const c: Any = await referralConfigSave({ enabled: cfg.enabled, reward_tokens: Number(cfg.reward_tokens) || 0, paid_reward_tokens: Number(cfg.paid_tokens) || 0 })
+              const c: Any = await referralConfigSave({ enabled: cfg.enabled, reward_tokens: Number(cfg.reward_tokens) || 0, paid_reward_tokens: Number(cfg.paid_tokens) || 0, reward_days: Number(cfg.reward_days) || 0, paid_reward_days: Number(cfg.paid_days) || 0 })
               if (!c.success) window.alert(c.message || '保存失败')
               else window.alert(t('referral.cfgSaved'))
             }}>{t('referral.cfgSave')}</Button>

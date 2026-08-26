@@ -30,7 +30,9 @@ export const zh: Record<string, string> = {
   'referral.cfgTitle': '⚙️ 运营参数（仅超级管理员）',
   'referral.cfgEnabled': '启用邀请裂变',
   'referral.cfgRewardTokens': '受邀注册奖励 token（邀请人获得）',
-  'referral.cfgPaidTokens': '首笔付费永久奖励 token',
+  'referral.cfgPaidTokens': '首笔付费奖励 token（0 天=永久）',
+  'referral.cfgRewardDays': '注册邀请奖励有效期（天）',
+  'referral.cfgPaidDays': '付费邀请奖励有效期（天，0=永久）',
   'referral.cfgSave': '保存参数',
   'referral.cfgSaved': '✅ 邀请参数已更新，立即生效',
 }
@@ -67,7 +69,9 @@ export const en: Record<string, string> = {
   'referral.cfgTitle': '⚙️ Settings (super admin only)',
   'referral.cfgEnabled': 'Enable referral program',
   'referral.cfgRewardTokens': 'Signup reward tokens (to inviter)',
-  'referral.cfgPaidTokens': 'First-paid permanent reward tokens',
+  'referral.cfgPaidTokens': 'First-paid reward tokens (0 days = permanent)',
+  'referral.cfgRewardDays': 'Signup reward validity (days)',
+  'referral.cfgPaidDays': 'First-paid reward validity (days, 0 = permanent)',
   'referral.cfgSave': 'Save settings',
   'referral.cfgSaved': '✅ Referral settings updated',
 }

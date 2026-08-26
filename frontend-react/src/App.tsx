@@ -5,7 +5,7 @@
 //       （改密、绑邮箱、注销、退出、进入后台）。meContext 无邮箱时强制绑定弹窗。
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Tag, Dropdown, MessagePlugin } from 'tdesign-react'
+import { Button, Tag } from 'tdesign-react'
 import { myPackage, meContext } from '@/api'
 import { AuthProvider, useAuth } from '@/stores/auth'
 import { AdminProvider } from '@/stores/admin'
@@ -16,7 +16,8 @@ import ChatWindow from './components/ChatWindow'
 import TicketsPage from './components/TicketsPage'
 import Bell from './components/Bell'
 import AdminDashboard from './components/admin/AdminDashboard'
-import { PasswordModal, EmailBindModal, DeactivateModal } from './components/modals'
+import AccountMenu from './components/AccountMenu'
+import { EmailBindModal } from './components/modals'
 
 // 监听浏览器 popstate，同步当前 pathname 状态
 function usePath(): string {
@@ -43,14 +44,6 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
   const [pkgLine, setPkgLine] = useState('')
   // 是否未绑定邮箱（强制弹窗）
   const [ctxNoEmail, setCtxNoEmail] = useState(false)
-  // 当前用户邮箱（可能为空）
-  const [curEmail, setCurEmail] = useState('')
-  // 修改密码弹窗开关
-  const [openPwd, setOpenPwd] = useState(false)
-  // 绑定/修改邮箱弹窗开关
-  const [openBind, setOpenBind] = useState(false)
-  // 注销账号弹窗开关
-  const [openDeact, setOpenDeact] = useState(false)
 
   // meContext：无邮箱强制绑定；余额徽标：myPackage 计算 token ≈ 句单语言
   useEffect(() => {
@@ -61,7 +54,6 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
         if (c.success) {
           const email = String((c as unknown as { email?: string }).email || '')
           setCtxNoEmail(!email) // 无邮箱 → 不可关闭的绑定弹窗（行为同 Vue 版 dismissible=false）
-          setCurEmail(email)
         }
       } catch { /* ignore */ }
       try {
@@ -98,18 +90,7 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
         {!!pkgLine && <Tag theme="primary" variant="light">{pkgLine}</Tag>}
         <Bell />
         <Button size="small" variant="text" onClick={toggleLang}>{lang === 'zh' ? 'EN' : '中'}</Button>
-        <Dropdown
-          trigger="click"
-          options={[
-            ...(roleLevelSafe(user?.role) >= 2 ? [{ content: '🛠 ' + t('menu.adminConsole'), value: 'admin', onClick: onGotoAdmin }] : []),
-            { content: '🔒 ' + t('pwd.title'), value: 'pwd', onClick: () => setOpenPwd(true) },
-            { content: '📧 ' + t('menu.changeEmail'), value: 'email', onClick: () => setOpenBind(true) },
-            ...(user?.role === 'user' ? [{ content: '🗑 ' + t('menu.deactivate'), value: 'deact', onClick: () => setOpenDeact(true) }] : []),
-            { content: '⎋ ' + t('common.logout'), value: 'logout', onClick: () => { logout(); void MessagePlugin.success(t('app.bye')) } },
-          ]}
-        >
-          <Button variant="text" size="small">👤 {user?.username || user?.display_name || ''} ▾</Button>
-        </Dropdown>
+        <AccountMenu showAdminConsole={roleLevelSafe(user?.role) >= 2} onGotoAdmin={onGotoAdmin} />
       </header>
 
       {/* 主内容区：后端启动中显示 Loading，否则根据 Tab 渲染页面 */}
@@ -124,12 +105,8 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
         ) : tab === 'tickets' ? <TicketsPage /> : <ChatWindow />}
       </div>
 
-      {/* 账号相关弹窗：改密、绑邮箱、注销 */}
-      {openPwd && <PasswordModal email={curEmail} onClose={() => setOpenPwd(false)} />}
-      {openBind && <EmailBindModal hasOldEmail={!!curEmail} oldEmail={curEmail} onClose={() => setOpenBind(false)} />}
-      {openDeact && <DeactivateModal onClose={() => setOpenDeact(false)} />}
-      {/* 强制绑邮箱（不可关闭） */}
-      {ctxNoEmail && !openBind && (
+      {/* 强制绑邮箱（不可关闭）；改密/换绑/注销统一由 AccountMenu 托管 */}
+      {ctxNoEmail && (
         <EmailBindModal hasOldEmail={false} dismissible={false}
                         onClose={() => setCtxNoEmail(false)}
                         onDone={() => setCtxNoEmail(false)} />

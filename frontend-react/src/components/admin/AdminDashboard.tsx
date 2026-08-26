@@ -6,11 +6,11 @@
 // L2 仅 Overview/Usage/Kb/Tickets。超管含租户切换器。
 // ============================================================================
 import { Button, Menu, Select, Tag } from 'tdesign-react'
-import { useAuth } from '@/stores/auth'
 import { useAdmin } from '@/stores/admin'
 import type { PanelKey } from '@/stores/admin'
 import { t, toggleLang } from '@/i18n'
 import Bell from '@/components/Bell'
+import AccountMenu from '@/components/AccountMenu'
 
 import Overview from './panels_a'
 import { UsersP, AlertsP, AuditP, UsageP, InvitesP } from './panels_a'
@@ -62,7 +62,6 @@ function renderPanel(p: PanelKey) {
 
 // 后台控制台主组件：组合侧边菜单、顶部操作栏与动态面板
 export default function AdminDashboard() {
-  const { user, logout } = useAuth()
   const ad = useAdmin()
   // 按当前用户等级过滤出可见菜单项
   const visible = ITEMS.filter((i) => ad.myLevel >= i.minLevel)
@@ -109,9 +108,7 @@ export default function AdminDashboard() {
                   onClick={() => { window.history.pushState({}, '', '/'); window.dispatchEvent(new PopStateEvent('popstate')) }}>
             ← {t('admin.backWorkbench')}
           </Button>
-          <Button size="small" variant="text" theme="danger" onClick={logout}>
-            {user?.username} · {t('common.logout')}
-          </Button>
+          <AccountMenu />
         </div>
 
         {renderPanel(ad.panel)}

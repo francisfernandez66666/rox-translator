@@ -115,9 +115,11 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	const (
-		kEnabled = "referral_enabled"
-		kReward  = "invite_reward_tokens"
-		kPaid    = "inviter_paid_reward_tokens"
+		kEnabled    = "referral_enabled"
+		kReward     = "invite_reward_tokens"
+		kPaid       = "inviter_paid_reward_tokens"
+		kRewardDays = "invite_extend_days" // 注册邀请奖励有效期（天）；register.go 读取，此处暴露给超管
+		kPaidDays   = "inviter_paid_reward_days" // 付费邀请奖励有效期（天）；0=永久（默认）
 	)
 	get := func(key string) (string, error) { return s.Store.GetConfig(key) }
 	switch r.Method {
@@ -127,12 +129,16 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 			"enabled":            s.Store.ReferralEnabled(),
 			"reward_tokens":      sysReferralCfgInt64(get, kReward, 300000),
 			"paid_reward_tokens": sysReferralCfgInt64(get, kPaid, 500000),
+			"reward_days":        sysReferralCfgInt64(get, kRewardDays, 14),
+			"paid_reward_days":   sysReferralCfgInt64(get, kPaidDays, 0),
 		})
 	case http.MethodPost:
 		var req struct {
 			Enabled      *bool  `json:"enabled"`
 			RewardTokens *int64 `json:"reward_tokens"`
 			PaidTokens   *int64 `json:"paid_reward_tokens"`
+			RewardDays   *int64 `json:"reward_days"`
+			PaidDays     *int64 `json:"paid_reward_days"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -156,6 +162,22 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 				*req.PaidTokens = 0
 			}
 			_ = s.Store.SetConfig(kPaid, strconv.FormatInt(*req.PaidTokens, 10))
+		}
+		// 注册邀请奖励有效期（天）：至少 1 天，避免 0 天立刻过期
+		if req.RewardDays != nil {
+			d := *req.RewardDays
+			if d < 1 {
+				d = 1
+			}
+			_ = s.Store.SetConfig(kRewardDays, strconv.FormatInt(d, 10))
+		}
+		// 付费邀请奖励有效期（天）：0=永久（默认），>0=限时
+		if req.PaidDays != nil {
+			d := *req.PaidDays
+			if d < 0 {
+				d = 0
+			}
+			_ = s.Store.SetConfig(kPaidDays, strconv.FormatInt(d, 10))
 		}
 		s.Store.LogAudit(0, u.ID, "referral_config", "system_config", "邀请裂变运营参数更新")
 		writeJSON(w, 200, map[string]interface{}{"success": true})

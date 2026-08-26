@@ -49,7 +49,7 @@ func TestReferralFlow(t *testing.T) {
 	if b, _ := s.GetBalance(1); b != nil {
 		before = b.Balance
 	}
-	if err := s.RewardPaidPermanent(u2.ID, 500000); err != nil {
+	if err := s.RewardPaidPermanent(u2.ID, 500000, 0); err != nil {
 		t.Fatalf("RewardPaidPermanent 失败: %v", err)
 	}
 	b, _ := s.GetBalance(1)
@@ -57,7 +57,7 @@ func TestReferralFlow(t *testing.T) {
 		t.Fatalf("邀请人永久余额应为 %d，实际 %+v", before+500000, b)
 	}
 	// 仅首笔：重复确认不再发奖
-	_ = s.RewardPaidPermanent(u2.ID, 500000)
+	_ = s.RewardPaidPermanent(u2.ID, 500000, 0)
 	if b2, _ := s.GetBalance(1); b2.Balance != before+500000 {
 		t.Fatalf("付费奖励应按对去重，余额异常: %d", b2.Balance)
 	}
@@ -67,7 +67,7 @@ func TestReferralFlow(t *testing.T) {
 		t.Fatalf("邀请记录应为 2 条，实际 %d", len(recs))
 	}
 	// 非邀请来源静默跳过
-	if err := s.RewardPaidPermanent(u1.ID, 100); err != nil {
+	if err := s.RewardPaidPermanent(u1.ID, 100, 0); err != nil {
 		t.Fatalf("非邀请来源应返回 nil，实际 %v", err)
 	}
 }

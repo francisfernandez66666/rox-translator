@@ -170,9 +170,10 @@ func (s *Store) GrantTrialStack(inviterUID, inviterTID, inviteeUID, tokens int64
 	return nil
 }
 
-// RewardPaidPermanent 受邀者首笔付费套餐→邀请者永久 token（双唯一：同对仅一次 + 邮箱快照全局仅一次）。
-// 参数：inviteeUID=受邀人用户 ID；tokens=奖励 token 数；返回错误（非邀请来源静默返回 nil）。
-func (s *Store) RewardPaidPermanent(inviteeUID, tokens int64) error {
+// RewardPaidPermanent 受邀者首笔付费套餐→邀请者 token 奖励（双唯一：同对仅一次 + 邮箱快照全局仅一次）。
+// 参数：inviteeUID=受邀人用户 ID；tokens=奖励 token 数；days=有效期（天），0 天=永久（默认），>0 为限时台账。
+// 限时奖励写入带到期日的 quota_grants（按最早到期优先扣减）；发放失败兜底永久余额，保证奖励不丢。
+func (s *Store) RewardPaidPermanent(inviteeUID, tokens, days int64) error {
 	const typ = "paid_perm"
 	var inviterUID int64
 	err := s.db.QueryRow("SELECT referred_by FROM users WHERE id=?", inviteeUID).Scan(&inviterUID)
@@ -189,11 +190,21 @@ func (s *Store) RewardPaidPermanent(inviteeUID, tokens int64) error {
 		return nil // 仅首笔付费触发；邮箱撞库同样永久拒绝
 	}
 	// 占用优先：流水落库成功才加余额（并发/撞库由双唯一索引在此拦截）
-	if _, err := s.db.Exec("INSERT INTO referral_rewards (inviter_uid,inviter_tid,invitee_uid,invitee_email,type,tokens,created_at) VALUES (?,?,?,?,?,?,?)",
-		inviterUID, inviterTID, inviteeUID, email, typ, tokens, time.Now().Format(time.RFC3339)); err != nil {
+	if _, err := s.db.Exec("INSERT INTO referral_rewards (inviter_uid,inviter_tid,invitee_uid,invitee_email,type,tokens,days,created_at) VALUES (?,?,?,?,?,?,?,?)",
+		inviterUID, inviterTID, inviteeUID, email, typ, tokens, days, time.Now().Format(time.RFC3339)); err != nil {
 		log.Printf("[referral] paid_perm 占用失败（视为重复发放跳过）invitee=%d err=%v", inviteeUID, err)
 		return nil
 	}
+	// 限时奖励：写入带到期日的台账（按最早到期优先扣减）
+	if days > 0 {
+		expT := time.Now().UTC().Add(time.Duration(days) * 24 * time.Hour)
+		if gerr := s.CreateQuotaGrant(inviterTID, "referral_paid", tokens, expT, "invite", inviteeUID); gerr != nil {
+			_ = s.EnsureBalance(inviterTID)
+			_, _ = s.db.Exec("UPDATE balance_accounts SET balance=balance+? WHERE tenant_id=?", tokens, inviterTID)
+		}
+		return nil
+	}
+	// 永久奖励（默认）：直接累加永久余额
 	_ = s.EnsureBalance(inviterTID)
 	_, err = s.db.Exec("UPDATE balance_accounts SET balance=balance+? WHERE tenant_id=?", tokens, inviterTID)
 	return err
@@ -230,7 +241,14 @@ func (s *Store) ReferralPaidReward(inviteeUID int64) {
 			tokens = x
 		}
 	}
-	_ = s.RewardPaidPermanent(inviteeUID, tokens)
+	// 付费邀请奖励有效期（天）：0=永久（默认），>0=限时台账
+	days := int64(0)
+	if v, _ := s.GetConfig("inviter_paid_reward_days"); v != "" {
+		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x >= 0 {
+			days = x
+		}
+	}
+	_ = s.RewardPaidPermanent(inviteeUID, tokens, days)
 }
 
 // OneidMigrate 账户体系邮箱唯一化（幂等，随 Store.New 调用）：

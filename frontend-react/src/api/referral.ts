@@ -51,7 +51,9 @@ export async function fetchReferralQrBlob(): Promise<Blob | null> {
 export interface ReferralConfig {
   enabled: boolean // 总开关（关闭后绑定与奖励全部停发）
   reward_tokens: number // 受邀注册→邀请人体验叠加 token
-  paid_reward_tokens: number // 受邀人首笔付费→邀请人永久 token
+  paid_reward_tokens: number // 受邀人首笔付费→邀请人奖励 token
+  reward_days: number // 注册邀请奖励有效期（天）；register.go 读取
+  paid_reward_days: number // 付费邀请奖励有效期（天）；0=永久
 }
 
 // referralConfigGet 读取邀请运营参数（超管）
@@ -68,6 +70,8 @@ export async function referralConfigSave(cfg: Partial<ReferralConfig>): Promise<
       enabled: cfg.enabled,
       reward_tokens: cfg.reward_tokens,
       paid_reward_tokens: cfg.paid_reward_tokens,
+      reward_days: cfg.reward_days,
+      paid_reward_days: cfg.paid_reward_days,
     }),
   })
 }
