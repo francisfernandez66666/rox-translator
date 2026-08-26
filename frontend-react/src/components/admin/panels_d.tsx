@@ -473,6 +473,9 @@ export function ModelsP() {
   const [pForm2, setPForm2] = useState<Any>({ high_sim: 0.9, med_sim: 0.75, evals_pass_threshold: 75, cross_dept_fallback: true, data_feedback_opt_out: false })
   // 分阶段模型配置
   const [stForm, setStForm] = useState<Any>({})
+  // ★ LLM 密钥（翻译/工单任务 + KB 向量重建，仅超管）
+  const [eForm, setEForm] = useState<Any>({ api_key: '', api_base: '' })
+  const [keyState, setKeyState] = useState<Any>({ translation: false, embedding: false, embeddingMasked: '', embeddingBase: '' })
 
   // 供应商预设：api_base 与默认模型
   const providerPresets: Record<string, { api_base: string; model: string }> = {
@@ -494,7 +497,13 @@ export function ModelsP() {
   // 加载主模型与路由配置
   const loadModels = useCallback(async () => {
     const r = await adminModels()
-    if (r.success) { setMForm((r as unknown as { model?: Any }).model || {}); setRouteForm((r as unknown as { routes?: Any[] }).routes || []) }
+    if (r.success) {
+      const d = r as unknown as { model?: Any; embedding?: Any; routes?: Any[] }
+      setMForm(d.model || {})
+      setRouteForm(d.routes || [])
+      setEForm({ api_key: '', api_base: (d.embedding?.api_base as string) || '' })
+      setKeyState({ translation: !!(d.model && d.model.set), embedding: !!(d.embedding && d.embedding.set), embeddingMasked: (d.embedding?.masked as string) || '', embeddingBase: (d.embedding?.api_base as string) || '' })
+    }
   }, [])
   // 加载翻译策略参数
   const loadPolicy = useCallback(async () => {
@@ -565,6 +574,24 @@ export function ModelsP() {
     if (!r.success) { MessagePlugin.error(r.message); return }
     MessagePlugin.success(t('models.savedPolicy'))
   }
+  // ★ 保存 Embedding 密钥（KB 向量重建）
+  async function saveEmbed() {
+    const r = await adminModelsSave({ embed_api_key: eForm.api_key, embed_api_base: eForm.api_base } as never)
+    if (!r.success) { MessagePlugin.error(r.message); return }
+    MessagePlugin.success(t('models.savedEmbed')); await loadModels()
+  }
+  // ★ 清除 Embedding 密钥
+  async function clearEmbed() {
+    const r = await adminModelsSave({ clear_keys: ['embedding'] } as never)
+    if (!r.success) { MessagePlugin.error(r.message); return }
+    MessagePlugin.success(t('models.clearedEmbed')); await loadModels()
+  }
+  // ★ 清除翻译/工单任务密钥
+  async function clearTrans() {
+    const r = await adminModelsSave({ clear_keys: ['translation'] } as never)
+    if (!r.success) { MessagePlugin.error(r.message); return }
+    MessagePlugin.success(t('models.clearedTrans')); await loadModels()
+  }
 
   // 当前生效主模型（优先取路由链中 weight>0 的项）
   const mainModel = (routeForm.find((r: Any) => Number(r.weight) > 0)?.model) || mForm.model || '—'
@@ -604,6 +631,22 @@ export function ModelsP() {
         <p style={{ fontSize: 12, color: '#667', margin: '8px 0 0' }}>
           {routeForm.length ? tpl('models.routesActive', { count: routeForm.length, main: mainModel }) : t('models.routesNone')}
         </p>
+      </Panel>
+
+      {/* ===== LLM 密钥（翻译/工单任务 + KB 向量重建，仅超管） ===== */}
+      <Panel title={t('models.llmKeyTitle')}>
+        <div style={{ fontSize: 12, color: '#667', marginBottom: 8 }}>{t('models.llmKeyHint')}</div>
+        <div style={rowMt}>
+          <span style={{ fontSize: 13 }}>{t('models.translationKeyLabel')}：{keyState.translation ? `✓ ${t('models.configured')}` : `✗ ${t('models.notConfigured')}`}</span>
+          {keyState.translation && <Button size="small" theme="danger" variant="outline" onClick={() => void clearTrans()}>{t('models.clearTranslation')}</Button>}
+        </div>
+        <Field label={t('models.embedApiKey')}><Input type="password" value={String(eForm.api_key ?? '')} onChange={(v: any) => setEForm({ ...eForm, api_key: v })} placeholder={t('models.embedApiKeyPlaceholder')} /></Field>
+        <Field label={t('models.embedApiBase')}><Input value={String(eForm.api_base ?? '')} onChange={(v: any) => setEForm({ ...eForm, api_base: v })} placeholder={t('models.embedApiBasePlaceholder')} /></Field>
+        <div style={rowMt}>
+          <Button onClick={() => void saveEmbed()}>{t('models.saveEmbed')}</Button>
+          {keyState.embedding && <Button size="small" theme="danger" variant="outline" onClick={() => void clearEmbed()}>{t('models.clearEmbed')}</Button>}
+          {keyState.embedding && <span style={{ fontSize: 12, color: '#1a7f37' }}>✓ {keyState.embeddingMasked}</span>}
+        </div>
       </Panel>
 
       {/* ===== 分阶段模型配置 ===== */}

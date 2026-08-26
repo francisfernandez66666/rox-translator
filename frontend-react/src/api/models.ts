@@ -13,8 +13,11 @@ export async function adminModels(): Promise<AdminResp> {
 }
 
 // 保存平台网关模型配置（单模型字段合并为主路由 + routes 全量覆盖；掩码 Key=未修改）
+// embed_api_key/embed_api_base：KB 向量重建密钥；clear_keys：清空指定密钥作用域（["translation"|"embedding"]）
 export async function adminModelsSave(data: {
   api_base?: string; api_key?: string; model?: string;
+  embed_api_key?: string; embed_api_base?: string;
+  clear_keys?: string[];
   routes?: { provider: string; api_base: string; api_key: string; model: string; weight: number }[]
 }): Promise<AdminResp> {
   return request('/api/admin/models/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })

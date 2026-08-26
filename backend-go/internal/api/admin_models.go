@@ -54,6 +54,19 @@ func encryptRoutes(rs []config.ProviderConfig) []config.ProviderConfig {
 	return out
 }
 
+// llmKeyState 返回某加密配置键是否已设置及其掩码展示（解密后脱敏）。
+func (s *Server) llmKeyState(key string) (bool, string) {
+	v, err := s.Store.GetConfig(key)
+	if err != nil || v == "" {
+		return false, ""
+	}
+	dec := store.DecryptSecret(v)
+	if dec == "" {
+		return false, ""
+	}
+	return true, maskKey(dec)
+}
+
 // handleModels 读取模型配置（仅超管）：
 // 读取全局配置（全局默认单模型 + system_config.model_routes 全局路由）。
 //
@@ -76,9 +89,13 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		rt.APIKey = maskKey(rt.APIKey)
 		maskedRoutes = append(maskedRoutes, rt)
 	}
+	embSet, embMask := s.llmKeyState("embed_api_key")
+	// 翻译密钥是否已真实配置（占位随机 Key 视为未配置）
+	transSet := key != "" && !s.Cfg.OnlineAPIKeyIsPlaceholder
 	writeJSON(w, 200, map[string]interface{}{"success": true,
-		"model":  map[string]interface{}{"api_base": base, "api_key": maskKey(key), "model": model},
-		"routes": maskedRoutes})
+		"model": map[string]interface{}{"api_base": base, "api_key": maskKey(key), "model": model, "set": transSet},
+		"embedding": map[string]interface{}{"set": embSet, "masked": embMask, "api_base": s.Cfg.EmbedAPIBase},
+		"routes":   maskedRoutes})
 }
 
 // handleModelsSave 保存模型配置（仅超管）：
@@ -93,10 +110,13 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		APIBase string                  `json:"api_base"` // 模型 API 基础地址（可为空=不修改）
-		APIKey  string                  `json:"api_key"`  // 模型 API Key（掩码值不覆盖原密钥）
-		Model   string                  `json:"model"`    // 模型名称
-		Routes  []config.ProviderConfig `json:"routes"`   // 多供应商路由（可为空=清空；平台统一网关多供应商调度）
+		APIBase      string                  `json:"api_base"`      // 模型 API 基础地址（可为空=不修改）
+		APIKey       string                  `json:"api_key"`       // 模型 API Key（掩码值不覆盖原密钥）
+		Model        string                  `json:"model"`         // 模型名称
+		Routes       []config.ProviderConfig `json:"routes"`        // 多供应商路由（可为空=清空；平台统一网关多供应商调度）
+		EmbedAPIKey  string                  `json:"embed_api_key"` // ★ KB 向量重建 Embedding Key（掩码值不覆盖）
+		EmbedAPIBase string                  `json:"embed_api_base"`
+		ClearKeys    []string                `json:"clear_keys"` // ★ 清空指定密钥作用域：["translation","embedding"]
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -143,9 +163,45 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.APIKey != "" && !hasMask(req.APIKey) {
 		s.Cfg.OnlineAPIKey = req.APIKey
+		s.Cfg.OnlineAPIKeyIsPlaceholder = false
 	}
 	if req.Model != "" {
 		s.Cfg.OnlineModel = req.Model
+	}
+	// ★ 后台可配 LLM Key：覆盖环境变量、重启后水合生效（需求：翻译/工单任务 + KB 向量重建）
+	// 清空作用域优先（clear_keys 指定的密钥置回占位/删除）
+	for _, sc := range req.ClearKeys {
+		if sc == "translation" {
+			_ = s.Store.SetConfig("online_api_key", "")
+			_ = s.Store.SetConfig("online_api_base", "")
+			_ = s.Store.SetConfig("online_model", "")
+			s.Cfg.OnlineAPIKey = ""
+			s.Cfg.OnlineAPIKeyIsPlaceholder = true
+		}
+		if sc == "embedding" {
+			_ = s.Store.SetConfig("embed_api_key", "")
+			_ = s.Store.SetConfig("embed_api_base", "")
+			s.Cfg.EmbedAPIKey = ""
+		}
+	}
+	// 翻译 Key 持久化（仅在非空且非掩码时写入；掩码=未修改保留原值）
+	if req.APIKey != "" && !hasMask(req.APIKey) {
+		_ = s.Store.SetConfig("online_api_key", store.EncryptSecret(req.APIKey))
+	}
+	if req.APIBase != "" {
+		_ = s.Store.SetConfig("online_api_base", req.APIBase)
+	}
+	if req.Model != "" {
+		_ = s.Store.SetConfig("online_model", req.Model)
+	}
+	// Embedding Key 持久化（KB 向量重建）
+	if req.EmbedAPIKey != "" && !hasMask(req.EmbedAPIKey) {
+		s.Cfg.EmbedAPIKey = req.EmbedAPIKey
+		_ = s.Store.SetConfig("embed_api_key", store.EncryptSecret(req.EmbedAPIKey))
+	}
+	if req.EmbedAPIBase != "" {
+		s.Cfg.EmbedAPIBase = req.EmbedAPIBase
+		_ = s.Store.SetConfig("embed_api_base", req.EmbedAPIBase)
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "model_save", "system", fmt.Sprintf("%d 条全局路由", len(merged)))
 	writeJSON(w, 200, map[string]interface{}{"success": true})

@@ -53,6 +53,22 @@ export const zh: Record<string, string> = {
   'models.stageNone': '未配置任何阶段独立模型，全部使用全局/路由',
   'models.onlineHint': '租户管理员可配置本租户自己的模型（BYOK）；超管配置平台全局。支持任意 OpenAI 兼容端点（ChatGPT/Gemini/DeepSeek 等）。',
   'models.presetPlaceholder': '选择常用供应商预设…',
+  // ---- LLM 密钥（翻译/工单任务 + KB 向量重建，仅超管） ----
+  'models.llmKeyTitle': 'LLM 密钥（翻译/工单 + KB 向量重建）',
+  'models.llmKeyHint': '翻译/工单任务使用上方「在线模型」API Key；知识库向量重建使用下方 Embedding Key。两项均仅超管可配置，密文落库、即时生效、重启保留。',
+  'models.translationKeyLabel': '翻译/工单任务密钥',
+  'models.configured': '已配置',
+  'models.notConfigured': '未配置',
+  'models.clearTranslation': '清除翻译密钥',
+  'models.clearedTrans': '翻译密钥已清除',
+  'models.embedApiKey': 'Embedding API Key（留空不修改）',
+  'models.embedApiKeyPlaceholder': 'Embedding API Key',
+  'models.embedApiBase': 'Embedding API 地址',
+  'models.embedApiBasePlaceholder': 'Embedding API Base (…/v4)',
+  'models.saveEmbed': '保存 Embedding 密钥',
+  'models.clearEmbed': '清除 Embedding 密钥',
+  'models.savedEmbed': 'Embedding 密钥已保存',
+  'models.clearedEmbed': 'Embedding 密钥已清除',
 }
 
 export const en: Record<string, string> = {
@@ -109,4 +125,20 @@ export const en: Record<string, string> = {
   'models.stageNone': 'No independent stage models configured; all use global/routing',
   'models.onlineHint': 'Tenant admins can configure their own model (BYOK); super admins configure platform global. Supports any OpenAI-compatible endpoint (ChatGPT/Gemini/DeepSeek, etc.).',
   'models.presetPlaceholder': 'Pick a provider preset…',
+  // ---- LLM keys (translation/tickets + KB vectors; super admin only) ----
+  'models.llmKeyTitle': 'LLM Keys (Translation/Tickets + KB Vectors)',
+  'models.llmKeyHint': 'Translation/ticket tasks use the "Online Model" API Key above; KB vector rebuild uses the Embedding Key below. Both are super-admin only, stored encrypted, applied instantly and persisted across restarts.',
+  'models.translationKeyLabel': 'Translation/Ticket Key',
+  'models.configured': 'Configured',
+  'models.notConfigured': 'Not configured',
+  'models.clearTranslation': 'Clear translation key',
+  'models.clearedTrans': 'Translation key cleared',
+  'models.embedApiKey': 'Embedding API Key (leave blank to keep)',
+  'models.embedApiKeyPlaceholder': 'Embedding API Key',
+  'models.embedApiBase': 'Embedding API Base',
+  'models.embedApiBasePlaceholder': 'Embedding API Base (…/v4)',
+  'models.saveEmbed': 'Save embedding key',
+  'models.clearEmbed': 'Clear embedding key',
+  'models.savedEmbed': 'Embedding key saved',
+  'models.clearedEmbed': 'Embedding key cleared',
 }
