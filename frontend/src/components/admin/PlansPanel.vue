@@ -1,8 +1,9 @@
 <!-- ============================================================================
    components/admin/PlansPanel.vue — 💰 套餐中心（2026-08-26 整合重构）
-   把原「套餐详情(Packages 全部 + Billing 全部)」两面板堆叠重组为按用户旅程分区的单一页面：
-     ① 当前套餐与余额   ② 选购套餐   ③ 在线充值   ④ 订单与发票   ⑤ 用量配额
-     超管附加（默认折叠）：⑥ 商业包管理 ⑦ 运营参数 ⑧ 待人工确认订单
+   把原「套餐详情(Packages 全部 + Billing 全部)」两面板堆叠重组为按角色分域的单一页面：
+     租户管理员（L3·采购视角）：① 当前套餐与余额 ② 选购套餐 ③ 在线充值 ④ 订单与发票 ⑤ 用量配额
+     超级管理员（L4·运营视角）：④ 平台订单与发票 ⑤ 生效租户配量（默认折叠）：⑥ 商业包管理 ⑦ 运营参数 ⑧ 待人工确认订单
+     —— 超管不出现「当前套餐/选购/充值」（无采购语义）；租管不可见任何超管区。
    与注册触达无关的配置已迁出（→ Alerts 系统告警面板「注册与触达」区）。
    ============================================================================ -->
 <template>
@@ -14,8 +15,8 @@
       <button v-for="sec in sections" :key="sec.key" class="pl-chip" @click="go(sec.id)">{{ t(sec.label) }}</button>
     </div>
 
-    <!-- ========== ① 当前套餐与余额 ========== -->
-    <div id="sec-current" class="ad-chart-card">
+    <!-- ========== ① 当前套餐与余额（仅租管；超管为平台视角无采购语义） ========== -->
+    <div id="sec-current" v-if="!isSuper" class="ad-chart-card">
       <h3>{{ t('plans.nav.current') }}</h3>
       <div class="pl-cards">
         <div class="pl-card"><b>{{ fmtNum(pkg.balance_tokens) }}</b><span>{{ t('usage.currentBalance') }}</span></div>
@@ -32,8 +33,8 @@
       </div>
     </div>
 
-    <!-- ========== ② 选购套餐 ========== -->
-    <div id="sec-shop" class="ad-chart-card">
+    <!-- ========== ② 选购套餐（仅租管） ========== -->
+    <div id="sec-shop" v-if="!isSuper" class="ad-chart-card">
       <h3>{{ t('plans.nav.shop') }}</h3>
       <template v-for="g in planGroups" :key="g.type">
         <div class="pl-group-title">{{ g.title }}</div>
@@ -52,8 +53,8 @@
       </template>
     </div>
 
-    <!-- ========== ③ 在线充值 ========== -->
-    <div id="sec-topup" class="ad-chart-card">
+    <!-- ========== ③ 在线充值（仅租管） ========== -->
+    <div id="sec-topup" v-if="!isSuper" class="ad-chart-card">
       <h3>{{ t('plans.nav.topup') }}</h3>
       <div class="ad-hint">{{ t('billing.onlineTopUpHint') }}</div>
       <div class="ad-row" style="margin-top:8px">
@@ -242,19 +243,22 @@ import { activeTenantId, isSuper } from './store'
 import { fmtTime } from './ui'
 import { t, tpl } from '@/i18n'
 
-// ===== 分区导航 =====
-const sections = [
+// ===== 分区导航（★ 按角色分域，2026-08-26 线上反馈修正） =====
+// 租管(L3)=采购视角五区；超管(L4)=平台运营视角（订单发票/配额 + 三个折叠运营区），
+// 不再出现当前套餐/选购/充值等采购语义分区。
+const sections = computed(() => isSuper.value ? [
+  { id: 'sec-orders', key: 'orders', label: 'plans.nav.orders' },
+  { id: 'sec-quota', key: 'quota', label: 'plans.nav.quota' },
+  { id: 'sec-pkg', key: 'pkgMgmt', label: 'plans.nav.pkgMgmt' },
+  { id: 'sec-ops', key: 'ops', label: 'plans.nav.ops' },
+  { id: 'sec-manual', key: 'manual', label: 'plans.nav.manual' },
+] : [
   { id: 'sec-current', key: 'current', label: 'plans.nav.current' },
   { id: 'sec-shop', key: 'shop', label: 'plans.nav.shop' },
   { id: 'sec-topup', key: 'topup', label: 'plans.nav.topup' },
   { id: 'sec-orders', key: 'orders', label: 'plans.nav.orders' },
   { id: 'sec-quota', key: 'quota', label: 'plans.nav.quota' },
-  ...(isSuper.value ? [
-    { id: 'sec-pkg', key: 'pkgMgmt', label: 'plans.nav.pkgMgmt' },
-    { id: 'sec-ops', key: 'ops', label: 'plans.nav.ops' },
-    { id: 'sec-manual', key: 'manual', label: 'plans.nav.manual' },
-  ] : []),
-]
+])
 function go(id: string) { document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
 
 const fmtNum = (n: unknown) => typeof n === 'number' ? new Intl.NumberFormat().format(n) : '—'
@@ -414,9 +418,10 @@ async function savePayMode() { await adminPackageSettingsSave({ pay_mode: payMod
 async function saveStaticQR() { await adminPackageSettingsSave({ static_qr_image: staticQRImage.value }) }
 async function confirmManual(o: any) { const r = await adminOrderPay(o.id); if (r.success) await Promise.all([loadPkgs(), loadOrders()]) }
 
-// ===== 装载 =====
+// ===== 装载（按角色裁剪：超管不拉采购数据） =====
 async function loadAll() {
-  await Promise.all([loadPackage(), loadOrders(), loadInvoices(), loadQuota(), loadPkgs()])
+  if (!isSuper.value) await loadPackage()
+  await Promise.all([loadOrders(), loadInvoices(), loadQuota(), loadPkgs()])
 }
 async function loadOrders() { const r = await billingOrders(); if (r.success) orders.value = (r as any).orders || [] }
 async function loadInvoices() { const r = await billingInvoices(); if (r.success) invoices.value = (r as any).invoices || [] }
