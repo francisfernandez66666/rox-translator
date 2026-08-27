@@ -63,7 +63,7 @@ th{background:#e8f5e9;color:var(--green)}
 </style></head><body>
 <div class="header"><div class="brand">🌐 能言</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">条款 Terms</a><a href="/docs/sla">SLA</a><a href="/status">状态 Status</a><a href="/docs/privacy">隐私 Privacy</a></div></div>
 <div class="wrap"><div class="card">` + body + `</div></div>
-<div class="footer">© 2026 能言 · langcross 多语翻译知识库 · <a href="/status">服务状态</a> · <a href="/admin">管理后台</a></div>
+<div class="footer">© 2026 能言 · LangCross 多语翻译知识库 · <a href="/status">服务状态</a> · <a href="/admin">管理后台</a></div>
 </body></html>`
 }
 
@@ -107,7 +107,7 @@ th{background:#e8f5e9;color:var(--green)}
 <p><b>Q：额度用完后怎么办？</b> 可订阅付费包或购买增量包，到账后立即恢复；也可联系管理员充值。</p>
 <p><b>Q：支持哪些支付方式？</b> 支持微信 / 支付宝在线支付（对接中），静态二维码扫码 + 人工确认，当前可使用线下转账 + 管理员充值。</p>
 </div></div>
-<div class="footer">© 2026 能言 · langcross 多语翻译知识库</div>
+<div class="footer">© 2026 能言 · LangCross 多语翻译知识库</div>
 <script>
 fetch('/api/plans').then(r=>r.json()).then(d=>{
   const types={free:'免费体验',paid:'付费包',increment:'增量包'};
@@ -136,7 +136,7 @@ const termsBody = `
 <p>翻译结果由 AI 模型生成，可能存在错误，不构成任何专业意见。在适用法律允许范围内，我们对间接损失不承担责任。</p>
 <hr>
 <h2>1. Service Description</h2>
-<p>langcross provides multilingual text/file translation and knowledge base management as a SaaS. By using the service you agree to these terms.</p>
+<p>LangCross provides multilingual text/file translation and knowledge base management as a SaaS. By using the service you agree to these terms.</p>
 <h2>2. Accounts and Use</h2>
 <p>Users must safeguard credentials; prohibited uses include unlawful activity, IP infringement, and resource abuse. Prepaid tokens carry no expiry and are non-refundable except as required by law.</p>
 <h2>3. Changes and Termination</h2>

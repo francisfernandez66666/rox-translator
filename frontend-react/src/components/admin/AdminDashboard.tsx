@@ -104,11 +104,10 @@ export default function AdminDashboard() {
           <div style={{ flex: 1 }} />
           <Bell />
           <Button size="small" variant="text" onClick={toggleLang}>{t('app.langBtn')}</Button>
-          <Button size="small" variant="outline"
-                  onClick={() => { window.history.pushState({}, '', '/'); window.dispatchEvent(new PopStateEvent('popstate')) }}>
-            ← {t('admin.backWorkbench')}
-          </Button>
-          <AccountMenu />
+          <AccountMenu showWorkbench onGotoWorkbench={() => {
+            window.history.pushState({}, '', '/')
+            window.dispatchEvent(new PopStateEvent('popstate'))
+          }} />
         </div>
 
         {renderPanel(ad.panel)}

@@ -13,9 +13,11 @@ import { PasswordModal, EmailBindModal, DeactivateModal } from './modals'
 interface Props {
   showAdminConsole?: boolean // 前台专用：是否展示「进入后台」入口
   onGotoAdmin?: () => void // 前台点击「进入后台」的回调
+  showWorkbench?: boolean // 后台专用：是否展示「返回工作台」入口
+  onGotoWorkbench?: () => void // 后台点击「返回工作台」的回调
 }
 
-export default function AccountMenu({ showAdminConsole, onGotoAdmin }: Props) {
+export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkbench, onGotoWorkbench }: Props) {
   const { user, logout } = useAuth()
   const [lang, t] = useT()
   const [curEmail, setCurEmail] = useState('')
@@ -36,6 +38,8 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin }: Props) {
 
   // 菜单项：后台不展示「进入后台」；仅普通用户显示「注销」；其余为改密/换绑/退出
   const options = [
+    // 后台专用：返回前台工作台
+    ...(showWorkbench ? [{ content: '🏠 ' + t('menu.backWorkbench'), value: 'workbench', onClick: () => onGotoWorkbench?.() }] : []),
     // 前台专用：跳转后台管理控制台
     ...(showAdminConsole ? [{ content: '🛠 ' + t('menu.adminConsole'), value: 'admin', onClick: () => onGotoAdmin?.() }] : []),
     // 修改密码：打开邮箱验证码 + 新密码弹窗
