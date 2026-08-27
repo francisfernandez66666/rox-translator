@@ -11,7 +11,24 @@ import { AuthProvider, useAuth } from '@/stores/auth'
 import { AdminProvider } from '@/stores/admin'
 import { ChatProvider, useChat } from '@/hooks/useChat'
 import { useT, t as gt, toggleLang } from '@/i18n'
+import { setAuthToken, setActiveTenantId } from '@/api'
 import Login from './components/Login'
+
+// 跨域登录跳转：品牌子域登录后通过 /?token= 跳转回来，此处把 token 写入本地会话并清除 URL 参数。
+;(() => {
+  try {
+    const p = new URLSearchParams(window.location.search)
+    const tk = p.get('token')
+    if (tk) {
+      setAuthToken(tk)
+      setActiveTenantId(0)
+      p.delete('token')
+      const url = window.location.pathname + (p.toString() ? '?' + p.toString() : '') + window.location.hash
+      window.history.replaceState({}, '', url)
+    }
+  } catch { /* ignore */ }
+})()
+
 import ChatWindow from './components/ChatWindow'
 import TicketsPage from './components/TicketsPage'
 import Bell from './components/Bell'
@@ -118,7 +135,7 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
         {chat.isBackendLoading ? (
           <div className="loading-screen" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
             {/* 旋转 Loading 图标 */}
-            <div className="loading-spinner" style={{ width: 48, height: 48, border: '4px solid #e0e0e0', borderTopColor: '#1a73e8', borderRadius: '50%', animation: 'appspin 0.8s linear infinite' }} />
+            <div className="loading-spinner" style={{ width: 48, height: 48, border: '4px solid #e0e0e0', borderTopColor: 'var(--td-brand-color, #2f47f5)', borderRadius: '50%', animation: 'appspin 0.8s linear infinite' }} />
             {/* 启动提示文案 */}
             <p style={{ fontSize: 16, color: '#5f6368' }}>{t('app.starting')}</p>
           </div>

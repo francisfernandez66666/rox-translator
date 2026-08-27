@@ -13,7 +13,7 @@ import {
   plans as apiPlans, myPackage, packageSubscribe,
   adminPackages, adminPackageCreate, adminPackageUpdate, adminPackageDelete,
   adminPackageSettings, adminPackageSettingsSave,
-  referralMy, fetchReferralQrBlob, referralConfigGet, referralConfigSave,
+  referralMy, fetchReferralQrBlob, referralConfigGet, referralConfigSave, meContext,
   webhooks as apiWebhooks, webhookSave, webhookDelete, webhookTest,
   apiKeys as apiApiKeys, apiKeyCreate, apiKeyStatus, apiKeyRotate, apiKeyDelete,
   apiKeyLimit, getOpenAPIDocs, saveOpenAPIDocs, previewOpenAPIDocs,
@@ -269,7 +269,7 @@ export function PlansP() {
         <Panel title={t('plans.nav.current')}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10 }}>
             <div style={{ background: '#f7f9fc', borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: '#1a237e' }}>{fmtNum(pkg.balance_tokens as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('usage.currentBalance')}</span>
+              <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtNum(pkg.balance_tokens as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('usage.currentBalance')}</span>
             </div>
             <div style={{ background: '#f7f9fc', borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
               <b style={{ fontSize: 20, color: '#e65100' }}>{fmtNum(pkg.sub_grants_left as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('plans.balanceGrants')}</span>
@@ -278,7 +278,7 @@ export function PlansP() {
               <b style={{ fontSize: 20, color: '#2e7d32' }}>{fmtNum(pkg.permanent_balance as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('plans.balancePermanent')}</span>
             </div>
             <div style={{ background: '#f7f9fc', borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: '#1a237e' }}>{fmtNum(pkg.tokens_used_month as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('plans.usedMonth')}</span>
+              <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtNum(pkg.tokens_used_month as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('plans.usedMonth')}</span>
             </div>
           </div>
           <div style={{ marginTop: 10, fontSize: 13, color: '#667' }}>
@@ -299,7 +299,7 @@ export function PlansP() {
                 {g.items.map((pl) => (
                   <div key={pl.id} style={{ border: '1.5px solid #e3eaf2', borderRadius: 12, padding: 14, display: 'flex', flexDirection: 'column', gap: 6, background: '#fff' }}>
                     <div style={{ fontWeight: 600, fontSize: 15 }}>{pl.name}</div>
-                    <div style={{ fontSize: 22, fontWeight: 700, color: '#1a237e' }}>¥{pl.price_money}<small style={{ fontSize: 12, color: '#90a4ae', fontWeight: 400 }}>{pl.ptype === 'paid' ? ` /${pl.duration_days}d` : ''}</small></div>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--td-brand-color-active, #1f33d6)' }}>¥{pl.price_money}<small style={{ fontSize: 12, color: '#90a4ae', fontWeight: 400 }}>{pl.ptype === 'paid' ? ` /${pl.duration_days}d` : ''}</small></div>
                     <ul style={{ margin: '0 0 4px 16px', padding: 0, fontSize: 12.5, color: '#607d8b', lineHeight: 1.7 }}>
                       <li>{tpl('billing.pkgSentences', { n: pl.sentences })}</li>
                       <li>{t('packages.type.' + pl.ptype)}</li>
@@ -324,7 +324,7 @@ export function PlansP() {
             <Button theme="success" loading={chLoading} onClick={openCheckout}>{chLoading ? t('billing.ordering') : t('billing.goPay')}</Button>
           </Space>
           {curOrder && curOrder.status === 'pending' && (
-            <p style={{ color: '#1a237e', fontSize: 13, marginTop: 8 }}>{tpl('billing.currentOrder', { orderNo: curOrder.order_no, amount: curOrder.amount_tokens })}</p>
+            <p style={{ color: 'var(--td-brand-color-active, #1f33d6)', fontSize: 13, marginTop: 8 }}>{tpl('billing.currentOrder', { orderNo: curOrder.order_no, amount: curOrder.amount_tokens })}</p>
           )}
         </Panel>
       )}
@@ -512,10 +512,16 @@ export function ReferralP() {
   const [trialTokens, setTrialTokens] = useState(0)
   const [paidTokens, setPaidTokens] = useState(0)
   const [cfg, setCfg] = useState({ enabled: true, reward_tokens: 300000, paid_tokens: 500000, reward_days: 14, paid_days: 0 })
+  // 是否个人用户：企业用户不参与「多邀得多」奖励（需求 5）
+  const [isPersonal, setIsPersonal] = useState(true)
 
   // 加载邀请数据、二维码 blob、超管运营配置
   useEffect(() => {
     void (async () => {
+      try {
+        const mc: Any = await meContext()
+        if (mc.success) setIsPersonal(mc.is_personal !== false)
+      } catch { /* ignore */ }
       try {
         const r: Any = await referralMy()
         if (r.success) {
@@ -568,10 +574,16 @@ export function ReferralP() {
   return (
     <>
       <Panel title={t('referral.title')} extra={<Space size={8}><Button onClick={downloadQr}>⬇️ {t('referral.downloadQr')}</Button></Space>}>
+        {/* 企业用户不参与「多邀得多」个人裂变奖励，仅可邀请同事加入本企业 */}
+        {!isPersonal && (
+          <div style={{ marginBottom: 14, background: 'rgba(64,128,255,.08)', border: '1px solid rgba(64,128,255,.25)', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#33415c', lineHeight: 1.7 }}>
+            当前为企业用户，不参与「多邀得多」个人邀请奖励。可通过「企业管理 → 邀请码」邀请同事加入本企业。
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 320, background: 'rgba(64,128,255,.06)', border: '1px solid rgba(64,128,255,.18)', borderRadius: 10, padding: '14px 16px' }}>
             <div style={{ fontSize: 12, color: '#556' }}>{t('referral.myCode')}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 2, color: '#1a237e', marginTop: 2 }}>{refCode || '—'}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 2, color: 'var(--td-brand-color-active, #1f33d6)', marginTop: 2 }}>{refCode || '—'}</div>
             <div style={{ fontSize: 12, color: '#667', marginTop: 8 }}>{t('referral.linkLabel')}</div>
             <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
               <Input readOnly value={inviteUrl} onFocus={(e: any) => e.target.select()} style={{ flex: 1 }} />
@@ -580,7 +592,7 @@ export function ReferralP() {
             <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 12, fontSize: 13, color: '#555' }}>
               <span>👥 {t('referral.invitedCount')}：<b>{invited}</b></span>
               <span>🎁 {t('referral.trialRewards')}：<b>{fmtNum(trialTokens)}</b> token / {trialCount} {t('referral.times')}</span>
-              <span>💰 {t('referral.paidRewards')}：<b>{fmtNum(paidTokens)}</b> token</span>
+              {isPersonal && <span>💰 {t('referral.paidRewards')}：<b>{fmtNum(paidTokens)}</b> token</span>}
             </div>
           </div>
           {qrUrl && <img src={qrUrl} alt="QR" width={150} height={150} style={{ borderRadius: 10, border: '1px solid #e3e6ef', background: '#fff' }} />}
@@ -599,18 +611,27 @@ export function ReferralP() {
               <Input type="number" value={String(cfg.reward_tokens)} onChange={(v) => setCfg({ ...cfg, reward_tokens: Number(v) || 0 })} style={{ width: 200 }} />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+              <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgRewardTokens')}</span>
+              <Input type="number" value={String(cfg.reward_tokens)} onChange={(v) => setCfg({ ...cfg, reward_tokens: Number(v) || 0 })} style={{ width: 200 }} />
+            </div>
+            {/* 付费邀请奖励（多邀得多）仅对个人用户开放；企业用户不显示后台配置 */}
+            {isPersonal && (
+            <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
               <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgPaidTokens')}</span>
               <Input type="number" value={String(cfg.paid_tokens)} onChange={(v) => setCfg({ ...cfg, paid_tokens: Number(v) || 0 })} style={{ width: 200 }} />
-            </div>
-            {/* 注册邀请奖励有效期（天）：控制体验叠加额度的到期时长，后台可调 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-              <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgRewardDays')}</span>
-              <Input type="number" value={String(cfg.reward_days)} onChange={(v) => setCfg({ ...cfg, reward_days: Number(v) || 0 })} style={{ width: 200 }} />
             </div>
             {/* 付费邀请奖励有效期（天）：0=永久（默认），>0=限时台账（按最早到期优先扣减） */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
               <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgPaidDays')}</span>
               <Input type="number" value={String(cfg.paid_days)} onChange={(v) => setCfg({ ...cfg, paid_days: Number(v) || 0 })} style={{ width: 200 }} />
+            </div>
+            </>
+            )}
+            {/* 注册邀请奖励有效期（天）：控制体验叠加额度的到期时长，后台可调 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+              <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgRewardDays')}</span>
+              <Input type="number" value={String(cfg.reward_days)} onChange={(v) => setCfg({ ...cfg, reward_days: Number(v) || 0 })} style={{ width: 200 }} />
             </div>
             <Button onClick={async () => {
               const c: Any = await referralConfigSave({ enabled: cfg.enabled, reward_tokens: Number(cfg.reward_tokens) || 0, paid_reward_tokens: Number(cfg.paid_tokens) || 0, reward_days: Number(cfg.reward_days) || 0, paid_reward_days: Number(cfg.paid_days) || 0 })

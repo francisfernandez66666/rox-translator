@@ -27,10 +27,34 @@ func (s *Server) handlePublicTerms(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, publicDocPage("用户协议 / User Agreement", termsBody))
 }
 
-// handlePublicSLA 服务等级协议页。
+// handlePublicSLA 服务等级协议页（中英文切换）。
 func (s *Server) handlePublicSLA(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, publicDocPage("服务等级协议 / SLA", slaBody))
+	fmt.Fprint(w, publicDocPageLang("服务等级协议 / SLA", slaBodyZh, slaBodyEn))
+}
+
+// publicDocPageLang 支持中英文切换的文档页（如 SLA）：顶栏提供「中文 / English」切换，
+// 默认展示中文，切换后仅渲染对应语言段落，并记忆选择到 localStorage。
+func publicDocPageLang(title, zh, en string) string {
+	body := `<h1>` + title + `</h1>
+<div class="lang-switch" style="margin:6px 0 18px;display:flex;gap:8px">
+  <button id="btnZh" class="ls ls-on" onclick="setLang('zh')">中文</button>
+  <button id="btnEn" class="ls" onclick="setLang('en')">English</button>
+</div>
+<div id="secZh">` + zh + `</div>
+<div id="secEn" style="display:none">` + en + `</div>
+<style>
+.lang-switch .ls{border:1px solid var(--border);background:#fff;color:var(--text-2);font-size:13px;padding:6px 16px;border-radius:8px;cursor:pointer;transition:.2s}
+.lang-switch .ls-on{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:600}
+</style>
+<script>
+function setLang(l){var z=document.getElementById('secZh'),e=document.getElementById('secEn'),bz=document.getElementById('btnZh'),be=document.getElementById('btnEn');
+  if(l==='zh'){z.style.display='';e.style.display='none';bz.className='ls ls-on';be.className='ls'}else{z.style.display='none';e.style.display='';be.className='ls ls-on';bz.className='ls'}
+  try{localStorage.setItem('doc_lang',l)}catch(_){}
+}
+try{var s=localStorage.getItem('doc_lang');if(s==='en')setLang('en')}catch(_){}
+</script>`
+	return publicLayout(title, body)
 }
 
 // handlePublicPrivacy 数据保护条款（DPA）页。
@@ -75,9 +99,9 @@ th,td{border:1px solid var(--border);padding:10px 12px;text-align:left}
 th{background:var(--brand-light);color:var(--brand-active);font-weight:600}
 .tag{display:inline-block;background:var(--brand-light);color:var(--brand-active);border-radius:999px;padding:2px 12px;font-size:12px;font-weight:500}
 </style></head><body>
-<div class="header"><div class="brand">🌐 能言 LangCross</div><nav><a href="/pricing">定价 Pricing</a><a href="/docs/terms">用户协议 Terms</a><a href="/docs/sla">SLA</a><a href="/status">状态 Status</a><a href="/docs/privacy">隐私协议 Privacy</a><a class="btn" href="/admin">管理后台</a></nav></div>
+<div class="header"><div class="brand">🌐 能言 LangCross</div><nav><a href="/pricing">定价 Pricing</a><a href="/docs/terms">用户协议 Terms</a><a href="/docs/sla">SLA</a><a href="/docs/privacy">隐私协议 Privacy</a><a class="btn" href="/admin">管理后台</a></nav></div>
 <div class="wrap"><div class="card">` + body + `</div></div>
-<div class="footer">© 2026 能言 LangCross · 翻译平台<br><a href="/docs/terms">用户协议</a> · <a href="/docs/privacy">隐私协议</a> · <a href="/status">服务状态</a> · <a href="/admin">管理后台</a></div>
+<div class="footer">© 2026 能言 LangCross · 翻译平台<br><a href="/docs/terms">用户协议</a> · <a href="/docs/privacy">隐私协议</a> · <a href="/admin">管理后台</a></div>
 </body></html>`
 }
 
@@ -86,29 +110,38 @@ func publicDocPage(title, body string) string {
 	return publicLayout(title, `<h1>`+title+`</h1>`+body)
 }
 
-// pricingHTML 定价页正文（套餐卡片由前端 fetch /api/plans 动态渲染）。
+// pricingHTML 定价页正文（套餐卡片由前端 fetch /api/plans 动态渲染；样式统一品牌蓝）。
 const pricingHTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>定价 - 能言</title>
 <style>
-:root{--green:#2e7d32;--dark:#202124;--gray:#5f6368}
+:root{--brand:#2b3ee8;--brand-hover:#4a5cf0;--brand-active:#1c2bd0;--brand-light:#e7ebff;--text:#1a2233;--text-2:#5a6478;--border:#e3e6ef;--bg:#f4f6fa}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:var(--dark);background:#f5f7fb;line-height:1.7}
-.header{background:var(--green);color:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center}
-.header .brand{font-size:18px;font-weight:600}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:var(--text);background:var(--bg);line-height:1.75;font-size:15px}
+.header{background:linear-gradient(135deg,#2b3ee8 0%,#1c2bd0 100%);color:#fff;padding:0 24px;display:flex;justify-content:space-between;align-items:center;height:60px;position:sticky;top:0;z-index:20}
+.header .brand{font-size:18px;font-weight:700;letter-spacing:.3px}
 .header a{color:#fff;text-decoration:none;margin-left:18px;font-size:14px}
-.wrap{max-width:900px;margin:32px auto;padding:0 20px}
-.card{background:#fff;border-radius:14px;padding:28px 32px;box-shadow:0 2px 12px rgba(0,0,0,.06)}
-h1{font-size:22px;margin-bottom:8px;color:var(--green)}
-h2{font-size:17px;margin:22px 0 8px;color:var(--green)}
-p{margin:8px 0;color:#333}
-.footer{text-align:center;color:var(--gray);font-size:13px;padding:28px}
-table{width:100%;border-collapse:collapse;margin:14px 0}
-th,td{border:1px solid #e0e0e0;padding:10px 12px;text-align:left;font-size:14px}
-th{background:#e8f5e9;color:var(--green)}
-.note{background:#fff8e1;border-left:4px solid #f9a825;padding:12px 16px;border-radius:6px;font-size:14px;color:#5f6368;margin:16px 0}
+.header a:hover{opacity:.85}
+.wrap{max-width:920px;margin:32px auto;padding:0 20px}
+.card{background:#fff;border-radius:12px;padding:32px 36px;box-shadow:0 2px 12px rgba(26,35,126,.06);border:1px solid var(--border)}
+h1{font-size:24px;font-weight:700;margin-bottom:6px;color:var(--brand)}
+h2{font-size:18px;font-weight:600;margin:26px 0 10px;padding-left:11px;border-left:4px solid var(--brand);color:var(--text);line-height:1.4}
+p{margin:9px 0;color:#2b3145}
+a{color:var(--brand);text-decoration:none}
+a:hover{text-decoration:underline}
+.footer{text-align:center;color:var(--text-2);font-size:13px;padding:28px;line-height:2}
+.footer a{color:var(--text-2);margin:0 6px}
+.footer a:hover{color:var(--brand)}
+.note{background:var(--brand-light);border-left:4px solid var(--brand);padding:12px 16px;border-radius:8px;font-size:14px;color:var(--text-2);margin:16px 0}
+#plansBox{display:flex;flex-wrap:wrap;gap:14px;margin:14px 0}
+.plan{border:1px solid var(--border);border-radius:12px;padding:18px 20px;min-width:240px;flex:1 1 240px;background:#fff;transition:.2s}
+.plan:hover{border-color:var(--brand);box-shadow:0 4px 16px rgba(43,62,232,.12)}
+.plan b{font-size:16px;color:var(--text)}
+.plan .meta{color:var(--text-2);font-size:13px;margin:6px 0}
+.plan .price{color:var(--brand-active);font-weight:700;font-size:18px}
+.plan .tag2{display:inline-block;margin-top:6px;font-size:12px;color:var(--brand-active);background:var(--brand-light);border-radius:999px;padding:2px 12px}
 </style></head><body>
-<div class="header"><div class="brand">🌐 能言</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">用户协议 Terms</a><a href="/docs/sla">SLA</a><a href="/docs/privacy">隐私协议 Privacy</a></div></div>
+<div class="header"><div class="brand">🌐 能言 LangCross</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">用户协议 Terms</a><a href="/docs/sla">SLA</a><a href="/docs/privacy">隐私协议 Privacy</a><a href="/admin" style="background:#fff;color:var(--brand);padding:7px 16px;border-radius:8px;font-weight:600">管理后台</a></div></div>
 <div class="wrap">
 <div class="card">
 <h1>定价 Pricing</h1>
@@ -116,7 +149,7 @@ th{background:#e8f5e9;color:var(--green)}
 <h2>商业套餐 Plans</h2>
 <div id="plansBox"><p>加载中…</p></div>
 <div class="note">💡 套餐标注的句数为<b>单语言句数</b>：一次翻译译入 N 种语言将按 N 倍消耗；按实际用量从余额折算，具体以用量明细为准。</div>
-<h2>常见问题</h2>
+<h2>常见问题 FAQ</h2>
 <p><b>Q：如何计费？</b> 按每次翻译任务的实际消耗计费，专业校对模式包含知识库匹配与多轮质量保障环节。</p>
 <p><b>Q：额度用完后怎么办？</b> 可订阅付费包或购买增量包，到账后立即恢复；也可联系管理员充值。</p>
 <p><b>Q：支持哪些支付方式？</b> 支持微信 / 支付宝在线支付（对接中），静态二维码扫码 + 人工确认，当前可使用线下转账 + 管理员充值。</p>
@@ -126,10 +159,9 @@ th{background:#e8f5e9;color:var(--green)}
 fetch('/api/plans').then(r=>r.json()).then(d=>{
   const types={free:'免费体验',paid:'付费包',increment:'增量包'};
   const cards=(d.plans||[]).map(p=>{
-    return '<div style="border:1px solid #e0e0e0;border-radius:12px;padding:16px;margin:10px 10px 10px 0;display:inline-block;min-width:220px;vertical-align:top">'+
-      '<b>'+p.name+'</b><br><span style="color:#5f6368">'+p.sentences+' 句 · '+(types[p.ptype]||p.ptype)+'</span><br>'+
-      '<span style="color:#2e7d32;font-weight:600">¥'+p.price_money+'</span> / '+(p.duration_days||'—')+'天<br>'+
-      (p.ptype==='free' ? '<span style="color:#5f6368">注册即送</span>' : '<span style="color:#5f6368">订阅后生效</span>')+
+    return '<div class="plan"><b>'+p.name+'</b><div class="meta">'+p.sentences+' 句 · '+(types[p.ptype]||p.ptype)+'</div>'+
+      '<div class="price">¥'+p.price_money+'</div><div class="meta">/ '+(p.duration_days||'—')+' 天</div>'+
+      (p.ptype==='free' ? '<span class="tag2">注册即送</span>' : '<span class="tag2">订阅后生效</span>')+
       '</div>';
   }).join('');
   document.getElementById('plansBox').innerHTML=cards || '<p>暂无上架套餐，请联系管理员</p>';
@@ -235,16 +267,16 @@ const termsBody = `
 <h2>12. Contact</h2>
 <p>For questions, contact us via in-app tickets or the contact information published in the admin console.</p>`
 
-// slaBody 服务等级协议正文。
-const slaBody = `
-<p><b>中文</b>｜<i>English below</i></p>
+// slaBodyZh / slaBodyEn 服务等级协议正文（拆分为中英文两段，由页面语言切换器控制显示）。
+const slaBodyZh = `
 <h2>可用性目标</h2>
 <p>本服务月度可用性目标为 99.5%（不含计划维护与不可抗力）。可用性 =（当月总分钟数 − 不可用分钟数）÷ 当月总分钟数。</p>
 <h2>补偿机制</h2>
 <p>连续不可用超过 4 小时，或月度可用性低于目标，可申请等价 token 补偿，次月生效。</p>
 <h2>响应时限</h2>
-<p>工单支持响应时限：P1 严重故障 2 小时内响应，P2 一般问题 8 小时内响应，P3 咨询 24 小时内响应。</p>
-<hr>
+<p>工单支持响应时限：P1 严重故障 2 小时内响应，P2 一般问题 8 小时内响应，P3 咨询 24 小时内响应。</p>`
+
+const slaBodyEn = `
 <h2>Availability Target</h2>
 <p>Monthly availability target is 99.5% (excluding scheduled maintenance and force majeure). Availability = (total minutes − unavailable minutes) ÷ total minutes.</p>
 <h2>Credits</h2>

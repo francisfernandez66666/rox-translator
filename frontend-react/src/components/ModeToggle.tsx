@@ -17,12 +17,12 @@ export default function ModeToggle({ value, onChange, fastFirst = false }: Props
   const fast = { key: 'fast' as const, label: t('chat.modeFast') }
   const items = fastFirst ? [fast, pro] : [pro, fast]
   return (
-    <div style={{ display: 'inline-flex', background: 'rgba(26,115,232,.06)', borderRadius: 14, padding: 2, gap: 2 }}>
+    <div style={{ display: 'inline-flex', background: 'rgba(43,62,232,.06)', borderRadius: 14, padding: 2, gap: 2 }}>
       {items.map((it) => (
         <button key={it.key} title={t('chat.modeTip')} onClick={() => onChange(it.key)}
           style={{
-            border: '1px solid #d8dee6',
-            background: value === it.key ? '#1a73e8' : '#fff',
+            border: '1px solid var(--td-component-stroke, #d8deef)',
+            background: value === it.key ? 'var(--td-brand-color, #2b3ee8)' : '#fff',
             color: value === it.key ? '#fff' : '#777',
             fontSize: 14, padding: '6px 9px', borderRadius: 12, cursor: 'pointer',
           }}>

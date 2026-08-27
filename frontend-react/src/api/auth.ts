@@ -20,6 +20,8 @@ export interface LoginResp {
   success: boolean
   message?: string
   token?: string
+  /** 品牌专属域名：当用户所属租户配置了独立子域且本次登录不在该子域时返回，前端据此带 token 跳转过去 */
+  brand_host?: string
   user?: AuthUser
 }
 

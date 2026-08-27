@@ -36,6 +36,8 @@ export default function Login({ mode, onLogin }: Props) {
   const [regMsg, setRegMsg] = useState('')
   const [agreed, setAgreed] = useState(false)
   const [typeChoice, setTypeChoice] = useState<'personal' | 'enterprise'>('personal')
+  // 企业用户角色选择：admin=我是管理员（新建企业）；member=我是普通成员（须凭企业邀请码加入）
+  const [roleChoice, setRoleChoice] = useState<'admin' | 'member'>('admin')
   const [form, setForm] = useState({ code: '', name: '', invite: '', email: '', emailCode: '', industry: '' })
   const [industries, setIndustries] = useState<Array<{ code: string; name: string }>>([])
   const [emailVerifyOn, setEmailVerifyOn] = useState(false)
@@ -111,6 +113,12 @@ export default function Login({ mode, onLogin }: Props) {
       const resp = await login(username, password)
       if (!resp.success || !resp.token) { setError(resp.message || t('login.fail')); return }
       if (mode === 'admin' && roleLevel(resp.user?.role) < 2) { setError(t('login.noAdmin')); return }
+      // 品牌专属域名跳转（需求 1-B）：若后端返回 brand_host 且与当前域不一致，带 token 重定向过去
+      if (resp.brand_host && resp.brand_host !== window.location.host) {
+        const target = window.location.protocol + '//' + resp.brand_host + '/?token=' + encodeURIComponent(resp.token)
+        window.location.replace(target)
+        return
+      }
       setAuthToken(resp.token)
       setActiveTenantId(0)
       onLogin(resp.user!)
@@ -140,20 +148,24 @@ export default function Login({ mode, onLogin }: Props) {
     if (!branding.dedicatedRegister && typeChoice === 'enterprise' && !form.name.trim()) { setRegMsg(t('login.orgNameRequired')); return }
     if (captchaOn && !captchaTokenRef.current) { setRegMsg('请先完成人机验证'); return }
     const urlRef = (() => { try { return new URLSearchParams(window.location.search).get('ref')?.trim() || undefined } catch { return undefined } })()
-    // 个人用户：好友邀请码经 ref 走邀请裂变；企业用户：公开注册不再凭邀请码加入企业
-    const ref = (!branding.dedicatedRegister && typeChoice === 'personal') ? (form.invite.trim() || urlRef || undefined) : undefined
+    const regType = (!branding.dedicatedRegister ? typeChoice : 'enterprise')
+    // 个人用户：好友邀请码经 ref 走邀请裂变；企业用户：普通成员须凭企业邀请码加入
+    const ref = (regType === 'personal') ? (form.invite.trim() || urlRef || undefined) : undefined
+    const entInvite = (regType === 'enterprise' && roleChoice === 'member') ? (form.invite.trim() || undefined) : undefined
+    if (regType === 'enterprise' && roleChoice === 'member' && !entInvite) { setRegMsg('普通成员须凭企业邀请码加入，请填写邀请码'); return }
     setLoading(true); setRegMsg('')
     try {
       const r = await authRegister({
         username, password,
-        type: (!branding.dedicatedRegister ? typeChoice : 'enterprise'),
-        code: (!branding.dedicatedRegister && typeChoice === 'enterprise' ? (form.code || undefined) : undefined),
-        name: (!branding.dedicatedRegister && typeChoice === 'enterprise' ? (form.name || undefined) : undefined),
-        invite: undefined,
+        type: regType,
+        code: (regType === 'enterprise' ? (form.code || undefined) : undefined),
+        name: (regType === 'enterprise' ? (form.name || undefined) : undefined),
+        invite: entInvite,
+        role_choice: (regType === 'enterprise' ? roleChoice : undefined),
         email: form.email.trim() || undefined,
         email_code: form.emailCode || undefined,
         captcha_token: captchaTokenRef.current || undefined,
-        industry: (!branding.dedicatedRegister && typeChoice === 'enterprise' ? (form.industry || undefined) : undefined),
+        industry: (regType === 'enterprise' ? (form.industry || undefined) : undefined),
         ref,
         agreed,
       })
@@ -269,9 +281,20 @@ export default function Login({ mode, onLogin }: Props) {
                 </Button>
               </div>
             )}
-            {/* 企业用户：填写企业信息（公开注册合并原「管理员/普通用户」为单一企业注册，注册人成为企业管理员） */}
+            {/* 企业用户：区分「管理员 / 普通成员」角色（需求 7） */}
             {typeChoice === 'enterprise' && !branding.dedicatedRegister ? (
               <>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Button block variant={roleChoice === 'admin' ? 'base' : 'outline'} theme="primary"
+                          onClick={() => setRoleChoice('admin')}>我是管理员（新建企业）</Button>
+                  <Button block variant={roleChoice === 'member' ? 'base' : 'outline'} theme="primary"
+                          onClick={() => setRoleChoice('member')}>我是普通成员（受邀加入）</Button>
+                </div>
+                {/* 普通成员须凭企业邀请码加入；无效/非企业码将被降级为个人用户（需求 2） */}
+                {roleChoice === 'member' && (
+                  <Input value={form.invite} onChange={(v) => setForm({ ...form, invite: v })}
+                         placeholder="请输入企业邀请码" />
+                )}
                 <Input value={form.code} onChange={(v) => setForm({ ...form, code: v })} placeholder={t('login.orgCode')} />
                 <Input value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder={t('login.orgName')} />
                 <Select value={form.industry} onChange={(v) => setForm({ ...form, industry: v as string })}

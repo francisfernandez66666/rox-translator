@@ -141,9 +141,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		auditTID = 1
 	}
 	s.Store.LogAudit(auditTID, u.ID, "login", "auth", "用户登录")
+	// 品牌域名跳转：若用户所属租户配置了专属品牌子域，且本次登录不在该子域上，
+	// 返回 brand_host 供前端带 token 重定向过去（需求 1-B）。
+	brandHost := ""
+	if t, e := s.Ten.GetByID(u.TenantID); e == nil && t.Domain != "" {
+		base := brandingBaseDomain(s)
+		if bh := strings.TrimSpace(t.Domain) + "." + base; r.Host != bh {
+			brandHost = bh
+		}
+	}
 	// 返回 JWT 与脱敏后的用户信息（不含密码哈希）
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "token": tok,
+		"success": true, "token": tok, "brand_host": brandHost,
 		"user": map[string]interface{}{
 			"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
 			"role": u.Role, "tenant_id": u.TenantID,
@@ -200,23 +209,29 @@ func (s *Server) handleMeContext(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	tenantName := ""
+	isPersonal := false
+	inviteEnabled := false
 	if u.TenantID > 0 && s.Ten != nil {
 		if t, e := s.Ten.GetByID(u.TenantID); e == nil {
 			tenantName = t.Name
+			isPersonal = t.IsPersonal
+			inviteEnabled = t.InviteEnabled
 		}
 	}
 	packs, _ := s.Store.ListApplicablePacks(u.TenantID)
 	writeJSON(w, 200, map[string]interface{}{
-		"success":      true,
-		"username":     u.Username,
-		"display_name": u.DisplayName,
-		"email":        u.Email,
-		"role":         u.Role,
-		"tenant_id":    u.TenantID,
-		"tenant_name":  tenantName,
-		"org_id":       u.OrgID,
-		"org_name":     orgName,
-		"kb_packs":     packs,
+		"success":        true,
+		"username":       u.Username,
+		"display_name":   u.DisplayName,
+		"email":          u.Email,
+		"role":           u.Role,
+		"tenant_id":      u.TenantID,
+		"tenant_name":    tenantName,
+		"is_personal":    isPersonal,
+		"invite_enabled": inviteEnabled,
+		"org_id":         u.OrgID,
+		"org_name":       orgName,
+		"kb_packs":       packs,
 	})
 }
 

@@ -90,7 +90,7 @@ export default function AdminDashboard() {
   return (
     <div className="admin-shell">
       <aside className="admin-side">
-        <div style={{ fontWeight: 800, color: '#1a237e', padding: '6px 10px 14px' }}>
+        <div style={{ fontWeight: 800, color: 'var(--td-brand-color-active, #1f33d6)', padding: '6px 10px 14px' }}>
           {branding.brandLogo
             ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 60 }} />
             : `🌐 ${branding.brandName || t('admin.title')}`}

@@ -351,7 +351,7 @@ export default function TicketsPage() {
         {pct !== null && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '10px 0 6px' }}>
             <Progress theme="plump" percentage={pct} style={{ flex: 1 }} />
-            <span style={{ fontSize: 14, fontWeight: 700, color: '#1a73e8', minWidth: 42 }}>{pct}%</span>
+            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--td-brand-color, #2f47f5)', minWidth: 42 }}>{pct}%</span>
             {stepLabel && <span style={{ fontSize: 12.5, color: '#666' }}>{stepLabel}</span>}
           </div>
         )}
@@ -362,7 +362,7 @@ export default function TicketsPage() {
                 <span style={{ flex: 1, color: '#555' }}>{STEP_NAMES[st.step] || st.step}</span>
                 <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4,
                   background: st.status === 'success' ? '#e6f4ea' : st.status === 'running' ? '#e8f0fe' : st.status === 'error' ? '#fce8e6' : '#eee',
-                  color: st.status === 'success' ? '#2e7d32' : st.status === 'running' ? '#1a73e8' : st.status === 'error' ? '#c5221f' : '#888' }}>{st.status}</span>
+                  color: st.status === 'success' ? '#2e7d32' : st.status === 'running' ? 'var(--td-brand-color, #2f47f5)' : st.status === 'error' ? '#c5221f' : '#888' }}>{st.status}</span>
                 {st.error && <span style={{ color: '#c5221f', fontSize: 11 }}>⚠️ {st.error}</span>}
               </div>
             ))}

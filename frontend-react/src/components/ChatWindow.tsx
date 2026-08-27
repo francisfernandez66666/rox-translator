@@ -311,7 +311,7 @@ export default function ChatWindow() {
 
       {/* 余额 / 用量条 */}
       {(balance || usage || orgBudget) && (
-        <div style={{ background: '#e8f0fe', color: '#1a73e8', fontSize: 12, padding: '4px 6%', display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ background: '#e8f0fe', color: 'var(--td-brand-color, #2f47f5)', fontSize: 12, padding: '4px 6%', display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
           {balance && <span>余额 {fmtNum(balance.tokens)}（≈{fmtNum(balance.approx)} 句）</span>}
           {usage && <span>今日 {fmtNum(usage.today)} token（≈{fmtNum(usage.todaySentences)} 句）</span>}
           {orgBudget && <span>{orgBudget.name} {fmtNum(orgBudget.used)}/{fmtNum(orgBudget.limit)}</span>}
@@ -322,7 +322,7 @@ export default function ChatWindow() {
       <div className="chat-scroll" ref={scrollRef}>
         {chat.messages.length === 0 && (
           <div style={{ textAlign: 'center', marginTop: 60 }}>
-            <div style={{ fontSize: 26, fontWeight: 800, color: '#1a237e' }}>{t2('chat.welcome')}</div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--td-brand-color-active, #1f33d6)' }}>{t2('chat.welcome')}</div>
             <div style={{ fontSize: 14, color: '#5f6b7a', marginTop: 10, maxWidth: 480, margin: '10px auto 0' }}>
               {t2('chat.welcomeSub')}
             </div>

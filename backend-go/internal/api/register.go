@@ -194,8 +194,42 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				req.Name = "个人用户"
 			}
 		default: // enterprise
-			// 企业用户：公开注册不再凭邀请码加入；注册人成为企业管理员
-			req.Invite = ""
+			// 企业用户按角色选择区分（需求 7）：
+			//  admin  = 我是管理员（新建企业，注册人成为企业管理员，忽略邀请码）
+			//  member = 我是普通成员（须凭有效企业邀请码加入；无效/非企业码 → 降级为个人用户，需求 2）
+			roleChoice := strings.ToLower(strings.TrimSpace(req.RoleChoice))
+			if roleChoice == "member" {
+				if code := strings.TrimSpace(req.Invite); code != "" {
+					if inv, e := s.Store.GetInviteCodeByCode(code); e == nil && inv.Used == 0 && inv.TenantID > 0 {
+						// 有效企业邀请码：保留 invite，后续走受邀加入（普通成员）
+					} else {
+						// 无效/已用/非企业邀请码：降级为个人用户（强制不得注册该企业用户）
+						req.Invite = ""
+						creatingPersonal = true
+						req.Code = fmt.Sprintf("p_%d", time.Now().UnixNano())
+						if req.Name == "" {
+							req.Name = req.Username
+						}
+						if req.Name == "" {
+							req.Name = "个人用户"
+						}
+					}
+				} else {
+					// 成员模式但未提供邀请码：降级为个人用户
+					creatingPersonal = true
+					req.Code = fmt.Sprintf("p_%d", time.Now().UnixNano())
+					if req.Name == "" {
+						req.Name = req.Username
+					}
+					if req.Name == "" {
+						req.Name = "个人用户"
+					}
+				}
+			}
+			// admin（或默认）新建企业：忽略邀请码
+			if !creatingPersonal {
+				req.Invite = ""
+			}
 		}
 	}
 	// 专属域名：自动归入对应租户、强制普通用户、忽略邀请码与类型选择

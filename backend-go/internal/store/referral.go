@@ -185,6 +185,11 @@ func (s *Store) RewardPaidPermanent(inviteeUID, tokens, days int64) error {
 	if err := s.db.QueryRow("SELECT tenant_id FROM users WHERE id=?", inviterUID).Scan(&inviterTID); err != nil || inviterTID <= 0 {
 		return nil
 	}
+	// ★ 企业邀请人（非个人租户）不参与「多邀得多」付费奖励（需求 5）
+	var inviterPersonal int
+	if err := s.db.QueryRow("SELECT is_personal FROM tenants WHERE id=?", inviterTID).Scan(&inviterPersonal); err != nil || inviterPersonal != 1 {
+		return nil // 企业租户：跳过付费奖励
+	}
 	email := s.inviteeEmailOf(inviteeUID)
 	if s.PairRewardExists(inviterUID, inviteeUID, typ) || s.EmailRewardExists(email, typ) {
 		return nil // 仅首笔付费触发；邮箱撞库同样永久拒绝
