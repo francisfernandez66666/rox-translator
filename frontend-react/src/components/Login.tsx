@@ -134,7 +134,7 @@ export default function Login({ mode, onLogin }: Props) {
     if (!username || !password) { setRegMsg(t('login.needInput')); return }
     if (password.length < 6) { setRegMsg(t('login.pwdShort')); return }
     if (!agreed) { setRegMsg(t('login.needAgree')); return }
-    if (roleChoice === 'user' && !form.invite.trim()) { setRegMsg(t('login.userNeedsInvite')); return }
+    if (!branding.dedicatedRegister && roleChoice === 'user' && !form.invite.trim()) { setRegMsg(t('login.userNeedsInvite')); return }
     if (emailVerifyOn && !form.invite.trim() && (!form.emailCode.trim() || !form.email.trim())) { setRegMsg('请填写邮箱并输入验证码'); return }
     if (!form.email.trim()) { setRegMsg(t('login.emailPlaceholder')); return }
     if (captchaOn && !captchaTokenRef.current) { setRegMsg('请先完成人机验证'); return }
@@ -143,11 +143,14 @@ export default function Login({ mode, onLogin }: Props) {
     try {
       const r = await authRegister({
         username, password,
-        code: form.code || undefined, name: form.name || undefined,
-        invite: form.invite || undefined, email: form.email.trim() || undefined,
+        code: (branding.dedicatedRegister ? undefined : (form.code || undefined)),
+        name: (branding.dedicatedRegister ? undefined : (form.name || undefined)),
+        invite: (branding.dedicatedRegister ? undefined : (form.invite || undefined)),
+        email: form.email.trim() || undefined,
         email_code: form.emailCode || undefined,
         captcha_token: captchaTokenRef.current || undefined,
-        industry: form.industry || undefined, ref,
+        industry: (branding.dedicatedRegister ? undefined : (form.industry || undefined)),
+        ref,
         agreed,
       })
       if (!r.success) { setRegMsg(r.message || t('register.fail')); return }
@@ -191,7 +194,7 @@ export default function Login({ mode, onLogin }: Props) {
   }
 
   return (
-    <div className="login-wrap">
+    <div className="login-wrap" style={branding.brandHomeBg ? { backgroundImage: `url(${branding.brandHomeBg})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}>
       <div className="login-lang">
         <Button size="small" variant="outline" theme="primary" onClick={toggleLang}>
           {{ zh: 'English', en: '中文' }[useLangSafe()]}
@@ -225,12 +228,22 @@ export default function Login({ mode, onLogin }: Props) {
         <div className="login-card">
           <div className="login-logo">{t('login.selfRegisterTitle')}</div>
           <div className="login-sub">{t('login.selfRegisterSub')}</div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-            <Button block variant={roleChoice === 'admin' ? 'base' : 'outline'} theme="primary"
-                    onClick={() => setRoleChoice('admin')}>🏢 {t('login.roleAdmin')}</Button>
-            <Button block variant={roleChoice === 'user' ? 'base' : 'outline'} theme="primary"
-                    onClick={() => setRoleChoice('user')}>👤 {t('login.roleUser')}</Button>
-          </div>
+          {branding.dedicatedRegister ? (
+            <div style={{ fontSize: 13, color: '#335', background: '#eef4ff', border: '1px solid #c9ddff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.6 }}>
+              {tpl('login.dedicatedInfo', {
+                name: branding.tenantName || branding.brandName || t('login.platform'),
+                code: branding.code || '-',
+                industry: branding.industryName || branding.industry || '-',
+              })}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <Button block variant={roleChoice === 'admin' ? 'base' : 'outline'} theme="primary"
+                      onClick={() => setRoleChoice('admin')}>🏢 {t('login.roleAdmin')}</Button>
+              <Button block variant={roleChoice === 'user' ? 'base' : 'outline'} theme="primary"
+                      onClick={() => setRoleChoice('user')}>👤 {t('login.roleUser')}</Button>
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <Input value={username} onChange={setUsername} placeholder={t('login.username')} />
             <form onSubmit={(e) => e.preventDefault()}><Input type="password" value={password} onChange={setPassword} placeholder={t('login.password')} /></form>
@@ -244,7 +257,7 @@ export default function Login({ mode, onLogin }: Props) {
                 </Button>
               </div>
             )}
-            {roleChoice === 'admin' ? (
+            {roleChoice === 'admin' && !branding.dedicatedRegister ? (
               <>
                 <Input value={form.code} onChange={(v) => setForm({ ...form, code: v })} placeholder={t('login.orgCode')} />
                 <Input value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder={t('login.orgName')} />
@@ -253,9 +266,11 @@ export default function Login({ mode, onLogin }: Props) {
                         options={industries.map((i) => ({ label: i.name, value: i.code }))} />
               </>
             ) : null}
-            {/* 邀请码：user 必填；admin 可选（个人裂变码走 URL ?ref= 自动携带） */}
-            <Input value={form.invite} onChange={(v) => setForm({ ...form, invite: v })}
-                   placeholder={roleChoice === 'user' ? t('login.inviteRequired') : t('login.invite')} />
+            {/* 邀请码：user 必填；admin 可选（个人裂变码走 URL ?ref= 自动携带）；专属域名场景不展示 */}
+            {!branding.dedicatedRegister && (
+              <Input value={form.invite} onChange={(v) => setForm({ ...form, invite: v })}
+                     placeholder={roleChoice === 'user' ? t('login.inviteRequired') : t('login.invite')} />
+            )}
             <div ref={captchaBoxRef} id="__ts_widget__" />
             <Checkbox checked={agreed} onChange={(c) => setAgreed(!!c)}>
               {t('login.agreeTerms')}{' '}

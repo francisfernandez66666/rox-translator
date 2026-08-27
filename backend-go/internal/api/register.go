@@ -65,6 +65,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			"message": fmt.Sprintf("注册过于频繁，请 %d 秒后再试", wait)})
 		return
 	}
+	// 专属域名自助注册：从访问 Host 解析目标租户（仅品牌子域、非主站、非默认平台租户）。
+	// 命中后注册强制归入该企业且仅为普通成员（禁止建企业/升管理员、免邀请码）。
+	dedicatedTid := resolveDedicatedTenant(s, r)
 	var req struct {
 		Username   string `json:"username"`      // 注册用户名
 		Password   string `json:"password"`      // 密码（至少 6 位）
@@ -174,15 +177,24 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// ★ 角色选择（四期体验增强）：
 	//   admin（默认，兼容旧客户端）= 创建新企业并成为租户管理员；
 	//   user = 必须凭有效邀请码加入已有企业成为普通用户。
-	switch strings.ToLower(strings.TrimSpace(req.RoleChoice)) {
-	case "user":
-		if req.Invite == "" {
-			writeJSON(w, 400, map[string]interface{}{"success": false,
-				"message": "普通用户注册需通过邀请码加入企业；如需创建企业请选择「我是管理员」"})
-			return
+	//   专属域名场景（dedicatedTid>0）忽略角色选择：强制为普通用户、自动归入该企业。
+	if dedicatedTid == 0 {
+		switch strings.ToLower(strings.TrimSpace(req.RoleChoice)) {
+		case "user":
+			if req.Invite == "" {
+				writeJSON(w, 400, map[string]interface{}{"success": false,
+					"message": "普通用户注册需通过邀请码加入企业；如需创建企业请选择「我是管理员」"})
+				return
+			}
+		case "admin":
+			req.Invite = "" // 管理员路径不接受邀请码混入（避免语义冲突降级为普通用户）
 		}
-	case "admin":
-		req.Invite = "" // 管理员路径不接受邀请码混入（避免语义冲突降级为普通用户）
+	}
+	// 专属域名：自动归入对应租户、强制普通用户、忽略邀请码与角色选择
+	if dedicatedTid > 0 {
+		req.RoleChoice = "user"
+		req.Invite = ""
+		inviteTenantID = dedicatedTid
 	}
 	if req.Invite != "" {
 		inv, err := s.Store.GetInviteCodeByCode(strings.TrimSpace(req.Invite))
@@ -272,9 +284,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. 创建账号：独立租户 → tenant_admin；受邀加入 → user
+	// 3. 创建账号：独立租户 → tenant_admin；受邀加入 → user；专属域名 → 强制普通用户
 	role := store.RoleTenantAdmin
 	if inviteTenantID > 0 && s.wasInviteBind(req.Invite) {
+		role = store.RoleUser
+	}
+	if dedicatedTid > 0 {
 		role = store.RoleUser
 	}
 	// ★ 邀请码绑定组织：受邀用户归入邀请码指定的组织层级（四期）
@@ -303,7 +318,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// ★ 新租户默认 API Key（2026-08-26 冒烟修复）：移到建号之后签发并强绑定创建人——
 	//   原「先发 Key 后建号」产生 user_id=0 的孤儿 Key，被 authenticateAPIKey
 	//   「Key 必须归属用户」闸门拦截，新注册租户的 Key 要重启服务（backfill）后才生效。
-	if inviteTenantID > 0 && req.Invite == "" {
+	//   专属域名注册视为「加入已有企业」，不签发独立 API Key（与邀请码加入保持一致）。
+	if inviteTenantID > 0 && req.Invite == "" && dedicatedTid == 0 {
 		defaultKey = s.issueDefaultAPIKeyFor(inviteTenantID, nu.ID, "默认 Key")
 	}
 	// ★ 邀请裂变首绑（白皮书 §5）：携带个人邀请码注册→写入 referred_by（首绑闸门），
@@ -348,6 +364,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	auditRole := "user"
 	if inviteTenantID == 0 || !s.wasInviteBind(req.Invite) {
 		auditRole = "admin"
+	}
+	if dedicatedTid > 0 {
+		auditRole = "user"
 	}
 	s.Store.LogAudit(inviteTenantID, nu.ID, "register", "auth", "自助注册 role="+auditRole)
 	// 登记注册成功（推进同 IP 频率窗口）

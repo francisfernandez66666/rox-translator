@@ -20,6 +20,7 @@ export default function BrandP() {
   const [name, setName] = useState('')
   const [logo, setLogo] = useState('')
   const [domain, setDomain] = useState('')
+  const [homeBg, setHomeBg] = useState('')
   const [saving, setSaving] = useState(false)
   const [loaded, setLoaded] = useState(false)
   // 后端回传：当前编辑租户是否已购有效付费套餐 / 是否被超管授权（二者任一即可编辑）
@@ -37,6 +38,7 @@ export default function BrandP() {
         setName(j.brand_name || '')
         setLogo(j.brand_logo || '')
         setDomain(j.domain || '')
+        setHomeBg(j.brand_home_bg || '')
         setBrandPaid(!!j.brand_paid)
         setBrandGranted(!!j.brand_granted)
         setLoaded(true)
@@ -54,6 +56,15 @@ export default function BrandP() {
     e.currentTarget.value = ''
   }
 
+  const onHomeBgFile = (e: any) => {
+    const file: File | undefined = e?.target?.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => setHomeBg(String(reader.result))
+    reader.readAsDataURL(file)
+    e.currentTarget.value = ''
+  }
+
   const save = async () => {
     if (!editable) return
     setSaving(true)
@@ -63,6 +74,7 @@ export default function BrandP() {
         brand_name: name,
         brand_logo: logo,
         domain,
+        brand_home_bg: homeBg,
       })
       if (j.success) MessagePlugin.success(t('brand.saved'))
       else MessagePlugin.error(j.message || 'error')
@@ -94,6 +106,9 @@ export default function BrandP() {
   return (
     <Panel title={t('brand.title')}>
       <p style={{ fontSize: 13, color: '#667', marginBottom: 12 }}>{t('brand.hint')}</p>
+      <div style={{ fontSize: 13, color: '#335', background: '#eef4ff', border: '1px solid #c9ddff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.6 }}>
+        🌟 {t('brand.featureDedicated')}
+      </div>
       {isSuper && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f3f0ff', border: '1px solid #d6c8ff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13 }}>
           <span>{tpl('brand.grantLabel', { id: targetTenantId })}</span>
@@ -131,12 +146,25 @@ export default function BrandP() {
            <div>
              <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.domain')}</div>
               <Input value={domain} disabled={!editable} onChange={(v: any) => setDomain(String(v ?? ''))} placeholder="请输入你想要的域名名称" />
-             <div style={{ fontSize: 12, color: '#889', marginTop: 4 }}>
-               你将改的是 {domain || '前缀'}.lexicorn.cn
-             </div>
-           </div>
+              <div style={{ fontSize: 12, color: '#889', marginTop: 4 }}>
+                你将改的是 {domain || '前缀'}.lexicorn.cn
+              </div>
+            </div>
 
-          {editable && (
+            <div>
+              <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.homeBg')}</div>
+              <input type="file" accept="image/*" disabled={!editable} onChange={onHomeBgFile} />
+              {homeBg && (
+                <div style={{ marginTop: 8, padding: 12, border: '1px dashed #d0d5e0', borderRadius: 8, display: 'inline-block' }}>
+                  <img src={homeBg} alt="bg" style={{ height: 96, maxWidth: 420, objectFit: 'cover', display: 'block' }} />
+                </div>
+              )}
+              <div style={{ fontSize: 13, margin: '8px 0 4px' }}>{t('brand.homeBgUrl')}</div>
+              <Input value={homeBg} disabled={!editable} onChange={setHomeBg} placeholder="https://…/bg.png" />
+              <div style={{ fontSize: 12, color: '#889', marginTop: 4 }}>{t('brand.homeBgHint')}</div>
+            </div>
+
+           {editable && (
             <div>
               <Button theme="primary" loading={saving} onClick={save}>{t('brand.save')}</Button>
             </div>

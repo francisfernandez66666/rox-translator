@@ -24,12 +24,13 @@ type Tenant struct {
 	ExpiresAt   string `json:"expires_at"`  // 有效期（空=永久），格式 2006-01-02 或 RFC3339
 	Permissions string `json:"permissions"` // JSON 权限字符串（解码见 Perms）
 	Industry    string `json:"industry"`    // 注册行业编码（关联共享行业包的载入过滤）
-	BrandName   string `json:"brand_name"`  // 自定义品牌展示名（租户级品牌定制）
-	BrandLogo   string `json:"brand_logo"`  // 自定义品牌 Logo URL（空=用默认）
-	Domain      string `json:"domain"`      // 自定义访问域名（用于按域名解析租户品牌）
-	BrandLinks  string `json:"brand_links"` // 自定义页脚链接 JSON 数组（[{label,label_en,url}]）
-	CreatedAt   string `json:"created_at"`  // 创建时间（RFC3339 字符串）
-	UpdatedAt   string `json:"updated_at"`  // 更新时间（RFC3339 字符串）
+	BrandName    string `json:"brand_name"`    // 自定义品牌展示名（租户级品牌定制）
+	BrandLogo    string `json:"brand_logo"`    // 自定义品牌 Logo URL（空=用默认）
+	Domain       string `json:"domain"`        // 自定义访问域名（用于按域名解析租户品牌）
+	BrandHomeBg  string `json:"brand_home_bg"`  // 未登录首页背景图（base64 dataURL 或外链 URL，空=用默认）
+	BrandLinks   string `json:"brand_links"`   // 自定义页脚链接 JSON 数组（[{label,label_en,url}]）
+	CreatedAt    string `json:"created_at"`    // 创建时间（RFC3339 字符串）
+	UpdatedAt    string `json:"updated_at"`    // 更新时间（RFC3339 字符串）
 }
 
 // BrandLink 自定义品牌链接项（页脚展示）
@@ -152,11 +153,16 @@ func (s *Store) ensureTable() error {
 			return err
 		}
 	}
+	if !have["brand_home_bg"] {
+		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_home_bg TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // tenantColumns 租户查询统一列清单（与 scanTenant 顺序一致）。
-const tenantColumns = `id, code, name, status, expires_at, permissions, COALESCE(industry,''), COALESCE(brand_name,''), COALESCE(brand_logo,''), COALESCE(domain,''), COALESCE(brand_links,''), created_at, updated_at`
+const tenantColumns = `id, code, name, status, expires_at, permissions, COALESCE(industry,''), COALESCE(brand_name,''), COALESCE(brand_logo,''), COALESCE(domain,''), COALESCE(brand_home_bg,''), COALESCE(brand_links,''), created_at, updated_at`
 
 // scanner 同时兼容 *sql.Row 与 *sql.Rows 的 Scan 方法。
 type scanner interface{ Scan(dest ...interface{}) error }
@@ -164,7 +170,7 @@ type scanner interface{ Scan(dest ...interface{}) error }
 // scanTenant 从一行中解析租户对象（字段顺序须与 tenantColumns 一致）。
 func scanTenant(s scanner) (*Tenant, error) {
 	var t Tenant
-	if err := s.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.BrandName, &t.BrandLogo, &t.Domain, &t.BrandLinks, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	if err := s.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.BrandName, &t.BrandLogo, &t.Domain, &t.BrandHomeBg, &t.BrandLinks, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
 	t.Status = effectiveStatus(t.Status, t.ExpiresAt)
@@ -276,6 +282,13 @@ func (s *Store) SetBranding(id int64, brandName, brandLogo, domain, brandLinks s
 	_, err := s.db.Exec(
 		"UPDATE tenants SET brand_name=?, brand_logo=?, domain=?, brand_links=?, updated_at=? WHERE id=?",
 		brandName, brandLogo, domain, brandLinks, nowStr(), id)
+	return err
+}
+
+// SetBrandHomeBg 保存租户级「未登录首页背景图」（base64 dataURL 或外链 URL，空串=清空）。
+// 参数：id=租户 ID；bg=背景图数据（dataURL 或 URL），空串表示恢复默认背景。
+func (s *Store) SetBrandHomeBg(id int64, bg string) error {
+	_, err := s.db.Exec("UPDATE tenants SET brand_home_bg=?, updated_at=? WHERE id=?", bg, nowStr(), id)
 	return err
 }
 

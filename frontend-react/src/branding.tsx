@@ -14,12 +14,20 @@ export interface Branding {
   brandName: string  // 自定义品牌展示名（空=用默认）
   brandLogo: string  // 自定义品牌 Logo URL（空=用默认文字）
   domain: string     // 子域名前缀
+  brandHomeBg: string   // 未登录首页背景图（base64 dataURL 或外链 URL，空=用默认）
+  code: string          // 企业编码（专属域名注册自动带入展示）
+  industry: string      // 行业编码（专属域名注册自动带入展示）
+  industryName: string  // 行业名称（专属域名注册自动带入展示）
+  dedicatedRegister: boolean // 当前是否处于「专属域名自助注册」场景
 }
 
 // 默认品牌（未定制时回退）
 export const DEFAULT_BRAND_NAME = '能言 LangCross'
 
-const DEFAULT: Branding = { tenantId: 0, tenantName: '', brandName: '', brandLogo: '', domain: '' }
+const DEFAULT: Branding = {
+  tenantId: 0, tenantName: '', brandName: '', brandLogo: '', domain: '',
+  brandHomeBg: '', code: '', industry: '', industryName: '', dedicatedRegister: false,
+}
 
 const Ctx = createContext<Branding>(DEFAULT)
 
@@ -45,6 +53,11 @@ export function BrandingProvider({ tenantId, children }: { tenantId?: number; ch
           brandName: j.brand_name || '',
           brandLogo: j.brand_logo || '',
           domain: j.domain || '',
+          brandHomeBg: j.brand_home_bg || '',
+          code: j.code || '',
+          industry: j.industry || '',
+          industryName: j.industry_name || '',
+          dedicatedRegister: !!j.dedicated_register,
         })
       })
       .catch(() => {})

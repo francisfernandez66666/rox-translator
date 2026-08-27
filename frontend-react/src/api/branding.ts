@@ -14,7 +14,11 @@ export interface BrandLink {
 
 /** 获取品牌信息（按域名自动解析；super 可指定 tenant_id） */
 export async function tenantBranding(tenantId?: number) {
-  return request<{ success: boolean; tenant_id: number; brand_name: string; brand_logo: string; domain: string; brand_paid: boolean; brand_granted: boolean }>(
+  return request<{
+    success: boolean; tenant_id: number; name: string; code: string; industry: string; industry_name: string
+    brand_name: string; brand_logo: string; domain: string; brand_home_bg: string
+    brand_paid: boolean; brand_granted: boolean; dedicated_register: boolean
+  }>(
     `/api/tenant/branding${tenantId ? `?tenant_id=${tenantId}` : ''}`,
   )
 }
@@ -33,6 +37,7 @@ export async function tenantBrandingSave(p: {
   brand_name: string
   brand_logo: string
   domain: string
+  brand_home_bg?: string
 }) {
   return request<{ success: boolean; message?: string }>('/api/tenant/branding', {
     method: 'POST',
