@@ -54,7 +54,8 @@
 - **TM 自闭环**：tm_review 待审池唯一入库通道（超管人工审核通过才落正式 TM）；bitext/tmx/反馈修正/命中达标四来源候选
 - **开放 API**：`POST /openapi/v1/tasks` 异步任务 + 轮询 status/download + balance；AES-GCM 密钥加密与一次性明文展示
 - **组织架构**：平台根→租户根→组织→部门四级树、拖拽调层级、部门预算徽标弹窗、邀请码绑定组织
-- **管理后台**：三工作台（超管/租管/部门管）、租户切换器、OpenAPI 文档在线编辑（双语）、审计日志、告警中心、记忆审核台
+  - **管理后台**：三工作台（超管/租管/部门管）、租户切换器、OpenAPI 文档在线编辑（双语）、审计日志、告警中心、记忆审核台
+  - **品牌定制与子域名**：按子域名前缀解析租户品牌（名称/Logo/子域）；Caddy on-demand TLS 自动签发证书（需 DNS 通配符 A 记录 `*.lexicorn.cn → 服务器 IP`）；品牌定制为付费套餐功能（有效付费套餐或超管授权方可编辑，未满足仅可查看）
 - **Office 划译插件**：Word 侧加载 taskpane，选区翻译插回文档
 - **运维护栏**：GOMEMLIMIT=850Mi、LLM 并发 8（禁 HTTP/2 治流挂起）、worker 4、memleak 日志采样、产物留存 14 天+到期提醒、pending 订单 15min 自动关闭、低额提醒巡检
 
@@ -75,6 +76,7 @@
 | 194211c+7225bfa | CommitD 邀请裂变全量：存储层首绑闸门/叠加发放/付费去重 + my/qrcode 接口 + 注册绑定与付费奖励钩子 + 前端邀请面板；修复 RewardPaidPermanent 租户取错、套餐订单 amount_tokens=0 致入账 0、QuotaGrantMigrate/ReferralMigrate 未挂载三处存量缺陷 |
 | 1e37128 | 今日改动范围全量中文注释补全（后端 32 文件 + 前端 10 文件，无逻辑变更） |
 | 6d85e1b | React + TDesign 前端重写（frontend/ Vue 旧栈下线，frontend-react/ 新建，start.sh/build.sh 切到新栈）；React 新栈与 backend 未提交改动全量中文注释补齐；租户级唯一约束（output_artifacts.path / packages.code / orders.order_no / users.ref_code）；KB 嵌入向量索引重建按包类型分摊 token 费用，全局包免费、租户/部门包按字符比例计费 |
+| 9fa17af | 品牌定制按子域名前缀解析租户；Caddy on-demand TLS 自动签发证书（配合 DNS 通配符 A 记录）；品牌定制改为套餐付费功能（有效付费套餐或超管授权方可编辑，未满足仅可查看并提示）；新增超管为指定租户开通品牌定制接口 POST /api/admin/tenant/brand-grant；前后端代码补充全量中文注释 |
 
 ## 四、技术要点备忘
 
@@ -93,8 +95,7 @@
 - [部署指南.md](部署指南.md) — 构建/部署/systemd/Caddy/依赖清单
   - [未完成项目.md](archive/未完成项目.md) — 待办与外部依赖项
   - [待解决问题.md](archive/待解决问题.md) — 问题跟踪（含已解决归档）
-- [权限关系.md](权限关系.md) — 角色层级与数据可见性矩阵
-- [商业化白皮书-能言.md](商业化白皮书-能言.md) — 商业化口径上游文档（计费/套餐/邀请裂变规则）
+  - [权限关系.md](权限关系.md) — 角色层级与数据可见性矩阵
   - [全仓端到端评审·P0缺陷与交付收口方案.md](archive/全仓端到端评审·P0缺陷与交付收口方案.md) — 第四批整改设计+UAT 实测记录（含 4 个 UAT 缺陷修复）
   - [TOKEN双桶改造实施方案.md](archive/TOKEN双桶改造实施方案.md) — 双桶台账数据模型/扣减算法/参数（已全部落地）
   - [TM自闭环与OCR移除方案.md](archive/TM自闭环与OCR移除方案.md) — TM 唯一入库通道与 OCR 移除决策记录

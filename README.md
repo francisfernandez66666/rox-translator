@@ -86,5 +86,4 @@ cd ../backend-go && go build -o translator-server ./cmd/server
 |---|---|
 | [部署指南.md](部署指南.md) | 生产环境安装、systemd/Caddy 配置、依赖与目录 |
 | [PROGRESS.md](PROGRESS.md) | 项目进度、批次整改、当前生产状态 |
-| [商业化白皮书-能言.md](商业化白皮书-能言.md) | Token 预充值商业模式、计费与订阅设计 |
 | [权限关系.md](权限关系.md) | 租户-组织-部门-角色权限模型 |
