@@ -28,7 +28,7 @@ func (s *Server) notifyBots(title, body string) {
 	}
 	wecom, _ := s.Store.GetConfig("wecom_webhook_url")
 	dingtalk, _ := s.Store.GetConfig("dingtalk_webhook_url")
-	content := "【翻译助手】" + title + "\n" + body
+	content := "【能言】" + title + "\n" + body
 	if u := strings.TrimSpace(wecom); u != "" && u != "0" {
 		go postBot(u, map[string]interface{}{
 			"msgtype": "text",

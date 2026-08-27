@@ -79,8 +79,8 @@ func (s *Server) sendEmailCode(ip, email string) (bool, string, bool) {
 	sender := s.mailer()
 	err = sender.Send(&mail.Message{
 		To:      key,
-		Subject: "【翻译助手】注册验证码",
-		Body:    fmt.Sprintf("您好，\n\n您的注册验证码是：%s\n\n该验证码 10 分钟内有效，请勿泄露给他人。\n\n—— 翻译助手", code),
+		Subject: "【能言】注册验证码",
+		Body:    fmt.Sprintf("您好，\n\n您的注册验证码是：%s\n\n该验证码 10 分钟内有效，请勿泄露给他人。\n\n—— 能言", code),
 	})
 	_, isNoop := sender.(*mail.NoopSender)
 	if err != nil {

@@ -231,7 +231,7 @@ func main() {
 	// 创建 HTTP 服务
 	srv := api.NewServer(cfg, eng, db, distDir, st, ts)
 
-	log.Printf("翻译助手 v2.0.0-go 服务已启动: http://localhost%s", *addr)
+	log.Printf("能言 v2.0.0-go 服务已启动: http://localhost%s", *addr)
 	s := &http.Server{
 		Addr:              *addr,
 		Handler:           srv.Handler(),

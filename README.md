@@ -1,4 +1,4 @@
-# 翻译助手 SaaS
+# 能言 SaaS
 
 > 面向企业与团队的 AI 翻译协作平台，文件翻译、对话翻译、知识库一体化，支持 Token 预充值商业化。
 
@@ -19,7 +19,7 @@
 
 ```bash
 git clone <仓库地址>
-cd 翻译助手
+cd 能言
 ./start.sh        # 编译 Go 后端并启动 http://127.0.0.1:8787
 # ./start.sh -f   # 同时启动 vite 热更新前端（:5174）
 ```
@@ -42,7 +42,7 @@ cd ../backend-go && go build -o translator-server ./cmd/server
 ## 目录结构
 
 ```
-翻译助手/
+能言/
 ├── backend-go/        # Go 后端源码与单二进制
 ├── frontend-react/    # React + TDesign 前端
 ├── deploy/            # systemd、Caddy、冒烟/压测/演练脚本
@@ -86,5 +86,5 @@ cd ../backend-go && go build -o translator-server ./cmd/server
 |---|---|
 | [部署指南.md](部署指南.md) | 生产环境安装、systemd/Caddy 配置、依赖与目录 |
 | [PROGRESS.md](PROGRESS.md) | 项目进度、批次整改、当前生产状态 |
-| [商业化白皮书-翻译助手.md](商业化白皮书-翻译助手.md) | Token 预充值商业模式、计费与订阅设计 |
+| [商业化白皮书-能言.md](商业化白皮书-能言.md) | Token 预充值商业模式、计费与订阅设计 |
 | [权限关系.md](权限关系.md) | 租户-组织-部门-角色权限模型 |

@@ -128,7 +128,7 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 平台上下文（tid=0）→ 展示平台组织树（所有租户）
-		root, err := s.Store.EnsurePlatformRootOrg("翻译助手")
+		root, err := s.Store.EnsurePlatformRootOrg("能言")
 		if err != nil {
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 			return

@@ -314,7 +314,7 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	// 发送邮件（失败不再静默：明确告知用户稍后重试）
 	if serr := s.mailer().Send(&mail.Message{
 		To:      u.Email,
-		Subject: "【翻译助手】密码重置验证码",
+		Subject: "【能言】密码重置验证码",
 		Body:    mail.BuildVerificationBody(code),
 	}); serr != nil {
 		log.Printf("[mail] 密码重置验证码发送失败 to=%s err=%v", u.Email, serr)

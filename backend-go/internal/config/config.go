@@ -228,7 +228,7 @@ func Default() *Config {
 		if err != nil {
 			home = "."
 		}
-		c.UserDataDir = filepath.Join(home, "Library", "Application Support", "翻译助手")
+		c.UserDataDir = filepath.Join(home, "Library", "Application Support", "能言")
 	}
 	c.DBPath = filepath.Join(c.UserDataDir, "tm.sqlite3")
 	c.EmbPath = filepath.Join(c.UserDataDir, "tm_embeddings.npz")

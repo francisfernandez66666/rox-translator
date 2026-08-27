@@ -145,7 +145,7 @@ func (s *Store) EnsureDefault() (int64, error) {
 	}
 	now := nowStr()
 	res, err := s.db.Exec(
-		"INSERT INTO tenants (code, name, status, expires_at, permissions, created_at, updated_at) VALUES ('rox','ROX 默认租户','active','','{}',?,?)",
+		"INSERT INTO tenants (code, name, status, expires_at, permissions, created_at, updated_at) VALUES ('rox','langcross 默认租户','active','','{}',?,?)",
 		now, now)
 	if err != nil {
 		return 0, err

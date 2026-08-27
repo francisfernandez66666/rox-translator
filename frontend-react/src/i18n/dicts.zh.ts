@@ -19,7 +19,7 @@ export const baseZh: Record<string,string> = {
   'common.expired': '已过期',
 
   // ---- 应用工作台 ----
-  'app.title': '翻译助手',
+  'app.title': '能言',
   'app.starting': '翻译引擎启动中…',
   'app.modelLabel': '翻译模型',
   'app.modelRec33': '(推荐，33语专用)',
@@ -134,7 +134,7 @@ export const baseZh: Record<string,string> = {
   'models.s5ReviewEvalsHint': '对校对结果做质量评分的裁判模型',
   'models.stageConfigured': '已配置',
   'models.stageApiKeyKeep': '留空沿用原 Key / 继承全局密钥',
-  'admin.platformRoot': '翻译助手（平台）',
+  'admin.platformRoot': '能言（平台）',
   'org.orgHint': '账号归属以上所选组织',
   'org.orgLabel': '归属部门',
   'org.roleLabel': '账号角色',

@@ -105,7 +105,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       if (r.success) {
         const list = (r as unknown as { tenants?: TenantInfo[] }).tenants || []
         setTenants(list)
-        // 超管默认平台上下文（0=翻译助手根组织）；仅当存储了已删除的租户 id 时才回退
+        // 超管默认平台上下文（0=能言根组织）；仅当存储了已删除的租户 id 时才回退
         const stored = getActiveTenantId()
         if (stored > 0 && !list.some((t) => t.id === stored) && list.length) {
           setActiveTenantId(0)

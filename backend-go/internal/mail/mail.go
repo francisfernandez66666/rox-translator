@@ -133,12 +133,12 @@ func (s *SMTPSender) Send(m *Message) error {
 
 // BuildVerificationBody 生成密码重置验证码邮件正文（通用）。
 func BuildVerificationBody(code string) string {
-	return fmt.Sprintf("您好，\n\n您的密码重置验证码是：%s\n\n该验证码 10 分钟内有效，请勿泄露给他人。\n\n—— 翻译助手", code)
+	return fmt.Sprintf("您好，\n\n您的密码重置验证码是：%s\n\n该验证码 10 分钟内有效，请勿泄露给他人。\n\n—— 能言", code)
 }
 
 // BuildResetLinkBody 生成带重置链接的邮件正文（SMTP 模式使用，链接由调用方拼接）。
 func BuildResetLinkBody(link string) string {
-	return fmt.Sprintf("您好，\n\n请点击以下链接重置您的密码（10 分钟内有效）：\n\n%s\n\n如果非本人操作，请忽略本邮件。\n\n—— 翻译助手", link)
+	return fmt.Sprintf("您好，\n\n请点击以下链接重置您的密码（10 分钟内有效）：\n\n%s\n\n如果非本人操作，请忽略本邮件。\n\n—— 能言", link)
 }
 
 // 小工具：确保 strings 包被引用（便于未来扩展 HTML 邮件）。

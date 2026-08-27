@@ -281,13 +281,18 @@ func (s *Store) migrate() error {
 		`CREATE TABLE IF NOT EXISTS alerts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			tenant_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,        -- 关联用户 ID（系统/租户级告警为 0）
 			level TEXT NOT NULL DEFAULT 'info',      -- info/warning/critical
 			kind TEXT NOT NULL DEFAULT '',            -- balance/model/error_rate
 			message TEXT NOT NULL DEFAULT '',
+			log TEXT NOT NULL DEFAULT '',             -- 详细日志/上下文（比 message 更完整）
 			status TEXT NOT NULL DEFAULT 'open',      -- open/resolved
 			created_at TEXT,
 			resolved_at TEXT NOT NULL DEFAULT ''
 		)`,
+		// 历史库兼容：补充 user_id / log 两列
+		`ALTER TABLE alerts ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE alerts ADD COLUMN log TEXT NOT NULL DEFAULT ''`,
 		// ---------- orgs 组织层级（管理结构展示层：根组织=租户） ----------
 		`CREATE TABLE IF NOT EXISTS orgs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

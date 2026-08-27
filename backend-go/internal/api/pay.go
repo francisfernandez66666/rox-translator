@@ -130,12 +130,12 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 	res, err := s.payProvider().CreateOrder(&payment.PayRequest{
 		OrderNo:  o.OrderNo,
 		Amount:   amountFen,
-		Subject:  "翻译助手 token 充值",
+		Subject:  "能言 token 充值",
 		TenantID: tid,
 	})
 	if err != nil {
 		// 真实渠道未配置：回退 mock 保证流程可用
-		res, err = (&payment.MockProvider{}).CreateOrder(&payment.PayRequest{OrderNo: o.OrderNo, Amount: amountFen, Subject: "翻译助手 token 充值", TenantID: tid})
+		res, err = (&payment.MockProvider{}).CreateOrder(&payment.PayRequest{OrderNo: o.OrderNo, Amount: amountFen, Subject: "能言 token 充值", TenantID: tid})
 	}
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "下单失败: " + err.Error()})

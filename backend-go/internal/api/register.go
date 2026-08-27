@@ -447,7 +447,7 @@ func (s *Server) notifyTenantAdmins(tid int64, title, body string) {
 			go func(to string) {
 				_ = s.mailer().Send(&mail.Message{
 					To:      to,
-					Subject: "【翻译助手】" + title,
+					Subject: "【能言】" + title,
 					Body:    body,
 				})
 			}(usr.Email)

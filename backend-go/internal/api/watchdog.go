@@ -308,9 +308,10 @@ func (s *Server) runWatchdogCheck() {
 				}
 				// 余额耗尽 → critical 级告警；低于阈值 → warning 级告警
 				if bal.Balance <= 0 {
-					msg := "租户余额已耗尽，翻译服务将被暂停"
-					existed := s.hasOpenAlert(t.ID, "balance") // 邮件触达去重：仅新告警时发信
-					_ = s.Store.CreateAlert(t.ID, "critical", "balance", msg)
+				msg := "租户余额已耗尽，翻译服务将被暂停"
+				existed := s.hasOpenAlert(t.ID, "balance") // 邮件触达去重：仅新告警时发信
+				_ = s.Store.CreateAlertEx(t.ID, "critical", "balance", msg, 0,
+					fmt.Sprintf("租户 #%d（%s）翻译额度余额已耗尽，翻译服务将被暂停", t.ID, t.Name))
 					if !existed {
 						s.notifyAlert("余额耗尽告警（租户 #"+strconv.FormatInt(t.ID, 10)+"）", msg)
 						s.notifyTenantAdmins(t.ID, "余额已耗尽",

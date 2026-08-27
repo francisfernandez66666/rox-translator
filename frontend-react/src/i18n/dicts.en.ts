@@ -19,7 +19,7 @@ export const baseEn: Record<string,string> = {
   'common.expired': 'Expired',
 
   // ---- Workspace ----
-  'app.title': 'Translation Assistant',
+  'app.title': 'langcross',
   'app.starting': 'Starting translation engine…',
   'app.modelLabel': 'Translation model',
   'app.modelRec33': '(Recommended, 33 langs)',
@@ -131,7 +131,7 @@ export const baseEn: Record<string,string> = {
   'models.s5ReviewEvalsHint': 'Judge model scoring proofread results',
   'models.stageConfigured': 'Configured',
   'models.stageApiKeyKeep': 'Leave empty to keep current key / inherit global key',
-  'admin.platformRoot': 'Translator (Platform)',
+  'admin.platformRoot': 'langcross (Platform)',
   'org.orgHint': 'Account belongs to the selected org',
   'org.orgLabel': 'Department',
   'org.roleLabel': 'Role',

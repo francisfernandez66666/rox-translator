@@ -43,7 +43,7 @@ func (s *Server) handlePublicPrivacy(w http.ResponseWriter, r *http.Request) {
 func publicLayout(title, body string) string {
 	return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>` + title + ` - 翻译助手</title>
+<title>` + title + ` - 能言</title>
 <style>
 :root{--green:#2e7d32;--dark:#202124;--gray:#5f6368}
 *{margin:0;padding:0;box-sizing:border-box}
@@ -61,9 +61,9 @@ table{width:100%;border-collapse:collapse;margin:14px 0}
 th,td{border:1px solid #e0e0e0;padding:10px 12px;text-align:left;font-size:14px}
 th{background:#e8f5e9;color:var(--green)}
 </style></head><body>
-<div class="header"><div class="brand">🌐 翻译助手</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">条款 Terms</a><a href="/docs/sla">SLA</a><a href="/status">状态 Status</a><a href="/docs/privacy">隐私 Privacy</a></div></div>
+<div class="header"><div class="brand">🌐 能言</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">条款 Terms</a><a href="/docs/sla">SLA</a><a href="/status">状态 Status</a><a href="/docs/privacy">隐私 Privacy</a></div></div>
 <div class="wrap"><div class="card">` + body + `</div></div>
-<div class="footer">© 2026 翻译助手 · ROX 多语翻译知识库 · <a href="/status">服务状态</a> · <a href="/admin">管理后台</a></div>
+<div class="footer">© 2026 能言 · langcross 多语翻译知识库 · <a href="/status">服务状态</a> · <a href="/admin">管理后台</a></div>
 </body></html>`
 }
 
@@ -75,7 +75,7 @@ func publicDocPage(title, body string) string {
 // pricingHTML 定价页正文（套餐卡片由前端 fetch /api/plans 动态渲染）。
 const pricingHTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>定价 - 翻译助手</title>
+<title>定价 - 能言</title>
 <style>
 :root{--green:#2e7d32;--dark:#202124;--gray:#5f6368}
 *{margin:0;padding:0;box-sizing:border-box}
@@ -94,7 +94,7 @@ th,td{border:1px solid #e0e0e0;padding:10px 12px;text-align:left;font-size:14px}
 th{background:#e8f5e9;color:var(--green)}
 .note{background:#fff8e1;border-left:4px solid #f9a825;padding:12px 16px;border-radius:6px;font-size:14px;color:#5f6368;margin:16px 0}
 </style></head><body>
-<div class="header"><div class="brand">🌐 翻译助手</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">条款 Terms</a><a href="/docs/sla">SLA</a><a href="/docs/privacy">隐私 Privacy</a></div></div>
+<div class="header"><div class="brand">🌐 能言</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">条款 Terms</a><a href="/docs/sla">SLA</a><a href="/docs/privacy">隐私 Privacy</a></div></div>
 <div class="wrap">
 <div class="card">
 <h1>定价 Pricing</h1>
@@ -107,7 +107,7 @@ th{background:#e8f5e9;color:var(--green)}
 <p><b>Q：额度用完后怎么办？</b> 可订阅付费包或购买增量包，到账后立即恢复；也可联系管理员充值。</p>
 <p><b>Q：支持哪些支付方式？</b> 支持微信 / 支付宝在线支付（对接中），静态二维码扫码 + 人工确认，当前可使用线下转账 + 管理员充值。</p>
 </div></div>
-<div class="footer">© 2026 翻译助手 · ROX 多语翻译知识库</div>
+<div class="footer">© 2026 能言 · langcross 多语翻译知识库</div>
 <script>
 fetch('/api/plans').then(r=>r.json()).then(d=>{
   const types={free:'免费体验',paid:'付费包',increment:'增量包'};
@@ -127,7 +127,7 @@ fetch('/api/plans').then(r=>r.json()).then(d=>{
 const termsBody = `
 <p><b>中文</b>｜<i>English below</i></p>
 <h2>1. 服务说明</h2>
-<p>翻译助手（以下简称「本服务」）提供多语言文本/文件翻译、知识库管理等 SaaS 能力。使用本服务即视为同意本条款。</p>
+<p>能言（以下简称「本服务」）提供多语言文本/文件翻译、知识库管理等 SaaS 能力。使用本服务即视为同意本条款。</p>
 <h2>2. 账户与使用</h2>
 <p>用户须妥善保管账号密码；不得利用本服务从事违法活动、侵犯他人知识产权或滥用系统资源。余额为预付 token，不设有效期，不可退款（法律另有规定除外）。</p>
 <h2>3. 服务变更与终止</h2>
@@ -136,7 +136,7 @@ const termsBody = `
 <p>翻译结果由 AI 模型生成，可能存在错误，不构成任何专业意见。在适用法律允许范围内，我们对间接损失不承担责任。</p>
 <hr>
 <h2>1. Service Description</h2>
-<p>Translation Assistant provides multilingual text/file translation and knowledge base management as a SaaS. By using the service you agree to these terms.</p>
+<p>langcross provides multilingual text/file translation and knowledge base management as a SaaS. By using the service you agree to these terms.</p>
 <h2>2. Accounts and Use</h2>
 <p>Users must safeguard credentials; prohibited uses include unlawful activity, IP infringement, and resource abuse. Prepaid tokens carry no expiry and are non-refundable except as required by law.</p>
 <h2>3. Changes and Termination</h2>

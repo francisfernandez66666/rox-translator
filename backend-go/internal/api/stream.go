@@ -79,7 +79,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	// 空消息：返回系统问候语（不消耗配额）
 	if strings.TrimSpace(req.Message) == "" {
-		result := map[string]interface{}{"skill": "system", "reply": "你好！我是翻译助手，可以帮你翻译多语言文本和文件。"}
+		result := map[string]interface{}{"skill": "system", "reply": "你好！我是能言，可以帮你翻译多语言文本和文件。"}
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": result}))
 		if flusher != nil {
 			flusher.Flush()

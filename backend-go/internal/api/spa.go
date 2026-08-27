@@ -40,7 +40,7 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`<!DOCTYPE html><html><body style="font-family:sans-serif;max-width:640px;margin:60px auto">
-<h1>翻译助手服务已启动</h1>
+<h1>能言服务已启动</h1>
 <p>前端页面尚未构建。请先在前端目录执行 <code>npm run build</code>，
 或在 <code>backend-go/cmd/server/main.go</code> 中通过 <code>-frontend</code> 指定前端 dist 目录。</p>
 <p>API 正常：<a href="/api/health">/api/health</a></p>

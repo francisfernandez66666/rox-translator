@@ -49,7 +49,7 @@ type AlipayConfig struct {
 type PayRequest struct {
 	OrderNo  string // 商户订单号（RO + 时间戳 + 随机后缀）
 	Amount   int64  // 金额（分）
-	Subject  string // 订单标题（如「翻译助手 token 充值」）
+	Subject  string // 订单标题（如「能言 token 充值」）
 	TenantID int64  // 归属租户（幂等与回调对账用）
 }
 

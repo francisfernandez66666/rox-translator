@@ -40,10 +40,10 @@ const officeManifestXML = `<?xml version="1.0" encoding="UTF-8"?>
            xsi:type="TaskPaneApp">
   <Id>7f3a2c64-9b1e-4e5d-8a77-53c2f0a91b10</Id>
   <Version>1.0.0.0</Version>
-  <ProviderName>翻译助手</ProviderName>
+  <ProviderName>能言</ProviderName>
   <DefaultLocale>zh-CN</DefaultLocale>
-  <DisplayName DefaultValue="翻译助手 · 划译"/>
-  <Description DefaultValue="选中文字一键翻译：调用企业自建翻译助手，术语与翻译记忆全量生效。"/>
+  <DisplayName DefaultValue="能言 · 划译"/>
+  <Description DefaultValue="选中文字一键翻译：调用企业自建能言，术语与翻译记忆全量生效。"/>
   <IconUrl DefaultValue="` + officeOrigin + `/favicon.ico"/>
   <SupportUrl DefaultValue="` + officeOrigin + `/docs/terms"/>
   <AppDomains>
@@ -81,7 +81,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 </style>
 </head>
 <body>
-<h3>🌐 翻译助手 · 划译</h3>
+<h3>🌐 能言 · 划译</h3>
 <input id="apiKey" placeholder="开放 API Key（管理后台签发）"/>
 <input id="langs" placeholder="目标语言，逗号分隔（默认 en）"/>
 <button id="btnGo">翻译选中文本</button>

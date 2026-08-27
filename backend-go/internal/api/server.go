@@ -428,7 +428,7 @@ func (s *Server) withTenant(next http.Handler) http.Handler {
 
 // effTenant 计算当前请求生效租户。
 // 超级管理员（平台级，tenant_id=0）：X-Tenant-ID 显式指定（>0）时用该租户；
-// 未指定或为 0 时默认平台上下文（tid=0，即「翻译助手」根组织视角）。
+// 未指定或为 0 时默认平台上下文（tid=0，即「能言」根组织视角）。
 // 其余用户固定自身租户。
 // 参数 r: HTTP 请求；u: 当前用户。返回: 生效租户 ID。
 func (s *Server) effTenant(r *http.Request, u *store.User) int64 {
