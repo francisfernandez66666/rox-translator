@@ -16,7 +16,14 @@ import {
 import { useAdmin } from '@/stores/admin'
 import { Panel, Field, toastResp } from './parts'
 import { fmtTime } from '@/lib/ui'
-import { useT } from '@/i18n'
+import { useT, t as tFn } from '@/i18n'
+
+// 审计动作键→中英文映射名（模块级，避免渲染闭包作用域问题；未命中字典时回退原始动作键）
+function auditActionLabel(a: string): string {
+	const key = 'audit.action.' + a
+	const v = tFn(key)
+	return v && v !== key ? v : a
+}
 
 type Any = Record<string, unknown>
 
@@ -126,7 +133,7 @@ export default function Overview() {
               { colKey: 'tenant', title: t('audit.tenant'), width: 130, cell: ({ row }: any) => (
                 <>{row.tenant_name || '—'}{row.username && <span style={{ color: '#999' }}> @{row.username}</span>}</>
               ) },
-          { colKey: 'action', title: t('overview.colAction'), width: 150, cell: ({ row }: any) => actionLabel(row.action) },
+          { colKey: 'action', title: t('overview.colAction'), width: 150, cell: ({ row }: any) => auditActionLabel(row.action) },
               { colKey: 'resource', title: t('overview.colResource'), width: 110 },
               { colKey: 'detail', title: t('overview.colDetail'), ellipsis: true },
               { colKey: 'change', title: t('overview.colChange'), ellipsis: true, cell: ({ row }: any) =>
@@ -421,12 +428,6 @@ export function AuditP() {
   const actions = ['login', 'user_create', 'user_update', 'user_delete', 'user_reset_pwd',
     'org_create', 'org_rename', 'org_delete', 'kb_package_create', 'kb_package_status',
     'kb_entries_import', 'model_save', 'stage_models_save', 'package_subscribe']
-  // 动作键→中英文映射名（未命中字典时回退原始动作键）
-  const actionLabel = (a: string) => {
-    const key = 'audit.action.' + a
-    const v = t(key)
-    return v && v !== key ? v : a
-  }
 
   // 拉取全部审计日志并在前端按条件过滤
   const load = useCallback(async () => {
@@ -460,7 +461,7 @@ export function AuditP() {
       <p className="ad-hint" style={{ fontSize: 13, color: '#889', margin: '0 0 8px' }}>{t('audit.hint')}</p>
       <Space style={{ marginBottom: 8 }}>
         <Select value={fAction} onChange={(v) => setFAction(v as string)} style={{ width: 180 }}
-          options={[{ label: t('audit.allActions'), value: '' }, ...actions.map((a) => ({ label: actionLabel(a), value: a }))]} />
+          options={[{ label: t('audit.allActions'), value: '' }, ...actions.map((a) => ({ label: auditActionLabel(a), value: a }))]} />
         <input type="date" value={fFrom} onChange={(e) => setFFrom(e.target.value)} style={{ height: 30, border: '1px solid #dcdcdc', borderRadius: 4, padding: '0 8px', width: 150 }} />
         <span style={{ color: '#999' }}>→</span>
         <input type="date" value={fTo} onChange={(e) => setFTo(e.target.value)} style={{ height: 30, border: '1px solid #dcdcdc', borderRadius: 4, padding: '0 8px', width: 150 }} />

@@ -165,8 +165,6 @@ export default function ChatWindow() {
   const [lang, t2] = useT()
   const chat = useChat()
   const [input, setInput] = useState('')
-  const [kbLangs, setKbLangs] = useState<string[]>(['en', 'ru', 'ar', 'es', 'pt', 'fr', 'kk', 'de', 'zh_hant'])
-  const [langItems, setLangItems] = useState<LangItem[]>([])
   const [feedbackMsg, setFeedbackMsg] = useState<ChatMessage | null>(null)
 
   // ★ 待翻译文件
@@ -191,24 +189,6 @@ export default function ChatWindow() {
     const v = t2(`lang.${code}`)
     return v !== `lang.${code}` ? v : (fallback || code)
   }, [t2])
-
-  // ---- KB 语言从后端动态加载（升级到 KB 区） ----
-  // 拉取后端支持的 KB 语言列表，覆盖本地兜底的名称与国旗
-  useEffect(() => {
-    ;(async () => {
-      try {
-        const r = await request<{ kb_langs?: LangItem[] }>('/api/translation/langs')
-        if (r.kb_langs && r.kb_langs.length) {
-          setLangItems(r.kb_langs)
-          setKbLangs(r.kb_langs.map((x) => x.code))
-          for (const l of r.kb_langs) {
-            if (!LANG_OPTIONS[l.code]) LANG_OPTIONS[l.code] = { label: l.name, flag: l.flag || '🌐' }
-            else { LANG_OPTIONS[l.code].label = l.name; LANG_OPTIONS[l.code].flag = l.flag || '🌐' }
-          }
-        }
-      } catch { /* 本地兜底 */ }
-    })()
-  }, [])
 
   // ---- 余额 / 用量加载 ----
   // 从 myPackage 接口读取个人余额、今日用量及企业预算额度
@@ -428,13 +408,6 @@ export default function ChatWindow() {
           ) : (
             <Button theme="primary" disabled={!canSend} onClick={() => void handleSend()}>{t2('chat.send')}</Button>
           )}
-        </div>
-
-        {/* KB 语言提示条 */}
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {langItems.map((l) => (
-            <span key={l.code} className="tr-lang-chip">{l.flag || ''} {l.name}</span>
-          ))}
         </div>
       </div>
 

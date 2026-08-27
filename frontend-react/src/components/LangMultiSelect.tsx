@@ -3,7 +3,7 @@
 // 功能等价 Vue 版：KB 九语分组 / 其他常用语分组 / 手输自定义语言代码加入选中集。
 // ============================================================================
 import { useEffect, useMemo, useState } from 'react'
-import { Select, Input, Button, Space } from 'tdesign-react'
+import { Select, Input, Button } from 'tdesign-react'
 import { t } from '@/i18n'
 
 // KB 九语（与后端 /api/translation/langs 对齐的本地兜底；挂载后由父组件动态覆盖可选）
@@ -99,25 +99,31 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
     setCustom('')
   }
 
+  // 自定义语言输入内嵌于下拉面板底部（与多选选项合并，不再单独外置）
+  const customPanel = (
+    <div
+      style={{ padding: '8px 12px', borderTop: '1px solid #e7e7e7', display: 'flex', gap: 6, alignItems: 'center' }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <Input size="small" style={{ flex: 1 }} value={custom}
+             placeholder={t('chat.customLangPlaceholder')}
+             onChange={(v) => setCustom(v as string)}
+             onEnter={() => addCustom()} />
+      <Button size="small" variant="outline" disabled={!custom.trim()} onClick={addCustom}>＋</Button>
+    </div>
+  )
+
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={6}>
-      <Select
-        multiple
-        clearable
-        filterable
-        value={value}
-        options={options as never}
-        placeholder={t('chat.langPlaceholder')}
-        onChange={(v) => onChange((v as string[]) || [])}
-        style={{ width: '100%' }}
-      />
-      <Space size={6}>
-        <Input size="small" style={{ width: 180 }} value={custom}
-               placeholder={t('chat.customLangPlaceholder')}
-               onChange={setCustom}
-               onEnter={() => addCustom()} />
-        <Button size="small" variant="outline" disabled={!custom.trim()} onClick={addCustom}>＋</Button>
-      </Space>
-    </Space>
+    <Select
+      multiple
+      clearable
+      filterable
+      value={value}
+      options={options as never}
+      placeholder={t('chat.langPlaceholder')}
+      onChange={(v) => onChange((v as string[]) || [])}
+      panelBottomContent={customPanel}
+      style={{ width: '100%' }}
+    />
   )
 }
