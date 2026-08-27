@@ -13,6 +13,8 @@ import { useChat } from '@/hooks/useChat'
 import { myPackage, meContext, request } from '@/api'
 import type { ChatMessage } from '@/types'
 import { useT } from '@/i18n'
+import LangMultiSelect from '@/components/LangMultiSelect'
+import ModeToggle from '@/components/ModeToggle'
 
 interface LangItem { code: string; name: string; flag?: string }
 
@@ -160,20 +162,13 @@ function fmtNum(n: number): string {
 
 // 默认导出组件：前台翻译工作台，承载消息流、语言选择、文件上传、双模式与余额展示（等价 Vue ChatWindow.vue）
 export default function ChatWindow() {
-  const [lang, t2, tplFn] = useT()
+  const [lang, t2] = useT()
   const chat = useChat()
   const [input, setInput] = useState('')
   const [kbLangs, setKbLangs] = useState<string[]>(['en', 'ru', 'ar', 'es', 'pt', 'fr', 'kk', 'de', 'zh_hant'])
   const [langItems, setLangItems] = useState<LangItem[]>([])
   const [feedbackMsg, setFeedbackMsg] = useState<ChatMessage | null>(null)
 
-  // ★ 源语言（默认 auto）
-  const [sourceLang, setSourceLang] = useState<string>('auto')
-  // ★ 语言下拉展开
-  const [langOpen, setLangOpen] = useState(false)
-  // ★ 自定义语言
-  const [customLangText, setCustomLangText] = useState('')
-  const [customLangs, setCustomLangs] = useState<string[]>([])
   // ★ 待翻译文件
   const [attachedFiles, setAttachedFiles] = useState<File[]>([])
   // ★ 双模式（fast/pro）持久化
@@ -189,7 +184,6 @@ export default function ChatWindow() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const langSelectorRef = useRef<HTMLDivElement>(null)
 
   // ---- 语言显示名：优先 i18n（lang.<code>），缺失回退本地 label ----
   // 根据语言代码获取展示名，便于在标签中统一显示
@@ -197,20 +191,6 @@ export default function ChatWindow() {
     const v = t2(`lang.${code}`)
     return v !== `lang.${code}` ? v : (fallback || code)
   }, [t2])
-
-  // ---- 语言按钮标签 ----
-  const langBtnLabel = (() => {
-    const sel = chat.selectedLangs
-    if (sel.length === 0) return t2('chat.langZero')
-    if (sel.length <= 2) {
-      const names = sel.map((l) => {
-        if (l === 'other') return t2('chat.langOther')
-        return langLabel(l, LANG_OPTIONS[l]?.label || OTHER_LANG_OPTIONS[l]?.label)
-      })
-      return names.join('+')
-    }
-    return tplFn('chat.langCount', { n: sel.length })
-  })()
 
   // ---- KB 语言从后端动态加载（升级到 KB 区） ----
   // 拉取后端支持的 KB 语言列表，覆盖本地兜底的名称与国旗
@@ -277,59 +257,11 @@ export default function ChatWindow() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [chat.messages])
 
-  // ---- 点击外部关闭下拉 ----
-  // 监听全局点击，若点击落在语言选择器外部则收起下拉面板
-  useEffect(() => {
-    function onClickOutside(e: MouseEvent) {
-      if (langSelectorRef.current && !langSelectorRef.current.contains(e.target as Node)) {
-        setLangOpen(false)
-      }
-    }
-    document.addEventListener('click', onClickOutside)
-    return () => document.removeEventListener('click', onClickOutside)
-  }, [])
-
   // ---- 切换模式并持久化 ----
   // fast/pro 模式切换，同时写入 localStorage 以便跨会话记忆
   function setMode2(m: 'fast' | 'pro') {
     setMode(m)
     localStorage.setItem('translate_mode', m)
-  }
-
-  // ---- 语言多选切换 ----
-  // 切换单个目标语言选中状态；'other' 控制"更多语言"输入框显隐；至少保留一种语言
-  function toggleLang(l: string) {
-    const cur = chat.selectedLangs
-    if (l === 'other') {
-      // 其它语言开关位：始终可切换，控制"更多语言"输入框显隐
-      const next = cur.includes('other') ? cur.filter((x) => x !== 'other') : [...cur, 'other']
-      chat.setSelectedLangs(next)
-      return
-    }
-    const idx = cur.indexOf(l)
-    if (idx >= 0) {
-      if (cur.length > 1) chat.setSelectedLangs(cur.filter((x) => x !== l))
-    } else {
-      chat.setSelectedLangs([...cur, l])
-    }
-  }
-
-  // ---- 添加自定义语言（更多语言输入框） ----
-  // 解析用户输入（支持中/英文名与逗号分隔），命中映射则转为 ISO 代码，否则作为自定义语言加入
-  function addCustomLang() {
-    const raw = customLangText.trim()
-    if (!raw) return
-    const parts = raw.split(/[、，,\s]+/).map((s) => s.trim()).filter(Boolean)
-    for (const part of parts) {
-      const key = part.toLowerCase()
-      const code = _LANG_NAME_TO_CODE[key] || _LANG_NAME_TO_CODE[part]
-      if (code && !chat.selectedLangs.includes(code)) {
-        chat.setSelectedLangs([...new Set([...chat.selectedLangs, code])])
-      } else if (!code && !customLangs.includes(part)) {
-        setCustomLangs((prev) => [...prev, part])
-      }
-    }
-    setCustomLangText('')
   }
 
   // ---- 文件选择 ----
@@ -357,39 +289,26 @@ export default function ChatWindow() {
   }
 
   // ---- 发送 ----
-  // 组装自定义语言前缀与目标语言集：有附件走文件翻译，否则走文本翻译
+  // 有附件走文件翻译，否则走文本翻译；目标语言直接取自聊天全局 selectedLangs
   async function handleSend() {
-    const customLangPrefix = customLangs.length > 0
-      ? tplFn('chat.customLangPrefix', { l: customLangs.join('、') })
-      : ''
-
     // 文件翻译
     if (attachedFiles.length > 0) {
+      const langs = chat.selectedLangs.length > 0 ? chat.selectedLangs : undefined
       for (const file of attachedFiles) {
-        const msg = customLangPrefix + input.trim()
-        const customCodes = customLangs
-          .map((cl) => _LANG_NAME_TO_CODE[cl.toLowerCase()] || _LANG_NAME_TO_CODE[cl])
-          .filter((c): c is string => !!c)
-        const langs = [...new Set([...chat.selectedLangs.filter((l) => l !== 'other'), ...customCodes])]
-        await chat.sendFile(file, langs.length > 0 ? langs : undefined, msg)
+        await chat.sendFile(file, langs, input.trim())
       }
       setAttachedFiles([])
       setInput('')
-      setCustomLangs([])
       return
     }
 
     // 文本翻译
     const rawText = input.trim()
-    if (!rawText && !customLangPrefix) return
-    const text = customLangPrefix + rawText
+    if (!rawText) return
     setInput('')
-    setCustomLangs([])
 
-    const options: Record<string, unknown> = { target_langs: [...chat.selectedLangs] }
-    if (sourceLang !== 'auto') options.source_lang = sourceLang
-    options.lang = lang
-    chat.sendMessage(text, options)
+    const options: Record<string, unknown> = { target_langs: chat.selectedLangs, lang }
+    chat.sendMessage(rawText, options)
   }
 
   // ★ 示例问题：点击自动发送（对齐 Vue sendExample）
@@ -445,7 +364,7 @@ export default function ChatWindow() {
       {/* 输入区 */}
       <div className="chat-inputbar">
         {/* 已选文件 / 语言标签行 */}
-        {(attachedFiles.length > 0 || chat.selectedLangs.length > 0 || customLangs.length > 0) && (
+        {(attachedFiles.length > 0 || chat.selectedLangs.length > 0) && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingBottom: 8 }}>
             {attachedFiles.map((f, idx) => (
               <span key={'f' + idx} className="tag tag-file">
@@ -453,28 +372,16 @@ export default function ChatWindow() {
                 <button className="tag-remove" onClick={() => removeFile(idx)}>✕</button>
               </span>
             ))}
-            {chat.selectedLangs.filter((l) => l !== 'other' && LANG_OPTIONS[l]).map((l) => (
+            {chat.selectedLangs.filter((l) => LANG_OPTIONS[l]).map((l) => (
               <span key={'l' + l} className="tag tag-lang">
                 {LANG_OPTIONS[l].flag} {langLabel(l, LANG_OPTIONS[l].label)}
-                <button className="tag-remove" onClick={() => toggleLang(l)}>✕</button>
+                <button className="tag-remove" onClick={() => chat.setSelectedLangs(chat.selectedLangs.filter((x) => x !== l))}>✕</button>
               </span>
             ))}
-            {chat.selectedLangs.filter((l) => l !== 'other' && !LANG_OPTIONS[l]).map((l) => (
+            {chat.selectedLangs.filter((l) => !LANG_OPTIONS[l]).map((l) => (
               <span key={'ol' + l} className="tag tag-other-lang">
                 🤖 {langLabel(l, OTHER_LANG_OPTIONS[l]?.label)}
-                <button className="tag-remove" onClick={() => toggleLang(l)}>✕</button>
-              </span>
-            ))}
-            {chat.selectedLangs.includes('other') && (
-              <span className="tag tag-other-lang">
-                🤖 {t2('chat.langOther')}
-                <button className="tag-remove" onClick={() => toggleLang('other')}>✕</button>
-              </span>
-            )}
-            {customLangs.map((cl, idx) => (
-              <span key={'cl' + idx} className="tag tag-other-lang">
-                🤖 {cl}
-                <button className="tag-remove" onClick={() => setCustomLangs((prev) => prev.filter((_, i) => i !== idx))}>✕</button>
+                <button className="tag-remove" onClick={() => chat.setSelectedLangs(chat.selectedLangs.filter((x) => x !== l))}>✕</button>
               </span>
             ))}
           </div>
@@ -490,71 +397,8 @@ export default function ChatWindow() {
             <button className="action-btn" title={t2('chat.uploadFile')} onClick={triggerFileUpload}>＋</button>
             <input ref={fileInputRef} type="file" accept={FILE_ACCEPT} style={{ display: 'none' }} onChange={handleFileSelect} />
 
-            <div className="lang-selector" ref={langSelectorRef} style={{ position: 'relative' }}>
-              <button className="action-btn lang-btn" style={{ fontSize: 14, width: 'auto', borderRadius: 18, padding: '0 10px' }}
-                      title={t2('chat.selectTargetLang')} onClick={() => setLangOpen((v) => !v)}>
-                🌐 {langBtnLabel}
-              </button>
-              {langOpen && (
-                <div className="lang-dropdown" style={{
-                  position: 'absolute', bottom: 'calc(100% + 8px)', left: 0, minWidth: 220, background: '#fff',
-                  border: '1px solid #dadce0', borderRadius: 12, boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-                  padding: '8px 0', zIndex: 100, maxHeight: 360, overflowY: 'auto',
-                }}>
-                  {/* 源语言 */}
-                  <div style={{ padding: '8px 16px 4px', fontSize: 12, fontWeight: 600, color: '#5f6368' }}>{t2('chat.sourceLang')}</div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '4px 16px 8px' }}>
-                    {SOURCE_LANG_OPTIONS.map((opt) => (
-                      <button key={opt.code} onClick={() => setSourceLang(opt.code)}
-                              style={{
-                                padding: '4px 10px', border: '1px solid #dadce0', borderRadius: 14, background: '#fff',
-                                fontSize: 12, color: '#5f6368', cursor: 'pointer',
-                                ...(sourceLang === opt.code ? { background: '#e8f0fe', borderColor: '#1a73e8', color: '#1a73e8', fontWeight: 600 } : {}),
-                              }}>
-                        {opt.flag} {t2(opt.labelKey)}
-                      </button>
-                    ))}
-                  </div>
-                  <div style={{ height: 1, background: '#e0e0e0', margin: '0 16px 4px' }} />
-
-                  {/* KB 语言 */}
-                  <div style={{ padding: '8px 16px 4px', fontSize: 12, fontWeight: 600, color: '#5f6368' }}>{t2('chat.kbLangs')}</div>
-                  {kbLangs.map((l) => (
-                    <label key={l} className="lang-option" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', cursor: 'pointer', fontSize: 13 }}>
-                      <input type="checkbox" checked={chat.selectedLangs.includes(l)} onChange={() => toggleLang(l)} style={{ width: 16, height: 16, accentColor: '#1a73e8' }} />
-                      <span>{LANG_OPTIONS[l]?.flag || '🌐'} {langLabel(l, LANG_OPTIONS[l]?.label)}</span>
-                    </label>
-                  ))}
-                  <div style={{ height: 1, background: '#e0e0e0', margin: '0 16px 4px' }} />
-
-                  {/* 其他语言 + 更多语言 */}
-                  <div style={{ padding: '8px 16px 4px', fontSize: 12, fontWeight: 600, color: '#5f6368' }}>{t2('chat.otherLangs')}</div>
-                  {Object.entries(OTHER_LANG_OPTIONS).map(([code, info]) => (
-                    <label key={code} className="lang-option" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 500 }}>
-                      <input type="checkbox" checked={chat.selectedLangs.includes(code)} onChange={() => toggleLang(code)} style={{ width: 16, height: 16, accentColor: '#1a73e8' }} />
-                      <span>{info.flag} {langLabel(code, info.label)}</span>
-                    </label>
-                  ))}
-                  <div style={{ height: 1, background: '#e0e0e0', margin: '4px 16px' }} />
-                  <label className="lang-option" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', cursor: 'pointer', fontSize: 13 }}>
-                    <input type="checkbox" checked={chat.selectedLangs.includes('other')} onChange={() => toggleLang('other')} style={{ width: 16, height: 16, accentColor: '#1a73e8' }} />
-                    <span>{t2('chat.moreLangs')}</span>
-                  </label>
-                  {chat.selectedLangs.includes('other') && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 12px 8px 40px' }}>
-                      <input
-                        value={customLangText}
-                        onChange={(e) => setCustomLangText((e.target as HTMLInputElement).value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustomLang() } }}
-                        placeholder={t2('chat.customLangPlaceholder')}
-                        style={{ flex: 1, padding: '6px 10px', border: '1px solid #dadce0', borderRadius: 8, fontSize: 13, outline: 'none' }}
-                      />
-                      <button onClick={addCustomLang} disabled={!customLangText.trim()}
-                              style={{ width: 30, height: 30, borderRadius: 8, border: 'none', background: '#1a73e8', color: '#fff', fontSize: 16, cursor: 'pointer' }}>＋</button>
-                    </div>
-                  )}
-                </div>
-              )}
+            <div style={{ minWidth: 240, flex: '1 1 240px' }}>
+              <LangMultiSelect value={chat.selectedLangs} onChange={chat.setSelectedLangs} />
             </div>
           </div>
 
@@ -572,13 +416,8 @@ export default function ChatWindow() {
             style={{ flex: 1 }}
           />
 
-          {/* 双模式切换 */}
-          <div style={{ display: 'inline-flex', background: 'rgba(26,115,232,.06)', borderRadius: 14, padding: 2, gap: 2 }}>
-            <button className="mode-btn" title={t2('chat.modeTip')} onClick={() => setMode2('pro')}
-                    style={{ border: '1px solid #d8dee6', background: mode === 'pro' ? '#1a73e8' : '#fff', color: mode === 'pro' ? '#fff' : '#777', fontSize: 14, padding: '6px 9px', borderRadius: 12, cursor: 'pointer' }}>{t2('chat.modePro')}</button>
-            <button className="mode-btn" title={t2('chat.modeTip')} onClick={() => setMode2('fast')}
-                    style={{ border: '1px solid #d8dee6', background: mode === 'fast' ? '#1a73e8' : '#fff', color: mode === 'fast' ? '#fff' : '#777', fontSize: 14, padding: '6px 9px', borderRadius: 12, cursor: 'pointer' }}>{t2('chat.modeFast')}</button>
-          </div>
+          {/* 双模式切换（与翻译工单共用 ModeToggle） */}
+          <ModeToggle value={mode} onChange={setMode2} />
           <Button variant="text" theme="default" icon={<ClearIcon />}
                   onClick={() => { chat.clearMessages() }}>
             {t2('chat.clearChat')}

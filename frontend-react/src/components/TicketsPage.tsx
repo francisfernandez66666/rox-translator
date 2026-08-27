@@ -13,6 +13,7 @@ import {
 } from '@/api'
 import type { Ticket, TicketResp } from '@/api/tickets'
 import LangMultiSelect from './LangMultiSelect'
+import ModeToggle from '@/components/ModeToggle'
 import { t, tpl } from '@/i18n'
 
 // 步骤 key → 用户友好名称（与 Vue 对齐）——用于进度气泡中展示每个阶段中文名
@@ -41,7 +42,7 @@ const fmtKB = (bytes: number): string => {
 // 默认导出组件：翻译工单页，提供建单、工单列表、进度气泡与反馈（等价 Vue TicketsPage）
 export default function TicketsPage() {
   const [mode, setMode] = useState<'text' | 'file'>('text')
-  const [qualityMode, setQualityMode] = useState<string>(localStorage.getItem('translate_mode') || 'pro')
+  const [qualityMode, setQualityMode] = useState<string>(localStorage.getItem('translate_mode') || 'fast')
   const [title, setTitle] = useState('')
   const [text, setText] = useState('')
   const [files, setFiles] = useState<File[]>([])
@@ -288,11 +289,8 @@ export default function TicketsPage() {
           <div style={{ minWidth: 300, flex: 1 }}>
             <LangMultiSelect value={langs} onChange={setLangs} />
           </div>
-          <Tooltip content={t('tk.modeTip')}>
-            <Select value={qualityMode as any} onChange={(v: any) => { const val = String(v); setQualityMode(val); localStorage.setItem('translate_mode', val) }}
-                    style={{ width: 160 }}
-                    options={[{ label: `🎓 ${t('tk.modeProShort')}`, value: 'pro' }, { label: `⚡ ${t('tk.modeFastShort')}`, value: 'fast' }] as never} />
-          </Tooltip>
+          <ModeToggle value={qualityMode as 'fast' | 'pro'} fastFirst
+            onChange={(val) => { setQualityMode(val); localStorage.setItem('translate_mode', val) }} />
           <Button theme="primary" loading={creating} onClick={create} style={{ marginLeft: 'auto' }}>
             {creating ? t('tk.submitting') : t('tk.create')}
           </Button>
