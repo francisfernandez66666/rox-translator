@@ -25,7 +25,7 @@ function auditActionLabel(a: string): string {
 	return v && v !== key ? v : a
 }
 
-type Any = Record<string, unknown>
+type Any = any
 
 // Vue 版 shortJSON：把 before/after 的 JSON 字符串压成「k=v,k=v…」摘要（最多 3 键）
 function shortDiffJSON(s: string): string {

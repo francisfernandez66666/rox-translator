@@ -15,6 +15,9 @@ interface Props {
   onClose: () => void
 }
 
+// 通用弱类型别名（与后台面板一致）：用于松类型的接口响应/行数据
+type Any = any
+
 interface Pkg {
   id: number
   name: string

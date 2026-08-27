@@ -14,7 +14,7 @@ import { t } from '@/i18n'
 /** 后台管理可用面板键名集合（用于面板路由与侧边栏导航） */
 export type PanelKey =
   | 'overview' | 'tenants' | 'plans' | 'referral' | 'org' | 'usage' | 'kb'
-  | 'models' | 'workflow' | 'apikeys' | 'webhooks' | 'tickets' | 'audit' | 'alerts' | 'users' | 'agreements' | 'brand' | 'mailTpl'
+  | 'models' | 'workflow' | 'apikeys' | 'webhooks' | 'tickets' | 'audit' | 'alerts' | 'users' | 'agreements' | 'brand' | 'mailTpl' | 'footer'
 
 /** 根据角色 key 返回本地化展示名称（后台侧边栏展示，i18n）；未知角色返回普通用户
  * @param r - 角色标识字符串（如 super_admin / tenant_admin 等）
