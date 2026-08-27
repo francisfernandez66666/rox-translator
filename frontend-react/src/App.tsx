@@ -5,7 +5,7 @@
 //       （改密、绑邮箱、注销、退出、进入后台）。meContext 无邮箱时强制绑定弹窗。
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Tag } from 'tdesign-react'
+import { Button, Tag, Drawer } from 'tdesign-react'
 import { myPackage, meContext } from '@/api'
 import { AuthProvider, useAuth } from '@/stores/auth'
 import { AdminProvider } from '@/stores/admin'
@@ -17,7 +17,10 @@ import TicketsPage from './components/TicketsPage'
 import Bell from './components/Bell'
 import AdminDashboard from './components/admin/AdminDashboard'
 import AccountMenu from './components/AccountMenu'
+import SiteFooter from './components/SiteFooter'
+import KbUploadDialog from './components/KbUploadDialog'
 import { EmailBindModal } from './components/modals'
+import { BrandingProvider, useBranding } from './branding'
 
 // 监听浏览器 popstate，同步当前 pathname 状态
 function usePath(): string {
@@ -44,6 +47,13 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
   const [pkgLine, setPkgLine] = useState('')
   // 是否未绑定邮箱（强制弹窗）
   const [ctxNoEmail, setCtxNoEmail] = useState(false)
+  // 前台「上传知识库」弹窗（仅部门管理员及以上可见，复用后台 recognize→import 流程）
+  const [kbUploadOpen, setKbUploadOpen] = useState(false)
+  // 侧边隐藏菜单（原页脚内容收入此处，顶部汉堡按钮唤起）
+  const [menuOpen, setMenuOpen] = useState(false)
+  const canUploadKb = roleLevelSafe(user?.role) >= 2
+  // 租户级品牌定制（按访问域名解析）
+  const branding = useBranding()
 
   // meContext：无邮箱强制绑定；余额徽标：myPackage 计算 token ≈ 句单语言
   useEffect(() => {
@@ -81,13 +91,23 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
       <style>{'@keyframes appspin{to{transform:rotate(360deg)}}'}</style>
       {/* 顶部导航栏：品牌、Tab、余额、通知、语言、账号菜单 */}
       <header className="app-header">
-        <span className="brand">🌐 {t('app.title')}</span>
+        <Button variant="text" shape="square" onClick={() => setMenuOpen(true)} aria-label="menu" style={{ fontSize: 20, padding: '0 8px' }}>☰</Button>
+        <span className="brand">
+          {branding.brandLogo
+            ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 60 }} />
+            : <span style={{ fontSize: 20, fontWeight: 700 }}>🌐 {branding.brandName || t('app.title')}</span>}
+        </span>
         <Button variant={tab === 'workbench' ? 'base' : 'text'} theme="primary" size="small"
                 onClick={() => switchTab('workbench')}>💬 {t('app.tabWorkbench')}</Button>
         <Button variant={tab === 'tickets' ? 'base' : 'text'} theme="primary" size="small"
                 onClick={() => switchTab('tickets')}>📋 {t('app.tabTickets')}</Button>
         <div style={{ flex: 1 }} />
         {!!pkgLine && <Tag theme="primary" variant="light">{pkgLine}</Tag>}
+        {canUploadKb && (
+          <Button size="small" variant="outline" theme="primary" onClick={() => setKbUploadOpen(true)}>
+            {t('kb.topbarUpload')}
+          </Button>
+        )}
         <Bell />
         <Button size="small" variant="text" onClick={toggleLang}>{lang === 'zh' ? 'EN' : '中'}</Button>
         <AccountMenu showAdminConsole={roleLevelSafe(user?.role) >= 2} onGotoAdmin={onGotoAdmin} />
@@ -104,6 +124,14 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
           </div>
         ) : tab === 'tickets' ? <TicketsPage /> : <ChatWindow />}
       </div>
+
+      {/* 侧边隐藏菜单：原前台页脚内容收入此处（汉堡按钮唤起） */}
+      <Drawer visible={menuOpen} onClose={() => setMenuOpen(false)} header={t('app.more') || '更多'} size="320px" footer={false}>
+        <SiteFooter />
+      </Drawer>
+
+      {/* 前台「上传知识库」弹窗（部门管理员及以上） */}
+      {canUploadKb && <KbUploadDialog visible={kbUploadOpen} onClose={() => setKbUploadOpen(false)} />}
 
       {/* 强制绑邮箱（不可关闭）；改密/换绑/注销统一由 AccountMenu 托管 */}
       {ctxNoEmail && (
@@ -157,7 +185,9 @@ export default function App() {
     <AuthProvider>
       <ChatProvider>
         <AdminProvider>
-          <Root />
+          <BrandingProvider>
+            <Root />
+          </BrandingProvider>
         </AdminProvider>
       </ChatProvider>
     </AuthProvider>

@@ -97,6 +97,7 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 			return
 		}
+		s.decoratePackages(tid, pkgs)
 		writeJSON(w, 200, map[string]interface{}{"success": true, "packages": pkgs})
 		return
 	}
@@ -105,7 +106,35 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 租户管理员（非超管）仅可见企业包/部门包；行业包与语言文化包仅超管可见
+	if auth.RoleLevel(u.Role) < 4 {
+		filtered := pkgs[:0]
+		for _, p := range pkgs {
+			if p.PackType == store.PackIndustry || p.PackType == store.PackLocale {
+				continue
+			}
+			filtered = append(filtered, p)
+		}
+		pkgs = filtered
+	}
+	s.decoratePackages(tid, pkgs)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "packages": pkgs})
+}
+
+// decoratePackages 为包列表补充展示用名称：归属部门名（org_name）与所属企业名（tenant_name）。
+// 部门包/企业包均归属租户，统一带出企业名称；部门包额外带出部门名称。
+func (s *Server) decoratePackages(tid int64, pkgs []*store.KBPackage) {
+	orgNames, _ := s.Store.OrgNameMap()
+	tenantName := ""
+	if tn, e := s.Ten.Name(tid); e == nil {
+		tenantName = tn
+	}
+	for _, p := range pkgs {
+		p.TenantName = tenantName
+		if p.OrgID > 0 {
+			p.OrgName = orgNames[p.OrgID]
+		}
+	}
 }
 
 // handleKBPackageCreate 创建包（行业包/企业包/部门包）

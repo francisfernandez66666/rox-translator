@@ -7,16 +7,18 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react'
 import { tenantList as apiTenantList, setActiveTenantId, getActiveTenantId } from '@/api'
 import type { TenantInfo } from '@/api'
+import { orgList, type OrgInfo } from '@/api/org'
 import { useAuth, roleLevel } from './auth'
 import { t } from '@/i18n'
 
-// 后台管理可用面板键名集合
+/** 后台管理可用面板键名集合（用于面板路由与侧边栏导航） */
 export type PanelKey =
   | 'overview' | 'tenants' | 'plans' | 'referral' | 'org' | 'usage' | 'kb'
-  | 'models' | 'workflow' | 'apikeys' | 'webhooks' | 'tickets' | 'audit' | 'alerts' | 'users'
+  | 'models' | 'workflow' | 'apikeys' | 'webhooks' | 'tickets' | 'audit' | 'alerts' | 'users' | 'agreements' | 'brand'
 
-// 角色名（后台侧边栏展示，i18n）
-// 根据角色 key 返回本地化展示名称；未知角色返回普通用户
+/** 根据角色 key 返回本地化展示名称（后台侧边栏展示，i18n）；未知角色返回普通用户
+ * @param r - 角色标识字符串（如 super_admin / tenant_admin 等）
+ */
 export function roleName(r?: string): string {
   if (r === 'super_admin' || r === 'admin') return t('users.role.super_admin')
   if (r === 'tenant_admin' || r === 'approver') return t('users.role.tenant_admin')
@@ -46,6 +48,12 @@ interface AdminCtx {
   switchTenant: (tid: number) => void
   // 加载租户列表
   loadTenants: () => Promise<void>
+  // 组织树（登录后静默加载；供部门包映射为部门名等使用）
+  orgs: OrgInfo[]
+  // 组织 id → 组织信息（含名称），供部门包按 id 反查部门名
+  orgMap: Map<number, OrgInfo>
+  // 静默加载当前租户组织树
+  loadOrgs: () => Promise<void>
   // 清除本地认证与租户信息
   clearAuth: () => void
   // 当前展示的后台面板
@@ -64,11 +72,14 @@ const Ctx = createContext<AdminCtx>({
   myLevel: 0, isAdmin: false, isDeptAdmin: false, isTenantAdmin: false, isSuper: false,
   roleOptions: [], tenants: [], activeTenantId: 0,
   switchTenant: () => {}, loadTenants: async () => {}, clearAuth: () => {},
+  orgs: [], orgMap: new Map(), loadOrgs: async () => {},
   panel: 'overview', gotoPanel: () => {}, pendingFeedbackId: 0,
   openFeedback: () => {}, consumeFeedback: () => 0,
 })
 
-// 后台管理全局状态 Provider：租户、权限、面板路由、反馈跳转
+/** 后台管理全局状态 Provider：管理租户列表/切换、角色权限、面板路由与反馈跨组件跳转
+ * @param children - 需要访问后台上下文的子组件树
+ */
 export function AdminProvider({ children }: { children: ReactNode }) {
   // 从认证上下文获取当前用户
   const { user } = useAuth()
@@ -78,6 +89,9 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   const [tenants, setTenants] = useState<TenantInfo[]>([])
   // 当前选中的租户 ID
   const [activeTenantId, setActive] = useState<number>(getActiveTenantId())
+  // 当前租户组织树（登录后静默加载）
+  const [orgs, setOrgs] = useState<OrgInfo[]>([])
+  const [orgMap, setOrgMap] = useState<Map<number, OrgInfo>>(new Map())
   // 当前展示的后台面板
   const [panel, setPanel] = useState<PanelKey>('overview')
   // 消息中心跳转而来的待处理反馈 ID
@@ -135,6 +149,29 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     } catch { /* 忽略 */ }
   }, [])
 
+  // 静默加载当前租户组织树（供部门包映射为部门名等使用）
+  const loadOrgs = useCallback(async () => {
+    try {
+      const r: any = await orgList()
+      if (r && r.success) {
+        const list: OrgInfo[] = r.orgs || []
+        setOrgs(list)
+        const m = new Map<number, OrgInfo>()
+        list.forEach((o) => m.set(o.id, o))
+        setOrgMap(m)
+      }
+    } catch { /* 忽略 */ }
+  }, [])
+
+  // 登录后：【非超管】把租户上下文切到本人所属租户（确保组织树/包按租户作用域）；随后静默加载组织树
+  useEffect(() => {
+    if (!user) return
+    if (roleLevel(user.role) < 4 && user.tenant_id && activeTenantId !== user.tenant_id) {
+      switchTenant(user.tenant_id)
+    }
+    void loadOrgs()
+  }, [user, activeTenantId, switchTenant, loadOrgs])
+
   // 跨组件跳转入口（Bell → 反馈处理面板）
   const gotoPanel = useCallback((p: PanelKey) => {
     setPanel(p)
@@ -168,13 +205,15 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AdminCtx>(() => ({
     myLevel, isAdmin, isDeptAdmin, isTenantAdmin, isSuper, roleOptions,
     tenants, activeTenantId, switchTenant, loadTenants, clearAuth,
+    orgs, orgMap, loadOrgs,
     panel, gotoPanel, pendingFeedbackId, openFeedback, consumeFeedback,
   }), [myLevel, isAdmin, isDeptAdmin, isTenantAdmin, isSuper, roleOptions,
        tenants, activeTenantId, switchTenant, loadTenants, clearAuth,
+       orgs, orgMap, loadOrgs,
        panel, gotoPanel, pendingFeedbackId, openFeedback, consumeFeedback])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
 
-// 在函数组件中读取后台管理上下文
+/** 在函数组件中读取后台管理上下文（必须在 <AdminProvider> 内使用） */
 export function useAdmin() { return useContext(Ctx) }

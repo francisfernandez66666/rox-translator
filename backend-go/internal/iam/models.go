@@ -28,6 +28,8 @@ type User struct {
 	Email        string `json:"email"`         // 联系邮箱（找回密码验证码接收地址）
 	CreatedAt    string `json:"created_at"`    // 创建时间（RFC3339 字符串）
 	UpdatedAt    string `json:"updated_at"`    // 更新时间（RFC3339 字符串）
+	// AgreedAt 用户协议+隐私协议签署时间（RFC3339；空=未签署）。注册勾选即写入，后台「协议签署」tab 据此展示。
+	AgreedAt string `json:"agreed_at"` // 协议签署时间（空=未签署）
 	// DeactivatedAt 自助注销请求日期（2006-01-02；空=未注销）。
 	// 宽限语义：请求当日仍可正常使用，次日起按 disabled 处理（数据保留不删除）。
 	DeactivatedAt string `json:"-"`

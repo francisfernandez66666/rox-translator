@@ -5,7 +5,7 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
-// 租户信息数据结构
+/** 租户信息数据结构：含编码/名称/状态/有效期/权限 */
 export interface TenantInfo {
   id: number
   code: string
@@ -17,7 +17,7 @@ export interface TenantInfo {
   updated_at: string
 }
 
-// TenantResp 租户接口统一响应结构：success 标记结果，tenants 为列表、tenant 为单个对象。
+/** 租户接口统一响应结构：success 标记结果，tenants 列表/tenant 单对象 */
 export interface TenantResp {
   success: boolean
   message?: string
@@ -26,12 +26,12 @@ export interface TenantResp {
 }
 
 // 租户管理：统一走 JWT 登录认证（管理后台 admin 角色）
-// 获取租户列表
+/** 获取租户列表（需 admin 角色 JWT 认证） */
 export async function tenantList(): Promise<TenantResp> {
   return request('/api/tenant/list', { headers: authHeaders() })
 }
 
-// 创建新租户（可附带租户管理员账号）
+/** 创建新租户（可附带租户管理员账号） */
 export async function tenantCreate(
   data: { code: string; name: string; expires_at: string; permissions: string; admin_user?: string; admin_pass?: string },
 ): Promise<TenantResp> {
@@ -42,7 +42,7 @@ export async function tenantCreate(
   })
 }
 
-// 更新租户信息（名称/有效期/权限）
+/** 更新租户信息（名称/有效期/权限） */
 export async function tenantUpdate(
   data: { id: number; name: string; expires_at: string; permissions: string },
 ): Promise<TenantResp> {
@@ -53,7 +53,7 @@ export async function tenantUpdate(
   })
 }
 
-// 启用/停用租户
+/** 启用/停用租户 */
 export async function tenantSetStatus(id: number, status: string): Promise<TenantResp> {
   return request('/api/tenant/status', {
     method: 'POST',
@@ -62,7 +62,7 @@ export async function tenantSetStatus(id: number, status: string): Promise<Tenan
   })
 }
 
-// 删除租户（连同数据一并删除）
+/** 删除租户（连同数据一并删除） */
 export async function tenantDelete(id: number): Promise<TenantResp> {
   return request('/api/tenant/delete', {
     method: 'POST',
@@ -72,17 +72,17 @@ export async function tenantDelete(id: number): Promise<TenantResp> {
 }
 
 // 租户数据导出（数据主权）/ 清除（GDPR 删除权，super_admin）
-// 导出租户全部数据（JSON 文件下载）
+/** 导出租户全部数据（JSON 文件下载，数据主权） */
 export async function tenantExport(id: number): Promise<AdminResp> {
   return request('/api/tenant/export', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
 
-// GDPR 清除租户全部业务数据（不可恢复）
+/** GDPR 清除租户全部业务数据（不可恢复，删除权） */
 export async function tenantErase(id: number): Promise<AdminResp> {
   return request('/api/tenant/erase', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
 
-// 向待审核租户发放试用额度（super_admin，幂等：已开通则拒绝）
+/** 向待审核租户发放试用额度（super_admin，幂等） */
 export async function tenantGrantTrial(id: number): Promise<AdminResp> {
   return request('/api/admin/tenants/grant-trial', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ tenant_id: id }) })
 }

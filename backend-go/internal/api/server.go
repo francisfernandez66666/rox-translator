@@ -172,6 +172,13 @@ func (s *Server) routesTenant() {
 	s.mux.HandleFunc("/api/tenant/delete", s.handleTenantDelete)
 	s.mux.HandleFunc("/api/tenant/export", s.handleTenantExport)
 	s.mux.HandleFunc("/api/tenant/erase", s.handleTenantErase)
+	s.mux.HandleFunc("/api/tenant/branding", s.handleTenantBranding)
+	// 超管为指定租户开通/撤销「品牌定制」权限（免套餐）
+	s.mux.HandleFunc("/api/admin/tenant/brand-grant", s.handleAdminBrandGrant)
+	// Caddy on_demand_tls 权限回调（localhost 调用，无需鉴权）：放行本平台域名的子域证书自动签发
+	s.mux.HandleFunc("/api/caddy/ask", s.handleCaddyOnDemandAsk)
+	s.mux.HandleFunc("/api/footer-links", s.handleFooterLinksGet)
+	s.mux.HandleFunc("/api/admin/footer-links", s.handleFooterLinksSet)
 	s.mux.HandleFunc("/api/admin/tenants/grant-trial", s.handleGrantTrial)
 }
 
@@ -562,9 +569,10 @@ func (s *Server) handleTranslationLangs(w http.ResponseWriter, r *http.Request) 
 	// 遍历全局语言配置组装语言元信息
 	for _, code := range config.TranslateLangs {
 		langs = append(langs, map[string]string{
-			"code": code,
-			"name": config.LangNames[code],
-			"flag": config.Flags[code],
+			"code":    code,
+			"name":    config.LangNames[code],
+			"name_en": config.LangNamesEn[code],
+			"flag":    config.Flags[code],
 		})
 	}
 	writeJSON(w, 200, map[string]interface{}{"kb_langs": langs})

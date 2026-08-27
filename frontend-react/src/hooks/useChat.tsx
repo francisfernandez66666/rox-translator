@@ -54,7 +54,9 @@ interface ChatCtx {
 // 内部 Context 实例；null 默认值用于检测是否在 Provider 内使用
 const Ctx = createContext<ChatCtx | null>(null)
 
-// 聊天全局状态 Provider：封装消息、语言、后端健康、SSE 发送与停止等生命周期
+/** 聊天全局状态 Provider：封装消息列表、目标语言、后端健康检查、SSE 发送与停止等生命周期
+ * @param children - 需要访问聊天上下文的子组件树
+ */
 export function ChatProvider({ children }: { children: ReactNode }) {
   // 聊天消息列表（从 localStorage 恢复）
   const [messages, setMessages] = useState<ChatMessage[]>(loadMsgs)
@@ -236,7 +238,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
 
-// 在函数组件中读取聊天上下文；必须在 <ChatProvider> 内使用
+/** 在函数组件中读取聊天上下文；必须在 <ChatProvider> 内使用，否则抛出错误 */
 export function useChat(): ChatCtx {
   const v = useContext(Ctx)
   if (!v) throw new Error('useChat 必须在 <ChatProvider> 内使用')

@@ -24,7 +24,7 @@ func (s *Server) handlePublicPricing(w http.ResponseWriter, r *http.Request) {
 // handlePublicTerms 服务条款页。
 func (s *Server) handlePublicTerms(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, publicDocPage("服务条款 / Terms of Service", termsBody))
+	fmt.Fprint(w, publicDocPage("用户协议 / User Agreement", termsBody))
 }
 
 // handlePublicSLA 服务等级协议页。
@@ -36,7 +36,7 @@ func (s *Server) handlePublicSLA(w http.ResponseWriter, r *http.Request) {
 // handlePublicPrivacy 数据保护条款（DPA）页。
 func (s *Server) handlePublicPrivacy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, publicDocPage("数据保护条款 / Data Processing Agreement", privacyBody))
+	fmt.Fprint(w, publicDocPage("隐私协议 / Privacy Policy", privacyBody))
 }
 
 // publicLayout 公共页面外壳（品牌导航 + 内容区 + 页脚）。
@@ -61,9 +61,9 @@ table{width:100%;border-collapse:collapse;margin:14px 0}
 th,td{border:1px solid #e0e0e0;padding:10px 12px;text-align:left;font-size:14px}
 th{background:#e8f5e9;color:var(--green)}
 </style></head><body>
-<div class="header"><div class="brand">🌐 能言</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">条款 Terms</a><a href="/docs/sla">SLA</a><a href="/status">状态 Status</a><a href="/docs/privacy">隐私 Privacy</a></div></div>
+<div class="header"><div class="brand">🌐 能言</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">用户协议 Terms</a><a href="/docs/sla">SLA</a><a href="/status">状态 Status</a><a href="/docs/privacy">隐私协议 Privacy</a></div></div>
 <div class="wrap"><div class="card">` + body + `</div></div>
-<div class="footer">© 2026 能言 · LangCross 多语翻译知识库 · <a href="/status">服务状态</a> · <a href="/admin">管理后台</a></div>
+<div class="footer">© 2026 能言 LangCross · 翻译平台 · <a href="/docs/terms">用户协议</a> · <a href="/docs/privacy">隐私协议</a> · <a href="/status">服务状态</a> · <a href="/admin">管理后台</a></div>
 </body></html>`
 }
 
@@ -94,7 +94,7 @@ th,td{border:1px solid #e0e0e0;padding:10px 12px;text-align:left;font-size:14px}
 th{background:#e8f5e9;color:var(--green)}
 .note{background:#fff8e1;border-left:4px solid #f9a825;padding:12px 16px;border-radius:6px;font-size:14px;color:#5f6368;margin:16px 0}
 </style></head><body>
-<div class="header"><div class="brand">🌐 能言</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">条款 Terms</a><a href="/docs/sla">SLA</a><a href="/docs/privacy">隐私 Privacy</a></div></div>
+<div class="header"><div class="brand">🌐 能言</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">用户协议 Terms</a><a href="/docs/sla">SLA</a><a href="/docs/privacy">隐私协议 Privacy</a></div></div>
 <div class="wrap">
 <div class="card">
 <h1>定价 Pricing</h1>
@@ -107,7 +107,7 @@ th{background:#e8f5e9;color:var(--green)}
 <p><b>Q：额度用完后怎么办？</b> 可订阅付费包或购买增量包，到账后立即恢复；也可联系管理员充值。</p>
 <p><b>Q：支持哪些支付方式？</b> 支持微信 / 支付宝在线支付（对接中），静态二维码扫码 + 人工确认，当前可使用线下转账 + 管理员充值。</p>
 </div></div>
-<div class="footer">© 2026 能言 · LangCross 多语翻译知识库</div>
+<div class="footer">© 2026 能言 LangCross · 翻译平台 · <a href="/docs/terms">用户协议</a> · <a href="/docs/privacy">隐私协议</a></div>
 <script>
 fetch('/api/plans').then(r=>r.json()).then(d=>{
   const types={free:'免费体验',paid:'付费包',increment:'增量包'};
@@ -123,26 +123,103 @@ fetch('/api/plans').then(r=>r.json()).then(d=>{
 </script>
 </body></html>`
 
-// termsBody 服务条款正文（中英双语）。
+// termsBody 用户协议正文（中英双语，面向翻译平台）。
 const termsBody = `
-<p><b>中文</b>｜<i>English below</i></p>
-<h2>1. 服务说明</h2>
-<p>能言（以下简称「本服务」）提供多语言文本/文件翻译、知识库管理等 SaaS 能力。使用本服务即视为同意本条款。</p>
-<h2>2. 账户与使用</h2>
-<p>用户须妥善保管账号密码；不得利用本服务从事违法活动、侵犯他人知识产权或滥用系统资源。余额为预付 token，不设有效期，不可退款（法律另有规定除外）。</p>
-<h2>3. 服务变更与终止</h2>
-<p>我们可能基于产品迭代调整功能与定价，重大变更将提前通知。用户违反条款时，我们有权暂停或终止其账户。</p>
-<h2>4. 免责与责任限制</h2>
-<p>翻译结果由 AI 模型生成，可能存在错误，不构成任何专业意见。在适用法律允许范围内，我们对间接损失不承担责任。</p>
+<p><b>能言 LangCross 用户协议</b>（以下简称「本协议」）</p>
+<p>生效日期：2026 年 1 月 1 日</p>
+<p>能言（LangCross，以下简称「本平台」或「我们」）是一个面向个人与企业的<b>翻译平台</b>，提供文本/文件翻译、多语知识库、术语管理与团队协作等 SaaS 能力。在使用本平台前，请您（以下简称「用户」）仔细阅读并充分理解本协议。您注册、登录或使用本平台任一功能，即视为已阅读并同意接受本协议全部条款。</p>
+
+<h2>1. 协议的接受与变更</h2>
+<p>1.1 您点击「同意」或实际使用本平台服务，即与本平台成立服务关系，本协议对双方均具有法律约束力。</p>
+<p>1.2 我们可能根据法律法规变化或产品升级不时修订本协议，修订后的协议将在本页面及站内公告公示。若您继续使用服务，视为接受修订；若您不同意，应停止使用本平台。</p>
+
+<h2>2. 服务说明</h2>
+<p>2.1 本平台作为<b>翻译平台</b>，提供的核心能力包括但不限于：多语种文本与文件翻译、机器与人工结合的译文校对、多语知识库与术语库管理、翻译记忆、批量任务与团队协作等。</p>
+<p>2.2 翻译结果由人工智能模型及/或人工服务生成，仅供您参考，不构成任何专业法律、医疗、财务或其他专业意见。</p>
+
+<h2>3. 账户注册与安全</h2>
+<p>3.1 您须提供真实、准确、完整的注册信息，并及时更新。</p>
+<p>3.2 您应妥善保管账户名与密码，凡通过您账户发生的操作均视为您本人行为，由此产生的后果由您承担。</p>
+<p>3.3 如发生账号盗用或安全漏洞，请立即通知我们；在接到通知前已产生的损失，除非法律另有规定，本平台不承担责任。</p>
+
+<h2>4. 使用规则与禁止行为</h2>
+<p>4.1 您承诺合法使用本平台，不得利用本平台从事以下行为：</p>
+<p>（一）违反国家法律、法规或公序良俗；<br>（二）侵犯他人知识产权、商业秘密或个人隐私；<br>（三）上传含有病毒、木马或恶意代码的文件；<br>（四）对本平台进行反向工程、破解、滥用或超出授权范围的批量调用；<br>（五）利用本平台生成或传播违法、侵权或虚假信息。</p>
+
+<h2>5. 知识产权</h2>
+<p>5.1 本平台及其算法、软件、界面、文档、品牌标识等知识产权归本平台运营方所有，除本协议明示授权外，您不得复制、传播或用于商业目的。</p>
+<p>5.2 您在使用本平台过程中提交的内容（含原文、术语、知识库）的知识产权归您或相关权利人所有；您授予本平台为提供服务所必需的存储、处理与展示权利。</p>
+
+<h2>6. 费用与支付</h2>
+<p>6.1 本平台采用免费体验与付费订阅/按量计费相结合的商业模式，具体套餐、价格与计费规则以站内公示及管理后台为准。</p>
+<p>6.2 预付费余额（token/句数）不设有效期，除法律另有规定或本协议明确约定外不予退款；赠送额度不含退款权益。</p>
+
+<h2>7. 服务变更、暂停与终止</h2>
+<p>7.1 我们可能因系统维护、产品迭代或安全需要，调整、暂停或终止部分功能，重大变更将提前通知。</p>
+<p>7.2 若您违反本协议，我们有权暂停或终止您的账户，并保留追究责任的权利。</p>
+
+<h2>8. 免责声明</h2>
+<p>8.1 本平台按「现状」提供服务，我们尽合理努力保障服务可用与结果质量，但不对翻译结果的准确性、适用性作出明示或默示担保。</p>
+<p>8.2 因不可抗力、第三方服务故障或您自身操作导致的损失，本平台不承担责任。</p>
+
+<h2>9. 责任限制</h2>
+<p>在适用法律允许的最大范围内，本平台对因使用或无法使用本服务所导致的间接、附带、特殊或后果性损害不承担责任；累计赔偿责任不超过您在前 12 个月内实际支付的费用总额。</p>
+
+<h2>10. 隐私与数据保护</h2>
+<p>本平台高度重视用户数据与隐私，相关收集、使用、共享与删除规则详见《<a href="/docs/privacy">隐私协议</a>》，该协议为本协议不可分割的组成部分。</p>
+
+<h2>11. 适用法律与争议解决</h2>
+<p>本协议的订立、解释与争议解决适用中华人民共和国法律；双方因本协议产生争议的，应友好协商解决，协商不成的，提交本平台运营方所在地有管辖权的人民法院诉讼解决。</p>
+
+<h2>12. 联系我们</h2>
+<p>如您对本协议有任何疑问，可通过站内工单或管理后台公布的联系方式与我们联系。</p>
+
 <hr>
-<h2>1. Service Description</h2>
-<p>LangCross provides multilingual text/file translation and knowledge base management as a SaaS. By using the service you agree to these terms.</p>
-<h2>2. Accounts and Use</h2>
-<p>Users must safeguard credentials; prohibited uses include unlawful activity, IP infringement, and resource abuse. Prepaid tokens carry no expiry and are non-refundable except as required by law.</p>
-<h2>3. Changes and Termination</h2>
-<p>We may evolve features and pricing with advance notice. Accounts may be suspended or terminated for breach of these terms.</p>
-<h2>4. Disclaimers</h2>
-<p>AI-generated translations may contain errors and do not constitute professional advice. To the extent permitted by law, we are not liable for indirect damages.</p>`
+<h2>User Agreement</h2>
+<p><b>Effective date: January 1, 2026</b></p>
+<p>LangCross ("the Platform", "we", or "us") is a <b>translation platform</b> offering multilingual text/file translation, multilingual knowledge bases, terminology management, and team collaboration as a SaaS. By registering, logging in, or using any feature of the Platform, you ("User") agree to be bound by this Agreement.</p>
+
+<h2>1. Acceptance and Changes</h2>
+<p>1.1 Clicking "Agree" or actually using the service creates a binding agreement between you and the Platform.</p>
+<p>1.2 We may revise this Agreement from time to time. Continued use after notice constitutes acceptance of the revised terms.</p>
+
+<h2>2. Service Description</h2>
+<p>2.1 As a <b>translation platform</b>, LangCross provides multilingual text/file translation, AI- and human-assisted proofreading, knowledge-base and glossary management, translation memory, batch tasks, and team collaboration.</p>
+<p>2.2 Translations are generated by AI models and/or human services for reference only and do not constitute professional advice.</p>
+
+<h2>3. Account Registration and Security</h2>
+<p>3.1 You must provide accurate registration information and keep it up to date.</p>
+<p>3.2 You are responsible for safeguarding your credentials; activities under your account are deemed your own.</p>
+
+<h2>4. Acceptable Use</h2>
+<p>You agree not to: (a) violate laws or public morality; (b) infringe IP, trade secrets, or privacy; (c) upload malicious files; (d) reverse-engineer, abuse, or over-call the Platform; (e) generate or disseminate unlawful or infringing content.</p>
+
+<h2>5. Intellectual Property</h2>
+<p>5.1 The Platform's software, algorithms, interfaces, documentation, and trademarks are owned by the operator. No rights are granted except as expressly stated.</p>
+<p>5.2 You retain rights to content you submit; you grant the Platform a license to store, process, and display it solely to provide the service.</p>
+
+<h2>6. Fees and Payment</h2>
+<p>6.1 The Platform combines free trials with paid subscriptions/usage-based billing; plans and prices are as published.</p>
+<p>6.2 Prepaid balance has no expiry and is non-refundable except as required by law.</p>
+
+<h2>7. Changes, Suspension, and Termination</h2>
+<p>7.1 We may modify, suspend, or terminate features for maintenance, iteration, or security, with notice for material changes.</p>
+<p>7.2 We may suspend or terminate accounts that breach this Agreement.</p>
+
+<h2>8. Disclaimers</h2>
+<p>The Platform is provided "as is"; we do not warrant the accuracy or fitness of translations.</p>
+
+<h2>9. Limitation of Liability</h2>
+<p>To the maximum extent permitted by law, the Platform is not liable for indirect or consequential damages; aggregate liability is capped at fees paid in the preceding 12 months.</p>
+
+<h2>10. Privacy</h2>
+<p>Data collection, use, and deletion are governed by our <a href="/docs/privacy">Privacy Policy</a>, which is incorporated into this Agreement.</p>
+
+<h2>11. Governing Law</h2>
+<p>This Agreement is governed by the laws of the People's Republic of China; disputes are resolved in the courts of the operator's location.</p>
+
+<h2>12. Contact</h2>
+<p>For questions, contact us via in-app tickets or the contact information published in the admin console.</p>`
 
 // slaBody 服务等级协议正文。
 const slaBody = `
@@ -161,25 +238,89 @@ const slaBody = `
 <h2>Support Response</h2>
 <p>P1 critical: 2h; P2 general: 8h; P3 inquiry: 24h.</p>`
 
-// privacyBody 数据保护条款（DPA）正文。
+// privacyBody 隐私协议正文（中英双语，面向翻译平台）。
 const privacyBody = `
-<p><b>中文</b>｜<i>English below</i></p>
-<h2>我们收集的数据</h2>
-<p>账户信息（用户名/邮箱/联系方式）、翻译内容（仅用于提供翻译服务与质量改进）、用量记录（计费与报表）。</p>
-<h2>数据使用与共享</h2>
-<p>数据仅用于提供服务，不向第三方出售。翻译内容调用大模型供应商 API 处理，供应商仅按委托处理且不得用于训练。</p>
-<h2>数据保留与删除</h2>
-<p>租户可随时在管理后台导出全部数据（GDPR 导出）或申请清除（删除级联清理）。我们按法律要求保留必要日志。</p>
-<h2>安全措施</h2>
-<p>传输加密（TLS）、数据落盘加密、访问审计日志、最小权限原则。</p>
+<p><b>能言 LangCross 隐私协议</b></p>
+<p>生效日期：2026 年 1 月 1 日</p>
+<p>能言（LangCross，以下简称「本平台」）作为<b>翻译平台</b>的运营方，深知个人信息保护的重要性。本隐私协议说明我们如何收集、使用、共享、存储与保护您的信息，以及您所享有的权利。</p>
+
+<h2>1. 我们收集的信息</h2>
+<p>1.1 <b>账户信息</b>：注册时提供的用户名、邮箱、联系方式及组织信息。</p>
+<p>1.2 <b>翻译内容</b>：您上传的待翻译文本、文件、术语与知识库内容，仅用于向您提供翻译及相关服务。</p>
+<p>1.3 <b>用量与日志</b>：计费所需的任务记录、调用日志、设备与网络信息（IP、浏览器、访问时间）。</p>
+
+<h2>2. 信息的使用</h2>
+<p>2.1 提供、维护与改进翻译服务；</p>
+<p>2.2 计费、对账与客服支持；</p>
+<p>2.3 安全风控、欺诈防范与产品体验优化。</p>
+
+<h2>3. 信息的共享</h2>
+<p>3.1 我们<b>不出售</b>您的个人信息。</p>
+<p>3.2 为实现翻译能力，您的翻译内容会调用大模型供应商 API 进行处理，供应商仅在委托范围内按数据处理协议处理，且不得将其用于自身模型训练。</p>
+<p>3.3 在法律要求或为保护本平台及用户合法权益的必要范围内，我们可能向监管或司法机关提供相关信息。</p>
+
+<h2>4. 数据存储与跨境传输</h2>
+<p>4.1 您的数据存储于本平台运营方控制的服务器，传输采用 TLS 加密。</p>
+<p>4.2 如涉及跨境传输，我们将依据适用法律采取合规措施（如标准合同条款）并征得必要同意。</p>
+
+<h2>5. 数据保留与删除</h2>
+<p>5.1 我们在实现服务目的所必需的最短时间内保留您的信息；法律法规要求更长期限的，从其规定。</p>
+<p>5.2 您可随时在管理后台导出全部数据，或申请删除账户及关联数据，我们将在合理期限内完成删除（法律另行要求的除外）。</p>
+
+<h2>6. 您的权利</h2>
+<p>您对个人信息的查询、更正、导出、删除及撤回同意等权利，可通过管理后台或联系我们行使。</p>
+
+<h2>7. 安全措施</h2>
+<p>我们采取传输加密（TLS）、存储加密、访问审计日志与最小权限原则等技术与管理措施保护您的信息。</p>
+
+<h2>8. 未成年人保护</h2>
+<p>本平台主要面向成年人及企业用户；我们不直接收集未成年人个人信息，如误收集将及时删除。</p>
+
+<h2>9. Cookie 与同类技术</h2>
+<p>我们可能使用 Cookie 维持登录态与统计访问，您可通过浏览器设置管理 Cookie。</p>
+
+<h2>10. 联系我们</h2>
+<p>如您对个人信息处理有任何疑问或投诉，可通过管理后台公布的联系方式或隐私专用邮箱与我们联系。</p>
+
+<h2>11. 协议更新</h2>
+<p>本隐私协议将随产品与法规变化更新，更新后以本页面公示版本为准。</p>
+
 <hr>
-<h2>Data We Collect</h2>
-<p>Account info, translation content (to provide service), and usage records (billing/reporting).</p>
-<h2>Use and Sharing</h2>
-<p>Data is used solely to provide the service and is never sold. Translation content is processed via LLM providers under data-processing terms; it is not used for their model training.</p>
-<h2>Retention and Deletion</h2>
-<p>Tenants may export (GDPR export) or erase all data at any time. Necessary logs are retained per legal requirements.</p>
-<h2>Security</h2>
-<p>TLS in transit, encryption at rest, audit logging, least-privilege access.</p>`
+<h2>Privacy Policy</h2>
+<p><b>Effective date: January 1, 2026</b></p>
+<p>LangCross ("the Platform") operates a <b>translation platform</b>. This Privacy Policy explains how we collect, use, share, store, and protect your information.</p>
+
+<h2>1. Information We Collect</h2>
+<p>(a) Account info: username, email, contact, and organization details; (b) Translation content: texts, files, glossaries, and knowledge bases you upload, used solely to provide the service; (c) Usage and logs: task records, API logs, and device/network data (IP, browser, timestamps).</p>
+
+<h2>2. How We Use</h2>
+<p>To provide, maintain, and improve translation services; for billing and support; and for security, fraud prevention, and experience optimization.</p>
+
+<h2>3. Sharing</h2>
+<p>We do <b>not sell</b> personal information. Translation content is processed via LLM providers under data-processing agreements and is not used for their training. We may disclose information when required by law or to protect rights.</p>
+
+<h2>4. Storage and Cross-Border Transfer</h2>
+<p>Data is stored on our controlled servers with TLS in transit. Cross-border transfers follow applicable law (e.g., standard contractual clauses) with necessary consent.</p>
+
+<h2>5. Retention and Deletion</h2>
+<p>We retain data only as long as necessary; you may export or erase your data anytime via the admin console.</p>
+
+<h2>6. Your Rights</h2>
+<p>You may access, correct, export, delete, or withdraw consent regarding your personal data.</p>
+
+<h2>7. Security</h2>
+<p>We apply TLS, encryption at rest, audit logging, and least-privilege access.</p>
+
+<h2>8. Minors</h2>
+<p>The Platform is intended for adults and enterprises; we do not knowingly collect minors' data.</p>
+
+<h2>9. Cookies</h2>
+<p>We use cookies to maintain sessions and analytics; you can manage them in your browser.</p>
+
+<h2>10. Contact</h2>
+<p>For privacy questions, contact us via the admin console or our privacy email.</p>
+
+<h2>11. Updates</h2>
+<p>This Policy is updated as products and laws evolve; the latest version is published here.</p>`
 
 // 本文件不直接使用这些包，移除多余导入。

@@ -24,6 +24,8 @@ type KBPackage struct {
 	PackType       string `json:"pack_type"`        // 包类型：tenant(企业) / industry(行业) / locale(语言文化) / department(部门)
 	Role           string `json:"role"`             // 包角色：source(匹配来源) / gate(输出闸门)
 	OrgID          int64  `json:"org_id"`           // 归属部门组织 ID（0=租户级）
+	OrgName        string `json:"org_name"`         // 归属部门名称（展示用，0=租户级时为空）
+	TenantName     string `json:"tenant_name"`      // 所属租户（企业）名称（展示用）
 	Enabled        int    `json:"enabled"`          // 启用状态：1=启用（参与翻译命中）0=停用
 	ShareCrossDept int    `json:"share_cross_dept"` // ★ 跨部门共享开关（2026-08-26 KB继承链）：1=愿意参与跨部门降级检索（默认）0=仅限归属链内用户可见（包级 opt-out）；仅对部门包有意义
 	SortOrder      int    `json:"sort_order"`       // 同级排序权重（升序）

@@ -77,6 +77,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Industry   string `json:"industry"`      // 所属行业（新租户注册时必填，来自行业包 code）
 		RoleChoice string `json:"role_choice"`   // 角色选择：admin=我是管理员(建企业) / user=我是普通用户(邀请码加入)
 		Ref        string `json:"ref"`           // 个人邀请码（可选，邀请裂变：?ref=<个人码> 链接携带）
+		// ★ 协议签署（2026-08-27 需求）：注册即视为同意《用户协议》与《隐私协议》，
+		//   前端注册表单须勾选后方可提交；勾选时 agreed=true 并随注册写入签署时间。
+		Agreed bool `json:"agreed"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -95,6 +98,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// 密码强度：至少 6 位
 	if len(req.Password) < 6 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "密码至少 6 位"})
+		return
+	}
+	// 协议同意校验：注册必须勾选同意《用户协议》与《隐私协议》
+	if !req.Agreed {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请阅读并同意《用户协议》与《隐私协议》"})
 		return
 	}
 
@@ -280,6 +288,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "用户创建失败: " + err.Error()})
 		return
+	}
+	// 记录协议签署时间（注册勾选即视为同意《用户协议》与《隐私协议》，给后台超管「协议签署」tab 留痕）
+	if req.Agreed {
+		now := time.Now().Format(time.RFC3339)
+		_ = s.Store.SetUserAgreed(nu.ID, inviteTenantID, now)
+		nu.AgreedAt = now
 	}
 	// 绑定联系邮箱（用于找回密码）
 	if req.Email != "" {

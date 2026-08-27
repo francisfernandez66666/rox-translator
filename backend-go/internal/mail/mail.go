@@ -7,6 +7,8 @@
 //
 // 通过环境变量 MAIL_ENABLED=1 + SMTP_* 系列变量启用真实邮件。
 // =============================================
+// Package mail 提供邮件发送抽象层：定义 Sender 接口与 NoopSender（测试占位）、
+// SMTPSender（SMTP 真实发送）两种实现，用于验证码与密码重置链接等邮件通知。
 package mail
 
 import (

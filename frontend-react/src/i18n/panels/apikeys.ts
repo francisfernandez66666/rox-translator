@@ -3,7 +3,7 @@ export const zh: Record<string, string> = {
   // ---- API 文档在线维护 ----
   'docsEdit.title': 'API 文档维护',
   'docsEdit.hint': 'Markdown 源码编辑，保存后公开页 /openapi/docs 立即生效；留空保存可恢复内置默认。仅超级管理员可见。',
-  'docsEdit.placeholder': '# 翻译平台开放 API',
+  'docsEdit.placeholder': '# 能言开放 API',
   'docsEdit.saving': '发布中…',
   'docsEdit.preview': '预览',
   'docsEdit.import': '导入 .md',

@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-// userCols 用户表查询列清单（Scan 顺序契约；email 为老库可空列，COALESCE 兜底）。
-const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at, COALESCE(deactivate_at,'')"
+// userCols 用户表查询列清单（Scan 顺序契约；email/deactivate_at/agreed_at 为老库可空列，COALESCE 兜底）。
+const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at, COALESCE(deactivate_at,''), COALESCE(agreed_at,'')"
 
 // orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
 // orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
@@ -51,7 +51,7 @@ func NewStore(db *sql.DB) *Store {
 func scanUser(row *sql.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt)
+		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +145,7 @@ func (s *Store) GetUserByUsernameGlobal(username string) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt); err != nil {
 			continue
 		}
 		out = append(out, &u)
@@ -164,7 +164,7 @@ func (s *Store) ListUsers(tid int64) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt); err != nil {
 			continue
 		}
 		u.PasswordHash = ""
@@ -215,7 +215,7 @@ func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt); err != nil {
 			continue
 		}
 		u.PasswordHash = ""
@@ -234,6 +234,12 @@ func (s *Store) ResetPassword(id, tid int64, passHash string) error {
 // TouchLogin 记录最近登录时间（失败静默）。
 func (s *Store) TouchLogin(id int64) {
 	_, _ = s.execW("UPDATE users SET last_login_at=? WHERE id=?", time.Now().Format(time.RFC3339), id)
+}
+
+// SetUserAgreed 记录用户协议+隐私协议签署时间（注册勾选同意时写入；空串=撤销/未签署）。
+func (s *Store) SetUserAgreed(id, tid int64, at string) error {
+	_, err := s.execW("UPDATE users SET agreed_at=?, updated_at=? WHERE id=? AND tenant_id=?", at, time.Now().Format(time.RFC3339), id, tid)
+	return err
 }
 
 // EnsureAdmin 确保平台超管初始账号存在（幂等；已存在同名普通账号则提升为超管）。
@@ -524,7 +530,7 @@ func (s *Store) ListAllUsers() ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt); err != nil {
 			continue
 		}
 		u.PasswordHash = ""

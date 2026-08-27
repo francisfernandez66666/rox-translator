@@ -290,9 +290,7 @@ func (s *Store) migrate() error {
 			created_at TEXT,
 			resolved_at TEXT NOT NULL DEFAULT ''
 		)`,
-		// 历史库兼容：补充 user_id / log 两列
-		`ALTER TABLE alerts ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE alerts ADD COLUMN log TEXT NOT NULL DEFAULT ''`,
+		// 历史库兼容：user_id / log 两列改由 migrateColumns 按列存在性幂等补列（避免 ADD COLUMN IF NOT EXISTS 在部分 SQLite 驱动下的语法错误）
 		// ---------- orgs 组织层级（管理结构展示层：根组织=租户） ----------
 		`CREATE TABLE IF NOT EXISTS orgs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -481,6 +479,11 @@ func (s *Store) migrateColumns() error {
 		// ★ OpenAPI 安全绑定：Key 归属签发用户；API 任务盖印创建者用户 ID（回读校验防跨用户/租户越权）
 		{"api_keys", "user_id", "ALTER TABLE api_keys ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0"},
 		{"tickets", "api_user_id", "ALTER TABLE tickets ADD COLUMN api_user_id INTEGER NOT NULL DEFAULT 0"},
+		// 告警表：关联用户与详细日志（历史库补列，按存在性幂等；避免 ADD COLUMN IF NOT EXISTS 语法不兼容）
+		{"alerts", "user_id", "ALTER TABLE alerts ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0"},
+		{"alerts", "log", "ALTER TABLE alerts ADD COLUMN log TEXT NOT NULL DEFAULT ''"},
+		// 用户协议签署时间（注册即视为同意用户协议+隐私协议；空=未签署）
+		{"users", "agreed_at", "ALTER TABLE users ADD COLUMN agreed_at TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, c := range cols {
 		// 判断表是否存在（tm_segments 等表由 kb 模块延迟建表，缺表时跳过）

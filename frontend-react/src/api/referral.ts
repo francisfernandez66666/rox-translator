@@ -5,7 +5,7 @@
 
 import { request, API_BASE, authHeaders, type AdminResp } from './core'
 
-// ReferralRecord 单条邀请奖励记录（对应后端 store.ReferralRecord）
+/** 单条邀请奖励记录（对应后端 store.ReferralRecord） */
 export interface ReferralRecord {
   invitee_uid: number
   invitee_name: string
@@ -17,7 +17,7 @@ export interface ReferralRecord {
   created_at: string
 }
 
-// 我的邀请主页数据响应
+/** 我的邀请主页数据响应（含邀请码/链接/记录/奖励统计） */
 export interface ReferralMyResp extends AdminResp {
   ref_code?: string
   invite_url?: string
@@ -28,15 +28,15 @@ export interface ReferralMyResp extends AdminResp {
   paid_tokens?: number
 }
 
-// referralMy 拉取我的邀请码与邀请记录（懒生成个人码）
+/** 拉取我的邀请码与邀请记录（懒生成个人码） */
 export async function referralMy(): Promise<ReferralMyResp> {
   return request('/api/referral/my', { headers: authHeaders() })
 }
 
-// fetchReferralQrBlob 拉取邀请二维码 PNG Blob。
-// ★ 修复（2026-08-26 U2）：此前用裸 <img src>/<a href> 引用该端点——浏览器原生请求
-// 无法携带 Authorization 头，后端强制 JWT 返回 401，导致预览裂图、下载报「需要授权」。
-// 现改为 fetch + authHeaders 取 Blob，由调用方经 URL.createObjectURL 展示/下载。
+/**
+ * 拉取邀请二维码 PNG Blob（需鉴权）。
+ * 此前裸 <img>/<a> 引用无法携带 Authorization 头导致 401，现改为 fetch + authHeaders 取 Blob。
+ */
 export async function fetchReferralQrBlob(): Promise<Blob | null> {
   try {
     const resp = await fetch(`${API_BASE}/api/referral/qrcode`, { headers: authHeaders() })
@@ -47,7 +47,7 @@ export async function fetchReferralQrBlob(): Promise<Blob | null> {
   }
 }
 
-// 邀请裂变运营参数（仅超管可读写）
+/** 邀请裂变运营参数（仅超管可读写）：总开关/奖励 token/有效期等 */
 export interface ReferralConfig {
   enabled: boolean // 总开关（关闭后绑定与奖励全部停发）
   reward_tokens: number // 受邀注册→邀请人体验叠加 token
@@ -56,12 +56,12 @@ export interface ReferralConfig {
   paid_reward_days: number // 付费邀请奖励有效期（天）；0=永久
 }
 
-// referralConfigGet 读取邀请运营参数（超管）
+/** 读取邀请运营参数（超管） */
 export async function referralConfigGet(): Promise<ReferralConfig & AdminResp> {
   return request('/api/admin/referral/config', { headers: authHeaders() })
 }
 
-// referralConfigSave 保存邀请运营参数（超管；可选字段增量更新）
+/** 保存邀请运营参数（超管；可选字段增量更新） */
 export async function referralConfigSave(cfg: Partial<ReferralConfig>): Promise<AdminResp> {
   return request('/api/admin/referral/config', {
     method: 'POST',

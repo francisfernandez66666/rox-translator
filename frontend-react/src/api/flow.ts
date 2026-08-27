@@ -5,19 +5,19 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
-// 流程步骤配置项
+/** 流程步骤配置项：key 标识/name 展示名/enable 启停 */
 export interface FlowStepItem {
   key: string
   name: string
   enable: boolean
 }
 
-// 读取流程引擎配置
+/** 读取流程引擎配置 */
 export async function flowConfig(): Promise<AdminResp> {
   return request('/api/admin/flow', { headers: authHeaders() })
 }
 
-// 保存流程引擎配置（各步骤启停）
+/** 保存流程引擎配置（各步骤启停） */
 export async function flowSave(steps: FlowStepItem[]): Promise<AdminResp> {
   return request('/api/admin/flow/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ steps }) })
 }

@@ -5,6 +5,8 @@
 // 未配置时生成随机临时值并打告警，不泄露任何硬编码密钥），
 // 以及从 config.json / 环境变量覆盖配置的加载逻辑。
 // ========================================
+// Package config 提供运行时配置：定义 LLM 供应商路由、模型降级与熔断、
+// 相似度阈值、采样参数、目录路径等全局配置，并提供默认值与环境变量/配置文件加载逻辑。
 package config
 
 import (
@@ -146,6 +148,19 @@ var LangNames = map[string]string{
 	"el": "希腊语", "my": "缅甸语", "km": "柬埔寨语", "lo": "老挝语", "tl": "菲律宾语",
 	"gu": "古吉拉特语", "ur": "乌尔都语", "te": "泰卢固语", "mr": "马拉地语",
 	"bn": "孟加拉语", "ta": "泰米尔语", "bo": "藏语", "ug": "维吾尔语", "yue": "粤语",
+}
+
+// LangNamesEn：语言代码 → 英文名（与 LangNames 同源，供英文界面使用）
+var LangNamesEn = map[string]string{
+	"en": "English", "ru": "Russian", "ar": "Arabic", "es": "Spanish", "pt": "Portuguese",
+	"fr": "French", "kk": "Kazakh", "de": "German", "zh_hant": "Traditional Chinese",
+	"ms": "Malay", "id_lang": "Indonesian", "th": "Thai", "tr": "Turkish",
+	"it": "Italian", "pl": "Polish", "sv": "Swedish",
+	"ja": "Japanese", "ko": "Korean", "mn": "Mongolian", "vi": "Vietnamese", "id": "Indonesian",
+	"nl": "Dutch", "uk": "Ukrainian", "hi": "Hindi", "fa": "Persian", "he": "Hebrew",
+	"el": "Greek", "my": "Burmese", "km": "Khmer", "lo": "Lao", "tl": "Filipino",
+	"gu": "Gujarati", "ur": "Urdu", "te": "Telugu", "mr": "Marathi",
+	"bn": "Bengali", "ta": "Tamil", "bo": "Tibetan", "ug": "Uyghur", "yue": "Cantonese",
 }
 
 // KBFlag：KB 语言对应的国旗

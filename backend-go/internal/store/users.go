@@ -110,6 +110,11 @@ func (s *Store) TouchLogin(id int64) {
 	s.iam.TouchLogin(id)
 }
 
+// SetUserAgreed 委托 iam.Store：记录用户协议+隐私协议签署时间。
+func (s *Store) SetUserAgreed(id, tid int64, at string) error {
+	return s.iam.SetUserAgreed(id, tid, at)
+}
+
 // EnsureAdmin 委托 iam.Store
 func (s *Store) EnsureAdmin(tid int64, username, passHash, displayName string) error {
 	return s.iam.EnsureAdmin(tid, username, passHash, displayName)

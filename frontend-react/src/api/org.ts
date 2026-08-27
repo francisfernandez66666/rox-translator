@@ -5,7 +5,7 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
-// 组织实体
+/** 组织实体：含父子关系/名称/类型（root/org/dept） */
 export interface OrgInfo {
   id: number
   tenant_id: number
@@ -16,7 +16,7 @@ export interface OrgInfo {
   updated_at: string
 }
 
-// OrgResp 组织接口统一响应结构：orgs 为组织列表、org 为单个对象、root 为根组织行、tenant_id 为归属租户。
+/** 组织接口统一响应结构：orgs 列表/org 单对象/root 根组织行/tenant_id 归属租户 */
 export interface OrgResp {
   success: boolean
   message?: string
@@ -26,12 +26,12 @@ export interface OrgResp {
   tenant_id?: number
 }
 
-// 组织列表（扁平，前端组装树；含根组织行 root）
+/** 获取组织列表（扁平结构，前端组装树；含根组织行） */
 export async function orgList(): Promise<OrgResp> {
   return request('/api/admin/orgs', { headers: authHeaders() })
 }
 
-// 创建组织/部门（parent_id=0 为根组织下=组织；parent_id>0=部门）
+/** 创建组织/部门（parent_id=0 为组织；>0 为部门） */
 export async function orgCreate(data: { name: string; parent_id: number; type?: string }): Promise<OrgResp> {
   return request('/api/admin/orgs/create', {
     method: 'POST',
@@ -40,7 +40,7 @@ export async function orgCreate(data: { name: string; parent_id: number; type?: 
   })
 }
 
-// 重命名组织
+/** 重命名组织 */
 export async function orgRename(id: number, name: string): Promise<OrgResp> {
   return request('/api/admin/orgs/rename', {
     method: 'POST',
@@ -49,7 +49,7 @@ export async function orgRename(id: number, name: string): Promise<OrgResp> {
   })
 }
 
-// 移动组织/部门到新父节点下（拖拽调整层级；parent_id=0 为根组织下）
+/** 移动组织/部门到新父节点（拖拽调整层级；parent_id=0 为根组织下） */
 export async function orgMove(id: number, parentId: number): Promise<OrgResp> {
   return request('/api/admin/orgs/move', {
     method: 'POST',
@@ -58,7 +58,7 @@ export async function orgMove(id: number, parentId: number): Promise<OrgResp> {
   })
 }
 
-// 删除组织（子孙上移、用户回收至根组织）
+/** 删除组织（子孙上移、用户回收至根组织） */
 export async function orgDelete(id: number): Promise<OrgResp> {
   return request('/api/admin/orgs/delete', {
     method: 'POST',
@@ -67,7 +67,7 @@ export async function orgDelete(id: number): Promise<OrgResp> {
   })
 }
 
-// 组织下用户视图（含子孙组织归集）；org_id 缺省/0 = 租户全部用户
+/** 组织下用户视图（含子孙组织归集）；org_id 缺省/0 = 租户全部用户 */
 export async function orgUsers(orgId?: number): Promise<any> {
   const q = orgId ? `?org_id=${orgId}` : ''
   return request(`/api/admin/orgs/users${q}`, { headers: authHeaders() })

@@ -27,7 +27,9 @@ interface AuthCtx {
 
 const Ctx = createContext<AuthCtx>({ user: null, restoring: true, onLogin: () => {}, logout: () => {} })
 
-// 认证状态 Provider：管理登录态、会话恢复、登录/登出收敛点
+/** 认证状态 Provider：管理登录态、会话恢复，以及登录/登出的统一收敛点
+ * @param children - 需要访问认证上下文的子组件树
+ */
 export function AuthProvider({ children }: { children: ReactNode }) {
   // 当前登录用户信息，null 表示未登录
   const [user, setUser] = useState<AuthUser | null>(null)
@@ -65,5 +67,5 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
 
-// 在函数组件中读取认证上下文
+/** 在函数组件中读取认证上下文（必须在 <AuthProvider> 内使用） */
 export function useAuth() { return useContext(Ctx) }

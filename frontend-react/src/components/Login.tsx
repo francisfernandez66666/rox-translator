@@ -5,7 +5,7 @@
 // ★ U4：/register 路径或 ?ref= 自动展开注册面板并捕获个人码。
 // ============================================================================
 import { useEffect, useRef, useState } from 'react'
-import { Button, Input, Select, MessagePlugin } from 'tdesign-react'
+import { Button, Input, Select, Checkbox, MessagePlugin } from 'tdesign-react'
 import {
   login, authRegister, registerIndustries, sendEmailCode, registerConfig,
   forgotPassword, resetPassword,
@@ -13,6 +13,7 @@ import {
 } from '@/api'
 import { t, tpl, useT, toggleLang } from '@/i18n'
 import { roleLevel } from '@/stores/auth'
+import { useBranding } from '@/branding'
 import type { AuthUser } from '@/api'
 
 // Login 组件入参：mode 区分前台(home)/后台(admin)登录；onLogin 登录成功后回调上层
@@ -24,6 +25,7 @@ interface Props {
 // 默认导出组件：登录 / 自助注册 / 忘记密码 一站式页面（等价 Vue Login.vue）
 export default function Login({ mode, onLogin }: Props) {
   const [, , tplF] = useT()
+  const branding = useBranding()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -32,6 +34,7 @@ export default function Login({ mode, onLogin }: Props) {
   // 注册面板状态
   const [showReg, setShowReg] = useState(false)
   const [regMsg, setRegMsg] = useState('')
+  const [agreed, setAgreed] = useState(false)
   const [roleChoice, setRoleChoice] = useState<'admin' | 'user'>('admin')
   const [form, setForm] = useState({ code: '', name: '', invite: '', email: '', emailCode: '', industry: '' })
   const [industries, setIndustries] = useState<Array<{ code: string; name: string }>>([])
@@ -130,6 +133,7 @@ export default function Login({ mode, onLogin }: Props) {
   async function doRegister() {
     if (!username || !password) { setRegMsg(t('login.needInput')); return }
     if (password.length < 6) { setRegMsg(t('login.pwdShort')); return }
+    if (!agreed) { setRegMsg(t('login.needAgree')); return }
     if (roleChoice === 'user' && !form.invite.trim()) { setRegMsg(t('login.userNeedsInvite')); return }
     if (emailVerifyOn && !form.invite.trim() && (!form.emailCode.trim() || !form.email.trim())) { setRegMsg('请填写邮箱并输入验证码'); return }
     if (!form.email.trim()) { setRegMsg(t('login.emailPlaceholder')); return }
@@ -144,6 +148,7 @@ export default function Login({ mode, onLogin }: Props) {
         email_code: form.emailCode || undefined,
         captcha_token: captchaTokenRef.current || undefined,
         industry: form.industry || undefined, ref,
+        agreed,
       })
       if (!r.success) { setRegMsg(r.message || t('register.fail')); return }
       // 注册成功自动登录（行为同 Vue 版）
@@ -195,20 +200,24 @@ export default function Login({ mode, onLogin }: Props) {
 
       {/* 登录卡片 */}
       <div className="login-card">
-        <div className="login-logo">{mode === 'admin' ? t('login.platformAdmin') : t('login.platform')}</div>
-        <div className="login-sub">{mode === 'admin' ? t('login.adminOnly') : t('login.enterWorkspace')}</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Input value={username} onChange={setUsername} placeholder={t('login.username')}
-                 autocomplete="username" onEnter={doLogin} clearable />
-          <Input type="password" value={password} onChange={setPassword} placeholder={t('login.password')}
-                 autocomplete="current-password" onEnter={doLogin} />
-          {!!error && <div style={{ color: '#c62828', fontSize: 13 }}>{error}</div>}
-          <Button block loading={loading} onClick={doLogin}>{t('login.signIn')}</Button>
-          <Button block variant="text" onClick={() => setShowForgot(true)}>{t('login.forgot')}</Button>
-          <Button block variant="text" onClick={() => setShowReg(!showReg)}>
-            {showReg ? t('login.backToLogin') : t('login.selfRegister')}
-          </Button>
+        <div className="login-logo">
+          {branding.brandLogo
+            ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 108 }} />
+            : <span style={{ fontSize: 28, fontWeight: 800 }}>{branding.brandName || (mode === 'admin' ? t('login.platformAdmin') : t('login.platform'))}</span>}
         </div>
+        <div className="login-sub">{mode === 'admin' ? t('login.adminOnly') : t('login.enterWorkspace')}</div>
+          <form onSubmit={(e) => e.preventDefault()} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Input value={username} onChange={setUsername} placeholder={t('login.username')}
+                   autocomplete="username" onEnter={doLogin} clearable />
+            <Input type="password" value={password} onChange={setPassword} placeholder={t('login.password')}
+                   autocomplete="current-password" onEnter={doLogin} />
+            {!!error && <div style={{ color: '#c62828', fontSize: 13 }}>{error}</div>}
+            <Button block loading={loading} onClick={doLogin}>{t('login.signIn')}</Button>
+            <Button block variant="text" onClick={() => setShowForgot(true)}>{t('login.forgot')}</Button>
+            <Button block variant="text" onClick={() => setShowReg(!showReg)}>
+              {showReg ? t('login.backToLogin') : t('login.selfRegister')}
+            </Button>
+          </form>
       </div>
 
       {/* 自助注册卡片 */}
@@ -224,7 +233,7 @@ export default function Login({ mode, onLogin }: Props) {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <Input value={username} onChange={setUsername} placeholder={t('login.username')} />
-            <Input type="password" value={password} onChange={setPassword} placeholder={t('login.password')} />
+            <form onSubmit={(e) => e.preventDefault()}><Input type="password" value={password} onChange={setPassword} placeholder={t('login.password')} /></form>
             <Input value={form.email} onChange={(v) => setForm({ ...form, email: v })} placeholder={t('login.emailPlaceholder')} />
             {emailVerifyOn && (
               <div style={{ display: 'flex', gap: 8 }}>
@@ -248,6 +257,12 @@ export default function Login({ mode, onLogin }: Props) {
             <Input value={form.invite} onChange={(v) => setForm({ ...form, invite: v })}
                    placeholder={roleChoice === 'user' ? t('login.inviteRequired') : t('login.invite')} />
             <div ref={captchaBoxRef} id="__ts_widget__" />
+            <Checkbox checked={agreed} onChange={(c) => setAgreed(!!c)}>
+              {t('login.agreeTerms')}{' '}
+              <a href="/docs/terms" target="_blank" rel="noreferrer">{t('login.userAgreement')}</a>
+              {' & '}
+              <a href="/docs/privacy" target="_blank" rel="noreferrer">{t('login.privacyPolicy')}</a>
+            </Checkbox>
             {!!regMsg && <div style={{ color: '#c62828', fontSize: 13 }}>{regMsg}</div>}
             <Button block loading={loading} onClick={doRegister}>{t('login.registerAndLogin')}</Button>
           </div>

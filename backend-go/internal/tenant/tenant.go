@@ -24,8 +24,19 @@ type Tenant struct {
 	ExpiresAt   string `json:"expires_at"`  // 有效期（空=永久），格式 2006-01-02 或 RFC3339
 	Permissions string `json:"permissions"` // JSON 权限字符串（解码见 Perms）
 	Industry    string `json:"industry"`    // 注册行业编码（关联共享行业包的载入过滤）
+	BrandName   string `json:"brand_name"`  // 自定义品牌展示名（租户级品牌定制）
+	BrandLogo   string `json:"brand_logo"`  // 自定义品牌 Logo URL（空=用默认）
+	Domain      string `json:"domain"`      // 自定义访问域名（用于按域名解析租户品牌）
+	BrandLinks  string `json:"brand_links"` // 自定义页脚链接 JSON 数组（[{label,label_en,url}]）
 	CreatedAt   string `json:"created_at"`  // 创建时间（RFC3339 字符串）
 	UpdatedAt   string `json:"updated_at"`  // 更新时间（RFC3339 字符串）
+}
+
+// BrandLink 自定义品牌链接项（页脚展示）
+type BrandLink struct {
+	Label   string `json:"label"`             // 中文标签
+	LabelEn string `json:"label_en"`          // 英文标签
+	URL     string `json:"url"`               // 跳转地址
 }
 
 // Perms 租户权限（Permissions JSON 的解码结构）
@@ -121,7 +132,43 @@ func (s *Store) ensureTable() error {
 			return err
 		}
 	}
+	if !have["brand_name"] {
+		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_name TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	if !have["brand_logo"] {
+		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_logo TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	if !have["domain"] {
+		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN domain TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	if !have["brand_links"] {
+		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_links TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// tenantColumns 租户查询统一列清单（与 scanTenant 顺序一致）。
+const tenantColumns = `id, code, name, status, expires_at, permissions, COALESCE(industry,''), COALESCE(brand_name,''), COALESCE(brand_logo,''), COALESCE(domain,''), COALESCE(brand_links,''), created_at, updated_at`
+
+// scanner 同时兼容 *sql.Row 与 *sql.Rows 的 Scan 方法。
+type scanner interface{ Scan(dest ...interface{}) error }
+
+// scanTenant 从一行中解析租户对象（字段顺序须与 tenantColumns 一致）。
+func scanTenant(s scanner) (*Tenant, error) {
+	var t Tenant
+	if err := s.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.BrandName, &t.BrandLogo, &t.Domain, &t.BrandLinks, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		return nil, err
+	}
+	t.Status = effectiveStatus(t.Status, t.ExpiresAt)
+	return &t, nil
 }
 
 // SetIndustry 设置租户注册行业编码（行业包共享载入的过滤依据）。
@@ -180,19 +227,18 @@ func (s *Store) Create(code, name, expiresAt, permissions string) (*Tenant, erro
 // List 列出所有租户（含计算后的有效状态）。
 // 返回：租户列表（按 ID 排序）。
 func (s *Store) List() ([]*Tenant, error) {
-	rows, err := s.db.Query("SELECT id, code, name, status, expires_at, permissions, COALESCE(industry,''), created_at, updated_at FROM tenants ORDER BY id")
+	rows, err := s.db.Query("SELECT " + tenantColumns + " FROM tenants ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []*Tenant
 	for rows.Next() {
-		var t Tenant
-		if err := rows.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		t, err := scanTenant(rows)
+		if err != nil {
 			continue // 单行解析失败跳过
 		}
-		t.Status = effectiveStatus(t.Status, t.ExpiresAt) // 结合有效期刷新实际状态
-		out = append(out, &t)
+		out = append(out, t)
 	}
 	return out, nil
 }
@@ -200,25 +246,37 @@ func (s *Store) List() ([]*Tenant, error) {
 // GetByID 按 id 查询租户。
 // 参数：id=租户主键 ID；返回租户对象（含计算后的有效状态）。
 func (s *Store) GetByID(id int64) (*Tenant, error) {
-	row := s.db.QueryRow("SELECT id, code, name, status, expires_at, permissions, COALESCE(industry,''), created_at, updated_at FROM tenants WHERE id=?", id)
-	var t Tenant
-	if err := row.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.CreatedAt, &t.UpdatedAt); err != nil {
-		return nil, err
-	}
-	t.Status = effectiveStatus(t.Status, t.ExpiresAt)
-	return &t, nil
+	row := s.db.QueryRow("SELECT "+tenantColumns+" FROM tenants WHERE id=?", id)
+	return scanTenant(row)
 }
 
 // GetByCode 按租户编码查询。
 // 参数：code=租户编码；返回租户对象（含计算后的有效状态）。
 func (s *Store) GetByCode(code string) (*Tenant, error) {
-	row := s.db.QueryRow("SELECT id, code, name, status, expires_at, permissions, COALESCE(industry,''), created_at, updated_at FROM tenants WHERE code=?", code)
-	var t Tenant
-	if err := row.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.CreatedAt, &t.UpdatedAt); err != nil {
-		return nil, err
+	row := s.db.QueryRow("SELECT "+tenantColumns+" FROM tenants WHERE code=?", code)
+	return scanTenant(row)
+}
+
+// GetByDomain 按自定义域名查询租户（用于按访问域名解析品牌/租户）。
+// 参数：domain=访问域名（不含端口）；返回租户对象（含计算后的有效状态）。
+func (s *Store) GetByDomain(domain string) (*Tenant, error) {
+	row := s.db.QueryRow("SELECT "+tenantColumns+" FROM tenants WHERE domain=?", domain)
+	return scanTenant(row)
+}
+
+// SetBranding 保存租户级品牌定制（展示名/Logo/自定义域名/页脚链接）。
+// 参数：id=租户 ID；brandName/brandLogo/domain 为展示字段；brandLinks 为 JSON 数组字符串（需合法 JSON 数组，空串=清空）。
+func (s *Store) SetBranding(id int64, brandName, brandLogo, domain, brandLinks string) error {
+	if brandLinks != "" {
+		var arr []interface{}
+		if err := json.Unmarshal([]byte(brandLinks), &arr); err != nil {
+			return fmt.Errorf("brand_links 需为合法 JSON 数组")
+		}
 	}
-	t.Status = effectiveStatus(t.Status, t.ExpiresAt)
-	return &t, nil
+	_, err := s.db.Exec(
+		"UPDATE tenants SET brand_name=?, brand_logo=?, domain=?, brand_links=?, updated_at=? WHERE id=?",
+		brandName, brandLogo, domain, brandLinks, nowStr(), id)
+	return err
 }
 
 // Update 更新租户（名称、有效期、权限；状态单独由 SetStatus 控制）。
@@ -318,8 +376,17 @@ func (s *Store) SetFlowConfig(tid int64, fc FlowConfig) error {
 	return err
 }
 
-// Delete 删除租户。
-// 参数：id=租户主键 ID；返回错误。
+// Name 查询租户名称（按 ID）。
+// 参数：id=租户主键 ID；返回租户名称（未找到返回空串）。
+func (s *Store) Name(id int64) (string, error) {
+	var name string
+	err := s.db.QueryRow("SELECT name FROM tenants WHERE id=?", id).Scan(&name)
+	if err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
 // Delete 删除租户并级联清理其全部主数据与业务数据（组织树/用户/知识库/工单/订单等）。
 // 参数：id=租户 ID；默认租户（ID=1）由调用方拦截。
 func (s *Store) Delete(id int64) error {

@@ -7,13 +7,15 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
-// 读取平台网关模型配置（全局默认单模型 + model_routes 多供应商路由，密钥掩码回显）
+/** 读取平台网关模型配置（全局单模型 + 多供应商路由，密钥掩码回显） */
 export async function adminModels(): Promise<AdminResp> {
   return request('/api/admin/models', { headers: authHeaders() })
 }
 
-// 保存平台网关模型配置（单模型字段合并为主路由 + routes 全量覆盖；掩码 Key=未修改）
-// embed_api_key/embed_api_base：KB 向量重建密钥；clear_keys：清空指定密钥作用域（["translation"|"embedding"]）
+/**
+ * 保存平台网关模型配置（单模型字段合并为主路由 + routes 全量覆盖；掩码 Key=未修改）。
+ * embed_api_key/embed_api_base 为 KB 向量重建密钥；clear_keys 清空指定密钥作用域。
+ */
 export async function adminModelsSave(data: {
   api_base?: string; api_key?: string; model?: string;
   embed_api_key?: string; embed_api_base?: string;
@@ -25,6 +27,7 @@ export async function adminModelsSave(data: {
 
 // ==================== 各流程阶段模型配置（super_admin） ====================
 
+/** 单流程阶段模型配置：供应商/网关地址/密钥/模型名 */
 export interface StageModelConfig {
   provider: string
   api_base: string
@@ -32,22 +35,22 @@ export interface StageModelConfig {
   model: string
 }
 
-// 读取各流程阶段模型配置（kb_match/ai_initial/evals/review）
+/** 读取各流程阶段模型配置（kb_match/ai_initial/evals/review） */
 export async function stageModels(): Promise<AdminResp> {
   return request('/api/admin/models/stage', { headers: authHeaders() })
 }
 
-// 保存各流程阶段模型配置（全量提交；某项 api_base/model 为空=清空该阶段）
+/** 保存各流程阶段模型配置（全量提交；某项为空=清空该阶段） */
 export async function stageModelsSave(stages: Record<string, StageModelConfig>): Promise<AdminResp> {
   return request('/api/admin/models/stage/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ stages }) })
 }
 
-// 读取匹配策略参数
+/** 读取匹配策略参数 */
 export async function adminPolicy(): Promise<AdminResp> {
   return request('/api/admin/policy', { headers: authHeaders() })
 }
 
-// 保存匹配策略参数（crossDeptFallback=跨部门降级检索；dataFeedbackOptOut=★ 数据回流关闭，D7）
+/** 保存匹配策略参数（crossDeptFallback=跨部门降级检索；dataFeedbackOptOut=数据回流关闭） */
 export async function adminPolicySave(policy: Record<string, number>, crossDeptFallback?: boolean, dataFeedbackOptOut?: boolean): Promise<AdminResp> {
   return request('/api/admin/policy/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ policy, cross_dept_fallback: crossDeptFallback, data_feedback_opt_out: dataFeedbackOptOut }) })
 }

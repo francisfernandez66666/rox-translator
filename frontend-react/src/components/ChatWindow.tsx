@@ -291,12 +291,6 @@ export default function ChatWindow() {
     chat.sendMessage(rawText, options)
   }
 
-  // ★ 示例问题：点击自动发送（对齐 Vue sendExample）
-  // 欢迎页示例文案点击后直接以当前选中语言发送
-  function sendExample(ex: string) {
-    chat.sendMessage(ex, { target_langs: [...chat.selectedLangs] })
-  }
-
   const canSend = input.trim().length > 0 || attachedFiles.length > 0
 
   return (
@@ -329,10 +323,8 @@ export default function ChatWindow() {
         {chat.messages.length === 0 && (
           <div style={{ textAlign: 'center', marginTop: 60 }}>
             <div style={{ fontSize: 26, fontWeight: 800, color: '#1a237e' }}>{t2('chat.welcome')}</div>
-            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap', maxWidth: 460, margin: '24px auto 0' }}>
-              {[t2('chat.example1'), t2('chat.example2'), t2('chat.example3'), t2('chat.example4')].map((ex) => (
-                <button key={ex} className="example-bubble" onClick={() => sendExample(ex)}>{ex}</button>
-              ))}
+            <div style={{ fontSize: 14, color: '#5f6b7a', marginTop: 10, maxWidth: 480, margin: '10px auto 0' }}>
+              {t2('chat.welcomeSub')}
             </div>
           </div>
         )}

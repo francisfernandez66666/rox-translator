@@ -5,7 +5,7 @@
 
 import { request, authHeaders, API_BASE, type AdminResp } from './core'
 
-// 翻译工单信息
+/** 翻译工单信息结构：含编号/标题/状态/原文/目标语言/审批人等 */
 export interface Ticket {
   id: number
   tenant_id: number
@@ -24,7 +24,7 @@ export interface Ticket {
   updated_at: string
 }
 
-// TicketResp 工单接口统一响应结构：tickets 为列表、ticket 为单个对象、states 为流程状态历史。
+/** 工单接口统一响应结构：tickets 列表/ticket 单对象/states 流程状态/ files 结果文件 */
 export interface TicketResp {
   success: boolean
   message?: string
@@ -34,7 +34,7 @@ export interface TicketResp {
   files?: { id: number; file_name: string; result_path: string; error: string }[]
 }
 
-// 工单列表（mine=true 仅查看自己的）
+/** 获取工单列表（mine=true 仅查看自己创建的） */
 export async function ticketList(mine?: boolean): Promise<TicketResp> {
   return request(`/api/tickets${mine ? '?mine=1' : ''}`, { headers: authHeaders() })
 }
@@ -47,12 +47,12 @@ export async function ticketList(mine?: boolean): Promise<TicketResp> {
 
 // ==================== 审批 ====================
 
-// 待审批工单列表
+/** 获取待审批工单列表 */
 export async function approveList(): Promise<TicketResp> {
   return request('/api/approve/list', { headers: authHeaders() })
 }
 
-// 审批操作：批准或驳回（附原因/建议/审定译文）
+/** 审批操作：批准或驳回（附原因/建议/审定译文） */
 export async function approveAction(id: number, action: 'approve' | 'reject', reason: string, suggestion: string, approvedText: string): Promise<TicketResp> {
   return request('/api/approve/action', {
     method: 'POST', headers: authHeaders(),
@@ -61,27 +61,27 @@ export async function approveAction(id: number, action: 'approve' | 'reject', re
 }
 // ==================== 异步工单（队列模式）+ 通知中心 ====================
 
-// 我的工单列表（隐私隔离：非超管仅返回自己创建的）
+/** 我的工单列表（隐私隔离：非超管仅返回自己创建的） */
 export async function myTickets(): Promise<TicketResp> {
   return request('/api/tickets', { headers: authHeaders() })
 }
 
-// 创建文本翻译工单（入队即返回 ticket_no）
+/** 创建文本翻译工单（入队即返回 ticket_no） */
 export async function ticketCreate(data: { title: string; source_text: string; target_langs: string; mode?: string }): Promise<TicketResp> {
   return request('/api/tickets/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
-// 运行工单（异步入队执行五步编排）
+/** 运行工单（异步入队执行五步编排） */
 export async function ticketRun(id: number): Promise<TicketResp> {
   return request('/api/tickets/run', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
 
-// 工单详情（含步骤状态轨迹）
+/** 获取工单详情（含步骤状态轨迹） */
 export async function ticketDetail(id: number): Promise<TicketResp> {
   return request(`/api/tickets/detail?id=${id}`, { headers: authHeaders() })
 }
 
-// 工单结果下载地址（需带鉴权头，用 fetch→blob 触发保存）
+/** 下载工单结果文件（fetch→blob 触发保存，需鉴权头） */
 export async function ticketDownload(id: number): Promise<void> {
   const r = await fetch(`${API_BASE}/api/tickets/download?id=${id}`, { headers: authHeaders() })
   if (!r.ok) {
@@ -101,28 +101,30 @@ export async function ticketDownload(id: number): Promise<void> {
   URL.revokeObjectURL(url)
 }
 
-// 我的站内信列表
+/** 获取我的站内信列表 */
 export async function notifications(): Promise<AdminResp> {
   return request('/api/notifications', { headers: authHeaders() })
 }
 
-// 未读数量
+/** 获取未读通知数量 */
 export async function notificationsUnread(): Promise<AdminResp> {
   return request('/api/notifications/unread', { headers: authHeaders() })
 }
 
-// 标记单条已读
+/** 标记单条通知已读 */
 export async function notificationRead(id: number): Promise<AdminResp> {
   return request('/api/notifications/read', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
 
-// 全部已读
+/** 标记全部通知已读 */
 export async function notificationsReadAll(): Promise<AdminResp> {
   return request('/api/notifications/read-all', { method: 'POST', headers: authHeaders(), body: JSON.stringify({}) })
 }
 
-// 文件工单创建（multipart 上传，≤10MB；支持 docx/xlsx/pptx/pdf/txt/csv）
-// 文件建单：支持多文件（files 字段可重复），共享 10MB 上限
+/**
+ * 文件工单创建：multipart 上传，≤10MB；支持 docx/xlsx/pptx/pdf/txt/csv。
+ * 支持多文件（共享 10MB 上限）；mode 透传后端避免被静默吞掉。
+ */
 export async function ticketCreateFile(files: File | File[], meta: { title: string; target_langs: string; mode?: string }): Promise<TicketResp> {
   const fd = new FormData()
   const list = Array.isArray(files) ? files : [files]

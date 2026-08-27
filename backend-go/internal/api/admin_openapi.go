@@ -52,12 +52,12 @@ func renderDocsHTML(md string) string {
 	var buf bytes.Buffer
 	if err := docsRenderer.Convert([]byte(md), &buf); err != nil {
 		// 渲染异常兜底：按纯文本输出，绝不因文档问题打断服务
-		return `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>翻译平台开放 API 文档</title></head><body><pre>` +
+		return `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>能言开放 API 文档</title></head><body><pre>` +
 			htmlEscapeText(md) + `</pre></body></html>`
 	}
 	return `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>翻译平台开放 API 文档</title>
+<title>能言开放 API 文档</title>
 <style>
 body{font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;max-width:900px;margin:30px auto;padding:0 20px;color:#222;line-height:1.7}
 h1{border-bottom:2px solid #1a237e;padding-bottom:8px;font-size:24px}
@@ -114,7 +114,7 @@ func (s *Server) handleOpenAPIDocs(w http.ResponseWriter, r *http.Request) {
 	enBody := extractBodyInner(renderDocsHTML(s.getDocsMD("en")))
 	page := `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>翻译平台开放 API 文档</title>
+<title>能言开放 API 文档</title>
 <style>
 body{font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;max-width:900px;margin:30px auto;padding:0 20px;color:#222;line-height:1.7}
 h1{border-bottom:2px solid #1a237e;padding-bottom:8px;font-size:24px}
@@ -265,7 +265,7 @@ func itoaApi(n int) string {
 }
 
 // defaultDocsMD 内置默认文档（Markdown 源码；openapi_docs_md 为空时使用）。
-const defaultDocsMDZh = `# 翻译平台开放 API
+const defaultDocsMDZh = `# 能言开放 API
 
 所有接口使用 \Authorization: Bearer <API_KEY>\ 认证，API Key 在管理后台「API Key」面板签发。
 
@@ -394,7 +394,7 @@ balance_sentences_approx（≈句数）。额度不足将返回错误码 insuffi
 `
 
 // defaultDocsMDEn 英文默认文档。
-const defaultDocsMDEn = `# Translation Platform Open API
+const defaultDocsMDEn = `# LangCross Open API
 
 All endpoints authenticate with **Authorization: Bearer YOUR_API_KEY**. Issue keys in the admin console "API Key" panel.
 

@@ -1,0 +1,72 @@
+// components/admin/FooterP.tsx — 平台级页脚链接（仅超管）
+// 页脚链接与租户无关，对所有租户统一生效。
+import { useEffect, useState } from 'react'
+import { Button, Input, MessagePlugin, Space } from 'tdesign-react'
+import { useT } from '@/i18n'
+import { Panel } from './parts'
+import { footerLinksGet, footerLinksSet, BrandLink } from '@/api/branding'
+
+// 平台级页脚链接面板组件（仅超管）：维护对所有租户统一生效的页脚链接列表
+export default function FooterP() {
+  const [, t] = useT()
+  const [links, setLinks] = useState<BrandLink[]>([])
+  const [saving, setSaving] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    footerLinksGet()
+      .then((j) => {
+        if (!alive || !j.success) return
+        setLinks(Array.isArray(j.links) ? j.links : [])
+        setLoaded(true)
+      })
+      .catch(() => setLoaded(true))
+    return () => { alive = false }
+  }, [])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const j = await footerLinksSet(JSON.stringify(links))
+      if (j.success) MessagePlugin.success(t('brand.saved'))
+      else MessagePlugin.error(j.message || 'error')
+    } catch (e: any) {
+      MessagePlugin.error(e?.message || 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const setLink = (i: number, k: keyof BrandLink, v: string) => {
+    setLinks((arr) => arr.map((l, idx) => (idx === i ? { ...l, [k]: v } : l)))
+  }
+  const addLink = () => setLinks((arr) => [...arr, { label: '', label_en: '', url: '' }])
+  const removeLink = (i: number) => setLinks((arr) => arr.filter((_, idx) => idx !== i))
+
+  return (
+    <Panel title={t('footer.title')}>
+      <p style={{ fontSize: 13, color: '#667', marginBottom: 12 }}>{t('footer.hint')}</p>
+      {!loaded ? (
+        <div style={{ color: '#889' }}>…</div>
+      ) : (
+        <div style={{ maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <Space direction="vertical" style={{ width: '100%' }} size={8}>
+            {links.map((l, i) => (
+              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <Input value={l.label} onChange={(v) => setLink(i, 'label', v)} placeholder={t('brand.linkLabel')} style={{ width: 140 }} />
+                <Input value={l.label_en} onChange={(v) => setLink(i, 'label_en', v)} placeholder={t('brand.linkLabelEn')} style={{ width: 140 }} />
+                <Input value={l.url} onChange={(v) => setLink(i, 'url', v)} placeholder={t('brand.linkUrl')} style={{ flex: 1 }} />
+                <Button size="small" variant="text" theme="danger" onClick={() => removeLink(i)}>✕</Button>
+              </div>
+            ))}
+          </Space>
+          <Button size="small" variant="outline" theme="primary" onClick={addLink}>+ {t('brand.addLink')}</Button>
+          <div>
+            <Button theme="primary" loading={saving} onClick={save}>{t('brand.save')}</Button>
+          </div>
+        </div>
+      )}
+    </Panel>
+  )
+}

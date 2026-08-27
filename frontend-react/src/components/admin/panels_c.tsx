@@ -329,7 +329,7 @@ export function PlansP() {
       )}
 
       {/* ===== 订单与发票 ===== */}
-      <Panel title={t('billing.colOrders') || '我的订单'}>
+      <Panel title={t('billing.ordersTitle')}>
         <Table rowKey="id" size="small" maxHeight={260} data={orders}
                columns={[
                  { colKey: 'order_no', title: t('billing.colOrderNo'), width: 150 },
@@ -359,7 +359,7 @@ export function PlansP() {
           <Input type="number" value={num(quotaForm.qps)} onChange={(v) => setQuotaForm({ ...quotaForm, qps: Number(v) || 0 })} placeholder={t('billing.quotaQps')} style={{ width: 140 }} />
           <Input type="number" value={num(quotaForm.concurrent)} onChange={(v) => setQuotaForm({ ...quotaForm, concurrent: Number(v) || 0 })} placeholder={t('billing.quotaConcurrent')} style={{ width: 140 }} />
           <Input type="number" value={num(quotaForm.max_daily_chars)} onChange={(v) => setQuotaForm({ ...quotaForm, max_daily_chars: Number(v) || 0 })} placeholder={t('billing.quotaDailyChars')} style={{ width: 160 }} />
-          <Input type="number" value={num(quotaForm.max_daily_tokens)} onChange={(v) => setQuotaForm({ ...quotaForm, max_daily_tokens: Number(v) || 0 })} placeholder="每日 token 上限" style={{ width: 160 }} />
+          <Input type="number" value={num(quotaForm.max_daily_tokens)} onChange={(v) => setQuotaForm({ ...quotaForm, max_daily_tokens: Number(v) || 0 })} placeholder={t('billing.quotaDailyTokens')} style={{ width: 160 }} />
           <Button onClick={saveQuota}>{t('billing.saveQuota')}</Button>
         </Space>
       </Panel>
@@ -389,7 +389,7 @@ export function PlansP() {
                    { colKey: 'enabled', title: t('common.status'), width: 90, cell: ({ row }: any) =>
                      <Button size="small" variant={row.enabled ? 'outline' : 'text'} theme={row.enabled ? 'success' : 'default'} onClick={() => togglePkg(row)}>{row.enabled ? t('common.active') : t('common.disabled')}</Button> },
                    { colKey: 'op', title: '', width: 90, cell: ({ row }: any) =>
-                     <Popconfirm content="删除该商业包？" onConfirm={() => deletePkg(row)}>
+                     <Popconfirm content={t('packages.deletePkgConfirm')} onConfirm={() => deletePkg(row)}>
                        <Button size="small" variant="text" theme="danger">✕</Button>
                      </Popconfirm> },
                  ] as never} />
@@ -483,14 +483,14 @@ export function PlansP() {
       </Dialog>
 
       {/* ===== 发票申请弹窗 ===== */}
-      <Dialog visible={!!invDlg} onClose={() => setInvDlg(null)} header="开具发票" width={440}
-              onConfirm={async () => {
+      <Dialog visible={!!invDlg} onClose={() => setInvDlg(null)} header={t('billing.invoiceDialogTitle')} width={440}
+               onConfirm={async () => {
                 if (!invDlg) return
                 const r = await billingInvoiceCreate({ order_id: Number(invDlg.order.id), title: invDlg.title, tax_no: invDlg.taxNo })
-                if (toastResp(r, '发票已申请')) setInvDlg(null)
+                if (toastResp(r, t('billing.invoiceApplied'))) setInvDlg(null)
               }}>
-        <Field label="抬头"><Input value={invDlg?.title || ''} onChange={(v) => setInvDlg((d) => (d ? { ...d, title: v } : d))} /></Field>
-        <Field label="税号"><Input value={invDlg?.taxNo || ''} onChange={(v) => setInvDlg((d) => (d ? { ...d, taxNo: v } : d))} /></Field>
+        <Field label={t('billing.invoiceTitleField')}><Input value={invDlg?.title || ''} onChange={(v) => setInvDlg((d) => (d ? { ...d, title: v } : d))} /></Field>
+        <Field label={t('billing.invoiceTaxField')}><Input value={invDlg?.taxNo || ''} onChange={(v) => setInvDlg((d) => (d ? { ...d, taxNo: v } : d))} /></Field>
       </Dialog>
     </>
   )
@@ -885,8 +885,8 @@ export function ApiKeysP() {
         <Panel title={t('docsEdit.title')}>
           <div style={{ fontSize: 13, color: '#667', marginBottom: 8 }}>{t('docsEdit.hint')}</div>
           <Space size={6} style={{ marginBottom: 8 }}>
-            <Button size="small" theme={docsLang === 'zh' ? 'primary' : 'default'} onClick={() => setDocsLang('zh')}>中文</Button>
-            <Button size="small" theme={docsLang === 'en' ? 'primary' : 'default'} onClick={() => setDocsLang('en')}>English</Button>
+            <Button size="small" theme={docsLang === 'zh' ? 'primary' : 'default'} onClick={() => setDocsLang('zh')}>{t('docsEdit.langZh')}</Button>
+            <Button size="small" theme={docsLang === 'en' ? 'primary' : 'default'} onClick={() => setDocsLang('en')}>{t('docsEdit.langEn')}</Button>
           </Space>
           <Textarea autosize={{ minRows: 16 }} value={docsMD} onChange={(v) => setDocsMD(v as string)} placeholder={t('docsEdit.placeholder')}
                     style={{ width: '100%', fontFamily: 'SFMono-Regular, Consolas, monospace', fontSize: 12.5, lineHeight: 1.55, resize: 'vertical' }} />

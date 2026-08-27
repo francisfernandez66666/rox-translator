@@ -115,7 +115,11 @@ func main() {
 	// ★ SaaS 平台存储（users/tickets/kb包/计费/审计/系统配置等）
 	var st *store.Store
 	if db != nil {
-		st, _ = store.New(db.RawDB())
+		var storeErr error
+		st, storeErr = store.New(db.RawDB())
+		if storeErr != nil {
+			log.Printf("[init] 存储初始化失败（Store 将为 nil，登录等接口不可用）: %v", storeErr)
+		}
 		if st != nil {
 			// 初始 admin 账号（密码来自 ADMIN_INIT_PASSWORD，未配置则随机生成并打印）
 			initPwd := os.Getenv("ADMIN_INIT_PASSWORD")

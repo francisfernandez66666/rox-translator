@@ -11,6 +11,8 @@
 //
 // 队列接缝：仅依赖 queue.Queue 接口（当前 direct 实现；未来 kafka driver 单文件接入）。
 // =============================================
+// Package service 提供服务层：连接 API 与编排器的桥梁，负责工单入队、worker 工作池、
+// 文本/文件翻译执行、Token 实费计费、webhook 回调、卡死巡检与启动断点续跑。
 package service
 
 import (

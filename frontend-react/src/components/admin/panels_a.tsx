@@ -13,7 +13,7 @@ import {
   API_BASE, authHeaders, getAuthToken, getActiveTenantId,
   type OrgInfo,
 } from '@/api'
-import { useAdmin } from '@/stores/admin'
+import { useAdmin, roleName } from '@/stores/admin'
 import { Panel, Field, toastResp } from './parts'
 import { fmtTime } from '@/lib/ui'
 import { useT, t as tFn } from '@/i18n'
@@ -490,6 +490,7 @@ function MessagePluginError(m: string) { void import('tdesign-react').then((M) =
 // ---------------- 用量看板（Vue Usage.vue） ----------------
 // 个人/组织/成本用量以 Tabs 展示，过滤掉对象字段
 export function UsageP() {
+  const [, t] = useT()
   const [me, setMe] = useState<Any | null>(null)
   const [org, setOrg] = useState<Any | null>(null)
   const [cost, setCost] = useState<Any | null>(null)
@@ -510,11 +511,11 @@ export function UsageP() {
     </div>
   )
   return (
-    <Panel title="📈 用量看板">
+    <Panel title={t('usage.dashboardTitle')}>
       <Tabs placement="top" list={[
-        { label: '我的用量', value: 'me', panel: renderKV(me) },
-        { label: '组织用量', value: 'org', panel: renderKV(org) },
-        ...(cost ? [{ label: '成本核算', value: 'cost', panel: renderKV(cost) }] : []),
+        { label: t('usage.tabMine'), value: 'me', panel: renderKV(me) },
+        { label: t('usage.tabOrg'), value: 'org', panel: renderKV(org) },
+        ...(cost ? [{ label: t('usage.tabCost'), value: 'cost', panel: renderKV(cost) }] : []),
       ]} />
     </Panel>
   )
@@ -565,6 +566,50 @@ export function InvitesP() {
             options={[{ label: t('invites.newOrg'), value: 0 }, ...tenants.map((tt: any) => ({ label: `${tt.name} (#${tt.id})`, value: tt.id }))]} />
         </Field>
       </Dialog>
+    </Panel>
+  )
+}
+
+// ---------------- 协议签署（Vue 无对应，新增后台面板） ----------------
+// 列出全部用户，展示是否已阅读并同意《用户协议》与《隐私协议》及签署时间
+export function AgreementsP() {
+  const [, t, tpl] = useT()
+  const [rows, setRows] = useState<Any[]>([])
+  const [loading, setLoading] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const r = await adminUsers()
+      if (r.success) setRows(((r as unknown as { users?: Any[] }).users) || [])
+    } finally { setLoading(false) }
+  }, [])
+  useEffect(() => { void load() }, [load])
+
+  const signed = rows.filter((u: Any) => (u.agreed_at || '').trim() !== '').length
+
+  const columns = [
+    { colKey: 'username', title: t('agreements.user'), width: 160 },
+    { colKey: 'role', title: t('agreements.role'), width: 130, cell: ({ row }: Any) => roleName(row.role) },
+    { colKey: 'email', title: t('agreements.email'), width: 200 },
+    {
+      colKey: 'status', title: t('agreements.status'), width: 110,
+      cell: ({ row }: Any) => {
+        const ok = (row.agreed_at || '').trim() !== ''
+        return <Tag theme={ok ? 'success' : 'warning'} variant="light">{ok ? t('agreements.signed') : t('agreements.unsigned')}</Tag>
+      },
+    },
+    {
+      colKey: 'agreed_at', title: t('agreements.signedAt'), width: 180,
+      cell: ({ row }: Any) => (row.agreed_at ? fmtTime(row.agreed_at) : '—'),
+    },
+  ] as never
+
+  return (
+    <Panel title={t('agreements.title')}>
+      <div style={{ color: '#666', marginBottom: 12 }}>{t('agreements.desc')}</div>
+      <div style={{ marginBottom: 12 }}>{tpl('agreements.total', { n: rows.length, m: signed })}</div>
+      <Table rowKey="id" size="small" loading={loading} data={rows as never} columns={columns} />
     </Panel>
   )
 }

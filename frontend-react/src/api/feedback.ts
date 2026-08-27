@@ -5,7 +5,7 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
-// Feedback 反馈记录结构
+/** 反馈记录结构：含目标类型/原文/译文/状态等字段 */
 export interface FeedbackItem {
   id: number
   tenant_id: number
@@ -56,7 +56,7 @@ export async function resolveFeedback(id: number, note = ''): Promise<AdminResp>
   })
 }
 
-// FeedbackReply BBS 回复线程元素
+/** 反馈 BBS 回复线程元素：含用户/角色/内容/时间 */
 export interface FeedbackReply {
   u: number
   name: string
@@ -65,7 +65,7 @@ export interface FeedbackReply {
   at: string
 }
 
-// FeedbackDetail 反馈记录（列表视图，含线程）
+/** 反馈记录（列表视图，含回复线程与状态） */
 export interface FeedbackRecord {
   id: number
   user_id: number

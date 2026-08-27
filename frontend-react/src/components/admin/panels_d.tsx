@@ -21,6 +21,7 @@ import { Panel, Field, toastResp, num } from './parts'
 import { fmtTime } from '@/lib/ui'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
+import { orgList, type OrgInfo } from '@/api/org'
 
 type Any = Record<string, any>
 
@@ -44,6 +45,35 @@ function firstTranslation(finalResult: unknown): string {
 const SAFETY_LANGS = ['en', 'ar', 'de', 'es', 'fr', 'id_lang', 'kk', 'pt', 'ru', 'th', 'tr', 'zh_hant']
   .map((x) => ({ label: x === 'id_lang' ? 'id' : x === 'zh_hant' ? 'zh-Hant' : x, value: x }))
 
+// 后端包类型 → 前端分类标签（仅作为分类说明；实际展示名用组织/租户名）
+const PACK_TYPE_LABEL: Record<string, string> = {
+  tenant: '企业包',
+  department: '部门包',
+  industry: '行业包',
+  locale: '语言文化包',
+}
+
+// 由组织树构建「id → 全路径名」（如 销售部 / 华东区），用于部门包映射为部门名
+function orgPath(map: Map<number, OrgInfo>, id: number): string {
+  const parts: string[] = []
+  let cur = map.get(id)
+  while (cur) {
+    parts.unshift(cur.name)
+    cur = map.get(cur.parent_id)
+  }
+  return parts.join(' / ')
+}
+
+// 把后端包映射为前端可读名称：企业包 → 企业名（租户名）；部门包 → 部门名（组织路径）；其余 → 包名
+function packDisplayName(p: Any, orgMap: Map<number, OrgInfo>): string {
+  if (p.pack_type === 'tenant') return p.tenant_name || p.name
+  if (p.pack_type === 'department') {
+    if (orgMap.has(p.org_id)) return orgPath(orgMap, p.org_id)
+    return p.org_name || p.name
+  }
+  return p.name
+}
+
 // ==================== 知识库（Vue Kb.vue / KnowledgeBase.vue） ====================
 export function KbP() {
   const [, t, tpl] = useT()
@@ -51,6 +81,8 @@ export function KbP() {
   // 包列表与各包条目数缓存
   const [pkgs, setPkgs] = useState<Any[]>([])
   const [entriesMap, setEntriesMap] = useState<Record<number, number>>({})
+  // 组织树（用于把部门包映射为部门名 / 部门路径；企业包映射为租户名）
+  const [orgMap, setOrgMap] = useState<Map<number, OrgInfo>>(new Map())
   // 当前选中的包与其条目
   const [selectedPkg, setSelectedPkg] = useState<number | null>(null)
   const [entries, setEntries] = useState<Any[]>([])
@@ -108,7 +140,7 @@ export function KbP() {
     sf.kind === 'forbidden' ? t('kb.phraseForbidden') : sf.kind === 'replace' ? t('kb.phraseReplace') : t('kb.phraseStyle')
   , [sf.kind, t])
 
-  // 加载知识包列表并统计每个包条目数
+  // 加载知识包列表、组织树，并统计每个包条目数
   const loadPackages = useCallback(async () => {
     const r = await kbPackages()
     if (r.success) {
@@ -120,6 +152,15 @@ export function KbP() {
       }
       setEntriesMap(map)
     }
+    // 同步加载组织树，供部门包/企业包映射为部门名 / 租户名
+    try {
+      const o = await orgList()
+      if (o && (o as unknown as { success?: boolean }).success) {
+        const m = new Map<number, OrgInfo>()
+        for (const x of ((o as unknown as { orgs?: OrgInfo[] }).orgs) || []) m.set(x.id, x)
+        setOrgMap(m)
+      }
+    } catch { /* 忽略：组织树缺失时回退到包自带的 tenant_name / org_name */ }
   }, [activeTenantId])
 
   // 加载语言文化规范（安全句）列表
@@ -326,6 +367,14 @@ export function KbP() {
           <input type="file" accept=".csv,.xlsx,.xls" onChange={(e: any) => { setKbFile(e.target.files?.[0] || null); setKbRecognized(null); setKbImportResult(null); setKbImportPkg(0); e.currentTarget.value = '' }} />
           <Button onClick={() => void startRecognize()} disabled={!kbFile || kbRecognizing}>{kbRecognizing ? t('kb.recognizing') : t('kb.recognize')}</Button>
         </div>
+        {kbFile && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#334', marginTop: 6 }}>
+            <span>📄 {t('kb.fileSelected')}{kbFile.name}{(kbFile.name.split('.').pop() || '').toUpperCase() && ` (${(kbFile.name.split('.').pop() || '').toUpperCase()})`}</span>
+            <Button size="small" variant="text" theme="danger" onClick={() => { setKbFile(null); setKbRecognized(null); setKbImportResult(null); setKbImportPkg(0) }}>
+              {t('kb.fileRemove')}
+            </Button>
+          </div>
+        )}
         {kbRecognized && (
           <div style={{ marginTop: 8, fontSize: 13 }}>
             <div>
@@ -334,7 +383,7 @@ export function KbP() {
             </div>
             <div style={rowMt}>
               <Select value={kbImportPkg} onChange={(v: any) => setKbImportPkg(Number(v))} placeholder={t('kb.selectPkg')}
-                options={pkgs.map((p: Any) => ({ label: `[${p.pack_type}] ${p.name}`, value: Number(p.id) }))} style={{ minWidth: 220 }} />
+                options={pkgs.map((p: Any) => ({ label: packDisplayName(p, orgMap), value: Number(p.id) }))} style={{ minWidth: 220 }} />
               <Button theme="success" onClick={() => void startImport()} disabled={!kbImportPkg || kbImporting}>{t('kb.import')}</Button>
             </div>
             {kbImportResult && <div style={resStyle(!!(kbImportResult as Any).success)}>{(kbImportResult as Any).message}</div>}
@@ -365,10 +414,10 @@ export function KbP() {
       {/* ===== 知识包列表 ===== */}
       <Table rowKey="id" size="small" data={pkgs} style={{ marginTop: 8 }}
         columns={[
-          { colKey: 'id', title: 'ID', width: 60 },
-          { colKey: 'code', title: t('kb.codePlaceholder'), width: 120 },
-          { colKey: 'name', title: t('kb.namePlaceholder') },
-          { colKey: 'pack_type', title: '类型', width: 120 },
+           { colKey: 'id', title: 'ID', width: 60 },
+           { colKey: 'code', title: t('kb.codePlaceholder'), width: 120 },
+           { colKey: 'name', title: t('kb.namePlaceholder'), cell: ({ row }: any) => packDisplayName(row, orgMap) },
+           { colKey: 'pack_type', title: t('kb.colType'), width: 120, cell: ({ row }: any) => PACK_TYPE_LABEL[row.pack_type] || row.pack_type },
           { colKey: 'enabled', title: t('kb.enablePack') ? '启用' : '启用', width: 80, cell: ({ row }: any) =>
             <Switch size="small" value={row.enabled !== 0} onChange={async () => { await togglePackage(row) }} /> },
           { colKey: 'share_cross_dept', title: t('kb.shareOn'), width: 120, cell: ({ row }: any) =>
@@ -421,7 +470,7 @@ export function KbP() {
         <div style={{ fontSize: 12, color: '#667', marginBottom: 8 }}>{t('kb.safetyHint')}</div>
         <div style={rowMt}>
           <Select value={safetyPkgId} onChange={(v: any) => setSafetyPkgId(Number(v))}
-            options={localePackages.map((p: Any) => ({ label: `[${p.pack_type}] ${p.name}`, value: Number(p.id) }))} style={{ minWidth: 200 }} placeholder={t('kb.selectPkg')} />
+            options={localePackages.map((p: Any) => ({ label: packDisplayName(p, orgMap), value: Number(p.id) }))} style={{ minWidth: 200 }} placeholder={t('kb.selectPkg')} />
           <Select value={safetyStatusFilter} onChange={(v: any) => setSafetyStatusFilter(String(v))}
             options={[{ label: t('kb.allStatus'), value: '' }, { label: t('kb.pending'), value: 'pending' }, { label: t('kb.approved'), value: 'approved' }, { label: t('kb.rejected'), value: 'rejected' }]} style={{ width: 140 }} />
           <span style={{ fontSize: 12, color: '#889' }}>{t('kb.safetyScopeHint')}</span>
@@ -799,7 +848,7 @@ export function TicketsP() {
   }
   // TM 来源标签本地化
   function srcLabel(src: string) {
-    return src === 'bitext' ? '双语文本' : src === 'tmx' ? 'TMX 导入' : src === 'feedback' ? '用户反馈修正' : '次数达标'
+    return src === 'bitext' ? t('tmr.srcBitext') : src === 'tmx' ? t('tmr.srcTmx') : src === 'feedback' ? t('tmr.srcFeedback') : t('tmr.srcCount')
   }
   // 解析反馈上下文中的多语言译文
   function ctxTranslations(f: Any): Record<string, string> {
@@ -929,7 +978,7 @@ export function TicketsP() {
             <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
               {selected.replies.map((r: Any, i: number) => (
                 <div key={i} style={{ background: r.role === 'admin' ? '#e8f0fe' : '#f5f6f8', borderRadius: 8, padding: '6px 10px', fontSize: 13 }}>
-                  <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>{r.name} · {r.role === 'admin' ? '超管' : '用户'} · {fmtAt(r.at)}</div>
+                  <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>{r.name} · {r.role === 'admin' ? t('tickets.roleAdmin') : t('tickets.roleUser')} · {fmtAt(r.at)}</div>
                   <div style={{ whiteSpace: 'pre-wrap' }}>{r.content}</div>
                 </div>
               ))}
@@ -1035,7 +1084,7 @@ export function TicketsP() {
             {approveDlg.action === 'approve' && (
               <Field label={t('fb.complete')}>
                 <Textarea autosize={{ minRows: 3 }} value={approveDlg.text} onChange={(v: any) => setApproveDlg({ ...approveDlg, text: v })}
-                  placeholder="留空=按系统译文批准；填写后将与载荷中对应语言的现有译文匹配并覆盖" />
+                  placeholder={t('tickets.finalResultPlaceholder')} />
               </Field>
             )}
             {approveDlg.action === 'reject' && (
