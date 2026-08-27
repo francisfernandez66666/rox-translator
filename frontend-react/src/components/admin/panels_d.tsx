@@ -616,7 +616,7 @@ export function ModelsP() {
             options={[{ label: 'OpenAI (ChatGPT)', value: 'openai' }, { label: 'Google Gemini', value: 'gemini' }, { label: 'DeepSeek', value: 'deepseek' }, { label: 'SiliconFlow', value: 'siliconflow' }, { label: 'Zhipu GLM', value: 'zhipu' }]} />
         </div>
         <Field label={t('models.apiBase')}><Input value={String(mForm.api_base ?? '')} onChange={(v: any) => setMForm({ ...mForm, api_base: v })} placeholder={t('models.apiBasePlaceholder')} /></Field>
-        <Field label={t('models.apiKey')}><Input type="password" value={String(mForm.api_key ?? '')} onChange={(v: any) => setMForm({ ...mForm, api_key: v })} placeholder={t('models.apiKeyPlaceholder')} /></Field>
+        <form onSubmit={(e) => e.preventDefault()}><Field label={t('models.apiKey')}><Input type="password" value={String(mForm.api_key ?? '')} onChange={(v: any) => setMForm({ ...mForm, api_key: v })} placeholder={t('models.apiKeyPlaceholder')} /></Field></form>
         <Field label={t('models.modelName')}><Input value={String(mForm.model ?? '')} onChange={(v: any) => setMForm({ ...mForm, model: v })} placeholder={t('models.modelNamePlaceholder')} /></Field>
 
         {routeForm.map((r, i) => (
@@ -649,7 +649,7 @@ export function ModelsP() {
           {keyState.translation && <Button size="small" theme="danger" variant="outline" onClick={() => void clearTrans()}>{t('models.clearTranslation')}</Button>}
         </div>
         {/* Embedding 密钥：知识库向量重建专用，独立于翻译 Key，单独录入/保存/清除 */}
-        <Field label={t('models.embedApiKey')}><Input type="password" value={String(eForm.api_key ?? '')} onChange={(v: any) => setEForm({ ...eForm, api_key: v })} placeholder={t('models.embedApiKeyPlaceholder')} /></Field>
+        <form onSubmit={(e) => e.preventDefault()}><Field label={t('models.embedApiKey')}><Input type="password" value={String(eForm.api_key ?? '')} onChange={(v: any) => setEForm({ ...eForm, api_key: v })} placeholder={t('models.embedApiKeyPlaceholder')} /></Field></form>
         <Field label={t('models.embedApiBase')}><Input value={String(eForm.api_base ?? '')} onChange={(v: any) => setEForm({ ...eForm, api_base: v })} placeholder={t('models.embedApiBasePlaceholder')} /></Field>
         <div style={rowMt}>
           <Button onClick={() => void saveEmbed()}>{t('models.saveEmbed')}</Button>
@@ -669,7 +669,7 @@ export function ModelsP() {
             {stActive(st.key) && <span style={{ fontSize: 12, color: '#1a7f37' }}>✓ {t('models.stageConfigured' as never)}</span>}
           </div>
           <Field label={t('models.apiBase')}><Input value={String(stForm[st.key]?.api_base ?? '')} onChange={(v: any) => setStForm({ ...stForm, [st.key]: { ...stForm[st.key], api_base: v } })} placeholder={t('models.stageApiBasePlaceholder' as never)} /></Field>
-          <Field label={t('models.apiKey')}><Input type="password" value={String(stForm[st.key]?.api_key ?? '')} onChange={(v: any) => setStForm({ ...stForm, [st.key]: { ...stForm[st.key], api_key: v } })} placeholder={t('models.stageApiKeyPlaceholder' as never)} /></Field>
+          <form onSubmit={(e) => e.preventDefault()}><Field label={t('models.apiKey')}><Input type="password" value={String(stForm[st.key]?.api_key ?? '')} onChange={(v: any) => setStForm({ ...stForm, [st.key]: { ...stForm[st.key], api_key: v } })} placeholder={t('models.stageApiKeyPlaceholder' as never)} /></Field></form>
           <Field label={t('models.modelName')}><Input value={String(stForm[st.key]?.model ?? '')} onChange={(v: any) => setStForm({ ...stForm, [st.key]: { ...stForm[st.key], model: v } })} placeholder={t('models.stageModelPlaceholder' as never)} /></Field>
         </Panel>
       ))}

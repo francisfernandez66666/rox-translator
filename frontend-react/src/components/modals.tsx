@@ -146,8 +146,10 @@ export function PasswordModal(props: { onClose: () => void; onDone?: () => void;
             {cooldown > 0 ? tpl('login.codeResend', { n: cooldown }) : t('login.sendCode')}
           </Button>
         </div>
-        <Input type="password" value={newPwd} onChange={setNewPwd} placeholder={t('login.newPassword')} />
-        <Input type="password" value={confirmPwd} onChange={setConfirmPwd} placeholder={t('pwd.confirmPlaceholder')} />
+        <form onSubmit={(e) => e.preventDefault()}>
+          <Input type="password" value={newPwd} onChange={setNewPwd} placeholder={t('login.newPassword')} />
+          <Input type="password" value={confirmPwd} onChange={setConfirmPwd} placeholder={t('pwd.confirmPlaceholder')} />
+        </form>
         {!!msg && (
           <div className={msgOk ? 'login-ok-hint' : 'login-error'}>{msg}</div>
         )}

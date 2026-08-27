@@ -17,7 +17,7 @@ interface Props {
 
 export default function AccountMenu({ showAdminConsole, onGotoAdmin }: Props) {
   const { user, logout } = useAuth()
-  const [t] = useT()
+  const [lang, t] = useT()
   const [curEmail, setCurEmail] = useState('')
   const [openPwd, setOpenPwd] = useState(false)
   const [openBind, setOpenBind] = useState(false)

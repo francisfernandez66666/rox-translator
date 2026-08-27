@@ -575,13 +575,13 @@ export default function ChatWindow() {
           {/* 双模式切换 */}
           <div style={{ display: 'inline-flex', background: 'rgba(26,115,232,.06)', borderRadius: 14, padding: 2, gap: 2 }}>
             <button className="mode-btn" title={t2('chat.modeTip')} onClick={() => setMode2('pro')}
-                    style={{ border: '1px solid #d8dee6', background: mode === 'pro' ? '#1a73e8' : '#fff', color: mode === 'pro' ? '#fff' : '#777', fontSize: 14, padding: '6px 9px', borderRadius: 12, cursor: 'pointer' }}>🎓</button>
+                    style={{ border: '1px solid #d8dee6', background: mode === 'pro' ? '#1a73e8' : '#fff', color: mode === 'pro' ? '#fff' : '#777', fontSize: 14, padding: '6px 9px', borderRadius: 12, cursor: 'pointer' }}>{t2('chat.modePro')}</button>
             <button className="mode-btn" title={t2('chat.modeTip')} onClick={() => setMode2('fast')}
-                    style={{ border: '1px solid #d8dee6', background: mode === 'fast' ? '#1a73e8' : '#fff', color: mode === 'fast' ? '#fff' : '#777', fontSize: 14, padding: '6px 9px', borderRadius: 12, cursor: 'pointer' }}>⚡</button>
+                    style={{ border: '1px solid #d8dee6', background: mode === 'fast' ? '#1a73e8' : '#fff', color: mode === 'fast' ? '#fff' : '#777', fontSize: 14, padding: '6px 9px', borderRadius: 12, cursor: 'pointer' }}>{t2('chat.modeFast')}</button>
           </div>
           <Button variant="text" theme="default" icon={<ClearIcon />}
                   onClick={() => { chat.clearMessages() }}>
-            {t2('chat.clear')}
+            {t2('chat.clearChat')}
           </Button>
 
           {chat.isLoading ? (
