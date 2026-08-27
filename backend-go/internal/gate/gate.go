@@ -18,13 +18,15 @@ import (
 	"unicode"
 )
 
-// 8 项校验结果
+// GateResult 译文约束闸门的整体校验结果：汇总全部硬性校验项，
+// Pass 表示是否所有单项均通过（任一不通过即为 false，用于质控打回）。
 type GateResult struct {
 	Pass   bool    `json:"pass"`   // 是否全部通过
 	Checks []Check `json:"checks"` // 各单项校验明细
 }
 
-// Check 单项校验
+// Check 单条硬性校验项的结果：Name 标识校验项、Pass 标记是否通过、
+// Detail 在失败时给出原因说明（通过时为空）。
 type Check struct {
 	Name   string `json:"name"`   // 校验项名称（如 非空/无乱码/数字保持）
 	Pass   bool   `json:"pass"`   // 该项是否通过

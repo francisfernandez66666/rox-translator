@@ -109,7 +109,7 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
           </Button>
         )}
         <Bell />
-        <Button size="small" variant="text" onClick={toggleLang}>{lang === 'zh' ? 'EN' : '中'}</Button>
+        <Button size="small" variant="text" onClick={toggleLang}>{lang === 'zh' ? 'EN' : '中文'}</Button>
         <AccountMenu showAdminConsole={roleLevelSafe(user?.role) >= 2} onGotoAdmin={onGotoAdmin} />
       </header>
 

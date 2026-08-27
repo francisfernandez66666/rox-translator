@@ -404,7 +404,9 @@ func (s *Server) handleAdminBrandGrant(w http.ResponseWriter, r *http.Request) {
 
 
 // handleTenantBrandingGet 公开接口：按域名/租户解析品牌展示信息（登录页与前台使用，无需鉴权）。
-// 解析优先级：?tenant_id= > Host 子域名前缀（前缀.基础域名）→ 默认租户 rox。
+// 解析优先级：?tenant_id=（超管预览指定租户）> Host 子域名前缀（前缀.基础域名）。
+// 关键：品牌只由「访问域名」决定——全局根域名（主站/apex）永远返回平台级品牌（能言 LangCross），
+// 不跟随登录用户所属租户，避免根域名误显示某租户（如 rox）的品牌；租户品牌仅在该租户专属子域下生效。
 func (s *Server) handleTenantBrandingGet(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	var tid int64
@@ -414,24 +416,51 @@ func (s *Server) handleTenantBrandingGet(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if tid <= 0 {
-		// 已登录用户优先解析为自身租户（使租户管理员看到本租户品牌，而非默认 rox）
-		if u := s.authUser(r); u != nil {
-			tid = s.effTenant(r, u)
-		}
-		if tid <= 0 {
-			if prefix := tenantPrefixFromHost(s, r.Host); prefix != "" {
+		// 按访问子域前缀解析专属租户品牌；主站前缀（如 langcross）按全局根处理，不套用任何租户品牌
+		if prefix := tenantPrefixFromHost(s, r.Host); prefix != "" {
+			primary := "langcross.lexicorn.cn"
+			if s.Store != nil {
+				if v, e := s.Store.GetConfig("primary_host"); e == nil && v != "" {
+					primary = v
+				}
+			}
+			base := brandingBaseDomain(s)
+			primaryPrefix := ""
+			if strings.HasSuffix(primary, "."+base) {
+				primaryPrefix = strings.TrimSuffix(primary, "."+base)
+			}
+			if prefix != primaryPrefix {
 				if t, err := s.Ten.GetByDomain(prefix); err == nil && t != nil {
 					tid = t.ID
 				}
 			}
 		}
 	}
+	// 全局根域名（主站 langcross.lexicorn.cn / apex）：返回平台级默认品牌（能言 LangCross），
+	// 不套用任何租户品牌——租户品牌仅在该租户专属子域下生效，避免「全局根」误显示某租户品牌。
+	if tid <= 0 {
+		writeJSON(w, 200, map[string]interface{}{
+			"success":            true,
+			"tenant_id":          0,
+			"name":               "",
+			"code":               "",
+			"industry":           "",
+			"industry_name":      "",
+			"brand_name":         "",
+			"brand_logo":         "",
+			"domain":             "",
+			"brand_home_bg":      "",
+			"brand_login_card_pos": "",
+			"brand_login_layout": "",
+			"brand_paid":         false,
+			"brand_granted":      false,
+			"dedicated_register": false,
+		})
+		return
+	}
 	var t *tenant.Tenant
 	if tid > 0 {
 		t, _ = s.Ten.GetByID(tid)
-	}
-	if t == nil {
-		t, _ = s.Ten.GetByCode("rox")
 	}
 	if t == nil {
 		writeJSON(w, 200, map[string]interface{}{"success": true, "tenant_id": 0})
@@ -455,6 +484,9 @@ func (s *Server) handleTenantBrandingGet(w http.ResponseWriter, r *http.Request)
 		"brand_logo":         t.BrandLogo,
 		"domain":             t.Domain,
 		"brand_home_bg":      t.BrandHomeBg,
+		"brand_home_bg_style": t.BrandHomeBgStyle,
+		"brand_login_card_pos": t.BrandLoginCardPos,
+		"brand_login_layout": t.BrandLoginLayout,
 		"brand_paid":         tenantBrandingPackagePaid(s, t.ID),
 		"brand_granted":      tenantBrandingGranted(s, t.ID),
 		"dedicated_register": isDedicatedRegisterHost(s, r),
@@ -561,12 +593,15 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
-		ID           int64  `json:"id"`
-		BrandName    string `json:"brand_name"`
-		BrandLogo    string `json:"brand_logo"`
-		Domain       string `json:"domain"`
-		BrandHomeBg  string `json:"brand_home_bg"`
-		BrandLinks   string `json:"brand_links"`
+		ID              int64  `json:"id"`
+		BrandName       string `json:"brand_name"`
+		BrandLogo       string `json:"brand_logo"`
+		Domain          string `json:"domain"`
+		BrandHomeBg     string `json:"brand_home_bg"`
+		BrandHomeBgStyle string `json:"brand_home_bg_style"`
+		BrandLoginCardPos string `json:"brand_login_card_pos"`
+		BrandLoginLayout string `json:"brand_login_layout"`
+		BrandLinks      string `json:"brand_links"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -589,8 +624,16 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
 		return
 	}
-	if err := s.Ten.SetBrandHomeBg(tid, req.BrandHomeBg); err != nil {
+	if err := s.Ten.SetBrandHomeBg(tid, req.BrandHomeBg, req.BrandHomeBgStyle); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "首页背景保存失败: " + err.Error()})
+		return
+	}
+	if err := s.Ten.SetBrandLoginCardPos(tid, req.BrandLoginCardPos); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "登录卡片位置保存失败: " + err.Error()})
+		return
+	}
+	if err := s.Ten.SetBrandLoginLayout(tid, req.BrandLoginLayout); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "登录页布局保存失败: " + err.Error()})
 		return
 	}
 	t, _ := s.Ten.GetByID(tid)

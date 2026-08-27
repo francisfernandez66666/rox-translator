@@ -5,6 +5,7 @@ package store
 
 import "testing"
 
+// TestDbgProbe2 调试型探针：直查临时库 kb_packages/tenants，打印指定租户包与租户行数（临时排查用）。
 func TestDbgProbe2(t *testing.T) {
 	env := newScopeEnv(t)
 	rows, _ := env.st.db.Query("SELECT id, code, org_id, COALESCE(share_cross_dept,-1) FROM kb_packages WHERE tenant_id=2 ORDER BY id")

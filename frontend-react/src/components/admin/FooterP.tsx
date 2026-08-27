@@ -38,10 +38,13 @@ export default function FooterP() {
     }
   }
 
+  // 修改第 i 条链接的指定字段（label/label_en/url）
   const setLink = (i: number, k: keyof BrandLink, v: string) => {
     setLinks((arr) => arr.map((l, idx) => (idx === i ? { ...l, [k]: v } : l)))
   }
+  // 新增一条空白链接
   const addLink = () => setLinks((arr) => [...arr, { label: '', label_en: '', url: '' }])
+  // 删除第 i 条链接
   const removeLink = (i: number) => setLinks((arr) => arr.filter((_, idx) => idx !== i))
 
   return (

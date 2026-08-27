@@ -1,7 +1,11 @@
 /* ============================================================================
-   theme.css — React 版主题（TDesign 之上补齐原 Vue 版的视觉个性）
-   仅保留三类规则：①登录页渐变 ②聊天气泡/文件卡 ③后台布局微调
-   ============================================================================ */
+    theme.css — React 版主题（TDesign 之上补齐原 Vue 版的视觉个性）
+    仅保留三类规则：①登录页渐变 ②聊天气泡/文件卡 ③后台布局微调
+    ============================================================================ */
+
+/* ---- 全局复位：去掉默认 body 外边距，避免登录页背景四周露出白边 ---- */
+html, body, #root { margin: 0; padding: 0; height: 100%; }
+* { box-sizing: border-box; }
 
 /* ---- 登录页渐变背景（复刻 Login.vue） ---- */
 .login-wrap {
@@ -18,10 +22,12 @@
   padding: 40px 36px;
   width: 400px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  position: relative;
+  z-index: 1;
 }
 .login-logo { font-size: 22px; font-weight: 700; color: #1a237e; margin-bottom: 6px; }
 .login-sub { font-size: 13px; color: #888; margin-bottom: 22px; }
-.login-lang { position: absolute; top: 18px; right: 24px; }
+.login-lang { position: absolute; top: 18px; right: 24px; z-index: 1; }
 
 /* ---- 前台工作台头部 ---- */
 .app-header {

@@ -28,6 +28,9 @@ type Tenant struct {
 	BrandLogo    string `json:"brand_logo"`    // 自定义品牌 Logo URL（空=用默认）
 	Domain       string `json:"domain"`        // 自定义访问域名（用于按域名解析租户品牌）
 	BrandHomeBg  string `json:"brand_home_bg"`  // 未登录首页背景图（base64 dataURL 或外链 URL，空=用默认）
+	BrandHomeBgStyle string `json:"brand_home_bg_style"` // 首页背景图样式 JSON：{scale,x,y,mode}（mode: tile/cover/contain）
+	BrandLoginCardPos string `json:"brand_login_card_pos"` // 登录/注册卡片位置 JSON：{x,y} 百分比（卡片中心相对于视口）
+	BrandLoginLayout string `json:"brand_login_layout"` // 登录页布局 JSON：{mode:'full'|'split', side:'left'|'right'}
 	BrandLinks   string `json:"brand_links"`   // 自定义页脚链接 JSON 数组（[{label,label_en,url}]）
 	CreatedAt    string `json:"created_at"`    // 创建时间（RFC3339 字符串）
 	UpdatedAt    string `json:"updated_at"`    // 更新时间（RFC3339 字符串）
@@ -158,11 +161,26 @@ func (s *Store) ensureTable() error {
 			return err
 		}
 	}
+	if !have["brand_home_bg_style"] {
+		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_home_bg_style TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	if !have["brand_login_card_pos"] {
+		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_login_card_pos TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	if !have["brand_login_layout"] {
+		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_login_layout TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // tenantColumns 租户查询统一列清单（与 scanTenant 顺序一致）。
-const tenantColumns = `id, code, name, status, expires_at, permissions, COALESCE(industry,''), COALESCE(brand_name,''), COALESCE(brand_logo,''), COALESCE(domain,''), COALESCE(brand_home_bg,''), COALESCE(brand_links,''), created_at, updated_at`
+const tenantColumns = `id, code, name, status, expires_at, permissions, COALESCE(industry,''), COALESCE(brand_name,''), COALESCE(brand_logo,''), COALESCE(domain,''), COALESCE(brand_home_bg,''), COALESCE(brand_home_bg_style,''), COALESCE(brand_login_card_pos,''), COALESCE(brand_login_layout,''), COALESCE(brand_links,''), created_at, updated_at`
 
 // scanner 同时兼容 *sql.Row 与 *sql.Rows 的 Scan 方法。
 type scanner interface{ Scan(dest ...interface{}) error }
@@ -170,7 +188,7 @@ type scanner interface{ Scan(dest ...interface{}) error }
 // scanTenant 从一行中解析租户对象（字段顺序须与 tenantColumns 一致）。
 func scanTenant(s scanner) (*Tenant, error) {
 	var t Tenant
-	if err := s.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.BrandName, &t.BrandLogo, &t.Domain, &t.BrandHomeBg, &t.BrandLinks, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	if err := s.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.BrandName, &t.BrandLogo, &t.Domain, &t.BrandHomeBg, &t.BrandHomeBgStyle, &t.BrandLoginCardPos, &t.BrandLoginLayout, &t.BrandLinks, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
 	t.Status = effectiveStatus(t.Status, t.ExpiresAt)
@@ -285,10 +303,24 @@ func (s *Store) SetBranding(id int64, brandName, brandLogo, domain, brandLinks s
 	return err
 }
 
-// SetBrandHomeBg 保存租户级「未登录首页背景图」（base64 dataURL 或外链 URL，空串=清空）。
-// 参数：id=租户 ID；bg=背景图数据（dataURL 或 URL），空串表示恢复默认背景。
-func (s *Store) SetBrandHomeBg(id int64, bg string) error {
-	_, err := s.db.Exec("UPDATE tenants SET brand_home_bg=?, updated_at=? WHERE id=?", bg, nowStr(), id)
+// SetBrandHomeBg 保存租户级「未登录首页背景图」及其样式（缩放/位置/平铺模式）。
+// 参数：id=租户 ID；bg=背景图数据（dataURL 或 URL，空串=清空）；style=样式 JSON 字符串。
+func (s *Store) SetBrandHomeBg(id int64, bg, style string) error {
+	_, err := s.db.Exec("UPDATE tenants SET brand_home_bg=?, brand_home_bg_style=?, updated_at=? WHERE id=?", bg, style, nowStr(), id)
+	return err
+}
+
+// SetBrandLoginCardPos 保存租户级「登录/注册卡片位置」（百分比 JSON：{x,y}）。
+// 参数：id=租户 ID；pos=位置 JSON 字符串（空串=重置默认居中）。
+func (s *Store) SetBrandLoginCardPos(id int64, pos string) error {
+	_, err := s.db.Exec("UPDATE tenants SET brand_login_card_pos=?, updated_at=? WHERE id=?", pos, nowStr(), id)
+	return err
+}
+
+// SetBrandLoginLayout 保存租户级「登录页布局」（JSON：{mode:'full'|'split', side:'left'|'right'}）。
+// 参数：id=租户 ID；layout=布局 JSON 字符串（空串=重置默认全屏背景）。
+func (s *Store) SetBrandLoginLayout(id int64, layout string) error {
+	_, err := s.db.Exec("UPDATE tenants SET brand_login_layout=?, updated_at=? WHERE id=?", layout, nowStr(), id)
 	return err
 }
 

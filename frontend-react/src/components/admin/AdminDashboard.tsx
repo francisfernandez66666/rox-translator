@@ -74,7 +74,7 @@ function renderPanel(p: PanelKey) {
 export default function AdminDashboard() {
   const ad = useAdmin()
   // 订阅语言变化，使菜单与角色标签随 UI 语言切换刷新
-  useLang()
+  const lang = useLang()
   // 租户级品牌定制
   const branding = useBranding()
   // 按当前用户等级过滤出可见菜单项
@@ -121,7 +121,7 @@ export default function AdminDashboard() {
           {/* 右侧占位，把后续操作按钮推到最右 */}
           <div style={{ flex: 1 }} />
           <Bell />
-          <Button size="small" variant="text" onClick={toggleLang}>{t('app.langBtn')}</Button>
+          <Button size="small" variant="text" onClick={toggleLang}>{lang === 'zh' ? 'EN' : '中文'}</Button>
           <AccountMenu showWorkbench onGotoWorkbench={() => {
             window.history.pushState({}, '', '/')
             window.dispatchEvent(new PopStateEvent('popstate'))

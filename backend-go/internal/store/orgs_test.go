@@ -5,6 +5,7 @@ package store
 
 import "testing"
 
+// TestOrgHierarchy 验证组织层级：根组织创建与幂等、组织/部门类型与父级、列表根优先、根组织删除保护。
 func TestOrgHierarchy(t *testing.T) {
 	s := newTestStore(t)
 
@@ -59,6 +60,7 @@ func TestOrgHierarchy(t *testing.T) {
 	}
 }
 
+// TestOrgMove 验证组织移动：组织可嵌套到另一组织下，跨租户/移动到自身子树应被拒绝。
 func TestOrgMove(t *testing.T) {
 	s := newTestStore(t)
 	root, _ := s.EnsureRootOrg(1, "测试租户")

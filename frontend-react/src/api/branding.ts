@@ -17,6 +17,7 @@ export async function tenantBranding(tenantId?: number) {
   return request<{
     success: boolean; tenant_id: number; name: string; code: string; industry: string; industry_name: string
     brand_name: string; brand_logo: string; domain: string; brand_home_bg: string
+    brand_login_card_pos: string; brand_login_layout: string
     brand_paid: boolean; brand_granted: boolean; dedicated_register: boolean
   }>(
     `/api/tenant/branding${tenantId ? `?tenant_id=${tenantId}` : ''}`,
@@ -38,6 +39,9 @@ export async function tenantBrandingSave(p: {
   brand_logo: string
   domain: string
   brand_home_bg?: string
+  brand_home_bg_style?: string
+  brand_login_card_pos?: string
+  brand_login_layout?: string
 }) {
   return request<{ success: boolean; message?: string }>('/api/tenant/branding', {
     method: 'POST',

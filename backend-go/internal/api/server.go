@@ -1,5 +1,9 @@
 // ============ server.go · 职责说明 ============
-// api 包内部实现文件。
+// Package api 提供翻译 SaaS 平台的所有 HTTP 接口层：
+// 负责认证与用户管理、翻译任务与流式输出、知识库导入与检索、租户与组织隔离、
+// 计费与订阅、工单与反馈、管理后台以及开放 API 等。本包聚合 store/engine/kb/tenant
+// 等内部模块，向上为前端与第三方调用方提供 REST 接口，并承担鉴权、限流、审计、
+// 指标收集、租户解析与静态资源托管等横切职责。
 // =============================================
 package api
 
@@ -366,8 +370,9 @@ func (s *Server) Handler() http.Handler {
 	return s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.withAccessLog(s.mux)))))
 }
 
-// maxJSONBody 非 multipart 请求体上限（JSON 接口防超大请求；文件上传走 multipart 不受限）
-const maxJSONBody = 16 << 20 // 16MB
+// maxJSONBody 非 multipart 请求体上限（JSON 接口防超大请求；文件上传走 multipart 不受限）。
+// 背景图等以 base64 经 JSON 上传，故上限设为 5MB——前端上传前需将图片缩放/压缩至该体积内。
+const maxJSONBody = 5 << 20 // 5MB
 
 // withBodyLimit 限制非 multipart 请求体大小（防滥用超大 JSON）。
 // 参数 next: 下一层 Handler。返回: 包装后的 Handler（超出上限时解码方返回错误）。

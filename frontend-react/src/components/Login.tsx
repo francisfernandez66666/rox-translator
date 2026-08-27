@@ -13,7 +13,7 @@ import {
 } from '@/api'
 import { t, tpl, useT, toggleLang } from '@/i18n'
 import { roleLevel } from '@/stores/auth'
-import { useBranding } from '@/branding'
+import { useBranding, DEFAULT_BRAND_NAME, BrandBgLayer, parseLoginLayout, parseCardPos } from '@/branding'
 import type { AuthUser } from '@/api'
 
 // Login 组件入参：mode 区分前台(home)/后台(admin)登录；onLogin 登录成功后回调上层
@@ -32,7 +32,7 @@ export default function Login({ mode, onLogin }: Props) {
   const [loading, setLoading] = useState(false)
 
   // 注册面板状态
-  const [showReg, setShowReg] = useState(false)
+  const [view, setView] = useState<'signin' | 'register' | 'forgot'>('signin')
   const [regMsg, setRegMsg] = useState('')
   const [agreed, setAgreed] = useState(false)
   const [roleChoice, setRoleChoice] = useState<'admin' | 'user'>('admin')
@@ -45,7 +45,7 @@ export default function Login({ mode, onLogin }: Props) {
   const captchaTokenRef = useRef('')
 
   // 忘记密码流程
-  const [showForgot, setShowForgot] = useState(false)
+
   const [forgotMsg, setForgotMsg] = useState('')
   const [forgotSent, setForgotSent] = useState(false)
   const [forgot, setForgot] = useState({ username: '', email: '', code: '', newPassword: '' })
@@ -55,7 +55,7 @@ export default function Login({ mode, onLogin }: Props) {
     try {
       const p = new URLSearchParams(window.location.search)
       const ref = p.get('ref')?.trim() || ''
-      if (mode === 'home' && (window.location.pathname === '/register' || ref)) setShowReg(true)
+      if (mode === 'home' && (window.location.pathname === '/register' || ref)) setView('register')
       if (ref) setForm((f) => ({ ...f, invite: f.invite || '' })) // 企业邀请码与个人 ref 相互独立
     } catch { /* ignore */ }
   }, [mode])
@@ -188,25 +188,30 @@ export default function Login({ mode, onLogin }: Props) {
 
   // 关闭忘记密码面板并清空其表单状态
   function closeForgot() {
-    setShowForgot(false)
+    setView('signin')
     setForgotSent(false)
     setForgot({ username: '', email: '', code: '', newPassword: '' })
   }
 
-  return (
-    <div className="login-wrap" style={branding.brandHomeBg ? { backgroundImage: `url(${branding.brandHomeBg})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}>
-      <div className="login-lang">
-        <Button size="small" variant="outline" theme="primary" onClick={toggleLang}>
-          {{ zh: 'English', en: '中文' }[useLangSafe()]}
-        </Button>
-      </div>
-
-      {/* 登录卡片 */}
+  const layout = parseLoginLayout(branding.brandLoginLayout)
+  const cardPos = parseCardPos(branding.brandLoginCardPos)
+  const langBtn = (
+    <div style={{ position: 'absolute', top: 10, right: 10, zIndex: 3 }}>
+      <Button size="small" variant="outline" theme="primary" onClick={toggleLang}>
+        {{ zh: 'EN', en: '中文' }[useLangSafe()]}
+      </Button>
+    </div>
+  )
+  // 登录/注册/忘记密码 卡片（三种形态按需渲染，统一交由布局容器定位）
+  const cards = (
+    <>
+      {langBtn}
+      {view === 'signin' && (
       <div className="login-card">
         <div className="login-logo">
           {branding.brandLogo
             ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 108 }} />
-            : <span style={{ fontSize: 28, fontWeight: 800 }}>{branding.brandName || (mode === 'admin' ? t('login.platformAdmin') : t('login.platform'))}</span>}
+            : <span style={{ fontSize: 28, fontWeight: 800 }}>{branding.brandName || branding.tenantName || (mode === 'admin' ? t('login.platformAdmin') : DEFAULT_BRAND_NAME)}</span>}
         </div>
         <div className="login-sub">{mode === 'admin' ? t('login.adminOnly') : t('login.enterWorkspace')}</div>
           <form onSubmit={(e) => e.preventDefault()} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -216,24 +221,23 @@ export default function Login({ mode, onLogin }: Props) {
                    autocomplete="current-password" onEnter={doLogin} />
             {!!error && <div style={{ color: '#c62828', fontSize: 13 }}>{error}</div>}
             <Button block loading={loading} onClick={doLogin}>{t('login.signIn')}</Button>
-            <Button block variant="text" onClick={() => setShowForgot(true)}>{t('login.forgot')}</Button>
-            <Button block variant="text" onClick={() => setShowReg(!showReg)}>
-              {showReg ? t('login.backToLogin') : t('login.selfRegister')}
+            <Button block variant="text" onClick={() => setView('forgot')}>{t('login.forgot')}</Button>
+            <Button block variant="text" onClick={() => setView(view === 'register' ? 'signin' : 'register')}>
+              {view === 'register' ? t('login.backToLogin') : t('login.selfRegister')}
             </Button>
           </form>
       </div>
+      )}
 
       {/* 自助注册卡片 */}
-      {showReg && mode === 'home' && (
+      {view === 'register' && mode === 'home' && (
         <div className="login-card">
-          <div className="login-logo">{t('login.selfRegisterTitle')}</div>
-          <div className="login-sub">{t('login.selfRegisterSub')}</div>
+           <div className="login-logo">{t('login.selfRegisterTitle')}</div>
+           {!branding.dedicatedRegister && <div className="login-sub">{t('login.selfRegisterSub')}</div>}
           {branding.dedicatedRegister ? (
             <div style={{ fontSize: 13, color: '#335', background: '#eef4ff', border: '1px solid #c9ddff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.6 }}>
               {tpl('login.dedicatedInfo', {
-                name: branding.tenantName || branding.brandName || t('login.platform'),
-                code: branding.code || '-',
-                industry: branding.industryName || branding.industry || '-',
+                name: branding.tenantName || branding.brandName || DEFAULT_BRAND_NAME,
               })}
             </div>
           ) : (
@@ -285,7 +289,7 @@ export default function Login({ mode, onLogin }: Props) {
       )}
 
       {/* 忘记密码卡片 */}
-      {showForgot && (
+      {view === 'forgot' && (
         <div className="login-card">
           <div className="login-logo">{t('login.forgotTitle')}</div>
           <div className="login-sub">{t('login.forgotSub')}</div>
@@ -306,6 +310,35 @@ export default function Login({ mode, onLogin }: Props) {
           </div>
         </div>
       )}
+    </>
+  )
+
+  // 左右分栏布局：一侧背景图，另一侧登录容器（容器可在左/右切换）
+  if (layout.mode === 'split') {
+    const imgPanel = (
+      <div style={{ flex: 1, position: 'relative', overflow: 'hidden', minHeight: '100vh' }}>
+        <BrandBgLayer src={branding.brandHomeBg} styleJson={branding.brandHomeBgStyle} />
+      </div>
+    )
+    const formPanel = (
+      <div style={{ flex: 1, position: 'relative', background: '#eef1f8', padding: 24, minHeight: '100vh' }}>
+        <div style={{ position: 'absolute', left: `${cardPos.x}%`, top: `${cardPos.y}%`, transform: 'translate(-50%,-50%)', zIndex: 2, width: '100%', maxWidth: 400, padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>{cards}</div>
+      </div>
+    )
+    return (
+      <div className="login-wrap" style={{ position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'row', alignItems: 'stretch' }}>
+        {layout.side === 'left' ? (<>{formPanel}{imgPanel}</>) : (<>{imgPanel}{formPanel}</>)}
+      </div>
+    )
+  }
+
+  // 全屏背景 + 可定位登录卡片（默认布局，无遮罩）
+  return (
+    <div className="login-wrap" style={{ position: 'relative', overflow: 'hidden' }}>
+      <BrandBgLayer src={branding.brandHomeBg} styleJson={branding.brandHomeBgStyle} />
+      <div style={{ position: 'absolute', left: `${cardPos.x}%`, top: `${cardPos.y}%`, transform: 'translate(-50%,-50%)', zIndex: 2, width: '100%', maxWidth: 400, padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {cards}
+      </div>
     </div>
   )
 }

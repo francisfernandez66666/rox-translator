@@ -5,6 +5,7 @@ package store
 
 import "testing"
 
+// TestEnsureDefaultPackagesIncludesDepartment 验证 EnsureDefaultPackages 幂等创建企业/行业/语言文化/部门四类默认包。
 func TestEnsureDefaultPackagesIncludesDepartment(t *testing.T) {
 	s := newTestStore(t)
 	// 初始无包，首次调用应创建 4 类默认包
