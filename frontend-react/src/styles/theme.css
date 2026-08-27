@@ -7,6 +7,42 @@
 html, body, #root { margin: 0; padding: 0; height: 100%; }
 * { box-sizing: border-box; }
 
+/* ---- 统一 TDesign 主题令牌（覆盖默认蓝灰，收敛为更饱和的蓝靛主色，统一圆角） ----
+   目标：① 全站按钮/输入/标签/菜单沿用同一套 TDesign 设计变量，解决圆角方角不一致；
+        ② 提升主色饱和度与选中态对比（原选中浅底偏灰发淡）。 */
+:root {
+  /* 主色梯度（-1 最浅选中底 … -10 最深）；整体提高饱和，选中态不再发灰 */
+  --td-brand-color: #2b3ee8;
+  --td-brand-color-hover: #4a5cf0;
+  --td-brand-color-active: #1c2bd0;
+  --td-brand-color-focus: #2b3ee8;
+  --td-brand-color-light: #e7ebff;
+  --td-brand-color-light-hover: #d6ddff;
+  --td-brand-color-light-active: #c2ccff;
+  --td-brand-color-1: #eef1ff;
+  --td-brand-color-2: #dde3ff;
+  --td-brand-color-3: #c4ccff;
+  --td-brand-color-4: #a6b2ff;
+  --td-brand-color-5: #8693f7;
+  --td-brand-color-6: #6479f5;
+  --td-brand-color-7: #455be8;
+  --td-brand-color-8: #2b3ee8;
+  --td-brand-color-9: #1c2bd0;
+  --td-brand-color-10: #1420a8;
+  /* 统一圆角：控件/卡片一致，消除方圆混用 */
+  --td-radius-default: 8px;
+  --td-radius-small: 6px;
+  --td-radius-large: 12px;
+  --td-radius-control: 8px;
+  --td-radius-round: 999px;
+  --td-radius-circle: 50%;
+  /* 选中/激活态描边更清晰 */
+  --td-component-stroke: #d8deef;
+  --td-bg-color-container-active: #e7ebff;
+  --td-text-color-primary: #1a2233;
+  --td-text-color-secondary: #5a6478;
+}
+
 /* ---- 登录页渐变背景（复刻 Login.vue） ---- */
 .login-wrap {
   min-height: 100vh;

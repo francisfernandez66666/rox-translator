@@ -125,6 +125,7 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 		BrandLogo   string `json:"brand_logo"`  // 自定义品牌 Logo
 		Domain      string `json:"domain"`      // 自定义域名
 		BrandLinks  string `json:"brand_links"` // 自定义页脚链接 JSON
+		InviteEnabled *bool `json:"invite_enabled"` // 邀请好友功能开关（nil=不改动；非 nil=按值设置）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -140,8 +141,41 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "品牌保存失败: " + err.Error()})
 		return
 	}
+	// 更新「邀请好友」开关（仅当显式传入时）
+	if req.InviteEnabled != nil {
+		if err := s.Ten.SetInviteEnabled(req.ID, *req.InviteEnabled); err != nil {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邀请开关保存失败: " + err.Error()})
+			return
+		}
+	}
 	t, _ := s.Ten.GetByID(req.ID)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "tenant": t})
+}
+
+// handleTenantInviteEnabledGet 读取当前生效租户的「邀请好友」功能开关（tenant_admin 及以上）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求。
+// 当前生效租户：超管随 X-Tenant-ID 切换；租户管理员取自身租户。
+// 返回: success=true 时携带 invite_enabled（bool，true=开通）。
+func (s *Server) handleTenantInviteEnabledGet(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	// 解析当前生效租户：请求上下文注入了 X-Tenant-ID 则用其值，否则用当前用户自身租户
+	var tid int64
+	if id := tenant.FromContext(r.Context()); id > 0 {
+		tid = id
+	} else {
+		tid = u.TenantID
+	}
+	enabled := true
+	if tid > 0 {
+		if ten, e := s.Ten.GetByID(tid); e == nil && ten != nil {
+			enabled = ten.InviteEnabled
+		}
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "invite_enabled": enabled})
 }
 
 // handleTenantStatus 切换租户状态接口（super_admin）：启用/禁用租户。
@@ -408,6 +442,13 @@ func (s *Server) handleAdminBrandGrant(w http.ResponseWriter, r *http.Request) {
 // 关键：品牌只由「访问域名」决定——全局根域名（主站/apex）永远返回平台级品牌（能言 LangCross），
 // 不跟随登录用户所属租户，避免根域名误显示某租户（如 rox）的品牌；租户品牌仅在该租户专属子域下生效。
 func (s *Server) handleTenantBrandingGet(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, s.brandingPayload(r))
+}
+
+// brandingPayload 解析当前访问域名的租户品牌定制（供接口与 SPA 首屏注入复用）。
+// 解析优先级：显式 ?tenant_id= > 按访问子域前缀；主站前缀（如 langcross）按全局根处理，不套用任何租户品牌。
+// 返回结构与历史 /api/tenant/branding 响应一致（前端 BrandingProvider 直接消费）。
+func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 	q := r.URL.Query()
 	var tid int64
 	if v := q.Get("tenant_id"); v != "" {
@@ -439,10 +480,10 @@ func (s *Server) handleTenantBrandingGet(w http.ResponseWriter, r *http.Request)
 	// 全局根域名（主站 langcross.lexicorn.cn / apex）：返回平台级默认品牌（能言 LangCross），
 	// 不套用任何租户品牌——租户品牌仅在该租户专属子域下生效，避免「全局根」误显示某租户品牌。
 	if tid <= 0 {
-		writeJSON(w, 200, map[string]interface{}{
-			"success":            true,
-			"tenant_id":          0,
-			"name":               "",
+	return map[string]interface{}{
+		"success":            true,
+		"tenant_id":          0,
+		"name":               "",
 			"code":               "",
 			"industry":           "",
 			"industry_name":      "",
@@ -453,18 +494,16 @@ func (s *Server) handleTenantBrandingGet(w http.ResponseWriter, r *http.Request)
 			"brand_login_card_pos": "",
 			"brand_login_layout": "",
 			"brand_paid":         false,
-			"brand_granted":      false,
-			"dedicated_register": false,
-		})
-		return
+		"brand_granted":      false,
+		"dedicated_register": false,
 	}
+}
 	var t *tenant.Tenant
 	if tid > 0 {
 		t, _ = s.Ten.GetByID(tid)
 	}
 	if t == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": true, "tenant_id": 0})
-		return
+		return map[string]interface{}{"success": true, "tenant_id": 0}
 	}
 	// 行业名称解析（注册页「专属域名自动带入企业信息」展示用）
 	industryName := ""
@@ -473,7 +512,7 @@ func (s *Server) handleTenantBrandingGet(w http.ResponseWriter, r *http.Request)
 			industryName = ip.Name
 		}
 	}
-	writeJSON(w, 200, map[string]interface{}{
+	return map[string]interface{}{
 		"success":            true,
 		"tenant_id":          t.ID,
 		"name":               t.Name,
@@ -490,7 +529,7 @@ func (s *Server) handleTenantBrandingGet(w http.ResponseWriter, r *http.Request)
 		"brand_paid":         tenantBrandingPackagePaid(s, t.ID),
 		"brand_granted":      tenantBrandingGranted(s, t.ID),
 		"dedicated_register": isDedicatedRegisterHost(s, r),
-	})
+	}
 }
 
 // handleCaddyOnDemandAsk 供 Caddy 的 on_demand_tls「ask 权限模块」调用：

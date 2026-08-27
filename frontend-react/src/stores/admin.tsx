@@ -5,7 +5,7 @@
 // ============================================================================
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { tenantList as apiTenantList, setActiveTenantId, getActiveTenantId } from '@/api'
+import { tenantList as apiTenantList, tenantInviteEnabledGet, setActiveTenantId, getActiveTenantId } from '@/api'
 import type { TenantInfo } from '@/api'
 import { orgList, type OrgInfo } from '@/api/org'
 import { useAuth, roleLevel } from './auth'
@@ -14,7 +14,7 @@ import { t } from '@/i18n'
 /** 后台管理可用面板键名集合（用于面板路由与侧边栏导航） */
 export type PanelKey =
   | 'overview' | 'tenants' | 'plans' | 'referral' | 'org' | 'usage' | 'kb'
-  | 'models' | 'workflow' | 'apikeys' | 'webhooks' | 'tickets' | 'audit' | 'alerts' | 'users' | 'agreements' | 'brand'
+  | 'models' | 'workflow' | 'apikeys' | 'webhooks' | 'tickets' | 'audit' | 'alerts' | 'users' | 'agreements' | 'brand' | 'mailTpl'
 
 /** 根据角色 key 返回本地化展示名称（后台侧边栏展示，i18n）；未知角色返回普通用户
  * @param r - 角色标识字符串（如 super_admin / tenant_admin 等）
@@ -42,6 +42,10 @@ interface AdminCtx {
   roleOptions: string[]
   // 租户列表（仅超管需要）
   tenants: TenantInfo[]
+  // 当前生效租户是否开通「邀请好友」功能（超管按租户开关；默认 true）
+  inviteEnabled: boolean
+  // 重新拉取当前生效租户的「邀请好友」开关
+  loadInviteEnabled: () => Promise<void>
   // 当前选中的租户 ID（0 表示平台根组织）
   activeTenantId: number
   // 切换当前租户上下文
@@ -75,6 +79,7 @@ const Ctx = createContext<AdminCtx>({
   orgs: [], orgMap: new Map(), loadOrgs: async () => {},
   panel: 'overview', gotoPanel: () => {}, pendingFeedbackId: 0,
   openFeedback: () => {}, consumeFeedback: () => 0,
+  inviteEnabled: true, loadInviteEnabled: async () => {},
 })
 
 /** 后台管理全局状态 Provider：管理租户列表/切换、角色权限、面板路由与反馈跨组件跳转
@@ -96,6 +101,8 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   const [panel, setPanel] = useState<PanelKey>('overview')
   // 消息中心跳转而来的待处理反馈 ID
   const [pendingFeedbackId, setPendingFeedbackId] = useState<number>(0)
+  // 当前生效租户是否开通「邀请好友」功能（默认开通）
+  const [inviteEnabled, setInviteEnabled] = useState<boolean>(true)
 
   // 是否为管理员/部门管理员（等级≥2）
   const isAdmin = myLevel >= 2
@@ -140,6 +147,15 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     setActive(tid)
   }, [])
 
+  // 拉取当前生效租户的「邀请好友」开关（超管随 X-Tenant-ID 切换；租户管理员取自身租户）
+  const loadInviteEnabled = useCallback(async () => {
+    if (!user) return
+    try {
+      const r = await tenantInviteEnabledGet()
+      if (r.success) setInviteEnabled(r.invite_enabled !== false)
+    } catch { /* 忽略 */ }
+  }, [user])
+
   // 清除本地认证 token 与租户上下文
   const clearAuth = useCallback(() => {
     setActiveTenantId(0)
@@ -171,6 +187,11 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     }
     void loadOrgs()
   }, [user, activeTenantId, switchTenant, loadOrgs])
+
+  // 登录后/切换租户后刷新「邀请好友」开关
+  useEffect(() => {
+    if (user) void loadInviteEnabled()
+  }, [user, activeTenantId, loadInviteEnabled])
 
   // 跨组件跳转入口（Bell → 反馈处理面板）
   const gotoPanel = useCallback((p: PanelKey) => {
@@ -207,10 +228,12 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     tenants, activeTenantId, switchTenant, loadTenants, clearAuth,
     orgs, orgMap, loadOrgs,
     panel, gotoPanel, pendingFeedbackId, openFeedback, consumeFeedback,
+    inviteEnabled, loadInviteEnabled,
   }), [myLevel, isAdmin, isDeptAdmin, isTenantAdmin, isSuper, roleOptions,
        tenants, activeTenantId, switchTenant, loadTenants, clearAuth,
        orgs, orgMap, loadOrgs,
-       panel, gotoPanel, pendingFeedbackId, openFeedback, consumeFeedback])
+       panel, gotoPanel, pendingFeedbackId, openFeedback, consumeFeedback,
+       inviteEnabled, loadInviteEnabled])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

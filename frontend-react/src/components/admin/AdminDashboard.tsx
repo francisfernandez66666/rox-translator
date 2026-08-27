@@ -19,6 +19,7 @@ import { UsersP, AlertsP, AuditP, UsageP, InvitesP, AgreementsP } from './panels
 import { TenantsP, OrgP } from './panels_b'
 import BrandP from './BrandP'
 import FooterP from './FooterP'
+import MailTplP from './MailTplP'
 import { PlansP, ReferralP, WebhooksP, ApiKeysP } from './panels_c'
 import { KbP, ModelsP, WorkflowP, TicketsP } from './panels_d'
 
@@ -43,6 +44,7 @@ const ITEMS: Item[] = [
   { key: 'agreements', label: 'admin.menuAgreements', minLevel: 2 },
   { key: 'brand', label: 'admin.menuBrand', minLevel: 3 },
   { key: 'footer', label: 'admin.menuFooter', minLevel: 4 },
+  { key: 'mailTpl', label: 'admin.menuMailTpl', minLevel: 4 },
 ]
 
 // 根据当前选中的面板 key 返回对应组件（集中分发，避免在 JSX 中写长 switch）
@@ -66,6 +68,7 @@ function renderPanel(p: PanelKey) {
     case 'agreements': return <AgreementsP />
     case 'brand': return <BrandP />
     case 'footer': return <FooterP />
+    case 'mailTpl': return <MailTplP />
     default: return null
   }
 }
@@ -77,8 +80,12 @@ export default function AdminDashboard() {
   const lang = useLang()
   // 租户级品牌定制
   const branding = useBranding()
-  // 按当前用户等级过滤出可见菜单项
-  const visible = ITEMS.filter((i) => ad.myLevel >= i.minLevel)
+  // 按当前用户等级过滤出可见菜单项；「邀请好友」仅超管或已开通该功能的租户可见
+  const visible = ITEMS.filter((i) => {
+    if (ad.myLevel < i.minLevel) return false
+    if (i.key === 'referral' && !ad.isSuper && !ad.inviteEnabled) return false
+    return true
+  })
 
   return (
     <div className="admin-shell">
@@ -93,12 +100,19 @@ export default function AdminDashboard() {
             <Menu.MenuItem key={i.key} value={i.key}>{t(i.label)}</Menu.MenuItem>
           ))}
         </Menu>
+        {/* 语言切换按钮置于 logo 区域（侧边栏底部，常驻可见） */}
+        <div style={{ marginTop: 'auto', padding: '10px 10px 0' }}>
+          <Button size="small" variant="outline" block onClick={toggleLang}>{lang === 'zh' ? 'EN' : '中文'}</Button>
+        </div>
       </aside>
 
       {/* 主内容区：顶部工具栏 + 当前面板 */}
       <main className="admin-main">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-          {/* 超管专属：平台标识与租户切换器 */}
+          {/* 右侧占位，把管理范围标签与租户切换器推到 admin 下拉菜单左侧 */}
+          <div style={{ flex: 1 }} />
+          <Bell />
+          {/* 超管专属：平台标识与租户切换器（置于 admin 下拉左侧） */}
           {ad.isSuper && (
             <>
               <Tag theme="primary" variant="light">{t('admin.tagPlatformAdmin')}</Tag>
@@ -118,10 +132,6 @@ export default function AdminDashboard() {
           {/* 非超管时显示当前管理范围标签 */}
           {!ad.isSuper && ad.myLevel >= 3 && <Tag theme="primary" variant="light">{t('admin.tagCompany')}</Tag>}
           {ad.myLevel === 2 && <Tag variant="light">{t('admin.tagDept')}</Tag>}
-          {/* 右侧占位，把后续操作按钮推到最右 */}
-          <div style={{ flex: 1 }} />
-          <Bell />
-          <Button size="small" variant="text" onClick={toggleLang}>{lang === 'zh' ? 'EN' : '中文'}</Button>
           <AccountMenu showWorkbench onGotoWorkbench={() => {
             window.history.pushState({}, '', '/')
             window.dispatchEvent(new PopStateEvent('popstate'))

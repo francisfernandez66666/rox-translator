@@ -13,6 +13,7 @@ package mail
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"net/smtp"
@@ -21,9 +22,17 @@ import (
 
 // Message 邮件消息结构。
 type Message struct {
-	To      string // 收件人邮箱
-	Subject string // 邮件主题
-	Body    string // 邮件正文（纯文本）
+	To         string       // 收件人邮箱
+	CC         string       // 抄送邮箱（可选；SMTP 发送时作为 Cc 收件人）
+	Subject    string       // 邮件主题
+	Body       string       // 邮件正文（纯文本）
+	Attachments []Attachment // 附件（可选；存在时以 multipart/mixed 发送）
+}
+
+// Attachment 邮件附件（如产品手册 PDF）。
+type Attachment struct {
+	Name string // 附件文件名（如 产品手册.pdf）
+	Data []byte // 附件二进制内容
 }
 
 // Sender 邮件发送器接口：统一封装各渠道邮件发送。
@@ -64,7 +73,7 @@ func (s *NoopSender) Send(m *Message) error {
 	if m == nil {
 		return fmt.Errorf("nil 消息")
 	}
-	log.Printf("[MAIL-NOOP] To=%s Subject=%s\n%s", m.To, m.Subject, m.Body)
+	log.Printf("[MAIL-NOOP] To=%s CC=%s Subject=%s\n%s", m.To, m.CC, m.Subject, m.Body)
 	return nil
 }
 
@@ -88,13 +97,49 @@ func (s *SMTPSender) Send(m *Message) error {
 	if s.port != "" {
 		addr = s.host + ":" + s.port
 	}
-	// 构造简单纯文本邮件（含 From/To/Subject/Date 头）
-	msg := "From: " + s.from + "\r\n" +
-		"To: " + m.To + "\r\n" +
-		"Subject: " + m.Subject + "\r\n" +
-		"MIME-Version: 1.0\r\n" +
-		"Content-Type: text/plain; charset=UTF-8\r\n" +
-		"\r\n" + m.Body
+	// 构造邮件（含 From/To/Cc/Subject 头）
+	// 主题做 RFC2047 编码（中文主题直接发送会被部分 SMTP 服务端拒收）；
+	// 正文用 base64 传输编码，规避 8bit 非 ASCII 字符问题。
+	// 存在附件时改用 multipart/mixed，文本与附件均为 base64 段。
+	var msg string
+	if len(m.Attachments) == 0 {
+		msg = "From: " + s.from + "\r\n" +
+			"To: " + m.To + "\r\n"
+		if m.CC != "" {
+			msg += "Cc: " + m.CC + "\r\n"
+		}
+		msg += "Subject: " + encodeMIMEHeader(m.Subject) + "\r\n" +
+			"MIME-Version: 1.0\r\n" +
+			"Content-Type: text/plain; charset=UTF-8\r\n" +
+			"Content-Transfer-Encoding: base64\r\n" +
+			"\r\n" + base64.StdEncoding.EncodeToString([]byte(m.Body))
+	} else {
+		const boundary = "MIME_boundary_9f3c2a7b"
+		var sb strings.Builder
+		sb.WriteString("From: " + s.from + "\r\n")
+		sb.WriteString("To: " + m.To + "\r\n")
+		if m.CC != "" {
+			sb.WriteString("Cc: " + m.CC + "\r\n")
+		}
+		sb.WriteString("Subject: " + encodeMIMEHeader(m.Subject) + "\r\n")
+		sb.WriteString("MIME-Version: 1.0\r\n")
+		sb.WriteString("Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n")
+		// 正文段
+		sb.WriteString("--" + boundary + "\r\n")
+		sb.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+		sb.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
+		sb.WriteString(base64.StdEncoding.EncodeToString([]byte(m.Body)) + "\r\n")
+		// 附件段
+		for _, a := range m.Attachments {
+			sb.WriteString("--" + boundary + "\r\n")
+			sb.WriteString("Content-Type: application/pdf\r\n")
+			sb.WriteString("Content-Transfer-Encoding: base64\r\n")
+			sb.WriteString("Content-Disposition: attachment; filename=\"" + a.Name + "\"\r\n\r\n")
+			sb.WriteString(base64.StdEncoding.EncodeToString(a.Data) + "\r\n")
+		}
+		sb.WriteString("--" + boundary + "--\r\n")
+		msg = sb.String()
+	}
 	// ★ 发送通道：465 用隐式 TLS 直连（crypto/tls）；587 用 smtp.SendMail（STARTTLS 自动协商）
 	auth := smtp.PlainAuth("", s.user, s.pass, s.host)
 	if s.port == "465" {
@@ -117,6 +162,11 @@ func (s *SMTPSender) Send(m *Message) error {
 		if aerr := c.Rcpt(m.To); aerr != nil {
 			return fmt.Errorf("设置收件人失败: %w", aerr)
 		}
+		if m.CC != "" {
+			if aerr := c.Rcpt(m.CC); aerr != nil {
+				return fmt.Errorf("设置抄送收件人失败: %w", aerr)
+			}
+		}
 		w, werr := c.Data()
 		if werr != nil {
 			return fmt.Errorf("打开数据通道失败: %w", werr)
@@ -130,7 +180,30 @@ func (s *SMTPSender) Send(m *Message) error {
 		}
 		return c.Quit()
 	}
-	return smtp.SendMail(addr, auth, s.from, []string{m.To}, []byte(msg))
+	rcpts := []string{m.To}
+	if m.CC != "" {
+		rcpts = append(rcpts, m.CC)
+	}
+	return smtp.SendMail(addr, auth, s.from, rcpts, []byte(msg))
+}
+
+// encodeMIMEHeader 对邮件头字段（如 Subject）做 RFC2047 编码：含非 ASCII 字符时
+// 编码为 =?UTF-8?B?...?=，纯 ASCII 原样返回（避免中文主题被部分 SMTP 服务端拒收）。
+func encodeMIMEHeader(s string) string {
+	if isASCII(s) {
+		return s
+	}
+	return "=?UTF-8?B?" + base64.StdEncoding.EncodeToString([]byte(s)) + "?="
+}
+
+// isASCII 判断字符串是否仅含 ASCII 字符。
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }
 
 // BuildVerificationBody 生成密码重置验证码邮件正文（通用）。

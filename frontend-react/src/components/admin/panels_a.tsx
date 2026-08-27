@@ -485,6 +485,7 @@ export function AuditP() {
   )
 }
 
+// 错误提示封装：动态导入 tdesign 的 MessagePlugin.error，规避循环依赖/SSR 问题
 function MessagePluginError(m: string) { void import('tdesign-react').then((M) => M.MessagePlugin.error(m)) }
 
 // ---------------- 用量看板（Vue Usage.vue） ----------------

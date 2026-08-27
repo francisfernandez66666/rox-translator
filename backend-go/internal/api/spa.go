@@ -13,6 +13,7 @@ package api
 // 安全约束：对请求路径做 filepath.Clean 归一化并校验前缀，防止目录穿越（path traversal）。
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -66,8 +67,13 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	// 目标文件不存在或是目录：SPA 路由回退到 index.html（每次重新校验，避免缓存旧 bundle）
 	info, err := os.Stat(full)
 	if err != nil || info.IsDir() {
-		w.Header().Set("Cache-Control", "no-cache")
-		http.ServeFile(w, r, filepath.Join(dist, "index.html"))
+		// SPA 路由回退到 index.html（注入当前域名品牌，消除首屏「先通用后品牌」闪烁）
+		s.serveIndexHTML(w, r, filepath.Join(dist, "index.html"))
+		return
+	}
+	// 入口 HTML（index.html）：注入当前访问域名的品牌定制，避免首屏闪烁
+	if filepath.Base(full) == "index.html" {
+		s.serveIndexHTML(w, r, full)
 		return
 	}
 	// 缓存策略：带 hash 的 /assets/ 静态资源可长缓存；index.html 等入口每次重新校验
@@ -77,4 +83,31 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 	}
 	http.ServeFile(w, r, full)
+}
+
+// serveIndexHTML 读取并回退前端入口 HTML，并在 </head> 前注入当前访问域名的品牌定制
+// （window.__BRANDING__），使前端首屏直接采用品牌设计，避免「先通用后品牌」的闪烁。
+func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request, path string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "读取前端入口失败"})
+		return
+	}
+	html := injectBrandingScript(s.brandingPayload(r), string(raw))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write([]byte(html))
+}
+
+// injectBrandingScript 将品牌定制 JSON 注入 HTML 的 </head> 之前（缺省则前置）。
+func injectBrandingScript(payload map[string]interface{}, html string) string {
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return html
+	}
+	script := `<script id="__branding__">window.__BRANDING__=` + string(b) + `;</script>`
+	if i := strings.Index(strings.ToLower(html), "</head>"); i >= 0 {
+		return html[:i] + script + html[i:]
+	}
+	return script + html
 }

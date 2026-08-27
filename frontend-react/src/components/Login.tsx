@@ -35,7 +35,7 @@ export default function Login({ mode, onLogin }: Props) {
   const [view, setView] = useState<'signin' | 'register' | 'forgot'>('signin')
   const [regMsg, setRegMsg] = useState('')
   const [agreed, setAgreed] = useState(false)
-  const [roleChoice, setRoleChoice] = useState<'admin' | 'user'>('admin')
+  const [typeChoice, setTypeChoice] = useState<'personal' | 'enterprise'>('personal')
   const [form, setForm] = useState({ code: '', name: '', invite: '', email: '', emailCode: '', industry: '' })
   const [industries, setIndustries] = useState<Array<{ code: string; name: string }>>([])
   const [emailVerifyOn, setEmailVerifyOn] = useState(false)
@@ -129,27 +129,31 @@ export default function Login({ mode, onLogin }: Props) {
     } else void MessagePlugin.error(r.message || t('pwd.sendFail'))
   }
 
-  // 执行自助注册：逐项校验表单（密码长度、邀请码、邮箱、人机验证）→ 调用注册接口 → 成功后自动登录
+  // 执行自助注册：逐项校验表单（密码长度、企业信息、邮箱、人机验证）→ 调用注册接口 → 成功后自动登录
   async function doRegister() {
     if (!username || !password) { setRegMsg(t('login.needInput')); return }
     if (password.length < 6) { setRegMsg(t('login.pwdShort')); return }
     if (!agreed) { setRegMsg(t('login.needAgree')); return }
-    if (!branding.dedicatedRegister && roleChoice === 'user' && !form.invite.trim()) { setRegMsg(t('login.userNeedsInvite')); return }
-    if (emailVerifyOn && !form.invite.trim() && (!form.emailCode.trim() || !form.email.trim())) { setRegMsg('请填写邮箱并输入验证码'); return }
     if (!form.email.trim()) { setRegMsg(t('login.emailPlaceholder')); return }
+    if (emailVerifyOn && (!form.emailCode.trim() || !form.email.trim())) { setRegMsg('请填写邮箱并输入验证码'); return }
+    if (!branding.dedicatedRegister && typeChoice === 'enterprise' && !form.code.trim()) { setRegMsg(t('login.orgCodeRequired')); return }
+    if (!branding.dedicatedRegister && typeChoice === 'enterprise' && !form.name.trim()) { setRegMsg(t('login.orgNameRequired')); return }
     if (captchaOn && !captchaTokenRef.current) { setRegMsg('请先完成人机验证'); return }
-    const ref = (() => { try { return new URLSearchParams(window.location.search).get('ref')?.trim() || undefined } catch { return undefined } })()
+    const urlRef = (() => { try { return new URLSearchParams(window.location.search).get('ref')?.trim() || undefined } catch { return undefined } })()
+    // 个人用户：好友邀请码经 ref 走邀请裂变；企业用户：公开注册不再凭邀请码加入企业
+    const ref = (!branding.dedicatedRegister && typeChoice === 'personal') ? (form.invite.trim() || urlRef || undefined) : undefined
     setLoading(true); setRegMsg('')
     try {
       const r = await authRegister({
         username, password,
-        code: (branding.dedicatedRegister ? undefined : (form.code || undefined)),
-        name: (branding.dedicatedRegister ? undefined : (form.name || undefined)),
-        invite: (branding.dedicatedRegister ? undefined : (form.invite || undefined)),
+        type: (!branding.dedicatedRegister ? typeChoice : 'enterprise'),
+        code: (!branding.dedicatedRegister && typeChoice === 'enterprise' ? (form.code || undefined) : undefined),
+        name: (!branding.dedicatedRegister && typeChoice === 'enterprise' ? (form.name || undefined) : undefined),
+        invite: undefined,
         email: form.email.trim() || undefined,
         email_code: form.emailCode || undefined,
         captcha_token: captchaTokenRef.current || undefined,
-        industry: (branding.dedicatedRegister ? undefined : (form.industry || undefined)),
+        industry: (!branding.dedicatedRegister && typeChoice === 'enterprise' ? (form.industry || undefined) : undefined),
         ref,
         agreed,
       })
@@ -213,7 +217,7 @@ export default function Login({ mode, onLogin }: Props) {
             ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 108 }} />
             : <span style={{ fontSize: 28, fontWeight: 800 }}>{branding.brandName || branding.tenantName || (mode === 'admin' ? t('login.platformAdmin') : DEFAULT_BRAND_NAME)}</span>}
         </div>
-        <div className="login-sub">{mode === 'admin' ? t('login.adminOnly') : t('login.enterWorkspace')}</div>
+        <div className="login-sub">{mode === 'admin' ? t('login.adminLogin') : t('login.enterWorkspace')}</div>
           <form onSubmit={(e) => e.preventDefault()} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <Input value={username} onChange={setUsername} placeholder={t('login.username')}
                    autocomplete="username" onEnter={doLogin} clearable />
@@ -222,9 +226,9 @@ export default function Login({ mode, onLogin }: Props) {
             {!!error && <div style={{ color: '#c62828', fontSize: 13 }}>{error}</div>}
             <Button block loading={loading} onClick={doLogin}>{t('login.signIn')}</Button>
             <Button block variant="text" onClick={() => setView('forgot')}>{t('login.forgot')}</Button>
-            <Button block variant="text" onClick={() => setView(view === 'register' ? 'signin' : 'register')}>
-              {view === 'register' ? t('login.backToLogin') : t('login.selfRegister')}
-            </Button>
+            {mode === 'home' && (
+              <Button block variant="text" onClick={() => setView('register')}>{t('login.selfRegister')}</Button>
+            )}
           </form>
       </div>
       )}
@@ -233,7 +237,6 @@ export default function Login({ mode, onLogin }: Props) {
       {view === 'register' && mode === 'home' && (
         <div className="login-card">
            <div className="login-logo">{t('login.selfRegisterTitle')}</div>
-           {!branding.dedicatedRegister && <div className="login-sub">{t('login.selfRegisterSub')}</div>}
           {branding.dedicatedRegister ? (
             <div style={{ fontSize: 13, color: '#335', background: '#eef4ff', border: '1px solid #c9ddff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.6 }}>
               {tpl('login.dedicatedInfo', {
@@ -241,12 +244,17 @@ export default function Login({ mode, onLogin }: Props) {
               })}
             </div>
           ) : (
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-              <Button block variant={roleChoice === 'admin' ? 'base' : 'outline'} theme="primary"
-                      onClick={() => setRoleChoice('admin')}>🏢 {t('login.roleAdmin')}</Button>
-              <Button block variant={roleChoice === 'user' ? 'base' : 'outline'} theme="primary"
-                      onClick={() => setRoleChoice('user')}>👤 {t('login.roleUser')}</Button>
-            </div>
+            <>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                <Button block variant={typeChoice === 'personal' ? 'base' : 'outline'} theme="primary"
+                        onClick={() => setTypeChoice('personal')}>👤 {t('login.personalUser')}</Button>
+                <Button block variant={typeChoice === 'enterprise' ? 'base' : 'outline'} theme="primary"
+                        onClick={() => setTypeChoice('enterprise')}>🏢 {t('login.enterpriseUser')}</Button>
+              </div>
+              <div className="login-sub" style={{ marginBottom: 12 }}>
+                {typeChoice === 'personal' ? t('login.personalRegisterSub') : t('login.enterpriseRegisterSub')}
+              </div>
+            </>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <Input value={username} onChange={setUsername} placeholder={t('login.username')} />
@@ -261,7 +269,8 @@ export default function Login({ mode, onLogin }: Props) {
                 </Button>
               </div>
             )}
-            {roleChoice === 'admin' && !branding.dedicatedRegister ? (
+            {/* 企业用户：填写企业信息（公开注册合并原「管理员/普通用户」为单一企业注册，注册人成为企业管理员） */}
+            {typeChoice === 'enterprise' && !branding.dedicatedRegister ? (
               <>
                 <Input value={form.code} onChange={(v) => setForm({ ...form, code: v })} placeholder={t('login.orgCode')} />
                 <Input value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder={t('login.orgName')} />
@@ -270,11 +279,14 @@ export default function Login({ mode, onLogin }: Props) {
                         options={industries.map((i) => ({ label: i.name, value: i.code }))} />
               </>
             ) : null}
-            {/* 邀请码：user 必填；admin 可选（个人裂变码走 URL ?ref= 自动携带）；专属域名场景不展示 */}
-            {!branding.dedicatedRegister && (
-              <Input value={form.invite} onChange={(v) => setForm({ ...form, invite: v })}
-                     placeholder={roleChoice === 'user' ? t('login.inviteRequired') : t('login.invite')} />
-            )}
+            {/* 个人用户：好友邀请码（选填）——邀请人将获得试用 token */}
+            {typeChoice === 'personal' && !branding.dedicatedRegister ? (
+              <>
+                <Input value={form.invite} onChange={(v) => setForm({ ...form, invite: v })}
+                       placeholder={t('login.friendInvite')} />
+                <div style={{ fontSize: 12, color: '#8893a5', marginTop: -4 }}>{t('login.friendInviteHint')}</div>
+              </>
+            ) : null}
             <div ref={captchaBoxRef} id="__ts_widget__" />
             <Checkbox checked={agreed} onChange={(c) => setAgreed(!!c)}>
               {t('login.agreeTerms')}{' '}
@@ -284,6 +296,7 @@ export default function Login({ mode, onLogin }: Props) {
             </Checkbox>
             {!!regMsg && <div style={{ color: '#c62828', fontSize: 13 }}>{regMsg}</div>}
             <Button block loading={loading} onClick={doRegister}>{t('login.registerAndLogin')}</Button>
+            <Button block variant="text" onClick={() => setView('signin')}>{t('login.backToLogin')}</Button>
           </div>
         </div>
       )}
@@ -307,6 +320,9 @@ export default function Login({ mode, onLogin }: Props) {
               </>
             )}
             <Button block variant="text" onClick={closeForgot}>{t('login.backToLogin')}</Button>
+            {mode === 'home' && (
+              <Button block variant="text" onClick={() => { closeForgot(); setView('register') }}>{t('login.selfRegister')}</Button>
+            )}
           </div>
         </div>
       )}
@@ -320,11 +336,11 @@ export default function Login({ mode, onLogin }: Props) {
         <BrandBgLayer src={branding.brandHomeBg} styleJson={branding.brandHomeBgStyle} />
       </div>
     )
-    const formPanel = (
-      <div style={{ flex: 1, position: 'relative', background: '#eef1f8', padding: 24, minHeight: '100vh' }}>
-        <div style={{ position: 'absolute', left: `${cardPos.x}%`, top: `${cardPos.y}%`, transform: 'translate(-50%,-50%)', zIndex: 2, width: '100%', maxWidth: 400, padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>{cards}</div>
-      </div>
-    )
+      const formPanel = (
+        <div style={{ flex: 1, position: 'relative', background: '#eef1f8', padding: 24, minHeight: '100vh' }}>
+          <div style={{ position: 'absolute', left: `${cardPos.x}%`, top: `${cardPos.y}%`, transform: 'translate(-50%,-50%)', zIndex: 2, width: '100%', maxWidth: 400, maxHeight: '100vh', overflowY: 'auto', padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>{cards}</div>
+          </div>
+      )
     return (
       <div className="login-wrap" style={{ position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'row', alignItems: 'stretch' }}>
         {layout.side === 'left' ? (<>{formPanel}{imgPanel}</>) : (<>{imgPanel}{formPanel}</>)}
@@ -336,7 +352,7 @@ export default function Login({ mode, onLogin }: Props) {
   return (
     <div className="login-wrap" style={{ position: 'relative', overflow: 'hidden' }}>
       <BrandBgLayer src={branding.brandHomeBg} styleJson={branding.brandHomeBgStyle} />
-      <div style={{ position: 'absolute', left: `${cardPos.x}%`, top: `${cardPos.y}%`, transform: 'translate(-50%,-50%)', zIndex: 2, width: '100%', maxWidth: 400, padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ position: 'absolute', left: `${cardPos.x}%`, top: `${cardPos.y}%`, transform: 'translate(-50%,-50%)', zIndex: 2, width: '100%', maxWidth: 400, maxHeight: '100vh', overflowY: 'auto', padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {cards}
       </div>
     </div>

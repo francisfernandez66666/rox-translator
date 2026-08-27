@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"translator/internal/auth"
-	"translator/internal/mail"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -78,7 +77,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		EmailCode  string `json:"email_code"`    // 邮箱验证码（email_verify_enabled=1 时必填）
 		Captcha    string `json:"captcha_token"` // 人机验证 token（captcha_provider=turnstile 时必填）
 		Industry   string `json:"industry"`      // 所属行业（新租户注册时必填，来自行业包 code）
-		RoleChoice string `json:"role_choice"`   // 角色选择：admin=我是管理员(建企业) / user=我是普通用户(邀请码加入)
+		RoleChoice string `json:"role_choice"`   // 角色选择（兼容旧客户端）：admin=我是管理员(建企业) / user=我是普通用户(邀请码加入)
+		Type       string `json:"type"`          // 注册类型：personal=个人用户 / enterprise=企业用户（默认）
 		Ref        string `json:"ref"`           // 个人邀请码（可选，邀请裂变：?ref=<个人码> 链接携带）
 		// ★ 协议签署（2026-08-27 需求）：注册即视为同意《用户协议》与《隐私协议》，
 		//   前端注册表单须勾选后方可提交；勾选时 agreed=true 并随注册写入签署时间。
@@ -174,25 +174,32 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	// ★ 角色选择（四期体验增强）：
-	//   admin（默认，兼容旧客户端）= 创建新企业并成为租户管理员；
-	//   user = 必须凭有效邀请码加入已有企业成为普通用户。
-	//   专属域名场景（dedicatedTid>0）忽略角色选择：强制为普通用户、自动归入该企业。
+	// ★ 注册类型（个人用户 / 企业用户）：
+	//   personal = 个人用户：自动建个人租户，好友邀请码经 ref 走邀请裂变（个人用户默认可获奖励）；
+	//   enterprise（默认，兼容旧客户端）= 合并原「管理员/普通用户」为单一企业注册，注册人成为企业管理员。
+	//   专属域名场景（dedicatedTid>0）忽略类型选择：强制为普通用户、自动归入该企业。
+	creatingPersonal := false
 	if dedicatedTid == 0 {
-		switch strings.ToLower(strings.TrimSpace(req.RoleChoice)) {
-		case "user":
-			if req.Invite == "" {
-				writeJSON(w, 400, map[string]interface{}{"success": false,
-					"message": "普通用户注册需通过邀请码加入企业；如需创建企业请选择「我是管理员」"})
-				return
+		switch strings.ToLower(strings.TrimSpace(req.Type)) {
+		case "personal":
+			// 个人用户：公开注册不凭企业邀请码加入；好友邀请码经 ref 处理
+			req.Invite = ""
+			creatingPersonal = true
+			// 自动生成个人租户编码/名称（前端不填企业信息）
+			req.Code = fmt.Sprintf("p_%d", time.Now().UnixNano())
+			if req.Name == "" {
+				req.Name = req.Username
 			}
-		case "admin":
-			req.Invite = "" // 管理员路径不接受邀请码混入（避免语义冲突降级为普通用户）
+			if req.Name == "" {
+				req.Name = "个人用户"
+			}
+		default: // enterprise
+			// 企业用户：公开注册不再凭邀请码加入；注册人成为企业管理员
+			req.Invite = ""
 		}
 	}
-	// 专属域名：自动归入对应租户、强制普通用户、忽略邀请码与角色选择
+	// 专属域名：自动归入对应租户、强制普通用户、忽略邀请码与类型选择
 	if dedicatedTid > 0 {
-		req.RoleChoice = "user"
 		req.Invite = ""
 		inviteTenantID = dedicatedTid
 	}
@@ -283,6 +290,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// 个人用户租户标记（企业用户默认 is_personal=0，无需额外处理）。
+	// 个人用户默认可参与邀请好友奖励；企业用户默认不参与（见下方 ref 奖励门禁）。
+	if creatingPersonal && inviteTenantID > 0 {
+		_ = s.Ten.SetPersonal(inviteTenantID, true)
+	}
 
 	// 3. 创建账号：独立租户 → tenant_admin；受邀加入 → user；专属域名 → 强制普通用户
 	role := store.RoleTenantAdmin
@@ -315,6 +327,24 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		_ = s.Store.SetUserEmail(nu.ID, inviteTenantID, strings.TrimSpace(req.Email))
 		nu.Email = strings.TrimSpace(req.Email)
 	}
+	// ★ 注册成功自动发送《产品手册》PDF 邮件（个人/企业用户均发送；用 info 专用邮箱，附件为手册 PDF）
+	if req.Email != "" {
+		go func(to, uname string) {
+			_ = s.sendManualEmail(to, uname)
+		}(strings.TrimSpace(req.Email), req.Username)
+	}
+	// ★ 企业注册提醒（需求 2026-08-27）：企业用户注册成功后，向注册人发送欢迎邮件
+	//   并抄送运营邮箱（抄送地址由邮件模板 enterprise_reg 控制，默认 575160894@qq.com）建联。
+	//   仅「新建企业（非个人、非受邀加入、非专属域名）」触发；个人用户不抄送。
+	if !creatingPersonal && dedicatedTid == 0 && req.Invite == "" && req.Email != "" {
+		go func(to, name, username string) {
+			_ = s.sendTemplatedMail(to, "enterprise_reg", map[string]string{
+				"name":     name,
+				"username": username,
+				"email":    to,
+			})
+		}(strings.TrimSpace(req.Email), req.Name, req.Username)
+	}
 	// ★ 新租户默认 API Key（2026-08-26 冒烟修复）：移到建号之后签发并强绑定创建人——
 	//   原「先发 Key 后建号」产生 user_id=0 的孤儿 Key，被 authenticateAPIKey
 	//   「Key 必须归属用户」闸门拦截，新注册租户的 Key 要重启服务（backfill）后才生效。
@@ -327,34 +357,44 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	//   ★ 总开关门禁（2026-08-26 U3）：referral_enabled=0 时跳过绑定与奖励发放
 	if strings.TrimSpace(req.Ref) != "" && s.Store.ReferralEnabled() {
 		if inviterUID, inviterTID, ok := s.Store.BindReferral(nu.ID, nu.TenantID, strings.TrimSpace(req.Ref)); ok {
-			refTokens := int64(300000)
-			if v, _ := s.Store.GetConfig("invite_reward_tokens"); v != "" {
-				if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
-					refTokens = x
-				}
+			// ★ 需求 2026-08-27：企业用户默认不参与邀请好友奖励；仅个人用户邀请人可获奖励。
+			inviterPersonal := false
+			if it, ie := s.Ten.GetByID(inviterTID); ie == nil {
+				inviterPersonal = it.IsPersonal
 			}
-			refDays := 14
-			if v, _ := s.Store.GetConfig("invite_extend_days"); v != "" {
-				if x, e := strconv.Atoi(v); e == nil && x > 0 {
-					refDays = x
-				}
-			}
-			// ★ 整改 A5：单邀请人日发放上限（referral_max_daily_rewards，默认 50 笔）——
-			//   把「换 IP 自邀刷奖励」的损失上限钉死为可配置常数；触顶升 critical 告警拒发。
-			//   配套 U3 总开关（referral_enabled=0 全量停发）构成两级防薅。
-			maxDaily := int64(50)
-			if v, _ := s.Store.GetConfig("referral_max_daily_rewards"); v != "" {
-				if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
-					maxDaily = x
-				}
-			}
-			if n := s.Store.CountInviterRewardsToday(inviterUID); n >= maxDaily {
-				s.Store.CreateAlert(inviterTID, "critical", "referral_cap",
-					fmt.Sprintf("邀请人 uid=%d 今日奖励已达上限 %d 笔，本笔(+%d token/%d天)已拒发，请人工核实",
-						inviterUID, maxDaily, refTokens, refDays))
+			if !inviterPersonal {
+				s.Store.LogAudit(inviteTenantID, nu.ID, "referral_bind", "user",
+					fmt.Sprintf("受邀绑定邀请人 uid=%d（企业用户，不参与邀请奖励）", inviterUID))
 			} else {
-				_ = s.Store.GrantTrialStack(inviterUID, inviterTID, nu.ID, refTokens, refDays)
-				s.Store.LogAudit(inviteTenantID, nu.ID, "referral_bind", "user", fmt.Sprintf("受邀绑定邀请人 uid=%d", inviterUID))
+				refTokens := int64(300000)
+				if v, _ := s.Store.GetConfig("invite_reward_tokens"); v != "" {
+					if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+						refTokens = x
+					}
+				}
+				refDays := 14
+				if v, _ := s.Store.GetConfig("invite_extend_days"); v != "" {
+					if x, e := strconv.Atoi(v); e == nil && x > 0 {
+						refDays = x
+					}
+				}
+				// ★ 整改 A5：单邀请人日发放上限（referral_max_daily_rewards，默认 50 笔）——
+				//   把「换 IP 自邀刷奖励」的损失上限钉死为可配置常数；触顶升 critical 告警拒发。
+				//   配套 U3 总开关（referral_enabled=0 全量停发）构成两级防薅。
+				maxDaily := int64(50)
+				if v, _ := s.Store.GetConfig("referral_max_daily_rewards"); v != "" {
+					if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+						maxDaily = x
+					}
+				}
+				if n := s.Store.CountInviterRewardsToday(inviterUID); n >= maxDaily {
+					s.Store.CreateAlert(inviterTID, "critical", "referral_cap",
+						fmt.Sprintf("邀请人 uid=%d 今日奖励已达上限 %d 笔，本笔(+%d token/%d天)已拒发，请人工核实",
+							inviterUID, maxDaily, refTokens, refDays))
+				} else {
+					_ = s.Store.GrantTrialStack(inviterUID, inviterTID, nu.ID, refTokens, refDays)
+					s.Store.LogAudit(inviteTenantID, nu.ID, "referral_bind", "user", fmt.Sprintf("受邀绑定邀请人 uid=%d", inviterUID))
+				}
 			}
 		}
 	}
@@ -478,10 +518,9 @@ func (s *Server) notifyTenantAdmins(tid int64, title, body string) {
 		_ = s.Store.CreateNotification(usr.ID, title, body, "tenant", tid)
 		if emailOn == "1" && usr.Email != "" {
 			go func(to string) {
-				_ = s.mailer().Send(&mail.Message{
-					To:      to,
-					Subject: "【能言】" + title,
-					Body:    body,
+				_ = s.sendTemplatedMail(to, "tenant_notify", map[string]string{
+					"title": title,
+					"body":  body,
 				})
 			}(usr.Email)
 		}

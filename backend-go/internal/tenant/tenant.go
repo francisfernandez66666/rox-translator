@@ -32,6 +32,8 @@ type Tenant struct {
 	BrandLoginCardPos string `json:"brand_login_card_pos"` // 登录/注册卡片位置 JSON：{x,y} 百分比（卡片中心相对于视口）
 	BrandLoginLayout string `json:"brand_login_layout"` // 登录页布局 JSON：{mode:'full'|'split', side:'left'|'right'}
 	BrandLinks   string `json:"brand_links"`   // 自定义页脚链接 JSON 数组（[{label,label_en,url}]）
+	InviteEnabled bool `json:"invite_enabled"` // 是否开通「邀请好友」功能（超管按租户开关；false=对该租户关闭邀请裂变）
+	IsPersonal   bool `json:"is_personal"`    // 是否个人用户租户（true=个人用户；false=企业用户，企业用户默认不参与邀请好友奖励）
 	CreatedAt    string `json:"created_at"`    // 创建时间（RFC3339 字符串）
 	UpdatedAt    string `json:"updated_at"`    // 更新时间（RFC3339 字符串）
 }
@@ -176,11 +178,21 @@ func (s *Store) ensureTable() error {
 			return err
 		}
 	}
+	if !have["invite_enabled"] {
+		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN invite_enabled INTEGER NOT NULL DEFAULT 1"); err != nil {
+			return err
+		}
+	}
+	if !have["is_personal"] {
+		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN is_personal INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // tenantColumns 租户查询统一列清单（与 scanTenant 顺序一致）。
-const tenantColumns = `id, code, name, status, expires_at, permissions, COALESCE(industry,''), COALESCE(brand_name,''), COALESCE(brand_logo,''), COALESCE(domain,''), COALESCE(brand_home_bg,''), COALESCE(brand_home_bg_style,''), COALESCE(brand_login_card_pos,''), COALESCE(brand_login_layout,''), COALESCE(brand_links,''), created_at, updated_at`
+const tenantColumns = `id, code, name, status, expires_at, permissions, COALESCE(industry,''), COALESCE(brand_name,''), COALESCE(brand_logo,''), COALESCE(domain,''), COALESCE(brand_home_bg,''), COALESCE(brand_home_bg_style,''), COALESCE(brand_login_card_pos,''), COALESCE(brand_login_layout,''), COALESCE(brand_links,''), COALESCE(invite_enabled,1), COALESCE(is_personal,0), created_at, updated_at`
 
 // scanner 同时兼容 *sql.Row 与 *sql.Rows 的 Scan 方法。
 type scanner interface{ Scan(dest ...interface{}) error }
@@ -188,7 +200,7 @@ type scanner interface{ Scan(dest ...interface{}) error }
 // scanTenant 从一行中解析租户对象（字段顺序须与 tenantColumns 一致）。
 func scanTenant(s scanner) (*Tenant, error) {
 	var t Tenant
-	if err := s.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.BrandName, &t.BrandLogo, &t.Domain, &t.BrandHomeBg, &t.BrandHomeBgStyle, &t.BrandLoginCardPos, &t.BrandLoginLayout, &t.BrandLinks, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	if err := s.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.BrandName, &t.BrandLogo, &t.Domain, &t.BrandHomeBg, &t.BrandHomeBgStyle, &t.BrandLoginCardPos, &t.BrandLoginLayout, &t.BrandLinks, &t.InviteEnabled, &t.IsPersonal, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
 	t.Status = effectiveStatus(t.Status, t.ExpiresAt)
@@ -342,6 +354,25 @@ func (s *Store) SetStatus(id int64, status string) error {
 	_, err := s.db.Exec(
 		"UPDATE tenants SET status=?, updated_at=? WHERE id=?",
 		status, nowStr(), id)
+	return err
+}
+
+// SetInviteEnabled 设置租户「邀请好友」功能开关（超管按租户控制是否对租户开放邀请裂变）。
+// 参数：id=租户 ID；enabled=true 开通 / false 关闭。
+func (s *Store) SetInviteEnabled(id int64, enabled bool) error {
+	_, err := s.db.Exec(
+		"UPDATE tenants SET invite_enabled=?, updated_at=? WHERE id=?",
+		enabled, nowStr(), id)
+	return err
+}
+
+// SetPersonal 设置租户是否为「个人用户」租户（true=个人用户；false=企业用户）。
+// 个人用户默认可参与邀请好友奖励；企业用户默认不参与。
+// 参数：id=租户 ID；personal=true 标记为个人用户。
+func (s *Store) SetPersonal(id int64, personal bool) error {
+	_, err := s.db.Exec(
+		"UPDATE tenants SET is_personal=?, updated_at=? WHERE id=?",
+		personal, nowStr(), id)
 	return err
 }
 

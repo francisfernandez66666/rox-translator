@@ -37,7 +37,7 @@ export async function authMe(): Promise<LoginResp> {
  * 自助注册：可带邀请码/租户信息/行业/邮箱验证码/人机验证 token。
  * @param data 注册字段（username/password 必填，其余可选；ref 为邀请裂变个人码）
  */
-export async function authRegister(data: { username: string; password: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string; role_choice?: string; ref?: string; agreed?: boolean }): Promise<AdminResp> {
+export async function authRegister(data: { username: string; password: string; type?: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string; role_choice?: string; ref?: string; agreed?: boolean }): Promise<AdminResp> {
   return request('/api/auth/register', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 

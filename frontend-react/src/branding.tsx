@@ -1,5 +1,5 @@
 // branding.tsx — 租户级品牌定制上下文（按域名/租户解析品牌展示信息）
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState, ReactNode } from 'react'
 
 export interface BrandLink {
   label: string    // 中文标签
@@ -101,14 +101,42 @@ export function BrandBgLayer({ src, styleJson }: { src: string; styleJson?: stri
   )
 }
 
+// brandingFromGlobal 读取服务端在 index.html 注入的 window.__BRANDING__（按域名解析，首屏即用，避免闪烁）。
+// 返回 null 表示未注入（如本地开发无注入），此时回退到 DEFAULT 并走异步拉取。
+function brandingFromGlobal(): Branding | null {
+  const g = (window as unknown as { __BRANDING__?: any }).__BRANDING__
+  if (!g || !g.success) return null
+  return {
+    tenantId: g.tenant_id || 0,
+    tenantName: g.name || '',
+    brandName: g.brand_name || '',
+    brandLogo: g.brand_logo || '',
+    domain: g.domain || '',
+    brandHomeBg: g.brand_home_bg || '',
+    brandHomeBgStyle: g.brand_home_bg_style || '',
+    brandLoginCardPos: g.brand_login_card_pos || '',
+    brandLoginLayout: g.brand_login_layout || '',
+    code: g.code || '',
+    industry: g.industry || '',
+    industryName: g.industry_name || '',
+    dedicatedRegister: !!g.dedicated_register,
+  }
+}
+
 // BrandingProvider 在挂载时按访问域名解析品牌。品牌只由「访问域名」决定：根域名永远为平台品牌
 // （能言 LangCross），租户专属子域才显示该租户品牌；登录用户不改写站点品牌，避免根域名误显示租户品牌。
 // 仅当显式传入 tenantId（超管在后台切换租户预览/编辑）时才按指定租户解析。
+// 优化：若服务端已在首屏 index.html 注入 window.__BRANDING__（按 Host 解析），直接作为初值使用，
+// 跳过一次首屏异步拉取，消除「先通用设计、后品牌设计」的闪烁。
 export function BrandingProvider({ tenantId, children }: { tenantId?: number; children: ReactNode }) {
-  const [b, setB] = useState<Branding>(DEFAULT)
+  // 首屏品牌初值：优先使用服务端注入（无闪烁），否则回退 DEFAULT
+  const initial = useMemo(() => brandingFromGlobal(), [])
+  const [b, setB] = useState<Branding>(initial ?? DEFAULT)
   // 解析优先级：显式 tenantId（超管预览）> 按访问域名（后端按 Host 解析，根域名=平台品牌）
   const effectiveTenantId = tenantId ?? 0
   useEffect(() => {
+    // 已注入且为按域名解析（非超管预览指定租户）：直接采用注入值，无需再拉取
+    if (effectiveTenantId <= 0 && initial) return
     let alive = true
     const url = '/api/tenant/branding' + (effectiveTenantId ? `?tenant_id=${effectiveTenantId}` : '')
     fetch(url)

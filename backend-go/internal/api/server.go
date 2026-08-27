@@ -172,6 +172,7 @@ func (s *Server) routesTenant() {
 	s.mux.HandleFunc("/api/tenant/list", s.handleTenantList)
 	s.mux.HandleFunc("/api/tenant/create", s.handleTenantCreate)
 	s.mux.HandleFunc("/api/tenant/update", s.handleTenantUpdate)
+	s.mux.HandleFunc("/api/tenant/invite-enabled", s.handleTenantInviteEnabledGet)
 	s.mux.HandleFunc("/api/tenant/status", s.handleTenantStatus)
 	s.mux.HandleFunc("/api/tenant/delete", s.handleTenantDelete)
 	s.mux.HandleFunc("/api/tenant/export", s.handleTenantExport)
@@ -184,6 +185,7 @@ func (s *Server) routesTenant() {
 	s.mux.HandleFunc("/api/footer-links", s.handleFooterLinksGet)
 	s.mux.HandleFunc("/api/admin/footer-links", s.handleFooterLinksSet)
 	s.mux.HandleFunc("/api/admin/tenants/grant-trial", s.handleGrantTrial)
+	s.mux.HandleFunc("/api/admin/mail-templates", s.handleAdminMailTemplates)
 }
 
 // routesAuth 注册认证与用户管理路由。

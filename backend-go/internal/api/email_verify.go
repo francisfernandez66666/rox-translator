@@ -77,12 +77,8 @@ func (s *Server) sendEmailCode(ip, email string) (bool, string, bool) {
 	emailCodes.mu.Unlock()
 
 	sender := s.mailer()
-	err = sender.Send(&mail.Message{
-		To:      key,
-		Subject: "【能言】注册验证码",
-		Body:    fmt.Sprintf("您好，\n\n您的注册验证码是：%s\n\n该验证码 10 分钟内有效，请勿泄露给他人。\n\n—— 能言", code),
-	})
 	_, isNoop := sender.(*mail.NoopSender)
+	err = s.sendTemplatedMail(key, "register_code", map[string]string{"code": code})
 	if err != nil {
 		return false, "邮件发送失败，请稍后重试", isNoop
 	}

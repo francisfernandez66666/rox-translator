@@ -312,11 +312,7 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	resetCodes.m[u.ID] = resetCode{Code: code, ExpiresAt: time.Now().Add(10 * time.Minute)}
 	resetCodes.Unlock()
 	// 发送邮件（失败不再静默：明确告知用户稍后重试）
-	if serr := s.mailer().Send(&mail.Message{
-		To:      u.Email,
-		Subject: "【能言】密码重置验证码",
-		Body:    mail.BuildVerificationBody(code),
-	}); serr != nil {
+	if serr := s.sendTemplatedMail(u.Email, "reset_code", map[string]string{"code": code}); serr != nil {
 		log.Printf("[mail] 密码重置验证码发送失败 to=%s err=%v", u.Email, serr)
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "邮件发送失败，请稍后重试或联系管理员"})
 		return
@@ -452,6 +448,27 @@ func (s *Server) mailer() mail.Sender {
 		Pass:    os.Getenv("SMTP_PASS"),
 		From:    os.Getenv("SMTP_FROM"),
 	})
+}
+
+// infoMailer 产品手册/欢迎邮件专用发送器（info@lexicorn.cn），凭据取自 INFO_SMTP_* 环境变量。
+// 默认 host/port 走阿里云邮箱；未配置 USER 时退化 Noop（不报错，仅日志缺失）。
+func (s *Server) infoMailer() mail.Sender {
+	host := os.Getenv("INFO_SMTP_HOST")
+	if host == "" {
+		host = "smtp.mxhichina.com"
+	}
+	port := os.Getenv("INFO_SMTP_PORT")
+	if port == "" {
+		port = "465"
+	}
+	user := os.Getenv("INFO_SMTP_USER")
+	pass := os.Getenv("INFO_SMTP_PASS")
+	from := os.Getenv("INFO_SMTP_FROM")
+	if from == "" {
+		from = user
+	}
+	enabled := user != "" && os.Getenv("INFO_SMTP_ENABLED") != "0"
+	return mail.NewSender(&mail.Config{Enabled: enabled, Host: host, Port: port, User: user, Pass: pass, From: from})
 }
 
 // ============ 用户管理（tenant_admin + super_admin） ============

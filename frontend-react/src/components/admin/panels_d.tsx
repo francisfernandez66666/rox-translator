@@ -28,6 +28,7 @@ type Any = Record<string, any>
 const rowStyle: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }
 const rowMt: any = { ...rowStyle, marginTop: 8 }
 const rowTop: any = { ...rowStyle, marginTop: 8, borderTop: '1px dashed #e0e0e0', paddingTop: 10 }
+// 审批结果文本样式：成功显绿、失败显红，统一字号与间距
 const resStyle = (ok: boolean): any => ({ color: ok ? '#1a7f37' : '#c0392b', fontSize: 13, marginTop: 6 })
 const cardStyle: any = { border: '1px solid #e3e6ef', borderRadius: 8, padding: 14, marginBottom: 12 }
 

@@ -27,7 +27,6 @@ import (
 	"strings"
 	"time"
 
-	"translator/internal/mail"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -395,6 +394,10 @@ func (s *Server) notifyAlert(subject, body string) {
 		if to == "" {
 			continue
 		}
-		_ = s.mailer().Send(&mail.Message{To: to, Subject: subject, Body: body})
+		_ = s.sendTemplatedMail(to, "alert", map[string]string{
+			"title":   subject,
+			"content": body,
+			"level":   "warning",
+		})
 	}
 }

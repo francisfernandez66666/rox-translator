@@ -13,6 +13,7 @@ export interface TenantInfo {
   status: string
   expires_at: string
   permissions: string
+  invite_enabled?: boolean // 是否开通「邀请好友」功能（超管按租户开关）
   created_at: string
   updated_at: string
 }
@@ -42,15 +43,20 @@ export async function tenantCreate(
   })
 }
 
-/** 更新租户信息（名称/有效期/权限） */
+/** 更新租户信息（名称/有效期/权限/邀请好友开关） */
 export async function tenantUpdate(
-  data: { id: number; name: string; expires_at: string; permissions: string },
+  data: { id: number; name: string; expires_at: string; permissions: string; invite_enabled?: boolean },
 ): Promise<TenantResp> {
   return request('/api/tenant/update', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(data),
   })
+}
+
+/** 读取当前生效租户的「邀请好友」功能开关（tenant_admin 及以上） */
+export async function tenantInviteEnabledGet(): Promise<{ success: boolean; invite_enabled?: boolean }> {
+  return request('/api/tenant/invite-enabled', { headers: authHeaders() })
 }
 
 /** 启用/停用租户 */

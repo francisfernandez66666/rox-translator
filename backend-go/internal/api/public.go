@@ -40,30 +40,44 @@ func (s *Server) handlePublicPrivacy(w http.ResponseWriter, r *http.Request) {
 }
 
 // publicLayout 公共页面外壳（品牌导航 + 内容区 + 页脚）。
+// 视觉风格统一为「能言」TDesign 设计语言：蓝靛主色、统一圆角、浅底卡片，
+// 与管理后台 / 登录页配色一致（替换原绿色主题）。
 func publicLayout(title, body string) string {
 	return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>` + title + ` - 能言</title>
 <style>
-:root{--green:#2e7d32;--dark:#202124;--gray:#5f6368}
+:root{--brand:#2b3ee8;--brand-hover:#4a5cf0;--brand-active:#1c2bd0;--brand-light:#e7ebff;--text:#1a2233;--text-2:#5a6478;--border:#e3e6ef;--bg:#f4f6fa}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:var(--dark);background:#f5f7fb;line-height:1.7}
-.header{background:var(--green);color:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center}
-.header .brand{font-size:18px;font-weight:600}
-.header a{color:#fff;text-decoration:none;margin-left:18px;font-size:14px}
-.wrap{max-width:900px;margin:32px auto;padding:0 20px}
-.card{background:#fff;border-radius:14px;padding:28px 32px;box-shadow:0 2px 12px rgba(0,0,0,.06)}
-h1{font-size:22px;margin-bottom:8px;color:var(--green)}
-h2{font-size:17px;margin:22px 0 8px;color:var(--green)}
-p{margin:8px 0;color:#333}
-.footer{text-align:center;color:var(--gray);font-size:13px;padding:28px}
-table{width:100%;border-collapse:collapse;margin:14px 0}
-th,td{border:1px solid #e0e0e0;padding:10px 12px;text-align:left;font-size:14px}
-th{background:#e8f5e9;color:var(--green)}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:var(--text);background:var(--bg);line-height:1.75;font-size:15px}
+.header{background:linear-gradient(135deg,#2b3ee8 0%,#1c2bd0 100%);color:#fff;padding:0 24px;display:flex;justify-content:space-between;align-items:center;height:60px;position:sticky;top:0;z-index:20}
+.header .brand{font-size:18px;font-weight:700;letter-spacing:.3px;display:flex;align-items:center;gap:8px}
+.header nav{display:flex;align-items:center;gap:6px}
+.header nav a{color:#fff;text-decoration:none;font-size:14px;padding:6px 12px;border-radius:8px;transition:background .2s}
+.header nav a:hover{background:rgba(255,255,255,.16)}
+.header .btn{background:#fff;color:var(--brand);text-decoration:none;font-size:14px;font-weight:600;padding:7px 16px;border-radius:8px;margin-left:8px;transition:opacity .2s}
+.header .btn:hover{opacity:.88}
+.wrap{max-width:920px;margin:32px auto;padding:0 20px}
+.card{background:#fff;border-radius:12px;padding:32px 36px;box-shadow:0 2px 12px rgba(26,35,126,.06);border:1px solid var(--border)}
+h1{font-size:24px;font-weight:700;margin-bottom:6px;color:var(--brand)}
+.doc-meta{color:var(--text-2);font-size:13px;margin-bottom:8px}
+h2{font-size:18px;font-weight:600;margin:26px 0 10px;padding-left:11px;border-left:4px solid var(--brand);color:var(--text);line-height:1.4}
+h3{font-size:15px;font-weight:600;margin:18px 0 8px;color:var(--text)}
+p{margin:9px 0;color:#2b3145}
+a{color:var(--brand);text-decoration:none}
+a:hover{text-decoration:underline}
+.footer{text-align:center;color:var(--text-2);font-size:13px;padding:28px;line-height:2}
+.footer a{color:var(--text-2);margin:0 6px}
+.footer a:hover{color:var(--brand)}
+hr{border:none;border-top:1px solid var(--border);margin:24px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+th,td{border:1px solid var(--border);padding:10px 12px;text-align:left}
+th{background:var(--brand-light);color:var(--brand-active);font-weight:600}
+.tag{display:inline-block;background:var(--brand-light);color:var(--brand-active);border-radius:999px;padding:2px 12px;font-size:12px;font-weight:500}
 </style></head><body>
-<div class="header"><div class="brand">🌐 能言</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">用户协议 Terms</a><a href="/docs/sla">SLA</a><a href="/status">状态 Status</a><a href="/docs/privacy">隐私协议 Privacy</a></div></div>
+<div class="header"><div class="brand">🌐 能言 LangCross</div><nav><a href="/pricing">定价 Pricing</a><a href="/docs/terms">用户协议 Terms</a><a href="/docs/sla">SLA</a><a href="/status">状态 Status</a><a href="/docs/privacy">隐私协议 Privacy</a><a class="btn" href="/admin">管理后台</a></nav></div>
 <div class="wrap"><div class="card">` + body + `</div></div>
-<div class="footer">© 2026 能言 LangCross · 翻译平台 · <a href="/docs/terms">用户协议</a> · <a href="/docs/privacy">隐私协议</a> · <a href="/status">服务状态</a> · <a href="/admin">管理后台</a></div>
+<div class="footer">© 2026 能言 LangCross · 翻译平台<br><a href="/docs/terms">用户协议</a> · <a href="/docs/privacy">隐私协议</a> · <a href="/status">服务状态</a> · <a href="/admin">管理后台</a></div>
 </body></html>`
 }
 

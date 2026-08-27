@@ -125,6 +125,16 @@ export function TenantsP() {
     await load()
   }
 
+  // 切换租户「邀请好友」功能开关（超管按租户控制是否开放邀请裂变）
+  async function setInvite(tt: TenantInfo, val: boolean) {
+    const r: any = await tenantUpdate({
+      id: tt.id, name: tt.name, expires_at: tt.expires_at || '',
+      permissions: tt.permissions || '{}', invite_enabled: val,
+    })
+    if (!r.success) { window.alert(r.message); return }
+    await load()
+  }
+
   // 为未开通套餐的租户发放试用套餐
   async function grantTrial(tt: TenantInfo) {
     if (!window.confirm(tpl('tenants.grantTrialConfirm', { name: tt.name }))) return
@@ -146,7 +156,10 @@ export function TenantsP() {
                  const label = s === 'active' ? t('tenants.enable') : s === 'disabled' ? t('tenants.disable') : t('tenants.expired')
                  return <Tag theme={s === 'active' ? 'success' : s === 'expired' ? 'warning' : 'default'}>{label}</Tag>
                } },
-               { colKey: 'expires_at', title: t('tenants.colExpires'), width: 120, cell: ({ row }: any) => row.expires_at || t('tenants.forever') },
+                { colKey: 'expires_at', title: t('tenants.colExpires'), width: 120, cell: ({ row }: any) => row.expires_at || t('tenants.forever') },
+                { colKey: 'invite', title: t('tenants.invite'), width: 110, cell: ({ row }: any) => (
+                  <Switch size="small" value={!!row.invite_enabled} onChange={(v: boolean) => { void setInvite(row, v) }} />
+                ) },
                { colKey: 'op', title: t('tenants.colActions'), width: 360, cell: ({ row }: any) => (
                  <Space size={2} breakLine>
                    {!pkgOf(row) && (

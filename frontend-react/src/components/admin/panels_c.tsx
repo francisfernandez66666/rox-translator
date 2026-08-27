@@ -42,6 +42,7 @@ function orderStatusLabel(s: string, t: (k: string) => string): string {
   }
   return m[s] || s
 }
+// 支付/订单状态→TDesign Tag 主题映射（待支付=warning，已支付=success，其余=default）
 function statusTheme(s: string): string {
   return ({ pending: 'warning', paid: 'success', refunded: 'default', cancelled: 'default' } as Record<string, string>)[s] || 'default'
 }
