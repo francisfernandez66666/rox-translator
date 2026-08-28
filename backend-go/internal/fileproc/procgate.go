@@ -9,6 +9,7 @@
 package fileproc
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"runtime"
@@ -50,9 +51,21 @@ func acquireProcGate() func() {
 }
 
 // wrapNice Linux 下以低优先级运行转换子进程；其余平台原样返回。
+// ★ 性能优化（不换库 Phase A2）：低配机器（1G）上 pdf2docx/LibreOffice 一旦内存失控，
+//   会 OOM-kill 抢走 Go 主进程或挂死管道。这里把转换子进程：
+//     - 标记为 OOM 优先受害者（/proc/self/oom_score_adj=1000），内存紧张时操作系统先杀它，
+//       使转换「快速失败」而非拖垮整机；
+//     - 可选硬地址空间上限：设 FILEPROC_RLIMIT_AS_MB（默认关闭）后，超限直接被内核杀掉，
+//       避免 LibreOffice 把整机内存吃满。注意 RLIMIT_AS 含 mmap 映射，LibreOffice 虚拟空间偏大，
+//       故默认不启用，仅当运维明确要硬封顶时打开。
 func wrapNice(bin string, args []string) (string, []string) {
-	if runtime.GOOS == "linux" {
-		return "nice", append([]string{"-n", "10", bin}, args...)
+	if runtime.GOOS != "linux" {
+		return bin, args
 	}
-	return bin, args
+	wrapper := "echo 1000 >/proc/self/oom_score_adj 2>/dev/null; "
+	if mb := os.Getenv("FILEPROC_RLIMIT_AS_MB"); mb != "" {
+		wrapper += fmt.Sprintf("prlimit --as=$((%s*1024*1024)) -- ", mb)
+	}
+	wrapper += "exec \"$@\""
+	return "sh", append([]string{"-c", wrapper, "_", "nice", "-n", "10", bin}, args...)
 }

@@ -10,9 +10,14 @@ package api
 // ========================================
 
 import (
+	"bytes"
+	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
+
+	ledong "github.com/ledongthuc/pdf"
 )
 
 // 翻译文件支持的类型白名单（与 fileproc.ExtractTexts 提取逻辑一致）
@@ -42,7 +47,43 @@ var kbExtWhitelist = map[string]bool{
 const (
 	translateUploadMax = 50 << 20 // 翻译文件 50MB（原 200MB，过大文件易撑爆 1.6G 内存服务器）
 	kbUploadMax        = 20 << 20 // KB 导入 20MB（表格文件通常远小于此）
+
+	// ★ 性能优化（不换库 Phase A1）：PDF 在低配机器（1G 内存）上走 pdf2docx+LibreOffice
+	// 转换极易 OOM/超时。前置拦截：体积或页数超限则直接友好拒绝，提示先转 docx 再上传。
+	pdfUploadSizeLimit = 15 << 20 // 15MB：PDF 转换高峰期容易顶满内存
+	pdfPageHardLimit   = 120       // 120 页：超出建议先转为 docx
 )
+
+// checkPdfLimits 对 PDF 做前置安全拦截：过大或页数过多会在文件转换阶段（pdf2docx+LibreOffice）
+// 触发 OOM / 超时。提前友好拒绝并提示转 docx，避免后台工单卡死。
+// 非 PDF 或无 read 权限/解析失败（加密件等）一律放行，不误伤正常请求。
+func checkPdfLimits(path, filename string) error {
+	if strings.ToLower(filepath.Ext(filename)) != ".pdf" {
+		return nil
+	}
+	if fi, err := os.Stat(path); err == nil && fi.Size() > pdfUploadSizeLimit {
+		return &apiErr{fmt.Sprintf("PDF 文件过大（%.1fMB，上限 %dMB）。低配环境转换容易失败/超时，请先转存 docx 再上传",
+			float64(fi.Size())/1024/1024, pdfUploadSizeLimit/1024/1024)}
+	}
+	n, err := pdfPageCount(path)
+	if err == nil && n > pdfPageHardLimit {
+		return &apiErr{fmt.Sprintf("PDF 页数过多（%d 页，上限 %d 页）。低配环境转换容易失败/超时，请先转存 docx 再上传", n, pdfPageHardLimit)}
+	}
+	return nil
+}
+
+// pdfPageCount 读取 PDF 页数（纯 Go，无需外部依赖）。解析失败返回 error 由调用方放行。
+func pdfPageCount(path string) (int, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	r, err := ledong.NewReader(bytes.NewReader(b), int64(len(b)))
+	if err != nil {
+		return 0, err
+	}
+	return r.NumPage(), nil
+}
 
 // validateUploadExt 校验文件扩展名是否在允许列表内（小写归一化）。
 // 参数 filename: 上传文件名；whitelist: 允许的扩展名集合。

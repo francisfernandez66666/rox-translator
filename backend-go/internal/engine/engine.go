@@ -79,6 +79,13 @@ type cultureEntry struct {
 	ExpiresAt time.Time
 }
 
+// ★ 性能优化（不换库 Phase A4，1G 机器）：进程级缓存封顶，防止长运行无限增长。
+const (
+	cjkCacheScopeMax  = 128    // CJK 分片数上限（超过整代清空，惰性重建）
+	cultureCacheMax   = 4096   // 文化闸门缓存条目上限（超过整代清空）
+	cultureCacheTTL   = 60 * time.Second // 单条有效期（原有语义保留）
+)
+
 // tenantID 从 ctx 取租户 id；未指定时回退默认租户 rox（id=1）
 func (e *Engine) tenantID(ctx context.Context) int64 {
 	if id := tenant.FromContext(ctx); id > 0 {
@@ -370,7 +377,13 @@ func (e *Engine) getCJKCache(scope *kb.PackScope) map[string]int64 {
 			}
 		}
 	}
-	e.cjkCacheByTenant[key] = m
+	// ★ 性能优化（不换库 Phase A4）：分片数封顶，超限整代清空后仅保留本次新建分片，
+	//   防止组织移动/开关切换累积的分片无限增长挤占内存。
+	if len(e.cjkCacheByTenant) >= cjkCacheScopeMax {
+		e.cjkCacheByTenant = map[string]map[string]int64{key: m}
+	} else {
+		e.cjkCacheByTenant[key] = m
+	}
 	return m
 }
 
@@ -1784,7 +1797,13 @@ func (e *Engine) cultureRules(ctx context.Context, tid int64, targetLang string)
 		}
 	}
 	text := sb.String()
-	e.cultureCache[key] = cultureEntry{Text: text, Rules: rules, ExpiresAt: time.Now().Add(60 * time.Second)}
+	// ★ 性能优化（不换库 Phase A4）：条目数封顶，超限整代清空后仅保留本次写入，
+	//   防止不同语言/租户组合随时间无限累积（TTL 仅控制命中、不回收内存）。
+	if len(e.cultureCache) >= cultureCacheMax {
+		e.cultureCache = map[string]cultureEntry{}
+		e.cultureEntries = map[string][]cultureRule{}
+	}
+	e.cultureCache[key] = cultureEntry{Text: text, Rules: rules, ExpiresAt: time.Now().Add(cultureCacheTTL)}
 	e.cultureEntries[key] = rules
 	return text, rules
 }

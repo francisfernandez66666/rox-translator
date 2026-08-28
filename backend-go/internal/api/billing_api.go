@@ -15,7 +15,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -132,17 +131,10 @@ func (s *Server) ChargeUsageRealtime(ctx context.Context, model string, prompt, 
 	if billed < total {
 		billed = total // 系数异常兜底：至少按真实消耗计
 	}
-	// provider 暂无更精确来源时以 model 代填；bizKind/bizMode 留痕用通用值（看板可后续细化）
-	if err := s.Bill.Meter(tid, 0, "translate", model, model, billed, "text", "pro"); err != nil {
-		// ★ 余额耗尽：中止整次翻译任务，避免其余段被供应商免费翻译（白嫖）。
-		// 仅对余额不足精确中止；其余扣费错误（如瞬时 DB 异常）不中止，交由引擎容错。
-		if errors.Is(err, store.ErrInsufficientBalance) {
-			if fn := llm.AbortFromCtx(ctx); fn != nil {
-				fn()
-			}
-		}
-		return err
-	}
+	// ★ 性能优化 B2/B3：实时计量改为批量落库（billing.DefaultSink）。每次 LLM 调用仅追加
+	//   内存缓冲，由后台 flusher 按租户单事务批量扣减+落账，彻底消除并发翻译下的 SQLITE_BUSY。
+	//   余额不足由 sink 内的内存影子余额即时触发 abort（保留「耗尽即停」语义）。
+	billing.RecordUsage(tid, tenant.UserFromContext(ctx), "translate", model, model, billed, "text", "pro", llm.AbortFromCtx(ctx))
 	s.metrics.addUsage(billed)
 	return nil
 }

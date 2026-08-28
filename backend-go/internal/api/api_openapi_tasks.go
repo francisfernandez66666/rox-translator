@@ -294,6 +294,16 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		src.Close()
 		saved = append(saved, struct{ path, name string }{savePath, hdr.Filename})
 	}
+	// ★ 性能优化 Phase A1：PDF 前置拦截（大小/页数），超限直接友好拒绝
+	for _, f := range saved {
+		if perr := checkPdfLimits(f.path, f.name); perr != nil {
+			for _, cleanup := range saved {
+				os.Remove(cleanup.path)
+			}
+			writeTaskError(w, "bad_request", perr.Error())
+			return
+		}
+	}
 	if title == "" {
 		title = "[API] " + saved[0].name
 		if len(saved) > 1 {

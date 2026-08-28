@@ -550,3 +550,18 @@ func FromContext(ctx context.Context) int64 {
 	v, _ := ctx.Value(ctxKey{}).(int64)
 	return v
 }
+
+// userCtxKey 携带发起用户 ID 的私有 context 键（与租户键分离，互不干扰）。
+type userCtxKey struct{}
+
+// WithUser 将发起用户 ID 注入 context（实时计费归属用，2026-08-26 性能优化 B1：
+// 修正此前工单异步路径 user_id 恒为 0、个人/组织用量看板失真的缺陷）。
+func WithUser(ctx context.Context, uid int64) context.Context {
+	return context.WithValue(ctx, userCtxKey{}, uid)
+}
+
+// UserFromContext 从 context 取发起用户 ID；无则返回 0。
+func UserFromContext(ctx context.Context) int64 {
+	v, _ := ctx.Value(userCtxKey{}).(int64)
+	return v
+}

@@ -11,17 +11,39 @@
 # ============================================================================
 set -euo pipefail
 
-BASE="${1:?用法: $0 <base_url> <api_key> [并发数] [任务数]}"
+BASE="${1:?用法: $0 <base_url> <api_key> [并发数] [任务数] [file_mode=text|file] [pdf_path]}"
 KEY="${2:?缺少 api_key}"
 CONC="${3:-4}"
 TOTAL="${4:-8}"
+MODE="${5:-text}"
+PDF="${6:-}"
 
 [ "$TOTAL" -ge "$CONC" ] || { echo "任务数应 ≥ 并发数"; exit 1; }
+if [ "$MODE" = "file" ]; then
+  [ -n "$PDF" ] && [ -f "$PDF" ] || { echo "file 模式需提供第 6 个参数 pdf_path 且文件存在"; exit 1; }
+fi
 
 TEXT="智能驾驶域控制器固件升级已完成，蓝牙钥匙绑定状态同步成功，请提醒用户在下次上车前重新校准迎宾灯语与座椅记忆位置。"
 OUT=/tmp/loadtest_$$; mkdir -p "$OUT"; trap 'rm -rf "$OUT"' EXIT
 
-echo "==> 压测开始 base=$BASE 并发=$CONC 任务数=$TOTAL"
+if [ "$MODE" = "file" ]; then
+  echo "==> 压测开始(文件模式) base=$BASE 并发=$CONC 任务数=$TOTAL pdf=$PDF"
+else
+  echo "==> 压测开始(文本模式) base=$BASE 并发=$CONC 任务数=$TOTAL"
+fi
+
+submit() { # 提交单任务，输出 task_id
+  if [ "$MODE" = "file" ]; then
+    curl -s -X POST "$BASE/openapi/v1/tasks/files" \
+      -H "Authorization: Bearer $KEY" -F "files=@$PDF" -F "target_langs=en" -F "mode=pro" \
+      | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('task_id') or '')"
+  else
+    curl -s -X POST "$BASE/openapi/v1/tasks" \
+      -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+      -d "{\"text\":\"$TEXT\",\"target_langs\":[\"en\"],\"mode\":\"pro\"}" \
+      | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('task_id') or '')"
+  fi
+}
 submit() { # 提交单任务，输出 task_id
   curl -s -X POST "$BASE/openapi/v1/tasks" \
     -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
@@ -72,5 +94,10 @@ if ok:
     print(f"时延秒: min={ok[0]} P50={pct(.5)} P95={pct(.95)} max={ok[-1]} 均值={st.mean(ok):.1f}")
 for f in fail[:5]:
     print("失败样例:", f)
+busy = [f for f in fail if 'busy' in f.lower() or 'database' in f.lower()]
+if busy:
+    print("⚠ 出现数据库忙/SQLITE_BUSY 类失败：", len(busy), "条 —— 并发写优化未达预期")
+else:
+    print("✓ 无数据库忙类失败（并发写优化生效）")
 PY
-echo "==> 压测结束（建议：改造前后各跑一次，同参数对照）"
+echo "==> 压测结束（建议：改造前后各跑一次，同参数对照；file 模式可验证大文件并发下的 SQLITE_BUSY 是否归零）"

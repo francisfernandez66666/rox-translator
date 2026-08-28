@@ -17,12 +17,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
 
 	"translator/internal/api"
 	"translator/internal/auth"
+	"translator/internal/billing"
 	"translator/internal/config"
 	"translator/internal/engine"
 	"translator/internal/evals"
@@ -34,6 +36,12 @@ import (
 
 // main 服务启动入口。
 func main() {
+	// ★ 性能优化（不换库 Phase A3）：低配机器（1G）上给 Go 运行时的软内存上限留足余量给
+	//   文档转换子进程（pdf2docx/LibreOffice）。未显式设置 GOMEMLIMIT 时默认 650Mi，
+	//   部署可经环境变量覆盖（见 deploy/systemd/prod.conf）。
+	if os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(650 << 20)
+	}
 	// 命令行参数：监听地址、前端静态目录、KB 向量索引与 KB 缓存库路径
 	addr := flag.String("addr", ":8787", "HTTP 监听地址")
 	frontend := flag.String("frontend", "", "前端 dist 目录（默认相对路径 ./frontend/dist）")
@@ -240,6 +248,10 @@ func main() {
 	// 覆盖即时翻译 / 翻译工单 / OpenAPI 三类入口，杜绝后置计费被取消绕过的白嫖。
 	eng.LLM.OnUsage = srv.ChargeUsageRealtime
 
+	// ★ 性能优化 B2/B3：启动实时计量批量落库（把逐 LLM 调用的写事务合并为周期批量），
+	//   彻底消除并发翻译下的 SQLITE_BUSY。
+	billing.InitGlobalSink(srv.Bill)
+
 	log.Printf("能言 v2.0.0-go 服务已启动: http://localhost%s", *addr)
 	s := &http.Server{
 		Addr:              *addr,
@@ -254,6 +266,7 @@ func main() {
 		signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 		sig := <-quit
 		log.Printf("收到退出信号 %v，正在优雅停机…", sig)
+		billing.DefaultSink.Stop() // ★ 性能优化 B2/B3：停机前完成最终批量落库
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := s.Shutdown(ctx); err != nil {

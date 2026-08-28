@@ -205,7 +205,102 @@ func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model string,
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	s.incrementDailyUsage(tid, cost) // ★ 性能优化 B6：同步累加日计数器
 	return res.LastInsertId()
+}
+
+// UsageBatchRow 批量计量单行输入（性能优化 B2）。
+type UsageBatchRow struct {
+	UserID   int64
+	TaskType string
+	Provider string
+	Model    string
+	Quantity int64
+	BizKind  string
+	BizMode  string
+}
+
+// RecordUsageBatch 单事务批量扣减+多行落账（性能优化 B2 核心）：把数十~上千次逐 LLM 调用的
+// 写事务合并为「每租户每刷新周期一次写事务」，彻底消除并发翻译下的 SQLITE_BUSY。
+// 先按各行单价/倍率汇总 cost，单次 deductWithGrantsTx 扣减全部，再循环多行 INSERT ledger；
+// 余额不足整体回滚。返回首个插入行 id。
+func (s *Store) RecordUsageBatch(tid int64, rows []UsageBatchRow) (int64, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	type priced struct {
+		UsageBatchRow
+		price int64
+		cost  int64
+	}
+	pricedRows := make([]priced, 0, len(rows))
+	var sumCost int64
+	for _, r := range rows {
+		price, mult := s.unitPrice(r.TaskType, r.Provider)
+		cost := int64(float64(r.Quantity*price) * mult)
+		if cost < 0 {
+			cost = 0
+		}
+		sumCost += cost
+		pricedRows = append(pricedRows, priced{r, price, cost})
+	}
+	tx, err := s.db.Begin() // DSN _txlock=immediate ⇒ BEGIN IMMEDIATE
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if err := deductWithGrantsTx(tx, tid, sumCost); err != nil {
+		return 0, err // 余额不足整体回滚
+	}
+	const insertSQL = "INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+	var firstID int64
+	for i, pr := range pricedRows {
+		res, e := tx.Exec(insertSQL,
+			tid, pr.UserID, pr.TaskType, pr.Provider, pr.Model, pr.Quantity, pr.price, pr.cost, pr.BizKind, pr.BizMode, time.Now().Format(time.RFC3339))
+		if e != nil {
+			return 0, e
+		}
+		if i == 0 {
+			firstID, _ = res.LastInsertId()
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	s.incrementDailyUsage(tid, sumCost) // ★ 性能优化 B6：同步累加日计数器
+	return firstID, nil
+}
+
+// LogUsageBatch 仅记录用量、不扣余额的批量版（billing 未强制计费时用于留痕计量）。
+// 单事务多行 INSERT。
+func (s *Store) LogUsageBatch(tid int64, rows []UsageBatchRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	const insertSQL = "INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var sumCost int64
+	for _, r := range rows {
+		price, mult := s.unitPrice(r.TaskType, r.Provider)
+		cost := int64(float64(r.Quantity*price) * mult)
+		if cost < 0 {
+			cost = 0
+		}
+		if _, e := tx.Exec(insertSQL,
+			tid, r.UserID, r.TaskType, r.Provider, r.Model, r.Quantity, price, cost, r.BizKind, r.BizMode, time.Now().Format(time.RFC3339)); e != nil {
+			return e
+		}
+		sumCost += cost
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.incrementDailyUsage(tid, sumCost) // ★ 性能优化 B6：同步累加日计数器
+	return nil
 }
 
 // LogUsage 只记录用量、不扣余额（billing 未强制计费时用于留痕计量）。
@@ -219,6 +314,9 @@ func (s *Store) LogUsage(tid, userID int64, taskType, provider, model string, qu
 	_, err := s.db.Exec(
 		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
 		tid, userID, taskType, provider, model, quantity, price, cost, bizKind, bizMode, time.Now().Format(time.RFC3339))
+	if err == nil {
+		s.incrementDailyUsage(tid, cost) // ★ 性能优化 B6：同步累加日计数器
+	}
 	return err
 }
 
@@ -371,9 +469,26 @@ func (s *Store) UsageLedgerList(tid int64, limit, offset int) ([]*UsageLedger, e
 func (s *Store) DailyUsage(tid int64) (int64, error) {
 	day := time.Now().Format("2006-01-02")
 	var cost int64
-	// 用 LIKE 前缀匹配当日所有记录（created_at 以 日期 开头）
+	// ★ 性能优化 B6：优先读日计数器表（O(1) 命中主键），避免每次翻译请求都对 usage_ledger
+	//   做 created_at LIKE 全表扫描（gateUsage→CheckDailyQuota 每请求一次）。
+	if err := s.db.QueryRow("SELECT COALESCE(SUM(total),0) FROM usage_daily WHERE tenant_id=? AND day=?", tid, day).Scan(&cost); err == nil {
+		return cost, nil
+	}
+	// 兜底（表缺失/无当日行）：回退 ledger 当日 LIKE 扫描
 	err := s.db.QueryRow("SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at LIKE ?", tid, day+"%").Scan(&cost)
 	return cost, err
+}
+
+// incrementDailyUsage 落账时增量更新日计数器（性能优化 B6）。
+func (s *Store) incrementDailyUsage(tid, amount int64) {
+	if amount <= 0 {
+		return
+	}
+	day := time.Now().Format("2006-01-02")
+	_, _ = s.db.Exec(
+		`INSERT INTO usage_daily (tenant_id, day, total) VALUES (?,?,?)
+		 ON CONFLICT(tenant_id, day) DO UPDATE SET total=total+?`,
+		tid, day, amount, amount)
 }
 
 // UsageByUser 个人用量汇总（普通用户个人级看板）：按用户统计当日/累计费用与句数。

@@ -16,8 +16,12 @@ import (
 	"translator/internal/kb"
 )
 
-// embedCacheMax 缓存条目上限（1024 维 float32 ≈ 4KB/条，2 万条约 80MB——1.6G 机器可承受）。
-const embedCacheMax = 20000
+// embedCacheMax 缓存条目上限（性能优化 Phase A4，1G 机器收紧）：1024 维 float32 ≈ 4KB/条，
+// 1 万条约 40MB，配合 genMB 总字节上限，确保 GOMEMLIMIT=650Mi 下仍有余量给转换子进程。
+const embedCacheMax = 10000
+// embedCacheMaxBytes 整代累计写入字节上限（性能优化 Phase A4）：超过则整代清空，
+// 防止大词汇量语料把嵌入缓存撑到百 MB 级。
+const embedCacheMaxBytes = 200 << 20
 
 // embedStore 进程级嵌入缓存（超限整代清空，避免 LRU 复杂度；命中率场景下足够）。
 type embedStore struct {
@@ -46,7 +50,7 @@ func getCachedEmbed(zh string) ([]float32, bool) {
 func putCachedEmbed(zh string, vec []float32) {
 	globalEmbeds.mu.Lock()
 	defer globalEmbeds.mu.Unlock()
-	if len(globalEmbeds.m) >= embedCacheMax || int64(len(vec))*4 > (1<<30)-globalEmbeds.genMB {
+	if len(globalEmbeds.m) >= embedCacheMax || globalEmbeds.genMB+int64(len(vec))*4 > embedCacheMaxBytes {
 		globalEmbeds.m = map[string][]float32{}
 		globalEmbeds.genMB = 0
 	}

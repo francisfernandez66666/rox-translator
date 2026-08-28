@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"translator/internal/iam"
 
@@ -175,6 +176,16 @@ func (s *Store) migrate() error {
 		)`,
 		// 按租户+时间查询用量的索引
 		`CREATE INDEX IF NOT EXISTS idx_usage_tenant ON usage_ledger(tenant_id, created_at)`,
+		// ★ 性能优化 B6：日用量计数器表——替代每次翻译请求都对 usage_ledger 做
+		//   created_at LIKE 全表扫描（gateUsage→CheckDailyQuota→DailyUsage）。
+		//   落账时增量更新，查询 O(1) 命中主键。
+		`CREATE TABLE IF NOT EXISTS usage_daily (
+			tenant_id INTEGER NOT NULL DEFAULT 1,
+			day TEXT NOT NULL,
+			total INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY(tenant_id, day)
+		)`,
+		// ★ 性能优化 B7 索引在补列迁移后统一创建（避免引用尚未存在的列），见下方 migrate 尾部。
 		// ---------- rate_card 单价表 ----------
 		`CREATE TABLE IF NOT EXISTS rate_card (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -511,7 +522,26 @@ func (s *Store) migrateColumns() error {
 			}
 		}
 	}
+	// ★ 性能优化 B6：部署当日若 usage_daily 尚无当日行，从 usage_ledger 兜底回填当日计数，
+	//   避免「切换前已产生的当日用量」丢失；覆盖写（非累加）保证幂等，后续启动因已有当日行而跳过。
+	s.backfillDailyUsage()
+	// ★ 性能优化 B7：补列迁移完成后再建联合索引（引用 org_id 等后加列，否则建表期报错）
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_users_tenant_org ON users(tenant_id, org_id)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_tenant_user ON usage_ledger(tenant_id, user_id, created_at)`)
 	return nil
+}
+
+// backfillDailyUsage 部署当日日计数器兜底回填（性能优化 B6）。
+func (s *Store) backfillDailyUsage() {
+	today := time.Now().Format("2006-01-02")
+	var cnt int64
+	if err := s.db.QueryRow("SELECT COUNT(1) FROM usage_daily WHERE day=?", today).Scan(&cnt); err != nil || cnt > 0 {
+		return // 已有当日行：跳过
+	}
+	_, _ = s.db.Exec(`INSERT INTO usage_daily (tenant_id, day, total)
+		SELECT tenant_id, substr(created_at,1,10) AS day, COALESCE(SUM(cost),0)
+		FROM usage_ledger WHERE substr(created_at,1,10)=? GROUP BY tenant_id
+		ON CONFLICT(tenant_id, day) DO UPDATE SET total=excluded.total`, today)
 }
 
 // seedRateCard 初始化默认单价表（幂等）。

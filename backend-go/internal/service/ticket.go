@@ -158,6 +158,13 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	// （eng.LLM.OnUsage）靠 tenant.FromContext 取租户扣费，必须显式注入，
 	// 否则 tid=0 不计费（白嫖）。t.TenantID 同时覆盖 OpenAPI 任务归属租户。
 	ctx = tenant.WithTenant(ctx, t.TenantID)
+	// ★ 性能优化 B1：注入发起用户到 ctx，修正实时计量 user_id 恒为 0 的缺陷
+	//   （个人/组织用量看板此前失真）。OpenAPI 任务回退其归属用户 APIUserID。
+	if t.CreatedBy > 0 {
+		ctx = tenant.WithUser(ctx, t.CreatedBy)
+	} else if t.APIUserID > 0 {
+		ctx = tenant.WithUser(ctx, t.APIUserID)
+	}
 	// ★ 注入创建人组织（2026-08-26 KB继承链）：异步工单按「发起用户当前所在部门」
 	//   的祖先链决定部门包可见范围；OpenAPI 任务（CreatedBy=0）回退其归属用户 APIUserID。
 	creatorUID := t.CreatedBy
@@ -290,10 +297,13 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	return nil
 }
 
-// chargeTokens 工单级 Token 实费扣费：读取 ctx 收集器累计的真实 token × 均摊系数。
-// 强制计费关闭时仅留痕。扣减失败写 critical 告警（欠费跟进），不阻断完成态。
+// chargeTokens 工单级 Token 实费展示回填：读取 ctx 收集器累计的真实 token。
+// ★ 性能优化 B1（修双重计费资损）：实时计量钩子（eng.LLM.OnUsage → ChargeUsageRealtime）
+//   已是唯一扣费来源，每次 LLM 调用即扣减并支持余额不足中止；本函数**不再二次扣费**，
+//   仅回填展示用的真实 token 数（TokensBilled）。强制计费开关仅影响实时路径是否落账，
+//   与这里无关。
 func (s *TicketService) chargeTokens(ctx context.Context, t *store.Ticket) int64 {
-	if s.Bill == nil || s.Engine == nil || s.Store == nil {
+	if s.Engine == nil {
 		return 0
 	}
 	prompt, completion := s.Engine.UsageTokens(ctx)
@@ -301,27 +311,7 @@ func (s *TicketService) chargeTokens(ctx context.Context, t *store.Ticket) int64
 	if total <= 0 {
 		return 0 // 无 LLM 调用（纯 KB 命中等）
 	}
-	m := 1.5 // 默认均摊系数
-	if v, _ := s.Store.GetConfig("billing_markup_multiplier"); v != "" {
-		if f, perr := strconv.ParseFloat(v, 64); perr == nil && f >= 1.0 {
-			m = f
-		}
-	}
-	billed := int64(float64(total) * m)
-	if billed < total {
-		billed = total
-	}
-	provider, model := s.Engine.UsageModel(ctx)
-	// ★ 用量看板标注（2026-08-26 需求）：文件工单=file、文本工单=text；模式随工单落库值
-	bizKind := "text"
-	if t.FilePath != "" {
-		bizKind = "file"
-	}
-	if err := s.Bill.MeterDeferred(t.TenantID, t.CreatedBy, "translate", provider, model, billed, bizKind, normalizeMode(t.Mode)); err != nil {
-		_ = s.Store.CreateAlert(t.TenantID, "critical", "billing",
-			fmt.Sprintf("工单 %s 计费失败（余额不足）：应扣 %d token，请充值或升级套餐", t.TicketNo, billed))
-	}
-	return billed
+	return total
 }
 
 // dispatchCompletedWebhook 投递工单完成 webhook 事件（OpenAPI 任务完成推送）。
@@ -386,6 +376,11 @@ func (s *TicketService) StartStallSweep() {
 // 阶段进度回调（提取20/初翻40/校对60/回写80）→产物落盘与工单状态推进。
 // 参数：ctx=取消/超时上下文（暂停与硬闸重试依赖）；t=工单对象；返回错误（含回显重试语义）。
 func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) error {
+	// ★ 性能优化（不换库 Phase A3）：文件翻译（尤其 PDF 转换）期间 Go 侧会累积大量
+	//   段落/译文缓冲与 KB 向量检索结果；转换子进程退出后其峰值已释放，但 Go 的
+	//   GC 默认保留 RSS 不立即归还 OS。本 defer 在工单收尾时主动归还，给 1G 机器上的
+	//   后续转换子进程（pdf2docx/LibreOffice）留出内存空间，规避累积式 OOM。
+	defer debug.FreeOSMemory()
 	langs := parseLangs(t.TargetLangs)
 	mode := t.Mode // fast | pro（空=pro）
 	// ★ 归属登记用创建者 ID（评审整改 C1）：OpenAPI 任务回退其归属用户
@@ -404,6 +399,10 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 		reviewT map[string]int64
 	}
 	sp := &segProg{init: map[string]int64{}, initT: map[string]int64{}, review: map[string]int64{}, reviewT: map[string]int64{}}
+	// ★ 性能优化 B4：逐段进度落库节流——每 1s 或每 100 段才写一次 ticket_state，
+	//   避免上千段 × 多语言把 SQLite 写事务堆成瓶颈（与计量批量落库协同缓解 SQLITE_BUSY）。
+	var progLastWrite time.Time
+	progWriteCount := 0
 	finalizeFileTranslate := func() {
 		sp.mu.Lock()
 		var id, it, rd, rt int64
@@ -450,7 +449,12 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 			}
 			payload := fmt.Sprintf(`{"init_done":%d,"init_total":%d,"review_done":%d,"review_total":%d}`, id, it, rd, rt)
 			sp.mu.Unlock()
-			s.Store.SetTicketState(t.ID, "file_translate", "running", payload)
+			// ★ 性能优化 B4：节流落库（每 1s 或每 100 段一次；最终态由 finalizeFileTranslate 落）
+			progWriteCount++
+			if time.Since(progLastWrite) >= time.Second || progWriteCount%100 == 0 {
+				progLastWrite = time.Now()
+				s.Store.SetTicketState(t.ID, "file_translate", "running", payload)
+			}
 			return
 		}
 		switch {
@@ -632,6 +636,7 @@ func normalizeMode(m string) string {
 
 // bumpTmHitsFromTranslations TM 自闭环计数：模型最终译文按 (原文,语言,译文) 累计；
 // 达到 tm_review_threshold（默认100）自动生成待审候选并告警提醒超管。绝不直接写入正式 TM。
+// ★ 性能优化 B5：改为单次批量 upsert（单事务），避免大文件逐条 INSERT+SELECT 产生数千次 DB 往返。
 func (s *TicketService) bumpTmHitsFromTranslations(tid int64, translations map[string]map[string]string) {
 	if s.DB == nil || s.Store == nil || len(translations) == 0 || tid <= 0 {
 		return
@@ -642,21 +647,16 @@ func (s *TicketService) bumpTmHitsFromTranslations(tid int64, translations map[s
 			th = x
 		}
 	}
+	var pairs []store.TmHitPair
 	for lc, m := range translations {
 		for src, tgt := range m {
-			n, created, err := s.Store.BumpTmHit(tid, src, lc, tgt, th)
-			if err != nil {
-				continue
-			}
-			if created {
-				preview := src
-				if len([]rune(preview)) > 50 {
-					preview = string([]rune(preview)[:50]) + "…"
-				}
-				s.Store.CreateAlert(tid, "warning", "tm_review",
-					fmt.Sprintf("相同翻译累计达 %d 次，已生成待审候选：%s", n, preview))
-			}
+			pairs = append(pairs, store.TmHitPair{Zh: src, Lang: lc, Trans: tgt})
 		}
+	}
+	created := s.Store.BumpTmHitsBatch(tid, pairs, th)
+	for _, preview := range created {
+		s.Store.CreateAlert(tid, "warning", "tm_review",
+			fmt.Sprintf("相同翻译累计达 %d 次，已生成待审候选：%s", th, preview))
 	}
 }
 

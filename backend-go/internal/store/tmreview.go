@@ -199,3 +199,83 @@ func (s *Store) BumpTmHit(tid int64, zh, lang, trans string, threshold int64) (i
 	}
 	return n, true, nil
 }
+
+// TmHitPair 批量计数的单条输入。
+type TmHitPair struct {
+	Zh    string
+	Lang  string
+	Trans string
+}
+
+// BumpTmHitsBatch 批量累计翻译记忆命中（性能优化 B5）：把一次工单内全部
+// (原文,语言,译文) 去重后在单个事务内批量 upsert，避免逐条 INSERT+SELECT 在大型文件下
+// 产生数千次 DB 往返。达到阈值且未关闭回流的条目生成待审候选。
+// 返回本次新生成候选的原文预览（用于上层告警），无则空切片。
+func (s *Store) BumpTmHitsBatch(tid int64, pairs []TmHitPair, threshold int64) []string {
+	if tid <= 0 || len(pairs) == 0 {
+		return nil
+	}
+	// 去重（同 (zh,lang,trans) 在文件内可能多次出现，合并计数）
+	uniq := make([]TmHitPair, 0, len(pairs))
+	seen := map[string]bool{}
+	for _, p := range pairs {
+		if p.Zh == "" || p.Trans == "" || p.Zh == p.Trans {
+			continue
+		}
+		key := tmHash(p.Zh) + "\x00" + p.Lang + "\x00" + tmHash(p.Trans)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		uniq = append(uniq, TmHitPair{maskPII(p.Zh), p.Lang, maskPII(p.Trans)})
+	}
+	if len(uniq) == 0 {
+		return nil
+	}
+	// 单事务批量 upsert 计数
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil
+	}
+	defer tx.Rollback()
+	for _, p := range uniq {
+		if _, e := tx.Exec(`INSERT INTO tm_hit_count (tenant_id, zh_hash, lang, trans_hash, zh, trans, n)
+			VALUES (?,?,?,?,?,?,1)
+			ON CONFLICT(tenant_id, zh_hash, lang, trans_hash) DO UPDATE SET n=n+1`,
+			tid, tmHash(p.Zh), p.Lang, tmHash(p.Trans), p.Zh, p.Trans); e != nil {
+			return nil
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil
+	}
+	// 阈值判定 + 生成待审候选（仅在首次达到阈值时）
+	if s.feedbackOptOut(tid) {
+		return nil
+	}
+	var created []string
+	for _, p := range uniq {
+		var n int64
+		if err := s.db.QueryRow(`SELECT n FROM tm_hit_count WHERE tenant_id=? AND zh_hash=? AND lang=? AND trans_hash=?`,
+			tid, tmHash(p.Zh), p.Lang, tmHash(p.Trans)).Scan(&n); err != nil {
+			continue
+		}
+		if n < threshold {
+			continue
+		}
+		if s.HasActiveTmReview(tid, p.Zh, p.Lang, p.Trans) {
+			continue
+		}
+		cr := &TmReview{TenantID: tid, Zh: p.Zh, Lang: p.Lang, Trans: p.Trans,
+			Source: "hit_threshold", RefType: "ticket", HitCount: n}
+		if err := s.CreateTmReview(cr); err != nil {
+			continue
+		}
+		preview := p.Zh
+		if len([]rune(preview)) > 50 {
+			preview = string([]rune(preview)[:50]) + "…"
+		}
+		created = append(created, preview)
+	}
+	return created
+}

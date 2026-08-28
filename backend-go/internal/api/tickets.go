@@ -206,6 +206,16 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		src.Close()
 		saved = append(saved, struct{ path, name string }{savePath, hdr.Filename})
 	}
+	// ★ 性能优化 Phase A1：PDF 前置拦截（大小/页数），超限直接友好拒绝，避免后台转换卡死
+	for _, f := range saved {
+		if perr := checkPdfLimits(f.path, f.name); perr != nil {
+			for _, cleanup := range saved {
+				os.Remove(cleanup.path)
+			}
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": perr.Error()})
+			return
+		}
+	}
 	if title == "" {
 		title = saved[0].name + fmt.Sprintf(" 等 %d 个文件", len(saved))
 		if len(saved) == 1 {

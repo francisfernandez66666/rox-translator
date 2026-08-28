@@ -29,6 +29,7 @@ import (
 	"translator/internal/auth"
 	"translator/internal/engine"
 	"translator/internal/llm"
+	"translator/internal/tenant"
 )
 
 // ============ SSE 工具 ============
@@ -233,6 +234,15 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	f.Close()
 	defer os.Remove(savePath)
 
+	// ★ 性能优化 Phase A1：PDF 前置拦截（大小/页数），超限直接友好拒绝
+	if perr := checkPdfLimits(savePath, header.Filename); perr != nil {
+		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": perr.Error()}))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
+	}
+
 	// 进度回调：推送 progress 事件（与文本翻译一致，封顶 99%）
 	prog := func(step string, done, total int) {
 		percent := 0
@@ -377,6 +387,11 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	}
 	f.Close()
 	defer os.Remove(savePath)
+	// ★ 性能优化 Phase A1：PDF 前置拦截（大小/页数），超限直接友好拒绝
+	if perr := checkPdfLimits(savePath, header.Filename); perr != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "error": perr.Error()})
+		return
+	}
 	// 调用引擎处理文件翻译（非流式）
 	// ★ 注入用户组织（2026-08-26 KB继承链）
 	res := s.Engine.HandleFile(s.userOrgCtx(r), savePath, options, nil)
@@ -536,12 +551,16 @@ func timeNow() int64 {
 	return time.Now().UnixNano()
 }
 
-// userOrgCtx 组装带用户组织的请求上下文（KB 部门包祖先链继承依据，2026-08-26）。
-// 已登录用户取其 org_id；匿名/超管平台上下文返回原 ctx（org=0 → 仅企业/共享层）。
+// userOrgCtx 组装带用户组织/用户的请求上下文（KB 部门包祖先链继承 + 实时计费归属依据，
+// 2026-08-26；性能优化 B1 修正 user_id 归属）。已登录用户取其 org_id 与 id；
+// 匿名/超管平台上下文返回原 ctx（org=0 → 仅企业/共享层；user=0）。
 func (s *Server) userOrgCtx(r *http.Request) context.Context {
 	ctx := r.Context()
-	if u := s.authUser(r); u != nil && u.OrgID > 0 {
-		return engine.WithUserOrg(ctx, u.OrgID)
+	if u := s.authUser(r); u != nil {
+		if u.OrgID > 0 {
+			ctx = engine.WithUserOrg(ctx, u.OrgID)
+		}
+		ctx = tenant.WithUser(ctx, u.ID)
 	}
 	return ctx
 }
