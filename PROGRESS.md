@@ -1,6 +1,6 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-08-28（实时计费 + 细粒度进度 + 全量中文注释）｜ 与生产一致（main 分支）
+> 最后更新：2026-08-28（实时计费 + 细粒度进度 + 全量中文注释 + token 口径计费（入账=扣费×可配 markup）+ OpenAPI 全功能 UAT 7/7 通过）｜ 与生产一致（main 分支）
 
 ## 〇、全仓端到端评审整改 + 黑盒 UAT（第四批）
 
@@ -43,6 +43,25 @@
 
 ---
 
+## 〇-E、OpenAPI 全功能 UAT（2026-08-28，生产验收）
+
+生产端点 `https://langcross.lexicorn.cn`，scope=all 测试 Key（测后已轮换，旧 Key 作废）。**7/7 全通过**：
+
+| 端点 | 结果 |
+|------|------|
+| `GET /openapi/v1/balance` | 200，返回 token / ≈句数余额 |
+| `GET /openapi/v1/kb/stats` | 200（`kb_entries:4013`） |
+| `GET /openapi/v1/billing/usage` | 200，usage 随调用持续增长（**真实计量生效**） |
+| `POST /openapi/v1/translate`（同步短文） | 200，en/ja 译文正确 |
+| `POST /openapi/v1/tasks`（文本） | 202 入队 → `completed`；`status` 含完整译文，`tokens_used` 已计费 |
+| `POST /openapi/v1/tasks`（文件 .txt） | 202 入队 → `completed`；`download` 返回正确译文内容 |
+| `POST /openapi/v1/apikey/rotate` | 200，旧 Key 立即失效（balance 复测 401）/ 新 Key 可用（200） |
+
+说明（非缺陷，已交叉验证不影响计费）：
+- 文本任务结果在 `status.translations`；其 `download` 返回 `no_result` 为预期（download 仅用于文件产物）。
+- 文件任务单文件 `download` 直接回传译文内容（多文件才打包 zip，与文档「缺省 zip」措辞略有出入，功能正常）。
+- 同步 `translate` 响应体 `tokens_used` 字段回填为 0（真实扣减已在异步链路完成，balance/usage 已印证），属展示字段一致性小问题。
+
 ## 〇-A、历史批次索引（详情见对应方案文档）
 
   - **第三批（并发优化+商业化收口）**：LLM 三路信号量/Embed 批处理缓存/卡死巡检正确性/FILEPROC 子进程闸；双桶余额贯通/定价单一事实源/payments 实收/退款权益回收/download 归属/metrics 死锁修复/模型Key加密/oneid 邮箱唯一+自助注销 → 《archive/评审整改·余额贯通与商业化收口方案.md》《archive/翻译引擎并发瓶颈诊断与优化方案.md》
@@ -64,7 +83,7 @@
 
 ## 二、核心能力（全部已上线）
 
-- **多格式文件翻译**：docx/pptx/xlsx/pdf/txt/csv/srt/vtt/md/json/yaml；多文件混合工单、多目标语言打包 zip
+- **多格式文件翻译**：docx/pptx/xlsx/pdf/txt/csv/md 输出译文文件；srt/vtt/json/yaml 等以对照表（xlsx）形式交付；多文件混合工单、多目标语言打包 zip
 - **PDF 保真翻译管线（两阶段，a1a5aad）**：
    1. `extract`：pdf2docx 转 DOCX 并提取段落键（含表格/嵌套/文本框/页眉脚）
    2. LLM 翻译段落键 → `apply`：在缓存 DOCX 上 w:t 级替换（图片/排版零破坏）+ LibreOffice 转回 PDF（★ 图片内容按产品策略不翻译，OCR 已移除）

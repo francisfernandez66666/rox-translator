@@ -57,7 +57,7 @@ cd ../backend-go && go build -o translator-server ./cmd/server
 
 ## 核心能力
 
-- **多格式文件翻译**：docx/pptx/xlsx/pdf/txt/csv/srt/vtt/md/json/yaml，支持多目标语言打包下载
+- **多格式文件翻译**：docx/pptx/xlsx/pdf/txt/csv/md 输出译文文件；srt/vtt/json/yaml 等以对照表（xlsx）形式交付；支持多目标语言打包下载
 - **对话式翻译**：聊天交互、上下文审校、风格指令
 - **知识库与翻译记忆（KB/TM）**：向量检索、组织继承链、部门级隔离
 - **租户与组织隔离**：多租户、角色权限、部门预算
