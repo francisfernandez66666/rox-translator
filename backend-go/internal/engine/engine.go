@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"translator/internal/billing"
 	"translator/internal/config"
 	"translator/internal/evals"
 	"translator/internal/kb"
@@ -326,7 +327,7 @@ func NewEngine(cfg *config.Config, db *kb.KBDatabase, idx *kb.Index, ts *tenant.
 	}
 	// 构建语义检索的语言过滤映射（rowID → 已有语言）+ 租户映射（rowID → 租户）
 	if idx != nil && db != nil {
-		if langs, err := db.AllRowLangs(0); err == nil {
+		if langs, err := db.AllRowLangs(-1); err == nil {
 			idx.IDLangs = langs
 		}
 		if rows, err := db.AllRowsWithTenant(); err == nil {
@@ -1654,7 +1655,7 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	idLangs, _ := e.DB.AllRowLangs(0)
+	idLangs, _ := e.DB.AllRowLangs(-1)
 
 	newIdx := &kb.Index{IDs: make([]int64, 0, len(rows)), Vecs: make([][]float32, 0, len(rows)),
 		IDLangs: idLangs, IDTenants: map[int64]int64{}, IDPacks: map[int64]int64{}}
@@ -1725,19 +1726,16 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 	e.Index = newIdx
 	e.indexMu.Unlock()
 
-	// 统一计费：强制计费时扣余额，否则仅留痕。
+	// 统一计费（P1-3）：经全局 sink 落库，与翻译用量共用同一扣减入口与批量写事务，
+	// 消除「重建直写库」造成的第二计费源与 SQLITE_BUSY 回归；是否扣余额由 sink 按
+	// billing_enforced 自行决定（此处不再分支）。
 	if e.St != nil {
-		enforced, _ := e.St.GetConfig("billing_enforced")
 		provider, model := "bigmodel", "embedding-rebuild"
 		for tid, tokens := range usageByTenant {
 			if tokens <= 0 || tid <= 0 {
 				continue
 			}
-			if enforced == "1" {
-				_, _ = e.St.RecordUsage(tid, 0, "kb_embed", provider, model, tokens, "kb", "index")
-			} else {
-				_ = e.St.LogUsage(tid, 0, "kb_embed", provider, model, tokens, "kb", "index")
-			}
+			billing.RecordUsage(tid, 0, "kb_embed", provider, model, tokens, "kb", "index", nil)
 		}
 	}
 

@@ -195,8 +195,10 @@ func Default() *Config {
 		TopFuzzy:               3,
 		SemHitCharOverlap:      0.55,
 		AdminToken:             "",
-		// 默认仅允许本地开发来源；生产同源部署（Caddy 反代）不受影响
-		CORSOrigins: []string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8080"},
+		// 默认仅允许本地开发来源；生产同源部署（Caddy 反代）不受影响。
+		// 同时包容 Vite 默认 5173 与本项目 start.sh -f 实际使用的 5174（修复开发态 /api 跨域失败）。
+		CORSOrigins: []string{"http://localhost:5173", "http://127.0.0.1:5173",
+			"http://localhost:5174", "http://127.0.0.1:5174", "http://localhost:8080"},
 	}
 
 	// ★ 密钥安全：不再内置任何硬编码密钥。

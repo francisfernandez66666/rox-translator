@@ -475,6 +475,19 @@ func (s *Store) TokenSentenceRate() int64 {
 	return 500
 }
 
+// MarkupMultiplier 成本均摊系数（billing_markup_multiplier，默认 1.5，强制 ≥1.0）。
+// 对外计费与权益发放统一乘以该系数：扣费侧（用量实时计量）与入账侧（包订单发放）共用同一口径，
+// 保证「1 入账 token = 1 扣费 token」的单位一致；后台可调。
+func (s *Store) MarkupMultiplier() float64 {
+	m := 1.5
+	if v, err := s.GetConfig("billing_markup_multiplier"); err == nil && v != "" {
+		if f, perr := strconv.ParseFloat(v, 64); perr == nil && f >= 1.0 {
+			m = f
+		}
+	}
+	return m
+}
+
 // ExpirePackage 摘除租户订阅身份（订阅到期由后台扫描调用）：
 // 清空 package_code/package_expires_at 与提醒标记；句数余额保留（已购句数为买断资产）。
 // 参数：tid=租户 ID，返回被摘除的包编码（审计留痕用）与错误。

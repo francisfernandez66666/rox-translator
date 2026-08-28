@@ -6,7 +6,7 @@
 #
 # 用法：
 #   ./start.sh            # 编译并启动 Go 后端（127.0.0.1:8787）
-#   ./start.sh -f         # 额外前台启动 vite dev server（:5173，API 代理到 8787）
+#   ./start.sh -f         # 额外前台启动 vite dev server（:5174，API 代理到 8787）
 #   ./start.sh -b         # 启动前先执行一次前端构建（frontend-react/dist 不存在时也会自动构建）
 # ============================================================================
 
@@ -51,7 +51,7 @@ trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
 
 # ---------- 可选：vite dev（热更新） ----------
 if [ "$RUN_VITE" = "1" ]; then
-  echo "==> 启动 vite dev http://localhost:5173 （API 已代理至 :8787）"
+  echo "==> 启动 vite dev http://localhost:5174 （API 已代理至 :8787）"
   (cd frontend-react && npx vite)
 else
   echo "==> 就绪。打开 http://127.0.0.1:8787 ；Ctrl+C 退出"

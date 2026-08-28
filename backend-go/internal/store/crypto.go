@@ -15,14 +15,42 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"io"
+	"log"
 	"os"
 	"strings"
+	"sync"
+)
+
+// aeadKeyOnce 保证「JWT_SECRET 缺失时的随机派生密钥」在进程内只生成一次（否则加解密密钥不一致）。
+var (
+	aeadKeyOnce sync.Once
+	aeadKeyRand []byte
 )
 
 // deriveAEADKey 由 JWT_SECRET 派生 32 字节 AES 密钥。
+// 生产必须设置 JWT_SECRET；若缺失，退回进程级随机密钥（仅本地/测试用，且不可被外部推算），
+// 杜绝原「SHA256("|rox-apikey-enc")」这一公开常量导致的密钥明文可被还原的风险。
 func deriveAEADKey() []byte {
-	sum := sha256.Sum256([]byte(os.Getenv("JWT_SECRET") + "|rox-apikey-enc"))
-	return sum[:]
+	secret := os.Getenv("JWT_SECRET")
+	if secret != "" {
+		sum := sha256.Sum256([]byte(secret + "|rox-apikey-enc"))
+		return sum[:]
+	}
+	// 缺失：生成稳定随机密钥并告警（每次启动时不同；多副本需共享 JWT_SECRET）。
+	aeadKeyOnce.Do(func() {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			log.Printf("[crypto] 警告: 随机源不可用，AES 密钥派生回退空值（加密将不可用，请设置 JWT_SECRET）")
+			aeadKeyRand = nil
+			return
+		}
+		aeadKeyRand = b
+		log.Printf("[crypto] 警告: JWT_SECRET 未设置，AES 静态加密使用随机进程密钥（重启后旧密文不可解密，生产请设置 JWT_SECRET）")
+	})
+	if aeadKeyRand == nil {
+		return make([]byte, 32) // 极端降级：空密钥（加密无意义但避免 nil panic）
+	}
+	return aeadKeyRand
 }
 
 // EncryptPlain AES-256-GCM 加密：返回 base64(nonce||ciphertext)。

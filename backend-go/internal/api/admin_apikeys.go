@@ -17,7 +17,7 @@ import (
 
 // ============ 开放 API Key ============
 
-// handleAPIKeys 列表
+// handleAPIKeys 查询当前租户下的开放 API Key 列表（密钥已脱敏展示，不可复原明文）。参数 w/r：标准 HTTP；鉴权：租户管理员及以上；按 effTenant 租户隔离；返回 keys 数组。
 func (s *Server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
@@ -32,7 +32,7 @@ func (s *Server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "keys": keys})
 }
 
-// handleAPIKeyCreate 签发
+// handleAPIKeyCreate 为当前租户签发新的开放 API Key（明文仅本次返回，前端须立即保存）。参数 w/r：body 含 name/perms/daily_call_limit；鉴权：租户管理员及以上；副作用：写入 api_keys 表并记审计 apikey_create；平台上下文自动落到首个活跃租户避免任务归属悬空。
 func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
@@ -62,7 +62,7 @@ func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "api_key": plain, "note": "请立即保存，仅显示一次"})
 }
 
-// handleAPIKeyStatus 启停
+// handleAPIKeyStatus 启用/停用指定 API Key（status=active/disabled）。参数 w/r：body 含 id 与 status；鉴权：租户管理员及以上；副作用：更新状态并写审计；按租户隔离。
 func (s *Server) handleAPIKeyStatus(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
@@ -117,7 +117,7 @@ func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "api_key": plain, "note": "旧 Key 已失效，新 Key 仅显示一次"})
 }
 
-// handleAPIKeyDelete 删除
+// handleAPIKeyDelete 删除指定 API Key（按租户隔离）。参数 w/r：body 含 id；鉴权：租户管理员及以上；副作用：删除记录并写审计。
 func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {

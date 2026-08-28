@@ -195,8 +195,10 @@ func TestPackageOrderManualConfirm(t *testing.T) {
 	if bal, _ := s.GetSentenceBalance(1); bal != paid.Sentences {
 		t.Fatalf("确认后句数镜像应为 %d，实际 %d", paid.Sentences, bal)
 	}
-	if g := s.SumActiveGrants(1); g != paid.Sentences*s.TokenSentenceRate() {
-		t.Fatalf("确认后台账额度应为 %d，实际 %d", paid.Sentences*s.TokenSentenceRate(), g)
+	// 台账额度按 token 口径（句数×折算率×可配均摊系数 markup，与扣费侧同单位）
+	wantGrants := int64(float64(paid.Sentences*s.TokenSentenceRate()) * s.MarkupMultiplier())
+	if g := s.SumActiveGrants(1); g != wantGrants {
+		t.Fatalf("确认后台账额度应为 %d，实际 %d", wantGrants, g)
 	}
 	// 确认后不再出现在待确认列表
 	list, _ = s.ListManualConfirmOrders()

@@ -43,7 +43,7 @@ func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleUsage 用量统计
+// handleUsage 查询当前租户计费用量统计（调用次数 / Token 消耗 / 余额趋势等）。参数 w/r：标准 HTTP；鉴权：租户管理员及以上；按 effTenant 租户隔离；返回 usage 明细与 total 汇总。
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
@@ -118,7 +118,7 @@ func (s *Server) handleManualConfirmOrders(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, 200, map[string]interface{}{"success": true, "orders": orders})
 }
 
-// handleOrders 订单列表
+// handleOrders 查询当前租户的充值 / 订单列表（状态、金额、渠道、时间）。参数 w/r：标准 HTTP；鉴权：租户管理员及以上；按 effTenant 租户隔离；返回 orders 数组。
 func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {

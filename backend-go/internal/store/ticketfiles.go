@@ -56,10 +56,10 @@ func (s *Store) TicketFiles(ticketID int64) ([]*TicketFile, error) {
 	return out, nil
 }
 
-// GetTicketFile 按 ID 取单个文件行（租户隔离校验由调用方完成）。
-func (s *Store) GetTicketFile(id int64) (*TicketFile, error) {
+// GetTicketFile 按 ID + 租户取单个文件行（强制租户隔离，杜绝跨租户读取上传/产物路径）。
+func (s *Store) GetTicketFile(id, tenantID int64) (*TicketFile, error) {
 	var f TicketFile
-	err := s.db.QueryRow("SELECT "+ticketFileCols+" FROM ticket_files WHERE id=?", id).
+	err := s.db.QueryRow("SELECT "+ticketFileCols+" FROM ticket_files WHERE id=? AND tenant_id=?", id, tenantID).
 		Scan(&f.ID, &f.TenantID, &f.TicketID, &f.FileName, &f.FilePath, &f.ResultPath, &f.Error, &f.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil

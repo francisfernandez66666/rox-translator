@@ -154,12 +154,12 @@ export class TranslatorClient {
     return this.#fetch("/openapi/v1/balance");
   }
 
-  /** 知识库统计（需 kb/all 权限）。 */
+  /** 知识库统计（需 kb 权限）。 */
   kbStats() {
     return this.#postJson("/openapi/v1/kb/stats", {});
   }
 
-  /** 用量汇总（需 billing/all 权限）。 */
+  /** 用量汇总（需 billing 权限）。 */
   usage() {
     return this.#postJson("/openapi/v1/billing/usage", {});
   }

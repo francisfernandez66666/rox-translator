@@ -408,7 +408,15 @@ func ensureTables(db *sql.DB) error {
 		"ms" TEXT, "id_lang" TEXT, "th" TEXT, "tr" TEXT, "it" TEXT, "pl" TEXT, "sv" TEXT,
 		"updated_at" TEXT
 	)`)
-	return err
+	if err != nil {
+		return err
+	}
+	// P0-4：补全模糊检索索引（FuzzyHits 的 zh LIKE '%…%' 在大数据量下仍全扫，
+	// 但精确/前缀检索与常规定位受益；唯一键 zh_hash 已覆盖去重）。
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_tm_zh ON tm_segments(zh)`); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Close 关闭数据库连接。
@@ -765,10 +773,18 @@ func (k *KBDatabase) GetAllRows(tenantID int64) ([]Row, error) {
 
 // AllRowLangs 返回指定租户每行已有的语言集合（id → 非空语言代码集合）。
 // 用于语义检索按目标语言过滤，避免检索不含目标语言的行。
-// 参数：tenantID=租户 ID；返回 map[行ID]→语言集合。
+// 参数：tenantID=租户 ID；tenantID<0 时返回所有租户的行（构建全局语言映射用，
+// 租户隔离仍由 ScopedSearch 的 IDTenants 完成，二者正交）。
+// 返回 map[行ID]→语言集合。
 func (k *KBDatabase) AllRowLangs(tenantID int64) (map[int64]map[string]bool, error) {
-	rows, err := k.db.Query(fmt.Sprintf(
-		"SELECT id, %s FROM tm_segments WHERE tenant_id=?", langCols), tenantID)
+	q := fmt.Sprintf("SELECT id, %s FROM tm_segments", langCols)
+	var rows *sql.Rows
+	var err error
+	if tenantID < 0 {
+		rows, err = k.db.Query(q) // 全租户：构建向量索引语言映射
+	} else {
+		rows, err = k.db.Query(q+" WHERE tenant_id=?", tenantID)
+	}
 	if err != nil {
 		return nil, err
 	}

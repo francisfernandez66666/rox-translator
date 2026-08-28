@@ -145,6 +145,21 @@ func (s *UsageSink) flush() {
 	}
 	batch := s.buf
 	s.buf = nil
+	// ★ 影子账本自愈（修复 P0-2）：按租户回读真实双桶余额并重算影子。
+	// 每周期每租户一次 DB 读，符合「每周期每租户一次写事务」的批处理目标，不破坏性能优化；
+	// 同时保证外部充值/退款或上次扣减失败后，影子不会永久负化导致租户被冻结。
+	if s.svc != nil && s.svc.Store != nil {
+		byTid := map[int64]int64{}
+		for _, r := range batch {
+			byTid[r.Tid] += r.Quantity
+		}
+		for tid, pending := range byTid {
+			if g, p, err := s.svc.Store.TenantRemainTotal(tid); err == nil {
+				s.shadow[tid] = g + p - pending // 真实余额 - 本批待落库量，保持乐观准确
+				s.shadowOk[tid] = true
+			}
+		}
+	}
 	s.mu.Unlock()
 
 	groups := map[int64][]usageRecord{}

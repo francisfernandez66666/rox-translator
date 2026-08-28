@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Textarea, MessagePlugin,
 } from 'tdesign-react'
+import { confirmDialog } from '@/components/uiDialogs'
 import {
   kbPackages, kbPackageCreate, kbPackageDelete, kbEntries, kbEntryAdd, kbEntryDelete,
   kbEntriesImport, bitextImport, tmxImport,
@@ -204,14 +205,14 @@ export function KbP() {
   }
   // 删除知识包
   async function removePackage(p: Any) {
-    if (!window.confirm(tpl('kb.confirmDeletePackage', { name: String(p.name) }))) return
+    if (!(await confirmDialog({ body: tpl('kb.confirmDeletePackage', { name: String(p.name) }) }))) return
     const r = await kbPackageDelete(Number(p.id))
     if (!r.success) { MessagePlugin.error(r.message); return }
     await loadPackages()
   }
   // 重建知识库索引（超管）
   async function rebuildIndex() {
-    if (!window.confirm(t('kb.rebuildConfirm'))) return
+    if (!(await confirmDialog({ body: t('kb.rebuildConfirm') }))) return
     setRebuilding(true)
     try {
       const r = await kbIndexRebuild()
@@ -316,7 +317,7 @@ export function KbP() {
   }
   // 删除安全句
   async function removeSafety(sp: Any) {
-    if (!window.confirm(t('kb.deleteConfirm'))) return
+    if (!(await confirmDialog({ body: t('kb.deleteConfirm') }))) return
     const r = await safetyPhraseDelete(Number(sp.id))
     if (!r.success) { MessagePlugin.error(r.message); return }
     await loadSafety()
@@ -841,7 +842,7 @@ export function TicketsP() {
   // 超管将反馈标记为已解决
   async function doResolve() {
     if (!selected) return
-    if (!window.confirm(t('fb.resolveConfirm'))) return
+    if (!(await confirmDialog({ body: t('fb.resolveConfirm') }))) return
     const r = await resolveFeedback(Number(selected.id))
     if (!r.success) { MessagePlugin.error(r.message); return }
     setSelected({ ...selected, status: 'resolved', handled_at: new Date().toISOString() })

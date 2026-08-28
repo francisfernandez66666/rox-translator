@@ -34,7 +34,7 @@ fi
 
 submit() { # 提交单任务，输出 task_id
   if [ "$MODE" = "file" ]; then
-    curl -s -X POST "$BASE/openapi/v1/tasks/files" \
+    curl -s -X POST "$BASE/openapi/v1/tasks" \
       -H "Authorization: Bearer $KEY" -F "files=@$PDF" -F "target_langs=en" -F "mode=pro" \
       | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('task_id') or '')"
   else
@@ -43,12 +43,6 @@ submit() { # 提交单任务，输出 task_id
       -d "{\"text\":\"$TEXT\",\"target_langs\":[\"en\"],\"mode\":\"pro\"}" \
       | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('task_id') or '')"
   fi
-}
-submit() { # 提交单任务，输出 task_id
-  curl -s -X POST "$BASE/openapi/v1/tasks" \
-    -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
-    -d "{\"text\":\"$TEXT\",\"target_langs\":[\"en\"],\"mode\":\"pro\"}" \
-    | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('task_id') or '')"
 }
 wait_one() { # 轮询单任务至终态，输出耗时秒（failed 输出 FAIL:<code>）
   local id="$1" t0=$SECONDS

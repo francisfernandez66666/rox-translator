@@ -236,8 +236,11 @@ func (s *Store) RecordUsageBatch(tid int64, rows []UsageBatchRow) (int64, error)
 	pricedRows := make([]priced, 0, len(rows))
 	var sumCost int64
 	for _, r := range rows {
-		price, mult := s.unitPrice(r.TaskType, r.Provider)
-		cost := int64(float64(r.Quantity*price) * mult)
+		price, _ := s.unitPrice(r.TaskType, r.Provider)
+		// ★ P1-3：计费量以传入 quantity（已在 api 层 markupMultiplier 折算）为唯一口径，
+		// 不再于此处二次乘 rate_card 倍率，杜绝「price × 1.5 × mult」的静默双算。
+		// price 仅作为 unit_price 列留档，不参与扣减。
+		cost := r.Quantity
 		if cost < 0 {
 			cost = 0
 		}
@@ -285,8 +288,9 @@ func (s *Store) LogUsageBatch(tid int64, rows []UsageBatchRow) error {
 	defer tx.Rollback()
 	var sumCost int64
 	for _, r := range rows {
-		price, mult := s.unitPrice(r.TaskType, r.Provider)
-		cost := int64(float64(r.Quantity*price) * mult)
+		price, _ := s.unitPrice(r.TaskType, r.Provider)
+		// ★ P1-3：与 RecordUsageBatch 同口径，quantity 即计费量，price 仅留档。
+		cost := r.Quantity
 		if cost < 0 {
 			cost = 0
 		}
@@ -596,13 +600,21 @@ func (s *Store) CreateOrderChannel(tid int64, tokens int64, money float64, creat
 }
 
 // CreatePackageOrder 创建商业包订阅订单（付费包/增量包）：金额取包售价，关联 package_id。
+// 费用一律以 token 口径计：下单时把「句数」按折算率一次性折算为 token 数写入 amount_tokens，
+// 此后（支付发放 / 退款核算）一律以该 token 数为唯一事实源，句数仅作业务展示不计入计算。
 // 参数：tid=租户 ID，pkg=商业包对象，createdBy=创建者 ID，channel=支付渠道（mock/manual/wechat/alipay）。
 // 返回：新订单对象（初始状态 pending，待支付）。
 func (s *Store) CreatePackageOrder(tid int64, pkg *Package, createdBy int64, channel string) (*Order, error) {
 	orderNo := fmt.Sprintf("T%d-RO%s%s", tid, time.Now().Format("20060102150405"), randSuffix(4)) // 生成唯一订单号
+	// ★ 句→token 仅在此折算一次，并统一乘以后台可配的成本均摊系数（billing_markup_multiplier），
+	// 与扣费侧（用量实时计量的 billed = total × markup）共用同一 token 单位，保证「1 入账 token = 1 扣费 token」。
+	tokenAmt := int64(float64(pkg.Sentences*s.TokenSentenceRate()) * s.MarkupMultiplier())
+	if tokenAmt < 0 {
+		tokenAmt = 0
+	}
 	_, err := s.db.Exec(
-		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, qr_content, package_id, created_by, created_at) VALUES (?,?,0,?, 'pending', 'online', ?, '', ?, ?, ?)",
-		tid, orderNo, pkg.PriceMoney, channel, pkg.ID, createdBy, time.Now().Format(time.RFC3339))
+		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, qr_content, package_id, created_by, created_at) VALUES (?,?,?,?, 'pending', 'online', ?, '', ?, ?, ?)",
+		tid, orderNo, tokenAmt, pkg.PriceMoney, channel, pkg.ID, createdBy, time.Now().Format(time.RFC3339))
 	if err != nil {
 		return nil, err
 	}
@@ -689,6 +701,38 @@ func (s *Store) orderMoneyBackfill() {
 	s.db.Exec(`UPDATE orders SET amount_money=ROUND(amount_tokens * ? / 100.0, 2)
 		WHERE status='pending' AND package_id=0 AND COALESCE(amount_money,0)=0 AND amount_tokens>0`,
 		float64(rate))
+}
+
+// PackageOrderTokenBackfill 存量商业包订单 token 口径回填（幂等，Store.New 迁移链调用）：
+// 历史 CreatePackageOrder 将 amount_tokens 存为 0，实际 token 数需由 pkg.Sentences×折算率得出；
+// 为贯彻「费用一律 token 口径、句数不参与运行期计算」，此处把存量包订单的 amount_tokens 一次性补全，
+// 此后支付发放（MarkOrderPaid）与退款核算（RefundOrder）均直接采用该 token 数，不再以句数折算。
+func (s *Store) PackageOrderTokenBackfill() {
+	rate := s.TokenSentenceRate()
+	if rate <= 0 {
+		rate = 500
+	}
+	rows, err := s.db.Query("SELECT id, package_id FROM orders WHERE package_id>0 AND amount_tokens=0")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	type rec struct{ id, pkg int64 }
+	var pending []rec
+	for rows.Next() {
+		var r rec
+		if err := rows.Scan(&r.id, &r.pkg); err == nil {
+			pending = append(pending, r)
+		}
+	}
+	for _, r := range pending {
+		p, e := s.GetPackage(r.pkg)
+		if e != nil {
+			continue
+		}
+		tok := p.Sentences * rate
+		s.db.Exec("UPDATE orders SET amount_tokens=? WHERE id=?", tok, r.id)
+	}
 }
 
 // ===== 订单确认事务内原语（★ 整改 B2）=====
@@ -778,7 +822,13 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		pkgSentences = p.Sentences
 		pkgCode = p.Code
 		pkgDays = p.DurationDays
-		pkgTokens = pkgSentences * sentenceRate
+		// ★ token 口径：实际入账 token 数一律以订单 amount_tokens（下单时由句数一次性折算/迁移回填）为准，
+		// 不再以 pkgSentences*sentenceRate 在发放路径二次折算。句数仅用于 SentenceBalance 展示镜像。
+		pkgTokens = tokens
+		if pkgTokens == 0 {
+			// 兜底：存量未回填订单，按句数×折算率×均摊系数（与新建订单一致口径）发放
+			pkgTokens = int64(float64(pkgSentences*s.TokenSentenceRate()) * s.MarkupMultiplier())
+		}
 	}
 	// 应收金额转分：套餐单取包售价，纯充值单按 tokens×定价兜底
 	payFen := int64(money*100 + 0.5)
@@ -965,11 +1015,9 @@ func (s *Store) MarkOrderPaidByOrderNo(orderNo string) error {
 //	  非订阅单 → 从永久余额守卫式扣回 min(剩余, 当前余额)；余额不足的差额不再整体拒绝
 //	  退款（修复旧实现与「已消耗不追讨」注释的矛盾），差额 CreateAlert 转人工核对。
 //	orders.refund_money 列记录实退金额（审计/对账）；订阅身份清理由 API 层在退款成功后执行。
+//	费用一律以 token 口径计：granted 直接取订单入账 token 数（amount_tokens），
+//	句数折算已在下单时一次性完成，退款核算不再以句数参与计算。
 func (s *Store) RefundOrder(orderID, tid int64) error {
-	sentenceRate := s.TokenSentenceRate()
-	if sentenceRate <= 0 {
-		sentenceRate = 500 // 配置异常时按默认 500 token/句 折算，避免除零
-	}
 	tx, err := s.db.Begin() // DSN _txlock=immediate ⇒ BEGIN IMMEDIATE
 	if err != nil {
 		return err
@@ -987,20 +1035,16 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 		}
 		return err
 	}
-	// 反推发放总量与剩余量
+	// 反推发放总量与剩余量（均为 token 口径；granted 直接取订单入账 token 数）
 	granted := tokens
 	remain := tokens // 非订阅单默认全额未耗（paid_at 缺失时保守按全退）
 	isSub := false
 	if pkgID > 0 {
 		var ptype string
-		var sentences int64
-		if err := tx.QueryRow("SELECT ptype, sentences FROM packages WHERE id=?", pkgID).Scan(&ptype, &sentences); err != nil {
+		if err := tx.QueryRow("SELECT ptype FROM packages WHERE id=?", pkgID).Scan(&ptype); err != nil {
 			return err
 		}
-		granted = sentences * sentenceRate
-		if granted <= 0 {
-			granted = tokens
-		}
+		// granted 已由 tokens（=订单入账 token 数）给出；句数不参与计算
 		if ptype == "paid" {
 			isSub = true
 			// 订阅单：台账剩余精确可查

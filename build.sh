@@ -24,7 +24,7 @@ CONTENTS="$APP/Contents"
 echo "==> [1/4] 构建前端 ..."
 (cd frontend-react && npm install --silent && npm run build)
 
-echo "==> [2/4] 编译 Go 后端 (darwin/arm64 + amd64 通吃本机) ..."
+echo "==> [2/4] 编译 Go 后端 (darwin 单架构本机二进制：按当前主机架构产出，非 arm64+amd64 通用 fat 包) ..."
 (cd backend-go && go build -ldflags "-s -w" -o /tmp/translator-server-mac ./cmd/server)
 
 echo "==> [3/4] 组装 $APP ..."

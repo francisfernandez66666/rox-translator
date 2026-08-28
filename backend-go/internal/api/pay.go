@@ -28,8 +28,18 @@ import (
 	"strconv"
 	"strings"
 
+	"crypto/subtle"
+
 	"translator/internal/payment"
 )
+
+// constantTimeTokenEqual 恒定时间比较两个令牌（消除时序侧信道）。任一为空直接不等。
+func constantTimeTokenEqual(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
 
 // payProvider 当前支付提供商（按 system_config pay_mode 惰性构建）。
 // 说明：pay_mode=sdk 映射到 wechat/alipay 适配器（需商户号）；static_qr/mock 用 mock 适配器。
@@ -260,7 +270,8 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 	// ① 凭证必填：头缺失 = 匿名请求，直接拒绝（不再「可选校验」）
 	tok := r.Header.Get("X-Admin-Token")
-	if tok == "" || tok != s.Cfg.AdminToken {
+	// ★ P1-2：恒定时间比较，消除时序侧信道（AdminToken 为共享密钥，非用户口令）。
+	if tok == "" || !constantTimeTokenEqual(tok, s.Cfg.AdminToken) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "拒绝访问"})
 		return
 	}

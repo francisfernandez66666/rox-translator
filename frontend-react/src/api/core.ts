@@ -20,6 +20,7 @@ const TENANT_KEY = 'active_tenant_id_v2'
 let activeTenantId = Number(localStorage.getItem(TENANT_KEY) || 0)
 
 /** 设置登录 token 并持久化到 localStorage */
+// 注意：token 存于 localStorage（XSS 风险已由安全团队单独跟踪，本处不改动存储机制）。
 export function setAuthToken(token: string) {
   authToken = token
   try { localStorage.setItem('auth_token', token) } catch {}
@@ -28,6 +29,18 @@ export function setAuthToken(token: string) {
 /** 读取当前登录 token */
 export function getAuthToken(): string {
   return authToken
+}
+
+// 全局 401 拦截：登录态失效时清 token 并跳回登录页。
+// 登录/注册等自身接口返回 401（如凭证错误）不触发跳转，避免循环。
+let authRedirecting = false
+function handleUnauthorized(url: string) {
+  if (url.includes('/api/auth/login') || url.includes('/api/auth/register')) return
+  setAuthToken('') // 清除本地 token（同步清空内存与 localStorage）
+  if (!authRedirecting) {
+    authRedirecting = true
+    window.location.href = '/'
+  }
 }
 
 /** 设置并持久化超管生效租户 ID（用于租户切换器） */
@@ -74,6 +87,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       ...options,
       signal: controller.signal,
     })
+    if (response.status === 401) handleUnauthorized(url)
     if (!response.ok) {
       const errorText = await response.text()
       throw new Error(`请求失败 (${response.status}): ${errorText}`)

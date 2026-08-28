@@ -277,12 +277,12 @@ const defaultDocsMDZh = `# 能言开放 API
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
-| POST | /openapi/v1/tasks | translate/all | 创建任务：JSON=文本；multipart=文件批量（≤20个/30MB） |
-| GET | /openapi/v1/tasks/status?id= | translate/all | 轮询状态与结果 |
-| GET | /openapi/v1/tasks/download?id=&file_id= | translate/all | 文件产物下载（缺省 zip 全部） |
+| POST | /openapi/v1/tasks | translate | 创建任务：JSON=文本；multipart=文件批量（≤20个/30MB） |
+| GET | /openapi/v1/tasks/status?id= | translate | 轮询状态与结果 |
+| GET | /openapi/v1/tasks/download?id=&file_id= | translate | 文件产物下载（缺省 zip 全部） |
 | GET | /openapi/v1/balance | * | 查询 token 余额与 ≈句数 |
-| GET | /openapi/v1/kb/stats | kb/all | 知识库条目统计 |
-| GET | /openapi/v1/billing/usage | billing/all | 用量明细 |
+| GET | /openapi/v1/kb/stats | kb | 知识库条目统计 |
+| GET | /openapi/v1/billing/usage | billing | 用量明细 |
 | POST | /openapi/v1/apikey/rotate | all | 轮换 API Key（旧 Key 立即失效） |
 
 ## ① 创建文本任务（heredoc 传 JSON：复制即用，免疫引号/换行问题）
@@ -404,12 +404,12 @@ All endpoints authenticate with **Authorization: Bearer YOUR_API_KEY**. Issue ke
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
-| POST | /openapi/v1/tasks | translate/all | Create task: JSON = text; multipart = batch files (up to 20 files / 30MB) |
-| GET | /openapi/v1/tasks/status?id= | translate/all | Poll status & result |
-| GET | /openapi/v1/tasks/download?id=&file_id= | translate/all | Download artifacts (zip when omitted) |
+| POST | /openapi/v1/tasks | translate | Create task: JSON = text; multipart = batch files (up to 20 files / 30MB) |
+| GET | /openapi/v1/tasks/status?id= | translate | Poll status & result |
+| GET | /openapi/v1/tasks/download?id=&file_id= | translate | Download artifacts (zip when omitted) |
 | GET | /openapi/v1/balance | * | Token balance & sentence conversion |
-| GET | /openapi/v1/kb/stats | kb/all | Knowledge base statistics |
-| GET | /openapi/v1/billing/usage | billing/all | Usage details |
+| GET | /openapi/v1/kb/stats | kb | Knowledge base statistics |
+| GET | /openapi/v1/billing/usage | billing | Usage details |
 | POST | /openapi/v1/apikey/rotate | all | Rotate API Key (old key invalidates immediately) |
 
 ## Create a text task
@@ -510,7 +510,7 @@ Usage is deducted from your account balance based on actual consumption; every r
 
 // ============ 开放 API 辅助接口（KB 统计 / 用量 / Key 轮换） ============
 
-// handleOpenAPIKBStats 开放接口：查询本租户知识库统计（需要 kb/all 权限）。
+// handleOpenAPIKBStats 开放接口：查询本租户知识库统计（需要 kb 权限）。
 func (s *Server) handleOpenAPIKBStats(w http.ResponseWriter, r *http.Request) {
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {
@@ -542,7 +542,7 @@ func (s *Server) kbStats(tid int64) int64 {
 	return total
 }
 
-// handleOpenAPIUsage 开放接口：查询本租户用量与余额（需要 billing/all 权限）。
+// handleOpenAPIUsage 开放接口：查询本租户用量与余额（需要 billing 权限）。
 func (s *Server) handleOpenAPIUsage(w http.ResponseWriter, r *http.Request) {
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {

@@ -20,6 +20,7 @@ export const zh: Record<string, string> = {
   // ---- 强制计费与注册/触达配置 ----
   'packages.enforceTitle': '强制计费开关',
   'packages.markupLabel': '成本均摊系数（≥1.0）：',
+  'packages.markupHint': '全局生效：套餐发放（入账 token）与实时用量扣费统一乘以该系数，保证「1 入账 token = 1 扣费 token」。调整即时生效，仅影响此后新购/新产生的用量。',
   'packages.rateLabel': '句↔token 换算率：',
   'packages.markupInvalid': '均摊系数不能小于 1.0',
   'packages.rateInvalid': '换算率必须大于 0',
@@ -71,6 +72,7 @@ export const en: Record<string, string> = {
   // ---- Billing enforcement & registration settings ----
   'packages.enforceTitle': 'Billing enforcement',
   'packages.markupLabel': 'Cost markup (≥1.0):',
+  'packages.markupHint': 'Applies globally: package grants (credited tokens) and real-time usage billing both multiply by this factor, keeping "1 credited token = 1 billed token". Takes effect immediately; only affects purchases/usage after the change.',
   'packages.rateLabel': 'Sentence↔token rate:',
   'packages.markupInvalid': 'Markup must be ≥ 1.0',
   'packages.rateInvalid': 'Rate must be > 0',

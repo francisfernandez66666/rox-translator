@@ -11,6 +11,7 @@ import {
   myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail,
   ticketDownload, ticketDelete, ticketCancel, createFeedback,
 } from '@/api'
+import { confirmDialog } from '@/components/uiDialogs'
 import type { Ticket, TicketResp } from '@/api/tickets'
 import { TRANSLATE_FILE_ACCEPT, validateTranslateFile } from '@/api/translate'
 import LangMultiSelect from './LangMultiSelect'
@@ -209,14 +210,14 @@ export default function TicketsPage() {
   }
   // 取消排队/进行中的工单（需确认）
   async function cancelTicket(row: Ticket) {
-    if (!window.confirm(tpl('tk.cancelConfirm', { no: row.ticket_no || row.id }))) return
+    if (!(await confirmDialog({ body: tpl('tk.cancelConfirm', { no: row.ticket_no || row.id }) }))) return
     const r = await ticketCancel(row.id)
     if (!r.success) { void MessagePlugin.error(r.message || t('tk.opFail')); return }
     void load()
   }
   // 删除已完成/已取消的工单（需确认）
   async function deleteTicket(row: Ticket) {
-    if (!window.confirm(tpl('tk.deleteConfirm', { no: row.ticket_no }))) return
+    if (!(await confirmDialog({ body: tpl('tk.deleteConfirm', { no: row.ticket_no }) }))) return
     const r = await ticketDelete(row.id)
     if (!r.success) { void MessagePlugin.error(r.message || t('tk.opFail')); return }
     void load()
@@ -418,10 +419,10 @@ function TicketFeedbackModal({ target, onClose, onSubmitted }: {
         with_context: withContext,
         mode: target.mode,
       })
-      if (!r.success) { alert(r.message); return }
+      if (!r.success) { void MessagePlugin.error(r.message); return }
       onSubmitted()
     } catch (e: any) {
-      alert(e instanceof Error ? e.message : String(e))
+      void MessagePlugin.error(e instanceof Error ? e.message : String(e))
     } finally { setSubmitting(false) }
   }
 

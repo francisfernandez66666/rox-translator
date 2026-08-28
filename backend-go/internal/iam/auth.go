@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -24,14 +25,28 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// jwtSecret JWT 签名密钥默认值；init 中允许 JWT_SECRET 环境变量覆盖（多实例部署需一致）。
-var jwtSecret = "trans-platform-jwt-secret-2026"
+// jwtSecret JWT 签名密钥；默认空串，由 init 在启动时解析：
+//   - 配置了 JWT_SECRET 环境变量 → 使用其值（多实例部署需保持一致）；
+//   - 未配置 → 生成进程级随机密钥并告警。随机密钥不可被外部伪造（替代原硬编码常量），
+//     但重启/扩副本会失效，生产必须设置 JWT_SECRET（亦可开 REQUIRE_PROD_SECRETS=1 强校验）。
+var jwtSecret string
 
-// init 启动时读取 JWT_SECRET 环境变量覆盖默认签名密钥。
+// init 启动时确定 JWT 签名密钥。
 func init() {
 	if v := os.Getenv("JWT_SECRET"); v != "" {
 		jwtSecret = v
+		return
 	}
+	// 未配置：生成随机密钥，杜绝「已知常量可伪造超管 token」的致命风险。
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// 随机源不可用（极罕见）：退化为空，Verify 将拒绝所有 token，服务不可用但不可被伪造。
+		jwtSecret = ""
+		log.Printf("[auth] 警告: JWT_SECRET 未设置且随机源不可用，JWT 校验将全部失败（请设置 JWT_SECRET）")
+		return
+	}
+	jwtSecret = hex.EncodeToString(b)
+	log.Printf("[auth] 警告: JWT_SECRET 未设置，已生成随机进程密钥（重启或扩副本后旧 token 失效，生产环境请设置 JWT_SECRET）")
 }
 
 // RandomSecret 生成 32 字节随机数的 hex 字符串（API Key 等高熵凭证用）；随机源不可用时回退 jwtSecret。

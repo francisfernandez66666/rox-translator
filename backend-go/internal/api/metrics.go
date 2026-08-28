@@ -230,7 +230,8 @@ func metricsToken() string {
 }
 
 // handleMetrics 导出 Prometheus 指标接口（/metrics）。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求。配置 METRICS_TOKEN 后需 Bearer 鉴权。
+// 安全默认：未配置 METRICS_TOKEN 时直接 401 关闭（杜绝默认公开泄露租户活跃度）；
+// 本地开发可显式设 METRICS_PUBLIC=1 重新放开无鉴权。配置 METRICS_TOKEN 后需 Bearer 鉴权。
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if tok := metricsToken(); tok != "" {
 		h := r.Header.Get("Authorization")
@@ -238,6 +239,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 401, map[string]string{"error": "未授权"})
 			return
 		}
+	} else if os.Getenv("METRICS_PUBLIC") != "1" {
+		writeJSON(w, 401, map[string]string{"error": "METRICS_TOKEN 未配置，/metrics 已关闭；本地开发请设 METRICS_PUBLIC=1"})
+		return
 	}
 	// 输出 Prometheus 文本格式（指定版本 0.0.4）
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

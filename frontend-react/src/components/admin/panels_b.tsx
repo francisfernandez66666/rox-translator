@@ -4,8 +4,9 @@
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Textarea, Tabs,
+  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Textarea, Tabs, MessagePlugin,
 } from 'tdesign-react'
+import { confirmDialog, promptText } from '@/components/uiDialogs'
 import {
   tenantList, tenantCreate, tenantUpdate, tenantSetStatus, tenantDelete,
   tenantGrantTrial, tenantErase, adminOrderCreate, adminOrderPay,
@@ -58,14 +59,14 @@ export function TenantsP() {
   // 保存租户：区分创建与编辑
   async function save() {
     if (dlg === 'create') {
-      if (!String(form.code || '').trim()) { window.alert(t('tenants.codeRequired')); return }
+      if (!String(form.code || '').trim()) { void MessagePlugin.warning(t('tenants.codeRequired')); return }
       const r: any = await tenantCreate({
         code: String(form.code || ''), name: String(form.name || ''),
         expires_at: String(form.expires_at || ''), permissions: String(form.permissions || '{}'),
         admin_user: form.admin_user ? String(form.admin_user) : undefined,
         admin_pass: form.admin_pass ? String(form.admin_pass) : undefined,
       })
-      if (!r.success) { window.alert(r.message); return }
+      if (!r.success) { void MessagePlugin.error(r.message); return }
       setForm({}); setDlg(null); await load(); ad.loadTenants()
     } else if (dlg && typeof dlg === 'object' && 'edit' in dlg) {
       const tt = dlg.edit
@@ -74,14 +75,14 @@ export function TenantsP() {
         expires_at: String(form.expires_at ?? tt.expires_at ?? ''),
         permissions: String(form.permissions ?? tt.permissions ?? '{}'),
       })
-      if (!r.success) { window.alert(r.message); return }
+      if (!r.success) { void MessagePlugin.error(r.message); return }
       setDlg(null); await load()
     }
   }
 
   // 导出租户数据：POST /api/tenant/export 返回 blob，XHR 下载（对齐 Vue）
-  function doExport(tt: TenantInfo) {
-    if (!window.confirm(tpl('tenants.exportConfirm', { name: tt.name }))) return
+  async function doExport(tt: TenantInfo) {
+    if (!(await confirmDialog({ body: tpl('tenants.exportConfirm', { name: tt.name }) }))) return
     const url = `${API_BASE}/api/tenant/export`
     const xhr = new XMLHttpRequest()
     xhr.open('POST', url, true)
@@ -90,7 +91,7 @@ export function TenantsP() {
     if (tk) xhr.setRequestHeader('Authorization', `Bearer ${tk}`)
     xhr.responseType = 'blob'
     xhr.onload = () => {
-      if (xhr.status !== 200) { window.alert(t('tenants.exportFailed')); return }
+      if (xhr.status !== 200) { void MessagePlugin.error(t('tenants.exportFailed')); return }
       const a = document.createElement('a')
       a.href = URL.createObjectURL(xhr.response)
       a.download = `tenant_${tt.id}_${tt.code}.json`
@@ -102,31 +103,31 @@ export function TenantsP() {
 
   // 超管代充值：输入 token 数创建订单并自动模拟支付入账
   async function charge(tt: TenantInfo) {
-    const tokens = window.prompt(tpl('tenants.chargePrompt', { name: tt.name }))
+    const tokens = await promptText({ body: tpl('tenants.chargePrompt', { name: tt.name }) })
     if (!tokens || Number(tokens) <= 0) return
     const r: any = await adminOrderCreate({ tenant_id: tt.id, tokens: Number(tokens), money: 0 })
-    if (!r.success) { window.alert(r.message); return }
+    if (!r.success) { void MessagePlugin.error(r.message); return }
     const o = r.order
     if (o && o.id) await adminOrderPay(o.id)
-    window.alert(tpl('tenants.charged', { tokens }))
+    void MessagePlugin.success(tpl('tenants.charged', { tokens }))
     await load()
   }
 
   // 删除租户（id=1 为平台默认租户，对齐 Vue v-if 禁止删除）
   async function removeTenant(tt: TenantInfo) {
-    if (!window.confirm(tpl('tenants.deleteConfirm', { name: tt.name }))) return
+    if (!(await confirmDialog({ body: tpl('tenants.deleteConfirm', { name: tt.name }) }))) return
     const r: any = await tenantDelete(tt.id)
-    if (!r.success) { window.alert(r.message); return }
+    if (!r.success) { void MessagePlugin.error(r.message); return }
     await load(); ad.loadTenants()
   }
 
   // GDPR 擦除：两次确认后调用擦除接口（对齐 Vue confirm×2）
   async function erase(tt: TenantInfo) {
-    if (!window.confirm(tpl('tenants.eraseConfirm', { name: tt.name }))) return
-    if (!window.confirm(tpl('tenants.eraseConfirm2', { name: tt.name }))) return
+    if (!(await confirmDialog({ body: tpl('tenants.eraseConfirm', { name: tt.name }) }))) return
+    if (!(await confirmDialog({ body: tpl('tenants.eraseConfirm2', { name: tt.name }) }))) return
     const r: any = await tenantErase(tt.id)
-    if (!r.success) { window.alert(r.message); return }
-    window.alert(t('tenants.erased'))
+    if (!r.success) { void MessagePlugin.error(r.message); return }
+    void MessagePlugin.success(t('tenants.erased'))
     await load()
   }
 
@@ -136,16 +137,16 @@ export function TenantsP() {
       id: tt.id, name: tt.name, expires_at: tt.expires_at || '',
       permissions: tt.permissions || '{}', invite_enabled: val,
     })
-    if (!r.success) { window.alert(r.message); return }
+    if (!r.success) { void MessagePlugin.error(r.message); return }
     await load()
   }
 
   // 为未开通套餐的租户发放试用套餐
   async function grantTrial(tt: TenantInfo) {
-    if (!window.confirm(tpl('tenants.grantTrialConfirm', { name: tt.name }))) return
+    if (!(await confirmDialog({ body: tpl('tenants.grantTrialConfirm', { name: tt.name }) }))) return
     const r: any = await tenantGrantTrial(tt.id)
-    if (!r.success) { window.alert(r.message); return }
-    window.alert(t('tenants.grantTrialDone'))
+    if (!r.success) { void MessagePlugin.error(r.message); return }
+    void MessagePlugin.success(t('tenants.grantTrialDone'))
     await load()
   }
 
@@ -171,7 +172,7 @@ export function TenantsP() {
                      <Button size="small" variant="text" onClick={() => grantTrial(row)}>{t('tenants.grantTrial')}</Button>
                    )}
                    <Button size="small" variant="text"
-                           onClick={async () => { const r: any = await tenantSetStatus(row.id, row.status === 'active' ? 'disabled' : 'active'); if (!r.success) window.alert(r.message); await load() }}>
+                            onClick={async () => { const r: any = await tenantSetStatus(row.id, row.status === 'active' ? 'disabled' : 'active'); if (!r.success) void MessagePlugin.error(r.message); await load() }}>
                      {row.status === 'active' ? t('tenants.disable') : t('tenants.enable')}
                    </Button>
                    {row.id !== 1 && (
@@ -344,7 +345,7 @@ export function OrgP() {
     const r: any = await request('/api/admin/users/update', {
       method: 'POST', headers: authHeaders(), body: JSON.stringify({ id: u.id, ...data }),
     })
-    if (!r.success) { window.alert(r.message); return false }
+    if (!r.success) { void MessagePlugin.error(r.message); return false }
     return true
   }
 
@@ -393,7 +394,7 @@ export function OrgP() {
 
   // 在选中组织下开通新用户
   async function createUser() {
-    if (!nu.username?.trim() || (nu.password?.length ?? 0) < 6) { window.alert(t('org.userValidation')); return }
+    if (!nu.username?.trim() || (nu.password?.length ?? 0) < 6) { void MessagePlugin.warning(t('org.userValidation')); return }
     setCreating(true)
     try {
       const r: any = await adminUserCreate({
@@ -403,8 +404,8 @@ export function OrgP() {
         role: nu.role,
         org_id: nuOrgId || undefined,
       })
-      if (!r.success) { window.alert(r.message); return }
-      window.alert(tpl('org.userCreated', { name: nu.username }))
+      if (!r.success) { void MessagePlugin.error(r.message); return }
+      void MessagePlugin.success(tpl('org.userCreated', { name: nu.username }))
       setNu({ username: '', password: '', display_name: '', role: 'user' })
       await loadAll()
     } finally { setCreating(false) }
@@ -412,11 +413,11 @@ export function OrgP() {
 
   // 弹窗重置组织用户密码
   async function resetPwd(u: Any) {
-    const pwd = window.prompt(tpl('org.resetPwdPrompt', { name: u.username }))
-    if (!pwd || pwd.length < 6) { window.alert(t('org.pwdMinLength')); return }
+    const pwd = await promptText({ header: t('org.resetPwdPrompt'), body: tpl('org.resetPwdPrompt', { name: u.username }) })
+    if (!pwd || pwd.length < 6) { void MessagePlugin.warning(t('org.pwdMinLength')); return }
     const r: any = await adminUserResetPassword(u.id, pwd)
-    if (!r.success) { window.alert(r.message); return }
-    window.alert(t('org.pwdReset'))
+    if (!r.success) { void MessagePlugin.error(r.message); return }
+    void MessagePlugin.success(t('org.pwdReset'))
   }
 
   // 启用/禁用组织用户
@@ -426,9 +427,9 @@ export function OrgP() {
 
   // 删除组织用户
   async function deleteUser(u: Any) {
-    if (!window.confirm(tpl('org.deleteUserConfirm', { name: u.username }))) return
+    if (!(await confirmDialog({ body: tpl('org.deleteUserConfirm', { name: u.username }) }))) return
     const r: any = await adminUserDelete(u.id)
-    if (!r.success) { window.alert(r.message); return }
+    if (!r.success) { void MessagePlugin.error(r.message); return }
     await loadAll()
   }
 
@@ -447,9 +448,9 @@ export function OrgP() {
     const cur = tenantStatusOf(o.tenant_id)
     const next = cur === 'active' ? 'disabled' : 'active'
     const key = next === 'disabled' ? 'org.disableTenantConfirm' : 'org.enableTenantConfirm'
-    if (!window.confirm(tpl(key, { name: o.name }))) return
+    if (!(await confirmDialog({ body: tpl(key, { name: o.name }) }))) return
     const r: any = await tenantSetStatus(o.tenant_id, next)
-    if (!r.success) { window.alert(r.message); return }
+    if (!r.success) { void MessagePlugin.error(r.message); return }
     ad.loadTenants(); await loadAll()
   }
 
@@ -458,18 +459,18 @@ export function OrgP() {
 
   // 创建组织或部门（parent_id=0 为组织，否则为部门）
   async function createOrg() {
-    if (!newName.trim()) { window.alert(t('org.nameRequired')); return }
+    if (!newName.trim()) { void MessagePlugin.warning(t('org.nameRequired')); return }
     const r: any = await orgCreate({ name: newName.trim(), parent_id: parentId, type: parentId === 0 ? 'org' : 'dept' })
-    if (!r.success) { window.alert(r.message); return }
+    if (!r.success) { void MessagePlugin.error(r.message); return }
     setNewName(''); await loadAll()
   }
 
   // 重命名组织；若重命名根组织且为超管，同步刷新租户列表
   async function renameOrg(o: OrgInfo) {
-    const name = window.prompt(tpl('org.renamePrompt', { name: o.name }), o.name)
+    const name = await promptText({ header: t('org.renamePrompt'), body: tpl('org.renamePrompt', { name: o.name }), defaultValue: o.name })
     if (!name || !name.trim()) return
     const r: any = await orgRename(o.id, name.trim())
-    if (!r.success) { window.alert(r.message); return }
+    if (!r.success) { void MessagePlugin.error(r.message); return }
     if (isSuper && o.type === 'root') ad.loadTenants()
     await loadAll()
   }
@@ -477,19 +478,19 @@ export function OrgP() {
   // 重命名当前租户根组织
   async function renameRootOrg() {
     if (!rootOrg) return
-    const name = window.prompt(t('org.renameRoot'), rootOrg.name)
+    const name = await promptText({ header: t('org.renameRoot'), body: t('org.renameRoot'), defaultValue: rootOrg.name })
     if (!name || !name.trim()) return
     const r: any = await orgRename(rootOrg.id, name.trim())
-    if (!r.success) { window.alert(r.message); return }
+    if (!r.success) { void MessagePlugin.error(r.message); return }
     if (isSuper) ad.loadTenants()
     await loadAll()
   }
 
   // 删除组织；若当前正选中该组织则重置
   async function deleteOrg(o: OrgInfo) {
-    if (!window.confirm(tpl('org.deleteConfirm', { name: o.name }))) return
+    if (!(await confirmDialog({ body: tpl('org.deleteConfirm', { name: o.name }) }))) return
     const r: any = await orgDelete(o.id)
-    if (!r.success) { window.alert(r.message); return }
+    if (!r.success) { void MessagePlugin.error(r.message); return }
     if (selectedOrg === o.id) setSelectedOrg(0)
     await loadAll()
   }
@@ -503,9 +504,9 @@ export function OrgP() {
   }
   async function saveBudget() {
     if (!budgetModal) return
-    if (!(budgetInput >= 0)) { window.alert(t('org.budgetInvalid')); return }
+    if (!(budgetInput >= 0)) { void MessagePlugin.warning(t('org.budgetInvalid')); return }
     const r: any = await orgTokenLimit(budgetModal.id, Math.floor(budgetInput))
-    if (!r.success) { window.alert(r.message); return }
+    if (!r.success) { void MessagePlugin.error(r.message); return }
     setBudgetMap((m) => ({ ...m, [budgetModal.id]: { limit: budgetInput, used: budgetModal.used } }))
     setBudgetModal(null)
   }
@@ -523,9 +524,9 @@ export function OrgP() {
   async function createInvite() {
     if (!inviteModal) return
     const code = inviteCodeInput.trim()
-    if (!code) { window.alert(t('org.inviteNeedCode')); return }
+    if (!code) { void MessagePlugin.warning(t('org.inviteNeedCode')); return }
     const r: any = await inviteCodeCreate({ code, tenant_id: inviteModal.id, org_id: inviteModal.id })
-    if (!r.success) { window.alert(r.message); return }
+    if (!r.success) { void MessagePlugin.error(r.message); return }
     setInviteCodeInput('')
     await openInvites(inviteModal)
   }

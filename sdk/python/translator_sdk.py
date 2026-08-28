@@ -214,14 +214,14 @@ class TranslatorClient:
         return self._get("/openapi/v1/balance")
 
     def kb_stats(self) -> dict:
-        """查询本租户知识库统计（需 Key 具备 kb/all 权限）。"""
+        """查询本租户知识库统计（需 Key 具备 kb 权限）。"""
         r = self._post_json("/openapi/v1/kb/stats", {})
         if not r.get("success"):
             raise TranslatorError(r.get("message", "查询失败"), body=r)
         return r
 
     def usage(self) -> dict:
-        """查询本租户用量汇总（需 Key 具备 billing/all 权限）。"""
+        """查询本租户用量汇总（需 Key 具备 billing 权限）。"""
         r = self._post_json("/openapi/v1/billing/usage", {})
         if not r.get("success"):
             raise TranslatorError(r.get("message", "查询失败"), body=r)

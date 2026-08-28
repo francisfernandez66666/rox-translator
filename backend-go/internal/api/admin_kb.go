@@ -192,7 +192,7 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "package": p})
 }
 
-// handleKBPackageUpdate 更新包
+// handleKBPackageUpdate 更新知识库包元信息（名称 / 描述 / 跨部门共享范围等）。参数 w/r：body 含 id 与待更新字段；鉴权：部门管理员及以上；副作用：更新 kb_packages 并写审计。
 func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
@@ -238,7 +238,7 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
-// handleKBPackageDelete 删除包
+// handleKBPackageDelete 删除指定知识库包（按租户 / 部门隔离）。参数 w/r：body 含 id；鉴权：部门管理员及以上；副作用：删除包及其条目并写审计。
 func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
@@ -287,7 +287,7 @@ func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "entries": entries})
 }
 
-// handleKBEntryAdd 新增条目
+// handleKBEntryAdd 向指定知识库包新增翻译记忆条目（源 / 目标文本等）。参数 w/r：body 含 package_id 与条目内容；鉴权：部门管理员及以上；副作用：写入 kb_entries 并写审计。
 func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
@@ -323,7 +323,7 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "id": id})
 }
 
-// handleKBEntryDelete 删除条目
+// handleKBEntryDelete 删除指定知识库条目（按租户 / 部门隔离）。参数 w/r：body 含 id；鉴权：部门管理员及以上；副作用：删除记录并写审计。
 func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {

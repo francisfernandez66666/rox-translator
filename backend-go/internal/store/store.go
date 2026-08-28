@@ -49,6 +49,7 @@ func New(db *sql.DB) (*Store, error) {
 	s.OneidMigrate()          // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
 	s.EnsureBillingDefaults() // 商业化参数默认值落库（幂等，面板可改）
 	s.orderMoneyBackfill()    // ★ 存量 pending 充值单应收回填（幂等；评审整改 B1，置于默认值落库后以读取到定价键）
+	s.PackageOrderTokenBackfill() // ★ token 口径：存量包订单 amount_tokens 补全（幂等；句数不参与运行期计算）
 	s.ArtifactsMigrate()      // ★ 产物归属登记表（幂等；评审整改 C1）
 	return s, nil
 }
@@ -389,6 +390,11 @@ func (s *Store) migrate() error {
 			created_at TEXT,
 			handled_at TEXT
 		)`,
+		// ---------- 索引补全（P0-4，幂等，避免高并发/大表全扫） ----------
+		`CREATE INDEX IF NOT EXISTS idx_ticket_state_ticket ON ticket_state(ticket_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_ticket_files_ticket ON ticket_files(ticket_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_ledger_tenant_user ON usage_ledger(tenant_id, user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(tenant_id, created_at)`,
 	}
 	for _, stmt := range stmts {
 		// 逐条幂等执行建表语句，失败即中止迁移

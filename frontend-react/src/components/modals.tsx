@@ -125,7 +125,7 @@ export function PasswordModal(props: { onClose: () => void; onDone?: () => void;
       const r = await submitNewPassword({ username, code: code.trim(), new_password: newPwd })
       if (!r.success) { setMsgOk(false); setMsg(r.message || t('pwd.codeBad')); return }
       setMsgOk(true)
-      window.alert(t('pwd.done'))
+      void MessagePlugin.success(t('pwd.done'))
       props.onDone?.()
       props.onClose()
     } catch (e) {

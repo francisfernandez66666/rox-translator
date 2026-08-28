@@ -49,6 +49,7 @@ type limitedBuffer struct {
 	limit int
 }
 
+// Write 限量写入：超出上限的字节静默丢弃，保证 Write 永不报错且内存有界（防止子进程输出爆炸 OOM）
 func (w *limitedBuffer) Write(p []byte) (int, error) {
 	room := w.limit - w.b.Len()
 	if room <= 0 {

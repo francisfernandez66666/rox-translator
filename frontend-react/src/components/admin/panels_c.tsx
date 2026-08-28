@@ -4,8 +4,9 @@
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Textarea,
+  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Textarea, MessagePlugin,
 } from 'tdesign-react'
+import { confirmDialog, promptText } from '@/components/uiDialogs'
 import {
   billingQuota, billingQuotaSave,
   billingOrders, billingInvoices, billingInvoiceCreate,
@@ -83,7 +84,6 @@ export function PlansP() {
   const [markupMultiplier, setMarkupMultiplier] = useState(1.5)
   const [tokensPerSentence, setTokensPerSentence] = useState(500)
   const [staticQRImage, setStaticQRImage] = useState('')
-  const [pkgDlg, setPkgDlg] = useState<null | 'settings'>(null)
   const [manualOrders, setManualOrders] = useState<Any[]>([])
   const [invDlg, setInvDlg] = useState<null | { order: Any; title: string; taxNo: string }>(null)
 
@@ -228,20 +228,23 @@ export function PlansP() {
   const [pkgForm, setPkgForm] = useState<Any>({ code: '', name: '', ptype: 'paid', sentences: 1000, price_money: 0, duration_days: 30 })
   // 创建商业包
   async function createPkg() {
-    if (!pkgForm.code || !pkgForm.name) { window.alert(t('apikeys.nameRequired')); return }
+    if (!pkgForm.code || !pkgForm.name) { void MessagePlugin.warning(t('apikeys.nameRequired')); return }
     const r: Any = await adminPackageCreate(pkgForm as any)
     if (toastResp(r)) { setPkgForm({ code: '', name: '', ptype: 'paid', sentences: 1000, price_money: 0, duration_days: 30 }); void loadPkgs() }
   }
   // 超管商业包启停
   async function togglePkg(p: Any) { await adminPackageUpdate({ id: Number(p.id), enabled: p.enabled ? 0 : 1 }); void loadPkgs() }
   // 超管删除商业包
-  async function deletePkg(p: Any) { if (!window.confirm(t('webhooks.confirmDelete'))) return; await adminPackageDelete(Number(p.id)); void loadPkgs() }
+  async function deletePkg(p: Any) {
+    if (!(await confirmDialog({ body: t('webhooks.confirmDelete') }))) return
+    await adminPackageDelete(Number(p.id)); void loadPkgs()
+  }
   // 保存计费强制开关
   async function saveEnforce() { const r: Any = await adminPackageSettingsSave({ billing_enforced: billingEnforced ? '1' : '0' } as never); toastResp(r, t('common.save')) }
   // 保存计费参数：试用句数、加价倍率、句-token 换算率
   async function saveBillingParams() {
-    if (!(markupMultiplier >= 1)) return
-    if (!(tokensPerSentence > 0)) return
+    if (!(markupMultiplier >= 1)) { void MessagePlugin.warning(t('packages.markupInvalid')); return }
+    if (!(tokensPerSentence > 0)) { void MessagePlugin.warning(t('packages.rateInvalid')); return }
     const r: Any = await adminPackageSettingsSave({ billing_markup_multiplier: markupMultiplier, estimate_tokens_per_sentence: tokensPerSentence } as never)
     toastResp(r, t('common.save'))
   }
@@ -369,11 +372,48 @@ export function PlansP() {
         </Space>
       </Panel>
 
+      {/* ===== 超管计费运营参数（原「运营参数」弹窗内容，移至主面板常驻） ===== */}
+      {isSuper && (
+        <Panel title={t('plans.nav.ops')}>
+          <Space size={8} align="center">
+            <Switch value={billingEnforced} onChange={(v) => setBillingEnforced(v as boolean)} />
+            <span style={{ color: billingEnforced ? '#2e7d32' : '#888', fontWeight: 600 }}>{billingEnforced ? t('billing.enforcedOn') : t('billing.enforcedOff')}</span>
+            <Button onClick={saveEnforce}>{t('common.save')}</Button>
+          </Space>
+          <div style={{ marginTop: 12 }}>
+            <Space size={8} align="center">
+              <span style={{ fontSize: 13, color: '#556' }}>{t('packages.trialLabel')}</span>
+              <Input type="number" value={num(trialSentences)} onChange={(v) => setTrialSentences(Number(v) || 0)} style={{ width: 120 }} />
+              <span style={{ fontSize: 13, color: '#556', marginLeft: 12 }}>{t('packages.markupLabel')}</span>
+              <Input type="number" value={num(markupMultiplier)} onChange={(v) => setMarkupMultiplier(Math.max(0, Number(v) || 0))} style={{ width: 120 }} />
+              <span style={{ fontSize: 13, color: '#556', marginLeft: 12 }}>{t('packages.rateLabel')}</span>
+              <Input type="number" value={num(tokensPerSentence)} onChange={(v) => setTokensPerSentence(Math.max(0, Number(v) || 0))} style={{ width: 120 }} />
+              <Button onClick={saveBillingParams}>{t('common.save')}</Button>
+            </Space>
+            <div style={{ fontSize: 12, color: '#889', marginTop: 6 }}>{t('packages.markupHint')}</div>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <Space size={8} align="center">
+              <span style={{ fontSize: 13, color: '#556' }}>{t('packages.payModeTitle')}</span>
+              <Select value={payModeCfg} onChange={(v) => setPayModeCfg(v as string)} style={{ width: 200 }}
+                      options={[{ label: t('packages.payMock'), value: 'mock' }, { label: t('packages.paySdk'), value: 'sdk' }, { label: t('packages.payStaticQR'), value: 'static_qr' }]} />
+              <Button onClick={savePayMode}>{t('common.save')}</Button>
+            </Space>
+          </div>
+          {payModeCfg === 'static_qr' && (
+            <div style={{ marginTop: 8 }}>
+              <Space size={8} align="center">
+                <Input value={staticQRImage} onChange={(v) => setStaticQRImage(v)} placeholder={t('packages.staticQRPlaceholder')} style={{ width: 360 }} />
+                <Button onClick={saveStaticQR}>{t('common.save')}</Button>
+              </Space>
+            </div>
+          )}
+        </Panel>
+      )}
+
       {/* ===== 超管商业包管理 ===== */}
       {isSuper && (
-        <Panel title={t('plans.nav.pkgMgmt')} extra={
-          <Button onClick={() => setPkgDlg('settings')}>{t('plans.nav.ops')}</Button>
-        }>
+        <Panel title={t('plans.nav.pkgMgmt')}>
           <Space size={8} align="center">
             <Input value={String(pkgForm.code || '')} onChange={(v) => setPkgForm({ ...pkgForm, code: v })} placeholder={t('packages.code')} style={{ width: 140 }} />
             <Input value={String(pkgForm.name || '')} onChange={(v) => setPkgForm({ ...pkgForm, name: v })} placeholder={t('packages.name')} style={{ width: 160 }} />
@@ -400,42 +440,6 @@ export function PlansP() {
                  ] as never} />
         </Panel>
       )}
-
-      {/* ===== 超管计费运营设置弹窗 ===== */}
-      <Dialog visible={pkgDlg === 'settings'} onClose={() => setPkgDlg(null)} header={t('plans.nav.ops')} width={560}>
-        <Space size={8} align="center">
-          <Switch value={billingEnforced} onChange={(v) => setBillingEnforced(v as boolean)} />
-          <span style={{ color: billingEnforced ? '#2e7d32' : '#888', fontWeight: 600 }}>{billingEnforced ? t('billing.enforcedOn') : t('billing.enforcedOff')}</span>
-          <Button onClick={saveEnforce}>{t('common.save')}</Button>
-        </Space>
-        <div style={{ marginTop: 12 }}>
-          <Space size={8} align="center">
-            <span style={{ fontSize: 13, color: '#556' }}>{t('packages.trialLabel')}</span>
-            <Input type="number" value={num(trialSentences)} onChange={(v) => setTrialSentences(Number(v) || 0)} style={{ width: 120 }} />
-            <span style={{ fontSize: 13, color: '#556', marginLeft: 12 }}>{t('packages.markupLabel')}</span>
-            <Input type="number" value={num(markupMultiplier)} onChange={(v) => setMarkupMultiplier(Number(v) || 0)} style={{ width: 120 }} />
-            <span style={{ fontSize: 13, color: '#556', marginLeft: 12 }}>{t('packages.rateLabel')}</span>
-            <Input type="number" value={num(tokensPerSentence)} onChange={(v) => setTokensPerSentence(Number(v) || 0)} style={{ width: 120 }} />
-            <Button onClick={saveBillingParams}>{t('common.save')}</Button>
-          </Space>
-        </div>
-        <div style={{ marginTop: 12 }}>
-          <Space size={8} align="center">
-            <span style={{ fontSize: 13, color: '#556' }}>{t('packages.payModeTitle')}</span>
-            <Select value={payModeCfg} onChange={(v) => setPayModeCfg(v as string)} style={{ width: 200 }}
-                    options={[{ label: t('packages.payMock'), value: 'mock' }, { label: t('packages.paySdk'), value: 'sdk' }, { label: t('packages.payStaticQR'), value: 'static_qr' }]} />
-            <Button onClick={savePayMode}>{t('common.save')}</Button>
-          </Space>
-        </div>
-        {payModeCfg === 'static_qr' && (
-          <div style={{ marginTop: 8 }}>
-            <Space size={8} align="center">
-              <Input value={staticQRImage} onChange={(v) => setStaticQRImage(v)} placeholder={t('packages.staticQRPlaceholder')} style={{ width: 360 }} />
-              <Button onClick={saveStaticQR}>{t('common.save')}</Button>
-            </Space>
-          </div>
-        )}
-      </Dialog>
 
       {/* ===== 超管人工确认订单 ===== */}
       {isSuper && (
@@ -614,10 +618,6 @@ export function ReferralP() {
               <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgRewardTokens')}</span>
               <Input type="number" value={String(cfg.reward_tokens)} onChange={(v) => setCfg({ ...cfg, reward_tokens: Number(v) || 0 })} style={{ width: 200 }} />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-              <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgRewardTokens')}</span>
-              <Input type="number" value={String(cfg.reward_tokens)} onChange={(v) => setCfg({ ...cfg, reward_tokens: Number(v) || 0 })} style={{ width: 200 }} />
-            </div>
             {/* 付费邀请奖励（多邀得多）仅对个人用户开放；企业用户不显示后台配置 */}
             {isPersonal && (
             <>
@@ -639,8 +639,8 @@ export function ReferralP() {
             </div>
             <Button onClick={async () => {
               const c: Any = await referralConfigSave({ enabled: cfg.enabled, reward_tokens: Number(cfg.reward_tokens) || 0, paid_reward_tokens: Number(cfg.paid_tokens) || 0, reward_days: Number(cfg.reward_days) || 0, paid_reward_days: Number(cfg.paid_days) || 0 })
-              if (!c.success) window.alert(c.message || '保存失败')
-              else window.alert(t('referral.cfgSaved'))
+              if (!c.success) void MessagePlugin.error(c.message || '保存失败')
+              else void MessagePlugin.success(t('referral.cfgSaved'))
             }}>{t('referral.cfgSave')}</Button>
           </div>
         )}
@@ -695,7 +695,7 @@ export function WebhooksP() {
         <Input value={String(dlg?.url || '')} onChange={(v) => setDlg((d) => (d ? { ...d, url: v } : d))} placeholder={t('webhooks.urlPlaceholder')} style={{ flex: 1, minWidth: 240 }} />
         <Input value={String(dlg?.secret || '')} onChange={(v) => setDlg((d) => (d ? { ...d, secret: v } : d))} placeholder={t('webhooks.secretPlaceholder')} style={{ width: 200 }} />
         <Input value={String(dlg?.events || '')} onChange={(v) => setDlg((d) => (d ? { ...d, events: v } : d))} placeholder={t('webhooks.eventsPlaceholder')} style={{ flex: 1, minWidth: 200 }} />
-        {!!dlg && <Button theme="primary" onClick={async () => { if (!dlg?.url) { window.alert(t('webhooks.urlRequired')); return } const r: Any = await webhookSave({ id: dlg.id ? Number(dlg.id) : undefined, url: String(dlg.url || ''), secret: dlg.secret ? String(dlg.secret) : undefined, events: String(dlg.events || 'translation.completed') }); if (toastResp(r)) { setDlg(null); void load() } }}>{t('webhooks.saveConfig')}</Button>}
+        {!!dlg && <Button theme="primary" onClick={async () => { if (!dlg?.url) { void MessagePlugin.warning(t('webhooks.urlRequired')); return } const r: Any = await webhookSave({ id: dlg.id ? Number(dlg.id) : undefined, url: String(dlg.url || ''), secret: dlg.secret ? String(dlg.secret) : undefined, events: String(dlg.events || 'translation.completed') }); if (toastResp(r)) { setDlg(null); void load() } }}>{t('webhooks.saveConfig')}</Button>}
       </Space>
 
       <Table rowKey="id" size="small" data={rows}
@@ -706,7 +706,7 @@ export function WebhooksP() {
                { colKey: 'enabled', title: t('webhooks.colStatus'), width: 90, cell: ({ row }: any) => <Tag theme={row.enabled ? 'success' : 'default'}>{row.enabled ? t('webhooks.enable') : t('webhooks.disable')}</Tag> },
                { colKey: 'op', title: t('webhooks.colActions'), width: 260, cell: ({ row }: any) => (
                  <Space size={4}>
-                   <Button size="small" variant="text" onClick={async () => { const r: Any = await webhookTest(Number(row.id)); window.alert((r.message as string) || (r.success ? t('webhooks.testSent') : t('webhooks.testFailed'))) }}>{t('webhooks.test')}</Button>
+                    <Button size="small" variant="text" onClick={async () => { const r: Any = await webhookTest(Number(row.id)); if (r.success) void MessagePlugin.success(t('webhooks.testSent')); else void MessagePlugin.error((r.message as string) || t('webhooks.testFailed')) }}>{t('webhooks.test')}</Button>
                    <Button size="small" variant="text" onClick={() => toggleWebhook(row)}>{row.enabled ? t('webhooks.disable') : t('webhooks.enable')}</Button>
                    <Button size="small" variant="text" onClick={() => setDlg({ ...row })}>{t('webhooks.saveConfig')}</Button>
                    <Popconfirm content={t('webhooks.confirmDelete')} onConfirm={async () => { await webhookDelete(Number(row.id)); void load() }}>
@@ -754,13 +754,13 @@ export function ApiKeysP() {
   // 复制新创建的 Key（仅展示一次）
   async function copyNewKey() {
     try { await navigator.clipboard.writeText(newKey); setCopied(true); setTimeout(() => setCopied(false), 2000) }
-    catch { window.alert(t('apikeys.copyFail')) }
+    catch { void MessagePlugin.error(t('apikeys.copyFail')) }
   }
   // 创建 API Key
   async function createKey() {
-    if (!kForm.name) { window.alert(t('apikeys.nameRequired')); return }
+    if (!kForm.name) { void MessagePlugin.warning(t('apikeys.nameRequired')); return }
     const r: Any = await apiKeyCreate({ name: String(kForm.name || ''), perms: String(kForm.perms || 'translate'), daily_call_limit: kForm.daily_call_limit === '' ? undefined : Number(kForm.daily_call_limit) })
-    if (!r.success) { window.alert(r.message || ''); return }
+    if (!r.success) { void MessagePlugin.error(r.message || ''); return }
     setNewKey(r.api_key || '')
     setKForm({ name: '', perms: 'translate', daily_call_limit: '' })
     await loadKeys()
@@ -768,23 +768,26 @@ export function ApiKeysP() {
   // 启停 API Key
   async function toggleKey(k: Any) { await apiKeyStatus(Number(k.id), k.status === 'active' ? 'disabled' : 'active'); await loadKeys() }
   // 删除 API Key
-  async function deleteKey(k: Any) { if (!window.confirm(t('apikeys.confirmDelete'))) return; await apiKeyDelete(Number(k.id)); await loadKeys() }
+  async function deleteKey(k: Any) {
+    if (!(await confirmDialog({ body: t('apikeys.confirmDelete') }))) return
+    await apiKeyDelete(Number(k.id)); await loadKeys()
+  }
   // 轮换 API Key（生成新 key，旧 key 失效）
   async function rotateKey(k: Any) {
-    if (!window.confirm(tpl('apikeys.confirmRotate', { name: k.name }))) return
+    if (!(await confirmDialog({ body: tpl('apikeys.confirmRotate', { name: k.name }) }))) return
     const r: Any = await apiKeyRotate(Number(k.id))
-    if (!r.success) { window.alert(r.message || ''); return }
+    if (!r.success) { void MessagePlugin.error(r.message || ''); return }
     setNewKey(r.api_key || '')
     await loadKeys()
   }
   // 设置单日调用上限
   async function setLimit(k: Any) {
-    const input = window.prompt(tpl('apikeys.limitPrompt', { name: k.name, cur: k.daily_call_limit || 0 }))
+    const input = await promptText({ body: tpl('apikeys.limitPrompt', { name: k.name, cur: k.daily_call_limit || 0 }) })
     if (input === null) return
     const n = Number(input)
-    if (!Number.isFinite(n) || n < 0) { window.alert(t('apikeys.limitInvalid')); return }
+    if (!Number.isFinite(n) || n < 0) { void MessagePlugin.warning(t('apikeys.limitInvalid')); return }
     const r: Any = await apiKeyLimit(Number(k.id), Math.floor(n))
-    if (!r.success) { window.alert(r.message || ''); return }
+    if (!r.success) { void MessagePlugin.error(r.message || ''); return }
     await loadKeys()
   }
 
@@ -802,12 +805,12 @@ export function ApiKeysP() {
   async function refreshDocsState() { setDocsLoaded(false); await loadDocs() }
   // 保存当前语言文档
   async function saveDocs() {
-    if (!window.confirm(t('docsEdit.confirmSave'))) return
+    if (!(await confirmDialog({ body: t('docsEdit.confirmSave') }))) return
     setDocsSaving(true)
     try {
       const r: Any = await saveOpenAPIDocs({ lang: docsLang, md: docsMD })
-      if (!r.success) { window.alert(r.message || ''); return }
-      window.alert(t('docsEdit.saved'))
+      if (!r.success) { void MessagePlugin.error(r.message || ''); return }
+      void MessagePlugin.success(t('docsEdit.saved'))
       await refreshDocsState()
     } finally { setDocsSaving(false) }
   }
@@ -815,10 +818,10 @@ export function ApiKeysP() {
   async function previewDocs() {
     try {
       const r: Any = await previewOpenAPIDocs({ lang: docsLang, md: docsMD })
-      if (!r.success) { window.alert(r.message || ''); return }
+      if (!r.success) { void MessagePlugin.error(r.message || ''); return }
       const w = window.open('', '_blank')
       if (w) { w.document.open(); w.document.write(r.html as string); w.document.close() }
-    } catch (e) { window.alert(String(e)) }
+    } catch (e) { void MessagePlugin.error(String(e)) }
   }
   // 导入本地 Markdown 文件
   function importDocs(e: any) {
@@ -838,12 +841,12 @@ export function ApiKeysP() {
   }
   // 重置为默认文档（传空 md 让后端回退）
   async function resetDocs() {
-    if (!window.confirm(t('docsEdit.confirmReset'))) return
+    if (!(await confirmDialog({ body: t('docsEdit.confirmReset') }))) return
     const r: Any = await saveOpenAPIDocs({ lang: docsLang, md: '' })
-    if (!r.success) { window.alert(r.message || ''); return }
+    if (!r.success) { void MessagePlugin.error(r.message || ''); return }
     setDocsMD('')
     await refreshDocsState()
-    window.alert(t('docsEdit.resetDone'))
+    void MessagePlugin.success(t('docsEdit.resetDone'))
   }
   // 在新标签打开在线文档页面
   function openDocs() { window.open('/openapi/docs', '_blank') }

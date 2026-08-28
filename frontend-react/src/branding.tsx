@@ -167,5 +167,26 @@ export function BrandingProvider({ tenantId, children }: { tenantId?: number; ch
     const name = b.brandName || b.tenantName
     document.title = name ? `${name} 智能翻译平台` : DEFAULT_BRAND_NAME
   }, [b])
+  // 注入工作台/聊天气泡配色（ChatWindow、MessageBubble 等引用的 CSS 变量）。
+  // 品牌数据暂无独立主色字段，统一以平台主色派生，避免与 TDesign 令牌冲突；
+  // 组件卸载时清除，避免多租户间变量泄漏。
+  useEffect(() => {
+    const root = document.documentElement
+    const palette: Record<string, string> = {
+      '--bubble-user-bg': '#e3f2fd',
+      '--bubble-user-border': '#2f47f5',
+      '--bubble-ai-bg': '#f4f6fa',
+      '--bubble-ai-border': '#e3e6ef',
+      '--bg': '#fafbfd',
+      '--panel': '#ffffff',
+      '--text': '#141b2d',
+      '--border': '#e7eaf0',
+      '--muted': '#525c70',
+      '--msg-out-bg': '#2f47f5',
+      '--msg-out-color': '#ffffff',
+    }
+    Object.entries(palette).forEach(([k, v]) => root.style.setProperty(k, v))
+    return () => { Object.keys(palette).forEach((k) => root.style.removeProperty(k)) }
+  }, [])
   return <Ctx.Provider value={b}>{children}</Ctx.Provider>
 }

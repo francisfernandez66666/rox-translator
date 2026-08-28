@@ -3,8 +3,9 @@
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Tabs, Empty,
+  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Tabs, Empty, MessagePlugin,
 } from 'tdesign-react'
+import { promptText } from '@/components/uiDialogs'
 import {
   systemHealth, systemAudit, systemAlerts, alertResolve,
   adminUsers, adminUserCreate, adminUserUpdate, adminUserDelete, adminUserResetPassword,
@@ -94,7 +95,7 @@ export default function Overview() {
     if (tid > 0) xhr.setRequestHeader('X-Tenant-ID', String(tid))
     xhr.responseType = 'blob'
     xhr.onload = () => {
-      if (xhr.status !== 200) { alert(t('overview.exportFailed')); return }
+      if (xhr.status !== 200) { void MessagePlugin.error(t('overview.exportFailed')); return }
       const a = document.createElement('a')
       a.href = URL.createObjectURL(xhr.response)
       a.download = `audit_${new Date().toISOString().slice(0, 10)}.csv`
@@ -223,9 +224,9 @@ export function UsersP() {
 
   // 创建用户并清空表单
   async function createUser() {
-    if (!uForm.username || !uForm.password) { alert(t('users.required')); return }
+    if (!uForm.username || !uForm.password) { void MessagePlugin.warning(t('users.required')); return }
     const r = await adminUserCreate({ ...uForm } as never)
-    if (!r.success) { alert(r.message); return }
+    if (!r.success) { void MessagePlugin.error(r.message); return }
     setUForm({ username: '', password: '', display_name: '', role: 'user', tenant_id: activeTenantId || 1, org_id: 0 })
     setDlg(false); void load()
   }
@@ -236,7 +237,7 @@ export function UsersP() {
     if (field === 'org_id') data.org_id = Number(val)
     else data[field] = val
     const r = await adminUserUpdate(Number(u.id), data as never)
-    if (!r.success) alert(r.message)
+    if (!r.success) void MessagePlugin.error(r.message)
     void load()
   }
 
@@ -246,15 +247,15 @@ export function UsersP() {
       display_name: u.display_name, role: u.role,
       status: u.status === 'active' ? 'disabled' : 'active', org_id: u.org_id || 0,
     } as never)
-    if (!r.success) alert(r.message)
+    if (!r.success) void MessagePlugin.error(r.message)
     void load()
   }
 
   // 弹窗重置用户密码
-  function resetPwd(u: Any) {
-    const pwd = prompt(tpl('users.resetPwdPrompt', { name: String(u.username ?? '') }))
+  async function resetPwd(u: Any) {
+    const pwd = await promptText({ header: t('users.resetPwdPrompt'), body: tpl('users.resetPwdPrompt', { name: String(u.username ?? '') }) })
     if (!pwd) return
-    void adminUserResetPassword(Number(u.id), pwd).then((r) => { if (!r.success) alert(r.message) })
+    void adminUserResetPassword(Number(u.id), pwd).then((r) => { if (!r.success) void MessagePlugin.error(r.message) })
   }
 
   return (
@@ -600,7 +601,7 @@ export function InvitesP() {
       {!rows.length && <div style={{ textAlign: 'center', color: '#999', padding: 12 }}>{t('invites.empty')}</div>}
 
       <Dialog visible={dlg} onClose={() => setDlg(false)} header={t('invites.create')} onConfirm={async () => {
-        if (!code.trim()) { alert(t('invites.codeRequired')); return }
+        if (!code.trim()) { void MessagePlugin.warning(t('invites.codeRequired')); return }
         // 企业用户（非超管）创建邀请码只能绑定本企业，忽略前端选择的租户
         const tid = isSuper ? tenantId : activeTenantId
         const r = await inviteCodeCreate({ code: code.trim(), tenant_id: tid })
