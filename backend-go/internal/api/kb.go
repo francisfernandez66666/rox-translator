@@ -438,6 +438,7 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		TempID    string `json:"temp_id"`    // 识别阶段返回的临时 ID
 		PackageID int64  `json:"package_id"` // 目标知识库包 ID（按包隔离写入）
+		Layer     int    `json:"layer"`      // 条目层（0 缺省 TM=2；整改 R-L4：支持术语1/安全句3/碎片4）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TempID == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少 temp_id"})
@@ -548,8 +549,13 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// 按语言逐条写入指定包（来源标记 "imported"；单条失败跳过计数）
+		// ★ 整改 R-L4：尊重导入请求的 layer（缺省 TM=2），使术语/安全句/碎片四层均可经导入写入。
+		layer := req.Layer
+		if layer == 0 {
+			layer = store.LayerTM
+		}
 		for lang, txt := range translations {
-			if _, err := s.Store.SaveEntry(tid, req.PackageID, store.LayerTM, "zh", src, lang, txt, "imported"); err != nil {
+			if _, err := s.Store.SaveEntry(tid, req.PackageID, layer, "zh", src, lang, txt, "imported"); err != nil {
 				skipped++
 				continue
 			}

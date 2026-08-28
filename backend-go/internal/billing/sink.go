@@ -167,6 +167,7 @@ func (s *UsageSink) flush() {
 		groups[r.Tid] = append(groups[r.Tid], r)
 	}
 	enforced := s.svc.Enabled()
+	var failed []usageRecord
 	for tid, recs := range groups {
 		rows := make([]store.UsageBatchRow, 0, len(recs))
 		for _, r := range recs {
@@ -182,15 +183,32 @@ func (s *UsageSink) flush() {
 			err = s.svc.Store.LogUsageBatch(tid, rows)
 		}
 		if err != nil {
-			// 余额不足：对批次内各条触发中止（兜底；影子已提前中止过）
 			if errors.Is(err, store.ErrInsufficientBalance) {
+				// 余额不足：中止本批且不再重试（避免无限回放）
 				for _, r := range recs {
 					if r.Abort != nil {
 						r.Abort()
 					}
 				}
+				log.Printf("[usagesink] flush tenant=%d 余额不足，丢弃计费: %v", tid, err)
+				continue
 			}
-			log.Printf("[usagesink] flush tenant=%d failed: %v", tid, err)
+			// 其余错误（如 SQLITE_BUSY/磁盘抖动）：回插缓冲，下一周期重试，避免 fail-open 少计费
+			log.Printf("[usagesink] flush tenant=%d 失败，回插缓冲重试: %v", tid, err)
+			failed = append(failed, recs...)
+		}
+	}
+	if len(failed) > 0 {
+		s.mu.Lock()
+		// 内存护栏：缓冲超过 5 万条时丢弃最旧部分，防止持续故障下无限膨胀
+		s.buf = append(failed, s.buf...)
+		if len(s.buf) > 50000 {
+			s.buf = s.buf[len(s.buf)-50000:]
+		}
+		s.mu.Unlock()
+		select {
+		case s.wake <- struct{}{}:
+		default:
 		}
 	}
 }

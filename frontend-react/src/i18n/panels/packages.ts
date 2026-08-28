@@ -1,4 +1,5 @@
 // panels/packages.ts — 商业包/套餐/注册与支付配置面板 i18n 键（中英）
+// 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
 export const zh: Record<string, string> = {
   'packages.title': '商业包管理',
   'packages.hint': '免费体验包：新租户注册自动发放试用句数。付费包：包月 X 句，订阅后发放。增量包：购买后追加句数。',
@@ -51,6 +52,7 @@ export const zh: Record<string, string> = {
   'packages.staticQRPlaceholder': '收款码图片 URL 或 base64',
 }
 
+// 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
   'packages.title': 'Commercial Packages',
   'packages.hint': 'Free trial: new tenants get trial sentences on registration. Paid: monthly X sentences. Increment: adds sentences on purchase.',

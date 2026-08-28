@@ -17,6 +17,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -583,6 +584,14 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 // 其余子域一律 403，既满足 Caddy 防滥用要求，又避免任意子域耗尽 Let's Encrypt 配额。
 // 租户在后台设置子域前缀后即时生效，无需手动申请证书（配合 DNS 通配符 A 记录 *.lexicorn.cn → 服务器 IP）。
 func (s *Server) handleCaddyOnDemandAsk(w http.ResponseWriter, r *http.Request) {
+	// ★ 整改 R-M6：本接口仅供 Caddy 的 on_demand_tls ask 模块调用，返回 200/403 即会暴露
+	//   哪些租户子域已登记（子域名枚举 oracle）。因此强制来源白名单：仅本机回环（Caddy 同机）
+	//   或 system_config「caddy_ask_allowed」配置的 CIDR（Caddy 与后端不同机时）可调用，
+	//   其余来源一律 403，杜绝外部探测。
+	if !s.caddyAskAuthorized(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	domain := r.URL.Query().Get("domain")
 	if i := strings.Index(domain, ":"); i >= 0 {
 		domain = domain[:i]
@@ -618,6 +627,30 @@ func (s *Server) handleCaddyOnDemandAsk(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	http.Error(w, "forbidden", http.StatusForbidden)
+}
+
+// caddyAskAuthorized 判断 Caddy ask 请求是否来自受信来源：本机回环优先；
+// 若 Caddy 与后端不同机，可在 system_config「caddy_ask_allowed」配置逗号分隔的 CIDR 白名单。
+func (s *Server) caddyAskAuthorized(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = strings.TrimSpace(r.RemoteAddr)
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsLoopback() {
+		return true
+	}
+	if s.Store != nil {
+		if v, e := s.Store.GetConfig("caddy_ask_allowed"); e == nil && v != "" {
+			for _, cidr := range strings.Split(v, ",") {
+				cidr = strings.TrimSpace(cidr)
+				if _, netC, cerr := net.ParseCIDR(cidr); cerr == nil && ip != nil && netC.Contains(ip) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // handleFooterLinksGet 公开接口：返回平台级页脚链接（超管设置，与租户无关）。

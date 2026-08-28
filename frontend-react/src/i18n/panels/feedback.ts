@@ -2,6 +2,7 @@
 // i18n/panels/feedback.ts — 用户反馈面板文案（中英）
 // ============================================================================
 
+// 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
 export const zh = {
   'fb.title': '翻译反馈',
   'fb.hint': '你的反馈将直接提交给平台管理员，帮助我们改进翻译质量。',
@@ -28,6 +29,7 @@ export const zh = {
   'fb.empty': '暂无反馈',
 }
 
+// 英文文案词典：键与上方 zh 一一对应。
 export const en = {
   'fb.title': 'Translation Feedback',
   'fb.hint': 'Your feedback goes directly to platform admins and helps us improve quality.',

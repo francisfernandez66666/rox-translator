@@ -90,6 +90,25 @@ func (c *Client) embedOverride() (base, key, model string) {
 	return c.embedBase, c.embedKey, c.embedModel
 }
 
+// embedOverrideCtxKey 请求级 Embed 覆盖端点键（整改 R3：消除全局可变状态的跨请求污染）。
+// 此前的全局 SetEmbedOverride 会被并发请求 last-writer-wins 串味，导致本请求无 kb_embed 阶段
+// 配置却误用其他请求的 Embed 模型；改为经 ctx 透传后，覆盖仅对当前请求生效。
+type embedOverrideCtxKey struct{}
+
+// WithEmbedOverride 把 kb_embed 阶段覆盖端点注入 ctx（仅对当前请求生效）。
+// 参数：ctx=上下文，base/key/model=覆盖的 Embed 端点。
+func WithEmbedOverride(ctx context.Context, base, key, model string) context.Context {
+	return context.WithValue(ctx, embedOverrideCtxKey{}, [3]string{base, key, model})
+}
+
+// embedOverrideFromCtx 读取请求级 Embed 覆盖；未设置返回 ok=false。
+func embedOverrideFromCtx(ctx context.Context) (base, key, model string, ok bool) {
+	if v, yes := ctx.Value(embedOverrideCtxKey{}).([3]string); yes {
+		return v[0], v[1], v[2], true
+	}
+	return "", "", "", false
+}
+
 // Inflight 当前在途 LLM 调用数（/status 与排障观测用）。
 func (c *Client) Inflight() int64 { return c.inflight.Load() }
 
@@ -185,8 +204,9 @@ func (s *semSlot) Release() {
 
 // acquireWaitTimeout 信号量获牌等待上限（LLM_ACQUIRE_TIMEOUT_SEC，默认 90s）。
 // ★ 防死锁整改：文件翻译等大并发场景会把全局 chatSem/embSem 打满，若无上限，
-//   等待方在无 deadline 的 ctx 下会永久阻塞（持一锁等另一锁的循环等待），拖垮整个
-//   worker 池乃至全站。加此上限后，久等不到即报错返回，由上层降级/重试，绝不会卡死。
+//
+//	等待方在无 deadline 的 ctx 下会永久阻塞（持一锁等另一锁的循环等待），拖垮整个
+//	worker 池乃至全站。加此上限后，久等不到即报错返回，由上层降级/重试，绝不会卡死。
 func acquireWaitTimeout() time.Duration {
 	if v := strings.TrimSpace(os.Getenv("LLM_ACQUIRE_TIMEOUT_SEC")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -573,7 +593,10 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string, batchSize ...in
 func (c *Client) embedChunk(ctx context.Context, texts []string) ([][]float32, error) {
 	// 阶段覆盖（kb_embed）：超管在分阶段模型里配置的 Embed 端点优先（R7：持锁快照读取）
 	base, key, model := c.cfg.EmbedAPIBase, c.cfg.EmbedAPIKey, "embedding-2"
-	if eb, ek, em := c.embedOverride(); eb != "" && em != "" {
+	// 优先级：ctx 请求级覆盖 > 全局快照覆盖 > 默认配置（整改 R3）
+	if cb, ck, cm, cok := embedOverrideFromCtx(ctx); cok && cb != "" && cm != "" {
+		base, key, model = cb, ck, cm
+	} else if eb, ek, em := c.embedOverride(); eb != "" && em != "" {
 		base, key, model = eb, ek, em
 	}
 	payload := map[string]interface{}{

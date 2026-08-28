@@ -356,3 +356,60 @@ func TestVectorScopedSharedVisible(t *testing.T) {
 		t.Fatal("兄弟部门包不应进入链内集合")
 	}
 }
+
+// TestFindEntriesBySourceScopedIsolation 整改 R2 回归：结构化 KB 条目按组织可见性隔离。
+// 部门私有（opt-out, share_cross_dept=0）术语对兄弟部门不可见；共享部门包/企业包/行业包/文化包可见。
+func TestFindEntriesBySourceScopedIsolation(t *testing.T) {
+	env := newScopeEnv(t)
+
+	// C 部门用户视角
+	got, err := env.st.FindEntriesBySourceScoped(2, env.orgC, "zh", "D机密流程")
+	if err != nil {
+		t.Fatalf("查询失败: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("兄弟部门 opt-out 私有术语不应跨见, got=%v", got)
+	}
+
+	// 批量检索收集命中源文本
+	collect := func(zh string) map[string]bool {
+		es, e := env.st.FindEntriesBySourceScoped(2, env.orgC, "zh", zh)
+		if e != nil {
+			t.Fatalf("查询 %s 失败: %v", zh, e)
+		}
+		m := map[string]bool{}
+		for _, x := range es {
+			m[x.SourceText] = true
+		}
+		return m
+	}
+	if m := collect("C专属术语"); !m["C专属术语"] {
+		t.Fatal("本部门术语应可见")
+	}
+	if m := collect("刹车系统"); !m["刹车系统"] {
+		t.Fatal("企业包术语应可见")
+	}
+	if m := collect("跨部门共享话术"); !m["跨部门共享话术"] {
+		t.Fatal("兄弟部门 opt-in 共享术语应可见")
+	}
+	if m := collect("B层术语"); !m["B层术语"] {
+		t.Fatal("兄弟部门默认共享术语应可见")
+	}
+
+	// 无组织（org=0）用户：任何部门私有包均不可见，只见企业/行业/文化
+	zero := func(zh string) bool {
+		es, _ := env.st.FindEntriesBySourceScoped(2, 0, "zh", zh)
+		for _, x := range es {
+			if x.SourceText == zh {
+				return true
+			}
+		}
+		return false
+	}
+	if zero("D机密流程") {
+		t.Fatal("无组织用户不应见 opt-out 私有术语")
+	}
+	if !zero("刹车系统") {
+		t.Fatal("无组织用户应见企业包术语")
+	}
+}

@@ -5,6 +5,17 @@
 package payment
 
 import (
+	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
+	"fmt"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -78,40 +89,123 @@ func TestMockProviderCreateMissingOrderNo(t *testing.T) {
 	}
 }
 
-// wechat 未配置资质应报错（引导回退 mock）；已配置可下单。
+// wechat 未配置资质应报错（引导回退 mock）；已配置可下单并验签加密回调。
 func TestWechatProvider(t *testing.T) {
 	p := &WechatProvider{cfg: &Config{}}
 	if _, err := p.CreateOrder(&PayRequest{OrderNo: "RO1", Amount: 100}); err == nil {
 		t.Fatal("未配置微信资质应报错")
 	}
 	// 已配置
-	p2 := &WechatProvider{cfg: &Config{Wechat: WechatConfig{AppID: "app", MchID: "mch", APIv3Key: "key"}}}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	p2 := &WechatProvider{cfg: &Config{Wechat: WechatConfig{AppID: "app", MchID: "mch", APIv3Key: string(key)}}}
 	res, err := p2.CreateOrder(&PayRequest{OrderNo: "RO1", Amount: 100})
 	if err != nil || res.Channel != "wechat" {
 		t.Fatalf("已配置微信下单失败: %v", err)
 	}
-	// 回调验签（骨架）
-	n, err := p2.VerifyNotify([]byte(`{"order_no":"RO1","amount":100}`), nil)
-	if err != nil || n.OrderNo != "RO1" || !n.Verified {
+	// 加密回调报文（AES-256-GCM，真实 resource 结构）
+	plain := `{"out_trade_no":"RO1","transaction_id":"T1","trade_state":"SUCCESS","amount":{"total":100}}`
+	body := encryptWechatResource(t, string(key), plain)
+	n, err := p2.VerifyNotify(body, nil)
+	if err != nil || n.OrderNo != "RO1" || n.Amount != 100 || !n.Verified {
 		t.Fatalf("微信回调失败: %v %+v", err, n)
+	}
+	// 伪造明文报文（无加密 resource）必须被拒
+	if _, err := p2.VerifyNotify([]byte(`{"order_no":"RO1","amount":100}`), nil); err == nil {
+		t.Fatal("未加密明文回调应被拒绝")
 	}
 }
 
-// alipay 未配置资质应报错；已配置可下单。
+// alipay 未配置资质应报错；已配置可下单并以公钥 RSA2 验签回调。
 func TestAlipayProvider(t *testing.T) {
 	p := &AlipayProvider{cfg: &Config{}}
 	if _, err := p.CreateOrder(&PayRequest{OrderNo: "RO1", Amount: 100}); err == nil {
 		t.Fatal("未配置支付宝资质应报错")
 	}
-	p2 := &AlipayProvider{cfg: &Config{Alipay: AlipayConfig{AppID: "app", PrivateKey: "pk", PublicKey: "pubkey"}}}
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubDER, perr := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
+	p2 := &AlipayProvider{cfg: &Config{Alipay: AlipayConfig{AppID: "app", PrivateKey: "pk", PublicKey: string(pubPEM)}}}
 	res, err := p2.CreateOrder(&PayRequest{OrderNo: "RO1", Amount: 100})
 	if err != nil || res.Channel != "alipay" {
 		t.Fatalf("已配置支付宝下单失败: %v", err)
 	}
-	n, err := p2.VerifyNotify([]byte(`{"out_trade_no":"RO1","total_amount":"1.00"}`), nil)
-	if err != nil || n.OrderNo != "RO1" || n.Amount != 100 {
+	// 构造已签名的表单回调
+	form := signAlipayForm(t, priv, map[string]string{
+		"out_trade_no": "RO1",
+		"trade_no":     "T1",
+		"trade_status": "TRADE_SUCCESS",
+		"total_amount": "1.00",
+		"sign_type":    "RSA2",
+	})
+	n, err := p2.VerifyNotify([]byte(form), nil)
+	if err != nil || n.OrderNo != "RO1" || n.Amount != 100 || !n.Verified {
 		t.Fatalf("支付宝回调失败: %v %+v", err, n)
 	}
+	// 篡改已签名报文（不重新签名）必然验签失败
+	bad := strings.Replace(form, "total_amount=1.00", "total_amount=0.01", 1)
+	if _, err := p2.VerifyNotify([]byte(bad), nil); err == nil {
+		t.Fatal("金额篡改的回调应验签失败")
+	}
+}
+
+// encryptWechatResource 用 APIv3 密钥加密明文并拼装微信回调报文。
+func encryptWechatResource(t *testing.T, apiV3Key, plain string) []byte {
+	t.Helper()
+	key := []byte(apiV3Key)
+	if len(key) != 32 {
+		t.Fatal("APIv3_KEY 长度非 32")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatal(err)
+	}
+	ct := gcm.Seal(nil, nonce, []byte(plain), nil)
+	return []byte(fmt.Sprintf(
+		`{"resource":{"algorithm":"AEAD_AES_256_GCM","ciphertext":%q,"nonce":%q,"associated_data":""}}`,
+		base64.StdEncoding.EncodeToString(ct), base64.StdEncoding.EncodeToString(nonce)))
+}
+
+// signAlipayForm 构造支付宝回调表单串并 RSA2 签名（与 verifyAlipayRSA2 对应）。
+func signAlipayForm(t *testing.T, priv *rsa.PrivateKey, params map[string]string) string {
+	t.Helper()
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		if k == "sign" || k == "sign_type" || params[k] == "" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			sb.WriteString("&")
+		}
+		sb.WriteString(k + "=" + params[k])
+	}
+	digest := sha256.Sum256([]byte(sb.String()))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, digest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sb.String() + "&sign=" + base64.StdEncoding.EncodeToString(sig)
 }
 
 // parseAmount：整数分 / 小数元 / JSON 数字与字符串。

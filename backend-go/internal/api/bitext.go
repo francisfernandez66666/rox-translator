@@ -13,10 +13,10 @@ package api
 // =============================================
 
 import (
-	"translator/internal/store"
 	"net/http"
 	"os"
 	"strconv"
+	"translator/internal/store"
 
 	"translator/internal/fileproc"
 	"translator/internal/kb"
@@ -90,11 +90,14 @@ func (s *Server) handleImportBitext(w http.ResponseWriter, r *http.Request) {
 			skipped++
 			continue
 		}
-		if err := s.Store.CreateTmReview(&store.TmReview{TenantID: tid, Zh: src, Lang: firstLang(trans), Trans: firstVal(trans), Source: "bitext", RefType: "import"}); err != nil {
-			skipped++
-			continue
+		// 整改 R7：逐语言生成待审候选（此前仅取首个语言，多语种 TM 冷启动数据大量丢失）
+		for lc, tv := range trans {
+			if err := s.Store.CreateTmReview(&store.TmReview{TenantID: tid, Zh: src, Lang: lc, Trans: tv, Source: "bitext", RefType: "import"}); err != nil {
+				skipped++
+				continue
+			}
+			added++
 		}
-		added += len(trans)
 	}
 	s.Store.LogAudit(tid, u.ID, "bitext_import", "tm_segments", strconv.Itoa(added))
 	writeJSON(w, 200, map[string]interface{}{
@@ -162,11 +165,14 @@ func (s *Server) handleImportTMX(w http.ResponseWriter, r *http.Request) {
 				trans[lc] = v
 			}
 		}
-		if err := s.Store.CreateTmReview(&store.TmReview{TenantID: tid, Zh: src, Lang: firstLang(trans), Trans: firstVal(trans), Source: "tmx", RefType: "import"}); err != nil {
-			skipped++
-			continue
+		// 整改 R7：逐语言生成待审候选（此前仅取首个语言）
+		for lc, tv := range trans {
+			if err := s.Store.CreateTmReview(&store.TmReview{TenantID: tid, Zh: src, Lang: lc, Trans: tv, Source: "tmx", RefType: "import"}); err != nil {
+				skipped++
+				continue
+			}
+			added++
 		}
-		added += len(trans)
 	}
 	s.Store.LogAudit(tid, u.ID, "tmx_import", "tm_segments", strconv.Itoa(added))
 	writeJSON(w, 200, map[string]interface{}{
@@ -174,8 +180,18 @@ func (s *Server) handleImportTMX(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// firstLang 取译文映射的首个语言键（导入场景单语言为主）。
-func firstLang(m map[string]string) string { for k := range m { return k }; return "en" }
+// firstLang 取译文映射的首个语言键（保留供其他导入路径复用）。
+func firstLang(m map[string]string) string {
+	for k := range m {
+		return k
+	}
+	return "en"
+}
 
 // firstVal 取译文映射的首个值。
-func firstVal(m map[string]string) string { for _, v := range m { return v }; return "" }
+func firstVal(m map[string]string) string {
+	for _, v := range m {
+		return v
+	}
+	return ""
+}

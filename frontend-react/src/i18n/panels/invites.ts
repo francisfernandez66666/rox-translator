@@ -1,4 +1,5 @@
 // panels/invites.ts — 邀请码管理面板 i18n 键（中英）
+// 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
 export const zh: Record<string, string> = {
   'invites.title': '邀请码管理',
   'invites.hint': '绑定组织的邀请码：受邀用户加入该组织（普通用户）；未绑定组织的邀请码：受邀用户自助新建组织。',
@@ -17,6 +18,7 @@ export const zh: Record<string, string> = {
   'invites.codeRequired': '邀请码必填',
 }
 
+// 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
   'invites.title': 'Invite Codes',
   'invites.hint': 'Codes bound to a tenant let invited users join that org (as regular users); unbound codes let invited users self-register a new org.',

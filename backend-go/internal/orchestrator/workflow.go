@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"translator/internal/config"
@@ -113,22 +112,12 @@ func parseTicketLang(s string) []string {
 
 // savePayload 把中间结果 JSON 序列化写入工单 FinalResult 并落库。
 // 参数：t=工单对象，p=中间结果结构体。
+// ★ TM 自闭环计数不在此处做：此前每步 savePayload 都会 BumpTmHit，导致同一译文在单工单内
+// 被计约 7 次（kb_match/ai_initial/review/evals×2/qa），阈值语义失真。现统一由工单收尾的
+// service.BumpTmHitsBatch（ticket.go）一次性批量累计，每个 (原文,语言,译文) 仅计一次（整改 R6）。
 func (w *Workflow) savePayload(t *store.Ticket, p *ticketPayload) {
 	data, _ := json.Marshal(p)
 	t.FinalResult = string(data)
-	// ★ TM 自闭环计数：模型/审校产出的最终译文按 (原文,语言,译文) 累计，达阈值进待审池
-	if w.Store != nil && len(p.Translations) > 0 && t.SourceText != "" {
-		th := int64(100)
-		if v, _ := w.Store.GetConfig("tm_review_threshold"); v != "" {
-			if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
-				th = x
-			}
-		}
-		for lc, tr := range p.Translations {
-			if _, _, e := w.Store.BumpTmHit(t.TenantID, t.SourceText, lc, tr, th); e == nil {
-			}
-		}
-	}
 	_ = w.Store.UpdateTicket(t)
 }
 
@@ -158,7 +147,14 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 
 	// 1. 平台 KB 包四层查找（企业包优先，按层排序，按实际源语言匹配；已有译文不覆盖）
 	if w.Store != nil {
-		if entries, err := w.Store.FindEntriesBySource(tid, srcLang, t.SourceText); err == nil {
+		// 整改 R2：按创建人所属部门施加 KB 可见性隔离，避免跨部门读到其他部门私有术语
+		orgID := int64(0)
+		if t.CreatedBy > 0 {
+			if u, uerr := w.Store.GetUser(t.CreatedBy, tid); uerr == nil && u != nil {
+				orgID = u.OrgID
+			}
+		}
+		if entries, err := w.Store.FindEntriesBySourceScoped(tid, orgID, srcLang, t.SourceText); err == nil {
 			for _, ent := range entries {
 				if _, ok := p.Translations[ent.TargetLang]; ok {
 					continue // 高优包/高层/既有译文已命中
@@ -266,6 +262,10 @@ func (w *Workflow) runEvalsInitial(ctx context.Context, t *store.Ticket) error {
 		if tr == "" {
 			continue
 		}
+		// 抽样率控制（成本敏感）：未命中抽样则跳过本次 Judge（整改 R5）
+		if !w.Engine.Evals.ShouldSample() {
+			continue
+		}
 		total, scores, err := w.Engine.Evals.Evaluate(ctx, p.SourceText, tr, lc, "translate")
 		if err == nil && p.EvalScores == nil {
 			p.EvalScores = map[string]float64{}
@@ -311,6 +311,10 @@ func (w *Workflow) runEvalsReview(ctx context.Context, t *store.Ticket) error {
 	}
 	for lc, tr := range p.Translations {
 		if tr == "" {
+			continue
+		}
+		// 抽样率控制（成本敏感）：未命中抽样则跳过本次 Judge（整改 R5）
+		if !w.Engine.Evals.ShouldSample() {
 			continue
 		}
 		total, scores, err := w.Engine.Evals.Evaluate(ctx, p.SourceText, tr, lc, "review")

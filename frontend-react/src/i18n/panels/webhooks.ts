@@ -1,4 +1,5 @@
 // panels/webhooks.ts — Webhook 回调配置面板 i18n 键（中英）
+// 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
 export const zh: Record<string, string> = {
   'webhooks.title': 'Webhook 回调',
   'webhooks.hint': '翻译完成后自动 POST 到回调 URL（携带 X-Signature 签名），失败自动重试 3 次。',
@@ -21,6 +22,7 @@ export const zh: Record<string, string> = {
   'webhooks.testFailed': '发送失败',
 }
 
+// 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
   'webhooks.title': 'Webhook Callbacks',
   'webhooks.hint': 'On translation completion a POST is sent to the callback URL (signed with X-Signature); it retries automatically up to 3 times on failure.',

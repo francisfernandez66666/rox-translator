@@ -1,6 +1,7 @@
 // dicts.en.ts — 英文基础字典
 // 聚合通用文案、语言名、登录/注册、后台导航、翻译工单、反馈等跨模块 i18n 键。
 // 与 Vue 版 i18n/index.ts baseEn 同源，保持同步。
+// 导出英文基础词典：与 baseZh 同键对应（中文基础词典的英文版），最终由 i18n/index.ts 合并到全局词典。
 export const baseEn: Record<string,string> = {
   // ---- Common ----
   'common.online': 'Online',

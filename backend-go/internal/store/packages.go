@@ -394,7 +394,9 @@ func (s *Store) GrantPackageSentences(tid int64, pkg *Package) (int64, error) {
 	// ★ 句数折算 token 入账（句包外壳→token 底层的唯一兑换点）
 	if granted > 0 {
 		rate := s.TokenSentenceRate()
-		if tokens := granted * rate; tokens > 0 {
+		// ★ 与扣费侧同单位：句数×折算率×成本均摊系数 markup（billing.go:611 同口径），
+		// 否则免费/体验包 token 入账不含 markup，破坏「1 入账=1 扣费」一致性。
+		if tokens := int64(float64(granted*rate) * s.MarkupMultiplier()); tokens > 0 {
 			// 事务内先确保余额账户行存在（等价 Charge 的 EnsureBalance 语义），
 			// 再原子累加——避免账户行缺失时 UPDATE 影响 0 行导致 token 静默丢失。
 			if _, err := tx.Exec(

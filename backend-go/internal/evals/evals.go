@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"strings"
 
 	"translator/internal/config"
@@ -43,13 +44,20 @@ func New(cfg *config.Config, client *llm.Client, st *store.Store, judgeKey strin
 	return e
 }
 
-// ShouldSample 是否采样本次（抽样率控制，销售场景成本敏感）。
+// ShouldSample 是否采样本次（抽样率控制，成本敏感场景）。
+// SampleRate>=1 全量；<=0 关闭；否则按概率 rand.Float64()<rate 抽样。
 // 返回：是否需要执行评估（禁用时恒为 false）。
 func (e *Evaluator) ShouldSample() bool {
 	if !e.Enabled {
 		return false
 	}
-	return e.SampleRate >= 1.0 // 当前实现：仅 100% 抽样才评估
+	if e.SampleRate >= 1.0 {
+		return true
+	}
+	if e.SampleRate <= 0 {
+		return false
+	}
+	return rand.Float64() < e.SampleRate
 }
 
 // judgeKeyUsable 判断解析出的 Judge Key 是否可用（非空、非掩码、非启动占位符）。

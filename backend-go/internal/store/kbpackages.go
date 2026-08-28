@@ -309,6 +309,11 @@ func (s *Store) SaveEntry(tid, pkgID int64, layer int, srcLang, srcText, tgtLang
 	if !isValidLangColumn(tgtLang) {
 		return 0, fmt.Errorf("不支持的目标语言: %s", tgtLang)
 	}
+	// ★ 整改 R-L4：四层契约（1术语/2TM/3安全句/4碎片）强制校验，防止越界层值写入，
+	// 确保 kb_entries.layer 仅取四个语义层的合法值。
+	if layer < LayerTerm || layer > LayerFrag {
+		return 0, fmt.Errorf("非法的条目层: %d（合法范围 %d-%d）", layer, LayerTerm, LayerFrag)
+	}
 	now := time.Now().Format(time.RFC3339)
 	var id int64
 	// 先按唯一键查找已有条目
@@ -404,6 +409,39 @@ func (s *Store) FindEntriesBySource(tid int64, srcLang, srcText string) ([]*KBEn
 	return out, nil
 }
 
+// FindEntriesBySourceScoped 按源文本查找匹配来源包条目，并施加组织可见性隔离（整改 R2）。
+// 部门私有术语（org_id>0 且不等于调用方部门）默认不可见，除非包开启 share_cross_dept=1
+// （跨部门降级检索 opt-in）；租户级/行业级/语言文化级包对所有用户可见。
+// orgID=0（调用方不在任何部门，如租户管理员）时，仅可见 org_id=0 及行业/语言文化包，
+// 其余部门私有包一律隔离，杜绝跨部门泄漏。
+// 参数：tid=租户 ID，orgID=调用方组织 ID，srcLang=源语言，srcText=源文本。
+func (s *Store) FindEntriesBySourceScoped(tid, orgID int64, srcLang, srcText string) ([]*KBEntry, error) {
+	q := "SELECT e.id, e.tenant_id, e.package_id, e.layer, e.source_lang, e.source_text, e.target_lang, e.target_text, e.module, e.created_at, e.updated_at " +
+		"FROM kb_entries e JOIN kb_packages p ON e.package_id=p.id " +
+		"WHERE e.tenant_id=? AND e.source_lang=? AND e.source_text=? AND p.role='source' " +
+		"AND (" +
+		"  p.org_id = 0" + // 租户级包（企业/共享）全员可见
+		"  OR p.pack_type IN ('industry','locale')" + // 行业/语言文化包全员可见
+		"  OR p.org_id = ?" + // 调用方所在部门
+		"  OR (p.org_id <> 0 AND p.org_id <> ? AND COALESCE(p.share_cross_dept,1)=1)" + // 其他部门 opt-in 共享
+		") " +
+		"ORDER BY CASE p.pack_type WHEN 'tenant' THEN 0 WHEN 'industry' THEN 1 ELSE 2 END, e.layer, e.id"
+	rows, err := s.db.Query(q, tid, srcLang, srcText, orgID, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*KBEntry
+	for rows.Next() {
+		var e KBEntry
+		if err := rows.Scan(&e.ID, &e.TenantID, &e.PackageID, &e.Layer, &e.SourceLang, &e.SourceText, &e.TargetLang, &e.TargetText, &e.Module, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			continue
+		}
+		out = append(out, &e)
+	}
+	return out, nil
+}
+
 // ============ 安全句 ============
 
 // SaveSafetyPhrase 新增一条安全句。
@@ -466,8 +504,9 @@ func (s *Store) ListSafetyPhrasesFilter(tid int64, status string) ([]*KBSafetyPh
 // SetSafetyPhraseStatus 审核安全句（通过/驳回）；仅 pending 状态可流转，approved/rejected 可人工改判。
 //
 // ★ 租户隔离（2026-08-26 全仓评审 A1）：SQL 必须携带 tenant_id 条件——
-//   此前仅 WHERE id=?，任一租户的部门管理员可遍历自增 ID 改判其他租户的安全句
-//  （approved 即生效于该租户的文化闸门拦截逻辑），构成跨租户越权写。
+//
+//	 此前仅 WHERE id=?，任一租户的部门管理员可遍历自增 ID 改判其他租户的安全句
+//	（approved 即生效于该租户的文化闸门拦截逻辑），构成跨租户越权写。
 func (s *Store) SetSafetyPhraseStatus(id, tid int64, status string) error {
 	if status != "pending" && status != "approved" && status != "rejected" {
 		return fmt.Errorf("非法状态: %s", status)
@@ -648,12 +687,14 @@ func (s *Store) ListApplicablePacks(tid int64) ([]*PackBrief, error) {
 
 // BuildPackScope 按用户组织祖先链组装知识库可见范围（检索三路径统一消费）。
 // 装配规则（与方案 §一语义总图一一对应）：
-//   链内部门包   pack_type='department' 且 org_id ∈ chain → ChainPacks[包ID]=距离(下标)
-//   企业包       pack_type='tenant'                      → TenantPackIDs
-//   历史无主行   tm_segments.pack_id=0                    → 检索层按企业层对待（无需登记）
-//   行业包       平台共享且 code=租户注册行业              → SharedPackIDs
-//   语言文化包   平台共享                                 → SharedPackIDs
-//   跨部门候选   本租户其余 department 包且 share_cross_dept=1 → CrossDeptPacks（仅开关开时装配）
+//
+//	链内部门包   pack_type='department' 且 org_id ∈ chain → ChainPacks[包ID]=距离(下标)
+//	企业包       pack_type='tenant'                      → TenantPackIDs
+//	历史无主行   tm_segments.pack_id=0                    → 检索层按企业层对待（无需登记）
+//	行业包       平台共享且 code=租户注册行业              → SharedPackIDs
+//	语言文化包   平台共享                                 → SharedPackIDs
+//	跨部门候选   本租户其余 department 包且 share_cross_dept=1 → CrossDeptPacks（仅开关开时装配）
+//
 // 参数：tid=租户 ID；chain=OrgAncestorIDs 输出（空链=未挂组织用户，只见企业/共享层）。
 // 返回：kb.PackScope（store→kb 单向依赖：kb 不反向 import store）。
 func (s *Store) BuildPackScope(tid int64, chain []int64, allowCross bool) (*kb.PackScope, error) {

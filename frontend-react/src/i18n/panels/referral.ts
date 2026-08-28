@@ -1,4 +1,5 @@
 // panels/referral.ts — 邀请裂变/推荐奖励面板 i18n 键（中英）
+// 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
 export const zh: Record<string, string> = {
   'admin.referral': '🔗 邀请好友',
   'referral.title': '邀请好友 · 多邀多得',
@@ -38,6 +39,7 @@ export const zh: Record<string, string> = {
 }
 
 // 英文字典（与上方 zh 同键一一对应）
+// 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
   'admin.referral': '🔗 Referrals',
   'referral.title': 'Invite Friends · Earn More',

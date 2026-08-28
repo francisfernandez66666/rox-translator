@@ -195,23 +195,52 @@ func PostProcessTranslation(text, langCode string) string {
 	return strings.TrimSpace(text)
 }
 
-// DetectSourceLang 检测源语言：CJK 占比 >25% 视为中文
+// DetectSourceLang 检测源语言：CJK 占比 >25% 视为中文；否则按非空字符的主导文字
+// 判定（韩/日/阿/俄），避免把俄/阿/韩/日误判为中文或英文（原实现只返回 zh/en）。
 func DetectSourceLang(text string) string {
-	cjk := len(cjkRe.FindAllString(text, -1))
-	r := []rune(text)
-	total := 0
-	for _, c := range r {
-		if c < 0x80 || c >= 0x3000 { // 非 ASCII 控制字符
-			total++
+	cjk := 0
+	hangul, jp, ar, ru, other := 0, 0, 0, 0, 0
+	for _, c := range text {
+		switch {
+		case cjkRe.MatchString(string(c)):
+			cjk++
+		case c >= 0xAC00 && c <= 0xD7A3, c >= 0x1100 && c <= 0x11FF, c >= 0x3130 && c <= 0x318F:
+			hangul++ // 谚文
+		case c >= 0x3040 && c <= 0x30FF:
+			jp++ // 平假名/片假名
+		case c >= 0x0600 && c <= 0x06FF, c >= 0x0750 && c <= 0x077F, c >= 0x08A0 && c <= 0x08FF, c >= 0xFB50 && c <= 0xFDFF, c >= 0xFE70 && c <= 0xFEFF:
+			ar++ // 阿拉伯文
+		case c >= 0x0400 && c <= 0x052F:
+			ru++ // 西里尔文
+		case c >= 0x80:
+			other++ // 全角标点/数字/重音字母/符号：非真实文字脚本
 		}
 	}
-	if total == 0 {
+	// ★ 整改（成本表漏译根因）：other（全角数字/标点/符号）不应稀释中文判定。
+	// 仅以真实文字脚本（CJK/谚文/假名/阿/俄）计总数，避免「单价￥１２３．４５」式
+	// 中文单元格因全角数字占比高被误判为 en→en 导致模型原样回显、段未译出。
+	scriptTotal := cjk + hangul + jp + ar + ru
+	if scriptTotal == 0 {
+		return "en" // 纯 ASCII / 纯符号默认英文（数字单元格本就不翻译）
+	}
+	if float64(cjk)/float64(scriptTotal) > 0.2 {
 		return "zh"
 	}
-	if float64(cjk)/float64(total) > 0.25 {
-		return "zh"
+	// 否则取主导的非中文脚本
+	bestN, bestCode := 0, "en"
+	for _, s := range []struct {
+		n    int
+		code string
+	}{{hangul, "ko"}, {jp, "ja"}, {ar, "ar"}, {ru, "ru"}} {
+		if s.n > bestN {
+			bestN, bestCode = s.n, s.code
+		}
 	}
-	return "en"
+	// 仅 other 而无真实脚本时回退英文，不把全角符号当外文脚本
+	if bestN == 0 {
+		return "en"
+	}
+	return bestCode
 }
 
 // HasCJK 是否含中文

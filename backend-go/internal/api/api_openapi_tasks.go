@@ -646,11 +646,15 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 	// ⑤ 调用引擎同步翻译（HandleText 内部已注入用量收集器；无进度回调）
 	// ★ 注入 Key 归属用户组织（2026-08-26 KB继承链）：OpenAPI 调用与站内同租户同权
 	// ★ 交互标记（评审整改 R6）：划译求快，允许抢占 LLM 保留槽
+	// ★ 整改 R-L1：注入用量收集器（WithUsageRecorder），否则 UsageTokens 恒为 0、
+	//   响应 tokens_used 永远为 0（真实计费在 OnUsage 已发生，仅展示字段错）。
 	syncCtx := r.Context()
 	if cu, uerr := s.Store.GetUser(ak.UserID, ak.TenantID); uerr == nil && cu != nil && cu.OrgID > 0 {
 		syncCtx = engine.WithUserOrg(syncCtx, cu.OrgID)
 	}
-	res := s.Engine.HandleText(llm.WithInteractive(syncCtx), req.Text, options, nil)
+	syncCtx = s.Engine.WithUsageRecorder(syncCtx)
+	syncCtx = llm.WithInteractive(syncCtx)
+	res := s.Engine.HandleText(syncCtx, req.Text, options, nil)
 	if res.Error != "" {
 		s.metrics.countTranslate("text", false)
 		writeTaskError(w, "task_failed", res.Error)
@@ -658,7 +662,7 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 	}
 	// ⑥ 实时计费已在每次 LLM 调用时由 eng.LLM.OnUsage 完成（边工作边计费，防白嫖），
 	// 此处仅据用量收集器汇总本次消耗用于响应出参（不再后置扣费）。
-	prompt, completion := s.Engine.UsageTokens(r.Context())
+	prompt, completion := s.Engine.UsageTokens(syncCtx)
 	charged := int64(float64(prompt+completion) * s.markupMultiplier())
 	if charged < prompt+completion {
 		charged = prompt + completion

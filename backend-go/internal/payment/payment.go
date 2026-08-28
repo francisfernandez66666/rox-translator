@@ -13,10 +13,17 @@
 package payment
 
 import (
+	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"sort"
 	"strings"
@@ -155,26 +162,50 @@ func (p *WechatProvider) CreateOrder(req *PayRequest) (*PayResult, error) {
 	return &PayResult{Channel: "wechat", QRContent: codeURL}, nil
 }
 
-// VerifyNotify 微信回调验签：用 APIv3 密钥做 AES-256-GCM 解密报文 + HMAC 校验。
+// VerifyNotify 微信回调验签：以 APIv3 密钥 AES-256-GCM 解密 resource 得到订单明文，
+// 解密成功即证明报文来自微信（密钥仅商户与微信知晓）。明文需为交易成功态。
 func (p *WechatProvider) VerifyNotify(rawBody []byte, headers map[string]string) (*Notify, error) {
-	if p.cfg.Wechat.APIv3Key == "" {
+	key := p.cfg.Wechat.APIv3Key
+	if key == "" {
 		return nil, fmt.Errorf("微信支付未配置 APIv3_KEY")
 	}
-	// ★ 真实接入点：以 APIv3 密钥解密 resource.ciphertext 得到订单 JSON
-	// （out_trade_no / transaction_id / amount.total / trade_state），
-	// 并用 Wechatpay-Timestamp + Wechatpay-Nonce + 报文做 HMAC-SHA256 验签。
-	// 当前未配商户号，暂按 mock 报文结构解析以便测试。
-	vals := parseKV(string(rawBody))
-	orderNo := vals["order_no"]
-	if orderNo == "" {
-		orderNo = extractJSONStr(string(rawBody), "order_no")
+	var cb struct {
+		Resource struct {
+			Algorithm      string `json:"algorithm"`
+			Ciphertext     string `json:"ciphertext"`
+			Nonce          string `json:"nonce"`
+			AssociatedData string `json:"associated_data"`
+		} `json:"resource"`
 	}
-	if orderNo == "" {
+	if err := json.Unmarshal(rawBody, &cb); err != nil {
+		return nil, fmt.Errorf("微信回调报文解析失败: %w", err)
+	}
+	if cb.Resource.Ciphertext == "" {
+		// 生产环境微信永远发送加密 resource；明文回调视为伪造直接拒绝（杜绝 mock 报文注入发币）
+		return nil, fmt.Errorf("微信回调缺少加密 resource（必须为 AES-256-GCM 加密报文）")
+	}
+	plain, err := decryptAEADAES256GCM(key, cb.Resource.Nonce, cb.Resource.AssociatedData, cb.Resource.Ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("微信回调解密失败（验签未通过）: %w", err)
+	}
+	var dec struct {
+		OutTradeNo   string `json:"out_trade_no"`
+		TransactionID string `json:"transaction_id"`
+		TradeState   string `json:"trade_state"`
+		Amount       struct {
+			Total int64 `json:"total"`
+		} `json:"amount"`
+	}
+	if err := json.Unmarshal(plain, &dec); err != nil {
+		return nil, fmt.Errorf("微信回调明文解析失败: %w", err)
+	}
+	if dec.TradeState != "" && dec.TradeState != "SUCCESS" {
+		return nil, fmt.Errorf("微信交易状态非成功: %s", dec.TradeState)
+	}
+	if dec.OutTradeNo == "" {
 		return nil, fmt.Errorf("微信回调缺少 out_trade_no")
 	}
-	amount := parseAmount(vals["amount"], string(rawBody))
-	return &Notify{OrderNo: orderNo, TradeNo: "WX" + time.Now().Format("20060102150405"),
-		Amount: amount, Verified: amount > 0}, nil
+	return &Notify{OrderNo: dec.OutTradeNo, TradeNo: dec.TransactionID, Amount: dec.Amount.Total, Verified: true}, nil
 }
 
 // ============ 支付宝当面付适配器 ============
@@ -196,14 +227,21 @@ func (p *AlipayProvider) CreateOrder(req *PayRequest) (*PayResult, error) {
 	return &PayResult{Channel: "alipay", QRContent: "alipay://precreate?out=" + req.OrderNo}, nil
 }
 
-// VerifyNotify 支付宝回调验签：RSA2 验签（sign + sign_type）。
+// VerifyNotify 支付宝回调验签：解析表单参数并以支付宝公钥 RSA2 验签 sign，
+// 验签通过且交易成功才认定到账（杜绝伪造回调发币）。
 func (p *AlipayProvider) VerifyNotify(rawBody []byte, headers map[string]string) (*Notify, error) {
-	if p.cfg.Alipay.PublicKey == "" {
+	pub := p.cfg.Alipay.PublicKey
+	if pub == "" {
 		return nil, fmt.Errorf("支付宝未配置 PUBLIC_KEY")
 	}
-	// ★ 真实接入点：解析 form 表单参数（out_trade_no / trade_no / total_amount / trade_status），
-	//   用支付宝公钥 RSA2 验签 sign。当前未配公钥，暂按 mock 报文解析。
 	vals := parseKV(string(rawBody))
+	sign := vals["sign"]
+	if sign == "" {
+		return nil, fmt.Errorf("支付宝回调缺少 sign（验签必需）")
+	}
+	if err := verifyAlipayRSA2(pub, vals); err != nil {
+		return nil, fmt.Errorf("支付宝回调验签失败: %w", err)
+	}
 	orderNo := vals["out_trade_no"]
 	if orderNo == "" {
 		orderNo = extractJSONStr(string(rawBody), "out_trade_no")
@@ -211,12 +249,111 @@ func (p *AlipayProvider) VerifyNotify(rawBody []byte, headers map[string]string)
 	if orderNo == "" {
 		return nil, fmt.Errorf("支付宝回调缺少 out_trade_no")
 	}
+	if st := vals["trade_status"]; st != "" && st != "TRADE_SUCCESS" && st != "TRADE_FINISHED" {
+		return nil, fmt.Errorf("支付宝交易状态非成功: %s", st)
+	}
 	amount := parseAmount(vals["total_amount"], string(rawBody))
-	return &Notify{OrderNo: orderNo, TradeNo: "ALI" + time.Now().Format("20060102150405"),
-		Amount: amount, Verified: amount > 0}, nil
+	return &Notify{OrderNo: orderNo, TradeNo: vals["trade_no"], Amount: amount, Verified: true}, nil
 }
 
 // ============ 工具 ============
+
+// decryptAEADAES256GCM 以 APIv3 密钥解密微信回调 resource（AES-256-GCM）。
+// nonce 应为 12 字节；associated_data 可空；tag 已附在 ciphertext 尾部。
+func decryptAEADAES256GCM(key, nonce, aad, ciphertextB64 string) ([]byte, error) {
+	keyB := []byte(key)
+	if len(keyB) != 32 {
+		return nil, fmt.Errorf("APIv3_KEY 长度应为 32 字节，实际 %d", len(keyB))
+	}
+	ct, err := base64.StdEncoding.DecodeString(ciphertextB64)
+	if err != nil {
+		return nil, fmt.Errorf("ciphertext base64 解码失败: %w", err)
+	}
+	block, err := aes.NewCipher(keyB)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonceB, nerr := base64.StdEncoding.DecodeString(nonce)
+	if nerr != nil || len(nonceB) != gcm.NonceSize() {
+		// 兼容非 base64 的原始 nonce 串（微信真实回调为 ASCII 随机串）
+		nonceB = []byte(nonce)
+		if len(nonceB) != gcm.NonceSize() {
+			return nil, fmt.Errorf("nonce 长度应为 %d 字节", gcm.NonceSize())
+		}
+	}
+	var aadB []byte
+	if aad != "" {
+		if dec, derr := base64.StdEncoding.DecodeString(aad); derr == nil {
+			aadB = dec
+		} else {
+			aadB = []byte(aad)
+		}
+	}
+	plain, err := gcm.Open(nil, nonceB, ct, aadB)
+	if err != nil {
+		return nil, fmt.Errorf("GCM 解密失败（密钥或报文被篡改）: %w", err)
+	}
+	return plain, nil
+}
+
+// verifyAlipayRSA2 以支付宝公钥对回调节点做 RSA2（SHA256withRSA）验签。
+// vals 为表单参数；签名串按「排序后 k=v 拼接（排除 sign/sign_type 及空值）」构造。
+func verifyAlipayRSA2(pubPEM string, vals map[string]string) error {
+	keys := make([]string, 0, len(vals))
+	for k := range vals {
+		if k == "sign" || k == "sign_type" || vals[k] == "" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			sb.WriteString("&")
+		}
+		sb.WriteString(k + "=" + vals[k])
+	}
+	sig, err := base64.StdEncoding.DecodeString(vals["sign"])
+	if err != nil {
+		return fmt.Errorf("sign base64 解码失败: %w", err)
+	}
+	pub, err := parseAlipayPublicKey(pubPEM)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256([]byte(sb.String()))
+	return rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest[:], sig)
+}
+
+// parseAlipayPublicKey 解析支付宝公钥：支持 PEM（PKIX/PKCS1）或裸 base64 PKCS1 两种写法。
+func parseAlipayPublicKey(s string) (*rsa.PublicKey, error) {
+	s = strings.TrimSpace(s)
+	if strings.Contains(s, "-----BEGIN") {
+		block, _ := pem.Decode([]byte(s))
+		if block == nil {
+			return nil, fmt.Errorf("支付宝公钥 PEM 解析失败")
+		}
+		if pk, err := x509.ParsePKIXPublicKey(block.Bytes); err == nil {
+			if r, ok := pk.(*rsa.PublicKey); ok {
+				return r, nil
+			}
+		}
+		if r, err := x509.ParsePKCS1PublicKey(block.Bytes); err == nil {
+			return r, nil
+		}
+		return nil, fmt.Errorf("支付宝公钥解析失败")
+	}
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return nil, fmt.Errorf("支付宝公钥 base64 解码失败: %w", err)
+	}
+	return x509.ParsePKCS1PublicKey(b)
+}
 
 // SignHMAC 生成 HMAC-SHA256 十六进制签名（webhook 与回调通用）。
 func SignHMAC(secret string, payload []byte) string {

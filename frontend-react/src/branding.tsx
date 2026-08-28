@@ -1,4 +1,10 @@
-// branding.tsx — 租户级品牌定制上下文（按域名/租户解析品牌展示信息）
+// ============================================================================
+// branding.tsx — 租户级品牌定制上下文
+// 职责：按访问域名/显式租户 ID 解析品牌展示信息（品牌名、Logo、登录页背景与布局、
+// 首页背景图层、网页标题、聊天气泡配色等），通过 React Context 向全站下发。
+// 品牌只由「访问域名」决定：根域名=平台品牌，租户专属子域=该租户品牌；
+// 支持服务端在 index.html 注入 window.__BRANDING__ 以首屏即生效、避免闪烁。
+// ============================================================================
 import { createContext, useContext, useEffect, useMemo, useState, ReactNode } from 'react'
 
 export interface BrandLink {

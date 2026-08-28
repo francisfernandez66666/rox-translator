@@ -170,7 +170,7 @@ func (s *Server) loginLocked(r *http.Request) bool {
 // 参数 r: HTTP 请求。
 func (s *Server) recordLoginFail(r *http.Request) {
 	if s.loginLimit == nil {
-		s.loginLimit = newLoginLimiter()
+		s.loginLimit = newLoginLimiter(s.Store)
 	}
 	s.loginLimit.fail(clientIP(r))
 }

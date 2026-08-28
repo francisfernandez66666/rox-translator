@@ -203,6 +203,16 @@ class TranslatorClient:
         if file_id:
             qs += f"&file_id={file_id}"
         data = self._request("GET", qs, raw=True)
+        # ★ 整改 R-L2：产物未就绪/失败时下载接口返回 JSON（no_result/error）而非二进制，
+        # 若误存为文件会得到内容为 JSON 的「假产物」。识别到 JSON 错误体时直接抛错。
+        try:
+            parsed = json.loads(data.decode("utf-8"))
+            if isinstance(parsed, dict) and not parsed.get("success", True):
+                raise TranslatorError(
+                    parsed.get("message", "产物未就绪或下载失败"),
+                    error_code=parsed.get("error_code"), body=parsed)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass  # 二进制产物，正常写入
         with open(save_path, "wb") as fh:
             fh.write(data)
         return save_path

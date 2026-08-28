@@ -14,11 +14,13 @@ import (
 	"sync"
 
 	"translator/internal/kb"
+	"translator/internal/llm"
 )
 
 // embedCacheMax 缓存条目上限（性能优化 Phase A4，1G 机器收紧）：1024 维 float32 ≈ 4KB/条，
 // 1 万条约 40MB，配合 genMB 总字节上限，确保 GOMEMLIMIT=650Mi 下仍有余量给转换子进程。
 const embedCacheMax = 10000
+
 // embedCacheMaxBytes 整代累计写入字节上限（性能优化 Phase A4）：超过则整代清空，
 // 防止大词汇量语料把嵌入缓存撑到百 MB 级。
 const embedCacheMaxBytes = 200 << 20
@@ -99,7 +101,8 @@ func (e *Engine) prefetchEmbeddings(ctx context.Context, texts []string, stageBa
 		return ctx
 	}
 	if stageBase != "" && stageModel != "" {
-		e.LLM.SetEmbedOverride(stageBase, stageKey, stageModel)
+		// 整改 R3：改为请求级 ctx 覆盖，避免污染后续无 kb_embed 配置的请求
+		ctx = llm.WithEmbedOverride(ctx, stageBase, stageKey, stageModel)
 	}
 	const batch = 32
 	for i := 0; i < len(uniq); i += batch {

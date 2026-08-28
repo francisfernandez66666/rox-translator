@@ -67,7 +67,7 @@ type Server struct {
 // st: 平台存储（可 nil）；ts: 租户存储（可 nil）。
 // 返回: 组装完成的 *Server 实例。
 func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist string, st *store.Store, ts *tenant.Store) *Server {
-	s := &Server{Cfg: cfg, Engine: eng, DB: db, Ten: ts, Store: st, Dist: dist, metrics: newMetrics(), loginLimit: newLoginLimiter(), regGuard: newRegisterGuard(), startedAt: time.Now()}
+	s := &Server{Cfg: cfg, Engine: eng, DB: db, Ten: ts, Store: st, Dist: dist, metrics: newMetrics(), loginLimit: newLoginLimiter(st), regGuard: newRegisterGuard(st), startedAt: time.Now()}
 	// 平台存储就绪时初始化计费服务（限流/配额/余额）
 	if st != nil {
 		s.Bill = billing.NewService(st)
@@ -486,9 +486,11 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 // corsAllowed 判断请求来源是否在 CORS 白名单内。
 // 参数 origin: 请求 Origin 头值；返回 true 表示允许该跨域来源。
 func (s *Server) corsAllowed(origin string) bool {
-	// 无白名单配置时默认放行（保持向后兼容）
+	// ★ 整改 R-M7：未配置白名单时默认拒绝反射（deny-by-default），杜绝「任意 Origin 跨域读取」
+	//   的管理/租户接口。需跨域的前端请在 system_config「cors_origins」显式登记。
+	//   （/openapi/* 前缀在中间件层无条件反射，属开放 API 设计，不在此函数管辖内）
 	if s.Cfg == nil || len(s.Cfg.CORSOrigins) == 0 {
-		return true
+		return false
 	}
 	for _, o := range s.Cfg.CORSOrigins {
 		if o == origin {

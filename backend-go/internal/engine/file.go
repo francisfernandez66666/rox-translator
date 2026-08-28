@@ -48,6 +48,7 @@ type FileTranslateData struct {
 	//   在工单层面完全不可见，QA/审批无从发现。现随 Data 序列化进工单 payload，
 	//   审批台/QA 报告可据此提示人工补译。>0 时 Reply 亦追加告警文案。
 	Untranslated map[string]int `json:"untranslated,omitempty"`
+	GateWarnings []string       `json:"gate_warnings,omitempty"` // 整改 R1：主路径输出质量/文化闸门警告
 	// Translations 原文→译文映射（语言维度），供工单执行器回写 tm_segments 长期沉淀；
 	// 不序列化进 SSE/HTTP 响应（体量大且前端无需）。
 	Translations map[string]map[string]string `json:"-"`
@@ -132,12 +133,14 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	// ★ 嵌入管线级预取（评审整改 R2）：pro 模式且走 KB 语义检索时，
 	//   对去重后的全部源文一次 EmbedBatch 预热缓存并向 ctx 注入向量表——
 	//   Embed 调用量从「段数×语言数」降为「去重段数/32」，消除逐段逐语言回源。
-	if !fast && len(kbLangs) > 0 && e.Index != nil && len(e.Index.Vecs) > 0 {
-		eb, ek, em, eok := e.resolveStageModel(ctx, config.StageKBEmbed)
-		if !eok {
-			em = ""
+	if !fast && len(kbLangs) > 0 {
+		if idx := e.getIndex(); idx != nil && len(idx.Vecs) > 0 {
+			eb, ek, em, eok := e.resolveStageModel(ctx, config.StageKBEmbed)
+			if !eok {
+				em = ""
+			}
+			ctx = e.prefetchEmbeddings(ctx, texts, eb, ek, em)
 		}
-		ctx = e.prefetchEmbeddings(ctx, texts, eb, ek, em)
 	}
 
 	// 语言名映射
@@ -258,7 +261,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	}
 
 	// 其他语言：批量模型
-		for _, lc := range directOther {
+	for _, lc := range directOther {
 		wg.Add(1)
 		go func(lc string) {
 			defer wg.Done()
@@ -271,7 +274,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					func(done, total int) { prog("file_translate|校对|"+lc, done, total) })
 			}
 			for i, t := range texts {
-				if batch[i] != "" && batch[i] != "[翻译失败]" {
+				// ★ 回显检测（与 KB 路径一致）：模型原样返回源文 = 未翻译，视为缺失走重试，
+				// 否则非中文目标时源文会被当成「译文」静默写入成品（整改：directOther 原漏回显检测）。
+				if batch[i] != "" && batch[i] != "[翻译失败]" && batch[i] != t {
 					addTrans(lc, t, batch[i])
 					addModelHit()
 				}
@@ -381,6 +386,12 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	}
 	prog("第2步/3：翻译完成", 2, 3)
 
+	// 整改 R1：文件主翻译路径统一走约束闸门 + 语言文化闸门。
+	// 硬约束闸门（数字/格式/非源语言/乱码等）必须强制：首轮不过带反馈重翻一次，
+	// 否则错误会直接落入成品文件（如成本表数字错）。文化闸门仍仅警告。
+	// fast 模式同样强制硬闸（交付物正确性优先于速度）。
+	gateWarnings := e.applySegmentGates(ctx, langTranslations, true)
+
 	isXlsxInput := ext == ".xlsx"
 
 	// 第3步：写回文件
@@ -393,10 +404,20 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	filesOut := []string{}
 
 	if isXlsxInput {
-		// ★ xlsx 多 Sheet 模式：单文件输出，每个目标语言一个 Sheet（Sheet 名=语言代码）
 		outPath := filepath.Join(outputDir, baseName+"_translated.xlsx")
-		if aerr := writeMultiSheetXlsx(filePath, outputDir, baseName, finalLangs, langTranslations); aerr != nil {
-			return &FileTranslateResult{Skill: "translation", Error: "xlsx 写回失败: " + aerr.Error()}
+		if len(finalLangs) == 1 {
+			// ★ 单目标语言：原地替换单元格为译文，产物文件即译文本身
+			// （符合「把文件翻成 X 语」的预期；原文件保持不变，下载的 _translated.xlsx 为译文）。
+			// 此前多 Sheet 模式会把原文 Sheet 留在首位、译文放新增 Sheet，Excel 默认打开原文 Sheet
+			// 造成「还是中文」的误解（实际译文在 en Sheet 中已正确生成）。
+			if aerr := fileproc.ApplyXlsx(filePath, outPath, langTranslations[finalLangs[0]]); aerr != nil {
+				return &FileTranslateResult{Skill: "translation", Error: "xlsx 写回失败: " + aerr.Error()}
+			}
+		} else {
+			// ★ 多目标语言：单文件多 Sheet，每个目标语言一个 Sheet（Sheet 名=语言代码）
+			if aerr := writeMultiSheetXlsx(filePath, outputDir, baseName, finalLangs, langTranslations); aerr != nil {
+				return &FileTranslateResult{Skill: "translation", Error: "xlsx 写回失败: " + aerr.Error()}
+			}
 		}
 		filesOut = append(filesOut, outPath)
 	} else {
@@ -460,6 +481,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		}
 		reply += fmt.Sprintf("；⚠️ 有 %d 段未能译出已保留原文（%s），请人工检查", len(parts), strings.Join(parts, ","))
 	}
+	if len(gateWarnings) > 0 {
+		reply += fmt.Sprintf("；⚠️ 质量校验提示 %d 条，详见结构化返回", len(gateWarnings))
+	}
 	return &FileTranslateResult{
 		Skill: "translation",
 		Reply: reply,
@@ -471,6 +495,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			ModelHits:    modelHits,
 			Untranslated: untranslated,     // 语言→未译出段数（>0 时审批台可见）
 			Translations: langTranslations, // 原文→译文（不序列化），工单执行器回写 TM
+			GateWarnings: gateWarnings,     // 整改 R1：主路径输出质量/文化闸门警告
 		},
 		Files: filesOut,
 	}

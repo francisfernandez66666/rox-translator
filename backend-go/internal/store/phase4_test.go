@@ -24,8 +24,10 @@ func TestGrantPackageChargesTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bal.Balance != 100*500 {
-		t.Fatalf("发放 100 句应折算充入 50000 token，实得 %d", bal.Balance)
+	// 入账侧与扣费侧共用 MarkupMultiplier（默认 1.5，packages.go:480）：100 句=50000 基准 token，
+	// 折算充入 50000*1.5=75000 billed token，保证「1 入账 token = 1 扣费 token」单位一致。
+	if bal.Balance != int64(100*500)*3/2 {
+		t.Fatalf("发放 100 句应折算充入 75000 token（含 markup），实得 %d", bal.Balance)
 	}
 	perms, _ := s.GetTenantPerms(1)
 	if perms.SentenceBalance != 100 {
@@ -40,8 +42,8 @@ func TestGrantPackageChargesTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	bal, _ = s.GetBalance(1)
-	if bal.Balance != (100+10)*500 {
-		t.Fatalf("增量包应追加 5000 token，实得 %d", bal.Balance)
+	if bal.Balance != int64((100+10)*500)*3/2 {
+		t.Fatalf("增量包应追加 7500 token（含 markup），实得 %d", bal.Balance)
 	}
 }
 

@@ -268,14 +268,17 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（path 含 :channel，body 为渠道报文）。
 // 返回: 渠道约定格式（成功返回 success 字符串，微信返回 204）。
 func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
-	// ① 凭证必填：头缺失 = 匿名请求，直接拒绝（不再「可选校验」）
-	tok := r.Header.Get("X-Admin-Token")
-	// ★ P1-2：恒定时间比较，消除时序侧信道（AdminToken 为共享密钥，非用户口令）。
-	if tok == "" || !constantTimeTokenEqual(tok, s.Cfg.AdminToken) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "拒绝访问"})
-		return
-	}
 	channel := strings.TrimPrefix(r.URL.Path, "/api/pay/notify/")
+	// ① 凭证：mock 渠道为「管理员模拟确认」，必须带超管令牌（恒定时间比较，防时序侧信道）；
+	//    wechat/alipay 真实渠道不依赖共享令牌，由渠道签名验签（VerifyNotify）保障，
+	//    故无需 X-Admin-Token——把超管令牌暴露给第三方支付服务器反而是更大风险。
+	if channel == "mock" {
+		tok := r.Header.Get("X-Admin-Token")
+		if tok == "" || !constantTimeTokenEqual(tok, s.Cfg.AdminToken) {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "拒绝访问"})
+			return
+		}
+	}
 	// ③ mock 封禁（★ 整改 A6：与 handlePaySimulate 同口径收紧——pay_mode 未显式
 	//    配置为 mock 时，mock 渠道回调一律拒绝，堵住「空配置=可模拟充值」的默认放行）
 	payMode, _ := s.Store.GetConfig("pay_mode")

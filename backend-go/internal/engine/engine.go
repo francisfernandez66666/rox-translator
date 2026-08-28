@@ -82,9 +82,9 @@ type cultureEntry struct {
 
 // ★ 性能优化（不换库 Phase A4，1G 机器）：进程级缓存封顶，防止长运行无限增长。
 const (
-	cjkCacheScopeMax  = 128    // CJK 分片数上限（超过整代清空，惰性重建）
-	cultureCacheMax   = 4096   // 文化闸门缓存条目上限（超过整代清空）
-	cultureCacheTTL   = 60 * time.Second // 单条有效期（原有语义保留）
+	cjkCacheScopeMax = 128              // CJK 分片数上限（超过整代清空，惰性重建）
+	cultureCacheMax  = 4096             // 文化闸门缓存条目上限（超过整代清空）
+	cultureCacheTTL  = 60 * time.Second // 单条有效期（原有语义保留）
 )
 
 // tenantID 从 ctx 取租户 id；未指定时回退默认租户 rox（id=1）
@@ -208,6 +208,14 @@ func (e *Engine) ErrorRate() float64 {
 		}
 	}
 	return float64(fails) / float64(len(e.errRing))
+}
+
+// getIndex 加锁快照当前语义索引（整改 R4：与 RebuildKBIndex 的 indexMu 写操作互斥，
+// 消除「读 e.Index 同时另一请求重建热替换」的 data race）。返回指针副本，调用方勿长期持有。
+func (e *Engine) getIndex() *kb.Index {
+	e.indexMu.Lock()
+	defer e.indexMu.Unlock()
+	return e.Index
 }
 
 // tenantOK 校验租户是否可用（存在且未禁用/未过期）。返回错误信息；nil 表示可用。
@@ -438,8 +446,10 @@ func cjkOverlap(a, b string) float64 {
 // TranslateOne 单条文本翻译入口，复刻 lib.translate_one 四段匹配流程：
 // 精确命中 → CJK 标点无关精确 → 模糊子串 → 语义高相似+例句参考，未命中则模型兜底。
 // 参数：zhText=源文本；targetLangs=目标语言列表；langOnly=true 时只用知识库
-//       （文件翻译第一遍用），false 时知识库未覆盖语言由模型补齐；
-//       stage=流程阶段标识（默认 config.StageKBMatch）。
+//
+//	（文件翻译第一遍用），false 时知识库未覆盖语言由模型补齐；
+//	stage=流程阶段标识（默认 config.StageKBMatch）。
+//
 // 返回单条翻译结果与错误；返回前已应用 L2 语言文化硬闸门
 // （replace 规则自动替换、forbidden 规则记录违规并在强制模式下拦截）。
 func (e *Engine) TranslateOne(ctx context.Context, zhText string, targetLangs []string, langOnly bool, stage string) (*TranslateResult, error) {
@@ -566,10 +576,11 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 	}
 
 	// 3. 语义检索（scope 化：链内高相似可整句采用；跨部门与低相似一律降级为例句）
-	if e.Index != nil && len(e.Index.Vecs) > 0 {
-		// 知识库 Embed 阶段覆盖（stage_models.kb_embed）：配置了独立 Embed 模型则热应用
+	if idx := e.getIndex(); idx != nil && len(idx.Vecs) > 0 {
+		// 知识库 Embed 阶段覆盖（stage_models.kb_embed）：配置了独立 Embed 模型则随 ctx 透传
+		// （整改 R3：改为请求级覆盖，避免全局 SetEmbedOverride 被并发请求串味）
 		if eb, ek, em, eok := e.resolveStageModel(ctx, config.StageKBEmbed); eok {
-			e.LLM.SetEmbedOverride(eb, ek, em)
+			ctx = llm.WithEmbedOverride(ctx, eb, ek, em)
 		}
 		// ★ 嵌入三级查找（评审整改 R2）：管线预取向量表 → 进程缓存 → 回源单条调用。
 		//   此前「每段每语言」必发一次 Embed HTTP，是文件并翻卡顿的第二大根因。
@@ -591,7 +602,7 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 		if len(vec) > 0 {
 			highSim, medSim := e.resolvePolicy(ctx)
 			// 检索返回 TopK（结果已按 InChain 优先 + 相似度排序；InChain=false=跨部门仅参考）
-			results := e.Index.ScopedSearchScope(vec, e.Cfg.TopK, targetLangs, tid, scope)
+			results := idx.ScopedSearchScope(vec, e.Cfg.TopK, targetLangs, tid, scope)
 			semAdopted := false
 			anyChainExample := false
 			for _, sr := range results {
@@ -1061,13 +1072,16 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 		stageActive = true
 	}
 
-	// 模型路由策略：配置了全局多供应商路由时，主模型失败按权重降序逐一降级
-	// （阶段模型独立时不走路由链）。
+	// 模型路由策略：配置了全局多供应商路由时，主模型失败按权重降序逐一降级。
+	// 阶段模型（stageActive）同样参与多供应商降级：以阶段模型为主，路由链其余供应商为降级候选，
+	// 避免「配置了阶段模型就失去 failover」的单点风险（整改 R-M5）。
 	// ★ 2026-08-26 BYOK 移除：原「租户 BYOK 路由优先」分支删除——该分支还有两处
 	//   缺陷（降级链含主路由自身导致双倍请求放大；租户端点误配 Hunyuan 兜底模型必 404），随分支一并消除。
 	var routeFallbacks []config.ProviderConfig
-	if !stageActive {
-		if len(e.Cfg.ModelRoutes) > 0 {
+	if len(e.Cfg.ModelRoutes) > 0 {
+		if stageActive {
+			routeFallbacks = e.resolveRouteFallbacks(config.ProviderConfig{APIBase: base, APIKey: key, Model: model})
+		} else {
 			primary := e.pickPrimaryRoute()
 			routeFallbacks = e.resolveRouteFallbacks(primary)
 		}
@@ -1116,13 +1130,14 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 				}
 			}
 		}
-		// 路由链全部失败或无路由配置 → 原有单 fallback
+		// 路由链全部失败或无路由配置 → 单 fallback（用主供应商基址/密钥，避免沿用已失败阶段模型所在供应商）
 		if err != nil {
+			fbase, fkey, _ := e.resolveModel(ctx)
 			fallback := cfg.HunyuanFallbackModel
 			if isRateLimited(err) {
 				time.Sleep(2 * time.Second)
 			}
-			content, finishReason, err = e.LLM.CallChat(ctx, base, key, fallback, messages, maxTokens, false, cfg.FallbackTemp)
+			content, finishReason, err = e.LLM.CallChat(ctx, fbase, fkey, fallback, messages, maxTokens, false, cfg.FallbackTemp)
 			e.NoteLLMResult(err == nil)
 		}
 	}
@@ -1646,9 +1661,9 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 	}
 	defer e.rebuilding.Store(false)
 
-	// 知识库 Embed 阶段配置优先（stage_models.kb_embed）
+	// 知识库 Embed 阶段配置优先（stage_models.kb_embed）；随 ctx 透传（整改 R3）
 	if eb, ek, em, ok := e.resolveStageModel(ctx, config.StageKBEmbed); ok {
-		e.LLM.SetEmbedOverride(eb, ek, em)
+		ctx = llm.WithEmbedOverride(ctx, eb, ek, em)
 	}
 
 	rows, err := e.DB.AllRowsWithTenant()

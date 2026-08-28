@@ -1,4 +1,5 @@
 // panels/tickets.ts — 翻译工单/审批台面板 i18n 键（中英）
+// 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
 export const zh: Record<string, string> = {
   'tickets.title': '工单工作台',
   'tickets.titlePlaceholder': '标题',
@@ -26,6 +27,7 @@ export const zh: Record<string, string> = {
   'tickets.runDone': '工单 {no} 流程执行完成',
 }
 
+// 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
   'tickets.title': 'Ticket Workspace',
   'tickets.titlePlaceholder': 'Title',

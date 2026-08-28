@@ -1,4 +1,5 @@
 // panels/users.ts — 账户/用户管理面板 i18n 键（中英）
+// 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
 export const zh: Record<string, string> = {
   'users.title': '账户管理',
   'users.usernamePlaceholder': '用户名',
@@ -29,6 +30,7 @@ export const zh: Record<string, string> = {
   'users.resetPwdPrompt': '为 {name} 设置新密码：',
 }
 
+// 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
   'users.title': 'User Management',
   'users.usernamePlaceholder': 'Username',

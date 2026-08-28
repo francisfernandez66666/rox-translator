@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"translator/internal/store"
 )
 
 // 暴力破解防护参数
@@ -26,7 +28,7 @@ const (
 	loginCooldownSec   = 300 // 冷却期：5 分钟
 )
 
-// loginAttempt 单 IP 的失败计数与冷却状态
+// loginAttempt 单 IP 的失败计数与冷却状态（内存回退用）
 type loginAttempt struct {
 	count       int       // 窗口内失败次数
 	firstAt     time.Time // 窗口起始时间
@@ -35,18 +37,23 @@ type loginAttempt struct {
 
 // loginLimiter 登录失败限流器（并发安全）
 type loginLimiter struct {
+	st   *store.Store        // 持久化后端（nil 时回退内存）
 	mu   sync.Mutex
-	data map[string]*loginAttempt // key: 客户端 IP
+	data map[string]*loginAttempt // key: 客户端 IP（内存回退）
 }
 
-// newLoginLimiter 创建登录失败限流器。
-func newLoginLimiter() *loginLimiter {
-	return &loginLimiter{data: make(map[string]*loginAttempt)}
+// newLoginLimiter 创建登录失败限流器（传入 Store 以启用持久化护栏）。
+func newLoginLimiter(st *store.Store) *loginLimiter {
+	return &loginLimiter{st: st, data: make(map[string]*loginAttempt)}
 }
 
 // blocked 判断指定 IP 是否处于冷却期（不可登录）。
 // 参数 ip: 客户端 IP；返回 true 表示需要拒绝登录。
 func (l *loginLimiter) blocked(ip string) bool {
+	if l.st != nil {
+		st, _ := l.st.RateLoad("login_fail", ip)
+		return time.Now().Unix() < st.LockUntil
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	a, ok := l.data[ip]
@@ -54,22 +61,26 @@ func (l *loginLimiter) blocked(ip string) bool {
 		return false
 	}
 	now := time.Now()
-	// 已进入冷却期（lockedUntil 非零）且冷却期已过：清空计数并解除封锁
 	if !a.lockedUntil.IsZero() && now.After(a.lockedUntil) {
 		delete(l.data, ip)
 		return false
 	}
-	// 冷却期有效期内：拒绝登录
 	if !a.lockedUntil.IsZero() {
 		return true
 	}
-	// 尚未达到阈值：仅失败计数，不封锁
 	return false
 }
 
 // fail 记录一次登录失败；达到阈值则进入冷却期。
 // 参数 ip: 客户端 IP。
 func (l *loginLimiter) fail(ip string) {
+	if l.st != nil {
+		st, _ := l.st.RateRecord("login_fail", ip, loginWindowSec)
+		if st.Count >= loginFailThreshold {
+			l.st.RateSetLock("login_fail", ip, time.Now().Unix()+loginCooldownSec)
+		}
+		return
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
@@ -78,13 +89,11 @@ func (l *loginLimiter) fail(ip string) {
 		l.data[ip] = &loginAttempt{count: 1, firstAt: now}
 		return
 	}
-	// 窗口过期则重置
 	if now.Sub(a.firstAt) > loginWindowSec*time.Second {
 		a.count = 0
 		a.firstAt = now
 	}
 	a.count++
-	// 达到阈值：进入冷却期
 	if a.count >= loginFailThreshold {
 		a.lockedUntil = now.Add(loginCooldownSec * time.Second)
 	}
@@ -93,6 +102,10 @@ func (l *loginLimiter) fail(ip string) {
 // clear 登录成功时清零该 IP 的失败记录。
 // 参数 ip: 客户端 IP。
 func (l *loginLimiter) clear(ip string) {
+	if l.st != nil {
+		l.st.RateReset("login_fail", ip)
+		return
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.data, ip)

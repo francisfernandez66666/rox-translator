@@ -174,13 +174,13 @@ export default function BrandP() {
             onChange={(v: any) => ad.switchTenant(Number(v))}
             style={{ width: 320 }}
             options={[
-              ...(isSuper ? [{ label: t('brand.tenantRoot'), value: 0 }] : []),
+              ...(isSuper ? [{ label: t('brand.tenantRoot'), value: 1 }] : []),
               ...ad.tenants.map((x) => ({ label: `#${x.id} ${x.name}`, value: x.id })),
             ]}
           />
         </div>
       )}
-      {isSuper && targetTenantId !== 0 && (
+      {isSuper && targetTenantId > 1 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f3f0ff', border: '1px solid #d6c8ff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13 }}>
           <span>{tpl('brand.grantLabel', { id: targetTenantId })}</span>
           <Switch value={brandGranted} loading={granting} onChange={(v) => toggleGrant(Boolean(v))} />
@@ -216,7 +216,7 @@ export default function BrandP() {
 
            <div>
              <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.domain')}</div>
-               <Input value={domain} disabled={!editable || targetTenantId === 0} onChange={(v: any) => setDomain(String(v ?? ''))} placeholder="请输入你想要的域名名称" />
+                <Input value={domain} disabled={!editable || targetTenantId === 1} onChange={(v: any) => setDomain(String(v ?? ''))} placeholder="请输入你想要的域名名称" />
               <div style={{ fontSize: 12, color: '#889', marginTop: 4 }}>
                 你将改的是 {domain || '前缀'}.lexicorn.cn
               </div>

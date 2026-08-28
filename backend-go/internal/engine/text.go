@@ -37,6 +37,7 @@ type TextTranslateData struct {
 	OtherLangs         []string          `json:"other_langs"`         // 走纯模型翻译的其他语言
 	SourceText         string            `json:"source_text"`         // 实际被翻译的原文（剥离指令后）
 	Mode               string            `json:"mode"`                // 命中模式描述（精确命中/纯模型等）
+	GateWarnings       []string          `json:"gate_warnings"`       // 整改 R1：主路径输出质量/文化闸门警告
 	Similarity         *float64          `json:"similarity"`          // 语义命中的相似度（未命中为 nil）
 	MatchedZH          string            `json:"matched_zh"`          // 命中的知识库中文原文
 	TargetLangs        []string          `json:"target_langs"`        // 全部目标语言（KB + 其他）
@@ -260,6 +261,9 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 		wg.Wait()
 	}
 
+	// 整改 R1：文本主翻译路径统一走约束闸门 + 语言文化闸门（pro 模式可带反馈重翻）
+	gateWarnings := e.applyOutputGates(ctx, cleanText, allTr, !fast)
+
 	langNames := map[string]string{}
 	for lc := range allTr {
 		langNames[lc] = config.LangNames[lc]
@@ -310,6 +314,10 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 	}
 	sb.WriteString("\n📊 模式：" + mode)
 
+	if len(gateWarnings) > 0 {
+		sb.WriteString("\n\n⚠️ 质量校验提示：\n" + strings.Join(gateWarnings, "\n"))
+	}
+
 	var sim *float64
 	if kbResult.Similarity > 0 {
 		s := kbResult.Similarity
@@ -330,6 +338,7 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 			Similarity:         sim,
 			MatchedZH:          kbResult.MatchedZH,
 			TargetLangs:        append(append([]string{}, kbTarget...), directOther...),
+			GateWarnings:       gateWarnings,
 		},
 	}
 }

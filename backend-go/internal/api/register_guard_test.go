@@ -9,7 +9,7 @@ import (
 
 // TestRegisterGuard_DailyLimit 同 IP 达到每日上限后拒绝，并给出等待时间。
 func TestRegisterGuard_DailyLimit(t *testing.T) {
-	g := newRegisterGuard()
+	g := newRegisterGuard(nil)
 	ip := "1.2.3.4"
 	// 前 3 次放行
 	for i := 0; i < 3; i++ {
@@ -30,7 +30,7 @@ func TestRegisterGuard_DailyLimit(t *testing.T) {
 
 // TestRegisterGuard_MinInterval 最小间隔内拒绝，间隔过后放行。
 func TestRegisterGuard_MinInterval(t *testing.T) {
-	g := newRegisterGuard()
+	g := newRegisterGuard(nil)
 	ip := "5.6.7.8"
 	g.record(ip)
 	// 刚注册完立即再注册：拒绝（minInterval=3600s 远未过）
@@ -47,7 +47,7 @@ func TestRegisterGuard_MinInterval(t *testing.T) {
 
 // TestRegisterGuard_WindowReset 窗口过期后计数重置。
 func TestRegisterGuard_WindowReset(t *testing.T) {
-	g := newRegisterGuard()
+	g := newRegisterGuard(nil)
 	ip := "7.7.7.7"
 	for i := 0; i < 5; i++ {
 		g.record(ip)

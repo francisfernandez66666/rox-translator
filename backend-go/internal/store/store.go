@@ -394,6 +394,15 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_ticket_state_ticket ON ticket_state(ticket_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_ticket_files_ticket ON ticket_files(ticket_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_ledger_tenant_user ON usage_ledger(tenant_id, user_id)`,
+		// ---------- 频率护栏持久化（整改 R-M8：登录/注册/验证码限流从内存迁 SQLite，重启/多副本共享） ----------
+		`CREATE TABLE IF NOT EXISTS rate_limits (
+			scope TEXT NOT NULL,
+			key TEXT NOT NULL,
+			count INTEGER NOT NULL DEFAULT 0,
+			window_start INTEGER NOT NULL DEFAULT 0,
+			lock_until INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (scope, key)
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(tenant_id, created_at)`,
 	}
 	for _, stmt := range stmts {

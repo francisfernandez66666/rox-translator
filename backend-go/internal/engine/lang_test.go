@@ -40,3 +40,27 @@ func TestParse(t *testing.T) {
 		}
 	}
 }
+
+// TestDetectSourceLangFullWidth 成本表根因：含全角数字/标点的中文单元格
+// （如「单价￥１２３．４５」「合计：５００元」）不得因全角字符稀释被误判为 en。
+func TestDetectSourceLangFullWidth(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"单价￥１２３．４５", "zh"},
+		{"合计：５００元", "zh"},
+		{"产品名称：ＶＩＰ会员（￥１，２３４）", "zh"},
+		{"成本 100.00 元", "zh"},
+		{"2024-08-28 成本分析表", "zh"},
+		{"100.00", "en"},    // 纯 ASCII 数字：不翻译，回退英文
+		{"Total Cost", "en"}, // 纯英文
+		{"안녕하세요", "ko"},
+		{"こんにちは", "ja"},
+	}
+	for _, c := range cases {
+		if got := DetectSourceLang(c.in); got != c.want {
+			t.Errorf("DetectSourceLang(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
