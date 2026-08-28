@@ -65,7 +65,7 @@ cd ../backend-go && go build -o translator-server ./cmd/server
 - **Token 计费**：双桶台账（发放额度 + 永久余额）、预充值、订阅与发票
 - **邀请裂变**：推荐注册、邀请奖励（仅个人用户可获奖励，企业用户不参与多邀得多）
 - **注册与邮件模板**：自助注册分个人 / 企业两类，企业注册进一步区分「管理员（新建企业）/普通成员（凭有效企业邀请码加入，无效码降级个人）」；超管可在后台配置多用途邮件模板；注册成功自动发送产品手册 PDF 邮件
-- **OpenAPI**：API Key、任务状态回调、Python/JS SDK
+- **OpenAPI**：API Key、任务状态回调、Python SDK（sdk/python/translator_sdk.py）
 - **管理后台**：仪表盘、审计日志、系统配置
 
 ---
