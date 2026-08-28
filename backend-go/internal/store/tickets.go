@@ -41,9 +41,11 @@ type TicketState struct {
 	TicketID  int64  `json:"ticket_id"`  // 关联工单 ID
 	Step      string `json:"step"`       // 流程步骤标识（如 kb_match / gate）
 	Status    string `json:"status"`     // 该步骤状态：pending/running/success/failed/skipped
-	Payload   string `json:"payload"`    // 步骤轨迹快照（JSON，如命中记录）
+	Payload   string `json:"payload"`    // 步骤轨迹快照（JSON，如命中记录 / 初翻校对进度）
 	Version   int    `json:"version"`    // 步骤版本号（同步骤递增）
 	UpdatedAt string `json:"updated_at"` // 更新时间（RFC3339 字符串）
+	StartedAt string `json:"started_at"` // 步骤开始时间（首次 running 时记录）
+	DurationMs int64 `json:"duration_ms"` // 步骤执行耗时（毫秒，running→终态时结算）
 }
 
 // 工单状态
@@ -167,16 +169,51 @@ func (s *Store) UpdateTicket(t *Ticket) error {
 	return err
 }
 
-// SetTicketState 记录工单状态轨迹（同步骤版本递增）。
-// 参数：ticketID=工单 ID，step=步骤标识，status=步骤状态，payload=轨迹快照 JSON。
+// ★ 整改：SetTicketState 改为同步骤 UPSERT（每步骤仅保留一行最新轨迹），
+// 避免细粒度进度（每批初翻/校对）反复 INSERT 撑爆 ticket_state。
+// 同时结算每步执行耗时：首次 running 记录 started_at；running→终态时计算 duration_ms。
 func (s *Store) SetTicketState(ticketID int64, step, status, payload string) error {
-	// 取当前步骤最大版本号，新记录版本 +1
-	var maxVer int
-	_ = s.db.QueryRow("SELECT COALESCE(MAX(version),0) FROM ticket_state WHERE ticket_id=? AND step=?", ticketID, step).Scan(&maxVer)
+	now := time.Now().Format(time.RFC3339)
+	isTerminal := status == "success" || status == "failed" || status == "warning" || status == "skipped"
+
+	var id int64
+	var oldStatus, oldStarted string
+	var oldDur int64
+	qerr := s.db.QueryRow(
+		"SELECT id, status, COALESCE(started_at,''), COALESCE(duration_ms,0) FROM ticket_state WHERE ticket_id=? AND step=? ORDER BY version DESC LIMIT 1",
+		ticketID, step).Scan(&id, &oldStatus, &oldStarted, &oldDur)
+	if qerr != nil {
+		// 不存在：新建；首次 running 记录开始时间
+		started := ""
+		if status == "running" {
+			started = now
+		}
+		_, err := s.db.Exec(
+			"INSERT INTO ticket_state (ticket_id, step, status, payload, version, updated_at, started_at, duration_ms) VALUES (?,?,?,?,1,?,?,0)",
+			ticketID, step, status, payload, now, started)
+		return err
+	}
+	// 已存在：更新同一行
+	started := oldStarted
+	dur := oldDur
+	if oldStatus != "running" && status == "running" && started == "" {
+		started = now
+	}
+	if oldStatus == "running" && isTerminal && started != "" {
+		if t0, perr := time.Parse(time.RFC3339, started); perr == nil {
+			dur = int64(time.Since(t0) / time.Millisecond)
+		}
+	}
 	_, err := s.db.Exec(
-		"INSERT INTO ticket_state (ticket_id, step, status, payload, version, updated_at) VALUES (?,?,?,?,?,?)",
-		ticketID, step, status, payload, maxVer+1, time.Now().Format(time.RFC3339))
+		"UPDATE ticket_state SET status=?, payload=?, version=version+1, updated_at=?, started_at=?, duration_ms=? WHERE id=?",
+		status, payload, now, started, dur, id)
 	return err
+}
+
+// TicketStateTimingMigrate 为 ticket_state 增加 started_at / duration_ms 列（幂等，列已存在则忽略）。
+func (s *Store) TicketStateTimingMigrate() {
+	s.db.Exec("ALTER TABLE ticket_state ADD COLUMN started_at TEXT")
+	s.db.Exec("ALTER TABLE ticket_state ADD COLUMN duration_ms INTEGER")
 }
 
 // TicketStates 查询工单状态轨迹（按版本升序）。

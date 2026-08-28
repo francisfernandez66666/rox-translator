@@ -5,6 +5,10 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装自助注册邀请码的查询与生成等接口
+// ========================================
+
 /** 获取自助注册邀请码列表 */
 export async function inviteCodes(): Promise<AdminResp> {
   return request('/api/admin/invite-codes', { headers: authHeaders() })

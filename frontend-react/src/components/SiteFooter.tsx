@@ -5,6 +5,10 @@ import { useT } from '@/i18n'
 import { useBranding, DEFAULT_BRAND_NAME } from '@/branding'
 import { footerLinksGet, BrandLink } from '@/api/branding'
 
+// ============ 本文件职责中文说明 ============
+// 全站页脚组件：按访问域名解析品牌并展示平台级页脚链接。
+// ========================================
+
 // 默认导出组件：全站页脚，按访问域名解析品牌并展示平台级页脚链接（无链接时回退默认协议入口）
 export default function SiteFooter() {
   const [lang] = useT()

@@ -37,6 +37,12 @@ import (
 const (
 	DefaultChatConcurrent  = 2 // 交互另有 1 个保留槽，总 chat 上限=3（与历史口径一致）
 	DefaultEmbedConcurrent = 6
+	// ★ 文件/后台批任务专用并发池（整改：大文件翻译高并发曾打满共享交互信号量，
+	//   拖垮全站）。与交互池彻底隔离。容量需匹配主机规格——过大会把小规格 VM 的
+	//   CPU/网络/磁盘打满，反而让全站（含即时翻译与健康检查）无响应。默认取保守值，
+	//   大规格主机可用 LLM_FILE_CHAT_CONCURRENT / LLM_FILE_EMBED_CONCURRENT 调大。
+	DefaultFileChatConcurrent  = 6
+	DefaultFileEmbedConcurrent = 12
 )
 
 // Client LLM 客户端
@@ -52,10 +58,19 @@ type Client struct {
 	chatFast chan struct{}
 	embSem   chan struct{}
 
+	// ★ 文件/后台批任务专用信号量（与交互池隔离，避免大文件翻译饿死交互请求）。
+	fileChatSem chan struct{}
+	fileEmbSem  chan struct{}
+
 	// 知识库 Embed 阶段覆盖（stage_models.kb_embed；空=用全局 Embed 配置）。
 	// ★ R7：读改一律持锁——引擎每请求都可能调用 SetEmbedOverride，裸写字段是数据竞争。
 	embedMu                         sync.Mutex
 	embedBase, embedKey, embedModel string
+
+	// OnUsage 实时计费钩子：每次 LLM 调用产生真实 token 用量后回调（边工作边计费）。
+	// 返回 error（如余额不足）时，本次 LLM 调用向上返回该错误，从而中止翻译，
+	// 防止「后置计费」被取消/断开绕过（白嫖）。nil 表示不启用实时计费（仅归集用量）。
+	OnUsage func(ctx context.Context, model string, prompt, completion int64) error
 
 	// inflight 当前在途 LLM 调用数（观测用，原子计数）
 	inflight atomic.Int64
@@ -116,6 +131,9 @@ func NewClient(cfg *config.Config) *Client {
 		chatSem:  make(chan struct{}, envInt("LLM_CHAT_CONCURRENT", DefaultChatConcurrent)),
 		chatFast: make(chan struct{}, 1),
 		embSem:   make(chan struct{}, envInt("LLM_EMBED_CONCURRENT", DefaultEmbedConcurrent)),
+		// ★ 文件/后台批任务专用池（容量可经环境变量调整）
+		fileChatSem: make(chan struct{}, envInt("LLM_FILE_CHAT_CONCURRENT", DefaultFileChatConcurrent)),
+		fileEmbSem:  make(chan struct{}, envInt("LLM_FILE_EMBED_CONCURRENT", DefaultFileEmbedConcurrent)),
 	}
 }
 
@@ -136,6 +154,22 @@ func isInteractive(ctx context.Context) bool {
 	return v
 }
 
+// fileModeKey ctx 存取键：文件/后台批任务（大文档翻译、批量模型补漏等）置位后，
+// doChat/embedChunk 改用「文件专用信号量池」（容量更大、与交互池隔离），
+// ★ 避免长文档高并发打满共享交互信号量、饿死前台即时翻译、乃至拖垮全站。
+type fileModeKey struct{}
+
+// WithFileMode 标记本次请求走文件/后台批任务专用信号量池。
+func WithFileMode(ctx context.Context) context.Context {
+	return context.WithValue(ctx, fileModeKey{}, true)
+}
+
+// isFileMode 读取文件模式标记。
+func isFileMode(ctx context.Context) bool {
+	v, _ := ctx.Value(fileModeKey{}).(bool)
+	return v
+}
+
 // semSlot 一次成功 acquire 的凭据：Release 归还到「当初取得」的同一通道
 // （chat/chatFast 容量不同，错位归还会逐步污染两池容量）。
 type semSlot struct{ ch chan struct{} }
@@ -149,11 +183,40 @@ func (s *semSlot) Release() {
 	s.ch = nil // 置空防二次释放
 }
 
+// acquireWaitTimeout 信号量获牌等待上限（LLM_ACQUIRE_TIMEOUT_SEC，默认 90s）。
+// ★ 防死锁整改：文件翻译等大并发场景会把全局 chatSem/embSem 打满，若无上限，
+//   等待方在无 deadline 的 ctx 下会永久阻塞（持一锁等另一锁的循环等待），拖垮整个
+//   worker 池乃至全站。加此上限后，久等不到即报错返回，由上层降级/重试，绝不会卡死。
+func acquireWaitTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("LLM_ACQUIRE_TIMEOUT_SEC")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 90 * time.Second
+}
+
 // acquireChat 获取 chat 并发名额：交互请求可使用后台槽+保留槽（先试后台、再双通道竞争），
-// 后台任务只能使用后台槽。等待超过 1s 打观测日志（评审整改 R7）。
-// 返回 (名额凭据, 错误)；ctx 取消时排队中的调用立即返回错误。
+// 后台任务只能使用后台槽。文件/后台批任务（isFileMode）使用独立的大容量文件池，
+// 与交互池彻底隔离。等待超过 1s 打观测日志（评审整改 R7）。
+// 返回 (名额凭据, 错误)；ctx 取消或等待超时时排队中的调用立即返回错误（防永久阻塞）。
 func (c *Client) acquireChat(ctx context.Context) (*semSlot, error) {
 	start := time.Now()
+	// ★ 文件/后台批任务：走专用信号量池（容量更大，且与交互池隔离，避免饿死前台）。
+	if isFileMode(ctx) {
+		acqCtx, acqCancel := context.WithTimeout(ctx, acquireWaitTimeout())
+		defer acqCancel()
+		select {
+		case c.fileChatSem <- struct{}{}:
+			c.noteAcquired("fileChat", start)
+			return &semSlot{ch: c.fileChatSem}, nil
+		case <-acqCtx.Done():
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("llm 文件翻译 chat 并发槽获取超时（请稍后重试）")
+		}
+	}
 	if isInteractive(ctx) {
 		// 非阻塞优先取后台槽（避免保留槽被无关紧要地占用）
 		select {
@@ -163,40 +226,66 @@ func (c *Client) acquireChat(ctx context.Context) (*semSlot, error) {
 		default:
 		}
 	}
+	// ★ 防死锁：以等待上限派生 ctx，避免无 deadline 的调用在信号量打满时永久卡死。
+	acqCtx, acqCancel := context.WithTimeout(ctx, acquireWaitTimeout())
+	defer acqCancel()
 	var got chan struct{}
 	if isInteractive(ctx) {
 		// 双通道阻塞竞争（先到先用）
-		done := ctx.Done()
 		select {
 		case c.chatSem <- struct{}{}:
 			got = c.chatSem
 		case c.chatFast <- struct{}{}:
 			got = c.chatFast
-		case <-done:
+		case <-acqCtx.Done():
 		}
 	} else {
 		select {
 		case c.chatSem <- struct{}{}:
 			got = c.chatSem
-		case <-ctx.Done():
+		case <-acqCtx.Done():
 		}
 	}
 	if got == nil {
-		return nil, ctx.Err()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("llm chat 并发槽获取超时（信号量可能已耗尽，请稍后重试）")
 	}
 	c.noteAcquired("chat", start)
 	return &semSlot{ch: got}, nil
 }
 
 // acquireEmbed 获取 embed 并发名额（独立池，不与 chat 抢占）。
+// 文件/后台批任务走专用文件池（容量更大、与交互池隔离）。同样带等待上限，
+// 避免嵌入调用在信号量打满时永久阻塞。
 func (c *Client) acquireEmbed(ctx context.Context) (*semSlot, error) {
 	start := time.Now()
+	if isFileMode(ctx) {
+		acqCtx, acqCancel := context.WithTimeout(ctx, acquireWaitTimeout())
+		defer acqCancel()
+		select {
+		case c.fileEmbSem <- struct{}{}:
+			c.noteAcquired("fileEmbed", start)
+			return &semSlot{ch: c.fileEmbSem}, nil
+		case <-acqCtx.Done():
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("llm 文件翻译 embed 并发槽获取超时（请稍后重试）")
+		}
+	}
+	acqCtx, acqCancel := context.WithTimeout(ctx, acquireWaitTimeout())
+	defer acqCancel()
 	select {
 	case c.embSem <- struct{}{}:
 		c.noteAcquired("embed", start)
 		return &semSlot{ch: c.embSem}, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	case <-acqCtx.Done():
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("llm embed 并发槽获取超时（信号量可能已耗尽，请稍后重试）")
 	}
 }
 
@@ -290,6 +379,21 @@ func CollectorFrom(ctx context.Context) *UsageCollector {
 	return uc
 }
 
+// abortKey ctx 存取键：实时计费钩子在余额不足时取出取消函数，中止整次翻译任务。
+// 否则仅当前 LLM 调用失败、引擎对单段错误容忍并继续，其余段会被供应商「免费」翻译（白嫖漏洞）。
+type abortKey struct{}
+
+// WithAbort 向 ctx 注入余额不足时的中止函数（引擎在翻译任务入口创建并注入）。
+func WithAbort(ctx context.Context, fn func()) context.Context {
+	return context.WithValue(ctx, abortKey{}, fn)
+}
+
+// AbortFromCtx 取余额不足中止函数；未注入返回 nil。
+func AbortFromCtx(ctx context.Context) func() {
+	fn, _ := ctx.Value(abortKey{}).(func())
+	return fn
+}
+
 // chatPayload 请求体（map 以便按模型附加参数）
 type chatPayload map[string]interface{}
 
@@ -345,6 +449,10 @@ func (c *Client) CallChatFallback(ctx context.Context, baseURL, apiKey, model st
 // 参数：endpoint=完整接口地址，apiKey=密钥，payload=请求体。
 // 返回：模型输出内容与 finishReason。
 func (c *Client) doChat(ctx context.Context, endpoint, apiKey string, payload chatPayload) (string, string, error) {
+	model := ""
+	if m, ok := payload["model"].(string); ok {
+		model = m
+	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -398,6 +506,12 @@ func (c *Client) doChat(ctx context.Context, endpoint, apiKey string, payload ch
 	// ★ 真实 token 用量归集：ctx 注入收集器时累加（供按实际费用计费）
 	if uc := CollectorFrom(ctx); uc != nil {
 		uc.Add(cr.Usage.PromptTokens, cr.Usage.CompletionTokens)
+	}
+	// ★ 实时计费：每次 chat 调用后立即扣减，余额不足则中止翻译（边工作边计费，防白嫖）
+	if c.OnUsage != nil {
+		if err := c.OnUsage(ctx, model, cr.Usage.PromptTokens, cr.Usage.CompletionTokens); err != nil {
+			return "", "", err
+		}
 	}
 	return strings.TrimSpace(cr.Choices[0].Message.Content), cr.Choices[0].FinishReason, nil
 }
@@ -506,6 +620,12 @@ func (c *Client) embedChunk(ctx context.Context, texts []string) ([][]float32, e
 	// ★ embedding token 用量归集（KB 匹配成本计入租户账单）
 	if uc := CollectorFrom(ctx2); uc != nil {
 		uc.Add(er.Usage.PromptTokens, er.Usage.CompletionTokens)
+	}
+	// ★ 实时计费：每次 embed 调用后立即扣减，余额不足则中止（边工作边计费，防白嫖）
+	if c.OnUsage != nil {
+		if err := c.OnUsage(ctx2, model, er.Usage.PromptTokens, er.Usage.CompletionTokens); err != nil {
+			return nil, err
+		}
 	}
 	// 转 float32 并做 L2 归一化（除以向量模长，便于余弦相似度点积检索）
 	out := make([][]float32, len(er.Data))

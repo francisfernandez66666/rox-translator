@@ -7,6 +7,10 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装平台网关模型配置、各流程阶段模型与匹配策略参数等接口
+// ========================================
+
 /** 读取平台网关模型配置（全局单模型 + 多供应商路由，密钥掩码回显） */
 export async function adminModels(): Promise<AdminResp> {
   return request('/api/admin/models', { headers: authHeaders() })

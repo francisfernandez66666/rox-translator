@@ -5,6 +5,10 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装后台用户管理、充值订单、邮件模板与身份上下文等接口
+// ========================================
+
 /** 获取后台用户列表 */
 export async function adminUsers(): Promise<AdminResp> {
   return request('/api/admin/users', { headers: authHeaders() })

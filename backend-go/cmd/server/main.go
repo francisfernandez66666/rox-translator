@@ -235,6 +235,11 @@ func main() {
 	// 创建 HTTP 服务
 	srv := api.NewServer(cfg, eng, db, distDir, st, ts)
 
+	// ★ 边工作边计费：将实时扣费钩子挂到引擎的 LLM 客户端。
+	// 每次 chat/embed 调用产生真实 token 用量后立即扣减租户余额，余额不足即中止翻译，
+	// 覆盖即时翻译 / 翻译工单 / OpenAPI 三类入口，杜绝后置计费被取消绕过的白嫖。
+	eng.LLM.OnUsage = srv.ChargeUsageRealtime
+
 	log.Printf("能言 v2.0.0-go 服务已启动: http://localhost%s", *addr)
 	s := &http.Server{
 		Addr:              *addr,

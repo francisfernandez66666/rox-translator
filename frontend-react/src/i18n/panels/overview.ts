@@ -20,6 +20,8 @@ export const zh: Record<string, string> = {
   'overview.colChange': '变更轨迹',
   'overview.diffOldNew': '旧 {old} → 新 {new}',
   'overview.exportFailed': '导出失败',
+  'overview.tabSystem': '系统看板',
+  'overview.tabUsage': '用量看板',
 }
 
 export const en: Record<string, string> = {
@@ -43,4 +45,6 @@ export const en: Record<string, string> = {
   'overview.colChange': 'Change',
   'overview.diffOldNew': 'Old {old} → New {new}',
   'overview.exportFailed': 'Export failed',
+  'overview.tabSystem': 'System Board',
+  'overview.tabUsage': 'Usage Board',
 }

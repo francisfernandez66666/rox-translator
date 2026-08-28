@@ -5,6 +5,10 @@
 
 import { request, API_BASE, authHeaders, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装邀请裂变(我的邀请/二维码/记录)与运营参数读写等接口
+// ========================================
+
 /** 单条邀请奖励记录（对应后端 store.ReferralRecord） */
 export interface ReferralRecord {
   invitee_uid: number

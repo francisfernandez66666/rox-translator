@@ -8,6 +8,10 @@ import type { ReactNode } from 'react'
 import { authMe, setAuthToken, getAuthToken } from '@/api'
 import type { AuthUser } from '@/api'
 
+// ============ 本文件职责中文说明 ============
+// 全局登录态：认证上下文、会话恢复与角色等级判定。
+// ========================================
+
 /** roleLevel 角色等级：super_admin/admin=4 · tenant_admin/approver=3 · dept_admin=2 · 其他=1
  *  （单一来源，与后端 auth.IsSuperAdmin/IsTenantAdmin 口径一致） */
 export function roleLevel(r?: string): number {

@@ -5,6 +5,10 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装前台翻译反馈提交与超管反馈列表/处理/回复等接口
+// ========================================
+
 /** 反馈记录结构：含目标类型/原文/译文/状态等字段 */
 export interface FeedbackItem {
   id: number

@@ -594,7 +594,7 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// ③ 配额闸门：QPS/并发/每日上限/token 余额校验（余额不足 → insufficient_balance）
-	tid, release, gateErr := s.gateUsage(r)
+	_, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
 		writeTaskError(w, gateErrorCode(gateErr), gateErr.Error()+"。如余额不足请充值或升级套餐")
@@ -646,8 +646,13 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 		writeTaskError(w, "task_failed", res.Error)
 		return
 	}
-	// ⑥ Token 实费计费：聚合本次全链路真实消耗 × 均摊系数（强制计费时扣余额）
-	charged := s.chargeTaskTokens(r, tid, "translate", "text", normalizeTaskMode(req.Mode))
+	// ⑥ 实时计费已在每次 LLM 调用时由 eng.LLM.OnUsage 完成（边工作边计费，防白嫖），
+	// 此处仅据用量收集器汇总本次消耗用于响应出参（不再后置扣费）。
+	prompt, completion := s.Engine.UsageTokens(r.Context())
+	charged := int64(float64(prompt+completion) * s.markupMultiplier())
+	if charged < prompt+completion {
+		charged = prompt + completion
+	}
 	s.metrics.countTranslate("text", true)
 	// ⑦ 组装响应
 	writeJSON(w, 200, map[string]interface{}{

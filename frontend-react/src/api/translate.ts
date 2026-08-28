@@ -6,6 +6,10 @@
 import type { ChatResponse, HealthResponse, ProgressEvent } from '@/types'
 import { API_BASE, authHeaders, request } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装 SSE 流式翻译(文本/文件)、健康检查与文件格式校验等翻译接口
+// ========================================
+
 /** SSE 流式聊天接口 */
 export async function chatStream(
   message: string,
@@ -151,4 +155,33 @@ export async function translateFileStream(
   }
   if (!finalResult) throw new Error('未收到翻译结果')
   return finalResult
+}
+
+// ============ 翻译文件格式/大小校验（即时翻译与工单翻译共用，保证两端一致） ============
+// 与后端 translateExtWhitelist 保持一致：docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml/yml
+export const TRANSLATE_FILE_EXTS = [
+  '.docx', '.xlsx', '.pptx', '.pdf', '.txt', '.csv', '.srt', '.vtt', '.md', '.json', '.yaml', '.yml',
+] as const
+
+// 文件选择框 accept 属性（即时翻译与工单翻译共用，避免两端格式不一致）
+export const TRANSLATE_FILE_ACCEPT = TRANSLATE_FILE_EXTS.join(',')
+
+// 单文件大小上限：与后端 translateUploadMax 对齐（50MB）
+export const TRANSLATE_FILE_MAX_BYTES = 50 * 1024 * 1024
+
+/**
+ * 校验待翻译文件：返回错误原因字符串（含「为什么不能翻译」）或 null（通过）。
+ * - 格式不在白名单：提示支持的格式
+ * - 体积超过上限：提示具体大小与上限
+ */
+export function validateTranslateFile(file: File): string | null {
+  const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()
+  if (!TRANSLATE_FILE_EXTS.includes(ext as (typeof TRANSLATE_FILE_EXTS)[number])) {
+    return `不支持的文件格式：${file.name}（仅支持 ${TRANSLATE_FILE_EXTS.join(' / ')}）`
+  }
+  if (file.size > TRANSLATE_FILE_MAX_BYTES) {
+    const mb = (file.size / 1024 / 1024).toFixed(1)
+    return `文件过大（${mb}MB），超出翻译上限 ${TRANSLATE_FILE_MAX_BYTES / 1024 / 1024}MB，请拆分或压缩后重试`
+  }
+  return null
 }

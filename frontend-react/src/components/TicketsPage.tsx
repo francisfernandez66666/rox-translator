@@ -12,9 +12,14 @@ import {
   ticketDownload, ticketDelete, ticketCancel, createFeedback,
 } from '@/api'
 import type { Ticket, TicketResp } from '@/api/tickets'
+import { TRANSLATE_FILE_ACCEPT, validateTranslateFile } from '@/api/translate'
 import LangMultiSelect from './LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
 import { t, tpl } from '@/i18n'
+
+// ============ 本文件职责中文说明 ============
+// 翻译工单页面：建单、列表、进度、取消/删除/下载与反馈。
+// ========================================
 
 // 步骤 key → 用户友好名称（与 Vue 对齐）——用于进度气泡中展示每个阶段中文名
 const STEP_NAMES: Record<string, string> = {
@@ -159,7 +164,11 @@ export default function TicketsPage() {
     if (!list.length) return
     const exist = new Set(files.map((f) => f.name + f.size))
     const next = [...files]
-    for (const f of list) { if (!exist.has(f.name + f.size)) { next.push(f); exist.add(f.name + f.size) } }
+    for (const f of list) {
+      const reason = validateTranslateFile(f)
+      if (reason) { void MessagePlugin.error(reason); continue }
+      if (!exist.has(f.name + f.size)) { next.push(f); exist.add(f.name + f.size) }
+    }
     setFiles(next)
     e.target.value = ''
   }
@@ -184,9 +193,11 @@ export default function TicketsPage() {
         if (!files.length) return
         r = await ticketCreateFile([...files], { title: title.trim(), target_langs: langsJoined, mode: qualityMode })
       }
-      if (!r.success) { alert(r.message); setCreating(false); return }
+      if (!r.success) { void MessagePlugin.error(r.message || t('tk.createFail')); setCreating(false); return }
       setTitle(''); setText(''); setFiles([])
       void load()
+    } catch (e: any) {
+      void MessagePlugin.error(e?.message || t('tk.createFail'))
     } finally { setCreating(false) }
   }
 
@@ -239,14 +250,14 @@ export default function TicketsPage() {
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 24px' }}>
       <h2 style={{ margin: '0 0 4px' }}>📋 {t('tk.entry')}</h2>
-      <p style={{ fontSize: 12.5, color: '#888', margin: '0 0 12px' }}>{t('tk.createHint')}</p>
+      <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>{t('tk.createHint')}</p>
 
       {/* ===== 创建工单 ===== */}
-      <div style={{ border: '1px solid #e6e9ef', borderRadius: 12, padding: 16, marginBottom: 18 }}>
+      <div style={{ border: '1px solid #e3e6ef', borderRadius: 8, padding: 16, marginBottom: 18 }}>
         {imageHeavyHint && (
-          <div style={{ background: '#fff8e1', border: '1px solid #f0c674', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 12.5 }}>
+          <div style={{ background: '#fff8e1', border: '1px solid #f0c674', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 12 }}>
             ⚠️ {t('tk.imageHeavyHint')}
-            <button style={{ marginLeft: 8, border: 'none', background: 'transparent', cursor: 'pointer' }} onClick={() => setImageHeavyHint(false)}>✕</button>
+            <Button size="small" variant="text" theme="default" style={{ marginLeft: 8 }} onClick={() => setImageHeavyHint(false)}>✕</Button>
           </div>
         )}
         <h3 style={{ margin: '0 0 10px' }}>{t('tk.createTitle')}</h3>
@@ -262,20 +273,20 @@ export default function TicketsPage() {
           <Textarea autosize={{ minRows: 4, maxRows: 14 }} value={text} onChange={setText} placeholder={t('tk.textPlaceholder')} style={{ width: '100%' }} />
         ) : (
           <>
-            <div onClick={() => document.getElementById('tk-file-input')?.click()}
-                 style={{ border: '2px dashed #c9d4e3', borderRadius: 10, padding: 34, textAlign: 'center', cursor: 'pointer', color: '#667', background: '#fafbfd' }}>
-              <input id="tk-file-input" type="file" multiple hidden accept=".docx,.xlsx,.pptx,.pdf,.txt,.csv,.srt,.vtt,.md,.json,.yaml,.yml" onChange={onFileSelect} />
-              <div>📎 {t('tk.fileHint')}<br /><span style={{ fontSize: 12 }}>{t('tk.multiHint')}</span></div>
-            </div>
-            {files.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, alignItems: 'center' }}>
-                {files.map((f, idx) => (
-                  <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#f5f7fb', border: '1px solid #d8dee6', borderRadius: 14, padding: '3px 10px', fontSize: 12.5, maxWidth: 320 }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📄 {f.name}</span>
-                    <span style={{ color: '#999', fontSize: 11.5 }}>{fmtKB(f.size)}</span>
-                    <button style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#c62828', fontSize: 12 }} onClick={() => removeFileAt(idx)}>✕</button>
-                  </div>
-                ))}
+              <div onClick={() => document.getElementById('tk-file-input')?.click()}
+                  style={{ border: '2px dashed #c9d4e3', borderRadius: 8, padding: 34, textAlign: 'center', cursor: 'pointer', color: '#667', background: '#fafbfd' }}>
+                <input id="tk-file-input" type="file" multiple hidden accept={TRANSLATE_FILE_ACCEPT} onChange={onFileSelect} />
+                <div>📎 {t('tk.fileHint')}<br /><span style={{ fontSize: 12 }}>{t('tk.multiHint')}</span></div>
+              </div>
+              {files.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, alignItems: 'center' }}>
+                  {files.map((f, idx) => (
+                    <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#f5f7fb', border: '1px solid #d8dee6', borderRadius: 8, padding: '3px 10px', fontSize: 12, maxWidth: 320 }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📄 {f.name}</span>
+                      <span style={{ color: '#999', fontSize: 11.5 }}>{fmtKB(f.size)}</span>
+                      <Button size="small" variant="text" theme="danger" onClick={() => removeFileAt(idx)}>✕</Button>
+                    </div>
+                  ))}
                 <div style={{ width: '100%', fontSize: 12, color: '#888' }}>
                   {tpl('tk.filesCount', { n: files.length })} · {(files.reduce((a, f) => a + f.size, 0) / 1024).toFixed(0)} KB
                 </div>
@@ -298,7 +309,7 @@ export default function TicketsPage() {
       </div>
 
       {/* ===== 我的工单 ===== */}
-      <div style={{ border: '1px solid #e6e9ef', borderRadius: 12, padding: 16 }}>
+      <div style={{ border: '1px solid #e3e6ef', borderRadius: 8, padding: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <h3 style={{ margin: 0 }}>{t('tk.myTickets')}</h3>
           <Button size="small" variant="outline" onClick={load}>🔄</Button>
@@ -352,7 +363,7 @@ export default function TicketsPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '10px 0 6px' }}>
             <Progress theme="plump" percentage={pct} style={{ flex: 1 }} />
             <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--td-brand-color, #2f47f5)', minWidth: 42 }}>{pct}%</span>
-            {stepLabel && <span style={{ fontSize: 12.5, color: '#666' }}>{stepLabel}</span>}
+            {stepLabel && <span style={{ fontSize: 12, color: '#666' }}>{stepLabel}</span>}
           </div>
         )}
         {states.length > 0 ? (
@@ -368,7 +379,7 @@ export default function TicketsPage() {
             ))}
           </div>
         ) : (
-          <p style={{ fontSize: 12.5, color: '#888', margin: '8px 0 0' }}>{t('tk.noSteps')}</p>
+          <p style={{ fontSize: 12, color: '#888', margin: '8px 0 0' }}>{t('tk.noSteps')}</p>
         )}
       </Dialog>
 

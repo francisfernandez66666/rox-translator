@@ -16,6 +16,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -117,15 +118,15 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID          int64  `json:"id"`          // 目标租户 ID
-		Name        string `json:"name"`        // 租户名称
-		ExpiresAt   string `json:"expires_at"`  // 到期时间
-		Permissions string `json:"permissions"` // 权限 JSON
-		BrandName   string `json:"brand_name"`  // 自定义品牌名
-		BrandLogo   string `json:"brand_logo"`  // 自定义品牌 Logo
-		Domain      string `json:"domain"`      // 自定义域名
-		BrandLinks  string `json:"brand_links"` // 自定义页脚链接 JSON
-		InviteEnabled *bool `json:"invite_enabled"` // 邀请好友功能开关（nil=不改动；非 nil=按值设置）
+		ID            int64  `json:"id"`             // 目标租户 ID
+		Name          string `json:"name"`           // 租户名称
+		ExpiresAt     string `json:"expires_at"`     // 到期时间
+		Permissions   string `json:"permissions"`    // 权限 JSON
+		BrandName     string `json:"brand_name"`     // 自定义品牌名
+		BrandLogo     string `json:"brand_logo"`     // 自定义品牌 Logo
+		Domain        string `json:"domain"`         // 自定义域名
+		BrandLinks    string `json:"brand_links"`    // 自定义页脚链接 JSON
+		InviteEnabled *bool  `json:"invite_enabled"` // 邀请好友功能开关（nil=不改动；非 nil=按值设置）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -136,10 +137,13 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "更新失败: " + err.Error()})
 		return
 	}
-	// 更新品牌定制（含自定义域名/Logo/页脚链接）
-	if err := s.Ten.SetBranding(req.ID, req.BrandName, req.BrandLogo, req.Domain, req.BrandLinks); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "品牌保存失败: " + err.Error()})
-		return
+	// 更新品牌定制（含自定义域名/Logo/页脚链接）：仅当请求显式携带品牌字段时才写，
+	// 避免「邀请好友」开关、编辑租户名等只改部分字段的请求把已有品牌清空（品牌有独立保存接口）。
+	if req.BrandName != "" || req.BrandLogo != "" || req.Domain != "" || req.BrandLinks != "" {
+		if err := s.Ten.SetBranding(req.ID, req.BrandName, req.BrandLogo, req.Domain, req.BrandLinks); err != nil {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "品牌保存失败: " + err.Error()})
+			return
+		}
 	}
 	// 更新「邀请好友」开关（仅当显式传入时）
 	if req.InviteEnabled != nil {
@@ -170,12 +174,14 @@ func (s *Server) handleTenantInviteEnabledGet(w http.ResponseWriter, r *http.Req
 		tid = u.TenantID
 	}
 	enabled := true
+	isPersonal := false
 	if tid > 0 {
 		if ten, e := s.Ten.GetByID(tid); e == nil && ten != nil {
 			enabled = ten.InviteEnabled
+			isPersonal = ten.IsPersonal
 		}
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "invite_enabled": enabled})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "invite_enabled": enabled, "is_personal": isPersonal})
 }
 
 // handleTenantStatus 切换租户状态接口（super_admin）：启用/禁用租户。
@@ -386,9 +392,41 @@ func tenantBrandingGranted(s *Server, tid int64) bool {
 	return m[strconv.FormatInt(tid, 10)]
 }
 
-// tenantBrandingUnlocked 综合判定：持有有效付费套餐 或 超管已授权，二者任一即可解锁编辑。
+// tenantBrandingUnlocked 综合判定：满足以下任一即可解锁品牌定制编辑：
+//  1. 租户根（企业租户，is_personal=false）——企业默认开放品牌定制；
+//  2. 持有有效付费套餐（套餐付费租户）；
+//  3. 超管显式指定开通（超管指定租户）。
 func tenantBrandingUnlocked(s *Server, tid int64) bool {
+	if t, _ := s.Ten.GetByID(tid); t != nil && !t.IsPersonal {
+		return true // 租户根（企业租户）默认可定制品牌
+	}
 	return tenantBrandingPackagePaid(s, tid) || tenantBrandingGranted(s, tid)
+}
+
+// platformBrandingKey 存储「平台主站（租户根 tenant_id=0）」品牌定制，JSON 字符串。
+const platformBrandingKey = "platform_branding"
+
+// getPlatformBranding 读取平台主站（tenant_id=0）品牌定制字段。
+func (s *Server) getPlatformBranding() map[string]string {
+	m := map[string]string{}
+	if s.Store == nil {
+		return m
+	}
+	raw, err := s.Store.GetConfig(platformBrandingKey)
+	if err != nil || raw == "" {
+		return m
+	}
+	_ = json.Unmarshal([]byte(raw), &m)
+	return m
+}
+
+// setPlatformBranding 保存平台主站（tenant_id=0）品牌定制字段。
+func (s *Server) setPlatformBranding(m map[string]string) error {
+	if s.Store == nil {
+		return fmt.Errorf("平台存储未初始化")
+	}
+	b, _ := json.Marshal(m)
+	return s.Store.SetConfig(platformBrandingKey, string(b))
 }
 
 // handleAdminBrandGrant 超管为指定租户开通/撤销「品牌定制」权限（免套餐）。
@@ -436,7 +474,6 @@ func (s *Server) handleAdminBrandGrant(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
-
 // handleTenantBrandingGet 公开接口：按域名/租户解析品牌展示信息（登录页与前台使用，无需鉴权）。
 // 解析优先级：?tenant_id=（超管预览指定租户）> Host 子域名前缀（前缀.基础域名）。
 // 关键：品牌只由「访问域名」决定——全局根域名（主站/apex）永远返回平台级品牌（能言 LangCross），
@@ -456,8 +493,8 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 			tid = n
 		}
 	}
+	// 按访问子域前缀解析专属租户品牌；主站前缀按全局根处理，不套用任何租户品牌
 	if tid <= 0 {
-		// 按访问子域前缀解析专属租户品牌；主站前缀（如 langcross）按全局根处理，不套用任何租户品牌
 		if prefix := tenantPrefixFromHost(s, r.Host); prefix != "" {
 			primary := "langcross.lexicorn.cn"
 			if s.Store != nil {
@@ -477,27 +514,30 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 			}
 		}
 	}
-	// 全局根域名（主站 langcross.lexicorn.cn / apex）：返回平台级默认品牌（能言 LangCross），
-	// 不套用任何租户品牌——租户品牌仅在该租户专属子域下生效，避免「全局根」误显示某租户品牌。
+	// 全局根域名（主站 langcross / apex）：返回平台级默认品牌；平台主站品牌定制存于 system_config
 	if tid <= 0 {
-	return map[string]interface{}{
-		"success":            true,
-		"tenant_id":          0,
-		"name":               "",
-			"code":               "",
-			"industry":           "",
-			"industry_name":      "",
-			"brand_name":         "",
-			"brand_logo":         "",
-			"domain":             "",
-			"brand_home_bg":      "",
-			"brand_login_card_pos": "",
-			"brand_login_layout": "",
-			"brand_paid":         false,
-		"brand_granted":      false,
-		"dedicated_register": false,
+		// 平台主站（租户根 tenant_id=0）：读取 system_config 中存储的平台品牌定制
+		m := s.getPlatformBranding()
+		return map[string]interface{}{
+			"success":              true,
+			"tenant_id":            0,
+			"name":                 "",
+			"code":                 "",
+			"industry":             "",
+			"industry_name":        "",
+			"brand_name":           m["brand_name"],
+			"brand_logo":           m["brand_logo"],
+			"domain":               m["domain"],
+			"brand_home_bg":        m["brand_home_bg"],
+			"brand_home_bg_style":  m["brand_home_bg_style"],
+			"brand_login_card_pos": m["brand_login_card_pos"],
+			"brand_login_layout":   m["brand_login_layout"],
+			"brand_paid":           false,
+			"brand_granted":        false,
+			"brand_root":           false,
+			"dedicated_register":   false,
+		}
 	}
-}
 	var t *tenant.Tenant
 	if tid > 0 {
 		t, _ = s.Ten.GetByID(tid)
@@ -513,31 +553,33 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 		}
 	}
 	return map[string]interface{}{
-		"success":            true,
-		"tenant_id":          t.ID,
-		"name":               t.Name,
-		"code":               t.Code,
-		"industry":           t.Industry,
-		"industry_name":      industryName,
-		"brand_name":         t.BrandName,
-		"brand_logo":         t.BrandLogo,
-		"domain":             t.Domain,
-		"brand_home_bg":      t.BrandHomeBg,
-		"brand_home_bg_style": t.BrandHomeBgStyle,
+		"success":              true,
+		"tenant_id":            t.ID,
+		"name":                 t.Name,
+		"code":                 t.Code,
+		"industry":             t.Industry,
+		"industry_name":        industryName,
+		"brand_name":           t.BrandName,
+		"brand_logo":           t.BrandLogo,
+		"domain":               t.Domain,
+		"brand_home_bg":        t.BrandHomeBg,
+		"brand_home_bg_style":  t.BrandHomeBgStyle,
 		"brand_login_card_pos": t.BrandLoginCardPos,
-		"brand_login_layout": t.BrandLoginLayout,
-		"brand_paid":         tenantBrandingPackagePaid(s, t.ID),
-		"brand_granted":      tenantBrandingGranted(s, t.ID),
-		"dedicated_register": isDedicatedRegisterHost(s, r),
+		"brand_login_layout":   t.BrandLoginLayout,
+		"brand_paid":           tenantBrandingPackagePaid(s, t.ID),
+		"brand_granted":        tenantBrandingGranted(s, t.ID),
+		"brand_root":           !t.IsPersonal,
+		"dedicated_register":   isDedicatedRegisterHost(s, r),
 	}
 }
 
 // handleCaddyOnDemandAsk 供 Caddy 的 on_demand_tls「ask 权限模块」调用：
 // Caddy 在为每个未知子域名签发 Let's Encrypt 证书前，会 GET 本接口 ?domain=<host>，
 // 仅当返回 HTTP 200 才允许签发。放行范围：
-//   1) 基础域名本身（apex，如 lexicorn.cn）；
-//   2) 主站点（primary_host，缺省 langcross.lexicorn.cn，可在 system_config 配置）；
-//   3) 已在「品牌定制」中登记的租户子域前缀（GetByDomain 命中）。
+//  1. 基础域名本身（apex，如 lexicorn.cn）；
+//  2. 主站点（primary_host，缺省 langcross.lexicorn.cn，可在 system_config 配置）；
+//  3. 已在「品牌定制」中登记的租户子域前缀（GetByDomain 命中）。
+//
 // 其余子域一律 403，既满足 Caddy 防滥用要求，又避免任意子域耗尽 Let's Encrypt 配额。
 // 租户在后台设置子域前缀后即时生效，无需手动申请证书（配合 DNS 通配符 A 记录 *.lexicorn.cn → 服务器 IP）。
 func (s *Server) handleCaddyOnDemandAsk(w http.ResponseWriter, r *http.Request) {
@@ -577,7 +619,6 @@ func (s *Server) handleCaddyOnDemandAsk(w http.ResponseWriter, r *http.Request) 
 	}
 	http.Error(w, "forbidden", http.StatusForbidden)
 }
-
 
 // handleFooterLinksGet 公开接口：返回平台级页脚链接（超管设置，与租户无关）。
 func (s *Server) handleFooterLinksGet(w http.ResponseWriter, r *http.Request) {
@@ -632,15 +673,15 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
-		ID              int64  `json:"id"`
-		BrandName       string `json:"brand_name"`
-		BrandLogo       string `json:"brand_logo"`
-		Domain          string `json:"domain"`
-		BrandHomeBg     string `json:"brand_home_bg"`
-		BrandHomeBgStyle string `json:"brand_home_bg_style"`
+		ID                int64  `json:"id"`
+		BrandName         string `json:"brand_name"`
+		BrandLogo         string `json:"brand_logo"`
+		Domain            string `json:"domain"`
+		BrandHomeBg       string `json:"brand_home_bg"`
+		BrandHomeBgStyle  string `json:"brand_home_bg_style"`
 		BrandLoginCardPos string `json:"brand_login_card_pos"`
-		BrandLoginLayout string `json:"brand_login_layout"`
-		BrandLinks      string `json:"brand_links"`
+		BrandLoginLayout  string `json:"brand_login_layout"`
+		BrandLinks        string `json:"brand_links"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -648,7 +689,12 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 	}
 	tid := req.ID
 	if tid <= 0 {
-		tid = s.effTenant(r, u)
+		// 超管以 id=0 显式表示「平台主站（租户根）」；其余角色回落到本租户
+		if auth.RoleLevel(u.Role) >= 4 {
+			tid = 0
+		} else {
+			tid = s.effTenant(r, u)
+		}
 	}
 	if auth.RoleLevel(u.Role) < 4 && tid != u.TenantID {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "只能设置本租户品牌"})
@@ -657,6 +703,24 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 	// ★ 品牌定制鉴权：付费套餐且在有效期内才能编辑（超管拥有覆盖权）
 	if auth.RoleLevel(u.Role) < 4 && !tenantBrandingUnlocked(s, tid) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "品牌定制为付费套餐功能，请先订阅有效套餐后解锁"})
+		return
+	}
+	// 平台主站（tenant_id=0）品牌定制：超管专属，存入 system_config
+	if tid == 0 {
+		m := s.getPlatformBranding()
+		m["brand_name"] = req.BrandName
+		m["brand_logo"] = req.BrandLogo
+		m["domain"] = req.Domain
+		m["brand_home_bg"] = req.BrandHomeBg
+		m["brand_home_bg_style"] = req.BrandHomeBgStyle
+		m["brand_login_card_pos"] = req.BrandLoginCardPos
+		m["brand_login_layout"] = req.BrandLoginLayout
+		m["brand_links"] = req.BrandLinks
+		if err := s.setPlatformBranding(m); err != nil {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]interface{}{"success": true, "tenant_id": 0})
 		return
 	}
 	if err := s.Ten.SetBranding(tid, req.BrandName, req.BrandLogo, req.Domain, req.BrandLinks); err != nil {

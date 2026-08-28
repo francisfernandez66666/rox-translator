@@ -6,7 +6,8 @@
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Textarea } from 'tdesign-react'
-import { UploadIcon, StopCircleIcon, ClearIcon } from 'tdesign-icons-react'
+import { StopCircleIcon, ClearIcon } from 'tdesign-icons-react'
+import { MessagePlugin } from 'tdesign-react'
 import MessageBubble from './MessageBubble'
 import { FeedbackModalFromMessage } from './modals'
 import { useChat } from '@/hooks/useChat'
@@ -15,6 +16,10 @@ import type { ChatMessage } from '@/types'
 import { useT } from '@/i18n'
 import LangMultiSelect from '@/components/LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
+
+// ============ 本文件职责中文说明 ============
+// 前台工作台（聊天主界面）：消息流、语言选择、文件翻译、双模式与反馈。
+// ========================================
 
 interface LangItem { code: string; name: string; flag?: string }
 
@@ -153,22 +158,18 @@ const _LANG_NAME_TO_CODE: Record<string, string> = {
   '达里语': 'fa-af', 'dari': 'fa-af',
 }
 
-const FILE_ACCEPT = '.docx,.pptx,.xlsx,.pdf,.txt,.csv,.srt,.vtt,.md,.json,.yaml,.yml'
-
 // 数字千分位格式化，并处理 undefined/负数，用于余额与用量展示
 function fmtNum(n: number): string {
   return new Intl.NumberFormat().format(Math.max(0, Math.floor(n || 0)))
 }
 
-// 默认导出组件：前台翻译工作台，承载消息流、语言选择、文件上传、双模式与余额展示（等价 Vue ChatWindow.vue）
+// 默认导出组件：前台翻译工作台，承载消息流、语言选择、双模式与余额展示（等价 Vue ChatWindow.vue）
 export default function ChatWindow() {
   const [lang, t2] = useT()
   const chat = useChat()
   const [input, setInput] = useState('')
   const [feedbackMsg, setFeedbackMsg] = useState<ChatMessage | null>(null)
 
-  // ★ 待翻译文件
-  const [attachedFiles, setAttachedFiles] = useState<File[]>([])
   // ★ 双模式（fast/pro）持久化
   const [mode, setMode] = useState<'fast' | 'pro'>(
     (localStorage.getItem('translate_mode') as 'fast' | 'pro') || 'pro',
@@ -181,7 +182,6 @@ export default function ChatWindow() {
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // ---- 语言显示名：优先 i18n（lang.<code>），缺失回退本地 label ----
   // 根据语言代码获取展示名，便于在标签中统一显示
@@ -244,21 +244,6 @@ export default function ChatWindow() {
     localStorage.setItem('translate_mode', m)
   }
 
-  // ---- 文件选择 ----
-  // 触发隐藏的文件输入框点击
-  function triggerFileUpload() { fileInputRef.current?.click() }
-  // 处理文件选择：去重并入已选文件列表，最后清空 input 以便重复选择同名文件
-  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const target = e.target
-    if (!target.files) return
-    for (const file of Array.from(target.files)) {
-      setAttachedFiles((prev) => (prev.find((f) => f.name === file.name) ? prev : [...prev, file]))
-    }
-    target.value = ''
-  }
-  // 按索引移除已选文件
-  function removeFile(idx: number) { setAttachedFiles((prev) => prev.filter((_, i) => i !== idx)) }
-
   // ---- textarea 自动高度 ----
   // 根据内容自动调整输入框高度（最大 120px），避免长文本溢出
   function autoResize() {
@@ -268,21 +253,15 @@ export default function ChatWindow() {
     el.style.height = Math.min(el.scrollHeight, 120) + 'px'
   }
 
-  // ---- 发送 ----
-  // 有附件走文件翻译，否则走文本翻译；目标语言直接取自聊天全局 selectedLangs
-  async function handleSend() {
-    // 文件翻译
-    if (attachedFiles.length > 0) {
-      const langs = chat.selectedLangs.length > 0 ? chat.selectedLangs : undefined
-      for (const file of attachedFiles) {
-        await chat.sendFile(file, langs, input.trim())
-      }
-      setAttachedFiles([])
-      setInput('')
-      return
-    }
+  // 停止生成：中断当前翻译流；已翻译部分消耗的 token 不会退还（产品规则）
+  function handleStop() {
+    chat.stopGeneration()
+    void MessagePlugin.info(t2('chat.stopTokenNote'))
+  }
 
-    // 文本翻译
+  // ---- 发送 ----
+  // 走文本翻译；目标语言直接取自聊天全局 selectedLangs
+  async function handleSend() {
     const rawText = input.trim()
     if (!rawText) return
     setInput('')
@@ -291,7 +270,7 @@ export default function ChatWindow() {
     chat.sendMessage(rawText, options)
   }
 
-  const canSend = input.trim().length > 0 || attachedFiles.length > 0
+  const canSend = input.trim().length > 0
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 57px)' }}>
@@ -336,24 +315,18 @@ export default function ChatWindow() {
       {/* 输入区 */}
       <div className="chat-inputbar">
         {/* 已选文件 / 语言标签行 */}
-        {(attachedFiles.length > 0 || chat.selectedLangs.length > 0) && (
+        {chat.selectedLangs.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingBottom: 8 }}>
-            {attachedFiles.map((f, idx) => (
-              <span key={'f' + idx} className="tag tag-file">
-                📄 {f.name}
-                <button className="tag-remove" onClick={() => removeFile(idx)}>✕</button>
-              </span>
-            ))}
             {chat.selectedLangs.filter((l) => LANG_OPTIONS[l]).map((l) => (
               <span key={'l' + l} className="tag tag-lang">
                 {LANG_OPTIONS[l].flag} {langLabel(l, LANG_OPTIONS[l].label)}
-                <button className="tag-remove" onClick={() => chat.setSelectedLangs(chat.selectedLangs.filter((x) => x !== l))}>✕</button>
+                <Button size="small" variant="text" theme="default" className="tag-close" onClick={() => chat.setSelectedLangs(chat.selectedLangs.filter((x) => x !== l))}>✕</Button>
               </span>
             ))}
             {chat.selectedLangs.filter((l) => !LANG_OPTIONS[l]).map((l) => (
               <span key={'ol' + l} className="tag tag-other-lang">
                 🤖 {langLabel(l, OTHER_LANG_OPTIONS[l]?.label)}
-                <button className="tag-remove" onClick={() => chat.setSelectedLangs(chat.selectedLangs.filter((x) => x !== l))}>✕</button>
+                <Button size="small" variant="text" theme="default" className="tag-close" onClick={() => chat.setSelectedLangs(chat.selectedLangs.filter((x) => x !== l))}>✕</Button>
               </span>
             ))}
           </div>
@@ -366,9 +339,6 @@ export default function ChatWindow() {
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
           {/* 上传 + 语言选择 */}
           <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
-            <button className="action-btn" title={t2('chat.uploadFile')} onClick={triggerFileUpload}>＋</button>
-            <input ref={fileInputRef} type="file" accept={FILE_ACCEPT} style={{ display: 'none' }} onChange={handleFileSelect} />
-
             <div style={{ minWidth: 240, flex: '1 1 240px' }}>
               <LangMultiSelect value={chat.selectedLangs} onChange={chat.setSelectedLangs} />
             </div>
@@ -378,7 +348,7 @@ export default function ChatWindow() {
             autosize={{ minRows: 1, maxRows: 5 }}
             value={input}
             onChange={(v) => { setInput(v); autoResize() }}
-            placeholder={attachedFiles.length > 0 ? t2('chat.sendFile') : t2('chat.placeholder')}
+            placeholder={t2('chat.placeholder')}
             onKeydown={(v, ctx) => {
               if (ctx.e.key === 'Enter' && !ctx.e.shiftKey) {
                 ctx.e.preventDefault()
@@ -388,17 +358,17 @@ export default function ChatWindow() {
             style={{ flex: 1 }}
           />
 
-          {/* 双模式切换（与翻译工单共用 ModeToggle） */}
-          <ModeToggle value={mode} onChange={setMode2} />
-          <Button variant="text" theme="default" icon={<ClearIcon />}
+          {/* 双模式切换（与翻译工单共用 ModeToggle，顺序与工单页保持一致：左快速/右专业） */}
+          <ModeToggle value={mode} onChange={setMode2} fastFirst />
+          <Button variant="text" theme="default" size="medium" icon={<ClearIcon />}
                   onClick={() => { chat.clearMessages() }}>
             {t2('chat.clearChat')}
           </Button>
 
           {chat.isLoading ? (
-            <Button theme="warning" icon={<StopCircleIcon />} onClick={chat.stopGeneration}>{t2('chat.stop')}</Button>
+            <Button theme="warning" size="medium" icon={<StopCircleIcon />} onClick={handleStop}>{t2('chat.stop')}</Button>
           ) : (
-            <Button theme="primary" disabled={!canSend} onClick={() => void handleSend()}>{t2('chat.send')}</Button>
+            <Button theme="primary" size="medium" disabled={!canSend} onClick={() => void handleSend()}>{t2('chat.send')}</Button>
           )}
         </div>
       </div>

@@ -1,7 +1,7 @@
 // components/admin/BrandP.tsx — 品牌定制面板（租户管理员 / 超管）
 // 仅含：品牌名称、Logo（图片上传+预览）、子域名前缀。页脚链接为平台级，见 FooterP。
-// 鉴权：品牌定制为付费套餐功能，需持有有效付费套餐（且未过期）才能编辑；
-// 未付费/已过期的租户仅展示不可编辑，并提示「套餐付费功能」。超管拥有覆盖权。
+// 鉴权：品牌定制开放给三类租户，满足任一即可编辑——① 租户根（企业租户，is_personal=false）；
+// ② 持有有效付费套餐（套餐付费租户）；③ 超管显式指定开通（超管指定租户）。超管始终可编辑。
 import { useEffect, useRef, useState } from 'react'
 import { Button, Input, MessagePlugin, Switch, Tag, Select, Slider } from 'tdesign-react'
 import { useAdmin } from '@/stores/admin'
@@ -10,13 +10,17 @@ import { Panel } from './parts'
 import { tenantBranding, tenantBrandingSave, brandGrant } from '@/api/branding'
 import { parseBgStyle, BrandBgLayer, BgStyle, parseCardPos, parseLoginLayout, CardPos, LoginLayout } from '@/branding'
 
+// ============ 本文件职责中文说明 ============
+// 品牌定制面板：编辑当前（或超管所选）租户的品牌名称、Logo、子域名前缀与登录页样式。
+// ========================================
+
 // 品牌定制面板组件：编辑当前（或超管所选）租户的品牌名称、Logo、子域名前缀，受套餐付费状态限制
 export default function BrandP() {
   const ad = useAdmin()
   const [, t, tpl] = useT()
   const isSuper = ad.myLevel >= 4
-  // 超管编辑「切换器」当前租户（平台根=rox=ID 1）；租户管理员不传 id，仅本租户
-  const targetTenantId = isSuper ? ad.activeTenantId || 1 : 0
+  // 超管编辑「切换器」当前租户（平台根=rox=ID 1）；租户管理员传本租户 id，确保按本租户解析品牌授权
+  const targetTenantId = ad.activeTenantId ?? (isSuper ? 1 : 0)
 
   const [name, setName] = useState('')
   const [logo, setLogo] = useState('')
@@ -30,8 +34,10 @@ export default function BrandP() {
   // 后端回传：当前编辑租户是否已购有效付费套餐 / 是否被超管授权（二者任一即可编辑）
   const [brandPaid, setBrandPaid] = useState(false)
   const [brandGranted, setBrandGranted] = useState(false)
+  const [brandRoot, setBrandRoot] = useState(false)
   const [granting, setGranting] = useState(false)
-  const editable = isSuper || brandPaid || brandGranted
+  // 品牌定制开放给三类租户：租户根（企业租户）/ 付费套餐租户 / 超管指定租户；超管始终可编辑
+  const editable = isSuper || brandPaid || brandGranted || brandRoot
 
   useEffect(() => {
     let alive = true
@@ -48,6 +54,7 @@ export default function BrandP() {
         setLoginCardPos(parseCardPos(j.brand_login_card_pos))
         setBrandPaid(!!j.brand_paid)
         setBrandGranted(!!j.brand_granted)
+        setBrandRoot(!!j.brand_root)
         setLoaded(true)
       })
       .catch(() => setLoaded(true))
@@ -117,7 +124,7 @@ export default function BrandP() {
     setSaving(true)
     try {
       const j = await tenantBrandingSave({
-        id: targetTenantId || undefined,
+        id: targetTenantId,
         brand_name: name,
         brand_logo: logo,
         domain,
@@ -160,22 +167,25 @@ export default function BrandP() {
         🌟 {t('brand.featureDedicated')}
       </div>
       {isSuper && (
-        <>
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.tenantSelect')}</div>
-            <Select
-              value={targetTenantId}
-              onChange={(v: any) => ad.switchTenant(Number(v))}
-              style={{ width: 320 }}
-              options={ad.tenants.map((x) => ({ label: `#${x.id} ${x.name}`, value: x.id }))}
-            />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f3f0ff', border: '1px solid #d6c8ff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13 }}>
-            <span>{tpl('brand.grantLabel', { id: targetTenantId })}</span>
-            <Switch value={brandGranted} loading={granting} onChange={(v) => toggleGrant(Boolean(v))} />
-            {brandGranted && <Tag theme="success" variant="light">{t('brand.grantedTag')}</Tag>}
-          </div>
-        </>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.tenantSelect')}</div>
+          <Select
+            value={targetTenantId}
+            onChange={(v: any) => ad.switchTenant(Number(v))}
+            style={{ width: 320 }}
+            options={[
+              ...(isSuper ? [{ label: t('brand.tenantRoot'), value: 0 }] : []),
+              ...ad.tenants.map((x) => ({ label: `#${x.id} ${x.name}`, value: x.id })),
+            ]}
+          />
+        </div>
+      )}
+      {isSuper && targetTenantId !== 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f3f0ff', border: '1px solid #d6c8ff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13 }}>
+          <span>{tpl('brand.grantLabel', { id: targetTenantId })}</span>
+          <Switch value={brandGranted} loading={granting} onChange={(v) => toggleGrant(Boolean(v))} />
+          {brandGranted && <Tag theme="success" variant="light">{t('brand.grantedTag')}</Tag>}
+        </div>
       )}
       {!editable && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#fff7e6', border: '1px solid #ffd591', color: '#ad6800', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13 }}>
@@ -206,7 +216,7 @@ export default function BrandP() {
 
            <div>
              <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.domain')}</div>
-              <Input value={domain} disabled={!editable} onChange={(v: any) => setDomain(String(v ?? ''))} placeholder="请输入你想要的域名名称" />
+               <Input value={domain} disabled={!editable || targetTenantId === 0} onChange={(v: any) => setDomain(String(v ?? ''))} placeholder="请输入你想要的域名名称" />
               <div style={{ fontSize: 12, color: '#889', marginTop: 4 }}>
                 你将改的是 {domain || '前缀'}.lexicorn.cn
               </div>

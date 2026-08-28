@@ -5,6 +5,10 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装组织/部门树 CRUD、组织下用户视图与部门预算等接口
+// ========================================
+
 /** 组织实体：含父子关系/名称/类型（root/org/dept） */
 export interface OrgInfo {
   id: number

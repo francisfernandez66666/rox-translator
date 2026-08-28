@@ -39,7 +39,8 @@ func New(db *sql.DB) (*Store, error) {
 	s.feedbackMigrate()       // 老库补 replies 列（幂等，BBS 回复线程）
 	s.backfillAPIOwnership()  // ★ 历史 Key/任务强绑定回填（幂等）
 	s.TmReviewMigrate()       // TM 待审池建表（幂等）
-	s.QuotaGrantMigrate()     // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
+	s.QuotaGrantMigrate()       // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
+	s.TicketStateTimingMigrate() // ★ ticket_state 增加 started_at/duration_ms（幂等；进度耗时展示）
 	s.BalanceAccountMigrate() // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
 	s.BillingIndexMigrate()   // ★ 整改 B5：订单号唯一索引 + Key 哈希检索索引（幂等，撞重复降级告警）
 	s.PackagesTenantMigrate() // ★ 商业包租户化：packages 加 tenant_id 并改 (tenant_id, code) 复合唯一（幂等）

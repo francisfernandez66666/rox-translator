@@ -9,6 +9,10 @@ import type { ReactNode } from 'react'
 import { chatStream, translateFileStream, healthCheck } from '@/api'
 import type { ChatMessage } from '@/types'
 
+// ============ 本文件职责中文说明 ============
+// 聊天全局状态 Hook：消息持久化、SSE 收发、健康检查与离线重试。
+// ========================================
+
 // 单会话消息数量上限（超出时从尾部截断）
 const MAX_MESSAGES = 200
 

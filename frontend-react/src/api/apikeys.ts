@@ -5,6 +5,10 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装开放平台 API Key 签发/启停/轮换/删除/限额与文档维护等接口
+// ========================================
+
 /** 获取开放平台 API Key 列表 */
 export async function apiKeys(): Promise<AdminResp> {
   return request('/api/apikeys', { headers: authHeaders() })

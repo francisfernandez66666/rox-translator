@@ -5,6 +5,10 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装工单翻译流程步骤配置的读取与保存等接口
+// ========================================
+
 /** 流程步骤配置项：key 标识/name 展示名/enable 启停 */
 export interface FlowStepItem {
   key: string

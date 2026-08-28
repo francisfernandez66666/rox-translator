@@ -5,6 +5,10 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装余额/用量/充值订单/配额/发票/在线支付/商业包等计费接口
+// ========================================
+
 /** 查询当前租户余额 */
 export async function billingBalance(): Promise<AdminResp> {
   return request('/api/billing/balance', { headers: authHeaders() })

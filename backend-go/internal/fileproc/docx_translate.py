@@ -10,7 +10,7 @@ import sys, os, io, json, re, subprocess, tempfile, shutil
 from pathlib import Path
 
 
-def run(cmd: list, timeout=180):
+def run(cmd: list, timeout=600):
     subprocess.run(cmd, check=True, timeout=timeout, capture_output=True)
 
 def pdf_to_docx(pdf_path: str, docx_path: str):
@@ -22,8 +22,17 @@ def pdf_to_docx(pdf_path: str, docx_path: str):
         cv.close()
 
 def docx_to_pdf(docx_path: str, pdf_path: str):
-    run(["libreoffice", "--headless", "--convert-to", "pdf",
-         "--outdir", str(Path(pdf_path).parent), docx_path])
+    # ★ 每个调用使用独立的 LibreOffice 用户配置目录，避免默认 profile 被并发/历史
+    #   进程锁住导致 --headless 转换卡死（曾致大文档 PDF 写回超时降级为 xlsx 对照表）。
+    prof = tempfile.mkdtemp(prefix="lo_profile_")
+    try:
+        run(["libreoffice", "--headless",
+             f"-env:UserInstallation=file://{prof}",
+             "--convert-to", "pdf",
+             "--outdir", str(Path(pdf_path).parent), docx_path],
+            timeout=600)
+    finally:
+        shutil.rmtree(prof, ignore_errors=True)
     expected = str(Path(pdf_path).parent / (Path(docx_path).stem + ".pdf"))
     if os.path.exists(expected):
         os.replace(expected, pdf_path)

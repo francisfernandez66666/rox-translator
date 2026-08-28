@@ -5,6 +5,10 @@
 import type { ReactNode } from 'react'
 import { MessagePlugin } from 'tdesign-react'
 
+// ============ 本文件职责中文说明 ============
+// 后台面板公共小部件：Panel 容器、Field 字段行、toastResp 提示、num 数字格式化助手。
+// ========================================
+
 /** 面板容器卡片 */
 export function Panel({ title, extra, children }: { title: string; extra?: ReactNode; children: ReactNode }) {
   return (

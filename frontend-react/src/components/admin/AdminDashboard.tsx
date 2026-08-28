@@ -15,13 +15,17 @@ import SiteFooter from '@/components/SiteFooter'
 import { useBranding } from '@/branding'
 
 import Overview from './panels_a'
-import { UsersP, AlertsP, AuditP, UsageP, InvitesP, AgreementsP } from './panels_a'
+import { UsersP, AlertsP, InvitesP, AgreementsP } from './panels_a'
 import { TenantsP, OrgP } from './panels_b'
 import BrandP from './BrandP'
 import FooterP from './FooterP'
 import MailTplP from './MailTplP'
 import { PlansP, ReferralP, WebhooksP, ApiKeysP } from './panels_c'
 import { KbP, ModelsP, WorkflowP, TicketsP } from './panels_d'
+
+// ============ 本文件职责中文说明 ============
+// 后台控制台整体布局与导航：左侧菜单、顶部工具栏与面板路由。
+// ========================================
 
 // 菜单项：key 对应 admin store 中的面板标识，minLevel 为可见最低角色等级
 interface Item { key: PanelKey; label: string; minLevel: number }
@@ -32,14 +36,12 @@ const ITEMS: Item[] = [
   { key: 'plans', label: 'admin.menuPlans', minLevel: 3 },
   { key: 'referral', label: 'admin.menuReferral', minLevel: 3 },
   { key: 'org', label: 'admin.menuOrg', minLevel: 3 },
-  { key: 'usage', label: 'admin.menuUsage', minLevel: 2 },
   { key: 'kb', label: 'admin.menuKb', minLevel: 2 },
   { key: 'models', label: 'admin.menuModels', minLevel: 4 },
   { key: 'workflow', label: 'admin.menuWorkflow', minLevel: 4 },
   { key: 'apikeys', label: 'admin.menuApikeys', minLevel: 3 },
   { key: 'webhooks', label: 'admin.menuWebhooks', minLevel: 3 },
   { key: 'tickets', label: 'admin.menuTickets', minLevel: 2 },
-  { key: 'audit', label: 'admin.menuAudit', minLevel: 4 },
   { key: 'alerts', label: 'admin.menuAlerts', minLevel: 4 },
   { key: 'agreements', label: 'admin.menuAgreements', minLevel: 2 },
   { key: 'brand', label: 'admin.menuBrand', minLevel: 3 },
@@ -55,14 +57,12 @@ function renderPanel(p: PanelKey) {
     case 'plans': return <PlansP />
     case 'referral': return <ReferralP />
     case 'org': return <OrgP />
-    case 'usage': return <UsageP />
     case 'kb': return <KbP />
     case 'models': return <ModelsP />
     case 'workflow': return <WorkflowP />
     case 'apikeys': return <ApiKeysP />
     case 'webhooks': return <WebhooksP />
     case 'tickets': return <TicketsP />
-    case 'audit': return <AuditP />
     case 'alerts': return <AlertsP />
     case 'users': return <UsersP />
     case 'agreements': return <AgreementsP />
@@ -80,10 +80,13 @@ export default function AdminDashboard() {
   const lang = useLang()
   // 租户级品牌定制
   const branding = useBranding()
-  // 按当前用户等级过滤出可见菜单项；「邀请好友」仅超管或已开通该功能的租户可见
+  // 按当前用户等级与租户类型过滤可见菜单项：
+  //  - 企业管理（org）/邀请码（invites）仅企业租户可见，个人用户不显示
+  //  - 邀请好友（referral）个人用户始终可见；企业用户仅当超管开通「邀请好友」开关时可见
   const visible = ITEMS.filter((i) => {
     if (ad.myLevel < i.minLevel) return false
-    if (i.key === 'referral' && !ad.isSuper && !ad.inviteEnabled) return false
+    if (i.key === 'org' && ad.isPersonal) return false
+    if (i.key === 'referral' && !ad.isPersonal && !ad.isSuper && !ad.inviteEnabled) return false
     return true
   })
 

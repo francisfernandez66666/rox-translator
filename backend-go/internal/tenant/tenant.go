@@ -179,7 +179,7 @@ func (s *Store) ensureTable() error {
 		}
 	}
 	if !have["invite_enabled"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN invite_enabled INTEGER NOT NULL DEFAULT 1"); err != nil {
+		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN invite_enabled INTEGER NOT NULL DEFAULT 0"); err != nil {
 			return err
 		}
 	}
@@ -192,7 +192,7 @@ func (s *Store) ensureTable() error {
 }
 
 // tenantColumns 租户查询统一列清单（与 scanTenant 顺序一致）。
-const tenantColumns = `id, code, name, status, expires_at, permissions, COALESCE(industry,''), COALESCE(brand_name,''), COALESCE(brand_logo,''), COALESCE(domain,''), COALESCE(brand_home_bg,''), COALESCE(brand_home_bg_style,''), COALESCE(brand_login_card_pos,''), COALESCE(brand_login_layout,''), COALESCE(brand_links,''), COALESCE(invite_enabled,1), COALESCE(is_personal,0), created_at, updated_at`
+const tenantColumns = `id, code, name, status, expires_at, permissions, COALESCE(industry,''), COALESCE(brand_name,''), COALESCE(brand_logo,''), COALESCE(domain,''), COALESCE(brand_home_bg,''), COALESCE(brand_home_bg_style,''), COALESCE(brand_login_card_pos,''), COALESCE(brand_login_layout,''), COALESCE(brand_links,''), COALESCE(invite_enabled,0), COALESCE(is_personal,0), created_at, updated_at`
 
 // scanner 同时兼容 *sql.Row 与 *sql.Rows 的 Scan 方法。
 type scanner interface{ Scan(dest ...interface{}) error }

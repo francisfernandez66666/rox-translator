@@ -122,7 +122,11 @@ type usageRecord struct {
 // 同时注入 llm.UsageCollector：全链路（初翻/校对/Judge/文化闸门/embedding）
 // 的真实 token 用量自动归集，供按实际费用计费。
 func (e *Engine) WithUsageRecorder(ctx context.Context) context.Context {
+	// ★ 余额不足中止：创建可取消 ctx 并注入中止函数，实时计费钩子在余额耗尽时调用，
+	// 立即中止整次翻译任务（含全部并发段），杜绝其余段被供应商免费翻译的白嫖漏洞。
+	ctx, cancel := context.WithCancel(ctx)
 	ctx = llm.WithUsageCollector(ctx, &llm.UsageCollector{})
+	ctx = llm.WithAbort(ctx, cancel)
 	return context.WithValue(ctx, usageCtxKey{}, &usageRecord{})
 }
 

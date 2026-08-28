@@ -9,6 +9,10 @@ import { fmtTime } from '@/lib/ui'
 import { t } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
 
+// ============ 本文件职责中文说明 ============
+// 站内通知铃铛：未读轮询、下拉列表与已读操作。
+// ========================================
+
 // 站内通知条目数据结构
 interface NoticeItem {
   id: number

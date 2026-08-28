@@ -16,6 +16,10 @@ import { roleLevel } from '@/stores/auth'
 import { useBranding, DEFAULT_BRAND_NAME, BrandBgLayer, parseLoginLayout, parseCardPos } from '@/branding'
 import type { AuthUser } from '@/api'
 
+// ============ 本文件职责中文说明 ============
+// 登录 / 自助注册页面：前台与后台双模式、角色选择、邮箱验证码与找回密码。
+// ========================================
+
 // Login 组件入参：mode 区分前台(home)/后台(admin)登录；onLogin 登录成功后回调上层
 interface Props {
   mode: 'home' | 'admin'
@@ -151,7 +155,11 @@ export default function Login({ mode, onLogin }: Props) {
     const regType = (!branding.dedicatedRegister ? typeChoice : 'enterprise')
     // 个人用户：好友邀请码经 ref 走邀请裂变；企业用户：普通成员须凭企业邀请码加入
     const ref = (regType === 'personal') ? (form.invite.trim() || urlRef || undefined) : undefined
-    const entInvite = (regType === 'enterprise' && roleChoice === 'member') ? (form.invite.trim() || undefined) : undefined
+    // 品牌专属域名注册：企业邀请码必填（且须绑定该企业，由后端校验）；普通企业成员亦凭邀请码加入
+    const entInvite = branding.dedicatedRegister
+      ? (form.invite.trim() || undefined)
+      : (regType === 'enterprise' && roleChoice === 'member' ? (form.invite.trim() || undefined) : undefined)
+    if (branding.dedicatedRegister && !entInvite) { setRegMsg('请填写企业邀请码后再注册'); return }
     if (regType === 'enterprise' && roleChoice === 'member' && !entInvite) { setRegMsg('普通成员须凭企业邀请码加入，请填写邀请码'); return }
     setLoading(true); setRegMsg('')
     try {
@@ -249,13 +257,16 @@ export default function Login({ mode, onLogin }: Props) {
       {view === 'register' && mode === 'home' && (
         <div className="login-card">
            <div className="login-logo">{t('login.selfRegisterTitle')}</div>
-          {branding.dedicatedRegister ? (
-            <div style={{ fontSize: 13, color: '#335', background: '#eef4ff', border: '1px solid #c9ddff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.6 }}>
-              {tpl('login.dedicatedInfo', {
-                name: branding.tenantName || branding.brandName || DEFAULT_BRAND_NAME,
-              })}
-            </div>
-          ) : (
+           {branding.dedicatedRegister ? (
+             <>
+               <div style={{ fontSize: 13, color: '#335', background: '#eef4ff', border: '1px solid #c9ddff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.6 }}>
+                 {tpl('login.dedicatedInfo', {
+                   name: branding.tenantName || branding.brandName || DEFAULT_BRAND_NAME,
+                 })}
+               </div>
+               <Input value={form.invite} onChange={(v: any) => setForm({ ...form, invite: v })} placeholder="请输入企业邀请码（必填）" />
+             </>
+           ) : (
             <>
               <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
                 <Button block variant={typeChoice === 'personal' ? 'base' : 'outline'} theme="primary"
@@ -281,25 +292,30 @@ export default function Login({ mode, onLogin }: Props) {
                 </Button>
               </div>
             )}
-            {/* 企业用户：区分「管理员 / 普通成员」角色（需求 7） */}
+            {/* 企业用户：区分「管理员 / 员工」角色（需求 7） */}
             {typeChoice === 'enterprise' && !branding.dedicatedRegister ? (
               <>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <Button block variant={roleChoice === 'admin' ? 'base' : 'outline'} theme="primary"
-                          onClick={() => setRoleChoice('admin')}>我是管理员（新建企业）</Button>
+                          onClick={() => setRoleChoice('admin')}>管理员（新建企业）</Button>
                   <Button block variant={roleChoice === 'member' ? 'base' : 'outline'} theme="primary"
-                          onClick={() => setRoleChoice('member')}>我是普通成员（受邀加入）</Button>
+                          onClick={() => setRoleChoice('member')}>员工（加入企业）</Button>
                 </div>
-                {/* 普通成员须凭企业邀请码加入；无效/非企业码将被降级为个人用户（需求 2） */}
+                {/* 员工（普通成员）仅须凭企业邀请码加入；无效/非企业码将被降级为个人用户（需求 2） */}
                 {roleChoice === 'member' && (
                   <Input value={form.invite} onChange={(v) => setForm({ ...form, invite: v })}
                          placeholder="请输入企业邀请码" />
                 )}
-                <Input value={form.code} onChange={(v) => setForm({ ...form, code: v })} placeholder={t('login.orgCode')} />
-                <Input value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder={t('login.orgName')} />
-                <Select value={form.industry} onChange={(v) => setForm({ ...form, industry: v as string })}
-                        placeholder={t('login.selectIndustry')} clearable
-                        options={industries.map((i) => ({ label: i.name, value: i.code }))} />
+                {/* 管理员（新建企业）需填写企业编码 / 名称 / 行业；员工加入无需这些字段 */}
+                {roleChoice === 'admin' && (
+                  <>
+                    <Input value={form.code} onChange={(v) => setForm({ ...form, code: v })} placeholder={t('login.orgCode')} />
+                    <Input value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder={t('login.orgName')} />
+                    <Select value={form.industry} onChange={(v) => setForm({ ...form, industry: v as string })}
+                            placeholder={t('login.selectIndustry')} clearable
+                            options={industries.map((i) => ({ label: i.name, value: i.code }))} />
+                  </>
+                )}
               </>
             ) : null}
             {/* 个人用户：好友邀请码（选填）——邀请人将获得试用 token */}

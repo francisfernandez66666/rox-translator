@@ -10,6 +10,10 @@ import { kbRecognizeFile, kbPackages, kbImportFile } from '@/api/kb'
 import { orgList, type OrgInfo } from '@/api/org'
 import { useAdmin } from '@/stores/admin'
 
+// ============ 本文件职责中文说明 ============
+// 前台「上传知识库」弹窗：识别文件、选择知识包并导入。
+// ========================================
+
 interface Props {
   visible: boolean
   onClose: () => void
@@ -67,6 +71,45 @@ function orgTreeOptions(orgs: OrgInfo[], deptByOrg: Map<number, Pkg[]>, startPar
   return build(startParent)
 }
 
+// 由知识包列表 + 组织树构建前台上传弹窗所用的 Cascader 选项（企业包/部门包(组织树)/行业包/语言文化包）。
+// 抽出为导出函数，供后台知识库面板复用，保证前后台「选包」交互完全一致。
+export function buildKbCascaderOptions(pkgs: Pkg[], orgs: OrgInfo[]): COpt[] {
+  const rootOrg = orgs.find((o) => o.type === 'root')
+  const startParent = rootOrg ? rootOrg.id : 0
+
+  const tenantPkgs = pkgs.filter((p) => p.pack_type === 'tenant')
+  const industryPkgs = pkgs.filter((p) => p.pack_type === 'industry')
+  const localePkgs = pkgs.filter((p) => p.pack_type === 'locale')
+  const deptByOrg = new Map<number, Pkg[]>()
+  for (const p of pkgs) {
+    if (p.pack_type === 'department') {
+      const arr = deptByOrg.get(p.org_id || 0) || []
+      arr.push(p)
+      deptByOrg.set(p.org_id || 0, arr)
+    }
+  }
+  const options: COpt[] = []
+  const tenantName =
+    tenantPkgs[0]?.tenant_name ||
+    pkgs.find((p) => p.tenant_name)?.tenant_name ||
+    t('kb.typeTenant')
+  for (const p of tenantPkgs) options.push({ label: tenantName, value: p.id })
+  options.push(...orgTreeOptions(orgs, deptByOrg, startParent))
+  const orgIdSet = new Set(orgs.map((o) => o.id))
+  for (const p of pkgs) {
+    if (p.pack_type === 'department' && !orgIdSet.has(p.org_id || 0)) {
+      options.push({ label: p.org_name || p.name, value: p.id })
+    }
+  }
+  if (industryPkgs.length) {
+    options.push({ label: t('kb.typeIndustry'), value: -2, children: industryPkgs.map((p) => ({ label: p.name, value: p.id })) })
+  }
+  if (localePkgs.length) {
+    options.push({ label: t('kb.typeLocale'), value: -3, children: localePkgs.map((p) => ({ label: p.name, value: p.id })) })
+  }
+  return options
+}
+
 export default function KbUploadDialog({ visible, onClose }: Props) {
   const ad = useAdmin()
   const [file, setFile] = useState<File | null>(null)
@@ -80,9 +123,6 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
 
   // 组织树优先用「登录时静默加载」的全局组织树（ad.orgs）；若为空则本地兜底拉取一次
   const effectiveOrgs = ad.orgs.length > 0 ? ad.orgs : orgs
-  // 组织根节点（其下直接为部门）；找不到则从头（0）构建
-  const rootOrg = effectiveOrgs.find((o) => o.type === 'root')
-  const startParent = rootOrg ? rootOrg.id : 0
 
   // 打开时加载可导入的知识库包（后端按角色过滤）；组织树优先用全局（登录已加载）
   useEffect(() => {
@@ -127,42 +167,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
     } finally { setImporting(false) }
   }
 
-  // 按类型分组：企业包 / 部门包（组织树）/ 行业包 / 语言文化包
-  const tenantPkgs = pkgs.filter((p) => p.pack_type === 'tenant')
-  const industryPkgs = pkgs.filter((p) => p.pack_type === 'industry')
-  const localePkgs = pkgs.filter((p) => p.pack_type === 'locale')
-  const deptByOrg = new Map<number, Pkg[]>()
-  for (const p of pkgs) {
-    if (p.pack_type === 'department') {
-      const arr = deptByOrg.get(p.org_id || 0) || []
-      arr.push(p); deptByOrg.set(p.org_id || 0, arr)
-    }
-  }
-  const options: COpt[] = []
-  // 企业包：以「租户名称」作为选项标签（后端“企业包”概念映射为实际租户名，不显示“企业包”字样）
-  const tenantName =
-    tenantPkgs[0]?.tenant_name ||
-    pkgs.find((p) => p.tenant_name)?.tenant_name ||
-    t('kb.typeTenant')
-  for (const p of tenantPkgs) {
-    options.push({ label: tenantName, value: p.id })
-  }
-  // 部门包：按组织树以「部门名称」为标签多级展示（路径即部门层级），叶子即部门名
-  options.push(...orgTreeOptions(effectiveOrgs, deptByOrg, startParent))
-  // 兜底：组织树缺失时，部门包以部门名（org_name）作为顶层选项，避免不可见
-  const orgIdSet = new Set(effectiveOrgs.map((o) => o.id))
-  for (const p of pkgs) {
-    if (p.pack_type === 'department' && !orgIdSet.has(p.org_id || 0)) {
-      options.push({ label: p.org_name || p.name, value: p.id })
-    }
-  }
-  // 行业包 / 语言文化包（仅超管）：以平台分类名为分组
-  if (industryPkgs.length) {
-    options.push({ label: t('kb.typeIndustry'), value: -2, children: industryPkgs.map((p) => ({ label: p.name, value: p.id })) })
-  }
-  if (localePkgs.length) {
-    options.push({ label: t('kb.typeLocale'), value: -3, children: localePkgs.map((p) => ({ label: p.name, value: p.id })) })
-  }
+  const options = buildKbCascaderOptions(pkgs, effectiveOrgs)
 
   return (
     <Dialog
@@ -230,7 +235,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
   )
 }
 
-function fileExt(name: string): string {
+export function fileExt(name: string): string {
   const i = name.lastIndexOf('.')
   return i >= 0 ? name.slice(i + 1).toUpperCase() : ''
 }

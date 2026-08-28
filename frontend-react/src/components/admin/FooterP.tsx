@@ -6,6 +6,10 @@ import { useT } from '@/i18n'
 import { Panel } from './parts'
 import { footerLinksGet, footerLinksSet, BrandLink } from '@/api/branding'
 
+// ============ 本文件职责中文说明 ============
+// 平台级页脚链接面板（仅超管）：维护对所有租户统一生效的页脚链接。
+// ========================================
+
 // 平台级页脚链接面板组件（仅超管）：维护对所有租户统一生效的页脚链接列表
 export default function FooterP() {
   const [, t] = useT()

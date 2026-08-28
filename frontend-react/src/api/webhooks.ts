@@ -7,6 +7,10 @@
 import { request, authHeaders } from './core'
 import type { AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装租户 Webhook 回调配置(列表/保存/删除/测试投递)等接口
+// ========================================
+
 /** 查询当前租户 webhook 配置列表 */
 export async function webhooks(): Promise<AdminResp> {
   return request('/api/webhooks', { headers: authHeaders() })

@@ -4,6 +4,10 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装 TM 自闭环审核台(待审列表/通过/驳回/采纳反馈)等接口
+// ========================================
+
 /** TM 待审池候选条目（对应后端 store.TmReview） */
 export interface TmReviewItem {
   id: number

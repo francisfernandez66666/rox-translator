@@ -127,8 +127,6 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": res.Error}))
 		s.metrics.countTranslate("text", false)
 	} else {
-		// ★ Token 实费计费：聚合本次全链路真实 token × 均摊系数（强制计费时扣余额）
-		s.chargeTaskTokens(r, tid, "translate", "text", optMode(req.Options))
 		s.metrics.countTranslate("text", true)
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
 		// Webhook：翻译完成事件回调租户配置的 URL（异步投递，不阻塞 SSE 返回）
@@ -264,8 +262,6 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": res.Error}))
 		s.metrics.countTranslate("file", false)
 	} else {
-		// ★ Token 实费计费：聚合本次全链路真实 token × 均摊系数（强制计费时扣余额）
-		s.chargeTaskTokens(r, tid, "translate", "file", normalizeTaskMode(r.FormValue("mode")))
 		s.metrics.countTranslate("file", true)
 		// ★ 归属登记（评审整改 C1）：产物可被 /api/download 按 tenant/user 校验
 		if u := s.authUser(r); u != nil && s.Store != nil {
@@ -311,8 +307,6 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		res.Reply = "❌ 处理出错: " + res.Error
 		s.metrics.countTranslate("text", false)
 	} else {
-		// ★ Token 实费计费：聚合本次全链路真实 token × 均摊系数（强制计费时扣余额）
-		s.chargeTaskTokens(r, tid, "translate", "text", optMode(req.Options))
 		s.metrics.countTranslate("text", true)
 		// Webhook：翻译完成事件回调（异步投递）
 		s.dispatchTranslateWebhook(tid, "text", req.Message, res)
@@ -387,8 +381,6 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	// ★ 注入用户组织（2026-08-26 KB继承链）
 	res := s.Engine.HandleFile(s.userOrgCtx(r), savePath, options, nil)
 	if res.Error == "" {
-		// ★ Token 实费计费：聚合本次全链路真实 token × 均摊系数（强制计费时扣余额）
-		s.chargeTaskTokens(r, tid, "translate", "file", normalizeTaskMode(r.FormValue("mode")))
 		s.metrics.countTranslate("file", true)
 		// ★ 归属登记（评审整改 C1）
 		if u := s.authUser(r); u != nil && s.Store != nil {

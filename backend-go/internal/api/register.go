@@ -232,10 +232,20 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// 专属域名：自动归入对应租户、强制普通用户、忽略邀请码与类型选择
+	// 专属域名：自动归入对应租户、强制普通用户；但企业邀请码仍必填，且须绑定该专属租户
 	if dedicatedTid > 0 {
-		req.Invite = ""
+		invCode := strings.TrimSpace(req.Invite)
+		if invCode == "" {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请填写企业邀请码后再注册"})
+			return
+		}
+		inv, ierr := s.Store.GetInviteCodeByCode(invCode)
+		if ierr != nil || inv.Used == 1 || inv.TenantID != dedicatedTid {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邀请码无效、已使用或不属于该企业"})
+			return
+		}
 		inviteTenantID = dedicatedTid
+		// 保留 req.Invite 供下方「标记已使用」逻辑处理（不在此清空）
 	}
 	if req.Invite != "" {
 		inv, err := s.Store.GetInviteCodeByCode(strings.TrimSpace(req.Invite))
@@ -589,11 +599,12 @@ func (s *Server) wasInviteBind(invite string) bool {
 	return inv.TenantID > 0
 }
 
-// handleInviteCodes 邀请码列表接口（super_admin）。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（需 admin 权限）。
-// 返回: success=true 时携带 codes 数组。
+// handleInviteCodes 邀请码列表接口（tenant_admin 及以上；企业用户仅看本租户）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（需 tenant_admin 权限）。
+// 返回: success=true 时携带 codes 数组；非超管仅返回当前生效租户（企业）的邀请码。
 func (s *Server) handleInviteCodes(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireTenantAdmin(r); err != nil {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
@@ -602,10 +613,20 @@ func (s *Server) handleInviteCodes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 企业用户（非超管）仅可管理本企业邀请码：按当前生效租户过滤
+	if !auth.IsSuperAdmin(u) {
+		kept := codes[:0]
+		for _, c := range codes {
+			if c.TenantID == u.TenantID {
+				kept = append(kept, c)
+			}
+		}
+		codes = kept
+	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "codes": codes})
 }
 
-// handleInviteCodeCreate 创建邀请码接口（super_admin）。
+// handleInviteCodeCreate 创建邀请码接口（tenant_admin 及以上；企业用户仅可绑定本企业）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 code/tenant_id）。
 // 返回: success=true 时携带新建邀请码对象。
 func (s *Server) handleInviteCodeCreate(w http.ResponseWriter, r *http.Request) {
@@ -616,13 +637,18 @@ func (s *Server) handleInviteCodeCreate(w http.ResponseWriter, r *http.Request) 
 	}
 	var req struct {
 		Code     string `json:"code"`      // 邀请码字符串（必填）
-		TenantID int64  `json:"tenant_id"` // 0=新建租户；>0=绑定已有租户（受邀加入）
+		TenantID int64  `json:"tenant_id"` // 0=新建租户；>0=绑定已有租户（受邀加入）；企业用户强制绑定本企业
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Code) == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邀请码不能为空"})
 		return
 	}
-	c, err := s.Store.CreateInviteCode(strings.TrimSpace(req.Code), req.TenantID)
+	// 企业用户（非超管）创建邀请码只能绑定本企业，忽略请求体中的 tenant_id
+	tid := req.TenantID
+	if !auth.IsSuperAdmin(u) {
+		tid = u.TenantID
+	}
+	c, err := s.Store.CreateInviteCode(strings.TrimSpace(req.Code), tid)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + err.Error()})
 		return

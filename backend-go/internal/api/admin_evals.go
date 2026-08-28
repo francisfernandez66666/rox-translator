@@ -76,9 +76,9 @@ func llmErrorRateStr(eng *engine.Engine) string {
 	return fmt.Sprintf("%.1f%%", eng.ErrorRate()*100)
 }
 
-// handleSystemAudit 审计日志（仅超管；支持 action/resource/user/time 过滤；export=csv 导出）
+// handleSystemAudit 审计日志（租户管理员及以上；超管看全平台，企业租户管理员看本租户；支持过滤与 CSV 导出）
 func (s *Server) handleSystemAudit(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireAdminUser(r)
+	u, err := s.requireTenantAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return

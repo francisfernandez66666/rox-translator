@@ -5,6 +5,10 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装系统健康、审计日志、监控告警与 evals 评估记录等接口
+// ========================================
+
 /** 获取系统健康状态（知识库/余额/流程/用量/模型等） */
 export async function systemHealth(): Promise<AdminResp> {
   return request('/api/system/health', { headers: authHeaders() })

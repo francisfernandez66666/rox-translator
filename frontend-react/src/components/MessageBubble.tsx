@@ -5,10 +5,15 @@
 //      附件图片内联预览 + 全类型下载（blob 鉴权）、反馈入口。
 // ============================================================================
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Button } from 'tdesign-react'
 import { API_BASE, getAuthToken } from '@/api'
 import type { ChatMessage } from '@/types'
 import { t } from '@/i18n'
 import { SkillBadge } from './SkillBadge'
+
+// ============ 本文件职责中文说明 ============
+// 聊天气泡组件：渲染单条消息（Markdown、译文表、附件预览、反馈入口）。
+// ========================================
 
 // ---- 轻量 Markdown → HTML（转义优先，行内顺序与 Vue 一致：** __ *em* `code`）----
 // 转义 HTML 特殊字符，防止注入并确保后续标签正常解析
@@ -248,9 +253,9 @@ export default function MessageBubble({ message, onFeedback }: Props) {
             ))}
             {/* 反馈入口：仅对翻译结果 */}
             <div className="msg-feedback-row">
-              <button className="feedback-btn" title={t('fb.entryTip')} onClick={() => onFeedback?.(message)}>
+              <Button size="small" variant="text" theme="primary" title={t('fb.entryTip')} onClick={() => onFeedback?.(message)}>
                 💬 {t('fb.entry')}
-              </button>
+              </Button>
             </div>
           </div>
         )}

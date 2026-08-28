@@ -8,7 +8,7 @@ import {
 } from 'tdesign-react'
 import {
   kbPackages, kbPackageCreate, kbPackageDelete, kbEntries, kbEntryAdd, kbEntryDelete,
-  kbEntriesImport, kbRecognizeFile, bitextImport, tmxImport, kbImportFile,
+  kbEntriesImport, bitextImport, tmxImport,
   kbPackageStatus, kbPackageShare, kbIndexRebuild,
   safetyPhrases, safetyPhraseAdd, safetyPhraseDelete, safetyPhraseStatus, safetyBulkImport,
   adminModels, adminModelsSave, stageModels, stageModelsSave, adminPolicy, adminPolicySave,
@@ -22,6 +22,11 @@ import { fmtTime } from '@/lib/ui'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
 import { orgList, type OrgInfo } from '@/api/org'
+import KbUploadDialog from '@/components/KbUploadDialog'
+
+// ============ 本文件职责中文说明 ============
+// 后台面板 D：知识库、模型、工作流与工单（反馈/审批/TM 审核）。
+// ========================================
 
 type Any = Record<string, any>
 
@@ -78,7 +83,7 @@ function packDisplayName(p: Any, orgMap: Map<number, OrgInfo>): string {
 // ==================== 知识库（Vue Kb.vue / KnowledgeBase.vue） ====================
 export function KbP() {
   const [, t, tpl] = useT()
-  const { myLevel, isSuper, activeTenantId } = useAdmin()
+  const { myLevel, isSuper, activeTenantId, orgs } = useAdmin()
   // 包列表与各包条目数缓存
   const [pkgs, setPkgs] = useState<Any[]>([])
   const [entriesMap, setEntriesMap] = useState<Record<number, number>>({})
@@ -94,13 +99,8 @@ export function KbP() {
   const [bulkText, setBulkText] = useState('')
   const [bulkTextMsg, setBulkTextMsg] = useState('')
 
-  // ---- KB 文件上传 ----
-  const [kbFile, setKbFile] = useState<File | null>(null)
-  const [kbRecognizing, setKbRecognizing] = useState(false)
-  const [kbRecognized, setKbRecognized] = useState<Any | null>(null)
-  const [kbImportPkg, setKbImportPkg] = useState<number>(0)
-  const [kbImporting, setKbImporting] = useState(false)
-  const [kbImportResult, setKbImportResult] = useState<Any | null>(null)
+  // ---- KB 文件上传（直接复用前台「上传知识库」弹窗，保证前后台交互完全一致）----
+  const [kbDlg, setKbDlg] = useState(false)
   const [bitextFile, setBitextFile] = useState<File | null>(null)
   const [bitextImporting, setBitextImporting] = useState(false)
   const [bitextMsg, setBitextMsg] = useState('')
@@ -132,6 +132,7 @@ export function KbP() {
 
   // 安全句相关派生状态
   const localePackages = useMemo(() => pkgs.filter((p: Any) => p.pack_type === 'locale'), [pkgs])
+  // 文件导入所用「选包」Cascader 选项由前台 KbUploadDialog 内部构建，无需在此重复
   const filteredSafety = useMemo(() => safetyList.filter((s: Any) =>
     (!safetyPkgId || s.package_id === safetyPkgId) &&
     (!safetyStatusFilter || (s.status || 'approved') === safetyStatusFilter)
@@ -267,29 +268,7 @@ export function KbP() {
   }
 
   // ---- 文件上传 ----
-  // 识别上传文件中的多语言列
-  async function startRecognize() {
-    if (!kbFile) return
-    setKbRecognizing(true); setKbImportResult(null)
-    try {
-      const r = await kbRecognizeFile(kbFile)
-      if (r.success) setKbRecognized(r as Any)
-      else MessagePlugin.error(r.message || t('kb.recognizeFailed'))
-    } catch (err: any) { MessagePlugin.error(tpl('kb.recognizeErr', { msg: err?.message || t('kb.networkErr') })) }
-    finally { setKbRecognizing(false) }
-  }
-  // 将识别结果导入指定知识包
-  async function startImport() {
-    if (!kbRecognized?.temp_id || !kbImportPkg) return
-    setKbImporting(true); setKbImportResult(null)
-    try {
-      const r = await kbImportFile({ temp_id: String(kbRecognized.temp_id), package_id: kbImportPkg })
-      setKbImportResult(r as Any)
-      if (r.success) { await loadPackages(); setKbImportPkg(0); setKbRecognized(null) }
-    } catch (err: any) {
-      setKbImportResult({ success: false, message: tpl('kb.importErr', { msg: err?.message || t('kb.networkErr') }) } as Any)
-    } finally { setKbImporting(false) }
-  }
+  // 识别与导入逻辑全部封装在前台 KbUploadDialog 内（与管理台复用同一组件），此处仅负责打开弹窗
   // 导入双语文本文件
   async function startBitextImport() {
     if (!bitextFile) return
@@ -361,44 +340,24 @@ export function KbP() {
       {/* 页面标题 */}
       <h2 style={{ margin: '4px 0 12px' }}>{t('kb.title')}</h2>
 
-      {/* ===== 文件导入 ===== */}
-      <Panel title={t('kb.uploadTitle')}>
+      {/* ===== 文件导入：直接复用前台「上传知识库」弹窗，交互完全一致 ===== */}
+      <Panel title={t('kb.uploadTitle')} extra={<Button theme="primary" onClick={() => setKbDlg(true)}>{t('kb.topbarUpload')}</Button>}>
         <div style={{ ...rowStyle, marginBottom: 6 }}><span style={{ fontSize: 13, color: '#556' }}>{t('kb.uploadHint')}</span></div>
-        <div style={rowMt}>
-          <input type="file" accept=".csv,.xlsx,.xls" onChange={(e: any) => { setKbFile(e.target.files?.[0] || null); setKbRecognized(null); setKbImportResult(null); setKbImportPkg(0); e.currentTarget.value = '' }} />
-          <Button onClick={() => void startRecognize()} disabled={!kbFile || kbRecognizing}>{kbRecognizing ? t('kb.recognizing') : t('kb.recognize')}</Button>
-        </div>
-        {kbFile && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#334', marginTop: 6 }}>
-            <span>📄 {t('kb.fileSelected')}{kbFile.name}{(kbFile.name.split('.').pop() || '').toUpperCase() && ` (${(kbFile.name.split('.').pop() || '').toUpperCase()})`}</span>
-            <Button size="small" variant="text" theme="danger" onClick={() => { setKbFile(null); setKbRecognized(null); setKbImportResult(null); setKbImportPkg(0) }}>
-              {t('kb.fileRemove')}
-            </Button>
-          </div>
-        )}
-        {kbRecognized && (
-          <div style={{ marginTop: 8, fontSize: 13 }}>
-            <div>
-              {tpl('kb.kbTotal', { total: (kbRecognized as Any).total, n: ((kbRecognized as Any).lang_cols || []).length })}
-              {((kbRecognized as Any).new_langs || []).length > 0 && <span> {t('kb.kbNewLangs')} {((kbRecognized as Any).new_langs || []).map((l: string) => <Tag key={l} size="small">{l}</Tag>)}</span>}
-            </div>
-            <div style={rowMt}>
-              <Select value={kbImportPkg} onChange={(v: any) => setKbImportPkg(Number(v))} placeholder={t('kb.selectPkg')}
-                options={pkgs.map((p: Any) => ({ label: packDisplayName(p, orgMap), value: Number(p.id) }))} style={{ minWidth: 220 }} />
-              <Button theme="success" onClick={() => void startImport()} disabled={!kbImportPkg || kbImporting}>{t('kb.import')}</Button>
-            </div>
-            {kbImportResult && <div style={resStyle(!!(kbImportResult as Any).success)}>{(kbImportResult as Any).message}</div>}
-          </div>
-        )}
+        <div style={{ fontSize: 13, color: '#889' }}>{t('kb.uploadSameAsFrontend')}</div>
+      </Panel>
+      {/* 双语文本 / TMX 导入（管理员附加功能，保留既有端点与逻辑） */}
+      <Panel title={t('kb.alignTitle')}>
         <div style={rowTop}>
           <input type="file" accept=".csv,.xlsx,.xls" onChange={(e: any) => { setBitextFile(e.target.files?.[0] || null); setBitextMsg(''); e.currentTarget.value = '' }} />
-          <Button onClick={() => void startBitextImport()} disabled={!bitextFile || bitextImporting}>{bitextImporting ? t('kb.bitextImporting') : t('kb.bitextImport')}</Button>
+          <Button onClick={() => void startBitextImport()} disabled={!bitextFile || bitextImporting} loading={bitextImporting}>{bitextImporting ? t('kb.bitextImporting') : t('kb.bitextImport')}</Button>
           <input type="file" accept=".tmx,.xml" onChange={(e: any) => { setTmxFile(e.target.files?.[0] || null); setTmxMsg(''); e.currentTarget.value = '' }} style={{ marginLeft: 8 }} />
-          <Button onClick={() => void startTmxImport()} disabled={!tmxFile || tmxImporting}>{tmxImporting ? t('kb.tmxImporting') : t('kb.tmxImport')}</Button>
+          <Button onClick={() => void startTmxImport()} disabled={!tmxFile || tmxImporting} loading={tmxImporting}>{tmxImporting ? t('kb.tmxImporting') : t('kb.tmxImport')}</Button>
         </div>
         {bitextMsg && <div style={resStyle(bitextOk)}>{bitextMsg}</div>}
         {tmxMsg && <div style={resStyle(tmxOk)}>{tmxMsg}</div>}
       </Panel>
+      {/* 复用前台上传弹窗：识别 → Cascader 选包 → 导入，与管理台完全一致 */}
+      <KbUploadDialog visible={kbDlg} onClose={() => setKbDlg(false)} />
 
       {/* ===== 新建知识包 ===== */}
       <div style={rowMt}>

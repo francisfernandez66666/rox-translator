@@ -23,6 +23,7 @@ import (
 	"github.com/xuri/excelize/v2"
 	"translator/internal/config"
 	"translator/internal/fileproc"
+	"translator/internal/llm"
 )
 
 // FileTranslateResult 文件翻译结果
@@ -56,6 +57,9 @@ type FileTranslateData struct {
 func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[string]interface{}, prog Progress) *FileTranslateResult {
 	// 注入请求级用量记录器（供计量成本核算）
 	ctx = e.WithUsageRecorder(ctx)
+	// ★ 文件/后台批任务：走专用 LLM 信号量池（容量更大、与交互池隔离），
+	//   避免长文档高并发打满共享交互信号量、饿死前台即时翻译、拖垮全站（整改）。
+	ctx = llm.WithFileMode(ctx)
 	if prog == nil {
 		prog = func(string, int, int) {}
 	}
@@ -234,10 +238,12 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					for i, idx := range needModelIdx {
 						needTexts[i] = texts[idx]
 					}
-					batch := e.BatchTranslate(ctx, needTexts, lc, 15, nil)
+					batch := e.BatchTranslate(ctx, needTexts, lc, 15,
+						func(done, total int) { prog("file_translate|初翻|"+lc, done, total) })
 					// ★ pro 模式批量审校：本块一次 LLM 调用逐条修正，失败/不符原样保留
 					if !fast {
-						batch = e.reviewBatchSafe(ctx, needTexts, batch, lc)
+						batch = e.reviewBatchSafe(ctx, needTexts, batch, lc,
+							func(done, total int) { prog("file_translate|校对|"+lc, done, total) })
 					}
 					for i, idx := range needModelIdx {
 						// ★ 回显检测：模型原样返回源文 = 未翻译，视为缺失走重试
@@ -252,15 +258,17 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	}
 
 	// 其他语言：批量模型
-	for _, lc := range directOther {
+		for _, lc := range directOther {
 		wg.Add(1)
 		go func(lc string) {
 			defer wg.Done()
 			defer recoverPipeline("file_batch:" + lc) // 整改 D4
-			batch := e.BatchTranslate(ctx, texts, lc, 15, nil)
+			batch := e.BatchTranslate(ctx, texts, lc, 15,
+				func(done, total int) { prog("file_translate|初翻|"+lc, done, total) })
 			// ★ pro 模式批量审校（同上：整块一次调用）
 			if !fast {
-				batch = e.reviewBatchSafe(ctx, texts, batch, lc)
+				batch = e.reviewBatchSafe(ctx, texts, batch, lc,
+					func(done, total int) { prog("file_translate|校对|"+lc, done, total) })
 			}
 			for i, t := range texts {
 				if batch[i] != "" && batch[i] != "[翻译失败]" {
@@ -334,7 +342,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			}
 			// 本轮第1优先：小批量重译（bs=10）。BatchTranslate 内部含动态批与低解析率二次收编，
 			// 对短段回显的纠正率高于逐段单发。
-			batch := e.BatchTranslate(ctx, still, lc, 10, nil)
+			batch := e.BatchTranslate(ctx, still, lc, 10,
+				func(done, total int) { prog("file_translate|初翻|"+lc, done, total) })
 			for i, m := range still {
 				if v := batch[i]; v != "" && v != "[翻译失败]" && v != m {
 					addTrans(lc, m, v)
@@ -526,7 +535,7 @@ func (e *Engine) parseOtherLangsFromPrompt(ctx context.Context, text string) ([]
 
 // reviewBatchSafe 批量审校安全包装：过滤空译文与占位失败项，仅审校有效对；
 // 审校结果不改变成功/失败判定（审校输出为空时保留原译文）。
-func (e *Engine) reviewBatchSafe(ctx context.Context, sources, translations []string, lang string) []string {
+func (e *Engine) reviewBatchSafe(ctx context.Context, sources, translations []string, lang string, onDone func(done, total int)) []string {
 	idxs := make([]int, 0, len(sources))
 	var srcs, tgts []string
 	for i, tr := range translations {
@@ -538,7 +547,13 @@ func (e *Engine) reviewBatchSafe(ctx context.Context, sources, translations []st
 		tgts = append(tgts, tr)
 	}
 	if len(idxs) < 2 { // 单段走常规逐段审校收益低，跳过
+		if onDone != nil {
+			onDone(len(translations), len(translations))
+		}
 		return translations
+	}
+	if onDone != nil {
+		onDone(0, len(translations))
 	}
 	rev := e.ReviewTranslationBatch(ctx, srcs, tgts, lang, config.StageReview)
 	out := make([]string, len(translations))
@@ -547,6 +562,9 @@ func (e *Engine) reviewBatchSafe(ctx context.Context, sources, translations []st
 		if rev[j] != "" {
 			out[i] = rev[j]
 		}
+	}
+	if onDone != nil {
+		onDone(len(translations), len(translations))
 	}
 	return out
 }

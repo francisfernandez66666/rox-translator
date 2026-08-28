@@ -5,6 +5,10 @@
 
 import { request, authHeaders, API_BASE, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装行业知识库包/条目、文件导入、安全句(Gate)与向量重建等接口
+// ========================================
+
 /** 获取行业知识库包列表 */
 export async function kbPackages(): Promise<AdminResp> {
   return request('/api/admin/kb-packages', { headers: authHeaders() })

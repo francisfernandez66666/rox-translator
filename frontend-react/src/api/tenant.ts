@@ -5,6 +5,10 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装租户 CRUD、状态切换、数据导出/清除(GDPR)与试用额度等接口
+// ========================================
+
 /** 租户信息数据结构：含编码/名称/状态/有效期/权限 */
 export interface TenantInfo {
   id: number
@@ -54,8 +58,8 @@ export async function tenantUpdate(
   })
 }
 
-/** 读取当前生效租户的「邀请好友」功能开关（tenant_admin 及以上） */
-export async function tenantInviteEnabledGet(): Promise<{ success: boolean; invite_enabled?: boolean }> {
+/** 读取当前生效租户的「邀请好友」功能开关与租户类型（tenant_admin 及以上） */
+export async function tenantInviteEnabledGet(): Promise<{ success: boolean; invite_enabled?: boolean; is_personal?: boolean }> {
   return request('/api/tenant/invite-enabled', { headers: authHeaders() })
 }
 

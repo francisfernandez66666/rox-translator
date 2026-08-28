@@ -6,6 +6,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { Select, Input, Button } from 'tdesign-react'
 import { t } from '@/i18n'
 
+// ============ 本文件职责中文说明 ============
+// 目标语言多选组件：分组下拉 + 自定义语言输入。
+// ========================================
+
 // KB 九语（与后端 /api/translation/langs 对齐的本地兜底；挂载后由父组件动态覆盖可选）
 // 知识库支持的高质量目标语言（本地兜底，后端返回后覆盖名称与国旗）
 const KB_LANGS: Array<{ code: string; label: string; flag?: string }> = [

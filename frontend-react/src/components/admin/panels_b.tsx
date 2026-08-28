@@ -4,7 +4,7 @@
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Textarea,
+  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Textarea, Tabs,
 } from 'tdesign-react'
 import {
   tenantList, tenantCreate, tenantUpdate, tenantSetStatus, tenantDelete,
@@ -19,7 +19,12 @@ import {
 import { Panel, Field, toastResp, num } from './parts'
 import { fmtNum, fmtTime } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
+import { InvitesP } from './panels_a'
 import { t, tpl } from '@/i18n'
+
+// ============ 本文件职责中文说明 ============
+// 后台面板 B：租户管理与组织架构。
+// ========================================
 
 type Any = any
 
@@ -256,6 +261,8 @@ export function OrgP() {
 
   const myLevel = ad.myLevel
   const isSuper = ad.isSuper
+  // 「企业管理」内部双 Tab：组织结构 / 邀请员工（邀请码并入此处）
+  const [tab, setTab] = useState<'org' | 'invite'>('org')
 
   // 根组织显示名称：优先取后端返回的根组织，否则用当前租户名兜底
   const rootOrgName = useMemo(() => {
@@ -547,7 +554,9 @@ export function OrgP() {
   ]
 
   return (
-    <Panel title={t('org.title')}>
+    <Tabs value={tab} onChange={(v) => setTab(v as 'org' | 'invite')}>
+      <Tabs.TabPanel value="org" label={t('org.tabOrg')}>
+        <Panel title={t('org.title')}>
       <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>{t('org.treeHint')}</p>
 
       {/* ===== 新建组织/部门 ===== */}
@@ -591,7 +600,7 @@ export function OrgP() {
                   <span className={isOverBudget(o) ? 'budget-over' : ''}
                         title={t('org.budgetSet')}
                         onClick={(e) => { e.stopPropagation(); openBudget(o) }}
-                        style={{ cursor: 'pointer', fontSize: 12, color: isOverBudget(o) ? '#c62828' : '#667', border: `1px solid ${isOverBudget(o) ? '#c62828' : '#d0d7de'}`, borderRadius: 10, padding: '0 6px' }}>
+                        style={{ cursor: 'pointer', fontSize: 12, color: isOverBudget(o) ? '#c62828' : '#667', border: `1px solid ${isOverBudget(o) ? '#c62828' : '#d0d7de'}`, borderRadius: 8, padding: '0 6px' }}>
                     💰 {budgetText(o)}
                   </span>
                 )}
@@ -655,7 +664,7 @@ export function OrgP() {
           {!orgUserList.length && <div style={{ fontSize: 12, color: '#999', padding: 8 }}>{t('org.noUsers')}</div>}
 
           {/* 开通用户 */}
-          <div style={{ marginTop: 16, border: '1px solid #eef0f3', borderRadius: 10, padding: 14 }}>
+          <div style={{ marginTop: 16, border: '1px solid #e3e6ef', borderRadius: 8, padding: 14 }}>
             <h3 style={{ margin: '0 0 10px' }}>{tpl('org.addUser', { org: addUserHeading })}</h3>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
               <Input value={String(nu.username || '')} placeholder={t('org.usernamePlaceholder')} onChange={(v) => setNu((n: Any) => ({ ...n, username: v }))} style={{ flex: 1, minWidth: 140 }} />
@@ -718,6 +727,11 @@ export function OrgP() {
           </Field>
         )}
       </Dialog>
-    </Panel>
+        </Panel>
+      </Tabs.TabPanel>
+      <Tabs.TabPanel value="invite" label={t('org.tabInvite')}>
+        <InvitesP />
+      </Tabs.TabPanel>
+    </Tabs>
   )
 }

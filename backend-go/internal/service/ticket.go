@@ -154,6 +154,10 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	if t.Status == store.TicketCompleted {
 		return nil
 	}
+	// ★ 注入租户到 ctx：异步工单 ctx 源自 context.Background()，而实时计费钩子
+	// （eng.LLM.OnUsage）靠 tenant.FromContext 取租户扣费，必须显式注入，
+	// 否则 tid=0 不计费（白嫖）。t.TenantID 同时覆盖 OpenAPI 任务归属租户。
+	ctx = tenant.WithTenant(ctx, t.TenantID)
 	// ★ 注入创建人组织（2026-08-26 KB继承链）：异步工单按「发起用户当前所在部门」
 	//   的祖先链决定部门包可见范围；OpenAPI 任务（CreatedBy=0）回退其归属用户 APIUserID。
 	creatorUID := t.CreatedBy
@@ -389,8 +393,66 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	if ownerUID <= 0 && t.APIUserID > 0 {
 		ownerUID = t.APIUserID
 	}
-	// ★ 进度阶梯回调：把引擎内部阶段映射为步骤状态（前端锚点：提取20/初翻40/校对60/回写80）
+	// ★ 进度阶梯回调：把引擎内部阶段映射为步骤状态（前端锚点：提取20/初翻40/校对60/回写80）。
+	// 同时归集细粒度「初翻/校对」逐段进度：引擎以 "file_translate|初翻|en" / "file_translate|校对|en"
+	// 上报（done/total 为该语言段数），此处按语言累加，落库为单条 file_translate 轨迹的 JSON。
+	type segProg struct {
+		mu      sync.Mutex
+		init    map[string]int64
+		initT   map[string]int64
+		review  map[string]int64
+		reviewT map[string]int64
+	}
+	sp := &segProg{init: map[string]int64{}, initT: map[string]int64{}, review: map[string]int64{}, reviewT: map[string]int64{}}
+	finalizeFileTranslate := func() {
+		sp.mu.Lock()
+		var id, it, rd, rt int64
+		for _, v := range sp.init {
+			id += v
+		}
+		for _, v := range sp.initT {
+			it += v
+		}
+		for _, v := range sp.review {
+			rd += v
+		}
+		for _, v := range sp.reviewT {
+			rt += v
+		}
+		payload := fmt.Sprintf(`{"init_done":%d,"init_total":%d,"review_done":%d,"review_total":%d}`, id, it, rd, rt)
+		sp.mu.Unlock()
+		s.Store.SetTicketState(t.ID, "file_translate", "success", payload)
+	}
 	progFn := func(step string, done, total int) {
+		if strings.Contains(step, "|") {
+			parts := strings.Split(step, "|")
+			stage, lang := parts[1], parts[2]
+			sp.mu.Lock()
+			if stage == "初翻" {
+				sp.init[lang] = int64(done)
+				sp.initT[lang] = int64(total)
+			} else if stage == "校对" {
+				sp.review[lang] = int64(done)
+				sp.reviewT[lang] = int64(total)
+			}
+			var id, it, rd, rt int64
+			for _, v := range sp.init {
+				id += v
+			}
+			for _, v := range sp.initT {
+				it += v
+			}
+			for _, v := range sp.review {
+				rd += v
+			}
+			for _, v := range sp.reviewT {
+				rt += v
+			}
+			payload := fmt.Sprintf(`{"init_done":%d,"init_total":%d,"review_done":%d,"review_total":%d}`, id, it, rd, rt)
+			sp.mu.Unlock()
+			s.Store.SetTicketState(t.ID, "file_translate", "running", payload)
+			return
+		}
 		switch {
 		case strings.Contains(step, "第1步"):
 			s.Store.SetTicketState(t.ID, "file_extract", "running", "")
@@ -454,6 +516,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 			}(f)
 		}
 		wg.Wait()
+		finalizeFileTranslate()
 		s.Store.SetTicketState(t.ID, "file_extract", "success", "")
 		if okCount > 0 {
 			// 校对（pro 流水线内含 QA，此处为阶梯标记）与回写完成
@@ -481,6 +544,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	if res.Error != "" {
 		return fmt.Errorf("%s", res.Error)
 	}
+	finalizeFileTranslate()
 	// 翻译完成 → 校对标记 → 进入回写阶段
 	s.Store.SetTicketState(t.ID, "file_qa", "success", "")
 	s.Store.SetTicketState(t.ID, "file_writeback", "running", "")

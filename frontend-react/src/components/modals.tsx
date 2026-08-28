@@ -14,6 +14,10 @@ import type { ChatMessage } from '@/types'
 import { t, tpl } from '@/i18n'
 import { useAuth } from '@/stores/auth'
 
+// ============ 本文件职责中文说明 ============
+// 四个应用内弹窗：反馈、改密、换绑邮箱、自助注销。
+// ========================================
+
 // ---------------- FeedbackModal ----------------
 // 反馈目标描述：区分文本反馈与工单反馈，并携带可附带的上下文
 export interface FeedbackTarget {

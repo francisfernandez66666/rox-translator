@@ -15,8 +15,12 @@ import {
 } from '@/api'
 import { useAdmin, roleName } from '@/stores/admin'
 import { Panel, Field, toastResp } from './parts'
-import { fmtTime } from '@/lib/ui'
+import { fmtTime, fmtNum } from '@/lib/ui'
 import { useT, t as tFn } from '@/i18n'
+
+// ============ 本文件职责中文说明 ============
+// 后台面板 A：概览、用户、告警、审计、用量与邀请码。
+// ========================================
 
 // 审计动作键→中英文映射名（模块级，避免渲染闭包作用域问题；未命中字典时回退原始动作键）
 function auditActionLabel(a: string): string {
@@ -42,7 +46,7 @@ function shortDiffJSON(s: string): string {
 // 指标卡片：仅做展示，value 可直接为 React 节点
 function HealthCard({ value, label }: { value: React.ReactNode; label: string }) {
   return (
-    <div style={{ minWidth: 120, border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 14px' }}>
+    <div style={{ minWidth: 120, border: '1px solid #e3e6ef', borderRadius: 8, padding: '10px 14px' }}>
       <b style={{ fontSize: 18, display: 'block' }}>{value}</b>
       <span style={{ fontSize: 12, color: '#889' }}>{label}</span>
     </div>
@@ -52,9 +56,11 @@ function HealthCard({ value, label }: { value: React.ReactNode; label: string })
 // 总览面板：加载系统健康度与最近审计日志，仅超管可见审计部分
 export default function Overview() {
   const [, t, tpl] = useT()
-  const { isSuper, activeTenantId } = useAdmin()
+  const { isSuper, activeTenantId, myLevel } = useAdmin()
   const [health, setHealth] = useState<Any | null>(null)
   const [audit, setAudit] = useState<Any[]>([])
+  // 总览内部分屏：系统看板（运行状态+审计日志）/ 用量看板（个人+系统用量）
+  const [ovTab, setOvTab] = useState<'system' | 'usage'>('system')
 
   // 拉取 health 与 audit；非超管清空 audit
   const loadDash = useCallback(async () => {
@@ -62,7 +68,7 @@ export default function Overview() {
       const h = await systemHealth()
       if (h.success) setHealth(((h as unknown as Any).health as Any) ?? null)
     } catch { /* ignore */ }
-    if (isSuper) {
+    if (isSuper || myLevel >= 3) {
       try {
         const a = await systemAudit()
         if (a.success) setAudit(((a as unknown as Any).logs as Any[]) || [])
@@ -104,12 +110,14 @@ export default function Overview() {
   }
 
   return (
-    <Panel title={t('overview.title')}
-      extra={<Space>
-        <Button onClick={loadDash}>{t('overview.refresh')}</Button>
-        {isSuper && <Button theme="success" onClick={exportAuditCSV}>{t('overview.exportAuditCsv')}</Button>}
-        <Button onClick={openMetrics}>{t('overview.prometheus')}</Button>
-      </Space>}>
+    <Tabs value={ovTab} onChange={(v) => setOvTab(v as 'system' | 'usage')}>
+      <Tabs.TabPanel value="system" label={t('overview.tabSystem')}>
+        <Panel title={t('overview.title')}
+          extra={<Space>
+            <Button onClick={loadDash}>{t('overview.refresh')}</Button>
+            {isSuper && <Button theme="success" onClick={exportAuditCSV}>{t('overview.exportAuditCsv')}</Button>}
+            <Button onClick={openMetrics}>{t('overview.prometheus')}</Button>
+          </Space>}>
       {/* 健康指标卡片网格 */}
       {!health && <Empty description={t('overview.refresh')} />}
       {health && (
@@ -123,10 +131,10 @@ export default function Overview() {
         </div>
       )}
 
-      {/* 超管最近审计日志表格 */}
-      {isSuper && audit.length > 0 && (
+      {/* 审计日志表格：超管看全平台，企业租户管理员看本租户（后端按 X-Tenant-ID 自动隔离） */}
+      {audit.length > 0 && (
         <div style={{ marginTop: 16 }}>
-          <h3 style={{ fontSize: 15 }}>{t('overview.recentAudit')}</h3>
+          <h3 style={{ fontSize: 14 }}>{t('overview.recentAudit')}</h3>
           <Table rowKey="id" size="small" maxHeight={360} data={audit as never}
             columns={[
               { colKey: 'created_at', title: t('overview.colTime'), width: 165, cell: ({ row }: any) => fmtTime(row.created_at) },
@@ -143,7 +151,12 @@ export default function Overview() {
             ] as never} />
         </div>
       )}
-    </Panel>
+        </Panel>
+      </Tabs.TabPanel>
+      <Tabs.TabPanel value="usage" label={t('overview.tabUsage')}>
+        <UsageP />
+      </Tabs.TabPanel>
+    </Tabs>
   )
 }
 
@@ -462,9 +475,9 @@ export function AuditP() {
       <Space style={{ marginBottom: 8 }}>
         <Select value={fAction} onChange={(v) => setFAction(v as string)} style={{ width: 180 }}
           options={[{ label: t('audit.allActions'), value: '' }, ...actions.map((a) => ({ label: auditActionLabel(a), value: a }))]} />
-        <input type="date" value={fFrom} onChange={(e) => setFFrom(e.target.value)} style={{ height: 30, border: '1px solid #dcdcdc', borderRadius: 4, padding: '0 8px', width: 150 }} />
+        <input type="date" value={fFrom} onChange={(e) => setFFrom(e.target.value)} style={{ height: 30, border: '1px solid #dcdcdc', borderRadius: 8, padding: '0 8px', width: 150 }} />
         <span style={{ color: '#999' }}>→</span>
-        <input type="date" value={fTo} onChange={(e) => setFTo(e.target.value)} style={{ height: 30, border: '1px solid #dcdcdc', borderRadius: 4, padding: '0 8px', width: 150 }} />
+        <input type="date" value={fTo} onChange={(e) => setFTo(e.target.value)} style={{ height: 30, border: '1px solid #dcdcdc', borderRadius: 8, padding: '0 8px', width: 150 }} />
         <Button onClick={load}>{t('common.refresh')}</Button>
       </Space>
 
@@ -489,34 +502,64 @@ export function AuditP() {
 function MessagePluginError(m: string) { void import('tdesign-react').then((M) => M.MessagePlugin.error(m)) }
 
 // ---------------- 用量看板（Vue Usage.vue） ----------------
-// 个人/组织/成本用量以 Tabs 展示，过滤掉对象字段
+// 个人用量 / 系统用量（组织）/ 模型成本，逐类渲染：剥离 success 元字段，避免误显示「success:true」
 export function UsageP() {
-  const [, t] = useT()
+  const [, t, tpl] = useT()
   const [me, setMe] = useState<Any | null>(null)
   const [org, setOrg] = useState<Any | null>(null)
   const [cost, setCost] = useState<Any | null>(null)
-  // 并行拉取三类用量数据
+  // 用量看板默认打开「个人用量」
+  const [usageTab, setUsageTab] = useState<'me' | 'org' | 'cost'>('me')
+  // 并行拉取三类用量数据（剔除 success/message 等接口元字段）
   useEffect(() => {
     void (async () => {
-      try { const r = await usageMe(); if (r.success) setMe(r as unknown as Any) } catch {}
-      try { const r = await usageOrg(); if (r.success) setOrg(r as unknown as Any) } catch {}
-      try { const r = await usageCost(); if (r.success) setCost(r as unknown as Any) } catch {}
+      try { const r = await usageMe(); if (r.success) { const { success, message, ...d } = r as Any; setMe(d) } } catch {}
+      try { const r = await usageOrg(); if (r.success) { const { success, message, ...d } = r as Any; setOrg(d) } } catch {}
+      try { const r = await usageCost(); if (r.success) { const { success, message, ...d } = r as Any; setCost(d) } } catch {}
     })()
   }, [])
-  // 把对象拍平成 k-v 统计卡片（排除嵌套对象）
-  const renderKV = (d: Any | null) => !d ? <Empty description="—" /> : (
+  // 个人用量：基础费用/句数指标卡片
+  const meCards = (d: Any) => !d ? <Empty description="—" /> : (
     <div className="stat-grid">
       {Object.entries(d).filter(([, v]) => typeof v !== 'object').map(([k, v]) => (
-        <div key={k} className="stat-card"><div style={{ fontSize: 12, color: '#889' }}>{k}</div><b>{String(v)}</b></div>
+        <div key={k} className="stat-card"><div style={{ fontSize: 12, color: '#889' }}>{k}</div><b>{fmtNum(Number(v))}</b></div>
       ))}
+    </div>
+  )
+  // 系统用量：组织下用户成本明细表 + 合计
+  const orgTable = (d: Any) => !d ? <Empty description="—" /> : (
+    <div>
+      <p style={{ fontSize: 13, color: '#666', margin: '0 0 8px' }}>{tpl('usage.orgTotal', { n: fmtNum(d.total || 0) })}</p>
+      <Table rowKey="id" size="small" maxHeight={520} data={d.users || []}
+        columns={[
+          { colKey: 'username', title: t('usage.colUser'), width: 160 },
+          { colKey: 'display_name', title: t('usage.colName'), width: 160 },
+          { colKey: 'org_name', title: t('usage.colOrg'), width: 160 },
+          { colKey: 'cost', title: t('usage.colCost'), width: 120, cell: ({ row }: any) => fmtNum(row.cost || 0) },
+        ] as never} />
+    </div>
+  )
+  // 模型成本：按模型的成本/用量两张表
+  const costTables = (d: Any) => !d ? <Empty description="—" /> : (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+      <div style={{ flex: 1, minWidth: 320 }}>
+        <h4 style={{ fontSize: 14, margin: '4px 0' }}>{t('usage.costBy')}</h4>
+        <Table rowKey="k" size="small" data={Object.entries(d.costs || {}).map(([k, v]) => ({ k, v }))}
+          columns={[{ colKey: 'k', title: t('usage.colModel') }, { colKey: 'v', title: t('usage.colCost'), cell: ({ row }: any) => fmtNum(row.v) }] as never} />
+      </div>
+      <div style={{ flex: 1, minWidth: 320 }}>
+        <h4 style={{ fontSize: 14, margin: '4px 0' }}>{t('usage.quantBy')}</h4>
+        <Table rowKey="k" size="small" data={Object.entries(d.quants || {}).map(([k, v]) => ({ k, v }))}
+          columns={[{ colKey: 'k', title: t('usage.colModel') }, { colKey: 'v', title: t('usage.colCount'), cell: ({ row }: any) => fmtNum(row.v) }] as never} />
+      </div>
     </div>
   )
   return (
     <Panel title={t('usage.dashboardTitle')}>
-      <Tabs placement="top" list={[
-        { label: t('usage.tabMine'), value: 'me', panel: renderKV(me) },
-        { label: t('usage.tabOrg'), value: 'org', panel: renderKV(org) },
-        ...(cost ? [{ label: t('usage.tabCost'), value: 'cost', panel: renderKV(cost) }] : []),
+      <Tabs placement="top" value={usageTab} onChange={(v) => setUsageTab(v as 'me' | 'org' | 'cost')} list={[
+        { label: t('usage.tabMine'), value: 'me', panel: meCards(me) },
+        { label: t('usage.tabOrg'), value: 'org', panel: orgTable(org) },
+        ...(cost ? [{ label: t('usage.tabCost'), value: 'cost', panel: costTables(cost) }] : []),
       ]} />
     </Panel>
   )
@@ -526,7 +569,7 @@ export function UsageP() {
 // 邀请码列表与创建；可指定归属租户或新建组织
 export function InvitesP() {
   const [, t] = useT()
-  const { tenants, activeTenantId } = useAdmin()
+  const { tenants, activeTenantId, isSuper } = useAdmin()
   const [rows, setRows] = useState<Any[]>([])
   const [dlg, setDlg] = useState(false)
   const [code, setCode] = useState('')
@@ -558,14 +601,19 @@ export function InvitesP() {
 
       <Dialog visible={dlg} onClose={() => setDlg(false)} header={t('invites.create')} onConfirm={async () => {
         if (!code.trim()) { alert(t('invites.codeRequired')); return }
-        const r = await inviteCodeCreate({ code: code.trim(), tenant_id: tenantId })
+        // 企业用户（非超管）创建邀请码只能绑定本企业，忽略前端选择的租户
+        const tid = isSuper ? tenantId : activeTenantId
+        const r = await inviteCodeCreate({ code: code.trim(), tenant_id: tid })
         if (toastResp(r, t('invites.create'))) { setDlg(false); void load() }
       }}>
         <Field label={t('invites.codePlaceholder')}><Input value={code} onChange={setCode} /></Field>
-        <Field label={t('invites.colTenant')}>
-          <Select value={tenantId} onChange={(v) => setTenantId(v as number)}
-            options={[{ label: t('invites.newOrg'), value: 0 }, ...tenants.map((tt: any) => ({ label: `${tt.name} (#${tt.id})`, value: tt.id }))]} />
-        </Field>
+        {/* 仅超管可选择归属租户；企业用户强制绑定本企业 */}
+        {isSuper && (
+          <Field label={t('invites.colTenant')}>
+            <Select value={tenantId} onChange={(v) => setTenantId(v as number)}
+              options={[{ label: t('invites.newOrg'), value: 0 }, ...tenants.map((tt: any) => ({ label: `${tt.name} (#${tt.id})`, value: tt.id }))]} />
+          </Field>
+        )}
       </Dialog>
     </Panel>
   )

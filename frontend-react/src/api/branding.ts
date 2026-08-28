@@ -5,6 +5,10 @@
 
 import { request } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装品牌信息解析/授权/保存与平台页脚链接读写等接口
+// ========================================
+
 /** 品牌页脚链接项：含中英文标签与跳转地址 */
 export interface BrandLink {
   label: string
@@ -18,7 +22,7 @@ export async function tenantBranding(tenantId?: number) {
     success: boolean; tenant_id: number; name: string; code: string; industry: string; industry_name: string
     brand_name: string; brand_logo: string; domain: string; brand_home_bg: string
     brand_home_bg_style: string; brand_login_card_pos: string; brand_login_layout: string
-    brand_paid: boolean; brand_granted: boolean; dedicated_register: boolean
+    brand_paid: boolean; brand_granted: boolean; brand_root: boolean; dedicated_register: boolean
   }>(
     `/api/tenant/branding${tenantId ? `?tenant_id=${tenantId}` : ''}`,
   )

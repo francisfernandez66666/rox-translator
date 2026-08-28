@@ -5,6 +5,10 @@
 
 import { request, authHeaders, API_BASE, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装翻译工单 CRUD、运行流程、审批、结果下载与通知中心等接口
+// ========================================
+
 /** 翻译工单信息结构：含编号/标题/状态/原文/目标语言/审批人等 */
 export interface Ticket {
   id: number

@@ -141,10 +141,10 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
-	// 10MB 上传上限与 multipart 解析（多文件共享 10MB 总上限）
-	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
-	if err := r.ParseMultipartForm(10 << 20); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文件解析失败或超过 10MB 上限"})
+	// 上传上限与 multipart 解析（与即时翻译对齐：translateUploadMax=50MB，多文件共享总上限）
+	r.Body = http.MaxBytesReader(w, r.Body, translateUploadMax)
+	if err := r.ParseMultipartForm(translateUploadMax); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": fmt.Sprintf("文件解析失败或超过大小上限（%dMB）", translateUploadMax/1024/1024)})
 		return
 	}
 	// 多文件：优先取 "files" 字段（可重复）；兼容旧单文件字段 "file"

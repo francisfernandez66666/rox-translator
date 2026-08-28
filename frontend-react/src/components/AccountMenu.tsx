@@ -10,6 +10,10 @@ import { useT } from '@/i18n'
 import { meContext } from '@/api'
 import { PasswordModal, EmailBindModal, DeactivateModal } from './modals'
 
+// ============ 本文件职责中文说明 ============
+// 右上角账号菜单：进入后台、改密、换绑邮箱、注销与退出登录。
+// ========================================
+
 interface Props {
   showAdminConsole?: boolean // 前台专用：是否展示「进入后台」入口
   onGotoAdmin?: () => void // 前台点击「进入后台」的回调

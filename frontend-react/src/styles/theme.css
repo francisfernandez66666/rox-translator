@@ -196,6 +196,14 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 }
 .lang-tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 
+/* 已选文件 / 语言标签 chip（与翻译工单页文件 chip 视觉对齐） */
+.tag { display: inline-flex; align-items: center; gap: 4px; background: #f5f7fb; border: 1px solid #d8dee6; border-radius: 14px; padding: 3px 8px; font-size: 12px; color: #444; line-height: 1.4; }
+.tag-file { background: #eef3fb; border-color: #d4e0f2; }
+.tag-lang { background: #eef6ee; border-color: #d2e8d2; }
+.tag-other-lang { background: #f6f0fb; border-color: #e6d9f2; }
+/* 标签内统一的关闭按钮（TDesign Button size=small，三处一致） */
+.tag-close { margin-left: 2px; }
+
 /* ---- 后台布局 ---- */
 .admin-shell { display: flex; min-height: 100vh; background: #f4f6fa; }
 .admin-side { width: 232px; background: #fff; border-right: 1px solid #e7eaf0; padding: 14px 10px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }

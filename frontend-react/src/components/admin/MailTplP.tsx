@@ -7,6 +7,10 @@ import { useT } from '@/i18n'
 import { Panel } from './parts'
 import { mailTemplatesGet, mailTemplatesSave, type MailTplItem } from '@/api/admin'
 
+// ============ 本文件职责中文说明 ============
+// 邮件模板配置面板（仅超管）：按用途编辑各邮件模板的主题、正文与抄送。
+// ========================================
+
 // 邮件模板面板组件（仅超管）：列出全部模板，逐项编辑主题/正文/抄送并保存
 export default function MailTplP() {
   const [, t] = useT()
@@ -90,9 +94,9 @@ export default function MailTplP() {
           {list.map((it) => {
             const d = draft[it.code] || it
             return (
-              <div key={it.code} style={{ border: '1px solid #e3e8f2', borderRadius: 10, padding: 14 }}>
+              <div key={it.code} style={{ border: '1px solid #e3e6ef', borderRadius: 8, padding: 14 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <strong style={{ fontSize: 15 }}>{it.name}</strong>
+                  <strong style={{ fontSize: 14 }}>{it.name}</strong>
                   <code style={{ fontSize: 12, color: '#889', background: '#f3f5fa', padding: '1px 6px', borderRadius: 4 }}>{it.code}</code>
                   {it.is_modified && (
                     <span style={{ fontSize: 12, color: '#c08a00', background: '#fff6e0', padding: '1px 6px', borderRadius: 4 }}>{t('mailTpl.modified')}</span>

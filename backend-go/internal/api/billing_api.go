@@ -13,13 +13,16 @@ package api
 // 所有保存操作写入审计 diff。
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"translator/internal/auth"
 	"translator/internal/billing"
+	"translator/internal/llm"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -105,33 +108,43 @@ func (s *Server) markupMultiplier() float64 {
 	return m
 }
 
-// chargeTaskTokens 任务级 Token 实费计费：聚合本次请求全链路（初翻/校对/Judge/文化闸门/
-// embedding）的真实 token 用量 × 均摊系数，一次性写入 usage_ledger 并扣减余额。
-// 强制计费关闭时仅留痕计量。失败不阻断业务。
-// 参数 r: HTTP 请求（取 ctx 收集器与用户）；tid: 生效租户；taskType: 任务类型；
-// bizKind: text|file（业务形态）；bizMode: fast|pro（翻译模式，2026-08-26 看板标注需求）。
-// 返回: 本次计费的 token 数（未启用收集器时为 0）。
-func (s *Server) chargeTaskTokens(r *http.Request, tid int64, taskType, bizKind, bizMode string) int64 {
-	if s.Engine == nil || s.Bill == nil || s.Store == nil {
-		return 0
+// ChargeUsageRealtime 实时计量钩子（边工作边计费）：每次 LLM 调用产生真实 token 用量后，
+// 由 llm.Client.OnUsage 回调。★ 计量（落 usage_ledger）始终开启——
+// 无论是否强制计费，token 用量都被实时记录，支撑「已消耗不退还」与用量看板。
+// 是否「扣减租户余额」由强制计费开关决定：开启时 Meter→RecordUsage 扣减+台账同事务，
+// 余额不足返回 error 以中止本次翻译，杜绝「后置计费」被取消/断开绕过的白嫖；
+// 关闭时 Meter→LogUsage 仅留痕计量、不扣余额（体验包/免费策略）。
+// tid<=0（品牌主站根租户，无归属）或用量<=0 时直接放行。
+// 覆盖即时翻译、翻译工单、OpenAPI 三类入口——三者共用同一 llm.Client，故一处生效全局实时计量。
+func (s *Server) ChargeUsageRealtime(ctx context.Context, model string, prompt, completion int64) error {
+	if s.Bill == nil || s.Store == nil {
+		return nil
 	}
-	prompt, completion := s.Engine.UsageTokens(r.Context())
+	tid := tenant.FromContext(ctx)
+	if tid <= 0 {
+		return nil
+	}
 	total := prompt + completion
 	if total <= 0 {
-		return 0 // 无 LLM 调用（如纯 KB 命中）
+		return nil
 	}
 	billed := int64(float64(total) * s.markupMultiplier())
 	if billed < total {
 		billed = total // 系数异常兜底：至少按真实消耗计
 	}
-	userID := int64(0)
-	if u := s.authUser(r); u != nil {
-		userID = u.ID
+	// provider 暂无更精确来源时以 model 代填；bizKind/bizMode 留痕用通用值（看板可后续细化）
+	if err := s.Bill.Meter(tid, 0, "translate", model, model, billed, "text", "pro"); err != nil {
+		// ★ 余额耗尽：中止整次翻译任务，避免其余段被供应商免费翻译（白嫖）。
+		// 仅对余额不足精确中止；其余扣费错误（如瞬时 DB 异常）不中止，交由引擎容错。
+		if errors.Is(err, store.ErrInsufficientBalance) {
+			if fn := llm.AbortFromCtx(ctx); fn != nil {
+				fn()
+			}
+		}
+		return err
 	}
-	provider, model := s.usageModel(r, tid)
 	s.metrics.addUsage(billed)
-	_ = s.Bill.MeterDeferred(tid, userID, taskType, provider, model, billed, bizKind, bizMode)
-	return billed
+	return nil
 }
 
 // balancePayload 组装余额出参（★ 双桶口径，评审整改 A1）：

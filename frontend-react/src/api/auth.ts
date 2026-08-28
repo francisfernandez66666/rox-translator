@@ -5,6 +5,10 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+// ============ 本文件职责中文说明 ============
+// 封装登录、会话恢复(me)、自助注册/找回密码/改绑邮箱等认证接口
+// ========================================
+
 /** 登录用户信息结构：含 id/用户名/显示名/角色/所属租户 */
 export interface AuthUser {
   id: number

@@ -14,6 +14,10 @@ import { useT, t as gt, toggleLang } from '@/i18n'
 import { setAuthToken, setActiveTenantId } from '@/api'
 import Login from './components/Login'
 
+// ============ 本文件职责中文说明 ============
+// 根组件：手搓路由、头部布局与登录跳转处理。
+// ========================================
+
 // 跨域登录跳转：品牌子域登录后通过 /?token= 跳转回来，此处把 token 写入本地会话并清除 URL 参数。
 ;(() => {
   try {

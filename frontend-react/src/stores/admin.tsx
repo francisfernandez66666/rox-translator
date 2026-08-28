@@ -11,9 +11,13 @@ import { orgList, type OrgInfo } from '@/api/org'
 import { useAuth, roleLevel } from './auth'
 import { t } from '@/i18n'
 
+// ============ 本文件职责中文说明 ============
+// 后台全局状态：租户切换、角色权限、面板路由与反馈跳转。
+// ========================================
+
 /** 后台管理可用面板键名集合（用于面板路由与侧边栏导航） */
 export type PanelKey =
-  | 'overview' | 'tenants' | 'plans' | 'referral' | 'org' | 'usage' | 'kb'
+  | 'overview' | 'tenants' | 'plans' | 'referral' | 'org' | 'invites' | 'usage' | 'kb'
   | 'models' | 'workflow' | 'apikeys' | 'webhooks' | 'tickets' | 'audit' | 'alerts' | 'users' | 'agreements' | 'brand' | 'mailTpl' | 'footer'
 
 /** 根据角色 key 返回本地化展示名称（后台侧边栏展示，i18n）；未知角色返回普通用户
@@ -44,6 +48,8 @@ interface AdminCtx {
   tenants: TenantInfo[]
   // 当前生效租户是否开通「邀请好友」功能（超管按租户开关；默认 true）
   inviteEnabled: boolean
+  // 当前生效租户是否为个人用户租户（个人用户不显示「企业管理」类后台；企业用户不显示「邀请好友」除非开通开关）
+  isPersonal: boolean
   // 重新拉取当前生效租户的「邀请好友」开关
   loadInviteEnabled: () => Promise<void>
   // 当前选中的租户 ID（0 表示平台根组织）
@@ -79,7 +85,7 @@ const Ctx = createContext<AdminCtx>({
   orgs: [], orgMap: new Map(), loadOrgs: async () => {},
   panel: 'overview', gotoPanel: () => {}, pendingFeedbackId: 0,
   openFeedback: () => {}, consumeFeedback: () => 0,
-  inviteEnabled: true, loadInviteEnabled: async () => {},
+  inviteEnabled: true, isPersonal: false, loadInviteEnabled: async () => {},
 })
 
 /** 后台管理全局状态 Provider：管理租户列表/切换、角色权限、面板路由与反馈跨组件跳转
@@ -103,6 +109,8 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   const [pendingFeedbackId, setPendingFeedbackId] = useState<number>(0)
   // 当前生效租户是否开通「邀请好友」功能（默认开通）
   const [inviteEnabled, setInviteEnabled] = useState<boolean>(true)
+  // 当前生效租户是否为个人用户租户（默认 false=企业/平台）
+  const [isPersonal, setIsPersonal] = useState<boolean>(false)
 
   // 是否为管理员/部门管理员（等级≥2）
   const isAdmin = myLevel >= 2
@@ -152,7 +160,10 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     if (!user) return
     try {
       const r = await tenantInviteEnabledGet()
-      if (r.success) setInviteEnabled(r.invite_enabled !== false)
+      if (r.success) {
+        setInviteEnabled(r.invite_enabled !== false)
+        setIsPersonal(r.is_personal === true)
+      }
     } catch { /* 忽略 */ }
   }, [user])
 
@@ -228,12 +239,12 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     tenants, activeTenantId, switchTenant, loadTenants, clearAuth,
     orgs, orgMap, loadOrgs,
     panel, gotoPanel, pendingFeedbackId, openFeedback, consumeFeedback,
-    inviteEnabled, loadInviteEnabled,
+    inviteEnabled, isPersonal, loadInviteEnabled,
   }), [myLevel, isAdmin, isDeptAdmin, isTenantAdmin, isSuper, roleOptions,
-       tenants, activeTenantId, switchTenant, loadTenants, clearAuth,
-       orgs, orgMap, loadOrgs,
-       panel, gotoPanel, pendingFeedbackId, openFeedback, consumeFeedback,
-       inviteEnabled, loadInviteEnabled])
+        tenants, activeTenantId, switchTenant, loadTenants, clearAuth,
+        orgs, orgMap, loadOrgs,
+        panel, gotoPanel, pendingFeedbackId, openFeedback, consumeFeedback,
+        inviteEnabled, isPersonal, loadInviteEnabled])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

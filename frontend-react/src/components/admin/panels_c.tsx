@@ -23,6 +23,10 @@ import { fmtNum, fmtTime, maskKey } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { useT } from '@/i18n'
 
+// ============ 本文件职责中文说明 ============
+// 后台面板 C：套餐、推荐、Webhook 与 API 密钥。
+// ========================================
+
 type Any = Record<string, any>
 
 // 判断二维码内容是否为图片（data:image 或 http(s) 图片 URL）
@@ -268,16 +272,16 @@ export function PlansP() {
       {!isSuper && (
         <Panel title={t('plans.nav.current')}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10 }}>
-            <div style={{ background: '#f7f9fc', borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div style={{ background: '#f7f9fc', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
               <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtNum(pkg.balance_tokens as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('usage.currentBalance')}</span>
             </div>
-            <div style={{ background: '#f7f9fc', borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div style={{ background: '#f7f9fc', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
               <b style={{ fontSize: 20, color: '#e65100' }}>{fmtNum(pkg.sub_grants_left as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('plans.balanceGrants')}</span>
             </div>
-            <div style={{ background: '#f7f9fc', borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div style={{ background: '#f7f9fc', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
               <b style={{ fontSize: 20, color: '#2e7d32' }}>{fmtNum(pkg.permanent_balance as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('plans.balancePermanent')}</span>
             </div>
-            <div style={{ background: '#f7f9fc', borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div style={{ background: '#f7f9fc', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
               <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtNum(pkg.tokens_used_month as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('plans.usedMonth')}</span>
             </div>
           </div>
@@ -294,13 +298,13 @@ export function PlansP() {
         <Panel title={t('plans.nav.shop')}>
           {planGroups.map((g) => (
             <div key={g.type}>
-              <div style={{ fontWeight: 600, fontSize: 13.5, color: '#455a64', margin: '10px 0 6px' }}>{g.title}</div>
+              <div style={{ fontWeight: 600, fontSize: 14, color: '#455a64', margin: '10px 0 6px' }}>{g.title}</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 12 }}>
                 {g.items.map((pl) => (
-                  <div key={pl.id} style={{ border: '1.5px solid #e3eaf2', borderRadius: 12, padding: 14, display: 'flex', flexDirection: 'column', gap: 6, background: '#fff' }}>
-                    <div style={{ fontWeight: 600, fontSize: 15 }}>{pl.name}</div>
+                  <div key={pl.id} style={{ border: '1px solid #e3e6ef', borderRadius: 8, padding: 14, display: 'flex', flexDirection: 'column', gap: 6, background: '#fff' }}>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{pl.name}</div>
                     <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--td-brand-color-active, #1f33d6)' }}>¥{pl.price_money}<small style={{ fontSize: 12, color: '#90a4ae', fontWeight: 400 }}>{pl.ptype === 'paid' ? ` /${pl.duration_days}d` : ''}</small></div>
-                    <ul style={{ margin: '0 0 4px 16px', padding: 0, fontSize: 12.5, color: '#607d8b', lineHeight: 1.7 }}>
+                    <ul style={{ margin: '0 0 4px 16px', padding: 0, fontSize: 13, color: '#607d8b', lineHeight: 1.7 }}>
                       <li>{tpl('billing.pkgSentences', { n: pl.sentences })}</li>
                       <li>{t('packages.type.' + pl.ptype)}</li>
                     </ul>
@@ -576,12 +580,12 @@ export function ReferralP() {
       <Panel title={t('referral.title')} extra={<Space size={8}><Button onClick={downloadQr}>⬇️ {t('referral.downloadQr')}</Button></Space>}>
         {/* 企业用户不参与「多邀得多」个人裂变奖励，仅可邀请同事加入本企业 */}
         {!isPersonal && (
-          <div style={{ marginBottom: 14, background: 'rgba(64,128,255,.08)', border: '1px solid rgba(64,128,255,.25)', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#33415c', lineHeight: 1.7 }}>
+          <div style={{ marginBottom: 14, background: 'rgba(64,128,255,.08)', border: '1px solid rgba(64,128,255,.25)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#33415c', lineHeight: 1.7 }}>
             当前为企业用户，不参与「多邀得多」个人邀请奖励。可通过「企业管理 → 邀请码」邀请同事加入本企业。
           </div>
         )}
         <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, minWidth: 320, background: 'rgba(64,128,255,.06)', border: '1px solid rgba(64,128,255,.18)', borderRadius: 10, padding: '14px 16px' }}>
+          <div style={{ flex: 1, minWidth: 320, background: 'rgba(64,128,255,.06)', border: '1px solid rgba(64,128,255,.18)', borderRadius: 8, padding: '14px 16px' }}>
             <div style={{ fontSize: 12, color: '#556' }}>{t('referral.myCode')}</div>
             <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 2, color: 'var(--td-brand-color-active, #1f33d6)', marginTop: 2 }}>{refCode || '—'}</div>
             <div style={{ fontSize: 12, color: '#667', marginTop: 8 }}>{t('referral.linkLabel')}</div>
@@ -595,12 +599,12 @@ export function ReferralP() {
               {isPersonal && <span>💰 {t('referral.paidRewards')}：<b>{fmtNum(paidTokens)}</b> token</span>}
             </div>
           </div>
-          {qrUrl && <img src={qrUrl} alt="QR" width={150} height={150} style={{ borderRadius: 10, border: '1px solid #e3e6ef', background: '#fff' }} />}
+          {qrUrl && <img src={qrUrl} alt="QR" width={150} height={150} style={{ borderRadius: 8, border: '1px solid #e3e6ef', background: '#fff' }} />}
         </div>
 
         {/* ===== 超管运营配置 ===== */}
         {isSuper && (
-          <div style={{ marginTop: 16, background: 'rgba(255,152,0,.06)', border: '1px solid rgba(255,152,0,.25)', borderRadius: 10, padding: '14px 16px', maxWidth: 560 }}>
+          <div style={{ marginTop: 16, background: 'rgba(255,152,0,.06)', border: '1px solid rgba(255,152,0,.25)', borderRadius: 8, padding: '14px 16px', maxWidth: 560 }}>
             <div style={{ fontWeight: 700, color: '#b26a00', marginBottom: 10 }}>{t('referral.cfgTitle')}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
               <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgEnabled')}</span>
@@ -911,7 +915,7 @@ export function ApiKeysP() {
             <Button size="small" theme={docsLang === 'en' ? 'primary' : 'default'} onClick={() => setDocsLang('en')}>{t('docsEdit.langEn')}</Button>
           </Space>
           <Textarea autosize={{ minRows: 16 }} value={docsMD} onChange={(v) => setDocsMD(v as string)} placeholder={t('docsEdit.placeholder')}
-                    style={{ width: '100%', fontFamily: 'SFMono-Regular, Consolas, monospace', fontSize: 12.5, lineHeight: 1.55, resize: 'vertical' }} />
+                    style={{ width: '100%', fontFamily: 'SFMono-Regular, Consolas, monospace', fontSize: 13, lineHeight: 1.55, resize: 'vertical' }} />
           <Space size={8} style={{ marginTop: 8 }}>
             <Button theme="success" disabled={docsSaving || !docsMD.trim()} onClick={saveDocs}>💾 {docsSaving ? t('docsEdit.saving') : t('common.save')}</Button>
             <Button disabled={!docsMD.trim()} onClick={previewDocs}>👁 {t('docsEdit.preview')}</Button>
