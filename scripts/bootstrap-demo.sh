@@ -126,6 +126,11 @@ if ! id translator >/dev/null 2>&1; then
 fi
 chown -R translator:translator "$DEMO_DIR"
 chmod -R o-rwx "$DEMO_DIR" 2>/dev/null || true
+# ★ Caddy（caddy 用户）需能遍历 $DEMO_DIR 并读静态 web：
+#   - bin/data 保持 o-rwx（安全）；仅 $DEMO_DIR 加 o+x 供遍历
+#   - web 属主转 root:caddy 并对其他人开放 rX（否则主页/静态资源 403）
+chmod o+x "$DEMO_DIR"
+chown -R root:caddy "$DEMO_DIR/web" 2>/dev/null || chmod -R o+rX "$DEMO_DIR/web" || true
 
 # ----------------------------- 2. 克隆数据库 -----------------------------
 log "==> [2/6] 克隆生产库 ${PROD_DB_NAME} → ${DEMO_DB}（pg_dump + 恢复）"
@@ -136,7 +141,7 @@ else
   sudo -u postgres createdb -O langcross "$DEMO_DB"
   sudo -u postgres psql -d "$DEMO_DB" -c "CREATE EXTENSION IF NOT EXISTS vector;"
   TMPDUMP=$(mktemp /tmp/langcross_demo_XXXX.sql)
-  chmod 600 "$TMPDUMP"
+  chmod 644 "$TMPDUMP"   # postgres 用户需可读（脚本以 root 运行，dump 由 root 写入）
   log "   pg_dump ${PROD_DB_NAME} ..."
   sudo -u postgres pg_dump "$PROD_DB_NAME" > "$TMPDUMP"
   log "   恢复至 ${DEMO_DB} ..."
@@ -206,7 +211,7 @@ Environment=TRUST_PROXY_XFF=1
 Environment=DB_DRIVER=postgres
 Environment=DB_DSN=${DEMO_DSN}
 Environment=USER_DATA_DIR=${DEMO_USER_DATA}
-Environment=GOMEMLIMIT=450Mi
+Environment=GOMEMLIMIT=450MiB
 Environment=LLM_CHAT_CONCURRENT=1
 Environment=LLM_EMBED_CONCURRENT=2
 Environment=FILEPROC_MAX_CONCURRENT=1
