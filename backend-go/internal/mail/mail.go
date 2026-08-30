@@ -93,6 +93,7 @@ func (s *SMTPSender) Send(m *Message) error {
 	if m == nil || m.To == "" {
 		return fmt.Errorf("收件人邮箱为空")
 	}
+	log.Printf("[smtp] 开始发送 to=%s from=%s subject=%s", m.To, s.from, m.Subject)
 	addr := s.host
 	if s.port != "" {
 		addr = s.host + ":" + s.port
@@ -145,46 +146,61 @@ func (s *SMTPSender) Send(m *Message) error {
 	if s.port == "465" {
 		conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: s.host})
 		if err != nil {
+			log.Printf("[smtp] TLS 连接失败 to=%s err=%v", m.To, err)
 			return fmt.Errorf("SMTP TLS 连接失败: %w", err)
 		}
 		defer conn.Close()
 		c, err := smtp.NewClient(conn, s.host)
 		if err != nil {
+			log.Printf("[smtp] 客户端创建失败 to=%s err=%v", m.To, err)
 			return fmt.Errorf("SMTP 客户端创建失败: %w", err)
 		}
 		defer c.Close()
 		if aerr := c.Auth(auth); aerr != nil {
+			log.Printf("[smtp] 认证失败 to=%s err=%v", m.To, aerr)
 			return fmt.Errorf("SMTP 认证失败: %w", aerr)
 		}
 		if aerr := c.Mail(s.from); aerr != nil {
+			log.Printf("[smtp] 设置发件人失败 to=%s err=%v", m.To, aerr)
 			return fmt.Errorf("设置发件人失败: %w", aerr)
 		}
 		if aerr := c.Rcpt(m.To); aerr != nil {
+			log.Printf("[smtp] 设置收件人失败 to=%s err=%v", m.To, aerr)
 			return fmt.Errorf("设置收件人失败: %w", aerr)
 		}
 		if m.CC != "" {
 			if aerr := c.Rcpt(m.CC); aerr != nil {
+				log.Printf("[smtp] 设置抄送失败 to=%s cc=%s err=%v", m.To, m.CC, aerr)
 				return fmt.Errorf("设置抄送收件人失败: %w", aerr)
 			}
 		}
 		w, werr := c.Data()
 		if werr != nil {
+			log.Printf("[smtp] 打开数据通道失败 to=%s err=%v", m.To, werr)
 			return fmt.Errorf("打开数据通道失败: %w", werr)
 		}
 		if _, werr = w.Write([]byte(msg)); werr != nil {
 			w.Close()
+			log.Printf("[smtp] 写入内容失败 to=%s err=%v", m.To, werr)
 			return fmt.Errorf("写入邮件内容失败: %w", werr)
 		}
 		if werr = w.Close(); werr != nil {
+			log.Printf("[smtp] 提交邮件失败 to=%s err=%v", m.To, werr)
 			return fmt.Errorf("提交邮件失败: %w", werr)
 		}
+		log.Printf("[smtp] 发送成功 to=%s", m.To)
 		return c.Quit()
 	}
 	rcpts := []string{m.To}
 	if m.CC != "" {
 		rcpts = append(rcpts, m.CC)
 	}
-	return smtp.SendMail(addr, auth, s.from, rcpts, []byte(msg))
+	if err := smtp.SendMail(addr, auth, s.from, rcpts, []byte(msg)); err != nil {
+		log.Printf("[smtp] 发送失败 to=%s err=%v", m.To, err)
+		return err
+	}
+	log.Printf("[smtp] 发送成功 to=%s", m.To)
+	return nil
 }
 
 // encodeMIMEHeader 对邮件头字段（如 Subject）做 RFC2047 编码：含非 ASCII 字符时
