@@ -278,7 +278,7 @@ func Default() *Config {
 		c.CORSOrigins = origins
 	}
 	if v := os.Getenv("ONLINE_API_BASE"); v != "" {
-		c.EmbedAPIBase = v
+		c.OnlineAPIBase = v
 	}
 	if v := os.Getenv("EMBED_API_BASE"); v != "" {
 		c.EmbedAPIBase = v
