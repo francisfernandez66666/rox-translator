@@ -251,16 +251,32 @@ func (s *Store) SetUserAgreed(id, tid int64, at string) error {
 }
 
 // EnsureAdmin 确保平台超管初始账号存在（幂等；已存在同名普通账号则提升为超管）。
-func (s *Store) EnsureAdmin(tid int64, username, passHash, displayName string) error {
+// 若 email 非空，则确保该账号绑定了对应邮箱（新建时写入；已存在时更新）。
+func (s *Store) EnsureAdmin(tid int64, username, passHash, displayName, email string) error {
 	if su, err := s.GetSuperAdminByUsername(username); err == nil && su != nil {
+		if email != "" {
+			_, _ = s.execW("UPDATE users SET email=? WHERE username=? AND tenant_id=?", email, username, tid)
+		}
 		return nil
 	}
 	if u, err := s.GetUserByUsername(tid, username); err == nil && u != nil {
 		_, _ = s.execW("UPDATE users SET tenant_id=0, role=? WHERE id=?", RoleAdmin, u.ID)
+		if email != "" {
+			_, _ = s.execW("UPDATE users SET email=? WHERE id=?", email, u.ID)
+		}
 		return nil
 	}
 	_, err := s.CreateUser(0, username, passHash, displayName, RoleAdmin, 0, 0)
-	return err
+	if err != nil {
+		return err
+	}
+	if email != "" {
+		u, _ := s.GetUserByUsername(0, username)
+		if u != nil {
+			_, _ = s.execW("UPDATE users SET email=? WHERE id=?", email, u.ID)
+		}
+	}
+	return nil
 }
 
 // ============ 组织 ============

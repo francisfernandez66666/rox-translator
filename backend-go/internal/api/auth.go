@@ -156,7 +156,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"success": true, "token": tok, "brand_host": brandHost,
 		"user": map[string]interface{}{
 			"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
-			"role": u.Role, "tenant_id": u.TenantID,
+			"role": u.Role, "tenant_id": u.TenantID, "email": u.Email,
 		},
 	})
 }

@@ -161,7 +161,8 @@ func main() {
 				initPwd = genRandomPass(12)
 				log.Printf("[init] 未配置 ADMIN_INIT_PASSWORD，已生成随机初始密码: %s（请登录后立即修改）", initPwd)
 			}
-			if err := st.EnsureAdmin(1, "admin", auth.PasswordHash(initPwd), "系统管理员"); err != nil {
+			adminEmail := os.Getenv("ADMIN_EMAIL")
+			if err := st.EnsureAdmin(1, "admin", auth.PasswordHash(initPwd), "系统管理员", adminEmail); err != nil {
 				log.Printf("警告: admin 账号初始化失败: %v", err)
 			}
 			if err := st.EnsureDefaultPackages(1); err != nil {
