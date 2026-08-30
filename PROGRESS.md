@@ -1,6 +1,17 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-08-30（全量中文注释 + 支付回调安全修复 + 部署验证通过）｜ 与生产一致（main 分支）
+> 最后更新：2026-08-31（任务2：体验额度统一 + KB 上传奖励 + 重新发放 + 到期提醒，已部署生产）｜ 与生产一致（main 分支）
+
+## 〇-II、任务2：体验额度统一 + KB 上传奖励 + 重新发放 + 到期提醒（2026-08-31，提交 33db59c）
+
+| 块 | 内容 |
+|---|---|
+| **免费体验唯一口径（2.2）** | 新建/旧配置统一为 `free_trial_tokens`（300000）/ `free_trial_days`（14）；`registration_review` 与 `trial_sentences` 运行时读取清零下线；`/api/plans` 公开返回新口径；注册/`handleGrantTrial`/审核兜底全链路统一 |
+| **KB 上传奖励（2.3）** | 新增 `kb_upload_rewards` 流水表 + `GrantKBReward` 事务发放永久 token（加入口增量×单条奖励，IMMEDIATE）；单租户日封顶 `kb_upload_reward_daily_cap`（UTC）；配置键 `kb_upload_reward_tokens_per_entry`=200；含数据层单测 |
+| **企业重新发放（2.4）** | 超管「重新发放体验」对所有租户常显，叠加发放一份新体验（放开幂等；customFile/deduct API 等不受影响） |
+| **到期提醒 + 耗尽引导（2.5）** | 台账 `NotifiedExp3` 标记 + watchog 每日扫描提前 3 天提醒；前端余额面板 / 套餐页额度用尽引导横幅（购买月租 / 充值永久 token，锚点侧滑） |
+| **顺带修复** | `kb/db.go` nil 判空（测试环境 panic 根因）；KB 日封顶 UTC 口径跨时区修复 |
+| **验证** | go build/vet/test（store+api 全绿）+ npm typecheck + vite build；已部署至生产（43.108.86.140）并回归 `/status`、`/api/plans`、`/api/auth/register-config` |
 
 ## 〇、全仓端到端评审整改 + 黑盒 UAT（第四批）
 
@@ -99,6 +110,16 @@
 | **tickets_pkey 序列修复** | PostgreSQL 序列与 tickets 表最大 ID 不同步导致异步任务创建失败，`setval` 修复 |
 | **全量中文注释** | Go 后端 146 个文件 + 前端 75 个文件全量添加/标准化中文注释（文件职责说明块 + 导出函数注释 + 行内注释） |
 | **UAT 全场景测试** | 42 项测试覆盖认证/翻译/KB/计费/OpenAPI/管理后台/前端/安全，核心链路全通 |
+
+## 〇-I、SDK 鉴权统一 + 后端 Bug 修复（2026-08-30，提交 f2c0e98）
+
+| 块 | 内容 |
+|---|---|
+| **go.mod 版本修复** | `go 1.26.5`（无效版本号）→ `go 1.22`，编译验证通过 |
+| **config.go 环境变量 Bug** | `ONLINE_API_BASE` 环境变量被错误赋值给 `EmbedAPIBase`，修正为 `OnlineAPIBase` |
+| **TypeScript SDK 统一** | 鉴权头 `X-API-Key` → `Authorization: Bearer`；裸路径 → `/openapi/v1/` 前缀；轮询间隔对齐（文本15s/文件60s）；kbStats/usage 改 POST；rotateApiKey 路径修正 |
+| **Java SDK 统一** | 同 TypeScript SDK 修复项 |
+| **全量中文注释** | TypeScript/Java SDK 补充完整的函数级中文注释 |
 
 ## 〇-A、历史批次索引（详情见对应方案文档）
 
