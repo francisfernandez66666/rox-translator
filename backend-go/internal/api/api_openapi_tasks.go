@@ -540,6 +540,7 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 // ticketExpiry 读取工单产物到期时间（result_expires_at 列；无值返回 ok=false）。
 func (s *Server) ticketExpiry(ticketID int64) (string, bool) {
 	var exp string
+	// 查询工单产物到期时间，空值按未设置处理
 	if err := s.Store.DB().QueryRow("SELECT COALESCE(result_expires_at,'') FROM tickets WHERE id=?", ticketID).Scan(&exp); err != nil || exp == "" {
 		return "", false
 	}

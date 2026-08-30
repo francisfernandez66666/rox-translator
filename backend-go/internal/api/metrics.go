@@ -143,6 +143,7 @@ func (s *Server) metricsText() string {
 	// 翻译计数：合并成功/失败 key 集合，按 kind + result 输出
 	sb.WriteString("# HELP translator_translations_total 翻译调用总数\n# TYPE translator_translations_total counter\n")
 	kinds := map[string]bool{}
+	// 汇总成功与失败计数中的全部翻译种类，去重
 	for k := range m.translationsOK {
 		kinds[k] = true
 	}
@@ -150,6 +151,7 @@ func (s *Server) metricsText() string {
 		kinds[k] = true
 	}
 	kindList := make([]string, 0, len(kinds))
+	// 收集去重后的种类列表，便于后续排序输出
 	for k := range kinds {
 		kindList = append(kindList, k)
 	}

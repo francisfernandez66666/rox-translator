@@ -45,7 +45,7 @@ func TestWriteTranslatedPDF(t *testing.T) {
 	}
 }
 
-// min 两整数取小（测试内使用）。
+// min 返回两整数中的较小值（测试辅助函数）。
 func min(a, b int) int {
 	if a < b {
 		return a

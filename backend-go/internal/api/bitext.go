@@ -109,9 +109,11 @@ func (s *Server) handleImportBitext(w http.ResponseWriter, r *http.Request) {
 func trimSpace(s string) string {
 	b := []rune(s)
 	i, j := 0, len(b)
+	// 从前向后跳过前导空白字符
 	for i < j && (b[i] == ' ' || b[i] == '\t' || b[i] == '\n' || b[i] == '\r') {
 		i++
 	}
+	// 从后向前跳过后缀空白字符
 	for j > i && (b[j-1] == ' ' || b[j-1] == '\t' || b[j-1] == '\n' || b[j-1] == '\r') {
 		j--
 	}
@@ -182,6 +184,7 @@ func (s *Server) handleImportTMX(w http.ResponseWriter, r *http.Request) {
 
 // firstLang 取译文映射的首个语言键（保留供其他导入路径复用）。
 func firstLang(m map[string]string) string {
+	// 返回映射中任意一个语言键（Go 遍历顺序随机，取首个即可）
 	for k := range m {
 		return k
 	}

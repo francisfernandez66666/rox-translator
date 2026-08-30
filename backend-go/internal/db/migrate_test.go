@@ -9,6 +9,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// TestDialectHelpers 验证 Dialect 各助手（占位符/自增主键/布尔字面量/NOW/UPSERT）在
+// SQLite 与 PostgreSQL 下的返回差异符合预期。
 func TestDialectHelpers(t *testing.T) {
 	sq := DialectSQLite
 	pg := DialectPostgres
@@ -47,6 +49,7 @@ func TestDialectHelpers(t *testing.T) {
 	}
 }
 
+// TestMigrationUpSQLSelection 验证 Migration.UpSQL 按当前方言返回对应升级语句。
 func TestMigrationUpSQLSelection(t *testing.T) {
 	m := Migration{ID: "0001", SQLiteUp: "SQLITE_SQL", PostgresUp: "PG_SQL"}
 	if m.UpSQL(DialectSQLite) != "SQLITE_SQL" {
@@ -100,6 +103,7 @@ func TestRunnerIdempotent(t *testing.T) {
 	}
 }
 
+// tableExists 测试辅助：查询 sqlite_master 判断指定表是否存在。
 func tableExists(t *testing.T, conn *sql.DB, name string) bool {
 	t.Helper()
 	rows, err := conn.Query("SELECT name FROM sqlite_master WHERE type='table' AND name=?", name)
@@ -135,6 +139,7 @@ func TestRegisteredMigrationsApplies(t *testing.T) {
 }
 
 
+// TestSplitStmts 验证 splitStmts 按分号拆分多语句 SQL 并剥离 -- 行注释。
 func TestSplitStmts(t *testing.T) {
 	in := "CREATE TABLE a (id INTEGER);\n-- comment\nCREATE TABLE b (id INTEGER);\n"
 	got := splitStmts(in)

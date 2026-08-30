@@ -197,6 +197,7 @@ func langCodeFromColName(name string) string {
 		"zh-tw": "zh_hant", "zh-hant": "zh_hant", "zh-cn": "zh",
 		"zh-hans": "zh", "zh-sg": "zh", "zh-mo": "zh_hant",
 	}
+	// 遍历复合别名映射，匹配形如 "zh-tw"/"zh-cn" 的复合语言代码
 	for comp, code := range compound {
 		if strings.HasSuffix(lower, "-"+comp) || strings.HasSuffix(lower, comp) && len(trimmed) == len(comp) {
 			return mapDBLangCode(code)

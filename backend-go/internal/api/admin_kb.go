@@ -612,6 +612,7 @@ func (s *Server) rebuildIndexAsync() {
 	if s.Engine == nil || s.Engine.DB == nil || s.Engine.NPZPath == "" || s.Engine.Rebuilding() {
 		return
 	}
+	// 后台协程：带 10 分钟超时的上下文重建索引，避免阻塞当前请求
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()

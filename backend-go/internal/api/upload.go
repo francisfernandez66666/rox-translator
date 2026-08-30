@@ -117,6 +117,7 @@ func parseUpload(r *http.Request, maxBytes int64, whitelist map[string]bool) err
 // whitelistKeys 返回白名单扩展名列表（用于错误提示）。
 func whitelistKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
+	// 收集白名单中的所有扩展名
 	for k := range m {
 		out = append(out, k)
 	}

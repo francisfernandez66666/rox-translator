@@ -351,12 +351,14 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 	old := config.StageModels{}
 	if v, err := s.Store.GetConfig("stage_models"); err == nil && v != "" {
 		_ = json.Unmarshal([]byte(v), &old)
+		// 遍历旧配置，解密各阶段密钥以便后续对比
 		for k := range old {
 			sm := old[k]
 			sm.APIKey = store.DecryptSecret(sm.APIKey)
 			old[k] = sm
 		}
 	}
+	// 遍历请求中各阶段配置，做校验与缺省值补全
 	for k := range req.Stages {
 		sm := req.Stages[k]
 		if sm.APIBase == "" && sm.Model == "" {

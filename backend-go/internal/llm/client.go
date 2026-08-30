@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"translator/internal/config"
+	"translator/internal/infra/concurrency"
+	"translator/internal/infra/redis"
 )
 
 // DefaultChatConcurrent chat 后台默认并发槽；DefaultEmbedConcurrent embed 默认并发槽。
@@ -52,15 +54,18 @@ type Client struct {
 	proxy *url.URL       // 代理地址（PROXY_URL/HTTPS_PROXY/HTTP_PROXY 环境变量解析结果）
 
 	// ★ 三路独立信号量（评审整改 R1/R6）：超过容量的调用排队等待，不无限叠加。
-	//   chatSem：后台批任务共用；chatFast：交互保留槽（批任务不可占用）；
+	//   chatSem：后台批任务共用（Redis 全局上限，未启用则进程内）；
+	//   chatFast：交互保留槽（进程内，容量 1，批任务不可占用）；
 	//   embSem：嵌入调用独立池（智谱侧额度与 SiliconFlow 无关）。
-	chatSem  chan struct{}
-	chatFast chan struct{}
-	embSem   chan struct{}
+	// 阶段二：后台/文件/embed 池经 concurrency.Semaphore 实现——Redis 启用时跨实例共享上限，
+	// 未启用 Redis 自动降级为进程内 channel（单实例行为不变）。
+	chatSem  concurrency.Semaphore
+	chatFast concurrency.Semaphore
+	embSem   concurrency.Semaphore
 
 	// ★ 文件/后台批任务专用信号量（与交互池隔离，避免大文件翻译饿死交互请求）。
-	fileChatSem chan struct{}
-	fileEmbSem  chan struct{}
+	fileChatSem concurrency.Semaphore
+	fileEmbSem  concurrency.Semaphore
 
 	// 知识库 Embed 阶段覆盖（stage_models.kb_embed；空=用全局 Embed 配置）。
 	// ★ R7：读改一律持锁——引擎每请求都可能调用 SetEmbedOverride，裸写字段是数据竞争。
@@ -146,13 +151,14 @@ func NewClient(cfg *config.Config) *Client {
 		//   双倍调用双倍计费。挂起防护改由 Transport 层（响应头 60s/握手 15s/空闲回收）
 		//   + 各调用点 context.WithTimeout 分级承担。
 		http: &http.Client{Transport: tr},
-		// ★ 三路信号量容量可经环境变量调整（评审整改 R1）
-		chatSem:  make(chan struct{}, envInt("LLM_CHAT_CONCURRENT", DefaultChatConcurrent)),
-		chatFast: make(chan struct{}, 1),
-		embSem:   make(chan struct{}, envInt("LLM_EMBED_CONCURRENT", DefaultEmbedConcurrent)),
+		// ★ 三路信号量容量可经环境变量调整（评审整改 R1）；阶段二：Redis 启用时跨实例共享上限。
+		//   chatFast 保留槽固定进程内容量 1（交互 QoS 本地优先，不被全局容量稀释）。
+		chatSem:  concurrency.New("sem:llm:chat", envInt("LLM_CHAT_CONCURRENT", DefaultChatConcurrent), redis.Get()),
+		chatFast: concurrency.New("", 1, nil), // 恒进程内
+		embSem:   concurrency.New("sem:llm:embed", envInt("LLM_EMBED_CONCURRENT", DefaultEmbedConcurrent), redis.Get()),
 		// ★ 文件/后台批任务专用池（容量可经环境变量调整）
-		fileChatSem: make(chan struct{}, envInt("LLM_FILE_CHAT_CONCURRENT", DefaultFileChatConcurrent)),
-		fileEmbSem:  make(chan struct{}, envInt("LLM_FILE_EMBED_CONCURRENT", DefaultFileEmbedConcurrent)),
+		fileChatSem: concurrency.New("sem:llm:filechat", envInt("LLM_FILE_CHAT_CONCURRENT", DefaultFileChatConcurrent), redis.Get()),
+		fileEmbSem:  concurrency.New("sem:llm:fileembed", envInt("LLM_FILE_EMBED_CONCURRENT", DefaultFileEmbedConcurrent), redis.Get()),
 	}
 }
 
@@ -189,19 +195,6 @@ func isFileMode(ctx context.Context) bool {
 	return v
 }
 
-// semSlot 一次成功 acquire 的凭据：Release 归还到「当初取得」的同一通道
-// （chat/chatFast 容量不同，错位归还会逐步污染两池容量）。
-type semSlot struct{ ch chan struct{} }
-
-// Release 归还名额（幂等保护：重复调用无效果）。
-func (s *semSlot) Release() {
-	if s == nil || s.ch == nil {
-		return
-	}
-	<-s.ch
-	s.ch = nil // 置空防二次释放
-}
-
 // acquireWaitTimeout 信号量获牌等待上限（LLM_ACQUIRE_TIMEOUT_SEC，默认 90s）。
 // ★ 防死锁整改：文件翻译等大并发场景会把全局 chatSem/embSem 打满，若无上限，
 //
@@ -219,94 +212,93 @@ func acquireWaitTimeout() time.Duration {
 // acquireChat 获取 chat 并发名额：交互请求可使用后台槽+保留槽（先试后台、再双通道竞争），
 // 后台任务只能使用后台槽。文件/后台批任务（isFileMode）使用独立的大容量文件池，
 // 与交互池彻底隔离。等待超过 1s 打观测日志（评审整改 R7）。
-// 返回 (名额凭据, 错误)；ctx 取消或等待超时时排队中的调用立即返回错误（防永久阻塞）。
-func (c *Client) acquireChat(ctx context.Context) (*semSlot, error) {
+// 返回 (释放函数, 错误)；ctx 取消或等待超时时排队中的调用立即返回错误（防永久阻塞）。
+// 阶段二：后台/文件池为 concurrency.Semaphore（Redis 全局上限或进程内），保留槽恒进程内。
+func (c *Client) acquireChat(ctx context.Context) (func(), error) {
 	start := time.Now()
 	// ★ 文件/后台批任务：走专用信号量池（容量更大，且与交互池隔离，避免饿死前台）。
 	if isFileMode(ctx) {
-		acqCtx, acqCancel := context.WithTimeout(ctx, acquireWaitTimeout())
-		defer acqCancel()
-		select {
-		case c.fileChatSem <- struct{}{}:
-			c.noteAcquired("fileChat", start)
-			return &semSlot{ch: c.fileChatSem}, nil
-		case <-acqCtx.Done():
+		acqCtx, cancel := withAcqTimeout(ctx)
+		defer cancel()
+		rel, err := c.fileChatSem.Acquire(acqCtx)
+		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			return nil, fmt.Errorf("llm 文件翻译 chat 并发槽获取超时（请稍后重试）")
 		}
+		c.noteAcquired("fileChat", start)
+		return rel, nil
 	}
 	if isInteractive(ctx) {
 		// 非阻塞优先取后台槽（避免保留槽被无关紧要地占用）
-		select {
-		case c.chatSem <- struct{}{}:
+		if rel, ok := c.chatSem.TryAcquire(); ok {
 			c.noteAcquired("chat", start)
-			return &semSlot{ch: c.chatSem}, nil
-		default:
+			return rel, nil
 		}
 	}
 	// ★ 防死锁：以等待上限派生 ctx，避免无 deadline 的调用在信号量打满时永久卡死。
-	acqCtx, acqCancel := context.WithTimeout(ctx, acquireWaitTimeout())
-	defer acqCancel()
-	var got chan struct{}
+	//   交互请求可在「本地保留槽」与「全局后台槽」间二选一竞争，保证前台不饿死。
 	if isInteractive(ctx) {
-		// 双通道阻塞竞争（先到先用）
-		select {
-		case c.chatSem <- struct{}{}:
-			got = c.chatSem
-		case c.chatFast <- struct{}{}:
-			got = c.chatFast
-		case <-acqCtx.Done():
+		acqCtx, cancel := withAcqTimeout(ctx)
+		defer cancel()
+		rel, err := concurrency.AcquireEither(acqCtx, c.chatFast, c.chatSem)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("llm chat 并发槽获取超时（信号量可能已耗尽，请稍后重试）")
 		}
-	} else {
-		select {
-		case c.chatSem <- struct{}{}:
-			got = c.chatSem
-		case <-acqCtx.Done():
-		}
+		c.noteAcquired("chat", start)
+		return rel, nil
 	}
-	if got == nil {
+	acqCtx, cancel := withAcqTimeout(ctx)
+	defer cancel()
+	rel, err := c.chatSem.Acquire(acqCtx)
+	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		return nil, fmt.Errorf("llm chat 并发槽获取超时（信号量可能已耗尽，请稍后重试）")
 	}
 	c.noteAcquired("chat", start)
-	return &semSlot{ch: got}, nil
+	return rel, nil
 }
 
 // acquireEmbed 获取 embed 并发名额（独立池，不与 chat 抢占）。
 // 文件/后台批任务走专用文件池（容量更大、与交互池隔离）。同样带等待上限，
 // 避免嵌入调用在信号量打满时永久阻塞。
-func (c *Client) acquireEmbed(ctx context.Context) (*semSlot, error) {
+func (c *Client) acquireEmbed(ctx context.Context) (func(), error) {
 	start := time.Now()
 	if isFileMode(ctx) {
-		acqCtx, acqCancel := context.WithTimeout(ctx, acquireWaitTimeout())
-		defer acqCancel()
-		select {
-		case c.fileEmbSem <- struct{}{}:
-			c.noteAcquired("fileEmbed", start)
-			return &semSlot{ch: c.fileEmbSem}, nil
-		case <-acqCtx.Done():
+		acqCtx, cancel := withAcqTimeout(ctx)
+		defer cancel()
+		rel, err := c.fileEmbSem.Acquire(acqCtx)
+		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			return nil, fmt.Errorf("llm 文件翻译 embed 并发槽获取超时（请稍后重试）")
 		}
+		c.noteAcquired("fileEmbed", start)
+		return rel, nil
 	}
-	acqCtx, acqCancel := context.WithTimeout(ctx, acquireWaitTimeout())
-	defer acqCancel()
-	select {
-	case c.embSem <- struct{}{}:
-		c.noteAcquired("embed", start)
-		return &semSlot{ch: c.embSem}, nil
-	case <-acqCtx.Done():
+	acqCtx, cancel := withAcqTimeout(ctx)
+	defer cancel()
+	rel, err := c.embSem.Acquire(acqCtx)
+	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		return nil, fmt.Errorf("llm embed 并发槽获取超时（信号量可能已耗尽，请稍后重试）")
 	}
+	c.noteAcquired("embed", start)
+	return rel, nil
+}
+
+// withAcqTimeout 派生带等待上限的 ctx（防永久阻塞，见 acquireWaitTimeout），返回 cancel 由调用方 defer 释放。
+func withAcqTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, acquireWaitTimeout())
 }
 
 // noteAcquired 记录在途数并按需输出排队观测日志。
@@ -490,12 +482,12 @@ func (c *Client) doChat(ctx context.Context, endpoint, apiKey string, payload ch
 	}
 
 	// ★ chat 并发限流：后台任务共用 chatSem，交互请求另可抢占保留槽（评审整改 R1/R6）
-	slot, err := c.acquireChat(ctx)
+	rel, err := c.acquireChat(ctx)
 	if err != nil {
 		return "", "", err
 	}
 	defer c.inflight.Add(-1)
-	defer slot.Release()
+	defer rel()
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -619,12 +611,14 @@ func (c *Client) embedChunk(ctx context.Context, texts []string) ([][]float32, e
 	req = req.WithContext(ctx2)
 
 	// ★ embed 独立并发限流（评审整改 R1）：不与 chat 抢占——两家供应商额度本就独立
-	slot, err := c.acquireEmbed(ctx2)
+	acqCtx, cancel := withAcqTimeout(ctx2)
+	defer cancel()
+	rel, err := c.embSem.Acquire(acqCtx)
 	if err != nil {
 		return nil, err
 	}
 	defer c.inflight.Add(-1)
-	defer slot.Release()
+	defer rel()
 
 	resp, err := c.http.Do(req)
 	if err != nil {

@@ -104,10 +104,12 @@ type MigrateError struct {
 	Err error
 }
 
+// Error 实现 error 接口，返回带迁移 ID 与出错 SQL 的可读错误信息。
 func (e *MigrateError) Error() string {
 	return "db: 迁移 " + e.ID + " 执行失败 [" + e.SQL + "]: " + e.Err.Error()
 }
 
+// Unwrap 返回底层错误，支持 errors.Is / errors.As 链式的错误判定。
 func (e *MigrateError) Unwrap() error { return e.Err }
 
 // splitStmts 按分号拆分多语句 SQL，去除空白与行注释（-- 起始）。

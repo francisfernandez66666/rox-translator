@@ -9,6 +9,7 @@ import (
 	"translator/internal/kb"
 )
 
+// TestCJKOverlap 验证 cjkOverlap 对「同一句标点变体」与「非同一句流程条目」的判定。
 func TestCJKOverlap(t *testing.T) {
 	input := "激活蓝牙钥匙，即可将手机当作车钥匙使用。您后续也可以在“全部功能”板块中添加“蓝牙钥匙”并激活钥匙。"
 	cases := []struct {
@@ -41,6 +42,7 @@ func TestCJKOverlap(t *testing.T) {
 	}
 }
 
+// TestBuildExamplesPrompt 验证术语参考块构造：去重、跳过缺译文行与超长流程句。
 func TestBuildExamplesPrompt(t *testing.T) {
 	zh := "激活蓝牙钥匙，即可将手机当作车钥匙使用。"
 	rows := []*kb.Row{
@@ -72,6 +74,7 @@ func TestBuildExamplesPrompt(t *testing.T) {
 	}
 }
 
+// contains 朴素子串判定（测试辅助，不依赖 strings.Contains 以避免引入业务语义）。
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (func() bool {
 		for i := 0; i+len(sub) <= len(s); i++ {

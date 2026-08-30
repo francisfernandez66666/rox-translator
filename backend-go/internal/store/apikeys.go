@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 	"translator/internal/db"
+	"translator/internal/infra/ratelimit"
 )
 
 // APIKey 租户开放 API Key
@@ -151,8 +152,17 @@ func (s *Store) DeleteAPIKey(id, tid int64) error {
 
 // TouchAPIKey 记录一次 API 调用：调用次数 +1 并刷新最近使用时间。
 // 参数：id=Key 主键 ID；忽略错误（统计失败不影响业务主流程）。
+// 阶段二：启用 Redis 时，日配额计数改为 Redis 原子 INCR（跨实例聚合，单一事实源），
+// SQLite 仅保留 call_count/last_used_at 展示用；未启用 Redis 走原 SQLite 字段逻辑。
 func (s *Store) TouchAPIKey(id int64) {
 	today := time.Now().Format("2006-01-02")
+	if c := ratelimit.Daily(); c != nil {
+		_, _ = c.Incr(ratelimit.KeyForAKQuota(id, today))
+		_, _ = db.Exec(s.db, db.CurrentDialect(),
+			"UPDATE api_keys SET call_count=call_count+1, last_used_at=? WHERE id=?",
+			time.Now().Format(time.RFC3339), id)
+		return
+	}
 	_, _ = db.Exec(s.db, db.CurrentDialect(), `UPDATE api_keys SET call_count=call_count+1, last_used_at=?,
 		calls_today = CASE WHEN calls_today_date=? THEN calls_today+1 ELSE 1 END,
 		calls_today_date=?

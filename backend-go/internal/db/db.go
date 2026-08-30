@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// 驱动标识
+// 驱动标识：用于 Config.Driver 取值，决定 Open 走哪条连接分支。
 const (
 	DriverSQLite   = "sqlite"
 	DriverPostgres = "postgres"
@@ -66,6 +66,10 @@ func SQLiteDSN(dbPath string) string {
 		"&_txlock=immediate"
 }
 
+// openSQLite 打开 SQLite 数据库连接。
+// 参数：dsn 为原始 DSN：若为 ":memory:" 则改用共享缓存的内存库；
+//  若未带查询参数则通过 SQLiteDSN 补齐加固参数（busy_timeout/WAL 等）；已带参数则原样使用。
+// 返回打开的 *sql.DB，失败返回错误。注意不设置连接池（SQLite 单写者模型由锁与 WAL 保证）。
 func openSQLite(dsn string) (*sql.DB, error) {
 	if dsn == ":memory:" {
 		dsn = "file::memory:?cache=shared&_txlock=immediate"
@@ -79,6 +83,12 @@ func openSQLite(dsn string) (*sql.DB, error) {
 	return conn, nil
 }
 
+// openPostgres 打开 PostgreSQL 数据库连接并应用连接池与可选扩展初始化。
+// 参数：cfg 提供 DSN、连接池参数及是否启用 pgvector 扩展。
+//   - 连接池：MaxOpenConns 默认 20，MaxIdleConns/ConnMaxLifetime 仅当 >0 时设置；
+//   - EnablePgvector 为 true 时执行 CREATE EXTENSION IF NOT EXISTS vector，失败仅告警不影响其余功能；
+//   - 最后执行 Ping 探活，失败返回带上下文的错误。
+// 返回打开且已验证的 *sql.DB，失败返回错误。
 func openPostgres(cfg Config) (*sql.DB, error) {
 	maxOpen := cfg.MaxOpenConns
 	if maxOpen <= 0 {

@@ -9,6 +9,7 @@ import (
 	"testing"
 )
 
+// TestTranslatePptxXML 验证 translatePptxXML 写入译文、设置 autofit=shrink 并自动缩小字号。
 func TestTranslatePptxXML(t *testing.T) {
 	slide := `<p:sld><p:spTree>
 <p:sp><p:spPr><a:xfrm><a:off x="457200" y="457200"/><a:ext cx="3000000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:p><a:pPr><a:defRPr sz="1800" lang="zh-CN"/></a:pPr><a:r><a:rPr lang="zh-CN" sz="1800"/><a:t>刹车系统故障指示灯</a:t></a:r></a:p><a:p><a:r><a:rPr lang="zh-CN" sz="1800"/><a:t>请立即联系售后服务</a:t></a:r></a:p></p:txBody></p:sp>
@@ -49,6 +50,7 @@ func TestTranslatePptxXML(t *testing.T) {
 	}
 }
 
+// TestTranslatePptxCell 验证表格单元格译文写入与译文变长时的字号缩小。
 func TestTranslatePptxCell(t *testing.T) {
 	cell := `<a:tc><a:txBody><a:bodyPr/><a:p><a:pPr><a:defRPr sz="1400" lang="zh-CN"/></a:pPr><a:r><a:rPr lang="zh-CN" sz="1400"/><a:t>刹车系统故障</a:t></a:r></a:p></a:txBody></a:tc>`
 	translations := map[string]string{

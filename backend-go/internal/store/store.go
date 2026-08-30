@@ -13,6 +13,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -645,4 +647,26 @@ func (s *Store) backfillAPIOwnership() {
 		SELECT MIN(u.id) FROM users u
 		WHERE u.tenant_id=tickets.tenant_id AND u.role IN ('admin','tenant_admin'))
 	WHERE created_by=0 AND COALESCE(api_user_id,0)=0`)
+}
+
+// PruneAuditLogs 删除早于 cutoff 的审计日志（长期运行表膨胀治理，P2 审计留存策略）。
+// 参数 cutoff=保留截止时间（早于此时间的记录删除）；返回删除条数。忽略错误（清理失败不影响主流程）。
+func (s *Store) PruneAuditLogs(cutoff time.Time) (int64, error) {
+	res, err := db.Exec(s.db, db.CurrentDialect(),
+		"DELETE FROM audit_logs WHERE created_at < ?", cutoff.Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// AuditRetentionDays 审计日志保留天数（默认 365；可由 system_config.audit_retention_days 覆盖）。
+func (s *Store) AuditRetentionDays() int {
+	if v, err := s.GetConfig("audit_retention_days"); err == nil {
+		if n, e := strconv.Atoi(strings.TrimSpace(v)); e == nil && n > 0 {
+			return n
+		}
+	}
+	return 365
 }

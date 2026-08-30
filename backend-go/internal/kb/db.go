@@ -73,12 +73,12 @@ func Open(dbPath string) (*KBDatabase, error) {
 		}
 	}
 	conn, err := db.Open(db.Config{
-		Driver:                  driver,
-		DSN:                     dsn,
-		EnablePgvector:          true,
-		MaxOpenConns:            config.C.DBMaxOpenConns,
-		MaxIdleConns:            config.C.DBMaxIdleConns,
-		ConnMaxLifetimeMinutes:  config.C.DBConnMaxLifetimeMinutes,
+		Driver:                 driver,
+		DSN:                    dsn,
+		EnablePgvector:         true,
+		MaxOpenConns:           config.C.DBMaxOpenConns,
+		MaxIdleConns:           config.C.DBMaxIdleConns,
+		ConnMaxLifetimeMinutes: config.C.DBConnMaxLifetimeMinutes,
 	})
 	if err != nil {
 		return nil, err
@@ -905,6 +905,36 @@ func (k *KBDatabase) AddTerm(lang, src, dst, module string, tenantID int64) erro
 		return err
 	}
 	return nil
+}
+
+// EmbedSeg 重建向量索引时的段标识（ID + 原文）。
+type EmbedSeg struct {
+	ID int64  // 段主键
+	Zh string // 中文原文（嵌入输入）
+}
+
+// SegmentsForEmbedding 分页拉取待重建向量的段（仅含非空原文），供 rebuild-kb-index 批量嵌入。
+// 参数：limit/offset=分页；返回本页段列表。PG 下 embedding 列由外部 UpsertEmbedding 回填，
+// SQLite 后端无此列，调用方应跳过。（? 占位符由 db.Query 按方言重写）
+func (k *KBDatabase) SegmentsForEmbedding(limit, offset int) ([]EmbedSeg, error) {
+	if limit <= 0 {
+		limit = 256
+	}
+	rows, err := db.Query(k.db, db.CurrentDialect(),
+		`SELECT id, zh FROM tm_segments WHERE zh IS NOT NULL AND zh <> '' ORDER BY id LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EmbedSeg
+	for rows.Next() {
+		var s EmbedSeg
+		if err := rows.Scan(&s.ID, &s.Zh); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
 }
 
 // Stats 知识库统计（指定租户）。

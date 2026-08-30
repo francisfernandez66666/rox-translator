@@ -32,6 +32,7 @@ type TicketRetentionRow struct {
 	ExpireNotify    string // 已发送档位标记（逗号分隔："7,3,1"）
 }
 
+// retentionCols 工单留存扫描通用查询列清单（Scan 顺序契约；result_path/expires_at/expire_notify 为可空列，COALESCE 兜底）。
 const retentionCols = "id, tenant_id, created_by, ticket_no, title, COALESCE(result_path,''), COALESCE(result_expires_at,''), COALESCE(expire_notify,'')"
 
 // scanRetentionRows 通用查询：completed 且设置了到期时间的工单。

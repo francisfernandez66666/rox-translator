@@ -35,6 +35,9 @@ import (
 	"translator/internal/store"
 	"translator/internal/tenant"
 
+	// Redis 单例（阶段二）：REDIS_ADDR 非空即启用分布式锁/信号量/配额；空则降级进程内。
+	"translator/internal/infra/redis"
+
 	// PostgreSQL 驱动注册（P0-3）：当选型 DB_DRIVER=postgres 时由连接器(db.Open)使用。
 	// 未启用时仅为 inert 依赖，不影响 SQLite 默认路径。
 	_ "github.com/lib/pq"
@@ -55,6 +58,7 @@ func main() {
 	frontend := flag.String("frontend", "", "前端 dist 目录（默认相对路径 ./frontend/dist）")
 	kbNpz := flag.String("kb", "", "知识库 .npz 文件路径；留空则不加载")
 	kbDB := flag.String("kbdb", "", "知识库 SQLite 缓存路径（默认 <npz 同名>.db）")
+	initDB := flag.Bool("init-db", false, "仅初始化数据库 schema（建表/扩展/默认数据）后退出，用于 PostgreSQL 切流前置")
 	flag.Parse()
 
 	cfg := config.Default()
@@ -78,6 +82,16 @@ func main() {
 	uploadDir, _ := filepath.Abs(cfg.UploadDir)
 	os.MkdirAll(uploadDir, 0o755) // 确保上传目录存在
 	cfg.UploadDir = uploadDir
+
+	// ★ 阶段二：Redis 单例初始化（REDIS_ADDR 非空启用分布式能力，空则降级进程内实现）。
+	redis.Init(cfg.RedisAddr, cfg.RedisPassword)
+	if redis.Enabled() {
+		if err := redis.Ping(); err != nil {
+			log.Printf("[init] 警告: Redis 探活失败（%v），分布式能力降级为进程内实现", err)
+		} else {
+			log.Printf("[init] Redis 已启用: %s", cfg.RedisAddr)
+		}
+	}
 
 	// 解析前端 dist 目录（默认 ../frontend/dist，存在 index.html 才启用）
 	distDir := *frontend
@@ -159,6 +173,18 @@ func main() {
 		}
 	}
 
+	// ★ 阶段一 PG 切流落地点：--init-db 仅初始化 schema（建表/默认数据）后退出，
+	// 供 cutover 脚本在迁移前一次性建立 PG 表结构（含 pgvector 列）。
+	if *initDB {
+		if config.C.DatabaseDriver == "postgres" {
+			log.Printf("[init-db] PostgreSQL schema 已初始化: %s", config.C.DatabaseDSN)
+		} else {
+			log.Printf("[init-db] SQLite schema 已初始化: %s", cfg.DBPath)
+		}
+		log.Println("[init-db] 退出（未启动 HTTP 服务）")
+		os.Exit(0)
+	}
+
 	// 加载知识库向量索引 (.npz)
 	npzPath := *kbNpz
 	if npzPath != "" {
@@ -207,34 +233,34 @@ func main() {
 					cfg.OnlineAPIKeyIsPlaceholder = false
 					log.Printf("全局 API Key 已从主路由水合（provider=%s model=%s）", r.Provider, r.Model)
 					break
-		}
-		// ★ 后台可配 LLM Key 启动水合（2026-08-27，并入「全局模型」tab 的一部分）：
-		//   后台在 /api/admin/models/save 中把翻译/向量密钥以密文落库到 system_config，
-		//   此处启动时优先读取这些库内配置并覆盖（环境变量与 model_routes 的）默认值，
-		//   实现「后台设置优先、重启后仍生效」。
-		if v, _ := st.GetConfig("online_api_key"); v != "" {
-			if dec := store.DecryptSecret(v); dec != "" {
-				cfg.OnlineAPIKey = dec
-				cfg.OnlineAPIKeyIsPlaceholder = false
-				log.Println("[llmkey] 已从后台配置水合 在线翻译 Key")
+				}
+				// ★ 后台可配 LLM Key 启动水合（2026-08-27，并入「全局模型」tab 的一部分）：
+				//   后台在 /api/admin/models/save 中把翻译/向量密钥以密文落库到 system_config，
+				//   此处启动时优先读取这些库内配置并覆盖（环境变量与 model_routes 的）默认值，
+				//   实现「后台设置优先、重启后仍生效」。
+				if v, _ := st.GetConfig("online_api_key"); v != "" {
+					if dec := store.DecryptSecret(v); dec != "" {
+						cfg.OnlineAPIKey = dec
+						cfg.OnlineAPIKeyIsPlaceholder = false
+						log.Println("[llmkey] 已从后台配置水合 在线翻译 Key")
+					}
+				}
+				if v, _ := st.GetConfig("online_api_base"); v != "" {
+					cfg.OnlineAPIBase = v
+				}
+				if v, _ := st.GetConfig("online_model"); v != "" {
+					cfg.OnlineModel = v
+				}
+				if v, _ := st.GetConfig("embed_api_key"); v != "" {
+					if dec := store.DecryptSecret(v); dec != "" {
+						cfg.EmbedAPIKey = dec
+						log.Println("[llmkey] 已从后台配置水合 Embedding Key")
+					}
+				}
+				if v, _ := st.GetConfig("embed_api_base"); v != "" {
+					cfg.EmbedAPIBase = v
+				}
 			}
-		}
-		if v, _ := st.GetConfig("online_api_base"); v != "" {
-			cfg.OnlineAPIBase = v
-		}
-		if v, _ := st.GetConfig("online_model"); v != "" {
-			cfg.OnlineModel = v
-		}
-		if v, _ := st.GetConfig("embed_api_key"); v != "" {
-			if dec := store.DecryptSecret(v); dec != "" {
-				cfg.EmbedAPIKey = dec
-				log.Println("[llmkey] 已从后台配置水合 Embedding Key")
-			}
-		}
-		if v, _ := st.GetConfig("embed_api_base"); v != "" {
-			cfg.EmbedAPIBase = v
-		}
-	}
 
 		}
 	}

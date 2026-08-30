@@ -16,6 +16,7 @@ import (
 	"translator/internal/store"
 )
 
+// newTestStore 测试辅助：用内存 SQLite 构建最小 Store 供阶段模型测试使用。
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
@@ -30,6 +31,7 @@ func newTestStore(t *testing.T) *store.Store {
 	return s
 }
 
+// TestResolveStageModel 验证阶段模型命中/未配置回退/缺 model 视为未配置的解析逻辑。
 func TestResolveStageModel(t *testing.T) {
 	st := newTestStore(t)
 	e := &Engine{St: st, Cfg: config.Default()}
@@ -69,6 +71,7 @@ func TestResolveStageModel(t *testing.T) {
 	}
 }
 
+// TestResolveStageModelKeyInherit 验证阶段模型未填 APIKey 时继承全局默认密钥。
 func TestResolveStageModelKeyInherit(t *testing.T) {
 	st := newTestStore(t)
 	cfg := config.Default()

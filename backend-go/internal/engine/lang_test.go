@@ -5,6 +5,7 @@ package engine
 
 import "testing"
 
+// TestStrip 验证 StripLangInstruction 在各类句式下正确剥离语言指令并返回目标语言。
 func TestStrip(t *testing.T) {
 	inputs := []string{
 		`把"你好，世界"翻译成英语`,
@@ -25,6 +26,7 @@ func TestStrip(t *testing.T) {
 	}
 }
 
+// TestParse 验证 ParseTargetLangs 从用户输入中识别目标语言代码（按出现顺序）。
 func TestParse(t *testing.T) {
 	cases := map[string][]string{
 		`把"你好，世界"翻译成英语`: {"en"},

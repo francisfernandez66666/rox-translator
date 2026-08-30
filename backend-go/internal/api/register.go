@@ -373,6 +373,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 注册成功自动发送《产品手册》PDF 邮件（个人/企业用户均发送；用 info 专用邮箱，附件为手册 PDF）
 	if req.Email != "" {
+		// 后台异步发送《产品手册》PDF 邮件，避免阻塞注册响应
 		go func(to, uname string) {
 			_ = s.sendManualEmail(to, uname)
 		}(strings.TrimSpace(req.Email), req.Username)
@@ -381,6 +382,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	//   并抄送运营邮箱（抄送地址由邮件模板 enterprise_reg 控制，默认 575160894@qq.com）建联。
 	//   仅「新建企业（非个人、非受邀加入、非专属域名）」触发；个人用户不抄送。
 	if !creatingPersonal && dedicatedTid == 0 && req.Invite == "" && req.Email != "" {
+		// 后台异步发送企业注册欢迎邮件并抄送运营，不阻塞注册响应
 		go func(to, name, username string) {
 			_ = s.sendTemplatedMail(to, "enterprise_reg", map[string]string{
 				"name":     name,
@@ -561,6 +563,7 @@ func (s *Server) notifyTenantAdmins(tid int64, title, body string) {
 		}
 		_ = s.Store.CreateNotification(usr.ID, title, body, "tenant", tid)
 		if emailOn == "1" && usr.Email != "" {
+			// 后台异步向成员发送租户通知邮件，避免阻塞循环
 			go func(to string) {
 				_ = s.sendTemplatedMail(to, "tenant_notify", map[string]string{
 					"title": title,

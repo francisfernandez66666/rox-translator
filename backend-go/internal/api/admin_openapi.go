@@ -28,6 +28,7 @@ import (
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/renderer/html"
 
+	"translator/internal/infra/ratelimit"
 	"translator/internal/store"
 )
 
@@ -252,6 +253,7 @@ func itoaApi(n int) string {
 	}
 	var buf [20]byte
 	i := len(buf)
+	// 从缓冲末尾向前写入各位数字，最后取有效切片
 	for n > 0 {
 		i--
 		buf[i] = byte('0' + n%10)
@@ -650,6 +652,12 @@ func (s *Server) validateAPIKey(r *http.Request) (*store.APIKey, string) {
 		used := ak.CallsToday
 		if ak.CallsTodayDate != today {
 			used = 0 // 跨日自动清零
+		}
+		// 阶段二：启用 Redis 时以 Redis 原子计数作为跨实例聚合的权威源（覆盖 SQLite 字段）
+		if c := ratelimit.Daily(); c != nil {
+			if n, gerr := c.Get(ratelimit.KeyForAKQuota(ak.ID, today)); gerr == nil && n > 0 {
+				used = n
+			}
 		}
 		if used >= ak.DailyCallLimit {
 			return ak, "key_quota_exceeded"

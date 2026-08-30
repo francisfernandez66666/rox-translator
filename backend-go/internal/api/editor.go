@@ -10,13 +10,18 @@ package api
 import (
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xuri/excelize/v2"
 	apierrors "translator/internal/errors"
+	"translator/internal/doc"
 	"translator/internal/store"
 )
 
@@ -34,6 +39,8 @@ type EditorSegment struct {
 func (s *Server) routesEditor() {
 	s.mux.HandleFunc("/api/tickets/segments", s.handleTicketSegments)
 	s.mux.HandleFunc("/api/tickets/segments/save", s.handleSaveSegments)
+	s.mux.HandleFunc("/api/tickets/segments/export", s.handleExportSegments)
+	s.mux.HandleFunc("/api/editor/export/download", s.handleEditorExportDownload)
 }
 
 // handleTicketSegments 读取工单逐段对照 + 术语表。
@@ -164,12 +171,16 @@ type baseSeg struct {
 }
 
 // extractSegments 从工单抽取源文/译文逐段对照。
-// 返回 (段落列表, 是否支持在线编辑)。文件工单仅 xlsx/csv 对照表支持；其余返回 supported=false。
+// 返回 (段落列表, 是否支持在线编辑)。文本/xlsx/csv/docx/pdf 均支持；其余返回 supported=false。
 func (s *Server) extractSegments(t *store.Ticket, lang string) ([]baseSeg, bool) {
 	if t.FilePath == "" {
 		return extractTextSegments(t, lang), true
 	}
-	// 文件工单：取主产物路径
+	// 文件工单：docx/pdf 走 Office 段落抽取（源文取原文件、译文取结果文件，按段对齐）
+	if doc.IsOfficeDoc(t.FilePath) || doc.IsPDF(t.FilePath) {
+		return s.extractOfficeSegments(t, lang)
+	}
+	// xlsx/csv 对照表
 	path := t.ResultPath
 	if path == "" {
 		if files, _ := s.Store.TicketFiles(t.ID); len(files) > 0 {
@@ -181,6 +192,51 @@ func (s *Server) extractSegments(t *store.Ticket, lang string) ([]baseSeg, bool)
 	}
 	segs, ok := parseAlignedFile(path, lang)
 	return segs, ok
+}
+
+// extractOfficeSegments 抽取 docx/pdf 工单的源文/译文段落对照。
+// 源文取原始上传文件段落；译文取翻译结果文件（docx/pdf）段落，按段落索引对齐。
+// 未生成结果文件时返回 supported=false（前端提示「翻译完成后可在线编辑」）。
+func (s *Server) extractOfficeSegments(t *store.Ticket, lang string) ([]baseSeg, bool) {
+	var srcParas []string
+	var err error
+	switch {
+	case doc.IsOfficeDoc(t.FilePath):
+		srcParas, err = doc.DocxParagraphs(t.FilePath)
+	case doc.IsPDF(t.FilePath):
+		srcParas, err = doc.PDFToParagraphs(t.FilePath)
+	default:
+		return nil, false
+	}
+	if err != nil || len(srcParas) == 0 {
+		return nil, false
+	}
+	// 译文：取结果文件段落（与源文段数未必一致，按短者对齐）
+	tgtPath := t.ResultPath
+	if tgtPath == "" {
+		if files, _ := s.Store.TicketFiles(t.ID); len(files) > 0 {
+			tgtPath = files[0].ResultPath
+		}
+	}
+	var tgtParas []string
+	if tgtPath != "" {
+		switch {
+		case doc.IsOfficeDoc(tgtPath):
+			tgtParas, _ = doc.DocxParagraphs(tgtPath)
+		case doc.IsPDF(tgtPath):
+			tgtParas, _ = doc.PDFToParagraphs(tgtPath)
+		}
+	}
+	n := len(srcParas)
+	if len(tgtParas) < n {
+		n = len(tgtParas)
+	}
+	segs := make([]baseSeg, 0, n)
+	// 按段落下标一一对齐源文与目标文，构成可编辑片段
+	for i := 0; i < n; i++ {
+		segs = append(segs, baseSeg{Index: i, Source: srcParas[i], Target: tgtParas[i]})
+	}
+	return segs, true
 }
 
 // extractTextSegments 文本工单：按行对齐 FinalResult.translations 与 SourceText。
@@ -330,6 +386,91 @@ func splitLines(s string) []string {
 		return []string{s}
 	}
 	return out
+}
+
+// handleExportSegments 审批后回写：按翻译编辑（edited_text）逐段重写结果 docx，导出修订稿。
+// 仅支持 docx 结果文件的回写（pdf 结果先转 docx 的成本较高，MVP 限定 docx）。
+func (s *Server) handleExportSegments(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录或登录已失效"))
+		return
+	}
+	id, lang := s.parseTicketIDLang(r)
+	t, err := s.Store.GetTicketGlobal(id)
+	if err != nil || t == nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrTicketNotFound, "工单不存在"))
+		return
+	}
+	if u.TenantID != t.TenantID && u.TenantID != 0 {
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权访问该工单"))
+		return
+	}
+	base, ok := s.extractSegments(t, lang)
+	if !ok || len(base) == 0 {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "该工单不支持在线回写（需 docx 结果文件）"))
+		return
+	}
+	edits, _ := s.Store.GetTranslationEdits(id, lang)
+	editMap := map[int]*store.TranslationEdit{}
+	for i := range edits {
+		editMap[edits[i].SegIndex] = &edits[i]
+	}
+	repl := make([]string, len(base))
+	for i, b := range base {
+		rep := b.Target
+		if e, ok := editMap[i]; ok && e.EditedText != "" {
+			rep = e.EditedText
+		}
+		repl[i] = rep
+	}
+	// 结果 docx 路径
+	tgtPath := t.ResultPath
+	if tgtPath == "" {
+		if files, _ := s.Store.TicketFiles(t.ID); len(files) > 0 {
+			tgtPath = files[0].ResultPath
+		}
+	}
+	if tgtPath == "" || !doc.IsOfficeDoc(tgtPath) {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "回写仅支持 docx 结果文件（当前结果非 docx）"))
+		return
+	}
+	dir := filepath.Dir(tgtPath)
+	base2 := strings.TrimSuffix(filepath.Base(tgtPath), filepath.Ext(tgtPath))
+	outPath := filepath.Join(dir, fmt.Sprintf("%s_%s_edited_%d.docx", base2, lang, time.Now().Unix()))
+	if err := doc.DocxRewrite(tgtPath, outPath, repl); err != nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "回写失败: "+err.Error()))
+		return
+	}
+	rel, _ := filepath.Rel(s.Cfg.UploadDir, outPath)
+	writeJSON(w, 200, map[string]interface{}{
+		"success":  true,
+		"download": "/api/editor/export/download?file=" + url.PathEscape(rel),
+	})
+}
+
+// handleEditorExportDownload 鉴权后安全下载回写产物（限定在 UploadDir 内，防路径穿越）。
+func (s *Server) handleEditorExportDownload(w http.ResponseWriter, r *http.Request) {
+	if u := s.authUser(r); u == nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录或登录已失效"))
+		return
+	}
+	file := r.URL.Query().Get("file")
+	if file == "" {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少 file 参数"))
+		return
+	}
+	decoded, err := url.QueryUnescape(file)
+	if err != nil {
+		decoded = file
+	}
+	abs, ok := resolveSafePath([]string{s.Cfg.UploadDir}, decoded)
+	if !ok {
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "非法文件路径"))
+		return
+	}
+	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filepath.Base(abs)))
+	http.ServeFile(w, r, abs)
 }
 
 // parseTicketIDLang 从查询参数解析工单 ID 与语言（lang 缺省取工单首目标语言）。

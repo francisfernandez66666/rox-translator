@@ -47,6 +47,7 @@ func (s *Server) startMemoryMonitor() {
 	if s.Store == nil {
 		return
 	}
+	// 启动后台协程：按配置周期采样内存并检测压力阈值
 	go func() {
 		interval := 60
 		if v, _ := s.Store.GetConfig("mem_monitor_interval_sec"); v != "" {

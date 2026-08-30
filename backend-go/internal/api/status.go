@@ -27,14 +27,17 @@ func (s *Server) handlePublicStatus(w http.ResponseWriter, r *http.Request) {
 		"success":      true,
 		"version":      "v3",
 		"service":      "translator-saas",
+		"dialect":      s.dialectName(),
 		"uptime_sec":   uptime,
 		"breaker_open": s.Engine != nil && s.Engine.BreakerOpen(),
 	}
 	// 工单队列深度：jobs 表 queued/running 计数（存储不可用则省略）
 	if s.Store != nil {
 		var queued, running int64
+		// 统计待处理任务数
 		_ = s.Store.DB().QueryRowContext(context.Background(),
 			"SELECT COUNT(*) FROM jobs WHERE status='queued'").Scan(&queued)
+		// 统计执行中任务数
 		_ = s.Store.DB().QueryRowContext(context.Background(),
 			"SELECT COUNT(*) FROM jobs WHERE status='running'").Scan(&running)
 		resp["queue"] = map[string]int64{"queued": queued, "running": running}
@@ -57,4 +60,12 @@ func (s *Server) handlePublicStatus(w http.ResponseWriter, r *http.Request) {
 	ok := !(resp["breaker_open"].(bool)) && openAlerts < 10
 	resp["ok"] = ok
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// dialectName 返回当前持久化后端标识（postgres / sqlite），供 /status 暴露与切流校验。
+func (s *Server) dialectName() string {
+	if s.Cfg != nil && s.Cfg.DatabaseDriver == "postgres" {
+		return "postgres"
+	}
+	return "sqlite"
 }

@@ -23,6 +23,7 @@ type TicketFile struct {
 	CreatedAt  string `json:"created_at"`
 }
 
+// ticketFileCols 工单源文件表通用查询列清单（Scan 顺序契约；result_path/error 为可空列，COALESCE 兜底）。
 const ticketFileCols = "id, tenant_id, ticket_id, file_name, file_path, COALESCE(result_path,''), COALESCE(error,''), created_at"
 
 // AddTicketFile 为工单登记一个源文件。

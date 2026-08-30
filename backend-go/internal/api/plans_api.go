@@ -74,8 +74,10 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 	usedToday, usedMonth := int64(0), int64(0)
 	if tid > 0 {
 		ms := time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)
+		// 统计本月租户级用量
 		_ = s.Store.DB().QueryRow(
 			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=?", tid, ms).Scan(&usedMonth)
+		// 统计今日当前用户用量
 		_ = s.Store.DB().QueryRow(
 			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at>=?",
 			tid, u.ID, ms).Scan(&usedToday)

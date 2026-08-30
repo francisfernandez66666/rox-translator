@@ -31,7 +31,9 @@ import (
 	"time"
 
 	"translator/internal/auth"
+	"translator/internal/auth/sso"
 	"translator/internal/billing"
+	"translator/internal/infra/redis"
 	"translator/internal/config"
 	"translator/internal/engine"
 	apierrors "translator/internal/errors"
@@ -61,6 +63,8 @@ type Server struct {
 	regGuard *registerGuard
 	// 服务启动时间（/status 与 uptime 展示）
 	startedAt time.Time
+	// SSO / OIDC 适配层（阶段六；nil=未启用）
+	SSO *sso.Manager
 }
 
 // NewServer 创建 HTTP 服务：初始化计费服务、注册路由并启动看门狗。
@@ -68,7 +72,7 @@ type Server struct {
 // st: 平台存储（可 nil）；ts: 租户存储（可 nil）。
 // 返回: 组装完成的 *Server 实例。
 func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist string, st *store.Store, ts *tenant.Store) *Server {
-	s := &Server{Cfg: cfg, Engine: eng, DB: db, Ten: ts, Store: st, Dist: dist, metrics: newMetrics(), loginLimit: newLoginLimiter(st), regGuard: newRegisterGuard(st), startedAt: time.Now()}
+	s := &Server{Cfg: cfg, Engine: eng, DB: db, Ten: ts, Store: st, Dist: dist, metrics: newMetrics(), loginLimit: newLoginLimiter(st), regGuard: newRegisterGuard(st), startedAt: time.Now(), SSO: sso.NewManager(cfg.SSOProviders)}
 	// 平台存储就绪时初始化计费服务（限流/配额/余额）
 	if st != nil {
 		s.Bill = billing.NewService(st)
@@ -89,10 +93,15 @@ func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist s
 			log.Printf("[worker] 启动回收中断任务: %d 个已重新入队", n)
 		}
 		s.TicketSvc = service.NewTicketService(st, eng, ts, db, q, s.Bill)
+		// ★ 多 AZ 唤醒（阶段七）：Redis 启用时以 Redis 信号列表唤醒跨实例 worker，降低分发延迟
+		if r := redis.Get(); r != nil {
+			s.TicketSvc.Notifier = redis.NewQueueNotifier(r)
+		}
 		s.TicketSvc.Mailer = s.mailer()         // 邮件异步：注入默认发送器
 		s.TicketSvc.InfoMailer = s.infoMailer() // 邮件异步：注入专用发送器
-		s.TicketSvc.BootResume()      // ★ 断点续传：启动即接管上次中断的 in_progress 工单
-		s.TicketSvc.StartStallSweep() // ★ 卡死工单巡检：>20min 无进展自动重排续跑
+		s.TicketSvc.BootResume()                // ★ 断点续传：启动即接管上次中断的 in_progress 工单
+		s.TicketSvc.StartStallSweep()           // ★ 卡死工单巡检：>20min 无进展自动重排续跑
+		s.startAuditRetention()                 // ★ P2 审计留存：按保留天数定期清理 audit_logs
 		// ★ 并发增强：worker 数量从环境变量 WORKER_CONCURRENCY 读取（默认 4）
 		workerCount := 4
 		if v := os.Getenv("WORKER_CONCURRENCY"); v != "" {
@@ -104,9 +113,42 @@ func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist s
 	}
 	s.mux = http.NewServeMux()
 	s.routes()
+	s.routesSSO()
+	s.routesOpenAPISpec()
 	// 启动监控看门狗（后台巡检余额/模型健康）
 	s.startWatchdog()
 	return s
+}
+
+// startAuditRetention 按保留天数（默认 365，system_config.audit_retention_days 可覆盖）
+// 每 6 小时清理一次早于截止日的审计日志，避免长期运行表膨胀。
+func (s *Server) startAuditRetention() {
+	if s.Store == nil {
+		return
+	}
+	// 启动后台协程：每 6 小时触发一次审计日志清理（先立即执行一次）
+	go func() {
+		t := time.NewTicker(6 * time.Hour)
+		defer t.Stop()
+		s.pruneAuditOnce()
+		for range t.C {
+			s.pruneAuditOnce()
+		}
+	}()
+}
+
+// pruneAuditOnce 执行一次审计日志清理：按保留天数计算截止时间，删除早于该时间的记录。
+// 无参数无返回；清理条数大于 0 时记日志。失败仅静默返回，不阻断主流程。
+func (s *Server) pruneAuditOnce() {
+	days := s.Store.AuditRetentionDays()
+	cutoff := time.Now().AddDate(0, 0, -days)
+	n, err := s.Store.PruneAuditLogs(cutoff)
+	if err != nil {
+		return
+	}
+	if n > 0 {
+		log.Printf("[audit] 已清理 %d 条超过 %d 天的审计日志", n, days)
+	}
 }
 
 // routes 注册全部 HTTP 路由，按业务域分组调用各分组注册函数。
@@ -370,10 +412,60 @@ func (s *Server) routesOpenAPI() {
 	s.mux.HandleFunc("/openapi/docs", s.handleOpenAPIDocs)
 }
 
-// Handler 返回完整的 http.Handler（依次包裹指标/租户/CORS 中间件）。
+// Handler 返回完整的 http.Handler（依次包裹版本/指标/租户/CORS 中间件）。
 // 返回: 可交给 http.ListenAndServe 使用的 http.Handler。
 func (s *Server) Handler() http.Handler {
-	return s.withTraceID(s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.withAccessLog(s.mux))))))
+	return s.withAPIVersion(s.withTraceID(s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.withAccessLog(s.mux)))))))
+}
+
+// apiVersionKey ctx 存取键：当前请求命中的 API 版本（默认 v1）。
+type apiVersionKey struct{}
+
+// WithAPIVersion 写入 ctx（供未来 v2 路由分支使用）。
+func WithAPIVersion(ctx context.Context, v string) context.Context {
+	return context.WithValue(ctx, apiVersionKey{}, v)
+}
+
+// APIVersionFrom 读取 ctx 中的 API 版本（缺省 v1）。
+func APIVersionFrom(ctx context.Context) string {
+	if v, ok := ctx.Value(apiVersionKey{}).(string); ok && v != "" {
+		return v
+	}
+	return "v1"
+}
+
+// withAPIVersion 解析请求 API 版本（优先级：Accept 头 application/vnd.langcross.<v>+json
+// > X-API-Version 头 > 默认 v1），写入 ctx 并回显 X-API-Version 响应头。
+// 当前仅 v1 生效，v2 路径预留；未知版本不拒绝（向后兼容），仅记录。
+func (s *Server) withAPIVersion(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		v := "v1"
+		if h := r.Header.Get("X-API-Version"); h != "" {
+			v = normalizeVersion(h)
+		} else if acc := r.Header.Get("Accept"); strings.Contains(acc, "vnd.langcross.") {
+			// 形如 application/vnd.langcross.v2+json
+			if idx := strings.Index(acc, "vnd.langcross."); idx >= 0 {
+				rest := acc[idx+len("vnd.langcross."):]
+				if end := strings.IndexAny(rest, "+; "); end > 0 {
+					v = normalizeVersion(rest[:end])
+				} else {
+					v = normalizeVersion(rest)
+				}
+			}
+		}
+		w.Header().Set("X-API-Version", v)
+		next.ServeHTTP(w, r.WithContext(WithAPIVersion(r.Context(), v)))
+	})
+}
+
+// normalizeVersion 规整版本串（v1 / 1 / V1 -> v1）。
+func normalizeVersion(raw string) string {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	raw = strings.TrimPrefix(raw, "v")
+	if raw == "" {
+		return "v1"
+	}
+	return "v" + raw
 }
 
 // maxJSONBody 非 multipart 请求体上限（JSON 接口防超大请求；文件上传走 multipart 不受限）。

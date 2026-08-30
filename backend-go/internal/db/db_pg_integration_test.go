@@ -18,6 +18,7 @@ import (
 //	createdb -p 55432 -h 127.0.0.1 -U postgres pgtest
 //	PG_TEST_DSN="postgres://postgres@127.0.0.1:55432/pgtest?sslmode=disable" \
 //	  go test ./internal/db/ -run TestRegisteredMigrationsPostgres -v
+// TestRegisteredMigrationsPostgres：TestRegisteredMigrationsPostgres
 func TestRegisteredMigrationsPostgres(t *testing.T) {
 	dsn := os.Getenv("PG_TEST_DSN")
 	if dsn == "" {

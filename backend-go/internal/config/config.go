@@ -54,6 +54,24 @@ type StageModel struct {
 // 键为流程阶段标识（kb_match / ai_initial / evals / review）。
 type StageModels map[string]StageModel
 
+// SSOProviderConfig 单 IdP 配置（阶段六：企业身份联合登录）。
+// Type 取值：oidc（标准 OpenID Connect 发现）/ feishu（飞书）/ dingtalk（钉钉）。
+type SSOProviderConfig struct {
+	Name           string `json:"name"`            // 提供方标识（路由用，如 "azure"、"feishu"）
+	DisplayName    string `json:"display_name"`    // 前端展示名（如 "Azure AD"）
+	Type           string `json:"type"`            // oidc / feishu / dingtalk
+	ClientID       string `json:"client_id"`       // OAuth2 / OIDC client_id
+	ClientSecret   string `json:"client_secret"`   // client_secret
+	Issuer         string `json:"issuer"`          // oidc 发现文档基地址（Type=oidc 必填）
+	AuthURL        string `json:"auth_url"`        // 非 oidc 时手动指定授权端点
+	TokenURL       string `json:"token_url"`       // 非 oidc 时手动指定令牌端点
+	UserinfoURL    string `json:"userinfo_url"`    // 非 oidc 时手动指定用户信息端点
+	RedirectURL    string `json:"redirect_url"`    // 回调地址（需与 IdP 注册一致）
+	Scopes         string `json:"scopes"`          // 空格分隔的作用域（缺省 openid email profile）
+	AutoProvision  bool   `json:"auto_provision"`  // 无匹配账号时自动按邮箱开通（默认 false）
+	DefaultTenantID int64 `json:"default_tenant_id"` // 自动开通归属租户（缺省 1）
+}
+
 // Config 保存运行时配置（等价于 Python lib.py 的模块级配置）
 type Config struct {
 	// 翻译 LLM（SiliconFlow）
@@ -101,6 +119,14 @@ type Config struct {
 	DBMaxOpenConns           int
 	DBMaxIdleConns           int
 	DBConnMaxLifetimeMinutes int
+
+	// Redis（阶段二：分布式锁/信号量/配额计数；空=未启用，自动降级进程内实现）
+	RedisAddr     string // Redis 地址（如 127.0.0.1:6379）；空则禁用
+	RedisPassword string // Redis 密码（空则无密码）
+
+	// SSO / OIDC（阶段六：企业身份联合登录）。SSOProviders 为空则未启用。
+	SSOProviders   []SSOProviderConfig // 各 IdP 配置（oidc/feishu/dingtalk）
+	SSOFrontendURL string              // 登录成功后重定向的前端基址（如 https://app.example.com）
 
 	// 上传/输出目录
 	UploadDir string // 上传文件目录
@@ -291,6 +317,31 @@ func Default() *Config {
 	}
 	if v := os.Getenv("DB_DSN"); v != "" {
 		c.DatabaseDSN = v
+	}
+	// Redis（阶段二）：REDIS_ADDR 非空即启用分布式能力，空则降级进程内。
+	if v := os.Getenv("REDIS_ADDR"); v != "" {
+		c.RedisAddr = v
+	}
+	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
+		c.RedisPassword = v
+	}
+	// SSO / OIDC（阶段六）：SSO_PROVIDERS 为 JSON 数组（SSOProviderConfig 列表）；
+	// SSO_FRONTEND_URL 为登录成功后重定向的前端基址。
+	if v := strings.TrimSpace(os.Getenv("SSO_PROVIDERS")); v != "" {
+		var providers []SSOProviderConfig
+		if err := json.Unmarshal([]byte(v), &providers); err != nil {
+			log.Printf("[config] SSO_PROVIDERS 解析失败（应为 JSON 数组）：%v", err)
+		} else {
+			c.SSOProviders = providers
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("SSO_FRONTEND_URL")); v != "" {
+		c.SSOFrontendURL = v
+	}
+	// ★ PostgreSQL 后端强校验（阶段一切流落地）：选型 postgres 但缺 DSN 直接拒绝，
+	// 避免「启动后才发现连不上」的半吊子状态（此前缺省回退 sqlite，会静默写错库）。
+	if c.DatabaseDriver == "postgres" && strings.TrimSpace(c.DatabaseDSN) == "" {
+		log.Fatal("[config] 已选择 PostgreSQL 后端（DB_DRIVER=postgres），但 DB_DSN 为空，无法连接数据库；请在 secrets.env 配置 DATABASE_DSN 后重启")
 	}
 	// 连接池（仅 postgres 生效）：经环境变量可调，未配置由 db.Open 取默认（MaxOpen=20）
 	if v := os.Getenv("DB_MAX_OPEN_CONNS"); v != "" {

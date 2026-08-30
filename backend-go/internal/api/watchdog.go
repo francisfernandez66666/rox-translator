@@ -49,6 +49,7 @@ func (s *Server) startWatchdog() {
 			interval = n
 		}
 	}
+	// 启动后台协程：按配置周期定时执行告警检查（如续费到期、余额耗尽等）
 	go func() {
 		ticker := time.NewTicker(time.Duration(interval) * time.Second)
 		defer ticker.Stop()

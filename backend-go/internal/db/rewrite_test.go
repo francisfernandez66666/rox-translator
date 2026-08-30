@@ -4,6 +4,7 @@ package db
 
 import "testing"
 
+// TestToDialectSQLiteNoop 验证 SQLite 方言下 ToDialect 原样返回（不翻译）。
 func TestToDialectSQLiteNoop(t *testing.T) {
 	in := "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, v BLOB, r REAL)"
 	if got := ToDialect(in, DialectSQLite); got != in {
@@ -11,6 +12,7 @@ func TestToDialectSQLiteNoop(t *testing.T) {
 	}
 }
 
+// TestToDialectPostgres 验证 PostgreSQL 下 AUTOINCREMENT/BLOB/REAL 等类型被正确翻译。
 func TestToDialectPostgres(t *testing.T) {
 	in := `CREATE TABLE t (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,6 +33,7 @@ func TestToDialectPostgres(t *testing.T) {
 	}
 }
 
+// TestRunAlterPostgresAddsIfNotExists 验证 PostgreSQL 下 ALTER 补列自动追加 IF NOT EXISTS 使其幂等。
 func TestRunAlterPostgresAddsIfNotExists(t *testing.T) {
 	in := "ALTER TABLE users ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"
 	want := "ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id INTEGER NOT NULL DEFAULT 0"

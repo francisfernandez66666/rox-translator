@@ -22,7 +22,7 @@ func writeTemp(t *testing.T, name, content string) string {
 	return p
 }
 
-// TestExtractSrt 字幕：跳过序号/时间轴，块内合并。
+// TestExtractSrt 字幕提取：跳过序号/时间轴，块内行合并为一条。
 func TestExtractSrt(t *testing.T) {
 	p := writeTemp(t, "a.srt", "1\n00:00:01,000 --> 00:00:02,000\nHello world\nsecond line\n\n2\n00:00:03,000 --> 00:00:04,000\nGoodbye\n")
 	texts, err := ExtractTexts(p)

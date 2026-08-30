@@ -31,6 +31,8 @@ import (
 
 	"translator/internal/billing"
 	"translator/internal/engine"
+	"translator/internal/infra/distlock"
+	"translator/internal/infra/redis"
 	"translator/internal/kb"
 	"translator/internal/mail"
 	"translator/internal/orchestrator"
@@ -41,14 +43,15 @@ import (
 
 // TicketService 工单服务。
 type TicketService struct {
-	Store  *store.Store
-	Engine *engine.Engine
-	Ten    *tenant.Store
-	DB     *kb.KBDatabase
-	Queue  queue.Queue
-	Bill   *billing.Service // 计费服务（用量流水；可 nil）
-	Mailer mail.Sender     // 默认邮件发送器（注册验证码/重置码等）；可 nil
-	InfoMailer mail.Sender // 专用邮箱发送器（产品手册等）；可 nil
+	Store      *store.Store
+	Engine     *engine.Engine
+	Ten        *tenant.Store
+	DB         *kb.KBDatabase
+	Queue      queue.Queue
+	Bill       *billing.Service // 计费服务（用量流水；可 nil）
+	Mailer     mail.Sender      // 默认邮件发送器（注册验证码/重置码等）；可 nil
+	InfoMailer mail.Sender      // 专用邮箱发送器（产品手册等）；可 nil
+	Notifier   queue.Notifier   // 多实例唤醒信号器（Redis 启用时注入；nil=轮询）
 
 	stopCh  chan struct{}
 	mu      sync.Mutex
@@ -62,7 +65,11 @@ func NewTicketService(st *store.Store, eng *engine.Engine, ts *tenant.Store, db 
 
 // EnqueueTicketRun 将工单翻译任务入队（立即返回，不阻塞 HTTP）。
 func (s *TicketService) EnqueueTicketRun(ctx context.Context, ticketID int64) (int64, error) {
-	return s.Queue.Enqueue(ctx, "ticket_run", queue.NewTicketPayload(ticketID), queue.DefaultMaxAttempts)
+	id, err := s.Queue.Enqueue(ctx, "ticket_run", queue.NewTicketPayload(ticketID), queue.DefaultMaxAttempts)
+	if err == nil && s.Notifier != nil {
+		_ = s.Notifier.Signal(ctx)
+	}
+	return id, err
 }
 
 // StartWorkers 启动 n 个 worker goroutine（幂等；重复调用忽略）。
@@ -101,6 +108,10 @@ func (s *TicketService) workerLoop(workerID string) {
 		default:
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		// 多实例唤醒：有信号器时阻塞等待（最长 1s），否则直接领取（等价于原轮询节奏）
+		if s.Notifier != nil {
+			s.Notifier.Wait(ctx, time.Second)
+		}
 		job, err := s.Queue.Reserve(ctx, workerID, queue.DefaultLeaseSec)
 		cancel()
 		if err != nil || job == nil {
@@ -150,7 +161,11 @@ func (s *TicketService) processJob(ctx context.Context, job *queue.Job) error {
 // EnqueueMail 将邮件投递异步化：入队由 worker 发送，失败自动重试直至死信。
 // 参数 useInfo=true 时使用专用邮箱（产品手册等）；否则默认邮箱。
 func (s *TicketService) EnqueueMail(ctx context.Context, msg *mail.Message, useInfo bool) (int64, error) {
-	return s.Queue.Enqueue(ctx, "mail_send", queue.NewMailPayload(msg, useInfo), 5)
+	id, err := s.Queue.Enqueue(ctx, "mail_send", queue.NewMailPayload(msg, useInfo), 5)
+	if err == nil && s.Notifier != nil {
+		_ = s.Notifier.Signal(ctx)
+	}
+	return id, err
 }
 
 // processMailJob 消费邮件任务：还原 mail.Message 并经对应 sender 发送。
@@ -335,9 +350,10 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 
 // chargeTokens 工单级 Token 实费展示回填：读取 ctx 收集器累计的真实 token。
 // ★ 性能优化 B1（修双重计费资损）：实时计量钩子（eng.LLM.OnUsage → ChargeUsageRealtime）
-//   已是唯一扣费来源，每次 LLM 调用即扣减并支持余额不足中止；本函数**不再二次扣费**，
-//   仅回填展示用的真实 token 数（TokensBilled）。强制计费开关仅影响实时路径是否落账，
-//   与这里无关。
+//
+//	已是唯一扣费来源，每次 LLM 调用即扣减并支持余额不足中止；本函数**不再二次扣费**，
+//	仅回填展示用的真实 token 数（TokensBilled）。强制计费开关仅影响实时路径是否落账，
+//	与这里无关。
 func (s *TicketService) chargeTokens(ctx context.Context, t *store.Ticket) int64 {
 	if s.Engine == nil {
 		return 0
@@ -390,20 +406,31 @@ func lowBalanceThreshold() int64 {
 // StartStallSweep 卡死工单巡检：每 5 分钟扫描 in_progress 且 updated_at 超过 20 分钟的工单，
 // 重置为 queued 触发断点续传（worker 收尾前已有取消复查，重排安全）。防信号量饿死类静默卡死。
 // ★ 同周期顺带执行商业化巡检：订单15min超时自动关闭（CloseStalePendingOrders）+ 低额提醒（24h去重）。
+// 阶段二：多实例部署下用分布式锁保证巡检同一时刻仅一个实例执行（避免重复告警/重复下单关闭）。
 func (s *TicketService) StartStallSweep() {
+	// 分布式锁（Redis 启用时跨实例互斥；未启用则进程内锁，单实例行为不变）。
+	lock := distlock.New("lock:stallsweep", redis.Get())
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
 		for range t.C {
-			s.Store.CloseStalePendingOrders()                     // ★ 订单15min超时自动关闭
-			s.Store.TenantLowBalanceAlerts(lowBalanceThreshold()) // ★ 低额提醒(24h去重)
-			n, err := s.Store.RequeueStalledTickets(20 * time.Minute)
-			if err != nil {
+			// 非阻塞获取：拿不到说明其他实例正在巡检，本实例直接跳过本轮（尽力而为）。
+			got, release, err := lock.TryLock(context.Background(), 6*time.Minute)
+			if err != nil || !got {
 				continue
 			}
-			if n > 0 {
-				s.Store.CreateAlert(0, "warning", "stall",
-					fmt.Sprintf("检测到 %d 个翻译卡死工单（>20min 无进展），已自动重新排队续跑", n))
-			}
+			func() {
+				defer release()
+				s.Store.CloseStalePendingOrders()                     // ★ 订单15min超时自动关闭
+				s.Store.TenantLowBalanceAlerts(lowBalanceThreshold()) // ★ 低额提醒(24h去重)
+				n, rerr := s.Store.RequeueStalledTickets(20 * time.Minute)
+				if rerr != nil {
+					return
+				}
+				if n > 0 {
+					s.Store.CreateAlert(0, "warning", "stall",
+						fmt.Sprintf("检测到 %d 个翻译卡死工单（>20min 无进展），已自动重新排队续跑", n))
+				}
+			}()
 		}
 	}()
 }
