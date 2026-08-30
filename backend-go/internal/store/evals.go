@@ -6,6 +6,7 @@ package store
 
 import (
 	"time"
+	"translator/internal/db"
 )
 
 // EvalRecord 评估记录
@@ -28,13 +29,13 @@ type EvalRecord struct {
 // 参数：r=评估记录结构体（TenantID/UserID/TicketID/TaskType/Model/InputText/OutputText/Scores/Total/Status 必填）。
 // 返回：新记录 ID 或错误。
 func (s *Store) SaveEvalRecord(r *EvalRecord) (int64, error) {
-	res, err := s.db.Exec(
+	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
 		"INSERT INTO eval_records (tenant_id, user_id, ticket_id, task_type, model, input_text, output_text, scores, total, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
 		r.TenantID, r.UserID, r.TicketID, r.TaskType, r.Model, r.InputText, r.OutputText, r.Scores, r.Total, r.Status, time.Now().Format(time.RFC3339))
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 // ListEvalRecords 查询评估记录列表（租户隔离）。
@@ -44,7 +45,7 @@ func (s *Store) ListEvalRecords(tid int64, limit int) ([]*EvalRecord, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100 // 非法 limit 收敛到默认 100
 	}
-	rows, err := s.db.Query("SELECT id, tenant_id, user_id, ticket_id, task_type, model, input_text, output_text, scores, total, status, created_at FROM eval_records WHERE tenant_id=? ORDER BY id DESC LIMIT ?", tid, limit)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT id, tenant_id, user_id, ticket_id, task_type, model, input_text, output_text, scores, total, status, created_at FROM eval_records WHERE tenant_id=? ORDER BY id DESC LIMIT ?", tid, limit)
 	if err != nil {
 		return nil, err
 	}

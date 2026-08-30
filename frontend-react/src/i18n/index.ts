@@ -26,6 +26,7 @@ import * as pReferral from './panels/referral'
 import { baseZh } from './dicts.zh'
 import { baseEn } from './dicts.en'
 
+// 语言类型：'zh' 中文 / 'en' 英文（i18n 全部取词与切换基于此类型）
 export type Lang = 'zh' | 'en'
 type Dict = Record<string, string>
 

@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"time"
+	"translator/internal/db"
 )
 
 // APIKey 租户开放 API Key
@@ -42,8 +43,9 @@ func HashAPIKey(key string) string {
 // randToken 生成 n 字节密码学随机数的十六进制串（API Key 明文专用）。
 //
 // ★ 安全（2026-08-26 全仓评审 A4）：Key 是鉴权凭证，必须用 crypto/rand——
-//   此前复用 randSuffix（UnixNano 种子的线性同余伪随机，服务于订单号可读性），
-//   其输出空间与种子可预测性不满足凭证强度要求。
+//
+//	此前复用 randSuffix（UnixNano 种子的线性同余伪随机，服务于订单号可读性），
+//	其输出空间与种子可预测性不满足凭证强度要求。
 func randToken(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
@@ -65,7 +67,7 @@ func (s *Store) CreateAPIKey(tid, userID int64, name, perms string, dailyLimit i
 	if perms == "" {
 		perms = "translate" // 默认只给翻译权限，最小权限原则
 	}
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO api_keys (tenant_id, user_id, key_hash, key_prefix, name, perms, status, created_at, daily_call_limit, key_enc) VALUES (?,?,?, ?,?, ?, 'active', ?, ?, ?)",
 		tid, userID, HashAPIKey(plain), plain[:10], name, perms, time.Now().Format(time.RFC3339), dailyLimit, EncryptPlain(plain))
 	if err != nil {
@@ -76,14 +78,14 @@ func (s *Store) CreateAPIKey(tid, userID int64, name, perms string, dailyLimit i
 
 // SetAPIKeyDailyLimit 设置 Key 每日调用上限（R4 Key 级配额；0=不限）。
 func (s *Store) SetAPIKeyDailyLimit(id, tid, limit int64) error {
-	_, err := s.db.Exec("UPDATE api_keys SET daily_call_limit=? WHERE id=? AND tenant_id=?", limit, id, tid)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE api_keys SET daily_call_limit=? WHERE id=? AND tenant_id=?", limit, id, tid)
 	return err
 }
 
 // GetAPIKeyByHash 按哈希查询 API Key（用于开放 API 鉴权：把请求携带的 Key 哈希后精确匹配）。
 // 参数：hash=SHA-256 哈希；返回匹配的 API Key 记录。
 func (s *Store) GetAPIKeyByHash(hash string) (*APIKey, error) {
-	row := s.db.QueryRow("SELECT id, tenant_id, COALESCE(user_id,0), key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count, COALESCE(daily_call_limit,0), COALESCE(calls_today,0), COALESCE(calls_today_date,''), COALESCE(key_enc,'') FROM api_keys WHERE key_hash=?", hash)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, COALESCE(user_id,0), key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count, COALESCE(daily_call_limit,0), COALESCE(calls_today,0), COALESCE(calls_today_date,''), COALESCE(key_enc,'') FROM api_keys WHERE key_hash=?", hash)
 	var k APIKey
 	if err := row.Scan(&k.ID, &k.TenantID, &k.UserID, &k.KeyHash, &k.KeyPrefix, &k.Name, &k.Perms, &k.Status, &k.CreatedAt, &k.LastUsedAt, &k.CallCount, &k.DailyCallLimit, &k.CallsToday, &k.CallsTodayDate, &k.KeyEnc); err != nil {
 		return nil, err
@@ -94,7 +96,7 @@ func (s *Store) GetAPIKeyByHash(hash string) (*APIKey, error) {
 // GetAPIKey 按 ID+租户查询 API Key（用于管理端轮换：必须同时校验租户归属，防止越权访问）。
 // 参数：id=Key 主键 ID，tid=租户 ID。
 func (s *Store) GetAPIKey(id, tid int64) (*APIKey, error) {
-	row := s.db.QueryRow("SELECT id, tenant_id, COALESCE(user_id,0), key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count, COALESCE(daily_call_limit,0), COALESCE(calls_today,0), COALESCE(calls_today_date,''), COALESCE(key_enc,'') FROM api_keys WHERE id=? AND tenant_id=?", id, tid)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, COALESCE(user_id,0), key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count, COALESCE(daily_call_limit,0), COALESCE(calls_today,0), COALESCE(calls_today_date,''), COALESCE(key_enc,'') FROM api_keys WHERE id=? AND tenant_id=?", id, tid)
 	var k APIKey
 	if err := row.Scan(&k.ID, &k.TenantID, &k.UserID, &k.KeyHash, &k.KeyPrefix, &k.Name, &k.Perms, &k.Status, &k.CreatedAt, &k.LastUsedAt, &k.CallCount, &k.DailyCallLimit, &k.CallsToday, &k.CallsTodayDate, &k.KeyEnc); err != nil {
 		return nil, err
@@ -114,9 +116,9 @@ func (s *Store) ListAPIKeys(tid int64) ([]*APIKey, error) {
 	var rows *sql.Rows
 	var err error
 	if tid > 0 {
-		rows, err = s.db.Query(q, tid)
+		rows, err = db.Query(s.db, db.CurrentDialect(), q, tid)
 	} else {
-		rows, err = s.db.Query(q)
+		rows, err = db.Query(s.db, db.CurrentDialect(), q)
 	}
 	if err != nil {
 		return nil, err
@@ -136,14 +138,14 @@ func (s *Store) ListAPIKeys(tid int64) ([]*APIKey, error) {
 // SetAPIKeyStatus 启用/停用 API Key（管理端轮换/吊销）。
 // 参数：id=Key 主键 ID，tid=租户 ID，status=新状态（active/disabled）。
 func (s *Store) SetAPIKeyStatus(id, tid int64, status string) error {
-	_, err := s.db.Exec("UPDATE api_keys SET status=? WHERE id=? AND tenant_id=?", status, id, tid)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE api_keys SET status=? WHERE id=? AND tenant_id=?", status, id, tid)
 	return err
 }
 
 // DeleteAPIKey 删除 API Key（永久吊销）。
 // 参数：id=Key 主键 ID，tid=租户 ID（租户隔离校验）。
 func (s *Store) DeleteAPIKey(id, tid int64) error {
-	_, err := s.db.Exec("DELETE FROM api_keys WHERE id=? AND tenant_id=?", id, tid)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM api_keys WHERE id=? AND tenant_id=?", id, tid)
 	return err
 }
 
@@ -151,7 +153,7 @@ func (s *Store) DeleteAPIKey(id, tid int64) error {
 // 参数：id=Key 主键 ID；忽略错误（统计失败不影响业务主流程）。
 func (s *Store) TouchAPIKey(id int64) {
 	today := time.Now().Format("2006-01-02")
-	_, _ = s.db.Exec(`UPDATE api_keys SET call_count=call_count+1, last_used_at=?,
+	_, _ = db.Exec(s.db, db.CurrentDialect(), `UPDATE api_keys SET call_count=call_count+1, last_used_at=?,
 		calls_today = CASE WHEN calls_today_date=? THEN calls_today+1 ELSE 1 END,
 		calls_today_date=?
 		WHERE id=?`, time.Now().Format(time.RFC3339), today, today, id)
@@ -160,7 +162,7 @@ func (s *Store) TouchAPIKey(id int64) {
 // GetAPIKeyPlain 解密返回 Key 明文（租户隔离校验；供「固定复制」能力使用）。
 func (s *Store) GetAPIKeyPlain(id, tid int64) (string, error) {
 	var enc string
-	err := s.db.QueryRow("SELECT COALESCE(key_enc,'') FROM api_keys WHERE id=? AND tenant_id=?", id, tid).Scan(&enc)
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(key_enc,'') FROM api_keys WHERE id=? AND tenant_id=?", id, tid).Scan(&enc)
 	if err != nil {
 		return "", err
 	}
@@ -171,7 +173,7 @@ func (s *Store) GetAPIKeyPlain(id, tid int64) (string, error) {
 // 注销即收回其签发 Key 的调用权限（status=disabled 即时生效）；账号恢复启用后
 // 可由管理员在 API Key 面板逐条重新启用。返回停用条数。
 func (s *Store) DisableAPIKeysByUser(tid, userID int64) int64 {
-	res, err := s.db.Exec("UPDATE api_keys SET status='disabled' WHERE tenant_id=? AND user_id=? AND status='active'", tid, userID)
+	res, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE api_keys SET status='disabled' WHERE tenant_id=? AND user_id=? AND status='active'", tid, userID)
 	if err != nil {
 		return 0
 	}

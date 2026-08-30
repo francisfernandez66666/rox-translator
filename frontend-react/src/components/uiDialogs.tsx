@@ -1,3 +1,6 @@
+// ============ 本文件职责中文说明 ============
+// 确认/输入弹窗组件（基于 TDesign DialogPlugin，替代原生 confirm/prompt）
+// =============================================
 // uiDialogs.tsx — 基于 TDesign DialogPlugin 的确认/输入弹窗
 // 替代 window.confirm / window.prompt（PROGRESS.md 禁用原生弹窗）。
 // 以 Promise 形式返回，方便在 async 函数里 await，保持原有 if (!confirm) return 的控制流。

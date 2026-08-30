@@ -23,10 +23,16 @@ func TestCanManagePackType(t *testing.T) {
 		{super, store.PackDepartment, true},
 		{super, store.PackIndustry, true},
 		{super, store.PackLocale, true},
+		{super, store.PackCrossDept, true},
 		{tenantAdmin, store.PackTenant, true},
 		{tenantAdmin, store.PackDepartment, true},
+		{tenantAdmin, store.PackCrossDept, true},
 		{tenantAdmin, store.PackIndustry, false},
 		{tenantAdmin, store.PackLocale, false},
+		{&store.User{Role: "dept_admin", OrgID: 5}, store.PackDepartment, true},
+		{&store.User{Role: "dept_admin", OrgID: 5}, store.PackCrossDept, true},
+		{&store.User{Role: "dept_admin", OrgID: 5}, store.PackTenant, false},
+		{&store.User{Role: "dept_admin", OrgID: 5}, store.PackIndustry, false},
 	}
 	for _, c := range cases {
 		if got := canManagePackType(c.u, c.packType); got != c.want {

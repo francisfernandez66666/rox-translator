@@ -1,10 +1,11 @@
 // ============ 本文件职责中文说明 ============
 // direct 队列驱动：基于 jobs 表的进程内实现（SQLite 持久化）。
-// - Enqueue：INSERT queued
-// - Reserve：原子领取（queued 或 租约过期的 running → running + 刷新租约）
-// - MarkDone/MarkFailed：完成置 done；失败用单条 CASE WHEN 原子更新，
-//   attempts<max 回 queued（延迟由 updated_at 排序天然实现），超限置 dead
-// - RecoverStale：启动/巡检时把租约过期的 running 重置回 queued（崩溃自愈）
+//   - Enqueue：INSERT queued
+//   - Reserve：原子领取（queued 或 租约过期的 running → running + 刷新租约）
+//   - MarkDone/MarkFailed：完成置 done；失败用单条 CASE WHEN 原子更新，
+//     attempts<max 回 queued（延迟由 updated_at 排序天然实现），超限置 dead
+//   - RecoverStale：启动/巡检时把租约过期的 running 重置回 queued（崩溃自愈）
+//
 // 未来 Kafka 驱动：实现同一 Queue 接口；jobs 表仍作为状态账本共用。
 // =============================================
 package queue
@@ -15,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+	"translator/internal/db"
 )
 
 // DirectQueue 基于 SQL 存储的队列实现（与业务共用同一 SQLite 连接）。
@@ -36,13 +38,9 @@ func (q *DirectQueue) Enqueue(ctx context.Context, jobType string, payload []byt
 		maxAttempts = DefaultMaxAttempts
 	}
 	now := Now().Format(time.RFC3339)
-	res, err := q.db.ExecContext(ctx,
+	return db.InsertID(q.db, db.CurrentDialect(), "id",
 		"INSERT INTO jobs (type, payload, status, attempts, max_attempts, leased_by, leased_at, timeout_sec, error, created_at, updated_at) VALUES (?,?, 'queued',0,?,'','',?, '', ?, ?)",
 		jobType, string(payload), maxAttempts, DefaultLeaseSec, now, now)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
 }
 
 // Reserve 原子领取下一个可执行任务：
@@ -71,7 +69,7 @@ func (q *DirectQueue) Reserve(ctx context.Context, workerID string, leaseSec int
 	}
 	var j Job
 	var payload string // modernc/sqlite TEXT 返回 string；json.RawMessage 直接扫描会报 unsupported Scan
-	err = q.db.QueryRow("SELECT "+jobCols+" FROM jobs WHERE leased_by=? AND status='running' ORDER BY id DESC LIMIT 1", workerID).
+	err = db.QueryRow(q.db, db.CurrentDialect(), "SELECT "+jobCols+" FROM jobs WHERE leased_by=? AND status='running' ORDER BY id DESC LIMIT 1", workerID).
 		Scan(&j.ID, &j.Type, &payload, &j.Status, &j.Attempts, &j.MaxAttempts, &j.Error)
 	if err != nil {
 		return nil, fmt.Errorf("reserve scan: %w", err)

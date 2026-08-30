@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"translator/internal/db"
 )
 
 // SysConfig 系统配置项（DB 持久化 + 内存缓存）
@@ -25,7 +26,7 @@ type SysConfig struct {
 // 参数：key=配置键名；返回配置值（无记录时返回 "" 且无错误）。
 func (s *Store) GetConfig(key string) (string, error) {
 	var v string
-	err := s.db.QueryRow("SELECT value FROM system_config WHERE key=?", key).Scan(&v)
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT value FROM system_config WHERE key=?", key).Scan(&v)
 	if err == sql.ErrNoRows {
 		return "", nil // 键不存在按空串处理
 	}
@@ -36,7 +37,7 @@ func (s *Store) GetConfig(key string) (string, error) {
 // 参数：key=配置键名，value=配置值；返回错误。
 func (s *Store) SetConfig(key, value string) error {
 	// ON CONFLICT(key) 实现 upsert，保证键唯一
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO system_config (key, value, updated_at) VALUES (?,?,?) "+
 			"ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
 		key, value, time.Now().Format(time.RFC3339))
@@ -46,7 +47,7 @@ func (s *Store) SetConfig(key, value string) error {
 // AllConfigs 返回全部配置项（按键名排序）。
 // 返回：配置项切片。
 func (s *Store) AllConfigs() ([]SysConfig, error) {
-	rows, err := s.db.Query("SELECT key, value, COALESCE(updated_at,'') FROM system_config ORDER BY key")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT key, value, COALESCE(updated_at,'') FROM system_config ORDER BY key")
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +151,7 @@ func (s *Store) SaveTenantQuotaCfg(tid int64, qps, concurrent int) error {
 // 返回：map[租户ID]=配额；解析失败的行跳过。
 func (s *Store) LoadTenantQuotaConfigs() map[int64]TenantQuotaCfg {
 	out := map[int64]TenantQuotaCfg{}
-	rows, err := s.db.Query("SELECT key, value FROM system_config WHERE key LIKE 'tenant_quota_%'")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT key, value FROM system_config WHERE key LIKE 'tenant_quota_%'")
 	if err != nil {
 		return out
 	}

@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"translator/internal/db"
 )
 
 // TmReview 待审候选
@@ -40,15 +41,15 @@ func tmHash(v string) string { h := sha256.Sum256([]byte(v)); return hex.EncodeT
 
 // TmReviewMigrate 建表（幂等）。
 func (s *Store) TmReviewMigrate() {
-	s.db.Exec(`CREATE TABLE IF NOT EXISTS tm_review (
+	db.Exec(s.db, db.CurrentDialect(), `CREATE TABLE IF NOT EXISTS tm_review (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		tenant_id INTEGER NOT NULL DEFAULT 0,
 		zh TEXT NOT NULL, lang TEXT NOT NULL DEFAULT 'en', trans TEXT NOT NULL,
 		source TEXT DEFAULT '', ref_type TEXT DEFAULT '', ref_id INTEGER DEFAULT 0,
 		hit_count INTEGER DEFAULT 0, status TEXT DEFAULT 'pending',
 		reviewer TEXT DEFAULT '', reviewed_at TEXT DEFAULT '', created_at TEXT)`)
-	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_tm_review_status ON tm_review(status, id DESC)`)
-	s.db.Exec(`CREATE TABLE IF NOT EXISTS tm_hit_count (
+	db.Exec(s.db, db.CurrentDialect(), `CREATE INDEX IF NOT EXISTS idx_tm_review_status ON tm_review(status, id DESC)`)
+	db.Exec(s.db, db.CurrentDialect(), `CREATE TABLE IF NOT EXISTS tm_hit_count (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		tenant_id INTEGER NOT NULL,
 		zh_hash TEXT NOT NULL, lang TEXT NOT NULL, trans_hash TEXT NOT NULL,
@@ -81,7 +82,7 @@ func maskPII(s string) string {
 // 避免 store→tenant 反向依赖）。true=该租户已关闭数据回流。
 func (s *Store) feedbackOptOut(tid int64) bool {
 	var raw string
-	if err := s.db.QueryRow("SELECT COALESCE(policy_config,'{}') FROM tenants WHERE id=?", tid).Scan(&raw); err != nil {
+	if err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(policy_config,'{}') FROM tenants WHERE id=?", tid).Scan(&raw); err != nil {
 		return false // 查询异常按「参与」处理（与默认开启语义一致）
 	}
 	var pc struct {
@@ -106,13 +107,13 @@ func (s *Store) CreateTmReview(r *TmReview) error {
 	if r.Status == "" {
 		r.Status = "pending"
 	}
-	res, err := s.db.Exec(
+	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
 		"INSERT INTO tm_review (tenant_id, zh, lang, trans, source, ref_type, ref_id, hit_count, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
 		r.TenantID, r.Zh, r.Lang, r.Trans, r.Source, r.RefType, r.RefID, r.HitCount, r.Status, r.CreatedAt)
 	if err != nil {
 		return err
 	}
-	r.ID, _ = res.LastInsertId()
+	r.ID = id
 	return nil
 }
 
@@ -125,7 +126,7 @@ func (s *Store) ListTmReviews(status string) ([]*TmReview, error) {
 		args = append(args, status)
 	}
 	q += " ORDER BY id DESC LIMIT 200"
-	rows, err := s.db.Query(q, args...)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +145,7 @@ func (s *Store) ListTmReviews(status string) ([]*TmReview, error) {
 
 // GetTmReview 单条。
 func (s *Store) GetTmReview(id int64) (*TmReview, error) {
-	row := s.db.QueryRow("SELECT "+tmReviewCols+" FROM tm_review WHERE id=?", id)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+tmReviewCols+" FROM tm_review WHERE id=?", id)
 	var r TmReview
 	err := row.Scan(&r.ID, &r.TenantID, &r.Zh, &r.Lang, &r.Trans, &r.Source,
 		&r.RefType, &r.RefID, &r.HitCount, &r.Status, &r.Reviewer, &r.ReviewedAt, &r.CreatedAt)
@@ -153,7 +154,7 @@ func (s *Store) GetTmReview(id int64) (*TmReview, error) {
 
 // SetTmReviewStatus 审核状态变更。
 func (s *Store) SetTmReviewStatus(id int64, status, reviewer string) error {
-	_, err := s.db.Exec("UPDATE tm_review SET status=?, reviewer=?, reviewed_at=? WHERE id=?",
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tm_review SET status=?, reviewer=?, reviewed_at=? WHERE id=?",
 		status, reviewer, time.Now().Format(time.RFC3339), id)
 	return err
 }
@@ -161,7 +162,7 @@ func (s *Store) SetTmReviewStatus(id int64, status, reviewer string) error {
 // HasActiveTmReview 同对已有 pending/approved。
 func (s *Store) HasActiveTmReview(tid int64, zh, lang, trans string) bool {
 	var one int
-	return s.db.QueryRow("SELECT 1 FROM tm_review WHERE tenant_id=? AND zh=? AND lang=? AND trans=? AND status IN ('pending','approved') LIMIT 1",
+	return db.QueryRow(s.db, db.CurrentDialect(), "SELECT 1 FROM tm_review WHERE tenant_id=? AND zh=? AND lang=? AND trans=? AND status IN ('pending','approved') LIMIT 1",
 		tid, zh, lang, trans).Scan(&one) == nil
 }
 
@@ -174,14 +175,14 @@ func (s *Store) BumpTmHit(tid int64, zh, lang, trans string, threshold int64) (i
 	zh = maskPII(zh)
 	trans = maskPII(trans)
 	now := time.Now().Format(time.RFC3339)
-	if _, err := s.db.Exec(`INSERT INTO tm_hit_count (tenant_id, zh_hash, lang, trans_hash, zh, trans, n)
+	if _, err := db.Exec(s.db, db.CurrentDialect(), `INSERT INTO tm_hit_count (tenant_id, zh_hash, lang, trans_hash, zh, trans, n)
 		VALUES (?,?,?,?,?,?,1)
 		ON CONFLICT(tenant_id, zh_hash, lang, trans_hash) DO UPDATE SET n=n+1`,
 		tid, tmHash(zh), lang, tmHash(trans), zh, trans); err != nil {
 		return 0, false, err
 	}
 	var n int64
-	if err := s.db.QueryRow(`SELECT n FROM tm_hit_count WHERE tenant_id=? AND zh_hash=? AND lang=? AND trans_hash=?`,
+	if err := db.QueryRow(s.db, db.CurrentDialect(), `SELECT n FROM tm_hit_count WHERE tenant_id=? AND zh_hash=? AND lang=? AND trans_hash=?`,
 		tid, tmHash(zh), lang, tmHash(trans)).Scan(&n); err != nil {
 		return 0, false, err
 	}
@@ -239,7 +240,7 @@ func (s *Store) BumpTmHitsBatch(tid int64, pairs []TmHitPair, threshold int64) [
 	}
 	defer tx.Rollback()
 	for _, p := range uniq {
-		if _, e := tx.Exec(`INSERT INTO tm_hit_count (tenant_id, zh_hash, lang, trans_hash, zh, trans, n)
+		if _, e := db.Exec(tx, db.CurrentDialect(), `INSERT INTO tm_hit_count (tenant_id, zh_hash, lang, trans_hash, zh, trans, n)
 			VALUES (?,?,?,?,?,?,1)
 			ON CONFLICT(tenant_id, zh_hash, lang, trans_hash) DO UPDATE SET n=n+1`,
 			tid, tmHash(p.Zh), p.Lang, tmHash(p.Trans), p.Zh, p.Trans); e != nil {
@@ -256,7 +257,7 @@ func (s *Store) BumpTmHitsBatch(tid int64, pairs []TmHitPair, threshold int64) [
 	var created []string
 	for _, p := range uniq {
 		var n int64
-		if err := s.db.QueryRow(`SELECT n FROM tm_hit_count WHERE tenant_id=? AND zh_hash=? AND lang=? AND trans_hash=?`,
+		if err := db.QueryRow(s.db, db.CurrentDialect(), `SELECT n FROM tm_hit_count WHERE tenant_id=? AND zh_hash=? AND lang=? AND trans_hash=?`,
 			tid, tmHash(p.Zh), p.Lang, tmHash(p.Trans)).Scan(&n); err != nil {
 			continue
 		}

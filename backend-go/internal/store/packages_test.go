@@ -23,12 +23,15 @@ func newTestStoreWithTenants(t *testing.T) *Store {
 		"status" TEXT NOT NULL DEFAULT 'active',
 		"expires_at" TEXT NOT NULL DEFAULT '',
 		"permissions" TEXT NOT NULL DEFAULT '{}',
+		"is_personal" INTEGER NOT NULL DEFAULT 0,
 		"created_at" TEXT,
 		"updated_at" TEXT
 	)`); err != nil {
 		t.Fatalf("建 tenants 表失败: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO tenants (code, name, status, expires_at, permissions) VALUES ('test','测试租户','active','','{}')`); err != nil {
+	// 测试租户标记为个人用户（is_personal=1）：邀请裂变付费奖励仅个人用户可得，
+	// 缺省 0 会导致 RewardPaidPermanent 的 is_personal 校验静默跳过奖励，使交易类用例误红。
+	if _, err := db.Exec(`INSERT INTO tenants (code, name, status, expires_at, permissions, is_personal) VALUES ('test','测试租户','active','','{}',1)`); err != nil {
 		t.Fatalf("插入测试租户失败: %v", err)
 	}
 	s, err := New(db)

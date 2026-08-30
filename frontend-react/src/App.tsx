@@ -39,6 +39,7 @@ import Bell from './components/Bell'
 import AdminDashboard from './components/admin/AdminDashboard'
 import AccountMenu from './components/AccountMenu'
 import SiteFooter from './components/SiteFooter'
+import { BalancePanel, ReferralPanel, MyPackagePanel, AccountPanel } from './components/selfservice'
 import KbUploadDialog from './components/KbUploadDialog'
 import { EmailBindModal } from './components/modals'
 import { BrandingProvider, useBranding } from './branding'
@@ -64,6 +65,11 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
   const [lang, t] = useT()
   // 当前顶部 Tab：工作台或工单
   const [tab, setTab] = useState<'workbench' | 'tickets'>(window.location.pathname.startsWith('/tickets') ? 'tickets' : 'workbench')
+  // 端用户自服务路径（余额 / 我的邀请 / 我的套餐 / 我的账号）
+  const path = usePath()
+  function navigate(to: string) {
+    if (window.location.pathname !== to) { window.history.pushState({}, '', to); window.dispatchEvent(new PopStateEvent('popstate')) }
+  }
   // 余额徽标展示文本
   const [pkgLine, setPkgLine] = useState('')
   // 是否未绑定邮箱（强制弹窗）
@@ -110,6 +116,24 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: '#fafbfd' }}>
       <style>{'@keyframes appspin{to{transform:rotate(360deg)}}'}</style>
+      <style>{`
+        .ss-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
+        .ss-grid .t-card{width:100%}
+        .ss-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f0f0f0}
+        .ss-row span{color:#666}.ss-row b{font-size:18px}
+        .ss-copy{display:flex;align-items:center;gap:8px}
+        .ss-stats{display:flex;gap:24px;padding:12px 0}
+        .ss-stat{text-align:center}
+        .ss-stat b{display:block;font-size:20px;color:#2f47f5}
+        .ss-table{width:100%;border-collapse:collapse}
+        .ss-table th,.ss-table td{border:1px solid #e8e8e8;padding:6px 8px;text-align:left}
+        .ss-table th{background:#fafbfc}
+        .ss-quick{display:flex;flex-wrap:wrap;gap:8px}
+        .ss-drawer-nav{display:flex;flex-direction:column;padding:8px 0;border-bottom:1px solid #f0f0f0}
+        .ss-drawer-item{padding:12px 16px;cursor:pointer;border-bottom:1px solid #f5f5f5;font-size:15px}
+        .ss-drawer-item:hover{background:#f0f5ff}
+        .ss-loading{display:flex;justify-content:center;padding:40px}
+      `}</style>`
       {/* 顶部导航栏：品牌、Tab、余额、通知、语言、账号菜单 */}
       <header className="app-header">
         <Button variant="text" shape="square" onClick={() => setMenuOpen(true)} aria-label="menu" style={{ fontSize: 20, padding: '0 8px' }}>☰</Button>
@@ -143,11 +167,20 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
             {/* 启动提示文案 */}
             <p style={{ fontSize: 16, color: '#5f6368' }}>{t('app.starting')}</p>
           </div>
-        ) : tab === 'tickets' ? <TicketsPage /> : <ChatWindow />}
+        ) : path === '/billing' ? <BalancePanel />
+          : path === '/invites' ? <ReferralPanel />
+          : path === '/packages' ? <MyPackagePanel />
+          : path === '/my' ? <AccountPanel />
+          : tab === 'tickets' ? <TicketsPage /> : <ChatWindow />}
       </div>
 
       {/* 侧边隐藏菜单：原前台页脚内容收入此处（汉堡按钮唤起） */}
-      <Drawer visible={menuOpen} onClose={() => setMenuOpen(false)} header={t('app.more') || '更多'} size="320px" footer={false}>
+      <Drawer visible={menuOpen} onClose={() => setMenuOpen(false)} header={t('app.more') || '更多'} size="340px" footer={false}>
+        <nav className="ss-drawer-nav">
+          {[['/billing','💰 我的余额'],['/invites','🔗 我的邀请'],['/packages','💎 我的套餐'],['/my','👤 我的账号']].map(([p,l]) => (
+            <div key={p} className="ss-drawer-item" onClick={() => { navigate(p); setMenuOpen(false) }}>{l}</div>
+          ))}
+        </nav>
         <SiteFooter />
       </Drawer>
 

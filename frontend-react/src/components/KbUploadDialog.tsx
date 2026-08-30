@@ -5,7 +5,7 @@
 // 部门包按组织层级以多级下拉框（Cascader）展示，叶子即包名（一级只显示名字）。
 import { useEffect, useState } from 'react'
 import { Dialog, Button, Cascader, Tag, MessagePlugin } from 'tdesign-react'
-import { t } from '@/i18n'
+import { t, tpl } from '@/i18n'
 import { kbRecognizeFile, kbPackages, kbImportFile } from '@/api/kb'
 import { orgList, type OrgInfo } from '@/api/org'
 import { useAdmin } from '@/stores/admin'
@@ -29,6 +29,9 @@ interface Pkg {
   org_id?: number
   org_name?: string
   tenant_name?: string
+  share_cross_dept?: number
+  cross_all?: boolean
+  cross_orgs?: number[]
 }
 
 interface COpt {
@@ -80,6 +83,7 @@ export function buildKbCascaderOptions(pkgs: Pkg[], orgs: OrgInfo[]): COpt[] {
   const tenantPkgs = pkgs.filter((p) => p.pack_type === 'tenant')
   const industryPkgs = pkgs.filter((p) => p.pack_type === 'industry')
   const localePkgs = pkgs.filter((p) => p.pack_type === 'locale')
+  const crossDeptPkgs = pkgs.filter((p) => p.pack_type === 'cross_dept')
   const deptByOrg = new Map<number, Pkg[]>()
   for (const p of pkgs) {
     if (p.pack_type === 'department') {
@@ -107,7 +111,20 @@ export function buildKbCascaderOptions(pkgs: Pkg[], orgs: OrgInfo[]): COpt[] {
   if (localePkgs.length) {
     options.push({ label: t('kb.typeLocale'), value: -3, children: localePkgs.map((p) => ({ label: p.name, value: p.id })) })
   }
+  if (crossDeptPkgs.length) {
+    options.push({ label: t('kb.typeCrossDept'), value: -4, children: crossDeptPkgs.map((p) => ({ label: p.name, value: p.id })) })
+  }
   return options
+}
+
+// 知识包可见范围文案（按澄清的五档权限模型：部门/跨部门/企业/行业/通用语言习惯包）
+function pkgScopeText(p: Pkg, t: (k: string) => string, tpl: (k: string, vars?: Record<string, string | number>) => string): string {
+  if (p.pack_type === 'locale') return t('kb.scopeUniversal')
+  if (p.pack_type === 'industry') return t('kb.scopeIndustry')
+  if (p.pack_type === 'tenant') return t('kb.scopeTenant')
+  if (p.pack_type === 'cross_dept') return p.cross_all ? t('kb.scopeCrossAll') : tpl('kb.scopeCrossDepts', { n: (p.cross_orgs || []).length })
+  if (p.pack_type === 'department') return (p.share_cross_dept ?? 1) === 1 ? t('kb.scopeCross') : t('kb.scopeDept')
+  return ''
 }
 
 export default function KbUploadDialog({ visible, onClose }: Props) {
@@ -222,6 +239,14 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
             <Button theme="success" onClick={() => void startImport()} disabled={!pkgId || importing} loading={importing}>
               {t('kb.import')}
             </Button>
+            {pkgId > 0 ? (() => {
+              const p = pkgs.find((x) => x.id === pkgId)
+              return p ? (
+                <span style={{ fontSize: 12, color: '#889' }}>
+                  {t('kb.scopePrefix')}{pkgScopeText(p, t, tpl)}
+                </span>
+              ) : null
+            })() : null}
           </div>
         </div>
       )}

@@ -8,6 +8,7 @@ package store
 import (
 	"database/sql"
 	"time"
+	"translator/internal/db"
 )
 
 // TicketFile 工单源文件
@@ -27,20 +28,19 @@ const ticketFileCols = "id, tenant_id, ticket_id, file_name, file_path, COALESCE
 // AddTicketFile 为工单登记一个源文件。
 func (s *Store) AddTicketFile(tf *TicketFile) (*TicketFile, error) {
 	tf.CreatedAt = time.Now().Format(time.RFC3339)
-	res, err := s.db.Exec(
+	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
 		"INSERT INTO ticket_files (tenant_id, ticket_id, file_name, file_path, created_at) VALUES (?,?,?,?,?)",
 		tf.TenantID, tf.TicketID, tf.FileName, tf.FilePath, tf.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
 	tf.ID = id
 	return tf, nil
 }
 
 // TicketFiles 列出工单的全部源文件（按 ID 升序）。
 func (s *Store) TicketFiles(ticketID int64) ([]*TicketFile, error) {
-	rows, err := s.db.Query("SELECT "+ticketFileCols+" FROM ticket_files WHERE ticket_id=? ORDER BY id", ticketID)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+ticketFileCols+" FROM ticket_files WHERE ticket_id=? ORDER BY id", ticketID)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func (s *Store) TicketFiles(ticketID int64) ([]*TicketFile, error) {
 // GetTicketFile 按 ID + 租户取单个文件行（强制租户隔离，杜绝跨租户读取上传/产物路径）。
 func (s *Store) GetTicketFile(id, tenantID int64) (*TicketFile, error) {
 	var f TicketFile
-	err := s.db.QueryRow("SELECT "+ticketFileCols+" FROM ticket_files WHERE id=? AND tenant_id=?", id, tenantID).
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+ticketFileCols+" FROM ticket_files WHERE id=? AND tenant_id=?", id, tenantID).
 		Scan(&f.ID, &f.TenantID, &f.TicketID, &f.FileName, &f.FilePath, &f.ResultPath, &f.Error, &f.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -72,19 +72,19 @@ func (s *Store) GetTicketFile(id, tenantID int64) (*TicketFile, error) {
 
 // SetTicketFileResult 写入单个文件的产物路径（error 清空）。
 func (s *Store) SetTicketFileResult(id int64, resultPath string) error {
-	_, err := s.db.Exec("UPDATE ticket_files SET result_path=?, error='' WHERE id=?", resultPath, id)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE ticket_files SET result_path=?, error='' WHERE id=?", resultPath, id)
 	return err
 }
 
 // SetTicketFileError 写入单个文件的失败原因。
 func (s *Store) SetTicketFileError(id int64, errMsg string) error {
-	_, err := s.db.Exec("UPDATE ticket_files SET error=? WHERE id=?", errMsg)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE ticket_files SET error=? WHERE id=?", errMsg)
 	return err
 }
 
 // CountTicketFiles 统计工单挂载的文件数（判断是否多文件工单）。
 func (s *Store) CountTicketFiles(ticketID int64) (int64, error) {
 	var n int64
-	err := s.db.QueryRow("SELECT COUNT(*) FROM ticket_files WHERE ticket_id=?", ticketID).Scan(&n)
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COUNT(*) FROM ticket_files WHERE ticket_id=?", ticketID).Scan(&n)
 	return n, err
 }

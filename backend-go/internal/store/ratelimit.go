@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"translator/internal/db"
 )
 
 // RateState 某 (scope,key) 的窗口计数与锁定时刻（unix 秒）。
@@ -25,7 +26,7 @@ func (s *Store) RateLoad(scope, key string) (RateState, error) {
 		return RateState{}, nil
 	}
 	var st RateState
-	row := s.db.QueryRow("SELECT count, window_start, lock_until FROM rate_limits WHERE scope=? AND key=?", scope, key)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT count, window_start, lock_until FROM rate_limits WHERE scope=? AND key=?", scope, key)
 	err := row.Scan(&st.Count, &st.WindowStart, &st.LockUntil)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RateState{}, nil
@@ -50,10 +51,10 @@ func (s *Store) RateRecord(scope, key string, windowSec int64) (RateState, error
 	}
 	defer tx.Rollback()
 	var count, ws int64
-	row := tx.QueryRow("SELECT count, window_start FROM rate_limits WHERE scope=? AND key=?", scope, key)
+	row := db.QueryRow(tx, db.CurrentDialect(), "SELECT count, window_start FROM rate_limits WHERE scope=? AND key=?", scope, key)
 	scanErr := row.Scan(&count, &ws)
 	if errors.Is(scanErr, sql.ErrNoRows) {
-		if _, e := tx.Exec("INSERT INTO rate_limits(scope,key,count,window_start,lock_until) VALUES(?,?,1,?,0)", scope, key, now); e != nil {
+		if _, e := db.Exec(tx, db.CurrentDialect(), "INSERT INTO rate_limits(scope,key,count,window_start,lock_until) VALUES(?,?,1,?,0)", scope, key, now); e != nil {
 			return RateState{}, e
 		}
 		if e := tx.Commit(); e != nil {
@@ -70,7 +71,7 @@ func (s *Store) RateRecord(scope, key string, windowSec int64) (RateState, error
 	} else {
 		count++
 	}
-	if _, e := tx.Exec("UPDATE rate_limits SET count=?, window_start=? WHERE scope=? AND key=?", count, ws, scope, key); e != nil {
+	if _, e := db.Exec(tx, db.CurrentDialect(), "UPDATE rate_limits SET count=?, window_start=? WHERE scope=? AND key=?", count, ws, scope, key); e != nil {
 		return RateState{}, e
 	}
 	if e := tx.Commit(); e != nil {
@@ -84,7 +85,7 @@ func (s *Store) RateSetLock(scope, key string, lockUntil int64) error {
 	if s.db == nil {
 		return nil
 	}
-	if _, err := s.db.Exec("UPDATE rate_limits SET lock_until=? WHERE scope=? AND key=?", lockUntil, scope, key); err != nil {
+	if _, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE rate_limits SET lock_until=? WHERE scope=? AND key=?", lockUntil, scope, key); err != nil {
 		return fmt.Errorf("设置频率封锁失败: %w", err)
 	}
 	return nil
@@ -95,7 +96,7 @@ func (s *Store) RateReset(scope, key string) error {
 	if s.db == nil {
 		return nil
 	}
-	if _, err := s.db.Exec("DELETE FROM rate_limits WHERE scope=? AND key=?", scope, key); err != nil {
+	if _, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM rate_limits WHERE scope=? AND key=?", scope, key); err != nil {
 		return fmt.Errorf("重置频率护栏失败: %w", err)
 	}
 	return nil

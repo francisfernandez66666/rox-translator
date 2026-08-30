@@ -68,9 +68,10 @@ type Config struct {
 	// 模型路由策略：按权重选主模型，失败后按顺序降级。空则用 Online* 单供应商。
 	ModelRoutes []ProviderConfig // 多供应商路由列表（权重路由/降级链）
 
-	// Embedding（智谱）
+	// Embedding（默认 SiliconFlow BAAI/bge-m3；可通过 kb_embed 阶段覆盖）
 	EmbedAPIBase string // Embedding API 基地址
 	EmbedAPIKey  string // Embedding API 密钥
+	EmbedModel   string // Embedding 模型名（如 BAAI/bge-m3，1024 维）
 
 	// 模型降级
 	HunyuanMTModel       string          // Hunyuan 多语翻译模型名
@@ -88,6 +89,12 @@ type Config struct {
 	DBPath      string // 知识库 SQLite 路径
 	EmbPath     string // 向量文件路径（npz）
 	IndexStamp  string // 索引时间戳文件路径
+
+	// 数据库后端（P0-3 起点：SQLite→PostgreSQL 可切换基石）
+	// DatabaseDriver：后端驱动，"sqlite"（默认）或 "postgres"。
+	// DatabaseDSN：postgres 连接串；sqlite 后端忽略（改用 DBPath）。
+	DatabaseDriver string
+	DatabaseDSN    string
 
 	// 上传/输出目录
 	UploadDir string // 上传文件目录
@@ -116,6 +123,13 @@ type Config struct {
 	// CORS 允许的跨域来源（同源部署无需配置；前后端分离时通过 CORS_ALLOWED_ORIGINS 环境变量指定，逗号分隔）
 	CORSOrigins []string
 }
+
+// DefaultDatabaseDriver 默认数据库后端（P0-3：当前为 SQLite，后续可切换 PostgreSQL）。
+const DefaultDatabaseDriver = "sqlite"
+
+// C 保存最近一次 Default() 返回的全局配置指针；供无需显式传参的深层调用
+// （如 kb.Open 经连接器选择驱动）读取数据库后端配置。仅作只读用途。
+var C *Config
 
 // HunyuanMTLangSet 返回支持的语言代码集合
 func HunyuanMTLangSet() map[string]bool {
@@ -176,8 +190,9 @@ func Default() *Config {
 		OnlineAPIKey:           os.Getenv("SILICONFLOW_API_KEY"),
 		OnlineModel:            "tencent/Hunyuan-MT-7B",
 		OnlineTimeout:          120,
-		EmbedAPIBase:           "https://open.bigmodel.cn/api/paas/v4",
-		EmbedAPIKey:            os.Getenv("ONLINE_API_KEY"),
+		EmbedAPIBase:           "https://api.siliconflow.cn/v1",
+		EmbedAPIKey:            getenvFirst("ONLINE_API_KEY", "SILICONFLOW_API_KEY"),
+		EmbedModel:             "BAAI/bge-m3",
 		HunyuanMTModel:         "tencent/Hunyuan-MT-7B",
 		HunyuanFallbackModel:   "THUDM/GLM-4-9B-0414",
 		HunyuanFirstTimeoutSec: 30,
@@ -233,6 +248,15 @@ func Default() *Config {
 	if v := os.Getenv("ONLINE_API_BASE"); v != "" {
 		c.EmbedAPIBase = v
 	}
+	if v := os.Getenv("EMBED_API_BASE"); v != "" {
+		c.EmbedAPIBase = v
+	}
+	if v := os.Getenv("EMBED_API_KEY"); v != "" {
+		c.EmbedAPIKey = v
+	}
+	if v := os.Getenv("EMBED_MODEL"); v != "" {
+		c.EmbedModel = v
+	}
 	if v := os.Getenv("ONLINE_MODEL"); v != "" {
 		c.OnlineModel = v
 		c.HunyuanMTModel = v
@@ -252,6 +276,18 @@ func Default() *Config {
 	c.IndexStamp = filepath.Join(c.UserDataDir, ".index_stamp")
 	c.UploadDir = filepath.Join(c.UserDataDir, "_uploads")
 	c.OutputDir = filepath.Join(c.UserDataDir, "_output")
+
+	// 数据库后端（P0-3 起点）：默认 sqlite，可经环境变量切换为 postgres。
+	if v := os.Getenv("DB_DRIVER"); v != "" {
+		c.DatabaseDriver = v
+	} else if c.DatabaseDriver == "" {
+		c.DatabaseDriver = DefaultDatabaseDriver
+	}
+	if v := os.Getenv("DB_DSN"); v != "" {
+		c.DatabaseDSN = v
+	}
+
+	C = c // 暴露为全局只读配置，供连接器等深层调用读取
 	return c
 }
 
@@ -276,6 +312,16 @@ func (c *Config) LoadConfigFromJSON(exeDir string) {
 		}
 		return
 	}
+}
+
+// getenvFirst 依次读取多个环境变量，返回首个非空值。
+func getenvFirst(keys ...string) string {
+	for _, k := range keys {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // randHex 生成 n 字节随机数并以十六进制字符串返回（密钥占位 / 临时凭证生成）。

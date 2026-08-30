@@ -20,29 +20,48 @@ import (
 )
 
 // canManagePackType 判断用户是否有权管理指定包类型的知识库包。
-// 超管可管理全部类型（tenant/industry/locale/department）；
-// 租户管理员可管理企业包与部门包；
-// 部门管理员仅可管理部门包（department）。
+// 超管可管理全部类型（tenant/industry/locale/department/cross_dept）；
+// 租户管理员可管理企业包、部门包、跨部门包；
+// 部门管理员仅可管理部门包与跨部门包。
 func canManagePackType(u *store.User, packType string) bool {
 	if u != nil && auth.IsSuperAdmin(u) {
 		return true
 	}
 	if auth.RoleLevel(u.Role) == 2 {
-		// 部门管理员：仅部门包
-		return packType == store.PackDepartment
+		// 部门管理员：仅部门包 / 跨部门包
+		return packType == store.PackDepartment || packType == store.PackCrossDept
 	}
-	// 租户管理员及以上：企业包/部门包
-	return packType == store.PackTenant || packType == store.PackDepartment
+	// 租户管理员及以上：企业包/部门包/跨部门包
+	return packType == store.PackTenant || packType == store.PackDepartment || packType == store.PackCrossDept
 }
 
-// deptKBScope 校验部门管理员对指定 KB 包是否有权（包必须归属本部门及子部门）。
+// deptKBScope 校验部门管理员对指定 KB 包是否有权（部门包须归属本部门及子部门；
+// 跨部门包须归属其涵盖部门集合中的本部门及子部门，或全公司包仅超管/租管可维护）。
 // 非部门管理员直接放行（超管/租户管理员）。返回 nil 表示有权。
 // 参数：u=当前用户，tid=生效租户，pkg=目标包。
 func (s *Server) deptKBScope(u *store.User, tid int64, pkg *store.KBPackage) error {
 	if auth.RoleLevel(u.Role) != 2 {
-		return nil // 非部门管理员无需部门范围校验
+		return nil // 非部门管理员无需部门范围校验（超管/租户管理员放行）
 	}
-	if u.OrgID <= 0 || pkg.OrgID <= 0 {
+	if u.OrgID <= 0 {
+		return &apiErr{"无权操作：未绑定部门"}
+	}
+	// 跨部门包：维护人 = 涵盖部门集合内的部门管理员（全公司包仅超管/租管维护）
+	if pkg.PackType == store.PackCrossDept {
+		if pkg.CrossAll {
+			return &apiErr{"全公司跨部门包仅超管/租管可维护"}
+		}
+		for _, o := range pkg.CrossOrgs {
+			if o == u.OrgID {
+				return nil
+			}
+			if in, _ := s.Store.IsOrgInSubtree(tid, u.OrgID, o); in {
+				return nil
+			}
+		}
+		return &apiErr{"无权维护非本部门的跨部门包"}
+	}
+	if pkg.OrgID <= 0 {
 		return &apiErr{"无权操作非本部门的包"}
 	}
 	inTree, err := s.Store.IsOrgInSubtree(tid, u.OrgID, pkg.OrgID)
@@ -145,11 +164,13 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Code           string `json:"code"`             // 包编码（唯一标识，必填）
-		Name           string `json:"name"`             // 包名称（必填）
-		PackType       string `json:"pack_type"`        // 包类型（industry 行业包，默认）
-		Role           string `json:"role"`             // 包角色（source 源语言包，默认）
-		ShareCrossDept *int   `json:"share_cross_dept"` // ★ 可选：部门包跨部门共享初始态（1=共享默认 / 0=退出）；nil=不设置
+		Code           string  `json:"code"`             // 包编码（唯一标识，必填）
+		Name           string  `json:"name"`             // 包名称（必填，跨部门包由创建人自定义）
+		PackType       string  `json:"pack_type"`        // 包类型（industry 行业包，默认）
+		Role           string  `json:"role"`             // 包角色（source 源语言包，默认）
+		ShareCrossDept *int    `json:"share_cross_dept"` // ★ 可选：部门包跨部门共享初始态（1=共享默认 / 0=退出）；nil=不设置
+		CrossAll       *bool   `json:"cross_all"`        // 跨部门包：true=全公司（涵盖租户内全部部门）
+		CrossOrgs      []int64 `json:"cross_orgs"`       // 跨部门包：涵盖部门（使用/维护范围）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" || req.Name == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code/name 不能为空"})
@@ -188,6 +209,30 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 			p.ShareCrossDept = *req.ShareCrossDept
 		}
 	}
+	// ★ 跨部门包：落库跨部门范围（全公司 或 涵盖部门集合）；部门管理员创建时至少包含本人部门以便维护
+	if p.PackType == store.PackCrossDept {
+		all := false
+		if req.CrossAll != nil {
+			all = *req.CrossAll
+		}
+		orgs := req.CrossOrgs
+		if auth.RoleLevel(u.Role) == 2 && !all {
+			has := false
+			for _, o := range orgs {
+				if o == u.OrgID {
+					has = true
+					break
+				}
+			}
+			if !has {
+				orgs = append(orgs, u.OrgID)
+			}
+		}
+		if serr := s.Store.SetKBPackageCrossScope(p.ID, tid, all, orgs); serr == nil {
+			p.CrossAll = all
+			p.CrossOrgs = orgs
+		}
+	}
 	s.Store.LogAudit(tid, u.ID, "kb_package_create", "kb_packages", req.Name)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "package": p})
 }
@@ -200,9 +245,11 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID             int64  `json:"id"`               // 目标包 ID
-		Name           string `json:"name"`             // 新包名称
-		ShareCrossDept *int   `json:"share_cross_dept"` // ★ 可选：同步调整跨部门共享开关（nil=不修改）
+		ID             int64   `json:"id"`               // 目标包 ID
+		Name           string  `json:"name"`             // 新包名称
+		ShareCrossDept *int    `json:"share_cross_dept"` // ★ 可选：同步调整跨部门共享开关（nil=不修改）
+		CrossAll       *bool   `json:"cross_all"`        // 跨部门包：全公司范围（nil=不修改）
+		CrossOrgs      []int64 `json:"cross_orgs"`       // 跨部门包：涵盖部门（nil=不修改）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -234,6 +281,22 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		s.invKB() // 共享集合变化：一致性起见同刷缓存
 	}
+	// ★ 可选：跨部门包调整跨部门范围（全公司 / 涵盖部门），权限已在上方校验
+	if pkg.PackType == store.PackCrossDept && (req.CrossAll != nil || req.CrossOrgs != nil) {
+		all := pkg.CrossAll
+		if req.CrossAll != nil {
+			all = *req.CrossAll
+		}
+		orgs := pkg.CrossOrgs
+		if req.CrossOrgs != nil {
+			orgs = req.CrossOrgs
+		}
+		if serr := s.Store.SetKBPackageCrossScope(req.ID, tid, all, orgs); serr != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": serr.Error()})
+			return
+		}
+		s.invKB() // 范围变化：同刷缓存
+	}
 	s.Store.LogAudit(tid, u.ID, "kb_package_update", "kb_packages", "")
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
@@ -260,6 +323,11 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if !canManagePackType(u, pkg.PackType) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权删除该类型的知识库包"})
+		return
+	}
+	// 维护权限：跨部门包须涵盖本部门（含子树/全公司仅超管租管）；部门包须归属本部门
+	if err := s.deptKBScope(u, s.kbTenant(r, u), pkg); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
 	if err := s.Store.DeleteKBPackage(req.ID, s.kbTenant(r, u)); err != nil {
@@ -306,13 +374,28 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "source_text 不能为空"})
 		return
 	}
+	tid := s.kbTenant(r, u)
+	// 包类型与维护权限校验（跨部门包须涵盖本部门；部门包须归属本部门）
+	pkg, gErr := s.Store.GetKBPackage(req.PackageID, tid)
+	if gErr != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		return
+	}
+	if !canManagePackType(u, pkg.PackType) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包写入"})
+		return
+	}
+	if err := s.deptKBScope(u, tid, pkg); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
 	if req.Layer == 0 {
 		req.Layer = store.LayerTM
 	}
 	if req.TargetLang == "" {
 		req.TargetLang = "en"
 	}
-	id, err := s.Store.SaveEntry(s.kbTenant(r, u), req.PackageID, req.Layer, "zh", req.SourceText, req.TargetLang, req.TargetText, req.Module)
+	id, err := s.Store.SaveEntry(tid, req.PackageID, req.Layer, "zh", req.SourceText, req.TargetLang, req.TargetText, req.Module)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return

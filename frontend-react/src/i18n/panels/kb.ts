@@ -1,3 +1,6 @@
+// ============ 本文件职责中文说明 ============
+// 知识库管理面板 i18n 键
+// =============================================
 // panels/kb.ts — 知识库/行业包/语言文化规范面板 i18n 键（中英）
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
 export const zh: Record<string, string> = {
@@ -42,8 +45,19 @@ export const zh: Record<string, string> = {
   'kb.rebuildConfirm': '将全量重新嵌入知识库原文（调用 Embed API，耗时取决于条目数），确定继续？',
   'kb.rebuildDone': '向量索引已重建：{n} 行',
   'kb.typeIndustry': '行业包（同行业共享）',
-  'kb.typeLocale': '语言文化包（全系统）',
+  'kb.typeLocale': '通用语言习惯包（全用户）',
   'kb.typeDepartment': '部门包（本部门）',
+  'kb.typeCrossDept': '跨部门包（共享）',
+  'kb.colScope': '可见范围',
+  'kb.colCross': '跨部门',
+  'kb.scopePrefix': '可见范围：',
+  'kb.scopeDept': '本部门',
+  'kb.scopeCross': '跨部门（全公司/自定义部门）',
+  'kb.scopeCrossAll': '跨部门（全公司）',
+  'kb.scopeCrossDepts': '跨部门（{n}个部门）',
+  'kb.scopeTenant': '全企业',
+  'kb.scopeIndustry': '全行业',
+  'kb.scopeUniversal': '全用户（通用语言习惯）',
   'kb.createPackage': '创建包',
   'kb.entriesHint': '包内条目: 层 L1术语 / L2 TM / L3 安全句 / L4 碎片；源=中文，目标语言代码 (en/de/fr…)',
   'kb.deletePackage': '删除包',
@@ -142,8 +156,19 @@ export const en: Record<string, string> = {
   'kb.layer': 'Layer',
 'kb.typeTenant': 'Tenant Pack',
   'kb.typeIndustry': 'Industry Pack',
-  'kb.typeLocale': 'Locale/Culture Pack',
+  'kb.typeLocale': 'Universal Language Pack (all users)',
   'kb.typeDepartment': 'Department Pack',
+  'kb.typeCrossDept': 'Cross-dept Pack (shared)',
+  'kb.colScope': 'Visible scope',
+  'kb.colCross': 'Cross-dept',
+  'kb.scopePrefix': 'Visible: ',
+  'kb.scopeDept': 'This department',
+  'kb.scopeCross': 'Cross-dept (company / custom depts)',
+  'kb.scopeCrossAll': 'Cross-dept (whole company)',
+  'kb.scopeCrossDepts': 'Cross-dept ({n} depts)',
+  'kb.scopeTenant': 'Whole enterprise',
+  'kb.scopeIndustry': 'Whole industry',
+  'kb.scopeUniversal': 'All users (universal)',
   'kb.createPackage': 'Create Pack',
   'kb.entriesHint': 'Entries: L1 Glossary / L2 TM / L3 Safe Sentences / L4 Fragments; source = Chinese, target language code (en/de/fr…)',
   'kb.deletePackage': 'Delete Pack',

@@ -32,6 +32,10 @@ import (
 	"translator/internal/llm"
 	"translator/internal/store"
 	"translator/internal/tenant"
+
+	// PostgreSQL 驱动注册（P0-3）：当选型 DB_DRIVER=postgres 时由连接器(db.Open)使用。
+	// 未启用时仅为 inert 依赖，不影响 SQLite 默认路径。
+	_ "github.com/lib/pq"
 )
 
 // main 服务启动入口。
@@ -100,7 +104,11 @@ func main() {
 		log.Printf("警告: 术语数据库打开失败: %v", openErr)
 		db = nil
 	} else {
-		log.Printf("术语数据库已打开: %s", dbPath)
+		if config.C.DatabaseDriver == "postgres" {
+			log.Printf("术语数据库已打开(PostgreSQL): %s", config.C.DatabaseDSN)
+		} else {
+			log.Printf("术语数据库已打开(SQLite): %s", dbPath)
+		}
 		// ★ 多租户迁移：tm_segments 加 tenant_id 列 + 既有数据归入 rox
 		if err := db.EnsureTenantMigration(); err != nil {
 			log.Printf("警告: 租户迁移失败: %v", err)

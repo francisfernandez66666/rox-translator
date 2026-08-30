@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"translator/internal/db"
 	"translator/internal/iam"
 
 	_ "modernc.org/sqlite"
@@ -37,20 +38,20 @@ func New(db *sql.DB) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		return nil, err // 迁移失败则返回错误
 	}
-	s.feedbackMigrate()       // 老库补 replies 列（幂等，BBS 回复线程）
-	s.backfillAPIOwnership()  // ★ 历史 Key/任务强绑定回填（幂等）
-	s.TmReviewMigrate()       // TM 待审池建表（幂等）
-	s.QuotaGrantMigrate()       // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
-	s.TicketStateTimingMigrate() // ★ ticket_state 增加 started_at/duration_ms（幂等；进度耗时展示）
-	s.BalanceAccountMigrate() // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
-	s.BillingIndexMigrate()   // ★ 整改 B5：订单号唯一索引 + Key 哈希检索索引（幂等，撞重复降级告警）
-	s.PackagesTenantMigrate() // ★ 商业包租户化：packages 加 tenant_id 并改 (tenant_id, code) 复合唯一（幂等）
-	s.ReferralMigrate()       // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
-	s.OneidMigrate()          // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
-	s.EnsureBillingDefaults() // 商业化参数默认值落库（幂等，面板可改）
-	s.orderMoneyBackfill()    // ★ 存量 pending 充值单应收回填（幂等；评审整改 B1，置于默认值落库后以读取到定价键）
+	s.feedbackMigrate()           // 老库补 replies 列（幂等，BBS 回复线程）
+	s.backfillAPIOwnership()      // ★ 历史 Key/任务强绑定回填（幂等）
+	s.TmReviewMigrate()           // TM 待审池建表（幂等）
+	s.QuotaGrantMigrate()         // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
+	s.TicketStateTimingMigrate()  // ★ ticket_state 增加 started_at/duration_ms（幂等；进度耗时展示）
+	s.BalanceAccountMigrate()     // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
+	s.BillingIndexMigrate()       // ★ 整改 B5：订单号唯一索引 + Key 哈希检索索引（幂等，撞重复降级告警）
+	s.PackagesTenantMigrate()     // ★ 商业包租户化：packages 加 tenant_id 并改 (tenant_id, code) 复合唯一（幂等）
+	s.ReferralMigrate()           // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
+	s.OneidMigrate()              // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
+	s.EnsureBillingDefaults()     // 商业化参数默认值落库（幂等，面板可改）
+	s.orderMoneyBackfill()        // ★ 存量 pending 充值单应收回填（幂等；评审整改 B1，置于默认值落库后以读取到定价键）
 	s.PackageOrderTokenBackfill() // ★ token 口径：存量包订单 amount_tokens 补全（幂等；句数不参与运行期计算）
-	s.ArtifactsMigrate()      // ★ 产物归属登记表（幂等；评审整改 C1）
+	s.ArtifactsMigrate()          // ★ 产物归属登记表（幂等；评审整改 C1）
 	return s, nil
 }
 
@@ -405,116 +406,136 @@ func (s *Store) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(tenant_id, created_at)`,
 	}
+	// 方言：以现有 SQLite DDL 为唯一真源，PostgreSQL 下经 db.ToDialect 自动改写
+	d := db.CurrentDialect()
 	for _, stmt := range stmts {
 		// 逐条幂等执行建表语句，失败即中止迁移
-		if _, err := s.db.Exec(stmt); err != nil {
+		if err := db.ExecDDL(s.db, d, stmt); err != nil {
 			return fmt.Errorf("建表失败: %w\nSQL: %s", err, stmt)
 		}
 	}
-	// 迁移：老库补充新列（SQLite 无 IF NOT EXISTS 的 ALTER，需先查列）
-	if err := s.migrateColumns(); err != nil {
-		return err
+	// 迁移：老库补充新列
+	if d == db.DialectSQLite {
+		// SQLite 无 ADD COLUMN IF NOT EXISTS，需先 PRAGMA 查列存在性
+		if err := s.migrateColumnsSQLite(); err != nil {
+			return err
+		}
+	} else {
+		// PostgreSQL 下 ALTER 自动补 IF NOT EXISTS，幂等可重复执行
+		if err := s.migrateColumnsPG(); err != nil {
+			return err
+		}
 	}
 	// 初始化默认单价表（幂等）
 	if err := s.seedRateCard(); err != nil {
 		return err
 	}
 	// 迁移：超级管理员（admin/super_admin）为平台级账号，不挂租户
-	if _, err := s.db.Exec(`UPDATE users SET tenant_id=0 WHERE role IN ('admin','super_admin')`); err != nil {
+	if _, err := db.Exec(s.db, db.CurrentDialect(), `UPDATE users SET tenant_id=0 WHERE role IN ('admin','super_admin')`); err != nil {
 		return err
 	}
 	// 约束：同租户下用户名唯一（三期）。容错执行——存量库若已有重名数据，
 	// 建索引失败仅记日志不阻断启动；清理重名后重启自动补建。
-	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tid_username ON users(tenant_id, username)`); err != nil {
+	if _, err := db.Exec(s.db, db.CurrentDialect(), `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tid_username ON users(tenant_id, username)`); err != nil {
 		log.Printf("[migrate] 同租户用户名唯一索引创建失败（存在重名数据，请清理后重启）: %v", err)
 	}
 	return nil
 }
 
-// migrateColumns 为老库补充新增列（SQLite 3.35+ 才支持 ADD COLUMN IF NOT EXISTS，这里手工判断）。
+// colDef 描述一次补列迁移。
+type colDef struct {
+	table string // 目标表名
+	col   string // 目标列名
+	ddl   string // 补列的 ALTER 语句
+}
+
+// columnAdditions 老库可能缺失的列清单（SQLite 与 PostgreSQL 共用同一份 ALTER 模板，
+// PostgreSQL 下经 db.RunAlter 自动补 IF NOT EXISTS）。
+var columnAdditions = []colDef{
+	// 老库可能缺少的列：供应商/模型/审计前后值
+	{"usage_ledger", "provider", "ALTER TABLE usage_ledger ADD COLUMN provider TEXT NOT NULL DEFAULT ''"},
+	{"usage_ledger", "model", "ALTER TABLE usage_ledger ADD COLUMN model TEXT NOT NULL DEFAULT ''"},
+	// ★ 用量看板标注（2026-08-26 需求）：业务形态(text/file)与翻译模式(fast/pro)
+	{"usage_ledger", "biz_kind", "ALTER TABLE usage_ledger ADD COLUMN biz_kind TEXT NOT NULL DEFAULT ''"},
+	{"usage_ledger", "biz_mode", "ALTER TABLE usage_ledger ADD COLUMN biz_mode TEXT NOT NULL DEFAULT ''"},
+	{"rate_card", "provider", "ALTER TABLE rate_card ADD COLUMN provider TEXT NOT NULL DEFAULT ''"},
+	{"audit_logs", "before_val", "ALTER TABLE audit_logs ADD COLUMN before_val TEXT NOT NULL DEFAULT ''"},
+	{"audit_logs", "after_val", "ALTER TABLE audit_logs ADD COLUMN after_val TEXT NOT NULL DEFAULT ''"},
+	// 组织归属：用户挂到组织（0=未分配/根组织）
+	{"users", "org_id", "ALTER TABLE users ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
+	// 在线支付：订单渠道与支付凭证
+	{"orders", "channel", "ALTER TABLE orders ADD COLUMN channel TEXT NOT NULL DEFAULT 'offline'"},
+	{"orders", "prepay_id", "ALTER TABLE orders ADD COLUMN prepay_id TEXT NOT NULL DEFAULT ''"},
+	{"orders", "qr_content", "ALTER TABLE orders ADD COLUMN qr_content TEXT NOT NULL DEFAULT ''"},
+	// 联系邮箱：找回密码验证码接收地址
+	{"users", "email", "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''"},
+	// ★ 自助注销请求日期（2026-08-26 需求）：当日宽限、次日起等效停用；数据保留不删除
+	{"users", "deactivate_at", "ALTER TABLE users ADD COLUMN deactivate_at TEXT NOT NULL DEFAULT ''"},
+	// 组织类型：root(根组织)/org(组织)/dept(部门)
+	{"orgs", "type", "ALTER TABLE orgs ADD COLUMN type TEXT NOT NULL DEFAULT 'org'"},
+	// ★ 部门预算（四期）：部门月度 token 预算上限；∑部门预算=租户总预算（双预算墙之部门墙）
+	{"orgs", "token_limit", "ALTER TABLE orgs ADD COLUMN token_limit INTEGER NOT NULL DEFAULT 0"},
+	// 订单关联商业包（订阅付费包/增量包）
+	{"orders", "package_id", "ALTER TABLE orders ADD COLUMN package_id INTEGER NOT NULL DEFAULT 0"},
+	// 静态码支付人工确认标记（用户点「我已付费」后置 1，超管确认到账后清零）
+	{"orders", "manual_confirm", "ALTER TABLE orders ADD COLUMN manual_confirm INTEGER NOT NULL DEFAULT 0"},
+	// ★ 整改 B3：部分退款实退金额（比例折算口径），审计与对账依据
+	{"orders", "refund_money", "ALTER TABLE orders ADD COLUMN refund_money REAL NOT NULL DEFAULT 0"},
+	// 知识库包归属部门（0=租户级；部门管理员创建部门包时挂本部门）
+	{"kb_packages", "org_id", "ALTER TABLE kb_packages ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
+	// ★ 跨部门共享开关（2026-08-26 KB继承链改造）：1=愿意参与跨部门降级检索（默认），
+	//   0=本包仅限归属链内用户可见（包级 opt-out）；对企业/行业/文化包无意义（本就全局/全租户）
+	{"kb_packages", "share_cross_dept", "ALTER TABLE kb_packages ADD COLUMN share_cross_dept INTEGER NOT NULL DEFAULT 1"},
+	// 知识库应用优先级：部门包(0) > 组织包(1) > 行业包(2) > 语言文化包(3)；旧数据默认 9
+	{"tm_segments", "priority", "ALTER TABLE tm_segments ADD COLUMN priority INTEGER NOT NULL DEFAULT 9"},
+	// 检索条目归属知识库包（0=无归属/历史兜底数据）；停用/启用/统计按此精确摘除与回写
+	{"tm_segments", "pack_id", "ALTER TABLE tm_segments ADD COLUMN pack_id INTEGER NOT NULL DEFAULT 0"},
+	// 工单结果文件路径（原格式回写产物或 xlsx 对照表）
+	{"tickets", "result_path", "ALTER TABLE tickets ADD COLUMN result_path TEXT NOT NULL DEFAULT ''"},
+	// 翻译模式：fast 快速（无KB/初翻+校对）/ pro 专业校对（全流水线）；空=pro
+	{"tickets", "mode", "ALTER TABLE tickets ADD COLUMN mode TEXT NOT NULL DEFAULT ''"},
+	// R4 Key 级配额：每日调用上限（0=不限）与今日计数（跨日自动清零）
+	// 四期：工单实费计费 token 数（完成时按真实用量×均摊系数写入）
+	{"tickets", "tokens_billed", "ALTER TABLE tickets ADD COLUMN tokens_billed INTEGER NOT NULL DEFAULT 0"},
+	{"api_keys", "daily_call_limit", "ALTER TABLE api_keys ADD COLUMN daily_call_limit INTEGER NOT NULL DEFAULT 0"},
+	{"api_keys", "calls_today", "ALTER TABLE api_keys ADD COLUMN calls_today INTEGER NOT NULL DEFAULT 0"},
+	// ★ Key 静态加密存储：支持任意时刻复制（明文不出库、不回显）
+	{"api_keys", "key_enc", "ALTER TABLE api_keys ADD COLUMN key_enc TEXT NOT NULL DEFAULT ''"},
+	{"api_keys", "calls_today_date", "ALTER TABLE api_keys ADD COLUMN calls_today_date TEXT NOT NULL DEFAULT ''"},
+	// ★ 邀请码绑定组织（四期）：受邀用户归入该组织层级
+	{"invite_codes", "org_id", "ALTER TABLE invite_codes ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
+	// 工单产物保留期：完成时间 + N 天（到期由后台扫描清理文件；核心译文已入 tm_segments 长期保留）
+	{"tickets", "result_expires_at", "ALTER TABLE tickets ADD COLUMN result_expires_at TEXT NOT NULL DEFAULT ''"},
+	// 产物过期提醒档位去重标记（逗号分隔：14,7,3,1）
+	{"tickets", "expire_notify", "ALTER TABLE tickets ADD COLUMN expire_notify TEXT NOT NULL DEFAULT ''"},
+	// 安全句结构化字段（Gate 闸门）：类型/替换词/审核状态/来源
+	{"kb_safety_phrases", "kind", "ALTER TABLE kb_safety_phrases ADD COLUMN kind TEXT NOT NULL DEFAULT 'style'"},
+	{"kb_safety_phrases", "replacement", "ALTER TABLE kb_safety_phrases ADD COLUMN replacement TEXT NOT NULL DEFAULT ''"},
+	{"kb_safety_phrases", "status", "ALTER TABLE kb_safety_phrases ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'"},
+	{"kb_safety_phrases", "source", "ALTER TABLE kb_safety_phrases ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"},
+	// 知识库包启停状态（停用后不参与翻译命中）
+	{"kb_packages", "enabled", "ALTER TABLE kb_packages ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"},
+	// 跨部门包涵盖部门集合（JSON 数组；使用/维护范围=这些部门的成员/管理员）
+	{"kb_packages", "cross_orgs", "ALTER TABLE kb_packages ADD COLUMN cross_orgs TEXT NOT NULL DEFAULT '[]'"},
+	// 跨部门包是否全公司（1=涵盖租户内全部部门，0=仅 cross_orgs 列明的部门）
+	{"kb_packages", "cross_all", "ALTER TABLE kb_packages ADD COLUMN cross_all INTEGER NOT NULL DEFAULT 0"},
+	// ★ OpenAPI 安全绑定：Key 归属签发用户；API 任务盖印创建者用户 ID（回读校验防跨用户/租户越权）
+	{"api_keys", "user_id", "ALTER TABLE api_keys ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0"},
+	{"tickets", "api_user_id", "ALTER TABLE tickets ADD COLUMN api_user_id INTEGER NOT NULL DEFAULT 0"},
+	// 告警表：关联用户与详细日志（历史库补列，按存在性幂等；避免 ADD COLUMN IF NOT EXISTS 语法不兼容）
+	{"alerts", "user_id", "ALTER TABLE alerts ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0"},
+	{"alerts", "log", "ALTER TABLE alerts ADD COLUMN log TEXT NOT NULL DEFAULT ''"},
+	// 用户协议签署时间（注册即视为同意用户协议+隐私协议；空=未签署）
+	{"users", "agreed_at", "ALTER TABLE users ADD COLUMN agreed_at TEXT NOT NULL DEFAULT ''"},
+}
+
+// migrateColumnsSQLite 为老库补充新增列（SQLite 3.35+ 才支持 ADD COLUMN IF NOT EXISTS，这里手工判断）。
 // 实现：用 pragma_table_info 检查列是否存在，缺失才执行 ALTER TABLE ADD COLUMN。
-func (s *Store) migrateColumns() error {
-	type colDef struct {
-		table string // 目标表名
-		col   string // 目标列名
-		ddl   string // 补列的 ALTER 语句
-	}
-	cols := []colDef{
-		// 老库可能缺少的列：供应商/模型/审计前后值
-		{"usage_ledger", "provider", "ALTER TABLE usage_ledger ADD COLUMN provider TEXT NOT NULL DEFAULT ''"},
-		{"usage_ledger", "model", "ALTER TABLE usage_ledger ADD COLUMN model TEXT NOT NULL DEFAULT ''"},
-		// ★ 用量看板标注（2026-08-26 需求）：业务形态(text/file)与翻译模式(fast/pro)
-		{"usage_ledger", "biz_kind", "ALTER TABLE usage_ledger ADD COLUMN biz_kind TEXT NOT NULL DEFAULT ''"},
-		{"usage_ledger", "biz_mode", "ALTER TABLE usage_ledger ADD COLUMN biz_mode TEXT NOT NULL DEFAULT ''"},
-		{"rate_card", "provider", "ALTER TABLE rate_card ADD COLUMN provider TEXT NOT NULL DEFAULT '*"},
-		{"audit_logs", "before_val", "ALTER TABLE audit_logs ADD COLUMN before_val TEXT NOT NULL DEFAULT ''"},
-		{"audit_logs", "after_val", "ALTER TABLE audit_logs ADD COLUMN after_val TEXT NOT NULL DEFAULT ''"},
-		// 组织归属：用户挂到组织（0=未分配/根组织）
-		{"users", "org_id", "ALTER TABLE users ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
-		// 在线支付：订单渠道与支付凭证
-		{"orders", "channel", "ALTER TABLE orders ADD COLUMN channel TEXT NOT NULL DEFAULT 'offline'"},
-		{"orders", "prepay_id", "ALTER TABLE orders ADD COLUMN prepay_id TEXT NOT NULL DEFAULT ''"},
-		{"orders", "qr_content", "ALTER TABLE orders ADD COLUMN qr_content TEXT NOT NULL DEFAULT ''"},
-		// 联系邮箱：找回密码验证码接收地址
-		{"users", "email", "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''"},
-		// ★ 自助注销请求日期（2026-08-26 需求）：当日宽限、次日起等效停用；数据保留不删除
-		{"users", "deactivate_at", "ALTER TABLE users ADD COLUMN deactivate_at TEXT NOT NULL DEFAULT ''"},
-		// 组织类型：root(根组织)/org(组织)/dept(部门)
-		{"orgs", "type", "ALTER TABLE orgs ADD COLUMN type TEXT NOT NULL DEFAULT 'org'"},
-		// ★ 部门预算（四期）：部门月度 token 预算上限；∑部门预算=租户总预算（双预算墙之部门墙）
-		{"orgs", "token_limit", "ALTER TABLE orgs ADD COLUMN token_limit INTEGER NOT NULL DEFAULT 0"},
-		// 订单关联商业包（订阅付费包/增量包）
-		{"orders", "package_id", "ALTER TABLE orders ADD COLUMN package_id INTEGER NOT NULL DEFAULT 0"},
-		// 静态码支付人工确认标记（用户点「我已付费」后置 1，超管确认到账后清零）
-		{"orders", "manual_confirm", "ALTER TABLE orders ADD COLUMN manual_confirm INTEGER NOT NULL DEFAULT 0"},
-		// ★ 整改 B3：部分退款实退金额（比例折算口径），审计与对账依据
-		{"orders", "refund_money", "ALTER TABLE orders ADD COLUMN refund_money REAL NOT NULL DEFAULT 0"},
-		// 知识库包归属部门（0=租户级；部门管理员创建部门包时挂本部门）
-		{"kb_packages", "org_id", "ALTER TABLE kb_packages ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
-		// ★ 跨部门共享开关（2026-08-26 KB继承链改造）：1=愿意参与跨部门降级检索（默认），
-		//   0=本包仅限归属链内用户可见（包级 opt-out）；对企业/行业/文化包无意义（本就全局/全租户）
-		{"kb_packages", "share_cross_dept", "ALTER TABLE kb_packages ADD COLUMN share_cross_dept INTEGER NOT NULL DEFAULT 1"},
-		// 知识库应用优先级：部门包(0) > 组织包(1) > 行业包(2) > 语言文化包(3)；旧数据默认 9
-		{"tm_segments", "priority", "ALTER TABLE tm_segments ADD COLUMN priority INTEGER NOT NULL DEFAULT 9"},
-		// 检索条目归属知识库包（0=无归属/历史兜底数据）；停用/启用/统计按此精确摘除与回写
-		{"tm_segments", "pack_id", "ALTER TABLE tm_segments ADD COLUMN pack_id INTEGER NOT NULL DEFAULT 0"},
-		// 工单结果文件路径（原格式回写产物或 xlsx 对照表）
-		{"tickets", "result_path", "ALTER TABLE tickets ADD COLUMN result_path TEXT NOT NULL DEFAULT ''"},
-		// 翻译模式：fast 快速（无KB/初翻+校对）/ pro 专业校对（全流水线）；空=pro
-		{"tickets", "mode", "ALTER TABLE tickets ADD COLUMN mode TEXT NOT NULL DEFAULT ''"},
-		// R4 Key 级配额：每日调用上限（0=不限）与今日计数（跨日自动清零）
-		// 四期：工单实费计费 token 数（完成时按真实用量×均摊系数写入）
-		{"tickets", "tokens_billed", "ALTER TABLE tickets ADD COLUMN tokens_billed INTEGER NOT NULL DEFAULT 0"},
-		{"api_keys", "daily_call_limit", "ALTER TABLE api_keys ADD COLUMN daily_call_limit INTEGER NOT NULL DEFAULT 0"},
-		{"api_keys", "calls_today", "ALTER TABLE api_keys ADD COLUMN calls_today INTEGER NOT NULL DEFAULT 0"},
-		// ★ Key 静态加密存储：支持任意时刻复制（明文不出库、不回显）
-		{"api_keys", "key_enc", "ALTER TABLE api_keys ADD COLUMN key_enc TEXT NOT NULL DEFAULT ''"},
-		{"api_keys", "calls_today_date", "ALTER TABLE api_keys ADD COLUMN calls_today_date TEXT NOT NULL DEFAULT ''"},
-		// ★ 邀请码绑定组织（四期）：受邀用户归入该组织层级
-		{"invite_codes", "org_id", "ALTER TABLE invite_codes ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
-		// 工单产物保留期：完成时间 + N 天（到期由后台扫描清理文件；核心译文已入 tm_segments 长期保留）
-		{"tickets", "result_expires_at", "ALTER TABLE tickets ADD COLUMN result_expires_at TEXT NOT NULL DEFAULT ''"},
-		// 产物过期提醒档位去重标记（逗号分隔：14,7,3,1）
-		{"tickets", "expire_notify", "ALTER TABLE tickets ADD COLUMN expire_notify TEXT NOT NULL DEFAULT ''"},
-		// 安全句结构化字段（Gate 闸门）：类型/替换词/审核状态/来源
-		{"kb_safety_phrases", "kind", "ALTER TABLE kb_safety_phrases ADD COLUMN kind TEXT NOT NULL DEFAULT 'style'"},
-		{"kb_safety_phrases", "replacement", "ALTER TABLE kb_safety_phrases ADD COLUMN replacement TEXT NOT NULL DEFAULT ''"},
-		{"kb_safety_phrases", "status", "ALTER TABLE kb_safety_phrases ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'"},
-		{"kb_safety_phrases", "source", "ALTER TABLE kb_safety_phrases ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"},
-		// 知识库包启停状态（停用后不参与翻译命中）
-		{"kb_packages", "enabled", "ALTER TABLE kb_packages ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"},
-		// ★ OpenAPI 安全绑定：Key 归属签发用户；API 任务盖印创建者用户 ID（回读校验防跨用户/租户越权）
-		{"api_keys", "user_id", "ALTER TABLE api_keys ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0"},
-		{"tickets", "api_user_id", "ALTER TABLE tickets ADD COLUMN api_user_id INTEGER NOT NULL DEFAULT 0"},
-		// 告警表：关联用户与详细日志（历史库补列，按存在性幂等；避免 ADD COLUMN IF NOT EXISTS 语法不兼容）
-		{"alerts", "user_id", "ALTER TABLE alerts ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0"},
-		{"alerts", "log", "ALTER TABLE alerts ADD COLUMN log TEXT NOT NULL DEFAULT ''"},
-		// 用户协议签署时间（注册即视为同意用户协议+隐私协议；空=未签署）
-		{"users", "agreed_at", "ALTER TABLE users ADD COLUMN agreed_at TEXT NOT NULL DEFAULT ''"},
-	}
+func (s *Store) migrateColumnsSQLite() error {
+	cols := columnAdditions
 	for _, c := range cols {
 		// 判断表是否存在（tm_segments 等表由 kb 模块延迟建表，缺表时跳过）
-		trows, err := s.db.Query(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`, c.table)
+		trows, err := db.Query(s.db, db.CurrentDialect(), `SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`, c.table)
 		if err != nil {
 			return err
 		}
@@ -524,7 +545,7 @@ func (s *Store) migrateColumns() error {
 			continue
 		}
 		// 判断列是否存在
-		rows, err := s.db.Query(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, c.table, c.col)
+		rows, err := db.Query(s.db, db.CurrentDialect(), `SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, c.table, c.col)
 		if err != nil {
 			return err
 		}
@@ -532,7 +553,7 @@ func (s *Store) migrateColumns() error {
 		rows.Close()
 		if !has {
 			// 列不存在才补列迁移
-			if _, err := s.db.Exec(c.ddl); err != nil {
+			if _, err := db.Exec(s.db, db.CurrentDialect(), c.ddl); err != nil {
 				return fmt.Errorf("迁移失败(%s.%s): %w", c.table, c.col, err)
 			}
 		}
@@ -541,8 +562,34 @@ func (s *Store) migrateColumns() error {
 	//   避免「切换前已产生的当日用量」丢失；覆盖写（非累加）保证幂等，后续启动因已有当日行而跳过。
 	s.backfillDailyUsage()
 	// ★ 性能优化 B7：补列迁移完成后再建联合索引（引用 org_id 等后加列，否则建表期报错）
-	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_users_tenant_org ON users(tenant_id, org_id)`)
-	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_tenant_user ON usage_ledger(tenant_id, user_id, created_at)`)
+	db.Exec(s.db, db.CurrentDialect(), `CREATE INDEX IF NOT EXISTS idx_users_tenant_org ON users(tenant_id, org_id)`)
+	db.Exec(s.db, db.CurrentDialect(), `CREATE INDEX IF NOT EXISTS idx_usage_tenant_user ON usage_ledger(tenant_id, user_id, created_at)`)
+	return nil
+}
+
+// migrateColumnsPG 在 PostgreSQL 下补充新增列：ALTER ADD COLUMN IF NOT EXISTS（幂等可重复）。
+// 不执行 backfillDailyUsage（PG 为全新实例，无 legacy 当日用量需回填；且其 ? 占位符需走 PG 改写层）。
+func (s *Store) migrateColumnsPG() error {
+	d := db.DialectPostgres
+	for _, c := range columnAdditions {
+		var exists int
+		if err := db.QueryRow(s.db, d, "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?", c.table).Scan(&exists); err != nil {
+			return err
+		}
+		if exists == 0 {
+			continue // 表尚未创建（如 tm_segments 由 kb 模块延迟建表）
+		}
+		if err := db.RunAlter(s.db, d, c.ddl); err != nil {
+			return fmt.Errorf("PG 补列失败(%s.%s): %w", c.table, c.col, err)
+		}
+	}
+	// B7：补列后再建联合索引（引用 org_id 等后加列）
+	if err := db.ExecDDL(s.db, d, `CREATE INDEX IF NOT EXISTS idx_users_tenant_org ON users(tenant_id, org_id)`); err != nil {
+		return err
+	}
+	if err := db.ExecDDL(s.db, d, `CREATE INDEX IF NOT EXISTS idx_usage_tenant_user ON usage_ledger(tenant_id, user_id, created_at)`); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -550,10 +597,10 @@ func (s *Store) migrateColumns() error {
 func (s *Store) backfillDailyUsage() {
 	today := time.Now().Format("2006-01-02")
 	var cnt int64
-	if err := s.db.QueryRow("SELECT COUNT(1) FROM usage_daily WHERE day=?", today).Scan(&cnt); err != nil || cnt > 0 {
+	if err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COUNT(1) FROM usage_daily WHERE day=?", today).Scan(&cnt); err != nil || cnt > 0 {
 		return // 已有当日行：跳过
 	}
-	_, _ = s.db.Exec(`INSERT INTO usage_daily (tenant_id, day, total)
+	_, _ = db.Exec(s.db, db.CurrentDialect(), `INSERT INTO usage_daily (tenant_id, day, total)
 		SELECT tenant_id, substr(created_at,1,10) AS day, COALESCE(SUM(cost),0)
 		FROM usage_ledger WHERE substr(created_at,1,10)=? GROUP BY tenant_id
 		ON CONFLICT(tenant_id, day) DO UPDATE SET total=excluded.total`, today)
@@ -562,7 +609,7 @@ func (s *Store) backfillDailyUsage() {
 // seedRateCard 初始化默认单价表（幂等）。
 // 用 INSERT OR IGNORE 保证重复执行不产生重复行；设置四类任务的全局单价。
 func (s *Store) seedRateCard() error {
-	_, err := s.db.Exec(`INSERT OR IGNORE INTO rate_card (task_type, lang, provider, unit_price, multiplier, updated_at) VALUES
+	_, err := db.Exec(s.db, db.CurrentDialect(), `INSERT OR IGNORE INTO rate_card (task_type, lang, provider, unit_price, multiplier, updated_at) VALUES
 		('translate', '*', '*', 1, 1.0, ''), ('review', '*', '*', 1, 1.0, ''),
 		('evals', '*', '*', 1, 0.5, ''), ('gate', '*', '*', 0, 0, '')`)
 	return err
@@ -573,11 +620,11 @@ func (s *Store) seedRateCard() error {
 // ② created_by=0 且 api_user_id=0 的 API 任务 → 同上。
 // 使 status/download 的「租户+用户」双重校验对全部存量生效，杜绝跨用户越权。
 func (s *Store) backfillAPIOwnership() {
-	s.db.Exec(`UPDATE api_keys SET user_id=(
+	db.Exec(s.db, db.CurrentDialect(), `UPDATE api_keys SET user_id=(
 		SELECT MIN(u.id) FROM users u
 		WHERE u.tenant_id=api_keys.tenant_id AND u.role IN ('admin','tenant_admin'))
 	WHERE COALESCE(user_id,0)=0`)
-	s.db.Exec(`UPDATE tickets SET api_user_id=(
+	db.Exec(s.db, db.CurrentDialect(), `UPDATE tickets SET api_user_id=(
 		SELECT MIN(u.id) FROM users u
 		WHERE u.tenant_id=tickets.tenant_id AND u.role IN ('admin','tenant_admin'))
 	WHERE created_by=0 AND COALESCE(api_user_id,0)=0`)

@@ -61,6 +61,7 @@ type scopeEnv struct {
 	orgD   int64
 	indMed int64
 	locP   *KBPackage
+	crossP *KBPackage
 }
 
 // save 条目写通（SaveEntry 自动落 tm_segments 的 priority/host/pack_id）。
@@ -127,6 +128,14 @@ func newScopeEnv(t *testing.T) *scopeEnv {
 	if e.locP, err = st.CreateKBPackage(1, 0, "loc", "文化包", PackLocale, PackRoleSource); err != nil {
 		t.Fatalf("建文化包失败: %v", err)
 	}
+	if e.crossP, err = st.CreateKBPackageForOrg(2, 0, "cross", "跨部门包", PackCrossDept, PackRoleSource, e.orgC); err != nil {
+		t.Fatalf("建跨部门包失败: %v", err)
+	}
+	// 跨部门包涵盖部门 = {C}（使用/维护范围为 C 部门成员/管理员）
+	if err = st.SetKBPackageCrossScope(e.crossP.ID, 2, false, []int64{e.orgC}); err != nil {
+		t.Fatalf("设置跨部门包范围失败: %v", err)
+	}
+	e.crossP.CrossOrgs = []int64{e.orgC}
 
 	// 种子条目
 	e.save(t, 2, e.entP.ID, "刹车系统", "Braking system [ENT]")      // 企业层
@@ -344,13 +353,13 @@ func TestVectorScopedSharedVisible(t *testing.T) {
 	env := newScopeEnv(t)
 	scope := env.scopeOf(t, env.orgC, false)
 	found := false
-	for id := range scope.SharedPackIDs {
+	for id := range scope.UniversalPackIDs {
 		if id == env.locP.ID {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("文化包未进入 SharedPackIDs（向量白名单将漏召回）")
+		t.Fatal("通用语言习惯包(locale)未进入 UniversalPackIDs（向量白名单将漏召回）")
 	}
 	if _, inChain := scope.ChainPacks[env.dP.ID]; inChain {
 		t.Fatal("兄弟部门包不应进入链内集合")
@@ -411,5 +420,84 @@ func TestFindEntriesBySourceScopedIsolation(t *testing.T) {
 	}
 	if !zero("刹车系统") {
 		t.Fatal("无组织用户应见企业包术语")
+	}
+}
+
+// TestCrossDeptIndependentType 跨部门包作为独立可见类型的回归：
+// ① 开关开时进入 CrossDeptPacks；② 开关关时不纳入；③ 不混进链内/企业/行业/文化集合；
+// ④ ScopeVisibility 判定为可见但 inChain=false（仅例句参考，绝不自动替换）。
+func TestCrossDeptIndependentType(t *testing.T) {
+	env := newScopeEnv(t)
+
+	// ① 开关开：跨部门包进入 CrossDeptPacks
+	scopeOn := env.scopeOf(t, env.orgC, true)
+	if _, ok := scopeOn.CrossDeptPacks[env.crossP.ID]; !ok {
+		t.Fatal("跨部门包(cross_dept)未进入 CrossDeptPacks（开关开）")
+	}
+	// ③ 不混进其他域
+	if _, ok := scopeOn.ChainPacks[env.crossP.ID]; ok {
+		t.Fatal("跨部门包不应进入链内集合")
+	}
+	if scopeOn.TenantPackIDs[env.crossP.ID] {
+		t.Fatal("跨部门包不应进入企业集合")
+	}
+	if scopeOn.SharedPackIDs[env.crossP.ID] {
+		t.Fatal("跨部门包不应进入行业共享集合")
+	}
+	if scopeOn.UniversalPackIDs[env.crossP.ID] {
+		t.Fatal("跨部门包不应进入通用语言习惯集合")
+	}
+	// ④ 可见性判定：可见但非链内（仅参考）
+	vis, inChain := kb.ScopeVisibility(2, env.crossP.ID, 2, scopeOn)
+	if !vis || inChain {
+		t.Fatalf("跨部门包应为可见且 inChain=false, got vis=%v inChain=%v", vis, inChain)
+	}
+
+	// ② 开关关：跨部门包不纳入任何跨部门集
+	scopeOff := env.scopeOf(t, env.orgC, false)
+	if _, ok := scopeOff.CrossDeptPacks[env.crossP.ID]; ok {
+		t.Fatal("跨部门包不应在开关关时进入 CrossDeptPacks")
+	}
+	visOff, _ := kb.ScopeVisibility(2, env.crossP.ID, 2, scopeOff)
+	if visOff {
+		t.Fatal("开关关时跨部门包应对调用者不可见")
+	}
+
+	// ②b 部门隔离（使用权限）：D 部门成员不得见 C 部门的跨部门包
+	scopeD := env.scopeOf(t, env.orgD, true)
+	if _, ok := scopeD.CrossDeptPacks[env.crossP.ID]; ok {
+		t.Fatal("跨部门包仅对归属部门成员可见，D 部门不应见 C 部门的跨部门包")
+	}
+	visD, _ := kb.ScopeVisibility(2, env.crossP.ID, 2, scopeD)
+	if visD {
+		t.Fatal("D 部门成员对 C 部门的跨部门包应不可见")
+	}
+	// 超管/租管（空链）见全部跨部门包
+	scopeZero := env.scopeOf(t, 0, true)
+	if _, ok := scopeZero.CrossDeptPacks[env.crossP.ID]; !ok {
+		t.Fatal("无组织链用户（超管/租管）应见全部跨部门包")
+	}
+
+	// 全公司跨部门包：对其他部门可见（使用范围=租户内全部部门）
+	allP, err := env.st.CreateKBPackage(2, 0, "crossall", "全公司跨部门包", PackCrossDept, PackRoleSource)
+	if err != nil {
+		t.Fatalf("建全公司跨部门包失败: %v", err)
+	}
+	if err := env.st.SetKBPackageCrossScope(allP.ID, 2, true, nil); err != nil {
+		t.Fatalf("设置全公司失败: %v", err)
+	}
+	scopeDAll := env.scopeOf(t, env.orgD, true)
+	if _, ok := scopeDAll.CrossDeptPacks[allP.ID]; !ok {
+		t.Fatal("全公司跨部门包应对其他部门（D）可见")
+	}
+
+	// 跨部门包条目在精确检索中仅作参考（不打入采用域）
+	env.save(t, 2, env.crossP.ID, "跨部门专有句", "Cross-dept only")
+	en, src, hit := env.find(t, scopeOn, "跨部门专有句")
+	if !hit {
+		t.Fatal("跨部门包条目应对 C 用户可召回（参考域）")
+	}
+	if src != "cross" {
+		t.Fatalf("跨部门包条目来源应为参考域(cross), got src=%s en=%q", src, en)
 	}
 }

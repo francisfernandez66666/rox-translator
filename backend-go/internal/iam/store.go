@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"translator/internal/db"
 )
 
 // userCols 用户表查询列清单（Scan 顺序契约；email/deactivate_at/agreed_at 为老库可空列，COALESCE 兜底）。
@@ -39,7 +40,14 @@ func (s *Store) write(fn func() error) error {
 func (s *Store) execW(query string, args ...interface{}) (sql.Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.db.Exec(query, args...)
+	return db.Exec(s.db, db.CurrentDialect(), query, args...)
+}
+
+// execWID 执行 INSERT 并返回自增主键（跨方言；PostgreSQL 经 RETURNING 取回，避免 lib/pq 的 LastInsertId 不支持）。
+func (s *Store) execWID(query string, args ...interface{}) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return db.InsertID(s.db, db.CurrentDialect(), "id", query, args...)
 }
 
 // NewStore 构造函数：初始化并返回实例。
@@ -63,7 +71,7 @@ func scanUser(row *sql.Row) (*User, error) {
 // CreateUser 创建用户（初始 active）。参数 tid=租户(0=平台级)，orgID=所属组织。返回新用户。
 func (s *Store) CreateUser(tid int64, username, passHash, displayName, role string, createdBy, orgID int64) (*User, error) {
 	now := time.Now().Format(time.RFC3339)
-	res, err := s.execW(
+	id, err := s.execWID(
 		"INSERT INTO users (tenant_id, username, password_hash, display_name, role, status, created_by, org_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
 		tid, username, passHash, displayName, role, UserActive, createdBy, orgID, now, now)
 	if err != nil {
@@ -73,23 +81,22 @@ func (s *Store) CreateUser(tid int64, username, passHash, displayName, role stri
 		}
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
 	return s.GetUser(id, tid)
 }
 
 // GetUser 按 ID+租户查询用户（租户隔离校验）。
 func (s *Store) GetUser(id, tid int64) (*User, error) {
-	return scanUser(s.db.QueryRow("SELECT "+userCols+" FROM users WHERE id=? AND tenant_id=?", id, tid))
+	return scanUser(db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+userCols+" FROM users WHERE id=? AND tenant_id=?", id, tid))
 }
 
 // GetUserByUsername 同租户内按用户名查询。
 func (s *Store) GetUserByUsername(tid int64, username string) (*User, error) {
-	return scanUser(s.db.QueryRow("SELECT "+userCols+" FROM users WHERE username=? AND tenant_id=?", username, tid))
+	return scanUser(db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+userCols+" FROM users WHERE username=? AND tenant_id=?", username, tid))
 }
 
 // GetUserByEmail 跨租户按邮箱查询（找回密码用；邮箱小写归一化）。
 func (s *Store) GetUserByEmail(email string) (*User, error) {
-	return scanUser(s.db.QueryRow("SELECT "+userCols+" FROM users WHERE lower(email)=? ORDER BY tenant_id LIMIT 1", strings.ToLower(strings.TrimSpace(email))))
+	return scanUser(db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+userCols+" FROM users WHERE lower(email)=? ORDER BY tenant_id LIMIT 1", strings.ToLower(strings.TrimSpace(email))))
 }
 
 // DeactivateSelf 自助注销：仅普通用户且 active 可发起；置 deactivating + 请求日期。
@@ -113,8 +120,9 @@ func (s *Store) FinalizeDeactivation(id, tid int64) {
 
 // SetUserEmail 设置联系邮箱。
 // ★ 账户体系语义（2026-08-26 修正）：id 为不可变主键；email 是「同一时刻全局唯一」的
-//   绑定属性——目标邮箱正被其他账号持有时拒绝（前置查重 + idx_users_email 部分唯一索引兜底）；
-//   本人换绑不受限（新旧邮箱双验证由 API 层完成）。空邮箱视为解绑，不做唯一校验。
+//
+//	绑定属性——目标邮箱正被其他账号持有时拒绝（前置查重 + idx_users_email 部分唯一索引兜底）；
+//	本人换绑不受限（新旧邮箱双验证由 API 层完成）。空邮箱视为解绑，不做唯一校验。
 func (s *Store) SetUserEmail(id, tid int64, email string) error {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
@@ -122,7 +130,7 @@ func (s *Store) SetUserEmail(id, tid int64, email string) error {
 		return err
 	}
 	var owner int64
-	if err := s.db.QueryRow("SELECT id FROM users WHERE email=?", email).Scan(&owner); err == nil && owner != id {
+	if err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id FROM users WHERE email=?", email).Scan(&owner); err == nil && owner != id {
 		return fmt.Errorf("该邮箱已被其他账号绑定")
 	}
 	_, err := s.execW("UPDATE users SET email=? WHERE id=? AND tenant_id=?", email, id, tid)
@@ -131,12 +139,12 @@ func (s *Store) SetUserEmail(id, tid int64, email string) error {
 
 // GetSuperAdminByUsername 按用户名查平台级管理员（role IN admin/super_admin）。
 func (s *Store) GetSuperAdminByUsername(username string) (*User, error) {
-	return scanUser(s.db.QueryRow("SELECT "+userCols+" FROM users WHERE username=? AND role IN ('admin','super_admin') LIMIT 1", username))
+	return scanUser(db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+userCols+" FROM users WHERE username=? AND role IN ('admin','super_admin') LIMIT 1", username))
 }
 
 // GetUserByUsernameGlobal 跨全部租户按用户名查询（登录时多租户重名判定用）。
 func (s *Store) GetUserByUsernameGlobal(username string) ([]*User, error) {
-	rows, err := s.db.Query("SELECT "+userCols+" FROM users WHERE username=? ORDER BY tenant_id", username)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+userCols+" FROM users WHERE username=? ORDER BY tenant_id", username)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +163,7 @@ func (s *Store) GetUserByUsernameGlobal(username string) ([]*User, error) {
 
 // ListUsers 列出本租户全部用户（密码哈希脱敏）。
 func (s *Store) ListUsers(tid int64) ([]*User, error) {
-	rows, err := s.db.Query("SELECT "+userCols+" FROM users WHERE tenant_id=? ORDER BY id", tid)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+userCols+" FROM users WHERE tenant_id=? ORDER BY id", tid)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +202,7 @@ func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
 	var rows *sql.Rows
 	var err error
 	if len(orgIDs) == 0 {
-		rows, err = s.db.Query("SELECT "+userCols+" FROM users WHERE tenant_id=? ORDER BY id", tid)
+		rows, err = db.Query(s.db, db.CurrentDialect(), "SELECT "+userCols+" FROM users WHERE tenant_id=? ORDER BY id", tid)
 	} else {
 		phs := ""
 		args := []interface{}{tid}
@@ -205,7 +213,7 @@ func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
 			phs += "?"
 			args = append(args, id)
 		}
-		rows, err = s.db.Query("SELECT "+userCols+" FROM users WHERE tenant_id=? AND org_id IN ("+phs+") ORDER BY id", args...)
+		rows, err = db.Query(s.db, db.CurrentDialect(), "SELECT "+userCols+" FROM users WHERE tenant_id=? AND org_id IN ("+phs+") ORDER BY id", args...)
 	}
 	if err != nil {
 		return nil, err
@@ -263,11 +271,7 @@ func (s *Store) CreateOrg(tid, parentID int64, name, orgType string) (*Org, erro
 		orgType = OrgTypeOrg
 	}
 	now := time.Now().Format(time.RFC3339)
-	res, err := s.execW("INSERT INTO orgs (tenant_id, parent_id, name, type, created_at, updated_at) VALUES (?,?,?,?,?,?)", tid, parentID, name, orgType, now, now)
-	if err != nil {
-		return nil, err
-	}
-	id, err := res.LastInsertId()
+	id, err := s.execWID("INSERT INTO orgs (tenant_id, parent_id, name, type, created_at, updated_at) VALUES (?,?,?,?,?,?)", tid, parentID, name, orgType, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +280,7 @@ func (s *Store) CreateOrg(tid, parentID int64, name, orgType string) (*Org, erro
 
 // GetOrgByID 按主键查询组织。
 func (s *Store) GetOrgByID(id int64) (*Org, error) {
-	row := s.db.QueryRow("SELECT "+orgCols+" FROM orgs WHERE id=?", id)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+orgCols+" FROM orgs WHERE id=?", id)
 	var o Org
 	if err := row.Scan(&o.ID, &o.TenantID, &o.ParentID, &o.Name, &o.Type, &o.TokenLimit, &o.CreatedAt, &o.UpdatedAt); err != nil {
 		return nil, err
@@ -298,7 +302,7 @@ func (s *Store) EnsureRootOrg(tid int64, name string) (*Org, error) {
 
 // GetRootOrg 查询租户根组织行。
 func (s *Store) GetRootOrg(tid int64) (*Org, error) {
-	row := s.db.QueryRow("SELECT "+orgCols+" FROM orgs WHERE tenant_id=? AND type='root' ORDER BY id LIMIT 1", tid)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+orgCols+" FROM orgs WHERE tenant_id=? AND type='root' ORDER BY id LIMIT 1", tid)
 	var o Org
 	if err := row.Scan(&o.ID, &o.TenantID, &o.ParentID, &o.Name, &o.Type, &o.TokenLimit, &o.CreatedAt, &o.UpdatedAt); err != nil {
 		return nil, err
@@ -329,7 +333,7 @@ func (s *Store) ListPlatformOrgs(platformRootID int64) ([]*Org, error) {
 	// INNER JOIN tenants：已删除租户的孤儿组织不再出现在平台树
 	// ★ 修复（2026-08-26 P1-b）：SELECT 补第 8 列 token_limit——旧 SQL 只查 7 列却 Scan
 	//   8 个目标，每行 Scan 报错被 continue 吞掉，导致平台组织树恒为空。
-	rows, err := s.db.Query("SELECT o.id, o.tenant_id, o.parent_id, o.name, o.type, COALESCE(o.token_limit,0), o.created_at, o.updated_at FROM orgs o INNER JOIN tenants t ON o.tenant_id=t.id WHERE o.tenant_id>0 ORDER BY o.tenant_id, CASE o.type WHEN 'root' THEN 0 ELSE 1 END, o.parent_id, o.id")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT o.id, o.tenant_id, o.parent_id, o.name, o.type, COALESCE(o.token_limit,0), o.created_at, o.updated_at FROM orgs o INNER JOIN tenants t ON o.tenant_id=t.id WHERE o.tenant_id>0 ORDER BY o.tenant_id, CASE o.type WHEN 'root' THEN 0 ELSE 1 END, o.parent_id, o.id")
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +364,7 @@ func (s *Store) ListPlatformOrgs(platformRootID int64) ([]*Org, error) {
 
 // ListOrgs 列出租户下全部组织（扁平列表，前端组装树）。
 func (s *Store) ListOrgs(tid int64) ([]*Org, error) {
-	rows, err := s.db.Query("SELECT "+orgCols+" FROM orgs WHERE tenant_id=? ORDER BY CASE type WHEN 'root' THEN 0 ELSE 1 END, parent_id, id", tid)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+orgCols+" FROM orgs WHERE tenant_id=? ORDER BY CASE type WHEN 'root' THEN 0 ELSE 1 END, parent_id, id", tid)
 	if err != nil {
 		return nil, err
 	}
@@ -431,18 +435,18 @@ func (s *Store) DeleteOrg(id int64) error {
 	}
 	defer tx.Rollback()
 	// ★ 用户回收至上级组织（非根组织）：保持层级归属语义
-	if _, err := tx.Exec("UPDATE users SET org_id=? WHERE org_id=?", org.ParentID, id); err != nil {
+	if _, err := db.Exec(tx, db.CurrentDialect(), "UPDATE users SET org_id=? WHERE org_id=?", org.ParentID, id); err != nil {
 		return err
 	}
 	// 部门删除保护：被回收的部门管理员失去管理范围，自动降级为普通用户（防"幽灵管理员"）
-	if _, err := tx.Exec("UPDATE users SET role=?, updated_at=? WHERE org_id=0 AND role=? AND tenant_id=?",
+	if _, err := db.Exec(tx, db.CurrentDialect(), "UPDATE users SET role=?, updated_at=? WHERE org_id=0 AND role=? AND tenant_id=?",
 		RoleUser, time.Now().Format(time.RFC3339), RoleDeptAdmin, org.TenantID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("UPDATE orgs SET parent_id=?, updated_at=? WHERE parent_id=?", org.ParentID, time.Now().Format(time.RFC3339), id); err != nil {
+	if _, err := db.Exec(tx, db.CurrentDialect(), "UPDATE orgs SET parent_id=?, updated_at=? WHERE parent_id=?", org.ParentID, time.Now().Format(time.RFC3339), id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("DELETE FROM orgs WHERE id=?", id); err != nil {
+	if _, err := db.Exec(tx, db.CurrentDialect(), "DELETE FROM orgs WHERE id=?", id); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -521,7 +525,7 @@ func (s *Store) IsOrgInSubtree(tid, rootOrgID, targetOrgID int64) (bool, error) 
 // 返回：用户列表（按 tenant_id,id 排序，密码哈希脱敏）。
 // ListAllUsers 跨全部租户列出所有用户（超管平台根视图聚合用，脱敏）。
 func (s *Store) ListAllUsers() ([]*User, error) {
-	rows, err := s.db.Query("SELECT " + userCols + " FROM users ORDER BY tenant_id, id")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+userCols+" FROM users ORDER BY tenant_id, id")
 	if err != nil {
 		return nil, err
 	}
@@ -542,7 +546,7 @@ func (s *Store) ListAllUsers() ([]*User, error) {
 // OrgNameMap 全部组织 ID→名称映射（跨租户展示所属组织用）。
 // OrgNameMap 全部组织 ID→名称映射（跨租户展示所属组织用）。
 func (s *Store) OrgNameMap() (map[int64]string, error) {
-	rows, err := s.db.Query("SELECT id, name FROM orgs")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT id, name FROM orgs")
 	if err != nil {
 		return nil, err
 	}

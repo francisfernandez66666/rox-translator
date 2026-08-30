@@ -7,6 +7,7 @@ package store
 
 import (
 	"time"
+	"translator/internal/db"
 )
 
 // Alert 监控告警记录
@@ -36,11 +37,11 @@ func (s *Store) CreateAlert(tid int64, level, kind, message string) error {
 func (s *Store) CreateAlertEx(tid int64, level, kind, message string, userID int64, log string) error {
 	// 幂等：同 tenant+kind 已有 open 告警时跳过（避免每次检查都刷屏）
 	var cnt int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM alerts WHERE tenant_id=? AND kind=? AND status='open'", tid, kind).Scan(&cnt)
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COUNT(*) FROM alerts WHERE tenant_id=? AND kind=? AND status='open'", tid, kind).Scan(&cnt)
 	if err == nil && cnt > 0 {
 		return nil // 已存在未处理同类型告警，直接返回，不再重复写入
 	}
-	_, err = s.db.Exec(
+	_, err = db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO alerts (tenant_id, user_id, level, kind, message, log, status, created_at) VALUES (?,?,?,?,?,?,'open',?)",
 		tid, userID, level, kind, message, log, time.Now().Format(time.RFC3339))
 	return err
@@ -69,7 +70,7 @@ func (s *Store) ListAlerts(tid int64, status string, limit int) ([]*Alert, error
 	}
 	query += " ORDER BY id DESC LIMIT ?"
 	args = append(args, limit)
-	rows, err := s.db.Query(query, args...)
+	rows, err := db.Query(s.db, db.CurrentDialect(), query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +90,7 @@ func (s *Store) ListAlerts(tid int64, status string, limit int) ([]*Alert, error
 // ResolveAlert 关闭指定告警：将状态置为 resolved 并记录关闭时间。
 // 参数：id=告警主键 ID。
 func (s *Store) ResolveAlert(id int64) error {
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE alerts SET status='resolved', resolved_at=? WHERE id=?",
 		time.Now().Format(time.RFC3339), id)
 	return err

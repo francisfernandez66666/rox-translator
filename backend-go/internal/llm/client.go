@@ -542,7 +542,7 @@ func isRateLimit(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "429")
 }
 
-// EmbedResponse 智谱 embedding 响应
+// EmbedResponse 嵌入响应（OpenAI 兼容 embeddings 格式，兼容 SiliconFlow 智谱等）
 type EmbedResponse struct {
 	Data []struct {
 		Embedding []float64 `json:"embedding"` // 嵌入向量（float64 数组）
@@ -550,7 +550,7 @@ type EmbedResponse struct {
 	Usage Usage `json:"usage"` // 嵌入调用 token 用量（KB 匹配成本归集）
 }
 
-// Embed 单条文本嵌入（智谱 embedding-2，1024 维），返回归一化向量。
+// Embed 单条文本嵌入（默认 SiliconFlow BAAI/bge-m3，1024 维），返回 L2 归一化向量。
 // 参数：text=待嵌入文本；返回归一化后的 float32 向量。
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	vecs, err := c.EmbedBatch(ctx, []string{text})
@@ -592,7 +592,7 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string, batchSize ...in
 // 参数：texts=单批文本；返回归一化向量列表。
 func (c *Client) embedChunk(ctx context.Context, texts []string) ([][]float32, error) {
 	// 阶段覆盖（kb_embed）：超管在分阶段模型里配置的 Embed 端点优先（R7：持锁快照读取）
-	base, key, model := c.cfg.EmbedAPIBase, c.cfg.EmbedAPIKey, "embedding-2"
+	base, key, model := c.cfg.EmbedAPIBase, c.cfg.EmbedAPIKey, c.cfg.EmbedModel
 	// 优先级：ctx 请求级覆盖 > 全局快照覆盖 > 默认配置（整改 R3）
 	if cb, ck, cm, cok := embedOverrideFromCtx(ctx); cok && cb != "" && cm != "" {
 		base, key, model = cb, ck, cm

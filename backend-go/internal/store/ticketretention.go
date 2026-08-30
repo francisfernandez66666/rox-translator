@@ -11,11 +11,12 @@ package store
 import (
 	"strings"
 	"time"
+	"translator/internal/db"
 )
 
 // SetTicketExpiry 打点工单产物到期时间。
 func (s *Store) SetTicketExpiry(id int64, expiresAt string) error {
-	_, err := s.db.Exec("UPDATE tickets SET result_expires_at=? WHERE id=?", expiresAt, id)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tickets SET result_expires_at=? WHERE id=?", expiresAt, id)
 	return err
 }
 
@@ -35,7 +36,7 @@ const retentionCols = "id, tenant_id, created_by, ticket_no, title, COALESCE(res
 
 // scanRetentionRows 通用查询：completed 且设置了到期时间的工单。
 func (s *Store) scanRetentionRows(where string) ([]*TicketRetentionRow, error) {
-	rows, err := s.db.Query("SELECT " + retentionCols + " FROM tickets WHERE status='completed' AND result_expires_at != '' " + where + " ORDER BY result_expires_at")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+retentionCols+" FROM tickets WHERE status='completed' AND result_expires_at != '' "+where+" ORDER BY result_expires_at")
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +60,7 @@ func (s *Store) ListTicketsForRetention() ([]*TicketRetentionRow, error) {
 // TicketExpireMarked 判断某提醒档位是否已发送过。
 func (s *Store) TicketExpireMarked(id int64, tier string) bool {
 	var m string
-	_ = s.db.QueryRow("SELECT COALESCE(expire_notify,'') FROM tickets WHERE id=?", id).Scan(&m)
+	_ = db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(expire_notify,'') FROM tickets WHERE id=?", id).Scan(&m)
 	for _, t := range strings.Split(m, ",") {
 		if strings.TrimSpace(t) == tier {
 			return true
@@ -71,7 +72,7 @@ func (s *Store) TicketExpireMarked(id int64, tier string) bool {
 // MarkTicketExpireNotify 追加提醒档位标记（幂等）。
 func (s *Store) MarkTicketExpireNotify(id int64, tier string) error {
 	var m string
-	_ = s.db.QueryRow("SELECT COALESCE(expire_notify,'') FROM tickets WHERE id=?", id).Scan(&m)
+	_ = db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(expire_notify,'') FROM tickets WHERE id=?", id).Scan(&m)
 	for _, t := range strings.Split(m, ",") {
 		if strings.TrimSpace(t) == tier {
 			return nil // 已标记
@@ -83,7 +84,7 @@ func (s *Store) MarkTicketExpireNotify(id int64, tier string) error {
 	} else {
 		newVal += "," + tier
 	}
-	_, err := s.db.Exec("UPDATE tickets SET expire_notify=?, updated_at=? WHERE id=?", newVal, time.Now().Format(time.RFC3339), id)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tickets SET expire_notify=?, updated_at=? WHERE id=?", newVal, time.Now().Format(time.RFC3339), id)
 	return err
 }
 
@@ -92,7 +93,7 @@ func (s *Store) MarkTicketExpireNotify(id int64, tier string) error {
 func (s *Store) CleanupTicketResults(id int64) ([]string, error) {
 	var paths []string
 	var mainPath string
-	_ = s.db.QueryRow("SELECT COALESCE(result_path,'') FROM tickets WHERE id=?", id).Scan(&mainPath)
+	_ = db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(result_path,'') FROM tickets WHERE id=?", id).Scan(&mainPath)
 	if mainPath != "" {
 		paths = append(paths, mainPath)
 	}
@@ -103,12 +104,12 @@ func (s *Store) CleanupTicketResults(id int64) ([]string, error) {
 				paths = append(paths, f.ResultPath)
 			}
 		}
-		if _, err := s.db.Exec("UPDATE ticket_files SET result_path='', error=CASE WHEN error='' THEN '产物已过保留期清理' ELSE error END WHERE ticket_id=?", id); err != nil {
+		if _, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE ticket_files SET result_path='', error=CASE WHEN error='' THEN '产物已过保留期清理' ELSE error END WHERE ticket_id=?", id); err != nil {
 			return paths, err
 		}
 	}
 	now := time.Now().Format(time.RFC3339)
-	if _, err := s.db.Exec("UPDATE tickets SET result_path='', result_expires_at='', updated_at=? WHERE id=?", now, id); err != nil {
+	if _, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tickets SET result_path='', result_expires_at='', updated_at=? WHERE id=?", now, id); err != nil {
 		return paths, err
 	}
 	return paths, nil

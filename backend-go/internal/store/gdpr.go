@@ -5,7 +5,10 @@
 // =============================================
 package store
 
-import "os"
+import (
+	"os"
+	"translator/internal/db"
+)
 
 // ============ 租户数据主权：导出 / 删除（GDPR） ============
 
@@ -83,10 +86,11 @@ func (s *Store) ExportTenantData(tid int64) (map[string]interface{}, error) {
 // 参数：tid=租户 ID；注意：tenants 表本身由 tenant.Store 管理，由调用方负责。
 //
 // ★ 清单补全（2026-08-26 全仓评审 C5）：原清单漏 12 张表——
-//   referral_rewards（含被邀邮箱快照，个人数据）/ tm_review / tm_hit_count /
-//   feedbacks / notifications / eval_records / ticket_files / ticket_state /
-//   output_artifacts / quota_grants / balance_accounts / jobs。
-//   并追加磁盘产物清理（工单源文件与译文产物 best-effort 删除）。
+//
+//	referral_rewards（含被邀邮箱快照，个人数据）/ tm_review / tm_hit_count /
+//	feedbacks / notifications / eval_records / ticket_files / ticket_state /
+//	output_artifacts / quota_grants / balance_accounts / jobs。
+//	并追加磁盘产物清理（工单源文件与译文产物 best-effort 删除）。
 func (s *Store) EraseTenantData(tid int64) error {
 	tables := []string{
 		"users", "kb_entries", "kb_packages", "kb_safety_phrases",
@@ -99,20 +103,20 @@ func (s *Store) EraseTenantData(tid int64) error {
 	}
 	for _, t := range tables {
 		// 只删除明确带 tenant_id 列的表；忽略不存在的表
-		if _, err := s.db.Exec("DELETE FROM "+t+" WHERE tenant_id=?", tid); err != nil {
+		if _, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM "+t+" WHERE tenant_id=?", tid); err != nil {
 			// 表可能不存在，忽略
 			continue
 		}
 	}
 	// 邀请码：删除绑定该租户的邀请码
-	_, _ = s.db.Exec("DELETE FROM invite_codes WHERE tenant_id=?", tid)
+	_, _ = db.Exec(s.db, db.CurrentDialect(), "DELETE FROM invite_codes WHERE tenant_id=?", tid)
 	return nil
 }
 
 // collectTenantArtifactPaths 收集租户全部工单相关磁盘文件路径（擦除前调用）。
 func (s *Store) collectTenantArtifactPaths(tid int64) []string {
 	paths := []string{}
-	rows, err := s.db.Query(`SELECT COALESCE(file_path,''), COALESCE(result_path,'') FROM tickets WHERE tenant_id=?`, tid)
+	rows, err := db.Query(s.db, db.CurrentDialect(), `SELECT COALESCE(file_path,''), COALESCE(result_path,'') FROM tickets WHERE tenant_id=?`, tid)
 	if err == nil {
 		for rows.Next() {
 			var fp, rp string
@@ -127,7 +131,7 @@ func (s *Store) collectTenantArtifactPaths(tid int64) []string {
 		}
 		rows.Close()
 	}
-	rows2, err := s.db.Query(`SELECT COALESCE(file_path,''), COALESCE(result_path,'') FROM ticket_files WHERE tenant_id=?`, tid)
+	rows2, err := db.Query(s.db, db.CurrentDialect(), `SELECT COALESCE(file_path,''), COALESCE(result_path,'') FROM ticket_files WHERE tenant_id=?`, tid)
 	if err == nil {
 		for rows2.Next() {
 			var fp, rp string
@@ -169,7 +173,7 @@ func removeFilesBestEffort(paths []string) {
 // ListPackages 租户 KB 包列表。
 // 参数：tid=租户 ID；返回该租户全部知识库包（KBPackage 定义于 kbpackages.go）。
 func (s *Store) ListPackages(tid int64) ([]*KBPackage, error) {
-	rows, err := s.db.Query("SELECT "+kbPkgCols+" FROM kb_packages WHERE tenant_id=?", tid)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+kbPkgCols+" FROM kb_packages WHERE tenant_id=?", tid)
 	if err != nil {
 		return nil, err
 	}

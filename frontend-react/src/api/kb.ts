@@ -15,8 +15,13 @@ export async function kbPackages(): Promise<AdminResp> {
 }
 
 /** 创建行业知识库包 */
-export async function kbPackageCreate(data: { code: string; name: string; pack_type: string; role: string }): Promise<AdminResp> {
+export async function kbPackageCreate(data: { code: string; name: string; pack_type: string; role: string; cross_all?: boolean; cross_orgs?: number[] }): Promise<AdminResp> {
   return request('/api/admin/kb-packages/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
+/** 更新知识库包（名称 / 跨部门范围：全公司或涵盖部门） */
+export async function kbPackageUpdate(data: { id: number; name?: string; cross_all?: boolean; cross_orgs?: number[] }): Promise<AdminResp> {
+  return request('/api/admin/kb-packages/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
 /** 删除行业知识库包 */

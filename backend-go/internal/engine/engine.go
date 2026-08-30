@@ -22,6 +22,7 @@ import (
 
 	"translator/internal/billing"
 	"translator/internal/config"
+	"translator/internal/db"
 	"translator/internal/evals"
 	"translator/internal/kb"
 	"translator/internal/llm"
@@ -411,7 +412,7 @@ func scopeVisibleID(scope *kb.PackScope, packID, rowTenant int64) bool {
 	if scope.TenantPackIDs[packID] {
 		return true // 企业包
 	}
-	return scope.SharedPackIDs[packID] // 共享行业/文化包
+	return scope.SharedPackIDs[packID] || scope.UniversalPackIDs[packID] // 行业包 / 通用语言习惯包
 }
 
 // cjkOverlap 计算两条中文的 CJK 字符 Jaccard 重叠率（0~1）
@@ -602,7 +603,13 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 		if len(vec) > 0 {
 			highSim, medSim := e.resolvePolicy(ctx)
 			// 检索返回 TopK（结果已按 InChain 优先 + 相似度排序；InChain=false=跨部门仅参考）
+			// ★ PostgreSQL + pgvector：优先走数据库内向量检索（VectorSearch），失败/缺失则回退 npz 索引。
 			results := idx.ScopedSearchScope(vec, e.Cfg.TopK, targetLangs, tid, scope)
+			if db.CurrentDialect() == db.DialectPostgres {
+				if vr, verr := e.DB.VectorSearch(vec, tid, scope, e.Cfg.TopK); verr == nil && len(vr) > 0 {
+					results = vr
+				}
+			}
 			semAdopted := false
 			anyChainExample := false
 			for _, sr := range results {
@@ -1740,6 +1747,14 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 	e.indexMu.Lock()
 	e.Index = newIdx
 	e.indexMu.Unlock()
+
+	// pgvector 双写：将重建得到的向量同步写入 tm_segments.embedding（仅 PostgreSQL + 已安装 pgvector）。
+	// 与 npz 并存；pgvector 不可用（未安装扩展/列缺失）时最佳努力跳过，不阻断主流程。
+	if db.CurrentDialect() == db.DialectPostgres {
+		for n := 0; n < len(newIdx.IDs); n++ {
+			_ = e.DB.UpsertEmbedding(newIdx.IDs[n], newIdx.Vecs[n])
+		}
+	}
 
 	// 统一计费（P1-3）：经全局 sink 落库，与翻译用量共用同一扣减入口与批量写事务，
 	// 消除「重建直写库」造成的第二计费源与 SQLITE_BUSY 回归；是否扣余额由 sink 按

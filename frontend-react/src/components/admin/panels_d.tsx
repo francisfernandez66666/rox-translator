@@ -52,12 +52,25 @@ function firstTranslation(finalResult: unknown): string {
 const SAFETY_LANGS = ['en', 'ar', 'de', 'es', 'fr', 'id_lang', 'kk', 'pt', 'ru', 'th', 'tr', 'zh_hant']
   .map((x) => ({ label: x === 'id_lang' ? 'id' : x === 'zh_hant' ? 'zh-Hant' : x, value: x }))
 
-// 后端包类型 → 前端分类标签（仅作为分类说明；实际展示名用组织/租户名）
-const PACK_TYPE_LABEL: Record<string, string> = {
-  tenant: '企业包',
-  department: '部门包',
-  industry: '行业包',
-  locale: '语言文化包',
+// 后端包类型 → 前端分类标签：部门包开启跨部门共享即视为「跨部门包」（业务五档之一）
+// 其余包类型直译；实际展示名仍用组织/租户名（packDisplayName）。
+function packTypeLabel(p: Any, t: (k: string) => string): string {
+  if (p.pack_type === 'department') return (p.share_cross_dept ?? 1) === 1 ? t('kb.typeCrossDept') : t('kb.typeDepartment')
+  if (p.pack_type === 'cross_dept') return t('kb.typeCrossDept')
+  if (p.pack_type === 'tenant') return t('kb.typeTenant')
+  if (p.pack_type === 'industry') return t('kb.typeIndustry')
+  if (p.pack_type === 'locale') return t('kb.typeLocale')
+  return String(p.pack_type)
+}
+
+// 包可见范围（按澄清的五档权限模型：部门/跨部门/企业/行业/通用语言习惯包）
+function packScopeLabel(p: Any, t: (k: string) => string, tpl: (k: string, vars?: Record<string, string | number>) => string): string {
+  if (p.pack_type === 'locale') return t('kb.scopeUniversal')
+  if (p.pack_type === 'industry') return t('kb.scopeIndustry')
+  if (p.pack_type === 'tenant') return t('kb.scopeTenant')
+  if (p.pack_type === 'department') return (p.share_cross_dept ?? 1) === 1 ? t('kb.scopeCross') : t('kb.scopeDept')
+  if (p.pack_type === 'cross_dept') return p.cross_all ? t('kb.scopeCrossAll') : tpl('kb.scopeCrossDepts', { n: (p.cross_orgs || []).length })
+  return ''
 }
 
 // 由组织树构建「id → 全路径名」（如 销售部 / 华东区），用于部门包映射为部门名
@@ -94,7 +107,7 @@ export function KbP() {
   const [selectedPkg, setSelectedPkg] = useState<number | null>(null)
   const [entries, setEntries] = useState<Any[]>([])
   // 新建包与新建条目表单
-  const [pForm, setPForm] = useState<Any>({ code: '', name: '', pack_type: 'industry' })
+  const [pForm, setPForm] = useState<Any>({ code: '', name: '', pack_type: 'department' })
   const [eForm, setEForm] = useState<Any>({ source_text: '', layer: 2, target_lang: 'en', target_text: '', module: '' })
   // 批量文本导入
   const [bulkText, setBulkText] = useState('')
@@ -120,16 +133,27 @@ export function KbP() {
   const [sf, setSf] = useState<Any>({ lang: 'en', kind: 'style', phrase: '', replacement: '' })
   const [rebuilding, setRebuilding] = useState(false)
 
-  // 当前用户可创建的知识包类型（受角色等级限制）
+  // 当前用户可创建的知识包类型（受角色等级限制）：部门管理员可建 部门包/跨部门包；
+  // 租户管理员加 企业包；超管再加 行业包/通用语言习惯包。跨部门包名称由创建人自定义。
   const packTypeOptions = useMemo(() => {
-    if (myLevel <= 2) return [{ value: 'department', label: t('kb.typeDepartment') }]
-    const base = [{ value: 'tenant', label: t('kb.typeTenant') }, { value: 'department', label: t('kb.typeDepartment') }]
+    if (myLevel <= 2) return [
+      { value: 'department', label: t('kb.typeDepartment') },
+      { value: 'cross_dept', label: t('kb.typeCrossDept') },
+    ]
+    const base = [
+      { value: 'tenant', label: t('kb.typeTenant') },
+      { value: 'department', label: t('kb.typeDepartment') },
+      { value: 'cross_dept', label: t('kb.typeCrossDept') },
+    ]
     if (isSuper) {
       base.push({ value: 'industry', label: t('kb.typeIndustry') })
       base.push({ value: 'locale', label: t('kb.typeLocale') })
     }
     return base
   }, [myLevel, isSuper, t])
+
+  // 部门列表（用于跨部门包的跨部门范围选择）
+  const deptOrgs = useMemo(() => (orgs || []).filter((o: OrgInfo) => o.type === 'dept'), [orgs])
 
   // 安全句相关派生状态
   const localePackages = useMemo(() => pkgs.filter((p: Any) => p.pack_type === 'locale'), [pkgs])
@@ -184,9 +208,15 @@ export function KbP() {
   // 创建知识包
   async function createPackage() {
     if (!pForm.code || !pForm.name) { MessagePlugin.warning(t('kb.errorCodeNameRequired')); return }
-    const r = await kbPackageCreate({ code: String(pForm.code), name: String(pForm.name), pack_type: String(pForm.pack_type), role: 'source' } as never)
+    const data: Any = { code: String(pForm.code), name: String(pForm.name), pack_type: String(pForm.pack_type), role: 'source' }
+    // 跨部门包：附带跨部门范围（全公司 或 涵盖部门集合）
+    if (pForm.pack_type === 'cross_dept') {
+      data.cross_all = !!pForm.cross_all
+      if (!data.cross_all) data.cross_orgs = (pForm.cross_orgs || []).map((x: Any) => Number(x))
+    }
+    const r = await kbPackageCreate(data as never)
     if (!r.success) { MessagePlugin.error(r.message); return }
-    setPForm({ code: '', name: '', pack_type: 'industry' })
+    setPForm({ code: '', name: '', pack_type: 'department', cross_all: false, cross_orgs: [] })
     await loadPackages()
   }
   // 启用/禁用知识包
@@ -367,6 +397,30 @@ export function KbP() {
         <Select value={String(pForm.pack_type)} onChange={(v: any) => setPForm({ ...pForm, pack_type: v })} options={packTypeOptions} style={{ minWidth: 180 }} />
         <Button onClick={() => void createPackage()}>{t('kb.createPackage')}</Button>
       </div>
+      {/* 跨部门包：选择跨部门范围（全公司 或 自定义部门；维护/使用范围=这些部门的成员/管理员） */}
+      {pForm.pack_type === 'cross_dept' && (
+        <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+          <label style={{ fontSize: 13 }}>
+            <input type="checkbox" checked={!!pForm.cross_all} onChange={(e: any) => setPForm({ ...pForm, cross_all: e.target.checked, cross_orgs: e.target.checked ? [] : (pForm.cross_orgs || []) })} />
+            {' '}{t('kb.scopeCrossAll')}
+          </label>
+          {!pForm.cross_all && (
+            <>
+              <span style={{ fontSize: 13, color: '#889' }}>{tpl('kb.scopeCrossDepts', { n: (pForm.cross_orgs || []).length })}:</span>
+              {deptOrgs.map((o: OrgInfo) => (
+                <label key={o.id} style={{ fontSize: 13 }}>
+                  <input type="checkbox" checked={(pForm.cross_orgs || []).includes(o.id)} onChange={(e: any) => {
+                    const set = new Set<number>(pForm.cross_orgs || [])
+                    if (e.target.checked) set.add(o.id); else set.delete(o.id)
+                    setPForm({ ...pForm, cross_orgs: Array.from(set) })
+                  }} />
+                  {' '}{o.name}
+                </label>
+              ))}
+            </>
+          )}
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
         <span style={{ fontSize: 12, color: '#889' }}>{t('kb.entriesHint')}</span>
         {isSuper && <Button size="small" disabled={rebuilding} onClick={() => void rebuildIndex()}>{rebuilding ? t('kb.rebuilding') : t('kb.rebuildIndex')}</Button>}
@@ -378,13 +432,14 @@ export function KbP() {
            { colKey: 'id', title: 'ID', width: 60 },
            { colKey: 'code', title: t('kb.codePlaceholder'), width: 120 },
            { colKey: 'name', title: t('kb.namePlaceholder'), cell: ({ row }: any) => packDisplayName(row, orgMap) },
-           { colKey: 'pack_type', title: t('kb.colType'), width: 120, cell: ({ row }: any) => PACK_TYPE_LABEL[row.pack_type] || row.pack_type },
-          { colKey: 'enabled', title: t('kb.enablePack') ? '启用' : '启用', width: 80, cell: ({ row }: any) =>
-            <Switch size="small" value={row.enabled !== 0} onChange={async () => { await togglePackage(row) }} /> },
-          { colKey: 'share_cross_dept', title: t('kb.shareOn'), width: 120, cell: ({ row }: any) =>
-            row.pack_type === 'department'
-              ? <Switch size="small" value={(row.share_cross_dept ?? 1) === 1} onChange={async () => { await toggleShare(row) }} />
-              : <span /> },
+           { colKey: 'pack_type', title: t('kb.colType'), width: 130, cell: ({ row }: any) => packTypeLabel(row, t) },
+           { colKey: 'scope', title: t('kb.colScope'), width: 180, cell: ({ row }: any) => packScopeLabel(row, t, tpl) },
+           { colKey: 'enabled', title: t('kb.enablePack') ? '启用' : '启用', width: 80, cell: ({ row }: any) =>
+             <Switch size="small" value={row.enabled !== 0} onChange={async () => { await togglePackage(row) }} /> },
+           { colKey: 'share_cross_dept', title: t('kb.colCross'), width: 110, cell: ({ row }: any) =>
+             row.pack_type === 'department'
+               ? <Switch size="small" value={(row.share_cross_dept ?? 1) === 1} onChange={async () => { await toggleShare(row) }} />
+               : <span /> },
           { colKey: 'op', title: t('org.colActions'), width: 200, cell: ({ row }: any) => (
             <Space size={2}>
               <Button size="small" variant="text" onClick={() => openEntries(row)}>{tpl('kb.viewEntries', { count: entriesMap[Number(row.id)] || 0 })}</Button>

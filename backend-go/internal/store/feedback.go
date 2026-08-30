@@ -8,6 +8,7 @@ package store
 import (
 	"database/sql"
 	"time"
+	"translator/internal/db"
 )
 
 // Feedback 用户反馈记录
@@ -43,7 +44,7 @@ func (s *Store) CreateFeedback(f *Feedback) error {
 	if f.WithContext {
 		ctxInt = 1
 	}
-	res, err := s.db.Exec(
+	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
 		`INSERT INTO feedbacks (tenant_id, user_id, target_type, ticket_id, source_text, translations, target_langs, mode, content, with_context, status, created_at)
 		 VALUES (?,?,?,?,?,?,?,?,?,?,'open',?)`,
 		f.TenantID, f.UserID, f.TargetType, f.TicketID, f.SourceText, f.Translations,
@@ -51,7 +52,6 @@ func (s *Store) CreateFeedback(f *Feedback) error {
 	if err != nil {
 		return err
 	}
-	id, _ := res.LastInsertId()
 	f.ID = id
 	return nil
 }
@@ -65,7 +65,7 @@ func (s *Store) ListFeedbacks(status string) ([]*Feedback, error) {
 		args = append(args, status)
 	}
 	q += " ORDER BY id DESC LIMIT 200"
-	rows, err := s.db.Query(q, args...)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,7 @@ func scanFeedback(row feedbackScanner) (*Feedback, error) {
 
 // ResolveFeedback 超管标记反馈已处理并附备注。
 func (s *Store) ResolveFeedback(id int64, note string) error {
-	res, err := s.db.Exec(
+	res, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE feedbacks SET status='resolved', handle_note=?, handled_at=? WHERE id=?",
 		note, time.Now().Format(time.RFC3339), id)
 	if err != nil {
@@ -117,14 +117,14 @@ func (s *Store) ResolveFeedback(id int64, note string) error {
 func (s *Store) CountFeedbacksToday(userID int64) int64 {
 	day := time.Now().Format("2006-01-02")
 	var n int64
-	_ = s.db.QueryRow(
+	_ = db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT COUNT(*) FROM feedbacks WHERE user_id=? AND created_at>=?", userID, day+"T00:00:00").Scan(&n)
 	return n
 }
 
 // feedbackMigrate 老库补 replies 列（幂等）。
 func (s *Store) feedbackMigrate() {
-	_, _ = s.db.Exec("ALTER TABLE feedbacks ADD COLUMN replies TEXT NOT NULL DEFAULT '[]'")
+	_, _ = db.Exec(s.db, db.CurrentDialect(), "ALTER TABLE feedbacks ADD COLUMN replies TEXT NOT NULL DEFAULT '[]'")
 }
 
 // ListFeedbacksByUser 查询某用户提交的全部反馈（BBS 我的反馈视图）。status 为空=全部。
@@ -136,7 +136,7 @@ func (s *Store) ListFeedbacksByUser(userID int64, status string) ([]*Feedback, e
 		args = append(args, status)
 	}
 	q += " ORDER BY id DESC LIMIT 200"
-	rows, err := s.db.Query(q, args...)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -155,13 +155,13 @@ func (s *Store) ListFeedbacksByUser(userID int64, status string) ([]*Feedback, e
 // AppendFeedbackReply 向回复线程追加一条（BBS 模式；超管与提交者均可写）。
 // 参数：id=反馈 ID；replyJSON=完整线程 JSON（调用方读改写，避免并发覆盖场景复杂化——当前量级可接受）。
 func (s *Store) AppendFeedbackReply(id int64, replyJSON string) error {
-	_, err := s.db.Exec("UPDATE feedbacks SET replies=? WHERE id=?", replyJSON, id)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE feedbacks SET replies=? WHERE id=?", replyJSON, id)
 	return err
 }
 
 // GetFeedback 按 ID 取单条反馈（不存在返回 nil, err）。
 func (s *Store) GetFeedback(id int64) (*Feedback, error) {
-	row := s.db.QueryRow("SELECT " + feedbackCols + " FROM feedbacks WHERE id=?", id)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+feedbackCols+" FROM feedbacks WHERE id=?", id)
 	f, err := scanFeedback(row)
 	if err != nil {
 		return nil, err

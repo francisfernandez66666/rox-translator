@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"time"
+	"translator/internal/db"
 )
 
 // Ticket 工单
@@ -37,15 +38,15 @@ type Ticket struct {
 
 // TicketState 工单状态轨迹（Projector 物化）
 type TicketState struct {
-	ID        int64  `json:"id"`         // 轨迹记录主键 ID
-	TicketID  int64  `json:"ticket_id"`  // 关联工单 ID
-	Step      string `json:"step"`       // 流程步骤标识（如 kb_match / gate）
-	Status    string `json:"status"`     // 该步骤状态：pending/running/success/failed/skipped
-	Payload   string `json:"payload"`    // 步骤轨迹快照（JSON，如命中记录 / 初翻校对进度）
-	Version   int    `json:"version"`    // 步骤版本号（同步骤递增）
-	UpdatedAt string `json:"updated_at"` // 更新时间（RFC3339 字符串）
-	StartedAt string `json:"started_at"` // 步骤开始时间（首次 running 时记录）
-	DurationMs int64 `json:"duration_ms"` // 步骤执行耗时（毫秒，running→终态时结算）
+	ID         int64  `json:"id"`          // 轨迹记录主键 ID
+	TicketID   int64  `json:"ticket_id"`   // 关联工单 ID
+	Step       string `json:"step"`        // 流程步骤标识（如 kb_match / gate）
+	Status     string `json:"status"`      // 该步骤状态：pending/running/success/failed/skipped
+	Payload    string `json:"payload"`     // 步骤轨迹快照（JSON，如命中记录 / 初翻校对进度）
+	Version    int    `json:"version"`     // 步骤版本号（同步骤递增）
+	UpdatedAt  string `json:"updated_at"`  // 更新时间（RFC3339 字符串）
+	StartedAt  string `json:"started_at"`  // 步骤开始时间（首次 running 时记录）
+	DurationMs int64  `json:"duration_ms"` // 步骤执行耗时（毫秒，running→终态时结算）
 }
 
 // 工单状态
@@ -78,13 +79,12 @@ func (s *Store) CreateTicket(tid, userID int64, title, sourceText, filePath, tar
 		CreatedAt:   now.Format(time.RFC3339),
 		UpdatedAt:   now.Format(time.RFC3339),
 	}
-	res, err := s.db.Exec(
+	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
 		"INSERT INTO tickets (tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
 		t.TenantID, t.TicketNo, t.Title, t.Status, t.SourceText, t.FilePath, t.TargetLangs, t.CreatedBy, t.CreatedAt, t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
 	t.ID = id // 回填自增主键
 	return t, nil
 }
@@ -93,7 +93,7 @@ func (s *Store) CreateTicket(tid, userID int64, title, sourceText, filePath, tar
 // 参数：id=工单主键 ID，tid=租户 ID；返回工单对象。
 func (s *Store) GetTicket(id, tid int64) (*Ticket, error) {
 	var t Ticket
-	err := s.db.QueryRow("SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), created_at, updated_at FROM tickets WHERE id=? AND tenant_id=?", id, tid).
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), created_at, updated_at FROM tickets WHERE id=? AND tenant_id=?", id, tid).
 		Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -103,13 +103,13 @@ func (s *Store) GetTicket(id, tid int64) (*Ticket, error) {
 
 // GetTicketGlobal 按 ID 查询工单（不带租户过滤，worker 异步上下文用）。
 func (s *Store) GetTicketGlobal(id int64) (*Ticket, error) {
-	row := s.db.QueryRow("SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), created_at, updated_at FROM tickets WHERE id=?", id)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), created_at, updated_at FROM tickets WHERE id=?", id)
 	return scanTicketFull(row)
 }
 
 // SetTicketResultPath 写入结果文件路径。
 func (s *Store) SetTicketResultPath(id int64, path string) error {
-	_, err := s.db.Exec("UPDATE tickets SET result_path=?, updated_at=? WHERE id=?", path, time.Now().Format(time.RFC3339), id)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tickets SET result_path=?, updated_at=? WHERE id=?", path, time.Now().Format(time.RFC3339), id)
 	return err
 }
 
@@ -124,7 +124,7 @@ func (s *Store) ListTickets(tid, userID int64, onlyMine bool) ([]*Ticket, error)
 		args = append(args, userID)
 	}
 	q += " ORDER BY id DESC LIMIT 200"
-	rows, err := s.db.Query(q, args...)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +143,7 @@ func (s *Store) ListTickets(tid, userID int64, onlyMine bool) ([]*Ticket, error)
 // ListPendingApproval 待审批工单列表（供 approver/admin 审批台使用）。
 // 参数：tid=租户 ID；返回状态为 pending_approval/approved/rejected 的工单。
 func (s *Store) ListPendingApproval(tid int64) ([]*Ticket, error) {
-	rows, err := s.db.Query("SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), created_at, updated_at FROM tickets WHERE tenant_id=? AND status IN ('pending_approval','approved','rejected') ORDER BY id DESC LIMIT 200", tid)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), created_at, updated_at FROM tickets WHERE tenant_id=? AND status IN ('pending_approval','approved','rejected') ORDER BY id DESC LIMIT 200", tid)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +162,7 @@ func (s *Store) ListPendingApproval(tid int64) ([]*Ticket, error) {
 // UpdateTicket 更新工单状态与字段。
 // 参数：t=待更新工单对象（以 ID+TenantID 定位）；返回错误。
 func (s *Store) UpdateTicket(t *Ticket) error {
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tickets SET title=?, status=?, target_langs=?, approver_id=?, reviewer_id=?, reject_reason=?, final_result=?, mode=?, tokens_billed=?, updated_at=? WHERE id=? AND tenant_id=?",
 		t.Title, t.Status, t.TargetLangs, t.ApproverID, t.ReviewerID, t.RejectReason, t.FinalResult, t.Mode, t.TokensBilled,
 		time.Now().Format(time.RFC3339), t.ID, t.TenantID)
@@ -179,7 +179,7 @@ func (s *Store) SetTicketState(ticketID int64, step, status, payload string) err
 	var id int64
 	var oldStatus, oldStarted string
 	var oldDur int64
-	qerr := s.db.QueryRow(
+	qerr := db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT id, status, COALESCE(started_at,''), COALESCE(duration_ms,0) FROM ticket_state WHERE ticket_id=? AND step=? ORDER BY version DESC LIMIT 1",
 		ticketID, step).Scan(&id, &oldStatus, &oldStarted, &oldDur)
 	if qerr != nil {
@@ -188,7 +188,7 @@ func (s *Store) SetTicketState(ticketID int64, step, status, payload string) err
 		if status == "running" {
 			started = now
 		}
-		_, err := s.db.Exec(
+		_, err := db.Exec(s.db, db.CurrentDialect(),
 			"INSERT INTO ticket_state (ticket_id, step, status, payload, version, updated_at, started_at, duration_ms) VALUES (?,?,?,?,1,?,?,0)",
 			ticketID, step, status, payload, now, started)
 		return err
@@ -204,7 +204,7 @@ func (s *Store) SetTicketState(ticketID int64, step, status, payload string) err
 			dur = int64(time.Since(t0) / time.Millisecond)
 		}
 	}
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE ticket_state SET status=?, payload=?, version=version+1, updated_at=?, started_at=?, duration_ms=? WHERE id=?",
 		status, payload, now, started, dur, id)
 	return err
@@ -212,14 +212,14 @@ func (s *Store) SetTicketState(ticketID int64, step, status, payload string) err
 
 // TicketStateTimingMigrate 为 ticket_state 增加 started_at / duration_ms 列（幂等，列已存在则忽略）。
 func (s *Store) TicketStateTimingMigrate() {
-	s.db.Exec("ALTER TABLE ticket_state ADD COLUMN started_at TEXT")
-	s.db.Exec("ALTER TABLE ticket_state ADD COLUMN duration_ms INTEGER")
+	db.Exec(s.db, db.CurrentDialect(), "ALTER TABLE ticket_state ADD COLUMN started_at TEXT")
+	db.Exec(s.db, db.CurrentDialect(), "ALTER TABLE ticket_state ADD COLUMN duration_ms INTEGER")
 }
 
 // TicketStates 查询工单状态轨迹（按版本升序）。
 // 参数：ticketID=工单 ID；返回该工单全部步骤轨迹。
 func (s *Store) TicketStates(ticketID int64) ([]*TicketState, error) {
-	rows, err := s.db.Query("SELECT id, ticket_id, step, status, payload, version, updated_at FROM ticket_state WHERE ticket_id=? ORDER BY version", ticketID)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT id, ticket_id, step, status, payload, version, updated_at FROM ticket_state WHERE ticket_id=? ORDER BY version", ticketID)
 	if err != nil {
 		return nil, err
 	}
@@ -271,13 +271,13 @@ func (s *Store) DeleteTicketWithFiles(id, tid int64) error {
 		}
 	}
 	// 删除 DB 记录（ticket_files → ticket_state → tickets）
-	if _, err := s.db.Exec("DELETE FROM ticket_files WHERE ticket_id=?", id); err != nil {
+	if _, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM ticket_files WHERE ticket_id=?", id); err != nil {
 		return err
 	}
-	if _, err := s.db.Exec("DELETE FROM ticket_state WHERE ticket_id=?", id); err != nil {
+	if _, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM ticket_state WHERE ticket_id=?", id); err != nil {
 		return err
 	}
-	if _, err := s.db.Exec("DELETE FROM tickets WHERE id=? AND tenant_id=?", id, tid); err != nil {
+	if _, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM tickets WHERE id=? AND tenant_id=?", id, tid); err != nil {
 		return err
 	}
 	// 异步清理磁盘文件（不阻塞主流程）
@@ -291,13 +291,13 @@ func (s *Store) DeleteTicketWithFiles(id, tid int64) error {
 
 // StampTicketAPIUser 给 API 创建的任务盖印归属用户 ID（OpenAPI 安全绑定）。
 func (s *Store) StampTicketAPIUser(id, userID int64) error {
-	_, err := s.db.Exec("UPDATE tickets SET api_user_id=? WHERE id=?", userID, id)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tickets SET api_user_id=? WHERE id=?", userID, id)
 	return err
 }
 
 // CancelTicket 用户取消：仅排队中/翻译中可置为 cancelled（幂等安全）。
 func (s *Store) CancelTicket(id int64) error {
-	res, err := s.db.Exec(
+	res, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tickets SET status='cancelled', updated_at=? WHERE id=? AND status IN ('queued','in_progress')",
 		time.Now().Format(time.RFC3339), id)
 	if err != nil {
@@ -314,7 +314,7 @@ func (s *Store) CancelTicket(id int64) error {
 // 长翻译阶段内业务状态不变，若无心跳，20 分钟卡死巡检会把仍在运行的工单误判重排，
 // 造成同工单双副本并发执行（双份 LLM 消耗 + 双份计费）。worker 每 60s 调用一次保活。
 func (s *Store) TouchTicket(id int64) error {
-	_, err := s.db.Exec("UPDATE tickets SET updated_at=? WHERE id=?", time.Now().Format(time.RFC3339), id)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tickets SET updated_at=? WHERE id=?", time.Now().Format(time.RFC3339), id)
 	return err
 }
 
@@ -327,7 +327,7 @@ func (s *Store) TouchTicket(id int64) error {
 // direct 队列 Reserve 自行回收，无需此处越权释放。
 func (s *Store) RequeueStalledTickets(stale time.Duration) (int64, error) {
 	cut := time.Now().Add(-stale).Format(time.RFC3339)
-	res, err := s.db.Exec(
+	res, err := db.Exec(s.db, db.CurrentDialect(),
 		`UPDATE tickets SET status='queued', updated_at=?
 		 WHERE status='in_progress' AND updated_at < ?
 		   AND NOT EXISTS (

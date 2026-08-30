@@ -8,6 +8,7 @@ package store
 
 import (
 	"time"
+	"translator/internal/db"
 )
 
 // Artifact 归属登记行
@@ -22,42 +23,45 @@ type Artifact struct {
 
 // ArtifactsMigrate 建表与唯一索引（幂等，Store.New 迁移链调用）。
 func (s *Store) ArtifactsMigrate() {
-	var tableExists int
-	if err := s.db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='output_artifacts'`).Scan(&tableExists); err != nil {
-		tableExists = 0
-	}
+	d := db.CurrentDialect()
 	needRebuild := false
-	if tableExists == 1 {
-		rows, err := s.db.Query(`PRAGMA index_list('output_artifacts')`)
-		if err == nil {
-			for rows.Next() {
-				var seq, unique, partial int
-				var name, origin string
-				if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
-					continue
-				}
-				if unique != 1 {
-					continue
-				}
-				irows, err := s.db.Query(`PRAGMA index_info(?)`, name)
-				if err != nil {
-					continue
-				}
-				cols := []string{}
-				for irows.Next() {
-					var seqno, cid int
-					var colName string
-					if err := irows.Scan(&seqno, &cid, &colName); err == nil {
-						cols = append(cols, colName)
+	if d == db.DialectSQLite {
+		var tableExists int
+		if err := db.QueryRow(s.db, d, `SELECT 1 FROM sqlite_master WHERE type='table' AND name='output_artifacts'`).Scan(&tableExists); err != nil {
+			tableExists = 0
+		}
+		if tableExists == 1 {
+			rows, err := db.Query(s.db, d, `PRAGMA index_list('output_artifacts')`)
+			if err == nil {
+				for rows.Next() {
+					var seq, unique, partial int
+					var name, origin string
+					if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+						continue
+					}
+					if unique != 1 {
+						continue
+					}
+					irows, err := db.Query(s.db, d, `PRAGMA index_info(?)`, name)
+					if err != nil {
+						continue
+					}
+					cols := []string{}
+					for irows.Next() {
+						var seqno, cid int
+						var colName string
+						if err := irows.Scan(&seqno, &cid, &colName); err == nil {
+							cols = append(cols, colName)
+						}
+					}
+					irows.Close()
+					if len(cols) == 1 && cols[0] == "path" {
+						needRebuild = true
+						break
 					}
 				}
-				irows.Close()
-				if len(cols) == 1 && cols[0] == "path" {
-					needRebuild = true
-					break
-				}
+				rows.Close()
 			}
-			rows.Close()
 		}
 	}
 	if needRebuild {
@@ -65,7 +69,7 @@ func (s *Store) ArtifactsMigrate() {
 		if err != nil {
 			return
 		}
-		tx.Exec(`CREATE TABLE output_artifacts_new (
+		db.Exec(tx, d, `CREATE TABLE output_artifacts_new (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			path TEXT NOT NULL,
 			tenant_id INTEGER NOT NULL DEFAULT 0,
@@ -73,13 +77,13 @@ func (s *Store) ArtifactsMigrate() {
 			ticket_id INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT,
 			UNIQUE(tenant_id, path))`)
-		tx.Exec(`INSERT INTO output_artifacts_new SELECT * FROM output_artifacts`)
-		tx.Exec(`DROP TABLE output_artifacts`)
-		tx.Exec(`ALTER TABLE output_artifacts_new RENAME TO output_artifacts`)
+		db.Exec(tx, d, `INSERT INTO output_artifacts_new SELECT * FROM output_artifacts`)
+		db.Exec(tx, d, `DROP TABLE output_artifacts`)
+		db.Exec(tx, d, `ALTER TABLE output_artifacts_new RENAME TO output_artifacts`)
 		tx.Commit()
 		return
 	}
-	s.db.Exec(`CREATE TABLE IF NOT EXISTS output_artifacts (
+	db.Exec(s.db, d, `CREATE TABLE IF NOT EXISTS output_artifacts (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		path TEXT NOT NULL,
 		tenant_id INTEGER NOT NULL DEFAULT 0,
@@ -95,13 +99,13 @@ func (s *Store) RegisterArtifact(path string, tid, uid, ticketID int64) {
 	if path == "" {
 		return
 	}
-	s.db.Exec(`INSERT OR IGNORE INTO output_artifacts (path, tenant_id, user_id, ticket_id, created_at)
+	db.Exec(s.db, db.CurrentDialect(), `INSERT OR IGNORE INTO output_artifacts (path, tenant_id, user_id, ticket_id, created_at)
 		VALUES (?,?,?,?,?)`, path, tid, uid, ticketID, time.Now().Format(time.RFC3339))
 }
 
 // GetArtifactByPath 按路径查归属；不存在返回 (nil, err)。
 func (s *Store) GetArtifactByPath(path string) (*Artifact, error) {
-	row := s.db.QueryRow(
+	row := db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT id, path, tenant_id, user_id, ticket_id, COALESCE(created_at,'') FROM output_artifacts WHERE path=?", path)
 	var a Artifact
 	if err := row.Scan(&a.ID, &a.Path, &a.TenantID, &a.UserID, &a.TicketID, &a.CreatedAt); err != nil {

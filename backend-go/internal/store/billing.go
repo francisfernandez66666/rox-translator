@@ -13,6 +13,7 @@ import (
 	"log"
 	"strconv"
 	"time"
+	"translator/internal/db"
 )
 
 // Balance 租户余额
@@ -97,7 +98,7 @@ const orderCols = "id, tenant_id, order_no, amount_tokens, amount_money, status,
 //	INSERT OR IGNORE——依赖 BalanceAccountMigrate 建立的 tenant_id 唯一索引，
 //	并发首次访问不会产生重复账户行（旧行为会插入两行，导致展示与实扣不一致）。
 func (s *Store) EnsureBalance(tid int64) error {
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT OR IGNORE INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
 		tid, time.Now().Format(time.RFC3339))
 	return err
@@ -110,10 +111,10 @@ func (s *Store) EnsureBalance(tid int64) error {
 //	   注意顺序不能颠倒：存量已有重复行时建唯一索引会失败。
 func (s *Store) BalanceAccountMigrate() {
 	// 去重：同租户多行时仅保留 id 最小的一行（历史余额取首行口径）
-	s.db.Exec(`DELETE FROM balance_accounts WHERE id NOT IN
+	db.Exec(s.db, db.CurrentDialect(), `DELETE FROM balance_accounts WHERE id NOT IN
 		(SELECT MIN(id) FROM balance_accounts GROUP BY tenant_id)`)
 	// 唯一索引：并发 INSERT OR IGNORE 的正确性前提
-	s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_balance_tid ON balance_accounts(tenant_id)`)
+	db.Exec(s.db, db.CurrentDialect(), `CREATE UNIQUE INDEX IF NOT EXISTS idx_balance_tid ON balance_accounts(tenant_id)`)
 }
 
 // GetBalance 查询租户余额（内部先确保账户存在）。
@@ -123,7 +124,7 @@ func (s *Store) GetBalance(tid int64) (*Balance, error) {
 		return nil, err
 	}
 	var b Balance
-	err := s.db.QueryRow("SELECT id, tenant_id, balance, currency, COALESCE(updated_at,'') FROM balance_accounts WHERE tenant_id=?", tid).
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, balance, currency, COALESCE(updated_at,'') FROM balance_accounts WHERE tenant_id=?", tid).
 		Scan(&b.ID, &b.TenantID, &b.Balance, &b.Currency, &b.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -138,7 +139,7 @@ func (s *Store) Charge(tid int64, tokens int64) error {
 		return err
 	}
 	// 余额累加充值 token 数
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE balance_accounts SET balance=balance+?, updated_at=? WHERE tenant_id=?",
 		tokens, time.Now().Format(time.RFC3339), tid)
 	return err
@@ -160,7 +161,7 @@ func (s *Store) Deduct(tid int64, tokens int64) error {
 	if err := s.EnsureBalance(tid); err != nil {
 		return err
 	}
-	res, err := s.db.Exec(
+	res, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
 		tokens, time.Now().Format(time.RFC3339), tid, tokens)
 	if err != nil {
@@ -196,7 +197,7 @@ func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model string,
 	if err := deductWithGrantsTx(tx, tid, cost); err != nil {
 		return 0, err // 扣减失败（含余额不足）→ 整体回滚，不落半条
 	}
-	res, err := tx.Exec(
+	id, err := db.InsertID(tx, db.CurrentDialect(), "id",
 		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
 		tid, userID, taskType, provider, model, quantity, price, cost, bizKind, bizMode, time.Now().Format(time.RFC3339))
 	if err != nil {
@@ -206,7 +207,7 @@ func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model string,
 		return 0, err
 	}
 	s.incrementDailyUsage(tid, cost) // ★ 性能优化 B6：同步累加日计数器
-	return res.LastInsertId()
+	return id, nil
 }
 
 // UsageBatchRow 批量计量单行输入（性能优化 B2）。
@@ -258,13 +259,13 @@ func (s *Store) RecordUsageBatch(tid int64, rows []UsageBatchRow) (int64, error)
 	const insertSQL = "INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
 	var firstID int64
 	for i, pr := range pricedRows {
-		res, e := tx.Exec(insertSQL,
+		id, e := db.InsertID(tx, db.CurrentDialect(), "id", insertSQL,
 			tid, pr.UserID, pr.TaskType, pr.Provider, pr.Model, pr.Quantity, pr.price, pr.cost, pr.BizKind, pr.BizMode, time.Now().Format(time.RFC3339))
 		if e != nil {
 			return 0, e
 		}
 		if i == 0 {
-			firstID, _ = res.LastInsertId()
+			firstID = id
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -294,7 +295,7 @@ func (s *Store) LogUsageBatch(tid int64, rows []UsageBatchRow) error {
 		if cost < 0 {
 			cost = 0
 		}
-		if _, e := tx.Exec(insertSQL,
+		if _, e := db.Exec(tx, db.CurrentDialect(), insertSQL,
 			tid, r.UserID, r.TaskType, r.Provider, r.Model, r.Quantity, price, cost, r.BizKind, r.BizMode, time.Now().Format(time.RFC3339)); e != nil {
 			return e
 		}
@@ -315,7 +316,7 @@ func (s *Store) LogUsage(tid, userID int64, taskType, provider, model string, qu
 	if cost < 0 {
 		cost = 0 // 兜底：费用不可能为负
 	}
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
 		tid, userID, taskType, provider, model, quantity, price, cost, bizKind, bizMode, time.Now().Format(time.RFC3339))
 	if err == nil {
@@ -330,11 +331,11 @@ func (s *Store) unitPrice(taskType, provider string) (int64, float64) {
 	var price int64
 	var mult float64
 	// 第一次查询：任务+供应商专属价格
-	err := s.db.QueryRow("SELECT unit_price, multiplier FROM rate_card WHERE task_type=? AND lang='*' AND provider=?", taskType, provider).
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT unit_price, multiplier FROM rate_card WHERE task_type=? AND lang='*' AND provider=?", taskType, provider).
 		Scan(&price, &mult)
 	if err != nil {
 		// 回退查询：任务全局价格（provider='*'）
-		err = s.db.QueryRow("SELECT unit_price, multiplier FROM rate_card WHERE task_type=? AND lang='*' AND provider='*'", taskType).
+		err = db.QueryRow(s.db, db.CurrentDialect(), "SELECT unit_price, multiplier FROM rate_card WHERE task_type=? AND lang='*' AND provider='*'", taskType).
 			Scan(&price, &mult)
 	}
 	if err != nil {
@@ -349,7 +350,7 @@ func (s *Store) unitPrice(taskType, provider string) (int64, float64) {
 // ListRateCards 返回全部单价配置（公开定价页展示用）。
 // 返回: 全部 rate_card 行（按 task_type/provider/lang 排序）。
 func (s *Store) ListRateCards() ([]*RateCard, error) {
-	rows, err := s.db.Query("SELECT id, task_type, lang, provider, unit_price, multiplier, COALESCE(updated_at,'') FROM rate_card ORDER BY task_type, provider, lang")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT id, task_type, lang, provider, unit_price, multiplier, COALESCE(updated_at,'') FROM rate_card ORDER BY task_type, provider, lang")
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +369,7 @@ func (s *Store) ListRateCards() ([]*RateCard, error) {
 // UsageStats 租户用量汇总（按任务类型分组统计费用）。
 // 参数：tid=租户 ID；返回 map[任务类型]=总费用 与 全部费用合计。
 func (s *Store) UsageStats(tid int64) (map[string]int64, int64, error) {
-	rows, err := s.db.Query("SELECT task_type, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? GROUP BY task_type", tid)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT task_type, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? GROUP BY task_type", tid)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -398,7 +399,7 @@ func (s *Store) UsageStatsByProvider(tid int64) (map[string]int64, error) {
 		args = append(args, tid)
 	}
 	q += " GROUP BY provider, model"
-	rows, err := s.db.Query(q, args...)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +425,7 @@ func (s *Store) UsageTrend(tid int64, days int) (map[string]int64, error) {
 	}
 	// 计算起始日期（不含今天，往前 days-1 天）
 	start := time.Now().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
-	rows, err := s.db.Query(
+	rows, err := db.Query(s.db, db.CurrentDialect(),
 		"SELECT substr(created_at,1,10) AS day, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=? GROUP BY day ORDER BY day",
 		tid, start)
 	if err != nil {
@@ -450,7 +451,7 @@ func (s *Store) UsageLedgerList(tid int64, limit, offset int) ([]*UsageLedger, e
 	if limit <= 0 || limit > 500 {
 		limit = 50 // 非法 limit 收敛到 50
 	}
-	rows, err := s.db.Query(
+	rows, err := db.Query(s.db, db.CurrentDialect(),
 		"SELECT id, tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, COALESCE(biz_kind,''), COALESCE(biz_mode,''), created_at FROM usage_ledger WHERE tenant_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
 		tid, limit, offset)
 	if err != nil {
@@ -475,11 +476,11 @@ func (s *Store) DailyUsage(tid int64) (int64, error) {
 	var cost int64
 	// ★ 性能优化 B6：优先读日计数器表（O(1) 命中主键），避免每次翻译请求都对 usage_ledger
 	//   做 created_at LIKE 全表扫描（gateUsage→CheckDailyQuota 每请求一次）。
-	if err := s.db.QueryRow("SELECT COALESCE(SUM(total),0) FROM usage_daily WHERE tenant_id=? AND day=?", tid, day).Scan(&cost); err == nil {
+	if err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(SUM(total),0) FROM usage_daily WHERE tenant_id=? AND day=?", tid, day).Scan(&cost); err == nil {
 		return cost, nil
 	}
 	// 兜底（表缺失/无当日行）：回退 ledger 当日 LIKE 扫描
-	err := s.db.QueryRow("SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at LIKE ?", tid, day+"%").Scan(&cost)
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at LIKE ?", tid, day+"%").Scan(&cost)
 	return cost, err
 }
 
@@ -489,7 +490,7 @@ func (s *Store) incrementDailyUsage(tid, amount int64) {
 		return
 	}
 	day := time.Now().Format("2006-01-02")
-	_, _ = s.db.Exec(
+	_, _ = db.Exec(s.db, db.CurrentDialect(),
 		`INSERT INTO usage_daily (tenant_id, day, total) VALUES (?,?,?)
 		 ON CONFLICT(tenant_id, day) DO UPDATE SET total=total+?`,
 		tid, day, amount, amount)
@@ -500,13 +501,13 @@ func (s *Store) incrementDailyUsage(tid, amount int64) {
 func (s *Store) UsageByUser(tid, userID int64) (int64, int64, int64, error) {
 	day := time.Now().Format("2006-01-02")
 	var total, today, cnt int64
-	err := s.db.QueryRow(
+	err := db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=?", tid, userID).
 		Scan(&total, &cnt)
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	_ = s.db.QueryRow(
+	_ = db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at LIKE ?", tid, userID, day+"%").Scan(&today)
 	return total, today, cnt, nil
 }
@@ -532,7 +533,7 @@ func (s *Store) UsageByOrg(tid int64, orgIDs []int64) (map[int64]int64, error) {
 			"WHERE l.tenant_id=? AND u.org_id IN (" + ph + ") AND l.user_id>0"
 	}
 	q += " GROUP BY user_id"
-	rows, err := s.db.Query(q, args...)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +553,7 @@ func (s *Store) UsageByOrg(tid int64, orgIDs []int64) (map[int64]int64, error) {
 func (s *Store) CostByModel() (map[string]int64, map[string]int64, error) {
 	costs := map[string]int64{}
 	quants := map[string]int64{}
-	rows, err := s.db.Query(
+	rows, err := db.Query(s.db, db.CurrentDialect(),
 		"SELECT COALESCE(NULLIF(provider,''),'global'), COALESCE(NULLIF(model,''),'?'), COALESCE(SUM(cost),0), COALESCE(SUM(quantity),0) FROM usage_ledger GROUP BY provider, model")
 	if err != nil {
 		return nil, nil, err
@@ -590,7 +591,7 @@ func (s *Store) CreateOrderChannel(tid int64, tokens int64, money float64, creat
 	if channel != "offline" {
 		payMethod = "online"
 	}
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, qr_content, created_by, created_at) VALUES (?,?,?,?, 'pending', ?, ?, ?, ?, ?)",
 		tid, orderNo, tokens, money, payMethod, channel, qrContent, createdBy, time.Now().Format(time.RFC3339))
 	if err != nil {
@@ -612,7 +613,7 @@ func (s *Store) CreatePackageOrder(tid int64, pkg *Package, createdBy int64, cha
 	if tokenAmt < 0 {
 		tokenAmt = 0
 	}
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, qr_content, package_id, created_by, created_at) VALUES (?,?,?,?, 'pending', 'online', ?, '', ?, ?, ?)",
 		tid, orderNo, tokenAmt, pkg.PriceMoney, channel, pkg.ID, createdBy, time.Now().Format(time.RFC3339))
 	if err != nil {
@@ -625,7 +626,7 @@ func (s *Store) CreatePackageOrder(tid int64, pkg *Package, createdBy int64, cha
 // 参数：orderNo=订单号，tid=租户 ID；返回订单对象。
 func (s *Store) GetOrderByOrderNo(orderNo string, tid int64) (*Order, error) {
 	var o Order
-	err := s.db.QueryRow("SELECT "+orderCols+" FROM orders WHERE order_no=? AND tenant_id=?", orderNo, tid).
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+orderCols+" FROM orders WHERE order_no=? AND tenant_id=?", orderNo, tid).
 		Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.PackageID, &o.ManualConfirm, &o.CreatedBy, &o.CreatedAt, &o.PaidAt)
 	if err != nil {
 		return nil, err
@@ -637,7 +638,7 @@ func (s *Store) GetOrderByOrderNo(orderNo string, tid int64) (*Order, error) {
 // 参数：id=订单主键 ID，tid=租户 ID；返回订单对象。
 func (s *Store) GetOrder(id, tid int64) (*Order, error) {
 	var o Order
-	err := s.db.QueryRow("SELECT "+orderCols+" FROM orders WHERE id=? AND tenant_id=?", id, tid).
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+orderCols+" FROM orders WHERE id=? AND tenant_id=?", id, tid).
 		Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.PackageID, &o.ManualConfirm, &o.CreatedBy, &o.CreatedAt, &o.PaidAt)
 	if err != nil {
 		return nil, err
@@ -650,10 +651,10 @@ func (s *Store) GetOrder(id, tid int64) (*Order, error) {
 func (s *Store) ListOrders(tid int64) ([]*Order, error) {
 	// tid<=0：跨租户全量（超管平台视角聚合）
 	if tid <= 0 {
-		rows, err := s.db.Query("SELECT " + orderCols + " FROM orders ORDER BY id DESC")
+		rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+orderCols+" FROM orders ORDER BY id DESC")
 		return scanOrders(rows, err)
 	}
-	rows, err := s.db.Query("SELECT "+orderCols+" FROM orders WHERE tenant_id=? ORDER BY id DESC", tid)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+orderCols+" FROM orders WHERE tenant_id=? ORDER BY id DESC", tid)
 	return scanOrders(rows, err)
 }
 
@@ -689,7 +690,7 @@ func (s *Store) PriceFenPerToken() int64 {
 // UpdateOrderMoney 回填订单应收金额（元）——下单时按定价换算落库，
 // 作为回调核对、payments 流水与发票开具的统一取数来源（评审整改 B1）。
 func (s *Store) UpdateOrderMoney(orderNo string, money float64) error {
-	_, err := s.db.Exec("UPDATE orders SET amount_money=? WHERE order_no=?", money, orderNo)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE orders SET amount_money=? WHERE order_no=?", money, orderNo)
 	return err
 }
 
@@ -698,7 +699,7 @@ func (s *Store) UpdateOrderMoney(orderNo string, money float64) error {
 // 仅补 pending（paid 单以已发生的流水为准，不改历史）。
 func (s *Store) orderMoneyBackfill() {
 	rate := s.PriceFenPerToken()
-	s.db.Exec(`UPDATE orders SET amount_money=ROUND(amount_tokens * ? / 100.0, 2)
+	db.Exec(s.db, db.CurrentDialect(), `UPDATE orders SET amount_money=ROUND(amount_tokens * ? / 100.0, 2)
 		WHERE status='pending' AND package_id=0 AND COALESCE(amount_money,0)=0 AND amount_tokens>0`,
 		float64(rate))
 }
@@ -712,7 +713,7 @@ func (s *Store) PackageOrderTokenBackfill() {
 	if rate <= 0 {
 		rate = 500
 	}
-	rows, err := s.db.Query("SELECT id, package_id FROM orders WHERE package_id>0 AND amount_tokens=0")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT id, package_id FROM orders WHERE package_id>0 AND amount_tokens=0")
 	if err != nil {
 		return
 	}
@@ -731,7 +732,7 @@ func (s *Store) PackageOrderTokenBackfill() {
 			continue
 		}
 		tok := p.Sentences * rate
-		s.db.Exec("UPDATE orders SET amount_tokens=? WHERE id=?", tok, r.id)
+		db.Exec(s.db, db.CurrentDialect(), "UPDATE orders SET amount_tokens=? WHERE id=?", tok, r.id)
 	}
 }
 
@@ -742,7 +743,7 @@ func (s *Store) PackageOrderTokenBackfill() {
 
 // ensureBalanceTx 确保余额账户行存在（tx 版 EnsureBalance，INSERT OR IGNORE 依赖唯一索引）。
 func ensureBalanceTx(tx *sql.Tx, tid int64) error {
-	_, err := tx.Exec(
+	_, err := db.Exec(tx, db.CurrentDialect(),
 		"INSERT OR IGNORE INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
 		tid, time.Now().Format(time.RFC3339))
 	return err
@@ -756,7 +757,7 @@ func chargePermanentTx(tx *sql.Tx, tid int64, tokens int64) error {
 	if err := ensureBalanceTx(tx, tid); err != nil {
 		return err
 	}
-	_, err := tx.Exec(
+	_, err := db.Exec(tx, db.CurrentDialect(),
 		"UPDATE balance_accounts SET balance=balance+?, updated_at=? WHERE tenant_id=?",
 		tokens, time.Now().Format(time.RFC3339), tid)
 	return err
@@ -764,7 +765,7 @@ func chargePermanentTx(tx *sql.Tx, tid int64, tokens int64) error {
 
 // createQuotaGrantTx 台账发放（tx 版 CreateQuotaGrant）。
 func createQuotaGrantTx(tx *sql.Tx, tid int64, kind string, total int64, expires time.Time, source string, refID int64) error {
-	_, err := tx.Exec(
+	_, err := db.Exec(tx, db.CurrentDialect(),
 		"INSERT INTO quota_grants (tenant_id, kind, total, left, expires_at, source, ref_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
 		tid, kind, total, total, expires.UTC().Format(time.RFC3339), source, refID, time.Now().Format(time.RFC3339))
 	return err
@@ -775,7 +776,7 @@ func applyIncrementMirrorTx(tx *sql.Tx, tid int64, sentences int64) error {
 	if sentences <= 0 {
 		return nil
 	}
-	_, err := tx.Exec(
+	_, err := db.Exec(tx, db.CurrentDialect(),
 		"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), "+
 			"'$.sentence_balance', COALESCE(json_extract(permissions,'$.sentence_balance'),0)+?), updated_at=? WHERE id=?",
 		sentences, time.Now().Format(time.RFC3339), tid)
@@ -801,7 +802,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 	// ① 事务外预读（失败不产生任何写副作用）
 	var tokens, pkgID, createdBy int64
 	var money float64
-	if err := s.db.QueryRow(
+	if err := db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT amount_tokens, package_id, COALESCE(created_by,0), COALESCE(amount_money,0) FROM orders WHERE id=? AND tenant_id=?",
 		orderID, tid).Scan(&tokens, &pkgID, &createdBy, &money); err != nil {
 		return &errTxt{"订单不存在"}
@@ -841,7 +842,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(
+	res, err := db.Exec(tx, db.CurrentDialect(),
 		"UPDATE orders SET status='paid', paid_at=?, manual_confirm=0 WHERE id=? AND tenant_id=? AND status='pending'",
 		nowStr, orderID, tid)
 	if err != nil {
@@ -851,7 +852,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		return &errTxt{"订单不存在或已处理"} // 幂等：重复调用/并发双回调仅一笔生效
 	}
 	// 支付流水与权益同事务：消除「有流水无权益」中间态（整改 B2）
-	if _, err := tx.Exec(
+	if _, err := db.Exec(tx, db.CurrentDialect(),
 		"INSERT INTO payments (order_id, tenant_id, amount_tokens, amount_money, status, created_at) VALUES (?,?,?,?, 'paid', ?)",
 		orderID, tid, tokens, payFen, nowStr); err != nil {
 		return err
@@ -936,7 +937,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 //	条件并以 RowsAffected 判定，消除「查询+更新」两步间被并发重复确认的窗口。
 func (s *Store) MarkOrderManualConfirm(orderID, tid int64) error {
 	// 条件更新：仅 manual 渠道、未确认、未支付的订单可被标记
-	res, err := s.db.Exec(
+	res, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE orders SET manual_confirm=1 WHERE id=? AND tenant_id=? AND channel='manual' AND manual_confirm=0 AND status='pending'",
 		orderID, tid)
 	if err != nil {
@@ -951,7 +952,7 @@ func (s *Store) MarkOrderManualConfirm(orderID, tid int64) error {
 // ListManualConfirmOrders 列出待人工确认的订单（超管 Billing 面板）：manual 渠道 + manual_confirm=1 + pending。
 // 参数：无（全平台）；返回订单列表（按 ID 倒序）。
 func (s *Store) ListManualConfirmOrders() ([]*Order, error) {
-	rows, err := s.db.Query("SELECT " + orderCols + " FROM orders WHERE channel='manual' AND manual_confirm=1 AND status='pending' ORDER BY id DESC")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+orderCols+" FROM orders WHERE channel='manual' AND manual_confirm=1 AND status='pending' ORDER BY id DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -971,7 +972,7 @@ func (s *Store) ListManualConfirmOrders() ([]*Order, error) {
 // 参数：orderNo=渠道回调的订单号；返回订单对象。
 func (s *Store) FindOrderByOrderNo(orderNo string) (*Order, error) {
 	var o Order
-	err := s.db.QueryRow("SELECT "+orderCols+" FROM orders WHERE order_no=? LIMIT 1", orderNo).
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+orderCols+" FROM orders WHERE order_no=? LIMIT 1", orderNo).
 		Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.PackageID, &o.ManualConfirm, &o.CreatedBy, &o.CreatedAt, &o.PaidAt)
 	if err != nil {
 		return nil, err
@@ -982,7 +983,7 @@ func (s *Store) FindOrderByOrderNo(orderNo string) (*Order, error) {
 // UpdateOrderPrepay 更新订单支付凭证（prepay_id / 二维码），供下单后回填。
 // 参数：orderNo=订单号，prepayID=渠道预支付 ID，qrContent=二维码内容。
 func (s *Store) UpdateOrderPrepay(orderNo, prepayID, qrContent string) error {
-	_, err := s.db.Exec("UPDATE orders SET prepay_id=?, qr_content=? WHERE order_no=?", prepayID, qrContent, orderNo)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE orders SET prepay_id=?, qr_content=? WHERE order_no=?", prepayID, qrContent, orderNo)
 	return err
 }
 
@@ -1027,7 +1028,7 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	var pkgID, tokens int64
 	var money float64
 	var paidAt string
-	if err := tx.QueryRow(
+	if err := db.QueryRow(tx, db.CurrentDialect(),
 		"SELECT package_id, amount_tokens, COALESCE(amount_money,0), COALESCE(paid_at,'') FROM orders WHERE id=? AND tenant_id=? AND status='paid'",
 		orderID, tid).Scan(&pkgID, &tokens, &money, &paidAt); err != nil {
 		if err == sql.ErrNoRows {
@@ -1041,14 +1042,14 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	isSub := false
 	if pkgID > 0 {
 		var ptype string
-		if err := tx.QueryRow("SELECT ptype FROM packages WHERE id=?", pkgID).Scan(&ptype); err != nil {
+		if err := db.QueryRow(tx, db.CurrentDialect(), "SELECT ptype FROM packages WHERE id=?", pkgID).Scan(&ptype); err != nil {
 			return err
 		}
 		// granted 已由 tokens（=订单入账 token 数）给出；句数不参与计算
 		if ptype == "paid" {
 			isSub = true
 			// 订阅单：台账剩余精确可查
-			if err := tx.QueryRow(
+			if err := db.QueryRow(tx, db.CurrentDialect(),
 				"SELECT COALESCE(SUM(left),0) FROM quota_grants WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND left>0",
 				tid, orderID).Scan(&remain); err != nil {
 				return err
@@ -1056,7 +1057,7 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 		} else if paidAt != "" {
 			// 充值/increment：自支付时刻起的租户级消耗近似折算
 			var consumed int64
-			if err := tx.QueryRow(
+			if err := db.QueryRow(tx, db.CurrentDialect(),
 				"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=?",
 				tid, paidAt).Scan(&consumed); err != nil {
 				return err
@@ -1085,7 +1086,7 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	clawDiff := int64(0)
 	if isSub {
 		// 订阅单：作废本单全部剩余台账行（即收回「剩余」，已消耗部分无从收回）
-		if _, err := tx.Exec(
+		if _, err := db.Exec(tx, db.CurrentDialect(),
 			"UPDATE quota_grants SET left=0 WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND left>0",
 			tid, orderID); err != nil {
 			return err
@@ -1094,7 +1095,7 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	} else if remain > 0 {
 		// 非订阅单：从永久余额守卫式扣回 min(剩余, 当前余额)——不足部分转人工，不阻塞退款
 		var bal int64
-		if err := tx.QueryRow("SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=?", tid).Scan(&bal); err != nil && err != sql.ErrNoRows {
+		if err := db.QueryRow(tx, db.CurrentDialect(), "SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=?", tid).Scan(&bal); err != nil && err != sql.ErrNoRows {
 			return err
 		}
 		clawed = remain
@@ -1103,7 +1104,7 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 			clawed = bal
 		}
 		if clawed > 0 {
-			if _, err := tx.Exec(
+			if _, err := db.Exec(tx, db.CurrentDialect(),
 				"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
 				clawed, time.Now().Format(time.RFC3339), tid, clawed); err != nil {
 				return err
@@ -1111,7 +1112,7 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 		}
 	}
 	// 条件置 refunded + 记录实退金额（并发双退款只有一个能成功 → 整体回滚，不会双扣）
-	res2, err := tx.Exec(
+	res2, err := db.Exec(tx, db.CurrentDialect(),
 		"UPDATE orders SET status='refunded', refund_money=? WHERE id=? AND tenant_id=? AND status='paid'",
 		float64(refundFen)/100.0, orderID, tid)
 	if err != nil {
@@ -1165,26 +1166,25 @@ type Invoice struct {
 func (s *Store) CreateInvoice(tid, orderID int64, title, taxNo string) (*Invoice, error) {
 	var money float64
 	// 仅允许对已支付订单开票，金额取订单金额
-	err := s.db.QueryRow("SELECT amount_money FROM orders WHERE id=? AND tenant_id=? AND status='paid'", orderID, tid).Scan(&money)
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT amount_money FROM orders WHERE id=? AND tenant_id=? AND status='paid'", orderID, tid).Scan(&money)
 	if err != nil {
 		return nil, err
 	}
 	no := "INV" + time.Now().Format("20060102150405") + randSuffix(4) // 生成唯一发票号
 	now := time.Now().Format(time.RFC3339)
-	res, err := s.db.Exec(
+	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
 		"INSERT INTO invoices (tenant_id, order_id, invoice_no, amount_money, title, tax_no, status, created_at) VALUES (?,?,?,?,?,?,'issued',?)",
 		tid, orderID, no, money, title, taxNo, now)
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
 	return s.GetInvoice(id, tid)
 }
 
 // GetInvoice 按 ID+租户查询发票（租户隔离校验）。
 // 参数：id=发票主键 ID，tid=租户 ID；返回发票对象。
 func (s *Store) GetInvoice(id, tid int64) (*Invoice, error) {
-	row := s.db.QueryRow(
+	row := db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT id, tenant_id, order_id, invoice_no, amount_money, COALESCE(title,''), COALESCE(tax_no,''), status, COALESCE(created_at,'') FROM invoices WHERE id=? AND tenant_id=?", id, tid)
 	var inv Invoice
 	err := row.Scan(&inv.ID, &inv.TenantID, &inv.OrderID, &inv.InvoiceNo, &inv.AmountMoney, &inv.Title, &inv.TaxNo, &inv.Status, &inv.CreatedAt)
@@ -1197,7 +1197,7 @@ func (s *Store) GetInvoice(id, tid int64) (*Invoice, error) {
 // ListInvoices 列出租户全部发票（按 ID 倒序）。
 // 参数：tid=租户 ID；返回发票列表。
 func (s *Store) ListInvoices(tid int64) ([]*Invoice, error) {
-	rows, err := s.db.Query(
+	rows, err := db.Query(s.db, db.CurrentDialect(),
 		"SELECT id, tenant_id, order_id, invoice_no, amount_money, COALESCE(title,''), COALESCE(tax_no,''), status, COALESCE(created_at,'') FROM invoices WHERE tenant_id=? ORDER BY id DESC", tid)
 	if err != nil {
 		return nil, err
@@ -1221,14 +1221,14 @@ func (s *Store) ListInvoices(tid int64) ([]*Invoice, error) {
 //   - api_keys.key_hash 普通索引：GetAPIKeyByHash 是 OpenAPI 每次调用的热路径，
 //     此前全表扫描。
 func (s *Store) BillingIndexMigrate() {
-	s.db.Exec(`DROP INDEX IF EXISTS idx_orders_no`)
-	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_no ON orders(tenant_id, order_no) WHERE order_no<>''`); err != nil {
+	db.Exec(s.db, db.CurrentDialect(), `DROP INDEX IF EXISTS idx_orders_no`)
+	if _, err := db.Exec(s.db, db.CurrentDialect(), `CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_no ON orders(tenant_id, order_no) WHERE order_no<>''`); err != nil {
 		log.Printf("[migrate] orders.order_no 唯一索引创建失败（疑存量重复单号，请人工核对）: %v", err)
-		if _, err2 := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_no ON orders(tenant_id, order_no) WHERE order_no<>''`); err2 != nil {
+		if _, err2 := db.Exec(s.db, db.CurrentDialect(), `CREATE INDEX IF NOT EXISTS idx_orders_no ON orders(tenant_id, order_no) WHERE order_no<>''`); err2 != nil {
 			log.Printf("[migrate] orders.order_no 普通索引亦创建失败: %v", err2)
 		}
 	}
-	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_apikeys_hash ON api_keys(key_hash)`)
+	db.Exec(s.db, db.CurrentDialect(), `CREATE INDEX IF NOT EXISTS idx_apikeys_hash ON api_keys(key_hash)`)
 }
 
 // randSuffix 生成 n 位由大写字母和数字组成的随机后缀（用于订单号/发票号/API Key 唯一性）。
@@ -1260,7 +1260,7 @@ func randSuffix(n int) string {
 // UsageAllByUser 跨租户聚合每用户用量（超管平台视角）。
 // 返回：用户 ID → 累计消耗。
 func (s *Store) UsageAllByUser() (map[int64]int64, error) {
-	rows, err := s.db.Query("SELECT user_id, COALESCE(SUM(quantity),0) FROM usage_ledger GROUP BY user_id")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT user_id, COALESCE(SUM(quantity),0) FROM usage_ledger GROUP BY user_id")
 	if err != nil {
 		return nil, err
 	}
@@ -1291,7 +1291,7 @@ func (s *Store) EnsureBillingDefaults() {
 		{"price_fen_per_token", "10"},            // ★ 充值定价（分/token，评审整改 B1 单一事实源）
 	}
 	for _, kv := range defaults {
-		s.db.Exec("INSERT INTO system_config (key,value) SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM system_config WHERE key=?)", kv[0], kv[1], kv[0])
+		db.Exec(s.db, db.CurrentDialect(), "INSERT INTO system_config (key,value) SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM system_config WHERE key=?)", kv[0], kv[1], kv[0])
 	}
 }
 
@@ -1309,7 +1309,7 @@ func (s *Store) CloseStalePendingOrders() int64 {
 		}
 	}
 	cut := time.Now().Add(-time.Duration(minutes) * time.Minute).Format(time.RFC3339)
-	res, err := s.db.Exec(`UPDATE orders SET status='cancelled'
+	res, err := db.Exec(s.db, db.CurrentDialect(), `UPDATE orders SET status='cancelled'
 		WHERE status='pending' AND created_at < ?
 		  AND NOT (channel='manual' AND manual_confirm=1)`, cut)
 	if err != nil {
@@ -1327,7 +1327,7 @@ func (s *Store) CloseStalePendingOrders() int64 {
 //	语义说明：灰度期（billing_enforced=0）同样提醒——提前触达优于突然停服，
 //	「只提醒不拦截」正是灰度设计的本意。
 func (s *Store) TenantLowBalanceAlerts(threshold int64) {
-	rows, err := s.db.Query(`SELECT ba.tenant_id,
+	rows, err := db.Query(s.db, db.CurrentDialect(), `SELECT ba.tenant_id,
 		COALESCE(ba.balance,0) + COALESCE((SELECT SUM(g.left) FROM quota_grants g
 			WHERE g.tenant_id=ba.tenant_id AND g.left>0 AND g.expires_at > ?),0) AS remain
 		FROM balance_accounts ba WHERE ba.tenant_id>0`,
@@ -1352,7 +1352,7 @@ func (s *Store) TenantLowBalanceAlerts(threshold int64) {
 			continue
 		}
 		var cnt int
-		s.db.QueryRow(`SELECT COUNT(*) FROM alerts WHERE tenant_id=? AND kind='low_balance'
+		db.QueryRow(s.db, db.CurrentDialect(), `SELECT COUNT(*) FROM alerts WHERE tenant_id=? AND kind='low_balance'
 			AND created_at>?`, r.tid, dayAgo).Scan(&cnt)
 		if cnt == 0 {
 			s.CreateAlert(r.tid, "warning", "low_balance",

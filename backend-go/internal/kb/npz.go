@@ -521,12 +521,37 @@ func (idx *Index) GetVec(id int64) []float32 {
 //   永远不可召回——现改为 scope 集合判定：
 //     直接采用域(InChain=true)：本租户的 历史行0/企业包/链内部门包 + 共享行业/文化包
 //     跨部门回退域(InChain=false)：租户开关开时的其他部门共享包（调用方仅可作例句）
+// ScopeVisibility 判定某行（rowTenant, pack）对 caller 租户在给定 scope 下是否可见、
+// 以及是否属链内直接采用域（InChain）。供 npz 检索与 pgvector 检索（kb.VectorSearch）
+// 共用，保证两种后端语义一致。
+func ScopeVisibility(rowTenant, pack, caller int64, scope *PackScope) (visible, inChain bool) {
+	if scope == nil {
+		return caller <= 0 || rowTenant == caller, caller <= 0 || rowTenant == caller
+	}
+	_, chainOK := scope.ChainPacks[pack]
+	switch {
+	case rowTenant == caller && (pack == 0 || scope.TenantPackIDs[pack] || chainOK):
+		return true, true // 直接采用域
+	case scope.SharedPackIDs[pack]:
+		return true, true // 行业包同属采用域
+	case scope.UniversalPackIDs[pack]:
+		return true, true // 通用语言习惯包（全用户可见、采用域、最低优先级）
+	case scope.AllowCrossDept:
+		if _, ok := scope.CrossDeptPacks[pack]; ok {
+			return true, false // 跨部门回退域（仅例句参考）
+		}
+	}
+	return false, false
+}
+
 func (idx *Index) ScopedSearchScope(query []float32, k int, wantLangs []string, tenantID int64, scope *PackScope) []SearchResult {
 	if len(query) == 0 || len(idx.Vecs) == 0 {
 		return nil // 无查询向量或无索引数据直接返回
 	}
 	type scored struct {
 		id      int64
+		tid     int64
+		pack    int64
 		sim     float64
 		inChain bool
 	}
@@ -544,23 +569,7 @@ func (idx *Index) ScopedSearchScope(query []float32, k int, wantLangs []string, 
 		if idx.IDTenants != nil {
 			rowTenant = idx.IDTenants[rowID]
 		}
-		// ★ 可见性三选一（scope=nil 时退化为旧租户相等口径）
-		inChain := false
-		visible := false
-		if scope == nil {
-			visible = tenantID <= 0 || rowTenant == tenantID
-			inChain = visible
-		} else {
-			_, chainOK := scope.ChainPacks[pack]
-			switch {
-			case rowTenant == tenantID && (pack == 0 || scope.TenantPackIDs[pack] || chainOK):
-				visible, inChain = true, true // 直接采用域
-			case scope.SharedPackIDs[pack]:
-				visible, inChain = true, true // 共享层同属采用域
-			case scope.AllowCrossDept && func() bool { _, ok := scope.CrossDeptPacks[pack]; return ok }():
-				visible = true // 跨部门回退域（仅例句参考）
-			}
-		}
+		visible, inChain := ScopeVisibility(rowTenant, pack, tenantID, scope)
 		if !visible {
 			continue
 		}
@@ -582,13 +591,14 @@ func (idx *Index) ScopedSearchScope(query []float32, k int, wantLangs []string, 
 		for j := range query {
 			dot += v[j] * query[j]
 		}
-		results = append(results, scored{id: rowID, sim: float64(dot), inChain: inChain})
+		results = append(results, scored{id: rowID, tid: rowTenant, pack: pack, sim: float64(dot), inChain: inChain})
 	}
-	// 排序策略：链内优先于跨部门；同层按相似度降序——保证链内弱相似候选仍排在
-	// 跨部门强相似之前（隔离语义在排序层的最后防线），引擎侧再按阈值分流。
+	// 排序策略：业务优先级 Rank（部门>跨部门>企业>行业>无scope）升序优先；
+	// 同档按相似度降序。与 kb.VectorSearch 口径一致，引擎侧再按阈值/InChain 分流。
 	sort.Slice(results, func(a, b int) bool {
-		if results[a].inChain != results[b].inChain {
-			return results[a].inChain
+		ra, rb := scope.Rank(results[a].pack, results[a].tid), scope.Rank(results[b].pack, results[b].tid)
+		if ra != rb {
+			return ra < rb
 		}
 		return results[a].sim > results[b].sim
 	})

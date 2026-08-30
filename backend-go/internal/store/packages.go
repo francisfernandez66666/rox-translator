@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"time"
 
+	"translator/internal/db"
 	"translator/internal/tenant"
 )
 
@@ -51,13 +52,12 @@ const packageCols = "id, tenant_id, code, name, ptype, sentences, price_money, d
 // 参数：pkg=待创建的包对象（code/name/ptype 必填）；返回新包对象。
 func (s *Store) CreatePackage(pkg *Package) (*Package, error) {
 	now := time.Now().Format(time.RFC3339)
-	res, err := s.db.Exec(
+	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
 		"INSERT INTO packages (tenant_id, code, name, ptype, sentences, price_money, duration_days, enabled, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
 		pkg.TenantID, pkg.Code, pkg.Name, pkg.PType, pkg.Sentences, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, now, now)
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
 	return s.GetPackage(id)
 }
 
@@ -65,7 +65,7 @@ func (s *Store) CreatePackage(pkg *Package) (*Package, error) {
 // 参数：id=包主键 ID；返回包对象。
 func (s *Store) GetPackage(id int64) (*Package, error) {
 	var p Package
-	err := s.db.QueryRow("SELECT "+packageCols+" FROM packages WHERE id=?", id).
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+packageCols+" FROM packages WHERE id=?", id).
 		Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -77,7 +77,7 @@ func (s *Store) GetPackage(id int64) (*Package, error) {
 // 参数：code=包编码；返回包对象。
 func (s *Store) GetPackageByCode(tenantID int64, code string) (*Package, error) {
 	var p Package
-	err := s.db.QueryRow("SELECT "+packageCols+" FROM packages WHERE tenant_id=? AND code=?", tenantID, code).
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+packageCols+" FROM packages WHERE tenant_id=? AND code=?", tenantID, code).
 		Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -88,7 +88,7 @@ func (s *Store) GetPackageByCode(tenantID int64, code string) (*Package, error) 
 // ListCommercialPackages 列出全部商业包（超管管理用，含下架包）。
 // 参数：无；返回包列表（按类型、排序、ID 排序）。
 func (s *Store) ListCommercialPackages() ([]*Package, error) {
-	rows, err := s.db.Query("SELECT " + packageCols + " FROM packages ORDER BY ptype, sort_order, id")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+packageCols+" FROM packages ORDER BY ptype, sort_order, id")
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func (s *Store) ListCommercialPackages() ([]*Package, error) {
 // ListEnabledCommercialPackages 列出上架中的商业包（公开定价页 / 注册订阅用）。
 // 参数：无；返回已启用的包列表（按类型、排序、ID 排序）。
 func (s *Store) ListEnabledCommercialPackages() ([]*Package, error) {
-	rows, err := s.db.Query("SELECT " + packageCols + " FROM packages WHERE enabled=1 ORDER BY ptype, sort_order, id")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+packageCols+" FROM packages WHERE enabled=1 ORDER BY ptype, sort_order, id")
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +126,7 @@ func (s *Store) ListEnabledCommercialPackages() ([]*Package, error) {
 // UpdatePackage 更新商业包（超管）。
 // 参数：pkg=待更新的包对象（全部字段整体覆盖）；返回错误。
 func (s *Store) UpdatePackage(pkg *Package) error {
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE packages SET tenant_id=?, name=?, ptype=?, sentences=?, price_money=?, duration_days=?, enabled=?, sort_order=?, updated_at=? WHERE id=?",
 		pkg.TenantID, pkg.Name, pkg.PType, pkg.Sentences, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, time.Now().Format(time.RFC3339), pkg.ID)
 	return err
@@ -135,15 +135,40 @@ func (s *Store) UpdatePackage(pkg *Package) error {
 // DeletePackage 删除商业包（超管）。
 // 参数：id=包主键 ID；返回错误。
 func (s *Store) DeletePackage(id int64) error {
-	_, err := s.db.Exec("DELETE FROM packages WHERE id=?", id)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM packages WHERE id=?", id)
 	return err
 }
 
 // PackagesTenantMigrate 将 packages 表从「code 全局唯一」迁移为「(tenant_id, code) 租户级唯一」。
 // 幂等：新库直接创建复合唯一；老库补 tenant_id 列后重建表完成约束替换。
 func (s *Store) PackagesTenantMigrate() {
+	d := db.CurrentDialect()
+	if d != db.DialectSQLite {
+		// PostgreSQL：直接保证复合唯一，无需重建表。
+		_ = db.EnsureColumns(s.db, d, "packages", map[string]string{
+			"tenant_id": "INTEGER NOT NULL DEFAULT 0",
+		})
+		sets, err := db.UniqueColumnSets(s.db, d, "packages")
+		if err == nil {
+			for _, set := range sets {
+				if len(set) == 2 {
+					m := map[string]bool{}
+					for _, c := range set {
+						m[c] = true
+					}
+					if m["tenant_id"] && m["code"] {
+						return // 已是目标形态
+					}
+				}
+			}
+		}
+		// 旧形态单列 code 唯一：丢弃后建复合唯一（PostgreSQL 唯一约束名由 code 自动派生）。
+		_, _ = s.db.Exec("ALTER TABLE packages DROP CONSTRAINT IF EXISTS packages_code_key")
+		_, _ = s.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS packages_tenant_code_uniq ON packages(tenant_id, code)")
+		return
+	}
 	// ① 补 tenant_id 列（老库没有）
-	cols, err := s.db.Query("PRAGMA table_info(packages)")
+	cols, err := db.Query(s.db, db.CurrentDialect(), "PRAGMA table_info(packages)")
 	if err != nil {
 		return
 	}
@@ -161,11 +186,11 @@ func (s *Store) PackagesTenantMigrate() {
 	}
 	cols.Close()
 	if !hasTenant {
-		s.db.Exec("ALTER TABLE packages ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 0")
+		db.Exec(s.db, db.CurrentDialect(), "ALTER TABLE packages ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 0")
 	}
 
 	// ② 检测当前唯一约束是否仅为 code 单列；若是则重建表换为复合唯一。
-	idxRows, err := s.db.Query("PRAGMA index_list(packages)")
+	idxRows, err := db.Query(s.db, db.CurrentDialect(), "PRAGMA index_list(packages)")
 	if err != nil {
 		return
 	}
@@ -179,7 +204,7 @@ func (s *Store) PackagesTenantMigrate() {
 		if unique != 1 {
 			continue
 		}
-		irows, err := s.db.Query("PRAGMA index_info(?)", name)
+		irows, err := db.Query(s.db, db.CurrentDialect(), "PRAGMA index_info(?)", name)
 		if err != nil {
 			continue
 		}
@@ -207,7 +232,7 @@ func (s *Store) PackagesTenantMigrate() {
 		return
 	}
 	defer tx.Rollback()
-	tx.Exec(`CREATE TABLE packages_new (
+	db.Exec(tx, db.CurrentDialect(), `CREATE TABLE packages_new (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		tenant_id INTEGER NOT NULL DEFAULT 0,
 		code TEXT NOT NULL,
@@ -221,10 +246,10 @@ func (s *Store) PackagesTenantMigrate() {
 		created_at TEXT,
 		updated_at TEXT,
 		UNIQUE(tenant_id, code))`)
-	tx.Exec(`INSERT INTO packages_new (id, tenant_id, code, name, ptype, sentences, price_money, duration_days, enabled, sort_order, created_at, updated_at)
+	db.Exec(tx, db.CurrentDialect(), `INSERT INTO packages_new (id, tenant_id, code, name, ptype, sentences, price_money, duration_days, enabled, sort_order, created_at, updated_at)
 		SELECT id, 0, code, name, ptype, sentences, price_money, duration_days, enabled, sort_order, created_at, updated_at FROM packages`)
-	tx.Exec(`DROP TABLE packages`)
-	tx.Exec(`ALTER TABLE packages_new RENAME TO packages`)
+	db.Exec(tx, db.CurrentDialect(), `DROP TABLE packages`)
+	db.Exec(tx, db.CurrentDialect(), `ALTER TABLE packages_new RENAME TO packages`)
 	tx.Commit()
 }
 
@@ -245,7 +270,7 @@ func (s *Store) GetSentenceBalance(tid int64) (int64, error) {
 func (s *Store) GetTenantPerms(tid int64) (*tenant.Perms, error) {
 	p := &tenant.Perms{}
 	var raw string
-	err := s.db.QueryRow("SELECT permissions FROM tenants WHERE id=?", tid).Scan(&raw)
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT permissions FROM tenants WHERE id=?", tid).Scan(&raw)
 	if err == sql.ErrNoRows {
 		return p, nil // 租户不存在返回空权限
 	}
@@ -278,7 +303,7 @@ func (s *Store) SetSentenceBalance(tid int64, balance int64) error {
 	}
 	perms.SentenceBalance = balance
 	b, _ := json.Marshal(perms)
-	if _, err := tx.Exec("UPDATE tenants SET permissions=?, updated_at=? WHERE id=?", string(b), time.Now().Format(time.RFC3339), tid); err != nil {
+	if _, err := db.Exec(tx, db.CurrentDialect(), "UPDATE tenants SET permissions=?, updated_at=? WHERE id=?", string(b), time.Now().Format(time.RFC3339), tid); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -294,7 +319,7 @@ func (s *Store) AddSentences(tid, n int64) (int64, error) {
 		cur, _ := s.GetSentenceBalance(tid)
 		return cur, nil
 	}
-	if _, err := s.db.Exec(
+	if _, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$.sentence_balance', COALESCE(json_extract(permissions,'$.sentence_balance'),0)+?), updated_at=? WHERE id=?",
 		n, time.Now().Format(time.RFC3339), tid); err != nil {
 		return 0, err
@@ -309,7 +334,7 @@ func (s *Store) AddSentences(tid, n int64) (int64, error) {
 // ★ 并发安全（2026-08-26 全仓评审 B3）：json_set 单语句原子自减 + WHERE 余额守卫，
 // RowsAffected==0 即余额不足（或租户不存在）——守卫式核销与 DeductWithGrants 同款双保险。
 func (s *Store) DeductSentences(tid, n int64) (int64, error) {
-	res, err := s.db.Exec(
+	res, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$.sentence_balance', COALESCE(json_extract(permissions,'$.sentence_balance'),0)-?), updated_at=? WHERE id=? AND COALESCE(json_extract(permissions,'$.sentence_balance'),0)>=?",
 		n, time.Now().Format(time.RFC3339), tid, n)
 	if err != nil {
@@ -328,7 +353,7 @@ var ErrSentenceExhausted = &errTxt{"翻译句数已用尽，请购买套餐或�
 func getTenantPermsTx(tx *sql.Tx, tid int64) (*tenant.Perms, error) {
 	p := &tenant.Perms{}
 	var raw string
-	err := tx.QueryRow("SELECT permissions FROM tenants WHERE id=?", tid).Scan(&raw)
+	err := db.QueryRow(tx, db.CurrentDialect(), "SELECT permissions FROM tenants WHERE id=?", tid).Scan(&raw)
 	if err == sql.ErrNoRows {
 		return p, nil
 	}
@@ -345,7 +370,7 @@ func getTenantPermsTx(tx *sql.Tx, tid int64) (*tenant.Perms, error) {
 // saveTenantPermsTx 事务作用域的租户权限写入（SaveTenantPerms 的 tx 变体）。
 func saveTenantPermsTx(tx *sql.Tx, tid int64, perms *tenant.Perms) error {
 	b, _ := json.Marshal(perms)
-	_, err := tx.Exec("UPDATE tenants SET permissions=?, updated_at=? WHERE id=?", string(b), time.Now().Format(time.RFC3339), tid)
+	_, err := db.Exec(tx, db.CurrentDialect(), "UPDATE tenants SET permissions=?, updated_at=? WHERE id=?", string(b), time.Now().Format(time.RFC3339), tid)
 	return err
 }
 
@@ -399,12 +424,12 @@ func (s *Store) GrantPackageSentences(tid int64, pkg *Package) (int64, error) {
 		if tokens := int64(float64(granted*rate) * s.MarkupMultiplier()); tokens > 0 {
 			// 事务内先确保余额账户行存在（等价 Charge 的 EnsureBalance 语义），
 			// 再原子累加——避免账户行缺失时 UPDATE 影响 0 行导致 token 静默丢失。
-			if _, err := tx.Exec(
+			if _, err := db.Exec(tx, db.CurrentDialect(),
 				"INSERT OR IGNORE INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
 				tid, time.Now().Format(time.RFC3339)); err != nil {
 				return 0, err
 			}
-			if _, err := tx.Exec(
+			if _, err := db.Exec(tx, db.CurrentDialect(),
 				"UPDATE balance_accounts SET balance=balance+?, updated_at=? WHERE tenant_id=?",
 				tokens, time.Now().Format(time.RFC3339), tid); err != nil {
 				return 0, err
@@ -457,7 +482,7 @@ func (s *Store) ApplyPaidPackageIdentity(tid int64, pkg *Package) (int64, error)
 // ★ 并发安全（2026-08-26 全仓评审 B3）：改为 json_set 单语句原子自增。
 func (s *Store) ApplyIncrementMirror(tid int64, pkg *Package) (int64, error) {
 	if pkg.Sentences > 0 {
-		if _, err := s.db.Exec(
+		if _, err := db.Exec(s.db, db.CurrentDialect(),
 			"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$.sentence_balance', COALESCE(json_extract(permissions,'$.sentence_balance'),0)+?), updated_at=? WHERE id=?",
 			pkg.Sentences, time.Now().Format(time.RFC3339), tid); err != nil {
 			return 0, err
@@ -506,7 +531,7 @@ func (s *Store) ExpirePackage(tid int64) (code string, err error) {
 	if code == "" {
 		return "", nil // 无订阅无需摘除
 	}
-	_, err = s.db.Exec(`UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'),
+	_, err = db.Exec(s.db, db.CurrentDialect(), `UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'),
 		'$.package_code', '', '$.package_expires_at', '',
 		'$.notified_exp7', json('false'), '$.notified_exp1', json('false')),
 		updated_at=? WHERE id=?`,
@@ -524,7 +549,7 @@ func (s *Store) SetNotifiedExpFlag(tid int64, flag string) error {
 	if flag != "notified_exp7" && flag != "notified_exp1" {
 		return &errTxt{"非法提醒标记: " + flag}
 	}
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$."+flag+"', json('true')), updated_at=? WHERE id=?",
 		time.Now().Format(time.RFC3339), tid)
 	return err
@@ -534,7 +559,7 @@ func (s *Store) SetNotifiedExpFlag(tid int64, flag string) error {
 // 参数：tid=租户 ID，perms=待保存的权限结构体；返回错误。
 func (s *Store) SaveTenantPerms(tid int64, perms *tenant.Perms) error {
 	b, _ := json.Marshal(perms)
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET permissions=?, updated_at=? WHERE id=?",
 		string(b), time.Now().Format(time.RFC3339), tid)
 	return err

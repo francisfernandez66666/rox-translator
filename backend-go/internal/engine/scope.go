@@ -48,26 +48,28 @@ func (e *Engine) userScope(ctx context.Context, tid int64) *kb.PackScope {
 	allowCross := crossDeptFallbackEnabled(ctx, e, tid)
 	if e.St == nil {
 		return &kb.PackScope{
-			TenantID:       tid,
-			ChainPacks:     map[int64]int{},
-			TenantPackIDs:  map[int64]bool{},
-			SharedPackIDs:  map[int64]bool{},
-			CrossDeptPacks: map[int64]string{},
-			AllowCrossDept: allowCross,
-			Chain:          chain,
+			TenantID:         tid,
+			ChainPacks:       map[int64]int{},
+			TenantPackIDs:    map[int64]bool{},
+			SharedPackIDs:    map[int64]bool{},
+			UniversalPackIDs: map[int64]bool{},
+			CrossDeptPacks:   map[int64]string{},
+			AllowCrossDept:   allowCross,
+			Chain:            chain,
 		}
 	}
 	scope, err := e.St.BuildPackScope(tid, chain, allowCross)
 	if err != nil || scope == nil {
 		// 查询异常：返回空可见域（仅历史无主行按企业层兜底），不放大权限
 		return &kb.PackScope{
-			TenantID:       tid,
-			ChainPacks:     map[int64]int{},
-			TenantPackIDs:  map[int64]bool{},
-			SharedPackIDs:  map[int64]bool{},
-			CrossDeptPacks: map[int64]string{},
-			AllowCrossDept: false,
-			Chain:          chain,
+			TenantID:         tid,
+			ChainPacks:       map[int64]int{},
+			TenantPackIDs:    map[int64]bool{},
+			SharedPackIDs:    map[int64]bool{},
+			UniversalPackIDs: map[int64]bool{},
+			CrossDeptPacks:   map[int64]string{},
+			AllowCrossDept:   false,
+			Chain:            chain,
 		}
 	}
 	scope.Chain = chain

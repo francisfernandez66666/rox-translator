@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"translator/internal/db"
 )
 
 // Webhook 租户回调配置记录
@@ -61,7 +62,7 @@ func (s *Store) UpsertWebhook(w *Webhook) error {
 	now := time.Now().Format(time.RFC3339)
 	if w.ID > 0 {
 		// 更新已有记录
-		_, err := s.db.Exec(
+		_, err := db.Exec(s.db, db.CurrentDialect(),
 			"UPDATE webhooks SET url=?, secret=?, events=?, enabled=?, updated_at=? WHERE id=? AND tenant_id=?",
 			w.URL, w.Secret, w.Events, w.Enabled, now, w.ID, w.TenantID)
 		return err
@@ -70,13 +71,12 @@ func (s *Store) UpsertWebhook(w *Webhook) error {
 	if w.Enabled == 0 {
 		w.Enabled = 1
 	}
-	res, err := s.db.Exec(
+	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
 		"INSERT INTO webhooks (tenant_id, url, secret, events, enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
 		w.TenantID, w.URL, w.Secret, w.Events, w.Enabled, now, now)
 	if err != nil {
 		return err
 	}
-	id, _ := res.LastInsertId()
 	w.ID = id
 	w.CreatedAt = now
 	w.UpdatedAt = now
@@ -95,9 +95,9 @@ func (s *Store) ListWebhooks(tid int64) ([]*Webhook, error) {
 	var rows *sql.Rows
 	var err error
 	if tid > 0 {
-		rows, err = s.db.Query(q, tid)
+		rows, err = db.Query(s.db, db.CurrentDialect(), q, tid)
 	} else {
-		rows, err = s.db.Query(q)
+		rows, err = db.Query(s.db, db.CurrentDialect(), q)
 	}
 	if err != nil {
 		return nil, err
@@ -117,7 +117,7 @@ func (s *Store) ListWebhooks(tid int64) ([]*Webhook, error) {
 // GetEnabledWebhooks 查询启用状态的 webhook（用于事件触发投递）。
 // 参数：tid=租户 ID，event=订阅事件；返回匹配的启用 webhook 列表。
 func (s *Store) GetEnabledWebhooks(tid int64, event string) ([]*Webhook, error) {
-	rows, err := s.db.Query("SELECT "+webhookCols+" FROM webhooks WHERE tenant_id=? AND enabled=1 ORDER BY id", tid)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+webhookCols+" FROM webhooks WHERE tenant_id=? AND enabled=1 ORDER BY id", tid)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func containsEvent(events, target string) bool {
 // DeleteWebhook 删除租户的 webhook 配置。
 // 参数：id=webhook ID，tid=租户 ID（越权防护）。
 func (s *Store) DeleteWebhook(id, tid int64) error {
-	_, err := s.db.Exec("DELETE FROM webhooks WHERE id=? AND tenant_id=?", id, tid)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM webhooks WHERE id=? AND tenant_id=?", id, tid)
 	return err
 }
 

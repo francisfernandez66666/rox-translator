@@ -10,13 +10,17 @@ import (
 	"crypto/md5"
 	"database/sql"
 	"fmt"
+	"log"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 
 	"translator/internal/config"
+	"translator/internal/db"
 )
 
 // AllLangs DB 语言列（16 列）
@@ -55,72 +59,92 @@ func MD5Hex(s string) string {
 }
 
 // Open 打开数据库并确保表存在。
-// 参数：dbPath=SQLite 文件路径；返回知识库对象（含已建立的连接与表结构）。
+// 参数：dbPath=SQLite 文件路径（或 ":memory:"）；返回知识库对象（含已建立的连接与表结构）。
+//
+// 后端可经全局配置（config.C.DatabaseDriver / DatabaseDSN，或环境变量 DB_DRIVER/DB_DSN）
+// 切换为 PostgreSQL；当前默认仍为 SQLite，行为与原内联 DSN 完全一致。
 func Open(dbPath string) (*KBDatabase, error) {
-	// ★ SQLite 并发加固：busy_timeout 等待锁而非立刻报错；WAL 读写不互斥；
-	//   synchronous=NORMAL 在 WAL 下安全且更快。经 DSN 下发，池内每个新连接自动携带。
-	// ★ _txlock=immediate（2026-08-26 安全止血）：所有事务升级为 BEGIN IMMEDIATE，
-	//   写事务在 BEGIN 时即获取写锁——消除「先 SELECT 快照、后 UPDATE 落库」类
-	//   check-then-write 在并发下的双花/重复发放竞态（计费扣减、订单确认等均依赖此保证）。
-	dsn := "file:" + dbPath +
-		"?_pragma=busy_timeout(5000)" +
-		"&_pragma=journal_mode(WAL)" +
-		"&_pragma=synchronous(NORMAL)" +
-		"&_txlock=immediate"
-	db, err := sql.Open("sqlite", dsn)
+	driver := db.DriverSQLite
+	dsn := dbPath
+	if config.C != nil {
+		driver = config.C.DatabaseDriver
+		if driver == db.DriverPostgres {
+			dsn = config.C.DatabaseDSN
+		}
+	}
+	conn, err := db.Open(db.Config{
+		Driver:         driver,
+		DSN:            dsn,
+		EnablePgvector: true,
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureTables(db); err != nil {
+	if err := ensureTables(conn); err != nil {
 		return nil, err
 	}
-	return &KBDatabase{db: db, dbPath: dbPath}, nil
+	return &KBDatabase{db: conn, dbPath: dbPath}, nil
 }
 
-// EnsureTenantMigration 确保 tm_segments 有 tenant_id 列，并把既有数据归入默认租户 rox（id=1）。
-// 实现：先查后加列；历史数据归入租户 1；重建 zh_hash 唯一索引为 (zh_hash, tenant_id) 复合唯一。
+// EnsureTenantMigration 确保 tm_segments 具备多租户与继承链列，并把既有数据归入默认租户 rox（id=1）。
+// 实现：按方言补列（PG: ADD COLUMN IF NOT EXISTS；SQLite: PRAGMA 查后补）；历史数据归入租户 1；
+// 再将唯一键收敛为目标复合唯一 (zh_hash, tenant_id, pack_id)。
 func (k *KBDatabase) EnsureTenantMigration() error {
-	// 加列（SQLite: 无 IF NOT EXISTS 加列，先查后加）
-	cols, err := k.db.Query("PRAGMA table_info(tm_segments)")
-	if err != nil {
+	d := db.CurrentDialect()
+	// 补列：tenant_id（多租户）、priority/pack_id（继承链）
+	if err := db.EnsureColumns(k.db, d, "tm_segments", map[string]string{
+		"tenant_id": "INTEGER DEFAULT 1",
+		"priority":  "INTEGER NOT NULL DEFAULT 9",
+		"pack_id":   "INTEGER NOT NULL DEFAULT 0",
+	}); err != nil {
 		return err
-	}
-	defer cols.Close()
-	hasTenant := false
-	// 遍历现有列，判断是否已有 tenant_id
-	for cols.Next() {
-		var cid, notnull, pk int
-		var name, ctype string
-		var dflt interface{}
-		if err := cols.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			continue
-		}
-		if name == "tenant_id" {
-			hasTenant = true
-		}
-	}
-	if !hasTenant {
-		// 老库无 tenant_id 列 → 补列
-		if _, err := k.db.Exec("ALTER TABLE tm_segments ADD COLUMN tenant_id INTEGER DEFAULT 1"); err != nil {
-			return err
-		}
 	}
 	// 历史数据统一归入租户 1（rox）
-	if _, err := k.db.Exec("UPDATE tm_segments SET tenant_id=1 WHERE tenant_id IS NULL OR tenant_id=0"); err != nil {
+	if _, err := db.Exec(k.db, d, "UPDATE tm_segments SET tenant_id=1 WHERE tenant_id IS NULL OR tenant_id=0"); err != nil {
 		return err
 	}
-	// 将 zh_hash 的唯一约束重建为 (zh_hash, tenant_id) 复合唯一，
-	// 保证不同租户可存相同中文句。重建会导致 zh_hash 唯一索引被替换。
+	// 将唯一键收敛为目标复合唯一 (zh_hash, tenant_id, pack_id)。
+	if err := k.ensureTripleUnique(d); err != nil {
+		return err
+	}
+	// pgvector 向量列（仅 PostgreSQL，且需已安装 pgvector 扩展；缺失则跳过，KB 回退到 npz 索引）。
+	if d == db.DialectPostgres {
+		if _, err := k.db.Exec("ALTER TABLE tm_segments ADD COLUMN IF NOT EXISTS embedding vector(1024)"); err != nil {
+			log.Printf("kb: 跳过 embedding 列（pgvector 扩展不可用，KB 语义检索继续走 npz）：%v", err)
+		}
+	}
+	return nil
+}
+
+// ensureTripleUnique 确保 tm_segments 的唯一键已是三元组 (zh_hash, tenant_id, pack_id)。
+//   - PostgreSQL：直接以 information_schema 判据，缺失则 CREATE UNIQUE INDEX IF NOT EXISTS（无需重建表）。
+//   - SQLite：沿用既有「重建表」迁移路径（rebuildUniqueIndex -> ensurePackScopeUnique）。
+func (k *KBDatabase) ensureTripleUnique(d db.Dialect) error {
+	if d != db.DialectSQLite {
+		sets, err := db.UniqueColumnSets(k.db, d, "tm_segments")
+		if err != nil {
+			return err
+		}
+		for _, s := range sets {
+			if len(s) == 3 {
+				set := map[string]bool{}
+				for _, c := range s {
+					set[c] = true
+				}
+				if set["zh_hash"] && set["tenant_id"] && set["pack_id"] {
+					return nil // 已是目标形态
+				}
+			}
+		}
+		// 若存在单列 zh_hash 唯一约束（旧形态），先丢弃再建复合唯一（PostgreSQL 唯一约束名为 zh_hash 自动派生）。
+		_, _ = k.db.Exec("ALTER TABLE tm_segments DROP CONSTRAINT IF EXISTS tm_segments_zh_hash_key")
+		_, err = k.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS tm_segments_triple_uniq ON tm_segments(zh_hash, tenant_id, pack_id)")
+		return err
+	}
 	if err := k.rebuildUniqueIndex(); err != nil {
 		return err
 	}
-	// ★ 继承链迁移（2026-08-26）：唯一键扩为 (zh_hash, tenant_id, pack_id) 三元组——
-	// 同租户同原文可同时存在于「部门包/企业包/行业包」多个层级行，
-	// 由检索层按 scope.Rank 就近裁决（写时不再互覆，读时定胜负）。
-	if err := k.ensurePackScopeUnique(); err != nil {
-		return err
-	}
-	return nil
+	return k.ensurePackScopeUnique()
 }
 
 // ensurePackScopeUnique 确保唯一键为三元组 (zh_hash, tenant_id, pack_id)。
@@ -132,7 +156,7 @@ func (k *KBDatabase) EnsureTenantMigration() error {
 //	②幂等判据=存在恰好 [zh_hash,tenant_id,pack_id] 的唯一索引则跳过。
 func (k *KBDatabase) ensurePackScopeUnique() error {
 	// ① 幂等检测：任一唯一索引的列集合恰为三元组即视为已完成
-	idxRows, err := k.db.Query("PRAGMA index_list(tm_segments)")
+	idxRows, err := db.Query(k.db, db.CurrentDialect(), "PRAGMA index_list(tm_segments)")
 	if err != nil {
 		return err
 	}
@@ -155,7 +179,7 @@ func (k *KBDatabase) ensurePackScopeUnique() error {
 	satisfied := false
 	needDrop := []string{}
 	for _, ui := range uniques {
-		infoRows, err := k.db.Query("PRAGMA index_info(" + ui.name + ")")
+		infoRows, err := db.Query(k.db, db.CurrentDialect(), "PRAGMA index_info("+ui.name+")")
 		if err != nil {
 			continue
 		}
@@ -209,7 +233,7 @@ func (k *KBDatabase) rebuildTableWithTripleUnique() error {
 		{"priority", "ALTER TABLE tm_segments ADD COLUMN priority INTEGER NOT NULL DEFAULT 9"},
 		{"pack_id", "ALTER TABLE tm_segments ADD COLUMN pack_id INTEGER NOT NULL DEFAULT 0"},
 	} {
-		info, err := k.db.Query("PRAGMA table_info(tm_segments)")
+		info, err := db.Query(k.db, db.CurrentDialect(), "PRAGMA table_info(tm_segments)")
 		if err != nil {
 			return err
 		}
@@ -224,7 +248,7 @@ func (k *KBDatabase) rebuildTableWithTripleUnique() error {
 		}
 		info.Close()
 		if !found {
-			if _, err := k.db.Exec(cd[1]); err != nil {
+			if _, err := db.Exec(k.db, db.CurrentDialect(), cd[1]); err != nil {
 				return err
 			}
 		}
@@ -235,7 +259,7 @@ func (k *KBDatabase) rebuildTableWithTripleUnique() error {
 	}
 	defer tx.Rollback()
 	cols := "id, zh_hash, zh, zh_short, module, tenant_id, priority, pack_id, en, ru, ar, es, pt, fr, kk, de, zh_hant, ms, id_lang, th, tr, it, pl, sv, updated_at"
-	if _, err := tx.Exec(`CREATE TABLE tm_segments_new (
+	if _, err := db.Exec(tx, db.CurrentDialect(), `CREATE TABLE tm_segments_new (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		"zh_hash" TEXT,
 		"zh" TEXT,
@@ -252,13 +276,13 @@ func (k *KBDatabase) rebuildTableWithTripleUnique() error {
 	)`); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("INSERT INTO tm_segments_new (" + cols + ") SELECT " + cols + " FROM tm_segments"); err != nil {
+	if _, err := db.Exec(tx, db.CurrentDialect(), "INSERT INTO tm_segments_new ("+cols+") SELECT "+cols+" FROM tm_segments"); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("DROP TABLE tm_segments"); err != nil {
+	if _, err := db.Exec(tx, db.CurrentDialect(), "DROP TABLE tm_segments"); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("ALTER TABLE tm_segments_new RENAME TO tm_segments"); err != nil {
+	if _, err := db.Exec(tx, db.CurrentDialect(), "ALTER TABLE tm_segments_new RENAME TO tm_segments"); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -267,7 +291,7 @@ func (k *KBDatabase) rebuildTableWithTripleUnique() error {
 // rebuildUniqueIndex 检查并重建复合唯一约束（zh_hash 单列唯一 → (zh_hash, tenant_id)）。
 // 实现：检查 tm_segments 的唯一索引是否仍为单列 zh_hash；若是则走重建表方案。
 func (k *KBDatabase) rebuildUniqueIndex() error {
-	idxRows, err := k.db.Query("PRAGMA index_list(tm_segments)")
+	idxRows, err := db.Query(k.db, db.CurrentDialect(), "PRAGMA index_list(tm_segments)")
 	if err != nil {
 		return err
 	}
@@ -285,7 +309,7 @@ func (k *KBDatabase) rebuildUniqueIndex() error {
 		idxNames = append(idxNames, name)
 		if name == "sqlite_autoindex_tm_segments_1" {
 			// 单列唯一索引，检查其列
-			cols, err := k.db.Query("PRAGMA index_info(" + name + ")")
+			cols, err := db.Query(k.db, db.CurrentDialect(), "PRAGMA index_info("+name+")")
 			if err == nil {
 				var cname string
 				var cseq, cid int
@@ -317,7 +341,7 @@ func (k *KBDatabase) rebuildUniqueIndex() error {
 // isSingleUniqueOnZhHash 判断 tm_segments 的隐式唯一索引是否只含 zh_hash 一列。
 // 返回：true 表示需要重建（单列 zh_hash 唯一）。
 func (k *KBDatabase) isSingleUniqueOnZhHash() (bool, error) {
-	rows, err := k.db.Query("PRAGMA index_list(tm_segments)")
+	rows, err := db.Query(k.db, db.CurrentDialect(), "PRAGMA index_list(tm_segments)")
 	if err != nil {
 		return false, err
 	}
@@ -333,7 +357,7 @@ func (k *KBDatabase) isSingleUniqueOnZhHash() (bool, error) {
 		if unique != 1 || origin != "u" {
 			continue
 		}
-		cols, err := k.db.Query("PRAGMA index_info(" + name + ")")
+		cols, err := db.Query(k.db, db.CurrentDialect(), "PRAGMA index_info("+name+")")
 		if err != nil {
 			continue
 		}
@@ -365,7 +389,7 @@ func (k *KBDatabase) rebuildTableWithCompositeUnique() error {
 	defer tx.Rollback()
 	cols := "id, zh_hash, zh, zh_short, module, tenant_id, en, ru, ar, es, pt, fr, kk, de, zh_hant, ms, id_lang, th, tr, it, pl, sv, updated_at"
 	// 建新表：UNIQUE(zh_hash, tenant_id) 复合唯一
-	if _, err := tx.Exec(`CREATE TABLE tm_segments_new (
+	if _, err := db.Exec(tx, db.CurrentDialect(), `CREATE TABLE tm_segments_new (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		"zh_hash" TEXT,
 		"zh" TEXT,
@@ -381,39 +405,44 @@ func (k *KBDatabase) rebuildTableWithCompositeUnique() error {
 		return err
 	}
 	// 拷贝旧数据到新表
-	if _, err := tx.Exec("INSERT INTO tm_segments_new (" + cols + ") SELECT " + cols + " FROM tm_segments"); err != nil {
+	if _, err := db.Exec(tx, db.CurrentDialect(), "INSERT INTO tm_segments_new ("+cols+") SELECT "+cols+" FROM tm_segments"); err != nil {
 		return err
 	}
 	// 删旧表并改名新表
-	if _, err := tx.Exec("DROP TABLE tm_segments"); err != nil {
+	if _, err := db.Exec(tx, db.CurrentDialect(), "DROP TABLE tm_segments"); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("ALTER TABLE tm_segments_new RENAME TO tm_segments"); err != nil {
+	if _, err := db.Exec(tx, db.CurrentDialect(), "ALTER TABLE tm_segments_new RENAME TO tm_segments"); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-// ensureTables 幂等创建 tm_segments 表（zh_hash 单列唯一，建表阶段）。
-func ensureTables(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS tm_segments (
+// ensureTables 幂等创建 tm_segments 表。
+// 新库直接以目标复合唯一键 (zh_hash, tenant_id, pack_id) 建表（含 priority/pack_id 列），
+// 使 SQLite 与 PostgreSQL 下的全新安装即处于最终形态，迁移逻辑可安全跳过。
+func ensureTables(conn *sql.DB) error {
+	d := db.CurrentDialect()
+	if _, err := db.Exec(conn, d, `CREATE TABLE IF NOT EXISTS tm_segments (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		"zh_hash" TEXT UNIQUE,
+		"zh_hash" TEXT,
 		"zh" TEXT,
 		"zh_short" TEXT,
 		"module" TEXT,
 		"tenant_id" INTEGER DEFAULT 1,
+		"priority" INTEGER NOT NULL DEFAULT 9,
+		"pack_id" INTEGER NOT NULL DEFAULT 0,
 		"en" TEXT, "ru" TEXT, "ar" TEXT, "es" TEXT, "pt" TEXT, "fr" TEXT,
 		"kk" TEXT, "de" TEXT, "zh_hant" TEXT,
 		"ms" TEXT, "id_lang" TEXT, "th" TEXT, "tr" TEXT, "it" TEXT, "pl" TEXT, "sv" TEXT,
-		"updated_at" TEXT
-	)`)
-	if err != nil {
+		"updated_at" TEXT,
+		UNIQUE(zh_hash, tenant_id, pack_id)
+	)`); err != nil {
 		return err
 	}
 	// P0-4：补全模糊检索索引（FuzzyHits 的 zh LIKE '%…%' 在大数据量下仍全扫，
-	// 但精确/前缀检索与常规定位受益；唯一键 zh_hash 已覆盖去重）。
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_tm_zh ON tm_segments(zh)`); err != nil {
+	// 但精确/前缀检索与常规定位受益；复合唯一键已覆盖去重）。
+	if _, err := db.Exec(conn, d, `CREATE INDEX IF NOT EXISTS idx_tm_zh ON tm_segments(zh)`); err != nil {
 		return err
 	}
 	return nil
@@ -434,7 +463,7 @@ const rowCols = "id, zh, COALESCE(module,''), COALESCE(tenant_id,1), COALESCE(pa
 // FetchRow 按 id 查询整行（跨租户，用于语义检索后回查）。
 // 参数：id=条目主键 ID；返回该行记录（含全部语言译文）。
 func (k *KBDatabase) FetchRow(id int64) (*Row, error) {
-	row := k.db.QueryRow("SELECT "+rowCols+" FROM tm_segments WHERE id=?", id)
+	row := db.QueryRow(k.db, db.CurrentDialect(), "SELECT "+rowCols+" FROM tm_segments WHERE id=?", id)
 	return scanRow(row)
 }
 
@@ -472,7 +501,7 @@ func scanRow(row *sql.Row) (*Row, error) {
 func (k *KBDatabase) FetchRowTenant(id, tenantID int64, scope *PackScope) (*Row, error) {
 	// ★ scope 精确口径：行必须落在 scope 任一集合内（链内/企业/历史0/共享/跨部门）
 	if scope != nil {
-		row := k.db.QueryRow(fmt.Sprintf("SELECT "+rowCols+" FROM tm_segments WHERE id=?"), id)
+		row := db.QueryRow(k.db, db.CurrentDialect(), fmt.Sprintf("SELECT "+rowCols+" FROM tm_segments WHERE id=?"), id)
 		r, err := scanRow(row)
 		if err != nil {
 			return nil, err
@@ -483,6 +512,7 @@ func (k *KBDatabase) FetchRowTenant(id, tenantID int64, scope *PackScope) (*Row,
 		_, inCross := scope.CrossDeptPacks[r.PackID]
 		visible := (r.TenantID == tenantID && (r.PackID == 0 || scope.TenantPackIDs[r.PackID] || inChain)) ||
 			scope.SharedPackIDs[r.PackID] ||
+			scope.UniversalPackIDs[r.PackID] ||
 			(scope.AllowCrossDept && inCross)
 		if !visible {
 			return nil, sql.ErrNoRows
@@ -490,7 +520,7 @@ func (k *KBDatabase) FetchRowTenant(id, tenantID int64, scope *PackScope) (*Row,
 		return r, nil
 	}
 	// 旧口径（兼容路径）：本租户 OR 租户1 共享（行业码已校验）
-	row := k.db.QueryRow(fmt.Sprintf(
+	row := db.QueryRow(k.db, db.CurrentDialect(), fmt.Sprintf(
 		"SELECT "+rowCols+" FROM tm_segments tm "+
 			"WHERE tm.id=? AND (tm.tenant_id=? OR (tm.tenant_id=1 AND tm.priority>=2 AND EXISTS(SELECT 1 FROM kb_packages pkg WHERE pkg.id=tm.pack_id AND (pkg.pack_type='locale' OR (pkg.pack_type='industry' AND pkg.code=(SELECT COALESCE(industry,'') FROM tenants WHERE id=?))))))"),
 		id, tenantID, tenantID)
@@ -507,7 +537,7 @@ const sharedFilterSQL = "OR (tm.tenant_id=1 AND tm.priority>=2 AND EXISTS(SELECT
 // FindExact 精确命中查询：按原文全等匹配术语，应用知识库优先级链（部门包0 > 组织包1 > 行业包2 > 语言文化包3）。
 // 查询范围 = 本租户 + 租户1 共享过滤子句；返回最优一行（priority 最小），无命中返回 sql.ErrNoRows。
 func (k *KBDatabase) FindExact(zh string, tenantID int64) (*Row, error) {
-	row := k.db.QueryRow(fmt.Sprintf(
+	row := db.QueryRow(k.db, db.CurrentDialect(), fmt.Sprintf(
 		"SELECT tm.id, tm.zh, COALESCE(tm.module,''), COALESCE(tm.tenant_id,1), "+langCols+" FROM tm_segments tm WHERE tm.zh=? AND (tm.tenant_id=? "+sharedFilterSQL+") ORDER BY tm.priority ASC, tm.id ASC LIMIT 1"),
 		zh, tenantID, tenantID)
 	return scanRow(row)
@@ -518,7 +548,7 @@ func (k *KBDatabase) FindExact(zh string, tenantID int64) (*Row, error) {
 // 返回：命中的行列表（按原文长度差由近到远排序）。
 func (k *KBDatabase) FuzzyHits(zhShort string, limit int, tenantID int64) ([]*Row, error) {
 	// 优先级链排序：部门包 > 组织包 > 行业包 > 语言文化包（共享宿主=租户1）
-	rows, err := k.db.Query("SELECT tm.id, tm.zh FROM tm_segments tm WHERE tm.zh LIKE ? AND (tm.tenant_id=? "+
+	rows, err := db.Query(k.db, db.CurrentDialect(), "SELECT tm.id, tm.zh FROM tm_segments tm WHERE tm.zh LIKE ? AND (tm.tenant_id=? "+
 		sharedFilterSQL+") ORDER BY tm.priority ASC, tm.id ASC LIMIT ?", "%"+zhShort+"%", tenantID, tenantID, limit)
 	if err != nil {
 		return nil, err
@@ -569,7 +599,7 @@ func (k *KBDatabase) FuzzyHits(zhShort string, limit int, tenantID int64) ([]*Ro
 // ③跨部门回退层（allow 时并入）。返回 SQL 片段与按序占位参数。
 func scopeVisibleSQL(scope *PackScope, includeCross bool, tenantID int64) (string, []interface{}) {
 	// 收集可见包 ID 集：链内 + 企业 + 共享（+ 跨部门可选）
-	ids := make([]int64, 0, len(scope.ChainPacks)+len(scope.TenantPackIDs)+len(scope.SharedPackIDs))
+	ids := make([]int64, 0, len(scope.ChainPacks)+len(scope.TenantPackIDs)+len(scope.SharedPackIDs)+len(scope.UniversalPackIDs))
 	for id := range scope.ChainPacks {
 		ids = append(ids, id)
 	}
@@ -577,6 +607,9 @@ func scopeVisibleSQL(scope *PackScope, includeCross bool, tenantID int64) (strin
 		ids = append(ids, id)
 	}
 	for id := range scope.SharedPackIDs {
+		ids = append(ids, id)
+	}
+	for id := range scope.UniversalPackIDs {
 		ids = append(ids, id)
 	}
 	if includeCross && scope.AllowCrossDept {
@@ -614,7 +647,7 @@ func (k *KBDatabase) FindExactScoped(zh string, tenantID int64, scope *PackScope
 	visSQL, visArgs := scopeVisibleSQL(scope, false, tenantID)
 	q1 := "SELECT " + rowCols + " FROM tm_segments tm WHERE tm.zh=? AND (" + visSQL + ") ORDER BY tm.priority ASC, tm.id ASC LIMIT 16"
 	stage1Args := append([]interface{}{zh}, visArgs...)
-	rows, err := k.db.Query(q1, stage1Args...)
+	rows, err := db.Query(k.db, db.CurrentDialect(), q1, stage1Args...)
 	if err == nil {
 		best, bestRank := (*Row)(nil), 1<<30
 		for rows.Next() {
@@ -636,7 +669,7 @@ func (k *KBDatabase) FindExactScoped(zh string, tenantID int64, scope *PackScope
 		crossSQL, crossArgs := scopeVisibleSQL(scope, true, tenantID)
 		q2 := "SELECT " + rowCols + " FROM tm_segments tm WHERE tm.zh=? AND (" + crossSQL + ") ORDER BY tm.priority ASC, tm.id ASC LIMIT 4"
 		stage2Args := append([]interface{}{zh}, crossArgs...)
-		rows2, err2 := k.db.Query(q2, stage2Args...)
+		rows2, err2 := db.Query(k.db, db.CurrentDialect(), q2, stage2Args...)
 		if err2 == nil {
 			defer rows2.Close()
 			for rows2.Next() {
@@ -661,7 +694,7 @@ func (k *KBDatabase) FuzzyHitsScoped(zhShort string, limit int, tenantID int64, 
 	fuzzyArgs := append([]interface{}{"%" + zhShort + "%"}, visArgs...)
 	fuzzyArgs = append(fuzzyArgs, limit*3) // 多取 3 倍候选：长度差过滤后仍够分层数量
 	fuzzyQuery := "SELECT tm.id, tm.zh FROM tm_segments tm WHERE tm.zh LIKE ? AND (" + visSQL + ") ORDER BY tm.priority ASC, tm.id ASC LIMIT ?"
-	rows, qerr := k.db.Query(fuzzyQuery, fuzzyArgs...)
+	rows, qerr := db.Query(k.db, db.CurrentDialect(), fuzzyQuery, fuzzyArgs...)
 	if qerr != nil {
 		return nil, nil, qerr
 	}
@@ -701,8 +734,8 @@ func (k *KBDatabase) FuzzyHitsScoped(zhShort string, limit int, tenantID int64, 
 		}
 		if _, inChain := scope.ChainPacks[r.PackID]; inChain || r.PackID == 0 || scope.TenantPackIDs[r.PackID] {
 			chain = append(chain, r) // 采用域：链内/企业/历史行
-		} else if scope.SharedPackIDs[r.PackID] {
-			chain = append(chain, r) // 共享层同属直接采用域
+		} else if scope.SharedPackIDs[r.PackID] || scope.UniversalPackIDs[r.PackID] {
+			chain = append(chain, r) // 共享层/通用语言习惯包同属直接采用域
 		} else {
 			cross = append(cross, r) // 跨部门：仅例句参考
 		}
@@ -755,7 +788,7 @@ func interfaceSlice(in []int64) []interface{} {
 // GetAllRows 遍历指定租户所有条目的 id + zh + module + tenant（构建 CJK 缓存用）。
 // 参数：tenantID=租户 ID；返回精简行列表。
 func (k *KBDatabase) GetAllRows(tenantID int64) ([]Row, error) {
-	rows, err := k.db.Query("SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1) FROM tm_segments WHERE tenant_id=?", tenantID)
+	rows, err := db.Query(k.db, db.CurrentDialect(), "SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1) FROM tm_segments WHERE tenant_id=?", tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -781,9 +814,9 @@ func (k *KBDatabase) AllRowLangs(tenantID int64) (map[int64]map[string]bool, err
 	var rows *sql.Rows
 	var err error
 	if tenantID < 0 {
-		rows, err = k.db.Query(q) // 全租户：构建向量索引语言映射
+		rows, err = db.Query(k.db, db.CurrentDialect(), q) // 全租户：构建向量索引语言映射
 	} else {
-		rows, err = k.db.Query(q+" WHERE tenant_id=?", tenantID)
+		rows, err = db.Query(k.db, db.CurrentDialect(), q+" WHERE tenant_id=?", tenantID)
 	}
 	if err != nil {
 		return nil, err
@@ -850,11 +883,7 @@ func (k *KBDatabase) SaveBack(zh string, translations map[string]string, module 
 	sql := fmt.Sprintf(
 		"INSERT INTO tm_segments (%s) VALUES (%s) ON CONFLICT(zh_hash, tenant_id, pack_id) DO UPDATE SET %s",
 		strings.Join(cols, ","), strings.Join(placeholders, ","), strings.Join(updates, ","))
-	res, err := k.db.Exec(sql, vals...)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
+	return db.InsertID(k.db, db.CurrentDialect(), "id", sql, vals...)
 }
 
 // AddTerm 新增/更新单条术语（只更新指定语言列，不清空其它列）。
@@ -866,7 +895,7 @@ func (k *KBDatabase) AddTerm(lang, src, dst, module string, tenantID int64) erro
 		module = "manual" // 手工录入默认标记
 	}
 	// ON CONFLICT 命中则只更新指定语言列
-	if _, err := k.db.Exec(
+	if _, err := db.Exec(k.db, db.CurrentDialect(),
 		"INSERT INTO tm_segments (zh_hash, zh, tenant_id, "+lang+", module, updated_at) VALUES (?,?,?,?,?,?) "+
 			"ON CONFLICT(zh_hash, tenant_id, pack_id) DO UPDATE SET "+lang+"=excluded."+lang+", updated_at=excluded.updated_at",
 		hash, src, tenantID, dst, module, now); err != nil {
@@ -879,11 +908,11 @@ func (k *KBDatabase) AddTerm(lang, src, dst, module string, tenantID int64) erro
 // 参数：tenantID=租户 ID；返回总条数、各语言非空条数、段数（segCount 当前恒为 0）。
 func (k *KBDatabase) Stats(tenantID int64) (total int64, perLang map[string]int, segCount int64, err error) {
 	// 总条数
-	if err = k.db.QueryRow("SELECT COUNT(*) FROM tm_segments WHERE tenant_id=?", tenantID).Scan(&total); err != nil {
+	if err = db.QueryRow(k.db, db.CurrentDialect(), "SELECT COUNT(*) FROM tm_segments WHERE tenant_id=?", tenantID).Scan(&total); err != nil {
 		return
 	}
 	perLang = map[string]int{}
-	rows, err := k.db.Query("SELECT en,ru,ar,es,pt,fr,kk,de,zh_hant,ms,id_lang,th,tr,it,pl,sv FROM tm_segments WHERE tenant_id=?", tenantID)
+	rows, err := db.Query(k.db, db.CurrentDialect(), "SELECT en,ru,ar,es,pt,fr,kk,de,zh_hant,ms,id_lang,th,tr,it,pl,sv FROM tm_segments WHERE tenant_id=?", tenantID)
 	if err != nil {
 		return
 	}
@@ -908,7 +937,7 @@ func (k *KBDatabase) Stats(tenantID int64) (total int64, perLang map[string]int,
 // AllTenantIDs 返回所有租户 id（供索引构建/重建遍历）。
 // 返回：去重后的租户 ID 列表。
 func (k *KBDatabase) AllTenantIDs() ([]int64, error) {
-	rows, err := k.db.Query("SELECT DISTINCT tenant_id FROM tm_segments WHERE tenant_id IS NOT NULL")
+	rows, err := db.Query(k.db, db.CurrentDialect(), "SELECT DISTINCT tenant_id FROM tm_segments WHERE tenant_id IS NOT NULL")
 	if err != nil {
 		return nil, err
 	}
@@ -927,7 +956,7 @@ func (k *KBDatabase) AllTenantIDs() ([]int64, error) {
 // AllRowsWithTenant 遍历全部条目的 id + zh + tenant_id（构建租户映射用）。
 // 返回：全部精简行列表（跨租户）。
 func (k *KBDatabase) AllRowsWithTenant() ([]Row, error) {
-	rows, err := k.db.Query("SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1), COALESCE(pack_id,0) FROM tm_segments")
+	rows, err := db.Query(k.db, db.CurrentDialect(), "SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1), COALESCE(pack_id,0) FROM tm_segments")
 	if err != nil {
 		return nil, err
 	}
@@ -939,6 +968,93 @@ func (k *KBDatabase) AllRowsWithTenant() ([]Row, error) {
 			continue
 		}
 		out = append(out, r)
+	}
+	return out, nil
+}
+
+// formatVector 将 float32 向量序列化为 pgvector 字面量（如 [0.1,0.2,...]）。
+func formatVector(v []float32) string {
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, x := range v {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.FormatFloat(float64(x), 'f', -1, 32))
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
+// UpsertEmbedding 将段向量写入 tm_segments.embedding（仅 PostgreSQL + 已安装 pgvector）。
+// SQLite 后端向量存于 npz 文件，无需落库；pgvector 不可用时最佳努力跳过（不阻断主流程）。
+func (k *KBDatabase) UpsertEmbedding(id int64, vec []float32) error {
+	if db.CurrentDialect() != db.DialectPostgres || len(vec) == 0 {
+		return nil
+	}
+	if _, err := k.db.Exec("UPDATE tm_segments SET embedding=$1 WHERE id=$2", formatVector(vec), id); err != nil {
+		log.Printf("kb: 写入 embedding 失败（段 %d，pgvector 可能不可用）：%v", id, err)
+	}
+	return nil
+}
+
+// VectorSearch 基于 pgvector 余弦距离（1 - cosine_distance）检索与 query 最相似的段。
+// 仅 PostgreSQL + 已安装 pgvector 时有效；其余情况返回 (nil, nil)，调用方应回退到 npz 索引。
+// 取较大候选集后在 Go 侧复用 npz.ScopeVisibility 做可见性/链内判定（与 npz 检索口径一致，
+// 含跨部门回退域 InChain=false），再按「业务优先级 Rank 升序 + 相似度降序」截断到 limit。
+func (k *KBDatabase) VectorSearch(query []float32, tenantID int64, scope *PackScope, limit int) ([]SearchResult, error) {
+	if db.CurrentDialect() != db.DialectPostgres || limit <= 0 {
+		return nil, nil
+	}
+	// 候选上限：limit 的若干倍（兼顾 scope 过滤后仍有足够链内/跨部门候选）
+	cap := limit * 4
+	if cap < 32 {
+		cap = 32
+	}
+	if cap > 200 {
+		cap = 200
+	}
+	q := fmt.Sprintf("SELECT id, tenant_id, pack_id, embedding <=> $1 FROM tm_segments WHERE embedding IS NOT NULL ORDER BY embedding <=> $1 LIMIT %d", cap)
+	rows, err := k.db.Query(q, formatVector(query))
+	if err != nil {
+		return nil, nil // pgvector 不可用：回退 npz
+	}
+	defer rows.Close()
+	type cand struct {
+		id      int64
+		tid     int64
+		pack    int64
+		sim     float64
+		inChain bool
+	}
+	var cands []cand
+	for rows.Next() {
+		var id, tid, pack int64
+		var dist float64
+		if err := rows.Scan(&id, &tid, &pack, &dist); err != nil {
+			continue
+		}
+		visible, inChain := ScopeVisibility(tid, pack, tenantID, scope)
+		if !visible {
+			continue
+		}
+		cands = append(cands, cand{id: id, tid: tid, pack: pack, sim: 1 - dist, inChain: inChain})
+	}
+	// 排序：业务优先级 Rank（部门>跨部门>企业>行业>无scope）升序优先；同档按相似度降序。
+	// 与 npz.ScopedSearchScope 口径一致。
+	sort.Slice(cands, func(a, b int) bool {
+		ra, rb := scope.Rank(cands[a].pack, cands[a].tid), scope.Rank(cands[b].pack, cands[b].tid)
+		if ra != rb {
+			return ra < rb
+		}
+		return cands[a].sim > cands[b].sim
+	})
+	if limit < len(cands) {
+		cands = cands[:limit]
+	}
+	out := make([]SearchResult, len(cands))
+	for i, c := range cands {
+		out[i] = SearchResult{ID: c.id, Sim: c.sim, InChain: c.inChain}
 	}
 	return out, nil
 }

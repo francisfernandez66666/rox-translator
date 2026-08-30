@@ -12,11 +12,12 @@ package store
 import (
 	"fmt"
 	"time"
+	"translator/internal/db"
 )
 
 // SetOrgTokenLimit 设置部门月度 token 预算（0=未启用该部门的部门墙）。
 func (s *Store) SetOrgTokenLimit(id int64, limit int64) error {
-	_, err := s.db.Exec("UPDATE orgs SET token_limit=?, updated_at=? WHERE id=?",
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE orgs SET token_limit=?, updated_at=? WHERE id=?",
 		limit, time.Now().Format(time.RFC3339), id)
 	return err
 }
@@ -45,14 +46,14 @@ func (s *Store) OrgTokensUsedThisMonth(tid, orgID int64) (int64, error) {
 	      JOIN users u ON u.id=l.user_id
 	      WHERE l.tenant_id=? AND l.created_at>=? AND u.org_id IN (` + placeholders + `)`
 	var total int64
-	err = s.db.QueryRow(q, args...).Scan(&total)
+	err = db.QueryRow(s.db, db.CurrentDialect(), q, args...).Scan(&total)
 	return total, err
 }
 
 // TenantTokensUsedThisMonth 统计全租户本月 token 消耗（含未分配部门的直属用户）。
 func (s *Store) TenantTokensUsedThisMonth(tid int64) (int64, error) {
 	var total int64
-	err := s.db.QueryRow(
+	err := db.QueryRow(s.db, db.CurrentDialect(),
 		`SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=?`,
 		tid, monthStart()).Scan(&total)
 	return total, err
@@ -198,7 +199,7 @@ func (s *Store) notifyTenantQuota(tid int64, sum *OrgBudgetSummary) {
 // openAlertExists 是否已存在同标记的 open 告警（去重闸）。
 func (s *Store) openAlertExists(marker string) bool {
 	var n int
-	_ = s.db.QueryRow(
+	_ = db.QueryRow(s.db, db.CurrentDialect(),
 		`SELECT COUNT(*) FROM alerts WHERE status='open' AND kind='quota' AND message LIKE ?`,
 		"%"+marker+"%").Scan(&n)
 	return n > 0
@@ -212,7 +213,7 @@ func (s *Store) usersByRoleInOrg(tid int64, orgID int64, role string) []int64 {
 		q += " AND org_id=?"
 		args = append(args, orgID)
 	}
-	rows, err := s.db.Query(q, args...)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil
 	}

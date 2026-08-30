@@ -7,6 +7,7 @@ package store
 
 import (
 	"time"
+	"translator/internal/db"
 )
 
 // AuditLog 审计日志
@@ -35,7 +36,7 @@ func (s *Store) LogAudit(tid, userID int64, action, resource, detail string) {
 // beforeVal=操作前值（JSON），afterVal=操作后值（JSON）。
 func (s *Store) LogAuditDiff(tid, userID int64, action, resource, detail, beforeVal, afterVal string) {
 	// 写入审计表；失败静默忽略（审计不应阻塞业务主流程）
-	_, _ = s.db.Exec(
+	_, _ = db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO audit_logs (tenant_id, user_id, action, resource, detail, before_val, after_val, created_at) VALUES (?,?,?,?,?,?,?,?)",
 		tid, userID, action, resource, detail, beforeVal, afterVal, time.Now().Format(time.RFC3339))
 }
@@ -81,7 +82,7 @@ func (s *Store) ListAuditFilter(tid int64, action, resource string, userID int64
 	}
 	query += " ORDER BY a.id DESC LIMIT ?"
 	args = append(args, limit)
-	rows, err := s.db.Query(query, args...)
+	rows, err := db.Query(s.db, db.CurrentDialect(), query, args...)
 	if err != nil {
 		return nil, err
 	}

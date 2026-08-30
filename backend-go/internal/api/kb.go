@@ -27,7 +27,6 @@ import (
 	"strings"
 	"time"
 
-	"translator/internal/auth"
 	"translator/internal/engine"
 	"translator/internal/kb"
 	"translator/internal/store"
@@ -79,16 +78,10 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包导入"})
 		return
 	}
-	if auth.RoleLevel(u.Role) == 2 {
-		if u.OrgID <= 0 || pkg.OrgID <= 0 {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向非本部门的包导入"})
-			return
-		}
-		inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, pkg.OrgID)
-		if e2 != nil || !inTree {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向非本部门的包导入"})
-			return
-		}
+	// 部门管理员：目标包须在本部门及子部门内（部门包），或跨部门包须涵盖本部门（含子树/全公司仅超管租管）。
+	if err := s.deptKBScope(u, tid, pkg); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
 	}
 	added, skipped := 0, 0
 	// 逐条导入：空源文跳过；默认层 2、默认目标语言 en
@@ -466,17 +459,11 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包导入"})
 		return
 	}
-	// 部门管理员：目标包必须在本部门及子部门内（org_id 归属）
-	if auth.RoleLevel(u.Role) == 2 {
-		if u.OrgID <= 0 || pkg.OrgID <= 0 {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向非本部门的包导入"})
-			return
-		}
-		inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, pkg.OrgID)
-		if e2 != nil || !inTree {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向非本部门的包导入"})
-			return
-		}
+	// 部门管理员：目标包须在本部门及子部门内（部门包），或跨部门包须涵盖本部门（含子树/全公司仅超管租管）。
+	// 复用后台维护权限口径（deptKBScope），保证导入与维护权限一致。
+	if err := s.deptKBScope(u, tid, pkg); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
 	}
 
 	// 读取缓存元信息文件

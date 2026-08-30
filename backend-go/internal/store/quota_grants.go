@@ -8,6 +8,7 @@ package store
 import (
 	"database/sql"
 	"time"
+	"translator/internal/db"
 )
 
 // QuotaGrant 一条额度发放记录
@@ -25,20 +26,20 @@ type QuotaGrant struct {
 
 // QuotaGrantMigrate 建表与索引（幂等，随 Store.New 调用）。
 func (s *Store) QuotaGrantMigrate() {
-	s.db.Exec(`CREATE TABLE IF NOT EXISTS quota_grants (
+	db.Exec(s.db, db.CurrentDialect(), `CREATE TABLE IF NOT EXISTS quota_grants (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		tenant_id INTEGER NOT NULL,
 		kind TEXT NOT NULL DEFAULT 'trial',
 		total INTEGER NOT NULL, left INTEGER NOT NULL,
 		expires_at TEXT NOT NULL,
 		source TEXT DEFAULT '', ref_id INTEGER DEFAULT 0, created_at TEXT)`)
-	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_qg_tid_exp ON quota_grants(tenant_id, expires_at)`)
+	db.Exec(s.db, db.CurrentDialect(), `CREATE INDEX IF NOT EXISTS idx_qg_tid_exp ON quota_grants(tenant_id, expires_at)`)
 }
 
 // CreateQuotaGrant 发放一条额度。
 func (s *Store) CreateQuotaGrant(tid int64, kind string, total int64, expires time.Time, source string, refID int64) error {
 	now := time.Now().Format(time.RFC3339)
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO quota_grants (tenant_id, kind, total, left, expires_at, source, ref_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
 		tid, kind, total, total, expires.UTC().Format(time.RFC3339), source, refID, now)
 	return err
@@ -47,7 +48,7 @@ func (s *Store) CreateQuotaGrant(tid int64, kind string, total int64, expires ti
 // SumActiveGrants 未过期额度剩余合计（低额提醒/展示用）。
 func (s *Store) SumActiveGrants(tid int64) int64 {
 	var n int64
-	s.db.QueryRow("SELECT COALESCE(SUM(left),0) FROM quota_grants WHERE tenant_id=? AND left>0 AND expires_at>?",
+	db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(SUM(left),0) FROM quota_grants WHERE tenant_id=? AND left>0 AND expires_at>?",
 		tid, time.Now().UTC().Format(time.RFC3339)).Scan(&n)
 	return n
 }
@@ -61,7 +62,7 @@ func (s *Store) TenantRemainTotal(tid int64) (grants, permanent int64, err error
 		return 0, 0, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	err = s.db.QueryRow(`
+	err = db.QueryRow(s.db, db.CurrentDialect(), `
 		SELECT b.balance,
 		       COALESCE((SELECT SUM(g.left) FROM quota_grants g
 		                 WHERE g.tenant_id=b.tenant_id AND g.left>0 AND g.expires_at>?),0)
@@ -102,13 +103,13 @@ func (s *Store) DeductWithGrants(tid int64, tokens int64) error {
 // 约束：tx 必须已由调用方 Begin（IMMEDIATE）；函数内禁止触碰 s.db。
 func deductWithGrantsTx(tx *sql.Tx, tid int64, tokens int64) error {
 	// 确保账户行存在（等价 EnsureBalance 的 tx 内联版）
-	if _, err := tx.Exec(
+	if _, err := db.Exec(tx, db.CurrentDialect(),
 		"INSERT OR IGNORE INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
 		tid, time.Now().Format(time.RFC3339)); err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	rows, err := tx.Query(
+	rows, err := db.Query(tx, db.CurrentDialect(),
 		"SELECT id, left FROM quota_grants WHERE tenant_id=? AND left>0 AND expires_at>? ORDER BY expires_at ASC",
 		tid, now)
 	if err != nil {
@@ -138,7 +139,7 @@ func deductWithGrantsTx(tx *sql.Tx, tid int64, tokens int64) error {
 		}
 		// ★ 守卫式核销：AND left>=use 保证不扣负；影响行数为 0 说明并发下该行余额
 		//   已发生变化（理论上是防御性分支，IMMEDIATE 锁下不应触发），整体回滚报余额不足。
-		res, err := tx.Exec("UPDATE quota_grants SET left=left-? WHERE id=? AND left>=?", use, g.id, use)
+		res, err := db.Exec(tx, db.CurrentDialect(), "UPDATE quota_grants SET left=left-? WHERE id=? AND left>=?", use, g.id, use)
 		if err != nil {
 			return err
 		}
@@ -148,7 +149,7 @@ func deductWithGrantsTx(tx *sql.Tx, tid int64, tokens int64) error {
 		need -= use
 	}
 	if need > 0 {
-		res, err := tx.Exec("UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
+		res, err := db.Exec(tx, db.CurrentDialect(), "UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
 			need, time.Now().Format(time.RFC3339), tid, need)
 		if err != nil {
 			return err

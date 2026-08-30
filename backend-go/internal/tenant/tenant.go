@@ -14,36 +14,37 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"translator/internal/db"
 )
 
 // Tenant 租户实体
 type Tenant struct {
-	ID          int64  `json:"id"`          // 租户主键 ID
-	Code        string `json:"code"`        // 租户编码（唯一，如 rox）
-	Name        string `json:"name"`        // 租户名称
-	Status      string `json:"status"`      // 状态：active / disabled / expired（disabled 与 expired 由 effectiveStatus 计算）
-	ExpiresAt   string `json:"expires_at"`  // 有效期（空=永久），格式 2006-01-02 或 RFC3339
-	Permissions string `json:"permissions"` // JSON 权限字符串（解码见 Perms）
-	Industry    string `json:"industry"`    // 注册行业编码（关联共享行业包的载入过滤）
-	BrandName    string `json:"brand_name"`    // 自定义品牌展示名（租户级品牌定制）
-	BrandLogo    string `json:"brand_logo"`    // 自定义品牌 Logo URL（空=用默认）
-	Domain       string `json:"domain"`        // 自定义访问域名（用于按域名解析租户品牌）
-	BrandHomeBg  string `json:"brand_home_bg"`  // 未登录首页背景图（base64 dataURL 或外链 URL，空=用默认）
-	BrandHomeBgStyle string `json:"brand_home_bg_style"` // 首页背景图样式 JSON：{scale,x,y,mode}（mode: tile/cover/contain）
+	ID                int64  `json:"id"`                   // 租户主键 ID
+	Code              string `json:"code"`                 // 租户编码（唯一，如 rox）
+	Name              string `json:"name"`                 // 租户名称
+	Status            string `json:"status"`               // 状态：active / disabled / expired（disabled 与 expired 由 effectiveStatus 计算）
+	ExpiresAt         string `json:"expires_at"`           // 有效期（空=永久），格式 2006-01-02 或 RFC3339
+	Permissions       string `json:"permissions"`          // JSON 权限字符串（解码见 Perms）
+	Industry          string `json:"industry"`             // 注册行业编码（关联共享行业包的载入过滤）
+	BrandName         string `json:"brand_name"`           // 自定义品牌展示名（租户级品牌定制）
+	BrandLogo         string `json:"brand_logo"`           // 自定义品牌 Logo URL（空=用默认）
+	Domain            string `json:"domain"`               // 自定义访问域名（用于按域名解析租户品牌）
+	BrandHomeBg       string `json:"brand_home_bg"`        // 未登录首页背景图（base64 dataURL 或外链 URL，空=用默认）
+	BrandHomeBgStyle  string `json:"brand_home_bg_style"`  // 首页背景图样式 JSON：{scale,x,y,mode}（mode: tile/cover/contain）
 	BrandLoginCardPos string `json:"brand_login_card_pos"` // 登录/注册卡片位置 JSON：{x,y} 百分比（卡片中心相对于视口）
-	BrandLoginLayout string `json:"brand_login_layout"` // 登录页布局 JSON：{mode:'full'|'split', side:'left'|'right'}
-	BrandLinks   string `json:"brand_links"`   // 自定义页脚链接 JSON 数组（[{label,label_en,url}]）
-	InviteEnabled bool `json:"invite_enabled"` // 是否开通「邀请好友」功能（超管按租户开关；false=对该租户关闭邀请裂变）
-	IsPersonal   bool `json:"is_personal"`    // 是否个人用户租户（true=个人用户；false=企业用户，企业用户默认不参与邀请好友奖励）
-	CreatedAt    string `json:"created_at"`    // 创建时间（RFC3339 字符串）
-	UpdatedAt    string `json:"updated_at"`    // 更新时间（RFC3339 字符串）
+	BrandLoginLayout  string `json:"brand_login_layout"`   // 登录页布局 JSON：{mode:'full'|'split', side:'left'|'right'}
+	BrandLinks        string `json:"brand_links"`          // 自定义页脚链接 JSON 数组（[{label,label_en,url}]）
+	InviteEnabled     bool   `json:"invite_enabled"`       // 是否开通「邀请好友」功能（超管按租户开关；false=对该租户关闭邀请裂变）
+	IsPersonal        bool   `json:"is_personal"`          // 是否个人用户租户（true=个人用户；false=企业用户，企业用户默认不参与邀请好友奖励）
+	CreatedAt         string `json:"created_at"`           // 创建时间（RFC3339 字符串）
+	UpdatedAt         string `json:"updated_at"`           // 更新时间（RFC3339 字符串）
 }
 
 // BrandLink 自定义品牌链接项（页脚展示）
 type BrandLink struct {
-	Label   string `json:"label"`             // 中文标签
-	LabelEn string `json:"label_en"`          // 英文标签
-	URL     string `json:"url"`               // 跳转地址
+	Label   string `json:"label"`    // 中文标签
+	LabelEn string `json:"label_en"` // 英文标签
+	URL     string `json:"url"`      // 跳转地址
 }
 
 // Perms 租户权限（Permissions JSON 的解码结构）
@@ -86,9 +87,10 @@ func NewStore(db *sql.DB) (*Store, error) {
 }
 
 // ensureTable 幂等建表并补齐老库缺失的租户级配置列。
-// 实现：CREATE TABLE IF NOT EXISTS 建表，再用 PRAGMA table_info 检查并 ALTER 补列。
+// 实现：CREATE TABLE IF NOT EXISTS 建表，再按方言补列（PG 用 ADD COLUMN IF NOT EXISTS，SQLite 用 PRAGMA 检查后补）。
 func (s *Store) ensureTable() error {
-	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS tenants (
+	d := db.CurrentDialect()
+	if _, err := db.Exec(s.db, d, `CREATE TABLE IF NOT EXISTS tenants (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		"code" TEXT UNIQUE NOT NULL,
 		"name" TEXT NOT NULL DEFAULT '',
@@ -100,103 +102,32 @@ func (s *Store) ensureTable() error {
 	)`); err != nil {
 		return err
 	}
-	// 兼容旧库：补充租户级配置列（model/policy/flow，均为 JSON）
-	rows, err := s.db.Query("PRAGMA table_info(tenants)")
-	if err != nil {
-		return err
+	cols := map[string]string{
+		"model_config":              "TEXT NOT NULL DEFAULT '{}'",
+		"policy_config":             "TEXT NOT NULL DEFAULT '{}'",
+		"flow_config":               "TEXT NOT NULL DEFAULT '{}'",
+		"industry":                  "TEXT NOT NULL DEFAULT ''",
+		"brand_name":                "TEXT NOT NULL DEFAULT ''",
+		"brand_logo":                "TEXT NOT NULL DEFAULT ''",
+		"domain":                    "TEXT NOT NULL DEFAULT ''",
+		"brand_links":               "TEXT NOT NULL DEFAULT ''",
+		"brand_home_bg":             "TEXT NOT NULL DEFAULT ''",
+		"brand_home_bg_style":       "TEXT NOT NULL DEFAULT ''",
+		"brand_login_card_pos":      "TEXT NOT NULL DEFAULT ''",
+		"brand_login_layout":        "TEXT NOT NULL DEFAULT ''",
+		"invite_enabled":            "INTEGER NOT NULL DEFAULT 0",
+		"is_personal":               "INTEGER NOT NULL DEFAULT 0",
 	}
-	defer rows.Close()
-	have := map[string]bool{}
-	// 遍历现有列，构建存在性集合
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt *string
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			continue
-		}
-		have[name] = true
-	}
-	// 缺失的列逐一 ALTER 补上（SQLite 无 ADD COLUMN IF NOT EXISTS）
-	if !have["model_config"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN model_config TEXT NOT NULL DEFAULT '{}'"); err != nil {
-			return err
-		}
-	}
-	if !have["policy_config"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN policy_config TEXT NOT NULL DEFAULT '{}'"); err != nil {
-			return err
-		}
-	}
-	if !have["flow_config"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN flow_config TEXT NOT NULL DEFAULT '{}'"); err != nil {
-			return err
-		}
-	}
-	if !have["industry"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN industry TEXT NOT NULL DEFAULT ''"); err != nil {
-			return err
-		}
-	}
-	if !have["brand_name"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_name TEXT NOT NULL DEFAULT ''"); err != nil {
-			return err
-		}
-	}
-	if !have["brand_logo"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_logo TEXT NOT NULL DEFAULT ''"); err != nil {
-			return err
-		}
-	}
-	if !have["domain"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN domain TEXT NOT NULL DEFAULT ''"); err != nil {
-			return err
-		}
-	}
-	if !have["brand_links"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_links TEXT NOT NULL DEFAULT ''"); err != nil {
-			return err
-		}
-	}
-	if !have["brand_home_bg"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_home_bg TEXT NOT NULL DEFAULT ''"); err != nil {
-			return err
-		}
-	}
-	if !have["brand_home_bg_style"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_home_bg_style TEXT NOT NULL DEFAULT ''"); err != nil {
-			return err
-		}
-	}
-	if !have["brand_login_card_pos"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_login_card_pos TEXT NOT NULL DEFAULT ''"); err != nil {
-			return err
-		}
-	}
-	if !have["brand_login_layout"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN brand_login_layout TEXT NOT NULL DEFAULT ''"); err != nil {
-			return err
-		}
-	}
-	if !have["invite_enabled"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN invite_enabled INTEGER NOT NULL DEFAULT 0"); err != nil {
-			return err
-		}
-	}
-	if !have["is_personal"] {
-		if _, err := s.db.Exec("ALTER TABLE tenants ADD COLUMN is_personal INTEGER NOT NULL DEFAULT 0"); err != nil {
-			return err
-		}
-	}
-	return nil
+	return db.EnsureColumns(s.db, d, "tenants", cols)
 }
 
 // tenantColumns 租户查询统一列清单（与 scanTenant 顺序一致）。
 const tenantColumns = `id, code, name, status, expires_at, permissions, COALESCE(industry,''), COALESCE(brand_name,''), COALESCE(brand_logo,''), COALESCE(domain,''), COALESCE(brand_home_bg,''), COALESCE(brand_home_bg_style,''), COALESCE(brand_login_card_pos,''), COALESCE(brand_login_layout,''), COALESCE(brand_links,''), COALESCE(invite_enabled,0), COALESCE(is_personal,0), created_at, updated_at`
 
 // scanner 同时兼容 *sql.Row 与 *sql.Rows 的 Scan 方法。
-type scanner interface{ Scan(dest ...interface{}) error }
+type scanner interface {
+	Scan(dest ...interface{}) error
+}
 
 // scanTenant 从一行中解析租户对象（字段顺序须与 tenantColumns 一致）。
 func scanTenant(s scanner) (*Tenant, error) {
@@ -210,7 +141,7 @@ func scanTenant(s scanner) (*Tenant, error) {
 
 // SetIndustry 设置租户注册行业编码（行业包共享载入的过滤依据）。
 func (s *Store) SetIndustry(id int64, code string) error {
-	_, err := s.db.Exec("UPDATE tenants SET industry=?, updated_at=? WHERE id=?", code, nowStr(), id)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tenants SET industry=?, updated_at=? WHERE id=?", code, nowStr(), id)
 	return err
 }
 
@@ -222,19 +153,15 @@ func nowStr() string {
 // EnsureDefault 确保默认租户 rox 存在；不存在则创建并返回其 id。
 // 返回：默认租户 ID。
 func (s *Store) EnsureDefault() (int64, error) {
-	row := s.db.QueryRow("SELECT id FROM tenants WHERE code='rox'")
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id FROM tenants WHERE code='rox'")
 	var id int64
 	if err := row.Scan(&id); err == nil {
 		return id, nil // 已存在直接返回
 	}
 	now := nowStr()
-	res, err := s.db.Exec(
+	return db.InsertID(s.db, db.CurrentDialect(), "id",
 		"INSERT INTO tenants (code, name, status, expires_at, permissions, created_at, updated_at) VALUES ('rox','langcross 默认租户','active','','{}',?,?)",
 		now, now)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
 }
 
 // Create 创建租户（初始状态 active）。
@@ -248,13 +175,9 @@ func (s *Store) Create(code, name, expiresAt, permissions string) (*Tenant, erro
 	if permissions == "" {
 		permissions = "{}" // 默认空权限
 	}
-	res, err := s.db.Exec(
+	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
 		"INSERT INTO tenants (code, name, status, expires_at, permissions, created_at, updated_at) VALUES (?,?,'active',?,?,?,?)",
 		code, name, expiresAt, permissions, now, now)
-	if err != nil {
-		return nil, err
-	}
-	id, err := res.LastInsertId()
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +187,7 @@ func (s *Store) Create(code, name, expiresAt, permissions string) (*Tenant, erro
 // List 列出所有租户（含计算后的有效状态）。
 // 返回：租户列表（按 ID 排序）。
 func (s *Store) List() ([]*Tenant, error) {
-	rows, err := s.db.Query("SELECT " + tenantColumns + " FROM tenants ORDER BY id")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+tenantColumns+" FROM tenants ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -283,21 +206,21 @@ func (s *Store) List() ([]*Tenant, error) {
 // GetByID 按 id 查询租户。
 // 参数：id=租户主键 ID；返回租户对象（含计算后的有效状态）。
 func (s *Store) GetByID(id int64) (*Tenant, error) {
-	row := s.db.QueryRow("SELECT "+tenantColumns+" FROM tenants WHERE id=?", id)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+tenantColumns+" FROM tenants WHERE id=?", id)
 	return scanTenant(row)
 }
 
 // GetByCode 按租户编码查询。
 // 参数：code=租户编码；返回租户对象（含计算后的有效状态）。
 func (s *Store) GetByCode(code string) (*Tenant, error) {
-	row := s.db.QueryRow("SELECT "+tenantColumns+" FROM tenants WHERE code=?", code)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+tenantColumns+" FROM tenants WHERE code=?", code)
 	return scanTenant(row)
 }
 
 // GetByDomain 按自定义域名查询租户（用于按访问域名解析品牌/租户）。
 // 参数：domain=访问域名（不含端口）；返回租户对象（含计算后的有效状态）。
 func (s *Store) GetByDomain(domain string) (*Tenant, error) {
-	row := s.db.QueryRow("SELECT "+tenantColumns+" FROM tenants WHERE domain=?", domain)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+tenantColumns+" FROM tenants WHERE domain=?", domain)
 	return scanTenant(row)
 }
 
@@ -310,7 +233,7 @@ func (s *Store) SetBranding(id int64, brandName, brandLogo, domain, brandLinks s
 			return fmt.Errorf("brand_links 需为合法 JSON 数组")
 		}
 	}
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET brand_name=?, brand_logo=?, domain=?, brand_links=?, updated_at=? WHERE id=?",
 		brandName, brandLogo, domain, brandLinks, nowStr(), id)
 	return err
@@ -319,21 +242,21 @@ func (s *Store) SetBranding(id int64, brandName, brandLogo, domain, brandLinks s
 // SetBrandHomeBg 保存租户级「未登录首页背景图」及其样式（缩放/位置/平铺模式）。
 // 参数：id=租户 ID；bg=背景图数据（dataURL 或 URL，空串=清空）；style=样式 JSON 字符串。
 func (s *Store) SetBrandHomeBg(id int64, bg, style string) error {
-	_, err := s.db.Exec("UPDATE tenants SET brand_home_bg=?, brand_home_bg_style=?, updated_at=? WHERE id=?", bg, style, nowStr(), id)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tenants SET brand_home_bg=?, brand_home_bg_style=?, updated_at=? WHERE id=?", bg, style, nowStr(), id)
 	return err
 }
 
 // SetBrandLoginCardPos 保存租户级「登录/注册卡片位置」（百分比 JSON：{x,y}）。
 // 参数：id=租户 ID；pos=位置 JSON 字符串（空串=重置默认居中）。
 func (s *Store) SetBrandLoginCardPos(id int64, pos string) error {
-	_, err := s.db.Exec("UPDATE tenants SET brand_login_card_pos=?, updated_at=? WHERE id=?", pos, nowStr(), id)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tenants SET brand_login_card_pos=?, updated_at=? WHERE id=?", pos, nowStr(), id)
 	return err
 }
 
 // SetBrandLoginLayout 保存租户级「登录页布局」（JSON：{mode:'full'|'split', side:'left'|'right'}）。
 // 参数：id=租户 ID；layout=布局 JSON 字符串（空串=重置默认全屏背景）。
 func (s *Store) SetBrandLoginLayout(id int64, layout string) error {
-	_, err := s.db.Exec("UPDATE tenants SET brand_login_layout=?, updated_at=? WHERE id=?", layout, nowStr(), id)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tenants SET brand_login_layout=?, updated_at=? WHERE id=?", layout, nowStr(), id)
 	return err
 }
 
@@ -343,7 +266,7 @@ func (s *Store) Update(id int64, name, expiresAt, permissions string) error {
 	if permissions == "" {
 		permissions = "{}" // 默认空权限
 	}
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET name=?, expires_at=?, permissions=?, updated_at=? WHERE id=?",
 		name, expiresAt, permissions, nowStr(), id)
 	return err
@@ -352,7 +275,7 @@ func (s *Store) Update(id int64, name, expiresAt, permissions string) error {
 // SetStatus 设置租户状态（active / disabled）。
 // 参数：id=租户主键 ID，status=新状态。
 func (s *Store) SetStatus(id int64, status string) error {
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET status=?, updated_at=? WHERE id=?",
 		status, nowStr(), id)
 	return err
@@ -361,7 +284,7 @@ func (s *Store) SetStatus(id int64, status string) error {
 // SetInviteEnabled 设置租户「邀请好友」功能开关（超管按租户控制是否对租户开放邀请裂变）。
 // 参数：id=租户 ID；enabled=true 开通 / false 关闭。
 func (s *Store) SetInviteEnabled(id int64, enabled bool) error {
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET invite_enabled=?, updated_at=? WHERE id=?",
 		enabled, nowStr(), id)
 	return err
@@ -371,7 +294,7 @@ func (s *Store) SetInviteEnabled(id int64, enabled bool) error {
 // 个人用户默认可参与邀请好友奖励；企业用户默认不参与。
 // 参数：id=租户 ID；personal=true 标记为个人用户。
 func (s *Store) SetPersonal(id int64, personal bool) error {
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET is_personal=?, updated_at=? WHERE id=?",
 		personal, nowStr(), id)
 	return err
@@ -402,7 +325,7 @@ type PolicyConfig struct {
 // 参数：tid=租户 ID；返回策略配置结构体（未配置返回零值）。
 func (s *Store) GetPolicyConfig(tid int64) (PolicyConfig, error) {
 	var raw string
-	err := s.db.QueryRow("SELECT policy_config FROM tenants WHERE id=?", tid).Scan(&raw)
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT policy_config FROM tenants WHERE id=?", tid).Scan(&raw)
 	if err != nil || raw == "" || raw == "{}" {
 		return PolicyConfig{}, nil // 未配置按零值返回
 	}
@@ -417,7 +340,7 @@ func (s *Store) GetPolicyConfig(tid int64) (PolicyConfig, error) {
 // 参数：tid=租户 ID，pc=策略配置结构体。
 func (s *Store) SetPolicyConfig(tid int64, pc PolicyConfig) error {
 	b, _ := json.Marshal(pc)
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET policy_config=?, updated_at=? WHERE id=?",
 		string(b), nowStr(), tid)
 	return err
@@ -432,7 +355,7 @@ type FlowConfig struct {
 // 参数：tid=租户 ID；返回流程步骤配置结构体。
 func (s *Store) GetFlowConfig(tid int64) (FlowConfig, error) {
 	var raw string
-	err := s.db.QueryRow("SELECT flow_config FROM tenants WHERE id=?", tid).Scan(&raw)
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT flow_config FROM tenants WHERE id=?", tid).Scan(&raw)
 	if err != nil || raw == "" || raw == "{}" {
 		return FlowConfig{}, nil // 未配置按空 map 返回
 	}
@@ -447,7 +370,7 @@ func (s *Store) GetFlowConfig(tid int64) (FlowConfig, error) {
 // 参数：tid=租户 ID，fc=流程步骤配置结构体。
 func (s *Store) SetFlowConfig(tid int64, fc FlowConfig) error {
 	b, _ := json.Marshal(fc)
-	_, err := s.db.Exec(
+	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET flow_config=?, updated_at=? WHERE id=?",
 		string(b), nowStr(), tid)
 	return err
@@ -457,7 +380,7 @@ func (s *Store) SetFlowConfig(tid int64, fc FlowConfig) error {
 // 参数：id=租户主键 ID；返回租户名称（未找到返回空串）。
 func (s *Store) Name(id int64) (string, error) {
 	var name string
-	err := s.db.QueryRow("SELECT name FROM tenants WHERE id=?", id).Scan(&name)
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT name FROM tenants WHERE id=?", id).Scan(&name)
 	if err != nil {
 		return "", err
 	}
@@ -496,7 +419,7 @@ func (s *Store) Delete(id int64) error {
 			return e
 		}
 	}
-	if _, e := tx.Exec("DELETE FROM tenants WHERE id=?", id); e != nil {
+	if _, e := db.Exec(tx, db.CurrentDialect(), "DELETE FROM tenants WHERE id=?", id); e != nil {
 		return e
 	}
 	return tx.Commit()
@@ -504,7 +427,7 @@ func (s *Store) Delete(id int64) error {
 
 // delTenantRows 在事务内按 tenant_id 删除指定表数据；表不存在（旧库）时忽略，不中断删除流程。
 func (s *Store) delTenantRows(tx *sql.Tx, tbl string, tenantID int64) error {
-	if _, e := tx.Exec("DELETE FROM "+tbl+" WHERE tenant_id=?", tenantID); e != nil {
+	if _, e := db.Exec(tx, db.CurrentDialect(), "DELETE FROM "+tbl+" WHERE tenant_id=?", tenantID); e != nil {
 		if strings.Contains(e.Error(), "no such table") {
 			return nil // 旧库尚未建该表，跳过
 		}

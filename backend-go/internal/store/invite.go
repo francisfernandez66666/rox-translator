@@ -7,6 +7,7 @@ package store
 import (
 	"database/sql"
 	"time"
+	"translator/internal/db"
 )
 
 // InviteCode 自助注册邀请码
@@ -30,20 +31,19 @@ func (s *Store) CreateInviteCode(code string, tenantID int64, orgID ...int64) (*
 	if len(orgID) > 0 {
 		org = orgID[0]
 	}
-	res, err := s.db.Exec(
+	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
 		"INSERT INTO invite_codes (code, used, tenant_id, org_id, created_at) VALUES (?,0,?,?,?)",
 		code, tenantID, org, now)
 	if err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
 	return s.GetInviteCode(id)
 }
 
 // GetInviteCode 按主键 ID 查询邀请码。
 // 参数：id=邀请码主键 ID；返回邀请码对象。
 func (s *Store) GetInviteCode(id int64) (*InviteCode, error) {
-	row := s.db.QueryRow(
+	row := db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT id, code, used, tenant_id, COALESCE(used_by,''), COALESCE(created_at,''), COALESCE(used_at,''), COALESCE(org_id,0) FROM invite_codes WHERE id=?", id)
 	var c InviteCode
 	err := row.Scan(&c.ID, &c.Code, &c.Used, &c.TenantID, &c.UsedBy, &c.CreatedAt, &c.UsedAt, &c.OrgID)
@@ -56,7 +56,7 @@ func (s *Store) GetInviteCode(id int64) (*InviteCode, error) {
 // GetInviteCodeByCode 按邀请码字符串查询（注册流程校验使用状态用）。
 // 参数：code=邀请码字符串；返回邀请码对象。
 func (s *Store) GetInviteCodeByCode(code string) (*InviteCode, error) {
-	row := s.db.QueryRow(
+	row := db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT id, code, used, tenant_id, COALESCE(used_by,''), COALESCE(created_at,''), COALESCE(used_at,''), COALESCE(org_id,0) FROM invite_codes WHERE code=?", code)
 	var c InviteCode
 	err := row.Scan(&c.ID, &c.Code, &c.Used, &c.TenantID, &c.UsedBy, &c.CreatedAt, &c.UsedAt, &c.OrgID)
@@ -72,7 +72,7 @@ func (s *Store) GetInviteCodeByCode(code string) (*InviteCode, error) {
 // 调用方必须据此拒绝本次注册（2026-08-26 整改 A4：此前返回值被丢弃，「先查后标」窗口内并发同码双双放行）。
 func (s *Store) MarkInviteCodeUsed(id int64, usedBy string) (bool, error) {
 	now := time.Now().Format(time.RFC3339)
-	res, err := s.db.Exec(
+	res, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE invite_codes SET used=1, used_by=?, used_at=? WHERE id=? AND used=0",
 		usedBy, now, id)
 	if err != nil {
@@ -85,7 +85,7 @@ func (s *Store) MarkInviteCodeUsed(id int64, usedBy string) (bool, error) {
 // ListInviteCodes 列出全部邀请码（含已使用，按 ID 倒序）。
 // 返回：邀请码列表。
 func (s *Store) ListInviteCodes() ([]*InviteCode, error) {
-	rows, err := s.db.Query(
+	rows, err := db.Query(s.db, db.CurrentDialect(),
 		"SELECT id, code, used, tenant_id, COALESCE(used_by,''), COALESCE(created_at,''), COALESCE(used_at,''), COALESCE(org_id,0) FROM invite_codes ORDER BY id DESC")
 	if err != nil {
 		return nil, err
