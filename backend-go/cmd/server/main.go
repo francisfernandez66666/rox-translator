@@ -165,6 +165,8 @@ func main() {
 			if err := st.EnsureAdmin(1, "admin", auth.PasswordHash(initPwd), "系统管理员", adminEmail); err != nil {
 				log.Printf("警告: admin 账号初始化失败: %v", err)
 			}
+			_ = st.EnsureBalance(0)
+			_ = st.EnsureDefaultPackages(0)
 			if err := st.EnsureDefaultPackages(1); err != nil {
 				log.Printf("警告: 默认 KB 包初始化失败: %v", err)
 			}

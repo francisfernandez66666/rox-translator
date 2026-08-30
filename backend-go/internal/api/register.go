@@ -491,8 +491,39 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		TenantID int64 `json:"tenant_id"` // 待发放的租户 ID
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TenantID <= 0 {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TenantID < 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "无效的租户 ID"})
+		return
+	}
+	// 平台根租户（tenant_id=0）：直接发放试用额度，无需 tenants 表记录
+	if req.TenantID == 0 {
+		trialSentences := int64(100)
+		if v, _ := s.Store.GetConfig("trial_sentences"); v != "" {
+			if sv, perr := strconv.ParseInt(v, 10, 64); perr == nil && sv > 0 {
+				trialSentences = sv
+			}
+		}
+		trialTokens := int64(300000)
+		if v, _ := s.Store.GetConfig("free_trial_tokens"); v != "" {
+			if tv, perr := strconv.ParseInt(v, 10, 64); perr == nil && tv > 0 {
+				trialTokens = tv
+			}
+		}
+		trialDays := 14
+		if v, _ := s.Store.GetConfig("free_trial_days"); v != "" {
+			if d2, perr := strconv.Atoi(v); perr == nil && d2 > 0 {
+				trialDays = d2
+			}
+		}
+		_ = s.Store.EnsureBalance(0)
+		if trialTokens > 0 {
+			if gerr := s.Store.CreateQuotaGrant(0, "trial", trialTokens, time.Now().Add(time.Duration(trialDays)*24*time.Hour), "register", 0); gerr != nil {
+				_ = s.Store.Charge(0, trialTokens)
+			}
+		}
+		s.Store.LogAuditDiff(1, u.ID, "grant_trial", "tenant", "0",
+			`{"package_code":""}`, `{"package_code":"trial","sentences":`+strconv.FormatInt(trialSentences, 10)+`}`)
+		writeJSON(w, 200, map[string]interface{}{"success": true, "sentence_balance": trialSentences})
 		return
 	}
 	t, err := s.Ten.GetByID(req.TenantID)
