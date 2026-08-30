@@ -251,16 +251,20 @@ func (s *Server) enqueueMail(msg *mail.Message, useInfo bool) error {
 			log.Printf("[mail] 入队失败（降级同步发送） to=%s err=%v", msg.To, err)
 			return s.syncSendMail(msg, useInfo)
 		}
+		log.Printf("[mail] 已入队 to=%s useInfo=%v", msg.To, useInfo)
 		return nil
 	}
+	log.Printf("[mail] 队列不可用，同步发送 to=%s", msg.To)
 	return s.syncSendMail(msg, useInfo)
 }
 
 // syncSendMail 同步发送邮件（enqueueMail 的降级路径）。
 func (s *Server) syncSendMail(msg *mail.Message, useInfo bool) error {
 	if useInfo {
+		log.Printf("[mail] 同步发送(info) to=%s", msg.To)
 		return s.infoMailer().Send(msg)
 	}
+	log.Printf("[mail] 同步发送 to=%s", msg.To)
 	return s.mailer().Send(msg)
 }
 
