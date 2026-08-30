@@ -1,6 +1,6 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-08-30（PG + Redis 已落地 Seoul 生产部署；监控/日志/Loki/Prometheus/Grafana 配置交付；k6 压测 + Playwright E2E 配置交付；API 版本化 Header 控制落地；审计日志按保留天数定期 prune 落地）｜ 与生产一致（main 分支）
+> 最后更新：2026-08-30（全量中文注释 + 支付回调安全修复 + 广州服务器部署验证通过）｜ 与生产一致（main 分支）
 
 ## 〇、全仓端到端评审整改 + 黑盒 UAT（第四批）
 
@@ -83,12 +83,22 @@
 
 | 工作流 | 内容 | 状态 |
 |---|---|---|
-| **A. PostgreSQL 切换** | 连接池配置 env（`DB_MAX_OPEN_CONNS` 等）+ 一次性迁移工具 `cmd/migrate-sqlite-to-pg` 已就绪；PG 驱动此前已 blank-import。`DB_DRIVER=postgres`+`DB_DSN` 部署切换与切流后 `RebuildKBIndex` 回填 pgvector 已落地 ✅（Seoul 服务器同机自建 PG 16 + pgvector 0.6.0，非托管 RDS） | ✅ 已落地（Seoul 生产部署，2026-08-30） |
+| **A. PostgreSQL 切换** | 连接池配置 env（`DB_MAX_OPEN_CONNS` 等）+ 一次性迁移工具 `cmd/migrate-sqlite-to-pg` 已就绪；PG 驱动此前已 blank-import。`DB_DRIVER=postgres`+`DB_DSN` 部署切换与切流后 `RebuildKBIndex` 回填 pgvector 已落地 ✅（服务器同机自建 PG 16 + pgvector 0.6.0，非托管 RDS） | ✅ 已落地（2026-08-30） |
 | **B. 邮件异步** | 复用 `internal/queue` 把同步 `mail.Sender.Send` 改为入队 + worker 发送 + 重试/死信；不引 Redis | ✅ 已落地（commit 76f4410） |
 | **C. 统一错误码+结构化日志** | 新增 `internal/errors` 枚举 + `log/slog` + `X-Trace-ID` 中间件；auth 关键路径已迁移，其余渐进 | ✅ 已落地（commit 76f4410） |
 | **D. 对照编辑器（新 feature）** | `translation_edits` 表 + `GET/POST /api/tickets/segments` + 前端双栏编辑器（术语高亮+逐段通过/驳回批注）；文本+文件（MVP 先 xlsx/csv/对照表，docx/pdf 二期） | ✅ 已落地（commit 76f4410，见 〇-H） |
 
 **明确不做（当前过度设计）**：Redis Cluster / etcd / gRPC Sidecar / K8s 微服务拆分 / 多区域；SSO/SCIM/白标/CAT 插件/混沌工程/SDK 自动发布流水线——等具体企业客户或规模化运维诉求出现再做。
+
+## 〇-H、广州服务器部署 + 全量注释 + 安全修复（2026-08-30）
+
+| 块 | 内容 |
+|---|---|
+| **广州服务器部署** | 交叉编译 Linux 二进制 → scp → 备份旧版 → 替换 → 重启；验证通过（健康检查/翻译/OpenAPI/管理后台/前端加载/PostgreSQL 连接均正常） |
+| **支付回调安全修复** | `handlePayNotify` X-Admin-Token 校验从仅 mock 渠道改为所有渠道统一校验（修复前 wechat/alipay 无凭证可探测订单存在性） |
+| **tickets_pkey 序列修复** | PostgreSQL 序列与 tickets 表最大 ID 不同步导致异步任务创建失败，`setval` 修复 |
+| **全量中文注释** | Go 后端 146 个文件 + 前端 75 个文件全量添加/标准化中文注释（文件职责说明块 + 导出函数注释 + 行内注释） |
+| **UAT 全场景测试** | 42 项测试覆盖认证/翻译/KB/计费/OpenAPI/管理后台/前端/安全，核心链路全通 |
 
 ## 〇-A、历史批次索引（详情见对应方案文档）
 
@@ -102,10 +112,10 @@
 | 项 | 值 |
 |----|-----|
 | 生产域名 | **https://langcross.lexicorn.cn**（2026-08-24 起，旧域名已下线） |
-| 服务器 | 43.108.86.140（阿里云；内存紧张，按 **≤1G 有效可用** 调优：GOMEMLIMIT=650Mi、MemoryMax=950M、worker=2，详见下文「运维护栏」） |
+| 服务器 | 43.108.86.140（阿里云广州；内存紧张，按 **≤1G 有效可用** 调优：GOMEMLIMIT=650Mi、MemoryMax=950M、worker=2） |
 | 服务 | `translator.service`（Go 单二进制，/status 返回 v3, ok:true）；前端已切换为 React + TDesign（frontend/ 旧 Vue 栈已下线） |
 | 反代 | Caddy（自动 HTTPS），配置片段 `/etc/caddy/translator.conf` |
-| 数据库 | SQLite 单文件 `/opt/translator/data/tm.sqlite3`（业务+TM 共用） |
+| 数据库 | PostgreSQL 16 + pgvector 0.6.0（同机自建，非托管 RDS）；历史 SQLite 保留于 `/opt/translator/data/backups/` |
 | 计费 | Token 实时计量（每次 LLM 调用即上报用量；余额扣除受 billing_enforced 控制，billing_enforced=0 暂未启用扣费，超管随时开启；余额不足中止整次任务避免白嫖） |
 | 部署脚本 | 后端交叉编译（GOOS=linux GOARCH=amd64）→ scp 二进制；前端 `npm run build` → scp dist 静态资源；ssh 重启 `translator.service`（详见 README 快速开始） |
 
