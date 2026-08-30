@@ -231,3 +231,16 @@
   - `main.go`：增加 `EnsureBalance(0)` 和 `EnsureDefaultPackages(0)` 初始化平台根账号
   - `handleGrantTrial`：`req.TenantID <= 0` 改为 `< 0`，新增 `tenant_id=0` 特殊分支直接发放试用额度（无需 tenants 表记录）
 - **文件**：`backend-go/cmd/server/main.go`、`backend-go/internal/api/register.go`
+
+### 9.4 超管被 `registration_review` 闸住无法翻译
+- **根因**：`billing_api.go` 的 `gateUsage` 在 `registration_review=1` 时要求当前租户存在有效套餐/试用，但超管 `currentTenant` 返回 `1`，同样被闸
+- **修复**：`gateUsage` 中 `registration_review` 检查增加超管豁免：`auth.IsSuperAdmin(u)` 为真时直接跳过
+- **文件**：`backend-go/internal/api/billing_api.go`
+
+### 9.5 验证码邮件仍无法送达（排查中）
+- **当前状态**：Seoul 服务器 `MAIL_ENABLED=1`、SMTP 凭据已配置；Python 直连 `smtp.mxhichina.com:465` 发信成功（认证+发送均 OK）。但用户真实邮箱仍收不到验证码。
+- **已做**：
+  - 已部署新增邮件流程日志（`enqueueMail`/`syncSendMail`/`SMTPSender.Send` 均加 `[mail]`/`[smtp]` 日志）
+  - 已确认进程环境变量 `MAIL_ENABLED=1`、SMTP 参数正确
+- **待验证**：需要用户在部署后触发一次「发送验证码」，根据日志判断是入队未消费、SMTP 被拒、还是投递到垃圾箱/异步退回
+- **可能方向**：发件域 `lexicorn.cn`  reputation/SPF/DKIM/DMARC 导致收件方拒收或进垃圾箱；需用户配合查看垃圾箱或提供具体邮箱做定向测试
