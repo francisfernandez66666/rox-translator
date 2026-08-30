@@ -1,0 +1,54 @@
+# 翻译助手（langcross）告警规则
+# 由 Prometheus 加载（rule_files），配合 Alertmanager 投递（邮件/企业微信/Slack）。
+groups:
+  - name: translator-saas
+    rules:
+      # 主模型熔断中（持续 2 分钟）
+      - alert: LLMBreakerOpen
+        expr: translator_llm_breaker_open == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "翻译主模型熔断中"
+          description: "translator_llm_breaker_open=1 已持续 2 分钟，翻译可能大规模失败，请检查 LLM 供应商密钥与配额。"
+
+      # LLM 窗口错误率过高
+      - alert: LLMHighErrorRate
+        expr: translator_llm_error_rate > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM 错误率偏高"
+          description: "近窗口错误率 {{ $value | humanizePercentage }} 超过 20%，检查供应商稳定性。"
+
+      # 平台余额过低（运营预警，需结合租户阈值）
+      - alert: PlatformBalanceLow
+        expr: translator_balance_tokens_total < 1000000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "平台余额偏低"
+          description: "平台余额总 token 降至 {{ $value }}（约 {{ $value | humanize }}），关注充值与套餐升级。"
+
+      # 服务不可用（up 掉）
+      - alert: TranslatorDown
+        expr: up{job="translator"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "翻译服务不可达"
+          description: "Prometheus 抓取 translator 失败，服务可能已退出，请检查 systemd 状态。"
+
+      # goroutine 泄漏迹象（远超基线）
+      - alert: GoroutineLeak
+        expr: go_goroutines > 2000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "goroutine 数异常偏高"
+          description: "go_goroutines={{ $value }}，疑似泄漏或信号量未释放，请排查 /debug/pprof/goroutine。"

@@ -51,29 +51,36 @@ func (s *Server) handleTmReviewList(w http.ResponseWriter, r *http.Request) {
 
 // handleTmReviewApprove 通过：入正式库（module='manual'）并标记 approved。
 func (s *Server) handleTmReviewApprove(w http.ResponseWriter, r *http.Request) {
+	// 超管鉴权
 	u, ok := s.requireSuperJSON(w, r)
 	if !ok {
 		return
 	}
+	// 解析候选 ID
 	var req struct {
 		ID int64 `json:"id"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
+	// 查询候选记录
 	cr, err := s.Store.GetTmReview(req.ID)
 	if err != nil || cr == nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "候选不存在"})
 		return
 	}
+	// 校验候选状态：仅 pending 状态可处理
 	if cr.Status != "pending" {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "该候选已处理"})
 		return
 	}
+	// 写入正式翻译记忆库（module='manual'）
 	if _, err := s.DB.SaveBack(cr.Zh, map[string]string{cr.Lang: cr.Trans}, "manual", cr.TenantID); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
 	s.invKB() // ★ KB 内容变更：失效引擎 CJK 精确缓存（新术语立即可命中）
+	// 更新候选状态为已通过
 	_ = s.Store.SetTmReviewStatus(cr.ID, "approved", u.DisplayName)
+	// 记录审计日志
 	s.Store.LogAudit(cr.TenantID, u.ID, "tm_review_approve", "tm_review", cr.Zh)
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }

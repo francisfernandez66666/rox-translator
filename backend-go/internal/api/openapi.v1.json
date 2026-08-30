@@ -1,0 +1,110 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "翻译助手 langcross OpenAPI",
+    "version": "1.0.0",
+    "description": "翻译助手（langcross）开放 API v1 规范（与 Python SDK 契约一致）。鉴权：X-API-Key 头（开放 API 专用 Key）。所有计量按 token 计费，受租户余额与每日配额约束。"
+  },
+  "servers": [
+    { "url": "https://{host}/openapi/v1", "variables": { "host": { "default": "translator.example.com", "description": "部署域名（Caddy 已配置 TLS）" } } }
+  ],
+  "security": [ { "ApiKeyAuth": [] } ],
+  "paths": {
+    "/tasks": {
+      "post": {
+        "summary": "创建翻译任务（文本或文件）",
+        "operationId": "createTask",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/CreateTextTask" } },
+            "multipart/form-data": { "schema": { "$ref": "#/components/schemas/CreateFileTask" } }
+          }
+        },
+        "responses": {
+          "200": { "description": "已创建（成功响应不含 success 字段，以 task_id 为准）", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskCreated" } } } },
+          "402": { "description": "余额不足" },
+          "429": { "description": "超过并发/每日配额" }
+        }
+      }
+    },
+    "/tasks/status": {
+      "get": {
+        "summary": "查询任务状态与进度",
+        "operationId": "getTaskStatus",
+        "parameters": [ { "name": "id", "in": "query", "required": true, "schema": { "type": "integer" } } ],
+        "responses": { "200": { "description": "status ∈ queued/processing/completed/failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskStatus" } } } } }
+      }
+    },
+    "/tasks/download": {
+      "get": {
+        "summary": "下载产物（file_id 可选，缺省 zip 全部）",
+        "operationId": "downloadTask",
+        "parameters": [
+          { "name": "id", "in": "query", "required": true, "schema": { "type": "integer" } },
+          { "name": "file_id", "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "文件流（attachment）", "content": { "application/octet-stream": {} } } }
+      }
+    },
+    "/balance": {
+      "get": { "summary": "租户余额 token", "operationId": "getBalance", "responses": { "200": { "content": { "application/json": { "schema": { "type": "object", "properties": { "balance_tokens": { "type": "integer" } } } } } } } }
+    },
+    "/usage": {
+      "get": { "summary": "用量明细", "operationId": "getUsage", "parameters": [ { "name": "days", "in": "query", "schema": { "type": "integer", "default": 7 } } ], "responses": { "200": { "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "type": "object" } } } } } } } } }
+    },
+    "/kb/stats": {
+      "get": { "summary": "知识库统计", "operationId": "kbStats", "responses": { "200": { "content": { "application/json": { "schema": { "type": "object" } } } } }
+    },
+    "/keys/rotate": {
+      "post": { "summary": "轮换 API Key", "operationId": "rotateKey", "responses": { "200": { "content": { "application/json": { "schema": { "type": "object" } } } } } }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": { "type": "apiKey", "in": "header", "name": "X-API-Key" }
+    },
+    "schemas": {
+      "CreateTextTask": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "text": { "type": "string" },
+          "target_langs": { "type": "array", "items": { "type": "string" } },
+          "mode": { "type": "string", "enum": ["fast", "pro"] },
+          "title": { "type": "string" }
+        }
+      },
+      "CreateFileTask": {
+        "type": "object",
+        "properties": {
+          "files": { "type": "array", "items": { "type": "string", "format": "binary" } },
+          "target_langs": { "type": "array", "items": { "type": "string" } },
+          "mode": { "type": "string", "enum": ["fast", "pro"] },
+          "title": { "type": "string" }
+        }
+      },
+      "TaskCreated": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "integer" },
+          "mode": { "type": "string" },
+          "type": { "type": "string" },
+          "status": { "type": "string" },
+          "file_count": { "type": "integer" }
+        }
+      },
+      "TaskStatus": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "integer" },
+          "status": { "type": "string", "enum": ["queued", "processing", "completed", "failed"] },
+          "progress": { "type": "number" },
+          "error_code": { "type": "string" },
+          "message": { "type": "string" },
+          "files": { "type": "array", "items": { "type": "object", "properties": { "file_id": { "type": "integer" }, "name": { "type": "string" }, "url": { "type": "string" } } } }
+        }
+      }
+    }
+  }
+}

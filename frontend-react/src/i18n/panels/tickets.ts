@@ -1,8 +1,7 @@
-// ============ 本文件职责中文说明 ============
-// 翻译工单面板 i18n 键
-// =============================================
-// panels/tickets.ts — 翻译工单/审批台面板 i18n 键（中英）
+// ============ panels/tickets.ts · 职责说明 ============
+// 翻译工单/审批台面板 i18n 键
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
+// =============================================
 export const zh: Record<string, string> = {
   'tickets.title': '工单工作台',
   'tickets.titlePlaceholder': '标题',
@@ -46,7 +45,7 @@ export const en: Record<string, string> = {
   'tickets.run': 'Run Workflow',
   'tickets.detail': 'Detail',
   'tickets.ticketDetail': 'Ticket {no} Details',
-  // ---- Approval desk ----
+  // ---- 审批台 ----
   'tickets.approvalTitle': 'Approval Desk',
   'tickets.refresh': 'Refresh',
   'tickets.approve': 'Approve',

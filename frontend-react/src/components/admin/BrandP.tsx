@@ -1,7 +1,9 @@
+// ============================================================================
 // components/admin/BrandP.tsx — 品牌定制面板（租户管理员 / 超管）
-// 仅含：品牌名称、Logo（图片上传+预览）、子域名前缀。页脚链接为平台级，见 FooterP。
+// 职责：编辑当前（或超管所选）租户的品牌名称、Logo、子域名前缀与登录页样式。
 // 鉴权：品牌定制开放给三类租户，满足任一即可编辑——① 租户根（企业租户，is_personal=false）；
 // ② 持有有效付费套餐（套餐付费租户）；③ 超管显式指定开通（超管指定租户）。超管始终可编辑。
+// ============================================================================
 import { useEffect, useRef, useState } from 'react'
 import { Button, Input, MessagePlugin, Switch, Tag, Select, Slider } from 'tdesign-react'
 import { useAdmin } from '@/stores/admin'
@@ -10,11 +12,7 @@ import { Panel } from './parts'
 import { tenantBranding, tenantBrandingSave, brandGrant } from '@/api/branding'
 import { parseBgStyle, BrandBgLayer, BgStyle, parseCardPos, parseLoginLayout, CardPos, LoginLayout } from '@/branding'
 
-// ============ 本文件职责中文说明 ============
-// 品牌定制面板：编辑当前（或超管所选）租户的品牌名称、Logo、子域名前缀与登录页样式。
-// ========================================
-
-// 品牌定制面板组件：编辑当前（或超管所选）租户的品牌名称、Logo、子域名前缀，受套餐付费状态限制
+/** 品牌定制面板组件：编辑当前（或超管所选）租户的品牌名称、Logo、子域名前缀，受套餐付费状态限制 */
 export default function BrandP() {
   const ad = useAdmin()
   const [, t, tpl] = useT()
@@ -22,6 +20,7 @@ export default function BrandP() {
   // 超管编辑「切换器」当前租户（平台根=rox=ID 1）；租户管理员传本租户 id，确保按本租户解析品牌授权
   const targetTenantId = ad.activeTenantId ?? (isSuper ? 1 : 0)
 
+  // 表单状态：品牌名称、Logo URL、子域名、首页背景图、背景样式、登录页布局、登录卡片位置
   const [name, setName] = useState('')
   const [logo, setLogo] = useState('')
   const [domain, setDomain] = useState('')
@@ -39,6 +38,7 @@ export default function BrandP() {
   // 品牌定制开放给三类租户：租户根（企业租户）/ 付费套餐租户 / 超管指定租户；超管始终可编辑
   const editable = isSuper || brandPaid || brandGranted || brandRoot
 
+  // 加载品牌定制数据：租户品牌名称、Logo、子域名、首页背景等
   useEffect(() => {
     let alive = true
     setLoaded(false)
@@ -61,6 +61,7 @@ export default function BrandP() {
     return () => { alive = false }
   }, [targetTenantId])
 
+  /** Logo 文件选择处理：读取本地文件并转为 Data URL */
   const onLogoFile = (e: any) => {
     const file: File | undefined = e?.target?.files?.[0]
     if (!file) return
@@ -70,6 +71,7 @@ export default function BrandP() {
     e.currentTarget.value = ''
   }
 
+  /** 首页背景图文件选择处理：读取本地文件并转为 Data URL */
   const onHomeBgFile = (e: any) => {
     const file: File | undefined = e?.target?.files?.[0]
     if (!file) return
@@ -84,6 +86,8 @@ export default function BrandP() {
   const splitFormRef = useRef<HTMLDivElement>(null)
   // 记录按下时的光标位置与背景中心，拖动时按相对位移移动（不吸附光标，手感更顺滑）
   const bgDragRef = useRef<{ startX: number; startY: number; x0: number; y0: number } | null>(null)
+
+  /** 更新背景图位置（根据鼠标拖动偏移计算百分比坐标） */
   const updateBgPos = (e: { clientX: number; clientY: number }) => {
     const d = bgDragRef.current
     const el = bgPreviewRef.current
@@ -95,8 +99,11 @@ export default function BrandP() {
     const y = Math.min(100, Math.max(0, d.y0 + dy))
     setHomeBgStyle((s) => ({ ...s, x, y }))
   }
+
   // 登录卡片拖拽调整位置（全屏/分栏均生效）：拖动卡片更新 x/y（相对其所在容器）
   const cardDragRef = useRef<{ startX: number; startY: number; x0: number; y0: number; el: HTMLElement | null } | null>(null)
+
+  /** 更新登录卡片位置（根据鼠标拖动偏移计算百分比坐标） */
   const updateCardPos = (e: { clientX: number; clientY: number }) => {
     const d = cardDragRef.current
     const el = d?.el
@@ -108,6 +115,8 @@ export default function BrandP() {
     const y = Math.min(100, Math.max(0, d.y0 + dy))
     setLoginCardPos({ x, y })
   }
+
+  // 全局鼠标事件：处理背景图和登录卡片的拖拽
   useEffect(() => {
     const move = (e: MouseEvent) => {
       if (bgDragRef.current) updateBgPos(e)
@@ -119,6 +128,7 @@ export default function BrandP() {
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
   }, [])
 
+  /** 保存品牌定制配置：调用后端接口持久化所有品牌设置 */
   const save = async () => {
     if (!editable) return
     setSaving(true)
@@ -142,7 +152,7 @@ export default function BrandP() {
     }
   }
 
-  // 超管为当前「切换器所选租户」开通/撤销品牌定制（免套餐）
+  /** 超管为当前「切换器所选租户」开通/撤销品牌定制（免套餐） */
   const toggleGrant = async (val: boolean) => {
     setGranting(true)
     try {
@@ -166,6 +176,7 @@ export default function BrandP() {
       <div style={{ fontSize: 13, color: '#335', background: '#eef4ff', border: '1px solid #c9ddff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.6 }}>
         🌟 {t('brand.featureDedicated')}
       </div>
+      {/* 超管：租户选择器 */}
       {isSuper && (
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.tenantSelect')}</div>
@@ -180,6 +191,7 @@ export default function BrandP() {
           />
         </div>
       )}
+      {/* 超管：品牌定制授权开关（仅对非平台根租户生效） */}
       {isSuper && targetTenantId > 1 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f3f0ff', border: '1px solid #d6c8ff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13 }}>
           <span>{tpl('brand.grantLabel', { id: targetTenantId })}</span>
@@ -187,6 +199,7 @@ export default function BrandP() {
           {brandGranted && <Tag theme="success" variant="light">{t('brand.grantedTag')}</Tag>}
         </div>
       )}
+      {/* 未获得编辑权限时显示锁定提示 */}
       {!editable && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#fff7e6', border: '1px solid #ffd591', color: '#ad6800', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13 }}>
           <span>{t('brand.locked')}</span>
@@ -197,11 +210,13 @@ export default function BrandP() {
         <div style={{ color: '#889' }}>…</div>
       ) : (
         <div style={{ maxWidth: 560, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* 品牌名称输入 */}
           <div>
             <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.name')}</div>
             <Input value={name} disabled={!editable} onChange={setName} placeholder="能言 LangCross" />
           </div>
 
+           {/* Logo 上传与预览 */}
            <div>
              <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.logo')}</div>
              <input type="file" accept="image/*" disabled={!editable} onChange={onLogoFile} />
@@ -214,6 +229,7 @@ export default function BrandP() {
              <Input value={logo} disabled={!editable} onChange={setLogo} placeholder="https://…/logo.png" />
            </div>
 
+           {/* 子域名前缀输入 */}
            <div>
              <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.domain')}</div>
                 <Input value={domain} disabled={!editable || targetTenantId === 1} onChange={(v: any) => setDomain(String(v ?? ''))} placeholder="请输入你想要的域名名称" />
@@ -222,6 +238,7 @@ export default function BrandP() {
               </div>
             </div>
 
+            {/* 首页背景图配置：文件上传 + 登录页布局选择 */}
             <div>
               <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.homeBg')}</div>
               <input type="file" accept="image/*" disabled={!editable} onChange={onHomeBgFile} />
@@ -249,17 +266,21 @@ export default function BrandP() {
                     <div ref={bgPreviewRef} style={{ position: 'relative', width: '100%', maxWidth: 420, height: 180, overflow: 'hidden', borderRadius: 8, border: '1px dashed #d0d5e0', display: 'flex' }}>
                       {loginLayout.side === 'left' ? (
                         <>
+                          {/* 左侧：登录表单容器（可拖拽调整卡片位置） */}
                           <div ref={splitFormRef} style={{ flex: 1, position: 'relative', background: '#eef1f8', overflow: 'hidden' }}>
                             <div onMouseDown={(e) => { e.preventDefault(); cardDragRef.current = { startX: e.clientX, startY: e.clientY, x0: loginCardPos.x, y0: loginCardPos.y, el: splitFormRef.current } }}
                               style={{ position: 'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform: 'translate(-50%,-50%)', width: 120, height: 80, background: '#fff', borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#889', cursor: 'move' }}>
                               {t('brand.cardPreview')}
                             </div>
                           </div>
+                          {/* 右侧：背景图展示 */}
                           <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}><BrandBgLayer src={homeBg} styleJson={JSON.stringify(homeBgStyle)} /></div>
                         </>
                       ) : (
                         <>
+                          {/* 左侧：背景图展示 */}
                           <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}><BrandBgLayer src={homeBg} styleJson={JSON.stringify(homeBgStyle)} /></div>
+                          {/* 右侧：登录表单容器（可拖拽调整卡片位置） */}
                           <div ref={splitFormRef} style={{ flex: 1, position: 'relative', background: '#eef1f8', overflow: 'hidden' }}>
                             <div onMouseDown={(e) => { e.preventDefault(); cardDragRef.current = { startX: e.clientX, startY: e.clientY, x0: loginCardPos.x, y0: loginCardPos.y, el: splitFormRef.current } }}
                               style={{ position: 'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform: 'translate(-50%,-50%)', width: 120, height: 80, background: '#fff', borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#889', cursor: 'move' }}>
@@ -280,18 +301,22 @@ export default function BrandP() {
                       style={{ position: 'relative', width: '100%', maxWidth: 420, height: 180, overflow: 'hidden', borderRadius: 8, border: '1px dashed #d0d5e0', cursor: 'move', background: '#0d1b3e' }}
                     >
                       <BrandBgLayer src={homeBg} styleJson={JSON.stringify(homeBgStyle)} />
+                      {/* 半透明遮罩层 */}
                       <div style={{ position: 'absolute', inset: 0, background: 'rgba(10,16,40,0.42)' }} />
+                      {/* 可拖拽的登录卡片预览 */}
                       <div
                         onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); cardDragRef.current = { startX: e.clientX, startY: e.clientY, x0: loginCardPos.x, y0: loginCardPos.y, el: bgPreviewRef.current } }}
                         style={{ position: 'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform: 'translate(-50%,-50%)', width: 140, height: 90, background: '#fff', borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#889', cursor: 'move' }}
                       >
                         {t('brand.cardPreview')}
                       </div>
+                      {/* 背景图拖拽提示文字 */}
                       <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#cdd', fontSize: 12, pointerEvents: 'none' }}>
                         {t('brand.homeBgDragHint')}
                       </div>
                     </div>
                   )}
+                  {/* 背景图显示模式、缩放比例、重置按钮 */}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', marginTop: 10, maxWidth: 420 }}>
                     <div style={{ fontSize: 13 }}>{t('brand.homeBgMode')}</div>
                     <Select
@@ -322,6 +347,7 @@ export default function BrandP() {
               <div style={{ fontSize: 12, color: '#889', marginTop: 4 }}>{t('brand.homeBgHint')}</div>
             </div>
 
+           {/* 保存按钮（仅可编辑时显示） */}
            {editable && (
             <div>
               <Button theme="primary" loading={saving} onClick={save}>{t('brand.save')}</Button>

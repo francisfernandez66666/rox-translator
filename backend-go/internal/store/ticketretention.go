@@ -1,10 +1,9 @@
-// ============ 本文件职责中文说明 ============
-// 工单产物保留期（tickets 表 result_expires_at / expire_notify 列）数据访问层：
+// ============ ticketretention.go · 职责说明 ============
+// store 包工单产物保留期（tickets 表 result_expires_at / expire_notify 列）数据访问层。
 //   - 完成时打点到期时间（默认完成 +14 天，ticket_retention_days 可配置，0=永久）
 //   - 每日扫描：剩余 ≤7/3/1 天分档提醒创建者下载（expire_notify 逗号标记去重）
 //   - 到期清理：删除产物文件（主产物 + 多文件表各产物），清空路径字段；
 //     核心译文不受影响——文本工单在 final_result、文件工单已回写 tm_segments 长期保留
-//
 // =============================================
 package store
 

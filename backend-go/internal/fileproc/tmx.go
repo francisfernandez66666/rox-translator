@@ -1,5 +1,5 @@
-// ============ 本文件职责中文说明 ============
-// TMX（Translation Memory eXchange，翻译记忆交换标准 XML 格式）导入：
+// ============ tmx.go · 职责说明 ============
+// fileproc 包 TMX（Translation Memory eXchange，翻译记忆交换标准 XML 格式）导入实现。
 //   - ParseTMX：流式解析 TMX 文件 → 双语记录 []TMXTU（每个 tu 的 语言→译文 映射）
 //   - xml:lang 归一化：zh-CN/zh_CN/zh-Hans → zh，en-US → en 等（与 KB 语言码对齐）
 //

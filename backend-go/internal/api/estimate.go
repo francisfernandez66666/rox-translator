@@ -24,11 +24,13 @@ import (
 //	balance_tokens=当前 token 余额；balance_sentences_approx=余额≈句数；
 //	activated=租户是否已开通；hint=未开通提示。
 func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Request) {
+	// 用户鉴权
 	u := s.authUser(r)
 	if u == nil {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
+	// 解析请求参数：文本内容/段数、目标语言、翻译模式
 	var req struct {
 		Text         string   `json:"text"`          // 文本内容（与 segment_count 二选一）
 		SegmentCount int64    `json:"segment_count"` // 文件提取段数（文件场景直传）
@@ -39,7 +41,7 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
-	// 源句数：优先按文本实时计算，否则用文件段数
+	// 计算源句数：优先按文本实时计算，否则用文件段数
 	sents := req.SegmentCount
 	if req.Text != "" {
 		sents = countSentences(req.Text)
@@ -47,23 +49,28 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 	if sents < 1 {
 		sents = 1
 	}
+	// 计算目标语言数
 	langs := int64(len(req.TargetLangs))
 	if langs < 1 {
 		langs = 1
 	}
-	units := sents * langs // 翻译工作量单位（源句×语言）
+	// 翻译工作量单位 = 源句数 × 目标语言数
+	units := sents * langs
+	// 读取 token 单价和加价系数
 	rate := s.Store.TokenSentenceRate()
 	markup := s.markupMultiplier()
 	// 经验基准：每「源句×语言」两轮调用约 2×rate token（初翻+校对，含提示词开销）
 	base := int64(2*rate) * units
 	minTokens := int64(float64(base) * markup)
 	maxTokens := minTokens
+	// 专业模式叠加 Judge×2/文化反查/KB 检索：经验放大 ~2.5×
 	if normalizeTaskMode(req.Mode) != "fast" {
-		// 专业模式叠加 Judge×2/文化反查/KB 检索：经验放大 ~2.5×
 		maxTokens = int64(float64(minTokens) * 2.5)
 	}
-	_, _, tokens, approxBal := s.balancePayload(s.effTenant(r, u)) // tokens=双桶可用总额（A1）
+	// 获取当前租户 token 余额（双桶可用总额）
+	_, _, tokens, approxBal := s.balancePayload(s.effTenant(r, u))
 	tid := s.effTenant(r, u)
+	// 检查租户是否已开通（有套餐或余额）
 	activated := true
 	hint := ""
 	if tid > 0 {
@@ -76,6 +83,7 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
+	// 返回预估结果
 	writeJSON(w, 200, map[string]interface{}{
 		"success":                  true,
 		"sentences":                units,

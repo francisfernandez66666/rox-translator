@@ -1,8 +1,7 @@
-// ============ 本文件职责中文说明 ============
-// 知识库管理面板 i18n 键
-// =============================================
-// panels/kb.ts — 知识库/行业包/语言文化规范面板 i18n 键（中英）
+// ============ panels/kb.ts · 职责说明 ============
+// 知识库/行业包/语言文化规范面板 i18n 键
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
+// =============================================
 export const zh: Record<string, string> = {
   'kb.title': '行业管理（KB 包）',
   'kb.codePlaceholder': '编码 (如 auto)',
@@ -114,6 +113,7 @@ export const zh: Record<string, string> = {
 
 // 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
+  // ---- 租户/行业/语言文化/部门包类型 ----
   'kb.enablePack': 'Enable',
   'kb.disablePack': 'Disable',
   // KB inheritance chain (2026-08-26): department pack cross-dept share toggle
@@ -126,7 +126,7 @@ export const en: Record<string, string> = {
   'kb.title': 'Industry Management (KB Packs)',
   'kb.codePlaceholder': 'Code (e.g. auto)',
   'kb.namePlaceholder': 'Name (e.g. Auto Industry Pack)',
-  // ---- Locale/culture rules (safety phrases / forbidden terms / replacements) ----
+  // ---- 语言文化规范（安全句 / 禁用词 / 替换对） ----
     'kb.safetyTitle': 'Language Culture Rules (Safety Phrases · Gate)',
   'kb.safetyHint': 'Rules are injected into AI translation context; forbidden terms found in output are flagged (blocking optional via system switch)',
   'kb.allStatus': 'All statuses',

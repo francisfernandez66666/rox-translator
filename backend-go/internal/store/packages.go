@@ -1,5 +1,6 @@
-// ============ 本文件职责中文说明 ============
-// 商业包数据访问层（packages 表）：付费包 / 增量包 / 免费体验包的 CRUD，
+// ============ packages.go · 职责说明 ============
+// store 包商业包数据访问层（packages 表）。
+// 付费包 / 增量包 / 免费体验包的 CRUD，
 // 以及租户句数余额（sentence_balance，存于 tenants.permissions JSON）的读写。
 // 商业包模型：
 //   - free（免费体验）：新租户注册自动开通，句数由 trial_sentences 配置（默认 500）

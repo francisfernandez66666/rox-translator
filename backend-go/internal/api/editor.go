@@ -45,22 +45,27 @@ func (s *Server) routesEditor() {
 
 // handleTicketSegments 读取工单逐段对照 + 术语表。
 func (s *Server) handleTicketSegments(w http.ResponseWriter, r *http.Request) {
+	// 用户鉴权
 	u := s.authUser(r)
 	if u == nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录或登录已失效"))
 		return
 	}
+	// 解析工单 ID 和目标语言
 	id, lang := s.parseTicketIDLang(r)
+	// 获取工单信息
 	t, err := s.Store.GetTicketGlobal(id)
 	if err != nil || t == nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrTicketNotFound, "工单不存在"))
 		return
 	}
+	// 租户隔离校验：非超管只能访问自己租户的工单
 	if u.TenantID != t.TenantID && u.TenantID != 0 {
 		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权访问该工单"))
 		return
 	}
 
+	// 提取工单的源文/译文逐段对照
 	base, supported := s.extractSegments(t, lang)
 	// 叠加已保存的编辑（edited_text/status/note）
 	edits, _ := s.Store.GetTranslationEdits(id, lang)
@@ -68,6 +73,7 @@ func (s *Server) handleTicketSegments(w http.ResponseWriter, r *http.Request) {
 	for i := range edits {
 		editMap[edits[i].SegIndex] = &edits[i]
 	}
+	// 组装最终输出：基础段落 + 编辑记录
 	out := make([]EditorSegment, 0, len(base))
 	for _, b := range base {
 		seg := EditorSegment{Index: b.Index, Source: b.Source, Target: b.Target}
@@ -79,6 +85,7 @@ func (s *Server) handleTicketSegments(w http.ResponseWriter, r *http.Request) {
 		out = append(out, seg)
 	}
 
+	// 判断工单类型：文本/文件/不支持在线编辑
 	typ := "text"
 	if t.FilePath != "" {
 		if supported {
@@ -88,8 +95,10 @@ func (s *Server) handleTicketSegments(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 获取术语表（供前端编辑器展示）
 	terms, _ := s.Store.ListKBTerms(t.TenantID, lang, 200)
 
+	// 解析目标语言列表
 	langs := []string{}
 	for _, l := range strings.Split(t.TargetLangs, ",") {
 		if l = strings.TrimSpace(l); l != "" {

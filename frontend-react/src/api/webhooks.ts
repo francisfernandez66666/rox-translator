@@ -4,12 +4,16 @@
 // 提供：列表 / 新增或更新 / 删除 / 测试投递
 // ============================================================================
 
+/**
+ * api/webhooks.ts · 职责说明
+ * 封装 Webhook 回调配置的所有接口，包括：
+ * - Webhook 列表：查询当前租户的 webhook 配置
+ * - Webhook 管理：新增或更新 webhook 配置、删除 webhook
+ * - Webhook 测试：向指定 webhook 发送测试 ping 验证连通性
+ */
+
 import { request, authHeaders } from './core'
 import type { AdminResp } from './core'
-
-// ============ 本文件职责中文说明 ============
-// 封装租户 Webhook 回调配置(列表/保存/删除/测试投递)等接口
-// ========================================
 
 /** 查询当前租户 webhook 配置列表 */
 export async function webhooks(): Promise<AdminResp> {

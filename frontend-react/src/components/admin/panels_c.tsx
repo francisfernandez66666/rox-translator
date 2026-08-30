@@ -1,5 +1,6 @@
 // ============================================================================
 // components/admin/panels_c.tsx — PlansPanel(套餐中心) / Referral / Webhooks / ApiKeys
+// 职责：后台面板 C，包含套餐中心、推荐奖励、Webhook 与 API 密钥管理。
 // 行为对齐 Vue 版：PlansPanel.vue / Referral.vue / Webhooks.vue / ApiKeys.vue
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'

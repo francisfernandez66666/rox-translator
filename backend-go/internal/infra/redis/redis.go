@@ -1,5 +1,6 @@
-// ============ 本文件职责中文说明 ============
-// 极简自包含 Redis 客户端（RESP 协议），仅在离线环境无法引入 go-redis 时作为零依赖落地；
+// ============ redis.go · 职责说明 ============
+// redis 包极简自包含 Redis 客户端实现（RESP 协议）。
+// 仅在离线环境无法引入 go-redis 时作为零依赖落地；
 // 覆盖本服务所需命令：PING / SETNX / GET / INCR / DECR / EXPIRE / DEL / LLEN /
 // RPUSH / LPUSH / RPOP / BLPOP / EXISTS。连接池按租约复用，BLPOP 使用独立连接避免阻塞池。
 //

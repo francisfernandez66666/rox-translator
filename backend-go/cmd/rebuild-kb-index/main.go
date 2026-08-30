@@ -1,5 +1,6 @@
-// ============ 本文件职责中文说明 ============
-// 一次性向量索引回填工具：PostgreSQL 切流后，tm_segments.embedding（pgvector）列在迁移时
+// ============ main.go · 职责说明 ============
+// cmd/rebuild-kb-index 包一次性向量索引回填工具。
+// PostgreSQL 切流后，tm_segments.embedding（pgvector）列在迁移时
 // 被刻意跳过（见 cmd/migrate-sqlite-to-pg 注释），本工具遍历全量段、调用 Embedding API
 // 重新计算向量并 UpsertEmbedding 写回 PG，使语义检索（VectorSearch）生效。
 //
@@ -10,10 +11,8 @@
 //
 // 幂等：已存在向量也会覆盖重写，可重复执行；支持 -batch 分批、-workers 并发嵌入、-limit 限量。
 // 用法：
-//
-//	go run ./cmd/rebuild-kb-index
-//	DB_DRIVER=postgres DB_DSN=postgres://... go run ./cmd/rebuild-kb-index -batch 256 -workers 4
-//
+//   go run ./cmd/rebuild-kb-index
+//   DB_DRIVER=postgres DB_DSN=postgres://... go run ./cmd/rebuild-kb-index -batch 256 -workers 4
 // =============================================
 package main
 

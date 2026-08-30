@@ -21,13 +21,17 @@ const officeOrigin = "https://langcross.lexicorn.cn"
 
 // handleOfficeManifest 返回 Word 加载项侧加载清单。
 func (s *Server) handleOfficeManifest(w http.ResponseWriter, r *http.Request) {
+	// 设置 XML 内容类型
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	// 返回预定义的 Word 加载项清单
 	fmt.Fprint(w, officeManifestXML)
 }
 
 // handleOfficeTaskPane 返回任务窗格页面（Office.js + 划词翻译 UI）。
 func (s *Server) handleOfficeTaskPane(w http.ResponseWriter, r *http.Request) {
+	// 设置 HTML 内容类型
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// 返回预定义的任务窗格页面
 	fmt.Fprint(w, officeTaskPaneHTML)
 }
 

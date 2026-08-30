@@ -3,11 +3,16 @@
 // 职责：开放平台 API Key 的签发、启停、轮换、删除、限额、解密复制
 // ============================================================================
 
-import { request, authHeaders, type AdminResp } from './core'
+/**
+ * api/apikeys.ts · 职责说明
+ * 封装开放平台 API Key 的完整生命周期管理接口，包括：
+ * - API Key 的签发、启用/停用、轮换、删除
+ * - 每日调用限额设置
+ * - Key 明文解密复制（仅前端写入剪贴板）
+ * - OpenAPI 文档的在线维护（中英双语）
+ */
 
-// ============ 本文件职责中文说明 ============
-// 封装开放平台 API Key 签发/启停/轮换/删除/限额与文档维护等接口
-// ========================================
+import { request, authHeaders, type AdminResp } from './core'
 
 /** 获取开放平台 API Key 列表 */
 export async function apiKeys(): Promise<AdminResp> {

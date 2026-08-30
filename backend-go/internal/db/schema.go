@@ -1,3 +1,9 @@
+// ============ schema.go · 职责说明 ============
+// 平台核心表迁移定义：注册 users/tickets 等核心表的双方言迁移 SQL，
+// 作为 P0-3「SQLite→PostgreSQL 表结构迁移」的基线模板。
+// 后续按相同模式逐表补齐其余约 37 张表，并在 legacy store.migrate() 移除
+// 对应建表后由本 Runner 接管。
+// =============================================
 package db
 
 // RegisteredMigrations 返回平台核心表的双方言迁移定义。
@@ -11,9 +17,12 @@ package db
 //   - SQLite 端布尔/时间用 INTEGER/TEXT，默认值沿用原 store.go；
 //   - PostgreSQL 端自增主键用 BIGSERIAL，时间列用 TIMESTAMPTZ，布尔列用 BOOLEAN；
 //   - 凡涉及 INSERT 的迁移，占位符与冲突子句统一经 Dialect 助手生成（见 dialect.go）。
+//
+// 返回：迁移列表，包含 users 和 tickets 表的双方言迁移定义。
 func RegisteredMigrations() []Migration {
 	return []Migration{
 		{
+			// 用户表迁移：存储租户下的用户账号、角色、状态等信息
 			ID: "0001_users",
 			SQLiteUp: `CREATE TABLE IF NOT EXISTS users (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +54,7 @@ func RegisteredMigrations() []Migration {
 			)`,
 		},
 		{
+			// 工单表迁移：存储翻译工单的源文、目标语言、状态、审批等信息
 			ID: "0002_tickets",
 			SQLiteUp: `CREATE TABLE IF NOT EXISTS tickets (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,

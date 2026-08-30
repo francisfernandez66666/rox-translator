@@ -20,11 +20,13 @@ import (
 
 // handleNotifications 列出当前用户的站内信。
 func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
+	// 用户鉴权
 	u := s.authUser(r)
 	if u == nil {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
+	// 查询当前用户的站内信列表（最新在前，最多 100 条）
 	list, err := s.Store.ListNotifications(u.ID)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})

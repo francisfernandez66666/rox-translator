@@ -1,6 +1,6 @@
-// ============ 本文件职责中文说明 ============
-// 工单（tickets / ticket_state 表）数据访问层：工单 CRUD、租户隔离查询、
-// 待审批列表，以及工单状态轨迹（每步运行快照，版本递增，供前端流程进度展示）。
+// ============ tickets.go · 职责说明 ============
+// store 包工单（tickets / ticket_state 表）数据访问层。
+// 工单 CRUD、租户隔离查询、待审批列表，以及工单状态轨迹（每步运行快照，版本递增，供前端流程进度展示）。
 // 工单状态机：draft → in_progress → pending_approval → approved / rejected → completed。
 // =============================================
 package store

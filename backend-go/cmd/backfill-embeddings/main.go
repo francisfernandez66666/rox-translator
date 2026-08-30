@@ -1,5 +1,6 @@
-// ============ 本文件职责中文说明 ============
-// 一次性向量回填工具：将既有知识库向量索引（tm_embeddings.npz）写回 PostgreSQL 的
+// ============ main.go · 职责说明 ============
+// cmd/backfill-embeddings 包一次性向量回填工具。
+// 将既有知识库向量索引（tm_embeddings.npz）写回 PostgreSQL 的
 // tm_segments.embedding（pgvector）列，使原生向量语义检索（kb.VectorSearch）生效。
 //
 // 与 rebuild-kb-index 的区别：本工具不调用 Embedding API、不重新计算向量，而是直接复用

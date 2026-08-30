@@ -1,8 +1,7 @@
-// ============ 本文件职责中文说明 ============
-// 聊天/对话面板 i18n 键
-// =============================================
-// panels/chat.ts — 即时翻译/聊天工作台 i18n 键（中英）
+// ============ panels/chat.ts · 职责说明 ============
+// 即时翻译/聊天工作台面板 i18n 键
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
+// =============================================
 export const zh: Record<string, string> = {
   // ---- 修改密码弹窗 ----
   'pwd.title': '修改密码',
@@ -117,7 +116,7 @@ export const zh: Record<string, string> = {
 
 // 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
-  // ---- Change password dialog ----
+  // ---- 修改密码弹窗 ----
   'pwd.title': 'Change Password',
   'pwd.hint': 'Account "{user}"; a code will be emailed to your bound address (valid 10 min)',
   'pwd.entryTip': 'Change password via email verification',
@@ -129,7 +128,7 @@ export const en: Record<string, string> = {
   'pwd.codeBad': 'Invalid or expired code',
   'pwd.done': 'Password updated — use the new one next login',
   'pwd.confirmPlaceholder': 'Repeat new password',
-  // ---- Translation workbench ----
+  // ---- 翻译工作台主界面 ----
   'chat.title': '🌐 Translate',
   'chat.clearChat': 'Clear chat',
   'chat.balance': '{n} left',
@@ -172,7 +171,7 @@ export const en: Record<string, string> = {
   'chat.sendFile': 'Click send to translate files...',
   'chat.translatingFile': 'Translating files...',
   'chat.translating': 'Translating...',
-  // ---- KB import dialog ----
+  // ---- 知识库导入弹窗 ----
   'chat.importKbTitle': '📚 Import Translations',
   'chat.kbStep1': 'Upload file',
   'chat.kbStep2': 'Recognize data',
@@ -198,7 +197,7 @@ export const en: Record<string, string> = {
   'chat.kbImportErr': 'Import failed: {msg}',
   'chat.kbNetworkErr': 'network error',
   'chat.customLangPrefix': 'Translate into {l}: ',
-  // ---- Message source & file type labels ----
+  // ---- 消息来源与文件类型标签 ----
   'msg.exactHit': '✅ Exact match',
   'msg.fuzzy': '🔄 Fuzzy match',
   'msg.semantic': '🔍 Semantic match',

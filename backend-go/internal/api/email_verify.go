@@ -57,26 +57,31 @@ const (
 // sendEmailCode 为指定邮箱生成并发送验证码；返回 (是否受理, 提示信息, 是否 Noop 模式)。
 // 参数：s=服务（用于 mailer 与 IP 日上限）；ip=请求方 IP；email=目标邮箱。
 func (s *Server) sendEmailCode(ip, email string) (bool, string, bool) {
+	// 邮箱地址归一化为小写
 	key := strings.ToLower(strings.TrimSpace(email))
 	now := time.Now()
 	emailCodes.mu.Lock()
+	// 检查冷却期：60秒内不允许重发
 	if ec, ok := emailCodes.codes[key]; ok {
-		// 冷却期内拒绝重发
 		if now.Sub(ec.SentAt) < emailCodeCooldown {
 			wait := int((emailCodeCooldown - now.Sub(ec.SentAt)).Seconds()) + 1
 			emailCodes.mu.Unlock()
 			return false, fmt.Sprintf("发送过于频繁，请 %d 秒后再试", wait), false
 		}
 	}
+	// 生成6位数字验证码
 	code, err := genResetCode()
 	if err != nil {
 		emailCodes.mu.Unlock()
 		return false, "生成验证码失败", false
 	}
+	// 存储验证码：设置10分钟有效期
 	emailCodes.codes[key] = &emailCode{Code: code, ExpiresAt: now.Add(emailCodeTTL), SentAt: now}
 	emailCodes.mu.Unlock()
 
+	// 判断是否为 Noop 模式（测试环境）
 	_, isNoop := s.mailer().(*mail.NoopSender)
+	// 发送邮件：使用注册验证码模板
 	err = s.sendTemplatedMail(key, "register_code", map[string]string{"code": code})
 	if err != nil {
 		return false, "邮件发送失败，请稍后重试", isNoop

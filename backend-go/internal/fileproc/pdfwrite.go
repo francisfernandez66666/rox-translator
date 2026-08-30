@@ -1,12 +1,12 @@
-// ============ 本文件职责中文说明 ============
-// PDF 译文排版回写：优先通过 Python fpdf2/pdf2docx 子进程重建版式，回退 go-pdf/fpdf 纯 Go 实现。
+// ============ pdfwrite.go · 职责说明 ============
+// fileproc 包 PDF 译文排版回写实现。
+// 优先通过 Python fpdf2/pdf2docx 子进程重建版式，回退 go-pdf/fpdf 纯 Go 实现。
 //   - 版式策略：A4 页面；首段启发式标题（≤60 字符时加大居左）；正文段落流式排版自动分页；页脚页码
 //   - 字体解析顺序（ResolvePDFFont）：system_config/env pdf_font_path → 常见系统 TTF → 内置
 //     assets/fonts/DroidSansFallbackFull.ttf（Apache 2.0，覆盖中日韩英）
-//   - 子进程控制：受 nice 低优先级 + 资源闸 + context 超时/取消约束（整改 D1/R4）
+//   - 子进程控制：受 nice 低优先级 + 资源闸 + context 超时/取消约束
 //   - 说明：PDF 原生内容流无法安全替换文字（字体子集/CID 编码），业界通行做法即版式重建；
 //     产物为可读性优先的译文 PDF，源文对照另有 xlsx 通道兜底
-//
 // =============================================
 package fileproc
 
@@ -114,7 +114,7 @@ func WriteTranslatedPDFviaDocx(ctx context.Context, outPath, inPath string, tran
 // 参数：ctx=子进程超时/取消上下文；pdfPath=输入 PDF 路径。
 // 返回 (文本键列表, 缓存 DOCX 路径, 错误)；调用方负责删除缓存 DOCX。
 // 图片型文档按产品策略不做内容翻译——提取失败时由调用方降级 pdftotext/xlsx 对照表。
-// ★ 整改 D1：ctx 超时/取消贯通 + 创建缓存前清扫 >24h 崩溃残留。
+// 上下文超时/取消贯通 + 创建缓存前清扫 >24h 崩溃残留。
 func ExtractTextsPdfDocx(ctx context.Context, pdfPath string) ([]string, string, error) {
 	sweepStalePdfDocxCache()
 	cache := filepath.Join(os.TempDir(), fmt.Sprintf("pdfdocx_%d.docx", time.Now().UnixNano()))
@@ -172,7 +172,7 @@ func truncateTail(b []byte) string {
 }
 
 // runDocxScript 调用 Python docx 管线脚本（extract 子命令）。
-// ★ 经资源闸串行化 + nice 低优先级（评审整改 R4）；★ 整改 D1：runSubprocess 受控执行——
+// 经资源闸串行化 + nice 低优先级运行；runSubprocess 受控执行——
 // stdout/stderr 分离后 JSON 直接取自 stdout，不再依赖「最后一个 '{'」的脆弱启发式。
 // 参数：args=脚本子命令与参数；返回：stdout 内容（JSON）与错误。
 func runDocxScript(ctx context.Context, args []string) ([]byte, error) {
@@ -185,7 +185,7 @@ func runDocxScript(ctx context.Context, args []string) ([]byte, error) {
 }
 
 // runDocxScriptStdin 以 stdin 传入大 payload（docx 字节流等）调用 docx 管线脚本，
-// 规避命令行长度限制。★ 资源闸 + nice（R4）+ 整改 D1 受控执行。
+// 规避命令行长度限制。资源闸 + nice 低优先级运行 + 受控执行。
 func runDocxScriptStdin(ctx context.Context, args []string, payload []byte) error {
 	bin, argv := wrapNice(pyBin(), append([]string{docxScriptPath()}, args...))
 	_, stderr, err := runSubprocess(ctx, fileprocTimeout(), bin, argv, payload)
@@ -196,7 +196,7 @@ func runDocxScriptStdin(ctx context.Context, args []string, payload []byte) erro
 }
 
 // writePDFViaPython 走 Python(fpdf2) 管线写出 PDF：payload 含源句与译文映射，脚本路径与可执行文件同目录。
-// ★ 资源闸 + nice（R4）+ 整改 D1 受控执行。
+// 资源闸 + nice 低优先级运行 + 受控执行。
 func writePDFViaPython(ctx context.Context, outPath string, fontPath string, srcTexts []string, translations map[string]string) error {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"srcTexts":     srcTexts,
@@ -268,7 +268,7 @@ func writePDFViaGoFpdf(outPath string, fontPath string, srcTexts []string, trans
 // PdfImageHeavy 判定图片型 PDF：平均每页文本层字符 < 200（引导用户改传 Word 源文件）。
 // 参数：pdfPath=待检测 PDF 路径。
 // 返回 true 表示文本层稀薄，疑似扫描件/图片型 PDF。
-// ★ 整改 D1：外部工具调用加 30s 超时（FILEPROC_SUB_TIMEOUT_SEC 可调）。
+// 外部工具调用加 30s 超时（FILEPROC_SUB_TIMEOUT_SEC 可调）。
 func PdfImageHeavy(pdfPath string) bool {
 	sctx, scancel := context.WithTimeout(context.Background(), subTimeout())
 	defer scancel()

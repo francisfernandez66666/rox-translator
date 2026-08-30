@@ -1,8 +1,10 @@
-// ============ 本文件职责中文说明 ============
-// docx 文件解析与写回：从 word/document.xml（正文段落+表格）及页眉页脚中提取文本，
+// ============ docx.go · 职责说明 ============
+// fileproc 包 docx 文件解析与写回实现。
+// 从 word/document.xml（正文段落+表格）及页眉页脚中提取文本，
 // 以及把译文写回 docx（XML 层面替换段落第一个 w:t 文本并清空其余 run）。
 // 提取与写回保持一致的文本规整规则：跳过 hyperlink 内文本，避免原文/译文不匹配。
-// 读取 zip 条目时带 64MB 解压上限（整改 D5），超限由调用方降级 xlsx 对照表。
+// 读取 zip 条目时带 64MB 解压上限（防止压缩比过高的 zip 文件导致内存溢出），
+// 超限由调用方降级为 xlsx 对照表。
 // =============================================
 package fileproc
 
@@ -119,13 +121,13 @@ func extractDocx(path string, e *Extractor) error {
 	return nil
 }
 
-// maxZipEntryBytes 单条目解压上限（★ 整改 D5：防高压缩比 zip 炸弹 OOM——
+// maxZipEntryBytes 单条目解压上限（防止高压缩比 zip 炸弹导致内存溢出——
 // 50MB 上传可构造解压数 GB 的条目；64MB 覆盖一切合法 OOXML 部件）。
 const maxZipEntryBytes = 64 << 20
 
 // readZipEntry 从 zip 读取指定名称文件的全部字节。
 // 参数：zr=zip 读取器，name=zip 内文件路径；返回文件内容字节。
-// ★ 整改 D5：预检 UncompressedSize64 + LimitReader 双闸，超限报错由上层降级 xlsx 对照表。
+// 预检 UncompressedSize64 + LimitReader 双闸，超限报错由上层降级为 xlsx 对照表。
 func readZipEntry(zr *zip.ReadCloser, name string) ([]byte, error) {
 	for _, f := range zr.File {
 		if f.Name == name {
@@ -269,8 +271,8 @@ func translateDocxParagraph(para string, translations map[string]string) string 
 	}
 	closeStart += firstIdx
 	// 替换第一个 w:t 内容为译文（保留其闭合标签）
-	// ★ XML 转义（2026-08-26 P1-g）：译文来自 LLM 自由文本，可能含 & < > " '，
-	//   裸拼进 document.xml 会产出非法 XML（Office 报「文件损坏」），必须先转义。
+// XML 转义：译文来自大语言模型自由文本，可能含 & < > " '，
+//   裸拼进 document.xml 会产出非法 XML（Office 报「文件损坏」），必须先转义。
 	newPara := para[:firstIdx] + EscapeXML(translated) + para[closeStart:]
 	// 清空第一个 w:t 之后所有 w:t 的内容（含 hyperlink 内文本）
 	after := newPara[firstIdx+len(translated):]

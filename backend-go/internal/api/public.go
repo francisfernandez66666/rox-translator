@@ -21,19 +21,25 @@ import (
 
 // handlePublicPricing 定价页：token 单价表 + 充值说明。
 func (s *Server) handlePublicPricing(w http.ResponseWriter, r *http.Request) {
+	// 设置 HTML 内容类型
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// 返回预定义的定价页 HTML
 	fmt.Fprint(w, pricingHTML)
 }
 
 // handlePublicTerms 服务条款页。
 func (s *Server) handlePublicTerms(w http.ResponseWriter, r *http.Request) {
+	// 设置 HTML 内容类型
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// 返回服务条款页（中英双语）
 	fmt.Fprint(w, publicDocPage("用户协议 / User Agreement", termsBody))
 }
 
 // handlePublicSLA 服务等级协议页（中英文切换）。
 func (s *Server) handlePublicSLA(w http.ResponseWriter, r *http.Request) {
+	// 设置 HTML 内容类型
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// 返回服务等级协议页（支持中英文切换）
 	fmt.Fprint(w, publicDocPageLang("服务等级协议 / SLA", slaBodyZh, slaBodyEn))
 }
 

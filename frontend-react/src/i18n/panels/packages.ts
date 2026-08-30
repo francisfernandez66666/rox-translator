@@ -1,8 +1,7 @@
-// ============ 本文件职责中文说明 ============
-// 商业包/套餐管理面板 i18n 键
-// =============================================
-// panels/packages.ts — 商业包/套餐/注册与支付配置面板 i18n 键（中英）
+// ============ panels/packages.ts · 职责说明 ============
+// 商业包/套餐/注册与支付配置面板 i18n 键
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
+// =============================================
 export const zh: Record<string, string> = {
   'packages.title': '商业包管理',
   'packages.hint': '免费体验包：新租户注册自动发放试用句数。付费包：包月 X 句，订阅后发放。增量包：购买后追加句数。',
@@ -69,12 +68,12 @@ export const en: Record<string, string> = {
   'packages.type.free': 'Free trial',
   'packages.type.paid': 'Paid',
   'packages.type.increment': 'Increment',
-  // ---- Package list ----
+  // ---- 商业包列表 ----
   'packages.listTitle': 'Package list',
   'packages.noPackages': 'No packages yet',
   'packages.confirmDelete': 'Delete this package?',
   'packages.fillRequired': 'Fill in code, name and sentences > 0',
-  // ---- Billing enforcement & registration settings ----
+  // ---- 强制计费与注册/触达配置 ----
   'packages.enforceTitle': 'Billing enforcement',
   'packages.markupLabel': 'Cost markup (≥1.0):',
   'packages.markupHint': 'Applies globally: package grants (credited tokens) and real-time usage billing both multiply by this factor, keeping "1 credited token = 1 billed token". Takes effect immediately; only affects purchases/usage after the change.',
@@ -98,7 +97,7 @@ export const en: Record<string, string> = {
   'packages.dingtalkWebhook': 'DingTalk group bot Webhook URL (optional)',
   'packages.saved': 'Saved',
   'admin.packages': '📦 Packages',
-  // ---- Payment mode ----
+  // ---- 支付模式 ----
   'packages.payModeTitle': 'Payment mode',
   'packages.payModeHint': 'sdk: call WeChat/Alipay SDK online pay (merchant IDs required); static QR: show a fixed QR code, user taps "I have paid" for manual confirmation; mock: simulated payment (test).',
   'packages.payMock': 'Mock payment (test)',

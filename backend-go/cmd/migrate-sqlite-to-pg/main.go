@@ -1,5 +1,6 @@
-// ============ 本文件职责中文说明 ============
-// 一次性数据迁移工具：将存量 SQLite（业务+KB 共用库）的数据拷贝到已建好 schema 的 PostgreSQL。
+// ============ main.go · 职责说明 ============
+// cmd/migrate-sqlite-to-pg 包一次性数据迁移工具。
+// 将存量 SQLite（业务+KB 共用库）的数据拷贝到已建好 schema 的 PostgreSQL。
 //
 // 适用场景：从 SQLite 单文件切换到托管 RDS PG（见《系统优化方案.md》§〇 工作流 A）。
 // 前置条件：

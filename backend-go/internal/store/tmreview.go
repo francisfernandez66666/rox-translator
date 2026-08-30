@@ -1,5 +1,6 @@
 // ============ tmreview.go · 职责说明 ============
-// TM 自闭环待审池：系统不再自动写入 tm_segments；所有候选先进 tm_review，
+// store 包 TM 自闭环待审池实现。
+// 系统不再自动写入 tm_segments；所有候选先进 tm_review，
 // 仅超管「通过」后才落正式库（SaveBack module='manual'）。
 // 触发来源：① 用户反馈修正（ref_type=feedback）② 相同原文+译文对累计达阈值
 // ③ bitext/tmx 人工导入（import，不豁免审核）。权限：全部接口仅超管。

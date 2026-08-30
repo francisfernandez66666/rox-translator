@@ -1,6 +1,6 @@
-// ============ 本文件职责中文说明 ============
-// 工单服务层：连接 API 层与编排器的桥梁。
-// 职责：
+// ============ ticket.go · 职责说明 ============
+// service 包工单服务层实现。
+// 连接 API 层与编排器的桥梁。
 //   - EnqueueTicketRun：工单入队（API 层调用，立即返回 ticket_no）
 //   - StartWorkers：goroutine 工作池，循环 Reserve → 分发执行 → Ack/Fail
 //   - safeProcessJob/processJob：按任务类型分发；捕获 panic 转为任务失败，避免击穿进程

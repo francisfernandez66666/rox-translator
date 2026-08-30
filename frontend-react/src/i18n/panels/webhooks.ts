@@ -1,8 +1,7 @@
-// ============ 本文件职责中文说明 ============
-// Webhook 回调面板 i18n 键
-// =============================================
-// panels/webhooks.ts — Webhook 回调配置面板 i18n 键（中英）
+// ============ panels/webhooks.ts · 职责说明 ============
+// Webhook 回调配置面板 i18n 键
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
+// =============================================
 export const zh: Record<string, string> = {
   'webhooks.title': 'Webhook 回调',
   'webhooks.hint': '翻译完成后自动 POST 到回调 URL（携带 X-Signature 签名），失败自动重试 3 次。',

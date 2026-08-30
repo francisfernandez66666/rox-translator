@@ -50,6 +50,7 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 解析请求参数：目标知识库包 ID 和待导入条目数组
 	var req struct {
 		PackageID int64           `json:"package_id"` // 目标知识库包 ID
 		Entries   []kbImportEntry `json:"entries"`    // 待导入条目数组
@@ -105,7 +106,7 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 		}
 		added++
 	}
-	// 导入审计
+	// 导入审计日志
 	s.Store.LogAudit(tid, u.ID, "kb_entries_import", "kb_entries", strconv.Itoa(added))
 	s.invKB()             // ★ 批量导入写通 tm_segments：失效 CJK 缓存
 	s.rebuildIndexAsync() // 异步重建向量索引（增量入库）

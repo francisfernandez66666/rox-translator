@@ -1,8 +1,7 @@
-// ============ 本文件职责中文说明 ============
-// 邀请裂变面板 i18n 键
-// =============================================
-// panels/referral.ts — 邀请裂变/推荐奖励面板 i18n 键（中英）
+// ============ panels/referral.ts · 职责说明 ============
+// 邀请裂变/推荐奖励面板 i18n 键
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
+// =============================================
 export const zh: Record<string, string> = {
   'admin.referral': '🔗 邀请好友',
   'referral.title': '邀请好友 · 多邀多得',
@@ -70,7 +69,7 @@ export const en: Record<string, string> = {
   'referral.rwTrial': 'Trial Stack',
   'referral.rwPaid': 'Paid Permanent',
   'referral.empty': 'No referral records yet — start inviting!',
-  // ---- Settings (super admin) ----
+  // ---- 运营参数（超管） ----
   'referral.cfgTitle': '⚙️ Settings (super admin only)',
   'referral.cfgEnabled': 'Enable referral program',
   'referral.cfgRewardTokens': 'Signup reward tokens (to inviter)',

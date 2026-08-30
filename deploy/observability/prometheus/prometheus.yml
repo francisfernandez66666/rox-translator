@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# 翻译助手（langcross）指标抓取：仅内网抓取（Caddy 已注释掉公网 /metrics）。
+# 生产 /metrics 需 Bearer METRICS_TOKEN；此处以静态鉴权头注入。
+scrape_configs:
+  - job_name: translator
+    metrics_path: /metrics
+    scheme: http
+    authorization:
+      type: Bearer
+      # 与 secrets.env 的 METRICS_TOKEN 保持一致（未配置则删去 authorization 块并设 METRICS_PUBLIC=1）
+      credentials: "${METRICS_TOKEN}"
+    static_configs:
+      - targets: ['127.0.0.1:8787']
+        labels:
+          service: translator-saas

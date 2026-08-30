@@ -1,5 +1,6 @@
-// ============ 本文件职责中文说明 ============
-// 纯文本类格式提取器：srt/vtt 字幕、md Markdown、json、yaml、txt/csv 文本。
+// ============ text_formats.go · 职责说明 ============
+// fileproc 包纯文本类格式提取器。
+// 包含 srt/vtt 字幕、md Markdown、json、yaml、txt/csv 文本的提取。
 // 全部复用 Extractor 的去重与规整逻辑；输出为待翻译文本片段列表。
 // 另提供 WriteComparisonXlsx：无原格式回写能力的格式（pdf/txt/csv/srt/vtt/md/json/yaml）
 // 统一降级生成「源文+译文」xlsx 对照表作为翻译产物。

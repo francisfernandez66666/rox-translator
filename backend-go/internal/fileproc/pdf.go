@@ -1,5 +1,6 @@
-// ============ 本文件职责中文说明 ============
-// PDF 文本提取：优先使用 pdftotext CLI（poppler-utils，完美支持 CJK）；
+// ============ pdf.go · 职责说明 ============
+// fileproc 包 PDF 文本提取实现。
+// 优先使用 pdftotext CLI（poppler-utils，完美支持 CJK）；
 // CLI 不可用时回退 ledongthuc/pdf（纯 Go，无 CGO）逐页读取文本。
 // PDF 无原格式回写能力，翻译产物由引擎层统一降级为 xlsx 对照表（见 engine/file.go 第3步）。
 // 加密/扫描件（图片型）无法提取文本时返回可读错误。

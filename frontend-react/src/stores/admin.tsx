@@ -3,6 +3,18 @@
 // 职责：后台用户视图、租户列表与切换器（X-Tenant-ID）、面板路由（无 vue-router，
 //       沿用 pathname 手搓路由语义）、gotoFeedbackPanel 跨组件跳转。
 // ============================================================================
+
+/**
+ * stores/admin.tsx · 职责说明
+ * 后台管理全局状态 Context，提供以下功能：
+ * - 角色权限：根据用户角色计算权限等级、判断管理员身份
+ * - 租户管理：租户列表加载、租户切换（X-Tenant-ID）
+ * - 组织架构：组织树加载、组织 ID 到组织信息的映射
+ * - 面板路由：后台面板切换、路径同步
+ * - 跨组件跳转：消息中心点击通知跳转到对应面板
+ * - 邀请开关：当前租户的邀请好友功能开关
+ */
+
 // 依赖引入：React 基础 Hooks、API（租户/组织/邀请开关）、认证与 i18n 模块
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -11,10 +23,6 @@ import type { TenantInfo } from '@/api'
 import { orgList, type OrgInfo } from '@/api/org'
 import { useAuth, roleLevel } from './auth'
 import { t } from '@/i18n'
-
-// ============ 本文件职责中文说明 ============
-// 后台全局状态：租户切换、角色权限、面板路由与反馈跳转。
-// ========================================
 
 /** 后台管理可用面板键名集合（用于面板路由与侧边栏导航） */
 export type PanelKey =

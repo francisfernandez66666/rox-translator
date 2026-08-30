@@ -4,6 +4,17 @@
 // 头部：品牌 / 双 Tab / 余额徽标(pkgLine) / Bell / 语言切换 / 账号菜单
 //       （改密、绑邮箱、注销、退出、进入后台）。meContext 无邮箱时强制绑定弹窗。
 // ============================================================================
+
+/**
+ * App.tsx · 职责说明
+ * 应用根组件，提供以下功能：
+ * - 路由管理：基于 pathname 的手搓路由（/admin 后台、/tickets 工单、/ 对照编辑）
+ * - 全局 Provider 嵌套：AuthProvider → ChatProvider → AdminProvider → BrandingProvider
+ * - 前台外壳：顶部导航、Tab 切换、余额徽标、通知铃铛、账号菜单
+ * - 后台管理：AdminDashboard 面板
+ * - 跨域登录跳转：品牌子域登录后通过 /?token= 跳转回来
+ */
+
 // 依赖引入：React 基础 Hooks、TDesign 组件、API/状态/i18n 模块与各类页面/组件
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Tag, Drawer } from 'tdesign-react'
@@ -14,10 +25,6 @@ import { ChatProvider, useChat } from '@/hooks/useChat'
 import { useT, t as gt, toggleLang } from '@/i18n'
 import { setAuthToken, setActiveTenantId } from '@/api'
 import Login from './components/Login'
-
-// ============ 本文件职责中文说明 ============
-// 根组件：手搓路由、头部布局与登录跳转处理。
-// ========================================
 
 // 跨域登录跳转：品牌子域登录后通过 /?token= 跳转回来，此处把 token 写入本地会话并清除 URL 参数。
 ;(() => {

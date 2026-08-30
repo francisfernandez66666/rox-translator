@@ -209,8 +209,10 @@ func renderMailTpl(tpl MailTpl, data map[string]string) *mail.Message {
 // 改为异步：投递到任务队列由 worker 发送（失败自动重试/死信），避免 SMTP 阻塞注册/重置流程。
 // 返回错误仅在「入队与同步降级均失败」时出现（极少见）。
 func (s *Server) sendTemplatedMail(to, code string, data map[string]string) error {
+	// 渲染邮件模板：替换占位符
 	msg := renderMailTpl(s.getMailTpl(code), data)
 	msg.To = to
+	// 异步投递邮件（优先入队，队列不可用时降级同步发送）
 	return s.enqueueMail(msg, false)
 }
 

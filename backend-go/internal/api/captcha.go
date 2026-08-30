@@ -35,16 +35,20 @@ func (s *Server) captchaEnabled() bool { return s.captchaProvider() == "turnstil
 // verifyCaptcha 校验前端提交的人机验证 token；未启用时恒通过。
 // 参数 r: HTTP 请求（取客户端 IP 供 siteverify 参考）；token: 前端组件产出的一次性令牌。
 func (s *Server) verifyCaptcha(r *http.Request, token string) error {
+	// 未启用人机验证时直接放行
 	if !s.captchaEnabled() {
-		return nil // 未启用：直接放行
+		return nil
 	}
+	// token 为空时拒绝
 	if strings.TrimSpace(token) == "" {
 		return &apiErr{"请完成人机验证"}
 	}
+	// 读取 Cloudflare Turnstile 服务端密钥
 	secret, _ := s.Store.GetConfig("captcha_secret_key")
 	if secret == "" {
 		return &apiErr{"人机验证未配置密钥，请联系管理员"}
 	}
+	// 构造表单参数：secret + response（token）+ remoteip（可选）
 	form := url.Values{
 		"secret":   {secret},
 		"response": {strings.TrimSpace(token)},
@@ -52,12 +56,14 @@ func (s *Server) verifyCaptcha(r *http.Request, token string) error {
 	if ip := clientIP(r); ip != "" {
 		form.Set("remoteip", ip)
 	}
+	// 调用 Cloudflare Turnstile 服务端校验接口
 	client := &http.Client{Timeout: 8 * time.Second}
 	resp, err := client.PostForm(turnstileVerifyURL, form)
 	if err != nil {
 		return &apiErr{"人机验证服务不可用，请稍后再试"}
 	}
 	defer resp.Body.Close()
+	// 解析响应并判断校验结果
 	var vr struct {
 		Success bool `json:"success"`
 	}

@@ -33,15 +33,19 @@ func inviteBaseURL(r *http.Request) string {
 // handleReferralMy 我的邀请主页数据：
 // 返回: ref_code=个人邀请码（懒生成）、invite_url=专属注册链接、records=邀请奖励记录、stats=汇总。
 func (s *Server) handleReferralMy(w http.ResponseWriter, r *http.Request) {
+	// 用户鉴权
 	u := s.authUser(r)
 	if u == nil {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
+	// 确保用户有邀请码（懒生成）
 	code := s.Store.EnsureRefCode(u.ID)
+	// 构造专属注册链接
 	inviteURL := inviteBaseURL(r) + "/register?ref=" + code
+	// 查询邀请奖励记录
 	records := s.Store.ListReferrals(u.ID)
-	// 汇总：累计邀请人数、体验叠加次数与 token、付费永久奖励 token
+	// 汇总统计数据：累计邀请人数、体验叠加次数与 token、付费永久奖励 token
 	invited := len(records)
 	trialCount, trialTokens, paidTokens := 0, int64(0), int64(0)
 	for _, rec := range records {

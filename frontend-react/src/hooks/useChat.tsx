@@ -4,15 +4,21 @@
 // progress)、selectedLangs(chat_langs)、SSE 发送/停止(占位气泡收尾文案)、健康检查
 // （离线后 30×1s 重试循环、可停止）、清空消息。
 // ============================================================================
+
+/**
+ * hooks/useChat.tsx · 职责说明
+ * 聊天全局状态 Hook，提供以下功能：
+ * - 消息管理：消息列表的增删改查、持久化到 localStorage
+ * - SSE 收发：文本翻译和文件翻译的流式请求、进度回调、中断控制
+ * - 健康检查：后端服务状态检测、离线自动重试（30×1s）
+ * - 语言选择：目标语言列表的管理和持久化
+ */
+
 // 依赖引入：React 基础 Hooks、API（SSE 流式聊天/文件翻译/健康检查）与 ChatMessage 类型
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { chatStream, translateFileStream, healthCheck } from '@/api'
 import type { ChatMessage } from '@/types'
-
-// ============ 本文件职责中文说明 ============
-// 聊天全局状态 Hook：消息持久化、SSE 收发、健康检查与离线重试。
-// ========================================
 
 // 单会话消息数量上限（超出时从尾部截断）
 const MAX_MESSAGES = 200

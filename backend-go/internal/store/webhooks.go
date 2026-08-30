@@ -1,10 +1,9 @@
-// ============ 本文件职责中文说明 ============
-// Webhook 回调数据访问层与投递逻辑：
+// ============ webhooks.go · 职责说明 ============
+// store 包 Webhook 回调数据访问层与投递逻辑。
 //   - webhooks 表：租户配置回调 URL / 签名密钥 / 订阅事件 / 启用状态
 //   - store 层 CRUD：UpsertWebhook / ListWebhooks / DeleteWebhook / GetEnabledWebhooks
 //   - 投递：DispatchWebhook 对翻译完成事件异步 POST 到回调 URL（HMAC-SHA256 签名，
 //     失败重试 3 次，指数退避），供客户 TMS / CI 集成。
-//
 // =============================================
 package store
 

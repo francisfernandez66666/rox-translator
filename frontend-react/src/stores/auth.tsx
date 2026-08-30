@@ -3,15 +3,21 @@
 // 职责：authUser 状态、restoreSession（token→/api/auth/me）、roleLevel 四级判定、
 //       登录/登出收敛点（修复 Vue 版「无全局 401 收敛」的已知问题）。
 // ============================================================================
+
+/**
+ * stores/auth.tsx · 职责说明
+ * 全局认证状态 Context，提供以下功能：
+ * - 用户状态管理：当前登录用户信息、会话恢复状态
+ * - 会话恢复：启动时根据本地 token 调用 /api/auth/me 恢复会话
+ * - 角色等级判定：四级角色体系（super_admin=4, tenant_admin=3, dept_admin=2, user=1）
+ * - 登录/登出：统一的登录成功和登出处理
+ */
+
 // 依赖引入：React 基础 Hooks、API（会话校验/Token 读写）与 AuthUser 类型
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { authMe, setAuthToken, getAuthToken } from '@/api'
 import type { AuthUser } from '@/api'
-
-// ============ 本文件职责中文说明 ============
-// 全局登录态：认证上下文、会话恢复与角色等级判定。
-// ========================================
 
 /** roleLevel 角色等级：super_admin/admin=4 · tenant_admin/approver=3 · dept_admin=2 · 其他=1
  *  （单一来源，与后端 auth.IsSuperAdmin/IsTenantAdmin 口径一致） */

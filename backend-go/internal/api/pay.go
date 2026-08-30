@@ -256,12 +256,11 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 
 // handlePayNotify 支付渠道异步回调：验签后确认订单到账（幂等）。
 //
-// ★ 安全止血（2026-08-26 P0-2，三层防御，商户号官方验签落地前的兜底闸门）：
+// ★ 安全止血（2026-08-26 P0-2 + 2026-08-30 修复）：
 //
-//	① 凭证必填——X-Admin-Token 头缺失或不符合 AdminToken 一律 403。
-//	   此前「带头才校验」等于匿名可确认任意订单（免费充值漏洞）。
-//	   渠道服务器无法携带该头的问题由反代注入解决（见部署指南 Caddy 片段），
-//	   后续接入微信/支付宝官方验签后可移除本要求；
+//	① 凭证必填（所有渠道统一）——X-Admin-Token 头缺失或不符合 AdminToken 一律 403。
+//	   Caddy 反代已为 /api/pay/notify/* 注入该头，微信/支付宝服务器无需自行携带。
+//	   此前仅 mock 渠道校验导致 wechat/alipay 无凭证也能探测订单存在（信息泄露）；
 //	② 渠道一致性——回调 channel 必须与订单落库 channel 匹配；manual 单只认人工确认流程；
 //	③ mock 封禁——pay_mode≠mock 时 mock 渠道回调直接拒绝（生产防呆）。
 //
@@ -269,15 +268,15 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 // 返回: 渠道约定格式（成功返回 success 字符串，微信返回 204）。
 func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 	channel := strings.TrimPrefix(r.URL.Path, "/api/pay/notify/")
-	// ① 凭证：mock 渠道为「管理员模拟确认」，必须带超管令牌（恒定时间比较，防时序侧信道）；
-	//    wechat/alipay 真实渠道不依赖共享令牌，由渠道签名验签（VerifyNotify）保障，
-	//    故无需 X-Admin-Token——把超管令牌暴露给第三方支付服务器反而是更大风险。
-	if channel == "mock" {
-		tok := r.Header.Get("X-Admin-Token")
-		if tok == "" || !constantTimeTokenEqual(tok, s.Cfg.AdminToken) {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "拒绝访问"})
-			return
-		}
+	// ① 凭证（★ 2026-08-30 修复：所有渠道统一先验 X-Admin-Token，再走渠道签名）：
+	//    此前仅 mock 渠道校验 Token，wechat/alipay 直接跳到签名验签→查订单，
+	//    导致无凭证请求也能探测订单是否存在（信息泄露）。
+	//    Caddy 反代已为 /api/pay/notify/* 路径注入 X-Admin-Token 头，
+	//    故所有渠道均可统一校验，不依赖第三方支付服务器携带该头。
+	tok := r.Header.Get("X-Admin-Token")
+	if tok == "" || !constantTimeTokenEqual(tok, s.Cfg.AdminToken) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "拒绝访问"})
+		return
 	}
 	// ③ mock 封禁（★ 整改 A6：与 handlePaySimulate 同口径收紧——pay_mode 未显式
 	//    配置为 mock 时，mock 渠道回调一律拒绝，堵住「空配置=可模拟充值」的默认放行）

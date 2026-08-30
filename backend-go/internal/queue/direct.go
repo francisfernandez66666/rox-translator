@@ -1,5 +1,6 @@
-// ============ 本文件职责中文说明 ============
-// direct 队列驱动：基于 jobs 表的进程内实现（SQLite 持久化）。
+// ============ direct.go · 职责说明 ============
+// queue 包 direct 队列驱动实现。
+// 基于 jobs 表的进程内实现（SQLite 持久化）。
 //   - Enqueue：INSERT queued
 //   - Reserve：原子领取（queued 或 租约过期的 running → running + 刷新租约）
 //   - MarkDone/MarkFailed：完成置 done；失败用单条 CASE WHEN 原子更新，
@@ -86,7 +87,7 @@ func (q *DirectQueue) MarkDone(ctx context.Context, jobID int64) error {
 }
 
 // MarkFailed 标记失败：未达上限回 queued（等待下轮领取），达上限置 dead 死信。
-// ★ 整改 D6：单条 CASE WHEN 条件 UPDATE——此前「SELECT attempts → 独立 UPDATE」
+// 单条 CASE WHEN 条件 UPDATE——此前「SELECT attempts → 独立 UPDATE」
 // 两语句无事务，与巡检 RecoverStale/其他 worker 并发时基于过期计数决策，
 // 可能把该 dead 的毒丸反复回队或覆盖他方刚写入的状态。
 func (q *DirectQueue) MarkFailed(ctx context.Context, jobID int64, errMsg string) error {

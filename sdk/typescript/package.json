@@ -1,0 +1,16 @@
+{
+  "name": "@langcross/translator-sdk",
+  "version": "1.0.0",
+  "description": "翻译助手 langcross 开放 API TypeScript 客户端（与 Python SDK 契约一致）",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "tsc --noEmit"
+  },
+  "keywords": ["translation", "langcross", "sdk"],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

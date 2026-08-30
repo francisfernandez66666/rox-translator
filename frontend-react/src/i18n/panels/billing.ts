@@ -1,8 +1,7 @@
-// ============ 本文件职责中文说明 ============
+// ============ panels/billing.ts · 职责说明 ============
 // 计费/充值/订阅/发票面板 i18n 键
-// =============================================
-// panels/billing.ts — 计费/充值/订阅/发票面板 i18n 键（中英）
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
+// =============================================
 export const zh: Record<string, string> = {
   'billing.title': '计费管理',
   'billing.config': '计费配置',
@@ -141,7 +140,7 @@ export const en: Record<string, string> = {
   'billing.colAmountYuan': 'Amount (CNY)',
   'billing.colInvoiceTime': 'Issue time',
   'billing.noInvoices': 'No invoices',
-  // ---- Online top-up & checkout ----
+  // ---- 在线充值与收银台 ----
   'billing.checkout': 'Checkout',
   'billing.orderNo': 'Order no.: {orderNo}',
   'billing.channelStatus': 'Channel: {channel} · Status: {status}',
@@ -165,7 +164,7 @@ export const en: Record<string, string> = {
   'billing.stRefunded': 'Refunded',
   'billing.stCancelled': 'Cancelled',
   'billing.enterTokenCount': 'Enter a token count',
-  // ---- Package subscription ----
+  // ---- 套餐订阅 ----
   'billing.myPackageTitle': 'My package & remaining sentences',
   'billing.myPackageBalance': 'Remaining sentences: {balance} (source sentences × target languages)',
   'billing.myPackageCode': 'Current package: {code}',
@@ -184,7 +183,7 @@ export const en: Record<string, string> = {
   'billing.iPaid': 'I have paid',
   'billing.manualHint': 'After paying, tap "I have paid" and an admin will confirm and grant access.',
   'billing.manualNotify': 'Admin notified. Please wait for the credit to be granted.',
-  // ---- Static QR / manual confirmation ----
+  // ---- 静态码/人工确认订单 ----
   'billing.manualOrders': 'Awaiting manual confirmation',
   'billing.manualOrdersHint': 'Confirm payment here after users tap "I have paid" (static QR).',
   'billing.colTenant': 'Tenant',

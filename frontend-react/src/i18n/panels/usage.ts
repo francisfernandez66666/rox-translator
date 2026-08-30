@@ -1,8 +1,7 @@
-// ============ 本文件职责中文说明 ============
-// 用量看板面板 i18n 键
-// =============================================
-// panels/usage.ts — 用量看板/成本核算面板 i18n 键（中英）
+// ============ panels/usage.ts · 职责说明 ============
+// 用量看板/成本核算面板 i18n 键
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
+// =============================================
 export const zh: Record<string, string> = {
   'usage.title': '用量看板',
   'usage.refresh': '刷新',
@@ -60,7 +59,7 @@ export const en: Record<string, string> = {
   'usage.noUsage': 'No usage',
   'usage.byProvider': 'By provider/model (cost)',
   'usage.noProviderData': 'No provider data',
-  // ---- Usage details & cost ----
+  // ---- 用量明细与成本核算 ----
   'usage.ledgerTitle': 'Usage details',
   'usage.colTime': 'Time',
   'usage.colType': 'Type',
@@ -80,7 +79,7 @@ export const en: Record<string, string> = {
   'usage.modelCount': 'Model/provider combos',
   'usage.costByModel': 'Model token cost',
   'usage.noCost': 'No cost data',
-  // ---- Org usage drill-down ----
+  // ---- 组织用量下钻 ----
   'usage.orgTitle': 'Org usage drill-down',
   'usage.orgHint': 'Pick an org to view usage of all users below it (incl. sub-orgs/departments).',
   'usage.allOrg': 'All orgs (all users in tenant)',

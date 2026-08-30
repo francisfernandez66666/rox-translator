@@ -1,8 +1,7 @@
-// ============ 本文件职责中文说明 ============
+// ============ panels/apikeys.ts · 职责说明 ============
 // API 密钥管理面板 i18n 键
-// =============================================
-// panels/apikeys.ts — 开放 API Key / API 文档维护面板 i18n 键（中英）
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
+// =============================================
 export const zh: Record<string, string> = {
   // ---- API 文档在线维护 ----
   'docsEdit.title': 'API 文档维护',
@@ -51,7 +50,7 @@ export const zh: Record<string, string> = {
 
 // 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
-  // ---- OpenAPI docs editor ----
+  // ---- API 文档在线维护 ----
   'docsEdit.title': 'API Docs Editor',
   'docsEdit.hint': 'Edit Markdown source; the public page /openapi/docs updates instantly on save. Save empty to restore built-in default. Super admin only.',
   'docsEdit.placeholder': '# Translation Platform Open API',
@@ -65,7 +64,7 @@ export const en: Record<string, string> = {
   'docsEdit.saved': 'Published — live on the public page',
   'docsEdit.confirmReset': 'Restore built-in default? Custom content will be cleared.',
   'docsEdit.resetDone': 'Built-in default restored',
-  // ---- API Key management ----
+  // ---- API Key 管理 ----
   'apikeys.title': 'Open API Keys',
   'apikeys.docs': '📄 View API Docs',
   'apikeys.keyName': 'Key name',

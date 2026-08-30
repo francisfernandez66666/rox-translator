@@ -1,12 +1,11 @@
-// ============ 本文件职责中文说明 ============
+// ============ dicts.en.ts · 职责说明 ============
 // 英文基础字典（跨模块 i18n 键，与 dicts.zh.ts 同键对应）
-// =============================================
-// dicts.en.ts — 英文基础字典
 // 聚合通用文案、语言名、登录/注册、后台导航、翻译工单、反馈等跨模块 i18n 键。
 // 与 Vue 版 i18n/index.ts baseEn 同源，保持同步。
 // 导出英文基础词典：与 baseZh 同键对应（中文基础词典的英文版），最终由 i18n/index.ts 合并到全局词典。
+// =============================================
 export const baseEn: Record<string,string> = {
-  // ---- Common ----
+  // ---- 通用 ----
   'common.online': 'Online',
   'common.offline': 'Offline',
   'common.settings': 'Settings',
@@ -22,7 +21,7 @@ export const baseEn: Record<string,string> = {
   'common.disabled': 'Disabled',
   'common.expired': 'Expired',
 
-  // ---- Workspace ----
+  // ---- 工作台 ----
   'app.title': 'LangCross',
   'app.more': 'More',
   'app.starting': 'Starting translation engine…',
@@ -33,7 +32,7 @@ export const baseEn: Record<string,string> = {
   'app.modelFallback': '(Fallback)',
   'app.langs': 'Languages',
 
-  // ---- Language names ----
+  // ---- 语言名 ----
   'lang.zh': 'Chinese',
   'lang.en': 'English',
   'lang.zhHant': 'Traditional Chinese',
@@ -75,7 +74,7 @@ export const baseEn: Record<string,string> = {
   'lang.ug': 'Uyghur',
   'lang.yue': 'Cantonese',
 
-  // ---- Login ----
+  // ---- 登录页 ----
   'login.platformAdmin': '🏢 LangCross Admin',
   'login.platform': '🌐 LangCross',
   'login.adminLogin': 'Admin Console Login',
@@ -142,7 +141,7 @@ export const baseEn: Record<string,string> = {
   'login.regSuccess': 'Registered. Signing in…',
   'login.selectIndustry': 'Industry (required when creating a new org)',
 
-  // ---- Admin nav ----
+  // ---- 后台导航 ----
   'admin.console': 'Admin Console',
   'admin.ops': 'Operations',
   'admin.org': 'Org',
@@ -396,7 +395,7 @@ export const baseEn: Record<string,string> = {
   'admin.invites': '✉️ Invite Codes',
   'admin.self': '☁️ Open API Docs',
   'admin.gdpr': '🛡️ Data Compliance',
-  // ---- Role workspaces ----
+  // ---- 角色工作台 ----
   'admin.wsPlatform': 'Platform Ops',
   'admin.wsCompany': 'Company Mgmt',
   'admin.wsDept': 'Department',
@@ -506,7 +505,7 @@ export const baseEn: Record<string,string> = {
   'tmr.colLangs': 'Langs',
   'users.colUser': 'User',
 
-  // ---- New: admin panel titles / tabs / sections (this i18n batch) ----
+  // ---- 新增：后台面板标题/页签/区块 ----
   'admin.menuOverview': 'Overview',
   'admin.menuTenants': 'Tenants',
   'admin.menuPlans': 'Plans',

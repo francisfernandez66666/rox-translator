@@ -26,15 +26,18 @@ func (s *Server) notifyBots(title, body string) {
 	if s.Store == nil {
 		return
 	}
+	// 从系统配置读取企业微信和钉钉群机器人 webhook 地址
 	wecom, _ := s.Store.GetConfig("wecom_webhook_url")
 	dingtalk, _ := s.Store.GetConfig("dingtalk_webhook_url")
 	content := "【能言】" + title + "\n" + body
+	// 企业微信渠道：地址非空且非占位符时异步推送
 	if u := strings.TrimSpace(wecom); u != "" && u != "0" {
 		go postBot(u, map[string]interface{}{
 			"msgtype": "text",
 			"text":    map[string]string{"content": content},
 		})
 	}
+	// 钉钉渠道：地址非空且非占位符时异步推送
 	if u := strings.TrimSpace(dingtalk); u != "" && u != "0" {
 		go postBot(u, map[string]interface{}{
 			"msgtype": "text",

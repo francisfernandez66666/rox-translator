@@ -5,6 +5,17 @@
 // 品牌只由「访问域名」决定：根域名=平台品牌，租户专属子域=该租户品牌；
 // 支持服务端在 index.html 注入 window.__BRANDING__ 以首屏即生效、避免闪烁。
 // ============================================================================
+
+/**
+ * branding.tsx · 职责说明
+ * 租户级品牌定制 Context，提供以下功能：
+ * - 品牌解析：按访问域名自动解析租户品牌信息
+ * - 品牌应用：网页标题、聊天气泡配色、登录页背景等
+ * - 背景图层：未登录首页背景图的渲染（支持 cover/contain/tile 模式）
+ * - 布局配置：登录卡片位置、登录页布局（全屏/分栏）
+ * - 首屏优化：支持服务端注入 window.__BRANDING__ 避免闪烁
+ */
+
 // 依赖引入：React 基础 Hooks（createContext/useContext/useEffect/useMemo/useState）与类型 ReactNode
 import { createContext, useContext, useEffect, useMemo, useState, ReactNode } from 'react'
 

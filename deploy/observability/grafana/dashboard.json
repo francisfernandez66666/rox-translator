@@ -1,0 +1,88 @@
+{
+  "title": "翻译助手 langcross · 服务健康与运营",
+  "uid": "langcross-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "tenant",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(translator_tenants_active, tenant)",
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "翻译吞吐（按类型/结果）",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(translator_translations_total[5m])) by (kind, result)", "legendFormat": "{{kind}}/{{result}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "HTTP 请求速率（按路径）",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(translator_http_requests_total[5m])) by (path)", "legendFormat": "{{path}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "LLM 错误率 & 熔断状态",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "translator_llm_error_rate", "legendFormat": "error_rate" },
+        { "expr": "translator_llm_breaker_open", "legendFormat": "breaker_open" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "平台余额总 token",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "translator_balance_tokens_total", "legendFormat": "balance_tokens" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "启用租户数 / KB 条目数",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        { "expr": "translator_tenants_active", "legendFormat": "tenants" },
+        { "expr": "translator_kb_entries_total", "legendFormat": "kb_entries" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Go goroutines / 堆内存",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        { "expr": "go_goroutines", "legendFormat": "goroutines" },
+        { "expr": "go_heap_bytes", "legendFormat": "heap_bytes" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "累计计量 token（成本口径）",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "targets": [
+        { "expr": "rate(translator_usage_tokens_total[1h])", "legendFormat": "tokens/hour" }
+      ]
+    }
+  ]
+}

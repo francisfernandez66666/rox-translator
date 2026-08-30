@@ -1,3 +1,7 @@
+// ============ query.go · 职责说明 ============
+// 数据库查询工具层：提供跨方言的 SQL 执行与查询接口，包括占位符改写、
+// DDL 翻译、通用 Exec/Query/Prepare 方法，以及 INSERT 返回主键的 InsertID 方法。
+// =============================================
 package db
 
 import (
@@ -31,6 +35,7 @@ type Preparer interface {
 // RewritePlaceholders 将 SQLite 风格的位置占位符 ? 改写为 PostgreSQL 风格 $1/$2/...。
 // 仅改写不在单引号字符串字面量内的 ?（字面量内的 ? 保持原样，例如 LIKE 模式或默认值）。
 // 调用方传入的 query 为 SQLite 方言（唯一真源），PostgreSQL 下经此改写后即可复用同一段 SQL。
+// 参数：query=SQLite 方言 SQL；返回改写后的 PostgreSQL 方言 SQL。
 func RewritePlaceholders(query string) string {
 	var b strings.Builder
 	n := 0
@@ -61,11 +66,13 @@ func RewritePlaceholders(query string) string {
 
 // pgTranslate 对 PostgreSQL 方言做完整翻译：先转 DDL 语义（AUTOINCREMENT/BLOB/REAL），
 // 再改写占位符 ? -> $n。所有经本包执行的 SQL 均以 SQLite 方言为唯一真源。
+// 参数：query=SQLite 方言 SQL；返回 PostgreSQL 方言 SQL。
 func pgTranslate(query string) string {
 	return RewritePlaceholders(ToDialect(query, DialectPostgres))
 }
 
 // Exec 按方言执行写操作，连接或事务通用。PostgreSQL 下自动翻译 DDL 并改写占位符。
+// 参数：e=执行器（连接或事务）；d=方言；query=SQL 语句；args=参数；返回执行结果及错误。
 func Exec(e Execer, d Dialect, query string, args ...interface{}) (sql.Result, error) {
 	if d == DialectPostgres {
 		query = pgTranslate(query)
@@ -74,6 +81,7 @@ func Exec(e Execer, d Dialect, query string, args ...interface{}) (sql.Result, e
 }
 
 // ExecContext 按方言执行带上下文的写操作，连接或事务通用。PostgreSQL 下自动改写占位符。
+// 参数：ctx=上下文；e=执行器；d=方言；query=SQL 语句；args=参数；返回执行结果及错误。
 func ExecContext(ctx context.Context, e ContextExecer, d Dialect, query string, args ...interface{}) (sql.Result, error) {
 	if d == DialectPostgres {
 		query = pgTranslate(query)
@@ -82,6 +90,7 @@ func ExecContext(ctx context.Context, e ContextExecer, d Dialect, query string, 
 }
 
 // Query 按方言执行查询，连接或事务通用。PostgreSQL 下自动翻译 DDL 并改写占位符。
+// 参数：qr=查询器；d=方言；query=SQL 语句；args=参数；返回结果集及错误。
 func Query(qr Querier, d Dialect, query string, args ...interface{}) (*sql.Rows, error) {
 	if d == DialectPostgres {
 		query = pgTranslate(query)
@@ -90,6 +99,7 @@ func Query(qr Querier, d Dialect, query string, args ...interface{}) (*sql.Rows,
 }
 
 // QueryRow 按方言执行单行查询，连接或事务通用。PostgreSQL 下自动翻译 DDL 并改写占位符。
+// 参数：qr=查询器；d=方言；query=SQL 语句；args=参数；返回单行结果。
 func QueryRow(qr Querier, d Dialect, query string, args ...interface{}) *sql.Row {
 	if d == DialectPostgres {
 		query = pgTranslate(query)
@@ -98,6 +108,7 @@ func QueryRow(qr Querier, d Dialect, query string, args ...interface{}) *sql.Row
 }
 
 // Prepare 按方言预备语句。PostgreSQL 下自动翻译 DDL 并改写占位符（保证后续 stmt.Exec 可用 $n）。
+// 参数：p=预备语句执行器；d=方言；query=SQL 语句；返回预备语句及错误。
 func Prepare(p Preparer, d Dialect, query string) (*sql.Stmt, error) {
 	if d == DialectPostgres {
 		query = pgTranslate(query)
@@ -114,17 +125,20 @@ type insertExecer interface {
 // InsertID 执行 INSERT 并返回自增主键，跨方言统一。
 //   - SQLite：沿用 res.LastInsertId()。
 //   - PostgreSQL：追加 RETURNING <pkCol> 并以 QueryRow 取回（lib/pq 不支持 LastInsertId）。
-//     对 INSERT OR IGNORE 等“可能不插入”的语义，冲突时无行返回，按 SQLite 行为返回 0。
+//     对 INSERT OR IGNORE 等"可能不插入"的语义，冲突时无行返回，按 SQLite 行为返回 0。
 //
 // 调用方传入的 query 为 SQLite 方言（INSERT ... VALUES(?...)），PostgreSQL 下自动改写。
+// 参数：e=执行器；d=方言；pkCol=主键列名；query=INSERT 语句；args=参数；返回自增主键及错误。
 func InsertID(e insertExecer, d Dialect, pkCol string, query string, args ...interface{}) (int64, error) {
 	if d != DialectPostgres {
+		// SQLite 路径：直接使用 LastInsertId
 		res, err := e.Exec(query, args...)
 		if err != nil {
 			return 0, err
 		}
 		return res.LastInsertId()
 	}
+	// PostgreSQL 路径：追加 RETURNING 子句并以 QueryRow 取回
 	q := pgTranslate(strings.TrimRight(query, " ;")) + " RETURNING " + pkCol
 	var id int64
 	err := e.QueryRow(q, args...).Scan(&id)

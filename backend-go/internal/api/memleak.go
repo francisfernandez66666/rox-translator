@@ -48,11 +48,13 @@ func (s *Server) runMemLeakCapture() {
 	if s.Store == nil || s.Cfg == nil {
 		return
 	}
+	// 创建泄漏日志目录
 	dir := filepath.Join(s.Cfg.UserDataDir, memLeakDirName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		log.Printf("[memleak] 创建目录失败: %v", err)
 		return
 	}
+	// 采集运行时内存指标
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	rssKB := readSelfRSSKB()
@@ -66,7 +68,7 @@ func (s *Server) runMemLeakCapture() {
 		SysMB:       int64(ms.Sys / 1024 / 1024),
 	}
 
-	// 1) heap pprof 二进制快照（保留最近 7 份）
+	// 1) 生成 heap pprof 二进制快照（保留最近 7 份）
 	now := time.Now()
 	snap := filepath.Join(dir, fmt.Sprintf("heap_%s.pb", now.Format("20060102_1504")))
 	f, err := os.Create(snap)
@@ -75,12 +77,13 @@ func (s *Server) runMemLeakCapture() {
 			sample.Snapshot = filepath.Base(snap)
 		}
 		f.Close()
+		// 清理旧快照，只保留最近 7 份
 		pruneMemSnapshots(dir, 7)
 	} else {
 		log.Printf("[memleak] 快照创建失败: %v", err)
 	}
 
-	// 2) JSONL 追加（一行一天，便于 grep/导入表格）
+	// 2) 追加 JSONL 日志（一行一天，便于 grep/导入表格）
 	line, _ := json.Marshal(sample)
 	lf, err := os.OpenFile(filepath.Join(dir, "memleak.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err == nil {
@@ -89,7 +92,7 @@ func (s *Server) runMemLeakCapture() {
 	}
 	log.Printf("[memleak] RSS=%dMB Heap=%dMB Objs=%d Goroutines=%d", sample.RSSMB, sample.HeapMB, sample.HeapObjects, sample.Goroutines)
 
-	// 3) 超阈值：文本转储（可直接 grep 持有者）+ critical 告警（联动邮件/群机器人）
+	// 3) 超阈值时：生成文本转储（可直接 grep 持有者）+ 发送 critical 告警（联动邮件/群机器人）
 	threshold := int64(500)
 	if v, _ := s.Store.GetConfig("leak_rss_threshold_mb"); v != "" {
 		if n, e := strconv.ParseInt(v, 10, 64); e == nil && n > 0 {
@@ -106,6 +109,7 @@ func (s *Server) runMemLeakCapture() {
 			_ = pprof.Lookup("goroutine").WriteTo(gz, 2)
 			gz.Close()
 			df.Close()
+			// 发送告警：内存超阈值
 			msg := fmt.Sprintf("内存超阈值 %dMB（当前 %dMB），已留转储 %s", threshold, rssMB, filepath.Base(dump))
 			_ = s.Store.CreateAlert(0, "critical", "memory", msg)
 			s.notifyBots("内存超阈值", msg)

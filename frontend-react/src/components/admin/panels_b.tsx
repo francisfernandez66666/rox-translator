@@ -1,5 +1,6 @@
 // ============================================================================
 // components/admin/panels_b.tsx — Tenants / Org
+// 职责：后台面板 B，包含租户管理与组织架构功能。
 // 功能对齐 Vue: frontend/src/components/admin/Tenants.vue 与 Org.vue
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -23,42 +24,42 @@ import { useAdmin } from '@/stores/admin'
 import { InvitesP } from './panels_a'
 import { t, tpl } from '@/i18n'
 
-// ============ 本文件职责中文说明 ============
-// 后台面板 B：租户管理与组织架构。
-// ========================================
-
 type Any = any
 
-// 数字缩写：≥1万 显示为 x.xw（用于组织预算展示）
+/** 数字缩写：≥1万 显示为 x.xw（用于组织预算展示） */
 function fmtNumShort(n: number): string {
   if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + 'w'
   return String(n)
 }
 
-// ---------------- 租户管理（Vue Tenants.vue） ----------------
-// 租户 CRUD、试用开通、充值、导出、状态启停、GDPR 擦除
+// ==================== 租户管理面板（Vue Tenants.vue） ====================
+
+/** 租户 CRUD、试用开通、充值、导出、状态启停、GDPR 擦除组件 */
 export function TenantsP() {
   const ad = useAdmin()
+  // 租户列表数据
   const [rows, setRows] = useState<TenantInfo[]>([])
-  // dlg 复用：创建 / 编辑 / 建充值单
+  // 弹窗状态：复用 create / edit / order 三种模式
   const [dlg, setDlg] = useState<null | 'create' | { edit: TenantInfo } | { order: TenantInfo }>(null)
+  // 表单数据
   const [form, setForm] = useState<Any>({})
 
-  // 解析租户权限 JSON 中的 package_code（空表示未开通套餐，可发放试用）
+  /** 解析租户权限 JSON 中的 package_code（空表示未开通套餐，可发放试用） */
   const pkgOf = (row: TenantInfo): string => {
     try { return (JSON.parse(row.permissions || '{}') as Any).package_code || '' } catch { return '' }
   }
 
-  // 加载租户列表
+  /** 加载租户列表 */
   const load = useCallback(async () => {
     const r: any = await tenantList()
     if (r.success) setRows(r.tenants || [])
   }, [])
   useEffect(() => { void load() }, [load])
 
-  // 保存租户：区分创建与编辑
+  /** 保存租户：区分创建与编辑 */
   async function save() {
     if (dlg === 'create') {
+      // 创建租户：校验编码必填
       if (!String(form.code || '').trim()) { void MessagePlugin.warning(t('tenants.codeRequired')); return }
       const r: any = await tenantCreate({
         code: String(form.code || ''), name: String(form.name || ''),
@@ -69,6 +70,7 @@ export function TenantsP() {
       if (!r.success) { void MessagePlugin.error(r.message); return }
       setForm({}); setDlg(null); await load(); ad.loadTenants()
     } else if (dlg && typeof dlg === 'object' && 'edit' in dlg) {
+      // 编辑租户：更新名称、过期时间、权限
       const tt = dlg.edit
       const r: any = await tenantUpdate({
         id: tt.id, name: String(form.name ?? tt.name),
@@ -80,7 +82,7 @@ export function TenantsP() {
     }
   }
 
-  // 导出租户数据：POST /api/tenant/export 返回 blob，XHR 下载（对齐 Vue）
+  /** 导出租户数据：POST /api/tenant/export 返回 blob，XHR 下载（对齐 Vue） */
   async function doExport(tt: TenantInfo) {
     if (!(await confirmDialog({ body: tpl('tenants.exportConfirm', { name: tt.name }) }))) return
     const url = `${API_BASE}/api/tenant/export`
@@ -101,7 +103,7 @@ export function TenantsP() {
     xhr.send(JSON.stringify({ id: tt.id }))
   }
 
-  // 超管代充值：输入 token 数创建订单并自动模拟支付入账
+  /** 超管代充值：输入 token 数创建订单并自动模拟支付入账 */
   async function charge(tt: TenantInfo) {
     const tokens = await promptText({ body: tpl('tenants.chargePrompt', { name: tt.name }) })
     if (!tokens || Number(tokens) <= 0) return
@@ -113,7 +115,7 @@ export function TenantsP() {
     await load()
   }
 
-  // 删除租户（id=1 为平台默认租户，对齐 Vue v-if 禁止删除）
+  /** 删除租户（id=1 为平台默认租户，禁止删除） */
   async function removeTenant(tt: TenantInfo) {
     if (!(await confirmDialog({ body: tpl('tenants.deleteConfirm', { name: tt.name }) }))) return
     const r: any = await tenantDelete(tt.id)
@@ -121,7 +123,7 @@ export function TenantsP() {
     await load(); ad.loadTenants()
   }
 
-  // GDPR 擦除：两次确认后调用擦除接口（对齐 Vue confirm×2）
+  /** GDPR 擦除：两次确认后调用擦除接口（对齐 Vue confirm×2） */
   async function erase(tt: TenantInfo) {
     if (!(await confirmDialog({ body: tpl('tenants.eraseConfirm', { name: tt.name }) }))) return
     if (!(await confirmDialog({ body: tpl('tenants.eraseConfirm2', { name: tt.name }) }))) return
@@ -131,7 +133,7 @@ export function TenantsP() {
     await load()
   }
 
-  // 切换租户「邀请好友」功能开关（超管按租户控制是否开放邀请裂变）
+  /** 切换租户「邀请好友」功能开关（超管按租户控制是否开放邀请裂变） */
   async function setInvite(tt: TenantInfo, val: boolean) {
     const r: any = await tenantUpdate({
       id: tt.id, name: tt.name, expires_at: tt.expires_at || '',
@@ -141,7 +143,7 @@ export function TenantsP() {
     await load()
   }
 
-  // 为未开通套餐的租户发放试用套餐
+  /** 为未开通套餐的租户发放试用套餐 */
   async function grantTrial(tt: TenantInfo) {
     if (!(await confirmDialog({ body: tpl('tenants.grantTrialConfirm', { name: tt.name }) }))) return
     const r: any = await tenantGrantTrial(tt.id)
@@ -152,6 +154,7 @@ export function TenantsP() {
 
   return (
     <Panel title={t('tenants.title')} extra={<Button theme="primary" onClick={() => { setForm({ permissions: '{}' }); setDlg('create') }}>{t('tenants.create')}</Button>}>
+      {/* 租户列表表格 */}
       <Table rowKey="id" size="small" data={rows}
              columns={[
                { colKey: 'id', title: t('tenants.colId'), width: 60 },
@@ -168,20 +171,26 @@ export function TenantsP() {
                 ) },
                { colKey: 'op', title: t('tenants.colActions'), width: 360, cell: ({ row }: any) => (
                  <Space size={2} breakLine>
+                   {/* 发放试用套餐（仅未开通套餐的租户显示） */}
                    {!pkgOf(row) && (
                      <Button size="small" variant="text" onClick={() => grantTrial(row)}>{t('tenants.grantTrial')}</Button>
                    )}
+                   {/* 启用/禁用租户 */}
                    <Button size="small" variant="text"
                             onClick={async () => { const r: any = await tenantSetStatus(row.id, row.status === 'active' ? 'disabled' : 'active'); if (!r.success) void MessagePlugin.error(r.message); await load() }}>
                      {row.status === 'active' ? t('tenants.disable') : t('tenants.enable')}
                    </Button>
+                   {/* 删除租户（id=1 为平台默认租户，禁止删除） */}
                    {row.id !== 1 && (
                      <Popconfirm content={t('tenants.deleteConfirm')} onConfirm={async () => { await removeTenant(row) }}>
                        <Button size="small" variant="text" theme="danger">{t('tenants.delete')}</Button>
                      </Popconfirm>
                    )}
+                   {/* 超管代充值 */}
                    <Button size="small" variant="text" onClick={() => charge(row)}>{t('tenants.charge')}</Button>
+                   {/* 导出租户数据 */}
                    <Button size="small" variant="text" onClick={() => doExport(row)}>{t('tenants.exportData')}</Button>
+                   {/* GDPR 擦除（id=1 为平台默认租户，禁止擦除） */}
                    {row.id !== 1 && (
                      <Button size="small" variant="text" theme="danger" onClick={() => erase(row)}>{t('tenants.eraseData')}</Button>
                    )}
@@ -189,17 +198,20 @@ export function TenantsP() {
                ) },
              ] as never} />
 
+      {/* 创建/编辑租户弹窗 */}
       <Dialog visible={!!dlg && (dlg === 'create' || (dlg && typeof dlg === 'object' && 'edit' in dlg))}
                onClose={() => setDlg(null)} header={dlg === 'create' ? t('tenants.create') : t('tenants.title')} width={520}
                onConfirm={save}>
         {(dlg === 'create' || (dlg && typeof dlg === 'object' && 'edit' in dlg)) && (
           <>
+            {/* 创建模式：显示租户编码输入框 */}
             {dlg === 'create' && (
               <Field label={t('tenants.codePlaceholder')}><Input value={String(form.code || '')} onChange={(v) => setForm({ ...form, code: v })} /></Field>
             )}
             <Field label={t('tenants.namePlaceholder')}><Input value={String(form.name ?? '')} onChange={(v) => setForm({ ...form, name: v })} /></Field>
             <Field label={t('tenants.colExpires')}><Input value={String(form.expires_at ?? '')} placeholder="YYYY-MM-DD" onChange={(v) => setForm({ ...form, expires_at: v })} /></Field>
             <Field label={t('tenants.permissionsHint')}><Textarea autosize={{ minRows: 3 }} value={String(form.permissions ?? '{}')} onChange={(v) => setForm({ ...form, permissions: v })} /></Field>
+            {/* 创建模式：显示管理员账号与初始密码 */}
             {dlg === 'create' && (
               <>
                 <Field label={t('tenants.adminUserPlaceholder')}><Input value={String(form.admin_user || '')} onChange={(v) => setForm({ ...form, admin_user: v })} /></Field>
@@ -210,7 +222,7 @@ export function TenantsP() {
         )}
       </Dialog>
 
-      {/* 建充值单（超管代充） */}
+      {/* 超管代充值弹窗 */}
       <Dialog visible={!!dlg && typeof dlg === 'object' && 'order' in dlg}
               onClose={() => setDlg(null)} header={dlg && typeof dlg === 'object' && 'order' in dlg ? `#${(dlg as { order: TenantInfo }).order.id} ${t('tenants.charge')}` : ''} width={440}
               onConfirm={async () => {
@@ -230,8 +242,9 @@ export function TenantsP() {
   )
 }
 
-// ---------------- 组织架构（Vue Org.vue） ----------------
-// 组织树展示、组织 CRUD、用户管理、预算设置、邀请码、组织移动
+// ==================== 组织架构面板（Vue Org.vue） ====================
+
+/** 组织树展示、组织 CRUD、用户管理、预算设置、邀请码、组织移动组件 */
 export function OrgP() {
   const ad = useAdmin()
   // 组织数据
@@ -243,20 +256,20 @@ export function OrgP() {
   // 当前选中组织与其下的用户
   const [selectedOrg, setSelectedOrg] = useState(0)
   const [orgUserList, setOrgUserList] = useState<Any[]>([])
-  // 新建组织
+  // 新建组织表单
   const [parentId, setParentId] = useState(0)
   const [newName, setNewName] = useState('')
   // 开通用户表单
   const [nu, setNu] = useState<Any>({ username: '', password: '', display_name: '', role: 'user' })
   const [nuOrgId, setNuOrgId] = useState(0)
   const [creating, setCreating] = useState(false)
-  // 预算/邀请弹窗
+  // 预算/邀请弹窗状态
   const [budgetModal, setBudgetModal] = useState<{ id: number; name: string; limit: number; used: number } | null>(null)
   const [budgetInput, setBudgetInput] = useState(0)
   const [inviteModal, setInviteModal] = useState<{ id: number; name: string } | null>(null)
   const [inviteItems, setInviteItems] = useState<Any[]>([])
   const [inviteCodeInput, setInviteCodeInput] = useState('')
-  // 移动弹窗
+  // 移动弹窗状态
   const [moveDlg, setMoveDlg] = useState<{ node: Any } | null>(null)
   const [moveParent, setMoveParent] = useState(0)
 
@@ -265,14 +278,14 @@ export function OrgP() {
   // 「企业管理」内部双 Tab：组织结构 / 邀请员工（邀请码并入此处）
   const [tab, setTab] = useState<'org' | 'invite'>('org')
 
-  // 根组织显示名称：优先取后端返回的根组织，否则用当前租户名兜底
+  /** 根组织显示名称：优先取后端返回的根组织，否则用当前租户名兜底 */
   const rootOrgName = useMemo(() => {
     if (rootOrg?.name) return rootOrg.name
     const tt = ad.tenants.find((x) => x.id === ad.activeTenantId)
     return tt?.name || tpl('org.orgHash', { id: ad.activeTenantId })
   }, [rootOrg, ad.tenants, ad.activeTenantId])
 
-  // 过滤后的组织列表（平台视图排除当前根；普通视图排除 root 类型）
+  /** 过滤后的组织列表（平台视图排除当前根；普通视图排除 root 类型） */
   const flatOrgs = useMemo(() => {
     if (isPlatformView) {
       return orgs.filter((o) => !(o.type === 'root' && rootOrg && o.id === rootOrg.id))
@@ -280,7 +293,7 @@ export function OrgP() {
     return orgs.filter((o) => o.type !== 'root')
   }, [orgs, isPlatformView, rootOrg])
 
-  // 组装扁平树（深度优先，记录层级 _depth）
+  /** 组装扁平树（深度优先，记录层级 _depth） */
   const flatTree = useMemo(() => {
     const byParent: Record<number, OrgInfo[]> = {}
     for (const o of flatOrgs) {
@@ -298,24 +311,30 @@ export function OrgP() {
     return out
   }, [flatOrgs, isPlatformView, rootOrg])
 
+  /** 递归计算组织的完整路径名 */
   const orgPath = (o: OrgInfo): string => {
     if (o.parent_id === 0) return o.name
     const parent = flatOrgs.find((x) => x.id === o.parent_id)
     return parent ? `${orgPath(parent)} / ${o.name}` : o.name
   }
+
+  /** 获取组织图标：部门→标签、组织→商场、根→办公楼 */
   const orgIcon = (o: OrgInfo): string => (o.type === 'dept' ? '🏷️' : o.type === 'org' ? '🏬' : '🏢')
 
+  /** 获取预算文本显示（已用/限额） */
   const budgetText = (o: Any): string => {
     const b = budgetMap[o.id]
     if (!b || !(b.limit > 0)) return t('org.budgetUnset')
     return `${fmtNumShort(b.used)}/${fmtNumShort(b.limit)}`
   }
+
+  /** 判断组织是否超预算 */
   const isOverBudget = (o: Any): boolean => {
     const b = budgetMap[o.id]
     return !!b && b.limit > 0 && b.used >= b.limit
   }
 
-  // 开通用户可选角色：根据所选组织类型与当前权限级联
+  /** 开通用户可选角色：根据所选组织类型与当前权限级联 */
   const nuRoleOptions = useMemo(() => {
     const oid = nuOrgId
     if (!oid) {
@@ -327,6 +346,7 @@ export function OrgP() {
     return myLevel >= 2 ? ['dept_admin', 'user'] : ['user']
   }, [nuOrgId, isPlatformView, myLevel, flatOrgs])
 
+  /** 组织选择变更时，若当前角色不在可用角色列表则回退 */
   function onNuOrgChange(v: any) {
     setNuOrgId(v)
     setNu((n: Any) => {
@@ -335,7 +355,7 @@ export function OrgP() {
     })
   }
 
-  // 用户字段更新：构造全量数据提交 /api/admin/users/update（对齐 Vue editUser）
+  /** 用户字段更新：构造全量数据提交 /api/admin/users/update（对齐 Vue editUser） */
   async function updateUser(u: Any, patch: Any): Promise<boolean> {
     const data: Any = {
       display_name: u.display_name, role: u.role, status: u.status,
@@ -349,7 +369,7 @@ export function OrgP() {
     return true
   }
 
-  // 加载各部门 token 预算汇总
+  /** 加载各部门 token 预算汇总 */
   async function loadBudget() {
     try {
       const r: any = await orgBudgetSummary()
@@ -361,13 +381,13 @@ export function OrgP() {
     } catch { /* 非租管静默 */ }
   }
 
-  // 加载选中组织下的用户（不传则取当前用户可见全部）
+  /** 加载选中组织下的用户（不传则取当前用户可见全部） */
   async function loadOrgUsers() {
     const r: any = await orgUsers(selectedOrg || undefined)
     if (r.success) setOrgUserList(r.users || [])
   }
 
-  // 初始/刷新：组织列表 + 用户列表
+  /** 初始/刷新：组织列表 + 用户列表 */
   const loadAll = useCallback(async () => {
     const [r, ru] = await Promise.all([orgList(), orgUsers()])
     if (r.success) {
@@ -381,18 +401,18 @@ export function OrgP() {
 
   // 初始加载组织、用户、预算
   useEffect(() => { void loadAll(); void loadBudget() }, [loadAll])
-  // activeTenantId 变化时重置选中并重载（对齐 Vue watch(activeTenantId)）
+  // activeTenantId 变化时重置选中并重载
   useEffect(() => {
     setSelectedOrg(0); setNuOrgId(0)
     void loadAll(); void loadBudget()
   }, [ad.activeTenantId])
 
-  // 选中组织并加载其用户
+  /** 选中组织并加载其用户 */
   function selectOrg(id: number) {
     setSelectedOrg(id); setNuOrgId(id); void loadOrgUsers()
   }
 
-  // 在选中组织下开通新用户
+  /** 在选中组织下开通新用户 */
   async function createUser() {
     if (!nu.username?.trim() || (nu.password?.length ?? 0) < 6) { void MessagePlugin.warning(t('org.userValidation')); return }
     setCreating(true)
@@ -411,7 +431,7 @@ export function OrgP() {
     } finally { setCreating(false) }
   }
 
-  // 弹窗重置组织用户密码
+  /** 弹窗重置组织用户密码 */
   async function resetPwd(u: Any) {
     const pwd = await promptText({ header: t('org.resetPwdPrompt'), body: tpl('org.resetPwdPrompt', { name: u.username }) })
     if (!pwd || pwd.length < 6) { void MessagePlugin.warning(t('org.pwdMinLength')); return }
@@ -420,12 +440,12 @@ export function OrgP() {
     void MessagePlugin.success(t('org.pwdReset'))
   }
 
-  // 启用/禁用组织用户
+  /** 启用/禁用组织用户 */
   async function setStatus(u: Any, status: string) {
     if (await updateUser(u, { status })) await loadAll()
   }
 
-  // 删除组织用户
+  /** 删除组织用户 */
   async function deleteUser(u: Any) {
     if (!(await confirmDialog({ body: tpl('org.deleteUserConfirm', { name: u.username }) }))) return
     const r: any = await adminUserDelete(u.id)
@@ -433,17 +453,18 @@ export function OrgP() {
     await loadAll()
   }
 
-  // 行内编辑用户字段（display_name / org_id / role）
+  /** 行内编辑用户字段（display_name / org_id / role） */
   async function editUser(u: Any, field: string, val: string) {
     const v = field === 'org_id' ? Number(val) : val
     if (field === 'display_name' && !String(val).trim()) return
     if (await updateUser(u, { [field]: v })) await loadAll()
   }
 
-  // 超管启停租户根（联动租户状态）
+  /** 超管启停租户根（联动租户状态） */
   function tenantStatusOf(tid: number): string {
     return ad.tenants.find((x) => x.id === tid)?.status || 'active'
   }
+
   async function toggleTenantByOrg(o: OrgInfo) {
     const cur = tenantStatusOf(o.tenant_id)
     const next = cur === 'active' ? 'disabled' : 'active'
@@ -454,10 +475,10 @@ export function OrgP() {
     ad.loadTenants(); await loadAll()
   }
 
-  // 设置新建组织的父节点并清空名称输入
+  /** 设置新建组织的父节点并清空名称输入 */
   function setParent(id: number) { setParentId(id); setNewName('') }
 
-  // 创建组织或部门（parent_id=0 为组织，否则为部门）
+  /** 创建组织或部门（parent_id=0 为组织，否则为部门） */
   async function createOrg() {
     if (!newName.trim()) { void MessagePlugin.warning(t('org.nameRequired')); return }
     const r: any = await orgCreate({ name: newName.trim(), parent_id: parentId, type: parentId === 0 ? 'org' : 'dept' })
@@ -465,7 +486,7 @@ export function OrgP() {
     setNewName(''); await loadAll()
   }
 
-  // 重命名组织；若重命名根组织且为超管，同步刷新租户列表
+  /** 重命名组织；若重命名根组织且为超管，同步刷新租户列表 */
   async function renameOrg(o: OrgInfo) {
     const name = await promptText({ header: t('org.renamePrompt'), body: tpl('org.renamePrompt', { name: o.name }), defaultValue: o.name })
     if (!name || !name.trim()) return
@@ -475,7 +496,7 @@ export function OrgP() {
     await loadAll()
   }
 
-  // 重命名当前租户根组织
+  /** 重命名当前租户根组织 */
   async function renameRootOrg() {
     if (!rootOrg) return
     const name = await promptText({ header: t('org.renameRoot'), body: t('org.renameRoot'), defaultValue: rootOrg.name })
@@ -486,7 +507,7 @@ export function OrgP() {
     await loadAll()
   }
 
-  // 删除组织；若当前正选中该组织则重置
+  /** 删除组织；若当前正选中该组织则重置 */
   async function deleteOrg(o: OrgInfo) {
     if (!(await confirmDialog({ body: tpl('org.deleteConfirm', { name: o.name }) }))) return
     const r: any = await orgDelete(o.id)
@@ -495,13 +516,14 @@ export function OrgP() {
     await loadAll()
   }
 
-  // ---- 预算 ----
-  // 打开预算弹窗并预填当前限制
+  /** 打开预算弹窗并预填当前限制 */
   function openBudget(o: Any) {
     const b = budgetMap[o.id]
     setBudgetModal({ id: o.id, name: o.name, limit: b?.limit || 0, used: b?.used || 0 })
     setBudgetInput(b?.limit || 0)
   }
+
+  /** 保存预算设置 */
   async function saveBudget() {
     if (!budgetModal) return
     if (!(budgetInput >= 0)) { void MessagePlugin.warning(t('org.budgetInvalid')); return }
@@ -511,8 +533,7 @@ export function OrgP() {
     setBudgetModal(null)
   }
 
-  // ---- 邀请码 ----
-  // 打开邀请码弹窗并加载该组织的邀请码
+  /** 打开邀请码弹窗并加载该组织的邀请码 */
   async function openInvites(o: Any) {
     setInviteModal({ id: o.id, name: o.name })
     setInviteItems([])
@@ -521,6 +542,8 @@ export function OrgP() {
       if (r.success) setInviteItems((r.codes || []).filter((x: Any) => x.org_id === o.id))
     } catch { setInviteItems([]) }
   }
+
+  /** 创建邀请码 */
   async function createInvite() {
     if (!inviteModal) return
     const code = inviteCodeInput.trim()
@@ -531,24 +554,27 @@ export function OrgP() {
     await openInvites(inviteModal)
   }
 
-  // ---- 移动（select 对话框） ----
-  // 打开移动弹窗，默认目标为当前父节点
+  /** 打开移动弹窗，默认目标为当前父节点 */
   function openMove(o: Any) { setMoveParent(Number(o.parent_id ?? 0)); setMoveDlg({ node: o }) }
-  // 提交组织移动
+
+  /** 提交组织移动 */
   async function doMove() {
     if (!moveDlg) return
     const r: any = await orgMove(moveDlg.node.id, moveParent)
     if (toastResp(r, '已移动')) { setMoveDlg(null); await loadAll() }
   }
 
+  // 用于添加用户时的组织标题显示
   const addUserHeading = nuOrgId === 0
     ? (isPlatformView ? t('admin.platformRoot') : rootOrgName)
     : (flatOrgs.find((x) => x.id === nuOrgId)?.name || '')
 
+  // 组织选择下拉选项
   const orgSelectOptions = [
     { label: isPlatformView ? t('admin.platformRoot') : t('org.rootOption'), value: 0 },
     ...flatTree.map((o) => ({ label: orgPath(o), value: o.id })),
   ]
+  // 用户组织选择下拉选项
   const userOrgOptions = [
     { label: rootOrgName, value: 0 },
     ...flatTree.map((o) => ({ label: orgPath(o), value: o.id })),
@@ -556,11 +582,12 @@ export function OrgP() {
 
   return (
     <Tabs value={tab} onChange={(v) => setTab(v as 'org' | 'invite')}>
+      {/* 组织结构 Tab */}
       <Tabs.TabPanel value="org" label={t('org.tabOrg')}>
         <Panel title={t('org.title')}>
       <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>{t('org.treeHint')}</p>
 
-      {/* ===== 新建组织/部门 ===== */}
+      {/* 新建组织/部门区域（仅租户管理员及以上可见） */}
       {myLevel >= 3 && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
           <Select value={parentId} onChange={(v) => setParentId(Number(v))} style={{ minWidth: 200 }}
@@ -575,8 +602,9 @@ export function OrgP() {
       )}
 
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        {/* ===== 组织树（左侧） ===== */}
+        {/* 组织树（左侧） */}
         <div style={{ minWidth: 280, flex: '1 1 320px' }}>
+          {/* 根组织节点 */}
           <div
             onClick={() => selectOrg(0)}
             style={{ padding: '8px 10px', borderRadius: 8, cursor: 'pointer', background: selectedOrg === 0 ? '#e8f3ff' : '#f5f7fa', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
@@ -586,6 +614,7 @@ export function OrgP() {
               <Button size="small" variant="text" title={t('org.renameRoot')} onClick={(e) => { e.stopPropagation(); renameRootOrg() }}>✎</Button>
             )}
           </div>
+          {/* 子组织列表（扁平树，按深度缩进） */}
           {flatTree.map((o) => (
             <div
               key={o.id}
@@ -597,6 +626,7 @@ export function OrgP() {
                 {orgIcon(o)} {o.name}
               </span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                {/* 预算按钮（非根组织且租户管理员及以上可见） */}
                 {o.type !== 'root' && myLevel >= 3 && (
                   <span className={isOverBudget(o) ? 'budget-over' : ''}
                         title={t('org.budgetSet')}
@@ -605,19 +635,24 @@ export function OrgP() {
                     💰 {budgetText(o)}
                   </span>
                 )}
+                {/* 邀请码按钮（非根组织且租户管理员及以上可见） */}
                 {o.type !== 'root' && myLevel >= 3 && (
                   <Button size="small" variant="text" title={t('org.inviteEntry')} onClick={(e) => { e.stopPropagation(); openInvites(o) }}>🎟️</Button>
                 )}
+                {/* 超管启停租户根（仅根组织显示） */}
                 {isSuper && o.type === 'root' && (
                   <Button size="small" variant="text"
                           onClick={(e) => { e.stopPropagation(); toggleTenantByOrg(o) }}>
                     {tenantStatusOf(o.tenant_id) === 'active' ? t('tenants.disable') : t('tenants.enable')}
                   </Button>
                 )}
+                {/* 添加子节点按钮 */}
                 <Button size="small" variant="text" title={t('org.addChild')} onClick={(e) => { e.stopPropagation(); setParent(o.id) }}>+</Button>
+                {/* 重命名按钮（租户管理员及以上可见） */}
                 {myLevel >= 3 && (
                   <Button size="small" variant="text" title={t('org.rename')} onClick={(e) => { e.stopPropagation(); renameOrg(o) }}>✎</Button>
                 )}
+                {/* 移动与删除按钮（非根组织且租户管理员及以上可见） */}
                 {o.type !== 'root' && myLevel >= 3 && (
                   <>
                     <Button size="small" variant="text" title={t('org.move')} onClick={(e) => { e.stopPropagation(); openMove(o) }}>⇄</Button>
@@ -629,12 +664,13 @@ export function OrgP() {
           ))}
         </div>
 
-        {/* ===== 组织下用户（含子孙归集，右侧） ===== */}
+        {/* 组织下用户列表（含子孙归集，右侧） */}
         <div style={{ flex: '2 1 480px', minWidth: 360 }}>
           <h3 style={{ margin: '0 0 4px' }}>
             {selectedOrg === 0 ? tpl('org.allUsersRootTpl', { name: rootOrgName }) : tpl('org.usersInChildren', { name: flatOrgs.find((x) => x.id === selectedOrg)?.name || '' })}
           </h3>
           <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>{t('org.usersHint')}</p>
+          {/* 用户列表表格 */}
           <Table rowKey="id" size="small" maxHeight={360} data={orgUserList}
                  columns={[
                    { colKey: 'id', title: t('org.colId'), width: 60 },
@@ -664,7 +700,7 @@ export function OrgP() {
                  ] as never} />
           {!orgUserList.length && <div style={{ fontSize: 12, color: '#999', padding: 8 }}>{t('org.noUsers')}</div>}
 
-          {/* 开通用户 */}
+          {/* 开通用户表单 */}
           <div style={{ marginTop: 16, border: '1px solid #e3e6ef', borderRadius: 8, padding: 14 }}>
             <h3 style={{ margin: '0 0 10px' }}>{tpl('org.addUser', { org: addUserHeading })}</h3>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
@@ -685,7 +721,7 @@ export function OrgP() {
         </div>
       </div>
 
-          {/* ===== 预算弹窗 ===== */}
+          {/* 预算弹窗 */}
       <Dialog visible={!!budgetModal} onClose={() => setBudgetModal(null)}
               header={`💰 ${t('org.budgetTitle')} · ${budgetModal?.name || ''}`} width={440}
               onConfirm={saveBudget}>
@@ -698,7 +734,7 @@ export function OrgP() {
         )}
       </Dialog>
 
-      {/* ===== 邀请码弹窗 ===== */}
+      {/* 邀请码弹窗 */}
       <Dialog visible={!!inviteModal} onClose={() => setInviteModal(null)}
               header={`🎟️ ${t('org.inviteTitle')} · ${inviteModal?.name || ''}`} width={440}>
         {inviteModal && (
@@ -708,6 +744,7 @@ export function OrgP() {
               <Input value={inviteCodeInput} placeholder={t('org.inviteInputPlaceholder')} onChange={(v) => setInviteCodeInput(v)} style={{ flex: 1 }} />
               <Button theme="primary" disabled={!inviteCodeInput.trim()} onClick={createInvite}>➕ {t('org.inviteCreate')}</Button>
             </div>
+            {/* 已有邀请码列表 */}
             {inviteItems.length ? (
               <Table rowKey="id" size="small" data={inviteItems}
                      columns={[
@@ -719,7 +756,7 @@ export function OrgP() {
         )}
       </Dialog>
 
-      {/* ===== 移动弹窗 ===== */}
+      {/* 移动弹窗 */}
       <Dialog visible={!!moveDlg} onClose={() => setMoveDlg(null)} header="移动组织" width={440} onConfirm={doMove}>
         {moveDlg && (
           <Field label="移动到">
@@ -730,6 +767,7 @@ export function OrgP() {
       </Dialog>
         </Panel>
       </Tabs.TabPanel>
+      {/* 邀请员工 Tab（复用 InvitesP 组件） */}
       <Tabs.TabPanel value="invite" label={t('org.tabInvite')}>
         <InvitesP />
       </Tabs.TabPanel>

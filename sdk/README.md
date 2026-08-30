@@ -83,6 +83,19 @@ const blob = await cli.downloadFile(t.task_id);
 1. 管理后台「开放 API」面板签发 API Key
 2. 完整接口文档见服务端 `/openapi/docs`
 
+## API Key 权限范围
+
+签发 Key 时权限（`perms`）仅接受以下取值（服务端按 Key 校验，SDK 不携带该字段）：
+
+| 权限 | 可用接口 |
+|------|----------|
+| `all` | 全部开放接口（translate + kb + billing + 轮换） |
+| `translate` | 任务创建/轮询/下载、余额、同步翻译 |
+| `kb` | 知识库统计 |
+| `billing` | 用量明细 |
+
+> 注意：权限字符串为 `kb` / `billing` / `translate` / `all`，**不是** `kb/all`、`billing/all`、`translate/all` 之类的写法。
+
 ## 待办（需外部资源）
 
 - CI 自动发 PyPI/npm 包（需账号）；当前以源码文件分发

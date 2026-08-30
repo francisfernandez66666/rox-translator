@@ -33,11 +33,13 @@ const feedbackMaxLen = 1000
 
 // handleFeedbackCreate 用户提交翻译反馈。
 func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
+	// 用户鉴权
 	u := s.authUser(r)
 	if u == nil {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
+	// 解析请求参数
 	var req struct {
 		TargetType   string            `json:"target_type"`  // text | ticket
 		TicketID     int64             `json:"ticket_id"`    // 工单 ID（ticket 类型必填）
@@ -52,6 +54,7 @@ func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
+	// 校验反馈内容
 	content := strings.TrimSpace(req.Content)
 	if content == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请填写反馈意见"})
@@ -66,11 +69,13 @@ func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 429, map[string]interface{}{"success": false, "message": "今日反馈已达上限，请明天再试"})
 		return
 	}
+	// 默认反馈类型为文本
 	targetType := req.TargetType
 	if targetType != "text" && targetType != "ticket" {
 		targetType = "text"
 	}
 
+	// 构建反馈记录
 	f := &store.Feedback{
 		TenantID:    u.TenantID,
 		UserID:      u.ID,
@@ -90,6 +95,7 @@ func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		f.TicketID = t.ID
 		if req.WithContext {
+			// 读取工单上下文：源文和译文
 			f.SourceText = t.SourceText
 			var payload struct {
 				Translations map[string]string `json:"translations"`
@@ -115,6 +121,7 @@ func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
 		f.SourceText = ""
 		f.Translations = ""
 	}
+	// 创建反馈记录
 	if err := s.Store.CreateFeedback(f); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return

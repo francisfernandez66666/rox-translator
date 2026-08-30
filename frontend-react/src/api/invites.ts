@@ -3,11 +3,14 @@
 // 职责：自助注册邀请码的查询与生成
 // ============================================================================
 
-import { request, authHeaders, type AdminResp } from './core'
+/**
+ * api/invites.ts · 职责说明
+ * 封装自助注册邀请码的管理接口，包括：
+ * - 邀请码列表：获取当前租户的邀请码列表
+ * - 邀请码生成：创建新的邀请码，可绑定租户或留空新建租户
+ */
 
-// ============ 本文件职责中文说明 ============
-// 封装自助注册邀请码的查询与生成等接口
-// ========================================
+import { request, authHeaders, type AdminResp } from './core'
 
 /** 获取自助注册邀请码列表 */
 export async function inviteCodes(): Promise<AdminResp> {

@@ -26,15 +26,18 @@ import (
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（multipart 文件，xlsx/xls/csv）。
 // 返回: success=true 时携带 added（写入行×语言数）/skipped（空源文或失败跳过数）。
 func (s *Server) handleImportBitext(w http.ResponseWriter, r *http.Request) {
+	// 鉴权：需部门管理员及以上权限
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 检查知识库是否已加载
 	if s.DB == nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "翻译技能未加载（未传入 -kb）"})
 		return
 	}
+	// 保存上传的对照表文件
 	savePath, err := s.saveUploadedFile(r)
 	if err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文件上传失败"})
@@ -42,6 +45,7 @@ func (s *Server) handleImportBitext(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.Remove(savePath) // 用完即删（对照表不落库留痕）
 
+	// 解析对照表文件（复用 KB 解析逻辑）
 	records, allCols, err := kb.ParseKBFile(savePath)
 	if err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "解析失败: " + err.Error()})
@@ -54,8 +58,9 @@ func (s *Server) handleImportBitext(w http.ResponseWriter, r *http.Request) {
 
 	tid := s.effTenant(r, u)
 	added, skipped := 0, 0
+	// 逐行解析并写入翻译记忆库
 	for _, rec := range records {
-		// 源文本：识别到的源列优先（zh/source/src），否则取第一列
+		// 提取源文本：识别到的源列优先（zh/source/src），否则取第一列
 		src := ""
 		for _, col := range allCols {
 			if isSourceCol(col) {
@@ -71,7 +76,7 @@ func (s *Server) handleImportBitext(w http.ResponseWriter, r *http.Request) {
 			skipped++
 			continue
 		}
-		// 目标语言列 → 逐语言写入 TM
+		// 提取各语言列的译文
 		trans := map[string]string{}
 		for _, col := range allCols {
 			if isSourceCol(col) {
@@ -99,6 +104,7 @@ func (s *Server) handleImportBitext(w http.ResponseWriter, r *http.Request) {
 			added++
 		}
 	}
+	// 记录审计日志
 	s.Store.LogAudit(tid, u.ID, "bitext_import", "tm_segments", strconv.Itoa(added))
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "added": added, "skipped": skipped,

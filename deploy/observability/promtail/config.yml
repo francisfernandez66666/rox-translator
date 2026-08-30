@@ -1,0 +1,59 @@
+# Promtail 配置：采集翻译助手日志与指标，推送至 Loki（多实例按 trace_id 串联）。
+# 前置：安装 Loki + Promtail（或 Grafana Alloy），将本文件作为 --config.file 加载。
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /var/lib/promtail/positions.yaml
+
+clients:
+  - url: http://127.0.0.1:3100/loki/api/v1/push   # 改为你的 Loki 地址
+
+scrape_configs:
+  # ---- 应用 JSON 日志（slog JSON，已带 trace_id/tenant_id/user_id）----
+  - job_name: translator-app
+    static_configs:
+      - targets: ['localhost']
+        labels:
+          job: translator
+          __path__: /opt/translator/logs/*.log
+    pipeline_stages:
+      # 提取 JSON 字段为标签，便于 Loki 按 trace_id/tenant_id 检索
+      - json:
+          expressions:
+            trace_id: trace_id
+            tenant_id: tenant_id
+            user_id: user_id
+            level: level
+            msg: msg
+      - labels:
+          trace_id:
+          tenant_id:
+          level:
+
+  # ---- Caddy 访问日志（关联 trace_id 打通全链路）----
+  - job_name: translator-caddy
+    static_configs:
+      - targets: ['localhost']
+        labels:
+          job: caddy
+          __path__: /var/log/caddy/translator.access.log
+
+  # ---- Prometheus 指标直采（可选：若不走独立 Prometheus，由 Promtail 推送）----
+  - job_name: translator-metrics
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['127.0.0.1:8787']
+    pipeline_stages:
+      - metrics:
+          translator_http_requests_total:
+            type: Counter
+            description: "HTTP 请求总数"
+            source: translator_http_requests_total
+          translator_translations_total:
+            type: Counter
+            description: "翻译调用总数"
+            source: translator_translations_total
+      - labels:
+          service: translator-saas

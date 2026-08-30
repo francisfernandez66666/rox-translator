@@ -49,16 +49,19 @@ func (s *Server) startMemoryMonitor() {
 	}
 	// 启动后台协程：按配置周期采样内存并检测压力阈值
 	go func() {
+		// 读取采样周期配置（默认 60 秒）
 		interval := 60
 		if v, _ := s.Store.GetConfig("mem_monitor_interval_sec"); v != "" {
 			if n, err := parseInt(v); err == nil && n > 0 {
 				interval = n
 			}
 		}
+		// 周期为 0 时关闭监控
 		if interval <= 0 {
 			log.Println("内存监控已关闭（mem_monitor_interval_sec=0）")
 			return
 		}
+		// 读取内存压力阈值配置（默认 85%）
 		pressurePct := 85
 		if v, _ := s.Store.GetConfig("mem_pressure_pct"); v != "" {
 			if n, err := parseInt(v); err == nil && n > 0 {
@@ -67,6 +70,7 @@ func (s *Server) startMemoryMonitor() {
 		}
 		// 启动先采样一次建立基线
 		runMemorySample(pressurePct, s.Store.CreateAlert)
+		// 按周期定时采样
 		ticker := time.NewTicker(time.Duration(interval) * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {

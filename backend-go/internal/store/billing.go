@@ -1,5 +1,6 @@
-// ============ 本文件职责中文说明 ============
-// 计费域数据访问层：租户余额账本（balance_accounts）、用量明细（usage_ledger）、
+// ============ billing.go · 职责说明 ============
+// store 包计费域数据访问层。
+// 租户余额账本（balance_accounts）、用量明细（usage_ledger）、
 // 单价表（rate_card）、充值订单（orders/payments）与发票（invoices）。
 // 核心业务逻辑：充值/扣减余额（不足抛 ErrInsufficientBalance）、按单价计量并扣费、
 // 订单支付确认、退款、开具发票等。

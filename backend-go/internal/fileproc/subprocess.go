@@ -1,11 +1,11 @@
-// ============ 本文件职责中文说明 ============
-// 文档转换子进程统一执行器（2026-08-26 整改 D1）：
+// ============ subprocess.go · 职责说明 ============
+// fileproc 包文档转换子进程统一执行器。
 // 此前 pdfwrite.go 三处 exec.Command + CombinedOutput 无超时、不分离输出、
 // 取消不杀进程——pdf2docx/LibreOffice 任一挂死即永久占用容量=1 的资源闸，
-// 全站文件管线停摆（死锁单点）；CombinedOutput 无界缓存还有 OOM 面。
+// 全站文件管线停摆（死锁单点）；CombinedOutput 无界缓存还有内存溢出风险。
 // 本执行器提供：分级超时、独立进程组整组击杀、WaitDelay 排空兜底、
 // stdout/stderr 各 4MB 限量捕获、可取消的闸门排队。
-// ========================================
+// =============================================
 package fileproc
 
 import (
@@ -63,7 +63,7 @@ func (w *limitedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// acquireProcGateCtx 可取消地获取转换名额（整改 D1：工单取消后不再无限排队占位）。
+// acquireProcGateCtx 可取消地获取转换名额（工单取消后不再无限排队占位）。
 // 返回释放函数；ctx 已取消时返回 no-op（未获得名额无需释放）。
 func acquireProcGateCtx(ctx context.Context) func() {
 	g := procGateChan()
@@ -114,8 +114,8 @@ func runSubprocess(ctx context.Context, timeout time.Duration, bin string, args 
 	return outBuf.b.Bytes(), errBuf.b.Bytes(), err
 }
 
-// sweepStalePdfDocxCache 清扫超过 24h 的 pdfdocx_*.docx 崩溃残留
-// （整改 D1：ExtractTextsPdfDocx 每次创建缓存前顺带执行，成本一次目录遍历）。
+// sweepStalePdfDocxCache 清扫超过 24h 的 pdfdocx_*.docx 崩溃残留。
+// ExtractTextsPdfDocx 每次创建缓存前顺带执行，成本一次目录遍历。
 func sweepStalePdfDocxCache() {
 	tmp := os.TempDir()
 	entries, err := os.ReadDir(tmp)

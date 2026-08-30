@@ -26,11 +26,13 @@ import (
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。
 // 返回: success=true 时携带 plans 数组（仅上架包）与 trial_sentences（默认试用句数）。
 func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
+	// 查询所有上架的商业包
 	pkgs, err := s.Store.ListEnabledCommercialPackages()
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 读取默认试用句数配置（默认 100 句）
 	trial := int64(100)
 	if v, _ := s.Store.GetConfig("trial_sentences"); v != "" {
 		if n, e := parseInt64(v); e == nil && n > 0 {

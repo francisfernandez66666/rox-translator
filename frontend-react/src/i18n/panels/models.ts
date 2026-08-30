@@ -1,8 +1,7 @@
-// ============ 本文件职责中文说明 ============
-// 模型配置面板 i18n 键
-// =============================================
-// panels/models.ts — 模型/路由/策略/分阶段模型配置面板 i18n 键（中英）
+// ============ panels/models.ts · 职责说明 ============
+// 模型/路由/策略/分阶段模型配置面板 i18n 键
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
+// =============================================
 export const zh: Record<string, string> = {
   // ---- 在线模型配置 ----
   'models.title': '模型配置',
@@ -77,14 +76,14 @@ export const zh: Record<string, string> = {
 
 // 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
-  // ---- Online model config ----
+  // ---- 在线模型配置 ----
   'models.title': 'Model Configuration',
   'models.onlineTitle': 'Online Model',
   'models.apiBase': 'API Base URL',
   'models.apiKey': 'API Key (leave blank to keep unchanged)',
   'models.modelName': 'Model Name',
   'models.saveModel': 'Save Model',
-  // ---- Model routing policy ----
+  // ---- 模型路由策略 ----
   'models.routingTitle': 'Model Routing Policy',
   'models.routingHint': 'Multi-provider routing: pick the main model by weight, fall back in descending weight order on failure. Leave empty to use the single-provider Online* config.',
   'models.providerPlaceholder': 'Provider (siliconflow/bigmodel…)',
@@ -97,7 +96,7 @@ export const en: Record<string, string> = {
   'models.saveRoutes': 'Save Routes',
   'models.routesActive': 'Active: {count} route(s) (main model {main})',
   'models.routesNone': 'Not configured; using platform default single provider',
-  // ---- Policy parameters ----
+  // ---- 策略参数 ----
   'models.policyTitle': 'Policy Parameters',
   'models.highSim': 'Similarity threshold high_sim',
   'models.medSim': 'Similarity threshold med_sim',
@@ -113,7 +112,7 @@ export const en: Record<string, string> = {
   'models.savedModels': 'Model configuration saved',
   'models.savedPolicy': 'Policy saved',
   'models.savedRoutes': 'Routes saved and applied',
-  // ---- Per-stage model config ----
+  // ---- 分阶段模型配置 ----
   'models.stageTitle': 'Stage Model Configuration',
   'models.stageHint': 'Set an independent model per workflow stage (overrides global/routing). Leave api_base and model blank to fall back to global/routing for that stage. Leave api_key blank to inherit the global default key.',
   'models.stageKbMatch': 'KB fallback (kb_match)',
@@ -130,7 +129,7 @@ export const en: Record<string, string> = {
   'models.stageNone': 'No independent stage models configured; all use global/routing',
   'models.onlineHint': 'Tenant admins can configure their own model (BYOK); super admins configure platform global. Supports any OpenAI-compatible endpoint (ChatGPT/Gemini/DeepSeek, etc.).',
   'models.presetPlaceholder': 'Pick a provider preset…',
-  // ---- LLM keys (translation/tickets + KB vectors; super admin only) ----
+  // ---- LLM 密钥（翻译/工单任务 + KB 向量重建，仅超管） ----
   'models.llmKeyTitle': 'LLM Keys (Translation/Tickets + KB Vectors)',
   'models.llmKeyHint': 'Translation/ticket tasks use the "Online Model" API Key above; KB vector rebuild uses the Embedding Key below. Both are super-admin only, stored encrypted, applied instantly and persisted across restarts.',
   'models.translationKeyLabel': 'Translation/Ticket Key',
