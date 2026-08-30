@@ -495,7 +495,7 @@ export const baseEn: Record<string,string> = {
   'login.pwdShort': 'Password too short',
   'org.move': 'Move',
   'org.typePlatform': 'Platform',
-  'pwd.codeNoop': 'Send code first',
+  'pwd.codeNoop': 'Code generated (test mode, check server log)',
   'pwd.sendFail': 'Failed to send code',
   'register.fail': 'Register failed',
   'tk.deleteConfirm': 'Delete this job?',

@@ -76,13 +76,15 @@ func (s *Server) sendEmailCode(ip, email string) (bool, string, bool) {
 	emailCodes.codes[key] = &emailCode{Code: code, ExpiresAt: now.Add(emailCodeTTL), SentAt: now}
 	emailCodes.mu.Unlock()
 
-	sender := s.mailer()
-	_, isNoop := sender.(*mail.NoopSender)
+	_, isNoop := s.mailer().(*mail.NoopSender)
 	err = s.sendTemplatedMail(key, "register_code", map[string]string{"code": code})
 	if err != nil {
 		return false, "邮件发送失败，请稍后重试", isNoop
 	}
-	return true, "验证码已发送，请查收邮箱", isNoop
+	if isNoop {
+		return true, "验证码已生成（测试模式，请查看服务端日志）", true
+	}
+	return true, "验证码已发送，请查收邮箱", false
 }
 
 // verifyEmailCode 校验并一次性消费验证码；错误尝试超限作废。

@@ -498,7 +498,7 @@ export const baseZh: Record<string,string> = {
   'login.pwdShort': '密码至少 6 位',
   'org.move': '移动',
   'org.typePlatform': '平台',
-  'pwd.codeNoop': '请先发送验证码',
+  'pwd.codeNoop': '验证码已生成（测试模式，请查看服务端日志）',
   'pwd.sendFail': '验证码发送失败',
   'register.fail': '注册失败',
   'tk.deleteConfirm': '确认删除该工单？',
