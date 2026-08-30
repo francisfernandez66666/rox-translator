@@ -1,6 +1,6 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-08-30（全量中文注释 + 支付回调安全修复 + 广州服务器部署验证通过）｜ 与生产一致（main 分支）
+> 最后更新：2026-08-30（全量中文注释 + 支付回调安全修复 + 部署验证通过）｜ 与生产一致（main 分支）
 
 ## 〇、全仓端到端评审整改 + 黑盒 UAT（第四批）
 
@@ -90,11 +90,11 @@
 
 **明确不做（当前过度设计）**：Redis Cluster / etcd / gRPC Sidecar / K8s 微服务拆分 / 多区域；SSO/SCIM/白标/CAT 插件/混沌工程/SDK 自动发布流水线——等具体企业客户或规模化运维诉求出现再做。
 
-## 〇-H、广州服务器部署 + 全量注释 + 安全修复（2026-08-30）
+## 〇-H、部署验证 + 全量注释 + 安全修复（2026-08-30）
 
 | 块 | 内容 |
 |---|---|
-| **广州服务器部署** | 交叉编译 Linux 二进制 → scp → 备份旧版 → 替换 → 重启；验证通过（健康检查/翻译/OpenAPI/管理后台/前端加载/PostgreSQL 连接均正常） |
+| **生产部署验证** | 交叉编译 Linux 二进制 → scp → 备份旧版 → 替换 → 重启；验证通过（健康检查/翻译/OpenAPI/管理后台/前端加载/PostgreSQL 连接均正常） |
 | **支付回调安全修复** | `handlePayNotify` X-Admin-Token 校验从仅 mock 渠道改为所有渠道统一校验（修复前 wechat/alipay 无凭证可探测订单存在性） |
 | **tickets_pkey 序列修复** | PostgreSQL 序列与 tickets 表最大 ID 不同步导致异步任务创建失败，`setval` 修复 |
 | **全量中文注释** | Go 后端 146 个文件 + 前端 75 个文件全量添加/标准化中文注释（文件职责说明块 + 导出函数注释 + 行内注释） |
@@ -112,7 +112,7 @@
 | 项 | 值 |
 |----|-----|
 | 生产域名 | **https://langcross.lexicorn.cn**（2026-08-24 起，旧域名已下线） |
-| 服务器 | 43.108.86.140（阿里云广州；内存紧张，按 **≤1G 有效可用** 调优：GOMEMLIMIT=650Mi、MemoryMax=950M、worker=2） |
+| 服务器 | 43.108.86.140（阿里云；内存紧张，按 **≤1G 有效可用** 调优：GOMEMLIMIT=650Mi、MemoryMax=950M、worker=2） |
 | 服务 | `translator.service`（Go 单二进制，/status 返回 v3, ok:true）；前端已切换为 React + TDesign（frontend/ 旧 Vue 栈已下线） |
 | 反代 | Caddy（自动 HTTPS），配置片段 `/etc/caddy/translator.conf` |
 | 数据库 | PostgreSQL 16 + pgvector 0.6.0（同机自建，非托管 RDS）；历史 SQLite 保留于 `/opt/translator/data/backups/` |
