@@ -53,7 +53,7 @@ func (q *DirectQueue) Reserve(ctx context.Context, workerID string, leaseSec int
 	// ⚠️ 历史缺陷（2026-08-23 E2E 发现）：占位符 4 个仅绑定 3 个参数（updated_at 被误绑
 	// 租约时间、子查询无参可绑），驱动报参数不足 → Reserve 永远空手 → 工单永久滞留 queued。
 	// 已修正为按序绑定：leased_by / leased_at / updated_at / 租约阈值。
-	res, err := q.db.ExecContext(ctx, `
+	res, err := db.ExecContext(ctx, q.db, db.CurrentDialect(), `
 		UPDATE jobs SET status='running', leased_by=?, leased_at=?, attempts=attempts+1, updated_at=?
 		WHERE id = (
 			SELECT id FROM jobs
@@ -80,7 +80,7 @@ func (q *DirectQueue) Reserve(ctx context.Context, workerID string, leaseSec int
 
 // MarkDone 标记任务完成。
 func (q *DirectQueue) MarkDone(ctx context.Context, jobID int64) error {
-	_, err := q.db.ExecContext(ctx,
+	_, err := db.ExecContext(ctx, q.db, db.CurrentDialect(),
 		"UPDATE jobs SET status='done', error='', updated_at=? WHERE id=?", Now().Format(time.RFC3339), jobID)
 	return err
 }
@@ -90,7 +90,7 @@ func (q *DirectQueue) MarkDone(ctx context.Context, jobID int64) error {
 // 两语句无事务，与巡检 RecoverStale/其他 worker 并发时基于过期计数决策，
 // 可能把该 dead 的毒丸反复回队或覆盖他方刚写入的状态。
 func (q *DirectQueue) MarkFailed(ctx context.Context, jobID int64, errMsg string) error {
-	_, err := q.db.ExecContext(ctx,
+	_, err := db.ExecContext(ctx, q.db, db.CurrentDialect(),
 		"UPDATE jobs SET status=(CASE WHEN attempts>=max_attempts THEN 'dead' ELSE 'queued' END), "+
 			"error=?, updated_at=? WHERE id=?",
 		errMsg, Now().Format(time.RFC3339), jobID)
@@ -100,7 +100,7 @@ func (q *DirectQueue) MarkFailed(ctx context.Context, jobID int64, errMsg string
 // RecoverStale 回收中断任务（服务启动/巡检调用）：running 且租约过期 → queued。
 func (q *DirectQueue) RecoverStale(ctx context.Context) (int64, error) {
 	leaseUntil := Now().Add(-time.Duration(DefaultLeaseSec) * time.Second).Format(time.RFC3339)
-	res, err := q.db.ExecContext(ctx,
+	res, err := db.ExecContext(ctx, q.db, db.CurrentDialect(),
 		"UPDATE jobs SET status='queued', leased_by='', leased_at='', updated_at=? WHERE status='running' AND leased_at<=?",
 		Now().Format(time.RFC3339), leaseUntil)
 	if err != nil {

@@ -115,6 +115,9 @@ func (s *TicketService) workerLoop(workerID string) {
 		job, err := s.Queue.Reserve(ctx, workerID, queue.DefaultLeaseSec)
 		cancel()
 		if err != nil || job == nil {
+			if err != nil {
+				log.Printf("[worker] 领取任务出错 worker=%s err=%v", workerID, err)
+			}
 			time.Sleep(1 * time.Second)
 			continue
 		}

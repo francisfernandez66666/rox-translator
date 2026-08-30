@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"strconv"
 	"strings"
@@ -9,6 +10,11 @@ import (
 // Execer 可执行写操作的连接或事务（*sql.DB / *sql.Tx 均满足）。
 type Execer interface {
 	Exec(query string, args ...interface{}) (sql.Result, error)
+}
+
+// ContextExecer 可执行带上下文写操作的连接或事务（*sql.DB / *sql.Tx 均满足）。
+type ContextExecer interface {
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
 }
 
 // Querier 可查询的连接或事务（*sql.DB / *sql.Tx 均满足）。
@@ -65,6 +71,14 @@ func Exec(e Execer, d Dialect, query string, args ...interface{}) (sql.Result, e
 		query = pgTranslate(query)
 	}
 	return e.Exec(query, args...)
+}
+
+// ExecContext 按方言执行带上下文的写操作，连接或事务通用。PostgreSQL 下自动改写占位符。
+func ExecContext(ctx context.Context, e ContextExecer, d Dialect, query string, args ...interface{}) (sql.Result, error) {
+	if d == DialectPostgres {
+		query = pgTranslate(query)
+	}
+	return e.ExecContext(ctx, query, args...)
 }
 
 // Query 按方言执行查询，连接或事务通用。PostgreSQL 下自动翻译 DDL 并改写占位符。
