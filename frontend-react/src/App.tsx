@@ -4,6 +4,7 @@
 // 头部：品牌 / 双 Tab / 余额徽标(pkgLine) / Bell / 语言切换 / 账号菜单
 //       （改密、绑邮箱、注销、退出、进入后台）。meContext 无邮箱时强制绑定弹窗。
 // ============================================================================
+// 依赖引入：React 基础 Hooks、TDesign 组件、API/状态/i18n 模块与各类页面/组件
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Tag, Drawer } from 'tdesign-react'
 import { myPackage, meContext } from '@/api'
@@ -35,6 +36,7 @@ import Login from './components/Login'
 
 import ChatWindow from './components/ChatWindow'
 import TicketsPage from './components/TicketsPage'
+import EditorPage from './components/EditorPage'
 import Bell from './components/Bell'
 import AdminDashboard from './components/admin/AdminDashboard'
 import AccountMenu from './components/AccountMenu'
@@ -63,8 +65,14 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
   const { user, logout } = useAuth()
   // 当前语言与翻译函数
   const [lang, t] = useT()
-  // 当前顶部 Tab：工作台或工单
-  const [tab, setTab] = useState<'workbench' | 'tickets'>(window.location.pathname.startsWith('/tickets') ? 'tickets' : 'workbench')
+  // 当前顶部 Tab：工作台 / 工单 / 对照编辑
+  const [tab, setTab] = useState<'workbench' | 'tickets' | 'editor'>(
+    window.location.pathname.startsWith('/tickets')
+      ? 'tickets'
+      : window.location.pathname.startsWith('/editor')
+        ? 'editor'
+        : 'workbench',
+  )
   // 端用户自服务路径（余额 / 我的邀请 / 我的套餐 / 我的账号）
   const path = usePath()
   function navigate(to: string) {
@@ -107,9 +115,9 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
   }, [user])
 
   // 切换顶部 Tab 并同步浏览器历史路径
-  function switchTab(to: 'workbench' | 'tickets') {
+  function switchTab(to: 'workbench' | 'tickets' | 'editor') {
     setTab(to)
-    const target = to === 'tickets' ? '/tickets' : '/'
+    const target = to === 'tickets' ? '/tickets' : to === 'editor' ? '/editor' : '/'
     if (window.location.pathname !== target) window.history.pushState({}, '', target)
   }
 
@@ -146,6 +154,8 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
                 onClick={() => switchTab('workbench')}>💬 {t('app.tabWorkbench')}</Button>
         <Button variant={tab === 'tickets' ? 'base' : 'text'} theme="primary" size="small"
                 onClick={() => switchTab('tickets')}>📋 {t('app.tabTickets')}</Button>
+        <Button variant={tab === 'editor' ? 'base' : 'text'} theme="primary" size="small"
+                onClick={() => switchTab('editor')}>✍️ 对照编辑</Button>
         <div style={{ flex: 1 }} />
         {!!pkgLine && <Tag theme="primary" variant="light">{pkgLine}</Tag>}
         {canUploadKb && (
@@ -171,7 +181,7 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
           : path === '/invites' ? <ReferralPanel />
           : path === '/packages' ? <MyPackagePanel />
           : path === '/my' ? <AccountPanel />
-          : tab === 'tickets' ? <TicketsPage /> : <ChatWindow />}
+          : tab === 'tickets' ? <TicketsPage /> : tab === 'editor' ? <EditorPage /> : <ChatWindow />}
       </div>
 
       {/* 侧边隐藏菜单：原前台页脚内容收入此处（汉堡按钮唤起） */}

@@ -362,6 +362,23 @@ func (s *Store) migrate() error {
 			created_at TEXT,
 			updated_at TEXT
 		)`,
+		// ---------- translation_edits 对照编辑器（逐段编辑/通过/驳回批注） ----------
+		`CREATE TABLE IF NOT EXISTS translation_edits (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id INTEGER NOT NULL DEFAULT 0,         -- 所属租户 ID
+			ticket_id INTEGER NOT NULL DEFAULT 0,         -- 关联工单 ID
+			lang TEXT NOT NULL DEFAULT '',                -- 目标语言
+			seg_index INTEGER NOT NULL DEFAULT 0,         -- 段序号（与源文分段对齐）
+			source_text TEXT NOT NULL DEFAULT '',          -- 源文段落
+			target_text TEXT NOT NULL DEFAULT '',          -- 当前译文（系统产出）
+			edited_text TEXT NOT NULL DEFAULT '',          -- 用户修订译文（未编辑为空）
+			status TEXT NOT NULL DEFAULT 'pending',        -- pending/approved/rejected
+			note TEXT NOT NULL DEFAULT '',                 -- 驳回/批注说明
+			reviewer_id INTEGER NOT NULL DEFAULT 0,        -- 操作人 ID
+			created_at TEXT,
+			updated_at TEXT
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_translation_edits_uniq ON translation_edits(ticket_id, lang, seg_index)`,
 		// ---------- notifications 站内信（通用通知中心） ----------
 		`CREATE TABLE IF NOT EXISTS notifications (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

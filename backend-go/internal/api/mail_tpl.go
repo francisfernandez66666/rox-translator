@@ -9,6 +9,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -205,15 +206,12 @@ func renderMailTpl(tpl MailTpl, data map[string]string) *mail.Message {
 }
 
 // sendTemplatedMail 按模板发送邮件（自动套用当前生效模板并渲染占位符）。
-// 参数 to=收件人；code=模板标识；data=占位符数据。返回发送错误（Noop 模式不报错）。
+// 改为异步：投递到任务队列由 worker 发送（失败自动重试/死信），避免 SMTP 阻塞注册/重置流程。
+// 返回错误仅在「入队与同步降级均失败」时出现（极少见）。
 func (s *Server) sendTemplatedMail(to, code string, data map[string]string) error {
 	msg := renderMailTpl(s.getMailTpl(code), data)
 	msg.To = to
-	if err := s.mailer().Send(msg); err != nil {
-		log.Printf("[mail] 发送失败 to=%s tpl=%s err=%v", to, code, err)
-		return err
-	}
-	return nil
+	return s.enqueueMail(msg, false)
 }
 
 // sendManualEmail 注册成功后给新用户发送《产品手册》PDF 邮件（附件为你提供的产品手册 PDF 文件）。
@@ -234,16 +232,36 @@ func (s *Server) sendManualEmail(to, username string) error {
 		msg.Attachments = []mail.Attachment{{Name: "产品手册.pdf", Data: pdf}}
 	}
 	msg.To = to
-	if err := s.infoMailer().Send(msg); err != nil {
-		log.Printf("[mail] 手册邮件发送失败 to=%s err=%v", to, err)
+	if err := s.enqueueMail(msg, true); err != nil {
 		return err
 	}
 	if path != "" {
-		log.Printf("[mail] 手册邮件已发送 to=%s (附件PDF <- %s, %d字节)", to, path, len(pdf))
+		log.Printf("[mail] 手册邮件已入队 to=%s (附件PDF <- %s, %d字节)", to, path, len(pdf))
 	} else {
-		log.Printf("[mail] 手册邮件已发送 to=%s (无附件PDF)", to)
+		log.Printf("[mail] 手册邮件已入队 to=%s (无附件PDF)", to)
 	}
 	return nil
+}
+
+// enqueueMail 异步投递邮件：优先入队由 worker 发送；队列不可用时降级为同步发送，
+// 确保注册/重置等关键流程在极端情况下仍可发出邮件（不静默丢失）。
+func (s *Server) enqueueMail(msg *mail.Message, useInfo bool) error {
+	if s.TicketSvc != nil && s.TicketSvc.Queue != nil {
+		if _, err := s.TicketSvc.EnqueueMail(context.Background(), msg, useInfo); err != nil {
+			log.Printf("[mail] 入队失败（降级同步发送） to=%s err=%v", msg.To, err)
+			return s.syncSendMail(msg, useInfo)
+		}
+		return nil
+	}
+	return s.syncSendMail(msg, useInfo)
+}
+
+// syncSendMail 同步发送邮件（enqueueMail 的降级路径）。
+func (s *Server) syncSendMail(msg *mail.Message, useInfo bool) error {
+	if useInfo {
+		return s.infoMailer().Send(msg)
+	}
+	return s.mailer().Send(msg)
 }
 
 // loadManualPDF 按优先级读取产品手册 PDF 文件，返回内容、命中路径。

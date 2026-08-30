@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"translator/internal/auth"
+	apierrors "translator/internal/errors"
 	"translator/internal/mail"
 	"translator/internal/store"
 )
@@ -56,12 +57,12 @@ type resetCode struct {
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// 暴力破解防护：同一 IP 连续失败超过阈值后进入冷却期
 	if s.loginLocked(r) {
-		writeJSON(w, 429, map[string]interface{}{"success": false, "message": "登录尝试过于频繁，请稍后再试"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "登录尝试过于频繁，请稍后再试"))
 		return
 	}
 	// 平台存储未初始化时拒绝登录
 	if s.Store == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "平台存储未初始化"))
 		return
 	}
 	var req struct {
@@ -69,7 +70,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"` // 登录密码（明文，内部比对哈希）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 先按当前请求上下文租户查用户；未命中则跨租户匹配
@@ -79,7 +80,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// 未在默认租户命中：跨租户全局匹配（兼容平台级账号与单租户唯一用户名）
 		matches, gerr := s.Store.GetUserByUsernameGlobal(req.Username)
 		if gerr != nil || len(matches) == 0 {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "用户名或密码错误"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "用户名或密码错误"))
 			return
 		}
 		// 优先平台超管账号（tenant_id=0，平台级账号可在任何租户入口登录）
@@ -96,7 +97,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		// 用户名在多个租户重复且非超管：拒绝登录，要求通过租户专属入口登录
 		if u == nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "用户名在多个租户重复，请通过租户入口登录"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "用户名在多个租户重复，请通过租户入口登录"))
 			return
 		}
 	}
@@ -106,17 +107,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if effective == store.UserDisabled || (u.Status == store.UserDeactivating && effective == store.UserDisabled) {
 		if u.Status == store.UserDeactivating {
 			s.Store.FinalizeDeactivation(u.ID, u.TenantID) // 宽限期届满：落停用态
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "账号已注销，如需恢复请联系管理员"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "账号已注销，如需恢复请联系管理员"))
 			return
 		}
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "账号已停用"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "账号已停用"))
 		return
 	}
 	// 密码校验：比对存储的 bcrypt 哈希（兼容历史 SHA-256）
 	if !auth.CheckPassword(u.PasswordHash, req.Password) {
 		// 暴力破解防护：记录失败次数
 		s.recordLoginFail(r)
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "用户名或密码错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "用户名或密码错误"))
 		return
 	}
 	// 历史哈希自动升级：登录成功后若仍为 SHA-256 格式，改写为 bcrypt
@@ -130,7 +131,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// 签发有效期 24 小时的 JWT
 	tok, err := auth.Sign(u, 24*time.Hour)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "签发失败"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "签发失败"))
 		return
 	}
 	// 记录最近登录时间
@@ -319,17 +320,17 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	// 生成 6 位数字验证码
 	code, err := genResetCode()
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "生成验证码失败"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "生成验证码失败"))
 		return
 	}
 	// 存储验证码（覆盖旧码，10 分钟有效）
 	resetCodes.Lock()
 	resetCodes.m[u.ID] = resetCode{Code: code, ExpiresAt: time.Now().Add(10 * time.Minute)}
 	resetCodes.Unlock()
-	// 发送邮件（失败不再静默：明确告知用户稍后重试）
+	// 发送邮件（改为异步入队：SMTP 失败由队列重试/死信吸收，不阻塞用户）
 	if serr := s.sendTemplatedMail(u.Email, "reset_code", map[string]string{"code": code}); serr != nil {
-		log.Printf("[mail] 密码重置验证码发送失败 to=%s err=%v", u.Email, serr)
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "邮件发送失败，请稍后重试或联系管理员"})
+		log.Printf("[mail] 密码重置验证码入队失败 to=%s err=%v", u.Email, serr)
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "邮件发送失败，请稍后重试或联系管理员"))
 		return
 	}
 	s.regGuard.record("pwd-forgot:" + ip) // 业务成功才计数（与 email-code 同款 allow/record 模式）

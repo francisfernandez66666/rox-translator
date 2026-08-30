@@ -3,6 +3,7 @@
 // 职责：authUser 状态、restoreSession（token→/api/auth/me）、roleLevel 四级判定、
 //       登录/登出收敛点（修复 Vue 版「无全局 401 收敛」的已知问题）。
 // ============================================================================
+// 依赖引入：React 基础 Hooks、API（会话校验/Token 读写）与 AuthUser 类型
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { authMe, setAuthToken, getAuthToken } from '@/api'
@@ -21,6 +22,7 @@ export function roleLevel(r?: string): number {
   return 1
 }
 
+// AuthCtx 认证上下文对外暴露的状态与方法类型定义
 interface AuthCtx {
   user: AuthUser | null
   restoring: boolean
@@ -29,6 +31,7 @@ interface AuthCtx {
   logout: () => void
 }
 
+// AuthContext 默认值：初始处于「恢复中」状态、未登录，方法为空实现
 const Ctx = createContext<AuthCtx>({ user: null, restoring: true, onLogin: () => {}, logout: () => {} })
 
 /** 认证状态 Provider：管理登录态、会话恢复，以及登录/登出的统一收敛点

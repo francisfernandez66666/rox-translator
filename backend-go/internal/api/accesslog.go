@@ -14,6 +14,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"translator/internal/errors"
 )
 
 // accessLogEntry 访问日志单条记录（JSON 序列化）。
@@ -26,6 +28,21 @@ type accessLogEntry struct {
 	DurationMS float64 `json:"duration_ms"` // 处理耗时（毫秒）
 	IP         string  `json:"ip"`          // 客户端 IP
 	Bytes      int64   `json:"bytes"`       // 响应字节数
+	TraceID    string  `json:"trace_id"`    // 链路追踪 ID（全链路定位）
+}
+
+// withTraceID 链路追踪中间件：从 X-Trace-ID 头读取或新生成 trace_id，
+// 注入 context 并回写响应头，供下游结构化日志与错误响应携带。
+func (s *Server) withTraceID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid := r.Header.Get("X-Trace-ID")
+		if tid == "" {
+			tid = errors.GenTraceID()
+		}
+		w.Header().Set("X-Trace-ID", tid)
+		ctx := errors.WithTraceID(r.Context(), tid)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // statusWriter 包装 ResponseWriter 以捕获状态码与字节数。
@@ -65,6 +82,7 @@ func (s *Server) withAccessLog(next http.Handler) http.Handler {
 			DurationMS: float64(time.Since(start).Microseconds()) / 1000.0,
 			IP:         clientIP(r),
 			Bytes:      sw.bytes,
+			TraceID:    errors.TraceIDFromContext(r.Context()),
 		}
 		b, err := json.Marshal(entry)
 		if err == nil {

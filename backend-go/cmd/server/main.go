@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"flag"
 	"log"
+	"log/slog"
 	"math/big"
 	"net/http"
 	httppprof "net/http/pprof" // 注册 pprof Handler（仅经下方独立回环监听器暴露，外网不可达）
@@ -30,6 +31,7 @@ import (
 	"translator/internal/evals"
 	"translator/internal/kb"
 	"translator/internal/llm"
+	"translator/internal/observability"
 	"translator/internal/store"
 	"translator/internal/tenant"
 
@@ -46,6 +48,8 @@ func main() {
 	if os.Getenv("GOMEMLIMIT") == "" {
 		debug.SetMemoryLimit(650 << 20)
 	}
+	// ★ 结构化日志（工作流 C）：以 slog JSON 日志器替换默认 logger，全链路带 trace_id。
+	slog.SetDefault(observability.NewLogger())
 	// 命令行参数：监听地址、前端静态目录、KB 向量索引与 KB 缓存库路径
 	addr := flag.String("addr", ":8787", "HTTP 监听地址")
 	frontend := flag.String("frontend", "", "前端 dist 目录（默认相对路径 ./frontend/dist）")

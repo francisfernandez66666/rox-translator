@@ -12,6 +12,8 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"translator/internal/mail"
 )
 
 // Job 异步任务（jobs 表一行）。
@@ -58,6 +60,28 @@ func ParseTicketPayload(b []byte) (int64, error) {
 		return 0, err
 	}
 	return p.TicketID, nil
+}
+
+// MailPayload 邮件异步任务的载荷约定（直接复用 mail.Message，json 自动 base64 编码附件）。
+type MailPayload struct {
+	To          string           `json:"to"`
+	CC          string           `json:"cc"`
+	Subject     string           `json:"subject"`
+	Body        string           `json:"body"`
+	Attachments []mail.Attachment `json:"attachments,omitempty"`
+	UseInfo     bool             `json:"use_info"` // true=使用 info 专用邮箱发送
+}
+
+// NewMailPayload 由 mail.Message 构造邮件任务载荷。
+func NewMailPayload(m *mail.Message, useInfo bool) []byte {
+	p := MailPayload{To: m.To, CC: m.CC, Subject: m.Subject, Body: m.Body, UseInfo: useInfo, Attachments: m.Attachments}
+	b, _ := json.Marshal(p)
+	return b
+}
+
+// ToMailMessage 还原为 mail.Message（供 worker 发送）。
+func (p MailPayload) ToMailMessage() *mail.Message {
+	return &mail.Message{To: p.To, CC: p.CC, Subject: p.Subject, Body: p.Body, Attachments: p.Attachments}
 }
 
 // 默认参数。

@@ -3,6 +3,7 @@
 // 职责：后台用户视图、租户列表与切换器（X-Tenant-ID）、面板路由（无 vue-router，
 //       沿用 pathname 手搓路由语义）、gotoFeedbackPanel 跨组件跳转。
 // ============================================================================
+// 依赖引入：React 基础 Hooks、API（租户/组织/邀请开关）、认证与 i18n 模块
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { tenantList as apiTenantList, tenantInviteEnabledGet, setActiveTenantId, getActiveTenantId } from '@/api'
@@ -78,6 +79,7 @@ interface AdminCtx {
   consumeFeedback: () => number
 }
 
+// AdminContext 默认值：所有状态/方法提供安全的空实现，避免未初始化时访问报错
 const Ctx = createContext<AdminCtx>({
   myLevel: 0, isAdmin: false, isDeptAdmin: false, isTenantAdmin: false, isSuper: false,
   roleOptions: [], tenants: [], activeTenantId: 0,

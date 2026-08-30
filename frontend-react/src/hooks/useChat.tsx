@@ -4,6 +4,7 @@
 // progress)、selectedLangs(chat_langs)、SSE 发送/停止(占位气泡收尾文案)、健康检查
 // （离线后 30×1s 重试循环、可停止）、清空消息。
 // ============================================================================
+// 依赖引入：React 基础 Hooks、API（SSE 流式聊天/文件翻译/健康检查）与 ChatMessage 类型
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { chatStream, translateFileStream, healthCheck } from '@/api'

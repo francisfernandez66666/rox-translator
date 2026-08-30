@@ -5,14 +5,17 @@
 // 品牌只由「访问域名」决定：根域名=平台品牌，租户专属子域=该租户品牌；
 // 支持服务端在 index.html 注入 window.__BRANDING__ 以首屏即生效、避免闪烁。
 // ============================================================================
+// 依赖引入：React 基础 Hooks（createContext/useContext/useEffect/useMemo/useState）与类型 ReactNode
 import { createContext, useContext, useEffect, useMemo, useState, ReactNode } from 'react'
 
+// BrandLink 品牌页脚/导航链接条目：含中英文标签与跳转地址
 export interface BrandLink {
-  label: string    // 中文标签
-  label_en: string // 英文标签
-  url: string      // 跳转地址
+   label: string    // 中文标签
+   label_en: string // 英文标签
+   url: string      // 跳转地址
 }
 
+// Branding 品牌定制完整结构：描述某租户的品牌名、Logo、登录/首页布局与注册场景等
 export interface Branding {
   tenantId: number
   tenantName: string  // 租户名称（用于网页标题等）

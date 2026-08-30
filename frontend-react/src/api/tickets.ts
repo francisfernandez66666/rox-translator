@@ -150,3 +150,49 @@ export async function ticketDelete(id: number): Promise<AdminResp> {
 export async function ticketCancel(id: number): Promise<AdminResp> {
   return request("/api/tickets/cancel", { method: "POST", headers: authHeaders(), body: JSON.stringify({ id }) })
 }
+
+// ==================== 对照编辑器（工作流 D） ====================
+
+/** 单段对照 */
+export interface EditorSegment {
+  index: number
+  source: string
+  target: string
+  edited_text: string
+  status: string   // pending / approved / rejected
+  note: string
+}
+
+/** 对照编辑器读取响应 */
+export interface SegmentsResp {
+  success: boolean
+  message?: string
+  ticket_id: number
+  lang: string
+  langs: string[]
+  type: string    // text / file / unsupported
+  segments: EditorSegment[]
+  terms: string[]
+}
+
+/** 保存单段编辑的请求体 */
+export interface SegmentEdit {
+  index: number
+  edited_text: string
+  status: string
+  note: string
+}
+
+/** getSegments 读取工单逐段对照 + 术语表 */
+export async function getSegments(ticketId: number, lang: string): Promise<SegmentsResp> {
+  return request(`/api/tickets/segments?id=${ticketId}&lang=${encodeURIComponent(lang)}`, { headers: authHeaders() })
+}
+
+/** saveSegments 保存逐段编辑/通过/驳回批注 */
+export async function saveSegments(ticketId: number, lang: string, edits: SegmentEdit[]): Promise<AdminResp> {
+  return request(`/api/tickets/segments/save?id=${ticketId}&lang=${encodeURIComponent(lang)}`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ edits }),
+  })
+}

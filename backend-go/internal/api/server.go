@@ -34,6 +34,7 @@ import (
 	"translator/internal/billing"
 	"translator/internal/config"
 	"translator/internal/engine"
+	apierrors "translator/internal/errors"
 	"translator/internal/kb"
 	"translator/internal/queue"
 	"translator/internal/service"
@@ -88,6 +89,8 @@ func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist s
 			log.Printf("[worker] 启动回收中断任务: %d 个已重新入队", n)
 		}
 		s.TicketSvc = service.NewTicketService(st, eng, ts, db, q, s.Bill)
+		s.TicketSvc.Mailer = s.mailer()         // 邮件异步：注入默认发送器
+		s.TicketSvc.InfoMailer = s.infoMailer() // 邮件异步：注入专用发送器
 		s.TicketSvc.BootResume()      // ★ 断点续传：启动即接管上次中断的 in_progress 工单
 		s.TicketSvc.StartStallSweep() // ★ 卡死工单巡检：>20min 无进展自动重排续跑
 		// ★ 并发增强：worker 数量从环境变量 WORKER_CONCURRENCY 读取（默认 4）
@@ -207,6 +210,7 @@ func (s *Server) routesAuth() {
 	s.mux.HandleFunc("/api/admin/invite-codes/create", s.handleInviteCodeCreate)
 	// ★ 邀请裂变（白皮书 §五）：我的邀请码/记录 + 二维码
 	s.registerReferralRoutes()
+	s.routesEditor()
 }
 
 // routesTickets 注册工单与审批路由。
@@ -369,7 +373,7 @@ func (s *Server) routesOpenAPI() {
 // Handler 返回完整的 http.Handler（依次包裹指标/租户/CORS 中间件）。
 // 返回: 可交给 http.ListenAndServe 使用的 http.Handler。
 func (s *Server) Handler() http.Handler {
-	return s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.withAccessLog(s.mux)))))
+	return s.withTraceID(s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.withAccessLog(s.mux))))))
 }
 
 // maxJSONBody 非 multipart 请求体上限（JSON 接口防超大请求；文件上传走 multipart 不受限）。
@@ -536,6 +540,12 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+// writeError 写出统一结构化错误（含正确 HTTP 状态码与 trace_id）。
+// 参数 w: 响应写入器；r: 请求（提供上下文与 trace_id）；e: 结构化错误。
+func (s *Server) writeError(w http.ResponseWriter, r *http.Request, e *apierrors.APIError) {
+	apierrors.WriteError(w, r.Context(), e)
 }
 
 // ChatRequest 聊天请求。

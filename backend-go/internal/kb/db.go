@@ -73,9 +73,12 @@ func Open(dbPath string) (*KBDatabase, error) {
 		}
 	}
 	conn, err := db.Open(db.Config{
-		Driver:         driver,
-		DSN:            dsn,
-		EnablePgvector: true,
+		Driver:                  driver,
+		DSN:                     dsn,
+		EnablePgvector:          true,
+		MaxOpenConns:            config.C.DBMaxOpenConns,
+		MaxIdleConns:            config.C.DBMaxIdleConns,
+		ConnMaxLifetimeMinutes:  config.C.DBConnMaxLifetimeMinutes,
 	})
 	if err != nil {
 		return nil, err

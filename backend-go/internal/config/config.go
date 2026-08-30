@@ -16,6 +16,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -95,6 +96,11 @@ type Config struct {
 	// DatabaseDSN：postgres 连接串；sqlite 后端忽略（改用 DBPath）。
 	DatabaseDriver string
 	DatabaseDSN    string
+
+	// 连接池参数（仅 postgres 生效；sqlite 单写者忽略）
+	DBMaxOpenConns           int
+	DBMaxIdleConns           int
+	DBConnMaxLifetimeMinutes int
 
 	// 上传/输出目录
 	UploadDir string // 上传文件目录
@@ -285,6 +291,22 @@ func Default() *Config {
 	}
 	if v := os.Getenv("DB_DSN"); v != "" {
 		c.DatabaseDSN = v
+	}
+	// 连接池（仅 postgres 生效）：经环境变量可调，未配置由 db.Open 取默认（MaxOpen=20）
+	if v := os.Getenv("DB_MAX_OPEN_CONNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.DBMaxOpenConns = n
+		}
+	}
+	if v := os.Getenv("DB_MAX_IDLE_CONNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.DBMaxIdleConns = n
+		}
+	}
+	if v := os.Getenv("DB_CONN_MAX_LIFETIME_MIN"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.DBConnMaxLifetimeMinutes = n
+		}
 	}
 
 	C = c // 暴露为全局只读配置，供连接器等深层调用读取

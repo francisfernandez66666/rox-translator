@@ -18,6 +18,7 @@ package service
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -31,6 +32,7 @@ import (
 	"translator/internal/billing"
 	"translator/internal/engine"
 	"translator/internal/kb"
+	"translator/internal/mail"
 	"translator/internal/orchestrator"
 	"translator/internal/queue"
 	"translator/internal/store"
@@ -45,6 +47,8 @@ type TicketService struct {
 	DB     *kb.KBDatabase
 	Queue  queue.Queue
 	Bill   *billing.Service // 计费服务（用量流水；可 nil）
+	Mailer mail.Sender     // 默认邮件发送器（注册验证码/重置码等）；可 nil
+	InfoMailer mail.Sender // 专用邮箱发送器（产品手册等）；可 nil
 
 	stopCh  chan struct{}
 	mu      sync.Mutex
@@ -136,9 +140,41 @@ func (s *TicketService) processJob(ctx context.Context, job *queue.Job) error {
 			return nil // 载荷损坏：标记完成避免毒丸死循环
 		}
 		return s.runTicket(ctx, ticketID)
+	case "mail_send":
+		return s.processMailJob(job)
 	default:
 		return nil // 未知类型直接完成（防毒丸）
 	}
+}
+
+// EnqueueMail 将邮件投递异步化：入队由 worker 发送，失败自动重试直至死信。
+// 参数 useInfo=true 时使用专用邮箱（产品手册等）；否则默认邮箱。
+func (s *TicketService) EnqueueMail(ctx context.Context, msg *mail.Message, useInfo bool) (int64, error) {
+	return s.Queue.Enqueue(ctx, "mail_send", queue.NewMailPayload(msg, useInfo), 5)
+}
+
+// processMailJob 消费邮件任务：还原 mail.Message 并经对应 sender 发送。
+func (s *TicketService) processMailJob(job *queue.Job) error {
+	var p queue.MailPayload
+	if err := json.Unmarshal(job.Payload, &p); err != nil {
+		return nil // 载荷损坏：标记完成避免毒丸
+	}
+	m := p.ToMailMessage()
+	var sender mail.Sender
+	if p.UseInfo && s.InfoMailer != nil {
+		sender = s.InfoMailer
+	} else if s.Mailer != nil {
+		sender = s.Mailer
+	} else {
+		log.Printf("[mail-worker] 无可用 sender（use_info=%v），丢弃任务 %d", p.UseInfo, job.ID)
+		return nil
+	}
+	if err := sender.Send(m); err != nil {
+		log.Printf("[mail-worker] 发送失败 to=%s 任务 %d: %v", m.To, job.ID, err)
+		return err // 触发重试/死信
+	}
+	log.Printf("[mail-worker] 已发送 to=%s 任务 %d", m.To, job.ID)
+	return nil
 }
 
 // 工单失败错误码前缀：余额不足（OpenAPI 状态接口据此返回独立出参 error_code）
