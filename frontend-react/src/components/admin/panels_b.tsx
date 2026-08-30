@@ -143,7 +143,7 @@ export function TenantsP() {
     await load()
   }
 
-  /** 为未开通套餐的租户发放试用套餐 */
+  /** 为租户发放/重新发放体验额度（任务2.4：叠加发放，已开通/已订阅也可再领） */
   async function grantTrial(tt: TenantInfo) {
     if (!(await confirmDialog({ body: tpl('tenants.grantTrialConfirm', { name: tt.name }) }))) return
     const r: any = await tenantGrantTrial(tt.id)
@@ -169,12 +169,10 @@ export function TenantsP() {
                 { colKey: 'invite', title: t('tenants.invite'), width: 110, cell: ({ row }: any) => (
                   <Switch size="small" value={!!row.invite_enabled} onChange={(v: boolean) => { void setInvite(row, v) }} />
                 ) },
-               { colKey: 'op', title: t('tenants.colActions'), width: 360, cell: ({ row }: any) => (
+               { colKey: 'op', title: t('tenants.colActions'), width: 380, cell: ({ row }: any) => (
                  <Space size={2} breakLine>
-                   {/* 发放试用套餐（仅未开通套餐的租户显示） */}
-                   {!pkgOf(row) && (
-                     <Button size="small" variant="text" onClick={() => grantTrial(row)}>{t('tenants.grantTrial')}</Button>
-                   )}
+                   {/* ★ 发放/重新发放体验额度（任务2.4：对所有租户可用，叠加发放新体验；已开通也可再领） */}
+                   <Button size="small" variant="text" onClick={() => grantTrial(row)}>{t('tenants.grantTrial')}</Button>
                    {/* 启用/禁用租户 */}
                    <Button size="small" variant="text"
                             onClick={async () => { const r: any = await tenantSetStatus(row.id, row.status === 'active' ? 'disabled' : 'active'); if (!r.success) void MessagePlugin.error(r.message); await load() }}>

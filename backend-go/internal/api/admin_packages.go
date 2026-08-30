@@ -14,11 +14,23 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"translator/internal/store"
 )
+
+// qrImageWhitelist 套餐中心静态收款码图片支持的扩展名白名单。
+var qrImageWhitelist = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
+}
+
+// qrImageUploadMax 收款码图片上传大小上限（5MB，收款码 PNG/JPEG 通常远小于此）。
+const qrImageUploadMax = 5 << 20
 
 // handleAdminPackages 列出全部商业包（super_admin）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。
@@ -150,18 +162,25 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
-// handleAdminPackageSettings 读取商业包全局设置（super_admin）：句数强制开关 / 试用句数 / 支付模式 / 静态码配置。
+// handleAdminPackageSettings 读取商业包全局设置（super_admin）：强制计费开关 / 体验额度 / 支付模式 / 静态码配置。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。
-// 返回: success=true 时携带 billing_enforced / trial_sentences / pay_mode / static_qr_image。
+// 返回: success=true 时携带 billing_enforced / free_trial_tokens / free_trial_days / pay_mode / static_qr_image。
 func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	trial := int64(100)
-	if v, _ := s.Store.GetConfig("trial_sentences"); v != "" {
+	// ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days（旧键 trial_sentences 已下线）
+	freeTokens := int64(300000)
+	if v, _ := s.Store.GetConfig("free_trial_tokens"); v != "" {
 		if n, e := parseInt64(v); e == nil && n > 0 {
-			trial = n
+			freeTokens = n
+		}
+	}
+	freeDays := 14
+	if v, _ := s.Store.GetConfig("free_trial_days"); v != "" {
+		if n, e := parseInt64(v); e == nil && n > 0 {
+			freeDays = int(n)
 		}
 	}
 	enforced := "0"
@@ -184,14 +203,14 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	tokenRate := s.Store.TokenSentenceRate()
-	// 三期注册与触达配置：邮箱验证 / 注册审核 / 人机验证 / 群机器人（secret_key 只写不回显）
+	// 三期注册与触达配置：邮箱验证 / 人机验证 / 群机器人（secret_key 只写不回显）
 	getCfg := func(k string) string { v, _ := s.Store.GetConfig(k); return v }
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "billing_enforced": enforced, "trial_sentences": trial,
+		"success": true, "billing_enforced": enforced,
+		"free_trial_tokens": freeTokens, "free_trial_days": freeDays,
 		"pay_mode": payMode, "static_qr_image": staticQR,
 		"email_verify_enabled": getCfg("email_verify_enabled"),
 		"email_notify_enabled": getCfg("email_notify_enabled"),
-		"registration_review":  getCfg("registration_review"),
 		"captcha_provider":     getCfg("captcha_provider"),
 		"captcha_site_key":     getCfg("captcha_site_key"),
 		"wecom_webhook_url":    getCfg("wecom_webhook_url"),
@@ -203,7 +222,7 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 }
 
 // handleAdminPackageSettingsSave 保存商业包全局设置（super_admin）。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 billing_enforced/trial_sentences/pay_mode/static_qr_image 可选字段）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 billing_enforced/free_trial_tokens/free_trial_days/pay_mode/static_qr_image 可选字段）。
 // 返回: success=true 表示保存成功。
 func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
@@ -213,7 +232,8 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	}
 	var req struct {
 		BillingEnforced   *string  `json:"billing_enforced"`             // 强制计费开关："1"/"0"
-		TrialSentences    *int64   `json:"trial_sentences"`              // 试用句数
+		FreeTrialTokens   *int64   `json:"free_trial_tokens"`            // 新租户体验 token 数
+		FreeTrialDays     *int64   `json:"free_trial_days"`              // 体验有效期（天）
 		MarkupMultiplier  *float64 `json:"billing_markup_multiplier"`    // 成本均摊系数（≥1.0）
 		TokensPerSentence *int64   `json:"estimate_tokens_per_sentence"` // 句↔token 换算率（>0）
 		PayMode           *string  `json:"pay_mode"`                     // mock / sdk / static_qr
@@ -221,7 +241,6 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		// 三期注册与触达配置（均可选，传了才更新；secret_key 只写不回显）
 		EmailVerifyEnabled *string `json:"email_verify_enabled"` // "1"=注册需邮箱验证码
 		EmailNotifyEnabled *string `json:"email_notify_enabled"` // "1"=站内通知同步邮件触达租户管理员
-		RegistrationReview *string `json:"registration_review"`  // "1"=新试用租户需超管发放额度
 		CaptchaProvider    *string `json:"captcha_provider"`     // 空/none=关闭；turnstile
 		CaptchaSiteKey     *string `json:"captcha_site_key"`     // Turnstile 站点 key（公开下发）
 		CaptchaSecretKey   *string `json:"captcha_secret_key"`   // Turnstile 服务端密钥（只写）
@@ -238,8 +257,15 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
-	if req.TrialSentences != nil && *req.TrialSentences > 0 {
-		if err := s.Store.SetConfig("trial_sentences", strconv.FormatInt(*req.TrialSentences, 10)); err != nil {
+	// ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days
+	if req.FreeTrialTokens != nil && *req.FreeTrialTokens > 0 {
+		if err := s.Store.SetConfig("free_trial_tokens", strconv.FormatInt(*req.FreeTrialTokens, 10)); err != nil {
+			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+	}
+	if req.FreeTrialDays != nil && *req.FreeTrialDays > 0 {
+		if err := s.Store.SetConfig("free_trial_days", strconv.FormatInt(*req.FreeTrialDays, 10)); err != nil {
 			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 			return
 		}
@@ -267,7 +293,6 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	}{
 		{"email_verify_enabled", req.EmailVerifyEnabled},
 		{"email_notify_enabled", req.EmailNotifyEnabled},
-		{"registration_review", req.RegistrationReview},
 		{"captcha_provider", req.CaptchaProvider},
 		{"captcha_site_key", req.CaptchaSiteKey},
 		{"captcha_secret_key", req.CaptchaSecretKey},
@@ -307,6 +332,71 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		}
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleAdminQRUpload 上传套餐中心静态收款码图片（super_admin）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（multipart 表单，字段名 file，图片文件）。
+// 返回: success=true 时携带 qr_url（静态码图片的相对 URL，前端存入 static_qr_image 配置）。
+// 说明：图片保存到上传目录 _qr 子目录，文件名用 uniqueName 生成（纳秒级唯一 + Base 清洗防路径穿越）；
+// 通过 /api/qr-image/<文件名> 公开访问（支付二维码需被买家扫码，属公开资源）。
+func (s *Server) handleAdminQRUpload(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireAdminUser(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	// 大小/扩展名校验（复用 parseUpload，仅允许图片白名单）
+	if err := parseUpload(r, qrImageUploadMax, qrImageWhitelist); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少文件"})
+		return
+	}
+	defer file.Close()
+	// 保存到上传目录 _qr 子目录（独立命名空间，避免与翻译上传文件混放）
+	dir := filepath.Join(s.Cfg.UploadDir, "_qr")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "无法创建上传目录"})
+		return
+	}
+	savePath := filepath.Join(dir, uniqueName(header.Filename))
+	f, err := os.Create(savePath)
+	if err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "无法保存文件"})
+		return
+	}
+	defer f.Close()
+	if _, err := io.Copy(f, file); err != nil {
+		os.Remove(savePath)
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "写入失败"})
+		return
+	}
+	qrURL := "/api/qr-image/" + filepath.Base(savePath)
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_qr_upload", "packages", qrURL)
+	writeJSON(w, 200, map[string]interface{}{"success": true, "qr_url": qrURL})
+}
+
+// handleQRImage 公开访问静态收款码图片（/api/qr-image/<文件名>，无需登录）。
+// 支付二维码需被买家扫码，属公开资源；文件名经 uniqueName 生成（纳秒级随机），
+// 且仅允许 _qr 子目录内的图片文件，防止路径穿越访问其他上传文件。
+func (s *Server) handleQRImage(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/qr-image/")
+	if name == "" || strings.ContainsAny(name, "/\\") {
+		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "图片不存在"})
+		return
+	}
+	dir := filepath.Join(s.Cfg.UploadDir, "_qr")
+	full := filepath.Join(dir, filepath.Base(name))
+	info, err := os.Stat(full)
+	if err != nil || info.IsDir() {
+		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "图片不存在"})
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	http.ServeFile(w, r, full)
 }
 
 // handleAdminPackageDelete 删除商业包（super_admin）。

@@ -1290,6 +1290,9 @@ func (s *Store) EnsureBillingDefaults() {
 		{"invite_extend_days", "14"},             // 每邀 1 人·邀请者时长叠加天数
 		{"inviter_paid_reward_tokens", "500000"}, // 受邀者首笔付费套餐→邀请者永久 token
 		{"price_fen_per_token", "10"},            // ★ 充值定价（分/token，评审整改 B1 单一事实源）
+		// ★ KB 上传奖励（任务2.3）：每条约额 + 单租户日封顶（防刷）
+		{"kb_upload_reward_tokens_per_entry", "200"},
+		{"kb_upload_reward_daily_cap", "50000"},
 	}
 	for _, kv := range defaults {
 		db.Exec(s.db, db.CurrentDialect(), "INSERT INTO system_config (key,value) SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM system_config WHERE key=?)", kv[0], kv[1], kv[0])

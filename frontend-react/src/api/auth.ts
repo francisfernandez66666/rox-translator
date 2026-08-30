@@ -58,8 +58,8 @@ export async function sendEmailCode(email: string, captchaToken?: string): Promi
   return request('/api/auth/email-code', { method: 'POST', body: JSON.stringify({ email, captcha_token: captchaToken }) })
 }
 
-/** 获取公开注册配置（email_verify_enabled/registration_review，前端据以显隐验证码输入） */
-export async function registerConfig(): Promise<AdminResp & { email_verify_enabled?: boolean; registration_review?: boolean }> {
+/** 获取公开注册配置（email_verify_enabled，前端据以显隐验证码输入） */
+export async function registerConfig(): Promise<AdminResp & { email_verify_enabled?: boolean }> {
   return request('/api/auth/register-config')
 }
 

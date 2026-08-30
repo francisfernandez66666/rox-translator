@@ -77,10 +77,8 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 		perms, err := s.Store.GetTenantPerms(tid)
 		if err == nil && perms.PackageCode == "" && tokens <= 0 {
 			activated = false
-			hint = "额度已用尽或尚未开通，请充值或升级套餐"
-			if v, _ := s.Store.GetConfig("registration_review"); v == "1" {
-				hint = "等待管理员审核发放试用额度"
-			}
+			// ★ 任务2.5：耗尽引导——购买月租套餐或充值永久 token
+			hint = "额度已用尽，请购买月租套餐或充值永久 token"
 		}
 	}
 	// 返回预估结果

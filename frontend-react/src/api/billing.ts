@@ -14,7 +14,7 @@
  * - 商业包管理：套餐列表、订阅、创建、更新、删除
  */
 
-import { request, authHeaders, type AdminResp } from './core'
+import { request, authHeaders, API_BASE, type AdminResp } from './core'
 
 /** 查询当前租户余额 */
 export async function billingBalance(): Promise<AdminResp> {
@@ -158,17 +158,29 @@ export async function adminPackageSettings(): Promise<AdminResp> {
   return request('/api/admin/packages/settings', { headers: authHeaders() })
 }
 
+/** 上传套餐中心静态收款码图片（super_admin；multipart 字段 file） */
+export async function adminQRUpload(file: File): Promise<AdminResp & { qr_url?: string }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const resp = await fetch(`${API_BASE}/api/admin/packages/qr-upload`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: formData,
+  })
+  return resp.json()
+}
+
 /** 保存商业包全局设置（仅传的字段更新；对齐后端 handleAdminPackageSettingsSave） */
 export async function adminPackageSettingsSave(data: {
   billing_enforced?: string
-  trial_sentences?: number
+  free_trial_tokens?: number
+  free_trial_days?: number
   billing_markup_multiplier?: number
   estimate_tokens_per_sentence?: number
   pay_mode?: string
   static_qr_image?: string
   email_verify_enabled?: string
   email_notify_enabled?: string
-  registration_review?: string
   captcha_provider?: string
   captcha_site_key?: string
   captcha_secret_key?: string

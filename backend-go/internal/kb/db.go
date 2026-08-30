@@ -66,19 +66,25 @@ func MD5Hex(s string) string {
 func Open(dbPath string) (*KBDatabase, error) {
 	driver := db.DriverSQLite
 	dsn := dbPath
+	// ★ nil 加固：config.C 未初始化（测试环境等）时全部走默认值，
+	//   避免判空分支外访问 config.C.DBMaxOpenConns 等字段触发 nil panic。
+	var maxOpen, maxIdle, connMaxLifetimeMinutes int
 	if config.C != nil {
 		driver = config.C.DatabaseDriver
 		if driver == db.DriverPostgres {
 			dsn = config.C.DatabaseDSN
 		}
+		maxOpen = config.C.DBMaxOpenConns
+		maxIdle = config.C.DBMaxIdleConns
+		connMaxLifetimeMinutes = config.C.DBConnMaxLifetimeMinutes
 	}
 	conn, err := db.Open(db.Config{
 		Driver:                 driver,
 		DSN:                    dsn,
 		EnablePgvector:         true,
-		MaxOpenConns:           config.C.DBMaxOpenConns,
-		MaxIdleConns:           config.C.DBMaxIdleConns,
-		ConnMaxLifetimeMinutes: config.C.DBConnMaxLifetimeMinutes,
+		MaxOpenConns:           maxOpen,
+		MaxIdleConns:           maxIdle,
+		ConnMaxLifetimeMinutes: connMaxLifetimeMinutes,
 	})
 	if err != nil {
 		return nil, err

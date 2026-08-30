@@ -24,7 +24,7 @@ import (
 
 // handlePlans 公开定价页接口（无需登录）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。
-// 返回: success=true 时携带 plans 数组（仅上架包）与 trial_sentences（默认试用句数）。
+// 返回: success=true 时携带 plans 数组（仅上架包）与 free_trial_tokens/free_trial_days（体验额度，任务2.2 唯一口径）。
 func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 	// 查询所有上架的商业包
 	pkgs, err := s.Store.ListEnabledCommercialPackages()
@@ -32,14 +32,23 @@ func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	// 读取默认试用句数配置（默认 100 句）
-	trial := int64(100)
-	if v, _ := s.Store.GetConfig("trial_sentences"); v != "" {
+	// ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days（旧键 trial_sentences 已下线）
+	freeTokens := int64(300000)
+	if v, _ := s.Store.GetConfig("free_trial_tokens"); v != "" {
 		if n, e := parseInt64(v); e == nil && n > 0 {
-			trial = n
+			freeTokens = n
 		}
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "plans": pkgs, "trial_sentences": trial})
+	freeDays := 14
+	if v, _ := s.Store.GetConfig("free_trial_days"); v != "" {
+		if n, e := parseInt64(v); e == nil && n > 0 {
+			freeDays = int(n)
+		}
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"success": true, "plans": pkgs,
+		"free_trial_tokens": freeTokens, "free_trial_days": freeDays,
+	})
 }
 
 // handleMyPackage 当前租户包信息接口（登录用户）。

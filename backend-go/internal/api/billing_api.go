@@ -82,17 +82,8 @@ func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 			return tid, release, &apiErr{hit.Msg}
 		}
 	}
-	// 注册审核模式兜底：registration_review=1 时，未开通额度（无包身份且零 token 余额）的租户一律拒绝
-	// 超管不受此限制（超管身份说明一切，无需试用额度）
-	if rv, _ := s.Store.GetConfig("registration_review"); rv == "1" && tid > 0 {
-		if u := s.authUser(r); u == nil || !auth.IsSuperAdmin(u) {
-			perms, perr := s.Store.GetTenantPerms(tid)
-			bal, berr := s.Store.GetBalance(tid)
-			if perr == nil && perms.PackageCode == "" && (berr != nil || bal == nil || bal.Balance <= 0) {
-				return tid, release, &apiErr{"账号尚未开通翻译额度，请等待管理员审核发放试用额度"}
-			}
-		}
-	}
+	// ★ 任务2.2：注册一律自动发放体验额度，registration_review「审核不发」机制已下线，
+	//   不再存在「等待审核发放」的未开通租户——此兜底分支移除。
 	return tid, release, nil
 }
 

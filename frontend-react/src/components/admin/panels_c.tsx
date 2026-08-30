@@ -4,6 +4,7 @@
 // 行为对齐 Vue 版：PlansPanel.vue / Referral.vue / Webhooks.vue / ApiKeys.vue
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ChangeEvent } from 'react'
 import {
   Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Textarea, MessagePlugin,
 } from 'tdesign-react'
@@ -14,7 +15,7 @@ import {
   payCreate, payStatus, paySimulate, payManualConfirm, manualConfirmOrders, adminOrderPay,
   plans as apiPlans, myPackage, packageSubscribe,
   adminPackages, adminPackageCreate, adminPackageUpdate, adminPackageDelete,
-  adminPackageSettings, adminPackageSettingsSave,
+  adminPackageSettings, adminPackageSettingsSave, adminQRUpload,
   referralMy, fetchReferralQrBlob, referralConfigGet, referralConfigSave, meContext,
   webhooks as apiWebhooks, webhookSave, webhookDelete, webhookTest,
   apiKeys as apiApiKeys, apiKeyCreate, apiKeyStatus, apiKeyRotate, apiKeyDelete,
@@ -31,10 +32,11 @@ import { useT } from '@/i18n'
 
 type Any = Record<string, any>
 
-// 判断二维码内容是否为图片（data:image 或 http(s) 图片 URL）
+// 判断二维码内容是否为图片（data:image、http(s) 图片 URL、或 /api/qr-image/ 相对路径）
 function isImage(s?: string): boolean {
   if (!s) return false
   if (s.indexOf('data:image') === 0) return true
+  if (s.indexOf('/api/qr-image/') === 0) return true
   const idx = s.indexOf('.')
   if (idx < 0) return false
   const tail = s.slice(idx + 1).split(/[?#]/)[0].toLowerCase()
@@ -81,7 +83,9 @@ export function PlansP() {
   // ⑥⑦⑧ 超管区：商业包、计费开关、价格参数、支付模式
   const [pkgs, setPkgs] = useState<Any[]>([])
   const [billingEnforced, setBillingEnforced] = useState(false)
-  const [trialSentences, setTrialSentences] = useState(100)
+  // ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days（旧键 trial_sentences 已下线）
+  const [freeTrialTokens, setFreeTrialTokens] = useState(300000)
+  const [freeTrialDays, setFreeTrialDays] = useState(14)
   const [markupMultiplier, setMarkupMultiplier] = useState(1.5)
   const [tokensPerSentence, setTokensPerSentence] = useState(500)
   const [staticQRImage, setStaticQRImage] = useState('')
@@ -141,7 +145,9 @@ export function PlansP() {
     const cfg: Any = await adminPackageSettings()
     if (cfg.success) {
       setBillingEnforced(cfg.billing_enforced === '1' || cfg.billing_enforced === true)
-      if (cfg.trial_sentences) setTrialSentences(Number(cfg.trial_sentences))
+      // ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days
+      if (cfg.free_trial_tokens) setFreeTrialTokens(Number(cfg.free_trial_tokens))
+      if (cfg.free_trial_days) setFreeTrialDays(Number(cfg.free_trial_days))
       if (typeof cfg.billing_markup_multiplier === 'number') setMarkupMultiplier(cfg.billing_markup_multiplier)
       if (cfg.estimate_tokens_per_sentence) setTokensPerSentence(Number(cfg.estimate_tokens_per_sentence))
       if (cfg.pay_mode) setPayModeCfg(cfg.pay_mode as string)
@@ -242,11 +248,16 @@ export function PlansP() {
   }
   // 保存计费强制开关
   async function saveEnforce() { const r: Any = await adminPackageSettingsSave({ billing_enforced: billingEnforced ? '1' : '0' } as never); toastResp(r, t('common.save')) }
-  // 保存计费参数：试用句数、加价倍率、句-token 换算率
+  // 保存计费参数：体验额度（token/天）、加价倍率、句-token 换算率
   async function saveBillingParams() {
+    if (!(freeTrialTokens > 0)) { void MessagePlugin.warning(t('packages.trialTokensInvalid')); return }
+    if (!(freeTrialDays > 0)) { void MessagePlugin.warning(t('packages.trialDaysInvalid')); return }
     if (!(markupMultiplier >= 1)) { void MessagePlugin.warning(t('packages.markupInvalid')); return }
     if (!(tokensPerSentence > 0)) { void MessagePlugin.warning(t('packages.rateInvalid')); return }
-    const r: Any = await adminPackageSettingsSave({ billing_markup_multiplier: markupMultiplier, estimate_tokens_per_sentence: tokensPerSentence } as never)
+    const r: Any = await adminPackageSettingsSave({
+      free_trial_tokens: freeTrialTokens, free_trial_days: freeTrialDays,
+      billing_markup_multiplier: markupMultiplier, estimate_tokens_per_sentence: tokensPerSentence,
+    } as never)
     toastResp(r, t('common.save'))
   }
   // 保存支付模式
@@ -256,6 +267,26 @@ export function PlansP() {
   }
   // 保存静态二维码图片地址
   async function saveStaticQR() { const r: Any = await adminPackageSettingsSave({ static_qr_image: staticQRImage } as never); toastResp(r, t('common.save')) }
+  // 上传静态收款码图片文件（支持 png/jpg/jpeg/gif/webp），成功后回填到配置并保存
+  const [qrUploading, setQrUploading] = useState(false)
+  async function uploadStaticQR(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.currentTarget.value = ''
+    if (!file) return
+    setQrUploading(true)
+    try {
+      const r = await adminQRUpload(file)
+      if (r.success && r.qr_url) {
+        setStaticQRImage(r.qr_url)
+        const s = await adminPackageSettingsSave({ static_qr_image: r.qr_url } as never)
+        toastResp(s, t('common.save'))
+      } else {
+        void MessagePlugin.error((r.message as string) || t('common.saveFail'))
+      }
+    } catch (err: any) {
+      void MessagePlugin.error(err?.message || t('common.saveFail'))
+    } finally { setQrUploading(false) }
+  }
   // 人工确认订单入账
   async function confirmManual(o: Any) { const r: Any = await adminOrderPay(Number(o.id)); if (r.success) await Promise.all([loadPkgs(), loadOrders()]) }
 
@@ -294,12 +325,27 @@ export function PlansP() {
             {pkgExpiresLabel ? ` · ${t('plans.expiresAt')}: ${pkgExpiresLabel}` : ''}
             {' · '}{tpl('billing.myPackageBalance', { balance: pkg.sentence_balance ?? '—' })}
           </div>
+          {/* ★ 任务2.5：额度耗尽引导——购买月租套餐或充值永久 token（billing_enforced 联动展示） */}
+          {(() => {
+            const total = Number(pkg.balance_tokens ?? 0)
+            const hasPlan = !!(pkg.package_code && pkg.package_code !== 'trial')
+            if (total > 0 || hasPlan) return null
+            return (
+              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: '#fff7e6', border: '1px solid #ffd591', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
+                {t('plans.exhaustedHint')}
+                <Space size={6} style={{ marginTop: 6 }}>
+                  <Button size="small" theme="warning" onClick={() => { document.getElementById('plans-shop')?.scrollIntoView({ behavior: 'smooth' }) }}>{t('plans.goSubscribe')}</Button>
+                  <Button size="small" variant="outline" theme="warning" onClick={() => { document.getElementById('plans-topup')?.scrollIntoView({ behavior: 'smooth' }) }}>{t('plans.goTopup')}</Button>
+                </Space>
+              </div>
+            )
+          })()}
         </Panel>
       )}
 
       {/* ===== 套餐选购（非超管） ===== */}
       {!isSuper && (
-        <Panel title={t('plans.nav.shop')}>
+        <Panel id="plans-shop" title={t('plans.nav.shop')}>
           {planGroups.map((g) => (
             <div key={g.type}>
               <div style={{ fontWeight: 600, fontSize: 14, color: '#455a64', margin: '10px 0 6px' }}>{g.title}</div>
@@ -324,7 +370,7 @@ export function PlansP() {
 
       {/* ===== 在线充值（非超管） ===== */}
       {!isSuper && (
-        <Panel title={t('plans.nav.topup')}>
+        <Panel id="plans-topup" title={t('plans.nav.topup')}>
           <div style={{ fontSize: 13, color: '#667', marginBottom: 8 }}>{t('billing.onlineTopUpHint')}</div>
           <Space size={8} align="center">
             <Select value={chForm.channel} onChange={(v) => setChForm({ ...chForm, channel: v as string })} style={{ width: 200 }} options={chOptions} />
@@ -383,8 +429,10 @@ export function PlansP() {
           </Space>
           <div style={{ marginTop: 12 }}>
             <Space size={8} align="center">
-              <span style={{ fontSize: 13, color: '#556' }}>{t('packages.trialLabel')}</span>
-              <Input type="number" value={num(trialSentences)} onChange={(v) => setTrialSentences(Number(v) || 0)} style={{ width: 120 }} />
+              <span style={{ fontSize: 13, color: '#556' }}>{t('packages.trialTokensLabel')}</span>
+              <Input type="number" value={num(freeTrialTokens)} onChange={(v) => setFreeTrialTokens(Number(v) || 0)} style={{ width: 120 }} />
+              <span style={{ fontSize: 13, color: '#556' }}>{t('packages.trialDaysLabel')}</span>
+              <Input type="number" value={num(freeTrialDays)} onChange={(v) => setFreeTrialDays(Number(v) || 0)} style={{ width: 80 }} />
               <span style={{ fontSize: 13, color: '#556', marginLeft: 12 }}>{t('packages.markupLabel')}</span>
               <Input type="number" value={num(markupMultiplier)} onChange={(v) => setMarkupMultiplier(Math.max(0, Number(v) || 0))} style={{ width: 120 }} />
               <span style={{ fontSize: 13, color: '#556', marginLeft: 12 }}>{t('packages.rateLabel')}</span>
@@ -403,10 +451,18 @@ export function PlansP() {
           </div>
           {payModeCfg === 'static_qr' && (
             <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 12, color: '#889', marginBottom: 4 }}>{t('packages.staticQRHint')}</div>
               <Space size={8} align="center">
                 <Input value={staticQRImage} onChange={(v) => setStaticQRImage(v)} placeholder={t('packages.staticQRPlaceholder')} style={{ width: 360 }} />
+                <input type="file" accept=".png,.jpg,.jpeg,.gif,.webp" style={{ fontSize: 12 }} onChange={uploadStaticQR} disabled={qrUploading} />
+                {qrUploading && <span style={{ fontSize: 12, color: '#889' }}>…</span>}
                 <Button onClick={saveStaticQR}>{t('common.save')}</Button>
               </Space>
+              {isImage(staticQRImage) && (
+                <div style={{ marginTop: 8, display: 'inline-block', border: '1px dashed #d0d5e0', borderRadius: 8, padding: 8 }}>
+                  <img src={staticQRImage} alt="qr" style={{ maxWidth: 160, maxHeight: 160, borderRadius: 6, display: 'block' }} />
+                </div>
+              )}
             </div>
           )}
         </Panel>

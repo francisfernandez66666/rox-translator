@@ -5,7 +5,7 @@ package api
 
 // ============ 本文件职责中文说明 ============
 // 注册邮箱验证（第二批·轻第三方）：自助注册前先验证邮箱归属，堵住脚本批量
-// 注册薅试用额度的口子（与 registration_review 审核开关叠加使用）。
+// 注册薅体验额度的口子。
 //   - handleEmailCode：POST /api/auth/email-code —— 发送 6 位验证码到邮箱
 //     （同邮箱 60s 冷却；MAIL_ENABLED 未开启时走 NoopSender 打印日志，响应带 noop=true）
 //   - verifyEmailCode：校验并一次性消费验证码（10 分钟有效，最多 5 次错误尝试）
@@ -151,20 +151,15 @@ func (s *Server) handleEmailCode(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRegisterConfig 公开注册配置接口（前端注册面板显隐用）。
-// 返回: success=true 时携带 email_verify_enabled / registration_review。
+// 返回: success=true 时携带 email_verify_enabled（★ 任务2.2：registration_review 审核机制已下线，不再返回）。
 func (s *Server) handleRegisterConfig(w http.ResponseWriter, r *http.Request) {
 	ev := false
 	if v, _ := s.Store.GetConfig("email_verify_enabled"); v == "1" {
 		ev = true
 	}
-	rv := false
-	if v, _ := s.Store.GetConfig("registration_review"); v == "1" {
-		rv = true
-	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success":              true,
 		"email_verify_enabled": ev,
-		"registration_review":  rv,
 		"captcha_enabled":      s.captchaEnabled(),
 		"captcha_site_key":     s.captchaSiteKey(),
 	})

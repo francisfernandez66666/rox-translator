@@ -343,7 +343,7 @@ export function AlertsP() {
   const [status, setStatus] = useState('')
   // 注册与触达配置表单（布尔以 '0'/'1' 字符串存储以兼容后端）
   const [regCfg, setRegCfg] = useState<Record<string, string | boolean>>({
-    email_verify_enabled: '0', email_notify_enabled: '0', registration_review: '0',
+    email_verify_enabled: '0', email_notify_enabled: '0',
     captcha_provider: '', captcha_site_key: '', captcha_secret_key: '',
     wecom_webhook_url: '', dingtalk_webhook_url: '',
   })
@@ -359,7 +359,7 @@ export function AlertsP() {
     const cfg = await adminPackageSettings()
     if (cfg.success) {
       const c = cfg as Any
-      for (const k of ['email_verify_enabled', 'email_notify_enabled', 'registration_review',
+      for (const k of ['email_verify_enabled', 'email_notify_enabled',
         'captcha_provider', 'captcha_site_key', 'wecom_webhook_url', 'dingtalk_webhook_url']) {
         if (c[k] !== undefined && c[k] !== '') setRegCfg((p) => ({ ...p, [k]: c[k] }) as Record<string, string | boolean>)
       }
@@ -386,7 +386,7 @@ export function AlertsP() {
   /** 保存注册/触达配置（布尔开关 + 验证码与 webhook 字段） */
   async function saveRegCfg() {
     const payload: Record<string, string> = {}
-    for (const k of ['email_verify_enabled', 'email_notify_enabled', 'registration_review']) {
+    for (const k of ['email_verify_enabled', 'email_notify_enabled']) {
       const val = regCfg[k]
       payload[k] = String(val) === 'true' || val === '1' ? '1' : '0'
     }
@@ -431,10 +431,6 @@ export function AlertsP() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <Switch value={regCfg.email_notify_enabled === '1' || regCfg.email_notify_enabled === true} onChange={(v) => setSwitch('email_notify_enabled', v as boolean)} />
           <span style={{ fontSize: 13, color: '#556' }}>{t('packages.emailNotify')}</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <Switch value={regCfg.registration_review === '1' || regCfg.registration_review === true} onChange={(v) => setSwitch('registration_review', v as boolean)} />
-          <span style={{ fontSize: 13, color: '#556' }}>{t('packages.regReview')}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ fontSize: 13, color: '#556', minWidth: 130 }}>{t('packages.captchaProvider')}</span>

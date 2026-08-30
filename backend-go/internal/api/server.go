@@ -369,6 +369,8 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/admin/packages/delete", s.handleAdminPackageDelete)
 	s.mux.HandleFunc("/api/admin/packages/settings", s.handleAdminPackageSettings)
 	s.mux.HandleFunc("/api/admin/packages/settings/save", s.handleAdminPackageSettingsSave)
+	s.mux.HandleFunc("/api/admin/packages/qr-upload", s.handleAdminQRUpload)
+	s.mux.HandleFunc("/api/qr-image/", s.handleQRImage)
 	// 在线支付：下单 / 状态轮询 / 模拟支付 / 我已付费（静态码人工确认）/ 渠道回调
 	s.mux.HandleFunc("/api/pay/create", s.handlePayCreate)
 	s.mux.HandleFunc("/api/pay/status", s.handlePayStatus)

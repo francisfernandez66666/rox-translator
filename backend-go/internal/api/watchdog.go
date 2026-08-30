@@ -130,12 +130,15 @@ func (s *Server) startWatchdog() {
 	// OOM 内存监控（默认每 60 秒采样，可配置 mem_monitor_interval_sec；0=关闭）
 	s.startMemoryMonitor()
 	// 订阅到期扫描（每日一轮：启动即扫一次；到期摘除 + 7/1 天前提醒）
+	// ★ 任务2.5：同周期顺带扫描体验台账到期前 3 天提醒
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 		s.runSubscriptionScan()
+		s.runTrialScan()
 		for range ticker.C {
 			s.runSubscriptionScan()
+			s.runTrialScan()
 		}
 	}()
 	// 工单产物留存扫描（每日一轮：剩余 7/3/1 天提醒下载；到期清理文件，译文已入 TM 不受影响）
@@ -256,6 +259,44 @@ func (s *Server) runSubscriptionScan() {
 			_ = s.Store.SetNotifiedExpFlag(t.ID, "notified_exp1") // ★ B1
 			s.notifyTenantAdmins(t.ID, "订阅今日到期",
 				"商业包「"+perms.PackageCode+"」将于今日到期，续订请前往管理后台订阅页。")
+		}
+	}
+}
+
+// runTrialScan 体验台账到期提醒扫描（每日执行，任务2.5）：
+//   - 遍历租户，取其最早到期的未过期体验台账（quota_grants kind='trial'）
+//   - 剩余 ≤3 天 → 通知租户管理员并置 NotifiedExp3 去重标记（新发放 trial 由 CreateQuotaGrant 自动复位）
+func (s *Server) runTrialScan() {
+	if s.Store == nil || s.Ten == nil {
+		return
+	}
+	tenants, err := s.Ten.List()
+	if err != nil {
+		return
+	}
+	for _, t := range tenants {
+		if t.ID <= 1 {
+			continue
+		}
+		perms := tenant.ParsePerms(t.Permissions)
+		if perms.NotifiedExp3 {
+			continue // 本档提醒已发送过（新发放 trial 会复位）
+		}
+		expStr, found := s.Store.EarliestActiveTrialExpiry(t.ID)
+		if !found {
+			continue // 无未过期体验台账
+		}
+		exp, perr := time.Parse(time.RFC3339, expStr)
+		if perr != nil {
+			continue
+		}
+		daysLeft := int(time.Until(exp).Hours() / 24)
+		if daysLeft > 3 {
+			continue
+		}
+		if err := s.Store.SetNotifiedExpFlag(t.ID, "notified_exp3"); err == nil {
+			s.notifyTenantAdmins(t.ID, "体验额度即将到期",
+				"体验额度将于 "+exp.Format("2006-01-02")+" 到期（剩 "+strconv.Itoa(daysLeft+1)+" 天）。到期后可购买月租套餐或充值永久 token 继续使用。")
 		}
 	}
 }

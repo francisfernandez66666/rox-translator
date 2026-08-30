@@ -10,9 +10,9 @@ import { MessagePlugin } from 'tdesign-react'
 // ========================================
 
 /** 面板容器卡片 */
-export function Panel({ title, extra, children }: { title: string; extra?: ReactNode; children: ReactNode }) {
+export function Panel({ title, extra, id, children }: { title: string; extra?: ReactNode; id?: string; children: ReactNode }) {
   return (
-    <div className="panel-card" style={{ marginBottom: 16 }}>
+    <div className="panel-card" style={{ marginBottom: 16 }} id={id}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h2 style={{ fontSize: 17, margin: 0 }}>{title}</h2>
         {extra}

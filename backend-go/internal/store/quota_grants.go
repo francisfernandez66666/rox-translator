@@ -43,7 +43,17 @@ func (s *Store) CreateQuotaGrant(tid int64, kind string, total int64, expires ti
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO quota_grants (tenant_id, kind, total, left, expires_at, source, ref_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
 		tid, kind, total, total, expires.UTC().Format(time.RFC3339), source, refID, now)
-	return err
+	if err != nil {
+		return err
+	}
+	// ★ 任务2.5：发放 trial 体验台账时，复位「到期前 3 天提醒」去重标记——
+	//   新体验重新进入提醒窗口（注册礼包 / 超管重新发放均自动复位）。
+	if kind == "trial" {
+		_, _ = db.Exec(s.db, db.CurrentDialect(),
+			"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$.notified_exp3', json('false')), updated_at=? WHERE id=?",
+			time.Now().Format(time.RFC3339), tid)
+	}
+	return nil
 }
 
 // SumActiveGrants 未过期额度剩余合计（低额提醒/展示用）。
@@ -72,6 +82,19 @@ func (s *Store) TenantRemainTotal(tid int64) (grants, permanent int64, err error
 		return 0, 0, err
 	}
 	return grants, permanent, nil
+}
+
+// EarliestActiveTrialExpiry 返回租户最早到期的未过期试用台账到期时间（任务2.5 到期提醒用）。
+// 返回 (expiresAt RFC3339, found)。仅统计 kind='trial' 且 left>0 且未过期；无则 found=false。
+func (s *Store) EarliestActiveTrialExpiry(tid int64) (string, bool) {
+	var exp string
+	err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT MIN(expires_at) FROM quota_grants WHERE tenant_id=? AND kind='trial' AND left>0 AND expires_at>?",
+		tid, time.Now().UTC().Format(time.RFC3339)).Scan(&exp)
+	if err != nil || exp == "" {
+		return "", false
+	}
+	return exp, true
 }
 
 // DeductWithGrants 双部分顺序扣减（事务）：

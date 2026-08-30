@@ -62,6 +62,7 @@ type Perms struct {
 	PackageExpires  string `json:"package_expires_at,omitempty"` // 订阅到期时间（RFC3339，空=不限期；到期由后台扫描摘除）
 	NotifiedExp7    bool   `json:"notified_exp7,omitempty"`      // 到期提醒 7 天档已发送（去重标记）
 	NotifiedExp1    bool   `json:"notified_exp1,omitempty"`      // 到期提醒 1 天档已发送（去重标记）
+	NotifiedExp3    bool   `json:"notified_exp3,omitempty"`      // ★ 体验台账到期前 3 天提醒已发送（去重标记；任务2.5）
 }
 
 // 租户状态常量

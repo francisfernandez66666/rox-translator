@@ -555,7 +555,25 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	s.Store.LogAudit(tid, u.ID, "kb_file_import", "kb_entries", req.TempID)
 	s.invKB()             // ★ 文件导入写通 tm_segments：失效 CJK 缓存
 	s.rebuildIndexAsync() // 异步重建向量索引（增量入库）
+	// ★ KB 上传奖励（任务2.3）：按新增条数 × 每条约额发永久 token，单租户日封顶防刷。
+	//   奖励仅针对「文件导入」路径（KB 共建反哺数据飞轮）；JSON 批量导入（handleKBEntriesImport）不奖励。
+	reward := map[string]interface{}{}
+	if tid > 0 && added > 0 {
+		if granted, tokens, used := s.Store.GrantKBReward(tid, u.ID, req.PackageID, int64(added)); granted {
+			reward = map[string]interface{}{
+				"granted": true, "tokens": tokens, "daily_used": used,
+				"added": added, "per_entry": s.Store.KBRewardTokensPerEntry(),
+			}
+			s.Store.LogAudit(tid, u.ID, "kb_upload_reward", "balance_accounts",
+				strconv.FormatInt(tokens, 10))
+		} else {
+			reward = map[string]interface{}{
+				"granted": false, "daily_used": used, "cap": s.Store.KBRewardDailyCap(),
+			}
+		}
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "message": "导入完成", "added": added, "skipped": skipped,
+		"reward": reward,
 	})
 }

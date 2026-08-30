@@ -3,7 +3,7 @@
 // 付费包 / 增量包 / 免费体验包的 CRUD，
 // 以及租户句数余额（sentence_balance，存于 tenants.permissions JSON）的读写。
 // 商业包模型：
-//   - free（免费体验）：新租户注册自动开通，句数由 trial_sentences 配置（默认 500）
+//   - free（免费体验）：新租户注册自动开通，token 由 free_trial_tokens 配置（默认 300000）
 //   - paid（付费包）：超管自定义（包月 X 句），订阅后向租户句数余额发放 X 句
 //   - increment（增量包）：超管自定义（X 句），购买后追加到租户句数余额
 //
@@ -543,11 +543,11 @@ func (s *Store) ExpirePackage(tid int64) (code string, err error) {
 	return code, nil
 }
 
-// SetNotifiedExpFlag 订阅到期提醒去重标记位（★ 整改 B1：json_set 单字段原子更新，
+// SetNotifiedExpFlag 到期提醒去重标记位（★ 整改 B1：json_set 单字段原子更新，
 // 替代 watchdog「读整包→改一位→整体覆盖写回」的丢失更新窗口；flag 取
-// notified_exp7 / notified_exp1）。
+// notified_exp7 / notified_exp1 / notified_exp3（体验台账到期前3天，任务2.5））。
 func (s *Store) SetNotifiedExpFlag(tid int64, flag string) error {
-	if flag != "notified_exp7" && flag != "notified_exp1" {
+	if flag != "notified_exp7" && flag != "notified_exp1" && flag != "notified_exp3" {
 		return &errTxt{"非法提醒标记: " + flag}
 	}
 	_, err := db.Exec(s.db, db.CurrentDialect(),

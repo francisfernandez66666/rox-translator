@@ -4,9 +4,9 @@
 package api
 
 // ============ 本文件职责中文说明 ============
-// 本文件实现自助注册与试用额度发放、邀请码管理：
+// 本文件实现自助注册与体验额度发放、邀请码管理：
 //   - handleRegister：自助注册（无邀请码→新建独立试用租户 + tenant_admin 账号；有绑定租户的邀请码→加入已有租户 + user 账号）
-//   - 试用额度：新租户默认发放 trial_tokens（system_config 可配置，默认 50000 token）并写入每日字符上限权限
+//   - 体验额度：新租户自动发放 free_trial_tokens（system_config 可配置，默认 300000 token/14 天）并写入每日字符上限权限
 //   - 注册开关：system_config registration_enabled=0 时关闭注册
 //   - 邀请码管理（super_admin）：列表 / 创建（handleInviteCodes / handleInviteCodeCreate）
 // 安全要点：邀请码一次性使用（used=1 即失效）；受邀加入前校验该租户用户名唯一。
@@ -29,7 +29,7 @@ import (
 // handleRegister 自助注册接口：
 //   - 不携带邀请码：创建独立租户（试用额度）→ 创建该租户 tenant_admin 账号
 //   - 携带邀请码且邀请码绑定租户：加入已有租户（创建 user 账号）
-//   - 试用额度默认发放（system_config trial_tokens，默认 50000），并在 permissions 记录 max_daily_chars
+//   - 体验额度默认发放（system_config free_trial_tokens，默认 300000 token），并在 permissions 记录 max_daily_chars
 //
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 username/password/code/name/invite）。
 // 返回: success=true 时携带新用户、tenant_id 与提示信息。
@@ -109,7 +109,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 试用额度（可配置）：默认 50000 token
+	// ★ 体验额度统一口径（任务2.2）：仅 free_trial_tokens / free_trial_days 为唯一配置键，
+	//   旧键 trial_tokens / trial_sentences 已完全移除；句数镜像由 token÷折算率换算。
 	defaultKey := "" // 新租户默认 API Key（明文，仅注册响应返回一次）
 	trialTokens := int64(300000)
 	trialDays := 14
@@ -123,27 +124,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			trialDays = x
 		}
 	}
-	if v, _ := s.Store.GetConfig("trial_tokens"); v != "" {
-		if tv, err := strconv.ParseInt(v, 10, 64); err == nil && tv > 0 {
-			trialTokens = tv
-		}
-	}
-	// 试用句数（可配置）：默认 500 句（每源句 × 目标语言数）
-	trialSentences := int64(100)
-	if v, _ := s.Store.GetConfig("trial_sentences"); v != "" {
-		if sv, err := strconv.ParseInt(v, 10, 64); err == nil && sv > 0 {
-			trialSentences = sv
-		}
+	// 体验额度句数镜像（展示用）：token ÷ 句↔token 折算率
+	trialSentences := int64(0)
+	if rate := s.Store.TokenSentenceRate(); rate > 0 {
+		trialSentences = trialTokens / rate
 	}
 
 	// 1. 处理邀请码（可选）：校验有效且未使用，标记为已使用
 	inviteTenantID := int64(0)
-	// 注册审核开关（registration_review=1）：新建试用租户暂不发放体验额度，
-	// 由超管审核后经 /api/admin/tenants/grant-trial 手动发放（受邀加入不受影响）
-	reviewMode := false
-	if v, _ := s.Store.GetConfig("registration_review"); v == "1" {
-		reviewMode = true
-	}
 	// ★ 邮箱必填：所有自助注册路径（含受邀加入）都必须提供邮箱——验证码收件与找回密码依赖
 	if strings.TrimSpace(req.Email) == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱为必填项"})
@@ -295,12 +283,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			s.Store.LogAudit(0, 0, "register_industry_missing", "kb_packages",
 				"通用行业包缺失，注册未载入行业(租户编码:"+req.Code+")")
 		}
-		// 权限：试用每日上限 2 万字符 + 2 万 token（D4 token 口径优先）；审核模式下不预发
+		// 权限：试用每日上限 2 万字符 + 2 万 token（D4 token 口径优先）；
+		// ★ 任务2.2：注册一律自动发放体验额度（不再有审核模式不发分支）
 		perms := &tenant.Perms{MaxDailyChars: 20000, MaxDailyTokens: 20000}
-		if !reviewMode {
-			perms.SentenceBalance = trialSentences
-			perms.PackageCode = "trial"
-		}
+		perms.SentenceBalance = trialSentences
+		perms.PackageCode = "trial"
 		pb, _ := json.Marshal(perms)
 		t, err := s.Ten.Create(req.Code, req.Name, "", string(pb))
 		if err != nil {
@@ -320,7 +307,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			_ = s.Ten.SetIndustry(inviteTenantID, industryPkg.Code)
 		}
 		_ = s.Store.EnsureBalance(inviteTenantID)
-		if trialTokens > 0 && !reviewMode {
+		if trialTokens > 0 {
 			if gerr := s.Store.CreateQuotaGrant(inviteTenantID, "trial", trialTokens, time.Now().Add(time.Duration(trialDays)*24*time.Hour), "register", 0); gerr != nil {
 				_ = s.Store.Charge(inviteTenantID, trialTokens) // 台账失败兜底旧通道
 			}
@@ -457,11 +444,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.Store.LogAudit(inviteTenantID, nu.ID, "register", "auth", "自助注册 role="+auditRole)
 	// 登记注册成功（推进同 IP 频率窗口）
 	s.regGuard.record(ip)
-	// 成功提示：审核模式下提示等待发放
+	// 成功提示（任务2.2：注册即自动发放体验额度，不再有审核等待态）
 	msg := "注册成功，试用额度已发放"
-	if reviewMode && req.Invite == "" {
-		msg = "注册成功，账号已创建；管理员审核后将发放试用额度"
-	}
 	regResp := map[string]interface{}{
 		"success":   true,
 		"message":   msg,
@@ -476,9 +460,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, regResp)
 }
 
-// handleGrantTrial 超管向待审核租户发放试用额度（幂等）：
-//   - 幂等校验：租户已有 package_code（已开通/已订阅）时拒绝重复发放
-//   - 发放内容：trial_sentences 句数 + trial_tokens 余额，并置 package_code="trial"
+// handleGrantTrial 超管向租户发放/重新发放体验额度（任务2.4：放开幂等，改为叠加发放）：
+//   - ★ 重新发放语义：每次调用都叠加发放一份全新体验额度（独立到期日），
+//     已开通/已订阅租户也可再领（适用于体验用完/过期的老租户再给一次体验）
+//   - 发放内容：体验 token（free_trial_tokens）+ 句数镜像（token÷折算率），并置 package_code="trial"（仅当前为空时）
 //
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 tenant_id，需 super_admin）。
 // 返回: success=true 时携带发放后的句数余额。
@@ -497,12 +482,6 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 	}
 	// 平台根租户（tenant_id=0）：直接发放试用额度，无需 tenants 表记录
 	if req.TenantID == 0 {
-		trialSentences := int64(100)
-		if v, _ := s.Store.GetConfig("trial_sentences"); v != "" {
-			if sv, perr := strconv.ParseInt(v, 10, 64); perr == nil && sv > 0 {
-				trialSentences = sv
-			}
-		}
 		trialTokens := int64(300000)
 		if v, _ := s.Store.GetConfig("free_trial_tokens"); v != "" {
 			if tv, perr := strconv.ParseInt(v, 10, 64); perr == nil && tv > 0 {
@@ -514,6 +493,10 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 			if d2, perr := strconv.Atoi(v); perr == nil && d2 > 0 {
 				trialDays = d2
 			}
+		}
+		trialSentences := int64(0)
+		if rate := s.Store.TokenSentenceRate(); rate > 0 {
+			trialSentences = trialTokens / rate
 		}
 		_ = s.Store.EnsureBalance(0)
 		if trialTokens > 0 {
@@ -531,19 +514,9 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "租户不存在"})
 		return
 	}
-	// 幂等：已有任何包身份（含 trial）即拒绝重复发放
+	// ★ 任务2.4：不再幂等拒绝——每次都是「重新发放」叠加一份新体验
 	perms := tenant.ParsePerms(t.Permissions)
-	if perms.PackageCode != "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该租户已开通试用或已订阅商业包，无需重复发放"})
-		return
-	}
-	// 读取发放配置（与注册路径同一套配置键）
-	trialSentences := int64(100)
-	if v, _ := s.Store.GetConfig("trial_sentences"); v != "" {
-		if sv, perr := strconv.ParseInt(v, 10, 64); perr == nil && sv > 0 {
-			trialSentences = sv
-		}
-	}
+	// 读取发放配置（与注册路径同一套配置键，唯一口径 free_trial_*）
 	trialTokens := int64(300000)
 	if v, _ := s.Store.GetConfig("free_trial_tokens"); v != "" {
 		if tv, perr := strconv.ParseInt(v, 10, 64); perr == nil && tv > 0 {
@@ -556,16 +529,21 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 			trialDays = d2
 		}
 	}
-	// 发放句数并置试用包身份
-	perms.SentenceBalance = trialSentences
-	perms.PackageCode = "trial"
-	perms.SubscribedAt = time.Now().Format(time.RFC3339)
+	trialSentences := int64(0)
+	if rate := s.Store.TokenSentenceRate(); rate > 0 {
+		trialSentences = trialTokens / rate
+	}
+	// 发放：句数镜像叠加 + 包身份（仅当前为空时置 trial，避免覆盖付费订阅身份）
+	perms.SentenceBalance += trialSentences
+	if perms.PackageCode == "" {
+		perms.PackageCode = "trial"
+	}
 	pb, _ := json.Marshal(perms)
 	if err := s.Ten.Update(t.ID, t.Name, t.ExpiresAt, string(pb)); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	// 充值 token 余额
+	// 充值 token 余额（叠加新台账行，独立到期日）
 	_ = s.Store.EnsureBalance(t.ID)
 	if trialTokens > 0 {
 		if gerr := s.Store.CreateQuotaGrant(t.ID, "trial", trialTokens, time.Now().Add(time.Duration(trialDays)*24*time.Hour), "register", 0); gerr != nil {
@@ -575,7 +553,7 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 	// 审计 + 通知租户管理员
 	s.Store.LogAuditDiff(s.effTenant(r, u), u.ID, "grant_trial", "tenant", strconv.FormatInt(t.ID, 10),
 		`{"package_code":""}`, `{"package_code":"trial","sentences":`+strconv.FormatInt(trialSentences, 10)+`}`)
-	s.notifyTenantAdmins(t.ID, "试用额度已发放", "您的企业工作台已开通，试用句数 "+strconv.FormatInt(trialSentences, 10)+" 句已到账。")
+	s.notifyTenantAdmins(t.ID, "体验额度已重新发放", "您的企业工作台已重新发放体验额度，体验 token "+strconv.FormatInt(trialTokens, 10)+" 已到账（有效期 "+strconv.Itoa(trialDays)+" 天）。")
 	writeJSON(w, 200, map[string]interface{}{"success": true, "sentence_balance": perms.SentenceBalance})
 }
 

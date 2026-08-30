@@ -40,13 +40,25 @@ export function BalancePanel() {
   if (loading) return <Loading className="ss-loading" />
   if (err) return <Card><Tag theme="danger">{err}</Tag></Card>
   const b = (data as any)?.balance ?? {}
+  // ★ 任务2.5：可用总额 = 台账 + 永久余额；为 0 时展示「购买月租套餐或充值永久 token」引导横幅
+  const totalAvailable = Number((data as any)?.total_available ?? 0)
   return (
     <div className="ss-grid">
+      {totalAvailable <= 0 && (
+        <Card>
+          <div style={{ padding: '10px 14px', borderRadius: 8, background: '#fff7e6', border: '1px solid #ffd591', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
+            额度已用尽。可购买月租套餐或充值永久 token 后继续使用。
+            <div style={{ marginTop: 6 }}>
+              <Button size="small" theme="warning" onClick={() => { window.history.pushState({}, '', '/packages'); window.dispatchEvent(new PopStateEvent('popstate')) }}>💎 购买月租套餐 / 充值永久 token</Button>
+            </div>
+          </div>
+        </Card>
+      )}
       <Card>
         <h3>我的余额</h3>
         <div className="ss-row"><span>永久余额</span><b>{fmtNum(b.balance ?? 0)}</b></div>
         <div className="ss-row"><span>发放台账</span><b>{fmtNum((data as any)?.sub_grants_left ?? 0)}</b></div>
-        <div className="ss-row"><span>可用总额</span><b>{fmtNum((data as any)?.total_available ?? 0)}</b></div>
+        <div className="ss-row"><span>可用总额</span><b>{fmtNum(totalAvailable)}</b></div>
       </Card>
     </div>
   )
@@ -94,13 +106,25 @@ export function MyPackagePanel() {
   if (loading) return <Loading className="ss-loading" />
   if (err) return <Card><Tag theme="danger">{err}</Tag></Card>
   const p = (data as any) ?? {}
+  const total = Number(p.tokens ?? p.balance_tokens ?? 0)
+  const hasPlan = !!(p.package_code && p.package_code !== 'trial')
   return (
     <div className="ss-grid">
+      {total <= 0 && !hasPlan && (
+        <Card>
+          <div style={{ padding: '10px 14px', borderRadius: 8, background: '#fff7e6', border: '1px solid #ffd591', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
+            额度已用尽。可购买月租套餐或充值永久 token 后继续使用。
+            <div style={{ marginTop: 6 }}>
+              <Button size="small" theme="warning" onClick={() => { window.history.pushState({}, '', '/billing'); window.dispatchEvent(new PopStateEvent('popstate')) }}>💰 前往充值/购买</Button>
+            </div>
+          </div>
+        </Card>
+      )}
       <Card>
         <h3>我的套餐</h3>
         <div className="ss-row"><span>当前包</span><Tag>{p.package_code ?? '—'}</Tag></div>
         <div className="ss-row"><span>剩余句数</span><b>{fmtNum(p.sentence_balance ?? 0)} 句</b></div>
-        <div className="ss-row"><span>可用 token</span><b>{fmtNum(p.tokens ?? p.balance_tokens ?? 0)}</b></div>
+        <div className="ss-row"><span>可用 token</span><b>{fmtNum(total)}</b></div>
         <div className="ss-row"><span>永久余额</span><b>{fmtNum(p.permanent_balance ?? 0)}</b></div>
       </Card>
     </div>
