@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -248,7 +249,16 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 	// 写入 critical 级告警（前台告警面板 + 超管可见）
 	msg := "静态码支付待人工确认：租户 #" + strconv.FormatInt(tid, 10) + " 订单 " + o.OrderNo + " 用户已付款，请尽快查看并开通"
 	_ = s.Store.CreateAlert(0, "critical", "pay_manual", msg)
-	// 邮件通知超管（复用告警邮件收件人 alert_email）
+	// ★ 站内信通知平台超管（tenant_id=0, role=admin）：超管铃铛即时可见待确认订单
+	//   注意：CreateNotification 依赖自增序列取主键；若序列失步（如 pg 迁移/回放后
+	//   seq 落后于实际行数）会撞主键失败——务必打日志而非静默吞错，便于及时发现。
+	for _, sa := range s.Store.ListUsersByRole(0, "admin") {
+		if err := s.Store.CreateNotification(sa.ID, "静态码支付待人工确认",
+			fmt.Sprintf("租户 #%d 订单 %s 用户已付款，请尽快查看并开通", tid, o.OrderNo), "pay_manual", req.OrderID); err != nil {
+			log.Printf("[pay-manual-confirm] 站内信通知超管(id=%d)失败: %v", sa.ID, err)
+		}
+	}
+	// 邮件通知超管（收件人 alert_email，抄送 alert_email_cc）
 	s.notifyAlert("静态码支付待人工确认（请尽快开通）", msg)
 	s.Store.LogAudit(tid, u.ID, "pay_manual_confirm", "orders", o.OrderNo)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "已通知管理员审核开通，请等待到账"})

@@ -241,7 +241,11 @@ SEEDSQL
   DEMO_PSQL --file "$TMPSEED" >/dev/null || die "种入演示账号失败"
   rm -f "$TMPSEED"
   # 修正自增序列（pg_dump 重放后序列可能回退到低位，防止与显式 id 撞号）
-  DEMO_PSQL --tuples-only --command "SELECT setval('users_id_seq', GREATEST((SELECT COALESCE(MAX(id),1) FROM users),1), true)" >/dev/null
+  # ★ 必须覆盖所有核心表：此前仅 users 已修，notifications/api_keys/kb_entries 等
+  #   失步会导致 insert 撞主键失败（如「我已付费」站内信通知超管静默丢失）。
+  for _seq in users notifications api_keys kb_entries orders tickets alerts; do
+    DEMO_PSQL --tuples-only --command "SELECT setval('${_seq}_id_seq', GREATEST((SELECT COALESCE(MAX(id),1) FROM ${_seq}),1), true)" >/dev/null 2>&1
+  done
   log "   已种入演示账号（统一密码：Demo#2026Rm!）→ demo_admin / demo_youtube / demo_hr / demo_cs"
 else
   log "   DEMO_SEED_ACCOUNTS=0，跳过演示账号种入"

@@ -419,7 +419,8 @@ func parseInt64(s string) (int64, error) {
 	return n, err
 }
 
-// notifyAlert 关键告警邮件通知：向配置的收件人（系统配置 alert_email）发送告警邮件。
+// notifyAlert 关键告警邮件通知：向配置的收件人（系统配置 alert_email）发送告警邮件，
+// 可配置 alert_email_cc 作为抄送（两者均为逗号分隔多地址）。
 // 收件人未配置时跳过（告警仍写入 alerts 表，后台可见）；邮件走 mail.Sender（未配置
 // SMTP 时为 Noop 打印日志，配置后发送真实邮件）。
 // 参数：subject=邮件主题，body=告警内容。
@@ -427,6 +428,10 @@ func (s *Server) notifyAlert(subject, body string) {
 	recipients := ""
 	if v, _ := s.Store.GetConfig("alert_email"); v != "" {
 		recipients = v
+	}
+	cc := ""
+	if v, _ := s.Store.GetConfig("alert_email_cc"); v != "" {
+		cc = v
 	}
 	if recipients == "" {
 		return // 未配置告警收件人，不发送
@@ -436,10 +441,14 @@ func (s *Server) notifyAlert(subject, body string) {
 		if to == "" {
 			continue
 		}
-		_ = s.sendTemplatedMail(to, "alert", map[string]string{
+		// 渲染 alert 模板后补 To/Cc，入队异步发送（Message.CC 由 SMTPSender 写入 Cc 头）
+		msg := renderMailTpl(s.getMailTpl("alert"), map[string]string{
 			"title":   subject,
 			"content": body,
 			"level":   "warning",
 		})
+		msg.To = to
+		msg.CC = cc
+		_ = s.enqueueMail(msg, false)
 	}
 }
