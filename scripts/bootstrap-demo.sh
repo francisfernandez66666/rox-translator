@@ -29,6 +29,14 @@ DEMO_SVC="${DEMO_SVC:-translator-demo}"
 DEMO_DB="${DEMO_DB:-langcross_demo}"
 DEMO_USER_DATA="${DEMO_USER_DATA:-/opt/translator-demo/data}"
 
+# 演示专用账号（仅种入 langcross_demo，生产库不存在同名账号 → 跨库彻底独立）
+# 说明：镜像克隆含生产真实账号（zhangzifei 等）；但这些账号凭据与生产一致，
+#      用于演示时不「独立」。为此额外种入 4 个只存在于演示库的专用账号：
+#      demo_admin（企业管理员）/ demo_youtube / demo_hr / demo_cs（普通用户）。
+# 密码统一：Demo#2026Rm!（bcrypt(DefaultCost) 哈希见下方 4.5 步骤的 SEEDSQL）。
+# 开关：DEMO_SEED_ACCOUNTS=0 可跳过种入。
+DEMO_SEED_ACCOUNTS=1
+
 # 生产实例路径（脚本自动探测，通常无需覆盖）
 PROD_DIR="${PROD_DIR:-/opt/translator}"
 PROD_BIN="${PROD_BIN:-/opt/translator/bin/translator-server}"
@@ -151,7 +159,8 @@ else
 fi
 
 # ----------------------------- 3. 演示库微调 -----------------------------
-log "==> [3/6] 演示库配置微调（主域名 / 支付模式）"
+log "==> [3/6] 演示库配置微调（主域名 / 支付模式 / 品牌子域）"
+PRE=$(printf '%s' "$DEMO_DOMAIN" | sed -E 's/\.lexicorn\.cn$//')
 # ① 主站域名指向演示域（品牌/Caddy on-demand ask 均按此放行）
 sudo -u postgres psql -d "$DEMO_DB" -c "
 INSERT INTO system_config (key, value, updated_at) VALUES ('primary_host','${DEMO_DOMAIN}', now())
@@ -160,6 +169,11 @@ ON CONFLICT (key) DO UPDATE SET value=excluded.value, updated_at=excluded.update
 sudo -u postgres psql -d "$DEMO_DB" -c "
 INSERT INTO system_config (key, value, updated_at) VALUES ('pay_mode','${DEMO_PAY_MODE}', now())
 ON CONFLICT (key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at;"
+# ③ 品牌子域：租户1 Domain 由生产 rox 改为演示前缀（如 rox-test）。
+#    否则登录响应 brand_host=rox.lexicorn.cn，前端会 window.location.replace
+#    强制跳回生产域名，破坏演示独立性（auth.go:150 + 前端 login 分支）。
+sudo -u postgres psql -d "$DEMO_DB" -c "
+UPDATE tenants SET domain='${PRE}' WHERE id=1 AND domain='rox';"
 
 # ----------------------------- 4. 演示 secrets -----------------------------
 log "==> [4/6] 生成演示环境密钥文件 ${DEMO_SECRETS}（0600）"
@@ -192,6 +206,40 @@ METRICS_TOKEN=${METRICS_TOKEN_VAL}
 EOF
 chmod 600 "$DEMO_SECRETS"
 chown root:translator "$DEMO_SECRETS" 2>/dev/null || true
+
+# ----------------------------- 4.5 种入演示专用账号 -----------------------------
+# 幂等：先 DELETE username 前缀 demo_ 的账号再 INSERT（设计上 demo_ 仅为镜像专用，
+#       生产库不会出现同名账号，故不会误删生产数据）；用 heredoc 直读(<<'SEEDSQL')
+#       避免 bcrypt 哈希中的 $ 被 shell/heredoc 二次展开破坏。
+log "==> [4.5/6] 种入演示专用账号（仅演示库，生产无同名账号 → 跨库彻底独立）"
+if [ "$DEMO_SEED_ACCOUNTS" = "1" ]; then
+  # 演示库 psql 封装（直连 DSN，等价：psql "$DEMO_DSN" -v ON_ERROR_STOP=1）
+  DEMO_PSQL() { psql "$DEMO_DSN" -v ON_ERROR_STOP=1 "$@"; }
+  # 演示库 DSN（同角色同主机换库，见步骤2）→ psql 直连执行。
+  # ★ 注意：psql 参数须用单引号传字符串（勿用 \" 拼接），否则 psql 会把转义引号
+  #   当连接字符串的一部分而报 invalid connection option。
+  DEMO_PSQL --command "DELETE FROM users WHERE username LIKE 'demo\\_%'" >/dev/null
+  # ★ 关键：bcrypt 哈希含 $，任何 shell/heredoc 参数展开都会破坏（$2/$10/$408 被当变量）。
+  #   正确做法：用「引号 heredoc」把 SQL 原样写入临时文件（$ 保持字面量），再由 psql -f
+  #   读取执行——这是唯一不损坏哈希的可靠路径。
+  TMPSEED=$(mktemp /tmp/langcross_demo_seed_XXXXXX.sql)
+  chmod 640 "$TMPSEED"
+  cat > "$TMPSEED" <<'SEEDSQL'
+INSERT INTO users (tenant_id,username,password_hash,display_name,role,status,created_by,created_at,updated_at,org_id,email,agreed_at)
+VALUES
+(1,'demo_admin','$2a$10$408aoZNzLUsf9rCNwjY75OHs6oeSBC7XPmx0RM0BmY2tCkKQC9j6W','演示·企业管理员','tenant_admin','active',10001,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,2,'demo_admin@example.com',CURRENT_TIMESTAMP),
+(1,'demo_youtube','$2a$10$X5PebOqqK1jQ48Ga7K/uZuQiKFuoNE8mI44/r9A1dAvrk1dnhyW7W','演示·视频制作','user','active',10001,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,8,'demo_youtube@example.com',CURRENT_TIMESTAMP),
+(1,'demo_hr','$2a$10$Xk4.0Cbz8L3DUS..vqfDJ.47JoztnPQiPUcnZQVk1hwfI.2Zvm1Ky','演示·人事部','user','active',10001,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,7,'demo_hr@example.com',CURRENT_TIMESTAMP),
+(1,'demo_cs','$2a$10$x2HpH87cz3LDzWauVJu4dO5oEolJQJHx4IHOKrWRIMAQ6cnOZ2zaC','演示·客服部','user','active',10001,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,17,'demo_cs@example.com',CURRENT_TIMESTAMP);
+SEEDSQL
+  DEMO_PSQL --file "$TMPSEED" >/dev/null || die "种入演示账号失败"
+  rm -f "$TMPSEED"
+  # 修正自增序列（pg_dump 重放后序列可能回退到低位，防止与显式 id 撞号）
+  DEMO_PSQL --tuples-only --command "SELECT setval('users_id_seq', GREATEST((SELECT COALESCE(MAX(id),1) FROM users),1), true)" >/dev/null
+  log "   已种入演示账号（统一密码：Demo#2026Rm!）→ demo_admin / demo_youtube / demo_hr / demo_cs"
+else
+  log "   DEMO_SEED_ACCOUNTS=0，跳过演示账号种入"
+fi
 
 # ----------------------------- 5. systemd 演示单元 -----------------------------
 log "==> [5/6] 安装演示 systemd 单元 ${DEMO_SVC}.service"
