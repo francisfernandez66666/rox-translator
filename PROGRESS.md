@@ -1,6 +1,17 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-08-31（任务2：体验额度统一 + KB 上传奖励 + 重新发放 + 到期提醒，已部署生产）｜ 与生产一致（main 分支）
+> 最后更新：2026-08-31（演示镜像独立化：专用账号 + 品牌域修正）｜ 与生产一致（main 分支）
+
+## 〇-III、演示镜像独立化 + 演示专用账号（2026-08-31，提交 2dff0bc）
+
+| 块 | 内容 |
+|---|---|
+| **云端清理测试数据** | 删除生产库测试租户 5/7/8/9/10/11 及 user01/taadmin/t_member_bad/t_admin3 等测试账号并级联清理关联数据；生产库仅存唯一租户1（rox）+ 真实用户 |
+| **演示专用账号种入** | `bootstrap-demo.sh` 新增 [4.5] 步骤：种入 4 个仅存在于 langcross_demo 的账号 demo_admin（企业管理员）/ demo_youtube / demo_hr / demo_cs，统一密码 Demo#2026Rm!；生产库无同名账号 → 跨库登录/数据彻底独立 |
+| **bcrypt 哈希双坑修复** | ① shell/heredoc 变量展开破坏 `$2/$10/$408` → 引号 heredoc 写临时文件 + `psql -f`（`$` 保持字面量）；② psql 参数误用 `\"` 拼接 → 改函数封装 `psql "$DEMO_DSN" "$@"` |
+| **品牌子域修复** | 租户1 Domain `rox`→`rox-test`：登录不再返回 `brand_host=rox.lexicorn.cn`，避免前端 `window.location.replace` 强跳生产域名破坏演示独立性 |
+| **发版隔离验证** | 生产 translator 重启（模拟发版）期间演示 translator-demo 全程 200；两服务/两端口(8787/8789)/两库(PostgreSQL langcross/langcross_demo)物理隔离 |
+| **验证** | 演示 4 账号公网登录 + 受保护接口（/api/billing/balance total_available=300000）+ 生产/演示主页 200 全通过 |
 
 ## 〇-II、任务2：体验额度统一 + KB 上传奖励 + 重新发放 + 到期提醒（2026-08-31，提交 33db59c）
 
