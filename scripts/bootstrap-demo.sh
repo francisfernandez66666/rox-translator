@@ -161,9 +161,15 @@ fi
 # ----------------------------- 3. 演示库微调 -----------------------------
 log "==> [3/6] 演示库配置微调（主域名 / 支付模式 / 品牌子域）"
 PRE=$(printf '%s' "$DEMO_DOMAIN" | sed -E 's/\.lexicorn\.cn$//')
-# ① 主站域名指向演示域（品牌/Caddy on-demand ask 均按此放行）
+# ① 主站域名：保持主站（langcross.lexicorn.cn），绝不能改成演示域！
+#    ★ 原因：brandingPayload 以 primary_host 判定「主站前缀」；若设为演示域 rox-test.lexicorn.cn，
+#      则访问 rox-test 时前缀 rox-test 命中主站 → 返回平台品牌（空），租户1的品牌定制
+#      （logo/首页背景/网页标题 brand_name）在演示站不展示。保持主站域名，rox-test 前缀
+#      才走租户域解析 GetByDomain("rox-test") → 命中租户1 → 返回完整品牌（含标题）。
+#      （on-demand ask 对 rox-test 仍放行：handleCaddyOnDemandAsk 用 GetByDomain 分支，见 tenant.go）
+PROD_PRIMARY="${PROD_PRIMARY:-langcross.lexicorn.cn}"
 sudo -u postgres psql -d "$DEMO_DB" -c "
-INSERT INTO system_config (key, value, updated_at) VALUES ('primary_host','${DEMO_DOMAIN}', now())
+INSERT INTO system_config (key, value, updated_at) VALUES ('primary_host','${PROD_PRIMARY}', now())
 ON CONFLICT (key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at;"
 # ② 支付模式：演示环境默认 mock（下单自动到账，无需真实收款回调）
 sudo -u postgres psql -d "$DEMO_DB" -c "
