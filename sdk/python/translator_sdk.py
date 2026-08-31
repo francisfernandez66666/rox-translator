@@ -115,7 +115,7 @@ class TranslatorClient:
 
     def create_file_task(self, files, target_langs=None, mode: str = "pro",
                          title: str = "") -> dict:
-        """创建文件批量翻译任务（≤20 个，总量 ≤30MB）。
+        """创建文件批量翻译任务（≤20 个，总量 ≤40MB）。
 
         :param files: 文件路径列表，如 ["手册.docx", "清单.xlsx"]
         :param target_langs: 目标语言代码列表，缺省 ["en"]

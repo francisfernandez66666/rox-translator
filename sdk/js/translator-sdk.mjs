@@ -90,7 +90,7 @@ export class TranslatorClient {
     return this.#postJson("/openapi/v1/tasks", body);
   }
 
-  /** 创建文件批量翻译任务（≤20 个 / ≤30MB）。files: File|Blob[]（带 name）。 */
+  /** 创建文件批量翻译任务（≤20 个 / ≤40MB）。files: File|Blob[]（带 name）。 */
   async createFileTask(files, targetLangs, mode = "pro", title = "") {
     const fd = new FormData();
     for (const f of files) fd.append("files", f, f.name || `file-${Date.now()}`);

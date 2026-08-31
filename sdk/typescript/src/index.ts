@@ -135,7 +135,7 @@ export class TranslatorClient {
   }
 
   /**
-   * 创建文件批量翻译任务（≤20 个，总量 ≤30MB）。
+   * 创建文件批量翻译任务（≤20 个，总量 ≤40MB）。
    *
    * @param files - 本地文件路径数组（Node 环境）
    * @param targetLangs - 目标语言代码列表，缺省 ["en"]

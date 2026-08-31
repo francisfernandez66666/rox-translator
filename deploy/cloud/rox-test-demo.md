@@ -51,7 +51,7 @@ sudo PROD_DSN='postgres://langcross:<密码>@127.0.0.1:5432/langcross?sslmode=di
 4. **演示密钥**：写 `/etc/translator-demo/secrets.env`（0600），`JWT_SECRET`/`ADMIN_TOKEN` 复用生产
    （保证库内 `enc:v1:` 加密密钥可解密、登录 token 可验证——镜像的本质）。
 5. **systemd**：安装 `translator-demo.service`（端口 8789，独立 env、低并发、内存护栏）。
-6. **Caddy**：生成 `/etc/caddy/translator-demo.conf`（`rox-test.lexicorn.cn` → 127.0.0.1:8789）并在主 Caddyfile 引入、reload。
+6. **Caddy**：生成 `/etc/caddy/translator-demo.conf`（`rox-test.lexicorn.cn` → 127.0.0.1:8789，`request_body max_size 40MB`；SPA 首页走后端 `handleSPA` 注入品牌，消除先主站后演示站的闪烁）并在主 Caddyfile 引入、reload。
 
 ---
 
