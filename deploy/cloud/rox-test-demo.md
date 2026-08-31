@@ -94,6 +94,9 @@ journalctl -u translator-demo -n 30
 | 完全卸载 | `systemctl disable --now translator-demo; rm -rf /opt/translator-demo /etc/translator-demo /etc/caddy/translator-demo.conf`（并从主 Caddyfile 删除 import 行后 reload） |
 
 > 注：脚本已自动将演示库租户1的品牌子域从 `rox` 改为 `rox-test`，避免登录响应 `brand_host=rox.lexicorn.cn` 导致前端强制跳回生产域名。
+> 另注意：演示库 `primary_host` 必须保持主站 `langcross.lexicorn.cn`（**不可**改成演示域）。
+> 若改成演示域，品牌接口会把 `rox-test` 判为主站前缀而返回平台品牌（空），租户1的品牌定制
+> （logo/首页背景/网页标题）在演示站不展示——数据本身已随克隆带入，只是解析层被跳过。
 
 ---
 
@@ -104,7 +107,7 @@ journalctl -u translator-demo -n 30
 - **数据隔离**：演示库 `langcross_demo` 独立；生产写操作不影响演示，演示写操作不影响生产。
 - **密钥复用**：`JWT_SECRET` 复用生产，是为了克隆库内加密密钥可解；如担心安全可轮换，
   但需同时重写库内 `enc:v1:` 密文（成本高，演示场景不推荐）。
-- **内存**：演示实例已降低并发与内存（`GOMEMLIMIT=450Mi`、`MemoryMax=700M`、worker=1）。
+- **内存**：演示实例已降低并发与内存（`GOMEMLIMIT=450MiB`、`MemoryMax=700M`、worker=1）。
   若生产与演示同时高负载，请留意 `free -m`；极端情况可进一步压低演示参数或错峰演示。
 
 ---

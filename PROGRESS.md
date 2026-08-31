@@ -1,8 +1,8 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-08-31（演示镜像独立化：专用账号 + 品牌域修正）｜ 与生产一致（main 分支）
+> 最后更新：2026-08-31（演示镜像品牌定制展示修复：primary_host 保持主站）｜ 与生产一致（main 分支）
 
-## 〇-III、演示镜像独立化 + 演示专用账号（2026-08-31，提交 2dff0bc）
+## 〇-III、演示镜像独立化 + 演示专用账号（2026-08-31，提交 2dff0bc / 55a148a）
 
 | 块 | 内容 |
 |---|---|
@@ -10,6 +10,7 @@
 | **演示专用账号种入** | `bootstrap-demo.sh` 新增 [4.5] 步骤：种入 4 个仅存在于 langcross_demo 的账号 demo_admin（企业管理员）/ demo_youtube / demo_hr / demo_cs，统一密码 Demo#2026Rm!；生产库无同名账号 → 跨库登录/数据彻底独立 |
 | **bcrypt 哈希双坑修复** | ① shell/heredoc 变量展开破坏 `$2/$10/$408` → 引号 heredoc 写临时文件 + `psql -f`（`$` 保持字面量）；② psql 参数误用 `\"` 拼接 → 改函数封装 `psql "$DEMO_DSN" "$@"` |
 | **品牌子域修复** | 租户1 Domain `rox`→`rox-test`：登录不再返回 `brand_host=rox.lexicorn.cn`，避免前端 `window.location.replace` 强跳生产域名破坏演示独立性 |
+| **品牌定制展示修复（55a148a）** | 原脚本把演示库 `primary_host` 设为 `rox-test.lexicorn.cn`，导致 brandingPayload 将 rox-test 判为主站前缀 → 返回平台品牌（空），租户1的品牌定制（logo/首页背景/网页标题 brand_name）在演示站不展示（数据其实已随克隆）。修复：`primary_host` 保持主站 `langcross.lexicorn.cn`，rox-test 前缀走 `GetByDomain(rox-test)` 命中租户1 → 演示站正确展示 Rox极石汽车 logo/背景，网页标题自动变为「Rox极石汽车 智能翻译平台」 |
 | **发版隔离验证** | 生产 translator 重启（模拟发版）期间演示 translator-demo 全程 200；两服务/两端口(8787/8789)/两库(PostgreSQL langcross/langcross_demo)物理隔离 |
 | **验证** | 演示 4 账号公网登录 + 受保护接口（/api/billing/balance total_available=300000）+ 生产/演示主页 200 全通过 |
 
