@@ -31,6 +31,9 @@ func Log(ctx context.Context, level slog.Level, msg string, args ...any) {
 }
 
 // Info / Warn / Error 便捷封装。
+// Info 输出一条 INFO 级结构化日志（带 trace_id）。
 func Info(ctx context.Context, msg string, args ...any)  { Log(ctx, slog.LevelInfo, msg, args...) }
+// Warn 输出一条 WARN 级结构化日志（带 trace_id，用于非致命但需关注的情况）。
 func Warn(ctx context.Context, msg string, args ...any)  { Log(ctx, slog.LevelWarn, msg, args...) }
+// Error 输出一条 ERROR 级结构化日志（带 trace_id，用于异常与失败路径）。
 func Error(ctx context.Context, msg string, args ...any) { Log(ctx, slog.LevelError, msg, args...) }

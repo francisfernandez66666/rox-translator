@@ -70,6 +70,8 @@ func itoa(n int) string {
 
 type chanSem struct{ ch chan struct{} }
 
+// newChanSem 基于带缓冲 channel 创建进程内信号量（容量=缓冲区大小）。
+// 容量 <1 时按 1 兜底，保证至少允许一个并发。
 func newChanSem(capacity int) *chanSem {
 	if capacity < 1 {
 		capacity = 1
@@ -77,6 +79,8 @@ func newChanSem(capacity int) *chanSem {
 	return &chanSem{ch: make(chan struct{}, capacity)}
 }
 
+// Acquire 阻塞获取一个许可；ctx 取消则立即返回错误。
+// 返回的释放函数必须被调用一次归还许可。
 func (s *chanSem) Acquire(ctx context.Context) (func(), error) {
 	select {
 	case s.ch <- struct{}{}:
@@ -86,6 +90,7 @@ func (s *chanSem) Acquire(ctx context.Context) (func(), error) {
 	}
 }
 
+// TryAcquire 非阻塞尝试获取一个许可：立即成功返回 (释放函数,true)，失败返回 (nil,false)。
 func (s *chanSem) TryAcquire() (func(), bool) {
 	select {
 	case s.ch <- struct{}{}:
@@ -107,10 +112,13 @@ type redisSem struct {
 	ttl  time.Duration
 }
 
+// slotKey 生成第 i 个槽位的 Redis 键（key:0..key:cap-1）。
 func (s *redisSem) slotKey(i int) string {
 	return s.key + ":" + itoa(i)
 }
 
+// Acquire 阻塞获取一个全局许可（Redis SETNX 抢占任一槽位），ctx 取消或超时返回错误。
+// 槽位带 TTL 作看门狗，持有者崩溃后自动回收，不产生永久泄漏。
 func (s *redisSem) Acquire(ctx context.Context) (func(), error) {
 	token := randToken()
 	deadline := time.Now().Add(acquireTimeout(ctx))
@@ -135,6 +143,7 @@ func (s *redisSem) Acquire(ctx context.Context) (func(), error) {
 	}
 }
 
+// TryAcquire 非阻塞尝试获取一个全局许可：任一槽位 SETNX 成功即返回 (释放函数,true)。
 func (s *redisSem) TryAcquire() (func(), bool) {
 	token := randToken()
 	for i := 0; i < s.cap; i++ {
@@ -207,8 +216,10 @@ var ErrAcquireTimeout = errAcqTimeout{}
 
 type errAcqTimeout struct{}
 
+// Error 实现 error 接口：返回信号量获取超时的提示。
 func (errAcqTimeout) Error() string { return "信号量获取超时（容量可能已耗尽）" }
 
+// acquireTimeout 计算信号量获取的等待上限：优先沿用 ctx 截止时间，否则默认 90 秒。
 func acquireTimeout(ctx context.Context) time.Duration {
 	if dl, ok := ctx.Deadline(); ok {
 		return time.Until(dl)

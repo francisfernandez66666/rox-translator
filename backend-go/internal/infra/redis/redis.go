@@ -58,6 +58,8 @@ func New(addr, password string) *Client {
 	return c
 }
 
+// dial 建立一条新的 Redis TCP 连接（含可选密码 AUTH 鉴权）。
+// 仅当连接池空时被 get 调用；失败返回错误由调用方决定重试。
 func (c *Client) dial() (*conn, error) {
 	nc, err := net.DialTimeout(c.dialNet, c.addr, 3*time.Second)
 	if err != nil {
@@ -77,6 +79,8 @@ func (c *Client) dial() (*conn, error) {
 	return cc, nil
 }
 
+// get 从连接池取一条可用连接；池空时新建（dial）。
+// 不阻塞：池空立即新拨号，避免高并发下排队拖慢。
 func (c *Client) get() (*conn, error) {
 	select {
 	case cc := <-c.pool:
@@ -86,6 +90,7 @@ func (c *Client) get() (*conn, error) {
 	}
 }
 
+// put 把用完的连接归还连接池；池满则直接关闭（避免闲置连接堆积）。
 func (c *Client) put(cc *conn) {
 	if cc == nil {
 		return
@@ -355,6 +360,8 @@ func (c *Client) BLPop(ctx context.Context, key string, timeout time.Duration) (
 
 var errTimeout = errors.New("timeout")
 
+// do 在单条连接上执行一次完整的 RESP 读写（写命令→读回复），
+// 先按 ctx 截止时间设置 socket 超时，避免卡死；任一阶段出错即返回。
 func (cc *conn) do(ctx context.Context, write func(*bufio.Reader) error, read func(*bufio.Reader) error) error {
 	if err := cc.c.SetDeadline(deadline(ctx)); err != nil {
 		return err
@@ -368,6 +375,8 @@ func (cc *conn) do(ctx context.Context, write func(*bufio.Reader) error, read fu
 	return nil
 }
 
+// deadline 计算本次操作的 socket 截止时间：优先沿用 ctx 的截止时间，
+// 否则默认 5 秒超时（防底层卡死）。
 func deadline(ctx context.Context) (t time.Time) {
 	if dl, ok := ctx.Deadline(); ok {
 		return dl

@@ -29,6 +29,7 @@ func Daily() Counter {
 
 type redisCounter struct{ rdb *redis.Client }
 
+// Incr 对指定键自增 1，并兜底设置「至次日零点」的过期时间（INCR 不覆盖已有 TTL）。
 func (r *redisCounter) Incr(key string) (int64, error) {
 	n, err := r.rdb.Incr(context.Background(), key)
 	if err != nil {
@@ -39,6 +40,7 @@ func (r *redisCounter) Incr(key string) (int64, error) {
 	return n, nil
 }
 
+// Get 读取指定键当前计数（不存在返回 0）。
 func (r *redisCounter) Get(key string) (int64, error) {
 	return r.rdb.GetInt(context.Background(), key)
 }
@@ -55,6 +57,7 @@ func KeyForAKQuota(id int64, date string) string {
 	return "ak:quota:" + itoa(id) + ":" + date
 }
 
+// itoa 无符号十进制整数转字符串（避免依赖 strconv，供 Redis 键拼接使用）。
 func itoa(n int64) string {
 	if n == 0 {
 		return "0"

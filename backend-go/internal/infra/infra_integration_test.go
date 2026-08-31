@@ -53,6 +53,8 @@ func startRedis(t *testing.T) (string, func()) {
 	return addr, func() { _ = cmd.Process.Kill() }
 }
 
+// TestRedisBackedInfra Redis 后端联调测试：起临时 redis-server 验证
+// 信号量全局上限、每日计数器、分布式锁三者在多「实例」下共享生效。
 func TestRedisBackedInfra(t *testing.T) {
 	addr, cleanup := startRedis(t)
 	defer cleanup()

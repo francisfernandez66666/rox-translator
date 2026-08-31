@@ -36,6 +36,8 @@ func New(key string, rdb *redis.Client) Lock {
 
 type localLock struct{ mu *sync.Mutex }
 
+// TryLock 进程内互斥锁的非阻塞尝试加锁：成功返回 (true, 释放函数, nil)，占用中返回 (false,nil,nil)。
+// ttl 参数在本地实现中忽略（无跨进程竞争）。
 func (l *localLock) TryLock(ctx context.Context, ttl time.Duration) (bool, func(), error) {
 	if !l.mu.TryLock() {
 		return false, nil, nil
@@ -50,6 +52,9 @@ type redisLock struct {
 	key string
 }
 
+// TryLock 基于 Redis SETNX 的非阻塞分布式锁：抢占成功返回 (true, 释放函数, nil)。
+// 自带看门狗在 ttl 过半时续期（校验持有者 token 未变才续），
+// 释放时先校验持有者再删除，兼顾长任务与防误删。
 func (l *redisLock) TryLock(ctx context.Context, ttl time.Duration) (bool, func(), error) {
 	token := randToken()
 	ok, err := l.rdb.SetNX(ctx, l.key, token, ttl)
@@ -83,6 +88,7 @@ func (l *redisLock) TryLock(ctx context.Context, ttl time.Duration) (bool, func(
 	return true, release, nil
 }
 
+// randToken 生成 16 字节随机 token 用于锁持有者标识（防误删他人锁）；随机源失败时兜底返回固定串。
 func randToken() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {

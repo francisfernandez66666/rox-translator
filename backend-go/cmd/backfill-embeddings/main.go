@@ -25,6 +25,7 @@ import (
 	"translator/internal/kb"
 )
 
+// main 一次性向量回填工具入口：读取既有 npz 向量索引，写回 PG tm_segments.embedding（pgvector）。
 func main() {
 	npz := flag.String("npz", "/opt/translator/data/tm_embeddings.npz", "npz 向量索引路径")
 	dsn := flag.String("dsn", "", "目标 PostgreSQL DSN（缺省取环境变量 DB_DSN）")

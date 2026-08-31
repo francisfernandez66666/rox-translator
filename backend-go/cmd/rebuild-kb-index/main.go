@@ -33,6 +33,7 @@ import (
 	"translator/internal/llm"
 )
 
+// main 一次性向量索引回填工具入口：遍历全量段，调用 Embedding API 重算向量并 Upsert 写回 PG。
 func main() {
 	batch := flag.Int("batch", 256, "每批嵌入的段数量")
 	workers := flag.Int("workers", 4, "并发嵌入批数（另受 LLM_EMBED_CONCURRENT 限流约束）")

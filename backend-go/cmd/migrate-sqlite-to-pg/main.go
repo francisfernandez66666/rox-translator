@@ -46,6 +46,7 @@ var preferredOrder = []string{
 	"eval_records", "system_config",
 }
 
+// main 一次性迁移工具入口：解析 -sqlite/-dsn 参数，逐表从 SQLite 拷贝数据到 PostgreSQL。
 func main() {
 	sqlitePath := flag.String("sqlite", "", "源 SQLite 文件路径（必填）")
 	pgDSN := flag.String("dsn", "", "目标 PostgreSQL 连接串（必填）")
@@ -248,6 +249,8 @@ func pgColumns(dst *sql.DB, table string) (map[string]string, map[string]string,
 // valueScanner 用于吸收 PRAGMA 的默认值列（可能为 NULL）。
 type valueScanner struct{ v sql.NullString }
 
+// Scan 把任意来源值归一为 sql.NullString（nil→Invalid；string/[]byte/其他→格式化字符串），
+// 用于吸收 PRAGMA 中可能为 NULL 的默认值列。
 func (s *valueScanner) Scan(src interface{}) error {
 	if src == nil {
 		s.v = sql.NullString{Valid: false}

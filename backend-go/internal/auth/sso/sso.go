@@ -153,7 +153,8 @@ func (p *oidcProvider) discover() (*oidcDiscovery, error) {
 	return p.disc, p.err
 }
 
-// AuthURL：AuthURL
+// AuthURL 基于 OIDC 发现文档生成授权跳转 URL（含 client_id/redirect_uri/scope/state）。
+// 发现失败时返回空串（调用方应提示配置错误）。
 func (p *oidcProvider) AuthURL(state string) string {
 	d, err := p.discover()
 	if err != nil || d == nil {
@@ -177,7 +178,8 @@ func (p *oidcProvider) scopes() string {
 	return "openid email profile"
 }
 
-// Exchange：Exchange
+// Exchange 用授权码换取 OIDC token，并优先经 userinfo 端点获取用户信息。
+// 返回统一 UserInfo（邮箱/名称/sub）；任一步失败均返回错误。
 func (p *oidcProvider) Exchange(ctx context.Context, code string) (*UserInfo, error) {
 	d, err := p.discover()
 	if err != nil || d == nil {
@@ -257,7 +259,7 @@ type oauth2Provider struct {
 // Name 返回提供方展示名。
 func (p *oauth2Provider) Name() string { return p.cfg.Name }
 
-// AuthURL：AuthURL
+// AuthURL 生成 OAuth2 授权跳转 URL：按类型分流（飞书/钉钉专用端点，或配置的自定义端点）。
 func (p *oauth2Provider) AuthURL(state string) string {
 	q := url.Values{}
 	q.Set("client_id", p.cfg.ClientID)
@@ -283,7 +285,7 @@ func (p *oauth2Provider) AuthURL(state string) string {
 	return base + "?" + q.Encode()
 }
 
-// Exchange：Exchange
+// Exchange 按提供方类型分发授权码换 token：飞书/钉钉走各自实现，其余走通用 OAuth2。
 func (p *oauth2Provider) Exchange(ctx context.Context, code string) (*UserInfo, error) {
 	switch strings.ToLower(p.cfg.Type) {
 	case "feishu":
@@ -294,6 +296,7 @@ func (p *oauth2Provider) Exchange(ctx context.Context, code string) (*UserInfo, 
 	return p.exchangeGeneric(ctx, code)
 }
 
+// exchangeFeishu 飞书 OIDC 授权码换 token + 用户信息（Basic 认证用 app_id/app_secret）。
 func (p *oauth2Provider) exchangeFeishu(ctx context.Context, code string) (*UserInfo, error) {
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
@@ -327,6 +330,7 @@ func (p *oauth2Provider) exchangeFeishu(ctx context.Context, code string) (*User
 	return &UserInfo{Sub: r.Data.OpenID, Email: r.Data.Email, Name: r.Data.Name}, nil
 }
 
+// exchangeDingTalk 钉钉 OAuth2 授权码换 token，再经 contact/users/me 拉取用户信息。
 func (p *oauth2Provider) exchangeDingTalk(ctx context.Context, code string) (*UserInfo, error) {
 	payload := map[string]interface{}{
 		"clientId":     p.cfg.ClientID,
@@ -377,6 +381,7 @@ func (p *oauth2Provider) exchangeDingTalk(ctx context.Context, code string) (*Us
 	return &UserInfo{Sub: u.OpenID, Email: u.Email, Name: u.NickName}, nil
 }
 
+// exchangeGeneric 通用 OAuth2 授权码换 token（配置 token_url），再用 access_token 拉取 userinfo。
 func (p *oauth2Provider) exchangeGeneric(ctx context.Context, code string) (*UserInfo, error) {
 	if p.cfg.TokenURL == "" {
 		return nil, fmt.Errorf("提供方 %s 未配置 token_url", p.cfg.Name)

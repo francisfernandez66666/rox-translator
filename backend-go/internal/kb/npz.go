@@ -544,6 +544,9 @@ func ScopeVisibility(rowTenant, pack, caller int64, scope *PackScope) (visible, 
 	return false, false
 }
 
+// ScopedSearchScope 按给定 PackScope（租户/部门/行业/通用等可见范围）做向量相似度检索，
+// 返回命中的搜索结果；无查询向量或无索引数据时返回 nil。与 VectorSearch 的区别是
+// 在打分后叠加组织继承链范围过滤，保证仅返回当前 scope 可见的条目。
 func (idx *Index) ScopedSearchScope(query []float32, k int, wantLangs []string, tenantID int64, scope *PackScope) []SearchResult {
 	if len(query) == 0 || len(idx.Vecs) == 0 {
 		return nil // 无查询向量或无索引数据直接返回

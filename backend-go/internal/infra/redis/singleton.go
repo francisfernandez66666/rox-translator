@@ -57,4 +57,5 @@ var ErrDisabled = errDisabled{}
 
 type errDisabled struct{}
 
+// Error 实现 error 接口：返回未启用 Redis 的降级说明。
 func (errDisabled) Error() string { return "redis 未启用（降级进程内实现）" }
