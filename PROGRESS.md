@@ -1,6 +1,18 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-08-31（演示镜像品牌定制展示修复：primary_host 保持主站）｜ 与生产一致（main 分支）
+> 最后更新：2026-08-31（订单「我已付费」通知超管链路修复：站内信 + 抄送邮件）｜ 与生产一致（main 分支）
+
+## 〇-IV、订单「我已付费」通知超管链路修复（2026-08-31，提交 ed1be6d）
+
+| 块 | 内容 |
+|---|---|
+| **现象** | 静态码订单用户点「我已付费」后：超管铃铛无站内信、无告警邮件（alert 表其实已写入 id=55） |
+| **根因1（站内信静默丢失）** | `notifications_id_seq` 序列失步（生产 seq=15 vs 实际 max(id)=92），`CreateNotification` 取序列主键撞已存在 id → insert 失败被 `_ =` 静默吞掉 → 站内信全丢。alerts 表序列正常故告警能写入 |
+| **修复1** | 生产+演示 `notifications_id_seq` setval 对齐 max(id)；同时发现 `api_keys`(-22)/`kb_entries`(-23580) 同病，一并修复 |
+| **根因2（无告警邮件）** | `alert_email` 系统配置为空 → `notifyAlert` 直接 return（不发送）。本次已配置 `alert_email=noreply@lexicorn.cn` + `alert_email_cc=575160894@qq.com` |
+| **代码加固** | `handlePayManualConfirm` 站内信循环改为捕获错误打日志（`[pay-manual-confirm] 站内信通知超管(id=..)失败`）而非静默吞错；`notifyAlert` 支持 `alert_email_cc` 抄送 + 改走 `enqueueMail` 异步队列（Message.CC 由 SMTPSender 写入 Cc 头） |
+| **演示脚本固化** | `bootstrap-demo.sh` 序列修复由仅 users 扩展到全核心表（users/notifications/api_keys/kb_entries/orders/tickets/alerts），防止 pg_dump 回放后新演示镜像再踩主键冲突 |
+| **验证** | 演示环境端到端：demo_admin 下单(manual)→manual-confirm → `notifications` 新增 admin(id=1) pay_manual 站内信 + `jobs` mail_send 入队 `to=noreply@lexicorn.cn cc=575160894@qq.com` 主题「静态码支付待人工确认」+ alerts 写入；已清理演示测试订单/通知；生产+演示二进制同 MD5(708d557d) |
 
 ## 〇-III、演示镜像独立化 + 演示专用账号（2026-08-31，提交 2dff0bc / 55a148a）
 

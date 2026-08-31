@@ -97,6 +97,8 @@ journalctl -u translator-demo -n 30
 > 另注意：演示库 `primary_host` 必须保持主站 `langcross.lexicorn.cn`（**不可**改成演示域）。
 > 若改成演示域，品牌接口会把 `rox-test` 判为主站前缀而返回平台品牌（空），租户1的品牌定制
 > （logo/首页背景/网页标题）在演示站不展示——数据本身已随克隆带入，只是解析层被跳过。
+> 邮件说明：演示库已同步 `alert_email=noreply@lexicorn.cn` / `alert_email_cc=575160894@qq.com`
+> （供「我已付费」通知链路验证），但演示服务本身未配置 SMTP，邮件为 Noop（仅入 jobs 队列并打印日志，不真实外发）。
 
 ---
 
