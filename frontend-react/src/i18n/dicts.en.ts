@@ -193,7 +193,7 @@ export const baseEn: Record<string,string> = {
   'tk.createTitle': 'Create Translation Job',
   'tk.modeText': 'Text',
   'tk.modeFile': 'File',
-  'tk.fileHint': 'Click to select: docx / xlsx / pptx / pdf / txt / csv / srt / vtt / md / json / yaml (≤10MB)',
+  'tk.fileHint': 'Click to select: docx / xlsx / pptx / pdf / txt / csv / srt / vtt / md / json / yaml (≤40MB)',
   'tk.multiHint': 'Multi-select & mixed types (e.g. pdf+word+ppt+excel) supported; results zipped',
   'tk.filesCount': '{n} files selected',
   'tk.langsLabel': 'Target languages',

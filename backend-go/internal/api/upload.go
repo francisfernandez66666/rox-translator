@@ -45,12 +45,12 @@ var kbExtWhitelist = map[string]bool{
 
 // 上传大小上限（字节）
 const (
-	translateUploadMax = 50 << 20 // 翻译文件 50MB（原 200MB，过大文件易撑爆 1.6G 内存服务器）
+	translateUploadMax = 40 << 20 // 翻译文件 40MB（原 200MB，过大文件易撑爆 1.6G 内存服务器）
 	kbUploadMax        = 20 << 20 // KB 导入 20MB（表格文件通常远小于此）
 
 	// ★ 性能优化（不换库 Phase A1）：PDF 在低配机器（1G 内存）上走 pdf2docx+LibreOffice
 	// 转换极易 OOM/超时。前置拦截：体积或页数超限则直接友好拒绝，提示先转 docx 再上传。
-	pdfUploadSizeLimit = 15 << 20 // 15MB：PDF 转换高峰期容易顶满内存
+	pdfUploadSizeLimit = 40 << 20 // 40MB：与翻译文件总上限对齐（PDF 转换高峰期仍可能顶满内存）
 	pdfPageHardLimit   = 120       // 120 页：超出建议先转为 docx
 )
 

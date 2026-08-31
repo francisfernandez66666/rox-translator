@@ -344,15 +344,15 @@ ${DEMO_DOMAIN} {
 		file_server
 	}
 
+	# ★ SPA/首页托管改走演示后端 handleSPA：由后端按访问域名（rox-test → 租户1 ROX）
+	#   在 index.html 注入 window.__BRANDING__，首屏直接显示演示站自身品牌定制，
+	#   避免「先平台品牌、后演示品牌」的闪烁（演示站独立展示自身品牌，不套用主站）。
 	handle {
-		root * ${DEMO_DIR}/web
-		try_files {path} /index.html
-		header Cache-Control "no-cache, must-revalidate"
-		file_server
+		reverse_proxy 127.0.0.1:${DEMO_PORT}
 	}
 
 	request_body {
-		max_size 10MB
+		max_size 40MB
 	}
 }
 CADDYEOF

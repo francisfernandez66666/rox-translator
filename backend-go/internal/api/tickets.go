@@ -141,7 +141,7 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
-	// 上传上限与 multipart 解析（与即时翻译对齐：translateUploadMax=50MB，多文件共享总上限）
+	// 上传上限与 multipart 解析（与即时翻译对齐：translateUploadMax=40MB，多文件共享总上限）
 	r.Body = http.MaxBytesReader(w, r.Body, translateUploadMax)
 	if err := r.ParseMultipartForm(translateUploadMax); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": fmt.Sprintf("文件解析失败或超过大小上限（%dMB）", translateUploadMax/1024/1024)})

@@ -132,8 +132,8 @@ const errInsufficientCode = "insufficient_balance"
 // openAPITaskMaxFiles 单次文件任务数量上限
 const openAPITaskMaxFiles = 20
 
-// openAPITaskMaxBytes 单次文件任务总体积上限（30MB；Caddy 该路径放宽至 35MB）
-const openAPITaskMaxBytes = 30 << 20
+// openAPITaskMaxBytes 单次文件任务总体积上限（40MB；Caddy 该路径放宽至 40MB）
+const openAPITaskMaxBytes = 40 << 20
 
 // openAPITaskExtWhitelist 文件任务扩展名白名单（与内部文件工单一致）
 var openAPITaskExtWhitelist = map[string]bool{

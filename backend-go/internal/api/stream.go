@@ -163,7 +163,7 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, 401, map[string]string{"error": "未登录或登录已过期"})
 		return
 	}
-	// 解析 multipart 表单（上限 50MB，仅允许 docx/pptx/xlsx/pdf）
+	// 解析 multipart 表单（上限 40MB，仅允许 docx/pptx/xlsx/pdf）
 	if err := parseUpload(r, translateUploadMax, translateExtWhitelist); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
@@ -333,7 +333,7 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]string{"error": "未登录或登录已过期"})
 		return
 	}
-	// 解析 multipart 表单（上限 50MB，仅允许 docx/pptx/xlsx/pdf）
+	// 解析 multipart 表单（上限 40MB，仅允许 docx/pptx/xlsx/pdf）
 	if err := parseUpload(r, translateUploadMax, translateExtWhitelist); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return

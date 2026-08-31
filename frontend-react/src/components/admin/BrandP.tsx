@@ -18,7 +18,9 @@ export default function BrandP() {
   const [, t, tpl] = useT()
   const isSuper = ad.myLevel >= 4
   // 超管编辑「切换器」当前租户（平台根=rox=ID 1）；租户管理员传本租户 id，确保按本租户解析品牌授权
-  const targetTenantId = ad.activeTenantId ?? (isSuper ? 1 : 0)
+  // ★ 用 || 而非 ??：activeTenantId=0（超管未选租户）时必须回落到默认租户1（独立演示站=ROX 品牌），
+  //   否则 tid=0 会被后端当作「平台主站」→ 品牌定制 tab 显示/保存主站品牌而非演示站自身品牌。
+  const targetTenantId = ad.activeTenantId || (isSuper ? 1 : 0)
 
   // 表单状态：品牌名称、Logo URL、子域名、首页背景图、背景样式、登录页布局、登录卡片位置
   const [name, setName] = useState('')

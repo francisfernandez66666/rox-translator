@@ -286,7 +286,7 @@ export const baseZh: Record<string,string> = {
   'tk.createTitle': '创建翻译工单',
   'tk.modeText': '文本',
   'tk.modeFile': '文件',
-  'tk.fileHint': '点击选择文件：docx / xlsx / pptx / pdf / txt / csv / srt / vtt / md / json / yaml（≤10MB）',
+  'tk.fileHint': '点击选择文件：docx / xlsx / pptx / pdf / txt / csv / srt / vtt / md / json / yaml（≤40MB）',
   'tk.multiHint': '支持多选与混合类型（如 pdf+word+ppt+excel 一起提交），产物打包下载',
   'tk.filesCount': '已选 {n} 个文件',
   'tk.langsLabel': '目标语言',

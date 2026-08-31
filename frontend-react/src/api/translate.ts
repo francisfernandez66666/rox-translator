@@ -9,7 +9,7 @@
  * - 文本翻译：SSE 流式聊天翻译，支持进度回调和中断
  * - 文件翻译：SSE 流式文件翻译，支持多语言和进度回调
  * - 健康检查：后端服务状态检测（10 秒超时）
- * - 文件校验：翻译文件格式和大小校验（白名单 + 50MB 上限）
+ * - 文件校验：翻译文件格式和大小校验（白名单 + 40MB 上限）
  */
 
 import type { ChatResponse, HealthResponse, ProgressEvent } from '@/types'
@@ -171,8 +171,8 @@ export const TRANSLATE_FILE_EXTS = [
 // 文件选择框 accept 属性（即时翻译与工单翻译共用，避免两端格式不一致）
 export const TRANSLATE_FILE_ACCEPT = TRANSLATE_FILE_EXTS.join(',')
 
-// 单文件大小上限：与后端 translateUploadMax 对齐（50MB）
-export const TRANSLATE_FILE_MAX_BYTES = 50 * 1024 * 1024
+// 单文件大小上限：与后端 translateUploadMax 对齐（40MB）
+export const TRANSLATE_FILE_MAX_BYTES = 40 * 1024 * 1024
 
 /**
  * 校验待翻译文件：返回错误原因字符串（含「为什么不能翻译」）或 null（通过）。

@@ -132,8 +132,8 @@ export async function notificationsReadAll(): Promise<AdminResp> {
 }
 
 /**
- * 文件工单创建：multipart 上传，≤10MB；支持 docx/xlsx/pptx/pdf/txt/csv。
- * 支持多文件（共享 10MB 上限）；mode 透传后端避免被静默吞掉。
+ * 文件工单创建：multipart 上传，≤40MB；支持 docx/xlsx/pptx/pdf/txt/csv。
+ * 支持多文件（共享 40MB 上限）；mode 透传后端避免被静默吞掉。
  */
 export async function ticketCreateFile(files: File | File[], meta: { title: string; target_langs: string; mode?: string }): Promise<TicketResp> {
   const fd = new FormData()
