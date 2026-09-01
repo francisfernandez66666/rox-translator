@@ -213,7 +213,12 @@ func (s *Server) handleKBScrapeApprove(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				// 语言码白名单校验（SaveEntry 内部校验，此处按层写正式库）
-				if _, serr := s.Store.SaveEntry(tid, e.TargetPackID, e.Layer, e.SrcLang, e.SrcText, e.TgtLang, e.TgtText, "scrape:"+strconv.FormatInt(e.SourceID, 10)); serr != nil {
+				// 来源标记：采集投喂=scrape:<source_id>；用户投稿（source_id=0）=imported
+				module := "imported"
+				if e.SourceID > 0 {
+					module = "scrape:" + strconv.FormatInt(e.SourceID, 10)
+				}
+				if _, serr := s.Store.SaveEntry(tid, e.TargetPackID, e.Layer, e.SrcLang, e.SrcText, e.TgtLang, e.TgtText, module); serr != nil {
 					continue
 				}
 				applied++

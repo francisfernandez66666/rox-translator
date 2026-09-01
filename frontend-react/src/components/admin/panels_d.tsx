@@ -102,6 +102,13 @@ export function KbP() {
   // 包列表与各包条目数缓存
   const [pkgs, setPkgs] = useState<Any[]>([])
   const [entriesMap, setEntriesMap] = useState<Record<number, number>>({})
+  // ★ 行业下拉筛选（2026-09-02 功能①）：按包类型过滤列表
+  const [pkgTypeFilter, setPkgTypeFilter] = useState('')
+  // 过滤后的知识包列表（空=全部）
+  const filteredPkgs = useMemo<Any[]>(() => {
+    if (!pkgTypeFilter) return pkgs
+    return pkgs.filter((p: Any) => p.pack_type === pkgTypeFilter)
+  }, [pkgs, pkgTypeFilter])
   // 组织树（用于把部门包映射为部门名 / 部门路径；企业包映射为租户名）
   const [orgMap, setOrgMap] = useState<Map<number, OrgInfo>>(new Map())
   // 当前选中的包与其条目
@@ -433,7 +440,20 @@ export function KbP() {
       </div>
 
       {/* ===== 知识包列表 ===== */}
-      <Table rowKey="id" size="small" data={pkgs} style={{ marginTop: 8 }}
+      {/* ★ 行业下拉筛选（2026-09-02 功能①）：按包类型过滤，便于在众多行业包中快速定位 */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '10px 0 6px' }}>
+        <span style={{ fontSize: 13, color: '#556' }}>{t('kb.filterType')}</span>
+        <Select value={pkgTypeFilter} onChange={(v: any) => setPkgTypeFilter(String(v))}
+          options={[
+            { label: t('kb.filterAll'), value: '' },
+            { label: t('kb.typeTenant'), value: 'tenant' },
+            { label: t('kb.typeIndustry'), value: 'industry' },
+            { label: t('kb.typeLocale'), value: 'locale' },
+            { label: t('kb.typeDepartment'), value: 'department' },
+            { label: t('kb.typeCrossDept'), value: 'cross_dept' },
+          ]} style={{ width: 180 }} />
+      </div>
+      <Table rowKey="id" size="small" data={filteredPkgs} style={{ marginTop: 8 }}
         columns={[
            { colKey: 'id', title: 'ID', width: 60 },
            { colKey: 'code', title: t('kb.codePlaceholder'), width: 120 },

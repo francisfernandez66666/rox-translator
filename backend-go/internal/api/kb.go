@@ -85,6 +85,47 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	added, skipped := 0, 0
+	// ★ 平台共享包强制先审批（2026-09-02 功能）：行业包/语言文化包为全平台共享、
+	//   直接落入正式库将立即影响所有租户译文。上传内容改为先进待审池（source_id=0）,
+	//   由超管在「待审池」批量通过后才落正式库生效。企业包/部门包/跨部门包沿用自服务立即生效。
+	if sharedPackNeedsApproval(pkg.PackType) {
+		staged := 0
+		for _, e := range req.Entries {
+			src := strings.TrimSpace(e.SourceText)
+			if src == "" {
+				skipped++
+				continue
+			}
+			if e.Layer == 0 {
+				e.Layer = store.LayerTM
+			}
+			if e.TargetLang == "" {
+				e.TargetLang = "en"
+			}
+			if ok, serr := s.Store.StageEntry(&store.KBStagedEntry{
+				TargetPackID: req.PackageID,
+				PackType:     pkg.PackType,
+				SourceID:     0, // 手动投喂
+				Tier:         2,
+				Layer:        e.Layer,
+				SrcLang:      "zh",
+				SrcText:      src,
+				TgtLang:      e.TargetLang,
+				TgtText:      e.TargetText,
+				Status:       "pending",
+			}); serr == nil && ok {
+				staged++
+			} else {
+				skipped++
+			}
+		}
+		s.Store.LogAudit(tid, u.ID, "kb_shared_submit", "kb_staged_entries", strconv.Itoa(staged))
+		writeJSON(w, 200, map[string]interface{}{
+			"success": true, "message": "已提交共享包待审池，超管审批通过后生效",
+			"added": 0, "skipped": skipped, "staged": staged, "needs_approval": true,
+		})
+		return
+	}
 	// 逐条导入：空源文跳过；默认层 2、默认目标语言 en
 	for _, e := range req.Entries {
 		src := strings.TrimSpace(e.SourceText)
@@ -507,6 +548,15 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 
 	added := 0
 	skipped := 0
+	// ★ 平台共享包强制先审批（2026-09-02 功能①）：行业包/语言文化包上传内容先进待审池，
+	//   超管审批通过后才落正式库；其余包类型沿用自服务立即生效（与 JSON 导入同口径）。
+	shared := sharedPackNeedsApproval(pkg.PackType)
+	type stagedItem struct {
+		layer int
+		lang  string
+		text  string
+	}
+	var stagedItems []*store.KBStagedEntry
 	for _, rec := range records {
 		var src string
 		// 提取源列值
@@ -544,12 +594,37 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 			layer = store.LayerTM
 		}
 		for lang, txt := range translations {
+			if shared {
+				stagedItems = append(stagedItems, &store.KBStagedEntry{
+					TargetPackID: req.PackageID,
+					PackType:     pkg.PackType,
+					SourceID:     0, // 手动投喂
+					Tier:         2,
+					Layer:        layer,
+					SrcLang:      "zh",
+					SrcText:      src,
+					TgtLang:      lang,
+					TgtText:      txt,
+					Status:       "pending",
+				})
+				continue
+			}
 			if _, err := s.Store.SaveEntry(tid, req.PackageID, layer, "zh", src, lang, txt, "imported"); err != nil {
 				skipped++
 				continue
 			}
 			added++
 		}
+	}
+	// 共享包：整批进待审池（hash 去重），不落正式库、不触发奖励
+	if shared {
+		staged, _ := s.Store.StageEntriesBatch(stagedItems)
+		s.Store.LogAudit(tid, u.ID, "kb_shared_submit", "kb_staged_entries", strconv.Itoa(staged))
+		writeJSON(w, 200, map[string]interface{}{
+			"success": true, "message": "已提交共享包待审池，超管审批通过后生效",
+			"added": 0, "skipped": skipped, "staged": staged, "needs_approval": true,
+		})
+		return
 	}
 
 	s.Store.LogAudit(tid, u.ID, "kb_file_import", "kb_entries", req.TempID)

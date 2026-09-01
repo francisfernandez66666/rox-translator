@@ -35,6 +35,12 @@ func canManagePackType(u *store.User, packType string) bool {
 	return packType == store.PackTenant || packType == store.PackDepartment || packType == store.PackCrossDept
 }
 
+// sharedPackNeedsApproval 判断是否为平台共享包（行业包/语言文化包）——用户上传内容须先进待审池。
+// ★ 2026-09-02 功能①：共享包直接落正式库会影响所有租户译文，必须超管审批通过后热加载生效。
+func sharedPackNeedsApproval(packType string) bool {
+	return packType == store.PackIndustry || packType == store.PackLocale
+}
+
 // deptKBScope 校验部门管理员对指定 KB 包是否有权（部门包须归属本部门及子部门；
 // 跨部门包须归属其涵盖部门集合中的本部门及子部门，或全公司包仅超管/租管可维护）。
 // 非部门管理员直接放行（超管/租户管理员）。返回 nil 表示有权。
