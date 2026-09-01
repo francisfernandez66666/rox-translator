@@ -63,6 +63,10 @@ func (p *llmProducer) Next(ctx context.Context, deps *SourceDeps, cursor string,
 	if err != nil {
 		return nil, nil, cursor, false, err
 	}
+	// 空输出：视为该源已产出完毕（自然结束），不再推进游标
+	if len(out.Entries) == 0 && len(out.Phrases) == 0 {
+		return nil, nil, fmt.Sprintf("%d", batch+1), true, nil
+	}
 	// 转换 LLM 原始输出为 store 待审条目/安全句（过滤空值，填充包 ID/语言/来源）
 	tgtLang := p.src.Lang
 	if tgtLang == "" {
@@ -110,22 +114,32 @@ func (p *llmProducer) Next(ctx context.Context, deps *SourceDeps, cursor string,
 
 // generateBatch 调用 LLM 生成一批候选。
 func (p *llmProducer) generateBatch(ctx context.Context, deps *SourceDeps, batch int) (*llmGenOutput, error) {
-	prompt := p.buildPrompt(deps, batch)
-	messages := []map[string]string{{"role": "user", "content": prompt}}
-	base, key, model := p.llmRoute()
-	content, _, err := p.llm.CallChat(ctx, base, key, model, messages, 4096, false, 0.7)
-	if err != nil {
-		return nil, err
+	const emptyRetries = 1 // 空输出最多重试 1 次，仍空则视为该源产出完毕（自然结束）
+	for attempt := 0; attempt <= emptyRetries; attempt++ {
+		prompt := p.buildPrompt(deps, batch)
+		messages := []map[string]string{{"role": "user", "content": prompt}}
+		base, key, model := p.llmRoute()
+		content, _, err := p.llm.CallChat(ctx, base, key, model, messages, 4096, false, 0.7)
+		if err != nil {
+			if attempt < emptyRetries {
+				continue // 本次调用失败，重试一次
+			}
+			return nil, err
+		}
+		parsed, perr := parseLLMOutput(content)
+		if perr != nil && attempt < emptyRetries {
+			continue // 解析失败，重试一次
+		}
+		if perr != nil {
+			return nil, perr
+		}
+		out := *parsed
+		if len(out.Entries) == 0 && len(out.Phrases) == 0 && attempt < emptyRetries {
+			continue // 空输出，重试一次
+		}
+		return &out, nil // 空输出兜底：直接返回空，由上层按「产出完毕」结束
 	}
-	parsed, perr := parseLLMOutput(content)
-	if perr != nil {
-		return nil, perr
-	}
-	out := *parsed
-	if len(out.Entries) == 0 && len(out.Phrases) == 0 {
-		return nil, fmt.Errorf("LLM 输出解析后为空（批次 %d）", batch)
-	}
-	return &out, nil
+	return &llmGenOutput{}, nil
 }
 
 // llmRoute 选择 LLM 路由：优先 stage_models.ai_initial，否则全局默认。
