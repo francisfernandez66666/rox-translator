@@ -93,8 +93,10 @@ type ticketPayload struct {
 	EvalScores       map[string]float64     `json:"eval_scores"`                  // 语言 → 评估总分
 	ReviewEvalScores map[string]float64     `json:"review_eval_scores,omitempty"` // 语言 → 校对评估总分
 	Gate             *gate.GateResult       `json:"gate"`                         // Gate 校验结果
-	Culture          *culture.CultureResult `json:"culture"`                      // 语言文化闸门结果
+	Culture          *culture.CultureResult `json:"culture,omitempty"`            // 语言文化闸门结果
 	QAReport         *qa.Report             `json:"qa_report,omitempty"`          // 确定性 QA 质检报告
+	RetryCount       map[string]int         `json:"retry_count,omitempty"`        // 语言 → 硬闸自动重译次数
+	GateHints        map[string]string      `json:"gate_hints,omitempty"`         // 语言 → 最近一次硬闸打回原因（供审批参考）
 }
 
 // parseTicketLang 从 target_langs 逗号分隔字符串解析语言列表。
@@ -330,44 +332,161 @@ func (w *Workflow) runEvalsReview(ctx context.Context, t *store.Ticket) error {
 	return nil
 }
 
-// runGate 8 项硬校验。
-// 参数：ctx=上下文，t=工单对象；任一语言校验不通过则返回错误。
+// runGate 8 项硬校验。校验失败时自动附 KB 提示重译（硬闸护栏，≤ gate_retry_max 次），
+// 仍失败才返回错误置 rejected。
+// 参数：ctx=上下文，t=工单对象。
 func (w *Workflow) runGate(ctx context.Context, t *store.Ticket) error {
 	p := w.loadPayload(t)
 	if p == nil {
 		return fmt.Errorf("缺少翻译结果")
 	}
+	maxRetry := w.gateRetryMax()
+	if p.RetryCount == nil {
+		p.RetryCount = map[string]int{}
+	}
+	if p.GateHints == nil {
+		p.GateHints = map[string]string{}
+	}
 	for lc, tr := range p.Translations {
 		if tr == "" {
 			continue
 		}
-		g := gate.Run(p.SourceText, lc, tr)
-		if !g.Pass {
-			// 校验失败：返回首条失败项的详情
-			return fmt.Errorf("Gate 校验失败 [%s]: %s", lc, firstFail(g.Checks))
+		// 硬闸循环：校验 → 失败则附 KB 提示重译 → 再校验，直到通过或达到上限
+		cursor := tr
+		for attempt := 0; attempt <= maxRetry; attempt++ {
+			g := gate.Run(p.SourceText, lc, cursor)
+			if g.Pass {
+				p.Gate = g
+				p.Translations[lc] = cursor
+				break
+			}
+			p.Gate = g
+			reason := fmt.Sprintf("Gate 校验失败 [%s]: %s", lc, firstFail(g.Checks))
+			p.GateHints[lc] = reason
+			if attempt >= maxRetry {
+				return fmt.Errorf("%s（已自动重译 %d 次仍不通过）", reason, maxRetry)
+			}
+			feedback := gateRetranslateFeedback(g.Checks)
+			rev := w.retranslateWithKB(ctx, t, lc, cursor, feedback)
+			if rev == "" {
+				return fmt.Errorf("%s，且附带 KB 提示重译失败", reason)
+			}
+			p.RetryCount[lc] = attempt + 1
+			p.Translations[lc] = rev
+			p.Sources[lc] = "model"
+			cursor = rev
 		}
 	}
+	w.savePayload(t, p)
 	return nil
 }
 
-// runCultureGate 语言文化包输出闸门（反查译文）。
-// 参数：ctx=上下文，t=工单对象；译文命中安全句则打回。
+// runCultureGate 语言文化包输出闸门（反查译文）。命中避雷/数字/语气不合规则时，
+// 附 KB 安全句提示自动重译（硬闸护栏，≤ gate_retry_max 次），仍失败才返回错误。
+// 参数：ctx=上下文，t=工单对象。
 func (w *Workflow) runCultureGate(ctx context.Context, t *store.Ticket) error {
 	p := w.loadPayload(t)
 	if p == nil {
 		return nil
 	}
-	safety, _ := w.Store.ListSafetyPhrases(t.TenantID) // 读取租户安全句
+	// 语言文化包按租户读取，含待审审批后热加载的已批准安全句
+	safety, _ := w.Store.ListSafetyPhrasesFilter(t.TenantID, "approved")
+	maxRetry := w.gateRetryMax()
+	if p.RetryCount == nil {
+		p.RetryCount = map[string]int{}
+	}
+	if p.GateHints == nil {
+		p.GateHints = map[string]string{}
+	}
 	for lc, tr := range p.Translations {
 		if tr == "" {
 			continue
 		}
-		c := culture.Run(lc, tr, safety)
-		if !c.Pass {
-			return fmt.Errorf("语言文化闸门打回 [%s]: %s", lc, strings.Join(c.Reasons, ";"))
+		cursor := tr
+		for attempt := 0; attempt <= maxRetry; attempt++ {
+			c := culture.Run(lc, cursor, safety)
+			if c.Pass {
+				p.Culture = c
+				p.Translations[lc] = cursor
+				break
+			}
+			p.Culture = c
+			reason := fmt.Sprintf("语言文化闸门打回 [%s]: %s", lc, strings.Join(c.Reasons, ";"))
+			p.GateHints[lc] = reason
+			if attempt >= maxRetry {
+				return fmt.Errorf("%s（已自动重译 %d 次仍不通过）", reason, maxRetry)
+			}
+			rev := w.retranslateWithKB(ctx, t, lc, cursor, reason)
+			if rev == "" {
+				return fmt.Errorf("%s，且附带 KB 提示重译失败", reason)
+			}
+			p.RetryCount[lc] = attempt + 1
+			p.Translations[lc] = rev
+			p.Sources[lc] = "model"
+			cursor = rev
 		}
 	}
+	w.savePayload(t, p)
 	return nil
+}
+
+// gateRetryMax 读取硬闸自动重译上限（默认 8 次）。
+// 参数：无；返回最大重译次数。
+func (w *Workflow) gateRetryMax() int {
+	if w.Store != nil {
+		return w.Store.ConfigInt("gate_retry_max", 8)
+	}
+	return 8
+}
+
+// retranslateWithKB 附 KB 提示重译单语言译文（硬闸护栏核心）。
+// 依据 Gate 失败项/语言文化打回原因 + 命中的 KB 参考（源文本在租户 KB 中的标准译法），
+// 用 TranslateWithFeedbackEx 修正重译。参数：ctx=上下文，t=工单对象（取创建人/租户做
+// KB 可见性隔离），lc=目标语言，tr=当前译文，reason=打回原因；返回修正后译文（失败返回 ""）。
+func (w *Workflow) retranslateWithKB(ctx context.Context, t *store.Ticket, lc, tr, reason string) string {
+	// KB 在知识库匹配阶段已按租户/部门隔离；此处取源文本命中的标准译法作为重译参考
+	var examples []*kb.Row
+	if w.Store != nil {
+		srcLang := engine.DetectSourceLang(t.SourceText)
+		orgID := int64(0)
+		if t.CreatedBy > 0 {
+			if u, uerr := w.Store.GetUser(t.CreatedBy, t.TenantID); uerr == nil && u != nil {
+				orgID = u.OrgID
+			}
+		}
+		if ents, err := w.Store.FindEntriesBySourceScoped(t.TenantID, orgID, srcLang, t.SourceText); err == nil {
+			for _, ent := range ents {
+				if strings.TrimSpace(ent.TargetText) == "" {
+					continue
+				}
+				examples = append(examples, &kb.Row{
+					Zh:     ent.SourceText,
+					Module: ent.Module,
+					Langs:  map[string]string{ent.TargetLang: ent.TargetText},
+				})
+			}
+		}
+	}
+	return w.Engine.TranslateWithFeedbackEx(ctx, t.SourceText, lc, reason, config.StageAIInitial, examples)
+}
+
+// gateRetranslateFeedback 把 Gate 校验失败项拼成重译修正意见。
+// 参数：checks=Check 失败项列表；返回意见字符串（如 "存在残留乱码、数字未保持"）。
+func gateRetranslateFeedback(checks []gate.Check) string {
+	var fails []string
+	for _, c := range checks {
+		if !c.Pass {
+			if c.Detail != "" {
+				fails = append(fails, c.Name+":"+c.Detail)
+			} else {
+				fails = append(fails, c.Name)
+			}
+		}
+	}
+	if len(fails) == 0 {
+		return "请重新按原文准确翻译"
+	}
+	return strings.Join(fails, "；")
 }
 
 // runQA 确定性质检：对最终译文跑纯规则检查（数字/占位符/漏翻等），

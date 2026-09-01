@@ -56,6 +56,7 @@ func New(db *sql.DB) (*Store, error) {
 	s.orderMoneyBackfill()        // ★ 存量 pending 充值单应收回填（幂等；评审整改 B1，置于默认值落库后以读取到定价键）
 	s.PackageOrderTokenBackfill() // ★ token 口径：存量包订单 amount_tokens 补全（幂等；句数不参与运行期计算）
 	s.ArtifactsMigrate()          // ★ 产物归属登记表（幂等；评审整改 C1）
+	s.KBScrapeMigrate()           // ★ 行业/语言文化包自动采集：数据源 + 待审池建表（幂等；2026-09-01）
 	return s, nil
 }
 

@@ -772,6 +772,18 @@ func (e *Engine) TranslateLangsInto(ctx context.Context, zhText string, langs []
 // TranslateWithFeedback 带驳回意见重译（初翻 Agent 修正，用于被驳回工单重跑）。
 // 参数 stage: 流程阶段（默认 config.StageAIInitial）。
 func (e *Engine) TranslateWithFeedback(ctx context.Context, zhText, targetLang, feedback, stage string) string {
+	return e.translateWithFeedbackEx(ctx, zhText, targetLang, feedback, stage, nil)
+}
+
+// TranslateWithFeedbackEx 带驳回意见与知识库参考重译（硬闸打回自动重译用）。
+// 参数 stage: 流程阶段（默认 config.StageAIInitial）；examples：知识库命中行（提供标准术语译法）。
+func (e *Engine) TranslateWithFeedbackEx(ctx context.Context, zhText, targetLang, feedback, stage string, examples []*kb.Row) string {
+	return e.translateWithFeedbackEx(ctx, zhText, targetLang, feedback, stage, examples)
+}
+
+// translateWithFeedbackEx 带驳回意见（可选知识库参考）重译核心实现。
+// 参数 stage: 流程阶段（默认 config.StageAIInitial）；examples：知识库命中行（可为 nil）。
+func (e *Engine) translateWithFeedbackEx(ctx context.Context, zhText, targetLang, feedback, stage string, examples []*kb.Row) string {
 	langName := config.LangNames[targetLang]
 	if langName == "" {
 		langName = targetLang
@@ -780,9 +792,15 @@ func (e *Engine) TranslateWithFeedback(ctx context.Context, zhText, targetLang, 
 	if tid := tenant.FromContext(ctx); tid > 0 {
 		culture, _ = e.cultureRules(ctx, tid, targetLang)
 	}
-	prompt := fmt.Sprintf(
-		"你是资深%s翻译。前一次翻译被审校驳回，驳回意见如下：%s。请严格按照意见修正重译。%s\n\n【原文】%s\n\n只输出修正后的%s译文：",
-		langName, feedback, culture, zhText, langName)
+	ref := buildExamplesPrompt(zhText, targetLang, examples) // 知识库术语参考（无命中则为空串）
+	var prompt string
+	if ref != "" {
+		prompt = fmt.Sprintf("你是资深%s翻译。前一次翻译被驳回，驳回意见如下：%s。请严格按照意见修正重译。\n%s\n%s\n\n【原文】%s\n\n只输出修正后的%s译文：",
+			langName, feedback, ref, culture, zhText, langName)
+	} else {
+		prompt = fmt.Sprintf("你是资深%s翻译。前一次翻译被审校驳回，驳回意见如下：%s。请严格按照意见修正重译。%s\n\n【原文】%s\n\n只输出修正后的%s译文：",
+			langName, feedback, culture, zhText, langName)
+	}
 	messages := []map[string]string{{"role": "user", "content": prompt}}
 	base, key, model := e.resolveModel(ctx)
 	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {

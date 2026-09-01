@@ -22,6 +22,7 @@ import FooterP from './FooterP'
 import MailTplP from './MailTplP'
 import { PlansP, ReferralP, WebhooksP, ApiKeysP } from './panels_c'
 import { KbP, ModelsP, WorkflowP, TicketsP } from './panels_d'
+import DataSourcesP from './DataSourcesP'
 
 // 菜单项接口定义：key 对应 admin store 中的面板标识，minLevel 为可见最低角色等级
 interface Item { key: PanelKey; label: string; minLevel: number }
@@ -44,6 +45,7 @@ const ITEMS: Item[] = [
   { key: 'brand', label: 'admin.menuBrand', minLevel: 3 },
   { key: 'footer', label: 'admin.menuFooter', minLevel: 4 },
   { key: 'mailTpl', label: 'admin.menuMailTpl', minLevel: 4 },
+  { key: 'dataSources', label: 'admin.menuDataSources', minLevel: 4 },
 ]
 
 /** 根据当前选中的面板 key 返回对应组件（集中分发，避免在 JSX 中写长 switch） */
@@ -66,6 +68,7 @@ function renderPanel(p: PanelKey) {
     case 'brand': return <BrandP />
     case 'footer': return <FooterP />
     case 'mailTpl': return <MailTplP />
+    case 'dataSources': return <DataSourcesP />
     default: return null
   }
 }

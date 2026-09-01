@@ -159,6 +159,8 @@ func (s *Server) startWatchdog() {
 			s.runMemLeakCapture()
 		}
 	}()
+	// ★ 行业/语言文化包自动采集（2026-09-01）：低占用驱动 + 断点续传 + 首日铺底
+	s.startPackScraper()
 	log.Println("监控看门狗已启动")
 }
 

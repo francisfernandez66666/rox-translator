@@ -304,6 +304,15 @@ func (s *Server) routesAdminKB() {
 	s.mux.HandleFunc("/api/admin/safety-phrases/delete", s.handleSafetyPhraseDelete)
 	s.mux.HandleFunc("/api/admin/safety-phrases/bulk-import", s.handleSafetyPhraseBulkImport)
 	s.mux.HandleFunc("/api/admin/safety-phrases/status", s.handleSafetyPhraseStatus)
+	// ★ 行业/语言文化包自动采集（2026-09-01）：数据源管理 + 待审审批 + 热加载
+	s.mux.HandleFunc("/api/admin/kb-scrape/sources", s.handleKBScrapeSources)
+	s.mux.HandleFunc("/api/admin/kb-scrape/sources/create", s.handleKBScrapeSourceCreate)
+	s.mux.HandleFunc("/api/admin/kb-scrape/sources/update", s.handleKBScrapeSourceUpdate)
+	s.mux.HandleFunc("/api/admin/kb-scrape/sources/status", s.handleKBScrapeSourceStatus)
+	s.mux.HandleFunc("/api/admin/kb-scrape/sources/run", s.handleKBScrapeSourceRun)
+	s.mux.HandleFunc("/api/admin/kb-scrape/staged", s.handleKBScrapeStaged)
+	s.mux.HandleFunc("/api/admin/kb-scrape/approve", s.handleKBScrapeApprove)
+	s.mux.HandleFunc("/api/admin/kb-scrape/summary", s.handleKBScrapeSummary)
 }
 
 // routesAdminFlow 注册流程引擎设置路由。
