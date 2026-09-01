@@ -178,23 +178,51 @@ func (p *llmProducer) buildPrompt(deps *SourceDeps, batch int) string {
 }
 
 // extractJSON 从 LLM 输出中提取 JSON 对象/数组（容忍 Markdown 代码块包裹）。
+// extractJSON 从模型输出中稳健提取最外层 JSON 对象字符串。
+// 特性：①字符串感知的括号平衡（引号内 { } 不计深度，正确处理 \" 转义）②遍历所有
+// 候选起点，返回第一个能通过 json.Valid 校验的片段（规避模型输出前后缀/截断导致的错位）。
 func extractJSON(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.Index(s, "{"); i >= 0 {
-		// 找最外层平衡括号
+	s = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "\ufeff")) // 去 BOM
+	for i := 0; i < len(s); i++ {
+		if s[i] != '{' {
+			continue
+		}
 		depth := 0
-		for j := i; j < len(s); j++ {
-			switch s[j] {
+		inStr := false
+		esc := false
+		j := i
+		for ; j < len(s); j++ {
+			ch := s[j]
+			if inStr {
+				if esc {
+					esc = false
+					continue
+				}
+				if ch == '\\' {
+					esc = true
+					continue
+				}
+				if ch == '"' {
+					inStr = false
+				}
+				continue
+			}
+			switch ch {
+			case '"':
+				inStr = true
 			case '{':
 				depth++
 			case '}':
 				depth--
 				if depth == 0 {
-					return s[i : j+1]
+					cand := s[i : j+1]
+					if json.Valid([]byte(cand)) {
+						return cand
+					}
+					break // 当前候选非法，尝试下一个 '{'
 				}
 			}
 		}
-		return s[i:]
 	}
 	return s
 }
