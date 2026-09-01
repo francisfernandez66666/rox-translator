@@ -4,7 +4,7 @@
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Textarea, MessagePlugin,
+  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Textarea, MessagePlugin, Tabs,
 } from 'tdesign-react'
 import { confirmDialog } from '@/components/uiDialogs'
 import {
@@ -24,6 +24,7 @@ import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
 import { orgList, type OrgInfo } from '@/api/org'
 import KbUploadDialog from '@/components/KbUploadDialog'
+import DataSourcesP from './DataSourcesP'
 
 // ============ 本文件职责中文说明 ============
 // 后台面板 D：知识库、模型、工作流与工单（反馈/审批/TM 审核）。
@@ -132,6 +133,8 @@ export function KbP() {
   const [bulkJson, setBulkJson] = useState('')
   const [sf, setSf] = useState<Any>({ lang: 'en', kind: 'style', phrase: '', replacement: '' })
   const [rebuilding, setRebuilding] = useState(false)
+  // 当前知识库页内 tab：kb=知识库管理；scrape=自动采集（仅超管）
+  const [kbTab, setKbTab] = useState('kb')
 
   // 当前用户可创建的知识包类型（受角色等级限制）：部门管理员可建 部门包/跨部门包；
   // 租户管理员加 企业包；超管再加 行业包/通用语言习惯包。跨部门包名称由创建人自定义。
@@ -371,6 +374,9 @@ export function KbP() {
       {/* 页面标题 */}
       <h2 style={{ margin: '4px 0 12px' }}>{t('kb.title')}</h2>
 
+      {/* 知识库主视图：kb=知识库管理；scrape=自动采集（超管专属，并入知识库菜单） */}
+      <Tabs value={kbTab} onChange={(v) => setKbTab(String(v))}>
+        <Tabs.TabPanel value="kb" label={`📚 ${t('kb.title')}`}>
       {/* ===== 文件导入：直接复用前台「上传知识库」弹窗，交互完全一致 ===== */}
       <Panel title={t('kb.uploadTitle')} extra={<Button theme="primary" onClick={() => setKbDlg(true)}>{t('kb.topbarUpload')}</Button>}>
         <div style={{ ...rowStyle, marginBottom: 6 }}><span style={{ fontSize: 13, color: '#556' }}>{t('kb.uploadHint')}</span></div>
@@ -520,7 +526,14 @@ export function KbP() {
               </Space>
             ) },
           ] as never} />
-      </Panel>
+        </Panel>
+        </Tabs.TabPanel>
+        {isSuper && (
+          <Tabs.TabPanel value="scrape" label={`🕷️ ${t('admin.menuDataSources')}`}>
+            <DataSourcesP />
+          </Tabs.TabPanel>
+        )}
+      </Tabs>
     </>
   )
 }
