@@ -175,16 +175,31 @@ func (p *llmProducer) buildPrompt(deps *SourceDeps, batch int) string {
 		return sb.String()
 	}
 	// industry 包
-	industry := p.src.Industry
-	if industry == "" {
-		industry = "通用行业"
-	}
+	industry := industryName(p.src.Industry)
 	sb.WriteString(fmt.Sprintf(
 		"你是资深行业翻译专家。请针对行业「%s」与目标语言「%s」（%s）输出第 %d 批「行业常用术语 zh→%s 对照」。\n"+
 			"严格只输出 JSON，格式：{\"entries\":[{\"src\":\"中文\",\"tgt\":\"%s\"}]}\n"+
 			"每批 %d 条术语（高频、地道、避免直译腔），共输出一次 JSON，不要任何多余文字。",
 		industry, langName, tgtLang, batch+1, tgtLang, langName, llmBatchSize))
 	return sb.String()
+}
+
+// industryName 行业 code → 中文展示名（供 LLM 提示词使用；未知 code 回退原文）。
+func industryName(code string) string {
+	if code == "" {
+		return "通用行业"
+	}
+	if n, ok := industryNames[code]; ok {
+		return n
+	}
+	return code
+}
+
+// industryNames 行业 code → 中文名（与 tier1 内置种子/builtinIndustrySeeds 对齐）。
+var industryNames = map[string]string{
+	"auto": "汽车", "realestate": "房产/装修", "b2b": "企业服务/B2B",
+	"education": "教育/留学", "ecommerce": "跨境独立站", "wedding": "婚庆/高端服务",
+	"retail": "电商/零售", "media": "自媒体/内容创作",
 }
 
 // extractJSON 从 LLM 输出中提取 JSON 对象/数组（容忍 Markdown 代码块包裹、前后缀文字、
