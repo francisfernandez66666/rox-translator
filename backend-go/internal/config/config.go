@@ -176,12 +176,19 @@ func HunyuanMTLangSet() map[string]bool {
 	}
 }
 
-// TRANSLATE_LANGS：知识库完整覆盖的 9 种语言
-var TranslateLangs = []string{"en", "ru", "ar", "es", "pt", "fr", "kk", "de", "zh_hant"}
+// TRANSLATE_LANGS：知识库匹配+AI 完整覆盖的 34 种语言（2026-09-01 扩列：
+// 在原 9 语基础上补齐用户侧 34 语口径，IsKBLang 逐语言门控 KB 检索层）
+var TranslateLangs = []string{"en", "ru", "ar", "es", "pt", "fr", "kk", "de", "zh_hant",
+	"ja", "ko", "th", "tr", "it", "pl", "sv", "ms", "id_lang", "vi", "mn", "nl", "uk",
+	"hi", "fa", "he", "el", "my", "km", "lo", "tl", "gu", "ur", "te", "mr"}
 
-// ALL_LANGS：DB 语言列（16 列）
+// ALL_LANGS：DB 语言列（34 列，2026-09-01 由 16 列扩到 34）
+// 顺序即 tm_segments 建表/查询扫描契约顺序：保持原有 16 列在前，新增 18 列在后，
+// 与 kb/db.go langCols / scanRow / Stats 等一一对应，勿随意调序。
 var AllLangs = []string{"en", "ru", "ar", "es", "pt", "fr", "kk", "de", "zh_hant",
-	"ms", "id_lang", "th", "tr", "it", "pl", "sv"}
+	"ms", "id_lang", "th", "tr", "it", "pl", "sv",
+	"ja", "ko", "vi", "mn", "nl", "uk", "hi", "fa", "he", "el", "my", "km", "lo", "tl",
+	"gu", "ur", "te", "mr"}
 
 // LangNames：语言代码 → 中文名
 var LangNames = map[string]string{

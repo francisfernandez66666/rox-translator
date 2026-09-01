@@ -267,7 +267,7 @@ func (k *KBDatabase) rebuildTableWithTripleUnique() error {
 		return err
 	}
 	defer tx.Rollback()
-	cols := "id, zh_hash, zh, zh_short, module, tenant_id, priority, pack_id, en, ru, ar, es, pt, fr, kk, de, zh_hant, ms, id_lang, th, tr, it, pl, sv, updated_at"
+	cols := "id, zh_hash, zh, zh_short, module, tenant_id, priority, pack_id, en, ru, ar, es, pt, fr, kk, de, zh_hant, ms, id_lang, th, tr, it, pl, sv, ja, ko, vi, mn, nl, uk, hi, fa, he, el, my, km, lo, tl, gu, ur, te, mr, updated_at"
 	if _, err := db.Exec(tx, db.CurrentDialect(), `CREATE TABLE tm_segments_new (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		"zh_hash" TEXT,
@@ -280,6 +280,9 @@ func (k *KBDatabase) rebuildTableWithTripleUnique() error {
 		"en" TEXT, "ru" TEXT, "ar" TEXT, "es" TEXT, "pt" TEXT, "fr" TEXT,
 		"kk" TEXT, "de" TEXT, "zh_hant" TEXT,
 		"ms" TEXT, "id_lang" TEXT, "th" TEXT, "tr" TEXT, "it" TEXT, "pl" TEXT, "sv" TEXT,
+		"ja" TEXT, "ko" TEXT, "vi" TEXT, "mn" TEXT, "nl" TEXT, "uk" TEXT, "hi" TEXT,
+		"fa" TEXT, "he" TEXT, "el" TEXT, "my" TEXT, "km" TEXT, "lo" TEXT, "tl" TEXT,
+		"gu" TEXT, "ur" TEXT, "te" TEXT, "mr" TEXT,
 		"updated_at" TEXT,
 		UNIQUE(zh_hash, tenant_id, pack_id)
 	)`); err != nil {
@@ -396,7 +399,7 @@ func (k *KBDatabase) rebuildTableWithCompositeUnique() error {
 		return err
 	}
 	defer tx.Rollback()
-	cols := "id, zh_hash, zh, zh_short, module, tenant_id, en, ru, ar, es, pt, fr, kk, de, zh_hant, ms, id_lang, th, tr, it, pl, sv, updated_at"
+	cols := "id, zh_hash, zh, zh_short, module, tenant_id, en, ru, ar, es, pt, fr, kk, de, zh_hant, ms, id_lang, th, tr, it, pl, sv, ja, ko, vi, mn, nl, uk, hi, fa, he, el, my, km, lo, tl, gu, ur, te, mr, updated_at"
 	// 建新表：UNIQUE(zh_hash, tenant_id) 复合唯一
 	if _, err := db.Exec(tx, db.CurrentDialect(), `CREATE TABLE tm_segments_new (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -408,6 +411,9 @@ func (k *KBDatabase) rebuildTableWithCompositeUnique() error {
 		"en" TEXT, "ru" TEXT, "ar" TEXT, "es" TEXT, "pt" TEXT, "fr" TEXT,
 		"kk" TEXT, "de" TEXT, "zh_hant" TEXT,
 		"ms" TEXT, "id_lang" TEXT, "th" TEXT, "tr" TEXT, "it" TEXT, "pl" TEXT, "sv" TEXT,
+		"ja" TEXT, "ko" TEXT, "vi" TEXT, "mn" TEXT, "nl" TEXT, "uk" TEXT, "hi" TEXT,
+		"fa" TEXT, "he" TEXT, "el" TEXT, "my" TEXT, "km" TEXT, "lo" TEXT, "tl" TEXT,
+		"gu" TEXT, "ur" TEXT, "te" TEXT, "mr" TEXT,
 		"updated_at" TEXT,
 		UNIQUE(zh_hash, tenant_id)
 	)`); err != nil {
@@ -444,6 +450,9 @@ func ensureTables(conn *sql.DB) error {
 		"en" TEXT, "ru" TEXT, "ar" TEXT, "es" TEXT, "pt" TEXT, "fr" TEXT,
 		"kk" TEXT, "de" TEXT, "zh_hant" TEXT,
 		"ms" TEXT, "id_lang" TEXT, "th" TEXT, "tr" TEXT, "it" TEXT, "pl" TEXT, "sv" TEXT,
+		"ja" TEXT, "ko" TEXT, "vi" TEXT, "mn" TEXT, "nl" TEXT, "uk" TEXT, "hi" TEXT,
+		"fa" TEXT, "he" TEXT, "el" TEXT, "my" TEXT, "km" TEXT, "lo" TEXT, "tl" TEXT,
+		"gu" TEXT, "ur" TEXT, "te" TEXT, "mr" TEXT,
 		"updated_at" TEXT,
 		UNIQUE(zh_hash, tenant_id, pack_id)
 	)`); err != nil {
@@ -463,8 +472,10 @@ func (k *KBDatabase) Close() error { return k.db.Close() }
 // RawDB 返回底层 *sql.DB（供租户存储等共享同一连接）。
 func (k *KBDatabase) RawDB() *sql.DB { return k.db }
 
-// langCols 16 个语言列名（逗号分隔，供 SELECT 拼接）。
-const langCols = "en, ru, ar, es, pt, fr, kk, de, zh_hant, ms, id_lang, th, tr, it, pl, sv"
+// langCols 34 个语言列名（逗号分隔，供 SELECT 拼接）。顺序与 config.AllLangs 一致：
+// 原有 16 列在前，2026-09-01 新增 18 个（ja/ko/vi/mn/nl/uk/hi/fa/he/el/my/km/lo/tl/gu/ur/te/mr）。
+const langCols = "en, ru, ar, es, pt, fr, kk, de, zh_hant, ms, id_lang, th, tr, it, pl, sv, " +
+	"ja, ko, vi, mn, nl, uk, hi, fa, he, el, my, km, lo, tl, gu, ur, te, mr"
 
 // rowCols 行查询列清单：scanRow 的消费方必须按此顺序 SELECT（2026-08-26 补 pack_id，继承链过滤依赖）。
 const rowCols = "id, zh, COALESCE(module,''), COALESCE(tenant_id,1), COALESCE(pack_id,0), " + langCols
@@ -481,9 +492,11 @@ func (k *KBDatabase) FetchRow(id int64) (*Row, error) {
 func scanRow(row *sql.Row) (*Row, error) {
 	var r Row
 	var zh, module string
-	var en, ru, ar, es, pt, fr, kk, de, zhHant, ms, idLang, th, tr, it, pl, sv sql.NullString
+	var en, ru, ar, es, pt, fr, kk, de, zhHant, ms, idLang, th, tr, it, pl, sv,
+		ja, ko, vi, mn, nl, uk, hi, fa, he, el, my, km, lo, tl, gu, ur, te, mr sql.NullString
 	err := row.Scan(&r.ID, &zh, &module, &r.TenantID, &r.PackID, &en, &ru, &ar, &es, &pt, &fr, &kk, &de, &zhHant,
-		&ms, &idLang, &th, &tr, &it, &pl, &sv)
+		&ms, &idLang, &th, &tr, &it, &pl, &sv,
+		&ja, &ko, &vi, &mn, &nl, &uk, &hi, &fa, &he, &el, &my, &km, &lo, &tl, &gu, &ur, &te, &mr)
 	if err != nil {
 		return nil, err
 	}
@@ -495,6 +508,11 @@ func scanRow(row *sql.Row) (*Row, error) {
 		"pt": pt.String, "fr": fr.String, "kk": kk.String, "de": de.String,
 		"zh_hant": zhHant.String, "ms": ms.String, "id_lang": idLang.String,
 		"th": th.String, "tr": tr.String, "it": it.String, "pl": pl.String, "sv": sv.String,
+		"ja": ja.String, "ko": ko.String, "vi": vi.String, "mn": mn.String,
+		"nl": nl.String, "uk": uk.String, "hi": hi.String, "fa": fa.String,
+		"he": he.String, "el": el.String, "my": my.String, "km": km.String,
+		"lo": lo.String, "tl": tl.String, "gu": gu.String, "ur": ur.String,
+		"te": te.String, "mr": mr.String,
 	}
 	return &r, nil
 }
@@ -756,9 +774,11 @@ func (k *KBDatabase) FuzzyHitsScoped(zhShort string, limit int, tenantID int64, 
 func scanScopedRow(rows *sql.Rows) (*Row, error) {
 	var r Row
 	var zh, module string
-	var en, ru, ar, es, pt, fr, kk, de, zhHant, ms, idLang, th, tr, it, pl, sv sql.NullString
+	var en, ru, ar, es, pt, fr, kk, de, zhHant, ms, idLang, th, tr, it, pl, sv,
+		ja, ko, vi, mn, nl, uk, hi, fa, he, el, my, km, lo, tl, gu, ur, te, mr sql.NullString
 	err := rows.Scan(&r.ID, &zh, &module, &r.TenantID, &r.PackID, &en, &ru, &ar, &es, &pt, &fr, &kk, &de, &zhHant,
-		&ms, &idLang, &th, &tr, &it, &pl, &sv)
+		&ms, &idLang, &th, &tr, &it, &pl, &sv,
+		&ja, &ko, &vi, &mn, &nl, &uk, &hi, &fa, &he, &el, &my, &km, &lo, &tl, &gu, &ur, &te, &mr)
 	if err != nil {
 		return nil, err
 	}
@@ -769,6 +789,11 @@ func scanScopedRow(rows *sql.Rows) (*Row, error) {
 		"pt": pt.String, "fr": fr.String, "kk": kk.String, "de": de.String,
 		"zh_hant": zhHant.String, "ms": ms.String, "id_lang": idLang.String,
 		"th": th.String, "tr": tr.String, "it": it.String, "pl": pl.String, "sv": sv.String,
+		"ja": ja.String, "ko": ko.String, "vi": vi.String, "mn": mn.String,
+		"nl": nl.String, "uk": uk.String, "hi": hi.String, "fa": fa.String,
+		"he": he.String, "el": el.String, "my": my.String, "km": km.String,
+		"lo": lo.String, "tl": tl.String, "gu": gu.String, "ur": ur.String,
+		"te": te.String, "mr": mr.String,
 	}
 	return &r, nil
 }
@@ -867,7 +892,7 @@ func (k *KBDatabase) SaveBack(zh string, translations map[string]string, module 
 	vals := []interface{}{hash, zh, tenantID}
 	updates := []string{"zh=excluded.zh"}
 
-	// 动态拼接 16 个语言列（缺失语言写空串，保留已有列更新）
+	// 动态拼接 34 个语言列（缺失语言写空串，保留已有列更新）
 	for _, lc := range AllLangs {
 		v, ok := translations[lc]
 		if !ok {
@@ -951,16 +976,18 @@ func (k *KBDatabase) Stats(tenantID int64) (total int64, perLang map[string]int,
 		return
 	}
 	perLang = map[string]int{}
-	rows, err := db.Query(k.db, db.CurrentDialect(), "SELECT en,ru,ar,es,pt,fr,kk,de,zh_hant,ms,id_lang,th,tr,it,pl,sv FROM tm_segments WHERE tenant_id=?", tenantID)
+	rows, err := db.Query(k.db, db.CurrentDialect(), "SELECT "+langCols+" FROM tm_segments WHERE tenant_id=?", tenantID)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
-	var vals [16]sql.NullString
+	var vals [34]sql.NullString
 	for rows.Next() {
-		if err := rows.Scan(&vals[0], &vals[1], &vals[2], &vals[3], &vals[4], &vals[5],
-			&vals[6], &vals[7], &vals[8], &vals[9], &vals[10], &vals[11], &vals[12],
-			&vals[13], &vals[14], &vals[15]); err != nil {
+		ptr := make([]interface{}, len(AllLangs))
+		for i := range ptr {
+			ptr[i] = &vals[i]
+		}
+		if err := rows.Scan(ptr...); err != nil {
 			continue
 		}
 		// 逐语言统计非空条数
