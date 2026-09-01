@@ -90,6 +90,7 @@ type ticketPayload struct {
 	Translations     map[string]string      `json:"translations"`                 // 语言 → 译文
 	Sources          map[string]string      `json:"sources"`                      // 语言 → 来源（kb/model）
 	Mode             string                 `json:"mode"`                         // 匹配模式标识
+	Examples         []*kb.Row              `json:"examples,omitempty"`           // 知识库命中例句（供 AI 初翻注入术语参考）
 	EvalScores       map[string]float64     `json:"eval_scores"`                  // 语言 → 评估总分
 	ReviewEvalScores map[string]float64     `json:"review_eval_scores,omitempty"` // 语言 → 校对评估总分
 	Gate             *gate.GateResult       `json:"gate"`                         // Gate 校验结果
@@ -180,6 +181,14 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 	if len(missing) > 0 {
 		ctx = tenant.WithTenant(ctx, tid) // 注入租户上下文供引擎租户隔离
 		res, _ := w.Engine.TranslateOne(ctx, t.SourceText, missing, true, config.StageKBMatch)
+		if res != nil {
+			// ★ 治本整改：KB 命中例句（res.Examples）随载荷持久化，供 ai_initial 初翻注入术语参考——
+			//   此前只抄 Translations/Mode，例句被丢弃，KB「部分命中」的术语（极石→ROX、车主→owner）
+			//   从未进入 AI prompt，直接丢给模型自由发挥。
+			if len(res.Examples) > 0 {
+				p.Examples = res.Examples
+			}
+		}
 		for lc, v := range res.Translations {
 			if strings.TrimSpace(v) == "" || strings.TrimSpace(p.Translations[lc]) != "" {
 				continue // 空命中跳过 / 已有 KB 或人工译文不覆盖
@@ -187,7 +196,7 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 			p.Translations[lc] = v
 			p.Sources[lc] = "kb"
 		}
-		if p.Mode == "" {
+		if p.Mode == "" && res != nil {
 			p.Mode = res.Mode
 		}
 	} else if p.Mode == "" {
@@ -236,7 +245,8 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 		return nil
 	}
 
-	// 正常流程：只翻译缺失语言
+	// 正常流程：只翻译缺失语言（★ 治本整改：把 kb_match 阶段收集的 KB 命中例句注入初翻，
+	// 使模型在翻译时沿用知识库标准术语译法——此前传 nil，KB 部分命中从未进入 prompt）
 	var need []string
 	for _, lc := range p.TargetLangs {
 		if strings.TrimSpace(p.Translations[lc]) == "" {
@@ -244,7 +254,7 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 		}
 	}
 	if len(need) > 0 {
-		w.Engine.TranslateLangsInto(ctx, t.SourceText, need, p.Translations, p.Sources, srcLang, config.StageAIInitial)
+		w.Engine.TranslateLangsInto(ctx, t.SourceText, need, p.Examples, p.Translations, p.Sources, srcLang, config.StageAIInitial)
 	}
 	w.savePayload(t, p)
 	return nil

@@ -128,6 +128,16 @@ if [ -d "$PROD_WEB" ] && [ -f "$PROD_WEB/index.html" ]; then
 else
   log "⚠️  未找到生产前端目录 $PROD_WEB（或缺少 index.html），演示将仅提供 API；可稍后手动补充"
 fi
+# ★ 复制生产 npz 向量索引到演示数据目录（否则演示站无语义检索，知识库术语无法命中）。
+#   -kb 参数由下方 5/6 的 ExecStart 引用；缺失时仅告警不阻断（服务仍可起，语义检索降级）。
+PROD_NPZ="${PROD_NPZ:-/opt/translator/data/tm_embeddings.npz}"
+if [ -f "$PROD_NPZ" ]; then
+  cp -f "$PROD_NPZ" "$DEMO_USER_DATA/tm_embeddings.npz"
+  chown translator:translator "$DEMO_USER_DATA/tm_embeddings.npz" 2>/dev/null || true
+  log "   已复制向量索引: $PROD_NPZ"
+else
+  log "⚠️  未找到生产向量索引 $PROD_NPZ——演示站将无语义检索（KB 术语参考受限）；请确认路径或以 PROD_NPZ=... 覆盖"
+fi
 # 运行账号（与生产一致 translator；目录归属一次性授权）
 if ! id translator >/dev/null 2>&1; then
   useradd -r -s /usr/sbin/nologin translator || true
@@ -275,7 +285,7 @@ Environment=LLM_EMBED_CONCURRENT=2
 Environment=FILEPROC_MAX_CONCURRENT=1
 Environment=WORKER_CONCURRENCY=1
 Environment=PPROF_ADDR=${DEMO_PPROF}
-ExecStart=${DEMO_DIR}/bin/translator-server -addr 127.0.0.1:${DEMO_PORT} -frontend ${DEMO_DIR}/web -kbdb ${DEMO_USER_DATA}/tm.sqlite3
+ExecStart=${DEMO_DIR}/bin/translator-server -addr 127.0.0.1:${DEMO_PORT} -frontend ${DEMO_DIR}/web -kb ${DEMO_USER_DATA}/tm_embeddings.npz -kbdb ${DEMO_USER_DATA}/tm.sqlite3
 Restart=always
 RestartSec=3
 NoNewPrivileges=true

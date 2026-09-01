@@ -577,7 +577,14 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 	}
 
 	// 3. 语义检索（scope 化：链内高相似可整句采用；跨部门与低相似一律降级为例句）
-	if idx := e.getIndex(); idx != nil && len(idx.Vecs) > 0 {
+	// ★ 检索源解耦（治本整改）：pgvector（PostgreSQL）不再依赖 npz 索引——
+	//   此前整个语义块被 `if idx != nil` 包住，Postgres 部署未加载 npz 时（如演示镜像）
+	//   连数据库内向量检索也被一并跳过，知识库术语完全无法命中。现按源独立可用性判定：
+	//   任一源可用（pgvector 或 npz）即进入语义检索。
+	idx := e.getIndex()
+	pgSemOK := db.CurrentDialect() == db.DialectPostgres && e.DB != nil // pgvector 候选源（VectorSearch 内部自检不可用则返回空）
+	npzSemOK := idx != nil && len(idx.Vecs) > 0
+	if pgSemOK || npzSemOK {
 		// 知识库 Embed 阶段覆盖（stage_models.kb_embed）：配置了独立 Embed 模型则随 ctx 透传
 		// （整改 R3：改为请求级覆盖，避免全局 SetEmbedOverride 被并发请求串味）
 		if eb, ek, em, eok := e.resolveStageModel(ctx, config.StageKBEmbed); eok {
@@ -603,12 +610,16 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 		if len(vec) > 0 {
 			highSim, medSim := e.resolvePolicy(ctx)
 			// 检索返回 TopK（结果已按 InChain 优先 + 相似度排序；InChain=false=跨部门仅参考）
-			// ★ PostgreSQL + pgvector：优先走数据库内向量检索（VectorSearch），失败/缺失则回退 npz 索引。
-			results := idx.ScopedSearchScope(vec, e.Cfg.TopK, targetLangs, tid, scope)
-			if db.CurrentDialect() == db.DialectPostgres {
+			// ★ PostgreSQL + pgvector：优先走数据库内向量检索（VectorSearch）；
+			//   无 pgvector 结果（非 PG / 扩展缺失 / 无向量）时回退 npz 索引。
+			var results []kb.SearchResult
+			if pgSemOK {
 				if vr, verr := e.DB.VectorSearch(vec, tid, scope, e.Cfg.TopK); verr == nil && len(vr) > 0 {
 					results = vr
 				}
+			}
+			if len(results) == 0 && npzSemOK {
+				results = idx.ScopedSearchScope(vec, e.Cfg.TopK, targetLangs, tid, scope)
 			}
 			semAdopted := false
 			anyChainExample := false
@@ -756,12 +767,13 @@ func (e *Engine) assignKB(row *kb.Row, targetLangs []string, needModel *[]string
 
 // TranslateLangsInto 并发翻译缺失语言，写入 out/sources（供 workflow 初翻用）。
 // 参数 sourceLang: 实际源语言代码（默认 "zh"）；stage: 流程阶段（初翻默认 config.StageAIInitial）；
+// examples: 知识库命中例句（可为 nil，注入初翻 prompt 作术语参考）；
 // out/sources 为译文与来源映射。
-func (e *Engine) TranslateLangsInto(ctx context.Context, zhText string, langs []string, out map[string]string, sources map[string]string, sourceLang, stage string) {
+func (e *Engine) TranslateLangsInto(ctx context.Context, zhText string, langs []string, examples []*kb.Row, out map[string]string, sources map[string]string, sourceLang, stage string) {
 	if stage == "" {
 		stage = config.StageAIInitial
 	}
-	e.translateLangsConcurrent(ctx, zhText, langs, nil, out, sourceLang, stage)
+	e.translateLangsConcurrent(ctx, zhText, langs, examples, out, sourceLang, stage)
 	for _, lc := range langs {
 		if sources != nil && out[lc] != "" {
 			sources[lc] = "model"
