@@ -158,12 +158,18 @@ func (f *fetchBase) throttle(host string) {
 	f.lastRequest[host] = time.Now()
 }
 
-// get 带限频 + 重试 + robots 检查的 GET 请求；返回响应体字节。
-// 参数 ctx=上下文；rawURL=目标 URL。返回 (内容, 错误)。
+// get 带限频 + 重试 + robots 检查的 GET 请求（受限网页抓取 tier2 用）；
+// 返回响应体字节。参数 ctx=上下文；rawURL=目标 URL。返回 (内容, 错误)。
 func (f *fetchBase) get(ctx context.Context, rawURL string) ([]byte, error) {
 	if !f.robotsAllowed(ctx, rawURL) {
 		return nil, fmt.Errorf("robots.txt 禁止抓取: %s", rawURL)
 	}
+	return f.doGet(ctx, rawURL)
+}
+
+// doGet 限频 + 重试 + UA 的 GET 请求核心（不做 robots 检查）。
+// 参数 ctx=上下文；rawURL=目标 URL。返回 (内容, 错误)。
+func (f *fetchBase) doGet(ctx context.Context, rawURL string) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt <= f.cfg.MaxRetries; attempt++ {
 		f.throttle(hostOf(rawURL))
@@ -198,7 +204,9 @@ func (f *fetchBase) get(ctx context.Context, rawURL string) ([]byte, error) {
 	return nil, lastErr
 }
 
-// getJSON 请求 JSON 接口（官方 API 用），返回响应体字节。
+// getJSON 请求 JSON 接口（官方开放 API tier1 用）。
+// ★ 官方 API 属合规开放接口，不受 robots.txt 约束（仅 tier2 受限网页抓取需遵循 robots）。
+// 返回响应体字节。
 func (f *fetchBase) getJSON(ctx context.Context, rawURL string) ([]byte, error) {
-	return f.get(ctx, rawURL)
+	return f.doGet(ctx, rawURL)
 }
