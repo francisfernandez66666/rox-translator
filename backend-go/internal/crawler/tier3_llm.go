@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"translator/internal/config"
 	"translator/internal/store"
@@ -118,16 +117,13 @@ func (p *llmProducer) generateBatch(ctx context.Context, deps *SourceDeps, batch
 	if err != nil {
 		return nil, err
 	}
-	var out llmGenOutput
-	if err := json.Unmarshal([]byte(extractJSON(content)), &out); err != nil {
-		return nil, fmt.Errorf("LLM 输出解析失败: %v", err)
+	parsed, perr := parseLLMOutput(content)
+	if perr != nil {
+		return nil, perr
 	}
-	// 规范化：填充目标包/语言/来源
-	now := time.Now().Format(time.RFC3339)
-	_ = now
-	for _, e := range out.Entries {
-		e.SrcText = strings.TrimSpace(e.SrcText)
-		e.TgtText = strings.TrimSpace(e.TgtText)
+	out := *parsed
+	if len(out.Entries) == 0 && len(out.Phrases) == 0 {
+		return nil, fmt.Errorf("LLM 输出解析后为空（批次 %d）", batch)
 	}
 	return &out, nil
 }
@@ -177,15 +173,20 @@ func (p *llmProducer) buildPrompt(deps *SourceDeps, batch int) string {
 	return sb.String()
 }
 
-// extractJSON 从 LLM 输出中提取 JSON 对象/数组（容忍 Markdown 代码块包裹）。
-// extractJSON 从模型输出中稳健提取最外层 JSON 对象字符串。
-// 特性：①字符串感知的括号平衡（引号内 { } 不计深度，正确处理 \" 转义）②遍历所有
-// 候选起点，返回第一个能通过 json.Valid 校验的片段（规避模型输出前后缀/截断导致的错位）。
+// extractJSON 从 LLM 输出中提取 JSON 对象/数组（容忍 Markdown 代码块包裹、前后缀文字、
+// 输出截断等）。特性：①字符串感知的括号平衡（引号内 { } [ ] 不计深度，正确处理 \" 转义）
+// ②对象/数组两种顶层形态均可提取 ③遍历所有候选起点，返回第一个能通过 json.Valid
+// 校验的片段（规避模型在 JSON 外附加说明或被截断导致的错位）。
 func extractJSON(s string) string {
 	s = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "\ufeff")) // 去 BOM
 	for i := 0; i < len(s); i++ {
-		if s[i] != '{' {
+		if s[i] != '{' && s[i] != '[' {
 			continue
+		}
+		openC := s[i]
+		closeC := byte('}')
+		if s[i] == '[' {
+			closeC = ']'
 		}
 		depth := 0
 		inStr := false
@@ -210,19 +211,82 @@ func extractJSON(s string) string {
 			switch ch {
 			case '"':
 				inStr = true
-			case '{':
+			case openC:
 				depth++
-			case '}':
+			case closeC:
 				depth--
 				if depth == 0 {
 					cand := s[i : j+1]
 					if json.Valid([]byte(cand)) {
 						return cand
 					}
-					break // 当前候选非法，尝试下一个 '{'
+					break // 当前候选非法，尝试下一个起点
 				}
 			}
 		}
 	}
 	return s
+}
+
+// parseLLMOutput 解析 LLM 输出为结构化结果，兼容多种输出形态：
+//  1. 标准对象：{"entries":[...]} 或 {"phrases":[...]}
+//  2. 顶层数组：[{...}, {...}] —— 数组元素为条目对象（含 src/tgt）或安全句对象（含 kind/phrase），
+//     或元素本身是含 entries/phrases 的包裹对象
+//
+// 返回规整后的输出与错误（解析失败时错误信息包含原始片段前 200 字符便于排障）。
+func parseLLMOutput(content string) (*llmGenOutput, error) {
+	extracted := extractJSON(content)
+	out := &llmGenOutput{}
+	// 形态 1：直接对象
+	if json.Unmarshal([]byte(extracted), out) == nil {
+		normalizeLLMOutput(out)
+		return out, nil
+	}
+	// 形态 2：顶层数组 → 遍历元素合并
+	if ext := strings.TrimSpace(extracted); len(ext) > 0 && ext[0] == '[' {
+		var raw []json.RawMessage
+		if err := json.Unmarshal([]byte(ext), &raw); err == nil {
+			merged := &llmGenOutput{}
+			for _, item := range raw {
+				var obj llmGenOutput
+				if json.Unmarshal(item, &obj) == nil && (len(obj.Entries) > 0 || len(obj.Phrases) > 0) {
+					merged.Entries = append(merged.Entries, obj.Entries...)
+					merged.Phrases = append(merged.Phrases, obj.Phrases...)
+					continue
+				}
+				var e llmEntry
+				if json.Unmarshal(item, &e) == nil && e.SrcText != "" {
+					merged.Entries = append(merged.Entries, e)
+					continue
+				}
+				var p llmPhrase
+				if json.Unmarshal(item, &p) == nil && p.Phrase != "" {
+					merged.Phrases = append(merged.Phrases, p)
+				}
+			}
+			if len(merged.Entries) > 0 || len(merged.Phrases) > 0 {
+				normalizeLLMOutput(merged)
+				return merged, nil
+			}
+		}
+	}
+	msg := extracted
+	if len(msg) > 200 {
+		msg = msg[:200]
+	}
+	return nil, fmt.Errorf("LLM 输出解析失败: 无法识别 JSON 结构，片段=%q", msg)
+}
+
+// normalizeLLMOutput 规整输出：去首尾空白、kind 白名单兜底。
+func normalizeLLMOutput(out *llmGenOutput) {
+	for i := range out.Entries {
+		out.Entries[i].SrcText = strings.TrimSpace(out.Entries[i].SrcText)
+		out.Entries[i].TgtText = strings.TrimSpace(out.Entries[i].TgtText)
+	}
+	for i := range out.Phrases {
+		out.Phrases[i].Phrase = strings.TrimSpace(out.Phrases[i].Phrase)
+		if out.Phrases[i].Kind != "style" && out.Phrases[i].Kind != "forbidden" && out.Phrases[i].Kind != "replace" {
+			out.Phrases[i].Kind = "style"
+		}
+	}
 }
