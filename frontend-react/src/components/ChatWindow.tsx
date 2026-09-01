@@ -175,6 +175,10 @@ export default function ChatWindow() {
     (localStorage.getItem('translate_mode') as 'fast' | 'pro') || 'pro',
   )
 
+  // ★ 缩翻（任务7）：勾选+最长字符限制（0=未启用）
+  const [condenseOn, setCondenseOn] = useState(false)
+  const [condenseMax, setCondenseMax] = useState(200)
+
   // ★ 余额 / 用量
   const [balance, setBalance] = useState<{ tokens: number; approx: number } | null>(null)
   const [usage, setUsage] = useState<{ today: number; todaySentences: number } | null>(null)
@@ -261,12 +265,14 @@ export default function ChatWindow() {
 
   // ---- 发送 ----
   // 走文本翻译；目标语言直接取自聊天全局 selectedLangs
+  // ★ 缩翻（任务7）：勾选后把最长字符限制透传后端（0=未启用）
   async function handleSend() {
     const rawText = input.trim()
     if (!rawText) return
     setInput('')
 
     const options: Record<string, unknown> = { target_langs: chat.selectedLangs, lang }
+    if (condenseOn && condenseMax > 0) options.max_length = condenseMax
     chat.sendMessage(rawText, options)
   }
 
@@ -360,6 +366,18 @@ export default function ChatWindow() {
 
           {/* 双模式切换（与翻译工单共用 ModeToggle，顺序与工单页保持一致：左快速/右专业） */}
           <ModeToggle value={mode} onChange={setMode2} fastFirst />
+          {/* ★ 缩翻（任务7）：勾选并输入最长字符限制，提示模型精简输出 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+            <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+              <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> 缩翻
+            </label>
+            {condenseOn && (
+              <input type="number" min={1} max={10000} value={condenseMax}
+                onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
+                style={{ width: 72, height: 28, fontSize: 12, border: '1px solid #d8dee6', borderRadius: 6, padding: '0 6px' }}
+                title="最长字符长度" />
+            )}
+          </div>
           <Button variant="text" theme="default" size="medium" icon={<ClearIcon />}
                   onClick={() => { chat.clearMessages() }}>
             {t2('chat.clearChat')}

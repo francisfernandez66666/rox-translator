@@ -55,6 +55,9 @@ export default function TicketsPage() {
   const [langs, setLangs] = useState<string[]>(['en'])
   const [creating, setCreating] = useState(false)
   const [imageHeavyHint, setImageHeavyHint] = useState(false)
+  // ★ 缩翻（任务7）：勾选后输入最长字符限制，提示模型精简输出
+  const [condenseOn, setCondenseOn] = useState(false)
+  const [condenseMax, setCondenseMax] = useState(200)
 
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [detail, setDetail] = useState<TicketResp | null>(null)
@@ -182,6 +185,7 @@ export default function TicketsPage() {
     setCreating(true)
     try {
       let r: TicketResp
+      const maxLength = condenseOn && condenseMax > 0 ? condenseMax : 0
       if (mode === 'text') {
         if (!text.trim()) return
         r = await ticketCreate({
@@ -189,10 +193,11 @@ export default function TicketsPage() {
           source_text: text,
           target_langs: langsJoined,
           mode: qualityMode,
+          max_length: maxLength,
         })
       } else {
         if (!files.length) return
-        r = await ticketCreateFile([...files], { title: title.trim(), target_langs: langsJoined, mode: qualityMode })
+        r = await ticketCreateFile([...files], { title: title.trim(), target_langs: langsJoined, mode: qualityMode, max_length: maxLength })
       }
       if (!r.success) { void MessagePlugin.error(r.message || t('tk.createFail')); setCreating(false); return }
       setTitle(''); setText(''); setFiles([])
@@ -303,6 +308,16 @@ export default function TicketsPage() {
           </div>
           <ModeToggle value={qualityMode as 'fast' | 'pro'} fastFirst
             onChange={(val) => { setQualityMode(val); localStorage.setItem('translate_mode', val) }} />
+          {/* ★ 缩翻（任务7）：勾选并输入最长字符限制，提示模型精简输出 */}
+          <label style={{ fontSize: 13, color: '#555', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+            <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> 缩翻
+          </label>
+          {condenseOn && (
+            <input type="number" min={1} max={10000} value={condenseMax}
+              onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
+              style={{ width: 72, height: 30, fontSize: 12, border: '1px solid #d8dee6', borderRadius: 6, padding: '0 6px' }}
+              title="最长字符长度" />
+          )}
           <Button theme="primary" loading={creating} onClick={create} style={{ marginLeft: 'auto' }}>
             {creating ? t('tk.submitting') : t('tk.create')}
           </Button>

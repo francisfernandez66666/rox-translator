@@ -56,7 +56,7 @@ interface ChatCtx {
   isBackendChecking: boolean
   errorMessage: string
   sendMessage: (text: string, options?: Record<string, unknown>) => Promise<void>
-  sendFile: (file: File, langs?: string[], userMessage?: string) => Promise<void>
+  sendFile: (file: File, langs?: string[], userMessage?: string, maxLength?: number) => Promise<void>
   stopGeneration: () => void
   clearMessages: () => void
   retryHealth: () => Promise<void>
@@ -200,15 +200,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     })
   }, [startSend, patchMsg])
 
-  // ★ 对齐 Vue：sendFile(file, langs?, userMessage?)，langs 优先于 selectedLangs 透传后端
-  const sendFile = useCallback((file: File, langs?: string[], userMessage = '') => {
+  // ★ 对齐 Vue：sendFile(file, langs?, userMessage?, maxLength?)，langs 优先于 selectedLangs 透传后端
+  const sendFile = useCallback((file: File, langs?: string[], userMessage = '', maxLength = 0) => {
     const label = userMessage || file.name
     const targetLangs = langs && langs.length > 0 ? langs : selectedLangs
     const mode = currentMode()
     return startSend(label, async (assistantId, signal) => {
       const res = await translateFileStream(file, targetLangs, true, (ev) => {
         if (ev.type === 'progress') patchMsg(assistantId, { progress: { step: ev.step || '', percent: ev.percent ?? 0 } })
-      }, signal, userMessage, mode)
+      }, signal, userMessage, mode, maxLength)
       patchMsg(assistantId, { ...res, progress: undefined } as Partial<ChatMessage>)
     })
   }, [startSend, patchMsg, selectedLangs])

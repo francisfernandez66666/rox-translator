@@ -544,11 +544,13 @@ var columnAdditions = []colDef{
 	// ★ OpenAPI 安全绑定：Key 归属签发用户；API 任务盖印创建者用户 ID（回读校验防跨用户/租户越权）
 	{"api_keys", "user_id", "ALTER TABLE api_keys ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0"},
 	{"tickets", "api_user_id", "ALTER TABLE tickets ADD COLUMN api_user_id INTEGER NOT NULL DEFAULT 0"},
-	// 告警表：关联用户与详细日志（历史库补列，按存在性幂等；避免 ADD COLUMN IF NOT EXISTS 语法不兼容）
+	{"tickets", "max_length", "ALTER TABLE tickets ADD COLUMN max_length INTEGER NOT NULL DEFAULT 0"},
 	{"alerts", "user_id", "ALTER TABLE alerts ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0"},
 	{"alerts", "log", "ALTER TABLE alerts ADD COLUMN log TEXT NOT NULL DEFAULT ''"},
 	// 用户协议签署时间（注册即视为同意用户协议+隐私协议；空=未签署）
 	{"users", "agreed_at", "ALTER TABLE users ADD COLUMN agreed_at TEXT NOT NULL DEFAULT ''"},
+	// ★ 首登强制改密（2026-09-02 功能）：Excel 批量导入用户置 1，首次登录需先改密
+	{"users", "must_change_pwd", "ALTER TABLE users ADD COLUMN must_change_pwd INTEGER NOT NULL DEFAULT 0"},
 }
 
 // migrateColumnsSQLite 为老库补充新增列（SQLite 3.35+ 才支持 ADD COLUMN IF NOT EXISTS，这里手工判断）。

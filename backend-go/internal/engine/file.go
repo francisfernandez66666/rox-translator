@@ -61,6 +61,10 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	// ★ 文件/后台批任务：走专用 LLM 信号量池（容量更大、与交互池隔离），
 	//   避免长文档高并发打满共享交互信号量、饿死前台即时翻译、拖垮全站（整改）。
 	ctx = llm.WithFileMode(ctx)
+	// ★ 缩翻（任务7）：options["max_length"]>0 时启用最长字符限制
+	if n := maxLengthOption(options); n > 0 {
+		ctx = WithMaxLength(ctx, n)
+	}
 	if prog == nil {
 		prog = func(string, int, int) {}
 	}

@@ -77,7 +77,7 @@ export async function myTickets(): Promise<TicketResp> {
 }
 
 /** 创建文本翻译工单（入队即返回 ticket_no） */
-export async function ticketCreate(data: { title: string; source_text: string; target_langs: string; mode?: string }): Promise<TicketResp> {
+export async function ticketCreate(data: { title: string; source_text: string; target_langs: string; mode?: string; max_length?: number }): Promise<TicketResp> {
   return request('/api/tickets/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
@@ -135,7 +135,7 @@ export async function notificationsReadAll(): Promise<AdminResp> {
  * 文件工单创建：multipart 上传，≤40MB；支持 docx/xlsx/pptx/pdf/txt/csv。
  * 支持多文件（共享 40MB 上限）；mode 透传后端避免被静默吞掉。
  */
-export async function ticketCreateFile(files: File | File[], meta: { title: string; target_langs: string; mode?: string }): Promise<TicketResp> {
+export async function ticketCreateFile(files: File | File[], meta: { title: string; target_langs: string; mode?: string; max_length?: number }): Promise<TicketResp> {
   const fd = new FormData()
   const list = Array.isArray(files) ? files : [files]
   for (const f of list) fd.append('files', f)
@@ -144,6 +144,8 @@ export async function ticketCreateFile(files: File | File[], meta: { title: stri
   // ★ 整改 C2：此前 meta.mode 被收下但从不发送——文件工单永远按默认 pro 全流水线
   //   计费执行，用户选的「快速」被静默吞掉；后端经 FormValue("mode") 读取。
   if (meta.mode) fd.append('mode', meta.mode)
+  // ★ 缩翻（任务7）：最长字符限制随表单透传后端（>0 启用缩翻）
+  if (meta.max_length && meta.max_length > 0) fd.append('max_length', String(meta.max_length))
   return request('/api/tickets/create-file', { method: 'POST', headers: authHeaders(), body: fd })
 }
 

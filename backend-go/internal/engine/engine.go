@@ -112,6 +112,44 @@ func uiLangFromCtx(ctx context.Context) string {
 	return "zh"
 }
 
+// maxLenKey 缩翻最长字符限制 context 键（0=未启用缩翻）。
+type maxLenKey struct{}
+
+// WithMaxLength 把缩翻最长字符限制写入 context（0=未启用；>0=译文总长不得超过该值）。
+// 用途：文本/文件翻译与工单初翻共用，提示模型按上限精简输出。
+func WithMaxLength(ctx context.Context, n int) context.Context {
+	return context.WithValue(ctx, maxLenKey{}, n)
+}
+
+// maxLengthFromCtx 从 context 读取缩翻最长字符限制；未设置返回 0（未启用）。
+func maxLengthFromCtx(ctx context.Context) int {
+	if v, ok := ctx.Value(maxLenKey{}).(int); ok && v > 0 {
+		return v
+	}
+	return 0
+}
+
+// maxLengthOption 从 options map 读取缩翻最长字符限制（兼容 JSON number/string 形态）。
+// 返回：>0=启用缩翻并指定上限；<=0=未启用。
+func maxLengthOption(options map[string]interface{}) int {
+	if options == nil {
+		return 0
+	}
+	switch v := options["max_length"].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
 // usageCtxKey 请求级"实际使用的 LLM 供应商/模型"记录键（供计量成本核算）
 type usageCtxKey struct{}
 
@@ -1070,6 +1108,10 @@ func (e *Engine) SingleLangTranslate(ctx context.Context, zhText, targetLang str
 func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang, stage string, attempt int) (string, error) {
 	cfg := e.Cfg
 	instruction := translateInstruction(sourceLang, targetLang, uiLangFromCtx(ctx))
+	// ★ 缩翻（任务7）：启用时向指令追加最长字符限制，提示模型精简输出
+	if ml := maxLengthFromCtx(ctx); ml > 0 {
+		instruction += fmt.Sprintf(" 译文总长度（含标点）不得超过 %d 个字符。请在保留原意与关键信息的前提下尽量精简，不要额外解释，只输出译文。", ml)
+	}
 	ref := buildExamplesPrompt(zhText, targetLang, examples)
 
 	// 术语参考放入 system 消息（模型不会复述 system 内容），user 只含指令+待翻译文本
@@ -1203,6 +1245,19 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 		completed := e.autoCompleteTranslation(ctx, zhText, targetLang, content, base, key, model, sourceLang)
 		if completed != "" {
 			content = completed
+		}
+	}
+
+	// ★ 缩翻硬闸（任务7）：译文总长超过上限则附提示重译（≤2 次），仍超长返回最近一次结果
+	if ml := maxLengthFromCtx(ctx); ml > 0 {
+		for retry := 0; retry < 2 && len([]rune(content)) > ml; retry++ {
+			fb := fmt.Sprintf("译文长度为 %d 字符，超过最长限制 %d 字符。请压缩精简至不超过 %d 字符（含标点），保留原意与关键信息，只输出压缩后的译文。",
+				len([]rune(content)), ml, ml)
+			rev := e.translateWithFeedbackEx(ctx, zhText, targetLang, fb, stage, examples)
+			if rev == "" {
+				break
+			}
+			content = rev
 		}
 	}
 	return content, nil

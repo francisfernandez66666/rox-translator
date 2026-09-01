@@ -108,6 +108,10 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 	if l, ok := options["lang"].(string); ok && l != "" {
 		ctx = WithUILang(ctx, l)
 	}
+	// ★ 缩翻（任务7）：options["max_length"]>0 时启用最长字符限制
+	if n := maxLengthOption(options); n > 0 {
+		ctx = WithMaxLength(ctx, n)
+	}
 	if prog == nil {
 		prog = func(string, int, int) {}
 	}

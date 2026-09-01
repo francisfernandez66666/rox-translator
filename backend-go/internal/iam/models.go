@@ -33,6 +33,9 @@ type User struct {
 	// DeactivatedAt 自助注销请求日期（2006-01-02；空=未注销）。
 	// 宽限语义：请求当日仍可正常使用，次日起按 disabled 处理（数据保留不删除）。
 	DeactivatedAt string `json:"-"`
+	// MustChangePwd 首次登录强制改密标记（1=登录后必须先改密，改密成功后自动清零）。
+	// ★ 租户 Excel 批量导入用户（2026-09-02 功能）创建账号时置 1。
+	MustChangePwd int `json:"must_change_pwd"`
 }
 
 // EffectiveUserStatus 计算生效状态：deactivating（注销宽限期）在次日起降级为 disabled。

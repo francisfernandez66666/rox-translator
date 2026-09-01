@@ -284,6 +284,10 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	// ★ 注入用量收集器：本工单全链路（初翻/校对/Judge/文化闸门/embedding）
 	// 的真实 token 用量自动归集，完成后按实费计费。
 	ctx = s.Engine.WithUsageRecorder(ctx)
+	// ★ 缩翻（任务7）：工单最长字符限制注入 ctx（0=未启用；>0=译文总长不得超过该值）
+	if t.MaxLength > 0 {
+		ctx = engine.WithMaxLength(ctx, int(t.MaxLength))
+	}
 
 	var runErr error
 	if t.FilePath != "" {

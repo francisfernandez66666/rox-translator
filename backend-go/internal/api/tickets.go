@@ -97,6 +97,7 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 		SourceText  string `json:"source_text"`  // 待翻译源文本（必填）
 		TargetLangs string `json:"target_langs"` // 目标语言列表（逗号分隔，默认 en）
 		Mode        string `json:"mode"`         // 翻译模式：fast | pro（默认 pro）
+		MaxLength   int64  `json:"max_length"`   // ★ 缩翻最长字符限制（0=未启用）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SourceText == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请提供源文本"})
@@ -122,6 +123,11 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 翻译模式随创建请求落库（fast=快速 / pro=专业校对；空值归一化为 pro）
 	t.Mode = normalizeTaskMode(req.Mode)
+	// ★ 缩翻（任务7）：最长字符限制随建单落库（0=未启用缩翻）
+	t.MaxLength = req.MaxLength
+	if t.MaxLength > 0 {
+		_ = s.Store.UpdateTicket(t)
+	}
 	// 创建工单审计 + 自动入队执行（★ 整改 C6：入队用 Background——请求 ctx 在响应返回后
 	// 即取消，异步任务不得绑定其生命周期）
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_create", "tickets", t.TicketNo)
@@ -237,6 +243,10 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 	}
 	// ★ 文件任务模式落库（multipart mode 字段；空=pro）
 	t.Mode = normalizeTaskMode(r.FormValue("mode"))
+	// ★ 缩翻（任务7）：文件工单最长字符限制（multipart max_length；空=0 未启用）
+	if n, perr := strconv.ParseInt(r.FormValue("max_length"), 10, 64); perr == nil && n > 0 {
+		t.MaxLength = n
+	}
 	tid := s.effTenant(r, u)
 	for _, f := range saved {
 		_, _ = s.Store.AddTicketFile(&store.TicketFile{

@@ -157,6 +157,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"user": map[string]interface{}{
 			"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
 			"role": u.Role, "tenant_id": u.TenantID, "email": u.Email,
+			// ★ 首登强制改密（2026-09-02 功能）：1=登录后必须先改密，前端弹窗引导
+			"must_change_pwd": u.MustChangePwd,
 		},
 	})
 }
@@ -265,6 +267,10 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	// 记录修改密码审计
 	s.Store.LogAudit(u.TenantID, u.ID, "change_password", "auth", "")
+	// ★ 首登强制改密（2026-09-02 功能）：改密成功后自动清零标记
+	if u.MustChangePwd > 0 {
+		_ = s.Store.SetMustChangePwd(u.ID, u.TenantID, 0)
+	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 

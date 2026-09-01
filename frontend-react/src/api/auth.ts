@@ -40,6 +40,11 @@ export async function login(username: string, password: string): Promise<LoginRe
   return request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) })
 }
 
+/** 登录后自助修改密码（校验原密码）。首登强制改密（must_change_pwd=1）时用于设置新密码 */
+export async function changePassword(old_password: string, new_password: string): Promise<AdminResp> {
+  return request('/api/auth/change-password', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ old_password, new_password }) })
+}
+
 /** 校验当前 token 对应的用户信息（用于会话恢复） */
 export async function authMe(): Promise<LoginResp> {
   return request('/api/auth/me', { headers: authHeaders() })

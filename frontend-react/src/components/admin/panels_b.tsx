@@ -3,7 +3,7 @@
 // 职责：后台面板 B，包含租户管理与组织架构功能。
 // 功能对齐 Vue: frontend/src/components/admin/Tenants.vue 与 Org.vue
 // ============================================================================
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Textarea, Tabs, MessagePlugin,
 } from 'tdesign-react'
@@ -13,7 +13,7 @@ import {
   tenantGrantTrial, tenantErase, adminOrderCreate, adminOrderPay,
   orgList, orgCreate, orgRename, orgMove, orgDelete, orgUsers,
   orgBudgetSummary, orgTokenLimit,
-  adminUserCreate, adminUserDelete, adminUserResetPassword,
+  adminUserCreate, adminUserDelete, adminUserResetPassword, userBulkImport,
   inviteCodes, inviteCodeCreate,
   request, authHeaders, API_BASE, getAuthToken,
   type TenantInfo, type OrgInfo,
@@ -261,6 +261,11 @@ export function OrgP() {
   const [nu, setNu] = useState<Any>({ username: '', password: '', display_name: '', role: 'user' })
   const [nuOrgId, setNuOrgId] = useState(0)
   const [creating, setCreating] = useState(false)
+  // ★ 批量导入（2026-09-02 功能）：Excel 导入用户（建号+首登强制改密+邮件通知）
+  const importFileRef = useRef<HTMLInputElement>(null)
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState<Any[] | null>(null)
   // 预算/邀请弹窗状态
   const [budgetModal, setBudgetModal] = useState<{ id: number; name: string; limit: number; used: number } | null>(null)
   const [budgetInput, setBudgetInput] = useState(0)
@@ -429,9 +434,22 @@ export function OrgP() {
     } finally { setCreating(false) }
   }
 
+  /** 批量导入用户：选择 Excel 后上传（表头：用户名称、姓名、部门、角色、邮箱） */
+  async function doBulkImport() {
+    if (!importFile) { void MessagePlugin.warning(t('org.importNeedFile')); return }
+    setImporting(true)
+    try {
+      const r: any = await userBulkImport(importFile)
+      if (!r.success) { void MessagePlugin.error(r.message); return }
+      setImportResult(r.results || [])
+      void MessagePlugin.success(tpl('org.importDone', { ok: r.created || 0, fail: r.failed || 0 }))
+      setImportFile(null)
+      await loadAll()
+    } finally { setImporting(false) }
+  }
+
   /** 弹窗重置组织用户密码 */
-  async function resetPwd(u: Any) {
-    const pwd = await promptText({ header: t('org.resetPwdPrompt'), body: tpl('org.resetPwdPrompt', { name: u.username }) })
+  async function resetPwd(u: Any) {    const pwd = await promptText({ header: t('org.resetPwdPrompt'), body: tpl('org.resetPwdPrompt', { name: u.username }) })
     if (!pwd || pwd.length < 6) { void MessagePlugin.warning(t('org.pwdMinLength')); return }
     const r: any = await adminUserResetPassword(u.id, pwd)
     if (!r.success) { void MessagePlugin.error(r.message); return }
@@ -714,10 +732,32 @@ export function OrgP() {
                       options={nuRoleOptions.map((r) => ({ label: t('users.role.' + r), value: r }))} />
               <span style={{ fontSize: 12, color: '#888', flex: 1, minWidth: 120 }}>{t('org.cascadeHint')}</span>
               <Button theme="primary" disabled={creating} onClick={createUser}>{creating ? t('org.creating') : t('org.addUserBtn')}</Button>
+              {/* ★ 批量导入（2026-09-02 功能）：仅租户管理员及以上 */}
+              {myLevel >= 3 && (
+                <>
+                  <input ref={importFileRef} type="file" hidden accept=".xlsx,.xls,.csv"
+                         onChange={(e) => { setImportFile(e.target.files?.[0] || null); e.target.value = '' }} />
+                  <Button variant="outline" disabled={importing} onClick={() => importFileRef.current?.click()}
+                          title={t('org.importHint')}>{importing ? t('org.importing') : t('org.importBtn')}</Button>
+                  <Button variant="outline" disabled={importing || !importFile} onClick={doBulkImport}
+                          title={importFile ? importFile.name : ''}>↗</Button>
+                </>
+              )}
             </div>
           </div>
         </div>
       </div>
+
+          {/* 批量导入结果弹窗 */}
+          <Dialog visible={!!importResult} onClose={() => setImportResult(null)}
+                  header={`📥 ${tpl('org.importResultTitle', { total: importResult?.length || 0 })}`} width={520}>
+            <Table rowKey="username" size="small" maxHeight={360} data={importResult || []}
+                   columns={[
+                     { colKey: 'username', title: t('org.importResultCol') },
+                     { colKey: 'ok', title: t('org.importResultStatus'), width: 70, cell: ({ row }: any) => row.ok ? <Tag theme="success">{t('org.importResultOk')}</Tag> : <Tag theme="danger">{t('org.importResultFail')}</Tag> },
+                     { colKey: 'message', title: '', cell: ({ row }: any) => <span style={{ fontSize: 12, color: row.ok ? '#666' : '#c62828' }}>{row.message}</span> },
+                   ] as never} />
+          </Dialog>
 
           {/* 预算弹窗 */}
       <Dialog visible={!!budgetModal} onClose={() => setBudgetModal(null)}

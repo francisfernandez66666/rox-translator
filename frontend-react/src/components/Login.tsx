@@ -5,10 +5,10 @@
 // ★ U4：/register 路径或 ?ref= 自动展开注册面板并捕获个人码。
 // ============================================================================
 import { useEffect, useRef, useState } from 'react'
-import { Button, Input, Select, Checkbox, MessagePlugin } from 'tdesign-react'
+import { Button, Input, Select, Checkbox, Dialog, MessagePlugin } from 'tdesign-react'
 import {
   login, authRegister, registerIndustries, sendEmailCode, registerConfig,
-  forgotPassword, resetPassword,
+  forgotPassword, resetPassword, changePassword,
   setAuthToken, setActiveTenantId,
 } from '@/api'
 import { t, tpl, useT, toggleLang } from '@/i18n'
@@ -34,6 +34,15 @@ export default function Login({ mode, onLogin }: Props) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // ★ 首登强制改密（2026-09-02 功能）：登录成功后 user.must_change_pwd=1 时弹窗强制改密
+  const [forceOpen, setForceOpen] = useState(false)
+  const [forcePending, setForcePending] = useState<AuthUser | null>(null)
+  const [forceOld, setForceOld] = useState('')
+  const [forceNew, setForceNew] = useState('')
+  const [forceConfirm, setForceConfirm] = useState('')
+  const [forceMsg, setForceMsg] = useState('')
+  const [forceBusy, setForceBusy] = useState(false)
 
   // 注册面板状态
   const [view, setView] = useState<'signin' | 'register' | 'forgot'>('signin')
@@ -125,8 +134,33 @@ export default function Login({ mode, onLogin }: Props) {
       }
       setAuthToken(resp.token)
       setActiveTenantId(0)
-      onLogin(resp.user!)
+      // ★ 首登强制改密（2026-09-02 功能）：管理员导入的账号登录后必须先改密再进入系统
+      const u = resp.user!
+      if ((u as any).must_change_pwd) {
+        setForcePending(u)
+        setForceOld('')
+        setForceNew('')
+        setForceConfirm('')
+        setForceMsg('')
+        setForceOpen(true)
+        return
+      }
+      onLogin(u)
     } finally { setLoading(false) }
+  }
+
+  // 提交首登强制改密：校验新密码长度与一致 → 调用 changePassword（原密码=初始密码）
+  async function submitForcePwd() {
+    if (!forceOld || forceNew.length < 6) { setForceMsg(t('pwd.tooShort')); return }
+    if (forceNew !== forceConfirm) { setForceMsg(t('pwd.mismatch')); return }
+    setForceBusy(true); setForceMsg('')
+    try {
+      const r = await changePassword(forceOld, forceNew)
+      if (!r.success) { setForceMsg(r.message || '密码修改失败'); return }
+      void MessagePlugin.success(t('pwd.done'))
+      setForceOpen(false)
+      if (forcePending) { onLogin(forcePending); setForcePending(null) }
+    } finally { setForceBusy(false) }
   }
 
   // 发送邮箱验证码：校验邮箱与人机验证 → 调用接口 → 成功后进入 60s 倒计时冷却
@@ -368,6 +402,21 @@ export default function Login({ mode, onLogin }: Props) {
     </>
   )
 
+  // 首登强制改密弹窗（成功后自动进入系统）
+  const forceDialog = (
+    <Dialog header={t('pwd.forceTitle')} visible={forceOpen} width={420}
+            closeBtn={false} footer={false} onClose={() => { if (!forceBusy) setForceOpen(false) }}>
+      <p style={{ fontSize: 13, color: '#555', lineHeight: 1.7, margin: '0 0 14px' }}>{t('pwd.forceHint')}</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <Input type="password" value={forceOld} onChange={setForceOld} placeholder={t('pwd.oldPassword')} />
+        <Input type="password" autocomplete="new-password" value={forceNew} onChange={setForceNew} placeholder={t('login.newPassword')} />
+        <Input type="password" autocomplete="new-password" value={forceConfirm} onChange={setForceConfirm} placeholder={t('pwd.confirmPlaceholder')} onEnter={submitForcePwd} />
+        {!!forceMsg && <div style={{ color: forceMsg === t('pwd.done') ? '#2e7d32' : '#c62828', fontSize: 13 }}>{forceMsg}</div>}
+        <Button block theme="primary" loading={forceBusy} onClick={submitForcePwd}>{t('pwd.forceSubmit')}</Button>
+      </div>
+    </Dialog>
+  )
+
   // 左右分栏布局：一侧背景图，另一侧登录容器（容器可在左/右切换）
   if (layout.mode === 'split') {
     const imgPanel = (
@@ -383,6 +432,7 @@ export default function Login({ mode, onLogin }: Props) {
     return (
       <div className="login-wrap" style={{ position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'row', alignItems: 'stretch' }}>
         {layout.side === 'left' ? (<>{formPanel}{imgPanel}</>) : (<>{imgPanel}{formPanel}</>)}
+        {forceDialog}
       </div>
     )
   }
@@ -394,6 +444,7 @@ export default function Login({ mode, onLogin }: Props) {
       <div style={{ position: 'absolute', left: `${cardPos.x}%`, top: `${cardPos.y}%`, transform: 'translate(-50%,-50%)', zIndex: 2, width: '100%', maxWidth: 400, maxHeight: '100vh', overflowY: 'auto', padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {cards}
       </div>
+      {forceDialog}
     </div>
   )
 }

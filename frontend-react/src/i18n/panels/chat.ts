@@ -15,6 +15,10 @@ export const zh: Record<string, string> = {
   'pwd.codeBad': '验证码错误或已过期',
   'pwd.done': '密码已更新，下次登录请使用新密码',
   'pwd.confirmPlaceholder': '再次输入新密码',
+  'pwd.forceTitle': '首次登录请修改密码',
+  'pwd.forceHint': '管理员为您开通了初始密码，出于安全考虑，请先设置新密码后再使用系统。',
+  'pwd.oldPassword': '当前密码（初始密码）',
+  'pwd.forceSubmit': '设置新密码',
 
   // ---- 翻译工作台主界面 ----
   'chat.title': '🌐 翻译',
@@ -128,6 +132,10 @@ export const en: Record<string, string> = {
   'pwd.codeBad': 'Invalid or expired code',
   'pwd.done': 'Password updated — use the new one next login',
   'pwd.confirmPlaceholder': 'Repeat new password',
+  'pwd.forceTitle': 'Change Your Password (Required)',
+  'pwd.forceHint': 'Your administrator set an initial password. For security, set a new password to continue.',
+  'pwd.oldPassword': 'Current (initial) password',
+  'pwd.forceSubmit': 'Set new password',
   // ---- 翻译工作台主界面 ----
   'chat.title': '🌐 Translate',
   'chat.clearChat': 'Clear chat',

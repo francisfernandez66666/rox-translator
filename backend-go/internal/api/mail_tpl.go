@@ -79,6 +79,15 @@ var mailTplMetas = []MailTplMeta{
 		},
 	},
 	{
+		Code: "user_import", Name: "批量导入用户通知",
+		Desc: "租户 Excel 批量导入用户后，发送账号与初始密码（引导首次登录改密）",
+		Vars: []string{"username", "password", "login_url", "brand"},
+		Default: MailTpl{
+			Subject: "【{brand}】您的账号已开通",
+			Body:    "您好，\n\n管理员已为您开通 {brand} 账号：\n登录账号：{username}\n初始密码：{password}\n登录地址：{login_url}\n\n出于安全考虑，首次登录后请立即修改密码。\n\n—— {brand}",
+		},
+	},
+	{
 		Code: "alert", Name: "系统告警通知",
 		Desc: "系统监控/阈值告警通知（如邀请奖励触顶、余额不足等）",
 		Vars: []string{"title", "content", "level", "brand"},

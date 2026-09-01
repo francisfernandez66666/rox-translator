@@ -39,6 +39,17 @@ export async function adminUserResetPassword(id: number, password: string): Prom
   return request('/api/admin/users/reset-password', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, password }) })
 }
 
+/**
+ * 租户 Excel 批量导入用户（2026-09-02 功能）。
+ * 表头：用户名称、姓名、部门、角色、邮箱；建号后首登强制改密 + 邮件通知初始密码。
+ * 返回 { created, failed, total, results: [{ username, ok, message }] }
+ */
+export async function userBulkImport(file: File): Promise<AdminResp & { created?: number; failed?: number; total?: number; results?: Array<{ username: string; ok: boolean; message: string }> }> {
+  const fd = new FormData()
+  fd.append('file', file)
+  return request('/api/admin/users/bulk-import', { method: 'POST', headers: authHeaders(), body: fd })
+}
+
 // ==================== 充值订单 ====================
 
 /** 创建充值订单（租户/代币数/金额） */

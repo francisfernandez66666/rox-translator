@@ -118,6 +118,11 @@ func (s *Store) SetUserAgreed(id, tid int64, at string) error {
 	return s.iam.SetUserAgreed(id, tid, at)
 }
 
+// SetMustChangePwd 委托 iam.Store：设置/清除首登强制改密标记（Excel 批量导入置 1）。
+func (s *Store) SetMustChangePwd(id, tid int64, flag int) error {
+	return s.iam.SetMustChangePwd(id, tid, flag)
+}
+
 // EnsureAdmin 委托 iam.Store
 func (s *Store) EnsureAdmin(tid int64, username, passHash, displayName, email string) error {
 	return s.iam.EnsureAdmin(tid, username, passHash, displayName, email)

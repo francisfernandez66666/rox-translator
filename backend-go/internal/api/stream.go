@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -195,6 +196,10 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 		options["message"] = message
 		options["_prompt"] = message
 	}
+	// ★ 缩翻（任务7）：文件翻译最长字符限制（multipart max_length 字段；空=未启用）
+	if n, perr := strconv.Atoi(strings.TrimSpace(r.FormValue("max_length"))); perr == nil && n > 0 {
+		options["max_length"] = n
+	}
 
 	sseHeaders(w)
 	flusher, _ := w.(http.Flusher)
@@ -363,6 +368,10 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	if message != "" {
 		options["message"] = message
 		options["_prompt"] = message
+	}
+	// ★ 缩翻（任务7）：文件翻译最长字符限制（multipart max_length 字段；空=未启用）
+	if n, perr := strconv.Atoi(strings.TrimSpace(r.FormValue("max_length"))); perr == nil && n > 0 {
+		options["max_length"] = n
 	}
 	// 配额闸门：QPS/并发/每日上限/余额校验（不通过则拒绝本次文件翻译）
 	tid, release, gateErr := s.gateUsage(r)
