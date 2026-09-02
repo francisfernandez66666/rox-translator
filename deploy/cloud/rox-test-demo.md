@@ -45,12 +45,14 @@ sudo PROD_DSN='postgres://langcross:<密码>@127.0.0.1:5432/langcross?sslmode=di
 
 脚本执行内容（幂等，可重复跑）：
 
-1. **目录与快照**：建 `/opt/translator-demo/`，复制生产二进制与前端 dist（快照，发版不影响）。
+1. **目录与快照**：建 `/opt/translator-demo/`，复制生产二进制与前端 dist（快照，发版不影响）；
+   **并复制生产 npz 向量索引**（`/opt/translator/data/tm_embeddings.npz` → 演示数据目录，`PROD_NPZ` 可覆盖；
+   缺失仅告警不阻断；演示库为 PostgreSQL，npz 缺失时 DB 内 pgvector 检索仍可兜底（见 §3.2 治本修复）。
 2. **克隆数据库**：`pg_dump` 生产库 → 恢复为 `langcross_demo`（含 ROX 租户全部数据、用户、KB 语料、向量）。
 3. **演示库微调**：`primary_host` 指向演示域；`pay_mode` 置 `mock`（演示下单自动到账，老板演示最顺）。
 4. **演示密钥**：写 `/etc/translator-demo/secrets.env`（0600），`JWT_SECRET`/`ADMIN_TOKEN` 复用生产
    （保证库内 `enc:v1:` 加密密钥可解密、登录 token 可验证——镜像的本质）。
-5. **systemd**：安装 `translator-demo.service`（端口 8789，独立 env、低并发、内存护栏）。
+5. **systemd**：安装 `translator-demo.service`（端口 8789，独立 env、低并发、内存护栏；`ExecStart` 带 `-kb <演示数据目录>/tm_embeddings.npz`，见下方 §3.2）。
 6. **Caddy**：生成 `/etc/caddy/translator-demo.conf`（`rox-test.lexicorn.cn` → 127.0.0.1:8789，`request_body max_size 40MB`；SPA 首页走后端 `handleSPA` 注入品牌，消除先主站后演示站的闪烁）并在主 Caddyfile 引入、reload。
 
 ---
@@ -99,6 +101,29 @@ journalctl -u translator-demo -n 30
 > （logo/首页背景/网页标题）在演示站不展示——数据本身已随克隆带入，只是解析层被跳过。
 > 邮件说明：演示库已同步 `alert_email=noreply@lexicorn.cn` / `alert_email_cc=575160894@qq.com`
 > （供「我已付费」通知链路验证），但演示服务本身未配置 SMTP，邮件为 Noop（仅入 jobs 队列并打印日志，不真实外发）。
+
+### 3.1 行业包/语言文化包自动采集演示（★ 2026-09-01 新增）
+
+- 演示入口：用 `demo_admin`（超管 L4）登录 → 管理后台「🕷️ 数据采集」面板。
+- 可演示链路：新增数据源（如官方 API / 受限抓取 / LLM 生成）→「立即采集一轮」→ 待审增量池出现
+  tier 1/2/3 条目与安全句 → 批量「通过并热加载」→ 该包术语即时进入后续翻译参考（CJK 缓存已失效重建）。
+- 采集为低占用后台任务（无排队工单 + LLM 错误率低 + RSS 低于阈值时才跑），演示高峰时段可能
+  处于暂停态，点「立即采集一轮」仅触发一轮探测，不会挤占翻译；护栏与断点续传配置见《部署指南》§八-B4。
+- 注意：演示库克隆自生产时 `kb_pack_sources`/`kb_staged_*` 表与数据随库带入；重复刷新克隆即回到初始态。
+
+### 3.2 npz 向量索引与 `-kb` 参数（★ 2026-09-01 修复说明）
+
+- **背景**：早期演示镜像只带 `-kbdb`、漏带 `-kb`（npz 向量索引），导致演示站**语义检索整层被跳过**，
+  知识库术语（如 极石→ROX、车主→owner）在工单翻译时无法命中、直接丢给模型自由发挥。
+- **修复**：
+  1. 临时修复：脚本已改为复制生产 npz 并在 `ExecStart` 增加 `-kb ${DEMO_USER_DATA}/tm_embeddings.npz`
+     （演示库是 PostgreSQL，npz 缺失时 `pgvector` 语义检索在旧代码里也被 `if idx != nil` 一并跳过）；
+  2. 治本修复（主站+演示站同一代码）：`engine.go` 语义检索块重构——pgvector 不再依赖 npz 索引，
+     任一源（pgvector 或 npz）可用即执行语义检索；`workflow.go` 把 kb_match 阶段收集的 KB 命中例句
+     （`res.Examples`）持久化并注入 AI 初翻 prompt，KB「部分命中」的术语也会被模型沿用。
+- **验证**：重跑 `sudo bash scripts/bootstrap-demo.sh` 后，用演示账号翻译含 极石/车主 的句子，
+  应命中知识库译法（模式不再显示「纯模型翻译/无知识库」）；或在 `journalctl -u translator-demo`
+  中确认启动日志出现 `知识库向量索引已加载: N 条`。
 
 ---
 

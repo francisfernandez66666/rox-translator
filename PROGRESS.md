@@ -1,6 +1,25 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-08-31（订单「我已付费」通知超管链路修复：站内信 + 抄送邮件）｜ 与生产一致（main 分支）
+> 最后更新：2026-09-02（行业下拉双语自适应 + 前后端全量中文注释补齐）｜ 与生产一致（main 分支）
+
+## 〇-VI、行业下拉双语自适应 + 全量中文注释补齐（2026-09-02，提交 ff48ee0）
+
+| 块 | 内容 |
+|---|---|
+| **行业双语自适应** | 新增 `frontend-react/src/lib/industries.ts`：行业 code↔中英文名映射（汽车↔automobile 等 9 行业），登录注册/租户管理/数据源三类下拉统一按当前语言显示中文或英文名；值用中文名、提交时经 `industryCodeOf` 转回 code，后端接口契约不变 |
+| **注释补齐** | 前端 api/core、branding、MessageBubble、AccountMenu、panels_b/d 及历史遗漏的顶层声明补充中文注释；后端 crawler/extract_test.go 测试函数注释补齐 |
+| **验证** | `npm run typecheck` + `vite build` 通过；`go build ./...` + `go vet` 通过；已部署至生产（43.108.86.140）并跑 `deploy_check.sh` 8 项全通过 |
+
+## 〇-V、行业包/语言文化包自动采集 + 硬闸护栏（2026-09-01，提交 ff7bf17）
+
+| 块 | 内容 |
+|---|---|
+| **数据源三档** | tier1 官方 API（维基百科 langlinks 反查，源语言 zh）、tier2 受限抓取（robots.txt 遵从 + 每主机限速 1.2s + 术语表表格解析）、tier3 LLM 生成（词表批量翻译，kind 白名单 style/forbidden/replace），统一标注 tier 可信度进待审池 |
+| **调度（低占用驱动）** | watchdog 内嵌 `startPackScraper`：每 `scrape_poll_sec` 探测，仅当「无排队/运行工单 + LLM 错误率 < 阈值 + RSS < 水位」三条件全满足才采集；占用提升即暂停，checkpoint 断点续传；`scrape_seed_once=1` 首日铺底 + 每日增量（`kb_scrape_daily_marker`）；新增待审通知全部超管（站内信） |
+| **审批热加载** | 超管面板「🕷️ 数据采集」：数据源 CRUD/启停/手动采集一轮；待审池按类型/语言/状态筛选 + 批量通过/驳回；通过条目经 SaveEntry 落 `kb_entries`（宿主租户1）、安全句经 SaveSafetyPhraseEx 落 `kb_safety_phrases`，随后 invKB 失效缓存 + 异步重建向量索引即时生效 |
+| **硬闸护栏（gate_retry_max=8）** | Gate 8 项硬校验 / 语言文化闸门任一失败不再直接置 rejected：附 KB 参考（源文本命中标准译法）+ 失败原因，经 TranslateWithFeedbackEx 自动重译，循环至通过或达上限（默认 8 次）；重试次数与最近打回原因写入 payload（RetryCount/GateHints）供审批参考；`0`=关停自动重译直接打回 |
+| **幂等与去重** | 待审去重键 `md5(src_lang\|src_text\|tgt_lang\|tgt_text)`（条目）/ `md5(lang\|kind\|phrase\|replacement)`（安全句），唯一索引 + INSERT OR IGNORE；断点续传键 `kb_scrape_checkpoint_<date>_<source_id>` 等存 system_config；store.KBScrapeMigrate 幂等建表（kb_pack_sources / kb_staged_entries / kb_staged_phrases） |
+| **验证** | go build/vet/test（api+crawler+store+orchestrator 全绿）+ npm typecheck + vite build 通过；文档同步《部署指南》§八-B4（采集与护栏配置）并去掉过时/不存在的配置键表述 |
 
 ## 〇-IV、订单「我已付费」通知超管链路修复（2026-08-31，提交 ed1be6d）
 
@@ -181,7 +200,7 @@
   - **管理后台**：三工作台（超管/租管/部门管）、租户切换器、OpenAPI 文档在线编辑（双语）、审计日志、告警中心、记忆审核台
    - **品牌定制与子域名**：按子域名前缀解析租户品牌（名称/Logo/子域）；Caddy on-demand TLS 自动签发证书（需 DNS 通配符 A 记录 `*.lexicorn.cn → 服务器 IP`）；品牌信息前端按 host 直接调 `/api/branding` 加载（无根域覆盖）；登录成功后自动跳转至所属品牌子域（后端返回 `brand_host`）。品牌定制为付费套餐功能（有效付费套餐或超管授权方可编辑，未满足仅可查看）；登录页支持两种布局——① 全屏背景（登录卡片浮于其上，无遮罩）② 左右分栏（容器可在左/右，另一侧为图片）；登录卡片与背景图位置均可在品牌管理页拖拽定位并保存；语言切换（中文/EN）为全局设计，内嵌于登录容器右上角
 - **Office 划译插件**：Word 侧加载 taskpane，选区翻译插回文档
-- **运维护栏（1G 内存红线，2026-08-28 优化）**：`GOMEMLIMIT=650Mi`、`MemoryMax=950M`、worker=2、LLM 并发 8（禁 HTTP/2 治流挂起）；**文件翻译防卡死**：PDF 体积>15MB 或页数>120 前置拦截 + 友好提示；转换子进程 OOM 优先受害者 + 可选 `FILEPROC_RLIMIT_AS_MB` 硬上限；**并发写零 SQLITE_BUSY**：实时用量计量改为内存累积 + 周期(2s/200条)按租户单事务批量落库（写事务从每秒 N 个降到每周期每租户 1 个），并用 `usage_daily` 计数器表替代每次请求的 ledger `LIKE` 全扫；产物留存 14 天+到期提醒、pending 订单 15min 自动关闭、低额提醒巡检
+- **运维护栏（1G 内存红线，2026-08-28 优化）**：`GOMEMLIMIT=650Mi`、`MemoryMax=950M`、worker=2、LLM 并发 8（禁 HTTP/2 治流挂起）；**文件翻译防卡死**：PDF 体积>40MB 或页数>120 前置拦截 + 友好提示；转换子进程 OOM 优先受害者 + 可选 `FILEPROC_RLIMIT_AS_MB` 硬上限；**并发写零 SQLITE_BUSY**：实时用量计量改为内存累积 + 周期(2s/200条)按租户单事务批量落库（写事务从每秒 N 个降到每周期每租户 1 个），并用 `usage_daily` 计数器表替代每次请求的 ledger `LIKE` 全扫；产物留存 14 天+到期提醒、pending 订单 15min 自动关闭、低额提醒巡检
 
 ## 三、近期关键修复（2026-08-24~27）
 
