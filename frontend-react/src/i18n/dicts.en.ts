@@ -218,6 +218,8 @@ export const baseEn: Record<string,string> = {
   'tk.stQueued': 'Queued', 'tk.stRunning': 'Translating', 'tk.stPending': 'Pending approval',
   'tk.stApproved': 'Approved', 'tk.stRejected': 'Rejected', 'tk.stCompleted': 'Completed',
   'tk.stCancelled': 'Cancelled', 'tk.cancel': 'Cancel',
+  'tk.confirmCancelAction': 'Confirm Cancel',
+  'tk.confirmDeleteAction': 'Confirm Delete',
   'tk.cancelConfirm': 'Cancel job {no}? Billing and output will stop; tokens already consumed will not be refunded.',
   'tk.imageHeavyHint': 'Image-based tables detected: text inside images will NOT be translated. Upload the Word source for full coverage.',
   'menu.adminConsole': 'Admin Console',

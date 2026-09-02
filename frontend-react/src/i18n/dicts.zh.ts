@@ -310,6 +310,8 @@ export const baseZh: Record<string,string> = {
   'tk.stQueued': '排队中', 'tk.stRunning': '翻译中', 'tk.stPending': '待审批',
   'tk.stApproved': '已批准', 'tk.stRejected': '已驳回', 'tk.stCompleted': '已完成',
   'tk.stCancelled': '已取消', 'tk.cancel': '取消',
+  'tk.confirmCancelAction': '确认取消',
+  'tk.confirmDeleteAction': '确认删除',
   'tk.cancelConfirm': '确认取消工单 {no}？翻译中将停止后续计费与产出；已消耗的 token 不会退还。',
   'tk.imageHeavyHint': '检测到图片型表格：图片中的文字将不做翻译。如需完整翻译请上传 Word 源文件。',
   'menu.adminConsole': '进入管理后台',

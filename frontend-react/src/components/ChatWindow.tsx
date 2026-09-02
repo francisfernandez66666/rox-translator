@@ -208,7 +208,14 @@ export default function ChatWindow() {
         }
         const today = typeof r.tokens_used_today === 'number' ? r.tokens_used_today : null
         if (today !== null) {
-          setUsage({ today, todaySentences: Math.floor(today / (r.estimate_rate || 500)) })
+          // ★ 修复（2026-09-02 前端契约审计）：后端 /api/me/package 无 estimate_rate 字段。
+          //   改用余额行「可用 token ÷ ≈句数」反推实际换算率（无余额时兜底 500 句/token）。
+          let rate = 500
+          if (typeof r.balance_tokens === 'number' && r.balance_tokens > 0
+              && typeof r.balance_sentences_approx === 'number' && r.balance_sentences_approx > 0) {
+            rate = r.balance_tokens / r.balance_sentences_approx
+          }
+          setUsage({ today, todaySentences: Math.floor(today / rate) })
         }
         if (r.org_budget && r.org_budget.limit > 0) {
           setOrgBudget({ limit: r.org_budget.limit, used: r.org_budget.used_this_month, name: r.org_budget.name })

@@ -218,16 +218,16 @@ export default function TicketsPage() {
     if (!r.success) { void MessagePlugin.error(r.message || t('tk.runFail')); return }
     void load()
   }
-  // 取消排队/进行中的工单（需确认）
+  // 取消排队/进行中的工单（需确认；确认按钮置文案「确认取消」避免与弹窗取消同级歧义）
   async function cancelTicket(row: Ticket) {
-    if (!(await confirmDialog({ body: tpl('tk.cancelConfirm', { no: row.ticket_no || row.id }) }))) return
+    if (!(await confirmDialog({ body: tpl('tk.cancelConfirm', { no: row.ticket_no || row.id }), confirmText: t('tk.confirmCancelAction') }))) return
     const r = await ticketCancel(row.id)
     if (!r.success) { void MessagePlugin.error(r.message || t('tk.opFail')); return }
     void load()
   }
   // 删除已完成/已取消的工单（需确认）
   async function deleteTicket(row: Ticket) {
-    if (!(await confirmDialog({ body: tpl('tk.deleteConfirm', { no: row.ticket_no }) }))) return
+    if (!(await confirmDialog({ body: tpl('tk.deleteConfirm', { no: row.ticket_no }), confirmText: t('tk.confirmDeleteAction') }))) return
     const r = await ticketDelete(row.id)
     if (!r.success) { void MessagePlugin.error(r.message || t('tk.opFail')); return }
     void load()

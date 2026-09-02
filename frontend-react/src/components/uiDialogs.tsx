@@ -7,16 +7,21 @@
 import { DialogPlugin, Input } from 'tdesign-react'
 
 // 确认弹窗：用户点「确认」→ resolve(true)，取消/关闭/遮罩 → resolve(false)
-export function confirmDialog(opts: { header?: string; body: string }): Promise<boolean> {
+// confirmText/cancelText 可定制按钮文案（如「确认取消」「确认删除」），
+// 避免动作按钮与弹窗取消按钮同名造成「点了没反应、再点确定才生效」的交互歧义。
+export function confirmDialog(opts: { header?: string; body: string; confirmText?: string; cancelText?: string }): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false
     const done = (v: boolean) => { if (!settled) { settled = true; resolve(v) } }
-    const inst = DialogPlugin.confirm({
+    const dialogOpts: Record<string, unknown> = {
       header: opts.header ?? '确认操作',
       body: opts.body,
       onConfirm: () => { inst.hide(); done(true) },
       onClose: () => done(false),
-    })
+    }
+    if (opts.confirmText) dialogOpts.confirmBtn = opts.confirmText
+    if (opts.cancelText) dialogOpts.cancelBtn = opts.cancelText
+    const inst = DialogPlugin.confirm(dialogOpts)
   })
 }
 

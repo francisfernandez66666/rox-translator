@@ -10,7 +10,6 @@
 
 import { useEffect, useState } from 'react'
 import { Card, Tag, Loading, Button } from 'tdesign-react'
-import { billingBalance } from '@/api/billing'
 import { myPackage } from '@/api/billing'
 import { referralMy, type ReferralMyResp } from '@/api/referral'
 import { meContext } from '@/api'
@@ -36,12 +35,17 @@ function useAsync<T>(fn: () => Promise<T>, deps: readonly unknown[]) {
 
 // 余额面板：展示当前用户的永久余额、发放台账与可用总额
 export function BalancePanel() {
-  const { data, err, loading } = useAsync(() => billingBalance(), [])
+  // ★ 修复（2026-09-02 前端交互审计）：改用 /api/me/package（登录用户即可读）。
+  //   原 /api/billing/balance 后端 handleBalance 需租户管理员（requireTenantAdmin），
+  //   普通用户访问「我的余额」（/billing）会 403 显示错误卡片——本页为端用户自服务。
+  const { data, err, loading } = useAsync(() => myPackage(), [])
   if (loading) return <Loading className="ss-loading" />
   if (err) return <Card><Tag theme="danger">{err}</Tag></Card>
-  const b = (data as any)?.balance ?? {}
-  // ★ 任务2.5：可用总额 = 台账 + 永久余额；为 0 时展示「购买月租套餐或充值永久 token」引导横幅
-  const totalAvailable = Number((data as any)?.total_available ?? 0)
+  const p = (data as any) ?? {}
+  // ★ 双桶口径：permanent_balance=永久余额、sub_grants_left=未过期台账、balance_tokens=可用总额
+  const permanent = Number(p.permanent_balance ?? 0)
+  const grants = Number(p.sub_grants_left ?? 0)
+  const totalAvailable = Number(p.balance_tokens ?? p.sentence_balance ?? 0)
   return (
     <div className="ss-grid">
       {totalAvailable <= 0 && (
@@ -56,8 +60,8 @@ export function BalancePanel() {
       )}
       <Card>
         <h3>我的余额</h3>
-        <div className="ss-row"><span>永久余额</span><b>{fmtNum(b.balance ?? 0)}</b></div>
-        <div className="ss-row"><span>发放台账</span><b>{fmtNum((data as any)?.sub_grants_left ?? 0)}</b></div>
+        <div className="ss-row"><span>永久余额</span><b>{fmtNum(permanent)}</b></div>
+        <div className="ss-row"><span>发放台账</span><b>{fmtNum(grants)}</b></div>
         <div className="ss-row"><span>可用总额</span><b>{fmtNum(totalAvailable)}</b></div>
       </Card>
     </div>

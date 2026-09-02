@@ -14,25 +14,6 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
-/** 反馈记录结构：含目标类型/原文/译文/状态等字段 */
-export interface FeedbackItem {
-  id: number
-  tenant_id: number
-  user_id: number
-  target_type: string   // text | ticket
-  ticket_id: number
-  source_text: string
-  translations: string  // JSON 字符串（语言→译文）
-  target_langs: string
-  mode: string          // fast | pro
-  content: string
-  with_context: boolean
-  status: string        // open | resolved
-  handle_note: string
-  created_at: string
-  handled_at: string
-}
-
 // createFeedback 提交翻译反馈（文本气泡/工单详情入口）。
 export async function createFeedback(payload: {
   target_type: string
@@ -49,11 +30,6 @@ export async function createFeedback(payload: {
     headers: authHeaders(),
     body: JSON.stringify(payload),
   })
-}
-
-// adminFeedbacks 超管查询反馈列表（status=open|resolved|空=全部）。
-export async function adminFeedbacks(status = ''): Promise<AdminResp & { feedbacks?: FeedbackItem[] }> {
-  return request(`/api/admin/feedbacks${status ? '?status=' + encodeURIComponent(status) : ''}`, { headers: authHeaders() })
 }
 
 // resolveFeedback 超管标记已处理并附备注。
