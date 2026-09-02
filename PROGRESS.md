@@ -1,6 +1,20 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-02（行业下拉双语自适应 + 前后端全量中文注释补齐）｜ 与生产一致（main 分支）
+> 最后更新：2026-09-02（符号残留根因修复 + 功能0/1/2/3/4/5/6 收尾发版；已部署演示+生产，main 分支 2dc29b0）
+
+## 〇-VII、符号残留根因修复 + 功能批量收尾发版（2026-09-02，提交 2dc29b0 / 7654cbc）
+
+| 块 | 内容 |
+|---|---|
+| **★ 符号残留根因** | 翻译后处理 `stripReviewMarkers` 泛化：`markerBracketRe` 匹配单条审校模板标记（原文/译文/待审校译文/待審校譯文 及 `[]` 变体），最后一个标记后非空则取其后续译文、否则删除全部标记（不误删 `【贵宾】` 等正常内容）；`PostProcessTranslation` 在中文删除后追加空占位方括号二次清扫（原 `【原文】→【】` 残留）。实测 `【】Please perform…` 与 `【原文】Please perform…` 式残留根治；新增 `postprocess_test.go` 24 用例回归（en/zh_hant 端到端） |
+| **工单轮询（功能0）** | TicketsPage 列表轮询改 `ref` 持有最新列表 + 一次性 effect（原 useCallback 依赖 tickets 重建 interval 致高频/无限请求）；kaijin.liu 登录403：邀请开关按角色等级只对租管及以上读取（stores/admin.tsx） |
+| **计费豁免（功能6）** | `gateUsage` 与 `runTicket` 余额预检：超管 / tenant_id=0（平台上下文）跳过 QPS/并发/日额/余额/预算墙全闸门，避免平台视角被误判「余额不足」拒绝 |
+| **哈萨克语全链路（功能3/4）** | 翻译指令限定「哈萨克斯坦国家语 · 西里尔字母」（Qazaq tili），禁止中国哈萨克族阿拉伯字母写法；config.LangNames / langNames.ts / 字典 / 下拉全链路名称统一「哈萨克语（哈萨克斯坦）」；繁体提示词禁止复述原文与【原文】【待審校譯文】标记 |
+| **工单导出语言名（功能5）** | Excel 导出表头语言码→中文名（`config.LangNames`，无映射回退码）；工单列表 `target_langs` 列改 `langLabel` 显示中文名（此前显示原始码如 en,fr） |
+| **控件行稳定+去重（功能1/2）** | 缩翻输入框 72px 定宽预留槽位——勾选只显隐输入框、不推移模式/发送/创建按钮；聊天页语言选择器改可收缩（minWidth:0）防窄窗口溢出；LangMultiSelect `valueDisplay` 去重 |
+| **租户导入模板（功能4 收尾）** | 新增 `GET /api/admin/users/import-template`（表头+说明+示例行 xlsx）+ 前端「下载模板」按钮与中英 i18n |
+| **其他修复** | xlsx 字号缩放样式 nil 判空、`kb_staged_entries` 幂等补 tenant_id 列（EnsureColumns）、bootstrap-demo `users_id_seq` 序列修正 |
+| **验证与发布** | go build/vet/test 全绿 + npm typecheck/vite build 通过；已部署演示站（rox-test.lexicorn.cn，二进制 MD5 与生产一致 `637a749d`）与生产（langcross.lexicorn.cn，health/plans/register-config/translation-langs/tenant-branding 全 200）；7654cbc 全量中文注释收尾（crawler/extract_test.go 文件头） |
 
 ## 〇-VI、行业下拉双语自适应 + 全量中文注释补齐（2026-09-02，提交 ff48ee0）
 
@@ -198,7 +212,7 @@
 - **开放 API**：`POST /openapi/v1/tasks` 异步任务 + 轮询 status/download + balance；AES-GCM 密钥加密与一次性明文展示
 - **组织架构**：平台根→租户根→组织→部门四级树、拖拽调层级、部门预算徽标弹窗、邀请码绑定组织
   - **管理后台**：三工作台（超管/租管/部门管）、租户切换器、OpenAPI 文档在线编辑（双语）、审计日志、告警中心、记忆审核台
-   - **品牌定制与子域名**：按子域名前缀解析租户品牌（名称/Logo/子域）；Caddy on-demand TLS 自动签发证书（需 DNS 通配符 A 记录 `*.lexicorn.cn → 服务器 IP`）；品牌信息前端按 host 直接调 `/api/branding` 加载（无根域覆盖）；登录成功后自动跳转至所属品牌子域（后端返回 `brand_host`）。品牌定制为付费套餐功能（有效付费套餐或超管授权方可编辑，未满足仅可查看）；登录页支持两种布局——① 全屏背景（登录卡片浮于其上，无遮罩）② 左右分栏（容器可在左/右，另一侧为图片）；登录卡片与背景图位置均可在品牌管理页拖拽定位并保存；语言切换（中文/EN）为全局设计，内嵌于登录容器右上角
+   - **品牌定制与子域名**：按子域名前缀解析租户品牌（名称/Logo/子域）；Caddy on-demand TLS 自动签发证书（需 DNS 通配符 A 记录 `*.lexicorn.cn → 服务器 IP`）；品牌信息前端按 host 直接调 `/api/tenant/branding` 加载（无根域覆盖）；登录成功后自动跳转至所属品牌子域（后端返回 `brand_host`）。品牌定制为付费套餐功能（有效付费套餐或超管授权方可编辑，未满足仅可查看）；登录页支持两种布局——① 全屏背景（登录卡片浮于其上，无遮罩）② 左右分栏（容器可在左/右，另一侧为图片）；登录卡片与背景图位置均可在品牌管理页拖拽定位并保存；语言切换（中文/EN）为全局设计，内嵌于登录容器右上角
 - **Office 划译插件**：Word 侧加载 taskpane，选区翻译插回文档
 - **运维护栏（1G 内存红线，2026-08-28 优化）**：`GOMEMLIMIT=650Mi`、`MemoryMax=950M`、worker=2、LLM 并发 8（禁 HTTP/2 治流挂起）；**文件翻译防卡死**：PDF 体积>40MB 或页数>120 前置拦截 + 友好提示；转换子进程 OOM 优先受害者 + 可选 `FILEPROC_RLIMIT_AS_MB` 硬上限；**并发写零 SQLITE_BUSY**：实时用量计量改为内存累积 + 周期(2s/200条)按租户单事务批量落库（写事务从每秒 N 个降到每周期每租户 1 个），并用 `usage_daily` 计数器表替代每次请求的 ledger `LIKE` 全扫；产物留存 14 天+到期提醒、pending 订单 15min 自动关闭、低额提醒巡检
 
