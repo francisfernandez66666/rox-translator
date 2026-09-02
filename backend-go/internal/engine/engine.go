@@ -931,7 +931,10 @@ func translateInstruction(source, target, uiLang string) string {
 			if cn == "" {
 				cn = target
 			}
-			return "Translate the following text into " + cn + ". Output only the translation, without extra explanation."
+			if strings.Contains(cn, "哈萨克") {
+				return "Translate the following text into Kazakh, the state language of Kazakhstan (Qazaq tili). Use ONLY the Cyrillic alphabet (Қазақ тілі), NOT the Arabic-based script used by the Kazakh ethnic minority in China. Output only the Kazakh translation in Cyrillic, with no original text, no explanations, no placeholders like 【】 or brackets."
+			}
+			return "Translate the following text into " + cn + ". Output only the translation, without reproducing the original text, without extra explanations, and without placeholder symbols like 【原文】 or 【】."
 		}
 	}
 	// 中文界面 → 中文提示词
@@ -939,7 +942,7 @@ func translateInstruction(source, target, uiLang string) string {
 	case "zh":
 		return fmt.Sprintf("把下面的%s翻译为简体中文，只输出简体中文结果", src)
 	case "zh_hant":
-		return fmt.Sprintf("把下面的%s转换为繁体中文，只输出繁体中文结果", src)
+		return fmt.Sprintf("把下面的%s转换为繁体中文，只输出繁体中文结果，不要复述原文，不要输出类似【原文】【待審校譯文】的标记", src)
 	case "ja":
 		return fmt.Sprintf("把下面的%s翻译为日语，必须使用规范的日语汉字+假名混合书写，不要只用假名", src)
 	case "ko":
@@ -949,7 +952,10 @@ func translateInstruction(source, target, uiLang string) string {
 		if cn == "" {
 			cn = target
 		}
-		return fmt.Sprintf("把下面的%s翻译为%s，不要额外解释", src, cn)
+		if strings.Contains(cn, "哈萨克") {
+			return fmt.Sprintf("把下面的%s翻译为哈萨克语（哈萨克斯坦国家的官方语言，Qazaq tili）。只使用西里尔字母书写（Қазақ тілі），禁止使用中国哈萨克族使用的阿拉伯字母写法。只输出西里尔哈萨克语译文，不要复述原文，不要任何解释，不要输出【】等占位符号", src)
+		}
+		return fmt.Sprintf("把下面的%s翻译为%s，只输出译文本身，不要复述原文，不要输出【原文】【待審校譯文】等任何标记，不要额外解释", src, cn)
 	}
 }
 

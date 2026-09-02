@@ -232,7 +232,9 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	}
 	// ★ 余额预检（强制计费时）：可用额度 = 未过期台账 + 永久余额（双桶口径，评审整改 A1），
 	//   与 gateUsage/CheckBalance/DeductWithGrants 保持一致；不足快速失败，单独错误码提示充值/升级套餐
-	if s.Bill != nil && s.Bill.Enabled() {
+	// ★ 计费豁免（2026-09-02 需求6）：超管建单的工单 tenant_id=0（平台上下文）跳过余额预检，
+	//   与 gateUsage 建单豁免保持一致——避免超管平台视角工单异步执行被误判「余额不足」拒绝。
+	if s.Bill != nil && s.Bill.Enabled() && t.TenantID > 0 {
 		if grants, perm, berr := s.Store.TenantRemainTotal(t.TenantID); berr == nil && grants+perm <= 0 {
 			t.Status = store.TicketRejected
 			t.RejectReason = errInsufficientCode + ": 余额不足，请充值或升级套餐"

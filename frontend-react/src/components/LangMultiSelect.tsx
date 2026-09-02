@@ -19,7 +19,7 @@ const KB_LANGS: Array<{ code: string; label: string; flag?: string }> = [
   { code: 'es', label: '西班牙语', flag: '🇪🇸' },
   { code: 'pt', label: '葡萄牙语', flag: '🇵🇹' },
   { code: 'fr', label: '法语', flag: '🇫🇷' },
-  { code: 'kk', label: '哈萨克语', flag: '🇰🇿' },
+  { code: 'kk', label: '哈萨克语（哈萨克斯坦）', flag: '🇰🇿' },
   { code: 'de', label: '德语', flag: '🇩🇪' },
   { code: 'zh_hant', label: '繁体中文', flag: '🇹🇼' },
 ]
@@ -127,6 +127,7 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
       placeholder={t('chat.langPlaceholder')}
       onChange={(v) => onChange((v as string[]) || [])}
       panelBottomContent={customPanel}
+      valueDisplay={() => null}
       style={{ width: '100%' }}
     />
   )

@@ -12,7 +12,24 @@
  * - 身份上下文：获取当前用户的账号/租户/组织部门信息
  */
 
-import { request, authHeaders, type AdminResp } from './core'
+import { request, authHeaders, API_BASE, type AdminResp } from './core'
+
+/** 下载批量导入用户 Excel 模板（带表头/填写说明/示例行，保存为用户导入模板.xlsx） */
+export async function downloadUserImportTemplate(): Promise<boolean> {
+  const token = authHeaders()['Authorization']
+  const res = await fetch(`${API_BASE}/api/admin/users/import-template`, {
+    headers: token ? { Authorization: token } : {},
+  })
+  if (!res.ok) return false
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = '用户导入模板.xlsx'
+  a.click()
+  URL.revokeObjectURL(url)
+  return true
+}
 
 /** 获取后台用户列表 */
 export async function adminUsers(): Promise<AdminResp> {

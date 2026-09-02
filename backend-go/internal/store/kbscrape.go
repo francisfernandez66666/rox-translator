@@ -145,6 +145,12 @@ func (s *Store) KBScrapeMigrate() {
 		applied_at TEXT DEFAULT '')`)
 	db.Exec(s.db, d, `CREATE UNIQUE INDEX IF NOT EXISTS idx_staged_phrase_hash ON kb_staged_phrases(src_hash)`)
 	db.Exec(s.db, d, `CREATE INDEX IF NOT EXISTS idx_staged_phrase_status ON kb_staged_phrases(status, lang, id DESC)`)
+	// ★ 幂等补列：CREATE TABLE IF NOT EXISTS 不会给已存在的旧表补列。
+	//   tenant_id 为「企业包双轨行业化」新加列（用户投稿归属租户，审批通过奖励）。
+	//   早期创建的表缺此列会导致 INSERT 报 column not exist，此处对双方言统一补列。
+	_ = db.EnsureColumns(s.db, d, "kb_staged_entries", map[string]string{
+		"tenant_id": "INTEGER DEFAULT 0",
+	})
 }
 
 // ============ 数据源 ============

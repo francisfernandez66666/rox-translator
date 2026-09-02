@@ -71,7 +71,7 @@ func ApplyXlsx(path, outPath string, translations map[string]string) error {
 				if float64(len([]rune(translated))) > float64(len([]rune(orig)))*1.3 {
 					styleID, err := f.GetCellStyle(sheet, cellName)
 					if err == nil {
-						if style, err := f.GetStyle(styleID); err == nil {
+						if style, err := f.GetStyle(styleID); err == nil && style != nil && style.Font != nil {
 							old := style.Font.Size
 							if old > 9 {
 								// 字号下限：>9pt 才缩小 2pt，避免过小不可读

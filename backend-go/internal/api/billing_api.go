@@ -37,6 +37,13 @@ import (
 // 参数 r: HTTP 请求（用于解析当前租户）。返回 tid: 生效租户 ID；release: 归还并发名额的函数；错误: 闸门校验失败原因。
 func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 	tid := s.currentTenant(r)
+	// ★ 计费豁免（2026-09-02 需求6）：超管（平台级）永不收费——
+	//   超级管理员（role≥4）与其平台上下文（tenant_id=0）跳过 QPS/并发/日额/余额/预算墙全部闸门，
+	//   避免超管在平台视角操作时被误判「余额不足/并发过多」而拒绝（此前 tenant_id=0 查余额恒为 0）。
+	u := s.authUser(r)
+	if auth.IsSuperAdmin(u) || tid <= 0 {
+		return tid, func() {}, nil
+	}
 	// 计费服务未初始化时不限流（降级为放行）
 	if s.Bill == nil {
 		return tid, func() {}, nil

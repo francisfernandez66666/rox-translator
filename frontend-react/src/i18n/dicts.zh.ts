@@ -42,7 +42,7 @@ export const baseZh: Record<string,string> = {
   'lang.es': '西班牙语',
   'lang.pt': '葡萄牙语',
   'lang.fr': '法语',
-  'lang.kk': '哈萨克语',
+  'lang.kk': '哈萨克语（哈萨克斯坦）',
   'lang.de': '德语',
   'lang.ja': '日语',
   'lang.ko': '韩语',

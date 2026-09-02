@@ -42,7 +42,7 @@ export const baseEn: Record<string,string> = {
   'lang.es': 'Spanish',
   'lang.pt': 'Portuguese',
   'lang.fr': 'French',
-  'lang.kk': 'Kazakh',
+  'lang.kk': 'Kazakh (Kazakhstan)',
   'lang.de': 'German',
   'lang.ja': 'Japanese',
   'lang.ko': 'Korean',

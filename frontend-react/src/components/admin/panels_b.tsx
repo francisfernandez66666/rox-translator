@@ -13,7 +13,7 @@ import {
   tenantGrantTrial, tenantErase, adminOrderCreate, adminOrderPay,
   orgList, orgCreate, orgRename, orgMove, orgDelete, orgUsers,
   orgBudgetSummary, orgTokenLimit,
-  adminUserCreate, adminUserDelete, adminUserResetPassword, userBulkImport,
+  adminUserCreate, adminUserDelete, adminUserResetPassword, userBulkImport, downloadUserImportTemplate,
   inviteCodes, inviteCodeCreate,
   request, authHeaders, API_BASE, getAuthToken,
   type TenantInfo, type OrgInfo,
@@ -469,6 +469,12 @@ export function OrgP() {
     } finally { setImporting(false) }
   }
 
+  /** 下载批量导入用户 Excel 模板（含填写说明与示例行） */
+  async function downloadTemplate() {
+    const ok = await downloadUserImportTemplate()
+    if (!ok) void MessagePlugin.error(t('org.importTplFail'))
+  }
+
   /** 弹窗重置组织用户密码 */
   async function resetPwd(u: Any) {    const pwd = await promptText({ header: t('org.resetPwdPrompt'), body: tpl('org.resetPwdPrompt', { name: u.username }) })
     if (!pwd || pwd.length < 6) { void MessagePlugin.warning(t('org.pwdMinLength')); return }
@@ -756,6 +762,8 @@ export function OrgP() {
               {/* ★ 批量导入（2026-09-02 功能）：仅租户管理员及以上 */}
               {myLevel >= 3 && (
                 <>
+                  <Button variant="outline" onClick={() => void downloadTemplate()}
+                          title={t('org.importTplHint')}>📄 {t('org.importTplBtn')}</Button>
                   <input ref={importFileRef} type="file" hidden accept=".xlsx,.xls,.csv"
                          onChange={(e) => { setImportFile(e.target.files?.[0] || null); e.target.value = '' }} />
                   <Button variant="outline" disabled={importing} onClick={() => importFileRef.current?.click()}

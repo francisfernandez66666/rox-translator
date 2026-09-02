@@ -16,7 +16,8 @@ import type { Ticket, TicketResp } from '@/api/tickets'
 import { TRANSLATE_FILE_ACCEPT, validateTranslateFile } from '@/api/translate'
 import LangMultiSelect from './LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
-import { t, tpl } from '@/i18n'
+import { t, tpl, useLang } from '@/i18n'
+import { langLabel } from '@/lib/langNames'
 
 // ============ 本文件职责中文说明 ============
 // 翻译工单页面：建单、列表、进度、取消/删除/下载与反馈。
@@ -47,6 +48,7 @@ const fmtKB = (bytes: number): string => {
 
 // 默认导出组件：翻译工单页，提供建单、工单列表、进度气泡与反馈（等价 Vue TicketsPage）
 export default function TicketsPage() {
+  const lang = useLang()
   const [mode, setMode] = useState<'text' | 'file'>('text')
   const [qualityMode, setQualityMode] = useState<string>(localStorage.getItem('translate_mode') || 'fast')
   const [title, setTitle] = useState('')
@@ -66,8 +68,7 @@ export default function TicketsPage() {
   // 反馈弹窗目标（已完成工单）
   const [feedbackTarget, setFeedbackTarget] = useState<{ type: 'ticket'; ticket_id: number; mode: string } | null>(null)
 
-  // 列表轮询定时器与详情轮询定时器句柄（用于清理）
-  const listTimer = useRef<number | null>(null)
+  // 详情轮询定时器句柄（列表轮询改用 ref + 一次性 effect，不再持有句柄）
   const detailTimer = useRef<number | null>(null)
 
   // 目标语言逗号拼接串（空时回退 en），随建单请求提交
@@ -81,18 +82,20 @@ export default function TicketsPage() {
     } catch { /* 忽略 */ }
   }, [])
 
+  // ★ 保持最新 tickets 供定时器读取（不随 load 重建，避免 effect 循环触发高频请求）
+  const ticketsRef = useRef(tickets)
+  ticketsRef.current = tickets
+
   // 列表轮询：存在排队/进行中工单且页面可见时每 5s 刷新
   // 仅在页面可见且存在活跃工单时才刷新列表
-  const pollActive = useCallback(() => {
-    if (document.hidden) return
-    if (tickets.some((x) => ['queued', 'in_progress'].includes(x.status))) void load()
-  }, [tickets, load])
-
   useEffect(() => {
     void load()
-    listTimer.current = window.setInterval(pollActive, 5000)
-    return () => { if (listTimer.current) window.clearInterval(listTimer.current) }
-  }, [load, pollActive])
+    const iv = window.setInterval(() => {
+      if (document.hidden) return
+      if (ticketsRef.current.some((x) => ['queued', 'in_progress'].includes(x.status))) void load()
+    }, 5000)
+    return () => { window.clearInterval(iv) }
+  }, [load])
 
   // 详情轮询：打开气泡期间每 3s 刷新；工单完成自动停止
   // 启动工单详情轮询，完成态到达后自动停止
@@ -311,16 +314,19 @@ export default function TicketsPage() {
           </div>
           <ModeToggle value={qualityMode as 'fast' | 'pro'} fastFirst
             onChange={(val) => { setQualityMode(val); localStorage.setItem('translate_mode', val) }} />
-          {/* ★ 缩翻（任务7）：勾选并输入最长字符限制，提示模型精简输出 */}
+          {/* ★ 缩翻（任务7）：勾选并输入最长字符限制，提示模型精简输出。
+              预留定宽槽位（72px）——勾选只显隐输入框、不改变行宽，避免模式切换/创建按钮位置跳动 */}
           <label style={{ fontSize: 13, color: '#555', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
             <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> 缩翻
           </label>
-          {condenseOn && (
-            <input type="number" min={1} max={10000} value={condenseMax}
-              onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
-              style={{ width: 72, height: 30, fontSize: 12, border: '1px solid #d8dee6', borderRadius: 6, padding: '0 6px' }}
-              title="最长字符长度" />
-          )}
+          <div style={{ width: 72, flexShrink: 0 }}>
+            {condenseOn && (
+              <input type="number" min={1} max={10000} value={condenseMax}
+                onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
+                style={{ width: '100%', boxSizing: 'border-box', height: 30, fontSize: 12, border: '1px solid #d8dee6', borderRadius: 6, padding: '0 6px' }}
+                title="最长字符长度" />
+            )}
+          </div>
           <Button theme="primary" loading={creating} onClick={create} style={{ marginLeft: 'auto' }}>
             {creating ? t('tk.submitting') : t('tk.create')}
           </Button>
@@ -344,7 +350,17 @@ export default function TicketsPage() {
               cell: ({ row }: any) => <span title={row.title}>{row.title}</span> },
             { colKey: 'status', title: t('users.colStatus'), width: 110,
               cell: ({ row }: any) => <span>{statusLabel(row.status)}</span> },
-            { colKey: 'target_langs', title: t('tk.colLangs'), width: 150 },
+            { colKey: 'target_langs', title: t('tk.colLangs'), width: 150,
+              cell: ({ row }: any) => (
+                <span>
+                  {String(row.target_langs || '')
+                    .split(',')
+                    .map((c: string) => c.trim())
+                    .filter(Boolean)
+                    .map((c: string) => langLabel(c, lang))
+                    .join('、')}
+                </span>
+              ) },
             { colKey: 'created_at', title: t('users.colLastLogin'), width: 160,
               cell: ({ row }: any) => fmtTime(row.created_at) },
             { colKey: 'op', title: t('org.colActions'), width: 280,

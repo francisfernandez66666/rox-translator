@@ -39,7 +39,7 @@ const LANG_OPTIONS: Record<string, { label: string; flag: string }> = {
   es: { label: '西班牙语', flag: '🇪🇸' },
   pt: { label: '葡萄牙语', flag: '🇵🇹' },
   fr: { label: '法语', flag: '🇫🇷' },
-  kk: { label: '哈萨克语', flag: '🇰🇿' },
+  kk: { label: '哈萨克语（哈萨克斯坦）', flag: '🇰🇿' },
   de: { label: '德语', flag: '🇩🇪' },
   zh_hant: { label: '繁体中文', flag: '🇹🇼' },
 }
@@ -344,8 +344,8 @@ export default function ChatWindow() {
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
           {/* 上传 + 语言选择 */}
-          <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
-            <div style={{ minWidth: 240, flex: '1 1 240px' }}>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 1, minWidth: 0 }}>
+            <div style={{ minWidth: 0, flex: '1 1 200px' }}>
               <LangMultiSelect value={chat.selectedLangs} onChange={chat.setSelectedLangs} />
             </div>
           </div>
@@ -366,17 +366,20 @@ export default function ChatWindow() {
 
           {/* 双模式切换（与翻译工单共用 ModeToggle，顺序与工单页保持一致：左快速/右专业） */}
           <ModeToggle value={mode} onChange={setMode2} fastFirst />
-          {/* ★ 缩翻（任务7）：勾选并输入最长字符限制，提示模型精简输出 */}
+          {/* ★ 缩翻（任务7）：勾选并输入最长字符限制，提示模型精简输出。
+              预留定宽槽位（72px）——勾选只显隐输入框、不改变行宽，避免模式/清空/发送按钮位置跳动 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
             <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
               <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> 缩翻
             </label>
-            {condenseOn && (
-              <input type="number" min={1} max={10000} value={condenseMax}
-                onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
-                style={{ width: 72, height: 28, fontSize: 12, border: '1px solid #d8dee6', borderRadius: 6, padding: '0 6px' }}
-                title="最长字符长度" />
-            )}
+            <div style={{ width: 72, flexShrink: 0 }}>
+              {condenseOn && (
+                <input type="number" min={1} max={10000} value={condenseMax}
+                  onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
+                  style={{ width: '100%', boxSizing: 'border-box', height: 28, fontSize: 12, border: '1px solid #d8dee6', borderRadius: 6, padding: '0 6px' }}
+                  title="最长字符长度" />
+              )}
+            </div>
           </div>
           <Button variant="text" theme="default" size="medium" icon={<ClearIcon />}
                   onClick={() => { chat.clearMessages() }}>

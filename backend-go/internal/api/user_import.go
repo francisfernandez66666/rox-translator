@@ -1,5 +1,6 @@
 // ============ user_import.go · 职责说明 ============
 // 租户 Excel 批量导入用户（2026-09-02 功能）：
+//   - 模板下载：GET /api/admin/users/import-template 返回带表头与示例行的 xlsx
 //   - 解析 xlsx，表头：用户名称、姓名、部门、角色、邮箱（角色列可省略，默认普通用户）
 //   - 逐行创建账号：随机初始密码 + 首登强制改密标记（must_change_pwd=1）
 //   - 绑定邮箱并向导入用户发送《账号开通通知》（含登录地址、账号、初始密码）
@@ -51,6 +52,40 @@ func randomImportPassword() string {
 		buf[i] = alphabet[n.Int64()]
 	}
 	return string(buf)
+}
+
+// handleUserImportTemplate 下载批量导入 Excel 模板（带表头与示例行，含填写说明注释行）。
+// 权限：租户管理员及以上。返回 application/octet-stream 的 xlsx 附件。
+func (s *Server) handleUserImportTemplate(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	// 生成带表头、说明行与示例行的模板工作簿
+	f := excelize.NewFile()
+	sheet := f.GetSheetName(0)
+	_ = f.SetCellStr(sheet, "A1", "用户名称")
+	_ = f.SetCellStr(sheet, "B1", "姓名")
+	_ = f.SetCellStr(sheet, "C1", "部门")
+	_ = f.SetCellStr(sheet, "D1", "角色")
+	_ = f.SetCellStr(sheet, "E1", "邮箱")
+	// 说明行（首行补注释单元格，导入时将被忽略——readImportRows 从第 2 行开始读）
+	_ = f.SetCellStr(sheet, "F1", "填写说明：用户名称必填且租户内唯一；角色可留空=普通用户（可填 普通用户/管理员/部门管理员/租户管理员）；部门须与现有组织名称一致，留空挂根组织；邮箱用于发送账号开通通知")
+	// 示例行（如用户直接提交亦会被正常导入）
+	_ = f.SetCellStr(sheet, "A2", "zhangsan")
+	_ = f.SetCellStr(sheet, "B2", "张三")
+	_ = f.SetCellStr(sheet, "C2", "销售部")
+	_ = f.SetCellStr(sheet, "D2", "普通用户")
+	_ = f.SetCellStr(sheet, "E2", "zhangsan@example.com")
+	// 表头浅灰填充 + 加粗，示例行便于识别
+	if style, e := f.NewStyle(&excelize.Style{Fill: excelize.Fill{Type: "pattern", Color: []string{"F2F2F2"}, Pattern: 1}, Font: &excelize.Font{Bold: true}}); e == nil {
+		_ = f.SetCellStyle(sheet, "A1", "E1", style)
+	}
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	w.Header().Set("Content-Disposition", `attachment; filename="user_import_template.xlsx"`)
+	_ = f.Write(w)
+	_ = u.ID // tid 鉴权已由 requireTenantAdmin 完成，此处仅保持权限一致性
 }
 
 // handleUserBulkImport 租户 Excel 批量导入用户接口。

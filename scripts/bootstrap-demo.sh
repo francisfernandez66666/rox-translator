@@ -148,7 +148,11 @@ chmod -R o-rwx "$DEMO_DIR" 2>/dev/null || true
 #   - bin/data 保持 o-rwx（安全）；仅 $DEMO_DIR 加 o+x 供遍历
 #   - web 属主转 root:caddy 并对其他人开放 rX（否则主页/静态资源 403）
 chmod o+x "$DEMO_DIR"
-chown -R root:caddy "$DEMO_DIR/web" 2>/dev/null || chmod -R o+rX "$DEMO_DIR/web" || true
+# ★ 双读角色：Caddy（caddy 组）+ 后端 handleSPA（translator 用户）都要能读 web。
+#   仅 chown root:caddy 会使权限变为 750/640 → translator 读不了 → 首页判定「前端未构建」。
+#   故 chown 后必须强制 chmod o+rX（其他用户可读/可遍历）。
+chown -R root:caddy "$DEMO_DIR/web" 2>/dev/null || true
+chmod -R o+rX "$DEMO_DIR/web"
 
 # ----------------------------- 2. 克隆数据库 -----------------------------
 log "==> [2/6] 克隆生产库 ${PROD_DB_NAME} → ${DEMO_DB}（pg_dump + 恢复）"
@@ -235,6 +239,8 @@ if [ "$DEMO_SEED_ACCOUNTS" = "1" ]; then
   # ★ 注意：psql 参数须用单引号传字符串（勿用 \" 拼接），否则 psql 会把转义引号
   #   当连接字符串的一部分而报 invalid connection option。
   DEMO_PSQL --command "DELETE FROM users WHERE username LIKE 'demo\\_%'" >/dev/null
+  # ★ 在插入前修正 users 序列（pg_dump 恢复后序列可能落后于已有 id，导致自增撞主键）
+  DEMO_PSQL --tuples-only --command "SELECT setval('users_id_seq', GREATEST((SELECT COALESCE(MAX(id),1) FROM users),1), true)" >/dev/null 2>&1
   # ★ 关键：bcrypt 哈希含 $，任何 shell/heredoc 参数展开都会破坏（$2/$10/$408 被当变量）。
   #   正确做法：用「引号 heredoc」把 SQL 原样写入临时文件（$ 保持字面量），再由 psql -f
   #   读取执行——这是唯一不损坏哈希的可靠路径。

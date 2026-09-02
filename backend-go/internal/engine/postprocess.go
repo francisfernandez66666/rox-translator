@@ -72,6 +72,36 @@ func StripLangPrefix(text, langCode string) string {
 	return text
 }
 
+// markerBracketRe 匹配单条审校模板标记方括号（【原文】/【译文】/【待审校译文】/【待審校譯文】
+// 及 [] 变体，标记内仅允许空白），用于剥离 LLM 误带入输出中的模板标记。
+// 仅匹配「纯标记」（括号内只有标记词），绝不误删正常译文中的普通中括号内容（如【贵宾】【2】）。
+var markerBracketRe = regexp.MustCompile(`[\[【]\s*(?:原文|译文|譯文|待审校译文|待審校譯文)\s*[\]】]`)
+
+// stripReviewMarkers 剥离 LLM 误带入单句译文的批量审校模板标记（【原文】/【译文】/【待審校譯文】）。
+// 规则：若最后一个标记之后仍有非空内容，说明那是模型输出的审校后译文，直接取其后续内容；
+// 否则整段都是模板残留，删除全部标记后返回剩余文本。[] 与【】变体统一处理。
+func stripReviewMarkers(text string) string {
+	idx := markerBracketRe.FindAllStringIndex(text, -1)
+	if len(idx) == 0 {
+		return text
+	}
+	last := idx[len(idx)-1]
+	if after := strings.TrimSpace(text[last[1]:]); after != "" {
+		return after
+	}
+	return strings.TrimSpace(markerBracketRe.ReplaceAllString(text, ""))
+}
+
+// emptyBracketRe 匹配成对的空占位方括号（【】，【 】，[]，[ ]，中间可含空白），
+// 用于剥离模型误输出的占位符号。带内容（非空白字符）的方括号不受影响。
+var emptyBracketRe = regexp.MustCompile(`[\[【][\s\x{3000}]*[\]】]`)
+
+// stripEmptyPlaceholderBrackets 剥离成对的空占位方括号（含内部纯空白），
+// 修复 LLM 在译文开头输出『【】』占位符未被清理的问题。
+func stripEmptyPlaceholderBrackets(text string) string {
+	return emptyBracketRe.ReplaceAllString(text, "")
+}
+
 // StripChineseInNonZh 非 CJK 目标语删除所有中文字符
 func StripChineseInNonZh(text, langCode string) string {
 	if langCode == "zh_hant" || langCode == "ja" || langCode == "ko" {
@@ -179,6 +209,14 @@ func PostProcessTranslation(text, langCode string) string {
 	re := regexp.MustCompile(`(?i)\bJishi\b`)
 	text = re.ReplaceAllString(text, "ROX")
 
+	// 需求3：剥离误带入单句译文的批量审校模板残留（【原文】…【待審校譯文】…）
+	text = stripReviewMarkers(text)
+
+	// ★ 占位残留剥离（2026-09-02 实测：xlsx 译文单元格出现『【】Please perform…』——
+	//   模型被要求"不要输出【】等占位符号"却回了个空方括号对）。仅剥离成对的空
+	//   占位括号（含可选空格/换行），绝不误伤带内容的方括号（如【贵宾】【2】）。
+	text = stripEmptyPlaceholderBrackets(text)
+
 	// en 专属 6 组短语修正
 	if langCode == "en" {
 		enFixes := []struct{ from, to string }{
@@ -192,6 +230,9 @@ func PostProcessTranslation(text, langCode string) string {
 	}
 	// 非 CJK 目标语删除中文字符
 	text = StripChineseInNonZh(text, langCode)
+	// ★ 二次空占位清扫（2026-09-02 符号残留根因修复）：中文删除可能把残留标记
+	//   变成新的空方括号对（如【原文】→【】），兜底再剥离一次，确保成品无空占位括号残留。
+	text = stripEmptyPlaceholderBrackets(text)
 	return strings.TrimSpace(text)
 }
 

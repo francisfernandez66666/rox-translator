@@ -18,7 +18,7 @@ export const LANG_META: Record<string, LangMeta> = {
   es: { code: 'es', zh: '西班牙语', en: 'Spanish', flag: '🇪🇸' },
   pt: { code: 'pt', zh: '葡萄牙语', en: 'Portuguese', flag: '🇵🇹' },
   fr: { code: 'fr', zh: '法语', en: 'French', flag: '🇫🇷' },
-  kk: { code: 'kk', zh: '哈萨克语', en: 'Kazakh', flag: '🇰🇿' },
+  kk: { code: 'kk', zh: '哈萨克语（哈萨克斯坦）', en: 'Kazakh (Kazakhstan)', flag: '🇰🇿' },
   de: { code: 'de', zh: '德语', en: 'German', flag: '🇩🇪' },
   zh_hant: { code: 'zh_hant', zh: '繁体中文', en: 'Traditional Chinese', flag: '🇹🇼' },
   ja: { code: 'ja', zh: '日语', en: 'Japanese', flag: '🇯🇵' },

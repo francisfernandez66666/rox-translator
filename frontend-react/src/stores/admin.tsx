@@ -209,9 +209,9 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     void loadOrgs()
   }, [user, activeTenantId, switchTenant, loadOrgs])
 
-  // 登录后/切换租户后刷新「邀请好友」开关
+  // 登录后/切换租户后刷新「邀请好友」开关（仅租户管理员及以上可读该接口，其余角色跳过免 403）
   useEffect(() => {
-    if (user) void loadInviteEnabled()
+    if (user && roleLevel(user.role) >= 3) void loadInviteEnabled()
   }, [user, activeTenantId, loadInviteEnabled])
 
   // 跨组件跳转入口（Bell → 反馈处理面板）

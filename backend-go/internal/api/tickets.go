@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"translator/internal/auth"
+	"translator/internal/config"
 	"translator/internal/fileproc"
 	"translator/internal/orchestrator"
 	"translator/internal/qa"
@@ -541,7 +542,12 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 	_ = f.SetSheetName(sheet, sheet)
 	headers := []string{"source_text"}
 	for _, lc := range langs {
-		headers = append(headers, lc)
+		// ★ 需求5：表头语言码 → 语言中文名（en→英文、fr→法语），无映射时回退语言码
+		name := config.LangNames[lc]
+		if name == "" {
+			name = lc
+		}
+		headers = append(headers, name)
 	}
 	// QA 列：存在质检报告时追加（error 级前缀 ✖，warning 级 ⚠）
 	hasQA := payload.QAReport != nil && len(payload.QAReport.Issues) > 0

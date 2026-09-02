@@ -193,7 +193,7 @@ var AllLangs = []string{"en", "ru", "ar", "es", "pt", "fr", "kk", "de", "zh_hant
 // LangNames：语言代码 → 中文名
 var LangNames = map[string]string{
 	"en": "英语", "ru": "俄语", "ar": "阿拉伯语", "es": "西班牙语", "pt": "葡萄牙语",
-	"fr": "法语", "kk": "哈萨克语", "de": "德语", "zh_hant": "繁体中文",
+	"fr": "法语", "kk": "哈萨克语（哈萨克斯坦）", "de": "德语", "zh_hant": "繁体中文",
 	"ms": "马来语", "id_lang": "印尼语", "th": "泰语", "tr": "土耳其语",
 	"it": "意大利语", "pl": "波兰语", "sv": "瑞典语",
 	"ja": "日语", "ko": "韩语", "mn": "蒙古语", "vi": "越南语", "id": "印尼语",
@@ -206,7 +206,7 @@ var LangNames = map[string]string{
 // LangNamesEn：语言代码 → 英文名（与 LangNames 同源，供英文界面使用）
 var LangNamesEn = map[string]string{
 	"en": "English", "ru": "Russian", "ar": "Arabic", "es": "Spanish", "pt": "Portuguese",
-	"fr": "French", "kk": "Kazakh", "de": "German", "zh_hant": "Traditional Chinese",
+	"fr": "French", "kk": "Kazakh (Kazakhstan)", "de": "German", "zh_hant": "Traditional Chinese",
 	"ms": "Malay", "id_lang": "Indonesian", "th": "Thai", "tr": "Turkish",
 	"it": "Italian", "pl": "Polish", "sv": "Swedish",
 	"ja": "Japanese", "ko": "Korean", "mn": "Mongolian", "vi": "Vietnamese", "id": "Indonesian",

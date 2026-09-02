@@ -249,6 +249,7 @@ func (s *Server) routesAuth() {
 	s.mux.HandleFunc("/api/admin/users/reset-password", s.handleAdminUserResetPassword)
 	s.mux.HandleFunc("/api/admin/users/delete", s.handleAdminUserDelete)
 	// ★ 租户 Excel 批量导入用户（2026-09-02 功能）：建号+首登强制改密+邮件通知
+	s.mux.HandleFunc("/api/admin/users/import-template", s.handleUserImportTemplate)
 	s.mux.HandleFunc("/api/admin/users/bulk-import", s.handleUserBulkImport)
 	s.mux.HandleFunc("/api/admin/invite-codes", s.handleInviteCodes)
 	s.mux.HandleFunc("/api/admin/invite-codes/create", s.handleInviteCodeCreate)
