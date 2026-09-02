@@ -2,6 +2,7 @@
 // 知识库上传奖励（任务2.3）数据层单元测试：
 //   - TestGrantKBRewardPermanent：奖励入永久余额 + 流水落表
 //   - TestGrantKBRewardDailyCap：单租户日封顶（超限跳过）
+//
 // 环境：临时文件库（kb.Open + store.New 共享连接，DSN 自带 IMMEDIATE/WAL）。
 // ========================================
 package store
@@ -23,13 +24,14 @@ func grantRewardEnv(t *testing.T) *Store {
 // TestGrantKBRewardPermanent 奖励入永久余额且流水落表。
 func TestGrantKBRewardPermanent(t *testing.T) {
 	st := grantRewardEnv(t)
-	// 默认每条约额 200（EnsureBillingDefaults 已在 New 落库默认值）
-	granted, tokens, used := st.GrantKBReward(7, 1, 0, 3)
+	// 功能⑥字符计量：单字符默认 100 token（EnsureBillingDefaults 已在 New 落库默认值）
+	// 6 个字符 × 100 = 600 token
+	granted, tokens, used := st.GrantKBRewardByChars(7, 1, 0, 6)
 	if !granted {
 		t.Fatalf("应发放奖励")
 	}
 	if tokens != 600 {
-		t.Fatalf("3 条 × 200 = 600 token，实际 %d", tokens)
+		t.Fatalf("6 字符 × 100 = 600 token，实际 %d", tokens)
 	}
 	if used != 600 {
 		t.Fatalf("发放后当日累计应为 600，实际 %d", used)
@@ -49,22 +51,22 @@ func TestGrantKBRewardPermanent(t *testing.T) {
 // TestGrantKBRewardDailyCap 单租户日封顶：累计超过 cap 后续导入不发。
 func TestGrantKBRewardDailyCap(t *testing.T) {
 	st := grantRewardEnv(t)
-	// 压低日封顶：每条约额 200，cap 500 —— 累计 600 触发封顶
+	// 压低日封顶：单字符 100，cap 500 —— 6 字符 → 600 触发封顶
 	if err := st.SetConfig("kb_upload_reward_daily_cap", "500"); err != nil {
 		t.Fatalf("设置日封顶失败: %v", err)
 	}
-	// 第一笔 3 条 = 600 > 500 → 直接超限（entire batch denied）
-	granted, _, used := st.GrantKBReward(7, 1, 0, 3)
+	// 第一笔 6 字符 = 600 > 500 → 直接超限（entire batch denied）
+	granted, _, used := st.GrantKBRewardByChars(7, 1, 0, 6)
 	if granted || used != 0 {
 		t.Fatalf("首笔即超日封顶应拒发（used=%d）", used)
 	}
-	// 第二笔 2 条 = 400 ≤ 500 → 发放
-	granted, tokens, used := st.GrantKBReward(7, 1, 0, 2)
+	// 第二笔 4 字符 = 400 ≤ 500 → 发放
+	granted, tokens, used := st.GrantKBRewardByChars(7, 1, 0, 4)
 	if !granted || tokens != 400 || used != 400 {
-		t.Fatalf("2条应发放 400，实际 granted=%v tokens=%d used=%d", granted, tokens, used)
+		t.Fatalf("4字符应发放 400，实际 granted=%v tokens=%d used=%d", granted, tokens, used)
 	}
-	// 第三笔 1 条 = 200 → 400+200=600 > 500 → 拒发
-	granted, _, used = st.GrantKBReward(7, 1, 0, 1)
+	// 第三笔 2 字符 = 200 → 400+200=600 > 500 → 拒发
+	granted, _, used = st.GrantKBRewardByChars(7, 1, 0, 2)
 	if granted || used != 400 {
 		t.Fatalf("超过日封顶应拒发（used=%d）", used)
 	}

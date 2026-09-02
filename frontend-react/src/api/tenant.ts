@@ -25,6 +25,8 @@ export interface TenantInfo {
   expires_at: string
   permissions: string
   invite_enabled?: boolean // 是否开通「邀请好友」功能（超管按租户开关）
+  industry?: string // 注册行业编码（功能②：决定共享行业包载入范围）
+  industry_name?: string // 行业展示名
   created_at: string
   updated_at: string
 }
@@ -56,7 +58,7 @@ export async function tenantCreate(
 
 /** 更新租户信息（名称/有效期/权限/邀请好友开关） */
 export async function tenantUpdate(
-  data: { id: number; name: string; expires_at: string; permissions: string; invite_enabled?: boolean },
+  data: { id: number; name: string; expires_at: string; permissions: string; invite_enabled?: boolean; industry?: string },
 ): Promise<TenantResp> {
   return request('/api/tenant/update', {
     method: 'POST',

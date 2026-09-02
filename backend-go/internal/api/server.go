@@ -33,10 +33,10 @@ import (
 	"translator/internal/auth"
 	"translator/internal/auth/sso"
 	"translator/internal/billing"
-	"translator/internal/infra/redis"
 	"translator/internal/config"
 	"translator/internal/engine"
 	apierrors "translator/internal/errors"
+	"translator/internal/infra/redis"
 	"translator/internal/kb"
 	"translator/internal/queue"
 	"translator/internal/service"
@@ -315,6 +315,7 @@ func (s *Server) routesAdminKB() {
 	s.mux.HandleFunc("/api/admin/kb-scrape/staged", s.handleKBScrapeStaged)
 	s.mux.HandleFunc("/api/admin/kb-scrape/approve", s.handleKBScrapeApprove)
 	s.mux.HandleFunc("/api/admin/kb-scrape/summary", s.handleKBScrapeSummary)
+	s.mux.HandleFunc("/api/admin/kb-reward", s.handleKBRewardConfig)
 }
 
 // routesAdminFlow 注册流程引擎设置路由。

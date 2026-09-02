@@ -1,9 +1,11 @@
 // ============ kbscrape.go · 职责说明 ============
 // store 包「行业包/语言文化包自动采集」数据访问层（2026-09-01 新功能）。
 // 三张待审/源管理表：
-//   kb_pack_sources   数据源（official_api / limited_web / llm_gen，可启停/限频/记状态）
-//   kb_staged_entries 增量待审条目（术语/TM/碎片），超管审批通过后落 kb_entries + tm_segments
-//   kb_staged_phrases 增量待审语言文化安全句，审批通过后落 kb_safety_phrases
+//
+//	kb_pack_sources   数据源（official_api / limited_web / llm_gen，可启停/限频/记状态）
+//	kb_staged_entries 增量待审条目（术语/TM/碎片），超管审批通过后落 kb_entries + tm_segments
+//	kb_staged_phrases 增量待审语言文化安全句，审批通过后落 kb_safety_phrases
+//
 // 断点续传经 system_config 持久化（kb_scrape_checkpoint_<date>_<source_id> 等）。
 // =============================================
 package store
@@ -21,36 +23,37 @@ import (
 
 // KBScrapeSource 数据源（采集引擎按此表驱动每日任务）
 type KBScrapeSource struct {
-	ID         int64  `json:"id"`         // 源主键 ID
-	Kind       string `json:"kind"`       // official_api / limited_web / llm_gen
-	Name       string `json:"name"`       // 源名称
-	BaseURL    string `json:"base_url"`   // 入口 URL（llm_gen 可为空）
-	Lang       string `json:"lang"`       // 目标语言（空=不限/全量）
-	Industry   string `json:"industry"`   // 行业 code（空=不限/语言文化包）
-	PackType   string `json:"pack_type"`  // industry / locale
-	Enabled    int    `json:"enabled"`    // 1=启用参与采集 0=停用
-	FreqHours  int    `json:"freq_hours"` // 采集频次（小时）
-	Tier       int    `json:"tier"`       // 数据可信度：1官方 / 2受限抓取 / 3LLM
-	LastRunAt  string `json:"last_run_at"`  // 最近采集时间
-	LastStatus string `json:"last_status"`  // 最近状态：ok / error:<msg>
+	ID         int64  `json:"id"`          // 源主键 ID
+	Kind       string `json:"kind"`        // official_api / limited_web / llm_gen
+	Name       string `json:"name"`        // 源名称
+	BaseURL    string `json:"base_url"`    // 入口 URL（llm_gen 可为空）
+	Lang       string `json:"lang"`        // 目标语言（空=不限/全量）
+	Industry   string `json:"industry"`    // 行业 code（空=不限/语言文化包）
+	PackType   string `json:"pack_type"`   // industry / locale
+	Enabled    int    `json:"enabled"`     // 1=启用参与采集 0=停用
+	FreqHours  int    `json:"freq_hours"`  // 采集频次（小时）
+	Tier       int    `json:"tier"`        // 数据可信度：1官方 / 2受限抓取 / 3LLM
+	LastRunAt  string `json:"last_run_at"` // 最近采集时间
+	LastStatus string `json:"last_status"` // 最近状态：ok / error:<msg>
 	CreatedAt  string `json:"created_at"`
 }
 
 // KBStagedEntry 增量待审条目（术语/TM/碎片）
 type KBStagedEntry struct {
-	ID           int64  `json:"id"`           // 待审主键
+	ID           int64  `json:"id"`             // 待审主键
+	TenantID     int64  `json:"tenant_id"`      // 投稿归属租户（0=采集/平台宿主；>0=共享包用户投稿，审批通过后奖励该租户）
 	TargetPackID int64  `json:"target_pack_id"` // 审批通过后落入的正式包 ID
-	PackType     string `json:"pack_type"`    // industry / locale
-	SourceID     int64  `json:"source_id"`    // 来源数据源 ID（0=手动投喂）
-	Tier         int    `json:"tier"`         // 1官方 / 2受限抓取 / 3LLM
-	Layer        int    `json:"layer"`        // 1术语/2TM/3安全句/4碎片
-	SrcLang      string `json:"src_lang"`     // 源语言
-	SrcText      string `json:"src_text"`     // 源文本
-	TgtLang      string `json:"tgt_lang"`     // 目标语言
-	TgtText      string `json:"tgt_text"`     // 目标译文
-	SourceURL    string `json:"source_url"`   // 出处（抓取/API 溯源；LLM 为提示描述）
-	SrcHash      string `json:"src_hash"`     // md5 去重键
-	Status       string `json:"status"`       // pending / approved / rejected
+	PackType     string `json:"pack_type"`      // industry / locale
+	SourceID     int64  `json:"source_id"`      // 来源数据源 ID（0=手动投喂）
+	Tier         int    `json:"tier"`           // 1官方 / 2受限抓取 / 3LLM
+	Layer        int    `json:"layer"`          // 1术语/2TM/3安全句/4碎片
+	SrcLang      string `json:"src_lang"`       // 源语言
+	SrcText      string `json:"src_text"`       // 源文本
+	TgtLang      string `json:"tgt_lang"`       // 目标语言
+	TgtText      string `json:"tgt_text"`       // 目标译文
+	SourceURL    string `json:"source_url"`     // 出处（抓取/API 溯源；LLM 为提示描述）
+	SrcHash      string `json:"src_hash"`       // md5 去重键
+	Status       string `json:"status"`         // pending / approved / rejected
 	CreatedAt    string `json:"created_at"`
 	AppliedAt    string `json:"applied_at"`
 }
@@ -72,11 +75,11 @@ type KBStagedPhrase struct {
 
 // ScrapeStagedSummary 待审池汇总（管理面板一屏概览）
 type ScrapeStagedSummary struct {
-	PendingEntries int `json:"pending_entries"` // 待审条目数
-	PendingPhrases int `json:"pending_phrases"` // 待审安全句数
-	SourcesTotal   int `json:"sources_total"`   // 数据源总数
-	SourcesEnabled int `json:"sources_enabled"` // 启用源数
-	LastDaily      string `json:"last_daily"`   // 最近完成采集日（YYYY-MM-DD）
+	PendingEntries int    `json:"pending_entries"` // 待审条目数
+	PendingPhrases int    `json:"pending_phrases"` // 待审安全句数
+	SourcesTotal   int    `json:"sources_total"`   // 数据源总数
+	SourcesEnabled int    `json:"sources_enabled"` // 启用源数
+	LastDaily      string `json:"last_daily"`      // 最近完成采集日（YYYY-MM-DD）
 }
 
 // scrapeEntryHash 待审条目去重键：md5(src_lang|src_text|tgt_lang|tgt_text)。
@@ -114,6 +117,7 @@ func (s *Store) KBScrapeMigrate() {
 		target_pack_id INTEGER NOT NULL DEFAULT 0,
 		pack_type TEXT NOT NULL DEFAULT 'locale',
 		source_id INTEGER DEFAULT 0,
+		tenant_id INTEGER DEFAULT 0,
 		tier INTEGER DEFAULT 3,
 		layer INTEGER DEFAULT 1,
 		src_lang TEXT NOT NULL DEFAULT '',
@@ -182,6 +186,24 @@ func (s *Store) UpdateScrapeSource(id int64, src *KBScrapeSource) error {
 		"UPDATE kb_pack_sources SET name=?, base_url=?, lang=?, industry=?, pack_type=?, freq_hours=?, tier=? WHERE id=?",
 		src.Name, src.BaseURL, src.Lang, src.Industry, src.PackType, src.FreqHours, src.Tier, id)
 	return err
+}
+
+// SeedDefaultScrapeSources 功能③：通用行业兜底包（general）默认采集源幂等种子。
+// 通用行业包为注册行业缺选/错选时的回落目标，需要常见商务英语用法数据打底。
+// 这里保证共享宿主始终存在一个启用的 general 行业包数据源（官方API/Wiktionary，
+// 无 URL 时抓取器回退内置通用商务种子词）；仅当不存在任何 general 源时插入。
+func (s *Store) SeedDefaultScrapeSources() {
+	var cnt int
+	_ = db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT COUNT(*) FROM kb_pack_sources WHERE pack_type='industry' AND COALESCE(industry,'')='general'").Scan(&cnt)
+	if cnt > 0 {
+		return
+	}
+	_, _ = s.CreateScrapeSource(&KBScrapeSource{
+		Kind: "official_api", Name: "通用行业·商务英语基础词表",
+		Lang: "en", Industry: "general", PackType: "industry",
+		Enabled: 1, FreqHours: 24, Tier: 2,
+	})
 }
 
 // ListScrapeSources 列出全部数据源（按 pack_type、id 排序）。
@@ -280,8 +302,8 @@ func (s *Store) StageEntry(e *KBStagedEntry) (bool, error) {
 	}
 	now := time.Now().Format(time.RFC3339)
 	res, err := db.Exec(s.db, db.CurrentDialect(),
-		"INSERT OR IGNORE INTO kb_staged_entries (target_pack_id, pack_type, source_id, tier, layer, src_lang, src_text, tgt_lang, tgt_text, source_url, src_hash, status, created_at, applied_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-		e.TargetPackID, e.PackType, e.SourceID, e.Tier, e.Layer, e.SrcLang, e.SrcText, e.TgtLang, e.TgtText, e.SourceURL, e.SrcHash, e.Status, now, "")
+		"INSERT OR IGNORE INTO kb_staged_entries (target_pack_id, pack_type, source_id, tenant_id, tier, layer, src_lang, src_text, tgt_lang, tgt_text, source_url, src_hash, status, created_at, applied_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		e.TargetPackID, e.PackType, e.SourceID, e.TenantID, e.Tier, e.Layer, e.SrcLang, e.SrcText, e.TgtLang, e.TgtText, e.SourceURL, e.SrcHash, e.Status, now, "")
 	if err != nil {
 		return false, err
 	}
@@ -315,8 +337,8 @@ func (s *Store) StageEntriesBatch(items []*KBStagedEntry) (int, error) {
 			e.Tier = 3
 		}
 		res, err := db.Exec(tx, db.CurrentDialect(),
-			"INSERT OR IGNORE INTO kb_staged_entries (target_pack_id, pack_type, source_id, tier, layer, src_lang, src_text, tgt_lang, tgt_text, source_url, src_hash, status, created_at, applied_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-			e.TargetPackID, e.PackType, e.SourceID, e.Tier, e.Layer, e.SrcLang, e.SrcText, e.TgtLang, e.TgtText, e.SourceURL, e.SrcHash, e.Status, now, "")
+			"INSERT OR IGNORE INTO kb_staged_entries (target_pack_id, pack_type, source_id, tenant_id, tier, layer, src_lang, src_text, tgt_lang, tgt_text, source_url, src_hash, status, created_at, applied_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+			e.TargetPackID, e.PackType, e.SourceID, e.TenantID, e.Tier, e.Layer, e.SrcLang, e.SrcText, e.TgtLang, e.TgtText, e.SourceURL, e.SrcHash, e.Status, now, "")
 		if err != nil {
 			return added, err
 		}
@@ -333,7 +355,7 @@ func (s *Store) StageEntriesBatch(items []*KBStagedEntry) (int, error) {
 // ListStagedEntries 列出待审条目（可按包/类型/状态/语言筛选，分页）。
 // 参数：packType/status/lang 空=不过滤；limit<=0 取 200。
 func (s *Store) ListStagedEntries(packType, status, lang string, limit, offset int) ([]*KBStagedEntry, error) {
-	q := "SELECT id, target_pack_id, pack_type, source_id, tier, layer, src_lang, src_text, tgt_lang, tgt_text, source_url, src_hash, status, COALESCE(created_at,''), COALESCE(applied_at,'') FROM kb_staged_entries WHERE 1=1"
+	q := "SELECT id, target_pack_id, pack_type, source_id, tenant_id, tier, layer, src_lang, src_text, tgt_lang, tgt_text, source_url, src_hash, status, COALESCE(created_at,''), COALESCE(applied_at,'') FROM kb_staged_entries WHERE 1=1"
 	args := []interface{}{}
 	if packType != "" {
 		q += " AND pack_type=?"
@@ -363,7 +385,7 @@ func (s *Store) ListStagedEntries(packType, status, lang string, limit, offset i
 	var out []*KBStagedEntry
 	for rows.Next() {
 		var e KBStagedEntry
-		if err := rows.Scan(&e.ID, &e.TargetPackID, &e.PackType, &e.SourceID, &e.Tier, &e.Layer,
+		if err := rows.Scan(&e.ID, &e.TargetPackID, &e.PackType, &e.SourceID, &e.TenantID, &e.Tier, &e.Layer,
 			&e.SrcLang, &e.SrcText, &e.TgtLang, &e.TgtText, &e.SourceURL, &e.SrcHash, &e.Status,
 			&e.CreatedAt, &e.AppliedAt); err == nil {
 			out = append(out, &e)
@@ -521,7 +543,7 @@ func (s *Store) GetStagedEntriesByIDs(ids []int64) ([]*KBStagedEntry, error) {
 		args = append(args, id)
 	}
 	rows, err := db.Query(s.db, db.CurrentDialect(),
-		"SELECT id, target_pack_id, pack_type, source_id, tier, layer, src_lang, src_text, tgt_lang, tgt_text, source_url, src_hash, status, COALESCE(created_at,''), COALESCE(applied_at,'') FROM kb_staged_entries WHERE id IN ("+ph+") AND status='pending'", args...)
+		"SELECT id, target_pack_id, pack_type, source_id, tenant_id, tier, layer, src_lang, src_text, tgt_lang, tgt_text, source_url, src_hash, status, COALESCE(created_at,''), COALESCE(applied_at,'') FROM kb_staged_entries WHERE id IN ("+ph+") AND status='pending'", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -529,7 +551,7 @@ func (s *Store) GetStagedEntriesByIDs(ids []int64) ([]*KBStagedEntry, error) {
 	var out []*KBStagedEntry
 	for rows.Next() {
 		var e KBStagedEntry
-		if err := rows.Scan(&e.ID, &e.TargetPackID, &e.PackType, &e.SourceID, &e.Tier, &e.Layer,
+		if err := rows.Scan(&e.ID, &e.TargetPackID, &e.PackType, &e.SourceID, &e.TenantID, &e.Tier, &e.Layer,
 			&e.SrcLang, &e.SrcText, &e.TgtLang, &e.TgtText, &e.SourceURL, &e.SrcHash, &e.Status,
 			&e.CreatedAt, &e.AppliedAt); err == nil {
 			out = append(out, &e)

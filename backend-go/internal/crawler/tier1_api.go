@@ -3,7 +3,9 @@
 // 当前实现：维基百科/维基词典 MediaWiki `action=query&prop=langlinks` 翻译查询——
 // 给定种子词（源语言），取指定目标语言的词条标题作为译文候选（官方开放 API，合规风险低）。
 // 种子词来源：数据源 base_url 指向的纯文本词表（每行一个词），
-//   若未配置词表 URL，则使用内置行业关键词种子（按 src.Industry 匹配）。
+//
+//	若未配置词表 URL，则使用内置行业关键词种子（按 src.Industry 匹配）。
+//
 // 逐词查询、游标=已处理词数（断点续传基于词序号）。
 // =============================================
 package crawler
@@ -151,18 +153,46 @@ func (p *wiktionaryProducer) lookupTranslation(ctx context.Context, f *fetchBase
 
 // builtinIndustrySeeds 内置行业关键词种子（按 src.Industry 匹配；后续可由超管词表 URL 替代）。
 var builtinIndustrySeeds = map[string][]string{
-	"auto":      {"汽车", "发动机", "刹车", "续航", "充电", "经销商", "保修", "自动挡", "混合动力", "驾驶辅助"},
+	"auto":       {"汽车", "发动机", "刹车", "续航", "充电", "经销商", "保修", "自动挡", "混合动力", "驾驶辅助"},
 	"realestate": {"房产", "装修", "首付", "按揭", "户型", "样板间", "物业", "交房", "精装", "毛坯"},
-	"b2b":       {"解决方案", "报价", "合同", "售后", "服务商", "供应链", "签约", "续约", "白皮书", "案例"},
-	"education": {"留学", "申请", "签证", "奖学金", "课程", "学位", "预科", "语言成绩", "文书", "面试"},
-	"ecommerce": {"独立站", "转化率", "客单价", "复购", "物流", "退货", "优惠券", "广告投放", "落地页", "加购"},
-	"wedding":   {"婚庆", "跟妆", "司仪", "摄影", "场地", "婚纱", "婚宴", "礼金", "请柬", "蜜月"},
-	"retail":    {"电商", "店铺", "下单", "购物车", "库存", "上架", "促销", "满减", "包邮", "售后"},
-	"media":     {"自媒体", "短视频", "涨粉", "流量", "运营", "内容创作", "直播", "账号", "变现", "粉丝"},
+	"b2b":        {"解决方案", "报价", "合同", "售后", "服务商", "供应链", "签约", "续约", "白皮书", "案例"},
+	"education":  {"留学", "申请", "签证", "奖学金", "课程", "学位", "预科", "语言成绩", "文书", "面试"},
+	"ecommerce":  {"独立站", "转化率", "客单价", "复购", "物流", "退货", "优惠券", "广告投放", "落地页", "加购"},
+	"wedding":    {"婚庆", "跟妆", "司仪", "摄影", "场地", "婚纱", "婚宴", "礼金", "请柬", "蜜月"},
+	"retail":     {"电商", "店铺", "下单", "购物车", "库存", "上架", "促销", "满减", "包邮", "售后"},
+	"media":      {"自媒体", "短视频", "涨粉", "流量", "运营", "内容创作", "直播", "账号", "变现", "粉丝"},
 }
 
 // builtinGeneralSeeds 通用语言文化种子词（无行业匹配时兜底）。
 var builtinGeneralSeeds = []string{
 	"欢迎", "您好", "谢谢", "对不起", "请问", "价格", "发货", "退款", "服务", "客服",
 	"您好吗", "再见", "请", "不客气", "没关系", "加油", "合作", "订单", "支付", "发票",
+}
+
+// IndustrySeedWords 导出指定行业的关键词种子（供企业包行业化筛选提示词复用；
+//
+//	未知/空行业返回空切片，调用方应回退通用种子）。
+func IndustrySeedWords(code string) []string {
+	if code == "" {
+		return nil
+	}
+	if ws, ok := builtinIndustrySeeds[code]; ok {
+		return ws
+	}
+	return nil
+}
+
+// GeneralSeedWords 导出通用语言文化种子词（优先级最低的兜底词表）。
+func GeneralSeedWords() []string {
+	out := make([]string, len(builtinGeneralSeeds))
+	copy(out, builtinGeneralSeeds)
+	return out
+}
+
+// IndustryName 导出行业 code → 中文名（供筛选提示词与 UI 展示复用；未知回退"通用行业"）。
+func IndustryName(code string) string {
+	if n, ok := industryNames[code]; ok {
+		return n
+	}
+	return "通用行业"
 }

@@ -57,6 +57,7 @@ func New(db *sql.DB) (*Store, error) {
 	s.PackageOrderTokenBackfill() // ★ token 口径：存量包订单 amount_tokens 补全（幂等；句数不参与运行期计算）
 	s.ArtifactsMigrate()          // ★ 产物归属登记表（幂等；评审整改 C1）
 	s.KBScrapeMigrate()           // ★ 行业/语言文化包自动采集：数据源 + 待审池建表（幂等；2026-09-01）
+	s.SeedDefaultScrapeSources()  // ★ 功能③：通用行业兜底包默认采集源（幂等；无任何 general 源时补建）
 	return s, nil
 }
 

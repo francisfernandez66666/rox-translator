@@ -15,6 +15,7 @@ package api
 //   - 租户隔离：写入均带当前租户 ID（tid）
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -27,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"translator/internal/crawler"
 	"translator/internal/engine"
 	"translator/internal/kb"
 	"translator/internal/store"
@@ -105,7 +107,8 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 			if ok, serr := s.Store.StageEntry(&store.KBStagedEntry{
 				TargetPackID: req.PackageID,
 				PackType:     pkg.PackType,
-				SourceID:     0, // 手动投喂
+				SourceID:     0,   // 手动投喂
+				TenantID:     tid, // 投稿归属：审批通过后奖励该租户（功能⑥）
 				Tier:         2,
 				Layer:        e.Layer,
 				SrcLang:      "zh",
@@ -127,6 +130,7 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 逐条导入：空源文跳过；默认层 2、默认目标语言 en
+	var twin []kbScreenCand // 功能①双轨候选（仅企业包）
 	for _, e := range req.Entries {
 		src := strings.TrimSpace(e.SourceText)
 		if src == "" {
@@ -146,13 +150,21 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		added++
+		if pkg.PackType == store.PackTenant {
+			twin = append(twin, kbScreenCand{lay: e.Layer, lang: e.TargetLang, src: src, tgt: e.TargetText})
+		}
 	}
 	// 导入审计日志
 	s.Store.LogAudit(tid, u.ID, "kb_entries_import", "kb_entries", strconv.Itoa(added))
 	s.invKB()             // ★ 批量导入写通 tm_segments：失效 CJK 缓存
 	s.rebuildIndexAsync() // 异步重建向量索引（增量入库）
+	industryStaged := 0
+	if len(twin) > 0 {
+		industryStaged = s.screenAndStageIndustry(tid, twin)
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "message": "批量导入完成", "added": added, "skipped": skipped,
+		"industry_staged": industryStaged,
 	})
 }
 
@@ -163,6 +175,80 @@ type kbImportEntry struct {
 	TargetText string `json:"target_text"` // 目标译文
 	Layer      int    `json:"layer"`       // 层级（0 时默认 2）
 	Module     string `json:"module"`      // 所属模块
+}
+
+// screenAndStageIndustry 功能①双轨：租户上传企业包立即生效后，用 LLM 逐条分析
+// 哪些条目「可行业化」（行业关键词作提示词），命中者另抄一份进共享行业包待审池
+// （超管审批+热加载+奖励）。LLM 不可用/失败时静默跳过，不影响正常导入。
+// 参数 cands: 已成功载入企业包的条目候选；返回进入行业包待审池的条数。
+func (s *Server) screenAndStageIndustry(tid int64, cands []kbScreenCand) int {
+	if len(cands) == 0 || s.Engine == nil || s.Engine.LLM == nil || s.Ten == nil {
+		return 0
+	}
+	// 租户行业编码（缺省通用行业）
+	industryCode := ""
+	if t, err := s.Ten.GetByID(tid); err == nil {
+		industryCode = t.Industry
+	}
+	if industryCode == "" {
+		industryCode = store.GeneralIndustryCode
+	}
+	// 目标：共享宿主（租户1）的行业包，缺失回退通用行业包，仍缺失则跳过
+	indPkg, ierr := s.Store.FindIndustryByCode(industryCode)
+	if ierr != nil {
+		indPkg, ierr = s.Store.FindIndustryByCode(store.GeneralIndustryCode)
+	}
+	if ierr != nil || indPkg == nil {
+		return 0
+	}
+	// 行业关键词种子作提示词上下文（用户口径：关键词匹配做提示词）
+	seeds := crawler.IndustrySeedWords(industryCode)
+	if len(seeds) == 0 {
+		seeds = crawler.GeneralSeedWords()
+	}
+	list := make([]engine.ScreenCandidate, 0, len(cands))
+	for _, c := range cands {
+		list = append(list, engine.ScreenCandidate{SrcText: c.src, TgtText: c.tgt, TgtLang: c.lang})
+	}
+	flags := s.Engine.ScreenIndustryEntries(context.Background(), crawler.IndustryName(industryCode), seeds, list)
+	if len(flags) != len(cands) {
+		return 0 // 判定失败 → 一个都不进待审池（保守）
+	}
+	var stagedItems []*store.KBStagedEntry
+	for i, ok := range flags {
+		if !ok || strings.TrimSpace(cands[i].src) == "" {
+			continue
+		}
+		stagedItems = append(stagedItems, &store.KBStagedEntry{
+			TargetPackID: indPkg.ID,
+			PackType:     store.PackIndustry,
+			SourceID:     0,
+			TenantID:     tid, // 投稿归属：审批通过后奖励该租户
+			Tier:         2,
+			Layer:        cands[i].lay,
+			SrcLang:      "zh",
+			SrcText:      cands[i].src,
+			TgtLang:      cands[i].lang,
+			TgtText:      cands[i].tgt,
+			Status:       "pending",
+		})
+	}
+	if len(stagedItems) == 0 {
+		return 0
+	}
+	n, _ := s.Store.StageEntriesBatch(stagedItems)
+	if n > 0 {
+		s.Store.LogAudit(tid, 0, "kb_dual_track_screen", "kb_staged_entries", strconv.Itoa(n))
+	}
+	return n
+}
+
+// kbScreenCand 企业包双轨筛选候选（一条已载入企业包的条目）。
+type kbScreenCand struct {
+	lay  int
+	lang string
+	src  string
+	tgt  string
 }
 
 // ============ KB 识别/导入 ============
@@ -548,6 +634,8 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 
 	added := 0
 	skipped := 0
+	var twin []kbScreenCand       // 功能①双轨候选（仅企业包，按 src×lang 收敛）
+	seenTwin := map[string]bool{} // 去重：同 src+lang 只筛一次
 	// ★ 平台共享包强制先审批（2026-09-02 功能①）：行业包/语言文化包上传内容先进待审池，
 	//   超管审批通过后才落正式库；其余包类型沿用自服务立即生效（与 JSON 导入同口径）。
 	shared := sharedPackNeedsApproval(pkg.PackType)
@@ -598,7 +686,8 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 				stagedItems = append(stagedItems, &store.KBStagedEntry{
 					TargetPackID: req.PackageID,
 					PackType:     pkg.PackType,
-					SourceID:     0, // 手动投喂
+					SourceID:     0,   // 手动投喂
+					TenantID:     tid, // 投稿归属：审批通过后奖励该租户（功能⑥）
 					Tier:         2,
 					Layer:        layer,
 					SrcLang:      "zh",
@@ -614,6 +703,13 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			added++
+			if pkg.PackType == store.PackTenant {
+				key := lang + "\x00" + src
+				if !seenTwin[key] {
+					seenTwin[key] = true
+					twin = append(twin, kbScreenCand{lay: layer, lang: lang, src: src, tgt: txt})
+				}
+			}
 		}
 	}
 	// 共享包：整批进待审池（hash 去重），不落正式库、不触发奖励
@@ -630,25 +726,40 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	s.Store.LogAudit(tid, u.ID, "kb_file_import", "kb_entries", req.TempID)
 	s.invKB()             // ★ 文件导入写通 tm_segments：失效 CJK 缓存
 	s.rebuildIndexAsync() // 异步重建向量索引（增量入库）
-	// ★ KB 上传奖励（任务2.3）：按新增条数 × 每条约额发永久 token，单租户日封顶防刷。
-	//   奖励仅针对「文件导入」路径（KB 共建反哺数据飞轮）；JSON 批量导入（handleKBEntriesImport）不奖励。
+	// ★ KB 上传奖励（功能⑥）：按实际载入的源文字符数 × 单字符单价发永久 token，
+	//   单租户日封顶防刷；总开关与单价由超管后台设置。仅「文件导入」路径发奖。
 	reward := map[string]interface{}{}
 	if tid > 0 && added > 0 {
-		if granted, tokens, used := s.Store.GrantKBReward(tid, u.ID, req.PackageID, int64(added)); granted {
+		totalChars := int64(0)
+		for i := 0; i < len(records) && i < 100000; i++ {
+			for k, v := range records[i] {
+				if isSourceCol(k) {
+					totalChars += int64(len([]rune(strings.TrimSpace(v))))
+					break
+				}
+			}
+		}
+		if granted, tokens, used := s.Store.GrantKBRewardByChars(tid, u.ID, req.PackageID, totalChars); granted {
 			reward = map[string]interface{}{
 				"granted": true, "tokens": tokens, "daily_used": used,
-				"added": added, "per_entry": s.Store.KBRewardTokensPerEntry(),
+				"chars": totalChars, "per_char": s.Store.KBRewardTokensPerChar(),
 			}
 			s.Store.LogAudit(tid, u.ID, "kb_upload_reward", "balance_accounts",
 				strconv.FormatInt(tokens, 10))
 		} else {
 			reward = map[string]interface{}{
 				"granted": false, "daily_used": used, "cap": s.Store.KBRewardDailyCap(),
+				"enabled": s.Store.KBRewardEnabled(), "per_char": s.Store.KBRewardTokensPerChar(),
 			}
 		}
 	}
+	// 功能①双轨：企业包中可行业化的条目抄进行业包待审池（LLM 筛选）
+	industryStaged := 0
+	if len(twin) > 0 {
+		industryStaged = s.screenAndStageIndustry(tid, twin)
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "message": "导入完成", "added": added, "skipped": skipped,
-		"reward": reward,
+		"reward": reward, "industry_staged": industryStaged,
 	})
 }

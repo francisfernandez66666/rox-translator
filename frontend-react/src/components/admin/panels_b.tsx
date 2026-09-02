@@ -32,6 +32,26 @@ function fmtNumShort(n: number): string {
   return String(n)
 }
 
+/** 行业下拉可选项（与后端内置行业 code 对齐，功能②/③） */
+const tenantIndustryOptions = [
+  { value: '', label: '（未设置）' },
+  { value: 'general', label: '通用行业' },
+  { value: 'auto', label: '汽车' },
+  { value: 'realestate', label: '房产/装修' },
+  { value: 'b2b', label: '企业服务/B2B' },
+  { value: 'education', label: '教育/留学' },
+  { value: 'ecommerce', label: '跨境独立站' },
+  { value: 'wedding', label: '婚庆/高端服务' },
+  { value: 'retail', label: '电商/零售' },
+  { value: 'media', label: '自媒体/内容创作' },
+]
+
+/** 行业 code → 展示名（列表列用） */
+const industryLabel = (code: string): string => {
+  const o = tenantIndustryOptions.find((x) => x.value === code)
+  return o ? o.label : code || '—'
+}
+
 // ==================== 租户管理面板（Vue Tenants.vue） ====================
 
 /** 租户 CRUD、试用开通、充值、导出、状态启停、GDPR 擦除组件 */
@@ -70,12 +90,13 @@ export function TenantsP() {
       if (!r.success) { void MessagePlugin.error(r.message); return }
       setForm({}); setDlg(null); await load(); ad.loadTenants()
     } else if (dlg && typeof dlg === 'object' && 'edit' in dlg) {
-      // 编辑租户：更新名称、过期时间、权限
+      // 编辑租户：更新名称、过期时间、权限、行业（功能②）
       const tt = dlg.edit
       const r: any = await tenantUpdate({
         id: tt.id, name: String(form.name ?? tt.name),
         expires_at: String(form.expires_at ?? tt.expires_at ?? ''),
         permissions: String(form.permissions ?? tt.permissions ?? '{}'),
+        industry: String(form.industry ?? tt.industry ?? ''),
       })
       if (!r.success) { void MessagePlugin.error(r.message); return }
       setDlg(null); await load()
@@ -160,6 +181,7 @@ export function TenantsP() {
                { colKey: 'id', title: t('tenants.colId'), width: 60 },
                { colKey: 'code', title: t('tenants.colCode'), width: 120 },
                { colKey: 'name', title: t('tenants.colName') },
+               { colKey: 'industry', title: t('tenants.industry'), width: 120, cell: ({ row }: any) => industryLabel(row.industry || '') },
                { colKey: 'status', title: t('tenants.colStatus'), width: 90, cell: ({ row }: any) => {
                  const s = row.status
                  const label = s === 'active' ? t('tenants.enable') : s === 'disabled' ? t('tenants.disable') : t('tenants.expired')
@@ -171,6 +193,8 @@ export function TenantsP() {
                 ) },
                { colKey: 'op', title: t('tenants.colActions'), width: 380, cell: ({ row }: any) => (
                  <Space size={2} breakLine>
+                   {/* 编辑租户（名称/权限/行业，功能②） */}
+                   <Button size="small" variant="text" onClick={() => { setForm({ name: row.name, expires_at: row.expires_at || '', permissions: row.permissions || '{}', industry: row.industry || '' }); setDlg({ edit: row }) }}>{t('tenants.edit')}</Button>
                    {/* ★ 发放/重新发放体验额度（任务2.4：对所有租户可用，叠加发放新体验；已开通也可再领） */}
                    <Button size="small" variant="text" onClick={() => grantTrial(row)}>{t('tenants.grantTrial')}</Button>
                    {/* 启用/禁用租户 */}
@@ -209,6 +233,12 @@ export function TenantsP() {
             <Field label={t('tenants.namePlaceholder')}><Input value={String(form.name ?? '')} onChange={(v) => setForm({ ...form, name: v })} /></Field>
             <Field label={t('tenants.colExpires')}><Input value={String(form.expires_at ?? '')} placeholder="YYYY-MM-DD" onChange={(v) => setForm({ ...form, expires_at: v })} /></Field>
             <Field label={t('tenants.permissionsHint')}><Textarea autosize={{ minRows: 3 }} value={String(form.permissions ?? '{}')} onChange={(v) => setForm({ ...form, permissions: v })} /></Field>
+            {/* 行业属性（功能②：决定共享行业包载入范围，超管可修正） */}
+            <Field label={t('tenants.industry')}>
+              <Select value={String(form.industry ?? '')} onChange={(v: any) => setForm({ ...form, industry: String(v) })}>
+                {tenantIndustryOptions.map((o) => <Select.Option key={o.value} value={o.value} label={o.label} />)}
+              </Select>
+            </Field>
             {/* 创建模式：显示管理员账号与初始密码 */}
             {dlg === 'create' && (
               <>

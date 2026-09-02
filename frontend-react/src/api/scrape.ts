@@ -107,11 +107,21 @@ export async function scrapeStaged(params: { pack_type?: string; status?: string
 }
 
 /** 批量审批：通过（落正式库+热加载）/ 驳回 */
-export async function scrapeApprove(kind: 'entries' | 'phrases', ids: number[], action: 'approve' | 'reject'): Promise<AdminResp & { updated?: number; applied?: number }> {
+export async function scrapeApprove(kind: 'entries' | 'phrases', ids: number[], action: 'approve' | 'reject'): Promise<AdminResp & { updated?: number; applied?: number; rewards?: { tenant_id?: number; tokens?: number; chars?: number; per_char?: number }[] }> {
   return request('/api/admin/kb-scrape/approve', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ kind, ids, action }) })
 }
 
 /** 采集概览 */
 export async function scrapeSummary(): Promise<AdminResp & { summary?: ScrapeSummary }> {
   return request('/api/admin/kb-scrape/summary', { headers: authHeaders() })
+}
+
+/** KB 上传奖励配置：读取开关/单价/日封顶 */
+export async function kbRewardConfigGet(): Promise<AdminResp & { enabled?: boolean; per_char?: number; daily_cap?: number }> {
+  return request('/api/admin/kb-reward', { headers: authHeaders() })
+}
+
+/** KB 上传奖励配置：更新（enabled 传 null=不改） */
+export async function kbRewardConfigSet(body: { enabled?: boolean | null; per_char?: number; daily_cap?: number }): Promise<AdminResp & { enabled?: boolean; per_char?: number; daily_cap?: number }> {
+  return request('/api/admin/kb-reward', { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) })
 }

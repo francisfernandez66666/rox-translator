@@ -3,6 +3,7 @@
 //   - 解析 xlsx，表头：用户名称、姓名、部门、角色、邮箱（角色列可省略，默认普通用户）
 //   - 逐行创建账号：随机初始密码 + 首登强制改密标记（must_change_pwd=1）
 //   - 绑定邮箱并向导入用户发送《账号开通通知》（含登录地址、账号、初始密码）
+//
 // =============================================
 package api
 
@@ -150,8 +151,8 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 		// 发送《账号开通通知》：登录地址 + 账号 + 初始密码
 		if nu.Email != "" {
 			_ = s.sendTemplatedMail(nu.Email, "user_import", map[string]string{
-				"username": nu.Username,
-				"password": initPwd,
+				"username":  nu.Username,
+				"password":  initPwd,
 				"login_url": importLoginURL(r),
 			})
 		}

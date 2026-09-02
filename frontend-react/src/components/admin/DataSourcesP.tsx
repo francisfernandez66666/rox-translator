@@ -10,6 +10,7 @@ import { Panel, toastResp } from './parts'
 import {
   scrapeSources, scrapeSourceCreate, scrapeSourceUpdate, scrapeSourceStatus, scrapeSourceRun,
   scrapeStaged, scrapeApprove, scrapeSummary,
+  kbRewardConfigGet, kbRewardConfigSet,
   type ScrapeSource, type StagedEntry, type StagedPhrase, type ScrapeSummary,
 } from '@/api/scrape'
 
@@ -51,6 +52,32 @@ export default function DataSourcesP() {
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [approving, setApproving] = useState(false)
 
+  // ---- KB 上传奖励（功能⑥） ----
+  const [rewardCfg, setRewardCfg] = useState<{ enabled: boolean; per_char: number; daily_cap: number } | null>(null)
+  const [savingReward, setSavingReward] = useState(false)
+
+  /** 读取奖励配置 */
+  const loadReward = async () => {
+    const r = await kbRewardConfigGet()
+    if (r.success && r.enabled !== undefined) {
+      setRewardCfg({ enabled: !!r.enabled, per_char: r.per_char ?? 100, daily_cap: r.daily_cap ?? 50000 })
+    }
+  }
+
+  /** 保存奖励配置 */
+  const onSaveReward = async () => {
+    if (!rewardCfg) return
+    setSavingReward(true)
+    const r = await kbRewardConfigSet({
+      enabled: rewardCfg.enabled,
+      per_char: rewardCfg.per_char,
+      daily_cap: rewardCfg.daily_cap,
+    })
+    setSavingReward(false)
+    if (!toastResp(r, '奖励配置已保存')) return
+    await loadReward()
+  }
+
   /** 刷新数据源 + 概览 */
   /** 刷新数据源 + 概览 */
   const reload = async () => {
@@ -70,6 +97,7 @@ export default function DataSourcesP() {
 
   useEffect(() => { reload() }, [])
   useEffect(() => { if (tab === 'staged') reloadStaged() }, [tab, stagedFilter])
+  useEffect(() => { loadReward() }, [])
 
   /** 新增数据源 */
   const onCreate = async () => {
@@ -99,9 +127,11 @@ export default function DataSourcesP() {
     const label = action === 'approve' ? '通过' : '驳回'
     // 条目与安全句分两类处理
     let ok = true
+    let rewardNote = ''
     if (entries.length) {
       const r = await scrapeApprove('entries', selectedIds, action)
-      if (!toastResp(r, ok ? `已${label} ${r.applied ?? 0} 条并热加载` : undefined)) ok = false
+      if (action === 'approve' && r.rewards?.length) rewardNote = `，发放奖励 ${r.rewards.reduce((x: number, y) => x + (y.tokens ?? 0), 0)} token`
+      if (!toastResp(r, ok ? `已${label} ${r.applied ?? 0} 条并热加载${rewardNote}` : undefined)) ok = false
     }
     if (phrases.length) {
       const r = await scrapeApprove('phrases', selectedIds, action)
@@ -164,6 +194,29 @@ export default function DataSourcesP() {
           <Button size="small" loading={running} onClick={onRun}>立即采集一轮</Button>
         </div>
       }>
+        {/* 功能⑥ KB 上传奖励开关（超管） */}
+        <div style={{ border: '1px solid #e5e6eb', borderRadius: 8, padding: 12, marginBottom: 12, display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 600, fontSize: 13 }}>KB 上传奖励</span>
+          {rewardCfg && (
+            <>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                <Switch size="small" value={rewardCfg.enabled} onChange={(v: boolean) => setRewardCfg((c) => (c ? { ...c, enabled: v } : c))} />
+                发放开关
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                1 字符
+                <Input type="number" style={{ width: 110 }} value={String(rewardCfg.per_char)} onChange={(v: string) => setRewardCfg((c) => (c ? { ...c, per_char: Number(v) || 0 } : c))} />
+                token
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                单租户日封顶
+                <Input type="number" style={{ width: 130 }} value={String(rewardCfg.daily_cap)} onChange={(v: string) => setRewardCfg((c) => (c ? { ...c, daily_cap: Number(v) || 0 } : c))} />
+                token
+              </label>
+              <Button size="small" theme="primary" loading={savingReward} onClick={onSaveReward}>保存</Button>
+            </>
+          )}
+        </div>
         <Tabs value={tab} onChange={(v) => setTab(v as 'sources' | 'staged')}>
           <Tabs.TabPanel value="sources" label={`数据源（${sources.length}）`}>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>

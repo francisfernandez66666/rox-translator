@@ -37,6 +37,8 @@ export const zh: Record<string, string> = {
   'tenants.grantTrial': '重新发放体验',
   'tenants.grantTrialConfirm': '向「{name}」重新发放一份体验额度（叠加发放，含 token 与句数）？',
   'tenants.grantTrialDone': '体验额度已重新发放',
+  'tenants.industry': '行业（决定共享行业包载入范围）',
+  'tenants.edit': '编辑',
 }
 
 // 英文文案词典：键与上方 zh 一一对应。
@@ -75,4 +77,6 @@ export const en: Record<string, string> = {
   'tenants.grantTrial': 'Re-grant experience',
   'tenants.grantTrialConfirm': 'Re-grant a new experience quota (stacked, tokens + sentences) to "{name}"?',
   'tenants.grantTrialDone': 'Experience quota re-granted',
+  'tenants.industry': 'Industry (determines shared industry pack scope)',
+  'tenants.edit': 'Edit',
 }

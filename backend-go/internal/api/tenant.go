@@ -75,6 +75,7 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 		Permissions string `json:"permissions"` // 权限 JSON（含每日字符上限等）
 		AdminUser   string `json:"admin_user"`  // 初始租户管理员用户名（可选）
 		AdminPass   string `json:"admin_pass"`  // 初始租户管理员密码（可选）
+		Industry    string `json:"industry"`    // 注册行业编码（功能②：决定共享行业包载入范围）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -86,6 +87,13 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "创建失败: " + err.Error()})
 		return
 	}
+	// 功能②：初始化租户默认包 + 行业（缺选回退通用行业兜底）
+	_ = s.Store.EnsureDefaultPackages(t.ID)
+	industryCode := req.Industry
+	if industryCode == "" {
+		industryCode = store.GeneralIndustryCode
+	}
+	_ = s.Ten.SetIndustry(t.ID, industryCode)
 	// 创建该租户的初始租户管理员账号（挂到新租户下；仅当提供了用户名/密码时）
 	if s.Store != nil && req.AdminUser != "" && req.AdminPass != "" {
 		if _, err := s.Store.CreateUser(t.ID, req.AdminUser, auth.PasswordHash(req.AdminPass), req.AdminUser+" 管理员", store.RoleTenantAdmin, u.ID, 0); err != nil {
@@ -127,6 +135,7 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 		BrandLogo     string `json:"brand_logo"`     // 自定义品牌 Logo
 		Domain        string `json:"domain"`         // 自定义域名
 		BrandLinks    string `json:"brand_links"`    // 自定义页脚链接 JSON
+		Industry      string `json:"industry"`       // 注册行业编码（空=不清除；功能②超管可修正租户行业）
 		InviteEnabled *bool  `json:"invite_enabled"` // 邀请好友功能开关（nil=不改动；非 nil=按值设置）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
@@ -137,6 +146,14 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := s.Ten.Update(req.ID, req.Name, req.ExpiresAt, req.Permissions); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "更新失败: " + err.Error()})
 		return
+	}
+	// 功能②：更新租户行业编码（仅当显式传入且非空时；空值不改动，避免误清）。
+	//   行业决定共享行业包的载入范围（与注册口径一致）。
+	if req.Industry != "" {
+		if err := s.Ten.SetIndustry(req.ID, req.Industry); err != nil {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "行业保存失败: " + err.Error()})
+			return
+		}
 	}
 	// 更新品牌定制（含自定义域名/Logo/页脚链接）：仅当请求显式携带品牌字段时才写，
 	// 避免「邀请好友」开关、编辑租户名等只改部分字段的请求把已有品牌清空（品牌有独立保存接口）。
