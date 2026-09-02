@@ -1,3 +1,8 @@
+// ============ extract_test.go · 职责说明 ============
+// crawler 包「LLM 采集输出解析」的单元测试：
+//   - TestExtractJSONRobust    验证 extractJSON 对 LLM 输出 JSON 的鲁棒提取
+//   - TestParseLLMOutputArray  验证 parseLLMOutput 兼容顶层数组形态（条目/安全句/包装对象）
+// =============================================
 package crawler
 
 import "testing"
