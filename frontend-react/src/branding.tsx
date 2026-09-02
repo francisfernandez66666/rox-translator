@@ -46,6 +46,7 @@ export interface Branding {
 // 默认品牌（未定制时回退）
 export const DEFAULT_BRAND_NAME = '能言 LangCross'
 
+// DEFAULT 默认品牌配置对象（未解析到租户时回退平台品牌）
 const DEFAULT: Branding = {
   tenantId: 0, tenantName: '', brandName: '', brandLogo: '', domain: '',
   brandHomeBg: '', brandHomeBgStyle: '', brandLoginCardPos: '', brandLoginLayout: '', code: '', industry: '', industryName: '', dedicatedRegister: false,
@@ -56,6 +57,7 @@ export interface BgStyle { scale: number; x: number; y: number; mode: 'tile' | '
 
 // 登录卡片位置默认值：居中（百分比为卡片中心相对视口）
 export interface CardPos { x: number; y: number }
+// parseCardPos 解析品牌配置 JSON 中的登录卡片位置（缺省居中 50/50）
 export function parseCardPos(json?: string): CardPos {
   const d: CardPos = { x: 50, y: 50 }
   if (!json) return d
@@ -69,6 +71,7 @@ export function parseCardPos(json?: string): CardPos {
 
 // 登录页布局默认值：全屏背景（full）；分栏时容器默认在右侧（right）
 export interface LoginLayout { mode: 'full' | 'split'; side: 'left' | 'right' }
+// parseLoginLayout 解析品牌配置 JSON 中的登录页布局（全屏/分栏+卡片方位，缺省 full/right）
 export function parseLoginLayout(json?: string): LoginLayout {
   const d: LoginLayout = { mode: 'full', side: 'right' }
   if (!json) return d

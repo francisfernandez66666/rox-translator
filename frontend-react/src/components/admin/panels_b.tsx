@@ -22,9 +22,10 @@ import { Panel, Field, toastResp, num } from './parts'
 import { fmtNum, fmtTime } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { InvitesP } from './panels_a'
-import { t, tpl } from '@/i18n'
+import { t, tpl, useT, type Lang } from '@/i18n'
+import { industryName, industryOptions, industryCodeOf } from '@/lib/industries'
 
-type Any = any
+type Any = any // 兜底类型：避免对 TD 组件回调/返回结构强类型化（沿用项目惯例）
 
 /** 数字缩写：≥1万 显示为 x.xw（用于组织预算展示） */
 function fmtNumShort(n: number): string {
@@ -32,31 +33,21 @@ function fmtNumShort(n: number): string {
   return String(n)
 }
 
-/** 行业下拉可选项（与后端内置行业 code 对齐，功能②/③） */
-const tenantIndustryOptions = [
-  { value: '', label: '（未设置）' },
-  { value: 'general', label: '通用行业' },
-  { value: 'auto', label: '汽车' },
-  { value: 'realestate', label: '房产/装修' },
-  { value: 'b2b', label: '企业服务/B2B' },
-  { value: 'education', label: '教育/留学' },
-  { value: 'ecommerce', label: '跨境独立站' },
-  { value: 'wedding', label: '婚庆/高端服务' },
-  { value: 'retail', label: '电商/零售' },
-  { value: 'media', label: '自媒体/内容创作' },
+/** 行业下拉可选项（含空项，label 按当前语言自适应，值=中文名，功能②/③） */
+const tenantIndustryOptions = (lang: Lang) => [
+  { value: '', label: lang === 'en' ? 'Unset' : '（未设置）' },
+  ...industryOptions(lang),
 ]
 
-/** 行业 code → 展示名（列表列用） */
-const industryLabel = (code: string): string => {
-  const o = tenantIndustryOptions.find((x) => x.value === code)
-  return o ? o.label : code || '—'
-}
+/** 行业 code → 当前语言展示名（列表列用） */
+const industryLabel = (code: string, lang: Lang): string => industryName(code || '', lang) || '—'
 
 // ==================== 租户管理面板（Vue Tenants.vue） ====================
 
 /** 租户 CRUD、试用开通、充值、导出、状态启停、GDPR 擦除组件 */
 export function TenantsP() {
   const ad = useAdmin()
+  const [lang] = useT()
   // 租户列表数据
   const [rows, setRows] = useState<TenantInfo[]>([])
   // 弹窗状态：复用 create / edit / order 三种模式
@@ -96,7 +87,7 @@ export function TenantsP() {
         id: tt.id, name: String(form.name ?? tt.name),
         expires_at: String(form.expires_at ?? tt.expires_at ?? ''),
         permissions: String(form.permissions ?? tt.permissions ?? '{}'),
-        industry: String(form.industry ?? tt.industry ?? ''),
+        industry: String(form.industry ? industryCodeOf(String(form.industry)) : (tt.industry ?? '')),
       })
       if (!r.success) { void MessagePlugin.error(r.message); return }
       setDlg(null); await load()
@@ -181,7 +172,7 @@ export function TenantsP() {
                { colKey: 'id', title: t('tenants.colId'), width: 60 },
                { colKey: 'code', title: t('tenants.colCode'), width: 120 },
                { colKey: 'name', title: t('tenants.colName') },
-               { colKey: 'industry', title: t('tenants.industry'), width: 120, cell: ({ row }: any) => industryLabel(row.industry || '') },
+               { colKey: 'industry', title: t('tenants.industry'), width: 130, cell: ({ row }: any) => industryLabel(row.industry || '', lang) },
                { colKey: 'status', title: t('tenants.colStatus'), width: 90, cell: ({ row }: any) => {
                  const s = row.status
                  const label = s === 'active' ? t('tenants.enable') : s === 'disabled' ? t('tenants.disable') : t('tenants.expired')
@@ -194,7 +185,7 @@ export function TenantsP() {
                { colKey: 'op', title: t('tenants.colActions'), width: 380, cell: ({ row }: any) => (
                  <Space size={2} breakLine>
                    {/* 编辑租户（名称/权限/行业，功能②） */}
-                   <Button size="small" variant="text" onClick={() => { setForm({ name: row.name, expires_at: row.expires_at || '', permissions: row.permissions || '{}', industry: row.industry || '' }); setDlg({ edit: row }) }}>{t('tenants.edit')}</Button>
+                   <Button size="small" variant="text" onClick={() => { setForm({ name: row.name, expires_at: row.expires_at || '', permissions: row.permissions || '{}', industry: row.industry ? industryName(row.industry, 'zh') : '' }); setDlg({ edit: row }) }}>{t('tenants.edit')}</Button>
                    {/* ★ 发放/重新发放体验额度（任务2.4：对所有租户可用，叠加发放新体验；已开通也可再领） */}
                    <Button size="small" variant="text" onClick={() => grantTrial(row)}>{t('tenants.grantTrial')}</Button>
                    {/* 启用/禁用租户 */}
@@ -236,7 +227,7 @@ export function TenantsP() {
             {/* 行业属性（功能②：决定共享行业包载入范围，超管可修正） */}
             <Field label={t('tenants.industry')}>
               <Select value={String(form.industry ?? '')} onChange={(v: any) => setForm({ ...form, industry: String(v) })}>
-                {tenantIndustryOptions.map((o) => <Select.Option key={o.value} value={o.value} label={o.label} />)}
+                {tenantIndustryOptions(lang).map((o) => <Select.Option key={o.value} value={o.value} label={o.label} />)}
               </Select>
             </Field>
             {/* 创建模式：显示管理员账号与初始密码 */}

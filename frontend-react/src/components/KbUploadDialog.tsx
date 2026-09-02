@@ -14,6 +14,7 @@ import { useAdmin } from '@/stores/admin'
 // 前台「上传知识库」弹窗：识别文件、选择知识包并导入。
 // ========================================
 
+// Props 弹窗属性：是否可见与关闭回调
 interface Props {
   visible: boolean
   onClose: () => void
@@ -22,6 +23,7 @@ interface Props {
 // 通用弱类型别名（与后台面板一致）：用于松类型的接口响应/行数据
 type Any = any
 
+// Pkg 知识包信息（与后端返回字段对应）：标识、名称、类型、归属组织与跨部门共享范围
 interface Pkg {
   id: number
   name: string
@@ -34,6 +36,7 @@ interface Pkg {
   cross_orgs?: number[]
 }
 
+// COpt 多级下拉（Cascader）选项结构：label/value 及可选子节点
 interface COpt {
   label: string
   value: number
@@ -127,6 +130,7 @@ function pkgScopeText(p: Pkg, t: (k: string) => string, tpl: (k: string, vars?: 
   return ''
 }
 
+/** KbUploadDialog · 职责说明：前台顶部栏「上传知识库」弹窗，识别文件 → 选择知识包 → 导入（自动 embed） */
 export default function KbUploadDialog({ visible, onClose }: Props) {
   const ad = useAdmin()
   const [file, setFile] = useState<File | null>(null)
@@ -160,6 +164,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
     })()
   }, [visible])
 
+  // startRecognize 识别所选知识文件（recognize-kb），成功后在结果中记录 temp_id 供导入使用
   async function startRecognize() {
     if (!file) return
     setRecognizing(true); setRecognized(null); setResult(null)
@@ -172,6 +177,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
     } finally { setRecognizing(false) }
   }
 
+  // startImport 将已识别文件（temp_id）导入所选知识包（import-kb，自动 embed），成功则清空已选文件
   async function startImport() {
     if (!recognized?.temp_id || !pkgId) return
     setImporting(true); setResult(null)
@@ -184,6 +190,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
     } finally { setImporting(false) }
   }
 
+  // options 由已加载的知识包列表与组织树构建选包下拉选项（企业包/部门包组织树/行业包/语言文化包）
   const options = buildKbCascaderOptions(pkgs, effectiveOrgs)
 
   return (
@@ -260,6 +267,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
   )
 }
 
+// fileExt 取文件名扩展名并转为大写，无扩展名时返回空字符串（用于展示文件类型）
 export function fileExt(name: string): string {
   const i = name.lastIndexOf('.')
   return i >= 0 ? name.slice(i + 1).toUpperCase() : ''

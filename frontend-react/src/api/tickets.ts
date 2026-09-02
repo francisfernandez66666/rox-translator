@@ -49,12 +49,6 @@ export async function ticketList(mine?: boolean): Promise<TicketResp> {
   return request(`/api/tickets${mine ? '?mine=1' : ''}`, { headers: authHeaders() })
 }
 
-// 创建翻译工单
-
-// 运行工单翻译流程
-
-// 工单详情
-
 // ==================== 审批 ====================
 
 /** 获取待审批工单列表 */

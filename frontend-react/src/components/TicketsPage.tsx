@@ -66,9 +66,11 @@ export default function TicketsPage() {
   // 反馈弹窗目标（已完成工单）
   const [feedbackTarget, setFeedbackTarget] = useState<{ type: 'ticket'; ticket_id: number; mode: string } | null>(null)
 
+  // 列表轮询定时器与详情轮询定时器句柄（用于清理）
   const listTimer = useRef<number | null>(null)
   const detailTimer = useRef<number | null>(null)
 
+  // 目标语言逗号拼接串（空时回退 en），随建单请求提交
   const langsJoined = langs.length ? langs.join(',') : 'en'
 
   // 拉取我的工单列表
@@ -249,6 +251,7 @@ export default function TicketsPage() {
     setFeedbackTarget({ type: 'ticket', ticket_id: tk.id, mode: (tk as any).mode || 'pro' })
   }
 
+  // 当前工单的整体进度百分比、当前步骤文案与状态列表（用于进度气泡展示）
   const pct = ticketProgress()
   const stepLabel = currentStepLabel()
   const states = (detail?.states as any[]) || []

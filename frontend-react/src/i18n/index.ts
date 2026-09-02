@@ -28,8 +28,10 @@ import { baseEn } from './dicts.en'
 
 // 语言类型：'zh' 中文 / 'en' 英文（i18n 全部取词与切换基于此类型）
 export type Lang = 'zh' | 'en'
+// Dict 字典类型：key 为文案标识，value 为对应语言的展示文本
 type Dict = Record<string, string>
 
+// zh 中文词典：base 基础字典 + 各面板模块中文文案合并
 const zh: Dict = {
   ...baseZh,
   ...pOverview.zh, ...pTenants.zh, ...pOrg.zh, ...pUsers.zh, ...pKb.zh,
@@ -39,6 +41,7 @@ const zh: Dict = {
   ...pReferral.zh,
 }
 
+// en 英文词典：base 基础字典 + 各面板模块英文文案合并
 const en: Dict = {
   ...baseEn,
   ...pOverview.en, ...pTenants.en, ...pOrg.en, ...pUsers.en, ...pKb.en,
@@ -48,12 +51,16 @@ const en: Dict = {
   ...pReferral.en,
 }
 
+// dicts 按语言索引的词典集合，取词时按当前语言定位
 const dicts: Record<Lang, Dict> = { zh, en }
 
 // ---- 极简外部语言 store ----
+// currentLang 当前语言（首次从 localStorage 读取，默认中文）
 let currentLang: Lang = (localStorage.getItem('app_lang') as Lang) || 'zh'
+// listeners 语言订阅者集合（语言切换时依次触发，驱动组件重渲染）
 const listeners = new Set<() => void>()
 
+// emit 通知所有语言订阅者执行回调
 function emit() { listeners.forEach((l) => l()) }
 
 // 设置当前语言并持久化到 localStorage，触发订阅者重渲染
@@ -68,11 +75,13 @@ export function toggleLang() {
   setLang(currentLang === 'zh' ? 'en' : 'zh')
 }
 
+// subscribe 注册语言订阅回调，返回用于取消订阅的函数
 function subscribe(cb: () => void) {
   listeners.add(cb)
   return () => { listeners.delete(cb) }
 }
 
+// getSnapshot 返回当前语言快照（供 useSyncExternalStore 读取）
 function getSnapshot(): Lang { return currentLang }
 
 /** useLang 订阅当前语言；语言切换时所有调用组件重渲染 */

@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Button, Input, MessagePlugin, Select, Switch, Table, Tag, Tabs, RadioGroup, Radio } from 'tdesign-react'
 import { useT } from '@/i18n'
+import { industryName } from '@/lib/industries'
 import { Panel, toastResp } from './parts'
 import {
   scrapeSources, scrapeSourceCreate, scrapeSourceUpdate, scrapeSourceStatus, scrapeSourceRun,
@@ -33,7 +34,7 @@ function tierTag(tier: number): React.ReactNode {
 
 /** 数据源面板组件（超管 L4）：数据源 CRUD/启停/手动采集 + 待审池批量审批 + 概览 */
 export default function DataSourcesP() {
-  const [, t] = useT()
+  const [lang, t] = useT()
   // ---- 数据源 ----
   const [sources, setSources] = useState<ScrapeSource[]>([])
   const [summary, setSummary] = useState<ScrapeSummary | null>(null)
@@ -162,7 +163,7 @@ export default function DataSourcesP() {
     { colKey: 'kind', title: '类型', cell: ({ row }: any) => kindName(row.kind) },
     { colKey: 'pack_type', title: '包类型', cell: ({ row }: any) => row.pack_type === 'industry' ? '行业包' : '语言文化包' },
     { colKey: 'lang', title: '语言', cell: ({ row }: any) => row.lang || '不限' },
-    { colKey: 'industry', title: '行业', cell: ({ row }: any) => row.industry || '—' },
+    { colKey: 'industry', title: '行业', cell: ({ row }: any) => row.industry ? industryName(row.industry, lang) : '—' },
     { colKey: 'tier', title: '可信度', cell: ({ row }: any) => tierTag(row.tier) },
     { colKey: 'base_url', title: 'URL', cell: ({ row }: any) => row.base_url ? <span style={{ wordBreak: 'break-all' }}>{row.base_url}</span> : '—' },
     { colKey: 'last_status', title: '最近状态', cell: ({ row }: any) => <span style={{ color: row.last_status === 'ok' ? '#2f9e44' : '#d03050' }}>{row.last_status || '未采集'}</span> },

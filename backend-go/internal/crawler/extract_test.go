@@ -2,6 +2,8 @@ package crawler
 
 import "testing"
 
+// TestExtractJSONRobust 验证 extractJSON 对 LLM 输出中的 JSON 提取鲁棒性：
+// 覆盖带前后缀文本、含花括号值、Markdown 代码块、破损前导 JSON 等多种形态。
 func TestExtractJSONRobust(t *testing.T) {
 	s1 := `这是内容{"entries":[{"src":"a {x}","tgt":"b } y"}]}`
 	if got := extractJSON(s1); got != `{"entries":[{"src":"a {x}","tgt":"b } y"}]}` {
@@ -29,6 +31,7 @@ func TestExtractJSONRobust(t *testing.T) {
 	}
 }
 
+// TestParseLLMOutputArray 验证 parseLLMOutput 解析顶层数组 JSON（条目对象列表）与安全句对象。
 func TestParseLLMOutputArray(t *testing.T) {
 	// 顶层数组：元素为条目对象
 	out, err := parseLLMOutput(`[{"src":"落地窗","tgt":"Floor-to-ceiling"},{"src":"玄关","tgt":"Entryway"}]`)

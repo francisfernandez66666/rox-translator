@@ -40,6 +40,7 @@ export function FeedbackModal(props: { target: FeedbackTarget; onClose: () => vo
     props.target.source_text ||
     (props.target.translations && Object.keys(props.target.translations).length)
   )
+  // ctxPreview 反馈上下文中源文的前 40 字符预览（仅用于勾选框旁提示）
   const ctxPreview = (props.target.source_text || '').slice(0, 40)
 
   // 提交反馈：校验非空 → 调用接口 → 成功提示并关闭弹窗
@@ -182,6 +183,7 @@ export function EmailBindModal(props: { hasOldEmail: boolean; oldEmail?: string;
   const [sendingNew, setSendingNew] = useState(false)
   const [sendingOld, setSendingOld] = useState(false)
 
+  // valid 新邮箱格式校验（简单正则：非空用户名 + 域名）
   const valid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(newEmail.trim())
 
   // 通用倒计时启动：置 60 并在每秒递减至 0 后清除定时器

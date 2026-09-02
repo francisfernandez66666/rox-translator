@@ -40,6 +40,7 @@ export function getAuthToken(): string {
 // 全局 401 拦截：登录态失效时清 token 并跳回登录页。
 // 登录/注册等自身接口返回 401（如凭证错误）不触发跳转，避免循环。
 let authRedirecting = false
+// handleUnauthorized 统一处理 401 响应：清除登录态并跳转回登录页（登录/注册接口自身除外，避免循环）
 function handleUnauthorized(url: string) {
   if (url.includes('/api/auth/login') || url.includes('/api/auth/register')) return
   setAuthToken('') // 清除本地 token（同步清空内存与 localStorage）

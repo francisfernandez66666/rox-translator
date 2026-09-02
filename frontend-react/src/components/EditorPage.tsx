@@ -15,6 +15,7 @@ interface RowState {
   note: string
 }
 
+// STATUS_OPTIONS 译文状态选项：待处理/通过/驳回，供每行的状态下拉框选择
 const STATUS_OPTIONS = [
   { label: '待处理', value: 'pending' },
   { label: '通过', value: 'approved' },
@@ -39,6 +40,7 @@ function highlightTerms(text: string, terms: string[]): React.ReactNode {
   )
 }
 
+/** EditorPage · 职责说明：对照编辑器页面，双栏展示源文与可编辑译文，支持逐段修改/通过/驳回并保存到后端 */
 export default function EditorPage() {
   const [ticketId, setTicketId] = useState('')
   const [lang, setLang] = useState('en')
@@ -49,6 +51,7 @@ export default function EditorPage() {
   const [rows, setRows] = useState<Record<number, RowState>>({})
   const [loading, setLoading] = useState(false)
 
+  // load 加载工单分段：输入为数字 ID 走 getSegments，为工单号（T 开头）走 getSegmentsByKey，并初始化每行的编辑态
   const load = useCallback(async () => {
     const raw = String(ticketId || '').trim()
     if (!raw) {
@@ -112,14 +115,18 @@ export default function EditorPage() {
     }
   }, [ticketId, lang])
 
+  // rowOf 取某分段的本地编辑态，尚未编辑时回退到系统译文/状态/批注
   const rowOf = (s: EditorSegment): RowState =>
     rows[s.index] || { edited_text: s.edited_text || s.target, status: s.status || 'pending', note: s.note || '' }
 
+  // getRow 按序号取本地编辑态，无记录时返回空默认值
   const getRow = (idx: number): RowState => rows[idx] || { edited_text: '', status: 'pending', note: '' }
 
+  // update 局部更新某分段的编辑态字段（与已有状态合并）
   const update = (idx: number, patch: Partial<RowState>) =>
     setRows((prev) => ({ ...prev, [idx]: { ...getRow(idx), ...patch } }))
 
+  // dirtyEdits 对比系统原值，筛出有改动的分段列表（供保存时提交给后端）
   const dirtyEdits = useMemo<SegmentEdit[]>(() => {
     const out: SegmentEdit[] = []
     for (const s of segments) {
@@ -131,6 +138,7 @@ export default function EditorPage() {
     return out
   }, [segments, rows])
 
+  // save 将有改动的分段提交到后端保存，成功后提示并重新加载
   const save = useCallback(async () => {
     const id = Number(ticketId)
     if (!dirtyEdits.length) {

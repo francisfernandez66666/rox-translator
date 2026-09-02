@@ -32,11 +32,15 @@ import DataSourcesP from './DataSourcesP'
 
 type Any = Record<string, any>
 
+// 面板 D 顶部筛选行共用样式：弹性布局，横向排列并允许换行
 const rowStyle: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }
+// rowMt 在 rowStyle 基础上增加上边距（用于非首行区域）
 const rowMt: any = { ...rowStyle, marginTop: 8 }
+// rowTop 在 rowStyle 基础上用上虚线分隔，垫高上内边距（用于分区分隔）
 const rowTop: any = { ...rowStyle, marginTop: 8, borderTop: '1px dashed #e0e0e0', paddingTop: 10 }
 // 审批结果文本样式：成功显绿、失败显红，统一字号与间距
 const resStyle = (ok: boolean): any => ({ color: ok ? '#1a7f37' : '#c0392b', fontSize: 13, marginTop: 6 })
+// cardStyle 卡片通用样式：浅色边框、圆角、内边距与下间距（用于分卡展示审批/工单详情）
 const cardStyle: any = { border: '1px solid #e3e6ef', borderRadius: 8, padding: 14, marginBottom: 12 }
 
 /** firstTranslation 从工单载荷 JSON 中取首个语言的译文（供审批终稿预填；解析失败返回空） */

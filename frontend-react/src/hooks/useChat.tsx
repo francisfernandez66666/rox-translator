@@ -124,6 +124,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } catch { return false }
   }, [])
 
+  // 首屏健康检查：后端离线时每 1s 重试最多 30 次；卸载或重试成功即停止
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -188,6 +189,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // 读取当前翻译模式：fast（快速）或 pro（专业），默认 professional
   const currentMode = (): string => localStorage.getItem('translate_mode') || 'pro'
 
+  // sendMessage 发送文本翻译：未指定模式时透传当前翻译模式（默认 pro），以 SSE 流式回填助手气泡
   const sendMessage = useCallback((text: string, options: Record<string, unknown> = {}) => {
     if (!text.trim()) return Promise.resolve()
     const opts = { ...options }

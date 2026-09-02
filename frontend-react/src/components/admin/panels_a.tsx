@@ -27,6 +27,7 @@ function auditActionLabel(a: string): string {
 	return v && v !== key ? v : a
 }
 
+// Any 简化别名：接口返回的非强类型数据统一用 any 承接，避免逐处标注
 type Any = any
 
 /** Vue 版 shortJSON：把 before/after 的 JSON 字符串压成「k=v,k=v…」摘要（最多 3 键） */
@@ -615,6 +616,7 @@ export function InvitesP() {
   const [dlg, setDlg] = useState(false)
   // 新建邀请码表单
   const [code, setCode] = useState('')
+  // 归属租户 id（仅超管可选；企业用户强制绑定本企业）
   const [tenantId, setTenantId] = useState(0)
 
   /** 加载邀请码列表（兼容后端返回 invite_codes / codes 两种字段名） */
@@ -670,6 +672,7 @@ export function AgreementsP() {
   const [, t, tpl] = useT()
   // 用户列表数据
   const [rows, setRows] = useState<Any[]>([])
+  // 表格加载中状态
   const [loading, setLoading] = useState(false)
 
   /** 加载用户列表（获取协议签署状态） */

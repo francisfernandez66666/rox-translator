@@ -10,6 +10,7 @@ import { useT } from '@/i18n'
 import { meContext } from '@/api'
 import { PasswordModal, EmailBindModal, DeactivateModal } from './modals'
 
+// Props 账号菜单组件的入参（区分前台/后台的入口配置）
 interface Props {
   /** 前台专用：是否展示「进入后台」入口 */
   showAdminConsole?: boolean

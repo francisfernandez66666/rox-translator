@@ -96,20 +96,24 @@ export function renderMarkdown(text: string): string {
 function getFileName(path: string): string {
   try { return decodeURIComponent(path.split('/').pop() || path.split('\\').pop() || path) } catch { return path }
 }
+// getFileIcon 根据文件扩展名返回对应的展示图标（如 Word/PPT/Excel/PDF/文本等）
 function getFileIcon(path: string): string {
   const ext = path.split('.').pop()?.toLowerCase() || ''
   const map: Record<string, string> = { docx: 'W', doc: 'W', pptx: 'P', ppt: 'P', xlsx: 'X', xls: 'X', csv: 'X', pdf: '📄', md: '📝', txt: '📝' }
   return map[ext] || '📄'
 }
+// getFileTypeLabel 返回文件类型中文标签（Word/PPT/Excel/PDF 等）
 function getFileTypeLabel(path: string): string {
   const ext = path.split('.').pop()?.toLowerCase() || ''
   const key = `msg.type.${ext}`
   const v = t(key)
   return v !== key ? v : t('msg.file')
 }
+// isImage 判断路径是否为常见图片格式
 function isImage(path: string): boolean {
   return /\.(png|jpg|jpeg|gif|webp|bmp)$/i.test(path)
 }
+// isDocx 判断路径是否以 .docx 结尾（Word 文档）
 function isDocx(path: string): boolean {
   return path.toLowerCase().endsWith('.docx')
 }

@@ -7,13 +7,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button, Input, Select, Checkbox, Dialog, MessagePlugin } from 'tdesign-react'
 import {
-  login, authRegister, registerIndustries, sendEmailCode, registerConfig,
+  login, authRegister, sendEmailCode, registerConfig,
   forgotPassword, resetPassword, changePassword,
   setAuthToken, setActiveTenantId,
 } from '@/api'
 import { t, tpl, useT, toggleLang } from '@/i18n'
 import { roleLevel } from '@/stores/auth'
 import { useBranding, DEFAULT_BRAND_NAME, BrandBgLayer, parseLoginLayout, parseCardPos } from '@/branding'
+import { industryCodeOf, industryOptions } from '@/lib/industries'
 import type { AuthUser } from '@/api'
 
 // ============ 本文件职责中文说明 ============
@@ -28,7 +29,7 @@ interface Props {
 
 // 默认导出组件：登录 / 自助注册 / 忘记密码 一站式页面（等价 Vue Login.vue）
 export default function Login({ mode, onLogin }: Props) {
-  const [, , tplF] = useT()
+  const [lang, , tplF] = useT()
   const branding = useBranding()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -52,7 +53,6 @@ export default function Login({ mode, onLogin }: Props) {
   // 企业用户角色选择：admin=我是管理员（新建企业）；member=我是普通成员（须凭企业邀请码加入）
   const [roleChoice, setRoleChoice] = useState<'admin' | 'member'>('admin')
   const [form, setForm] = useState({ code: '', name: '', invite: '', email: '', emailCode: '', industry: '' })
-  const [industries, setIndustries] = useState<Array<{ code: string; name: string }>>([])
   const [emailVerifyOn, setEmailVerifyOn] = useState(false)
   const [captchaOn, setCaptchaOn] = useState(false)
   const [codeCooldown, setCooldown] = useState(0)
@@ -75,14 +75,10 @@ export default function Login({ mode, onLogin }: Props) {
     } catch { /* ignore */ }
   }, [mode])
 
-  // 仅前台(home)加载注册配置与行业列表：邮箱验证开关、人机验证开关、Turnstile 站点配置
+  // 仅前台(home)加载注册配置：邮箱验证开关、人机验证开关、Turnstile 站点配置
   useEffect(() => {
     if (mode !== 'home') return
     ;(async () => {
-      try {
-        const r = await registerIndustries()
-        if (r.success) setIndustries(((r as unknown as { industries?: Array<{ code: string; name: string }> }).industries) || [])
-      } catch { /* ignore */ }
       try {
         const c = await registerConfig()
         if (c.success) {
@@ -207,7 +203,7 @@ export default function Login({ mode, onLogin }: Props) {
         email: form.email.trim() || undefined,
         email_code: form.emailCode || undefined,
         captcha_token: captchaTokenRef.current || undefined,
-        industry: (regType === 'enterprise' ? (form.industry || undefined) : undefined),
+        industry: (regType === 'enterprise' ? (form.industry ? industryCodeOf(form.industry) : undefined) : undefined),
         ref,
         agreed,
       })
@@ -347,7 +343,7 @@ export default function Login({ mode, onLogin }: Props) {
                     <Input value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder={t('login.orgName')} />
                     <Select value={form.industry} onChange={(v) => setForm({ ...form, industry: v as string })}
                             placeholder={t('login.selectIndustry')} clearable
-                            options={industries.map((i) => ({ label: i.name, value: i.code }))} />
+                            options={industryOptions(lang)} />
                   </>
                 )}
               </>
