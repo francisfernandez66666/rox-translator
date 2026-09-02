@@ -1,6 +1,19 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-02（符号残留根因修复 + 功能0/1/2/3/4/5/6 收尾发版；已部署演示+生产，main 分支 2dc29b0）
+> 最后更新：2026-09-02（前端交互与前后端契约审计修复发版；已部署演示+生产，main 分支 0ee5b97）
+
+## 〇-VIII、前端交互与前后端契约审计修复（2026-09-02，提交 0ee5b97）
+
+> 全面审计 React 迁移后前端交互一致性/显示统一性/前后端契约：程序化比对前端 API 调用与后端路由（模板串插值经哈希键校验），并逐项核对弹窗/取消链路、字段口径。
+
+| 块 | 内容 |
+|---|---|
+| **余额面板 403（bug1）** | `selfservice.tsx` BalancePanel 原调 `/api/billing/balance`（后端 `handleBalance` 需租户管理员 `requireTenantAdmin`），普通用户访问「我的余额」(/billing) 403 显示错误卡片。改走 `/api/me/package`（登录用户即可读），读 `permanent_balance`/`sub_grants_left`/`balance_tokens` 三字段 |
+| **死代码路由（bug2）** | `api/feedback.ts` 删除 `adminFeedbacks()` 与无用 `FeedbackItem`（前端唯一指向不存在路由的调用——后端仅 `/api/admin/feedbacks/resolve`，管理台列表实际走 `/api/feedback/list`） |
+| **字段缺口（bug3）** | ChatWindow 读后端不存在的 `estimate_rate` 字段，句数换算恒走 500 兜底；改按「可用 token ÷ ≈句数」（balance_tokens/balance_sentences_approx）反推实际换算率，无余额时兜底 500 句/token |
+| **确认弹窗语义（ux4）** | 工单「✕取消」动作与确认弹窗「取消」按钮同名，造成「点了取消没反应、再点确定才取消」的交互歧义（链路本身正确，是文案混淆）。`confirmDialog` 增加 `confirmText`/`cancelText` 定制按钮文案；工单取消/删除确认按钮显示「确认取消」/「确认删除」（中英 i18n） |
+| **审计确认无问题** | 登录强制改密/邮箱绑定/注销/密码/反馈弹窗、Bell 通知、AccountMenu、ModeToggle、KB 上传、审批弹窗、用量看板、支付/发票/订单（仅超管面板调用）等交互与契约均一致；159 个前端 API 调用 vs 后端路由无其他 URL 级不匹配 |
+| **验证与发布** | npm typecheck + vite build 通过；已部署生产（langcross.lexicorn.cn）与演示（rox-test.lexicorn.cn），主页与 `/api/health` 全 200 |
 
 ## 〇-VII、符号残留根因修复 + 功能批量收尾发版（2026-09-02，提交 2dc29b0 / 7654cbc）
 
@@ -247,10 +260,10 @@
 - **PDF 字体**：服务器装 `fonts-noto-cjk`（NotoSansCJK-Regular.ttc，拉丁+CJK 全覆盖）；`PDF_FONT_PATH` 指向它。旧 DroidSansFallbackFull.ttf 无拉丁字形（渲染为框框），勿再使用
 - **Python 依赖**：`/opt/translator/.venv` 内 fpdf2/pdf2docx/python-docx/Pillow/fonttools；系统需 poppler-utils、libreoffice-writer/impress/calc。★ tesseract/pytesseract 已随 OCR 移除卸载，勿再装回
 - **双桶台账**：额度唯一扣减入口 DeductWithGrants；paid 订单按「包内句数×estimate_tokens_per_sentence(默认500)」折算入台账（订单 amount_tokens 恒为 0，不可直接用）
-- **前端弹窗规范**：应用内 Teleport 遮罩弹窗（fb-mask/fb-modal 样式需组件内自带，scoped 不跨组件共享）；禁用浏览器 alert/confirm 于关键交互
+- **前端弹窗规范**：应用内弹窗统一走 TDesign `Dialog`/`DialogPlugin`（`confirmDialog`/`promptText` 封装于 `frontend-react/src/components/uiDialogs.tsx`，取消按钮触发 `onClose` 保证 resolve(false)）；禁用浏览器 alert/confirm 于关键交互
 - **lxml 陷阱**：元素代理对象回收后 id() 复用，严禁按 id() 去重节点
 - **python-docx 陷阱**：`para.runs` 每次访问返回新代理列表；`run.text=` 会删除该 run 的 drawing/pict 子元素
-- **SQLite 并发红线**：DSN `_txlock=immediate` 全局生效；事务内严禁经独立连接再写库（会撞 busy_timeout 静默失败——UAT-2 教训）；句数镜像一律 json_set 原子语句或 IMMEDIATE 事务
+- **SQLite 并发红线（仅本地开发/旧库适用；生产已切 PostgreSQL，DB_DRIVER=postgres）**：DSN `_txlock=immediate` 全局生效；事务内严禁经独立连接再写库（会撞 busy_timeout 静默失败——UAT-2 教训）；句数镜像一律 json_set 原子语句或 IMMEDIATE 事务
 - **新增环境变量（第四批）**：`TRUST_PROXY_XFF=1`（反代取真实IP，直连勿开）；`FILE_HARDGATE_MAX_SEC`（硬闸补漏墙钟预算，默认600s）
 - **邮件相关环境变量**：`MAIL_ENABLED` / `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS`（默认发信箱 `noreply@lexicorn.cn`，SMTP 端口 465）；`INFO_SMTP_ENABLED` / `INFO_SMTP_USER` / `INFO_SMTP_PASS`（产品手册等专用发信箱 `info@lexicorn.cn`，默认 `smtp.mxhichina.com:465`）。均在 systemd `translator.service` 的 `Environment` 中配置。
 - **注册行业口径**：缺选/错选行业→通用行业(general)兜底不再拒绝；通用包由 EnsureDefaultPackages 在租户1幂等创建
