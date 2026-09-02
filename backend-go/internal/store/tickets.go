@@ -108,6 +108,12 @@ func (s *Store) GetTicketGlobal(id int64) (*Ticket, error) {
 	return scanTicketFull(row)
 }
 
+// GetTicketByNo 按工单号查询工单（对应用户粘贴「工单号 T20260902...」而非数字 ID 的场景）。
+func (s *Store) GetTicketByNo(no string) (*Ticket, error) {
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), created_at, updated_at FROM tickets WHERE ticket_no=?", no)
+	return scanTicketFull(row)
+}
+
 // SetTicketResultPath 写入结果文件路径。
 func (s *Store) SetTicketResultPath(id int64, path string) error {
 	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tickets SET result_path=?, updated_at=? WHERE id=?", path, time.Now().Format(time.RFC3339), id)

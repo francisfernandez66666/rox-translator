@@ -17,6 +17,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"translator/internal/store"
@@ -192,6 +193,9 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 
 // handleRegisterIndustries 注册行业列表接口（无需登录）。
 // 说明：行业来源 = 默认租户（tenant 1）的 industry 类型 KB 包；超管在默认租户下创建行业包即成为注册选项。
+// ★ 2026-09 修复：①跳过旧版占位包（code=industry，名为"行业包"，非真实行业）；
+//    ②同 code 合并去重（历史遗留可能出现多个 general/同码包）；
+//    ③展示名清理：去掉「行业包/包」后缀（前端下拉不显示"包"字）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。
 // 返回: success=true 时携带 industries 数组（code/name）。
 func (s *Server) handleRegisterIndustries(w http.ResponseWriter, r *http.Request) {
@@ -200,12 +204,27 @@ func (s *Server) handleRegisterIndustries(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	industries := make([]map[string]string, 0, len(pkgs))
+	seen := map[string]bool{}
+	industries := []map[string]string{}
 	for _, p := range pkgs {
-		// 仅 industry 类型包作为注册行业选项
-		if p.PackType == store.PackIndustry {
-			industries = append(industries, map[string]string{"code": p.Code, "name": p.Name})
+		// 仅 industry 类型包作为注册行业选项；跳过旧版占位「行业包」
+		if p.PackType != store.PackIndustry || p.Code == "industry" {
+			continue
 		}
+		if seen[p.Code] {
+			continue // 同 code 合并去重（保首个）
+		}
+		seen[p.Code] = true
+		industries = append(industries, map[string]string{"code": p.Code, "name": cleanIndustryName(p.Name)})
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "industries": industries})
+}
+
+// cleanIndustryName 行业包展示名清理：仅去掉结尾「包」字（如 汽车行业包→汽车行业，
+// 通用行业 等无「包」后缀原名不动），避免前端下拉出现「某某行业包」。
+func cleanIndustryName(name string) string {
+	if strings.HasSuffix(name, "包") && len(name) > 1 {
+		return strings.TrimSuffix(name, "包")
+	}
+	return name
 }

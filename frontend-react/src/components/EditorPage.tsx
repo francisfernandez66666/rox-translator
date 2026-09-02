@@ -6,7 +6,7 @@
 // ============================================================================
 import { useCallback, useMemo, useState } from 'react'
 import { Button, Input, Select, Textarea, Tag, MessagePlugin } from 'tdesign-react'
-import { getSegments, saveSegments, type EditorSegment, type SegmentEdit } from '@/api/tickets'
+import { getSegments, getSegmentsByKey, saveSegments, type EditorSegment, type SegmentEdit } from '@/api/tickets'
 
 /** 行本地编辑态 */
 interface RowState {
@@ -50,9 +50,39 @@ export default function EditorPage() {
   const [loading, setLoading] = useState(false)
 
   const load = useCallback(async () => {
-    const id = Number(ticketId)
+    const raw = String(ticketId || '').trim()
+    if (!raw) {
+      void MessagePlugin.warning('请输入工单 ID 或工单号（如 T20260902…）')
+      return
+    }
+    const id = Number(raw)
     if (!id) {
-      void MessagePlugin.warning('请输入工单 ID')
+      // 粘贴了工单号（T 开头非数字）→ 由后端按 ticket_no 回查，直接传字符串
+      setLoading(true)
+      try {
+        const resp = await getSegmentsByKey(raw, lang)
+        if (!resp.success) {
+          void MessagePlugin.error(resp.message || '加载失败')
+          return
+        }
+        setSegments(resp.segments || [])
+        setTerms(resp.terms || [])
+        setType(resp.type || 'text')
+        setLangs(resp.langs || (resp.lang ? [resp.lang] : []))
+        const init: Record<number, RowState> = {}
+        for (const s of resp.segments || []) {
+          init[s.index] = {
+            edited_text: s.edited_text || s.target,
+            status: s.status || 'pending',
+            note: s.note || '',
+          }
+        }
+        setRows(init)
+      } catch (e) {
+        void MessagePlugin.error('加载失败：' + String(e))
+      } finally {
+        setLoading(false)
+      }
       return
     }
     setLoading(true)

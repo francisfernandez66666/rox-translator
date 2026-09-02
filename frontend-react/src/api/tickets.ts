@@ -196,6 +196,11 @@ export async function getSegments(ticketId: number, lang: string): Promise<Segme
   return request(`/api/tickets/segments?id=${ticketId}&lang=${encodeURIComponent(lang)}`, { headers: authHeaders() })
 }
 
+/** getSegmentsByKey 按 ID 或工单号读取逐段对照（后端兼容双标识解析） */
+export async function getSegmentsByKey(ticketKey: string, lang: string): Promise<SegmentsResp> {
+  return request(`/api/tickets/segments?id=${encodeURIComponent(ticketKey)}&lang=${encodeURIComponent(lang)}`, { headers: authHeaders() })
+}
+
 /** saveSegments 保存逐段编辑/通过/驳回批注 */
 export async function saveSegments(ticketId: number, lang: string, edits: SegmentEdit[]): Promise<AdminResp> {
   return request(`/api/tickets/segments/save?id=${ticketId}&lang=${encodeURIComponent(lang)}`, {

@@ -482,10 +482,19 @@ func (s *Server) handleEditorExportDownload(w http.ResponseWriter, r *http.Reque
 	http.ServeFile(w, r, abs)
 }
 
-// parseTicketIDLang 从查询参数解析工单 ID 与语言（lang 缺省取工单首目标语言）。
+// parseTicketIDLang 从查询参数解析工单标识与语言（lang 缺省取工单首目标语言）。
+// ★ 兼容双标识（2026-09 修复）：前端可能粘贴数字 ID 或「工单号 T20260902...」，
+//   后者经 id 数值解析得 0，需回退按 ticket_no 精确查行再取其 ID。
 func (s *Server) parseTicketIDLang(r *http.Request) (int64, string) {
-	id, _ := parseInt64(r.URL.Query().Get("id"))
+	raw := r.URL.Query().Get("id")
+	id, _ := parseInt64(raw)
 	lang := r.URL.Query().Get("lang")
+	// 数字解析失败（粘贴工单号）→ 回退按工单号精确查找
+	if id <= 0 && strings.TrimSpace(raw) != "" {
+		if t, err := s.Store.GetTicketByNo(strings.TrimSpace(raw)); err == nil && t != nil {
+			id = t.ID
+		}
+	}
 	if lang == "" {
 		if t, err := s.Store.GetTicketGlobal(id); err == nil && t != nil {
 			if langs := strings.Split(t.TargetLangs, ","); len(langs) > 0 {
