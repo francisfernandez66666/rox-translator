@@ -8,7 +8,7 @@ import {
 } from 'tdesign-react'
 import { confirmDialog } from '@/components/uiDialogs'
 import {
-  kbPackages, kbPackageCreate, kbPackageDelete, kbEntries, kbEntryAdd, kbEntryDelete,
+  kbPackages, kbPackageCreate, kbPackageDelete, kbEntries, kbEntryAdd, kbEntryDelete, kbEntryUpdate,
   kbEntriesImport, bitextImport, tmxImport,
   kbPackageStatus, kbPackageShare, kbIndexRebuild,
   safetyPhrases, safetyPhraseAdd, safetyPhraseDelete, safetyPhraseStatus, safetyBulkImport,
@@ -126,6 +126,8 @@ export function KbP() {
   // 新建包与新建条目表单
   const [pForm, setPForm] = useState<Any>({ code: '', name: '', pack_type: 'department' })
   const [eForm, setEForm] = useState<Any>({ source_text: '', layer: 2, target_lang: 'en', target_text: '', module: '' })
+  // ★ 编辑条目：非空时处于「编辑模式」，保存调用 kbEntryUpdate
+  const [editingId, setEditingId] = useState<number | null>(null)
   // 批量文本导入
   const [bulkText, setBulkText] = useState('')
   const [bulkTextMsg, setBulkTextMsg] = useState('')
@@ -143,6 +145,11 @@ export function KbP() {
 
   // ---- 语言文化规范（安全句）----
   const [safetyList, setSafetyList] = useState<Any[]>([])
+  const [safetyTotal, setSafetyTotal] = useState(0)
+  const [safetyPage, setSafetyPage] = useState(1)
+  const SAFETY_PAGE_SIZE = 20
+  const [safetyQ, setSafetyQ] = useState('')
+  const [safetyFilter, setSafetyFilter] = useState<Any>({ lang: '', kind: '' })
   const [safetyPkgId, setSafetyPkgId] = useState<number>(0)
   const [safetyStatusFilter, setSafetyStatusFilter] = useState('')
   // 批量 JSON 导入安全句
@@ -174,14 +181,11 @@ export function KbP() {
   // 部门列表（用于跨部门包的跨部门范围选择）
   const deptOrgs = useMemo(() => (orgs || []).filter((o: OrgInfo) => o.type === 'dept'), [orgs])
 
-  // 安全句相关派生状态
+  // 安全句相关派生状态（列表已由服务端分页/过滤，hasReplace 用整表计数判断列显隐）
   const localePackages = useMemo(() => pkgs.filter((p: Any) => p.pack_type === 'locale'), [pkgs])
   // 文件导入所用「选包」Cascader 选项由前台 KbUploadDialog 内部构建，无需在此重复
-  const filteredSafety = useMemo(() => safetyList.filter((s: Any) =>
-    (!safetyPkgId || s.package_id === safetyPkgId) &&
-    (!safetyStatusFilter || (s.status || 'approved') === safetyStatusFilter)
-  ), [safetyList, safetyPkgId, safetyStatusFilter])
-  const hasReplace = useMemo(() => filteredSafety.some((s: Any) => s.kind === 'replace'), [filteredSafety])
+  const filteredSafety = useMemo(() => safetyList, [safetyList])
+  const hasReplace = useMemo(() => safetyList.some((s: Any) => s.kind === 'replace'), [safetyList])
   const phrasePlaceholder = useMemo(() =>
     sf.kind === 'forbidden' ? t('kb.phraseForbidden') : sf.kind === 'replace' ? t('kb.phraseReplace') : t('kb.phraseStyle')
   , [sf.kind, t])
@@ -192,10 +196,10 @@ export function KbP() {
     if (r.success) {
       const list = ((r as unknown as { packages?: Any[] }).packages) || []
       setPkgs(list)
+      // ★ 2026-09-03：条目数由后端一次 GROUP BY 附带（entry_count），
+      //   替代原来「每包一次 kbEntries(count:true)」的 N+1 循环，消除面板卡顿。
       const map: Record<number, number> = {}
-      for (const p of list) {
-        try { const e = await kbEntries(Number(p.id), { count: true }); map[Number(p.id)] = Number((e as unknown as { total?: number }).total) || 0 } catch { map[Number(p.id)] = 0 }
-      }
+      for (const p of list) map[Number(p.id)] = Number((p as Any).entry_count) || 0
       setEntriesMap(map)
     }
     // 同步加载组织树，供部门包/企业包映射为部门名 / 租户名
@@ -209,15 +213,51 @@ export function KbP() {
     } catch { /* 忽略：组织树缺失时回退到包自带的 tenant_name / org_name */ }
   }, [activeTenantId])
 
-  // 加载语言文化规范（安全句）列表
+  // 加载语言文化规范（安全句）列表（服务端分页 + 过滤）
   const loadSafety = useCallback(async () => {
-    const r = await safetyPhrases()
+    const r = await safetyPhrases({
+      package_id: safetyPkgId || undefined,
+      status: safetyStatusFilter || undefined,
+      lang: safetyFilter.lang || undefined,
+      kind: safetyFilter.kind || undefined,
+      q: safetyQ || undefined,
+      page: safetyPage,
+      page_size: SAFETY_PAGE_SIZE,
+    })
     if (r.success) {
       const list = ((r as unknown as { phrases?: Any[] }).phrases) || []
       setSafetyList(list)
+      setSafetyTotal(Number((r as unknown as { total?: number }).total) || 0)
       if (!safetyPkgId && localePackages.length) setSafetyPkgId(Number((localePackages[0] as Any).id))
     }
-  }, [safetyPkgId, localePackages])
+  }, [safetyPkgId, localePackages, safetyPage, safetyStatusFilter, safetyFilter, safetyQ])
+
+  // 重新查询安全句（显式传参，避免依赖闭包里的陈旧状态）
+  const querySafety = useCallback(async (query: Any) => {
+    const r = await safetyPhrases({
+      package_id: Number(query.pkg_id) || undefined,
+      lang: query.lang || undefined,
+      kind: query.kind || undefined,
+      status: query.status || undefined,
+      q: query.q || undefined,
+      page: Number(query.page),
+      page_size: SAFETY_PAGE_SIZE,
+    })
+    if (r.success) {
+      setSafetyList(((r as unknown as { phrases?: Any[] }).phrases) || [])
+      setSafetyTotal(Number((r as unknown as { total?: number }).total) || 0)
+    }
+  }, [])
+
+  // 应用安全句过滤条件：同步状态 + 立即按新条件查询（过滤变更回第 1 页）
+  const applySafetyQuery = useCallback((q: Any) => {
+    setSafetyPkgId(Number(q.pkg_id) || 0)
+    setSafetyStatusFilter(String(q.status || ''))
+    setSafetyFilter((f: Any) => ({ ...f, lang: String(q.lang || ''), kind: String(q.kind || '') }))
+    setSafetyQ(String(q.q || ''))
+    setSafetyPage(1)
+    void querySafety({ ...q, page: 1 })
+  }, [querySafety])
 
   // 初始化加载包与安全句
   useEffect(() => { void loadPackages() }, [loadPackages])
@@ -310,6 +350,30 @@ export function KbP() {
     await loadEntries({ id: pkgId })
     await loadPackages()
   }
+  // 保存条目：编辑模式走更新，否则新增
+  async function saveEntry(pkgId: number | null) {
+    if (!eForm.source_text) { MessagePlugin.warning(t('kb.errorSourceRequired')); return }
+    if (editingId != null) {
+      const r = await kbEntryUpdate({
+        id: editingId, layer: Number(eForm.layer || 2), source_text: String(eForm.source_text),
+        target_lang: String(eForm.target_lang || 'en'), target_text: String(eForm.target_text), module: String(eForm.module || ''),
+      } as never)
+      if (!r.success) { MessagePlugin.error(r.message); return }
+      MessagePlugin.success(t('kb.saved'))
+      setEditingId(null)
+      setEForm({ source_text: '', layer: 2, target_lang: 'en', target_text: '', module: '' })
+      if (pkgId != null) await loadEntries({ id: pkgId })
+      await loadPackages()
+      return
+    }
+    if (pkgId == null) return
+    await addEntry(pkgId)
+  }
+  // 进入编辑模式：回填表单
+  async function startEditEntry(e: Any) {
+    setEditingId(Number(e.id))
+    setEForm({ source_text: String(e.source_text || ''), layer: Number(e.layer) || 2, target_lang: String(e.target_lang || 'en'), target_text: String(e.target_text || ''), module: String(e.module || '') })
+  }
   // 删除单条条目
   async function removeEntry(e: Any) {
     const r = await kbEntryDelete(Number(e.id))
@@ -364,6 +428,11 @@ export function KbP() {
   }
 
   // ---- 安全句 ----
+  // 刷新当前安全句列表（沿用现有过滤/页码，供增删改后回填）
+  const reloadSafety = useCallback(async () => {
+    await querySafety({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ, page: safetyPage })
+  }, [querySafety, safetyPkgId, safetyStatusFilter, safetyFilter, safetyQ, safetyPage])
+
   // 新增语言文化规范
   async function addSafety() {
     if (!safetyPkgId || !sf.phrase.trim()) return
@@ -373,20 +442,20 @@ export function KbP() {
     } as never)
     if (!r.success) { MessagePlugin.error(r.message); return }
     setSf({ ...sf, phrase: '', replacement: '' })
-    await loadSafety()
+    await reloadSafety()
   }
   // 审核/变更安全句状态
   async function setSafetyStatus(sp: Any, status: string) {
     const r = await safetyPhraseStatus(Number(sp.id), status)
     if (!r.success) { MessagePlugin.error(r.message); return }
-    await loadSafety()
+    await reloadSafety()
   }
   // 删除安全句
   async function removeSafety(sp: Any) {
     if (!(await confirmDialog({ body: t('kb.deleteConfirm') }))) return
     const r = await safetyPhraseDelete(Number(sp.id))
     if (!r.success) { MessagePlugin.error(r.message); return }
-    await loadSafety()
+    await reloadSafety()
   }
   // 批量 JSON 导入安全句
   async function importSafety() {
@@ -397,7 +466,7 @@ export function KbP() {
     if (!r.success) { MessagePlugin.error(r.message); return }
     MessagePlugin.success(tpl('kb.bulkDone', { n: (r as unknown as { added?: number }).added ?? 0 }))
     setBulkJson('')
-    await loadSafety()
+    await reloadSafety()
   }
   function kindLabel(k?: string) { return k === 'forbidden' ? t('kb.kindForbidden') : k === 'replace' ? t('kb.kindReplace') : t('kb.kindStyle') }
   function statusLabel(s?: string) { return s === 'pending' ? t('kb.pending') : s === 'rejected' ? t('kb.rejected') : t('kb.approved') }
@@ -511,7 +580,8 @@ export function KbP() {
             options={[1, 2, 3, 4].map((n) => ({ label: t('kb.layer' + n), value: n }))} style={{ width: 120 }} />
           <Input value={String(eForm.target_lang || '')} onChange={(v: any) => setEForm({ ...eForm, target_lang: v })} placeholder={t('kb.targetLangPlaceholder')} style={{ width: 120 }} />
           <Input value={String(eForm.target_text || '')} onChange={(v: any) => setEForm({ ...eForm, target_text: v })} placeholder={t('kb.translationPlaceholder')} style={{ flex: 1 }} />
-          <Button theme="primary" onClick={() => selectedPkg != null && void addEntry(selectedPkg)}>{t('kb.add')}</Button>
+          {editingId != null && <Button variant="outline" onClick={() => { setEditingId(null); setEForm({ source_text: '', layer: 2, target_lang: 'en', target_text: '', module: '' }) }}>{t('kb.cancelEdit')}</Button>}
+          <Button theme="primary" onClick={() => selectedPkg != null && void saveEntry(selectedPkg)}>{editingId != null ? t('kb.saveEdit') : t('kb.add')}</Button>
         </div>
         <details style={{ marginTop: 8 }}>
           <summary>{t('kb.bulkImportSummary')}</summary>
@@ -553,10 +623,14 @@ export function KbP() {
             { colKey: 'source_text', title: t('kb.colSource'), ellipsis: true },
             { colKey: 'target_lang', title: t('kb.colLang'), width: 90 },
             { colKey: 'target_text', title: t('kb.colTranslation'), ellipsis: true },
-            { colKey: 'op', title: '', width: 80, cell: ({ row }: any) =>
-              <Popconfirm content={t('kb.delete')} onConfirm={async () => { await removeEntry(row) }}>
-                <Button size="small" variant="text" theme="danger">{t('kb.delete')}</Button>
-              </Popconfirm> },
+            { colKey: 'op', title: '', width: 130, cell: ({ row }: any) => (
+              <Space size={4}>
+                <Button size="small" variant="text" theme="primary" onClick={() => void startEditEntry(row)}>{t('kb.edit')}</Button>
+                <Popconfirm content={t('kb.delete')} onConfirm={async () => { await removeEntry(row) }}>
+                  <Button size="small" variant="text" theme="danger">{t('kb.delete')}</Button>
+                </Popconfirm>
+              </Space>
+            ) },
           ] as never} />
       </Dialog>
 
@@ -564,11 +638,20 @@ export function KbP() {
       <Panel title={t('kb.safetyTitle')}>
         <div style={{ fontSize: 12, color: '#667', marginBottom: 8 }}>{t('kb.safetyHint')}</div>
         <div style={rowMt}>
-          <Select value={safetyPkgId} onChange={(v: any) => setSafetyPkgId(Number(v))}
+          <Select value={safetyPkgId} onChange={(v: any) => applySafetyQuery({ pkg_id: Number(v), status: safetyStatusFilter, ...safetyFilter, q: safetyQ })}
             options={localePackages.map((p: Any) => ({ label: packDisplayName(p, orgMap), value: Number(p.id) }))} style={{ minWidth: 200 }} placeholder={t('kb.selectPkg')} />
-          <Select value={safetyStatusFilter} onChange={(v: any) => setSafetyStatusFilter(String(v))}
+          <Select value={safetyStatusFilter} onChange={(v: any) => applySafetyQuery({ pkg_id: safetyPkgId, status: String(v), ...safetyFilter, q: safetyQ })}
             options={[{ label: t('kb.allStatus'), value: '' }, { label: t('kb.pending'), value: 'pending' }, { label: t('kb.approved'), value: 'approved' }, { label: t('kb.rejected'), value: 'rejected' }]} style={{ width: 140 }} />
-          <span style={{ fontSize: 12, color: '#889' }}>{t('kb.safetyScopeHint')}</span>
+          <Select value={String(safetyFilter.lang || '')} onChange={(v: any) => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, lang: String(v), kind: safetyFilter.kind, q: safetyQ })}
+            options={[{ label: t('kb.allLang'), value: '' }, ...SAFETY_LANGS.map((l: Any) => ({ label: String(l), value: String(l) }))]} style={{ width: 100 }} />
+          <Select value={String(safetyFilter.kind || '')} onChange={(v: any) => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, lang: safetyFilter.lang, kind: String(v), q: safetyQ })}
+            options={[{ label: t('kb.allKind'), value: '' }, { label: t('kb.kindStyle'), value: 'style' }, { label: t('kb.kindForbidden'), value: 'forbidden' }, { label: t('kb.kindReplace'), value: 'replace' }]} style={{ width: 110 }} />
+          <Input placeholder={t('kb.searchSafety')} value={safetyQ}
+            onChange={(v: string) => setSafetyQ(v)}
+            onEnter={() => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ })}
+            style={{ flex: 1, minWidth: 180 }} />
+          <Button size="small" theme="primary" onClick={() => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ })}>{t('kb.search')}</Button>
+          <span style={{ fontSize: 12, color: '#889' }}>{tpl('kb.safetyCount', { n: safetyTotal })}</span>
         </div>
         <div style={rowMt}>
           <Select value={String(sf.lang)} onChange={(v: any) => setSf({ ...sf, lang: v })} options={SAFETY_LANGS} style={{ width: 110 }} />
@@ -583,6 +666,18 @@ export function KbP() {
           <Button disabled={!safetyPkgId || !bulkJson.trim()} onClick={() => void importSafety()}>{t('kb.bulkImport')}</Button>
         </div>
         <Table rowKey="id" size="small" data={filteredSafety} style={{ marginTop: 8 }}
+          pagination={{
+            current: safetyPage,
+            pageSize: SAFETY_PAGE_SIZE,
+            total: safetyTotal,
+            showJumper: true,
+            onChange: async (pi: unknown) => {
+              const p = typeof pi === 'number' ? pi : Number((pi as { current?: number })?.current || 1)
+              if (p === safetyPage) return
+              setSafetyPage(p)
+              await querySafety({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ, page: p })
+            },
+          }}
           columns={[
             { colKey: 'lang', title: t('kb.colLang'), width: 80 },
             { colKey: 'kind', title: t('kb.colKind'), width: 110, cell: ({ row }: any) => kindLabel(row.kind) },

@@ -15,7 +15,7 @@
 
 import { request, authHeaders, API_BASE, type AdminResp } from './core'
 
-/** 获取行业知识库包列表 */
+/** 获取行业知识库包列表（不带头条目数 entry_count，后端一次 GROUP BY 附带） */
 export async function kbPackages(): Promise<AdminResp> {
   return request('/api/admin/kb-packages', { headers: authHeaders() })
 }
@@ -50,6 +50,11 @@ export async function kbEntries(packageId: number, params?: { layer?: number; ta
 /** 新增 KB 条目（层级/原文/目标语言/译文/模块） */
 export async function kbEntryAdd(data: { package_id: number; layer: number; source_text: string; target_lang: string; target_text: string; module: string }): Promise<AdminResp> {
   return request('/api/admin/kb-entries/add', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
+/** 更新 KB 条目（层级/原文/目标语言/译文/模块；不可改包归属） */
+export async function kbEntryUpdate(data: { id: number; layer: number; source_text: string; target_lang: string; target_text: string; module: string }): Promise<AdminResp> {
+  return request('/api/admin/kb-entries/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
 /** 删除 KB 条目 */
@@ -135,9 +140,18 @@ export interface SafetyPhrase {
   created_at: string
 }
 
-/** 列出安全句（可按语言文化包过滤） */
-export async function safetyPhrases(): Promise<AdminResp> {
-  return request('/api/admin/safety-phrases', { headers: authHeaders() })
+/** 列出安全句（可按语言文化包/语言/类型/状态过滤 + 关键词搜索 + 服务端分页） */
+export async function safetyPhrases(params?: { package_id?: number; lang?: string; kind?: string; status?: string; q?: string; page?: number; page_size?: number }): Promise<AdminResp> {
+  const qs = new URLSearchParams()
+  if (params?.package_id) qs.set('package_id', String(params.package_id))
+  if (params?.lang) qs.set('lang', params.lang)
+  if (params?.kind) qs.set('kind', params.kind)
+  if (params?.status) qs.set('status', params.status)
+  if (params?.q) qs.set('q', params.q)
+  if (params?.page) qs.set('page', String(params.page))
+  if (params?.page_size) qs.set('page_size', String(params.page_size))
+  const qstr = qs.toString()
+  return request(`/api/admin/safety-phrases${qstr ? `?${qstr}` : ''}`, { headers: authHeaders() })
 }
 
 /** 新增安全句（结构化：类型+替换词） */

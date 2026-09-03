@@ -301,6 +301,7 @@ func (s *Server) routesAdminKB() {
 	s.mux.HandleFunc("/api/admin/kb-packages/delete", s.handleKBPackageDelete)
 	s.mux.HandleFunc("/api/admin/kb-entries", s.handleKBEntries)
 	s.mux.HandleFunc("/api/admin/kb-entries/add", s.handleKBEntryAdd)
+	s.mux.HandleFunc("/api/admin/kb-entries/update", s.handleKBEntryUpdate)
 	s.mux.HandleFunc("/api/admin/kb-entries/import", s.handleKBEntriesImport)
 	s.mux.HandleFunc("/api/admin/kb-entries/delete", s.handleKBEntryDelete)
 	s.mux.HandleFunc("/api/admin/safety-phrases", s.handleSafetyPhrases)

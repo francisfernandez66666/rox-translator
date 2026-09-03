@@ -21,21 +21,22 @@ import (
 
 // KBPackage 知识库包（三级分层：企业包>行业包>语言文化习惯包，树形继承；部门包归属部门）
 type KBPackage struct {
-	ID             int64  `json:"id"`               // 包主键 ID
-	TenantID       int64  `json:"tenant_id"`        // 所属租户 ID
-	ParentID       int64  `json:"parent_id"`        // 父包 ID（0 表示根节点）
-	Code           string `json:"code"`             // 包编码（唯一标识，如 tenant/industry/locale）
-	Name           string `json:"name"`             // 包名称（如 企业包/行业包/语言文化习惯包）
-	PackType       string `json:"pack_type"`        // 包类型：tenant(企业) / industry(行业) / locale(语言文化) / department(部门)
-	Role           string `json:"role"`             // 包角色：source(匹配来源) / gate(输出闸门)
-	OrgID          int64  `json:"org_id"`           // 归属部门组织 ID（0=租户级）
-	OrgName        string `json:"org_name"`         // 归属部门名称（展示用，0=租户级时为空）
-	TenantName     string `json:"tenant_name"`      // 所属租户（企业）名称（展示用）
+	ID             int64   `json:"id"`               // 包主键 ID
+	TenantID       int64   `json:"tenant_id"`        // 所属租户 ID
+	ParentID       int64   `json:"parent_id"`        // 父包 ID（0 表示根节点）
+	Code           string  `json:"code"`             // 包编码（唯一标识，如 tenant/industry/locale）
+	Name           string  `json:"name"`             // 包名称（如 企业包/行业包/语言文化习惯包）
+	PackType       string  `json:"pack_type"`        // 包类型：tenant(企业) / industry(行业) / locale(语言文化) / department(部门)
+	Role           string  `json:"role"`             // 包角色：source(匹配来源) / gate(输出闸门)
+	OrgID          int64   `json:"org_id"`           // 归属部门组织 ID（0=租户级）
+	OrgName        string  `json:"org_name"`         // 归属部门名称（展示用，0=租户级时为空）
+	TenantName     string  `json:"tenant_name"`      // 所属租户（企业）名称（展示用）
 	Enabled        int     `json:"enabled"`          // 启用状态：1=启用（参与翻译命中）0=停用
 	ShareCrossDept int     `json:"share_cross_dept"` // ★ 跨部门共享开关（2026-08-26 KB继承链）：1=愿意参与跨部门降级检索（默认）0=仅限归属链内用户可见（包级 opt-out）；仅对部门包有意义
 	CrossOrgs      []int64 `json:"cross_orgs"`       // 跨部门包涵盖的部门集合（使用/维护范围为这些部门的成员/管理员）
 	CrossAll       bool    `json:"cross_all"`        // 跨部门包是否全公司（涵盖租户内全部部门）
 	SortOrder      int     `json:"sort_order"`       // 同级排序权重（升序）
+	EntryCount     int     `json:"entry_count"`      // 包内条目总数（列表角标用；后台一次 GROUP BY 附带）
 	CreatedAt      string  `json:"created_at"`       // 创建时间（RFC3339 字符串）
 	UpdatedAt      string  `json:"updated_at"`       // 更新时间（RFC3339 字符串）
 }
@@ -465,6 +466,56 @@ func (s *Store) CountEntries(tid, pkgID int64) (int, error) {
 	return n, err
 }
 
+// CountEntriesByPackages 一次性统计租户下每个包的条目数（包列表角标用，避免 N+1 次 COUNT）。
+// 参数：tid=租户 ID；返回 package_id → 条目数 映射。
+func (s *Store) CountEntriesByPackages(tid int64) (map[int64]int, error) {
+	rows, err := db.Query(s.db, db.CurrentDialect(),
+		"SELECT package_id, COUNT(*) FROM kb_entries WHERE tenant_id=? GROUP BY package_id", tid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]int{}
+	for rows.Next() {
+		var pkgID int64
+		var n int
+		if err := rows.Scan(&pkgID, &n); err == nil {
+			out[pkgID] = n
+		}
+	}
+	return out, nil
+}
+
+// UpdateEntry 更新单条条目内容（租户隔离校验，不可改包/归属）。
+// 参数：id=条目主键，tid=租户 ID，layer=层级，srcText/tgtLang/tgtText/module=可编辑字段；返回错误。
+func (s *Store) UpdateEntry(id, tid int64, layer int, srcText, tgtLang, tgtText, module string) error {
+	_, err := db.Exec(s.db, db.CurrentDialect(),
+		"UPDATE kb_entries SET layer=?, source_text=?, target_lang=?, target_text=?, module=?, updated_at=? WHERE id=? AND tenant_id=?",
+		layer, srcText, tgtLang, tgtText, module, time.Now().Format(time.RFC3339), id, tid)
+	return err
+}
+
+// GetEntryForUpdate 按 ID+租户取单条条目（编辑前置校验用；只取 ID/包/层，避免拉大字段）。
+// 参数：tid=租户 ID，id=条目主键；返回命中条目切片（未命中为空）。
+func (s *Store) GetEntryForUpdate(tid, id int64) ([]*KBEntry, error) {
+	rows, err := db.Query(s.db, db.CurrentDialect(),
+		"SELECT id, tenant_id, package_id, layer, source_lang, source_text, target_lang, target_text, module, created_at, updated_at "+
+			"FROM kb_entries WHERE id=? AND tenant_id=?", id, tid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*KBEntry
+	for rows.Next() {
+		var e KBEntry
+		if err := rows.Scan(&e.ID, &e.TenantID, &e.PackageID, &e.Layer, &e.SourceLang, &e.SourceText, &e.TargetLang, &e.TargetText, &e.Module, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			continue
+		}
+		out = append(out, &e)
+	}
+	return out, nil
+}
+
 // escapeLike 转义 LIKE 通配符，防止关键词里的 % 与 _ 干扰模糊匹配。
 // 参数：s=原始关键词；返回转义后的关键词（配合 ESCAPE '\' 使用）。
 func escapeLike(s string) string {
@@ -593,6 +644,60 @@ func (s *Store) ListSafetyPhrasesFilter(tid int64, status string) ([]*KBSafetyPh
 		out = append(out, &p)
 	}
 	return out, nil
+}
+
+// ListSafetyPhrasesPage 服务端分页 + 过滤列出安全句（后台语言文化规范面板用）。
+// 参数：tid=租户，pkgID>0 按包过滤，lang/kind/status 精确过滤，q 对 phrase/replacement 模糊搜索，
+// page/pageSize 分页（pageSize 超限回退默认 20）；返回列表与总数。
+func (s *Store) ListSafetyPhrasesPage(tid, pkgID int64, lang, kind, status, q string, page, pageSize int) ([]*KBSafetyPhrase, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 500 {
+		pageSize = 20
+	}
+	where := "WHERE tenant_id=?"
+	args := []interface{}{tid}
+	if pkgID > 0 {
+		where += " AND package_id=?"
+		args = append(args, pkgID)
+	}
+	if lang != "" {
+		where += " AND lang=?"
+		args = append(args, lang)
+	}
+	if kind != "" {
+		where += " AND COALESCE(kind,'style')=?"
+		args = append(args, kind)
+	}
+	if status != "" {
+		where += " AND COALESCE(status,'approved')=?"
+		args = append(args, status)
+	}
+	if strings.TrimSpace(q) != "" {
+		kw := "%" + escapeLike(q) + "%"
+		where += " AND (phrase LIKE ? ESCAPE '\\' OR COALESCE(replacement,'') LIKE ? ESCAPE '\\')"
+		args = append(args, kw, kw)
+	}
+	var total int
+	_ = db.QueryRow(s.db, db.CurrentDialect(), "SELECT COUNT(*) FROM kb_safety_phrases "+where, args...).Scan(&total)
+	pageArgs := append(append([]interface{}{}, args...), pageSize, (page-1)*pageSize)
+	rows, err := db.Query(s.db, db.CurrentDialect(),
+		"SELECT id, tenant_id, package_id, lang, phrase, COALESCE(kind,'style'), COALESCE(replacement,''), COALESCE(status,'approved'), COALESCE(source,'manual'), created_at "+
+			"FROM kb_safety_phrases "+where+" ORDER BY id DESC LIMIT ? OFFSET ?", pageArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []*KBSafetyPhrase
+	for rows.Next() {
+		var p KBSafetyPhrase
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.PackageID, &p.Lang, &p.Phrase, &p.Kind, &p.Replacement, &p.Status, &p.Source, &p.CreatedAt); err != nil {
+			continue
+		}
+		out = append(out, &p)
+	}
+	return out, total, nil
 }
 
 // SetSafetyPhraseStatus 审核安全句（通过/驳回）；仅 pending 状态可流转，approved/rejected 可人工改判。
@@ -794,14 +899,14 @@ func (s *Store) ListApplicablePacks(tid int64) ([]*PackBrief, error) {
 // 返回：kb.PackScope（store→kb 单向依赖：kb 不反向 import store）。
 func (s *Store) BuildPackScope(tid int64, chain []int64, allowCross bool) (*kb.PackScope, error) {
 	scope := &kb.PackScope{
-		TenantID:        tid,
-		Chain:           chain,
-		ChainPacks:      map[int64]int{},
-		TenantPackIDs:   map[int64]bool{},
-		SharedPackIDs:   map[int64]bool{},
+		TenantID:         tid,
+		Chain:            chain,
+		ChainPacks:       map[int64]int{},
+		TenantPackIDs:    map[int64]bool{},
+		SharedPackIDs:    map[int64]bool{},
 		UniversalPackIDs: map[int64]bool{},
-		CrossDeptPacks:  map[int64]string{},
-		AllowCrossDept:  allowCross,
+		CrossDeptPacks:   map[int64]string{},
+		AllowCrossDept:   allowCross,
 	}
 	// 祖先距离映射：chain[0]=本部门(0)、chain[1]=父(1)…
 	dist := map[int64]int{}

@@ -196,6 +196,9 @@ func (s *Store) migrate() error {
 		)`,
 		// 为按包+语言检索建立的索引
 		`CREATE INDEX IF NOT EXISTS idx_kb_entries_pkg ON kb_entries(package_id, source_lang, target_lang)`,
+		// ★ 性能优化：后台「查看条目」按 租户+包 过滤的 COUNT/LIKE 检索，原索引不含 tenant_id 走全表扫
+		`CREATE INDEX IF NOT EXISTS idx_kb_entries_tid_pkg ON kb_entries(tenant_id, package_id, layer, target_lang)`,
+
 		// ---------- kb_safety_phrases 安全句锁死串库 ----------
 		`CREATE TABLE IF NOT EXISTS kb_safety_phrases (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -205,6 +208,8 @@ func (s *Store) migrate() error {
 			phrase TEXT NOT NULL DEFAULT '',
 			created_at TEXT
 		)`,
+		// ★ 性能优化：安全句（语言文化规范）按 租户+包+语言 过滤，原无索引（须在表创建后建立）
+		`CREATE INDEX IF NOT EXISTS idx_kb_safety_tid_pkg ON kb_safety_phrases(tenant_id, package_id, lang)`,
 		// ---------- balance_accounts 租户 token 余额账本 ----------
 		`CREATE TABLE IF NOT EXISTS balance_accounts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

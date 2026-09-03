@@ -173,7 +173,8 @@ func (p *llmProducer) buildPrompt(deps *SourceDeps, batch int) string {
 			"你是跨文化语言专家。请针对目标语言「%s」（%s）输出第 %d 批「语言文化习惯与避雷规范」。\n"+
 				"严格只输出 JSON，格式：{\"phrases\":[{\"kind\":\"forbidden|replace|style\",\"phrase\":\"...\",\"replacement\":\"...\"}]}\n"+
 				"内容要求（每条真实、通用、可直接用于翻译质检）：\n"+
-				"1. forbidden：该语言中政治/文化/种族/辱骂/不雅/色情/敏感等应避免出现的词或表达\n"+
+				"1. forbidden：仅限严重伤害他人感情/影响极坏的真正禁忌——种族歧视词、宗教忌讳、民族与国家/地区文化忌讳、严重人格侮辱；\n"+
+				"   ★严禁把普通中性常用词（如 control/hot/open/close/start/stop/run 等日常词汇）列为 forbidden，禁止无限扩大中性词的负面概念；\n"+
 				"2. replace：常见不恰当用词 → 应替换为的地道用词\n"+
 				"3. style：该语言写作习惯规范（格式、语气、度量衡、礼貌用语）\n"+
 				"每批生成 %d 条，各 kind 都要有，共输出一次 JSON，不要任何多余文字。",

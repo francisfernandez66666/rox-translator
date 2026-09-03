@@ -122,6 +122,7 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 			return
 		}
+		s.attachEntryCounts(tid, pkgs)
 		s.decoratePackages(tid, pkgs)
 		writeJSON(w, 200, map[string]interface{}{"success": true, "packages": pkgs})
 		return
@@ -131,6 +132,7 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	s.attachEntryCounts(tid, pkgs)
 	// 租户管理员（非超管）：可见企业包/部门包 + 行业包（行业知识库按租户对应行业作用域）；
 	// 语言文化包为平台级全域资源，仅超管在后台维护。
 	if auth.RoleLevel(u.Role) < 4 {
@@ -160,6 +162,18 @@ func (s *Server) decoratePackages(tid int64, pkgs []*store.KBPackage) {
 		if p.OrgID > 0 {
 			p.OrgName = orgNames[p.OrgID]
 		}
+	}
+}
+
+// attachEntryCounts 为包列表一次性附带每条包条目总数（GROUP BY 单查询），
+// 消除前端逐包 COUNT 的 N+1 请求（2026-09-03 知识库面板卡顿根因）。
+func (s *Server) attachEntryCounts(tid int64, pkgs []*store.KBPackage) {
+	counts, err := s.Store.CountEntriesByPackages(tid)
+	if err != nil {
+		return // 计数失败不阻断列表，角标留 0
+	}
+	for _, p := range pkgs {
+		p.EntryCount = counts[p.ID]
 	}
 }
 
@@ -453,19 +467,85 @@ func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
-// handleSafetyPhrases 安全句列表
+// handleKBEntryUpdate 更新指定知识库条目内容（层/源文本/目标语言/译文/模块；不可改包归属）。
+// 参数 w/r：body 含 id 与可编辑字段；鉴权：部门管理员及以上；副作用：更新记录并写审计 + 失效 CJK 缓存。
+func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireDeptAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		ID         int64  `json:"id"`          // 待更新条目 ID（必填）
+		Layer      int    `json:"layer"`       // 层级（0 时保留原层，由 store 侧校验）
+		SourceText string `json:"source_text"` // 源文本（中文，必填）
+		TargetLang string `json:"target_lang"` // 目标语言代码（默认 en）
+		TargetText string `json:"target_text"` // 目标译文
+		Module     string `json:"module"`      // 所属模块
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	if req.SourceText == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "source_text 不能为空"})
+		return
+	}
+	if req.TargetLang == "" {
+		req.TargetLang = "en"
+	}
+	tid := s.kbTenant(r, u)
+	// 取原条目，校验包归属与维护权限（与新增同源）
+	var cur *store.KBEntry
+	if rows, e := s.Store.GetEntryForUpdate(tid, req.ID); e == nil && len(rows) > 0 {
+		cur = rows[0]
+	} else {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "条目不存在或无权操作"})
+		return
+	}
+	pkg, gErr := s.Store.GetKBPackage(cur.PackageID, tid)
+	if gErr != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		return
+	}
+	if !canManagePackType(u, pkg.PackType) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包写入"})
+		return
+	}
+	if err := s.deptKBScope(u, tid, pkg); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	if req.Layer == 0 {
+		req.Layer = cur.Layer
+	}
+	if err := s.Store.UpdateEntry(req.ID, tid, req.Layer, req.SourceText, req.TargetLang, req.TargetText, req.Module); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(tid, u.ID, "kb_entry_update", "kb_entries", req.SourceText)
+	s.invKB() // ★ 改条目：失效 CJK 缓存
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleSafetyPhrases 安全句列表（支持按包/语言/类型/状态过滤与 q 搜索 + 服务端分页）
 func (s *Server) handleSafetyPhrases(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	phrases, err := s.Store.ListSafetyPhrases(s.kbTenant(r, u))
+	qp := r.URL.Query()
+	pkgID, _ := strconv.ParseInt(qp.Get("package_id"), 10, 64)
+	page, _ := strconv.Atoi(qp.Get("page"))
+	pageSize, _ := strconv.Atoi(qp.Get("page_size"))
+	phrases, total, err := s.Store.ListSafetyPhrasesPage(s.kbTenant(r, u), pkgID,
+		qp.Get("lang"), qp.Get("kind"), qp.Get("status"), qp.Get("q"), page, pageSize)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "phrases": phrases})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "phrases": phrases, "total": total})
 }
 
 // handleSafetyPhraseAdd 新增安全句
