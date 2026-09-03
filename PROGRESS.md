@@ -1,6 +1,18 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-03（采集自动审批改造 + 源语言清洗 + 待审还原编辑发版；已部署生产+演示，main 分支 657f7b3）
+> 最后更新：2026-09-03（待审面板服务端分页 + LLM 解析容错发版；已部署生产+演示，main 分支 82ffccb）
+
+## 〇-X、待审面板服务端分页 + LLM 输出容错（2026-09-03，提交 82ffccb）
+
+> 线上反馈两类问题：①待审面板仅显示约 400 行（编号已到 4 千多、通知说有 1 万多待审，对齐不上）；②部分数据源报 `pq: column "tenant_id" does not exist` 与硅流超时。核查定位后针对性修复。
+
+| 块 | 内容 |
+|---|---|
+| **面板数量失真根因** | 旧实现 `scrapeStaged` 对条目/安全句各取 `limit=200`（共 400 行）后纯前端分页，与真实库量（主库 approved 条目 15818 + 安全句 4787）严重不符。改 **服务端分页**：新增 `ListStagedMerged`（`kb_staged_entries`+`kb_staged_phrases` UNION ALL 统一行集，`key=kind:id` 复合键防两表自增撞车，`phrase_kind` 保留 style/forbidden/replace）与 `CountStagedEntries`/`CountStagedPhrases` 精确总数；`handleKBScrapeStaged` 返回 `rows/total/limit/offset`，前端面板按真实总数翻页（`待审增量（${total}）`，单页 20 条 + 跳页器，翻页清空选中）。SQL 已在生产库实测验证 |
+| **tenant_id 报错为历史残留** | `kb_staged_entries` 列早已由启动迁移幂等补齐；面板所报 error 均为 **2026-09-02 旧二进制**遗留的 `last_status`（`last_run_at` 全为昨日）。清掉历史 error 源标记重跑后 22 个源全部转 `ok`（新增数据带 tenant_id 写入成功） |
+| **LLM 输出解析容错** | tier3 低语种（ur/te）模型输出带**尾逗号**（`{"tgt":"...",}`）与 **Markdown 代码块围栏**（```json … ```），`extractJSON` 严格校验失败。新增 `cleanJSONFence`（剥围栏）与 `stripTrailingCommas`（字符串感知剔尾逗号，跳过引号内逗号与转义），预处理后再做括号平衡提取；`TestExtractJSONTrailingComma` 用线上真实失败样本锁定回归。ur/te 两源已实测重跑转 `ok` |
+| **剩余观察项** | 579 源中 1 个仍 `error` 为 **LLM 输出截断**（JSON 未闭合），与尾逗号/围栏非同类；低语种冷门模型偶发超时属外部依赖，次日自动重跑自愈 |
+| **验证与发布** | go build/vet/test（含 crawler 新回归）+ npm typecheck/vite build 通过；已部署生产与演示，/api/health 全 true；本次提交不含文档/流程图 |
 
 ## 〇-IX、采集自动审批改造 + 源语言清洗 + 待审还原编辑（2026-09-03，提交 657f7b3）
 
