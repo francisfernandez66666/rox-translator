@@ -1,6 +1,20 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-02（前端交互与前后端契约审计修复发版；已部署演示+生产，main 分支 0ee5b97）
+> 最后更新：2026-09-03（采集自动审批改造 + 源语言清洗 + 待审还原编辑发版；已部署生产+演示，main 分支 657f7b3）
+
+## 〇-IX、采集自动审批改造 + 源语言清洗 + 待审还原编辑（2026-09-03，提交 657f7b3）
+
+> 待审批数据流程由「人工审核」改为「自动清洗/修正/审批并通过」：采集即检测源语言并直接落正式库并留痕，人工只对已通过数据驳回/改正。
+
+| 块 | 内容 |
+|---|---|
+| **流程改造** | 爬虫 `RunSource` 改为自动审批模式（`system_config.scrape_auto_approve`，默认开）：采集条目/安全句经 `AutoApproveEntry`/`AutoApprovePhrase` 直接落正式库（kb_entries/tm_segments + kb_safety_phrases）并在待审表留 `approved` 痕迹，人工事后可查看/驳回/改正；采集后由 SDK 调度自动 `invKB` + 异步重建向量索引 |
+| **源语言自动清洗** | 新增 `crawler.DetectSourceLang` 按 Unicode 脚本检测源语言（CJK→zh/zh_hant 简繁细分、假名→ja、谚文→ko、西里尔→ru、阿拉伯→ar、泰文→th、天城文→hi、拉丁→en），采集时纠正 tier1/2/3 硬编码的 `SrcLang:"zh"`，英文源文本（如「blended learning」「auto parts」）不再误标 zh；`detect_test.go` 锁定回归 |
+| **历史数据一键回填** | 新增 `cmd/auto-approve`：连接生产库批量清洗+审批历史 pending 待审（更正源语言→重算去重 hash→嵌入正式库→置 approved），含 `-dryrun` 预览与 hash 一致性修复（reconcile 删除 stale 重复行/更正孤儿 hash）。操作前 pg_dump 备份 |
+| **还原为待审/编辑** | 新增 `POST /api/admin/kb-scrape/restore`：已通过/已驳回条目拉回待审池，支持还原前编辑内容（改译文/替换词），并回收正式库落库（kb_entries/tm_segments/kb_safety_phrases）+ 失效缓存 |
+| **前端** | 待审面板「已通过/已驳回」筛选下显示「批量还原为待审」按钮 + 每行「还原/编辑」弹窗；语言列改中英文名展示（补充 `zh` 缺失映射）；新增「系统设置」合并面板（邮件模板/流程引擎/系统告警） |
+| **修复事故** | `AutoApproveEntry` 原沿用内存 stale hash 致源语言更正行插入重复 approved 行（实测 15818→18841 +3023）；改为始终按当前字段重算 hash，回归测试 `TestAutoApproveEntryAfterSrcLangChange` 锁定 |
+| **验证与发布** | go build/test（store+crawler+api+engine 全绿）+ npm typecheck/vite build 通过；已部署生产（langcross.lexicorn.cn）与演示（rox-test.lexicorn.cn），/api/health 全 true；主站 15818 条待审条目全部自动审批通过（更正源语言 3023）、4787 安全句通过；演示站 15626 条目 + 4787 安全句全部通过 |
 
 ## 〇-VIII、前端交互与前后端契约审计修复（2026-09-02，提交 0ee5b97）
 
