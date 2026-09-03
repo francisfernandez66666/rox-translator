@@ -118,6 +118,11 @@ export function KbP() {
   // 当前选中的包与其条目
   const [selectedPkg, setSelectedPkg] = useState<number | null>(null)
   const [entries, setEntries] = useState<Any[]>([])
+  // ★ 条目预览分页 + 过滤（2026-09-03）：服务端分页，避免万级条目一次平铺卡死
+  const [entryTotal, setEntryTotal] = useState(0)
+  const [entryPage, setEntryPage] = useState(1)
+  const [entryPageSize, setEntryPageSize] = useState(20)
+  const [entryFilter, setEntryFilter] = useState<Any>({ layer: 0, target_lang: '', q: '' })
   // 新建包与新建条目表单
   const [pForm, setPForm] = useState<Any>({ code: '', name: '', pack_type: 'department' })
   const [eForm, setEForm] = useState<Any>({ source_text: '', layer: 2, target_lang: 'en', target_text: '', module: '' })
@@ -189,7 +194,7 @@ export function KbP() {
       setPkgs(list)
       const map: Record<number, number> = {}
       for (const p of list) {
-        try { const e = await kbEntries(Number(p.id)); map[Number(p.id)] = (e as unknown as { entries?: Any[] }).entries?.length || 0 } catch { map[Number(p.id)] = 0 }
+        try { const e = await kbEntries(Number(p.id), { count: true }); map[Number(p.id)] = Number((e as unknown as { total?: number }).total) || 0 } catch { map[Number(p.id)] = 0 }
       }
       setEntriesMap(map)
     }
@@ -266,15 +271,32 @@ export function KbP() {
   }
 
   // ---- 条目 ----
-  // 打开某个包的条目对话框并加载条目
+  // 按过滤条件 + 页码加载条目（服务端分页）；filter/page 显式传入以免命中陈旧 state
+  async function queryEntries(pkgId: number, filter?: Any, page?: number) {
+    const f = filter && typeof filter === 'object' ? filter : entryFilter
+    const pg = typeof page === 'number' ? page : entryPage
+    const r = await kbEntries(pkgId, {
+      layer: f.layer || undefined,
+      target_lang: f.target_lang || undefined,
+      q: f.q || undefined,
+      page: pg,
+      page_size: entryPageSize,
+    })
+    if (r.success) {
+      setEntries(((r as unknown as { entries?: Any[] }).entries) || [])
+      setEntryTotal(Number((r as unknown as { total?: number }).total) || 0)
+    }
+  }
+  // 打开某个包的条目对话框并加载条目（重置过滤与页码）
   async function openEntries(p: Any) {
     setSelectedPkg(Number(p.id))
-    const r = await kbEntries(Number(p.id))
-    if (r.success) setEntries((r as unknown as { entries?: Any[] }).entries || [])
+    const f = { layer: 0, target_lang: '', q: '' }
+    setEntryFilter(f)
+    setEntryPage(1)
+    await queryEntries(Number(p.id), f, 1)
   }
   async function loadEntries(p: Any) {
-    const r = await kbEntries(Number(p.id))
-    if (r.success) setEntries((r as unknown as { entries?: Any[] }).entries || [])
+    await queryEntries(Number(p.id))
   }
   // 向指定包添加单条条目
   async function addEntry(pkgId: number) {
@@ -497,7 +519,34 @@ export function KbP() {
           <Button style={{ marginTop: 6 }} onClick={() => selectedPkg != null && void bulkImport(selectedPkg)}>{t('kb.bulkImport')}</Button>
           {bulkTextMsg && <span style={{ marginLeft: 10, fontSize: 12, color: '#1a7f37' }}>{bulkTextMsg}</span>}
         </details>
+        {/* ★ 过滤条件 + 服务端分页（避免万级条目一次拉全平铺） */}
+        <div style={{ ...rowMt, marginBottom: 8 }}>
+          <Select value={String(entryFilter.layer ?? 0)} onChange={(v: any) => {
+            const f = { ...entryFilter, layer: Number(v) }
+            setEntryFilter(f); setEntryPage(1); void queryEntries(Number(selectedPkg), f, 1)
+          }}
+            options={[{ label: t('kb.allLayer'), value: '0' }, { label: t('kb.layer1'), value: '1' }, { label: t('kb.layer2'), value: '2' }, { label: t('kb.layer3'), value: '3' }, { label: t('kb.layer4'), value: '4' }]} style={{ width: 140 }} />
+          <Input placeholder={t('kb.targetLangPlaceholder')} value={String(entryFilter.target_lang || '')}
+            onChange={(v: string) => setEntryFilter((f: Any) => ({ ...f, target_lang: v.trim() }))}
+            onEnter={() => { const f = entryFilter; setEntryPage(1); void queryEntries(Number(selectedPkg), f, 1) }} style={{ width: 150 }} />
+          <Input placeholder={t('kb.searchEntries')} value={String(entryFilter.q || '')}
+            onChange={(v: string) => setEntryFilter((f: Any) => ({ ...f, q: v }))}
+            onEnter={() => { const f = entryFilter; setEntryPage(1); void queryEntries(Number(selectedPkg), f, 1) }} style={{ flex: 1 }} />
+          <Button theme="primary" size="small" onClick={() => { const f = entryFilter; setEntryPage(1); void queryEntries(Number(selectedPkg), f, 1) }}>{t('kb.search')}</Button>
+        </div>
         <Table rowKey="id" size="small" maxHeight={360} data={entries} style={{ marginTop: 8 }}
+          pagination={{
+            current: entryPage,
+            pageSize: entryPageSize,
+            total: entryTotal,
+            showJumper: true,
+            onChange: async (pi: unknown) => {
+              const p = typeof pi === 'number' ? pi : Number((pi as { current?: number })?.current || 1)
+              if (p === entryPage) return
+              setEntryPage(p)
+              await queryEntries(Number(selectedPkg), entryFilter, p)
+            },
+          }}
           columns={[
             { colKey: 'id', title: 'ID', width: 70 },
             { colKey: 'layer', title: t('kb.colLayer'), width: 60, cell: ({ row }: any) => `L${row.layer}` },

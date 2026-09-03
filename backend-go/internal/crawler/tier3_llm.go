@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"translator/internal/config"
+	"translator/internal/culture"
 	"translator/internal/store"
 )
 
@@ -97,6 +98,11 @@ func (p *llmProducer) Next(ctx context.Context, deps *SourceDeps, cursor string,
 		kind := ph.Kind
 		if kind != "style" && kind != "forbidden" && kind != "replace" {
 			kind = "style"
+		}
+		// ★ 2026-09-03：过滤 LLM 采集的英语中性常见词（control/hot 等）作为 forbidden，
+		//   防止无限扩大中性词的负面概念、避免正常译文被 culture 闸门误打回。
+		if kind == "forbidden" && culture.IsNeutralForbidden(tgtLang, ph.Phrase) {
+			continue
 		}
 		phrases = append(phrases, &store.KBStagedPhrase{
 			PackageID:   deps.TargetPackID,

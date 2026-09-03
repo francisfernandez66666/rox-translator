@@ -533,6 +533,8 @@ export const baseZh: Record<string,string> = {
   'admin.menuAudit': '📋 审计日志',
   'admin.menuAlerts': '🚨 系统告警',
   'admin.menuAgreements': '📝 协议签署',
+  'admin.menuExternal': '🔌 外部调用',
+  'admin.menuPersonal': '👤 个人中心',
   'admin.tagPlatformAdmin': '平台管理员',
   'admin.tagCompany': '企业管理',
   'admin.tagDept': '部门管理',

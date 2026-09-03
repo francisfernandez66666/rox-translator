@@ -289,6 +289,11 @@ func main() {
 	// 每次 chat/embed 调用产生真实 token 用量后立即扣减租户余额，余额不足即中止翻译，
 	// 覆盖即时翻译 / 翻译工单 / OpenAPI 三类入口，杜绝后置计费被取消绕过的白嫖。
 	eng.LLM.OnUsage = srv.ChargeUsageRealtime
+	// ★ 评估器（evals）使用独立 LLM client：同样挂上计费钩子，
+	//   否则 Judge（初翻评估/校对评估）调用不进入 usage_ledger（调用了但白嫖）。
+	if eng.Evals != nil {
+		eng.Evals.LLM.OnUsage = srv.ChargeUsageRealtime
+	}
 
 	// ★ 性能优化 B2/B3：启动实时计量批量落库（把逐 LLM 调用的写事务合并为周期批量），
 	//   彻底消除并发翻译下的 SQLITE_BUSY。

@@ -346,20 +346,37 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
-// handleKBEntries 列出包内条目
+// handleKBEntries 列出包内条目（按 package_id 必填；支持 layer/target_lang/q 过滤与 page/page_size 分页；count=1 仅返回总数）。
 func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	pkgID, _ := strconv.ParseInt(r.URL.Query().Get("package_id"), 10, 64)
-	entries, err := s.Store.ListEntries(s.kbTenant(r, u), pkgID)
+	qp := r.URL.Query()
+	pkgID, _ := strconv.ParseInt(qp.Get("package_id"), 10, 64)
+	layer, _ := strconv.Atoi(qp.Get("layer"))
+	targetLang := qp.Get("target_lang")
+	keyword := qp.Get("q")
+	page, _ := strconv.Atoi(qp.Get("page"))
+	pageSize, _ := strconv.Atoi(qp.Get("page_size"))
+	countOnly := qp.Get("count") == "1"
+	tid := s.kbTenant(r, u)
+	if countOnly {
+		total, err := s.Store.CountEntries(tid, pkgID)
+		if err != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]interface{}{"success": true, "total": total})
+		return
+	}
+	entries, total, err := s.Store.ListEntriesPage(tid, pkgID, layer, targetLang, keyword, page, pageSize)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "entries": entries})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "entries": entries, "total": total})
 }
 
 // handleKBEntryAdd 向指定知识库包新增翻译记忆条目（源 / 目标文本等）。参数 w/r：body 含 package_id 与条目内容；鉴权：部门管理员及以上；副作用：写入 kb_entries 并写审计。

@@ -14,10 +14,59 @@ package culture
 // ========================================
 
 import (
+	"regexp"
 	"strings"
 
 	"translator/internal/store"
 )
+
+// neutralEnWords 英语常见中性词豁免表：这类词即便被误采集为 forbidden（如 LLM 自动
+// 采集把 control/hot 等普通词汇当敏感词）也不作避雷拦截，避免「无限扩大中性词的负面
+// 概念」影响翻译质量。仅对英语生效，其他语言不豁免。
+var neutralEnWords = map[string]bool{
+	"control": true, "hot": true,
+	// 常用中性词（防止 LLM 采集器把普通词汇误判为敏感词后打回正常译文）
+	"open": true, "close": true, "start": true, "stop": true, "run": true,
+	"make": true, "take": true, "get": true, "set": true, "check": true,
+	"light": true, "water": true, "power": true, "high": true, "low": true,
+	"cold": true, "cool": true, "fast": true, "slow": true, "left": true,
+	"right": true, "front": true, "back": true, "top": true, "bottom": true,
+	"off": true, "on": true, "up": true, "down": true, "over": true, "under": true,
+	"out": true, "in": true, "near": true, "far": true, "hard": true, "soft": true,
+	"wet": true, "dry": true, "clean": true, "dirty": true, "empty": true, "full": true,
+}
+
+// IsNeutralForbidden 判断短语是否为应豁免的中性常见词（不作为避雷词拦截）。
+// 参数：target=目标语言，phrase=避雷词；返回 true=豁免。
+func IsNeutralForbidden(target, phrase string) bool {
+	if target != "en" && target != "en_US" {
+		return false
+	}
+	return neutralEnWords[strings.ToLower(strings.TrimSpace(phrase))]
+}
+
+// wordHit 对拉丁系单词做整词边界匹配，避免 control 命中 controller/controlling 等。
+// 参数：text=译文，phrase=避雷词；返回是否命中。
+func wordHit(text, phrase string) bool {
+	// 整词边界匹配（单词型避雷词）；带空格/符号的短语走子串匹配
+	if strings.ContainsAny(phrase, " \t") {
+		return strings.Contains(text, phrase)
+	}
+	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(phrase) + `\b`)
+	return re.MatchString(text)
+}
+
+// ForbiddenHit 判断译文是否命中 forbidden 避雷词（整词匹配 + 中性词豁免）。
+// 参数：target=目标语言，translation=译文，phrase=避雷词；返回是否命中（豁免返回 false）。
+func ForbiddenHit(target, translation, phrase string) bool {
+	if phrase == "" {
+		return false
+	}
+	if IsNeutralForbidden(target, phrase) {
+		return false
+	}
+	return wordHit(strings.ToLower(translation), strings.ToLower(phrase))
+}
 
 // CultureResult 闸门检查结果
 type CultureResult struct {
@@ -39,12 +88,12 @@ func Run(target string, translation string, safety []*store.KBSafetyPhrase) *Cul
 	res := &CultureResult{Pass: true}
 	tr := strings.ToLower(strings.TrimSpace(translation))
 
-	// 1. 政治文化避雷词反查（译文侧命中即打回）
+	// 1. 政治文化避雷词反查（译文侧命中即打回；中性常见词豁免，避免 control/hot 等误拦）
 	if len(safety) > 0 {
 		hit := []string{}
 		for _, sp := range safety {
 			if sp.Lang == target && sp.Phrase != "" {
-				if strings.Contains(tr, strings.ToLower(sp.Phrase)) {
+				if ForbiddenHit(target, tr, sp.Phrase) {
 					hit = append(hit, sp.Phrase)
 				}
 			}

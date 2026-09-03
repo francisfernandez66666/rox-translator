@@ -493,7 +493,7 @@ func (s *Store) incrementDailyUsage(tid, amount int64) {
 	day := time.Now().Format("2006-01-02")
 	_, _ = db.Exec(s.db, db.CurrentDialect(),
 		`INSERT INTO usage_daily (tenant_id, day, total) VALUES (?,?,?)
-		 ON CONFLICT(tenant_id, day) DO UPDATE SET total=total+?`,
+		 ON CONFLICT(tenant_id, day) DO UPDATE SET total=usage_daily.total+?`,
 		tid, day, amount, amount)
 }
 
@@ -782,7 +782,7 @@ func chargePermanentTx(tx *sql.Tx, tid int64, tokens int64) error {
 // createQuotaGrantTx 台账发放（tx 版 CreateQuotaGrant）。
 func createQuotaGrantTx(tx *sql.Tx, tid int64, kind string, total int64, expires time.Time, source string, refID int64) error {
 	_, err := db.Exec(tx, db.CurrentDialect(),
-		"INSERT INTO quota_grants (tenant_id, kind, total, left, expires_at, source, ref_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
+		"INSERT INTO quota_grants (tenant_id, kind, total, \"left\", expires_at, source, ref_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
 		tid, kind, total, total, expires.UTC().Format(time.RFC3339), source, refID, time.Now().Format(time.RFC3339))
 	return err
 }
@@ -1066,7 +1066,7 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 			isSub = true
 			// 订阅单：台账剩余精确可查
 			if err := db.QueryRow(tx, db.CurrentDialect(),
-				"SELECT COALESCE(SUM(left),0) FROM quota_grants WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND left>0",
+				"SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND \"left\">0",
 				tid, orderID).Scan(&remain); err != nil {
 				return err
 			}
@@ -1103,7 +1103,7 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	if isSub {
 		// 订阅单：作废本单全部剩余台账行（即收回「剩余」，已消耗部分无从收回）
 		if _, err := db.Exec(tx, db.CurrentDialect(),
-			"UPDATE quota_grants SET left=0 WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND left>0",
+			"UPDATE quota_grants SET \"left\"=0 WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND \"left\">0",
 			tid, orderID); err != nil {
 			return err
 		}
@@ -1355,8 +1355,8 @@ func (s *Store) CloseStalePendingOrders() int64 {
 //	「只提醒不拦截」正是灰度设计的本意。
 func (s *Store) TenantLowBalanceAlerts(threshold int64) {
 	rows, err := db.Query(s.db, db.CurrentDialect(), `SELECT ba.tenant_id,
-		COALESCE(ba.balance,0) + COALESCE((SELECT SUM(g.left) FROM quota_grants g
-			WHERE g.tenant_id=ba.tenant_id AND g.left>0 AND g.expires_at > ?),0) AS remain
+		COALESCE(ba.balance,0) + COALESCE((SELECT SUM(g."left") FROM quota_grants g
+			WHERE g.tenant_id=ba.tenant_id AND g."left">0 AND g.expires_at > ?),0) AS remain
 		FROM balance_accounts ba WHERE ba.tenant_id>0`,
 		time.Now().UTC().Format(time.RFC3339))
 	if err != nil {

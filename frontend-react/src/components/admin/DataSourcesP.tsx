@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Button, Dialog, Input, MessagePlugin, Select, Switch, Table, Tag, Tabs, RadioGroup, Radio } from 'tdesign-react'
 import { useT } from '@/i18n'
-import { industryName } from '@/lib/industries'
+import { industryName, INDUSTRY_META } from '@/lib/industries'
 import { LANG_META } from '@/lib/langNames'
 import { Panel, toastResp } from './parts'
 import { confirmDialog } from '@/components/uiDialogs'
@@ -18,7 +18,7 @@ import {
 } from '@/api/scrape'
 
 /** 待审表格行类型（entries/phrases 合并行） */
-type StagedRow = { key: string; id: number; kind: 'entries' | 'phrases'; tier: number; pack_type: string; lang: string; src: string; tgt: string; source_url: string; status: string }
+type StagedRow = { key: string; id: number; kind: 'entries' | 'phrases'; tier: number; pack_type: string; lang: string; src: string; tgt: string; source_url: string; status: string; industry: string }
 
 /** 数据源类型中文名 */
 /** 数据源类型中文名 */
@@ -63,7 +63,7 @@ export default function DataSourcesP() {
   const [stagedTotal, setStagedTotal] = useState(0)
   const [stagedPage, setStagedPage] = useState(1)
   const STAGED_PAGE_SIZE = 20
-  const [stagedFilter, setStagedFilter] = useState<{ pack_type: string; status: string; lang: string }>({ pack_type: '', status: 'pending', lang: '' })
+  const [stagedFilter, setStagedFilter] = useState<{ pack_type: string; status: string; lang: string; industry: string }>({ pack_type: '', status: 'pending', lang: '', industry: '' })
   // 选中行（合并行复合键 "entries:<id>" / "phrases:<id>"，避免两表自增 ID 撞车误伤）
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [approving, setApproving] = useState(false)
@@ -107,12 +107,13 @@ export default function DataSourcesP() {
     if (sm.success) setSummary(sm.summary || null)
   }
 
-  /** 刷新待审池（服务端分页：limit/offset 拉当前页 + 真实总数） */
+  /** 刷新待审池（服务端分页：limit/offset 拉当前页 + 真实总数 + 行业筛选） */
   const reloadStaged = async (page = stagedPage) => {
     const r = await scrapeStaged({
       pack_type: stagedFilter.pack_type,
       status: stagedFilter.status,
       lang: stagedFilter.lang,
+      industry: stagedFilter.industry,
       limit: STAGED_PAGE_SIZE,
       offset: (page - 1) * STAGED_PAGE_SIZE,
     })
@@ -231,7 +232,7 @@ export default function DataSourcesP() {
 
   /** 拼接待审合并行（条目+安全句统一展示；复合键防两表 ID 撞车；服务端已分页） */
   const mergedRows = useMemo((): StagedRow[] => rows.map((e) => ({
-    key: e.key, id: e.id, kind: e.kind, tier: e.tier, pack_type: e.pack_type,
+    key: e.key, id: e.id, kind: e.kind, tier: e.tier, pack_type: e.pack_type, industry: e.industry || '',
     lang: e.kind === 'phrases'
       ? langLabelCN(e.src_lang)
       : `${langLabelCN(e.src_lang)} → ${langLabelCN(e.tgt_lang)}`,
@@ -259,6 +260,7 @@ export default function DataSourcesP() {
     { colKey: 'row-select', type: 'multiple' as const, width: 44 },
     { colKey: 'id', title: 'ID', width: 70 },
     { colKey: 'pack_type', title: '类型', width: 90, cell: ({ row }: any) => row.pack_type === 'industry' ? <Tag theme="primary" variant="light">行业</Tag> : <Tag theme="success" variant="light">语言文化</Tag> },
+    { colKey: 'industry', title: '行业', width: 110, cell: ({ row }: any) => row.industry ? <Tag variant="light">{industryName(row.industry, lang)}</Tag> : '—' },
     { colKey: 'tier', title: '可信度', width: 90, cell: ({ row }: any) => tierTag(row.tier) },
     { colKey: 'lang', title: '语言', width: 90 },
     { colKey: 'src', title: '源文本' },
@@ -348,6 +350,15 @@ export default function DataSourcesP() {
                 <Radio value="rejected">已驳回</Radio>
               </RadioGroup>
               <div style={{ width: 140 }}><Input placeholder="语言过滤" value={stagedFilter.lang} onChange={(v: string) => setStagedFilter((f) => ({ ...f, lang: v }))} /></div>
+              <div style={{ width: 160 }}>
+                <Select
+                  value={stagedFilter.industry}
+                  onChange={(v: any) => setStagedFilter((f) => ({ ...f, industry: String(v ?? '') }))}
+                  clearable
+                  placeholder="行业筛选"
+                  options={Object.values(INDUSTRY_META).map((m) => ({ label: industryName(m.code, lang), value: m.code }))}
+                />
+              </div>
               <div style={{ flex: 1 }} />
               {stagedFilter.status === 'pending' ? (
                 <>

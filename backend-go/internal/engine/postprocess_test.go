@@ -77,3 +77,39 @@ func TestPostProcessSymbolRemnant(t *testing.T) {
 		}
 	}
 }
+
+// TestBrandReplaceVariants 验证极石汽车品牌拼音变体（jishi/jieshi/jixi 等）全部替换为 ROX。
+func TestBrandReplaceVariants(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"Jishi Auto", "ROX Auto"},
+		{"Jieshi Auto Center", "ROX Auto Center"},
+		{"Jixi Auto", "ROX Auto"},
+		{"jieshi Auto", "ROX Auto"},
+		{"ji shi Auto", "ROX Auto"},
+		{"ji-shi Auto", "ROX Auto"},
+		{"去极石汽车服务中心", "去ROX汽车服务中心"},
+		{"no brand here", "no brand here"},
+	}
+	for _, c := range cases {
+		if got := brandReplace(c.in); got != c.want {
+			t.Errorf("brandReplace(%q)=%q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestStripTrailingCJKNotes 验证译文末尾的中文「编辑注释/术语对照」残留块被整体截断，
+// 修复用户反馈的快速翻译英文遗留乱码问题（（：，：1. ：… 骨架）。
+func TestStripTrailingCJKNotes(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// 末尾注释块起始行：纯全角标点无字母无数字 → 截断
+		{"VIII. Component protection.\n\n（：，：\n1. ：\"\"brake rotors\"\"\n2. ：（±2%）",
+			"VIII. Component protection."},
+		// 无注释块：原样保留
+		{"Normal English line 1\nAnother line 10 km/h.", "Normal English line 1\nAnother line 10 km/h."},
+	}
+	for _, c := range cases {
+		if got := stripTrailingCJKNotes(c.in); got != c.want {
+			t.Errorf("stripTrailingCJKNotes(%q)=%q, want %q", c.in, got, c.want)
+		}
+	}
+}

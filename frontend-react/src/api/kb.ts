@@ -35,9 +35,16 @@ export async function kbPackageDelete(id: number): Promise<AdminResp> {
   return request('/api/admin/kb-packages/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
 
-/** 获取指定行业包内的条目列表 */
-export async function kbEntries(packageId: number): Promise<AdminResp> {
-  return request(`/api/admin/kb-entries?package_id=${packageId}`, { headers: authHeaders() })
+/** 获取指定行业包内的条目列表（支持层/语言/关键词过滤与分页；count=true 仅返回 total） */
+export async function kbEntries(packageId: number, params?: { layer?: number; target_lang?: string; q?: string; page?: number; page_size?: number; count?: boolean }): Promise<AdminResp> {
+  const qs = new URLSearchParams({ package_id: String(packageId) })
+  if (params?.layer) qs.set('layer', String(params.layer))
+  if (params?.target_lang) qs.set('target_lang', params.target_lang)
+  if (params?.q) qs.set('q', params.q)
+  if (params?.page) qs.set('page', String(params.page))
+  if (params?.page_size) qs.set('page_size', String(params.page_size))
+  if (params?.count) qs.set('count', '1')
+  return request(`/api/admin/kb-entries?${qs.toString()}`, { headers: authHeaders() })
 }
 
 /** 新增 KB 条目（层级/原文/目标语言/译文/模块） */

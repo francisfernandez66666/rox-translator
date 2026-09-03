@@ -53,6 +53,7 @@ func New(db *sql.DB) (*Store, error) {
 	s.ReferralMigrate()           // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
 	s.OneidMigrate()              // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
 	s.KBRewardMigrate()           // ★ KB 上传奖励流水表（幂等；任务2.3）
+	s.TasksMigrate()              // ★ 任务中心：任务定义 + 领取记录建表（幂等；2026-09-03）
 	s.EnsureBillingDefaults()     // 商业化参数默认值落库（幂等，面板可改）
 	s.orderMoneyBackfill()        // ★ 存量 pending 充值单应收回填（幂等；评审整改 B1，置于默认值落库后以读取到定价键）
 	s.PackageOrderTokenBackfill() // ★ token 口径：存量包订单 amount_tokens 补全（幂等；句数不参与运行期计算）

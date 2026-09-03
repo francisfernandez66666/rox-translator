@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"translator/internal/db"
@@ -402,20 +403,75 @@ func (s *Store) SaveEntry(tid, pkgID int64, layer int, srcLang, srcText, tgtLang
 // ListEntries 列出包内全部条目（按层、ID 排序，最多 2000 条）。
 // 参数：tid=租户 ID，pkgID=包 ID；返回条目列表。
 func (s *Store) ListEntries(tid, pkgID int64) ([]*KBEntry, error) {
-	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT id, tenant_id, package_id, layer, source_lang, source_text, target_lang, target_text, module, created_at, updated_at FROM kb_entries WHERE tenant_id=? AND package_id=? ORDER BY layer, id LIMIT 2000", tid, pkgID)
+	entries, _, err := s.ListEntriesPage(tid, pkgID, 0, "", "", 1, 2000)
+	return entries, err
+}
+
+// ListEntriesPage 分页 + 过滤列出包内条目（管理台「查看条目」用，避免万级条目一次拉全平铺）。
+// 参数：tid=租户 ID，pkgID=包 ID；layer=层过滤（0=全部层）；targetLang=目标语言过滤（空=全部）；
+// q=关键词过滤（匹配源文本/目标译文/目标语言，空=全部）；page=页码（从 1 起）；pageSize=每页条数。
+// 返回：当前页条目列表与总数（供分页器核算页数）。
+func (s *Store) ListEntriesPage(tid, pkgID int64, layer int, targetLang, q string, page, pageSize int) ([]*KBEntry, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 500 {
+		pageSize = 20
+	}
+	where := "WHERE e.tenant_id=? AND e.package_id=?"
+	args := []interface{}{tid, pkgID}
+	if layer >= LayerTerm && layer <= LayerFrag {
+		where += " AND e.layer=?"
+		args = append(args, layer)
+	}
+	if targetLang != "" {
+		where += " AND e.target_lang=?"
+		args = append(args, targetLang)
+	}
+	if strings.TrimSpace(q) != "" {
+		kw := "%" + escapeLike(q) + "%"
+		where += " AND (e.source_text LIKE ? ESCAPE '\\' OR e.target_text LIKE ? ESCAPE '\\' OR e.target_lang LIKE ? ESCAPE '\\')"
+		args = append(args, kw, kw, kw)
+	}
+	var total int
+	_ = db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT COUNT(*) FROM kb_entries e "+where, args...).Scan(&total)
+	// 页码参数追加在过滤参数之后（LIMIT/OFFSET）
+	pageArgs := append(append([]interface{}{}, args...), pageSize, (page-1)*pageSize)
+	rows, err := db.Query(s.db, db.CurrentDialect(),
+		"SELECT e.id, e.tenant_id, e.package_id, e.layer, e.source_lang, e.source_text, e.target_lang, e.target_text, e.module, e.created_at, e.updated_at "+
+			"FROM kb_entries e "+where+" ORDER BY e.layer, e.id LIMIT ? OFFSET ?", pageArgs...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []*KBEntry
 	for rows.Next() {
 		var e KBEntry
 		if err := rows.Scan(&e.ID, &e.TenantID, &e.PackageID, &e.Layer, &e.SourceLang, &e.SourceText, &e.TargetLang, &e.TargetText, &e.Module, &e.CreatedAt, &e.UpdatedAt); err != nil {
-			continue // 单行解析失败跳过
+			continue
 		}
 		out = append(out, &e)
 	}
-	return out, nil
+	return out, total, nil
+}
+
+// CountEntries 统计包内条目总数（包列表角标用，只查 COUNT 避免整表拉取）。
+// 参数：tid=租户 ID，pkgID=包 ID；返回条数。
+func (s *Store) CountEntries(tid, pkgID int64) (int, error) {
+	var n int
+	err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT COUNT(*) FROM kb_entries WHERE tenant_id=? AND package_id=?", tid, pkgID).Scan(&n)
+	return n, err
+}
+
+// escapeLike 转义 LIKE 通配符，防止关键词里的 % 与 _ 干扰模糊匹配。
+// 参数：s=原始关键词；返回转义后的关键词（配合 ESCAPE '\' 使用）。
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
 }
 
 // DeleteEntry 删除单条条目（租户隔离校验）。

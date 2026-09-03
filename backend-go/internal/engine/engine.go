@@ -22,6 +22,7 @@ import (
 
 	"translator/internal/billing"
 	"translator/internal/config"
+	"translator/internal/culture"
 	"translator/internal/db"
 	"translator/internal/evals"
 	"translator/internal/kb"
@@ -1968,6 +1969,10 @@ func (e *Engine) cultureRules(ctx context.Context, tid int64, targetLang string)
 			case "style":
 				sb.WriteString("· 写作规范：" + r.Phrase + "\n")
 			case "forbidden":
+				// ★ 2026-09-03：中性常见词（control/hot 等）不作为 LLM 禁令指令，避免误导模型避开正常词
+				if culture.IsNeutralForbidden(targetLang, r.Phrase) {
+					continue
+				}
 				sb.WriteString("· 严禁在译文中出现：" + r.Phrase + "\n")
 			case "replace":
 				sb.WriteString("· 用词替换：译文中的「" + r.Phrase + "」必须写作「" + r.Replacement + "」\n")
@@ -1998,7 +2003,8 @@ func (e *Engine) applyCultureGate(ctx context.Context, tid int64, targetLang, te
 				text = strings.ReplaceAll(text, r.Phrase, r.Replacement)
 			}
 		case "forbidden":
-			if strings.Contains(strings.ToLower(text), strings.ToLower(r.Phrase)) {
+			// 中性常见词豁免 + 整词边界匹配，避免 control/hot 等普通词汇误拦正常译文
+			if culture.ForbiddenHit(targetLang, text, r.Phrase) {
 				violations = append(violations, r.Phrase)
 			}
 		}

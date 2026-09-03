@@ -69,6 +69,7 @@ export interface StagedMergedRow {
   phrase_kind: string    // phrases 的 style/forbidden/replace（entries 为空）
   pack_type: string
   tier: number
+  industry: string       // 行业 code（经来源数据源关联；phrases 恒空）
   src_lang: string
   src_text: string       // entries=源文本；phrases=语言文化短语
   tgt_lang: string
@@ -111,12 +112,13 @@ export async function scrapeSourceRun(): Promise<AdminResp & { sources_done?: nu
   return request('/api/admin/kb-scrape/sources/run', { method: 'POST', headers: authHeaders() })
 }
 
-/** 待审池列表（服务端分页：limit/offset + 合并行集 rows + 精确总数 total） */
-export async function scrapeStaged(params: { pack_type?: string; status?: string; lang?: string; limit?: number; offset?: number }): Promise<AdminResp & { rows?: StagedMergedRow[]; total?: number; limit?: number; offset?: number }> {
+/** 待审池列表（服务端分页：limit/offset + 合并行集 rows + 精确总数 total；可选行业筛选） */
+export async function scrapeStaged(params: { pack_type?: string; status?: string; lang?: string; industry?: string; limit?: number; offset?: number }): Promise<AdminResp & { rows?: StagedMergedRow[]; total?: number; limit?: number; offset?: number }> {
   const q = new URLSearchParams()
   if (params.pack_type) q.set('pack_type', params.pack_type)
   if (params.status) q.set('status', params.status)
   if (params.lang) q.set('lang', params.lang)
+  if (params.industry) q.set('industry', params.industry)
   if (params.limit) q.set('limit', String(params.limit))
   if (params.offset) q.set('offset', String(params.offset))
   return request(`/api/admin/kb-scrape/staged?${q.toString()}`, { headers: authHeaders() })

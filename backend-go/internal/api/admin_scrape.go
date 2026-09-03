@@ -155,7 +155,7 @@ func (s *Server) handleKBScrapeSourceRun(w http.ResponseWriter, r *http.Request)
 }
 
 // handleKBScrapeStaged 待审池列表（超管）。
-// query: pack_type / status / lang / limit / offset
+// query: pack_type / status / lang / industry / limit / offset
 // ★ 服务端分页：返回合并行集 rows + 精确总数 total（条目+安全句同口径），前端据此翻页
 func (s *Server) handleKBScrapeStaged(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireSuperAdmin(w, r); err != nil {
@@ -165,6 +165,7 @@ func (s *Server) handleKBScrapeStaged(w http.ResponseWriter, r *http.Request) {
 	packType := q.Get("pack_type")
 	status := q.Get("status")
 	lang := q.Get("lang")
+	industry := q.Get("industry")
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
 	if limit <= 0 || limit > 500 {
@@ -173,7 +174,7 @@ func (s *Server) handleKBScrapeStaged(w http.ResponseWriter, r *http.Request) {
 	if offset < 0 {
 		offset = 0
 	}
-	rows, total, err := s.Store.ListStagedMerged(packType, status, lang, limit, offset)
+	rows, total, err := s.Store.ListStagedMerged(packType, status, lang, industry, limit, offset)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return

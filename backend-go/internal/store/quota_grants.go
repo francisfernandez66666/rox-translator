@@ -31,7 +31,7 @@ func (s *Store) QuotaGrantMigrate() {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		tenant_id INTEGER NOT NULL,
 		kind TEXT NOT NULL DEFAULT 'trial',
-		total INTEGER NOT NULL, left INTEGER NOT NULL,
+		total INTEGER NOT NULL, "left" INTEGER NOT NULL,
 		expires_at TEXT NOT NULL,
 		source TEXT DEFAULT '', ref_id INTEGER DEFAULT 0, created_at TEXT)`)
 	db.Exec(s.db, db.CurrentDialect(), `CREATE INDEX IF NOT EXISTS idx_qg_tid_exp ON quota_grants(tenant_id, expires_at)`)
@@ -41,7 +41,7 @@ func (s *Store) QuotaGrantMigrate() {
 func (s *Store) CreateQuotaGrant(tid int64, kind string, total int64, expires time.Time, source string, refID int64) error {
 	now := time.Now().Format(time.RFC3339)
 	_, err := db.Exec(s.db, db.CurrentDialect(),
-		"INSERT INTO quota_grants (tenant_id, kind, total, left, expires_at, source, ref_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
+		"INSERT INTO quota_grants (tenant_id, kind, total, \"left\", expires_at, source, ref_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
 		tid, kind, total, total, expires.UTC().Format(time.RFC3339), source, refID, now)
 	if err != nil {
 		return err
@@ -59,7 +59,7 @@ func (s *Store) CreateQuotaGrant(tid int64, kind string, total int64, expires ti
 // SumActiveGrants 未过期额度剩余合计（低额提醒/展示用）。
 func (s *Store) SumActiveGrants(tid int64) int64 {
 	var n int64
-	db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(SUM(left),0) FROM quota_grants WHERE tenant_id=? AND left>0 AND expires_at>?",
+	db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=? AND \"left\">0 AND expires_at>?",
 		tid, time.Now().UTC().Format(time.RFC3339)).Scan(&n)
 	return n
 }
@@ -75,8 +75,8 @@ func (s *Store) TenantRemainTotal(tid int64) (grants, permanent int64, err error
 	now := time.Now().UTC().Format(time.RFC3339)
 	err = db.QueryRow(s.db, db.CurrentDialect(), `
 		SELECT b.balance,
-		       COALESCE((SELECT SUM(g.left) FROM quota_grants g
-		                 WHERE g.tenant_id=b.tenant_id AND g.left>0 AND g.expires_at>?),0)
+		       COALESCE((SELECT SUM(g."left") FROM quota_grants g
+		                 WHERE g.tenant_id=b.tenant_id AND g."left">0 AND g.expires_at>?),0)
 		FROM balance_accounts b WHERE b.tenant_id=?`, now, tid).Scan(&permanent, &grants)
 	if err != nil {
 		return 0, 0, err
@@ -89,7 +89,7 @@ func (s *Store) TenantRemainTotal(tid int64) (grants, permanent int64, err error
 func (s *Store) EarliestActiveTrialExpiry(tid int64) (string, bool) {
 	var exp string
 	err := db.QueryRow(s.db, db.CurrentDialect(),
-		"SELECT MIN(expires_at) FROM quota_grants WHERE tenant_id=? AND kind='trial' AND left>0 AND expires_at>?",
+		"SELECT MIN(expires_at) FROM quota_grants WHERE tenant_id=? AND kind='trial' AND \"left\">0 AND expires_at>?",
 		tid, time.Now().UTC().Format(time.RFC3339)).Scan(&exp)
 	if err != nil || exp == "" {
 		return "", false
@@ -134,7 +134,7 @@ func deductWithGrantsTx(tx *sql.Tx, tid int64, tokens int64) error {
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := db.Query(tx, db.CurrentDialect(),
-		"SELECT id, left FROM quota_grants WHERE tenant_id=? AND left>0 AND expires_at>? ORDER BY expires_at ASC",
+		"SELECT id, \"left\" FROM quota_grants WHERE tenant_id=? AND \"left\">0 AND expires_at>? ORDER BY expires_at ASC",
 		tid, now)
 	if err != nil {
 		return err
@@ -163,7 +163,7 @@ func deductWithGrantsTx(tx *sql.Tx, tid int64, tokens int64) error {
 		}
 		// ★ 守卫式核销：AND left>=use 保证不扣负；影响行数为 0 说明并发下该行余额
 		//   已发生变化（理论上是防御性分支，IMMEDIATE 锁下不应触发），整体回滚报余额不足。
-		res, err := db.Exec(tx, db.CurrentDialect(), "UPDATE quota_grants SET left=left-? WHERE id=? AND left>=?", use, g.id, use)
+		res, err := db.Exec(tx, db.CurrentDialect(), "UPDATE quota_grants SET \"left\"=\"left\"-? WHERE id=? AND \"left\">=?", use, g.id, use)
 		if err != nil {
 			return err
 		}

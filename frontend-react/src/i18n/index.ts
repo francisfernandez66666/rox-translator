@@ -23,6 +23,7 @@ import * as pChat from './panels/chat'
 import * as pPackages from './panels/packages'
 import * as pFeedback from './panels/feedback'
 import * as pReferral from './panels/referral'
+import * as pTasks from './panels/tasks'
 import { baseZh } from './dicts.zh'
 import { baseEn } from './dicts.en'
 
@@ -38,7 +39,7 @@ const zh: Dict = {
   ...pModels.zh, ...pWorkflow.zh, ...pApiKeys.zh, ...pWebhooks.zh,
   ...pTickets.zh, ...pBilling.zh, ...pUsage.zh, ...pAlerts.zh,
   ...pInvites.zh, ...pChat.zh, ...pPackages.zh, ...pFeedback.zh,
-  ...pReferral.zh,
+  ...pReferral.zh, ...pTasks.zh,
 }
 
 // en 英文词典：base 基础字典 + 各面板模块英文文案合并
@@ -48,7 +49,7 @@ const en: Dict = {
   ...pModels.en, ...pWorkflow.en, ...pApiKeys.en, ...pWebhooks.en,
   ...pTickets.en, ...pBilling.en, ...pUsage.en, ...pAlerts.en,
   ...pInvites.en, ...pChat.en, ...pPackages.en, ...pFeedback.en,
-  ...pReferral.en,
+  ...pReferral.en, ...pTasks.en,
 }
 
 // dicts 按语言索引的词典集合，取词时按当前语言定位

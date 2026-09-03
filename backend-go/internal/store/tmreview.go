@@ -178,7 +178,7 @@ func (s *Store) BumpTmHit(tid int64, zh, lang, trans string, threshold int64) (i
 	now := time.Now().Format(time.RFC3339)
 	if _, err := db.Exec(s.db, db.CurrentDialect(), `INSERT INTO tm_hit_count (tenant_id, zh_hash, lang, trans_hash, zh, trans, n)
 		VALUES (?,?,?,?,?,?,1)
-		ON CONFLICT(tenant_id, zh_hash, lang, trans_hash) DO UPDATE SET n=n+1`,
+		ON CONFLICT(tenant_id, zh_hash, lang, trans_hash) DO UPDATE SET n=tm_hit_count.n+1`,
 		tid, tmHash(zh), lang, tmHash(trans), zh, trans); err != nil {
 		return 0, false, err
 	}
@@ -243,7 +243,7 @@ func (s *Store) BumpTmHitsBatch(tid int64, pairs []TmHitPair, threshold int64) [
 	for _, p := range uniq {
 		if _, e := db.Exec(tx, db.CurrentDialect(), `INSERT INTO tm_hit_count (tenant_id, zh_hash, lang, trans_hash, zh, trans, n)
 			VALUES (?,?,?,?,?,?,1)
-			ON CONFLICT(tenant_id, zh_hash, lang, trans_hash) DO UPDATE SET n=n+1`,
+			ON CONFLICT(tenant_id, zh_hash, lang, trans_hash) DO UPDATE SET n=tm_hit_count.n+1`,
 			tid, tmHash(p.Zh), p.Lang, tmHash(p.Trans), p.Zh, p.Trans); e != nil {
 			return nil
 		}

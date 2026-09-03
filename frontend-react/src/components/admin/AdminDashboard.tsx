@@ -15,30 +15,31 @@ import SiteFooter from '@/components/SiteFooter'
 import { useBranding } from '@/branding'
 
 import Overview from './panels_a'
-import { UsersP, InvitesP, AgreementsP } from './panels_a'
+import { UsersP, InvitesP } from './panels_a'
 import { TenantsP, OrgP } from './panels_b'
 import BrandP from './BrandP'
 import SystemSettingsP from './SystemSettingsP'
+import ExternalCallsP from './ExternalCallsP'
+import PersonalCenterP from './PersonalCenterP'
 import { PlansP, ReferralP, WebhooksP, ApiKeysP } from './panels_c'
-import { KbP, ModelsP, TicketsP } from './panels_d'
+import { KbP, ModelsP, WorkflowP, TicketsP } from './panels_d'
 
 // 菜单项接口定义：key 对应 admin store 中的面板标识，minLevel 为可见最低角色等级
 interface Item { key: PanelKey; label: string; minLevel: number }
 
 // 菜单项配置：定义所有可展示的面板及其最低角色等级要求
+// ★ 2026-09-03 重组：协议签署并入「系统设置」；开放 API+回调通知并入「外部调用」；
+//   邀请好友+任务中心并入「个人中心」；流程引擎并入「系统设置」（修复白板）。
 const ITEMS: Item[] = [
   { key: 'overview', label: 'admin.menuOverview', minLevel: 2 },
   { key: 'tenants', label: 'admin.menuTenants', minLevel: 4 },
   { key: 'plans', label: 'admin.menuPlans', minLevel: 3 },
-  { key: 'referral', label: 'admin.menuReferral', minLevel: 3 },
+  { key: 'personal', label: 'admin.menuPersonal', minLevel: 2 },
+  { key: 'external', label: 'admin.menuExternal', minLevel: 3 },
   { key: 'org', label: 'admin.menuOrg', minLevel: 3 },
   { key: 'kb', label: 'admin.menuKb', minLevel: 2 },
   { key: 'models', label: 'admin.menuModels', minLevel: 4 },
-  { key: 'workflow', label: 'admin.menuWorkflow', minLevel: 4 },
-  { key: 'apikeys', label: 'admin.menuApikeys', minLevel: 3 },
-  { key: 'webhooks', label: 'admin.menuWebhooks', minLevel: 3 },
   { key: 'tickets', label: 'admin.menuTickets', minLevel: 2 },
-  { key: 'agreements', label: 'admin.menuAgreements', minLevel: 2 },
   { key: 'brand', label: 'admin.menuBrand', minLevel: 3 },
   { key: 'system', label: 'admin.menuSystem', minLevel: 4 },
 ]
@@ -50,14 +51,17 @@ function renderPanel(p: PanelKey) {
     case 'tenants': return <TenantsP />
     case 'plans': return <PlansP />
     case 'referral': return <ReferralP />
+    case 'personal': return <PersonalCenterP />
+    case 'external': return <ExternalCallsP />
     case 'org': return <OrgP />
     case 'kb': return <KbP />
     case 'models': return <ModelsP />
+    case 'workflow': return <WorkflowP />
     case 'apikeys': return <ApiKeysP />
     case 'webhooks': return <WebhooksP />
     case 'tickets': return <TicketsP />
     case 'users': return <UsersP />
-    case 'agreements': return <AgreementsP />
+    case 'agreements': return <SystemSettingsP />
     case 'brand': return <BrandP />
     case 'system': return <SystemSettingsP />
     default: return null
@@ -73,12 +77,11 @@ export default function AdminDashboard() {
   const branding = useBranding()
 
   // 按当前用户等级与租户类型过滤可见菜单项：
-  //  - 企业管理（org）/邀请码（invites）仅企业租户可见，个人用户不显示
-  //  - 邀请好友（referral）个人用户始终可见；企业用户仅当超管开通「邀请好友」开关时可见
+  //  - 企业管理（org）仅企业租户可见，个人用户不显示
+  //  - 「个人中心」含邀请好友 + 任务中心，对 L2+ 管理员可见（ReferralP 内部按 is_personal 自适应提示）
   const visible = ITEMS.filter((i) => {
     if (ad.myLevel < i.minLevel) return false
     if (i.key === 'org' && ad.isPersonal) return false
-    if (i.key === 'referral' && !ad.isPersonal && !ad.isSuper && !ad.inviteEnabled) return false
     return true
   })
 

@@ -530,6 +530,8 @@ export const baseEn: Record<string,string> = {
   'admin.menuAudit': 'Audit Log',
   'admin.menuAlerts': 'Alerts',
   'admin.menuAgreements': 'Agreements',
+  'admin.menuExternal': 'External Calls',
+  'admin.menuPersonal': 'Personal Center',
   'admin.tagPlatformAdmin': 'Platform Admin',
   'admin.tagCompany': 'Company Admin',
   'admin.tagDept': 'Dept Admin',

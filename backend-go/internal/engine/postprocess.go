@@ -96,10 +96,34 @@ func stripReviewMarkers(text string) string {
 // 用于剥离模型误输出的占位符号。带内容（非空白字符）的方括号不受影响。
 var emptyBracketRe = regexp.MustCompile(`[\[【][\s\x{3000}]*[\]】]`)
 
+// cjkPunctRe 匹配 CJK 全角/中文标点（全角括号、引号、逗号、句号、冒号等）。
+// 用于在非 CJK 目标语中识别「编辑注释/术语对照」残留块并整体截断（见 stripTrailingCJKNotes）。
+var cjkPunctRe = regexp.MustCompile("[\u3000-\u303f\uff00-\uffef\u2018\u2019\u201c\u201d\u2026]")
+
 // stripEmptyPlaceholderBrackets 剥离成对的空占位方括号（含内部纯空白），
 // 修复 LLM 在译文开头输出『【】』占位符未被清理的问题。
 func stripEmptyPlaceholderBrackets(text string) string {
 	return emptyBracketRe.ReplaceAllString(text, "")
+}
+
+// stripTrailingCJKNotes 剥离非 CJK 目标语译文末尾的「编辑注释/术语对照」残留块。
+// 现象：模型在译文后追加中文说明（如 术语对照/替换说明），经 StripChineseInNonZh
+// 去掉汉字后剩下一堆全角标点骨架（如 "（：，：\n1. ：…"），即用户反馈的「乱码没清干净」。
+// 规则：逐行扫描，遇到「不含拉丁字母且不含数字、但含 CJK 全角标点」的行即视为注释块
+// 起始行，从该行起截断丢弃；不影响正常英文行（含字母/数字）。
+func stripTrailingCJKNotes(text string) string {
+	lines := strings.Split(text, "\n")
+	digitRe := regexp.MustCompile(`[0-9]`)
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			continue
+		}
+		if !latnRe.MatchString(t) && !digitRe.MatchString(t) && cjkPunctRe.MatchString(t) {
+			return strings.TrimRight(strings.Join(lines[:i], "\n"), " \t\n")
+		}
+	}
+	return text
 }
 
 // StripChineseInNonZh 非 CJK 目标语删除所有中文字符
@@ -205,9 +229,8 @@ func stripLangNameSections(text, langCode string) string {
 
 // PostProcessTranslation 最终后处理（所有翻译路径必须经过）
 func PostProcessTranslation(text, langCode string) string {
-	// 品牌替换：Jishi/jishi → ROX
-	re := regexp.MustCompile(`(?i)\bJishi\b`)
-	text = re.ReplaceAllString(text, "ROX")
+	// 品牌替换：Jishi/Jieshi/Jixi 及变体（极石汽车拼音直译）→ ROX
+	text = brandReplace(text)
 
 	// 需求3：剥离误带入单句译文的批量审校模板残留（【原文】…【待審校譯文】…）
 	text = stripReviewMarkers(text)
@@ -233,7 +256,23 @@ func PostProcessTranslation(text, langCode string) string {
 	// ★ 二次空占位清扫（2026-09-02 符号残留根因修复）：中文删除可能把残留标记
 	//   变成新的空方括号对（如【原文】→【】），兜底再剥离一次，确保成品无空占位括号残留。
 	text = stripEmptyPlaceholderBrackets(text)
+	// ★ 注释残留块截断（2026-09-03）：模型在译文后追加的中文「编辑注释/术语对照」
+	//   经去中文后剩全角标点骨架，形如乱码——按行截断丢弃（不影响正常含字母/数字行）。
+	if langCode != "zh" && langCode != "zh_hant" && langCode != "ja" && langCode != "ko" {
+		text = stripTrailingCJKNotes(text)
+	}
 	return strings.TrimSpace(text)
+}
+
+// brandReplace 品牌替换：极石汽车（Jishi/Jieshi/Jixi 等拼音变体）→ ROX。
+// 兼容模型常见的直译拼音写法，避免品牌名被音译成 jieshi/jixi 等未命中知识库。
+func brandReplace(text string) string {
+	// 覆盖：jishi / jieshi / jixi / ji shi / ji-shi（大小写不敏感）
+	re := regexp.MustCompile(`(?i)\b(?:jishi|jieshi|jixi|ji[ -]?shi)\b`)
+	text = re.ReplaceAllString(text, "ROX")
+	// 中文品牌名直译残留（极石）也替换为 ROX（面向非中文目标语时中文残留本应被删）
+	text = strings.ReplaceAll(text, "极石", "ROX")
+	return text
 }
 
 // DetectSourceLang 检测源语言：CJK 占比 >25% 视为中文；否则按非空字符的主导文字

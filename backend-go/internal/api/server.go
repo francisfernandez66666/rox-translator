@@ -287,6 +287,7 @@ func (s *Server) routesAdmin() {
 	s.routesAPIKeys()
 	s.routesOpenAPI()
 	s.routesWebhooks()
+	s.routesTasks()
 }
 
 // routesAdminKB 注册知识库包/条目/安全句管理路由。
@@ -404,6 +405,15 @@ func (s *Server) routesAPIKeys() {
 	s.mux.HandleFunc("/api/apikeys/reveal", s.handleAPIKeyReveal)
 	s.mux.HandleFunc("/api/apikeys/rotate", s.handleAPIKeyRotate)
 	s.mux.HandleFunc("/api/apikeys/delete", s.handleAPIKeyDelete)
+}
+
+// routesTasks 注册任务中心路由（超管管理 + 用户领取）。
+func (s *Server) routesTasks() {
+	s.mux.HandleFunc("/api/admin/tasks", s.handleAdminTasks)
+	s.mux.HandleFunc("/api/admin/tasks/save", s.handleAdminTaskSave)
+	s.mux.HandleFunc("/api/admin/tasks/delete", s.handleAdminTaskDelete)
+	s.mux.HandleFunc("/api/me/tasks", s.handleMyTasks)
+	s.mux.HandleFunc("/api/me/tasks/claim", s.handleClaimTask)
 }
 
 // routesWebhooks 注册租户 webhook 回调配置管理路由。

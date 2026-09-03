@@ -82,6 +82,7 @@ type StagedMergedRow struct {
 	PhraseKind string `json:"phrase_kind"` // phrases 的 style/forbidden/replace（entries 为空）
 	PackType   string `json:"pack_type"`
 	Tier       int    `json:"tier"`
+	Industry   string `json:"industry"` // 行业 code（来自来源数据源；phrases 恒空）
 	SrcLang    string `json:"src_lang"` // entries=src_lang；phrases=lang
 	SrcText    string `json:"src_text"` // entries=src_text；phrases=phrase
 	TgtLang    string `json:"tgt_lang"` // entries=tgt_lang；phrases=""
@@ -506,7 +507,8 @@ func (s *Store) StagePhrasesBatch(items []*KBStagedPhrase) (int, error) {
 }
 
 // CountStagedEntries 统计待审条目数（与 ListStagedEntries 同口径筛选，供前端分页总数）。
-func (s *Store) CountStagedEntries(packType, status, lang string) (int64, error) {
+// 参数：packType/status/lang=原筛选；industry=行业 code（空=不过滤；经来源数据源关联）。
+func (s *Store) CountStagedEntries(packType, status, lang, industry string) (int64, error) {
 	q := "SELECT COUNT(*) FROM kb_staged_entries WHERE 1=1"
 	args := []interface{}{}
 	if packType != "" {
@@ -521,12 +523,18 @@ func (s *Store) CountStagedEntries(packType, status, lang string) (int64, error)
 		q += " AND (src_lang=? OR tgt_lang=?)"
 		args = append(args, lang, lang)
 	}
+	if industry != "" {
+		// 行业过滤：经来源数据源（kb_pack_sources.industry）关联，源缺失则视为非该行业
+		q += " AND EXISTS (SELECT 1 FROM kb_pack_sources ps WHERE ps.id=kb_staged_entries.source_id AND ps.industry=?)"
+		args = append(args, industry)
+	}
 	var n int64
 	err := db.QueryRow(s.db, db.CurrentDialect(), q, args...).Scan(&n)
 	return n, err
 }
 
 // CountStagedPhrases 统计待审安全句数（与 ListStagedPhrases 同口径筛选，供前端分页总数）。
+// 参数：status/lang=原筛选（安全句无行业概念，industry 筛选时由调用方整体排除）。
 func (s *Store) CountStagedPhrases(status, lang string) (int64, error) {
 	q := "SELECT COUNT(*) FROM kb_staged_phrases WHERE 1=1"
 	args := []interface{}{}
@@ -545,28 +553,34 @@ func (s *Store) CountStagedPhrases(status, lang string) (int64, error) {
 
 // ListStagedMerged 待审池合并分页（entries+phrases UNION ALL 统一行集，服务端分页）。
 // 与前端既有合并行语义对齐：kind 区分来源表，key=kind:id 复合键防两表自增撞车；
-// pack_type 过滤对 phrases 无效（安全句恒为 locale 包，pack_type=industry 时安全句全排除）。
-func (s *Store) ListStagedMerged(packType, status, lang string, limit, offset int) ([]*StagedMergedRow, int64, error) {
-	q := `SELECT key, id, kind, phrase_kind, pack_type, tier, src_lang, src_text, tgt_lang, tgt_text, source_url, status FROM (
-		SELECT ('entries:' || CAST(id AS TEXT)) AS key, id, 'entries' AS kind, '' AS phrase_kind, pack_type, tier,
-		       src_lang, src_text, tgt_lang, tgt_text, source_url, status
-		  FROM kb_staged_entries WHERE 1=1`
+// pack_type 过滤对 phrases 无效（安全句恒为 locale 包，pack_type=industry 时安全句全排除）；
+// industry 过滤经来源数据源关联（kb_pack_sources.industry），同时输出 industry 列供前端展示。
+// ★ 列名限定：kb_pack_sources 与 kb_staged_entries 均含 pack_type/tier/id 列，JOIN 后须 e./ps. 全量限定避免歧义。
+func (s *Store) ListStagedMerged(packType, status, lang, industry string, limit, offset int) ([]*StagedMergedRow, int64, error) {
+	q := `SELECT key, id, kind, phrase_kind, pack_type, tier, industry, src_lang, src_text, tgt_lang, tgt_text, source_url, status FROM (
+		SELECT ('entries:' || CAST(e.id AS TEXT)) AS key, e.id AS id, 'entries' AS kind, '' AS phrase_kind, e.pack_type AS pack_type, e.tier AS tier,
+		       COALESCE(ps.industry,'') AS industry, e.src_lang AS src_lang, e.src_text AS src_text, e.tgt_lang AS tgt_lang, e.tgt_text AS tgt_text, e.source_url AS source_url, e.status AS status
+		  FROM kb_staged_entries e LEFT JOIN kb_pack_sources ps ON ps.id=e.source_id WHERE 1=1`
 	args := []interface{}{}
 	if packType != "" {
-		q += " AND pack_type=?"
+		q += " AND e.pack_type=?"
 		args = append(args, packType)
 	}
 	if status != "" {
-		q += " AND status=?"
+		q += " AND e.status=?"
 		args = append(args, status)
 	}
 	if lang != "" {
-		q += " AND (src_lang=? OR tgt_lang=?)"
+		q += " AND (e.src_lang=? OR e.tgt_lang=?)"
 		args = append(args, lang, lang)
+	}
+	if industry != "" {
+		q += " AND ps.industry=?"
+		args = append(args, industry)
 	}
 	q += ` UNION ALL
 		SELECT ('phrases:' || CAST(id AS TEXT)) AS key, id, 'phrases' AS kind, kind AS phrase_kind, 'locale' AS pack_type, tier,
-		       lang AS src_lang, phrase AS src_text, '' AS tgt_lang, replacement AS tgt_text,
+		       '' AS industry, lang AS src_lang, phrase AS src_text, '' AS tgt_lang, replacement AS tgt_text,
 		       '语言文化规范' AS source_url, status
 		  FROM kb_staged_phrases WHERE 1=1`
 	if status != "" {
@@ -581,15 +595,18 @@ func (s *Store) ListStagedMerged(packType, status, lang string, limit, offset in
 	if packType == "industry" {
 		q += " AND kind='entries'" // 行业筛选下安全句（恒 locale）整体排除，与前端语义一致
 	}
+	if industry != "" {
+		q += " AND kind='entries'" // 行业筛选下安全句（无行业概念）整体排除
+	}
 	if limit <= 0 {
 		limit = 200
 	}
 	if offset < 0 {
 		offset = 0
 	}
-	// 精确总数：条目 + 安全句（pack_type 过滤仅作用于条目）
-	total, _ := s.CountStagedEntries(packType, status, lang)
-	if packType != "industry" {
+	// 精确总数：条目 + 安全句（pack_type/industry 过滤仅作用于条目）
+	total, _ := s.CountStagedEntries(packType, status, lang, industry)
+	if packType != "industry" && industry == "" {
 		tp, _ := s.CountStagedPhrases(status, lang)
 		total += tp
 	}
@@ -603,7 +620,7 @@ func (s *Store) ListStagedMerged(packType, status, lang string, limit, offset in
 	var out []*StagedMergedRow
 	for rows.Next() {
 		var r StagedMergedRow
-		if err := rows.Scan(&r.Key, &r.ID, &r.Kind, &r.PhraseKind, &r.PackType, &r.Tier,
+		if err := rows.Scan(&r.Key, &r.ID, &r.Kind, &r.PhraseKind, &r.PackType, &r.Tier, &r.Industry,
 			&r.SrcLang, &r.SrcText, &r.TgtLang, &r.TgtText, &r.SourceURL, &r.Status); err == nil {
 			out = append(out, &r)
 		}
