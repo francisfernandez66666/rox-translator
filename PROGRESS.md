@@ -1,6 +1,19 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-03（待审面板服务端分页 + LLM 解析容错发版；已部署生产+演示，main 分支 82ffccb）
+> 最后更新：2026-09-03（任务中心 + 后台菜单重组 + 行业筛选 + 计费审计 + 中性词/后处理增强发版；已部署生产+演示，main 分支 18c6857）
+
+## 〇-XI、任务中心 + 后台菜单重组 + 行业筛选 + 计费审计修复（2026-09-03，提交 18c6857）
+
+> 四线并行交付：①用户增长向的「任务中心」（每日/一次性任务领永久 token）与「个人中心」菜单；②后台菜单层级收敛（协议签署并入系统设置、开放 API+回调通知并入外部调用、邀请好友并入个人中心，流程引擎并入系统设置并修复跳转白板）；③待审池支持按行业筛选；④计费链路审计修复 + 中性词豁免 + 后处理增强。已本地构建/冒烟 + 生产部署验证通过。
+
+| 块 | 内容 |
+|---|---|
+| **任务中心（新）** | `user_tasks`/`user_task_claims` 建表（启动迁移幂等）+ 后端 `internal/api/tasks.go`（超管增删改 `/api/admin/tasks*` + 用户 `/api/me/tasks*`）+ `internal/store/tasks.go`（`ListTasks` 按 enabled/sort_order 排序、`ClaimUserTask` 日频/一次频去重 + 事务发放永久 token）；前端 `TaskCenterP`（用户视图一键领取 + 超管增删改弹窗）+ `api/tasks.ts` + `panels/tasks.ts` 中英 i18n。**路由已注册**（server.go `routesTasks`） |
+| **后台菜单重组** | 侧边栏收敛为 10 项：协议签署并入「系统设置」（SystemSettingsP 增加第 4 个 agreements tab）；开放 API+回调通知并入「外部调用」（ExternalCallsP 双 tab）；邀请好友+任务中心并入「个人中心」（PersonalCenterP 双 tab）；流程引擎并入「系统设置」（修复原菜单独立直达白板 bug）；stores/admin.tsx `PanelKey` 新增 `external`/`personal`、AdminDashboard `renderPanel` 补全 case，隐藏面板仍可跳转不白板 |
+| **待审行业筛选** | `ListStagedMerged`/`CountStagedEntries` 支持 `industry` 参数（JOIN `kb_pack_sources.industry`，指定行业时安全句整体排除，与前端语义一致）；`handleKBScrapeStaged` 透传；前端待审面板新增行业下拉（`INDUSTRY_META` 本地化名）+ 行业列，请求带 `industry` |
+| **计费链路审计修复** | `billing.go`/`quota_grants.go` 口径核对与修正；`admin_kb.go` 相关接口加固；`store.go` 迁移补充 |
+| **中性词豁免 + 后处理增强** | `culture/culture.go` 中性词豁免策略；`engine/postprocess.go` 后处理增强（配合 `panels_d.tsx` 前端展示）；`tier3_llm.go` 相关容错 |
+| **验证与发布** | go build/vet/test 全绿 + npm typecheck/vite build 通过；本地冒烟实测任务中心（建任务→领取+5000→重复领取被拒→已领取标记）与行业筛选 JOIN（health/finance 各取对应行）通过；已部署生产 langcross.lexicorn.cn（/api/health 全 true、/status dialect=postgres、新表 `user_tasks`/`user_task_claims` 已建、新路由 401/403 鉴权正常）；本次提交不含文档/流程图 |
 
 ## 〇-X、待审面板服务端分页 + LLM 输出容错（2026-09-03，提交 82ffccb）
 
@@ -250,7 +263,7 @@
 - **TM 自闭环**：tm_review 待审池唯一入库通道（超管人工审核通过才落正式 TM）；bitext/tmx/反馈修正/命中达标四来源候选
 - **开放 API**：`POST /openapi/v1/tasks` 异步任务 + 轮询 status/download + balance；AES-GCM 密钥加密与一次性明文展示
 - **组织架构**：平台根→租户根→组织→部门四级树、拖拽调层级、部门预算徽标弹窗、邀请码绑定组织
-  - **管理后台**：三工作台（超管/租管/部门管）、租户切换器、OpenAPI 文档在线编辑（双语）、审计日志、告警中心、记忆审核台
+  - **管理后台**：三工作台（超管/租管/部门管）、租户切换器、OpenAPI 文档在线编辑（双语）、审计日志、告警中心、记忆审核台、**任务中心（用户领永久 token + 超管自定义每日/一次性任务）**、**个人中心（邀请好友 + 任务中心）**、**外部调用（开放 API + 回调通知）**、**协议签署并入系统设置**（2026-09-03 菜单重组，详见 〇-XI）
    - **品牌定制与子域名**：按子域名前缀解析租户品牌（名称/Logo/子域）；Caddy on-demand TLS 自动签发证书（需 DNS 通配符 A 记录 `*.lexicorn.cn → 服务器 IP`）；品牌信息前端按 host 直接调 `/api/tenant/branding` 加载（无根域覆盖）；登录成功后自动跳转至所属品牌子域（后端返回 `brand_host`）。品牌定制为付费套餐功能（有效付费套餐或超管授权方可编辑，未满足仅可查看）；登录页支持两种布局——① 全屏背景（登录卡片浮于其上，无遮罩）② 左右分栏（容器可在左/右，另一侧为图片）；登录卡片与背景图位置均可在品牌管理页拖拽定位并保存；语言切换（中文/EN）为全局设计，内嵌于登录容器右上角
 - **Office 划译插件**：Word 侧加载 taskpane，选区翻译插回文档
 - **运维护栏（1G 内存红线，2026-08-28 优化）**：`GOMEMLIMIT=650Mi`、`MemoryMax=950M`、worker=2、LLM 并发 8（禁 HTTP/2 治流挂起）；**文件翻译防卡死**：PDF 体积>40MB 或页数>120 前置拦截 + 友好提示；转换子进程 OOM 优先受害者 + 可选 `FILEPROC_RLIMIT_AS_MB` 硬上限；**并发写零 SQLITE_BUSY**：实时用量计量改为内存累积 + 周期(2s/200条)按租户单事务批量落库（写事务从每秒 N 个降到每周期每租户 1 个），并用 `usage_daily` 计数器表替代每次请求的 ledger `LIKE` 全扫；产物留存 14 天+到期提醒、pending 订单 15min 自动关闭、低额提醒巡检
