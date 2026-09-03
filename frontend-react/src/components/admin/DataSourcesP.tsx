@@ -14,7 +14,7 @@ import {
   scrapeSources, scrapeSourceCreate, scrapeSourceUpdate, scrapeSourceStatus, scrapeSourceRun,
   scrapeStaged, scrapeApprove, scrapeRestore, scrapeSummary,
   kbRewardConfigGet, kbRewardConfigSet,
-  type ScrapeSource, type StagedEntry, type StagedPhrase, type ScrapeSummary,
+  type ScrapeSource, type StagedMergedRow, type ScrapeSummary,
 } from '@/api/scrape'
 
 /** 待审表格行类型（entries/phrases 合并行） */
@@ -57,10 +57,12 @@ export default function DataSourcesP() {
     kind: 'official_api', name: '', base_url: '', lang: 'en', industry: '', pack_type: 'locale', tier: 1, freq_hours: 24,
   })
 
-  // ---- 待审池 ----
+  // ---- 待审池（服务端分页） ----
   const [tab, setTab] = useState<'sources' | 'staged'>('sources')
-  const [entries, setEntries] = useState<StagedEntry[]>([])
-  const [phrases, setStagedPhrases] = useState<StagedPhrase[]>([])
+  const [rows, setRows] = useState<StagedMergedRow[]>([])
+  const [stagedTotal, setStagedTotal] = useState(0)
+  const [stagedPage, setStagedPage] = useState(1)
+  const STAGED_PAGE_SIZE = 20
   const [stagedFilter, setStagedFilter] = useState<{ pack_type: string; status: string; lang: string }>({ pack_type: '', status: 'pending', lang: '' })
   // 选中行（合并行复合键 "entries:<id>" / "phrases:<id>"，避免两表自增 ID 撞车误伤）
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
@@ -105,17 +107,26 @@ export default function DataSourcesP() {
     if (sm.success) setSummary(sm.summary || null)
   }
 
-  /** 刷新待审池 */
-  const reloadStaged = async () => {
-    const r = await scrapeStaged(stagedFilter)
+  /** 刷新待审池（服务端分页：limit/offset 拉当前页 + 真实总数） */
+  const reloadStaged = async (page = stagedPage) => {
+    const r = await scrapeStaged({
+      pack_type: stagedFilter.pack_type,
+      status: stagedFilter.status,
+      lang: stagedFilter.lang,
+      limit: STAGED_PAGE_SIZE,
+      offset: (page - 1) * STAGED_PAGE_SIZE,
+    })
     if (r.success) {
-      setEntries(r.entries || [])
-      setStagedPhrases(r.phrases || [])
+      setRows(r.rows || [])
+      setStagedTotal(r.total || 0)
     }
   }
 
   useEffect(() => { reload() }, [])
-  useEffect(() => { if (tab === 'staged') reloadStaged() }, [tab, stagedFilter])
+  useEffect(() => {
+    if (tab === 'staged') { setStagedPage(1); reloadStaged(1) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, stagedFilter])
   useEffect(() => { loadReward() }, [])
 
   /** 新增数据源 */
@@ -218,18 +229,15 @@ export default function DataSourcesP() {
     reload()
   }
 
-  /** 拼接待审合并行（条目+安全句统一展示；复合键防两表 ID 撞车） */
-  const mergedRows = useMemo((): StagedRow[] => {
-    const es = entries.map((e) => ({
-      key: `entries:${e.id}`, id: e.id, kind: 'entries' as const, tier: e.tier, pack_type: e.pack_type,
-      lang: `${langLabelCN(e.src_lang)} → ${langLabelCN(e.tgt_lang)}`, src: e.src_text, tgt: e.tgt_text, source_url: e.source_url, status: e.status,
-    }))
-    const ps = phrases.map((p) => ({
-      key: `phrases:${p.id}`, id: p.id, kind: 'phrases' as const, tier: p.tier, pack_type: 'locale',
-      lang: langLabelCN(p.lang), src: `[${p.kind}] ${p.phrase}`, tgt: p.replacement || '', source_url: '语言文化规范', status: p.status,
-    }))
-    return [...es, ...ps]
-  }, [entries, phrases])
+  /** 拼接待审合并行（条目+安全句统一展示；复合键防两表 ID 撞车；服务端已分页） */
+  const mergedRows = useMemo((): StagedRow[] => rows.map((e) => ({
+    key: e.key, id: e.id, kind: e.kind, tier: e.tier, pack_type: e.pack_type,
+    lang: e.kind === 'phrases'
+      ? langLabelCN(e.src_lang)
+      : `${langLabelCN(e.src_lang)} → ${langLabelCN(e.tgt_lang)}`,
+    src: e.kind === 'phrases' && e.phrase_kind ? `[${e.phrase_kind}] ${e.src_text}` : e.src_text,
+    tgt: e.tgt_text || '', source_url: e.source_url, status: e.status,
+  })), [rows])
 
   /** 表格列定义 */
   const srcCols = [
@@ -327,7 +335,7 @@ export default function DataSourcesP() {
             )}
             <Table rowKey="id" data={sources} columns={srcCols} size="small" bordered />
           </Tabs.TabPanel>
-          <Tabs.TabPanel value="staged" label={`待审增量（${mergedRows.length}）`}>
+          <Tabs.TabPanel value="staged" label={`待审增量（${stagedTotal}）`}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
               <RadioGroup value={stagedFilter.pack_type} onChange={(v: string) => setStagedFilter((f) => ({ ...f, pack_type: v }))}>
                 <Radio value="">全部</Radio>
@@ -358,7 +366,19 @@ export default function DataSourcesP() {
               bordered
               selectedRowKeys={selectedKeys}
               onSelectChange={(keys: any) => setSelectedKeys(keys)}
-              pagination={{ pageSize: 20, total: mergedRows.length }}
+              pagination={{
+                current: stagedPage,
+                pageSize: STAGED_PAGE_SIZE,
+                total: stagedTotal,
+                showJumper: true,
+                onChange: (pi: unknown) => {
+                  const p = typeof pi === 'number' ? pi : Number((pi as { current?: number })?.current || 1)
+                  if (p === stagedPage) return
+                  setSelectedKeys([])
+                  setStagedPage(p)
+                  reloadStaged(p)
+                },
+              }}
             />
           </Tabs.TabPanel>
         </Tabs>

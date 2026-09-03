@@ -61,6 +61,22 @@ export interface StagedPhrase {
   created_at: string
 }
 
+/** 待审合并行（entries/phrases 两表 UNION 统一结构，服务端分页返回） */
+export interface StagedMergedRow {
+  key: string            // kind:id 复合键（rowKey/选中键）
+  id: number
+  kind: 'entries' | 'phrases'
+  phrase_kind: string    // phrases 的 style/forbidden/replace（entries 为空）
+  pack_type: string
+  tier: number
+  src_lang: string
+  src_text: string       // entries=源文本；phrases=语言文化短语
+  tgt_lang: string
+  tgt_text: string       // entries=译文；phrases=规范/替换词
+  source_url: string
+  status: string
+}
+
 /** 概览 */
 export interface ScrapeSummary {
   pending_entries: number
@@ -95,8 +111,8 @@ export async function scrapeSourceRun(): Promise<AdminResp & { sources_done?: nu
   return request('/api/admin/kb-scrape/sources/run', { method: 'POST', headers: authHeaders() })
 }
 
-/** 待审池列表 */
-export async function scrapeStaged(params: { pack_type?: string; status?: string; lang?: string; limit?: number; offset?: number }): Promise<AdminResp & { entries?: StagedEntry[]; phrases?: StagedPhrase[] }> {
+/** 待审池列表（服务端分页：limit/offset + 合并行集 rows + 精确总数 total） */
+export async function scrapeStaged(params: { pack_type?: string; status?: string; lang?: string; limit?: number; offset?: number }): Promise<AdminResp & { rows?: StagedMergedRow[]; total?: number; limit?: number; offset?: number }> {
   const q = new URLSearchParams()
   if (params.pack_type) q.set('pack_type', params.pack_type)
   if (params.status) q.set('status', params.status)

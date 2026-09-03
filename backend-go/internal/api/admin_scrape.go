@@ -156,6 +156,7 @@ func (s *Server) handleKBScrapeSourceRun(w http.ResponseWriter, r *http.Request)
 
 // handleKBScrapeStaged 待审池列表（超管）。
 // query: pack_type / status / lang / limit / offset
+// ★ 服务端分页：返回合并行集 rows + 精确总数 total（条目+安全句同口径），前端据此翻页
 func (s *Server) handleKBScrapeStaged(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireSuperAdmin(w, r); err != nil {
 		return
@@ -169,17 +170,17 @@ func (s *Server) handleKBScrapeStaged(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
-	entries, err := s.Store.ListStagedEntries(packType, status, lang, limit, offset)
+	if offset < 0 {
+		offset = 0
+	}
+	rows, total, err := s.Store.ListStagedMerged(packType, status, lang, limit, offset)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	phrases, err := s.Store.ListStagedPhrases(status, lang, limit, offset)
-	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
-		return
-	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "entries": entries, "phrases": phrases})
+	writeJSON(w, 200, map[string]interface{}{
+		"success": true, "rows": rows, "total": total, "limit": limit, "offset": offset,
+	})
 }
 
 // handleKBScrapeApprove 批量审批：通过→落正式库（行业/语言文化条目用 SaveEntry，

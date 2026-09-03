@@ -73,6 +73,23 @@ type KBStagedPhrase struct {
 	AppliedAt   string `json:"applied_at"`
 }
 
+// StagedMergedRow 待审池合并行（服务端分页返回）：entries/phrases 两表 UNION 统一结构。
+// 展示与审批沿用前端既有合并行语义：kind 区分来源表，复合键 key=kind:id 防两表自增撞车。
+type StagedMergedRow struct {
+	Key        string `json:"key"` // kind:id（前端 rowKey/选中键）
+	ID         int64  `json:"id"`
+	Kind       string `json:"kind"` // entries / phrases
+	PhraseKind string `json:"phrase_kind"` // phrases 的 style/forbidden/replace（entries 为空）
+	PackType   string `json:"pack_type"`
+	Tier       int    `json:"tier"`
+	SrcLang    string `json:"src_lang"` // entries=src_lang；phrases=lang
+	SrcText    string `json:"src_text"` // entries=src_text；phrases=phrase
+	TgtLang    string `json:"tgt_lang"` // entries=tgt_lang；phrases=""
+	TgtText    string `json:"tgt_text"` // entries=tgt_text；phrases=replacement
+	SourceURL  string `json:"source_url"`
+	Status     string `json:"status"`
+}
+
 // ScrapeStagedSummary 待审池汇总（管理面板一屏概览）
 type ScrapeStagedSummary struct {
 	PendingEntries int    `json:"pending_entries"` // 待审条目数
@@ -486,6 +503,112 @@ func (s *Store) StagePhrasesBatch(items []*KBStagedPhrase) (int, error) {
 		return added, err
 	}
 	return added, nil
+}
+
+// CountStagedEntries 统计待审条目数（与 ListStagedEntries 同口径筛选，供前端分页总数）。
+func (s *Store) CountStagedEntries(packType, status, lang string) (int64, error) {
+	q := "SELECT COUNT(*) FROM kb_staged_entries WHERE 1=1"
+	args := []interface{}{}
+	if packType != "" {
+		q += " AND pack_type=?"
+		args = append(args, packType)
+	}
+	if status != "" {
+		q += " AND status=?"
+		args = append(args, status)
+	}
+	if lang != "" {
+		q += " AND (src_lang=? OR tgt_lang=?)"
+		args = append(args, lang, lang)
+	}
+	var n int64
+	err := db.QueryRow(s.db, db.CurrentDialect(), q, args...).Scan(&n)
+	return n, err
+}
+
+// CountStagedPhrases 统计待审安全句数（与 ListStagedPhrases 同口径筛选，供前端分页总数）。
+func (s *Store) CountStagedPhrases(status, lang string) (int64, error) {
+	q := "SELECT COUNT(*) FROM kb_staged_phrases WHERE 1=1"
+	args := []interface{}{}
+	if status != "" {
+		q += " AND status=?"
+		args = append(args, status)
+	}
+	if lang != "" {
+		q += " AND lang=?"
+		args = append(args, lang)
+	}
+	var n int64
+	err := db.QueryRow(s.db, db.CurrentDialect(), q, args...).Scan(&n)
+	return n, err
+}
+
+// ListStagedMerged 待审池合并分页（entries+phrases UNION ALL 统一行集，服务端分页）。
+// 与前端既有合并行语义对齐：kind 区分来源表，key=kind:id 复合键防两表自增撞车；
+// pack_type 过滤对 phrases 无效（安全句恒为 locale 包，pack_type=industry 时安全句全排除）。
+func (s *Store) ListStagedMerged(packType, status, lang string, limit, offset int) ([]*StagedMergedRow, int64, error) {
+	q := `SELECT key, id, kind, phrase_kind, pack_type, tier, src_lang, src_text, tgt_lang, tgt_text, source_url, status FROM (
+		SELECT ('entries:' || CAST(id AS TEXT)) AS key, id, 'entries' AS kind, '' AS phrase_kind, pack_type, tier,
+		       src_lang, src_text, tgt_lang, tgt_text, source_url, status
+		  FROM kb_staged_entries WHERE 1=1`
+	args := []interface{}{}
+	if packType != "" {
+		q += " AND pack_type=?"
+		args = append(args, packType)
+	}
+	if status != "" {
+		q += " AND status=?"
+		args = append(args, status)
+	}
+	if lang != "" {
+		q += " AND (src_lang=? OR tgt_lang=?)"
+		args = append(args, lang, lang)
+	}
+	q += ` UNION ALL
+		SELECT ('phrases:' || CAST(id AS TEXT)) AS key, id, 'phrases' AS kind, kind AS phrase_kind, 'locale' AS pack_type, tier,
+		       lang AS src_lang, phrase AS src_text, '' AS tgt_lang, replacement AS tgt_text,
+		       '语言文化规范' AS source_url, status
+		  FROM kb_staged_phrases WHERE 1=1`
+	if status != "" {
+		q += " AND status=?"
+		args = append(args, status)
+	}
+	if lang != "" {
+		q += " AND lang=?"
+		args = append(args, lang)
+	}
+	q += `) AS staged WHERE 1=1`
+	if packType == "industry" {
+		q += " AND kind='entries'" // 行业筛选下安全句（恒 locale）整体排除，与前端语义一致
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	// 精确总数：条目 + 安全句（pack_type 过滤仅作用于条目）
+	total, _ := s.CountStagedEntries(packType, status, lang)
+	if packType != "industry" {
+		tp, _ := s.CountStagedPhrases(status, lang)
+		total += tp
+	}
+	q += " ORDER BY (CASE kind WHEN 'entries' THEN 0 ELSE 1 END), id DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []*StagedMergedRow
+	for rows.Next() {
+		var r StagedMergedRow
+		if err := rows.Scan(&r.Key, &r.ID, &r.Kind, &r.PhraseKind, &r.PackType, &r.Tier,
+			&r.SrcLang, &r.SrcText, &r.TgtLang, &r.TgtText, &r.SourceURL, &r.Status); err == nil {
+			out = append(out, &r)
+		}
+	}
+	return out, total, nil
 }
 
 // ListStagedPhrases 列出待审安全句（可按状态/语言筛选，分页）。

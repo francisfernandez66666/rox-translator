@@ -202,11 +202,82 @@ var industryNames = map[string]string{
 	"retail": "电商/零售", "media": "自媒体/内容创作",
 }
 
+// cleanJSONFence 去除 Markdown 代码块包裹（```json / ```JSON / ``` 等围栏形式）。
+// 低语种模型常把 JSON 包在代码块内输出，直接剥掉首行围栏与末尾 ``` 后返回纯 JSON 文本。
+// 参数：s=LLM 原始输出；返回剥围栏后的文本（无围栏时原样返回）。
+func cleanJSONFence(s string) string {
+	t := strings.TrimSpace(s)
+	if !strings.HasPrefix(t, "```") {
+		return t
+	}
+	// 去掉首行围栏（如 ```json），保留其后正文
+	rest := t[3:]
+	if idx := strings.IndexByte(rest, '\n'); idx >= 0 {
+		rest = rest[idx+1:]
+	}
+	// 去掉末尾 ``` 围栏（可能带尾随空白）
+	rest = strings.TrimSpace(rest)
+	rest = strings.TrimSuffix(rest, "```")
+	return strings.TrimSpace(rest)
+}
+
+// stripTrailingCommas 字符串感知地剔除 JSON 中的尾逗号（如 {"a":1,} → {"a":1}）。
+// 低语种模型经常在数组/对象最后一项后多打逗号，导致严格 JSON 校验失败。
+// 特性：①跳过字符串字面量内的逗号（正确处理 \" 转义），不影响文本内容
+// ②仅当逗号后（跳过空白）紧跟右括号 } 或 ] 时才判定为尾逗号并剔除。
+// 参数：s=待清洗文本；返回去除尾逗号后的文本。
+func stripTrailingCommas(s string) string {
+	if s == "" {
+		return s
+	}
+	buf := make([]byte, 0, len(s))
+	inStr := false
+	esc := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if inStr {
+			buf = append(buf, ch)
+			if esc {
+				esc = false
+				continue
+			}
+			if ch == '\\' {
+				esc = true
+				continue
+			}
+			if ch == '"' {
+				inStr = false
+			}
+			continue
+		}
+		if ch == '"' {
+			inStr = true
+			buf = append(buf, ch)
+			continue
+		}
+		if ch == ',' {
+			// 跳过逗号后的空白，看是否紧跟右括号（尾逗号特征）
+			j := i + 1
+			for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+				j++
+			}
+			if j < len(s) && (s[j] == '}' || s[j] == ']') {
+				continue // 尾逗号，直接丢弃
+			}
+		}
+		buf = append(buf, ch)
+	}
+	return string(buf)
+}
+
 // extractJSON 从 LLM 输出中提取 JSON 对象/数组（容忍 Markdown 代码块包裹、前后缀文字、
-// 输出截断等）。特性：①字符串感知的括号平衡（引号内 { } [ ] 不计深度，正确处理 \" 转义）
-// ②对象/数组两种顶层形态均可提取 ③遍历所有候选起点，返回第一个能通过 json.Valid
+// 输出截断等）。特性：①预处理剥离代码块围栏与尾逗号（cleanJSONFence/stripTrailingCommas）
+// ②字符串感知的括号平衡（引号内 { } [ ] 不计深度，正确处理 \" 转义）
+// ③对象/数组两种顶层形态均可提取 ④遍历所有候选起点，返回第一个能通过 json.Valid
 // 校验的片段（规避模型在 JSON 外附加说明或被截断导致的错位）。
 func extractJSON(s string) string {
+	s = cleanJSONFence(s)
+	s = stripTrailingCommas(s)
 	s = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "\ufeff")) // 去 BOM
 	for i := 0; i < len(s); i++ {
 		if s[i] != '{' && s[i] != '[' {

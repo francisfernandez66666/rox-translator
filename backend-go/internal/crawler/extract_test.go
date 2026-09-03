@@ -36,6 +36,46 @@ func TestExtractJSONRobust(t *testing.T) {
 	}
 }
 
+// TestExtractJSONTrailingComma 验证 extractJSON 对「尾逗号+Markdown 代码块」输出的容错清洗。
+// 覆盖线上真实失败样本（ur/te 低语种模型输出）：条目末项多打逗号、整体被 ```json 围栏包裹。
+func TestExtractJSONTrailingComma(t *testing.T) {
+	// 线上失败样本 1（ur）：尾逗号 + 无围栏
+	s1 := `{"entries":[{"src":"企业服务","tgt":"کارپوریٹ سروسیس",},{"src":"B2B","tgt":"B2B",}]}`
+	out1, err := parseLLMOutput(s1)
+	if err != nil {
+		t.Fatalf("s1 parse err=%v", err)
+	}
+	if len(out1.Entries) != 2 || out1.Entries[0].TgtText != "کارپوریٹ سروسیس" {
+		t.Fatalf("s1 entries=%+v", out1.Entries)
+	}
+	// 线上失败样本 2（te）：```json 围栏 + 尾逗号 + 中文换行布局
+	s2 := "```json\n{\n  \"entries\": [\n    {\"src\": \"教育\", \"tgt\": \"విద్య\", },\n    {\"src\": \"留学\", \"tgt\": \"అంతర్జాతీయ విద్య\", }\n  ]\n}\n```"
+	out2, err := parseLLMOutput(s2)
+	if err != nil {
+		t.Fatalf("s2 parse err=%v", err)
+	}
+	if len(out2.Entries) != 2 || out2.Entries[1].TgtText != "అంతర్జాతీయ విద్య" {
+		t.Fatalf("s2 entries=%+v", out2.Entries)
+	}
+	// 围栏内尾逗号不应影响字符串字面量里的逗号
+	s3 := "```json\n{\"entries\":[{\"src\":\"教育\",\"tgt\":\"విద్య, ఉన్నత\",}]}\n```"
+	out3, err := parseLLMOutput(s3)
+	if err != nil {
+		t.Fatalf("s3 parse err=%v", err)
+	}
+	if len(out3.Entries) != 1 || out3.Entries[0].TgtText != "విద్య, ఉన్నత" {
+		t.Fatalf("s3 entries=%+v", out3.Entries)
+	}
+	// 安全句同样适用尾逗号清洗
+	out4, err := parseLLMOutput(`{"phrases":[{"kind":"forbidden","phrase":"fuck",},{"kind":"style","phrase":"please",}]}`)
+	if err != nil {
+		t.Fatalf("s4 parse err=%v", err)
+	}
+	if len(out4.Phrases) != 2 || out4.Phrases[1].Kind != "style" {
+		t.Fatalf("s4 phrases=%+v", out4.Phrases)
+	}
+}
+
 // TestParseLLMOutputArray 验证 parseLLMOutput 解析顶层数组 JSON（条目对象列表）与安全句对象。
 func TestParseLLMOutputArray(t *testing.T) {
 	// 顶层数组：元素为条目对象
