@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"translator/internal/auth"
+	"translator/internal/billing"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -503,6 +504,8 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 			if gerr := s.Store.CreateQuotaGrant(0, "trial", trialTokens, time.Now().Add(time.Duration(trialDays)*24*time.Hour), "register", 0); gerr != nil {
 				_ = s.Store.Charge(0, trialTokens)
 			}
+			// ★ 影子余额失效重建：发放后立即让计费影子重新 seed，避免「已发放仍提示耗尽」
+			billing.InvalidateShadow(0)
 		}
 		s.Store.LogAuditDiff(1, u.ID, "grant_trial", "tenant", "0",
 			`{"package_code":""}`, `{"package_code":"trial","sentences":`+strconv.FormatInt(trialSentences, 10)+`}`)
@@ -549,6 +552,8 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 		if gerr := s.Store.CreateQuotaGrant(t.ID, "trial", trialTokens, time.Now().Add(time.Duration(trialDays)*24*time.Hour), "register", 0); gerr != nil {
 			_ = s.Store.Charge(t.ID, trialTokens)
 		}
+		// ★ 影子余额失效重建：发放后立即让计费影子重新 seed，避免「已发放仍提示耗尽」
+		billing.InvalidateShadow(t.ID)
 	}
 	// 审计 + 通知租户管理员
 	s.Store.LogAuditDiff(s.effTenant(r, u), u.ID, "grant_trial", "tenant", strconv.FormatInt(t.ID, 10),

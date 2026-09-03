@@ -142,6 +142,9 @@ export default function Login({ mode, onLogin }: Props) {
         return
       }
       onLogin(u)
+    } catch (e: any) {
+      // 接口异常（如凭证错误返回 401）时把后端/网络错误信息透出，避免无提示
+      setError(e?.message || t('login.fail'))
     } finally { setLoading(false) }
   }
 

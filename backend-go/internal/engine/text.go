@@ -26,6 +26,8 @@ type TextTranslateResult struct {
 	Data  TextTranslateData `json:"data"`  // 结构化翻译数据
 	Files []string          `json:"files"` // 关联文件（文本翻译通常为空）
 	Error string            `json:"error"` // 失败原因（成功时为空）
+	// ★ 2026-09-03 需求：每次翻译结果携带实际消耗的 LLM token 数（全链路真实用量）
+	TokensUsed int64 `json:"tokens_used"`
 }
 
 // TextTranslateData 文本翻译结构化数据
@@ -318,6 +320,13 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 	}
 	sb.WriteString("\n📊 模式：" + mode)
 
+	// ★ 2026-09-03 需求：结果附带本次翻译实际消耗的 token 数（全链路真实用量）
+	tp, tc := e.UsageTokens(ctx)
+	tokensUsed := tp + tc
+	if tokensUsed > 0 {
+		sb.WriteString(fmt.Sprintf("\n⚡ 本次翻译消耗 token：%d", tokensUsed))
+	}
+
 	if len(gateWarnings) > 0 {
 		sb.WriteString("\n\n⚠️ 质量校验提示：\n" + strings.Join(gateWarnings, "\n"))
 	}
@@ -344,5 +353,6 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 			TargetLangs:        append(append([]string{}, kbTarget...), directOther...),
 			GateWarnings:       gateWarnings,
 		},
+		TokensUsed: tokensUsed,
 	}
 }

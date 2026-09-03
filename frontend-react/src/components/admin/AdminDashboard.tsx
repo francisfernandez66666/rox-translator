@@ -15,13 +15,12 @@ import SiteFooter from '@/components/SiteFooter'
 import { useBranding } from '@/branding'
 
 import Overview from './panels_a'
-import { UsersP, AlertsP, InvitesP, AgreementsP } from './panels_a'
+import { UsersP, InvitesP, AgreementsP } from './panels_a'
 import { TenantsP, OrgP } from './panels_b'
 import BrandP from './BrandP'
-import FooterP from './FooterP'
-import MailTplP from './MailTplP'
+import SystemSettingsP from './SystemSettingsP'
 import { PlansP, ReferralP, WebhooksP, ApiKeysP } from './panels_c'
-import { KbP, ModelsP, WorkflowP, TicketsP } from './panels_d'
+import { KbP, ModelsP, TicketsP } from './panels_d'
 
 // 菜单项接口定义：key 对应 admin store 中的面板标识，minLevel 为可见最低角色等级
 interface Item { key: PanelKey; label: string; minLevel: number }
@@ -39,11 +38,9 @@ const ITEMS: Item[] = [
   { key: 'apikeys', label: 'admin.menuApikeys', minLevel: 3 },
   { key: 'webhooks', label: 'admin.menuWebhooks', minLevel: 3 },
   { key: 'tickets', label: 'admin.menuTickets', minLevel: 2 },
-  { key: 'alerts', label: 'admin.menuAlerts', minLevel: 4 },
   { key: 'agreements', label: 'admin.menuAgreements', minLevel: 2 },
   { key: 'brand', label: 'admin.menuBrand', minLevel: 3 },
-  { key: 'footer', label: 'admin.menuFooter', minLevel: 4 },
-  { key: 'mailTpl', label: 'admin.menuMailTpl', minLevel: 4 },
+  { key: 'system', label: 'admin.menuSystem', minLevel: 4 },
 ]
 
 /** 根据当前选中的面板 key 返回对应组件（集中分发，避免在 JSX 中写长 switch） */
@@ -56,16 +53,13 @@ function renderPanel(p: PanelKey) {
     case 'org': return <OrgP />
     case 'kb': return <KbP />
     case 'models': return <ModelsP />
-    case 'workflow': return <WorkflowP />
     case 'apikeys': return <ApiKeysP />
     case 'webhooks': return <WebhooksP />
     case 'tickets': return <TicketsP />
-    case 'alerts': return <AlertsP />
     case 'users': return <UsersP />
     case 'agreements': return <AgreementsP />
     case 'brand': return <BrandP />
-    case 'footer': return <FooterP />
-    case 'mailTpl': return <MailTplP />
+    case 'system': return <SystemSettingsP />
     default: return null
   }
 }

@@ -12,6 +12,7 @@ export interface LangMeta {
 
 /** 语言代码 → 元数据映射表（中/英名称 + 国旗），与后端配置同源，供语言选择器与展示统一使用 */
 export const LANG_META: Record<string, LangMeta> = {
+  zh: { code: 'zh', zh: '中文', en: 'Chinese', flag: '🇨🇳' },
   en: { code: 'en', zh: '英语', en: 'English', flag: '🇬🇧' },
   ru: { code: 'ru', zh: '俄语', en: 'Russian', flag: '🇷🇺' },
   ar: { code: 'ar', zh: '阿拉伯语', en: 'Arabic', flag: '🇸🇦' },

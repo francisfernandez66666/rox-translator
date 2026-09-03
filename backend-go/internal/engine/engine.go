@@ -1238,7 +1238,9 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 
 	// finish_reason=length 或空内容 → 翻倍 max_tokens 重试
 	if (finishReason == "length" || content == "") && attempt < 2 {
-		if maxTokens*2 <= 8192 {
+		// ★ 2026-09-03 长文本丢内容修复：上限由 8192 提到 16384——
+		//   长文一次调用 maxTokens 可能已到 8192，翻倍被旧上限钳制无法扩容，译文被截断在中段。
+		if maxTokens*2 <= 16384 {
 			maxTokens *= 2
 		}
 		return e.singleLang(ctx, zhText, targetLang, examples, sourceLang, stage, attempt+1)
@@ -1319,13 +1321,28 @@ func (e *Engine) isTranslationIncomplete(result, zhText, targetLang string) bool
 	if resLen < zhLen*int(minRatio*10)/10 {
 		return true
 	}
-	if resLen < zhLen*6/5 && !strings.HasSuffix(strings.TrimSpace(result), ".") {
+	// 中段截断（长文本）检测：按句子终结符数量核对——译文终结符明显少于原文
+	// （如长文被 max_tokens 截断在中段，80% 长度比可能恰好通过），判定不完整。
+	if zhLen > 200 && countSentenceEnds(result) < countSentenceEnds(zhText) {
 		return true
 	}
-	if resLen > 100 && !isEndPunct(result) {
+	if !isEndPunct(result) {
 		return true
 	}
 	return false
+}
+
+// countSentenceEnds 统计文本中的句子终结符数量（。！？；．.!?; 等）。
+// 用于长文本截断检测：译文终结符数若明显少于原文，说明被截断在中段。
+func countSentenceEnds(s string) int {
+	n := 0
+	for _, r := range s {
+		switch r {
+		case '。', '！', '？', '；', '.', '!', '?', ';':
+			n++
+		}
+	}
+	return n
 }
 
 // isEndPunct 判断文本末尾是否以中文/西文结束标点收尾
@@ -1351,23 +1368,52 @@ func (e *Engine) autoCompleteTranslation(ctx context.Context, zhText, targetLang
 			return PostProcessTranslation(merged, targetLang)
 		}
 	}
-	// 全量重翻
+	// 全量重翻（★ 2026-09-03 长文本丢内容修复：上限 8192→16384，避免超长源文仍被截断）
 	instruction := translateInstruction(sourceLang, targetLang, uiLangFromCtx(ctx))
 	full := fmt.Sprintf("%s。必须完整翻译，不要省略任何内容，不要被截断：\n\n%s", instruction, zhText)
 	messages = []map[string]string{{"role": "user", "content": full}}
-	content, _, err = e.LLM.CallChat(ctx, base, key, model, messages, 8192, false, e.Cfg.FallbackTemp)
+	content, _, err = e.LLM.CallChat(ctx, base, key, model, messages, 16384, false, e.Cfg.FallbackTemp)
 	if err == nil && content != "" {
 		return PostProcessTranslation(content, targetLang)
 	}
 	return ""
 }
 
-// mergeContinuation 词级重叠去重拼接
+// mergeContinuation 词级重叠去重拼接（★ 2026-09-03 长文本丢内容修复）：
+// 中日韩等无空格语言经 strings.Fields 会被整段当作一个「词」，旧实现退化为纯拼接，
+// 造成续翻处重复/缺字。现在 CJK 占比高时按字符级重叠去重拼接。
 func mergeContinuation(original, continuation string) string {
+	if strings.TrimSpace(original) == "" || strings.TrimSpace(continuation) == "" {
+		return strings.TrimSpace(original) + " " + strings.TrimSpace(continuation)
+	}
+	// CJK 字符占比高 → 字符级拼接
+	cjk := 0
+	total := 0
+	for _, r := range original {
+		total++
+		if r >= '\u4e00' && r <= '\u9fff' || r >= '\u3040' && r <= '\u30ff' || r >= '\uac00' && r <= '\ud7af' {
+			cjk++
+		}
+	}
+	if total > 0 && cjk*2 >= total {
+		orig := []rune(original)
+		cont := []rune(continuation)
+		maxOverlap := 20
+		if len(orig) < maxOverlap {
+			maxOverlap = len(orig)
+		}
+		for n := maxOverlap; n >= 1; n-- {
+			tail := orig[len(orig)-n:]
+			if len(cont) >= n && equalRunes(tail, cont[:n]) {
+				return string(orig) + string(cont[n:])
+			}
+		}
+		return string(orig) + string(cont)
+	}
 	origWords := strings.Fields(original)
 	contWords := strings.Fields(continuation)
 	if len(origWords) == 0 || len(contWords) == 0 {
-		return original + continuation
+		return original + " " + continuation
 	}
 	maxOverlap := 20
 	if len(origWords) < maxOverlap {
@@ -1380,6 +1426,19 @@ func mergeContinuation(original, continuation string) string {
 		}
 	}
 	return original + " " + continuation
+}
+
+// equalRunes 逐字符比较两个 rune 切片是否完全相等（CJK 续翻拼接重叠检测用）。
+func equalRunes(a, b []rune) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // equalWords 逐词比较两个字符串切片是否完全相等（用于续翻拼接时的重叠检测）

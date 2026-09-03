@@ -91,7 +91,7 @@ func (c *Crawler) RunDaily(ctx context.Context) (int, error) {
 		_ = c.St.SetScrapeSourceStatus(src.ID, "ok")
 		done++
 		if !c.Quiet {
-			log.Printf("[crawler] 源 %s 采集完成（新增 %d 条待审）", src.Name, n)
+			log.Printf("[crawler] 源 %s 采集完成（新增/自动通过 %d 条）", src.Name, n)
 		}
 	}
 	// 当日全部启用源完成 → 标记 daily marker（供运营视图展示最近完成日）
@@ -130,6 +130,9 @@ func (c *Crawler) RunSource(ctx context.Context, src *store.KBScrapeSource) (int
 	added := 0
 	batch := make([]*store.KBStagedEntry, 0, c.ChunkSize())
 	phrases := make([]*store.KBStagedPhrase, 0, c.ChunkSize())
+	// 自动审批模式（2026-09-02 流程改造）：采集即自动清洗+审批+通过，人工只事后驳回/改正。
+	// 由 system_config.scrape_auto_approve 控制（默认 1=开启）。
+	autoApprove := c.St.ConfigInt("scrape_auto_approve", 1) == 1
 	offset := 0
 	for {
 		if ctx.Err() != nil {
@@ -154,6 +157,10 @@ func (c *Crawler) RunSource(ctx context.Context, src *store.KBScrapeSource) (int
 			if e.Tier <= 0 {
 				e.Tier = src.Tier
 			}
+			// 源语言自动清洗：按源文本脚本纠正硬编码/误标的 zh（如英文源文本）
+			if det := DetectSourceLang(e.SrcText); det != "" && det != e.SrcLang {
+				e.SrcLang = det
+			}
 			batch = append(batch, e)
 		}
 		for _, p := range phr {
@@ -166,7 +173,7 @@ func (c *Crawler) RunSource(ctx context.Context, src *store.KBScrapeSource) (int
 			phrases = append(phrases, p)
 		}
 		if len(batch) >= c.ChunkSize() {
-			n, aerr := c.St.StageEntriesBatch(batch)
+			n, aerr := c.flushEntries(batch, autoApprove)
 			batch = batch[:0]
 			if aerr != nil {
 				return added, aerr
@@ -174,7 +181,7 @@ func (c *Crawler) RunSource(ctx context.Context, src *store.KBScrapeSource) (int
 			added += n
 		}
 		if len(phrases) >= c.ChunkSize() {
-			n, aerr := c.St.StagePhrasesBatch(phrases)
+			n, aerr := c.flushPhrases(phrases, autoApprove)
 			phrases = phrases[:0]
 			if aerr != nil {
 				return added, aerr
@@ -189,14 +196,14 @@ func (c *Crawler) RunSource(ctx context.Context, src *store.KBScrapeSource) (int
 	}
 	// 收尾剩余批次
 	if len(batch) > 0 {
-		n, aerr := c.St.StageEntriesBatch(batch)
+		n, aerr := c.flushEntries(batch, autoApprove)
 		if aerr != nil {
 			return added, aerr
 		}
 		added += n
 	}
 	if len(phrases) > 0 {
-		n, aerr := c.St.StagePhrasesBatch(phrases)
+		n, aerr := c.flushPhrases(phrases, autoApprove)
 		if aerr != nil {
 			return added, aerr
 		}
@@ -231,6 +238,46 @@ func (c *Crawler) resolvePack(src *store.KBScrapeSource) (*SourceDeps, error) {
 		}
 	}
 	return nil, fmt.Errorf("目标包不存在：%s/%s（请先在知识库管理创建对应包）", src.PackType, src.Industry)
+}
+
+// flushEntries 处理一批待审条目：autoApprove=true 时自动清洗+审批+落正式库并留痕；
+// 否则写入待审池等人工审批。返回落库/新增条数。
+func (c *Crawler) flushEntries(batch []*store.KBStagedEntry, autoApprove bool) (int, error) {
+	if len(batch) == 0 {
+		return 0, nil
+	}
+	if autoApprove {
+		n := 0
+		for _, e := range batch {
+			if err := c.St.AutoApproveEntry(1, e); err != nil {
+				// 单条落库失败不阻断整批（如目标语言不在白名单列），计入失败并继续
+				log.Printf("[crawler] 自动审批条目失败（src=%q）: %v", e.SrcText, err)
+				continue
+			}
+			n++
+		}
+		return n, nil
+	}
+	return c.St.StageEntriesBatch(batch)
+}
+
+// flushPhrases 处理一批待审安全句：autoApprove=true 时自动审批+落正式库并留痕；否则入待审池。
+func (c *Crawler) flushPhrases(batch []*store.KBStagedPhrase, autoApprove bool) (int, error) {
+	if len(batch) == 0 {
+		return 0, nil
+	}
+	if autoApprove {
+		n := 0
+		for _, p := range batch {
+			if err := c.St.AutoApprovePhrase(1, p); err != nil {
+				log.Printf("[crawler] 自动审批安全句失败（phrase=%q）: %v", p.Phrase, err)
+				continue
+			}
+			n++
+		}
+		return n, nil
+	}
+	return c.St.StagePhrasesBatch(batch)
 }
 
 // ChunkSize 返回采集块大小（默认 100，可经 system_config.scrape_chunk_size 覆盖）。

@@ -114,10 +114,14 @@ func (e *Engine) applySegmentGates(ctx context.Context, langTranslations map[str
 	return capWarnings(warnings)
 }
 
-// firstGateFail 取首个未通过约束项的描述，便于在警告中提示。
+// firstGateFail 取首个未通过约束项的描述，便于在警告/重翻反馈中提示。
+// Detail 存在时一并附带（如哈萨克语必须使用西里尔字母），让重翻反馈对模型可执行。
 func firstGateFail(checks []gate.Check) string {
 	for _, c := range checks {
 		if !c.Pass {
+			if c.Detail != "" {
+				return c.Name + "（" + c.Detail + "）"
+			}
 			return c.Name
 		}
 	}

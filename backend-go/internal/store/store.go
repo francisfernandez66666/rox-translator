@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,11 +59,53 @@ func New(db *sql.DB) (*Store, error) {
 	s.ArtifactsMigrate()          // ★ 产物归属登记表（幂等；评审整改 C1）
 	s.KBScrapeMigrate()           // ★ 行业/语言文化包自动采集：数据源 + 待审池建表（幂等；2026-09-01）
 	s.SeedDefaultScrapeSources()  // ★ 功能③：通用行业兜底包默认采集源（幂等；无任何 general 源时补建）
+	s.RepairAutoincrementSeqs()   // ★ 2026-09-03 通知串号根因：sqlite_sequence 与 max(id) 失步修复（幂等）
 	return s, nil
 }
 
 // DB 返回底层连接（供需要跨表事务的调用方）。
 func (s *Store) DB() *sql.DB { return s.db }
+
+// repairSeqTableName 校验表名只含字母数字下划线（来自 sqlite_master，防御性防止拼接注入）。
+var repairSeqTableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// RepairAutoincrementSeqs 修复 SQLite 自增序列失步（★ 2026-09-03 通知串号根因修复，幂等）。
+// 背景：测试环境手工删行/数据搬运后 sqlite_sequence.seq（如 15）可能小于表内 max(id)（如 92），
+// 下一次 AUTOINCREMENT 插入尝试复用旧 id → UNIQUE 冲突导致新通知/工单等写入失败或错乱，
+// 表现为「消息通知串号/丢失」。启动时把所有 AUTOINCREMENT 表的 seq 重置为 max(id)，后续从 max(id)+1 分配。
+func (s *Store) RepairAutoincrementSeqs() {
+	if db.CurrentDialect() != db.DialectSQLite {
+		return // PostgreSQL 自增由序列对象管理，无此问题
+	}
+	rows, err := db.Query(s.db, db.DialectSQLite,
+		"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+	if err != nil {
+		return
+	}
+	var tables []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err == nil {
+			tables = append(tables, t)
+		}
+	}
+	rows.Close()
+	for _, t := range tables {
+		if !repairSeqTableName.MatchString(t) {
+			continue
+		}
+		var maxID int64
+		if err := db.QueryRow(s.db, db.DialectSQLite,
+			"SELECT COALESCE(MAX(id),0) FROM \""+t+"\"").Scan(&maxID); err != nil {
+			continue // 无 id 列的表跳过
+		}
+		// 表从未 INSERT（无 sqlite_sequence 行）或序列未落后：无需修复
+		if _, err := db.Exec(s.db, db.DialectSQLite,
+			"UPDATE sqlite_sequence SET seq=? WHERE name=? AND seq<?", maxID, t, maxID); err != nil {
+			continue
+		}
+	}
+}
 
 // migrate 顺序执行建表（幂等）。
 // 步骤：① 全部 CREATE TABLE IF NOT EXISTS 建表；② 老库补列迁移；③ 初始化默认单价；④ 超级管理员提租户。

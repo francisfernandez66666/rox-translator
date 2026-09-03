@@ -131,11 +131,12 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	// 租户管理员（非超管）仅可见企业包/部门包；行业包与语言文化包仅超管可见
+	// 租户管理员（非超管）：可见企业包/部门包 + 行业包（行业知识库按租户对应行业作用域）；
+	// 语言文化包为平台级全域资源，仅超管在后台维护。
 	if auth.RoleLevel(u.Role) < 4 {
 		filtered := pkgs[:0]
 		for _, p := range pkgs {
-			if p.PackType == store.PackIndustry || p.PackType == store.PackLocale {
+			if p.PackType == store.PackLocale {
 				continue
 			}
 			filtered = append(filtered, p)

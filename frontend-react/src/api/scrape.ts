@@ -111,6 +111,15 @@ export async function scrapeApprove(kind: 'entries' | 'phrases', ids: number[], 
   return request('/api/admin/kb-scrape/approve', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ kind, ids, action }) })
 }
 
+/** 还原为待审：把已通过/已驳回条目拉回待审池，支持还原前编辑内容 */
+export async function scrapeRestore(
+  kind: 'entries' | 'phrases',
+  ids: number[],
+  edits?: Record<string, { src_text?: string; tgt_text?: string; phrase?: string; replacement?: string }>,
+): Promise<AdminResp & { restored?: number; reverted?: number }> {
+  return request('/api/admin/kb-scrape/restore', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ kind, ids, edits: edits ?? {} }) })
+}
+
 /** 采集概览 */
 export async function scrapeSummary(): Promise<AdminResp & { summary?: ScrapeSummary }> {
   return request('/api/admin/kb-scrape/summary', { headers: authHeaders() })

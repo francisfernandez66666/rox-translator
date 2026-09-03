@@ -113,7 +113,11 @@ func Run(source, target, translation string) *GateResult {
 
 	// 8. 目标语言合理性（词面检查，弱校验）
 	pass = targetCharsReasonable(tr, target)
-	res.Checks = append(res.Checks, Check{"目标语言合理", pass, ""})
+	detail := ""
+	if !pass && target == "kk" {
+		detail = "哈萨克语必须使用西里尔字母书写（Қазақ тілі），不得输出阿拉伯字母写法"
+	}
+	res.Checks = append(res.Checks, Check{"目标语言合理", pass, detail})
 	if !pass {
 		res.Pass = false
 	}
@@ -171,6 +175,22 @@ func targetCharsReasonable(tr, target string) bool {
 		return strings.ContainsAny(tr, "가나다라마바사아자차카타파하")
 	case "th":
 		return strings.ContainsAny(tr, "กขคงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหอฮ")
+	case "kk":
+		// 哈萨克语（哈萨克斯坦）：官方书写系统为西里尔字母（Қазақ тілі）。
+		// 必须出现西里尔字母，且不得输出阿拉伯字母写法（中国哈萨克族所用阿拉伯字母变体）。
+		var cyr, arabic int
+		for _, r := range tr {
+			if !unicode.IsLetter(r) {
+				continue
+			}
+			switch {
+			case r >= '\u0400' && r <= '\u04FF':
+				cyr++
+			case r >= '\u0600' && r <= '\u06FF':
+				arabic++
+			}
+		}
+		return cyr > 0 && arabic == 0
 	default:
 		// 拉丁系语言：应含英文字母
 		for _, r := range tr {

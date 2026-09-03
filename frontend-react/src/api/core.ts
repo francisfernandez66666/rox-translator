@@ -96,8 +96,20 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     })
     if (response.status === 401) handleUnauthorized(url)
     if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`请求失败 (${response.status}): ${errorText}`)
+      // 优先解析后端结构化错误体（{message}）作为用户可读信息；解析失败回退状态码 + 原文
+      let message = ''
+      try {
+        const body = await response.json()
+        if (body && typeof body === 'object') {
+          const m = (body as { message?: string; error?: string }).message || (body as { error?: string }).error
+          if (typeof m === 'string' && m) message = m
+        }
+      } catch { /* 非 JSON 错误体 */ }
+      if (!message) {
+        const text = await response.text().catch(() => '')
+        message = `请求失败 (${response.status}): ${text}`
+      }
+      throw new Error(message)
     }
     return await response.json()
   } catch (error) {

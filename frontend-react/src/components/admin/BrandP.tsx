@@ -5,10 +5,11 @@
 // ② 持有有效付费套餐（套餐付费租户）；③ 超管显式指定开通（超管指定租户）。超管始终可编辑。
 // ============================================================================
 import { useEffect, useRef, useState } from 'react'
-import { Button, Input, MessagePlugin, Switch, Tag, Select, Slider } from 'tdesign-react'
+import { Button, Input, MessagePlugin, Switch, Tag, Select, Slider, Tabs } from 'tdesign-react'
 import { useAdmin } from '@/stores/admin'
 import { useT } from '@/i18n'
 import { Panel } from './parts'
+import FooterP from './FooterP'
 import { tenantBranding, tenantBrandingSave, brandGrant } from '@/api/branding'
 import { parseBgStyle, BrandBgLayer, BgStyle, parseCardPos, parseLoginLayout, CardPos, LoginLayout } from '@/branding'
 
@@ -174,7 +175,9 @@ export default function BrandP() {
 
   return (
     <Panel title={t('brand.title')}>
-      <p style={{ fontSize: 13, color: '#667', marginBottom: 12 }}>{t('brand.hint')}</p>
+      <Tabs defaultValue="brand">
+        <Tabs.TabPanel value="brand" label={t('brand.title')}>
+          <p style={{ fontSize: 13, color: '#667', marginBottom: 12 }}>{t('brand.hint')}</p>
       <div style={{ fontSize: 13, color: '#335', background: '#eef4ff', border: '1px solid #c9ddff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.6 }}>
         🌟 {t('brand.featureDedicated')}
       </div>
@@ -357,6 +360,14 @@ export default function BrandP() {
           )}
         </div>
       )}
+        </Tabs.TabPanel>
+        {/* 页脚链接并入品牌定制 tab（仅超管，平台级链接） */}
+        {isSuper && (
+          <Tabs.TabPanel value="footer" label={t('footer.title')}>
+            <FooterP />
+          </Tabs.TabPanel>
+        )}
+      </Tabs>
     </Panel>
   )
 }

@@ -26,14 +26,18 @@ export async function billingUsage(): Promise<AdminResp> {
   return request('/api/billing/usage', { headers: authHeaders() })
 }
 
-/** 个人用量看板（普通用户个人级） */
-export async function usageMe(): Promise<AdminResp> {
-  return request('/api/billing/usage/me', { headers: authHeaders() })
+/** 个人用量看板（普通用户个人级）：date=YYYY-MM-DD 指定日查询（空=累计+当日） */
+export async function usageMe(date?: string): Promise<AdminResp> {
+  const q = date ? `?date=${encodeURIComponent(date)}` : ''
+  return request(`/api/billing/usage/me${q}`, { headers: authHeaders() })
 }
 
-/** 组织用量看板（租户管理员：组织→子组织→用户下钻） */
-export async function usageOrg(orgId?: number): Promise<AdminResp> {
-  const q = orgId ? `?org_id=${orgId}` : ''
+/** 组织用量看板（租户管理员：组织→子组织→用户下钻）：date=YYYY-MM-DD 指定日查询 */
+export async function usageOrg(orgId?: number, date?: string): Promise<AdminResp> {
+  const params = new URLSearchParams()
+  if (orgId) params.set('org_id', String(orgId))
+  if (date) params.set('date', date)
+  const q = params.toString() ? `?${params.toString()}` : ''
   return request(`/api/billing/usage/org${q}`, { headers: authHeaders() })
 }
 

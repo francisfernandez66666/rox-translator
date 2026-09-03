@@ -498,10 +498,21 @@ func (s *Store) incrementDailyUsage(tid, amount int64) {
 }
 
 // UsageByUser 个人用量汇总（普通用户个人级看板）：按用户统计当日/累计费用与句数。
-// 参数：tid=租户 ID，userID=用户 ID；返回累计费用、当日费用、记录条数。
-func (s *Store) UsageByUser(tid, userID int64) (int64, int64, int64, error) {
-	day := time.Now().Format("2006-01-02")
+// 参数：tid=租户 ID，userID=用户 ID，day=指定日期（YYYY-MM-DD，空=累计+当日口径）。
+// 返回累计费用、当日费用、记录条数。
+// day 非空时表示「指定日查询」：返回该日费用（total 与 today 均为该日值）与该日记录条数。
+func (s *Store) UsageByUser(tid, userID int64, day string) (int64, int64, int64, error) {
 	var total, today, cnt int64
+	if day != "" {
+		err := db.QueryRow(s.db, db.CurrentDialect(),
+			"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at LIKE ?",
+			tid, userID, day+"%").Scan(&total, &cnt)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		return total, total, cnt, nil
+	}
+	day = time.Now().Format("2006-01-02")
 	err := db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=?", tid, userID).
 		Scan(&total, &cnt)
@@ -514,11 +525,11 @@ func (s *Store) UsageByUser(tid, userID int64) (int64, int64, int64, error) {
 }
 
 // UsageByOrg 组织用量汇总：统计指定组织及其子孙组织下全部用户的用量（组织→子组织→用户下钻）。
-// 参数：tid=租户 ID，orgIDs=组织及子孙组织 ID 集合（空=租户全部用户）。
-// 返回：map[用户ID]=累计费用；并携带 users 明细（在 API 层组装，此处仅聚合费用）。
-func (s *Store) UsageByOrg(tid int64, orgIDs []int64) (map[int64]int64, error) {
+// 参数：tid=租户 ID，orgIDs=组织及子孙组织 ID 集合（空=租户全部用户），day=指定日期（空=全部时间）。
+// 返回：map[用户ID]=费用；并携带 users 明细（在 API 层组装，此处仅聚合费用）。
+func (s *Store) UsageByOrg(tid int64, orgIDs []int64, day string) (map[int64]int64, error) {
 	out := map[int64]int64{}
-	q := "SELECT user_id, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND user_id>0"
+	q := "SELECT l.user_id, COALESCE(SUM(l.cost),0) FROM usage_ledger l WHERE l.tenant_id=? AND l.user_id>0"
 	args := []interface{}{tid}
 	if len(orgIDs) > 0 {
 		ph := ""
@@ -533,7 +544,11 @@ func (s *Store) UsageByOrg(tid int64, orgIDs []int64) (map[int64]int64, error) {
 		q = "SELECT l.user_id, COALESCE(SUM(l.cost),0) FROM usage_ledger l JOIN users u ON l.user_id=u.id " +
 			"WHERE l.tenant_id=? AND u.org_id IN (" + ph + ") AND l.user_id>0"
 	}
-	q += " GROUP BY user_id"
+	if day != "" {
+		q += " AND l.created_at LIKE ?"
+		args = append(args, day+"%")
+	}
+	q += " GROUP BY l.user_id"
 	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil, err
@@ -1259,9 +1274,17 @@ func randSuffix(n int) string {
 }
 
 // UsageAllByUser 跨租户聚合每用户用量（超管平台视角）。
-// 返回：用户 ID → 累计消耗。
-func (s *Store) UsageAllByUser() (map[int64]int64, error) {
-	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT user_id, COALESCE(SUM(quantity),0) FROM usage_ledger GROUP BY user_id")
+// 参数：day=指定日期（YYYY-MM-DD，空=全部时间）。
+// 返回：用户 ID → 消耗量。
+func (s *Store) UsageAllByUser(day string) (map[int64]int64, error) {
+	q := "SELECT user_id, COALESCE(SUM(quantity),0) FROM usage_ledger"
+	args := []interface{}{}
+	if day != "" {
+		q += " WHERE created_at LIKE ?"
+		args = append(args, day+"%")
+	}
+	q += " GROUP BY user_id"
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil, err
 	}

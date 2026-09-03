@@ -88,6 +88,21 @@ func scrapeEntryHash(srcLang, srcText, tgtLang, tgtText string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// ComputeEntryHash 导出版待审条目去重键（供一次性工具/外部计算一致性）。
+func ComputeEntryHash(srcLang, srcText, tgtLang, tgtText string) string {
+	return scrapeEntryHash(srcLang, srcText, tgtLang, tgtText)
+}
+
+// DeleteStagedEntry 按 ID 删除一条待审条目（数据修复工具用）。
+func (s *Store) DeleteStagedEntry(id int64) (bool, error) {
+	res, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM kb_staged_entries WHERE id=?", id)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // scrapePhraseHash 待审安全句去重键：md5(lang|kind|phrase|replacement)。
 func scrapePhraseHash(lang, kind, phrase, replacement string) string {
 	sum := md5.Sum([]byte(lang + "\x00" + kind + "\x00" + phrase + "\x00" + replacement))
@@ -510,13 +525,16 @@ func (s *Store) ListStagedPhrases(status, lang string, limit, offset int) ([]*KB
 	return out, nil
 }
 
-// SetStagedStatus 更新待审条目/安全句的审批状态（approve/reject），并记录 applied_at。
-// 参数：kind=entries|phrases；ids=待审主键；status=approved/rejected；返回受影响行数。
+// SetStagedStatus 更新待审条目/安全句的审核状态，并记录/清空 applied_at。
+// 参数：kind=entries|phrases；ids=待审主键；status=approved/rejected/pending。
+//   - approved/rejected：仅 pending 可流转，记录 applied_at（通过/驳回）。
+//   - pending：还原为待审——从 approved/rejected 拉回，清空 applied_at（含内容已编辑的场景）。
+// 返回受影响行数。
 func (s *Store) SetStagedStatus(kind string, ids []int64, status string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	if status != "approved" && status != "rejected" {
+	if status != "approved" && status != "rejected" && status != "pending" {
 		return 0, nil
 	}
 	table := "kb_staged_entries"
@@ -524,18 +542,278 @@ func (s *Store) SetStagedStatus(kind string, ids []int64, status string) (int, e
 		table = "kb_staged_phrases"
 	}
 	now := time.Now().Format(time.RFC3339)
+	appliedAt := now
+	where := "status='pending'"
+	if status == "pending" {
+		appliedAt = ""
+		where = "status IN ('approved','rejected')"
+	}
 	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	args := []interface{}{status, now}
+	args := []interface{}{status, appliedAt}
 	for _, id := range ids {
 		args = append(args, id)
 	}
 	res, err := db.Exec(s.db, db.CurrentDialect(),
-		"UPDATE "+table+" SET status=?, applied_at=? WHERE id IN ("+ph+") AND status='pending'", args...)
+		"UPDATE "+table+" SET status=?, applied_at=? WHERE id IN ("+ph+") AND "+where, args...)
 	if err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+// GetStagedEntriesAllByIDs 按 ID 取待审条目（不过滤状态；还原/编辑用）。
+func (s *Store) GetStagedEntriesAllByIDs(ids []int64) ([]*KBStagedEntry, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := []interface{}{}
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := db.Query(s.db, db.CurrentDialect(),
+		"SELECT id, target_pack_id, pack_type, source_id, tenant_id, tier, layer, src_lang, src_text, tgt_lang, tgt_text, source_url, src_hash, status, COALESCE(created_at,''), COALESCE(applied_at,'') FROM kb_staged_entries WHERE id IN ("+ph+")", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*KBStagedEntry
+	for rows.Next() {
+		var e KBStagedEntry
+		if err := rows.Scan(&e.ID, &e.TargetPackID, &e.PackType, &e.SourceID, &e.TenantID, &e.Tier, &e.Layer,
+			&e.SrcLang, &e.SrcText, &e.TgtLang, &e.TgtText, &e.SourceURL, &e.SrcHash, &e.Status,
+			&e.CreatedAt, &e.AppliedAt); err == nil {
+			out = append(out, &e)
+		}
+	}
+	return out, nil
+}
+
+// GetStagedPhrasesAllByIDs 按 ID 取待审安全句（不过滤状态；还原/编辑用）。
+func (s *Store) GetStagedPhrasesAllByIDs(ids []int64) ([]*KBStagedPhrase, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := []interface{}{}
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := db.Query(s.db, db.CurrentDialect(),
+		"SELECT id, package_id, lang, phrase, kind, COALESCE(replacement,''), tier, src_hash, status, COALESCE(created_at,''), COALESCE(applied_at,'') FROM kb_staged_phrases WHERE id IN ("+ph+")", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*KBStagedPhrase
+	for rows.Next() {
+		var p KBStagedPhrase
+		if err := rows.Scan(&p.ID, &p.PackageID, &p.Lang, &p.Phrase, &p.Kind, &p.Replacement,
+			&p.Tier, &p.SrcHash, &p.Status, &p.CreatedAt, &p.AppliedAt); err == nil {
+			out = append(out, &p)
+		}
+	}
+	return out, nil
+}
+
+// UpdateStagedEntryContent 编辑待审条目内容（还原为待审前修改译文/源文，重算去重 hash）。
+// 返回是否成功（hash 与既有行冲突时返回 false，避免唯一约束冲突）。
+func (s *Store) UpdateStagedEntryContent(id int64, srcText, tgtText string) (bool, error) {
+	if srcText == "" || tgtText == "" {
+		return false, nil
+	}
+	var srcLang, tgtLang string
+	if err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT src_lang, tgt_lang FROM kb_staged_entries WHERE id=?", id).Scan(&srcLang, &tgtLang); err != nil {
+		return false, err
+	}
+	newHash := scrapeEntryHash(srcLang, srcText, tgtLang, tgtText)
+	_, err := db.Exec(s.db, db.CurrentDialect(),
+		"UPDATE kb_staged_entries SET src_text=?, tgt_text=?, src_hash=? WHERE id=?", srcText, tgtText, newHash, id)
+	if err != nil {
+		return false, nil // 唯一约束冲突（与其它待审行重复）→ 忽略该条编辑
+	}
+	return true, nil
+}
+
+// UpdateStagedPhraseContent 编辑待审安全句内容（重算去重 hash）。
+func (s *Store) UpdateStagedPhraseContent(id int64, phrase, replacement string) (bool, error) {
+	if phrase == "" {
+		return false, nil
+	}
+	var lang, kind string
+	if err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT lang, COALESCE(kind,'style') FROM kb_staged_phrases WHERE id=?", id).Scan(&lang, &kind); err != nil {
+		return false, err
+	}
+	newHash := scrapePhraseHash(lang, kind, phrase, replacement)
+	_, err := db.Exec(s.db, db.CurrentDialect(),
+		"UPDATE kb_staged_phrases SET phrase=?, replacement=?, src_hash=? WHERE id=?", phrase, replacement, newHash, id)
+	if err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+// AutoApproveEntry 自动清洗+审批条目：直接落正式库（SaveEntry）+ 记录一条已通过待审留痕。
+// 流程改造（2026-09-02）：采集内容不再滞留待审池等人工审批，改为采集即自动清洗（源语言
+// 已在 crawler 层纠正）+ 直接嵌入正式库 + 在待审表留一条 approved 记录供人工事后查看/驳回/改正。
+// ★ 去重 hash 始终按当前字段重算（不接受外部传入的旧 hash）：调用方可能在冲洗时已更正
+//   src_lang（UpdateStagedEntrySrcLang），若沿用旧 hash 会在唯一索引上插入重复行（2026-09-03 修复）。
+// 返回错误（SaveEntry 失败时返回，调用方据此跳过；留痕失败不阻断落库）。
+func (s *Store) AutoApproveEntry(tid int64, e *KBStagedEntry) error {
+	if e.TargetPackID <= 0 || e.SrcText == "" || e.TgtText == "" || e.TgtLang == "" {
+		return nil
+	}
+	e.SrcHash = scrapeEntryHash(e.SrcLang, e.SrcText, e.TgtLang, e.TgtText)
+	module := "imported"
+	if e.SourceID > 0 {
+		module = "scrape:" + strconv.FormatInt(e.SourceID, 10)
+	}
+	if _, err := s.SaveEntry(tid, e.TargetPackID, e.Layer, e.SrcLang, e.SrcText, e.TgtLang, e.TgtText, module); err != nil {
+		return err
+	}
+	now := time.Now().Format(time.RFC3339)
+	// 留痕：hash 唯一键冲突时把既有行（可能是历史 pending）提升为 approved，
+	// 保证同内容跨源/跨轮只留一条已通过记录，且能承接人工事后审批视图。
+	_, _ = db.Exec(s.db, db.CurrentDialect(),
+		"INSERT INTO kb_staged_entries (target_pack_id, pack_type, source_id, tenant_id, tier, layer, src_lang, src_text, tgt_lang, tgt_text, source_url, src_hash, status, created_at, applied_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'approved',?,?) "+
+			"ON CONFLICT(src_hash) DO UPDATE SET status='approved', applied_at=excluded.applied_at, src_lang=excluded.src_lang, src_text=excluded.src_text, tgt_text=excluded.tgt_text, source_id=excluded.source_id",
+		e.TargetPackID, e.PackType, e.SourceID, e.TenantID, e.Tier, e.Layer, e.SrcLang, e.SrcText, e.TgtLang, e.TgtText, e.SourceURL, e.SrcHash, now, now)
+	return nil
+}
+
+// AutoApprovePhrase 自动清洗+审批安全句：直接落正式库（SaveSafetyPhraseEx）+ 记录已通过留痕。
+// 与 AutoApproveEntry 同语义：采集即通过，人工事后查看/驳回/改正。
+// 去重 hash 始终按当前字段重算（不继承外部旧 hash，避免重复行）。
+func (s *Store) AutoApprovePhrase(tid int64, p *KBStagedPhrase) error {
+	if p.PackageID <= 0 || p.Phrase == "" || p.Lang == "" {
+		return nil
+	}
+	p.SrcHash = scrapePhraseHash(p.Lang, p.Kind, p.Phrase, p.Replacement)
+	if _, err := s.SaveSafetyPhraseEx(tid, p.PackageID, p.Lang, p.Phrase, p.Kind, p.Replacement); err != nil {
+		return err
+	}
+	now := time.Now().Format(time.RFC3339)
+	_, _ = db.Exec(s.db, db.CurrentDialect(),
+		"INSERT INTO kb_staged_phrases (package_id, lang, phrase, kind, replacement, tier, src_hash, status, created_at, applied_at) VALUES (?,?,?,?,?,?,?,'approved',?,?) "+
+			"ON CONFLICT(src_hash) DO UPDATE SET status='approved', applied_at=excluded.applied_at",
+		p.PackageID, p.Lang, p.Phrase, p.Kind, p.Replacement, p.Tier, p.SrcHash, now, now)
+	return nil
+}
+
+// UpdateStagedEntrySrcLang 更正待审条目的源语言并重算去重 hash（清洗历史误标 zh 数据用）。
+// 返回是否成功（hash 与既有行冲突时返回 false，避免唯一约束冲突）。
+func (s *Store) UpdateStagedEntrySrcLang(id int64, srcLang string) (bool, error) {
+	if srcLang == "" {
+		return false, nil
+	}
+	var srcText, tgtLang, tgtText string
+	if err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT src_text, tgt_lang, tgt_text FROM kb_staged_entries WHERE id=?", id).Scan(&srcText, &tgtLang, &tgtText); err != nil {
+		return false, err
+	}
+	newHash := scrapeEntryHash(srcLang, srcText, tgtLang, tgtText)
+	_, err := db.Exec(s.db, db.CurrentDialect(),
+		"UPDATE kb_staged_entries SET src_lang=?, src_hash=? WHERE id=?", srcLang, newHash, id)
+	if err != nil {
+		return false, nil // 唯一约束冲突 → 忽略
+	}
+	return true, nil
+}
+
+// ListStagedEntriesAll 列出全部待审条目（含非 pending；一键清洗/回填/兜底用）。
+// 按 id 升序分批，支持大表游标扫描。
+func (s *Store) ListStagedEntriesAll(limit, offset int) ([]*KBStagedEntry, error) {
+	return s.listStagedEntriesAny("", limit, offset)
+}
+
+// listStagedEntriesAny 按状态与分页列待审条目（status 空=全部）。
+func (s *Store) listStagedEntriesAny(status string, limit, offset int) ([]*KBStagedEntry, error) {
+	q := "SELECT id, target_pack_id, pack_type, source_id, tenant_id, tier, layer, src_lang, src_text, tgt_lang, tgt_text, source_url, src_hash, status, COALESCE(created_at,''), COALESCE(applied_at,'') FROM kb_staged_entries"
+	args := []interface{}{}
+	if status != "" {
+		q += " WHERE status=?"
+		args = append(args, status)
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	q += " ORDER BY id LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*KBStagedEntry
+	for rows.Next() {
+		var e KBStagedEntry
+		if err := rows.Scan(&e.ID, &e.TargetPackID, &e.PackType, &e.SourceID, &e.TenantID, &e.Tier, &e.Layer,
+			&e.SrcLang, &e.SrcText, &e.TgtLang, &e.TgtText, &e.SourceURL, &e.SrcHash, &e.Status,
+			&e.CreatedAt, &e.AppliedAt); err == nil {
+			out = append(out, &e)
+		}
+	}
+	return out, nil
+}
+
+// ListStagedPhrasesAll 列出全部待审安全句（含非 pending；清洗/回填用）。
+func (s *Store) ListStagedPhrasesAll(limit, offset int) ([]*KBStagedPhrase, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := db.Query(s.db, db.CurrentDialect(),
+		"SELECT id, package_id, lang, phrase, kind, COALESCE(replacement,''), tier, src_hash, status, COALESCE(created_at,''), COALESCE(applied_at,'') FROM kb_staged_phrases ORDER BY id LIMIT ? OFFSET ?", limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*KBStagedPhrase
+	for rows.Next() {
+		var p KBStagedPhrase
+		if err := rows.Scan(&p.ID, &p.PackageID, &p.Lang, &p.Phrase, &p.Kind, &p.Replacement,
+			&p.Tier, &p.SrcHash, &p.Status, &p.CreatedAt, &p.AppliedAt); err == nil {
+			out = append(out, &p)
+		}
+	}
+	return out, nil
+}
+
+// DeleteAppliedEntry 撤销已通过待审条目时，从正式库删除对应条目并清空检索层译文。
+// 按 SaveEntry 的判重键（tenant_id,package_id,source_lang,source_text,target_lang）精确匹配。
+func (s *Store) DeleteAppliedEntry(tid, pkgID int64, srcLang, srcText, tgtLang string) error {
+	var id int64
+	err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT id FROM kb_entries WHERE tenant_id=? AND package_id=? AND source_lang=? AND source_text=? AND target_lang=?",
+		tid, pkgID, srcLang, srcText, tgtLang).Scan(&id)
+	if err == nil {
+		if derr := s.DeleteEntry(id, tid); derr != nil {
+			return derr
+		}
+	}
+	// 检索层（tm_segments）：清空该语言列（tgtLang 已由入库白名单校验，此处防注入复检）
+	if isValidLangColumn(tgtLang) {
+		sum := md5.Sum([]byte(srcText))
+		hash := hex.EncodeToString(sum[:])
+		_, _ = db.Exec(s.db, db.CurrentDialect(),
+			"UPDATE tm_segments SET "+tgtLang+"='' WHERE zh_hash=? AND tenant_id=? AND pack_id=?",
+			hash, tid, pkgID)
+	}
+	return nil
+}
+
+// DeleteAppliedPhrase 撤销已通过待审安全句时，从正式库删除对应安全句。
+func (s *Store) DeleteAppliedPhrase(tid, pkgID int64, lang, phrase, replacement string) error {
+	_, err := db.Exec(s.db, db.CurrentDialect(),
+		"DELETE FROM kb_safety_phrases WHERE tenant_id=? AND package_id=? AND lang=? AND phrase=? AND COALESCE(replacement,'')=?",
+		tid, pkgID, lang, phrase, replacement)
+	return err
 }
 
 // GetStagedEntriesByIDs 按 ID 取待审条目（审批应用用，仅取 pending）。

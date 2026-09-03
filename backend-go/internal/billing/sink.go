@@ -80,6 +80,22 @@ func InitGlobalSink(svc *Service) {
 	go DefaultSink.run()
 }
 
+// Invalidate 使指定租户的影子余额失效，下次 Record 时重新从数据库 seed。
+// 用途：发放试用/充值/退款等余额变动后立即调用，避免内存影子余额仍停留在旧值
+// （此前发放试用后若影子在「余额为 0」时被 seed，会一直负化并误触发 abort，
+// 表现为「已发放试用仍提示组织 token 已耗尽」）。
+func (s *UsageSink) Invalidate(tid int64) {
+	s.mu.Lock()
+	delete(s.shadowOk, tid)
+	delete(s.shadow, tid)
+	s.mu.Unlock()
+}
+
+// InvalidateShadow 进程级入口：使某租户影子余额失效（发放/充值后调用）。
+func InvalidateShadow(tid int64) {
+	DefaultSink.Invalidate(tid)
+}
+
 // Stop 停止 flusher（优雅停机时调用，执行一次最终 flush）。
 func (s *UsageSink) Stop() {
 	select {

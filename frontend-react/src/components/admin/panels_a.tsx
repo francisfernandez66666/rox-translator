@@ -533,7 +533,8 @@ function MessagePluginError(m: string) { void import('tdesign-react').then((M) =
 
 // ==================== 用量看板面板（Vue Usage.vue） ====================
 
-/** 个人用量 / 系统用量（组织）/ 模型成本组件：逐类渲染，剥离 success 元字段 */
+/** 个人用量 / 系统用量（组织）/ 模型成本组件：逐类渲染，剥离 success 元字段。
+ *  ★ 2026-09-03 需求：支持「当日 / 指定日」按日查询（date 参数透传后端）。 */
 export function UsageP() {
   const [, t, tpl] = useT()
   // 个人用量数据
@@ -544,15 +545,17 @@ export function UsageP() {
   const [cost, setCost] = useState<Any | null>(null)
   // 用量看板默认打开「个人用量」
   const [usageTab, setUsageTab] = useState<'me' | 'org' | 'cost'>('me')
+  // 按日查询：空=累计+当日口径；否则为指定日期（YYYY-MM-DD）
+  const [usageDate, setUsageDate] = useState('')
 
-  // 并行拉取三类用量数据（剔除 success/message 等接口元字段）
+  // 并行拉取三类用量数据（剔除 success/message 等接口元字段）；日期变化时重新拉取
   useEffect(() => {
     void (async () => {
-      try { const r = await usageMe(); if (r.success) { const { success, message, ...d } = r as Any; setMe(d) } } catch {}
-      try { const r = await usageOrg(); if (r.success) { const { success, message, ...d } = r as Any; setOrg(d) } } catch {}
+      try { const r = await usageMe(usageDate || undefined); if (r.success) { const { success, message, ...d } = r as Any; setMe(d) } } catch {}
+      try { const r = await usageOrg(undefined, usageDate || undefined); if (r.success) { const { success, message, ...d } = r as Any; setOrg(d) } } catch {}
       try { const r = await usageCost(); if (r.success) { const { success, message, ...d } = r as Any; setCost(d) } } catch {}
     })()
-  }, [])
+  }, [usageDate])
 
   /** 个人用量：基础费用/句数指标卡片 */
   const meCards = (d: Any) => !d ? <Empty description="—" /> : (
@@ -595,6 +598,19 @@ export function UsageP() {
 
   return (
     <Panel title={t('usage.dashboardTitle')}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, color: '#667' }}>{t('usage.dateQuery')}</span>
+        <input
+          type="date"
+          value={usageDate}
+          onChange={(e) => setUsageDate(e.target.value)}
+          style={{ height: 30, border: '1px solid #dcdcdc', borderRadius: 8, padding: '0 8px' }}
+        />
+        {usageDate && (
+          <Button size="small" variant="text" onClick={() => setUsageDate('')}>{t('usage.dateClear')}</Button>
+        )}
+        {usageDate && <Tag variant="light" theme="primary">📅 {usageDate}</Tag>}
+      </div>
       <Tabs placement="top" value={usageTab} onChange={(v) => setUsageTab(v as 'me' | 'org' | 'cost')} list={[
         { label: t('usage.tabMine'), value: 'me', panel: meCards(me) },
         { label: t('usage.tabOrg'), value: 'org', panel: orgTable(org) },

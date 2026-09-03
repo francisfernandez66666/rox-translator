@@ -315,6 +315,7 @@ func (s *Server) routesAdminKB() {
 	s.mux.HandleFunc("/api/admin/kb-scrape/sources/run", s.handleKBScrapeSourceRun)
 	s.mux.HandleFunc("/api/admin/kb-scrape/staged", s.handleKBScrapeStaged)
 	s.mux.HandleFunc("/api/admin/kb-scrape/approve", s.handleKBScrapeApprove)
+	s.mux.HandleFunc("/api/admin/kb-scrape/restore", s.handleKBScrapeRestore)
 	s.mux.HandleFunc("/api/admin/kb-scrape/summary", s.handleKBScrapeSummary)
 	s.mux.HandleFunc("/api/admin/kb-reward", s.handleKBRewardConfig)
 }
@@ -664,13 +665,19 @@ type ChatRequest struct {
 
 // ============ 基础接口 ============
 
-// handleHealth 健康检查接口（/api/health）：返回服务状态与版本。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求。返回 status/version/skills。
+// handleHealth 健康检查接口（/api/health）：返回服务状态、版本与核心模块初始化状态。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求。返回 status/version/skills + 核心模块就绪标记。
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{
 		"status":  "ok",
 		"version": "2.0.0-go",
 		"skills":  []string{"translation"},
+		// ★ 2026-09-03 云端诊断：暴露核心模块初始化状态——
+		//   任一项 false 即对应模块未就绪（登录/翻译/租户接口会 500「平台存储未初始化」）。
+		"store_ready":   s.Store != nil,
+		"tenant_ready":  s.Ten != nil,
+		"engine_ready":  s.Engine != nil,
+		"kb_ready":      s.DB != nil,
 	})
 }
 

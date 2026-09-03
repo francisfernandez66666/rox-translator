@@ -4,16 +4,21 @@
 // 依赖后端：/api/admin/kb-scrape/*（见 api/scrape.ts）。
 // ============================================================================
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Input, MessagePlugin, Select, Switch, Table, Tag, Tabs, RadioGroup, Radio } from 'tdesign-react'
+import { Button, Dialog, Input, MessagePlugin, Select, Switch, Table, Tag, Tabs, RadioGroup, Radio } from 'tdesign-react'
 import { useT } from '@/i18n'
 import { industryName } from '@/lib/industries'
+import { LANG_META } from '@/lib/langNames'
 import { Panel, toastResp } from './parts'
+import { confirmDialog } from '@/components/uiDialogs'
 import {
   scrapeSources, scrapeSourceCreate, scrapeSourceUpdate, scrapeSourceStatus, scrapeSourceRun,
-  scrapeStaged, scrapeApprove, scrapeSummary,
+  scrapeStaged, scrapeApprove, scrapeRestore, scrapeSummary,
   kbRewardConfigGet, kbRewardConfigSet,
   type ScrapeSource, type StagedEntry, type StagedPhrase, type ScrapeSummary,
 } from '@/api/scrape'
+
+/** 待审表格行类型（entries/phrases 合并行） */
+type StagedRow = { key: string; id: number; kind: 'entries' | 'phrases'; tier: number; pack_type: string; lang: string; src: string; tgt: string; source_url: string; status: string }
 
 /** 数据源类型中文名 */
 /** 数据源类型中文名 */
@@ -30,6 +35,13 @@ function tierTag(tier: number): React.ReactNode {
   }
   const m = map[tier] || { text: `t${tier}`, theme: 'default' as const }
   return <Tag theme={m.theme} variant="light">{m.text}</Tag>
+}
+
+/** 语言代码 → 中文名(English) 展示（如 "中文(Chinese)"）；未知代码原样返回 */
+function langLabelCN(code: string): string {
+  const m = LANG_META[code]
+  if (!m) return code
+  return m.en ? `${m.zh}(${m.en})` : m.zh
 }
 
 /** 数据源面板组件（超管 L4）：数据源 CRUD/启停/手动采集 + 待审池批量审批 + 概览 */
@@ -50,8 +62,14 @@ export default function DataSourcesP() {
   const [entries, setEntries] = useState<StagedEntry[]>([])
   const [phrases, setStagedPhrases] = useState<StagedPhrase[]>([])
   const [stagedFilter, setStagedFilter] = useState<{ pack_type: string; status: string; lang: string }>({ pack_type: '', status: 'pending', lang: '' })
-  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  // 选中行（合并行复合键 "entries:<id>" / "phrases:<id>"，避免两表自增 ID 撞车误伤）
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [approving, setApproving] = useState(false)
+  // 还原前编辑弹窗
+  const [editRow, setEditRow] = useState<StagedRow | null>(null)
+  const [editSrc, setEditSrc] = useState('')
+  const [editTgt, setEditTgt] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
 
   // ---- KB 上传奖励（功能⑥） ----
   const [rewardCfg, setRewardCfg] = useState<{ enabled: boolean; per_char: number; daily_cap: number } | null>(null)
@@ -123,36 +141,92 @@ export default function DataSourcesP() {
 
   /** 批量审批 */
   const onApprove = async (action: 'approve' | 'reject') => {
-    if (!selectedIds.length) { void MessagePlugin.error('请先勾选条目'); return }
+    if (!selectedKeys.length) { void MessagePlugin.error('请先勾选条目'); return }
+    // 按 kind 拆分选中行（entries/phrases 独立提交，避免 ID 撞车混传）
+    const idsOf = (kind: 'entries' | 'phrases') =>
+      selectedKeys.filter((k) => k.startsWith(kind + ':')).map((k) => parseInt(k.split(':')[1], 10))
     setApproving(true)
     const label = action === 'approve' ? '通过' : '驳回'
-    // 条目与安全句分两类处理
     let ok = true
     let rewardNote = ''
-    if (entries.length) {
-      const r = await scrapeApprove('entries', selectedIds, action)
+    const eIds = idsOf('entries')
+    const pIds = idsOf('phrases')
+    if (eIds.length) {
+      const r = await scrapeApprove('entries', eIds, action)
       if (action === 'approve' && r.rewards?.length) rewardNote = `，发放奖励 ${r.rewards.reduce((x: number, y) => x + (y.tokens ?? 0), 0)} token`
       if (!toastResp(r, ok ? `已${label} ${r.applied ?? 0} 条并热加载${rewardNote}` : undefined)) ok = false
     }
-    if (phrases.length) {
-      const r = await scrapeApprove('phrases', selectedIds, action)
+    if (pIds.length) {
+      const r = await scrapeApprove('phrases', pIds, action)
       if (!toastResp(r, ok ? `已${label} ${r.applied ?? 0} 条并热加载` : undefined)) ok = false
     }
     setApproving(false)
-    setSelectedIds([])
+    setSelectedKeys([])
     reloadStaged()
     reload()
   }
 
-  /** 拼接待审合并行（条目+安全句统一展示） */
-  const mergedRows = useMemo(() => {
+  /** 打开还原编辑弹窗（仅单行触发；可改译文后还原为待审） */
+  const openEditRestore = (row: StagedRow) => {
+    setEditRow(row)
+    setEditSrc(row.src.replace(/^\[[^\]]+\]\s*/, ''))
+    setEditTgt(row.tgt)
+    setSavingEdit(false)
+  }
+
+  /** 批量还原为待审（不改内容） */
+  const onBatchRestore = async () => {
+    if (!selectedKeys.length) { void MessagePlugin.error('请先勾选条目'); return }
+    const okGo = await confirmDialog({ header: '还原为待审', body: `确认将选中的 ${selectedKeys.length} 条还原为待审？已通过并热加载的条目将从正式库回收。`, confirmText: '还原' })
+    if (!okGo) return
+    const idsOf = (kind: 'entries' | 'phrases') =>
+      selectedKeys.filter((k) => k.startsWith(kind + ':')).map((k) => parseInt(k.split(':')[1], 10))
+    setApproving(true)
+    const eIds = idsOf('entries')
+    const pIds = idsOf('phrases')
+    let reverted = 0
+    if (eIds.length) {
+      const r = await scrapeRestore('entries', eIds)
+      if (toastResp(r, undefined)) reverted += r.reverted ?? 0
+    }
+    if (pIds.length) {
+      const r = await scrapeRestore('phrases', pIds)
+      if (toastResp(r, undefined)) reverted += r.reverted ?? 0
+    }
+    setApproving(false)
+    setSelectedKeys([])
+    if (reverted > 0) void MessagePlugin.success(`已还原 ${reverted} 条为待审`)
+    reloadStaged()
+    reload()
+  }
+
+  /** 还原并携带编辑内容 */
+  const confirmEditRestore = async () => {
+    if (!editRow) return
+    setSavingEdit(true)
+    let r: { success?: boolean; message?: string; reverted?: number }
+    if (editRow.kind === 'entries') {
+      r = await scrapeRestore('entries', [editRow.id], { [editRow.id]: { src_text: editSrc, tgt_text: editTgt } })
+    } else {
+      r = await scrapeRestore('phrases', [editRow.id], { [editRow.id]: { phrase: editSrc, replacement: editTgt } })
+    }
+    setSavingEdit(false)
+    if (!toastResp(r, `已还原为待审（修改已保存，可重新改审）`)) return
+    setEditRow(null)
+    setSelectedKeys([])
+    reloadStaged()
+    reload()
+  }
+
+  /** 拼接待审合并行（条目+安全句统一展示；复合键防两表 ID 撞车） */
+  const mergedRows = useMemo((): StagedRow[] => {
     const es = entries.map((e) => ({
-      id: e.id, kind: 'entries' as const, tier: e.tier, pack_type: e.pack_type,
-      lang: `${e.src_lang}→${e.tgt_lang}`, src: e.src_text, tgt: e.tgt_text, source_url: e.source_url,
+      key: `entries:${e.id}`, id: e.id, kind: 'entries' as const, tier: e.tier, pack_type: e.pack_type,
+      lang: `${langLabelCN(e.src_lang)} → ${langLabelCN(e.tgt_lang)}`, src: e.src_text, tgt: e.tgt_text, source_url: e.source_url, status: e.status,
     }))
     const ps = phrases.map((p) => ({
-      id: p.id, kind: 'phrases' as const, tier: p.tier, pack_type: 'locale',
-      lang: p.lang, src: `[${p.kind}] ${p.phrase}`, tgt: p.replacement || '', source_url: '语言文化规范',
+      key: `phrases:${p.id}`, id: p.id, kind: 'phrases' as const, tier: p.tier, pack_type: 'locale',
+      lang: langLabelCN(p.lang), src: `[${p.kind}] ${p.phrase}`, tgt: p.replacement || '', source_url: '语言文化规范', status: p.status,
     }))
     return [...es, ...ps]
   }, [entries, phrases])
@@ -162,7 +236,7 @@ export default function DataSourcesP() {
     { colKey: 'name', title: '名称' },
     { colKey: 'kind', title: '类型', cell: ({ row }: any) => kindName(row.kind) },
     { colKey: 'pack_type', title: '包类型', cell: ({ row }: any) => row.pack_type === 'industry' ? '行业包' : '语言文化包' },
-    { colKey: 'lang', title: '语言', cell: ({ row }: any) => row.lang || '不限' },
+    { colKey: 'lang', title: '语言', cell: ({ row }: any) => row.lang ? langLabelCN(row.lang) : '不限' },
     { colKey: 'industry', title: '行业', cell: ({ row }: any) => row.industry ? industryName(row.industry, lang) : '—' },
     { colKey: 'tier', title: '可信度', cell: ({ row }: any) => tierTag(row.tier) },
     { colKey: 'base_url', title: 'URL', cell: ({ row }: any) => row.base_url ? <span style={{ wordBreak: 'break-all' }}>{row.base_url}</span> : '—' },
@@ -172,8 +246,9 @@ export default function DataSourcesP() {
     ) },
   ]
 
-  /** 待审池表格列定义 */
+  /** 待审池表格列定义（首列为多选列，供批量操作勾选） */
   const stagedCols = [
+    { colKey: 'row-select', type: 'multiple' as const, width: 44 },
     { colKey: 'id', title: 'ID', width: 70 },
     { colKey: 'pack_type', title: '类型', width: 90, cell: ({ row }: any) => row.pack_type === 'industry' ? <Tag theme="primary" variant="light">行业</Tag> : <Tag theme="success" variant="light">语言文化</Tag> },
     { colKey: 'tier', title: '可信度', width: 90, cell: ({ row }: any) => tierTag(row.tier) },
@@ -181,6 +256,14 @@ export default function DataSourcesP() {
     { colKey: 'src', title: '源文本' },
     { colKey: 'tgt', title: '目标/规范' },
     { colKey: 'source_url', title: '来源' },
+    { colKey: 'status', title: '状态', width: 84, cell: ({ row }: any) => (
+      <Tag theme={row.status === 'approved' ? 'success' : row.status === 'rejected' ? 'danger' : 'warning'} variant="light">
+        {row.status === 'approved' ? '已通过' : row.status === 'rejected' ? '已驳回' : '待审'}
+      </Tag>
+    ) },
+    { colKey: 'op', title: '操作', width: 96, cell: ({ row }: any) => (
+      <Button size="small" variant="outline" onClick={() => openEditRestore(row)}>还原/编辑</Button>
+    ) },
   ]
 
   return (
@@ -258,22 +341,54 @@ export default function DataSourcesP() {
               </RadioGroup>
               <div style={{ width: 140 }}><Input placeholder="语言过滤" value={stagedFilter.lang} onChange={(v: string) => setStagedFilter((f) => ({ ...f, lang: v }))} /></div>
               <div style={{ flex: 1 }} />
-              <Button size="small" theme="primary" loading={approving} onClick={() => onApprove('approve')}>批量通过并热加载</Button>
-              <Button size="small" theme="danger" variant="outline" loading={approving} onClick={() => onApprove('reject')}>批量驳回</Button>
+              {stagedFilter.status === 'pending' ? (
+                <>
+                  <Button size="small" theme="primary" loading={approving} onClick={() => onApprove('approve')}>批量通过并热加载</Button>
+                  <Button size="small" theme="danger" variant="outline" loading={approving} onClick={() => onApprove('reject')}>批量驳回</Button>
+                </>
+              ) : (
+                <Button size="small" theme="primary" variant="outline" loading={approving} onClick={onBatchRestore}>批量还原为待审</Button>
+              )}
             </div>
             <Table
-              rowKey="id"
+              rowKey="key"
               data={mergedRows}
               columns={stagedCols}
               size="small"
               bordered
-              selectedRowKeys={selectedIds}
-              onSelectChange={(keys: any) => setSelectedIds(keys)}
+              selectedRowKeys={selectedKeys}
+              onSelectChange={(keys: any) => setSelectedKeys(keys)}
               pagination={{ pageSize: 20, total: mergedRows.length }}
             />
           </Tabs.TabPanel>
         </Tabs>
       </Panel>
+      {/* 还原前编辑内容弹窗（修改后还原为待审） */}
+      <Dialog visible={!!editRow} onClose={() => setEditRow(null)} header="还原为待审 · 编辑内容" width={560}
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Button variant="outline" onClick={() => setEditRow(null)}>取消</Button>
+            <Button theme="primary" loading={savingEdit} onClick={confirmEditRestore}>保存并还原为待审</Button>
+          </div>
+        }>
+        {editRow && (
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div>
+              <div style={{ marginBottom: 4, fontSize: 13, color: '#556' }}>
+                {editRow.kind === 'entries' ? '源文本 (src_text)' : '语言文化短语 (phrase)'}
+              </div>
+              <Input value={editSrc} onChange={(v: string) => setEditSrc(v)} />
+            </div>
+            <div>
+              <div style={{ marginBottom: 4, fontSize: 13, color: '#556' }}>
+                {editRow.kind === 'entries' ? '目标译文 (tgt_text)' : '规范/替换词 (replacement)'}
+              </div>
+              <Input value={editTgt} onChange={(v: string) => setEditTgt(v)} />
+            </div>
+            <div style={{ fontSize: 13, color: '#888' }}>保存后该条将回到「待审」筛选页，如需再次启用请重新通过审核。</div>
+          </div>
+        )}
+      </Dialog>
     </div>
   )
 }

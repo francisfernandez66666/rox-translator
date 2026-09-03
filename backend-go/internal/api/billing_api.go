@@ -426,14 +426,16 @@ func (s *Server) handleUsageMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
-	total, today, cnt, err := s.Store.UsageByUser(u.TenantID, u.ID)
+	// 指定日查询（YYYY-MM-DD；空=累计+当日口径）
+	day := r.URL.Query().Get("date")
+	total, today, cnt, err := s.Store.UsageByUser(u.TenantID, u.ID, day)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
 	bal, _ := s.Store.GetSentenceBalance(u.TenantID)
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "total": total, "today": today, "count": cnt, "sentence_balance": bal,
+		"success": true, "total": total, "today": today, "count": cnt, "sentence_balance": bal, "date": day,
 	})
 }
 
@@ -447,6 +449,8 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.effTenant(r, u)
+	// 指定日查询（YYYY-MM-DD；空=全部时间）
+	day := r.URL.Query().Get("date")
 	// 超管平台视角（tid<=0）：跨租户聚合全部用户用量
 	if auth.IsSuperAdmin(u) && tid <= 0 {
 		users, uerr := s.Store.ListAllUsers()
@@ -454,7 +458,7 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": uerr.Error()})
 			return
 		}
-		costByUser, cerr := s.Store.UsageAllByUser()
+		costByUser, cerr := s.Store.UsageAllByUser(day)
 		if cerr != nil {
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": cerr.Error()})
 			return
@@ -476,7 +480,7 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 			}
 			out = append(out, orgUsage{User: usr, OrgName: on, Cost: c})
 		}
-		writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": 0, "total": total})
+		writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": 0, "total": total, "date": day})
 		return
 	}
 	orgID := int64(0)
@@ -496,7 +500,7 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 			orgIDs = ids
 		}
 	}
-	costByUser, err := s.Store.UsageByOrg(tid, orgIDs)
+	costByUser, err := s.Store.UsageByOrg(tid, orgIDs, day)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -523,7 +527,7 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 		orgTotal += c
 		out = append(out, orgUsage{User: usr, OrgName: orgName[usr.OrgID], Cost: c})
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": orgID, "total": orgTotal})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": orgID, "total": orgTotal, "date": day})
 }
 
 // handleUsageCost 全平台模型成本核算看板（超级管理员）。

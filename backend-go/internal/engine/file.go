@@ -33,6 +33,8 @@ type FileTranslateResult struct {
 	Data  FileTranslateData `json:"data"`  // 结构化翻译数据（文本数/语言/命中统计等）
 	Files []string          `json:"files"` // 生成的翻译文件绝对路径列表
 	Error string            `json:"error"` // 失败原因（成功时为空）
+	// ★ 2026-09-03 需求：文件翻译结果携带实际消耗的 LLM token 数
+	TokensUsed int64 `json:"tokens_used"`
 }
 
 // FileTranslateData 文件翻译数据
@@ -488,6 +490,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	if len(gateWarnings) > 0 {
 		reply += fmt.Sprintf("；⚠️ 质量校验提示 %d 条，详见结构化返回", len(gateWarnings))
 	}
+	// ★ 2026-09-03 需求：文件翻译结果附带实际 token 消耗
+	tp, tc := e.UsageTokens(ctx)
+	tokensUsed := tp + tc
 	return &FileTranslateResult{
 		Skill: "translation",
 		Reply: reply,
@@ -501,7 +506,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			Translations: langTranslations, // 原文→译文（不序列化），工单执行器回写 TM
 			GateWarnings: gateWarnings,     // 整改 R1：主路径输出质量/文化闸门警告
 		},
-		Files: filesOut,
+		Files:      filesOut,
+		TokensUsed: tokensUsed,
 	}
 }
 

@@ -67,18 +67,23 @@ func (s *Server) runPackScrapeOnce() error {
 	// 低占用探针：无进行中翻译任务 + LLM 错误率低 + RSS 低于水位
 	// （Probe 返回 true=低占用可采集，与 Crawler.Idle 契约一致）
 	c.Probe = func() bool { return s.lowOccupancyForScrape() }
-	before := s.Store.ScrapeStagedSummary().PendingEntries
 	done, err := c.RunDaily(context.Background())
 	if err != nil {
 		return err
 	}
-	// 采集有新待审条目 → 通知全部超管（仅当有新增时，避免每日轰炸）
-	after := s.Store.ScrapeStagedSummary().PendingEntries
-	if after > before && after > 0 {
-		s.notifySuperAdmins("行业/语言文化包采集完成",
-			"自动采集新增 "+itoa(after-before)+" 条待审数据（累计待审 "+itoa(after)+" 条），请前往「数据源」面板审批后热加载。")
+	// 自动审批模式：采集即落正式库，采集后失效 KB 缓存 + 异步重建向量索引
+	s.invKB()
+	s.rebuildIndexAsync()
+	// 自动审批模式下新增数据直接落正式库（待审数基本不变），告知超管可去「已通过」复核/驳回/改正
+	if done > 0 {
+		if pending := s.Store.ScrapeStagedSummary().PendingEntries; pending > 0 {
+			s.notifySuperAdmins("行业/语言文化包采集完成",
+				"本次采集已完成并自动清洗/审批/通过，新数据已热加载到正式库。另有 "+itoa(pending)+" 条待审数据可前往「数据源」面板查看。")
+		} else {
+			s.notifySuperAdmins("行业/语言文化包采集完成",
+				"本次采集已完成并自动清洗/审批/通过，新数据已热加载到正式库。可前往「数据源」面板按「已通过」筛选查看/驳回/改正。")
+		}
 	}
-	_ = done
 	return nil
 }
 

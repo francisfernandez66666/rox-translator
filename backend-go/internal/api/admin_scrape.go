@@ -148,6 +148,9 @@ func (s *Server) handleKBScrapeSourceRun(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 自动审批模式：采集即落正式库，采集后失效 KB 缓存 + 异步重建向量索引
+	s.invKB()
+	s.rebuildIndexAsync()
 	writeJSON(w, 200, map[string]interface{}{"success": true, "sources_done": done})
 }
 
@@ -248,8 +251,13 @@ func (s *Server) handleKBScrapeApprove(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// 更新待审状态（approve/reject；仅 pending 可流转）
-	n, serr := s.Store.SetStagedStatus(req.Kind, req.IDs, req.Action)
+	// 更新待审状态（approve→approved / reject→rejected；仅 pending 可流转）
+	// ★ 修复：SetStagedStatus 仅接受 approved/rejected，此前直接把 "approve/reject" 传入导致状态从未更新。
+	status := "approved"
+	if req.Action == "reject" {
+		status = "rejected"
+	}
+	n, serr := s.Store.SetStagedStatus(req.Kind, req.IDs, status)
 	if serr != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": serr.Error()})
 		return
@@ -280,6 +288,92 @@ func (s *Server) handleKBScrapeApprove(w http.ResponseWriter, r *http.Request) {
 	s.Store.LogAudit(tid, u.ID, "kb_scrape_approve", "kb_staged_"+req.Kind,
 		strings.Join([]string{req.Action, strconv.Itoa(applied), strconv.Itoa(n)}, "/"))
 	writeJSON(w, 200, map[string]interface{}{"success": true, "updated": n, "applied": applied, "rewards": rewards})
+}
+
+// handleKBScrapeRestore 还原为待审（超管）：把已通过/已驳回的待审条目或安全句拉回待审池，
+// 支持还原前编辑内容（修改译文/替换词等），并回收已通过条目在正式库的落库（kb_entries/tm_segments、
+// kb_safety_phrases）+ 失效缓存，保证「还原」语义完整。
+// body: {kind:"entries"|"phrases", ids:[], edits:{ "<id>": {src_text?,tgt_text?} | {phrase?,replacement?} }}
+func (s *Server) handleKBScrapeRestore(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireSuperAdmin(w, r)
+	if err != nil {
+		return
+	}
+	var req struct {
+		Kind  string                    `json:"kind"`
+		IDs   []int64                   `json:"ids"`
+		Edits map[string]map[string]any `json:"edits"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.IDs) == 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "ids 必填"})
+		return
+	}
+	if req.Kind != "entries" && req.Kind != "phrases" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "kind 仅支持 entries/phrases"})
+		return
+	}
+	tid := int64(1) // 采集内容宿主租户1
+	reverted := 0
+	if req.Kind == "entries" {
+		items, gerr := s.Store.GetStagedEntriesAllByIDs(req.IDs)
+		if gerr != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
+			return
+		}
+		for _, e := range items {
+			// 可选：还原前编辑内容
+			if ed, ok := req.Edits[strconv.FormatInt(e.ID, 10)]; ok {
+				srcText, tgtText := e.SrcText, e.TgtText
+				if v, ok := ed["src_text"].(string); ok && v != "" {
+					srcText = v
+				}
+				if v, ok := ed["tgt_text"].(string); ok && v != "" {
+					tgtText = v
+				}
+				s.Store.UpdateStagedEntryContent(e.ID, srcText, tgtText)
+			}
+			// 已通过（已落正式库）→ 回收正式库条目与检索层
+			if e.Status == "approved" && e.TargetPackID > 0 {
+				_ = s.Store.DeleteAppliedEntry(tid, e.TargetPackID, e.SrcLang, e.SrcText, e.TgtLang)
+			}
+			reverted++
+		}
+	} else {
+		items, gerr := s.Store.GetStagedPhrasesAllByIDs(req.IDs)
+		if gerr != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
+			return
+		}
+		for _, p := range items {
+			if ed, ok := req.Edits[strconv.FormatInt(p.ID, 10)]; ok {
+				phrase, replacement := p.Phrase, p.Replacement
+				if v, ok := ed["phrase"].(string); ok && v != "" {
+					phrase = v
+				}
+				if v, ok := ed["replacement"].(string); ok {
+					replacement = v
+				}
+				s.Store.UpdateStagedPhraseContent(p.ID, phrase, replacement)
+			}
+			if p.Status == "approved" && p.PackageID > 0 {
+				_ = s.Store.DeleteAppliedPhrase(tid, p.PackageID, p.Lang, p.Phrase, p.Replacement)
+			}
+			reverted++
+		}
+	}
+	n, serr := s.Store.SetStagedStatus(req.Kind, req.IDs, "pending")
+	if serr != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": serr.Error()})
+		return
+	}
+	if n > 0 {
+		// 失效 KB 缓存 + 异步重建语义索引（撤销落库后引用不再命中）
+		s.invKB()
+		s.rebuildIndexAsync()
+	}
+	s.Store.LogAudit(tid, u.ID, "kb_scrape_restore", "kb_staged_"+req.Kind,
+		strings.Join([]string{strconv.Itoa(reverted), strconv.Itoa(n)}, "/"))
+	writeJSON(w, 200, map[string]interface{}{"success": true, "restored": n, "reverted": reverted})
 }
 
 // handleKBScrapeSummary 采集概览（超管）。
