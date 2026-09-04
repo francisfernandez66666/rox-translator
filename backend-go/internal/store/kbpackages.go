@@ -313,6 +313,44 @@ func (s *Store) EnsureDefaultPackages(tid int64) error {
 	return nil
 }
 
+// MigrateSharedHostToZero 把旧设计里宿主在租户1的行业包/语言文化包（及其条目/安全句/检索层行）
+// 统一迁移到平台宿主租户0（SharedHostTenant）。幂等：仅处理 tenant_id=1 且 pack_type IN (industry,locale) 的包。
+// 迁移范围：kb_packages、kb_entries、kb_safety_phrases、tm_segments 的 tenant_id 同步改为 0。
+// 背景（2026-09-04 权限澄清）：行业包/语言文化包是平台级全局资源，企业租户只调用不查看编辑；
+// 旧设计把这些包硬编码宿主在租户1（ROX）→ 存量行为在启动时一次性搬到租户0。
+func (s *Store) MigrateSharedHostToZero() {
+	d := db.CurrentDialect() // 当前数据库方言（PG/SQLite 占位符改写兼容）
+	// 查出宿主在租户1的行业/语言文化包 ID（迁移目标为租户0）
+	rows, err := db.Query(s.db, d, "SELECT id FROM kb_packages WHERE tenant_id=1 AND pack_type IN ('industry','locale')")
+	if err != nil {
+		return // 查询失败不阻断启动：本次无迁移（下次启动重试）
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id) // 收集待迁移包 ID
+		}
+	}
+	rows.Close()
+	if len(ids) == 0 {
+		return // 无存量旧宿主包，直接返回（幂等）
+	}
+	ph := placeholders(len(ids)) // 生成 IN 占位符
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	// 包本身搬到租户0
+	db.Exec(s.db, d, "UPDATE kb_packages SET tenant_id=0 WHERE id IN ("+ph+")", args...)
+	// 条目搬到租户0
+	db.Exec(s.db, d, "UPDATE kb_entries SET tenant_id=0 WHERE package_id IN ("+ph+")", args...)
+	// 安全句搬到租户0（语言文化包 Gate 闸门规则归属平台宿主）
+	db.Exec(s.db, d, "UPDATE kb_safety_phrases SET tenant_id=0 WHERE package_id IN ("+ph+")", args...)
+	// 检索层行搬到租户0（行业/文化条目在 tm_segments 的宿主行；pack_id 唯一不冲突）
+	db.Exec(s.db, d, "UPDATE tm_segments SET tenant_id=0 WHERE pack_id IN ("+ph+")", args...)
+}
+
 // FindIndustryByCode 在平台宿主（租户0，超管维护行业包的租户）中按 code 查找行业包。
 // 参数：code=行业包编码；返回行业包对象（供注册行业校验与名称引用）。
 func (s *Store) FindIndustryByCode(code string) (*KBPackage, error) {
