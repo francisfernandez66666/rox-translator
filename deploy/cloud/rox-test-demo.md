@@ -75,6 +75,12 @@ curl -s -X POST https://rox-test.lexicorn.cn/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"demo_admin","password":"Demo#2026Rm!"}'
 
+# 平台超管（演示库手种：demo_super，role=admin / tenant_id=0，密码同上；
+#   用于采集面板、行业包/语言文化包平台视角管理——企业视角 demo_admin 看不到行业包）
+curl -s -X POST https://rox-test.lexicorn.cn/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"demo_super","password":"Demo#2026Rm!"}'
+
 # ⑤ 服务状态
 systemctl status translator-demo
 journalctl -u translator-demo -n 30
@@ -89,7 +95,7 @@ journalctl -u translator-demo -n 30
 | 重启演示 | `systemctl restart translator-demo` |
 | 查看日志 | `journalctl -u translator-demo -f` |
 | 刷新演示数据 | `sudo -u postgres dropdb langcross_demo && sudo bash scripts/bootstrap-demo.sh`（重新克隆 + 自动种入演示账号 + 品牌域修正） |
-| **修复演示站知识库慢 SQL / 分页 / 行业包** | ① 先部署最新代码到**生产**（`/opt/translator/bin` + `web`，演示从生产快照克隆）；② `systemctl stop translator-demo`；③ `sudo -u postgres dropdb langcross_demo`；④ `sudo bash scripts/bootstrap-demo.sh`（重克隆 + `-kb` 向量索引 + 演示账号）；⑤ `systemctl start translator-demo`；⑥ 用 `demo_admin` 登录后台验证：包列表 `entry_count` 角标、「查看条目」/「语言文化规范」20/页服务端分页跳页、行业包下拉仅见「汽车」行业 |
+| **修复演示站知识库慢 SQL / 分页 / 行业包** | ① 先部署最新代码到**生产**（`/opt/translator/bin` + `web`，演示从生产快照克隆）；② `systemctl stop translator-demo`；③ `sudo -u postgres dropdb langcross_demo`；④ `sudo bash scripts/bootstrap-demo.sh`（重克隆 + `-kb` 向量索引 + 演示账号）；⑤ `systemctl start translator-demo`；⑥ 用 `demo_super`（平台超管）登录后台验证：「知识库」包列表 `entry_count` 角标、（行业包/语言文化包宿主为租户0）平台上下文可见全部行业包与语言文化包、「查看条目」/「语言文化规范」20/页服务端分页跳页；再用 `demo_admin`（企业视角）确认只看到本企业包/部门包、行业包与语言文化包不再出现（宿主迁移+权限澄清后企业仅调用不管理） |
 | 重置演示账号密码 | 直接用新 bcrypt 哈希替换 `scripts/bootstrap-demo.sh` 中 4.5 步骤的 `SEEDSQL` 用户行，重跑脚本即可（幂等） |
 | 跳过演示账号种入 | 执行前 `export DEMO_SEED_ACCOUNTS=0` |
 | 演示环境想单独改数据 | 直接在演示后台操作即可，不影响生产 |
@@ -105,7 +111,8 @@ journalctl -u translator-demo -n 30
 
 ### 3.1 行业包/语言文化包自动采集演示（★ 2026-09-01 新增）
 
-- 演示入口：用 `demo_admin`（超管 L4）登录 → 管理后台「🕷️ 数据采集」面板。
+- 演示入口：用**平台超管**登录（演示库种入的 `demo_super`，密码 `Demo#2026Rm!`，平台上下文 tid=0）→ 管理后台「🕷️ 数据采集」面板。
+  企业视角账号 `demo_admin`（租户管理员）仅能看到本企业包，无采集面板权限。
 - 可演示链路：新增数据源（如官方 API / 受限抓取 / LLM 生成）→「立即采集一轮」→ 待审增量池出现
   tier 1/2/3 条目与安全句 → 批量「通过并热加载」→ 该包术语即时进入后续翻译参考（CJK 缓存已失效重建）。
 - 采集为低占用后台任务（无排队工单 + LLM 错误率低 + RSS 低于阈值时才跑），演示高峰时段可能
