@@ -11,8 +11,9 @@ package api
 //       2) 模型可用性告警：主翻译模型熔断时告警，熔断恢复后自动关闭历史 model 告警
 //       3) 错误率告警：LLM 调用窗口错误率 > 40% 时告警，恢复后自动关闭
 //       4) 自检探活（R3）：周期性请求本机 /status，连续超时判定「请求挂起不自愈」——
-//          先写 critical 告警触达管理员；开启 watchdog_selfcheck_restart=1 后自动退出进程，
-//          由 systemd（Restart=always）拉起恢复，根治整机受压时的锁饥饿卡死。
+//          先写 critical 告警触达管理员；自动退出进程（watchdog_selfcheck_restart
+//          默认开启，显式 "0" 关闭），由 systemd（Restart=always）拉起恢复，根治整机受压时的锁饥饿卡死。
+//          探活目标可用 SELFCHECK_URL 覆盖（默认 127.0.0.1:8787/status）。
 // 告警数据由管理后台「系统告警」页面展示。
 
 import (
@@ -69,10 +70,16 @@ func (s *Server) startWatchdog() {
 		}
 		failStreak := 0
 		const failThreshold = 3 // 连续 3 次超时才判定挂起（防单次抖动误杀）
+		// ★ 探活目标：默认 127.0.0.1:8787（与生产 systemd 监听一致）；
+		//   非标准端口部署可经 SELFCHECK_URL 覆盖，防「探活打错地址→误重启」
+		selfcheckURL := os.Getenv("SELFCHECK_URL")
+		if selfcheckURL == "" {
+			selfcheckURL = "http://127.0.0.1:8787/status"
+		}
 		for {
 			time.Sleep(checkInterval)
 			client := &http.Client{Timeout: 10 * time.Second}
-			resp, err := client.Get("http://127.0.0.1:8787/status")
+			resp, err := client.Get(selfcheckURL)
 			if err == nil {
 				resp.Body.Close()
 				if failStreak >= failThreshold && s.Store != nil {
@@ -88,8 +95,10 @@ func (s *Server) startWatchdog() {
 					fmt.Sprintf("服务连续 %d 次探活超时，疑似请求挂起锁死", failThreshold))
 			}
 			if failStreak >= failThreshold {
-				if v, _ := s.Store.GetConfig("watchdog_selfcheck_restart"); v == "1" {
-					log.Printf("[watchdog-selfcheck] 自动重启触发（watchdog_selfcheck_restart=1）")
+				// ★ 2026-09-04 加固：默认开启自动重启（仅显式 "0" 关闭），根治锁饥饿不自愈；
+				//   探活地址允许经 SELFCHECK_URL 覆盖（默认 127.0.0.1:8787，与生产监听一致）
+				if v, _ := s.Store.GetConfig("watchdog_selfcheck_restart"); v != "0" {
+					log.Printf("[watchdog-selfcheck] 自动重启触发（watchdog_selfcheck_restart 默认开启）")
 					_ = s.Store.CreateAlert(0, "critical", "selfcheck", "服务无响应，自动重启以恢复")
 					// os.Exit 触发 systemd Restart=always 拉起新进程
 					os.Exit(1)
@@ -351,10 +360,10 @@ func (s *Server) runWatchdogCheck() {
 				}
 				// 余额耗尽 → critical 级告警；低于阈值 → warning 级告警
 				if bal.Balance <= 0 {
-				msg := "租户余额已耗尽，翻译服务将被暂停"
-				existed := s.hasOpenAlert(t.ID, "balance") // 邮件触达去重：仅新告警时发信
-				_ = s.Store.CreateAlertEx(t.ID, "critical", "balance", msg, 0,
-					fmt.Sprintf("租户 #%d（%s）翻译额度余额已耗尽，翻译服务将被暂停", t.ID, t.Name))
+					msg := "租户余额已耗尽，翻译服务将被暂停"
+					existed := s.hasOpenAlert(t.ID, "balance") // 邮件触达去重：仅新告警时发信
+					_ = s.Store.CreateAlertEx(t.ID, "critical", "balance", msg, 0,
+						fmt.Sprintf("租户 #%d（%s）翻译额度余额已耗尽，翻译服务将被暂停", t.ID, t.Name))
 					if !existed {
 						s.notifyAlert("余额耗尽告警（租户 #"+strconv.FormatInt(t.ID, 10)+"）", msg)
 						s.notifyTenantAdmins(t.ID, "余额已耗尽",

@@ -145,6 +145,10 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 		}
 		pkgs = filtered
 	}
+	// ★ 行业包按租户注册行业过滤（2026-09-04）：行业包宿主在租户1，平台内全部行业包都在此。
+	//   即便超管/宿主租户，也只能看到与本公司行业匹配的行业包——避免 ROX（汽车）等企业
+	//   在后台看到房产/教育/电商等无关行业包。无注册行业时回退通用行业包（general）兜底。
+	s.filterIndustryPackages(tid, &pkgs)
 	s.decoratePackages(tid, pkgs)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "packages": pkgs})
 }
@@ -163,6 +167,31 @@ func (s *Server) decoratePackages(tid int64, pkgs []*store.KBPackage) {
 			p.OrgName = orgNames[p.OrgID]
 		}
 	}
+}
+
+// filterIndustryPackages 按租户注册行业过滤行业包（原地改写 pkgs 切片）。
+// 规则：行业包仅保留 code=租户注册行业 的那一个；租户无注册行业时仅保留通用行业兜底包（general）。
+// 企业包/部门包/跨部门包/语言文化包不受影响（超管维护全平台行业包仍由超级用户面板统一管理）。
+func (s *Server) filterIndustryPackages(tid int64, pkgs *[]*store.KBPackage) {
+	t, terr := s.Ten.GetByID(tid)
+	industry := ""
+	if terr == nil && t != nil {
+		industry = t.Industry
+	}
+	out := (*pkgs)[:0]
+	for _, p := range *pkgs {
+		if p.PackType == store.PackIndustry {
+			if industry != "" {
+				if p.Code != industry {
+					continue
+				}
+			} else if p.Code != store.GeneralIndustryCode {
+				continue // 无注册行业：仅回退通用行业包
+			}
+		}
+		out = append(out, p)
+	}
+	*pkgs = out
 }
 
 // attachEntryCounts 为包列表一次性附带每条包条目总数（GROUP BY 单查询），

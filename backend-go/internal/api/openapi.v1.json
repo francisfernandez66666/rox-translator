@@ -23,8 +23,8 @@
         },
         "responses": {
           "200": { "description": "已创建（成功响应不含 success 字段，以 task_id 为准）", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskCreated" } } } },
-          "402": { "description": "余额不足" },
-          "429": { "description": "超过并发/每日配额" }
+          "402": { "description": "余额不足（error_code: insufficient_balance）" },
+          "429": { "description": "超过并发/每日配额（error_code: rate_limited / daily_quota_exceeded）" }
         }
       }
     },
@@ -54,7 +54,7 @@
       "get": { "summary": "用量明细", "operationId": "getUsage", "parameters": [ { "name": "days", "in": "query", "schema": { "type": "integer", "default": 7 } } ], "responses": { "200": { "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "type": "object" } } } } } } } } }
     },
     "/kb/stats": {
-      "get": { "summary": "知识库统计", "operationId": "kbStats", "responses": { "200": { "content": { "application/json": { "schema": { "type": "object" } } } } }
+      "get": { "summary": "知识库统计", "operationId": "kbStats", "responses": { "200": { "content": { "application/json": { "schema": { "type": "object" } } } } } }
     },
     "/keys/rotate": {
       "post": { "summary": "轮换 API Key", "operationId": "rotateKey", "responses": { "200": { "content": { "application/json": { "schema": { "type": "object" } } } } } }
@@ -100,9 +100,21 @@
           "task_id": { "type": "integer" },
           "status": { "type": "string", "enum": ["queued", "processing", "completed", "failed"] },
           "progress": { "type": "number" },
-          "error_code": { "type": "string" },
+          "error_code": { "type": "string", "description": "任务失败原因；与统一错误码表一致（insufficient_balance / rate_limited / daily_quota_exceeded / internal / bad_request / task_failed 等）" },
           "message": { "type": "string" },
           "files": { "type": "array", "items": { "type": "object", "properties": { "file_id": { "type": "integer" }, "name": { "type": "string" }, "url": { "type": "string" } } } }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "description": "统一错误响应体：success 恒为 false，code 为稳定错误码（前端 i18n 与分支依据），message 为用户可读提示",
+        "properties": {
+          "success": { "type": "boolean", "enum": [false] },
+          "code": { "type": "string", "enum": ["invalid_api_key", "key_quota_exceeded", "forbidden", "not_found", "bad_request", "text_too_long", "internal", "no_result", "task_failed", "insufficient_balance", "rate_limited", "daily_quota_exceeded", "rejected"] },
+          "error_code": { "type": "string", "description": "兼容 < 1.0.4 SDK 的别名字段（与 code 同值）" },
+          "message": { "type": "string" },
+          "details": { "type": "object" },
+          "trace_id": { "type": "string", "description": "链路追踪 ID，工单排查用" }
         }
       }
     }

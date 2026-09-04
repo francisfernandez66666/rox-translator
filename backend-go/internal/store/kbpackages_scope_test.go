@@ -287,6 +287,37 @@ func TestScopeLegacyRowAndShared(t *testing.T) {
 	}
 }
 
+// TestScopeHostTenantIndustryFilter 宿主租户（tid=1）注册行业的行业包隔离回归（2026-09-04）。
+// 背景：行业包宿主在租户1，平台内全部行业包（auto/medical/…）都在此。旧规则 `tid==1 全放行`
+// 使宿主（如 ROX=汽车）在翻译检索时装配全部无关行业包。本用例锁定：宿主租户同样只装配
+// 与本公司注册行业（auto）匹配的行业包，医疗行业包不进入 SharedPackIDs，其术语不可见。
+func TestScopeHostTenantIndustryFilter(t *testing.T) {
+	env := newScopeEnv(t)
+	// 宿主租户1注册行业 auto（演示 ROX=汽车）；仅匹配 auto 行业包
+	if _, err := env.st.db.Exec("INSERT OR IGNORE INTO tenants (id, code, name, status, industry) VALUES (1,'rox','ROX','active','auto')"); err != nil {
+		t.Fatalf("种子宿主租户失败: %v", err)
+	}
+	chain, err := env.st.OrgAncestorIDs(1, 0) // 宿主租户无组织，空链
+	if err != nil {
+		t.Fatalf("祖先链失败: %v", err)
+	}
+	scope, err := env.st.BuildPackScope(1, chain, true)
+	if err != nil {
+		t.Fatalf("BuildPackScope(宿主租户1) 失败: %v", err)
+	}
+	// 匹配行业包（auto）应装配；非本行业的平台行业包（med-ind）不应装配
+	findT1 := func(zh string) bool {
+		r, _, err := env.kdb.FindExactScoped(zh, 1, scope)
+		return err == nil && r != nil
+	}
+	if !findT1("行业通用句") {
+		t.Fatal("宿主租户应见匹配注册行业的行业包（auto）")
+	}
+	if findT1("医疗专用句") {
+		t.Fatal("宿主租户不应见非本注册行业的平台行业包（med-ind）")
+	}
+}
+
 // TestScopeMoveOrg 移动部门后继承随之变化：
 // 把 C 挂到 D 之下 → D 进入 C 的祖先链，其包从「跨部门回退」转为「链内可见」。
 func TestScopeMoveOrg(t *testing.T) {

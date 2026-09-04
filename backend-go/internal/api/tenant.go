@@ -69,13 +69,16 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Code        string `json:"code"`        // 租户唯一编码（必填）
-		Name        string `json:"name"`        // 租户名称
-		ExpiresAt   string `json:"expires_at"`  // 到期时间
-		Permissions string `json:"permissions"` // 权限 JSON（含每日字符上限等）
-		AdminUser   string `json:"admin_user"`  // 初始租户管理员用户名（可选）
-		AdminPass   string `json:"admin_pass"`  // 初始租户管理员密码（可选）
-		Industry    string `json:"industry"`    // 注册行业编码（功能②：决定共享行业包载入范围）
+		Code        string `json:"code"`          // 租户唯一编码（必填）
+		Name        string `json:"name"`          // 租户名称
+		ExpiresAt   string `json:"expires_at"`    // 到期时间
+		Permissions string `json:"permissions"`   // 权限 JSON（含每日字符上限等）
+		AdminUser   string `json:"admin_user"`    // 初始租户管理员用户名（可选）
+		AdminPass   string `json:"admin_pass"`    // 初始租户管理员密码（可选）
+		Industry    string `json:"industry"`      // 注册行业编码（功能②：决定共享行业包载入范围）
+		BrandName   string `json:"brand_name"`    // 品牌中文名（种入企业知识库固定用法）
+		BrandNameEn string `json:"brand_name_en"` // 品牌英文名（覆盖所有非 zh/zh_hant 目标语固定用法）
+		BrandNames  string `json:"brand_names"`   // 品牌多语言名 JSON（可选）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -89,6 +92,8 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// 功能②：初始化租户默认包 + 行业（缺选回退通用行业兜底）
 	_ = s.Store.EnsureDefaultPackages(t.ID)
+	// ★ 品牌固定用法种入企业知识库（2026-09-04）：防止品牌名翻译漂移（极石→ROX 而非 jixi）
+	s.seedTenantBrandTerms(t.ID, req.BrandName, req.BrandNameEn, req.BrandNames)
 	industryCode := req.Industry
 	if industryCode == "" {
 		industryCode = store.GeneralIndustryCode
@@ -525,7 +530,7 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 			if strings.HasSuffix(primary, "."+base) {
 				primaryPrefix = strings.TrimSuffix(primary, "."+base)
 			}
-			if prefix != primaryPrefix {
+			if prefix != primaryPrefix && s.Ten != nil {
 				if t, err := s.Ten.GetByDomain(prefix); err == nil && t != nil {
 					tid = t.ID
 				}
@@ -578,6 +583,8 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 		"industry":             t.Industry,
 		"industry_name":        industryName,
 		"brand_name":           t.BrandName,
+		"brand_names":          t.BrandNames,
+		"brand_name_en":        t.BrandNameEn,
 		"brand_logo":           t.BrandLogo,
 		"domain":               t.Domain,
 		"brand_home_bg":        t.BrandHomeBg,
@@ -725,6 +732,8 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 	var req struct {
 		ID                int64  `json:"id"`
 		BrandName         string `json:"brand_name"`
+		BrandNameEn       string `json:"brand_name_en"`
+		BrandNames        string `json:"brand_names"`
 		BrandLogo         string `json:"brand_logo"`
 		Domain            string `json:"domain"`
 		BrandHomeBg       string `json:"brand_home_bg"`
@@ -789,6 +798,9 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "登录页布局保存失败: " + err.Error()})
 		return
 	}
+	// ★ 品牌固定用法补种（2026-09-04）：后台品牌定制保存时同步 brand_names/brand_name_en
+	//   并幂等重写企业包 L1 术语，使换品牌名后新翻译不再漂移；未提供英文名则不种入。
+	s.seedTenantBrandTerms(tid, req.BrandName, req.BrandNameEn, req.BrandNames)
 	t, _ := s.Ten.GetByID(tid)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "tenant": t})
 }

@@ -3,17 +3,19 @@
 //
 // 背景（2026-09-02 流程改造）：待审批数据流程由「人工审核」改为「自动清洗/修正/审批并通过」，
 // 人工只对已通过数据驳回/改正。本工具用于把历史已采集滞留待审池（pending）的数据一次性：
-//   1. 按源文本脚本自动检测源语言（纠正英文源文本被误标 zh 等硬编码/误标问题，重算去重 hash）
-//   2. 直接嵌入正式库（kb_entries/tm_segments + kb_safety_phrases）
-//   3. 待审记录置 approved（留痕，供人工按「已通过」查看、驳回/改正）
+//  1. 按源文本脚本自动检测源语言（纠正英文源文本被误标 zh 等硬编码/误标问题，重算去重 hash）
+//  2. 直接嵌入正式库（kb_entries/tm_segments + kb_safety_phrases）
+//  3. 待审记录置 approved（留痕，供人工按「已通过」查看、驳回/改正）
 //
 // 幂等：已 approved/rejected 的跳过；SaveEntry 按唯一键判重（重复内容命中已有条目即更新不报错）。
 // 操作前务必先 pg_dump 备份生产库。
 //
 // 用法：
-//   auto-approve -dsn "postgres://user:pass@127.0.0.1:5432/langcross?sslmode=disable"
-//   DB_DRIVER=postgres DB_DSN=postgres://... auto-approve
-//   -dryrun 仅预览将纠正的源语言与将审批条数，不落库。
+//
+//	auto-approve -dsn "postgres://user:pass@127.0.0.1:5432/langcross?sslmode=disable"
+//	DB_DRIVER=postgres DB_DSN=postgres://... auto-approve
+//	-dryrun 仅预览将纠正的源语言与将审批条数，不落库。
+//
 // =============================================
 package main
 
@@ -84,6 +86,12 @@ func reconcileStagedHashes(st *store.Store) (int, int) {
 
 const pageSize = 500
 
+// main 一次性采集待审数据「清洗+自动审批+嵌入正式库」回填工具入口：
+//   - 解析 -dsn（缺省取环境变量 DB_DSN）与 -dryrun（仅预览不落库）；
+//   - 连接目标 PostgreSQL（写库直接使用，务必先 pg_dump 备份）；
+//   - 依次执行：① 待审条目 hash 一致性修复（reconcileStagedHashes，幂等）
+//     → ② 待审条目源语言纠正+审批嵌入 → ③ 安全句清洗+审批嵌入；
+//   - 宿主租户固定为 1（平台共享行业/语言文化包采集内容所在租户）。
 func main() {
 	dsn := flag.String("dsn", "", "目标 PostgreSQL DSN（缺省取环境变量 DB_DSN）")
 	dry := flag.Bool("dryrun", false, "仅预览，不落库")

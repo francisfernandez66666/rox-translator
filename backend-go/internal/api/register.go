@@ -69,18 +69,21 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// 命中后注册强制归入该企业且仅为普通成员（禁止建企业/升管理员、免邀请码）。
 	dedicatedTid := resolveDedicatedTenant(s, r)
 	var req struct {
-		Username   string `json:"username"`      // 注册用户名
-		Password   string `json:"password"`      // 密码（至少 6 位）
-		Code       string `json:"code"`          // 租户编码（无邀请码时必填）
-		Name       string `json:"name"`          // 租户名称
-		Invite     string `json:"invite"`        // 邀请码（可选）
-		Email      string `json:"email"`         // 联系邮箱（找回密码验证码接收）
-		EmailCode  string `json:"email_code"`    // 邮箱验证码（email_verify_enabled=1 时必填）
-		Captcha    string `json:"captcha_token"` // 人机验证 token（captcha_provider=turnstile 时必填）
-		Industry   string `json:"industry"`      // 所属行业（新租户注册时必填，来自行业包 code）
-		RoleChoice string `json:"role_choice"`   // 角色选择（兼容旧客户端）：admin=我是管理员(建企业) / user=我是普通用户(邀请码加入)
-		Type       string `json:"type"`          // 注册类型：personal=个人用户 / enterprise=企业用户（默认）
-		Ref        string `json:"ref"`           // 个人邀请码（可选，邀请裂变：?ref=<个人码> 链接携带）
+		Username    string `json:"username"`      // 注册用户名
+		Password    string `json:"password"`      // 密码（至少 6 位）
+		Code        string `json:"code"`          // 租户编码（无邀请码时必填）
+		Name        string `json:"name"`          // 租户名称
+		Invite      string `json:"invite"`        // 邀请码（可选）
+		Email       string `json:"email"`         // 联系邮箱（找回密码验证码接收）
+		EmailCode   string `json:"email_code"`    // 邮箱验证码（email_verify_enabled=1 时必填）
+		Captcha     string `json:"captcha_token"` // 人机验证 token（captcha_provider=turnstile 时必填）
+		Industry    string `json:"industry"`      // 所属行业（新租户注册时必填，来自行业包 code）
+		RoleChoice  string `json:"role_choice"`   // 角色选择（兼容旧客户端）：admin=我是管理员(建企业) / user=我是普通用户(邀请码加入)
+		Type        string `json:"type"`          // 注册类型：personal=个人用户 / enterprise=企业用户（默认）
+		Ref         string `json:"ref"`           // 个人邀请码（可选，邀请裂变：?ref=<个人码> 链接携带）
+		BrandName   string `json:"brand_name"`    // 品牌中文名（企业注册引导填写，种入企业知识库固定用法）
+		BrandNameEn string `json:"brand_name_en"` // 品牌英文名（覆盖所有非 zh/zh_hant 目标语固定用法）
+		BrandNames  string `json:"brand_names"`   // 品牌多语言名 JSON（{"zh":"极石","en":"ROX"}，可选；含其它语言名时优先）
 		// ★ 协议签署（2026-08-27 需求）：注册即视为同意《用户协议》与《隐私协议》，
 		//   前端注册表单须勾选后方可提交；勾选时 agreed=true 并随注册写入签署时间。
 		Agreed bool `json:"agreed"`
@@ -94,6 +97,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	req.Password = strings.TrimSpace(req.Password)
 	req.Code = strings.TrimSpace(req.Code)
 	req.Name = strings.TrimSpace(req.Name)
+	req.BrandName = strings.TrimSpace(req.BrandName)
+	req.BrandNameEn = strings.TrimSpace(req.BrandNameEn)
 	// 基础校验：用户名密码必填
 	if req.Username == "" || req.Password == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "用户名和密码不能为空"})
@@ -302,6 +307,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		// 初始化租户：默认 KB 包（组织包/部门包/语言文化包）+ 余额账户
 		_ = s.Store.EnsureDefaultPackages(inviteTenantID)
+		// ★ 品牌固定用法种入企业知识库（2026-09-04）：出厂把 品牌中文名/英文名（或其它语言名）
+		//   初始化进企业包 L1 术语，防止后续翻译把品牌名音译为 jixi/jishi 等拼音变体。
+		s.seedTenantBrandTerms(inviteTenantID, req.BrandName, req.BrandNameEn, req.BrandNames)
 		// 行业包单轨制：仅记录注册所选行业编码（含通用兜底），内容从共享宿主（租户1）
 		// 按行业载入，不再建空壳包；industryPkg=nil（异常部署）时跳过
 		if industryPkg != nil {
@@ -600,6 +608,48 @@ func (s *Server) hasOpenAlert(tid int64, kind string) bool {
 		}
 	}
 	return false
+}
+
+// seedTenantBrandTerms 把注册时填写的品牌固定用法种入租户企业知识库：
+// 品牌中文名（zh）→ 品牌英文名（en，或其它语言名），防止后续翻译把品牌名音译/漂移。
+// 规则：
+//   - brandNames（多语言 JSON）> brandNameEn（英文名）> brandName（中文名默认同时作为 zh_hant）；
+//   - 「没有其它语言名称」时，英文名覆盖所有非 zh/zh_hant 目标语固定用法（SeedBrandTerms 兜底）；
+//   - 品牌名同时写入租户 brand_names（JSON）与 brand_name_en，供后台展示与再次种入。
+func (s *Server) seedTenantBrandTerms(tid int64, brandName, brandNameEn, brandNamesJSON string) {
+	if s.Store == nil || s.Ten == nil || tid <= 0 {
+		return
+	}
+	brandName = strings.TrimSpace(brandName)
+	brandNameEn = strings.TrimSpace(brandNameEn)
+	names := map[string]string{}
+	if strings.TrimSpace(brandNamesJSON) != "" {
+		if err := json.Unmarshal([]byte(brandNamesJSON), &names); err != nil {
+			names = map[string]string{} // 非法 JSON 忽略，回到英文名兜底
+		}
+	}
+	if brandName != "" {
+		if names["zh"] == "" {
+			names["zh"] = brandName
+		}
+	}
+	if brandNameEn != "" {
+		if names["en"] == "" {
+			names["en"] = brandNameEn
+		}
+	}
+	if len(names) == 0 {
+		return // 未填写任何品牌名，不种入
+	}
+	// 固定写法持久化到租户 brand_names / brand_name_en（后台可展示、可再次补种）
+	if b, err := json.Marshal(names); err == nil {
+		_ = s.Ten.SetBrandNames(tid, string(b))
+	}
+	if names["en"] != "" {
+		_ = s.Ten.SetBrandNameEn(tid, names["en"])
+	}
+	// 企业包 L1 术语种入（幂等）
+	_ = s.Store.SeedBrandTerms(tid, names)
 }
 
 // wasInviteBind 判断是否通过绑定租户的邀请码加入（用于角色判定）。

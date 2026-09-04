@@ -39,6 +39,9 @@ type Queue interface {
 	MarkDone(ctx context.Context, jobID int64) error
 	// MarkFailed 标记失败：attempts<max 时回 queued 延迟重试，否则置 dead（死信）。
 	MarkFailed(ctx context.Context, jobID int64, errMsg string) error
+	// Heartbeat 租约续期：仅当任务仍由 workerID 持有（running）时刷新 leased_at，
+	// 防止长任务（大文件/多语言）处理超过租约窗口被其他实例/巡检误回收双跑。
+	Heartbeat(ctx context.Context, jobID int64, workerID string) error
 	// RecoverStale 启动/巡检时回收中断任务：running 且租约过期 → queued。返回回收条数。
 	RecoverStale(ctx context.Context) (int64, error)
 }
@@ -65,12 +68,12 @@ func ParseTicketPayload(b []byte) (int64, error) {
 
 // MailPayload 邮件异步任务的载荷约定（直接复用 mail.Message，json 自动 base64 编码附件）。
 type MailPayload struct {
-	To          string           `json:"to"`
-	CC          string           `json:"cc"`
-	Subject     string           `json:"subject"`
-	Body        string           `json:"body"`
+	To          string            `json:"to"`
+	CC          string            `json:"cc"`
+	Subject     string            `json:"subject"`
+	Body        string            `json:"body"`
 	Attachments []mail.Attachment `json:"attachments,omitempty"`
-	UseInfo     bool             `json:"use_info"` // true=使用 info 专用邮箱发送
+	UseInfo     bool              `json:"use_info"` // true=使用 info 专用邮箱发送
 }
 
 // NewMailPayload 由 mail.Message 构造邮件任务载荷。

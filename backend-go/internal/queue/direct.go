@@ -98,16 +98,45 @@ func (q *DirectQueue) MarkFailed(ctx context.Context, jobID int64, errMsg string
 	return err
 }
 
+// Heartbeat 租约续期：仅刷新当前 worker 持有的 running 任务租约。
+// 条件带 leased_by=? 防止误续其他 worker/已回队任务；RowsAffected=0 表示任务
+// 已被巡检重排/其他 worker 领走，worker 应尽快收尾（收尾守卫已拦截双扣费）。
+func (q *DirectQueue) Heartbeat(ctx context.Context, jobID int64, workerID string) error {
+	_, err := db.ExecContext(ctx, q.db, db.CurrentDialect(),
+		"UPDATE jobs SET leased_at=?, updated_at=? WHERE id=? AND status='running' AND leased_by=?",
+		Now().Format(time.RFC3339), Now().Format(time.RFC3339), jobID, workerID)
+	return err
+}
+
 // RecoverStale 回收中断任务（服务启动/巡检调用）：running 且租约过期 → queued。
+// ★ 2026-09-04 加固：RecoverStale 与 Reserve 并发时，仅回收「持有者已停止心跳」的
+//
+//	running 任务——先显式把匹配行的 leased_by 置空，再按置空结果回队，避免在
+//	多实例下把仍存活 worker 在跑的任务重置回 queued 造成双跑。
 func (q *DirectQueue) RecoverStale(ctx context.Context) (int64, error) {
 	leaseUntil := Now().Add(-time.Duration(DefaultLeaseSec) * time.Second).Format(time.RFC3339)
+	now := Now().Format(time.RFC3339)
+	// 第一步：仅对租约过期的 running 任务清空持有者（条件带 leased_at<=，原子抢断）。
 	res, err := db.ExecContext(ctx, q.db, db.CurrentDialect(),
-		"UPDATE jobs SET status='queued', leased_by='', leased_at='', updated_at=? WHERE status='running' AND leased_at<=?",
-		Now().Format(time.RFC3339), leaseUntil)
+		"UPDATE jobs SET leased_by='', leased_at='', updated_at=? WHERE status='running' AND leased_at<=?",
+		now, leaseUntil)
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	cleared, _ := res.RowsAffected()
+	if cleared == 0 {
+		return 0, nil
+	}
+	// 第二步：把已被清空的 running 任务回队。此处 leased_at 已为空，即使与
+	// Reserve 并发，Reserve 的 WHERE (status='queued' OR (running AND leased_at<=))
+	// 不会误领本步骤尚未回队的任务。
+	res2, err := db.ExecContext(ctx, q.db, db.CurrentDialect(),
+		"UPDATE jobs SET status='queued', updated_at=? WHERE status='running' AND leased_by='' AND leased_at=''",
+		now)
+	if err != nil {
+		return 0, err
+	}
+	return res2.RowsAffected()
 }
 
 // 状态常量（导出供 service 层使用）。

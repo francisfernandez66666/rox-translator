@@ -18,13 +18,13 @@ type ErrorCode string
 
 // 系统级错误码
 const (
-	ErrInternal   ErrorCode = "INTERNAL_ERROR"
-	ErrValidation ErrorCode = "VALIDATION_ERROR"
+	ErrInternal     ErrorCode = "INTERNAL_ERROR"
+	ErrValidation   ErrorCode = "VALIDATION_ERROR"
 	ErrUnauthorized ErrorCode = "UNAUTHORIZED"
-	ErrForbidden  ErrorCode = "FORBIDDEN"
-	ErrNotFound   ErrorCode = "NOT_FOUND"
-	ErrConflict   ErrorCode = "CONFLICT"
-	ErrRateLimited ErrorCode = "RATE_LIMITED"
+	ErrForbidden    ErrorCode = "FORBIDDEN"
+	ErrNotFound     ErrorCode = "NOT_FOUND"
+	ErrConflict     ErrorCode = "CONFLICT"
+	ErrRateLimited  ErrorCode = "RATE_LIMITED"
 )
 
 // 业务级错误码
@@ -38,6 +38,24 @@ const (
 	ErrModelUnreachable    ErrorCode = "MODEL_UNREACHABLE"
 	ErrCircuitBreakerOpen  ErrorCode = "CIRCUIT_BREAKER_OPEN"
 	ErrQuotaReserved       ErrorCode = "QUOTA_RESERVED"
+)
+
+// 开放 API 对外错误码（snake_case，Python/TS/Java SDK 依赖，勿改值）。
+// 与 OpenAPI 文档错误码表一致；HTTP 状态映射沿用 HTTPStatus()。
+const (
+	OpenAPIInvalidAPIKey    ErrorCode = "invalid_api_key"
+	OpenAPIKeyQuotaExceeded ErrorCode = "key_quota_exceeded"
+	OpenAPIForbidden        ErrorCode = "forbidden"
+	OpenAPINotFound         ErrorCode = "not_found"
+	OpenAPIInternal         ErrorCode = "internal"
+	OpenAPIBadRequest       ErrorCode = "bad_request"
+	OpenAPITextTooLong      ErrorCode = "text_too_long"
+	OpenAPINoResult         ErrorCode = "no_result"
+	OpenAPITaskFailed       ErrorCode = "task_failed"
+	OpenAPIInsufficient     ErrorCode = "insufficient_balance"
+	OpenAPIRateLimited      ErrorCode = "rate_limited"
+	OpenAPIDailyQuota       ErrorCode = "daily_quota_exceeded"
+	OpenAPIRejected         ErrorCode = "rejected"
 )
 
 // APIError 结构化错误响应体。

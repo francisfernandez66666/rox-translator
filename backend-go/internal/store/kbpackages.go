@@ -51,10 +51,16 @@ const (
 
 	// GeneralIndustryCode 通用行业兜底包编码（2026-08-26 UAT 产品决策）：
 	// 注册缺选/错选行业时回落到本行业，不再拒绝注册——注册漏斗每多一步都是流失。
-	// 包由 EnsureDefaultPackages 在共享宿主（租户1）幂等创建。
+	// 包由 EnsureDefaultPackages 在平台宿主幂等创建。
 	GeneralIndustryCode = "general"
 	// GeneralIndustryName 通用行业展示名。
 	GeneralIndustryName = "通用行业"
+
+	// SharedHostTenant 平台共享包（行业包/语言文化包）宿主租户（2026-09-04 权限澄清）。
+	// 行业包与语言文化包是平台级全局资源，归属租户0（平台上下文），企业租户/个人用户只调用、
+	// 不查看不编辑；企业包/跨部门包/部门包归企业租户。旧设计把这些包硬编码宿主在租户1（ROX），
+	// 导致 ROX 在后台看到全部无关行业包——已统一迁至租户0，并保留数据迁移回填存量。
+	SharedHostTenant = 0
 )
 
 // 包角色常量
@@ -288,8 +294,9 @@ func (s *Store) EnsureDefaultPackages(tid int64) error {
 		{"department", "部门包", PackDepartment, PackRoleSource},
 	}
 	for _, d := range defs {
-		// 行业包单轨制：内容只在共享宿主（租户1）维护，其他租户不建行业包壳
-		if d.packType == PackIndustry && tid != 1 {
+		// 行业包/语言文化包单轨制：内容只在平台宿主（租户0）维护，企业租户不建行业包/文化包壳，
+		// 仅「企业包/部门包/跨部门包」在各自企业租户内创建。
+		if (d.packType == PackIndustry || d.packType == PackLocale) && tid != SharedHostTenant {
 			continue
 		}
 		// 幂等判断：已存在同 code 包则跳过
@@ -306,10 +313,10 @@ func (s *Store) EnsureDefaultPackages(tid int64) error {
 	return nil
 }
 
-// FindIndustryByCode 在默认租户（tenant 1，超管维护行业包的租户）中按 code 查找行业包。
+// FindIndustryByCode 在平台宿主（租户0，超管维护行业包的租户）中按 code 查找行业包。
 // 参数：code=行业包编码；返回行业包对象（供注册行业校验与名称引用）。
 func (s *Store) FindIndustryByCode(code string) (*KBPackage, error) {
-	return s.queryKBPackage("SELECT "+kbPkgCols+" FROM kb_packages WHERE tenant_id=1 AND pack_type=? AND code=?", PackIndustry, code)
+	return s.queryKBPackage("SELECT "+kbPkgCols+" FROM kb_packages WHERE tenant_id=? AND pack_type=? AND code=?", SharedHostTenant, PackIndustry, code)
 }
 
 // EnsureIndustryPackage 确保新租户存在指定行业包（按 code 幂等）。
@@ -328,6 +335,46 @@ func (s *Store) EnsureIndustryPackage(tid int64, code, name string) error {
 }
 
 // ============ 条目 ============
+
+// SeedBrandTerms 把租户「品牌固定用法」种入企业包（L1 术语），防止品牌名被音译/漂移。
+// 规则：源语言 zh（源名为品牌中文名）；对每个目标语言生成一条术语：
+//   - 显式提供了该语言的品牌名 → 用该名；
+//   - zh_hant → 沿用品牌中文名；
+//   - 其余语言缺省 → 用品牌英文名兜底（无英文名则跳过该语言）。
+//
+// 参数：tid=租户 ID，brandNames=语言→品牌名映射（至少含 zh，en 为兜底）。已存在的条目幂等更新。
+func (s *Store) SeedBrandTerms(tid int64, brandNames map[string]string) error {
+	zh := strings.TrimSpace(brandNames["zh"])
+	if zh == "" {
+		return nil // 无品牌中文名，无从作为源名
+	}
+	var pkgID int64
+	if err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT id FROM kb_packages WHERE tenant_id=? AND code='tenant'", tid).Scan(&pkgID); err != nil {
+		return err
+	}
+	en := strings.TrimSpace(brandNames["en"])
+	for _, lang := range kb.AllLangs {
+		if lang == "zh" {
+			continue
+		}
+		tgt := strings.TrimSpace(brandNames[lang])
+		if tgt == "" {
+			if lang == "zh_hant" {
+				tgt = zh
+			} else {
+				tgt = en
+			}
+		}
+		if tgt == "" {
+			continue
+		}
+		if _, err := s.SaveEntry(tid, pkgID, LayerTerm, "zh", zh, lang, tgt, "brand"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // isValidLangColumn 校验语言码是否属于 tm_segments 的固定语言白名单列。
 // 用途：所有把语言码拼进 SQL 列名位置的写入点（SaveEntry / 包启停重写回）必须先过此闸，
@@ -376,7 +423,7 @@ func (s *Store) SaveEntry(tid, pkgID int64, layer int, srcLang, srcText, tgtLang
 		return 0, err
 	}
 	// ★ 写通翻译检索层（tm_segments）：按包类型落优先级与宿主租户
-	// 部门包(0)/组织包(1) → 本租户；行业包(2)/语言文化包(3) → 租户1（共享宿主）
+	// 部门包(0)/组织包(1) → 本租户；行业包(2)/语言文化包(3) → 平台宿主租户0（SharedHostTenant）
 	var packType string
 	if e2 := db.QueryRow(s.db, db.CurrentDialect(), "SELECT pack_type FROM kb_packages WHERE id=?", pkgID).Scan(&packType); e2 == nil {
 		prio := 9
@@ -387,9 +434,9 @@ func (s *Store) SaveEntry(tid, pkgID int64, layer int, srcLang, srcText, tgtLang
 		case "tenant":
 			prio, host = 1, tid
 		case "industry":
-			prio, host = 2, 1
+			prio, host = 2, SharedHostTenant
 		case "locale":
-			prio, host = 3, 1
+			prio, host = 3, SharedHostTenant
 		}
 		sum := md5.Sum([]byte(srcText))
 		hash := hex.EncodeToString(sum[:])
@@ -774,9 +821,9 @@ func (s *Store) SetKBPackageEnabled(id int64, enabled int) error {
 	case "tenant":
 		prio, host = 1, tid
 	case "industry":
-		prio, host = 2, 1
+		prio, host = 2, SharedHostTenant
 	case "locale":
-		prio, host = 3, 1
+		prio, host = 3, SharedHostTenant
 	}
 	now := time.Now().Format("2006-01-02T15:04:05")
 	if enabled == 0 {
@@ -946,8 +993,10 @@ func (s *Store) BuildPackScope(tid int64, chain []int64, allowCross bool) (*kb.P
 		case PackTenant:
 			scope.TenantPackIDs[id] = true // ② 企业包
 		case PackIndustry:
-			// 行业包本应宿主在租户1（平台共享）；本租户自建的行业包同样纳入共享判定
-			if industry != "" && (tid == 1 || code == industry) {
+			// 行业包本应宿主在租户1（平台共享）；本租户自建的行业包同样纳入共享判定。
+			// ★ 2026-09-04：移除 `tid==1 全放行` 的旧规则——宿主租户（如 ROX）同样只装配
+			//   与本公司注册行业匹配的行业包，避免翻译时参考到房产/教育等无关行业术语。
+			if industry != "" && code == industry {
 				scope.SharedPackIDs[id] = true
 			}
 		case PackLocale:
@@ -972,9 +1021,9 @@ func (s *Store) BuildPackScope(tid int64, chain []int64, allowCross bool) (*kb.P
 			}
 		}
 	}
-	// 平台宿主租户1 的共享行业/文化包（全租户可见；行业码校验与 sharedFilterSQL 口径一致）
+	// 平台宿主租户0 的共享行业/文化包（全租户可见；行业码校验与 sharedFilterSQL 口径一致）
 	hostRows, err := db.Query(s.db, db.CurrentDialect(),
-		"SELECT id, pack_type, code FROM kb_packages WHERE tenant_id=1 AND COALESCE(enabled,1)=1 AND pack_type IN ('industry','locale')")
+		"SELECT id, pack_type, code FROM kb_packages WHERE tenant_id=? AND COALESCE(enabled,1)=1 AND pack_type IN ('industry','locale')", SharedHostTenant)
 	if err != nil {
 		return scope, nil // 宿主查询失败不阻断：链内/企业层已装配
 	}

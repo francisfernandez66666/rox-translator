@@ -98,18 +98,22 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     if (!response.ok) {
       // 优先解析后端结构化错误体（{message}）作为用户可读信息；解析失败回退状态码 + 原文
       let message = ''
+      let errCode: string | undefined
       try {
         const body = await response.json()
         if (body && typeof body === 'object') {
           const m = (body as { message?: string; error?: string }).message || (body as { error?: string }).error
           if (typeof m === 'string' && m) message = m
+          // 统一错误码透传：code 为稳定码（errors 包），error_code 为 OpenAPI/SDK 兼容别名
+          errCode = (body as { code?: string }).code || (body as { error_code?: string }).error_code || undefined
         }
       } catch { /* 非 JSON 错误体 */ }
       if (!message) {
         const text = await response.text().catch(() => '')
         message = `请求失败 (${response.status}): ${text}`
       }
-      throw new Error(message)
+      const err = new ApiError(message, response.status, errCode)
+      throw err
     }
     return await response.json()
   } catch (error) {
@@ -132,6 +136,36 @@ export interface AdminResp {
   success: boolean
   message?: string
   [key: string]: unknown
+}
+
+/**
+ * ApiError 携带稳定错误码的请求错误（统一错误码体系）。
+ * code 来源：HTTP 非 2xx 响应体 {code}/{error_code}；业务错误（HTTP 200 + success:false）
+ * 不抛异常，由调用方用 bizErrorCode() 从响应体提取。
+ */
+export class ApiError extends Error {
+  /** 稳定错误码（如 INSUFFICIENT_BALANCE / insufficient_balance） */
+  readonly code?: string
+  /** HTTP 状态码 */
+  readonly status?: number
+
+  constructor(message: string, status?: number, code?: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+  }
+}
+
+/** 从业务错误响应体（HTTP 200 + success:false）提取稳定错误码（兼容 code / error_code 双字段） */
+export function bizErrorCode(body: unknown): string | undefined {
+  if (body && typeof body === 'object') {
+    const b = body as { code?: unknown; error_code?: unknown }
+    const c = typeof b.code === 'string' ? b.code : undefined
+    if (c) return c
+    return typeof b.error_code === 'string' ? b.error_code : undefined
+  }
+  return undefined
 }
 
 /** 获取文件下载 URL（带 path 编码查询参数） */

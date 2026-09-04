@@ -1947,8 +1947,8 @@ func (e *Engine) cultureRules(ctx context.Context, tid int64, targetLang string)
 		FROM kb_safety_phrases sp
 		JOIN kb_packages pkg ON pkg.id = sp.package_id
 		WHERE COALESCE(sp.status,'approved')='approved' AND sp.lang=?
-		  AND COALESCE(pkg.enabled,1)=1 AND pkg.pack_type='locale'
-		  AND pkg.tenant_id IN (?, 1)`, targetLang, tid)
+AND COALESCE(pkg.enabled,1)=1 AND pkg.pack_type='locale'
+	  AND pkg.tenant_id IN (?, 0)`, targetLang, tid)
 	if err != nil {
 		return "", nil
 	}

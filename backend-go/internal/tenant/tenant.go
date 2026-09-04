@@ -27,6 +27,8 @@ type Tenant struct {
 	Permissions       string `json:"permissions"`          // JSON 权限字符串（解码见 Perms）
 	Industry          string `json:"industry"`             // 注册行业编码（关联共享行业包的载入过滤）
 	BrandName         string `json:"brand_name"`           // 自定义品牌展示名（租户级品牌定制）
+	BrandNames        string `json:"brand_names"`          // 品牌多语言名称 JSON（{"zh":"极石","en":"ROX"}，用于种入知识库固定用法）
+	BrandNameEn       string `json:"brand_name_en"`        // 品牌英文名（覆盖所有非 zh/zh_hant 目标语的固定用法，兼容旧存量）
 	BrandLogo         string `json:"brand_logo"`           // 自定义品牌 Logo URL（空=用默认）
 	Domain            string `json:"domain"`               // 自定义访问域名（用于按域名解析租户品牌）
 	BrandHomeBg       string `json:"brand_home_bg"`        // 未登录首页背景图（base64 dataURL 或外链 URL，空=用默认）
@@ -104,26 +106,28 @@ func (s *Store) ensureTable() error {
 		return err
 	}
 	cols := map[string]string{
-		"model_config":              "TEXT NOT NULL DEFAULT '{}'",
-		"policy_config":             "TEXT NOT NULL DEFAULT '{}'",
-		"flow_config":               "TEXT NOT NULL DEFAULT '{}'",
-		"industry":                  "TEXT NOT NULL DEFAULT ''",
-		"brand_name":                "TEXT NOT NULL DEFAULT ''",
-		"brand_logo":                "TEXT NOT NULL DEFAULT ''",
-		"domain":                    "TEXT NOT NULL DEFAULT ''",
-		"brand_links":               "TEXT NOT NULL DEFAULT ''",
-		"brand_home_bg":             "TEXT NOT NULL DEFAULT ''",
-		"brand_home_bg_style":       "TEXT NOT NULL DEFAULT ''",
-		"brand_login_card_pos":      "TEXT NOT NULL DEFAULT ''",
-		"brand_login_layout":        "TEXT NOT NULL DEFAULT ''",
-		"invite_enabled":            "INTEGER NOT NULL DEFAULT 0",
-		"is_personal":               "INTEGER NOT NULL DEFAULT 0",
+		"model_config":         "TEXT NOT NULL DEFAULT '{}'",
+		"policy_config":        "TEXT NOT NULL DEFAULT '{}'",
+		"flow_config":          "TEXT NOT NULL DEFAULT '{}'",
+		"industry":             "TEXT NOT NULL DEFAULT ''",
+		"brand_name":           "TEXT NOT NULL DEFAULT ''",
+		"brand_names":          "TEXT NOT NULL DEFAULT '{}'",
+		"brand_name_en":        "TEXT NOT NULL DEFAULT ''",
+		"brand_logo":           "TEXT NOT NULL DEFAULT ''",
+		"domain":               "TEXT NOT NULL DEFAULT ''",
+		"brand_links":          "TEXT NOT NULL DEFAULT ''",
+		"brand_home_bg":        "TEXT NOT NULL DEFAULT ''",
+		"brand_home_bg_style":  "TEXT NOT NULL DEFAULT ''",
+		"brand_login_card_pos": "TEXT NOT NULL DEFAULT ''",
+		"brand_login_layout":   "TEXT NOT NULL DEFAULT ''",
+		"invite_enabled":       "INTEGER NOT NULL DEFAULT 0",
+		"is_personal":          "INTEGER NOT NULL DEFAULT 0",
 	}
 	return db.EnsureColumns(s.db, d, "tenants", cols)
 }
 
 // tenantColumns 租户查询统一列清单（与 scanTenant 顺序一致）。
-const tenantColumns = `id, code, name, status, expires_at, permissions, COALESCE(industry,''), COALESCE(brand_name,''), COALESCE(brand_logo,''), COALESCE(domain,''), COALESCE(brand_home_bg,''), COALESCE(brand_home_bg_style,''), COALESCE(brand_login_card_pos,''), COALESCE(brand_login_layout,''), COALESCE(brand_links,''), COALESCE(invite_enabled,0), COALESCE(is_personal,0), created_at, updated_at`
+const tenantColumns = `id, code, name, status, expires_at, permissions, COALESCE(industry,''), COALESCE(brand_name,''), COALESCE(brand_names,''), COALESCE(brand_name_en,''), COALESCE(brand_logo,''), COALESCE(domain,''), COALESCE(brand_home_bg,''), COALESCE(brand_home_bg_style,''), COALESCE(brand_login_card_pos,''), COALESCE(brand_login_layout,''), COALESCE(brand_links,''), COALESCE(invite_enabled,0), COALESCE(is_personal,0), created_at, updated_at`
 
 // scanner 同时兼容 *sql.Row 与 *sql.Rows 的 Scan 方法。
 type scanner interface {
@@ -133,7 +137,7 @@ type scanner interface {
 // scanTenant 从一行中解析租户对象（字段顺序须与 tenantColumns 一致）。
 func scanTenant(s scanner) (*Tenant, error) {
 	var t Tenant
-	if err := s.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.BrandName, &t.BrandLogo, &t.Domain, &t.BrandHomeBg, &t.BrandHomeBgStyle, &t.BrandLoginCardPos, &t.BrandLoginLayout, &t.BrandLinks, &t.InviteEnabled, &t.IsPersonal, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	if err := s.Scan(&t.ID, &t.Code, &t.Name, &t.Status, &t.ExpiresAt, &t.Permissions, &t.Industry, &t.BrandName, &t.BrandNames, &t.BrandNameEn, &t.BrandLogo, &t.Domain, &t.BrandHomeBg, &t.BrandHomeBgStyle, &t.BrandLoginCardPos, &t.BrandLoginLayout, &t.BrandLinks, &t.InviteEnabled, &t.IsPersonal, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
 	t.Status = effectiveStatus(t.Status, t.ExpiresAt)
@@ -237,6 +241,33 @@ func (s *Store) SetBranding(id int64, brandName, brandLogo, domain, brandLinks s
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET brand_name=?, brand_logo=?, domain=?, brand_links=?, updated_at=? WHERE id=?",
 		brandName, brandLogo, domain, brandLinks, nowStr(), id)
+	return err
+}
+
+// SetBrandNames 保存租户级「品牌多语言名称」JSON（如 {"zh":"极石","en":"ROX"}）。
+// 参数：id=租户 ID；names=语言→品牌名 JSON 字符串（空=清空）。翻译时按固定用法种入企业知识库。
+func (s *Store) SetBrandNames(id int64, names string) error {
+	if names != "" {
+		var m map[string]string
+		if err := json.Unmarshal([]byte(names), &m); err != nil {
+			return fmt.Errorf("brand_names 需为合法 JSON 对象")
+		}
+		if normalized, _ := json.Marshal(m); normalized != nil {
+			names = string(normalized)
+		}
+	} else {
+		names = "{}"
+	}
+	_, err := db.Exec(s.db, db.CurrentDialect(),
+		"UPDATE tenants SET brand_names=?, updated_at=? WHERE id=?", names, nowStr(), id)
+	return err
+}
+
+// SetBrandNameEn 保存租户品牌英文名（兼容旧字段；品牌多语言名称统一存 brand_names JSON）。
+// 参数：id=租户 ID；enName=品牌英文名。
+func (s *Store) SetBrandNameEn(id int64, enName string) error {
+	_, err := db.Exec(s.db, db.CurrentDialect(),
+		"UPDATE tenants SET brand_name_en=?, updated_at=? WHERE id=?", enName, nowStr(), id)
 	return err
 }
 

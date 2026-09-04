@@ -52,7 +52,7 @@ export default function Login({ mode, onLogin }: Props) {
   const [typeChoice, setTypeChoice] = useState<'personal' | 'enterprise'>('personal')
   // 企业用户角色选择：admin=我是管理员（新建企业）；member=我是普通成员（须凭企业邀请码加入）
   const [roleChoice, setRoleChoice] = useState<'admin' | 'member'>('admin')
-  const [form, setForm] = useState({ code: '', name: '', invite: '', email: '', emailCode: '', industry: '' })
+  const [form, setForm] = useState({ code: '', name: '', invite: '', email: '', emailCode: '', industry: '', brandName: '', brandNameEn: '' })
   const [emailVerifyOn, setEmailVerifyOn] = useState(false)
   const [captchaOn, setCaptchaOn] = useState(false)
   const [codeCooldown, setCooldown] = useState(0)
@@ -207,6 +207,8 @@ export default function Login({ mode, onLogin }: Props) {
         email_code: form.emailCode || undefined,
         captcha_token: captchaTokenRef.current || undefined,
         industry: (regType === 'enterprise' ? (form.industry ? industryCodeOf(form.industry) : undefined) : undefined),
+        brand_name: (regType === 'enterprise' && roleChoice === 'admin' ? (form.brandName.trim() || undefined) : undefined),
+        brand_name_en: (regType === 'enterprise' && roleChoice === 'admin' ? (form.brandNameEn.trim() || undefined) : undefined),
         ref,
         agreed,
       })
@@ -347,6 +349,11 @@ export default function Login({ mode, onLogin }: Props) {
                     <Select value={form.industry} onChange={(v) => setForm({ ...form, industry: v as string })}
                             placeholder={t('login.selectIndustry')} clearable
                             options={industryOptions(lang)} />
+                    {/* ★ 品牌固定用法（2026-09-04）：品牌中文名/英文名种入企业知识库，防止翻译漂移 */}
+                    <Input value={form.brandName} onChange={(v) => setForm({ ...form, brandName: v })}
+                           placeholder={t('login.brandName')} />
+                    <Input value={form.brandNameEn} onChange={(v) => setForm({ ...form, brandNameEn: v })}
+                           placeholder={t('login.brandNameEn')} />
                   </>
                 )}
               </>

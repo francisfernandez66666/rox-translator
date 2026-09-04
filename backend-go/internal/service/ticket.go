@@ -122,7 +122,26 @@ func (s *TicketService) workerLoop(workerID string) {
 			continue
 		}
 		jctx, jcancel := context.WithTimeout(context.Background(), 25*time.Minute)
+		// ★ 2026-09-04 加固：租约续期心跳——长任务处理期间定期刷新 jobs.leased_at，
+		//   防止处理时长逼近/超过租约窗口（默认 30m）时被 RecoverStale 或其他实例
+		//   误回收（running→queued 双跑）。任务结束/取消时停止。
+		hbStop := make(chan struct{})
+		go func() {
+			t := time.NewTicker(60 * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-t.C:
+					if herr := s.Queue.Heartbeat(context.Background(), job.ID, workerID); herr != nil {
+						log.Printf("[worker] 租约续期失败 job=%d: %v", job.ID, herr)
+					}
+				case <-hbStop:
+					return
+				}
+			}
+		}()
 		perr := s.safeProcessJob(jctx, job)
+		close(hbStop)
 		jcancel()
 		if perr != nil {
 			_ = s.Queue.MarkFailed(context.Background(), job.ID, perr.Error())

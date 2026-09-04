@@ -108,8 +108,9 @@ func (k *KBDatabase) EnsureTenantMigration() error {
 	}); err != nil {
 		return err
 	}
-	// 历史数据统一归入租户 1（rox）
-	if _, err := db.Exec(k.db, d, "UPDATE tm_segments SET tenant_id=1 WHERE tenant_id IS NULL OR tenant_id=0"); err != nil {
+	// 历史数据归入默认租户 rox（id=1）；★ 2026-09-04 不再重置 tenant_id=0 —— 平台共享包
+	// （行业包/语言文化包）宿主已迁至租户0，0 是合法宿主，不能再被覆写为 1。
+	if _, err := db.Exec(k.db, d, "UPDATE tm_segments SET tenant_id=1 WHERE tenant_id IS NULL"); err != nil {
 		return err
 	}
 	// 将唯一键收敛为目标复合唯一 (zh_hash, tenant_id, pack_id)。
@@ -546,10 +547,10 @@ func (k *KBDatabase) FetchRowTenant(id, tenantID int64, scope *PackScope) (*Row,
 		}
 		return r, nil
 	}
-	// 旧口径（兼容路径）：本租户 OR 租户1 共享（行业码已校验）
+	// 旧口径（兼容路径）：本租户 OR 租户0 平台共享（行业码已校验）
 	row := db.QueryRow(k.db, db.CurrentDialect(), fmt.Sprintf(
 		"SELECT "+rowCols+" FROM tm_segments tm "+
-			"WHERE tm.id=? AND (tm.tenant_id=? OR (tm.tenant_id=1 AND tm.priority>=2 AND EXISTS(SELECT 1 FROM kb_packages pkg WHERE pkg.id=tm.pack_id AND (pkg.pack_type='locale' OR (pkg.pack_type='industry' AND pkg.code=(SELECT COALESCE(industry,'') FROM tenants WHERE id=?))))))"),
+			"WHERE tm.id=? AND (tm.tenant_id=? OR (tm.tenant_id=0 AND tm.priority>=2 AND EXISTS(SELECT 1 FROM kb_packages pkg WHERE pkg.id=tm.pack_id AND (pkg.pack_type='locale' OR (pkg.pack_type='industry' AND pkg.code=(SELECT COALESCE(industry,'') FROM tenants WHERE id=?))))))"),
 		id, tenantID, tenantID)
 	return scanRow(row)
 }
@@ -559,7 +560,7 @@ func (k *KBDatabase) FetchRowTenant(id, tenantID int64, scope *PackScope) (*Row,
 // FindExact 精确命中（应用知识库优先级链：部门包0 > 组织包1 > 行业包2 > 语言文化包3）。
 // 查询范围 = 本租户 + 租户1（行业包/语言文化包的共享宿主），按 priority 升序取最优命中。
 // 共享过滤子句：租户1 行仅限 语言文化包(全放行) + 本租户注册行业的行业包（防组织包泄漏）
-const sharedFilterSQL = "OR (tm.tenant_id=1 AND tm.priority>=2 AND EXISTS(SELECT 1 FROM kb_packages pkg WHERE pkg.id=tm.pack_id AND (pkg.pack_type='locale' OR (pkg.pack_type='industry' AND pkg.code=(SELECT industry FROM tenants WHERE id=?)))))"
+const sharedFilterSQL = "OR (tm.tenant_id=0 AND tm.priority>=2 AND EXISTS(SELECT 1 FROM kb_packages pkg WHERE pkg.id=tm.pack_id AND (pkg.pack_type='locale' OR (pkg.pack_type='industry' AND pkg.code=(SELECT industry FROM tenants WHERE id=?)))))"
 
 // FindExact 精确命中查询：按原文全等匹配术语，应用知识库优先级链（部门包0 > 组织包1 > 行业包2 > 语言文化包3）。
 // 查询范围 = 本租户 + 租户1 共享过滤子句；返回最优一行（priority 最小），无命中返回 sql.ErrNoRows。

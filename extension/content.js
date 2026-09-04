@@ -1,5 +1,7 @@
 // content.js — 划词翻译内容脚本：选中文字 → 浮动按钮 → 调开放 API → 气泡展示
-// 配置（服务地址/API Key/目标语言）来自 chrome.storage（popup 页设置）。
+// 配置（服务地址/API Key/目标语言）来自 chrome.storage.local（popup 页设置）。
+// 安全加固（2026-09-04）：storage.sync → storage.local；所有 DOM 注入统一 textContent；
+//      远程请求仅允许投递到「已授权源」（与 popup 申请的 optional_host_permissions 一致）。
 (() => {
   let cfg = { baseUrl: "", apiKey: "", langs: "en" };
   let btn = null;
@@ -7,13 +9,22 @@
   let selText = "";
 
   // 启动加载配置，并监听设置变更
-  chrome.storage.sync.get(cfg, (saved) => { cfg = { ...cfg, ...saved }; });
+  chrome.storage.local.get(cfg, (saved) => { cfg = { ...cfg, ...saved }; });
   chrome.storage.onChanged.addListener((changes) => {
-    for (const k of Object.keys(changes)) cfg[k] = changes[k].cfg ?? changes[k].newValue;
-    if (changes.baseUrl) cfg.baseUrl = changes.baseUrl.newValue;
-    if (changes.apiKey) cfg.apiKey = changes.apiKey.newValue;
-    if (changes.langs) cfg.langs = changes.langs.newValue;
+    for (const k of Object.keys(changes)) cfg[k] = changes[k].newValue;
   });
+
+  // 目标服务地址安全预检：仅允许 http/https 且可解析为合法 origin。
+  // 说明：content script 无法枚举自身已授权源（由 popup 按源申请 optional_host_permissions，
+  //      跨域 fetch 由浏览器 CORS/授权机制拦截），此处负责挡掉协议走私与注入源。
+  function isTrustedBaseUrl(url) {
+    try {
+      const u = new URL(url);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+      if (!u.hostname) return false;
+      return true;
+    } catch { return false; }
+  }
 
   // 确保浮动「译」按钮存在并定位到选区上方
   // 参数：x, y —— 按钮左上角坐标（CSS 像素）
@@ -70,6 +81,11 @@
     if (!selText) return;
     if (!cfg.baseUrl || !cfg.apiKey) {
       showBubble(x, y, "请先点击扩展图标配置服务地址与 API Key");
+      return;
+    }
+    // 安全加固：仅允许投递到 http/https 且来源可解析的地址，防协议走私与注入源
+    if (!isTrustedBaseUrl(cfg.baseUrl)) {
+      showBubble(x, y, "服务地址不合法，请检查配置（仅支持 http/https）");
       return;
     }
     showBubble(x, y, "翻译中…");

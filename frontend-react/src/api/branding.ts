@@ -26,6 +26,7 @@ export async function tenantBranding(tenantId?: number) {
   return request<{
     success: boolean; tenant_id: number; name: string; code: string; industry: string; industry_name: string
     brand_name: string; brand_logo: string; domain: string; brand_home_bg: string
+    brand_names: string; brand_name_en: string
     brand_home_bg_style: string; brand_login_card_pos: string; brand_login_layout: string
     brand_paid: boolean; brand_granted: boolean; brand_root: boolean; dedicated_register: boolean
   }>(
@@ -45,6 +46,8 @@ export async function brandGrant(tenantId: number, enabled: boolean) {
 export async function tenantBrandingSave(p: {
   id?: number
   brand_name: string
+  brand_name_en?: string
+  brand_names?: string
   brand_logo: string
   domain: string
   brand_home_bg?: string

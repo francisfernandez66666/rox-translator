@@ -25,6 +25,7 @@ export default function BrandP() {
 
   // 表单状态：品牌名称、Logo URL、子域名、首页背景图、背景样式、登录页布局、登录卡片位置
   const [name, setName] = useState('')
+  const [nameEn, setNameEn] = useState('')
   const [logo, setLogo] = useState('')
   const [domain, setDomain] = useState('')
   const [homeBg, setHomeBg] = useState('')
@@ -49,6 +50,7 @@ export default function BrandP() {
       .then((j) => {
         if (!alive || !j.success) return
         setName(j.brand_name || '')
+        setNameEn(j.brand_name_en || '')
         setLogo(j.brand_logo || '')
         setDomain(j.domain || '')
         setHomeBg(j.brand_home_bg || '')
@@ -139,6 +141,7 @@ export default function BrandP() {
       const j = await tenantBrandingSave({
         id: targetTenantId,
         brand_name: name,
+        brand_name_en: nameEn,
         brand_logo: logo,
         domain,
         brand_home_bg: homeBg,
@@ -219,6 +222,12 @@ export default function BrandP() {
           <div>
             <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.name')}</div>
             <Input value={name} disabled={!editable} onChange={setName} placeholder="能言 LangCross" />
+          </div>
+
+          {/* 品牌英文名输入（固定用法种入企业知识库，防止翻译漂移） */}
+          <div>
+            <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.nameEn')}</div>
+            <Input value={nameEn} disabled={!editable} onChange={(v: any) => setNameEn(String(v ?? ''))} placeholder="LangCross" />
           </div>
 
            {/* Logo 上传与预览 */}
