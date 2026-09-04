@@ -534,7 +534,8 @@ function MessagePluginError(m: string) { void import('tdesign-react').then((M) =
 // ==================== 用量看板面板（Vue Usage.vue） ====================
 
 /** 个人用量 / 系统用量（组织）/ 模型成本组件：逐类渲染，剥离 success 元字段。
- *  ★ 2026-09-03 需求：支持「当日 / 指定日」按日查询（date 参数透传后端）。 */
+ *  ★ 2026-09-05 升级：支持「自定义日期区间」查询（from/to 分别透传后端；
+ *    TDesign DateRangePicker 选择任一起止日期，1 天/3 天/任意区间均可）。 */
 export function UsageP() {
   const [, t, tpl] = useT()
   // 个人用量数据
@@ -601,6 +602,8 @@ export function UsageP() {
     <Panel title={t('usage.dashboardTitle')}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 13, color: '#667' }}>{t('usage.dateQuery')}</span>
+        {/* 腾讯 TDesign 日期范围选择器（2026-09-05）：任选起止日期 → 分别写入 usageFrom/usageTo，
+            空=累计+当日口径（后端 from/to 均缺省）；单日区间可视同按日查询 */}
         <DateRangePicker
           mode="date"
           valueType="YYYY-MM-DD"
@@ -609,6 +612,7 @@ export function UsageP() {
           style={{ width: 260 }}
           value={usageFrom && usageTo ? [usageFrom, usageTo] : []}
           onChange={(v) => {
+            // TDesign 返回 [起, 止] 数组（valueType=YYYY-MM-DD），取前 10 位规范化为日期
             const arr = (Array.isArray(v) ? v : []) as (string | Date)[]
             const from = arr[0] ? String(arr[0]).slice(0, 10) : ''
             const to = arr[1] ? String(arr[1]).slice(0, 10) : ''

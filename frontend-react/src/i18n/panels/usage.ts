@@ -39,11 +39,13 @@ export const zh: Record<string, string> = {
   'usage.orgTitle': '组织用量下钻',
   'usage.orgHint': '选择组织查看其下（含子组织/部门）全部用户的翻译用量。',
   'usage.allOrg': '全部组织（租户内全部用户）',
+  // 本层累计合计（占位符 {n}，与 tpl(key, {n}) 对齐；修复 {total} 模板不替换 bug）
   'usage.orgTotal': '本层累计：{n} token',
   'usage.colUser': '用户',
   'usage.colOrg': '组织/部门',
   'usage.colName': '昵称',
   'usage.colCost': '消耗',
+  // 日期区间查询（TDesign DateRangePicker 起止日期）
   'usage.dateQuery': '按日期查询（空=累计+当日；可选任意区间，如近1天/近3天）',
   'usage.dateClear': '清除日期',
   'usage.dateFrom': '起始日期',

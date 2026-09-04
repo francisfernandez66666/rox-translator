@@ -504,8 +504,9 @@ func (s *Store) incrementDailyUsage(tid, amount int64) {
 // 返回累计费用、当日费用、记录条数（区间查询时 total 与 today 均为区间值）。
 func (s *Store) UsageByUser(tid, userID int64, from, to string) (int64, int64, int64, error) {
 	var total, today, cnt int64
+	// 区间口径（from/to 任一非空）：total=today=区间值
 	if pred, args := usageDatePred(from, to); args != nil {
-		// 区间口径：total=today=区间值
+		// 按租户+用户+created_at 区间聚合费用与笔数
 		err := db.QueryRow(s.db, db.CurrentDialect(),
 			"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at "+pred,
 			append([]interface{}{tid, userID}, args...)...).Scan(&total, &cnt)
@@ -521,6 +522,7 @@ func (s *Store) UsageByUser(tid, userID int64, from, to string) (int64, int64, i
 	if err != nil {
 		return 0, 0, 0, err
 	}
+	// 当日费用：created_at 前缀匹配今天
 	_ = db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at LIKE ?",
 		tid, userID, time.Now().Format("2006-01-02")+"%").Scan(&today)
@@ -531,12 +533,14 @@ func (s *Store) UsageByUser(tid, userID int64, from, to string) (int64, int64, i
 // 参数 from/to: YYYY-MM-DD；均空返回 nil（=不过滤全部时间）；仅给一个视同单日/单边。
 // 返回谓词（不含列名，如 `>= ? AND created_at < ?`…注意由调用方拼到 created_at 之后）与参数。
 func usageDatePred(from, to string) (string, []interface{}) {
+	// 仅给一端时补齐：from 缺省=to、to 缺省=from（视同单日）
 	if from == "" {
 		from = to
 	}
 	if to == "" {
 		to = from
 	}
+	// 两端均空：不过滤全部时间
 	if from == "" {
 		return "", nil
 	}
@@ -558,9 +562,12 @@ func usageDatePred(from, to string) (string, []interface{}) {
 //   否则仅含后台任务的日期（如全站批量 LLM 调用）按日查询恒为 0。user_id=0 由 API 层单独归一行。
 func (s *Store) UsageByOrg(tid int64, orgIDs []int64, from, to string) (map[int64]int64, error) {
 	out := map[int64]int64{}
+	// 基础 FROM：仅 usage_ledger 自身
 	selectFrom := "FROM usage_ledger l"
+	// 条件积累：租户恒等过滤为第一项
 	whereClauses := []string{"l.tenant_id=?"}
 	args := []interface{}{tid}
+	// 组织过滤占位符：org_id IN (...)
 	filters := []string{}
 	for _, oID := range orgIDs {
 		filters = append(filters, "?")
@@ -571,6 +578,7 @@ func (s *Store) UsageByOrg(tid int64, orgIDs []int64, from, to string) (map[int6
 		selectFrom = "FROM usage_ledger l JOIN users u ON l.user_id=u.id"
 		whereClauses = append(whereClauses, "u.org_id IN ("+strings.Join(filters, ",")+")")
 	}
+	// 指定日期区间：追加 created_at 区间谓词（空=全部时间，含 user_id=0 系统任务）
 	if pred, cargs := usageDatePred(from, to); cargs != nil {
 		whereClauses = append(whereClauses, "l.created_at "+pred)
 		args = append(args, cargs...)
@@ -1305,8 +1313,10 @@ func randSuffix(n int) string {
 // 参数：from/to=指定日期区间（YYYY-MM-DD，均空=全部时间，仅给一个视同单日/单边）。
 // 返回：用户 ID → 消耗量。
 func (s *Store) UsageAllByUser(from, to string) (map[int64]int64, error) {
+	// 基础聚合：按用户汇总 quantity（平台视角以用量为口径）
 	q := "SELECT user_id, COALESCE(SUM(quantity),0) FROM usage_ledger"
 	args := []interface{}{}
+	// 指定日期区间：追加 created_at 区间谓词（空=全部时间）
 	if pred, cargs := usageDatePred(from, to); cargs != nil {
 		q += " WHERE created_at " + pred
 		args = cargs
