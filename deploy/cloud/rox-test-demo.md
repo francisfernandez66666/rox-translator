@@ -89,6 +89,7 @@ journalctl -u translator-demo -n 30
 | 重启演示 | `systemctl restart translator-demo` |
 | 查看日志 | `journalctl -u translator-demo -f` |
 | 刷新演示数据 | `sudo -u postgres dropdb langcross_demo && sudo bash scripts/bootstrap-demo.sh`（重新克隆 + 自动种入演示账号 + 品牌域修正） |
+| **修复演示站知识库慢 SQL / 分页 / 行业包** | ① 先部署最新代码到**生产**（`/opt/translator/bin` + `web`，演示从生产快照克隆）；② `systemctl stop translator-demo`；③ `sudo -u postgres dropdb langcross_demo`；④ `sudo bash scripts/bootstrap-demo.sh`（重克隆 + `-kb` 向量索引 + 演示账号）；⑤ `systemctl start translator-demo`；⑥ 用 `demo_admin` 登录后台验证：包列表 `entry_count` 角标、「查看条目」/「语言文化规范」20/页服务端分页跳页、行业包下拉仅见「汽车」行业 |
 | 重置演示账号密码 | 直接用新 bcrypt 哈希替换 `scripts/bootstrap-demo.sh` 中 4.5 步骤的 `SEEDSQL` 用户行，重跑脚本即可（幂等） |
 | 跳过演示账号种入 | 执行前 `export DEMO_SEED_ACCOUNTS=0` |
 | 演示环境想单独改数据 | 直接在演示后台操作即可，不影响生产 |

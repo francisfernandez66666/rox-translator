@@ -1,6 +1,71 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-03（任务中心 + 后台菜单重组 + 行业筛选 + 计费审计 + 中性词/后处理增强发版；已部署生产+演示，main 分支 18c6857）
+> 最后更新：2026-09-04（错误码统一/OpenAPI 修复/队列心跳加固/扩展安全 + 全量中文注释 + 部署上线；main 分支 **b3a9fc6**）
+
+## 〇-XVI、共享包宿主迁移补齐 + 测试夹具对齐（2026-09-04，提交 b3a9fc6）
+
+> 〇-XV 后复核发现两处共享包宿主迁移遗漏：采集审批（admin_scrape.go）与一次性清洗审批工具（auto-approve）仍把平台共享行业包/语言文化包内容写入租户1，而生产代码已统一以 `SharedHostTenant=0` 装配共享包 → 审批落库租户与检索宿主不一致。本次补齐并让测试夹具随架构对齐。
+
+| 块 | 内容 |
+|---|---|
+| **① 宿主租户补齐** | `handleKBScrapeApprove`/`handleKBScrapeRestore`（admin_scrape.go 两处）与 `cmd/auto-approve/main.go` 的 `tid` 由 `int64(1)` 改为 `store.SharedHostTenant`（=0），审批/清洗通过的行业包与语言文化包内容正确落到共享宿主，与 `BuildPackScope`/`sharedFilterSQL` 检索口径一致 |
+| **② 测试夹具对齐** | `kbpackages_scope_test.go` 共享行业/文化包建包与条目宿主改为 `SharedHostTenant`；`packages_test.go` 行业包建在共享宿主（`FindIndustryByCode` 仅查宿主租户0）；`TestScopeHostTenantIndustryFilter` 注释同步为「企业租户按注册行业隔离」 |
+| **验证** | go build/vet + go test ./internal/... ./cmd/... 全绿（TestScopeLegacyRowAndShared/TestVectorScopedSharedVisible/TestIndustryPackage/TestScopeHostTenantIndustryFilter 均通过）；仅提交代码（4 文件，不含文档/流程图） |
+
+## 〇-XV、错误码体系 + OpenAPI 修复 + 队列租约心跳 + 扩展安全（2026-09-04，提交 309a126）
+
+> 全仓审计后的修复批次，已部署生产 langcross.lexicorn.cn 并通过 deploy_check.sh 验收（9 项全过）。
+
+| 块 | 内容 |
+|---|---|
+| **① 错误码体系** | `internal/errors/codes.go` 新增 OpenAPI snake_case 常量（invalid_api_key/key_quota_exceeded/forbidden/not_found/internal/bad_request/text_too_long/no_result/task_failed/insufficient/rate_limited/daily_quota/rejected）；api_openapi_tasks.go（37 处）与 admin_openapi.go（17 处）全部替换为 `string(errors.OpenAPIXXX)`（JSON 输出值不变）；前端 `api/core.ts` 新增 `ApiError` + `bizErrorCode` 透传 code/error_code |
+| **② OpenAPI JSON 修复** | `openapi.v1.json` 原为损坏 JSON（/kb/stats 与 /keys/rotate 两路径对象各缺一个 `}` 致根对象提前闭合、components 沦为尾料）。已重写并补统一 `Error` schema + code 枚举 + error_code 别名；新增回归测试 `verify_embed_test.go`；线上 `/openapi/v1.json` 已验证合法 |
+| **③ watchdog** | `watchdog_selfcheck_restart` 默认开启（显式 "0" 才关）；`SELFCHECK_URL` 可覆盖探活地址（默认 127.0.0.1:8787/status） |
+| **④ 队列租约心跳** | `Queue` 接口新增 `Heartbeat`；`DirectQueue.Heartbeat` 按 `id+status='running'+leased_by` 刷新 leased_at；`RecoverStale` 改两步（先清租约再审是否回队）；worker 每 60s 续租；新增 TestHeartbeatKeepsLease 等测试 |
+| **⑤ 扩展安全** | manifest.json 的 host_permissions → optional_host_permissions + activeTab/storage；popup.js 改 storage.local + API Key 掩码 + 按源授权；content.js 改 textContent 消毒 + 仅 http/https 受信任源 |
+| **⑥ 部署上线** | 交叉编译 Linux 二进制 → scp → 备份 → 替换 bin/web → 重启；deploy_check.sh 9/9、/openapi/v1.json 合法、错误码出参正常、当日 0 panic；邮件确认已生效（[smtp] 发送成功 from=noreply@lexicorn.cn） |
+| **⑦ 遗留待办** | backup_remote_cmd 异地备份未配、captcha_provider=turnstile 未启用（见《生产配置清单_20260904.md》） |
+
+## 〇-XIV、品牌固定用法初始化进企业知识库 + 主站/演示站部署（2026-09-04，基于 75496f5）
+
+> 线上实测：俄文翻译「极石汽车驾驶要领」品牌「极石」未被正确命中知识库译法 ROX，被模型音译为 **Jixi**（`Центр обслуживания автомобилей Jixi`）。根因：租户企业包无「极石→ROX」术语 → 模型自由发挥。本次把品牌固定用法在租户落地时初始化进企业包 L1 术语，并部署主站与演示站。
+
+| 块 | 内容 |
+|---|---|
+| **① 租户模型扩展** | `tenants` 新增 `brand_names`（多语言名 JSON，如 `{"zh":"极石","en":"ROX"}`）与 `brand_name_en`（品牌英文名）两列（`EnsureColumns` 幂等补列，PG/SQLite 双兼容）；`Tenant` 结构体 + `tenantColumns`/`scanTenant` + `SetBrandNames`/`SetBrandNameEn` |
+| **② 品牌术语种入** | `store.SeedBrandTerms(tid, names)`：品牌中文名→各目标语 L1 术语种入企业包（`code='tenant'`），语言兜底规则——显式语言名优先 > `zh_hant` 沿用中文名 > 其余语言用英文名；无可用译文跳过；复用 `SaveEntry` 幂等 upsert（kb_entries + tm_segments priority=1） |
+| **③ 注册/建租户/品牌定制接线** | `api.seedTenantBrandTerms`（register.go）：注册（handleRegister）、超管建租户（handleTenantCreate）、后台品牌定制保存（handleTenantBrandingSet）三处统一种入 + 持久化 `brand_names`/`brand_name_en`；`brandingPayload` 返回新字段 |
+| **④ 前端引导录入** | 注册表单「企业用户/管理员（新建企业）」新增「品牌中文名」「品牌英文名（选填，覆盖所有非中文语言固定用法）」录入（Login.tsx + auth.ts + i18n zh/en）；品牌面板（BrandP.tsx + api/branding.ts）新增品牌英文名编辑，保存即触发补种 |
+| **⑤ 部署主站** | 交叉编译 Linux 二进制（MD5 `16c57b12`）→ scp → 备份旧版 → 替换 `/opt/translator/bin/translator-server` + `/opt/translator/web` → 重启 translator.service；`deploy_check.sh` 8 项全通过；`/api/health` 全 true、dialect=postgres、新列已补 |
+| **⑥ 部署演示站** | 按 PROGRESS 记录流程：`systemctl stop translator-demo` → `dropdb langcross_demo` → `bash bootstrap-demo.sh`（克隆生产库/二进制/前端 + 种入 demo 账号）→ 起服；二进制 MD5 与生产一致、公网 `/api/health` 200 |
+| **⑦ 生产补种 ROX 术语** | 生产租户1（ROX极石汽车）此前无 brand 术语 → SQL 补种：`tenants.brand_name='极石'/brand_name_en='ROX'/brand_names={"zh":"极石","en":"ROX"}` + `kb_entries` 34 条（全目标语）+ `tm_segments` 1 行（priority=1）；演示站经后台 API 保存品牌英文名触发同样种入 |
+| **验证** | 演示站端到端回归：俄文「请尽快到极石汽车服务中心进行常规检查」→ 输出 `сервисный центр ROX`（不再 Jixi）；生产 `tm_segments` 精确命中 SQL 返回 `极石|1|ROX|ROX`；两站品牌字段/术语条数一致（34）；重启后无新增 panic |
+
+
+## 〇-XIII、演示站知识库根治 + 行业包权限修复（2026-09-04，基于 75496f5）
+
+> 演示站（rox-test.lexicorn.cn）运行旧二进制，知识库三个慢 SQL/交互问题未根治；且主站同样存在行业包权限问题。本次针对性修复 + 澄清演示站需以新二进制重发。
+
+| 块 | 内容 |
+|---|---|
+| **① 行业包权限（主站同样存在）** | 行业包宿主在租户1，平台内全部行业包（auto/realestate/b2b/education/ecommerce 等）都在此 → ROX（汽车）在后台看到全部无关行业包。新增 `Server.filterIndustryPackages`：后台包列表按租户注册行业只保留 code=行业 的行业包，无注册行业回退通用行业包（general）；并对超管/宿主租户一视同仁。同时修 `BuildPackScope`（检索层）：移除 `tid==1 全放行` 旧规则，宿主租户同样只装配与本公司注册行业匹配的行业包，避免翻译时参考房产/教育等无关行业术语 |
+| **② 安全句平铺（演示站旧二进制）** | 〇-XII 已实现安全句服务端分页（`ListSafetyPhrasesPage` + `applySafetyQuery` + 20/页跳页器），演示站因旧二进制未生效 → 重发即可 |
+| **③ 查看目录慢/只显 20 条/翻页失效/翻译（演示站旧二进制）** | 〇-XII 已实现条目服务端分页（`ListEntriesPage` + `kbEntries` 分页参数 + 20/页跳页器 + 包列表 `entry_count` 消除 N+1 COUNT 卡顿），演示站旧二进制未生效 → 重发即可 |
+| **演示站重发** | 演示站从生产克隆二进制/前端快照（`bootstrap-demo.sh`）。步骤：① 先部署本代码到生产（`/opt/translator/bin` + `web`）；② `systemctl stop translator-demo`；③ `sudo -u postgres dropdb langcross_demo && sudo bash scripts/bootstrap-demo.sh`（刷新克隆+种入演示账号+`-kb` 向量索引）；④ `systemctl start translator-demo`；⑤ 用 `demo_admin` 登录验证安全句/条目分页与仅汽车行业包 |
+| **验证** | go build/vet/test（store+api 全绿）+ npm typecheck/vite build 通过 |
+
+## 〇-XII、知识库性能优化 + 条目编辑 + 安全句服务端分页（2026-09-04，提交 75496f5）
+
+> 线上反馈后台知识库卡顿：①安全句面板全量平铺渲染；②包列表每包一次 COUNT 的 N+1 请求；③「查看条目」列表缺搜索定位与编辑；④相关查询命中慢 SQL。本次从数据层索引到 API 到前端交互一并治理。
+
+| 块 | 内容 |
+|---|---|
+| **N+1 卡顿根治** | 包列表条目数由前端逐包 `kbEntries(count:true)` 循环（每包一次请求）改为后端 `CountEntriesByPackages` 一次 `GROUP BY` 单查询，随 `handleKBPackages` 附带 `entry_count`（`attachEntryCounts`），前端 `loadPackages` 直接读角标，消除面板打开卡顿 |
+| **慢 SQL 索引** | 新增 `idx_kb_entries_tid_pkg ON kb_entries(tenant_id, package_id, layer, target_lang)`（后台「查看条目」按租户+包过滤的 COUNT/LIKE 检索，原索引不含 tenant_id 走全表扫）与 `idx_kb_safety_tid_pkg ON kb_safety_phrases(tenant_id, package_id, lang)`（安全句过滤，原无索引）；安全句索引须在表创建后建立 |
+| **安全句服务端分页** | `ListSafetyPhrasesPage`（store）：支持 包/语言/类型/状态 精确过滤 + phrase/replacement 关键词模糊搜索 + `LIMIT/OFFSET` 分页与真实总数；`handleSafetyPhrases` 接收 `package_id/lang/kind/status/q/page/page_size` 返回 `total`；前端安全句面板改为服务端分页（20/页 + 跳页器）+ 语言/类型下拉 + 搜索框 + 总数角标，替代原「全量平铺 + 客户端过滤」 |
+| **条目编辑** | 查看条目对话框新增每行「编辑」按钮（回填表单→`saveEntry` 走更新），新增/保存按钮在编辑模式切换文案，支持「取消编辑」；后端新增 `/api/admin/kb-entries/update`（`handleKBEntryUpdate`）与 `UpdateEntry`/`GetEntryForUpdate`（store，租户隔离 + 不可改包归属），带部门/包类型权限校验 + 审计 + 失效 CJK 缓存 |
+| **前端** | `api/kb.ts` 新增 `kbEntryUpdate`、`safetyPhrases` 支持分页/过滤参数；`panels_d.tsx` 新增 `querySafety`/`applySafetyQuery`（显式传参避免陈旧闭包）与 `reloadSafety`（增删改后沿当前过滤/页码回填）；i18n 新增编辑/搜索/安全句计数文案（zh/en） |
+| **验证与发布** | go build/vet/test（store+api+culture+crawler+engine 全绿）+ npm typecheck/vite build 通过；已部署生产 langcross.lexicorn.cn（/api/health 全 true、`/status` dialect=postgres、bundle 含新功能、新路由鉴权正常、重启后无新增 panic）；本次提交不含文档/流程图 |
 
 ## 〇-XI、任务中心 + 后台菜单重组 + 行业筛选 + 计费审计修复（2026-09-03，提交 18c6857）
 
@@ -82,7 +147,7 @@
 |---|---|
 | **数据源三档** | tier1 官方 API（维基百科 langlinks 反查，源语言 zh）、tier2 受限抓取（robots.txt 遵从 + 每主机限速 1.2s + 术语表表格解析）、tier3 LLM 生成（词表批量翻译，kind 白名单 style/forbidden/replace），统一标注 tier 可信度进待审池 |
 | **调度（低占用驱动）** | watchdog 内嵌 `startPackScraper`：每 `scrape_poll_sec` 探测，仅当「无排队/运行工单 + LLM 错误率 < 阈值 + RSS < 水位」三条件全满足才采集；占用提升即暂停，checkpoint 断点续传；`scrape_seed_once=1` 首日铺底 + 每日增量（`kb_scrape_daily_marker`）；新增待审通知全部超管（站内信） |
-| **审批热加载** | 超管面板「🕷️ 数据采集」：数据源 CRUD/启停/手动采集一轮；待审池按类型/语言/状态筛选 + 批量通过/驳回；通过条目经 SaveEntry 落 `kb_entries`（宿主租户1）、安全句经 SaveSafetyPhraseEx 落 `kb_safety_phrases`，随后 invKB 失效缓存 + 异步重建向量索引即时生效 |
+| **审批热加载** | 超管面板「🕷️ 数据采集」：数据源 CRUD/启停/手动采集一轮；待审池按类型/语言/状态筛选 + 批量通过/驳回；通过条目经 SaveEntry 落 `kb_entries`（宿主=平台共享包宿主租户0，`SharedHostTenant`）、安全句经 SaveSafetyPhraseEx 落 `kb_safety_phrases`，随后 invKB 失效缓存 + 异步重建向量索引即时生效（注：2026-09-04 行业包/语言文化包宿主已由租户1迁至租户0） |
 | **硬闸护栏（gate_retry_max=8）** | Gate 8 项硬校验 / 语言文化闸门任一失败不再直接置 rejected：附 KB 参考（源文本命中标准译法）+ 失败原因，经 TranslateWithFeedbackEx 自动重译，循环至通过或达上限（默认 8 次）；重试次数与最近打回原因写入 payload（RetryCount/GateHints）供审批参考；`0`=关停自动重译直接打回 |
 | **幂等与去重** | 待审去重键 `md5(src_lang\|src_text\|tgt_lang\|tgt_text)`（条目）/ `md5(lang\|kind\|phrase\|replacement)`（安全句），唯一索引 + INSERT OR IGNORE；断点续传键 `kb_scrape_checkpoint_<date>_<source_id>` 等存 system_config；store.KBScrapeMigrate 幂等建表（kb_pack_sources / kb_staged_entries / kb_staged_phrases） |
 | **验证** | go build/vet/test（api+crawler+store+orchestrator 全绿）+ npm typecheck + vite build 通过；文档同步《部署指南》§八-B4（采集与护栏配置）并去掉过时/不存在的配置键表述 |
@@ -242,7 +307,7 @@
 | 项 | 值 |
 |----|-----|
 | 生产域名 | **https://langcross.lexicorn.cn**（2026-08-24 起，旧域名已下线） |
-| 服务器 | 43.108.86.140（阿里云；内存紧张，按 **≤1G 有效可用** 调优：GOMEMLIMIT=650Mi、MemoryMax=950M、worker=2） |
+| 服务器 | 43.108.86.140（阿里云；内存紧张，按 **≤1G 有效可用** 调优：GOMEMLIMIT=850MiB、MemoryMax=1150M、worker=4） |
 | 服务 | `translator.service`（Go 单二进制，/status 返回 v3, ok:true）；前端已切换为 React + TDesign（frontend/ 旧 Vue 栈已下线） |
 | 反代 | Caddy（自动 HTTPS），配置片段 `/etc/caddy/translator.conf` |
 | 数据库 | PostgreSQL 16 + pgvector 0.6.0（同机自建，非托管 RDS）；历史 SQLite 保留于 `/opt/translator/data/backups/` |
@@ -266,7 +331,7 @@
   - **管理后台**：三工作台（超管/租管/部门管）、租户切换器、OpenAPI 文档在线编辑（双语）、审计日志、告警中心、记忆审核台、**任务中心（用户领永久 token + 超管自定义每日/一次性任务）**、**个人中心（邀请好友 + 任务中心）**、**外部调用（开放 API + 回调通知）**、**协议签署并入系统设置**（2026-09-03 菜单重组，详见 〇-XI）
    - **品牌定制与子域名**：按子域名前缀解析租户品牌（名称/Logo/子域）；Caddy on-demand TLS 自动签发证书（需 DNS 通配符 A 记录 `*.lexicorn.cn → 服务器 IP`）；品牌信息前端按 host 直接调 `/api/tenant/branding` 加载（无根域覆盖）；登录成功后自动跳转至所属品牌子域（后端返回 `brand_host`）。品牌定制为付费套餐功能（有效付费套餐或超管授权方可编辑，未满足仅可查看）；登录页支持两种布局——① 全屏背景（登录卡片浮于其上，无遮罩）② 左右分栏（容器可在左/右，另一侧为图片）；登录卡片与背景图位置均可在品牌管理页拖拽定位并保存；语言切换（中文/EN）为全局设计，内嵌于登录容器右上角
 - **Office 划译插件**：Word 侧加载 taskpane，选区翻译插回文档
-- **运维护栏（1G 内存红线，2026-08-28 优化）**：`GOMEMLIMIT=650Mi`、`MemoryMax=950M`、worker=2、LLM 并发 8（禁 HTTP/2 治流挂起）；**文件翻译防卡死**：PDF 体积>40MB 或页数>120 前置拦截 + 友好提示；转换子进程 OOM 优先受害者 + 可选 `FILEPROC_RLIMIT_AS_MB` 硬上限；**并发写零 SQLITE_BUSY**：实时用量计量改为内存累积 + 周期(2s/200条)按租户单事务批量落库（写事务从每秒 N 个降到每周期每租户 1 个），并用 `usage_daily` 计数器表替代每次请求的 ledger `LIKE` 全扫；产物留存 14 天+到期提醒、pending 订单 15min 自动关闭、低额提醒巡检
+- **运维护栏（1G 内存红线，2026-08-28 优化，2026-09-04 复核）**：`GOMEMLIMIT=850MiB`、`MemoryMax=1150M`、worker=4、LLM 并发 2（禁 HTTP/2 治流挂起）；**文件翻译防卡死**：PDF 体积>40MB 或页数>120 前置拦截 + 友好提示；转换子进程 OOM 优先受害者 + 可选 `FILEPROC_RLIMIT_AS_MB` 硬上限；**并发写零 SQLITE_BUSY**：实时用量计量改为内存累积 + 周期(2s/200条)按租户单事务批量落库（写事务从每秒 N 个降到每周期每租户 1 个），并用 `usage_daily` 计数器表替代每次请求的 ledger `LIKE` 全扫；产物留存 14 天+到期提醒、pending 订单 15min 自动关闭、低额提醒巡检
 
 ## 三、近期关键修复（2026-08-24~27）
 
