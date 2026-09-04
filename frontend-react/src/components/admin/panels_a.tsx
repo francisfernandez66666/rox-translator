@@ -4,7 +4,7 @@
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Tabs, Empty, MessagePlugin,
+  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Tabs, Empty, MessagePlugin, DateRangePicker,
 } from 'tdesign-react'
 import { promptText } from '@/components/uiDialogs'
 import {
@@ -545,17 +545,18 @@ export function UsageP() {
   const [cost, setCost] = useState<Any | null>(null)
   // 用量看板默认打开「个人用量」
   const [usageTab, setUsageTab] = useState<'me' | 'org' | 'cost'>('me')
-  // 按日查询：空=累计+当日口径；否则为指定日期（YYYY-MM-DD）
-  const [usageDate, setUsageDate] = useState('')
+  // 按日/区间查询：from/to=YYYY-MM-DD（均空=累计+当日口径；选自选区间如近1天/近3天/任意）
+  const [usageFrom, setUsageFrom] = useState('')
+  const [usageTo, setUsageTo] = useState('')
 
   // 并行拉取三类用量数据（剔除 success/message 等接口元字段）；日期变化时重新拉取
   useEffect(() => {
     void (async () => {
-      try { const r = await usageMe(usageDate || undefined); if (r.success) { const { success, message, ...d } = r as Any; setMe(d) } } catch {}
-      try { const r = await usageOrg(undefined, usageDate || undefined); if (r.success) { const { success, message, ...d } = r as Any; setOrg(d) } } catch {}
+      try { const r = await usageMe(usageFrom || undefined, usageTo || undefined); if (r.success) { const { success, message, ...d } = r as Any; setMe(d) } } catch {}
+      try { const r = await usageOrg(undefined, usageFrom || undefined, usageTo || undefined); if (r.success) { const { success, message, ...d } = r as Any; setOrg(d) } } catch {}
       try { const r = await usageCost(); if (r.success) { const { success, message, ...d } = r as Any; setCost(d) } } catch {}
     })()
-  }, [usageDate])
+  }, [usageFrom, usageTo])
 
   /** 个人用量：基础费用/句数指标卡片 */
   const meCards = (d: Any) => !d ? <Empty description="—" /> : (
@@ -600,16 +601,26 @@ export function UsageP() {
     <Panel title={t('usage.dashboardTitle')}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 13, color: '#667' }}>{t('usage.dateQuery')}</span>
-        <input
-          type="date"
-          value={usageDate}
-          onChange={(e) => setUsageDate(e.target.value)}
-          style={{ height: 30, border: '1px solid #dcdcdc', borderRadius: 8, padding: '0 8px' }}
+        <DateRangePicker
+          mode="date"
+          valueType="YYYY-MM-DD"
+          clearable
+          allowInput
+          style={{ width: 260 }}
+          value={usageFrom && usageTo ? [usageFrom, usageTo] : []}
+          onChange={(v) => {
+            const arr = (Array.isArray(v) ? v : []) as (string | Date)[]
+            const from = arr[0] ? String(arr[0]).slice(0, 10) : ''
+            const to = arr[1] ? String(arr[1]).slice(0, 10) : ''
+            setUsageFrom(from)
+            setUsageTo(to)
+          }}
+          placeholder={[t('usage.dateFrom'), t('usage.dateTo')]}
         />
-        {usageDate && (
-          <Button size="small" variant="text" onClick={() => setUsageDate('')}>{t('usage.dateClear')}</Button>
+        {(usageFrom || usageTo) && (
+          <Button size="small" variant="text" onClick={() => { setUsageFrom(''); setUsageTo('') }}>{t('usage.dateClear')}</Button>
         )}
-        {usageDate && <Tag variant="light" theme="primary">📅 {usageDate}</Tag>}
+        {(usageFrom || usageTo) && <Tag variant="light" theme="primary">📅 {usageFrom || usageTo}{usageFrom && usageTo && usageFrom !== usageTo ? ` ~ ${usageTo}` : ''}</Tag>}
       </div>
       <Tabs placement="top" value={usageTab} onChange={(v) => setUsageTab(v as 'me' | 'org' | 'cost')} list={[
         { label: t('usage.tabMine'), value: 'me', panel: meCards(me) },

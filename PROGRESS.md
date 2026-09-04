@@ -1,6 +1,19 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-05（并行分支核查修正：KB 面板租户0宿主回归；main 分支 **待提交**）
+> 最后更新：2026-09-05（用量看板日期区间查询修复 + 腾讯 TDesign 日期范围组件；main 分支 **待提交**）
+
+## 〇-XIX、用量看板日期筛选修复 + 自定义日期区间（2026-09-05）
+
+> 用户反馈主站/演示站「选了日期数据都是 0」。排查发现两处叠加 bug：① 前端 `usage.orgTotal` 字典用 `{total}` 占位符而调用传 `{n}` → 模板不替换直接渲染字面量「本层累计：{total} token」；② 后端 `UsageByOrg`/`UsageByUser` 过滤 `l.user_id>0`，而全站批量 LLM 任务记账 `user_id=0`（系统/未登录），仅含此类任务的日期（如 2026-09-03 的 938848 token）按日查询恒为 0。同时顺带把「单日查询」升级为「任意日期区间」（1 天/3 天/自定义）。
+
+| 块 | 内容 |
+|---|---|
+| **① 前端模板 bug** | `panels/usage.ts` `usage.orgTotal` 占位符 `{total}`→`{n}`（与 `panels_a.tsx` 的 `tpl(…,{n:…})` 对齐）；补 `usage.dateFrom/dateTo/dateClear/dateQuery` 中英键；清理与 `dicts.zh.ts` 重复键（`colUser/colName/colOrg/colCost` 由 panels 版覆盖生效） |
+| **② 后端 user_id=0 口径** | store `UsageByOrg` 移除 `l.user_id>0` 过滤；API `handleUsageOrg` 超管/企业两分支把 `costByUser[0]` 并入 total 并追加一行「系统/后台任务」明细；`UsageAllByUser` 同样纳入 0 号用户 |
+| **③ 自定义日期区间** | store 三函数（`UsageByUser/UsageByOrg/UsageAllByUser`）参数 `day`→`from,to`；新增 `usageDatePred` 生成 `created_at >= ? AND created_at < ?` 区间谓词（RFC3339 text 字典序可比；兼容非法日期回退 LIKE）；API 新增 `usageDateRange` 解析 `from/to` 并兼容旧 `date` 单日参数 |
+| **④ 腾讯 TDesign 组件** | 前端用量看板用 `tdesign-react` 的 `DateRangePicker`（mode=date + valueType=YYYY-MM-DD）替换原生 `<input type="date">`，支持任选起止日期/清除；`api/billing.ts` `usageMe/usageOrg` 传 `from/to` |
+| **验证** | 生产/演示库区间谓词与旧 LIKE 等价（2026-09-03 = 938848）；演示站 API：空日期累计 984997（含 system 968982）、单日 09-03 = 938848、区间 08-28~09-03 = 956337、平台视图区间 957602；go vet/test 全绿、vite build 通过 |
+| **部署** | 主站与演示站分别停服→备份→替换 bin+web（MD5 `43ac7e7bda601aff79c030f1c72993b6`）→启动→health 200，前端构建 `index-BLX7noca.js` 两站一致 |
 
 ## 〇-XVIII、并行分支核查修正：KB 面板平台上下文宿主回归（2026-09-05）
 

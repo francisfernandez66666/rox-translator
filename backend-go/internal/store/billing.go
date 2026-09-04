@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 	"translator/internal/db"
 )
@@ -497,22 +498,23 @@ func (s *Store) incrementDailyUsage(tid, amount int64) {
 		tid, day, amount, amount)
 }
 
-// UsageByUser 个人用量汇总（普通用户个人级看板）：按用户统计当日/累计费用与句数。
-// 参数：tid=租户 ID，userID=用户 ID，day=指定日期（YYYY-MM-DD，空=累计+当日口径）。
-// 返回累计费用、当日费用、记录条数。
-// day 非空时表示「指定日查询」：返回该日费用（total 与 today 均为该日值）与该日记录条数。
-func (s *Store) UsageByUser(tid, userID int64, day string) (int64, int64, int64, error) {
+// UsageByUser 个人用量汇总（普通用户个人级看板）：按用户统计区间/累计费用与句数。
+// 参数：tid=租户 ID，userID=用户 ID，from/to=日期区间（YYYY-MM-DD；均空=累计+当日口径，
+// from 缺省=to、to 缺省=from；from==to 即单日查询）。
+// 返回累计费用、当日费用、记录条数（区间查询时 total 与 today 均为区间值）。
+func (s *Store) UsageByUser(tid, userID int64, from, to string) (int64, int64, int64, error) {
 	var total, today, cnt int64
-	if day != "" {
+	if pred, args := usageDatePred(from, to); args != nil {
+		// 区间口径：total=today=区间值
 		err := db.QueryRow(s.db, db.CurrentDialect(),
-			"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at LIKE ?",
-			tid, userID, day+"%").Scan(&total, &cnt)
+			"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at "+pred,
+			append([]interface{}{tid, userID}, args...)...).Scan(&total, &cnt)
 		if err != nil {
 			return 0, 0, 0, err
 		}
 		return total, total, cnt, nil
 	}
-	day = time.Now().Format("2006-01-02")
+	// 全部时间口径：total=全量，today=当日
 	err := db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=?", tid, userID).
 		Scan(&total, &cnt)
@@ -520,35 +522,61 @@ func (s *Store) UsageByUser(tid, userID int64, day string) (int64, int64, int64,
 		return 0, 0, 0, err
 	}
 	_ = db.QueryRow(s.db, db.CurrentDialect(),
-		"SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at LIKE ?", tid, userID, day+"%").Scan(&today)
+		"SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at LIKE ?",
+		tid, userID, time.Now().Format("2006-01-02")+"%").Scan(&today)
 	return total, today, cnt, nil
 }
 
+// usageDatePred 生成 usage_ledger.created_at（RFC3339 text）的区间过滤谓词与参数。
+// 参数 from/to: YYYY-MM-DD；均空返回 nil（=不过滤全部时间）；仅给一个视同单日/单边。
+// 返回谓词（不含列名，如 `>= ? AND created_at < ?`…注意由调用方拼到 created_at 之后）与参数。
+func usageDatePred(from, to string) (string, []interface{}) {
+	if from == "" {
+		from = to
+	}
+	if to == "" {
+		to = from
+	}
+	if from == "" {
+		return "", nil
+	}
+	end, err := time.Parse("2006-01-02", to)
+	if err != nil {
+		// 非法日期回退单日前缀匹配
+		return "LIKE ?", []interface{}{to + "%"}
+	}
+	// 时间上界=to 次日零点；RFC3339 文本字典序天然可比（前 10 位即日期）
+	endEx := end.AddDate(0, 0, 1).Format("2006-01-02")
+	return ">= ? AND created_at < ?", []interface{}{from, endEx}
+}
+
 // UsageByOrg 组织用量汇总：统计指定组织及其子孙组织下全部用户的用量（组织→子组织→用户下钻）。
-// 参数：tid=租户 ID，orgIDs=组织及子孙组织 ID 集合（空=租户全部用户），day=指定日期（空=全部时间）。
+// 参数：tid=租户 ID，orgIDs=组织及子孙组织 ID 集合（空=租户全部用户），from/to=日期区间
+// （YYYY-MM-DD；均空=全部时间，仅给一个视同单日/单边）。
 // 返回：map[用户ID]=费用；并携带 users 明细（在 API 层组装，此处仅聚合费用）。
-func (s *Store) UsageByOrg(tid int64, orgIDs []int64, day string) (map[int64]int64, error) {
+// ★ 2026-09-05 修复：不再过滤 l.user_id>0——系统/未登录任务（user_id=0）的用量也归入区间口径，
+//   否则仅含后台任务的日期（如全站批量 LLM 调用）按日查询恒为 0。user_id=0 由 API 层单独归一行。
+func (s *Store) UsageByOrg(tid int64, orgIDs []int64, from, to string) (map[int64]int64, error) {
 	out := map[int64]int64{}
-	q := "SELECT l.user_id, COALESCE(SUM(l.cost),0) FROM usage_ledger l WHERE l.tenant_id=? AND l.user_id>0"
+	selectFrom := "FROM usage_ledger l"
+	whereClauses := []string{"l.tenant_id=?"}
 	args := []interface{}{tid}
-	if len(orgIDs) > 0 {
-		ph := ""
-		for i := range orgIDs {
-			if i > 0 {
-				ph += ","
-			}
-			ph += "?"
-			args = append(args, orgIDs[i])
-		}
+	filters := []string{}
+	for _, oID := range orgIDs {
+		filters = append(filters, "?")
+		args = append(args, oID)
+	}
+	if len(filters) > 0 {
 		// 限定组织内用户：join users 表按 org_id 过滤
-		q = "SELECT l.user_id, COALESCE(SUM(l.cost),0) FROM usage_ledger l JOIN users u ON l.user_id=u.id " +
-			"WHERE l.tenant_id=? AND u.org_id IN (" + ph + ") AND l.user_id>0"
+		selectFrom = "FROM usage_ledger l JOIN users u ON l.user_id=u.id"
+		whereClauses = append(whereClauses, "u.org_id IN ("+strings.Join(filters, ",")+")")
 	}
-	if day != "" {
-		q += " AND l.created_at LIKE ?"
-		args = append(args, day+"%")
+	if pred, cargs := usageDatePred(from, to); cargs != nil {
+		whereClauses = append(whereClauses, "l.created_at "+pred)
+		args = append(args, cargs...)
 	}
-	q += " GROUP BY l.user_id"
+	q := "SELECT l.user_id, COALESCE(SUM(l.cost),0) " + selectFrom + " WHERE " +
+		strings.Join(whereClauses, " AND ") + " GROUP BY l.user_id"
 	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil, err
@@ -1274,14 +1302,14 @@ func randSuffix(n int) string {
 }
 
 // UsageAllByUser 跨租户聚合每用户用量（超管平台视角）。
-// 参数：day=指定日期（YYYY-MM-DD，空=全部时间）。
+// 参数：from/to=指定日期区间（YYYY-MM-DD，均空=全部时间，仅给一个视同单日/单边）。
 // 返回：用户 ID → 消耗量。
-func (s *Store) UsageAllByUser(day string) (map[int64]int64, error) {
+func (s *Store) UsageAllByUser(from, to string) (map[int64]int64, error) {
 	q := "SELECT user_id, COALESCE(SUM(quantity),0) FROM usage_ledger"
 	args := []interface{}{}
-	if day != "" {
-		q += " WHERE created_at LIKE ?"
-		args = append(args, day+"%")
+	if pred, cargs := usageDatePred(from, to); cargs != nil {
+		q += " WHERE created_at " + pred
+		args = cargs
 	}
 	q += " GROUP BY user_id"
 	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)

@@ -426,16 +426,16 @@ func (s *Server) handleUsageMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
-	// 指定日查询（YYYY-MM-DD；空=累计+当日口径）
-	day := r.URL.Query().Get("date")
-	total, today, cnt, err := s.Store.UsageByUser(u.TenantID, u.ID, day)
+	// 指定日/区间查询：from=YYYY-MM-DD, to=YYYY-MM-DD（均空=累计+当日口径；兼容旧 date 单日参数）
+	from, to := usageDateRange(r)
+	total, today, cnt, err := s.Store.UsageByUser(u.TenantID, u.ID, from, to)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
 	bal, _ := s.Store.GetSentenceBalance(u.TenantID)
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "total": total, "today": today, "count": cnt, "sentence_balance": bal, "date": day,
+		"success": true, "total": total, "today": today, "count": cnt, "sentence_balance": bal, "from": from, "to": to, "date": to,
 	})
 }
 
@@ -449,8 +449,8 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.effTenant(r, u)
-	// 指定日查询（YYYY-MM-DD；空=全部时间）
-	day := r.URL.Query().Get("date")
+	// 指定日/区间查询：from=YYYY-MM-DD, to=YYYY-MM-DD（均空=全部时间；兼容旧 date 单日参数）
+	from, to := usageDateRange(r)
 	// 超管平台视角（tid<=0）：跨租户聚合全部用户用量
 	if auth.IsSuperAdmin(u) && tid <= 0 {
 		users, uerr := s.Store.ListAllUsers()
@@ -458,7 +458,7 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": uerr.Error()})
 			return
 		}
-		costByUser, cerr := s.Store.UsageAllByUser(day)
+		costByUser, cerr := s.Store.UsageAllByUser(from, to)
 		if cerr != nil {
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": cerr.Error()})
 			return
@@ -480,7 +480,14 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 			}
 			out = append(out, orgUsage{User: usr, OrgName: on, Cost: c})
 		}
-		writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": 0, "total": total, "date": day})
+		// ★ 2026-09-05 修复：系统/未登录任务（user_id=0，如全站批量 LLM 调用）的用量
+		//   未出现在 users 列表，但不计入 total 会让「全站仅后台任务」的日期按日查询恒为 0。
+		//   单独归一行（沙箱用户）并入 total，保证日期口径连续一致。
+		if c0 := costByUser[0]; c0 > 0 {
+			total += c0
+			out = append(out, orgUsage{User: &store.User{ID: 0, Username: "system", DisplayName: "系统/后台任务", Role: "system", TenantID: 0, OrgID: 0, Status: "active"}, OrgName: "平台", Cost: c0})
+		}
+		writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": 0, "total": total, "from": from, "to": to, "date": to})
 		return
 	}
 	orgID := int64(0)
@@ -500,7 +507,7 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 			orgIDs = ids
 		}
 	}
-	costByUser, err := s.Store.UsageByOrg(tid, orgIDs, day)
+	costByUser, err := s.Store.UsageByOrg(tid, orgIDs, from, to)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -527,7 +534,28 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 		orgTotal += c
 		out = append(out, orgUsage{User: usr, OrgName: orgName[usr.OrgID], Cost: c})
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": orgID, "total": orgTotal, "date": day})
+	// ★ 2026-09-05 修复：系统/未登录任务（user_id=0，如批量 LLM 调用）并入 total，
+	//   避免「当日仅系统任务」时按日查询 total 恒为 0，且明细可见该部分消耗。
+	if c0 := costByUser[0]; c0 > 0 {
+		orgTotal += c0
+		out = append(out, orgUsage{User: &store.User{ID: 0, Username: "system", DisplayName: "系统/后台任务", Role: "system", TenantID: tid, OrgID: 0, Status: "active"}, OrgName: "系统", Cost: c0})
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": orgID, "total": orgTotal, "from": from, "to": to, "date": to})
+}
+
+// usageDateRange 解析用量看板日期区间参数。
+// 兼容旧版单一 date 参数：date=YYYY-MM-DD 视同 from=to=date；新版用 from/to（YYYY-MM-DD），
+// 均空返回 "", ""（=全部时间/累计口径）。
+// 参数 r: HTTP 请求。返回 from、to 两个日期字符串。
+func usageDateRange(r *http.Request) (from, to string) {
+	from = r.URL.Query().Get("from")
+	to = r.URL.Query().Get("to")
+	if from == "" && to == "" {
+		if d := r.URL.Query().Get("date"); d != "" {
+			return d, d
+		}
+	}
+	return from, to
 }
 
 // handleUsageCost 全平台模型成本核算看板（超级管理员）。
