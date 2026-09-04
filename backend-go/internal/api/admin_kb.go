@@ -79,13 +79,19 @@ func (s *Server) deptKBScope(u *store.User, tid int64, pkg *store.KBPackage) err
 
 // ============ KB 包管理（行业包） ============
 
-// kbTenant 知识库生效租户：超管平台上下文（tid=0）时行业包宿主为租户 1，其余同 effTenant。
+// kbTenant 知识库生效租户：
+// ★ 2026-09-04 权限澄清后：行业包/语言文化包宿主为租户0（平台上下文 SharedHostTenant）。
+//   超管未显式切换企业租户（tid≤0）时返回 0（管理平台共享包）；已切换到企业租户（tid>0）
+//   则返回该企业租户（管理该企业的企业包/跨部门包/部门包）。普通用户按自身租户。
 // ⚠️ 历史事故（2026-08-21~23）：本函数曾误写为调用自身导致无限递归栈溢出，
 // 任何打开知识库面板的请求都会击穿进程（fatal error: stack overflow），已修复。
 func (s *Server) kbTenant(r *http.Request, u *store.User) int64 {
 	tid := s.effTenant(r, u) // ★ 修复点：原误写 s.kbTenant 自递归
+	// ★ 2026-09-04 权限澄清：行业包/语言文化包宿主为租户0（平台上下文）。
+	//   超管未显式切换企业租户（tid<=0）时直接以租户0管理平台共享包；
+	//   已切换到企业租户（tid>0）则管理该企业的企业包/跨部门包/部门包。
 	if auth.IsSuperAdmin(u) && tid <= 0 {
-		return 1
+		return 0
 	}
 	return tid
 }
@@ -133,22 +139,11 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.attachEntryCounts(tid, pkgs)
-	// 租户管理员（非超管）：可见企业包/部门包 + 行业包（行业知识库按租户对应行业作用域）；
-	// 语言文化包为平台级全域资源，仅超管在后台维护。
-	if auth.RoleLevel(u.Role) < 4 {
-		filtered := pkgs[:0]
-		for _, p := range pkgs {
-			if p.PackType == store.PackLocale {
-				continue
-			}
-			filtered = append(filtered, p)
-		}
-		pkgs = filtered
-	}
-	// ★ 行业包按租户注册行业过滤（2026-09-04）：行业包宿主在租户1，平台内全部行业包都在此。
-	//   即便超管/宿主租户，也只能看到与本公司行业匹配的行业包——避免 ROX（汽车）等企业
-	//   在后台看到房产/教育/电商等无关行业包。无注册行业时回退通用行业包（general）兜底。
-	s.filterIndustryPackages(tid, &pkgs)
+	// ★ 2026-09-04 权限澄清：行业包/语言文化包宿主为租户0（平台上下文）。
+	//   - 平台上下文（tid=0，超管）：列出平台全部行业包/语言文化包，统一管理；
+	//   - 企业租户上下文（tid>0，租管/超管已切换）：仅列出本企业的 企业包/跨部门包/部门包——
+	//     行业包/语言文化包已迁移至租户0，不在本租户的 kb_packages 中，天然不出现。
+	//     旧逻辑在此对非超管滤 locale、并对行业包按租户行业过滤，已随宿主迁移不再需要。
 	s.decoratePackages(tid, pkgs)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "packages": pkgs})
 }
@@ -167,31 +162,6 @@ func (s *Server) decoratePackages(tid int64, pkgs []*store.KBPackage) {
 			p.OrgName = orgNames[p.OrgID]
 		}
 	}
-}
-
-// filterIndustryPackages 按租户注册行业过滤行业包（原地改写 pkgs 切片）。
-// 规则：行业包仅保留 code=租户注册行业 的那一个；租户无注册行业时仅保留通用行业兜底包（general）。
-// 企业包/部门包/跨部门包/语言文化包不受影响（超管维护全平台行业包仍由超级用户面板统一管理）。
-func (s *Server) filterIndustryPackages(tid int64, pkgs *[]*store.KBPackage) {
-	t, terr := s.Ten.GetByID(tid)
-	industry := ""
-	if terr == nil && t != nil {
-		industry = t.Industry
-	}
-	out := (*pkgs)[:0]
-	for _, p := range *pkgs {
-		if p.PackType == store.PackIndustry {
-			if industry != "" {
-				if p.Code != industry {
-					continue
-				}
-			} else if p.Code != store.GeneralIndustryCode {
-				continue // 无注册行业：仅回退通用行业包
-			}
-		}
-		out = append(out, p)
-	}
-	*pkgs = out
 }
 
 // attachEntryCounts 为包列表一次性附带每条包条目总数（GROUP BY 单查询），

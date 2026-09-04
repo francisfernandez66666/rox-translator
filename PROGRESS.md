@@ -1,6 +1,27 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-04（错误码统一/OpenAPI 修复/队列心跳加固/扩展安全 + 全量中文注释 + 部署上线；main 分支 **b3a9fc6**）
+> 最后更新：2026-09-05（并行分支核查修正：KB 面板租户0宿主回归；main 分支 **待提交**）
+
+## 〇-XVIII、并行分支核查修正：KB 面板平台上下文宿主回归（2026-09-05）
+
+> 多 session 并行推进同一分支后复核发现：`admin_kb.go` 在并行提交中被**回退为旧模型**——`kbTenant` 超管平台上下文仍返回 1、`handleKBPackages` 仍调用 `filterIndustryPackages`（按租户行业过滤行业包），与已上线的「共享包宿主=租户0」模型矛盾。后果：超管平台上下文（tid=0）被映射到 ROX 租户1，**看不到/管理不了租户0的行业包/语言文化包**；逐一核对了其余宿主文件（kbpackages.go/kb/db.go/engine.go/admin_scrape.go/auto-approve）均正确，仅 admin_kb.go 与 kbtenant_test.go 残留旧模型。
+
+| 块 | 内容 |
+|---|---|
+| **① 修复** | `admin_kb.go` `kbTenant`：超管未显式切换企业租户（tid≤0）时返回 `0`（平台共享包宿主），已切换企业租户（tid>0）返回该租户；移除被并行分支倒退的 `filterIndustryPackages` 函数与其调用、移除旧的「非超管滤 locale」逻辑——行业包/文化包已迁至租户0，本租户 `kb_packages` 天然不包含，无需再按行业过滤 |
+| **② 测试同步** | `kbtenant_test.go` 由「超管平台→租户1」更新为「超管平台→租户0（SharedHostTenant）」+ 新增超管切换企业租户用例；`go test ./...` 16 包全绿 |
+| **③ 前端核对** | `authHeaders` 平台上下文（activeTenantId=0）不发 `X-Tenant-ID` → 后端 tid=0 → 平台行业包正常列出；企业租户发 `X-Tenant-ID` → 仅本租户包。`panels_d.tsx`/`KbUploadDialog` 数据驱动渲染，无硬编码冲突 |
+| **④ 部署** | 重新交叉编译 Linux 二进制 → 替换主站与演示站 → 重启 → 验收（健康检查 + 迁移计数核对） |
+
+## 〇-XVII、共享包宿主存量数据迁移（2026-09-04）
+
+> 〇-XVI 已把读写路径统一到 `SharedHostTenant=0`，但**存量库**里租户1的行业包/语言文化包及其条目/安全句/检索层行仍是旧宿主租户1，导致 ROX（租户1）后台/检索仍能看到平台行业包。本次补上启动数据迁移，把存量一并搬到租户0。
+
+| 块 | 内容 |
+|---|---|
+| **① 存量迁移** | `Store.MigrateSharedHostToZero`（启动自动执行，幂等）：找出 `tenant_id=1 AND pack_type IN ('industry','locale')` 的包，把 `kb_packages`/`kb_entries`/`kb_safety_phrases`/`tm_segments` 的 tenant_id 统一改为 `0`（企业包/部门包不受影响；pack_id 唯一不冲突） |
+| **② 回归测试** | `TestMigrateSharedHostToZero` 锁定：旧宿主（租户1）行业包 + 条目 + 检索行 + 安全句迁移后全部落租户0、企业包（租户2）不受影响、二次调用幂等 |
+| **验证** | go build/vet + go test ./internal/... ./cmd/... 全绿 |
 
 ## 〇-XVI、共享包宿主迁移补齐 + 测试夹具对齐（2026-09-04，提交 b3a9fc6）
 
