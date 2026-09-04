@@ -117,15 +117,15 @@ func newScopeEnv(t *testing.T) *scopeEnv {
 		t.Fatalf("设置 opt-out 失败: %v", err)
 	}
 	var indAuto *KBPackage
-	if indAuto, err = st.CreateKBPackage(1, 0, "auto", "汽车行业包", PackIndustry, PackRoleSource); err != nil {
+	if indAuto, err = st.CreateKBPackage(SharedHostTenant, 0, "auto", "汽车行业包", PackIndustry, PackRoleSource); err != nil {
 		t.Fatalf("建汽车行业包失败: %v", err)
 	}
 	var indMedPkg *KBPackage
-	if indMedPkg, err = st.CreateKBPackage(1, 0, "med-ind", "医疗行业包", PackIndustry, PackRoleSource); err != nil {
+	if indMedPkg, err = st.CreateKBPackage(SharedHostTenant, 0, "med-ind", "医疗行业包", PackIndustry, PackRoleSource); err != nil {
 		t.Fatalf("建医疗行业包失败: %v", err)
 	}
 	e.indMed = indMedPkg.ID
-	if e.locP, err = st.CreateKBPackage(1, 0, "loc", "文化包", PackLocale, PackRoleSource); err != nil {
+	if e.locP, err = st.CreateKBPackage(SharedHostTenant, 0, "loc", "文化包", PackLocale, PackRoleSource); err != nil {
 		t.Fatalf("建文化包失败: %v", err)
 	}
 	if e.crossP, err = st.CreateKBPackageForOrg(2, 0, "cross", "跨部门包", PackCrossDept, PackRoleSource, e.orgC); err != nil {
@@ -138,15 +138,15 @@ func newScopeEnv(t *testing.T) *scopeEnv {
 	e.crossP.CrossOrgs = []int64{e.orgC}
 
 	// 种子条目
-	e.save(t, 2, e.entP.ID, "刹车系统", "Braking system [ENT]")      // 企业层
-	e.save(t, 2, e.cP.ID, "刹车系统", "Brake sys [C]")               // 链内更近 → 应胜出
-	e.save(t, 2, e.cP.ID, "C专属术语", "C-only term")                // 链内独有
-	e.save(t, 2, e.bP.ID, "B层术语", "B-level term")                // 祖先链第 1 层
-	e.save(t, 2, e.dP.ID, "跨部门共享话术", "Cross-dept shared script") // 兄弟·愿共享
-	e.save(t, 2, e.dPOpt.ID, "D机密流程", "D secret process")        // 兄弟·已退出共享
-	e.save(t, 1, indAuto.ID, "行业通用句", "Industry common")         // 匹配行业（auto）
-	e.save(t, 1, e.indMed, "医疗专用句", "Medical only")              // 非本行业 → 不可见
-	e.save(t, 1, e.locP.ID, "文化习惯句", "Locale habit")             // 文化包全系统共享
+	e.save(t, 2, e.entP.ID, "刹车系统", "Braking system [ENT]")             // 企业层
+	e.save(t, 2, e.cP.ID, "刹车系统", "Brake sys [C]")                      // 链内更近 → 应胜出
+	e.save(t, 2, e.cP.ID, "C专属术语", "C-only term")                       // 链内独有
+	e.save(t, 2, e.bP.ID, "B层术语", "B-level term")                       // 祖先链第 1 层
+	e.save(t, 2, e.dP.ID, "跨部门共享话术", "Cross-dept shared script")        // 兄弟·愿共享
+	e.save(t, 2, e.dPOpt.ID, "D机密流程", "D secret process")               // 兄弟·已退出共享
+	e.save(t, SharedHostTenant, indAuto.ID, "行业通用句", "Industry common") // 匹配行业（auto）
+	e.save(t, SharedHostTenant, e.indMed, "医疗专用句", "Medical only")      // 非本行业 → 不可见
+	e.save(t, SharedHostTenant, e.locP.ID, "文化习惯句", "Locale habit")     // 文化包全系统共享
 	// pack_id=0 历史沉淀行（直插检索层）
 	if _, err := st.db.Exec(
 		"INSERT INTO tm_segments (zh_hash, zh, tenant_id, pack_id, priority, en) VALUES (?,?,?,?,?,?)",
@@ -287,23 +287,24 @@ func TestScopeLegacyRowAndShared(t *testing.T) {
 	}
 }
 
-// TestScopeHostTenantIndustryFilter 宿主租户（tid=1）注册行业的行业包隔离回归（2026-09-04）。
-// 背景：行业包宿主在租户1，平台内全部行业包（auto/medical/…）都在此。旧规则 `tid==1 全放行`
-// 使宿主（如 ROX=汽车）在翻译检索时装配全部无关行业包。本用例锁定：宿主租户同样只装配
-// 与本公司注册行业（auto）匹配的行业包，医疗行业包不进入 SharedPackIDs，其术语不可见。
+// TestScopeHostTenantIndustryFilter 企业租户按注册行业隔离行业包回归（2026-09-04）。
+// 背景：行业包/语言文化包为平台级全局资源，宿主在共享宿主租户0（SharedHostTenant）；
+// 旧规则 `tid==1 全放行` 使原宿主（如 ROX=汽车）在翻译检索时装配全部无关行业包——已移除。
+// 本用例锁定：企业租户（此处以租户1 ROX 为例）同样只装配与本公司注册行业（auto）匹配的
+// 行业包，医疗行业包不进入 SharedPackIDs，其术语不可见。
 func TestScopeHostTenantIndustryFilter(t *testing.T) {
 	env := newScopeEnv(t)
-	// 宿主租户1注册行业 auto（演示 ROX=汽车）；仅匹配 auto 行业包
+	// 企业租户1注册行业 auto（演示 ROX=汽车）；仅匹配 auto 行业包
 	if _, err := env.st.db.Exec("INSERT OR IGNORE INTO tenants (id, code, name, status, industry) VALUES (1,'rox','ROX','active','auto')"); err != nil {
-		t.Fatalf("种子宿主租户失败: %v", err)
+		t.Fatalf("种子租户失败: %v", err)
 	}
-	chain, err := env.st.OrgAncestorIDs(1, 0) // 宿主租户无组织，空链
+	chain, err := env.st.OrgAncestorIDs(1, 0) // 企业租户无组织，空链
 	if err != nil {
 		t.Fatalf("祖先链失败: %v", err)
 	}
 	scope, err := env.st.BuildPackScope(1, chain, true)
 	if err != nil {
-		t.Fatalf("BuildPackScope(宿主租户1) 失败: %v", err)
+		t.Fatalf("BuildPackScope(企业租户1) 失败: %v", err)
 	}
 	// 匹配行业包（auto）应装配；非本行业的平台行业包（med-ind）不应装配
 	findT1 := func(zh string) bool {

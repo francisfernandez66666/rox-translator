@@ -117,7 +117,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("[auto-approve] 初始化 Store 失败: %v", err)
 	}
-	tid := int64(1) // 采集内容宿主租户1（平台共享行业/语言文化包）
+	var tid int64 = store.SharedHostTenant // 采集内容宿主=平台共享包宿主租户（行业包/语言文化包，store.SharedHostTenant=0）
 
 	log.Printf("[auto-approve] 开始清洗+审批待审数据（dryrun=%v）", *dry)
 

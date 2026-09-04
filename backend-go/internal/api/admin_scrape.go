@@ -205,7 +205,7 @@ func (s *Server) handleKBScrapeApprove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "action 仅支持 approve/reject"})
 		return
 	}
-	tid := int64(1) // 采集内容宿主租户1（平台共享行业/语言文化包）
+	var tid int64 = store.SharedHostTenant // 采集内容宿主=平台共享包宿主租户（行业包/语言文化包，store.SharedHostTenant=0）
 	applied := 0
 	// 审批通过后按投稿租户累计源文字符数，用于功能⑥审批触发奖励
 	rewardChars := map[int64]int64{} // tenant_id → 审批通过条目的源文字符数合计
@@ -314,7 +314,7 @@ func (s *Server) handleKBScrapeRestore(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "kind 仅支持 entries/phrases"})
 		return
 	}
-	tid := int64(1) // 采集内容宿主租户1
+	var tid int64 = store.SharedHostTenant // 采集内容宿主=平台共享包宿主租户（行业包/语言文化包，store.SharedHostTenant=0）
 	reverted := 0
 	if req.Kind == "entries" {
 		items, gerr := s.Store.GetStagedEntriesAllByIDs(req.IDs)

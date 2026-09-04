@@ -128,8 +128,9 @@ func TestIndustryPackage(t *testing.T) {
 	if err := s.EnsureDefaultPackages(1); err != nil {
 		t.Fatalf("EnsureDefaultPackages 失败: %v", err)
 	}
-	// 在默认租户创建行业包
-	if _, err := s.CreateKBPackage(1, 0, "automotive", "汽车行业", PackIndustry, PackRoleSource); err != nil {
+	// 行业包宿主=平台共享租户0（SharedHostTenant，2026-09-04 权限澄清）；
+	// FindIndustryByCode 仅查宿主租户0 的行业包，故须在宿主创建。
+	if _, err := s.CreateKBPackage(SharedHostTenant, 0, "automotive", "汽车行业", PackIndustry, PackRoleSource); err != nil {
 		t.Fatalf("创建行业包失败: %v", err)
 	}
 	// 查找行业包
