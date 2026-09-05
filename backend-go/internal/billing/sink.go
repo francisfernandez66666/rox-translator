@@ -96,6 +96,24 @@ func InvalidateShadow(tid int64) {
 	DefaultSink.Invalidate(tid)
 }
 
+// Flush 进程级入口：同步冲刷实时计量缓冲（P3 修复——交互路径响应前调用，
+// 保证余额/台账即时可见，消除 2s 批量 flush 带来的计费可见延迟）。
+func Flush() {
+	DefaultSink.Flush()
+}
+
+// Flush 同步冲刷当前缓冲（阻塞至本批落库完成；无待落库时立即返回）。
+// 调用方应为低频交互路径（对话/文件翻译结束、余额查询前），高频场景继续走周期批量。
+func (s *UsageSink) Flush() {
+	s.mu.Lock()
+	if len(s.buf) == 0 || s.svc == nil || s.svc.Store == nil {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	s.flush()
+}
+
 // Stop 停止 flusher（优雅停机时调用，执行一次最终 flush）。
 func (s *UsageSink) Stop() {
 	select {

@@ -530,6 +530,7 @@ export const baseZh: Record<string,string> = {
   'admin.menuKb': '📚 知识库',
   'admin.menuModels': '🧠 模型配置',
   'admin.menuWorkflow': '⚙️ 流程引擎',
+  'admin.menuOps': '🎛️ 运营策略',
   'admin.menuApikeys': '🔑 开放 API',
   'admin.menuWebhooks': '🔗 回调通知',
   'admin.menuTickets': '📨 反馈/审批',

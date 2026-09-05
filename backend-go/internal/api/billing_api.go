@@ -15,6 +15,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -128,14 +129,35 @@ func (s *Server) ChargeUsageRealtime(ctx context.Context, model string, prompt, 
 	if total <= 0 {
 		return nil
 	}
-	billed := int64(float64(total) * s.markupMultiplier())
+	// ★ 运营策略引擎（2026-09-05）：按翻译模式（fast/pro）读取定价因子——
+	//   charge=false=推广期免费（仅留痕计量不扣减）、markup>0 时按模式成本系数、
+	//   enabled=false 时拒绝本次翻译（fail-closed 防漏计费）。
+	mode := tenant.ModeFromContext(ctx)
+	eff := s.effectivePolicy(tid)
+	rule, hasRule := eff.Mode(mode)
+	if hasRule && !rule.Enabled {
+		if abort := llm.AbortFromCtx(ctx); abort != nil {
+			abort()
+		}
+		return fmt.Errorf("翻译模式 %s 已停用", mode)
+	}
+	markup := eff.MarkupMultiplier
+	if hasRule && rule.Markup > 0 {
+		markup = rule.Markup
+	}
+	billed := int64(float64(total) * markup)
 	if billed < total {
 		billed = total // 系数异常兜底：至少按真实消耗计
 	}
-	// ★ 性能优化 B2/B3：实时计量改为批量落库（billing.DefaultSink）。每次 LLM 调用仅追加
-	//   内存缓冲，由后台 flusher 按租户单事务批量扣减+落账，彻底消除并发翻译下的 SQLITE_BUSY。
-	//   余额不足由 sink 内的内存影子余额即时触发 abort（保留「耗尽即停」语义）。
-	billing.RecordUsage(tid, tenant.UserFromContext(ctx), "translate", model, model, billed, "text", "pro", llm.AbortFromCtx(ctx))
+	uid := tenant.UserFromContext(ctx)
+	if hasRule && !rule.Charge {
+		// 免费模式：仅留痕计量（用量看板可见、cost=0），不扣双桶台账
+		_ = s.Store.LogUsage(tid, uid, "translate", model, model, billed, "text", mode)
+		s.metrics.addUsage(0)
+		return nil
+	}
+	// 收费模式：批量落库（sink）扣减，biz_mode 落真实模式（原硬编码 "pro" 口径修正）
+	billing.RecordUsage(tid, uid, "translate", model, model, billed, "text", mode, llm.AbortFromCtx(ctx))
 	s.metrics.addUsage(billed)
 	return nil
 }

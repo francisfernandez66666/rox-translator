@@ -13,6 +13,7 @@ import (
 	"net/http"
 
 	"translator/internal/auth"
+	"translator/internal/billing"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -31,6 +32,8 @@ func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.effTenant(r, u)
+	// ★ P3 修复：余额查询前冲刷计量缓冲，返回即时余额
+	billing.Flush()
 	b, err := s.Store.GetBalance(tid)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})

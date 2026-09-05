@@ -527,6 +527,7 @@ export const baseEn: Record<string,string> = {
   'admin.menuKb': 'Knowledge Base',
   'admin.menuModels': 'Models',
   'admin.menuWorkflow': 'Workflow',
+  'admin.menuOps': 'Ops Policy',
   'admin.menuApikeys': 'Open API',
   'admin.menuWebhooks': 'Webhooks',
   'admin.menuTickets': 'Feedback / Approval',

@@ -474,6 +474,8 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	defer debug.FreeOSMemory()
 	langs := parseLangs(t.TargetLangs)
 	mode := t.Mode // fast | pro（空=pro）
+	// ★ 运营策略引擎（2026-09-05）：注入模式到 ctx，异步工单实时计量按 fast/pro 区分免费/扣费
+	ctx = tenant.WithMode(ctx, mode)
 	// ★ 归属登记用创建者 ID（评审整改 C1）：OpenAPI 任务回退其归属用户
 	ownerUID := t.CreatedBy
 	if ownerUID <= 0 && t.APIUserID > 0 {

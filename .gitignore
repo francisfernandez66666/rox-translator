@@ -11,6 +11,10 @@ frontend/dist/
 node_modules/
 data/            # 本地知识库向量与开发库（tm_embeddings.npz / dev.db）
 
+# ============ 前端自动化测试产物（不入仓库） ============
+frontend-react/artifacts/
+frontend-react/test-results/
+
 # ============ Python 旧栈遗留（栈已退役，规则保留防复发） ============
 *.egg-info/
 *.manifest

@@ -75,10 +75,16 @@ func (s *Store) GetPackage(id int64) (*Package, error) {
 }
 
 // GetPackageByCode 按编码查询商业包。
-// 参数：code=包编码；返回包对象。
+// ★ P2 修复（2026-09-05）：支持平台包订阅——tenant_id IN (0, ?) 同时命中租户自有包与平台包，
+//
+//	优先返回租户自有包（同一 code 下租户级优先于平台级），保证 /api/plans 列出的平台套餐可被任意租户订阅。
+//
+// 参数：tenantID=租户 ID，code=包编码；返回包对象。
 func (s *Store) GetPackageByCode(tenantID int64, code string) (*Package, error) {
 	var p Package
-	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+packageCols+" FROM packages WHERE tenant_id=? AND code=?", tenantID, code).
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+packageCols+
+		" FROM packages WHERE code=? AND tenant_id IN (0, ?) ORDER BY CASE WHEN tenant_id=? THEN 0 ELSE 1 END, id LIMIT 1",
+		code, tenantID, tenantID).
 		Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err

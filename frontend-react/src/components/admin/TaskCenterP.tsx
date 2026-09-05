@@ -19,7 +19,7 @@ import { Panel, Field, toastResp } from './parts'
 import { confirmDialog } from '@/components/uiDialogs'
 import { adminTasks, adminTaskSave, adminTaskDelete, myTasks, claimTask, type UserTask, type UserTaskView } from '@/api/tasks'
 
-type Any = Record<string, any>
+type Any = Record<string, any> // 兜底类型：任务对象字段多变，避免过度强类型化（沿用项目惯例）
 
 /** 任务中心面板组件：超管管理 + 用户领取一体 */
 export default function TaskCenterP() {

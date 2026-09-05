@@ -62,7 +62,7 @@ export default function DataSourcesP() {
   const [rows, setRows] = useState<StagedMergedRow[]>([])
   const [stagedTotal, setStagedTotal] = useState(0)
   const [stagedPage, setStagedPage] = useState(1)
-  const STAGED_PAGE_SIZE = 20
+  const STAGED_PAGE_SIZE = 20 // 待审数据分页单页条数（服务端分页，配套跳页器）
   const [stagedFilter, setStagedFilter] = useState<{ pack_type: string; status: string; lang: string; industry: string }>({ pack_type: '', status: 'pending', lang: '', industry: '' })
   // 选中行（合并行复合键 "entries:<id>" / "phrases:<id>"，避免两表自增 ID 撞车误伤）
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])

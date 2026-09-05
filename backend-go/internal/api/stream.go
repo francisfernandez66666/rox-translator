@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"translator/internal/auth"
+	"translator/internal/billing"
 	"translator/internal/engine"
 	"translator/internal/llm"
 	"translator/internal/tenant"
@@ -118,7 +119,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	// 调用引擎处理文本翻译（流式回调进度）
 	// ★ 注入用户组织（2026-08-26 KB继承链）+ 交互标记（评审整改 R6：可抢占 LLM 保留槽）
-	res := s.Engine.HandleText(llm.WithInteractive(s.userOrgCtx(r)), req.Message, req.Options, prog)
+	//   + 模式（2026-09-05 计费策略引擎：计量侧按 fast/pro 区分免费/扣费）
+	res := s.Engine.HandleText(llm.WithInteractive(tenant.WithMode(s.userOrgCtx(r), engine.ModeFromOptions(req.Options))), req.Message, req.Options, prog)
 	// 推送完成进度
 	fmt.Fprint(w, sseEvent("progress", map[string]interface{}{"step": "完成", "done": 1, "total": 1, "percent": 100}))
 	if flusher != nil {
@@ -264,8 +266,8 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 调用引擎处理文件翻译
-	// ★ 注入用户组织（2026-08-26 KB继承链）
-	res := s.Engine.HandleFile(s.userOrgCtx(r), savePath, options, prog)
+	// ★ 注入用户组织（2026-08-26 KB继承链）+ 模式（2026-09-05 计费策略引擎）
+	res := s.Engine.HandleFile(tenant.WithMode(s.userOrgCtx(r), engine.ModeFromOptions(options)), savePath, options, prog)
 
 	// 推送完成进度
 	fmt.Fprint(w, sseEvent("progress", map[string]interface{}{"step": "完成", "done": 1, "total": 1, "percent": 100}))
@@ -313,9 +315,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "error": gateErr.Error()})
 		return
 	}
+	// ★ 运营策略引擎（2026-09-05）：模式因子闸门——enabled=false 拒绝；limit_chars 超限拒绝（不计费）
+	mode := engine.ModeFromOptions(req.Options)
+	eff := s.effectivePolicy(tid)
+	rule, hasRule := eff.Mode(mode)
+	if hasRule && !rule.Enabled {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "error": "该翻译模式已停用"})
+		return
+	}
+	if hasRule && rule.LimitChars > 0 && int64(len([]rune(req.Message))) > rule.LimitChars {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "error": fmt.Sprintf("该模式单次输入上限 %d 字符", rule.LimitChars)})
+		return
+	}
 	// 调用引擎处理文本翻译（非流式，无进度回调）
-	// ★ 注入用户组织（2026-08-26 KB继承链）+ 交互标记（评审整改 R6）
-	res := s.Engine.HandleText(llm.WithInteractive(s.userOrgCtx(r)), req.Message, req.Options, nil)
+	// ★ 注入用户组织（2026-08-26 KB继承链）+ 交互标记（评审整改 R6）+ 模式（计费策略引擎）
+	res := s.Engine.HandleText(llm.WithInteractive(tenant.WithMode(s.userOrgCtx(r), mode)), req.Message, req.Options, nil)
 	if res.Error != "" {
 		// 失败：填充错误回复并计入失败指标
 		res.Skill = "translation"
@@ -326,6 +340,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// Webhook：翻译完成事件回调（异步投递）
 		s.dispatchTranslateWebhook(tid, "text", req.Message, res)
 	}
+	// ★ P3 修复：交互路径响应前同步冲刷计量缓冲，余额/台账即时可见
+	billing.Flush()
 	writeJSON(w, 200, res)
 }
 
@@ -373,11 +389,23 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	if n, perr := strconv.Atoi(strings.TrimSpace(r.FormValue("max_length"))); perr == nil && n > 0 {
 		options["max_length"] = n
 	}
-	// 配额闸门：QPS/并发/每日上限/余额校验（不通过则拒绝本次文件翻译）
+	// ★ 运营策略引擎（2026-09-05）：文件翻译模式因子闸门——enabled=false 拒绝；
+	//   limit_chars 按「提示语 + 待翻源文本总字符」在闸门后由引擎侧校验（见 HandleFile）。
+	mode := engine.ModeFromOptions(options)
 	tid, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "error": gateErr.Error()})
+		return
+	}
+	eff := s.effectivePolicy(tid)
+	rule, hasRule := eff.Mode(mode)
+	if hasRule && !rule.Enabled {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "error": "该翻译模式已停用"})
+		return
+	}
+	if hasRule && rule.LimitChars > 0 && int64(len([]rune(message))) > rule.LimitChars {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "error": fmt.Sprintf("该模式单次输入上限 %d 字符", rule.LimitChars)})
 		return
 	}
 	// ★ 整改 A2：闸门通过后再落盘 + defer 兜底清理（拒绝路径零残留）
@@ -402,8 +430,8 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 调用引擎处理文件翻译（非流式）
-	// ★ 注入用户组织（2026-08-26 KB继承链）
-	res := s.Engine.HandleFile(s.userOrgCtx(r), savePath, options, nil)
+	// ★ 注入用户组织（2026-08-26 KB继承链）+ 模式（2026-09-05 计费策略引擎）
+	res := s.Engine.HandleFile(tenant.WithMode(s.userOrgCtx(r), mode), savePath, options, nil)
 	if res.Error == "" {
 		s.metrics.countTranslate("file", true)
 		// ★ 归属登记（评审整改 C1）
@@ -417,6 +445,8 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.metrics.countTranslate("file", false)
 	}
+	// ★ P3 修复：文件翻译结束同步冲刷计量缓冲（大文件数千条计量合并为一次事务）
+	billing.Flush()
 	writeJSON(w, 200, res)
 }
 

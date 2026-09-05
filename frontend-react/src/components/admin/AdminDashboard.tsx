@@ -23,6 +23,7 @@ import ExternalCallsP from './ExternalCallsP'
 import PersonalCenterP from './PersonalCenterP'
 import { PlansP, ReferralP, WebhooksP, ApiKeysP } from './panels_c'
 import { KbP, ModelsP, WorkflowP, TicketsP } from './panels_d'
+import { OpsP } from './panels_e'
 
 // 菜单项接口定义：key 对应 admin store 中的面板标识，minLevel 为可见最低角色等级
 interface Item { key: PanelKey; label: string; minLevel: number }
@@ -39,6 +40,7 @@ const ITEMS: Item[] = [
   { key: 'org', label: 'admin.menuOrg', minLevel: 3 },
   { key: 'kb', label: 'admin.menuKb', minLevel: 2 },
   { key: 'models', label: 'admin.menuModels', minLevel: 4 },
+  { key: 'ops', label: 'admin.menuOps', minLevel: 3 },
   { key: 'tickets', label: 'admin.menuTickets', minLevel: 2 },
   { key: 'brand', label: 'admin.menuBrand', minLevel: 3 },
   { key: 'system', label: 'admin.menuSystem', minLevel: 4 },
@@ -56,6 +58,7 @@ function renderPanel(p: PanelKey) {
     case 'org': return <OrgP />
     case 'kb': return <KbP />
     case 'models': return <ModelsP />
+    case 'ops': return <OpsP />
     case 'workflow': return <WorkflowP />
     case 'apikeys': return <ApiKeysP />
     case 'webhooks': return <WebhooksP />

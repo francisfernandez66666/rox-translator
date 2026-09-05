@@ -368,6 +368,11 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/admin/orders/refund", s.handleOrderRefund)
 	s.mux.HandleFunc("/api/billing/invoices", s.handleInvoices)
 	s.mux.HandleFunc("/api/billing/invoices/create", s.handleInvoiceCreate)
+	// ★ 运营策略引擎（2026-09-05）：计费/模式/套餐/时间窗/邀请等运营参数因子配置
+	s.mux.HandleFunc("/api/admin/ops/policy", s.handleOpsPolicy)
+	s.mux.HandleFunc("/api/admin/ops/policy/save", s.handleOpsPolicySave)
+	s.mux.HandleFunc("/api/admin/ops/policy/window/save", s.handleOpsWindowSave)
+	s.mux.HandleFunc("/api/admin/billing/package/reset", s.handlePackageReset)
 	// 商业包：我的包 / 订阅 / 超管管理
 	s.mux.HandleFunc("/api/me/package", s.handleMyPackage)
 	s.mux.HandleFunc("/api/me/context", s.handleMeContext)

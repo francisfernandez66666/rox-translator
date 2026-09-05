@@ -35,11 +35,13 @@ import (
 	"strings"
 	"time"
 
+	"translator/internal/billing"
 	"translator/internal/engine"
 	"translator/internal/errors"
 	"translator/internal/fileproc"
 	"translator/internal/llm"
 	"translator/internal/store"
+	"translator/internal/tenant"
 )
 
 // pollIntervalSec 按任务类型给出建议轮询间隔（秒）：文本 15s、文件 60s
@@ -560,6 +562,8 @@ func (s *Server) handleOpenAPIBalance(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInvalidAPIKey), "message": "API Key 无效"})
 		return
 	}
+	// ★ P3 修复：余额查询前冲刷计量缓冲，返回即时余额
+	billing.Flush()
 	resp := map[string]interface{}{
 		"success":   true,
 		"tenant_id": ak.TenantID,
@@ -656,6 +660,7 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 	}
 	syncCtx = s.Engine.WithUsageRecorder(syncCtx)
 	syncCtx = llm.WithInteractive(syncCtx)
+	syncCtx = tenant.WithMode(syncCtx, mode)
 	res := s.Engine.HandleText(syncCtx, req.Text, options, nil)
 	if res.Error != "" {
 		s.metrics.countTranslate("text", false)
@@ -670,6 +675,8 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 		charged = prompt + completion
 	}
 	s.metrics.countTranslate("text", true)
+	// ★ P3 修复：同步翻译结束冲刷计量缓冲，随后即时余额查询即可见
+	billing.Flush()
 	// ⑦ 组装响应
 	writeJSON(w, 200, map[string]interface{}{
 		"success":      true,

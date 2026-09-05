@@ -173,6 +173,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	//   enterprise（默认，兼容旧客户端）= 合并原「管理员/普通用户」为单一企业注册，注册人成为企业管理员。
 	//   专属域名场景（dedicatedTid>0）忽略类型选择：强制为普通用户、自动归入该企业。
 	creatingPersonal := false
+	joinWithInvite := false // ★ P1 修复：主站「企业成员凭有效邀请码加入」标记（防止下方被误清空）
 	if dedicatedTid == 0 {
 		switch strings.ToLower(strings.TrimSpace(req.Type)) {
 		case "personal":
@@ -196,6 +197,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				if code := strings.TrimSpace(req.Invite); code != "" {
 					if inv, e := s.Store.GetInviteCodeByCode(code); e == nil && inv.Used == 0 && inv.TenantID > 0 {
 						// 有效企业邀请码：保留 invite，后续走受邀加入（普通成员）
+						joinWithInvite = true
 					} else {
 						// 无效/已用/非企业邀请码：降级为个人用户（强制不得注册该企业用户）
 						req.Invite = ""
@@ -220,8 +222,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			// admin（或默认）新建企业：忽略邀请码
-			if !creatingPersonal {
+			// admin（或默认）新建企业：忽略邀请码；★ P1 修复：成员凭有效邀请码加入的路径不得清空
+			if !creatingPersonal && !joinWithInvite {
 				req.Invite = ""
 			}
 		}
@@ -397,7 +399,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// ★ 邀请裂变首绑（白皮书 §5）：携带个人邀请码注册→写入 referred_by（首绑闸门），
 	//   绑定成功即给邀请人叠加体验奖励：+invite_reward_tokens、时长 +invite_extend_days（与既有体验到期取大后叠加，按对去重）
 	//   ★ 总开关门禁（2026-08-26 U3）：referral_enabled=0 时跳过绑定与奖励发放
-	if strings.TrimSpace(req.Ref) != "" && s.Store.ReferralEnabled() {
+	//   ★ 运营策略引擎（2026-09-05）：invite.enabled 因子参与门禁（默认开启，零感知兼容）
+	if strings.TrimSpace(req.Ref) != "" && s.Store.ReferralEnabled() && s.effectivePolicy(nu.TenantID).Invite.Enabled {
 		if inviterUID, inviterTID, ok := s.Store.BindReferral(nu.ID, nu.TenantID, strings.TrimSpace(req.Ref)); ok {
 			// ★ 需求 2026-08-27：企业用户默认不参与邀请好友奖励；仅个人用户邀请人可获奖励。
 			inviterPersonal := false
@@ -408,17 +411,26 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				s.Store.LogAudit(inviteTenantID, nu.ID, "referral_bind", "user",
 					fmt.Sprintf("受邀绑定邀请人 uid=%d（企业用户，不参与邀请奖励）", inviterUID))
 			} else {
+				// ★ 运营策略引擎（2026-09-05）：邀请奖励因子优先读最终策略 invite.*
+				//   （策略显式值 > 存量 system_config 散键 > 代码内置默认）。
+				inv := s.effectivePolicy(inviterTID).Invite
 				refTokens := int64(300000)
 				if v, _ := s.Store.GetConfig("invite_reward_tokens"); v != "" {
 					if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
 						refTokens = x
 					}
 				}
+				if inv.RewardTokens > 0 {
+					refTokens = inv.RewardTokens
+				}
 				refDays := 14
 				if v, _ := s.Store.GetConfig("invite_extend_days"); v != "" {
 					if x, e := strconv.Atoi(v); e == nil && x > 0 {
 						refDays = x
 					}
+				}
+				if inv.RewardDays > 0 {
+					refDays = inv.RewardDays
 				}
 				// ★ 整改 A5：单邀请人日发放上限（referral_max_daily_rewards，默认 50 笔）——
 				//   把「换 IP 自邀刷奖励」的损失上限钉死为可配置常数；触顶升 critical 告警拒发。
@@ -428,6 +440,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 					if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
 						maxDaily = x
 					}
+				}
+				if inv.MaxDailyRewards > 0 {
+					maxDaily = int64(inv.MaxDailyRewards)
 				}
 				if n := s.Store.CountInviterRewardsToday(inviterUID); n >= maxDaily {
 					s.Store.CreateAlert(inviterTID, "critical", "referral_cap",

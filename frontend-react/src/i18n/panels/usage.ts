@@ -44,7 +44,6 @@ export const zh: Record<string, string> = {
   'usage.colUser': '用户',
   'usage.colOrg': '组织/部门',
   'usage.colName': '昵称',
-  'usage.colCost': '消耗',
   // 日期区间查询（TDesign DateRangePicker 起止日期）
   'usage.dateQuery': '按日期查询（空=累计+当日；可选任意区间，如近1天/近3天）',
   'usage.dateClear': '清除日期',
@@ -95,7 +94,6 @@ export const en: Record<string, string> = {
   'usage.colUser': 'User',
   'usage.colOrg': 'Org/Dept',
   'usage.colName': 'Name',
-  'usage.colCost': 'Cost',
   'usage.dateQuery': 'Query by date (empty = cumulative+today; any range e.g. 1/3 days)',
   'usage.dateClear': 'Clear dates',
   'usage.dateFrom': 'Start date',

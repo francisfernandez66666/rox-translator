@@ -64,10 +64,25 @@ func (s *Store) SumActiveGrants(tid int64) int64 {
 	return n
 }
 
+// ResetCurrentPackageGrants 重置当前套餐期用量（GPT 式重制）：
+// quota_grants 中 kind='plan'、未过期（expires_at>now）、left<total 的行恢复 left=total。
+// 参数：tid=租户 ID；返回重置行数（幂等：无待重置行返回 0）。
+// 供 /api/admin/billing/package/reset（运营策略引擎 package.monthly_reset_enabled 因子）调用。
+func (s *Store) ResetCurrentPackageGrants(tid int64) (int64, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := db.Exec(s.db, db.CurrentDialect(),
+		"UPDATE quota_grants SET \"left\"=total WHERE tenant_id=? AND kind='plan' AND expires_at>? AND \"left\"<total",
+		tid, now)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // TenantRemainTotal 双部分可用余额一次聚合（2026-08-26 评审整改 A1）：
 // 返回 (未过期台账合计, 永久余额)。全系统「可用额度」唯一口径——
-// 展示（balancePayload）、预检（CheckBalance / worker 快速失败）必须同时覆盖两桶，
-// 否则会出现「台账有 30 万体验 token、永久余额为 0 却被 fail-closed 拒绝」的口径分裂。
+// 展示（balancePayload）、预检（CheckBalance / worker 快速失败）必须同时覆盖两桶，// 否则会出现「台账有 30 万体验 token、永久余额为 0 却被 fail-closed 拒绝」的口径分裂。
 func (s *Store) TenantRemainTotal(tid int64) (grants, permanent int64, err error) {
 	if err := s.EnsureBalance(tid); err != nil {
 		return 0, 0, err

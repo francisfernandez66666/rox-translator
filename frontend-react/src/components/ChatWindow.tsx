@@ -358,6 +358,7 @@ export default function ChatWindow() {
           </div>
 
           <Textarea
+            data-testid="translate-input"
             autosize={{ minRows: 1, maxRows: 5 }}
             value={input}
             onChange={(v) => { setInput(v); autoResize() }}

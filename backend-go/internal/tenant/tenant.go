@@ -351,6 +351,10 @@ type PolicyConfig struct {
 	//   nil=默认参与行业记忆共建 / 1=该租户关闭回流——达标候选与导入候选不进入平台审核池，
 	//   私有 TM 与审批直入不受影响。指针三态语义与 CrossDeptFallback 一致。
 	DataFeedbackOptOut *int `json:"data_feedback_opt_out,omitempty"`
+	// ★ 运营策略引擎（2026-09-05）：租户级因子覆盖（JSON 字符串，ops.ParseOps 解析）
+	OpsPolicy string `json:"ops_policy,omitempty"`
+	// 套餐月度重置计数（{"month":"YYYY-MM","count":n}，跨月自动归零）
+	OpsResets string `json:"ops_resets,omitempty"`
 }
 
 // GetPolicyConfig 读取租户策略参数。
@@ -535,5 +539,21 @@ func WithUser(ctx context.Context, uid int64) context.Context {
 // UserFromContext 从 context 取发起用户 ID；无则返回 0。
 func UserFromContext(ctx context.Context) int64 {
 	v, _ := ctx.Value(userCtxKey{}).(int64)
+	return v
+}
+
+// modeCtxKey 携带翻译模式（fast/pro）的私有 context 键（计费策略引擎用——
+// ChargeUsageRealtime 依此区分模式扣费/免费，见《改造方案_计费流程引擎因子配置.md》§3.1）。
+type modeCtxKey struct{}
+
+// WithMode 将翻译模式注入 context（API 层在进入引擎前调用）。
+// 参数：ctx=父 context，mode=fast|pro（空视为 pro）；返回携带模式的新 context。
+func WithMode(ctx context.Context, mode string) context.Context {
+	return context.WithValue(ctx, modeCtxKey{}, mode)
+}
+
+// ModeFromContext 从 context 取翻译模式；无则返回空串（计费侧按 pro 兜底）。
+func ModeFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(modeCtxKey{}).(string)
 	return v
 }
