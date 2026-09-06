@@ -14,6 +14,7 @@
 import { test, expect, Page } from '@playwright/test';
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:8899';
+// 截图小件：把页面截图落 artifacts/<name>.png，供人工复核像素渲染
 const shot = (p: Page, name: string) => p.screenshot({ path: `artifacts/${name}.png`, fullPage: false });
 
 // 登录态注入：API 登录拿 token → localStorage 种入（与产品实际登录态等价）

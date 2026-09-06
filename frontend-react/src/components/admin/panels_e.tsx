@@ -60,6 +60,7 @@ export function OpsP() {
 
   useEffect(() => { void load() }, [activeTenantId, load])
 
+  // —— 草稿 setter：把某因子域的局部补丁并入 pol 草稿（不可变更新，供各 Panel 输入控件调用）——
   const setMode = (m: string, patch: Record<string, any>) => {
     setPol((p) => ({ ...p, billing: { ...p.billing, mode_rules: { ...p.billing.mode_rules, [m]: { ...p.billing.mode_rules[m], ...patch } } } }))
   }
@@ -70,12 +71,15 @@ export function OpsP() {
   const setPay = (patch: Record<string, any>) => setPol((p) => ({ ...p, payment: { ...p.payment, ...patch } }))
   const setContent = (patch: Record<string, any>) => setPol((p) => ({ ...p, content: { ...p.content, ...patch } }))
 
+  // 保存当前草稿（按作用域：超管平台级 / 租户级），成功即重新加载生效策略
   const save = async () => {
     if (toastResp(await opsPolicySave(scope, pol), t('ops.saved'))) void load()
   }
+  // 租户级「恢复默认」：向租户覆盖写空对象，回落平台/内置默认
   const resetTenant = async () => {
     if (toastResp(await opsPolicySave('tenant', {}), t('ops.resetDone'))) void load()
   }
+  // 套餐月度重置（消耗租户重置次数，后台二次确认后调用）
   const doReset = async () => {
     try {
       const r = await opsPackageReset() as any
@@ -85,6 +89,7 @@ export function OpsP() {
       } else void MessagePlugin.error(r.message || '')
     } catch { /* ignore */ }
   }
+  // 保存推广窗口（校验 overrides JSON，合法后提交并刷新窗口列表）
   const saveWindow = async () => {
     if (!winDlg) return
     let overrides: any = {}
@@ -97,6 +102,7 @@ export function OpsP() {
     if (ok) void load()
   }
 
+  // 便捷读取：某模式的草稿因子 / 当前是否平台作用域（决定可配范围与只读灰显）
   const mode = (m: string) => (pol.billing.mode_rules || {})[m] || {}
   const isPlatform = scope === 'platform'
 

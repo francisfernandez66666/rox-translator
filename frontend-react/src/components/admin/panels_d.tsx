@@ -468,6 +468,7 @@ export function KbP() {
     setBulkJson('')
     await reloadSafety()
   }
+  // 安全句/条目状态展示用中文名（forbidden/replace/style 与 pending/rejected/approved 映射）
   function kindLabel(k?: string) { return k === 'forbidden' ? t('kb.kindForbidden') : k === 'replace' ? t('kb.kindReplace') : t('kb.kindStyle') }
   function statusLabel(s?: string) { return s === 'pending' ? t('kb.pending') : s === 'rejected' ? t('kb.rejected') : t('kb.approved') }
 

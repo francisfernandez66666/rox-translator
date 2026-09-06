@@ -915,6 +915,7 @@ export function ApiKeysP() {
     const used = k.calls_today_date === today ? Number(k.calls_today) : 0
     return used >= Number(k.daily_call_limit)
   }
+  // 格式化「今日调用」展示：未设日上限显示 ∞，按 today 字段对齐日期后回显用量
   function fmtToday(k: Any): string {
     const limit = k.daily_call_limit && Number(k.daily_call_limit) > 0 ? k.daily_call_limit : '∞'
     const today = new Date().toISOString().slice(0, 10)

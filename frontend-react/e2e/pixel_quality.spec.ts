@@ -6,6 +6,7 @@
 import { test, expect, Page } from '@playwright/test';
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:8899';
+// 遍历检查的公开页面清单（无登录态，验证控制台无错/无请求失败/无页面异常）
 const PAGES = ['/', '/tickets', '/editor', '/billing', '/invites', '/packages', '/my', '/pricing', '/docs/terms'];
 
 async function login(page: Page) {
