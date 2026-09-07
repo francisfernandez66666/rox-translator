@@ -260,7 +260,7 @@ export default function TicketsPage() {
   const states = (detail?.states as any[]) || []
 
   return (
-    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 24px' }}>
+    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 24px', width: '100%', minWidth: 0 }}>
       <h2 style={{ margin: '0 0 4px' }}>📋 {t('tk.entry')}</h2>
       <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>{t('tk.createHint')}</p>
 

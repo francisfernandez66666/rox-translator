@@ -426,17 +426,17 @@ export default function Login({ mode, onLogin }: Props) {
   // 左右分栏布局：一侧背景图，另一侧登录容器（容器可在左/右切换）
   if (layout.mode === 'split') {
     const imgPanel = (
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden', minHeight: '100vh' }}>
+      <div className="login-split-img" style={{ flex: 1, position: 'relative', overflow: 'hidden', minHeight: '100vh' }}>
         <BrandBgLayer src={branding.brandHomeBg} styleJson={branding.brandHomeBgStyle} />
       </div>
     )
       const formPanel = (
-        <div style={{ flex: 1, position: 'relative', background: '#eef1f8', padding: 24, minHeight: '100vh' }}>
-          <div style={{ position: 'absolute', left: `${cardPos.x}%`, top: `${cardPos.y}%`, transform: 'translate(-50%,-50%)', zIndex: 2, width: '100%', maxWidth: 400, maxHeight: '100vh', overflowY: 'auto', padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>{cards}</div>
+        <div className="login-split-form" style={{ flex: 1, position: 'relative', background: '#eef1f8', padding: 24, minHeight: '100vh' }}>
+          <div className="login-card-holder" style={{ position: 'absolute', left: `${cardPos.x}%`, top: `${cardPos.y}%`, transform: 'translate(-50%,-50%)', zIndex: 2, width: '100%', maxWidth: 400, maxHeight: '100vh', overflowY: 'auto', padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>{cards}</div>
           </div>
       )
     return (
-      <div className="login-wrap" style={{ position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'row', alignItems: 'stretch' }}>
+      <div className="login-wrap login-split-wrap" style={{ position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'row', alignItems: 'stretch' }}>
         {layout.side === 'left' ? (<>{formPanel}{imgPanel}</>) : (<>{imgPanel}{formPanel}</>)}
         {forceDialog}
       </div>
@@ -447,7 +447,7 @@ export default function Login({ mode, onLogin }: Props) {
   return (
     <div className="login-wrap" style={{ position: 'relative', overflow: 'hidden' }}>
       <BrandBgLayer src={branding.brandHomeBg} styleJson={branding.brandHomeBgStyle} />
-      <div style={{ position: 'absolute', left: `${cardPos.x}%`, top: `${cardPos.y}%`, transform: 'translate(-50%,-50%)', zIndex: 2, width: '100%', maxWidth: 400, maxHeight: '100vh', overflowY: 'auto', padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div className="login-card-holder" style={{ position: 'absolute', left: `${cardPos.x}%`, top: `${cardPos.y}%`, transform: 'translate(-50%,-50%)', zIndex: 2, width: '100%', maxWidth: 400, maxHeight: '100vh', overflowY: 'auto', padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {cards}
       </div>
       {forceDialog}

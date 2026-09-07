@@ -162,7 +162,7 @@ export default function EditorPage() {
   }, [dirtyEdits, ticketId, lang, load])
 
   return (
-    <div style={{ maxWidth: 1100, margin: '0 auto', padding: 16 }}>
+    <div style={{ maxWidth: 1100, margin: '0 auto', padding: 16, width: '100%', minWidth: 0 }}>
       <h2 style={{ margin: '8px 0' }}>✍️ 对照编辑器</h2>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
         <Input placeholder="工单 ID" value={ticketId} onChange={(v) => setTicketId(String(v))} style={{ width: 160 }} />
@@ -198,6 +198,7 @@ export default function EditorPage() {
         return (
           <div
             key={s.index}
+            className="ed-seg"
             style={{
               display: 'grid',
               gridTemplateColumns: '1fr 1fr',

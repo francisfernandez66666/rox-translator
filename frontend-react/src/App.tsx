@@ -164,7 +164,7 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
         <Button variant={tab === 'editor' ? 'base' : 'text'} theme="primary" size="small"
                 onClick={() => switchTab('editor')}>✍️ 对照编辑</Button>
         <div style={{ flex: 1 }} />
-        {!!pkgLine && <Tag theme="primary" variant="light">{pkgLine}</Tag>}
+        {!!pkgLine && <Tag theme="primary" variant="light" className="pkg-line-tag">{pkgLine}</Tag>}
         {canUploadKb && (
           <Button size="small" variant="outline" theme="primary" onClick={() => setKbUploadOpen(true)}>
             {t('kb.topbarUpload')}
@@ -176,7 +176,7 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
       </header>
 
       {/* 主内容区：后端启动中显示 Loading，否则根据 Tab 渲染页面 */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div className="app-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         {chat.isBackendLoading ? (
           <div className="loading-screen" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
             {/* 旋转 Loading 图标 */}

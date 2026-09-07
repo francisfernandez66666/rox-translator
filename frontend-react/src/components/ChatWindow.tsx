@@ -349,10 +349,10 @@ export default function ChatWindow() {
           <div style={{ color: '#c62828', fontSize: 13 }}>{chat.errorMessage}</div>
         )}
 
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+        <div className="chat-input-row" style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
           {/* 上传 + 语言选择 */}
           <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 1, minWidth: 0 }}>
-            <div style={{ minWidth: 0, flex: '1 1 200px' }}>
+            <div className="lang-multi-sel" style={{ minWidth: 0, flex: '1 1 200px' }}>
               <LangMultiSelect value={chat.selectedLangs} onChange={chat.setSelectedLangs} />
             </div>
           </div>

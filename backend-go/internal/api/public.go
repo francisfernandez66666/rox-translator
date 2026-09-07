@@ -108,6 +108,15 @@ table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
 th,td{border:1px solid var(--border);padding:10px 12px;text-align:left}
 th{background:var(--brand-light);color:var(--brand-active);font-weight:600}
 .tag{display:inline-block;background:var(--brand-light);color:var(--brand-active);border-radius:999px;padding:2px 12px;font-size:12px;font-weight:500}
+@media (max-width:720px){
+.header{flex-wrap:wrap;height:auto;padding:12px 14px;gap:8px;row-gap:8px}
+.header nav{flex-wrap:wrap;gap:4px}
+.header nav a{font-size:13px;padding:5px 8px}
+.wrap{padding:0 12px;margin:16px auto}
+.card{padding:20px 16px}
+h1{font-size:20px}h2{font-size:16px}
+table{display:block;overflow-x:auto;font-size:13px}
+}
 </style></head><body>
 <div class="header"><div class="brand">🌐 能言 LangCross</div><nav><a href="/pricing">定价 Pricing</a><a href="/docs/terms">用户协议 Terms</a><a href="/docs/sla">SLA</a><a href="/docs/privacy">隐私协议 Privacy</a><a class="btn" href="/admin">管理后台</a></nav></div>
 <div class="wrap"><div class="card">` + body + `</div></div>
@@ -150,6 +159,14 @@ a:hover{text-decoration:underline}
 .plan .meta{color:var(--text-2);font-size:13px;margin:6px 0}
 .plan .price{color:var(--brand-active);font-weight:700;font-size:18px}
 .plan .tag2{display:inline-block;margin-top:6px;font-size:12px;color:var(--brand-active);background:var(--brand-light);border-radius:999px;padding:2px 12px}
+@media (max-width:720px){
+.header{flex-wrap:wrap;height:auto;padding:12px 14px;gap:6px;row-gap:8px}
+.header a{font-size:13px;margin-left:10px}
+.wrap{padding:0 12px;margin:16px auto}
+.card{padding:20px 16px}
+h1{font-size:20px}h2{font-size:16px}
+#plansBox .plan{flex:1 1 100%;min-width:0}
+}
 </style></head><body>
 <div class="header"><div class="brand">🌐 能言 LangCross</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">用户协议 Terms</a><a href="/docs/sla">SLA</a><a href="/docs/privacy">隐私协议 Privacy</a><a href="/admin" style="background:#fff;color:var(--brand);padding:7px 16px;border-radius:8px;font-weight:600">管理后台</a></div></div>
 <div class="wrap">

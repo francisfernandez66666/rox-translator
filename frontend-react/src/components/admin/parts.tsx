@@ -32,11 +32,11 @@ export function toastResp(r: { success?: boolean; message?: string }, okMsg?: st
   return false
 }
 
-/** 字段行：label + 控件 */
+/** 字段行：label + 控件（窄屏由 mobile.css 折叠为 label 上、控件下） */
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-      <span style={{ minWidth: 130, fontSize: 13, color: '#556' }}>{label}</span>
+    <div className="field-row" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+      <span className="field-label" style={{ minWidth: 130, fontSize: 13, color: '#556' }}>{label}</span>
       <div style={{ flex: 1 }}>{children}</div>
     </div>
   )

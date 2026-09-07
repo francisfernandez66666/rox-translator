@@ -4,7 +4,10 @@
 // 映射 Vue 版：frontend/src/components/admin/AdminDashboard.vue（或同目录下菜单壳组件）。
 // 权限矩阵与 Vue 版一致：L4 全量；L3 无 Tenants/Models/Workflow/Audit/Alerts；
 // L2 仅 Overview/Usage/Kb/Tickets。超管含租户切换器。
+// ★ 移动端自适应（2026-09-07）：≤900px 侧边栏转抽屉（汉堡按钮唤起 + 遮罩点关），
+//   桌面端仍为固定侧栏，行为互不影响。
 // ============================================================================
+import { useState } from 'react'
 import { Button, Menu, Select, Tag } from 'tdesign-react'
 import { useAdmin } from '@/stores/admin'
 import type { PanelKey } from '@/stores/admin'
@@ -88,17 +91,27 @@ export default function AdminDashboard() {
     return true
   })
 
+  // ★ 移动端抽屉导航状态（≤900px 时侧边栏转抽屉，点菜单/遮罩关闭）
+  const [navOpen, setNavOpen] = useState(false)
+  // 选择菜单项：切面板并关闭移动端抽屉
+  const onMenuChange = (v: PanelKey) => { ad.gotoPanel(v); setNavOpen(false) }
+
   return (
     <div className="admin-shell">
-      {/* 侧边栏：品牌 Logo、菜单列表、语言切换按钮 */}
-      <aside className="admin-side">
+      {/* 移动端汉堡按钮（桌面端由 CSS 隐藏） */}
+      <button type="button" className="admin-nav-toggle" aria-label="nav" onClick={() => setNavOpen(true)}>☰</button>
+      {/* 移动端抽屉遮罩 */}
+      {navOpen && <div className="admin-side-mask" onClick={() => setNavOpen(false)} />}
+
+      {/* 侧边栏：品牌 Logo、菜单列表、语言切换按钮（移动端为抽屉） */}
+      <aside className={'admin-side' + (navOpen ? ' open' : '')}>
         <div style={{ fontWeight: 800, color: 'var(--td-brand-color-active, #1f33d6)', padding: '6px 10px 14px' }}>
           {branding.brandLogo
             ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 60 }} />
             : `🌐 ${branding.brandName || t('admin.title')}`}
         </div>
         {/* 侧边菜单：点击切换面板 */}
-        <Menu value={ad.panel} onChange={(v) => ad.gotoPanel(v as PanelKey)} style={{ border: 'none' }}>
+        <Menu value={ad.panel} onChange={(v) => onMenuChange(v as PanelKey)} style={{ border: 'none' }}>
           {visible.map((i) => (
             <Menu.MenuItem key={i.key} value={i.key}>{t(i.label)}</Menu.MenuItem>
           ))}

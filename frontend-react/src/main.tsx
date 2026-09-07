@@ -16,6 +16,8 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 // 项目主题覆盖样式
 import './styles/theme.css'
+// 移动端 / 窄屏自适应样式（叠加在 theme.css 之上）
+import './styles/mobile.css'
 
 // TDesign 全量样式（与 Vue 版视觉基线对齐；细节覆盖见 theme.css）
 import 'tdesign-react/es/style/index.css'
