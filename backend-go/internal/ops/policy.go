@@ -27,6 +27,7 @@ type ModeRulePatch struct {
 	LimitChars *int64   `json:"limit_chars,omitempty"`
 }
 
+// ModeRulesPatch 模式定价因子集：按模式名（如 fast/pro）索引的各模式覆盖项
 type ModeRulesPatch map[string]ModeRulePatch
 
 // BillingPatch 计费基础因子

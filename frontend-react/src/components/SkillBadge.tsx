@@ -8,6 +8,7 @@ import { t } from '@/i18n'
 // 技能徽章组件：在 AI 回复气泡顶部展示当前技能标识。
 // ========================================
 
+/** 技能徽章组件属性：skill 为技能标识（当前版本仅支持"翻译"，参数预留扩展） */
 export interface SkillBadgeProps {
   skill?: string
 }
