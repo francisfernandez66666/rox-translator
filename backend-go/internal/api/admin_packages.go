@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 
+	qrcode "github.com/skip2/go-qrcode"
+
 	"translator/internal/store"
 )
 
@@ -397,6 +399,31 @@ func (s *Server) handleQRImage(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	http.ServeFile(w, r, full)
+}
+
+// handleQRRender 按文本渲染二维码 PNG（/api/qr/render?text=...，需登录）。
+// ★ 2026-09 debug：mock/wechat/alipay 渠道返回的 qr_content 是字符串（mockpay://…、
+//    weixin://…、alipay://…），收银台需展示真实二维码图片供扫码，故复用 go-qrcode
+//    将任意支付串渲染为 PNG（与邀请二维码同款渲染）。仅限登录用户，text 最长 512 字符。
+func (s *Server) handleQRRender(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	text := strings.TrimSpace(r.URL.Query().Get("text"))
+	if text == "" || len(text) > 512 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "text 参数必填且不超过 512 字符"})
+		return
+	}
+	png, err := qrcode.Encode(text, qrcode.Medium, 256)
+	if err != nil {
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "二维码生成失败: " + err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(png)
 }
 
 // handleAdminPackageDelete 删除商业包（super_admin）。

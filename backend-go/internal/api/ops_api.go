@@ -79,6 +79,18 @@ func (s *Server) applyLegacyConfig(eff *ops.EffectivePolicy) {
 			eff.Invite.MaxDailyRewards = int(x)
 		}
 	}
+	// 付费邀请奖励（多邀多得）：邀请人首笔付费套餐后的 token/有效期（0=永久）——随
+	// 2026-09 邀请奖励合并进运营策略引擎，此处把存量散键兜底进最终策略供面板回显。
+	if v, _ := s.Store.GetConfig("inviter_paid_reward_tokens"); v != "" {
+		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+			eff.Invite.PaidRewardTokens = x
+		}
+	}
+	if v, _ := s.Store.GetConfig("inviter_paid_reward_days"); v != "" {
+		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+			eff.Invite.PaidRewardDays = int(x)
+		}
+	}
 	if v, _ := s.Store.GetConfig("registration_enabled"); v == "0" {
 		eff.Registration.Enabled = false
 	}
@@ -124,6 +136,17 @@ func (s *Server) effectivePolicy(tid int64) ops.EffectivePolicy {
 	return eff
 }
 
+// effPayMode 当前生效支付模式（运营策略 payment.mode，落空默认 mock）。
+// 供支付下单/模拟/订阅等读点使用，替代散读 system_config pay_mode：
+// 存量 pay_mode 经 applyLegacyConfig 已并入最终策略，双入口收敛为单一事实源。
+func (s *Server) effPayMode(tid int64) string {
+	m := s.effectivePolicy(tid).Payment.Mode
+	if m == "" {
+		m = "mock"
+	}
+	return m
+}
+
 // ============ 查询 ============
 
 // handleOpsPolicy 查询运营策略（超管/租户管理员）。
@@ -149,7 +172,7 @@ func (s *Server) handleOpsPolicy(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "scope": "tenant", "super": super,
+		"success": true, "scope": "platform", "super": super,
 		"tenant_id": tid, "now": now.Format(time.RFC3339),
 		"platform": plat, "tenant": ten,
 		"base": base, "effective": eff,
@@ -160,12 +183,17 @@ func (s *Server) handleOpsPolicy(w http.ResponseWriter, r *http.Request) {
 // ============ 保存策略 ============
 
 // handleOpsPolicySave 保存运营策略。
-// 请求体：{"scope":"platform"|"tenant","policy":{...}}；scope 缺省 tenant。
-// 平台策略仅超管可写；租户策略仅租户管理员可写本租户，且按白名单裁剪可覆盖组。
+// ★ 2026-09 权限收紧：运营策略为平台级中台配置，仅超管可写（scope 恒为 platform）；
+//   租户管理员仅可读（GET），不再开放租户级覆盖，避免租户自行改奖励开关绕过运营管控。
+// 请求体：{"policy":{...OperationsPolicy...}}；scope 兼容字段，忽略租户级。
 func (s *Server) handleOpsPolicySave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	if !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "运营策略仅超级管理员可设置"})
 		return
 	}
 	var req struct {
@@ -176,57 +204,14 @@ func (s *Server) handleOpsPolicySave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "策略格式错误"})
 		return
 	}
-	scope := strings.ToLower(strings.TrimSpace(req.Scope))
-	if scope == "" {
-		scope = "tenant"
-	}
-	if scope == "platform" {
-		if !auth.IsSuperAdmin(u) {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权限修改平台策略"})
-			return
-		}
-		if err := s.Store.SetConfig("ops_policy", marshalOps(req.Policy)); err != nil {
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
-			return
-		}
-		s.Store.LogAudit(0, u.ID, "ops_policy_save", "ops", "scope=platform")
-		writeJSON(w, 200, map[string]interface{}{"success": true, "message": "运营策略已保存", "scope": "platform"})
-		return
-	}
-	// tenant 作用域：白名单裁剪（仅 billing.mode_rules / package / invite / limits）
-	tid := s.effTenant(r, u)
-	if tid <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请先切换到目标租户"})
-		return
-	}
-	scoped := tenantScopedPolicy(req.Policy)
-	if err := s.saveTenantOpsPolicy(tid, scoped); err != nil {
+	// 落库前安全裁剪：租户覆盖组与平台专属组一律以平台为准，禁止写 promo_windows/tz 之外的
+	// 非授权字段；平台全量策略直接整体写入。
+	if err := s.Store.SetConfig("ops_policy", marshalOps(req.Policy)); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
 		return
 	}
-	s.Store.LogAudit(tid, u.ID, "ops_policy_save", "ops", "scope=tenant")
-	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "租户运营策略已保存", "scope": "tenant"})
-}
-
-// saveTenantOpsPolicy 读取-合并-写回租户 policy_config（保留其他键，整体覆盖写入）。
-func (s *Server) saveTenantOpsPolicy(tid int64, pol ops.OperationsPolicy) error {
-	pc, _ := s.Ten.GetPolicyConfig(tid)
-	pc.OpsPolicy = marshalOps(pol)
-	return s.Ten.SetPolicyConfig(tid, pc)
-}
-
-// tenantScopedPolicy 租户可覆盖组白名单：仅保留 billing.mode_rules / package / invite / limits。
-func tenantScopedPolicy(p ops.OperationsPolicy) ops.OperationsPolicy {
-	p.TZ = ""
-	p.PromoWindows = nil
-	b := p.Billing
-	b.Enforced = nil
-	b.MarkupMultiplier = nil
-	p.Billing = b
-	p.Payment = ops.PaymentPatch{}
-	p.Registration = ops.RegistrationPatch{}
-	p.Content = ops.ContentPatch{}
-	return p
+	s.Store.LogAudit(0, u.ID, "ops_policy_save", "ops", "scope=platform")
+	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "运营策略已保存", "scope": "platform"})
 }
 
 // ============ 推广时间窗 ============

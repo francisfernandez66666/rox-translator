@@ -19,7 +19,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
 	"translator/internal/db"
+	"translator/internal/ops"
 )
 
 // ReferralMigrate 邀请裂变库表迁移（幂等，随 Store.New 调用）：
@@ -218,25 +220,46 @@ func (s *Store) RewardPaidPermanent(inviteeUID, tokens, days int64) error {
 
 // ReferralEnabled 邀请裂变总开关（system_config referral_enabled；仅显式 "0" 关闭，
 // 缺省/读取异常均视为开启，保证存量部署行为不变）。关闭后：注册绑定与两类奖励全部停发。
+// ★ 运营策略引擎（2026-09 合并）：平台 ops_policy.invite.enabled=false 同样视为关闭——
+// 邀请奖励发放开关收敛到「运营策略」中台，租户/业务页不再持有独立发放开关。
 func (s *Store) ReferralEnabled() bool {
 	if v, _ := s.GetConfig("referral_enabled"); v == "0" {
+		return false
+	}
+	if inv, ok := s.platformInvitePolicy(); ok && inv.Enabled != nil && !*inv.Enabled {
 		return false
 	}
 	return true
 }
 
+// platformInvitePolicy 读取平台级邀请奖励因子（system_config.ops_policy.invite）。
+// 返回: 邀请因子补丁 + 是否存在显式配置。付费奖励（MarkOrderPaid 触发）无租户上下文，
+// 以平台策略为唯一权威；注册绑定奖励在 API 层另有租户级 effectivePolicy 兜底。
+func (s *Store) platformInvitePolicy() (ops.InvitePatch, bool) {
+	raw, err := s.GetConfig("ops_policy")
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return ops.InvitePatch{}, false
+	}
+	p := ops.ParseOps(raw)
+	return p.Invite, true
+}
+
 // ReferralPaidReward 付费奖励入口（MarkOrderPaid 成功确认 paid 套餐后调用）：
-// 奖励金额取值优先级：system_config inviter_paid_reward_tokens（后台可调）→ env INVITER_PAID_REWARD_TOKENS → 默认 50 万。
+// 奖励金额取值优先级：运营策略 invite.paid_reward_tokens/days → system_config
+// inviter_paid_reward_tokens/days（后台可调）→ env INVITER_PAID_REWARD_TOKENS → 默认 50 万。
 // 内部按对去重，重复调用幂等；非邀请来源静默跳过。参数 inviteeUID=下单用户 ID。
 func (s *Store) ReferralPaidReward(inviteeUID int64) {
 	if inviteeUID <= 0 {
 		return
 	}
-	// ★ 总开关门禁（2026-08-26 U3）：后台关闭裂变后不再发放任何奖励
+	// ★ 总开关门禁（2026-08-26 U3 + 2026-09 运营策略）：后台/策略关闭裂变后不再发放任何奖励
 	if !s.ReferralEnabled() {
 		return
 	}
 	tokens := int64(500000)
+	days := int64(0)
+	// 奖励金额取值优先级：默认 50 万 → env → 存量散键 → 运营策略（平台级，最高优先）。
+	// ★ 2026-09 邀请奖励合并进策略引擎：运营策略为权威来源，必须最后应用才不会被旧散键覆盖。
 	if v := os.Getenv("INVITER_PAID_REWARD_TOKENS"); v != "" {
 		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
 			tokens = x
@@ -248,10 +271,18 @@ func (s *Store) ReferralPaidReward(inviteeUID int64) {
 		}
 	}
 	// 付费邀请奖励有效期（天）：0=永久（默认），>0=限时台账
-	days := int64(0)
 	if v, _ := s.GetConfig("inviter_paid_reward_days"); v != "" {
 		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x >= 0 {
 			days = x
+		}
+	}
+	// 运营策略最后应用（赢）：invite.paid_reward_tokens/days 覆盖以上全部来源
+	if inv, ok := s.platformInvitePolicy(); ok {
+		if inv.PaidRewardTokens > 0 {
+			tokens = inv.PaidRewardTokens
+		}
+		if inv.PaidRewardDays != 0 {
+			days = int64(inv.PaidRewardDays)
 		}
 	}
 	_ = s.RewardPaidPermanent(inviteeUID, tokens, days)

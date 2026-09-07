@@ -87,11 +87,11 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "tokens 必须大于 0"})
 		return
 	}
-	// 确定支付模式：优先请求指定渠道，否则按 system_config pay_mode（默认 mock）
-	payMode := ""
-	if v, _ := s.Store.GetConfig("pay_mode"); v != "" {
-		payMode = v
-	}
+	tid := s.effTenant(r, u)
+	// 确定支付模式：优先请求指定渠道，否则按最终运营策略 payment.mode（默认 mock）。
+	// ★ 2026-09：支付模式收敛到运营策略引擎（payment.mode），存量 system_config pay_mode
+	//   经 applyLegacyConfig 并入最终策略，二者统一由 effPayMode 输出。
+	payMode := s.effPayMode(tid)
 	if req.Channel == "" {
 		switch payMode {
 		case "static_qr":
@@ -106,7 +106,6 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "不支持的支付渠道"})
 		return
 	}
-	tid := s.effTenant(r, u)
 	// 创建订单（先落 pending，再取二维码回填）
 	o, err := s.Store.CreateOrderChannel(tid, req.Tokens, 0, u.ID, req.Channel, "")
 	if err != nil {
@@ -193,9 +192,9 @@ func (s *Server) handlePaySimulate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	// 仅 mock 模式开放（★ 整改 A6：pay_mode 未显式配置为 mock 时一律拒绝——
+	// 仅 mock 模式开放（★ 整改 A6 + 2026-09 运营策略：payment.mode 未显式为 mock 时一律拒绝——
 	// 此前「非空且≠mock 才拦」的写法让全新部署（空配置）处于可模拟充值状态）
-	if v, _ := s.Store.GetConfig("pay_mode"); v != "mock" {
+	if s.effPayMode(s.effTenant(r, u)) != "mock" {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "非 mock 模式禁止模拟支付"})
 		return
 	}
@@ -288,9 +287,10 @@ func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "拒绝访问"})
 		return
 	}
-	// ③ mock 封禁（★ 整改 A6：与 handlePaySimulate 同口径收紧——pay_mode 未显式
-	//    配置为 mock 时，mock 渠道回调一律拒绝，堵住「空配置=可模拟充值」的默认放行）
-	payMode, _ := s.Store.GetConfig("pay_mode")
+	// ③ mock 封禁（★ 整改 A6：与 handlePaySimulate 同口径收紧——支付模式未显式
+	//    配置为 mock 时，mock 渠道回调一律拒绝，堵住「空配置=可模拟充值」的默认放行）。
+	//    2026-09：支付模式读最终运营策略（payment.mode，平台级），存量配置经兜底并入。
+	payMode := s.effPayMode(0)
 	if channel == "mock" && payMode != "mock" {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "当前支付模式下禁止 mock 回调"})
 		return

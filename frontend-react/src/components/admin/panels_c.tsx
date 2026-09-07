@@ -16,10 +16,11 @@ import {
   plans as apiPlans, myPackage, packageSubscribe,
   adminPackages, adminPackageCreate, adminPackageUpdate, adminPackageDelete,
   adminPackageSettings, adminPackageSettingsSave, adminQRUpload,
-  referralMy, fetchReferralQrBlob, referralConfigGet, referralConfigSave, meContext,
+  referralMy, fetchReferralQrBlob,
   webhooks as apiWebhooks, webhookSave, webhookDelete, webhookTest,
   apiKeys as apiApiKeys, apiKeyCreate, apiKeyStatus, apiKeyRotate, apiKeyDelete,
   apiKeyLimit, getOpenAPIDocs, saveOpenAPIDocs, previewOpenAPIDocs,
+  authHeaders,
 } from '@/api'
 import { Panel, Field, toastResp, num } from './parts'
 import { fmtNum, fmtTime, maskKey } from '@/lib/ui'
@@ -217,8 +218,33 @@ export function PlansP() {
     const o = orderRef.current
     if (!o) return
     setChLoading(true)
-    try { const r: Any = await payManualConfirm(Number(o.id)); if (r.success) { stopPolling(); closeCheckout() } } finally { setChLoading(false) }
+    try {
+      const r: Any = await payManualConfirm(Number(o.id))
+      if (r.success) { void MessagePlugin.success(t('billing.manualNotify')); stopPolling(); closeCheckout() }
+      else void MessagePlugin.error((r.message as string) || t('billing.iPaidFailed'))
+    } catch (e: any) { void MessagePlugin.error(e?.message || t('common.fail')) }
+    finally { setChLoading(false) }
   }
+
+  // ★ 2026-09 演示/文本渠道：qr_content 非图片时（mock/wechat/alipay 返回 pay 文本），
+  //   通过后端 /api/qr/render 渲染为可扫码二维码图片
+  const [qrImg, setQrImg] = useState('')
+  useEffect(() => {
+    let alive = true
+    setQrImg('')
+    const content = curOrder?.qr_content as string | undefined
+    if (content && !isImage(content)) {
+      void (async () => {
+        try {
+          const res = await fetch(`/api/qr/render?text=${encodeURIComponent(content)}`, { headers: authHeaders() })
+          if (!res.ok) return
+          const blob = await res.blob()
+          if (alive) setQrImg(URL.createObjectURL(blob))
+        } catch { /* 渲染失败则回退文本展示 */ }
+      })()
+    }
+    return () => { alive = false }
+  }, [curOrder?.qr_content])
 
   // 保存配额配置
   async function saveQuota() {
@@ -287,8 +313,12 @@ export function PlansP() {
       void MessagePlugin.error(err?.message || t('common.saveFail'))
     } finally { setQrUploading(false) }
   }
-  // 人工确认订单入账
-  async function confirmManual(o: Any) { const r: Any = await adminOrderPay(Number(o.id)); if (r.success) await Promise.all([loadPkgs(), loadOrders()]) }
+  // 人工确认订单入账（★ 2026-09 修复：必须携带 tenant_id，超管平台上下文 effTenant=0 否则匹配不到订单）
+  async function confirmManual(o: Any) {
+    const r: Any = await adminOrderPay(Number(o.id), Number(o.tenant_id) || 0)
+    if (r.success) { void MessagePlugin.success(t('billing.manualConfirmed')); await Promise.all([loadPkgs(), loadOrders()]) }
+    else void MessagePlugin.error((r.message as string) || t('billing.iPaidFailed'))
+  }
 
   const planGroups = [
     { type: 'paid', title: t('plans.groupPaid'), items: planList.filter((p) => p.ptype === 'paid') },
@@ -531,10 +561,14 @@ export function PlansP() {
                     <div style={{ fontSize: 13, color: '#667', marginBottom: 6 }}>{t('billing.staticQR')}</div>
                     {isImage(curOrder.qr_content as string)
                       ? <img src={curOrder.qr_content} style={{ maxWidth: 200, borderRadius: 8, border: '1px solid #eee', margin: '8px 0' }} alt="qr" />
-                      : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f7f9fc', borderRadius: 8, padding: 12, fontSize: 12, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>}
+                      : qrImg
+                        ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '1px solid #eee', margin: '8px 0', background: '#fff' }} alt="qr" />
+                        : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f7f9fc', borderRadius: 8, padding: 12, fontSize: 12, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>}
                   </div>
                 ) : (
-                  <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f7f9fc', borderRadius: 8, padding: 12, fontSize: 12, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>
+                  qrImg
+                    ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '1px solid #eee', margin: '8px 0', background: '#fff' }} alt="qr" />
+                    : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f7f9fc', borderRadius: 8, padding: 12, fontSize: 12, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>
                 )}
                 <p style={{ fontSize: 13, color: '#667' }}>{tpl('billing.orderNo', { orderNo: curOrder.order_no })}</p>
               </div>
@@ -563,11 +597,14 @@ export function PlansP() {
 }
 
 // ---------------- 邀请好友（Vue Referral.vue） ----------------
-// 展示我的邀请码、邀请链接、二维码、奖励统计；超管可配置运营参数
+// 展示我的邀请码、邀请链接、二维码、奖励统计。
+// ★ 2026-09 权限收口：
+//   ① 邀请裂变奖励仅个人用户参与——企业用户/平台超管（is_personal=false）整个面板隐藏；
+//   ② 奖励运营参数（总开关/注册奖励/付费奖励）已合并进「运营策略引擎」，本面板不再承载超管配置。
 export function ReferralP() {
   const ad = useAdmin()
   const [, t] = useT()
-  const isSuper = ad.isSuper
+  const isPersonal = ad.isPersonal
   const [refCode, setRefCode] = useState('')
   const [inviteUrl, setInviteUrl] = useState('')
   const [records, setRecords] = useState<Any[]>([])
@@ -576,17 +613,11 @@ export function ReferralP() {
   const [trialCount, setTrialCount] = useState(0)
   const [trialTokens, setTrialTokens] = useState(0)
   const [paidTokens, setPaidTokens] = useState(0)
-  const [cfg, setCfg] = useState({ enabled: true, reward_tokens: 300000, paid_tokens: 500000, reward_days: 14, paid_days: 0 })
-  // 是否个人用户：企业用户不参与「多邀得多」奖励（需求 5）
-  const [isPersonal, setIsPersonal] = useState(true)
 
-  // 加载邀请数据、二维码 blob、超管运营配置
+  // 加载邀请数据、二维码 blob（仅个人用户渲染本面板）
   useEffect(() => {
+    if (!isPersonal) return
     void (async () => {
-      try {
-        const mc: Any = await meContext()
-        if (mc.success) setIsPersonal(mc.is_personal !== false)
-      } catch { /* ignore */ }
       try {
         const r: Any = await referralMy()
         if (r.success) {
@@ -601,14 +632,11 @@ export function ReferralP() {
       } catch { /* ignore */ }
       const blob = await fetchReferralQrBlob()
       if (blob) setQrUrl(URL.createObjectURL(blob))
-      if (isSuper) {
-        try {
-          const c: Any = await referralConfigGet()
-          if (c.success) setCfg({ enabled: !!c.enabled, reward_tokens: c.reward_tokens ?? 300000, paid_tokens: c.paid_reward_tokens ?? 500000, reward_days: c.reward_days ?? 14, paid_days: c.paid_reward_days ?? 0 })
-        } catch { /* ignore */ }
-      }
     })()
-  }, [isSuper])
+  }, [isPersonal])
+
+  // 企业用户/平台超管无邀请裂变奖励权限：彻底隐藏（安全网，正常由 PersonalCenterP 过滤）
+  if (!isPersonal) return null
 
   // 下载邀请二维码
   function downloadQr() {
@@ -639,12 +667,6 @@ export function ReferralP() {
   return (
     <>
       <Panel title={t('referral.title')} extra={<Space size={8}><Button onClick={downloadQr}>⬇️ {t('referral.downloadQr')}</Button></Space>}>
-        {/* 企业用户不参与「多邀得多」个人裂变奖励，仅可邀请同事加入本企业 */}
-        {!isPersonal && (
-          <div style={{ marginBottom: 14, background: 'rgba(64,128,255,.08)', border: '1px solid rgba(64,128,255,.25)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#33415c', lineHeight: 1.7 }}>
-            当前为企业用户，不参与「多邀得多」个人邀请奖励。可通过「企业管理 → 邀请码」邀请同事加入本企业。
-          </div>
-        )}
         <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 320, background: 'rgba(64,128,255,.06)', border: '1px solid rgba(64,128,255,.18)', borderRadius: 8, padding: '14px 16px' }}>
             <div style={{ fontSize: 12, color: '#556' }}>{t('referral.myCode')}</div>
@@ -657,50 +679,11 @@ export function ReferralP() {
             <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 12, fontSize: 13, color: '#555' }}>
               <span>👥 {t('referral.invitedCount')}：<b>{invited}</b></span>
               <span>🎁 {t('referral.trialRewards')}：<b>{fmtNum(trialTokens)}</b> token / {trialCount} {t('referral.times')}</span>
-              {isPersonal && <span>💰 {t('referral.paidRewards')}：<b>{fmtNum(paidTokens)}</b> token</span>}
+              <span>💰 {t('referral.paidRewards')}：<b>{fmtNum(paidTokens)}</b> token</span>
             </div>
           </div>
           {qrUrl && <img src={qrUrl} alt="QR" width={150} height={150} style={{ borderRadius: 8, border: '1px solid #e3e6ef', background: '#fff' }} />}
         </div>
-
-        {/* ===== 超管运营配置 ===== */}
-        {isSuper && (
-          <div style={{ marginTop: 16, background: 'rgba(255,152,0,.06)', border: '1px solid rgba(255,152,0,.25)', borderRadius: 8, padding: '14px 16px', maxWidth: 560 }}>
-            <div style={{ fontWeight: 700, color: '#b26a00', marginBottom: 10 }}>{t('referral.cfgTitle')}</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-              <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgEnabled')}</span>
-              <Switch value={cfg.enabled} onChange={(v) => setCfg({ ...cfg, enabled: v as boolean })} />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-              <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgRewardTokens')}</span>
-              <Input type="number" value={String(cfg.reward_tokens)} onChange={(v) => setCfg({ ...cfg, reward_tokens: Number(v) || 0 })} style={{ width: 200 }} />
-            </div>
-            {/* 付费邀请奖励（多邀得多）仅对个人用户开放；企业用户不显示后台配置 */}
-            {isPersonal && (
-            <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-              <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgPaidTokens')}</span>
-              <Input type="number" value={String(cfg.paid_tokens)} onChange={(v) => setCfg({ ...cfg, paid_tokens: Number(v) || 0 })} style={{ width: 200 }} />
-            </div>
-            {/* 付费邀请奖励有效期（天）：0=永久（默认），>0=限时台账（按最早到期优先扣减） */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-              <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgPaidDays')}</span>
-              <Input type="number" value={String(cfg.paid_days)} onChange={(v) => setCfg({ ...cfg, paid_days: Number(v) || 0 })} style={{ width: 200 }} />
-            </div>
-            </>
-            )}
-            {/* 注册邀请奖励有效期（天）：控制体验叠加额度的到期时长，后台可调 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-              <span style={{ minWidth: 220, fontSize: 13, color: '#555' }}>{t('referral.cfgRewardDays')}</span>
-              <Input type="number" value={String(cfg.reward_days)} onChange={(v) => setCfg({ ...cfg, reward_days: Number(v) || 0 })} style={{ width: 200 }} />
-            </div>
-            <Button onClick={async () => {
-              const c: Any = await referralConfigSave({ enabled: cfg.enabled, reward_tokens: Number(cfg.reward_tokens) || 0, paid_reward_tokens: Number(cfg.paid_tokens) || 0, reward_days: Number(cfg.reward_days) || 0, paid_reward_days: Number(cfg.paid_days) || 0 })
-              if (!c.success) void MessagePlugin.error(c.message || '保存失败')
-              else void MessagePlugin.success(t('referral.cfgSaved'))
-            }}>{t('referral.cfgSave')}</Button>
-          </div>
-        )}
       </Panel>
 
       <Panel title={t('referral.title')}>

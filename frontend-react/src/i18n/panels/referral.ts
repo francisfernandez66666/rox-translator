@@ -53,7 +53,7 @@ export const en: Record<string, string> = {
   'referral.invitedCount': 'Invited',
   'referral.trialRewards': 'Trial stack rewards',
   'referral.paidRewards': 'Paid permanent rewards',
-  'referral.times': '',
+  'referral.times': 'times',
     'referral.colInvitee': 'Invitee',
   'referral.colEmail': 'Invitee Email',
   'referral.colInviteStatus': 'Invite Status',

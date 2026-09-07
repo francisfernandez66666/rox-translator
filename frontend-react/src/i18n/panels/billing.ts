@@ -94,6 +94,7 @@ export const zh: Record<string, string> = {
   'billing.colTenant': '租户',
   'billing.noManualOrders': '暂无待人工确认订单',
   'billing.manualConfirmed': '已确认到账，句数/token 已发放',
+  'billing.iPaidFailed': '确认失败，请稍后重试',
 }
 
 // 英文文案词典：键与上方 zh 一一对应。
@@ -189,4 +190,5 @@ export const en: Record<string, string> = {
   'billing.colTenant': 'Tenant',
   'billing.noManualOrders': 'No orders awaiting confirmation',
   'billing.manualConfirmed': 'Payment confirmed, sentences/tokens granted',
+  'billing.iPaidFailed': 'Confirmation failed, please retry later',
 }

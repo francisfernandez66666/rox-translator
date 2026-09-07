@@ -120,3 +120,37 @@ func TestWindowTimesValid(t *testing.T) {
 		t.Fatal("非法时间应拒绝")
 	}
 }
+
+// TestTaskFactor 任务中心奖励总开关（2026-09 新增 task 因子）：
+// 默认开启；可显式关闭；可被租户/时间窗覆盖关闭后再次开启。
+func TestTaskFactor(t *testing.T) {
+	// 默认开启（内置默认 = 存量任务中心行为，零感知兼容）
+	d := DefaultEffective()
+	if !d.Task.Enabled {
+		t.Fatal("默认 task.enabled 应为 true")
+	}
+	// 显式关闭
+	eff := Merge(DefaultEffective(), ParseOps(`{"task":{"enabled":false}}`))
+	if eff.Task.Enabled {
+		t.Fatal("task.enabled=false 应显式关闭任务中心奖励")
+	}
+	// 关闭后再次开启（覆盖关闭态，恢复到可发奖）
+	eff2 := Merge(eff, ParseOps(`{"task":{"enabled":true}}`))
+	if !eff2.Task.Enabled {
+		t.Fatal("task.enabled=true 应重新开启任务中心奖励")
+	}
+	// 未配置时保持原值（不改变既有状态）
+	eff3 := Merge(DefaultEffective(), ParseOps(`{"invite":{"reward_tokens":1}}`))
+	if !eff3.Task.Enabled {
+		t.Fatal("无关覆盖不应影响 task.enabled 默认值")
+	}
+	// 解析容错：非法 task 域不影响其它因子
+	p := ParseOps(`{"task":{"enabled":false},"invite":{"reward_tokens":200000}}`)
+	if p.Task.Enabled == nil || *p.Task.Enabled {
+		t.Fatal("task.enabled=false 应可解析")
+	}
+	if p.Invite.RewardTokens != 200000 {
+		t.Fatal("task 域非法不应影响其它因子解析")
+	}
+}
+

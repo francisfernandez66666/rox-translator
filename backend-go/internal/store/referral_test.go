@@ -72,6 +72,105 @@ func TestReferralFlow(t *testing.T) {
 	}
 }
 
+// TestReferralEnabledPolicyGate 邀请裂变总开关与运营策略引擎耦合（2026-09 合并）：
+// 平台 ops_policy.invite.enabled=false 同样视为关闭；存量散键 referral_enabled=0 仍最高优先强制关闭。
+func TestReferralEnabledPolicyGate(t *testing.T) {
+	s := newTestStoreWithTenants(t)
+	if !s.ReferralEnabled() {
+		t.Fatal("默认无任何配置时应开启邀请裂变")
+	}
+	// ① 运营策略关闭
+	if err := s.SetConfig("ops_policy", `{"invite":{"enabled":false}}`); err != nil {
+		t.Fatalf("写 ops_policy 失败: %v", err)
+	}
+	if s.ReferralEnabled() {
+		t.Fatal("ops_policy.invite.enabled=false 应关闭邀请裂变")
+	}
+	// ② 运营策略重新开启
+	if err := s.SetConfig("ops_policy", `{"invite":{"enabled":true}}`); err != nil {
+		t.Fatalf("写 ops_policy 失败: %v", err)
+	}
+	if !s.ReferralEnabled() {
+		t.Fatal("ops_policy.invite.enabled=true 应开启邀请裂变")
+	}
+	// ③ 存量散键 referral_enabled=0 优先强制关闭（独立于策略开关）
+	if err := s.SetConfig("referral_enabled", "0"); err != nil {
+		t.Fatalf("写 referral_enabled 失败: %v", err)
+	}
+	if s.ReferralEnabled() {
+		t.Fatal("referral_enabled=0 应强制关闭邀请裂变")
+	}
+	// ④ 清理散键后回到策略开关
+	if err := s.SetConfig("referral_enabled", ""); err != nil {
+		t.Fatalf("清 referral_enabled 失败: %v", err)
+	}
+	if !s.ReferralEnabled() {
+		t.Fatal("清理散键后应按策略开启")
+	}
+}
+
+// TestReferralPaidRewardPolicyPriority 付费邀请奖励取值与总开关（2026-09 邀请奖励并入策略引擎）：
+//   - 奖励 token/有效期：运营策略 invite.paid_reward_tokens/days 必须覆盖存量散键与默认值；
+//   - 策略 invite.enabled=false 时不再发放任何付费奖励（发放中台关闸）。
+func TestReferralPaidRewardPolicyPriority(t *testing.T) {
+	s := newTestStoreWithTenants(t)
+	u1, err := s.CreateUser(1, "pri_inviter", "x", "邀请人", RoleTenantAdmin, 0, 0)
+	if err != nil {
+		t.Fatalf("创建邀请人失败: %v", err)
+	}
+	code := s.EnsureRefCode(u1.ID)
+	u2, err := s.CreateUser(1, "pri_invitee", "x", "被邀人", RoleUser, 0, 0)
+	if err != nil {
+		t.Fatalf("创建被邀人失败: %v", err)
+	}
+	if _, _, ok := s.BindReferral(u2.ID, 1, code); !ok {
+		t.Fatal("首绑应成功")
+	}
+	// 存量散键配置 10 万，运营策略配置 888888 + 30 天——策略必须覆盖散键（优先级最高）
+	if err := s.SetConfig("inviter_paid_reward_tokens", "100000"); err != nil {
+		t.Fatalf("写散键失败: %v", err)
+	}
+	if err := s.SetConfig("inviter_paid_reward_days", "7"); err != nil {
+		t.Fatalf("写散键天数失败: %v", err)
+	}
+	if err := s.SetConfig("ops_policy", `{"invite":{"paid_reward_tokens":888888,"paid_reward_days":30}}`); err != nil {
+		t.Fatalf("写 ops_policy 失败: %v", err)
+	}
+	before := s.SumActiveGrants(1)
+	s.ReferralPaidReward(u2.ID)
+	// 策略 paid_reward_days=30>0 → 走限时台账（quota_grants），按合计校验奖励金额
+	if got := s.SumActiveGrants(1); got != before+888888 {
+		t.Fatalf("策略应覆盖散键发放 888888 到台账，实增 %d", got-before)
+	}
+	// 奖励记录应为策略值（paid_perm 行 tokens=888888, days=30）
+	recs := s.ListReferrals(u1.ID)
+	found := false
+	for _, r := range recs {
+		if r.Type == "paid_perm" && r.Tokens == 888888 && r.Days == 30 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("奖励台账应记录策略值 paid_perm 888888/30 天，实际 %+v", recs)
+	}
+	// 策略总开关关闭后：新被邀人不发奖
+	if err := s.SetConfig("ops_policy", `{"invite":{"enabled":false}}`); err != nil {
+		t.Fatalf("写 ops_policy 失败: %v", err)
+	}
+	u3, err := s.CreateUser(1, "pri_invitee2", "x", "被邀人2", RoleUser, 0, 0)
+	if err != nil {
+		t.Fatalf("创建被邀人2失败: %v", err)
+	}
+	if _, _, ok := s.BindReferral(u3.ID, 1, code); !ok {
+		t.Fatal("被邀人2 首绑应成功")
+	}
+	after := s.SumActiveGrants(1)
+	s.ReferralPaidReward(u3.ID)
+	if got := s.SumActiveGrants(1); got != after {
+		t.Fatalf("策略关闭后不应发放付费奖励: %d → %d", after, got)
+	}
+}
+
 // TestReferralOneidDualUnique 奖励双唯一回归（2026-08-26 修正定稿）：
 // 账户层 id 主键不可变、email 同一时刻唯一可换绑；奖励层 invitee_uid 与
 // invitee_email 快照任一历史碰撞即永久拒绝——换绑流转无法二次领取。

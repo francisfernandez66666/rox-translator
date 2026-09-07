@@ -89,6 +89,8 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
   const [pkgLine, setPkgLine] = useState('')
   // 是否未绑定邮箱（强制弹窗）
   const [ctxNoEmail, setCtxNoEmail] = useState(false)
+  // 是否个人用户租户：企业用户/平台超管不参与「邀请好友 · 多邀多得」，隐藏对应入口（2026-09）
+  const [isPersonal, setIsPersonal] = useState(true)
   // 前台「上传知识库」弹窗（仅部门管理员及以上可见，复用后台 recognize→import 流程）
   const [kbUploadOpen, setKbUploadOpen] = useState(false)
   // 侧边隐藏菜单（原页脚内容收入此处，顶部汉堡按钮唤起）
@@ -106,6 +108,7 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
         if (c.success) {
           const email = String((c as unknown as { email?: string }).email || '')
           setCtxNoEmail(!email) // 无邮箱 → 不可关闭的绑定弹窗（行为同 Vue 版 dismissible=false）
+          setIsPersonal((c as unknown as { is_personal?: boolean }).is_personal !== false)
         }
       } catch { /* ignore */ }
       try {
@@ -185,7 +188,7 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
             <p style={{ fontSize: 16, color: '#5f6368' }}>{t('app.starting')}</p>
           </div>
         ) : path === '/billing' ? <BalancePanel />
-          : path === '/invites' ? <ReferralPanel />
+          : (path === '/invites' && isPersonal) ? <ReferralPanel />
           : path === '/packages' ? <MyPackagePanel />
           : path === '/my' ? <AccountPanel />
           : tab === 'tickets' ? <TicketsPage /> : tab === 'editor' ? <EditorPage /> : <ChatWindow />}
@@ -194,7 +197,7 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
       {/* 侧边隐藏菜单：原前台页脚内容收入此处（汉堡按钮唤起） */}
       <Drawer visible={menuOpen} onClose={() => setMenuOpen(false)} header={t('app.more') || '更多'} size="340px" footer={false}>
         <nav className="ss-drawer-nav">
-          {[['/billing','💰 我的余额'],['/invites','🔗 我的邀请'],['/packages','💎 我的套餐'],['/my','👤 我的账号']].map(([p,l]) => (
+          {[['/billing','💰 我的余额'],['/invites','🔗 我的邀请'],['/packages','💎 我的套餐'],['/my','👤 我的账号']].filter(([p]) => p !== '/invites' || isPersonal).map(([p,l]) => (
             <div key={p} className="ss-drawer-item" onClick={() => { navigate(p); setMenuOpen(false) }}>{l}</div>
           ))}
         </nav>

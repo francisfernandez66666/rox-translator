@@ -94,6 +94,11 @@ type ContentPatch struct {
 	FileMaxMB       int   `json:"file_max_mb,omitempty"`
 }
 
+// TaskPatch 任务中心因子：奖励发放总开关（前台任务中心具体任务项仍在其页面维护）。
+type TaskPatch struct {
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
 // OperationsPolicy 运营策略（可覆盖模型）
 type OperationsPolicy struct {
 	Version      int               `json:"version,omitempty"`
@@ -106,6 +111,7 @@ type OperationsPolicy struct {
 	Limits       LimitsPatch       `json:"limits,omitempty"`
 	Payment      PaymentPatch      `json:"payment,omitempty"`
 	Content      ContentPatch      `json:"content,omitempty"`
+	Task         TaskPatch         `json:"task,omitempty"`
 }
 
 // ============================== 最终策略（effective） ==============================
@@ -131,6 +137,7 @@ type EffectivePolicy struct {
 	Limits       LimitsEffective       `json:"limits"`
 	Payment      PaymentEffective      `json:"payment"`
 	Content      ContentEffective      `json:"content"`
+	Task         TaskEffective         `json:"task"`
 }
 
 // PackageEffective 解析后的套餐因子：体验 token/天数、月度用量重置开关与次数上限。
@@ -179,6 +186,11 @@ type ContentEffective struct {
 	FileMaxMB       int  `json:"file_max_mb"`
 }
 
+// TaskEffective 解析后的任务中心因子：奖励发放总开关。
+type TaskEffective struct {
+	Enabled bool `json:"enabled"`
+}
+
 // Mode 取指定翻译模式因子；未配置（或空模式）回落 pro 语义并返回 false。
 // 说明：空模式视为专业模式（历史口径 "" 与 pro 等同）。
 func (p EffectivePolicy) Mode(m string) (ModeRule, bool) {
@@ -208,6 +220,7 @@ func DefaultEffective() EffectivePolicy {
 		Limits:       LimitsEffective{MaxQPS: 100, MaxConcurrent: 50, DefaultMaxDailyChars: 20000, DefaultMaxDailyTokens: 20000},
 		Payment:      PaymentEffective{Mode: "mock", AutoCharge: false},
 		Content:      ContentEffective{CondenseEnabled: true, FileMaxMB: 40},
+		Task:         TaskEffective{Enabled: true},
 	}
 }
 
@@ -320,6 +333,9 @@ func Merge(base EffectivePolicy, patch OperationsPolicy) EffectivePolicy {
 	}
 	if patch.Content.FileMaxMB != 0 {
 		out.Content.FileMaxMB = patch.Content.FileMaxMB
+	}
+	if patch.Task.Enabled != nil {
+		out.Task.Enabled = *patch.Task.Enabled
 	}
 	return out
 }

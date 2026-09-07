@@ -76,20 +76,31 @@ func (s *Server) handleAdminTaskDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMyTasks 用户视角任务列表（登录用户：启用任务 + 本人领取状态）。
+// ★ 运营策略总开关（2026-09）：task.enabled=false 时任务中心整体隐藏（发放中台关闸）。
 func (s *Server) handleMyTasks(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
+	tid := s.effTenant(r, u)
+	if !s.effectivePolicy(tid).Task.Enabled {
+		writeJSON(w, 200, map[string]interface{}{"success": true, "tasks": []interface{}{}, "disabled": true})
+		return
+	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "tasks": s.Store.ListUserTaskViews(u.ID)})
 }
 
 // handleClaimTask 用户领取任务奖励（登录用户：每日任务当日一次 / 一次性任务终身一次）。
+// ★ 运营策略总开关（2026-09）：task.enabled=false 时拒绝领取（发放中台关闸）。
 func (s *Server) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	if !s.effectivePolicy(s.effTenant(r, u)).Task.Enabled {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "任务奖励暂未开放"})
 		return
 	}
 	var req struct {

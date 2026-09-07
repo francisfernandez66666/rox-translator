@@ -122,7 +122,7 @@ export function TenantsP() {
     const r: any = await adminOrderCreate({ tenant_id: tt.id, tokens: Number(tokens), money: 0 })
     if (!r.success) { void MessagePlugin.error(r.message); return }
     const o = r.order
-    if (o && o.id) await adminOrderPay(o.id)
+    if (o && o.id) await adminOrderPay(o.id, tt.id)
     void MessagePlugin.success(tpl('tenants.charged', { tokens }))
     await load()
   }
@@ -250,7 +250,7 @@ export function TenantsP() {
                 const r: any = await adminOrderCreate({ tenant_id: tt.id, tokens: Number(form.tokens || 0), money: Number(form.money || 0) })
                 if (toastResp(r, t('tenants.charged'))) {
                   const oid = Number(r.order?.id ?? r.id ?? 0)
-                  if (oid > 0) await adminOrderPay(oid)
+                  if (oid > 0) await adminOrderPay(oid, tt.id)
                   setDlg(null)
                 }
               }}>

@@ -43,7 +43,7 @@ const ITEMS: Item[] = [
   { key: 'org', label: 'admin.menuOrg', minLevel: 3 },
   { key: 'kb', label: 'admin.menuKb', minLevel: 2 },
   { key: 'models', label: 'admin.menuModels', minLevel: 4 },
-  { key: 'ops', label: 'admin.menuOps', minLevel: 3 },
+  { key: 'ops', label: 'admin.menuOps', minLevel: 4 },
   { key: 'tickets', label: 'admin.menuTickets', minLevel: 2 },
   { key: 'brand', label: 'admin.menuBrand', minLevel: 3 },
   { key: 'system', label: 'admin.menuSystem', minLevel: 4 },

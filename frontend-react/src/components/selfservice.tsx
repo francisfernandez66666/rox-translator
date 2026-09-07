@@ -142,6 +142,8 @@ export function AccountPanel() {
   const ctx = (data as any) ?? {}
   if (loading) return <Loading className="ss-loading" />
   if (err) return <Card><Tag theme="danger">{err}</Tag></Card>
+  // 是否个人用户租户：企业用户/平台超管不参与「邀请好友 · 多邀多得」，隐藏邀请入口（2026-09）
+  const isPersonal = ctx.is_personal !== false
   return (
     <div className="ss-grid">
       <Card>
@@ -155,7 +157,7 @@ export function AccountPanel() {
         <h3>快速入口</h3>
         <div className="ss-quick">
           <Button size="small" variant="outline" onClick={() => { window.history.pushState({}, '', '/billing'); window.dispatchEvent(new PopStateEvent('popstate')) }}>💰 我的余额</Button>
-          <Button size="small" variant="outline" onClick={() => { window.history.pushState({}, '', '/invites'); window.dispatchEvent(new PopStateEvent('popstate')) }}>🔗 我的邀请</Button>
+          {isPersonal && <Button size="small" variant="outline" onClick={() => { window.history.pushState({}, '', '/invites'); window.dispatchEvent(new PopStateEvent('popstate')) }}>🔗 我的邀请</Button>}
           <Button size="small" variant="outline" onClick={() => { window.history.pushState({}, '', '/packages'); window.dispatchEvent(new PopStateEvent('popstate')) }}>💎 我的套餐</Button>
         </div>
       </Card>

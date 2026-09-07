@@ -79,7 +79,8 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	payMode := "mock"
-	if v, _ := s.Store.GetConfig("pay_mode"); v != "" {
+	// ★ 2026-09：支付模式读最终运营策略 payment.mode（存量 pay_mode 兜底并入）
+	if v := s.effPayMode(tid); v != "" {
 		payMode = v
 	}
 	// ★ 四期体验增强：无论是否强制计费，均透出实际消耗（今日/本月）与部门预算进度
@@ -159,11 +160,8 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// 付费包/增量包：创建订单（含 package_id 与售价），按支付模式走不同渠道
-	// 支付模式：sdk / static_qr / mock（默认 mock）
-	payMode := "mock"
-	if v, _ := s.Store.GetConfig("pay_mode"); v != "" {
-		payMode = v
-	}
+	// 支付模式：sdk / static_qr / mock（默认 mock；2026-09 起读最终运营策略 payment.mode）
+	payMode := s.effPayMode(tid)
 	channel := "manual"
 	if payMode == "sdk" {
 		channel = "wechat"
@@ -181,10 +179,17 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 			o.Status = "paid"
 		}
 	} else if channel == "manual" {
-		// 静态码模式：回填收款码图片
+		// 静态码模式：回填收款码图片；未配置收款码时明确报错而非静默空码（2026-09 debug）
 		if v, _ := s.Store.GetConfig("static_qr_image"); v != "" {
 			_ = s.Store.UpdateOrderPrepay(o.OrderNo, "", v)
 			o.QRContent = v
+		} else {
+			// 订单已创建但无码可展示，通知管理员补配，前端给出引导
+			s.Store.LogAudit(tid, u.ID, "package_subscribe", "packages", pkg.Code+"（静态码未配置收款图片）")
+			writeJSON(w, 200, map[string]interface{}{
+				"success": false, "message": "静态收款码未配置，请联系管理员在套餐中心上传收款图片", "order_no": o.OrderNo,
+			})
+			return
 		}
 	}
 	s.Store.LogAudit(tid, u.ID, "package_subscribe", "packages", pkg.Code)

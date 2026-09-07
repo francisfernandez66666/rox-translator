@@ -392,6 +392,8 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/admin/packages/settings/save", s.handleAdminPackageSettingsSave)
 	s.mux.HandleFunc("/api/admin/packages/qr-upload", s.handleAdminQRUpload)
 	s.mux.HandleFunc("/api/qr-image/", s.handleQRImage)
+	// 通用二维码文本渲染（收银台把 mock/wechat/alipay 的 qr_content 渲染为可扫码图片；需登录）
+	s.mux.HandleFunc("/api/qr/render", s.handleQRRender)
 	// 在线支付：下单 / 状态轮询 / 模拟支付 / 我已付费（静态码人工确认）/ 渠道回调
 	s.mux.HandleFunc("/api/pay/create", s.handlePayCreate)
 	s.mux.HandleFunc("/api/pay/status", s.handlePayStatus)
