@@ -60,6 +60,8 @@ interface AdminCtx {
   inviteEnabled: boolean
   // 当前生效租户是否为个人用户租户（个人用户不显示「企业管理」类后台；企业用户不显示「邀请好友」除非开通开关）
   isPersonal: boolean
+  // 当前生效租户名称（租管及以上顶栏「管理范围」标签展示；个人用户=本人姓氏，企业=企业名）
+  tenantName: string
   // 重新拉取当前生效租户的「邀请好友」开关
   loadInviteEnabled: () => Promise<void>
   // 当前选中的租户 ID（0 表示平台根组织）
@@ -97,6 +99,7 @@ const Ctx = createContext<AdminCtx>({
   panel: 'overview', gotoPanel: () => {}, pendingFeedbackId: 0,
   openFeedback: () => {}, consumeFeedback: () => 0,
   inviteEnabled: true, isPersonal: false, loadInviteEnabled: async () => {},
+  tenantName: '',
 })
 
 /** 后台管理全局状态 Provider：管理租户列表/切换、角色权限、面板路由与反馈跨组件跳转
@@ -122,6 +125,8 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   const [inviteEnabled, setInviteEnabled] = useState<boolean>(true)
   // 当前生效租户是否为个人用户租户（默认 false=企业/平台）
   const [isPersonal, setIsPersonal] = useState<boolean>(false)
+  // 当前生效租户名称（默认空；租管及以上登录后由 loadInviteEnabled 填充）
+  const [tenantName, setTenantName] = useState<string>('')
 
   // 是否为管理员/部门管理员（等级≥2）
   const isAdmin = myLevel >= 2
@@ -174,6 +179,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       if (r.success) {
         setInviteEnabled(r.invite_enabled !== false)
         setIsPersonal(r.is_personal === true)
+        setTenantName(r.tenant_name || '')
       }
     } catch { /* 忽略 */ }
   }, [user])
@@ -250,12 +256,12 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     tenants, activeTenantId, switchTenant, loadTenants, clearAuth,
     orgs, orgMap, loadOrgs,
     panel, gotoPanel, pendingFeedbackId, openFeedback, consumeFeedback,
-    inviteEnabled, isPersonal, loadInviteEnabled,
+    inviteEnabled, isPersonal, loadInviteEnabled, tenantName,
   }), [myLevel, isAdmin, isDeptAdmin, isTenantAdmin, isSuper, roleOptions,
         tenants, activeTenantId, switchTenant, loadTenants, clearAuth,
         orgs, orgMap, loadOrgs,
         panel, gotoPanel, pendingFeedbackId, openFeedback, consumeFeedback,
-        inviteEnabled, isPersonal, loadInviteEnabled])
+        inviteEnabled, isPersonal, loadInviteEnabled, tenantName])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

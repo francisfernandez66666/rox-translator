@@ -559,8 +559,11 @@ func (k *KBDatabase) FetchRowTenant(id, tenantID int64, scope *PackScope) (*Row,
 // 参数：zh=中文原文，tenantID=租户 ID；返回命中的行。
 // FindExact 精确命中（应用知识库优先级链：部门包0 > 组织包1 > 行业包2 > 语言文化包3）。
 // 查询范围 = 本租户 + 租户1（行业包/语言文化包的共享宿主），按 priority 升序取最优命中。
-// 共享过滤子句：租户1 行仅限 语言文化包(全放行) + 本租户注册行业的行业包（防组织包泄漏）
-const sharedFilterSQL = "OR (tm.tenant_id=0 AND tm.priority>=2 AND EXISTS(SELECT 1 FROM kb_packages pkg WHERE pkg.id=tm.pack_id AND (pkg.pack_type='locale' OR (pkg.pack_type='industry' AND pkg.code=(SELECT industry FROM tenants WHERE id=?)))))"
+// 共享过滤子句：租户1 行仅限 语言文化包(全放行) + 本租户注册行业的行业包（防组织包泄漏）。
+// ★ 通用行业（industry='general'）聚合口径（2026-09-09 产品澄清）：通用行业 = 所有行业 KB 包之和，
+//
+//	因此 industry=general 的租户命中全部行业包（其余行业租户仍只命中本行业包）。
+const sharedFilterSQL = "OR (tm.tenant_id=0 AND tm.priority>=2 AND EXISTS(SELECT 1 FROM kb_packages pkg WHERE pkg.id=tm.pack_id AND (pkg.pack_type='locale' OR (pkg.pack_type='industry' AND (pkg.code=(SELECT industry FROM tenants WHERE id=?) OR (SELECT COALESCE(industry,'') FROM tenants WHERE id=?)='general')))))"
 
 // FindExact 精确命中查询：按原文全等匹配术语，应用知识库优先级链（部门包0 > 组织包1 > 行业包2 > 语言文化包3）。
 // 查询范围 = 本租户 + 租户1 共享过滤子句；返回最优一行（priority 最小），无命中返回 sql.ErrNoRows。

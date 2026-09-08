@@ -91,6 +91,8 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
   const [ctxNoEmail, setCtxNoEmail] = useState(false)
   // 是否个人用户租户：企业用户/平台超管不参与「邀请好友 · 多邀多得」，隐藏对应入口（2026-09）
   const [isPersonal, setIsPersonal] = useState(true)
+  // 当前用户所属租户名（企业=企业名，个人=本人姓氏；前台顶栏展示，解决「误以为在平台根」问题1）
+  const [myTenantName, setMyTenantName] = useState('')
   // 前台「上传知识库」弹窗（仅部门管理员及以上可见，复用后台 recognize→import 流程）
   const [kbUploadOpen, setKbUploadOpen] = useState(false)
   // 侧边隐藏菜单（原页脚内容收入此处，顶部汉堡按钮唤起）
@@ -109,6 +111,7 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
           const email = String((c as unknown as { email?: string }).email || '')
           setCtxNoEmail(!email) // 无邮箱 → 不可关闭的绑定弹窗（行为同 Vue 版 dismissible=false）
           setIsPersonal((c as unknown as { is_personal?: boolean }).is_personal !== false)
+          setMyTenantName(String((c as unknown as { tenant_name?: string }).tenant_name || ''))
         }
       } catch { /* ignore */ }
       try {
@@ -160,6 +163,9 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
             ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 60 }} />
             : <span style={{ fontSize: 20, fontWeight: 700 }}>🌐 {branding.brandName || t('app.title')}</span>}
         </span>
+        {user && myTenantName && (
+          <Tag theme="primary" variant="light" style={{ marginLeft: 4 }} title={myTenantName}>{myTenantName}</Tag>
+        )}
         <Button variant={tab === 'workbench' ? 'base' : 'text'} theme="primary" size="small"
                 onClick={() => switchTab('workbench')}>💬 {t('app.tabWorkbench')}</Button>
         <Button variant={tab === 'tickets' ? 'base' : 'text'} theme="primary" size="small"

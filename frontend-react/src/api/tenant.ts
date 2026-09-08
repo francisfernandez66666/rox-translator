@@ -68,7 +68,7 @@ export async function tenantUpdate(
 }
 
 /** 读取当前生效租户的「邀请好友」功能开关与租户类型（tenant_admin 及以上） */
-export async function tenantInviteEnabledGet(): Promise<{ success: boolean; invite_enabled?: boolean; is_personal?: boolean }> {
+export async function tenantInviteEnabledGet(): Promise<{ success: boolean; invite_enabled?: boolean; is_personal?: boolean; tenant_name?: string }> {
   return request('/api/tenant/invite-enabled', { headers: authHeaders() })
 }
 

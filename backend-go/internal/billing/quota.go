@@ -11,36 +11,46 @@ package billing
 // ========================================
 
 import (
+	"context"
+	"strconv"
 	"sync"
 	"time"
 
+	"translator/internal/infra/concurrency"
+	"translator/internal/infra/redis"
 	"translator/internal/store"
 )
 
-// Quota 租户配额（内存实时窗口）
+// Quota 租户配额（内存实时窗口 + Redis 全局聚合，2026-09-09 技术债①横向扩容改造）
+// 并发计数：concurrency.Semaphore（Redis 槽位/SETNX 跨实例共享；未启用 Redis 降级本地 channel）。
+// QPS 窗口：Redis 秒窗 INCR+EXPIRE（跨实例合计）；未启用 Redis 降级本地滑动窗口。
+// 上限配置（qpsMax/concurrentMax）内存驻留，由 admin 调用持久化到 system_config 后回放。
 type Quota struct {
+	id int64      // 租户 ID（并发信号量键与回收时定位用）
 	mu sync.Mutex // 保护配额字段的互斥锁
 
-	// QPS 滑动窗口（1 秒）
+	// QPS 滑动窗口（1 秒，本地兜底路径使用）
 	qpsWindow []time.Time // 近 1 秒内的时间戳窗口（用于 QPS 计数）
 	qpsMax    int         // QPS 上限（默认 10）
-	// 并发计数
-	concurrent    int // 当前并发调用数
+	// 并发信号量（Redis 或本地；并发上限变化时由 SetConcurrent 重建）
+	sem           concurrency.Semaphore
 	concurrentMax int // 并发上限（默认 3）
 }
 
-// quotaByTenant 租户 ID → 配额对象（内存缓存）
-var quotaByTenant = map[int64]*Quota{}
-// quotaMu 保护 quotaByTenant 的互斥锁（并发取配额对象时防竞态）。
-var quotaMu sync.Mutex
+// quotaByTenant 租户 ID → 配额对象（内存缓存）；quotaMu 保护 map 访问。
+var (
+	quotaByTenant = map[int64]*Quota{}
+	quotaMu       sync.Mutex
+)
 
-// getQuota 获取指定租户的配额对象（不存在则用默认上限创建）
+// getQuota 获取指定租户的配额对象（不存在则用默认上限创建）。
 func getQuota(tid int64) *Quota {
 	quotaMu.Lock()
 	defer quotaMu.Unlock()
 	q, ok := quotaByTenant[tid]
 	if !ok {
-		q = &Quota{qpsMax: 10, concurrentMax: 3}
+		q = &Quota{id: tid, qpsMax: 10, concurrentMax: 3}
+		q.sem = concurrency.New("quota:conc:"+itoa64(tid), q.concurrentMax, redis.Get())
 		quotaByTenant[tid] = q
 	}
 	return q
@@ -55,14 +65,13 @@ func SetQPS(tid int64, qps int) {
 }
 
 // setQPS 设置租户 QPS 上限（加锁写，供 SetQPS 调用）。
-// 参数 v: 目标 QPS 值；无返回。
 func (q *Quota) setQPS(v int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.qpsMax = v
 }
 
-// SetConcurrent 设置租户并发上限
+// SetConcurrent 设置租户并发上限（重建信号量以套用新容量，Redis/本地一致）
 func SetConcurrent(tid int64, n int) {
 	if n <= 0 {
 		n = 3
@@ -71,11 +80,11 @@ func SetConcurrent(tid int64, n int) {
 }
 
 // setConcurrent 设置租户并发上限（加锁写，供 SetConcurrent 调用）。
-// 参数 v: 目标并发值；无返回。
 func (q *Quota) setConcurrent(v int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.concurrentMax = v
+	q.sem = concurrency.New("quota:conc:"+itoa64(q.id), v, redis.Get())
 }
 
 // QPS 返回租户 QPS 上限（admin 读取用）
@@ -94,31 +103,53 @@ func (s *Service) Concurrent(tid int64) int {
 	return q.concurrentMax
 }
 
-// TryAcquire 尝试获取并发名额；返回是否允许继续
-func (s *Service) TryAcquire(tid int64) bool {
+// TryAcquire 尝试获取并发名额；返回 (是否允许, 释放函数)。
+// 释放函数必须被调用（往往 defer）；成功返回 (true, rel)，失败返回 (false, nil)。
+// 并发计数跨实例共享（Redis 信号量），多实例合计不超过上限。
+func (s *Service) TryAcquire(tid int64) (bool, func()) {
 	q := getQuota(tid)
 	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.concurrent >= q.concurrentMax {
-		return false
+	rel, ok := q.sem.TryAcquire()
+	q.mu.Unlock()
+	if !ok {
+		return false, nil
 	}
-	q.concurrent++
-	return true
+	return true, rel
 }
 
-// Release 释放并发名额
+// Release 释放并发名额（兼容旧签名：内部语义已由 TryAcquire 返回的闭包承担，
+// 保留此方法供历史调用方在获取失败时的安全空操作）。
 func (s *Service) Release(tid int64) {
-	q := getQuota(tid)
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.concurrent > 0 {
-		q.concurrent--
-	}
+	// 并发名额的释放由 TryAcquire 返回的闭包负责；此方法保留仅为向后兼容（空操作）。
 }
 
-// TryQPS 检查 QPS 窗口
+// TryQPS 检查 QPS 窗口（Redis 秒窗跨实例合计；未启用 Redis 降级本地滑动窗口）。
 func (s *Service) TryQPS(tid int64) bool {
 	q := getQuota(tid)
+	q.mu.Lock()
+	max := q.qpsMax
+	q.mu.Unlock()
+	if max <= 0 {
+		max = 10
+	}
+	// Redis 已启用：跨实例秒窗计数（INCR + 首次 EXPIRE 2s 防键泄漏）
+	if rdb := redis.Get(); rdb != nil {
+		epoch := time.Now().Unix()
+		key := "quota:qps:" + itoa64(tid) + ":" + itoa64(epoch)
+		n, err := rdb.Incr(context.Background(), key)
+		if err != nil {
+			return q.tryQPSSlow(max) // Redis 短暂故障 → 降级本地窗口（尽力而为）
+		}
+		if n == 1 {
+			_ = rdb.Expire(context.Background(), key, 2*time.Second)
+		}
+		return n <= int64(max)
+	}
+	return q.tryQPSSlow(max)
+}
+
+// tryQPSSlow 本地滑动窗口 QPS 判定（单实例兜底；Redis 未启用或故障时使用）。
+func (q *Quota) tryQPSSlow(max int) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	now := time.Now()
@@ -130,12 +161,15 @@ func (s *Service) TryQPS(tid int64) bool {
 		}
 	}
 	q.qpsWindow = kept
-	if len(q.qpsWindow) >= q.qpsMax {
+	if len(q.qpsWindow) >= max {
 		return false
 	}
 	q.qpsWindow = append(q.qpsWindow, now)
 	return true
 }
+
+// itoa64 int64→string 键缀（复用 strconv，避免重复实现）。
+func itoa64(v int64) string { return strconv.FormatInt(v, 10) }
 
 // Service 计费服务
 type Service struct {

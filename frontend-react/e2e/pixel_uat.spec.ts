@@ -18,7 +18,8 @@ const BASE = process.env.BASE_URL || 'http://127.0.0.1:8899';
 const shot = (p: Page, name: string) => p.screenshot({ path: `artifacts/${name}.png`, fullPage: false });
 
 // 登录态注入：API 登录拿 token → localStorage 种入（与产品实际登录态等价）
-async function login(page: Page, user = 'uatuser_a', pass = 'uatpass123') {
+// 默认测试账号：可用 UAT_USER/UAT_PASS 覆盖（不同联调库种子用户不同）
+async function login(page: Page, user = process.env.UAT_USER || 'uatuser_a', pass = process.env.UAT_PASS || 'uatpass123') {
   const res = await page.request.post(`${BASE}/api/auth/login`, { data: { username: user, password: pass } });
   const body = await res.json();
   expect(body.success, `登录失败:${JSON.stringify(body)}`).toBeTruthy();
@@ -46,11 +47,10 @@ test.describe('像素级 UAT', () => {
     await shot(page, 'p2_workbench');
   });
 
-  test('P3 自服务页渲染（余额/邀请/套餐/账号）', async ({ page }) => {
+  test('P3 自服务页渲染（余额/套餐/账号·企业 + 邀请·个人）', async ({ page }) => {
     await login(page);
     for (const [path, expectTxt, name] of [
       ['/billing', /余额|token|充值/i, 'p3_billing'],
-      ['/invites', /邀请|裂变|奖励/i, 'p3_invites'],
       ['/packages', /套餐|包|订阅/i, 'p3_packages'],
       ['/my', /账号|昵称|邮箱/i, 'p3_my'],
     ] as const) {
@@ -62,6 +62,25 @@ test.describe('像素级 UAT', () => {
       expect(overflow, `${path} 横向溢出`).toBeFalsy();
       await shot(page, name);
     }
+    // 邀请页仅个人用户可见（产品意图，2026-09 权限收口）：切个人账号（UAT_PERSONAL_USER，默认 uatuser_e；api_uat.sh B6 种入）校验渲染
+    await login(page, process.env.UAT_PERSONAL_USER || 'uatuser_e', process.env.UAT_PASS || 'uatpass123');
+    await page.goto('/invites');
+    // ReferralPanel 依赖 meContext 异步 resolve，需等待邀请内容出现（避免读快于渲染）
+    await expect(page.getByText(/邀请码|邀请链接/).first()).toBeVisible({ timeout: 15000 });
+    const txt = await page.locator('body').innerText();
+    expect(txt, '/invites(个人) 应含邀请内容').toMatch(/邀请好友|邀请码|裂变|奖励/i);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
+    expect(overflow, '/invites 横向溢出').toBeFalsy();
+    await shot(page, 'p3_invites');
+  });
+
+  test('P3-enterprise 企业用户隐藏邀请页（产品意图锁定）', async ({ page }) => {
+    await login(page);
+    await page.goto('/invites');
+    await page.waitForTimeout(400);
+    const txt = await page.locator('body').innerText();
+    expect(txt, '企业用户 /invites 不应渲染邀请面板').not.toMatch(/邀请好友 · 多邀多得|我的专属邀请码/);
+    await shot(page, 'p3_invites_hidden_enterprise');
   });
 
   test('P4 工单页与对照编辑渲染', async ({ page }) => {

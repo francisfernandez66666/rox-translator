@@ -34,13 +34,14 @@ type emailCode struct {
 	SentAt    time.Time // 发送时间（冷却判断）
 }
 
-// emailVerifyStore 邮箱验证码存储（并发安全）
+// emailVerifyStore 邮箱验证码存储（★ 2026-09-09 技术债①P1：底层改用 emailCodeStore——
+// Redis 键值 + 内存兜底跨实例共享；此结构保留历史字段与锁语义，读写委托 store）。
 type emailVerifyStore struct {
 	mu    sync.Mutex
-	codes map[string]*emailCode // key: 小写邮箱
+	codes map[string]*emailCode // key: 小写邮箱（本地镜像；跨实例一致由 emailCodeStore 保证）
 }
 
-// 全局单例：与 resetCodes 同生命周期（进程内存）
+// 全局单例：与 resetCodes 同生命周期（进程内存镜像 + Redis 共享）
 var emailCodes = &emailVerifyStore{codes: map[string]*emailCode{}}
 
 // 邮箱格式宽松校验（本地@域名，不做 TLD 强校验）
@@ -60,24 +61,37 @@ func (s *Server) sendEmailCode(ip, email string) (bool, string, bool) {
 	// 邮箱地址归一化为小写
 	key := strings.ToLower(strings.TrimSpace(email))
 	now := time.Now()
-	emailCodes.mu.Lock()
-	// 检查冷却期：60秒内不允许重发
-	if ec, ok := emailCodes.codes[key]; ok {
+	// ★ 2026-09-09 技术债①：冷却判断/写入经 vcodeGet/vcodeSet（Redis 优先，本地 map 镜像）
+	ekey := vcodeEmailKey(key)
+	// 检查冷却期：60秒内不允许重发（本地 map 读取；Redis 命中时同步镜像到本地）
+	var ec emailCode
+	if b, ok := vcodeGet(ekey); ok && json.Unmarshal(b, &ec) == nil {
 		if now.Sub(ec.SentAt) < emailCodeCooldown {
 			wait := int((emailCodeCooldown - now.Sub(ec.SentAt)).Seconds()) + 1
+			return false, fmt.Sprintf("发送过于频繁，请 %d 秒后再试", wait), false
+		}
+	} else {
+		emailCodes.mu.Lock()
+		if e, ok := emailCodes.codes[key]; ok && now.Sub(e.SentAt) < emailCodeCooldown {
+			wait := int((emailCodeCooldown - now.Sub(e.SentAt)).Seconds()) + 1
 			emailCodes.mu.Unlock()
 			return false, fmt.Sprintf("发送过于频繁，请 %d 秒后再试", wait), false
 		}
+		emailCodes.mu.Unlock()
 	}
 	// 生成6位数字验证码
 	code, err := genResetCode()
 	if err != nil {
-		emailCodes.mu.Unlock()
 		return false, "生成验证码失败", false
 	}
-	// 存储验证码：设置10分钟有效期
-	emailCodes.codes[key] = &emailCode{Code: code, ExpiresAt: now.Add(emailCodeTTL), SentAt: now}
+	// 存储验证码：设置10分钟有效期（本地 map + Redis 双写）
+	ec = emailCode{Code: code, ExpiresAt: now.Add(emailCodeTTL), SentAt: now}
+	emailCodes.mu.Lock()
+	emailCodes.codes[key] = &ec
 	emailCodes.mu.Unlock()
+	if b, e := json.Marshal(ec); e == nil {
+		vcodeSet(ekey, b, emailCodeTTL)
+	}
 
 	// 判断是否为 Noop 模式（测试环境）
 	_, isNoop := s.mailer().(*mail.NoopSender)
@@ -95,17 +109,39 @@ func (s *Server) sendEmailCode(ip, email string) (bool, string, bool) {
 // verifyEmailCode 校验并一次性消费验证码；错误尝试超限作废。
 func verifyEmailCode(email, code string) bool {
 	key := strings.ToLower(strings.TrimSpace(email))
-	emailCodes.mu.Lock()
-	defer emailCodes.mu.Unlock()
-	ec, ok := emailCodes.codes[key]
-	if !ok || ec.Attempts >= emailCodeMaxTries || time.Now().After(ec.ExpiresAt) {
+	// ★ 2026-09-09 技术债①：读优先 Redis（跨实例），未命中回退本地 map；错计双写、消费双删
+	ekey := vcodeEmailKey(key)
+	var ec emailCode
+	if b, ok := vcodeGet(ekey); ok && json.Unmarshal(b, &ec) == nil {
+		// Redis 命中即用；逻辑同下（统一走下方判定）
+	} else {
+		emailCodes.mu.Lock()
+		e, ok := emailCodes.codes[key]
+		emailCodes.mu.Unlock()
+		if ok {
+			ec = *e
+		} else {
+			return false
+		}
+	}
+	if ec.Attempts >= emailCodeMaxTries || time.Now().After(ec.ExpiresAt) {
 		return false
 	}
 	if ec.Code != strings.TrimSpace(code) {
 		ec.Attempts++
+		emailCodes.mu.Lock()
+		emailCodes.codes[key] = &ec
+		emailCodes.mu.Unlock()
+		if b, e := json.Marshal(ec); e == nil {
+			vcodeSet(ekey, b, emailCodeTTL)
+		}
 		return false
 	}
-	delete(emailCodes.codes, key) // 验证通过即消费
+	// 验证通过即消费：本地 + Redis 双删
+	emailCodes.mu.Lock()
+	delete(emailCodes.codes, key)
+	emailCodes.mu.Unlock()
+	vcodeDel(ekey)
 	return true
 }
 

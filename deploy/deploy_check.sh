@@ -2,9 +2,45 @@
 # ============================================================================
 # deploy/deploy_check.sh — 部署后验收一键检查（2026-08-26 评审整改配套）
 # 用法：./deploy/deploy_check.sh <base_url> [ADMIN_TOKEN] [METRICS_TOKEN]
+#        ./deploy/deploy_check.sh --systemd            （服务器 root 本地沙箱验收）
 # 退出码 0 = 全部通过；任何一项失败即非 0，便于部署窗口快速定位。
 # ============================================================================
 set -uo pipefail
+
+# --systemd 模式：技术债② sandbox 迁移验收（方案第二部分·四，须 root 在服务器本机执行）
+if [ "${1:-}" = "--systemd" ]; then
+  PASS=0; FAIL=0
+  ok()  { echo "  ✔ $1"; PASS=$((PASS+1)); }
+  bad() { echo "  ✖ $1"; FAIL=$((FAIL+1)); }
+  echo "==> [S1] 进程归属（须 translator，不得 root）"
+  PID=$(systemctl show -p MainPID --value translator 2>/dev/null)
+  if [ -z "$PID" ] || [ "$PID" = "0" ]; then bad "translator 服务未运行"; else
+    USER=$(ps -o user= -p "$PID" 2>/dev/null | tr -d ' ')
+    [ "$USER" = "translator" ] && ok "进程用户=$USER (PID=$PID)" || bad "进程用户=$USER（期望 translator）"
+  fi
+  echo "==> [S2] 密钥隔离（unit 无明文密钥 + secrets.env 0600）"
+  CAT=$(systemctl cat translator 2>/dev/null)
+  echo "$CAT" | grep -Eq 'JWT_SECRET=[^$]|ADMIN_TOKEN=[^$]' && bad "unit/drop-in 含明文密钥" || ok "unit 无明文密钥"
+  if [ -f /etc/translator/secrets.env ]; then
+    PERM=$(stat -c %a /etc/translator/secrets.env 2>/dev/null)
+    [ "$PERM" = "600" ] && ok "secrets.env 权限=$PERM" || bad "secrets.env 权限=$PERM（期望600）"
+    echo "$CAT" | grep -q "EnvironmentFile=/etc/translator/secrets.env" && ok "EnvironmentFile 引用正确" || bad "缺少 EnvironmentFile 引用"
+  else
+    bad "/etc/translator/secrets.env 不存在"
+  fi
+  echo "==> [S3] 沙箱生效（NoNewPrivileges / ProtectSystem）"
+  SHOW=$(systemctl show translator 2>/dev/null)
+  echo "$SHOW" | grep -q "NoNewPrivileges=yes" && ok "NoNewPrivileges=yes" || bad "NoNewPrivileges 未启用"
+  echo "$SHOW" | grep -q "ProtectSystem=full" && ok "ProtectSystem=full" || bad "ProtectSystem 未启用"
+  echo "$SHOW" | grep -q "MemoryMax=" && ok "MemoryMax 已设（$(echo "$SHOW" | grep -o 'MemoryMax=[0-9]*)')" || bad "MemoryMax 未设"
+  echo "==> [S4] 旧 drop-in 清理（concurrency/hardening/mail/mem/pdffont/secrets 不得残留）"
+  LEFTOVER=$(ls /etc/systemd/system/translator.service.d/ 2>/dev/null | grep -E '^(concurrency|hardening|mail|mem|pdffont|secrets)\.conf$')
+  if [ -z "$LEFTOVER" ]; then ok "旧 drop-in 已清理"; else bad "残留 drop-in: $LEFTOVER"; fi
+  echo ""
+  [ "$FAIL" = "0" ] && echo "✅ systemd 沙箱验收全部通过（$PASS 项）" || { echo "❌ 通过 $PASS 项 / 失败 $FAIL 项"; exit 1; }
+  exit 0
+fi
+
 BASE="${1:?用法: $0 <base_url> [ADMIN_TOKEN] [METRICS_TOKEN]}"
 ADMTOK="${2:-}"
 MTRTOK="${3:-}"
@@ -57,7 +93,7 @@ fi
 if [ "${SKIP_REGISTER:-0}" != "1" ]; then
 IND=$(curl -s --max-time 8 "$BASE/api/register/industries" | python3 -c "import sys,json;print(json.load(sys.stdin)['industries'][0]['code'])" 2>/dev/null)
 REG=$(curl -s --max-time 15 -X POST "$BASE/api/auth/register" -H 'Content-Type: application/json' \
-  -d "{\"username\":\"chk$(date +%s)\",\"password\":\"chk123456\",\"code\":\"chk$(date +%s)\",\"email\":\"chk$(date +%s)@t.com\",\"industry\":\"$IND\",\"role_choice\":\"admin\"}")
+  -d "{\"username\":\"chk$(date +%s)\",\"password\":\"chk123456\",\"code\":\"chk$(date +%s)\",\"email\":\"chk$(date +%s)@t.com\",\"industry\":\"$IND\",\"role_choice\":\"admin\",\"agreed\":true}")
 KEY=$(echo "$REG" | python3 -c "import sys,json;print(json.load(sys.stdin).get('api_key',''))" 2>/dev/null)
 if [ -n "$KEY" ]; then
   bal=$(curl -s "$BASE/openapi/v1/balance" -H "Authorization: Bearer $KEY")

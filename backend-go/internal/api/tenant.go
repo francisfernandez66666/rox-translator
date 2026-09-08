@@ -198,13 +198,15 @@ func (s *Server) handleTenantInviteEnabledGet(w http.ResponseWriter, r *http.Req
 	}
 	enabled := true
 	isPersonal := false
+	tenantName := ""
 	if tid > 0 {
 		if ten, e := s.Ten.GetByID(tid); e == nil && ten != nil {
 			enabled = ten.InviteEnabled
 			isPersonal = ten.IsPersonal
+			tenantName = ten.Name
 		}
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "invite_enabled": enabled, "is_personal": isPersonal})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "invite_enabled": enabled, "is_personal": isPersonal, "tenant_name": tenantName})
 }
 
 // handleTenantStatus 切换租户状态接口（super_admin）：启用/禁用租户。

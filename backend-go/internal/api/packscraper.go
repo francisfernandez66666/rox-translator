@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"translator/internal/crawler"
+	"translator/internal/infra/distlock"
+	"translator/internal/infra/redis"
 )
 
 // startPackScraper 启动数据采集调度器（由 startWatchdog 调用）。
@@ -30,11 +32,29 @@ func (s *Server) startPackScraper() {
 			poll = 300
 		}
 		var running int32 // 防止并发重入（单飞）
+		// ★ 横向扩容（2026-09-09 技术债①P0）：跨实例分布式锁防止多实例重复采集/重复通知。
+		//   锁 TTL 默认 30min（> 单轮采集最长），distlock 自带看门狗续期；
+		//   未启用 Redis 时降级进程内锁（单实例兼容）。采集进度本就有断点续传（多实例共享），加锁即安全。
+		lock := distlock.New("scrape:lock", redis.Get())
+		lockTTL := time.Duration(s.Store.ConfigInt("scrape_lock_ttl_sec", 1800)) * time.Second
+		if lockTTL <= 0 {
+			lockTTL = 1800 * time.Second
+		}
 		runOnce := func() {
 			if !atomic.CompareAndSwapInt32(&running, 0, 1) {
 				return
 			}
 			defer atomic.StoreInt32(&running, 0)
+			// 分布式锁：抢不到说明他实例正在采集，直接跳过本轮（非阻塞）
+			ok, release, err := lock.TryLock(context.Background(), lockTTL)
+			if err != nil {
+				log.Printf("[crawler] 采集分布式锁获取失败（跳过本轮）: %v", err)
+				return
+			}
+			if !ok {
+				return // 他实例持锁中，跳过
+			}
+			defer release()
 			if err := s.runPackScrapeOnce(); err != nil {
 				log.Printf("[crawler] 采集轮失败: %v", err)
 			}

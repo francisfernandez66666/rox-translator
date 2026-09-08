@@ -945,14 +945,27 @@ func (s *Store) ListApplicablePacks(tid int64) ([]*PackBrief, error) {
 	if tid <= 0 {
 		return []*PackBrief{}, nil
 	}
+	// 租户注册行业（空/缺省视为 general；★ 2026-09-09：general=所有行业之和，聚合展示全部行业包）
+	var industry string
+	_ = db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(industry,'') FROM tenants WHERE id=?", tid).Scan(&industry)
+	if industry == "" {
+		industry = GeneralIndustryCode
+	}
+	// ★ 2026-09-09 个人租户层级收口：个人用户 KB 层级=行业-个人（无企业/部门/跨部门层），
+	//   仅保留 tenant(个人包)/locale/行业包；企业租户保持 行业-企业-跨部门-部门 全层级。
+	var isPersonal int
+	_ = db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(is_personal,0) FROM tenants WHERE id=?", tid).Scan(&isPersonal)
 	rows, err := db.Query(s.db, db.CurrentDialect(), `
 		SELECT id, pack_type, name, COALESCE(enabled,1) FROM kb_packages
 		WHERE COALESCE(enabled,1)=1 AND (
 			tenant_id=?
 			OR pack_type='locale'
-			OR (pack_type='industry' AND code=(SELECT COALESCE(NULLIF(industry,''),'~none~') FROM tenants WHERE id=?))
-		)
-		ORDER BY CASE pack_type WHEN 'department' THEN 0 WHEN 'tenant' THEN 1 WHEN 'industry' THEN 2 ELSE 3 END, id`, tid, tid)
+			OR (pack_type='industry' AND (
+				? = 'general'
+				OR code=(SELECT COALESCE(NULLIF(industry,''),'~none~') FROM tenants WHERE id=?)
+			))
+		) AND (? = 0 OR pack_type NOT IN ('department','cross_dept'))
+		ORDER BY CASE pack_type WHEN 'department' THEN 0 WHEN 'tenant' THEN 1 WHEN 'industry' THEN 2 ELSE 3 END, id`, tid, industry, tid, isPersonal)
 	if err != nil {
 		return nil, err
 	}
@@ -1034,7 +1047,10 @@ func (s *Store) BuildPackScope(tid int64, chain []int64, allowCross bool) (*kb.P
 			// 行业包本应宿主在租户1（平台共享）；本租户自建的行业包同样纳入共享判定。
 			// ★ 2026-09-04：移除 `tid==1 全放行` 的旧规则——宿主租户（如 ROX）同样只装配
 			//   与本公司注册行业匹配的行业包，避免翻译时参考到房产/教育等无关行业术语。
-			if industry != "" && code == industry {
+			// ★ 2026-09-09 通用行业聚合：industry=general 命中所属租户全部行业包（通用=所有行业之和）。
+			if industry == GeneralIndustryCode {
+				scope.SharedPackIDs[id] = true
+			} else if industry != "" && code == industry {
 				scope.SharedPackIDs[id] = true
 			}
 		case PackLocale:
@@ -1074,7 +1090,10 @@ func (s *Store) BuildPackScope(tid int64, chain []int64, allowCross bool) (*kb.P
 		}
 		switch ptype {
 		case PackIndustry:
-			if industry != "" && code == industry {
+			// ★ 2026-09-09 通用行业聚合：industry=general 装配全部共享行业包（通用=所有行业之和）。
+			if industry == GeneralIndustryCode {
+				scope.SharedPackIDs[id] = true
+			} else if industry != "" && code == industry {
 				scope.SharedPackIDs[id] = true
 			}
 		case PackLocale:

@@ -54,11 +54,12 @@ func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 		return tid, func() {}, &apiErr{"请求过于频繁，请稍后再试"}
 	}
 	// 租户并发名额限流（获取并发名额，需在结束时归还）
-	if !s.Bill.TryAcquire(tid) {
+	ok, rl := s.Bill.TryAcquire(tid)
+	if !ok {
 		return tid, func() {}, &apiErr{"并发请求过多，请稍后再试"}
 	}
-	// 并发名额释放函数：翻译流程结束后必须调用归还
-	release := func() { s.Bill.Release(tid) }
+	// 并发名额释放闭包：翻译流程结束后必须调用归还（★ 2026-09-09 TryAcquire 返回释放闭包，配对正确）
+	release := rl
 
 	// ★ 日限额口径（评审整改 D4）：max_daily_tokens（token 成本口径）优先；
 	//   未配置时回退旧 max_daily_chars 字符口径（存量租户兼容）

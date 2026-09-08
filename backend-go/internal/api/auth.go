@@ -33,11 +33,12 @@ import (
 
 // ============ 认证 ============
 
-// 忘记密码验证码存储（内存实现；单实例部署足够）。
-// 键：用户 ID；值：验证码、过期时间与已错误尝试次数。获取验证码时自动清理过期项。
+// 忘记密码验证码存储（★ 2026-09-09 技术债①P1：Redis 键值 + 内存兜底，跨实例共享；
+// 历史为纯内存 map，重启/多实例失效——迁移到 vcodeStore 后任意实例生成的码其他实例可校验）。
+// 键：用户 ID（vcode:reset:<uid>）；值：验证码、过期时间与已错误尝试次数。获取验证码时自动清理过期项。
 var resetCodes = struct {
 	sync.Mutex
-	m map[int64]resetCode // 用户 ID → 验证码信息
+	m map[int64]resetCode // 用户 ID → 验证码信息（兼容历史直接访问；读写经 resetCodeStore 兜底同步）
 }{m: map[int64]resetCode{}}
 
 // resetCodeMaxTries 单个重置码的最大错误尝试次数（≥5 作废防爆破；对齐 email_verify 口径）。
@@ -329,10 +330,14 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "生成验证码失败"))
 		return
 	}
-	// 存储验证码（覆盖旧码，10 分钟有效）
+	// 存储验证码（覆盖旧码，10 分钟有效；★ Redis 镜像 + 本地 map 双写，跨实例共享）
+	rc := resetCode{Code: code, ExpiresAt: time.Now().Add(10 * time.Minute)}
 	resetCodes.Lock()
-	resetCodes.m[u.ID] = resetCode{Code: code, ExpiresAt: time.Now().Add(10 * time.Minute)}
+	resetCodes.m[u.ID] = rc
 	resetCodes.Unlock()
+	if b, e := json.Marshal(rc); e == nil {
+		vcodeSet(vcodeResetKey(u.ID), b, 10*time.Minute)
+	}
 	// 发送邮件（改为异步入队：SMTP 失败由队列重试/死信吸收，不阻塞用户）
 	if serr := s.sendTemplatedMail(u.Email, "reset_code", map[string]string{"code": code}); serr != nil {
 		log.Printf("[mail] 密码重置验证码入队失败 to=%s err=%v", u.Email, serr)
@@ -378,32 +383,49 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	//   ① 单次加锁内完成「读码→比对→错计/销毁」，消除旧实现两次 Lock 分离的竞态窗口；
 	//   ② 错误尝试 ≥resetCodeMaxTries(5) 即作废该码——6 位数字码若无次数限制，
 	//      攻击者可在 10 分钟有效期内脚本穷举（10^6 空间）→ 任意账号接管。
-	resetCodes.Lock()
-	rc, ok := resetCodes.m[u.ID]
-	if !ok || time.Now().After(rc.ExpiresAt) {
+	//   ★ 2026-09-09 技术债①：读取优先 Redis（跨实例共享），未命中回退本地 map；
+	//     写入/删除双端同步，保证多实例下任意实例生成的码可被其他实例校验。
+	rkey := vcodeResetKey(u.ID)
+	// 读：Redis 优先（反序列化失败/未命中回退本地 map）
+	var rc resetCode
+	found := false
+	if b, ok := vcodeGet(rkey); ok && json.Unmarshal(b, &rc) == nil {
+		found = true
+	} else {
+		resetCodes.Lock()
+		rc, ok = resetCodes.m[u.ID]
 		resetCodes.Unlock()
+		found = ok
+	}
+	if !found || time.Now().After(rc.ExpiresAt) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误或已过期"})
 		return
 	}
 	if rc.Attempts >= resetCodeMaxTries {
 		// 超限作废：直接删除该码，即使后续答对也不放行
+		resetCodes.Lock()
 		delete(resetCodes.m, u.ID)
 		resetCodes.Unlock()
+		vcodeDel(rkey)
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误次数过多，请重新获取"})
 		return
 	}
 	if rc.Code != req.Code {
 		rc.Attempts++
+		resetCodes.Lock()
 		resetCodes.m[u.ID] = rc // 回写累计错误次数
 		resetCodes.Unlock()
+		if b, e := json.Marshal(rc); e == nil {
+			vcodeSet(rkey, b, 10*time.Minute)
+		}
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误或已过期"})
 		return
 	}
-	resetCodes.Unlock()
-	// 验证通过：作废该验证码并更新密码
+	// 验证通过：作废该验证码并更新密码（本地 + Redis 双删）
 	resetCodes.Lock()
 	delete(resetCodes.m, u.ID)
 	resetCodes.Unlock()
+	vcodeDel(rkey)
 	// 更新密码
 	if err := s.Store.ResetPassword(u.ID, u.TenantID, auth.PasswordHash(req.NewPassword)); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
@@ -514,6 +536,16 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		users, err := s.Store.ListUsersByOrg(tid, orgIDs)
+		if err != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]interface{}{"success": true, "users": users})
+		return
+	}
+	// 超管平台根上下文（tid=0）：跨租户列出全部账号（与 handleOrgUsers 平台根视图一致）
+	if auth.IsSuperAdmin(u) && tid <= 0 {
+		users, err := s.Store.ListAllUsers()
 		if err != nil {
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 			return
@@ -661,8 +693,21 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.Status == "" {
 		req.Status = store.UserActive
 	}
+	// ★ 目标用户真实租户解析（问题2修复）：超管平台上下文（tid<=0）按 ID 定位用户实际归属租户，
+	//   否则 UpdateUser 以 tenant_id=0 执行 UPDATE 匹配不到目标行，角色/组织修改静默失效。
+	tid := s.effTenant(r, u)
+	if auth.IsSuperAdmin(u) && tid <= 0 {
+		if all, le := s.Store.ListAllUsers(); le == nil {
+			for _, uu := range all {
+				if uu.ID == req.ID {
+					tid = uu.TenantID
+					break
+				}
+			}
+		}
+	}
 	// 权限校验：目标用户角色检查（防越权操作超管）
-	if target, err := s.Store.GetUser(req.ID, s.effTenant(r, u)); err == nil {
+	if target, err := s.Store.GetUser(req.ID, tid); err == nil {
 		// 租户管理员不能操作超管账号
 		if auth.IsSuperAdmin(target) && !auth.IsSuperAdmin(u) {
 			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：不能操作超级管理员"})
@@ -679,7 +724,6 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	tid := s.effTenant(r, u)
 	// 部门管理员范围：目标用户必须在本部门及子部门树内
 	if auth.RoleLevel(u.Role) == 2 {
 		if u.OrgID <= 0 {
@@ -767,6 +811,17 @@ func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Req
 		return
 	}
 	tid := s.effTenant(r, u)
+	// ★ 平台上下文（tid=0）下按用户实际归属租户定位（问题2修复：否则 ResetPassword 以 tenant_id=0 匹配不到）
+	if auth.IsSuperAdmin(u) && tid <= 0 {
+		if all, le := s.Store.ListAllUsers(); le == nil {
+			for _, uu := range all {
+				if uu.ID == req.ID {
+					tid = uu.TenantID
+					break
+				}
+			}
+		}
+	}
 	// 权限校验：非超管不能重置超管密码（防越权）
 	if target, err := s.Store.GetUser(req.ID, tid); err == nil && auth.IsSuperAdmin(target) && !auth.IsSuperAdmin(u) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：不能操作超级管理员"})

@@ -141,6 +141,24 @@ func (c *Client) SetNX(ctx context.Context, key, val string, ttl time.Duration) 
 	return ok, e
 }
 
+// Set 无条件写入字符串（覆盖旧值；ttl>0 时带过期）。
+func (c *Client) Set(ctx context.Context, key, val string, ttl time.Duration) error {
+	cc, err := c.get()
+	if err != nil {
+		return err
+	}
+	defer c.put(cc)
+	return cc.do(ctx, func(r *bufio.Reader) error {
+		if ttl > 0 {
+			return cc.writeCmd("SET", key, val, "PX", strconv.FormatInt(ttl.Milliseconds(), 10))
+		}
+		return cc.writeCmd("SET", key, val)
+	}, func(r *bufio.Reader) error {
+		_, err := cc.readReply()
+		return err
+	})
+}
+
 // Get 读取字符串（未命中返回 ""）。
 func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	cc, err := c.get()

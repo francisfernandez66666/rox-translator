@@ -319,6 +319,35 @@ func TestScopeHostTenantIndustryFilter(t *testing.T) {
 	}
 }
 
+// TestScopeGeneralIndustryAggregation 通用行业聚合（2026-09-09 产品澄清）：
+// industry=general 的租户可见全部平台行业包（通用=所有行业之和），其余行业租户仍只可见本行业包。
+func TestScopeGeneralIndustryAggregation(t *testing.T) {
+	env := newScopeEnv(t)
+	// 通用行业租户100（注册行业 general）
+	if _, err := env.st.db.Exec("INSERT OR IGNORE INTO tenants (id, code, name, status, industry) VALUES (100,'gen100','通用租户','active','general')"); err != nil {
+		t.Fatalf("种子租户失败: %v", err)
+	}
+	chain, _ := env.st.OrgAncestorIDs(100, 0)
+	scope, err := env.st.BuildPackScope(100, chain, true)
+	if err != nil {
+		t.Fatalf("BuildPackScope(通用租户) 失败: %v", err)
+	}
+	findGen := func(zh string) bool {
+		r, _, e := env.kdb.FindExactScoped(zh, 100, scope)
+		return e == nil && r != nil
+	}
+	// 通用租户：非本行业包（med-ind）也须可见（聚合口径）
+	if !findGen("医疗专用句") {
+		t.Fatal("通用行业租户应见跨行业包（med-ind），通用=所有行业之和")
+	}
+	if !findGen("行业通用句") {
+		t.Fatal("通用行业租户应见本行业通用包（general）")
+	}
+	if !findGen("文化习惯句") {
+		t.Fatal("通用行业租户应见文化包")
+	}
+}
+
 // TestScopeMoveOrg 移动部门后继承随之变化：
 // 把 C 挂到 D 之下 → D 进入 C 的祖先链，其包从「跨部门回退」转为「链内可见」。
 func TestScopeMoveOrg(t *testing.T) {
