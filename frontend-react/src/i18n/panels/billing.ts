@@ -81,6 +81,9 @@ export const zh: Record<string, string> = {
   'billing.noPlans': '暂无可订阅套餐',
   'billing.confirmSubscribe': '确认订阅「{name}」（{p} 元）？',
   'billing.subscribeDone': '订阅成功，句数已发放（付费包需超管确认到账）',
+  // ---- 套餐升级 ----
+  'billing.upgradeConfirm': '确认从「{cur}」升级到「{next}」？旧套餐剩余价值将按比例抵扣新套餐应付金额，新套餐即时生效。',
+  'billing.upgradeCredit': '旧套餐已抵扣 ¥{money}，剩余应付请完成支付',
   'billing.payModeAuto': '按系统模式（{mode}）',
   'billing.chSdk': 'SDK 在线支付',
   'billing.chStaticQR': '静态码支付（人工确认）',
@@ -177,6 +180,9 @@ export const en: Record<string, string> = {
   'billing.noPlans': 'No plans available',
   'billing.confirmSubscribe': 'Subscribe to "{name}" ({p} CNY)?',
   'billing.subscribeDone': 'Subscribed. Sentences granted (paid packages need admin confirmation)',
+  // ---- 套餐升级 ----
+  'billing.upgradeConfirm': 'Upgrade from "{cur}" to "{next}"? The remaining value of the current plan will be credited toward the new plan, effective immediately.',
+  'billing.upgradeCredit': 'Credited ¥{money} from current plan. Please complete payment for the remainder.',
   'billing.payModeAuto': 'System mode ({mode})',
   'billing.chSdk': 'SDK online pay',
   'billing.chStaticQR': 'Static QR (manual confirm)',

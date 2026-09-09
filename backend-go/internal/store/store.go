@@ -554,6 +554,9 @@ var columnAdditions = []colDef{
 	{"orders", "manual_confirm", "ALTER TABLE orders ADD COLUMN manual_confirm INTEGER NOT NULL DEFAULT 0"},
 	// ★ 整改 B3：部分退款实退金额（比例折算口径），审计与对账依据
 	{"orders", "refund_money", "ALTER TABLE orders ADD COLUMN refund_money REAL NOT NULL DEFAULT 0"},
+	// ★ 套餐升级（2026-09-09）：升级来源订单（0=非升级单）与旧包抵扣金额（元，冲抵新包应付）
+	{"orders", "upgrade_from_order", "ALTER TABLE orders ADD COLUMN upgrade_from_order INTEGER NOT NULL DEFAULT 0"},
+	{"orders", "credit_money", "ALTER TABLE orders ADD COLUMN credit_money REAL NOT NULL DEFAULT 0"},
 	// 知识库包归属部门（0=租户级；部门管理员创建部门包时挂本部门）
 	{"kb_packages", "org_id", "ALTER TABLE kb_packages ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
 	// ★ 跨部门共享开关（2026-08-26 KB继承链改造）：1=愿意参与跨部门降级检索（默认），

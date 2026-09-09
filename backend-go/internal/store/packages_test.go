@@ -210,3 +210,121 @@ func TestPackageOrderManualConfirm(t *testing.T) {
 		t.Fatalf("已确认订单仍出现在待确认列表")
 	}
 }
+
+// TestPackageUpgrade 套餐升级全链路（2026-09-09）：
+// 旧付费包订阅并消耗部分 token → 升级到更高价付费包：
+//
+//	① ComputeUpgradeCredit 按旧包剩余台账折算抵扣；
+//	② CreateUpgradeOrder 应付 = 新价 − 抵扣；
+//	③ MarkOrderPaid 升级分流：旧包剩余台账作废 + 等价转入新台账、新包即时生效。
+func TestPackageUpgrade(t *testing.T) {
+	s := newTestStoreWithTenants(t)
+	if err := s.EnsureBalance(1); err != nil {
+		t.Fatalf("EnsureBalance 失败: %v", err)
+	}
+	// 两个付费包：低价 old、高价 new
+	oldPkg, _ := s.CreatePackage(&Package{Code: "paid500", Name: "包月 500 句", PType: PackagePaid, Sentences: 500, PriceMoney: 99, DurationDays: 30})
+	newPkg, _ := s.CreatePackage(&Package{Code: "paid2000", Name: "包月 2000 句", PType: PackagePaid, Sentences: 2000, PriceMoney: 299, DurationDays: 30})
+
+	// ① 先订阅低价包（mock 渠道自动到账）
+	o1, err := s.CreatePackageOrder(1, oldPkg, 1, "mock")
+	if err != nil {
+		t.Fatalf("CreatePackageOrder 失败: %v", err)
+	}
+	if err := s.MarkOrderPaid(o1.ID, 1); err != nil {
+		t.Fatalf("MarkOrderPaid 旧包失败: %v", err)
+	}
+	oldTokens := int64(float64(oldPkg.Sentences*s.TokenSentenceRate()) * s.MarkupMultiplier())
+	if g := s.SumActiveGrants(1); g != oldTokens {
+		t.Fatalf("订阅后台账应为 %d，实际 %d", oldTokens, g)
+	}
+	perms, _ := s.GetTenantPerms(1)
+	if perms.PackageCode != "paid500" {
+		t.Fatalf("订阅后包编码应为 paid500，实际 %q", perms.PackageCode)
+	}
+
+	// ② 消耗部分旧包 token（模拟用量）
+	consumed := oldTokens / 4
+	if err := s.DeductWithGrants(1, consumed); err != nil {
+		t.Fatalf("DeductWithGrants 失败: %v", err)
+	}
+	remain := s.SumActiveGrants(1)
+	if remain != oldTokens-consumed {
+		t.Fatalf("消耗后剩余台账应为 %d，实际 %d", oldTokens-consumed, remain)
+	}
+
+	// ③ 计算升级抵扣：应退 = 旧包实付 × 剩余率
+	credit, err := s.ComputeUpgradeCredit(1, newPkg)
+	if err != nil {
+		t.Fatalf("ComputeUpgradeCredit 失败: %v", err)
+	}
+	wantCredit := float64(int(oldPkg.PriceMoney*float64(remain)/float64(oldTokens)*100+0.5)) / 100.0
+	if credit.CreditMoney != wantCredit {
+		t.Fatalf("抵扣金额应为 %.2f，实际 %.2f", wantCredit, credit.CreditMoney)
+	}
+	if credit.OldOrderID != o1.ID {
+		t.Fatalf("升级来源订单应为 %d，实际 %d", o1.ID, credit.OldOrderID)
+	}
+
+	// ④ 创建升级订单：应付 = 新价 − 抵扣
+	up, err := s.CreateUpgradeOrder(1, newPkg, credit, 1, "mock")
+	if err != nil {
+		t.Fatalf("CreateUpgradeOrder 失败: %v", err)
+	}
+	if up.AmountMoney != newPkg.PriceMoney-credit.CreditMoney {
+		t.Fatalf("升级订单应付应为 %.2f，实际 %.2f", newPkg.PriceMoney-credit.CreditMoney, up.AmountMoney)
+	}
+	if up.UpgradeFromOrder != o1.ID {
+		t.Fatalf("升级订单来源应关联旧订单 %d，实际 %d", o1.ID, up.UpgradeFromOrder)
+	}
+
+	// ⑤ 支付升级订单：旧包剩余台账作废 + 等价转入新台账
+	if err := s.MarkOrderPaid(up.ID, 1); err != nil {
+		t.Fatalf("MarkOrderPaid 升级失败: %v", err)
+	}
+	// 旧台账作废（ref_id=旧订单 的 plan 台账 left 归零）
+	var zeroed int64
+	s.db.QueryRow("SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=1 AND source='order' AND ref_id=? AND kind='plan'", o1.ID).Scan(&zeroed)
+	if zeroed != 0 {
+		t.Fatalf("旧包台账应作废为 0，实际 %d", zeroed)
+	}
+	// 新台账 = 新包 token + 旧包剩余（等价转入）
+	newTokens := int64(float64(newPkg.Sentences*s.TokenSentenceRate()) * s.MarkupMultiplier())
+	if g := s.SumActiveGrants(1); g != newTokens+remain {
+		t.Fatalf("升级后总台账应为新包 %d + 旧剩 %d = %d，实际 %d", newTokens, remain, newTokens+remain, g)
+	}
+	// 新包即时生效：PackageCode 换新
+	perms2, _ := s.GetTenantPerms(1)
+	if perms2.PackageCode != "paid2000" {
+		t.Fatalf("升级后包编码应为 paid2000，实际 %q", perms2.PackageCode)
+	}
+}
+
+// TestPackageUpgradeRejections 升级边界：无订阅/相同包/非付费目标应拒绝。
+func TestPackageUpgradeRejections(t *testing.T) {
+	s := newTestStoreWithTenants(t)
+	if err := s.EnsureBalance(1); err != nil {
+		t.Fatalf("EnsureBalance 失败: %v", err)
+	}
+	oldPkg, _ := s.CreatePackage(&Package{Code: "paid500", Name: "包月 500 句", PType: PackagePaid, Sentences: 500, PriceMoney: 99, DurationDays: 30})
+	newPkg, _ := s.CreatePackage(&Package{Code: "paid2000", Name: "包月 2000 句", PType: PackagePaid, Sentences: 2000, PriceMoney: 299, DurationDays: 30})
+	inc, _ := s.CreatePackage(&Package{Code: "inc500", Name: "增量 500 句", PType: PackageIncrement, Sentences: 500, PriceMoney: 50})
+
+	// 未订阅 → 拒绝
+	if _, err := s.ComputeUpgradeCredit(1, newPkg); err == nil {
+		t.Fatal("无订阅应拒绝升级")
+	}
+	// 先订阅低价包
+	o1, _ := s.CreatePackageOrder(1, oldPkg, 1, "mock")
+	if err := s.MarkOrderPaid(o1.ID, 1); err != nil {
+		t.Fatalf("MarkOrderPaid 失败: %v", err)
+	}
+	// 同包 → 拒绝
+	if _, err := s.ComputeUpgradeCredit(1, oldPkg); err == nil {
+		t.Fatal("同包不应允许升级")
+	}
+	// 目标为增量包 → 拒绝
+	if _, err := s.ComputeUpgradeCredit(1, inc); err == nil {
+		t.Fatal("非付费目标应拒绝升级")
+	}
+}

@@ -13,7 +13,7 @@ import {
   billingQuota, billingQuotaSave,
   billingOrders, billingInvoices, billingInvoiceCreate,
   payCreate, payStatus, paySimulate, payManualConfirm, manualConfirmOrders, adminOrderPay,
-  plans as apiPlans, myPackage, packageSubscribe,
+  plans as apiPlans, myPackage, packageSubscribe, packageUpgrade,
   adminPackages, adminPackageCreate, adminPackageUpdate, adminPackageDelete,
   adminPackageSettings, adminPackageSettingsSave, adminQRUpload,
   referralMy, fetchReferralQrBlob,
@@ -173,6 +173,23 @@ export function PlansP() {
     if (o) { setOrder(o); setShowCheckout(true); if (o.channel !== 'manual') startPolling() }
     await loadPackage()
   }
+  // 升级套餐：旧包剩余价值按比例抵扣新包应付；确认后创建升级订单进入收银台
+  async function upgrade(pl: Any) {
+    const cur = pkg.package_code as string
+    const ok = await confirmDialog({
+      header: t('plans.upgradeTitle'),
+      body: tpl('billing.upgradeConfirm', { cur: cur || '', next: pl.name || pl.code }),
+      confirmText: t('billing.subscribeNow'),
+    })
+    if (!ok) return
+    const r: Any = await packageUpgrade(String(pl.code))
+    if (!toastResp(r)) return
+    // 抵扣金额提示（若后端返回）
+    if (r.credit_money > 0) void MessagePlugin.success(tpl('billing.upgradeCredit', { money: r.credit_money }))
+    const o = r.order as Any
+    if (o) { setOrder(o); setShowCheckout(true); if (o.channel !== 'manual') startPolling() }
+    await loadPackage()
+  }
   // 打开充值收银台：创建订单并进入支付流程
   async function openCheckout() {
     if (Number(chForm.tokens) <= 0) return
@@ -324,6 +341,12 @@ export function PlansP() {
     { type: 'paid', title: t('plans.groupPaid'), items: planList.filter((p) => p.ptype === 'paid') },
     { type: 'increment', title: t('plans.groupIncrement'), items: planList.filter((p) => p.ptype === 'increment') },
   ]
+  // ★ 套餐升级判定（2026-09-09）：当前有生效付费包（package_code 非空）
+  //   且目标付费包售价 > 当前包售价 → 视为升级（按钮显示「升级」走 upgrade 流程）。
+  //   当前包售价从 planList 中按 code 匹配（后端 /api/plans 返回上架付费包含 price_money）。
+  const curPlan = planList.find((p) => p.ptype === 'paid' && p.code === (pkg.package_code as string))
+  const isUpgradePlan = (pl: Any): boolean =>
+    !!curPlan && pl.ptype === 'paid' && Number(pl.price_money) > Number(curPlan.price_money)
   const chOptions = [
     { label: tpl('billing.payModeAuto', { mode: payModeLabel }), value: 'auto' },
     ...(payMode === 'static_qr' ? [{ label: t('billing.chStaticQR'), value: 'manual' }] : []),
@@ -388,7 +411,11 @@ export function PlansP() {
                       <li>{tpl('billing.pkgSentences', { n: pl.sentences })}</li>
                       <li>{t('packages.type.' + pl.ptype)}</li>
                     </ul>
-                    <Button theme="success" onClick={() => subscribe(pl)}>{t('billing.subscribeNow')}</Button>
+                    <Button theme="success" onClick={() => {
+                      // ★ 套餐升级入口：目标为付费包、且目标价 > 当前生效付费包价 → 显示升级按钮
+                      if (isUpgradePlan(pl)) upgrade(pl)
+                      else subscribe(pl)
+                    }}>{isUpgradePlan(pl) ? t('plans.upgrade') : t('billing.subscribeNow')}</Button>
                   </div>
                 ))}
                 {!g.items.length && <div style={{ color: '#999', fontSize: 13 }}>{t('billing.noPlans')}</div>}

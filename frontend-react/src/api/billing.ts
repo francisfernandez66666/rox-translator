@@ -135,6 +135,11 @@ export async function packageSubscribe(code: string): Promise<AdminResp> {
   return request('/api/package/subscribe', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ code }) })
 }
 
+/** 套餐升级（付费包→更高价付费包）：旧包剩余价值按比例抵扣新包应付，新包即时生效 */
+export async function packageUpgrade(code: string): Promise<AdminResp> {
+  return request('/api/package/upgrade', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ code }) })
+}
+
 // ==================== 商业包管理（super_admin） ====================
 
 /** 列出全部商业包（含下架） */

@@ -384,6 +384,7 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/admin/tm-review/reject", s.handleTmReviewReject)
 	s.mux.HandleFunc("/api/admin/tm-review/adopt", s.handleTmReviewAdopt)
 	s.mux.HandleFunc("/api/package/subscribe", s.handlePackageSubscribe)
+	s.mux.HandleFunc("/api/package/upgrade", s.handlePackageUpgrade)
 	s.mux.HandleFunc("/api/admin/packages", s.handleAdminPackages)
 	s.mux.HandleFunc("/api/admin/packages/create", s.handleAdminPackageCreate)
 	s.mux.HandleFunc("/api/admin/packages/update", s.handleAdminPackageUpdate)

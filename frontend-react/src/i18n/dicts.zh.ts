@@ -395,6 +395,8 @@ export const baseZh: Record<string,string> = {
   'plans.expiresAt': '到期时间',
   'plans.groupPaid': '包月订阅（t+30 滚动额度）',
   'plans.groupIncrement': '充值包（永久有效）',
+  'plans.upgrade': '升级',
+  'plans.upgradeTitle': '套餐升级',
   'plans.exhaustedHint': '⚠️ 额度已用尽。请购买月租套餐（订阅每月滚动额度）或充值永久 token，即可继续翻译。',
   'plans.goSubscribe': '选购月租套餐',
   'plans.goTopup': '充值永久 token',

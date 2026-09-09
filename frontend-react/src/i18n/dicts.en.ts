@@ -395,6 +395,8 @@ export const baseEn: Record<string,string> = {
   'plans.expiresAt': 'Expires',
   'plans.groupPaid': 'Monthly subscription (t+30 rolling)',
   'plans.groupIncrement': 'Top-up packs (never expire)',
+  'plans.upgrade': 'Upgrade',
+  'plans.upgradeTitle': 'Package Upgrade',
   'plans.exhaustedHint': '⚠️ Quota exhausted. Subscribe to a monthly plan (rolling quota) or top up permanent tokens to continue translating.',
   'plans.goSubscribe': 'Buy a monthly plan',
   'plans.goTopup': 'Top up permanent tokens',

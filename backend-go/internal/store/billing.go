@@ -85,10 +85,13 @@ type Order struct {
 	CreatedBy     int64   `json:"created_by"`     // 创建订单的用户 ID
 	CreatedAt     string  `json:"created_at"`     // 创建时间（RFC3339 字符串）
 	PaidAt        string  `json:"paid_at"`        // 支付确认时间（空表示未支付）
+	// ★ 套餐升级（2026-09-09）：升级来源订单 ID（0=非升级单）与旧包抵扣金额（元，冲抵新包应付）
+	UpgradeFromOrder int64   `json:"upgrade_from_order"` // 升级来源订单 ID（0=非升级单）
+	CreditMoney      float64 `json:"credit_money"`       // 旧包按剩余价值折算的抵扣金额（元）
 }
 
 // orderCols 订单表查询列清单（统一使用，避免遗漏新增列）
-const orderCols = "id, tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, prepay_id, qr_content, package_id, manual_confirm, created_by, created_at, COALESCE(paid_at,'')"
+const orderCols = "id, tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, prepay_id, qr_content, package_id, manual_confirm, created_by, created_at, COALESCE(paid_at,''), upgrade_from_order, COALESCE(credit_money,0)"
 
 // ============ 余额 ============
 
@@ -559,7 +562,8 @@ func usageDatePred(from, to string) (string, []interface{}) {
 // （YYYY-MM-DD；均空=全部时间，仅给一个视同单日/单边）。
 // 返回：map[用户ID]=费用；并携带 users 明细（在 API 层组装，此处仅聚合费用）。
 // ★ 2026-09-05 修复：不再过滤 l.user_id>0——系统/未登录任务（user_id=0）的用量也归入区间口径，
-//   否则仅含后台任务的日期（如全站批量 LLM 调用）按日查询恒为 0。user_id=0 由 API 层单独归一行。
+//
+//	否则仅含后台任务的日期（如全站批量 LLM 调用）按日查询恒为 0。user_id=0 由 API 层单独归一行。
 func (s *Store) UsageByOrg(tid int64, orgIDs []int64, from, to string) (map[int64]int64, error) {
 	out := map[int64]int64{}
 	// 基础 FROM：仅 usage_ledger 自身
@@ -674,12 +678,107 @@ func (s *Store) CreatePackageOrder(tid int64, pkg *Package, createdBy int64, cha
 	return s.GetOrderByOrderNo(orderNo, tid)
 }
 
+// UpgradeCredit 套餐升级抵扣结算结果：旧包剩余价值折算的抵扣金额与旧包剩余台账 token。
+type UpgradeCredit struct {
+	OldOrderID   int64   // 升级来源订单 ID
+	CreditMoney  float64 // 抵扣金额（元）= 旧订单实付 × 旧包剩余率
+	RemainTokens int64   // 旧包剩余台账 token（作废后等价转入新包）
+}
+
+// ComputeUpgradeCredit 计算套餐升级抵扣：找租户当前生效付费订阅的最近一笔已支付订单，
+// 按该订单剩余台账（quota_grants kind='plan'）折算剩余率 → 抵扣金额与剩余 token。
+// 仅支持付费包（paid）升级：订阅单的剩余台账能精确核算（source='order' 关联订单）。
+// ★ 校验：目标包售价必须高于当前包售价（更高才叫升级；持平/更低应走普通订阅）。
+// 参数：tid=租户 ID，newPkg=目标升级包；返回抵扣结算（无有效订阅/非升级关系则返回错误）。
+// ★ 2026-09-09 套餐升级：原包剩余价值按 token 台账比例退、新包即时生效、剩余额度等价转入新包。
+func (s *Store) ComputeUpgradeCredit(tid int64, newPkg *Package) (*UpgradeCredit, error) {
+	// ① 当前生效付费订阅（PackageCode 非空，最近一笔已支付订单）
+	perms, err := s.GetTenantPerms(tid)
+	if err != nil {
+		return nil, err
+	}
+	if perms.PackageCode == "" {
+		return nil, &errTxt{"当前无生效套餐，无法升级"}
+	}
+	// 目标不能是自己（换个包升级才有意义）
+	if perms.PackageCode == newPkg.Code {
+		return nil, &errTxt{"目标套餐与当前套餐相同，无需升级"}
+	}
+	curPkg, err := s.GetPackageByCode(tid, perms.PackageCode)
+	if err != nil {
+		return nil, &errTxt{"当前套餐不存在"}
+	}
+	if curPkg.PType != PackagePaid {
+		return nil, &errTxt{"仅付费包支持升级"}
+	}
+	// ★ 新包售价必须高于当前包（否则不是升级）
+	if newPkg.PriceMoney <= curPkg.PriceMoney {
+		return nil, &errTxt{"目标套餐价格应高于当前套餐才能升级"}
+	}
+	// ② 找最近一笔该包已支付订单
+	var oldID int64
+	if err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT id FROM orders WHERE tenant_id=? AND package_id=? AND status='paid' ORDER BY id DESC LIMIT 1",
+		tid, curPkg.ID).Scan(&oldID); err != nil {
+		return nil, &errTxt{"未找到当前套餐的已支付订单"}
+	}
+	oldOrder, err := s.GetOrder(oldID, tid)
+	if err != nil {
+		return nil, err
+	}
+	// ③ 剩余台账 token（精确）
+	var remain int64
+	if err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND \"left\">0",
+		tid, oldID).Scan(&remain); err != nil {
+		return nil, err
+	}
+	granted := oldOrder.AmountTokens
+	if granted <= 0 {
+		return nil, &errTxt{"当前套餐订单 token 口径异常，无法核算抵扣"}
+	}
+	// ④ 剩余率 → 抵扣金额
+	ratio := float64(remain) / float64(granted)
+	if ratio > 1 {
+		ratio = 1
+	}
+	if ratio <= 0 {
+		return nil, &errTxt{"当前套餐已无剩余价值，无法抵扣升级"}
+	}
+	credit := float64(int(oldOrder.AmountMoney*ratio*100+0.5)) / 100.0
+	return &UpgradeCredit{OldOrderID: oldID, CreditMoney: credit, RemainTokens: remain}, nil
+}
+
+// CreateUpgradeOrder 创建套餐升级订单（付费包→更高价付费包）：
+// 金额 = 新包售价 − 旧包抵扣（≥0），记录 upgrade_from_order / credit_money，
+// 支付确认时由 MarkOrderPaid 作废旧包剩余台账并等价转入新包台账。
+// 参数：tid=租户 ID，pkg=目标升级包，credit=抵扣结算，createdBy=创建者 ID，channel=支付渠道。
+// 返回：新订单对象（初始 pending）。
+func (s *Store) CreateUpgradeOrder(tid int64, pkg *Package, credit *UpgradeCredit, createdBy int64, channel string) (*Order, error) {
+	orderNo := fmt.Sprintf("T%d-RO%s%s", tid, time.Now().Format("20060102150405"), randSuffix(4))
+	tokenAmt := int64(float64(pkg.Sentences*s.TokenSentenceRate()) * s.MarkupMultiplier())
+	if tokenAmt < 0 {
+		tokenAmt = 0
+	}
+	pay := pkg.PriceMoney - credit.CreditMoney
+	if pay < 0 {
+		pay = 0
+	}
+	_, err := db.Exec(s.db, db.CurrentDialect(),
+		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, qr_content, package_id, created_by, created_at, upgrade_from_order, credit_money) VALUES (?,?,?,?, 'pending', 'online', ?, '', ?, ?, ?, ?, ?)",
+		tid, orderNo, tokenAmt, pay, channel, pkg.ID, createdBy, time.Now().Format(time.RFC3339), credit.OldOrderID, credit.CreditMoney)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetOrderByOrderNo(orderNo, tid)
+}
+
 // GetOrderByOrderNo 按订单号查询订单（回调对账用，租户隔离校验）。
 // 参数：orderNo=订单号，tid=租户 ID；返回订单对象。
 func (s *Store) GetOrderByOrderNo(orderNo string, tid int64) (*Order, error) {
 	var o Order
 	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+orderCols+" FROM orders WHERE order_no=? AND tenant_id=?", orderNo, tid).
-		Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.PackageID, &o.ManualConfirm, &o.CreatedBy, &o.CreatedAt, &o.PaidAt)
+		Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.PackageID, &o.ManualConfirm, &o.CreatedBy, &o.CreatedAt, &o.PaidAt, &o.UpgradeFromOrder, &o.CreditMoney)
 	if err != nil {
 		return nil, err
 	}
@@ -691,7 +790,7 @@ func (s *Store) GetOrderByOrderNo(orderNo string, tid int64) (*Order, error) {
 func (s *Store) GetOrder(id, tid int64) (*Order, error) {
 	var o Order
 	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+orderCols+" FROM orders WHERE id=? AND tenant_id=?", id, tid).
-		Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.PackageID, &o.ManualConfirm, &o.CreatedBy, &o.CreatedAt, &o.PaidAt)
+		Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.PackageID, &o.ManualConfirm, &o.CreatedBy, &o.CreatedAt, &o.PaidAt, &o.UpgradeFromOrder, &o.CreditMoney)
 	if err != nil {
 		return nil, err
 	}
@@ -719,7 +818,7 @@ func scanOrders(rows *sql.Rows, err error) ([]*Order, error) {
 	var out []*Order
 	for rows.Next() {
 		var o Order
-		if err := rows.Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.PackageID, &o.ManualConfirm, &o.CreatedBy, &o.CreatedAt, &o.PaidAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.PackageID, &o.ManualConfirm, &o.CreatedBy, &o.CreatedAt, &o.PaidAt, &o.UpgradeFromOrder, &o.CreditMoney); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &o)
@@ -852,11 +951,11 @@ func applyIncrementMirrorTx(tx *sql.Tx, tid int64, sentences int64) error {
 func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 	nowStr := time.Now().Format(time.RFC3339)
 	// ① 事务外预读（失败不产生任何写副作用）
-	var tokens, pkgID, createdBy int64
+	var tokens, pkgID, createdBy, upgradeFrom int64
 	var money float64
 	if err := db.QueryRow(s.db, db.CurrentDialect(),
-		"SELECT amount_tokens, package_id, COALESCE(created_by,0), COALESCE(amount_money,0) FROM orders WHERE id=? AND tenant_id=?",
-		orderID, tid).Scan(&tokens, &pkgID, &createdBy, &money); err != nil {
+		"SELECT amount_tokens, package_id, COALESCE(created_by,0), COALESCE(amount_money,0), COALESCE(upgrade_from_order,0) FROM orders WHERE id=? AND tenant_id=?",
+		orderID, tid).Scan(&tokens, &pkgID, &createdBy, &money, &upgradeFrom); err != nil {
 		return &errTxt{"订单不存在"}
 	}
 	sentenceRate := s.TokenSentenceRate()
@@ -915,6 +1014,45 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		// 纯充值单：token 入永久余额
 		if err := chargePermanentTx(tx, tid, tokens); err != nil {
 			return err
+		}
+	case pType == "paid" && upgradeFrom > 0:
+		// ★ 套餐升级（2026-09-09）：旧付费包作废 + 新付费包即时生效。
+		//   ① 作废旧包剩余台账（source='order' AND ref_id=旧订单 → left=0）；
+		//   ② 旧包剩余 token 等价转入新台账（新台账 total = 新包 token + 旧包剩余）；
+		//   ③ 订阅身份覆盖为新包（PackageCode/SubscribedAt/PackageExpires 从今天重算）。
+		//   旧包按剩余价值的抵扣已在创建订单时冲抵新包应付（credit_money），此处仅作废权益转移额度。
+		oldRemain := int64(0)
+		if err := db.QueryRow(tx, db.CurrentDialect(),
+			"SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND \"left\">0",
+			tid, upgradeFrom).Scan(&oldRemain); err != nil {
+			return err
+		}
+		// 作废旧包剩余台账（并发安全：同一事务内条件置零）
+		if _, err := db.Exec(tx, db.CurrentDialect(),
+			"UPDATE quota_grants SET \"left\"=0 WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan' AND \"left\">0",
+			tid, upgradeFrom); err != nil {
+			return err
+		}
+		perms, gerr := getTenantPermsTx(tx, tid)
+		if gerr != nil {
+			return gerr
+		}
+		perms.PackageCode = pkgCode
+		perms.SubscribedAt = nowStr
+		perms.SentenceBalance += pkgSentences
+		if pkgDays > 0 {
+			perms.PackageExpires = time.Now().AddDate(0, 0, pkgDays).Format(time.RFC3339)
+		} else {
+			perms.PackageExpires = ""
+		}
+		perms.NotifiedExp7 = false
+		perms.NotifiedExp1 = false
+		if serr := saveTenantPermsTx(tx, tid, perms); serr != nil {
+			return serr
+		}
+		// 新台账：新包 token + 旧包剩余 token 等价并入（新包到期一致）
+		if cerr := createQuotaGrantTx(tx, tid, "plan", pkgTokens+oldRemain, time.Now().Add(30*24*time.Hour), "order", orderID); cerr != nil {
+			return cerr
 		}
 	case pType == "paid":
 		// ★ 订阅付费包（白皮书 §4.1）：订阅身份+句数镜像照常落租户权限（不含 token 入余额），
@@ -1012,7 +1150,7 @@ func (s *Store) ListManualConfirmOrders() ([]*Order, error) {
 	var out []*Order
 	for rows.Next() {
 		var o Order
-		if err := rows.Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.PackageID, &o.ManualConfirm, &o.CreatedBy, &o.CreatedAt, &o.PaidAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.PackageID, &o.ManualConfirm, &o.CreatedBy, &o.CreatedAt, &o.PaidAt, &o.UpgradeFromOrder, &o.CreditMoney); err != nil {
 			continue
 		}
 		out = append(out, &o)
@@ -1025,7 +1163,7 @@ func (s *Store) ListManualConfirmOrders() ([]*Order, error) {
 func (s *Store) FindOrderByOrderNo(orderNo string) (*Order, error) {
 	var o Order
 	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+orderCols+" FROM orders WHERE order_no=? LIMIT 1", orderNo).
-		Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.PackageID, &o.ManualConfirm, &o.CreatedBy, &o.CreatedAt, &o.PaidAt)
+		Scan(&o.ID, &o.TenantID, &o.OrderNo, &o.AmountTokens, &o.AmountMoney, &o.Status, &o.PayMethod, &o.Channel, &o.PrepayID, &o.QRContent, &o.PackageID, &o.ManualConfirm, &o.CreatedBy, &o.CreatedAt, &o.PaidAt, &o.UpgradeFromOrder, &o.CreditMoney)
 	if err != nil {
 		return nil, err
 	}

@@ -16,6 +16,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -101,8 +102,8 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		"tokens_used_month":        usedMonth,
 		"balance_tokens":           tokens,
 		"balance_sentences_approx": approx,
-		"sub_grants_left":          grants,       // ★ 未过期台账合计（双桶明细）
-		"permanent_balance":        permanent,    // ★ 永久余额（双桶明细）
+		"sub_grants_left":          grants,         // ★ 未过期台账合计（双桶明细）
+		"permanent_balance":        permanent,      // ★ 永久余额（双桶明细）
 		"sentence_balance":         sentenceMirror, // 兼容字段：历史句数镜像
 		"package_code":             pkgCode,
 		"subscribed_at":            subAt,
@@ -196,11 +197,87 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, 200, map[string]interface{}{"success": true, "order": o})
 }
 
-// handleRegisterIndustries 注册行业列表接口（无需登录）。
+// handlePackageUpgrade 套餐升级（登录租户管理员）：付费包 paid→更高价 paid 包。
+// 流程：校验新包有效 → 计算旧包剩余价值抵扣（ComputeUpgradeCredit）→ 创建升级订单
+//
+//	（应付 = 新包售价 − 旧包抵扣，记录 upgrade_from_order/credit_money）→ 按支付模式走渠道
+//	→ 支付确认时 MarkOrderPaid 升级分流：作废旧包剩余台账并等价转入新包、新包即时生效。
+//
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 code=新包编码）。
+// 返回: success=true 时携带 order（含抵扣后应付金额）与 credit_money（旧包抵扣金额）。
+func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		Code string `json:"code"` // 新包编码（必填，付费包）
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code 不能为空"})
+		return
+	}
+	tid := s.effTenant(r, u)
+	newPkg, err := s.Store.GetPackageByCode(tid, req.Code)
+	if err != nil || newPkg.Enabled != 1 {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "套餐不存在或已下架"})
+		return
+	}
+	// 仅付费包支持升级（增量包为永久买断叠加，无「升级」概念）
+	if newPkg.PType != store.PackagePaid {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "仅付费包支持升级"})
+		return
+	}
+	// 计算旧包剩余价值抵扣（含校验：有生效订阅、目标高于当前付费包售价）
+	credit, err := s.Store.ComputeUpgradeCredit(tid, newPkg)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	// 支付渠道（与订阅一致）：sdk / static_qr / mock（默认 mock）
+	payMode := s.effPayMode(tid)
+	channel := "manual"
+	if payMode == "sdk" {
+		channel = "wechat"
+	} else if payMode == "mock" {
+		channel = "mock"
+	}
+	o, err := s.Store.CreateUpgradeOrder(tid, newPkg, credit, u.ID, channel)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	// mock 模式：模拟支付自动到账并发放入账
+	if channel == "mock" {
+		if err := s.Store.MarkOrderPaid(o.ID, tid); err == nil {
+			o.Status = "paid"
+		}
+	} else if channel == "manual" {
+		if v, _ := s.Store.GetConfig("static_qr_image"); v != "" {
+			_ = s.Store.UpdateOrderPrepay(o.OrderNo, "", v)
+			o.QRContent = v
+		} else {
+			s.Store.LogAudit(tid, u.ID, "package_upgrade", "packages", newPkg.Code+"（静态码未配置收款图片）")
+			writeJSON(w, 200, map[string]interface{}{
+				"success": false, "message": "静态收款码未配置，请联系管理员在套餐中心上传收款图片", "order_no": o.OrderNo,
+			})
+			return
+		}
+	}
+	s.Store.LogAudit(tid, u.ID, "package_upgrade", "packages", newPkg.Code+
+		fmt.Sprintf("（抵扣 ¥%.2f）", credit.CreditMoney))
+	writeJSON(w, 200, map[string]interface{}{
+		"success": true, "order": o, "credit_money": credit.CreditMoney,
+	})
+}
+
 // 说明：行业来源 = 默认租户（tenant 1）的 industry 类型 KB 包；超管在默认租户下创建行业包即成为注册选项。
 // ★ 2026-09 修复：①跳过旧版占位包（code=industry，名为"行业包"，非真实行业）；
-//    ②同 code 合并去重（历史遗留可能出现多个 general/同码包）；
-//    ③展示名清理：去掉「行业包/包」后缀（前端下拉不显示"包"字）。
+//
+//	②同 code 合并去重（历史遗留可能出现多个 general/同码包）；
+//	③展示名清理：去掉「行业包/包」后缀（前端下拉不显示"包"字）。
+//
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。
 // 返回: success=true 时携带 industries 数组（code/name）。
 func (s *Server) handleRegisterIndustries(w http.ResponseWriter, r *http.Request) {
