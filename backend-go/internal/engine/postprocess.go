@@ -111,6 +111,12 @@ func stripEmptyPlaceholderBrackets(text string) string {
 // 全角括号/冒号，而正常目标语（拉丁系）译文行绝不会以全角标点开头。
 var leadingCJKNoteRe = regexp.MustCompile(`^[\x{3000}-\x{303f}\x{ff00}-\x{ffef}\x{2018}\x{2019}\x{201c}\x{201d}\x{2026}]`)
 
+// leadingCJKNoteStrictRe 严格版行首特征（CJK 目标语专用）：行首为「可选开括号+全角冒号」
+// 的纯标点骨架（（：/：/【：）。中文/日文正常译文行几乎不可能以全角冒号开头，
+// 而模型注释块（（：1. "…"；2. "…"）以此开头。
+// ★ 刻意不含「注：/说明：」等中文词头——源文本本身可能含有「说明：xxx」行，剥离会误删正文。
+var leadingCJKNoteStrictRe = regexp.MustCompile(`^[（\[【]?\s*：`)
+
 // stripTrailingCJKNotes 剥离非 CJK 目标语译文末尾的「编辑注释/术语对照」残留块。
 // 现象：模型在译文后追加中文说明（如 术语对照/替换说明），经 StripChineseInNonZh
 // 去掉汉字后可能剩两种形态：
@@ -122,6 +128,7 @@ var leadingCJKNoteRe = regexp.MustCompile(`^[\x{3000}-\x{303f}\x{ff00}-\x{ffef}\
 // 规则：逐行扫描，命中以下任一特征即视为注释块起始行，从该行起截断丢弃：
 //   - 不含拉丁字母且不含数字、但含 CJK 全角标点（纯骨架行）；
 //   - 以 CJK 全角标点开头（讲解式残留行，其后仍含英文/数字）。
+//
 // 不影响正常目标语行（含字母/数字、且不以全角标点开头）。
 func stripTrailingCJKNotes(text string) string {
 	lines := strings.Split(text, "\n")
@@ -139,9 +146,57 @@ func stripTrailingCJKNotes(text string) string {
 	return text
 }
 
+// stripTrailingCJKNotesStrict CJK 目标语（zh/zh_hant/ja/ko）专用注释块截断：
+// 这些目标语的译文本身就是 CJK 文字，无法用「去中文后剩骨架」的特征识别注释块，
+// 仅以严格版行首特征（开括号+全角冒号的纯标点骨架）截断——正常译文行不会这样开头。
+// 参数：text=译文；返回截断后的译文。
+func stripTrailingCJKNotesStrict(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			continue
+		}
+		if leadingCJKNoteStrictRe.MatchString(t) {
+			return strings.TrimRight(strings.Join(lines[:i], "\n"), " \t\n")
+		}
+	}
+	return text
+}
+
+// contractTagRe 输出契约提取正则：<t>（容忍属性与大小写）…</t>，跨行匹配。
+// 用于白名单提取译文：标签内是译文本体，标签外的注释/术语对照/说明天然被丢弃。
+var contractTagRe = regexp.MustCompile(`(?is)<t\b[^>]*>(.*?)</t\s*>`)
+
+// extractContractTranslation 输出契约白名单提取：
+// 模型按契约把最终译文用 <t>…</t> 包裹时，只取标签内内容（标签外的注释块整体丢弃）；
+// 未命中契约（模型违约）时原样返回，交由后续黑名单清洗链兜底——不会比无契约时更差。
+// 多个 <t> 块（如按段分块）以换行拼接保留。参数：text=模型原始输出；返回提取后的译文。
+func extractContractTranslation(text string) string {
+	if !strings.Contains(strings.ToLower(text), "<t") {
+		return text
+	}
+	matches := contractTagRe.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return text
+	}
+	var parts []string
+	for _, m := range matches {
+		if s := strings.TrimSpace(m[1]); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	if len(parts) == 0 {
+		return text
+	}
+	return strings.Join(parts, "\n")
+}
+
 // StripChineseInNonZh 非 CJK 目标语删除所有中文字符
 func StripChineseInNonZh(text, langCode string) string {
-	if langCode == "zh_hant" || langCode == "ja" || langCode == "ko" {
+	// ★ 2026-09-09 修复：守卫遗漏 "zh"——互译（如 en→zh）目标为简体中文时，
+	//   汉字是译文本体，漏加 zh 会把整段中文译成只剩标点（实测 "…该操作。"→"，。"）。
+	if langCode == "zh" || langCode == "zh_hant" || langCode == "ja" || langCode == "ko" {
 		return text
 	}
 	return zhCharRe.ReplaceAllString(text, "")
@@ -242,6 +297,12 @@ func stripLangNameSections(text, langCode string) string {
 
 // PostProcessTranslation 最终后处理（所有翻译路径必须经过）
 func PostProcessTranslation(text, langCode string) string {
+	// ★ 输出契约白名单提取（2026-09-09）：prompt 要求模型用 <t>…</t> 包裹最终译文，
+	//   命中契约时只取标签内内容——标签外的注释/术语对照块整体丢弃（结构性根治「译文后
+	//   追加讲解」这一类问题，对 zh/zh_hant/ja/ko 等黑名单无法区分注释与正文的目标语同样有效）。
+	//   未命中契约（模型违约）时原样返回，走既有黑名单清洗链兜底。
+	text = extractContractTranslation(text)
+
 	// 品牌替换：Jishi/Jieshi/Jixi 及变体（极石汽车拼音直译）→ ROX
 	text = brandReplace(text)
 
@@ -271,8 +332,12 @@ func PostProcessTranslation(text, langCode string) string {
 	text = stripEmptyPlaceholderBrackets(text)
 	// ★ 注释残留块截断（2026-09-03）：模型在译文后追加的中文「编辑注释/术语对照」
 	//   经去中文后剩全角标点骨架，形如乱码——按行截断丢弃（不影响正常含字母/数字行）。
+	// ★ CJK 目标语（zh/zh_hant/ja/ko，2026-09-09）：去中文语义不适用（译文即中文），
+	//   改用严格版行首特征（开括号+全角冒号纯标点骨架，如 （：1. …）截断注释块。
 	if langCode != "zh" && langCode != "zh_hant" && langCode != "ja" && langCode != "ko" {
 		text = stripTrailingCJKNotes(text)
+	} else {
+		text = stripTrailingCJKNotesStrict(text)
 	}
 	return strings.TrimSpace(text)
 }

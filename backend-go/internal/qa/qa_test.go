@@ -33,6 +33,62 @@ func TestCheckNumberMismatch(t *testing.T) {
 	}
 }
 
+// TestNumberEnumeratorExemption 译文多出连续枚举序号（1,2,3…）应降级为 warning 而非 error
+// （模拟模型注释残留的序号：源文无数、译文含 （：1. …；2. …；3. …），工单 T20260909111254JZ7）。
+func TestNumberEnumeratorExemption(t *testing.T) {
+	r := Check("请先进行验证码校验，通过后再进行该操作",
+		map[string]string{"en": "Please wait.\n\n（：1. \"verification marks\"；2. \"passed\"；3. \"confirmed\"。"})
+	if !r.Pass {
+		t.Fatal("枚举序号残留应降级为 warning，不影响 pass")
+	}
+	// 报告汇总：Errors=0、Warnings≥1，且 number 规则为 warning
+	if r.Errors != 0 || r.Warnings == 0 {
+		t.Fatalf("期望 0 error、≥1 warning: %+v", r)
+	}
+	for _, iss := range r.Issues {
+		if iss.Rule == "number" && iss.Level == "error" {
+			t.Fatalf("枚举序号不应报 error: %+v", iss)
+		}
+	}
+}
+
+// TestNumberExtraNonEnumer 译文多出非连续/含小数的数字 → 仍为 error。
+func TestNumberExtraNonEnumer(t *testing.T) {
+	cases := []struct{ src, tgt string }{
+		{"请先验证", "Please verify then proceed with code 42."},  // 单个数 42，非 1..N 连续 → error
+		{"请先验证", "Proceed 1, then 3, then 5."},                 // 1,3,5 不连续 → error
+		{"请先验证", "Proceed 1.5 times."},                          // 小数 1.5 → error
+		{"id 5", "id 5 plus extra 9."},                             // 源有 5，译文多 9（非枚举）→ error
+	}
+	for _, c := range cases {
+		r := Check(c.src, map[string]string{"en": c.tgt})
+		errFound := false
+		for _, iss := range r.Issues {
+			if iss.Rule == "number" && iss.Level == "error" {
+				errFound = true
+			}
+		}
+		if !errFound {
+			t.Errorf("src=%q tgt=%q 应报 number error: %+v", c.src, c.tgt, r.Issues)
+		}
+	}
+}
+
+// TestNumberMissingStillError 源文数字漏译（即使译文同时多出枚举序号）→ 仍为 error。
+func TestNumberMissingStillError(t *testing.T) {
+	r := Check("2026 年，步骤：1. 准备 2. 执行",
+		map[string]string{"en": "Year, steps: 1. prepare 2. execute"}) // 漏 2026，但 1,2 枚举 → 仍 error
+	errFound := false
+	for _, iss := range r.Issues {
+		if iss.Rule == "number" && iss.Level == "error" {
+			errFound = true
+		}
+	}
+	if !errFound {
+		t.Fatalf("漏译源文数字仍应为 error: %+v", r.Issues)
+	}
+}
+
 // TestCheckPlaceholder 占位符缺失 → error；完整保留 → 通过。
 func TestCheckPlaceholder(t *testing.T) {
 	src := "点击 {button} 完成，进度 %d"

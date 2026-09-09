@@ -78,6 +78,98 @@ func TestPostProcessSymbolRemnant(t *testing.T) {
 	}
 }
 
+// TestStripTrailingCJKNotesStrict CJK 目标语（zh_hant/ja/ko）注释残留截断：
+// 译文本身就是中文，无法用「去中文后剩骨架」识别，仅以严格行首特征（开括号+全角冒号）截断。
+func TestStripTrailingCJKNotesStrict(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// zh_hant：结尾注释块以（：开头 → 截断
+		{"請先進行驗證碼校驗，通過後再進行該操作。\n\n（：1. \"verification marks\"\"驗證碼\"；2. \"passed\"\"驗證通過\"；3. \"confirmed\"\"通過\"。）",
+			"請先進行驗證碼校驗，通過後再進行該操作。"},
+		// zh_hant：正常行首括号（不带冒号）→ 保留
+		{"（此為備註）請填寫以下資訊。\n下一行內容。", "（此為備註）請填寫以下資訊。\n下一行內容。"},
+		// ja：正常正文（含全角括号但不以（：开头）→ 保留
+		{"認証コードを入力してください。\n補足（はんこ）を参照。", "認証コードを入力してください。\n補足（はんこ）を参照。"},
+		// zh_hant：真实模型注释块且第一行就是纯注释 → 整体截断为空译文主体
+		{"（：1. 術語對照 2. 解析說明。）", ""},
+	}
+	for _, c := range cases {
+		if got := stripTrailingCJKNotesStrict(c.in); got != c.want {
+			t.Errorf("stripTrailingCJKNotesStrict(%q)=%q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestExtractContractTranslation 输出契约白名单提取：
+// <t>…</t> 包裹时只取标签内内容（标签外注释块丢弃）；未命中契约时原样返回（零回归）。
+func TestExtractContractTranslation(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// 标准契约：标签内为译文，标签外注释被丢弃
+		{"<t>Please wait for the verification code.</t>\n（术语对照：verification=验证码）",
+			"Please wait for the verification code."},
+		// 仅标签内容，无歧义
+		{"<t>这是最终译文。</t>", "这是最终译文。"},
+		// 多段 <t> 块按行拼接保留
+		{"<t>第一段</t>\n<t>第二段</t>", "第一段\n第二段"},
+		// 未命中契约（模型违约）：原样返回
+		{"Please wait for the verification code.\n（术语对照）", "Please wait for the verification code.\n（术语对照）"},
+		{"请先进行验证码校验，通过后再进行该操作。", "请先进行验证码校验，通过后再进行该操作。"},
+		// 标签带属性 / 大小写容忍
+		{"<T lang=\"en\">Hello world</T>", "Hello world"},
+		// 未闭合标签：视为违约，原样返回
+		{"<t>未闭合内容", "<t>未闭合内容"},
+		// 标签内为空 → 原样返回
+		{"<t></t>noink", "<t></t>noink"},
+	}
+	for _, c := range cases {
+		if got := extractContractTranslation(c.in); got != c.want {
+			t.Errorf("extractContractTranslation(%q)=%q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestPostProcessContractEndToEnd 端到端回归：模型输出「契约译文 + 标签外中文注释」时，
+// 各目标语（en / zh_hant / zh）都能得到干净译文——白名单提取 + CJK 严格截断共同兜底。
+func TestPostProcessContractEndToEnd(t *testing.T) {
+	cases := []struct {
+		in, lang, want string
+	}{
+		// en：契约命中，标签外注释整体丢弃
+		{"<t>Please perform verification before proceeding.</t>\n（：1. \"驗證碼\"；2. \"通過\"。）",
+			"en", "Please perform verification before proceeding."},
+		// zh_hant：契约命中，注释被丢弃
+		{"<t>請先進行驗證碼校驗。</t>（：1. 術語對照 2. 解析。）",
+			"zh_hant", "請先進行驗證碼校驗。"},
+		// en：模型违约未用标签 → 走既有黑名单清洗（行首（：注释残留截断）
+		{"Please perform verification before proceeding.\n\n（：1. \"verification\"；2. \"passed\"。）",
+			"en", "Please perform verification before proceeding."},
+		// zh_hant：模型违约未用标签 → CJK 严格截断
+		{"請先進行驗證碼校驗。\n（：1. 術語對照 2. 解析。）",
+			"zh_hant", "請先進行驗證碼校驗。"},
+		// zh：互译目标为简体中文，注释块截断 + 正文保留
+		{"<t>请先进行验证码校验。</t>（：1. 术语 2. 解析。）",
+			"zh", "请先进行验证码校验。"},
+	}
+	for _, c := range cases {
+		if got := PostProcessTranslation(c.in, c.lang); got != c.want {
+			t.Errorf("PostProcessTranslation(%q,%q)=%q, want %q", c.in, c.lang, got, c.want)
+		}
+	}
+}
+
+// TestZhTargetNotWiped 回归：互译（如 en→zh）目标为简体中文时，译文不得被清空——
+// StripChineseInNonZh 守卫曾遗漏 "zh"，把整段中文删成只剩标点（实测 "…该操作。"→"，。"）。
+func TestZhTargetNotWiped(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"请先进行验证码校验，通过后再进行该操作。", "请先进行验证码校验，通过后再进行该操作。"},
+		{"请填写以下信息并提交。", "请填写以下信息并提交。"},
+	}
+	for _, c := range cases {
+		if got := PostProcessTranslation(c.in, "zh"); got != c.want {
+			t.Errorf("PostProcessTranslation(%q,'zh')=%q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // TestBrandReplaceVariants 验证极石汽车品牌拼音变体（jishi/jieshi/jixi 等）全部替换为 ROX。
 func TestBrandReplaceVariants(t *testing.T) {
 	cases := []struct{ in, want string }{

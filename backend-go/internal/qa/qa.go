@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -91,12 +92,20 @@ func checkOne(source, target, lang string) []Issue {
 	}
 
 	// number：数字集合必须一致（排序后逐位比较）
+	// ★ 2026-09-09 枚举序号豁免：译文多出的数字若恰为从 1 开始的连续枚举序号（1,2,3…），
+	//   判定为「模型追加术语对照/编辑注释的序号残留」，降级为 warning 而非 error——这种情况
+	//   由后处理注释块截断兜底清理，不应因序号把整条合法译文标成 error。其余数字差异仍为 error。
 	sn, tn := numRe.FindAllString(src, -1), numRe.FindAllString(tgt, -1)
 	sort.Strings(sn)
 	sort.Strings(tn)
 	if fmt.Sprint(sn) != fmt.Sprint(tn) {
-		out = append(out, Issue{Lang: lang, Rule: "number", Level: "error",
-			Detail: fmt.Sprintf("数字不一致：源=%v 译=%v", sn, tn)})
+		if missing, extra := splitNumberDiff(sn, tn); len(missing) > 0 || !isContiguousEnumer(extra) {
+			out = append(out, Issue{Lang: lang, Rule: "number", Level: "error",
+				Detail: fmt.Sprintf("数字不一致：源=%v 译=%v", sn, tn)})
+		} else {
+			out = append(out, Issue{Lang: lang, Rule: "number", Level: "warning",
+				Detail: fmt.Sprintf("译文多出连续枚举序号：%v（疑似注释残留）", extra)})
+		}
 	}
 
 	// placeholder：占位符集合必须一致
@@ -131,4 +140,61 @@ func containsLetter(s string) bool {
 		}
 	}
 	return false
+}
+
+// splitNumberDiff 拆分双向数字差异：missing=源文有而译文缺的数字，extra=译文有而源文无的数字。
+// 参数：sn/tn=已排序的源/译数字切片（可能重复，当前按元素逐个处理）。
+func splitNumberDiff(sn, tn []string) (missing, extra []string) {
+	ms := map[string]int{} // 源数字 → 剩余可用次数
+	for _, n := range sn {
+		ms[n]++
+	}
+	for _, n := range tn {
+		if ms[n] > 0 {
+			ms[n]--
+		} else {
+			extra = append(extra, n)
+		}
+	}
+	for _, n := range sn {
+		if ms[n] > 0 {
+			missing = append(missing, n)
+			ms[n]--
+		}
+	}
+	return missing, extra
+}
+
+// isContiguousEnumer 判断 extra 是否为从 1 开始的连续枚举序号（1,2,3,…，可含序数点 1. 2. 3.）。
+// 多出的数字恰为 1..N 连续时视为「枚举序号残留」，否则视为真实数字异常。
+func isContiguousEnumer(extra []string) bool {
+	if len(extra) == 0 {
+		return false
+	}
+	seen := map[int64]bool{}
+	max := int64(0)
+	for _, e := range extra {
+		s := strings.TrimSuffix(strings.TrimSuffix(e, "."), ",")
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil || n < 1 {
+			return false
+		}
+		// 小数不符合枚举特征（如 1.5；但 1. 2. 这类带序数点的算枚举）
+		if strings.HasSuffix(e, ".") {
+			// 结尾序数点已剥离，属合法枚举
+		} else if strings.Contains(e, ".") {
+			return false
+		}
+		seen[n] = true
+		if n > max {
+			max = n
+		}
+	}
+	// 必须恰好覆盖 1..max 全部整数
+	for i := int64(1); i <= max; i++ {
+		if !seen[i] {
+			return false
+		}
+	}
+	return true
 }

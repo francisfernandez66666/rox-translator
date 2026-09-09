@@ -846,11 +846,11 @@ func (e *Engine) translateWithFeedbackEx(ctx context.Context, zhText, targetLang
 	ref := buildExamplesPrompt(zhText, targetLang, examples) // 知识库术语参考（无命中则为空串）
 	var prompt string
 	if ref != "" {
-		prompt = fmt.Sprintf("你是资深%s翻译。前一次翻译被驳回，驳回意见如下：%s。请严格按照意见修正重译。\n%s\n%s\n\n【原文】%s\n\n只输出修正后的%s译文：",
-			langName, feedback, ref, culture, zhText, langName)
+		prompt = fmt.Sprintf("你是资深%s翻译。前一次翻译被驳回，驳回意见如下：%s。请严格按照意见修正重译。\n%s\n%s\n\n【原文】%s\n\n只输出修正后的%s译文：\n%s",
+			langName, feedback, ref, culture, zhText, langName, contractNoteZh())
 	} else {
-		prompt = fmt.Sprintf("你是资深%s翻译。前一次翻译被审校驳回，驳回意见如下：%s。请严格按照意见修正重译。%s\n\n【原文】%s\n\n只输出修正后的%s译文：",
-			langName, feedback, culture, zhText, langName)
+		prompt = fmt.Sprintf("你是资深%s翻译。前一次翻译被审校驳回，驳回意见如下：%s。请严格按照意见修正重译。%s\n\n【原文】%s\n\n只输出修正后的%s译文：\n%s",
+			langName, feedback, culture, zhText, langName, contractNoteZh())
 	}
 	messages := []map[string]string{{"role": "user", "content": prompt}}
 	base, key, model := e.resolveModel(ctx)
@@ -876,8 +876,8 @@ func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, tar
 		langName = targetLang
 	}
 	prompt := fmt.Sprintf(
-		"你是资深翻译审校。请审校以下%s译文，仅修正术语准确性和语法错误，保持原意与风格，不要改写结构。%s\n\n【原文】%s\n【待审校译文】%s\n\n只输出审校后的译文：",
-		langName, culture, source, translation)
+		"你是资深翻译审校。请审校以下%s译文，仅修正术语准确性和语法错误，保持原意与风格，不要改写结构。%s\n\n【原文】%s\n【待审校译文】%s\n\n只输出审校后的译文：\n%s",
+		langName, culture, source, translation, contractNoteZh())
 	messages := []map[string]string{{"role": "user", "content": prompt}}
 	base, key, model := e.resolveModel(ctx)
 	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {
@@ -958,6 +958,23 @@ func translateInstruction(source, target, uiLang string) string {
 		}
 		return fmt.Sprintf("把下面的%s翻译为%s，只输出译文本身，不要复述原文，不要输出【原文】【待審校譯文】等任何标记，不要额外解释", src, cn)
 	}
+}
+
+// outputContractNote 输出契约指令（按界面语言返回中/英文表述）：
+// 要求模型把最终译文整体用 <t>…</t> 标签包裹、标签外不得有任何内容——
+// 配合后处理 extractContractTranslation 做白名单提取，结构性根治「译文后追加
+// 术语对照/编辑注释」一类问题（模型违约时走现有黑名单清洗链兜底，不劣于现状）。
+// 参数 uiLang: 界面语言（zh=中文指令，其他=英文指令）。
+func outputContractNote(uiLang string) string {
+	if uiLang != "" && uiLang != "zh" && uiLang != "zh_hant" {
+		return " Output contract: wrap ONLY the final translation in <t> and </t> tags. Nothing outside the tags."
+	}
+	return "输出要求：只把最终译文用<t>和</t>标签整体包裹一遍，标签外不得输出任何其他内容（不要术语对照、不要解析、不要注释）。"
+}
+
+// contractNoteZh 中文输出契约指令（固定中文 prompt 路径用的简写）。
+func contractNoteZh() string {
+	return outputContractNote("zh")
 }
 
 // buildExamplesPrompt 从知识库命中行构造术语/句对参考，注入翻译 prompt
@@ -1115,6 +1132,8 @@ func (e *Engine) SingleLangTranslate(ctx context.Context, zhText, targetLang str
 func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang, stage string, attempt int) (string, error) {
 	cfg := e.Cfg
 	instruction := translateInstruction(sourceLang, targetLang, uiLangFromCtx(ctx))
+	// ★ 输出契约（2026-09-09）：要求模型用 <t>…</t> 包裹最终译文，白名单提取根治注释残留
+	instruction += outputContractNote(uiLangFromCtx(ctx))
 	// ★ 缩翻（任务7）：启用时向指令追加最长字符限制，提示模型精简输出
 	if ml := maxLengthFromCtx(ctx); ml > 0 {
 		instruction += fmt.Sprintf(" 译文总长度（含标点）不得超过 %d 个字符。请在保留原意与关键信息的前提下尽量精简，不要额外解释，只输出译文。", ml)
@@ -1371,6 +1390,7 @@ func (e *Engine) autoCompleteTranslation(ctx context.Context, zhText, targetLang
 	}
 	// 全量重翻（★ 2026-09-03 长文本丢内容修复：上限 8192→16384，避免超长源文仍被截断）
 	instruction := translateInstruction(sourceLang, targetLang, uiLangFromCtx(ctx))
+	instruction += outputContractNote(uiLangFromCtx(ctx))
 	full := fmt.Sprintf("%s。必须完整翻译，不要省略任何内容，不要被截断：\n\n%s", instruction, zhText)
 	messages = []map[string]string{{"role": "user", "content": full}}
 	content, _, err = e.LLM.CallChat(ctx, base, key, model, messages, 16384, false, e.Cfg.FallbackTemp)

@@ -146,8 +146,7 @@ export default function AdminDashboard() {
               />
             </>
           )}
-          {/* 非超管时显示当前管理范围标签：租户管理员=其企业/个人租户名，部门管理员=组织级 */}
-          {!ad.isSuper && ad.myLevel >= 3 && <Tag theme="primary" variant="light">{ad.tenantName || t('admin.tagCompany')}</Tag>}
+          {/* 部门管理员：组织级标签 */}
           {ad.myLevel === 2 && <Tag variant="light">{t('admin.tagDept')}</Tag>}
           <AccountMenu showWorkbench onGotoWorkbench={() => {
             // 返回前台工作台：通过 history API 模拟路由跳转
