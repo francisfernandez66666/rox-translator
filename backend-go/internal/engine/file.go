@@ -56,6 +56,28 @@ type FileTranslateData struct {
 	Translations map[string]map[string]string `json:"-"`
 }
 
+// writebackDelivery 写回交付形态（纯函数，便于单测）：
+//   - 返回 "xlsx"：无原格式回写能力的格式（srt/vtt/json/yaml/yml），以 xlsx 对照表为唯一交付形态；
+//   - 返回 "inplace"：有原格式写回能力的格式（pdf/docx/pptx/txt/csv/md），写回失败自动重试、不降级 xlsx。
+func writebackDelivery(ext string) string {
+	switch ext {
+	case ".srt", ".vtt", ".json", ".yaml", ".yml":
+		return "xlsx"
+	default:
+		return "inplace"
+	}
+}
+
+// leakedLang 漏译率硬闸判定（纯函数，便于单测）：
+// 某语言未译出段数 >50% 时返回该语言代码（触发工单失败）；否则返回 ""。
+// remain 为未译出段数、total 为源文总段数；remain==0 不触发。
+func leakedLang(lang string, remain, total int) string {
+	if remain > 0 && remain*2 > total {
+		return lang
+	}
+	return ""
+}
+
 // HandleFile 文件翻译主流程（复刻 skill.py _handle_file_translate）
 func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[string]interface{}, prog Progress) *FileTranslateResult {
 	// 注入请求级用量记录器（供计量成本核算）
@@ -392,6 +414,17 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	}
 	prog("第2步/3：翻译完成", 2, 3)
 
+	// ★ 漏译率硬闸（2026-09-09 用户决策：硬闸必须生效）：文件管线此前对「译文键与源文键
+	//   不匹配/模型整单失败」（untranslated 全额，如工单 T20260909205438QJH 312/312）仅记
+	//   警告仍 completed 输出残缺产物。现在：某语言未译出比例 >50% 直接置工单失败返回错误
+	//   （用户重新发起即可），绝不把大面积漏译的产物交付给用户；≤50% 维持既有警告口径。
+	for _, lc := range finalLangs {
+		if lang := leakedLang(lc, untranslated[lc], len(texts)); lang != "" {
+			log.Printf("[file-gate] %s 漏译 %d/%d 段（超 50%%），置工单失败", lang, untranslated[lc], len(texts))
+			return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 翻译失败：%d/%d 段未能译出（模型调用异常或译文键不匹配），请稍后重新发起", config.LangNames[lang], untranslated[lc], len(texts))}
+		}
+	}
+
 	// 整改 R1：文件主翻译路径统一走约束闸门 + 语言文化闸门。
 	// 硬约束闸门（数字/格式/非源语言/乱码等）必须强制：首轮不过带反馈重翻一次，
 	// 否则错误会直接落入成品文件（如成本表数字错）。文化闸门仍仅警告。
@@ -435,40 +468,59 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			}
 			outBase := fmt.Sprintf("%s_%s%s", baseName, lc, ext)
 			outPath := filepath.Join(outputDir, outBase)
-			var aerr error
-			switch ext {
-			case ".docx":
-				aerr = fileproc.ApplyDocx(filePath, outPath, tr)
-			case ".pptx":
-				aerr = fileproc.ApplyPptx(filePath, outPath, tr)
-			case ".pdf":
-				if pdfCacheDocx != "" {
-					// 两阶段：复用提取期缓存 DOCX（键对齐，图片/排版零破坏）
-					if perr := fileproc.ApplyTranslatedPdfFromDocx(ctx, outPath, pdfCacheDocx, tr, lc); perr == nil {
-						filesOut = append(filesOut, outPath)
-						continue
-					}
-					if perr := fileproc.WriteTranslatedPDFviaDocx(ctx, outPath, filePath, tr, lc); perr == nil {
-						filesOut = append(filesOut, outPath)
-						continue
-					}
-					aerr = fmt.Errorf("PDF 写回失败")
-				} else {
-					aerr = fmt.Errorf("PDF 写回失败")
+			// ★ 2026-09-09 产品决策：有原格式写回能力的格式（pdf/docx/pptx/txt/csv/md）写回失败
+			//   不再降级 xlsx 对照表（避免「翻译 PDF 却下载到 Excel」），改为自动重试（子进程转换
+			//   偶发失败：LibreOffice profile 锁/资源竞争），重试仍失败则返回错误置工单失败，
+			//   由用户重新发起。srt/vtt/json/yaml 等无原格式回写能力的格式仍以 xlsx 对照表为
+			//   唯一交付形态（设计如此，非降级）。
+			if writebackDelivery(ext) == "xlsx" {
+				if xerr := fileproc.WriteComparisonXlsx(outPath+".xlsx", texts, tr); xerr != nil {
+					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 对照表生成失败：%s", config.LangNames[lc], xerr.Error())}
 				}
-			case ".txt", ".csv", ".md":
-				aerr = writeTranslatedText(outPath, texts, tr)
-			default:
-				aerr = fmt.Errorf("不支持的写回格式")
+				filesOut = append(filesOut, outPath+".xlsx")
+				continue
+			}
+			// ★ 2026-09-09 产品决策：写回失败不再降级 xlsx 对照表（避免「翻译 PDF 却下载到
+			//   Excel」），改为自动重试（子进程转换偶发失败：LibreOffice profile 锁/资源竞争），
+			//   重试仍失败则返回错误置工单失败，由用户重新发起。
+			var aerr error
+			for attempt := 0; attempt <= 2; attempt++ {
+				aerr = nil
+				switch ext {
+				case ".docx":
+					aerr = fileproc.ApplyDocx(filePath, outPath, tr)
+				case ".pptx":
+					aerr = fileproc.ApplyPptx(filePath, outPath, tr)
+				case ".pdf":
+					if pdfCacheDocx != "" {
+						// 两阶段：复用提取期缓存 DOCX（键对齐，图片/排版零破坏）
+						if perr := fileproc.ApplyTranslatedPdfFromDocx(ctx, outPath, pdfCacheDocx, tr, lc); perr == nil {
+							break
+						}
+						if perr := fileproc.WriteTranslatedPDFviaDocx(ctx, outPath, filePath, tr, lc); perr == nil {
+							break
+						}
+						aerr = fmt.Errorf("PDF 写回失败")
+					} else {
+						aerr = fmt.Errorf("PDF 写回失败")
+					}
+				case ".txt", ".csv", ".md":
+					aerr = writeTranslatedText(outPath, texts, tr)
+				default:
+					aerr = fmt.Errorf("不支持的写回格式")
+				}
+				if aerr == nil {
+					break // 写回成功
+				}
+				// 重试前短暂退避（子进程转换释放资源），最后一次失败不再退避
+				if attempt < 2 {
+					time.Sleep(2 * time.Second)
+				}
 			}
 			if aerr != nil {
-				// 写回失败降级 xlsx 对照表
-				aerr2 := fileproc.WriteComparisonXlsx(outPath+".xlsx", texts, tr)
-				if aerr2 == nil {
-					filesOut = append(filesOut, outPath+".xlsx")
-					continue
-				}
-				continue
+				// 重试仍失败：移除可能残留的半成品，返回错误（工单失败，用户可重新发起）
+				_ = os.Remove(outPath)
+				return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 译文写回失败（已自动重试3次）：%s", config.LangNames[lc], aerr.Error())}
 			}
 			filesOut = append(filesOut, outPath)
 		}

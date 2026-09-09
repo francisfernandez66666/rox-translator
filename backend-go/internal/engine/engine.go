@@ -66,6 +66,15 @@ type Engine struct {
 	cultureMu      sync.Mutex
 	cultureCache   map[string]cultureEntry
 	cultureEntries map[string][]cultureRule // 同 key 的结构化条目（L2 用）
+
+	// ★ 2026-09-09 可靠性改造测试钩子：单语翻译器（nil 时默认走 SingleLangTranslate）。
+	//   仅测试注入 fake 用，生产恒为 nil，不影响既有行为。
+	singleLangFn func(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang, stage string) (string, error)
+
+	// ★ 2026-09-09 可靠性改造测试钩子：重试队列参数（0 时用默认值）。
+	//   仅测试注入缩短退避/次数用，生产恒为 0 走默认（maxAttempts=3、轮间 2s）。
+	retryMaxAttempts int
+	retrySleep       time.Duration
 }
 
 // cultureRule 单条语言文化规则（来自语言文化包安全句，approved 才生效）。
@@ -759,34 +768,70 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 		return
 	}
 
+	// ★ 2026-09-09 可靠性改造（用户决策：失败继续重试、队列排末尾）：
+	//   单语调用失败不再静默置空（此前阿语等偶发超时/429 即整段缺失、界面只见其余语言，
+	//   文件管线则整单 untranslated 全额告警）。改为轮次化重试队列：每轮并发 3 路处理
+	//   待翻语言，失败者排到队尾（下一轮——其余语言先行，天然退避），每语言最多尝试
+	//   3 次；仍失败记日志并置空，由上层漏译率硬闸/漏翻可见性告警兜底。
 	const maxConcurrent = 3 // 服务器 2 核，3 路并发平衡
-	sem := make(chan struct{}, maxConcurrent)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	for _, lc := range need {
-		wg.Add(1)
-		go func(lang string) {
-			defer wg.Done()
-			defer recoverPipeline("translate_lang:" + lang) // 整改 D4
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				return
-			}
-			defer func() { <-sem }()
-
-			tr, err := e.SingleLangTranslate(ctx, zhText, lang, examples, sourceLang, stage)
-			if err != nil {
-				tr = ""
-			}
-			tr = PostProcessTranslation(tr, lang)
-			mu.Lock()
-			out[lang] = tr
-			mu.Unlock()
-		}(lc)
+	maxAttempts := e.retryMaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 3 // 每语言最大尝试次数（首轮 + 重试 2 轮）
 	}
-	wg.Wait()
+	retrySleep := e.retrySleep
+	if retrySleep <= 0 {
+		retrySleep = 2 * time.Second // 轮间退避（规避限流瞬时窗口）
+	}
+
+	pending := need
+	for attempt := 0; attempt < maxAttempts && len(pending) > 0; attempt++ {
+		if ctx.Err() != nil {
+			return // 上下文取消：不再重试
+		}
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, maxConcurrent)
+		var failed []string
+		for _, lc := range pending {
+			wg.Add(1)
+			go func(lang string) {
+				defer wg.Done()
+				defer recoverPipeline("translate_lang:" + lang) // 整改 D4
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					return // 取消：外层 ctx.Err() 兜底退出
+				}
+				defer func() { <-sem }()
+
+				tr, err := e.callSingleLang(ctx, zhText, lang, examples, sourceLang, stage)
+				if err != nil {
+					log.Printf("[translate] %s 翻译失败（第%d次尝试）: %v", lang, attempt+1, err)
+					mu.Lock()
+					failed = append(failed, lang) // 失败排到队尾，下一轮继续
+					mu.Unlock()
+					tr = ""
+				}
+				tr = PostProcessTranslation(tr, lang)
+				mu.Lock()
+				out[lang] = tr
+				mu.Unlock()
+			}(lc)
+		}
+		wg.Wait()
+		pending = failed // 队尾重排：失败语言等其余语言完成后再试
+		if len(pending) > 0 {
+			time.Sleep(retrySleep) // 轮间退避（规避限流瞬时窗口）
+		}
+	}
+}
+
+// callSingleLang 单语翻译入口：优先走测试注入的 fake（singleLangFn），否则默认 SingleLangTranslate。
+func (e *Engine) callSingleLang(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang, stage string) (string, error) {
+	if e.singleLangFn != nil {
+		return e.singleLangFn(ctx, zhText, targetLang, examples, sourceLang, stage)
+	}
+	return e.SingleLangTranslate(ctx, zhText, targetLang, examples, sourceLang, stage)
 }
 
 // assignKB 从知识库行分配翻译，返回缺失语言

@@ -332,7 +332,10 @@ def cmd_extract(pdf_path: str, cache_docx: str):
         if not txt:
             continue
         k = _norm(txt)
-        if len(k) < 2 or k in seen:
+        # ★ 2026-09-09：单字段落也进翻译键（len<2 → len<1）。pdf2docx 偶发把一个词拆成
+        #   多个单字段（如「保险」→「保」+「险」、「无界」→「无」），旧过滤让这些单字从不
+        #   进入翻译映射，写回后以中文字残留在译文 PDF（实测工单84残留 无/查/险/贵 等）。
+        if len(k) < 1 or k in seen:
             continue
         seen.add(k)
         texts.append(txt)
