@@ -268,6 +268,26 @@ func extractTextSegments(t *store.Ticket, lang string) []baseSeg {
 	return segs
 }
 
+// alignTicketRow 计算 xlsx 对照表第 rowIdx 行（源文行）、目标语言 lang 的单元格译文。
+// 参数：t=工单对象；srcLines=splitLines(t.SourceText)（源文各行）；lang=目标语言；rowIdx=源文行下标。
+// 返回：该单元格内容。对齐口径：
+//   - 译文行数与源文行数一致 → 逐行对应（extractTextSegments 的按行映射，杜绝整段译文重复填每行）；
+//   - 译文行数不一致（译文更少/更多）→ 首行填整段译文、其余行留空，保证每格只含一段、不丢信息。
+func alignTicketRow(t *store.Ticket, srcLines []string, lang string, rowIdx int) string {
+	segs := extractTextSegments(t, lang)
+	if len(segs) == len(srcLines) && rowIdx < len(segs) {
+		return segs[rowIdx].Target
+	}
+	if rowIdx == 0 {
+		var payload struct {
+			Translations map[string]string `json:"translations"`
+		}
+		_ = json.Unmarshal([]byte(t.FinalResult), &payload)
+		return payload.Translations[lang]
+	}
+	return ""
+}
+
 // parseAlignedFile 解析 xlsx/csv 对照表为逐段对照（首列源文，目标语言列为译文）。
 func parseAlignedFile(path, lang string) ([]baseSeg, bool) {
 	ext := strings.ToLower(filepath.Ext(path))

@@ -7,6 +7,7 @@
 package api
 
 import (
+	"strings"
 	"testing"
 
 	"translator/internal/store"
@@ -68,5 +69,40 @@ func TestExtractTextSegmentsUnaligned(t *testing.T) {
 	}
 	if segs[2].Target != "" {
 		t.Fatalf("seg2 target should be empty when translation shorter, got %q", segs[2].Target)
+	}
+}
+
+// TestAlignTicketRow 校验 xlsx 对照表行对齐（回归工单 T20260909165612KWB）：
+//   - 源文两行、译文整段含换行（阿/俄）→ 逐行对应，每格只含一段，不重复整段译文；
+//   - 译文行数少于源文行数 → 首行填整段、其余行留空（不越界、不丢信息）。
+func TestAlignTicketRow(t *testing.T) {
+	// 复现工单 78：源文两行（中间空行被 splitLines 过滤），译文整段含换行（JSON 内 \n 转义）
+	src := "山海无界，极石致远\n\n国际标准赋能制造，极石汽车驰骋全球山海"
+	final := "{\"translations\":{\"ar\":\"لا حدود للجبال والبحار. \\n\\nالمعايير الدولية تعزّز التصنيع.\"}}"
+	tk := &store.Ticket{SourceText: src, FinalResult: final}
+	srcLines := splitLines(src)
+	if len(srcLines) != 2 {
+		t.Fatalf("splitLines 应得 2 行，实得 %d", len(srcLines))
+	}
+	// 译文整段含 2 行 → 与源文行数一致，逐行对应
+	row0 := alignTicketRow(tk, srcLines, "ar", 0)
+	row1 := alignTicketRow(tk, srcLines, "ar", 1)
+	if !strings.Contains(row0, "لا حدود") {
+		t.Fatalf("row0 应为译文第1段，实得: %q", row0)
+	}
+	if strings.Contains(row0, "المعايير") {
+		t.Fatalf("row0 不应包含译文第2段（整段重复缺陷），实得: %q", row0)
+	}
+	if !strings.Contains(row1, "المعايير") {
+		t.Fatalf("row1 应为译文第2段，实得: %q", row1)
+	}
+
+	// 译文行数少于源文（源文 2 行、译文单段）→ 首行填整段、次行留空
+	tk2 := &store.Ticket{SourceText: src, FinalResult: `{"translations":{"ar":"مجرد سطر واحد."}}`}
+	if got := alignTicketRow(tk2, srcLines, "ar", 0); !strings.Contains(got, "مجرد") {
+		t.Fatalf("行数不一致时首行应填整段译文，实得: %q", got)
+	}
+	if got := alignTicketRow(tk2, srcLines, "ar", 1); got != "" {
+		t.Fatalf("行数不一致时次行应留空，实得: %q", got)
 	}
 }

@@ -558,23 +558,14 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
 		_ = f.SetCellValue(sheet, cell, h)
 	}
-	// 源文可能多段（换行分隔），逐段成行；译文按行与源文对齐（复用 extractTextSegments 的
-	// 按行映射口径，避免「源文两行、每行都填整段译文」的重复输出缺陷 2026-09-09）。
+	// 源文可能多段（换行分隔），逐段成行；译文按行与源文对齐（alignTicketRow 复用
+	// extractTextSegments 的按行映射口径，避免「源文两行、每行都填整段译文」的重复输出缺陷 2026-09-09）。
 	srcLines := splitLines(t.SourceText)
 	row := 2
 	for i, line := range srcLines {
 		_ = f.SetCellValue(sheet, cellName(1, row), line)
 		for j, lc := range langs {
-			// 语言译文按行对齐：同段数逐行对应；段数不一致（译文更少）时首行填整段、其余留空，
-			// 译文更多时超出的行丢弃——保证每个单元格只含一段，Excel 不再重复整段译文
-			cell := ""
-			segs := extractTextSegments(t, lc)
-			if len(segs) == len(srcLines) && i < len(segs) {
-				cell = segs[i].Target
-			} else if i == 0 {
-				cell = payload.Translations[lc]
-			}
-			_ = f.SetCellValue(sheet, cellName(j+2, row), cell)
+			_ = f.SetCellValue(sheet, cellName(j+2, row), alignTicketRow(t, srcLines, lc, i))
 		}
 		row++
 	}
