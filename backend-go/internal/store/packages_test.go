@@ -5,6 +5,9 @@ package store
 import (
 	"database/sql"
 	"testing"
+	"time"
+
+	"translator/internal/db"
 
 	_ "modernc.org/sqlite"
 )
@@ -327,4 +330,71 @@ func TestPackageUpgradeRejections(t *testing.T) {
 	if _, err := s.ComputeUpgradeCredit(1, inc); err == nil {
 		t.Fatal("非付费目标应拒绝升级")
 	}
+}
+
+// TestFindTermsBySubstring KB 术语子串匹配：源文长句内嵌的 L1 术语应被检索命中，
+// 非 L1 条目（L2 翻译记忆）不参与术语匹配，目标语言不匹配的术语不返回。
+func TestFindTermsBySubstring(t *testing.T) {
+	s := newTestStoreWithTenants(t)
+	// 建一个 source 角色的行业包（包类型全员可见）
+	pkgID := s.dbInsertPkg(t, 1, "industry")
+	// 插入术语：极石→ar→ROX / 极石→ru→ROX（L1 术语）
+	s.dbInsertEntry(t, 1, pkgID, 1, "极石", "ar", "ROX")
+	s.dbInsertEntry(t, 1, pkgID, 1, "极石", "ru", "ROX")
+	// 插入一条 L2 翻译记忆（不应被术语子串匹配返回）
+	s.dbInsertEntry(t, 1, pkgID, 2, "山海无界，极石致远", "en", "Boundless mountains and seas, Jishi reaches far.")
+
+	// 源文长句内嵌「极石」→ 应命中 ar/ru 两条 L1 术语
+	terms, err := s.FindTermsBySubstring(1, 0, "zh", "山海无界，极石致远。国际标准赋能制造，极石汽车驰骋全球山海")
+	if err != nil {
+		t.Fatalf("FindTermsBySubstring 失败: %v", err)
+	}
+	if len(terms) != 2 {
+		t.Fatalf("应命中 2 条术语（ar/ru），实得 %d 条: %+v", len(terms), terms)
+	}
+	langs := map[string]string{}
+	for _, tm := range terms {
+		langs[tm.TargetLang] = tm.TargetText
+	}
+	if langs["ar"] != "ROX" || langs["ru"] != "ROX" {
+		t.Fatalf("术语译文不符: %+v", langs)
+	}
+
+	// 源文不含术语 → 空结果
+	empty, err := s.FindTermsBySubstring(1, 0, "zh", "今天天气不错")
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("无术语源文应返回空: err=%v n=%d", err, len(empty))
+	}
+
+	// 只取目标语言 ar → 仅 1 条（workflow 按语言过滤，此处验证返回包含多语言由上层过滤）
+	arTerms, err := s.FindTermsBySubstring(1, 0, "zh", "极石汽车")
+	if err != nil || len(arTerms) != 2 {
+		t.Fatalf("极石汽车应命中 2 条术语: err=%v n=%d", err, len(arTerms))
+	}
+}
+
+// dbInsertPkg 插入测试知识库包，返回包 ID。
+func (s *Store) dbInsertPkg(t *testing.T, tid int64, packType string) int64 {
+	t.Helper()
+	now := time.Now().Format(time.RFC3339)
+	res, err := db.Exec(s.db, db.CurrentDialect(), "INSERT INTO kb_packages (tenant_id, code, name, pack_type, role, org_id, created_at, updated_at) VALUES (?,?,?,?,?,0,?,?)",
+		tid, "t"+packType+now, "测试包", packType, "source", now, now)
+	if err != nil {
+		t.Fatalf("插入测试包失败: %v", err)
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
+
+// dbInsertEntry 插入测试知识库条目，返回条目 ID。
+func (s *Store) dbInsertEntry(t *testing.T, tid, pkgID int64, layer int, src, lang, tgt string) int64 {
+	t.Helper()
+	now := time.Now().Format(time.RFC3339)
+	res, err := db.Exec(s.db, db.CurrentDialect(), "INSERT INTO kb_entries (tenant_id, package_id, layer, source_lang, source_text, target_lang, target_text, module, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+		tid, pkgID, layer, "zh", src, lang, tgt, "brand", now, now)
+	if err != nil {
+		t.Fatalf("插入测试条目失败: %v", err)
+	}
+	id, _ := res.LastInsertId()
+	return id
 }

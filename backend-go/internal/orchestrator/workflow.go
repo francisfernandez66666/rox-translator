@@ -169,6 +169,27 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 				p.Sources[ent.TargetLang] = "kb" // 标记来源为知识库
 			}
 		}
+		// ★ 术语子串匹配（2026-09-09 硬闸 RAG 治本）：整段精确匹配无法命中嵌在长句里的
+		//   单条 L1 术语（如「山海无界，极石致远」中的「极石」）。对源文做术语子串检索，
+		//   把命中的术语条目并入 Examples，供 ai_initial 初翻注入 prompt 强制遵循
+		//   （知识库已定义 极石→ar→ROX / 极石→ru→ROX，此前模型自由发挥成 «جي شي» (ROX)）。
+		if terms, terr := w.Store.FindTermsBySubstring(tid, orgID, srcLang, t.SourceText); terr == nil && len(terms) > 0 {
+			seen := map[string]bool{}
+			for _, term := range terms {
+				if term == nil || strings.TrimSpace(term.SourceText) == "" {
+					continue
+				}
+				if seen[term.SourceText+"|"+term.TargetLang] {
+					continue
+				}
+				seen[term.SourceText+"|"+term.TargetLang] = true
+				p.Examples = append(p.Examples, &kb.Row{
+					Zh:     term.SourceText,
+					Module: term.Module,
+					Langs:  map[string]string{term.TargetLang: term.TargetText},
+				})
+			}
+		}
 	}
 
 	// 2. engine 兜底（npz 语义库），只对缺失语言取 KB 命中（langOnly=true 不调模型）
@@ -342,7 +363,41 @@ func (w *Workflow) runEvalsReview(ctx context.Context, t *store.Ticket) error {
 	return nil
 }
 
-// runGate 8 项硬校验。校验失败时自动附 KB 提示重译（硬闸护栏，≤ gate_retry_max 次），
+// kbTermHits 按源文子串匹配 L1 术语（同 runKBMatch 的口径，供硬闸校验与重译参考复用）。
+// 参数：t=工单对象，lc=目标语言。返回：术语要求列表（gate 校验用）与术语参考行（重译 prompt 用）。
+func (w *Workflow) kbTermHits(t *store.Ticket, lc string) ([]gate.TermRequirement, []*kb.Row) {
+	var reqs []gate.TermRequirement
+	var rows []*kb.Row
+	if w.Store == nil {
+		return reqs, rows
+	}
+	srcLang := engine.DetectSourceLang(t.SourceText)
+	orgID := int64(0)
+	if t.CreatedBy > 0 {
+		if u, uerr := w.Store.GetUser(t.CreatedBy, t.TenantID); uerr == nil && u != nil {
+			orgID = u.OrgID
+		}
+	}
+	if ents, err := w.Store.FindTermsBySubstring(t.TenantID, orgID, srcLang, t.SourceText); err == nil {
+		for _, ent := range ents {
+			if ent == nil || strings.TrimSpace(ent.SourceText) == "" || strings.TrimSpace(ent.TargetText) == "" {
+				continue
+			}
+			if ent.TargetLang != lc {
+				continue // 只取当前语言的术语要求
+			}
+			reqs = append(reqs, gate.TermRequirement{Source: ent.SourceText, Target: ent.TargetText})
+			rows = append(rows, &kb.Row{
+				Zh:     ent.SourceText,
+				Module: ent.Module,
+				Langs:  map[string]string{ent.TargetLang: ent.TargetText},
+			})
+		}
+	}
+	return reqs, rows
+}
+
+// runGate 8 项硬校验 + KB 术语遵循校验。校验失败时自动附 KB 提示重译（硬闸护栏，≤ gate_retry_max 次），
 // 仍失败才返回错误置 rejected。
 // 参数：ctx=上下文，t=工单对象。
 func (w *Workflow) runGate(ctx context.Context, t *store.Ticket) error {
@@ -361,10 +416,12 @@ func (w *Workflow) runGate(ctx context.Context, t *store.Ticket) error {
 		if tr == "" {
 			continue
 		}
+		// KB 术语要求（硬闸第 9 项）：源文命中术语须在译文中体现
+		termReqs, termRows := w.kbTermHits(t, lc)
 		// 硬闸循环：校验 → 失败则附 KB 提示重译 → 再校验，直到通过或达到上限
 		cursor := tr
 		for attempt := 0; attempt <= maxRetry; attempt++ {
-			g := gate.Run(p.SourceText, lc, cursor)
+			g := gate.RunWithTerms(p.SourceText, lc, cursor, termReqs)
 			if g.Pass {
 				p.Gate = g
 				p.Translations[lc] = cursor
@@ -377,7 +434,7 @@ func (w *Workflow) runGate(ctx context.Context, t *store.Ticket) error {
 				return fmt.Errorf("%s（已自动重译 %d 次仍不通过）", reason, maxRetry)
 			}
 			feedback := gateRetranslateFeedback(g.Checks)
-			rev := w.retranslateWithKB(ctx, t, lc, cursor, feedback)
+			rev := w.retranslateWithKB(ctx, t, lc, cursor, feedback, termRows)
 			if rev == "" {
 				return fmt.Errorf("%s，且附带 KB 提示重译失败", reason)
 			}
@@ -426,7 +483,7 @@ func (w *Workflow) runCultureGate(ctx context.Context, t *store.Ticket) error {
 			if attempt >= maxRetry {
 				return fmt.Errorf("%s（已自动重译 %d 次仍不通过）", reason, maxRetry)
 			}
-			rev := w.retranslateWithKB(ctx, t, lc, cursor, reason)
+			rev := w.retranslateWithKB(ctx, t, lc, cursor, reason, nil)
 			if rev == "" {
 				return fmt.Errorf("%s，且附带 KB 提示重译失败", reason)
 			}
@@ -452,10 +509,12 @@ func (w *Workflow) gateRetryMax() int {
 // retranslateWithKB 附 KB 提示重译单语言译文（硬闸护栏核心）。
 // 依据 Gate 失败项/语言文化打回原因 + 命中的 KB 参考（源文本在租户 KB 中的标准译法），
 // 用 TranslateWithFeedbackEx 修正重译。参数：ctx=上下文，t=工单对象（取创建人/租户做
-// KB 可见性隔离），lc=目标语言，tr=当前译文，reason=打回原因；返回修正后译文（失败返回 ""）。
-func (w *Workflow) retranslateWithKB(ctx context.Context, t *store.Ticket, lc, tr, reason string) string {
+// KB 可见性隔离），lc=目标语言，tr=当前译文，reason=打回原因，extraRows=调用方已命中的
+// 术语参考行（如 runGate 术语遵循打回时注入的 KB 术语，重译时必须沿用）；返回修正后译文（失败返回 ""）。
+func (w *Workflow) retranslateWithKB(ctx context.Context, t *store.Ticket, lc, tr, reason string, extraRows []*kb.Row) string {
 	// KB 在知识库匹配阶段已按租户/部门隔离；此处取源文本命中的标准译法作为重译参考
 	var examples []*kb.Row
+	examples = append(examples, extraRows...)
 	if w.Store != nil {
 		srcLang := engine.DetectSourceLang(t.SourceText)
 		orgID := int64(0)

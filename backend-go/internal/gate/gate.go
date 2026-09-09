@@ -13,6 +13,7 @@ package gate
 // ========================================
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode"
@@ -23,6 +24,13 @@ import (
 type GateResult struct {
 	Pass   bool    `json:"pass"`   // 是否全部通过
 	Checks []Check `json:"checks"` // 各单项校验明细
+}
+
+// TermRequirement 术语遵循要求：源文命中 KB 术语时，译文必须包含其规定译法。
+// 用于 RAG 硬闸——知识库检索到的术语（如 极石→ROX）若未在译文中体现，判不通过。
+type TermRequirement struct {
+	Source string // KB 术语源文（中文，如「极石」）
+	Target string // KB 规定译法（如 ROX）
 }
 
 // Check 单条硬性校验项的结果：Name 标识校验项、Pass 标记是否通过、
@@ -44,6 +52,14 @@ var (
 // Run 执行 8 项硬校验
 // source: 源文本（中文）；target: 目标语言代码；translation: 译文
 func Run(source, target, translation string) *GateResult {
+	return RunWithTerms(source, target, translation, nil)
+}
+
+// RunWithTerms 执行 8 项硬校验 + 第 9 项「KB 术语遵循」。
+// source: 源文本（中文）；target: 目标语言代码；translation: 译文；
+// terms: KB 命中的术语要求（源文→规定译法）。术语要求非空时，
+// 源文出现该术语、译文却未包含规定译法，则判不通过（RAG 硬闸护栏）。
+func RunWithTerms(source, target, translation string, terms []TermRequirement) *GateResult {
 	res := &GateResult{Pass: true}
 	tr := strings.TrimSpace(translation)
 
@@ -119,6 +135,23 @@ func Run(source, target, translation string) *GateResult {
 	}
 	res.Checks = append(res.Checks, Check{"目标语言合理", pass, detail})
 	if !pass {
+		res.Pass = false
+	}
+
+	// 9. KB 术语遵循（RAG 硬闸）：源文出现 KB 命中术语、译文却未含规定译法 → 不通过。
+	//   仅对「源文确实包含该术语」的要求生效；目标译法为空或源文不包含则跳过。
+	//   校验口径：译文非空且包含术语规定译法（子串匹配）即通过。
+	for _, tm := range terms {
+		if strings.TrimSpace(tm.Source) == "" || strings.TrimSpace(tm.Target) == "" {
+			continue
+		}
+		if !strings.Contains(source, tm.Source) {
+			continue // 源文不含该术语，不适用
+		}
+		if tr != "" && strings.Contains(tr, tm.Target) {
+			continue // 译文已含规定译法
+		}
+		res.Checks = append(res.Checks, Check{"术语遵循", false, fmt.Sprintf("知识库术语「%s」应译作 %s，译文未体现", tm.Source, tm.Target)})
 		res.Pass = false
 	}
 

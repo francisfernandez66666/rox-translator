@@ -649,6 +649,40 @@ func (s *Store) FindEntriesBySource(tid int64, srcLang, srcText string) ([]*KBEn
 // orgID=0（调用方不在任何部门，如租户管理员）时，仅可见 org_id=0 及行业/语言文化包，
 // 其余部门私有包一律隔离，杜绝跨部门泄漏。
 // 参数：tid=租户 ID，orgID=调用方组织 ID，srcLang=源语言，srcText=源文本。
+// FindTermsBySubstring 术语子串匹配：对源文做 L1 术语（layer=1）的子串命中查询。
+// 与 FindEntriesBySourceScoped（整段精确匹配）互补——单条术语（如「极石」）嵌在长句
+// 「山海无界，极石致远」中时，精确匹配无法命中，需按子串检索把术语拎出来注入 prompt。
+// 参数：tid=租户 ID，orgID=调用方部门 ID，srcLang=源语言，srcText=待翻译源文。
+// 返回：命中的术语条目（按包类型优先级 + layer + id 排序）。
+func (s *Store) FindTermsBySubstring(tid, orgID int64, srcLang, srcText string) ([]*KBEntry, error) {
+	q := "SELECT e.id, e.tenant_id, e.package_id, e.layer, e.source_lang, e.source_text, e.target_lang, e.target_text, e.module, e.created_at, e.updated_at " +
+		"FROM kb_entries e JOIN kb_packages p ON e.package_id=p.id " +
+		"WHERE e.tenant_id=? AND e.source_lang=? AND e.layer=1 AND p.role='source' " +
+		"AND ? LIKE '%' || e.source_text || '%' " +
+		"AND (" +
+		"  p.org_id = 0" +
+		"  OR p.pack_type IN ('industry','locale')" +
+		"  OR p.org_id = ?" +
+		"  OR (p.org_id <> 0 AND p.org_id <> ? AND COALESCE(p.share_cross_dept,1)=1)" +
+		") " +
+		"ORDER BY length(e.source_text) DESC, CASE p.pack_type WHEN 'tenant' THEN 0 WHEN 'industry' THEN 1 ELSE 2 END, e.layer, e.id"
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, tid, srcLang, srcText, orgID, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*KBEntry
+	for rows.Next() {
+		var e KBEntry
+		if err := rows.Scan(&e.ID, &e.TenantID, &e.PackageID, &e.Layer, &e.SourceLang, &e.SourceText, &e.TargetLang, &e.TargetText, &e.Module, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			continue
+		}
+		out = append(out, &e)
+	}
+	return out, nil
+}
+
+// FindEntriesBySourceScoped 知识库条目整段精确匹配（四层统一表）：
 func (s *Store) FindEntriesBySourceScoped(tid, orgID int64, srcLang, srcText string) ([]*KBEntry, error) {
 	q := "SELECT e.id, e.tenant_id, e.package_id, e.layer, e.source_lang, e.source_text, e.target_lang, e.target_text, e.module, e.created_at, e.updated_at " +
 		"FROM kb_entries e JOIN kb_packages p ON e.package_id=p.id " +
