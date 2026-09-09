@@ -99,13 +99,18 @@ func TestBrandReplaceVariants(t *testing.T) {
 
 // TestStripTrailingCJKNotes 验证译文末尾的中文「编辑注释/术语对照」残留块被整体截断，
 // 修复用户反馈的快速翻译英文遗留乱码问题（（：，：1. ：… 骨架）。
-func TestStripTrailingCJKNotes(t *testing.T) {
-	cases := []struct{ in, want string }{
+func TestStripTrailingCJKNotes(t *testing.T) {	cases := []struct{ in, want string }{
 		// 末尾注释块起始行：纯全角标点无字母无数字 → 截断
 		{"VIII. Component protection.\n\n（：，：\n1. ：\"\"brake rotors\"\"\n2. ：（±2%）",
 			"VIII. Component protection."},
+		// ★ 讲解式残留（工单 T20260909111254JZ7）：去汉字后含英文+序号数字+全角标点，
+		//   以全角括号开头 → 截断（旧判定不含字母不含数字不命中，QA 数字检查误报 1 2 3）
+		{"Please wait for the verification code to appear before proceeding. Only perform the operation after verification is confirmed.\n\n（：1. \"verification marks\"\"verification code\"；2. \"passed the verification\"\"verification is confirmed\"；3. ，\"before proceeding\"\"after verification\"，\"confirmed\"\"passed\"。）",
+			"Please wait for the verification code to appear before proceeding. Only perform the operation after verification is confirmed."},
 		// 无注释块：原样保留
 		{"Normal English line 1\nAnother line 10 km/h.", "Normal English line 1\nAnother line 10 km/h."},
+		// 正常英文以半角符号开头不受影响（全角标点才是注释残留特征）
+		{"(quoted) English line 1\nmore here.", "(quoted) English line 1\nmore here."},
 	}
 	for _, c := range cases {
 		if got := stripTrailingCJKNotes(c.in); got != c.want {

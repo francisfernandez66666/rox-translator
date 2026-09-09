@@ -106,11 +106,23 @@ func stripEmptyPlaceholderBrackets(text string) string {
 	return emptyBracketRe.ReplaceAllString(text, "")
 }
 
+// leadingCJKNoteRe 匹配以 CJK 全角标点开头的行——中文「编辑注释/术语对照」残留块
+// 经 StripChineseInNonZh 去汉字后的骨架行（如 （：1. "…"；2. "…"。）行首仍保留
+// 全角括号/冒号，而正常目标语（拉丁系）译文行绝不会以全角标点开头。
+var leadingCJKNoteRe = regexp.MustCompile(`^[\x{3000}-\x{303f}\x{ff00}-\x{ffef}\x{2018}\x{2019}\x{201c}\x{201d}\x{2026}]`)
+
 // stripTrailingCJKNotes 剥离非 CJK 目标语译文末尾的「编辑注释/术语对照」残留块。
 // 现象：模型在译文后追加中文说明（如 术语对照/替换说明），经 StripChineseInNonZh
-// 去掉汉字后剩下一堆全角标点骨架（如 "（：，：\n1. ：…"），即用户反馈的「乱码没清干净」。
-// 规则：逐行扫描，遇到「不含拉丁字母且不含数字、但含 CJK 全角标点」的行即视为注释块
-// 起始行，从该行起截断丢弃；不影响正常英文行（含字母/数字）。
+// 去掉汉字后可能剩两种形态：
+//   - 纯全角标点骨架（如 "（：，：\n1. ：…"），不含字母/数字；
+//   - 讲解式骨架（如 （：1. "verification marks""verification code"；2. …），
+//     含英文单词与序号数字——旧判定（不含字母且不含数字）漏网，混入译文触发
+//     QA 数字一致性误报（源=[] 译=[1 2 3]，工单 T20260909111254JZ7）。
+//
+// 规则：逐行扫描，命中以下任一特征即视为注释块起始行，从该行起截断丢弃：
+//   - 不含拉丁字母且不含数字、但含 CJK 全角标点（纯骨架行）；
+//   - 以 CJK 全角标点开头（讲解式残留行，其后仍含英文/数字）。
+// 不影响正常目标语行（含字母/数字、且不以全角标点开头）。
 func stripTrailingCJKNotes(text string) string {
 	lines := strings.Split(text, "\n")
 	digitRe := regexp.MustCompile(`[0-9]`)
@@ -119,7 +131,8 @@ func stripTrailingCJKNotes(text string) string {
 		if t == "" {
 			continue
 		}
-		if !latnRe.MatchString(t) && !digitRe.MatchString(t) && cjkPunctRe.MatchString(t) {
+		if (!latnRe.MatchString(t) && !digitRe.MatchString(t) && cjkPunctRe.MatchString(t)) ||
+			leadingCJKNoteRe.MatchString(t) {
 			return strings.TrimRight(strings.Join(lines[:i], "\n"), " \t\n")
 		}
 	}

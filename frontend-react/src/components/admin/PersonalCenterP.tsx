@@ -20,14 +20,16 @@ import { useAdmin } from '@/stores/admin'
 import { ReferralP } from './panels_c'
 import TaskCenterP from './TaskCenterP'
 
-/** 个人中心面板组件：邀请好友（个人用户）/ 任务中心 子 tab */
+/** 个人中心面板组件：邀请好友（个人用户）/ 任务中心 子 tab（默认不选中，由用户点选） */
 export default function PersonalCenterP() {
   const [, t] = useT()
   const { isPersonal } = useAdmin()
-  const [tab, setTab] = useState<'referral' | 'tasks'>('referral')
+  // ★ 默认不选中任何子 tab（2026-09-09 反馈）：点开「个人中心」先展示空内容区，
+  //   由用户自行点选「邀请好友/任务中心」，避免默认打开一个子页。
+  const [tab, setTab] = useState<'referral' | 'tasks' | ''>('')
 
   return (
-    <Tabs value={tab} onChange={(v) => setTab(v as 'referral' | 'tasks')}>
+    <Tabs value={tab} onChange={(v) => setTab(v as 'referral' | 'tasks' | '')}>
       {/* 邀请好友 · 多邀多得：仅个人用户展示；企业用户/平台超管彻底隐藏 */}
       {isPersonal && (
         <Tabs.TabPanel value="referral" label={t('referral.title')}>
