@@ -3,6 +3,8 @@
 //   A) 超管创建行业 → 列表可见 → 编辑名 → 停用/启用 → 删除（成功）
 //   B) 非超管（普通企业用户）访问写接口 → 403 拦截（仅超管可管理行业）
 //   C) 被租户引用的行业删除 → 400 拒绝（引用保护，提示改用停用）
+//   D) /api/auth/register-config 公开生效行业字典：无需登录可达；
+//      新建行业可见、停用行业立即从公开字典隐藏（注册页行业下拉动态拉取的数据源）。
 // 复用 admin_superadmin_scope_test.go 的内存 SQLite + 真实 JWT 基建，
 // 走 handler 全链路（鉴权 requireDeptAdmin → 超管判定 → store 落库）。
 // ========================================
@@ -252,5 +254,109 @@ func TestIndustryAPIDeleteReferencedRejected(t *testing.T) {
 		map[string]interface{}{"id": created.Industry.ID})
 	if del.Code != http.StatusBadRequest {
 		t.Fatalf("被引用行业删除应 400 拒绝，实得 %d: %s", del.Code, del.Body.String())
+	}
+}
+
+// registerConfigGET 公开调用 /api/auth/register-config（无需登录，前端注册面板用）。
+func registerConfigGET(t *testing.T, s *Server) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/register-config", nil)
+	rec := httptest.NewRecorder()
+	s.handleRegisterConfig(rec, req)
+	return rec
+}
+
+// TestRegisterConfigIndustries register-config 公开返回启用中的行业字典：
+// 创建 disable 行业（停用）→ 公开接口仅返回启用行业；开启后恢复可见。
+// 覆盖 2026-09-10「注册页行业下拉动态拉取」的 public 数据源（无 token 可访问）。
+func TestRegisterConfigIndustries(t *testing.T) {
+	s, tokens := newIndustryTestServer(t)
+
+	// 公开接口初始可达（无需登录）
+	r0 := registerConfigGET(t, s)
+	var init struct {
+		Success    bool   `json:"success"`
+		Industries []struct {
+			Code string `json:"code"`
+			Name string `json:"name"`
+		} `json:"industries"`
+	}
+	if err := json.Unmarshal(r0.Body.Bytes(), &init); err != nil || !init.Success {
+		t.Fatalf("register-config 应成功: %v (%s)", err, r0.Body.String())
+	}
+
+	// 创建两个行业：enabled（默认启用）与 disabled（随后停用）
+	cre := industryPost(t, s, "/api/admin/industries/create", tokens["admin"],
+		map[string]interface{}{"code": "enabled", "name": "启用行业"})
+	var ce struct {
+		Success  bool             `json:"success"`
+		Industry *store.KBPackage `json:"industry"`
+	}
+	_ = json.Unmarshal(cre.Body.Bytes(), &ce)
+	if !ce.Success || ce.Industry == nil {
+		t.Fatalf("创建 enabled 行业应成功: %s", cre.Body.String())
+	}
+	crd := industryPost(t, s, "/api/admin/industries/create", tokens["admin"],
+		map[string]interface{}{"code": "disabled", "name": "停用行业"})
+	var cd struct {
+		Success  bool             `json:"success"`
+		Industry *store.KBPackage `json:"industry"`
+	}
+	_ = json.Unmarshal(crd.Body.Bytes(), &cd)
+	if !cd.Success || cd.Industry == nil {
+		t.Fatalf("创建 disabled 行业应成功: %s", crd.Body.String())
+	}
+
+	// 两行业启用态的公开字典均应可见
+	rMid := registerConfigGET(t, s)
+	var mid struct {
+		Industries []struct {
+			Code string `json:"code"`
+		} `json:"industries"`
+	}
+	_ = json.Unmarshal(rMid.Body.Bytes(), &mid)
+	hasMidEnabled := false
+	hasMidDisabled := false
+	for _, x := range mid.Industries {
+		if x.Code == "enabled" {
+			hasMidEnabled = true
+		}
+		if x.Code == "disabled" {
+			hasMidDisabled = true
+		}
+	}
+	if !hasMidEnabled || !hasMidDisabled {
+		t.Fatalf("新建启用行业应出现在公开字典: %s", rMid.Body.String())
+	}
+
+	// 停用 disabled → 公开字典立即隐藏（仅 enabled 保留）
+	st0 := industryPost(t, s, "/api/admin/industries/status", tokens["admin"],
+		map[string]interface{}{"id": cd.Industry.ID, "enabled": 0})
+	var st0Out struct{ Success bool }
+	if err := json.Unmarshal(st0.Body.Bytes(), &st0Out); err != nil || !st0Out.Success {
+		t.Fatalf("停用 disabled 行业应成功: %v (%s)", err, st0.Body.String())
+	}
+	rLast := registerConfigGET(t, s)
+	var last struct {
+		Industries []struct {
+			Code string `json:"code"`
+		} `json:"industries"`
+	}
+	_ = json.Unmarshal(rLast.Body.Bytes(), &last)
+	hasDisabled := false
+	hasEnabled := false
+	for _, x := range last.Industries {
+		if x.Code == "disabled" {
+			hasDisabled = true
+		}
+		if x.Code == "enabled" {
+			hasEnabled = true
+		}
+	}
+	if hasDisabled {
+		t.Fatalf("停用行业不应出现在公开注册字典: %s", rLast.Body.String())
+	}
+	if !hasEnabled {
+		t.Fatalf("启用行业应保留在公开注册字典: %s", rLast.Body.String())
 	}
 }

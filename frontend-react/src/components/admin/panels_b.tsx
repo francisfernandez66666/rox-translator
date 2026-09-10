@@ -83,6 +83,7 @@ export function TenantsP() {
         expires_at: String(form.expires_at || ''), permissions: String(form.permissions || '{}'),
         admin_user: form.admin_user ? String(form.admin_user) : undefined,
         admin_pass: form.admin_pass ? String(form.admin_pass) : undefined,
+        // 创建租户行业：动态字典 code 直传（超管在「行业管理」维护；空则不设）
         industry: form.industry ? String(form.industry) : undefined,
       })
       if (!r.success) { void MessagePlugin.error(r.message); return }
@@ -94,6 +95,8 @@ export function TenantsP() {
         id: tt.id, name: String(form.name ?? tt.name),
         expires_at: String(form.expires_at ?? tt.expires_at ?? ''),
         permissions: String(form.permissions ?? tt.permissions ?? '{}'),
+        // industry 为动态行业字典 code（2026-09-10 起下拉直接选 code）；
+        // industryCodeOf 是兼容层：动态 code 原样透传，历史中文名兜底转 code
         industry: String(form.industry ? industryCodeOf(String(form.industry)) : (tt.industry ?? '')),
       })
       if (!r.success) { void MessagePlugin.error(r.message); return }
