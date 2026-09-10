@@ -39,6 +39,53 @@ import (
 
 // ============ 工单 ============
 
+// estimateTicketTokens 估算文件/文本工单翻译的 token 消耗（纯函数，便于单测）。
+// 规则：源文本字符数 ×（1/每 token 字符数）× 目标语言数 × 计费系数。
+// 说明：中文约 1 词 1.5 字符、每 token 覆盖 0.7 词 → 每 token 约 2.1 字符；
+// 取保守值每 token 1.3 字符、系数与配置计费 markup 相乘，得到偏高的上限估算，
+// 用于建单前余额预检（宁可多估，避免工单跑到中途因余额耗尽被实时计费中止）。
+func estimateTicketTokens(sourceChars int64, langCount int, markup float64) int64 {
+	if sourceChars <= 0 || langCount <= 0 {
+		return 0
+	}
+	charsPerToken := 1.3 // 保守下限（中文场景）
+	base := float64(sourceChars) / charsPerToken
+	if markup <= 0 {
+		return int64(base * float64(langCount))
+	}
+	return int64(base * float64(langCount) * markup)
+}
+
+// precheckTicketBalance 文件/文本工单建单前置余额预检（改进2，2026-09-10）：
+// 强制计费开启时，估算本次翻译的 token 消耗，若超出剩余余额则直接拒绝建单，
+// 避免「工单创建→队列→跑到中途余额耗尽→整单失败」（此前只查余额>0，不查是否够本次用量）。
+// release 为 gateUsage 返回的并发名额释放闭包：预检失败时同样需归还。
+func (s *Server) precheckTicketBalance(tid int64, srcChars int64, langCount int, release func()) error {
+	if release != nil {
+		defer release()
+	}
+	if tid <= 0 || srcChars <= 0 || langCount <= 0 {
+		return nil // 无归属租户/无可估消耗：交 raw gateUsage 处理
+	}
+	if s.Bill == nil || !s.Bill.Enabled() {
+		return nil // 未强制计费：不预检
+	}
+	estimated := estimateTicketTokens(srcChars, langCount, s.markupMultiplier())
+	grants, permanent, err := s.Store.TenantRemainTotal(tid)
+	if err != nil {
+		return nil // 余额查询失败不阻断建单，交由实时计费兜底
+	}
+	total := grants + permanent
+	if total <= 0 {
+		// 余额已耗尽：gateUsage.CheckBalance 已拦截，此处兜底给同样文案
+		return &apiErr{"组织 token 已耗尽，请联系管理员及时充值"}
+	}
+	if estimated > total {
+		return &apiErr{fmt.Sprintf("余额不足：本次翻译预估需 %d token，当前余额 %d token，请先充值后再发起", estimated, total)}
+	}
+	return nil
+}
+
 // handleTickets 工单列表接口（tenant_admin 及以上）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（查询参数 mine=1 仅显示本人创建的工单）。
 // 返回: success=true 时携带 tickets 数组。
@@ -110,11 +157,19 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 整改 C6：建单即自动执行，必须先过配额闸门（此前闸门只在手动 run 存在，
 	//   自动入队路径使 QPS/日额/余额闸对建单入口形同虚设）
-	if _, release, gerr := s.gateUsage(r); gerr != nil {
+	var release func()
+	var tid int64
+	var gerr error
+	if tid, release, gerr = s.gateUsage(r); gerr != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
 		return
-	} else {
-		release()
+	}
+	// ★ 改进2（2026-09-10）：余额预检——估算本次文本翻译消耗，超出剩余余额直接拒绝，
+	//   避免工单入队后中途因余额耗尽失败（precheck 内部会归还并发名额）。
+	langCount := len(strings.Split(req.TargetLangs, ","))
+	if perr := s.precheckTicketBalance(tid, int64(len([]rune(req.SourceText))), langCount, release); perr != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": perr.Error()})
+		return
 	}
 	// 创建工单（归属生效租户）
 	t, err := s.Store.CreateTicket(s.effTenant(r, u), u.ID, req.Title, req.SourceText, "", req.TargetLangs)
@@ -230,11 +285,31 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	// ★ 整改 C6：建文件工单同样先过配额闸门（自动入队路径此前完全绕闸）
-	if _, release, gerr := s.gateUsage(r); gerr != nil {
+	var tid int64
+	var release func()
+	var gerr error
+	if tid, release, gerr = s.gateUsage(r); gerr != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
 		return
-	} else {
-		release()
+	}
+	// ★ 改进2（2026-09-10）：文件工单建单前余额预检——用上传文件大小估算源字符数
+	//   （UTF-8 中文约 3 字节/字，取 1/3 为保守字符数），预检失败直接拒绝并提示充值，
+	//   避免工单入队后跑到中途因余额耗尽整单失败（precheck 内部归还并发名额）。
+	{
+		var srcChars int64
+		for _, f := range saved {
+			if fi, serr := os.Stat(f.path); serr == nil {
+				srcChars += fi.Size() / 3 // 文件字节数 → 估算源字符数（保守）
+			}
+		}
+		if perr := s.precheckTicketBalance(tid, srcChars, len(strings.Split(targetLangs, ",")), release); perr != nil {
+			// 预检失败：清理已上传文件，避免孤儿文件滞留磁盘
+			for _, cleanup := range saved {
+				os.Remove(cleanup.path)
+			}
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": perr.Error()})
+			return
+		}
 	}
 	// 创建工单（file_path 记首个文件，兼容旧列表展示；全部文件入 ticket_files 表）
 	t, err := s.Store.CreateTicket(s.effTenant(r, u), u.ID, title, "", saved[0].path, targetLangs)
@@ -248,7 +323,7 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 	if n, perr := strconv.ParseInt(r.FormValue("max_length"), 10, 64); perr == nil && n > 0 {
 		t.MaxLength = n
 	}
-	tid := s.effTenant(r, u)
+	tid = s.effTenant(r, u)
 	for _, f := range saved {
 		_, _ = s.Store.AddTicketFile(&store.TicketFile{
 			TenantID: tid, TicketID: t.ID, FileName: f.name, FilePath: f.path,

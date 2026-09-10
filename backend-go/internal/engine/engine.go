@@ -12,6 +12,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -175,15 +176,36 @@ type usageRecord struct {
 	used     bool       // 是否已记录过实际用量（避免回退默认）
 }
 
+// abortReasonFrom 读取本次翻译被实时计费中止的原因；未中止/未设置返回 ""。
+// 通过 context.Cause 获取（WithUsageRecorder 用 WithCancelCause 注入 cause）。
+func abortReasonFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	cause := context.Cause(ctx)
+	if cause == nil || cause == context.Canceled || cause == context.DeadlineExceeded {
+		return ""
+	}
+	if errors.Is(cause, store.ErrInsufficientBalance) {
+		return "余额不足"
+	}
+	return cause.Error()
+}
+
 // WithUsageRecorder 向 ctx 注入用量记录器（API 层在进入翻译前调用）。
 // 同时注入 llm.UsageCollector：全链路（初翻/校对/Judge/文化闸门/embedding）
 // 的真实 token 用量自动归集，供按实际费用计费。
 func (e *Engine) WithUsageRecorder(ctx context.Context) context.Context {
 	// ★ 余额不足中止：创建可取消 ctx 并注入中止函数，实时计费钩子在余额耗尽时调用，
 	// 立即中止整次翻译任务（含全部并发段），杜绝其余段被供应商免费翻译的白嫖漏洞。
-	ctx, cancel := context.WithCancel(ctx)
+	// ★ 2026-09-10 改进1：中止时记录面向用户的原因（context.CancelCause），
+	// 对话翻译据此在回复中提示「余额不足请充值」，不再静默缺失语言（用户无感知）。
+	ctx, cancel := context.WithCancelCause(ctx)
 	ctx = llm.WithUsageCollector(ctx, &llm.UsageCollector{})
-	ctx = llm.WithAbort(ctx, cancel)
+	// 包一层：中止前写入原因文案，供对话/工单结果组装读取。
+	ctx = llm.WithAbort(ctx, func() {
+		cancel(store.ErrInsufficientBalance)
+	})
 	return context.WithValue(ctx, usageCtxKey{}, &usageRecord{})
 }
 

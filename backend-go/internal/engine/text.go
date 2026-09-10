@@ -331,6 +331,16 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 		sb.WriteString("\n\n⚠️ 质量校验提示：\n" + strings.Join(gateWarnings, "\n"))
 	}
 
+	// ★ 2026-09-10 改进1：实时计费余额不足中止时，向用户明确提示（不再静默缺失语言）。
+	// 此前 abort() 直接取消 ctx，对话回复只见成功语言、缺失语言无任何说明，
+	// 用户误以为翻译故障。现把中止原因（store.ErrInsufficientBalance 的面向用户文案）
+	// 追加到回复尾部，并追加到 gateWarnings 供前端结构化展示。
+	if reason := abortReasonFrom(ctx); reason != "" {
+		hint := fmt.Sprintf("⚠️ %s：本次翻译可能不完整，请充值后重新发送。", reason)
+		sb.WriteString("\n\n" + hint)
+		gateWarnings = append(gateWarnings, hint)
+	}
+
 	var sim *float64
 	if kbResult.Similarity > 0 {
 		s := kbResult.Similarity
