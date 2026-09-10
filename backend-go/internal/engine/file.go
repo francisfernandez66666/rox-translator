@@ -324,6 +324,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		}
 		termRetrieve := strings.Join(retrieveTexts, "\n")
 		brandTermsAll = e.fetchBrandTerms(ctx, termRetrieve)
+		if len(brandTermsAll) > 0 {
+			log.Printf("[brandterm] 文件路径加载品牌术语 %d 个语言（翻译前保护+翻后归一化）", len(brandTermsAll))
+		}
 	}
 
 	translationMu := sync.Mutex{}
