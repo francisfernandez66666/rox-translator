@@ -293,13 +293,6 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 		allSrc[lc] = "model"
 	}
 
-	// ★ 品牌术语归一化（2026-09-10 需求）：源文命中 KB 品牌术语（极石/极石汽车→ROX）时，
-	//   对每个目标语言译文剥离「ROX vehicles/motor/автомобиль」等自创后缀，统一为纯品牌名，
-	//   放在 AI 校对之前——校对 agent 以归一化后的译文为基线复核，避免后续又加回后缀。
-	if hit := e.normalizeBrandTerms(ctx, cleanText, allTr, srcLang); hit > 0 {
-		log.Printf("[brandterm] 对话路径品牌术语归一化 %d 个语言译文", hit)
-	}
-
 	// ★ 校对 Agent：初翻结果逐语言审校修正（fast/pro 均含校对环节；3 路并发限流）
 	if len(allTr) > 0 {
 		prog("AI 校对中...", 3, 4)
@@ -328,6 +321,15 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 			}(lc, tr)
 		}
 		wg.Wait()
+	}
+
+	// ★ 品牌术语归一化收尾（2026-09-10 需求，放在 AI 校对与重翻之后）：
+	//   源文命中 KB 品牌术语（极石/极石汽车→ROX）时，对每个目标语言译文剥离
+	//   「ROX vehicles/motor/автомобиль」等自创后缀，统一为纯品牌名。
+	//   必须在校对之后做最终约束——校对 agent 可能把前半程归一化结果改回带后缀，
+	//   故此处为硬收尾，确保交给约束闸门与用户的是品牌名统一的译文。
+	if hit := e.normalizeBrandTerms(ctx, cleanText, allTr, srcLang); hit > 0 {
+		log.Printf("[brandterm] 对话路径品牌术语归一化 %d 个语言译文", hit)
 	}
 
 	// 整改 R1：文本主翻译路径统一走约束闸门 + 语言文化闸门（pro 模式可带反馈重翻）

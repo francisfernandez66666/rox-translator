@@ -97,6 +97,10 @@ func TestNormalizeBrandTerm(t *testing.T) {
 		{"译文无brand不动", "Honda vehicles expanding", "ROX", "Honda vehicles expanding"},
 		{"句首品牌", "ROX Motor unveiled its plans", "ROX", "ROX unveiled its plans"},
 		{"后无空格", "ROX vehicles.", "ROX", "ROX."},
+		{"俄语后缀在前", "Автомобили ROX мчатся по морям", "ROX", "ROX мчатся по морям"},
+		{"阿语后缀环绕", "تجوب سيارات ROX جبال العالم", "ROX", "تجوب ROX جبال العالم"},
+		{"西语后缀在后", "ROX automóviles venden bien", "ROX", "ROX venden bien"},
+		{"品牌在句中双侧后缀", "Big ROX cars motor sales", "ROX", "Big ROX sales"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

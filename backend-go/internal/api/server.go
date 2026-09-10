@@ -72,6 +72,11 @@ type Server struct {
 // st: 平台存储（可 nil）；ts: 租户存储（可 nil）。
 // 返回: 组装完成的 *Server 实例。
 func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist string, st *store.Store, ts *tenant.Store) *Server {
+	// ★ 2026-09-10 品牌术语归一化依赖平台 store：Engine 构造时不持有 St，
+	//   在此注入，使对话/文件路径的 normalizeBrandTerms 能查询 KB 品牌术语。
+	if eng != nil && st != nil {
+		eng.St = st
+	}
 	s := &Server{Cfg: cfg, Engine: eng, DB: db, Ten: ts, Store: st, Dist: dist, metrics: newMetrics(), loginLimit: newLoginLimiter(st), regGuard: newRegisterGuard(st), startedAt: time.Now(), SSO: sso.NewManager(cfg.SSOProviders)}
 	// 平台存储就绪时初始化计费服务（限流/配额/余额）
 	if st != nil {

@@ -15,6 +15,7 @@ package gate
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -171,18 +172,26 @@ func contains(list []string, v string) bool {
 // brandSuffixWords 品牌名后常见的车辆/公司类自创后缀集合（多语言小写，供 NormalizeBrandTerm 剥离）。
 // 背景：KB 定义了品牌术语（module=brand，如 极石→ROX）后，模型偶发把品牌名加上业务后缀——
 // 如 "ROX vehicles" / "ROX motor" / "ROX cars" / "ROX автомобиль"。产品要求品牌名一律等于
-// 术语规定译法（ROX），不得带后缀。此表覆盖英文/俄文/西语/葡语等高频情形。数组多次编译一次。
+// 术语规定译法（ROX），不得带后缀。此表覆盖英文/俄文/西语/阿语等高频情形。数组多次编译一次。
 var brandSuffixWords = []string{
 	"vehicles", "vehicle", "motors", "motor", "automobiles", "automobile",
 	"autos", "auto", "cars", "car",
 	"автомобилей", "автомобиль", "автомобили", "автомобиля", "авто",
 	"automóviles", "automóvil", "coches", "coche", "carros", "carro",
+	"سيارات", "سيارة",
 }
 
 // NormalizeBrandTerm 品牌术语归一化（纯函数，RAG 硬闸品牌统一输出用）：
-// 把译文里「品牌规定译法（brand）+ 空格/连字符 + 车辆类后缀词」的自创组合，规约为纯品牌名。
-// 例：NormalizeBrandTerm("ROX vehicles expanding", "ROX") → "ROX expanding"；
-//     多后缀连写 "ROX Motor Car" → "ROX"。大小写不敏感地匹配后缀（保持原品牌大小写不变）。
+// 把译文里「品牌规定译法（brand）」与其相邻的车辆类后缀词组成的组合，规约为纯品牌名。
+// 采用「两步正则替换」：先剥后缀词块（品牌+分隔符+后缀词），再剥前缀词块
+// （后缀词+分隔符+品牌），替换时保留品牌旁的分隔符，避免中阿/俄文粘连。
+// 覆盖形态：
+//   1) 品牌+后缀：   "ROX vehicles expanding"  → "ROX expanding"
+//   2) 后缀+品牌：   "Автомобили ROX мчатся"   → "ROX мчатся"
+//   3) 前后环绕：    "سيارات ROX في العالم"     → "ROX في العالم"
+// 多后缀连写 "ROX Motor Car" 整体剥离。大小写不敏感（(?i) 只折叠 ASCII，故词表
+// 已内置首字母大写变体覆盖俄/欧语句首名词大写）。短词（<5 字符）追加 \b 防误切
+// "automóviles" 等长词（auto→automóviles）。收尾压缩连续空白并清理标点前空格。
 // 参数 translation：模型译文；brand：品牌规定译法（如 ROX）。brand 为空或译文中无品牌则原样返回。
 func NormalizeBrandTerm(translation, brand string) string {
 	b := strings.TrimSpace(brand)
@@ -192,17 +201,42 @@ func NormalizeBrandTerm(translation, brand string) string {
 	if !strings.Contains(translation, b) {
 		return translation // 译文未出现品牌，无需归一
 	}
-	// 动态构造后缀词表正则（品牌后跟分隔符 + 一个或多个后缀词）
-	suffixAlt := strings.Join(brandSuffixWords, "|")
-	re := regexp.MustCompile("(?i)(" + regexp.QuoteMeta(b) + ")([\\s\\-_./·]*(?:" + suffixAlt + ")(?:[\\s\\-_./·]*(?:" + suffixAlt + "))*)")
-	out := re.ReplaceAllStringFunc(translation, func(m string) string {
-		group := re.FindStringSubmatch(m)
-		if len(group) < 2 {
-			return m
+	// 动态构造后缀词表正则：每个词内置「首字母大写」变体；短词追加 \b。
+	suffixAlt := make([]string, 0, len(brandSuffixWords)*2)
+	for _, w := range brandSuffixWords {
+		esc := regexp.QuoteMeta(w)
+		if len([]rune(w)) < 5 {
+			esc += `\b`
 		}
-		return group[1] // 仅保留品牌词本身，剥离全部车辆类后缀
-	})
-	return out
+		suffixAlt = append(suffixAlt, esc)
+		r := []rune(w)
+		r[0] = unicode.ToUpper(r[0])
+		escCap := regexp.QuoteMeta(string(r))
+		if len(r) < 5 {
+			escCap += `\b`
+		}
+		suffixAlt = append(suffixAlt, escCap)
+	}
+	// 按字符长度降序，保证长词（automóviles）优先于短词（auto）参与匹配。
+	sort.SliceStable(suffixAlt, func(i, j int) bool { return len(suffixAlt[i]) > len(suffixAlt[j]) })
+	joined := strings.Join(suffixAlt, "|")
+	sep := `[\s\-_./·]`
+	sw := `(?:` + joined + `)`
+	sblk := `(?:` + sw + `(?:` + sep + `+` + sw + `)*)`
+	escB := regexp.QuoteMeta(b)
+
+	// 第一步：剥后缀词块 —— (brand)(sep+)(词块) → $1$2（保留品牌+其后分隔符）。
+	out := regexp.MustCompile(`(?i)(` + escB + `)(` + sep + `+)(` + sblk + `)`).
+		ReplaceAllString(translation, `${1}${2}`)
+
+	// 第二步：剥前缀词块 —— (词块)(sep+)(brand) → $2$3（保留分隔符+品牌）。
+	out = regexp.MustCompile(`(?i)(` + sblk + `)(` + sep + `+)(` + escB + `)`).
+		ReplaceAllString(out, `${2}${3}`)
+
+	// 收尾：压缩连续空白、清理标点前空格、去首尾空白（替换可能残留单个分隔符）。
+	out = regexp.MustCompile(`[ \t]+`).ReplaceAllString(out, " ")
+	out = regexp.MustCompile(` ([.,;:!?…。！？，；：])`).ReplaceAllString(out, "$1")
+	return strings.TrimSpace(out)
 }
 
 // hasRepetition 检测明显重复片段（如 3 字以上连续出现 4 次）
