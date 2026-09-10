@@ -5,6 +5,34 @@ package engine
 
 import "testing"
 
+// TestProtectSourceByLang 翻译前品牌保护：源文品牌名替换为规定译法（长词优先防拆残），
+// 无术语匹配时不改动；返回第二个值标记是否发生过替换。
+func TestProtectSourceByLang(t *testing.T) {
+	terms := map[string]string{"极石汽车": "ROX", "极石": "ROX"}
+	cases := []struct {
+		name  string
+		in    []string
+		terms map[string]string
+		want  []string
+	}{
+		{"长词优先不拆残", []string{"极石汽车驰骋全球山海。"}, terms, []string{"ROX驰骋全球山海。"}},
+		{"短词单独替换", []string{"极石是高端品牌。"}, terms, []string{"ROX是高端品牌。"}},
+		{"不含品牌原样", []string{"今天天气不错。"}, terms, []string{"今天天气不错。"}},
+		{"无术语映射原样", []string{"极石汽车。"}, nil, []string{"极石汽车。"}},
+		{"多段各自替换", []string{"极石汽车A", "极石B"}, terms, []string{"ROXA", "ROXB"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, _ := protectSourceByLang(c.in, c.terms)
+			for i := range c.want {
+				if got[i] != c.want[i] {
+					t.Fatalf("protectSourceByLang(%v)[%d] = %q, want %q", c.in, i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+}
+
 // TestLeakedLang 漏译率硬闸判定：超 50% 触发、恰 50% 不触发、0 不触发、负数不触发
 func TestLeakedLang(t *testing.T) {
 	cases := []struct {

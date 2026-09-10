@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,22 +81,14 @@ func leakedLang(lang string, remain, total int) string {
 	return ""
 }
 
-// normalizeFileBrandTerms 文件路径品牌术语归一化（2026-09-10 需求，与对话路径一致）：
-// 源文（取文本段拼接作为检索串）命中 KB module=brand + layer=1 术语时，
-// 对 langTranslations 中每个命中语言的每条段落译文执行 gate.NormalizeBrandTerm，
-// 剥离「ROX vehicles/motor/автомобиль」等自创后缀，统一品牌名为规定译法。
-// 返回被归一的语言数（>0 说明做过归一化扫描）。
-func (e *Engine) normalizeFileBrandTerms(ctx context.Context, texts []string, langTranslations map[string]map[string]string) int {
-	if e.St == nil || len(texts) == 0 || len(langTranslations) == 0 {
-		return 0
+// fetchBrandTerms 查询该租户 KB 中全部 module=brand + layer=1 术语，
+// 返回 map[目标语言]map[源品牌名]规定译法（如 ru: 极石汽车→ROX）。用于：
+//   1) 翻译前品牌保护（把源文品牌名替换为规定译法，避免模型音译成 Киджиш 等）；
+//   2) 翻译后归一化（剥离 ROX vehicles/motor/汽车 等后缀）。
+func (e *Engine) fetchBrandTerms(ctx context.Context, retrieve string) map[string]map[string]string {
+	if e.St == nil || strings.TrimSpace(retrieve) == "" {
+		return nil
 	}
-	// 用首条文本段做术语检索串（品牌名通常在小段/标题即可命中；避免整文件拼接过大）
-	retrieve := texts[0]
-	if len([]rune(retrieve)) > 200 {
-		retrieve = string([]rune(retrieve)[:200])
-	}
-	// 源语言：文件翻译场景源文档语言由分段翻译时识别，这里复用对话路径口径（zh 缺省）；
-	// 若命中不到，可尝试 zh。
 	tid := tenant.FromContext(ctx)
 	if tid <= 0 {
 		tid = 1
@@ -106,37 +99,99 @@ func (e *Engine) normalizeFileBrandTerms(ctx context.Context, texts []string, la
 			orgID = u.OrgID
 		}
 	}
+	if len([]rune(retrieve)) > 200 {
+		retrieve = string([]rune(retrieve)[:200])
+	}
 	ents, err := e.St.FindTermsBySubstring(tid, orgID, "zh", retrieve)
 	if err != nil || len(ents) == 0 {
+		return nil
+	}
+	out := map[string]map[string]string{}
+	for _, ent := range ents {
+		if ent == nil || ent.Module != "brand" || ent.Layer != 1 || ent.TargetLang == "" || strings.TrimSpace(ent.TargetText) == "" {
+			continue
+		}
+		lc := ent.TargetLang
+		if _, ok := out[lc]; !ok {
+			out[lc] = map[string]string{}
+		}
+		src := strings.TrimSpace(ent.SourceText)
+		if _, dup := out[lc][src]; !dup {
+			out[lc][src] = strings.TrimSpace(ent.TargetText)
+		}
+	}
+	return out
+}
+
+// protectSourceByLang 翻译前品牌保护：把源文中的源品牌名（如 极石/极石汽车）替换为该
+// 目标语言的规定译法（如 ru→ROX），使模型直接输出 ROX、不会音译成 Киджиш 等。
+// terms 为该语言的 src→target 映射；长词优先替换（极石汽车 先于 极石，避免拆残）。
+// 返回替换后的源文数组与是否发生替换（无替换时原样返回原切片引用）。
+func protectSourceByLang(texts []string, terms map[string]string) ([]string, bool) {
+	if len(terms) == 0 {
+		return texts, false
+	}
+	keys := make([]string, 0, len(terms))
+	for k := range terms {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return len([]rune(keys[i])) > len([]rune(keys[j])) })
+	changed := false
+	out := make([]string, len(texts))
+	for i, t := range texts {
+		s := t
+		for _, k := range keys {
+			v := terms[k]
+			if strings.Contains(s, k) {
+				s = strings.ReplaceAll(s, k, v)
+				changed = true
+			}
+		}
+		out[i] = s
+	}
+	if !changed {
+		return texts, false
+	}
+	return out, true
+}
+
+// normalizeFileBrandTerms 文件路径品牌术语归一化（2026-09-10 需求，与对话路径一致）：
+// 源文命中 KB module=brand + layer=1 术语时，对 langTranslations 中每个命中语言的
+// 每条段落译文执行 gate.NormalizeBrandTerm，剥离「ROX vehicles/motor/автомобиль」
+// 等自创后缀，统一品牌名为规定译法。翻译前另有 protectSourceByLang 做源文品牌保护
+// （见文件主流程），此处为译后又一道兜底。返回被归一的语言数。
+func (e *Engine) normalizeFileBrandTerms(ctx context.Context, texts []string, langTranslations map[string]map[string]string) int {
+	if e.St == nil || len(texts) == 0 || len(langTranslations) == 0 {
 		return 0
 	}
-	brandByLang := map[string]string{}
-	for _, ent := range ents {
-		if ent == nil || ent.Module != "brand" || ent.Layer != 1 {
-			continue
-		}
-		if ent.TargetLang == "" || strings.TrimSpace(ent.TargetText) == "" {
-			continue
-		}
-		if _, ok := brandByLang[ent.TargetLang]; !ok {
-			brandByLang[ent.TargetLang] = strings.TrimSpace(ent.TargetText)
-		}
+	retrieve := strings.Join(texts, "\n")
+	if len([]rune(retrieve)) > 200 {
+		retrieve = string([]rune(retrieve)[:200])
 	}
-	if len(brandByLang) == 0 {
+	bm := e.fetchBrandTerms(ctx, retrieve)
+	if len(bm) == 0 {
 		return 0
 	}
 	fixedLang := map[string]bool{}
 	for lc, segs := range langTranslations {
-		brand, ok := brandByLang[lc]
-		if !ok {
+		terms := bm[lc]
+		if len(terms) == 0 {
 			continue
 		}
 		for orig, tr := range segs {
 			if strings.TrimSpace(tr) == "" {
 				continue
 			}
-			if norm := gate.NormalizeBrandTerm(tr, brand); norm != tr {
-				segs[orig] = norm
+			changed := false
+			n := tr
+			for _, tgt := range terms {
+				if nn := gate.NormalizeBrandTerm(n, tgt); nn != n {
+					n = nn
+					changed = true
+				}
+			}
+			if changed {
+				segs[orig] = n
 				fixedLang[lc] = true
 			}
 		}
@@ -257,6 +312,20 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	// 语言 → 原文 → 译文
 	langTranslations := map[string]map[string]string{}
 
+	// ★ 品牌术语预取（2026-09-10 需求）：一次查询取出 KB module=brand+layer=1 术语，
+	//   供文件各语言「翻译前品牌保护」与「翻后归一化」共用（map[lang]map[src]target）。
+	//   源文品牌名（极石/极石汽车）将被替换为规定译法（ROX），杜绝模型音译成
+	//   Киджиш 等（音译无法靠事后剥后缀修正）。
+	var brandTermsAll map[string]map[string]string
+	{
+		retrieveTexts := texts
+		if len(retrieveTexts) > 8 {
+			retrieveTexts = texts[:8]
+		}
+		termRetrieve := strings.Join(retrieveTexts, "\n")
+		brandTermsAll = e.fetchBrandTerms(ctx, termRetrieve)
+	}
+
 	translationMu := sync.Mutex{}
 	kbHitsMu := sync.Mutex{}
 	modelHitsMu := sync.Mutex{}
@@ -331,17 +400,20 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				log.Printf("[kb-match] lang=%s 命中=%d 走模型=%d", lc, len(texts)-len(needModelIdx), len(needModelIdx))
 				// 第二遍：批量模型补漏
 				if len(needModelIdx) > 0 {
-					needTexts := make([]string, len(needModelIdx))
-					for i, idx := range needModelIdx {
-						needTexts[i] = texts[idx]
-					}
-					batch := e.BatchTranslate(ctx, needTexts, lc, 15,
-						func(done, total int) { prog("file_translate|初翻|"+lc, done, total) })
-					// ★ pro 模式批量审校：本块一次 LLM 调用逐条修正，失败/不符原样保留
-					if !fast {
-						batch = e.reviewBatchSafe(ctx, needTexts, batch, lc,
-							func(done, total int) { prog("file_translate|校对|"+lc, done, total) })
-					}
+needTexts := make([]string, len(needModelIdx))
+				for i, idx := range needModelIdx {
+					needTexts[i] = texts[idx]
+				}
+				// ★ 品牌保护（2026-09-10）：把该语言源文中的品牌名替换为规定译法，
+				//   使模型输出 ROX 而非音译 Киджиш；返回的 batch 仍按原 needTexts 索引对应。
+				protSrc, _ := protectSourceByLang(needTexts, brandTermsAll[lc])
+				batch := e.BatchTranslate(ctx, protSrc, lc, 15,
+					func(done, total int) { prog("file_translate|初翻|"+lc, done, total) })
+				// ★ pro 模式批量审校：本块一次 LLM 调用逐条修正，失败/不符原样保留
+				if !fast {
+					batch = e.reviewBatchSafe(ctx, protSrc, batch, lc,
+						func(done, total int) { prog("file_translate|校对|"+lc, done, total) })
+				}
 					for i, idx := range needModelIdx {
 						// ★ 回显检测：模型原样返回源文 = 未翻译，视为缺失走重试
 						if batch[i] != "" && batch[i] != "[翻译失败]" && batch[i] != texts[idx] {
@@ -360,11 +432,13 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		go func(lc string) {
 			defer wg.Done()
 			defer recoverPipeline("file_batch:" + lc) // 整改 D4
-			batch := e.BatchTranslate(ctx, texts, lc, 15,
+			// ★ 品牌保护（2026-09-10）：同 KB 路径，源文品牌名替换为规定译法防音译。
+			protSrc, _ := protectSourceByLang(texts, brandTermsAll[lc])
+			batch := e.BatchTranslate(ctx, protSrc, lc, 15,
 				func(done, total int) { prog("file_translate|初翻|"+lc, done, total) })
 			// ★ pro 模式批量审校（同上：整块一次调用）
 			if !fast {
-				batch = e.reviewBatchSafe(ctx, texts, batch, lc,
+				batch = e.reviewBatchSafe(ctx, protSrc, batch, lc,
 					func(done, total int) { prog("file_translate|校对|"+lc, done, total) })
 			}
 			for i, t := range texts {
@@ -440,8 +514,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				break
 			}
 			// 本轮第1优先：小批量重译（bs=10）。BatchTranslate 内部含动态批与低解析率二次收编，
-			// 对短段回显的纠正率高于逐段单发。
-			batch := e.BatchTranslate(ctx, still, lc, 10,
+			// 对短段回显的纠正率高于逐段单发。品牌保护同前：源文品牌名先替换为规定译法防音译。
+			protStill, _ := protectSourceByLang(still, brandTermsAll[lc])
+			batch := e.BatchTranslate(ctx, protStill, lc, 10,
 				func(done, total int) { prog("file_translate|初翻|"+lc, done, total) })
 			for i, m := range still {
 				if v := batch[i]; v != "" && v != "[翻译失败]" && v != m {
