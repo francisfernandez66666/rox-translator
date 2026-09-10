@@ -304,6 +304,12 @@ func (s *Server) routesAdminKB() {
 	s.mux.HandleFunc("/api/admin/kb-packages/create", s.handleKBPackageCreate)
 	s.mux.HandleFunc("/api/admin/kb-packages/update", s.handleKBPackageUpdate)
 	s.mux.HandleFunc("/api/admin/kb-packages/delete", s.handleKBPackageDelete)
+	// ★ 2026-09-10 行业字典管理（超管可创建/维护行业，全站下拉动态拉取）
+	s.mux.HandleFunc("/api/admin/industries", s.handleIndustries)
+	s.mux.HandleFunc("/api/admin/industries/create", s.handleIndustryCreate)
+	s.mux.HandleFunc("/api/admin/industries/update", s.handleIndustryUpdate)
+	s.mux.HandleFunc("/api/admin/industries/status", s.handleIndustryStatus)
+	s.mux.HandleFunc("/api/admin/industries/delete", s.handleIndustryDelete)
 	s.mux.HandleFunc("/api/admin/kb-entries", s.handleKBEntries)
 	s.mux.HandleFunc("/api/admin/brand-terms", s.handleBrandTerms) // ★ 2026-09-10 品牌名设置前端可见（知识库单独可配）
 	s.mux.HandleFunc("/api/admin/kb-entries/add", s.handleKBEntryAdd)

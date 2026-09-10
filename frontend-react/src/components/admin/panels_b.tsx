@@ -23,7 +23,8 @@ import { fmtNum, fmtTime } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { InvitesP } from './panels_a'
 import { t, tpl, useT, type Lang } from '@/i18n'
-import { industryName, industryOptions, industryCodeOf } from '@/lib/industries'
+import { industryName, industryCodeOf } from '@/lib/industries'
+import { industries as fetchIndustries } from '@/api/industry'
 
 type Any = any // 兜底类型：避免对 TD 组件回调/返回结构强类型化（沿用项目惯例）
 
@@ -32,12 +33,6 @@ function fmtNumShort(n: number): string {
   if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + 'w'
   return String(n)
 }
-
-/** 行业下拉可选项（含空项，label 按当前语言自适应，值=中文名，功能②/③） */
-const tenantIndustryOptions = (lang: Lang) => [
-  { value: '', label: lang === 'en' ? 'Unset' : '（未设置）' },
-  ...industryOptions(lang),
-]
 
 /** 行业 code → 当前语言展示名（列表列用） */
 const industryLabel = (code: string, lang: Lang): string => industryName(code || '', lang) || '—'
@@ -54,6 +49,17 @@ export function TenantsP() {
   const [dlg, setDlg] = useState<null | 'create' | { edit: TenantInfo } | { order: TenantInfo }>(null)
   // 表单数据
   const [form, setForm] = useState<Any>({})
+  // ★ 2026-09-10 行业字典动态化：租户表单行业下拉动态拉取（超管在「行业管理」维护）
+  const [indList, setIndList] = useState<Array<{ code: string; name: string; enabled: number }>>([])
+
+  /** 加载行业字典（动态拉取，供租户表单行业下拉使用） */
+  const loadInd = useCallback(async () => {
+    try {
+      const r = await fetchIndustries()
+      if (r.success && r.industries) setIndList(r.industries)
+    } catch { /* ignore */ }
+  }, [])
+  useEffect(() => { void loadInd() }, [loadInd])
 
   /** 解析租户权限 JSON 中的 package_code（空表示未开通套餐，可发放试用） */
   const pkgOf = (row: TenantInfo): string => {
@@ -77,6 +83,7 @@ export function TenantsP() {
         expires_at: String(form.expires_at || ''), permissions: String(form.permissions || '{}'),
         admin_user: form.admin_user ? String(form.admin_user) : undefined,
         admin_pass: form.admin_pass ? String(form.admin_pass) : undefined,
+        industry: form.industry ? String(form.industry) : undefined,
       })
       if (!r.success) { void MessagePlugin.error(r.message); return }
       setForm({}); setDlg(null); await load(); ad.loadTenants()
@@ -185,7 +192,7 @@ export function TenantsP() {
                { colKey: 'op', title: t('tenants.colActions'), width: 380, cell: ({ row }: any) => (
                  <Space size={2} breakLine>
                    {/* 编辑租户（名称/权限/行业，功能②） */}
-                   <Button size="small" variant="text" onClick={() => { setForm({ name: row.name, expires_at: row.expires_at || '', permissions: row.permissions || '{}', industry: row.industry ? industryName(row.industry, 'zh') : '' }); setDlg({ edit: row }) }}>{t('tenants.edit')}</Button>
+                   <Button size="small" variant="text" onClick={() => { setForm({ name: row.name, expires_at: row.expires_at || '', permissions: row.permissions || '{}', industry: row.industry || '' }); setDlg({ edit: row }) }}>{t('tenants.edit')}</Button>
                    {/* ★ 发放/重新发放体验额度（任务2.4：对所有租户可用，叠加发放新体验；已开通也可再领） */}
                    <Button size="small" variant="text" onClick={() => grantTrial(row)}>{t('tenants.grantTrial')}</Button>
                    {/* 启用/禁用租户 */}
@@ -227,7 +234,9 @@ export function TenantsP() {
             {/* 行业属性（功能②：决定共享行业包载入范围，超管可修正） */}
             <Field label={t('tenants.industry')}>
               <Select value={String(form.industry ?? '')} onChange={(v: any) => setForm({ ...form, industry: String(v) })}>
-                {tenantIndustryOptions(lang).map((o) => <Select.Option key={o.value} value={o.value} label={o.label} />)}
+                {/* ★ 2026-09-10 行业字典动态化：动态拉取超管维护的行业（含空项） */}
+                <Select.Option key="" value="" label={lang === 'en' ? 'Unset' : '（未设置）'} />
+                {indList.map((o) => <Select.Option key={o.code} value={o.code} label={o.name} />)}
               </Select>
             </Field>
             {/* 创建模式：显示管理员账号与初始密码 */}

@@ -47,7 +47,7 @@ export async function tenantList(): Promise<TenantResp> {
 
 /** 创建新租户（可附带租户管理员账号） */
 export async function tenantCreate(
-  data: { code: string; name: string; expires_at: string; permissions: string; admin_user?: string; admin_pass?: string },
+  data: { code: string; name: string; expires_at: string; permissions: string; admin_user?: string; admin_pass?: string; industry?: string },
 ): Promise<TenantResp> {
   return request('/api/tenant/create', {
     method: 'POST',

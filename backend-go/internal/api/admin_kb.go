@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 	"translator/internal/auth"
 	"translator/internal/store"
@@ -788,5 +789,175 @@ func (s *Server) handleSafetyPhraseStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_status", "kb_safety_phrases", req.Status)
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// ============ 行业字典管理（超管可创建/维护行业，2026-09-10） ============
+// 行业以 kb_packages 中 pack_type=industry 的包为承载，宿主恒为平台租户0（SharedHostTenant）。
+// 超管在「行业管理」面板创建/维护行业，前端各行业下拉（注册/租户表单/数据采集/语料导入）
+// 一律动态拉取 GET /api/admin/industries。行业 CRUD 仅允许超管（平台上下文）。
+
+// handleIndustries 列出平台全部行业字典（超管/租户管理员以上可见；前端下拉与面板共用）。
+// 响应：{ success, industries: [{id,code,name,enabled,entry_count}] }
+func (s *Server) handleIndustries(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireDeptAdmin(r); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	inds, err := s.Store.ListIndustries()
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	// 附带条目计数（面板角标展示语料量）
+	counts, _ := s.Store.CountEntriesByPackages(store.SharedHostTenant)
+	for _, p := range inds {
+		p.EntryCount = counts[p.ID]
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "industries": inds})
+}
+
+// handleIndustryCreate 新建行业（仅超管）：创建平台行业包（pack_type=industry, 租户0）。
+// body：{ code, name }——code 为行业编码（全局唯一，如 auto），name 为显示名。
+func (s *Server) handleIndustryCreate(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireDeptAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	if !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可创建行业"})
+		return
+	}
+	var req struct {
+		Code string `json:"code"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Code) == "" || strings.TrimSpace(req.Name) == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code 与 name 不能为空"})
+		return
+	}
+	// code 规范化：小写字母/数字/下划线，防注入与展示异常
+	code := strings.ToLower(strings.TrimSpace(req.Code))
+	ok := true
+	for _, c := range code {
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
+			ok = false
+			break
+		}
+	}
+	if !ok {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "行业 code 仅允许小写字母/数字/下划线"})
+		return
+	}
+	exists, _ := s.Store.IndustryCodeExists(code)
+	if exists {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "行业 code 已存在"})
+		return
+	}
+	p, err := s.Store.CreateKBPackage(store.SharedHostTenant, 0, code, strings.TrimSpace(req.Name), store.PackIndustry, store.PackRoleSource)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(store.SharedHostTenant, u.ID, "industry_create", "kb_packages", code)
+	s.invKB()
+	writeJSON(w, 200, map[string]interface{}{"success": true, "industry": p})
+}
+
+// handleIndustryUpdate 编辑行业显示名（仅超管）。
+// body：{ id, name }
+func (s *Server) handleIndustryUpdate(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireDeptAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	if !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可编辑行业"})
+		return
+	}
+	var req struct {
+		ID   int64  `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || strings.TrimSpace(req.Name) == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	if err := s.Store.UpdateIndustry(req.ID, strings.TrimSpace(req.Name)); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(store.SharedHostTenant, u.ID, "industry_update", "kb_packages", fmt.Sprintf("id=%d name=%s", req.ID, req.Name))
+	s.invKB()
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleIndustryStatus 启用/停用行业（仅超管）。
+// body：{ id, enabled }——enabled=1 启用 / 0 停用。
+func (s *Server) handleIndustryStatus(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireDeptAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	if !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可启停行业"})
+		return
+	}
+	var req struct {
+		ID      int64 `json:"id"`
+		Enabled int   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || (req.Enabled != 0 && req.Enabled != 1) {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	if err := s.Store.ToggleIndustry(req.ID, req.Enabled); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(store.SharedHostTenant, u.ID, "industry_status", "kb_packages", fmt.Sprintf("id=%d enabled=%d", req.ID, req.Enabled))
+	s.invKB()
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleIndustryDelete 删除行业（仅超管）：删除平台行业包及其下条目/安全句。
+// 删除前校验行业未被企业租户引用（tenants.industry 指向该 code 时拒绝，避免注册回落失效）。
+// body：{ id }
+func (s *Server) handleIndustryDelete(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireDeptAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	if !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可删除行业"})
+		return
+	}
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	pkg, gErr := s.Store.GetKBPackage(req.ID, store.SharedHostTenant)
+	if gErr != nil || pkg == nil || pkg.PackType != store.PackIndustry {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "行业不存在"})
+		return
+	}
+	// 引用校验：任何租户以该行业 code 注册/配置时禁止删除（注册回落与行业包载入会失效）
+	if used, uErr := s.Store.IndustryReferenced(pkg.Code); uErr == nil && used {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该行业已被企业租户使用，无法删除（可停用替代）"})
+		return
+	}
+	if err := s.Store.DeleteIndustry(req.ID); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(store.SharedHostTenant, u.ID, "industry_delete", "kb_packages", pkg.Code)
+	s.invKB()
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }

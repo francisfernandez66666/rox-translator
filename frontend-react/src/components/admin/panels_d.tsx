@@ -26,6 +26,7 @@ import { orgList, type OrgInfo } from '@/api/org'
 import KbUploadDialog from '@/components/KbUploadDialog'
 import DataSourcesP from './DataSourcesP'
 import BrandTermsP from './BrandTermsP'
+import IndustriesP from './IndustriesP'
 
 // ============ 本文件职责中文说明 ============
 // 后台面板 D：知识库、模型、工作流与工单（反馈/审批/TM 审核）。
@@ -698,6 +699,12 @@ export function KbP() {
           ] as never} />
         </Panel>
         </Tabs.TabPanel>
+        {/* ★ 2026-09-10 行业管理（超管可创建/维护行业字典；平台行业包承载，全站下拉动态拉取） */}
+        {isSuper && (
+          <Tabs.TabPanel value="industries" label={`🏭 行业管理`}>
+            <IndustriesP />
+          </Tabs.TabPanel>
+        )}
         {/* ★ 2026-09-10 品牌名设置（知识库单独可配 + 前端可见）：品牌术语 module=brand，外语统一为规定译法 */}
         <Tabs.TabPanel value="brand" label={`🏷️ 品牌名`}>
           <BrandTermsP />

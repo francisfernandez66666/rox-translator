@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button, Dialog, Input, MessagePlugin, Select, Switch, Table, Tag, Tabs, RadioGroup, Radio } from 'tdesign-react'
 import { useT } from '@/i18n'
 import { industryName, INDUSTRY_META } from '@/lib/industries'
+import { industries as fetchIndustries } from '@/api/industry'
 import { LANG_META } from '@/lib/langNames'
 import { Panel, toastResp } from './parts'
 import { confirmDialog } from '@/components/uiDialogs'
@@ -56,6 +57,17 @@ export default function DataSourcesP() {
   const [form, setForm] = useState<Partial<ScrapeSource>>({
     kind: 'official_api', name: '', base_url: '', lang: 'en', industry: '', pack_type: 'locale', tier: 1, freq_hours: 24,
   })
+
+  // ★ 2026-09-10 行业字典动态化：待审筛选/数据源行业下拉动态拉取（超管在「行业管理」维护）
+  const [indList, setIndList] = useState<Array<{ code: string; name: string }>>([])
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetchIndustries()
+        if (r.success && r.industries) setIndList(r.industries)
+      } catch { /* ignore */ }
+    })()
+  }, [])
 
   // ---- 待审池（服务端分页） ----
   const [tab, setTab] = useState<'sources' | 'staged'>('sources')
@@ -356,7 +368,9 @@ export default function DataSourcesP() {
                   onChange={(v: any) => setStagedFilter((f) => ({ ...f, industry: String(v ?? '') }))}
                   clearable
                   placeholder="行业筛选"
-                  options={Object.values(INDUSTRY_META).map((m) => ({ label: industryName(m.code, lang), value: m.code }))}
+                  options={indList.length > 0
+                    ? indList.map((m) => ({ label: m.name, value: m.code }))
+                    : Object.values(INDUSTRY_META).map((m) => ({ label: industryName(m.code, lang), value: m.code }))}
                 />
               </div>
               <div style={{ flex: 1 }} />

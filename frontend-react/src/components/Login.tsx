@@ -55,6 +55,8 @@ export default function Login({ mode, onLogin }: Props) {
   const [form, setForm] = useState({ code: '', name: '', invite: '', email: '', emailCode: '', industry: '', brandName: '', brandNameEn: '' })
   const [emailVerifyOn, setEmailVerifyOn] = useState(false)
   const [captchaOn, setCaptchaOn] = useState(false)
+  // ★ 2026-09-10 行业字典动态化：注册行业下拉动态拉取（仅启用行业；超管在后台「行业管理」维护）
+  const [industries, setIndustries] = useState<Array<{ code: string; name: string }>>([])
   const [codeCooldown, setCooldown] = useState(0)
   const captchaBoxRef = useRef<HTMLDivElement>(null)
   const captchaTokenRef = useRef('')
@@ -86,6 +88,9 @@ export default function Login({ mode, onLogin }: Props) {
           setCaptchaOn(!!(c as unknown as { captcha_enabled?: boolean }).captcha_enabled)
           const key = (c as unknown as { captcha_site_key?: string }).captcha_site_key || ''
           if ((c as unknown as { captcha_enabled?: boolean }).captcha_enabled && key) renderTurnstile(key)
+          // 行业字典动态化：响应携带 industries（启用中的行业列表），填充注册下拉
+          const inds = (c as unknown as { industries?: Array<{ code: string; name: string }> }).industries
+          if (Array.isArray(inds) && inds.length > 0) setIndustries(inds)
         }
       } catch { /* ignore */ }
     })()
@@ -348,7 +353,7 @@ export default function Login({ mode, onLogin }: Props) {
                     <Input value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder={t('login.orgName')} />
                     <Select value={form.industry} onChange={(v) => setForm({ ...form, industry: v as string })}
                             placeholder={t('login.selectIndustry')} clearable
-                            options={industryOptions(lang)} />
+                            options={industries.length > 0 ? industries.map((x) => ({ label: x.name, value: x.code })) : industryOptions(lang)} />
                     {/* ★ 品牌固定用法（2026-09-04）：品牌中文名/英文名种入企业知识库，防止翻译漂移 */}
                     <Input value={form.brandName} onChange={(v) => setForm({ ...form, brandName: v })}
                            placeholder={t('login.brandName')} />

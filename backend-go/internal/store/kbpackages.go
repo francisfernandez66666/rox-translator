@@ -372,6 +372,73 @@ func (s *Store) EnsureIndustryPackage(tid int64, code, name string) error {
 	return err
 }
 
+// ============ 行业字典管理（超管可创建/维护行业，2026-09-10） ============
+
+// ListIndustries 列出平台全部行业包（pack_type=industry，宿主租户0）——
+// 行业字典的唯一数据源。返回按 sort_order 升序，供前端「行业管理」面板与
+// 各行业下拉动态拉取（注册/租户表单/数据采集/语料导入共用）。
+func (s *Store) ListIndustries() ([]*KBPackage, error) {
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+kbPkgCols+" FROM kb_packages WHERE tenant_id=? AND pack_type=? ORDER BY sort_order, id", SharedHostTenant, PackIndustry)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*KBPackage
+	for rows.Next() {
+		p, err := scanKBPackage(rows)
+		if err != nil {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// IndustryCodeExists 判断指定行业 code 是否已存在（平台宿主租户0 全局唯一）。
+// 返回 (存在与否, 错误)。创建行业前调用防止重复 code。
+func (s *Store) IndustryCodeExists(code string) (bool, error) {
+	var cnt int
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COUNT(*) FROM kb_packages WHERE tenant_id=? AND pack_type=? AND code=?", SharedHostTenant, PackIndustry, code).Scan(&cnt)
+	return cnt > 0, err
+}
+
+// UpdateIndustry 更新行业包名称（超管维护行业显示名）。
+// 参数：id=行业包 ID，name=新名称；仅操作平台宿主租户0 的行业包。
+func (s *Store) UpdateIndustry(id int64, name string) error {
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE kb_packages SET name=?, updated_at=? WHERE id=? AND tenant_id=? AND pack_type=?",
+		name, time.Now().Format(time.RFC3339), id, SharedHostTenant, PackIndustry)
+	return err
+}
+
+// ToggleIndustry 启用/停用行业包（停用后不再参与翻译命中，但仍保留在字典中）。
+// 参数：id=行业包 ID，enabled=1 启用 / 0 停用；仅操作平台宿主租户0 的行业包。
+func (s *Store) ToggleIndustry(id int64, enabled int) error {
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE kb_packages SET enabled=?, updated_at=? WHERE id=? AND tenant_id=? AND pack_type=?",
+		enabled, time.Now().Format(time.RFC3339), id, SharedHostTenant, PackIndustry)
+	return err
+}
+
+// DeleteIndustry 删除行业包（连带其下条目、安全句与语言文化共享数据）。
+// 参数：id=行业包 ID；仅操作平台宿主租户0 的行业包。
+func (s *Store) DeleteIndustry(id int64) error {
+	if _, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM kb_entries WHERE package_id=? AND tenant_id=?", id, SharedHostTenant); err != nil {
+		return err
+	}
+	if _, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM kb_safety_phrases WHERE package_id=? AND tenant_id=?", id, SharedHostTenant); err != nil {
+		return err
+	}
+	_, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM kb_packages WHERE id=? AND tenant_id=? AND pack_type=?", id, SharedHostTenant, PackIndustry)
+	return err
+}
+
+// IndustryReferenced 判断行业 code 是否仍被企业租户引用（tenants.industry 指向该 code）。
+// 供行业删除前置校验——被引用的行业禁止删除（注册回落与行业包载入会失效，应停用替代）。
+func (s *Store) IndustryReferenced(code string) (bool, error) {
+	var cnt int
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COUNT(*) FROM tenants WHERE industry=?", code).Scan(&cnt)
+	return cnt > 0, err
+}
+
 // ============ 条目 ============
 
 // SeedBrandTerms 把租户「品牌固定用法」种入企业包（L1 术语），防止品牌名被音译/漂移。

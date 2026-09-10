@@ -187,17 +187,33 @@ func (s *Server) handleEmailCode(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRegisterConfig 公开注册配置接口（前端注册面板显隐用）。
-// 返回: success=true 时携带 email_verify_enabled（★ 任务2.2：registration_review 审核机制已下线，不再返回）。
+// 返回: success=true 时携带 email_verify_enabled（★ 任务2.2：registration_review 审核机制已下线，不再返回）、
+// industries（★ 2026-09-10 行业字典动态化：公开返回启用中的行业列表，注册下拉动态拉取）。
 func (s *Server) handleRegisterConfig(w http.ResponseWriter, r *http.Request) {
 	ev := false
 	if v, _ := s.Store.GetConfig("email_verify_enabled"); v == "1" {
 		ev = true
+	}
+	// 行业字典：仅返回启用中的行业（停用行业不参与新注册选择）
+	type industryItem struct {
+		Code string `json:"code"`
+		Name string `json:"name"`
+	}
+	industries := []industryItem{}
+	if inds, err := s.Store.ListIndustries(); err == nil {
+		for _, p := range inds {
+			if p.Enabled == 0 {
+				continue
+			}
+			industries = append(industries, industryItem{Code: p.Code, Name: p.Name})
+		}
 	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success":              true,
 		"email_verify_enabled": ev,
 		"captcha_enabled":      s.captchaEnabled(),
 		"captcha_site_key":     s.captchaSiteKey(),
+		"industries":           industries,
 	})
 }
 
