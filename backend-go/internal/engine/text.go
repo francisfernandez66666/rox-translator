@@ -10,10 +10,13 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
 	"translator/internal/config"
+	"translator/internal/gate"
+	"translator/internal/tenant"
 )
 
 // Progress 进度回调（step=阶段描述，done/total=当前/总步数）
@@ -100,6 +103,59 @@ func SplitOptions(langs []string) (kbTarget, directOther []string, hasOther bool
 		}
 	}
 	return
+}
+
+// normalizeBrandTerms 品牌术语归一化（对话路径品牌统一输出，2026-09-10 需求）：
+// 源文命中 KB module=brand 术语（layer=1，如 极石→ROX）时，对每个目标语言译文执行
+// gate.NormalizeBrandTerm 剥离「品牌名+车辆类后缀」自创组合（ROX vehicles/motor/автомобиль 等），
+// 使品牌名一律等于术语规定译法。源文无术语/未启用平台存储/无 hits 时原样返回。
+// 返回命中的品牌术语数量（>0 说明做过归一化扫描）。
+func (e *Engine) normalizeBrandTerms(ctx context.Context, srcText string, langTranslations map[string]string, srcLang string) int {
+	if e.St == nil || strings.TrimSpace(srcText) == "" || len(langTranslations) == 0 {
+		return 0
+	}
+	tid := tenant.FromContext(ctx)
+	var orgID int64
+	if uid := tenant.UserFromContext(ctx); uid > 0 {
+		if u, uerr := e.St.GetUser(uid, tid); uerr == nil && u != nil {
+			orgID = u.OrgID
+		}
+	}
+	if tid <= 0 {
+		tid = 1 // 品牌主站根租户发型场景（与 KB 查询口径对齐：ticket 侧用有效租户）
+	}
+	ents, err := e.St.FindTermsBySubstring(tid, orgID, srcLang, srcText)
+	if err != nil || len(ents) == 0 {
+		return 0
+	}
+	// 仅保留 brand 模块 + layer=1 的品牌术语
+	brandByLang := map[string]string{} // target_lang → 规定译法（品牌名）
+	for _, ent := range ents {
+		if ent == nil || ent.Module != "brand" || ent.Layer != 1 {
+			continue
+		}
+		if ent.TargetLang == "" || strings.TrimSpace(ent.TargetText) == "" {
+			continue
+		}
+		if _, ok := brandByLang[ent.TargetLang]; !ok {
+			brandByLang[ent.TargetLang] = strings.TrimSpace(ent.TargetText)
+		}
+	}
+	if len(brandByLang) == 0 {
+		return 0
+	}
+	hit := 0
+	for lc, tr := range langTranslations {
+		brand, ok := brandByLang[lc]
+		if !ok || strings.TrimSpace(tr) == "" {
+			continue
+		}
+		if norm := gate.NormalizeBrandTerm(tr, brand); norm != tr {
+			langTranslations[lc] = norm
+			hit++
+		}
+	}
+	return hit
 }
 
 // HandleText 文本翻译主流程（复刻 skill.py _handle_text_translate）
@@ -235,6 +291,13 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 	for lc, v := range otherTr {
 		allTr[lc] = v
 		allSrc[lc] = "model"
+	}
+
+	// ★ 品牌术语归一化（2026-09-10 需求）：源文命中 KB 品牌术语（极石/极石汽车→ROX）时，
+	//   对每个目标语言译文剥离「ROX vehicles/motor/автомобиль」等自创后缀，统一为纯品牌名，
+	//   放在 AI 校对之前——校对 agent 以归一化后的译文为基线复核，避免后续又加回后缀。
+	if hit := e.normalizeBrandTerms(ctx, cleanText, allTr, srcLang); hit > 0 {
+		log.Printf("[brandterm] 对话路径品牌术语归一化 %d 个语言译文", hit)
 	}
 
 	// ★ 校对 Agent：初翻结果逐语言审校修正（fast/pro 均含校对环节；3 路并发限流）

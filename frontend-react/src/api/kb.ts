@@ -47,6 +47,11 @@ export async function kbEntries(packageId: number, params?: { layer?: number; ta
   return request(`/api/admin/kb-entries?${qs.toString()}`, { headers: authHeaders() })
 }
 
+/** 获取品牌术语（module=brand AND layer=1，如 极石→ROX；package_id 必填）——品牌名设置面板用 */
+export async function brandTerms(packageId: number): Promise<AdminResp> {
+  return request(`/api/admin/brand-terms?package_id=${packageId}`, { headers: authHeaders() })
+}
+
 /** 新增 KB 条目（层级/原文/目标语言/译文/模块） */
 export async function kbEntryAdd(data: { package_id: number; layer: number; source_text: string; target_lang: string; target_text: string; module: string }): Promise<AdminResp> {
   return request('/api/admin/kb-entries/add', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })

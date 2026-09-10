@@ -300,6 +300,7 @@ func (s *Server) routesAdminKB() {
 	s.mux.HandleFunc("/api/admin/kb-packages/update", s.handleKBPackageUpdate)
 	s.mux.HandleFunc("/api/admin/kb-packages/delete", s.handleKBPackageDelete)
 	s.mux.HandleFunc("/api/admin/kb-entries", s.handleKBEntries)
+	s.mux.HandleFunc("/api/admin/brand-terms", s.handleBrandTerms) // ★ 2026-09-10 品牌名设置前端可见（知识库单独可配）
 	s.mux.HandleFunc("/api/admin/kb-entries/add", s.handleKBEntryAdd)
 	s.mux.HandleFunc("/api/admin/kb-entries/update", s.handleKBEntryUpdate)
 	s.mux.HandleFunc("/api/admin/kb-entries/import", s.handleKBEntriesImport)

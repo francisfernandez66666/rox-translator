@@ -392,6 +392,25 @@ func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "entries": entries, "total": total})
 }
 
+// handleBrandTerms 品牌术语查询接口（2026-09-10 需求：品牌名设置前端可见 + 知识库单独可配）：
+// 列出指定知识库包内的品牌术语（module=brand AND layer=1，如 极石→ROX），
+// 供前端「品牌名」配置面板展示与校验。package_id 必填；鉴权：部门管理员及以上。
+func (s *Server) handleBrandTerms(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireDeptAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	pkgID, _ := strconv.ParseInt(r.URL.Query().Get("package_id"), 10, 64)
+	tid := s.kbTenant(r, u)
+	terms, err := s.Store.ListBrandTerms(tid, pkgID)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "terms": terms, "total": len(terms)})
+}
+
 // handleKBEntryAdd 向指定知识库包新增翻译记忆条目（源 / 目标文本等）。参数 w/r：body 含 package_id 与条目内容；鉴权：部门管理员及以上；副作用：写入 kb_entries 并写审计。
 func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)

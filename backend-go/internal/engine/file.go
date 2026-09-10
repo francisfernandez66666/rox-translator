@@ -23,7 +23,9 @@ import (
 	"github.com/xuri/excelize/v2"
 	"translator/internal/config"
 	"translator/internal/fileproc"
+	"translator/internal/gate"
 	"translator/internal/llm"
+	"translator/internal/tenant"
 )
 
 // FileTranslateResult 文件翻译结果
@@ -76,6 +78,70 @@ func leakedLang(lang string, remain, total int) string {
 		return lang
 	}
 	return ""
+}
+
+// normalizeFileBrandTerms 文件路径品牌术语归一化（2026-09-10 需求，与对话路径一致）：
+// 源文（取文本段拼接作为检索串）命中 KB module=brand + layer=1 术语时，
+// 对 langTranslations 中每个命中语言的每条段落译文执行 gate.NormalizeBrandTerm，
+// 剥离「ROX vehicles/motor/автомобиль」等自创后缀，统一品牌名为规定译法。
+// 返回被归一的语言数（>0 说明做过归一化扫描）。
+func (e *Engine) normalizeFileBrandTerms(ctx context.Context, texts []string, langTranslations map[string]map[string]string) int {
+	if e.St == nil || len(texts) == 0 || len(langTranslations) == 0 {
+		return 0
+	}
+	// 用首条文本段做术语检索串（品牌名通常在小段/标题即可命中；避免整文件拼接过大）
+	retrieve := texts[0]
+	if len([]rune(retrieve)) > 200 {
+		retrieve = string([]rune(retrieve)[:200])
+	}
+	// 源语言：文件翻译场景源文档语言由分段翻译时识别，这里复用对话路径口径（zh 缺省）；
+	// 若命中不到，可尝试 zh。
+	tid := tenant.FromContext(ctx)
+	if tid <= 0 {
+		tid = 1
+	}
+	var orgID int64
+	if uid := tenant.UserFromContext(ctx); uid > 0 {
+		if u, uerr := e.St.GetUser(uid, tid); uerr == nil && u != nil {
+			orgID = u.OrgID
+		}
+	}
+	ents, err := e.St.FindTermsBySubstring(tid, orgID, "zh", retrieve)
+	if err != nil || len(ents) == 0 {
+		return 0
+	}
+	brandByLang := map[string]string{}
+	for _, ent := range ents {
+		if ent == nil || ent.Module != "brand" || ent.Layer != 1 {
+			continue
+		}
+		if ent.TargetLang == "" || strings.TrimSpace(ent.TargetText) == "" {
+			continue
+		}
+		if _, ok := brandByLang[ent.TargetLang]; !ok {
+			brandByLang[ent.TargetLang] = strings.TrimSpace(ent.TargetText)
+		}
+	}
+	if len(brandByLang) == 0 {
+		return 0
+	}
+	fixedLang := map[string]bool{}
+	for lc, segs := range langTranslations {
+		brand, ok := brandByLang[lc]
+		if !ok {
+			continue
+		}
+		for orig, tr := range segs {
+			if strings.TrimSpace(tr) == "" {
+				continue
+			}
+			if norm := gate.NormalizeBrandTerm(tr, brand); norm != tr {
+				segs[orig] = norm
+				fixedLang[lc] = true
+			}
+		}
+	}
+	return len(fixedLang)
 }
 
 // HandleFile 文件翻译主流程（复刻 skill.py _handle_file_translate）
@@ -423,6 +489,12 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			log.Printf("[file-gate] %s 漏译 %d/%d 段（超 50%%），置工单失败", lang, untranslated[lc], len(texts))
 			return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 翻译失败：%d/%d 段未能译出（模型调用异常或译文键不匹配），请稍后重新发起", config.LangNames[lang], untranslated[lc], len(texts))}
 		}
+	}
+
+	// ★ 品牌术语归一化（2026-09-10 需求）：文件译文段落同样剥离「ROX vehicles/motor」等
+	//   品牌自创后缀，统一为 KB 规定译法（module=brand 术语），再进入约束闸门与写回。
+	if normalized := e.normalizeFileBrandTerms(ctx, texts, langTranslations); normalized > 0 {
+		log.Printf("[brandterm] 文件路径品牌术语归一化 %d 个语言译文", normalized)
 	}
 
 	// 整改 R1：文件主翻译路径统一走约束闸门 + 语言文化闸门。

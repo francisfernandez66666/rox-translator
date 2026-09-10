@@ -78,3 +78,31 @@ func TestRunWithTermsTermFollow(t *testing.T) {
 		}
 	})
 }
+
+// TestNormalizeBrandTerm 品牌术语归一化：译文把品牌名带上车辆类后缀时应剥除、统一为纯品牌名。
+func TestNormalizeBrandTerm(t *testing.T) {
+	cases := []struct {
+		name  string
+		in    string
+		brand string
+		want  string
+	}{
+		{"ro单后缀", "ROX vehicles expanding globally", "ROX", "ROX expanding globally"},
+		{"ro汽车联合实验室", "The Weiqiao-ROX motor lightweight joint lab", "ROX", "The Weiqiao-ROX lightweight joint lab"},
+		{"俄文 автомобиль", "ROX автомобиль ищет партнёров", "ROX", "ROX ищет партнёров"},
+		{"多后缀连写", "ROX motor car sales boom", "ROX", "ROX sales boom"},
+		{"大小写后缀", "ROX Vehicles are popular", "ROX", "ROX are popular"},
+		{"无后缀不动", "ROX is expanding", "ROX", "ROX is expanding"},
+		{"brand为空原样", "ROX vehicles", "", "ROX vehicles"},
+		{"译文无brand不动", "Honda vehicles expanding", "ROX", "Honda vehicles expanding"},
+		{"句首品牌", "ROX Motor unveiled its plans", "ROX", "ROX unveiled its plans"},
+		{"后无空格", "ROX vehicles.", "ROX", "ROX."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := NormalizeBrandTerm(c.in, c.brand); got != c.want {
+				t.Fatalf("NormalizeBrandTerm(%q, %q) = %q, want %q", c.in, c.brand, got, c.want)
+			}
+		})
+	}
+}

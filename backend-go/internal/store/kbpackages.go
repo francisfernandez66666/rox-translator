@@ -493,6 +493,30 @@ func (s *Store) ListEntries(tid, pkgID int64) ([]*KBEntry, error) {
 	return entries, err
 }
 
+// ListBrandTerms 列出租户指定包内的品牌术语（module=brand AND layer=1，2026-09-10 需求）：
+// 品牌名（如 极石/极石汽车）→ 各语言规定译法（ROX）。供前端口径的品牌名配置面板与
+// 引擎品牌术语校验使用；按 source_id 升序、目标语言升序稳定返回。
+func (s *Store) ListBrandTerms(tid, pkgID int64) ([]*KBEntry, error) {
+	q := "SELECT e.id, e.tenant_id, e.package_id, e.layer, e.source_lang, e.source_text, e.target_lang, e.target_text, e.module, e.created_at, e.updated_at " +
+		"FROM kb_entries e " +
+		"WHERE e.tenant_id=? AND e.package_id=? AND e.layer=1 AND e.module='brand' " +
+		"ORDER BY e.source_text, e.target_lang, e.id"
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, tid, pkgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*KBEntry
+	for rows.Next() {
+		var e KBEntry
+		if err := rows.Scan(&e.ID, &e.TenantID, &e.PackageID, &e.Layer, &e.SourceLang, &e.SourceText, &e.TargetLang, &e.TargetText, &e.Module, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			continue
+		}
+		out = append(out, &e)
+	}
+	return out, nil
+}
+
 // ListEntriesPage 分页 + 过滤列出包内条目（管理台「查看条目」用，避免万级条目一次拉全平铺）。
 // 参数：tid=租户 ID，pkgID=包 ID；layer=层过滤（0=全部层）；targetLang=目标语言过滤（空=全部）；
 // q=关键词过滤（匹配源文本/目标译文/目标语言，空=全部）；page=页码（从 1 起）；pageSize=每页条数。

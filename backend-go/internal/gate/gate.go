@@ -168,6 +168,43 @@ func contains(list []string, v string) bool {
 	return false
 }
 
+// brandSuffixWords 品牌名后常见的车辆/公司类自创后缀集合（多语言小写，供 NormalizeBrandTerm 剥离）。
+// 背景：KB 定义了品牌术语（module=brand，如 极石→ROX）后，模型偶发把品牌名加上业务后缀——
+// 如 "ROX vehicles" / "ROX motor" / "ROX cars" / "ROX автомобиль"。产品要求品牌名一律等于
+// 术语规定译法（ROX），不得带后缀。此表覆盖英文/俄文/西语/葡语等高频情形。数组多次编译一次。
+var brandSuffixWords = []string{
+	"vehicles", "vehicle", "motors", "motor", "automobiles", "automobile",
+	"autos", "auto", "cars", "car",
+	"автомобилей", "автомобиль", "автомобили", "автомобиля", "авто",
+	"automóviles", "automóvil", "coches", "coche", "carros", "carro",
+}
+
+// NormalizeBrandTerm 品牌术语归一化（纯函数，RAG 硬闸品牌统一输出用）：
+// 把译文里「品牌规定译法（brand）+ 空格/连字符 + 车辆类后缀词」的自创组合，规约为纯品牌名。
+// 例：NormalizeBrandTerm("ROX vehicles expanding", "ROX") → "ROX expanding"；
+//     多后缀连写 "ROX Motor Car" → "ROX"。大小写不敏感地匹配后缀（保持原品牌大小写不变）。
+// 参数 translation：模型译文；brand：品牌规定译法（如 ROX）。brand 为空或译文中无品牌则原样返回。
+func NormalizeBrandTerm(translation, brand string) string {
+	b := strings.TrimSpace(brand)
+	if b == "" {
+		return translation
+	}
+	if !strings.Contains(translation, b) {
+		return translation // 译文未出现品牌，无需归一
+	}
+	// 动态构造后缀词表正则（品牌后跟分隔符 + 一个或多个后缀词）
+	suffixAlt := strings.Join(brandSuffixWords, "|")
+	re := regexp.MustCompile("(?i)(" + regexp.QuoteMeta(b) + ")([\\s\\-_./·]*(?:" + suffixAlt + ")(?:[\\s\\-_./·]*(?:" + suffixAlt + "))*)")
+	out := re.ReplaceAllStringFunc(translation, func(m string) string {
+		group := re.FindStringSubmatch(m)
+		if len(group) < 2 {
+			return m
+		}
+		return group[1] // 仅保留品牌词本身，剥离全部车辆类后缀
+	})
+	return out
+}
+
 // hasRepetition 检测明显重复片段（如 3 字以上连续出现 4 次）
 func hasRepetition(s string) bool {
 	runes := []rune(s)
