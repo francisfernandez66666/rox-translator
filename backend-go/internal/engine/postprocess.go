@@ -360,17 +360,8 @@ func brandReplace(text string) string {
 // collapseRepeatedConjunctions 折叠译文中重复出现的连词（如 "and and and" → "and"）。
 // 模型偶发在多句翻译时连续输出相同连词，导致译文出现无意义重复。覆盖常见西文连词
 // （and/or/but/with/for/nor/yet/so），每词连续出现 2+ 次即折叠为单次。
-// 同时处理整条译文仅为无意义填充词的情况（如单独的 "and"/"or"），原样返回避免幻觉残留。
 func collapseRepeatedConjunctions(text string) string {
 	conjunctions := []string{"and", "or", "but", "with", "for", "nor", "yet", "so", "the", "a", "an"}
-	trimmed := strings.TrimSpace(text)
-	// ★ 整条译文仅为单个填充连词（模型对占位文本的幻觉输出）→ 原样返回，
-	//   交由上游 gate 校验或人工审校处理，不静默丢弃。
-	for _, conj := range conjunctions {
-		if strings.EqualFold(trimmed, conj) {
-			return text
-		}
-	}
 	for _, conj := range conjunctions {
 		// 连续重复：conj + (空格 + conj) * N（2+ 次重复 → 折叠为 1 次）
 		pattern := regexp.MustCompile(`(?i)\b(` + regexp.QuoteMeta(conj) + `\b(?:\s+\b` + regexp.QuoteMeta(conj) + `\b){2,})`)

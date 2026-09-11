@@ -164,3 +164,43 @@ func TestFillerWordGate(t *testing.T) {
 		})
 	}
 }
+
+// TestIsFillerWordOnly 直接单元测试：译文仅为无意义填充词的检测。
+func TestIsFillerWordOnly(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"and", true},
+		{"OR", true},
+		{"but", true},
+		{"Hello World", false},
+		{"TBD", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := isFillerWordOnly(c.in); got != c.want {
+			t.Errorf("isFillerWordOnly(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+// TestSourceIsFiller 直接单元测试：源文是否为无意义占位符。
+func TestSourceIsFiller(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"TBD", true},
+		{"N/A", true},
+		{"—", true},
+		{"...", true},
+		{"待补充", false}, // 有意义的中文短语，不算占位符
+		{"Hello", false},
+	}
+	for _, c := range cases {
+		if got := sourceIsFiller(c.in); got != c.want {
+			t.Errorf("sourceIsFiller(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}

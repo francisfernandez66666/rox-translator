@@ -47,7 +47,7 @@ const KbUploadDialog = lazy(() => import('./components/KbUploadDialog'))
 import { BalancePanel, ReferralPanel, MyPackagePanel, AccountPanel } from './components/selfservice'
 import { EmailBindModal } from './components/modals'
 
-// Loading fallback
+// 页面加载中占位组件（旋转动画 + 提示文字），路由懒加载时展示
 function PageLoading() {
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
@@ -100,6 +100,7 @@ function FrontShell() {
 
   // 从 pathname 推导当前 Tab
   const tab = path.startsWith('/tickets') ? 'tickets' : path.startsWith('/editor') ? 'editor' : 'workbench'
+  // 切换工作台 Tab（workbench/tickets/editor），通过 navigate 跳转
   function switchTab(to: 'workbench' | 'tickets' | 'editor') {
     const target = to === 'tickets' ? '/tickets' : to === 'editor' ? '/editor' : '/'
     if (path !== target) navigate(target)

@@ -230,3 +230,47 @@ func TestCollapseRepeatedConjunctions(t *testing.T) {
 		}
 	}
 }
+
+// TestDetectSourceLang 源语言检测：CJK >25% 为中文；韩/日/阿/俄/纯拉丁各有分支。
+func TestDetectSourceLang(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"中文", "你好世界", "zh"},
+		{"英文", "Hello World", "en"},
+		{"韩文", "안녕하세요", "ko"},
+		{"俄文", "Привет мир", "ru"},
+		{"阿拉伯文", "مرحبا بالعالم", "ar"},
+		{"空字符串", "", "en"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := DetectSourceLang(c.in); got != c.want {
+				t.Errorf("DetectSourceLang(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestStripLangPrefix 语言名前缀剥离：各语言「语言名：」前缀应被去除。
+// 注意：regex 匹配的是英文/中文名（如 "English:"、"英语："），不是原生语言名。
+func TestStripLangPrefix(t *testing.T) {
+	cases := []struct {
+		lang, in, want string
+	}{
+		{"en", "English: Hello World", "Hello World"},
+		{"en", "英语：Hello World", "Hello World"},
+		{"ru", "Russian: Привет", "Привет"},
+		{"ru", "俄语：Привет", "Привет"},
+		{"ar", "Arabic: مرحبا", "مرحبا"},
+		{"ar", "阿拉伯语：مرحبا", "مرحبا"},
+		{"en", "Hello World", "Hello World"}, // 无前缀原样
+	}
+	for _, c := range cases {
+		t.Run(c.lang+"_"+c.in, func(t *testing.T) {
+			if got := StripLangPrefix(c.in, c.lang); got != c.want {
+				t.Errorf("StripLangPrefix(%q,%q) = %q, want %q", c.in, c.lang, got, c.want)
+			}
+		})
+	}
+}
