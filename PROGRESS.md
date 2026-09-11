@@ -1,6 +1,25 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-10（行业字典超管可管理 + 品牌名统一翻译 + 可靠性改造，见「〇-XXVIII」/「〇-XXVII」/「〇-XXVI」）
+> 最后更新：2026-09-11（P0-P2 全链路修复 + Webhook 重试/死信机制）
+
+## 〇-XXIX、P0-P2 全链路修复 + Webhook 重试/死信机制（2026-09-11，提交 60edcfa）
+
+> 本次迭代完成安全审计 P0 修复、前端质量 P1 改进、Webhook 重试/死信全链路实现，共 25 文件变更、1368 行新增、295 行删除。
+
+| 块 | 内容 |
+|---|---|
+| **P0-1 ErrorBoundary** | 新增 `components/ErrorBoundary.tsx` 全局错误边界，组件崩溃时显示降级页+重试按钮；`App.tsx` 根组件包裹 `<ErrorBoundary>` |
+| **P0-2 XSS 修复** | `MessageBubble.tsx` 的 `escapeHtml()` 补充 `"` `'` 转义；`javascript:void(0)` 改为 `<button>` 元素 |
+| **P0-3 Token 安全** | `api/core.ts` 从 `localStorage` 改为 `sessionStorage`（关闭浏览器即清）；`stores/admin.tsx` 的 `clearAuth()` 同步清理 sessionStorage + 兼容清理旧 localStorage |
+| **P0-4 React Router** | `App.tsx` 从手搓路由迁移至 `react-router-dom`（BrowserRouter + Routes/Route）；React.lazy 代码分割（主 chunk 1.3MB → 527KB，Admin 307KB 懒加载） |
+| **P1 SSE 去重** | `api/translate.ts` 提取 `consumeSSEStream()` 公共函数，消除 chatStream/translateFileStream 重复 SSE 解析 |
+| **P1 i18n 补全** | `selfservice.tsx` 4 个面板 30+ 键值走 `useT()` i18n（`i18n/dicts.zh.ts` + `dicts.en.ts` 新增 `ss.*` 键） |
+| **P1 roleLevelSafe** | 提取到 `lib/ui.ts` 导出函数，消除 App.tsx 本地重复定义 |
+| **P1 E2E 修复** | `tenant_label.spec.ts` 改用已有 UAT 用户 + `test.skip` 标记未实现的 Header 租户 Tag |
+| **Webhook 重试/死信** | 后端：新建 `webhook_deliveries` 表（投递历史/死信队列）；webhooks 表新增 `max_retries`/`retry_interval`/`last_delivery_at`/`failure_count`；`postWebhooks` 每次投递写入 deliveries 表；新增 `/api/webhooks/deliveries` 和 `/api/webhooks/retry` API；`WebhookDelivery` 结构体 + `ListDeliveries`/`GetDelivery`/`RetryDelivery`/`GetDeliveryStats` 方法 |
+| **前端 Webhook 管理** | `WebhooksP` 面板新增投递历史 Drawer + 统计卡片（总/成功/失败/死信）+ 重试按钮 + 连续失败列 + 重试策略表单字段；`webhooks.ts` API 客户端扩展 |
+| **自动化测试** | `webhooks_test.go` 新增 8 个单元测试（投递记录/统计/重试/越权防护/策略字段）；`api_uat_txn.sh` 补充 webhook delivery/retry 端点测试 |
+| **验证** | go test 全通过 | tsc --noEmit | vitest 24/24 | UAT 67/67 后端 + 16/16 前端 |
 
 ## 〇-XXVIII、行业字典超管可创建/维护 + 全站下拉动态拉取（2026-09-10，提交 9f0c7bc / fcc4e4b）
 
