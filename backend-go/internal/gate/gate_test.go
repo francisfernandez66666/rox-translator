@@ -110,3 +110,28 @@ func TestNormalizeBrandTerm(t *testing.T) {
 		})
 	}
 }
+
+// TestHasRepetition 短词重复检测改进：
+// 1. "and and and" 应检出（3 字连续 3 次）
+// 2. "the the" 不检出（仅 2 次，阈值 3）
+// 3. "ROX ROX ROX ROX" 应检出（3 字连续 4 次，原逻辑已覆盖）
+func TestHasRepetition(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"and 连续 3 次", "The mountains and and and seas", true},
+		{"and 连续 2 次不拦截", "The mountains and and seas", false},
+		{"the 连续 3 次", "the the the quick brown fox", true},
+		{"ROX 连续 4 次", "ROX ROX ROX ROX cars", true},
+		{"正常文本不误拦", "The quick brown fox jumps over the lazy dog", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := hasRepetition(c.in); got != c.want {
+				t.Fatalf("hasRepetition(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}

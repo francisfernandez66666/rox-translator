@@ -239,9 +239,10 @@ func NormalizeBrandTerm(translation, brand string) string {
 	return strings.TrimSpace(out)
 }
 
-// hasRepetition 检测明显重复片段（如 3 字以上连续出现 4 次）
+// hasRepetition 检测明显重复片段（3+ 字连续出现 4+ 次，或常见词如 and/and/and 出现 3+ 次）
 func hasRepetition(s string) bool {
 	runes := []rune(s)
+	// 原逻辑：3+ 字段连续 4+ 次
 	for size := 3; size <= 8 && size*4 <= len(runes); size++ {
 		for i := 0; i+size*4 <= len(runes); i++ {
 			seg := string(runes[i : i+size])
@@ -254,6 +255,26 @@ func hasRepetition(s string) bool {
 				}
 			}
 			if count >= 4 {
+				return true
+			}
+		}
+	}
+	// 补充：短词（2-4 字）连续 3+ 次（如 "and and and"）
+	for size := 2; size <= 4 && size*3 <= len(runes); size++ {
+		for i := 0; i+size*3 <= len(runes); i++ {
+			seg := string(runes[i : i+size])
+			if seg == " " || strings.TrimSpace(seg) == "" {
+				continue
+			}
+			count := 0
+			for j := i; j+size <= len(runes); j += size {
+				if string(runes[j:j+size]) == seg {
+					count++
+				} else {
+					break
+				}
+			}
+			if count >= 3 {
 				return true
 			}
 		}

@@ -306,6 +306,10 @@ func PostProcessTranslation(text, langCode string) string {
 	// 品牌替换：Jishi/Jieshi/Jixi 及变体（极石汽车拼音直译）→ ROX
 	text = brandReplace(text)
 
+	// ★ 重复连词折叠（2026-09-11）：模型偶发连续输出 "and and and" 等重复连词，
+	//   折叠为单次（如 "and and and" → "and"），避免译文出现无意义重复。
+	text = collapseRepeatedConjunctions(text)
+
 	// 需求3：剥离误带入单句译文的批量审校模板残留（【原文】…【待審校譯文】…）
 	text = stripReviewMarkers(text)
 
@@ -350,6 +354,19 @@ func brandReplace(text string) string {
 	text = re.ReplaceAllString(text, "ROX")
 	// 中文品牌名直译残留（极石）也替换为 ROX（面向非中文目标语时中文残留本应被删）
 	text = strings.ReplaceAll(text, "极石", "ROX")
+	return text
+}
+
+// collapseRepeatedConjunctions 折叠译文中重复出现的连词（如 "and and and" → "and"）。
+// 模型偶发在多句翻译时连续输出相同连词，导致译文出现无意义重复。覆盖常见西文连词
+// （and/or/but/with/for/nor/yet/so），每词连续出现 2+ 次即折叠为单次。
+func collapseRepeatedConjunctions(text string) string {
+	conjunctions := []string{"and", "or", "but", "with", "for", "nor", "yet", "so", "the", "a", "an"}
+	for _, conj := range conjunctions {
+		// 连续重复：conj + (空格 + conj) * N
+		pattern := regexp.MustCompile(`(?i)\b(` + regexp.QuoteMeta(conj) + `\b(?:\s+\b` + regexp.QuoteMeta(conj) + `\b){2,})`)
+		text = pattern.ReplaceAllString(text, conj)
+	}
 	return text
 }
 

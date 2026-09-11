@@ -220,6 +220,18 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 		kbTarget = nil
 	}
 
+	// ★ 翻译前品牌保护（2026-09-11）：与文件路径对齐，在翻译前把源文品牌名替换为规定译法，
+	//   避免 LLM 音译（如 极石→جيشي），仅对 KB 语言（有品牌术语的语言）生效。
+	brandTermsAll := e.fetchBrandTerms(ctx, cleanText)
+	protectedTexts := map[string]string{} // lang → protected source text
+	if len(brandTermsAll) > 0 {
+		for lc, terms := range brandTermsAll {
+			if prot, changed := protectSourceByLang([]string{cleanText}, terms); changed {
+				protectedTexts[lc] = prot[0]
+			}
+		}
+	}
+
 	// KB 翻译
 	kbResult := &TranslateResult{Translations: map[string]string{}, Mode: "模型翻译（无知识库）"}
 	kbSrc := map[string]string{}
@@ -232,7 +244,15 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 				prog("AI生成中...", 2, 4)
 			}
 		})
-		kbResult, _ = e.TranslateOne(kbCtx, cleanText, kbTarget, false, config.StageKBMatch)
+		// ★ 品牌保护：如果有保护后的源文，使用第一个 KB 语言的保护版本
+		kbText := cleanText
+		for _, lc := range kbTarget {
+			if prot, ok := protectedTexts[lc]; ok {
+				kbText = prot
+				break
+			}
+		}
+		kbResult, _ = e.TranslateOne(kbCtx, kbText, kbTarget, false, config.StageKBMatch)
 		for lc := range kbResult.Translations {
 			src := "model"
 			if kbResult.MatchedZH != "" {
@@ -270,7 +290,12 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 					return
 				}
 				defer func() { <-sem }()
-				tr, _ := e.TranslateOtherLang(ctx, cleanText, lc, srcLang, config.StageAIInitial)
+				// ★ 品牌保护：使用保护后的源文（如有）
+				srcText := cleanText
+				if prot, ok := protectedTexts[lc]; ok {
+					srcText = prot
+				}
+				tr, _ := e.TranslateOtherLang(ctx, srcText, lc, srcLang, config.StageAIInitial)
 				mu.Lock()
 				otherTr[lc] = tr
 				mu.Unlock()

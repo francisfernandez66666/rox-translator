@@ -210,3 +210,23 @@ func TestStripTrailingCJKNotes(t *testing.T) {	cases := []struct{ in, want strin
 		}
 	}
 }
+
+// TestCollapseRepeatedConjunctions 验证重复连词折叠功能：
+// 模型偶发连续输出 "and and and" 等重复连词，折叠为单次。
+func TestCollapseRepeatedConjunctions(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"and and and", "and"},
+		{"and and", "and and"},             // 仅 2 次不折叠
+		{"or or or or", "or"},              // 4 次也折叠
+		{"The mountains and and and seas", "The mountains and seas"},
+		{"with with with benefits", "with benefits"},
+		{"the the the quick", "the quick"},
+		{"Normal text without repetition", "Normal text without repetition"},
+		{"and and AND", "and"},             // 大小写混合
+	}
+	for _, c := range cases {
+		if got := collapseRepeatedConjunctions(c.in); got != c.want {
+			t.Errorf("collapseRepeatedConjunctions(%q)=%q, want %q", c.in, got, c.want)
+		}
+	}
+}
