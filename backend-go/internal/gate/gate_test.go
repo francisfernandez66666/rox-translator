@@ -135,3 +135,32 @@ func TestHasRepetition(t *testing.T) {
 		})
 	}
 }
+
+// TestFillerWordGate 填充词检测（第 10 项检查）：
+// 1. 待补充 → and 应拦截（源文非填充词，译文仅为 and）
+// 2. 待补充 → TBD 不拦截（有效翻译）
+// 3. TBD → TBD 不拦截（源文本身是占位符）
+// 4. 正常翻译不误拦
+func TestFillerWordGate(t *testing.T) {
+	cases := []struct {
+		name       string
+		source     string
+		target     string
+		trans      string
+		wantPass   bool
+	}{
+		{"待补充→and 应拦截", "待补充", "en", "and", false},
+		{"待补充→TBD 不拦截", "待补充", "en", "TBD", true},
+		{"TBD→TBD 不拦截（源文占位符）", "TBD", "en", "TBD", true},
+		{"—→or 不拦截（源文占位符）", "—", "en", "or", true},
+		{"正常翻译不误拦", "你好世界", "en", "Hello World", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			g := Run(c.source, c.target, c.trans)
+			if g.Pass != c.wantPass {
+				t.Fatalf("Run(%q,%q,%q).Pass = %v, want %v; checks: %+v", c.source, c.target, c.trans, g.Pass, c.wantPass, g.Checks)
+			}
+		})
+	}
+}

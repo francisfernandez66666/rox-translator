@@ -156,6 +156,13 @@ func RunWithTerms(source, target, translation string, terms []TermRequirement) *
 		res.Pass = false
 	}
 
+	// 10. 译文非无意义填充词（幻觉检测）：模型偶发对占位文本（待补充/TBD）输出 "and"
+	//   等无意义连词作为整条译文。译文仅为单个常见填充词且源文非对应含义时拦截。
+	if tr != "" && isFillerWordOnly(tr) && !sourceIsFiller(source) {
+		res.Checks = append(res.Checks, Check{"译文非填充词", false, fmt.Sprintf("译文「%s」疑似无意义填充词，非有效翻译", tr)})
+		res.Pass = false
+	}
+
 	return res
 }
 
@@ -163,6 +170,33 @@ func RunWithTerms(source, target, translation string, terms []TermRequirement) *
 func contains(list []string, v string) bool {
 	for _, x := range list {
 		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+// isFillerWordOnly 判断译文是否仅为无意义填充词（模型幻觉输出）。
+// 常见填充词：and/or/but/so/yet/for/nor/the/a/an 等。
+func isFillerWordOnly(tr string) bool {
+	fillerWords := []string{"and", "or", "but", "so", "yet", "for", "nor", "the", "a", "an", "with", "by", "in", "on", "at", "to", "of"}
+	trimmed := strings.TrimSpace(strings.ToLower(tr))
+	for _, w := range fillerWords {
+		if trimmed == w {
+			return true
+		}
+	}
+	return false
+}
+
+// sourceIsFiller 判断源文是否本身为无意义占位符（纯标点/TBD/N/A 等）。
+// 注意：中文「待补充」「待定」等是有意义的短语，不算占位符，应被正确翻译。
+func sourceIsFiller(source string) bool {
+	// 纯标点/无语义占位符
+	fillerPatterns := []string{"—", "–", "...", "....", "TBD", "N/A", "NA", "TODO", "FIXME", "xxx", "XXX", "___", "---", "-"}
+	trimmed := strings.TrimSpace(source)
+	for _, p := range fillerPatterns {
+		if trimmed == p {
 			return true
 		}
 	}
