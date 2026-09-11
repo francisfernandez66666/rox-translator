@@ -1,22 +1,11 @@
 // ============================================================================
-// App.tsx — 根组件（Vue 版 App.vue 等价）
-// 路由语义沿用：pathname 手搓（/admin → 后台；/tickets → 工单页；其余工作台）。
-// 头部：品牌 / 双 Tab / 余额徽标(pkgLine) / Bell / 语言切换 / 账号菜单
-//       （改密、绑邮箱、注销、退出、进入后台）。meContext 无邮箱时强制绑定弹窗。
+// App.tsx — 根组件（react-router-dom 路由版）
+// 路由：BrowserRouter + React.lazy 代码分割
+// 头部：品牌 / Tab / 余额徽标 / Bell / 语言切换 / 账号菜单
 // ============================================================================
 
-/**
- * App.tsx · 职责说明
- * 应用根组件，提供以下功能：
- * - 路由管理：基于 pathname 的手搓路由（/admin 后台、/tickets 工单、/ 对照编辑）
- * - 全局 Provider 嵌套：AuthProvider → ChatProvider → AdminProvider → BrandingProvider
- * - 前台外壳：顶部导航、Tab 切换、余额徽标、通知铃铛、账号菜单
- * - 后台管理：AdminDashboard 面板
- * - 跨域登录跳转：品牌子域登录后通过 /?token= 跳转回来
- */
-
-// 依赖引入：React 基础 Hooks、TDesign 组件、API/状态/i18n 模块与各类页面/组件
-import { useCallback, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { Button, Tag, Drawer } from 'tdesign-react'
 import { myPackage, meContext } from '@/api'
 import { AuthProvider, useAuth } from '@/stores/auth'
@@ -24,9 +13,11 @@ import { AdminProvider } from '@/stores/admin'
 import { ChatProvider, useChat } from '@/hooks/useChat'
 import { useT, t as gt, toggleLang } from '@/i18n'
 import { setAuthToken, setActiveTenantId } from '@/api'
-import Login from './components/Login'
+import { BrandingProvider, useBranding } from './branding'
+import ErrorBoundary from './components/ErrorBoundary'
+import { roleLevelSafe } from '@/lib/ui'
 
-// 跨域登录跳转：品牌子域登录后通过 /?token= 跳转回来，此处把 token 写入本地会话并清除 URL 参数。
+// 跨域登录跳转：品牌子域登录后通过 /?token= 跳转回来
 ;(() => {
   try {
     const p = new URLSearchParams(window.location.search)
@@ -41,65 +32,48 @@ import Login from './components/Login'
   } catch { /* ignore */ }
 })()
 
-import ChatWindow from './components/ChatWindow'
-import TicketsPage from './components/TicketsPage'
-import EditorPage from './components/EditorPage'
-import Bell from './components/Bell'
-import AdminDashboard from './components/admin/AdminDashboard'
-import AccountMenu from './components/AccountMenu'
-import SiteFooter from './components/SiteFooter'
-import { BalancePanel, ReferralPanel, MyPackagePanel, AccountPanel } from './components/selfservice'
-import KbUploadDialog from './components/KbUploadDialog'
-import { EmailBindModal } from './components/modals'
-import { BrandingProvider, useBranding } from './branding'
+// ---- 懒加载页面组件（路由级代码分割） ----
+const Login = lazy(() => import('./components/Login'))
+const ChatWindow = lazy(() => import('./components/ChatWindow'))
+const TicketsPage = lazy(() => import('./components/TicketsPage'))
+const EditorPage = lazy(() => import('./components/EditorPage'))
+const AdminDashboard = lazy(() => import('./components/admin/AdminDashboard'))
+const Bell = lazy(() => import('./components/Bell'))
+const AccountMenu = lazy(() => import('./components/AccountMenu'))
+const SiteFooter = lazy(() => import('./components/SiteFooter'))
+const KbUploadDialog = lazy(() => import('./components/KbUploadDialog'))
 
-// 监听浏览器 popstate，同步当前 pathname 状态
-function usePath(): string {
-  const [p, setP] = useState(window.location.pathname)
-  useEffect(() => {
-    const onPop = () => setP(window.location.pathname)
-    window.addEventListener('popstate', onPop)
-    return () => window.removeEventListener('popstate', onPop)
-  }, [])
-  return p
+// 小组件保持静态导入（避免过度拆分）
+import { BalancePanel, ReferralPanel, MyPackagePanel, AccountPanel } from './components/selfservice'
+import { EmailBindModal } from './components/modals'
+
+// Loading fallback
+function PageLoading() {
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
+      <div style={{ width: 48, height: 48, border: '4px solid #e0e0e0', borderTopColor: 'var(--td-brand-color, #2f47f5)', borderRadius: '50%', animation: 'appspin 0.8s linear infinite' }} />
+      <p style={{ fontSize: 16, color: '#5f6368' }}>{gt('app.loading')}</p>
+    </div>
+  )
 }
 
-// 前台工作台外壳：顶部导航、Tab 切换、余额徽标、通知铃铛、账号菜单
-function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
-  // 聊天全局状态
+// ---- 前台工作台外壳 ----
+function FrontShell() {
   const chat = useChat()
-  // 当前登录用户与登出方法
-  const { user, logout } = useAuth()
-  // 当前语言与翻译函数
+  const { user } = useAuth()
   const [lang, t] = useT()
-  // 当前顶部 Tab：工作台 / 工单 / 对照编辑
-  const [tab, setTab] = useState<'workbench' | 'tickets' | 'editor'>(
-    window.location.pathname.startsWith('/tickets')
-      ? 'tickets'
-      : window.location.pathname.startsWith('/editor')
-        ? 'editor'
-        : 'workbench',
-  )
-  // 端用户自服务路径（余额 / 我的邀请 / 我的套餐 / 我的账号）
-  const path = usePath()
-  function navigate(to: string) {
-    if (window.location.pathname !== to) { window.history.pushState({}, '', to); window.dispatchEvent(new PopStateEvent('popstate')) }
-  }
-  // 余额徽标展示文本
-  const [pkgLine, setPkgLine] = useState('')
-  // 是否未绑定邮箱（强制弹窗）
-  const [ctxNoEmail, setCtxNoEmail] = useState(false)
-  // 是否个人用户租户：企业用户/平台超管不参与「邀请好友 · 多邀多得」，隐藏对应入口（2026-09）
-  const [isPersonal, setIsPersonal] = useState(true)
-  // 前台「上传知识库」弹窗（仅部门管理员及以上可见，复用后台 recognize→import 流程）
-  const [kbUploadOpen, setKbUploadOpen] = useState(false)
-  // 侧边隐藏菜单（原页脚内容收入此处，顶部汉堡按钮唤起）
-  const [menuOpen, setMenuOpen] = useState(false)
-  const canUploadKb = roleLevelSafe(user?.role) >= 2
-  // 租户级品牌定制（按访问域名解析）
+  const location = useLocation()
+  const navigate = useNavigate()
   const branding = useBranding()
 
-  // meContext：无邮箱强制绑定；余额徽标：myPackage 计算 token ≈ 句单语言
+  const path = location.pathname
+  const [pkgLine, setPkgLine] = useState('')
+  const [ctxNoEmail, setCtxNoEmail] = useState(false)
+  const [isPersonal, setIsPersonal] = useState(true)
+  const [kbUploadOpen, setKbUploadOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const canUploadKb = roleLevelSafe(user?.role) >= 2
+
   useEffect(() => {
     if (!user) return
     ;(async () => {
@@ -107,7 +81,7 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
         const c = await meContext()
         if (c.success) {
           const email = String((c as unknown as { email?: string }).email || '')
-          setCtxNoEmail(!email) // 无邮箱 → 不可关闭的绑定弹窗（行为同 Vue 版 dismissible=false）
+          setCtxNoEmail(!email)
           setIsPersonal((c as unknown as { is_personal?: boolean }).is_personal !== false)
         }
       } catch { /* ignore */ }
@@ -124,11 +98,11 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
     })()
   }, [user])
 
-  // 切换顶部 Tab 并同步浏览器历史路径
+  // 从 pathname 推导当前 Tab
+  const tab = path.startsWith('/tickets') ? 'tickets' : path.startsWith('/editor') ? 'editor' : 'workbench'
   function switchTab(to: 'workbench' | 'tickets' | 'editor') {
-    setTab(to)
     const target = to === 'tickets' ? '/tickets' : to === 'editor' ? '/editor' : '/'
-    if (window.location.pathname !== target) window.history.pushState({}, '', target)
+    if (path !== target) navigate(target)
   }
 
   return (
@@ -151,10 +125,9 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
         .ss-drawer-item{padding:12px 16px;cursor:pointer;border-bottom:1px solid #f5f5f5;font-size:15px}
         .ss-drawer-item:hover{background:#f0f5ff}
         .ss-loading{display:flex;justify-content:center;padding:40px}
-      `}</style>`
-      {/* 顶部导航栏：品牌、Tab、余额、通知、语言、账号菜单 */}
+      `}</style>
       <header className="app-header">
-        <Button variant="text" shape="square" onClick={() => setMenuOpen(true)} aria-label="menu" style={{ fontSize: 20, padding: '0 8px' }}>☰</Button>
+        <Button variant="text" shape="square" onClick={() => setMenuOpen(true)} aria-label="打开导航菜单" style={{ fontSize: 20, padding: '0 8px' }}>☰</Button>
         <span className="brand">
           {branding.brandLogo
             ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 60 }} />
@@ -165,7 +138,7 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
         <Button variant={tab === 'tickets' ? 'base' : 'text'} theme="primary" size="small"
                 onClick={() => switchTab('tickets')}>📋 {t('app.tabTickets')}</Button>
         <Button variant={tab === 'editor' ? 'base' : 'text'} theme="primary" size="small"
-                onClick={() => switchTab('editor')}>✍️ 对照编辑</Button>
+                onClick={() => switchTab('editor')}>✍️ {t('app.tabEditor') || '对照编辑'}</Button>
         <div style={{ flex: 1 }} />
         {!!pkgLine && <Tag theme="primary" variant="light" className="pkg-line-tag">{pkgLine}</Tag>}
         {canUploadKb && (
@@ -175,26 +148,31 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
         )}
         <Bell />
         <Button size="small" variant="text" onClick={toggleLang}>{lang === 'zh' ? 'EN' : '中文'}</Button>
-        <AccountMenu showAdminConsole={roleLevelSafe(user?.role) >= 2} onGotoAdmin={onGotoAdmin} />
+        <AccountMenu showAdminConsole={roleLevelSafe(user?.role) >= 2} onGotoAdmin={() => navigate('/admin')} />
       </header>
 
-      {/* 主内容区：后端启动中显示 Loading，否则根据 Tab 渲染页面 */}
       <div className="app-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         {chat.isBackendLoading ? (
           <div className="loading-screen" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
-            {/* 旋转 Loading 图标 */}
             <div className="loading-spinner" style={{ width: 48, height: 48, border: '4px solid #e0e0e0', borderTopColor: 'var(--td-brand-color, #2f47f5)', borderRadius: '50%', animation: 'appspin 0.8s linear infinite' }} />
-            {/* 启动提示文案 */}
             <p style={{ fontSize: 16, color: '#5f6368' }}>{t('app.starting')}</p>
           </div>
-        ) : path === '/billing' ? <BalancePanel />
-          : (path === '/invites' && isPersonal) ? <ReferralPanel />
-          : path === '/packages' ? <MyPackagePanel />
-          : path === '/my' ? <AccountPanel />
-          : tab === 'tickets' ? <TicketsPage /> : tab === 'editor' ? <EditorPage /> : <ChatWindow />}
+        ) : (
+          <Suspense fallback={<PageLoading />}>
+            <Routes>
+              <Route path="/" element={<ChatWindow />} />
+              <Route path="/tickets" element={<TicketsPage />} />
+              <Route path="/editor" element={<EditorPage />} />
+              <Route path="/billing" element={<BalancePanel />} />
+              <Route path="/invites" element={isPersonal ? <ReferralPanel /> : <Navigate to="/" replace />} />
+              <Route path="/packages" element={<MyPackagePanel />} />
+              <Route path="/my" element={<AccountPanel />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        )}
       </div>
 
-      {/* 侧边隐藏菜单：原前台页脚内容收入此处（汉堡按钮唤起） */}
       <Drawer visible={menuOpen} onClose={() => setMenuOpen(false)} header={t('app.more') || '更多'} size="340px" footer={false}>
         <nav className="ss-drawer-nav">
           {[['/billing','💰 我的余额'],['/invites','🔗 我的邀请'],['/packages','💎 我的套餐'],['/my','👤 我的账号']].filter(([p]) => p !== '/invites' || isPersonal).map(([p,l]) => (
@@ -204,10 +182,7 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
         <SiteFooter />
       </Drawer>
 
-      {/* 前台「上传知识库」弹窗（部门管理员及以上） */}
       {canUploadKb && <KbUploadDialog visible={kbUploadOpen} onClose={() => setKbUploadOpen(false)} />}
-
-      {/* 强制绑邮箱（不可关闭）；改密/换绑/注销统一由 AccountMenu 托管 */}
       {ctxNoEmail && (
         <EmailBindModal hasOldEmail={false} dismissible={false}
                         onClose={() => setCtxNoEmail(false)}
@@ -217,53 +192,53 @@ function FrontShell({ onGotoAdmin }: { onGotoAdmin: () => void }) {
   )
 }
 
-// 安全版角色等级：未登录或未知角色返回最低级 1
-function roleLevelSafe(r?: string): number {
-  if (r === 'super_admin' || r === 'admin') return 4
-  if (r === 'tenant_admin' || r === 'approver') return 3
-  if (r === 'dept_admin') return 2
-  return 1
-}
-
-// 根路由组件：根据会话恢复状态、登录态与 pathname 渲染登录/后台/前台
+// ---- 根路由 ----
 function Root() {
-  // 认证上下文
   const { user, restoring, onLogin } = useAuth()
-  // 当前浏览器路径
-  const path = usePath()
-  // 全局翻译函数
+  const location = useLocation()
+  const navigate = useNavigate()
+  const path = location.pathname
   const t = gt
-
-  // 跳转后台管理路径，并触发 popstate 让 usePath 同步更新
-  const gotoAdmin = useCallback(() => { window.history.pushState({}, '', '/admin'); window.dispatchEvent(new PopStateEvent('popstate')) }, [])
 
   if (restoring) {
     return <div style={{ display: 'grid', placeItems: 'center', height: '100vh' }}>{t('app.loading')}</div>
   }
   if (!user) {
-    return <Login mode={path.startsWith('/admin') ? 'admin' : 'home'} onLogin={(u) => { onLogin(u); if (path.startsWith('/admin') && roleLevelSafe(u.role) < 2) window.history.pushState({}, '', '/') }} />
+    return (
+      <Suspense fallback={<PageLoading />}>
+        <Login mode={path.startsWith('/admin') ? 'admin' : 'home'} onLogin={(u) => { onLogin(u); if (path.startsWith('/admin') && roleLevelSafe(u.role) < 2) navigate('/') }} />
+      </Suspense>
+    )
   }
   if (path.startsWith('/admin')) {
-    return roleLevelSafe(user.role) >= 2 ? <AdminDashboard /> : (
+    return roleLevelSafe(user.role) >= 2 ? (
+      <Suspense fallback={<PageLoading />}>
+        <AdminDashboard />
+      </Suspense>
+    ) : (
       <div style={{ padding: 40 }}>
-        <Button onClick={() => { window.history.pushState({}, '', '/'); window.location.reload() }}>{t('app.backHome')}</Button>
+        <Button onClick={() => navigate('/')}>{t('app.backHome')}</Button>
       </div>
     )
   }
-  return <FrontShell onGotoAdmin={gotoAdmin} />
+  return <FrontShell />
 }
 
-// 应用根组件：嵌套全局认证、聊天、后台 Provider
+// ---- 应用根组件 ----
 export default function App() {
   return (
-    <AuthProvider>
-      <ChatProvider>
-        <AdminProvider>
-          <BrandingProvider>
-            <Root />
-          </BrandingProvider>
-        </AdminProvider>
-      </ChatProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
+          <ChatProvider>
+            <AdminProvider>
+              <BrandingProvider>
+                <Root />
+              </BrandingProvider>
+            </AdminProvider>
+          </ChatProvider>
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   )
 }

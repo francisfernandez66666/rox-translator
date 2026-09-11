@@ -13,7 +13,7 @@ test.describe('翻译助手冒烟', () => {
       data: { username: 'uatuser_a', password: 'uatpass123' },
     });
     const body = await res.json();
-    await page.addInitScript((tk) => localStorage.setItem('auth_token', tk), body.token);
+    await page.addInitScript((tk) => sessionStorage.setItem('auth_token', tk), body.token);
     await page.goto('/');
     await expect(page).toHaveTitle(/翻译平台|翻译助手|langcross/i);
     const input = page.getByTestId('translate-input');

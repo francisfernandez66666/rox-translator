@@ -18,7 +18,7 @@ import { SkillBadge } from './SkillBadge'
 // ---- 轻量 Markdown → HTML（转义优先，行内顺序与 Vue 一致：** __ *em* `code`）----
 // 转义 HTML 特殊字符，防止注入并确保后续标签正常解析
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
 // 将消息正文渲染为受限 Markdown HTML：引用、标题、列表、分隔线、行内加粗/斜体/代码
@@ -292,9 +292,9 @@ export default function MessageBubble({ message, onFeedback }: Props) {
                     ? <img className="preview-img" src={blobUrls[f]} alt={getFileName(f)}
                            onClick={() => window.open(blobUrls[f], '_blank')} />
                     : <div className="preview-img preview-loading">…</div>}
-                  <a href="javascript:void(0)" className="image-download-btn" onClick={(e) => { e.preventDefault(); void downloadFile(f) }}>
+                  <button type="button" className="image-download-btn" onClick={() => void downloadFile(f)}>
                     {t('msg.downloadImage')}
-                  </a>
+                  </button>
                 </div>
               ) : (
                 <div key={f} className={`download-card ${isDocx(f) ? 'download-card-docx' : 'download-card-md'}`}>
@@ -311,7 +311,7 @@ export default function MessageBubble({ message, onFeedback }: Props) {
                     <div className="card-filename">{getFileName(f)}</div>
                     <div className="card-meta">{getFileTypeLabel(f)} {t('msg.clickDownload')}</div>
                   </div>
-                  <a href="javascript:void(0)" className="card-btn" onClick={(e) => { e.preventDefault(); void downloadFile(f) }}>📥</a>
+                  <button type="button" className="card-btn" onClick={() => void downloadFile(f)}>📥</button>
                 </div>
               ),
             )}

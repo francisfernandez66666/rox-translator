@@ -23,7 +23,7 @@ async function login(page: Page, user = process.env.UAT_USER || 'uatuser_a', pas
   const res = await page.request.post(`${BASE}/api/auth/login`, { data: { username: user, password: pass } });
   const body = await res.json();
   expect(body.success, `登录失败:${JSON.stringify(body)}`).toBeTruthy();
-  await page.addInitScript((tk) => localStorage.setItem('auth_token', tk), body.token);
+  await page.addInitScript((tk) => sessionStorage.setItem('auth_token', tk), body.token);
 }
 
 test.describe('像素级 UAT', () => {

@@ -443,6 +443,8 @@ func (s *Server) routesWebhooks() {
 	s.mux.HandleFunc("/api/webhooks/save", s.handleWebhookSave)
 	s.mux.HandleFunc("/api/webhooks/delete", s.handleWebhookDelete)
 	s.mux.HandleFunc("/api/webhooks/test", s.handleWebhookTest)
+	s.mux.HandleFunc("/api/webhooks/deliveries", s.handleWebhookDeliveries)
+	s.mux.HandleFunc("/api/webhooks/retry", s.handleWebhookRetry)
 }
 
 // routesOpenAPI 注册开放 API（API Key 鉴权）与文档路由。

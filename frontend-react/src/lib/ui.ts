@@ -50,3 +50,14 @@ export function maskKey(k?: string): string {
   if (k.length <= 12) return k.slice(0, 4) + '****'
   return k.slice(0, 8) + '****' + k.slice(-4)
 }
+
+/** roleLevelSafe 安全版角色等级
+ * @param r - 角色标识字符串
+ * @returns 角色等级数字（super_admin/admin=4, tenant_admin/approver=3, dept_admin=2, 其他=1）
+ */
+export function roleLevelSafe(r?: string): number {
+  if (r === 'super_admin' || r === 'admin') return 4
+  if (r === 'tenant_admin' || r === 'approver') return 3
+  if (r === 'dept_admin') return 2
+  return 1
+}

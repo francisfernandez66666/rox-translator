@@ -46,11 +46,13 @@ func (s *Server) handleWebhookSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID      int64  `json:"id"`      // webhook ID（<=0 表示新增）
-		URL     string `json:"url"`     // 回调 URL
-		Secret  string `json:"secret"`  // 签名密钥
-		Events  string `json:"events"`  // 订阅事件（逗号分隔）
-		Enabled int    `json:"enabled"` // 1=启用 0=停用
+		ID            int64  `json:"id"`              // webhook ID（<=0 表示新增）
+		URL           string `json:"url"`             // 回调 URL
+		Secret        string `json:"secret"`          // 签名密钥
+		Events        string `json:"events"`          // 订阅事件（逗号分隔）
+		Enabled       int    `json:"enabled"`         // 1=启用 0=停用
+		MaxRetries    int    `json:"max_retries"`     // 最大重试次数
+		RetryInterval int    `json:"retry_interval"`  // 重试间隔秒数
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -61,12 +63,14 @@ func (s *Server) handleWebhookSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hook := &store.Webhook{
-		ID:       req.ID,
-		TenantID: s.effTenant(r, u),
-		URL:      req.URL,
-		Secret:   req.Secret,
-		Events:   req.Events,
-		Enabled:  req.Enabled,
+		ID:            req.ID,
+		TenantID:      s.effTenant(r, u),
+		URL:           req.URL,
+		Secret:        req.Secret,
+		Events:        req.Events,
+		Enabled:       req.Enabled,
+		MaxRetries:    req.MaxRetries,
+		RetryInterval: req.RetryInterval,
 	}
 	if hook.Events == "" {
 		hook.Events = "translation.completed"
@@ -140,4 +144,59 @@ func (s *Server) handleWebhookTest(w http.ResponseWriter, r *http.Request) {
 	})
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "webhook_test", "webhooks", strconv.FormatInt(req.ID, 10))
 	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "已发送测试 ping，请检查回调端点日志"})
+}
+
+// handleWebhookDeliveries 查询指定 webhook 的投递历史（分页，按时间倒序）。
+func (s *Server) handleWebhookDeliveries(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	webhookIDStr := r.URL.Query().Get("webhook_id")
+	webhookID, _ := strconv.ParseInt(webhookIDStr, 10, 64)
+	if webhookID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "webhook_id 参数缺失"})
+		return
+	}
+	limitStr := r.URL.Query().Get("limit")
+	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 {
+		limit = 50
+	}
+	tid := s.effTenant(r, u)
+	deliveries, err := s.Store.ListDeliveries(webhookID, tid, limit)
+	if err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	// 统计
+	total, success, failed, dead, _ := s.Store.GetDeliveryStats(webhookID, tid)
+	writeJSON(w, 200, map[string]interface{}{
+		"success":    true,
+		"deliveries": deliveries,
+		"stats":      map[string]int{"total": total, "success": success, "failed": failed, "dead": dead},
+	})
+}
+
+// handleWebhookRetry 重试一条失败/死信投递。
+func (s *Server) handleWebhookRetry(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		DeliveryID int64 `json:"delivery_id"` // 待重试投递 ID
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.DeliveryID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	if err := s.Store.RetryDelivery(req.DeliveryID, s.effTenant(r, u)); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "webhook_retry", "webhook_deliveries", strconv.FormatInt(req.DeliveryID, 10))
+	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "已重新投递"})
 }

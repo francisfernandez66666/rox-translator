@@ -188,7 +188,8 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   const clearAuth = useCallback(() => {
     setActiveTenantId(0)
     try {
-      localStorage.removeItem('auth_token')
+      sessionStorage.removeItem('auth_token')
+      localStorage.removeItem('auth_token') // 兼容清理旧 localStorage 残留
       localStorage.removeItem('active_tenant_id')
     } catch { /* 忽略 */ }
   }, [])

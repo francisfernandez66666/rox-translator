@@ -12,7 +12,7 @@ const PAGES = ['/', '/tickets', '/editor', '/billing', '/invites', '/packages', 
 async function login(page: Page) {
   const res = await page.request.post(`${BASE}/api/auth/login`, { data: { username: 'uatuser_a', password: 'uatpass123' } });
   const body = await res.json();
-  await page.addInitScript((tk) => localStorage.setItem('auth_token', tk), body.token);
+  await page.addInitScript((tk) => sessionStorage.setItem('auth_token', tk), body.token);
 }
 
 test.describe('运行时健康体检', () => {

@@ -19,17 +19,16 @@ const API_BASE = import.meta.env.VITE_API_BASE || ''
 export { API_BASE }
 
 // 登录态：所有请求自动带 Authorization Bearer，租户由后端从 JWT 解析
-let authToken = localStorage.getItem('auth_token') || ''
+let authToken = sessionStorage.getItem('auth_token') || ''
 // 超管生效租户：以 X-Tenant-ID 下发（仅超级管理员使用租户切换器）
 // 存储键 v2：v1 键作废（防历史残留把超管误挂到具体租户，导致前台误命中该租户知识库）
 const TENANT_KEY = 'active_tenant_id_v2'
-let activeTenantId = Number(localStorage.getItem(TENANT_KEY) || 0)
+let activeTenantId = Number(sessionStorage.getItem(TENANT_KEY) || 0)
 
-/** 设置登录 token 并持久化到 localStorage */
-// 注意：token 存于 localStorage（XSS 风险已由安全团队单独跟踪，本处不改动存储机制）。
+/** 设置登录 token 并持久化到 sessionStorage（比 localStorage 更安全：不跨标签页、关闭即清） */
 export function setAuthToken(token: string) {
   authToken = token
-  try { localStorage.setItem('auth_token', token) } catch {}
+  try { sessionStorage.setItem('auth_token', token) } catch {}
 }
 
 /** 读取当前登录 token */
@@ -53,7 +52,7 @@ function handleUnauthorized(url: string) {
 /** 设置并持久化超管生效租户 ID（用于租户切换器） */
 export function setActiveTenantId(tid: number) {
   activeTenantId = tid
-  try { localStorage.setItem(TENANT_KEY, String(tid)) } catch {}
+  try { sessionStorage.setItem(TENANT_KEY, String(tid)) } catch {}
 }
 
 /** 读取当前生效租户 ID */

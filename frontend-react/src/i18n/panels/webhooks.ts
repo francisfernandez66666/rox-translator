@@ -4,7 +4,7 @@
 // =============================================
 export const zh: Record<string, string> = {
   'webhooks.title': 'Webhook 回调',
-  'webhooks.hint': '翻译完成后自动 POST 到回调 URL（携带 X-Signature 签名），失败自动重试 3 次。',
+  'webhooks.hint': '翻译完成后自动 POST 到回调 URL（携带 X-Signature 签名），失败自动重试。',
   'webhooks.urlPlaceholder': '回调 URL，如 https://example.com/webhook',
   'webhooks.secretPlaceholder': '签名密钥（可留空）',
   'webhooks.eventsPlaceholder': '订阅事件（默认 translation.completed）',
@@ -22,12 +22,40 @@ export const zh: Record<string, string> = {
   'webhooks.confirmDelete': '删除该 Webhook 配置？',
   'webhooks.testSent': '已发送',
   'webhooks.testFailed': '发送失败',
+  // 重试策略
+  'webhooks.maxRetries': '最大重试次数',
+  'webhooks.retryInterval': '重试间隔(秒)',
+  // 投递历史
+  'webhooks.deliveries': '投递历史',
+  'webhooks.noDeliveries': '暂无投递记录',
+  'webhooks.colDeliveryId': 'ID',
+  'webhooks.colDeliveryEvent': '事件',
+  'webhooks.colDeliveryStatus': '状态',
+  'webhooks.colDeliveryCode': '状态码',
+  'webhooks.colDeliveryAttempts': '尝试次数',
+  'webhooks.colDeliveryError': '错误信息',
+  'webhooks.colDeliveryTime': '投递时间',
+  'webhooks.colDeliveryActions': '操作',
+  'webhooks.statusPending': '等待中',
+  'webhooks.statusSuccess': '成功',
+  'webhooks.statusFailed': '失败',
+  'webhooks.statusDead': '死信',
+  'webhooks.retry': '重试',
+  'webhooks.retrySent': '已重新投递',
+  'webhooks.retryFailed': '重试失败',
+  'webhooks.cannotRetrySuccess': '成功的投递无需重试',
+  // 统计
+  'webhooks.statsTotal': '总投递',
+  'webhooks.statsSuccess': '成功',
+  'webhooks.statsFailed': '失败',
+  'webhooks.statsDead': '死信',
+  'webhooks.failureCount': '连续失败',
 }
 
 // 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
   'webhooks.title': 'Webhook Callbacks',
-  'webhooks.hint': 'On translation completion a POST is sent to the callback URL (signed with X-Signature); it retries automatically up to 3 times on failure.',
+  'webhooks.hint': 'On translation completion a POST is sent to the callback URL (signed with X-Signature); failed deliveries are retried automatically.',
   'webhooks.urlPlaceholder': 'Callback URL, e.g. https://example.com/webhook',
   'webhooks.secretPlaceholder': 'Signing secret (optional)',
   'webhooks.eventsPlaceholder': 'Events to subscribe (default translation.completed)',
@@ -45,4 +73,32 @@ export const en: Record<string, string> = {
   'webhooks.confirmDelete': 'Delete this webhook config?',
   'webhooks.testSent': 'Sent',
   'webhooks.testFailed': 'Send failed',
+  // Retry policy
+  'webhooks.maxRetries': 'Max Retries',
+  'webhooks.retryInterval': 'Retry Interval (sec)',
+  // Delivery history
+  'webhooks.deliveries': 'Delivery History',
+  'webhooks.noDeliveries': 'No delivery records yet',
+  'webhooks.colDeliveryId': 'ID',
+  'webhooks.colDeliveryEvent': 'Event',
+  'webhooks.colDeliveryStatus': 'Status',
+  'webhooks.colDeliveryCode': 'HTTP Code',
+  'webhooks.colDeliveryAttempts': 'Attempts',
+  'webhooks.colDeliveryError': 'Error',
+  'webhooks.colDeliveryTime': 'Time',
+  'webhooks.colDeliveryActions': 'Actions',
+  'webhooks.statusPending': 'Pending',
+  'webhooks.statusSuccess': 'Success',
+  'webhooks.statusFailed': 'Failed',
+  'webhooks.statusDead': 'Dead Letter',
+  'webhooks.retry': 'Retry',
+  'webhooks.retrySent': 'Re-delivered',
+  'webhooks.retryFailed': 'Retry failed',
+  'webhooks.cannotRetrySuccess': 'Successful deliveries cannot be retried',
+  // Stats
+  'webhooks.statsTotal': 'Total',
+  'webhooks.statsSuccess': 'Success',
+  'webhooks.statsFailed': 'Failed',
+  'webhooks.statsDead': 'Dead',
+  'webhooks.failureCount': 'Consecutive Failures',
 }

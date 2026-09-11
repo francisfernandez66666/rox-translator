@@ -15,6 +15,45 @@
 import type { ChatResponse, HealthResponse, ProgressEvent } from '@/types'
 import { API_BASE, authHeaders, request } from './core'
 
+/** SSE 公共解析器：从 ReadableStream 逐行解析 SSE 事件，回调进度，返回最终结果 */
+async function consumeSSEStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  onProgress?: (event: ProgressEvent) => void,
+  errorMessage = '翻译出错',
+): Promise<ChatResponse> {
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let finalResult: ChatResponse | null = null
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed.startsWith('data: ')) continue
+      const jsonStr = trimmed.slice(6)
+      if (jsonStr === '[DONE]') continue
+      try {
+        const event: ProgressEvent = JSON.parse(jsonStr)
+        if (event.type === 'progress' && onProgress) {
+          onProgress(event)
+        } else if (event.type === 'done') {
+          finalResult = event.result || null
+        } else if (event.type === 'error') {
+          throw new Error(event.error || errorMessage)
+        }
+      } catch (e) {
+        if (e instanceof Error && !e.message.includes('JSON')) throw e
+      }
+    }
+  }
+  if (!finalResult) throw new Error('未收到翻译结果')
+  return finalResult
+}
+
 /** SSE 流式聊天接口 */
 export async function chatStream(
   message: string,
@@ -39,45 +78,7 @@ export async function chatStream(
   const reader = response.body?.getReader()
   if (!reader) throw new Error('无法读取流式响应')
 
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let finalResult: ChatResponse | null = null
-
-  // 持续读取流数据直到 done；每次读出分块后按行切分 SSE 事件
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    // 将本次二进制分块解码追加进缓冲区（stream=true 处理多字节字符截断）
-    buffer += decoder.decode(value, { stream: true })
-    // 按换行切分；最后一行可能不完整，留在 buffer 等待下一次拼接
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    for (const line of lines) {
-      const trimmed = line.trim()
-      // 仅处理 SSE 的 data: 前缀行，其余（如注释/心跳）忽略
-      if (!trimmed.startsWith('data: ')) continue
-      const jsonStr = trimmed.slice(6)
-      // [DONE] 为流结束标记，无需解析
-      if (jsonStr === '[DONE]') continue
-      try {
-        const event: ProgressEvent = JSON.parse(jsonStr)
-        if (event.type === 'progress' && onProgress) {
-          // 进度事件：回调给上层用于展示中间状态
-          onProgress(event)
-        } else if (event.type === 'done') {
-          // 完成事件：提取最终翻译结果
-          finalResult = event.result || null
-        } else if (event.type === 'error') {
-          throw new Error(event.error || '翻译出错')
-        }
-      } catch (e) {
-        // 单行 JSON 解析失败时忽略（脏数据），仅当非解析错误才向上抛出
-        if (e instanceof Error && !e.message.includes('JSON')) throw e
-      }
-    }
-  }
-  if (!finalResult) throw new Error('未收到翻译结果')
-  return finalResult
+  return consumeSSEStream(reader, onProgress, '翻译出错')
 }
 
 /** 健康检查（10 秒超时：后端挂起时快速判定离线，不无限等待） */
@@ -125,44 +126,7 @@ export async function translateFileStream(
   const reader = response.body?.getReader()
   if (!reader) throw new Error('无法读取流式响应')
 
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let finalResult: ChatResponse | null = null
-
-  // 持续读取文件翻译流，逐行解析 SSE 事件（逻辑同 chatStream）
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    // 分块解码追加进缓冲区，处理多字节字符跨分块截断
-    buffer += decoder.decode(value, { stream: true })
-    // 按换行切分，保留最后不完整行到下一次循环
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    for (const line of lines) {
-      const trimmed = line.trim()
-      // 仅处理 data: 前缀的事件行
-      if (!trimmed.startsWith('data: ')) continue
-      const jsonStr = trimmed.slice(6)
-      // 跳过流结束标记
-      if (jsonStr === '[DONE]') continue
-      try {
-        const event: ProgressEvent = JSON.parse(jsonStr)
-        if (event.type === 'progress' && onProgress) {
-          onProgress(event)
-        } else if (event.type === 'done') {
-          // 提取文件翻译最终结果
-          finalResult = event.result || null
-        } else if (event.type === 'error') {
-          throw new Error(event.error || '文件翻译出错')
-        }
-      } catch (e) {
-        // 忽略单行 JSON 解析错误，非解析错误向上抛出
-        if (e instanceof Error && !e.message.includes('JSON')) throw e
-      }
-    }
-  }
-  if (!finalResult) throw new Error('未收到翻译结果')
-  return finalResult
+  return consumeSSEStream(reader, onProgress, '文件翻译出错')
 }
 
 // ============ 翻译文件格式/大小校验（即时翻译与工单翻译共用，保证两端一致） ============

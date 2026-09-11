@@ -385,6 +385,25 @@ func (s *Store) migrate() error {
 			updated_at TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_webhooks_tenant ON webhooks(tenant_id, enabled)`,
+		// ---------- webhook_deliveries 投递历史 / 死信队列 ----------
+		`CREATE TABLE IF NOT EXISTS webhook_deliveries (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			webhook_id INTEGER NOT NULL,
+			tenant_id INTEGER NOT NULL DEFAULT 0,
+			event TEXT NOT NULL DEFAULT '',
+			payload TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'pending',  -- pending/success/failed/dead
+			status_code INTEGER NOT NULL DEFAULT 0,
+			response TEXT NOT NULL DEFAULT '',
+			attempts INTEGER NOT NULL DEFAULT 0,
+			max_retries INTEGER NOT NULL DEFAULT 3,
+			next_retry_at TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			created_at TEXT,
+			updated_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_tenant ON webhook_deliveries(tenant_id, created_at)`,
 		// ---------- packages 商业包（免费体验/付费包/增量包） ----------
 		`CREATE TABLE IF NOT EXISTS packages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -605,6 +624,11 @@ var columnAdditions = []colDef{
 	{"users", "agreed_at", "ALTER TABLE users ADD COLUMN agreed_at TEXT NOT NULL DEFAULT ''"},
 	// ★ 首登强制改密（2026-09-02 功能）：Excel 批量导入用户置 1，首次登录需先改密
 	{"users", "must_change_pwd", "ALTER TABLE users ADD COLUMN must_change_pwd INTEGER NOT NULL DEFAULT 0"},
+	// Webhook 重试策略配置
+	{"webhooks", "max_retries", "ALTER TABLE webhooks ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3"},
+	{"webhooks", "retry_interval", "ALTER TABLE webhooks ADD COLUMN retry_interval INTEGER NOT NULL DEFAULT 60"},
+	{"webhooks", "last_delivery_at", "ALTER TABLE webhooks ADD COLUMN last_delivery_at TEXT NOT NULL DEFAULT ''"},
+	{"webhooks", "failure_count", "ALTER TABLE webhooks ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0"},
 }
 
 // migrateColumnsSQLite 为老库补充新增列（SQLite 3.35+ 才支持 ADD COLUMN IF NOT EXISTS，这里手工判断）。

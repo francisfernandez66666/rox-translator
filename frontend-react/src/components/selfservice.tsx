@@ -15,6 +15,7 @@ import { referralMy, type ReferralMyResp } from '@/api/referral'
 import { meContext } from '@/api'
 import { useAuth } from '@/stores/auth'
 import { fmtNum } from '@/lib/ui'
+import { useT } from '@/i18n'
 
 // useAsync：通用异步数据加载 Hook，自动管理 data/err/loading 状态；组件卸载后不再写入
 function useAsync<T>(fn: () => Promise<T>, deps: readonly unknown[]) {
@@ -35,6 +36,7 @@ function useAsync<T>(fn: () => Promise<T>, deps: readonly unknown[]) {
 
 // 余额面板：展示当前用户的永久余额、发放台账与可用总额
 export function BalancePanel() {
+  const [, t] = useT()
   // ★ 修复（2026-09-02 前端交互审计）：改用 /api/me/package（登录用户即可读）。
   //   原 /api/billing/balance 后端 handleBalance 需租户管理员（requireTenantAdmin），
   //   普通用户访问「我的余额」（/billing）会 403 显示错误卡片——本页为端用户自服务。
@@ -51,18 +53,18 @@ export function BalancePanel() {
       {totalAvailable <= 0 && (
         <Card>
           <div style={{ padding: '10px 14px', borderRadius: 8, background: '#fff7e6', border: '1px solid #ffd591', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
-            额度已用尽。可购买月租套餐或充值永久 token 后继续使用。
+            {t('ss.exhaustedHint')}
             <div style={{ marginTop: 6 }}>
-              <Button size="small" theme="warning" onClick={() => { window.history.pushState({}, '', '/packages'); window.dispatchEvent(new PopStateEvent('popstate')) }}>💎 购买月租套餐 / 充值永久 token</Button>
+              <Button size="small" theme="warning" onClick={() => { window.history.pushState({}, '', '/packages'); window.dispatchEvent(new PopStateEvent('popstate')) }}>{t('ss.gotoRecharge')}</Button>
             </div>
           </div>
         </Card>
       )}
       <Card>
-        <h3>我的余额</h3>
-        <div className="ss-row"><span>永久余额</span><b>{fmtNum(permanent)}</b></div>
-        <div className="ss-row"><span>发放台账</span><b>{fmtNum(grants)}</b></div>
-        <div className="ss-row"><span>可用总额</span><b>{fmtNum(totalAvailable)}</b></div>
+        <h3>{t('ss.myBalance')}</h3>
+        <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtNum(permanent)}</b></div>
+        <div className="ss-row"><span>{t('ss.grantLedger')}</span><b>{fmtNum(grants)}</b></div>
+        <div className="ss-row"><span>{t('ss.totalAvailable')}</span><b>{fmtNum(totalAvailable)}</b></div>
       </Card>
     </div>
   )
@@ -70,6 +72,7 @@ export function BalancePanel() {
 
 // 我的邀请面板：展示个人邀请码、邀请链接、奖励统计与邀请记录
 export function ReferralPanel() {
+  const [, t] = useT()
   const { data, err, loading } = useAsync<ReferralMyResp>(() => referralMy(), [])
   if (loading) return <Loading className="ss-loading" />
   if (err) return <Card><Tag theme="danger">{err}</Tag></Card>
@@ -80,25 +83,25 @@ export function ReferralPanel() {
   return (
     <div className="ss-grid">
       <Card>
-        <h3>我的邀请</h3>
+        <h3>{t('ss.myReferral')}</h3>
         <div className="ss-row">
-          <span>个人邀请码</span>
+          <span>{t('ss.myCode')}</span>
           <div className="ss-copy">
             <Tag>{code}</Tag>
-            <Button size="small" variant="outline" onClick={() => { navigator.clipboard?.writeText(code) }}>复制</Button>
+            <Button size="small" variant="outline" onClick={() => { navigator.clipboard?.writeText(code) }}>{t('ss.copy')}</Button>
           </div>
         </div>
-        {url && <div className="ss-row"><span>邀请链接</span><Tag>{url}</Tag></div>}
+        {url && <div className="ss-row"><span>{t('ss.inviteLink')}</span><Tag>{url}</Tag></div>}
         <div className="ss-stats">
-          <div className="ss-stat"><span>体验叠加</span><b>{fmtNum(d?.trial_tokens ?? 0)}</b></div>
-          <div className="ss-stat"><span>付费奖励</span><b>{fmtNum(d?.paid_tokens ?? 0)}</b></div>
-          <div className="ss-stat"><span>已邀人数</span><b>{d?.invited ?? 0}</b></div>
+          <div className="ss-stat"><span>{t('ss.trialStacked')}</span><b>{fmtNum(d?.trial_tokens ?? 0)}</b></div>
+          <div className="ss-stat"><span>{t('ss.paidBonus')}</span><b>{fmtNum(d?.paid_tokens ?? 0)}</b></div>
+          <div className="ss-stat"><span>{t('ss.invitedCount')}</span><b>{d?.invited ?? 0}</b></div>
         </div>
       </Card>
       {records.length > 0 && <Card>
-        <h3>邀请记录</h3>
-        <table className="ss-table"><thead><tr><th>类型</th><th>token</th><th>日期</th></tr></thead>
-          <tbody>{records.map((r, i) => <tr key={i}><td>{r.type === 'paid_perm' ? '付费永久' : '体验叠加'}</td><td>{fmtNum(r.tokens)}</td><td>{r.created_at?.slice(0, 10)}</td></tr>)}</tbody></table>
+        <h3>{t('ss.referralRecords')}</h3>
+        <table className="ss-table"><thead><tr><th>{t('ss.refTypeHeader')}</th><th>{t('ss.refTokenHeader')}</th><th>{t('ss.refDateHeader')}</th></tr></thead>
+          <tbody>{records.map((r, i) => <tr key={i}><td>{r.type === 'paid_perm' ? t('ss.refTypePaid') : t('ss.refTypeTrial')}</td><td>{fmtNum(r.tokens)}</td><td>{r.created_at?.slice(0, 10)}</td></tr>)}</tbody></table>
       </Card>}
     </div>
   )
@@ -106,6 +109,7 @@ export function ReferralPanel() {
 
 // 我的套餐面板：展示当前套餐、剩余句数、可用 token 与永久余额
 export function MyPackagePanel() {
+  const [, t] = useT()
   const { data, err, loading } = useAsync(() => myPackage(), [])
   if (loading) return <Loading className="ss-loading" />
   if (err) return <Card><Tag theme="danger">{err}</Tag></Card>
@@ -117,19 +121,19 @@ export function MyPackagePanel() {
       {total <= 0 && !hasPlan && (
         <Card>
           <div style={{ padding: '10px 14px', borderRadius: 8, background: '#fff7e6', border: '1px solid #ffd591', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
-            额度已用尽。可购买月租套餐或充值永久 token 后继续使用。
+            {t('ss.exhaustedHint')}
             <div style={{ marginTop: 6 }}>
-              <Button size="small" theme="warning" onClick={() => { window.history.pushState({}, '', '/billing'); window.dispatchEvent(new PopStateEvent('popstate')) }}>💰 前往充值/购买</Button>
+              <Button size="small" theme="warning" onClick={() => { window.history.pushState({}, '', '/billing'); window.dispatchEvent(new PopStateEvent('popstate')) }}>{t('ss.gotoTopUp')}</Button>
             </div>
           </div>
         </Card>
       )}
       <Card>
-        <h3>我的套餐</h3>
-        <div className="ss-row"><span>当前包</span><Tag>{p.package_code ?? '—'}</Tag></div>
-        <div className="ss-row"><span>剩余句数</span><b>{fmtNum(p.sentence_balance ?? 0)} 句</b></div>
-        <div className="ss-row"><span>可用 token</span><b>{fmtNum(total)}</b></div>
-        <div className="ss-row"><span>永久余额</span><b>{fmtNum(p.permanent_balance ?? 0)}</b></div>
+        <h3>{t('ss.myPackage')}</h3>
+        <div className="ss-row"><span>{t('ss.currentPkg')}</span><Tag>{p.package_code ?? '—'}</Tag></div>
+        <div className="ss-row"><span>{t('ss.remainingSentences')}</span><b>{fmtNum(p.sentence_balance ?? 0)} {t('ss.sentenceUnit')}</b></div>
+        <div className="ss-row"><span>{t('ss.availableTokens')}</span><b>{fmtNum(total)}</b></div>
+        <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtNum(p.permanent_balance ?? 0)}</b></div>
       </Card>
     </div>
   )
@@ -137,6 +141,7 @@ export function MyPackagePanel() {
 
 // 我的账号面板：展示用户名/邮箱/角色/租户，并提供余额/邀请/套餐快捷入口
 export function AccountPanel() {
+  const [, t] = useT()
   const { user } = useAuth()
   const { data, err, loading } = useAsync(() => meContext(), [])
   const ctx = (data as any) ?? {}
@@ -147,18 +152,18 @@ export function AccountPanel() {
   return (
     <div className="ss-grid">
       <Card>
-        <h3>我的账号</h3>
-        <div className="ss-row"><span>用户名</span><b>{ctx.username ?? user?.username ?? '—'}</b></div>
-        <div className="ss-row"><span>邮箱</span><Tag>{ctx.email ?? user?.email ?? '未绑定'}</Tag></div>
-        <div className="ss-row"><span>角色</span><Tag>{ctx.role ?? user?.role ?? '—'}</Tag></div>
-        <div className="ss-row"><span>租户</span><b>{ctx.tenant_name ?? ctx.tenant_id ?? '—'}</b></div>
+        <h3>{t('ss.myAccount')}</h3>
+        <div className="ss-row"><span>{t('ss.username')}</span><b>{ctx.username ?? user?.username ?? '—'}</b></div>
+        <div className="ss-row"><span>{t('ss.email')}</span><Tag>{ctx.email ?? user?.email ?? t('ss.emailUnbound')}</Tag></div>
+        <div className="ss-row"><span>{t('ss.role')}</span><Tag>{ctx.role ?? user?.role ?? '—'}</Tag></div>
+        <div className="ss-row"><span>{t('ss.tenant')}</span><b>{ctx.tenant_name ?? ctx.tenant_id ?? '—'}</b></div>
       </Card>
       <Card>
-        <h3>快速入口</h3>
+        <h3>{t('ss.quickLinks')}</h3>
         <div className="ss-quick">
-          <Button size="small" variant="outline" onClick={() => { window.history.pushState({}, '', '/billing'); window.dispatchEvent(new PopStateEvent('popstate')) }}>💰 我的余额</Button>
-          {isPersonal && <Button size="small" variant="outline" onClick={() => { window.history.pushState({}, '', '/invites'); window.dispatchEvent(new PopStateEvent('popstate')) }}>🔗 我的邀请</Button>}
-          <Button size="small" variant="outline" onClick={() => { window.history.pushState({}, '', '/packages'); window.dispatchEvent(new PopStateEvent('popstate')) }}>💎 我的套餐</Button>
+          <Button size="small" variant="outline" onClick={() => { window.history.pushState({}, '', '/billing'); window.dispatchEvent(new PopStateEvent('popstate')) }}>{t('ss.navBalance')}</Button>
+          {isPersonal && <Button size="small" variant="outline" onClick={() => { window.history.pushState({}, '', '/invites'); window.dispatchEvent(new PopStateEvent('popstate')) }}>{t('ss.navReferral')}</Button>}
+          <Button size="small" variant="outline" onClick={() => { window.history.pushState({}, '', '/packages'); window.dispatchEvent(new PopStateEvent('popstate')) }}>{t('ss.navPackage')}</Button>
         </div>
       </Card>
     </div>
