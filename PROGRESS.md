@@ -1,6 +1,20 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-11（P0-P2 全链路修复 + Webhook 重试/死信机制）
+> 最后更新：2026-09-11（品牌保护 + 填充词幻觉修复 + 自动化测试补充）
+
+## 〇-XXX、品牌保护与填充词幻觉修复（2026-09-11，提交 199419a / c5ed0b5 / 7bbb739）
+
+> 修复两个翻译质量问题：①对话路径品牌名未做源文保护（极石→جيشي）；②模型对占位文本（待补充）幻觉输出 "and" 且复核/硬闸未拦截。
+
+| 块 | 内容 |
+|---|---|
+| **对话路径品牌保护** | `text.go` HandleText 新增 `fetchBrandTerms` + `protectSourceByLang`，翻译前替换源文品牌名（极石→ROX），KB 翻译和其他语言翻译均使用保护后的源文 |
+| **填充词幻觉拦截** | `gate.go` 第 10 项检查「译文非填充词」：译文仅为 and/or/but 等无意义词时拦截；`sourceIsFiller` 仅识别纯标点占位符（TBD/N/A/—），中文「待补充」不算占位符 |
+| **复核模型增强** | 单条+批量复核提示词增加「语义偏差」修正指令（不仅检查术语+语法，还检查语义等价） |
+| **连词重复折叠** | `postprocess.go` `collapseRepeatedConjunctions` 折叠连续重复连词（and and and → and） |
+| **短词重复检测** | `gate.go` `hasRepetition` 补充短词（2-4 字）连续 3+ 次检测 |
+| **自动化测试** | `text_test.go` 新增 3 个纯函数单测；`gate_test.go` 新增 isFillerWordOnly/sourceIsFiller 直接单测 + 5 个填充词门禁场景；`postprocess_test.go` 新增 DetectSourceLang/StripLangPrefix 单测 |
+| **验证** | go test 全通过 | tsc --noEmit | vitest 24/24 | UAT 67/67 + 16/16 |
 
 ## 〇-XXIX、P0-P2 全链路修复 + Webhook 重试/死信机制（2026-09-11，提交 60edcfa）
 
