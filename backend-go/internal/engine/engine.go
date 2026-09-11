@@ -1201,6 +1201,8 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 	instruction := translateInstruction(sourceLang, targetLang, uiLangFromCtx(ctx))
 	// ★ 输出契约（2026-09-09）：要求模型用 <t>…</t> 包裹最终译文，白名单提取根治注释残留
 	instruction += outputContractNote(uiLangFromCtx(ctx))
+	// ★ 占位文本指引（2026-09-11）：模型对「待补充/TBD/N/A」等占位文本易幻觉输出 and/or 等无意义词
+	instruction += " 如果源文是占位文本（如「待补充」「TBD」「N/A」「—」），请原样输出，不要添加任何填充词。"
 	// ★ 缩翻（任务7）：启用时向指令追加最长字符限制，提示模型精简输出
 	if ml := maxLengthFromCtx(ctx); ml > 0 {
 		instruction += fmt.Sprintf(" 译文总长度（含标点）不得超过 %d 个字符。请在保留原意与关键信息的前提下尽量精简，不要额外解释，只输出译文。", ml)
@@ -1618,7 +1620,9 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 			sb.WriteString(fmt.Sprintf("<s%d>%s</s%d>\n", i+1, t, i+1))
 		}
 		instruction := translateInstruction("zh", targetLang, uiLangFromCtx(ctx))
-		userPrompt := instruction + "\n\n请按编号逐条翻译，用 <sN>...</sN> 包裹每条翻译结果：\n\n" + sb.String()
+		// ★ 补充占位内容指引：模型对「待补充/TBD/N/A」等占位文本易幻觉输出 and/or 等无意义词，
+		//   明确指示原样输出占位文本、不得添加填充词。
+		userPrompt := instruction + "\n\n注意：如果源文是占位文本（如「待补充」「TBD」「N/A」「—」），请原样输出，不要添加任何填充词（如 and/or/but）。\n\n请按编号逐条翻译，用 <sN>...</sN> 包裹每条翻译结果：\n\n" + sb.String()
 		messages := []map[string]string{{"role": "user", "content": userPrompt}}
 
 		maxTokens := 2048
