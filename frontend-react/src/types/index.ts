@@ -77,6 +77,8 @@ export interface ChatMessage {
   timestamp: number       // 消息时间戳（毫秒）
   progress?: {
     step: string    // 当前进度步骤文案
+    done?: number   // 已完成数量
+    total?: number  // 总数量
     percent: number // 当前进度百分比
   }
 }

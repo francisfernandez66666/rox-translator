@@ -131,8 +131,10 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 
 /* 进度条 */
 .progress-area { margin-bottom: 10px; }
-.progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; flex-wrap: wrap; }
 .progress-step { font-size: 13px; color: #5f6368; }
+.progress-lang { font-size: 12px; font-weight: 600; color: var(--td-brand-color, #2f47f5); background: #e8f0fe; padding: 1px 6px; border-radius: 4px; }
+.progress-detail { font-size: 12px; color: #9e9e9e; }
 .progress-percent { font-size: 13px; font-weight: 600; color: var(--td-brand-color, #2f47f5); font-family: 'SF Mono', Menlo, monospace; }
 .progress-bar-bg { width: 100%; height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden; }
 .progress-bar-fill { height: 100%; background: linear-gradient(90deg, var(--td-brand-color, #2f47f5), #4fc3f7); border-radius: 3px; transition: width .3s ease; }

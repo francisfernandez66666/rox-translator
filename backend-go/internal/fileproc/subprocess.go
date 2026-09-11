@@ -73,8 +73,10 @@ func acquireProcGateCtx(ctx context.Context) func() {
 	case <-ctx.Done():
 		return func() {}
 	}
-	if d := time.Since(start); d > 2*time.Second {
+	d := time.Since(start)
+	if d > 2*time.Second {
 		log.Printf("[fileproc-queue] waited=%s max=%d", d.Round(10*time.Millisecond), cap(g))
+		RecordQueueWait(d) // 记录队列等待指标
 	}
 	return func() { <-g }
 }
@@ -84,11 +86,16 @@ func acquireProcGateCtx(ctx context.Context) func() {
 //     （LibreOffice 由 python 派生，仅杀直属子进程会留孤儿继续吃 CPU）
 //   - WaitDelay=5s：ctx 触发后强杀并限时排空管道
 //   - stdout/stderr 分别限量 4MB（替代 CombinedOutput 的无界 CombinedOutput 缓存）
+//   - 监控指标：启动/成功/失败/超时/SIGKILL 次数，供 /metrics 导出
 //
 // stdin 非 nil 时经标准输入传入 payload。返回分离后的 stdout/stderr 与错误。
 func runSubprocess(ctx context.Context, timeout time.Duration, bin string, args []string, stdin []byte) ([]byte, []byte, error) {
 	release := acquireProcGateCtx(ctx)
 	defer release()
+
+	// 记录子进程启动
+	RecordStart()
+	startTime := time.Now()
 
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -98,6 +105,7 @@ func runSubprocess(ctx context.Context, timeout time.Duration, bin string, args 
 		cmd.Cancel = func() error {
 			if p := cmd.Process; p != nil {
 				_ = syscall.Kill(-p.Pid, syscall.SIGKILL) // 杀整组
+				RecordSigkill()                            // 记录 SIGKILL
 			}
 			return nil // 返回 nil 让 WaitDelay 继续排空管道
 		}
@@ -111,6 +119,20 @@ func runSubprocess(ctx context.Context, timeout time.Duration, bin string, args 
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
 	err := cmd.Run()
+	duration := time.Since(startTime)
+
+	// 记录执行结果
+	if err != nil {
+		// 区分超时和其他错误
+		if cctx.Err() == context.DeadlineExceeded {
+			RecordTimeout(duration)
+		} else {
+			RecordFailure(duration)
+		}
+	} else {
+		RecordSuccess(duration)
+	}
+
 	return outBuf.b.Bytes(), errBuf.b.Bytes(), err
 }
 

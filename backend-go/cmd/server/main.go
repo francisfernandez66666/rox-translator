@@ -30,6 +30,7 @@ import (
 	"translator/internal/config"
 	"translator/internal/engine"
 	"translator/internal/evals"
+	"translator/internal/fileproc"
 	"translator/internal/kb"
 	"translator/internal/llm"
 	"translator/internal/observability"
@@ -298,6 +299,9 @@ func main() {
 	// ★ 性能优化 B2/B3：启动实时计量批量落库（把逐 LLM 调用的写事务合并为周期批量），
 	//   彻底消除并发翻译下的 SQLITE_BUSY。
 	billing.InitGlobalSink(srv.Bill)
+
+	// 文件处理依赖健康检查（Python/LibreOffice）
+	fileproc.CheckHealth()
 
 	log.Printf("能言 v2.0.0-go 服务已启动: http://localhost%s", *addr)
 	s := &http.Server{

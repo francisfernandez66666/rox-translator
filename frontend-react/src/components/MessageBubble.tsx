@@ -228,7 +228,26 @@ export default function MessageBubble({ message, onFeedback }: Props) {
         {showProgress && (
           <div className="progress-area">
             <div className="progress-header">
-              <span className="progress-step">{progress!.step}</span>
+              {/* 解析 step 格式：file_translate|初翻|en 或 第2步/3：翻译英文（45/120） */}
+              {(() => {
+                const step = progress!.step || ''
+                const parts = step.split('|')
+                if (parts.length === 3 && parts[0] === 'file_translate') {
+                  // 文件翻译细粒度进度：阶段 + 语言
+                  const phase = parts[1] // 初翻/校对
+                  const lang = parts[2] // en/ja/ko 等
+                  const langName = lang.toUpperCase()
+                  return (
+                    <>
+                      <span className="progress-step">{phase}</span>
+                      <span className="progress-lang">{langName}</span>
+                      <span className="progress-detail">{progress!.done}/{progress!.total} 段</span>
+                    </>
+                  )
+                }
+                // 通用进度：直接显示 step 文案
+                return <span className="progress-step">{step}</span>
+              })()}
               <span className="progress-percent">{progress!.percent}%</span>
             </div>
             <div className="progress-bar-bg">

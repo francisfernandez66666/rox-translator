@@ -20,6 +20,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"translator/internal/fileproc"
 )
 
 // ============ 系统级指标收集（Prometheus 文本格式导出） ============
@@ -185,6 +187,25 @@ func (s *Server) metricsText() string {
 		sb.WriteString("# HELP translator_llm_error_rate LLM 调用窗口错误率(0~1)\n# TYPE translator_llm_error_rate gauge\n")
 		sb.WriteString(fmt.Sprintf("translator_llm_error_rate %v\n", s.Engine.ErrorRate()))
 	}
+
+	// 子进程监控指标（fileproc 包收集）
+	procSnap := fileproc.GetProcMetrics().Snapshot()
+	sb.WriteString("# HELP translator_fileproc_starts_total 子进程启动总数\n# TYPE translator_fileproc_starts_total counter\n")
+	sb.WriteString(fmt.Sprintf("translator_fileproc_starts_total %d\n", procSnap.Starts))
+	sb.WriteString("# HELP translator_fileproc_success_total 子进程成功完成总数\n# TYPE translator_fileproc_success_total counter\n")
+	sb.WriteString(fmt.Sprintf("translator_fileproc_success_total %d\n", procSnap.Success))
+	sb.WriteString("# HELP translator_fileproc_failures_total 子进程失败总数（非超时）\n# TYPE translator_fileproc_failures_total counter\n")
+	sb.WriteString(fmt.Sprintf("translator_fileproc_failures_total %d\n", procSnap.Failures))
+	sb.WriteString("# HELP translator_fileproc_timeouts_total 子进程超时总数\n# TYPE translator_fileproc_timeouts_total counter\n")
+	sb.WriteString(fmt.Sprintf("translator_fileproc_timeouts_total %d\n", procSnap.Timeouts))
+	sb.WriteString("# HELP translator_fileproc_sigkills_total 子进程 SIGKILL 总数\n# TYPE translator_fileproc_sigkills_total counter\n")
+	sb.WriteString(fmt.Sprintf("translator_fileproc_sigkills_total %d\n", procSnap.Sigkills))
+	sb.WriteString("# HELP translator_fileproc_running 当前运行中的子进程数\n# TYPE translator_fileproc_running gauge\n")
+	sb.WriteString(fmt.Sprintf("translator_fileproc_running %d\n", procSnap.Running))
+	sb.WriteString("# HELP translator_fileproc_queue_waits_total 队列等待次数（超过2s）\n# TYPE translator_fileproc_queue_waits_total counter\n")
+	sb.WriteString(fmt.Sprintf("translator_fileproc_queue_waits_total %d\n", procSnap.QueueWaits))
+	sb.WriteString("# HELP translator_fileproc_avg_duration_ms 子进程平均执行时间（毫秒）\n# TYPE translator_fileproc_avg_duration_ms gauge\n")
+	sb.WriteString(fmt.Sprintf("translator_fileproc_avg_duration_ms %.2f\n", procSnap.AvgDurationMs))
 
 	// 平台规模（租户/余额/KB 全平台汇总，仅聚合不泄露租户明细）
 	if s.Store != nil {
