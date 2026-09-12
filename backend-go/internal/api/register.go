@@ -14,6 +14,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -299,7 +300,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		pb, _ := json.Marshal(perms)
 		t, err := s.Ten.Create(req.Code, req.Name, "", string(pb))
 		if err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户创建失败: " + err.Error()})
+			// ★ 脱敏（2026-09-12）：驱动错误不透吐（PG/sqlite 文案不同且含约束名）
+			if store.IsUniqueViolation(err) {
+				writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户创建失败：该企业编码已存在"})
+				return
+			}
+			log.Printf("[register] 租户创建失败 code=%s: %v", req.Code, err)
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户创建失败: " + store.DebriefDBError(err)})
 			return
 		}
 		inviteTenantID = t.ID
@@ -334,8 +341,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	// 个人用户租户标记（企业用户默认 is_personal=0，无需额外处理）。
 	// 个人用户默认可参与邀请好友奖励；企业用户默认不参与（见下方 ref 奖励门禁）。
+	// ★ 2026-09-12：不得吞错——此前 `_ =` 把 PG 下 bool→INTEGER 的类型错误静默吞掉，
+	//   导致个人标记恒失败、邀请奖励全量停发且无任何痕迹。失败必须留日志。
 	if creatingPersonal && inviteTenantID > 0 {
-		_ = s.Ten.SetPersonal(inviteTenantID, true)
+		if perr := s.Ten.SetPersonal(inviteTenantID, true); perr != nil {
+			log.Printf("[register] 个人租户标记失败 tid=%d: %v", inviteTenantID, perr)
+		}
 	}
 
 	// 3. 创建账号：独立租户 → tenant_admin；受邀加入 → user；专属域名 → 强制普通用户

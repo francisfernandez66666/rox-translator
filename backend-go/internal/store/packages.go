@@ -319,15 +319,16 @@ func (s *Store) SetSentenceBalance(tid int64, balance int64) error {
 // AddSentences 增加租户句数余额（增量包购买/付费包发放时调用）。
 // 参数：tid=租户 ID，n=待增加句数（需为正数）；返回新余额。
 //
-// ★ 并发安全（2026-08-26 全仓评审 B3）：改为 json_set 单语句原子自增，
-// 不再整体覆盖 permissions JSON——并发发放/扣减不再互相踩掉对方写入。
+// ★ 并发安全（2026-08-26 全仓评审 B3）：单语句原子自增，不再整体覆盖 permissions JSON。
+// ★ 2026-09-12 PG 方言修复：JSON1 函数改经 db.JSONNumAdd 双方言助手。
 func (s *Store) AddSentences(tid, n int64) (int64, error) {
 	if n <= 0 {
 		cur, _ := s.GetSentenceBalance(tid)
 		return cur, nil
 	}
-	if _, err := db.Exec(s.db, db.CurrentDialect(),
-		"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$.sentence_balance', COALESCE(json_extract(permissions,'$.sentence_balance'),0)+?), updated_at=? WHERE id=?",
+	d := db.CurrentDialect()
+	if _, err := db.Exec(s.db, d,
+		"UPDATE tenants SET "+db.JSONNumAdd(d, "permissions", "sentence_balance")+", updated_at=? WHERE id=?",
 		n, time.Now().Format(time.RFC3339), tid); err != nil {
 		return 0, err
 	}
@@ -338,12 +339,15 @@ func (s *Store) AddSentences(tid, n int64) (int64, error) {
 // 参数：tid=租户 ID，n=待扣减句数；余额不足时返回 ErrSentenceExhausted。
 // 返回：扣减后的剩余句数。
 //
-// ★ 并发安全（2026-08-26 全仓评审 B3）：json_set 单语句原子自减 + WHERE 余额守卫，
+// ★ 并发安全（2026-08-26 全仓评审 B3）：单语句原子自减 + WHERE 余额守卫，
 // RowsAffected==0 即余额不足（或租户不存在）——守卫式核销与 DeductWithGrants 同款双保险。
+// ★ 2026-09-12 PG 方言修复：JSON1 改经 db.JSONNumAdd/JSONNumGE 助手（自减=负增量）。
 func (s *Store) DeductSentences(tid, n int64) (int64, error) {
-	res, err := db.Exec(s.db, db.CurrentDialect(),
-		"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$.sentence_balance', COALESCE(json_extract(permissions,'$.sentence_balance'),0)-?), updated_at=? WHERE id=? AND COALESCE(json_extract(permissions,'$.sentence_balance'),0)>=?",
-		n, time.Now().Format(time.RFC3339), tid, n)
+	d := db.CurrentDialect()
+	res, err := db.Exec(s.db, d,
+		"UPDATE tenants SET "+db.JSONNumAdd(d, "permissions", "sentence_balance")+", updated_at=? WHERE id=? AND "+
+			db.JSONNumGE(d, "permissions", "sentence_balance"),
+		-n, time.Now().Format(time.RFC3339), tid, n)
 	if err != nil {
 		return 0, err
 	}
@@ -486,11 +490,13 @@ func (s *Store) ApplyPaidPackageIdentity(tid int64, pkg *Package) (int64, error)
 // ApplyIncrementMirror 仅追加增量包句数镜像（不改订阅状态与到期，不折算 token）。
 // token 部分由永久余额通道（Charge）负责。参数：tid=租户 ID，pkg=增量包对象。
 //
-// ★ 并发安全（2026-08-26 全仓评审 B3）：改为 json_set 单语句原子自增。
+// ★ 并发安全（2026-08-26 全仓评审 B3）：单语句原子自增。
+// ★ 2026-09-12 PG 方言修复：JSON1 改经 db.JSONNumAdd 助手。
 func (s *Store) ApplyIncrementMirror(tid int64, pkg *Package) (int64, error) {
 	if pkg.Sentences > 0 {
-		if _, err := db.Exec(s.db, db.CurrentDialect(),
-			"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$.sentence_balance', COALESCE(json_extract(permissions,'$.sentence_balance'),0)+?), updated_at=? WHERE id=?",
+		d := db.CurrentDialect()
+		if _, err := db.Exec(s.db, d,
+			"UPDATE tenants SET "+db.JSONNumAdd(d, "permissions", "sentence_balance")+", updated_at=? WHERE id=?",
 			pkg.Sentences, time.Now().Format(time.RFC3339), tid); err != nil {
 			return 0, err
 		}

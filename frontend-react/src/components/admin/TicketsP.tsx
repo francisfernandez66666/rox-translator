@@ -22,6 +22,7 @@ type Any = Record<string, any>
 const rowMt: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }
 const cardStyle: any = { border: '1px solid #e3e6ef', borderRadius: 8, padding: 14, marginBottom: 12 }
 
+// firstTranslation 从工单 final_result JSON 中取第一个目标语种的译文（预览用；解析失败返回空串）。
 function firstTranslation(finalResult: unknown): string {
   try {
     const p = typeof finalResult === 'string' && finalResult ? JSON.parse(finalResult) : null

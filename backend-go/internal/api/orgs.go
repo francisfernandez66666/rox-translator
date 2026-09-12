@@ -14,6 +14,7 @@ package api
 // =============================================
 
 import (
+	"log"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -260,7 +261,13 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	org, err := s.Store.CreateOrg(tid, req.ParentID, req.Name, orgType)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + err.Error()})
+		// ★ 脱敏（2026-09-12）：驱动错误不透吐
+		if store.IsUniqueViolation(err) {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败：同级下已存在同名组织"})
+			return
+		}
+		log.Printf("[orgs] 创建组织失败 tid=%d name=%s: %v", tid, req.Name, err)
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + store.DebriefDBError(err)})
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "org_create", "orgs", req.Name)

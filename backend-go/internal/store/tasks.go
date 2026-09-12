@@ -109,13 +109,14 @@ func (s *Store) SaveUserTask(t *UserTask) (int64, error) {
 			t.TaskType, t.Title, t.Description, t.RewardTokens, t.Enabled, t.SortOrder, now, t.ID)
 		return t.ID, err
 	}
-	res, err := db.Exec(s.db, d,
+	// ★ 2026-09-12 PG 方言修复：lib/pq 不支持 LastInsertId（恒返 0），
+	// 建任务返回 id=0 → 前台无法领取，任务中心在 PG 下整体不可用。改经 InsertID（RETURNING）。
+	id, err := db.InsertID(s.db, d, "id",
 		"INSERT INTO user_tasks (task_type, title, description, reward_tokens, enabled, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
 		t.TaskType, t.Title, t.Description, t.RewardTokens, t.Enabled, t.SortOrder, now, now)
 	if err != nil {
 		return 0, err
 	}
-	id, _ := res.LastInsertId()
 	return id, nil
 }
 

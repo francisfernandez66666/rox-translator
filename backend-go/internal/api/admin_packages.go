@@ -13,6 +13,7 @@ package api
 // =============================================
 
 import (
+	"log"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -92,7 +93,13 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 		PriceMoney: req.PriceMoney, DurationDays: req.DurationDays, Enabled: 1, SortOrder: req.SortOrder,
 	})
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + err.Error()})
+		// ★ 脱敏（2026-09-12）：驱动错误不透吐
+		if store.IsUniqueViolation(err) {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败：套餐编码已存在"})
+			return
+		}
+		log.Printf("[packages] 创建套餐失败 code=%s: %v", req.Code, err)
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + store.DebriefDBError(err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_create", "packages", req.Code)

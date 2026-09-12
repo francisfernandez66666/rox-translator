@@ -17,6 +17,7 @@ U="${UAT_DB:-/tmp/uat/dev.db}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-Admin@1234}"
 J='Content-Type: application/json'
+source "$(dirname "$0")/dblib.sh"   # 双方言断言层（sqlite/PG）
 PASS=0; FAIL=0; START=$(date +%s)
 
 ck(){ if echo "$3" | grep -qE "$2"; then PASS=$((PASS+1)); echo "PASS|$1"; else FAIL=$((FAIL+1)); echo "FAIL|$1|want[$2]|got[${3:0:220}]"; fi; }
@@ -44,7 +45,7 @@ T1=$(tok uatuser_a uatpass123); H1="Authorization: Bearer $T1"
 ck A3-register-B '"success":true' "$(reg uatuser_b uatpass123 uatcorpB UAT公司B uat_b@test.com)"
 T2=$(tok uatuser_b uatpass123); H2="Authorization: Bearer $T2"
 ck A3-dup-tenantcode '租户创建失败|UNIQUE|已存在' "$(reg uatuser_a uatpass123 uatcorpA 重复 uat_dup@test.com)"
-AID=$(sqlite3 $U "SELECT id FROM users WHERE username='uatuser_a' LIMIT 1" | tr -d '[:space:]')
+AID=$(dbq "SELECT id FROM users WHERE username='uatuser_a' LIMIT 1" | tr -d '[:space:]')
 DUP_PAYLOAD="{\"username\":\"uatuser_a\",\"password\":\"uatpass123\",\"display_name\":\"重复\",\"role\":\"user\",\"tenant_id\":$AID}"
 ck A3-dup-username '已存在|占用|exists' "$(curl -s $B/api/admin/users/create -H "$AH" -H "$J" -d "$DUP_PAYLOAD")"
 ck A3-bad-login '密码|失败|incorrect|invalid|UNAUTHORIZED' "$(curl -s $B/api/auth/login -H "$J" -d '{"username":"uatuser_a","password":"wrongpass"}')"
@@ -66,17 +67,17 @@ echo "$MG" | grep -qE '\*\*\*\*' && { PASS=$((PASS+1)); echo "PASS|A5-mask"; } |
 ck A6-estimate '"success":true' "$(curl -s $B/api/translation/estimate -H "$H1" -H "$J" -d '{"text":"早上好，欢迎使用翻译助手平台进行文本翻译测试。","target_langs":["en"],"mode":"fast"}')"
 
 # ---------- A7 聊天翻译 + 计量入账（usage_ledger 行增） ----------
-Q1=$(sqlite3 $U "SELECT left FROM quota_grants WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a') AND kind='trial'")
+Q1=$(dbq "SELECT \"left\" FROM quota_grants WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a') AND kind='trial'")
 CH=$(curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"早上好，欢迎使用翻译助手平台。","options":{"target_langs":["en"]}}')
 ck A7-chat-ok 'TranslatedEN' "$CH"
 sleep 3
-Q2=$(sqlite3 $U "SELECT left FROM quota_grants WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a') AND kind='trial'")
+Q2=$(dbq "SELECT \"left\" FROM quota_grants WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a') AND kind='trial'")
 [ -n "$Q1" ] && [ -n "$Q2" ] && [ "$Q2" -lt "$Q1" ] && { PASS=$((PASS+1)); echo "PASS|A7-metering($Q1->$Q2)"; } || { FAIL=$((FAIL+1)); echo "FAIL|A7-metering($Q1->$Q2)"; }
 ck A7-usage-me '"success":true' "$(curl -s "$B/api/billing/usage/me" -H "$H1")"
 
 # ---------- A8 余额不足硬闸（清零 userB 双台账，billing_enforced=1） ----------
-BID=$(sqlite3 $U "SELECT tenant_id FROM users WHERE username='uatuser_b'")
-sqlite3 $U "UPDATE balance_accounts SET balance=0 WHERE tenant_id=$BID; UPDATE quota_grants SET left=0 WHERE tenant_id=$BID;"
+BID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_b'")
+dbq "UPDATE balance_accounts SET balance=0 WHERE tenant_id=$BID; UPDATE quota_grants SET \"left\"=0 WHERE tenant_id=$BID;"
 CH2=$(curl -s $B/api/chat -H "$H2" -H "$J" --max-time 30 -d '{"message":"这是一条余额不足应当被拦截的翻译请求文本内容","options":{"target_langs":["en"]}}')
 ck A8-insufficient-block '耗尽|不足|insufficient' "$CH2"
 echo "INFO|A8-reply|${CH2:0:200}"
@@ -89,9 +90,9 @@ echo "INFO|order-id|$OID"
 SIM_PAYLOAD="{\"order_id\":$OID}"
 ck A9-pay-simulate '"success":true' "$(curl -s $B/api/pay/simulate -H "$H1" -H "$J" -d "$SIM_PAYLOAD")"
 ck A9-pay-status-paid 'paid|success' "$(curl -s "$B/api/pay/status?order_id=$OID" -H "$H1")"
-G1=$(sqlite3 $U "SELECT balance FROM balance_accounts WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a')")
+G1=$(dbq "SELECT balance FROM balance_accounts WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a')")
 curl -s $B/api/pay/simulate -H "$H1" -H "$J" -d "{\"order_id\":$OID}" >/dev/null
-G2=$(sqlite3 $U "SELECT balance FROM balance_accounts WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a')")
+G2=$(dbq "SELECT balance FROM balance_accounts WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a')")
 [ "$G1" = "$G2" ] && { PASS=$((PASS+1)); echo "PASS|A9-pay-idempotent($G1==$G2)"; } || { FAIL=$((FAIL+1)); echo "FAIL|A9-pay-idempotent($G1->$G2)"; }
 ck A9-orders-list '"success":true' "$(curl -s "$B/api/billing/orders" -H "$H1")"
 INV_PAYLOAD="{\"order_id\":$OID,\"title\":\"UAT测试发票\",\"tax_no\":\"TAX123456\"}"
@@ -140,7 +141,7 @@ AUD=$(curl -s "$B/api/system/audit" -H "$H1")
 echo "$AUD" | python3 -c 'import sys,json;d=json.load(sys.stdin);ls=d.get("logs",[]);print("OK" if ls and all(l.get("tenant_id")==ls[0].get("tenant_id") for l in ls) else "BAD")' | grep -q '^OK' && { PASS=$((PASS+1)); echo "PASS|A13-audit-scoped"; } || { FAIL=$((FAIL+1)); echo "FAIL|A13-audit-scoped|$AUD"; }
 
 # ---------- A14 套餐订阅（包绑定用户A租户，mock 即付即到账） ----------
-TAID=$(sqlite3 $U "SELECT tenant_id FROM users WHERE username='uatuser_a' LIMIT 1")
+TAID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a' LIMIT 1")
 curl -s $B/api/admin/packages/create -H "$AH" -H "$J" -d "{\"tenant_id\":$TAID,\"code\":\"uat_paid_100k\",\"name\":\"UAT包月10万句\",\"ptype\":\"paid\",\"sentences\":100000,\"price_money\":99,\"duration_days\":30}" >/dev/null
 SUB=$(curl -s $B/api/package/subscribe -H "$H1" -H "$J" -d '{"code":"uat_paid_100k"}')
 ck A14-subscribe '"success"' "$SUB"
@@ -187,7 +188,7 @@ echo "==A-PASS=$PASS FAIL=$FAIL=="
 #       套餐月度重置、邀请奖励因子、企业成员邀请加入(P1)、推广时间窗覆盖
 # ============================================================================
 echo "=== B 阶段：运营策略引擎 / P1 / P2 回归 ==="
-TAID=$(sqlite3 $U "SELECT tenant_id FROM users WHERE username='uatuser_a' LIMIT 1")
+TAID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a' LIMIT 1")
 
 # ---------- B1 运营策略读取/保存（平台级，超管） ----------
 ck B1-ops-policy-get '"success":true' "$(curl -s $B/api/admin/ops/policy -H "$AH")"
@@ -203,7 +204,7 @@ CHF=$(curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"测试�
 ck B2-fast-chat-free 'TranslatedEN' "$CHF"
 B2B2=$(curl -s "$B/api/billing/balance" -H "$H1" | pv '.get("total_available") or 0')
 [ -n "$B2B1" ] && [ "$B2B1" = "$B2B2" ] && { PASS=$((PASS+1)); echo "PASS|B2-free-no-deduct($B2B1==$B2B2)"; } || { FAIL=$((FAIL+1)); echo "FAIL|B2-free-no-deduct($B2B1->$B2B2)"; }
-B2LED=$(sqlite3 $U "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=$TAID AND biz_mode='fast'")
+B2LED=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=$TAID AND biz_mode='fast'")
 [ "$B2LED" -ge 1 ] && { PASS=$((PASS+1)); echo "PASS|B2-fast-ledger(biz_mode=fast rows=$B2LED)"; } || { FAIL=$((FAIL+1)); echo "FAIL|B2-fast-ledger|rows=$B2LED"; }
 CHP=$(curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"专业模式扣费测试。","options":{"target_langs":["en"],"mode":"pro"}}')
 ck B2-pro-still-charge 'TranslatedEN' "$CHP"
@@ -222,7 +223,7 @@ ck B4-platform-subscribe '"success"' "$SUB2"
 echo "INFO|B4-platform-subscribe|$SUB2"
 
 # ---------- B5 套餐月度重置：扣减→重置恢复→二次重置被上限拦截 ----------
-sqlite3 $U "UPDATE quota_grants SET \"left\"=\"left\"-50000 WHERE tenant_id=$TAID AND kind='plan' AND \"left\">50000"
+dbq "UPDATE quota_grants SET \"left\"=\"left\"-50000 WHERE tenant_id=$TAID AND kind='plan' AND \"left\">50000"
 RST=$(curl -s $B/api/admin/billing/package/reset -H "$H1" -H "$J" -d '{}')
 ck B5-reset-ok '"success":true' "$RST"
 echo "INFO|B5-reset|$RST"
@@ -233,19 +234,19 @@ ck B5-reset-limit '上限|已达' "$RST2"
 curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_e","password":"uatpass123","type":"personal","name":"E邀请人","email":"uat_e@test.com","agreed":true}' >/dev/null
 TE=$(tok uatuser_e uatpass123); HE="Authorization: Bearer $TE"
 ECODE=$(curl -s "$B/api/referral/my" -H "$HE" | pv '.get("ref_code","")')
-ETID=$(sqlite3 $U "SELECT tenant_id FROM users WHERE username='uatuser_e'")
-E1=$(sqlite3 $U "SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$ETID AND kind='trial'")
+ETID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_e'")
+E1=$(dbq "SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$ETID AND kind='trial'")
 curl -s $B/api/auth/register -H "$J" -d "{\"username\":\"uatuser_d\",\"password\":\"uatpass123\",\"type\":\"personal\",\"name\":\"D受邀\",\"email\":\"uat_d@test.com\",\"agreed\":true,\"ref\":\"$ECODE\"}" >/dev/null
-E2=$(sqlite3 $U "SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$ETID AND kind='trial'")
+E2=$(dbq "SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$ETID AND kind='trial'")
 [ -n "$E1" ] && [ -n "$E2" ] && [ $((E2 - E1)) -ge 900000 ] && { PASS=$((PASS+1)); echo "PASS|B6-invite-factor(+$((E2-E1)))"; } || { FAIL=$((FAIL+1)); echo "FAIL|B6-invite-factor($E1->$E2)"; }
 
 # ---------- B7 P1 回归：企业成员凭有效邀请码加入既有租户（role=user） ----------
 curl -s $B/api/admin/invite-codes/create -H "$H1" -H "$J" -d '{"code":"JOINUAT001"}' >/dev/null
 RF=$(curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_f","password":"uatpass123","type":"enterprise","role_choice":"member","invite":"JOINUAT001","name":"F加入","email":"uat_f@test.com","agreed":true}')
 ck B7-invite-join '"success":true' "$RF"
-FTID=$(sqlite3 $U "SELECT tenant_id FROM users WHERE username='uatuser_f'" | tr -d '[:space:]')
-FROLE=$(sqlite3 $U "SELECT role FROM users WHERE username='uatuser_f'" | tr -d '[:space:]')
-FUSED=$(sqlite3 $U "SELECT used FROM invite_codes WHERE code='JOINUAT001'" | tr -d '[:space:]')
+FTID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_f'" | tr -d '[:space:]')
+FROLE=$(dbq "SELECT role FROM users WHERE username='uatuser_f'" | tr -d '[:space:]')
+FUSED=$(dbq "SELECT used FROM invite_codes WHERE code='JOINUAT001'" | tr -d '[:space:]')
 [ "$FTID" = "$TAID" ] && { PASS=$((PASS+1)); echo "PASS|B7-joined-tenant($FTID==$TAID)"; } || { FAIL=$((FAIL+1)); echo "FAIL|B7-joined-tenant(f=$FTID a=$TAID)"; }
 [ "$FROLE" = "user" ] && { PASS=$((PASS+1)); echo "PASS|B7-joined-role(user)"; } || { FAIL=$((FAIL+1)); echo "FAIL|B7-joined-role($FROLE)"; }
 [ "$FUSED" = "1" ] && { PASS=$((PASS+1)); echo "PASS|B7-invite-marked-used"; } || { FAIL=$((FAIL+1)); echo "FAIL|B7-invite-marked-used($FUSED)"; }

@@ -56,8 +56,9 @@ test.describe('像素级 UAT', () => {
     ] as const) {
       await page.goto(path);
       await expect(page.locator('body')).toBeVisible();
-      const txt = await page.locator('body').innerText();
-      expect(txt, `${path} 应含 ${expectTxt}`).toMatch(expectTxt);
+      // ★ 2026-09-12 修复竞态：goto 后异步面板（useAsync）尚未渲染即读 innerText 会误报——
+      //   改用轮询断言等待目标文案出现（15s 上限），再截图与溢出检查。
+      await expect(page.locator('body'), `${path} 应含 ${expectTxt}`).toContainText(expectTxt, { timeout: 15000 });
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
       expect(overflow, `${path} 横向溢出`).toBeFalsy();
       await shot(page, name);
@@ -109,9 +110,8 @@ test.describe('像素级 UAT', () => {
     for (const [label, rx, name] of panels) {
       const item = page.getByText(label, { exact: true }).first();
       if (await item.count()) { await item.click(); } else { continue; }
-      await page.waitForTimeout(400);
-      const txt = await page.locator('body').innerText();
-      expect(txt, `${label} 面板应含 ${rx}`).toMatch(rx);
+      // ★ 2026-09-12 修复竞态：面板数据异步加载，轮询等待目标文案而非固定 400ms 后一次性读取
+      await expect(page.locator('body'), `${label} 面板应含 ${rx}`).toContainText(rx, { timeout: 15000 });
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
       expect(overflow, `${label} 横向溢出`).toBeFalsy();
       await shot(page, name);

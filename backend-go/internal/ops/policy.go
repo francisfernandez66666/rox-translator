@@ -370,6 +370,8 @@ func WindowTimesValid(w PromoWindow, defaultTZ string) bool {
 	return ok1 && ok2 && start.Before(end)
 }
 
+// windowActive 判断 now 是否落在促销窗口 [start,end) 内（时区取窗口自带 TZ，空则 defaultTZ；解析失败视为未激活）。
+// 参数：w=窗口定义；now=判定时刻；defaultTZ=全局默认时区名。
 func windowActive(w PromoWindow, now time.Time, defaultTZ string) bool {
 	loc := defaultTZ
 	if w.TZ != "" {
@@ -388,6 +390,8 @@ func windowActive(w PromoWindow, now time.Time, defaultTZ string) bool {
 	return !n.Before(start) && n.Before(end)
 }
 
+// parseWindowTime 按指定时区解析窗口时间字符串（RFC3339 或 "2006-01-02 15:04" 形态）。
+// 参数：s=时间文本；tz=时区名（非法回退 UTC）；返回时刻与是否解析成功。
 func parseWindowTime(s, tz string) (time.Time, bool) {
 	s = strings.TrimSpace(s)
 	if s == "" {

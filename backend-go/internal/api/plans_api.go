@@ -15,6 +15,7 @@ package api
 // =============================================
 
 import (
+	"log"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -153,7 +154,8 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 	// 免费体验包不走支付：直接发放
 	if pkg.PType == store.PackageFree {
 		if _, err := s.Store.GrantPackageSentences(s.effTenant(r, u), pkg); err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			log.Printf("[plans] 免费包发放失败 code=%s: %v", pkg.Code, err)
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": store.DebriefDBError(err)})
 			return
 		}
 		s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_free_claim", "packages", pkg.Code)
@@ -171,7 +173,8 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 	}
 	o, err := s.Store.CreatePackageOrder(tid, pkg, u.ID, channel)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		log.Printf("[plans] 订阅下单失败 code=%s tid=%d: %v", pkg.Code, tid, err)
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": store.DebriefDBError(err)})
 		return
 	}
 	// mock 模式：模拟支付自动到账并发放句数（测试/演示）

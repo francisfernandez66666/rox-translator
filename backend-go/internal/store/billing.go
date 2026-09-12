@@ -178,6 +178,28 @@ func (s *Store) Deduct(tid int64, tokens int64) error {
 	return nil
 }
 
+// SettleExhausted 欠费停用结算（2026-09-12 决策）：批量结算遇余额不足时，把租户双桶
+// （未过期发放台账 + 永久余额）一次性清零——已消耗的 LLM 成本按「扣到归零」结算，
+// 不落 ledger、不补扣；充值后从 0 重新计量。幂等（重复调用结果同为 0）。
+// 参数：tid=租户 ID；返回错误。
+func (s *Store) SettleExhausted(tid int64) error {
+	tx, err := s.db.Begin() // sqlite 下 _txlock=immediate；PG 下两条 UPDATE 各自行锁，语义等价
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := db.Exec(tx, db.CurrentDialect(),
+		`UPDATE quota_grants SET "left"=0 WHERE tenant_id=? AND "left">0`, tid); err != nil {
+		return err
+	}
+	if _, err := db.Exec(tx, db.CurrentDialect(),
+		"UPDATE balance_accounts SET balance=0, updated_at=? WHERE tenant_id=? AND balance>0",
+		time.Now().Format(time.RFC3339), tid); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // ============ 用量 ============
 
 // RecordUsage 计量一条用量（并扣减余额）。provider/model 用于多供应商成本核算。
@@ -922,14 +944,17 @@ func createQuotaGrantTx(tx *sql.Tx, tid int64, kind string, total int64, expires
 	return err
 }
 
-// applyIncrementMirrorTx 增量包句数镜像追加（tx 版 ApplyIncrementMirror，json_set 原子自增）。
+// applyIncrementMirrorTx 增量包句数镜像追加（tx 版 ApplyIncrementMirror，单语句原子自增）。
+// ★ 2026-09-12 PG 方言修复：原内联 json_set/json_extract 为 SQLite JSON1 专属，
+// PG 下整条 UPDATE 报「function json_extract does not exist」→ 增量包订单结算必失败、
+// 订单永挂 pending。改经 db.JSONNumAdd 双方言助手。
 func applyIncrementMirrorTx(tx *sql.Tx, tid int64, sentences int64) error {
 	if sentences <= 0 {
 		return nil
 	}
-	_, err := db.Exec(tx, db.CurrentDialect(),
-		"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), "+
-			"'$.sentence_balance', COALESCE(json_extract(permissions,'$.sentence_balance'),0)+?), updated_at=? WHERE id=?",
+	d := db.CurrentDialect()
+	_, err := db.Exec(tx, d,
+		"UPDATE tenants SET "+db.JSONNumAdd(d, "permissions", "sentence_balance")+", updated_at=? WHERE id=?",
 		sentences, time.Now().Format(time.RFC3339), tid)
 	return err
 }

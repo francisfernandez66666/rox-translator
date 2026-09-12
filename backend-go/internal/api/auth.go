@@ -655,7 +655,13 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	nu, err := s.Store.CreateUser(tid, req.Username, auth.PasswordHash(req.Password), req.DisplayName, req.Role, u.ID, req.OrgID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + err.Error()})
+		// ★ 脱敏（2026-09-12）：驱动错误不透吐（PG 泄漏约束名/SQLSTATE，双方言文案漂移）
+		if store.IsUniqueViolation(err) {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败：用户名已存在"})
+			return
+		}
+		log.Printf("[admin] 建号失败 username=%s: %v", req.Username, err)
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + store.DebriefDBError(err)})
 		return
 	}
 	// 绑定联系邮箱（用于找回密码；SetUserEmail 内含占用即拒绝的最终守卫）

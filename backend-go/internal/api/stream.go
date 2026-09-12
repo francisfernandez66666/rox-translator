@@ -447,6 +447,13 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ P3 修复：文件翻译结束同步冲刷计量缓冲（大文件数千条计量合并为一次事务）
 	billing.Flush()
+	// ★ 真因文案（2026-09-12）：余额耗尽中止导致的「未能译出」不应报「模型调用异常」——
+	//   冲刷后双桶已归零/清零，据此改写为用户可行动文案。
+	if res.Error != "" && strings.Contains(res.Error, "未能译出") && s.Store != nil {
+		if g, p, terr := s.Store.TenantRemainTotal(tid); terr == nil && g+p <= 0 {
+			res.Error = "组织 token 余额已耗尽，本次翻译已中止（部分段落已保留在工单中供人工补译），请充值后重新发起"
+		}
+	}
 	writeJSON(w, 200, res)
 }
 

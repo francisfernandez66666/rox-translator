@@ -315,20 +315,33 @@ func (s *Store) SetStatus(id int64, status string) error {
 
 // SetInviteEnabled 设置租户「邀请好友」功能开关（超管按租户控制是否对租户开放邀请裂变）。
 // 参数：id=租户 ID；enabled=true 开通 / false 关闭。
+// ★ 2026-09-12 PG 方言修复：invite_enabled 为 INTEGER 列，Go bool 直绑在 lib/pq 下
+// 报「column is of type integer but expression is of type boolean」——统一转 1/0 写入。
 func (s *Store) SetInviteEnabled(id int64, enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET invite_enabled=?, updated_at=? WHERE id=?",
-		enabled, nowStr(), id)
+		v, nowStr(), id)
 	return err
 }
 
 // SetPersonal 设置租户是否为「个人用户」租户（true=个人用户；false=企业用户）。
 // 个人用户默认可参与邀请好友奖励；企业用户默认不参与。
 // 参数：id=租户 ID；personal=true 标记为个人用户。
+// ★ 2026-09-12 PG 方言修复（P0）：is_personal 为 INTEGER 列，Go bool 直绑在 lib/pq 下
+// 必然报类型错误且此前被调用方 `_ =` 吞掉——导致个人租户标记恒失败、邀请奖励全量停发。
+// 统一转 1/0 写入；调用方不得再吞错。
 func (s *Store) SetPersonal(id int64, personal bool) error {
+	v := 0
+	if personal {
+		v = 1
+	}
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tenants SET is_personal=?, updated_at=? WHERE id=?",
-		personal, nowStr(), id)
+		v, nowStr(), id)
 	return err
 }
 

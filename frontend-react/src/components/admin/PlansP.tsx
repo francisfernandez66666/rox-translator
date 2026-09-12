@@ -25,6 +25,7 @@ import { useT } from '@/i18n'
 
 type Any = Record<string, any>
 
+// isImage 判断字符串是否可作图片展示（data:image / 站内二维码 / http(s) 图片扩展名）。
 function isImage(s?: string): boolean {
   if (!s) return false
   if (s.indexOf('data:image') === 0) return true
@@ -35,6 +36,7 @@ function isImage(s?: string): boolean {
   return ['png', 'jpg', 'jpeg', 'gif', 'webp'].indexOf(tail) >= 0 && (s.indexOf('http://') === 0 || s.indexOf('https://') === 0)
 }
 
+// orderStatusLabel 订单状态中文文案（pending/paid/refunded/cancelled；未知原样返回）。
 function orderStatusLabel(s: string, t: (k: string) => string): string {
   const m: Record<string, string> = {
     pending: t('billing.stPending'), paid: t('billing.stPaid'),
@@ -43,10 +45,12 @@ function orderStatusLabel(s: string, t: (k: string) => string): string {
   return m[s] || s
 }
 
+// statusTheme 订单状态对应的标签配色（tdesign Tag theme）。
 function statusTheme(s: string): string {
   return ({ pending: 'warning', paid: 'success', refunded: 'default', cancelled: 'default' } as Record<string, string>)[s] || 'default'
 }
 
+// PlansP 套餐中心面板主组件：计费配置、套餐/订阅管理、充值订单、发票与超管商业包操作入口。
 export function PlansP() {
   const ad = useAdmin()
   const [, t, tpl] = useT()

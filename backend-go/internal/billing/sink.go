@@ -17,6 +17,7 @@ package billing
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -218,13 +219,26 @@ func (s *UsageSink) flush() {
 		}
 		if err != nil {
 			if errors.Is(err, store.ErrInsufficientBalance) {
-				// 余额不足：中止本批且不再重试（避免无限回放）
+				// ★ 欠费结算（2026-09-12 决策，替代原「丢弃计费」fail-open）：
+				//   ① 中止在途任务（保留原语义）；
+				//   ② 双桶余额清零停用（SettleExhausted）——已消耗的 LLM 成本按「扣到归零」结算，
+				//      杜绝原实现「批次无痕丢弃、白翻不封顶」的收入泄漏；
+				//   ③ critical 告警留痕（不落 ledger、不补扣；充值后从 0 重新计量）。
 				for _, r := range recs {
 					if r.Abort != nil {
 						r.Abort()
 					}
 				}
-				log.Printf("[usagesink] flush tenant=%d 余额不足，丢弃计费: %v", tid, err)
+				var owed int64
+				for _, r := range recs {
+					owed += r.Quantity
+				}
+				if serr := s.svc.Store.SettleExhausted(tid); serr != nil {
+					log.Printf("[usagesink] flush tenant=%d 欠费清零失败: %v", tid, serr)
+				}
+				_ = s.svc.Store.CreateAlert(tid, "critical", "billing_exhausted",
+					fmt.Sprintf("租户本周期用量 %d token 超出剩余余额：服务已停用，双桶余额已清零（该批用量未落账），充值后从 0 重新计量", owed))
+				log.Printf("[usagesink] flush tenant=%d 余额不足：已中止在途并清零双桶（欠费 %d token 未落账）", tid, owed)
 				continue
 			}
 			// 其余错误（如 SQLITE_BUSY/磁盘抖动）：回插缓冲，下一周期重试，避免 fail-open 少计费

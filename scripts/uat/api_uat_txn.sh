@@ -26,12 +26,13 @@ U="${UAT_DB:-/tmp/uat/dev.db}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-Admin@1234}"
 J='Content-Type: application/json'
+source "$(dirname "$0")/dblib.sh"   # 双方言断言层（sqlite/PG）
 PASS=0; FAIL=0; START=$(date +%s)
 
 ck(){ if echo "$3" | grep -qE "$2"; then PASS=$((PASS+1)); echo "PASS|$1"; else FAIL=$((FAIL+1)); echo "FAIL|$1|want[$2]|got[${3:0:220}]"; fi; }
 tok(){ curl -s $B/api/auth/login -H "$J" -d "{\"username\":\"$1\",\"password\":\"$2\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))'; }
 pv(){ python3 -c "import sys,json;d=json.load(sys.stdin);print(d$1)"; }
-sq(){ sqlite3 "$U" "$1"; }
+sq(){ dbq "$1"; }
 post(){ local h="$1" body="$2" path="$3"; curl -s $B"$path" -H "$h" -H "$J" -d "$body"; }
 get(){ local h="$1" path="$2"; curl -s $B"$path" -H "$h"; }
 
@@ -74,7 +75,7 @@ R=$(post "$AH" "{\"id\":$OID1,\"tenant_id\":$TAID}" /api/admin/orders/refund)
 ck T1-refund-dup '已退款|refunded|失败|不存在' "$R"
 
 # ---------- T2 静态码人工确认链路 ----------
-sqlite3 "$U" "INSERT OR REPLACE INTO system_config (key,value,updated_at) VALUES ('static_qr_image','data:image/png;base64,UATQR',datetime('now'));" 2>/dev/null
+dbcfg static_qr_image 'data:image/png;base64,UATQR' 2>/dev/null
 R=$(post "$H1" '{"tokens":8888,"channel":"manual"}' /api/pay/create)
 ck T2-manual-create '"success":true' "$R"
 ck T2-manual-qr 'UATQR' "$R"
@@ -234,6 +235,44 @@ ck T14-tenant-admin-cross-charge '权限不足|403' "$R"
 R=$(post "$H1" '{"scope":"platform","policy":{}}' /api/admin/ops/policy/save)
 ck T14-ops-save-non-super '超级管理员|超管|403' "$R"
 ck T14-anon-balance '401|未登录|success.*false' "$(curl -s $B/api/billing/balance)"
+
+# ---------- T15 本次开发专项：PG 方言修复端到端锁定（2026-09-12） ----------
+# ckn <名称> <禁止正则> <响应> —— 反向断言：命中即失败（用于驱动错误泄漏检测）
+ckn(){ if echo "$3" | grep -qE "$2"; then FAIL=$((FAIL+1)); echo "FAIL|$1|forbidden[$2]|got[${3:0:220}]"; else PASS=$((PASS+1)); echo "PASS|$1"; fi; }
+
+# ① /status 健康位分离：ok=基础设施（db_ok/breaker），degraded=业务告警位
+R=$(curl -s $B/status)
+ck T15-status-dbok '"db_ok":true' "$R"
+ck T15-status-degraded '"degraded":(true|false)' "$R"
+
+# ② 驱动错误脱敏：重复用户名/重复租户码不得泄漏 pq:/JSON1/约束名等内部细节
+#   注意：用户名唯一约束是「租户内」维度——必须同租户判重才触发约束（跨租户建号是合法操作）
+UA_TID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a' AND tenant_id>0 LIMIT 1")
+DUPU=$(post "$AH" "{\"username\":\"uatuser_a\",\"password\":\"x\",\"name\":\"d\",\"email\":\"dup15@test.com\",\"tenant_id\":$UA_TID}" /api/admin/users/create)
+ckn T15-sanitize-user 'pq:|SQL logic|UNIQUE constraint|42601|23505|lib/pq|json_extract' "$DUPU"
+ck T15-sanitize-user-msg '已存在|失败' "$DUPU"
+DUPC=$(post "$AH" "{\"code\":\"$(dbq "SELECT code FROM tenants LIMIT 1")\",\"name\":\"d\"}" /api/tenant/create)
+ckn T15-sanitize-tenant 'pq:|SQL logic|UNIQUE constraint|42601|23505|lib/pq' "$DUPC"
+
+# ③ 句数余额（JSONNumAdd/JSONNumGE 助手）：T4 已购 20000 句包并支付 → 余额入账
+SB=$(dbjson tenants $NTID permissions sentence_balance)
+[ "${SB%.*}" -ge 20000 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|T15-sentence-credit($SB)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T15-sentence-credit(got $SB, want>=20000)"; }
+
+# ④ 增量包镜像累加（applyIncrementMirrorTx/JSONNumAdd 修复主路径）：再购 5000 句充值包 → 余额 +5000
+curl -s $B/api/admin/packages/create -H "$AH" -H "$J" -d "{\"tenant_id\":$NTID,\"code\":\"uat_txn_inc\",\"name\":\"T15充值包\",\"ptype\":\"increment\",\"sentences\":5000,\"price_money\":10,\"duration_days\":0}" >/dev/null
+R=$(post "$HN" '{"code":"uat_txn_inc"}' /api/package/subscribe)
+OID15=$(echo "$R" | pv '.get("order",{}).get("id") or d.get("id") or 0')
+post "$AH" "{\"id\":$OID15,\"tenant_id\":$NTID}" /api/admin/orders/pay >/dev/null
+SBA=$(dbjson tenants $NTID permissions sentence_balance)
+[ "${SBA%.*}" -ge 25000 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|T15-increment-mirror($SB->$SBA)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T15-increment-mirror($SB->$SBA, want>=25000)"; }
+
+# ⑤ 个人标记落库（SetPersonal bool→INTEGER 修复）：type=personal 注册 → is_personal=1
+IP=$(dbq "SELECT is_personal FROM tenants WHERE id=$NTID")
+[ "$IP" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T15-personal-db"; } || { FAIL=$((FAIL+1)); echo "FAIL|T15-personal-db(got $IP)"; }
+
+# ⑥ 任务自增 ID（InsertID 修复）：超管建任务返回正 ID，用户可领取（T8 已测领取，此处锁 DB）
+TID15=$(post "$AH" '{"task_type":"once","title":"T15任务","description":"d","reward_tokens":100,"enabled":1,"sort_order":9}' /api/admin/tasks/save | pv '.get("id") or 0')
+[ "${TID15:-0}" -gt 0 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|T15-task-id($TID15)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T15-task-id(got $TID15)"; }
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

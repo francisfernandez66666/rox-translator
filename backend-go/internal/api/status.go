@@ -56,9 +56,19 @@ func (s *Server) handlePublicStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp["alerts_24h"] = openAlerts
-	// 健康位：熔断中或有 critical 告警堆积视为降级（ok=false 但仍返回 200，供外部监控判断）
-	ok := !(resp["breaker_open"].(bool)) && openAlerts < 10
-	resp["ok"] = ok
+	// ★ 健康位（2026-09-12 整改）：ok 仅代表基础设施健康（DB 可达 + 熔断器），
+	//   业务告警（余额耗尽/待审单/反馈等）不再翻转 ok——此前告警堆积会让外部监控
+	//   （Caddy/systemd/冒烟）把「正常营业但欠费租户多」误判为服务故障。
+	//   业务降级改由独立 degraded 位表达，监控可分别订阅。
+	dbOK := true
+	if s.Store != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		dbOK = s.Store.DB().PingContext(ctx) == nil
+	}
+	resp["db_ok"] = dbOK
+	resp["degraded"] = openAlerts >= 10
+	resp["ok"] = !resp["breaker_open"].(bool) && dbOK
 	writeJSON(w, http.StatusOK, resp)
 }
 

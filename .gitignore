@@ -9,7 +9,11 @@ build/
 dist/
 frontend/dist/
 node_modules/
-data/            # 本地知识库向量与开发库（tm_embeddings.npz / dev.db）
+# 本地开发库与运行数据（tm_embeddings.npz 已跟踪故不整目录忽略；gitignore 不支持行内注释）
+data/dev.db
+data/dev.db-shm
+data/dev.db-wal
+data/*.npz.tmp
 
 # ============ 前端自动化测试产物（不入仓库） ============
 frontend-react/artifacts/

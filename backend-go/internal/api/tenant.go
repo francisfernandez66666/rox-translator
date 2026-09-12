@@ -87,7 +87,12 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 	// 创建租户
 	t, err := s.Ten.Create(req.Code, req.Name, req.ExpiresAt, req.Permissions)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "创建失败: " + err.Error()})
+		// ★ 脱敏（2026-09-12 PG 重研）：驱动错误不透吐（PG 泄漏约束名 tenants_code_key/SQLSTATE）
+		if store.IsUniqueViolation(err) {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "创建失败：租户编码已存在"})
+			return
+		}
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "创建失败: " + store.DebriefDBError(err)})
 		return
 	}
 	// 功能②：初始化租户默认包 + 行业（缺选回退通用行业兜底）

@@ -32,6 +32,7 @@ import (
 	"crypto/subtle"
 
 	"translator/internal/payment"
+	"translator/internal/store"
 )
 
 // constantTimeTokenEqual 恒定时间比较两个令牌（消除时序侧信道）。任一为空直接不等。
@@ -148,7 +149,8 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		res, err = (&payment.MockProvider{}).CreateOrder(&payment.PayRequest{OrderNo: o.OrderNo, Amount: amountFen, Subject: "能言 token 充值", TenantID: tid})
 	}
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "下单失败: " + err.Error()})
+		log.Printf("[pay] 渠道下单失败: %v", err)
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "下单失败: " + store.DebriefDBError(err)})
 		return
 	}
 	// 回填二维码与渠道
@@ -341,7 +343,9 @@ func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.MarkOrderPaidByOrderNo(nt.OrderNo); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "订单确认失败: " + err.Error()})
+		// ★ 结算失败必须留日志（原始错误）+ 用户侧脱敏文案（2026-09-12：此前 pq 裸错直吐客户端）
+		log.Printf("[pay] 订单结算失败 order_no=%s: %v", nt.OrderNo, err)
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "订单确认失败: " + store.DebriefDBError(err)})
 		return
 	}
 	// 审计：记录渠道回调到账

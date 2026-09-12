@@ -334,14 +334,16 @@ func (s *Store) TouchTicket(id int64) error {
 // direct 队列 Reserve 自行回收，无需此处越权释放。
 func (s *Store) RequeueStalledTickets(stale time.Duration) (int64, error) {
 	cut := time.Now().Add(-stale).Format(time.RFC3339)
-	res, err := db.Exec(s.db, db.CurrentDialect(),
-		`UPDATE tickets SET status='queued', updated_at=?
+	// ★ 2026-09-12 PG 方言修复：payload 取 ticket_id 的 JSON 表达式按方言生成
+	// （原内联 json_extract 为 SQLite JSON1 专属，PG 下整条重排 SQL 报错，卡死工单永不自动重排）。
+	d := db.CurrentDialect()
+	q := `UPDATE tickets SET status='queued', updated_at=?
 		 WHERE status='in_progress' AND updated_at < ?
 		   AND NOT EXISTS (
 		       SELECT 1 FROM jobs j
 		       WHERE j.type='ticket_run' AND j.status='running'
-		         AND CAST(json_extract(j.payload,'$.ticket_id') AS INTEGER) = tickets.id)`,
-		time.Now().Format(time.RFC3339), cut)
+		         AND ` + db.JSONTicketIDExpr(d, "j.payload") + ` = tickets.id)`
+	res, err := db.Exec(s.db, d, q, time.Now().Format(time.RFC3339), cut)
 	if err != nil {
 		return 0, err
 	}

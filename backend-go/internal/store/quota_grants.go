@@ -8,6 +8,7 @@ package store
 
 import (
 	"database/sql"
+	"log"
 	"time"
 	"translator/internal/db"
 )
@@ -48,10 +49,14 @@ func (s *Store) CreateQuotaGrant(tid int64, kind string, total int64, expires ti
 	}
 	// ★ 任务2.5：发放 trial 体验台账时，复位「到期前 3 天提醒」去重标记——
 	//   新体验重新进入提醒窗口（注册礼包 / 超管重新发放均自动复位）。
+	// ★ 2026-09-12 PG 方言修复：JSON1 改经 db.JSONSetFalse 助手；失败不再静默吞掉（仅记日志，不阻断发放）。
 	if kind == "trial" {
-		_, _ = db.Exec(s.db, db.CurrentDialect(),
-			"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$.notified_exp3', json('false')), updated_at=? WHERE id=?",
-			time.Now().Format(time.RFC3339), tid)
+		d := db.CurrentDialect()
+		if _, uerr := db.Exec(s.db, d,
+			"UPDATE tenants SET "+db.JSONSetFalse(d, "permissions", "notified_exp3")+", updated_at=? WHERE id=?",
+			time.Now().Format(time.RFC3339), tid); uerr != nil {
+			log.Printf("[quota] trial 提醒标记复位失败 tid=%d: %v", tid, uerr)
+		}
 	}
 	return nil
 }

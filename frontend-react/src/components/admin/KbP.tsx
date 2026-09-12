@@ -28,11 +28,13 @@ type Any = Record<string, any>
 const rowStyle: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }
 const rowMt: any = { ...rowStyle, marginTop: 8 }
 const rowTop: any = { ...rowStyle, marginTop: 8, borderTop: '1px dashed #e0e0e0', paddingTop: 10 }
+// resStyle 校验结果文字样式：通过=绿色，不通过=红色。
 const resStyle = (ok: boolean): any => ({ color: ok ? '#1a7f37' : '#c0392b', fontSize: 13, marginTop: 6 })
 
 const SAFETY_LANGS = ['en', 'ar', 'de', 'es', 'fr', 'id_lang', 'kk', 'pt', 'ru', 'th', 'tr', 'zh_hant']
   .map((x) => ({ label: x === 'id_lang' ? 'id' : x === 'zh_hant' ? 'zh-Hant' : x, value: x }))
 
+// packTypeLabel 包类型中文名（部门包按是否跨部门共享细分文案；t=翻译函数）。
 function packTypeLabel(p: Any, t: (k: string) => string): string {
   if (p.pack_type === 'department') return (p.share_cross_dept ?? 1) === 1 ? t('kb.typeCrossDept') : t('kb.typeDepartment')
   if (p.pack_type === 'cross_dept') return t('kb.typeCrossDept')
@@ -42,6 +44,7 @@ function packTypeLabel(p: Any, t: (k: string) => string): string {
   return String(p.pack_type)
 }
 
+// packScopeLabel 包作用域说明文案（通用/行业/租户/部门；tpl=带变量模板函数）。
 function packScopeLabel(p: Any, t: (k: string) => string, tpl: (k: string, vars?: Record<string, string | number>) => string): string {
   if (p.pack_type === 'locale') return t('kb.scopeUniversal')
   if (p.pack_type === 'industry') return t('kb.scopeIndustry')
@@ -51,6 +54,7 @@ function packScopeLabel(p: Any, t: (k: string) => string, tpl: (k: string, vars?
   return ''
 }
 
+// orgPath 沿父链拼组织全路径（如「总部/研发部/平台组」；map=组织 ID→信息索引）。
 function orgPath(map: Map<number, OrgInfo>, id: number): string {
   const parts: string[] = []
   let cur = map.get(id)
@@ -61,6 +65,7 @@ function orgPath(map: Map<number, OrgInfo>, id: number): string {
   return parts.join(' / ')
 }
 
+// packDisplayName 包展示名：部门/租户包拼上所属组织路径，其余直接用原名。
 function packDisplayName(p: Any, orgMap: Map<number, OrgInfo>): string {
   if (p.pack_type === 'tenant') return p.tenant_name || p.name
   if (p.pack_type === 'department') {
@@ -70,6 +75,7 @@ function packDisplayName(p: Any, orgMap: Map<number, OrgInfo>): string {
   return p.name
 }
 
+// KbP 知识库管理面板主组件：知识包列表/CRUD、条目导入与管理、语言文化规范（安全句）三大 Tab。
 export function KbP() {
   const [, t, tpl] = useT()
   const { myLevel, isSuper, activeTenantId, orgs } = useAdmin()
