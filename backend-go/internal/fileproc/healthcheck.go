@@ -103,6 +103,14 @@ func findPython() string {
 		}
 	}
 
+	// ★ 与子进程实际解释器对齐：pyBin() 优先生产 venv（/opt/translator/.venv/bin/python3），
+	//   否则 venv 装了 firecrawl-anydoc/pdf2docx 而 PATH 系统 python3 没装时，探测会误报不可用。
+	if pb := pyBin(); pb != "python3" {
+		if _, err := exec.LookPath(pb); err == nil {
+			return pb
+		}
+	}
+
 	// 按优先级查找
 	candidates := []string{"python3", "python", "python3.11", "python3.10", "python3.9"}
 	for _, c := range candidates {
