@@ -1,5 +1,5 @@
 // 职责：占位符改写（SQLite ? → PostgreSQL $n）单元测试，覆盖基础替换、
-// 字符串字面量内的 ? 应被忽略、以及 '' 转义连续单引号的处理。
+// 字符串字面量内的 ? 应被忽略、以及 ” 转义连续单引号的处理。
 package db
 
 import "testing"
@@ -22,7 +22,7 @@ func TestRewritePlaceholdersInsideLiteral(t *testing.T) {
 	}
 }
 
-// TestRewritePlaceholdersEscapedQuote 验证 '' 转义连续单引号场景下的 ? 不被改写。
+// TestRewritePlaceholdersEscapedQuote 验证 ” 转义连续单引号场景下的 ? 不被改写。
 func TestRewritePlaceholdersEscapedQuote(t *testing.T) {
 	in := "SELECT 'it''s ? ok' AS a, id = ?"
 	want := "SELECT 'it''s ? ok' AS a, id = $1"

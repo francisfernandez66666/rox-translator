@@ -3,6 +3,7 @@
 //   - fetchBrandTerms：一次查询 KB module=brand+layer=1 术语，组装 map[lang]map[src]target
 //   - normalizeFileBrandTerms：文件路径译后剥离「ROX vehicles/motor」等自创后缀
 //   - normalizeBrandTerms：对话路径译后归一化（覆盖后缀在前/环绕等形态）
+//
 // 使用内存 SQLite 构建 Store 并插入品牌术语数据，不依赖业务库。
 // ========================================
 package engine

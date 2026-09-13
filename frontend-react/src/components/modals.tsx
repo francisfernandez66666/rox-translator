@@ -5,7 +5,7 @@
 // 行为、表单字段、i18n 键均与 Vue 对应组件对齐；成功后回调父级刷新。
 // ============================================================================
 import { useState } from 'react'
-import { Dialog, Input, Button, MessagePlugin, Textarea, Switch, Checkbox } from 'tdesign-react'
+import { Dialog, Input, Button, MessagePlugin, Textarea, Checkbox } from 'tdesign-react'
 import {
   createFeedback, sendPwdCode, submitNewPassword,
   meEmailCode, updateEmail, deactivateAccount,
@@ -59,6 +59,8 @@ export function FeedbackModal(props: { target: FeedbackTarget; onClose: () => vo
       })
       if (r.success) { void MessagePlugin.success(t('fb.done')); props.onClose() }
       else void MessagePlugin.error(r.message || t('fb.fail'))
+    } catch (e) { // ★ E10：异常必须可见（旧实现 try/finally，网络错误静默）
+      void MessagePlugin.error(e instanceof Error ? e.message : '提交失败')
     } finally { setSubmitting(false) }
   }
 
@@ -74,7 +76,7 @@ export function FeedbackModal(props: { target: FeedbackTarget; onClose: () => vo
             }>
       <p className="fb-hint">{t('fb.hint')}</p>
       <Textarea autosize={{ minRows: 4 }} maxlength={1000} value={content} onChange={(v) => setContent(v as string)}
-                placeholder={t('fb.placeholder')} />
+                aria-label={t('fb.placeholder')} placeholder={t('fb.placeholder')} />
       {hasContext && (
         <label className="fb-check">
           <Checkbox checked={withContext} onChange={(v) => setWithContext(v as boolean)} />
@@ -204,6 +206,8 @@ export function EmailBindModal(props: { hasOldEmail: boolean; oldEmail?: string;
       startCd(setNewCooldown)
       setMsg(r.message || t('pwd.codeSent'))
       setOk(true)
+    } catch (e) { // ★ E10
+      { setOk(false); setMsg(e instanceof Error ? e.message : String(t('pwd.sendFail'))); }
     } finally { setSendingNew(false) }
   }
 
@@ -217,6 +221,8 @@ export function EmailBindModal(props: { hasOldEmail: boolean; oldEmail?: string;
       startCd(setOldCooldown)
       setMsg(r.message || t('pwd.codeSent'))
       setOk(true)
+    } catch (e) { // ★ E10
+      { setOk(false); setMsg(e instanceof Error ? e.message : String(t('pwd.sendFail'))); }
     } finally { setSendingOld(false) }
   }
 
@@ -291,6 +297,8 @@ export function DeactivateModal(props: { onClose: () => void }) {
       void MessagePlugin.success(t('deact.done'))
       logout()
       props.onClose()
+    } catch (e) { // ★ E10
+      void MessagePlugin.error(e instanceof Error ? e.message : String(t('deact.fail')))
     } finally { setBusy(false) }
   }
 

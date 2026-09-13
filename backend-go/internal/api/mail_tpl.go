@@ -5,6 +5,7 @@
 //   - 支持 {var} 占位符替换（如 {code}/{name}/{username}/{email}/{brand}/{title}/{content}/{level}）
 //   - GET  /api/admin/mail-templates 仅超管：返回全部模板当前生效内容 + 用途/变量说明
 //   - PUT  /api/admin/mail-templates 仅超管：保存（覆盖）指定模板的 subject/body/cc
+//
 // =============================================
 package api
 
@@ -66,7 +67,7 @@ var mailTplMetas = []MailTplMeta{
 		Default: MailTpl{
 			Subject: "【{brand}】企业注册成功提醒",
 			Body:    "欢迎加入 {brand}！\n\n企业名称：{name}\n管理员账号：{username}\n联系邮箱：{email}\n\n我们已收到您的企业注册信息，将尽快与您建联。",
-			CC:      "575160894@qq.com",
+			CC:      opsNotifyEmail(), // ★ B11：运营抄送取自 OPS_NOTIFY_EMAIL（空=不抄送）
 		},
 	},
 	{
@@ -102,7 +103,7 @@ var mailTplMetas = []MailTplMeta{
 		Vars: []string{"username", "brand"},
 		Default: MailTpl{
 			Subject: "【{brand}】欢迎使用 · 产品手册",
-			Body: manualDefaultBody,
+			Body:    manualDefaultBody,
 		},
 	},
 }
@@ -226,7 +227,7 @@ func (s *Server) sendTemplatedMail(to, code string, data map[string]string) erro
 }
 
 // sendManualEmail 注册成功后给新用户发送《产品手册》PDF 邮件（附件为你提供的产品手册 PDF 文件）。
-// 使用 info@lexicorn.cn 专用邮箱发送；邮件正文模板内容可在后台「邮件模板」中配置（manual 模板）。
+// 使用 INFO_SMTP_* 配置的专用邮箱发送；邮件正文模板内容可在后台「邮件模板」中配置（manual 模板）。
 // PDF 附件来源（按优先级）：system_config.manual_pdf_path > 环境变量 MANUAL_PDF_PATH >
 // 默认路径 /opt/translator/data/manual.pdf。找不到时仍发送正文邮件（仅不含附件），并在日志提示。
 func (s *Server) sendManualEmail(to, username string) error {

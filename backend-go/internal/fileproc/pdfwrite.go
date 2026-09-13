@@ -7,6 +7,7 @@
 //   - 子进程控制：受 nice 低优先级 + 资源闸 + context 超时/取消约束
 //   - 说明：PDF 原生内容流无法安全替换文字（字体子集/CID 编码），业界通行做法即版式重建；
 //     产物为可读性优先的译文 PDF，源文对照另有 xlsx 通道兜底
+//
 // =============================================
 package fileproc
 
@@ -99,7 +100,9 @@ func WriteTranslatedPDF(ctx context.Context, outPath string, srcTexts []string, 
 
 // WriteTranslatedPDFviaDocx PDF→DOCX→翻译→DOCX→PDF（保留排版/图表；图片内容按产品策略不翻译）。
 // 参数：ctx=子进程超时/取消上下文；outPath=输出 PDF 路径；inPath=输入 PDF 路径；
-//       translations=原文→译文映射；lang=目标语言代码。
+//
+//	translations=原文→译文映射；lang=目标语言代码。
+//
 // 返回错误：子进程失败时返回带尾部 stderr 详情的错误。
 func WriteTranslatedPDFviaDocx(ctx context.Context, outPath, inPath string, translations map[string]string, lang string) error {
 	payload, _ := json.Marshal(map[string]interface{}{
@@ -137,7 +140,9 @@ func ExtractTextsPdfDocx(ctx context.Context, pdfPath string) ([]string, string,
 
 // ApplyTranslatedPdfFromDocx 在已缓存 DOCX 副本上应用译文并转 PDF（含图片 OCR）。
 // 参数：ctx=子进程超时/取消上下文；outPath=输出 PDF 路径；cacheDocx=ExtractTextsPdfDocx 生成的缓存 DOCX；
-//       translations=原文→译文映射；lang=目标语言代码。
+//
+//	translations=原文→译文映射；lang=目标语言代码。
+//
 // 返回错误：子进程失败时返回错误。
 func ApplyTranslatedPdfFromDocx(ctx context.Context, outPath, cacheDocx string, translations map[string]string, lang string) error {
 	payload, _ := json.Marshal(map[string]interface{}{

@@ -16,7 +16,8 @@ export const zh: Record<string, string> = {
   'docsEdit.confirmSave': '确认发布？公开页将立即更新。',
   'docsEdit.saved': '已发布，公开页立即生效',
   'docsEdit.confirmReset': '确认恢复内置默认文档？当前自定义内容将被清除。',
-  'docsEdit.resetDone': '已恢复内置默认文档',
+    'docsEdit.popupBlocked': '预览窗口被拦截，请允许弹出窗口',
+'docsEdit.resetDone': '已恢复内置默认文档',
   // ---- API Key 管理 ----
   'apikeys.title': '开放 API Key',
   'apikeys.docs': '📄 查看 API 文档',
@@ -63,6 +64,7 @@ export const en: Record<string, string> = {
   'docsEdit.confirmSave': 'Publish now? The public page updates immediately.',
   'docsEdit.saved': 'Published — live on the public page',
   'docsEdit.confirmReset': 'Restore built-in default? Custom content will be cleared.',
+  'docsEdit.popupBlocked': 'Preview popup was blocked; please allow popups for this site.',
   'docsEdit.resetDone': 'Built-in default restored',
   // ---- API Key 管理 ----
   'apikeys.title': 'Open API Keys',

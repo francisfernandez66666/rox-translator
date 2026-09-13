@@ -13,19 +13,19 @@ import (
 
 // TranslationEdit 对照编辑器单段编辑记录。
 type TranslationEdit struct {
-	ID          int64  `json:"id"`
-	TenantID    int64  `json:"tenant_id"`
-	TicketID    int64  `json:"ticket_id"`
-	Lang        string `json:"lang"`
-	SegIndex    int    `json:"seg_index"`
-	SourceText  string `json:"source_text"`
-	TargetText  string `json:"target_text"`
-	EditedText  string `json:"edited_text"`
-	Status      string `json:"status"` // pending / approved / rejected
-	Note        string `json:"note"`
-	ReviewerID  int64  `json:"reviewer_id"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID         int64  `json:"id"`
+	TenantID   int64  `json:"tenant_id"`
+	TicketID   int64  `json:"ticket_id"`
+	Lang       string `json:"lang"`
+	SegIndex   int    `json:"seg_index"`
+	SourceText string `json:"source_text"`
+	TargetText string `json:"target_text"`
+	EditedText string `json:"edited_text"`
+	Status     string `json:"status"` // pending / approved / rejected
+	Note       string `json:"note"`
+	ReviewerID int64  `json:"reviewer_id"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
 }
 
 // UpsertTranslationEdit 写入或更新单段编辑（按 ticket_id+lang+seg_index 唯一）。

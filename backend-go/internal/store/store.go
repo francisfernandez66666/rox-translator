@@ -44,13 +44,17 @@ func New(db *sql.DB) (*Store, error) {
 	}
 	s.feedbackMigrate()           // 老库补 replies 列（幂等，BBS 回复线程）
 	s.backfillAPIOwnership()      // ★ 历史 Key/任务强绑定回填（幂等）
+	s.backfillPaymentsFenC2()     // ★ C2 历史 payments.amount_money(分) → amount_fen 回填（幂等）
 	s.TmReviewMigrate()           // TM 待审池建表（幂等）
+	s.KBPackGrantsMigrate()       // ★ H3 KB 包级读/写/管理授权表（幂等）
+	s.SCIMMigrate()               // ★ H10 SCIM 2.0 配置表 + users.scim_external_id（幂等）
 	s.QuotaGrantMigrate()         // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
 	s.TicketStateTimingMigrate()  // ★ ticket_state 增加 started_at/duration_ms（幂等；进度耗时展示）
 	s.BalanceAccountMigrate()     // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
 	s.BillingIndexMigrate()       // ★ 整改 B5：订单号唯一索引 + Key 哈希检索索引（幂等，撞重复降级告警）
 	s.PackagesTenantMigrate()     // ★ 商业包租户化：packages 加 tenant_id 并改 (tenant_id, code) 复合唯一（幂等）
 	s.ReferralMigrate()           // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
+	s.KBSearchIndexMigrate()      // ★ D11：kb_entries 子串检索 trgm GIN（仅 PG，幂等）
 	s.OneidMigrate()              // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
 	s.KBRewardMigrate()           // ★ KB 上传奖励流水表（幂等；任务2.3）
 	s.TasksMigrate()              // ★ 任务中心：任务定义 + 领取记录建表（幂等；2026-09-03）
@@ -361,6 +365,14 @@ func (s *Store) migrate() error {
 			resolved_at TEXT NOT NULL DEFAULT ''
 		)`,
 		// 历史库兼容：user_id / log 两列改由 migrateColumns 按列存在性幂等补列（避免 ADD COLUMN IF NOT EXISTS 在部分 SQLite 驱动下的语法错误）
+		// ---------- ★ F9 告警静默（同租户同类到点自动失效，静音期内 CreateAlertEx 跳过写入） ----------
+		`CREATE TABLE IF NOT EXISTS alert_silences (
+			tenant_id INTEGER NOT NULL,
+			kind TEXT NOT NULL,
+			until TEXT NOT NULL,
+			created_by INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (tenant_id, kind)
+		)`,
 		// ---------- orgs 组织层级（管理结构展示层：根组织=租户） ----------
 		`CREATE TABLE IF NOT EXISTS orgs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -522,6 +534,8 @@ func (s *Store) migrate() error {
 	if err := s.seedRateCard(); err != nil {
 		return err
 	}
+
+	s.backfillUsageCostC1() // ★ C1 历史行 cost 回填（一次性，config 标志幂等）
 	// 迁移：超级管理员（admin/super_admin）为平台级账号，不挂租户
 	if _, err := db.Exec(s.db, db.CurrentDialect(), `UPDATE users SET tenant_id=0 WHERE role IN ('admin','super_admin')`); err != nil {
 		return err
@@ -624,6 +638,12 @@ var columnAdditions = []colDef{
 	{"users", "agreed_at", "ALTER TABLE users ADD COLUMN agreed_at TEXT NOT NULL DEFAULT ''"},
 	// ★ 首登强制改密（2026-09-02 功能）：Excel 批量导入用户置 1，首次登录需先改密
 	{"users", "must_change_pwd", "ALTER TABLE users ADD COLUMN must_change_pwd INTEGER NOT NULL DEFAULT 0"},
+	// ★ C2（2026-09-12）：payments 金额列单位归一——历史 amount_money 实为「分」
+	//   （与 orders.amount_money「元」同名不同单位，勾稽必错）。新增 amount_fen 语义列，
+	//   启动一次性回填旧行，写入点全部改投 amount_fen；amount_money 保留只读兼容。
+	{"payments", "amount_fen", "ALTER TABLE payments ADD COLUMN amount_fen INTEGER NOT NULL DEFAULT 0"},
+	// ★ B2 会话撤销（2026-09-12）：改密/重置后旧 JWT 立即失效（token_version 随签发携带，请求逐次比对）
+	{"users", "token_version", "ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"},
 	// Webhook 重试策略配置
 	{"webhooks", "max_retries", "ALTER TABLE webhooks ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3"},
 	{"webhooks", "retry_interval", "ALTER TABLE webhooks ADD COLUMN retry_interval INTEGER NOT NULL DEFAULT 60"},
@@ -752,4 +772,18 @@ func (s *Store) AuditRetentionDays() int {
 		}
 	}
 	return 365
+}
+
+// backfillPaymentsFenC2 ★ C2：把历史 payments 行（amount_money 存分）搬到语义正确的
+// amount_fen 列。仅处理 amount_fen=0 且 amount_money<>0 的行，天然幂等、跑完即静默。
+func (s *Store) backfillPaymentsFenC2() {
+	res, err := db.Exec(s.db, db.CurrentDialect(),
+		"UPDATE payments SET amount_fen=amount_money WHERE amount_fen=0 AND amount_money<>0")
+	if err != nil {
+		log.Printf("[C2] payments.amount_fen 回填失败（不阻断启动）: %v", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("[C2] payments.amount_fen 回填 %d 行", n)
+	}
 }

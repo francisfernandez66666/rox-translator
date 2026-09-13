@@ -25,7 +25,7 @@ interface Props {
 /** 右上角账号菜单组件：进入后台、改密、换绑邮箱、注销与退出登录（前台与后台共用） */
 export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkbench, onGotoWorkbench }: Props) {
   const { user, logout } = useAuth()
-  const [lang, t] = useT()
+  const [, t] = useT() // ★ E14：lang 未使用
   // 当前用户邮箱，用于改密验证码与换绑弹窗
   const [curEmail, setCurEmail] = useState('')
   // 弹窗开关状态

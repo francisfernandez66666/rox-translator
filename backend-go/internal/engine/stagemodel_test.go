@@ -19,6 +19,11 @@ import (
 // newTestStore 测试辅助：用内存 SQLite 构建最小 Store 供阶段模型测试使用。
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
+	// 本测试族固定内存 SQLite：显式钉方言，防 UAT PG 矩阵（DB_DRIVER=postgres）误导 store.New 迁移路径
+	oldCfg := config.C
+	config.C = config.Default()
+	config.C.DatabaseDriver = "sqlite"
+	t.Cleanup(func() { config.C = oldCfg })
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("打开内存数据库失败: %v", err)

@@ -82,8 +82,10 @@ func (s *Server) deptKBScope(u *store.User, tid int64, pkg *store.KBPackage) err
 
 // kbTenant 知识库生效租户：
 // ★ 2026-09-04 权限澄清后：行业包/语言文化包宿主为租户0（平台上下文 SharedHostTenant）。
-//   超管未显式切换企业租户（tid≤0）时返回 0（管理平台共享包）；已切换到企业租户（tid>0）
-//   则返回该企业租户（管理该企业的企业包/跨部门包/部门包）。普通用户按自身租户。
+//
+//	超管未显式切换企业租户（tid≤0）时返回 0（管理平台共享包）；已切换到企业租户（tid>0）
+//	则返回该企业租户（管理该企业的企业包/跨部门包/部门包）。普通用户按自身租户。
+//
 // ⚠️ 历史事故（2026-08-21~23）：本函数曾误写为调用自身导致无限递归栈溢出，
 // 任何打开知识库面板的请求都会击穿进程（fatal error: stack overflow），已修复。
 func (s *Server) kbTenant(r *http.Request, u *store.User) int64 {
@@ -260,9 +262,9 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 
 // handleKBPackageUpdate 更新知识库包元信息（名称 / 描述 / 跨部门共享范围等）。参数 w/r：body 含 id 与待更新字段；鉴权：部门管理员及以上；副作用：更新 kb_packages 并写审计。
 func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireDeptAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
 	var req struct {
@@ -282,13 +284,22 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
 		return
 	}
-	if !canManagePackType(u, pkg.PackType) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权更新该类型的知识库包"})
-		return
-	}
-	if err := s.deptKBScope(u, tid, pkg); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
-		return
+	// ★ H3：持有该包 manage 授权的普通成员跳过类型+部门范围校验
+	if !s.kbPackGrantedSkip(r, u, pkg, "manage") {
+		if auth.RoleLevel(u.Role) < 2 {
+			// ★ H3 硬闸（UAT T30 捕获）：非部门管理员成员必须持该包 manage 级授权，
+			//   旧版仅 skip 类型/范围校验、无正向准入检查，read 授权可越权写入
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的" + needLabel("manage") + "授权"})
+			return
+		}
+		if !canManagePackType(u, pkg.PackType) {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权更新该类型的知识库包"})
+			return
+		}
+		if err := s.deptKBScope(u, tid, pkg); err != nil {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
 	}
 	if err := s.Store.UpdateKBPackage(req.ID, tid, req.Name); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
@@ -324,9 +335,9 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 
 // handleKBPackageDelete 删除指定知识库包（按租户 / 部门隔离）。参数 w/r：body 含 id；鉴权：部门管理员及以上；副作用：删除包及其条目并写审计。
 func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireDeptAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
 	var req struct {
@@ -362,13 +373,18 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 
 // handleKBEntries 列出包内条目（按 package_id 必填；支持 layer/target_lang/q 过滤与 page/page_size 分页；count=1 仅返回总数）。
 func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireDeptAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
 	qp := r.URL.Query()
 	pkgID, _ := strconv.ParseInt(qp.Get("package_id"), 10, 64)
+	// ★ H3：普通成员需该包只读授权方可浏览条目
+	if auth.RoleLevel(u.Role) < 2 && !s.kbPackAllowed(r, u, "read", pkgID) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的只读授权"})
+		return
+	}
 	layer, _ := strconv.Atoi(qp.Get("layer"))
 	targetLang := qp.Get("target_lang")
 	keyword := qp.Get("q")
@@ -397,12 +413,16 @@ func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 // 列出指定知识库包内的品牌术语（module=brand AND layer=1，如 极石→ROX），
 // 供前端「品牌名」配置面板展示与校验。package_id 必填；鉴权：部门管理员及以上。
 func (s *Server) handleBrandTerms(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireDeptAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
 	pkgID, _ := strconv.ParseInt(r.URL.Query().Get("package_id"), 10, 64)
+	if auth.RoleLevel(u.Role) < 2 && !s.kbPackAllowed(r, u, "read", pkgID) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的只读授权"})
+		return
+	}
 	tid := s.kbTenant(r, u)
 	terms, err := s.Store.ListBrandTerms(tid, pkgID)
 	if err != nil {
@@ -414,9 +434,9 @@ func (s *Server) handleBrandTerms(w http.ResponseWriter, r *http.Request) {
 
 // handleKBEntryAdd 向指定知识库包新增翻译记忆条目（源 / 目标文本等）。参数 w/r：body 含 package_id 与条目内容；鉴权：部门管理员及以上；副作用：写入 kb_entries 并写审计。
 func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireDeptAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
 	var req struct {
@@ -438,13 +458,22 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
 		return
 	}
-	if !canManagePackType(u, pkg.PackType) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包写入"})
-		return
-	}
-	if err := s.deptKBScope(u, tid, pkg); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
-		return
+	// ★ H3：持有该包 write 授权的普通成员跳过类型+部门范围校验
+	if !s.kbPackGrantedSkip(r, u, pkg, "write") {
+		if auth.RoleLevel(u.Role) < 2 {
+			// ★ H3 硬闸（UAT T30 捕获）：非部门管理员成员必须持该包 write 级授权，
+			//   旧版仅 skip 类型/范围校验、无正向准入检查，read 授权可越权写入
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的" + needLabel("write") + "授权"})
+			return
+		}
+		if !canManagePackType(u, pkg.PackType) {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包写入"})
+			return
+		}
+		if err := s.deptKBScope(u, tid, pkg); err != nil {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
 	}
 	if req.Layer == 0 {
 		req.Layer = store.LayerTM
@@ -465,9 +494,9 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 
 // handleKBEntryDelete 删除指定知识库条目（按租户 / 部门隔离）。参数 w/r：body 含 id；鉴权：部门管理员及以上；副作用：删除记录并写审计。
 func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireDeptAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
 	var req struct {
@@ -476,6 +505,18 @@ func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
+	}
+	// ★ H3：普通成员需条目所属包的编辑授权（先定位包再放行）
+	if auth.RoleLevel(u.Role) < 2 {
+		rows, e := s.Store.GetEntryForUpdate(s.kbTenant(r, u), req.ID)
+		if e != nil || len(rows) == 0 {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "条目不存在或无权操作"})
+			return
+		}
+		if perr := s.requireKBPackPerm(r, u, "write", rows[0].PackageID); perr != nil {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": perr.Error()})
+			return
+		}
 	}
 	if err := s.Store.DeleteEntry(req.ID, s.kbTenant(r, u)); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
@@ -489,9 +530,9 @@ func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 // handleKBEntryUpdate 更新指定知识库条目内容（层/源文本/目标语言/译文/模块；不可改包归属）。
 // 参数 w/r：body 含 id 与可编辑字段；鉴权：部门管理员及以上；副作用：更新记录并写审计 + 失效 CJK 缓存。
 func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireDeptAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
 	var req struct {
@@ -527,13 +568,22 @@ func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
 		return
 	}
-	if !canManagePackType(u, pkg.PackType) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包写入"})
-		return
-	}
-	if err := s.deptKBScope(u, tid, pkg); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
-		return
+	// ★ H3：持有该包 write 授权的普通成员跳过类型+部门范围校验
+	if !s.kbPackGrantedSkip(r, u, pkg, "write") {
+		if auth.RoleLevel(u.Role) < 2 {
+			// ★ H3 硬闸（UAT T30 捕获）：非部门管理员成员必须持该包 write 级授权，
+			//   旧版仅 skip 类型/范围校验、无正向准入检查，read 授权可越权写入
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的" + needLabel("write") + "授权"})
+			return
+		}
+		if !canManagePackType(u, pkg.PackType) {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包写入"})
+			return
+		}
+		if err := s.deptKBScope(u, tid, pkg); err != nil {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
 	}
 	if req.Layer == 0 {
 		req.Layer = cur.Layer
@@ -625,9 +675,9 @@ func (s *Server) handleSafetyPhraseDelete(w http.ResponseWriter, r *http.Request
 // handleKBPackageStatus 启用/停用知识库包（租户管理员及以上，部门管理员限本部门子树）。
 // 停用：从翻译检索层（tm_segments）摘除该包条目（kb_entries 保留）；启用：按优先级重新写回。
 func (s *Server) handleKBPackageStatus(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireDeptAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
 	var req struct {
@@ -644,13 +694,22 @@ func (s *Server) handleKBPackageStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
 		return
 	}
-	if !canManagePackType(u, pkg.PackType) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作该类型的知识库包"})
-		return
-	}
-	if err := s.deptKBScope(u, tid, pkg); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
-		return
+	// ★ H3：持有该包 manage 授权的普通成员跳过类型+部门范围校验
+	if !s.kbPackGrantedSkip(r, u, pkg, "manage") {
+		if auth.RoleLevel(u.Role) < 2 {
+			// ★ H3 硬闸（UAT T30 捕获）：非部门管理员成员必须持该包 manage 级授权，
+			//   旧版仅 skip 类型/范围校验、无正向准入检查，read 授权可越权写入
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的" + needLabel("manage") + "授权"})
+			return
+		}
+		if !canManagePackType(u, pkg.PackType) {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作该类型的知识库包"})
+			return
+		}
+		if err := s.deptKBScope(u, tid, pkg); err != nil {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
 	}
 	if err := s.Store.SetKBPackageEnabled(req.ID, req.Enabled); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
@@ -666,9 +725,9 @@ func (s *Server) handleKBPackageStatus(w http.ResponseWriter, r *http.Request) {
 //
 //	share=0 本包仅限归属链内用户可见。校验口径与启停接口完全一致。
 func (s *Server) handleKBPackageShare(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireDeptAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
 	var req struct {
@@ -685,13 +744,22 @@ func (s *Server) handleKBPackageShare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
 		return
 	}
-	if !canManagePackType(u, pkg.PackType) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作该类型的知识库包"})
-		return
-	}
-	if err := s.deptKBScope(u, tid, pkg); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
-		return
+	// ★ H3：持有该包 manage 授权的普通成员跳过类型+部门范围校验
+	if !s.kbPackGrantedSkip(r, u, pkg, "manage") {
+		if auth.RoleLevel(u.Role) < 2 {
+			// ★ H3 硬闸（UAT T30 捕获）：非部门管理员成员必须持该包 manage 级授权，
+			//   旧版仅 skip 类型/范围校验、无正向准入检查，read 授权可越权写入
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的" + needLabel("manage") + "授权"})
+			return
+		}
+		if !canManagePackType(u, pkg.PackType) {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作该类型的知识库包"})
+			return
+		}
+		if err := s.deptKBScope(u, tid, pkg); err != nil {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
 	}
 	if err := s.Store.SetKBPackageCrossDeptShare(req.ID, tid, req.Share); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})

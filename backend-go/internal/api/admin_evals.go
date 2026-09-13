@@ -123,10 +123,66 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "alerts": alerts})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "alerts": alerts, "silences": s.Store.ActiveSilences(tid)})
 }
 
 // handleAlertResolve 关闭告警（仅超管）
+// ★ F9：告警静音（租户+类型，到点自动失效；静音顺带关闭现存 open 告警）
+func (s *Server) handleAlertSilence(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireAdminUser(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		TenantID int64  `json:"tenant_id"` // 仅超管可指定他租；普通管理员强制本租
+		Kind     string `json:"kind"`
+		Minutes  int    `json:"minutes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Kind == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误（kind 必填）"})
+		return
+	}
+	tid := s.effTenant(r, u)
+	if u.Role == "super_admin" {
+		tid = req.TenantID // 超管：0=平台级，>0=指定租户
+	}
+	if err := s.Store.SilenceAlert(tid, req.Kind, req.Minutes, u.ID); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(tid, u.ID, "alert_silence", "alerts", req.Kind)
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// ★ F9：解除告警静音
+func (s *Server) handleAlertUnsilence(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireAdminUser(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		TenantID int64  `json:"tenant_id"`
+		Kind     string `json:"kind"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Kind == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误（kind 必填）"})
+		return
+	}
+	tid := s.effTenant(r, u)
+	if u.Role == "super_admin" {
+		tid = req.TenantID
+	}
+	if err := s.Store.UnsilenceAlert(tid, req.Kind); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(tid, u.ID, "alert_unsilence", "alerts", req.Kind)
+	writeJSON(w, 200, map[string]interface{}{"success": true})
+}
+
+// handleAlertResolve POST /api/system/alerts/resolve —— 关闭指定告警（租户管理员及以上）。
 func (s *Server) handleAlertResolve(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {

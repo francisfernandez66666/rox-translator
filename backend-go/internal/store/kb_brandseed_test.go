@@ -10,7 +10,7 @@ import "testing"
 // tenantPkgID 返回租户企业包（code='tenant'）的 ID。
 func tenantPkgID(t *testing.T, s *Store) int64 {
 	t.Helper()
-	p, err := s.queryKBPackage("SELECT " + kbPkgCols + " FROM kb_packages WHERE tenant_id=? AND code='tenant'", 1)
+	p, err := s.queryKBPackage("SELECT "+kbPkgCols+" FROM kb_packages WHERE tenant_id=? AND code='tenant'", 1)
 	if err != nil {
 		t.Fatalf("查询企业包失败: %v", err)
 	}

@@ -58,7 +58,7 @@ type Perms struct {
 	//   修正旧「字符限额 vs token 计量」的语义错位；0=未配置（gateUsage 回退旧口径）
 	MaxDailyTokens int64 `json:"max_daily_tokens,omitempty"`
 	// 商业包（句数制）字段：
-	SentenceBalance int64  `json:"sentence_balance,omitempty"`   // 剩余翻译句数（源句×目标语言数累计）
+	SentenceBalance int64  `json:"sentence_balance,omitempty"`   // ★ C26：发放流水镜像（只增不减），禁止判额/对账；剩余句数展示=token÷rate 反推
 	PackageCode     string `json:"package_code,omitempty"`       // 当前订阅的付费包编码（空=无订阅）
 	SubscribedAt    string `json:"subscribed_at,omitempty"`      // 最近订阅时间（RFC3339）
 	PackageExpires  string `json:"package_expires_at,omitempty"` // 订阅到期时间（RFC3339，空=不限期；到期由后台扫描摘除）
@@ -569,4 +569,28 @@ func WithMode(ctx context.Context, mode string) context.Context {
 func ModeFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(modeCtxKey{}).(string)
 	return v
+}
+
+// langCtxKey 目标语种 context 键（★ C4 语种维度定价）。
+type langCtxKey struct{}
+
+// WithLang 将主目标语种注入 context（多语种请求取 target_langs 首个；进入引擎前 API 层调用）。
+func WithLang(ctx context.Context, lang string) context.Context {
+	return context.WithValue(ctx, langCtxKey{}, lang)
+}
+
+// LangFromContext 从 context 取主目标语种；无则空串（定价按通配 '*' 回退）。
+func LangFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(langCtxKey{}).(string)
+	return v
+}
+
+// LangFromOptions 从翻译 options 提取主目标语种（target_langs[0]；无则空串）。
+func LangFromOptions(options map[string]interface{}) string {
+	if langs, ok := options["target_langs"].([]interface{}); ok && len(langs) > 0 {
+		if v, ok := langs[0].(string); ok {
+			return v
+		}
+	}
+	return ""
 }

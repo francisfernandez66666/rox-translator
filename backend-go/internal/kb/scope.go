@@ -2,8 +2,10 @@
 // scope.go · 知识库可见范围（PackScope）——2026-08-26《KB组织继承链与部门隔离改造方案》核心类型。
 //
 // 语义总图（业务优先级，2026-08-29 调整）：
-//   部门(链内部门包，按祖先距离就近) > 跨部门 > 企业包 > 行业包/文化包 > 无scope兜底
-//   注：跨部门仅作例句参考（InChain=false，绝不直接采用），但业务展示优先级排在企业/行业之上。
+//
+//	部门(链内部门包，按祖先距离就近) > 跨部门 > 企业包 > 行业包/文化包 > 无scope兜底
+//	注：跨部门仅作例句参考（InChain=false，绝不直接采用），但业务展示优先级排在企业/行业之上。
+//
 // 类型归属本包（kb）的原因：检索层 FindExact/FuzzyHits/ScopedSearch 直接消费，
 // 由 store.BuildPackScope 组装、engine 注入 ctx 构造——依赖方向 store→kb 单向，无环。
 // =============================================
@@ -13,14 +15,14 @@ import "sort"
 
 // PackScope 一次翻译请求的知识库可见范围（按用户组织祖先链计算）。
 type PackScope struct {
-	TenantID       int64             // 生效租户
-	Chain          []int64           // 组织祖先链原始切片（[自身..根]；缓存指纹用）
-	ChainPacks        map[int64]int     // 链内部门包：包ID → 祖先距离（0=本部门,1=父,...）
-	TenantPackIDs     map[int64]bool    // 企业包集合（pack_id=0 历史行语义上归此层）
-	SharedPackIDs     map[int64]bool    // 行业包集合（注册行业匹配；含宿主租户1的行业包；全行业+超管可见）
-	UniversalPackIDs  map[int64]bool    // 通用语言习惯包（locale）：全用户可见、最低优先级档（无scope）
-	AllowCrossDept   bool              // 租户策略开关 kb_cross_dept_fallback（默认开）
-	CrossDeptPacks   map[int64]string  // 跨部门候选部门包：包ID → 包名（打标用；开关关或无可共享包时为空）
+	TenantID         int64            // 生效租户
+	Chain            []int64          // 组织祖先链原始切片（[自身..根]；缓存指纹用）
+	ChainPacks       map[int64]int    // 链内部门包：包ID → 祖先距离（0=本部门,1=父,...）
+	TenantPackIDs    map[int64]bool   // 企业包集合（pack_id=0 历史行语义上归此层）
+	SharedPackIDs    map[int64]bool   // 行业包集合（注册行业匹配；含宿主租户1的行业包；全行业+超管可见）
+	UniversalPackIDs map[int64]bool   // 通用语言习惯包（locale）：全用户可见、最低优先级档（无scope）
+	AllowCrossDept   bool             // 租户策略开关 kb_cross_dept_fallback（默认开）
+	CrossDeptPacks   map[int64]string // 跨部门候选部门包：包ID → 包名（打标用；开关关或无可共享包时为空）
 }
 
 // Distance 返回包在祖先链上的距离（0=本部门）；非链内包返回 false。
@@ -33,8 +35,10 @@ func (s *PackScope) Distance(packID int64) (int, bool) {
 }
 
 // Rank 计算行的全局排序秩（越小越优先）——业务优先级裁决依据：
-//   部门(链内部门包，按祖先距离 0..N) > 跨部门(100) > 企业包/历史无主行(200)
-//   > 行业包/文化包(300) > 无scope兜底(400)。
+//
+//	部门(链内部门包，按祖先距离 0..N) > 跨部门(100) > 企业包/历史无主行(200)
+//	> 行业包/文化包(300) > 无scope兜底(400)。
+//
 // 注：跨部门仅作例句参考（InChain=false），但业务展示优先级排在企业/行业之上。
 // 参数 packID=行归属包 ID（0=历史无主行），rowTenant=行宿主租户。
 func (s *PackScope) Rank(packID int64, rowTenant int64) int {

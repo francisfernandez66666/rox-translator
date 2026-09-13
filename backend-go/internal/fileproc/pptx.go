@@ -61,14 +61,17 @@ func extractPptx(path string, e *Extractor) error {
 	// 只处理 ppt/slides/slide*.xml 文件
 	for _, f := range zr.File {
 		name := f.Name
-		if !strings.HasPrefix(name, "ppt/slides/slide") || !strings.HasSuffix(name, ".xml") {
+		isSlide := strings.HasPrefix(name, "ppt/slides/slide") && strings.HasSuffix(name, ".xml")
+		// ★ D8（2026-09-12）：备注页纳入提取链（开关 PPTX_TRANSLATE_NOTES=0 关闭）
+		isNotes := pptxNotesEnabled() && strings.HasPrefix(name, "ppt/notesSlides/notesSlide") && strings.HasSuffix(name, ".xml")
+		if !isSlide && !isNotes {
 			continue
 		}
 		data, err := readZipEntry(zr, name)
 		if err != nil {
 			continue
 		}
-		extractPptxSlide(data, e) // 解析单个 slide
+		extractPptxSlide(data, e) // 解析单个 slide/notesSlide
 	}
 	return nil
 }
@@ -158,6 +161,8 @@ func ApplyPptx(path, outPath string, translations map[string]string) error {
 		}
 		if strings.HasPrefix(f.Name, "ppt/slides/slide") && strings.HasSuffix(f.Name, ".xml") {
 			data = translatePptxXML(data, translations) // 翻译 slide 并自适应字号
+		} else if pptxNotesEnabled() && strings.HasPrefix(f.Name, "ppt/notesSlides/notesSlide") && strings.HasSuffix(f.Name, ".xml") {
+			data = translatePptxXML(data, translations) // ★ D8：备注页同链路写回
 		}
 		w, err := zw.Create(f.Name)
 		if err != nil {
@@ -347,7 +352,8 @@ func replacePptxParagraph(para, translated string) string {
 // 参数：para=段落 XML；返回拼接后的纯文本。
 //
 // ★ 实体对齐（2026-08-26 P1-g）：与 docx 侧同理，扫描器截取的原始内文含实体，
-//   必须 UnescapeXMLText 后返回，保证与翻译请求原文键一致。
+//
+//	必须 UnescapeXMLText 后返回，保证与翻译请求原文键一致。
 func rawPptxText(para string) string {
 	var sb strings.Builder
 	for _, m := range aTextRe.FindAllStringSubmatch(para, -1) {
@@ -588,4 +594,12 @@ func translatePptxCell(cell string, translations map[string]string) string {
 		}
 	}
 	return out
+}
+
+// pptxNotesEnabled ★ D8：备注页（notesSlides）是否纳入提取/写回链。
+// 默认纳入；环境变量 PPTX_TRANSLATE_NOTES=0 显式关闭（备注含内部批注的场合）。
+// 母版/版式（slideMasters/slideLayouts）为演示稿样板文字，逐文件重复出现，
+// 刻意不译（避免占位符样板污染译文与重复计费用量）。
+func pptxNotesEnabled() bool {
+	return os.Getenv("PPTX_TRANSLATE_NOTES") != "0"
 }

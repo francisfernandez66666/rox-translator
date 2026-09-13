@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"translator/internal/auth"
 
 	"translator/internal/crawler"
 	"translator/internal/engine"
@@ -47,9 +48,9 @@ var tempIDRe = regexp.MustCompile(`^[0-9a-f]{24}$`)
 // 返回: success=true 时携带 added（新增数）/skipped（跳过数）。
 func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需租户管理员及以上权限
-	u, err := s.requireDeptAdmin(r)
-	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
 	// 解析请求参数：目标知识库包 ID 和待导入条目数组
@@ -77,14 +78,23 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
 		return
 	}
-	if !canManagePackType(u, pkg.PackType) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包导入"})
-		return
-	}
-	// 部门管理员：目标包须在本部门及子部门内（部门包），或跨部门包须涵盖本部门（含子树/全公司仅超管租管）。
-	if err := s.deptKBScope(u, tid, pkg); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
-		return
+	// ★ H3：持有该包 write 授权的普通成员跳过类型+部门范围校验
+	if !s.kbPackGrantedSkip(r, u, pkg, "write") {
+		if auth.RoleLevel(u.Role) < 2 {
+			// ★ H3 硬闸（UAT T30 捕获）：非部门管理员成员必须持该包 write 级授权，
+			//   旧版仅 skip 类型/范围校验、无正向准入检查，read 授权可越权写入
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的" + needLabel("write") + "授权"})
+			return
+		}
+		if !canManagePackType(u, pkg.PackType) {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包导入"})
+			return
+		}
+		// 部门管理员：目标包须在本部门及子部门内（部门包），或跨部门包须涵盖本部门（含子树/全公司仅超管租管）。
+		if err := s.deptKBScope(u, tid, pkg); err != nil {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
 	}
 	added, skipped := 0, 0
 	// ★ 平台共享包强制先审批（2026-09-02 功能）：行业包/语言文化包为全平台共享、
@@ -420,10 +430,25 @@ func (s *Server) handleRecognizeKB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 保存上传文件
-	savePath, err := s.saveUploadedFile(r)
-	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文件上传失败"})
-		return
+	savePath := ""
+	// ★ H5 断点续传：recognize-kb?merged=NAME 直读已合并分片产物，跳过整文件重传
+	if merged := r.URL.Query().Get("merged"); merged != "" {
+		if !mergedNameRe.MatchString(merged) {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "merged 文件名非法"})
+			return
+		}
+		savePath = filepath.Join(s.kbTempDir(), merged)
+		if _, statErr := os.Stat(savePath); statErr != nil {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "合并文件不存在或已过期"})
+			return
+		}
+	} else {
+		var err error
+		savePath, err = s.saveUploadedFile(r)
+		if err != nil {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文件上传失败"})
+			return
+		}
 	}
 
 	// 解析文件为记录行 + 全部列名

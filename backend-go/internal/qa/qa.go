@@ -44,6 +44,9 @@ var numRe = regexp.MustCompile(`[0-9]+(?:[.,][0-9]+)*`)
 // 占位符正则：{name} / %s %d %f / HTML/XML 标签
 var phRe = regexp.MustCompile(`\{[^{}]*\}|%[sdf]|</?[a-zA-Z][a-zA-Z0-9]*[^<>]*/?>`)
 
+// PlaceholderRe 占位符识别正则对外视图（★ D19 掩码-回填闭环与 QA 检测同源）。
+var PlaceholderRe = phRe
+
 // maxIssues 明细截断上限（防超大报告撑爆 payload）
 const maxIssues = 50
 

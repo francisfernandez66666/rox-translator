@@ -66,10 +66,19 @@ export default function BrandP() {
     return () => { alive = false }
   }, [targetTenantId])
 
+  // ★ E15：与后端 validateBrandPayloads 同口径的本地预检（Logo ~300KB、背景 ~800KB），
+  //   避免超大图整段 base64 进请求体才被拒
+  const checkBrandFile = (file: File, maxKB: number): boolean => {
+    if (!file.type.startsWith('image/')) { void MessagePlugin.error('请选择图片文件'); return false }
+    if (file.size > maxKB * 1024) { void MessagePlugin.error(`图片过大（上限约 ${maxKB}KB），请先压缩`); return false }
+    return true
+  }
+
   /** Logo 文件选择处理：读取本地文件并转为 Data URL */
   const onLogoFile = (e: any) => {
     const file: File | undefined = e?.target?.files?.[0]
     if (!file) return
+    if (!checkBrandFile(file, 300)) { e.currentTarget.value = ''; return }
     const reader = new FileReader()
     reader.onload = () => setLogo(String(reader.result))
     reader.readAsDataURL(file)
@@ -80,6 +89,7 @@ export default function BrandP() {
   const onHomeBgFile = (e: any) => {
     const file: File | undefined = e?.target?.files?.[0]
     if (!file) return
+    if (!checkBrandFile(file, 800)) { e.currentTarget.value = ''; return }
     const reader = new FileReader()
     reader.onload = () => setHomeBg(String(reader.result))
     reader.readAsDataURL(file)

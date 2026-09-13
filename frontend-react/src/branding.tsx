@@ -17,7 +17,10 @@
  */
 
 // 依赖引入：React 基础 Hooks（createContext/useContext/useEffect/useMemo/useState）与类型 ReactNode
-import { createContext, useContext, useEffect, useMemo, useState, ReactNode } from 'react'
+import { useEffect, useMemo } from 'react'
+import type { ReactNode } from 'react'
+import { create } from 'zustand'
+import { API_BASE } from '@/api'
 
 // BrandLink 品牌页脚/导航链接条目：含中英文标签与跳转地址
 export interface BrandLink {
@@ -97,11 +100,12 @@ export function parseBgStyle(json?: string): BgStyle {
   return d
 }
 
-// 品牌上下文实例（默认值为 DEFAULT，确保未解析到租户时回退平台品牌）
-const Ctx = createContext<Branding>(DEFAULT)
+// ★ H8：品牌状态唯一来源（Zustand）。默认值=平台品牌，未解析到租户时回退；
+// 组件树外（登录页标题同步等）也可读取。
+export const useBrandingStore = create<Branding>()(() => ({ ...(brandingFromGlobal() ?? DEFAULT) }))
 
-// 在组件树中读取当前品牌信息的 Hook
-export const useBranding = () => useContext(Ctx)
+// 在组件树中读取当前品牌信息的 Hook（zustand 全量订阅，字段变化即重渲染）
+export const useBranding = () => useBrandingStore()
 
 // BrandBgLayer 按样式渲染未登录首页背景图层（单张图，铺满父容器）：
 // - cover 充满（默认）：objectFit cover，scale 为缩放倍数
@@ -152,16 +156,18 @@ function brandingFromGlobal(): Branding | null {
 // 优化：若服务端已在首屏 index.html 注入 window.__BRANDING__（按 Host 解析），直接作为初值使用，
 // 跳过一次首屏异步拉取，消除「先通用设计、后品牌设计」的闪烁。
 export function BrandingProvider({ tenantId, children }: { tenantId?: number; children: ReactNode }) {
-  // 首屏品牌初值：优先使用服务端注入（无闪烁），否则回退 DEFAULT
+  // 首屏品牌初值：优先使用服务端注入（无闪烁），否则回退 DEFAULT；写入 zustand 单一状态源
   const initial = useMemo(() => brandingFromGlobal(), [])
-  const [b, setB] = useState<Branding>(initial ?? DEFAULT)
+  const b = useBrandingStore()
+  const setB = (v: Branding) => useBrandingStore.setState(v)
+  void b
   // 解析优先级：显式 tenantId（超管预览）> 按访问域名（后端按 Host 解析，根域名=平台品牌）
   const effectiveTenantId = tenantId ?? 0
   useEffect(() => {
     // 已注入且为按域名解析（非超管预览指定租户）：直接采用注入值，无需再拉取
     if (effectiveTenantId <= 0 && initial) return
     let alive = true
-    const url = '/api/tenant/branding' + (effectiveTenantId ? `?tenant_id=${effectiveTenantId}` : '')
+    const url = API_BASE + '/api/tenant/branding' + (effectiveTenantId ? `?tenant_id=${effectiveTenantId}` : '')
     fetch(url)
       .then((r) => r.json())
       .then((j: any) => {
@@ -211,5 +217,6 @@ export function BrandingProvider({ tenantId, children }: { tenantId?: number; ch
     Object.entries(palette).forEach(([k, v]) => root.style.setProperty(k, v))
     return () => { Object.keys(palette).forEach((k) => root.style.removeProperty(k)) }
   }, [])
-  return <Ctx.Provider value={b}>{children}</Ctx.Provider>
+  void b
+  return <>{children}</>
 }

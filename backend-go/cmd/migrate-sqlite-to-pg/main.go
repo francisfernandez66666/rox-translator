@@ -4,13 +4,15 @@
 //
 // 适用场景：从 SQLite 单文件切换到托管 RDS PG（见《系统优化方案.md》§〇 工作流 A）。
 // 前置条件：
-//   1) 已用 DB_DRIVER=postgres 启动过一次服务端，使 PG 侧表结构（含 pgvector 列）创建完毕；
-//   2) pgvector 扩展已在目标库安装（EnablePgvector 会自动 CREATE EXTENSION）；
-//   3) 本工具仅拷贝"数据"，不拷贝向量列（embedding），切换后跑一次 RebuildKBIndex 回填。
+//  1. 已用 DB_DRIVER=postgres 启动过一次服务端，使 PG 侧表结构（含 pgvector 列）创建完毕；
+//  2. pgvector 扩展已在目标库安装（EnablePgvector 会自动 CREATE EXTENSION）；
+//  3. 本工具仅拷贝"数据"，不拷贝向量列（embedding），切换后跑一次 RebuildKBIndex 回填。
 //
 // 幂等：所有 INSERT 使用 ON CONFLICT DO NOTHING，可重复执行；运行前请备份 SQLite 与 pg_dump。
 // 用法：
-//   go run ./cmd/migrate-sqlite-to-pg -sqlite /path/tm.sqlite3 -dsn "postgres://user:pass@host:5432/db?sslmode=disable"
+//
+//	go run ./cmd/migrate-sqlite-to-pg -sqlite /path/tm.sqlite3 -dsn "postgres://user:pass@host:5432/db?sslmode=disable"
+//
 // =============================================
 package main
 
@@ -30,8 +32,8 @@ import (
 
 // skipTables 跳过瞬态/重启自重建的表（jobs 异步账本、ticket_state 进度轨迹）
 var skipTables = map[string]bool{
-	"jobs":         true,
-	"ticket_state": true,
+	"jobs":            true,
+	"ticket_state":    true,
 	"sqlite_sequence": true,
 }
 

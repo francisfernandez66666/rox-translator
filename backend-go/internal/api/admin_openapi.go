@@ -21,8 +21,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+	"translator/internal/config"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
@@ -97,6 +99,16 @@ func (s *Server) getDocsMD(lang string) string {
 	return def
 }
 
+// expandDocsHost ★ B11（2026-09-12）：文档内 {{OPENAPI_HOST}} 占位替换为主站配置；
+// 未配置时用通用示例主机，代码零明文运营域名。
+func (s *Server) expandDocsHost(md string) string {
+	host := s.primaryHost()
+	if host == "" {
+		host = "your-host.example.com"
+	}
+	return strings.ReplaceAll(md, "{{OPENAPI_HOST}}", host)
+}
+
 // extractBodyInner 提取 HTML 文档 <body> 内部内容（双语容器嵌入复用）。
 func extractBodyInner(htmlDoc string) string {
 	low := strings.ToLower(htmlDoc)
@@ -112,8 +124,8 @@ func extractBodyInner(htmlDoc string) string {
 // （默认语言按浏览器 navigator.language 自动选择；切换结果记忆到 localStorage）。
 func (s *Server) handleOpenAPIDocs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	zhBody := extractBodyInner(renderDocsHTML(s.getDocsMD("zh")))
-	enBody := extractBodyInner(renderDocsHTML(s.getDocsMD("en")))
+	zhBody := extractBodyInner(renderDocsHTML(s.expandDocsHost(s.getDocsMD("zh"))))
+	enBody := extractBodyInner(renderDocsHTML(s.expandDocsHost(s.getDocsMD("en"))))
 	page := `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>能言开放 API 文档</title>
@@ -240,7 +252,7 @@ func (s *Server) handleAdminOpenAPIDocsPreview(w http.ResponseWriter, r *http.Re
 	if lang == "" {
 		lang = "zh"
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "html": renderDocsHTML(req.MD), "lang": lang})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "html": renderDocsHTML(s.expandDocsHost(req.MD)), "lang": lang})
 }
 
 // itoaApi 整数转字符串（审计明细用）。
@@ -291,7 +303,7 @@ const defaultDocsMDZh = `# 能言开放 API
 ## ① 创建文本任务（heredoc 传 JSON：复制即用，免疫引号/换行问题）
 
 ~~~
-curl -sS -X POST https://langcross.lexicorn.cn/openapi/v1/tasks \
+curl -sS -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
   -H 'Authorization: Bearer <API_KEY>' \
   -H 'Content-Type: application/json' \
   --data @- <<'EOF'
@@ -304,7 +316,7 @@ EOF
 ## ② 创建文件批量任务（mode=fast 快速 / pro 专业校对，默认 pro）
 
 ~~~
-curl -X POST https://langcross.lexicorn.cn/openapi/v1/tasks \
+curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
   -H 'Authorization: Bearer <API_KEY>' \
   -F 'files=@手册.docx' -F 'files=@清单.xlsx' -F 'target_langs=en,de' -F 'mode=fast' 
 ~~~
@@ -314,7 +326,7 @@ curl -X POST https://langcross.lexicorn.cn/openapi/v1/tasks \
 > 说明：响应为标准 JSON，键名的双引号是 JSON 语法要求，请勿将响应示例粘贴到终端执行。请求示例已用 heredoc/单引号包裹，可直接复制运行。
 
 ~~~
-curl 'https://langcross.lexicorn.cn/openapi/v1/tasks/status?id=123' -H 'Authorization: Bearer <API_KEY>'
+curl 'https://{{OPENAPI_HOST}}/openapi/v1/tasks/status?id=123' -H 'Authorization: Bearer <API_KEY>'
 # 处理中 → {'status':'processing','steps':[...]}
 # 文本完成 → {'status':'completed','translations':{'en':'Check the brake system.'},'tokens_used':1832}
 # 文件完成 → {'status':'completed','files':[...],'download':'/openapi/v1/tasks/download?id=123'}
@@ -418,7 +430,7 @@ All endpoints authenticate with **Authorization: Bearer YOUR_API_KEY**. Issue ke
 ## Create a text task
 
 ~~~json
-POST https://langcross.lexicorn.cn/openapi/v1/tasks
+POST https://{{OPENAPI_HOST}}/openapi/v1/tasks
 {'text':'Check the brake system.','target_langs':['en','de'],'mode':'pro'}
 ~~~
 
@@ -427,7 +439,7 @@ Response (202): {"task_id":123,"status":"queued","poll_interval_sec":15,"balance
 ## Create a batch file task (mode=fast / pro, default pro)
 
 ~~~bash
-curl -X POST https://langcross.lexicorn.cn/openapi/v1/tasks -H 'Authorization: Bearer YOUR_API_KEY' -F 'files=@manual.docx' -F 'files=@list.xlsx' -F 'target_langs=en,de' -F 'mode=fast'
+curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks -H 'Authorization: Bearer YOUR_API_KEY' -F 'files=@manual.docx' -F 'files=@list.xlsx' -F 'target_langs=en,de' -F 'mode=fast'
 ~~~
 
 ## Poll status
@@ -534,6 +546,61 @@ func (s *Server) handleOpenAPIKBStats(w http.ResponseWriter, r *http.Request) {
 		"tenant_id":  ak.TenantID,
 		"kb_entries": s.kbStats(ak.TenantID),
 	})
+}
+
+// handleOpenAPITerms ★ H12 GET /openapi/v1/terms?q=&lang=&limit=
+// 租户术语检索（划译插件/编辑器侧边栏用）：权限 all/kb/translate 可用。
+// q 必填（≤100 字符）；lang 可选目标语言过滤；limit 默认 20（≤50）。
+func (s *Server) handleOpenAPITerms(w http.ResponseWriter, r *http.Request) {
+	ak, authErr := s.authenticateAPIKey(r)
+	if authErr != "" {
+		if authErr == string(errors.OpenAPIKeyQuotaExceeded) {
+			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
+				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			return
+		}
+		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInvalidAPIKey), "message": "API Key 无效"})
+		return
+	}
+	if ak.Perms != "all" && ak.Perms != "kb" && ak.Perms != "translate" {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIForbidden), "message": "API Key 无术语检索权限（需 translate/kb）"})
+		return
+	}
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIBadRequest), "message": "q 不能为空"})
+		return
+	}
+	if n := len([]rune(q)); n > 100 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIBadRequest), "message": "q 超长（≤100 字符）"})
+		return
+	}
+	lang := strings.TrimSpace(r.URL.Query().Get("lang"))
+	if lang != "" {
+		ok := false
+		for _, l := range config.AllLangs {
+			if l == lang {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIBadRequest), "message": "不支持的语言代码: " + lang})
+			return
+		}
+	}
+	limit := 20
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, e := strconv.Atoi(v); e == nil {
+			limit = n
+		}
+	}
+	hits, err := s.Store.SearchTerms(ak.TenantID, 0, q, lang, limit)
+	if err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "count": len(hits), "terms": hits})
 }
 
 // kbStats 统计租户知识库条目数（安全封装：DB 为 nil 时返回 0）。

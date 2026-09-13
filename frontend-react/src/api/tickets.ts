@@ -45,9 +45,6 @@ export interface TicketResp {
 }
 
 /** 获取工单列表（mine=true 仅查看自己创建的） */
-export async function ticketList(mine?: boolean): Promise<TicketResp> {
-  return request(`/api/tickets${mine ? '?mine=1' : ''}`, { headers: authHeaders() })
-}
 
 // ==================== 审批 ====================
 

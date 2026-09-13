@@ -23,7 +23,9 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"translator/internal/config"
 
 	"translator/internal/auth"
 	apierrors "translator/internal/errors"
@@ -121,10 +123,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "用户名或密码错误"))
 		return
 	}
-	// 历史哈希自动升级：登录成功后若仍为 SHA-256 格式，改写为 bcrypt
+	// 历史哈希自动升级：登录成功后若仍为 SHA-256/legacy-salt 格式，改写为 bcrypt。
+	// ★ B10（2026-09-12）：计数日志观察存量（固定盐 trans-salt 属公开信息，存量清零后移除此路径）。
 	if auth.NeedMigrateHash(u.PasswordHash) {
+		legacyCounter.Add(1)
+		log.Printf("[auth] legacy 口令透明升级 uid=%d tid=%d（累计 %d 次）", u.ID, u.TenantID, legacyCounter.Load())
 		if err := s.Store.ResetPassword(u.ID, u.TenantID, auth.PasswordHash(req.Password)); err == nil {
 			u.PasswordHash = auth.PasswordHash(req.Password)
+			// ★ B2 联动修正：ResetPassword 会递增库内 token_version，内存副本必须同步，
+			//   否则下方 auth.Sign 携带旧版本号、签发即被 authUser 判为已撤销。
+			u.TokenVersion++
 		}
 	}
 	// 登录成功：清零失败计数
@@ -239,6 +247,9 @@ func (s *Server) handleMeContext(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// legacyCounter ★ B10：历史格式口令透明升级累计计数（进程内，日志观察存量账号）。
+var legacyCounter atomic.Int64
+
 // handleChangePassword 修改密码接口：校验原密码后更新为 bcrypt 哈希。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {old_password, new_password}）。
 // 返回: success=true 表示修改成功；原密码错误或存储失败返回 success=false。
@@ -340,7 +351,7 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	// 发送邮件（改为异步入队：SMTP 失败由队列重试/死信吸收，不阻塞用户）
 	if serr := s.sendTemplatedMail(u.Email, "reset_code", map[string]string{"code": code}); serr != nil {
-		log.Printf("[mail] 密码重置验证码入队失败 to=%s err=%v", u.Email, serr)
+		log.Printf("[mail] 密码重置验证码入队失败 to=%s err=%v", config.MaskEmail(u.Email), serr)
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "邮件发送失败，请稍后重试或联系管理员"))
 		return
 	}
@@ -494,7 +505,7 @@ func (s *Server) mailer() mail.Sender {
 	})
 }
 
-// infoMailer 产品手册/欢迎邮件专用发送器（info@lexicorn.cn），凭据取自 INFO_SMTP_* 环境变量。
+// infoMailer 产品手册/欢迎邮件专用发送器，发件地址由 INFO_SMTP_FROM 配置，凭据取自 INFO_SMTP_* 环境变量。
 // 默认 host/port 走阿里云邮箱；未配置 USER 时退化 Noop（不报错，仅日志缺失）。
 func (s *Server) infoMailer() mail.Sender {
 	host := os.Getenv("INFO_SMTP_HOST")

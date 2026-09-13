@@ -191,7 +191,8 @@ func TestBrandReplaceVariants(t *testing.T) {
 
 // TestStripTrailingCJKNotes 验证译文末尾的中文「编辑注释/术语对照」残留块被整体截断，
 // 修复用户反馈的快速翻译英文遗留乱码问题（（：，：1. ：… 骨架）。
-func TestStripTrailingCJKNotes(t *testing.T) {	cases := []struct{ in, want string }{
+func TestStripTrailingCJKNotes(t *testing.T) {
+	cases := []struct{ in, want string }{
 		// 末尾注释块起始行：纯全角标点无字母无数字 → 截断
 		{"VIII. Component protection.\n\n（：，：\n1. ：\"\"brake rotors\"\"\n2. ：（±2%）",
 			"VIII. Component protection."},
@@ -216,13 +217,13 @@ func TestStripTrailingCJKNotes(t *testing.T) {	cases := []struct{ in, want strin
 func TestCollapseRepeatedConjunctions(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"and and and", "and"},
-		{"and and", "and and"},             // 仅 2 次不折叠
-		{"or or or or", "or"},              // 4 次也折叠
+		{"and and", "and and"}, // 仅 2 次不折叠
+		{"or or or or", "or"},  // 4 次也折叠
 		{"The mountains and and and seas", "The mountains and seas"},
 		{"with with with benefits", "with benefits"},
 		{"the the the quick", "the quick"},
 		{"Normal text without repetition", "Normal text without repetition"},
-		{"and and AND", "and"},             // 大小写混合
+		{"and and AND", "and"}, // 大小写混合
 	}
 	for _, c := range cases {
 		if got := collapseRepeatedConjunctions(c.in); got != c.want {

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
+	"translator/internal/db"
 
 	"translator/internal/crawler"
 	"translator/internal/infra/distlock"
@@ -114,7 +115,7 @@ func (s *Server) lowOccupancyForScrape() bool {
 	// ① 无进行中翻译任务（jobs 表 ticket_run 无 running/queued）
 	if s.Store != nil {
 		var n int64
-		if err := s.Store.DB().QueryRow(
+		if err := db.QueryRow(s.Store.DB(), db.CurrentDialect(),
 			"SELECT COUNT(*) FROM jobs WHERE type='ticket_run' AND status IN ('queued','running')").Scan(&n); err == nil && n > 0 {
 			return false
 		}
@@ -137,7 +138,7 @@ func (s *Server) lowOccupancyForScrape() bool {
 // notifySuperAdmins 向全部超管（role='super_admin' 或 admin）发送站内信。
 // 参数 title/body：通知标题与正文。
 func (s *Server) notifySuperAdmins(title, body string) {
-	rows, err := s.Store.DB().Query("SELECT id FROM users WHERE role IN ('super_admin','admin')")
+	rows, err := db.Query(s.Store.DB(), db.CurrentDialect(), "SELECT id FROM users WHERE role IN ('super_admin','admin')")
 	if err != nil {
 		return
 	}

@@ -56,13 +56,16 @@ export interface ChatResponse {
 /** SSE 流式事件：翻译进度更新 / 完成 / 出错 */
 export interface ProgressEvent {
   // 事件类型：progress 进度 / done 完成 / error 错误
-  type: 'progress' | 'done' | 'error'
+  type: 'progress' | 'done' | 'error' | 'delta' // ★ D20：delta=token 级增量
   step?: string      // 当前步骤文案
   done?: number      // 已完成数量
   total?: number     // 总数量
   percent?: number   // 进度百分比
   result?: ChatResponse // 完成时返回的最终结果
   error?: string     // 错误信息
+  error_code?: string // ★ E11：稳定错误码（insufficient_balance / daily_quota_exceeded）
+  lang?: string      // ★ D20：delta 事件的目标语言
+  text?: string      // ★ D20：delta 增量文本
 }
 
 /** 聊天消息：用户提问或 AI 回复，附带技能 / 数据 / 文件 / 翻译进度 */

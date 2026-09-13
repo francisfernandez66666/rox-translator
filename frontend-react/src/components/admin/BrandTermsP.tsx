@@ -8,9 +8,10 @@
 // 保证「云端知识库单独可配」。
 // ============================================================================
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Table, Input, Select, Dialog, MessagePlugin, Popconfirm, Space, Tag } from 'tdesign-react'
+import { Button, Table, Input, Select, Dialog, MessagePlugin, Tag } from 'tdesign-react'
 import { brandTerms, kbPackages, kbEntryAdd, kbEntryUpdate, kbEntryDelete } from '@/api/kb'
 import { langLabel } from '@/lib/langNames'
+import { useT, tpl as gtpl } from '@/i18n'
 
 type BrandEntry = {
   id: number
@@ -50,6 +51,7 @@ function groupByBrand(entries: BrandEntry[]): { brand: string; langs: Record<str
  * 译文中品牌名统一剥离自创后缀（ROX vehicles/motor 等）并等于此处译法。修改后仅对后续翻译生效。
  */
 export default function BrandTermsP(_props: Props) {
+  const [, t] = useT()
   const [packages, setPackages] = useState<PkgItem[]>([])
   const [pkgId, setPkgId] = useState(0)           // 当前选中的知识库包 ID
   const [terms, setTerms] = useState<BrandEntry[]>([])
@@ -87,51 +89,51 @@ export default function BrandTermsP(_props: Props) {
   const addBrand = async () => {
     const brand = brandInput.trim()
     const en = brandEn.trim()
-    if (!brand) { MessagePlugin.warning('请输入品牌中文名'); return }
-    if (!en) { MessagePlugin.warning('请输入品牌外语统一译法（如 ROX）'); return }
+    if (!brand) { MessagePlugin.warning(t('bt.needBrand')); return }
+    if (!en) { MessagePlugin.warning(t('bt.needEn')); return }
     try {
       for (const lc of BRAND_LANGS) {
         await kbEntryAdd({ package_id: pkgId, layer: 1, source_text: brand, target_lang: lc, target_text: en, module: 'brand' })
       }
-      MessagePlugin.success('品牌名已新增（全语言译为 ' + en + '）')
+      MessagePlugin.success(gtpl('bt.added', { en }))
       setBrandInput(''); setBrandEn(''); setDlg(false)
       await load()
     } catch (e) {
-      MessagePlugin.error('新增失败：' + String((e as any)?.message || e))
+      MessagePlugin.error(gtpl('bt.addFail', { err: String((e as any)?.message || e) }))
     }
   }
 
   /** 新增单个语言的品牌条译法（品牌已存在但缺某语言时） */
   const addSingleLang = async (brand: string) => {
-    const lang = window.prompt('输入目标语言代码（如 ar），为「' + brand + '」补该语言译法')
+    const lang = window.prompt(gtpl('bt.promptLang', { brand }))
     if (!lang) return
-    const text = window.prompt('输入该语言品牌译法（如 ROX）')
+    const text = window.prompt(t('bt.promptText'))
     if (!text) return
     try {
       await kbEntryAdd({ package_id: pkgId, layer: 1, source_text: brand, target_lang: lang.trim(), target_text: text.trim(), module: 'brand' })
-      MessagePlugin.success('已补充 ' + lang.trim() + ' 译法')
+      MessagePlugin.success(gtpl('bt.langAdded', { lang: lang.trim() }))
       await load()
-    } catch (e) { MessagePlugin.error('补充失败：' + String((e as any)?.message || e)) }
+    } catch (e) { MessagePlugin.error(gtpl('bt.langFail', { err: String((e as any)?.message || e) })) }
   }
 
   /** 修改单语言译法 */
   const editLang = async (g: { brand: string }, e: BrandEntry | null, lang: string) => {
     if (!e) return
-    const text = window.prompt('修改「' + g.brand + '」的 ' + lang + ' 译法', e.target_text)
+    const text = window.prompt(gtpl('bt.editPrompt', { brand: g.brand, lang }), e.target_text)
     if (!text || text.trim() === e.target_text) return
     try {
       await kbEntryUpdate({ id: e.id, layer: 1, source_text: g.brand, target_lang: lang, target_text: text.trim(), module: 'brand' })
-      MessagePlugin.success('已更新')
+      MessagePlugin.success(t('bt.updated'))
       await load()
-    } catch (err) { MessagePlugin.error('更新失败：' + String((err as any)?.message || err)) }
+    } catch (err) { MessagePlugin.error(gtpl('bt.updateFail', { err: String((err as any)?.message || err) })) }
   }
 
   const removeEntry = async (id: number) => {
     try {
       await kbEntryDelete(id)
-      MessagePlugin.success('已删除该语言条目')
+      MessagePlugin.success(t('bt.entryDeleted'))
       await load()
-    } catch (e) { MessagePlugin.error('删除失败：' + String((e as any)?.message || e)) }
+    } catch (e) { MessagePlugin.error(gtpl('bt.deleteFail', { err: String((e as any)?.message || e) })) }
   }
 
   const inputStyle = { minWidth: 180 } as const
@@ -143,39 +145,39 @@ export default function BrandTermsP(_props: Props) {
       {/* ===== 包选择 + 顶部说明 + 新增品牌名 ===== */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 13, color: '#556' }}>知识库包</span>
+          <span style={{ fontSize: 13, color: '#556' }}>{t('bt.pkgLabel')}</span>
           <Select value={pkgId} onChange={(v: any) => setPkgId(Number(v ?? 0))} style={{ minWidth: 240 }}
             options={packages.map(p => ({ label: `${p.name || p.code}`, value: p.id }))} />
         </div>
         <div style={{ fontSize: 13, color: '#667' }}>
-          品牌名（如 极石 / 极石汽车）在外语统一译为规定写法（如 ROX）。翻译管线会强约束并剥离「ROX vehicles / ROX motor」等自创后缀。
+          {t('bt.hint')}
         </div>
-        <Button theme="primary" onClick={() => setDlg(true)}>＋ 新增品牌名</Button>
+        <Button theme="primary" onClick={() => setDlg(true)}>{t('bt.new')}</Button>
       </div>
 
-      <Dialog header="新增品牌名" visible={dlg} onClose={() => setDlg(false)} footer={null} width={420}>
+      <Dialog header={t('bt.newTitle')} visible={dlg} onClose={() => setDlg(false)} footer={null} width={420}>
         <div style={rowTop}>
-          <span style={{ width: 110, fontSize: 13 }}>品牌中文名</span>
-          <Input value={brandInput} onChange={(v: any) => setBrandInput(String(v ?? ''))} placeholder="极石 或 极石汽车" style={inputStyle} />
+          <span style={{ width: 110, fontSize: 13 }}>{t('bt.brandLabel')}</span>
+          <Input value={brandInput} onChange={(v: any) => setBrandInput(String(v ?? ''))} placeholder={t('bt.brandPlaceholder')} style={inputStyle} />
         </div>
         <div style={rowTop}>
-          <span style={{ width: 110, fontSize: 13 }}>外语统一译法</span>
+          <span style={{ width: 110, fontSize: 13 }}>{t('bt.enLabel')}</span>
           <Input value={brandEn} onChange={(v: any) => setBrandEn(String(v ?? ''))} placeholder="ROX" style={inputStyle} />
         </div>
         <div style={{ ...rowTop, marginTop: 16, justifyContent: 'flex-end' }}>
-          <Button onClick={() => setDlg(false)}>取消</Button>
-          <Button theme="primary" onClick={() => void addBrand()}>保存</Button>
+          <Button onClick={() => setDlg(false)}>{t('bt.cancel')}</Button>
+          <Button theme="primary" onClick={() => void addBrand()}>{t('bt.save')}</Button>
         </div>
       </Dialog>
 
       {/* ===== 品牌名列表（按品牌分组，各语言译法一目了然） ===== */}
       {groups.length === 0 ? (
-        <div style={{ color: '#889', fontSize: 13, padding: '16px 0' }}>{pkgId <= 0 ? '请先选择知识库包' : '暂无品牌名术语，点击「新增品牌名」添加。'}</div>
+        <div style={{ color: '#889', fontSize: 13, padding: '16px 0' }}>{pkgId <= 0 ? t('bt.needPkg') : t('bt.empty')}</div>
       ) : (
         <Table size="small" rowKey="brand" loading={loading} data={groups} maxHeight={520}
           columns={[
-            { colKey: 'brand', title: '品牌名', width: 160, cell: ({ row }: any) => <Tag theme="primary" variant="light">{row.brand}</Tag> },
-            { colKey: 'langs', title: '各语言译法', minWidth: 480, cell: ({ row }: any) => (
+            { colKey: 'brand', title: t('bt.colBrand'), width: 160, cell: ({ row }: any) => <Tag theme="primary" variant="light">{row.brand}</Tag> },
+            { colKey: 'langs', title: t('bt.colLangs'), minWidth: 480, cell: ({ row }: any) => (
               <div style={rowStyle}>
                 {BRAND_LANGS.filter(lc => row.langs[lc] !== undefined).map(lc => {
                   const entry = terms.find(t => t.source_text === row.brand && t.target_lang === lc)
@@ -183,12 +185,12 @@ export default function BrandTermsP(_props: Props) {
                     <span key={lc} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#f3f5f9', borderRadius: 5, padding: '2px 8px', fontSize: 12 }}>
                       <span style={{ color: '#889', width: 26 }}>{langLabel(lc, 'zh') || lc}</span>
                       <b style={{ color: '#2f3542' }}>{row.langs[lc]}</b>
-                      {entry && <a style={{ color: '#4a7dff', marginLeft: 2 }} onClick={() => void editLang(row, entry, lc)}>改</a>}
-                      {entry && <a style={{ color: '#d45656', marginLeft: 2 }} onClick={() => void removeEntry(entry.id)}>✕</a>}
+                      {entry && <button type="button" aria-label={t('bt.editShort')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', cursor: 'pointer', color: '#4a7dff', marginInlineStart: 2 }} onClick={() => void editLang(row, entry, lc)}>{t('bt.editShort')}</button>}
+                      {entry && <button type="button" aria-label={t('bt.delEntry')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', cursor: 'pointer', color: '#d45656', marginInlineStart: 2 }} onClick={() => void removeEntry(entry.id)}>✕</button>}
                     </span>
                   )
                 })}
-                <a style={{ color: '#889', fontSize: 12 }} onClick={() => void addSingleLang(row.brand)}>+补语言</a>
+                <button type="button" aria-label={t('bt.addLang')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', cursor: 'pointer', color: '#889', fontSize: 12 }} onClick={() => void addSingleLang(row.brand)}>{t('bt.addLang')}</button>
               </div>
             ) },
           ] as never} />

@@ -11,8 +11,10 @@
 //
 // 幂等：已存在向量也会覆盖重写，可重复执行；支持 -batch 分批、-workers 并发嵌入、-limit 限量。
 // 用法：
-//   go run ./cmd/rebuild-kb-index
-//   DB_DRIVER=postgres DB_DSN=postgres://... go run ./cmd/rebuild-kb-index -batch 256 -workers 4
+//
+//	go run ./cmd/rebuild-kb-index
+//	DB_DRIVER=postgres DB_DSN=postgres://... go run ./cmd/rebuild-kb-index -batch 256 -workers 4
+//
 // =============================================
 package main
 

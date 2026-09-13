@@ -18,12 +18,12 @@ var (
 
 // HealthResult 依赖健康检查结果
 type HealthResult struct {
-	PythonAvailable   bool   // Python 解释器是否可用
-	Fpdf2Available    bool   // fpdf2 库是否可导入
-	Pdf2docxAvaliable bool   // pdf2docx 库是否可导入
-	LibreOfficeAvail  bool   // LibreOffice 是否可用
-	PythonPath        string // Python 解释器路径
-	LibreOfficePath   string // LibreOffice 路径
+	PythonAvailable   bool     // Python 解释器是否可用
+	Fpdf2Available    bool     // fpdf2 库是否可导入
+	Pdf2docxAvaliable bool     // pdf2docx 库是否可导入
+	LibreOfficeAvail  bool     // LibreOffice 是否可用
+	PythonPath        string   // Python 解释器路径
+	LibreOfficePath   string   // LibreOffice 路径
 	Warnings          []string // 告警信息
 }
 

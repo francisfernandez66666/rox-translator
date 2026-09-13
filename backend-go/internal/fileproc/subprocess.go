@@ -105,7 +105,7 @@ func runSubprocess(ctx context.Context, timeout time.Duration, bin string, args 
 		cmd.Cancel = func() error {
 			if p := cmd.Process; p != nil {
 				_ = syscall.Kill(-p.Pid, syscall.SIGKILL) // 杀整组
-				RecordSigkill()                            // 记录 SIGKILL
+				RecordSigkill()                           // 记录 SIGKILL
 			}
 			return nil // 返回 nil 让 WaitDelay 继续排空管道
 		}

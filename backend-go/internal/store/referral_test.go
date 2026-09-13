@@ -4,6 +4,8 @@ package store
 
 import (
 	"testing"
+
+	"translator/internal/db"
 )
 
 // TestReferralFlow 全链路：建邀请人/被邀人 → 首绑绑定 → 体验叠加（重复调用不叠加奖励行）→
@@ -36,11 +38,11 @@ func TestReferralFlow(t *testing.T) {
 		t.Fatalf("已绑定的被邀人不应被二次绑定")
 	}
 	// 体验叠加：+10万/+14天，写入 trial_stack 奖励
-	if err := s.GrantTrialStack(u1.ID, 1, u2.ID, 100000, 14); err != nil {
+	if err := s.GrantTrialStack(u1.ID, 1, u2.ID, 100000, 14, 0); err != nil {
 		t.Fatalf("GrantTrialStack 失败: %v", err)
 	}
 	// 同对去重：重复发放无副作用（仍只有一条 trial_stack）
-	_ = s.GrantTrialStack(u1.ID, 1, u2.ID, 100000, 14)
+	_ = s.GrantTrialStack(u1.ID, 1, u2.ID, 100000, 14, 0)
 	if g := s.SumActiveGrants(1); g != 100000 {
 		t.Fatalf("体验叠加台账应为 100000，实际 %d", g)
 	}
@@ -195,7 +197,7 @@ func TestReferralOneidDualUnique(t *testing.T) {
 	if _, _, ok := st.BindReferral(a.ID, 1, codeX); !ok {
 		t.Fatal("A 首绑应成功")
 	}
-	if err := st.GrantTrialStack(x.ID, 1, a.ID, 300000, 14); err != nil {
+	if err := st.GrantTrialStack(x.ID, 1, a.ID, 300000, 14, 0); err != nil {
 		t.Fatalf("首次体验叠加: %v", err)
 	}
 	first := st.SumActiveGrants(1)
@@ -214,10 +216,49 @@ func TestReferralOneidDualUnique(t *testing.T) {
 	if _, _, ok := st.BindReferral(b.ID, 1, codeY); !ok {
 		t.Fatal("B 首绑应成功（绑定与奖励分离）")
 	}
-	if err := st.GrantTrialStack(y.ID, 1, b.ID, 300000, 14); err != nil {
+	if err := st.GrantTrialStack(y.ID, 1, b.ID, 300000, 14, 0); err != nil {
 		t.Fatalf("撞库调用不应报错（静默跳过）: %v", err)
 	}
 	if g := st.SumActiveGrants(1); g != first {
 		t.Fatalf("邮箱撞库必须拒绝发放: %d → %d", first, g)
+	}
+}
+
+// TestC25DailyCapAtomic 日上限在发放事务内原子守卫：触顶笔整体回滚，
+// 不留占用流水（旧实现「先查后发」并发可击穿；且占用失败被吞会焊死补发）。
+func TestC25DailyCapAtomic(t *testing.T) {
+	s := newTestStoreWithTenants(t)
+	inv, err := s.CreateUser(1, "cap_inviter", "x", "上限邀请人", RoleUser, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.EnsureRefCode(inv.ID)
+	var invitees []*User
+	for i := 0; i < 3; i++ {
+		u, e := s.CreateUser(1, "cap_inv"+string(rune('a'+i)), "x", "被邀", RoleUser, 0, 0)
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, _, ok := s.BindReferral(u.ID, 1, s.EnsureRefCode(inv.ID))
+		if !ok {
+			t.Fatalf("首绑失败 %d", i)
+		}
+		invitees = append(invitees, u)
+	}
+	// 上限 1：第一笔成功，第二笔触顶且回滚（referral_rewards 仅 1 行 trial_stack）
+	if err := s.GrantTrialStack(inv.ID, 1, invitees[0].ID, 100000, 14, 1); err != nil {
+		t.Fatalf("首笔应成功: %v", err)
+	}
+	if err := s.GrantTrialStack(inv.ID, 1, invitees[1].ID, 100000, 14, 1); err != ErrReferralCap {
+		t.Fatalf("第二笔应触顶回滚, got %v", err)
+	}
+	var n int64
+	db.QueryRow(s.db, db.CurrentDialect(), "SELECT COUNT(*) FROM referral_rewards WHERE inviter_uid=? AND type='trial_stack'", inv.ID).Scan(&n)
+	if n != 1 {
+		t.Fatalf("触顶笔不应留下占用流水: cnt=%d", n)
+	}
+	// 上限放到 2：第二笔可补发（证明回滚未焊死路径）
+	if err := s.GrantTrialStack(inv.ID, 1, invitees[1].ID, 100000, 14, 2); err != nil {
+		t.Fatalf("放宽上限后应可发放: %v", err)
 	}
 }

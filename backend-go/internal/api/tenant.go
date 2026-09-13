@@ -168,6 +168,10 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 	// 更新品牌定制（含自定义域名/Logo/页脚链接）：仅当请求显式携带品牌字段时才写，
 	// 避免「邀请好友」开关、编辑租户名等只改部分字段的请求把已有品牌清空（品牌有独立保存接口）。
 	if req.BrandName != "" || req.BrandLogo != "" || req.Domain != "" || req.BrandLinks != "" {
+		if msg := validateBrandPayloads(req.BrandLogo, ""); msg != "" { // ★ E15
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
+			return
+		}
 		if err := s.Ten.SetBranding(req.ID, req.BrandName, req.BrandLogo, req.Domain, req.BrandLinks); err != nil {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "品牌保存失败: " + err.Error()})
 			return
@@ -295,17 +299,18 @@ func (s *Server) handleTenantBranding(w http.ResponseWriter, r *http.Request) {
 	s.handleTenantBrandingSet(w, r)
 }
 
-// brandingBaseDomain 品牌基础域名（子域名前缀拼接到此后缀）；可由 system_config(base_domain) 覆盖，缺省 lexicorn.cn。
+// brandingBaseDomain 品牌基础域名（子域名前缀拼接到此后缀）。
+// ★ B11（2026-09-12）：system_config(base_domain) → env BRAND_DOMAIN_SUFFIX → 空（品牌子域解析关闭）。
 func brandingBaseDomain(s *Server) string {
 	if s.Store != nil {
 		if v, e := s.Store.GetConfig("base_domain"); e == nil && v != "" {
 			return v
 		}
 	}
-	return "lexicorn.cn"
+	return brandSuffix()
 }
 
-// tenantPrefixFromHost 从访问 Host 解析租户子域名前缀（如 rox.lexicorn.cn → rox）。
+// tenantPrefixFromHost 从访问 Host 解析租户子域名前缀（如 tenant1.example.com → tenant1）。
 func tenantPrefixFromHost(s *Server, host string) string {
 	if i := strings.Index(host, ":"); i >= 0 {
 		host = host[:i]
@@ -323,18 +328,13 @@ func tenantPrefixFromHost(s *Server, host string) string {
 // resolveDedicatedTenant 从访问 Host 解析「专属域名自助注册」目标租户：
 // 仅当子域前缀命中某租户的品牌子域（domain 列），且该子域不是主站前缀、且非默认平台租户（code≠rox、id≠1）时，
 // 返回该租户 ID；否则返回 0。命中后注册将自动归入该租户，并强制为普通成员（禁止建企业/升管理员）。
-// 说明：主站（如 langcross.lexicorn.cn）始终保留「创建企业」能力，不受专属域名逻辑影响。
+// 说明：主站（如 www.example.com）始终保留「创建企业」能力，不受专属域名逻辑影响。
 func resolveDedicatedTenant(s *Server, r *http.Request) int64 {
 	if s.Ten == nil {
 		return 0
 	}
 	base := brandingBaseDomain(s)
-	primary := "langcross.lexicorn.cn"
-	if s.Store != nil {
-		if v, e := s.Store.GetConfig("primary_host"); e == nil && v != "" {
-			primary = v
-		}
-	}
+	primary := s.primaryHost()
 	host := r.Host
 	if i := strings.Index(host, ":"); i >= 0 {
 		host = host[:i]
@@ -357,7 +357,7 @@ func resolveDedicatedTenant(s *Server, r *http.Request) int64 {
 	if prefix == primaryPrefix {
 		return 0
 	}
-	// 解析目标租户：优先按品牌子域（domain 列）匹配；兜底按租户编码匹配（如默认租户 rox → rox.lexicorn.cn）
+	// 解析目标租户：优先按品牌子域（domain 列）匹配；兜底按租户编码匹配（默认租户 code → code.品牌基础域）
 	t, err := s.Ten.GetByDomain(prefix)
 	if err != nil || t == nil {
 		t, err = s.Ten.GetByCode(prefix)
@@ -526,12 +526,7 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 	// 按访问子域前缀解析专属租户品牌；主站前缀按全局根处理，不套用任何租户品牌
 	if tid <= 0 {
 		if prefix := tenantPrefixFromHost(s, r.Host); prefix != "" {
-			primary := "langcross.lexicorn.cn"
-			if s.Store != nil {
-				if v, e := s.Store.GetConfig("primary_host"); e == nil && v != "" {
-					primary = v
-				}
-			}
+			primary := s.primaryHost()
 			base := brandingBaseDomain(s)
 			primaryPrefix := ""
 			if strings.HasSuffix(primary, "."+base) {
@@ -608,12 +603,12 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 // handleCaddyOnDemandAsk 供 Caddy 的 on_demand_tls「ask 权限模块」调用：
 // Caddy 在为每个未知子域名签发 Let's Encrypt 证书前，会 GET 本接口 ?domain=<host>，
 // 仅当返回 HTTP 200 才允许签发。放行范围：
-//  1. 基础域名本身（apex，如 lexicorn.cn）；
-//  2. 主站点（primary_host，缺省 langcross.lexicorn.cn，可在 system_config 配置）；
+//  1. 基础域名本身（apex，如 example.com）；
+//  2. 主站点（primary_host：system_config 或 BRAND_DOMAIN_SUFFIX 拼装）；
 //  3. 已在「品牌定制」中登记的租户子域前缀（GetByDomain 命中）。
 //
 // 其余子域一律 403，既满足 Caddy 防滥用要求，又避免任意子域耗尽 Let's Encrypt 配额。
-// 租户在后台设置子域前缀后即时生效，无需手动申请证书（配合 DNS 通配符 A 记录 *.lexicorn.cn → 服务器 IP）。
+// 租户在后台设置子域前缀后即时生效，无需手动申请证书（配合 DNS 通配符 A 记录 *.品牌基础域 → 服务器 IP）。
 func (s *Server) handleCaddyOnDemandAsk(w http.ResponseWriter, r *http.Request) {
 	// ★ 整改 R-M6：本接口仅供 Caddy 的 on_demand_tls ask 模块调用，返回 200/403 即会暴露
 	//   哪些租户子域已登记（子域名枚举 oracle）。因此强制来源白名单：仅本机回环（Caddy 同机）
@@ -637,12 +632,7 @@ func (s *Server) handleCaddyOnDemandAsk(w http.ResponseWriter, r *http.Request) 
 		_, _ = w.Write([]byte("ok"))
 		return
 	}
-	primary := "langcross.lexicorn.cn"
-	if s.Store != nil {
-		if v, e := s.Store.GetConfig("primary_host"); e == nil && v != "" {
-			primary = v
-		}
-	}
+	primary := s.primaryHost()
 	if domain == primary {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -726,6 +716,26 @@ func (s *Server) handleFooterLinksSet(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTenantBrandingSet 保存租户品牌（超管：任意租户；租户管理员：仅本租户）。
+// ★ E15：品牌 base64 体积上限——Logo/背景整段 DataURL 写入 tenants/system_config，
+//
+//	不设防会造成行膨胀、全站加载变慢与备份体积失控。上限按解码后 ~300KB / ~800KB 计。
+const (
+	brandLogoMaxLen = 420 * 1024
+	brandHomeBgMax  = 1200 * 1024
+)
+
+// validateBrandPayloads 校验品牌图片 base64 体积上限，返回错误说明（空串=通过）。
+func validateBrandPayloads(logo, homeBg string) string {
+	if len(logo) > brandLogoMaxLen {
+		return "品牌 Logo 过大（base64 约 300KB 上限），请压缩后上传"
+	}
+	if len(homeBg) > brandHomeBgMax {
+		return "首页背景图过大（base64 约 800KB 上限），请压缩后上传"
+	}
+	return ""
+}
+
+// handleTenantBrandingSet POST /api/tenant/branding —— 设置租户品牌 Logo 与首页背景（仅租户管理员）。
 func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
@@ -751,6 +761,10 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		return
+	}
+	if msg := validateBrandPayloads(req.BrandLogo, req.BrandHomeBg); msg != "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
 		return
 	}
 	tid := req.ID

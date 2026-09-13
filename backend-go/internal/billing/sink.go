@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,9 +33,11 @@ type usageRecord struct {
 	TaskType string
 	Provider string
 	Model    string
-	Quantity int64 // 已含对外计费系数（markup）后的计费量
+	Lang     string // ★ C4：目标语种（''=通配定价）
+	Quantity int64  // 已含对外计费系数（markup）后的计费量
 	BizKind  string
 	BizMode  string
+	When     time.Time // ★ B2 口径修正（2026-09-12）：入队时刻=用量实际发生时刻，落账用此时间
 	Abort    func()
 }
 
@@ -55,10 +58,10 @@ type UsageSink struct {
 
 // RecordUsage 进程级入口：把一条实时计量追加到批量缓冲（供 llm.OnUsage 钩子调用）。
 // abort 在余额不足时用于中止整次翻译；可为 nil。
-func RecordUsage(tid, uid int64, taskType, provider, model string, quantity int64, bizKind, bizMode string, abort func()) {
+func RecordUsage(tid, uid int64, taskType, provider, model, lang string, quantity int64, bizKind, bizMode string, abort func()) {
 	DefaultSink.Record(usageRecord{
-		Tid: tid, UID: uid, TaskType: taskType, Provider: provider, Model: model,
-		Quantity: quantity, BizKind: bizKind, BizMode: bizMode, Abort: abort,
+		Tid: tid, UID: uid, TaskType: taskType, Provider: provider, Model: model, Lang: lang,
+		Quantity: quantity, BizKind: bizKind, BizMode: bizMode, When: time.Now(), Abort: abort,
 	})
 }
 
@@ -208,7 +211,8 @@ func (s *UsageSink) flush() {
 		for _, r := range recs {
 			rows = append(rows, store.UsageBatchRow{
 				UserID: r.UID, TaskType: r.TaskType, Provider: r.Provider,
-				Model: r.Model, Quantity: r.Quantity, BizKind: r.BizKind, BizMode: r.BizMode,
+				Model: r.Model, Lang: r.Lang, Quantity: r.Quantity, BizKind: r.BizKind, BizMode: r.BizMode,
+				OccurredAt: r.When.UTC().Format(time.RFC3339), // ★ C22：台账域写点统一 UTC（比较口径同为 UTC）
 			})
 		}
 		var err error
@@ -219,6 +223,22 @@ func (s *UsageSink) flush() {
 		}
 		if err != nil {
 			if errors.Is(err, store.ErrInsufficientBalance) {
+				var owed int64
+				for _, r := range recs {
+					owed += r.Quantity
+				}
+				// ★ A1 误报防线（2026-09-12）：清零双桶是终局动作，执行前必须回读权威余额复核。
+				//   真实剩余 ≥ 本批应扣 → 判定为瞬态误报（锁竞争/瞬时读写偏斜），回插重试而非结算清零；
+				//   复核查询失败 → 按瞬态错误回插，绝不清零。
+				if g, p, terr := s.svc.Store.TenantRemainTotal(tid); terr != nil {
+					log.Printf("[usagesink] flush tenant=%d 欠费复核查询失败，回插重试: %v", tid, terr)
+					failed = append(failed, recs...)
+					continue
+				} else if g+p >= owed {
+					log.Printf("[usagesink] flush tenant=%d 余额不足误报（真实剩余 %d ≥ 应扣 %d），回插重试", tid, g+p, owed)
+					failed = append(failed, recs...)
+					continue
+				}
 				// ★ 欠费结算（2026-09-12 决策，替代原「丢弃计费」fail-open）：
 				//   ① 中止在途任务（保留原语义）；
 				//   ② 双桶余额清零停用（SettleExhausted）——已消耗的 LLM 成本按「扣到归零」结算，
@@ -229,16 +249,30 @@ func (s *UsageSink) flush() {
 						r.Abort()
 					}
 				}
-				var owed int64
-				for _, r := range recs {
-					owed += r.Quantity
-				}
 				if serr := s.svc.Store.SettleExhausted(tid); serr != nil {
 					log.Printf("[usagesink] flush tenant=%d 欠费清零失败: %v", tid, serr)
 				}
+				// ★ C20（2026-09-12）：欠费批次改走 LogUsageBatch——「留痕不扣费」。
+				//   旧实现整批无痕丢弃，已发生的真实 LLM 成本在账本上完全消失，
+				//   对账/风控/申诉均无依据。清零后按日志口径落 ledger（不扣费），
+				//   告警附批次明细供人工追偿/豁免。
+				if lerr := s.svc.Store.LogUsageBatch(tid, rows); lerr != nil {
+					log.Printf("[usagesink] flush tenant=%d 欠费批次留痕失败（成本无痕风险）: %v", tid, lerr)
+				}
+				detail := make([]string, 0, 6)
+				byProv := map[string]int64{}
+				for _, r := range recs {
+					byProv[r.Provider+"/"+r.TaskType] += r.Quantity
+				}
+				for k, v := range byProv {
+					if len(detail) < 5 {
+						detail = append(detail, fmt.Sprintf("%s:%d", k, v))
+					}
+				}
 				_ = s.svc.Store.CreateAlert(tid, "critical", "billing_exhausted",
-					fmt.Sprintf("租户本周期用量 %d token 超出剩余余额：服务已停用，双桶余额已清零（该批用量未落账），充值后从 0 重新计量", owed))
-				log.Printf("[usagesink] flush tenant=%d 余额不足：已中止在途并清零双桶（欠费 %d token 未落账）", tid, owed)
+					fmt.Sprintf("租户本周期用量 %d token 超出剩余余额：服务已停用，双桶余额已清零（该批用量已留痕不扣费：%s，共 %d 笔），充值后从 0 重新计量",
+						owed, strings.Join(detail, " / "), len(recs)))
+				log.Printf("[usagesink] flush tenant=%d 余额不足：已中止在途并清零双桶（欠费 %d token 已留痕）", tid, owed)
 				continue
 			}
 			// 其余错误（如 SQLITE_BUSY/磁盘抖动）：回插缓冲，下一周期重试，避免 fail-open 少计费

@@ -209,7 +209,12 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 func importLoginURL(r *http.Request) string {
 	host := r.Host
 	if host == "" {
-		host = "langcross.lexicorn.cn"
+		// ★ B11：兜底不再代码明文品牌域——取主站配置，未配置退回本地开发地址
+		if h := brandPrimaryHost(); h != "" {
+			host = h
+		} else {
+			host = "127.0.0.1:8787"
+		}
 	}
 	if i := strings.Index(host, ":"); i >= 0 {
 		host = host[:i]

@@ -122,7 +122,7 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 		kEnabled    = "referral_enabled"
 		kReward     = "invite_reward_tokens"
 		kPaid       = "inviter_paid_reward_tokens"
-		kRewardDays = "invite_extend_days" // 注册邀请奖励有效期（天）；register.go 读取，此处暴露给超管
+		kRewardDays = "invite_extend_days"       // 注册邀请奖励有效期（天）；register.go 读取，此处暴露给超管
 		kPaidDays   = "inviter_paid_reward_days" // 付费邀请奖励有效期（天）；0=永久（默认）
 	)
 	get := func(key string) (string, error) { return s.Store.GetConfig(key) }
@@ -190,10 +190,27 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// handleReferralFunnel ★ H9 GET /api/referral/funnel —— 我的 2 级邀请归因漏斗
+// （登录即可；数据仅本人维度）。
+func (s *Server) handleReferralFunnel(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	if u == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
+	f := s.Store.InviteFunnel(u.ID)
+	l2pct := s.Store.ReferralL2Pct()
+	writeJSON(w, 200, map[string]interface{}{
+		"success": true, "funnel": f, "l2_pct": l2pct,
+		"referrals": s.Store.ListReferrals(u.ID),
+	})
+}
+
 // registerReferralRoutes 注册邀请裂变路由。
 func (s *Server) registerReferralRoutes() {
 	s.mux.HandleFunc("/api/referral/my", s.handleReferralMy)
 	s.mux.HandleFunc("/api/referral/qrcode", s.handleReferralQrcode)
+	s.mux.HandleFunc("/api/referral/funnel", s.handleReferralFunnel) // ★ H9 归因看板
 	// ★ 邀请运营参数（仅超管，2026-08-26 U3）
 	s.mux.HandleFunc("/api/admin/referral/config", s.handleAdminReferralConfig)
 }

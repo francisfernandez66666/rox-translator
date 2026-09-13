@@ -18,10 +18,10 @@ import {
   type OrgInfo,
 } from '@/api'
 import { Panel, Field, toastResp, num } from './parts'
-import { fmtNum, fmtTime } from '@/lib/ui'
+import { fmtTime } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { InvitesP } from './panels_a'
-import { t, tpl, useT } from '@/i18n'
+import { t, tpl } from '@/i18n'
 
 type Any = any
 
@@ -192,6 +192,8 @@ export function OrgP() {
       void MessagePlugin.success(tpl('org.userCreated', { name: nu.username }))
       setNu({ username: '', password: '', display_name: '', role: 'user' })
       await loadAll()
+    } catch (e) { // ★ E10：创建用户网络错误可见（旧实现 try/finally 静默）
+      void MessagePlugin.error(e instanceof Error ? e.message : '创建失败')
     } finally { setCreating(false) }
   }
 
@@ -205,6 +207,8 @@ export function OrgP() {
       void MessagePlugin.success(tpl('org.importDone', { ok: r.created || 0, fail: r.failed || 0 }))
       setImportFile(null)
       await loadAll()
+    } catch (e) { // ★ E10
+      void MessagePlugin.error(e instanceof Error ? e.message : '导入失败')
     } finally { setImporting(false) }
   }
 
@@ -454,7 +458,7 @@ export function OrgP() {
             <h3 style={{ margin: '0 0 10px' }}>{tpl('org.addUser', { org: addUserHeading })}</h3>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
               <Input value={String(nu.username || '')} placeholder={t('org.usernamePlaceholder')} onChange={(v) => setNu((n: Any) => ({ ...n, username: v }))} style={{ flex: 1, minWidth: 140 }} />
-              <Input value={String(nu.password || '')} placeholder={t('org.passPlaceholder')} onChange={(v) => setNu((n: Any) => ({ ...n, password: v }))} style={{ flex: 1, minWidth: 140 }} />
+              <Input type="password" autocomplete="new-password" value={String(nu.password || '')} placeholder={t('org.passPlaceholder')} onChange={(v) => setNu((n: Any) => ({ ...n, password: v }))} style={{ flex: 1, minWidth: 140 }} />
               <Input value={String(nu.display_name || '')} placeholder={t('org.displayNamePlaceholder')} onChange={(v) => setNu((n: Any) => ({ ...n, display_name: v }))} style={{ flex: 1, minWidth: 140 }} />
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>

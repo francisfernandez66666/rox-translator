@@ -10,7 +10,7 @@
 #
 # 快速上手：
 #   from translator_sdk import TranslatorClient
-#   cli = TranslatorClient(base_url="https://translator.example.com", api_key="tk_xxx")
+#   cli = TranslatorClient(base_url="https://translator.example.com", api_key="rk_xxx")
 #
 #   # 文本翻译：提交任务 → 自动轮询（15s）→ 返回译文
 #   r = cli.translate_and_wait("蓝牙钥匙已激活", ["en", "ja"])

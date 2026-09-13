@@ -14,17 +14,25 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 )
 
-// officeOrigin Word 加载项（Office Add-in）的固定来源域，用于 CORS 放行与回跳校验。
-const officeOrigin = "https://langcross.lexicorn.cn"
+// officeOrigin ★ B11（2026-09-12）：Word 加载项来源域不再代码明文，
+// 取主站配置（system_config primary_host → env BRAND_DOMAIN_SUFFIX 拼装）。
+// 未配置时返回空串，CORS 精确匹配自然不命中（加载项功能需显式配置后启用）。
+func (s *Server) officeOrigin() string {
+	if h := s.primaryHost(); h != "" {
+		return "https://" + h
+	}
+	return ""
+}
 
 // handleOfficeManifest 返回 Word 加载项侧加载清单。
 func (s *Server) handleOfficeManifest(w http.ResponseWriter, r *http.Request) {
 	// 设置 XML 内容类型
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-	// 返回预定义的 Word 加载项清单
-	fmt.Fprint(w, officeManifestXML)
+	// 返回预定义的 Word 加载项清单（★ B11：origin 占位符按主站配置注入）
+	fmt.Fprint(w, strings.ReplaceAll(officeManifestXML, "__ORIGIN__", s.officeOrigin()))
 }
 
 // handleOfficeTaskPane 返回任务窗格页面（Office.js + 划词翻译 UI）。
@@ -35,7 +43,7 @@ func (s *Server) handleOfficeTaskPane(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, officeTaskPaneHTML)
 }
 
-// officeManifestXML Word 任务窗格清单（SourceLocation 指向本站 taskpane）。
+// officeManifestXML Word 任务窗格清单（SourceLocation 指向本站 taskpane；__ORIGIN__ 占位符运行时替换）。
 const officeManifestXML = `<?xml version="1.0" encoding="UTF-8"?>
 <OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -48,10 +56,10 @@ const officeManifestXML = `<?xml version="1.0" encoding="UTF-8"?>
   <DefaultLocale>zh-CN</DefaultLocale>
   <DisplayName DefaultValue="能言 · 划译"/>
   <Description DefaultValue="选中文字一键翻译：调用企业自建能言，术语与翻译记忆全量生效。"/>
-  <IconUrl DefaultValue="` + officeOrigin + `/favicon.ico"/>
-  <SupportUrl DefaultValue="` + officeOrigin + `/docs/terms"/>
+  <IconUrl DefaultValue="__ORIGIN__/favicon.ico"/>
+  <SupportUrl DefaultValue="__ORIGIN__/docs/terms"/>
   <AppDomains>
-    <AppDomain>` + officeOrigin + `</AppDomain>
+    <AppDomain>__ORIGIN__</AppDomain>
   </AppDomains>
   <Hosts>
     <Host Name="Document"/>
@@ -60,7 +68,7 @@ const officeManifestXML = `<?xml version="1.0" encoding="UTF-8"?>
     <Sets><Set Name="WordApi" MinVersion="1.1"/></Sets>
   </Requirements>
   <DefaultSettings>
-    <SourceLocation DefaultValue="` + officeOrigin + `/office/taskpane.html"/>
+    <SourceLocation DefaultValue="__ORIGIN__/office/taskpane.html"/>
   </DefaultSettings>
   <Permissions>ReadWriteDocument</Permissions>
 </OfficeApp>`

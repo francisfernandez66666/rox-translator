@@ -149,8 +149,28 @@ func TestTaskFactor(t *testing.T) {
 	if p.Task.Enabled == nil || *p.Task.Enabled {
 		t.Fatal("task.enabled=false 应可解析")
 	}
-	if p.Invite.RewardTokens != 200000 {
+	if p.Invite.RewardTokens == nil || *p.Invite.RewardTokens != 200000 { // ★ C32 指针化
 		t.Fatal("task 域非法不应影响其它因子解析")
 	}
 }
 
+// TestC32ExplicitZero 补丁数值字段指针化：缺省继承、显式 0 真实清零。
+func TestC32ExplicitZero(t *testing.T) {
+	base := DefaultEffective()
+	// 缺省：不携带字段 → 继承
+	if got := Merge(base, ParseOps(`{"limits":{}}`)).Limits.MaxQPS; got != base.Limits.MaxQPS {
+		t.Fatalf("缺省字段应继承上层 MaxQPS=%d, got %d", base.Limits.MaxQPS, got)
+	}
+	// 显式 0：清零成功
+	eff := Merge(base, ParseOps(`{"limits":{"max_qps":0},"registration":{"ip_daily_limit":0,"ip_min_interval_sec":0}}`))
+	if eff.Limits.MaxQPS != 0 {
+		t.Fatalf("显式 max_qps=0 应清零, got %d", eff.Limits.MaxQPS)
+	}
+	if eff.Registration.IPDailyLimit != 0 || eff.Registration.IPMinIntervalSec != 0 {
+		t.Fatal("显式 0 应覆盖注册 IP 限额")
+	}
+	// 再缺省：保持已清零状态（不会被默认值复活——0 是显式事实而非缺失）
+	if got := Merge(eff, ParseOps(`{"invite":{"enabled":true}}`)).Limits.MaxQPS; got != 0 {
+		t.Fatalf("合并无关补丁不应复活被清零的限额, got %d", got)
+	}
+}

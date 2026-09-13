@@ -47,6 +47,14 @@
         "responses": { "200": { "description": "文件流（attachment）", "content": { "application/octet-stream": {} } } }
       }
     },
+    "/translate": {
+      "post": { "summary": "同步短文翻译（≤2000 字符，划译插件/编辑器侧边栏；异步长文用 /tasks）", "operationId": "translateSync",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "required": ["text"],
+          "properties": { "text": { "type": "string" }, "target_langs": { "type": "array", "items": { "type": "string" } }, "mode": { "type": "string", "enum": ["fast", "pro"] } }
+        } } } },
+        "responses": { "200": { "content": { "application/json": { "schema": { "type": "object" } } } } } }
+    },
     "/balance": {
       "get": { "summary": "租户余额 token", "operationId": "getBalance", "responses": { "200": { "content": { "application/json": { "schema": { "type": "object", "properties": { "balance_tokens": { "type": "integer" } } } } } } } }
     },
@@ -55,6 +63,15 @@
     },
     "/kb/stats": {
       "get": { "summary": "知识库统计", "operationId": "kbStats", "responses": { "200": { "content": { "application/json": { "schema": { "type": "object" } } } } } }
+    },
+    "/terms": {
+      "get": { "summary": "术语检索（源/目标双向模糊，精确命中优先；划译插件/编辑器侧边栏）", "operationId": "searchTerms",
+        "parameters": [
+          { "name": "q", "in": "query", "required": true, "description": "检索词（≤100 字符）", "schema": { "type": "string" } },
+          { "name": "lang", "in": "query", "required": false, "description": "目标语言代码过滤（可选）", "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "required": false, "description": "返回条数（默认 20，≤50）", "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "content": { "application/json": { "schema": { "type": "object" } } } } } }
     },
     "/keys/rotate": {
       "post": { "summary": "轮换 API Key", "operationId": "rotateKey", "responses": { "200": { "content": { "application/json": { "schema": { "type": "object" } } } } } }

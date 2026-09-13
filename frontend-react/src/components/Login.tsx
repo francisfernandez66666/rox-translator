@@ -171,7 +171,13 @@ export default function Login({ mode, onLogin }: Props) {
   async function doSendCode() {
     if (!form.email.trim()) { void MessagePlugin.warning(t('login.emailPlaceholder')); return }
     if (captchaOn && !captchaTokenRef.current) { void MessagePlugin.warning('请先完成人机验证'); return }
-    const r = await sendEmailCode(form.email.trim(), captchaTokenRef.current || undefined)
+    let r!: Awaited<ReturnType<typeof sendEmailCode>>
+    try {
+      r = await sendEmailCode(form.email.trim(), captchaTokenRef.current || undefined)
+    } catch (e) { // ★ E10：网络/超时错误显式提示（旧实现 unhandled rejection，用户只见无响应）
+      void MessagePlugin.error(e instanceof Error ? e.message : '验证码发送失败')
+      return
+    }
     if (r.success) {
       void MessagePlugin.success(r.noop ? t('pwd.codeNoop') : t('pwd.codeSent'))
       setCooldown(60)
@@ -220,6 +226,8 @@ export default function Login({ mode, onLogin }: Props) {
       if (!r.success) { setRegMsg(r.message || t('register.fail')); return }
       // 注册成功自动登录（行为同 Vue 版）
       await doLogin()
+    } catch (e) { // ★ E10
+      setRegMsg(e instanceof Error ? e.message : String(t('register.fail')))
     } finally { setLoading(false) }
   }
 
@@ -233,6 +241,8 @@ export default function Login({ mode, onLogin }: Props) {
       if (!resp.success) { setForgotMsg(resp.message || '发送失败'); return }
       setForgotSent(true)
       setForgotMsg('验证码已发送到绑定邮箱（未配置邮件时请在服务端日志查看）')
+    } catch (e) { // ★ E10
+      setForgotMsg(e instanceof Error ? e.message : '发送失败')
     } finally { setLoading(false) }
   }
 
@@ -247,6 +257,8 @@ export default function Login({ mode, onLogin }: Props) {
       setPassword(forgot.newPassword)
       closeForgot()
       setError('密码已重置，请使用新密码登录')
+    } catch (e) { // ★ E10
+      setForgotMsg(e instanceof Error ? e.message : '重置失败')
     } finally { setLoading(false) }
   }
 

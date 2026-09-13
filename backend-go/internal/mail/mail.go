@@ -17,15 +17,16 @@ import (
 	"fmt"
 	"log"
 	"net/smtp"
+	"os"
 	"strings"
 )
 
 // Message 邮件消息结构。
 type Message struct {
-	To         string       // 收件人邮箱
-	CC         string       // 抄送邮箱（可选；SMTP 发送时作为 Cc 收件人）
-	Subject    string       // 邮件主题
-	Body       string       // 邮件正文（纯文本）
+	To          string       // 收件人邮箱
+	CC          string       // 抄送邮箱（可选；SMTP 发送时作为 Cc 收件人）
+	Subject     string       // 邮件主题
+	Body        string       // 邮件正文（纯文本）
 	Attachments []Attachment // 附件（可选；存在时以 multipart/mixed 发送）
 }
 
@@ -65,15 +66,23 @@ func NewSender(cfg *Config) Sender {
 
 // ============ Noop 实现（默认） ============
 
-// NoopSender 测试/占位实现：不发送真实邮件，仅打印日志。
+// NoopSender 测试/占位实现：不发送真实邮件，仅打印元信息。
+// ★ B4（2026-09-12）：默认【不再打印正文】——密码重置验证码等敏感内容随正文入日志，
+//
+//	生产漏配 MAIL_ENABLED 即等于把重置码写进 journalctl/云日志。确需本机调试正文时
+//	显式设置 MAIL_NOOP_PRINT_BODY=1（仅限开发）。
 type NoopSender struct{}
 
-// Send 打印消息到日志并返回 nil（保证调用方流程不中断）。
+// Send 打印消息元信息到日志并返回 nil（保证调用方流程不中断）。
 func (s *NoopSender) Send(m *Message) error {
 	if m == nil {
 		return fmt.Errorf("nil 消息")
 	}
-	log.Printf("[MAIL-NOOP] To=%s CC=%s Subject=%s\n%s", m.To, m.CC, m.Subject, m.Body)
+	if os.Getenv("MAIL_NOOP_PRINT_BODY") == "1" { // 仅开发显式开启才带正文
+		log.Printf("[MAIL-NOOP] To=%s Subject=%s\n%s", m.To, m.Subject, m.Body)
+	} else {
+		log.Printf("[MAIL-NOOP] 未启用真实邮件（MAIL_ENABLED≠1），消息仅记录元信息：To=%s Subject=%s", m.To, m.Subject)
+	}
 	return nil
 }
 

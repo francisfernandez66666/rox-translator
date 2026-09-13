@@ -5,15 +5,17 @@
 //       余额/用量展示、停止生成、清空、反馈弹窗。
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Textarea } from 'tdesign-react'
+import { Button, Input, Textarea } from 'tdesign-react'
 import { StopCircleIcon, ClearIcon } from 'tdesign-icons-react'
 import { MessagePlugin } from 'tdesign-react'
 import MessageBubble from './MessageBubble'
 import { FeedbackModalFromMessage } from './modals'
 import { useChat } from '@/hooks/useChat'
-import { myPackage, meContext, request } from '@/api'
+import { myPackage, meContext } from '@/api'
+import { estimateTranslation } from '@/api/translate' // ★ F7：翻译前消耗预估
+import { sentenceRateOf, approxSentencesOf } from '@/lib/quotaCalc' // ★ F11：换算抽纯 // ★ E14：删除死导入 request（无调用点）
 import type { ChatMessage } from '@/types'
-import { useT } from '@/i18n'
+import { useT, t, tpl } from '@/i18n'
 import LangMultiSelect from '@/components/LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
 
@@ -21,142 +23,59 @@ import ModeToggle from '@/components/ModeToggle'
 // 前台工作台（聊天主界面）：消息流、语言选择、文件翻译、双模式与反馈。
 // ========================================
 
-interface LangItem { code: string; name: string; flag?: string }
+// ★ E14：LangItem / SOURCE_LANG_OPTIONS / _LANG_NAME_TO_CODE 死定义移除（语言下拉统一走 LangMultiSelect 数据源）
 
 // ★ 源语言选项（互译方向；auto=自动检测）——用于语言面板顶部的"源语言"选择
-const SOURCE_LANG_OPTIONS = [
-  { code: 'auto', flag: '🤖', labelKey: 'chat.sourceAuto' },
-  { code: 'zh', flag: '🇨🇳', labelKey: 'lang.zh' },
-  { code: 'en', flag: '🇬🇧', labelKey: 'lang.en' },
-  { code: 'zh_hant', flag: '🇹🇼', labelKey: 'lang.zhHant' },
-]
 
 // ★ KB 语言名称/国旗（本地兜底，后端返回后覆盖）——知识库支持的高质量目标语言
 const LANG_OPTIONS: Record<string, { label: string; flag: string }> = {
-  en: { label: '英语', flag: '🇬🇧' },
-  ru: { label: '俄语', flag: '🇷🇺' },
-  ar: { label: '阿拉伯语', flag: '🇸🇦' },
-  es: { label: '西班牙语', flag: '🇪🇸' },
-  pt: { label: '葡萄牙语', flag: '🇵🇹' },
-  fr: { label: '法语', flag: '🇫🇷' },
-  kk: { label: '哈萨克语（哈萨克斯坦）', flag: '🇰🇿' },
-  de: { label: '德语', flag: '🇩🇪' },
-  zh_hant: { label: '繁体中文', flag: '🇹🇼' },
+  en: { label: t('chat.s1'), flag: '🇬🇧' },
+  ru: { label: t('chat.s2'), flag: '🇷🇺' },
+  ar: { label: t('chat.s3'), flag: '🇸🇦' },
+  es: { label: t('chat.s4'), flag: '🇪🇸' },
+  pt: { label: t('chat.s5'), flag: '🇵🇹' },
+  fr: { label: t('chat.s6'), flag: '🇫🇷' },
+  kk: { label: t('chat.s7'), flag: '🇰🇿' },
+  de: { label: t('chat.s8'), flag: '🇩🇪' },
+  zh_hant: { label: t('chat.s9'), flag: '🇹🇼' },
 }
 
 // ★ "其他语言"子选单（非KB语言，AI翻译，直接勾选）——不走知识库的普通 AI 翻译语言
 const OTHER_LANG_OPTIONS: Record<string, { label: string; flag: string }> = {
-  zh: { label: '中文', flag: '🇨🇳' },
-  ja: { label: '日语', flag: '🇯🇵' },
-  ko: { label: '韩语', flag: '🇰🇷' },
-  th: { label: '泰语', flag: '🇹🇭' },
-  vi: { label: '越南语', flag: '🇻🇳' },
-  mn: { label: '蒙语', flag: '🇲🇳' },
-  ms: { label: '马来语', flag: '🇲🇾' },
-  id: { label: '印尼语', flag: '🇮🇩' },
-  it: { label: '意大利语', flag: '🇮🇹' },
-  pl: { label: '波兰语', flag: '🇵🇱' },
-  nl: { label: '荷兰语', flag: '🇳🇱' },
-  sv: { label: '瑞典语', flag: '🇸🇪' },
-  uk: { label: '乌克兰语', flag: '🇺🇦' },
-  tr: { label: '土耳其语', flag: '🇹🇷' },
-  hi: { label: '印地语', flag: '🇮🇳' },
-  fa: { label: '波斯语', flag: '🇮🇷' },
-  he: { label: '希伯来语', flag: '🇮🇱' },
-  el: { label: '希腊语', flag: '🇬🇷' },
-  my: { label: '缅甸语', flag: '🇲🇲' },
-  km: { label: '柬埔寨语', flag: '🇰🇭' },
-  lo: { label: '老挝语', flag: '🇱🇦' },
-  tl: { label: '菲律宾语', flag: '🇵🇭' },
-  gu: { label: '古吉拉特语', flag: '🇮🇳' },
-  ur: { label: '乌尔都语', flag: '🇵🇰' },
-  te: { label: '泰卢固语', flag: '🇮🇳' },
-  mr: { label: '马拉地语', flag: '🇮🇳' },
-  bn: { label: '孟加拉语', flag: '🇧🇩' },
-  ta: { label: '泰米尔语', flag: '🇮🇳' },
-  bo: { label: '藏语', flag: '🇨🇳' },
-  ug: { label: '维吾尔语', flag: '🇨🇳' },
-  yue: { label: '粤语', flag: '🇨🇳' },
+  zh: { label: t('chat.s10'), flag: '🇨🇳' },
+  ja: { label: t('chat.s11'), flag: '🇯🇵' },
+  ko: { label: t('chat.s12'), flag: '🇰🇷' },
+  th: { label: t('chat.s13'), flag: '🇹🇭' },
+  vi: { label: t('chat.s14'), flag: '🇻🇳' },
+  mn: { label: t('chat.s15'), flag: '🇲🇳' },
+  ms: { label: t('chat.s16'), flag: '🇲🇾' },
+  id: { label: t('chat.s17'), flag: '🇮🇩' },
+  it: { label: t('chat.s18'), flag: '🇮🇹' },
+  pl: { label: t('chat.s19'), flag: '🇵🇱' },
+  nl: { label: t('chat.s20'), flag: '🇳🇱' },
+  sv: { label: t('chat.s21'), flag: '🇸🇪' },
+  uk: { label: t('chat.s22'), flag: '🇺🇦' },
+  tr: { label: t('chat.s23'), flag: '🇹🇷' },
+  hi: { label: t('chat.s24'), flag: '🇮🇳' },
+  fa: { label: t('chat.s25'), flag: '🇮🇷' },
+  he: { label: t('chat.s26'), flag: '🇮🇱' },
+  el: { label: t('chat.s27'), flag: '🇬🇷' },
+  my: { label: t('chat.s28'), flag: '🇲🇲' },
+  km: { label: t('chat.s29'), flag: '🇰🇭' },
+  lo: { label: t('chat.s30'), flag: '🇱🇦' },
+  tl: { label: t('chat.s31'), flag: '🇵🇭' },
+  gu: { label: t('chat.s32'), flag: '🇮🇳' },
+  ur: { label: t('chat.s33'), flag: '🇵🇰' },
+  te: { label: t('chat.s34'), flag: '🇮🇳' },
+  mr: { label: t('chat.s35'), flag: '🇮🇳' },
+  bn: { label: t('chat.s36'), flag: '🇧🇩' },
+  ta: { label: t('chat.s37'), flag: '🇮🇳' },
+  bo: { label: t('chat.s38'), flag: '🇨🇳' },
+  ug: { label: t('chat.s39'), flag: '🇨🇳' },
+  yue: { label: t('chat.s40'), flag: '🇨🇳' },
 }
 
 // ★ 语言名→代码的本地映射（常见语言中文名/英文名→ISO代码）——用于自定义语言输入解析
-const _LANG_NAME_TO_CODE: Record<string, string> = {
-  '日语': 'ja', '日本語': 'ja', 'japanese': 'ja', 'ja': 'ja',
-  '韩语': 'ko', '朝鲜语': 'ko', 'korean': 'ko', 'ko': 'ko',
-  '泰语': 'th', 'thai': 'th', 'th': 'th',
-  '越南语': 'vi', 'vietnamese': 'vi', 'vi': 'vi',
-  '蒙语': 'mn', '蒙古语': 'mn', 'mongolian': 'mn', 'mn': 'mn',
-  '马来语': 'ms', 'malay': 'ms', 'ms': 'ms',
-  '印尼语': 'id', '印度尼西亚语': 'id', 'indonesian': 'id', 'id': 'id',
-  '意大利语': 'it', 'italian': 'it', 'it': 'it',
-  '波兰语': 'pl', 'polish': 'pl', 'pl': 'pl',
-  '荷兰语': 'nl', 'dutch': 'nl', 'nl': 'nl',
-  '瑞典语': 'sv', 'swedish': 'sv', 'sv': 'sv',
-  '乌克兰语': 'uk', 'ukrainian': 'uk', 'uk': 'uk',
-  '土耳其语': 'tr', 'turkish': 'tr', 'tr': 'tr',
-  '印地语': 'hi', 'hindi': 'hi', 'hi': 'hi',
-  '波斯语': 'fa', 'iranian': 'fa', 'fa': 'fa',
-  '希伯来语': 'he', 'hebrew': 'he', 'he': 'he',
-  '希腊语': 'el', 'greek': 'el', 'el': 'el',
-  '缅甸语': 'my', 'burmese': 'my', 'my': 'my',
-  '柬埔寨语': 'km', 'khmer': 'km', 'km': 'km',
-  '老挝语': 'lo', 'lao': 'lo', 'lo': 'lo',
-  '僧伽罗语': 'si', 'sinhala': 'si', 'si': 'si',
-  '捷克语': 'cs', 'czech': 'cs', 'cs': 'cs',
-  '罗马尼亚语': 'ro', 'romanian': 'ro', 'ro': 'ro',
-  '匈牙利语': 'hu', 'hungarian': 'hu', 'hu': 'hu',
-  '芬兰语': 'fi', 'finnish': 'fi', 'fi': 'fi',
-  '丹麦语': 'da', 'danish': 'da', 'da': 'da',
-  '挪威语': 'no', 'norwegian': 'no', 'no': 'no',
-  '斯洛伐克语': 'sk', 'slovak': 'sk', 'sk': 'sk',
-  '保加利亚语': 'bg', 'bulgarian': 'bg', 'bg': 'bg',
-  '克罗地亚语': 'hr', 'croatian': 'hr', 'hr': 'hr',
-  '塞尔维亚语': 'sr', 'serbian': 'sr', 'sr': 'sr',
-  '斯洛文尼亚语': 'sl', 'slovenian': 'sl', 'sl': 'sl',
-  '立陶宛语': 'lt', 'lithuanian': 'lt', 'lt': 'lt',
-  '拉脱维亚语': 'lv', 'latvian': 'lv', 'lv': 'lv',
-  '爱沙尼亚语': 'et', 'estonian': 'et', 'et': 'et',
-  '冰岛语': 'is', 'icelandic': 'is', 'is': 'is',
-  '加泰罗尼亚语': 'ca', 'catalan': 'ca', 'ca': 'ca',
-  '巴斯克语': 'eu', 'basque': 'eu', 'eu': 'eu',
-  '威尔士语': 'cy', 'welsh': 'cy', 'cy': 'cy',
-  '乌尔都语': 'ur', 'urdu': 'ur', 'ur': 'ur',
-  '孟加拉语': 'bn', 'bengali': 'bn', 'bn': 'bn',
-  '泰米尔语': 'ta', 'tamil': 'ta', 'ta': 'ta',
-  '旁遮普语': 'pa', 'punjabi': 'pa', 'pa': 'pa',
-  '马拉地语': 'mr', 'marathi': 'mr', 'mr': 'mr',
-  '尼泊尔语': 'ne', 'nepali': 'ne', 'ne': 'ne',
-  '斯瓦希里语': 'sw', 'swahili': 'sw', 'sw': 'sw',
-  '阿姆哈拉语': 'am', 'amharic': 'am', 'am': 'am',
-  '祖鲁语': 'zu', 'zulu': 'zu', 'zu': 'zu',
-  '豪萨语': 'ha', 'hausa': 'ha', 'ha': 'ha',
-  '格鲁吉亚语': 'ka', 'georgian': 'ka', 'ka': 'ka',
-  '亚美尼亚语': 'hy', 'armenian': 'hy', 'hy': 'hy',
-  '阿塞拜疆语': 'az', 'azerbaijani': 'az', 'az': 'az',
-  '乌兹别克语': 'uz', 'uzbek': 'uz', 'uz': 'uz',
-  '哈萨克语': 'kk', 'kazakh': 'kk', 'kk': 'kk',
-  '吉尔吉斯语': 'ky', 'kyrgyz': 'ky', 'ky': 'ky',
-  '塔吉克语': 'tg', 'tajik': 'tg', 'tg': 'tg',
-  '土库曼语': 'tk', 'turkmen': 'tk', 'tk': 'tk',
-  '波斯尼亚语': 'bs', 'bosnian': 'bs', 'bs': 'bs',
-  '阿尔巴尼亚语': 'sq', 'albanian': 'sq', 'sq': 'sq',
-  '马其顿语': 'mk', 'macedonian': 'mk', 'mk': 'mk',
-  '黑山语': 'sr-me', 'montenegrin': 'sr-me',
-  '马耳他语': 'mt', 'maltese': 'mt', 'mt': 'mt',
-  '爱尔兰语': 'ga', 'irish': 'ga', 'ga': 'ga',
-  '苏格兰盖尔语': 'gd', 'scottish gaelic': 'gd', 'gd': 'gd',
-  '菲律宾语': 'fil', 'filipino': 'fil', 'fil': 'fil',
-  '爪哇语': 'jv', 'javanese': 'jv', 'jv': 'jv',
-  '信德语': 'sd', 'sindhi': 'sd', 'sd': 'sd',
-  '卡纳达语': 'kn', 'kannada': 'kn', 'kn': 'kn',
-  '马拉雅拉姆语': 'ml', 'malayalam': 'ml', 'ml': 'ml',
-  '泰卢固语': 'te', 'telugu': 'te', 'te': 'te',
-  '奥里亚语': 'or', 'oriya': 'or', 'or': 'or',
-  '古吉拉特语': 'gu', 'gujarati': 'gu', 'gu': 'gu',
-  '库尔德语': 'ku', 'kurdish': 'ku', 'ku': 'ku',
-  '普什图语': 'ps', 'pashto': 'ps', 'ps': 'ps',
-  '达里语': 'fa-af', 'dari': 'fa-af',
-}
 
 // 数字千分位格式化，并处理 undefined/负数，用于余额与用量展示
 function fmtNum(n: number): string {
@@ -177,6 +96,10 @@ export default function ChatWindow() {
 
   // ★ 缩翻（任务7）：勾选+最长字符限制（0=未启用）
   const [condenseOn, setCondenseOn] = useState(false)
+  // ★ F7：输入预估（防抖 600ms）/ 会话搜索 / 导出
+  const [estimate, setEstimate] = useState<{ min: number; max: number; low: boolean } | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQ, setSearchQ] = useState('')
   const [condenseMax, setCondenseMax] = useState(200)
 
   // ★ 余额 / 用量
@@ -203,18 +126,14 @@ export default function ChatWindow() {
         if (typeof r.balance_tokens === 'number') {
           setBalance({
             tokens: r.balance_tokens,
-            approx: r.balance_sentences_approx ?? Math.floor(r.balance_tokens / 500),
+            approx: r.balance_sentences_approx ?? approxSentencesOf(r.balance_tokens),
           })
         }
         const today = typeof r.tokens_used_today === 'number' ? r.tokens_used_today : null
         if (today !== null) {
           // ★ 修复（2026-09-02 前端契约审计）：后端 /api/me/package 无 estimate_rate 字段。
           //   改用余额行「可用 token ÷ ≈句数」反推实际换算率（无余额时兜底 500 句/token）。
-          let rate = 500
-          if (typeof r.balance_tokens === 'number' && r.balance_tokens > 0
-              && typeof r.balance_sentences_approx === 'number' && r.balance_sentences_approx > 0) {
-            rate = r.balance_tokens / r.balance_sentences_approx
-          }
+          const rate = sentenceRateOf(r.balance_tokens, r.balance_sentences_approx)
           setUsage({ today, todaySentences: Math.floor(today / rate) })
         }
         if (r.org_budget && r.org_budget.limit > 0) {
@@ -226,17 +145,12 @@ export default function ChatWindow() {
     } catch { setBalance(null) }
   }, [])
 
-  const loadMe = useCallback(async () => {
-    try {
-      await meContext()
-    } catch { /* 静默 */ }
-  }, [])
 
   // 组件挂载时初次加载余额与用户上下文
   useEffect(() => {
     void loadBalance()
-    void loadMe()
-  }, [loadBalance, loadMe])
+    void meContext().catch(() => { /* 会话有效性由请求层兜底（★ E14：原 loadMe 死变量包装移除 */ })
+  }, [loadBalance])
 
   // 每轮翻译结束（消息数变化）后刷新剩余量
   useEffect(() => {
@@ -254,6 +168,51 @@ export default function ChatWindow() {
     setMode(m)
     localStorage.setItem('translate_mode', m)
   }
+
+  // ★ F7：输入内容变化防抖预估 token 消耗；余额低于上限给出低额提示
+  useEffect(() => {
+    const text = input.trim()
+    if (!text || chat.selectedLangs.length === 0) { setEstimate(null); return }
+    let alive = true
+    const timer = setTimeout(async () => {
+      const r = await estimateTranslation(text, chat.selectedLangs, mode)
+      if (!alive || !r) return
+      setEstimate({ min: r.tokens_min, max: r.tokens_max, low: r.balance_tokens < r.tokens_max })
+    }, 600)
+    return () => { alive = false; clearTimeout(timer) }
+  }, [input, chat.selectedLangs, mode])
+
+  // ★ F7：快捷键 Cmd/Ctrl+K 聚焦搜索框
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSearchOpen(true)
+        setTimeout(() => document.querySelector<HTMLInputElement>('.chat-search input')?.focus(), 50)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // ★ F7：导出当前会话为 Markdown（本地生成，无后端依赖）
+  function exportChat() {
+    const lines: string[] = ['# ' + t('chat.exportTitle'), '']
+    for (const m of chat.messages) {
+      lines.push(`### ${m.role === 'user' ? t('chat.roleQ') : t('chat.roleA')} ${new Date(m.timestamp).toLocaleString()}`)
+      lines.push('', m.content || '', '')
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'chat_' + new Date().toISOString().slice(0, 10) + '.md'
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+  }
+
+  const shownMessages = searchQ.trim()
+    ? chat.messages.filter((m) => (m.content || '').toLowerCase().includes(searchQ.trim().toLowerCase()))
+    : chat.messages
 
   // ---- textarea 自动高度 ----
   // 根据内容自动调整输入框高度（最大 120px），避免长文本溢出
@@ -304,9 +263,22 @@ export default function ChatWindow() {
       {/* 余额 / 用量条 */}
       {(balance || usage || orgBudget) && (
         <div style={{ background: '#e8f0fe', color: 'var(--td-brand-color, #2f47f5)', fontSize: 12, padding: '4px 6%', display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
-          {balance && <span>余额 {fmtNum(balance.tokens)}（≈{fmtNum(balance.approx)} 句）</span>}
-          {usage && <span>今日 {fmtNum(usage.today)} token（≈{fmtNum(usage.todaySentences)} 句）</span>}
+          {balance && <span>{tpl('chat.balanceFmt', { tokens: fmtNum(balance.tokens), sents: fmtNum(balance.approx) })}</span>}
+          {usage && <span>{tpl('chat.todayFmt', { tokens: fmtNum(usage.today), sents: fmtNum(usage.todaySentences) })}</span>}
           {orgBudget && <span>{orgBudget.name} {fmtNum(orgBudget.used)}/{fmtNum(orgBudget.limit)}</span>}
+          {estimate && (
+            <span style={estimate.low ? { color: '#c66900', fontWeight: 600 } : undefined}>
+              {tpl('chat.estFmt', { min: fmtNum(estimate.min), max: fmtNum(estimate.max) })}
+              {estimate.low && ` · ${t('chat.estLow')}`}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* ★ F7：会话内搜索（Cmd/Ctrl+K） */}
+      {searchOpen && (
+        <div className="chat-search" style={{ padding: '6px 6% 0' }}>
+          <Input size="small" clearable autofocus aria-label={t('chat.searchPh')} placeholder={t('chat.searchPh')} value={searchQ} onChange={(v: string) => setSearchQ(v)} />
         </div>
       )}
 
@@ -320,9 +292,12 @@ export default function ChatWindow() {
             </div>
           </div>
         )}
-        {chat.messages.map((m) => (
-          <MessageBubble key={m.id} message={m} onFeedback={setFeedbackMsg} />
-        ))}
+        {shownMessages.map((m, _i) => {
+          const src = m.role === 'assistant'
+            ? [...chat.messages].slice(0, chat.messages.indexOf(m)).reverse().find((x) => x.role === 'user')?.content
+            : undefined
+          return <MessageBubble key={m.id} message={m} source={src} onFeedback={setFeedbackMsg} />
+        })}
       </div>
 
       {/* 输入区 */}
@@ -358,12 +333,14 @@ export default function ChatWindow() {
           </div>
 
           <Textarea
+            dir="auto" // ★ F3：阿/法等 RTL 文本按内容方向渲染
+            aria-label={t2('chat.placeholder')}
             data-testid="translate-input"
             autosize={{ minRows: 1, maxRows: 5 }}
             value={input}
             onChange={(v) => { setInput(v); autoResize() }}
             placeholder={t2('chat.placeholder')}
-            onKeydown={(v, ctx) => {
+            onKeydown={(_v, ctx) => {
               if (ctx.e.key === 'Enter' && !ctx.e.shiftKey) {
                 ctx.e.preventDefault()
                 void handleSend()
@@ -378,17 +355,19 @@ export default function ChatWindow() {
               预留定宽槽位（72px）——勾选只显隐输入框、不改变行宽，避免模式/清空/发送按钮位置跳动 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
             <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
-              <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> 缩翻
+              <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> {t('app.condense')}
             </label>
             <div style={{ width: 72, flexShrink: 0 }}>
               {condenseOn && (
                 <input type="number" min={1} max={10000} value={condenseMax}
                   onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
                   style={{ width: '100%', boxSizing: 'border-box', height: 28, fontSize: 12, border: '1px solid #d8dee6', borderRadius: 6, padding: '0 6px' }}
-                  title="最长字符长度" />
+                  title={t('chat.s41')} />
               )}
             </div>
           </div>
+          <Button variant="text" theme="default" size="medium" title={t('chat.searchPh')} onClick={() => { setSearchOpen((v) => !v); setSearchQ('') }}>🔍</Button>
+          <Button variant="text" theme="default" size="medium" title={t('chat.exportMd')} onClick={exportChat}>⬇</Button>
           <Button variant="text" theme="default" size="medium" icon={<ClearIcon />}
                   onClick={() => { chat.clearMessages() }}>
             {t2('chat.clearChat')}

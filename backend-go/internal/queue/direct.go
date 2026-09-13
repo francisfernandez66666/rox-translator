@@ -46,36 +46,48 @@ func (q *DirectQueue) Enqueue(ctx context.Context, jobType string, payload []byt
 
 // Reserve 原子领取下一个可执行任务：
 // 条件 = status='queued' 或 (status='running' AND 租约已过期)；领取后置 running 并刷新租约。
+// ★ S2/B12 改造（2026-09-12，生产统一 PG）：
+//   - 旧实现「UPDATE ... WHERE id=(SELECT ... 无锁)」在 PG 并发下两 worker 可选同一行，
+//     后者等待行锁释放后仍按旧子查询结果覆盖 leased_by → 双跑双扣费；SQLite 靠写锁侥幸安全。
+//   - 新实现：单事务内 SELECT ... FOR UPDATE SKIP LOCKED 锁住首行（PG 多 worker 互不阻塞、
+//     各取各行）→ 按 id 精确 UPDATE → COMMIT；任务内容随锁定的 SELECT 直接返回，
+//     消除旧「按 leased_by + ORDER BY id DESC 反查」在持有多任务时错拿的隐患。
 func (q *DirectQueue) Reserve(ctx context.Context, workerID string, leaseSec int) (*Job, error) {
+	d := db.CurrentDialect()
 	now := Now()
 	nowStr := now.Format(time.RFC3339)
 	leaseUntil := now.Add(-time.Duration(leaseSec) * time.Second).Format(time.RFC3339)
-	// 单条 UPDATE 完成领取（依赖 SQLite 写锁保证原子性）。
-	// ⚠️ 历史缺陷（2026-08-23 E2E 发现）：占位符 4 个仅绑定 3 个参数（updated_at 被误绑
-	// 租约时间、子查询无参可绑），驱动报参数不足 → Reserve 永远空手 → 工单永久滞留 queued。
-	// 已修正为按序绑定：leased_by / leased_at / updated_at / 租约阈值。
-	res, err := db.ExecContext(ctx, q.db, db.CurrentDialect(), `
-		UPDATE jobs SET status='running', leased_by=?, leased_at=?, attempts=attempts+1, updated_at=?
-		WHERE id = (
-			SELECT id FROM jobs
-			WHERE status='queued' OR (status='running' AND leased_at<=?)
-			ORDER BY id LIMIT 1
-		)`, workerID, nowStr, nowStr, leaseUntil)
+	lock := ""
+	if d.IsPostgres() {
+		lock = " FOR UPDATE SKIP LOCKED"
+	}
+	tx, err := q.db.BeginTx(ctx, nil) // SQLite DSN _txlock=immediate ⇒ BEGIN IMMEDIATE
 	if err != nil {
-		return nil, fmt.Errorf("reserve claim: %w", err)
+		return nil, fmt.Errorf("reserve begin: %w", err)
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return nil, nil // 无可执行任务
-	}
+	defer tx.Rollback()
 	var j Job
 	var payload string // modernc/sqlite TEXT 返回 string；json.RawMessage 直接扫描会报 unsupported Scan
-	err = db.QueryRow(q.db, db.CurrentDialect(), "SELECT "+jobCols+" FROM jobs WHERE leased_by=? AND status='running' ORDER BY id DESC LIMIT 1", workerID).
-		Scan(&j.ID, &j.Type, &payload, &j.Status, &j.Attempts, &j.MaxAttempts, &j.Error)
+	err = db.QueryRow(tx, d,
+		"SELECT "+jobCols+" FROM jobs WHERE status='queued' OR (status='running' AND leased_at<=?) ORDER BY id LIMIT 1"+lock,
+		leaseUntil).Scan(&j.ID, &j.Type, &payload, &j.Status, &j.Attempts, &j.MaxAttempts, &j.Error)
+	if err == sql.ErrNoRows {
+		return nil, nil // 无可执行任务
+	}
 	if err != nil {
 		return nil, fmt.Errorf("reserve scan: %w", err)
 	}
+	if _, err := db.Exec(tx, d,
+		"UPDATE jobs SET status='running', leased_by=?, leased_at=?, attempts=attempts+1, updated_at=? WHERE id=?",
+		workerID, nowStr, nowStr, j.ID); err != nil {
+		return nil, fmt.Errorf("reserve claim: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("reserve commit: %w", err)
+	}
 	j.Payload = json.RawMessage(payload)
+	j.Status = "running"
+	j.Attempts++
 	return &j, nil
 }
 

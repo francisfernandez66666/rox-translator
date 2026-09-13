@@ -11,7 +11,7 @@ import { confirmDialog, promptText } from '@/components/uiDialogs'
 import {
   tenantList, tenantCreate, tenantUpdate, tenantSetStatus, tenantDelete,
   tenantGrantTrial, tenantErase, adminOrderCreate, adminOrderPay,
-  request, authHeaders, API_BASE, getAuthToken,
+  API_BASE, getAuthToken,
   type TenantInfo,
 } from '@/api'
 import { Panel, Field, toastResp, num } from './parts'

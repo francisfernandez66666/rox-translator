@@ -8,11 +8,8 @@ import {
   Button, Table, Input, Select, Space, Tag, Popconfirm, Textarea, MessagePlugin,
 } from 'tdesign-react'
 import { confirmDialog, promptText } from '@/components/uiDialogs'
-import {
-  apiKeys as apiApiKeys, apiKeyCreate, apiKeyStatus, apiKeyRotate, apiKeyDelete,
-  apiKeyLimit, getOpenAPIDocs, saveOpenAPIDocs, previewOpenAPIDocs,
-} from '@/api'
-import { Panel, toastResp } from './parts'
+import { apiKeys as apiApiKeys, apiKeyCreate, apiKeyStatus, apiKeyRotate, apiKeyDelete, apiKeyLimit, getOpenAPIDocs, saveOpenAPIDocs, previewOpenAPIDocs, openAPIDocsUrl } from '@/api'
+import { Panel } from './parts'
 import { maskKey } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { useT } from '@/i18n'
@@ -104,8 +101,12 @@ export function ApiKeysP() {
     try {
       const r: Any = await previewOpenAPIDocs({ lang: docsLang, md: docsMD })
       if (!r.success) { void MessagePlugin.error(r.message || ''); return }
-      const w = window.open('', '_blank')
-      if (w) { w.document.open(); w.document.write(r.html as string); w.document.close() }
+      // ★ E7：document.write 打开的后端 HTML 会继承当前页 origin（后端 XSS 可升格为同源），
+      //   且部分 CSP/沙箱环境下直接失效。改为同源受限的 Blob URL 预览。
+      const url = URL.createObjectURL(new Blob([r.html as string], { type: 'text/html;charset=utf-8' }))
+      const w = window.open(url, '_blank')
+      if (!w) void MessagePlugin.error(t('docsEdit.popupBlocked'))
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
     } catch (e) { void MessagePlugin.error(String(e)) }
   }
   function importDocs(e: any) {
@@ -130,7 +131,7 @@ export function ApiKeysP() {
     await refreshDocsState()
     void MessagePlugin.success(t('docsEdit.resetDone'))
   }
-  function openDocs() { window.open('/openapi/docs', '_blank') }
+  function openDocs() { window.open(openAPIDocsUrl(), '_blank') }
 
   function isKeyOverQuota(k: Any): boolean {
     if (!k.daily_call_limit || Number(k.daily_call_limit) <= 0) return false

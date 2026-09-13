@@ -11,6 +11,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"translator/internal/auth"
 	"translator/internal/billing"
@@ -18,8 +19,19 @@ import (
 	"translator/internal/tenant"
 )
 
-// nonSuperDisplayFactor 非超管用量报表的展示膨胀倍数（仅展示口径，账本真实值不变）。
-const nonSuperDisplayFactor = 5
+// ★ C12（2026-09-12）：非超管用量「展示膨胀倍数」从代码常量（5 倍双口径）改为
+//
+//	system_config usage_display_factor 配置驱动，默认 1.0=关闭——
+//	真实账本与响应口径分叉且响应字段无任何标识，租户据此对账必然失真；
+//	若业务确需对外放大口径，超管显式配置并在响应 display_factor 字段留痕。
+func (s *Server) usageDisplayFactor() float64 {
+	if v, _ := s.Store.GetConfig("usage_display_factor"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 1 {
+			return f
+		}
+	}
+	return 1.0
+}
 
 // ============ 计费/充值/用量 ============
 
@@ -67,10 +79,10 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 			providerUsage = map[string]int64{}
 		}
 	}
-	// ★ 非超管展示口径：token 消耗按展示系数放大（默认 5 倍），账本真实值不变
+	// ★ 非超管展示口径：系数可配（C12，默认 1=不放大）
 	factor := 1.0
 	if !super {
-		factor = nonSuperDisplayFactor
+		factor = s.usageDisplayFactor()
 	}
 	scale := func(n int64) int64 { return int64(float64(n)*factor + 0.5) }
 	// 用量趋势（最近 7 天）
@@ -100,7 +112,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "usage": usage, "total": total,
+		"success": true, "usage": usage, "total": total, "display_factor": factor,
 		"provider_usage": providerUsage, "trend": trend, "ledger": ledger,
 	})
 }
@@ -172,10 +184,16 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 		o.AmountMoney = money
 	}
 	// 自助充值即时到账模式：system_config auto_charge=1 时创建订单即确认到账（内网/测试模式）
+	// ★ C18（2026-09-12）：auto_charge 确认失败不再吞错返回"成功"——
+	//   旧实现用户/面板见到 success 但订单实际 pending（假到账）。
 	if v, _ := s.Store.GetConfig("auto_charge"); v == "1" {
-		if err := s.Store.MarkOrderPaid(o.ID, req.TenantID); err == nil {
-			o.Status = "paid"
+		if perr := s.Store.MarkOrderPaid(o.ID, req.TenantID); perr != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false,
+				"message": "订单已创建但自动入账失败（保留待支付，可人工确认）: " + store.DebriefDBError(perr),
+				"order":   o})
+			return
 		}
+		o.Status = "paid"
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_create", "orders", o.OrderNo)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "order": o})
@@ -285,4 +303,27 @@ func (s *Server) handleInvoiceCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "invoice_create", "billing", inv.InvoiceNo)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "invoice": inv})
+}
+
+// handleInvoiceVoid ★ C16：发票作废（数据层冲红标记，作废后同单可重开）。
+// 税务侧正式冲红属资质遗留项；此处保证台账状态闭环可审计。
+func (s *Server) handleInvoiceVoid(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	var req struct {
+		ID int64 `json:"id"` // 发票 ID
+	}
+	if e := json.NewDecoder(r.Body).Decode(&req); e != nil || req.ID <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请提供发票 id"})
+		return
+	}
+	if err := s.Store.VoidInvoice(req.ID, s.effTenant(r, u)); err != nil {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "invoice_void", "billing", strconv.FormatInt(req.ID, 10))
+	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "发票已作废"})
 }

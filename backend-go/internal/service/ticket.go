@@ -118,7 +118,11 @@ func (s *TicketService) workerLoop(workerID string) {
 			if err != nil {
 				log.Printf("[worker] 领取任务出错 worker=%s err=%v", workerID, err)
 			}
-			time.Sleep(1 * time.Second)
+			select { // ★ D9：关停信号立即退出（ctx 已被 cancel 不可复用，以 stopCh 为准）
+			case <-time.After(1 * time.Second):
+			case <-s.stopCh:
+				return
+			}
 			continue
 		}
 		jctx, jcancel := context.WithTimeout(context.Background(), 25*time.Minute)
@@ -475,7 +479,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	langs := parseLangs(t.TargetLangs)
 	mode := t.Mode // fast | pro（空=pro）
 	// ★ 运营策略引擎（2026-09-05）：注入模式到 ctx，异步工单实时计量按 fast/pro 区分免费/扣费
-	ctx = tenant.WithMode(ctx, mode)
+	ctx = tenant.WithLang(tenant.WithMode(ctx, mode), firstLangOf(langs)) // ★ C4：模式+主目标语种注入
 	// ★ 归属登记用创建者 ID（评审整改 C1）：OpenAPI 任务回退其归属用户
 	ownerUID := t.CreatedBy
 	if ownerUID <= 0 && t.APIUserID > 0 {
@@ -754,6 +758,15 @@ func (s *TicketService) bumpTmHitsFromTranslations(tid int64, translations map[s
 }
 
 // parseLangs 解析逗号分隔语言串。
+// firstLangOf ★ C4：主目标语种（target_langs 首个；空=通配）。
+func firstLangOf(langs []string) string {
+	if len(langs) > 0 {
+		return langs[0]
+	}
+	return ""
+}
+
+// parseLangs 解析逗号分隔的语言列表，忽略空项。
 func parseLangs(s string) []string {
 	var out []string
 	for _, p := range splitComma(s) {

@@ -14,7 +14,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"math"
+	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,13 +38,17 @@ import (
 
 // Engine 翻译引擎（复刻 lib.py translate_one 核心流程）
 type Engine struct {
-	Cfg   *config.Config   // 全局配置（模型/路由/相似度阈值/目录等）
-	LLM   *llm.Client      // LLM 客户端（Chat 对话 / Embed 向量调用）
-	DB    *kb.KBDatabase   // 知识库数据库（精确/模糊/译文对/多租户行查询）
-	Index *kb.Index        // 语义检索索引（向量 + 目标语言过滤 + 租户隔离）
-	Ten   *tenant.Store    // 租户存储（查询租户级模型配置与策略阈值）
-	St    *store.Store     // 平台存储（读取 system_config：模型路由/阶段模型，可选）
-	Evals *evals.Evaluator // 评估器（质量评估用，可选）
+	Cfg *config.Config // 全局配置（模型/路由/相似度阈值/目录等）
+	LLM *llm.Client    // LLM 客户端（Chat 对话 / Embed 向量调用）
+
+	// ★ H6/H7 路由实时统计（竞速慢分位判定 + 动态权重数据源）
+	routeMu    sync.Mutex
+	routeStats map[string]*routeLatency
+	DB         *kb.KBDatabase   // 知识库数据库（精确/模糊/译文对/多租户行查询）
+	Index      *kb.Index        // 语义检索索引（向量 + 目标语言过滤 + 租户隔离）
+	Ten        *tenant.Store    // 租户存储（查询租户级模型配置与策略阈值）
+	St         *store.Store     // 平台存储（读取 system_config：模型路由/阶段模型，可选）
+	Evals      *evals.Evaluator // 评估器（质量评估用，可选）
 
 	cjkCache         map[string]int64            // 兼容旧字段（保留）：默认租户 CJK→rowID 缓存
 	cjkCacheByTenant map[string]map[string]int64 // ★ 2026-08-26 继承链改造：键=「租户|组织链指纹|跨部门开关」→ CJK字符 → row id
@@ -795,7 +803,9 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 	//   文件管线则整单 untranslated 全额告警）。改为轮次化重试队列：每轮并发 3 路处理
 	//   待翻语言，失败者排到队尾（下一轮——其余语言先行，天然退避），每语言最多尝试
 	//   3 次；仍失败记日志并置空，由上层漏译率硬闸/漏翻可见性告警兜底。
-	const maxConcurrent = 3 // 服务器 2 核，3 路并发平衡
+	// ★ D18（2026-09-12）：多语并发可配（LLM_LANG_CONCURRENCY，默认 3=旧值），
+	// 高配机器/高配额供应商可放大，不再硬编码封顶。
+	maxConcurrent := envPositiveInt("LLM_LANG_CONCURRENCY", 3)
 	maxAttempts := e.retryMaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 3 // 每语言最大尝试次数（首轮 + 重试 2 轮）
@@ -843,7 +853,9 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 		wg.Wait()
 		pending = failed // 队尾重排：失败语言等其余语言完成后再试
 		if len(pending) > 0 {
-			time.Sleep(retrySleep) // 轮间退避（规避限流瞬时窗口）
+			if !sleepCtx(ctx, retrySleep) { // ★ D9：上游已取消则不再排下一轮
+				return
+			}
 		}
 	}
 }
@@ -1132,6 +1144,10 @@ func (e *Engine) pickPrimaryRoute() config.ProviderConfig {
 	if len(rs) == 0 {
 		return config.ProviderConfig{}
 	}
+	// ★ H7：动态模式按实时 P95/错误率/token 成本重打分选主
+	if config.C != nil && config.C.DynamicRouting {
+		return e.pickPrimaryRouteDynamic(rs)
+	}
 	best, bestW := rs[0], rs[0].Weight
 	// 线性扫描取权重最高者（权重相等时优先前面的配置）
 	for _, r := range rs[1:] {
@@ -1140,6 +1156,54 @@ func (e *Engine) pickPrimaryRoute() config.ProviderConfig {
 		}
 	}
 	return best
+}
+
+// pickPrimaryRouteDynamic ★ H7 成本/延迟感知动态权重：
+//
+//	score = (Weight+1) × 健康因子(1-min(errRate,0.9)) × 速度因子(最快P95/本路P95，
+//	夹逼[0.4,2]) × 成本因子(最低token均耗/本路，夹逼[0.5,1.5])。
+//	无样本路由三因子均为 1（冷启动等价静态权重）。
+func (e *Engine) pickPrimaryRouteDynamic(rs []config.ProviderConfig) config.ProviderConfig {
+	p95s := make([]float64, len(rs))
+	toks := make([]float64, len(rs))
+	minP95, minTok := 0.0, 0.0
+	for i, r := range rs {
+		_, p95s[i], _ = e.routeHealth(r.APIBase, r.Model)
+		toks[i] = e.routeAvgTokens(r.APIBase, r.Model)
+		if p95s[i] > 0 && (minP95 == 0 || p95s[i] < minP95) {
+			minP95 = p95s[i]
+		}
+		if toks[i] > 0 && (minTok == 0 || toks[i] < minTok) {
+			minTok = toks[i]
+		}
+	}
+	best, bestScore := rs[0], math.Inf(-1)
+	for i, r := range rs {
+		errRate, _, _ := e.routeHealth(r.APIBase, r.Model)
+		score := float64(r.Weight + 1)
+		score *= 1 - math.Min(errRate, 0.9)
+		if p95s[i] > 0 && minP95 > 0 {
+			score *= clampF(minP95/p95s[i], 0.4, 2)
+		}
+		if toks[i] > 0 && minTok > 0 {
+			score *= clampF(minTok/toks[i], 0.5, 1.5)
+		}
+		if score > bestScore {
+			best, bestScore = r, score
+		}
+	}
+	return best
+}
+
+// clampF 数值夹逼。
+func clampF(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // resolveRouteFallbacks 返回按权重降序的备用路由（排除主路由），用于主模型失败时降级
@@ -1196,16 +1260,44 @@ func (e *Engine) SingleLangTranslate(ctx context.Context, zhText, targetLang str
 // → finish_reason=length 或空内容翻倍 max_tokens 递归重试（最多 2 次）
 // → 后处理 + 截断自修复。参数：sourceLang 源语言（默认 "zh"），stage 流程阶段，attempt 当前重试次数。
 // 返回译文内容与错误（失败时返回 ""）。
-func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang, stage string, attempt int) (string, error) {
+func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang, stage string, attempt int) (string, error) {
 	cfg := e.Cfg
+	// ★ D20：外层 sink 是 (lang,delta) 二元；此处套上本次调用的目标语言，
+	//   内层降级/重试逻辑统一看单参 sink（tryMainModel 消费）。
+	lang := targetLang
+	if outer := streamSinkFromCtx(ctx); outer != nil {
+		ctx = withStreamSinkInner(ctx, func(d string) { outer(lang, d) })
+	}
 	instruction := translateInstruction(sourceLang, targetLang, uiLangFromCtx(ctx))
 	// ★ 输出契约（2026-09-09）：要求模型用 <t>…</t> 包裹最终译文，白名单提取根治注释残留
 	instruction += outputContractNote(uiLangFromCtx(ctx))
+	if phGuardFromCtx(ctx) {
+		// ★ D19：掩码保护令牌逐字保留约束（配合 singleLang 的 mask/unmask 闭环）
+		instruction += " 文本中的 ⟦P数字⟧ 形式的保护令牌必须逐字原样保留（连同方括号），不得翻译、删除、合并或改动。"
+	}
 	// ★ 缩翻（任务7）：启用时向指令追加最长字符限制，提示模型精简输出
 	if ml := maxLengthFromCtx(ctx); ml > 0 {
 		instruction += fmt.Sprintf(" 译文总长度（含标点）不得超过 %d 个字符。请在保留原意与关键信息的前提下尽量精简，不要额外解释，只输出译文。", ml)
 	}
 	ref := buildExamplesPrompt(zhText, targetLang, examples)
+
+	// ★ H2 双轨约束解码：供应商声明支持时，把 KB 命中术语随请求以扩展字段注入
+	//   （x_term_constraints），由解码端强制规定译法；不支持的模型此步跳过，
+	//   仍由 H1 闸门（ForceTerms + 违规重翻）事后兜底——两轨都保证术语遵循 100%。
+	if e.LLM != nil && e.LLM.SupportsConstraints && len(examples) > 0 {
+		var cs []llm.TermConstraint
+		for _, r := range examples {
+			if r == nil || r.Zh == "" {
+				continue
+			}
+			tgt := r.Langs[targetLang]
+			if strings.TrimSpace(tgt) == "" || !strings.Contains(zhText, r.Zh) {
+				continue // 仅对真正命中的源术语施加约束
+			}
+			cs = append(cs, llm.TermConstraint{Source: r.Zh, Target: tgt})
+		}
+		ctx = llm.WithTermConstraints(ctx, cs)
+	}
 
 	// 术语参考放入 system 消息（模型不会复述 system 内容），user 只含指令+待翻译文本
 	// ★ Gate L1：语言文化规范注入（approved 安全句按目标语言，60s 缓存）
@@ -1280,7 +1372,16 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 	mainOpen := e.breaker.IsOpen()
 
 	// Hunyuan 主模型首次调用用短超时（熔断开启时不尝试主模型）
-	content, finishReason, err := e.tryMainModel(ctx, cfg, base, key, model, messages, maxTokens, hunyuan, mainOpen)
+	// ★ H6：满足竞速条件（pro/异步非流式 + 双路由）时走主/次对冲通道
+	var content, finishReason string
+	var err error
+	if e.hedgeApplicable(ctx, mainOpen, hunyuan, routeFallbacks) {
+		content, finishReason, err = e.hedgedChat(ctx, cfg, base, key, model, messages, maxTokens, routeFallbacks[0])
+	} else {
+		pStart := time.Now()
+		content, finishReason, err = e.tryMainModel(ctx, cfg, base, key, model, messages, maxTokens, hunyuan, mainOpen)
+		e.observeRoute(base, model, time.Since(pStart), err) // ★ H7：常规主路样本
+	}
 	e.NoteLLMResult(err == nil)
 
 	// 主模型失败 → 记录熔断计数并降级到 fallback 模型
@@ -1291,10 +1392,12 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 		// 优先尝试多供应商路由降级链
 		if len(routeFallbacks) > 0 {
 			for _, r := range routeFallbacks {
-				if isRateLimited(err) {
-					time.Sleep(2 * time.Second)
+				if isRateLimited(err) && !sleepCtx(ctx, 2*time.Second) {
+					return "", ctx.Err() // ★ D9：取消即止损，不再打后续供应商
 				}
+				fStart := time.Now()
 				content, finishReason, err = e.LLM.CallChat(ctx, r.APIBase, r.APIKey, r.Model, messages, maxTokens, false, cfg.FallbackTemp)
+				e.observeRoute(r.APIBase, r.Model, time.Since(fStart), err) // ★ H7：降级链样本
 				if err == nil {
 					model = r.Model
 					base = r.APIBase
@@ -1306,8 +1409,8 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 		if err != nil {
 			fbase, fkey, _ := e.resolveModel(ctx)
 			fallback := cfg.HunyuanFallbackModel
-			if isRateLimited(err) {
-				time.Sleep(2 * time.Second)
+			if isRateLimited(err) && !sleepCtx(ctx, 2*time.Second) {
+				return "", err // ★ D9：取消即返回原始错误，不再重试
 			}
 			content, finishReason, err = e.LLM.CallChat(ctx, fbase, fkey, fallback, messages, maxTokens, false, cfg.FallbackTemp)
 			e.NoteLLMResult(err == nil)
@@ -1330,7 +1433,7 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 		if maxTokens*2 <= 16384 {
 			maxTokens *= 2
 		}
-		return e.singleLang(ctx, zhText, targetLang, examples, sourceLang, stage, attempt+1)
+		return e.singleLangRaw(ctx, zhText, targetLang, examples, sourceLang, stage, attempt+1)
 	}
 
 	content = PostProcessTranslation(content, targetLang)
@@ -1373,6 +1476,13 @@ func (e *Engine) tryMainModel(ctx context.Context, cfg *config.Config, base, key
 	if hunyuan && cfg.HunyuanFirstTimeoutSec > 0 {
 		firstCtx, firstCancel = context.WithTimeout(ctx, time.Duration(cfg.HunyuanFirstTimeoutSec)*time.Second)
 		defer firstCancel()
+	}
+	// ★ D20：带流式 sink 且主模型可用（非熔断、非混元）时优先 token 级流式；
+	//   任何流式失败（端点不兼容/无 usage/网络）透明回退非流式——计费与结果仍由 CallChat 保证。
+	if sink := streamSinkInnerFromCtx(ctx); sink != nil && !hunyuan && !breakerOpen {
+		if content, finish, serr := e.LLM.StreamChat(firstCtx, base, key, model, messages, maxTokens, cfg.FallbackTemp, sink); serr == nil {
+			return content, finish, nil
+		}
 	}
 	return e.LLM.CallChat(firstCtx, base, key, model, messages, maxTokens, hunyuan, cfg.FallbackTemp)
 }
@@ -1541,13 +1651,32 @@ func equalWords(a, b []string) bool {
 
 // isRateLimited 判断错误是否为 429 限流（限流时应 sleep 后重试而非直接判定失败）
 func isRateLimited(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "429")
+	if err == nil {
+		return false
+	}
+	var se *llm.StatusError
+	if errors.As(err, &se) { // ★ D15：类型判定优先，文案匹配降为兼容兜底
+		return se.Code == 429
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "429")
 }
 
 // isNetworkError 判断是否为超时/网络/连接错误（这类错误值得降级重试）
 func isNetworkError(err error) bool {
 	if err == nil {
 		return false
+	}
+	// ★ D15：标准网络错误类型判定（换文案不失灵）；子串匹配保留为兼容兜底。
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return true
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "timeout") ||
@@ -1608,7 +1737,9 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 2) // 初始 2 批并发
+	// ★ D18（2026-09-12）：批量段块并发可配（LLM_BATCH_CONCURRENCY，默认 4）；
+	// 供应商侧另有 acquireChat 全局闸与 429 退避兜底，放大默认不再击穿配额。
+	sem := make(chan struct{}, envPositiveInt("LLM_BATCH_CONCURRENCY", 4))
 
 	// runChunk 翻译一个段块并按 <sN> 标记解析写回 result[start:]；返回命中数。
 	runChunk := func(start int, chunk []string) int {
@@ -1637,8 +1768,8 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 		// 429/网络错误 → 429 先 sleep 5s 避峰，再用 fallback 模型重试一次
 		//（base/key 沿用解析结果，不再回退 cfg.Online* 常量）
 		if err != nil && (isRateLimited(err) || isNetworkError(err)) {
-			if isRateLimited(err) {
-				time.Sleep(5 * time.Second)
+			if isRateLimited(err) && !sleepCtx(ctx, 5*time.Second) {
+				return 0 // ★ D9：批量链取消止损（该块计 0 命中）
 			}
 			content, _, err = e.LLM.CallChat(ctx, base, key, cfg.HunyuanFallbackModel, messages, maxTokens, false, cfg.FallbackTemp)
 		}
@@ -2003,7 +2134,7 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 			if tokens <= 0 || tid <= 0 {
 				continue
 			}
-			billing.RecordUsage(tid, 0, "kb_embed", provider, model, tokens, "kb", "index", nil)
+			billing.RecordUsage(tid, 0, "kb_embed", provider, model, "", tokens, "kb", "index", nil) // C4：嵌入无语种维度
 		}
 	}
 

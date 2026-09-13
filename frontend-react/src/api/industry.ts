@@ -46,7 +46,3 @@ export async function industryDelete(id: number): Promise<AdminResp> {
   return request('/api/admin/industries/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
 
-/** 公开注册行业字典（无需登录；来自 /api/auth/register-config，仅含启用行业） */
-export async function publicIndustries(): Promise<AdminResp & { industries?: Array<{ code: string; name: string }> }> {
-  return request('/api/auth/register-config')
-}

@@ -55,6 +55,7 @@ func Ping() error {
 // ErrDisabled 表示未启用 Redis（降级路径）。
 var ErrDisabled = errDisabled{}
 
+// errDisabled 是 ErrDisabled 哨兵错误的具体类型（Redis 未启用时返回）。
 type errDisabled struct{}
 
 // Error 实现 error 接口：返回未启用 Redis 的降级说明。

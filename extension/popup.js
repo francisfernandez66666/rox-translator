@@ -17,7 +17,7 @@ function originPattern(baseUrl) {
 // 打开时回填已保存配置；API Key 不回显明文，仅提示已保存
 chrome.storage.local.get({ baseUrl: "", apiKey: "", langs: "en", mode: "fast" }, (cfg) => {
   $("baseUrl").value = cfg.baseUrl;
-  $("apiKey").placeholder = cfg.apiKey ? "已保存（留空则不修改）" : "tk_...";
+  $("apiKey").placeholder = cfg.apiKey ? "已保存（留空则不修改）" : "rk_...";
   $("apiKey").value = "";
   $("langs").value = cfg.langs;
   $("mode").value = cfg.mode || "fast";

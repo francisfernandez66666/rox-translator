@@ -55,10 +55,10 @@ func TestNumberEnumeratorExemption(t *testing.T) {
 // TestNumberExtraNonEnumer 译文多出非连续/含小数的数字 → 仍为 error。
 func TestNumberExtraNonEnumer(t *testing.T) {
 	cases := []struct{ src, tgt string }{
-		{"请先验证", "Please verify then proceed with code 42."},  // 单个数 42，非 1..N 连续 → error
-		{"请先验证", "Proceed 1, then 3, then 5."},                 // 1,3,5 不连续 → error
-		{"请先验证", "Proceed 1.5 times."},                          // 小数 1.5 → error
-		{"id 5", "id 5 plus extra 9."},                             // 源有 5，译文多 9（非枚举）→ error
+		{"请先验证", "Please verify then proceed with code 42."}, // 单个数 42，非 1..N 连续 → error
+		{"请先验证", "Proceed 1, then 3, then 5."},               // 1,3,5 不连续 → error
+		{"请先验证", "Proceed 1.5 times."},                       // 小数 1.5 → error
+		{"id 5", "id 5 plus extra 9."},                       // 源有 5，译文多 9（非枚举）→ error
 	}
 	for _, c := range cases {
 		r := Check(c.src, map[string]string{"en": c.tgt})

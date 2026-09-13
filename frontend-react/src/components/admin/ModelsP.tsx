@@ -162,7 +162,7 @@ export function ModelsP() {
 
         <div style={rowMt}>
           <Button onClick={() => void saveModels()}>{t('models.saveModel')}</Button>
-          <Button onClick={() => setRouteForm([...routeForm, { provider: '', api_base: '', api_key: '', model: '', weight: 0 }])}>{t('models.addRoute')}</Button>
+          <Button onClick={() => { if (routePreset) applyRoutePreset(); else setRouteForm([...routeForm, { provider: '', api_base: '', api_key: '', model: '', weight: 0 }]) }}>{t('models.addRoute')}</Button> // ★ E14：预设选择后一键添加即套用（applyRoutePreset 接入调用点）
           <Button theme="success" onClick={() => void saveRoutes()}>{t('models.saveRoutes')}</Button>
         </div>
         <p style={{ fontSize: 12, color: '#667', margin: '8px 0 0' }}>

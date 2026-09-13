@@ -37,7 +37,7 @@ type loginAttempt struct {
 
 // loginLimiter 登录失败限流器（并发安全）
 type loginLimiter struct {
-	st   *store.Store        // 持久化后端（nil 时回退内存）
+	st   *store.Store // 持久化后端（nil 时回退内存）
 	mu   sync.Mutex
 	data map[string]*loginAttempt // key: 客户端 IP（内存回退）
 }
@@ -119,8 +119,9 @@ var trustProxyXFF = os.Getenv("TRUST_PROXY_XFF") == "1"
 // clientIP 提取客户端 IP（去掉端口；无则返回空串）。
 //
 // ★ 反代适配（2026-08-26 全仓评审 C4）：TRUST_PROXY_XFF=1 时取 X-Forwarded-For
-//   第一跳（最左侧客户端地址，由可信反代追加）。此前恒用 RemoteAddr，Caddy 反代后
-//   全体用户共享 127.0.0.1——一人爆破登录/注册，全站连坐进入冷却。
+//
+//	第一跳（最左侧客户端地址，由可信反代追加）。此前恒用 RemoteAddr，Caddy 反代后
+//	全体用户共享 127.0.0.1——一人爆破登录/注册，全站连坐进入冷却。
 func clientIP(r *http.Request) string {
 	if trustProxyXFF {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {

@@ -13,12 +13,14 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+	"translator/internal/ops"
 
 	"translator/internal/auth"
 	"translator/internal/billing"
@@ -119,18 +121,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// ★ 体验额度统一口径（任务2.2）：仅 free_trial_tokens / free_trial_days 为唯一配置键，
 	//   旧键 trial_tokens / trial_sentences 已完全移除；句数镜像由 token÷折算率换算。
 	defaultKey := "" // 新租户默认 API Key（明文，仅注册响应返回一次）
-	trialTokens := int64(300000)
-	trialDays := 14
-	if v, _ := s.Store.GetConfig("free_trial_tokens"); v != "" {
-		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
-			trialTokens = x
-		}
-	}
-	if v, _ := s.Store.GetConfig("free_trial_days"); v != "" {
-		if x, e := strconv.Atoi(v); e == nil && x > 0 {
-			trialDays = x
-		}
-	}
+	// ★ C6（2026-09-12）：默认值单一来源（ops.DefaultEffective），读取点收敛到 trialConfig
+	trialTokens, trialDays := s.trialConfig()
 	// 体验额度句数镜像（展示用）：token ÷ 句↔token 折算率
 	trialSentences := int64(0)
 	if rate := s.Store.TokenSentenceRate(); rate > 0 {
@@ -388,7 +380,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}(strings.TrimSpace(req.Email), req.Username)
 	}
 	// ★ 企业注册提醒（需求 2026-08-27）：企业用户注册成功后，向注册人发送欢迎邮件
-	//   并抄送运营邮箱（抄送地址由邮件模板 enterprise_reg 控制，默认 575160894@qq.com）建联。
+	//   并抄送运营邮箱（抄送地址由 OPS_NOTIFY_EMAIL 环境变量控制，空=不抄送）建联。
 	//   仅「新建企业（非个人、非受邀加入、非专属域名）」触发；个人用户不抄送。
 	if !creatingPersonal && dedicatedTid == 0 && req.Invite == "" && req.Email != "" {
 		// 后台异步发送企业注册欢迎邮件并抄送运营，不阻塞注册响应
@@ -446,7 +438,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				// ★ 整改 A5：单邀请人日发放上限（referral_max_daily_rewards，默认 50 笔）——
 				//   把「换 IP 自邀刷奖励」的损失上限钉死为可配置常数；触顶升 critical 告警拒发。
 				//   配套 U3 总开关（referral_enabled=0 全量停发）构成两级防薅。
-				maxDaily := int64(50)
+				maxDaily := ops.DefaultInviteMaxDailyRewards() // ★ C6 单一来源
 				if v, _ := s.Store.GetConfig("referral_max_daily_rewards"); v != "" {
 					if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
 						maxDaily = x
@@ -455,13 +447,17 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				if inv.MaxDailyRewards > 0 {
 					maxDaily = int64(inv.MaxDailyRewards)
 				}
-				if n := s.Store.CountInviterRewardsToday(inviterUID); n >= maxDaily {
+				// ★ C25：日上限守卫移入发放事务（条件计数器 UPDATE），
+				//   消除旧「COUNT 判断→发放」竞态击穿；触顶以哨兵错误回报并告警。
+				switch gerr := s.Store.GrantTrialStack(inviterUID, inviterTID, nu.ID, refTokens, refDays, maxDaily); {
+				case gerr == nil:
+					s.Store.LogAudit(inviteTenantID, nu.ID, "referral_bind", "user", fmt.Sprintf("受邀绑定邀请人 uid=%d", inviterUID))
+				case errors.Is(gerr, store.ErrReferralCap):
 					s.Store.CreateAlert(inviterTID, "critical", "referral_cap",
 						fmt.Sprintf("邀请人 uid=%d 今日奖励已达上限 %d 笔，本笔(+%d token/%d天)已拒发，请人工核实",
 							inviterUID, maxDaily, refTokens, refDays))
-				} else {
-					_ = s.Store.GrantTrialStack(inviterUID, inviterTID, nu.ID, refTokens, refDays)
-					s.Store.LogAudit(inviteTenantID, nu.ID, "referral_bind", "user", fmt.Sprintf("受邀绑定邀请人 uid=%d", inviterUID))
+				default:
+					log.Printf("[register] 邀请奖励发放失败（占用未落地，可重触发）inviter=%d invitee=%d: %v", inviterUID, nu.ID, gerr)
 				}
 			}
 		}
@@ -515,35 +511,11 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "无效的租户 ID"})
 		return
 	}
-	// 平台根租户（tenant_id=0）：直接发放试用额度，无需 tenants 表记录
-	if req.TenantID == 0 {
-		trialTokens := int64(300000)
-		if v, _ := s.Store.GetConfig("free_trial_tokens"); v != "" {
-			if tv, perr := strconv.ParseInt(v, 10, 64); perr == nil && tv > 0 {
-				trialTokens = tv
-			}
-		}
-		trialDays := 14
-		if v, _ := s.Store.GetConfig("free_trial_days"); v != "" {
-			if d2, perr := strconv.Atoi(v); perr == nil && d2 > 0 {
-				trialDays = d2
-			}
-		}
-		trialSentences := int64(0)
-		if rate := s.Store.TokenSentenceRate(); rate > 0 {
-			trialSentences = trialTokens / rate
-		}
-		_ = s.Store.EnsureBalance(0)
-		if trialTokens > 0 {
-			if gerr := s.Store.CreateQuotaGrant(0, "trial", trialTokens, time.Now().Add(time.Duration(trialDays)*24*time.Hour), "register", 0); gerr != nil {
-				_ = s.Store.Charge(0, trialTokens)
-			}
-			// ★ 影子余额失效重建：发放后立即让计费影子重新 seed，避免「已发放仍提示耗尽」
-			billing.InvalidateShadow(0)
-		}
-		s.Store.LogAuditDiff(1, u.ID, "grant_trial", "tenant", "0",
-			`{"package_code":""}`, `{"package_code":"trial","sentences":`+strconv.FormatInt(trialSentences, 10)+`}`)
-		writeJSON(w, 200, map[string]interface{}{"success": true, "sentence_balance": trialSentences})
+	// ★ C30（2026-09-12）：tid<=0 不再发放体验额度——该桶在 gateUsage 全量豁免计费，
+	//   发放无意义且留雷（历史实现给租户 0 建 trial 台账，永不被消费也永不告警）。
+	//   注册流程的租户都已在建租户环节拿到真实 ID，此处仅防御异常入参。
+	if req.TenantID <= 0 {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "无效的发放对象（平台上下文不参与体验额度）"})
 		return
 	}
 	t, err := s.Ten.GetByID(req.TenantID)
@@ -554,18 +526,8 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 	// ★ 任务2.4：不再幂等拒绝——每次都是「重新发放」叠加一份新体验
 	perms := tenant.ParsePerms(t.Permissions)
 	// 读取发放配置（与注册路径同一套配置键，唯一口径 free_trial_*）
-	trialTokens := int64(300000)
-	if v, _ := s.Store.GetConfig("free_trial_tokens"); v != "" {
-		if tv, perr := strconv.ParseInt(v, 10, 64); perr == nil && tv > 0 {
-			trialTokens = tv
-		}
-	}
-	trialDays := 14
-	if v, _ := s.Store.GetConfig("free_trial_days"); v != "" {
-		if d2, perr := strconv.Atoi(v); perr == nil && d2 > 0 {
-			trialDays = d2
-		}
-	}
+	// ★ C6：与注册路径同一读取点
+	trialTokens, trialDays := s.trialConfig()
 	trialSentences := int64(0)
 	if rate := s.Store.TokenSentenceRate(); rate > 0 {
 		trialSentences = trialTokens / rate

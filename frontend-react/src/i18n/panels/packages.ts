@@ -8,6 +8,9 @@ export const zh: Record<string, string> = {
   'packages.createTitle': '新建商业包',
   'packages.code': '包编码（唯一）',
   'packages.name': '包名称',
+  // ★ E16：本域键（旧实现跨域借用 apikeys.nameRequired / webhooks.confirmDelete）
+  'packages.nameRequired': '请先填写包编码与名称',
+  'packages.confirmDeletePkg': '确认删除该商业包？已产生的订单与发放额度不受影响。',
   'packages.sentences': '句数',
   'packages.price': '价格(元)',
   'packages.duration': '有效期(天)',
@@ -63,6 +66,8 @@ export const en: Record<string, string> = {
   'packages.createTitle': 'Create Package',
   'packages.code': 'Code (unique)',
   'packages.name': 'Name',
+  'packages.nameRequired': 'Package code and name are required',
+  'packages.confirmDeletePkg': 'Delete this package? Existing orders and granted quota remain unaffected.',
   'packages.sentences': 'Sentences',
   'packages.price': 'Price (CNY)',
   'packages.duration': 'Duration (days)',

@@ -12,6 +12,7 @@ package ops
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -49,37 +50,40 @@ type PromoWindow struct {
 }
 
 // PackagePatch 套餐因子
+// ★ C32（2026-09-12）：数值字段指针化——旧「0=未设置」语义导致运营无法
+// 显式把限额/奖励清零（填 0 等于没填，改不回去）。指针 + omitempty：
+// 缺省=继承上层，显式 0=真实清零。
 type PackagePatch struct {
-	TrialTokens         int64 `json:"trial_tokens,omitempty"`
-	TrialDays           int   `json:"trial_days,omitempty"`
-	MonthlyResetEnabled *bool `json:"monthly_reset_enabled,omitempty"`
-	MonthlyResetLimit   int   `json:"monthly_reset_limit,omitempty"`
+	TrialTokens         *int64 `json:"trial_tokens,omitempty"`
+	TrialDays           *int   `json:"trial_days,omitempty"`
+	MonthlyResetEnabled *bool  `json:"monthly_reset_enabled,omitempty"`
+	MonthlyResetLimit   *int   `json:"monthly_reset_limit,omitempty"`
 }
 
 // InvitePatch 邀请奖励因子
 type InvitePatch struct {
-	Enabled          *bool `json:"enabled,omitempty"`
-	RewardTokens     int64 `json:"reward_tokens,omitempty"`
-	RewardDays       int   `json:"reward_days,omitempty"`
-	PaidRewardTokens int64 `json:"paid_reward_tokens,omitempty"`
-	PaidRewardDays   int   `json:"paid_reward_days,omitempty"`
-	MaxDailyRewards  int   `json:"max_daily_rewards,omitempty"`
+	Enabled          *bool  `json:"enabled,omitempty"`
+	RewardTokens     *int64 `json:"reward_tokens,omitempty"` // ★ C32 指针化（显式 0 可清零）
+	RewardDays       *int   `json:"reward_days,omitempty"`
+	PaidRewardTokens *int64 `json:"paid_reward_tokens,omitempty"`
+	PaidRewardDays   *int   `json:"paid_reward_days,omitempty"`
+	MaxDailyRewards  *int   `json:"max_daily_rewards,omitempty"`
 }
 
 // RegistrationPatch 注册因子
 type RegistrationPatch struct {
 	Enabled            *bool `json:"enabled,omitempty"`
-	IPMinIntervalSec   int   `json:"ip_min_interval_sec,omitempty"`
-	IPDailyLimit       int   `json:"ip_daily_limit,omitempty"`
+	IPMinIntervalSec   *int  `json:"ip_min_interval_sec,omitempty"` // ★ C32 指针化
+	IPDailyLimit       *int  `json:"ip_daily_limit,omitempty"`
 	EmailVerifyEnabled *bool `json:"email_verify_enabled,omitempty"`
 }
 
 // LimitsPatch 限额因子
 type LimitsPatch struct {
-	MaxQPS                int   `json:"max_qps,omitempty"`
-	MaxConcurrent         int   `json:"max_concurrent,omitempty"`
-	DefaultMaxDailyChars  int64 `json:"default_max_daily_chars,omitempty"`
-	DefaultMaxDailyTokens int64 `json:"default_max_daily_tokens,omitempty"`
+	MaxQPS                *int   `json:"max_qps,omitempty"` // ★ C32 指针化
+	MaxConcurrent         *int   `json:"max_concurrent,omitempty"`
+	DefaultMaxDailyChars  *int64 `json:"default_max_daily_chars,omitempty"`
+	DefaultMaxDailyTokens *int64 `json:"default_max_daily_tokens,omitempty"`
 }
 
 // PaymentPatch 支付因子（平台级）
@@ -91,7 +95,7 @@ type PaymentPatch struct {
 // ContentPatch 内容/翻译因子
 type ContentPatch struct {
 	CondenseEnabled *bool `json:"condense_enabled,omitempty"`
-	FileMaxMB       int   `json:"file_max_mb,omitempty"`
+	FileMaxMB       *int  `json:"file_max_mb,omitempty"` // ★ C32 指针化
 }
 
 // TaskPatch 任务中心因子：奖励发放总开关（前台任务中心具体任务项仍在其页面维护）。
@@ -112,6 +116,44 @@ type OperationsPolicy struct {
 	Payment      PaymentPatch      `json:"payment,omitempty"`
 	Content      ContentPatch      `json:"content,omitempty"`
 	Task         TaskPatch         `json:"task,omitempty"`
+}
+
+// ============================== 保存校验（★ B6，2026-09-12） ==============================
+
+// ValidateWindowOverrides 校验推广时间窗的覆盖因子。
+// 平台专属开关（计费强制、支付方式）不允许经时间窗夹带：窗口是自动生效/失效的，
+// 绕过显式开关审批流即可临时打开收款/计费通道，构成运营后门。
+// 参数 w: 待校验窗口；返回首个违规定级错误（合规返回 nil）。
+func ValidateWindowOverrides(w PromoWindow) error {
+	if strings.TrimSpace(w.ID) == "" {
+		return fmt.Errorf("时间窗 id 不能为空")
+	}
+	if w.Overrides.Billing.Enforced != nil {
+		return fmt.Errorf("时间窗覆盖禁止设置 billing.enforced（请使用计费开关显式操作）")
+	}
+	if w.Overrides.Payment.Mode != "" || w.Overrides.Payment.AutoCharge != nil {
+		return fmt.Errorf("时间窗覆盖禁止设置 payment.mode/auto_charge（请使用支付设置显式操作）")
+	}
+	if len(w.Overrides.PromoWindows) > 0 {
+		return fmt.Errorf("时间窗覆盖不允许嵌套子窗口")
+	}
+	return nil
+}
+
+// ValidatePolicyWindows 校验策略内全部时间窗：id 非空、全局唯一、逐项通过覆盖禁项检查。
+// 参数 p: 待保存策略。返回首个违规定级错误（合规返回 nil）。
+func ValidatePolicyWindows(p OperationsPolicy) error {
+	seen := map[string]bool{}
+	for _, w := range p.PromoWindows {
+		if err := ValidateWindowOverrides(w); err != nil {
+			return err
+		}
+		if seen[w.ID] {
+			return fmt.Errorf("时间窗 id 重复: %s", w.ID)
+		}
+		seen[w.ID] = true
+	}
+	return nil
 }
 
 // ============================== 最终策略（effective） ==============================
@@ -237,9 +279,40 @@ func ParseOps(raw string) OperationsPolicy {
 	return p
 }
 
+// ============ ★ C6（2026-09-12）默认值单一来源访问器 ============
+// 全系统兜底默认值以 DefaultEffective 内建表为唯一事实源；
+// 任何「读 config 失败回退默认」的代码必须引用本组访问器，禁止再写字面量。
+
+// DefaultTrialTokens 新租户体验 token 数默认值。
+func DefaultTrialTokens() int64 { return DefaultEffective().Package.TrialTokens }
+
+// DefaultTrialDays 体验有效期（天）默认值。
+func DefaultTrialDays() int { return DefaultEffective().Package.TrialDays }
+
+// DefaultMarkupMultiplier 成本均摊系数默认值。
+func DefaultMarkupMultiplier() float64 { return DefaultEffective().MarkupMultiplier }
+
+// DefaultTokensPerSentence 句↔token 换算率默认值（500）。
+// 注：该因子暂未纳入 EffectivePolicy 结构（历史原因），常数在此收口，
+// store.DefaultTokensPerSentence 与本值保持一致由单测锁定。
+const DefaultTokensPerSentence int64 = 500
+
+// DefaultInviteMaxDailyRewards 单邀请人日发放上限默认值。
+func DefaultInviteMaxDailyRewards() int64 { return int64(DefaultEffective().Invite.MaxDailyRewards) }
+
 // Merge 以 base（上层解析结果）为底，用 patch 的非零/非空字段覆盖叠加。
 func Merge(base EffectivePolicy, patch OperationsPolicy) EffectivePolicy {
 	out := base
+	// ★ C8（2026-09-12）：结构体浅拷贝仍共享 ModeRules map——旧实现在此直接
+	//   `out.ModeRules[k]=r` 会改写 base（平台策略缓存/上一级合并结果），
+	//   租户补丁污染平台层、时间窗补丁污染租户层。合并前先克隆。
+	if base.ModeRules != nil {
+		rm := make(map[string]ModeRule, len(base.ModeRules))
+		for k, v := range base.ModeRules {
+			rm[k] = v
+		}
+		out.ModeRules = rm
+	}
 	if patch.TZ != "" {
 		out.TZ = patch.TZ
 	}
@@ -268,59 +341,59 @@ func Merge(base EffectivePolicy, patch OperationsPolicy) EffectivePolicy {
 		}
 		out.ModeRules[k] = r
 	}
-	if patch.Package.TrialTokens != 0 {
-		out.Package.TrialTokens = patch.Package.TrialTokens
+	if patch.Package.TrialTokens != nil {
+		out.Package.TrialTokens = *patch.Package.TrialTokens // ★ C32：显式 0 可清零
 	}
-	if patch.Package.TrialDays != 0 {
-		out.Package.TrialDays = patch.Package.TrialDays
+	if patch.Package.TrialDays != nil {
+		out.Package.TrialDays = *patch.Package.TrialDays
 	}
 	if patch.Package.MonthlyResetEnabled != nil {
 		out.Package.MonthlyResetEnabled = *patch.Package.MonthlyResetEnabled
 	}
-	if patch.Package.MonthlyResetLimit != 0 {
-		out.Package.MonthlyResetLimit = patch.Package.MonthlyResetLimit
+	if patch.Package.MonthlyResetLimit != nil {
+		out.Package.MonthlyResetLimit = *patch.Package.MonthlyResetLimit
 	}
 	if patch.Invite.Enabled != nil {
 		out.Invite.Enabled = *patch.Invite.Enabled
 	}
-	if patch.Invite.RewardTokens != 0 {
-		out.Invite.RewardTokens = patch.Invite.RewardTokens
+	if patch.Invite.RewardTokens != nil {
+		out.Invite.RewardTokens = *patch.Invite.RewardTokens
 	}
-	if patch.Invite.RewardDays != 0 {
-		out.Invite.RewardDays = patch.Invite.RewardDays
+	if patch.Invite.RewardDays != nil {
+		out.Invite.RewardDays = *patch.Invite.RewardDays
 	}
-	if patch.Invite.PaidRewardTokens != 0 {
-		out.Invite.PaidRewardTokens = patch.Invite.PaidRewardTokens
+	if patch.Invite.PaidRewardTokens != nil {
+		out.Invite.PaidRewardTokens = *patch.Invite.PaidRewardTokens
 	}
-	if patch.Invite.PaidRewardDays != 0 {
-		out.Invite.PaidRewardDays = patch.Invite.PaidRewardDays
+	if patch.Invite.PaidRewardDays != nil {
+		out.Invite.PaidRewardDays = *patch.Invite.PaidRewardDays
 	}
-	if patch.Invite.MaxDailyRewards != 0 {
-		out.Invite.MaxDailyRewards = patch.Invite.MaxDailyRewards
+	if patch.Invite.MaxDailyRewards != nil {
+		out.Invite.MaxDailyRewards = *patch.Invite.MaxDailyRewards
 	}
 	if patch.Registration.Enabled != nil {
 		out.Registration.Enabled = *patch.Registration.Enabled
 	}
-	if patch.Registration.IPMinIntervalSec != 0 {
-		out.Registration.IPMinIntervalSec = patch.Registration.IPMinIntervalSec
+	if patch.Registration.IPMinIntervalSec != nil {
+		out.Registration.IPMinIntervalSec = *patch.Registration.IPMinIntervalSec
 	}
-	if patch.Registration.IPDailyLimit != 0 {
-		out.Registration.IPDailyLimit = patch.Registration.IPDailyLimit
+	if patch.Registration.IPDailyLimit != nil {
+		out.Registration.IPDailyLimit = *patch.Registration.IPDailyLimit
 	}
 	if patch.Registration.EmailVerifyEnabled != nil {
 		out.Registration.EmailVerifyEnabled = *patch.Registration.EmailVerifyEnabled
 	}
-	if patch.Limits.MaxQPS != 0 {
-		out.Limits.MaxQPS = patch.Limits.MaxQPS
+	if patch.Limits.MaxQPS != nil {
+		out.Limits.MaxQPS = *patch.Limits.MaxQPS
 	}
-	if patch.Limits.MaxConcurrent != 0 {
-		out.Limits.MaxConcurrent = patch.Limits.MaxConcurrent
+	if patch.Limits.MaxConcurrent != nil {
+		out.Limits.MaxConcurrent = *patch.Limits.MaxConcurrent
 	}
-	if patch.Limits.DefaultMaxDailyChars != 0 {
-		out.Limits.DefaultMaxDailyChars = patch.Limits.DefaultMaxDailyChars
+	if patch.Limits.DefaultMaxDailyChars != nil {
+		out.Limits.DefaultMaxDailyChars = *patch.Limits.DefaultMaxDailyChars
 	}
-	if patch.Limits.DefaultMaxDailyTokens != 0 {
-		out.Limits.DefaultMaxDailyTokens = patch.Limits.DefaultMaxDailyTokens
+	if patch.Limits.DefaultMaxDailyTokens != nil {
+		out.Limits.DefaultMaxDailyTokens = *patch.Limits.DefaultMaxDailyTokens
 	}
 	if patch.Payment.Mode != "" {
 		out.Payment.Mode = patch.Payment.Mode
@@ -331,8 +404,8 @@ func Merge(base EffectivePolicy, patch OperationsPolicy) EffectivePolicy {
 	if patch.Content.CondenseEnabled != nil {
 		out.Content.CondenseEnabled = *patch.Content.CondenseEnabled
 	}
-	if patch.Content.FileMaxMB != 0 {
-		out.Content.FileMaxMB = patch.Content.FileMaxMB
+	if patch.Content.FileMaxMB != nil {
+		out.Content.FileMaxMB = *patch.Content.FileMaxMB
 	}
 	if patch.Task.Enabled != nil {
 		out.Task.Enabled = *patch.Task.Enabled

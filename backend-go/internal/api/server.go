@@ -28,6 +28,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"translator/internal/auth"
@@ -46,17 +48,25 @@ import (
 
 // Server HTTP 服务：聚合平台各子系统并对外提供 HTTP 接口。
 type Server struct {
-	Cfg       *config.Config         // 全局配置（模型/上传目录/策略参数等）
-	Engine    *engine.Engine         // 翻译引擎（文本/文件处理、LLM 调用与熔断）
-	DB        *kb.KBDatabase         // 知识库数据库（-kb 加载，用于匹配与统计）
-	Ten       *tenant.Store          // 租户存储（租户增删改查、权限与模型配置）
-	Store     *store.Store           // 平台存储（用户/工单/审计/计费/API Key 等）
-	Bill      *billing.Service       // 计费服务（QPS/并发限流、每日配额、余额扣减）
-	TicketSvc *service.TicketService // 工单服务（入队/worker/通知）
-	Dist      string                 // 前端 dist 目录（SPA 静态资源根目录）
-	mux       *http.ServeMux         // 路由分发器
+	// ★ C31 运营策略热路径缓存（实例级，防多测试/多实例间串 key）。
+	policyCache    sync.Map
+	policyCacheGen atomic.Int64
+	Cfg            *config.Config         // 全局配置（模型/上传目录/策略参数等）
+	Engine         *engine.Engine         // 翻译引擎（文本/文件处理、LLM 调用与熔断）
+	DB             *kb.KBDatabase         // 知识库数据库（-kb 加载，用于匹配与统计）
+	Ten            *tenant.Store          // 租户存储（租户增删改查、权限与模型配置）
+	Store          *store.Store           // 平台存储（用户/工单/审计/计费/API Key 等）
+	Bill           *billing.Service       // 计费服务（QPS/并发限流、每日配额、余额扣减）
+	TicketSvc      *service.TicketService // 工单服务（入队/worker/通知）
+	Dist           string                 // 前端 dist 目录（SPA 静态资源根目录）
+	mux            *routeMux              // 路由分发器（★ F10：包装 ServeMux 记录注册表供规范自动导出）
 	// 系统级指标收集器（Prometheus /metrics）
 	metrics *Metrics
+
+	// ★ H11 SLO 追踪状态（惰性初始化；watchdog 每分钟采样）
+	slo         *sloState
+	sloLastOK   int64
+	sloLastFail int64
 	// 登录失败限流器（暴力破解防护）
 	loginLimit *loginLimiter
 	// 注册频率护栏（防脚本批量薅试用额度）
@@ -116,7 +126,7 @@ func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist s
 		}
 		s.TicketSvc.StartWorkers(workerCount)
 	}
-	s.mux = http.NewServeMux()
+	s.mux = newRouteMux()
 	s.routes()
 	s.routesSSO()
 	s.routesOpenAPISpec()
@@ -214,6 +224,7 @@ func (s *Server) routesTranslate() {
 	s.mux.HandleFunc("/api/translation/import-kb", s.handleImportKB)
 	s.mux.HandleFunc("/api/translation/import-bitext", s.handleImportBitext)
 	s.mux.HandleFunc("/api/translation/import-tmx", s.handleImportTMX)
+	s.mux.HandleFunc("/api/translation/export-tmx", s.handleExportTMX) // ★ H12 TMX 导出（Trados/memoQ 桥）
 	s.mux.HandleFunc("/api/translation/kb-stats", s.handleKBStats)
 }
 
@@ -300,6 +311,14 @@ func (s *Server) routesAdminKB() {
 	s.mux.HandleFunc("/api/admin/kb-packages/status", s.handleKBPackageStatus)
 	s.mux.HandleFunc("/api/admin/kb-packages/share", s.handleKBPackageShare) // ★ 部门包跨部门共享开关（2026-08-26 KB继承链）
 	s.mux.HandleFunc("/api/admin/kb-index/rebuild", s.handleKBIndexRebuild)
+	s.registerSCIMRoutes()                                       // ★ H10 SCIM 2.0 组织同步（令牌鉴权，路由内部注册）
+	s.mux.HandleFunc("/api/admin/ops/slo", s.handleOpsSLO)       // H7 同域可视化见 /api/admin/ops/routes
+	s.mux.HandleFunc("/api/admin/ops/routes", s.handleOpsRoutes) // ★ H11 SLO/burn rate 状态
+	s.mux.HandleFunc("/api/upload/chunk", s.handleKBUploadChunk) // ★ H5 分片上传
+	s.mux.HandleFunc("/api/upload/status", s.handleKBUploadStatus)
+	s.mux.HandleFunc("/api/upload/merge", s.handleKBUploadMerge)
+	s.mux.HandleFunc("/api/admin/kb-packages/grants", s.handleKBPackGrants) // ★ H3 包级读/写/管理授权
+	s.mux.HandleFunc("/api/admin/kb-packages/mine", s.handleKBPackMine)     // ★ H3 当前用户包授权清单（前端导航门控）
 	s.mux.HandleFunc("/api/admin/kb-packages", s.handleKBPackages)
 	s.mux.HandleFunc("/api/admin/kb-packages/create", s.handleKBPackageCreate)
 	s.mux.HandleFunc("/api/admin/kb-packages/update", s.handleKBPackageUpdate)
@@ -361,6 +380,8 @@ func (s *Server) routesAdminSystem() {
 	s.mux.HandleFunc("/api/system/audit", s.handleSystemAudit)
 	s.mux.HandleFunc("/api/system/alerts", s.handleAlerts)
 	s.mux.HandleFunc("/api/system/alerts/resolve", s.handleAlertResolve)
+	s.mux.HandleFunc("/api/system/alerts/silence", s.handleAlertSilence)     // ★ F9
+	s.mux.HandleFunc("/api/system/alerts/unsilence", s.handleAlertUnsilence) // ★ F9
 }
 
 // routesBilling 注册计费/充值/用量/配额/发票/商业包路由。
@@ -375,15 +396,23 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/billing/config/save", s.handleBillingConfigSave)
 	s.mux.HandleFunc("/api/billing/quota", s.handleTenantQuota)
 	s.mux.HandleFunc("/api/billing/quota/save", s.handleTenantQuotaSave)
+	s.mux.HandleFunc("/api/admin/reconcile", s.handleAdminReconcile) // ★ F9 三表勾稽对账
 	s.mux.HandleFunc("/api/admin/orders/create", s.handleOrderCreate)
 	s.mux.HandleFunc("/api/admin/orders/pay", s.handleOrderPay)
 	s.mux.HandleFunc("/api/admin/orders/refund", s.handleOrderRefund)
+	s.mux.HandleFunc("/api/billing/my/overview", s.handleMyBillingOverview) // ★ F8 自服务账单
+	s.mux.HandleFunc("/api/billing/my/orders", s.handleMyOrders)
+	s.mux.HandleFunc("/api/billing/my/ledger", s.handleMyLedger)
+	s.mux.HandleFunc("/api/billing/my/rewards", s.handleMyRewards)
+	s.mux.HandleFunc("/api/billing/my/invoices", s.handleMyInvoices)
 	s.mux.HandleFunc("/api/billing/invoices", s.handleInvoices)
 	s.mux.HandleFunc("/api/billing/invoices/create", s.handleInvoiceCreate)
+	s.mux.HandleFunc("/api/billing/invoices/void", s.handleInvoiceVoid) // ★ C16
 	// ★ 运营策略引擎（2026-09-05）：计费/模式/套餐/时间窗/邀请等运营参数因子配置
 	s.mux.HandleFunc("/api/admin/ops/policy", s.handleOpsPolicy)
 	s.mux.HandleFunc("/api/admin/ops/policy/save", s.handleOpsPolicySave)
 	s.mux.HandleFunc("/api/admin/ops/policy/window/save", s.handleOpsWindowSave)
+	s.mux.HandleFunc("/api/admin/ops/watchdog/subscription-scan", s.handleWatchdogSubscriptionScan) // ★ G5
 	s.mux.HandleFunc("/api/admin/billing/package/reset", s.handlePackageReset)
 	// 商业包：我的包 / 订阅 / 超管管理
 	s.mux.HandleFunc("/api/me/package", s.handleMyPackage)
@@ -456,6 +485,7 @@ func (s *Server) routesOpenAPI() {
 	s.mux.HandleFunc("/openapi/v1/translate", s.handleOpenAPITranslateSync)     // 同步短文翻译（划译插件/Office taskpane 专用，2026-08-26 断链修复）
 	s.mux.HandleFunc("/openapi/v1/balance", s.handleOpenAPIBalance)             // 余额查询
 	s.mux.HandleFunc("/openapi/v1/kb/stats", s.handleOpenAPIKBStats)
+	s.mux.HandleFunc("/openapi/v1/terms", s.handleOpenAPITerms) // ★ H12 术语检索（划译插件/侧边栏）
 	s.mux.HandleFunc("/openapi/v1/billing/usage", s.handleOpenAPIUsage)
 	s.mux.HandleFunc("/openapi/v1/apikey/rotate", s.handleOpenAPIKeyRotate)
 	s.mux.HandleFunc("/openapi/docs", s.handleOpenAPIDocs)
@@ -537,8 +567,9 @@ func (s *Server) withBodyLimit(next http.Handler) http.Handler {
 // 参数 next: 下一层 Handler。返回: 包装后的 Handler。
 func (s *Server) withMetrics(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 每个请求按路径计数（供 /metrics 输出）
-		s.metrics.countHTTP(r.URL.Path)
+		// ★ H11：按路径计数 + 时延采样（P99 SLI 数据源）
+		start := time.Now()
+		defer func() { s.metrics.observeHTTP(r.URL.Path, float64(time.Since(start).Milliseconds())) }()
 		next.ServeHTTP(w, r)
 	})
 }
@@ -671,6 +702,10 @@ func (s *Server) authUser(r *http.Request) *store.User {
 	if s := auth.EffectiveUserStatus(u.Status, u.DeactivatedAt); s != store.UserActive && s != store.UserDeactivating {
 		return nil
 	}
+	// ★ B2 会话撤销：JWT 携带的版本号与库内不一致（改密/重置后已递增）→ 旧 token 作废
+	if claims.TokenVersion != u.TokenVersion {
+		return nil
+	}
 	return u
 }
 
@@ -707,10 +742,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"skills":  []string{"translation"},
 		// ★ 2026-09-03 云端诊断：暴露核心模块初始化状态——
 		//   任一项 false 即对应模块未就绪（登录/翻译/租户接口会 500「平台存储未初始化」）。
-		"store_ready":   s.Store != nil,
-		"tenant_ready":  s.Ten != nil,
-		"engine_ready":  s.Engine != nil,
-		"kb_ready":      s.DB != nil,
+		"store_ready":  s.Store != nil,
+		"tenant_ready": s.Ten != nil,
+		"engine_ready": s.Engine != nil,
+		"kb_ready":     s.DB != nil,
 	})
 }
 

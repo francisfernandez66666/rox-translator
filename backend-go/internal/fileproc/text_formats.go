@@ -108,6 +108,9 @@ func extractMarkdown(path string, e *Extractor) error {
 		if inCode || t == "" || sepRe.MatchString(t) {
 			continue
 		}
+		// ★ D5：结构前缀（# > - 数字.）不进翻译键——写回侧负责原样粘回，
+		//   模型只见文本节点，标记零破坏。
+		t = mdStructPrefixRe.ReplaceAllString(t, "")
 		t = imgRe.ReplaceAllString(t, "")
 		t = linkRe.ReplaceAllString(t, "$1")
 		t = emphasisRe.ReplaceAllString(t, "$1")
@@ -118,6 +121,74 @@ func extractMarkdown(path string, e *Extractor) error {
 	}
 	return nil
 }
+
+// ApplyAlignedText ★ D5（2026-09-12）：txt/csv/md 按「原文件行序」对齐写回。
+// 旧实现从去重提取表重建全文：空行、重复行、代码围栏、分隔线全部丢失，
+// md 行内标记被剥毁。现在未命中的行原样保留，命中行按提取侧同款规整键匹配，
+// 并做 md 结构保护：
+//   - 围栏（```/~~~）内与分隔线行永不替换；
+//   - 命中行重新粘回结构前缀（#/>/-/数字列表）；
+//   - 整行仅一个链接时输出 [译文](url)，保住 URL；
+//
+// 参数：ext=.txt/.csv/.md；srcPath=原文件；outPath=输出；translations=键→译文。
+func ApplyAlignedText(ext, srcPath, outPath string, translations map[string]string) error {
+	b, err := os.ReadFile(srcPath)
+	if err != nil {
+		return err
+	}
+	nl := "\n"
+	if strings.Contains(string(b), "\r\n") {
+		nl = "\r\n"
+	}
+	lines := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
+	inCode := false
+	md := ext == ".md"
+	for i, raw := range lines {
+		t := strings.TrimSpace(raw)
+		if md && (strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")) {
+			inCode = !inCode // 围栏行与块内容原样保留
+			continue
+		}
+		if t == "" || (md && (inCode || sepRe.MatchString(t))) {
+			continue
+		}
+		pfx := ""
+		body := strings.TrimSpace(raw)
+		if md {
+			pfx = mdStructPrefixRe.FindString(raw) // 含尾部空白，原样粘回
+			body = strings.TrimSpace(strings.TrimPrefix(body, strings.TrimSpace(pfx)))
+		}
+		key := body
+		if md {
+			key = imgRe.ReplaceAllString(key, "")
+			key = linkRe.ReplaceAllString(key, "$1")
+			key = emphasisRe.ReplaceAllString(key, "$1")
+			key = strings.TrimSpace(key)
+		}
+		tr, ok := translations[key]
+		if !ok || tr == "" {
+			continue // ★ 未命中保留原文（旧实现同样保留，但整表重建时该行位置已错乱）
+		}
+		out := strings.TrimSpace(tr)
+		if md {
+			// 整行唯一链接：译文回装进链接保住 URL（键已去标记，直接整行替换会丢地址）
+			if m := singleLinkRe.FindStringSubmatch(body); len(m) == 3 {
+				out = "[" + out + "](" + m[2] + ")"
+			}
+		}
+		if pfx != "" {
+			out = pfx + out
+		}
+		lines[i] = out
+	}
+	return os.WriteFile(outPath, []byte(strings.Join(lines, nl)), 0o644)
+}
+
+// mdStructPrefixRe 行首结构前缀（缩进 + 标题/引用/列表/编号）。
+var mdStructPrefixRe = regexp.MustCompile(`^([ \t]*(?:#{1,6}|>|[-*+]|\d+[.)])[ \t]+)`)
+
+// singleLinkRe 整行单链接：[text](url)
+var singleLinkRe = regexp.MustCompile(`^\[([^\]]*)\]\(([^)]+)\)$`)
 
 // extractJSON 递归收集 JSON 中全部字符串值（键名不入库）。
 func extractJSON(path string, e *Extractor) error {
@@ -192,5 +263,6 @@ func WriteComparisonXlsx(outPath string, sourceTexts []string, translations map[
 
 // cellNameA/cellNameB 第 A/B 列指定行的单元格名（对照表固定两列）。
 func cellNameA(row int) string { return "A" + strconv.Itoa(row) }
+
 // cellNameB 生成第 row 行 B 列的单元格坐标名（xlsx 对照表输出用）。
 func cellNameB(row int) string { return "B" + strconv.Itoa(row) }

@@ -518,9 +518,11 @@ func (idx *Index) GetVec(id int64) []float32 {
 
 // ScopedSearchScope 按 PackScope 可见范围的向量检索（ScopedSearch 的继承链版）。
 // ★ 修复审计 #10：旧实现按「行租户==请求租户」一刀切，宿主在租户1 的共享行业/文化包
-//   永远不可召回——现改为 scope 集合判定：
-//     直接采用域(InChain=true)：本租户的 历史行0/企业包/链内部门包 + 共享行业/文化包
-//     跨部门回退域(InChain=false)：租户开关开时的其他部门共享包（调用方仅可作例句）
+//
+//	永远不可召回——现改为 scope 集合判定：
+//	  直接采用域(InChain=true)：本租户的 历史行0/企业包/链内部门包 + 共享行业/文化包
+//	  跨部门回退域(InChain=false)：租户开关开时的其他部门共享包（调用方仅可作例句）
+//
 // ScopeVisibility 判定某行（rowTenant, pack）对 caller 租户在给定 scope 下是否可见、
 // 以及是否属链内直接采用域（InChain）。供 npz 检索与 pgvector 检索（kb.VectorSearch）
 // 共用，保证两种后端语义一致。

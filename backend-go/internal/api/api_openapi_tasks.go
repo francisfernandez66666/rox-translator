@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"translator/internal/db"
 
 	"translator/internal/billing"
 	"translator/internal/engine"
@@ -544,7 +545,8 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 func (s *Server) ticketExpiry(ticketID int64) (string, bool) {
 	var exp string
 	// 查询工单产物到期时间，空值按未设置处理
-	if err := s.Store.DB().QueryRow("SELECT COALESCE(result_expires_at,'') FROM tickets WHERE id=?", ticketID).Scan(&exp); err != nil || exp == "" {
+	if err := db.QueryRow(s.Store.DB(), db.CurrentDialect(),
+		"SELECT COALESCE(result_expires_at,'') FROM tickets WHERE id=?", ticketID).Scan(&exp); err != nil || exp == "" {
 		return "", false
 	}
 	return exp, true
@@ -660,7 +662,7 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 	}
 	syncCtx = s.Engine.WithUsageRecorder(syncCtx)
 	syncCtx = llm.WithInteractive(syncCtx)
-	syncCtx = tenant.WithMode(syncCtx, mode)
+	syncCtx = tenant.WithLang(tenant.WithMode(syncCtx, mode), tenant.LangFromOptions(options))
 	res := s.Engine.HandleText(syncCtx, req.Text, options, nil)
 	if res.Error != "" {
 		s.metrics.countTranslate("text", false)

@@ -4,6 +4,7 @@
 //   - 标准 OIDC：经 issuer 的 /.well-known/openid-configuration 发现端点（懒加载+缓存）。
 //   - 飞书 / 钉钉：手动指定授权/令牌/用户信息端点（OAuth2 授权码流程）。
 //   - Manager：按 name 索引各 IdP，供 api 层路由 /api/sso/login、/api/sso/callback 使用。
+//
 // 安全：state 用 crypto/rand 生成并校验防 CSRF；token 交换走 TLS；不落 IdP 密钥到日志。
 // 离线环境无 IdP 无法端到端验证，但 AuthURL 构造与配置解析可单测；Exchange 仅依赖标准 HTTP。
 package sso
@@ -319,9 +320,9 @@ func (p *oauth2Provider) exchangeFeishu(ctx context.Context, code string) (*User
 	var r struct {
 		Data struct {
 			AccessToken string `json:"access_token"`
-			OpenID     string `json:"open_id"`
-			Name       string `json:"name"`
-			Email      string `json:"email"`
+			OpenID      string `json:"open_id"`
+			Name        string `json:"name"`
+			Email       string `json:"email"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil {

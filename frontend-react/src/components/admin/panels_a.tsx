@@ -8,7 +8,7 @@ import {
 } from 'tdesign-react'
 import { promptText } from '@/components/uiDialogs'
 import {
-  systemHealth, systemAudit, systemAlerts, alertResolve,
+  systemHealth, systemAudit, systemAlerts, alertResolve, alertSilence, alertUnsilence,
   adminUsers, adminUserCreate, adminUserUpdate, adminUserDelete, adminUserResetPassword,
   usageMe, usageOrg, usageCost, inviteCodes, inviteCodeCreate,
   orgList, adminPackageSettings, adminPackageSettingsSave,
@@ -209,11 +209,6 @@ export function UsersP() {
     return parent ? `${orgPath(list, parent)} / ${o.name}` : o.name
   }
 
-  /** 获取组织显示名（根组织显示"根组织"，其他显示组织名） */
-  function userOrgName(orgId: number): string {
-    if (!orgId) return t('users.rootOrg')
-    return orgs.find((o) => o.id === orgId)?.name || tpl('users.orgHash', { id: orgId })
-  }
 
   /** 级联：可选部门随超管所选租户过滤；角色选项随部门层级收窄 */
   const cascadeOrgs = useMemo(() => {
@@ -310,7 +305,7 @@ export function UsersP() {
       <Dialog visible={dlg} onClose={() => setDlg(false)} header={t('users.create')} width={460}
         onConfirm={async () => { await createUser() }}>
         <Field label={t('users.usernamePlaceholder')}><Input value={String(uForm.username || '')} onChange={(v) => setUForm((p: Any) => ({ ...p, username: v }))} /></Field>
-        <Field label={t('users.passPlaceholder')}><Input value={String(uForm.password || '')} onChange={(v) => setUForm((p: Any) => ({ ...p, password: v }))} /></Field>
+        <Field label={t('users.passPlaceholder')}><Input type="password" autocomplete="new-password" value={String(uForm.password || '')} onChange={(v) => setUForm((p: Any) => ({ ...p, password: v }))} /></Field>
         <Field label={t('users.displayNamePlaceholder')}><Input value={String(uForm.display_name || '')} onChange={(v) => setUForm((p: Any) => ({ ...p, display_name: v }))} /></Field>
         {/* 超管可选择租户 */}
         {isSuper && (
@@ -342,6 +337,12 @@ export function AlertsP() {
   const [rows, setRows] = useState<Any[]>([])
   // 告警状态筛选
   const [status, setStatus] = useState('')
+  // ★ F9：级别/类型客户端筛选 + 静音管理
+  const [fLevel, setFLevel] = useState('')
+  const [fKind, setFKind] = useState('')
+  const [silences, setSilences] = useState<{ tenant_id: number; kind: string; until: string }[]>([])
+  const [silDlg, setSilDlg] = useState<{ kind: string; tenant_id: number } | null>(null)
+  const [silMin, setSilMin] = useState('720')
   // 注册与触达配置表单（布尔以 '0'/'1' 字符串存储以兼容后端）
   const [regCfg, setRegCfg] = useState<Record<string, string | boolean>>({
     email_verify_enabled: '0', email_notify_enabled: '0',
@@ -352,7 +353,10 @@ export function AlertsP() {
   /** 加载告警列表 */
   const load = useCallback(async () => {
     const r = await systemAlerts(status || undefined)
-    if (r.success) setRows(((r as unknown as { alerts?: Any[] }).alerts) || [])
+    if (r.success) {
+      setRows(((r as unknown as { alerts?: Any[] }).alerts) || [])
+      setSilences(((r as unknown as { silences?: { tenant_id: number; kind: string; until: string }[] }).silences) || [])
+    }
   }, [status])
 
   /** 加载注册与触达配置 */
@@ -377,6 +381,23 @@ export function AlertsP() {
   async function resolveAlert(a: Any) {
     await alertResolve(Number(a.id))
     await load()
+  }
+
+  // ★ F9：级别/类型可选项（从当前列表数据推导）与过滤视图
+  const levelOpts = Array.from(new Set(rows.map((r) => String(r.level)).filter(Boolean)))
+  const kindOpts = Array.from(new Set(rows.map((r) => String(r.kind)).filter(Boolean)))
+  const viewRows = rows.filter((r) => (!fLevel || r.level === fLevel) && (!fKind || r.kind === fKind))
+
+  /** 静音（弹层选择时长）/解除静音 */
+  async function doSilence() {
+    if (!silDlg) return
+    if (toastResp(await alertSilence(Number(silDlg.tenant_id), silDlg.kind, Number(silMin) || 720), t('alerts.silActive'))) {
+      setSilDlg(null)
+      await load()
+    }
+  }
+  async function doUnsilence(s: { tenant_id: number; kind: string }) {
+    if (await alertUnsilence(Number(s.tenant_id), s.kind)) await load()
   }
 
   /** Switch 变动时统一把布尔转 '1'/'0' */
@@ -404,10 +425,25 @@ export function AlertsP() {
       extra={<Space size={8}>
         <Select value={status} onChange={(v) => setStatus(v as string)} style={{ width: 120 }}
           options={[{ label: t('alerts.all'), value: '' }, { label: t('alerts.open'), value: 'open' }, { label: t('alerts.resolved'), value: 'resolved' }]} />
+        <Select value={fLevel} onChange={(v) => setFLevel(v as string)} style={{ width: 110 }}
+          options={[{ label: `${t('alerts.fLevel')}·${t('alerts.all')}`, value: '' }, ...levelOpts.map((l) => ({ label: l, value: l }))]} />
+        <Select value={fKind} onChange={(v) => setFKind(v as string)} style={{ width: 130 }}
+          options={[{ label: `${t('alerts.fKind')}·${t('alerts.all')}`, value: '' }, ...kindOpts.map((k) => ({ label: k, value: k }))]} />
         <Button onClick={load}>{t('alerts.refresh')}</Button>
       </Space>}>
       {/* 告警列表表格 */}
-      <Table rowKey="id" size="small" data={rows}
+      {/* ★ F9：生效中的静音规则条 */}
+      {silences.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+          {silences.map((sv) => (
+            <Tag key={`${sv.tenant_id}:${sv.kind}`} variant="light" title={t('alerts.silUntil').replace('{t}', fmtTime(sv.until))}>
+              {sv.kind}@#{sv.tenant_id} · {t('alerts.silUntil').replace('{t}', fmtTime(sv.until))}{' '}
+              <Button size="small" variant="text" onClick={() => void doUnsilence(sv)}>{t('alerts.unsilence')}</Button>
+            </Tag>
+          ))}
+        </div>
+      )}
+      <Table rowKey="id" size="small" data={viewRows}
         columns={[
           { colKey: 'level', title: t('alerts.colLevel'), width: 90, cell: ({ row }: any) => <Tag theme={row.level === 'critical' ? 'danger' : row.level === 'warning' ? 'warning' : 'default'}>{row.level}</Tag> },
           { colKey: 'kind', title: t('alerts.colKind'), width: 130 },
@@ -415,12 +451,30 @@ export function AlertsP() {
           { colKey: 'message', title: t('alerts.colContent'), ellipsis: true },
           { colKey: 'status', title: t('alerts.colStatus'), width: 90, cell: ({ row }: any) => row.status === 'open' ? t('alerts.open') : t('alerts.resolved') },
           { colKey: 'created_at', title: t('alerts.colTime'), width: 160, cell: ({ row }: any) => fmtTime(row.created_at) },
-          { colKey: 'op', title: '', width: 90, cell: ({ row }: any) =>
+          { colKey: 'op', title: '', width: 150, cell: ({ row }: any) =>
             row.status === 'open'
-              ? <Button size="small" variant="text" onClick={() => resolveAlert(row)}>{t('alerts.close')}</Button>
+              ? <Space size={4}>
+                <Button size="small" variant="text" onClick={() => resolveAlert(row)}>{t('alerts.close')}</Button>
+                <Button size="small" variant="text" onClick={() => setSilDlg({ kind: String(row.kind), tenant_id: Number(row.tenant_id) })}>{t('alerts.silence')}</Button>
+              </Space>
               : <Tag theme="success">{t('alerts.resolved')}</Tag> },
         ] as never} />
-      {!rows.length && <div style={{ textAlign: 'center', color: '#999', padding: 12 }}>{t('alerts.empty')}</div>}
+      {!viewRows.length && <div style={{ textAlign: 'center', color: '#999', padding: 12 }}>{t('alerts.empty')}</div>}
+
+      {/* ★ F9：静音时长选择弹层 */}
+      <Dialog header={`${t('alerts.silenceTitle')}（${silDlg?.kind ?? ''}@#${silDlg?.tenant_id ?? ''}）`} visible={!!silDlg} onClose={() => setSilDlg(null)}
+        onConfirm={() => void doSilence()} confirmBtn={t('alerts.silence')} cancelBtn={t('common.cancel')} width={380}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13 }}>{t('alerts.silDur')}</span>
+          <Select value={silMin} onChange={(v) => setSilMin(String(v))} style={{ width: 150 }}
+            options={[
+              { label: t('alerts.dur1h'), value: '60' },
+              { label: t('alerts.dur12h'), value: '720' },
+              { label: t('alerts.dur24h'), value: '1440' },
+              { label: t('alerts.dur7d'), value: '10080' },
+            ]} />
+        </div>
+      </Dialog>
 
       {/* 注册与触达配置区域 */}
       <Panel title={t('packages.regNotifyTitle')}>

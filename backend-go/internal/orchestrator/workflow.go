@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"translator/internal/config"
@@ -420,6 +421,11 @@ func (w *Workflow) runGate(ctx context.Context, t *store.Ticket) error {
 		termReqs, termRows := w.kbTermHits(t, lc)
 		// 硬闸循环：校验 → 失败则附 KB 提示重译 → 再校验，直到通过或达到上限
 		cursor := tr
+		// ★ H1：首轮前先做术语强制覆写（译文残留源术语字面时零成本合规）
+		if forced, n := gate.ForceTerms(p.SourceText, cursor, termReqs); n > 0 {
+			cursor = forced
+			log.Printf("[gate] 工单 %d/%s 术语强制替换 %d 处", t.ID, lc, n)
+		}
 		for attempt := 0; attempt <= maxRetry; attempt++ {
 			g := gate.RunWithTerms(p.SourceText, lc, cursor, termReqs)
 			if g.Pass {
@@ -592,14 +598,39 @@ func (w *Workflow) runFeedback(ctx context.Context, t *store.Ticket) error {
 		return nil
 	}
 	// 写入企业包（tm_segments 归租户）
+	// ★ H4 TM 自动审核：反馈句先过 QA 预筛（数字/占位符/长度比/未翻译），
+	//   达标直写正式 TM；低分转 tm_review 人审池（人工批准后经现有
+	//   handleTmReviewApprove 链路入库），避免带错误终稿沉淀进翻译记忆。
+	thr := config.C.TMFeedbackMinQAScore
+	if thr <= 0 {
+		thr = 80
+	}
+	auto, reviewed := 0, 0
 	for lc, tr := range p.Translations {
 		if tr == "" {
 			continue
 		}
-		_, _ = w.KB.SaveBack(p.SourceText, map[string]string{lc: tr}, "approved", t.TenantID)
-		if w.Engine != nil {
-			w.Engine.InvalidateKBCaches() // ★ 审批译文入正式 TM：失效 CJK 缓存保即时可见
+		res := qa.ScreenPair(p.SourceText, tr)
+		if res.Score >= thr {
+			_, _ = w.KB.SaveBack(p.SourceText, map[string]string{lc: tr}, "approved", t.TenantID)
+			if w.Engine != nil {
+				w.Engine.InvalidateKBCaches() // ★ 审批译文入正式 TM：失效 CJK 缓存保即时可见
+			}
+			auto++
+			continue
 		}
+		// 低分 → 人审池（同对已有 pending/approved 时跳过，防重复审稿）
+		reviewed++
+		if w.Store != nil && !w.Store.HasActiveTmReview(t.TenantID, p.SourceText, lc, tr) {
+			_ = w.Store.CreateTmReview(&store.TmReview{
+				TenantID: t.TenantID, Zh: p.SourceText, Lang: lc, Trans: tr,
+				Source: "feedback", RefType: "ticket", RefID: t.ID, Status: "pending",
+			})
+		}
+	}
+	if w.Store != nil && (auto > 0 || reviewed > 0) {
+		w.Store.LogAudit(t.TenantID, 0, "tm_feedback_screen", "tickets",
+			fmt.Sprintf("%s 自动入库%d句/转人审%d句(阈值%d)", t.TicketNo, auto, reviewed, thr))
 	}
 	t.Status = store.TicketCompleted // 写库完成置工单为已完成
 	_ = w.Store.UpdateTicket(t)

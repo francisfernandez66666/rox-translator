@@ -71,7 +71,7 @@ export const zh: Record<string, string> = {
   'billing.enterTokenCount': '请输入 token 数量',
   // ---- 套餐订阅 ----
   'billing.myPackageTitle': '我的套餐与剩余句数',
-  'billing.myPackageBalance': '剩余句数：{balance} 句（源句 × 目标语言数计）',
+  'billing.myPackageBalance': '约可翻 {balance} 句（按剩余 token 折算）',
   'billing.myPackageCode': '当前包：{code}',
   'billing.packageExpires': '到期：{date}',
   'billing.subscribe': '订阅套餐',
@@ -170,7 +170,7 @@ export const en: Record<string, string> = {
   'billing.enterTokenCount': 'Enter a token count',
   // ---- 套餐订阅 ----
   'billing.myPackageTitle': 'My package & remaining sentences',
-  'billing.myPackageBalance': 'Remaining sentences: {balance} (source sentences × target languages)',
+  'billing.myPackageBalance': '≈ {balance} sentences (derived from remaining tokens)',
   'billing.myPackageCode': 'Current package: {code}',
   'billing.packageExpires': 'Expires: {date}',
   'billing.subscribe': 'Subscribe',

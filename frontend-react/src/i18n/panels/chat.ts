@@ -4,6 +4,15 @@
 // =============================================
 export const zh: Record<string, string> = {
   // ---- 修改密码弹窗 ----
+    // ★ F2：聊天状态/额度提示（useChat）
+  'chat.preparing': '准备中',
+  'chat.quotaExhausted': '⚠️ 额度已用尽，请充值或升级套餐后继续。',
+  'chat.insufficientTitle': '额度不足',
+  'chat.insufficientBody': '当前租户 token 余额已用尽。可前往购买充值包或升级套餐，亦可联系管理员调额。',
+  'chat.gotoTopUp': '去充值',
+  'chat.dailyQuotaTpl': '⏳ {msg}（明日自动恢复）',
+  'chat.stopped': '⏹ 生成已停止',
+  'chat.providerGuard': 'useChat 必须在 <ChatProvider> 内使用',
   'pwd.title': '修改密码',
   'pwd.hint': '账号「{user}」；验证码将发送到绑定邮箱，10 分钟内有效',
   'pwd.entryTip': '自助修改密码（邮箱验证）',
@@ -120,6 +129,14 @@ export const zh: Record<string, string> = {
 
 // 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
+  'chat.preparing': 'Preparing',
+  'chat.quotaExhausted': '⚠️ Quota exhausted. Top up or upgrade to continue.',
+  'chat.insufficientTitle': 'Insufficient balance',
+  'chat.insufficientBody': 'Your tenant token balance is exhausted. Buy a top-up pack or upgrade, or ask an admin to adjust the quota.',
+  'chat.gotoTopUp': 'Top up',
+  'chat.dailyQuotaTpl': '⏳ {msg} (resets tomorrow)',
+  'chat.stopped': '⏹ Generation stopped',
+  'chat.providerGuard': 'useChat must be used within <ChatProvider>',
   // ---- 修改密码弹窗 ----
   'pwd.title': 'Change Password',
   'pwd.hint': 'Account "{user}"; a code will be emailed to your bound address (valid 10 min)',

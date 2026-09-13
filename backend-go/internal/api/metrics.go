@@ -39,6 +39,11 @@ type Metrics struct {
 	usageTokens int64
 	// 服务启动时间（用于计算 uptime）
 	startedAt time.Time
+
+	// ★ H11：HTTP 时延环形缓冲（近 4096 个请求样本，P99 SLI 数据源）
+	durRing  [4096]float64
+	durPos   int
+	durCount int
 }
 
 // newMetrics 初始化指标收集器：创建空计数映射并记录启动时间。
@@ -71,6 +76,56 @@ func (m *Metrics) countHTTP(path string) {
 
 // countTranslate 记录一次翻译结果（按 kind 与成功/失败分别计数）。
 // 参数 kind: 翻译类型(text/file/openapi/ticket)；ok: 是否成功。无返回。
+// observeHTTP 计数 + 时延采样（withMetrics 每请求调用）。
+func (m *Metrics) observeHTTP(path string, durMs float64) {
+	m.countHTTP(path)
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.durRing[m.durPos] = durMs
+	m.durPos = (m.durPos + 1) % len(m.durRing)
+	if m.durCount < len(m.durRing) {
+		m.durCount++
+	}
+	m.mu.Unlock()
+}
+
+// P99 最近样本窗口的 P99 时延（ms；无样本返回 0）。
+func (m *Metrics) P99() float64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	vals := make([]float64, 0, m.durCount)
+	vals = append(vals, m.durRing[:m.durCount]...)
+	m.mu.RUnlock()
+	if len(vals) == 0 {
+		return 0
+	}
+	sort.Float64s(vals)
+	i := int(float64(len(vals)-1) * 0.99)
+	return vals[i]
+}
+
+// TranslationsTotals 翻译成功/失败累计总数（SLO 增量采样用）。
+func (m *Metrics) TranslationsTotals() (int64, int64) {
+	if m == nil {
+		return 0, 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var ok, fail int64
+	for _, v := range m.translationsOK {
+		ok += atomic.LoadInt64(v)
+	}
+	for _, v := range m.translationsFail {
+		fail += atomic.LoadInt64(v)
+	}
+	return ok, fail
+}
+
+// countTranslate 按调用类别累计翻译请求计数（成功/失败分桶，nil 安全）。
 func (m *Metrics) countTranslate(kind string, ok bool) {
 	if m == nil {
 		return

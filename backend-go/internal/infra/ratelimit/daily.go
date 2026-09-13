@@ -3,6 +3,7 @@
 // API Key 日配额等需跨多实例聚合的场景。
 //   - Redis 实现：INCR 原子自增 + EXPIRE 至次日零点，天然跨实例聚合；
 //   - 返回 nil 表示未启用 Redis——调用方降级为既有 SQLite 字段逻辑（PG 下 UPDATE 亦原子）。
+//
 // =============================================
 package ratelimit
 
@@ -27,6 +28,7 @@ func Daily() Counter {
 	return nil
 }
 
+// redisCounter 基于 Redis INCR 的每日计数实现。
 type redisCounter struct{ rdb *redis.Client }
 
 // Incr 对指定键自增 1，并兜底设置「至次日零点」的过期时间（INCR 不覆盖已有 TTL）。

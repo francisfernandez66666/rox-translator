@@ -7,11 +7,11 @@
 //   并给出可覆盖因子的名称/公式速查，替代裸 JSON 输入框。
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Dialog, Input, Switch, Tag, Textarea, MessagePlugin, DateRangePicker } from 'tdesign-react'
+import { Button, Dialog, Input, Select, Switch, Tag, Textarea, MessagePlugin, DateRangePicker } from 'tdesign-react'
 import { Panel, Field, toastResp } from './parts'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
-import { opsPolicy, opsPolicySave, opsWindowSave, opsPackageReset } from '@/api/ops'
+import { opsPolicy, opsSlo, opsRoutes, opsPolicySave, opsWindowSave, opsPackageReset } from '@/api/ops'
 
 // 数字输入小件：Input 数值化（tdesign Input onChange 返回字符串）
 function NumInput({ value, onChange, style, disabled }: { value: number; onChange: (n: number) => void; style?: React.CSSProperties; disabled?: boolean }) {
@@ -58,9 +58,12 @@ export function OpsP() {
   // 策略草稿（本地编辑；2026-09 起仅超管平台级可写）
   const [pol, setPol] = useState<Record<string, any>>({ billing: { mode_rules: {} }, package: {}, invite: {}, registration: {}, limits: {}, payment: {}, content: {}, task: {} })
   const [windows, setWindows] = useState<any[]>([])
-  const [now, setNow] = useState('')
+  const [, setNow] = useState('') // ★ E14
   // 推广窗口编辑弹窗
   const [winDlg, setWinDlg] = useState<null | { index: number; id: string; name: string; start: string; end: string; priority: number; tz: string; overrides: string }>(null)
+  // ★ H11 SLO 状态卡片数据
+  const [slo, setSlo] = useState<any[]>([])
+  const [routes, setRoutes] = useState<any | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -84,6 +87,14 @@ export function OpsP() {
           task: eff.task || {},
         })
         setWindows(r.windows || [])
+        try {
+          const sr = await opsSlo() as any
+          if (sr.success) setSlo(sr.slos || [])
+        } catch { /* ignore */ }
+        try {
+          const rr = await opsRoutes() as any
+          if (rr.success) setRoutes(rr)
+        } catch { /* ignore */ }
         setNow(r.now || '')
       }
     } catch { /* ignore */ }
@@ -134,10 +145,101 @@ export function OpsP() {
   // 便捷读取：某模式的草稿因子
   const mode = (m: string) => (pol.billing.mode_rules || {})[m] || {}
 
+  // ★ F9：时间窗覆盖因子表单化编辑器——表单与原始 JSON 双向同步（单一数据源=winDlg.overrides，
+  //   B6 白名单由服务端 ValidateWindowOverrides 兜底；表单外键保留不删除）
+  type OvField = { path: string; kind: 'num' | 'bool'; label: string }
+  const OV_FIELDS: OvField[] = [
+    { path: 'billing.markup_multiplier', kind: 'num', label: t('ops.foMarkupGlobal') },
+    { path: 'billing.mode_rules.fast.markup', kind: 'num', label: t('ops.foFastMarkup') },
+    { path: 'billing.mode_rules.fast.limit_chars', kind: 'num', label: t('ops.foFastChars') },
+    { path: 'billing.mode_rules.pro.markup', kind: 'num', label: t('ops.foProMarkup') },
+    { path: 'billing.mode_rules.pro.limit_chars', kind: 'num', label: t('ops.foProChars') },
+    { path: 'invite.enabled', kind: 'bool', label: t('ops.foInviteEnabled') },
+    { path: 'invite.reward_tokens', kind: 'num', label: t('ops.foRewardTokens') },
+    { path: 'invite.reward_days', kind: 'num', label: t('ops.foRewardDays') },
+    { path: 'invite.paid_reward_tokens', kind: 'num', label: t('ops.foPaidTokens') },
+    { path: 'invite.paid_reward_days', kind: 'num', label: t('ops.foPaidDays') },
+    { path: 'invite.max_daily_rewards', kind: 'num', label: t('ops.foMaxDaily') },
+    { path: 'limits.max_qps', kind: 'num', label: t('ops.foQps') },
+    { path: 'limits.max_concurrent', kind: 'num', label: t('ops.foConc') },
+    { path: 'limits.default_max_daily_chars', kind: 'num', label: t('ops.foDailyChars') },
+    { path: 'limits.default_max_daily_tokens', kind: 'num', label: t('ops.foDailyTokens') },
+  ]
+  const ovParse = (): Record<string, any> => { try { return JSON.parse(winDlg?.overrides || '{}') || {} } catch { return {} } }
+  const ovGet = (o: Record<string, any>, path: string): string => {
+    const v = path.split('.').reduce<any>((a, k) => (a == null ? a : a[k]), o)
+    if (v == null) return ''
+    if (typeof v === 'boolean') return v ? '1' : '0'
+    return String(v)
+  }
+  const ovDeletePrune = (o: Record<string, any>, path: string) => {
+    const keys = path.split('.')
+    const parents: Record<string, any>[] = [o]
+    for (let i = 0; i < keys.length - 1; i++) { parents.push(parents[i]?.[keys[i]]); }
+    let cur = o; let ok = true
+    for (let i = 0; i < keys.length - 1; i++) { if (cur && typeof cur === 'object' && keys[i] in cur) { cur = cur[keys[i]]; } else { ok = false; break } }
+    if (ok && cur && typeof cur === 'object') delete cur[keys[keys.length - 1]]
+    // 自底向上剪空对象，避免留下 "billing": {} 之类空壳
+    for (let i = parents.length - 2; i >= 0; i--) {
+      const child = parents[i + 1]
+      const p = parents[i]
+      if (child && typeof child === 'object' && Object.keys(child).length === 0 && p && typeof p === 'object') {
+        const k = keys[i]; if (p[k] === child) delete p[k]
+      }
+    }
+  }
+  const ovPatch = (field: OvField, raw: string) => {
+    if (!winDlg) return
+    const o = ovParse()
+    if (raw === '') { ovDeletePrune(o, field.path) }
+    else {
+      const keys = field.path.split('.')
+      let cur = o
+      for (let i = 0; i < keys.length - 1; i++) {
+        if (typeof cur[keys[i]] !== 'object' || cur[keys[i]] == null) cur[keys[i]] = {}
+        cur = cur[keys[i]]
+      }
+      cur[keys[keys.length - 1]] = field.kind === 'bool' ? raw === '1' : (Number(raw) as number)
+    }
+    setWinDlg({ ...winDlg, overrides: JSON.stringify(o) })
+  }
+  const ovHasExtra = (() => {
+    const o = ovParse()
+    const leafPaths = new Set(OV_FIELDS.map((f) => f.path))
+    const walk = (v: any, pre: string): boolean => {
+      if (v == null || typeof v !== 'object' || Array.isArray(v)) return pre !== '' && !leafPaths.has(pre)
+      return Object.keys(v).some((k) => walk(v[k], pre ? `${pre}.${k}` : k))
+    }
+    return walk(o, '')
+  })()
+
   return (
     <>
       <h2 style={{ margin: '4px 0 8px' }}>{t('ops.title')}</h2>
       <p style={{ fontSize: 13, color: '#667', margin: '0 0 12px' }}>{t('ops.hint')}</p>
+      {isSuper && routes && (routes.routes || []).length > 0 && (
+        <div style={{ margin: '0 0 12px', fontSize: 12, color: '#556' }}>
+          <span style={{ marginRight: 8 }}>{`路由实时统计（动态权重 ${routes.dynamic_routing ? '开' : '关'} / 竞速 ${routes.hedge_enabled ? '开' : '关'}）`}</span>
+          {(routes.routes || []).map((x: any) => (
+            <Tag key={x.route} theme={x.err_rate > 0.2 ? 'danger' : x.err_rate > 0.05 ? 'warning' : 'success'} variant="light" style={{ marginRight: 6 }}>
+              {String(x.route).split('|').pop()} P50 {Math.round(x.p50_ms)}ms · P95 {Math.round(x.p95_ms)}ms · 错误 {(x.err_rate * 100).toFixed(1)}% · tok/次 {Math.round(x.tokens_per_call)}
+            </Tag>
+          ))}
+        </div>
+      )}
+      {isSuper && slo.length > 0 && (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', margin: '0 0 12px' }}>
+          {slo.map((x: any) => {
+            const burn = Number(x.burn_1h || 0)
+            const lv = burn >= 2 ? 'danger' : burn >= 1 ? 'warning' : 'success'
+            return (
+              <Tag key={x.key} theme={lv as any} variant="outline" title={`1h burn=${x.burn_1h} 6h burn=${x.burn_6h}${x.budget_left_pct != null ? ` 预算剩余 ${x.budget_left_pct}%` : ''}`}>
+                SLO {x.name} {x.target}{x.key === 'latency_p99' ? 'ms' : '%'} · 燃烧率 {burn}
+              </Tag>
+            )
+          })}
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
         <Tag theme="primary" variant="outline">{t('ops.platformScope')}</Tag>
         {windows.filter((w) => w.active).map((w) => (
@@ -280,7 +382,28 @@ export function OpsP() {
               />
             </Field>
             <Field label={t('ops.promoPriority')}><NumInput value={winDlg.priority} onChange={(n) => setWinDlg({ ...winDlg, priority: n })} /></Field>
-            <Field label={t('ops.promoOverrides')}><Textarea value={winDlg.overrides} onChange={(v) => setWinDlg({ ...winDlg, overrides: v as string })} /></Field>
+            <Field label={t('ops.foTitle')}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, border: '1px solid #e3e6ef', borderRadius: 8, padding: 8 }}>
+                {OV_FIELDS.map((f) => (
+                  <label key={f.path} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                    <span style={{ minWidth: 118, color: '#556' }}>{f.label}</span>
+                    {f.kind === 'bool' ? (
+                      <Select size="small" style={{ width: 90 }} value={ovGet(ovParse(), f.path)}
+                              onChange={(v: any) => ovPatch(f, String(v ?? ''))}
+                              options={[{ value: '', label: '—' }, { value: '1', label: t('ops.foOn') }, { value: '0', label: t('ops.foOff') }]} />
+                    ) : (
+                      <Input size="small" type="number" style={{ width: 110 }} value={ovGet(ovParse(), f.path)} placeholder="—"
+                             onChange={(v: any) => ovPatch(f, String(v ?? ''))} />
+                    )}
+                  </label>
+                ))}
+              </div>
+            </Field>
+            <details>
+              <summary style={{ fontSize: 12, color: '#889', cursor: 'pointer' }}>{t('ops.foRaw')}</summary>
+              {ovHasExtra && <p style={{ fontSize: 12, color: '#c66900', margin: '4px 0' }}>{t('ops.foExtraKeys')}</p>}
+              <Textarea value={winDlg.overrides} onChange={(v) => setWinDlg({ ...winDlg, overrides: v as string })} />
+            </details>
             <p style={{ fontSize: 12, color: '#889', margin: 0 }}>{t('ops.promoOverridesHint')}</p>
             <code style={{ fontSize: 11, color: '#5b6270', background: '#f4f6fa', borderRadius: 6, padding: '6px 8px', wordBreak: 'break-all' }}>{t('ops.promoOverridesExample')}</code>
             <div style={{ borderTop: '1px dashed #dbe0ea', paddingTop: 10 }}>

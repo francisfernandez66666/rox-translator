@@ -121,9 +121,42 @@ func (k *KBDatabase) EnsureTenantMigration() error {
 	if d == db.DialectPostgres {
 		if _, err := k.db.Exec("ALTER TABLE tm_segments ADD COLUMN IF NOT EXISTS embedding vector(1024)"); err != nil {
 			log.Printf("kb: 跳过 embedding 列（pgvector 扩展不可用，KB 语义检索继续走 npz）：%v", err)
+		} else {
+			k.ensureVectorIndex() // ★ D10/S4：HNSW 近邻索引（10 万行 <50ms 验收项）
 		}
+		k.ensureTrgmIndex() // ★ D11：pg_trgm GIN——LIKE '%x%' 子串命中索引
 	}
 	return nil
+}
+
+// ensureVectorIndex ★ D10（2026-09-12）：embedding 列的 ANN 索引。
+// 生产唯一检索形态 = pgvector + HNSW（cosine）；无 hnsw 支持（pgvector <0.5）
+// 时退 IVFFlat（需后续 REINDEX 调 lists），两者都不可用才允许顺序扫描并显式告警。
+func (k *KBDatabase) ensureVectorIndex() {
+	const hnsw = "CREATE INDEX IF NOT EXISTS idx_tm_embedding_hnsw ON tm_segments USING hnsw (embedding vector_cosine_ops)"
+	if _, err := k.db.Exec(hnsw); err == nil {
+		log.Printf("kb: pgvector HNSW 索引就绪——生产语义检索唯一路径；npz 索引仅保留给 dev/单测（S4）")
+		return
+	} else {
+		log.Printf("kb: HNSW 索引不可用（尝试 IVFFlat 兜底）：%v", err)
+	}
+	if _, err := k.db.Exec("CREATE INDEX IF NOT EXISTS idx_tm_embedding_ivf ON tm_segments USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"); err == nil {
+		return
+	}
+	log.Printf("kb: ⚠ pgvector ANN 索引（hnsw/ivfflat）均不可用，语义检索将全表扫描——大库务必升级 pgvector≥0.5")
+}
+
+// ensureTrgmIndex ★ D11（2026-09-12）：tm_segments.zh 的 pg_trgm GIN 索引，
+// 使 FuzzyHits 的 LIKE '%子串%' 可走索引（旧实现随库增大线性劣化）。
+// 扩展缺失（无超级用户权限部署）仅告警不阻断——查询语义不变，只是继续全扫。
+func (k *KBDatabase) ensureTrgmIndex() {
+	if _, err := k.db.Exec("CREATE EXTENSION IF NOT EXISTS pg_trgm"); err != nil {
+		log.Printf("kb: pg_trgm 扩展不可安装（LIKE 子串检索继续全表扫）：%v", err)
+		return
+	}
+	if _, err := k.db.Exec("CREATE INDEX IF NOT EXISTS idx_tm_zh_trgm ON tm_segments USING gin (zh gin_trgm_ops)"); err != nil {
+		log.Printf("kb: zh trgm GIN 索引创建失败：%v", err)
+	}
 }
 
 // ensureTripleUnique 确保 tm_segments 的唯一键已是三元组 (zh_hash, tenant_id, pack_id)。
@@ -550,7 +583,7 @@ func (k *KBDatabase) FetchRowTenant(id, tenantID int64, scope *PackScope) (*Row,
 	// 旧口径（兼容路径）：本租户 OR 租户0 平台共享（行业码已校验）
 	row := db.QueryRow(k.db, db.CurrentDialect(), fmt.Sprintf(
 		"SELECT "+rowCols+" FROM tm_segments tm "+
-			"WHERE tm.id=? AND (tm.tenant_id=? OR (tm.tenant_id=0 AND tm.priority>=2 AND EXISTS(SELECT 1 FROM kb_packages pkg WHERE pkg.id=tm.pack_id AND (pkg.pack_type='locale' OR (pkg.pack_type='industry' AND pkg.code=(SELECT COALESCE(industry,'') FROM tenants WHERE id=?))))))"),
+			"WHERE tm.id=? AND (tm.tenant_id=? OR (tm.tenant_id=0 AND tm.priority>=2 AND EXISTS(SELECT 1 FROM kb_packages pkg WHERE pkg.id=tm.pack_id AND COALESCE(pkg.enabled,1)=1 AND (pkg.pack_type='locale' OR (pkg.pack_type='industry' AND pkg.code=(SELECT COALESCE(industry,'') FROM tenants WHERE id=?))))))"),
 		id, tenantID, tenantID)
 	return scanRow(row)
 }
@@ -568,9 +601,12 @@ const sharedFilterSQL = "OR (tm.tenant_id=0 AND tm.priority>=2 AND EXISTS(SELECT
 // FindExact 精确命中查询：按原文全等匹配术语，应用知识库优先级链（部门包0 > 组织包1 > 行业包2 > 语言文化包3）。
 // 查询范围 = 本租户 + 租户1 共享过滤子句；返回最优一行（priority 最小），无命中返回 sql.ErrNoRows。
 func (k *KBDatabase) FindExact(zh string, tenantID int64) (*Row, error) {
+	// ★ D2（2026-09-12）：旧 SELECT 漏 COALESCE(tm.pack_id,0)（41 列）而 scanRow
+	//   扫 42 列——Scan 恒报错被调用方当「无命中」吞掉，精确命中链整条静默失效。
+	//   统一改用 rowCols 常量（与 scanRow 列序单一对账点）。
 	row := db.QueryRow(k.db, db.CurrentDialect(), fmt.Sprintf(
-		"SELECT tm.id, tm.zh, COALESCE(tm.module,''), COALESCE(tm.tenant_id,1), "+langCols+" FROM tm_segments tm WHERE tm.zh=? AND (tm.tenant_id=? "+sharedFilterSQL+") ORDER BY tm.priority ASC, tm.id ASC LIMIT 1"),
-		zh, tenantID, tenantID)
+		"SELECT "+rowCols+" FROM tm_segments tm WHERE tm.zh=? AND (tm.tenant_id=? "+sharedFilterSQL+") ORDER BY tm.priority ASC, tm.id ASC LIMIT 1"),
+		zh, tenantID, tenantID, tenantID) // ★ D2：sharedFilterSQL 含 2 个租户参数，旧只传 1 个→恒报错
 	return scanRow(row)
 }
 
@@ -580,7 +616,7 @@ func (k *KBDatabase) FindExact(zh string, tenantID int64) (*Row, error) {
 func (k *KBDatabase) FuzzyHits(zhShort string, limit int, tenantID int64) ([]*Row, error) {
 	// 优先级链排序：部门包 > 组织包 > 行业包 > 语言文化包（共享宿主=租户1）
 	rows, err := db.Query(k.db, db.CurrentDialect(), "SELECT tm.id, tm.zh FROM tm_segments tm WHERE tm.zh LIKE ? AND (tm.tenant_id=? "+
-		sharedFilterSQL+") ORDER BY tm.priority ASC, tm.id ASC LIMIT ?", "%"+zhShort+"%", tenantID, tenantID, limit)
+		sharedFilterSQL+") ORDER BY tm.priority ASC, tm.id ASC LIMIT ?", "%"+zhShort+"%", tenantID, tenantID, tenantID, limit) // ★ D2 同款：sharedFilterSQL 2 个租户参数补齐（旧 4/5 恒报错=模糊链静默失效）
 	if err != nil {
 		return nil, err
 	}
@@ -1025,6 +1061,41 @@ func (k *KBDatabase) AllTenantIDs() ([]int64, error) {
 
 // AllRowsWithTenant 遍历全部条目的 id + zh + tenant_id（构建租户映射用）。
 // 返回：全部精简行列表（跨租户）。
+// ★ H12 ExportRows 导出用全语言行（TMX 桥接 Trados/memoQ）：
+// tenantID=租户（0 含平台共享层不加，仅本租户）；lang 非空时只取该语言列非空的行。
+func (k *KBDatabase) ExportRows(tenantID int64, lang string) ([]*Row, error) {
+	q := fmt.Sprintf("SELECT " + rowCols + " FROM tm_segments WHERE tenant_id=?")
+	args := []interface{}{tenantID}
+	if lang != "" {
+		ok := false
+		for _, l := range AllLangs {
+			if l == lang {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return nil, fmt.Errorf("不支持的语言代码: %s", lang)
+		}
+		q += " AND COALESCE(" + lang + ",'')<>''"
+	}
+	rows, err := db.Query(k.db, db.CurrentDialect(), q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Row
+	for rows.Next() {
+		r, e := scanScopedRow(rows)
+		if e != nil || r == nil {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// AllRowsWithTenant 返回全量术语行（含 tenant_id），供索引重建与词典导出使用。
 func (k *KBDatabase) AllRowsWithTenant() ([]Row, error) {
 	rows, err := db.Query(k.db, db.CurrentDialect(), "SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1), COALESCE(pack_id,0) FROM tm_segments")
 	if err != nil {

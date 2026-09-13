@@ -44,10 +44,6 @@ export async function apiKeyLimit(id: number, dailyCallLimit: number): Promise<A
   return request('/api/apikeys/limit', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, daily_call_limit: dailyCallLimit }) })
 }
 
-/** 解密返回 Key 明文（前端仅写入剪贴板，不展示） */
-export async function apiKeyReveal(id: number): Promise<AdminResp & { api_key?: string }> {
-  return request('/api/apikeys/reveal', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
-}
 
 // ============================================================================
 // 开放 API 文档在线维护（仅超管）

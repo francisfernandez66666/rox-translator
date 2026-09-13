@@ -15,6 +15,8 @@ package api
 //   - 上传文件保存到 UploadDir（uniqueName 保证文件名唯一），处理完成后删除
 
 import (
+	"sync"
+
 	"context"
 	"encoding/json"
 	"fmt"
@@ -95,13 +97,15 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	if gateErr != nil {
 		// 限流/余额不足：推送 error 事件并结束
-		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": gateErr.Error()}))
+		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": gateErr.Error(), "error_code": billing.QuotaErrCode(gateErr)}))
 		if flusher != nil {
 			flusher.Flush()
 		}
 		return
 	}
 
+	// ★ D20：SSE 写序列化锁（progress/delta 均来自引擎并发管线）
+	var sseMu sync.Mutex
 	// 进度回调：计算百分比（封顶 99%，完成时单独发 100%）并推送 progress 事件
 	prog := func(step string, done, total int) {
 		percent := 0
@@ -111,6 +115,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				percent = 99
 			}
 		}
+		sseMu.Lock()
+		defer sseMu.Unlock()
 		fmt.Fprint(w, sseEvent("progress", map[string]interface{}{"step": step, "done": done, "total": total, "percent": percent}))
 		if flusher != nil {
 			flusher.Flush()
@@ -120,7 +126,18 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	// 调用引擎处理文本翻译（流式回调进度）
 	// ★ 注入用户组织（2026-08-26 KB继承链）+ 交互标记（评审整改 R6：可抢占 LLM 保留槽）
 	//   + 模式（2026-09-05 计费策略引擎：计量侧按 fast/pro 区分免费/扣费）
-	res := s.Engine.HandleText(llm.WithInteractive(tenant.WithMode(s.userOrgCtx(r), engine.ModeFromOptions(req.Options))), req.Message, req.Options, prog)
+	ctx := llm.WithInteractive(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), engine.ModeFromOptions(req.Options)), tenant.LangFromOptions(req.Options)))
+	// ★ D20：token 级流式 sink——上游增量以 delta 事件透传（lang=目标语言；
+	//   多目标并发交替输出，前端仅在单目标场景消费逐字渲染）
+	ctx = engine.WithStreamSink(ctx, func(lang, delta string) {
+		sseMu.Lock()
+		defer sseMu.Unlock()
+		fmt.Fprint(w, sseEvent("delta", map[string]interface{}{"lang": lang, "text": delta}))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	})
+	res := s.Engine.HandleText(ctx, req.Message, req.Options, prog)
 	// 推送完成进度
 	fmt.Fprint(w, sseEvent("progress", map[string]interface{}{"step": "完成", "done": 1, "total": 1, "percent": 100}))
 	if flusher != nil {
@@ -210,7 +227,7 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	tid, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
-		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": gateErr.Error()}))
+		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": gateErr.Error(), "error_code": billing.QuotaErrCode(gateErr)}))
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -267,7 +284,7 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 
 	// 调用引擎处理文件翻译
 	// ★ 注入用户组织（2026-08-26 KB继承链）+ 模式（2026-09-05 计费策略引擎）
-	res := s.Engine.HandleFile(tenant.WithMode(s.userOrgCtx(r), engine.ModeFromOptions(options)), savePath, options, prog)
+	res := s.Engine.HandleFile(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), engine.ModeFromOptions(options)), tenant.LangFromOptions(options)), savePath, options, prog)
 
 	// 推送完成进度
 	fmt.Fprint(w, sseEvent("progress", map[string]interface{}{"step": "完成", "done": 1, "total": 1, "percent": 100}))
@@ -312,12 +329,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	tid, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "error": gateErr.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "error": gateErr.Error(), "error_code": billing.QuotaErrCode(gateErr)})
 		return
 	}
 	// ★ 运营策略引擎（2026-09-05）：模式因子闸门——enabled=false 拒绝；limit_chars 超限拒绝（不计费）
 	mode := engine.ModeFromOptions(req.Options)
-	eff := s.effectivePolicy(tid)
+	eff := s.effectivePolicyCached(tid) // ★ C31
 	rule, hasRule := eff.Mode(mode)
 	if hasRule && !rule.Enabled {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "error": "该翻译模式已停用"})
@@ -329,7 +346,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// 调用引擎处理文本翻译（非流式，无进度回调）
 	// ★ 注入用户组织（2026-08-26 KB继承链）+ 交互标记（评审整改 R6）+ 模式（计费策略引擎）
-	res := s.Engine.HandleText(llm.WithInteractive(tenant.WithMode(s.userOrgCtx(r), mode)), req.Message, req.Options, nil)
+	res := s.Engine.HandleText(llm.WithInteractive(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), mode), tenant.LangFromOptions(req.Options))), req.Message, req.Options, nil)
 	if res.Error != "" {
 		// 失败：填充错误回复并计入失败指标
 		res.Skill = "translation"
@@ -395,10 +412,10 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	tid, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "error": gateErr.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "error": gateErr.Error(), "error_code": billing.QuotaErrCode(gateErr)})
 		return
 	}
-	eff := s.effectivePolicy(tid)
+	eff := s.effectivePolicyCached(tid) // ★ C31
 	rule, hasRule := eff.Mode(mode)
 	if hasRule && !rule.Enabled {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "error": "该翻译模式已停用"})
@@ -431,7 +448,7 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	}
 	// 调用引擎处理文件翻译（非流式）
 	// ★ 注入用户组织（2026-08-26 KB继承链）+ 模式（2026-09-05 计费策略引擎）
-	res := s.Engine.HandleFile(tenant.WithMode(s.userOrgCtx(r), mode), savePath, options, nil)
+	res := s.Engine.HandleFile(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), mode), tenant.LangFromOptions(options)), savePath, options, nil)
 	if res.Error == "" {
 		s.metrics.countTranslate("file", true)
 		// ★ 归属登记（评审整改 C1）

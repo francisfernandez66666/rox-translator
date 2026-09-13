@@ -5,6 +5,7 @@
 //     写出新 docx——用于对照编辑器「审批后回写」导出修订稿。
 //   - PDFToParagraphs：借 python 环境 pdf2docx（后端已装 /opt/translator/.venv）把 PDF 转 docx 再抽段落；
 //     离线无 python/pdf2docx 时返回明确错误（前端提示「需安装 PDF 解析依赖」）。
+//
 // 设计约束：不引入第三方库（离线 go get 不可用）；PDF 解析依赖既有 python venv（pdf2docx）。
 package doc
 

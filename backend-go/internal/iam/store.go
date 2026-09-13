@@ -17,7 +17,7 @@ import (
 )
 
 // userCols 用户表查询列清单（Scan 顺序契约；email/deactivate_at/agreed_at 为老库可空列，COALESCE 兜底）。
-const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at, COALESCE(deactivate_at,''), COALESCE(agreed_at,''), COALESCE(must_change_pwd,0)"
+const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at, COALESCE(deactivate_at,''), COALESCE(agreed_at,''), COALESCE(must_change_pwd,0), COALESCE(token_version,0)"
 
 // orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
 // orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
@@ -59,7 +59,7 @@ func NewStore(db *sql.DB) *Store {
 func scanUser(row *sql.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd)
+		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +153,7 @@ func (s *Store) GetUserByUsernameGlobal(username string) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion); err != nil {
 			continue
 		}
 		out = append(out, &u)
@@ -172,7 +172,7 @@ func (s *Store) ListUsers(tid int64) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion); err != nil {
 			continue
 		}
 		u.PasswordHash = ""
@@ -223,7 +223,7 @@ func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion); err != nil {
 			continue
 		}
 		u.PasswordHash = ""
@@ -235,7 +235,8 @@ func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
 // ResetPassword 重置密码哈希。
 func (s *Store) ResetPassword(id, tid int64, passHash string) error {
 	now := time.Now().Format(time.RFC3339)
-	_, err := s.execW("UPDATE users SET password_hash=?, updated_at=? WHERE id=? AND tenant_id=?", passHash, now, id, tid)
+	// ★ B2：改密同时递增 token_version——该用户全部已签发 JWT 立即失效（会话撤销）
+	_, err := s.execW("UPDATE users SET password_hash=?, token_version=token_version+1, updated_at=? WHERE id=? AND tenant_id=?", passHash, now, id, tid)
 	return err
 }
 
@@ -557,7 +558,7 @@ func (s *Store) ListAllUsers() ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion); err != nil {
 			continue
 		}
 		u.PasswordHash = ""

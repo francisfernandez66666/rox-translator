@@ -5,6 +5,7 @@
 //     无需 Lua；容量为「全局上限」，避免 N 实例各持一份导致总并发 = N×上限。
 //   - 进程内实现：带缓冲 channel，单实例兼容（无 Redis 时自动降级）。
 //   - AcquireEither：交互式请求在「本地保留槽」与「全局槽」间二选一竞争，保证前台不饿死。
+//
 // =============================================
 package concurrency
 
@@ -106,10 +107,10 @@ func (s *chanSem) TryAcquire() (func(), bool) {
 // 无「每实例各预充 cap 个令牌导致 2×cap」的竞态。
 
 type redisSem struct {
-	rdb  *redis.Client
-	key  string
-	cap  int
-	ttl  time.Duration
+	rdb *redis.Client
+	key string
+	cap int
+	ttl time.Duration
 }
 
 // slotKey 生成第 i 个槽位的 Redis 键（key:0..key:cap-1）。
@@ -214,6 +215,7 @@ func AcquireEither(ctx context.Context, x, y Semaphore) (func(), error) {
 // ErrAcquireTimeout 信号量获取超时（容量耗尽）。
 var ErrAcquireTimeout = errAcqTimeout{}
 
+// errAcqTimeout 是 ErrAcquireTimeout 哨兵错误的具体类型（获取超时）。
 type errAcqTimeout struct{}
 
 // Error 实现 error 接口：返回信号量获取超时的提示。

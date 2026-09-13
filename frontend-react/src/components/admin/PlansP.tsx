@@ -240,13 +240,13 @@ export function PlansP() {
 
   const [pkgForm, setPkgForm] = useState<Any>({ code: '', name: '', ptype: 'paid', sentences: 1000, price_money: 0, duration_days: 30 })
   async function createPkg() {
-    if (!pkgForm.code || !pkgForm.name) { void MessagePlugin.warning(t('apikeys.nameRequired')); return }
+    if (!pkgForm.code || !pkgForm.name) { void MessagePlugin.warning(t('packages.nameRequired')); return }
     const r: Any = await adminPackageCreate(pkgForm as any)
     if (toastResp(r)) { setPkgForm({ code: '', name: '', ptype: 'paid', sentences: 1000, price_money: 0, duration_days: 30 }); void loadPkgs() }
   }
   async function togglePkg(p: Any) { await adminPackageUpdate({ id: Number(p.id), enabled: p.enabled ? 0 : 1 }); void loadPkgs() }
   async function deletePkg(p: Any) {
-    if (!(await confirmDialog({ body: t('webhooks.confirmDelete') }))) return
+    if (!(await confirmDialog({ body: t('packages.confirmDeletePkg') }))) return
     await adminPackageDelete(Number(p.id)); void loadPkgs()
   }
   async function saveEnforce() { const r: Any = await adminPackageSettingsSave({ billing_enforced: billingEnforced ? '1' : '0' } as never); toastResp(r, t('common.save')) }
@@ -326,7 +326,7 @@ export function PlansP() {
           <div style={{ marginTop: 10, fontSize: 13, color: '#667' }}>
             {tpl('billing.myPackageCode', { code: (pkg.package_code as string) || '—' })}
             {pkgExpiresLabel ? ` · ${t('plans.expiresAt')}: ${pkgExpiresLabel}` : ''}
-            {' · '}{tpl('billing.myPackageBalance', { balance: pkg.sentence_balance ?? '—' })}
+            {' · '}{tpl('billing.myPackageBalance', { balance: pkg.balance_sentences_approx ?? pkg.sentence_balance ?? '—' })}
           </div>
           {(() => {
             const total = Number(pkg.balance_tokens ?? 0)

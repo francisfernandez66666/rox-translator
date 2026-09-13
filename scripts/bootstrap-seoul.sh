@@ -71,6 +71,8 @@ if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${PG_D
   sudo -u postgres createdb -O "${PG_USER}" "${PG_DB}"
 fi
 sudo -u postgres psql -d "${PG_DB}" -c "CREATE EXTENSION IF NOT EXISTS vector;"
+# ★ S8/D11：pg_trgm——KB 子串检索 GIN 索引依赖
+sudo -u postgres psql -d "${PG_DB}" -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
 echo "vector 扩展版本: $(sudo -u postgres psql -d "${PG_DB}" -tAc 'SELECT extversion FROM pg_extension WHERE extname=\$\$vector\$\$')"
 
 # ----------------------------- 2G 调优 -----------------------------

@@ -3,6 +3,7 @@
 //   - TestOpsPolicySavePermission：运营策略仅超管可写（租户管理员 403）
 //   - TestTaskCenterPolicyGate：task.enabled 总开关关闭后任务列表置空、领取被拒
 //   - TestEffPayMode：支付模式收敛为运营策略 payment.mode（缺省 mock）
+//
 // =============================================
 package api
 
@@ -115,6 +116,8 @@ func TestTaskCenterPolicyGate(t *testing.T) {
 		t.Fatalf("写 ops_policy 失败: %v", err)
 	}
 
+	s.invalidatePolicyCache()
+
 	// ① 任务列表置空 + disabled 标记
 	req := httptest.NewRequest(http.MethodGet, "/api/me/tasks", nil)
 	req.Header.Set("Authorization", bearer)
@@ -155,6 +158,8 @@ func TestTaskCenterPolicyGate(t *testing.T) {
 	if err := st.SetConfig("ops_policy", `{"task":{"enabled":true}}`); err != nil {
 		t.Fatalf("写 ops_policy 失败: %v", err)
 	}
+
+	s.invalidatePolicyCache()
 	req3 := httptest.NewRequest(http.MethodGet, "/api/me/tasks", nil)
 	req3.Header.Set("Authorization", bearer)
 	rec3 := httptest.NewRecorder()
@@ -186,6 +191,8 @@ func TestEffPayMode(t *testing.T) {
 	if err := st.SetConfig("ops_policy", `{"payment":{"mode":"wechat"}}`); err != nil {
 		t.Fatalf("写 ops_policy 失败: %v", err)
 	}
+
+	s.invalidatePolicyCache()
 	if m := s.effPayMode(1); m != "wechat" {
 		t.Fatalf("策略 payment.mode=wechat 应生效，实得 %q", m)
 	}

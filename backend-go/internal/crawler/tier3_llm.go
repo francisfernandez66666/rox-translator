@@ -29,7 +29,7 @@ const llmBatchSize = 10
 
 // llmGenOutput LLM 输出的结构化结果（要求模型严格按此 JSON 数组返回）。
 type llmGenOutput struct {
-	Entries []llmEntry `json:"entries"` // 行业/语言文化条目
+	Entries []llmEntry  `json:"entries"` // 行业/语言文化条目
 	Phrases []llmPhrase `json:"phrases"` // 语言文化安全句（locale 包）
 }
 
@@ -149,7 +149,19 @@ func (p *llmProducer) generateBatch(ctx context.Context, deps *SourceDeps, batch
 }
 
 // llmRoute 选择 LLM 路由：优先 stage_models.ai_initial，否则全局默认。
+// ★ D13（2026-09-12）：旧实现只有注释没有逻辑——tier3 恒用全局模型，
+// 运营在阶段模型里为采集配的独立供应商/密钥完全不生效（成本与配额口径失真）。
 func (p *llmProducer) llmRoute() (base, key, model string) {
+	if p.st != nil {
+		if raw, err := p.st.GetConfig("stage_models"); err == nil && raw != "" {
+			var m config.StageModels
+			if json.Unmarshal([]byte(raw), &m) == nil {
+				if sm, ok := m[config.StageAIInitial]; ok && sm.APIBase != "" && sm.Model != "" {
+					return sm.APIBase, store.DecryptSecret(sm.APIKey), sm.Model
+				}
+			}
+		}
+	}
 	cfg := config.C
 	if cfg != nil && cfg.OnlineAPIBase != "" && cfg.OnlineModel != "" {
 		return cfg.OnlineAPIBase, cfg.OnlineAPIKey, cfg.OnlineModel

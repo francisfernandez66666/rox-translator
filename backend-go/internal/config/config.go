@@ -27,6 +27,9 @@ type ProviderConfig struct {
 	APIKey   string `json:"api_key"`  // 供应商 API 密钥
 	Model    string `json:"model"`    // 该供应商下使用的模型名
 	Weight   int    `json:"weight"`   // 权重，越高越优先（0 表示仅作 fallback）
+	// ★ H2：供应商声明支持术语约束解码（logit/guided 扩展）。全部启用路由都为 true 时，
+	//   引擎随请求注入 x_term_constraints；否则保持 H1 事后强制闭环（双轨降级）。
+	SupportsConstraints bool `json:"supports_constraints"`
 }
 
 // 流程阶段标识（stage_models 的键）
@@ -57,19 +60,19 @@ type StageModels map[string]StageModel
 // SSOProviderConfig 单 IdP 配置（阶段六：企业身份联合登录）。
 // Type 取值：oidc（标准 OpenID Connect 发现）/ feishu（飞书）/ dingtalk（钉钉）。
 type SSOProviderConfig struct {
-	Name           string `json:"name"`            // 提供方标识（路由用，如 "azure"、"feishu"）
-	DisplayName    string `json:"display_name"`    // 前端展示名（如 "Azure AD"）
-	Type           string `json:"type"`            // oidc / feishu / dingtalk
-	ClientID       string `json:"client_id"`       // OAuth2 / OIDC client_id
-	ClientSecret   string `json:"client_secret"`   // client_secret
-	Issuer         string `json:"issuer"`          // oidc 发现文档基地址（Type=oidc 必填）
-	AuthURL        string `json:"auth_url"`        // 非 oidc 时手动指定授权端点
-	TokenURL       string `json:"token_url"`       // 非 oidc 时手动指定令牌端点
-	UserinfoURL    string `json:"userinfo_url"`    // 非 oidc 时手动指定用户信息端点
-	RedirectURL    string `json:"redirect_url"`    // 回调地址（需与 IdP 注册一致）
-	Scopes         string `json:"scopes"`          // 空格分隔的作用域（缺省 openid email profile）
-	AutoProvision  bool   `json:"auto_provision"`  // 无匹配账号时自动按邮箱开通（默认 false）
-	DefaultTenantID int64 `json:"default_tenant_id"` // 自动开通归属租户（缺省 1）
+	Name            string `json:"name"`              // 提供方标识（路由用，如 "azure"、"feishu"）
+	DisplayName     string `json:"display_name"`      // 前端展示名（如 "Azure AD"）
+	Type            string `json:"type"`              // oidc / feishu / dingtalk
+	ClientID        string `json:"client_id"`         // OAuth2 / OIDC client_id
+	ClientSecret    string `json:"client_secret"`     // client_secret
+	Issuer          string `json:"issuer"`            // oidc 发现文档基地址（Type=oidc 必填）
+	AuthURL         string `json:"auth_url"`          // 非 oidc 时手动指定授权端点
+	TokenURL        string `json:"token_url"`         // 非 oidc 时手动指定令牌端点
+	UserinfoURL     string `json:"userinfo_url"`      // 非 oidc 时手动指定用户信息端点
+	RedirectURL     string `json:"redirect_url"`      // 回调地址（需与 IdP 注册一致）
+	Scopes          string `json:"scopes"`            // 空格分隔的作用域（缺省 openid email profile）
+	AutoProvision   bool   `json:"auto_provision"`    // 无匹配账号时自动按邮箱开通（默认 false）
+	DefaultTenantID int64  `json:"default_tenant_id"` // 自动开通归属租户（缺省 1）
 }
 
 // Config 保存运行时配置（等价于 Python lib.py 的模块级配置）
@@ -150,6 +153,18 @@ type Config struct {
 	SemHitCharOverlap float64 // CJK 字符重叠率下限（默认 0.55）
 
 	// 管理后台访问凭证（租户管理接口鉴权）
+	// ★ H6 竞速路由：true 时对「pro/异步非流式」调用启用主/次供应商对冲
+	//   （慢分位触发，先成者胜）。默认关，灰度验证成本后再放开。
+	// ★ H7 成本/延迟感知动态选路：按路由实时 P95/错误率/token 成本调权重。
+	DynamicRouting bool
+	HedgeEnabled   bool
+	HedgeDelayMs   int // 对冲基础延迟（有 P50 样本时取 max(基础值, 1.5×P50)，上限 8s）
+
+	// ★ H4：工单反馈 TM 自动入库的 QA 预筛分数线（0-100）。
+	//   ScreenPair 得分 >= 阈值 → 直写正式 TM；低于阈值 → 进 tm_review 人审池。
+	//   0 表示用默认 80（保证达标率 >80% 的同时拦截数字/占位符错误）。
+	TMFeedbackMinQAScore int
+
 	AdminToken string
 
 	// CORS 允许的跨域来源（同源部署无需配置；前后端分离时通过 CORS_ALLOWED_ORIGINS 环境变量指定，逗号分隔）
@@ -235,6 +250,10 @@ func Default() *Config {
 		HunyuanMTModel:         "tencent/Hunyuan-MT-7B",
 		HunyuanFallbackModel:   "THUDM/GLM-4-9B-0414",
 		HunyuanFirstTimeoutSec: 30,
+		DynamicRouting:         os.Getenv("DYNAMIC_ROUTING") == "1",
+		HedgeEnabled:           os.Getenv("HEDGE_ENABLED") == "1",
+		HedgeDelayMs:           getenvInt("HEDGE_DELAY_MS", 1500),
+		TMFeedbackMinQAScore:   80,
 		BreakerThreshold:       5,
 		BreakerCoolDownSec:     1800,
 		HunyuanMTLangCode:      HunyuanMTLangSet(),
@@ -316,7 +335,8 @@ func Default() *Config {
 	c.UploadDir = filepath.Join(c.UserDataDir, "_uploads")
 	c.OutputDir = filepath.Join(c.UserDataDir, "_output")
 
-	// 数据库后端（P0-3 起点）：默认 sqlite，可经环境变量切换为 postgres。
+	// 数据库后端（★ S1 决策 2026-09-12）：环境变量 DB_DRIVER/DB_DSN 选型；开发默认 sqlite（仅回环，
+	// 由 main.go S1 闸口强制生产 postgres），生产统一 PostgreSQL。
 	if v := os.Getenv("DB_DRIVER"); v != "" {
 		c.DatabaseDriver = v
 	} else if c.DatabaseDriver == "" {
@@ -348,7 +368,7 @@ func Default() *Config {
 	// ★ PostgreSQL 后端强校验（阶段一切流落地）：选型 postgres 但缺 DSN 直接拒绝，
 	// 避免「启动后才发现连不上」的半吊子状态（此前缺省回退 sqlite，会静默写错库）。
 	if c.DatabaseDriver == "postgres" && strings.TrimSpace(c.DatabaseDSN) == "" {
-		log.Fatal("[config] 已选择 PostgreSQL 后端（DB_DRIVER=postgres），但 DB_DSN 为空，无法连接数据库；请在 secrets.env 配置 DATABASE_DSN 后重启")
+		log.Fatal("[config] 已选择 PostgreSQL 后端（DB_DRIVER=postgres），但 DB_DSN 为空，无法连接数据库；请在 secrets.env 配置 DB_DSN 后重启")
 	}
 	// 连接池（仅 postgres 生效）：经环境变量可调，未配置由 db.Open 取默认（MaxOpen=20）
 	if v := os.Getenv("DB_MAX_OPEN_CONNS"); v != "" {
@@ -395,6 +415,17 @@ func (c *Config) LoadConfigFromJSON(exeDir string) {
 }
 
 // getenvFirst 依次读取多个环境变量，返回首个非空值。
+// getenvInt 环境变量整型读取（缺省/非法回退 def）。
+func getenvInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// getenvFirst 按给定键名顺序返回第一个非空环境变量值。
 func getenvFirst(keys ...string) string {
 	for _, k := range keys {
 		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
@@ -412,4 +443,50 @@ func randHex(n int) string {
 		return strings.Repeat("0", n*2)
 	}
 	return hex.EncodeToString(buf)
+}
+
+// MaskDSN 数据源掩码（★ B1 日志脱敏，2026-09-12）：抹掉连接串中的密码段，
+// 供启动日志安全打印 DSN。支持两种形态：
+//   - URL：postgres://user:password@host/db → postgres://user:****@host/db
+//   - key=value：password=xxx / passfile 等 → password=****
+//
+// 参数：dsn=原始连接串；返回脱敏后的可打印形式。
+func MaskDSN(dsn string) string {
+	if dsn == "" {
+		return ""
+	}
+	// URL 形态：scheme://user:pass@
+	if i := strings.Index(dsn, "://"); i >= 0 {
+		rest := dsn[i+3:]
+		if at := strings.Index(rest, "@"); at >= 0 {
+			userinfo := rest[:at]
+			if c := strings.Index(userinfo, ":"); c >= 0 {
+				return dsn[:i+3] + userinfo[:c] + ":****" + rest[at:]
+			}
+		}
+	}
+	// key=value 形态
+	if idx := strings.Index(dsn, "password="); idx >= 0 {
+		end := len(dsn)
+		if sp := strings.IndexAny(dsn[idx:], " \t'\""); sp > 0 {
+			end = idx + sp
+		}
+		return dsn[:idx] + "password=****" + dsn[end:]
+	}
+	return dsn
+}
+
+// MaskEmail 邮箱打码（★ B1）：a***@domain（本地名仅保留首字符）。
+// 参数：email=原始邮箱；返回脱敏形式（不含 @ 时整体保留前 2 字符+***）。
+func MaskEmail(email string) string {
+	if email == "" {
+		return ""
+	}
+	if at := strings.Index(email, "@"); at > 0 {
+		return email[:1] + "***" + email[at:]
+	}
+	if len(email) > 2 {
+		return email[:2] + "***"
+	}
+	return "***"
 }

@@ -30,7 +30,7 @@ import java.util.Map;
  * <p>认证方式：Bearer Token（Authorization: Bearer <api_key>），在管理后台「API Key」面板签发。
  * <p>快速上手：
  * <pre>{@code
- *   TranslatorClient cli = new TranslatorClient("https://translator.example.com", "tk_xxx");
+ *   TranslatorClient cli = new TranslatorClient("https://translator.example.com", "rk_xxx");
  *
  *   // 文本翻译：提交任务 → 自动轮询（15s）→ 返回译文
  *   JsonNode r = cli.translateAndWait("蓝牙钥匙已激活", List.of("en", "ja"));

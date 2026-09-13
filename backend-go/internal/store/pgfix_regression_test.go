@@ -12,7 +12,7 @@ import (
 	"translator/internal/tenant"
 )
 
-// TestSentenceBalanceGuard 增量包句数：自增/守卫自减/余额不足拦截（JSONNumAdd/JSONNumGE 回归）。
+// TestSentenceBalanceGuard 句数镜像自增回归（JSONNumAdd；★ C26 删除守卫自减语义）。
 func TestSentenceBalanceGuard(t *testing.T) {
 	st, kdb := newKBEnv(t)
 	if _, err := st.db.Exec("INSERT INTO tenants (id, code, name, status, permissions) VALUES (9,'t9','句数测试','active','')"); err != nil {
@@ -21,14 +21,11 @@ func TestSentenceBalanceGuard(t *testing.T) {
 	if got, err := st.AddSentences(9, 100); err != nil || got != 100 {
 		t.Fatalf("AddSentences 应得 100，实得 %d (err=%v)", got, err)
 	}
-	if got, err := st.DeductSentences(9, 30); err != nil || got != 70 {
-		t.Fatalf("DeductSentences 应得 70，实得 %d (err=%v)", got, err)
+	if got, err := st.AddSentences(9, 30); err != nil || got != 130 {
+		t.Fatalf("镜像再自增应得 130，实得 %d (err=%v)", got, err)
 	}
-	if _, err := st.DeductSentences(9, 150); err != ErrSentenceExhausted {
-		t.Fatalf("超额扣减应返回 ErrSentenceExhausted，实得 %v", err)
-	}
-	if got, _ := st.GetSentenceBalance(9); got != 70 {
-		t.Fatalf("失败扣减不应改变余额，实得 %d", got)
+	if got, _ := st.GetSentenceBalance(9); got != 130 {
+		t.Fatalf("镜像回读应为 130，实得 %d", got)
 	}
 	_ = kdb
 }

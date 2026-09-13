@@ -13,10 +13,12 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -76,6 +78,12 @@ type Client struct {
 	// 返回 error（如余额不足）时，本次 LLM 调用向上返回该错误，从而中止翻译，
 	// 防止「后置计费」被取消/断开绕过（白嫖）。nil 表示不启用实时计费（仅归集用量）。
 	OnUsage func(ctx context.Context, model string, prompt, completion int64) error
+
+	// ★ H2 双轨约束解码：true 表示当前路由供应商声明支持术语约束扩展
+	//   （x_term_constraints / guided 类），CallChat/StreamChat 会随请求注入。
+	//   由 main.go 按 model_routes 的 supports_constraints 一致性统一设定；
+	//   不支持时引擎自然降级为 H1 事后强制闭环。
+	SupportsConstraints bool
 
 	// inflight 当前在途 LLM 调用数（观测用，原子计数）
 	inflight atomic.Int64
@@ -407,6 +415,31 @@ func AbortFromCtx(ctx context.Context) func() {
 }
 
 // chatPayload 请求体（map 以便按模型附加参数）
+// ★ H2 术语约束解码（双轨之「事前约束」轨）。
+// TermConstraint 单条术语约束：源术语 → 规定译法。
+type TermConstraint struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+// termConstraintsKey 是术语约束在 ctx 中的键。
+type termConstraintsKey struct{}
+
+// WithTermConstraints 把术语约束挂到 ctx（引擎仅在客户端 SupportsConstraints 时注入）。
+func WithTermConstraints(ctx context.Context, cs []TermConstraint) context.Context {
+	if len(cs) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, termConstraintsKey{}, cs)
+}
+
+// TermConstraintsFromCtx 读取 ctx 中的术语约束（无则 nil）。
+func TermConstraintsFromCtx(ctx context.Context) []TermConstraint {
+	cs, _ := ctx.Value(termConstraintsKey{}).([]TermConstraint)
+	return cs
+}
+
+// chatPayload 为 OpenAI 兼容 chat/completions 请求体（map 形态便于附加厂商私有字段）。
 type chatPayload map[string]interface{}
 
 // CallChat 调用 chat/completions，返回 content。baseURL 以 /v1 结尾。
@@ -420,6 +453,10 @@ func (c *Client) CallChat(ctx context.Context, baseURL, apiKey, model string, me
 		"model":      model,
 		"messages":   messages,
 		"max_tokens": maxTokens,
+	}
+	// ★ H2：声明支持约束解码的供应商——随请求注入术语约束（OpenAI 兼容扩展字段）
+	if cs := TermConstraintsFromCtx(ctx); len(cs) > 0 && c.SupportsConstraints {
+		payload["x_term_constraints"] = cs
 	}
 	if hunyuan {
 		// 混元模型：附加专属采样参数（温度/核采样/惩罚）
@@ -450,7 +487,9 @@ func (c *Client) CallChatFallback(ctx context.Context, baseURL, apiKey, model st
 	// 限流（HTTP 429）：触发回调、短暂等待后用降级模型重试
 	if isRateLimit(err) && onRateLimited != nil {
 		onRateLimited()
-		time.Sleep(2 * time.Second)
+		if !sleepCtx(ctx, 2*time.Second) {
+			return // ★ D9：取消即止损（保留原始错误返回）
+		}
 		fallback := c.cfg.HunyuanFallbackModel
 		content, finishReason, err = c.CallChat(ctx, baseURL, apiKey, fallback, messages, maxTokens, false, 0.1)
 	}
@@ -496,15 +535,17 @@ func (c *Client) doChat(ctx context.Context, endpoint, apiKey string, payload ch
 	defer resp.Body.Close()
 
 	// 状态码分类处理：429 限流、401 密钥无效、其余非 200 返回错误体摘要
+	// ★ D15（2026-09-12）：改抛类型化 StatusError——限流/鉴权判定不再依赖
+	// 文案子串（供应商改措辞即失灵），errors.As 直达状态码。
 	if resp.StatusCode == 429 {
-		return "", "", fmt.Errorf("rate_limited: HTTP 429")
+		return "", "", &StatusError{Code: 429}
 	}
 	if resp.StatusCode == 401 {
 		return "", "", fmt.Errorf("api key 无效 (401)")
 	}
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
-		return "", "", fmt.Errorf("LLM API HTTP %d: %s", resp.StatusCode, string(b))
+		return "", "", &StatusError{Code: resp.StatusCode, Body: string(b)}
 	}
 
 	// 解析 OpenAI 兼容响应（限制读取 4MB 防异常大响应）
@@ -528,10 +569,160 @@ func (c *Client) doChat(ctx context.Context, endpoint, apiKey string, payload ch
 	return strings.TrimSpace(cr.Choices[0].Message.Content), cr.Choices[0].FinishReason, nil
 }
 
+// ★ D20（2026-09-12）：token 级流式调用（chat 路径）。
+// onDelta 收到 OpenAI 兼容 SSE 的增量文本；结束块必须携带 usage（stream_options.include_usage），
+// 否则视为不可信供应商——返回 errNoStreamUsage 让调用方回退非流式重发（计费口径不蒸发，
+// 代价是极小概率用户看到一次重复输出，仅出现于不兼容 stream_options 的端点）。
+var errNoStreamUsage = errors.New("stream 未回传 usage（不可计费）")
+
+// StreamChat 流式 chat：endpoint 语义同 CallChat；hunyuan 参数不支持流式（返回错误走回退）。
+// 返回：完整累计文本、finishReason、错误（含“不支持流式”类错误，调用方应回退 CallChat）。
+func (c *Client) StreamChat(ctx context.Context, baseURL, apiKey, model string,
+	messages []map[string]string, maxTokens int, temp float64, onDelta func(string)) (string, string, error) {
+
+	endpoint := strings.TrimRight(baseURL, "/") + "/chat/completions"
+	payload := chatPayload{
+		"model":          model,
+		"messages":       messages,
+		"max_tokens":     maxTokens,
+		"temperature":    temp,
+		"stream":         true,
+		"stream_options": map[string]interface{}{"include_usage": true},
+	}
+	// ★ H2：流式路径同样注入术语约束（与 CallChat 同规则）
+	if cs := TermConstraintsFromCtx(ctx); len(cs) > 0 && c.SupportsConstraints {
+		payload["x_term_constraints"] = cs
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 180*time.Second)
+		defer cancel()
+		req = req.WithContext(ctx)
+	}
+	rel, err := c.acquireChat(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	defer c.inflight.Add(-1)
+	defer rel()
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == 429:
+		return "", "", &StatusError{Code: 429}
+	case resp.StatusCode == 401:
+		return "", "", errors.New("api key 无效 (401)")
+	case resp.StatusCode != 200:
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
+		return "", "", &StatusError{Code: resp.StatusCode, Body: string(b)}
+	}
+	// 非 SSE 响应（mock/不兼容端点返回 application/json）：不消费，判为不支持流式
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		return "", "", errors.New("端点不支持流式（Content-Type=" + ct + "）")
+	}
+
+	var (
+		full       strings.Builder
+		finish     string
+		prompt     int64
+		completion int64
+	)
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := sc.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(line[5:])
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+				FinishReason *string `json:"finish_reason"`
+			} `json:"choices"`
+			Usage *struct {
+				PromptTokens     int64 `json:"prompt_tokens"`
+				CompletionTokens int64 `json:"completion_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal([]byte(data), &chunk) != nil {
+			continue // 心跳/非 JSON 分片
+		}
+		for _, ch := range chunk.Choices {
+			if ch.Delta.Content != "" {
+				full.WriteString(ch.Delta.Content)
+				if onDelta != nil {
+					onDelta(ch.Delta.Content)
+				}
+			}
+			if ch.FinishReason != nil && *ch.FinishReason != "" {
+				finish = *ch.FinishReason
+			}
+		}
+		if chunk.Usage != nil {
+			prompt = chunk.Usage.PromptTokens
+			completion = chunk.Usage.CompletionTokens
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", "", err
+	}
+	if prompt == 0 && completion == 0 {
+		return "", "", errNoStreamUsage
+	}
+	if uc := CollectorFrom(ctx); uc != nil {
+		uc.Add(prompt, completion)
+	}
+	if c.OnUsage != nil {
+		if err := c.OnUsage(ctx, model, prompt, completion); err != nil {
+			return "", "", err
+		}
+	}
+	return strings.TrimSpace(full.String()), finish, nil
+}
+
 // isRateLimit 判断错误是否为限流（错误消息包含 "429"）。
 // 参数：err=待判断错误；返回是否为限流错误。
 func isRateLimit(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "429")
+	if err == nil {
+		return false
+	}
+	var se *StatusError
+	if errors.As(err, &se) {
+		return se.Code == 429 // ★ D15：类型判定优先
+	}
+	return strings.Contains(err.Error(), "429") // 兼容旧文案/透传错误
+}
+
+// StatusError ★ D15：LLM HTTP 非 2xx 的类型化错误（承载状态码供 errors.As 判定）。
+type StatusError struct {
+	Code int
+	Body string // 非 200 响应体摘要（≤500B）
+}
+
+// Error 实现 error 接口：429 统一归一化为 rate_limited 标记，便于上游限流识别。
+func (e *StatusError) Error() string {
+	if e.Code == 429 {
+		return "rate_limited: HTTP 429"
+	}
+	return fmt.Sprintf("LLM API HTTP %d: %s", e.Code, e.Body)
 }
 
 // EmbedResponse 嵌入响应（OpenAI 兼容 embeddings 格式，兼容 SiliconFlow 智谱等）

@@ -3,6 +3,7 @@
 //   - ListIndustries：按平台宿主租户0 列出全部行业包（pack_type=industry）
 //   - IndustryCodeExists / IndustryReferenced：code 唯一性 / 租户引用校验
 //   - UpdateIndustry / ToggleIndustry / DeleteIndustry：编辑名/启停/删除（连带条目清理）
+//
 // 复用 newTestStoreWithTenants 内存 SQLite 基建，不依赖业务库。
 // ========================================
 package store

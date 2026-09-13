@@ -6,6 +6,7 @@
 // ============================================================================
 import { useCallback, useMemo, useState } from 'react'
 import { Button, Input, Select, Textarea, Tag, MessagePlugin } from 'tdesign-react'
+import { t, tpl, useLang } from '@/i18n'
 import { getSegments, getSegmentsByKey, saveSegments, type EditorSegment, type SegmentEdit } from '@/api/tickets'
 
 /** 行本地编辑态 */
@@ -15,11 +16,11 @@ interface RowState {
   note: string
 }
 
-// STATUS_OPTIONS 译文状态选项：待处理/通过/驳回，供每行的状态下拉框选择
-const STATUS_OPTIONS = [
-  { label: '待处理', value: 'pending' },
-  { label: '通过', value: 'approved' },
-  { label: '驳回', value: 'rejected' },
+// STATUS_OPTIONS 译文状态选项（★ F2 i18n 化；取词延迟到组件内以获得语言切换刷新）
+const statusOptions = () => [
+  { label: t('tk.edStatusPending'), value: 'pending' },
+  { label: t('tk.edStatusApproved'), value: 'approved' },
+  { label: t('tk.edStatusRejected'), value: 'rejected' },
 ]
 
 /** 将源文中命中的术语串包裹为高亮 <mark> */
@@ -42,6 +43,8 @@ function highlightTerms(text: string, terms: string[]): React.ReactNode {
 
 /** EditorPage · 职责说明：对照编辑器页面，双栏展示源文与可编辑译文，支持逐段修改/通过/驳回并保存到后端 */
 export default function EditorPage() {
+  useLang() // ★ F2：语言切换即时重渲染（状态选项等）
+
   const [ticketId, setTicketId] = useState('')
   const [lang, setLang] = useState('en')
   const [langs, setLangs] = useState<string[]>([])
@@ -55,7 +58,7 @@ export default function EditorPage() {
   const load = useCallback(async () => {
     const raw = String(ticketId || '').trim()
     if (!raw) {
-      void MessagePlugin.warning('请输入工单 ID 或工单号（如 T20260902…）')
+      void MessagePlugin.warning(t('tk.edNeedId'))
       return
     }
     const id = Number(raw)
@@ -65,13 +68,15 @@ export default function EditorPage() {
       try {
         const resp = await getSegmentsByKey(raw, lang)
         if (!resp.success) {
-          void MessagePlugin.error(resp.message || '加载失败')
+          void MessagePlugin.error(resp.message || t('tk.edLoadFail'))
           return
         }
         setSegments(resp.segments || [])
         setTerms(resp.terms || [])
         setType(resp.type || 'text')
         setLangs(resp.langs || (resp.lang ? [resp.lang] : []))
+        // ★ E18：工单号解析成功后把输入框归一为数字 ID，后续保存/重载不再走 T 号分支
+        if (resp.ticket_id) setTicketId(String(resp.ticket_id))
         const init: Record<number, RowState> = {}
         for (const s of resp.segments || []) {
           init[s.index] = {
@@ -82,7 +87,7 @@ export default function EditorPage() {
         }
         setRows(init)
       } catch (e) {
-        void MessagePlugin.error('加载失败：' + String(e))
+        void MessagePlugin.error(tpl('tk.edLoadFailErr', { err: String(e) }))
       } finally {
         setLoading(false)
       }
@@ -92,7 +97,7 @@ export default function EditorPage() {
     try {
       const resp = await getSegments(id, lang)
       if (!resp.success) {
-        void MessagePlugin.error(resp.message || '加载失败')
+        void MessagePlugin.error(resp.message || t('tk.edLoadFail'))
         return
       }
       setSegments(resp.segments || [])
@@ -109,7 +114,7 @@ export default function EditorPage() {
       }
       setRows(init)
     } catch (e) {
-      void MessagePlugin.error('加载失败：' + String(e))
+      void MessagePlugin.error(tpl('tk.edLoadFailErr', { err: String(e) }))
     } finally {
       setLoading(false)
     }
@@ -140,22 +145,28 @@ export default function EditorPage() {
 
   // save 将有改动的分段提交到后端保存，成功后提示并重新加载
   const save = useCallback(async () => {
+    // ★ E18：数字工单 ID 校验——旧实现直接 Number(ticketId)，粘贴工单号（T 开头）时得 NaN
+    //   仍照发请求（?id=NaN）。数字 ID 已由 load 回填归一，此处仅兜底拦截。
     const id = Number(ticketId)
+    if (!Number.isInteger(id) || id <= 0) {
+      void MessagePlugin.warning(t('tk.edResolveFirst'))
+      return
+    }
     if (!dirtyEdits.length) {
-      void MessagePlugin.info('没有改动')
+      void MessagePlugin.info(t('tk.edNoChanges'))
       return
     }
     setLoading(true)
     try {
       const resp = await saveSegments(id, lang, dirtyEdits)
       if (resp.success) {
-        void MessagePlugin.success(`已保存 ${resp.saved ?? dirtyEdits.length} 段`)
+        void MessagePlugin.success(tpl('tk.edSavedN', { n: Number(resp.saved ?? dirtyEdits.length) }))
         await load()
       } else {
-        void MessagePlugin.error(resp.message || '保存失败')
+        void MessagePlugin.error(resp.message || t('tk.edSaveFail'))
       }
     } catch (e) {
-      void MessagePlugin.error('保存失败：' + String(e))
+      void MessagePlugin.error(tpl('tk.edSaveFailErr', { err: String(e) }))
     } finally {
       setLoading(false)
     }
@@ -163,30 +174,30 @@ export default function EditorPage() {
 
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: 16, width: '100%', minWidth: 0 }}>
-      <h2 style={{ margin: '8px 0' }}>✍️ 对照编辑器</h2>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-        <Input placeholder="工单 ID" value={ticketId} onChange={(v) => setTicketId(String(v))} style={{ width: 160 }} />
+      <h2 style={{ margin: '8px 0' }}>{t('tk.edTitle')}</h2>
+      <div className="editor-toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <Input placeholder={t("tk.edIdPlaceholder")} value={ticketId} onChange={(v) => setTicketId(String(v))} style={{ width: 160 }} />
         <Select
           value={lang}
           onChange={(v) => setLang(String(v))}
           options={langs.map((l) => ({ label: l, value: l }))}
           style={{ width: 140 }}
-          placeholder="语言"
+          placeholder={t('tk.edColLang')}
         />
-        <Button theme="primary" onClick={load} loading={loading}>加载</Button>
-        <Button theme="success" onClick={save} loading={loading} disabled={!segments.length}>保存改动</Button>
-        {dirtyEdits.length > 0 && <Tag theme="warning">待保存 {dirtyEdits.length} 段</Tag>}
+        <Button theme="primary" onClick={load} loading={loading}>{t('tk.edLoad')}</Button>
+        <Button theme="success" onClick={save} loading={loading} disabled={!segments.length}>{t('tk.edSave')}</Button>
+        {dirtyEdits.length > 0 && <Tag theme="warning">{tpl('tk.pendingSaveFmt', { n: dirtyEdits.length })}</Tag>}
       </div>
 
       {type === 'unsupported' && (
         <div style={{ padding: 12, background: '#fff7e6', border: '1px solid #ffd591', borderRadius: 6, marginBottom: 12 }}>
-          该工单为文件类型且产物不支持在线逐段编辑（仅 xlsx/csv 对照表支持）。请下载产物校对。
+          {t('tk.fileOnlyEditTip')}
         </div>
       )}
 
       {terms.length > 0 && (
         <div style={{ marginBottom: 12 }}>
-          <span style={{ color: '#888', marginRight: 6 }}>命中术语：</span>
+          <span style={{ color: '#888', marginRight: 6 }}>{t('tk.edTermsHit')}</span>
           {terms.slice(0, 30).map((t, i) => (
             <Tag key={i} style={{ marginRight: 4 }}>{t}</Tag>
           ))}
@@ -211,27 +222,28 @@ export default function EditorPage() {
             }}
           >
             <div>
-              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>源文 #{s.index + 1}</div>
+              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{tpl('tk.srcIdxFmt', { i: s.index + 1 })}</div>
               <div style={{ whiteSpace: 'pre-wrap', minHeight: 40 }}>{highlightTerms(s.source, terms)}</div>
             </div>
             <div>
               <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
-                译文（系统：{s.target ? '有' : '空'}）
+                {tpl('tk.edTargetTpl', { state: s.target ? t('tk.edHas') : t('tk.edEmpty') })}
               </div>
               <Textarea
                 value={r.edited_text}
                 onChange={(v) => update(s.index, { edited_text: String(v) })}
+                aria-label={t('tk.edTargetAria')}
                 autosize={{ minRows: 2, maxRows: 8 }}
               />
               <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
                 <Select
                   value={r.status}
                   onChange={(v) => update(s.index, { status: String(v) })}
-                  options={STATUS_OPTIONS}
+                  options={statusOptions()}
                   style={{ width: 120 }}
                 />
                 <Input
-                  placeholder="批注/驳回原因"
+                  placeholder={t('tk.edNotePlaceholder')}
                   value={r.note}
                   onChange={(v) => update(s.index, { note: String(v) })}
                   style={{ flex: 1 }}
@@ -243,7 +255,7 @@ export default function EditorPage() {
       })}
 
       {!loading && segments.length === 0 && (
-        <div style={{ color: '#999', padding: 24, textAlign: 'center' }}>输入工单 ID 并点击「加载」开始逐段校对</div>
+        <div style={{ color: '#999', padding: 24, textAlign: 'center' }}>{t('tk.edEmptyHint')}</div>
       )}
     </div>
   )

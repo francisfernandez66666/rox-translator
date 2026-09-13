@@ -5,12 +5,13 @@
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Input, Table, Dialog, MessagePlugin, Progress, Space, Select, Textarea, Switch, Tooltip,
+  Button, Input, Table, Dialog, MessagePlugin, Progress, Space, Textarea, Switch, // ★ E14：Select/Tooltip 死导入移除
 } from 'tdesign-react'
 import {
   myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail,
   ticketDownload, ticketDelete, ticketCancel, createFeedback,
 } from '@/api'
+import { runGuarded } from '@/lib/runGuarded'
 import { confirmDialog } from '@/components/uiDialogs'
 import type { Ticket, TicketResp } from '@/api/tickets'
 import { TRANSLATE_FILE_ACCEPT, validateTranslateFile } from '@/api/translate'
@@ -24,13 +25,15 @@ import { langLabel } from '@/lib/langNames'
 // ========================================
 
 // 步骤 key → 用户友好名称（与 Vue 对齐）——用于进度气泡中展示每个阶段中文名
-const STEP_NAMES: Record<string, string> = {
-  kb_match: '知识库匹配', ai_initial: 'AI 初翻', evals_initial: '质量评估',
-  review: '专业校对', evals_review: '校对评估', gate: '硬闸校验',
-  culture_gate: '文化检查', qa: '校对', file_extract: '解析提取',
-  file_translate: '初翻', approval: '审批', feedback: '反馈',
-  file_qa: '校对', file_writeback: '回写文件', writeback: '回写文件',
+const STEP_KEYS: Record<string, string> = {
+  kb_match: 'tk.stepKm', ai_initial: 'tk.stepAi', evals_initial: 'tk.stepEvalI',
+  review: 'tk.stepReview', evals_review: 'tk.stepEvalR', gate: 'tk.stepGate',
+  culture_gate: 'tk.stepCulture', qa: 'tk.stepQa', file_extract: 'tk.stepExtract',
+  file_translate: 'tk.stepTranslate', approval: 'tk.stepApproval', feedback: 'tk.stepFeedback',
+  file_qa: 'tk.stepQa', file_writeback: 'tk.stepWriteback', writeback: 'tk.stepWriteback',
 }
+// ★ F2：步骤名经 STEP_KEYS→词典取词（渲染期调用 t，随语言切换生效）
+const stepName = (step: string): string => { const k = STEP_KEYS[step]; return k ? t(k) : step }
 
 // 步骤锚点阶梯（百分比）——各阶段完成/执行时对应的整体进度基准值
 const STEP_WEIGHT: Record<string, number> = {
@@ -99,17 +102,22 @@ export default function TicketsPage() {
 
   // 详情轮询：打开气泡期间每 3s 刷新；工单完成自动停止
   // 启动工单详情轮询，完成态到达后自动停止
+  // ★ E6：轮询回调经 ref 读取当前工单 id——旧实现闭包捕获 startDetailPoll 创建时刻的
+  //   detail（打开详情时往往还是 null），轮询永远空转不刷新。
+  const detailIdRef = useRef<number | null>(null)
+  useEffect(() => { detailIdRef.current = detail?.ticket?.id ?? null }, [detail])
   const startDetailPoll = useCallback(() => {
     stopDetailPoll()
     detailTimer.current = window.setInterval(async () => {
-      const id = detail?.ticket?.id
+      const id = detailIdRef.current
       if (!id || document.hidden) return
       const r = await ticketDetail(id)
       if (r.success) setDetail(r)
       const stt = r.ticket?.status
       if (stt && !['queued', 'in_progress'].includes(stt)) stopDetailPoll()
     }, 3000)
-  }, [detail])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 停止详情轮询并清理定时器
   const stopDetailPoll = useCallback(() => {
@@ -143,11 +151,11 @@ export default function TicketsPage() {
   const currentStepLabel = (): string => {
     const st = (detail?.states as any[]) || []
     const running = st.find((x) => x.status === 'running')
-    if (running) return STEP_NAMES[running.step] || running.step
+    if (running) return stepName(running.step)
     const fs = (detail as any)?.files || []
     if (fs.length) {
       const done = fs.filter((f: any) => f.result_path || f.error).length
-      return `已完成 ${done}/${fs.length} 个文件`
+      return tpl('tk.filesDone', { done, total: fs.length })
     }
     return ''
   }
@@ -214,21 +222,25 @@ export default function TicketsPage() {
 
   // 运行草稿态工单
   async function run(row: Ticket) {
-    const r = await ticketRun(row.id)
+    // ★ E10：网络/超时异常同样可见（旧实现仅业务失败提示，异常被 unhandled rejection 吞）
+    const r = await runGuarded(() => ticketRun(row.id), { fallback: t('tk.runFail') })
+    if (!r) return
     if (!r.success) { void MessagePlugin.error(r.message || t('tk.runFail')); return }
     void load()
   }
   // 取消排队/进行中的工单（需确认；确认按钮置文案「确认取消」避免与弹窗取消同级歧义）
   async function cancelTicket(row: Ticket) {
     if (!(await confirmDialog({ body: tpl('tk.cancelConfirm', { no: row.ticket_no || row.id }), confirmText: t('tk.confirmCancelAction') }))) return
-    const r = await ticketCancel(row.id)
+    const r = await runGuarded(() => ticketCancel(row.id), { fallback: t('tk.opFail') })
+    if (!r) return
     if (!r.success) { void MessagePlugin.error(r.message || t('tk.opFail')); return }
     void load()
   }
   // 删除已完成/已取消的工单（需确认）
   async function deleteTicket(row: Ticket) {
     if (!(await confirmDialog({ body: tpl('tk.deleteConfirm', { no: row.ticket_no }), confirmText: t('tk.confirmDeleteAction') }))) return
-    const r = await ticketDelete(row.id)
+    const r = await runGuarded(() => ticketDelete(row.id), { fallback: t('tk.opFail') })
+    if (!r) return
     if (!r.success) { void MessagePlugin.error(r.message || t('tk.opFail')); return }
     void load()
   }
@@ -245,7 +257,7 @@ export default function TicketsPage() {
   async function toggleDetail(row: Ticket) {
     if (detail && detail.ticket?.id === row.id) { setDetail(null); stopDetailPoll(); return }
     const r = await ticketDetail(row.id)
-    if (r.success) { startDetailPoll(); setDetail(r) }
+    if (r.success) { setDetail(r); detailIdRef.current = r.ticket?.id ?? null; startDetailPoll() }
   }
 
   // 打开针对指定工单的反馈弹窗（携带工单 ID 与翻译模式）
@@ -279,10 +291,10 @@ export default function TicketsPage() {
           <Button variant={mode === 'file' ? 'base' : 'outline'} theme="primary" onClick={() => setMode('file')}>📎 {t('tk.modeFile')}</Button>
         </Space>
 
-        <Input value={title} onChange={setTitle} placeholder={t('tk.titlePlaceholder')} style={{ width: '100%', marginBottom: 8 }} />
+        <Input value={title} onChange={setTitle} aria-label={t('tk.titlePlaceholder')} placeholder={t('tk.titlePlaceholder')} style={{ width: '100%', marginBottom: 8 }} />
 
         {mode === 'text' ? (
-          <Textarea autosize={{ minRows: 4, maxRows: 14 }} value={text} onChange={setText} placeholder={t('tk.textPlaceholder')} style={{ width: '100%' }} />
+          <Textarea autosize={{ minRows: 4, maxRows: 14 }} value={text} onChange={setText} aria-label={t('tk.textPlaceholder')} placeholder={t('tk.textPlaceholder')} style={{ width: '100%' }} />
         ) : (
           <>
               <div onClick={() => document.getElementById('tk-file-input')?.click()}
@@ -317,14 +329,14 @@ export default function TicketsPage() {
           {/* ★ 缩翻（任务7）：勾选并输入最长字符限制，提示模型精简输出。
               预留定宽槽位（72px）——勾选只显隐输入框、不改变行宽，避免模式切换/创建按钮位置跳动 */}
           <label style={{ fontSize: 13, color: '#555', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
-            <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> 缩翻
+            <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> {t('app.condense')}
           </label>
           <div style={{ width: 72, flexShrink: 0 }}>
             {condenseOn && (
               <input type="number" min={1} max={10000} value={condenseMax}
                 onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
                 style={{ width: '100%', boxSizing: 'border-box', height: 30, fontSize: 12, border: '1px solid #d8dee6', borderRadius: 6, padding: '0 6px' }}
-                title="最长字符长度" />
+                title={t('tk.condenseMaxTitle')} />
             )}
           </div>
           <Button theme="primary" loading={creating} onClick={create} style={{ marginLeft: 'auto' }}>
@@ -361,7 +373,7 @@ export default function TicketsPage() {
                     .join('、')}
                 </span>
               ) },
-            { colKey: 'created_at', title: t('users.colLastLogin'), width: 160,
+            { colKey: 'created_at', title: t('tk.colCreatedAt'), width: 160, // ★ E16：本域键（旧借 users.colLastLogin）
               cell: ({ row }: any) => fmtTime(row.created_at) },
             { colKey: 'op', title: t('org.colActions'), width: 280,
               cell: ({ row }: any) => (
@@ -405,7 +417,7 @@ export default function TicketsPage() {
           <div style={{ marginTop: 8, maxHeight: 200, overflowY: 'auto' }}>
             {states.map((st: any) => (
               <div key={st.id} className={`st-${st.status}`} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, padding: '3px 0' }}>
-                <span style={{ flex: 1, color: '#555' }}>{STEP_NAMES[st.step] || st.step}</span>
+                <span style={{ flex: 1, color: '#555' }}>{stepName(st.step)}</span>
                 <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4,
                   background: st.status === 'success' ? '#e6f4ea' : st.status === 'running' ? '#e8f0fe' : st.status === 'error' ? '#fce8e6' : '#eee',
                   color: st.status === 'success' ? '#2e7d32' : st.status === 'running' ? 'var(--td-brand-color, #2f47f5)' : st.status === 'error' ? '#c5221f' : '#888' }}>{st.status}</span>
@@ -471,7 +483,7 @@ function TicketFeedbackModal({ target, onClose, onSubmitted }: {
               </>
             }>
       <p style={{ fontSize: 12, color: '#888', margin: '0 0 10px' }}>{t('fb.hint')}</p>
-      <Textarea autosize={{ minRows: 4 }} maxlength={1000} value={content} onChange={(v) => setContent(v as string)} placeholder={t('fb.placeholder')} />
+      <Textarea autosize={{ minRows: 4 }} maxlength={1000} value={content} onChange={(v) => setContent(v as string)} aria-label={t('fb.placeholder')} placeholder={t('fb.placeholder')} />
       <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
         <Switch size="small" value={withContext} onChange={(v) => setWithContext(v as boolean)} />
         <span style={{ fontSize: 13, color: '#667' }}>{t('fb.withContext')}</span>

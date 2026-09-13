@@ -78,7 +78,7 @@ type KBStagedPhrase struct {
 type StagedMergedRow struct {
 	Key        string `json:"key"` // kind:id（前端 rowKey/选中键）
 	ID         int64  `json:"id"`
-	Kind       string `json:"kind"` // entries / phrases
+	Kind       string `json:"kind"`        // entries / phrases
 	PhraseKind string `json:"phrase_kind"` // phrases 的 style/forbidden/replace（entries 为空）
 	PackType   string `json:"pack_type"`
 	Tier       int    `json:"tier"`
@@ -669,6 +669,7 @@ func (s *Store) ListStagedPhrases(status, lang string, limit, offset int) ([]*KB
 // 参数：kind=entries|phrases；ids=待审主键；status=approved/rejected/pending。
 //   - approved/rejected：仅 pending 可流转，记录 applied_at（通过/驳回）。
 //   - pending：还原为待审——从 approved/rejected 拉回，清空 applied_at（含内容已编辑的场景）。
+//
 // 返回受影响行数。
 func (s *Store) SetStagedStatus(kind string, ids []int64, status string) (int, error) {
 	if len(ids) == 0 {
@@ -798,7 +799,9 @@ func (s *Store) UpdateStagedPhraseContent(id int64, phrase, replacement string) 
 // 流程改造（2026-09-02）：采集内容不再滞留待审池等人工审批，改为采集即自动清洗（源语言
 // 已在 crawler 层纠正）+ 直接嵌入正式库 + 在待审表留一条 approved 记录供人工事后查看/驳回/改正。
 // ★ 去重 hash 始终按当前字段重算（不接受外部传入的旧 hash）：调用方可能在冲洗时已更正
-//   src_lang（UpdateStagedEntrySrcLang），若沿用旧 hash 会在唯一索引上插入重复行（2026-09-03 修复）。
+//
+//	src_lang（UpdateStagedEntrySrcLang），若沿用旧 hash 会在唯一索引上插入重复行（2026-09-03 修复）。
+//
 // 返回错误（SaveEntry 失败时返回，调用方据此跳过；留痕失败不阻断落库）。
 func (s *Store) AutoApproveEntry(tid int64, e *KBStagedEntry) error {
 	if e.TargetPackID <= 0 || e.SrcText == "" || e.TgtText == "" || e.TgtLang == "" {

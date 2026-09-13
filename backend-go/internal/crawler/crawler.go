@@ -6,6 +6,7 @@
 //   - 三层数据源（tier）：1官方API / 2受限网页抓取 / 3LLM生成，按 tier 标注可信度
 //   - 产出统一为 NormalizedEntry（行业/语言文化条目）与 NormalizedPhrase（语言文化安全句），
 //     经 store.StageEntriesBatch / StagePhrasesBatch 写入待审池（hash 去重、跨日幂等）
+//
 // =============================================
 package crawler
 
@@ -14,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"sync"
 	"time"
 
 	"translator/internal/store"
@@ -32,11 +34,15 @@ type LLMCaller interface {
 
 // Crawler 采集器：驱动每日采集循环。
 type Crawler struct {
-	St     *store.Store // 平台存储（数据源/待审池/断点）
-	LLM    LLMCaller    // LLM 客户端（tier3 用；可为 nil 则跳过 llm_gen 源）
-	Probe  LoadProbe    // 低占用探针（可为 nil=始终视为低占用）
-	Chunk  int          // 每块最大条目数（默认 100）
-	Quiet  bool         // 安静模式（不打印每源日志）
+	St    *store.Store // 平台存储（数据源/待审池/断点）
+	LLM   LLMCaller    // LLM 客户端（tier3 用；可为 nil 则跳过 llm_gen 源）
+	Probe LoadProbe    // 低占用探针（可为 nil=始终视为低占用）
+	// ★ D14（2026-09-12）：跨批次/跨源复用同一 fetchBase——主机限频窗口、
+	// robots 缓存、HTTP 连接池全程有效（旧实现每批新建，限频形同虚设）。
+	fetchMu sync.Mutex
+	fetchB  *fetchBase
+	Chunk   int  // 每块最大条目数（默认 100）
+	Quiet   bool // 安静模式（不打印每源日志）
 }
 
 // New 创建采集器。参数 st=平台存储；返回采集器实例。
@@ -111,10 +117,11 @@ func (c *Crawler) Idle() bool {
 
 // RunSource 采集单个数据源（可中断续传）。
 // 逻辑：
-//   1. 解析目标包（locale→租户1语言文化包；industry→按行业 code 匹配租户1行业包）
-//   2. 读取当日断点游标（checkpoint），从游标处继续
-//   3. 按源类型分发到 tier1/tier2/tier3 抓取函数，逐块产出并写待审池
-//   4. 块间检测负载：高占用则暂停并返回（游标已保存，下次续传）
+//  1. 解析目标包（locale→租户1语言文化包；industry→按行业 code 匹配租户1行业包）
+//  2. 读取当日断点游标（checkpoint），从游标处继续
+//  3. 按源类型分发到 tier1/tier2/tier3 抓取函数，逐块产出并写待审池
+//  4. 块间检测负载：高占用则暂停并返回（游标已保存，下次续传）
+//
 // 参数 ctx=上下文；src=数据源；返回新增待审条数。
 func (c *Crawler) RunSource(ctx context.Context, src *store.KBScrapeSource) (int, error) {
 	deps, err := c.resolvePack(src)
@@ -293,13 +300,23 @@ func (c *Crawler) ChunkSize() int {
 	return 100
 }
 
+// sharedFetch 返回进程级共享 fetchBase（懒建，双检锁）。
+func (c *Crawler) sharedFetch() *fetchBase {
+	c.fetchMu.Lock()
+	defer c.fetchMu.Unlock()
+	if c.fetchB == nil {
+		c.fetchB = newFetchBase()
+	}
+	return c.fetchB
+}
+
 // producerFor 按数据源类型返回对应抓取器（tier 分发）。
 func (c *Crawler) producerFor(src *store.KBScrapeSource) (Producer, error) {
 	switch src.Kind {
 	case "official_api":
-		return &wiktionaryProducer{st: c.St, src: src}, nil
+		return &wiktionaryProducer{st: c.St, src: src, fetch: c.sharedFetch()}, nil
 	case "limited_web":
-		return &htmlTableProducer{st: c.St, src: src}, nil
+		return &htmlTableProducer{st: c.St, src: src, fetch: c.sharedFetch()}, nil
 	case "llm_gen":
 		if c.LLM == nil {
 			return nil, fmt.Errorf("LLM 客户端未配置，无法运行 llm_gen 源")

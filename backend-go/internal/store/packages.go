@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"time"
+	"translator/internal/ops"
 
 	"translator/internal/db"
 	"translator/internal/tenant"
@@ -141,10 +142,39 @@ func (s *Store) UpdatePackage(pkg *Package) error {
 
 // DeletePackage 删除商业包（超管）。
 // 参数：id=包主键 ID；返回错误。
+// DeletePackage 删除商业包。★ C15（2026-09-12）：删除前引用检查——
+// ① 存在 pending 订单（用户正在支付流程中）；② 存在仍有余量的活跃台账
+// （source='order' 且 ref 挂本包订单、left>0、未过期）。任一命中即拒绝，
+// 提示改用停用（enabled=0），避免订单回调/退款找不到包定义（MarkOrderPaid
+// 「套餐缺失」挂起、RefundOrder 无法核算）。
 func (s *Store) DeletePackage(id int64) error {
+	var pendingOrders int64
+	if err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT COUNT(*) FROM orders WHERE package_id=? AND status='pending'", id).Scan(&pendingOrders); err != nil {
+		return err
+	}
+	if pendingOrders > 0 {
+		return &errPkgRef{"待支付订单 " + strconv.FormatInt(pendingOrders, 10) + " 笔正在引用，请改用停用"}
+	}
+	var activeGrants int64
+	if err := db.QueryRow(s.db, db.CurrentDialect(),
+		`SELECT COUNT(*) FROM quota_grants g JOIN orders o ON o.id=g.ref_id
+		 WHERE o.package_id=? AND g.source='order' AND g."left">0 AND g.expires_at>?`,
+		id, time.Now().UTC().Format(time.RFC3339)).Scan(&activeGrants); err != nil {
+		return err
+	}
+	if activeGrants > 0 {
+		return &errPkgRef{"仍有 " + strconv.FormatInt(activeGrants, 10) + " 条活跃权益台账引用本包，请改用停用"}
+	}
 	_, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM packages WHERE id=?", id)
 	return err
 }
+
+// errPkgRef 套餐被引用错误（可读消息，API 层直接透出）。
+type errPkgRef struct{ msg string }
+
+// Error 实现 error 接口：套餐被订单/余额引用时禁止删除。
+func (e *errPkgRef) Error() string { return "套餐被引用无法删除：" + e.msg }
 
 // PackagesTenantMigrate 将 packages 表从「code 全局唯一」迁移为「(tenant_id, code) 租户级唯一」。
 // 幂等：新库直接创建复合唯一；老库补 tenant_id 列后重建表完成约束替换。
@@ -262,8 +292,10 @@ func (s *Store) PackagesTenantMigrate() {
 
 // ============ 租户句数余额 ============
 
-// GetSentenceBalance 读取租户句数余额（来自 tenants.permissions JSON 的 sentence_balance 字段）。
-// 参数：tid=租户 ID；返回剩余句数（未设置返回 0）。
+// GetSentenceBalance 读取句数镜像（tenants.permissions.sentence_balance）。
+// ★ C26（2026-09-12）定稿：token 是唯一真账；sentence_balance 仅为发放流水镜像
+// （只增不减、退款回冲钳 0），**禁止用于判额/对账**；展示剩余句数一律
+// tokens_available ÷ TokenSentenceRate() 反推（旧 DeductSentences 生产零调用已删除）。
 func (s *Store) GetSentenceBalance(tid int64) (int64, error) {
 	perms, err := s.GetTenantPerms(tid)
 	if err != nil {
@@ -334,31 +366,6 @@ func (s *Store) AddSentences(tid, n int64) (int64, error) {
 	}
 	return s.GetSentenceBalance(tid)
 }
-
-// DeductSentences 扣减租户句数余额（每次翻译按「源句×目标语言数」扣减）。
-// 参数：tid=租户 ID，n=待扣减句数；余额不足时返回 ErrSentenceExhausted。
-// 返回：扣减后的剩余句数。
-//
-// ★ 并发安全（2026-08-26 全仓评审 B3）：单语句原子自减 + WHERE 余额守卫，
-// RowsAffected==0 即余额不足（或租户不存在）——守卫式核销与 DeductWithGrants 同款双保险。
-// ★ 2026-09-12 PG 方言修复：JSON1 改经 db.JSONNumAdd/JSONNumGE 助手（自减=负增量）。
-func (s *Store) DeductSentences(tid, n int64) (int64, error) {
-	d := db.CurrentDialect()
-	res, err := db.Exec(s.db, d,
-		"UPDATE tenants SET "+db.JSONNumAdd(d, "permissions", "sentence_balance")+", updated_at=? WHERE id=? AND "+
-			db.JSONNumGE(d, "permissions", "sentence_balance"),
-		-n, time.Now().Format(time.RFC3339), tid, n)
-	if err != nil {
-		return 0, err
-	}
-	if cnt, _ := res.RowsAffected(); cnt == 0 {
-		return 0, ErrSentenceExhausted
-	}
-	return s.GetSentenceBalance(tid)
-}
-
-// ErrSentenceExhausted 句数额度耗尽错误（免费体验句/付费包句数用完后提示购买）。
-var ErrSentenceExhausted = &errTxt{"翻译句数已用尽，请购买套餐或增量包"}
 
 // getTenantPermsTx 事务作用域的租户权限读取（GetTenantPerms 的 tx 变体）。
 func getTenantPermsTx(tx *sql.Tx, tid int64) (*tenant.Perms, error) {
@@ -512,14 +519,14 @@ func (s *Store) TokenSentenceRate() int64 {
 			return n
 		}
 	}
-	return 500
+	return ops.DefaultTokensPerSentence // ★ C6：默认值单一来源（ops.DefaultEffective 收口）
 }
 
 // MarkupMultiplier 成本均摊系数（billing_markup_multiplier，默认 1.5，强制 ≥1.0）。
 // 对外计费与权益发放统一乘以该系数：扣费侧（用量实时计量）与入账侧（包订单发放）共用同一口径，
 // 保证「1 入账 token = 1 扣费 token」的单位一致；后台可调。
 func (s *Store) MarkupMultiplier() float64 {
-	m := 1.5
+	m := ops.DefaultMarkupMultiplier() // ★ C6 默认值单一来源
 	if v, err := s.GetConfig("billing_markup_multiplier"); err == nil && v != "" {
 		if f, perr := strconv.ParseFloat(v, 64); perr == nil && f >= 1.0 {
 			m = f
@@ -544,11 +551,15 @@ func (s *Store) ExpirePackage(tid int64) (code string, err error) {
 	if code == "" {
 		return "", nil // 无订阅无需摘除
 	}
-	_, err = db.Exec(s.db, db.CurrentDialect(), `UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'),
-		'$.package_code', '', '$.package_expires_at', '',
-		'$.notified_exp7', json('false'), '$.notified_exp1', json('false')),
-		updated_at=? WHERE id=?`,
-		time.Now().Format(time.RFC3339), tid)
+	// ★ A2/S3（2026-09-12 PG 方言修复）：多键原子摘除改经 db.JSONPatchSet 合并补丁——
+	//   旧写法内联 SQLite JSON1 json_set，PG 下整条 UPDATE 报错，导致每日到期摘除静默失败。
+	patch, _ := json.Marshal(map[string]any{
+		"package_code": "", "package_expires_at": "", "notified_exp7": false, "notified_exp1": false,
+	})
+	d := db.CurrentDialect()
+	_, err = db.Exec(s.db, d,
+		"UPDATE tenants SET "+db.JSONPatchSet(d, "permissions")+", updated_at=? WHERE id=?",
+		string(patch), time.Now().Format(time.RFC3339), tid)
 	if err != nil {
 		return "", err
 	}
@@ -562,9 +573,12 @@ func (s *Store) SetNotifiedExpFlag(tid int64, flag string) error {
 	if flag != "notified_exp7" && flag != "notified_exp1" && flag != "notified_exp3" {
 		return &errTxt{"非法提醒标记: " + flag}
 	}
-	_, err := db.Exec(s.db, db.CurrentDialect(),
-		"UPDATE tenants SET permissions=json_set(COALESCE(permissions,'{}'), '$."+flag+"', json('true')), updated_at=? WHERE id=?",
-		time.Now().Format(time.RFC3339), tid)
+	// ★ A2/S3（2026-09-12）：置 true 走 JSONPatchSet（flag 已经白名单校验，键名安全）。
+	d := db.CurrentDialect()
+	patch := `{"` + flag + `":true}`
+	_, err := db.Exec(s.db, d,
+		"UPDATE tenants SET "+db.JSONPatchSet(d, "permissions")+", updated_at=? WHERE id=?",
+		patch, time.Now().Format(time.RFC3339), tid)
 	return err
 }
 

@@ -3,6 +3,7 @@
 //   - concurrency.Semaphore（list 令牌桶）：全局上限跨「多实例」生效；
 //   - ratelimit.Daily：原子日计数跨实例聚合；
 //   - distlock.Lock：同一时刻仅一个持有者。
+//
 // 另验证未启用 Redis 时自动降级进程内实现（单实例兼容）。
 // 运行：go test ./internal/infra/ -run TestRedisBackedInfra -v
 // =============================================

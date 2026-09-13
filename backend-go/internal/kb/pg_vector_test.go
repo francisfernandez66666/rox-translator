@@ -1,10 +1,11 @@
 // ============ 本文件职责中文说明 ============
 // pgvector 后端验证测试：仅在 PG_TEST_DSN 已配置且已安装 vector 扩展时运行，
 // 其余环境自动跳过（不影响默认的 SQLite 测试）。
-//   1) VectorSearch 余弦近邻排序与业务优先级（部门>跨部门>企业>行业>通用语言习惯包）正确性；
-//   2) ScopeVisibility 链内/共享层/跨部门/不可见/nil-scope 五种判定（保证 npz 与 pgvector 两条
-//      检索路径口径一致，跨部门命中 InChain=false）；
-//   3) UpsertEmbedding 向量双写与「真实 Embedding API → pgvector 写入 → 语义检索」全链路闭合。
+//  1. VectorSearch 余弦近邻排序与业务优先级（部门>跨部门>企业>行业>通用语言习惯包）正确性；
+//  2. ScopeVisibility 链内/共享层/跨部门/不可见/nil-scope 五种判定（保证 npz 与 pgvector 两条
+//     检索路径口径一致，跨部门命中 InChain=false）；
+//  3. UpsertEmbedding 向量双写与「真实 Embedding API → pgvector 写入 → 语义检索」全链路闭合。
+//
 // =============================================
 package kb
 
@@ -92,11 +93,11 @@ func TestScopeVisibility(t *testing.T) {
 		CrossDeptPacks: map[int64]string{3: "其它部门"},
 	}
 	cases := []struct {
-		name     string
-		rowT     int64
-		pack     int64
-		scope    *PackScope
-		vis, ic  bool
+		name    string
+		rowT    int64
+		pack    int64
+		scope   *PackScope
+		vis, ic bool
 	}{
 		{"链内企业包", caller, 1, shared, true, true},
 		{"共享层(宿主租户)", 1, 2, shared, true, true},
@@ -145,10 +146,10 @@ func TestVectorSearchPriorityOrderOnPG(t *testing.T) {
 		pack   int64
 		tag    string
 	}{
-		{"prio_dept", 10, 1, "部门"},       // ChainPacks[1]=0 → rank 0
-		{"prio_cross", 20, 3, "跨部门"},     // CrossDeptPacks[3] → rank 100
-		{"prio_ent", 10, 5, "企业"},        // TenantPackIDs[5] → rank 200
-		{"prio_ind", 1, 2, "行业"},         // SharedPackIDs[2] → rank 300
+		{"prio_dept", 10, 1, "部门"},    // ChainPacks[1]=0 → rank 0
+		{"prio_cross", 20, 3, "跨部门"},  // CrossDeptPacks[3] → rank 100
+		{"prio_ent", 10, 5, "企业"},     // TenantPackIDs[5] → rank 200
+		{"prio_ind", 1, 2, "行业"},      // SharedPackIDs[2] → rank 300
 		{"prio_univ", 1, 9, "通用语言习惯"}, // UniversalPackIDs[9] → rank 400（无scope，最低）
 	}
 	for _, r := range rows {
@@ -159,13 +160,13 @@ func TestVectorSearchPriorityOrderOnPG(t *testing.T) {
 		}
 	}
 	scope := &PackScope{
-		TenantID:        10,
-		TenantPackIDs:   map[int64]bool{1: true, 5: true},
-		ChainPacks:      map[int64]int{1: 0},
-		SharedPackIDs:   map[int64]bool{2: true},
+		TenantID:         10,
+		TenantPackIDs:    map[int64]bool{1: true, 5: true},
+		ChainPacks:       map[int64]int{1: 0},
+		SharedPackIDs:    map[int64]bool{2: true},
 		UniversalPackIDs: map[int64]bool{9: true},
-		AllowCrossDept:  true,
-		CrossDeptPacks:  map[int64]string{3: "其它部门"},
+		AllowCrossDept:   true,
+		CrossDeptPacks:   map[int64]string{3: "其它部门"},
 	}
 	k := &KBDatabase{db: conn, dbPath: "pg"}
 	query := make([]float32, 1024)
@@ -233,14 +234,14 @@ func TestKBDatabaseVectorSearchScopedOnPG(t *testing.T) {
 	query[0] = 1
 
 	rows := []struct {
-		hash    string
-		tenant  int64
-		pack    int64
-		vec     []float32
+		hash   string
+		tenant int64
+		pack   int64
+		vec    []float32
 	}{
-		{"vectest_chain", 10, 1, vecClose},  // 链内（caller 租户 + 企业包）：应 InChain=true
-		{"vectest_shared", 1, 2, vecFar},    // 共享层（宿主租户）：应 InChain=true
-		{"vectest_cross", 20, 3, vecClose},  // 跨部门（其它租户 + 跨部门包）：应 InChain=false
+		{"vectest_chain", 10, 1, vecClose}, // 链内（caller 租户 + 企业包）：应 InChain=true
+		{"vectest_shared", 1, 2, vecFar},   // 共享层（宿主租户）：应 InChain=true
+		{"vectest_cross", 20, 3, vecClose}, // 跨部门（其它租户 + 跨部门包）：应 InChain=false
 	}
 	for _, r := range rows {
 		if _, err := conn.Exec(

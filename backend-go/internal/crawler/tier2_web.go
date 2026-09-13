@@ -20,8 +20,17 @@ import (
 
 // htmlTableProducer tier-2 受限网页表格抓取器。
 type htmlTableProducer struct {
-	st  *store.Store
-	src *store.KBScrapeSource
+	st    *store.Store
+	src   *store.KBScrapeSource
+	fetch *fetchBase // ★ D14：跨批复用
+}
+
+// fetchBase 取共享抓取基座（未注入时懒建单实例）。
+func (p *htmlTableProducer) fetchBase() *fetchBase {
+	if p.fetch == nil {
+		p.fetch = newFetchBase()
+	}
+	return p.fetch
 }
 
 // Next 抓取术语表页并逐行产出术语对。
@@ -31,7 +40,7 @@ func (p *htmlTableProducer) Next(ctx context.Context, deps *SourceDeps, cursor s
 	if p.src.BaseURL == "" {
 		return nil, nil, cursor, true, fmt.Errorf("limited_web 源必须配置 base_url")
 	}
-	f := newFetchBase()
+	f := p.fetchBase() // ★ D14
 	body, err := f.get(ctx, p.src.BaseURL)
 	if err != nil {
 		return nil, nil, cursor, true, err
@@ -111,13 +120,30 @@ func extractTableRows(tbl *html.Node) [][]string {
 	var walkRow func(n *html.Node, cur *[]string)
 	// 收集一个 <tr> 内的前两列文本
 	collectRow := func(tr *html.Node) []string {
+		// ★ D6（2026-09-12）：表头行（含 <th>）整行跳过——旧实现把 th 当术语对
+		// 采集（「术语/Term」样表头自动审批入正式库，污染命中链）。
+		var hasTh func(n *html.Node) bool
+		hasTh = func(n *html.Node) bool {
+			if n.Type == html.ElementNode && n.DataAtom == atom.Th {
+				return true
+			}
+			for c := n.FirstChild; c != nil; c = c.NextSibling {
+				if hasTh(c) {
+					return true
+				}
+			}
+			return false
+		}
+		if hasTh(tr) {
+			return nil
+		}
 		var cells []string
 		var walkCells func(n *html.Node)
 		walkCells = func(n *html.Node) {
 			if len(cells) >= 2 {
 				return
 			}
-			if n.Type == html.ElementNode && (n.DataAtom == atom.Td || n.DataAtom == atom.Th) {
+			if n.Type == html.ElementNode && n.DataAtom == atom.Td {
 				cells = append(cells, nodeText(n))
 			}
 			for c := n.FirstChild; c != nil; c = c.NextSibling {

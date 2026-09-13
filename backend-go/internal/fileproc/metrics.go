@@ -74,30 +74,30 @@ func RecordQueueWait(waitTime time.Duration) {
 
 // Snapshot 指标快照（供 /metrics 导出）
 type ProcMetricsSnapshot struct {
-	Starts          int64
-	Success         int64
-	Failures        int64
-	Timeouts        int64
-	Sigkills        int64
-	TotalDurationNs int64
-	Running         int64
-	QueueWaits      int64
+	Starts           int64
+	Success          int64
+	Failures         int64
+	Timeouts         int64
+	Sigkills         int64
+	TotalDurationNs  int64
+	Running          int64
+	QueueWaits       int64
 	QueueWaitTotalNs int64
-	AvgDurationMs   float64
-	AvgQueueWaitMs  float64
+	AvgDurationMs    float64
+	AvgQueueWaitMs   float64
 }
 
 // Snapshot 获取指标快照（原子读取，保证一致性）
 func (m *ProcMetrics) Snapshot() ProcMetricsSnapshot {
 	s := ProcMetricsSnapshot{
-		Starts:          atomic.LoadInt64(&m.starts),
-		Success:         atomic.LoadInt64(&m.success),
-		Failures:        atomic.LoadInt64(&m.failures),
-		Timeouts:        atomic.LoadInt64(&m.timeouts),
-		Sigkills:        atomic.LoadInt64(&m.sigkills),
-		TotalDurationNs: atomic.LoadInt64(&m.totalDurationNs),
-		Running:         atomic.LoadInt64(&m.running),
-		QueueWaits:      atomic.LoadInt64(&m.queueWaits),
+		Starts:           atomic.LoadInt64(&m.starts),
+		Success:          atomic.LoadInt64(&m.success),
+		Failures:         atomic.LoadInt64(&m.failures),
+		Timeouts:         atomic.LoadInt64(&m.timeouts),
+		Sigkills:         atomic.LoadInt64(&m.sigkills),
+		TotalDurationNs:  atomic.LoadInt64(&m.totalDurationNs),
+		Running:          atomic.LoadInt64(&m.running),
+		QueueWaits:       atomic.LoadInt64(&m.queueWaits),
 		QueueWaitTotalNs: atomic.LoadInt64(&m.queueWaitTotalNs),
 	}
 	total := s.Success + s.Failures + s.Timeouts

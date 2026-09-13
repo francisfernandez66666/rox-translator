@@ -22,12 +22,15 @@ async function login(page: Page, username: string, password: string) {
 async function headerTenantTag(page: Page) {
   const tag = page.locator('header span[title]').filter({ hasText: /[\u4e00-\u9fa5]/ }).first();
   await expect(tag).toBeVisible({ timeout: 15000 });
+  // 顶栏初值即「个人版」占位，/api/me/context 异步返回后才替换——轮询直到稳定（PG 较慢）
+  await expect.poll(async () => (await tag.getAttribute('title')) || '', { timeout: 10000, message: '租户名 Tag 未落地' }).toContain('UAT');
   return (await tag.getAttribute('title')) || '';
 }
 
 // 用 UAT 已有用户验证租户名展示（uatuser_a 企业租户 "UAT公司A"，uatuser_b 企业租户 "UAT公司B"）
-// ⚠️ 前台 Header 尚未实现租户名 Tag（设计预留特性），待实现后取消 test.skip
-test.describe.skip('问题1 顶栏租户名展示（待实现 Header 租户 Tag）', () => {
+
+// ★ F1 已实现（Header 租户 Tag）：取消 skip（2026-09-12）
+test.describe('问题1 顶栏租户名展示（Header 租户 Tag）', () => {
   test('企业用户顶栏显示其租户名（UAT公司A）', async ({ page }) => {
     await login(page, 'uatuser_a', 'uatpass123');
     expect(await headerTenantTag(page)).toContain('UAT');

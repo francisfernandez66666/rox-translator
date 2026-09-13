@@ -17,82 +17,8 @@ import { SkillBadge } from './SkillBadge'
 
 // ---- 轻量 Markdown → HTML（转义优先，行内顺序与 Vue 一致：** __ *em* `code`）----
 // 转义 HTML 特殊字符，防止注入并确保后续标签正常解析
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
-}
-
-// 将消息正文渲染为受限 Markdown HTML：引用、标题、列表、分隔线、行内加粗/斜体/代码
-export function renderMarkdown(text: string): string {
-  let out = text || ''
-
-  // 0. 转义
-  out = escapeHtml(out)
-
-  // 1. 引用块
-  out = out.replace(/(?:^|\n)((?:&gt;\s*.*\n?)+)/g, (_m, block: string) => {
-    const lines = block.trim().split('\n').map((l: string) => l.replace(/^&gt;\s*/, ''))
-    return `\n<blockquote>${lines.join('<br>')}</blockquote>\n`
-  })
-
-  // 2. 标题 h1–h6
-  out = out.replace(/^(#{1,6})\s+(.+)$/gm, (_m, hashes: string, content: string) => {
-    const level = hashes.length
-    return `<h${level}>${content.trim()}</h${level}>`
-  })
-
-  // 3. 分隔线
-  out = out.replace(/^(?:---|\*\*\*)\s*$/gm, '<hr>')
-
-  // 4. 列表项
-  out = out.replace(/^(\s*)([-*+])\s+(.+)$/gm, '<li class="li-unordered">$3</li>')
-  out = out.replace(/^(\s*)(\d+[.)])\s+(.+)$/gm, '<li class="li-ordered">$3</li>')
-  out = out.replace(/((?:<li class="li-unordered">.*?<\/li>\s*)+)/gs, (_m, items: string) => {
-    const clean = items.replace(/ class="li-unordered"/g, '')
-    return `<ul>${clean}</ul>`
-  })
-  out = out.replace(/((?:<li class="li-ordered">.*?<\/li>\s*)+)/gs, (_m, items: string) => {
-    const clean = items.replace(/ class="li-ordered"/g, '')
-    return `<ol>${clean}</ol>`
-  })
-
-  // 5. 段落
-  const lines = out.split('\n')
-  const result: string[] = []
-  let para: string[] = []
-  const flush = () => {
-    if (para.length) {
-      const p = para.join(' ').trim()
-      if (p) result.push(`<p>${p}</p>`)
-      para = []
-    }
-  }
-  for (const line of lines) {
-    const trimmed = line.trim()
-    const isBlock = trimmed.match(/^<(h[1-6]|ul|ol|li|blockquote|hr|p|table)/)
-    if (isBlock) { flush(); result.push(line) }
-    else if (trimmed === '') { flush() }
-    else para.push(trimmed)
-  }
-  flush()
-  out = result.join('\n')
-
-  // 6. 行内格式（Vue 用 lookbehind 避免与 ** 冲突）
-  out = out.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-  out = out.replace(/__(.+?)__/g, '<strong>$1</strong>')
-  out = out.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
-  out = out.replace(/`([^`]+)`/g, '<code>$1</code>')
-
-  // 7. 清理段落内多余 <br>
-  out = out.replace(/<p>(.*?)<\/p>/gs, (_m, inner: string) => {
-    const cleaned = inner.replace(/<br>\s*$/, '')
-    return `<p>${cleaned}</p>`
-  })
-
-  return out
-}
-
-// ---- 工具函数（文件名/图标/类型标签/图片判定，行为同 Vue 版）----
-// 从路径中解码并提取文件名字段
+import { renderMarkdown } from '@/lib/markdown' // ★ F11：渲染纯函数抽提至 lib/markdown
+// 从路径中提取文件名（兼容 / 与 \ 分隔符，尽量 URL 解码）
 function getFileName(path: string): string {
   try { return decodeURIComponent(path.split('/').pop() || path.split('\\').pop() || path) } catch { return path }
 }
@@ -132,8 +58,9 @@ interface Props {
 }
 
 // 默认导出组件：渲染单条聊天气泡，区分用户/AI、翻译结果表、附件预览与反馈入口
-export default function MessageBubble({ message, onFeedback }: Props) {
+export default function MessageBubble({ message, onFeedback, source }: Props & { source?: string }) {
   const isUser = message.role === 'user'
+  const [copied, setCopied] = useState(false) // ★ F7 复制反馈
   const isAssistant = message.role === 'assistant'
 
   // 移动端标记（窗口宽度 ≤ 768px）
@@ -218,7 +145,8 @@ export default function MessageBubble({ message, onFeedback }: Props) {
         <div className="avatar avatar-ai"><span className="avatar-text">AI</span></div>
       )}
 
-      <div className="bubble">
+      {/* ★ F3：气泡整体按内容方向（RTL 语言镜像） */}
+      <div className="bubble" dir="auto">
         {/* 技能徽章 */}
         {isAssistant && message.skill && (
           <div className="bubble-badge"><SkillBadge skill={message.skill} /></div>
@@ -284,7 +212,25 @@ export default function MessageBubble({ message, onFeedback }: Props) {
         )}
 
         {/* 普通文本（Markdown） */}
-        {showMarkdown && <div className="bubble-text" dangerouslySetInnerHTML={{ __html: html }} />}
+        {showMarkdown && <div dir="auto" className="bubble-text" dangerouslySetInnerHTML={{ __html: html }} />}
+
+        {/* ★ F7：双语对照（折叠显示原文）+ 一键复制译文 */}
+        {isAssistant && (source || message.content) && (
+          <div className="msg-srcbar" style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 6 }}>
+            {!!source && (
+              <details>
+                <summary style={{ fontSize: 12, color: '#889', cursor: 'pointer' }}>{t('msg.showSrc')}</summary>
+                <div dir="auto" style={{ fontSize: 12, color: '#667', whiteSpace: 'pre-wrap', marginTop: 4, padding: '4px 8px', background: 'rgba(128,128,128,.08)', borderRadius: 4 }}>{source}</div>
+              </details>
+            )}
+            {!!message.content && (
+              <button type="button" aria-label={t('msg.copy')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 12, color: '#4a7dff', cursor: 'pointer' }}
+                      onClick={() => { void navigator.clipboard?.writeText(message.content || ''); setCopied(true); window.setTimeout(() => setCopied(false), 1500) }}>
+                {copied ? t('msg.copied') : t('msg.copy')}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* 匹配度报告 */}
         {!!(message.data as any)?.match_report?.length && (

@@ -13,9 +13,14 @@ package api
 // =============================================
 
 import (
+	"encoding/xml"
+	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
+	"time"
 	"translator/internal/store"
 
 	"translator/internal/fileproc"
@@ -203,4 +208,100 @@ func firstVal(m map[string]string) string {
 		return v
 	}
 	return ""
+}
+
+// ============ ★ H12 TMX 导出（Trados / memoQ 桥接） ============
+//
+// Trados Studio 与 memoQ 均以 TMX 1.x 为标准交换格式：本端点把当前租户
+// 翻译记忆（tm_segments）导出为 .tmx，可被客户工具「导入 TM」直接落库；
+// 反向通道沿用已有 /api/translation/import-tmx，形成双向同步闭环。
+// ?lang=de 可仅导出目标语言非空的句对（增量迁移常用）。
+
+// buildTMX 把行集渲染为 TMX 1.4 文档（纯函数，可脱库单测）。
+func buildTMX(rows []*kb.Row, moduleFilter string) []byte {
+	var sb strings.Builder
+	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+	sb.WriteString(`<tmx version="1.4">` + "\n")
+	sb.WriteString(`<header creationtool="LangCross 能言" creationtoolversion="2.0" segtype="sentence" adminstatus="managed" datatype="plain text" srclang="zh-CN" ta="langcross" />` + "\n")
+	sb.WriteString("<body>\n")
+	for _, r := range rows {
+		if r == nil || strings.TrimSpace(r.Zh) == "" {
+			continue
+		}
+		if moduleFilter != "" && r.Module != moduleFilter {
+			continue
+		}
+		pairs := map[string]string{}
+		for lc, v := range r.Langs {
+			if strings.TrimSpace(v) != "" && lc != "zh" {
+				pairs[lc] = v
+			}
+		}
+		if len(pairs) == 0 {
+			continue
+		}
+		langs := make([]string, 0, len(pairs))
+		for lc := range pairs {
+			langs = append(langs, lc)
+		}
+		sort.Strings(langs)
+		sb.WriteString(fmt.Sprintf("<tu tuid=\"%s\" datatype=\"plaintext\">\n", xmlEscape(kb.MD5Hex(r.Zh))))
+		sb.WriteString("<tuv xml:lang=\"zh-CN\"><seg>" + xmlEscape(r.Zh) + "</seg></tuv>\n")
+		for _, lc := range langs {
+			sb.WriteString("<tuv xml:lang=\"" + tmxLangTag(lc) + "\"><seg>" + xmlEscape(pairs[lc]) + "</seg></tuv>\n")
+		}
+		sb.WriteString("</tu>\n")
+	}
+	sb.WriteString("</body>\n</tmx>\n")
+	return []byte(sb.String())
+}
+
+// tmxLangTag 语言代码 → BCP47 标签（Trados/memoQ 识别度高的常用映射，其余原样）。
+func tmxLangTag(lc string) string {
+	switch lc {
+	case "en":
+		return "en-US"
+	case "zh_hant":
+		return "zh-TW"
+	case "pt":
+		return "pt-BR"
+	case "he":
+		return "he-IL"
+	case "id_lang":
+		return "id-ID"
+	}
+	return lc
+}
+
+// xmlEscape 对文本做 XML 转义（防止 TMX 导出内容破坏文档结构）。
+func xmlEscape(str string) string {
+	var b strings.Builder
+	_ = xml.EscapeText(&b, []byte(str))
+	return b.String()
+}
+
+// handleExportTMX GET /api/translation/export-tmx[?lang=xx&module=approved]
+// 鉴权：部门管理员及以上；租户上下文与 KB 查询口径一致（kbTenant）。
+func (s *Server) handleExportTMX(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireDeptAdmin(r)
+	if err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
+	if s.DB == nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "知识库未加载"})
+		return
+	}
+	lang := strings.TrimSpace(r.URL.Query().Get("lang"))
+	mod := strings.TrimSpace(r.URL.Query().Get("module"))
+	rows, qErr := s.DB.ExportRows(s.kbTenant(r, u), lang)
+	if qErr != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": qErr.Error()})
+		return
+	}
+	doc := buildTMX(rows, mod)
+	filename := fmt.Sprintf("langcross_tm_%s.tmx", time.Now().UTC().Format("20060102T150405"))
+	w.Header().Set("Content-Type", "application/x-tmx; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+	_, _ = w.Write(doc)
 }

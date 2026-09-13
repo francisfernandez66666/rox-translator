@@ -84,7 +84,7 @@ func (s *Server) handleMyTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.effTenant(r, u)
-	if !s.effectivePolicy(tid).Task.Enabled {
+	if !s.effectivePolicyCached(tid).Task.Enabled { // ★ C31
 		writeJSON(w, 200, map[string]interface{}{"success": true, "tasks": []interface{}{}, "disabled": true})
 		return
 	}
@@ -99,7 +99,7 @@ func (s *Server) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
-	if !s.effectivePolicy(s.effTenant(r, u)).Task.Enabled {
+	if !s.effectivePolicyCached(s.effTenant(r, u)).Task.Enabled { // ★ C31
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "任务奖励暂未开放"})
 		return
 	}

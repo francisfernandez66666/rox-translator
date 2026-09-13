@@ -13,13 +13,14 @@
  */
 
 import type { ChatResponse, HealthResponse, ProgressEvent } from '@/types'
-import { API_BASE, authHeaders, request } from './core'
+import { API_BASE, authHeaders, request, handleUnauthorized, ApiError } from './core'
 
 /** SSE 公共解析器：从 ReadableStream 逐行解析 SSE 事件，回调进度，返回最终结果 */
 async function consumeSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   onProgress?: (event: ProgressEvent) => void,
   errorMessage = '翻译出错',
+  onDelta?: (lang: string, text: string) => void, // ★ D20：token 级流式增量
 ): Promise<ChatResponse> {
   const decoder = new TextDecoder()
   let buffer = ''
@@ -40,10 +41,13 @@ async function consumeSSEStream(
         const event: ProgressEvent = JSON.parse(jsonStr)
         if (event.type === 'progress' && onProgress) {
           onProgress(event)
+        } else if (event.type === 'delta') {
+          if (onDelta) onDelta(event.lang || '', event.text || '')
         } else if (event.type === 'done') {
           finalResult = event.result || null
         } else if (event.type === 'error') {
-          throw new Error(event.error || errorMessage)
+          // ★ E11：SSE error 事件透传稳定错误码（余额不足等可在 UI 差异化处理）
+          throw new ApiError(event.error || errorMessage, undefined, event.error_code)
         }
       } catch (e) {
         if (e instanceof Error && !e.message.includes('JSON')) throw e
@@ -61,6 +65,7 @@ export async function chatStream(
   options?: Record<string, unknown>,
   onProgress?: (event: ProgressEvent) => void,
   signal?: AbortSignal,
+  onDelta?: (lang: string, text: string) => void, // ★ D20
 ): Promise<ChatResponse> {
   const body = JSON.stringify({ message, skill: skill || '', options: options || {} })
   const response = await fetch(`${API_BASE}/api/chat/stream`, {
@@ -72,16 +77,40 @@ export async function chatStream(
 
   if (!response.ok) {
     const errorText = await response.text()
+    // ★ E5：SSE 通道 401 与其他请求同源处理——清登录态并跳登录，而不是只渲染"请求失败(401)"
+    if (response.status === 401) {
+      handleUnauthorized('/api/chat/stream')
+      throw new ApiError('登录已过期，请重新登录', 401)
+    }
     throw new Error(`请求失败 (${response.status}): ${errorText}`)
   }
 
   const reader = response.body?.getReader()
   if (!reader) throw new Error('无法读取流式响应')
 
-  return consumeSSEStream(reader, onProgress, '翻译出错')
+  return consumeSSEStream(reader, onProgress, '翻译出错', onDelta)
 }
 
 /** 健康检查（10 秒超时：后端挂起时快速判定离线，不无限等待） */
+// ★ F7：翻译前 token 消耗预估（/api/translation/estimate，后端已具备）
+export interface EstimateResp {
+  success: boolean
+  sentences: number
+  tokens_min: number
+  tokens_max: number
+  balance_tokens: number
+  sufficient: boolean
+  hint?: string
+}
+// 翻译前预估 token 消耗与费用（失败静默返回 null，不打断输入）
+export async function estimateTranslation(text: string, targetLangs: string[], mode = 'pro'): Promise<EstimateResp | null> {
+  try {
+    const j = await request<EstimateResp>('/api/translation/estimate', { method: 'POST', body: JSON.stringify({ text, target_langs: targetLangs, mode }) })
+    return j?.success ? j : null
+  } catch { return null } // 预估失败静默（不打断输入）
+}
+
+// 后端健康检查（10s 超时）
 export async function healthCheck(): Promise<HealthResponse> {
   return request('/api/health', { timeoutMs: 10000 })
 }
@@ -120,6 +149,11 @@ export async function translateFileStream(
 
   if (!response.ok) {
     const errorText = await response.text()
+    // ★ E5：文件流式翻译 401 同上
+    if (response.status === 401) {
+      handleUnauthorized('/api/translate/stream')
+      throw new ApiError('登录已过期，请重新登录', 401)
+    }
     throw new Error(`文件翻译失败 (${response.status}): ${errorText}`)
   }
 

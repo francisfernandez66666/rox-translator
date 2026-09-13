@@ -8,10 +8,12 @@
 // 端用户交易自服务面板：余额、邀请、套餐与账号信息展示（路由 /billing /invites /packages /my）。
 // ========================================
 
-import { useEffect, useState } from 'react'
-import { Card, Tag, Loading, Button } from 'tdesign-react'
+import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Card, Tag, Loading, Button, Switch, MessagePlugin } from 'tdesign-react'
 import { myPackage } from '@/api/billing'
-import { referralMy, type ReferralMyResp } from '@/api/referral'
+import { referralMy, referralFunnel, type ReferralMyResp, type ReferralFunnel } from '@/api/referral'
+import { scimConfigGet, scimConfigSave } from '@/api/scim'
 import { meContext } from '@/api'
 import { useAuth } from '@/stores/auth'
 import { fmtNum } from '@/lib/ui'
@@ -36,6 +38,7 @@ function useAsync<T>(fn: () => Promise<T>, deps: readonly unknown[]) {
 
 // 余额面板：展示当前用户的永久余额、发放台账与可用总额
 export function BalancePanel() {
+  const navigate = useNavigate()
   const [, t] = useT()
   // ★ 修复（2026-09-02 前端交互审计）：改用 /api/me/package（登录用户即可读）。
   //   原 /api/billing/balance 后端 handleBalance 需租户管理员（requireTenantAdmin），
@@ -47,7 +50,7 @@ export function BalancePanel() {
   // ★ 双桶口径：permanent_balance=永久余额、sub_grants_left=未过期台账、balance_tokens=可用总额
   const permanent = Number(p.permanent_balance ?? 0)
   const grants = Number(p.sub_grants_left ?? 0)
-  const totalAvailable = Number(p.balance_tokens ?? p.sentence_balance ?? 0)
+  const totalAvailable = Number(p.balance_tokens ?? 0) // ★ C26：句数镜像不可当 token 兜底
   return (
     <div className="ss-grid">
       {totalAvailable <= 0 && (
@@ -55,7 +58,7 @@ export function BalancePanel() {
           <div style={{ padding: '10px 14px', borderRadius: 8, background: '#fff7e6', border: '1px solid #ffd591', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
             {t('ss.exhaustedHint')}
             <div style={{ marginTop: 6 }}>
-              <Button size="small" theme="warning" onClick={() => { window.history.pushState({}, '', '/packages'); window.dispatchEvent(new PopStateEvent('popstate')) }}>{t('ss.gotoRecharge')}</Button>
+              <Button size="small" theme="warning" onClick={() => { navigate('/packages') }}>{t('ss.gotoRecharge')}</Button>
             </div>
           </div>
         </Card>
@@ -74,6 +77,11 @@ export function BalancePanel() {
 export function ReferralPanel() {
   const [, t] = useT()
   const { data, err, loading } = useAsync<ReferralMyResp>(() => referralMy(), [])
+  const { data: ctxData } = useAsync(() => meContext(), []) // ★ H9 个人租户才展示归因看板
+  const { data: fd } = useAsync<ReferralFunnel & { pct: number }>(async () => {
+    const r = await referralFunnel()
+    return r.success ? ({ ...(r.funnel as ReferralFunnel), pct: r.l2_pct ?? 0 } as any) : null as any
+  }, [])
   if (loading) return <Loading className="ss-loading" />
   if (err) return <Card><Tag theme="danger">{err}</Tag></Card>
   const d = data as ReferralMyResp
@@ -98,10 +106,23 @@ export function ReferralPanel() {
           <div className="ss-stat"><span>{t('ss.invitedCount')}</span><b>{d?.invited ?? 0}</b></div>
         </div>
       </Card>
+      {/* ★ H9 归因看板：2 级邀请树漏斗（仅个人推广场景展示） */}
+      {(ctxData as any)?.is_personal !== false && fd && (
+        <Card>
+          <h3>{t('ss.funnelTitle')}</h3>
+          <div className="ss-stats">
+            <div className="ss-stat"><span>{t('ss.funnelL1')}</span><b>{(fd as any).l1_invited ?? 0}</b></div>
+            <div className="ss-stat"><span>{t('ss.funnelL1Paid')}</span><b>{(fd as any).l1_paid ?? 0}</b></div>
+            <div className="ss-stat"><span>{t('ss.funnelL2')}</span><b>{(fd as any).l2_invited ?? 0}</b></div>
+            <div className="ss-stat"><span>{t('ss.funnelL2Share')}</span><b>{fmtNum((fd as any).reward_tokens_l2 ?? 0)}{(fd as any).pct ? `（${(fd as any).pct}%）` : ''}</b></div>
+          </div>
+          <div style={{ fontSize: 12, color: '#889', marginTop: 8 }}>{t('ss.funnelHint')}</div>
+        </Card>
+      )}
       {records.length > 0 && <Card>
         <h3>{t('ss.referralRecords')}</h3>
         <table className="ss-table"><thead><tr><th>{t('ss.refTypeHeader')}</th><th>{t('ss.refTokenHeader')}</th><th>{t('ss.refDateHeader')}</th></tr></thead>
-          <tbody>{records.map((r, i) => <tr key={i}><td>{r.type === 'paid_perm' ? t('ss.refTypePaid') : t('ss.refTypeTrial')}</td><td>{fmtNum(r.tokens)}</td><td>{r.created_at?.slice(0, 10)}</td></tr>)}</tbody></table>
+          <tbody>{records.map((r, i) => <tr key={i}><td>{r.type === 'paid_perm' ? t('ss.refTypePaid') : r.type === 'paid_perm_l2' ? t('ss.refTypePaidL2') : t('ss.refTypeTrial')}</td><td>{fmtNum(r.tokens)}</td><td>{r.created_at?.slice(0, 10)}</td></tr>)}</tbody></table>
       </Card>}
     </div>
   )
@@ -109,6 +130,7 @@ export function ReferralPanel() {
 
 // 我的套餐面板：展示当前套餐、剩余句数、可用 token 与永久余额
 export function MyPackagePanel() {
+  const navigate = useNavigate()
   const [, t] = useT()
   const { data, err, loading } = useAsync(() => myPackage(), [])
   if (loading) return <Loading className="ss-loading" />
@@ -123,7 +145,7 @@ export function MyPackagePanel() {
           <div style={{ padding: '10px 14px', borderRadius: 8, background: '#fff7e6', border: '1px solid #ffd591', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
             {t('ss.exhaustedHint')}
             <div style={{ marginTop: 6 }}>
-              <Button size="small" theme="warning" onClick={() => { window.history.pushState({}, '', '/billing'); window.dispatchEvent(new PopStateEvent('popstate')) }}>{t('ss.gotoTopUp')}</Button>
+              <Button size="small" theme="warning" onClick={() => { navigate('/billing') }}>{t('ss.gotoTopUp')}</Button>
             </div>
           </div>
         </Card>
@@ -131,7 +153,7 @@ export function MyPackagePanel() {
       <Card>
         <h3>{t('ss.myPackage')}</h3>
         <div className="ss-row"><span>{t('ss.currentPkg')}</span><Tag>{p.package_code ?? '—'}</Tag></div>
-        <div className="ss-row"><span>{t('ss.remainingSentences')}</span><b>{fmtNum(p.sentence_balance ?? 0)} {t('ss.sentenceUnit')}</b></div>
+        <div className="ss-row"><span>{t('ss.remainingSentences')}</span><b>{t('ss.approxPrefix')}{fmtNum(p.balance_sentences_approx ?? 0)} {t('ss.sentenceUnit')}{t('ss.approxSuffix')}</b></div>
         <div className="ss-row"><span>{t('ss.availableTokens')}</span><b>{fmtNum(total)}</b></div>
         <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtNum(p.permanent_balance ?? 0)}</b></div>
       </Card>
@@ -141,6 +163,7 @@ export function MyPackagePanel() {
 
 // 我的账号面板：展示用户名/邮箱/角色/租户，并提供余额/邀请/套餐快捷入口
 export function AccountPanel() {
+  const navigate = useNavigate()
   const [, t] = useT()
   const { user } = useAuth()
   const { data, err, loading } = useAsync(() => meContext(), [])
@@ -161,11 +184,51 @@ export function AccountPanel() {
       <Card>
         <h3>{t('ss.quickLinks')}</h3>
         <div className="ss-quick">
-          <Button size="small" variant="outline" onClick={() => { window.history.pushState({}, '', '/billing'); window.dispatchEvent(new PopStateEvent('popstate')) }}>{t('ss.navBalance')}</Button>
-          {isPersonal && <Button size="small" variant="outline" onClick={() => { window.history.pushState({}, '', '/invites'); window.dispatchEvent(new PopStateEvent('popstate')) }}>{t('ss.navReferral')}</Button>}
-          <Button size="small" variant="outline" onClick={() => { window.history.pushState({}, '', '/packages'); window.dispatchEvent(new PopStateEvent('popstate')) }}>{t('ss.navPackage')}</Button>
+          <Button size="small" variant="outline" onClick={() => { navigate('/billing') }}>{t('ss.navBalance')}</Button>
+          {isPersonal && <Button size="small" variant="outline" onClick={() => { navigate('/invites') }}>{t('ss.navReferral')}</Button>}
+          <Button size="small" variant="outline" onClick={() => { navigate('/packages') }}>{t('ss.navPackage')}</Button>
         </div>
       </Card>
+      {/* ★ H10 SCIM 2.0 自助配置：仅租户管理员/超管可见 */}
+      {['tenant_admin', 'super_admin', 'admin'].includes(String(ctx.role ?? user?.role ?? '')) && <ScimCard />}
     </div>
+  )
+}
+
+// ScimCard ★ H10：IdP 用户/组织同步开通卡片（开关 + 端点/令牌展示 + 轮换）
+function ScimCard() {
+  const [, t] = useT()
+  const [cfg, setCfg] = useState<{ config?: any; endpoint?: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const load = useCallback(async () => {
+    const r = await scimConfigGet()
+    if (r.success) setCfg(r as any)
+  }, [])
+  useEffect(() => { void load() }, [load])
+  const save = async (patch: { enabled?: boolean; rotate?: boolean }) => {
+    setBusy(true)
+    const r = await scimConfigSave(patch)
+    setBusy(false)
+    if (r.success) { setCfg(r as any); void MessagePlugin.success(t('ss.scimSaved')) }
+    else void MessagePlugin.error(r.message || '')
+  }
+  if (!cfg) return null
+  const enabled = !!cfg.config?.enabled
+  const token = String(cfg.config?.token || '')
+  return (
+    <Card>
+      <h3>{t('ss.scimTitle')}</h3>
+      <div className="ss-row"><span>{t('ss.scimStatus')}</span>
+        <Switch size="small" value={enabled} disabled={busy} onChange={(v: any) => void save({ enabled: !!v })} /></div>
+      <div className="ss-row"><span>{t('ss.scimEndpoint')}</span><Tag>{cfg.endpoint ?? '—'}</Tag></div>
+      <div className="ss-row"><span>{t('ss.scimToken')}</span>
+        <div className="ss-copy">
+          <Tag>{token ? `${token.slice(0, 6)}${'•'.repeat(10)}${token.slice(-4)}` : '—'}</Tag>
+          {token && <Button size="small" variant="outline" onClick={() => { navigator.clipboard?.writeText(token) }}>{t('ss.copy')}</Button>}
+          <Button size="small" variant="outline" disabled={busy} onClick={() => void save({ rotate: true })}>{t('ss.scimRotate')}</Button>
+        </div>
+      </div>
+      <div style={{ fontSize: 12, color: '#889', marginTop: 8 }}>{t('ss.scimHint')}</div>
+    </Card>
   )
 }

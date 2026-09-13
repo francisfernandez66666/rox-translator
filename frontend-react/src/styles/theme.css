@@ -66,7 +66,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 }
 .login-logo { font-size: 22px; font-weight: 700; color: var(--td-brand-color-active, #1f33d6); margin-bottom: 6px; }
 .login-sub { font-size: 13px; color: #888; margin-bottom: 22px; }
-.login-lang { position: absolute; top: 18px; right: 24px; z-index: 1; }
+.login-lang { position: absolute; top: 18px; inset-inline-end: 24px; z-index: 1; }
 
 /* ---- 前台工作台头部 ---- */
 .app-header {
@@ -100,7 +100,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .tr-translations td { border-top: 1px dashed #dfe4ee; padding: 6px 4px; vertical-align: top; font-size: 13.5px; }
 .tr-lang-chip {
   display: inline-block; background: #e8eaf6; color: var(--td-brand-color-active, #1f33d6); border-radius: 10px;
-  padding: 0 8px; font-size: 12px; line-height: 20px; margin-right: 6px; white-space: nowrap;
+  padding: 0 8px; font-size: 12px; line-height: 20px; margin-inline-end: 6px; white-space: nowrap;
 }
 
 /* ---- 消息气泡（与 Vue MessageBubble 等价结构）---- */
@@ -121,9 +121,9 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .bubble-text h3 { font-size: 15px; font-weight: 600; margin: 12px 0 6px 0; }
 .bubble-text h4 { font-size: 14px; font-weight: 600; margin: 10px 0 4px 0; }
 .bubble-text h5, .bubble-text h6 { font-size: 13px; font-weight: 600; margin: 8px 0 4px 0; }
-.bubble-text ul, .bubble-text ol { margin: 4px 0 8px 0; padding-left: 20px; }
+.bubble-text ul, .bubble-text ol { margin: 4px 0 8px 0; padding-inline-start: 20px; }
 .bubble-text li { margin-bottom: 2px; line-height: 1.6; }
-.bubble-text blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--td-brand-color, #2f47f5); background: rgba(47,71,245,.05); color: #5f6368; border-radius: 0 4px 4px 0; }
+.bubble-text blockquote { margin: 8px 0; padding: 4px 12px; border-inline-start: 3px solid var(--td-brand-color, #2f47f5); background: rgba(47,71,245,.05); color: #5f6368; border-radius: 0 4px 4px 0; }
 .bubble-text code { background: rgba(0,0,0,.06); padding: 1px 5px; border-radius: 3px; font-size: 13px; font-family: 'SF Mono', Menlo, Consolas, monospace; }
 .bubble-text hr { border: none; border-top: 1px solid #dadce0; margin: 12px 0; }
 .bubble-text strong { font-weight: 600; }
@@ -207,11 +207,11 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .tag-lang { background: #eef6ee; border-color: #d2e8d2; }
 .tag-other-lang { background: #f6f0fb; border-color: #e6d9f2; }
 /* 标签内统一的关闭按钮（TDesign Button size=small，三处一致） */
-.tag-close { margin-left: 2px; }
+.tag-close { margin-inline-start: 2px; }
 
 /* ---- 后台布局 ---- */
 .admin-shell { display: flex; min-height: 100vh; background: #f4f6fa; }
-.admin-side { width: 232px; background: #fff; border-right: 1px solid #e7eaf0; padding: 14px 10px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.admin-side { width: 232px; background: #fff; border-inline-end: 1px solid #e7eaf0; padding: 14px 10px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 .admin-main { flex: 1; padding: 18px 22px; min-width: 0; }
 .panel-card { background: #fff; border-radius: 12px; padding: 18px; border: 1px solid #eceff5; }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
@@ -222,7 +222,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 
 /* 工单进度气泡（Teleport 等价：fixed 定位） */
 .ticket-progress-float {
-  position: fixed; right: 26px; bottom: 26px; width: 300px; z-index: 60;
+  position: fixed; inset-inline-end: 26px; bottom: 26px; width: 300px; z-index: 60;
   background: #fff; border: 1px solid #e3e6ef; border-radius: 14px; padding: 14px;
   box-shadow: 0 10px 30px rgba(31,51,214,.15);
 }
@@ -247,3 +247,35 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .fb-check { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13px; color: #444; cursor: pointer; }
 .fb-ctx-preview { color: #999; font-size: 12px; }
 .fb-confirm-row { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: #333; margin: 6px 0 4px; }
+
+/* ★ F4 无障碍基线：键盘焦点可见 + 动效偏好尊重（WCAG 2.4.7 / 2.3.3） */
+:focus-visible { outline: 2px solid var(--td-brand-color, #2f47f5); outline-offset: 1px; border-radius: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
+/* ============ ★ F5 暗黑模式（TDesign --td-* 变量 + 自绘 CSS 双轨覆写） ============ */
+:root { --npz-page-bg: #fafbfd; --npz-surface: #ffffff; --npz-text-1: #1d2129; --npz-text-2: #5f6368; --npz-line: #e7eaf0; }
+html[data-theme='dark'] {
+  --npz-page-bg: #14161a; --npz-surface: #1d2025; --npz-text-1: #e6e8eb; --npz-text-2: #9aa0a6; --npz-line: #2c3038;
+  /* TDesign 变量轨：组件容器/文字/边框整体换暗 */
+  --td-bg-color-page: #14161a; --td-bg-color-container: #1d2025; --td-bg-color-container-hover: #262a31;
+  --td-bg-color-secondarycontainer: #23262d; --td-bg-color-component: #2c3038; --td-bg-color-component-hover: #363b45;
+  --td-text-color-primary: #e6e8eb; --td-text-color-secondary: #b4b9c0; --td-text-color-placeholder: #6f757e;
+  --td-text-color-disabled: #55595f; --td-border-level-1-color: #2c3038; --td-border-level-2-color: #3a3f48;
+  --td-component-stroke: #2c3038; --td-component-border: #3a3f48; --td-mask-active: rgba(0,0,0,.7); --td-shadow-1: 0 1px 10px rgba(0,0,0,.4);
+  color-scheme: dark;
+}
+html[data-theme='dark'] body { background: var(--npz-page-bg); color: var(--npz-text-1); }
+html[data-theme='dark'] .app-header { background: var(--npz-surface); border-bottom-color: var(--npz-line); }
+html[data-theme='dark'] .bubble { background: var(--npz-surface); border-color: var(--npz-line); }
+html[data-theme='dark'] .bubble-text code, html[data-theme='dark'] .bubble-text pre { background: #23262d; }
+html[data-theme='dark'] .bubble-text blockquote { background: rgba(47,71,245,.12); }
+html[data-theme='dark'] .admin-side { background: var(--npz-surface); }
+html[data-theme='dark'] .admin-side-mask { background: rgba(0,0,0,.55); }
+html[data-theme='dark'] .t-card, html[data-theme='dark'] .t-dialog, html[data-theme='dark'] .t-drawer,
+html[data-theme='dark'] .t-popup__content, html[data-theme='dark'] .t-select__list, html[data-theme='dark'] .t-textarea { background: var(--npz-surface); }
+html[data-theme='dark'] .t-table, html[data-theme='dark'] .t-table th, html[data-theme='dark'] .t-table td { background: var(--npz-surface); border-color: var(--npz-line); }
+html[data-theme='dark'] .ss-row, html[data-theme='dark'] .ss-table th, html[data-theme='dark'] .ss-table td { border-color: var(--npz-line); }
+html[data-theme='dark'] .ss-table th { background: #23262d; }
+html[data-theme='dark'] .ss-row span { color: var(--npz-text-2); }

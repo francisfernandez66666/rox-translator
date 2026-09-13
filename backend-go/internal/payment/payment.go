@@ -25,6 +25,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"math"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -52,6 +54,7 @@ type AlipayConfig struct {
 	PrivateKey string // 应用私钥（PEM）
 	PublicKey  string // 支付宝公钥
 	Gateway    string // 网关地址（默认 https://openapi.alipay.com/gateway.do）
+	SellerID   string // 商户卖家 ID（可选；配置后回调须核对，★ A5）
 }
 
 // PayRequest 发起支付的下单请求
@@ -189,10 +192,10 @@ func (p *WechatProvider) VerifyNotify(rawBody []byte, headers map[string]string)
 		return nil, fmt.Errorf("微信回调解密失败（验签未通过）: %w", err)
 	}
 	var dec struct {
-		OutTradeNo   string `json:"out_trade_no"`
+		OutTradeNo    string `json:"out_trade_no"`
 		TransactionID string `json:"transaction_id"`
-		TradeState   string `json:"trade_state"`
-		Amount       struct {
+		TradeState    string `json:"trade_state"`
+		Amount        struct {
 			Total int64 `json:"total"`
 		} `json:"amount"`
 	}
@@ -241,6 +244,14 @@ func (p *AlipayProvider) VerifyNotify(rawBody []byte, headers map[string]string)
 	}
 	if err := verifyAlipayRSA2(pub, vals); err != nil {
 		return nil, fmt.Errorf("支付宝回调验签失败: %w", err)
+	}
+	// ★ A5：验签通过后复核 app_id——防「他应用合法签名报文投递本回调口」的串单攻击；
+	//   seller_id 配置了同样复核（partner 白名单）。
+	if p.cfg.Alipay.AppID != "" && vals["app_id"] != "" && vals["app_id"] != p.cfg.Alipay.AppID {
+		return nil, fmt.Errorf("支付宝回调 app_id 与配置不符")
+	}
+	if p.cfg.Alipay.SellerID != "" && vals["seller_id"] != "" && vals["seller_id"] != p.cfg.Alipay.SellerID {
+		return nil, fmt.Errorf("支付宝回调 seller_id 与配置不符")
 	}
 	orderNo := vals["out_trade_no"]
 	if orderNo == "" {
@@ -368,7 +379,17 @@ func parseKV(s string) map[string]string {
 	for _, pair := range strings.Split(s, "&") {
 		kv := strings.SplitN(pair, "=", 2)
 		if len(kv) == 2 {
-			out[kv[0]] = kv[1]
+			// ★ A5（2026-09-12）：支付宝异步通知为 application/x-www-form-urlencoded，
+			//   值经百分号编码——base64 sign 中的 '+'→' '、'='→'%3D'。不解码直接拼接待签名串
+			//   会导致真实回调验签必失败（此前只在测试用未编码报文时侥幸通过）。
+			k, v := kv[0], kv[1]
+			if dk, err := url.QueryUnescape(k); err == nil {
+				k = dk
+			}
+			if dv, err := url.QueryUnescape(v); err == nil {
+				v = dv
+			}
+			out[k] = v
 		}
 	}
 	return out
@@ -422,7 +443,9 @@ func toFen(s string) int64 {
 		return 0
 	}
 	if strings.Contains(s, ".") {
-		return int64(f * 100) // 小数 → 元 → 分
+		// ★ A5：四舍五入而非截断——浮点乘 100 存在表示误差（0.29×100=28.9999…），
+		//   截断会把 29 分算成 28 分，与订单应收（分口径精确值）比对必然「金额不符」误拒。
+		return int64(math.Round(f * 100)) // 小数 → 元 → 分
 	}
 	return int64(f) // 整数 → 分
 }

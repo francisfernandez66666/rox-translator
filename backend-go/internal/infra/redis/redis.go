@@ -33,6 +33,7 @@ type Client struct {
 	dialNet  string
 }
 
+// conn 是连接池中的单条底层连接及其读缓冲；inUse 标记防止并发复用。
 type conn struct {
 	c     net.Conn
 	r     *bufio.Reader

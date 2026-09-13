@@ -4,6 +4,7 @@
 //     （HTTP 入口取 authUser.OrgID；工单 worker 取创建人 org；OpenAPI 任务取 Key 归属用户 org）
 //   - userScope：组装 kb.PackScope = BuildPackScope(tid, OrgAncestorIDs(tid, userOrg), 租户开关)
 //   - getCJKCacheScoped：CJK 标点无关精确缓存，键升级为「租户|组织链指纹|跨部门开关」
+//
 // =============================================
 package engine
 

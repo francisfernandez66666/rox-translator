@@ -44,6 +44,8 @@ func (s *Store) Backup(backupDir, dbPath string) (string, error) {
 		}
 		return dest, nil
 	}
+	// ★ S6（2026-09-12）：SQLite VACUUM 路径为 dev/单测专用（生产 PG-only 单轨，
+	//   生产恢复演练统一走 pg_dump/pg_restore：scripts/restore_drill.sh）。
 	// 备份文件名：<库名>_<YYYYMMDD_HHMMSS>.bak.db
 	dest := filepath.Join(backupDir, fmt.Sprintf("%s_%s.bak.db", name, time.Now().Format("20060102_150405")))
 	// VACUUM INTO：在线一致性快照

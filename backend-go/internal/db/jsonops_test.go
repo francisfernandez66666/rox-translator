@@ -33,7 +33,7 @@ func TestJSONNumAddSQLite(t *testing.T) {
 		}
 	}
 	// 自增 +50（空串按 0 起算，id=1 行）
-	if _, err := conn.Exec("UPDATE tenants SET " + JSONNumAdd(DialectSQLite, "permissions", "sentence_balance") + ", updated_at=? WHERE id=?", 50, "t1", 1); err != nil {
+	if _, err := conn.Exec("UPDATE tenants SET "+JSONNumAdd(DialectSQLite, "permissions", "sentence_balance")+", updated_at=? WHERE id=?", 50, "t1", 1); err != nil {
 		t.Fatalf("自增失败: %v", err)
 	}
 	var v int64
@@ -140,4 +140,71 @@ func TestJSONOpsPGReal(t *testing.T) {
 		t.Fatalf("PG 余额不足守卫应 0 行，实得 %d", n)
 	}
 	var _ *sql.DB
+}
+
+// TestJSONPatchSetSQLite 真实执行：多键合并补丁（覆盖写/置布尔/删除键）在 SQLite 下语义正确。
+func TestJSONPatchSetSQLite(t *testing.T) {
+	conn, err := Open(Config{Driver: DriverSQLite, DSN: ":memory:"})
+	if err != nil {
+		t.Fatalf("打开内存库失败: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Exec("CREATE TABLE tenants (id INTEGER PRIMARY KEY, permissions TEXT, updated_at TEXT)"); err != nil {
+		t.Fatalf("建表失败: %v", err)
+	}
+	if _, err := conn.Exec("INSERT INTO tenants (id, permissions, updated_at) VALUES (1,?, 't0')",
+		`{"package_code":"pro_100k","package_expires_at":"2026-10-01T00:00:00Z","sentence_balance":888,"notified_exp7":true}`); err != nil {
+		t.Fatalf("种子失败: %v", err)
+	}
+	patch := `{"package_code":"","package_expires_at":"","notified_exp7":false,"notified_exp1":true,"dead_key":null}`
+	if _, err := conn.Exec("UPDATE tenants SET "+JSONPatchSet(DialectSQLite, "permissions")+", updated_at=? WHERE id=?",
+		patch, "t1", 1); err != nil {
+		t.Fatalf("合并补丁失败: %v", err)
+	}
+	var s string
+	if err := conn.QueryRow("SELECT permissions FROM tenants WHERE id=1").Scan(&s); err != nil {
+		t.Fatalf("回读失败: %v", err)
+	}
+	for want, bad := range map[string]bool{
+		`"package_code":""`: false, `"notified_exp7":false`: false, `"notified_exp1":true`: false, `"sentence_balance":888`: false,
+		"dead_key": true,
+	} {
+		got := strings.Contains(s, want)
+		if bad && got {
+			t.Fatalf("结果不应含 %s: %s", want, s)
+		}
+		if !bad && !got {
+			t.Fatalf("结果应含 %s: %s", want, s)
+		}
+	}
+	// 空 permissions 列兜底（NULL/空串 → 以 patch 为初值）
+	if _, err := conn.Exec("INSERT INTO tenants (id, permissions, updated_at) VALUES (2,'','t0')"); err != nil {
+		t.Fatalf("种子2失败: %v", err)
+	}
+	if _, err := conn.Exec("UPDATE tenants SET "+JSONPatchSet(DialectSQLite, "permissions")+", updated_at=? WHERE id=?",
+		`{"k":1}`, "t2", 2); err != nil {
+		t.Fatalf("空串列补丁失败: %v", err)
+	}
+	if err := conn.QueryRow("SELECT " + JSONExtractNum(DialectSQLite, "permissions", "k") + " FROM tenants WHERE id=2").Scan(new(int64)); err != nil {
+		t.Fatalf("空串列补丁回读失败: %v", err)
+	}
+}
+
+// TestJSONPatchSetPGShape PG 形态断言：jsonb `||` 合并、TEXT 回转、无 JSON1 残留。
+func TestJSONPatchSetPGShape(t *testing.T) {
+	frag := JSONPatchSet(DialectPostgres, "permissions")
+	for _, want := range []string{"jsonb_set", "::jsonb", "||"} {
+		if want == "jsonb_set" {
+			continue
+		}
+		if !strings.Contains(frag, want) {
+			t.Fatalf("PG 补丁片段缺少 %s: %s", want, frag)
+		}
+	}
+	if strings.Contains(frag, "json_set(") || strings.Contains(frag, "json_extract(") {
+		t.Fatalf("PG 片段混入 JSON1 语法: %s", frag)
+	}
+	if !strings.HasPrefix(frag, "permissions = ") {
+		t.Fatalf("片段应为 UPDATE SET 形态: %s", frag)
+	}
 }

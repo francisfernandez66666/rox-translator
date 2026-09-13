@@ -167,6 +167,35 @@ func RunWithTerms(source, target, translation string, terms []TermRequirement) *
 }
 
 // contains 判断字符串列表中是否包含指定值（数字保持校验辅助）
+// ForceTerms 术语强制替换（H1）：源文命中术语但译文未含规定译法时，
+// 若译文残留源术语字面（未翻译直通，如中文术语出现在英文译文中），直接以 KB 规定译法覆写——
+// 零成本命中 100% 遵循；无法确定性覆写的（译文用了第三种写法）返回原文，交由调用方走重翻闭环。
+// 返回修正后的译文与实际覆写的术语数。
+func ForceTerms(source, translation string, terms []TermRequirement) (string, int) {
+	tr := translation
+	fixed := 0
+	if strings.TrimSpace(tr) == "" || len(terms) == 0 {
+		return tr, 0
+	}
+	for _, tm := range terms {
+		src := strings.TrimSpace(tm.Source)
+		tgt := strings.TrimSpace(tm.Target)
+		if src == "" || tgt == "" || !strings.Contains(source, src) {
+			continue
+		}
+		if strings.Contains(tr, tgt) {
+			continue // 已合规
+		}
+		if strings.Contains(tr, src) {
+			n := strings.Count(tr, src)
+			tr = strings.ReplaceAll(tr, src, tgt)
+			fixed += n
+		}
+	}
+	return tr, fixed
+}
+
+// contains 判断 v 是否存在于 list 中。
 func contains(list []string, v string) bool {
 	for _, x := range list {
 		if x == v {
@@ -220,9 +249,10 @@ var brandSuffixWords = []string{
 // 采用「两步正则替换」：先剥后缀词块（品牌+分隔符+后缀词），再剥前缀词块
 // （后缀词+分隔符+品牌），替换时保留品牌旁的分隔符，避免中阿/俄文粘连。
 // 覆盖形态：
-//   1) 品牌+后缀：   "ROX vehicles expanding"  → "ROX expanding"
-//   2) 后缀+品牌：   "Автомобили ROX мчатся"   → "ROX мчатся"
-//   3) 前后环绕：    "سيارات ROX في العالم"     → "ROX في العالم"
+//  1. 品牌+后缀：   "ROX vehicles expanding"  → "ROX expanding"
+//  2. 后缀+品牌：   "Автомобили ROX мчатся"   → "ROX мчатся"
+//  3. 前后环绕：    "سيارات ROX في العالم"     → "ROX في العالم"
+//
 // 多后缀连写 "ROX Motor Car" 整体剥离。大小写不敏感（(?i) 只折叠 ASCII，故词表
 // 已内置首字母大写变体覆盖俄/欧语句首名词大写）。短词（<5 字符）追加 \b 防误切
 // "automóviles" 等长词（auto→automóviles）。收尾压缩连续空白并清理标点前空格。
@@ -260,11 +290,11 @@ func NormalizeBrandTerm(translation, brand string) string {
 	escB := regexp.QuoteMeta(b)
 
 	// 第一步：剥后缀词块 —— (brand)(sep+)(词块) → $1$2（保留品牌+其后分隔符）。
-	out := regexp.MustCompile(`(?i)(` + escB + `)(` + sep + `+)(` + sblk + `)`).
+	out := regexp.MustCompile(`(?i)(`+escB+`)(`+sep+`+)(`+sblk+`)`).
 		ReplaceAllString(translation, `${1}${2}`)
 
 	// 第二步：剥前缀词块 —— (词块)(sep+)(brand) → $2$3（保留分隔符+品牌）。
-	out = regexp.MustCompile(`(?i)(` + sblk + `)(` + sep + `+)(` + escB + `)`).
+	out = regexp.MustCompile(`(?i)(`+sblk+`)(`+sep+`+)(`+escB+`)`).
 		ReplaceAllString(out, `${2}${3}`)
 
 	// 收尾：压缩连续空白、清理标点前空格、去首尾空白（替换可能残留单个分隔符）。

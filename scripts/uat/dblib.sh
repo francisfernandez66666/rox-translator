@@ -32,6 +32,26 @@ dbjson(){
   fi
 }
 
+# dbjsonstr <表> <ID列值> <JSON列> <键> — 取 JSON 列中字符串键原值（缺失/空输出空串）。
+dbjsonstr(){
+  local tbl=$1 id=$2 col=$3 key=$4
+  if [ "${DB_DRIVER:-sqlite}" = "postgres" ]; then
+    dbq "SELECT COALESCE(NULLIF($col,'')::jsonb->>'$key','') FROM $tbl WHERE id=$id"
+  else
+    dbq "SELECT COALESCE(json_extract(NULLIF($col,''),'\$.$key'),'') FROM $tbl WHERE id=$id"
+  fi
+}
+
+# dbjsonset <表> <ID列值> <JSON列> <键> <值> — 顶层键覆写（断言层专用注入）。
+dbjsonset(){
+  local tbl=$1 id=$2 col=$3 key=$4 val=$5
+  if [ "${DB_DRIVER:-sqlite}" = "postgres" ]; then
+    dbq "UPDATE $tbl SET $col=(COALESCE(NULLIF($col,''),'{}')::jsonb || '{\"$key\":\"$val\"}')::text WHERE id=$id" >/dev/null
+  else
+    dbq "UPDATE $tbl SET $col=json_set($col,'\$.$key','$val') WHERE id=$id" >/dev/null
+  fi
+}
+
 # dbcfg <key> <value> — 幂等写 system_config（等价超管控制台配置）
 dbcfg(){
   if [ "${DB_DRIVER:-sqlite}" = "postgres" ]; then

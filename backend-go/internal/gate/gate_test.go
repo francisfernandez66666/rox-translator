@@ -143,11 +143,11 @@ func TestHasRepetition(t *testing.T) {
 // 4. 正常翻译不误拦
 func TestFillerWordGate(t *testing.T) {
 	cases := []struct {
-		name       string
-		source     string
-		target     string
-		trans      string
-		wantPass   bool
+		name     string
+		source   string
+		target   string
+		trans    string
+		wantPass bool
 	}{
 		{"待补充→and 应拦截", "待补充", "en", "and", false},
 		{"待补充→TBD 不拦截", "待补充", "en", "TBD", true},
@@ -202,5 +202,24 @@ func TestSourceIsFiller(t *testing.T) {
 		if got := sourceIsFiller(c.in); got != c.want {
 			t.Errorf("sourceIsFiller(%q) = %v, want %v", c.in, got, c.want)
 		}
+	}
+}
+
+func TestH1ForceTerms(t *testing.T) {
+	terms := []TermRequirement{{Source: "极石", Target: "ROX"}}
+	if got, n := ForceTerms("极石发布新车", "极石 Motors unveiled", terms); n != 1 || got != "ROX Motors unveiled" {
+		t.Fatalf("残留覆写失败: %q n=%d", got, n)
+	}
+	if got, n := ForceTerms("极石发布新车", "ROX unveiled", terms); n != 0 || got != "ROX unveiled" {
+		t.Fatalf("已合规被改动: %q n=%d", got, n)
+	}
+	if got, n := ForceTerms("极石发布新车", "JiShi unveiled", terms); n != 0 || got != "JiShi unveiled" {
+		t.Fatalf("第三种写法应原样返回: %q n=%d", got, n)
+	}
+	if got, n := ForceTerms("今天天气好", "极石 is nice", terms); n != 0 || got != "极石 is nice" {
+		t.Fatalf("源文未命中不应处理: %q n=%d", got, n)
+	}
+	if got, n := ForceTerms("极石与极石", "极石 and 极石", terms); n != 2 || got != "ROX and ROX" {
+		t.Fatalf("多处覆写计数错误: %q n=%d", got, n)
 	}
 }

@@ -7,8 +7,8 @@
 //   - 业务 SQL 仍为 SQLite 方言（AUTOINCREMENT / PRAGMA / INSERT OR IGNORE 等），
 //     全量方言迁移是后续数周的工作，不在本文件范围内。
 //   - 连接器本身不引入任何第三方驱动依赖；驱动由调用方通过 blank import 注册：
-//       sqlite：   _ "modernc.org/sqlite"   （store/kb 已导入，自动注册）
-//       postgres： _ "github.com/lib/pq"    或  _ "github.com/jackc/pgx/v5/stdlib"
+//     sqlite：   _ "modernc.org/sqlite"   （store/kb 已导入，自动注册）
+//     postgres： _ "github.com/lib/pq"    或  _ "github.com/jackc/pgx/v5/stdlib"
 //     待引入 PG 驱动并配置 DB_DRIVER=postgres / DB_DSN 后，仅改配置即可切换后端。
 package db
 
@@ -57,7 +57,8 @@ func Open(cfg Config) (*sql.DB, error) {
 
 // SQLiteDSN 由文件路径构造 modernc/sqlite 的加固 DSN。
 // 参数：dbPath=SQLite 文件路径（或 ":memory:"）；返回含 busy_timeout/WAL/
-//   synchronous/_txlock 的完整 DSN。
+//
+//	synchronous/_txlock 的完整 DSN。
 func SQLiteDSN(dbPath string) string {
 	return "file:" + dbPath +
 		"?_pragma=busy_timeout(5000)" +
@@ -68,7 +69,9 @@ func SQLiteDSN(dbPath string) string {
 
 // openSQLite 打开 SQLite 数据库连接。
 // 参数：dsn 为原始 DSN：若为 ":memory:" 则改用共享缓存的内存库；
-//  若未带查询参数则通过 SQLiteDSN 补齐加固参数（busy_timeout/WAL 等）；已带参数则原样使用。
+//
+//	若未带查询参数则通过 SQLiteDSN 补齐加固参数（busy_timeout/WAL 等）；已带参数则原样使用。
+//
 // 返回打开的 *sql.DB，失败返回错误。注意不设置连接池（SQLite 单写者模型由锁与 WAL 保证）。
 func openSQLite(dsn string) (*sql.DB, error) {
 	if dsn == ":memory:" {
@@ -88,6 +91,7 @@ func openSQLite(dsn string) (*sql.DB, error) {
 //   - 连接池：MaxOpenConns 默认 20，MaxIdleConns/ConnMaxLifetime 仅当 >0 时设置；
 //   - EnablePgvector 为 true 时执行 CREATE EXTENSION IF NOT EXISTS vector，失败仅告警不影响其余功能；
 //   - 最后执行 Ping 探活，失败返回带上下文的错误。
+//
 // 返回打开且已验证的 *sql.DB，失败返回错误。
 func openPostgres(cfg Config) (*sql.DB, error) {
 	maxOpen := cfg.MaxOpenConns

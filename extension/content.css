@@ -31,3 +31,6 @@
   word-break: break-word;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
 }
+
+/* ★ F10 术语高亮回显 */
+mark.__trz_mark__{background:rgba(255,213,79,.45);color:inherit;border-radius:2px;padding:0 1px}

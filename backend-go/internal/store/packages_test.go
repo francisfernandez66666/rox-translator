@@ -111,18 +111,7 @@ func TestSentenceBalance(t *testing.T) {
 	if bal != 150 {
 		t.Fatalf("增量后应为 150，实际 %d", bal)
 	}
-	// 扣减
-	if _, err := s.DeductSentences(1, 40); err != nil {
-		t.Fatalf("DeductSentences 失败: %v", err)
-	}
-	bal, _ = s.GetSentenceBalance(1)
-	if bal != 110 {
-		t.Fatalf("扣减后应为 110，实际 %d", bal)
-	}
-	// 超扣应报 ErrSentenceExhausted
-	if _, err := s.DeductSentences(1, 500); err != ErrSentenceExhausted {
-		t.Fatalf("超扣应返回 ErrSentenceExhausted，实际 %v", err)
-	}
+	// ★ C26：句数=发放镜像（只增），真实消耗扣 token 台账；镜像不再支持扣减
 }
 
 // TestIndustryPackage 行业包查找与新租户行业包开通。

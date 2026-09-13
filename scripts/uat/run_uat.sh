@@ -10,8 +10,8 @@
 #   6. 运行前端像素级 UAT（pixel_uat.spec.ts，Playwright 截图）
 #   7. 输出汇总与耗时
 # 用法：bash scripts/uat/run_uat.sh
-#   SQLite 矩阵（默认）：bash scripts/uat/run_uat.sh
-#   PostgreSQL 矩阵：    DB_DRIVER=postgres [UAT_PG_DB=translator_uat] [PG_ADMIN_DSN=...] bash scripts/uat/run_uat.sh
+#   PG 主矩阵（默认，发布闸门）：bash scripts/uat/run_uat.sh
+#   SQLite 本地快跑：    DB_DRIVER=sqlite bash scripts/uat/run_uat.sh
 # 环境变量：UAT_PORT（默认8899）、MOCK_LLM_PORT（默认8901）、KEEP（=1 不清理环境）
 #           DB_DRIVER/DB_DSN/UAT_DB —— 断言层 dblib.sh 据此路由（生产方言必须进矩阵）
 # ============================================================================
@@ -23,7 +23,7 @@ MOCK_LLM_PORT="${MOCK_LLM_PORT:-8901}"
 BASE_URL="http://127.0.0.1:${UAT_PORT}"
 WORK=$(mktemp -d)
 ADMIN_INIT_PASSWORD=Admin@1234
-DB_DRIVER="${DB_DRIVER:-sqlite}"
+DB_DRIVER="${DB_DRIVER:-postgres}"   # ★ 批次7：发布闸门主矩阵=PG；本地快跑显式 DB_DRIVER=sqlite
 
 log(){ echo "[run_uat] $*"; }
 T0=$(date +%s)
@@ -45,6 +45,16 @@ fi
 # ---------- 1. 构建 ----------
 log "构建后端..."
 (cd backend-go && go build -o "$WORK/uat-server" ./cmd/server) || { echo "构建失败"; exit 1; }
+
+# ---------- 1.5 ★ G3：竞态检测全量单测（UAT_SKIP_RACE=1 可跳过，本地快速回归用） ----------
+if [ "${UAT_SKIP_RACE:-0}" = "1" ]; then
+  log "跳过 go test -race（UAT_SKIP_RACE=1）"
+else
+  log "竞态检测 go test -race ./internal/...（数分钟）..."
+  (cd backend-go && go test -race -count=1 ./internal/...) \
+    || { echo "❌ 竞态检测发现数据竞争，中止 UAT"; exit 1; }
+  log "竞态检测通过"
+fi
 log "构建前端 dist（若缺失）..."
 [ -f frontend-react/dist/index.html ] || (cd frontend-react && npm run build) || { echo "前端构建失败"; exit 1; }
 
@@ -86,7 +96,7 @@ dbcfg pay_mode mock
 
 # ---------- 5. 后端 API 全链路（A/B 主链路 + T 交易专项，双方言断言层） ----------
 log "===== 后端 API 全链路 UAT ====="
-export BASE_URL UAT_DB="$WORK/dev.db" ADMIN_PASS=$ADMIN_INIT_PASSWORD MOCK_LLM_URL="http://127.0.0.1:${MOCK_LLM_PORT}"
+export BASE_URL UAT_DB="$WORK/dev.db" UAT_SERVER_LOG="$WORK/server.log" ADMIN_PASS=$ADMIN_INIT_PASSWORD MOCK_LLM_URL="http://127.0.0.1:${MOCK_LLM_PORT}"
 bash scripts/uat/api_uat.sh | tee "$WORK/api_uat.log"
 API_TAIL=$(tail -1 "$WORK/api_uat.log")
 API_PASS=$(echo "$API_TAIL" | grep -oE 'PASS=[0-9]+' | cut -d= -f2)

@@ -22,8 +22,10 @@ import (
 
 // wiktionaryProducer tier-1 官方 API 抓取器。
 type wiktionaryProducer struct {
-	st  *store.Store
-	src *store.KBScrapeSource
+	st    *store.Store
+	src   *store.KBScrapeSource
+	fetch *fetchBase // ★ D14：跨批复用（限频/robots 缓存全程有效）
+	seed  []string   // ★ D14：种子词表进程内缓存（旧实现每批重复下载 base_url）
 }
 
 // langlinksResp MediaWiki langlinks 响应结构（仅解析所需字段）。
@@ -41,6 +43,9 @@ type langlinksResp struct {
 // seedTerms 获取待翻译种子词：优先数据源 base_url（纯文本词表，每行一词），
 // 未配置时返回内置行业/通用种子词。
 func (p *wiktionaryProducer) seedTerms(ctx context.Context, f *fetchBase) ([]string, error) {
+	if p.seed != nil {
+		return p.seed, nil // ★ D14：命中缓存不再重复下载
+	}
 	if p.src.BaseURL != "" {
 		body, err := f.get(ctx, p.src.BaseURL)
 		if err == nil {
@@ -52,21 +57,32 @@ func (p *wiktionaryProducer) seedTerms(ctx context.Context, f *fetchBase) ([]str
 				}
 			}
 			if len(out) > 0 {
+				p.seed = out
 				return out, nil
 			}
 		}
 	}
 	// 内置种子词（按行业匹配 + 通用兜底）
 	if seeds, ok := builtinIndustrySeeds[p.src.Industry]; ok && len(seeds) > 0 {
+		p.seed = seeds
 		return seeds, nil
 	}
+	p.seed = builtinGeneralSeeds
 	return builtinGeneralSeeds, nil
+}
+
+// fetchBase 取共享抓取基座（未注入时懒建单实例）。
+func (p *wiktionaryProducer) fetchBase() *fetchBase {
+	if p.fetch == nil {
+		p.fetch = newFetchBase()
+	}
+	return p.fetch
 }
 
 // Next 抓取下一批：按游标（已处理词序号）继续，逐词查询目标语言词条。
 func (p *wiktionaryProducer) Next(ctx context.Context, deps *SourceDeps, cursor string, offset int) (
 	[]*store.KBStagedEntry, []*store.KBStagedPhrase, string, bool, error) {
-	f := newFetchBase()
+	f := p.fetchBase()
 	terms, err := p.seedTerms(ctx, f)
 	if err != nil {
 		return nil, nil, cursor, true, err

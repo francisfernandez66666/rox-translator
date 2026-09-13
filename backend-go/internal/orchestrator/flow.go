@@ -153,7 +153,12 @@ func (e *Executor) Execute(ctx context.Context, ticket *store.Ticket, onStep fun
 		if step.Compensable {
 			retried := false
 			for i := 0; i < 2; i++ { // 最多重试 2 次
-				time.Sleep(500 * time.Millisecond) // 重试间隔
+				tm := time.NewTimer(500 * time.Millisecond) // ★ D9：间隔可被取消打断
+				select {
+				case <-tm.C:
+				case <-ctx.Done():
+					tm.Stop()
+				}
 				if ctx.Err() != nil {
 					break
 				}

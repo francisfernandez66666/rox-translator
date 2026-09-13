@@ -7,7 +7,7 @@
 //   GET  /openapi/v1/balance         查询 token 余额与 ≈句数
 // 用法示例：
 //   import { TranslatorClient } from "./translator-sdk.mjs";
-//   const cli = new TranslatorClient("https://translator.example.com", "tk_xxx");
+//   const cli = new TranslatorClient("https://translator.example.com", "rk_xxx");
 //
 //   // 文本翻译：提交 → 自动轮询（15s）→ 译文
 //   const r = await cli.translateAndWait("蓝牙钥匙已激活", ["en", "ja"]);

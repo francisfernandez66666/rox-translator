@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"testing"
@@ -205,7 +206,9 @@ func signAlipayForm(t *testing.T, priv *rsa.PrivateKey, params map[string]string
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sb.String() + "&sign=" + base64.StdEncoding.EncodeToString(sig)
+	// ★ A5 配套：模拟真实线路格式——form-urlencoded 报文中 base64 sign 必须百分号编码
+	//   （'+','%3D' 等在 form 里以 %2B/%3D 传输），接收侧 parseKV 解码后参与验签。
+	return sb.String() + "&sign=" + url.QueryEscape(base64.StdEncoding.EncodeToString(sig))
 }
 
 // parseAmount：整数分 / 小数元 / JSON 数字与字符串。
@@ -216,6 +219,8 @@ func TestParseAmount(t *testing.T) {
 	}{
 		{"5000", "", 5000},                     // 表单：整数分
 		{"1.00", "", 100},                      // 表单：元 → 分
+		{"0.29", "", 29},                       // ★ A5：浮点误差不得截断成 28 分
+		{"88.88", "", 8888},                    // ★ A5：两位小数精确换算
 		{"", `{"amount":5000}`, 5000},          // JSON：数字整数分
 		{"", `{"amount":"5000"}`, 5000},        // JSON：字符串整数分
 		{"", `{"total_amount":"10.00"}`, 1000}, // JSON：元 → 分

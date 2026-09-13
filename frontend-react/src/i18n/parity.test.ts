@@ -5,6 +5,8 @@
 // 覆盖 2026-09 新增强译键（ops.task*/promo*/billing.iPaidFailed 等）的成对性。
 // =============================================
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { baseZh } from './dicts.zh'
 import { baseEn } from './dicts.en'
 import * as pOverview from './panels/overview'
@@ -27,6 +29,10 @@ import * as pFeedback from './panels/feedback'
 import * as pReferral from './panels/referral'
 import * as pTasks from './panels/tasks'
 import * as pOps from './panels/ops'
+import * as pIndustries from './panels/industries'
+import * as pBrandterms from './panels/brandterms'
+import * as pChatwin from './panels/chatwin'
+import * as pDatasources from './panels/datasources'
 
 // 与 i18n/index.ts 保持同序的面板模块表（保证合并口径一致）
 const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<string, string> } }[] = [
@@ -40,6 +46,8 @@ const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<stri
   { name: 'chat', mod: pChat }, { name: 'packages', mod: pPackages },
   { name: 'feedback', mod: pFeedback }, { name: 'referral', mod: pReferral },
   { name: 'tasks', mod: pTasks }, { name: 'ops', mod: pOps },
+  { name: 'industries', mod: pIndustries }, { name: 'brandterms', mod: pBrandterms },
+  { name: 'chatwin', mod: pChatwin }, { name: 'datasources', mod: pDatasources },
 ]
 
 describe('i18n 中英词典键值对等性', () => {
@@ -83,5 +91,32 @@ describe('全局词典取词行为', () => {
   it('tpl()：占位符替换生效', async () => {
     const { tpl } = await import('./index')
     expect(tpl('billing.orderNo', { orderNo: 'ORD-1' })).toContain('ORD-1')
+  })
+})
+
+// ★ F2：组件中文字面量扫描——迁移后这 8 个文件的代码（去注释）不得含 CJK 字符串字面量/JSX 文本
+describe('F2 组件 i18n 覆盖扫描', () => {
+  const files = [
+    'src/components/EditorPage.tsx', 'src/components/TicketsPage.tsx', 'src/components/ChatWindow.tsx',
+    'src/components/admin/DataSourcesP.tsx', 'src/components/admin/IndustriesP.tsx', 'src/components/admin/BrandTermsP.tsx',
+    'src/App.tsx', 'src/hooks/useChat.tsx', 'src/components/MyBilling.tsx',
+  ]
+  it('8 个组件文件无残留中文字面量（注释除外）', () => {
+    const root = fileURLToPath(new URL('../..', import.meta.url))
+    const lit = /"[^"\n]*[\u4e00-\u9fa5][^"\n]*"|'[^'\n]*[\u4e00-\u9fa5][^'\n]*'|`[^`\n]*[\u4e00-\u9fa5][^`\n]*`|>[^<]*[\u4e00-\u9fa5][^<]*</ // 含 JSX 文本+表达式混排（★ F2 补丁）
+    const bad: string[] = []
+    for (const f of files) {
+      // ★ 全文去注释（含 /* */ 与行注释），再按整文扫描——避免跨行 JSX 文本被行级扫描漏网
+      const src = readFileSync(root + '/' + f, 'utf-8')
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .split('\n').map((l) => l.replace(/(^|[^:])\/\/[^\n]*/g, '$1')).join('\n')
+      src.split('\n').forEach((l, i) => { if (lit.test(l)) bad.push(`${f}:${i + 1} ${l.trim().slice(0, 60)}`) })
+      const jsx = src.match(/>[^<]*[\u4e00-\u9fa5][^<]*</g) || []
+      jsx.forEach((m) => {
+        const ln = src.slice(0, src.indexOf(m)).split('\n').length
+        if (!bad.some((b) => b.startsWith(`${f}:${ln} `))) bad.push(`${f}:${ln} [jsx-cross] ${m.slice(0, 50)}`)
+      })
+    }
+    expect(bad).toEqual([])
   })
 })

@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 )
 
+// ctxKeyTraceID 是链路追踪 ID 在 ctx 中的键。
 type ctxKeyTraceID struct{}
 
 // WithTraceID 将 traceID 注入 context。

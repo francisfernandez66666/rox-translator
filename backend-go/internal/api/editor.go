@@ -2,6 +2,7 @@
 // 对照编辑器接口（工作流 D，新 feature）：
 //   - GET  /api/tickets/segments?id=&lang=   读取工单的源文/译文逐段对照 + 术语表（供前端双栏编辑器）
 //   - POST /api/tickets/segments?id=&lang=   保存逐段编辑/通过/驳回批注到 translation_edits
+//
 // 文本工单解析 FinalResult；文件工单解析产物（xlsx/csv 对照表），docx/pdf 等二进制暂不支持在线逐段编辑。
 // 所有接口要求登录且工单归属当前租户（超管可跨租户）。
 // =============================================
@@ -18,21 +19,22 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"translator/internal/auth"
 
 	"github.com/xuri/excelize/v2"
-	apierrors "translator/internal/errors"
 	"translator/internal/doc"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 )
 
 // EditorSegment 单段对照（前端双栏编辑器的一行）。
 type EditorSegment struct {
-	Index       int    `json:"index"`
-	Source      string `json:"source"`
-	Target      string `json:"target"`
-	EditedText  string `json:"edited_text"`
-	Status      string `json:"status"`
-	Note        string `json:"note"`
+	Index      int    `json:"index"`
+	Source     string `json:"source"`
+	Target     string `json:"target"`
+	EditedText string `json:"edited_text"`
+	Status     string `json:"status"`
+	Note       string `json:"note"`
 }
 
 // routesEditor 注册对照编辑器相关路由。
@@ -41,6 +43,28 @@ func (s *Server) routesEditor() {
 	s.mux.HandleFunc("/api/tickets/segments/save", s.handleSaveSegments)
 	s.mux.HandleFunc("/api/tickets/segments/export", s.handleExportSegments)
 	s.mux.HandleFunc("/api/editor/export/download", s.handleEditorExportDownload)
+}
+
+// canEditTicket ★ A4 授权口径（2026-09-12，替代旧「同租户任意用户可读写」）：
+// 创建者 ∪ 同租户审校及以上（role 等级 ≥2：approver/租管，与审批工作台口径一致）
+// ∪ 超管。旧实现只比对 TenantID，同租户普通成员可读写他人工单全部译文段，
+// 与 tickets.go「隐私=创建者或超管」冲突——在线编辑作为审批工具向 ≥2 级放开。
+func canEditTicket(u *store.User, t *store.Ticket) bool {
+	if u == nil || t == nil {
+		return false
+	}
+	if auth.IsSuperAdmin(u) {
+		return true
+	}
+	if u.TenantID != t.TenantID {
+		return false
+	}
+	return t.CreatedBy == u.ID || auth.RoleLevel(u.Role) >= 2
+}
+
+// editorDeny 统一拒绝响应（读接口按 403；不泄漏工单存在性由上层 GetTicketGlobal 已兜底）。
+func (s *Server) editorDeny(w http.ResponseWriter, r *http.Request) {
+	s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权访问该工单"))
 }
 
 // handleTicketSegments 读取工单逐段对照 + 术语表。
@@ -59,9 +83,9 @@ func (s *Server) handleTicketSegments(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrTicketNotFound, "工单不存在"))
 		return
 	}
-	// 租户隔离校验：非超管只能访问自己租户的工单
-	if u.TenantID != t.TenantID && u.TenantID != 0 {
-		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权访问该工单"))
+	// ★ A4：创建者 ∪ 同租户审校及以上 ∪ 超管（旧版仅租户级，同租户可越权读写他人工单）
+	if !canEditTicket(u, t) {
+		s.editorDeny(w, r)
 		return
 	}
 
@@ -130,8 +154,8 @@ func (s *Server) handleSaveSegments(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrTicketNotFound, "工单不存在"))
 		return
 	}
-	if u.TenantID != t.TenantID && u.TenantID != 0 {
-		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权访问该工单"))
+	if !canEditTicket(u, t) {
+		s.editorDeny(w, r)
 		return
 	}
 
@@ -431,8 +455,8 @@ func (s *Server) handleExportSegments(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrTicketNotFound, "工单不存在"))
 		return
 	}
-	if u.TenantID != t.TenantID && u.TenantID != 0 {
-		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权访问该工单"))
+	if !canEditTicket(u, t) {
+		s.editorDeny(w, r)
 		return
 	}
 	base, ok := s.extractSegments(t, lang)
@@ -471,6 +495,8 @@ func (s *Server) handleExportSegments(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "回写失败: "+err.Error()))
 		return
 	}
+	// ★ B8：产物归属登记（同评审整改 C1 口径），下载侧凭登记行做越权拦截
+	s.Store.RegisterArtifact(outPath, t.TenantID, u.ID, t.ID)
 	rel, _ := filepath.Rel(s.Cfg.UploadDir, outPath)
 	writeJSON(w, 200, map[string]interface{}{
 		"success":  true,
@@ -480,7 +506,8 @@ func (s *Server) handleExportSegments(w http.ResponseWriter, r *http.Request) {
 
 // handleEditorExportDownload 鉴权后安全下载回写产物（限定在 UploadDir 内，防路径穿越）。
 func (s *Server) handleEditorExportDownload(w http.ResponseWriter, r *http.Request) {
-	if u := s.authUser(r); u == nil {
+	u := s.authUser(r)
+	if u == nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录或登录已失效"))
 		return
 	}
@@ -498,13 +525,26 @@ func (s *Server) handleEditorExportDownload(w http.ResponseWriter, r *http.Reque
 		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "非法文件路径"))
 		return
 	}
+	// ★ B8（2026-09-12）：归属校验——凡已登记产物必须命中「同租户 + 本人/租管以上/超管」；
+	//   未登记文件一律 404（本端点只服务编辑器导出产物，无历史存量，不留灰度口子）。
+	art, aerr := s.Store.GetArtifactByPath(abs)
+	if aerr != nil || art == nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "文件不存在"))
+		return
+	}
+	if !auth.IsSuperAdmin(u) && !(art.TenantID == u.TenantID &&
+		(art.UserID == u.ID || auth.IsTenantAdmin(u))) {
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "文件不存在"))
+		return
+	}
 	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filepath.Base(abs)))
 	http.ServeFile(w, r, abs)
 }
 
 // parseTicketIDLang 从查询参数解析工单标识与语言（lang 缺省取工单首目标语言）。
 // ★ 兼容双标识（2026-09 修复）：前端可能粘贴数字 ID 或「工单号 T20260902...」，
-//   后者经 id 数值解析得 0，需回退按 ticket_no 精确查行再取其 ID。
+//
+//	后者经 id 数值解析得 0，需回退按 ticket_no 精确查行再取其 ID。
 func (s *Server) parseTicketIDLang(r *http.Request) (int64, string) {
 	raw := r.URL.Query().Get("id")
 	id, _ := parseInt64(raw)

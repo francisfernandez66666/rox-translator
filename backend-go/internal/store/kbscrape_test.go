@@ -179,7 +179,8 @@ func TestUpdateStagedEntrySrcLang(t *testing.T) {
 
 // TestAutoApproveEntryAfterSrcLangChange 回归：源语言更正后再自动审批，不得因 stale hash 插入重复行。
 // ★ 2026-09-03 修复：AutoApproveEntry 必须按当前字段重算 hash，否则 UpdateStagedEntrySrcLang
-//   已更换 src_lang 后沿用旧 hash 会 INSERT 出重复 approved 行（实测 15818→18841 +3023 事故）。
+//
+//	已更换 src_lang 后沿用旧 hash 会 INSERT 出重复 approved 行（实测 15818→18841 +3023 事故）。
 func TestAutoApproveEntryAfterSrcLangChange(t *testing.T) {
 	s := newTestStore(t)
 	e := &KBStagedEntry{TargetPackID: 1, PackType: "locale", SrcLang: "zh", SrcText: "blended learning", TgtLang: "en", TgtText: "Blended Learning", Tier: 3, Layer: 1}

@@ -146,7 +146,6 @@ func truncateRunes(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-
 // handleAdminFeedbackResolve 超管标记反馈已处理。
 func (s *Server) handleAdminFeedbackResolve(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
@@ -240,7 +239,12 @@ func (s *Server) handleFeedbackList(w http.ResponseWriter, r *http.Request) {
 			"target_type": f.TargetType, "ticket_id": f.TicketID,
 			"content": f.Content, "target_langs": f.TargetLangs, "mode": f.Mode,
 			"with_context": f.WithContext, "source_text": srcCtx,
-			"translations_json": func() string { if f.WithContext { return f.Translations }; return "" }(),
+			"translations_json": func() string {
+				if f.WithContext {
+					return f.Translations
+				}
+				return ""
+			}(),
 			"status": f.Status, "replies": json.RawMessage(f.Replies),
 			"created_at": f.CreatedAt, "handled_at": f.HandledAt,
 		})

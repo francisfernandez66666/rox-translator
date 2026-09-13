@@ -1,9 +1,10 @@
 // ============ 本文件职责说明 ============
 // 全仓端到端评审（2026-08-26）修复项回归测试：
-//   B3 句数镜像原子性（Add/DeductSentences 守卫与并发守恒）
-//   B4 legacy Deduct 守卫式扣减（并发不扣负）
-//   A2 SaveEntry 语言码白名单（标识符注入拦截）
-//   C1 ListUsersByRole 列数对齐（通知链路复活回归）
+//
+//	B3 句数镜像原子性（★ C26 后为只增流水，并发自增守恒）
+//	B4 legacy Deduct 守卫式扣减（并发不扣负）
+//	A2 SaveEntry 语言码白名单（标识符注入拦截）
+//	C1 ListUsersByRole 列数对齐（通知链路复活回归）
 package store
 
 import (
@@ -44,7 +45,7 @@ func TestDeductGuardConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := s.Deduct(1, 3)
+			err := s.deduct(1, 3)
 			mu.Lock()
 			if err == nil {
 				okCnt++
@@ -64,37 +65,26 @@ func TestDeductGuardConcurrent(t *testing.T) {
 	}
 }
 
-// TestSentenceMirrorAtomic 句数镜像并发：余额 100，50 个 goroutine 各扣 4——
-// 恰好 25 个成功、25 个 ErrSentenceExhausted；终值 0。
+// TestSentenceMirrorAtomic ★ C26：句数镜像为发放流水（只增）——并发自增守恒：
+// 基线 100 + 50×4 = 300，无丢失更新（JSONNumAdd 单语句原子）。
+// 旧「守卫自减」语义已删除（token 台账是唯一扣减通道）。
 func TestSentenceMirrorAtomic(t *testing.T) {
 	s := newConcurrentTestStore(t)
 	ensureTenantRow(t, s)
 	if _, err := s.AddSentences(1, 100); err != nil {
 		t.Fatalf("AddSentences: %v", err)
 	}
-	var mu sync.Mutex
-	var okCnt, failCnt int
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := s.DeductSentences(1, 4)
-			mu.Lock()
-			if err == nil {
-				okCnt++
-			} else if err == ErrSentenceExhausted {
-				failCnt++
-			}
-			mu.Unlock()
+			_, _ = s.AddSentences(1, 4)
 		}()
 	}
 	wg.Wait()
-	if okCnt != 25 || failCnt != 25 {
-		t.Fatalf("期望 25 成功 / 25 耗尽，实际 %d / %d", okCnt, failCnt)
-	}
-	if cur, _ := s.GetSentenceBalance(1); cur != 0 {
-		t.Fatalf("句数余额应为 0，实际 %d", cur)
+	if cur, _ := s.GetSentenceBalance(1); cur != 300 {
+		t.Fatalf("句数镜像应守恒为 300，实际 %d", cur)
 	}
 }
 

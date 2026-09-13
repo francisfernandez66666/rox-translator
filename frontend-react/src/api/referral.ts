@@ -36,6 +36,18 @@ export interface ReferralMyResp extends AdminResp {
   paid_tokens?: number
 }
 
+export interface ReferralFunnel {
+  l1_invited: number; l1_paid: number
+  l2_invited: number; l2_paid: number
+  reward_tokens_l1: number; reward_tokens_l2: number
+  reg_rewards: number
+}
+
+/** ★ H9 我的 2 级邀请归因漏斗（登录即可，仅本人维度） */
+export async function referralFunnel(): Promise<AdminResp & { funnel?: ReferralFunnel; l2_pct?: number }> {
+  return request('/api/referral/funnel', { headers: authHeaders() })
+}
+
 /** 拉取我的邀请码与邀请记录（懒生成个人码） */
 export async function referralMy(): Promise<ReferralMyResp> {
   return request('/api/referral/my', { headers: authHeaders() })

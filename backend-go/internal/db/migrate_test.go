@@ -70,13 +70,13 @@ func TestRunnerIdempotent(t *testing.T) {
 
 	migs := []Migration{
 		{
-			ID:        "0001_users",
-			SQLiteUp:  "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);",
+			ID:         "0001_users",
+			SQLiteUp:   "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);",
 			PostgresUp: "CREATE TABLE users (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL);",
 		},
 		{
-			ID:        "0002_tickets",
-			SQLiteUp:  "CREATE TABLE tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER NOT NULL);",
+			ID:         "0002_tickets",
+			SQLiteUp:   "CREATE TABLE tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER NOT NULL);",
 			PostgresUp: "CREATE TABLE tickets (id BIGSERIAL PRIMARY KEY, uid INTEGER NOT NULL);",
 		},
 	}
@@ -137,7 +137,6 @@ func TestRegisteredMigrationsApplies(t *testing.T) {
 		t.Fatalf("idempotent re-apply failed: %v", err)
 	}
 }
-
 
 // TestSplitStmts 验证 splitStmts 按分号拆分多语句 SQL 并剥离 -- 行注释。
 func TestSplitStmts(t *testing.T) {

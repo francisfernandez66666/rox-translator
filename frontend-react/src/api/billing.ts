@@ -17,14 +17,8 @@
 import { request, authHeaders, API_BASE, type AdminResp } from './core'
 
 /** 查询当前租户余额 */
-export async function billingBalance(): Promise<AdminResp> {
-  return request('/api/billing/balance', { headers: authHeaders() })
-}
 
 /** 查询当前租户用量 */
-export async function billingUsage(): Promise<AdminResp> {
-  return request('/api/billing/usage', { headers: authHeaders() })
-}
 
 /** 个人用量看板（普通用户个人级）：from/to=YYYY-MM-DD 日期区间（均空=累计+当日口径） */
 export async function usageMe(from?: string, to?: string): Promise<AdminResp> {
@@ -58,9 +52,6 @@ export async function billingOrders(): Promise<AdminResp> {
 // ==================== 计费配置（super_admin） ====================
 
 /** 读取计费配置（是否强制计费） */
-export async function billingConfig(): Promise<AdminResp> {
-  return request('/api/billing/config', { headers: authHeaders() })
-}
 
 /** 保存计费配置（是否强制计费） */
 export async function billingConfigSave(data: { billing_enforced: boolean }): Promise<AdminResp> {

@@ -57,8 +57,10 @@ func encryptRoutes(rs []config.ProviderConfig) []config.ProviderConfig {
 // llmKeyState 查询某个以密文落库的密钥配置（如 embed_api_key）的当前状态。
 //   - 入参 key：system_config 中的配置键名（其值应为 store.EncryptSecret 产生的 enc:v1: 密文）。
 //   - 返回 (是否已设置, 脱敏后的掩码)：未配置/解密失败均返回 (false, "")。
+//
 // 用途：在「全局模型」tab 的 GET 接口中向前端返回密钥是否已配置及掩码展示，
-//       避免将真实密钥明文回传到前端。
+//
+//	避免将真实密钥明文回传到前端。
 func (s *Server) llmKeyState(key string) (bool, string) {
 	// 从 system_config 读取密文（为空或读取失败视为未配置）
 	v, err := s.Store.GetConfig(key)
@@ -105,9 +107,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	transSet := key != "" && !s.Cfg.OnlineAPIKeyIsPlaceholder
 	writeJSON(w, 200, map[string]interface{}{"success": true,
 		// model：在线翻译/工单任务密钥（api_key 已掩码；set 表示是否真实配置）
-		"model": map[string]interface{}{"api_base": base, "api_key": maskKey(key), "model": model, "set": transSet},
+		"model":     map[string]interface{}{"api_base": base, "api_key": maskKey(key), "model": model, "set": transSet},
 		"embedding": map[string]interface{}{"set": embSet, "masked": embMask, "api_base": s.Cfg.EmbedAPIBase},
-		"routes":   maskedRoutes})
+		"routes":    maskedRoutes})
 }
 
 // handleModelsSave 保存模型配置（仅超管）：
@@ -122,12 +124,12 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		APIBase      string                  `json:"api_base"`      // 模型 API 基础地址（在线翻译用；可为空=不修改）
-		APIKey       string                  `json:"api_key"`       // 在线翻译/工单任务 API Key（掩码值不覆盖原密钥）
-		Model        string                  `json:"model"`         // 在线翻译模型名称
-		Routes       []config.ProviderConfig `json:"routes"`        // 多供应商路由（可为空=清空；平台统一网关多供应商调度）
+		APIBase string                  `json:"api_base"` // 模型 API 基础地址（在线翻译用；可为空=不修改）
+		APIKey  string                  `json:"api_key"`  // 在线翻译/工单任务 API Key（掩码值不覆盖原密钥）
+		Model   string                  `json:"model"`    // 在线翻译模型名称
+		Routes  []config.ProviderConfig `json:"routes"`   // 多供应商路由（可为空=清空；平台统一网关多供应商调度）
 		// ★ LLM Key 合并（2026-08-27）：将原本独立的 /api/admin/llm-key 接口功能并入本接口
-		EmbedAPIKey  string `json:"embed_api_key"` // KB 向量重建用的 Embedding Key（掩码值不覆盖原密钥）
+		EmbedAPIKey  string `json:"embed_api_key"`  // KB 向量重建用的 Embedding Key（掩码值不覆盖原密钥）
 		EmbedAPIBase string `json:"embed_api_base"` // Embedding 网关地址（如智谱 …/api/paas/v4）
 		// clear_keys：显式清空某个密钥作用域，取值 "translation"（在线翻译 Key）或 "embedding"（向量重建 Key）。
 		// 前端「清除」按钮即发送该字段，避免把空串误当作「清空」而误删。
@@ -430,10 +432,10 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 	// ★ 数据回流开关（评审整改 D7）：默认参与共建
 	feedbackOut := pc.DataFeedbackOptOut != nil && *pc.DataFeedbackOptOut == 1
 	writeJSON(w, 200, map[string]interface{}{"success": true, "policy": map[string]interface{}{
-		"high_sim":             high,
-		"med_sim":              med,
-		"evals_pass_threshold": evals,
-		"cross_dept_fallback":  cross,
+		"high_sim":              high,
+		"med_sim":               med,
+		"evals_pass_threshold":  evals,
+		"cross_dept_fallback":   cross,
 		"data_feedback_opt_out": feedbackOut,
 	}})
 }
@@ -447,7 +449,7 @@ func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Policy             map[string]float64 `json:"policy"`
-		CrossDeptFallback  *bool              `json:"cross_dept_fallback"`  // 跨部门降级检索（nil=不修改）
+		CrossDeptFallback  *bool              `json:"cross_dept_fallback"`   // 跨部门降级检索（nil=不修改）
 		DataFeedbackOptOut *bool              `json:"data_feedback_opt_out"` // ★ 数据回流关闭开关（D7；nil=不修改）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

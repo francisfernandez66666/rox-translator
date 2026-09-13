@@ -9,9 +9,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +29,8 @@ type fetchConfig struct {
 
 // defaultFetchConfig 默认抓取基座配置。
 var defaultFetchConfig = fetchConfig{
-	UserAgent:   "TranslatorKBPackCrawler/1.0 (+https://lexicorn.cn; 术语包自动采集)",
+	// ★ B11：UA 联系方式取品牌域 env（未配置则不带 URL）
+	UserAgent:   crawlerUserAgent(),
 	MinInterval: 1200 * time.Millisecond, // 每主机 ≥1.2s（低于常见速率限制）
 	Timeout:     15 * time.Second,
 	MaxRetries:  2,
@@ -38,13 +41,14 @@ type fetchBase struct {
 	cfg    fetchConfig
 	client *http.Client
 	// 主机级限频：lastRequest[host] = 上次请求时刻
-	mu           sync.Mutex
-	lastRequest  map[string]time.Time
+	mu          sync.Mutex
+	lastRequest map[string]time.Time
 	// robots 缓存：robots[host] = (允许, 过期时间)
-	robots       map[string]robotsEntry
-	robotsMu     sync.Mutex
+	robots   map[string]robotsEntry
+	robotsMu sync.Mutex
 }
 
+// robotsEntry 缓存 robots.txt 的单条 allow/deny 判定及其过期时间。
 type robotsEntry struct {
 	allow   bool
 	expires time.Time
@@ -58,7 +62,7 @@ func newFetchBase() *fetchBase {
 		client: &http.Client{
 			Timeout: cfg.Timeout,
 			Transport: &http.Transport{
-				DialContext: (&net.Dialer{Timeout: 8 * time.Second}).DialContext,
+				DialContext:  (&net.Dialer{Timeout: 8 * time.Second}).DialContext,
 				MaxIdleConns: 8,
 			},
 		},
@@ -91,17 +95,27 @@ func (f *fetchBase) robotsAllowed(ctx context.Context, rawURL string) bool {
 		return e.allow
 	}
 	f.robotsMu.Unlock()
-	// 抓取 robots.txt（短超时，失败按允许处理）
+	// 抓取 robots.txt。★ D12（2026-09-12）：不可达改按「拒绝」处理——
+	// 旧实现 err/5xx 一律 allow（注释自认 fail-open），等于「服务器一抖就绕规」。
+	// 对齐主流爬虫口径：网络错误/5xx=fail-closed 停抓（本小时缓存同样生效，防风暴）；
+	// 4xx（含 404 无 robots 文件）=无约束可查，放行。
 	robotsURL := u.Scheme + "://" + u.Host + "/robots.txt"
-	allow := true
+	allow := false
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, robotsURL, nil)
 	req.Header.Set("User-Agent", f.cfg.UserAgent)
 	resp, err := f.client.Do(req)
-	if err == nil {
+	if err != nil {
+		log.Printf("[crawler] robots.txt 不可达（按禁抓处理）%s: %v", robotsURL, err)
+	} else {
 		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
+		switch {
+		case resp.StatusCode == http.StatusOK:
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			allow = !robotsDisallows(string(body), u.Path)
+		case resp.StatusCode >= 500:
+			log.Printf("[crawler] robots.txt 服务端 %d（按禁抓处理）%s", resp.StatusCode, robotsURL)
+		default: // 4xx：无 robots 文件/不可读视为无规则，放行
+			allow = true
 		}
 	}
 	f.robotsMu.Lock()
@@ -145,17 +159,29 @@ func robotsDisallows(body, path string) bool {
 }
 
 // throttle 主机级限频：距上次请求不足 MinInterval 则等待。
-func (f *fetchBase) throttle(host string) {
+// ★ D9（2026-09-12）：等待改 ctx 感知——取消时返回 error 而非睡满（抓取在
+// 请求线程上执行，客户端断开后不应继续占用）。锁内只算时长，睡在锁外。
+func (f *fetchBase) throttle(ctx context.Context, host string) error {
+	var wait time.Duration
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	last, ok := f.lastRequest[host]
 	if ok {
-		elapsed := time.Since(last)
-		if elapsed < f.cfg.MinInterval {
-			time.Sleep(f.cfg.MinInterval - elapsed)
+		if elapsed := time.Since(last); elapsed < f.cfg.MinInterval {
+			wait = f.cfg.MinInterval - elapsed
 		}
 	}
 	f.lastRequest[host] = time.Now()
+	f.mu.Unlock()
+	if wait > 0 {
+		t := time.NewTimer(wait)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
+	return nil
 }
 
 // get 带限频 + 重试 + robots 检查的 GET 请求（受限网页抓取 tier2 用）；
@@ -172,7 +198,9 @@ func (f *fetchBase) get(ctx context.Context, rawURL string) ([]byte, error) {
 func (f *fetchBase) doGet(ctx context.Context, rawURL string) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt <= f.cfg.MaxRetries; attempt++ {
-		f.throttle(hostOf(rawURL))
+		if terr := f.throttle(ctx, hostOf(rawURL)); terr != nil {
+			return nil, terr // ★ D9：限频等待期取消，直接止损
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 		if err != nil {
 			return nil, err
@@ -182,7 +210,9 @@ func (f *fetchBase) doGet(ctx context.Context, rawURL string) ([]byte, error) {
 		resp, err := f.client.Do(req)
 		if err != nil {
 			lastErr = err
-			time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+			if serr := sleepCtx(ctx, time.Duration(attempt+1)*500*time.Millisecond); serr != nil {
+				return nil, serr // ★ D9：网络退避期取消，不再重试
+			}
 			continue
 		}
 		body, rerr := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
@@ -193,7 +223,9 @@ func (f *fetchBase) doGet(ctx context.Context, rawURL string) ([]byte, error) {
 		}
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-			time.Sleep(time.Duration(attempt+1) * 800 * time.Millisecond)
+			if serr := sleepCtx(ctx, time.Duration(attempt+1)*800*time.Millisecond); serr != nil {
+				return nil, serr // ★ D9
+			}
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
@@ -209,4 +241,28 @@ func (f *fetchBase) doGet(ctx context.Context, rawURL string) ([]byte, error) {
 // 返回响应体字节。
 func (f *fetchBase) getJSON(ctx context.Context, rawURL string) ([]byte, error) {
 	return f.doGet(ctx, rawURL)
+}
+
+// crawlerUserAgent 采集器 UA 串；品牌 URL 仅在 BRAND_DOMAIN_SUFFIX 配置后附带。
+func crawlerUserAgent() string {
+	if d := strings.TrimSpace(os.Getenv("BRAND_DOMAIN_SUFFIX")); d != "" {
+		return "TranslatorKBPackCrawler/1.0 (+https://" + d + "; 术语包自动采集)"
+	}
+	return "TranslatorKBPackCrawler/1.0"
+}
+
+// sleepCtx ★ D9（2026-09-12）：ctx 感知的重试退避——旧裸 Sleep 在客户端
+// 断开后仍继续抓取/重试，白白消耗对端配额与本进程连接。
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }

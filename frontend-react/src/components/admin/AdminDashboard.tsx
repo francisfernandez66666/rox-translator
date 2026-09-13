@@ -8,6 +8,7 @@
 //   桌面端仍为固定侧栏，行为互不影响。
 // ============================================================================
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Button, Menu, Select, Tag } from 'tdesign-react'
 import { useAdmin } from '@/stores/admin'
 import type { PanelKey } from '@/stores/admin'
@@ -18,7 +19,10 @@ import SiteFooter from '@/components/SiteFooter'
 import { useBranding } from '@/branding'
 
 import Overview from './panels_a'
-import { UsersP, InvitesP } from './panels_a'
+import MailTplP from './MailTplP'
+import FooterP from './FooterP'
+import DataSourcesP from './DataSourcesP'
+import { UsersP, InvitesP, AlertsP, AuditP, UsageP } from './panels_a'
 import { TenantsP, OrgP } from './panels_b'
 import BrandP from './BrandP'
 import SystemSettingsP from './SystemSettingsP'
@@ -27,6 +31,7 @@ import PersonalCenterP from './PersonalCenterP'
 import { PlansP, ReferralP, WebhooksP, ApiKeysP } from './panels_c'
 import { KbP, ModelsP, WorkflowP, TicketsP } from './panels_d'
 import { OpsP } from './panels_e'
+import { ReconcileP } from './ReconcileP' // ★ F9 对账视图
 
 // 菜单项接口定义：key 对应 admin store 中的面板标识，minLevel 为可见最低角色等级
 interface Item { key: PanelKey; label: string; minLevel: number }
@@ -44,9 +49,18 @@ const ITEMS: Item[] = [
   { key: 'kb', label: 'admin.menuKb', minLevel: 2 },
   { key: 'models', label: 'admin.menuModels', minLevel: 4 },
   { key: 'ops', label: 'admin.menuOps', minLevel: 4 },
+  { key: 'reconcile', label: 'admin.menuReconcile', minLevel: 4 }, // ★ F9
   { key: 'tickets', label: 'admin.menuTickets', minLevel: 2 },
   { key: 'brand', label: 'admin.menuBrand', minLevel: 3 },
   { key: 'system', label: 'admin.menuSystem', minLevel: 4 },
+  // ★ E9：以下面板组件早已存在但重组后菜单项与 renderPanel 分支双双丢失（点击/跳转渲染白板）
+  { key: 'invites', label: 'admin.menuInvites', minLevel: 3 },
+  { key: 'usage', label: 'admin.menuUsage', minLevel: 3 },
+  { key: 'alerts', label: 'admin.menuAlerts', minLevel: 4 },
+  { key: 'audit', label: 'admin.menuAudit', minLevel: 4 },
+  { key: 'mailTpl', label: 'admin.menuMailTpl', minLevel: 4 },
+  { key: 'footer', label: 'admin.menuFooter', minLevel: 4 },
+  { key: 'dataSources', label: 'admin.menuDataSources', minLevel: 4 },
 ]
 
 /** 根据当前选中的面板 key 返回对应组件（集中分发，避免在 JSX 中写长 switch） */
@@ -62,6 +76,7 @@ function renderPanel(p: PanelKey) {
     case 'kb': return <KbP />
     case 'models': return <ModelsP />
     case 'ops': return <OpsP />
+    case 'reconcile': return <ReconcileP />
     case 'workflow': return <WorkflowP />
     case 'apikeys': return <ApiKeysP />
     case 'webhooks': return <WebhooksP />
@@ -70,12 +85,21 @@ function renderPanel(p: PanelKey) {
     case 'agreements': return <SystemSettingsP />
     case 'brand': return <BrandP />
     case 'system': return <SystemSettingsP />
+    // ★ E9：补全孤儿面板分发（旧 default→null 使菜单/跳转渲染空白）
+    case 'invites': return <InvitesP />
+    case 'usage': return <UsageP />
+    case 'alerts': return <AlertsP />
+    case 'audit': return <AuditP />
+    case 'mailTpl': return <MailTplP />
+    case 'footer': return <FooterP />
+    case 'dataSources': return <DataSourcesP />
     default: return null
   }
 }
 
 /** 后台控制台主组件：组合侧边菜单、顶部操作栏与动态面板路由 */
 export default function AdminDashboard() {
+  const navigate = useNavigate()
   const ad = useAdmin()
   // 订阅语言变化，使菜单与角色标签随 UI 语言切换刷新
   const lang = useLang()
@@ -148,10 +172,11 @@ export default function AdminDashboard() {
           )}
           {/* 部门管理员：组织级标签 */}
           {ad.myLevel === 2 && <Tag variant="light">{t('admin.tagDept')}</Tag>}
+          {/* ★ F1：非超管顶栏显示其管理范围租户名 */}
+          {!ad.isSuper && !!ad.tenantName && <Tag theme="primary" variant="light">{ad.tenantName}</Tag>}
           <AccountMenu showWorkbench onGotoWorkbench={() => {
-            // 返回前台工作台：通过 history API 模拟路由跳转
-            window.history.pushState({}, '', '/')
-            window.dispatchEvent(new PopStateEvent('popstate'))
+            // ★ E8：走 router navigate（pushState+合成 popstate 与 react-router 脱节）
+            navigate('/')
           }} />
         </div>
 

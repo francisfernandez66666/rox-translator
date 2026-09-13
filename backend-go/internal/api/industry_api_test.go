@@ -1,10 +1,12 @@
 // ============ 本文件职责中文说明 ============
 // 行业字典管理 API（2026-09-10 超管可创建/维护行业）handler 全链路测试：
-//   A) 超管创建行业 → 列表可见 → 编辑名 → 停用/启用 → 删除（成功）
-//   B) 非超管（普通企业用户）访问写接口 → 403 拦截（仅超管可管理行业）
-//   C) 被租户引用的行业删除 → 400 拒绝（引用保护，提示改用停用）
-//   D) /api/auth/register-config 公开生效行业字典：无需登录可达；
-//      新建行业可见、停用行业立即从公开字典隐藏（注册页行业下拉动态拉取的数据源）。
+//
+//	A) 超管创建行业 → 列表可见 → 编辑名 → 停用/启用 → 删除（成功）
+//	B) 非超管（普通企业用户）访问写接口 → 403 拦截（仅超管可管理行业）
+//	C) 被租户引用的行业删除 → 400 拒绝（引用保护，提示改用停用）
+//	D) /api/auth/register-config 公开生效行业字典：无需登录可达；
+//	   新建行业可见、停用行业立即从公开字典隐藏（注册页行业下拉动态拉取的数据源）。
+//
 // 复用 admin_superadmin_scope_test.go 的内存 SQLite + 真实 JWT 基建，
 // 走 handler 全链路（鉴权 requireDeptAdmin → 超管判定 → store 落库）。
 // ========================================
@@ -122,8 +124,8 @@ func TestIndustryAPIChain(t *testing.T) {
 	resp := industryPost(t, s, "/api/admin/industries/create", tokens["admin"],
 		map[string]interface{}{"code": "MEDIA", "name": "传媒广告"})
 	var created struct {
-		Success  bool   `json:"success"`
-		Message  string `json:"message"`
+		Success  bool             `json:"success"`
+		Message  string           `json:"message"`
 		Industry *store.KBPackage `json:"industry"`
 	}
 	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil || !created.Success {
@@ -242,8 +244,8 @@ func TestIndustryAPIDeleteReferencedRejected(t *testing.T) {
 	cr := industryPost(t, s, "/api/admin/industries/create", tokens["admin"],
 		map[string]interface{}{"code": "auto", "name": "汽车"})
 	var created struct {
-		Success  bool              `json:"success"`
-		Industry *store.KBPackage  `json:"industry"`
+		Success  bool             `json:"success"`
+		Industry *store.KBPackage `json:"industry"`
 	}
 	if err := json.Unmarshal(cr.Body.Bytes(), &created); err != nil || !created.Success || created.Industry == nil {
 		t.Fatalf("创建 auto 行业应成功: %v (%s)", err, cr.Body.String())
@@ -275,7 +277,7 @@ func TestRegisterConfigIndustries(t *testing.T) {
 	// 公开接口初始可达（无需登录）
 	r0 := registerConfigGET(t, s)
 	var init struct {
-		Success    bool   `json:"success"`
+		Success    bool `json:"success"`
 		Industries []struct {
 			Code string `json:"code"`
 			Name string `json:"name"`

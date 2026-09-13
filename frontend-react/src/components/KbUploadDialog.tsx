@@ -135,6 +135,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
   const ad = useAdmin()
   const [file, setFile] = useState<File | null>(null)
   const [recognizing, setRecognizing] = useState(false)
+  const [uploadPct, setUploadPct] = useState(0) // ★ H5 分片上传进度
   const [recognized, setRecognized] = useState<Any | null>(null)
   const [pkgs, setPkgs] = useState<Pkg[]>([])
   const [orgs, setOrgs] = useState<OrgInfo[]>([])
@@ -169,12 +170,13 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
     if (!file) return
     setRecognizing(true); setRecognized(null); setResult(null)
     try {
-      const r = await kbRecognizeFile(file)
+      // ★ H5：大文件（≥4MB）自动分片续传上传，进度可见
+      const r = await kbRecognizeFile(file, undefined, (pct) => setUploadPct(pct))
       if (r.success) setRecognized(r as Any)
       else MessagePlugin.error(r.message || t('kb.recognizeFailed'))
     } catch (err: any) {
       MessagePlugin.error(t('kb.recognizeErr').replace('{msg}', err?.message || t('kb.networkErr')))
-    } finally { setRecognizing(false) }
+    } finally { setRecognizing(false); setUploadPct(0) }
   }
 
   // startImport 将已识别文件（temp_id）导入所选知识包（import-kb，自动 embed），成功则清空已选文件
@@ -210,7 +212,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
           onChange={(e: any) => { setFile(e.target.files?.[0] || null); setRecognized(null); setResult(null); setPkgId(0); e.currentTarget.value = '' }}
         />
         <Button onClick={() => void startRecognize()} disabled={!file || recognizing} loading={recognizing}>
-          {recognizing ? t('kb.recognizing') : t('kb.recognize')}
+          {recognizing ? (uploadPct > 0 && uploadPct < 100 ? `${t('kb.uploading')} ${uploadPct}%` : t('kb.recognizing')) : t('kb.recognize')}
         </Button>
       </div>
 

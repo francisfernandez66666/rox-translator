@@ -51,7 +51,7 @@ const (
 	// ★ 性能优化（不换库 Phase A1）：PDF 在低配机器（1G 内存）上走 pdf2docx+LibreOffice
 	// 转换极易 OOM/超时。前置拦截：体积或页数超限则直接友好拒绝，提示先转 docx 再上传。
 	pdfUploadSizeLimit = 40 << 20 // 40MB：与翻译文件总上限对齐（PDF 转换高峰期仍可能顶满内存）
-	pdfPageHardLimit   = 120       // 120 页：超出建议先转为 docx
+	pdfPageHardLimit   = 120      // 120 页：超出建议先转为 docx
 )
 
 // checkPdfLimits 对 PDF 做前置安全拦截：过大或页数过多会在文件转换阶段（pdf2docx+LibreOffice）

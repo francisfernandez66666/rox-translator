@@ -9,8 +9,10 @@
 //
 // 幂等：UPDATE 按段主键写入，可重复执行。
 // 用法：
-//   backfill-embeddings -npz /opt/translator/data/tm_embeddings.npz -dsn "postgres://..."
-//   DB_DRIVER=postgres DB_DSN=postgres://... backfill-embeddings
+//
+//	backfill-embeddings -npz /opt/translator/data/tm_embeddings.npz -dsn "postgres://..."
+//	DB_DRIVER=postgres DB_DSN=postgres://... backfill-embeddings
+//
 // =============================================
 package main
 

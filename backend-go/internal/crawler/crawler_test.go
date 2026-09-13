@@ -17,11 +17,11 @@ func TestParseTermTableRows(t *testing.T) {
 		<tr><td>只有一列</td></tr>
 	</table></body></html>`
 	rows := parseTermTableRows(htmlSrc)
-	if len(rows) != 3 { // 表头行也会被收集（两列），此处按实现返回 3 行（含表头）
-		t.Fatalf("期望 3 行，实际 %d", len(rows))
+	if len(rows) != 2 { // ★ D6：表头行（th）不再收集
+		t.Fatalf("期望 2 行，实际 %d", len(rows))
 	}
-	if rows[1][0] != "汽车" || rows[1][1] != "Automobile" {
-		t.Fatalf("行解析错误: %#v", rows[1])
+	if rows[0][0] != "汽车" || rows[0][1] != "Automobile" {
+		t.Fatalf("行解析错误: %#v", rows[0])
 	}
 	// 只有一列的行应被 collectRow 丢弃（<2 列）
 	for _, r := range rows {

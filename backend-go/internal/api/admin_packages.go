@@ -13,14 +13,15 @@ package api
 // =============================================
 
 import (
-	"log"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"translator/internal/ops"
 
 	qrcode "github.com/skip2/go-qrcode"
 
@@ -85,8 +86,16 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "sentences 必须大于 0"})
 		return
 	}
+	// ★ C14（2026-09-12）：负价拒绝（旧实现直落库，退款/统计口径被打穿）
+	if req.PriceMoney < 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "price_money 不能为负"})
+		return
+	}
 	if req.DurationDays <= 0 {
-		req.DurationDays = 30
+		req.DurationDays = 30 // 缺省 30 天（显式不限期请传 -1，见下）
+	}
+	if req.DurationDays == -1 {
+		req.DurationDays = 0 // ★ C14：-1 = 显式「不限期」（区别于缺省 0→30）
 	}
 	p, err := s.Store.CreatePackage(&store.Package{
 		TenantID: req.TenantID, Code: req.Code, Name: req.Name, PType: req.PType, Sentences: req.Sentences,
@@ -116,15 +125,15 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req struct {
-		ID           int64   `json:"id"`            // 目标包 ID（必填）
-		TenantID     *int64  `json:"tenant_id"`     // 新租户 ID（nil=不修改）
-		Name         string  `json:"name"`          // 新名称（可为空=不修改）
-		PType        string  `json:"ptype"`         // 新类型（可为空=不修改）
-		Sentences    int64   `json:"sentences"`     // 新句数（<=0=不修改）
-		PriceMoney   float64 `json:"price_money"`   // 新售价（<0=不修改）
-		DurationDays int     `json:"duration_days"` // 新有效期（<=0=不修改）
-		Enabled      *int    `json:"enabled"`       // 启停（0/1，nil=不修改）
-		SortOrder    *int    `json:"sort_order"`    // 排序（nil=不修改）
+		ID           int64    `json:"id"`            // 目标包 ID（必填）
+		TenantID     *int64   `json:"tenant_id"`     // 新租户 ID（nil=不修改）
+		Name         string   `json:"name"`          // 新名称（可为空=不修改）
+		PType        string   `json:"ptype"`         // 新类型（可为空=不修改）
+		Sentences    int64    `json:"sentences"`     // 新句数（<=0=不修改）
+		PriceMoney   *float64 `json:"price_money"`   // ★ C14：指针——nil=不修改，0=0 元价
+		DurationDays *int     `json:"duration_days"` // ★ C14：指针——nil=不修改，0=改回不限期
+		Enabled      *int     `json:"enabled"`       // 启停（0/1，nil=不修改）
+		SortOrder    *int     `json:"sort_order"`    // 排序（nil=不修改）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -151,11 +160,21 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 	if req.Sentences > 0 {
 		cur.Sentences = req.Sentences
 	}
-	if req.PriceMoney >= 0 {
-		cur.PriceMoney = req.PriceMoney
+	// ★ C14：价格/期限指针化后，「不修改」与「显式设为 0」可区分
+	//   （旧实现 -1/缺省混淆：0 元价改不了、限期改不回不限、负价直接落库）。
+	if req.PriceMoney != nil {
+		if *req.PriceMoney < 0 {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "price_money 不能为负"})
+			return
+		}
+		cur.PriceMoney = *req.PriceMoney
 	}
-	if req.DurationDays > 0 {
-		cur.DurationDays = req.DurationDays
+	if req.DurationDays != nil {
+		if *req.DurationDays < 0 {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "duration_days 不能为负"})
+			return
+		}
+		cur.DurationDays = *req.DurationDays
 	}
 	if req.Enabled != nil {
 		cur.Enabled = *req.Enabled
@@ -180,18 +199,8 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days（旧键 trial_sentences 已下线）
-	freeTokens := int64(300000)
-	if v, _ := s.Store.GetConfig("free_trial_tokens"); v != "" {
-		if n, e := parseInt64(v); e == nil && n > 0 {
-			freeTokens = n
-		}
-	}
-	freeDays := 14
-	if v, _ := s.Store.GetConfig("free_trial_days"); v != "" {
-		if n, e := parseInt64(v); e == nil && n > 0 {
-			freeDays = int(n)
-		}
-	}
+	// ★ C6（2026-09-12）：默认值单一来源，读取点收敛到 trialConfig
+	freeTokens, freeDays := s.trialConfig()
 	enforced := "0"
 	if v, _ := s.Store.GetConfig("billing_enforced"); v != "" {
 		enforced = v
@@ -204,8 +213,8 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 	if v, _ := s.Store.GetConfig("static_qr_image"); v != "" {
 		staticQR = v
 	}
-	// ★ Token 实费参数：均摊系数（默认 1.5）与句↔token 换算率（默认 500）
-	markup := 1.5
+	// ★ Token 实费参数：均摊系数与句↔token 换算率（默认值 ★ C6 单一来源）
+	markup := ops.DefaultMarkupMultiplier()
 	if v, _ := s.Store.GetConfig("billing_markup_multiplier"); v != "" {
 		if f, perr := strconv.ParseFloat(v, 64); perr == nil && f >= 1.0 {
 			markup = f
@@ -260,40 +269,34 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
+	// ★ C28（2026-09-12）重构：旧实现「边校验边写入、审计在校验前落笔」——
+	//   后置字段校验失败时，前面字段已生效但响应 400，且审计留下"已保存"假轨迹。
+	//   现在：① 全量校验 → ② 收集变更 → ③ 统一落库 → ④ 成功才写审计（带变更键明细）。
+	var pending []struct{ key, val string }
+	add := func(k, v string) { pending = append(pending, struct{ key, val string }{k, v}) }
 	if req.BillingEnforced != nil {
-		if err := s.Store.SetConfig("billing_enforced", *req.BillingEnforced); err != nil {
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		if *req.BillingEnforced != "0" && *req.BillingEnforced != "1" { // 值域白名单（C28）
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": `billing_enforced 仅支持 "0"/"1"`})
 			return
 		}
+		add("billing_enforced", *req.BillingEnforced)
 	}
 	// ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days
 	if req.FreeTrialTokens != nil && *req.FreeTrialTokens > 0 {
-		if err := s.Store.SetConfig("free_trial_tokens", strconv.FormatInt(*req.FreeTrialTokens, 10)); err != nil {
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
-			return
-		}
+		add("free_trial_tokens", strconv.FormatInt(*req.FreeTrialTokens, 10))
 	}
 	if req.FreeTrialDays != nil && *req.FreeTrialDays > 0 {
-		if err := s.Store.SetConfig("free_trial_days", strconv.FormatInt(*req.FreeTrialDays, 10)); err != nil {
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
-			return
-		}
+		add("free_trial_days", strconv.FormatInt(*req.FreeTrialDays, 10))
 	}
 	if req.PayMode != nil {
 		if *req.PayMode != "mock" && *req.PayMode != "sdk" && *req.PayMode != "static_qr" {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "pay_mode 仅支持 mock/sdk/static_qr"})
 			return
 		}
-		if err := s.Store.SetConfig("pay_mode", *req.PayMode); err != nil {
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
-			return
-		}
+		add("pay_mode", *req.PayMode)
 	}
 	if req.StaticQRImage != nil {
-		if err := s.Store.SetConfig("static_qr_image", *req.StaticQRImage); err != nil {
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
-			return
-		}
+		add("static_qr_image", *req.StaticQRImage)
 	}
 	// 三期注册与触达配置保存（键名白名单直传；空串=清除配置）
 	cfgKeys := []struct {
@@ -309,36 +312,38 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		{"dingtalk_webhook_url", req.DingtalkWebhookURL},
 	}
 	for _, kv := range cfgKeys {
-		if kv.val == nil {
-			continue
-		}
-		if err := s.Store.SetConfig(kv.key, *kv.val); err != nil {
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
-			return
+		if kv.val != nil {
+			add(kv.key, *kv.val)
 		}
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_settings_save", "system", "")
-
 	// ★ 计费参数（Token 实费体系）：均摊系数与换算率，超管可调
 	if req.MarkupMultiplier != nil {
 		if *req.MarkupMultiplier < 1.0 {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "均摊系数不能小于 1.0"})
 			return
 		}
-		if err := s.Store.SetConfig("billing_markup_multiplier", strconv.FormatFloat(*req.MarkupMultiplier, 'f', 2, 64)); err != nil {
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
-			return
-		}
+		add("billing_markup_multiplier", strconv.FormatFloat(*req.MarkupMultiplier, 'f', 2, 64))
 	}
 	if req.TokensPerSentence != nil {
 		if *req.TokensPerSentence <= 0 {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "换算率必须大于 0"})
 			return
 		}
-		if err := s.Store.SetConfig("estimate_tokens_per_sentence", strconv.FormatInt(*req.TokensPerSentence, 10)); err != nil {
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		add("estimate_tokens_per_sentence", strconv.FormatInt(*req.TokensPerSentence, 10))
+	}
+	for _, kv := range pending {
+		if err := s.Store.SetConfig(kv.key, kv.val); err != nil {
+			writeJSON(w, 500, map[string]interface{}{"success": false, "message": "保存失败（" + kv.key + "）: " + err.Error()})
 			return
 		}
+	}
+	if len(pending) > 0 {
+		s.invalidatePolicyCache() // ★ C31：pay_mode/billing_enforced 等经 applyLegacyConfig 影响有效策略
+		var keys []string
+		for _, kv := range pending {
+			keys = append(keys, kv.key)
+		}
+		s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_settings_save", "system", strings.Join(keys, ","))
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
@@ -410,8 +415,9 @@ func (s *Server) handleQRImage(w http.ResponseWriter, r *http.Request) {
 
 // handleQRRender 按文本渲染二维码 PNG（/api/qr/render?text=...，需登录）。
 // ★ 2026-09 debug：mock/wechat/alipay 渠道返回的 qr_content 是字符串（mockpay://…、
-//    weixin://…、alipay://…），收银台需展示真实二维码图片供扫码，故复用 go-qrcode
-//    将任意支付串渲染为 PNG（与邀请二维码同款渲染）。仅限登录用户，text 最长 512 字符。
+//
+//	weixin://…、alipay://…），收银台需展示真实二维码图片供扫码，故复用 go-qrcode
+//	将任意支付串渲染为 PNG（与邀请二维码同款渲染）。仅限登录用户，text 最长 512 字符。
 func (s *Server) handleQRRender(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
@@ -453,6 +459,6 @@ func (s *Server) handleAdminPackageDelete(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_delete", "packages", "")
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_delete", "packages", strconv.FormatInt(req.ID, 10))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }

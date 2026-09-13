@@ -55,6 +55,21 @@ func JSONNumGE(d Dialect, col, k string) string {
 	return fmt.Sprintf("COALESCE(json_extract(NULLIF(%s,''),'$.%s'),0)>=?", c, key)
 }
 
+// JSONNumAddFloor0 生成「col 的 JSON 字段 $.k 数值 += ?（一个参数，结果下限钳制为 0）」的
+// UPDATE SET 片段。用于展示镜像类字段的回冲（如退款时句数镜像扣回）：越界不报错、不为负。
+// 参数：d=目标方言；col=JSON 文本列；k=数值键。
+func JSONNumAddFloor0(d Dialect, col, k string) string {
+	c, key := mustJSONIdent(col), mustJSONIdent(k)
+	if d == DialectPostgres {
+		return fmt.Sprintf("%s = jsonb_set(COALESCE(NULLIF(%s,'')::jsonb,'{}'::jsonb), '{%s}', "+
+			"to_jsonb(GREATEST(0, (COALESCE(NULLIF(%s,'')::jsonb->>'%s','0')::numeric + ?))::bigint))::text",
+			c, c, key, c, key)
+	}
+	return fmt.Sprintf("%s = json_set(COALESCE(NULLIF(%s,''),'{}'), '$.%s', "+
+		"MAX(0, COALESCE(json_extract(NULLIF(%s,''),'$.%s'),0)+?))",
+		c, c, key, c, key)
+}
+
 // JSONSetFalse 生成「col 的 JSON 字段 $.k 置 false」的 UPDATE SET 片段（提醒标记复位用）。
 // 参数：d=目标方言；col=JSON 文本列；k=布尔键。
 func JSONSetFalse(d Dialect, col, k string) string {
@@ -64,6 +79,20 @@ func JSONSetFalse(d Dialect, col, k string) string {
 			c, c, key)
 	}
 	return fmt.Sprintf("%s = json_set(COALESCE(NULLIF(%s,''),'{}'), '$.%s', json('false'))", c, c, key)
+}
+
+// JSONPatchSet 生成「col 与一个 patch JSON 做合并补丁」的 UPDATE SET 片段（一个参数=patch 文本）。
+// 语义（RFC 7396 merge-patch）：patch 中的键覆盖写入；值为 null 的键删除。SQLite JSON1 用
+// json_patch，PostgreSQL 用 jsonb `||` 合并，两端行为一致。多键一次性更新必须走本助手
+// （SQL 单条 UPDATE 不允许对同一列赋值两次），键名在 Go 侧经 encoding/json 序列化防注入。
+// ★ A2/S3（2026-09-12）：替代 ExpirePackage/SetNotifiedExpFlag 内联的 SQLite JSON1 专属写法。
+// 参数：d=目标方言；col=JSON 文本列。
+func JSONPatchSet(d Dialect, col string) string {
+	c := mustJSONIdent(col)
+	if d == DialectPostgres {
+		return fmt.Sprintf("%s = (COALESCE(NULLIF(%s,'')::jsonb,'{}'::jsonb) || ?::jsonb)::text", c, c)
+	}
+	return fmt.Sprintf("%s = json_patch(COALESCE(NULLIF(%s,''),'{}'), ?)", c, c)
 }
 
 // JSONExtractNum 生成「取 col 的 JSON 字段 $.k 数值（缺失/空按 0）」的 SELECT 表达式。

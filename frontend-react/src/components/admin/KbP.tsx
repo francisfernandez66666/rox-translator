@@ -12,9 +12,10 @@ import {
   kbPackages, kbPackageCreate, kbPackageDelete, kbEntries, kbEntryAdd, kbEntryDelete, kbEntryUpdate,
   kbEntriesImport, bitextImport, tmxImport,
   kbPackageStatus, kbPackageShare, kbIndexRebuild,
+  kbPackGrants, kbPackGrantSet, adminUsers,
   safetyPhrases, safetyPhraseAdd, safetyPhraseDelete, safetyPhraseStatus, safetyBulkImport,
 } from '@/api'
-import { Panel, toastResp } from './parts'
+import { Panel } from './parts'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
 import { orgList, type OrgInfo } from '@/api/org'
@@ -91,11 +92,16 @@ export function KbP() {
   const [entries, setEntries] = useState<Any[]>([])
   const [entryTotal, setEntryTotal] = useState(0)
   const [entryPage, setEntryPage] = useState(1)
-  const [entryPageSize, setEntryPageSize] = useState(20)
+  const [entryPageSize] = useState(20)
   const [entryFilter, setEntryFilter] = useState<Any>({ layer: 0, target_lang: '', q: '' })
   const [pForm, setPForm] = useState<Any>({ code: '', name: '', pack_type: 'department' })
   const [eForm, setEForm] = useState<Any>({ source_text: '', layer: 2, target_lang: 'en', target_text: '', module: '' })
   const [editingId, setEditingId] = useState<number | null>(null)
+  // ★ H3 包级授权（读/写/管理三级）
+  const [grantPkg, setGrantPkg] = useState<Any | null>(null)
+  const [grantList, setGrantList] = useState<Any[]>([])
+  const [grantUsers, setGrantUsers] = useState<Any[]>([])
+  const [gForm, setGForm] = useState<Any>({ user_id: null, role: 'read' })
   const [bulkText, setBulkText] = useState('')
   const [bulkTextMsg, setBulkTextMsg] = useState('')
   const [kbDlg, setKbDlg] = useState(false)
@@ -240,6 +246,27 @@ export function KbP() {
     if (!r.success) { MessagePlugin.error(r.message); return }
     await loadPackages()
   }
+  async function openGrants(p: Any) {
+    setGrantPkg(p)
+    setGForm({ user_id: null, role: 'read' })
+    const r = await kbPackGrants(Number(p.id))
+    setGrantList(r.success ? ((r as Any).grants || []) : [])
+    if (!r.success) MessagePlugin.error(r.message)
+    if (grantUsers.length === 0) {
+      const ur = await adminUsers()
+      if (ur.success) setGrantUsers(((ur as Any).users || []).filter((u: Any) => u.status !== 'disabled'))
+    }
+  }
+  async function setGrant(role: string, userId?: number) {
+    const uid = userId ?? Number(gForm.user_id)
+    if (!grantPkg || !uid) return
+    const r = await kbPackGrantSet({ pack_id: Number(grantPkg.id), user_id: uid, role })
+    if (!r.success) { MessagePlugin.error(r.message); return }
+    MessagePlugin.success(role ? '授权已更新' : '已撤销授权')
+    const rr = await kbPackGrants(Number(grantPkg.id))
+    setGrantList(rr.success ? ((rr as Any).grants || []) : [])
+  }
+
   async function rebuildIndex() {
     if (!(await confirmDialog({ body: t('kb.rebuildConfirm') }))) return
     setRebuilding(true)
@@ -476,6 +503,7 @@ export function KbP() {
           { colKey: 'op', title: t('org.colActions'), width: 200, cell: ({ row }: any) => (
             <Space size={2}>
               <Button size="small" variant="text" onClick={() => openEntries(row)}>{tpl('kb.viewEntries', { count: entriesMap[Number(row.id)] || 0 })}</Button>
+              <Button size="small" variant="text" onClick={() => void openGrants(row)}>授权</Button>
               <Popconfirm content={tpl('kb.confirmDeletePackage', { name: String(row.name) })} onConfirm={async () => { await removePackage(row) }}>
                 <Button size="small" variant="text" theme="danger">{t('kb.deletePackage')}</Button>
               </Popconfirm>
@@ -619,6 +647,27 @@ export function KbP() {
           </Tabs.TabPanel>
         )}
       </Tabs>
+      <Dialog visible={grantPkg !== null} onClose={() => setGrantPkg(null)}
+        header={`包级授权 · ${grantPkg ? String(grantPkg.name) : ''}`} width={640} footer={false}>
+        <div style={rowStyle}>
+          <Select filterable value={gForm.user_id} onChange={(v: any) => setGForm({ ...gForm, user_id: v })}
+            options={grantUsers.map((u: Any) => ({ label: `${u.display_name || u.username}（${u.username}）`, value: Number(u.id) }))}
+            placeholder="选择用户" style={{ width: 260 }} />
+          <Select value={String(gForm.role)} onChange={(v: any) => setGForm({ ...gForm, role: String(v) })} style={{ width: 130 }}
+            options={[{ label: '只读 read', value: 'read' }, { label: '编辑 write', value: 'write' }, { label: '管理 manage', value: 'manage' }]} />
+          <Button theme="primary" size="small" onClick={() => void setGrant(String(gForm.role))}>授权</Button>
+          <span style={{ fontSize: 12, color: '#889' }}>读 &lt; 写 &lt; 管理（高级别含低级别）；部门管理员及以上天然拥有全部权限</span>
+        </div>
+        <Table rowKey="id" size="small" data={grantList} style={{ marginTop: 10 }}
+          columns={[
+            { colKey: 'username', title: '用户', cell: ({ row }: any) => `${row.display_name || row.username || '#'+row.user_id}` },
+            { colKey: 'role', title: '级别', width: 110, cell: ({ row }: any) =>
+              <Tag size="small" theme={row.role === 'manage' ? 'warning' : row.role === 'write' ? 'primary' : 'default'}>{row.role}</Tag> },
+            { colKey: 'created_at', title: '时间', width: 160, cell: ({ row }: any) => String(row.created_at || '').slice(0, 16) },
+            { colKey: 'op', title: '操作', width: 80, cell: ({ row }: any) => (
+              <Button size="small" variant="text" theme="danger" onClick={() => void setGrant('', Number(row.user_id))}>撤销</Button>) },
+          ] as never} />
+      </Dialog>
     </>
   )
 }

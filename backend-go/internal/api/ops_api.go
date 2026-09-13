@@ -126,6 +126,39 @@ func (s *Server) opsBaseEffective(tid int64) ops.EffectivePolicy {
 
 // effectivePolicy 最终有效策略 = 基础策略 + 命中的活跃时间窗 overrides。
 // 叠加顺序：ActiveWindows 返回 priority 降序，需倒序应用使最高优先级窗口最后生效（赢）。
+// ============ ★ C31（2026-09-12）热路径缓存 ============
+// effectivePolicy 每次 ≥3 条 SQL + 双 JSON 解析 + 窗口排序，且被 LLM 用量回调
+// （meterUsage/effPayMode/模式闸门）高频触发，抵消批量落账的性能优化收益。
+// 3 秒 TTL 进程内缓存；策略保存钩子即时失效。多实例部署下最大偏差= TTL，可接受。
+
+const policyCacheTTL = 3 * time.Second
+
+// policyCacheEntry 缓存条目（gen 感知实例级失效）。
+type policyCacheEntry struct {
+	gen int64
+	at  time.Time
+	eff ops.EffectivePolicy
+}
+
+// invalidatePolicyCache 策略/相关配置保存后调用（版本号 +1，本实例缓存全体视同过期）。
+func (s *Server) invalidatePolicyCache() { s.policyCacheGen.Add(1) }
+
+// effectivePolicyCached 热路径读取版（翻译计量/支付模式/闸门）。
+// 注意：窗口启停在 TTL 内可能延迟数秒生效；管理视图/注册等一致性敏感路径继续用直读版。
+func (s *Server) effectivePolicyCached(tid int64) ops.EffectivePolicy {
+	now := time.Now()
+	gen := s.policyCacheGen.Load()
+	if v, ok := s.policyCache.Load(tid); ok {
+		if e := v.(*policyCacheEntry); e.gen == gen && now.Sub(e.at) < policyCacheTTL {
+			return e.eff
+		}
+	}
+	eff := s.effectivePolicy(tid)
+	s.policyCache.Store(tid, &policyCacheEntry{gen: gen, at: now, eff: eff})
+	return eff
+}
+
+// effectivePolicy 合并基础策略与当前生效的促销窗口，得到租户此刻的最终生效策略。
 func (s *Server) effectivePolicy(tid int64) ops.EffectivePolicy {
 	eff := s.opsBaseEffective(tid)
 	plat := s.opsPlatformPolicy()
@@ -140,7 +173,7 @@ func (s *Server) effectivePolicy(tid int64) ops.EffectivePolicy {
 // 供支付下单/模拟/订阅等读点使用，替代散读 system_config pay_mode：
 // 存量 pay_mode 经 applyLegacyConfig 已并入最终策略，双入口收敛为单一事实源。
 func (s *Server) effPayMode(tid int64) string {
-	m := s.effectivePolicy(tid).Payment.Mode
+	m := s.effectivePolicyCached(tid).Payment.Mode // ★ C31 热路径
 	if m == "" {
 		m = "mock"
 	}
@@ -184,7 +217,9 @@ func (s *Server) handleOpsPolicy(w http.ResponseWriter, r *http.Request) {
 
 // handleOpsPolicySave 保存运营策略。
 // ★ 2026-09 权限收紧：运营策略为平台级中台配置，仅超管可写（scope 恒为 platform）；
-//   租户管理员仅可读（GET），不再开放租户级覆盖，避免租户自行改奖励开关绕过运营管控。
+//
+//	租户管理员仅可读（GET），不再开放租户级覆盖，避免租户自行改奖励开关绕过运营管控。
+//
 // 请求体：{"policy":{...OperationsPolicy...}}；scope 兼容字段，忽略租户级。
 func (s *Server) handleOpsPolicySave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
@@ -204,12 +239,17 @@ func (s *Server) handleOpsPolicySave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "策略格式错误"})
 		return
 	}
-	// 落库前安全裁剪：租户覆盖组与平台专属组一律以平台为准，禁止写 promo_windows/tz 之外的
-	// 非授权字段；平台全量策略直接整体写入。
+	// ★ B6（2026-09-12）：旧注释称「安全裁剪」实为整包直写——补上真实校验：
+	//   时间窗 id 非空且唯一、窗口 overrides 禁止夹带 billing.enforced / payment.mode 后门。
+	if err := ops.ValidatePolicyWindows(req.Policy); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "策略校验失败: " + err.Error()})
+		return
+	}
 	if err := s.Store.SetConfig("ops_policy", marshalOps(req.Policy)); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
 		return
 	}
+	s.invalidatePolicyCache() // ★ C31
 	s.Store.LogAudit(0, u.ID, "ops_policy_save", "ops", "scope=platform")
 	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "运营策略已保存", "scope": "platform"})
 }
@@ -239,6 +279,11 @@ func (s *Server) handleOpsWindowSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "时间窗格式非法或 start≥end"})
 		return
 	}
+	// ★ B6：单窗保存同样过覆盖禁项校验（id 非空在上方已隐含，此处禁项）
+	if err := ops.ValidateWindowOverrides(req.Window); err != nil {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		return
+	}
 	pol := s.opsPlatformPolicy()
 	replaced := false
 	for i := range pol.PromoWindows {
@@ -255,6 +300,7 @@ func (s *Server) handleOpsWindowSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
 		return
 	}
+	s.invalidatePolicyCache() // ★ C31
 	s.Store.LogAudit(0, u.ID, "ops_window_save", "ops", req.Window.ID)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "推广时间窗已保存", "id": req.Window.ID})
 }
@@ -291,63 +337,23 @@ func (s *Server) handlePackageReset(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未开放套餐重置"})
 		return
 	}
-	if eff.Package.MonthlyResetLimit > 0 {
-		if n := s.tenantResetCount(tid); n >= eff.Package.MonthlyResetLimit {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "本月重置次数已达上限"})
-			return
-		}
-	}
-	// 执行重置：当前套餐期（kind='plan' 未过期、left<total）恢复满额
-	cnt, err := s.Store.ResetCurrentPackageGrants(tid)
+	// ★ C7（2026-09-12）：限额检查 + 台账重置 + 计数累加合并为单事务原子操作
+	//   （旧「读计数→重置→写计数」三步非原子，并发连点可小幅击穿上限；
+	//   且重置波及升级转入行造成价值通胀）。
+	cnt, used, rejected, err := s.Store.ResetPackageMonthly(tid, eff.Package.MonthlyResetLimit)
 	if err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "重置失败: " + err.Error()})
 		return
 	}
-	s.bumpTenantResetCount(tid)
-	s.Store.LogAudit(tid, u.ID, "billing_package_reset", "packages", "")
+	if rejected {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "本月重置次数已达上限"})
+		return
+	}
+	s.Store.LogAudit(tid, u.ID, "billing_package_reset", "packages", strconv.Itoa(used))
 	g, p, _ := s.Store.TenantRemainTotal(tid)
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "message": "本月套餐用量已重置", "reset_count": cnt, "remaining": g + p,
 	})
-}
-
-// tenantResetCount 当月套餐重置次数。
-func (s *Server) tenantResetCount(tid int64) int {
-	if s.Ten == nil {
-		return 0
-	}
-	pc, _ := s.Ten.GetPolicyConfig(tid)
-	month := time.Now().Format("2006-01")
-	var rc struct {
-		Month string `json:"month"`
-		Count int    `json:"count"`
-	}
-	_ = json.Unmarshal([]byte(pc.OpsResets), &rc)
-	if rc.Month != month {
-		return 0
-	}
-	return rc.Count
-}
-
-// bumpTenantResetCount 累加当月重置次数（跨月自动归零重计）。
-func (s *Server) bumpTenantResetCount(tid int64) {
-	if s.Ten == nil {
-		return
-	}
-	month := time.Now().Format("2006-01")
-	pc, _ := s.Ten.GetPolicyConfig(tid)
-	var rc struct {
-		Month string `json:"month"`
-		Count int    `json:"count"`
-	}
-	_ = json.Unmarshal([]byte(pc.OpsResets), &rc)
-	if rc.Month != month {
-		rc.Month = month
-		rc.Count = 0
-	}
-	rc.Count++
-	pc.OpsResets = marshalOps(rc)
-	_ = s.Ten.SetPolicyConfig(tid, pc)
 }
 
 // marshalOps 通用 JSON 序列化（nil-safe）。

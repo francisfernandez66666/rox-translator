@@ -52,6 +52,7 @@
   function hideAll() {
     if (btn) btn.style.display = "none";
     hideBubble();
+    clearMarks(); // ★ F10：气泡收起同时清除选区高亮回显
   }
 
   function hideBubble() {
@@ -103,15 +104,65 @@
       });
       const data = await resp.json();
       if (!data.success || !data.translations) {
-        showBubble(x, y, "翻译失败：" + (data.message || resp.status));
+        const code = data.error_code || "";
+        const hint = ERR_HINT[code] || (data.message || ("HTTP " + resp.status));
+        showBubble(x, y, "翻译失败" + (code ? "（" + code + "）" : "") + "：" + hint);
         return;
       }
-      showBubble(x, y,
-        Object.entries(data.translations).map(([lc, v]) => lc + ": " + v).join("\n"));
+      // ★ F10：气泡增强——译文 + 模式/消耗回显 + 原文对照，并高亮页面选区
+      highlightSel();
+      const lines = Object.entries(data.translations).map(([lc, v]) => lc + ": " + v);
+      if (data.mode) lines.push("模式: " + data.mode);
+      if (data.tokens_used) lines.push("消耗: " + data.tokens_used + " token");
+      if (data.source_text) lines.push("原文: " + data.source_text);
+      showBubble(x, y, lines.join("\n"));
     } catch (e) {
       showBubble(x, y, e.name === "TimeoutError" ? "翻译超时，请重试或缩短选区" : ("网络错误：" + e.message));
     }
   }
+
+  // ★ F10：错误码提示表（与前端 E11 同口径：稳定 error_code → 用户可读指引）
+  const ERR_HINT = {
+    invalid_api_key: "API Key 无效或已吊销，请到扩展设置更新",
+    key_quota_exceeded: "该 API Key 当日配额已用完",
+    insufficient_balance: "账户余额不足，请充值或升级套餐",
+    forbidden: "API Key 无翻译权限",
+    text_too_long: "选区过长超出单次限制，请缩短选区",
+    rate_limited: "请求过于频繁，稍后重试",
+    no_result: "翻译无结果，请重试",
+    task_failed: "翻译任务失败，请重试",
+  };
+
+  // ★ F10：术语/结果回显——翻译成功后高亮当前选区（mark 包裹），下一次翻译或点击空白清除
+  let markEls = [];
+  function clearMarks() {
+    for (const m of markEls) { const p = m.parentNode; if (p) { p.replaceChild(document.createTextNode(m.textContent), m); p.normalize(); } }
+    markEls = [];
+  }
+  function highlightSel() {
+    clearMarks();
+    try {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+      const range = sel.getRangeAt(0);
+      if (range.collapsed || range.startContainer !== range.endContainer) return; // 跨节点选区不做破坏性包裹
+      const mk = document.createElement("mark");
+      mk.className = "__trz_mark__";
+      mk.appendChild(range.extractContents());
+      range.insertNode(mk);
+      markEls.push(mk);
+    } catch { /* 受保护 DOM 忽略 */ }
+  }
+
+  // ★ F10：快捷键（background.js 命令转发）——对当前选区直接翻译
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (!msg || msg.type !== "trz:shortcut-translate") return;
+    const sel = window.getSelection();
+    const t = sel ? String(sel).trim() : "";
+    if (!t) return;
+    selText = t;
+    translateSel(window.innerWidth / 2 - 200, Math.max(60, window.innerHeight / 3));
+  });
 
   // 选区监听：mouseup 时若非空白选区且配置就绪则显示按钮
   document.addEventListener("mouseup", (e) => {

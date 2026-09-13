@@ -3,7 +3,9 @@
 // 功能等价 Vue 版：KB 九语分组 / 其他常用语分组 / 手输自定义语言代码加入选中集。
 // ============================================================================
 import { useEffect, useMemo, useState } from 'react'
+import { API_BASE } from '@/api'
 import { Select, Input, Button } from 'tdesign-react'
+import type { TdInputProps } from 'tdesign-react/es/input/type'
 import { t } from '@/i18n'
 
 // ============ 本文件职责中文说明 ============
@@ -56,7 +58,7 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
   useEffect(() => {
     ;(async () => {
       try {
-        const resp = await fetch('/api/translation/langs')
+        const resp = await fetch(`${API_BASE}/api/translation/langs`)
         if (!resp.ok) return
         const data = await resp.json()
         if (data.kb_langs?.length) {
@@ -125,6 +127,8 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
       value={value}
       options={options as never}
       placeholder={t('chat.langPlaceholder')}
+      // G6-axe：valueDisplay 置空后 placeholder 不渲染，转义到内层 input 上补无障碍名
+      inputProps={{ 'aria-label': t('chat.langPlaceholder'), placeholder: t('chat.langPlaceholder') } as unknown as TdInputProps}
       onChange={(v) => onChange((v as string[]) || [])}
       panelBottomContent={customPanel}
       valueDisplay={() => null}

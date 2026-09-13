@@ -30,4 +30,5 @@ export * from './webhooks'
 export * from './feedback'
 export * from './invites'
 export * from './referral';
+export * from './scim';
 export * from './tmreview';

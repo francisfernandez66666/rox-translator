@@ -36,6 +36,10 @@ func (s *Store) CreateAlert(tid int64, level, kind, message string) error {
 //
 //	userID=关联用户（无则 0），log=详细日志/上下文。
 func (s *Store) CreateAlertEx(tid int64, level, kind, message string, userID int64, log string) error {
+	// ★ F9：静音门禁——该租户同类存在未到点静默记录则跳过（不产生 open 告警）
+	if s.KindSilenced(tid, kind) {
+		return nil
+	}
 	// 幂等：同 tenant+kind 已有 open 告警时跳过（避免每次检查都刷屏）
 	var cnt int
 	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COUNT(*) FROM alerts WHERE tenant_id=? AND kind=? AND status='open'", tid, kind).Scan(&cnt)
@@ -108,4 +112,71 @@ func joinConds(conds []string) string {
 		out += c
 	}
 	return out
+}
+
+// SilenceAlert 设定「租户+类型」静音截止时间（upsert 覆盖旧值）。
+// 参数：tid=租户 ID（0=平台级），kind=告警类型，minutes=静音分钟数（≤0 视为 60）。
+func (s *Store) SilenceAlert(tid int64, kind string, minutes int, by int64) error {
+	if kind == "" {
+		return nil
+	}
+	if minutes <= 0 {
+		minutes = 60
+	}
+	until := time.Now().Add(time.Duration(minutes) * time.Minute).UTC().Format(time.RFC3339)
+	d := db.CurrentDialect()
+	if _, err := db.Exec(s.db, d, `INSERT INTO alert_silences (tenant_id, kind, until, created_by) VALUES (?,?,?,?)
+		ON CONFLICT(tenant_id, kind) DO UPDATE SET until=?, created_by=?`, tid, kind, until, by, until, by); err != nil {
+		return err
+	}
+	// 静音生效即顺带关闭现存 open 告警（避免历史告警继续挂列表）
+	db.Exec(s.db, d, "UPDATE alerts SET status='resolved', resolved_at=? WHERE tenant_id=? AND kind=? AND status='open'",
+		time.Now().UTC().Format(time.RFC3339), tid, kind)
+	return nil
+}
+
+// UnsilenceAlert 解除静音。
+func (s *Store) UnsilenceAlert(tid int64, kind string) error {
+	_, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM alert_silences WHERE tenant_id=? AND kind=?", tid, kind)
+	return err
+}
+
+// KindSilenced 该租户+类型是否处于静音期内（tid 精确匹配；平台级告警 tid=0）。
+func (s *Store) KindSilenced(tid int64, kind string) bool {
+	var one int
+	err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT 1 FROM alert_silences WHERE tenant_id=? AND kind=? AND until>? LIMIT 1",
+		tid, kind, time.Now().UTC().Format(time.RFC3339)).Scan(&one)
+	return err == nil && one == 1
+}
+
+// ActiveSilences 未到点的静音记录（tid<=0=全平台）。
+func (s *Store) ActiveSilences(tid int64) []AlertSilence {
+	query := "SELECT tenant_id, kind, until, created_by FROM alert_silences WHERE until>?"
+	args := []interface{}{time.Now().UTC().Format(time.RFC3339)}
+	if tid > 0 {
+		query += " AND tenant_id=?"
+		args = append(args, tid)
+	}
+	rows, err := db.Query(s.db, db.CurrentDialect(), query+" ORDER BY tenant_id, kind", args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []AlertSilence{}
+	for rows.Next() {
+		var v AlertSilence
+		if rows.Scan(&v.TenantID, &v.Kind, &v.Until, &v.CreatedBy) == nil {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// AlertSilence 一条静音记录。
+type AlertSilence struct {
+	TenantID  int64  `json:"tenant_id"`
+	Kind      string `json:"kind"`
+	Until     string `json:"until"`
+	CreatedBy int64  `json:"created_by"`
 }

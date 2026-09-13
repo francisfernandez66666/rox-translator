@@ -19,6 +19,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
+	"translator/internal/ops"
 
 	"translator/internal/auth"
 	"translator/internal/billing"
@@ -41,8 +44,14 @@ func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 	// ★ 计费豁免（2026-09-02 需求6）：超管（平台级）永不收费——
 	//   超级管理员（role≥4）与其平台上下文（tenant_id=0）跳过 QPS/并发/日额/余额/预算墙全部闸门，
 	//   避免超管在平台视角操作时被误判「余额不足/并发过多」而拒绝（此前 tenant_id=0 查余额恒为 0）。
+	// ★ B13（2026-09-12）运营设计确认：本豁免为【有意行为】，请勿当漏洞"修复"；
+	//   同理，`tid<=0` 分支覆盖公开体验入口的匿名请求（无租户上下文可计），
+	//   依赖入口级限流兜底。豁免生效时写低频审计（每用户每小时至多一条）供追溯。
 	u := s.authUser(r)
 	if auth.IsSuperAdmin(u) || tid <= 0 {
+		if u != nil && auth.IsSuperAdmin(u) {
+			s.auditBillingExemptOnce(u)
+		}
 		return tid, func() {}, nil
 	}
 	// 计费服务未初始化时不限流（降级为放行）
@@ -101,7 +110,7 @@ func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 // markupMultiplier 成本均摊系数（billing_markup_multiplier，默认 1.5）。
 // 对外扣费 = 真实 LLM token 消耗 × 该系数；后台可调。
 func (s *Server) markupMultiplier() float64 {
-	m := 1.5
+	m := ops.DefaultMarkupMultiplier() // ★ C6 默认值单一来源
 	if v, _ := s.Store.GetConfig("billing_markup_multiplier"); v != "" {
 		if f, perr := strconv.ParseFloat(v, 64); perr == nil && f >= 1.0 {
 			m = f
@@ -134,7 +143,7 @@ func (s *Server) ChargeUsageRealtime(ctx context.Context, model string, prompt, 
 	//   charge=false=推广期免费（仅留痕计量不扣减）、markup>0 时按模式成本系数、
 	//   enabled=false 时拒绝本次翻译（fail-closed 防漏计费）。
 	mode := tenant.ModeFromContext(ctx)
-	eff := s.effectivePolicy(tid)
+	eff := s.effectivePolicyCached(tid) // ★ C31 热路径（每 LLM 用量回调）
 	rule, hasRule := eff.Mode(mode)
 	if hasRule && !rule.Enabled {
 		if abort := llm.AbortFromCtx(ctx); abort != nil {
@@ -153,12 +162,12 @@ func (s *Server) ChargeUsageRealtime(ctx context.Context, model string, prompt, 
 	uid := tenant.UserFromContext(ctx)
 	if hasRule && !rule.Charge {
 		// 免费模式：仅留痕计量（用量看板可见、cost=0），不扣双桶台账
-		_ = s.Store.LogUsage(tid, uid, "translate", model, model, billed, "text", mode)
+		_ = s.Store.LogUsage(tid, uid, "translate", model, model, tenant.LangFromContext(ctx), billed, "text", mode)
 		s.metrics.addUsage(0)
 		return nil
 	}
 	// 收费模式：批量落库（sink）扣减，biz_mode 落真实模式（原硬编码 "pro" 口径修正）
-	billing.RecordUsage(tid, uid, "translate", model, model, billed, "text", mode, llm.AbortFromCtx(ctx))
+	billing.RecordUsage(tid, uid, "translate", model, model, tenant.LangFromContext(ctx), billed, "text", mode, llm.AbortFromCtx(ctx))
 	s.metrics.addUsage(billed)
 	return nil
 }
@@ -173,7 +182,7 @@ func (s *Server) balancePayload(tid int64) (grants, permanent, total, approx int
 	}
 	rate := s.Store.TokenSentenceRate()
 	if rate <= 0 {
-		rate = 500
+		rate = ops.DefaultTokensPerSentence // ★ C6
 	}
 	total = grants + permanent
 	return grants, permanent, total, total / rate
@@ -237,7 +246,7 @@ func (s *Server) meterUsage(r *http.Request, tid int64, taskType string, quantit
 	// 系统级指标：累计计量 token
 	s.metrics.addUsage(quantity)
 	// 写入计费流水（强制计费模式下会扣余额）；失败仅忽略，由审计兜底
-	_ = s.Bill.MeterDeferred(tid, userID, taskType, provider, model, quantity, "", "")
+	_ = s.Bill.MeterDeferred(tid, userID, taskType, provider, model, "", quantity, "", "")
 }
 
 // usageModel 解析本次请求实际使用的 LLM 供应商与模型（多供应商成本核算）。
@@ -263,6 +272,12 @@ func (s *Server) usageModel(r *http.Request, tid int64) (provider, model string)
 func (s *Server) handleBillingConfig(w http.ResponseWriter, r *http.Request) {
 	if s.Store == nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
+		return
+	}
+	// ★ B5（2026-09-12）：计费开关暴露平台运营策略，仅 tenant_admin 及以上可读
+	// （前端唯一调用方为管理后台套餐页，收紧无兼容影响）
+	if _, err := s.requireTenantAdmin(r); err != nil {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
 	// 强制计费状态：由计费服务 Enabled() 判定
@@ -306,6 +321,7 @@ func (s *Server) handleBillingConfigSave(w http.ResponseWriter, r *http.Request)
 	}
 	// 审计：记录开关变更前后值（on/off）
 	u := s.authUser(r)
+	s.invalidatePolicyCache() // ★ C31：billing_enforced 参与 applyLegacyConfig
 	s.Store.LogAuditDiff(s.effTenant(r, u), u.ID, "billing_config_save", "system", val, `{"billing_enforced":"`+before+`"}`, `{"billing_enforced":"`+val+`"}`)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "billing_enforced": req.BillingEnforced})
 }
@@ -313,7 +329,14 @@ func (s *Server) handleBillingConfigSave(w http.ResponseWriter, r *http.Request)
 // handleTenantQuota 读取租户配额接口（QPS/并发/每日字符上限）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（当前租户）。返回 tenant_id/qps/concurrent/max_daily_chars。
 func (s *Server) handleTenantQuota(w http.ResponseWriter, r *http.Request) {
-	tid := s.currentTenant(r)
+	// ★ B5（2026-09-12）：要求登录。旧实现 currentTenant(r) 对匿名请求兜底到租户 1，
+	//   未登录即可读到平台侧默认租户的 QPS/并发/日配额画像。
+	qu := s.authUser(r)
+	if qu == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "请先登录"})
+		return
+	}
+	tid := qu.TenantID
 	writeJSON(w, 200, map[string]interface{}{
 		"success":          true,
 		"tenant_id":        tid,
@@ -456,9 +479,22 @@ func (s *Server) handleUsageMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	bal, _ := s.Store.GetSentenceBalance(u.TenantID)
+	// ★ C26（2026-09-12）：token 为唯一真账，剩余句数=可用 token÷折算率反推。
+	// 旧实现直读 sentence_balance 镜像（只增不减）导致「剩余句数」虚高。
+	gLeft, pLeft, terr := s.Store.TenantRemainTotal(u.TenantID)
+	var tokens int64
+	if terr == nil {
+		tokens = gLeft + pLeft
+	}
+	var est int64
+	if rate := s.Store.TokenSentenceRate(); rate > 0 {
+		est = tokens / rate
+	}
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "total": total, "today": today, "count": cnt, "sentence_balance": bal, "from": from, "to": to, "date": to,
+		"success": true, "total": total, "today": today, "count": cnt,
+		"tokens_available": tokens, "sentences_estimate": est,
+		"sentence_balance": est, // ★ C26：兼容旧前端键——语义已改为反推值（非镜像）
+		"from":             from, "to": to, "date": to,
 	})
 }
 
@@ -598,7 +634,6 @@ func (s *Server) handleUsageCost(w http.ResponseWriter, r *http.Request) {
 }
 
 // 编译期引用占位：保留 strings 导入（模板片段按构建标签条件编译时使用）。
-var _ = strings.TrimSpace
 
 // quotaDailyTokens 租户每日 token 上限（permissions.max_daily_tokens，0=未配置）。
 func (s *Server) quotaDailyTokens(tid int64) int64 {
@@ -611,3 +646,24 @@ func (s *Server) quotaDailyTokens(tid int64) int64 {
 	}
 	return tenant.ParsePerms(t.Permissions).MaxDailyTokens
 }
+
+// auditBillingExemptOnce ★ B13：超管计费豁免审计（限频：每用户每小时至多一条，防刷表）。
+func (s *Server) auditBillingExemptOnce(u *store.User) {
+	if s.Store == nil {
+		return
+	}
+	key := strconv.FormatInt(u.ID, 10)
+	v, _ := exemptAuditAt.LoadOrStore(key, time.Now().Add(-2*time.Hour).Unix())
+	now := time.Now().Unix()
+	oldTS := v.(int64)
+	if now-oldTS < 3600 {
+		return
+	}
+	if !exemptAuditAt.CompareAndSwap(key, oldTS, now) {
+		return
+	}
+	s.Store.LogAudit(0, u.ID, "billing_exempt_superadmin", "system", "超管豁免计费/限流闸门（运营设计，行为追溯用）")
+}
+
+// exemptAuditAt 超管豁免审计限频表（uid → 上次落审计的 unix 秒）。
+var exemptAuditAt sync.Map

@@ -12,7 +12,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"translator/internal/db"
@@ -267,6 +270,7 @@ func (s *Store) UpdateKBPackage(id, tid int64, name string) error {
 // DeleteKBPackage 删除包（连带删除其下条目与安全句）。
 // 参数：id=包主键 ID，tid=租户 ID；返回错误。
 func (s *Store) DeleteKBPackage(id, tid int64) error {
+	invalidateTermCache() // ★ D11
 	// 先删包下条目（外键无级联，需显式清理）
 	if _, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM kb_entries WHERE package_id=? AND tenant_id=?", id, tid); err != nil {
 		return err
@@ -413,6 +417,7 @@ func (s *Store) UpdateIndustry(id int64, name string) error {
 // ToggleIndustry 启用/停用行业包（停用后不再参与翻译命中，但仍保留在字典中）。
 // 参数：id=行业包 ID，enabled=1 启用 / 0 停用；仅操作平台宿主租户0 的行业包。
 func (s *Store) ToggleIndustry(id int64, enabled int) error {
+	invalidateTermCache() // ★ D11
 	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE kb_packages SET enabled=?, updated_at=? WHERE id=? AND tenant_id=? AND pack_type=?",
 		enabled, time.Now().Format(time.RFC3339), id, SharedHostTenant, PackIndustry)
 	return err
@@ -421,6 +426,7 @@ func (s *Store) ToggleIndustry(id int64, enabled int) error {
 // DeleteIndustry 删除行业包（连带其下条目、安全句与语言文化共享数据）。
 // 参数：id=行业包 ID；仅操作平台宿主租户0 的行业包。
 func (s *Store) DeleteIndustry(id int64) error {
+	invalidateTermCache() // ★ D11
 	if _, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM kb_entries WHERE package_id=? AND tenant_id=?", id, SharedHostTenant); err != nil {
 		return err
 	}
@@ -501,6 +507,7 @@ func isValidLangColumn(lang string) bool {
 // tgtLang/tgtText=目标语言与译文，module=来源模块。
 // 返回：条目 ID 或错误。
 func (s *Store) SaveEntry(tid, pkgID int64, layer int, srcLang, srcText, tgtLang, tgtText, module string) (int64, error) {
+	invalidateTermCache() // ★ D11
 	// ★ 语言码白名单（2026-08-26 全仓评审 A2）：tgtLang 会被拼进 tm_segments 列名
 	//  （SQL 标识符位置），必须限定在固定语言列集合内，否则构成标识符注入。
 	if !isValidLangColumn(tgtLang) {
@@ -665,6 +672,7 @@ func (s *Store) CountEntriesByPackages(tid int64) (map[int64]int, error) {
 // UpdateEntry 更新单条条目内容（租户隔离校验，不可改包/归属）。
 // 参数：id=条目主键，tid=租户 ID，layer=层级，srcText/tgtLang/tgtText/module=可编辑字段；返回错误。
 func (s *Store) UpdateEntry(id, tid int64, layer int, srcText, tgtLang, tgtText, module string) error {
+	invalidateTermCache() // ★ D11
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE kb_entries SET layer=?, source_text=?, target_lang=?, target_text=?, module=?, updated_at=? WHERE id=? AND tenant_id=?",
 		layer, srcText, tgtLang, tgtText, module, time.Now().Format(time.RFC3339), id, tid)
@@ -692,6 +700,60 @@ func (s *Store) GetEntryForUpdate(tid, id int64) ([]*KBEntry, error) {
 	return out, nil
 }
 
+// TermHit 术语检索命中行（★ H12 开放接口 /openapi/v1/terms）。
+type TermHit struct {
+	SourceLang string `json:"source_lang"`
+	SourceText string `json:"source"`
+	TargetLang string `json:"target_lang"`
+	TargetText string `json:"target"`
+	PackName   string `json:"package"`
+	Exact      bool   `json:"exact"`
+}
+
+// SearchTerms 租户术语检索（layer=1 术语行，源/目标双向 LIKE，可见包口径与
+// FindTermsBySubstring 一致：role=source、启用、org 可见性）。orgID 传 0 表示
+// 租户级 API 视角（跨部门共享包可见、独享部门包不可见）。
+func (s *Store) SearchTerms(tid, orgID int64, q, lang string, limit int) ([]TermHit, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return nil, fmt.Errorf("检索词不能为空")
+	}
+	if limit < 1 || limit > 50 {
+		limit = 20
+	}
+	kw := "%" + escapeLike(q) + "%"
+	vis := "p.org_id = 0 OR p.pack_type IN ('industry','locale') OR p.org_id = ? OR (p.org_id <> 0 AND p.org_id <> ? AND COALESCE(p.share_cross_dept,1)=1)"
+	sql := "SELECT e.source_lang, e.source_text, e.target_lang, e.target_text, p.name, " +
+		"CASE WHEN e.source_text = ? OR e.target_text = ? THEN 1 ELSE 0 END " +
+		"FROM kb_entries e JOIN kb_packages p ON e.package_id=p.id " +
+		"WHERE e.tenant_id=? AND e.layer=1 AND p.role='source' AND COALESCE(p.enabled,1)=1 " +
+		"AND (" + vis + ") " +
+		"AND (e.source_text LIKE ? ESCAPE '\\' OR e.target_text LIKE ? ESCAPE '\\')"
+	args := []interface{}{q, q, tid, orgID, orgID, kw, kw}
+	if lang != "" {
+		sql += " AND e.target_lang=?"
+		args = append(args, lang)
+	}
+	sql += " ORDER BY 6 DESC, length(e.source_text), e.id LIMIT ?"
+	args = append(args, limit)
+	rows, err := db.Query(s.db, db.CurrentDialect(), sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TermHit
+	for rows.Next() {
+		var h TermHit
+		var exact int
+		if err := rows.Scan(&h.SourceLang, &h.SourceText, &h.TargetLang, &h.TargetText, &h.PackName, &exact); err != nil {
+			continue
+		}
+		h.Exact = exact == 1
+		out = append(out, h)
+	}
+	return out, nil
+}
+
 // escapeLike 转义 LIKE 通配符，防止关键词里的 % 与 _ 干扰模糊匹配。
 // 参数：s=原始关键词；返回转义后的关键词（配合 ESCAPE '\' 使用）。
 func escapeLike(s string) string {
@@ -704,6 +766,7 @@ func escapeLike(s string) string {
 // DeleteEntry 删除单条条目（租户隔离校验）。
 // 参数：id=条目主键 ID，tid=租户 ID；返回错误。
 func (s *Store) DeleteEntry(id, tid int64) error {
+	invalidateTermCache() // ★ D11
 	_, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM kb_entries WHERE id=? AND tenant_id=?", id, tid)
 	return err
 }
@@ -716,7 +779,7 @@ func (s *Store) FindEntriesBySource(tid int64, srcLang, srcText string) ([]*KBEn
 	rows, err := db.Query(s.db, db.CurrentDialect(),
 		"SELECT e.id, e.tenant_id, e.package_id, e.layer, e.source_lang, e.source_text, e.target_lang, e.target_text, e.module, e.created_at, e.updated_at "+
 			"FROM kb_entries e JOIN kb_packages p ON e.package_id=p.id "+
-			"WHERE e.tenant_id=? AND e.source_lang=? AND e.source_text=? AND p.role='source' "+
+			"WHERE e.tenant_id=? AND e.source_lang=? AND e.source_text=? AND p.role='source' AND COALESCE(p.enabled,1)=1 "+
 			"ORDER BY CASE p.pack_type WHEN 'tenant' THEN 0 WHEN 'industry' THEN 1 ELSE 2 END, e.layer, e.id",
 		tid, srcLang, srcText)
 	if err != nil {
@@ -745,10 +808,36 @@ func (s *Store) FindEntriesBySource(tid int64, srcLang, srcText string) ([]*KBEn
 // 「山海无界，极石致远」中时，精确匹配无法命中，需按子串检索把术语拎出来注入 prompt。
 // 参数：tid=租户 ID，orgID=调用方部门 ID，srcLang=源语言，srcText=待翻译源文。
 // 返回：命中的术语条目（按包类型优先级 + layer + id 排序）。
+// ★ D11（2026-09-12）子串命中短 TTL 缓存：品牌词/种子词在文件批量翻译中
+// 同一 (租户,部门,文本) 会被多语言×多块反复查询，60s 窗口内直接复用；
+// 术语库后台编辑最长 60s 后可见（运营可接受，写入侧不做失效广播）。
+var termCache sync.Map // key → *termCacheVal
+// termCacheVal 术语查询缓存项（写入时间 + 查询结果）。
+type termCacheVal struct {
+	at   time.Time
+	data []*KBEntry
+}
+
+const termCacheTTL = 60 * time.Second
+
+// invalidateTermCache ★ D11：术语/包写路径联动清缓存（60s 短 TTL 之上再保一道，
+// 后台改词立即生效，避免「刚停用的包还在命中」窗口）。
+func invalidateTermCache() {
+	termCache.Range(func(k, _ interface{}) bool { termCache.Delete(k); return true })
+}
+
+// FindTermsBySubstring 按子串匹配查询术语条目（60s 进程内缓存；按租户/部门/共享范围过滤可见性）。
 func (s *Store) FindTermsBySubstring(tid, orgID int64, srcLang, srcText string) ([]*KBEntry, error) {
+	key := strconv.FormatInt(tid, 10) + "|" + strconv.FormatInt(orgID, 10) + "|" + srcLang + "|" + srcText
+	if v, ok := termCache.Load(key); ok {
+		if cv := v.(*termCacheVal); time.Since(cv.at) < termCacheTTL {
+			return cv.data, nil
+		}
+		termCache.Delete(key)
+	}
 	q := "SELECT e.id, e.tenant_id, e.package_id, e.layer, e.source_lang, e.source_text, e.target_lang, e.target_text, e.module, e.created_at, e.updated_at " +
 		"FROM kb_entries e JOIN kb_packages p ON e.package_id=p.id " +
-		"WHERE e.tenant_id=? AND e.source_lang=? AND e.layer=1 AND p.role='source' " +
+		"WHERE e.tenant_id=? AND e.source_lang=? AND e.layer=1 AND p.role='source' AND COALESCE(p.enabled,1)=1 " + // ★ D3：停用包不得命中
 		"AND ? LIKE '%' || e.source_text || '%' " +
 		"AND (" +
 		"  p.org_id = 0" +
@@ -770,6 +859,7 @@ func (s *Store) FindTermsBySubstring(tid, orgID int64, srcLang, srcText string) 
 		}
 		out = append(out, &e)
 	}
+	termCache.Store(key, &termCacheVal{at: time.Now(), data: out})
 	return out, nil
 }
 
@@ -777,7 +867,7 @@ func (s *Store) FindTermsBySubstring(tid, orgID int64, srcLang, srcText string) 
 func (s *Store) FindEntriesBySourceScoped(tid, orgID int64, srcLang, srcText string) ([]*KBEntry, error) {
 	q := "SELECT e.id, e.tenant_id, e.package_id, e.layer, e.source_lang, e.source_text, e.target_lang, e.target_text, e.module, e.created_at, e.updated_at " +
 		"FROM kb_entries e JOIN kb_packages p ON e.package_id=p.id " +
-		"WHERE e.tenant_id=? AND e.source_lang=? AND e.source_text=? AND p.role='source' " +
+		"WHERE e.tenant_id=? AND e.source_lang=? AND e.source_text=? AND p.role='source' AND COALESCE(p.enabled,1)=1 " +
 		"AND (" +
 		"  p.org_id = 0" + // 租户级包（企业/共享）全员可见
 		"  OR p.pack_type IN ('industry','locale')" + // 行业/语言文化包全员可见
@@ -971,6 +1061,7 @@ func (s *Store) DeleteSafetyPhrase(id, tid int64) error {
 // SetKBPackageEnabled 启用/停用知识库包，并联动翻译检索层（tm_segments）。
 // 停用：从 tm_segments 摘除该包条目（module 前缀 pkg:<id>| 标识）；启用：按包优先级重新写回。
 func (s *Store) SetKBPackageEnabled(id int64, enabled int) error {
+	invalidateTermCache() // ★ D11
 	var tid, orgID int64
 	var packType string
 	if err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT tenant_id, COALESCE(org_id,0), pack_type FROM kb_packages WHERE id=?", id).Scan(&tid, &orgID, &packType); err != nil {
@@ -1259,4 +1350,21 @@ func (s *Store) SetKBPackageCrossScope(id, tid int64, all bool, orgs []int64) er
 	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE kb_packages SET cross_all=?, cross_orgs=?, updated_at=? WHERE id=? AND tenant_id=?",
 		allInt, encodeCrossOrgs(orgs), time.Now().Format(time.RFC3339), id, tid)
 	return err
+}
+
+// KBSearchIndexMigrate ★ D11（2026-09-12）：PG 下为 kb_entries.source_text 建
+// pg_trgm GIN 索引，令 FindTermsBySubstring 的 `? LIKE '%'||source_text||'%'`
+// 检索可走索引（旧实现随词条量线性劣化）。SQLite / 扩展缺失仅告警，不改语义。
+func (s *Store) KBSearchIndexMigrate() {
+	if db.CurrentDialect() != db.DialectPostgres {
+		return
+	}
+	if _, err := db.Exec(s.db, db.DialectPostgres, "CREATE EXTENSION IF NOT EXISTS pg_trgm"); err != nil {
+		log.Printf("[migrate] pg_trgm 不可安装（KB 子串检索继续全表扫）: %v", err)
+		return
+	}
+	if _, err := db.Exec(s.db, db.DialectPostgres,
+		"CREATE INDEX IF NOT EXISTS idx_kbe_src_trgm ON kb_entries USING gin (source_text gin_trgm_ops)"); err != nil {
+		log.Printf("[migrate] kb_entries.source_text trgm GIN 创建失败: %v", err)
+	}
 }

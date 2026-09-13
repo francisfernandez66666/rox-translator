@@ -133,7 +133,6 @@ func TestPlaceholderRewriteOnPG(t *testing.T) {
 	}
 }
 
-
 // TestOpenPostgresDriverRegistered 验证 postgres 驱动已注册：无服务器时应返回
 // 连接类错误，而非 "unknown driver"。若本机装有 PG 则可连接成功（跳过断言）。
 func TestOpenPostgresDriverRegistered(t *testing.T) {

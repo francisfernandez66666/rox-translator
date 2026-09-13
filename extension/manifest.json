@@ -3,18 +3,42 @@
   "name": "能言 · 划词翻译",
   "version": "1.0.0",
   "description": "选中文字即翻：调用企业自建能言开放 API，术语与翻译记忆全量生效。",
-  "permissions": ["storage", "activeTab"],
-  "optional_host_permissions": ["http://*/", "https://*/"],
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "optional_host_permissions": [
+    "http://*/",
+    "https://*/"
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "能言设置"
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "translate_selection": {
+      "suggested_key": {
+        "default": "Alt+Shift+T",
+        "mac": "Alt+T"
+      },
+      "description": "翻译当前选中文本"
+    }
+  }
 }

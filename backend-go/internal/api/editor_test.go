@@ -3,6 +3,7 @@
 //   - TestSplitLines：换行切分与空行过滤、空串保底
 //   - TestLocateColumns：表头列定位（显式/回退）
 //   - TestExtractTextSegments / TestExtractTextSegmentsUnaligned：文本工单逐段对齐（含译文短于源文时的空段补位）
+//
 // =============================================
 package api
 
@@ -42,7 +43,7 @@ func TestLocateColumns(t *testing.T) {
 // TestExtractTextSegments 校验 extractTextSegments：源文/译文按行对齐，逐段 Source/Target 正确映射。
 func TestExtractTextSegments(t *testing.T) {
 	tk := &store.Ticket{
-		SourceText: "你好\n世界",
+		SourceText:  "你好\n世界",
 		FinalResult: `{"translations":{"en":"Hello\nWorld"}}`,
 	}
 	segs := extractTextSegments(tk, "en")

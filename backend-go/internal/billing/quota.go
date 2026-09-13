@@ -12,6 +12,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -196,20 +197,20 @@ func (s *Service) Enabled() bool {
 // Meter 计量一次用量。强制计费时扣余额；否则仅记录 usage_ledger 留痕。
 // 返回 error（强制计费且余额不足时返回）。provider/model 用于多供应商成本核算；
 // bizKind=text|file、bizMode=fast|pro 用于用量看板标注（2026-08-26 需求）。
-func (s *Service) Meter(tid, userID int64, taskType, provider, model string, quantity int64, bizKind, bizMode string) error {
+func (s *Service) Meter(tid, userID int64, taskType, provider, model, lang string, quantity int64, bizKind, bizMode string) error {
 	if s.Store == nil || quantity <= 0 {
 		return nil
 	}
 	if s.Enabled() {
-		_, err := s.Store.RecordUsage(tid, userID, taskType, provider, model, quantity, bizKind, bizMode)
+		_, err := s.Store.RecordUsage(tid, userID, taskType, provider, model, lang, quantity, bizKind, bizMode)
 		return err
 	}
-	return s.Store.LogUsage(tid, userID, taskType, provider, model, quantity, bizKind, bizMode)
+	return s.Store.LogUsage(tid, userID, taskType, provider, model, lang, quantity, bizKind, bizMode)
 }
 
 // MeterDeferred 计量失败不阻断业务（记录后返回错误供日志，但调用方按需忽略）。
-func (s *Service) MeterDeferred(tid, userID int64, taskType, provider, model string, quantity int64, bizKind, bizMode string) error {
-	return s.Meter(tid, userID, taskType, provider, model, quantity, bizKind, bizMode)
+func (s *Service) MeterDeferred(tid, userID int64, taskType, provider, model, lang string, quantity int64, bizKind, bizMode string) error {
+	return s.Meter(tid, userID, taskType, provider, model, lang, quantity, bizKind, bizMode)
 }
 
 // CheckDailyQuota 检查每日 token 上限（来自租户 permissions.max_daily_chars）
@@ -222,7 +223,7 @@ func (s *Service) CheckDailyQuota(tid int64, maxDaily int64) error {
 		return nil
 	}
 	if used >= maxDaily {
-		return &quotaErr{"已达到今日用量上限"}
+		return &quotaErr{"已达到今日用量上限", "daily_quota_exceeded"}
 	}
 	return nil
 }
@@ -237,13 +238,23 @@ func (s *Service) CheckBalance(tid int64) error {
 		return err
 	}
 	if grants+permanent <= 0 {
-		return &quotaErr{"额度不足，请充值"}
+		return &quotaErr{"额度不足，请充值", "insufficient_balance"}
 	}
 	return nil
 }
 
-// quotaErr 配额类错误（含今日用量超限/余额不足）。s: 面向用户的中文错误描述。
-type quotaErr struct{ s string }
+// quotaErr 配额类错误（含今日用量超限/余额不足）。s: 面向用户的中文错误描述；
+// code: ★ E11 稳定错误码（insufficient_balance / daily_quota_exceeded），供前端差异化处理。
+type quotaErr struct{ s, code string }
+
+// QuotaErrCode 提取配额错误的稳定错误码；非配额错误或无码错误返回空串。
+func QuotaErrCode(err error) string {
+	var qe *quotaErr
+	if errors.As(err, &qe) {
+		return qe.code
+	}
+	return ""
+}
 
 // Error 实现 error 接口：返回配额错误描述信息。
 func (e *quotaErr) Error() string { return e.s }

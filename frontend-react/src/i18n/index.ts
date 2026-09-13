@@ -25,6 +25,12 @@ import * as pFeedback from './panels/feedback'
 import * as pReferral from './panels/referral'
 import * as pTasks from './panels/tasks'
 import * as pOps from './panels/ops'
+import * as pIndustries from './panels/industries'
+import * as pBrandterms from './panels/brandterms'
+import * as pChatwin from './panels/chatwin'
+import * as pDs from './panels/datasources'
+import * as pMybill from './panels/mybilling'
+import * as pReconcile from './panels/reconcile'
 import { baseZh } from './dicts.zh'
 import { baseEn } from './dicts.en'
 
@@ -40,7 +46,7 @@ const zh: Dict = {
   ...pModels.zh, ...pWorkflow.zh, ...pApiKeys.zh, ...pWebhooks.zh,
   ...pTickets.zh, ...pBilling.zh, ...pUsage.zh, ...pAlerts.zh,
   ...pInvites.zh, ...pChat.zh, ...pPackages.zh, ...pFeedback.zh,
-  ...pReferral.zh, ...pTasks.zh, ...pOps.zh,
+  ...pReferral.zh, ...pTasks.zh, ...pOps.zh, ...pIndustries.zh, ...pBrandterms.zh, ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh,
 }
 
 // en 英文词典：base 基础字典 + 各面板模块英文文案合并
@@ -50,7 +56,7 @@ const en: Dict = {
   ...pModels.en, ...pWorkflow.en, ...pApiKeys.en, ...pWebhooks.en,
   ...pTickets.en, ...pBilling.en, ...pUsage.en, ...pAlerts.en,
   ...pInvites.en, ...pChat.en, ...pPackages.en, ...pFeedback.en,
-  ...pReferral.en, ...pTasks.en, ...pOps.en,
+  ...pReferral.en, ...pTasks.en, ...pOps.en, ...pIndustries.en, ...pBrandterms.en, ...pChatwin.en, ...pMybill.en, ...pReconcile.en,
 }
 
 // dicts 按语言索引的词典集合，取词时按当前语言定位
@@ -59,6 +65,19 @@ const dicts: Record<Lang, Dict> = { zh, en }
 // ---- 极简外部语言 store ----
 // currentLang 当前语言（首次从 localStorage 读取，默认中文）
 let currentLang: Lang = (localStorage.getItem('app_lang') as Lang) || 'zh'
+
+// ★ F3：RTL 方向接线——document.dir 随语言切换（ar/fa/he/ur/ps/ku/dv 为从右到左）。
+//   当前 UI 语言仅 zh/en（LTR），本钩子为品牌语言扩展（阿拉伯语界面等）预置；
+//   工作台/账单核心样式已改逻辑属性（margin-inline-* 等），dir=rtl 即镜像生效。
+const RTL_LANGS = new Set(['ar', 'fa', 'he', 'ur', 'ps', 'ku', 'dv'])
+// 按语言切换页面文字方向（RTL 语言设 dir=rtl）
+function applyDir(l: string) {
+  try {
+    document.documentElement.dir = RTL_LANGS.has(l) ? 'rtl' : 'ltr'
+    document.documentElement.lang = l
+  } catch { /* 非浏览器环境忽略 */ }
+}
+applyDir(currentLang)
 // listeners 语言订阅者集合（语言切换时依次触发，驱动组件重渲染）
 const listeners = new Set<() => void>()
 
@@ -68,6 +87,7 @@ function emit() { listeners.forEach((l) => l()) }
 // 设置当前语言并持久化到 localStorage，触发订阅者重渲染
 export function setLang(l: Lang) {
   currentLang = l
+  applyDir(l)
   try { localStorage.setItem('app_lang', l) } catch { /* ignore */ }
   emit()
 }

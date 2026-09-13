@@ -12,18 +12,18 @@ func TestDetectSourceLang(t *testing.T) {
 		text string
 		want string
 	}{
-		{"blended learning", "en"},        // 英文源文本：不得误标 zh
-		{"汽车维修服务", "zh"},               // 简体中文
-		{"欢迎，您好，谢谢", "zh"},             // 中文常用语
-		{"emoji 😀 符号", "zh"},              // 汉字占优（符号忽略）
-		{"コンニチハ世界", "ja"},              // 假名 → 日语（即便混汉字）
-		{"안녕하세요 세계", "ko"},             // 谚文 → 韩语
-		{"привет мир", "ru"},              // 西里尔 → 俄语
-		{"السلام عليكم", "ar"},             // 阿拉伯字母 → 阿拉伯语
-		{"สวัสดีครับ", "th"},                // 泰文
-		{"नमस्ते दुनिया", "hi"},             // 天城文 → 印地语
-		{"", ""},                            // 空 → 无法判定
-		{"12345 !!!", ""},                   // 纯符号 → 无法判定
+		{"blended learning", "en"}, // 英文源文本：不得误标 zh
+		{"汽车维修服务", "zh"},           // 简体中文
+		{"欢迎，您好，谢谢", "zh"},         // 中文常用语
+		{"emoji 😀 符号", "zh"},       // 汉字占优（符号忽略）
+		{"コンニチハ世界", "ja"},          // 假名 → 日语（即便混汉字）
+		{"안녕하세요 세계", "ko"},         // 谚文 → 韩语
+		{"привет мир", "ru"},       // 西里尔 → 俄语
+		{"السلام عليكم", "ar"},     // 阿拉伯字母 → 阿拉伯语
+		{"สวัสดีครับ", "th"},       // 泰文
+		{"नमस्ते दुनिया", "hi"},    // 天城文 → 印地语
+		{"", ""},          // 空 → 无法判定
+		{"12345 !!!", ""}, // 纯符号 → 无法判定
 	}
 	for _, c := range cases {
 		if got := DetectSourceLang(c.text); got != c.want {
@@ -46,5 +46,15 @@ func TestDetectHanVariant(t *testing.T) {
 		if got := detectHanVariant(c.text); got != c.want {
 			t.Errorf("detectHanVariant(%q) = %q, 期望 %q", c.text, got, c.want)
 		}
+	}
+}
+
+// TestD16HanVariantWired ★ D16：繁简细分必须经生产入口 DetectSourceLang 生效。
+func TestD16HanVariantWired(t *testing.T) {
+	if got := DetectSourceLang("計算機科學與網絡問題測試"); got != "zh_hant" {
+		t.Fatalf("繁体应判 zh_hant, got %q", got)
+	}
+	if got := DetectSourceLang("计算机科学与网络问题测试"); got != "zh" {
+		t.Fatalf("简体应判 zh, got %q", got)
 	}
 }

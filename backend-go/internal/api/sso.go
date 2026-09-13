@@ -2,8 +2,9 @@
 // 阶段六 SSO / OIDC 的 HTTP 接口：
 //   - GET  /api/sso/login?provider=   生成 state 写入 HttpOnly cookie，重定向至 IdP 授权页
 //   - GET  /api/sso/callback?provider=&code=&state=  校验 state，换取用户信息，
-//        按邮箱匹配平台账号（飞书无邮箱则失败），命中则签发 JWT 并带 ?token= 重定向前端；
-//        配置 auto_provision 时自动开通账号。
+//     按邮箱匹配平台账号（飞书无邮箱则失败），命中则签发 JWT 并带 ?token= 重定向前端；
+//     配置 auto_provision 时自动开通账号。
+//
 // 与既有登录体系一致：最终都签发同一套 JWT（前端 localStorage 托管），无独立会话态。
 package api
 
@@ -15,9 +16,11 @@ import (
 	"strings"
 	"time"
 
+	"encoding/json"
 	"translator/internal/auth"
 	"translator/internal/auth/sso"
 	apierrors "translator/internal/errors"
+
 	"translator/internal/config"
 	"translator/internal/store"
 )
@@ -30,6 +33,8 @@ func (s *Server) routesSSO() {
 	s.mux.HandleFunc("/api/sso/login", s.handleSSOLogin)
 	s.mux.HandleFunc("/api/sso/callback", s.handleSSOCallback)
 	s.mux.HandleFunc("/api/sso/providers", s.handleSSOProviders)
+	// ★ B3：SSO 一次性 code → JWT 兑换端点（公开：code 本身即凭证，60s TTL、单次消费）
+	s.mux.HandleFunc("/api/auth/sso/exchange", s.handleSSOExchange)
 }
 
 // handleSSOProviders 列出已启用的 IdP（供前端渲染登录按钮）。
@@ -69,6 +74,7 @@ func (s *Server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   httpsDetected(r), // ★ B3：HTTPS 下强制 Secure（反代场景按 X-Forwarded-Proto 判定）
 		MaxAge:   600,
 	})
 	http.Redirect(w, r, authURL, http.StatusFound)
@@ -111,6 +117,13 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := s.Store.GetUserByEmail(info.Email)
+	// ★ B3：命中已有账号也须复核生效状态（旧实现跳过禁用/注销检查，被停号可借 SSO 复活登录）
+	if u != nil {
+		if st := auth.EffectiveUserStatus(u.Status, u.DeactivatedAt); st != store.UserActive && st != store.UserDeactivating {
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "账号已停用或注销，无法通过 SSO 登录"))
+			return
+		}
+	}
 	if err != nil || u == nil {
 		// 自动开通
 		cfg := s.ssoProviderConfig(name)
@@ -142,7 +155,68 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		}})
 		return
 	}
-	http.Redirect(w, r, front+"/?token="+url.QueryEscape(tok), http.StatusFound)
+	// ★ B3（2026-09-12）：不再把 JWT 拼进重定向 URL（地址栏/Referer/网关日志长期泄漏）。
+	//   改为签发 60s 一次性 code，前端落地后 POST /api/auth/sso/exchange 换取 token。
+	xcode := newSSOExchangeCode()
+	if xcode == "" {
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "生成兑换码失败"))
+		return
+	}
+	payload, _ := json.Marshal(map[string]int64{"uid": u.ID, "tid": u.TenantID})
+	vcodeSet("sso_xchg:"+xcode, payload, 60*time.Second)
+	// code 为一次性短效凭据（60s、消费即删），经查询参数交予前端再兑换 JWT
+	http.Redirect(w, r, front+"/?sso_code="+url.QueryEscape(xcode), http.StatusFound)
+}
+
+// newSSOExchangeCode 生成 SSO 一次性兑换码（crypto/rand 32hex）。
+func newSSOExchangeCode() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
+
+// handleSSOExchange 一次性 code 兑换 JWT（★ B3）。参数 r: POST {"code":"..."}。
+// code 单次消费（取出即删）；60s TTL 内有效；uid/tid 以服务端暂存为准，不信任客户端。
+func (s *Server) handleSSOExchange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "仅支持 POST"))
+		return
+	}
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err == nil && req.Code != "" {
+		if val, ok := vcodeGet("sso_xchg:" + req.Code); ok {
+			vcodeDel("sso_xchg:" + req.Code)
+			var ids struct{ UID, TID int64 }
+			// JSON 反序列化用大写字段名映射
+			_ = json.Unmarshal(val, &ids)
+			if ids.UID > 0 {
+				if u, err := s.Store.GetUser(ids.UID, ids.TID); err == nil && u != nil {
+					if st := auth.EffectiveUserStatus(u.Status, u.DeactivatedAt); st == store.UserActive || st == store.UserDeactivating {
+						tok, err := auth.Sign(u, 24*time.Hour)
+						if err == nil {
+							writeJSON(w, 200, map[string]interface{}{"success": true, "token": tok, "user": map[string]interface{}{
+								"id": u.ID, "username": u.Username, "display_name": u.DisplayName, "role": u.Role, "tenant_id": u.TenantID,
+							}})
+							return
+						}
+					}
+				}
+			}
+		}
+	}
+	s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "兑换码无效或已过期，请重新发起 SSO 登录"))
+}
+
+// httpsDetected 判断当前请求是否走 HTTPS（直连 TLS 或反代 X-Forwarded-Proto=https）。
+func httpsDetected(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 // ssoProviderConfig 取回某 IdP 的原始配置（用于 auto_provision 参数）。
@@ -170,7 +244,9 @@ func (s *Server) provisionSSOUser(info *sso.UserInfo, tenantID int64) (*store.Us
 		return nil, err
 	}
 	passHash := auth.PasswordHash(hex.EncodeToString(rb))
-	u, err := s.Store.CreateUser(tenantID, username, passHash, info.Name, "member", 0, 0)
+	// ★ B3：角色必须落在合法角色集（user/dept_admin/tenant_admin/super_admin）；
+	//   旧值 "member" 不在 RoleLevel 定义内，权限解析行为未定义。SSO 自动开通按普通用户。
+	u, err := s.Store.CreateUser(tenantID, username, passHash, info.Name, "user", 0, 0)
 	if err != nil {
 		return nil, err
 	}

@@ -65,6 +65,9 @@ type Claims struct {
 	Username string `json:"username"`
 	Role     string `json:"role"`
 	Exp      int64  `json:"exp"`
+	// TokenVersion ★ B2 会话撤销：签发时用户的 token_version；authUser 每请求与库内比对，
+	// 改密/重置后不一致即拒绝。omitempty 兼容旧 token（缺字段解码为 0，与新列默认一致）。
+	TokenVersion int64 `json:"tv,omitempty"`
 }
 
 // ctxUserKey context 键类型（私有，防跨包碰撞），承载当前登录用户。
@@ -94,11 +97,12 @@ func b64Decode(s string) ([]byte, error) {
 // Sign 业务逻辑实现，详见函数体与调用处注释。
 func Sign(u *User, ttl time.Duration) (string, error) {
 	claims := Claims{
-		UserID:   u.ID,
-		TenantID: u.TenantID,
-		Username: u.Username,
-		Role:     u.Role,
-		Exp:      time.Now().Add(ttl).Unix(),
+		UserID:       u.ID,
+		TenantID:     u.TenantID,
+		Username:     u.Username,
+		Role:         u.Role,
+		Exp:          time.Now().Add(ttl).Unix(),
+		TokenVersion: u.TokenVersion,
 	}
 	header := map[string]string{"alg": "HS256", "typ": "JWT"}
 	hb, _ := json.Marshal(header)

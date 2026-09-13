@@ -12,6 +12,7 @@
 //   - 读（匹配键）：paragraphRunText / rawPptxText 等手写扫描器的输出必须先过 UnescapeXMLText，
 //     与 encoding/xml 提取侧对齐；
 //   - 写（注入译文）：任何把大语言模型译文拼回 OOXML 字符串的位置必须先过 EscapeXML。
+//
 // =============================================
 package fileproc
 

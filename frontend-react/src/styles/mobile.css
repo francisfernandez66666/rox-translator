@@ -68,10 +68,12 @@
   .field-row { flex-direction: column !important; align-items: stretch !important; row-gap: 4px; }
   .field-label { min-width: 0 !important; }
   .stat-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
-  .ss-grid { grid-template-columns: 1fr !important; }
+  /* minmax(0,…)：1fr 的隐含最小尺寸为 min-content，nowrap 宽表会反向撑破轨道（G6 移动巡检） */
+  .ss-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .ss-grid > * { min-width: 0; }
   .ss-stats { flex-wrap: wrap; gap: 12px; }
   .ref-cfg { max-width: none; }
-  .ticket-progress-float { right: 12px; bottom: 12px; width: calc(100% - 24px); max-width: 300px; }
+  .ticket-progress-float { inset-inline-end: 12px; bottom: 12px; width: calc(100% - 24px); max-width: 300px; }
 
   /* 宽表格横向滚动（含 .ss-table 与面板内 table） */
   .panel-card table, .ss-table { display: block; width: 100%; overflow-x: auto; white-space: nowrap; }
@@ -108,4 +110,20 @@
   /* 弹窗不超出屏幕（TDesign Dialog 默认 520px 宽） */
   .t-dialog { max-width: calc(100vw - 24px); }
   .t-dialog__body { max-height: 72vh; overflow-y: auto; }
+}
+
+/* ============ ★ F6 移动端深化 ============ */
+/* flex 子项默认 min-width:auto，宽内容（表格/图表）会反向撑破 app-main；窄屏统一放开 */
+@media (max-width: 900px) { .app-main > * { min-width: 0; } }
+/* 后台表格窄屏：横向滚动 + 右缘渐隐指示（提示还有列未显示） */
+@media (max-width: 900px) {
+  .admin-main .t-table__content { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .admin-main .t-table { position: relative; }
+  .admin-main .t-table::after {
+    content: ''; position: sticky; right: 0; top: 0; bottom: 0; width: 28px; float: right; pointer-events: none;
+    background: linear-gradient(to left, var(--npz-surface, #fff), transparent);
+  }
+  /* 工单/编辑器工具条窄屏堆叠 */
+  .tk-toolbar, .editor-toolbar { display: flex; flex-wrap: wrap; gap: 8px; }
+  .editor-toolbar .t-select, .editor-toolbar .t-input, .editor-toolbar .t-textarea { flex: 1 1 140px; }
 }

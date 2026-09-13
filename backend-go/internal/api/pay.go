@@ -16,7 +16,10 @@ package api
 //   - sdk：走 wechat/alipay 适配器（需商户号）
 //   - static_qr：返回超管配置的静态收款码图片（static_qr_image），人工确认到账
 //   - mock：模拟支付（测试）
-// 金额：入参为 token 数量，按 1 元 = 1000 token 换算人民币分（可配置 RATE_CARD）。
+// 金额：入参为 token 数量，按 system_config price_fen_per_token（缺省 10 分/token，
+//
+//	即 1 元 = 10 token）换算人民币分。★ C29 注释修正：旧注释「1 元 = 1000 token」
+//	与实现差 100 倍（文档-代码漂移示例）。
 // ========================================
 
 import (
@@ -43,16 +46,19 @@ func constantTimeTokenEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// payProvider 当前支付提供商（按 system_config pay_mode 惰性构建）。
-// 说明：pay_mode=sdk 映射到 wechat/alipay 适配器（需商户号）；static_qr/mock 用 mock 适配器。
-// Server 持有，首次调用时从系统配置读取渠道并创建适配器。
-func (s *Server) payProvider() payment.Provider {
+// payProviderFor ★ A5（2026-09-12）：按「订单/回调渠道」构建支付提供商。
+// 旧实现只按全局 pay_mode 构建单一 provider——/api/pay/notify/alipay 回调也交给
+// wechat 适配器验签，alipay 渠道事实上不可用；sdk 历史别名映射 wechat。
+// channel 为空时回退全局模式（兼容旧调用）。
+func (s *Server) payProviderFor(channel string) payment.Provider {
 	cfg := &payment.Config{}
-	mode := "mock"
-	if v, _ := s.Store.GetConfig("pay_mode"); v != "" {
-		mode = v
+	mode := channel
+	if mode == "" {
+		mode = s.effPayMode(0)
+		if v, _ := s.Store.GetConfig("pay_mode"); v != "" {
+			mode = v
+		}
 	}
-	// sdk 模式映射到具体渠道（默认微信）；static_qr 无需渠道（人工确认）
 	if mode == "sdk" {
 		mode = "wechat"
 	}
@@ -64,6 +70,7 @@ func (s *Server) payProvider() payment.Provider {
 	cfg.Alipay.AppID = os.Getenv("PAY_ALIPAY_APP_ID")
 	cfg.Alipay.PrivateKey = os.Getenv("PAY_ALIPAY_PRIVATE_KEY")
 	cfg.Alipay.PublicKey = os.Getenv("PAY_ALIPAY_PUBLIC_KEY")
+	cfg.Alipay.SellerID = os.Getenv("PAY_ALIPAY_SELLER_ID")
 	return payment.NewProvider(cfg)
 }
 
@@ -138,7 +145,7 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 	// 调用渠道下单获取二维码（mock 直接生成；真实渠道需商户号）
 	// 定价单一事实源：应收分 = 订单落库 amount_money×100（B1 回填值）
 	amountFen := int64(money*100 + 0.5)
-	res, err := s.payProvider().CreateOrder(&payment.PayRequest{
+	res, err := s.payProviderFor(req.Channel).CreateOrder(&payment.PayRequest{
 		OrderNo:  o.OrderNo,
 		Amount:   amountFen,
 		Subject:  "能言 token 充值",
@@ -242,20 +249,28 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	tid := s.effTenant(r, u)
+	rebateNote := ""
 	if err := s.Store.MarkOrderManualConfirm(req.OrderID, tid); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
-		return
+		// ★ C19（2026-09-12）：原单已被超时任务取消时不再死路——按原单重建补审单
+		origID := req.OrderID
+		if no, e2 := s.Store.ReopenManualOrder(origID, tid); e2 == nil {
+			req.OrderID = no.ID
+			rebateNote = fmt.Sprintf("（原订单 #%d 超时取消，已自动重建补审单）", origID)
+		} else {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
 	}
 	o, _ := s.Store.GetOrder(req.OrderID, tid)
 	// 写入 critical 级告警（前台告警面板 + 超管可见）
-	msg := "静态码支付待人工确认：租户 #" + strconv.FormatInt(tid, 10) + " 订单 " + o.OrderNo + " 用户已付款，请尽快查看并开通"
+	msg := "静态码支付待人工确认：租户 #" + strconv.FormatInt(tid, 10) + " 订单 " + o.OrderNo + rebateNote + " 用户已付款，请尽快查看并开通"
 	_ = s.Store.CreateAlert(0, "critical", "pay_manual", msg)
 	// ★ 站内信通知平台超管（tenant_id=0, role=admin）：超管铃铛即时可见待确认订单
 	//   注意：CreateNotification 依赖自增序列取主键；若序列失步（如 pg 迁移/回放后
 	//   seq 落后于实际行数）会撞主键失败——务必打日志而非静默吞错，便于及时发现。
 	for _, sa := range s.Store.ListUsersByRole(0, "admin") {
 		if err := s.Store.CreateNotification(sa.ID, "静态码支付待人工确认",
-			fmt.Sprintf("租户 #%d 订单 %s 用户已付款，请尽快查看并开通", tid, o.OrderNo), "pay_manual", req.OrderID); err != nil {
+			fmt.Sprintf("租户 #%d 订单 %s%s 用户已付款，请尽快查看并开通", tid, o.OrderNo, rebateNote), "pay_manual", req.OrderID); err != nil {
 			log.Printf("[pay-manual-confirm] 站内信通知超管(id=%d)失败: %v", sa.ID, err)
 		}
 	}
@@ -304,8 +319,8 @@ func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 		"Nonce":        r.Header.Get("Wechatpay-Nonce"),
 		"Signature":    r.Header.Get("Wechatpay-Signature"),
 	}
-	// 构建对应渠道的提供商并验签
-	prov := s.payProvider()
+	// 构建对应渠道的提供商并验签（★ A5：按回调 URL 渠道路由，wechat 单不再被 alipay 回调误配）
+	prov := s.payProviderFor(channel)
 	nt, err := prov.VerifyNotify(body, headers)
 	if err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "回调验签失败: " + err.Error()})

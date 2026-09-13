@@ -37,6 +37,22 @@ export async function alertResolve(id: number): Promise<AdminResp> {
   return request('/api/system/alerts/resolve', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
 
+// ★ F9：对账视图（orders↔payments 勾稽，超管）
+export interface ReconIssue { order_id: number; order_no: string; tenant_id: number; rule: string; detail: string; created_at: string }
+// 触发全量余额对账（超管）
+export async function adminReconcile(days: number): Promise<AdminResp> {
+  return request(`/api/admin/reconcile?days=${days}`, { headers: authHeaders() })
+}
+
+// ★ F9：告警静音 / 解除静音（分钟数到点自动失效）
+export async function alertSilence(tenantId: number, kind: string, minutes: number): Promise<AdminResp> {
+  return request('/api/system/alerts/silence', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ tenant_id: tenantId, kind, minutes }) })
+}
+// 解除告警静音（超管）
+export async function alertUnsilence(tenantId: number, kind: string): Promise<AdminResp> {
+  return request('/api/system/alerts/unsilence', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ tenant_id: tenantId, kind }) })
+}
+
 /** 获取 evals 评估记录列表 */
 export async function evalsList(): Promise<AdminResp> {
   return request('/api/evals/list', { headers: authHeaders() })

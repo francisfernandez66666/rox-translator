@@ -46,13 +46,13 @@ func (s *Server) handleWebhookSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID            int64  `json:"id"`              // webhook ID（<=0 表示新增）
-		URL           string `json:"url"`             // 回调 URL
-		Secret        string `json:"secret"`          // 签名密钥
-		Events        string `json:"events"`          // 订阅事件（逗号分隔）
-		Enabled       int    `json:"enabled"`         // 1=启用 0=停用
-		MaxRetries    int    `json:"max_retries"`     // 最大重试次数
-		RetryInterval int    `json:"retry_interval"`  // 重试间隔秒数
+		ID            int64  `json:"id"`             // webhook ID（<=0 表示新增）
+		URL           string `json:"url"`            // 回调 URL
+		Secret        string `json:"secret"`         // 签名密钥
+		Events        string `json:"events"`         // 订阅事件（逗号分隔）
+		Enabled       int    `json:"enabled"`        // 1=启用 0=停用
+		MaxRetries    int    `json:"max_retries"`    // 最大重试次数
+		RetryInterval int    `json:"retry_interval"` // 重试间隔秒数
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})

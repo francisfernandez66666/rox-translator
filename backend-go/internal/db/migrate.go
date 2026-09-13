@@ -32,8 +32,8 @@ func (m Migration) UpSQL(d Dialect) string {
 
 // Runner 负责按方言幂等执行迁移并记录已应用项。
 type Runner struct {
-	conn    *sql.DB   // 数据库连接
-	dialect Dialect   // 当前方言
+	conn    *sql.DB // 数据库连接
+	dialect Dialect // 当前方言
 }
 
 // NewRunner 构造 Runner。conn 为已打开的连接，dialect 决定 SQL 选择。

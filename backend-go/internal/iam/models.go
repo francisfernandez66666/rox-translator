@@ -33,6 +33,10 @@ type User struct {
 	// DeactivatedAt 自助注销请求日期（2006-01-02；空=未注销）。
 	// 宽限语义：请求当日仍可正常使用，次日起按 disabled 处理（数据保留不删除）。
 	DeactivatedAt string `json:"-"`
+	// TokenVersion 会话版本号（★ B2 会话撤销，2026-09-12）：改密/重置密码时 +1；
+	// JWT 携带签发时的版本，authUser 每请求比对，不一致即失效——堵住「改密后旧 token
+	// 仍有效 24h」窗口。零值兼容存量 token（未携带视为 0，与新列默认一致）。
+	TokenVersion int64 `json:"-"`
 	// MustChangePwd 首次登录强制改密标记（1=登录后必须先改密，改密成功后自动清零）。
 	// ★ 租户 Excel 批量导入用户（2026-09-02 功能）创建账号时置 1。
 	MustChangePwd int `json:"must_change_pwd"`

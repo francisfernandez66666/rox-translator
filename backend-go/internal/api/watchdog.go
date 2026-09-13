@@ -28,9 +28,27 @@ import (
 	"strings"
 	"time"
 
+	"translator/internal/auth"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
+
+// handleWatchdogSubscriptionScan ★ G5（2026-09-12）：手动立即执行订阅到期扫描（仅超管）。
+// 生产由 watchdog「启动即扫 + 24h 周期」自动执行；本端点为 UAT/发布矩阵提供
+// 「注入到期 → 触发 → 断言 permissions 实际摘除」的可验证入口，操作幂等。
+func (s *Server) handleWatchdogSubscriptionScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]interface{}{"success": false, "message": "仅支持 POST"})
+		return
+	}
+	u, err := s.requireTenantAdmin(r)
+	if err != nil || !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可触发订阅到期扫描"})
+		return
+	}
+	s.runSubscriptionScan()
+	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "订阅到期扫描已执行"})
+}
 
 // startWatchdog 启动监控看门狗：后台 goroutine 周期检查租户余额阈值与模型可用性，写入告警表。
 // 检查项可通过 system_config 配置：
@@ -80,6 +98,8 @@ func (s *Server) startWatchdog() {
 			time.Sleep(checkInterval)
 			client := &http.Client{Timeout: 10 * time.Second}
 			resp, err := client.Get(selfcheckURL)
+			// ★ H11：探活结果即可用性 SLI 样本，每轮驱动 SLO 燃烧率评估
+			s.sloSampleTick(err == nil)
 			if err == nil {
 				resp.Body.Close()
 				if failStreak >= failThreshold && s.Store != nil {
@@ -98,8 +118,20 @@ func (s *Server) startWatchdog() {
 				// ★ 2026-09-04 加固：默认开启自动重启（仅显式 "0" 关闭），根治锁饥饿不自愈；
 				//   探活地址允许经 SELFCHECK_URL 覆盖（默认 127.0.0.1:8787，与生产监听一致）
 				if v, _ := s.Store.GetConfig("watchdog_selfcheck_restart"); v != "0" {
-					log.Printf("[watchdog-selfcheck] 自动重启触发（watchdog_selfcheck_restart 默认开启）")
+					// ★ B9（2026-09-12）：重启风暴熔断。若故障根因不在进程内（如依赖挂起、
+					//   /status 自身逻辑死锁），每次「拉起→3 分钟判死→再退出」会无限循环，
+					//   比带着告警硬扛更糟。用文件时间戳跨进程计数：1 小时内自动重启
+					//   ≥3 次则拒绝再退，升级人工介入告警（systemd 侧 StartLimitBurst 双保险）。
+					n, allowed := selfRestartBudget(time.Hour, 3)
+					if !allowed {
+						_ = s.Store.CreateAlert(0, "critical", "selfcheck",
+							fmt.Sprintf("自动重启熔断：%d 分钟内已自愈 %d 次仍无法恢复，跳过本次重启，需人工介入（排查后调 watchdog_selfcheck_restart=0 或清理标记文件）", int(time.Hour.Minutes()), n))
+						failStreak = failThreshold - 1 // 下个周期仍评估，便于恢复后自动清零告警
+						continue
+					}
+					log.Printf("[watchdog-selfcheck] 自动重启触发（watchdog_selfcheck_restart 默认开启，本小时第 %d 次）", n+1)
 					_ = s.Store.CreateAlert(0, "critical", "selfcheck", "服务无响应，自动重启以恢复")
+					markSelfRestart()
 					// os.Exit 触发 systemd Restart=always 拉起新进程
 					os.Exit(1)
 				}
@@ -354,12 +386,16 @@ func (s *Server) runWatchdogCheck() {
 				if t.Status != tenant.StatusActive {
 					continue
 				}
-				bal, err := s.Store.GetBalance(t.ID)
+				// ★ C13（2026-09-12）：口径统一 TenantRemainTotal（未过期台账 + 永久余额），
+				//   旧实现只看 balance_accounts 永久桶，与预检/SettleExhausted 已整改的
+				//   口径分裂：租户明明有 30 万体验 token 却被告"余额耗尽"。
+				g, perm, err := s.Store.TenantRemainTotal(t.ID)
 				if err != nil {
 					continue
 				}
+				remain := g + perm
 				// 余额耗尽 → critical 级告警；低于阈值 → warning 级告警
-				if bal.Balance <= 0 {
+				if remain <= 0 {
 					msg := "租户余额已耗尽，翻译服务将被暂停"
 					existed := s.hasOpenAlert(t.ID, "balance") // 邮件触达去重：仅新告警时发信
 					_ = s.Store.CreateAlertEx(t.ID, "critical", "balance", msg, 0,
@@ -371,7 +407,7 @@ func (s *Server) runWatchdogCheck() {
 						s.notifyBots("租户余额耗尽",
 							"租户 #"+strconv.FormatInt(t.ID, 10)+"（"+t.Name+"）翻译额度余额已耗尽，服务暂停中。")
 					}
-				} else if bal.Balance < threshold {
+				} else if remain < threshold {
 					_ = s.Store.CreateAlert(t.ID, "warning", "balance", "租户余额低于阈值")
 				}
 			}
@@ -462,4 +498,41 @@ func (s *Server) notifyAlert(subject, body string) {
 		msg.CC = cc
 		_ = s.enqueueMail(msg, false)
 	}
+}
+
+// selfRestartFile 自动重启历史文件（一行一个 unix 秒；跨进程可见）。
+func selfRestartFile() string {
+	return filepath.Join(os.TempDir(), "translator-selfcheck-restarts")
+}
+
+// selfRestartBudget 统计窗口内已发生的自动重启次数；达到上限 cap 返回 (n,false)（禁止本次重启），
+// 否则返回 (n,true)。仅读取，不记账（记账由 markSelfRestart 在确定退出前执行）。
+func selfRestartBudget(window time.Duration, cap int) (int, bool) {
+	b, err := os.ReadFile(selfRestartFile())
+	if err != nil {
+		return 0, true
+	}
+	cutoff := time.Now().Add(-window).Unix()
+	n := 0
+	for _, ln := range strings.Split(string(b), "\n") {
+		if ts, err := strconv.ParseInt(strings.TrimSpace(ln), 10, 64); err == nil && ts >= cutoff {
+			n++
+		}
+	}
+	return n, n < cap
+}
+
+// markSelfRestart 追加一条本次重启记录，并裁剪窗口外旧行。
+func markSelfRestart() {
+	path := selfRestartFile()
+	b, _ := os.ReadFile(path)
+	cutoff := time.Now().Add(-time.Hour).Unix()
+	var keep []string
+	for _, ln := range strings.Split(string(b), "\n") {
+		if ts, err := strconv.ParseInt(strings.TrimSpace(ln), 10, 64); err == nil && ts >= cutoff {
+			keep = append(keep, ln)
+		}
+	}
+	keep = append(keep, strconv.FormatInt(time.Now().Unix(), 10))
+	_ = os.WriteFile(path, []byte(strings.Join(keep, "\n")+"\n"), 0644)
 }

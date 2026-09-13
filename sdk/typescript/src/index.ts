@@ -10,7 +10,7 @@
 //
 // 快速上手：
 //   import { TranslatorClient } from "@langcross/translator-sdk";
-//   const cli = new TranslatorClient("https://translator.example.com", "tk_xxx");
+//   const cli = new TranslatorClient("https://translator.example.com", "rk_xxx");
 //
 //   // 文本翻译：提交任务 → 自动轮询（15s）→ 返回译文
 //   const r = await cli.translateAndWait("蓝牙钥匙已激活", ["en", "ja"]);

@@ -17,6 +17,7 @@ func NewQueueNotifier(r *Client) queue.Notifier {
 	return &redisNotifier{client: r}
 }
 
+// redisNotifier 基于 Redis 列表的 Notifier 实现（跨进程唤醒信号）。
 type redisNotifier struct {
 	client *Client
 }

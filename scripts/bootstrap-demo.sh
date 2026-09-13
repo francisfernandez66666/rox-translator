@@ -161,7 +161,13 @@ if sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${DEMO_D
   log "   演示库 ${DEMO_DB} 已存在，跳过克隆（如需刷新请先 drop database ${DEMO_DB}）"
 else
   sudo -u postgres createdb -O langcross "$DEMO_DB"
-  sudo -u postgres psql -d "$DEMO_DB" -c "CREATE EXTENSION IF NOT EXISTS vector;"
+  # ★ S8/D10/D11：向量与子串检索扩展前置（缺则提前失败，不带病上线）
+  for ext in vector pg_trgm; do
+    sudo -u postgres psql -d "$DEMO_DB" -c "CREATE EXTENSION IF NOT EXISTS $ext;" >/dev/null \
+      || { echo "创建扩展 $ext 失败：请确认 postgresql 已安装 postgresql-1*-pgvector 与 pg_trgm" >&2; exit 1; }
+    sudo -u postgres psql -d "$DEMO_DB" -Atc "SELECT 1 FROM pg_extension WHERE extname='$ext'" | grep -q 1 \
+      || { echo "前置检查失败：库 $DEMO_DB 缺少扩展 $ext" >&2; exit 1; }
+  done
   TMPDUMP=$(mktemp /tmp/langcross_demo_XXXX.sql)
   chmod 644 "$TMPDUMP"   # postgres 用户需可读（脚本以 root 运行，dump 由 root 写入）
   log "   pg_dump ${PROD_DB_NAME} ..."

@@ -40,9 +40,10 @@ export function getAuthToken(): string {
 // 登录/注册等自身接口返回 401（如凭证错误）不触发跳转，避免循环。
 let authRedirecting = false
 // handleUnauthorized 统一处理 401 响应：清除登录态并跳转回登录页（登录/注册接口自身除外，避免循环）
-function handleUnauthorized(url: string) {
+// ★ E5：导出给 SSE 等手工 fetch 通道复用（chat/translate stream 此前无 401 处理）
+export function handleUnauthorized(url: string) {
   if (url.includes('/api/auth/login') || url.includes('/api/auth/register')) return
-  setAuthToken('') // 清除本地 token（同步清空内存与 localStorage）
+  setAuthToken('') // 清除本地 token（同步清空内存与 sessionStorage）
   if (!authRedirecting) {
     authRedirecting = true
     window.location.href = '/'
@@ -87,10 +88,13 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     else externalSignal.addEventListener('abort', onExternalAbort)
   }
   const timer = setTimeout(() => controller.abort(), timeoutMs)
+  // ★ E4：headers 合并必须在 ...options 展开【之后】——旧写法 options 自带的
+  //   headers 字段会后盖掉合并结果，凡传 headers 的调用全部丢失 Content-Type/认证头。
+  const { headers: optHeaders, timeoutMs: _omitTimeout, signal: _omitSignal, ...restOptions } = options ?? {}
   try {
     const response = await fetch(fullUrl, {
-      headers: { 'Content-Type': 'application/json', ...authHeaders(), ...options?.headers },
-      ...options,
+      ...restOptions,
+      headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(optHeaders as Record<string, string>) },
       signal: controller.signal,
     })
     if (response.status === 401) handleUnauthorized(url)
@@ -167,10 +171,6 @@ export function bizErrorCode(body: unknown): string | undefined {
   return undefined
 }
 
-/** 获取文件下载 URL（带 path 编码查询参数） */
-export function getDownloadUrl(filePath: string): string {
-  return `${API_BASE}/api/download/?path=${encodeURIComponent(filePath)}`
-}
 
 /** 获取开放 API 文档地址（同源） */
 export function openAPIDocsUrl(): string {

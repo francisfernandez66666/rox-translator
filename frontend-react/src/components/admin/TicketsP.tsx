@@ -150,7 +150,7 @@ export function TicketsP() {
               { colKey: 'trans', title: t('tmr.trans'), ellipsis: true },
               { colKey: 'lang', title: t('tmr.colLangs'), width: 90 },
               { colKey: 'source', title: t('tmr.source'), width: 130, cell: ({ row }: any) => (
-                <span>{srcLabel(row.source)}{row.ref_type === 'feedback' && <> · <a href="#" onClick={(e: any) => { e.preventDefault(); void jumpFeedback(Number(row.ref_id)) }}>{t('tmr.linkFb')}#{row.ref_id}</a></>}</span>
+                <span>{srcLabel(row.source)}{row.ref_type === 'feedback' && <> · <a href="#" aria-label={t('tmr.linkFb')} onClick={(e: any) => { e.preventDefault(); void jumpFeedback(Number(row.ref_id)) }}>{t('tmr.linkFb')}#{row.ref_id}</a></>}</span>
               ) },
               { colKey: 'hit_count', title: t('tmr.hits'), width: 90 },
               { colKey: 'status', title: t('users.colStatus' as never), width: 90, cell: ({ row }: any) =>

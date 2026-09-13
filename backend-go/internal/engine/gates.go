@@ -7,6 +7,7 @@
 //     与语言文化闸门 culture.Run（避雷词/格式/语气），retry=true 时约束项首轮不过带反馈重翻一次。
 //   - applyOutputGates / applySegmentGates：分别面向文本主路径与文件主路径的批量闸门校验，
 //     返回仅以警告形式透出的违规提示，绝不静默丢弃译文内容。
+//
 // =============================================
 package engine
 
@@ -26,15 +27,53 @@ import (
 // 自带调用方租户的安全句（避雷词 / 风格 / 替换对），避免每次逐条查库。
 type gateCtx struct {
 	safety []*store.KBSafetyPhrase
+	e      *Engine
+	tid    int64
+	orgID  int64
+	// ★ H1 术语强制：本批译文共享的术语命中缓存（key=srcLang|source|lang）
+	termCache map[string][]gate.TermRequirement
+}
+
+// termReqs 查询并缓存「源文命中 → 该语种规定译法」的 KB 术语要求（layer=1）。
+func (g *gateCtx) termReqs(source, lang string) []gate.TermRequirement {
+	if g.e == nil || g.e.St == nil || g.tid <= 0 {
+		return nil
+	}
+	srcLang := DetectSourceLang(source)
+	key := srcLang + "|" + source + "|" + lang
+	if v, ok := g.termCache[key]; ok {
+		return v
+	}
+	var out []gate.TermRequirement
+	if ents, err := g.e.St.FindTermsBySubstring(g.tid, g.orgID, srcLang, source); err == nil {
+		for _, ent := range ents {
+			if ent == nil || ent.Layer != 1 || ent.TargetLang != lang {
+				continue
+			}
+			if strings.TrimSpace(ent.SourceText) == "" || strings.TrimSpace(ent.TargetText) == "" {
+				continue
+			}
+			out = append(out, gate.TermRequirement{Source: ent.SourceText, Target: ent.TargetText})
+		}
+	}
+	g.termCache[key] = out
+	return out
 }
 
 // newGateCtx 构造输出闸门上下文，加载调用方租户及共享宿主（租户1）的安全句。
 func (e *Engine) newGateCtx(ctx context.Context) gateCtx {
-	gc := gateCtx{}
+	gc := gateCtx{e: e, termCache: map[string][]gate.TermRequirement{}}
 	if e.St == nil {
 		return gc
 	}
-	if tid := tenant.FromContext(ctx); tid > 0 {
+	tid := tenant.FromContext(ctx)
+	gc.tid = tid
+	if uid := tenant.UserFromContext(ctx); uid > 0 {
+		if u, uerr := e.St.GetUser(uid, tid); uerr == nil && u != nil {
+			gc.orgID = u.OrgID
+		}
+	}
+	if tid > 0 {
 		if ph, err := e.St.ListSafetyPhrases(tid); err == nil {
 			gc.safety = ph
 		}
@@ -56,16 +95,25 @@ func (g gateCtx) check(source, lang, translated string, retry bool, e *Engine, c
 		return tr, warnings
 	}
 	// 1) 约束闸门：数字/金额/单位/专有名词一致性等硬校验
-	gr := gate.Run(source, lang, tr)
+	// ★ H1 术语强制 100%：命中术语且译文残留源术语字面 → 直接以规定译法覆写；
+	//   剩余违规（第三种写法）带术语要求重翻一次，仍违规则记警告（不静默放行）。
+	terms := g.termReqs(source, lang)
+	if len(terms) > 0 {
+		if forced, n := gate.ForceTerms(source, tr, terms); n > 0 {
+			tr = forced
+			warnings = append(warnings, fmt.Sprintf("%s 术语强制替换 %d 处（KB 规定译法覆写）", langLabel(lang), n))
+		}
+	}
+	gr := gate.RunWithTerms(source, lang, tr, terms)
 	if !gr.Pass {
 		if retry {
 			msg := "请修正以下质量问题后重新翻译：" + firstGateFail(gr.Checks)
-			if fixed := e.TranslateWithFeedback(ctx, source, lang, msg, config.StageAIInitial); strings.TrimSpace(fixed) != "" && gate.Run(source, lang, fixed).Pass {
+			if fixed := e.TranslateWithFeedback(ctx, source, lang, msg, config.StageAIInitial); strings.TrimSpace(fixed) != "" && gate.RunWithTerms(source, lang, fixed, terms).Pass {
 				tr = fixed
 			}
 		}
-		if !gate.Run(source, lang, tr).Pass {
-			warnings = append(warnings, fmt.Sprintf("%s 译文未通过质量校验(%s)", langLabel(lang), firstGateFail(gate.Run(source, lang, tr).Checks)))
+		if gr = gate.RunWithTerms(source, lang, tr, terms); !gr.Pass {
+			warnings = append(warnings, fmt.Sprintf("%s 译文未通过质量校验(%s)", langLabel(lang), firstGateFail(gr.Checks)))
 		}
 	}
 	// 2) 语言文化闸门：输出侧避雷词 / 格式 / 语气校验（仅警告透出，不在主路径静默丢弃）

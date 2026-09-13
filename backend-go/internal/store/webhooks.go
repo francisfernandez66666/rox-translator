@@ -4,6 +4,7 @@
 //   - store 层 CRUD：UpsertWebhook / ListWebhooks / DeleteWebhook / GetEnabledWebhooks
 //   - 投递：DispatchWebhook 对翻译完成事件异步 POST 到回调 URL（HMAC-SHA256 签名，
 //     失败重试 3 次，指数退避），供客户 TMS / CI 集成。
+//
 // =============================================
 package store
 
@@ -25,36 +26,36 @@ import (
 
 // Webhook 租户回调配置记录
 type Webhook struct {
-	ID             int64  `json:"id"`              // 主键 ID
-	TenantID       int64  `json:"tenant_id"`       // 所属租户
-	URL            string `json:"url"`             // 回调 URL
-	Secret         string `json:"secret"`          // 签名密钥（HMAC-SHA256）
-	Events         string `json:"events"`          // 订阅事件（逗号分隔，默认 translation.completed）
-	Enabled        int    `json:"enabled"`         // 1=启用 0=停用
-	MaxRetries     int    `json:"max_retries"`     // 最大重试次数（默认 3）
-	RetryInterval  int    `json:"retry_interval"`  // 重试间隔秒数（默认 60）
+	ID             int64  `json:"id"`               // 主键 ID
+	TenantID       int64  `json:"tenant_id"`        // 所属租户
+	URL            string `json:"url"`              // 回调 URL
+	Secret         string `json:"secret"`           // 签名密钥（HMAC-SHA256）
+	Events         string `json:"events"`           // 订阅事件（逗号分隔，默认 translation.completed）
+	Enabled        int    `json:"enabled"`          // 1=启用 0=停用
+	MaxRetries     int    `json:"max_retries"`      // 最大重试次数（默认 3）
+	RetryInterval  int    `json:"retry_interval"`   // 重试间隔秒数（默认 60）
 	LastDeliveryAt string `json:"last_delivery_at"` // 最近投递时间
-	FailureCount   int    `json:"failure_count"`   // 连续失败次数
-	CreatedAt      string `json:"created_at"`      // 创建时间
-	UpdatedAt      string `json:"updated_at"`      // 更新时间
+	FailureCount   int    `json:"failure_count"`    // 连续失败次数
+	CreatedAt      string `json:"created_at"`       // 创建时间
+	UpdatedAt      string `json:"updated_at"`       // 更新时间
 }
 
 // WebhookDelivery 投递历史记录（死信队列）
 type WebhookDelivery struct {
-	ID           int64  `json:"id"`             // 主键 ID
-	WebhookID    int64  `json:"webhook_id"`     // 关联 webhook 配置 ID
-	TenantID     int64  `json:"tenant_id"`      // 所属租户
-	Event        string `json:"event"`          // 事件名
-	Payload      string `json:"payload"`        // 事件负载 JSON
-	Status       string `json:"status"`         // pending/success/failed/dead
-	StatusCode   int    `json:"status_code"`    // HTTP 响应码
-	Response     string `json:"response"`       // 响应体（截断 1KB）
-	Attempts     int    `json:"attempts"`       // 已尝试次数
-	MaxRetries   int    `json:"max_retries"`    // 最大重试次数
-	NextRetryAt  string `json:"next_retry_at"`  // 下次重试时间（空=不再重试）
-	Error        string `json:"error"`          // 最后错误信息
-	CreatedAt    string `json:"created_at"`     // 创建时间
-	UpdatedAt    string `json:"updated_at"`     // 更新时间
+	ID          int64  `json:"id"`            // 主键 ID
+	WebhookID   int64  `json:"webhook_id"`    // 关联 webhook 配置 ID
+	TenantID    int64  `json:"tenant_id"`     // 所属租户
+	Event       string `json:"event"`         // 事件名
+	Payload     string `json:"payload"`       // 事件负载 JSON
+	Status      string `json:"status"`        // pending/success/failed/dead
+	StatusCode  int    `json:"status_code"`   // HTTP 响应码
+	Response    string `json:"response"`      // 响应体（截断 1KB）
+	Attempts    int    `json:"attempts"`      // 已尝试次数
+	MaxRetries  int    `json:"max_retries"`   // 最大重试次数
+	NextRetryAt string `json:"next_retry_at"` // 下次重试时间（空=不再重试）
+	Error       string `json:"error"`         // 最后错误信息
+	CreatedAt   string `json:"created_at"`    // 创建时间
+	UpdatedAt   string `json:"updated_at"`    // 更新时间
 }
 
 // webhookCols webhooks 表通用查询列（避免各查询重复书写）
@@ -94,7 +95,8 @@ func (s *Store) UpsertWebhook(w *Webhook) error {
 		// 更新已有记录
 		_, err := db.Exec(s.db, db.CurrentDialect(),
 			"UPDATE webhooks SET url=?, secret=?, events=?, enabled=?, max_retries=?, retry_interval=?, updated_at=? WHERE id=? AND tenant_id=?",
-			w.URL, w.Secret, w.Events, w.Enabled, w.MaxRetries, w.RetryInterval, now, w.ID, w.TenantID)
+			// ★ B7（2026-09-12）：secret 静态加密落库（enc:v1: AES-GCM）；结构体保持明文供签名链路使用
+			w.URL, encryptWebhookSecret(w.Secret), w.Events, w.Enabled, w.MaxRetries, w.RetryInterval, now, w.ID, w.TenantID)
 		return err
 	}
 	// 新增默认启用
@@ -103,7 +105,8 @@ func (s *Store) UpsertWebhook(w *Webhook) error {
 	}
 	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
 		"INSERT INTO webhooks (tenant_id, url, secret, events, enabled, max_retries, retry_interval, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-		w.TenantID, w.URL, w.Secret, w.Events, w.Enabled, w.MaxRetries, w.RetryInterval, now, now)
+		// ★ B7：secret 静态加密落库；重复调用幂等（带前缀输入不再二次包裹）
+		w.TenantID, w.URL, encryptWebhookSecret(w.Secret), w.Events, w.Enabled, w.MaxRetries, w.RetryInterval, now, now)
 	if err != nil {
 		return err
 	}
@@ -139,6 +142,7 @@ func (s *Store) ListWebhooks(tid int64) ([]*Webhook, error) {
 		if err := rows.Scan(&w.ID, &w.TenantID, &w.URL, &w.Secret, &w.Events, &w.Enabled, &w.MaxRetries, &w.RetryInterval, &w.LastDeliveryAt, &w.FailureCount, &w.CreatedAt, &w.UpdatedAt); err != nil {
 			continue
 		}
+		w.Secret = decryptWebhookSecret(w.Secret)
 		out = append(out, &w)
 	}
 	return out, nil
@@ -158,6 +162,7 @@ func (s *Store) GetEnabledWebhooks(tid int64, event string) ([]*Webhook, error) 
 		if err := rows.Scan(&w.ID, &w.TenantID, &w.URL, &w.Secret, &w.Events, &w.Enabled, &w.MaxRetries, &w.RetryInterval, &w.LastDeliveryAt, &w.FailureCount, &w.CreatedAt, &w.UpdatedAt); err != nil {
 			continue
 		}
+		w.Secret = decryptWebhookSecret(w.Secret)
 		// 事件过滤：event 为空表示不过滤（如测试 ping）；否则逗号分隔订阅列表含目标事件才投递
 		if event != "" && w.Events != "" && !containsEvent(w.Events, event) {
 			continue
@@ -445,6 +450,7 @@ func (s *Store) RetryDelivery(deliveryID, tid int64) error {
 	if err := rows.Scan(&w.ID, &w.TenantID, &w.URL, &w.Secret, &w.Events, &w.Enabled, &w.MaxRetries, &w.RetryInterval, &w.LastDeliveryAt, &w.FailureCount, &w.CreatedAt, &w.UpdatedAt); err != nil {
 		return err
 	}
+	w.Secret = decryptWebhookSecret(w.Secret)
 	// 创建新投递记录并立即发送
 	maxRetries := w.MaxRetries
 	if maxRetries <= 0 {
@@ -493,4 +499,17 @@ func (s *Store) GetDeliveryStats(webhookID, tid int64) (total, success, failed, 
 		"SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='dead' THEN 1 ELSE 0 END),0) FROM webhook_deliveries WHERE webhook_id=? AND tenant_id=?",
 		webhookID, tid).Scan(&total, &success, &failed, &dead)
 	return
+}
+
+// encryptWebhookSecret ★ B7：webhook 签名密钥静态加密（幂等：已加密输入原样返回）。
+func encryptWebhookSecret(plain string) string {
+	if plain == "" || strings.HasPrefix(plain, SecretEncPrefix) {
+		return plain
+	}
+	return EncryptSecret(plain)
+}
+
+// decryptWebhookSecret ★ B7：读取解密；历史明文（无前缀）原样返回，兼容旧库平滑迁移。
+func decryptWebhookSecret(stored string) string {
+	return DecryptSecret(stored)
 }

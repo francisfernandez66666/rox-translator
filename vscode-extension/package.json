@@ -1,0 +1,94 @@
+{
+  "name": "langcross-translator",
+  "displayName": "能言 LangCross 翻译",
+  "description": "能言翻译平台 VS Code 侧边栏插件：划译/选中文本翻译与常用语对沉淀（对接 /openapi/v1 开放接口）",
+  "version": "0.1.0",
+  "publisher": "langcross",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "langcross",
+          "title": "能言翻译",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "langcross": [
+        {
+          "type": "webview",
+          "id": "langcross.panel",
+          "name": "翻译工作台"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "langcross.translateSelection",
+        "title": "能言：翻译编辑器选中文本"
+      },
+      {
+        "command": "langcross.setApiKey",
+        "title": "能言：设置 API Key"
+      },
+      {
+        "command": "langcross.setServer",
+        "title": "能言：设置服务地址"
+      },
+      {
+        "command": "langcross.searchTerms",
+        "title": "能言：检索术语表"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "langcross.translateSelection",
+        "key": "ctrl+alt+t",
+        "mac": "cmd+alt+t"
+      }
+    ],
+    "configuration": {
+      "title": "能言 LangCross",
+      "properties": {
+        "langcross.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8787",
+          "description": "平台服务地址（如 https://translate.example.com）"
+        },
+        "langcross.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "开放接口 API Key（后台「API Keys」页生成，需 translate 权限）"
+        },
+        "langcross.targetLangs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "en"
+          ],
+          "description": "默认目标语言代码列表（最多 5 个）"
+        },
+        "langcross.mode": {
+          "type": "string",
+          "enum": [
+            "fast",
+            "pro"
+          ],
+          "default": "fast",
+          "description": "翻译模式：fast 快速 / pro 专业校对（计入配额更高）"
+        }
+      }
+    }
+  }
+}

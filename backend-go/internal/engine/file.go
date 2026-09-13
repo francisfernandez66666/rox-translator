@@ -83,8 +83,8 @@ func leakedLang(lang string, remain, total int) string {
 
 // fetchBrandTerms 查询该租户 KB 中全部 module=brand + layer=1 术语，
 // 返回 map[目标语言]map[源品牌名]规定译法（如 ru: 极石汽车→ROX）。用于：
-//   1) 翻译前品牌保护（把源文品牌名替换为规定译法，避免模型音译成 Киджиш 等）；
-//   2) 翻译后归一化（剥离 ROX vehicles/motor/汽车 等后缀）。
+//  1. 翻译前品牌保护（把源文品牌名替换为规定译法，避免模型音译成 Киджиш 等）；
+//  2. 翻译后归一化（剥离 ROX vehicles/motor/汽车 等后缀）。
 func (e *Engine) fetchBrandTerms(ctx context.Context, retrieve string) map[string]map[string]string {
 	if e.St == nil || strings.TrimSpace(retrieve) == "" {
 		return nil
@@ -403,20 +403,20 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				log.Printf("[kb-match] lang=%s 命中=%d 走模型=%d", lc, len(texts)-len(needModelIdx), len(needModelIdx))
 				// 第二遍：批量模型补漏
 				if len(needModelIdx) > 0 {
-needTexts := make([]string, len(needModelIdx))
-				for i, idx := range needModelIdx {
-					needTexts[i] = texts[idx]
-				}
-				// ★ 品牌保护（2026-09-10）：把该语言源文中的品牌名替换为规定译法，
-				//   使模型输出 ROX 而非音译 Киджиш；返回的 batch 仍按原 needTexts 索引对应。
-				protSrc, _ := protectSourceByLang(needTexts, brandTermsAll[lc])
-				batch := e.BatchTranslate(ctx, protSrc, lc, 15,
-					func(done, total int) { prog("file_translate|初翻|"+lc, done, total) })
-				// ★ pro 模式批量审校：本块一次 LLM 调用逐条修正，失败/不符原样保留
-				if !fast {
-					batch = e.reviewBatchSafe(ctx, protSrc, batch, lc,
-						func(done, total int) { prog("file_translate|校对|"+lc, done, total) })
-				}
+					needTexts := make([]string, len(needModelIdx))
+					for i, idx := range needModelIdx {
+						needTexts[i] = texts[idx]
+					}
+					// ★ 品牌保护（2026-09-10）：把该语言源文中的品牌名替换为规定译法，
+					//   使模型输出 ROX 而非音译 Киджиш；返回的 batch 仍按原 needTexts 索引对应。
+					protSrc, _ := protectSourceByLang(needTexts, brandTermsAll[lc])
+					batch := e.BatchTranslate(ctx, protSrc, lc, 15,
+						func(done, total int) { prog("file_translate|初翻|"+lc, done, total) })
+					// ★ pro 模式批量审校：本块一次 LLM 调用逐条修正，失败/不符原样保留
+					if !fast {
+						batch = e.reviewBatchSafe(ctx, protSrc, batch, lc,
+							func(done, total int) { prog("file_translate|校对|"+lc, done, total) })
+					}
 					for i, idx := range needModelIdx {
 						// ★ 回显检测：模型原样返回源文 = 未翻译，视为缺失走重试
 						if batch[i] != "" && batch[i] != "[翻译失败]" && batch[i] != texts[idx] {
@@ -642,6 +642,10 @@ needTexts := make([]string, len(needModelIdx))
 				case ".pptx":
 					aerr = fileproc.ApplyPptx(filePath, outPath, tr)
 				case ".pdf":
+					// ★ D4（2026-09-12）：三级链——缓存 DOCX 复用 → pdf2docx 现场转换 →
+					//   纯 Go/fpdf2 版式重建（WriteTranslatedPDF，原为死代码）。
+					//   旧实现前两级失败即整单判失败，pdf2docx 不可用的部署永远产不出 PDF。
+					//   第三级丢原排版但保内容交付（版式重建，未命中段落回退原文）。
 					if pdfCacheDocx != "" {
 						// 两阶段：复用提取期缓存 DOCX（键对齐，图片/排版零破坏）
 						if perr := fileproc.ApplyTranslatedPdfFromDocx(ctx, outPath, pdfCacheDocx, tr, lc); perr == nil {
@@ -650,12 +654,16 @@ needTexts := make([]string, len(needModelIdx))
 						if perr := fileproc.WriteTranslatedPDFviaDocx(ctx, outPath, filePath, tr, lc); perr == nil {
 							break
 						}
-						aerr = fmt.Errorf("PDF 写回失败")
-					} else {
-						aerr = fmt.Errorf("PDF 写回失败")
 					}
+					if perr := fileproc.WriteTranslatedPDF(ctx, outPath, texts, tr); perr == nil {
+						log.Printf("[file] %s PDF 保版式写回不可用，已降级版式重建交付", lc)
+						break
+					} else {
+						log.Printf("[file] %s PDF 版式重建兜底失败: %v", lc, perr)
+					}
+					aerr = fmt.Errorf("PDF 写回失败")
 				case ".txt", ".csv", ".md":
-					aerr = writeTranslatedText(outPath, texts, tr)
+					aerr = fileproc.ApplyAlignedText(ext, filePath, outPath, tr) // ★ D5：按原行对齐写回
 				default:
 					aerr = fmt.Errorf("不支持的写回格式")
 				}
@@ -663,8 +671,8 @@ needTexts := make([]string, len(needModelIdx))
 					break // 写回成功
 				}
 				// 重试前短暂退避（子进程转换释放资源），最后一次失败不再退避
-				if attempt < 2 {
-					time.Sleep(2 * time.Second)
+				if attempt < 2 && !sleepCtx(ctx, 2*time.Second) {
+					break // ★ D9：客户端已断开，停止烧下一轮子进程/LLM 资源
 				}
 			}
 			if aerr != nil {
@@ -868,17 +876,4 @@ func writeMultiSheetXlsx(srcPath, outputDir, baseName string, langs []string, la
 	}
 	// 删除原始 Sheet 副本（保留第一个作为参考）
 	return f.SaveAs(outPath)
-}
-
-// writeTranslatedText 纯文本类格式直写翻译结果（逐行替换）。
-func writeTranslatedText(outPath string, sourceTexts []string, translations map[string]string) error {
-	lines := make([]string, len(sourceTexts))
-	for i, src := range sourceTexts {
-		if tr, ok := translations[strings.TrimSpace(src)]; ok && tr != "" {
-			lines[i] = tr
-		} else {
-			lines[i] = src // 未命中的保留原文
-		}
-	}
-	return os.WriteFile(outPath, []byte(strings.Join(lines, "\n")), 0o644)
 }

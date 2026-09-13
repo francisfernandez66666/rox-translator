@@ -14,6 +14,7 @@ import (
 	"log"
 	"log/slog"
 	"math/big"
+	"net"
 	"net/http"
 	httppprof "net/http/pprof" // 注册 pprof Handler（仅经下方独立回环监听器暴露，外网不可达）
 	"os"
@@ -56,7 +57,7 @@ func main() {
 	// ★ 结构化日志（工作流 C）：以 slog JSON 日志器替换默认 logger，全链路带 trace_id。
 	slog.SetDefault(observability.NewLogger())
 	// 命令行参数：监听地址、前端静态目录、KB 向量索引与 KB 缓存库路径
-	addr := flag.String("addr", ":8787", "HTTP 监听地址")
+	addr := flag.String("addr", "127.0.0.1:8787", "HTTP 监听地址（★ S1：开发默认回环；对外部署须显式绑定且 DB_DRIVER=postgres）")
 	frontend := flag.String("frontend", "", "前端 dist 目录（默认相对路径 ./frontend/dist）")
 	kbNpz := flag.String("kb", "", "知识库 .npz 文件路径；留空则不加载")
 	kbDB := flag.String("kbdb", "", "知识库 SQLite 缓存路径（默认 <npz 同名>.db）")
@@ -78,6 +79,21 @@ func main() {
 			log.Fatalf("[init] 生产密钥强校验已开启（REQUIRE_PROD_SECRETS=1），缺少环境变量: %s；请参照部署指南 §六 配置后重启", strings.Join(missing, ", "))
 		}
 	}
+	// ★ S1（2026-09-12 决策：存储统一 PostgreSQL，SQLite 退出生产）：
+	//   生产强拒 PG 外选项——REQUIRE_PROD_SECRETS=1 或 APP_ENV=prod/production 时 SQLite 直接 FATAL；
+	//   非回环监听（对外可达）同样禁止 SQLite；仅回环监听允许 SQLite 作为开发/测试便捷态（大声告警）。
+	if config.C.DatabaseDriver != "postgres" {
+		envFlag := strings.ToUpper(strings.TrimSpace(os.Getenv("APP_ENV")))
+		prodMark := os.Getenv("REQUIRE_PROD_SECRETS") == "1" || envFlag == "PROD" || envFlag == "PRODUCTION"
+		if prodMark {
+			log.Fatalf("[config] S1 拒绝启动：生产标记（REQUIRE_PROD_SECRETS/APP_ENV）已开启但 DB_DRIVER=%s；生产唯一受支持方言为 postgres，请设置 DB_DRIVER + DB_DSN 后重启", config.C.DatabaseDriver)
+		}
+		if !isLoopbackListen(*addr) {
+			log.Fatalf("[config] S1 拒绝启动：监听地址 %s 非回环（对外可达）而 DB_DRIVER=%s；SQLite 仅限本机开发/测试（-addr 127.0.0.1:8787），对外部署必须 DB_DRIVER=postgres", *addr, config.C.DatabaseDriver)
+		}
+		log.Printf("[config] ⚠️ 开发模式 SQLite（回环 %s）：生产统一 PostgreSQL，SQLite 不享受并发行锁语义（扣费/队列按 SQLite 写锁兜底），禁止对外部署", *addr)
+	}
+
 	// ★ 加载可执行目录 / 项目根的 config.json（model 字段）
 	exeDir, _ := filepath.Abs(filepath.Dir(os.Args[0]))
 	cfg.LoadConfigFromJSON(exeDir)
@@ -125,7 +141,7 @@ func main() {
 		db = nil
 	} else {
 		if config.C.DatabaseDriver == "postgres" {
-			log.Printf("术语数据库已打开(PostgreSQL): %s", config.C.DatabaseDSN)
+			log.Printf("术语数据库已打开(PostgreSQL): %s", config.MaskDSN(config.C.DatabaseDSN))
 		} else {
 			log.Printf("术语数据库已打开(SQLite): %s", dbPath)
 		}
@@ -161,7 +177,14 @@ func main() {
 			initPwd := os.Getenv("ADMIN_INIT_PASSWORD")
 			if initPwd == "" {
 				initPwd = genRandomPass(12)
-				log.Printf("[init] 未配置 ADMIN_INIT_PASSWORD，已生成随机初始密码: %s（请登录后立即修改）", initPwd)
+				// ★ B1（2026-09-12 日志脱敏）：随机初始密码不再打印 stdout（journalctl/云日志
+				//   长期留存=凭据泄漏面），改写 0600 本机文件，日志仅提示路径。
+				pwdFile := filepath.Join(cfg.UserDataDir, "admin-initial-password.txt")
+				if werr := os.WriteFile(pwdFile, []byte(initPwd+"\n"), 0o600); werr != nil {
+					log.Printf("[init] ⚠️ 未配置 ADMIN_INIT_PASSWORD 且初始密码文件写入失败(%v)：无法登录，请设置 ADMIN_INIT_PASSWORD 后重启", werr)
+				} else {
+					log.Printf("[init] 未配置 ADMIN_INIT_PASSWORD：随机初始超管密码已写入 %s（chmod 600，登录后立即修改并删除该文件）", pwdFile)
+				}
 			}
 			adminEmail := os.Getenv("ADMIN_EMAIL")
 			if err := st.EnsureAdmin(1, "admin", auth.PasswordHash(initPwd), "系统管理员", adminEmail); err != nil {
@@ -182,7 +205,7 @@ func main() {
 	// 供 cutover 脚本在迁移前一次性建立 PG 表结构（含 pgvector 列）。
 	if *initDB {
 		if config.C.DatabaseDriver == "postgres" {
-			log.Printf("[init-db] PostgreSQL schema 已初始化: %s", config.C.DatabaseDSN)
+			log.Printf("[init-db] PostgreSQL schema 已初始化: %s", config.MaskDSN(config.C.DatabaseDSN))
 		} else {
 			log.Printf("[init-db] SQLite schema 已初始化: %s", cfg.DBPath)
 		}
@@ -289,7 +312,30 @@ func main() {
 	// ★ 边工作边计费：将实时扣费钩子挂到引擎的 LLM 客户端。
 	// 每次 chat/embed 调用产生真实 token 用量后立即扣减租户余额，余额不足即中止翻译，
 	// 覆盖即时翻译 / 翻译工单 / OpenAPI 三类入口，杜绝后置计费被取消绕过的白嫖。
-	eng.LLM.OnUsage = srv.ChargeUsageRealtime
+	// ★ H7：usage 回调双写——计费 + 路由 token 成本统计（动态权重数据源）
+	prevUsage := srv.ChargeUsageRealtime
+	eng.LLM.OnUsage = func(ctx context.Context, model string, prompt, completion int64) error {
+		eng.ObserveRouteTokens(model, prompt, completion)
+		return prevUsage(ctx, model, prompt, completion)
+	}
+	// ★ H2 术语约束解码能力探测：所有存活主/备 chat 路由均声明 supports_constraints
+	//   才启用事前注入（任一不支持即整链路降级 H1，避免 x_term_constraints 打到普通端点）。
+	if eng.LLM != nil && len(config.C.ModelRoutes) > 0 {
+		supportAll := true
+		for _, rt := range config.C.ModelRoutes {
+			if rt.APIBase == "" {
+				continue
+			}
+			if !rt.SupportsConstraints {
+				supportAll = false
+				break
+			}
+		}
+		eng.LLM.SupportsConstraints = supportAll
+		if supportAll {
+			log.Printf("[init] H2 术语约束解码已启用（全部 %d 条路由声明 supports_constraints）", len(config.C.ModelRoutes))
+		}
+	}
 	// ★ 评估器（evals）使用独立 LLM client：同样挂上计费钩子，
 	//   否则 Judge（初翻评估/校对评估）调用不进入 usage_ledger（调用了但白嫖）。
 	if eng.Evals != nil {
@@ -371,4 +417,29 @@ func genRandomPass(n int) string {
 		out[i] = charset[idx.Int64()]
 	}
 	return string(out)
+}
+
+// isLoopbackListen 判断监听地址是否仅绑定回环（127.0.0.1/[::1]/localhost:port）。
+// 空 host（":8787"）视为全网卡监听 → 非回环。★ S1 生产判定用。
+func isLoopbackListen(addr string) bool {
+	host := addr
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		host = addr[:i]
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	if hps, err := net.LookupHost(host); err == nil && len(hps) > 0 {
+		for _, ip := range hps {
+			if parsed := net.ParseIP(ip); parsed == nil || !parsed.IsLoopback() {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }

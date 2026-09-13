@@ -15,12 +15,13 @@ package api
 // =============================================
 
 import (
-	"log"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
+	"translator/internal/db"
 
 	"translator/internal/store"
 )
@@ -36,18 +37,8 @@ func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days（旧键 trial_sentences 已下线）
-	freeTokens := int64(300000)
-	if v, _ := s.Store.GetConfig("free_trial_tokens"); v != "" {
-		if n, e := parseInt64(v); e == nil && n > 0 {
-			freeTokens = n
-		}
-	}
-	freeDays := 14
-	if v, _ := s.Store.GetConfig("free_trial_days"); v != "" {
-		if n, e := parseInt64(v); e == nil && n > 0 {
-			freeDays = int(n)
-		}
-	}
+	// ★ C6（2026-09-12）：默认值单一来源，读取点收敛到 trialConfig
+	freeTokens, freeDays := s.trialConfig()
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "plans": pkgs,
 		"free_trial_tokens": freeTokens, "free_trial_days": freeDays,
@@ -90,10 +81,10 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 	if tid > 0 {
 		ms := time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)
 		// 统计本月租户级用量
-		_ = s.Store.DB().QueryRow(
+		_ = db.QueryRow(s.Store.DB(), db.CurrentDialect(),
 			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=?", tid, ms).Scan(&usedMonth)
 		// 统计今日当前用户用量
-		_ = s.Store.DB().QueryRow(
+		_ = db.QueryRow(s.Store.DB(), db.CurrentDialect(),
 			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at>=?",
 			tid, u.ID, ms).Scan(&usedToday)
 	}
@@ -105,7 +96,7 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		"balance_sentences_approx": approx,
 		"sub_grants_left":          grants,         // ★ 未过期台账合计（双桶明细）
 		"permanent_balance":        permanent,      // ★ 永久余额（双桶明细）
-		"sentence_balance":         sentenceMirror, // 兼容字段：历史句数镜像
+		"sentence_balance":         sentenceMirror, // ★ C26 弃用镜像（只增流水）；前端应读 balance_sentences_approx
 		"package_code":             pkgCode,
 		"subscribed_at":            subAt,
 		"package_expires":          pkgExpires,
@@ -178,10 +169,15 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// mock 模式：模拟支付自动到账并发放句数（测试/演示）
+	// ★ C18（2026-09-12）：确认失败错误传播 + 响应带真实状态（订单留 pending 可重试）
 	if channel == "mock" {
-		if err := s.Store.MarkOrderPaid(o.ID, tid); err == nil {
-			o.Status = "paid"
+		if merr := s.Store.MarkOrderPaid(o.ID, tid); merr != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false,
+				"message": "下单成功但模拟入账失败（订单保留待支付）: " + store.DebriefDBError(merr),
+				"order":   o})
+			return
 		}
+		o.Status = "paid"
 	} else if channel == "manual" {
 		// 静态码模式：回填收款码图片；未配置收款码时明确报错而非静默空码（2026-09 debug）
 		if v, _ := s.Store.GetConfig("static_qr_image"); v != "" {
@@ -252,10 +248,15 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// mock 模式：模拟支付自动到账并发放入账
+	// ★ C18（2026-09-12）：升级单同口径错误传播
 	if channel == "mock" {
-		if err := s.Store.MarkOrderPaid(o.ID, tid); err == nil {
-			o.Status = "paid"
+		if merr := s.Store.MarkOrderPaid(o.ID, tid); merr != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false,
+				"message": "升级单已创建但模拟入账失败（订单保留待支付）: " + store.DebriefDBError(merr),
+				"order":   o})
+			return
 		}
+		o.Status = "paid"
 	} else if channel == "manual" {
 		if v, _ := s.Store.GetConfig("static_qr_image"); v != "" {
 			_ = s.Store.UpdateOrderPrepay(o.OrderNo, "", v)

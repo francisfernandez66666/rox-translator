@@ -100,20 +100,31 @@ func extractDocx(path string, e *Extractor) error {
 		}
 	}
 
-	// 页眉页脚：遍历常见命名（header1-3/footer1-3/header/footer）
-	for _, suffix := range []string{"header1", "header2", "header3", "footer1", "footer2", "footer3",
-		"header", "footer"} {
-		for _, name := range []string{"word/" + suffix + ".xml", "word/" + suffix + ".xml"} {
-			if data, err := readZipEntry(zr, name); err == nil {
-				var hdoc docxDocument
-				// 页眉页脚解析失败不影响主流程
-				if xml.Unmarshal(data, &hdoc) == nil {
-					for _, p := range hdoc.Body.Paragraphs {
-						text := paragraphText(p)
-						if strings.TrimSpace(text) != "" {
-							e.add(text)
-						}
-					}
+	// ★ D7（2026-09-12）：页眉/页脚改按 zip 实际条目全量遍历（旧列表写死
+	// header1-3 且同名循环笔误，第 4 页起的 header4…与 footer4+ 全部漏采）；
+	// 并补采脚注 footnotes.xml / 尾注 endnotes.xml（此前整块不提取不翻译）。
+	for _, f := range zr.File {
+		name := f.Name
+		if !strings.HasPrefix(name, "word/") || !strings.HasSuffix(name, ".xml") {
+			continue
+		}
+		base := strings.TrimPrefix(name, "word/")
+		isHF := strings.HasPrefix(base, "header") || strings.HasPrefix(base, "footer")
+		isNote := base == "footnotes.xml" || base == "endnotes.xml"
+		if !isHF && !isNote {
+			continue
+		}
+		data, err := readZipEntry(zr, name)
+		if err != nil {
+			continue
+		}
+		var hdoc docxDocument
+		// 部件解析失败不影响主流程
+		if xml.Unmarshal(data, &hdoc) == nil {
+			for _, p := range hdoc.Body.Paragraphs {
+				text := paragraphText(p)
+				if strings.TrimSpace(text) != "" {
+					e.add(text)
 				}
 			}
 		}
@@ -195,8 +206,9 @@ func ApplyDocx(path, outPath string, translations map[string]string) error {
 		}
 		if f.Name == "word/document.xml" {
 			data = newMain // 替换为主文档译文
-		} else if strings.HasPrefix(f.Name, "word/header") || strings.HasPrefix(f.Name, "word/footer") {
-			data = translateDocxXML(data, translations) // 翻译页眉页脚
+		} else if strings.HasPrefix(f.Name, "word/header") || strings.HasPrefix(f.Name, "word/footer") ||
+			f.Name == "word/footnotes.xml" || f.Name == "word/endnotes.xml" {
+			data = translateDocxXML(data, translations) // ★ D7：页眉页脚 + 脚注尾注同链路写回
 		}
 		w, err := zw.Create(f.Name)
 		if err != nil {
@@ -271,13 +283,109 @@ func translateDocxParagraph(para string, translations map[string]string) string 
 	}
 	closeStart += firstIdx
 	// 替换第一个 w:t 内容为译文（保留其闭合标签）
-// XML 转义：译文来自大语言模型自由文本，可能含 & < > " '，
-//   裸拼进 document.xml 会产出非法 XML（Office 报「文件损坏」），必须先转义。
-	newPara := para[:firstIdx] + EscapeXML(translated) + para[closeStart:]
+	// XML 转义：译文来自大语言模型自由文本，可能含 & < > " '，
+	//   裸拼进 document.xml 会产出非法 XML（Office 报「文件损坏」），必须先转义。
+	// ★ D1（2026-09-12）：游标必须按「转义后」长度计算——旧式 firstIdx+len(translated)
+	//   在译文含 & < > 时落在转义串中部，把 "&amp;" 拦腰截成 "&am" + 后半段，
+	//   产出残缺实体的损坏 XML（"R&D" 场景 Office 报文件无法打开）。
+	// ★ D21：多 run 段落按权重比例分配译文到各 w:t 节点，保留逐 run 格式（rPr 不动）。
+	if nodes := paragraphRunTextNodes(para); len(nodes) > 1 {
+		weights := make([]int, len(nodes))
+		for i, n := range nodes {
+			weights[i] = len([]rune(UnescapeXMLText(para[n.start:n.end])))
+		}
+		pieces := distributeByWeight(translated, weights)
+		b := strings.Builder{}
+		prev := 0
+		for i, n := range nodes {
+			b.WriteString(para[prev:n.start])
+			b.WriteString(EscapeXML(pieces[i]))
+			prev = n.end
+		}
+		b.WriteString(para[prev:])
+		return b.String()
+	}
+	escaped := EscapeXML(translated)
+	newPara := para[:firstIdx] + escaped + para[closeStart:]
 	// 清空第一个 w:t 之后所有 w:t 的内容（含 hyperlink 内文本）
-	after := newPara[firstIdx+len(translated):]
+	cut := firstIdx + len(escaped)
+	after := newPara[cut:]
 	cleaned := emptyWTextRe.ReplaceAllString(after, `${1}${3}`)
-	return newPara[:firstIdx+len(translated)] + cleaned
+	return newPara[:cut] + cleaned
+}
+
+// ★ D21（2026-09-12）：多 run 段落的节点枚举与按权重分配译文——
+//   旧写回把整段译文塞进第一个 w:t 并清空其余 run，加粗/颜色等按 run 混排的格式全灭。
+//   现改为：枚举全部非 hyperlink 的 w:t 节点 → 按各节点原文 rune 长度为权重
+//   比例切分译文 → 逐节点写回（各 run 的 rPr 格式标记原样保留）。
+
+// textNodeRange 一个 w:t 内容节点的字符区间（para 下标，左闭右开）。
+type textNodeRange struct {
+	start int // 内容起始（'>' 之后）
+	end   int // '</w:t>' 起始
+}
+
+// paragraphRunTextNodes 枚举段落中全部非 hyperlink 的 w:t 内容节点（按文档序）。
+func paragraphRunTextNodes(para string) []textNodeRange {
+	var nodes []textNodeRange
+	i := 0
+	for i < len(para) {
+		hidx := strings.Index(para[i:], "<w:hyperlink")
+		tidx := strings.Index(para[i:], "<w:t")
+		if tidx < 0 {
+			break
+		}
+		if hidx >= 0 && hidx < tidx {
+			openEnd := i + hidx + strings.Index(para[i+hidx:], ">") + 1
+			closeIdx := strings.Index(para[openEnd:], "</w:hyperlink>")
+			if closeIdx < 0 {
+				break
+			}
+			i = openEnd + closeIdx + len("</w:hyperlink>")
+			continue
+		}
+		openStart := i + tidx
+		contentStart := strings.Index(para[openStart:], ">") + openStart + 1
+		closeIdx := strings.Index(para[contentStart:], "</w:t>")
+		if closeIdx < 0 {
+			break
+		}
+		nodes = append(nodes, textNodeRange{contentStart, contentStart + closeIdx})
+		i = contentStart + closeIdx + len("</w:t>")
+	}
+	return nodes
+}
+
+// distributeByWeight 按权重（各节点原文 rune 长度）把字符串比例切分为 len(weights) 段。
+// 末段吃余数；总权重为 0 时全部文本归第一段。
+func distributeByWeight(text string, weights []int) []string {
+	runes := []rune(text)
+	out := make([]string, len(weights))
+	total := 0
+	for _, w := range weights {
+		total += w
+	}
+	if total <= 0 {
+		if len(out) > 0 {
+			out[0] = text
+		}
+		return out
+	}
+	acc := 0
+	prev := 0
+	for i, w := range weights {
+		end := len(runes)
+		if i < len(weights)-1 {
+			acc += w
+			end = int(float64(len(runes)) * float64(acc) / float64(total))
+			if end < prev {
+				end = prev
+			}
+		}
+		out[i] = string(runes[prev:end])
+		prev = end
+	}
+	return out
 }
 
 // paragraphRunText 提取段落中非 hyperlink 内的 w:t 文本，返回拼接文本及第一个 w:t 内容起点。

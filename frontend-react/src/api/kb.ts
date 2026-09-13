@@ -25,10 +25,6 @@ export async function kbPackageCreate(data: { code: string; name: string; pack_t
   return request('/api/admin/kb-packages/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
-/** 更新知识库包（名称 / 跨部门范围：全公司或涵盖部门） */
-export async function kbPackageUpdate(data: { id: number; name?: string; cross_all?: boolean; cross_orgs?: number[] }): Promise<AdminResp> {
-  return request('/api/admin/kb-packages/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
-}
 
 /** 删除行业知识库包 */
 export async function kbPackageDelete(id: number): Promise<AdminResp> {
@@ -75,7 +71,22 @@ export async function kbEntriesImport(data: { package_id: number; entries: { sou
 // ==================== KB 文件上传（后台，租户管理员及以上） ====================
 
 /** 识别 KB 文件（multipart 上传，返回预览/语言列/temp_id） */
-export async function kbRecognizeFile(file: File): Promise<AdminResp> {
+export async function kbRecognizeFile(file: File, mergedName?: string, onProgress?: (pct: number) => void): Promise<AdminResp> {
+  if (mergedName) {
+    // ★ H5：分片已合并，recognize 直读服务端合并产物
+    const resp = await fetch(`${API_BASE}/api/translation/recognize-kb?merged=${encodeURIComponent(mergedName)}`, {
+      method: 'POST', headers: authHeaders(),
+    })
+    return resp.json()
+  }
+  if (file.size > CHUNK_UPLOAD_MIN) {
+    const merged = await uploadFileChunked(file, onProgress)
+    if (!merged) return { success: false, message: '分片上传失败' }
+    const resp = await fetch(`${API_BASE}/api/translation/recognize-kb?merged=${encodeURIComponent(merged)}`, {
+      method: 'POST', headers: authHeaders(),
+    })
+    return resp.json()
+  }
   const formData = new FormData()
   formData.append('file', file)
   const resp = await fetch(`${API_BASE}/api/translation/recognize-kb`, {
@@ -84,6 +95,62 @@ export async function kbRecognizeFile(file: File): Promise<AdminResp> {
     body: formData,
   })
   return resp.json()
+}
+
+// ==================== ★ H5 大文件断点续传（分片上传） ====================
+
+export const CHUNK_SIZE = 4 * 1024 * 1024 // 4MB/片（服务端上限 8MB）
+export const CHUNK_UPLOAD_MIN = 4 * 1024 * 1024 // ≥4MB 自动走分片通道
+
+// 生成分片上传 ID（优先 crypto.randomUUID，降级随机串）
+function newUploadId(): string {
+  const c = globalThis.crypto as Crypto | undefined
+  if (c?.randomUUID) return c.randomUUID().replace(/-/g, '')
+  let s = ''
+  for (let i = 0; i < 32; i++) s += Math.floor(Math.random() * 16).toString(16)
+  return s
+}
+
+/** 查询已收分片（续传定位；网络失败按 0 处理不影响主流程） */
+export async function uploadStatus(uploadId: string): Promise<{ received: number[]; total: number }> {
+  try {
+    const r = await (await fetch(`${API_BASE}/api/upload/status?upload_id=${uploadId}`, { headers: authHeaders() })).json()
+    return r.success ? { received: r.received || [], total: r.total || 0 } : { received: [], total: 0 }
+  } catch { return { received: [], total: 0 } }
+}
+
+/** 分片上传整个文件并合并；返回合并产物名（recognize-kb merged 参数用）。onProgress 0-100 */
+export async function uploadFileChunked(file: File, onProgress?: (pct: number) => void, uploadId = newUploadId()): Promise<string | null> {
+  const total = Math.max(1, Math.ceil(file.size / CHUNK_SIZE))
+  const have = new Set((await uploadStatus(uploadId)).received)
+  for (let i = 0; i < total; i++) {
+    if (have.has(i)) { onProgress?.(Math.round(((i + 1) / total) * 95)); continue }
+    const blob = file.slice(i * CHUNK_SIZE, Math.min(file.size, (i + 1) * CHUNK_SIZE))
+    const fd = new FormData()
+    fd.append('upload_id', uploadId)
+    fd.append('index', String(i))
+    fd.append('total', String(total))
+    fd.append('chunk', blob, `${file.name}.part${i}`)
+    let ok = false
+    for (let retry = 0; retry < 3 && !ok; retry++) {
+      try {
+        const r = await (await fetch(`${API_BASE}/api/upload/chunk`, { method: 'POST', headers: authHeaders(), body: fd })).json()
+        ok = !!r.success
+      } catch { /* 断网重试 */ }
+      if (!ok) await new Promise((res) => setTimeout(res, 500 * (retry + 1)))
+    }
+    if (!ok) return null
+    onProgress?.(Math.round(((i + 1) / total) * 95))
+  }
+  try {
+    const mr = await (await fetch(`${API_BASE}/api/upload/merge`, {
+      method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ upload_id: uploadId, filename: file.name }),
+    })).json()
+    if (!mr.success) return null
+    onProgress?.(100)
+    return String(mr.merged)
+  } catch { return null }
 }
 
 /** 双语语料对齐导入：xlsx/csv 两列以上，直接写入翻译记忆库 */
@@ -117,6 +184,21 @@ export async function kbImportFile(data: { temp_id: string; package_id: number }
 /** 启用/停用知识库包（停用后不参与翻译命中） */
 export async function kbPackageStatus(id: number, enabled: number): Promise<AdminResp> {
   return request('/api/admin/kb-packages/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, enabled }) })
+}
+
+/** ★ H3 知识库包级授权：列某包 read/write/manage 授权清单 */
+export async function kbPackGrants(packId: number): Promise<AdminResp> {
+  return request(`/api/admin/kb-packages/grants?pack_id=${packId}`, { headers: authHeaders() })
+}
+
+/** ★ H3 设置包级授权（role: read|write|manage；空串=撤销） */
+export async function kbPackGrantSet(data: { pack_id: number; user_id: number; role: string }): Promise<AdminResp> {
+  return request('/api/admin/kb-packages/grants', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
+/** ★ H3 当前用户的包级授权清单（KB 管理导航门控用） */
+export async function kbPackMine(): Promise<AdminResp> {
+  return request('/api/admin/kb-packages/mine', { headers: authHeaders() })
 }
 
 /** 部门包跨部门共享开关：share=1 共享 / 0 仅限归属链内 */

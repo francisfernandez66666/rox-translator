@@ -58,7 +58,9 @@ func DetectSourceLang(text string) string {
 		return "ko"
 	}
 	if han > 0 {
-		return "zh" // 汉字：简体/繁体细分见 detectHanVariant（此处统一 zh）
+		// ★ D16（2026-09-12）：接入繁简细分——旧版注释指路但实现统一返回 zh，
+		// 繁体采集源被误标简中，落库后简中语料污染 zh 命中链。
+		return detectHanVariant(text)
 	}
 	if cyr > 0 {
 		return "ru"

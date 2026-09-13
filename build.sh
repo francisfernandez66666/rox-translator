@@ -24,6 +24,20 @@ CONTENTS="$APP/Contents"
 echo "==> [1/4] 构建前端 ..."
 (cd frontend-react && npm install --silent && npm run build)
 
+# ★ G2 方言护栏（2026-09-12 存储统一 S 批）：业务代码禁止内联 SQLite JSON1 专属函数
+#   （json_set/json_extract/json('...')），一律经 internal/db/jsonops.go 双方言助手，
+#   否则 PG 生产（唯一受支持方言）下整条 SQL 报错且多为静默失败链路。
+echo "==> [1.5/4] 方言护栏扫描（JSON1 裸用检测）..."
+offenders=$(grep -rn --include='*.go' -E "json_set\(|json_extract\(|json\('" backend-go/internal backend-go/cmd \
+  | grep -v '_test.go' | grep -v 'internal/db/jsonops.go' | grep -v 'internal/db/rewrite.go' \
+  | grep -v '//' || true)
+if [ -n "$offenders" ]; then
+  echo "❌ 发现业务层内联 SQLite JSON1 语法（PG 生产必坏），请改用 db.JSON* 助手："
+  echo "$offenders"
+  exit 1
+fi
+echo "    方言护栏通过"
+
 echo "==> [2/4] 编译 Go 后端 (darwin 单架构本机二进制：按当前主机架构产出，非 arm64+amd64 通用 fat 包) ..."
 (cd backend-go && go build -ldflags "-s -w" -o /tmp/translator-server-mac ./cmd/server)
 
