@@ -29,7 +29,7 @@
 #   T31 H12 TMX 导出（成员拒/文档结构/非法语言/匿名拒）  T32 H7+H11 ops 路由与 SLO 可视化
 #   T33 H4 TM 审核队列契约 + H9 二级裂变漏斗
 #   T34 工单双模式（2026-09-13）：还原文件模式纯文案旁路产物 / 纯文案模式交付 /
-#       白名单分档 / 文本工单无文案产物提示 / OpenAPI delivery 回显
+#       白名单分档 / 文本工单无文案产物提示 / OpenAPI delivery 回显 / health 暴露 anydoc_ready
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 # 依赖：mock_llm.py 已启动、uat 服务已启动（run_uat.sh 编排）
 # 用法：BASE_URL=... UAT_DB=... ADMIN_PASS=... [UAT_SERVER_LOG=...] bash scripts/uat/api_uat_txn.sh
@@ -637,6 +637,10 @@ ck T34-textticket-no-artifact '"success":false' "$(get "$H1" "/api/tickets/downl
 R=$(curl -s $B/openapi/v1/tasks -H "Authorization: Bearer $AK" -F "files=@$TMPD34/t34.docx" -F "target_langs=en" -F "mode=fast" -F "delivery=text" --max-time 60)
 ck T34-openapi-delivery-echo '"delivery":"text"' "$R"
 rm -rf "$TMPD34"
+
+# T34-6 健康检查暴露 anydoc_ready（纯文案模式提取层就绪状态，布尔值——未装依赖时为 false 也须存在该字段）
+H=$(curl -s "$B/api/health" --max-time 20)
+ck T34-health-anydoc-ready '"anydoc_ready":(true|false)' "$H"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="
