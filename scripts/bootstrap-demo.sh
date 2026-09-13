@@ -267,7 +267,8 @@ VALUES
 (1,'demo_youtube','$2a$10$X5PebOqqK1jQ48Ga7K/uZuQiKFuoNE8mI44/r9A1dAvrk1dnhyW7W','演示·视频制作','user','active',10001,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,8,'demo_youtube@example.com',CURRENT_TIMESTAMP),
 (1,'demo_hr','$2a$10$Xk4.0Cbz8L3DUS..vqfDJ.47JoztnPQiPUcnZQVk1hwfI.2Zvm1Ky','演示·人事部','user','active',10001,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,7,'demo_hr@example.com',CURRENT_TIMESTAMP),
 (1,'demo_cs','$2a$10$x2HpH87cz3LDzWauVJu4dO5oEolJQJHx4IHOKrWRIMAQ6cnOZ2zaC','演示·客服部','user','active',10001,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,17,'demo_cs@example.com',CURRENT_TIMESTAMP),
-(0,'demo_super','$2a$10$408aoZNzLUsf9rCNwjY75OHs6oeSBC7XPmx0RM0BmY2tCkKQC9j6W','演示·平台超管','admin','active',10001,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0,'demo_super@example.com',CURRENT_TIMESTAMP);
+(0,'demo_super','$2a$10$408aoZNzLUsf9rCNwjY75OHs6oeSBC7XPmx0RM0BmY2tCkKQC9j6W','演示·平台超管','admin','active',10001,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0,'demo_super@example.com',CURRENT_TIMESTAMP),
+(0,'demo_superadmin','$2a$10$408aoZNzLUsf9rCNwjY75OHs6oeSBC7XPmx0RM0BmY2tCkKQC9j6W','演示·平台超管2','admin','active',10001,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0,'demo_superadmin@example.com',CURRENT_TIMESTAMP);
 SEEDSQL
   DEMO_PSQL --file "$TMPSEED" >/dev/null || die "种入演示账号失败"
   rm -f "$TMPSEED"
