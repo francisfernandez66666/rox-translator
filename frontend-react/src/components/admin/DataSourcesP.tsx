@@ -313,7 +313,7 @@ export default function DataSourcesP() {
         </div>
       }>
         {/* 功能⑥ KB 上传奖励开关（超管） */}
-        <div style={{ border: '1px solid #e5e6eb', borderRadius: 8, padding: 12, marginBottom: 12, display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ border: '1px solid var(--adm-line)', borderRadius: 8, padding: 12, marginBottom: 12, display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 600, fontSize: 13 }}>{t('ds.kb52')}</span>
           {rewardCfg && (
             <>
@@ -341,7 +341,7 @@ export default function DataSourcesP() {
               <Button size="small" theme="primary" onClick={() => setShowForm((v) => !v)}>{showForm ? t('ds.s55') : t('ds.s56')}</Button>
             </div>
             {showForm && (
-              <div style={{ border: '1px solid #e5e6eb', borderRadius: 8, padding: 16, marginBottom: 12, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(200px,1fr))' }}>
+              <div style={{ border: '1px solid var(--adm-line)', borderRadius: 8, padding: 16, marginBottom: 12, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(200px,1fr))' }}>
                 <div><div style={{ marginBottom: 4 }}>{t('ds.s58')}</div><Input value={form.name} onChange={(v: string) => setForm((f) => ({ ...f, name: v }))} placeholder={t("ds.s57")} /></div>
                 <div><div style={{ marginBottom: 4 }}>{t('ds.s59')}</div>
                   <Select value={form.kind} onChange={(v: any) => setForm((f) => ({ ...f, kind: String(v) }))} options={[{ value: 'official_api', label: t('ds.s60') }, { value: 'limited_web', label: t('ds.s61') }, { value: 'llm_gen', label: t('ds.llm62') }]} /></div>
@@ -431,18 +431,18 @@ export default function DataSourcesP() {
         {editRow && (
           <div style={{ display: 'grid', gap: 12 }}>
             <div>
-              <div style={{ marginBottom: 4, fontSize: 13, color: '#556' }}>
+              <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>
                 {editRow.kind === 'entries' ? t('ds.s90') : t('ds.s91')}
               </div>
               <Input value={editSrc} onChange={(v: string) => setEditSrc(v)} />
             </div>
             <div>
-              <div style={{ marginBottom: 4, fontSize: 13, color: '#556' }}>
+              <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>
                 {editRow.kind === 'entries' ? t('ds.s92') : t('ds.s93')}
               </div>
               <Input value={editTgt} onChange={(v: string) => setEditTgt(v)} />
             </div>
-            <div style={{ fontSize: 13, color: '#888' }}>{t('ds.s94')}</div>
+            <div style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('ds.s94')}</div>
           </div>
         )}
       </Dialog>

@@ -190,8 +190,8 @@ export default function BrandP() {
     <Panel title={t('brand.title')}>
       <Tabs defaultValue="brand">
         <Tabs.TabPanel value="brand" label={t('brand.title')}>
-          <p style={{ fontSize: 13, color: '#667', marginBottom: 12 }}>{t('brand.hint')}</p>
-      <div style={{ fontSize: 13, color: '#335', background: '#eef4ff', border: '1px solid #c9ddff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.6 }}>
+          <p style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 12 }}>{t('brand.hint')}</p>
+      <div style={{ fontSize: 13, color: 'var(--adm-info-tx)', background: 'var(--adm-info-bg)', border: '1px solid var(--adm-info-bd)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.6 }}>
         🌟 {t('brand.featureDedicated')}
       </div>
       {/* 超管：租户选择器 */}
@@ -211,7 +211,7 @@ export default function BrandP() {
       )}
       {/* 超管：品牌定制授权开关（仅对非平台根租户生效） */}
       {isSuper && targetTenantId > 1 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f3f0ff', border: '1px solid #d6c8ff', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--adm-purp-bg)', border: '1px solid var(--adm-purp-bd)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13 }}>
           <span>{tpl('brand.grantLabel', { id: targetTenantId })}</span>
           <Switch value={brandGranted} loading={granting} onChange={(v) => toggleGrant(Boolean(v))} />
           {brandGranted && <Tag theme="success" variant="light">{t('brand.grantedTag')}</Tag>}
@@ -219,13 +219,13 @@ export default function BrandP() {
       )}
       {/* 未获得编辑权限时显示锁定提示 */}
       {!editable && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#fff7e6', border: '1px solid #ffd591', color: '#ad6800', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--adm-warn-bg)', border: '1px solid var(--adm-warn-bd)', color: 'var(--adm-warn-tx)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13 }}>
           <span>{t('brand.locked')}</span>
           {brandGranted && <Tag theme="success" variant="light">{t('brand.grantedTag')}</Tag>}
         </div>
       )}
       {!loaded ? (
-        <div style={{ color: '#889' }}>…</div>
+        <div style={{ color: 'var(--adm-faint)' }}>…</div>
       ) : (
         <div style={{ maxWidth: 560, display: 'flex', flexDirection: 'column', gap: 14 }}>
           {/* 品牌名称输入 */}
@@ -257,7 +257,7 @@ export default function BrandP() {
            <div>
              <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.domain')}</div>
                 <Input value={domain} disabled={!editable || targetTenantId === 1} onChange={(v: any) => setDomain(String(v ?? ''))} placeholder="请输入你想要的域名名称" />
-              <div style={{ fontSize: 12, color: '#889', marginTop: 4 }}>
+              <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginTop: 4 }}>
                 你将改的是 {domain || '前缀'}.lexicorn.cn
               </div>
             </div>
@@ -356,7 +356,7 @@ export default function BrandP() {
                     <Slider value={homeBgStyle.scale} min={0.5} max={3} step={0.1}
                             onChange={(v: any) => setHomeBgStyle((s) => ({ ...s, scale: Number(v) }))}
                             style={{ width: 160 }} />
-                    <span style={{ fontSize: 12, color: '#889', minWidth: 40 }}>{homeBgStyle.scale.toFixed(1)}x</span>
+                    <span style={{ fontSize: 12, color: 'var(--adm-faint)', minWidth: 40 }}>{homeBgStyle.scale.toFixed(1)}x</span>
                     <Button size="small" variant="text" onClick={() => setHomeBgStyle({ scale: 1, x: 50, y: 50, mode: 'cover' })}>
                       {t('brand.homeBgReset')}
                     </Button>
@@ -368,7 +368,7 @@ export default function BrandP() {
               )}
               <div style={{ fontSize: 13, margin: '8px 0 4px' }}>{t('brand.homeBgUrl')}</div>
               <Input value={homeBg} disabled={!editable} onChange={setHomeBg} placeholder="https://…/bg.png" />
-              <div style={{ fontSize: 12, color: '#889', marginTop: 4 }}>{t('brand.homeBgHint')}</div>
+              <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginTop: 4 }}>{t('brand.homeBgHint')}</div>
             </div>
 
            {/* 保存按钮（仅可编辑时显示） */}

@@ -140,7 +140,7 @@ export function ModelsP() {
       <h2 style={{ margin: '4px 0 12px' }}>{t('models.title')}</h2>
 
       <Panel title={t('models.routingTitle')}>
-        <div style={{ fontSize: 12, color: '#667', marginBottom: 8 }}>{t('models.onlineHint')}</div>
+        <div style={{ fontSize: 12, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('models.onlineHint')}</div>
         <div style={rowMt}>
           <Select value={routePreset} onChange={(v: any) => setRoutePreset(String(v))} placeholder={t('models.presetPlaceholder')} style={{ width: 220 }} clearable
             options={[{ label: 'OpenAI (ChatGPT)', value: 'openai' }, { label: 'Google Gemini', value: 'gemini' }, { label: 'DeepSeek', value: 'deepseek' }, { label: 'SiliconFlow', value: 'siliconflow' }, { label: 'Zhipu GLM', value: 'zhipu' }]} />
@@ -165,13 +165,13 @@ export function ModelsP() {
           <Button onClick={() => { if (routePreset) applyRoutePreset(); else setRouteForm([...routeForm, { provider: '', api_base: '', api_key: '', model: '', weight: 0 }]) }}>{t('models.addRoute')}</Button> // ★ E14：预设选择后一键添加即套用（applyRoutePreset 接入调用点）
           <Button theme="success" onClick={() => void saveRoutes()}>{t('models.saveRoutes')}</Button>
         </div>
-        <p style={{ fontSize: 12, color: '#667', margin: '8px 0 0' }}>
+        <p style={{ fontSize: 12, color: 'var(--adm-hint)', margin: '8px 0 0' }}>
           {routeForm.length ? tpl('models.routesActive', { count: routeForm.length, main: mainModel }) : t('models.routesNone')}
         </p>
       </Panel>
 
       <Panel title={t('models.llmKeyTitle')}>
-        <div style={{ fontSize: 12, color: '#667', marginBottom: 8 }}>{t('models.llmKeyHint')}</div>
+        <div style={{ fontSize: 12, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('models.llmKeyHint')}</div>
         <div style={rowMt}>
           <span style={{ fontSize: 13 }}>{t('models.translationKeyLabel')}：{keyState.translation ? `✓ ${t('models.configured')}` : `✗ ${t('models.notConfigured')}`}</span>
           {keyState.translation && <Button size="small" theme="danger" variant="outline" onClick={() => void clearTrans()}>{t('models.clearTranslation')}</Button>}
@@ -181,17 +181,17 @@ export function ModelsP() {
         <div style={rowMt}>
           <Button onClick={() => void saveEmbed()}>{t('models.saveEmbed')}</Button>
           {keyState.embedding && <Button size="small" theme="danger" variant="outline" onClick={() => void clearEmbed()}>{t('models.clearEmbed')}</Button>}
-          {keyState.embedding && <span style={{ fontSize: 12, color: '#1a7f37' }}>✓ {keyState.embeddingMasked}</span>}
+          {keyState.embedding && <span style={{ fontSize: 12, color: 'var(--adm-ok-tx)' }}>✓ {keyState.embeddingMasked}</span>}
         </div>
       </Panel>
 
       {stageCards.map((st) => (
         <Panel key={st.key} title={st.title}>
-          <div style={{ fontSize: 12, color: '#667', marginBottom: 8 }}>{st.hint}</div>
+          <div style={{ fontSize: 12, color: 'var(--adm-hint)', marginBottom: 8 }}>{st.hint}</div>
           <div style={rowMt}>
             <Select value={stForm[st.key]?.preset || ''} onChange={(v: any) => { setStForm({ ...stForm, [st.key]: { ...stForm[st.key], preset: v } }); applyStagePreset(st.key) }} placeholder={t('models.presetPlaceholder')} style={{ width: 220 }} clearable
               options={[{ label: 'OpenAI (ChatGPT)', value: 'openai' }, { label: 'Google Gemini', value: 'gemini' }, { label: 'DeepSeek', value: 'deepseek' }, { label: 'SiliconFlow', value: 'siliconflow' }, { label: 'Zhipu GLM', value: 'zhipu' }]} />
-            {stActive(st.key) && <span style={{ fontSize: 12, color: '#1a7f37' }}>✓ {t('models.stageConfigured' as never)}</span>}
+            {stActive(st.key) && <span style={{ fontSize: 12, color: 'var(--adm-ok-tx)' }}>✓ {t('models.stageConfigured' as never)}</span>}
           </div>
           <Field label={t('models.apiBase')}><Input value={String(stForm[st.key]?.api_base ?? '')} onChange={(v: any) => setStForm({ ...stForm, [st.key]: { ...stForm[st.key], api_base: v } })} placeholder={t('models.stageApiBasePlaceholder' as never)} /></Field>
           <form onSubmit={(e) => e.preventDefault()}><Field label={t('models.apiKey')}><Input type="password" autocomplete="new-password" value={String(stForm[st.key]?.api_key ?? '')} onChange={(v: any) => setStForm({ ...stForm, [st.key]: { ...stForm[st.key], api_key: v } })} placeholder={t('models.stageApiKeyPlaceholder' as never)} /></Field></form>
@@ -200,7 +200,7 @@ export function ModelsP() {
       ))}
       <div style={rowMt}>
         <Button theme="success" onClick={() => void saveStages()}>{t('models.saveStages')}</Button>
-        <span style={{ fontSize: 12, color: '#667' }}>{stageHint ? tpl('models.stageActive', { count: stageHint }) : t('models.stageNone')}</span>
+        <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{stageHint ? tpl('models.stageActive', { count: stageHint }) : t('models.stageNone')}</span>
       </div>
 
       <Panel title={t('models.policyTitle')}>

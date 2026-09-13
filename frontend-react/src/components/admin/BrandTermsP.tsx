@@ -145,11 +145,11 @@ export default function BrandTermsP(_props: Props) {
       {/* ===== 包选择 + 顶部说明 + 新增品牌名 ===== */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 13, color: '#556' }}>{t('bt.pkgLabel')}</span>
+          <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('bt.pkgLabel')}</span>
           <Select value={pkgId} onChange={(v: any) => setPkgId(Number(v ?? 0))} style={{ minWidth: 240 }}
             options={packages.map(p => ({ label: `${p.name || p.code}`, value: p.id }))} />
         </div>
-        <div style={{ fontSize: 13, color: '#667' }}>
+        <div style={{ fontSize: 13, color: 'var(--adm-hint)' }}>
           {t('bt.hint')}
         </div>
         <Button theme="primary" onClick={() => setDlg(true)}>{t('bt.new')}</Button>
@@ -172,7 +172,7 @@ export default function BrandTermsP(_props: Props) {
 
       {/* ===== 品牌名列表（按品牌分组，各语言译法一目了然） ===== */}
       {groups.length === 0 ? (
-        <div style={{ color: '#889', fontSize: 13, padding: '16px 0' }}>{pkgId <= 0 ? t('bt.needPkg') : t('bt.empty')}</div>
+        <div style={{ color: 'var(--adm-faint)', fontSize: 13, padding: '16px 0' }}>{pkgId <= 0 ? t('bt.needPkg') : t('bt.empty')}</div>
       ) : (
         <Table size="small" rowKey="brand" loading={loading} data={groups} maxHeight={520}
           columns={[
@@ -182,15 +182,15 @@ export default function BrandTermsP(_props: Props) {
                 {BRAND_LANGS.filter(lc => row.langs[lc] !== undefined).map(lc => {
                   const entry = terms.find(t => t.source_text === row.brand && t.target_lang === lc)
                   return (
-                    <span key={lc} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#f3f5f9', borderRadius: 5, padding: '2px 8px', fontSize: 12 }}>
-                      <span style={{ color: '#889', width: 26 }}>{langLabel(lc, 'zh') || lc}</span>
-                      <b style={{ color: '#2f3542' }}>{row.langs[lc]}</b>
+                    <span key={lc} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--adm-soft)', borderRadius: 5, padding: '2px 8px', fontSize: 12 }}>
+                      <span style={{ color: 'var(--adm-faint)', width: 26 }}>{langLabel(lc, 'zh') || lc}</span>
+                      <b style={{ color: 'var(--npz-text-1)' }}>{row.langs[lc]}</b>
                       {entry && <button type="button" aria-label={t('bt.editShort')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', cursor: 'pointer', color: '#4a7dff', marginInlineStart: 2 }} onClick={() => void editLang(row, entry, lc)}>{t('bt.editShort')}</button>}
                       {entry && <button type="button" aria-label={t('bt.delEntry')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', cursor: 'pointer', color: '#d45656', marginInlineStart: 2 }} onClick={() => void removeEntry(entry.id)}>✕</button>}
                     </span>
                   )
                 })}
-                <button type="button" aria-label={t('bt.addLang')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', cursor: 'pointer', color: '#889', fontSize: 12 }} onClick={() => void addSingleLang(row.brand)}>{t('bt.addLang')}</button>
+                <button type="button" aria-label={t('bt.addLang')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', cursor: 'pointer', color: 'var(--adm-faint)', fontSize: 12 }} onClick={() => void addSingleLang(row.brand)}>{t('bt.addLang')}</button>
               </div>
             ) },
           ] as never} />

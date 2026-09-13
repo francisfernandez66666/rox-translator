@@ -256,14 +256,36 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 
 /* ============ ★ F5 暗黑模式（TDesign --td-* 变量 + 自绘 CSS 双轨覆写） ============ */
 :root { --npz-page-bg: #fafbfd; --npz-surface: #ffffff; --npz-text-1: #1d2129; --npz-text-2: #5f6368; --npz-line: #e7eaf0; }
+/* ---- 管理后台语义色令牌（★ 2026-09-14 后台暗色适配）：
+   历史上 admin 组件内联硬编码 ~130 处浅色（#667 提示灰、#f7f9fc 软面板、#fff 卡片、
+   黄/蓝/紫提示盒三件套等），暗色下黑白混杂。统一收敛为语义变量：亮色值与历史逐一对应
+   （零视觉回归），暗色块整体换暗；tsx 内联样式以 var(--adm-*) 引用。 ---- */
+:root {
+  --adm-hint: #667; --adm-faint: #999; --adm-body: #333;
+  --adm-soft: #f7f9fc; --adm-line: #e3e6ef; --adm-card: #ffffff;
+  --adm-warn-bg: #fff7e6; --adm-warn-bd: #ffd591; --adm-warn-tx: #ad6800;
+  --adm-info-bg: #eef4ff; --adm-info-bd: #c9ddff; --adm-info-tx: #335;
+  --adm-purp-bg: #f3f0ff; --adm-purp-bd: #d6c8ff;
+  --adm-ok-tx: #1a7f37; --adm-ok-bg: #e8f5e9; --adm-amber-tx: #b26a00;
+}
 html[data-theme='dark'] {
   --npz-page-bg: #14161a; --npz-surface: #1d2025; --npz-text-1: #e6e8eb; --npz-text-2: #9aa0a6; --npz-line: #2c3038;
+  --adm-hint: #9aa0a6; --adm-faint: #7d8590; --adm-body: #d5d9df;
+  --adm-soft: #23262d; --adm-line: #3a3f48; --adm-card: #1d2025;
+  --adm-warn-bg: rgba(230,179,65,.10); --adm-warn-bd: rgba(230,179,65,.32); --adm-warn-tx: #e3b341;
+  --adm-info-bg: rgba(96,152,255,.10); --adm-info-bd: rgba(96,152,255,.32); --adm-info-tx: #b8c7e6;
+  --adm-purp-bg: rgba(158,120,255,.12); --adm-purp-bd: rgba(158,120,255,.34);
+  --adm-ok-tx: #4ac26b; --adm-ok-bg: rgba(74,194,107,.14); --adm-amber-tx: #e3b341;
   /* TDesign 变量轨：组件容器/文字/边框整体换暗 */
   --td-bg-color-page: #14161a; --td-bg-color-container: #1d2025; --td-bg-color-container-hover: #262a31;
+  --td-bg-color-specialcomponent: #23262d; /* 输入框/文本域底（★ D1 回归：漏配则表单控件保持白底） */
   --td-bg-color-secondarycontainer: #23262d; --td-bg-color-component: #2c3038; --td-bg-color-component-hover: #363b45;
   --td-text-color-primary: #e6e8eb; --td-text-color-secondary: #b4b9c0; --td-text-color-placeholder: #6f757e;
   --td-text-color-disabled: #55595f; --td-border-level-1-color: #2c3038; --td-border-level-2-color: #3a3f48;
   --td-component-stroke: #2c3038; --td-component-border: #3a3f48; --td-mask-active: rgba(0,0,0,.7); --td-shadow-1: 0 1px 10px rgba(0,0,0,.4);
+  /* 品牌浅色轨：菜单选中项/浅色系 Tag 底色（默认亮蓝近白 → 暗色下必须转半透明暗蓝） */
+  --td-brand-color: #5168ff; --td-brand-color-hover: #6d80ff; --td-brand-color-light: rgba(81,104,255,.16);
+  --td-brand-color-light-hover: rgba(81,104,255,.24); --td-brand-color-light-active: rgba(81,104,255,.32);
   color-scheme: dark;
 }
 html[data-theme='dark'] body { background: var(--npz-page-bg); color: var(--npz-text-1); }
@@ -271,8 +293,23 @@ html[data-theme='dark'] .app-header { background: var(--npz-surface); border-bot
 html[data-theme='dark'] .bubble { background: var(--npz-surface); border-color: var(--npz-line); }
 html[data-theme='dark'] .bubble-text code, html[data-theme='dark'] .bubble-text pre { background: #23262d; }
 html[data-theme='dark'] .bubble-text blockquote { background: rgba(47,71,245,.12); }
-html[data-theme='dark'] .admin-side { background: var(--npz-surface); }
+html[data-theme='dark'] .admin-shell { background: var(--npz-page-bg); }
+html[data-theme='dark'] .admin-side { background: var(--npz-surface); border-inline-end-color: var(--npz-line); }
 html[data-theme='dark'] .admin-side-mask { background: rgba(0,0,0,.55); }
+/* 后台自绘卡片/统计块/浮动进度卡/共享标签与下载卡（inline 语义变量之外的类级覆写） */
+html[data-theme='dark'] .panel-card, html[data-theme='dark'] .stat-card { background: var(--npz-surface); border-color: var(--npz-line); }
+html[data-theme='dark'] .ticket-progress-float { background: var(--npz-surface); border-color: var(--npz-line); }
+html[data-theme='dark'] .download-card, html[data-theme='dark'] .preview-img { background: var(--npz-surface); border-color: var(--npz-line); }
+html[data-theme='dark'] .tag { background: var(--adm-soft); border-color: var(--adm-line); color: var(--adm-body); }
+html[data-theme='dark'] .tag-file { background: rgba(96,152,255,.12); border-color: rgba(96,152,255,.3); }
+html[data-theme='dark'] .tag-lang { background: rgba(70,180,100,.14); border-color: rgba(70,180,100,.32); }
+html[data-theme='dark'] .tag-other-lang { background: rgba(158,120,255,.12); border-color: rgba(158,120,255,.3); }
+html[data-theme='dark'] .fb-hint, html[data-theme='dark'] .eb-hint, html[data-theme='dark'] .eb-old-label,
+html[data-theme='dark'] .eb-old-addr, html[data-theme='dark'] .fb-addr, html[data-theme='dark'] .fb-check { color: var(--adm-hint); }
+html[data-theme='dark'] .image-download-btn { background: var(--adm-soft); color: var(--adm-hint); }
+html[data-theme='dark'] .progress-bar-bg { background: var(--adm-line); }
+html[data-theme='dark'] .tr-translations td { border-top-color: var(--npz-line); }
+html[data-theme='dark'] .bubble .md th, html[data-theme='dark'] .bubble .md td { border-color: var(--npz-line); }
 html[data-theme='dark'] .t-card, html[data-theme='dark'] .t-dialog, html[data-theme='dark'] .t-drawer,
 html[data-theme='dark'] .t-popup__content, html[data-theme='dark'] .t-select__list, html[data-theme='dark'] .t-textarea { background: var(--npz-surface); }
 html[data-theme='dark'] .t-table, html[data-theme='dark'] .t-table th, html[data-theme='dark'] .t-table td { background: var(--npz-surface); border-color: var(--npz-line); }

@@ -28,7 +28,7 @@ type Any = Record<string, any>
 
 const rowStyle: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }
 const rowMt: any = { ...rowStyle, marginTop: 8 }
-const rowTop: any = { ...rowStyle, marginTop: 8, borderTop: '1px dashed #e0e0e0', paddingTop: 10 }
+const rowTop: any = { ...rowStyle, marginTop: 8, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }
 // resStyle 校验结果文字样式：通过=绿色，不通过=红色。
 const resStyle = (ok: boolean): any => ({ color: ok ? '#1a7f37' : '#c0392b', fontSize: 13, marginTop: 6 })
 
@@ -426,8 +426,8 @@ export function KbP() {
       <Tabs value={kbTab} onChange={(v) => setKbTab(String(v))}>
         <Tabs.TabPanel value="kb" label={`📚 ${t('kb.title')}`}>
       <Panel title={t('kb.uploadTitle')} extra={<Button theme="primary" onClick={() => setKbDlg(true)}>{t('kb.topbarUpload')}</Button>}>
-        <div style={{ ...rowStyle, marginBottom: 6 }}><span style={{ fontSize: 13, color: '#556' }}>{t('kb.uploadHint')}</span></div>
-        <div style={{ fontSize: 13, color: '#889' }}>{t('kb.uploadSameAsFrontend')}</div>
+        <div style={{ ...rowStyle, marginBottom: 6 }}><span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('kb.uploadHint')}</span></div>
+        <div style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('kb.uploadSameAsFrontend')}</div>
       </Panel>
       <Panel title={t('kb.alignTitle')}>
         <div style={rowTop}>
@@ -455,7 +455,7 @@ export function KbP() {
           </label>
           {!pForm.cross_all && (
             <>
-              <span style={{ fontSize: 13, color: '#889' }}>{tpl('kb.scopeCrossDepts', { n: (pForm.cross_orgs || []).length })}:</span>
+              <span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{tpl('kb.scopeCrossDepts', { n: (pForm.cross_orgs || []).length })}:</span>
               {deptOrgs.map((o: OrgInfo) => (
                 <label key={o.id} style={{ fontSize: 13 }}>
                   <input type="checkbox" checked={(pForm.cross_orgs || []).includes(o.id)} onChange={(e: any) => {
@@ -471,12 +471,12 @@ export function KbP() {
         </div>
       )}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-        <span style={{ fontSize: 12, color: '#889' }}>{t('kb.entriesHint')}</span>
+        <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('kb.entriesHint')}</span>
         {isSuper && <Button size="small" disabled={rebuilding} onClick={() => void rebuildIndex()}>{rebuilding ? t('kb.rebuilding') : t('kb.rebuildIndex')}</Button>}
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '10px 0 6px' }}>
-        <span style={{ fontSize: 13, color: '#556' }}>{t('kb.filterType')}</span>
+        <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('kb.filterType')}</span>
         <Select value={pkgTypeFilter} onChange={(v: any) => setPkgTypeFilter(String(v))}
           options={[
             { label: t('kb.filterAll'), value: '' },
@@ -526,7 +526,7 @@ export function KbP() {
           <summary>{t('kb.bulkImportSummary')}</summary>
           <Textarea autosize={{ minRows: 4 }} value={bulkText} onChange={(v: any) => setBulkText(v)} placeholder={t('kb.bulkPlaceholder')} />
           <Button style={{ marginTop: 6 }} onClick={() => selectedPkg != null && void bulkImport(selectedPkg)}>{t('kb.bulkImport')}</Button>
-          {bulkTextMsg && <span style={{ marginLeft: 10, fontSize: 12, color: '#1a7f37' }}>{bulkTextMsg}</span>}
+          {bulkTextMsg && <span style={{ marginLeft: 10, fontSize: 12, color: 'var(--adm-ok-tx)' }}>{bulkTextMsg}</span>}
         </details>
         <div style={{ ...rowMt, marginBottom: 8 }}>
           <Select value={String(entryFilter.layer ?? 0)} onChange={(v: any) => {
@@ -573,7 +573,7 @@ export function KbP() {
       </Dialog>
 
       <Panel title={t('kb.safetyTitle')}>
-        <div style={{ fontSize: 12, color: '#667', marginBottom: 8 }}>{t('kb.safetyHint')}</div>
+        <div style={{ fontSize: 12, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('kb.safetyHint')}</div>
         <div style={rowMt}>
           <Select value={safetyPkgId} onChange={(v: any) => applySafetyQuery({ pkg_id: Number(v), status: safetyStatusFilter, ...safetyFilter, q: safetyQ })}
             options={localePackages.map((p: Any) => ({ label: packDisplayName(p, orgMap), value: Number(p.id) }))} style={{ minWidth: 200 }} placeholder={t('kb.selectPkg')} />
@@ -588,7 +588,7 @@ export function KbP() {
             onEnter={() => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ })}
             style={{ flex: 1, minWidth: 180 }} />
           <Button size="small" theme="primary" onClick={() => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ })}>{t('kb.search')}</Button>
-          <span style={{ fontSize: 12, color: '#889' }}>{tpl('kb.safetyCount', { n: safetyTotal })}</span>
+          <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{tpl('kb.safetyCount', { n: safetyTotal })}</span>
         </div>
         <div style={rowMt}>
           <Select value={String(sf.lang)} onChange={(v: any) => setSf({ ...sf, lang: v })} options={SAFETY_LANGS} style={{ width: 110 }} />
@@ -656,7 +656,7 @@ export function KbP() {
           <Select value={String(gForm.role)} onChange={(v: any) => setGForm({ ...gForm, role: String(v) })} style={{ width: 130 }}
             options={[{ label: '只读 read', value: 'read' }, { label: '编辑 write', value: 'write' }, { label: '管理 manage', value: 'manage' }]} />
           <Button theme="primary" size="small" onClick={() => void setGrant(String(gForm.role))}>授权</Button>
-          <span style={{ fontSize: 12, color: '#889' }}>读 &lt; 写 &lt; 管理（高级别含低级别）；部门管理员及以上天然拥有全部权限</span>
+          <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>读 &lt; 写 &lt; 管理（高级别含低级别）；部门管理员及以上天然拥有全部权限</span>
         </div>
         <Table rowKey="id" size="small" data={grantList} style={{ marginTop: 10 }}
           columns={[

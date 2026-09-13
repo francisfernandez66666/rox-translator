@@ -94,7 +94,7 @@ export default function IndustriesP(_props: Props) {
 
   return (
     <>
-      <div style={{ marginBottom: 10, fontSize: 13, color: '#667' }}>
+      <div style={{ marginBottom: 10, fontSize: 13, color: 'var(--adm-hint)' }}>
         {t('ind.hint')}
       </div>
       <Button theme="primary" onClick={() => { setCode(''); setName(''); setDlg({ mode: 'create' }) }}>{t('ind.new')}</Button>
@@ -123,11 +123,11 @@ export default function IndustriesP(_props: Props) {
       {/* 新建行业弹窗 */}
       <Dialog visible={!!dlg && dlg.mode === 'create'} onClose={() => setDlg(null)} header={t('ind.newTitle')} width={440} onConfirm={doCreate}>
         <div style={{ marginBottom: 12 }}>
-          <div style={{ marginBottom: 4, fontSize: 13, color: '#556' }}>{t('ind.codeLabel')}</div>
+          <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>{t('ind.codeLabel')}</div>
           <Input value={code} onChange={(v) => setCode(String(v))} placeholder="auto / realestate / ..." />
         </div>
         <div>
-          <div style={{ marginBottom: 4, fontSize: 13, color: '#556' }}>{t('ind.nameLabel')}</div>
+          <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>{t('ind.nameLabel')}</div>
           <Input value={name} onChange={(v) => setName(String(v))} placeholder={t('ind.namePlaceholder')} />
         </div>
       </Dialog>
@@ -135,7 +135,7 @@ export default function IndustriesP(_props: Props) {
       {/* 编辑行业名弹窗 */}
       <Dialog visible={!!dlg && dlg.mode === 'edit'} onClose={() => setDlg(null)} header={t('ind.editTitle')} width={440} onConfirm={doUpdate}>
         <div>
-          <div style={{ marginBottom: 4, fontSize: 13, color: '#556' }}>{t('ind.nameLabel')}</div>
+          <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>{t('ind.nameLabel')}</div>
           <Input value={name} onChange={(v) => setName(String(v))} />
         </div>
       </Dialog>

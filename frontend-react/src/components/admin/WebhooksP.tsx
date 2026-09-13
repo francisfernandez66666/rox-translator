@@ -69,7 +69,7 @@ export function WebhooksP() {
 
   return (
     <Panel title={t('webhooks.title')} extra={<Button theme="primary" onClick={() => setDlg({ url: '', secret: '', events: 'translation.completed', max_retries: 3, retry_interval: 60 })}>＋ {t('webhooks.saveConfig')}</Button>}>
-      <p style={{ fontSize: 13, color: '#667', margin: '0 0 10px' }}>{t('webhooks.hint')}</p>
+      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 10px' }}>{t('webhooks.hint')}</p>
       <Space size={8} align="center" style={{ marginBottom: 10, flexWrap: 'wrap' }}>
         <Input value={String(dlg?.url || '')} onChange={(v) => setDlg((d) => (d ? { ...d, url: v } : d))} placeholder={t('webhooks.urlPlaceholder')} style={{ flex: 1, minWidth: 240 }} />
         <Input value={String(dlg?.secret || '')} onChange={(v) => setDlg((d) => (d ? { ...d, secret: v } : d))} placeholder={t('webhooks.secretPlaceholder')} style={{ width: 200 }} />
@@ -107,7 +107,7 @@ export function WebhooksP() {
           <Tag theme="danger" variant="light">{t('webhooks.statsDead')}: {deliveryStats.dead || 0}</Tag>
         </div>
         {deliveries.length === 0 ? (
-          <p style={{ color: '#999', textAlign: 'center', padding: 40 }}>{t('webhooks.noDeliveries')}</p>
+          <p style={{ color: 'var(--adm-faint)', textAlign: 'center', padding: 40 }}>{t('webhooks.noDeliveries')}</p>
         ) : (
           <Table rowKey="id" size="small" data={deliveries}
                  columns={[

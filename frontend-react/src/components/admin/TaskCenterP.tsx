@@ -127,15 +127,15 @@ export default function TaskCenterP() {
   return (
     <div>
       <Panel title={t('tasks.title')}>
-        <p style={{ fontSize: 13, color: '#667', margin: '0 0 12px' }}>{t('tasks.hint')}</p>
+        <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('tasks.hint')}</p>
         <Table rowKey="id" size="small" data={myRows as Any[]} columns={myCols} />
-        {!myRows.length && <div style={{ textAlign: 'center', color: '#999', padding: 16 }}>{t('tasks.empty')}</div>}
+        {!myRows.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 16 }}>{t('tasks.empty')}</div>}
       </Panel>
 
       {/* 超管任务管理 */}
       {isSuper && (
         <Panel title={t('tasks.adminTitle')} extra={<Button theme="primary" onClick={() => setDlg({ id: 0, task_type: 'daily', title: '', description: '', reward_tokens: 10000, enabled: 1, sort_order: 0 })}>＋ {t('tasks.add')}</Button>}>
-          <p style={{ fontSize: 13, color: '#667', margin: '0 0 12px' }}>{t('tasks.adminHint')}</p>
+          <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('tasks.adminHint')}</p>
           <Table rowKey="id" size="small" data={adminRows as Any[]} columns={adminCols} />
         </Panel>
       )}

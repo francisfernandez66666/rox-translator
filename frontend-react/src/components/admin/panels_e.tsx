@@ -216,9 +216,9 @@ export function OpsP() {
   return (
     <>
       <h2 style={{ margin: '4px 0 8px' }}>{t('ops.title')}</h2>
-      <p style={{ fontSize: 13, color: '#667', margin: '0 0 12px' }}>{t('ops.hint')}</p>
+      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('ops.hint')}</p>
       {isSuper && routes && (routes.routes || []).length > 0 && (
-        <div style={{ margin: '0 0 12px', fontSize: 12, color: '#556' }}>
+        <div style={{ margin: '0 0 12px', fontSize: 12, color: 'var(--adm-hint)' }}>
           <span style={{ marginRight: 8 }}>{`路由实时统计（动态权重 ${routes.dynamic_routing ? '开' : '关'} / 竞速 ${routes.hedge_enabled ? '开' : '关'}）`}</span>
           {(routes.routes || []).map((x: any) => (
             <Tag key={x.route} theme={x.err_rate > 0.2 ? 'danger' : x.err_rate > 0.05 ? 'warning' : 'success'} variant="light" style={{ marginRight: 6 }}>
@@ -250,11 +250,11 @@ export function OpsP() {
         <Button theme="primary" disabled={!isSuper} onClick={() => void save()}>{t('ops.save')}</Button>
       </div>
       {!isSuper && (
-        <p style={{ fontSize: 12, color: '#ad6800', margin: '0 0 12px', background: '#fff7e6', border: '1px solid #ffd591', borderRadius: 6, padding: '6px 10px' }}>{t('ops.superOnlyHint')}</p>
+        <p style={{ fontSize: 12, color: 'var(--adm-warn-tx)', margin: '0 0 12px', background: 'var(--adm-warn-bg)', border: '1px solid var(--adm-warn-bd)', borderRadius: 6, padding: '6px 10px' }}>{t('ops.superOnlyHint')}</p>
       )}
 
       {/* 模式定价因子 */}
-      <Panel title={t('ops.modeTitle')} extra={<span style={{ fontSize: 12, color: '#889' }}>{t('ops.modeHint')}</span>}>
+      <Panel title={t('ops.modeTitle')} extra={<span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('ops.modeHint')}</span>}>
         {['fast', 'pro'].map((m) => (
           <div key={m} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', flexWrap: 'wrap', opacity: isSuper ? 1 : 0.55 }}>
             <b style={{ width: 110 }}>{m === 'fast' ? t('ops.modeFast') : t('ops.modePro')}</b>
@@ -271,12 +271,12 @@ export function OpsP() {
       <Panel title={t('ops.promoTitle')} extra={
         <Button variant="outline" size="small" disabled={!isSuper} onClick={() => setWinDlg({ index: -1, id: '', name: '', start: '', end: '', priority: 0, tz: '', overrides: '{}' })}>{t('ops.promoAdd')}</Button>
       }>
-        <p style={{ fontSize: 12, color: '#889', margin: '0 0 8px' }}>{t('ops.promoHint')}</p>
+        <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('ops.promoHint')}</p>
         {windows.map((w, i) => (
           <div key={w.id || i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', flexWrap: 'wrap' }}>
             <code style={{ fontSize: 12 }}>{w.id}</code>
             <span style={{ width: 120 }}>{w.name || '-'}</span>
-            <span style={{ fontSize: 12, color: '#667' }}>{w.start} ~ {w.end}</span>
+            <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{w.start} ~ {w.end}</span>
             <Tag variant="outline">p={w.priority}</Tag>
             {w.active && <Tag theme="success">{t('ops.promoActive')}</Tag>}
             <Button size="small" variant="outline" disabled={!isSuper} onClick={() => setWinDlg({ index: i, id: w.id, name: w.name, start: w.start, end: w.end, priority: w.priority, tz: w.tz || '', overrides: JSON.stringify(w.overrides || {}) })}>{t('ops.promoEdit')}</Button>
@@ -312,7 +312,7 @@ export function OpsP() {
       <Panel title={t('ops.taskTitle')}>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', opacity: isSuper ? 1 : 0.55 }}>
           <Field label={t('ops.taskEnabled')}><Switch disabled={!isSuper} value={!!pol.task.enabled} onChange={(v: any) => setTask({ enabled: !!v })} /></Field>
-          <span style={{ fontSize: 12, color: '#889', maxWidth: 420, lineHeight: 1.7 }}>{t('ops.taskHint')}</span>
+          <span style={{ fontSize: 12, color: 'var(--adm-faint)', maxWidth: 420, lineHeight: 1.7 }}>{t('ops.taskHint')}</span>
         </div>
       </Panel>
 
@@ -383,10 +383,10 @@ export function OpsP() {
             </Field>
             <Field label={t('ops.promoPriority')}><NumInput value={winDlg.priority} onChange={(n) => setWinDlg({ ...winDlg, priority: n })} /></Field>
             <Field label={t('ops.foTitle')}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, border: '1px solid #e3e6ef', borderRadius: 8, padding: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, border: '1px solid var(--adm-line)', borderRadius: 8, padding: 8 }}>
                 {OV_FIELDS.map((f) => (
                   <label key={f.path} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                    <span style={{ minWidth: 118, color: '#556' }}>{f.label}</span>
+                    <span style={{ minWidth: 118, color: 'var(--adm-hint)' }}>{f.label}</span>
                     {f.kind === 'bool' ? (
                       <Select size="small" style={{ width: 90 }} value={ovGet(ovParse(), f.path)}
                               onChange={(v: any) => ovPatch(f, String(v ?? ''))}
@@ -400,19 +400,19 @@ export function OpsP() {
               </div>
             </Field>
             <details>
-              <summary style={{ fontSize: 12, color: '#889', cursor: 'pointer' }}>{t('ops.foRaw')}</summary>
-              {ovHasExtra && <p style={{ fontSize: 12, color: '#c66900', margin: '4px 0' }}>{t('ops.foExtraKeys')}</p>}
+              <summary style={{ fontSize: 12, color: 'var(--adm-faint)', cursor: 'pointer' }}>{t('ops.foRaw')}</summary>
+              {ovHasExtra && <p style={{ fontSize: 12, color: 'var(--adm-amber-tx)', margin: '4px 0' }}>{t('ops.foExtraKeys')}</p>}
               <Textarea value={winDlg.overrides} onChange={(v) => setWinDlg({ ...winDlg, overrides: v as string })} />
             </details>
-            <p style={{ fontSize: 12, color: '#889', margin: 0 }}>{t('ops.promoOverridesHint')}</p>
-            <code style={{ fontSize: 11, color: '#5b6270', background: '#f4f6fa', borderRadius: 6, padding: '6px 8px', wordBreak: 'break-all' }}>{t('ops.promoOverridesExample')}</code>
-            <div style={{ borderTop: '1px dashed #dbe0ea', paddingTop: 10 }}>
-              <div style={{ fontWeight: 600, fontSize: 13, color: '#455a64', marginBottom: 6 }}>{t('ops.promoFactorsTitle')}</div>
-              <div style={{ maxHeight: 220, overflow: 'auto', border: '1px solid #e3e6ef', borderRadius: 8 }}>
+            <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: 0 }}>{t('ops.promoOverridesHint')}</p>
+            <code style={{ fontSize: 11, color: 'var(--adm-hint)', background: 'var(--adm-soft)', borderRadius: 6, padding: '6px 8px', wordBreak: 'break-all' }}>{t('ops.promoOverridesExample')}</code>
+            <div style={{ borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--adm-hint)', marginBottom: 6 }}>{t('ops.promoFactorsTitle')}</div>
+              <div style={{ maxHeight: 220, overflow: 'auto', border: '1px solid var(--adm-line)', borderRadius: 8 }}>
                 {OVERRIDE_FACTORS.map((f) => (
-                  <div key={f.factor} style={{ display: 'flex', gap: 8, padding: '5px 10px', fontSize: 12, borderBottom: '1px solid #f0f2f7' }}>
+                  <div key={f.factor} style={{ display: 'flex', gap: 8, padding: '5px 10px', fontSize: 12, borderBottom: '1px solid var(--adm-line)' }}>
                     <code style={{ color: 'var(--td-brand-color-active, #1f33d6)', minWidth: 240, flexShrink: 0 }}>{f.factor}</code>
-                    <span style={{ color: '#667' }}>{f.formula}</span>
+                    <span style={{ color: 'var(--adm-hint)' }}>{f.formula}</span>
                   </div>
                 ))}
               </div>

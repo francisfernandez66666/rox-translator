@@ -29,12 +29,12 @@ export function WorkflowP() {
   return (
     <>
       <h2 style={{ margin: '4px 0 8px' }}>{t('workflow.title')}</h2>
-      <p style={{ fontSize: 13, color: '#667', margin: '0 0 12px' }}>{t('workflow.hint')}</p>
+      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('workflow.hint')}</p>
       {steps.map((s, i) => (
         <div key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0' }}>
           <Switch value={!!s.enable} onChange={(v: any) => setSteps(steps.map((x, j) => (j === i ? { ...x, enable: !!v } : x)))} />
           <span style={{ fontSize: 14 }}>{s.name}</span>
-          <code style={{ fontSize: 12, color: '#889' }}>{s.key}</code>
+          <code style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{s.key}</code>
         </div>
       ))}
       <Button theme="primary" style={{ marginTop: 8 }} onClick={async () => toastResp(await flowSave(steps as never), t('workflow.savedFlow'))}>{t('workflow.saveFlow')}</Button>

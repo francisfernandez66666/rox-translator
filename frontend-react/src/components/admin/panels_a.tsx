@@ -46,9 +46,9 @@ function shortDiffJSON(s: string): string {
 /** 指标卡片组件：仅做展示，value 可直接为 React 节点 */
 function HealthCard({ value, label }: { value: React.ReactNode; label: string }) {
   return (
-    <div style={{ minWidth: 120, border: '1px solid #e3e6ef', borderRadius: 8, padding: '10px 14px' }}>
+    <div style={{ minWidth: 120, border: '1px solid var(--adm-line)', borderRadius: 8, padding: '10px 14px' }}>
       <b style={{ fontSize: 18, display: 'block' }}>{value}</b>
-      <span style={{ fontSize: 12, color: '#889' }}>{label}</span>
+      <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{label}</span>
     </div>
   )
 }
@@ -142,7 +142,7 @@ export default function Overview() {
             columns={[
               { colKey: 'created_at', title: t('overview.colTime'), width: 165, cell: ({ row }: any) => fmtTime(row.created_at) },
               { colKey: 'tenant', title: t('audit.tenant'), width: 130, cell: ({ row }: any) => (
-                <>{row.tenant_name || '—'}{row.username && <span style={{ color: '#999' }}> @{row.username}</span>}</>
+                <>{row.tenant_name || '—'}{row.username && <span style={{ color: 'var(--adm-faint)' }}> @{row.username}</span>}</>
               ) },
               { colKey: 'action', title: t('overview.colAction'), width: 150, cell: ({ row }: any) => auditActionLabel(row.action) },
               { colKey: 'resource', title: t('overview.colResource'), width: 110 },
@@ -459,7 +459,7 @@ export function AlertsP() {
               </Space>
               : <Tag theme="success">{t('alerts.resolved')}</Tag> },
         ] as never} />
-      {!viewRows.length && <div style={{ textAlign: 'center', color: '#999', padding: 12 }}>{t('alerts.empty')}</div>}
+      {!viewRows.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 12 }}>{t('alerts.empty')}</div>}
 
       {/* ★ F9：静音时长选择弹层 */}
       <Dialog header={`${t('alerts.silenceTitle')}（${silDlg?.kind ?? ''}@#${silDlg?.tenant_id ?? ''}）`} visible={!!silDlg} onClose={() => setSilDlg(null)}
@@ -478,17 +478,17 @@ export function AlertsP() {
 
       {/* 注册与触达配置区域 */}
       <Panel title={t('packages.regNotifyTitle')}>
-        <div style={{ fontSize: 13, color: '#889', marginBottom: 8 }}>{t('packages.regNotifyHint')}</div>
+        <div style={{ fontSize: 13, color: 'var(--adm-faint)', marginBottom: 8 }}>{t('packages.regNotifyHint')}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <Switch value={regCfg.email_verify_enabled === '1' || regCfg.email_verify_enabled === true} onChange={(v) => setSwitch('email_verify_enabled', v as boolean)} />
-          <span style={{ fontSize: 13, color: '#556' }}>{t('packages.emailVerify')}</span>
+          <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.emailVerify')}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <Switch value={regCfg.email_notify_enabled === '1' || regCfg.email_notify_enabled === true} onChange={(v) => setSwitch('email_notify_enabled', v as boolean)} />
-          <span style={{ fontSize: 13, color: '#556' }}>{t('packages.emailNotify')}</span>
+          <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.emailNotify')}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <span style={{ fontSize: 13, color: '#556', minWidth: 130 }}>{t('packages.captchaProvider')}</span>
+          <span style={{ fontSize: 13, color: 'var(--adm-hint)', minWidth: 130 }}>{t('packages.captchaProvider')}</span>
           <Select value={String(regCfg.captcha_provider || '')} onChange={(v) => setRegCfg((p) => ({ ...p, captcha_provider: v as string }))} style={{ width: 160 }}
             options={[{ label: t('packages.captchaOff'), value: '' }, { label: 'Turnstile', value: 'turnstile' }]} />
         </div>
@@ -553,14 +553,14 @@ export function AuditP() {
   return (
     <Panel title={t('audit.title')}
       extra={<Button onClick={exportCsv}>{t('audit.export')}</Button>}>
-      <p className="ad-hint" style={{ fontSize: 13, color: '#889', margin: '0 0 8px' }}>{t('audit.hint')}</p>
+      <p className="ad-hint" style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('audit.hint')}</p>
       {/* 筛选条件：操作类型、日期范围 */}
       <Space style={{ marginBottom: 8 }}>
         <Select value={fAction} onChange={(v) => setFAction(v as string)} style={{ width: 180 }}
           options={[{ label: t('audit.allActions'), value: '' }, ...actions.map((a) => ({ label: auditActionLabel(a), value: a }))]} />
-        <input type="date" value={fFrom} onChange={(e) => setFFrom(e.target.value)} style={{ height: 30, border: '1px solid #dcdcdc', borderRadius: 8, padding: '0 8px', width: 150 }} />
-        <span style={{ color: '#999' }}>→</span>
-        <input type="date" value={fTo} onChange={(e) => setFTo(e.target.value)} style={{ height: 30, border: '1px solid #dcdcdc', borderRadius: 8, padding: '0 8px', width: 150 }} />
+        <input type="date" value={fFrom} onChange={(e) => setFFrom(e.target.value)} style={{ height: 30, border: '1px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
+        <span style={{ color: 'var(--adm-faint)' }}>→</span>
+        <input type="date" value={fTo} onChange={(e) => setFTo(e.target.value)} style={{ height: 30, border: '1px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
         <Button onClick={load}>{t('common.refresh')}</Button>
       </Space>
 
@@ -577,7 +577,7 @@ export function AuditP() {
               ? tpl('overview.diffOldNew', { old: shortDiffJSON(row.before_val), new: shortDiffJSON(row.after_val) })
               : '—' },
         ] as never} />
-      {!rows.length && <div style={{ textAlign: 'center', color: '#999', padding: 12 }}>{t('audit.empty')}</div>}
+      {!rows.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 12 }}>{t('audit.empty')}</div>}
     </Panel>
   )
 }
@@ -617,7 +617,7 @@ export function UsageP() {
   const meCards = (d: Any) => !d ? <Empty description="—" /> : (
     <div className="stat-grid">
       {Object.entries(d).filter(([, v]) => typeof v !== 'object').map(([k, v]) => (
-        <div key={k} className="stat-card"><div style={{ fontSize: 12, color: '#889' }}>{k}</div><b>{fmtNum(Number(v))}</b></div>
+        <div key={k} className="stat-card"><div style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{k}</div><b>{fmtNum(Number(v))}</b></div>
       ))}
     </div>
   )
@@ -625,7 +625,7 @@ export function UsageP() {
   /** 系统用量：组织下用户成本明细表 + 合计 */
   const orgTable = (d: Any) => !d ? <Empty description="—" /> : (
     <div>
-      <p style={{ fontSize: 13, color: '#666', margin: '0 0 8px' }}>{tpl('usage.orgTotal', { n: fmtNum(d.total || 0) })}</p>
+      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 8px' }}>{tpl('usage.orgTotal', { n: fmtNum(d.total || 0) })}</p>
       <Table rowKey="id" size="small" maxHeight={520} data={d.users || []}
         columns={[
           { colKey: 'username', title: t('usage.colUser'), width: 160 },
@@ -655,7 +655,7 @@ export function UsageP() {
   return (
     <Panel title={t('usage.dashboardTitle')}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, color: '#667' }}>{t('usage.dateQuery')}</span>
+        <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('usage.dateQuery')}</span>
         {/* 腾讯 TDesign 日期范围选择器（2026-09-05）：任选起止日期 → 分别写入 usageFrom/usageTo，
             空=累计+当日口径（后端 from/to 均缺省）；单日区间可视同按日查询 */}
         <DateRangePicker
@@ -716,7 +716,7 @@ export function InvitesP() {
   return (
     <Panel title={t('invites.title')}
       extra={<Button theme="primary" onClick={() => { setCode(''); setTenantId(0); setDlg(true) }}>{t('invites.create')}</Button>}>
-      <p className="ad-hint" style={{ fontSize: 13, color: '#889', margin: '0 0 8px' }}>{t('invites.hint')}</p>
+      <p className="ad-hint" style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('invites.hint')}</p>
       {/* 邀请码列表表格 */}
       <Table rowKey="id" size="small" data={rows}
         columns={[
@@ -727,7 +727,7 @@ export function InvitesP() {
           { colKey: 'created_at', title: t('invites.colCreatedAt'), width: 165, cell: ({ row }: any) => fmtTime(row.created_at) },
           { colKey: 'used_at', title: t('invites.colUsedAt'), width: 165, cell: ({ row }: any) => fmtTime(row.used_at) },
         ] as never} />
-      {!rows.length && <div style={{ textAlign: 'center', color: '#999', padding: 12 }}>{t('invites.empty')}</div>}
+      {!rows.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 12 }}>{t('invites.empty')}</div>}
 
       {/* 创建邀请码弹窗 */}
       <Dialog visible={dlg} onClose={() => setDlg(false)} header={t('invites.create')} onConfirm={async () => {
@@ -793,7 +793,7 @@ export function AgreementsP() {
 
   return (
     <Panel title={t('agreements.title')}>
-      <div style={{ color: '#666', marginBottom: 12 }}>{t('agreements.desc')}</div>
+      <div style={{ color: 'var(--adm-hint)', marginBottom: 12 }}>{t('agreements.desc')}</div>
       <div style={{ marginBottom: 12 }}>{tpl('agreements.total', { n: rows.length, m: signed })}</div>
       <Table rowKey="id" size="small" loading={loading} data={rows as never} columns={columns} />
     </Panel>

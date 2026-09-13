@@ -155,10 +155,10 @@ export function ApiKeysP() {
         </Space>
       }>
         {!!newKey && (
-          <div style={{ background: '#fff8e1', border: '1px solid #ffe082', borderRadius: 8, padding: 10, marginBottom: 10 }}>
+          <div style={{ background: 'var(--adm-warn-bg)', border: '1px solid var(--adm-warn-bd)', borderRadius: 8, padding: 10, marginBottom: 10 }}>
             ⚠️ {t('apikeys.newKeyOnce')}：<b style={{ userSelect: 'all' }}>{newKey}</b>
             <Button size="small" style={{ marginLeft: 8 }} onClick={copyNewKey}>📋 {t('apikeys.copy')}</Button>
-            {copied && <span style={{ fontSize: 12, color: '#667' }}> {t('apikeys.copied')}</span>}
+            {copied && <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}> {t('apikeys.copied')}</span>}
           </div>
         )}
         <Space size={8} align="center">
@@ -192,7 +192,7 @@ export function ApiKeysP() {
 
       {isSuper && docsCardOpen && (
         <Panel title={t('docsEdit.title')}>
-          <div style={{ fontSize: 13, color: '#667', marginBottom: 8 }}>{t('docsEdit.hint')}</div>
+          <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('docsEdit.hint')}</div>
           <Space size={6} style={{ marginBottom: 8 }}>
             <Button size="small" theme={docsLang === 'zh' ? 'primary' : 'default'} onClick={() => setDocsLang('zh')}>{t('docsEdit.langZh')}</Button>
             <Button size="small" theme={docsLang === 'en' ? 'primary' : 'default'} onClick={() => setDocsLang('en')}>{t('docsEdit.langEn')}</Button>
@@ -208,7 +208,7 @@ export function ApiKeysP() {
             </label>
             <Button onClick={exportDocs}>⬇️ {t('docsEdit.export')}</Button>
             <Button theme="danger" onClick={resetDocs}>↺ {t('docsEdit.reset')}</Button>
-            {docsDefaultBadge && <span style={{ fontSize: 12, color: '#667' }}>{t('docsEdit.isDefault')}</span>}
+            {docsDefaultBadge && <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('docsEdit.isDefault')}</span>}
           </Space>
         </Panel>
       )}

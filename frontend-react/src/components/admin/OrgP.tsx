@@ -351,7 +351,7 @@ export function OrgP() {
     <Tabs value={tab} onChange={(v) => setTab(v as 'org' | 'invite')}>
       <Tabs.TabPanel value="org" label={t('org.tabOrg')}>
         <Panel title={t('org.title')}>
-      <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>{t('org.treeHint')}</p>
+      <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 12px' }}>{t('org.treeHint')}</p>
 
       {myLevel >= 3 && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
@@ -381,7 +381,7 @@ export function OrgP() {
             <div
               key={o.id}
               onClick={() => selectOrg(o.id)}
-              style={{ padding: `8px 10px 8px ${8 + o._depth * 18}px`, borderRadius: 8, cursor: 'pointer', margin: '4px 0', background: selectedOrg === o.id ? '#e8f3ff' : '#fff', border: '1px solid #eef0f3', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
+              style={{ padding: `8px 10px 8px ${8 + o._depth * 18}px`, borderRadius: 8, cursor: 'pointer', margin: '4px 0', background: selectedOrg === o.id ? 'var(--adm-info-bg)' : 'var(--adm-card)', border: '1px solid var(--adm-line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
             >
               <span>
                 <span style={{ opacity: 0.6, marginRight: 4 }}>⠿</span>
@@ -424,7 +424,7 @@ export function OrgP() {
           <h3 style={{ margin: '0 0 4px' }}>
             {selectedOrg === 0 ? tpl('org.allUsersRootTpl', { name: rootOrgName }) : tpl('org.usersInChildren', { name: flatOrgs.find((x) => x.id === selectedOrg)?.name || '' })}
           </h3>
-          <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>{t('org.usersHint')}</p>
+          <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 12px' }}>{t('org.usersHint')}</p>
           <Table rowKey="id" size="small" maxHeight={360} data={orgUserList}
                  columns={[
                    { colKey: 'id', title: t('org.colId'), width: 60 },
@@ -452,9 +452,9 @@ export function OrgP() {
                      </Space>
                    ) },
                  ] as never} />
-          {!orgUserList.length && <div style={{ fontSize: 12, color: '#999', padding: 8 }}>{t('org.noUsers')}</div>}
+          {!orgUserList.length && <div style={{ fontSize: 12, color: 'var(--adm-faint)', padding: 8 }}>{t('org.noUsers')}</div>}
 
-          <div style={{ marginTop: 16, border: '1px solid #e3e6ef', borderRadius: 8, padding: 14 }}>
+          <div style={{ marginTop: 16, border: '1px solid var(--adm-line)', borderRadius: 8, padding: 14 }}>
             <h3 style={{ margin: '0 0 10px' }}>{tpl('org.addUser', { org: addUserHeading })}</h3>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
               <Input value={String(nu.username || '')} placeholder={t('org.usernamePlaceholder')} onChange={(v) => setNu((n: Any) => ({ ...n, username: v }))} style={{ flex: 1, minWidth: 140 }} />
@@ -462,12 +462,12 @@ export function OrgP() {
               <Input value={String(nu.display_name || '')} placeholder={t('org.displayNamePlaceholder')} onChange={(v) => setNu((n: Any) => ({ ...n, display_name: v }))} style={{ flex: 1, minWidth: 140 }} />
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <span style={{ fontSize: 12, color: '#555' }}>{t('org.orgLabel')}</span>
+              <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('org.orgLabel')}</span>
               <Select value={nuOrgId} onChange={onNuOrgChange} style={{ flex: 1, minWidth: 160 }} options={orgSelectOptions} />
-              <span style={{ fontSize: 12, color: '#555' }}>{t('org.roleLabel')}</span>
+              <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('org.roleLabel')}</span>
               <Select value={String(nu.role)} onChange={(v) => setNu((n: Any) => ({ ...n, role: v }))}
                       options={nuRoleOptions.map((r) => ({ label: t('users.role.' + r), value: r }))} />
-              <span style={{ fontSize: 12, color: '#888', flex: 1, minWidth: 120 }}>{t('org.cascadeHint')}</span>
+              <span style={{ fontSize: 12, color: 'var(--adm-faint)', flex: 1, minWidth: 120 }}>{t('org.cascadeHint')}</span>
               <Button theme="primary" disabled={creating} onClick={createUser}>{creating ? t('org.creating') : t('org.addUserBtn')}</Button>
               {myLevel >= 3 && (
                 <>
@@ -501,8 +501,8 @@ export function OrgP() {
               onConfirm={saveBudget}>
         {budgetModal && (
           <>
-            <p style={{ fontSize: 12, color: '#888', margin: '0 0 10px' }}>{tpl('org.budgetHint', { used: fmtNumShort(budgetModal.used) })}</p>
-            <label style={{ display: 'block', marginBottom: 4, fontSize: 12, color: '#555' }}>{t('org.budgetLimit')}</label>
+            <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 10px' }}>{tpl('org.budgetHint', { used: fmtNumShort(budgetModal.used) })}</p>
+            <label style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--adm-hint)' }}>{t('org.budgetLimit')}</label>
             <Input type="number" value={num(budgetInput)} placeholder={t('org.budgetPlaceholder')} onChange={(v) => setBudgetInput(Number(v))} />
           </>
         )}
@@ -512,7 +512,7 @@ export function OrgP() {
               header={`🎟️ ${t('org.inviteTitle')} · ${inviteModal?.name || ''}`} width={440}>
         {inviteModal && (
           <>
-            <p style={{ fontSize: 12, color: '#888', margin: '0 0 10px' }}>{t('org.inviteHint')}</p>
+            <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 10px' }}>{t('org.inviteHint')}</p>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
               <Input value={inviteCodeInput} placeholder={t('org.inviteInputPlaceholder')} onChange={(v) => setInviteCodeInput(v)} style={{ flex: 1 }} />
               <Button theme="primary" disabled={!inviteCodeInput.trim()} onClick={createInvite}>➕ {t('org.inviteCreate')}</Button>
@@ -523,7 +523,7 @@ export function OrgP() {
                        { colKey: 'code', title: t('org.inviteCode'), cell: ({ row }: any) => <code>{row.code}</code> },
                        { colKey: 'status', title: t('org.inviteStatus'), cell: ({ row }: any) => (Number(row.used_count) > 0 ? tpl('org.inviteUsed', { n: row.used_count }) : t('org.inviteUnused')) },
                      ] as never} />
-            ) : <p style={{ fontSize: 12, color: '#999' }}>{t('org.inviteNoCodes')}</p>}
+            ) : <p style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('org.inviteNoCodes')}</p>}
           </>
         )}
       </Dialog>

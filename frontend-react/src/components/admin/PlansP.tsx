@@ -310,20 +310,20 @@ export function PlansP() {
       {!isSuper && (
         <Panel title={t('plans.nav.current')}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10 }}>
-            <div style={{ background: '#f7f9fc', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtNum(pkg.balance_tokens as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('usage.currentBalance')}</span>
+            <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtNum(pkg.balance_tokens as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('usage.currentBalance')}</span>
             </div>
-            <div style={{ background: '#f7f9fc', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: '#e65100' }}>{fmtNum(pkg.sub_grants_left as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('plans.balanceGrants')}</span>
+            <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <b style={{ fontSize: 20, color: 'var(--adm-amber-tx)' }}>{fmtNum(pkg.sub_grants_left as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balanceGrants')}</span>
             </div>
-            <div style={{ background: '#f7f9fc', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: '#2e7d32' }}>{fmtNum(pkg.permanent_balance as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('plans.balancePermanent')}</span>
+            <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <b style={{ fontSize: 20, color: 'var(--adm-ok-tx)' }}>{fmtNum(pkg.permanent_balance as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balancePermanent')}</span>
             </div>
-            <div style={{ background: '#f7f9fc', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtNum(pkg.tokens_used_month as number)}</b><span style={{ fontSize: 12, color: '#78909c' }}>{t('plans.usedMonth')}</span>
+            <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtNum(pkg.tokens_used_month as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.usedMonth')}</span>
             </div>
           </div>
-          <div style={{ marginTop: 10, fontSize: 13, color: '#667' }}>
+          <div style={{ marginTop: 10, fontSize: 13, color: 'var(--adm-hint)' }}>
             {tpl('billing.myPackageCode', { code: (pkg.package_code as string) || '—' })}
             {pkgExpiresLabel ? ` · ${t('plans.expiresAt')}: ${pkgExpiresLabel}` : ''}
             {' · '}{tpl('billing.myPackageBalance', { balance: pkg.balance_sentences_approx ?? pkg.sentence_balance ?? '—' })}
@@ -333,7 +333,7 @@ export function PlansP() {
             const hasPlan = !!(pkg.package_code && pkg.package_code !== 'trial')
             if (total > 0 || hasPlan) return null
             return (
-              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: '#fff7e6', border: '1px solid #ffd591', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
+              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--adm-warn-bg)', border: '1px solid var(--adm-warn-bd)', fontSize: 13, color: 'var(--adm-warn-tx)', lineHeight: 1.7 }}>
                 {t('plans.exhaustedHint')}
                 <Space size={6} style={{ marginTop: 6 }}>
                   <Button size="small" theme="warning" onClick={() => { document.getElementById('plans-shop')?.scrollIntoView({ behavior: 'smooth' }) }}>{t('plans.goSubscribe')}</Button>
@@ -349,13 +349,13 @@ export function PlansP() {
         <Panel id="plans-shop" title={t('plans.nav.shop')}>
           {planGroups.map((g) => (
             <div key={g.type}>
-              <div style={{ fontWeight: 600, fontSize: 14, color: '#455a64', margin: '10px 0 6px' }}>{g.title}</div>
+              <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--adm-hint)', margin: '10px 0 6px' }}>{g.title}</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 12 }}>
                 {g.items.map((pl) => (
-                  <div key={pl.id} style={{ border: '1px solid #e3e6ef', borderRadius: 8, padding: 14, display: 'flex', flexDirection: 'column', gap: 6, background: '#fff' }}>
+                  <div key={pl.id} style={{ border: '1px solid var(--adm-line)', borderRadius: 8, padding: 14, display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--adm-card)' }}>
                     <div style={{ fontWeight: 600, fontSize: 14 }}>{pl.name}</div>
-                    <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--td-brand-color-active, #1f33d6)' }}>¥{pl.price_money}<small style={{ fontSize: 12, color: '#90a4ae', fontWeight: 400 }}>{pl.ptype === 'paid' ? ` /${pl.duration_days}d` : ''}</small></div>
-                    <ul style={{ margin: '0 0 4px 16px', padding: 0, fontSize: 13, color: '#607d8b', lineHeight: 1.7 }}>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--td-brand-color-active, #1f33d6)' }}>¥{pl.price_money}<small style={{ fontSize: 12, color: 'var(--adm-faint)', fontWeight: 400 }}>{pl.ptype === 'paid' ? ` /${pl.duration_days}d` : ''}</small></div>
+                    <ul style={{ margin: '0 0 4px 16px', padding: 0, fontSize: 13, color: 'var(--adm-hint)', lineHeight: 1.7 }}>
                       <li>{tpl('billing.pkgSentences', { n: pl.sentences })}</li>
                       <li>{t('packages.type.' + pl.ptype)}</li>
                     </ul>
@@ -365,7 +365,7 @@ export function PlansP() {
                     }}>{isUpgradePlan(pl) ? t('plans.upgrade') : t('billing.subscribeNow')}</Button>
                   </div>
                 ))}
-                {!g.items.length && <div style={{ color: '#999', fontSize: 13 }}>{t('billing.noPlans')}</div>}
+                {!g.items.length && <div style={{ color: 'var(--adm-faint)', fontSize: 13 }}>{t('billing.noPlans')}</div>}
               </div>
             </div>
           ))}
@@ -374,7 +374,7 @@ export function PlansP() {
 
       {!isSuper && (
         <Panel id="plans-topup" title={t('plans.nav.topup')}>
-          <div style={{ fontSize: 13, color: '#667', marginBottom: 8 }}>{t('billing.onlineTopUpHint')}</div>
+          <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('billing.onlineTopUpHint')}</div>
           <Space size={8} align="center">
             <Select value={chForm.channel} onChange={(v) => setChForm({ ...chForm, channel: v as string })} style={{ width: 200 }} options={chOptions} />
             <Input type="number" value={String(chForm.tokens)} onChange={(v) => setChForm({ ...chForm, tokens: Number(v) || 0 })} placeholder={t('billing.tokenCount')} style={{ width: 180 }} />
@@ -398,7 +398,7 @@ export function PlansP() {
                        ? <Button size="small" variant="text" onClick={() => setInvDlg({ order: row, title: '', taxNo: '' })}>开发票</Button>
                        : (row.status === 'pending' ? <Button size="small" theme="success" variant="outline" onClick={() => resumePay(row)}>{t('plans.orderContinue')}</Button> : null) },
                ] as never} />
-        {!orders.length && <div style={{ textAlign: 'center', color: '#999', padding: 8 }}>{t('plans.noOrder')}</div>}
+        {!orders.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 8 }}>{t('plans.noOrder')}</div>}
         <h4 style={{ margin: '14px 0 6px' }}>{t('billing.invoiceMgmt')}</h4>
         <Table rowKey="id" size="small" maxHeight={220} data={invoices}
                columns={[
@@ -406,11 +406,11 @@ export function PlansP() {
                  { colKey: 'title', title: t('billing.colTitle') },
                  { colKey: 'amount_money', title: t('billing.colAmountYuan'), width: 110 },
                ] as never} />
-        {!invoices.length && <div style={{ textAlign: 'center', color: '#999', padding: 8 }}>{t('billing.noInvoices')}</div>}
+        {!invoices.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 8 }}>{t('billing.noInvoices')}</div>}
       </Panel>
 
       <Panel title={t('plans.nav.quota')}>
-        <div style={{ fontSize: 13, color: '#667', marginBottom: 8 }}>{t('billing.quotaHint')}</div>
+        <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('billing.quotaHint')}</div>
         <Space size={8} align="center">
           <Input type="number" value={num(quotaForm.qps)} onChange={(v) => setQuotaForm({ ...quotaForm, qps: Number(v) || 0 })} placeholder={t('billing.quotaQps')} style={{ width: 140 }} />
           <Input type="number" value={num(quotaForm.concurrent)} onChange={(v) => setQuotaForm({ ...quotaForm, concurrent: Number(v) || 0 })} placeholder={t('billing.quotaConcurrent')} style={{ width: 140 }} />
@@ -429,21 +429,21 @@ export function PlansP() {
           </Space>
           <div style={{ marginTop: 12 }}>
             <Space size={8} align="center">
-              <span style={{ fontSize: 13, color: '#556' }}>{t('packages.trialTokensLabel')}</span>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.trialTokensLabel')}</span>
               <Input type="number" value={num(freeTrialTokens)} onChange={(v) => setFreeTrialTokens(Number(v) || 0)} style={{ width: 120 }} />
-              <span style={{ fontSize: 13, color: '#556' }}>{t('packages.trialDaysLabel')}</span>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.trialDaysLabel')}</span>
               <Input type="number" value={num(freeTrialDays)} onChange={(v) => setFreeTrialDays(Number(v) || 0)} style={{ width: 80 }} />
-              <span style={{ fontSize: 13, color: '#556', marginLeft: 12 }}>{t('packages.markupLabel')}</span>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('packages.markupLabel')}</span>
               <Input type="number" value={num(markupMultiplier)} onChange={(v) => setMarkupMultiplier(Math.max(0, Number(v) || 0))} style={{ width: 120 }} />
-              <span style={{ fontSize: 13, color: '#556', marginLeft: 12 }}>{t('packages.rateLabel')}</span>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('packages.rateLabel')}</span>
               <Input type="number" value={num(tokensPerSentence)} onChange={(v) => setTokensPerSentence(Math.max(0, Number(v) || 0))} style={{ width: 120 }} />
               <Button onClick={saveBillingParams}>{t('common.save')}</Button>
             </Space>
-            <div style={{ fontSize: 12, color: '#889', marginTop: 6 }}>{t('packages.markupHint')}</div>
+            <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginTop: 6 }}>{t('packages.markupHint')}</div>
           </div>
           <div style={{ marginTop: 12 }}>
             <Space size={8} align="center">
-              <span style={{ fontSize: 13, color: '#556' }}>{t('packages.payModeTitle')}</span>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.payModeTitle')}</span>
               <Select value={payModeCfg} onChange={(v) => setPayModeCfg(v as string)} style={{ width: 200 }}
                       options={[{ label: t('packages.payMock'), value: 'mock' }, { label: t('packages.paySdk'), value: 'sdk' }, { label: t('packages.payStaticQR'), value: 'static_qr' }]} />
               <Button onClick={savePayMode}>{t('common.save')}</Button>
@@ -451,11 +451,11 @@ export function PlansP() {
           </div>
           {payModeCfg === 'static_qr' && (
             <div style={{ marginTop: 8 }}>
-              <div style={{ fontSize: 12, color: '#889', marginBottom: 4 }}>{t('packages.staticQRHint')}</div>
+              <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginBottom: 4 }}>{t('packages.staticQRHint')}</div>
               <Space size={8} align="center">
                 <Input value={staticQRImage} onChange={(v) => setStaticQRImage(v)} placeholder={t('packages.staticQRPlaceholder')} style={{ width: 360 }} />
                 <input type="file" accept=".png,.jpg,.jpeg,.gif,.webp" style={{ fontSize: 12 }} onChange={uploadStaticQR} disabled={qrUploading} />
-                {qrUploading && <span style={{ fontSize: 12, color: '#889' }}>…</span>}
+                {qrUploading && <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>…</span>}
                 <Button onClick={saveStaticQR}>{t('common.save')}</Button>
               </Space>
               {isImage(staticQRImage) && (
@@ -508,14 +508,14 @@ export function PlansP() {
                    { colKey: 'op', title: '', width: 120, cell: ({ row }: any) =>
                      <Button size="small" theme="success" variant="outline" onClick={() => confirmManual(row)}>{t('billing.confirmPayment')}</Button> },
                  ] as never} />
-          {!manualOrders.length && <div style={{ textAlign: 'center', color: '#999', padding: 8 }}>{t('billing.noManualOrders')}</div>}
+          {!manualOrders.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 8 }}>{t('billing.noManualOrders')}</div>}
         </Panel>
       )}
 
       <Dialog visible={showCheckout} onClose={closeCheckout} header={t('billing.checkout')} width={380}>
         {curOrder && curOrder.status === 'paid' ? (
           <div style={{ textAlign: 'center', padding: '10px 0' }}>
-            <div style={{ width: 52, height: 52, lineHeight: '52px', borderRadius: '50%', background: '#e8f5e9', color: '#2e7d32', fontSize: 28, margin: '0 auto 8px' }}>✓</div>
+            <div style={{ width: 52, height: 52, lineHeight: '52px', borderRadius: '50%', background: 'var(--adm-ok-bg)', color: 'var(--adm-ok-tx)', fontSize: 28, margin: '0 auto 8px' }}>✓</div>
             <p>{tpl('billing.paySuccess', { amount: curOrder.amount_tokens })}</p>
             <Button theme="success" onClick={closeCheckout}>{t('billing.done')}</Button>
           </div>
@@ -525,19 +525,19 @@ export function PlansP() {
               <div style={{ textAlign: 'center' }}>
                 {curOrder.channel === 'manual' ? (
                   <div>
-                    <div style={{ fontSize: 13, color: '#667', marginBottom: 6 }}>{t('billing.staticQR')}</div>
+                    <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 6 }}>{t('billing.staticQR')}</div>
                     {isImage(curOrder.qr_content as string)
-                      ? <img src={curOrder.qr_content} style={{ maxWidth: 200, borderRadius: 8, border: '1px solid #eee', margin: '8px 0' }} alt="qr" />
+                      ? <img src={curOrder.qr_content} style={{ maxWidth: 200, borderRadius: 8, border: '1px solid var(--adm-line)', margin: '8px 0' }} alt="qr" />
                       : qrImg
                         ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '1px solid #eee', margin: '8px 0', background: '#fff' }} alt="qr" />
-                        : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f7f9fc', borderRadius: 8, padding: 12, fontSize: 12, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>}
+                        : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 8, padding: 12, fontSize: 12, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>}
                   </div>
                 ) : (
                   qrImg
                     ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '1px solid #eee', margin: '8px 0', background: '#fff' }} alt="qr" />
-                    : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f7f9fc', borderRadius: 8, padding: 12, fontSize: 12, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>
+                    : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 8, padding: 12, fontSize: 12, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>
                 )}
-                <p style={{ fontSize: 13, color: '#667' }}>{tpl('billing.orderNo', { orderNo: curOrder.order_no })}</p>
+                <p style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{tpl('billing.orderNo', { orderNo: curOrder.order_no })}</p>
               </div>
             )}
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap', marginTop: 12 }}>

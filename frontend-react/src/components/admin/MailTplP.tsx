@@ -89,27 +89,27 @@ export default function MailTplP() {
 
   return (
     <Panel title={t('mailTpl.title')}>
-      <p style={{ fontSize: 13, color: '#667', marginBottom: 14 }}>{t('mailTpl.hint')}</p>
+      <p style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 14 }}>{t('mailTpl.hint')}</p>
       {!loaded ? (
-        <div style={{ color: '#889' }}>…</div>
+        <div style={{ color: 'var(--adm-faint)' }}>…</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 760 }}>
           {/* 遍历每个邮件模板，提供主题/正文/抄送编辑界面 */}
           {list.map((it) => {
             const d = draft[it.code] || it
             return (
-              <div key={it.code} style={{ border: '1px solid #e3e6ef', borderRadius: 8, padding: 14 }}>
+              <div key={it.code} style={{ border: '1px solid var(--adm-line)', borderRadius: 8, padding: 14 }}>
                 {/* 模板标题与代码标识 */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                   <strong style={{ fontSize: 14 }}>{it.name}</strong>
-                  <code style={{ fontSize: 12, color: '#889', background: '#f3f5fa', padding: '1px 6px', borderRadius: 4 }}>{it.code}</code>
+                  <code style={{ fontSize: 12, color: 'var(--adm-faint)', background: 'var(--adm-soft)', padding: '1px 6px', borderRadius: 4 }}>{it.code}</code>
                   {it.is_modified && (
-                    <span style={{ fontSize: 12, color: '#c08a00', background: '#fff6e0', padding: '1px 6px', borderRadius: 4 }}>{t('mailTpl.modified')}</span>
+                    <span style={{ fontSize: 12, color: 'var(--adm-warn-tx)', background: 'var(--adm-warn-bg)', padding: '1px 6px', borderRadius: 4 }}>{t('mailTpl.modified')}</span>
                   )}
                 </div>
                 {/* 模板描述与可用变量 */}
-                <div style={{ fontSize: 12, color: '#889', marginBottom: 10 }}>{it.desc}</div>
-                <div style={{ fontSize: 12, color: '#5b6', marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginBottom: 10 }}>{it.desc}</div>
+                <div style={{ fontSize: 12, color: 'var(--adm-ok-tx)', marginBottom: 10 }}>
                   {t('mailTpl.vars')}：{it.vars.map((v) => `{${v}}`).join('  ')}
                 </div>
                 {/* 模板编辑区域：主题、正文、抄送 */}

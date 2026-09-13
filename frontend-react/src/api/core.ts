@@ -91,10 +91,16 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   // ★ E4：headers 合并必须在 ...options 展开【之后】——旧写法 options 自带的
   //   headers 字段会后盖掉合并结果，凡传 headers 的调用全部丢失 Content-Type/认证头。
   const { headers: optHeaders, timeoutMs: _omitTimeout, signal: _omitSignal, ...restOptions } = options ?? {}
+  // ★ multipart/二进制上传修复：body 为 FormData 时禁止预设 Content-Type，
+  //   否则浏览器不会生成 multipart/form-data 的 boundary，后端 ParseMultipartForm
+  //   瞬间 400（曾表现为「文件解析失败或超过大小上限（40MB）」误导文案）。
+  //   FormData/Blob 交由 fetch 自动设置带 boundary 的 Content-Type；调用方显式传入者优先。
+  const isFormBody = typeof FormData !== 'undefined' && options?.body instanceof FormData
+  const baseHeaders: Record<string, string> = isFormBody ? {} : { 'Content-Type': 'application/json' }
   try {
     const response = await fetch(fullUrl, {
       ...restOptions,
-      headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(optHeaders as Record<string, string>) },
+      headers: { ...baseHeaders, ...authHeaders(), ...(optHeaders as Record<string, string>) },
       signal: controller.signal,
     })
     if (response.status === 401) handleUnauthorized(url)

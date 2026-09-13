@@ -51,7 +51,7 @@ export function ReconcileP() {
         <Button size="small" variant="outline" loading={loading} onClick={() => void load()}>{t('rc.refresh')}</Button>
       </div>
     }>
-      <p style={{ fontSize: 12, color: '#889', margin: '0 0 8px' }}>{t('rc.hint')}</p>
+      <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('rc.hint')}</p>
       <div style={{ marginBottom: 8 }}>
         <Tag variant="light">{t('rc.summary').replace('{o}', String(summary.orders)).replace('{p}', String(summary.pays)).replace('{i}', String(rows.length))}</Tag>
       </div>
@@ -63,7 +63,7 @@ export function ReconcileP() {
           { colKey: 'detail', title: t('rc.colDetail'), ellipsis: true },
           { colKey: 'created_at', title: t('rc.colTime'), width: 160, cell: ({ row }: any) => fmtTime(row.created_at) },
         ] as never} />
-      {!view.length && !loading && <div style={{ textAlign: 'center', color: '#999', padding: 12 }}>{t('rc.empty')}</div>}
+      {!view.length && !loading && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 12 }}>{t('rc.empty')}</div>}
     </Panel>
   )
 }

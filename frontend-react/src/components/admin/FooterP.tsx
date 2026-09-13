@@ -54,9 +54,9 @@ export default function FooterP() {
 
   return (
     <Panel title={t('footer.title')}>
-      <p style={{ fontSize: 13, color: '#667', marginBottom: 12 }}>{t('footer.hint')}</p>
+      <p style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 12 }}>{t('footer.hint')}</p>
       {!loaded ? (
-        <div style={{ color: '#889' }}>…</div>
+        <div style={{ color: 'var(--adm-faint)' }}>…</div>
       ) : (
         <div style={{ maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 14 }}>
           {/* 链接列表：每行包含中文标签、英文标签、URL 与删除按钮 */}

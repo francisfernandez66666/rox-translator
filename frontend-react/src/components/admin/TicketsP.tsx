@@ -20,7 +20,7 @@ import { useAdmin } from '@/stores/admin'
 type Any = Record<string, any>
 
 const rowMt: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }
-const cardStyle: any = { border: '1px solid #e3e6ef', borderRadius: 8, padding: 14, marginBottom: 12 }
+const cardStyle: any = { border: '1px solid var(--adm-line)', borderRadius: 8, padding: 14, marginBottom: 12 }
 
 // firstTranslation 从工单 final_result JSON 中取第一个目标语种的译文（预览用；解析失败返回空串）。
 function firstTranslation(finalResult: unknown): string {
@@ -127,7 +127,7 @@ export function TicketsP() {
   return (
     <>
       <h2 style={{ margin: '4px 0 4px' }}>{t('fb.workbench')}</h2>
-      <p style={{ fontSize: 13, color: '#667', margin: '0 0 12px' }}>{isSuper ? t('fb.superHint') : t('fb.userHint')}</p>
+      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{isSuper ? t('fb.superHint') : t('fb.userHint')}</p>
 
       {isSuper && (
         <div style={{ marginBottom: 12 }}>
@@ -174,7 +174,7 @@ export function TicketsP() {
           </h3>
           <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0 }}>{selected.content}</pre>
           {selected.with_context && (
-            <div style={{ background: '#fafafa', border: '1px dashed #ddd', borderRadius: 8, padding: '8px 10px', marginTop: 8, fontSize: 12.5 }}>
+            <div style={{ background: 'var(--adm-soft)', border: '1px dashed var(--adm-line)', borderRadius: 8, padding: '8px 10px', marginTop: 8, fontSize: 12.5 }}>
               <b>{t('fb.ctxAttached')}</b>
               {selected.source_text && <pre style={{ whiteSpace: 'pre-wrap', margin: '4px 0' }}>{selected.source_text}</pre>}
               {Object.entries(ctxTranslations(selected)).map(([k, v]) => (
@@ -186,19 +186,19 @@ export function TicketsP() {
             <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
               {selected.replies.map((r: Any, i: number) => (
                 <div key={i} style={{ background: r.role === 'admin' ? '#e8f0fe' : '#f5f6f8', borderRadius: 8, padding: '6px 10px', fontSize: 13 }}>
-                  <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>{r.name} · {r.role === 'admin' ? t('tickets.roleAdmin') : t('tickets.roleUser')} · {fmtAt(r.at)}</div>
+                  <div style={{ fontSize: 11, color: 'var(--adm-faint)', marginBottom: 2 }}>{r.name} · {r.role === 'admin' ? t('tickets.roleAdmin') : t('tickets.roleUser')} · {fmtAt(r.at)}</div>
                   <div style={{ whiteSpace: 'pre-wrap' }}>{r.content}</div>
                 </div>
               ))}
             </div>
-          ) : <div style={{ fontSize: 12, color: '#889', marginTop: 8 }}>{t('fb.noReplies')}</div>}
+          ) : <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginTop: 8 }}>{t('fb.noReplies')}</div>}
           {selected.status === 'open' ? (
             <div style={rowMt}>
               <Input value={replyDraft} onChange={(v: any) => setReplyDraft(v)} placeholder={t('fb.replyPlaceholder')} style={{ flex: 1 }} />
               <Button disabled={!replyDraft.trim()} onClick={() => void doReply()}>↩ {t('fb.reply')}</Button>
               {isSuper && <Button theme="success" onClick={() => void doResolve()}>✔ {t('fb.complete')}</Button>}
             </div>
-          ) : <div style={{ fontSize: 12, color: '#1a7f37', marginTop: 8 }}>✅ {t('fb.archivedHint')}</div>}
+          ) : <div style={{ fontSize: 12, color: 'var(--adm-ok-tx)', marginTop: 8 }}>✅ {t('fb.archivedHint')}</div>}
         </div>
       )}
 
@@ -208,7 +208,7 @@ export function TicketsP() {
             <Panel title={t('fb.submitTitle')}>
               <Textarea autosize={{ minRows: 3 }} value={newContent} onChange={(v: any) => setNewContent(v)} placeholder={t('fb.contentPlaceholder')} maxlength={1000} />
               <div style={{ ...rowMt, marginTop: 8 }}>
-                <span style={{ flex: 1, fontSize: 12, color: '#889' }}>{newContent.length}/1000</span>
+                <span style={{ flex: 1, fontSize: 12, color: 'var(--adm-faint)' }}>{newContent.length}/1000</span>
                 <Button theme="success" disabled={!newContent.trim() || submitting} onClick={() => void submitFeedback()}>
                   {submitting ? t('fb.submitting') : t('fb.submit')}
                 </Button>
@@ -219,7 +219,7 @@ export function TicketsP() {
             <Select value={statusFilter} onChange={(v: any) => setStatusFilter(String(v))} style={{ width: 160 }}
               options={[{ label: t('fb.filterAll'), value: '' }, { label: t('fb.statusOpen'), value: 'open' }, { label: t('fb.statusResolved'), value: 'resolved' }]} />
             <Button size="small" onClick={() => void loadFeedbacks()}>{t('tickets.refresh')}</Button>
-            <span style={{ fontSize: 12, color: '#889' }}>{tpl('fb.count', { n: feedbacks.length })}</span>
+            <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{tpl('fb.count', { n: feedbacks.length })}</span>
           </div>
           <Table rowKey="id" size="small" data={feedbacks} style={{ marginTop: 8 }}
             columns={[
@@ -243,9 +243,9 @@ export function TicketsP() {
         <div key={tk.id} style={{ ...cardStyle, marginTop: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
             <b>{tk.ticket_no} — {tk.title}</b>
-            <span style={{ fontSize: 12, color: '#889' }}>{tk.status}</span>
+            <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{tk.status}</span>
           </div>
-          <p style={{ fontSize: 13, color: '#556', margin: '0 0 8px' }}>{tk.source_text}</p>
+          <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 8px' }}>{tk.source_text}</p>
           <Textarea value={tk.final_result} readonly autosize={{ minRows: 3 }} />
           <div style={rowMt}>
             <Button theme="success" onClick={() => void doApprove(tk, 'approve')}>{t('tickets.approve')}</Button>
@@ -255,7 +255,7 @@ export function TicketsP() {
           </div>
         </div>
       ))}
-      {!approvalTickets.length && <div style={{ fontSize: 13, color: '#889' }}>{t('tickets.noApproval')}</div>}
+      {!approvalTickets.length && <div style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('tickets.noApproval')}</div>}
 
       <Dialog visible={!!approveDlg} onClose={() => setApproveDlg(null)}
         header={`${t('tickets.approve')} ${approveDlg ? String(approveDlg.row.ticket_no) : ''}`} width={640}
@@ -281,7 +281,7 @@ export function TicketsP() {
         }>
         {approveDlg && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ fontSize: 13, color: '#556' }}>{String(approveDlg.row.source_text)}</div>
+            <div style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{String(approveDlg.row.source_text)}</div>
             {approveDlg.action === 'approve' && (
               <Field label={t('fb.complete')}>
                 <Textarea autosize={{ minRows: 3 }} value={approveDlg.text} onChange={(v: any) => setApproveDlg({ ...approveDlg, text: v })}

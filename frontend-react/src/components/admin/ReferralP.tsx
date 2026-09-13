@@ -79,14 +79,14 @@ export function ReferralP() {
       <Panel title={t('referral.title')} extra={<Space size={8}><Button onClick={downloadQr}>⬇️ {t('referral.downloadQr')}</Button></Space>}>
         <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 320, background: 'rgba(64,128,255,.06)', border: '1px solid rgba(64,128,255,.18)', borderRadius: 8, padding: '14px 16px' }}>
-            <div style={{ fontSize: 12, color: '#556' }}>{t('referral.myCode')}</div>
+            <div style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('referral.myCode')}</div>
             <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 2, color: 'var(--td-brand-color-active, #1f33d6)', marginTop: 2 }}>{refCode || '—'}</div>
-            <div style={{ fontSize: 12, color: '#667', marginTop: 8 }}>{t('referral.linkLabel')}</div>
+            <div style={{ fontSize: 12, color: 'var(--adm-hint)', marginTop: 8 }}>{t('referral.linkLabel')}</div>
             <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
               <Input readOnly value={inviteUrl} onFocus={(e: any) => e.target.select()} style={{ flex: 1 }} />
               <Button onClick={copyLink}>📋 {t('referral.copy')}</Button>
             </div>
-            <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 12, fontSize: 13, color: '#555' }}>
+            <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 12, fontSize: 13, color: 'var(--adm-hint)' }}>
               <span>👥 {t('referral.invitedCount')}：<b>{invited}</b></span>
               <span>🎁 {t('referral.trialRewards')}：<b>{fmtNum(trialTokens)}</b> token / {trialCount} {t('referral.times')}</span>
               <span>💰 {t('referral.paidRewards')}：<b>{fmtNum(paidTokens)}</b> token</span>
@@ -101,18 +101,18 @@ export function ReferralP() {
                columns={[
                  { colKey: 'invitee', title: t('referral.colInvitee'), cell: ({ row }: any) => `${String(row.invitee_name)} (#${String(row.invitee_uid)})` },
                  { colKey: 'invitee_email', title: t('referral.colEmail'), cell: ({ row }: any) => row.invitee_email || '—' },
-                 { colKey: 'invite_status', title: t('referral.colInviteStatus'), width: 120, cell: () => <span style={{ color: '#1b8a3f', fontWeight: 600 }}>✅ {t('referral.invSuccess')}</span> },
+                 { colKey: 'invite_status', title: t('referral.colInviteStatus'), width: 120, cell: () => <span style={{ color: 'var(--adm-ok-tx)', fontWeight: 600 }}>✅ {t('referral.invSuccess')}</span> },
                  { colKey: 'pay_status', title: t('referral.colPayStatus'), width: 120, cell: ({ row }: any) =>
                    row.paid
-                     ? <span style={{ color: '#1b8a3f', fontWeight: 600 }}>✅ {t('referral.payYes')}</span>
-                     : <span style={{ color: '#b26a00' }}>⏳ {t('referral.payNo')}</span> },
+                     ? <span style={{ color: 'var(--adm-ok-tx)', fontWeight: 600 }}>✅ {t('referral.payYes')}</span>
+                     : <span style={{ color: 'var(--adm-amber-tx)' }}>⏳ {t('referral.payNo')}</span> },
                  { colKey: 'reward', title: t('referral.colReward'), cell: ({ row }: any) =>
                    row.type === 'trial_stack'
                      ? <>+{fmtNum(row.tokens as number)} token{row.days ? ` / +${row.days} ${t('referral.daysUnit')}` : ''}</>
                      : <>+{fmtNum(row.tokens as number)} token</> },
                  { colKey: 'created_at', title: t('referral.colTime'), width: 165, cell: ({ row }: any) => fmtTime(row.created_at as string) },
                ] as never} />
-        {!records.length && <div style={{ textAlign: 'center', color: '#999', padding: 8 }}>{t('referral.empty')}</div>}
+        {!records.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 8 }}>{t('referral.empty')}</div>}
       </Panel>
     </>
   )
