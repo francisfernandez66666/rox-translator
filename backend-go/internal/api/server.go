@@ -37,6 +37,7 @@ import (
 	"translator/internal/billing"
 	"translator/internal/config"
 	"translator/internal/engine"
+	"translator/internal/fileproc"
 	apierrors "translator/internal/errors"
 	"translator/internal/infra/redis"
 	"translator/internal/kb"
@@ -746,6 +747,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"tenant_ready": s.Ten != nil,
 		"engine_ready": s.Engine != nil,
 		"kb_ready":     s.DB != nil,
+		// ★ 工单双模式（2026-09-13）：anydoc 纯文案提取层是否就绪（venv firecrawl-anydoc + 脚本，healthcheck 缓存）
+		"anydoc_ready": fileproc.AnydocAvailable(),
 	})
 }
 
