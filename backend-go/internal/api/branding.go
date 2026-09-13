@@ -21,7 +21,7 @@ func brandSuffix() string { return strings.TrimSpace(os.Getenv("BRAND_DOMAIN_SUF
 // opsNotifyEmail 运营抄送邮箱（env OPS_NOTIFY_EMAIL；空=不抄送）。
 func opsNotifyEmail() string { return strings.TrimSpace(os.Getenv("OPS_NOTIFY_EMAIL")) }
 
-// primaryHostFor 主站主机名：system_config(primary_host) → langcross 前缀按品牌后缀拼装 → 品牌后缀本身。
+// primaryHostFor 主站主机名：system_config(primary_host) → 主站前缀(env BRAND_PRIMARY_PREFIX，默认 www)按品牌后缀拼装 → 品牌后缀本身。
 // 参数 get: system_config 读取函数（解耦 Store 判空）。
 func primaryHostFor(get func(string) (string, error)) string {
 	if get != nil {
@@ -39,7 +39,8 @@ func primaryHostFor(get func(string) (string, error)) string {
 	return base
 }
 
-// primarySubdomainPrefix 主站子域前缀（默认沿用历史 langcross；env 可改，杜绝代码内品牌明文）。
+// primarySubdomainPrefix 主站子域前缀（env BRAND_PRIMARY_PREFIX 可配；默认 www——
+// B11 收敛不允许代码内出现运营方品牌明文，生产以 system_config.primary_host 显式覆盖）。
 func primarySubdomainPrefix() string {
 	if v := strings.TrimSpace(os.Getenv("BRAND_PRIMARY_PREFIX")); v != "" {
 		return v

@@ -35,7 +35,7 @@ DEMO_USER_DATA="${DEMO_USER_DATA:-/opt/translator-demo/data}"
 #      demo_admin（企业管理员）/ demo_youtube / demo_hr / demo_cs（普通用户）。
 # 密码统一：Demo#2026Rm!（bcrypt(DefaultCost) 哈希见下方 4.5 步骤的 SEEDSQL）。
 # 开关：DEMO_SEED_ACCOUNTS=0 可跳过种入。
-DEMO_SEED_ACCOUNTS=1
+DEMO_SEED_ACCOUNTS="${DEMO_SEED_ACCOUNTS:-1}"
 
 # 生产实例路径（脚本自动探测，通常无需覆盖）
 PROD_DIR="${PROD_DIR:-/opt/translator}"
@@ -190,6 +190,14 @@ PRE=$(printf '%s' "$DEMO_DOMAIN" | sed -E 's/\.lexicorn\.cn$//')
 PROD_PRIMARY="${PROD_PRIMARY:-langcross.lexicorn.cn}"
 sudo -u postgres psql -d "$DEMO_DB" -c "
 INSERT INTO system_config (key, value, updated_at) VALUES ('primary_host','${PROD_PRIMARY}', now())
+ON CONFLICT (key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at;"
+# ①-b 品牌基础域（★ 2026-09-14 补，B11 硬编码收敛遗留）：2026-09-12 起代码不再内置
+#    「lexicorn.cn」兜底，子域→租户品牌解析必须显式有 system_config.base_domain
+#    （或 env BRAND_DOMAIN_SUFFIX），否则 rox-test 命中空前缀 → 落平台默认空品牌，
+#    logo/首页背景/网页标题在演示站消失。值取演示域去掉首级前缀（rox-test.lexicorn.cn → lexicorn.cn）。
+BASE_DOM="${BRAND_BASE_DOMAIN:-${DEMO_DOMAIN#*.}}"
+sudo -u postgres psql -d "$DEMO_DB" -c "
+INSERT INTO system_config (key, value, updated_at) VALUES ('base_domain','${BASE_DOM}', now())
 ON CONFLICT (key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at;"
 # ② 支付模式：演示环境默认 mock（下单自动到账，无需真实收款回调）
 sudo -u postgres psql -d "$DEMO_DB" -c "
