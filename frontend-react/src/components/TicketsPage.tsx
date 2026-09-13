@@ -14,7 +14,7 @@ import {
 import { runGuarded } from '@/lib/runGuarded'
 import { confirmDialog } from '@/components/uiDialogs'
 import type { Ticket, TicketResp } from '@/api/tickets'
-import { TRANSLATE_FILE_ACCEPT, validateTranslateFile } from '@/api/translate'
+import { TRANSLATE_FILE_ACCEPT, TEXT_DELIVERY_ACCEPT, validateTranslateFile } from '@/api/translate'
 import LangMultiSelect from './LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
 import { t, tpl, useLang } from '@/i18n'
@@ -63,6 +63,8 @@ export default function TicketsPage() {
   // ★ 缩翻（任务7）：勾选后输入最长字符限制，提示模型精简输出
   const [condenseOn, setCondenseOn] = useState(false)
   const [condenseMax, setCondenseMax] = useState(200)
+  // ★ 工单双模式（2026-09-13）：交付方式 restore 还原文件模式（默认）/ text 纯文案模式
+  const [delivery, setDelivery] = useState<string>(localStorage.getItem('ticket_delivery') || 'restore')
 
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [detail, setDetail] = useState<TicketResp | null>(null)
@@ -182,7 +184,7 @@ export default function TicketsPage() {
     const exist = new Set(files.map((f) => f.name + f.size))
     const next = [...files]
     for (const f of list) {
-      const reason = validateTranslateFile(f)
+      const reason = validateTranslateFile(f, delivery === 'text')
       if (reason) { void MessagePlugin.error(reason); continue }
       if (!exist.has(f.name + f.size)) { next.push(f); exist.add(f.name + f.size) }
     }
@@ -210,7 +212,7 @@ export default function TicketsPage() {
         })
       } else {
         if (!files.length) return
-        r = await ticketCreateFile([...files], { title: title.trim(), target_langs: langsJoined, mode: qualityMode, max_length: maxLength })
+        r = await ticketCreateFile([...files], { title: title.trim(), target_langs: langsJoined, mode: qualityMode, max_length: maxLength, delivery })
       }
       if (!r.success) { void MessagePlugin.error(r.message || t('tk.createFail')); setCreating(false); return }
       setTitle(''); setText(''); setFiles([])
@@ -251,6 +253,13 @@ export default function TicketsPage() {
     try { await ticketDownload(row.id) } catch (e: any) { void MessagePlugin.error(e?.message || t('tk.downloadFail')) }
     finally { setDownloadingId(null) }
   }
+  // ★ 工单双模式（2026-09-13）：仅下载译文纯文案（.md，不取还原产物）
+  async function downloadText(row: Ticket) {
+    if (downloadingId !== null) return
+    setDownloadingId(row.id)
+    try { await ticketDownload(row.id, { fmt: 'text' }) } catch (e: any) { void MessagePlugin.error(e?.message || t('tk.downloadFail')) }
+    finally { setDownloadingId(null) }
+  }
 
   // 展开/收起步骤进度气泡
   // 点击行展开详情并启动轮询，再次点击或同一条已展开则收起
@@ -270,6 +279,15 @@ export default function TicketsPage() {
   const pct = ticketProgress()
   const stepLabel = currentStepLabel()
   const states = (detail?.states as any[]) || []
+
+  // ★ 双模式（2026-09-13）：还原模式已完成文件工单若已有纯文案 .md 产物，
+  //   进度气泡显示「仅下载译文文案」次级入口（纯文案模式主产物即 .md，不重复显示）
+  const canDownloadTextArtifact = (() => {
+    const tk = detail?.ticket
+    if (!tk || !tk.file_path || tk.status !== 'completed') return false
+    if ((tk.delivery || 'restore') === 'text') return false
+    return !!(tk as any).text_result_path || (detail?.files || []).some((f: any) => !!f.text_result_path)
+  })()
 
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 24px', width: '100%', minWidth: 0 }}>
@@ -291,6 +309,26 @@ export default function TicketsPage() {
           <Button variant={mode === 'file' ? 'base' : 'outline'} theme="primary" onClick={() => setMode('file')}>📎 {t('tk.modeFile')}</Button>
         </Space>
 
+        {/* ★ 工单双模式（2026-09-13）：文件工单交付方式——还原文件 / 纯文案 */}
+        {mode === 'file' && (
+          <div style={{ marginBottom: 10 }}>
+            <Space size={8}>
+              <span style={{ fontSize: 13, color: '#555' }}>{t('tk.deliveryLabel')}</span>
+              <Button size="small" variant={delivery === 'restore' ? 'base' : 'outline'} theme="primary"
+                onClick={() => { setDelivery('restore'); localStorage.setItem('ticket_delivery', 'restore') }}>
+                {t('tk.deliveryRestore')}
+              </Button>
+              <Button size="small" variant={delivery === 'text' ? 'base' : 'outline'} theme="primary"
+                onClick={() => { setDelivery('text'); localStorage.setItem('ticket_delivery', 'text') }}>
+                {t('tk.deliveryText')}
+              </Button>
+            </Space>
+            <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
+              {delivery === 'text' ? t('tk.deliveryTextTip') : t('tk.deliveryRestoreTip')}
+            </div>
+          </div>
+        )}
+
         <Input value={title} onChange={setTitle} aria-label={t('tk.titlePlaceholder')} placeholder={t('tk.titlePlaceholder')} style={{ width: '100%', marginBottom: 8 }} />
 
         {mode === 'text' ? (
@@ -299,8 +337,8 @@ export default function TicketsPage() {
           <>
               <div onClick={() => document.getElementById('tk-file-input')?.click()}
                   style={{ border: '2px dashed #c9d4e3', borderRadius: 8, padding: 34, textAlign: 'center', cursor: 'pointer', color: '#667', background: '#fafbfd' }}>
-                <input id="tk-file-input" type="file" multiple hidden accept={TRANSLATE_FILE_ACCEPT} onChange={onFileSelect} />
-                <div>📎 {t('tk.fileHint')}<br /><span style={{ fontSize: 12 }}>{t('tk.multiHint')}</span></div>
+                <input id="tk-file-input" type="file" multiple hidden accept={delivery === 'text' ? TEXT_DELIVERY_ACCEPT : TRANSLATE_FILE_ACCEPT} onChange={onFileSelect} />
+                <div>📎 {delivery === 'text' ? t('tk.fileHintText') : t('tk.fileHint')}<br /><span style={{ fontSize: 12 }}>{t('tk.multiHint')}</span></div>
               </div>
               {files.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, alignItems: 'center' }}>
@@ -359,7 +397,8 @@ export default function TicketsPage() {
             { colKey: 'ticket_no', title: t('tk.colNo'), width: 170,
               cell: ({ row }: any) => <code>{row.ticket_no || row.id}</code> },
             { colKey: 'title', title: t('users.colName'), width: 220, ellipsis: true,
-              cell: ({ row }: any) => <span title={row.title}>{row.title}</span> },
+              // ★ 双模式徽标：文件工单 📐 还原文件 / 📄 纯文案（文本工单无标记）
+              cell: ({ row }: any) => <span title={row.title}>{row.file_path ? (row.delivery === 'text' ? '📄 ' : '📐 ') : ''}{row.title}</span> },
             { colKey: 'status', title: t('users.colStatus'), width: 110,
               cell: ({ row }: any) => <span>{statusLabel(row.status)}</span> },
             { colKey: 'target_langs', title: t('tk.colLangs'), width: 150,
@@ -428,6 +467,15 @@ export default function TicketsPage() {
         ) : (
           <p style={{ fontSize: 12, color: '#888', margin: '8px 0 0' }}>{t('tk.noSteps')}</p>
         )}
+        {/* ★ 工单双模式（2026-09-13）：还原模式已完成文件工单提供「仅下载译文文案(.md)」次级入口
+            （版式不满意或对还原产物降级交付时直接取文案）；纯文案模式主产物即 .md，不重复展示 */}
+        {canDownloadTextArtifact ? (
+          <div style={{ marginTop: 10 }}>
+            <Button size="small" variant="outline" theme="default" onClick={() => detail && detail.ticket && downloadText(detail.ticket)}>
+              📄 {t('tk.downloadMd')}
+            </Button>
+          </div>
+        ) : null}
       </Dialog>
 
       {/* 用户反馈弹窗（已完成工单 → 平台） */}

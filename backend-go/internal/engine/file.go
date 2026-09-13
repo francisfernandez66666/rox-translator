@@ -36,6 +36,9 @@ type FileTranslateResult struct {
 	Data  FileTranslateData `json:"data"`  // 结构化翻译数据（文本数/语言/命中统计等）
 	Files []string          `json:"files"` // 生成的翻译文件绝对路径列表
 	Error string            `json:"error"` // 失败原因（成功时为空）
+	// ★ 工单双模式（2026-09-13）：还原模式（delivery=restore）完成后各语言的纯文案 .md
+	//   旁路产物（兜底交付，不占主产物位）；纯文案模式（text）主产物即 .md，本字段留空。
+	TextFiles []string `json:"text_files,omitempty"`
 	// ★ 2026-09-03 需求：文件翻译结果携带实际消耗的 LLM token 数
 	TokensUsed int64 `json:"tokens_used"`
 }
@@ -54,6 +57,9 @@ type FileTranslateData struct {
 	//   审批台/QA 报告可据此提示人工补译。>0 时 Reply 亦追加告警文案。
 	Untranslated map[string]int `json:"untranslated,omitempty"`
 	GateWarnings []string       `json:"gate_warnings,omitempty"` // 整改 R1：主路径输出质量/文化闸门警告
+	// ★ 工单双模式（2026-09-13）：原格式写回失败（重试后仍败）已降级纯文案交付的语言代码。
+	//   翻译内容已交付（.md 在 Files 中），工单仍为成功，但轨迹/通知据此提示"版式未还原"。
+	DegradedLangs []string `json:"degraded_langs,omitempty"`
 	// Translations 原文→译文映射（语言维度），供工单执行器回写 tm_segments 长期沉淀；
 	// 不序列化进 SSE/HTTP 响应（体量大且前端无需）。
 	Translations map[string]map[string]string `json:"-"`
@@ -69,6 +75,17 @@ func writebackDelivery(ext string) string {
 	default:
 		return "inplace"
 	}
+}
+
+// optionString options 通用字符串读取（非字符串/缺失返回空串）。
+func optionString(v interface{}) string {
+	s, _ := v.(string)
+	return s
+}
+
+// anydocSourceExt 纯文案模式下需经 anydoc 转 MD 的格式（老格式/ODF/RTF/EPUB + PDF 快速提取路径）。
+func anydocSourceExt(ext string) bool {
+	return fileproc.AnydocFormats[ext] || ext == ".pdf"
 }
 
 // leakedLang 漏译率硬闸判定（纯函数，便于单测）：
@@ -218,16 +235,26 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		return &FileTranslateResult{Skill: "translation", Error: err.Error()}
 	}
 	ext := strings.ToLower(filepath.Ext(filePath))
+	// ★ 工单双模式（2026-09-13）：options["delivery"]=="text" → 纯文案模式（anydoc/原生提取，
+	//   交付译文 .md，不还原版式）；restore/空 → 还原文件模式（既有原位回写管线，行为不变）。
+	deliveryText := strings.EqualFold(strings.TrimSpace(optionString(options["delivery"])), "text")
 	// ★ 格式白名单与工单管道对齐（三期格式补齐）：Office 原格式回写；PDF 版式重建；
-	// 其余文本类（txt/csv/srt/vtt/md/json/yaml）统一降级 xlsx 对照表产物
+	// 其余文本类（txt/csv/srt/vtt/md/json/yaml）统一降级 xlsx 对照表产物；
+	// 纯文案模式额外准入 anydoc 独占格式（doc/xls/ppt 老格式、odt/ods/odp、rtf/epub 等）。
 	allowedExt := map[string]bool{
 		".docx": true, ".pptx": true, ".xlsx": true, ".pdf": true,
 		".txt": true, ".csv": true, ".srt": true, ".vtt": true,
 		".md": true, ".json": true, ".yaml": true, ".yml": true,
 	}
 	if !allowedExt[ext] {
-		return &FileTranslateResult{Skill: "translation",
-			Error: "不支持的格式（支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml）"}
+		if !deliveryText || !fileproc.AnydocFormats[ext] {
+			if deliveryText {
+				return &FileTranslateResult{Skill: "translation",
+					Error: "不支持的格式（纯文案模式支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml/doc/xls/ppt/odt/ods/odp/rtf/epub 等）"}
+			}
+			return &FileTranslateResult{Skill: "translation",
+				Error: "不支持的格式（支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml）"}
+		}
 	}
 	if _, err := os.Stat(filePath); err != nil {
 		return &FileTranslateResult{Skill: "translation", Error: "文件不存在或无法读取"}
@@ -263,15 +290,38 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 
 	// 第1步：理解文件结构
 	prog("第1步/3：理解文件结构...", 1, 3)
-	texts, err := fileproc.ExtractTexts(filePath)
+	// ★ 纯文案模式（2026-09-13）：anydoc 独占格式（含 PDF 快速路径）先经 Rust 本地转换
+	//   成 GFM Markdown 落临时对齐源，再走既有 MD 结构感知提取器（剥离结构标记→纯文本键）。
+	var mdAlignPath string
+	if deliveryText && anydocSourceExt(ext) {
+		md, aerr := fileproc.AnydocToMarkdown(ctx, filePath)
+		if aerr != nil {
+			return &FileTranslateResult{Skill: "translation", Error: aerr.Error()}
+		}
+		mdAlignPath = filePath + ".anydoc.src.md"
+		if werr := os.WriteFile(mdAlignPath, []byte(md), 0o644); werr != nil {
+			return &FileTranslateResult{Skill: "translation", Error: "纯文案模式中间文件写入失败: " + werr.Error()}
+		}
+		defer os.Remove(mdAlignPath)
+	} else if deliveryText && ext == ".md" {
+		mdAlignPath = filePath // 源本就是 Markdown：写回对齐直接用原文件，不产出副本
+	}
+	var texts []string
+	var err error
+	if mdAlignPath != "" {
+		texts, err = fileproc.ExtractTexts(mdAlignPath)
+	} else {
+		texts, err = fileproc.ExtractTexts(filePath)
+	}
 	if err != nil || len(texts) == 0 {
 		return &FileTranslateResult{Skill: "translation", Error: "无法从文件提取文本或文件为空"}
 	}
 	// ★ PDF：改用 pdf2docx 提取段落（键与写回目标一致，表格/短文本必中），
 	//   缓存 DOCX 供多语言写回复用；失败回退 pdftotext 键（产物降级 xlsx 对照表）。
 	//   图片内容按产品策略不翻译（2026-08-25 OCR 已整体移除）。
+	//   纯文案模式不走此链（提取已由 anydoc 完成，交付 .md 无需坐标级对齐）。
 	var pdfCacheDocx string
-	if strings.EqualFold(filepath.Ext(filePath), ".pdf") {
+	if !deliveryText && strings.EqualFold(filepath.Ext(filePath), ".pdf") {
 		if t2, cache, e2 := fileproc.ExtractTextsPdfDocx(ctx, filePath); e2 == nil && len(t2) > 0 && cache != "" {
 			texts = t2
 			pdfCacheDocx = cache
@@ -591,24 +641,68 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	os.MkdirAll(outputDir, 0o755)
 
 	filesOut := []string{}
+	var degraded []string // ★ 双模式（2026-09-13）：原格式还原失败已降级纯文案的语言（工单仍成功）
 
-	if isXlsxInput {
+	// writeTextMd 生成某语言的纯文案 .md 产物（按提取顺序输出；未译段保留原文）。
+	writeTextMd := func(lc string) (string, error) {
+		p := filepath.Join(outputDir, fmt.Sprintf("%s_%s_text.md", baseName, lc))
+		return p, fileproc.WriteTranslationMd(p, texts, langTranslations[lc])
+	}
+
+	if deliveryText {
+		// —— 纯文案模式：交付 {base}_{lang}.md，不做任何 office 格式回写 ——
+		for _, lc := range finalLangs {
+			tr := langTranslations[lc]
+			if len(tr) == 0 {
+				continue
+			}
+			outPath := filepath.Join(outputDir, fmt.Sprintf("%s_%s.md", baseName, lc))
+			var aerr error
+			switch {
+			case ext == ".md" || anydocSourceExt(ext):
+				aerr = fileproc.ApplyAlignedText(".md", mdAlignPath, outPath, tr) // 行对齐+结构前缀粘回
+			case ext == ".txt" || ext == ".csv":
+				aerr = fileproc.ApplyAlignedText(ext, filePath, outPath, tr) // 行序对齐，非译文行原样保留
+			default: // json/yaml/srt/vtt：按提取顺序输出译文段落
+				aerr = fileproc.WriteTranslationMd(outPath, texts, tr)
+			}
+			if aerr != nil {
+				_ = os.Remove(outPath)
+				return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 文案产物生成失败：%s", config.LangNames[lc], aerr.Error())}
+			}
+			filesOut = append(filesOut, outPath)
+		}
+	} else if isXlsxInput {
 		outPath := filepath.Join(outputDir, baseName+"_translated.xlsx")
+		var aerr error
 		if len(finalLangs) == 1 {
 			// ★ 单目标语言：原地替换单元格为译文，产物文件即译文本身
 			// （符合「把文件翻成 X 语」的预期；原文件保持不变，下载的 _translated.xlsx 为译文）。
 			// 此前多 Sheet 模式会把原文 Sheet 留在首位、译文放新增 Sheet，Excel 默认打开原文 Sheet
 			// 造成「还是中文」的误解（实际译文在 en Sheet 中已正确生成）。
-			if aerr := fileproc.ApplyXlsx(filePath, outPath, langTranslations[finalLangs[0]]); aerr != nil {
-				return &FileTranslateResult{Skill: "translation", Error: "xlsx 写回失败: " + aerr.Error()}
-			}
+			aerr = fileproc.ApplyXlsx(filePath, outPath, langTranslations[finalLangs[0]])
 		} else {
 			// ★ 多目标语言：单文件多 Sheet，每个目标语言一个 Sheet（Sheet 名=语言代码）
-			if aerr := writeMultiSheetXlsx(filePath, outputDir, baseName, finalLangs, langTranslations); aerr != nil {
+			aerr = writeMultiSheetXlsx(filePath, outputDir, baseName, finalLangs, langTranslations)
+		}
+		if aerr == nil {
+			filesOut = append(filesOut, outPath)
+		} else {
+			// ★ 双模式（2026-09-13）：回写失败降级纯文案交付（翻译是资产，回写是增值）
+			log.Printf("[file-degrade] xlsx 回写失败，降级纯文案: %v", aerr)
+			for _, lc := range finalLangs {
+				if len(langTranslations[lc]) == 0 {
+					continue
+				}
+				if p, perr := writeTextMd(lc); perr == nil {
+					filesOut = append(filesOut, p)
+					degraded = append(degraded, lc)
+				}
+			}
+			if len(degraded) == 0 {
 				return &FileTranslateResult{Skill: "translation", Error: "xlsx 写回失败: " + aerr.Error()}
 			}
 		}
-		filesOut = append(filesOut, outPath)
 	} else {
 		// ★ 非 xlsx 格式：每个目标语言独立产物文件，文件名标注语言
 		for _, lc := range finalLangs {
@@ -618,11 +712,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			}
 			outBase := fmt.Sprintf("%s_%s%s", baseName, lc, ext)
 			outPath := filepath.Join(outputDir, outBase)
-			// ★ 2026-09-09 产品决策：有原格式写回能力的格式（pdf/docx/pptx/txt/csv/md）写回失败
-			//   不再降级 xlsx 对照表（避免「翻译 PDF 却下载到 Excel」），改为自动重试（子进程转换
-			//   偶发失败：LibreOffice profile 锁/资源竞争），重试仍失败则返回错误置工单失败，
-			//   由用户重新发起。srt/vtt/json/yaml 等无原格式回写能力的格式仍以 xlsx 对照表为
-			//   唯一交付形态（设计如此，非降级）。
+			// ★ 2026-09-09 产品决策：无原格式回写能力的格式（srt/vtt/json/yaml）以 xlsx 对照表
+			//   为唯一交付形态（设计如此，非降级）；还原模式下另有纯文案 .md 旁路产物（L788+）。
 			if writebackDelivery(ext) == "xlsx" {
 				if xerr := fileproc.WriteComparisonXlsx(outPath+".xlsx", texts, tr); xerr != nil {
 					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 对照表生成失败：%s", config.LangNames[lc], xerr.Error())}
@@ -630,9 +721,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				filesOut = append(filesOut, outPath+".xlsx")
 				continue
 			}
-			// ★ 2026-09-09 产品决策：写回失败不再降级 xlsx 对照表（避免「翻译 PDF 却下载到
-			//   Excel」），改为自动重试（子进程转换偶发失败：LibreOffice profile 锁/资源竞争），
-			//   重试仍失败则返回错误置工单失败，由用户重新发起。
+			// ★ 2026-09-09 产品决策：写回失败不降级 xlsx 对照表（避免「翻译 PDF 却下载到 Excel」），
+			//   自动重试（子进程转换偶发失败：LibreOffice profile 锁/资源竞争）；
+			//   ★ 2026-09-13 双模式：重试仍败改为「纯文案 .md 降级交付 + warning」，不再整单判死。
 			var aerr error
 			for attempt := 0; attempt <= 2; attempt++ {
 				aerr = nil
@@ -676,11 +767,44 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				}
 			}
 			if aerr != nil {
-				// 重试仍失败：移除可能残留的半成品，返回错误（工单失败，用户可重新发起）
+				// ★ 双模式（2026-09-13）：重试仍败不再整单判死——该语言交付物降级为
+				//   纯文案 .md（翻译是资产、回写是增值），工单成功但带 warning 轨迹与通知。
 				_ = os.Remove(outPath)
-				return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 译文写回失败（已自动重试3次）：%s", config.LangNames[lc], aerr.Error())}
+				if p, perr := writeTextMd(lc); perr == nil {
+					log.Printf("[file-degrade] %s 写回失败（%v），已降级纯文案交付 %s", config.LangNames[lc], aerr, filepath.Base(p))
+					filesOut = append(filesOut, p)
+					degraded = append(degraded, lc)
+					continue
+				}
+				return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 译文写回失败（已自动重试3次，纯文案兜底亦生成失败）：%s", config.LangNames[lc], aerr.Error())}
 			}
 			filesOut = append(filesOut, outPath)
+		}
+	}
+
+	// ★ 还原模式纯文案旁路产物（2026-09-13 双模式层次1）：还原成功时也逐语言生成 .md
+	//   附加交付物——用户对还原不满意可直接取文案；降级语言的主产物已是 .md，不重复生成。
+	var textOut []string
+	if !deliveryText {
+		for _, lc := range finalLangs {
+			if len(langTranslations[lc]) == 0 {
+				continue
+			}
+			hit := false
+			for _, d := range degraded {
+				if d == lc {
+					hit = true
+					break
+				}
+			}
+			if hit {
+				continue
+			}
+			if p, perr := writeTextMd(lc); perr == nil {
+				textOut = append(textOut, p)
+			} else {
+				log.Printf("[file-text] 纯文案旁路产物生成失败（%s，不影响主交付）: %v", lc, perr)
+			}
 		}
 	}
 	prog("第3步/3：完成", 3, 3)
@@ -700,6 +824,18 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	if len(gateWarnings) > 0 {
 		reply += fmt.Sprintf("；⚠️ 质量校验提示 %d 条，详见结构化返回", len(gateWarnings))
 	}
+	// ★ 双模式（2026-09-13）：降级语言在话术中明示（产物已交付 .md 纯文案，非整单失败）
+	if len(degraded) > 0 {
+		names := make([]string, 0, len(degraded))
+		for _, lc := range degraded {
+			if n := config.LangNames[lc]; n != "" {
+				names = append(names, n)
+			} else {
+				names = append(names, lc)
+			}
+		}
+		reply += fmt.Sprintf("；⚠️ %s 版式还原失败，已降级为纯文案交付（.md），如需还原版式可重新发起工单", strings.Join(names, "、"))
+	}
 	// ★ 2026-09-03 需求：文件翻译结果附带实际 token 消耗
 	tp, tc := e.UsageTokens(ctx)
 	tokensUsed := tp + tc
@@ -707,16 +843,18 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		Skill: "translation",
 		Reply: reply,
 		Data: FileTranslateData{
-			TotalTexts:   len(texts),
-			TargetLangs:  finalLangs,
-			LangNames:    langNames,
-			KBHits:       kbHits,
-			ModelHits:    modelHits,
-			Untranslated: untranslated,     // 语言→未译出段数（>0 时审批台可见）
-			Translations: langTranslations, // 原文→译文（不序列化），工单执行器回写 TM
-			GateWarnings: gateWarnings,     // 整改 R1：主路径输出质量/文化闸门警告
+			TotalTexts:    len(texts),
+			TargetLangs:   finalLangs,
+			LangNames:     langNames,
+			KBHits:        kbHits,
+			ModelHits:     modelHits,
+			Untranslated:  untranslated,     // 语言→未译出段数（>0 时审批台可见）
+			Translations:  langTranslations, // 原文→译文（不序列化），工单执行器回写 TM
+			GateWarnings:  gateWarnings,     // 整改 R1：主路径输出质量/文化闸门警告
+			DegradedLangs: degraded,         // ★ 双模式：版式还原失败已降级纯文案的语言
 		},
 		Files:      filesOut,
+		TextFiles:  textOut, // ★ 还原模式纯文案旁路产物（工单执行器登记为附加交付物）
 		TokensUsed: tokensUsed,
 	}
 }

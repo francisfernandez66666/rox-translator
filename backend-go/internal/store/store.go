@@ -649,6 +649,11 @@ var columnAdditions = []colDef{
 	{"webhooks", "retry_interval", "ALTER TABLE webhooks ADD COLUMN retry_interval INTEGER NOT NULL DEFAULT 60"},
 	{"webhooks", "last_delivery_at", "ALTER TABLE webhooks ADD COLUMN last_delivery_at TEXT NOT NULL DEFAULT ''"},
 	{"webhooks", "failure_count", "ALTER TABLE webhooks ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0"},
+	// ★ 工单双模式（2026-09-13 anydoc 纯文案）：delivery=restore 还原文件（默认）/ text 纯文案；
+	//   text_result_path=纯文案 .md 产物（还原模式兜底附加物 / 纯文案模式主产物）
+	{"tickets", "delivery", "ALTER TABLE tickets ADD COLUMN delivery TEXT NOT NULL DEFAULT 'restore'"},
+	{"tickets", "text_result_path", "ALTER TABLE tickets ADD COLUMN text_result_path TEXT NOT NULL DEFAULT ''"},
+	{"ticket_files", "text_result_path", "ALTER TABLE ticket_files ADD COLUMN text_result_path TEXT NOT NULL DEFAULT ''"},
 }
 
 // migrateColumnsSQLite 为老库补充新增列（SQLite 3.35+ 才支持 ADD COLUMN IF NOT EXISTS，这里手工判断）。

@@ -30,6 +30,11 @@ export interface Ticket {
   reviewer_id: number
   reject_reason: string
   final_result: string
+  mode?: string
+  /** ★ 工单双模式（2026-09-13）：restore 还原文件模式（默认）/ text 纯文案模式 */
+  delivery?: string
+  /** ★ 纯文案 .md 产物路径（还原模式兜底附加物 / 纯文案模式主产物） */
+  text_result_path?: string
   created_at: string
   updated_at: string
 }
@@ -41,7 +46,7 @@ export interface TicketResp {
   tickets?: Ticket[]
   ticket?: Ticket
   states?: unknown[]
-  files?: { id: number; file_name: string; result_path: string; error: string }[]
+  files?: { id: number; file_name: string; result_path: string; text_result_path?: string; error: string }[]
 }
 
 /** 获取工单列表（mine=true 仅查看自己创建的） */
@@ -82,9 +87,12 @@ export async function ticketDetail(id: number): Promise<TicketResp> {
   return request(`/api/tickets/detail?id=${id}`, { headers: authHeaders() })
 }
 
-/** 下载工单结果文件（fetch→blob 触发保存，需鉴权头） */
-export async function ticketDownload(id: number): Promise<void> {
-  const r = await fetch(`${API_BASE}/api/tickets/download?id=${id}`, { headers: authHeaders() })
+/** 下载工单结果文件（fetch→blob 触发保存，需鉴权头）；fmt='text' 仅下载译文纯文案(.md) */
+export async function ticketDownload(id: number, opts?: { fmt?: 'text'; fileId?: number }): Promise<void> {
+  let url = `${API_BASE}/api/tickets/download?id=${id}`
+  if (opts?.fmt) url += `&fmt=${encodeURIComponent(opts.fmt)}`
+  if (opts?.fileId) url += `&file_id=${opts.fileId}`
+  const r = await fetch(url, { headers: authHeaders() })
   if (!r.ok) {
     let msg = `HTTP ${r.status}`
     try { msg = (await r.json()).message || msg } catch {}
@@ -94,12 +102,12 @@ export async function ticketDownload(id: number): Promise<void> {
   const cd = r.headers.get('Content-Disposition') || ''
   const m = cd.match(/filename="?([^";]+)"?/)
   const blob = await r.blob()
-  const url = URL.createObjectURL(blob)
+  const url2 = URL.createObjectURL(blob)
   const a = document.createElement('a')
-  a.href = url
+  a.href = url2
   a.download = m ? m[1] : `ticket_${id}.xlsx`
   a.click()
-  URL.revokeObjectURL(url)
+  URL.revokeObjectURL(url2)
 }
 
 /** 获取我的站内信列表 */
@@ -125,8 +133,10 @@ export async function notificationsReadAll(): Promise<AdminResp> {
 /**
  * 文件工单创建：multipart 上传，≤40MB；支持 docx/xlsx/pptx/pdf/txt/csv。
  * 支持多文件（共享 40MB 上限）；mode 透传后端避免被静默吞掉。
+ * delivery：restore 还原文件模式（默认）/ text 纯文案模式（anydoc 提取，交付译文 .md，
+ * 额外准入 doc/xls/ppt/odt/ods/odp/rtf/epub 等老格式）。
  */
-export async function ticketCreateFile(files: File | File[], meta: { title: string; target_langs: string; mode?: string; max_length?: number }): Promise<TicketResp> {
+export async function ticketCreateFile(files: File | File[], meta: { title: string; target_langs: string; mode?: string; max_length?: number; delivery?: string }): Promise<TicketResp> {
   const fd = new FormData()
   const list = Array.isArray(files) ? files : [files]
   for (const f of list) fd.append('files', f)
@@ -137,6 +147,8 @@ export async function ticketCreateFile(files: File | File[], meta: { title: stri
   if (meta.mode) fd.append('mode', meta.mode)
   // ★ 缩翻（任务7）：最长字符限制随表单透传后端（>0 启用缩翻）
   if (meta.max_length && meta.max_length > 0) fd.append('max_length', String(meta.max_length))
+  // ★ 工单双模式（2026-09-13）：交付方式透传（restore/text）
+  if (meta.delivery) fd.append('delivery', meta.delivery)
   return request('/api/tickets/create-file', { method: 'POST', headers: authHeaders(), body: fd })
 }
 

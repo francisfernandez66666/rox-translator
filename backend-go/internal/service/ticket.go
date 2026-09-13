@@ -478,6 +478,11 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	defer debug.FreeOSMemory()
 	langs := parseLangs(t.TargetLangs)
 	mode := t.Mode // fast | pro（空=pro）
+	// ★ 工单双模式（2026-09-13）：交付方式 restore 还原文件（默认）/ text 纯文案（anydoc 提取，交付 .md）
+	delivery := t.Delivery
+	if delivery == "" {
+		delivery = "restore"
+	}
 	// ★ 运营策略引擎（2026-09-05）：注入模式到 ctx，异步工单实时计量按 fast/pro 区分免费/扣费
 	ctx = tenant.WithLang(tenant.WithMode(ctx, mode), firstLangOf(langs)) // ★ C4：模式+主目标语种注入
 	// ★ 归属登记用创建者 ID（评审整改 C1）：OpenAPI 任务回退其归属用户
@@ -567,7 +572,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	files, _ := s.Store.TicketFiles(t.ID)
 	if len(files) > 0 {
 		var mu sync.Mutex
-		var okCount, failCount, unTotal int64
+		var okCount, failCount, unTotal, degradedFiles int64
 		var firstErr string
 		s.Store.SetTicketState(t.ID, "file_extract", "running",
 			fmt.Sprintf("total=%d mode=%s", len(files), normalizeMode(mode)))
@@ -580,7 +585,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				sem <- struct{}{}
 				defer func() { <-sem }()
 				res := s.Engine.HandleFile(ctx, tf.FilePath,
-					map[string]interface{}{"target_langs": langs, "mode": mode}, progFn)
+					map[string]interface{}{"target_langs": langs, "mode": mode, "delivery": delivery}, progFn)
 				mu.Lock()
 				defer mu.Unlock()
 				if res.Error != "" || len(res.Files) == 0 {
@@ -605,6 +610,19 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				}
 				_ = s.Store.SetTicketFileResult(tf.ID, storePath)
 				s.Store.RegisterArtifact(storePath, t.TenantID, ownerUID, t.ID) // ★ 归属登记（C1）
+				// ★ 双模式（2026-09-13）：纯文案旁路产物登记（还原模式兜底附加物）
+				if p := s.persistTextOutputs(t, ownerUID, res.TextFiles); p != "" {
+					_ = s.Store.SetTicketFileTextResult(tf.ID, p)
+				}
+				// ★ 双模式：版式还原失败已降级纯文案——文件级通知（工单仍成功），汇总轨迹在循环后
+				if len(res.Data.DegradedLangs) > 0 {
+					degradedFiles++
+					s.Store.CreateNotification(t.CreatedBy,
+						fmt.Sprintf("文件版式还原失败已交付纯文案：%s", tf.FileName),
+						fmt.Sprintf("%s 翻译已完成，但版式还原失败（%s），已以纯文案 .md 交付；如需还原版式可重新发起还原模式工单。",
+							tf.FileName, strings.Join(res.Data.DegradedLangs, "/")),
+						"ticket", t.ID)
+				}
 				okCount++
 				doneN := okCount + failedCount(s.Store, t.ID)
 				mu.Unlock()
@@ -624,6 +642,11 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 			s.Store.SetTicketState(t.ID, "file_qa", "success",
 				fmt.Sprintf("ok=%d fail=%d", okCount, failCount))
 			s.Store.SetTicketState(t.ID, "file_writeback", "success", "")
+			// ★ 双模式（2026-09-13）：任一文件版式还原失败降级 → 回写步骤置 warning（阶梯语义仍完成）
+			if degradedFiles > 0 {
+				s.Store.SetTicketState(t.ID, "file_writeback", "warning",
+					fmt.Sprintf("degraded_files=%d（版式还原失败，已以纯文案 .md 交付，详见通知）", degradedFiles))
+			}
 		}
 		// ★ 漏翻可见性（2026-08-26）：硬闸结束后仍有缺失时，追加 warning 轨迹 + 通知创建人
 		if unTotal > 0 {
@@ -641,7 +664,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	}
 	// 旧单文件路径
 	s.Store.SetTicketState(t.ID, "file_translate", "running", "single")
-	res := s.Engine.HandleFile(ctx, t.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode}, progFn)
+	res := s.Engine.HandleFile(ctx, t.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode, "delivery": delivery}, progFn)
 	if res.Error != "" {
 		return fmt.Errorf("%s", res.Error)
 	}
@@ -676,6 +699,19 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 		s.Store.RegisterArtifact(fp, t.TenantID, ownerUID, t.ID)
 	}
 	s.Store.SetTicketState(t.ID, "file_writeback", "success", "")
+	// ★ 双模式（2026-09-13）：纯文案旁路产物登记；降级语言另发通知并回置 warning 轨迹
+	if p := s.persistTextOutputs(t, ownerUID, res.TextFiles); p != "" {
+		_ = s.Store.SetTicketTextResultPath(t.ID, p)
+	}
+	if len(res.Data.DegradedLangs) > 0 {
+		s.Store.SetTicketState(t.ID, "file_writeback", "warning",
+			fmt.Sprintf("degraded=%s（版式还原失败，已以纯文案 .md 交付）", strings.Join(res.Data.DegradedLangs, "/")))
+		s.Store.CreateNotification(t.CreatedBy,
+			fmt.Sprintf("文件版式还原失败已交付纯文案：%s", t.Title),
+			fmt.Sprintf("翻译已完成，但 %s 版式还原失败，已以纯文案 .md 交付；如需还原版式可重新发起还原模式工单。",
+				strings.Join(res.Data.DegradedLangs, "/")),
+			"ticket", t.ID)
+	}
 	s.bumpTmHitsFromTranslations(t.TenantID, res.Data.Translations) // ★ 自闭环计数（不自动入库）
 	return nil
 }
@@ -721,6 +757,31 @@ func zipOutputs(paths []string, zipName string) (string, error) {
 		_, _ = fe.Write(data)
 	}
 	return zipPath, w.Close()
+}
+
+// persistTextOutputs ★ 工单双模式（2026-09-13）：纯文案 .md 旁路产物的归属登记与汇总。
+// 单语言直接返回该文件路径；多语言打包为 {ticket_no}_texts.zip；全部产物登记归属（C1 口径）。
+// 返回空串表示无可用旁路产物（生成失败/列表为空，不影响主交付）。
+func (s *TicketService) persistTextOutputs(t *store.Ticket, ownerUID int64, paths []string) string {
+	var exist []string
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			exist = append(exist, p)
+			s.Store.RegisterArtifact(p, t.TenantID, ownerUID, t.ID)
+		}
+	}
+	if len(exist) == 0 {
+		return ""
+	}
+	if len(exist) == 1 {
+		return exist[0]
+	}
+	zp, err := zipOutputs(exist, t.TicketNo+"_texts.zip")
+	if err != nil {
+		return exist[0]
+	}
+	s.Store.RegisterArtifact(zp, t.TenantID, ownerUID, t.ID)
+	return zp
 }
 
 // normalizeMode 模式归一化（轨迹展示用）。

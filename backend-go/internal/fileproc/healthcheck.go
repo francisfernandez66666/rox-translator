@@ -21,6 +21,7 @@ type HealthResult struct {
 	PythonAvailable   bool     // Python 解释器是否可用
 	Fpdf2Available    bool     // fpdf2 库是否可导入
 	Pdf2docxAvaliable bool     // pdf2docx 库是否可导入
+	AnydocAvail       bool     // firecrawl-anydoc（导入名 anydoc）是否可导入——纯文案模式提取层
 	LibreOfficeAvail  bool     // LibreOffice 是否可用
 	PythonPath        string   // Python 解释器路径
 	LibreOfficePath   string   // LibreOffice 路径
@@ -59,6 +60,13 @@ func doHealthCheck() *HealthResult {
 			result.Pdf2docxAvaliable = true
 		} else {
 			result.Warnings = append(result.Warnings, "Python pdf2docx 库未安装，PDF 转 DOCX 功能不可用")
+		}
+
+		// 检查 firecrawl-anydoc（导入名 anydoc；工单纯文案模式提取层，纯本地零网络）
+		if checkPythonModule(pythonPath, "anydoc") {
+			result.AnydocAvail = true
+		} else {
+			result.Warnings = append(result.Warnings, "Python firecrawl-anydoc 库未安装，工单「纯文案模式」不可用（pip install firecrawl-anydoc）")
 		}
 	} else {
 		result.Warnings = append(result.Warnings, "Python 解释器未找到，文档转换子进程不可用")

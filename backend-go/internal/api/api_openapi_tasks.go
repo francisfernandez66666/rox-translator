@@ -81,6 +81,15 @@ func normalizeTaskMode(m string) string {
 	return "pro"
 }
 
+// normalizeTaskDelivery ★ 工单双模式（2026-09-13）：归一化交付方式——
+// "text"=纯文案模式；其余（含空/历史工单）一律 restore 还原文件模式。
+func normalizeTaskDelivery(d string) string {
+	if strings.ToLower(strings.TrimSpace(d)) == "text" {
+		return "text"
+	}
+	return "restore"
+}
+
 // singleQuotedJSON 宽松兼容：文档示例使用单引号 JSON（便于 shell 复制），
 // 服务端在解码前规范化为标准双引号。仅在未检测到双引号时启用，避免破坏正常负载。
 func singleQuotedJSON(body []byte) []byte {
@@ -248,9 +257,24 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		writeTaskError(w, string(errors.OpenAPIBadRequest), fmt.Sprintf("单次最多 %d 个文件", openAPITaskMaxFiles))
 		return
 	}
+	// ★ 工单双模式（2026-09-13）：delivery=text 纯文案模式（anydoc 提取交付 .md，额外准入老格式/ODF/RTF/EPUB）
+	delivery := normalizeTaskDelivery(r.FormValue("delivery"))
+	textExt := map[string]bool{}
+	if delivery == "text" {
+		for k := range fileproc.AnydocFormats {
+			textExt[k] = true
+		}
+	}
 	for _, hdr := range headers {
 		ext := strings.ToLower(filepath.Ext(hdr.Filename))
 		if !openAPITaskExtWhitelist[ext] {
+			if delivery == "text" && textExt[ext] {
+				if !fileproc.AnydocAvailable() {
+					writeTaskError(w, string(errors.OpenAPIBadRequest), hdr.Filename+" 需服务器安装 firecrawl-anydoc 依赖后方可纯文案翻译")
+					return
+				}
+				continue
+			}
 			writeTaskError(w, string(errors.OpenAPIBadRequest), "不支持的格式: "+hdr.Filename+"（仅支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml）")
 			return
 		}
@@ -298,14 +322,16 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		src.Close()
 		saved = append(saved, struct{ path, name string }{savePath, hdr.Filename})
 	}
-	// ★ 性能优化 Phase A1：PDF 前置拦截（大小/页数），超限直接友好拒绝
-	for _, f := range saved {
-		if perr := checkPdfLimits(f.path, f.name); perr != nil {
-			for _, cleanup := range saved {
-				os.Remove(cleanup.path)
+	// ★ 性能优化 Phase A1：PDF 前置拦截（大小/页数），超限直接友好拒绝（纯文案模式不走转换链，跳过）
+	if delivery != "text" {
+		for _, f := range saved {
+			if perr := checkPdfLimits(f.path, f.name); perr != nil {
+				for _, cleanup := range saved {
+					os.Remove(cleanup.path)
+				}
+				writeTaskError(w, string(errors.OpenAPIBadRequest), perr.Error())
+				return
 			}
-			writeTaskError(w, string(errors.OpenAPIBadRequest), perr.Error())
-			return
 		}
 	}
 	if title == "" {
@@ -326,14 +352,16 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		})
 		s.Store.RegisterArtifact(f.path, tid2, ak.UserID, t.ID) // ★ 归属登记（评审整改 C1）
 	}
+	// ★ 工单双模式：交付方式随任务落库（enqueueAPITask 的 UpdateTicket 持久化 delivery 列）
+	t.Delivery = delivery
 	s.enqueueAPITask(t, mode, ak)
 	respBody := map[string]interface{}{
-		"task_id": t.ID, "mode": mode,
+		"task_id": t.ID, "mode": mode, "delivery": delivery,
 		"type": "files", "status": "queued",
 		"file_count": len(saved),
 	}
 	for _, f := range saved {
-		if strings.EqualFold(filepath.Ext(f.name), ".pdf") && fileproc.PdfImageHeavy(f.path) {
+		if strings.EqualFold(filepath.Ext(f.name), ".pdf") && delivery != "text" && fileproc.PdfImageHeavy(f.path) {
 			respBody["image_heavy"] = true
 			break
 		}
@@ -375,6 +403,8 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 		"type":    map[bool]string{true: "files", false: "text"}[isFile],
 		"mode":    normalizeTaskMode(t.Mode),
 		"status":  "",
+		// ★ 工单双模式（2026-09-13）：回显交付方式（restore 还原文件 / text 纯文案）
+		"delivery": normalizeTaskDelivery(t.Delivery),
 	}
 	// 状态映射：queued→queued；in_progress/pending_approval/approved→processing；
 	// completed→completed；rejected/failed→failed
@@ -410,7 +440,9 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 				files = append(files, map[string]interface{}{
 					"file_id": f.ID, "name": f.FileName,
 					"result_ready": f.ResultPath != "",
-					"error":        f.Error,
+					// ★ 双模式：纯文案 .md 产物是否就绪（download?fmt=text 可取）
+					"text_result_ready": f.TextResultPath != "" || normalizeTaskDelivery(t.Delivery) == "text",
+					"error":             f.Error,
 				})
 			}
 			resp["files"] = files
@@ -475,6 +507,11 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	baseName := t.TicketNo
+	// ★ 工单双模式（2026-09-13）：fmt=text → 仅下载译文纯文案（.md）
+	if strings.EqualFold(r.URL.Query().Get("fmt"), "text") {
+		s.serveTicketTextDeliverable(w, r, t, baseName)
+		return
+	}
 	// 多文件工单：?file_id= 取单个产物；否则打包 zip（跳过失败文件）
 	tfiles, _ := s.Store.TicketFiles(t.ID)
 	if len(tfiles) > 0 {

@@ -15,26 +15,28 @@ import (
 
 // Ticket 工单
 type Ticket struct {
-	ID           int64  `json:"id"`                    // 工单主键 ID
-	TenantID     int64  `json:"tenant_id"`             // 所属租户 ID
-	TicketNo     string `json:"ticket_no"`             // 工单号（T + 时间戳 + 随机后缀）
-	Title        string `json:"title"`                 // 工单标题
-	Status       string `json:"status"`                // 状态：draft/in_progress/pending_approval/approved/rejected/completed
-	SourceText   string `json:"source_text"`           // 待翻译源文本
-	FilePath     string `json:"file_path"`             // 关联上传文件路径（空表示纯文本）
-	TargetLangs  string `json:"target_langs"`          // 目标语言列表（逗号分隔）
-	CreatedBy    int64  `json:"created_by"`            // 创建者用户 ID
-	Mode         string `json:"mode"`                  // 翻译模式：fast 快速 / pro 专业校对（空=pro）
-	TokensBilled int64  `json:"tokens_billed"`         // 本单实费计费 token 数（真实用量×均摊系数）
-	APIUserID    int64  `json:"api_user_id"`           // ★ OpenAPI 归属用户 ID（0=非 API 创建/历史数据，回读校验用）
-	MaxLength    int64  `json:"max_length"`            // ★ 缩翻最长字符限制（0=未启用缩翻；>0=译文总长不得超过该值）
-	ApproverID   int64  `json:"approver_id"`           // 审批人用户 ID（0 表示未分配）
-	ReviewerID   int64  `json:"reviewer_id"`           // 审校人用户 ID（0 表示未分配）
-	RejectReason string `json:"reject_reason"`         // 驳回原因（被驳回时填写，重翻时使用）
-	FinalResult  string `json:"final_result"`          // 最终结果（JSON：含各语言译文及中间轨迹）
-	ResultPath   string `json:"result_path,omitempty"` // 结果文件路径（原格式回写产物/xlsx 对照表；空=未生成）
-	CreatedAt    string `json:"created_at"`            // 创建时间（RFC3339 字符串）
-	UpdatedAt    string `json:"updated_at"`            // 更新时间（RFC3339 字符串）
+	ID             int64  `json:"id"`                         // 工单主键 ID
+	TenantID       int64  `json:"tenant_id"`                  // 所属租户 ID
+	TicketNo       string `json:"ticket_no"`                  // 工单号（T + 时间戳 + 随机后缀）
+	Title          string `json:"title"`                      // 工单标题
+	Status         string `json:"status"`                     // 状态：draft/in_progress/pending_approval/approved/rejected/completed
+	SourceText     string `json:"source_text"`                // 待翻译源文本
+	FilePath       string `json:"file_path"`                  // 关联上传文件路径（空表示纯文本）
+	TargetLangs    string `json:"target_langs"`               // 目标语言列表（逗号分隔）
+	CreatedBy      int64  `json:"created_by"`                 // 创建者用户 ID
+	Mode           string `json:"mode"`                       // 翻译模式：fast 快速 / pro 专业校对（空=pro）
+	TokensBilled   int64  `json:"tokens_billed"`              // 本单实费计费 token 数（真实用量×均摊系数）
+	APIUserID      int64  `json:"api_user_id"`                // ★ OpenAPI 归属用户 ID（0=非 API 创建/历史数据，回读校验用）
+	MaxLength      int64  `json:"max_length"`                 // ★ 缩翻最长字符限制（0=未启用缩翻；>0=译文总长不得超过该值）
+	Delivery       string `json:"delivery"`                   // ★ 文件工单交付方式：restore 还原文件模式（默认）/ text 纯文案模式
+	TextResultPath string `json:"text_result_path,omitempty"` // ★ 纯文案 .md 产物路径（还原模式兜底附加物 / 纯文案模式主产物）
+	ApproverID     int64  `json:"approver_id"`                // 审批人用户 ID（0 表示未分配）
+	ReviewerID     int64  `json:"reviewer_id"`                // 审校人用户 ID（0 表示未分配）
+	RejectReason   string `json:"reject_reason"`              // 驳回原因（被驳回时填写，重翻时使用）
+	FinalResult    string `json:"final_result"`               // 最终结果（JSON：含各语言译文及中间轨迹）
+	ResultPath     string `json:"result_path,omitempty"`      // 结果文件路径（原格式回写产物/xlsx 对照表；空=未生成）
+	CreatedAt      string `json:"created_at"`                 // 创建时间（RFC3339 字符串）
+	UpdatedAt      string `json:"updated_at"`                 // 更新时间（RFC3339 字符串）
 }
 
 // TicketState 工单状态轨迹（Projector 物化）
@@ -94,8 +96,8 @@ func (s *Store) CreateTicket(tid, userID int64, title, sourceText, filePath, tar
 // 参数：id=工单主键 ID，tid=租户 ID；返回工单对象。
 func (s *Store) GetTicket(id, tid int64) (*Ticket, error) {
 	var t Ticket
-	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), created_at, updated_at FROM tickets WHERE id=? AND tenant_id=?", id, tid).
-		Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.CreatedAt, &t.UpdatedAt)
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, created_at, updated_at FROM tickets WHERE id=? AND tenant_id=?", id, tid).
+		Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -104,13 +106,13 @@ func (s *Store) GetTicket(id, tid int64) (*Ticket, error) {
 
 // GetTicketGlobal 按 ID 查询工单（不带租户过滤，worker 异步上下文用）。
 func (s *Store) GetTicketGlobal(id int64) (*Ticket, error) {
-	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), created_at, updated_at FROM tickets WHERE id=?", id)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, created_at, updated_at FROM tickets WHERE id=?", id)
 	return scanTicketFull(row)
 }
 
 // GetTicketByNo 按工单号查询工单（对应用户粘贴「工单号 T20260902...」而非数字 ID 的场景）。
 func (s *Store) GetTicketByNo(no string) (*Ticket, error) {
-	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), created_at, updated_at FROM tickets WHERE ticket_no=?", no)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, created_at, updated_at FROM tickets WHERE ticket_no=?", no)
 	return scanTicketFull(row)
 }
 
@@ -120,11 +122,17 @@ func (s *Store) SetTicketResultPath(id int64, path string) error {
 	return err
 }
 
+// SetTicketTextResultPath 写入纯文案 .md 产物路径（还原模式兜底附加物 / 纯文案模式主产物）。
+func (s *Store) SetTicketTextResultPath(id int64, path string) error {
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tickets SET text_result_path=? WHERE id=?", path, id)
+	return err
+}
+
 // ListTickets 工单列表（租户隔离；onlyMine=true 时只返回当前用户创建的）。
 // 参数：tid=租户 ID，userID=用户 ID，onlyMine=是否仅我的工单。
 // 返回：工单列表（最多 200 条，按 ID 倒序）。
 func (s *Store) ListTickets(tid, userID int64, onlyMine bool) ([]*Ticket, error) {
-	q := "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), created_at, updated_at FROM tickets WHERE tenant_id=?"
+	q := "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, created_at, updated_at FROM tickets WHERE tenant_id=?"
 	args := []interface{}{tid}
 	if onlyMine {
 		q += " AND created_by=?" // 只看自己创建的
@@ -139,7 +147,7 @@ func (s *Store) ListTickets(tid, userID int64, onlyMine bool) ([]*Ticket, error)
 	var out []*Ticket
 	for rows.Next() {
 		var t Ticket
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &t)
@@ -150,7 +158,7 @@ func (s *Store) ListTickets(tid, userID int64, onlyMine bool) ([]*Ticket, error)
 // ListPendingApproval 待审批工单列表（供 approver/admin 审批台使用）。
 // 参数：tid=租户 ID；返回状态为 pending_approval/approved/rejected 的工单。
 func (s *Store) ListPendingApproval(tid int64) ([]*Ticket, error) {
-	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), created_at, updated_at FROM tickets WHERE tenant_id=? AND status IN ('pending_approval','approved','rejected') ORDER BY id DESC LIMIT 200", tid)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, created_at, updated_at FROM tickets WHERE tenant_id=? AND status IN ('pending_approval','approved','rejected') ORDER BY id DESC LIMIT 200", tid)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +166,7 @@ func (s *Store) ListPendingApproval(tid int64) ([]*Ticket, error) {
 	var out []*Ticket
 	for rows.Next() {
 		var t Ticket
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &t)
@@ -170,8 +178,8 @@ func (s *Store) ListPendingApproval(tid int64) ([]*Ticket, error) {
 // 参数：t=待更新工单对象（以 ID+TenantID 定位）；返回错误。
 func (s *Store) UpdateTicket(t *Ticket) error {
 	_, err := db.Exec(s.db, db.CurrentDialect(),
-		"UPDATE tickets SET title=?, status=?, target_langs=?, approver_id=?, reviewer_id=?, reject_reason=?, final_result=?, mode=?, tokens_billed=?, max_length=?, updated_at=? WHERE id=? AND tenant_id=?",
-		t.Title, t.Status, t.TargetLangs, t.ApproverID, t.ReviewerID, t.RejectReason, t.FinalResult, t.Mode, t.TokensBilled, t.MaxLength,
+		"UPDATE tickets SET title=?, status=?, target_langs=?, approver_id=?, reviewer_id=?, reject_reason=?, final_result=?, mode=?, tokens_billed=?, max_length=?, delivery=?, updated_at=? WHERE id=? AND tenant_id=?",
+		t.Title, t.Status, t.TargetLangs, t.ApproverID, t.ReviewerID, t.RejectReason, t.FinalResult, t.Mode, t.TokensBilled, t.MaxLength, t.Delivery,
 		time.Now().Format(time.RFC3339), t.ID, t.TenantID)
 	return err
 }
@@ -245,7 +253,7 @@ func (s *Store) TicketStates(ticketID int64) ([]*TicketState, error) {
 // scanTicketFull 扫描全列工单行（GetTicketGlobal 专用，含 result_path）。
 func scanTicketFull(row *sql.Row) (*Ticket, error) {
 	var t Ticket
-	err := row.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.CreatedAt, &t.UpdatedAt)
+	err := row.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -268,6 +276,9 @@ func (s *Store) DeleteTicketWithFiles(id, tid int64) error {
 	if t.ResultPath != "" {
 		diskPaths = append(diskPaths, t.ResultPath)
 	}
+	if t.TextResultPath != "" {
+		diskPaths = append(diskPaths, t.TextResultPath)
+	}
 	tfs, _ := s.TicketFiles(id)
 	for _, tf := range tfs {
 		if tf.FilePath != "" {
@@ -275,6 +286,9 @@ func (s *Store) DeleteTicketWithFiles(id, tid int64) error {
 		}
 		if tf.ResultPath != "" {
 			diskPaths = append(diskPaths, tf.ResultPath)
+		}
+		if tf.TextResultPath != "" { // ★ 双模式：纯文案兜底产物随工单一并清理
+			diskPaths = append(diskPaths, tf.TextResultPath)
 		}
 	}
 	// 删除 DB 记录（ticket_files → ticket_state → tickets）

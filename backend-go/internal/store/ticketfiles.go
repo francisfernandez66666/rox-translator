@@ -14,18 +14,19 @@ import (
 
 // TicketFile 工单源文件
 type TicketFile struct {
-	ID         int64  `json:"id"`          // 主键 ID
-	TenantID   int64  `json:"tenant_id"`   // 所属租户 ID
-	TicketID   int64  `json:"ticket_id"`   // 关联工单 ID
-	FileName   string `json:"file_name"`   // 原始文件名
-	FilePath   string `json:"file_path"`   // 上传保存路径
-	ResultPath string `json:"result_path"` // 翻译产物路径（空=未生成）
-	Error      string `json:"error"`       // 单文件处理失败原因（空=成功/未处理）
-	CreatedAt  string `json:"created_at"`
+	ID             int64  `json:"id"`               // 主键 ID
+	TenantID       int64  `json:"tenant_id"`        // 所属租户 ID
+	TicketID       int64  `json:"ticket_id"`        // 关联工单 ID
+	FileName       string `json:"file_name"`        // 原始文件名
+	FilePath       string `json:"file_path"`        // 上传保存路径
+	ResultPath     string `json:"result_path"`      // 翻译产物路径（空=未生成）
+	TextResultPath string `json:"text_result_path"` // ★ 纯文案 .md 产物路径（还原模式兜底附加物；空=未生成）
+	Error          string `json:"error"`            // 单文件处理失败原因（空=成功/未处理）
+	CreatedAt      string `json:"created_at"`
 }
 
 // ticketFileCols 工单源文件表通用查询列清单（Scan 顺序契约；result_path/error 为可空列，COALESCE 兜底）。
-const ticketFileCols = "id, tenant_id, ticket_id, file_name, file_path, COALESCE(result_path,''), COALESCE(error,''), created_at"
+const ticketFileCols = "id, tenant_id, ticket_id, file_name, file_path, COALESCE(result_path,''), COALESCE(error,''), created_at, COALESCE(text_result_path,'')"
 
 // AddTicketFile 为工单登记一个源文件。
 func (s *Store) AddTicketFile(tf *TicketFile) (*TicketFile, error) {
@@ -50,7 +51,7 @@ func (s *Store) TicketFiles(ticketID int64) ([]*TicketFile, error) {
 	var out []*TicketFile
 	for rows.Next() {
 		var f TicketFile
-		if err := rows.Scan(&f.ID, &f.TenantID, &f.TicketID, &f.FileName, &f.FilePath, &f.ResultPath, &f.Error, &f.CreatedAt); err != nil {
+		if err := rows.Scan(&f.ID, &f.TenantID, &f.TicketID, &f.FileName, &f.FilePath, &f.ResultPath, &f.Error, &f.CreatedAt, &f.TextResultPath); err != nil {
 			continue
 		}
 		out = append(out, &f)
@@ -62,7 +63,7 @@ func (s *Store) TicketFiles(ticketID int64) ([]*TicketFile, error) {
 func (s *Store) GetTicketFile(id, tenantID int64) (*TicketFile, error) {
 	var f TicketFile
 	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+ticketFileCols+" FROM ticket_files WHERE id=? AND tenant_id=?", id, tenantID).
-		Scan(&f.ID, &f.TenantID, &f.TicketID, &f.FileName, &f.FilePath, &f.ResultPath, &f.Error, &f.CreatedAt)
+		Scan(&f.ID, &f.TenantID, &f.TicketID, &f.FileName, &f.FilePath, &f.ResultPath, &f.Error, &f.CreatedAt, &f.TextResultPath)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -75,6 +76,12 @@ func (s *Store) GetTicketFile(id, tenantID int64) (*TicketFile, error) {
 // SetTicketFileResult 写入单个文件的产物路径（error 清空）。
 func (s *Store) SetTicketFileResult(id int64, resultPath string) error {
 	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE ticket_files SET result_path=?, error='' WHERE id=?", resultPath, id)
+	return err
+}
+
+// SetTicketFileTextResult 写入单个文件的纯文案 .md 产物路径（还原模式兜底附加物；多语言时为打包 zip）。
+func (s *Store) SetTicketFileTextResult(id int64, textPath string) error {
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE ticket_files SET text_result_path=? WHERE id=?", textPath, id)
 	return err
 }
 

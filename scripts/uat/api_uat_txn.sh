@@ -28,6 +28,8 @@
 #   T30 H3 包级授权矩阵（读/写/撤销）+ D11 关键词检索 + H12 开放术语检索
 #   T31 H12 TMX 导出（成员拒/文档结构/非法语言/匿名拒）  T32 H7+H11 ops 路由与 SLO 可视化
 #   T33 H4 TM 审核队列契约 + H9 二级裂变漏斗
+#   T34 工单双模式（2026-09-13）：还原文件模式纯文案旁路产物 / 纯文案模式交付 /
+#       白名单分档 / 文本工单无文案产物提示 / OpenAPI delivery 回显
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 # 依赖：mock_llm.py 已启动、uat 服务已启动（run_uat.sh 编排）
 # 用法：BASE_URL=... UAT_DB=... ADMIN_PASS=... [UAT_SERVER_LOG=...] bash scripts/uat/api_uat_txn.sh
@@ -564,6 +566,77 @@ H33="Authorization: Bearer $(tok $U33 uatpass123)"
 R=$(get "$H33" /api/referral/funnel)
 ck T33-funnel '"success":true' "$R"
 ck T33-funnel-l2pct '"l2_pct"' "$R"
+
+# ---------- T34 工单双模式（还原文件 / 纯文案，2026-09-13） ----------
+TMPD34=$(mktemp -d)
+python3 - "$TMPD34/t34.docx" <<'EOF'
+import sys, zipfile
+zf = zipfile.ZipFile(sys.argv[1],'w')
+zf.writestr('[Content_Types].xml','''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>''')
+zf.writestr('_rels/.rels','''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>''')
+zf.writestr('word/document.xml','''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body><w:p><w:r><w:t>双模式测试第一段：文件翻译兜底交付。</w:t></w:r></w:p>
+<w:p><w:r><w:t>双模式测试第二段：纯文案模式验证。</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>''')
+zf.close()
+EOF
+# 等待文件工单跑完（轮询 detail 至终态，最长 60s：mock LLM 下硬闸兜底循环亦需数秒）
+waittk(){ local hdr="$1" tid="$2" d st
+  for i in $(seq 1 30); do
+    d=$(get "$hdr" "/api/tickets/detail?id=$tid")
+    st=$(echo "$d" | pv "['ticket'].get('status')")
+    case "$st" in completed|rejected) echo "$d"; return 0;; esac
+    sleep 2
+  done
+  echo "$d"; return 1; }
+
+# T34-1 还原文件模式（缺省 delivery）：完成后旁路纯文案 .md 已登记 + fmt=text 可下载
+R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD34/t34.docx" -F "target_langs=en" -F "mode=fast")
+ck T34-restore-create '"success":true' "$R"
+TKR=$(echo "$R" | pv "['ticket']['id']")
+D34=$(waittk "$H1" "$TKR")
+ck T34-restore-completed '"status":"completed"' "$D34"
+ck T34-restore-sidecar-registered '"text_result_path":"[^"]' "$D34"
+T34MD=$(curl -s "$B/api/tickets/download?id=$TKR&fmt=text" -H "$H1" --max-time 30)
+ck T34-restore-dl-text-md 'TranslatedEN' "$T34MD"
+ck T34-restore-dl-main-200 '200' "$(curl -s -o /dev/null -w '%{http_code}' "$B/api/tickets/download?id=$TKR" -H "$H1" --max-time 30)"
+
+# T34-2 纯文案模式（delivery=text，docx 走 MD 管线不依赖 anydoc）：主产物即 .md
+R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD34/t34.docx" -F "target_langs=en" -F "mode=fast" -F "delivery=text")
+ck T34-text-create '"success":true' "$R"
+TKT=$(echo "$R" | pv "['ticket']['id']")
+D34T=$(waittk "$H1" "$TKT")
+ck T34-text-completed '"status":"completed"' "$D34T"
+ck T34-text-delivery-echo '"delivery":"text"' "$D34T"
+T34TMD=$(curl -s "$B/api/tickets/download?id=$TKT" -H "$H1" --max-time 30)
+ck T34-text-dl-md-content 'TranslatedEN' "$T34TMD"
+
+# T34-3 白名单分档：restore 拒绝 .rtf（老格式）；text 模式拒绝未知扩展并提示纯文案支持面
+printf '{\\rtf1 legacy}' > "$TMPD34/legacy.rtf"
+R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD34/legacy.rtf" -F "target_langs=en")
+ck T34-rtf-restore-reject '不支持的格式' "$R"
+printf 'not-a-doc' > "$TMPD34/bad.ppt9"
+R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD34/bad.ppt9" -F "target_langs=en" -F "delivery=text")
+ck T34-text-whitelist '纯文案模式支持' "$R"
+
+# T34-4 文本工单无文件产物：fmt=text 返回明确失败话术（非 500）
+R=$(post "$H1" '{"title":"T34文本工单","source_text":"双模式文本工单兜底提示检查","target_langs":"en","mode":"fast"}' /api/tickets/create)
+TKX=$(echo "$R" | pv "['ticket']['id']")
+ck T34-textticket-no-artifact '"success":false' "$(get "$H1" "/api/tickets/download?id=$TKX&fmt=text" )"
+
+# T34-5 OpenAPI 文件任务 delivery 透传回显
+R=$(curl -s $B/openapi/v1/tasks -H "Authorization: Bearer $AK" -F "files=@$TMPD34/t34.docx" -F "target_langs=en" -F "mode=fast" -F "delivery=text" --max-time 60)
+ck T34-openapi-delivery-echo '"delivery":"text"' "$R"
+rm -rf "$TMPD34"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

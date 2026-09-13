@@ -221,17 +221,36 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少文件"})
 		return
 	}
+	// ★ 工单双模式（2026-09-13）：交付方式 delivery=restore 还原文件模式（默认）/ text 纯文案模式
+	//   （anydoc 提取→交付译文 .md，不还原版式；额外准入 doc/xls/ppt/odt/ods/odp/rtf/epub 等）。
+	delivery := normalizeTaskDelivery(r.FormValue("delivery"))
 	// 扩展名白名单（与 fileproc.ExtractTexts 支持的格式一致；逐文件校验）
 	allowed := map[string]bool{
 		".docx": true, ".xlsx": true, ".pptx": true, ".pdf": true,
 		".txt": true, ".csv": true, ".srt": true, ".vtt": true,
 		".md": true, ".json": true, ".yaml": true, ".yml": true,
 	}
+	if delivery == "text" {
+		for k := range fileproc.AnydocFormats {
+			allowed[k] = true
+		}
+	}
 	for _, hdr := range headers {
 		ext := strings.ToLower(filepath.Ext(hdr.Filename))
 		if !allowed[ext] {
+			if delivery == "text" {
+				writeJSON(w, 400, map[string]interface{}{"success": false,
+					"message": "不支持的格式: " + hdr.Filename + "（纯文案模式支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml 及 doc/xls/ppt/odt/ods/odp/rtf/epub）"})
+				return
+			}
 			writeJSON(w, 400, map[string]interface{}{"success": false,
 				"message": "不支持的格式: " + hdr.Filename + "（仅支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml）"})
+			return
+		}
+		// 纯文案模式下 anydoc 独占格式需要依赖就绪（缺失时老 12 种仍可用，不受影响）
+		if delivery == "text" && fileproc.AnydocFormats[ext] && !fileproc.AnydocAvailable() {
+			writeJSON(w, 400, map[string]interface{}{"success": false,
+				"message": hdr.Filename + " 需服务器安装 firecrawl-anydoc 依赖后方可纯文案翻译（请管理员执行 pip install firecrawl-anydoc，或改用还原模式支持格式）"})
 			return
 		}
 	}
@@ -268,14 +287,17 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		src.Close()
 		saved = append(saved, struct{ path, name string }{savePath, hdr.Filename})
 	}
-	// ★ 性能优化 Phase A1：PDF 前置拦截（大小/页数），超限直接友好拒绝，避免后台转换卡死
-	for _, f := range saved {
-		if perr := checkPdfLimits(f.path, f.name); perr != nil {
-			for _, cleanup := range saved {
-				os.Remove(cleanup.path)
+	// ★ 性能优化 Phase A1：PDF 前置拦截（大小/页数），超限直接友好拒绝，避免后台转换卡死。
+	//   纯文案模式跳过——不经 pdf2docx/LibreOffice 转换链，毫秒级提取无卡死风险。
+	if delivery != "text" {
+		for _, f := range saved {
+			if perr := checkPdfLimits(f.path, f.name); perr != nil {
+				for _, cleanup := range saved {
+					os.Remove(cleanup.path)
+				}
+				writeJSON(w, 400, map[string]interface{}{"success": false, "message": perr.Error()})
+				return
 			}
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": perr.Error()})
-			return
 		}
 	}
 	if title == "" {
@@ -319,6 +341,8 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 	}
 	// ★ 文件任务模式落库（multipart mode 字段；空=pro）
 	t.Mode = normalizeTaskMode(r.FormValue("mode"))
+	// ★ 工单双模式（2026-09-13）：交付方式随建单落库（restore 还原文件 / text 纯文案）
+	t.Delivery = delivery
 	// ★ 缩翻（任务7）：文件工单最长字符限制（multipart max_length；空=0 未启用）
 	if n, perr := strconv.ParseInt(r.FormValue("max_length"), 10, 64); perr == nil && n > 0 {
 		t.MaxLength = n
@@ -528,6 +552,11 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 	baseName := t.TicketNo
 	if baseName == "" {
 		baseName = fmt.Sprintf("ticket_%d", t.ID)
+	}
+	// ★ 工单双模式（2026-09-13）：fmt=text → 仅返回译文纯文案（.md），不取还原产物
+	if strings.EqualFold(r.URL.Query().Get("fmt"), "text") {
+		s.serveTicketTextDeliverable(w, r, t, baseName)
+		return
 	}
 	// ⓪ 多文件工单：?file_id= 取单个文件产物；否则把全部产物打包 zip 返回
 	tfiles, _ := s.Store.TicketFiles(t.ID)
@@ -847,6 +876,107 @@ func resultFileName(f *store.TicketFile) string {
 		ext = filepath.Ext(base)
 	}
 	return strings.TrimSuffix(base, filepath.Ext(base)) + ext
+}
+
+// serveTicketTextDeliverable ★ 工单双模式（2026-09-13）：GET /api/tickets/download?id=&fmt=text
+// 仅返回译文纯文案。解析优先级：登记的旁路产物 text_result_path（还原模式兜底，
+// 多语言时为 zip）→ 纯文案模式主产物 result_path（本就是 .md）。
+// 多文件工单合并为 zip；无纯文案产物（历史工单）返回明确提示。
+func (s *Server) serveTicketTextDeliverable(w http.ResponseWriter, r *http.Request, t *store.Ticket, baseName string) {
+	isTextMode := strings.EqualFold(t.Delivery, "text")
+	var paths, names []string
+	tfiles, _ := s.Store.TicketFiles(t.ID)
+	// 单文件定位（file_id）优先
+	if fidStr := r.URL.Query().Get("file_id"); fidStr != "" {
+		fid, _ := strconv.ParseInt(fidStr, 10, 64)
+		for _, f := range tfiles {
+			if f.ID != fid {
+				continue
+			}
+			p := f.TextResultPath
+			if p == "" && isTextMode {
+				p = f.ResultPath
+			}
+			if p == "" {
+				writeJSON(w, 404, map[string]interface{}{"success": false, "message": "该文件暂无纯文案产物"})
+				return
+			}
+			s.serveOneFile(w, r, p, textDeliverableName(f))
+			return
+		}
+		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "文件不存在"})
+		return
+	}
+	for _, f := range tfiles {
+		p := f.TextResultPath
+		if p == "" && isTextMode {
+			p = f.ResultPath // 纯文案模式：主产物即 .md
+		}
+		if p != "" {
+			if _, err := os.Stat(p); err == nil {
+				paths = append(paths, p)
+				names = append(names, textDeliverableName(f))
+			}
+		}
+	}
+	if len(paths) == 0 { // 旧单文件路径（无 ticket_files 行）
+		p := t.TextResultPath
+		if p == "" && isTextMode {
+			p = t.ResultPath
+		}
+		if p != "" {
+			if _, err := os.Stat(p); err == nil {
+				paths = append(paths, p)
+				names = append(names, baseName+"_译文"+filepath.Ext(p))
+			}
+		}
+	}
+	if len(paths) == 0 {
+		writeJSON(w, 200, map[string]interface{}{"success": false,
+			"message": "该工单暂无纯文案产物（历史工单建单时未生成），可重新发起工单获取"})
+		return
+	}
+	if len(paths) == 1 {
+		s.serveOneFile(w, r, paths[0], names[0])
+		return
+	}
+	w.Header().Set("Content-Disposition", `attachment; filename="`+baseName+"_texts.zip"+`"`)
+	w.Header().Set("Content-Type", "application/zip")
+	zw := zip.NewWriter(w)
+	for i, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		fe, _ := zw.Create(names[i])
+		_, _ = fe.Write(data)
+	}
+	_ = zw.Close()
+}
+
+// serveOneFile 流式返回单个磁盘文件（不存在/不可读时回 JSON 错误）。
+func (s *Server) serveOneFile(w http.ResponseWriter, r *http.Request, path, dlName string) {
+	fh, err := os.Open(path)
+	if err != nil {
+		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "产物文件不存在"})
+		return
+	}
+	defer fh.Close()
+	w.Header().Set("Content-Disposition", `attachment; filename="`+mimeEscape(dlName)+`"`)
+	http.ServeContent(w, r, dlName, time.Now(), fh)
+}
+
+// textDeliverableName 纯文案产物下载名：源文件主名_译文.md（旁路为多语言 zip 时保留 .zip 后缀）。
+func textDeliverableName(f *store.TicketFile) string {
+	base := strings.TrimSuffix(f.FileName, filepath.Ext(f.FileName))
+	if base == "" {
+		base = fmt.Sprintf("file_%d", f.ID)
+	}
+	p := f.TextResultPath
+	if p == "" {
+		p = f.ResultPath
+	}
+	return base + "_译文" + filepath.Ext(p)
 }
 
 // mimeEscape Content-Disposition 文件名兜底转义（非 ASCII 场景由前端 zip 名承担）。

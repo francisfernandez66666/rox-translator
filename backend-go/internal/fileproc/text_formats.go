@@ -243,6 +243,32 @@ func extractYAML(path string, e *Extractor) error {
 	})
 }
 
+// WriteTranslationMd ★ 工单双模式（2026-09-13）：按提取顺序生成「纯文案」.md 产物。
+// 用途：① 还原文件模式的兜底附加交付（版式还原失败/用户只要文案时下载）；
+//
+//	② 纯文案模式（anydoc→MD 管线的 json/yaml/srt/vtt 类）主交付。
+//
+// 规则：命中段输出译文、未命中段保留原文；段间空一行（段落语义），
+// 表格单元格等短段以独立段落呈现——定位为"内容忠实"的纯文本稿，不承诺版式。
+// 参数：outPath=输出文件；sourceTexts=提取顺序的源文片段；translations=原文→译文映射。
+func WriteTranslationMd(outPath string, sourceTexts []string, translations map[string]string) error {
+	var b strings.Builder
+	for _, src := range sourceTexts {
+		tr := strings.TrimSpace(translations[src])
+		if tr == "" {
+			tr = src
+		}
+		b.WriteString(tr)
+		b.WriteString("\n\n")
+	}
+	if dir := filepath.Dir(outPath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(outPath, []byte(b.String()), 0o644)
+}
+
 // WriteComparisonXlsx 生成「源文→译文」xlsx 对照表（无原格式回写能力格式的统一产物）。
 // 参数：outPath=输出文件路径；sourceTexts=源文片段列表；translations=原文 → 该语言译文映射。
 func WriteComparisonXlsx(outPath string, sourceTexts []string, translations map[string]string) error {
