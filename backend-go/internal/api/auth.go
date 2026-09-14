@@ -202,7 +202,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "user": u})
+	// ★ S1 积分制（2026-09-14）：随会话上下文下发积分汇率（1 积分=N 内部 token），
+	//   前端全部余额/用量展示用它统一换算成积分；该值不含成本信息（成本率不外发）。
+	writeJSON(w, 200, map[string]interface{}{"success": true, "user": u,
+		"points_tokens_rate": s.Store.PointsTokensRate()})
 }
 
 // handleMeContext 前台身份上下文：账号/所属租户/组织部门 + 可应用知识库包类型。
@@ -953,6 +956,11 @@ func (s *Server) handleUpdateEmail(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if emailRe.MatchString(email) == false {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱格式不正确"})
+		return
+	}
+	// ★ S3 防薅：一次性邮箱拒绑
+	if msg := s.disposableEmailRejected(email); msg != "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
 		return
 	}
 	// ★ 新邮箱撞库预检（2026-08-26 需求）：目标邮箱出现在邀请奖励流水中即拒绝换绑——

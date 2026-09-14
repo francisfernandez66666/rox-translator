@@ -423,7 +423,8 @@ func (s *Store) migrate() error {
 			code TEXT NOT NULL,
 			name TEXT NOT NULL DEFAULT '',
 			ptype TEXT NOT NULL DEFAULT 'paid',       -- free(免费体验) / paid(付费包) / increment(增量包)
-			sentences INTEGER NOT NULL DEFAULT 0,     -- 包内含翻译句数
+			sentences INTEGER NOT NULL DEFAULT 0,     -- 包内含翻译句数（历史字段，售卖以 points 为准）
+			points INTEGER NOT NULL DEFAULT 0,        -- ★ S1 积分面值（对外售卖单位；内部 token=points×points_tokens_rate）
 			price_money REAL NOT NULL DEFAULT 0,      -- 售价（元）
 			duration_days INTEGER NOT NULL DEFAULT 30, -- 有效期（天，包月=30）
 			enabled INTEGER NOT NULL DEFAULT 1,       -- 1=上架 0=下架
@@ -509,6 +510,24 @@ func (s *Store) migrate() error {
 			PRIMARY KEY (scope, key)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(tenant_id, created_at)`,
+		// ---------- S4 归因（★ 2026-09-14）：注册上下文快照（UTM+来源），漏斗看板数据源 ----------
+		`CREATE TABLE IF NOT EXISTS registration_attribution (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			tenant_id INTEGER NOT NULL DEFAULT 0,
+			utm_source TEXT NOT NULL DEFAULT '',
+			utm_medium TEXT NOT NULL DEFAULT '',
+			utm_campaign TEXT NOT NULL DEFAULT '',
+			utm_term TEXT NOT NULL DEFAULT '',
+			utm_content TEXT NOT NULL DEFAULT '',
+			ref_code TEXT NOT NULL DEFAULT '',           -- 邀请裂变个人码（如有）
+			host TEXT NOT NULL DEFAULT '',               -- 注册时访问域名（品牌子域归因）
+			landing_path TEXT NOT NULL DEFAULT '',       -- 落地页路径（/ 或 /register 等）
+			user_agent TEXT NOT NULL DEFAULT '',
+			created_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_regattr_user ON registration_attribution(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_regattr_created ON registration_attribution(created_at)`,
 	}
 	// 方言：以现有 SQLite DDL 为唯一真源，PostgreSQL 下经 db.ToDialect 自动改写
 	d := db.CurrentDialect()
@@ -569,6 +588,8 @@ var columnAdditions = []colDef{
 	{"audit_logs", "after_val", "ALTER TABLE audit_logs ADD COLUMN after_val TEXT NOT NULL DEFAULT ''"},
 	// 组织归属：用户挂到组织（0=未分配/根组织）
 	{"users", "org_id", "ALTER TABLE users ADD COLUMN org_id INTEGER NOT NULL DEFAULT 0"},
+	// ★ S1 积分制：packages 面值积分列（内部 token=points×points_tokens_rate；0=未配置走句数折算兼容）
+	{"packages", "points", "ALTER TABLE packages ADD COLUMN points INTEGER NOT NULL DEFAULT 0"},
 	// 在线支付：订单渠道与支付凭证
 	{"orders", "channel", "ALTER TABLE orders ADD COLUMN channel TEXT NOT NULL DEFAULT 'offline'"},
 	{"orders", "prepay_id", "ALTER TABLE orders ADD COLUMN prepay_id TEXT NOT NULL DEFAULT ''"},
@@ -734,8 +755,19 @@ func (s *Store) backfillDailyUsage() {
 }
 
 // seedRateCard 初始化默认单价表（幂等）。
-// 用 INSERT OR IGNORE 保证重复执行不产生重复行；设置四类任务的全局单价。
+// ★ S1 账目修复：旧实现只有 INSERT OR IGNORE，但表上无唯一约束——PG 的
+//
+//	ON CONFLICT DO NOTHING 无冲突可判，每次启动都追加一遍重复行（生产实测 3 份）。
+//	现：① 相关子查询清历史重复（保留每组最小 id）；② 建唯一索引；③ 再幂等 seed。
 func (s *Store) seedRateCard() error {
+	if _, e := db.Exec(s.db, db.CurrentDialect(), `DELETE FROM rate_card WHERE id NOT IN (
+		SELECT keep FROM (SELECT MIN(id) AS keep FROM rate_card GROUP BY task_type, lang, provider) t)`); e != nil {
+		log.Printf("[migrate] rate_card 去重失败（将在唯一索引创建时暴露）: %v", e)
+	}
+	if _, err := db.Exec(s.db, db.CurrentDialect(),
+		`CREATE UNIQUE INDEX IF NOT EXISTS rate_card_key_uq ON rate_card (task_type, lang, provider)`); err != nil {
+		return err
+	}
 	_, err := db.Exec(s.db, db.CurrentDialect(), `INSERT OR IGNORE INTO rate_card (task_type, lang, provider, unit_price, multiplier, updated_at) VALUES
 		('translate', '*', '*', 1, 1.0, ''), ('review', '*', '*', 1, 1.0, ''),
 		('evals', '*', '*', 1, 0.5, ''), ('gate', '*', '*', 0, 0, '')`)

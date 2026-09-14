@@ -5,7 +5,7 @@
 export const zh: Record<string, string> = {
   'usage.title': '用量看板',
   'usage.refresh': '刷新',
-  'usage.currentBalance': '当前余额 (token)',
+  'usage.currentBalance': '当前余额 (积分)',
   'usage.totalUsage': '累计用量 (token)',
   'usage.providerCount': '使用供应商数',
   'usage.trendTitle': '近 7 日用量趋势',
@@ -56,7 +56,7 @@ export const zh: Record<string, string> = {
 export const en: Record<string, string> = {
   'usage.title': 'Usage dashboard',
   'usage.refresh': 'Refresh',
-  'usage.currentBalance': 'Current balance (token)',
+  'usage.currentBalance': 'Current balance (credits)',
   'usage.totalUsage': 'Total usage (token)',
   'usage.providerCount': 'Providers used',
   'usage.trendTitle': 'Last 7 days usage trend',

@@ -5,7 +5,7 @@
 export const zh: Record<string, string> = {
   'admin.referral': '🔗 邀请好友',
   'referral.title': '邀请好友 · 多邀多得',
-  'referral.hint': '把专属链接或二维码发给朋友：对方注册成功→您的体验包 +30 万 token、有效期 +14 天（自动叠加）；对方首笔付费套餐到账→您再得 50 万永久 token。同一人重复邀请无效。',
+  'referral.hint': '把专属链接或二维码发给朋友：对方注册成功→您的体验包 +1,000 积分、有效期 +14 天（自动叠加）；对方首笔付费套餐到账→您再得 1,667 永久积分。同一人重复邀请无效。',
   'referral.myCode': '我的专属邀请码',
   'referral.linkLabel': '专属邀请链接',
   'referral.copy': '复制链接',
@@ -45,7 +45,7 @@ export const zh: Record<string, string> = {
 export const en: Record<string, string> = {
   'admin.referral': '🔗 Referrals',
   'referral.title': 'Invite Friends · Earn More',
-  'referral.hint': 'Share your link or QR code: when a friend registers, your trial quota gains +300k tokens and +14 days (stacking); on their first paid plan, you earn an extra 500k permanent tokens. Re-inviting the same person has no effect.',
+  'referral.hint': 'Share your link or QR code: when a friend registers, your trial pack gains +1,000 credits and +14 days (stacking); on their first paid plan you earn 1,667 permanent credits. Re-inviting the same person has no effect.',
   'referral.myCode': 'My Invite Code',
   'referral.linkLabel': 'Invite Link',
   'referral.copy': 'Copy Link',

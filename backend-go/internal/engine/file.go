@@ -401,6 +401,10 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		modelHitsMu.Unlock()
 	}
 
+	// ★ S8 敏感词兑底闸（输入侧·段级）：命中段不送 KB/模型（上游零暴露），
+	// 各语言直接预填占位交付；其余段照常翻译。
+	blockedSeg := e.sensitiveBlockedSegments(ctx, texts, append(append([]string{}, kbLangs...), directOther...), addTrans)
+
 	// KB 语言：先 KB 直配，未命中的批量模型
 	var wg sync.WaitGroup
 	if len(kbLangs) > 0 {
@@ -421,6 +425,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				semKB := make(chan struct{}, 8)
 				var wgKB sync.WaitGroup
 				for i, t := range texts {
+					if blockedSeg[t] { // ★ S8：拦截段不进模型链路
+						continue
+					}
 					wgKB.Add(1)
 					go func(i int, t string) {
 						defer wgKB.Done()
@@ -446,6 +453,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					if kbHitIdx[i] {
 						addTrans(lc, texts[i], kbVal[i])
 						addKBHit()
+					} else if blockedSeg[texts[i]] {
+						continue // ★ S8：拦截段已预填占位，不入模型补漏
 					} else {
 						needModelIdx = append(needModelIdx, i)
 					}
@@ -486,7 +495,18 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			defer wg.Done()
 			defer recoverPipeline("file_batch:" + lc) // 整改 D4
 			// ★ 品牌保护（2026-09-10）：同 KB 路径，源文品牌名替换为规定译法防音译。
-			protSrc, _ := protectSourceByLang(texts, brandTermsAll[lc])
+			// ★ S8：仅送审未拦截段（命中段不出现于任何上游调用）。
+			sendIdx := make([]int, 0, len(texts))
+			for i, t := range texts {
+				if !blockedSeg[t] {
+					sendIdx = append(sendIdx, i)
+				}
+			}
+			sendTexts := make([]string, len(sendIdx))
+			for i, idx := range sendIdx {
+				sendTexts[i] = texts[idx]
+			}
+			protSrc, _ := protectSourceByLang(sendTexts, brandTermsAll[lc])
 			batch := e.BatchTranslate(ctx, protSrc, lc, 15,
 				func(done, total int) { prog("file_translate|初翻|"+lc, done, total) })
 			// ★ pro 模式批量审校（同上：整块一次调用）
@@ -494,7 +514,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				batch = e.reviewBatchSafe(ctx, protSrc, batch, lc,
 					func(done, total int) { prog("file_translate|校对|"+lc, done, total) })
 			}
-			for i, t := range texts {
+			for i, idx := range sendIdx {
+				t := texts[idx]
 				// ★ 回显检测（与 KB 路径一致）：模型原样返回源文 = 未翻译，视为缺失走重试，
 				// 否则非中文目标时源文会被当成「译文」静默写入成品（整改：directOther 原漏回显检测）。
 				if batch[i] != "" && batch[i] != "[翻译失败]" && batch[i] != t {
@@ -629,6 +650,11 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	// 硬约束闸门（数字/格式/非源语言/乱码等）必须强制：首轮不过带反馈重翻一次，
 	// 否则错误会直接落入成品文件（如成本表数字错）。文化闸门仍仅警告。
 	// fast 模式同样强制硬闸（交付物正确性优先于速度）。
+	// ★ S8 敏感词兑底闸（输出侧）：模型自产敏感内容在质量复核前统一替换占位。
+	if n := e.sensitiveSweepOutput(ctx, langTranslations); n > 0 {
+		result := fmt.Sprintf("[sensitive] 文件通道输出侧兑底替换 %d 段", n)
+		log.Println(result)
+	}
 	gateWarnings := e.applySegmentGates(ctx, langTranslations, true)
 
 	isXlsxInput := ext == ".xlsx"

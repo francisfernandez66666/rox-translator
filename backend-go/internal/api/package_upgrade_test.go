@@ -46,6 +46,12 @@ func newUpgradeTestServer(t *testing.T) (*Server, string, map[string]int64) {
 	if err != nil {
 		t.Fatalf("创建企业租户失败: %v", err)
 	}
+	// ★ S1 积分制后：租户注册 30 天内订阅/升级单享首月半价。本用例验证升级抵扣
+	//   正交逻辑，将注册时间回拨 31 天脱离半价窗（半价路径由 store 层单测覆盖）。
+	if _, err := db.Exec(`UPDATE tenants SET created_at=? WHERE id=?`,
+		time.Now().Add(-31*24*time.Hour).Format(time.RFC3339), car.ID); err != nil {
+		t.Fatalf("回拨注册时间失败: %v", err)
+	}
 	s := &Server{Store: st, Ten: ten}
 	// 租户管理员
 	if _, err := st.CreateUser(car.ID, "car_admin", "hash-car", "汽车公司管理员", "tenant_admin", 1, 0); err != nil {

@@ -41,7 +41,8 @@ func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 	freeTokens, freeDays := s.trialConfig()
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "plans": pkgs,
-		"free_trial_tokens": freeTokens, "free_trial_days": freeDays,
+		// ★ S1 积分制（2026-09-14）：公开出参只露积分面值，token 裸值不再对外
+		"free_trial_points": s.Store.PointsFromTokens(freeTokens), "free_trial_days": freeDays,
 	})
 }
 
@@ -94,13 +95,17 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		"tokens_used_month":        usedMonth,
 		"balance_tokens":           tokens,
 		"balance_sentences_approx": approx,
-		"sub_grants_left":          grants,         // ★ 未过期台账合计（双桶明细）
-		"permanent_balance":        permanent,      // ★ 永久余额（双桶明细）
-		"sentence_balance":         sentenceMirror, // ★ C26 弃用镜像（只增流水）；前端应读 balance_sentences_approx
-		"package_code":             pkgCode,
-		"subscribed_at":            subAt,
-		"package_expires":          pkgExpires,
-		"pay_mode":                 payMode,
+		// ★ S1 积分制对外展示口径（前端余额/用量条只显积分）
+		"points_balance":    s.Store.PointsFromTokens(tokens),
+		"points_used_month": s.Store.PointsFromTokens(usedMonth),
+		"points_used_today": s.Store.PointsFromTokens(usedToday),
+		"sub_grants_left":   grants,         // ★ 未过期台账合计（双桶明细）
+		"permanent_balance": permanent,      // ★ 永久余额（双桶明细）
+		"sentence_balance":  sentenceMirror, // ★ C26 弃用镜像（只增流水）；前端应读 balance_sentences_approx
+		"package_code":      pkgCode,
+		"subscribed_at":     subAt,
+		"package_expires":   pkgExpires,
+		"pay_mode":          payMode,
 	}
 	// ★ 部门预算进度（四期增强；前台「🏢 部门预算 used/limit」徽标数据源）：
 	// 仅当用户归属的部门启用了预算（token_limit>0）时返回 org_budget 与租户总预算

@@ -803,19 +803,47 @@ func (s *Store) CreateOrderChannel(tid int64, tokens int64, money float64, creat
 // 返回：新订单对象（初始状态 pending，待支付）。
 func (s *Store) CreatePackageOrder(tid int64, pkg *Package, createdBy int64, channel string) (*Order, error) {
 	orderNo := fmt.Sprintf("T%d-RO%s%s", tid, time.Now().Format("20060102150405"), randSuffix(4)) // 生成唯一订单号
-	// ★ 句→token 仅在此折算一次，并统一乘以后台可配的成本均摊系数（billing_markup_multiplier），
-	// 与扣费侧（用量实时计量的 billed = total × markup）共用同一 token 单位，保证「1 入账 token = 1 扣费 token」。
-	tokenAmt := int64(float64(pkg.Sentences*s.TokenSentenceRate()) * s.MarkupMultiplier())
-	if tokenAmt < 0 {
-		tokenAmt = 0
-	}
+	// ★ S1 积分制（2026-09-14）：包配置积分面值（points>0）时按「积分×points_tokens_rate」
+	//   折算内部计量 token（新口径）；未配置走历史句数折算（sentences×500×markup，兼容存量包）。
+	//   内部账本仍是 token（usage_ledger/成本核算不变），积分只是对外计量马甲，防成本反推。
+	tokenAmt := s.PackageTokenAmount(pkg)
+	// ★ 试运营首月半价（2026-09-14 拍板）：注册 30 天内订阅包订单一律挂牌价五折（含换档升级单）；
+	//   充值包（increment，价格尺子）不打折。
+	money := s.PackageOrderPrice(pkg, tid)
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, qr_content, package_id, created_by, created_at) VALUES (?,?,?,?, 'pending', 'online', ?, '', ?, ?, ?)",
-		tid, orderNo, tokenAmt, pkg.PriceMoney, channel, pkg.ID, createdBy, time.Now().Format(time.RFC3339))
+		tid, orderNo, tokenAmt, money, channel, pkg.ID, createdBy, time.Now().Format(time.RFC3339))
 	if err != nil {
 		return nil, err
 	}
 	return s.GetOrderByOrderNo(orderNo, tid)
+}
+
+// PackageTokenAmount 包面值 → 内部计量 token 数（积分包：积分×points_tokens_rate；
+// 存量句数包：句数×500×markup 兼容口径）。
+func (s *Store) PackageTokenAmount(pkg *Package) int64 {
+	if pkg.Points > 0 {
+		return pkg.Points * s.PointsTokensRate()
+	}
+	return int64(float64(pkg.Sentences*s.TokenSentenceRate()) * s.MarkupMultiplier())
+}
+
+// PackageOrderPrice 计算本单实收金额（元）：订阅包（paid）且租户注册未满 30 天 → 挂牌价五折。
+// 参数：pkg=商业包，tid=租户 ID；返回实收金额（分为最小颗粒，四舍五入）。
+func (s *Store) PackageOrderPrice(pkg *Package, tid int64) float64 {
+	if pkg.PType != PackagePaid {
+		return pkg.PriceMoney
+	}
+	var regAt string
+	if err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT COALESCE(created_at,'') FROM tenants WHERE id=?", tid).Scan(&regAt); err != nil || regAt == "" {
+		return pkg.PriceMoney
+	}
+	t, e := time.Parse(time.RFC3339, regAt)
+	if e != nil || time.Since(t) > 30*24*time.Hour {
+		return pkg.PriceMoney
+	}
+	return float64(int64(pkg.PriceMoney*100*0.5+0.5)) / 100
 }
 
 // UpgradeCredit 套餐升级抵扣结算结果：旧包剩余价值折算的抵扣金额与旧包剩余台账 token。
@@ -896,11 +924,12 @@ func (s *Store) ComputeUpgradeCredit(tid int64, newPkg *Package) (*UpgradeCredit
 // 返回：新订单对象（初始 pending）。
 func (s *Store) CreateUpgradeOrder(tid int64, pkg *Package, credit *UpgradeCredit, createdBy int64, channel string) (*Order, error) {
 	orderNo := fmt.Sprintf("T%d-RO%s%s", tid, time.Now().Format("20060102150405"), randSuffix(4))
-	tokenAmt := int64(float64(pkg.Sentences*s.TokenSentenceRate()) * s.MarkupMultiplier())
+	tokenAmt := s.PackageTokenAmount(pkg)
 	if tokenAmt < 0 {
 		tokenAmt = 0
 	}
-	pay := pkg.PriceMoney - credit.CreditMoney
+	// ★ S1：挂牌价走同一 PackageOrderPrice（注册 30 天内升级单同样享受首月半价），再减旧包抵扣
+	pay := s.PackageOrderPrice(pkg, tid) - credit.CreditMoney
 	if pay < 0 {
 		pay = 0
 	}
@@ -966,16 +995,25 @@ func scanOrders(rows *sql.Rows, err error) ([]*Order, error) {
 	return out, nil
 }
 
-// PriceFenPerToken 充值定价换算（分/token）：system_config price_fen_per_token。
-// 默认 10 = 现网实际执行口径（回调核对/payments 流水历史均按 tokens×10 分），
-// 面板可调；下单回填、回调金额核对、支付流水的单一事实源（评审整改 B1）。
-func (s *Store) PriceFenPerToken() int64 {
-	if v, _ := s.GetConfig("price_fen_per_token"); v != "" {
+// PriceFenPerMillionTokens 充值定价基准（分/百万 token）：system_config price_fen_per_million_tokens。
+// ★ S1 账目修复（2026-09-14）：旧键 price_fen_per_token 名义「分/token」、实值 10，
+//
+//	等价 100 元/千 token、百万 token=10 万元——「按次计费」时代遗留，token 迁移后未换算。
+//	新口径按试运营价目表尺子价锚定：¥299/百万 token → 29900 分。旧键不再读取（保留仅供历史对账）。
+//	注意：本价仅用于「无套餐裸充值单」的金额兜底；正式售卖一律走套餐 amount_money（packages.price_money）。
+func (s *Store) PriceFenPerMillionTokens() int64 {
+	if v, _ := s.GetConfig("price_fen_per_million_tokens"); v != "" {
 		if n, e := strconv.ParseInt(v, 10, 64); e == nil && n > 0 {
 			return n
 		}
 	}
-	return 10
+	return 29900
+}
+
+// TokensToFen token 数→应收金额（分），四舍五入。
+func (s *Store) TokensToFen(tokens int64) int64 {
+	r := s.PriceFenPerMillionTokens()
+	return (tokens*r + 500000) / 1000000
 }
 
 // UpdateOrderMoney 回填订单应收金额（元）——下单时按定价换算落库，
@@ -989,10 +1027,10 @@ func (s *Store) UpdateOrderMoney(orderNo string, money float64) error {
 // 历史在线充值单 amount_money 恒 0，导致回调核对兜底与开票金额失真；
 // 仅补 pending（paid 单以已发生的流水为准，不改历史）。
 func (s *Store) orderMoneyBackfill() {
-	rate := s.PriceFenPerToken()
-	db.Exec(s.db, db.CurrentDialect(), `UPDATE orders SET amount_money=ROUND(amount_tokens * ? / 100.0, 2)
+	rate := float64(s.PriceFenPerMillionTokens()) // 分/百万 token
+	db.Exec(s.db, db.CurrentDialect(), `UPDATE orders SET amount_money=ROUND(amount_tokens * ? / 100000000.0, 2)
 		WHERE status='pending' AND package_id=0 AND COALESCE(amount_money,0)=0 AND amount_tokens>0`,
-		float64(rate))
+		rate)
 }
 
 // PackageOrderTokenBackfill 存量商业包订单 token 口径回填（幂等，Store.New 迁移链调用）：
@@ -1119,7 +1157,6 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		return &errTxt{"订单不存在"}
 	}
 	sentenceRate := s.TokenSentenceRate()
-	priceFen := s.PriceFenPerToken()
 	pkgTokens := int64(0)
 	pType := ""
 	pkgSentences := int64(0)
@@ -1142,10 +1179,10 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 			pkgTokens = int64(float64(pkgSentences*s.TokenSentenceRate()) * s.MarkupMultiplier())
 		}
 	}
-	// 应收金额转分：套餐单取包售价，纯充值单按 tokens×定价兜底
+	// 应收金额转分：套餐单取包售价，纯充值单按尺子价（分/百万 token）兜底
 	payFen := int64(money*100 + 0.5)
 	if payFen <= 0 {
-		payFen = tokens * priceFen
+		payFen = s.TokensToFen(tokens)
 	}
 	// ② 单事务：确认权抢占 → 支付流水 → 权益发放（全有或全无）
 	tx, err := s.db.Begin() // DSN _txlock=immediate ⇒ BEGIN IMMEDIATE
@@ -1232,6 +1269,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		}
 		perms.NotifiedExp7 = false
 		perms.NotifiedExp1 = false
+		perms.NotifiedRenew3 = false
 		if serr := saveTenantPermsTx(tx, tid, perms); serr != nil {
 			return serr
 		}
@@ -1265,6 +1303,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		}
 		perms.NotifiedExp7 = false
 		perms.NotifiedExp1 = false
+		perms.NotifiedRenew3 = false
 		if serr := saveTenantPermsTx(tx, tid, perms); serr != nil {
 			return serr
 		}
@@ -1296,6 +1335,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		}
 		perms.NotifiedExp7 = false
 		perms.NotifiedExp1 = false
+		perms.NotifiedRenew3 = false
 		if serr := saveTenantPermsTx(tx, tid, perms); serr != nil {
 			return serr
 		}
@@ -1895,10 +1935,11 @@ func (s *Store) EnsureBillingDefaults() {
 		{"order_pending_timeout_min", "15"},
 		{"low_balance_alert_tokens", "100000"},
 		// ★ 邀请裂变参数（白皮书 §5.2 计奖矩阵，面板可改）
-		{"invite_reward_tokens", "300000"},       // 每邀 1 人·邀请者体验增量
-		{"invite_extend_days", "14"},             // 每邀 1 人·邀请者时长叠加天数
-		{"inviter_paid_reward_tokens", "500000"}, // 受邀者首笔付费套餐→邀请者永久 token
-		{"price_fen_per_token", "10"},            // ★ 充值定价（分/token，评审整改 B1 单一事实源）
+		{"invite_reward_tokens", "300000"},        // 每邀 1 人·邀请者体验增量
+		{"invite_extend_days", "14"},              // 每邀 1 人·邀请者时长叠加天数
+		{"inviter_paid_reward_tokens", "500000"},  // 受邀者首笔付费套餐→邀请者永久 token
+		{"price_fen_per_million_tokens", "29900"}, // ★ 充值尺子价（分/百万 token＝¥299/百万，S1 口径修复；旧键 price_fen_per_token 已废弃）
+		{"points_tokens_rate", "300"},             // ★ S1 积分制：1 积分 = 300 内部计量 token（对外只露积分，防成本反推）
 		// ★ KB 上传奖励（任务2.3）：每条约额 + 单租户日封顶（防刷）
 		{"kb_upload_reward_tokens_per_entry", "200"},
 		{"kb_upload_reward_daily_cap", "50000"},

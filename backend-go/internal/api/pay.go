@@ -16,10 +16,10 @@ package api
 //   - sdk：走 wechat/alipay 适配器（需商户号）
 //   - static_qr：返回超管配置的静态收款码图片（static_qr_image），人工确认到账
 //   - mock：模拟支付（测试）
-// 金额：入参为 token 数量，按 system_config price_fen_per_token（缺省 10 分/token，
+// 金额：入参为 token 数量，按 system_config price_fen_per_million_tokens（★ S1 口径修复：
 //
-//	即 1 元 = 10 token）换算人民币分。★ C29 注释修正：旧注释「1 元 = 1000 token」
-//	与实现差 100 倍（文档-代码漂移示例）。
+//	分/百万 token，缺省 29900＝¥299/百万，与充值包尺子价一致）换算人民币分。
+//	旧键 price_fen_per_token（分/token、实值 10）为按次时代遗留，已废弃不再读取。
 // ========================================
 
 import (
@@ -88,12 +88,16 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Tokens  int64  `json:"tokens"`  // 充值 token 数（必填）
+		Tokens  int64  `json:"tokens"`  // 充值 token 数（旧口径，兼容保留）
+		Points  int64  `json:"points"`  // ★ S1 积分制：充值积分数（优先于 tokens；内部 ×points_tokens_rate 折算）
 		Channel string `json:"channel"` // 支付渠道：mock/wechat/alipay（缺省按 pay_mode）
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Tokens <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "tokens 必须大于 0"})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Tokens <= 0 && req.Points <= 0) {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "points（或 tokens）必须大于 0"})
 		return
+	}
+	if req.Points > 0 {
+		req.Tokens = req.Points * s.Store.PointsTokensRate()
 	}
 	tid := s.effTenant(r, u)
 	// 确定支付模式：优先请求指定渠道，否则按最终运营策略 payment.mode（默认 mock）。
@@ -122,7 +126,7 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 应收金额落库（评审整改 B1）：amount_money=token 数×定价（元）——
 	//   此前恒 0，导致回调核对无单一事实源、发票开出 0 元单。
-	money := float64(req.Tokens*s.Store.PriceFenPerToken()) / 100.0
+	money := float64(s.Store.TokensToFen(req.Tokens)) / 100.0
 	_ = s.Store.UpdateOrderMoney(o.OrderNo, money)
 	o.AmountMoney = money
 	// 静态码模式：返回超管配置的静态收款码图片（不调用渠道）
@@ -350,7 +354,7 @@ func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 	// 回调金额为 0 或不一致即拒绝
 	expectFen := int64(o.AmountMoney*100 + 0.5)
 	if expectFen <= 0 {
-		expectFen = o.AmountTokens * s.Store.PriceFenPerToken()
+		expectFen = s.Store.TokensToFen(o.AmountTokens)
 	}
 	if nt.Amount <= 0 || nt.Amount != expectFen {
 		writeJSON(w, 400, map[string]interface{}{"success": false,

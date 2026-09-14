@@ -162,6 +162,11 @@ func (s *Server) handleEmailCode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱格式不正确"})
 		return
 	}
+	// ★ S3 防薅：一次性邮箱不发码
+	if msg := s.disposableEmailRejected(email); msg != "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
+		return
+	}
 	// 人机验证：防脚本刷短信/邮件接口
 	if err := s.verifyCaptcha(r, req.CaptchaToken); err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
@@ -238,6 +243,11 @@ func (s *Server) handleMeEmailCode(w http.ResponseWriter, r *http.Request) {
 	email := strings.TrimSpace(req.Email)
 	if !emailRe.MatchString(email) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱格式不正确"})
+		return
+	}
+	// ★ S3 防薅：奖励双唯一之外，一次性邮箱直接拒绑
+	if msg := s.disposableEmailRejected(email); msg != "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
 		return
 	}
 	if other, err := s.Store.GetUserByEmail(email); err == nil && other != nil && other.ID != u.ID {

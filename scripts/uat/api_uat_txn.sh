@@ -32,6 +32,10 @@
 #       白名单分档 / 文本工单无文案产物提示 / OpenAPI delivery 回显 / health 暴露 anydoc_ready
 #   T35 线上反馈回归（2026-09-14）：文件工单 multipart 上传（特殊文件名 PDF/多文件混合）/
 #       bootstrap-demo.sh 配置守护（base_domain 种入 / demo_superadmin / 种子开关可覆盖）
+#   T36 商业化开闸批次（2026-09-14）：S1 积分制公开面（plans/overview/me/settings 汇率校验）/
+#       S8 敏感词闸（输入拦截 e2e + 开关往返 + 非法值拒绝）/ S3 一次性邮箱黑名单（内置域+增补域）/
+#       S4 归因落库+漏斗接口鉴权 / S9 Alertmanager 收口鉴权+告警落库+metrics 401/Bearer /
+#       S7 s7_watchlist 表 / S5 首页 HTML
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 # 依赖：mock_llm.py 已启动、uat 服务已启动（run_uat.sh 编排）
 # 用法：BASE_URL=... UAT_DB=... ADMIN_PASS=... [UAT_SERVER_LOG=...] bash scripts/uat/api_uat_txn.sh
@@ -685,6 +689,66 @@ HITSA=$(grep -c "'demo_superadmin'" "$BS")
 ck T35-bootstrap-superadmin '^[1-9]' "$HITSA"
 HITSG=$(grep -c 'DEMO_SEED_ACCOUNTS:-1' "$BS")
 ck T35-bootstrap-seedguard '^[1-9]' "$HITSG"
+
+# ---------- T36 ★ 商业化开闸批次（09-14）专项 ----------
+echo "--- T36 商业化开闸（积分/敏感词/反薅/漏斗/监控收口）---"
+reg(){ local extra="${6:-}"; curl -s $B/api/auth/register -H "$J" -d "{\"username\":\"$1\",\"password\":\"$2\",\"code\":\"$3\",\"name\":\"$4\",\"email\":\"$5\",\"agreed\":true${extra:+,$extra}}"; }
+SSET(){ curl -s $B/api/admin/packages/settings -H "$AH" -H "$J"; }
+SSAVE(){ curl -s $B/api/admin/packages/settings/save -H "$AH" -H "$J" -d "$1"; }
+
+# ① S1 积分制公开面
+PL=$(get "$AH" /api/plans)
+ck T36-plans-free-points '"free_trial_points":1000' "$PL"
+if echo "$PL" | grep -qE 'free_trial_tokens'; then FAIL=$((FAIL+1)); echo "FAIL|T36-plans-no-token-naked"; else PASS=$((PASS+1)); echo "PASS|T36-plans-no-token-naked"; fi
+ck T36-overview-points '"points_available":' "$(get "$H1" /api/billing/my/overview)"
+ck T36-me-rate '"points_tokens_rate":300' "$(curl -s $B/api/auth/me -H "$H1")"
+ck T36-settings-show '"points_tokens_rate":300' "$(SSET)"
+ck T36-settings-rate-zero-reject '"success": *false' "$(SSAVE '{"points_tokens_rate":0}')"
+ck T36-settings-rate-400 '"success": *true' "$(SSAVE '{"points_tokens_rate":400}')"
+ck T36-settings-rate-echo '"points_tokens_rate":400' "$(SSET)"
+SSAVE '{"points_tokens_rate":300}' >/dev/null   # 还原
+
+# ② S8 敏感词闸（词包见 run_uat 注入：紫火核弹T36；输入命中不进模型）
+AK36=$(post "$H1" '{"name":"t36-key"}' /api/apikeys/create | pv '.get("api_key","")')
+S36(){ curl -s $B/openapi/v1/translate -H "Authorization: Bearer $AK36" -H "$J" -d "$1"; }
+ck T36-sensitive-block 'sensitive_blocked' "$(S36 '{"text":"请翻译：紫火核弹T36 常规句子","target_lang":"en","source_lang":"zh"}')"
+ck T36-sensitive-passthrough '"success": *true' "$(S36 '{"text":"纯净文本仅用于闸外验证","target_lang":"en","source_lang":"zh"}')"
+SSAVE '{"sensitive_gate_enabled":"0"}' >/dev/null
+ck T36-sensitive-off-passthrough '"success": *true' "$(S36 '{"text":"关闸后含词也不拦：紫火核弹T36","target_lang":"en","source_lang":"zh"}')"
+SSAVE '{"sensitive_gate_enabled":"1"}' >/dev/null
+ck T36-sensitive-on-again 'sensitive_blocked' "$(S36 '{"text":"再开闸恢复拦截：紫火核弹T36","target_lang":"en","source_lang":"zh"}')"
+ck T36-settings-gate-bad-reject '"success": *false' "$(SSAVE '{"sensitive_gate_enabled":"2"}')"
+
+# ③ S3 一次性邮箱黑名单
+ck T36-disposable-builtin '一次性|临时邮箱|不予' "$(reg t36mail uatpass123 T36MD 演练T36 a@mailinator.com)"
+SSAVE '{"disposable_email_domains":"spamt36.test"}' >/dev/null
+ck T36-disposable-custom '一次性|临时邮箱|不予' "$(reg t36mail2 uatpass123 T36MC 演练T36 b@spamt36.test)"
+ck T36-settings-domains-echo 'spamt36.test' "$(SSET)"
+SSAVE '{"disposable_email_domains":""}' >/dev/null   # 还原
+
+# ④ S4 归因 + 漏斗
+ck T36-funnel-anon-reject 'success|40[13]' "$(curl -s $B/api/admin/funnel)"
+R36=$(reg t36utm uatpass123 T36MU 演练T36 utmt36@t.test '"utm_source":"t36utm","utm_medium":"unit"')
+ck T36-utm-register-ok '"success": *true' "$R36"
+N=$(sq "SELECT COUNT(*) FROM registration_attribution WHERE utm_source='t36utm'" | tr -d '[:space:]')
+ck T36-utm-persist '^1$' "$N"
+ck T36-funnel-admin '"success": *true' "$(get "$AH" "/api/admin/funnel?days=7")"
+
+# ⑤ S9 Alertmanager 收口 + /metrics 鉴权（ADMIN_TOKEN/METRICS_TOKEN 由 run_uat 固定注入）
+NOW36=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+ALB36="{\"alerts\":[{\"status\":\"firing\",\"labels\":{\"alertname\":\"T36Smoke\",\"severity\":\"critical\"},\"annotations\":{\"summary\":\"T36 收口断言\"},\"startsAt\":\"$NOW36\"},{\"status\":\"resolved\",\"labels\":{\"alertname\":\"T36Ignored\"},\"startsAt\":\"$NOW36\"}]}"
+ck T36-am-noauth '^403$' "$(curl -s -o /dev/null -w '%{http_code}' -XPOST $B/api/alerts/alertmanager -H "$J" -d "$ALB36")"
+ck T36-am-wrongtok '^403$' "$(curl -s -o /dev/null -w '%{http_code}' -XPOST $B/api/alerts/alertmanager -H "X-Admin-Token: nope" -H "$J" -d "$ALB36")"
+ck T36-am-fire200 '"success": *true.*"accepted": *1|"accepted": *1.*"success": *true' "$(curl -s -XPOST $B/api/alerts/alertmanager -H "X-Admin-Token: uat-admin-token-36" -H "$J" -d "$ALB36")"
+CK36=$(sq "SELECT COUNT(*) FROM alerts WHERE kind='prom:T36Smoke'" | tr -d '[:space:]')
+ck T36-am-alert-persist '^[1-9]' "$CK36"
+ck T36-metrics-401 '401' "$(curl -s -o /dev/null -w '%{http_code}' $B/metrics)"
+ck T36-metrics-bearer 'translator_info' "$(curl -s $B/metrics -H 'Authorization: Bearer uat-metrics-36')"
+
+# ⑥ S7 观察表 + ⑦ S5 首页（静态托管）
+NW=$(sq "SELECT COUNT(*) FROM s7_watchlist" | tr -d '[:space:]')
+ck T36-s7-table '^[0-9]+$' "$NW"
+ck T36-landing-html 'og:title|能言|LangCross' "$(curl -s $B/)"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

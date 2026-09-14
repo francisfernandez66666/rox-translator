@@ -5,6 +5,7 @@
 // ★ U4：/register 路径或 ?ref= 自动展开注册面板并捕获个人码。
 // ============================================================================
 import { useEffect, useRef, useState } from 'react'
+import { readUtm, clearUtm } from '@/utils/utm' // ★ S4 归因
 import { Button, Input, Select, Checkbox, Dialog, MessagePlugin } from 'tdesign-react'
 import {
   login, authRegister, sendEmailCode, registerConfig,
@@ -222,8 +223,11 @@ export default function Login({ mode, onLogin }: Props) {
         brand_name_en: (regType === 'enterprise' && roleChoice === 'admin' ? (form.brandNameEn.trim() || undefined) : undefined),
         ref,
         agreed,
+        // ★ S4 归因：落地页捕获的 UTM 随注册上报（一次性消费）
+        landing_path: window.location.pathname, ...readUtm(),
       })
       if (!r.success) { setRegMsg(r.message || t('register.fail')); return }
+      clearUtm()
       // 注册成功自动登录（行为同 Vue 版）
       await doLogin()
     } catch (e) { // ★ E10

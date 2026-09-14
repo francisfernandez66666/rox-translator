@@ -4,6 +4,7 @@
 // 从 panels_c.tsx 拆分
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { fmtPoints } from '@/utils/points' // ★ S1 积分展示
 import type { ChangeEvent } from 'react'
 import {
   Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, MessagePlugin,
@@ -16,10 +17,11 @@ import {
   plans as apiPlans, myPackage, packageSubscribe, packageUpgrade,
   adminPackages, adminPackageCreate, adminPackageUpdate, adminPackageDelete,
   adminPackageSettings, adminPackageSettingsSave, adminQRUpload,
+  request,
   authHeaders,
 } from '@/api'
 import { Panel, Field, toastResp, num } from './parts'
-import { fmtNum, fmtTime } from '@/lib/ui'
+import { fmtTime } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { useT } from '@/i18n'
 
@@ -60,7 +62,7 @@ export function PlansP() {
   const [planList, setPlanList] = useState<Any[]>([])
   const [orders, setOrders] = useState<Any[]>([])
   const [invoices, setInvoices] = useState<Any[]>([])
-  const [chForm, setChForm] = useState<Any>({ channel: 'auto', tokens: 100000 })
+  const [chForm, setChForm] = useState<Any>({ channel: 'auto', points: 3000 })
   const [showCheckout, setShowCheckout] = useState(false)
   const [chLoading, setChLoading] = useState(false)
   const [curOrder, setCurOrder] = useState<Any | null>(null)
@@ -72,12 +74,17 @@ export function PlansP() {
   const [quotaForm, setQuotaForm] = useState<Any>({ qps: 10, concurrent: 3, max_daily_chars: 0, max_daily_tokens: 0 })
   const [pkgs, setPkgs] = useState<Any[]>([])
   const [billingEnforced, setBillingEnforced] = useState(false)
+  const [sensitiveGate, setSensitiveGate] = useState(true) // ★ S8 敏感词兑底闸开关
   const [freeTrialTokens, setFreeTrialTokens] = useState(300000)
   const [freeTrialDays, setFreeTrialDays] = useState(14)
   const [markupMultiplier, setMarkupMultiplier] = useState(1.5)
   const [tokensPerSentence, setTokensPerSentence] = useState(500)
+  const [pointsTokensRate, setPointsTokensRate] = useState(300) // ★ S1 积分汇率（内部 token/积分，仅超管可见）
   const [staticQRImage, setStaticQRImage] = useState('')
   const [manualOrders, setManualOrders] = useState<Any[]>([])
+  // ★ S4 增长漏斗（超管看板）：注册→激活→耗尽→首购→续费，按渠道聚合
+  const [funnelDays, setFunnelDays] = useState(30)
+  const [funnelRows, setFunnelRows] = useState<Any[]>([])
   const [invDlg, setInvDlg] = useState<null | { order: Any; title: string; taxNo: string }>(null)
 
   const setOrder = (o: Any | null) => { orderRef.current = o; setCurOrder(o) }
@@ -88,8 +95,10 @@ export function PlansP() {
     return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
   })()
 
-  function startPolling() { stopPolling(); payTimer.current = setInterval(checkStatus, 3000) }
-  function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current); payTimer.current = null } }
+    // startPolling 支付弹窗打开后每 6s 轮询订单状态（到账即停）
+function startPolling() { stopPolling(); payTimer.current = setInterval(checkStatus, 3000) }
+    // stopPolling 停止支付状态轮询
+function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current); payTimer.current = null } }
   useEffect(() => () => stopPolling(), [])
 
   const loadPackage = useCallback(async () => {
@@ -124,10 +133,12 @@ export function PlansP() {
     const cfg: Any = await adminPackageSettings()
     if (cfg.success) {
       setBillingEnforced(cfg.billing_enforced === '1' || cfg.billing_enforced === true)
+      if (cfg.sensitive_gate_enabled !== undefined) setSensitiveGate(cfg.sensitive_gate_enabled !== '0') // ★ S8
       if (cfg.free_trial_tokens) setFreeTrialTokens(Number(cfg.free_trial_tokens))
       if (cfg.free_trial_days) setFreeTrialDays(Number(cfg.free_trial_days))
       if (typeof cfg.billing_markup_multiplier === 'number') setMarkupMultiplier(cfg.billing_markup_multiplier)
       if (cfg.estimate_tokens_per_sentence) setTokensPerSentence(Number(cfg.estimate_tokens_per_sentence))
+      if (typeof cfg.points_tokens_rate === 'number') setPointsTokensRate(cfg.points_tokens_rate)
       if (cfg.pay_mode) setPayModeCfg(cfg.pay_mode as string)
       if (cfg.static_qr_image) setStaticQRImage(cfg.static_qr_image as string)
     }
@@ -141,14 +152,16 @@ export function PlansP() {
   }, [isSuper, loadPackage, loadOrders, loadInvoices, loadQuota, loadPkgs])
   useEffect(() => { void loadAll() }, [loadAll])
 
-  async function subscribe(pl: Any) {
+    // subscribe 订阅套餐：建单→弹收款台
+async function subscribe(pl: Any) {
     const r: Any = await packageSubscribe(String(pl.code))
     if (!r.success) return
     const o = r.order as Any
     if (o) { setOrder(o); setShowCheckout(true); if (o.channel !== 'manual') startPolling() }
     await loadPackage()
   }
-  async function upgrade(pl: Any) {
+    // upgrade 升级套餐（补差价折算）
+async function upgrade(pl: Any) {
     const cur = pkg.package_code as string
     const ok = await confirmDialog({
       header: t('plans.upgradeTitle'),
@@ -163,12 +176,13 @@ export function PlansP() {
     if (o) { setOrder(o); setShowCheckout(true); if (o.channel !== 'manual') startPolling() }
     await loadPackage()
   }
-  async function openCheckout() {
-    if (Number(chForm.tokens) <= 0) return
+    // openCheckout 打开收款弹窗（收款码/金额/复制）
+async function openCheckout() {
+    if (Number(chForm.points) <= 0) return
     setChLoading(true)
     try {
       const channel = chForm.channel === 'auto' ? '' : chForm.channel
-      const r: Any = await payCreate({ tokens: Number(chForm.tokens), channel })
+      const r: Any = await payCreate({ points: Number(chForm.points), channel })
       if (!toastResp(r)) return
       const o = r.order as Any
       setOrder(o); setShowCheckout(true)
@@ -181,8 +195,10 @@ export function PlansP() {
     setOrder(o); setShowCheckout(true)
     if (o && o.channel !== 'manual') startPolling()
   }
-  function closeCheckout() { setShowCheckout(false); stopPolling(); void loadOrders(); if (!isSuper) void loadPackage() }
-  async function checkStatus() {
+    // closeCheckout 关闭收款弹窗并清理轮询
+function closeCheckout() { setShowCheckout(false); stopPolling(); void loadOrders(); if (!isSuper) void loadPackage() }
+    // checkStatus 单次核对订单支付状态
+async function checkStatus() {
     const o = orderRef.current
     if (!o) return
     const r: Any = await payStatus(Number(o.id))
@@ -192,13 +208,15 @@ export function PlansP() {
       if (no.status === 'paid') stopPolling()
     }
   }
-  async function simulatePay() {
+    // simulatePay mock 模式下模拟支付成功（联调）
+async function simulatePay() {
     const o = orderRef.current
     if (!o) return
     setChLoading(true)
     try { const r: Any = await paySimulate(Number(o.id)); if (r.success) await checkStatus() } finally { setChLoading(false) }
   }
-  async function manualConfirm() {
+    // manualConfirm 用户声明已付款→进人工核对单
+async function manualConfirm() {
     const o = orderRef.current
     if (!o) return
     setChLoading(true)
@@ -228,7 +246,8 @@ export function PlansP() {
     return () => { alive = false }
   }, [curOrder?.qr_content])
 
-  async function saveQuota() {
+    // saveQuota 保存租户配额（qps/并发）
+async function saveQuota() {
     await billingQuotaSave({
       qps: Math.max(1, Number(quotaForm.qps) || 0),
       concurrent: Math.max(1, Number(quotaForm.concurrent) || 0),
@@ -238,36 +257,57 @@ export function PlansP() {
     await loadQuota()
   }
 
-  const [pkgForm, setPkgForm] = useState<Any>({ code: '', name: '', ptype: 'paid', sentences: 1000, price_money: 0, duration_days: 30 })
-  async function createPkg() {
+  const [pkgForm, setPkgForm] = useState<Any>({ code: '', name: '', ptype: 'paid', sentences: 0, points: 1000, price_money: 0, duration_days: 30 })
+    // createPkg 新建套餐
+async function createPkg() {
     if (!pkgForm.code || !pkgForm.name) { void MessagePlugin.warning(t('packages.nameRequired')); return }
     const r: Any = await adminPackageCreate(pkgForm as any)
-    if (toastResp(r)) { setPkgForm({ code: '', name: '', ptype: 'paid', sentences: 1000, price_money: 0, duration_days: 30 }); void loadPkgs() }
+    if (toastResp(r)) { setPkgForm({ code: '', name: '', ptype: 'paid', sentences: 0, points: 1000, price_money: 0, duration_days: 30 }); void loadPkgs() }
   }
-  async function togglePkg(p: Any) { await adminPackageUpdate({ id: Number(p.id), enabled: p.enabled ? 0 : 1 }); void loadPkgs() }
-  async function deletePkg(p: Any) {
+    // togglePkg 套餐上下架
+async function togglePkg(p: Any) { await adminPackageUpdate({ id: Number(p.id), enabled: p.enabled ? 0 : 1 }); void loadPkgs() }
+    // deletePkg 删除套餐
+async function deletePkg(p: Any) {
     if (!(await confirmDialog({ body: t('packages.confirmDeletePkg') }))) return
     await adminPackageDelete(Number(p.id)); void loadPkgs()
   }
-  async function saveEnforce() { const r: Any = await adminPackageSettingsSave({ billing_enforced: billingEnforced ? '1' : '0' } as never); toastResp(r, t('common.save')) }
-  async function saveBillingParams() {
+    // loadFunnel 拉取 S4 注册 cohort 增长漏斗
+async function loadFunnel() {
+    try {
+      const r: Any = await request(`/api/admin/funnel?days=${funnelDays}`, { headers: authHeaders() })
+      if (r?.success) setFunnelRows((r.rows || []) as Any[])
+    } catch { /* 静默：看板辅助数据 */ }
+  }
+  useEffect(() => { if (isSuper) void loadFunnel() }, [isSuper, funnelDays])
+
+    // saveEnforce 硬扣费开关（billing_enforced）
+async function saveEnforce() { const r: Any = await adminPackageSettingsSave({ billing_enforced: billingEnforced ? '1' : '0' } as never); toastResp(r, t('common.save')) }
+    // saveSensitiveGate S8 敏感词合规闸开关
+async function saveSensitiveGate() { const r: Any = await adminPackageSettingsSave({ sensitive_gate_enabled: sensitiveGate ? '1' : '0' } as never); toastResp(r, t('common.save')) }
+    // saveBillingParams S1 积分汇率 + S3 一次性邮箱黑名单保存
+async function saveBillingParams() {
     if (!(freeTrialTokens > 0)) { void MessagePlugin.warning(t('packages.trialTokensInvalid')); return }
     if (!(freeTrialDays > 0)) { void MessagePlugin.warning(t('packages.trialDaysInvalid')); return }
     if (!(markupMultiplier >= 1)) { void MessagePlugin.warning(t('packages.markupInvalid')); return }
     if (!(tokensPerSentence > 0)) { void MessagePlugin.warning(t('packages.rateInvalid')); return }
+    if (!(pointsTokensRate > 0)) { void MessagePlugin.warning(t('packages.rateInvalid')); return }
     const r: Any = await adminPackageSettingsSave({
       free_trial_tokens: freeTrialTokens, free_trial_days: freeTrialDays,
       billing_markup_multiplier: markupMultiplier, estimate_tokens_per_sentence: tokensPerSentence,
+      points_tokens_rate: pointsTokensRate,
     } as never)
     toastResp(r, t('common.save'))
   }
-  async function savePayMode() {
+    // savePayMode 支付模式切换（mock/静态收款码）
+async function savePayMode() {
     const r: Any = await adminPackageSettingsSave({ pay_mode: payModeCfg } as never)
     if (toastResp(r, t('common.save'))) setPayMode(payModeCfg)
   }
-  async function saveStaticQR() { const r: Any = await adminPackageSettingsSave({ static_qr_image: staticQRImage } as never); toastResp(r, t('common.save')) }
+    // saveStaticQR 保存静态收款码配置
+async function saveStaticQR() { const r: Any = await adminPackageSettingsSave({ static_qr_image: staticQRImage } as never); toastResp(r, t('common.save')) }
   const [qrUploading, setQrUploading] = useState(false)
-  async function uploadStaticQR(e: ChangeEvent<HTMLInputElement>) {
+    // uploadStaticQR 上传收款码图片
+async function uploadStaticQR(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     e.currentTarget.value = ''
     if (!file) return
@@ -285,7 +325,8 @@ export function PlansP() {
       void MessagePlugin.error(err?.message || t('common.saveFail'))
     } finally { setQrUploading(false) }
   }
-  async function confirmManual(o: Any) {
+    // confirmManual 管理员确认人工到账→积分入双桶
+async function confirmManual(o: Any) {
     const r: Any = await adminOrderPay(Number(o.id), Number(o.tenant_id) || 0)
     if (r.success) { void MessagePlugin.success(t('billing.manualConfirmed')); await Promise.all([loadPkgs(), loadOrders()]) }
     else void MessagePlugin.error((r.message as string) || t('billing.iPaidFailed'))
@@ -311,16 +352,16 @@ export function PlansP() {
         <Panel title={t('plans.nav.current')}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10 }}>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtNum(pkg.balance_tokens as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('usage.currentBalance')}</span>
+              <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtPoints(pkg.balance_tokens as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('usage.currentBalance')}</span>
             </div>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: 'var(--adm-amber-tx)' }}>{fmtNum(pkg.sub_grants_left as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balanceGrants')}</span>
+              <b style={{ fontSize: 20, color: 'var(--adm-amber-tx)' }}>{fmtPoints(pkg.sub_grants_left as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balanceGrants')}</span>
             </div>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: 'var(--adm-ok-tx)' }}>{fmtNum(pkg.permanent_balance as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balancePermanent')}</span>
+              <b style={{ fontSize: 20, color: 'var(--adm-ok-tx)' }}>{fmtPoints(pkg.permanent_balance as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balancePermanent')}</span>
             </div>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtNum(pkg.tokens_used_month as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.usedMonth')}</span>
+              <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtPoints(pkg.tokens_used_month as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.usedMonth')}</span>
             </div>
           </div>
           <div style={{ marginTop: 10, fontSize: 13, color: 'var(--adm-hint)' }}>
@@ -355,8 +396,11 @@ export function PlansP() {
                   <div key={pl.id} style={{ border: '1px solid var(--adm-line)', borderRadius: 8, padding: 14, display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--adm-card)' }}>
                     <div style={{ fontWeight: 600, fontSize: 14 }}>{pl.name}</div>
                     <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--td-brand-color-active, #1f33d6)' }}>¥{pl.price_money}<small style={{ fontSize: 12, color: 'var(--adm-faint)', fontWeight: 400 }}>{pl.ptype === 'paid' ? ` /${pl.duration_days}d` : ''}</small></div>
+                    {pl.ptype === 'paid' && Number(pl.price_money) > 0 && (
+                      <div style={{ fontSize: 12, color: '#c66900' }}>{t('plans.halfOffBadge')}</div>
+                    )}
                     <ul style={{ margin: '0 0 4px 16px', padding: 0, fontSize: 13, color: 'var(--adm-hint)', lineHeight: 1.7 }}>
-                      <li>{tpl('billing.pkgSentences', { n: pl.sentences })}</li>
+                      <li>{Number(pl.points) > 0 ? tpl('billing.pkgPoints', { n: pl.points }) : tpl('billing.pkgSentences', { n: pl.sentences })}</li>
                       <li>{t('packages.type.' + pl.ptype)}</li>
                     </ul>
                     <Button theme="success" onClick={() => {
@@ -377,11 +421,11 @@ export function PlansP() {
           <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('billing.onlineTopUpHint')}</div>
           <Space size={8} align="center">
             <Select value={chForm.channel} onChange={(v) => setChForm({ ...chForm, channel: v as string })} style={{ width: 200 }} options={chOptions} />
-            <Input type="number" value={String(chForm.tokens)} onChange={(v) => setChForm({ ...chForm, tokens: Number(v) || 0 })} placeholder={t('billing.tokenCount')} style={{ width: 180 }} />
+            <Input type="number" value={String(chForm.points)} onChange={(v) => setChForm({ ...chForm, points: Number(v) || 0 })} placeholder={t('billing.tokenCount')} style={{ width: 180 }} />
             <Button theme="success" loading={chLoading} onClick={openCheckout}>{chLoading ? t('billing.ordering') : t('billing.goPay')}</Button>
           </Space>
           {curOrder && curOrder.status === 'pending' && (
-            <p style={{ color: 'var(--td-brand-color-active, #1f33d6)', fontSize: 13, marginTop: 8 }}>{tpl('billing.currentOrder', { orderNo: curOrder.order_no, amount: curOrder.amount_tokens })}</p>
+            <p style={{ color: 'var(--td-brand-color-active, #1f33d6)', fontSize: 13, marginTop: 8 }}>{tpl('billing.currentOrder', { orderNo: curOrder.order_no, amount: fmtPoints(curOrder.amount_tokens), money: Number(curOrder.amount_money ?? 0).toFixed(2) })}</p>
           )}
         </Panel>
       )}
@@ -421,11 +465,35 @@ export function PlansP() {
       </Panel>
 
       {isSuper && (
+        <Panel title={t('plans.funnelTitle')}>
+          <Space size={8} align="center" style={{ marginBottom: 8 }}>
+            {[7, 30, 90].map((d) => (
+              <Button key={d} size="small" variant={funnelDays === d ? 'base' : 'outline'} theme="primary" onClick={() => setFunnelDays(d)}>{t('plans.funnelDays').replace('{d}', String(d))}</Button>
+            ))}
+            <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.funnelHint')}</span>
+          </Space>
+          <Table rowKey="source" size="small" data={funnelRows}
+                 columns={[
+                   { colKey: 'source', title: t('plans.funnelColSource'), width: 160 },
+                   { colKey: 'registered', title: t('plans.funnelColReg'), width: 90 },
+                   { colKey: 'activated', title: t('plans.funnelColAct'), width: 90 },
+                   { colKey: 'exhausted', title: t('plans.funnelColExh'), width: 90 },
+                   { colKey: 'first_pay', title: t('plans.funnelColPay'), width: 90 },
+                   { colKey: 'renewed', title: t('plans.funnelColRenew'), width: 90 },
+                 ] as never} />
+          {!funnelRows.length && <div style={{ color: 'var(--adm-faint)', fontSize: 13, marginTop: 6 }}>{t('plans.funnelEmpty')}</div>}
+        </Panel>
+      )}
+
+      {isSuper && (
         <Panel title={t('plans.nav.ops')}>
           <Space size={8} align="center">
             <Switch value={billingEnforced} onChange={(v) => setBillingEnforced(v as boolean)} />
             <span style={{ color: billingEnforced ? '#2e7d32' : '#888', fontWeight: 600 }}>{billingEnforced ? t('billing.enforcedOn') : t('billing.enforcedOff')}</span>
             <Button onClick={saveEnforce}>{t('common.save')}</Button>
+            <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 16 }}>{t('packages.sensitiveGateLabel')}</span>
+            <Switch value={sensitiveGate} onChange={(v) => setSensitiveGate(v as boolean)} />
+            <Button onClick={saveSensitiveGate}>{t('common.save')}</Button>
           </Space>
           <div style={{ marginTop: 12 }}>
             <Space size={8} align="center">
@@ -437,6 +505,8 @@ export function PlansP() {
               <Input type="number" value={num(markupMultiplier)} onChange={(v) => setMarkupMultiplier(Math.max(0, Number(v) || 0))} style={{ width: 120 }} />
               <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('packages.rateLabel')}</span>
               <Input type="number" value={num(tokensPerSentence)} onChange={(v) => setTokensPerSentence(Math.max(0, Number(v) || 0))} style={{ width: 120 }} />
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('packages.pointsRateLabel')}</span>
+              <Input type="number" value={num(pointsTokensRate)} onChange={(v) => setPointsTokensRate(Math.max(0, Number(v) || 0))} style={{ width: 110 }} />
               <Button onClick={saveBillingParams}>{t('common.save')}</Button>
             </Space>
             <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginTop: 6 }}>{t('packages.markupHint')}</div>
@@ -476,6 +546,7 @@ export function PlansP() {
             <Select value={String(pkgForm.ptype || 'paid')} onChange={(v) => setPkgForm({ ...pkgForm, ptype: v })} style={{ width: 140 }}
                     options={[{ label: t('packages.type.paid'), value: 'paid' }, { label: t('packages.type.increment'), value: 'increment' }, { label: t('packages.type.free'), value: 'free' }]} />
             <Input type="number" value={num(pkgForm.sentences)} onChange={(v) => setPkgForm({ ...pkgForm, sentences: Number(v) || 0 })} placeholder={t('packages.sentences')} style={{ width: 120 }} />
+            <Input type="number" value={num(pkgForm.points)} onChange={(v) => setPkgForm({ ...pkgForm, points: Number(v) || 0 })} placeholder={t('packages.points')} style={{ width: 110 }} />
             <Input type="number" value={num(pkgForm.price_money)} onChange={(v) => setPkgForm({ ...pkgForm, price_money: Number(v) || 0 })} placeholder={t('packages.price')} style={{ width: 120 }} />
             <Input type="number" value={num(pkgForm.duration_days)} onChange={(v) => setPkgForm({ ...pkgForm, duration_days: Number(v) || 0 })} placeholder={t('packages.duration')} style={{ width: 120 }} />
             <Button onClick={createPkg}>{t('common.save')}</Button>
@@ -486,6 +557,7 @@ export function PlansP() {
                    { colKey: 'name', title: t('packages.name') },
                    { colKey: 'ptype', title: t('packages.type'), width: 100, cell: ({ row }: any) => t('packages.type.' + row.ptype) },
                    { colKey: 'sentences', title: t('packages.sentences'), width: 90 },
+                   { colKey: 'points', title: t('packages.points'), width: 90 },
                    { colKey: 'price_money', title: `¥${t('packages.price')}`, width: 90 },
                    { colKey: 'enabled', title: t('common.status'), width: 90, cell: ({ row }: any) =>
                      <Button size="small" variant={row.enabled ? 'outline' : 'text'} theme={row.enabled ? 'success' : 'default'} onClick={() => togglePkg(row)}>{row.enabled ? t('common.active') : t('common.disabled')}</Button> },
@@ -516,7 +588,7 @@ export function PlansP() {
         {curOrder && curOrder.status === 'paid' ? (
           <div style={{ textAlign: 'center', padding: '10px 0' }}>
             <div style={{ width: 52, height: 52, lineHeight: '52px', borderRadius: '50%', background: 'var(--adm-ok-bg)', color: 'var(--adm-ok-tx)', fontSize: 28, margin: '0 auto 8px' }}>✓</div>
-            <p>{tpl('billing.paySuccess', { amount: curOrder.amount_tokens })}</p>
+            <p>{tpl('billing.paySuccess', { amount: fmtPoints(curOrder.amount_tokens) })}</p>
             <Button theme="success" onClick={closeCheckout}>{t('billing.done')}</Button>
           </div>
         ) : (

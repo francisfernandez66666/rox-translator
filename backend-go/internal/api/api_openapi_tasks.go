@@ -65,12 +65,20 @@ func writeTaskError(w http.ResponseWriter, code, message string) {
 // balance_sentences_approx 按总额折算。老调用方只读 balance_tokens 即获得正确总额。
 func (s *Server) balanceOut(tid int64) map[string]interface{} {
 	grants, permanent, total, approx := s.balancePayload(tid)
-	return map[string]interface{}{
-		"balance_tokens":           total,
+	// ★ S1 积分制（2026-09-14）：对外新增 balance_points 积分口径；token 字段默认保留
+	//   （存量 SDK 兼容），system_config openapi_show_tokens=0 时对 API 客户隐藏。
+	out := map[string]interface{}{
+		"balance_points":           s.Store.PointsFromTokens(total),
+		"points_grants":            s.Store.PointsFromTokens(grants),
+		"points_permanent":         s.Store.PointsFromTokens(permanent),
 		"balance_sentences_approx": approx,
-		"sub_grants_left":          grants,
-		"permanent_balance":        permanent,
 	}
+	if v, _ := s.Store.GetConfig("openapi_show_tokens"); v != "0" {
+		out["balance_tokens"] = total
+		out["sub_grants_left"] = grants
+		out["permanent_balance"] = permanent
+	}
+	return out
 }
 
 // normalizeTaskMode 归一化模式参数："fast"=快速；其余一律 pro 专业校对。

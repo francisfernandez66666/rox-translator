@@ -8,6 +8,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { Button, Tag, Drawer } from 'tdesign-react'
 import { myPackage, meContext } from '@/api'
+import { pointsOf } from '@/utils/points'
 import { AuthProvider, useAuth } from '@/stores/auth'
 import { AdminProvider } from '@/stores/admin'
 import { ChatProvider, useChat } from '@/hooks/useChat'
@@ -53,6 +54,7 @@ import { roleLevelSafe } from '@/lib/ui'
 
 // ---- 懒加载页面组件（路由级代码分割） ----
 const Login = lazy(() => import('./components/Login'))
+const Landing = lazy(() => import('./components/Landing')) // ★ S5 官网落地页（未登录 /）
 const ChatWindow = lazy(() => import('./components/ChatWindow'))
 const TicketsPage = lazy(() => import('./components/TicketsPage'))
 const EditorPage = lazy(() => import('./components/EditorPage'))
@@ -122,7 +124,7 @@ function FrontShell() {
             ? p.balance_sentences_approx
             : Math.floor(p.balance_tokens / 500)
           const nf = new Intl.NumberFormat()
-          setPkgLine(gtpl('app.pkgLineFmt', { tokens: nf.format(p.balance_tokens), approx: nf.format(approx) }))
+          setPkgLine(gtpl('app.pkgLineFmt', { points: nf.format(pointsOf(p.balance_tokens)), approx: nf.format(approx) }))
           setDepleted(p.balance_tokens <= 0) // ★ E11：billing_stopped 顶部横幅信号
         }
       } catch { /* ignore */ }
@@ -251,6 +253,14 @@ function Root() {
     return <div style={{ display: 'grid', placeItems: 'center', height: '100vh' }}>{t('app.loading')}</div>
   }
   if (!user) {
+    // ★ S5 门面：未登录访问 `/` 出官网落地页；登录/注册走 /login、/register
+    if (path === '/') {
+      return (
+        <Suspense fallback={<PageLoading />}>
+          <Landing />
+        </Suspense>
+      )
+    }
     return (
       <Suspense fallback={<PageLoading />}>
         <Login mode={path.startsWith('/admin') ? 'admin' : 'home'} onLogin={(u) => { onLogin(u); if (path.startsWith('/admin') && roleLevelSafe(u.role) < 2) navigate('/') }} />

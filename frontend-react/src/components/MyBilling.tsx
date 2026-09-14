@@ -5,6 +5,7 @@
 // 后端端点：/api/billing/my/{overview,orders,ledger,rewards,invoices}。
 // ============================================================================
 import { useEffect, useState } from 'react'
+import { fmtPoints } from '@/utils/points' // ★ S1 积分展示
 import { Card, Button, Tabs, Select } from 'tdesign-react'
 import { t } from '@/i18n'
 import {
@@ -14,9 +15,6 @@ import {
 import { BalancePanel } from './selfservice'
 
 // 千分位数字格式化
-function fmtNum(n: number): string {
-  return (n ?? 0).toLocaleString('en-US')
-}
 
 // ---------- 用量趋势图（近 30 天，UTC 日；SVG 柱状无第三方依赖） ----------
 function TrendCard() {
@@ -43,7 +41,7 @@ function TrendCard() {
             return (
               <rect key={b.date} x={i * bw + 1} y={H - h} width={bw - 2} height={Math.max(h, b.cost > 0 ? 2 : 0)}
                     rx={2} fill="var(--td-brand-color, #2f47f5)" opacity={b.cost > 0 ? 0.85 : 0.15}>
-                <title>{`${b.date} · ${fmtNum(b.cost)} token · ${b.count}${t('ss2.unitCnt')}`}</title>
+                <title>{`${b.date} · ${fmtPoints(b.cost)} ${t('ss2.unitPoints')} · ${b.count}${t('ss2.unitCnt')}`}</title>
               </rect>
             )
           })}
@@ -51,7 +49,7 @@ function TrendCard() {
           <text x={W} y={H + 14} fontSize={10} fill="#999" textAnchor="end">{bars[days - 1].date}</text>
         </svg>
       ) : <div style={{ fontSize: 12, color: '#999' }}>{t('ss2.loading')}</div>}
-      <div style={{ fontSize: 12, color: '#889', marginTop: 4 }}>{t('ss2.trendMax')}：{fmtNum(max)} token</div>
+      <div style={{ fontSize: 12, color: '#889', marginTop: 4 }}>{t('ss2.trendMax')}：{fmtPoints(max)} {t('ss2.unitPoints')}</div>
     </Card>
   )
 }
@@ -90,11 +88,11 @@ function OrdersTab() {
                 { value: 'cancelled', label: t('ss2.stCancelled') },
               ]} />
       <table className="ss-table"><thead><tr>
-        <th>{t('ss2.colOrderNo')}</th><th>{t('ss2.colTokens')}</th><th>{t('ss2.colMoney')}</th><th>{t('ss2.colStatus')}</th><th>{t('ss2.colChannel')}</th><th>{t('ss2.colCreatedAt')}</th>
+        <th>{t('ss2.colOrderNo')}</th><th>{t('ss2.colPoints')}</th><th>{t('ss2.colMoney')}</th><th>{t('ss2.colStatus')}</th><th>{t('ss2.colChannel')}</th><th>{t('ss2.colCreatedAt')}</th>
       </tr></thead><tbody>
         {rows.map((o) => (
           <tr key={o.id}>
-            <td>{o.order_no}</td><td>{fmtNum(o.amount_tokens)}</td><td>{o.amount_money.toFixed(2)}</td>
+            <td>{o.order_no}</td><td>{fmtPoints(o.amount_tokens)}</td><td>{o.amount_money.toFixed(2)}</td>
             <td>{t(`ss2.st${o.status.charAt(0).toUpperCase()}${o.status.slice(1)}`)}{o.manual_confirm === 1 && o.status === 'pending' ? ` · ${t('ss2.awaitConfirm')}` : ''}</td>
             <td>{o.channel || o.pay_method || '-'}</td><td>{o.created_at.slice(0, 10)}</td>
           </tr>
@@ -132,7 +130,7 @@ function LedgerTab() {
             <td>{l.created_at.replace('T', ' ').slice(0, 16)}</td>
             <td>{l.biz_kind ? t(`ss2.biz${l.biz_kind.charAt(0).toUpperCase()}${l.biz_kind.slice(1)}`) : '-'}</td>
             <td>{l.biz_mode === 'fast' ? t('ss2.modeFast') : l.biz_mode === 'pro' ? t('ss2.modePro') : '-'}</td>
-            <td>{fmtNum(l.quantity)}</td><td>{fmtNum(l.cost)}</td><td>{l.model || '-'}</td>
+            <td>{fmtPoints(l.quantity)}</td><td>{fmtPoints(l.cost)}</td><td>{l.model || '-'}</td>
           </tr>
         ))}
         {!rows.length && <tr><td colSpan={6} style={{ color: '#999' }}>{t('ss2.empty')}</td></tr>}
@@ -159,7 +157,7 @@ function RewardsTab() {
           <tr key={`${rw.invitee_uid}-${rw.type}`}>
             <td>{rw.invitee_name}{rw.invitee_email ? ` (${rw.invitee_email})` : ''}</td>
             <td>{rw.type === 'trial_stack' ? t('ss2.rwTrial') : rw.type === 'paid_perm' ? t('ss2.rwPaidPerm') : rw.type}</td>
-            <td>{fmtNum(rw.tokens)}</td><td>{rw.days > 0 ? rw.days : '-'}</td>
+            <td>{fmtPoints(rw.tokens)}</td><td>{rw.days > 0 ? rw.days : '-'}</td>
             <td>{rw.paid ? t('ss2.yes') : t('ss2.no')}</td><td>{rw.created_at.slice(0, 10)}</td>
           </tr>
         ))}

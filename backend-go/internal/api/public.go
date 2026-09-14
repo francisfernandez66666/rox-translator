@@ -172,12 +172,12 @@ h1{font-size:20px}h2{font-size:16px}
 <div class="wrap">
 <div class="card">
 <h1>定价 Pricing</h1>
-<p>新用户注册即送免费体验句数；按套餐订阅或按 token 计量。充值 / 用量明细请在<a href="/admin">管理后台</a>查看。</p>
+<p>新用户注册即送<b>免费体验积分</b>；翻译按积分计量，套餐订阅或积分充值均可，<b>新客注册 30 天内订阅首月 5 折</b>。充值 / 用量明细请在<a href="/admin">管理后台</a>查看。</p>
 <h2>商业套餐 Plans</h2>
 <div id="plansBox"><p>加载中…</p></div>
-<div class="note">💡 套餐标注的句数为<b>单语言句数</b>：一次翻译译入 N 种语言将按 N 倍消耗；按实际用量从余额折算，具体以用量明细为准。</div>
+<div class="note">💡 积分到账后按实际用量扣减：不同模式消耗不同（专业校对约 1 积分/300 token、快速模式约 3 倍效率、知识库/嵌入不加收）；订阅积分当期有效，充值积分永久有效。具体以用量明细为准。</div>
 <h2>常见问题 FAQ</h2>
-<p><b>Q：如何计费？</b> 按每次翻译任务的实际消耗计费，专业校对模式包含知识库匹配与多轮质量保障环节。</p>
+<p><b>Q：如何计费？</b> 以积分为计量单位，按每次翻译任务的实际消耗扣减；专业校对模式包含知识库匹配与多轮质量保障环节，消耗高于快速模式。</p>
 <p><b>Q：额度用完后怎么办？</b> 可订阅付费包或购买增量包，到账后立即恢复；也可联系管理员充值。</p>
 <p><b>Q：支持哪些支付方式？</b> 支持微信 / 支付宝在线支付（对接中），静态二维码扫码 + 人工确认，当前可使用线下转账 + 管理员充值。</p>
 </div></div>
@@ -186,9 +186,10 @@ h1{font-size:20px}h2{font-size:16px}
 fetch('/api/plans').then(r=>r.json()).then(d=>{
   const types={free:'免费体验',paid:'付费包',increment:'增量包'};
   const cards=(d.plans||[]).map(p=>{
-    return '<div class="plan"><b>'+p.name+'</b><div class="meta">'+p.sentences+' 句 · '+(types[p.ptype]||p.ptype)+'</div>'+
-      '<div class="price">¥'+p.price_money+'</div><div class="meta">/ '+(p.duration_days||'—')+' 天</div>'+
-      (p.ptype==='free' ? '<span class="tag2">注册即送</span>' : '<span class="tag2">订阅后生效</span>')+
+    const face=p.points>0?p.points.toLocaleString()+' 积分':(p.sentences||0)+' 句';
+    return '<div class="plan"><b>'+p.name+'</b><div class="meta">'+face+' · '+(types[p.ptype]||p.ptype)+'</div>'+
+      '<div class="price">¥'+p.price_money+'</div><div class="meta">'+(p.duration_days>0?'/ '+p.duration_days+' 天':'· 永久有效')+'</div>'+
+      (p.ptype==='free' ? '<span class="tag2">注册即送</span>' : p.ptype==='paid' ? '<span class="tag2">新客首月 5 折</span>' : '<span class="tag2">即购即到账</span>')+
       '</div>';
   }).join('');
   document.getElementById('plansBox').innerHTML=cards || '<p>暂无上架套餐，请联系管理员</p>';
@@ -200,7 +201,7 @@ fetch('/api/plans').then(r=>r.json()).then(d=>{
 const termsBody = `
 <p><b>能言 LangCross 用户协议</b>（以下简称「本协议」）</p>
 <p>生效日期：2026 年 1 月 1 日</p>
-<p>能言（LangCross，以下简称「本平台」或「我们」）是一个面向个人与企业的<b>翻译平台</b>，提供文本/文件翻译、多语知识库、术语管理与团队协作等 SaaS 能力。在使用本平台前，请您（以下简称「用户」）仔细阅读并充分理解本协议。您注册、登录或使用本平台任一功能，即视为已阅读并同意接受本协议全部条款。</p>
+<p>能言（LangCross，以下简称「本平台」或「我们」，运营主体见第 12 条）是一个面向个人与企业的<b>翻译平台</b>，提供文本/文件翻译、多语知识库、术语管理与团队协作等 SaaS 能力。在使用本平台前，请您（以下简称「用户」）仔细阅读并充分理解本协议。您注册、登录或使用本平台任一功能，即视为已阅读并同意接受本协议全部条款。</p>
 
 <h2>1. 协议的接受与变更</h2>
 <p>1.1 您点击「同意」或实际使用本平台服务，即与本平台成立服务关系，本协议对双方均具有法律约束力。</p>
@@ -245,7 +246,7 @@ const termsBody = `
 <p>本协议的订立、解释与争议解决适用中华人民共和国法律；双方因本协议产生争议的，应友好协商解决，协商不成的，提交本平台运营方所在地有管辖权的人民法院诉讼解决。</p>
 
 <h2>12. 联系我们</h2>
-<p>如您对本协议有任何疑问，可通过站内工单或管理后台公布的联系方式与我们联系。</p>
+<p>本平台由<b>能言（Lexicorn）团队</b>运营；正式运营主体注册就绪前，以团队名义提供服务并承担相应责任，主体变更后将公示承接关系。</p><p>如您对本协议有任何疑问，可通过站内工单或管理后台公布的联系方式与我们联系。</p>
 
 <hr>
 <h2>User Agreement</h2>
@@ -292,7 +293,7 @@ const termsBody = `
 <p>This Agreement is governed by the laws of the People's Republic of China; disputes are resolved in the courts of the operator's location.</p>
 
 <h2>12. Contact</h2>
-<p>For questions, contact us via in-app tickets or the contact information published in the admin console.</p>`
+<p>This platform is operated by the <b>LangCross (Lexicorn) team</b>; until the formal operating entity is registered, services are provided under the team name, which assumes the corresponding responsibilities. The successor entity will be announced upon change.</p><p>For questions, contact us via in-app tickets or the contact information published in the admin console.</p>`
 
 // slaBodyZh / slaBodyEn 服务等级协议正文（拆分为中英文两段，由页面语言切换器控制显示）。
 const slaBodyZh = `
@@ -391,7 +392,7 @@ const privacyBody = `
 <p>We use cookies to maintain sessions and analytics; you can manage them in your browser.</p>
 
 <h2>10. Contact</h2>
-<p>For privacy questions, contact us via the admin console or our privacy email.</p>
+<p>Operated by the LangCross (Lexicorn) team (see Terms §12). For privacy questions, contact us via the admin console or our privacy email.</p>
 
 <h2>11. Updates</h2>
 <p>This Policy is updated as products and laws evolve; the latest version is published here.</p>`

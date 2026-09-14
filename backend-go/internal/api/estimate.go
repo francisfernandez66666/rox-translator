@@ -78,7 +78,7 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 		if err == nil && perms.PackageCode == "" && tokens <= 0 {
 			activated = false
 			// ★ 任务2.5：耗尽引导——购买月租套餐或充值永久 token
-			hint = "额度已用尽，请购买月租套餐或充值永久 token"
+			hint = "额度已用尽，请购买订阅套餐或充值积分"
 		}
 	}
 	// 返回预估结果
@@ -90,8 +90,12 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 		"cost_sentences_approx":    maxTokens / rate, // 上限≈句数（保守展示）
 		"balance_tokens":           tokens,
 		"balance_sentences_approx": approxBal,
-		"sufficient":               !s.Bill.Enabled() || tokens > 0,
-		"activated":                activated,
-		"hint":                     hint,
+		// ★ S1 积分制对外展示口径（前端只显积分，token 字段保留供内部/超管链路）
+		"points_min":     s.Store.PointsFromTokens(minTokens),
+		"points_max":     s.Store.PointsFromTokens(maxTokens),
+		"points_balance": s.Store.PointsFromTokens(tokens),
+		"sufficient":     !s.Bill.Enabled() || tokens > 0,
+		"activated":      activated,
+		"hint":           hint,
 	})
 }

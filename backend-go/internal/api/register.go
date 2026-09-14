@@ -87,6 +87,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		BrandName   string `json:"brand_name"`    // 品牌中文名（企业注册引导填写，种入企业知识库固定用法）
 		BrandNameEn string `json:"brand_name_en"` // 品牌英文名（覆盖所有非 zh/zh_hant 目标语固定用法）
 		BrandNames  string `json:"brand_names"`   // 品牌多语言名 JSON（{"zh":"极石","en":"ROX"}，可选；含其它语言名时优先）
+		// ★ S4 归因（2026-09-14）：UTM 五参由落地页捕获、注册时随表单上报（可空）
+		UTMSource   string `json:"utm_source"`
+		UTMMedium   string `json:"utm_medium"`
+		UTMCampaign string `json:"utm_campaign"`
+		UTMTerm     string `json:"utm_term"`
+		UTMContent  string `json:"utm_content"`
+		LandingPath string `json:"landing_path"` // 落地页路径（前端 location.pathname）
 		// ★ 协议签署（2026-08-27 需求）：注册即视为同意《用户协议》与《隐私协议》，
 		//   前端注册表单须勾选后方可提交；勾选时 agreed=true 并随注册写入签署时间。
 		Agreed bool `json:"agreed"`
@@ -132,6 +139,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// 1. 处理邀请码（可选）：校验有效且未使用，标记为已使用
 	inviteTenantID := int64(0)
 	// ★ 邮箱必填：所有自助注册路径（含受邀加入）都必须提供邮箱——验证码收件与找回密码依赖
+	// ★ S3 防薅：一次性/临时邮箱域名黑名单（注册礼包=唯一钩子，先卡域名再验码）
+	if msg := s.disposableEmailRejected(req.Email); msg != "" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
+		return
+	}
 	if strings.TrimSpace(req.Email) == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱为必填项"})
 		return
@@ -371,6 +383,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if req.Email != "" {
 		_ = s.Store.SetUserEmail(nu.ID, inviteTenantID, strings.TrimSpace(req.Email))
 		nu.Email = strings.TrimSpace(req.Email)
+	// ★ S4 归因快照：注册主链路成功后落库（失败不阻断）
+	_ = s.Store.InsertRegAttribution(&store.RegAttribution{
+		UserID: nu.ID, TenantID: nu.TenantID,
+		UTMSource: strings.TrimSpace(req.UTMSource), UTMMedium: strings.TrimSpace(req.UTMMedium),
+		UTMCampaign: strings.TrimSpace(req.UTMCampaign), UTMTerm: strings.TrimSpace(req.UTMTerm),
+		UTMContent: strings.TrimSpace(req.UTMContent), RefCode: strings.TrimSpace(req.Ref),
+		Host: r.Host, LandingPath: req.LandingPath, UserAgent: r.Header.Get("User-Agent"),
+	})
 	}
 	// ★ 注册成功自动发送《产品手册》PDF 邮件（个人/企业用户均发送；用 info 专用邮箱，附件为手册 PDF）
 	if req.Email != "" {

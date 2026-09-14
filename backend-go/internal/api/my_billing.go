@@ -45,6 +45,8 @@ func (s *Server) handleMyBillingOverview(w http.ResponseWriter, r *http.Request)
 		"grants_left":      grants,
 		"total_available":  total,
 		"approx_sentences": approx,
+		// ★ S1 积分制：对外展示口径（1 积分=points_tokens_rate 内部 token；前端余额/用量只显积分）
+		"points_available": s.Store.PointsFromTokens(total),
 		"billing_enforced": s.Bill != nil && s.Bill.Enabled(),
 		"daily":            s.Store.MyDailyUsage(u.TenantID, u.ID, 30),
 	})

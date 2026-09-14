@@ -18,10 +18,12 @@ import { useEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { create } from 'zustand'
 import { authMe, setAuthToken, getAuthToken } from '@/api'
+import { setPointsRate } from '@/utils/points'
 import type { AuthUser } from '@/api'
 
 /** roleLevel 角色等级：super_admin/admin=4 · tenant_admin/approver=3 · dept_admin=2 · 其他=1
  *  （单一来源，与后端 auth.IsSuperAdmin/IsTenantAdmin 口径一致） */
+/** 角色等级序（owner>admin>member 便于门控比较） */
 export function roleLevel(r?: string): number {
   if (r === 'super_admin' || r === 'admin') return 4
   if (r === 'tenant_admin' || r === 'approver') return 3
@@ -61,6 +63,7 @@ export const authStore = useAuthStore
 /** 认证状态 Provider：仅负责首屏会话恢复副作用，状态本体在 zustand
  * @param children - 需要访问认证上下文的子组件树
  */
+/** 认证状态根：登录/登出/会话恢复（含 S1 积分汇率注入） */
 export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let alive = true
@@ -74,7 +77,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch { r = null }
       // StrictMode 双挂载下本实例可能已被取代（alive=false）：静默忽略，
       // 仅当响应确实无效才清凭证（旧写法把 alive=false 也当失败清 token，引发 401 风暴）
-      if (r && r.success && r.user) { if (alive) onLogin(r.user) }
+      if (r && r.success && r.user) {
+        setPointsRate(r.points_tokens_rate) // ★ S1 积分汇率注入（展示层统一换算）
+        if (alive) onLogin(r.user)
+      }
       else if (!alive) { /* 被新实例接管，由其负责状态 */ }
       else { setAuthToken(''); useAuthStore.setState({ user: null }) }
       if (alive) setRestoring(false)
@@ -87,6 +93,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 /** 在函数组件中读取认证状态（★ H8：直连 zustand，不再依赖 Provider 层级；
  *  保留 Context 兜底仅为独立预览等无 Provider 场景的旧行为兼容） */
+/** 取认证上下文 */
 export function useAuth(): AuthCtx {
   const user = useAuthStore((s) => s.user)
   const restoring = useAuthStore((s) => s.restoring)

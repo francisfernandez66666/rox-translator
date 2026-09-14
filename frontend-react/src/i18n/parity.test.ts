@@ -33,6 +33,8 @@ import * as pIndustries from './panels/industries'
 import * as pBrandterms from './panels/brandterms'
 import * as pChatwin from './panels/chatwin'
 import * as pDatasources from './panels/datasources'
+import * as pMybill from './panels/mybilling'
+import * as pLanding from './panels/landing'
 
 // 与 i18n/index.ts 保持同序的面板模块表（保证合并口径一致）
 const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<string, string> } }[] = [
@@ -48,6 +50,7 @@ const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<stri
   { name: 'tasks', mod: pTasks }, { name: 'ops', mod: pOps },
   { name: 'industries', mod: pIndustries }, { name: 'brandterms', mod: pBrandterms },
   { name: 'chatwin', mod: pChatwin }, { name: 'datasources', mod: pDatasources },
+  { name: 'mybilling', mod: pMybill }, { name: 'landing', mod: pLanding },
 ]
 
 describe('i18n 中英词典键值对等性', () => {

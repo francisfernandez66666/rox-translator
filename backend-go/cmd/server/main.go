@@ -35,6 +35,7 @@ import (
 	"translator/internal/kb"
 	"translator/internal/llm"
 	"translator/internal/observability"
+	"translator/internal/sensitive"
 	"translator/internal/store"
 	"translator/internal/tenant"
 
@@ -227,6 +228,9 @@ func main() {
 
 	// 创建翻译引擎（挂载 DB 与向量索引）
 	eng := engine.NewEngine(cfg, db, kbIndex, ts)
+	// ★ S8 敏感词兑底闸：装载平台词包（文件缺失/空=闸口关闭，热加载免重启）
+	eng.Sensitive = sensitive.New(cfg.SensitiveWordsFile)
+	log.Printf("[sensitive] 词包 %s 词条数=%d（0=兑底闸未启用）", cfg.SensitiveWordsFile, eng.Sensitive.Count())
 	eng.NPZPath = npzPath // 向量索引文件路径（重建时写回）
 	if st != nil {
 		eng.St = st
@@ -234,6 +238,25 @@ func main() {
 
 	// 加载模型路由策略（system_config.model_routes，admin 可热更新）
 	if st != nil {
+		// ★ 存量迁移（S0-S1 安全整改）：历史明文的供应商 Key 一次性加密回写，
+		//   消除「备份/psql 顺手导出即泄 Key」的敞口（D3 只保证了新保存路径）。
+		if v, err := st.GetConfig("model_routes"); err == nil && v != "" {
+			var raw []config.ProviderConfig
+			if json.Unmarshal([]byte(v), &raw) == nil {
+				dirty := false
+				for i := range raw {
+					if raw[i].APIKey != "" && !strings.HasPrefix(raw[i].APIKey, store.SecretEncPrefix) {
+						raw[i].APIKey = store.EncryptSecret(raw[i].APIKey)
+						dirty = true
+					}
+				}
+				if dirty {
+					if b, e := json.Marshal(raw); e == nil && st.SetConfig("model_routes", string(b)) == nil {
+						log.Printf("[init] model_routes 存量明文密钥已加密回写")
+					}
+				}
+			}
+		}
 		if v, err := st.GetConfig("model_routes"); err == nil && v != "" {
 			var routes []config.ProviderConfig
 			if json.Unmarshal([]byte(v), &routes) == nil && len(routes) > 0 {

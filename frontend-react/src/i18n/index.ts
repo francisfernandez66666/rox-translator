@@ -30,6 +30,7 @@ import * as pBrandterms from './panels/brandterms'
 import * as pChatwin from './panels/chatwin'
 import * as pDs from './panels/datasources'
 import * as pMybill from './panels/mybilling'
+import * as pLanding from './panels/landing'
 import * as pReconcile from './panels/reconcile'
 import { baseZh } from './dicts.zh'
 import { baseEn } from './dicts.en'
@@ -46,7 +47,7 @@ const zh: Dict = {
   ...pModels.zh, ...pWorkflow.zh, ...pApiKeys.zh, ...pWebhooks.zh,
   ...pTickets.zh, ...pBilling.zh, ...pUsage.zh, ...pAlerts.zh,
   ...pInvites.zh, ...pChat.zh, ...pPackages.zh, ...pFeedback.zh,
-  ...pReferral.zh, ...pTasks.zh, ...pOps.zh, ...pIndustries.zh, ...pBrandterms.zh, ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh,
+  ...pReferral.zh, ...pTasks.zh, ...pOps.zh, ...pIndustries.zh, ...pBrandterms.zh, ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh, ...pLanding.zh,
 }
 
 // en 英文词典：base 基础字典 + 各面板模块英文文案合并
@@ -56,7 +57,7 @@ const en: Dict = {
   ...pModels.en, ...pWorkflow.en, ...pApiKeys.en, ...pWebhooks.en,
   ...pTickets.en, ...pBilling.en, ...pUsage.en, ...pAlerts.en,
   ...pInvites.en, ...pChat.en, ...pPackages.en, ...pFeedback.en,
-  ...pReferral.en, ...pTasks.en, ...pOps.en, ...pIndustries.en, ...pBrandterms.en, ...pChatwin.en, ...pMybill.en, ...pReconcile.en,
+  ...pReferral.en, ...pTasks.en, ...pOps.en, ...pIndustries.en, ...pBrandterms.en, ...pChatwin.en, ...pMybill.en, ...pReconcile.en, ...pLanding.en,
 }
 
 // dicts 按语言索引的词典集合，取词时按当前语言定位
@@ -107,16 +108,19 @@ function subscribe(cb: () => void) {
 function getSnapshot(): Lang { return currentLang }
 
 /** useLang 订阅当前语言；语言切换时所有调用组件重渲染 */
+/** Hook：当前语言（订阅切换） */
 export function useLang(): Lang {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
 /** t 纯函数取词（非响应式；组件内请配合 useLang 使用以获得切换刷新） */
+/** 文案取词：key → 当前语言文本（缺词回退中文） */
 export function t(key: string): string {
   return dicts[currentLang][key] || dicts.zh[key] || key
 }
 
 /** tpl 带参数取词：{name} 占位符替换 */
+/** 带占位符文案：{name} 变量插值 */
 export function tpl(key: string, vars: Record<string, string | number> = {}): string {
   let s = t(key)
   for (const k in vars) s = s.split(`{${k}}`).join(String(vars[k]))
@@ -124,6 +128,7 @@ export function tpl(key: string, vars: Record<string, string | number> = {}): st
 }
 
 /** useT 组合钩子：返回 [lang, t, tpl]，语言切换自动重渲染 */
+/** Hook：一次取 [lang, t, tpl] */
 export function useT(): [Lang, typeof t, typeof tpl] {
   useLang()
   return [currentLang, t, tpl]

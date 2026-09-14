@@ -177,9 +177,11 @@ func (s *Server) startWatchdog() {
 		defer ticker.Stop()
 		s.runSubscriptionScan()
 		s.runTrialScan()
+		s.runGrowthScan()
 		for range ticker.C {
 			s.runSubscriptionScan()
 			s.runTrialScan()
+			s.runGrowthScan()
 		}
 	}()
 	// 工单产物留存扫描（每日一轮：剩余 7/3/1 天提醒下载；到期清理文件，译文已入 TM 不受影响）
@@ -287,6 +289,7 @@ func (s *Server) runSubscriptionScan() {
 					"商业包「"+code+"」已到期，订阅身份已移除；剩余句数仍可正常使用，续订后即时生效。")
 				s.notifyBots("订阅到期摘除",
 					"租户 #"+strconv.FormatInt(t.ID, 10)+"（"+t.Name+"）商业包「"+code+"」已到期，订阅身份已摘除。")
+				s.Store.S7MarkLapsed(t.ID, exp) // ★ S7：登记到期时刻，驱动 T+3 老客回访
 			}
 			continue
 		}
@@ -298,11 +301,66 @@ func (s *Server) runSubscriptionScan() {
 			s.notifyTenantAdmins(t.ID, "订阅即将到期",
 				"商业包「"+perms.PackageCode+"」将于 "+expDate+" 到期（剩 "+strconv.Itoa(daysLeft+1)+" 天），请及时续订。")
 		}
+		if daysLeft <= 3 && !perms.NotifiedRenew3 {
+			// ★ S7 续费三封之 T-3：邮件+站内（升级/续订引导），独立去重档
+			_ = s.Store.SetNotifiedExpFlag(t.ID, "notified_renew3")
+			s.notifyTenantAdmins(t.ID, "续费窗口：剩 "+strconv.Itoa(daysLeft+1)+" 天",
+				"您的订阅「"+perms.PackageCode+"」将于 "+expDate+" 到期。到期前续订额度无缝衔接；"+
+					"老客升级至更高档可抵扣旧包剩余价值（订阅页一键升级）。续订入口：管理后台 → 套餐与账单。")
+		}
 		if daysLeft < 1 && !perms.NotifiedExp1 {
 			_ = s.Store.SetNotifiedExpFlag(t.ID, "notified_exp1") // ★ B1
 			s.notifyTenantAdmins(t.ID, "订阅今日到期",
 				"商业包「"+perms.PackageCode+"」将于今日到期，续订请前往管理后台订阅页。")
 		}
+	}
+}
+
+// runGrowthScan S7 增长触达日扫（★ 2026-09-14）：
+//
+//	① 每轮刷新各租户「余额清零起点」；清零满 48h 且从未付费 → 发放一次性挽回礼包
+//	  （5 万内部 token≈167 积分 / 7 天台账），站内+邮件+运营群留痕；
+//	② 订阅到期 ≥72h（T+3）仍未续订 → 老客回归触达（每轮到期只发一次）。
+func (s *Server) runGrowthScan() {
+	if s.Store == nil || s.Ten == nil {
+		return
+	}
+	tenants, err := s.Ten.List()
+	if err != nil {
+		return
+	}
+	for _, t := range tenants {
+		if t.ID <= 1 {
+			continue
+		}
+		grants, permanent, e := s.Store.TenantRemainTotal(t.ID)
+		if e != nil {
+			continue
+		}
+		s.Store.S7MarkZero(t.ID, grants+permanent <= 0)
+	}
+	// ① 挽回礼包（每租户终身一次）
+	for _, tid := range s.Store.S7RescueCandidates(48 * time.Hour) {
+		_ = s.Store.CreateQuotaGrant(tid, "trial", 50000, time.Now().UTC().Add(7*24*time.Hour), "rescue_pack", 0)
+		s.Store.S7MarkRescued(tid)
+		s.notifyTenantAdmins(tid, "专属挽回礼包已到账",
+			"检测到一个免费体验周期用尽，送您 167 积分挽回礼包（7 天有效），够再跑一批真实内容验证效果。"+
+				"满意可随时订阅/充值，入口：管理后台 → 套餐与账单。")
+		s.Store.LogAudit(tid, 0, "s7_rescue_pack", "tenant", "rescue 50000tok/7d")
+		s.notifyBots("S7 挽回礼包发放", "租户 #"+strconv.FormatInt(tid, 10)+" 耗尽满 48h 未付费，已发放一次性挽回礼包（167 积分/7 天）。")
+	}
+	// ② T+3 老客回访（到期后仍未续订）
+	for _, tid := range s.Store.S7LapsedFollowups(72 * time.Hour) {
+		if t, e := s.Ten.GetByID(tid); e == nil {
+			p := tenant.ParsePerms(t.Permissions)
+			if p.PackageCode != "" && p.PackageCode != "trial" {
+				continue // 已续订（新一期生效）：不打扰
+			}
+		}
+		s.notifyTenantAdmins(tid, "好久不见——续订即可无缝恢复",
+			"您的订阅到期已 3 天。这期间产生的术语沉淀与翻译记忆都还在，续订后立即生效、无需重来。"+
+				"如需按量波动更大的方案，可选购永久积分充值包。入口：管理后台 → 套餐与账单。")
+		s.Store.S7MarkLapsed3Sent(tid)
 	}
 }
 

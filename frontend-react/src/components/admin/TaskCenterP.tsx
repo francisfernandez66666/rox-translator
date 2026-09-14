@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { fmtPoints } from '@/utils/points' // ★ S1 积分展示
 import { Button, Dialog, Input, MessagePlugin, Switch, Table, Tag, Textarea } from 'tdesign-react'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
@@ -51,7 +52,8 @@ export default function TaskCenterP() {
   useEffect(() => { void loadMy(); if (isSuper) void loadAdmin() }, [isSuper, loadMy, loadAdmin])
 
   /** 一键领取任务奖励 */
-  async function doClaim(row: UserTaskView) {
+    // doClaim 用户领取任务奖励额度
+async function doClaim(row: UserTaskView) {
     const r = await claimTask(row.id)
     if (!r.success) {
       void MessagePlugin.error(tpl('tasks.claimFail', { msg: r.message || '' }))
@@ -62,7 +64,8 @@ export default function TaskCenterP() {
   }
 
   /** 保存任务定义（新增/更新） */
-  async function saveTask() {
+    // saveTask 新建/更新增长任务
+async function saveTask() {
     if (!dlg) return
     if (!String(dlg.title || '').trim()) { void MessagePlugin.warning(t('tasks.titleLabel') + '不能为空'); return }
     setSaving(true)
@@ -83,7 +86,8 @@ export default function TaskCenterP() {
   }
 
   /** 删除任务定义 */
-  async function deleteTask(row: UserTask) {
+    // deleteTask 删除任务
+async function deleteTask(row: UserTask) {
     if (!(await confirmDialog({ body: t('tasks.deleteConfirm') }))) return
     const r = await adminTaskDelete(row.id)
     if (!toastResp(r, t('tasks.deleted'))) return
@@ -97,7 +101,7 @@ export default function TaskCenterP() {
     ) },
     { colKey: 'title', title: t('tasks.colTitle') },
     { colKey: 'description', title: t('tasks.colDesc'), cell: ({ row }: Any) => row.description || '—' },
-    { colKey: 'reward_tokens', title: t('tasks.colReward'), width: 110, cell: ({ row }: Any) => <Tag theme="success" variant="light">+{Number(row.reward_tokens).toLocaleString()}</Tag> },
+    { colKey: 'reward_tokens', title: t('tasks.colReward'), width: 110, cell: ({ row }: Any) => <Tag theme="success" variant="light">+{fmtPoints(Number(row.reward_tokens))}</Tag> },
     { colKey: 'status', title: '状态', width: 100, cell: ({ row }: Any) => row.claimed
       ? <Tag theme="default" variant="light">✅ {t('tasks.claimed')}</Tag>
       : <Tag theme="warning" variant="light">{t('tasks.claim')}</Tag> },

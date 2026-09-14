@@ -4,7 +4,7 @@
 // =============================================
 export const zh: Record<string, string> = {
   'tasks.title': '任务中心',
-  'tasks.hint': '完成任务领取永久 token 奖励。每日任务当日可领一次；一次性任务终身可领一次。',
+  'tasks.hint': '完成任务领取永久积分奖励。每日任务当日可领一次；一次性任务终身可领一次。',
   'tasks.daily': '每日任务',
   'tasks.once': '一次性任务',
   'tasks.reward': '奖励',
@@ -18,7 +18,7 @@ export const zh: Record<string, string> = {
   'tasks.colType': '类型',
   'tasks.colTitle': '标题',
   'tasks.colDesc': '说明',
-  'tasks.colReward': '奖励 token',
+  'tasks.colReward': '积分奖励',
   'tasks.colEnabled': '启用',
   'tasks.colSort': '排序',
   'tasks.colOp': '操作',
@@ -39,7 +39,7 @@ export const zh: Record<string, string> = {
 // 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
   'tasks.title': 'Task Center',
-  'tasks.hint': 'Complete tasks to earn permanent token rewards. Daily tasks can be claimed once per day; one-time tasks can be claimed once ever.',
+  'tasks.hint': 'Complete tasks to earn permanent credit rewards. Daily tasks can be claimed once per day; one-time tasks once ever.',
   'tasks.daily': 'Daily',
   'tasks.once': 'One-time',
   'tasks.reward': 'Reward',
@@ -53,7 +53,7 @@ export const en: Record<string, string> = {
   'tasks.colType': 'Type',
   'tasks.colTitle': 'Title',
   'tasks.colDesc': 'Description',
-  'tasks.colReward': 'Reward Tokens',
+  'tasks.colReward': 'Credits',
   'tasks.colEnabled': 'Enabled',
   'tasks.colSort': 'Sort',
   'tasks.colOp': 'Actions',

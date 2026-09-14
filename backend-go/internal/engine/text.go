@@ -159,7 +159,27 @@ func (e *Engine) normalizeBrandTerms(ctx context.Context, srcText string, langTr
 }
 
 // HandleText 文本翻译主流程（复刻 skill.py _handle_text_translate）
+// HandleText 文本/对话翻译统一入口（★ S8：敏感词双向兑底闸包一层，核心流程在 handleTextCore）。
 func (e *Engine) HandleText(ctx context.Context, text string, options map[string]interface{}, prog Progress) *TextTranslateResult {
+	// 输入侧：整段命中直接拒译（不进模型、不扣费）
+	if msg := e.sensitiveTextGuardInput(ctx, text); msg != "" {
+		return &TextTranslateResult{Skill: "translation", Reply: msg, Error: "sensitive_blocked"}
+	}
+	res := e.handleTextCore(ctx, text, options, prog)
+	// 输出侧兑底：模型自产敏感内容整单拒付（文本通道为单块交付，不做段级替换）
+	if res != nil && res.Error == "" && len(res.Data.Translations) > 0 {
+		if msg := e.sensitiveTextGuardOutput(ctx, res.Data.Translations); msg != "" {
+			res.Data.Translations = nil
+			res.Reply = msg
+			res.Error = "sensitive_blocked"
+		}
+	}
+	return res
+}
+
+// handleTextCore 文本/对话翻译核心流程（模型调用、用量记账、记忆与 TM 缓存）。
+// 合规闸与熔断在 HandleText 外层已处理，此处只做业务。
+func (e *Engine) handleTextCore(ctx context.Context, text string, options map[string]interface{}, prog Progress) *TextTranslateResult {
 	// 注入请求级用量记录器（供计量成本核算）
 	ctx = e.WithUsageRecorder(ctx)
 	// 界面语言（提示词语言跟随用户界面语言）：options["lang"] 缺省按中文

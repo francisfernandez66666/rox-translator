@@ -387,3 +387,48 @@ func (s *Store) dbInsertEntry(t *testing.T, tid, pkgID int64, layer int, src, la
 	id, _ := res.LastInsertId()
 	return id
 }
+
+// TestPackageOrderPointsPricing ★ S1 积分制定价链路：积分×汇率折算内部 token、
+// 注册 30 天内订阅包首月半价、充值包（价格尺子）不打折、老租户挂牌全价。
+func TestPackageOrderPointsPricing(t *testing.T) {
+	s := newTestStoreWithTenants(t)
+	setReg := func(when time.Time) {
+		if _, err := db.Exec(s.db, db.CurrentDialect(),
+			"UPDATE tenants SET created_at=? WHERE id=1", when.Format(time.RFC3339)); err != nil {
+			t.Fatalf("设置注册时间失败: %v", err)
+		}
+	}
+	paid, err := s.CreatePackage(&Package{Code: "basic_m", Name: "基础·月", PType: PackagePaid, Points: 3000, PriceMoney: 99, DurationDays: 30})
+	if err != nil {
+		t.Fatalf("CreatePackage 失败: %v", err)
+	}
+	topup, err := s.CreatePackage(&Package{Code: "topup_s", Name: "充值包·小", PType: PackageIncrement, Points: 3000, PriceMoney: 299})
+	if err != nil {
+		t.Fatalf("CreatePackage 失败: %v", err)
+	}
+	// 新租户（注册 1 天）：订阅五折 + token=积分×300
+	setReg(time.Now().Add(-24 * time.Hour))
+	o, err := s.CreatePackageOrder(1, paid, 1, "manual")
+	if err != nil {
+		t.Fatalf("订阅下单失败: %v", err)
+	}
+	if o.AmountMoney != 49.5 {
+		t.Fatalf("首月半价应为 49.5，实际 %v", o.AmountMoney)
+	}
+	if o.AmountTokens != 3000*300 {
+		t.Fatalf("积分折算 token 应为 900000，实际 %d", o.AmountTokens)
+	}
+	// 充值包：尺子价不打折
+	o2, err := s.CreatePackageOrder(1, topup, 1, "manual")
+	if err != nil {
+		t.Fatalf("充值下单失败: %v", err)
+	}
+	if o2.AmountMoney != 299 {
+		t.Fatalf("充值包应全价 299，实际 %v", o2.AmountMoney)
+	}
+	// 老租户（注册 31 天）：订阅恢复挂牌价
+	setReg(time.Now().Add(-31 * 24 * time.Hour))
+	if m := s.PackageOrderPrice(paid, 1); m != 99 {
+		t.Fatalf("老租户订阅应为全价 99，实际 %v", m)
+	}
+}

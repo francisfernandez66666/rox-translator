@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"translator/internal/sensitive"
 
 	"translator/internal/billing"
 	"translator/internal/config"
@@ -49,6 +50,10 @@ type Engine struct {
 	Ten        *tenant.Store    // 租户存储（查询租户级模型配置与策略阈值）
 	St         *store.Store     // 平台存储（读取 system_config：模型路由/阶段模型，可选）
 	Evals      *evals.Evaluator // 评估器（质量评估用，可选）
+
+	// ★ S8 敏感词兑底闸（2026-09-14）：词包扫描器（main 注入；nil 或空词包=关闭，
+	// 运营开关 system_config sensitive_gate_enabled=0 亦可临时停用）。
+	Sensitive *sensitive.Checker
 
 	cjkCache         map[string]int64            // 兼容旧字段（保留）：默认租户 CJK→rowID 缓存
 	cjkCacheByTenant map[string]map[string]int64 // ★ 2026-08-26 继承链改造：键=「租户|组织链指纹|跨部门开关」→ CJK字符 → row id

@@ -39,7 +39,6 @@ func (s *Server) handleAdminReconcile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	rate := s.Store.PriceFenPerToken()
 	byOrder := map[int64][]int64{} // order_id → payments 下标
 	ordByID := map[int64]*ReconOrderLite{}
 	var issues []ReconIssue
@@ -57,8 +56,13 @@ func (s *Server) handleAdminReconcile(w http.ResponseWriter, r *http.Request) {
 			switch p.Status {
 			case "paid":
 				paidRows++
-				if rate > 0 && o.AmountTokens > 0 {
-					want := o.AmountTokens * rate
+				// ★ S1 口径修复：核对基准=订单应收金额（amount_money，下单落库的单一事实源）；
+				//   历史未回填单退到尺子价 tokens×price_fen_per_million_tokens。
+				want := int64(o.AmountMoney*100 + 0.5)
+				if want <= 0 && o.AmountTokens > 0 {
+					want = s.Store.TokensToFen(o.AmountTokens)
+				}
+				if want > 0 {
 					diff := p.AmountFen - want
 					if diff < 0 {
 						diff = -diff

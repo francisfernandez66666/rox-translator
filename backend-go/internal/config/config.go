@@ -107,10 +107,11 @@ type Config struct {
 	BreakerCoolDownSec int // 熔断冷却秒数（默认 1800）
 
 	// 用户数据目录
-	UserDataDir string // 用户数据根目录
-	DBPath      string // 知识库 SQLite 路径
-	EmbPath     string // 向量文件路径（npz）
-	IndexStamp  string // 索引时间戳文件路径
+	UserDataDir        string // 用户数据根目录
+	DBPath             string // 知识库 SQLite 路径
+	SensitiveWordsFile string // ★ S8 敏感词包文件路径（一行一词，# 注释；mtime 热加载）
+	EmbPath            string // 向量文件路径（npz）
+	IndexStamp         string // 索引时间戳文件路径
 
 	// 数据库后端（P0-3 起点：SQLite→PostgreSQL 可切换基石）
 	// DatabaseDriver：后端驱动，"sqlite"（默认）或 "postgres"。
@@ -328,6 +329,10 @@ func Default() *Config {
 			home = "."
 		}
 		c.UserDataDir = filepath.Join(home, "Library", "Application Support", "能言")
+	}
+	c.SensitiveWordsFile = filepath.Join(c.UserDataDir, "sensitive_words.txt")
+	if v := os.Getenv("SENSITIVE_WORDS_FILE"); v != "" {
+		c.SensitiveWordsFile = v
 	}
 	c.DBPath = filepath.Join(c.UserDataDir, "tm.sqlite3")
 	c.EmbPath = filepath.Join(c.UserDataDir, "tm_embeddings.npz")

@@ -179,7 +179,7 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 未显式给金额时按定价回填（评审整改 B1）：发票/对账取数来源
 	if req.Money <= 0 && req.Tokens > 0 {
-		money := float64(req.Tokens*s.Store.PriceFenPerToken()) / 100.0
+		money := float64(s.Store.TokensToFen(req.Tokens)) / 100.0
 		_ = s.Store.UpdateOrderMoney(o.OrderNo, money)
 		o.AmountMoney = money
 	}

@@ -29,7 +29,8 @@ type Package struct {
 	Code         string  `json:"code"`          // 包编码（唯一，如 trial/monthly_1000/inc_500）
 	Name         string  `json:"name"`          // 包名称（如 包月 1000 句）
 	PType        string  `json:"ptype"`         // 包类型：free(免费体验) / paid(付费包) / increment(增量包)
-	Sentences    int64   `json:"sentences"`     // 包内含翻译句数
+	Sentences    int64   `json:"sentences"`     // 包内含翻译句数（★ 2026-09-14 起为历史展示字段，售卖以 Points 为准）
+	Points       int64   `json:"points"`        // ★ S1 积分面值（对外售卖/展示单位；内部 token=积分×points_tokens_rate）
 	PriceMoney   float64 `json:"price_money"`   // 售价（元）
 	DurationDays int     `json:"duration_days"` // 有效期（天，包月=30）
 	Enabled      int     `json:"enabled"`       // 1=上架 0=下架
@@ -48,15 +49,15 @@ const (
 // ============ 商业包 CRUD ============
 
 // packageCols packages 表查询列清单（统一使用，避免遗漏）
-const packageCols = "id, tenant_id, code, name, ptype, sentences, price_money, duration_days, enabled, sort_order, created_at, updated_at"
+const packageCols = "id, tenant_id, code, name, ptype, sentences, points, price_money, duration_days, enabled, sort_order, created_at, updated_at"
 
 // CreatePackage 创建商业包（超管）。
 // 参数：pkg=待创建的包对象（code/name/ptype 必填）；返回新包对象。
 func (s *Store) CreatePackage(pkg *Package) (*Package, error) {
 	now := time.Now().Format(time.RFC3339)
 	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
-		"INSERT INTO packages (tenant_id, code, name, ptype, sentences, price_money, duration_days, enabled, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-		pkg.TenantID, pkg.Code, pkg.Name, pkg.PType, pkg.Sentences, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, now, now)
+		"INSERT INTO packages (tenant_id, code, name, ptype, sentences, points, price_money, duration_days, enabled, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+		pkg.TenantID, pkg.Code, pkg.Name, pkg.PType, pkg.Sentences, pkg.Points, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +69,7 @@ func (s *Store) CreatePackage(pkg *Package) (*Package, error) {
 func (s *Store) GetPackage(id int64) (*Package, error) {
 	var p Package
 	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+packageCols+" FROM packages WHERE id=?", id).
-		Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.Points, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +87,7 @@ func (s *Store) GetPackageByCode(tenantID int64, code string) (*Package, error) 
 	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+packageCols+
 		" FROM packages WHERE code=? AND tenant_id IN (0, ?) ORDER BY CASE WHEN tenant_id=? THEN 0 ELSE 1 END, id LIMIT 1",
 		code, tenantID, tenantID).
-		Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.Points, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +105,7 @@ func (s *Store) ListCommercialPackages() ([]*Package, error) {
 	var out []*Package
 	for rows.Next() {
 		var p Package
-		if err := rows.Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.Points, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &p)
@@ -123,7 +124,7 @@ func (s *Store) ListEnabledCommercialPackages() ([]*Package, error) {
 	var out []*Package
 	for rows.Next() {
 		var p Package
-		if err := rows.Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.Points, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &p)
@@ -135,8 +136,8 @@ func (s *Store) ListEnabledCommercialPackages() ([]*Package, error) {
 // 参数：pkg=待更新的包对象（全部字段整体覆盖）；返回错误。
 func (s *Store) UpdatePackage(pkg *Package) error {
 	_, err := db.Exec(s.db, db.CurrentDialect(),
-		"UPDATE packages SET tenant_id=?, name=?, ptype=?, sentences=?, price_money=?, duration_days=?, enabled=?, sort_order=?, updated_at=? WHERE id=?",
-		pkg.TenantID, pkg.Name, pkg.PType, pkg.Sentences, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, time.Now().Format(time.RFC3339), pkg.ID)
+		"UPDATE packages SET tenant_id=?, name=?, ptype=?, sentences=?, points=?, price_money=?, duration_days=?, enabled=?, sort_order=?, updated_at=? WHERE id=?",
+		pkg.TenantID, pkg.Name, pkg.PType, pkg.Sentences, pkg.Points, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, time.Now().Format(time.RFC3339), pkg.ID)
 	return err
 }
 
@@ -522,6 +523,28 @@ func (s *Store) TokenSentenceRate() int64 {
 	return ops.DefaultTokensPerSentence // ★ C6：默认值单一来源（ops.DefaultEffective 收口）
 }
 
+// PointsTokensRate 积分↔内部计量 token 的基础汇率（points_tokens_rate，默认 300，超管可调）。
+// ★ S1 积分制（2026-09-14）：对外售卖/余额/账单一律展示积分；token 仅在内部账本
+//
+//	（usage_ledger/rate_card/成本核算）流转，防止外部从积分单价反推平台真实成本。
+func (s *Store) PointsTokensRate() int64 {
+	if v, err := s.GetConfig("points_tokens_rate"); err == nil && v != "" {
+		if n, perr := strconv.ParseInt(v, 10, 64); perr == nil && n > 0 {
+			return n
+		}
+	}
+	return 300
+}
+
+// PointsFromTokens 内部计量 token → 积分（展示换算，四舍五入；0 保持 0）。
+func (s *Store) PointsFromTokens(tokens int64) int64 {
+	r := s.PointsTokensRate()
+	if r <= 0 || tokens <= 0 {
+		return 0
+	}
+	return (tokens + r/2) / r
+}
+
 // MarkupMultiplier 成本均摊系数（billing_markup_multiplier，默认 1.5，强制 ≥1.0）。
 // 对外计费与权益发放统一乘以该系数：扣费侧（用量实时计量）与入账侧（包订单发放）共用同一口径，
 // 保证「1 入账 token = 1 扣费 token」的单位一致；后台可调。
@@ -570,7 +593,7 @@ func (s *Store) ExpirePackage(tid int64) (code string, err error) {
 // 替代 watchdog「读整包→改一位→整体覆盖写回」的丢失更新窗口；flag 取
 // notified_exp7 / notified_exp1 / notified_exp3（体验台账到期前3天，任务2.5））。
 func (s *Store) SetNotifiedExpFlag(tid int64, flag string) error {
-	if flag != "notified_exp7" && flag != "notified_exp1" && flag != "notified_exp3" {
+	if flag != "notified_exp7" && flag != "notified_exp1" && flag != "notified_exp3" && flag != "notified_renew3" {
 		return &errTxt{"非法提醒标记: " + flag}
 	}
 	// ★ A2/S3（2026-09-12）：置 true 走 JSONPatchSet（flag 已经白名单校验，键名安全）。

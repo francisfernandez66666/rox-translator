@@ -9,6 +9,7 @@
 // ========================================
 
 import { useCallback, useEffect, useState } from 'react'
+import { fmtPoints } from '@/utils/points' // ★ S1 积分展示
 import { useNavigate } from 'react-router-dom'
 import { Card, Tag, Loading, Button, Switch, MessagePlugin } from 'tdesign-react'
 import { myPackage } from '@/api/billing'
@@ -101,8 +102,8 @@ export function ReferralPanel() {
         </div>
         {url && <div className="ss-row"><span>{t('ss.inviteLink')}</span><Tag>{url}</Tag></div>}
         <div className="ss-stats">
-          <div className="ss-stat"><span>{t('ss.trialStacked')}</span><b>{fmtNum(d?.trial_tokens ?? 0)}</b></div>
-          <div className="ss-stat"><span>{t('ss.paidBonus')}</span><b>{fmtNum(d?.paid_tokens ?? 0)}</b></div>
+          <div className="ss-stat"><span>{t('ss.trialStacked')}</span><b>{fmtPoints(d?.trial_tokens ?? 0)}</b></div>
+          <div className="ss-stat"><span>{t('ss.paidBonus')}</span><b>{fmtPoints(d?.paid_tokens ?? 0)}</b></div>
           <div className="ss-stat"><span>{t('ss.invitedCount')}</span><b>{d?.invited ?? 0}</b></div>
         </div>
       </Card>
@@ -114,7 +115,7 @@ export function ReferralPanel() {
             <div className="ss-stat"><span>{t('ss.funnelL1')}</span><b>{(fd as any).l1_invited ?? 0}</b></div>
             <div className="ss-stat"><span>{t('ss.funnelL1Paid')}</span><b>{(fd as any).l1_paid ?? 0}</b></div>
             <div className="ss-stat"><span>{t('ss.funnelL2')}</span><b>{(fd as any).l2_invited ?? 0}</b></div>
-            <div className="ss-stat"><span>{t('ss.funnelL2Share')}</span><b>{fmtNum((fd as any).reward_tokens_l2 ?? 0)}{(fd as any).pct ? `（${(fd as any).pct}%）` : ''}</b></div>
+            <div className="ss-stat"><span>{t('ss.funnelL2Share')}</span><b>{fmtPoints((fd as any).reward_tokens_l2 ?? 0)}{(fd as any).pct ? `（${(fd as any).pct}%）` : ''}</b></div>
           </div>
           <div style={{ fontSize: 12, color: '#889', marginTop: 8 }}>{t('ss.funnelHint')}</div>
         </Card>
@@ -122,7 +123,7 @@ export function ReferralPanel() {
       {records.length > 0 && <Card>
         <h3>{t('ss.referralRecords')}</h3>
         <table className="ss-table"><thead><tr><th>{t('ss.refTypeHeader')}</th><th>{t('ss.refTokenHeader')}</th><th>{t('ss.refDateHeader')}</th></tr></thead>
-          <tbody>{records.map((r, i) => <tr key={i}><td>{r.type === 'paid_perm' ? t('ss.refTypePaid') : r.type === 'paid_perm_l2' ? t('ss.refTypePaidL2') : t('ss.refTypeTrial')}</td><td>{fmtNum(r.tokens)}</td><td>{r.created_at?.slice(0, 10)}</td></tr>)}</tbody></table>
+          <tbody>{records.map((r, i) => <tr key={i}><td>{r.type === 'paid_perm' ? t('ss.refTypePaid') : r.type === 'paid_perm_l2' ? t('ss.refTypePaidL2') : t('ss.refTypeTrial')}</td><td>{fmtPoints(r.tokens)}</td><td>{r.created_at?.slice(0, 10)}</td></tr>)}</tbody></table>
       </Card>}
     </div>
   )
@@ -154,7 +155,7 @@ export function MyPackagePanel() {
         <h3>{t('ss.myPackage')}</h3>
         <div className="ss-row"><span>{t('ss.currentPkg')}</span><Tag>{p.package_code ?? '—'}</Tag></div>
         <div className="ss-row"><span>{t('ss.remainingSentences')}</span><b>{t('ss.approxPrefix')}{fmtNum(p.balance_sentences_approx ?? 0)} {t('ss.sentenceUnit')}{t('ss.approxSuffix')}</b></div>
-        <div className="ss-row"><span>{t('ss.availableTokens')}</span><b>{fmtNum(total)}</b></div>
+        <div className="ss-row"><span>{t('ss.availableTokens')}</span><b>{fmtPoints(total)}</b></div>
         <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtNum(p.permanent_balance ?? 0)}</b></div>
       </Card>
     </div>

@@ -73,7 +73,12 @@ log "mock LLM 就绪（${i}s）"
 # ---------- 3. 后端（全新库 + 探活自指向 + 固定超管密码；方言随 DB_DRIVER） ----------
 log "启动后端 :${UAT_PORT}（方言 ${DB_DRIVER}）..."
 rm -f "$WORK/dev.db"*
+# ★ T36（09-14 商业化批次）：固定 ADMIN_TOKEN（S9 收口鉴权断言）与 METRICS_TOKEN（/metrics 401/Bearer），
+# 并布 S8 测试词包（SENSITIVE_WORDS_FILE 覆盖默认路径，热加载生效）。
+printf "# UAT T36 测试词包\n紫火核弹T36\n" > "$WORK/sensitive_words.txt"
 ADMIN_INIT_PASSWORD=$ADMIN_INIT_PASSWORD SELFCHECK_URL="${BASE_URL}/status" \
+  ADMIN_TOKEN=uat-admin-token-36 METRICS_TOKEN=uat-metrics-36 \
+  SENSITIVE_WORDS_FILE="$WORK/sensitive_words.txt" \
   nohup "$WORK/uat-server" -addr "127.0.0.1:${UAT_PORT}" -frontend frontend-react/dist -kbdb "$WORK/dev.db" \
   > "$WORK/server.log" 2>&1 < /dev/null &
 SERVER_PID=$!

@@ -66,7 +66,8 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 		Code         string  `json:"code"`          // 包编码（唯一，必填）
 		Name         string  `json:"name"`          // 包名称（必填）
 		PType        string  `json:"ptype"`         // 包类型：free/paid/increment（默认 paid）
-		Sentences    int64   `json:"sentences"`     // 包内含翻译句数（必填 >0）
+		Sentences    int64   `json:"sentences"`     // 包内含翻译句数（历史字段；与 points 二选一必填）
+		Points       int64   `json:"points"`        // ★ S1 积分面值（对外售卖单位；>0 时按积分口径发放）
 		PriceMoney   float64 `json:"price_money"`   // 售价（元）
 		DurationDays int     `json:"duration_days"` // 有效期（天，默认 30）
 		SortOrder    int     `json:"sort_order"`    // 展示排序
@@ -82,8 +83,8 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "ptype 仅支持 free/paid/increment"})
 		return
 	}
-	if req.Sentences <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "sentences 必须大于 0"})
+	if req.Sentences <= 0 && req.Points <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "sentences 与 points 至少一项大于 0（积分包填 points）"})
 		return
 	}
 	// ★ C14（2026-09-12）：负价拒绝（旧实现直落库，退款/统计口径被打穿）
@@ -99,7 +100,7 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 	}
 	p, err := s.Store.CreatePackage(&store.Package{
 		TenantID: req.TenantID, Code: req.Code, Name: req.Name, PType: req.PType, Sentences: req.Sentences,
-		PriceMoney: req.PriceMoney, DurationDays: req.DurationDays, Enabled: 1, SortOrder: req.SortOrder,
+		Points: req.Points, PriceMoney: req.PriceMoney, DurationDays: req.DurationDays, Enabled: 1, SortOrder: req.SortOrder,
 	})
 	if err != nil {
 		// ★ 脱敏（2026-09-12）：驱动错误不透吐
@@ -130,6 +131,7 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 		Name         string   `json:"name"`          // 新名称（可为空=不修改）
 		PType        string   `json:"ptype"`         // 新类型（可为空=不修改）
 		Sentences    int64    `json:"sentences"`     // 新句数（<=0=不修改）
+		Points       *int64   `json:"points"`        // ★ S1 新积分面值（nil=不修改，0=清零回退句数口径）
 		PriceMoney   *float64 `json:"price_money"`   // ★ C14：指针——nil=不修改，0=0 元价
 		DurationDays *int     `json:"duration_days"` // ★ C14：指针——nil=不修改，0=改回不限期
 		Enabled      *int     `json:"enabled"`       // 启停（0/1，nil=不修改）
@@ -159,6 +161,13 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 	}
 	if req.Sentences > 0 {
 		cur.Sentences = req.Sentences
+	}
+	if req.Points != nil {
+		if *req.Points < 0 {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "points 不能为负"})
+			return
+		}
+		cur.Points = *req.Points
 	}
 	// ★ C14：价格/期限指针化后，「不修改」与「显式设为 0」可区分
 	//   （旧实现 -1/缺省混淆：0 元价改不了、限期改不回不限、负价直接落库）。
@@ -236,6 +245,20 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 		// ★ Token 实费参数（四期）：均摊系数与句↔token 换算率
 		"billing_markup_multiplier":    markup,
 		"estimate_tokens_per_sentence": tokenRate,
+		// ★ S1 积分制：积分↔内部计量 token 汇率（对外只露积分，超管可见真实口径）
+		"points_tokens_rate": s.Store.PointsTokensRate(),
+		// ★ S3 防薅：一次性邮箱域黑名单（运营增补部分；内置表不随出参重复）
+		"disposable_email_domains": func() string {
+			v, _ := s.Store.GetConfig("disposable_email_domains")
+			return v
+		}(),
+		// ★ S8 敏感词兑底闸开关（"0"=临时停用；词包空文件=天然关闭）
+		"sensitive_gate_enabled": func() string {
+			if v, _ := s.Store.GetConfig("sensitive_gate_enabled"); v == "0" {
+				return "0"
+			}
+			return "1"
+		}(),
 	})
 }
 
@@ -254,16 +277,19 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		FreeTrialDays     *int64   `json:"free_trial_days"`              // 体验有效期（天）
 		MarkupMultiplier  *float64 `json:"billing_markup_multiplier"`    // 成本均摊系数（≥1.0）
 		TokensPerSentence *int64   `json:"estimate_tokens_per_sentence"` // 句↔token 换算率（>0）
+		PointsTokensRate  *int64   `json:"points_tokens_rate"`           // ★ S1 积分汇率：1 积分=N 内部 token（>0）
+		SensitiveGate     *string  `json:"sensitive_gate_enabled"`       // ★ S8 敏感词兑底闸："1"/"0"
 		PayMode           *string  `json:"pay_mode"`                     // mock / sdk / static_qr
 		StaticQRImage     *string  `json:"static_qr_image"`              // 静态收款码图片 URL 或 base64
 		// 三期注册与触达配置（均可选，传了才更新；secret_key 只写不回显）
-		EmailVerifyEnabled *string `json:"email_verify_enabled"` // "1"=注册需邮箱验证码
-		EmailNotifyEnabled *string `json:"email_notify_enabled"` // "1"=站内通知同步邮件触达租户管理员
-		CaptchaProvider    *string `json:"captcha_provider"`     // 空/none=关闭；turnstile
-		CaptchaSiteKey     *string `json:"captcha_site_key"`     // Turnstile 站点 key（公开下发）
-		CaptchaSecretKey   *string `json:"captcha_secret_key"`   // Turnstile 服务端密钥（只写）
-		WecomWebhookURL    *string `json:"wecom_webhook_url"`    // 企业微信群机器人地址
-		DingtalkWebhookURL *string `json:"dingtalk_webhook_url"` // 钉钉群机器人地址
+		EmailVerifyEnabled     *string `json:"email_verify_enabled"`     // "1"=注册需邮箱验证码
+		EmailNotifyEnabled     *string `json:"email_notify_enabled"`     // "1"=站内通知同步邮件触达租户管理员
+		CaptchaProvider        *string `json:"captcha_provider"`         // 空/none=关闭；turnstile
+		CaptchaSiteKey         *string `json:"captcha_site_key"`         // Turnstile 站点 key（公开下发）
+		CaptchaSecretKey       *string `json:"captcha_secret_key"`       // Turnstile 服务端密钥（只写）
+		WecomWebhookURL        *string `json:"wecom_webhook_url"`        // 企业微信群机器人地址
+		DisposableEmailDomains *string `json:"disposable_email_domains"` // ★ S3 防薅：一次性邮箱域增补黑名单（逗号分隔，叠加内置表）
+		DingtalkWebhookURL     *string `json:"dingtalk_webhook_url"`     // 钉钉群机器人地址
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -309,6 +335,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		{"captcha_site_key", req.CaptchaSiteKey},
 		{"captcha_secret_key", req.CaptchaSecretKey},
 		{"wecom_webhook_url", req.WecomWebhookURL},
+		{"disposable_email_domains", req.DisposableEmailDomains},
 		{"dingtalk_webhook_url", req.DingtalkWebhookURL},
 	}
 	for _, kv := range cfgKeys {
@@ -330,6 +357,20 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 			return
 		}
 		add("estimate_tokens_per_sentence", strconv.FormatInt(*req.TokensPerSentence, 10))
+	}
+	if req.PointsTokensRate != nil {
+		if *req.PointsTokensRate <= 0 {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "积分汇率必须大于 0"})
+			return
+		}
+		add("points_tokens_rate", strconv.FormatInt(*req.PointsTokensRate, 10))
+	}
+	if req.SensitiveGate != nil {
+		if *req.SensitiveGate != "0" && *req.SensitiveGate != "1" {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": `sensitive_gate_enabled 仅支持 "0"/"1"`})
+			return
+		}
+		add("sensitive_gate_enabled", *req.SensitiveGate)
 	}
 	for _, kv := range pending {
 		if err := s.Store.SetConfig(kv.key, kv.val); err != nil {

@@ -330,7 +330,7 @@ curl 'https://{{OPENAPI_HOST}}/openapi/v1/tasks/status?id=123' -H 'Authorization
 # 处理中 → {'status':'processing','steps':[...]}
 # 文本完成 → {'status':'completed','translations':{'en':'Check the brake system.'},'tokens_used':1832}
 # 文件完成 → {'status':'completed','files':[...],'download':'/openapi/v1/tasks/download?id=123'}
-# 失败     → {'status':'failed','error_code':'insufficient_balance','message':'余额不足，请充值或升级套餐'}
+# 失败     → {'status':'failed','error_code':'insufficient_balance','message':'余额不足（积分），请充值积分或升级套餐'}
 ~~~
 
 ## 支持的语言与计费规则
@@ -396,15 +396,15 @@ mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
 
 | error_code | 含义 |
 |------------|------|
-| insufficient_balance | **余额不足——请充值或升级套餐** |
+| insufficient_balance | **积分余额不足——请充值积分或升级套餐** |
 | rate_limited | 请求过于频繁，稍后重试 |
 | daily_quota_exceeded | 达到当日用量上限 |
 | bad_request / not_found / forbidden / invalid_api_key / task_failed / not_ready / no_result | 参数/权限/状态类错误 |
 
 ## 余额与计费
 
-翻译按实际用量从账户余额扣减；每次响应携带 balance_tokens（当前余额）与
-balance_sentences_approx（≈句数）。额度不足将返回错误码 insufficient_balance，
+翻译按实际用量从账户余额扣减；每次响应携带 balance_points（当前积分余额）与
+balance_sentences_approx（≈句数）。额度以积分计（1 积分对应固定内部计量单位，详见套餐说明）。额度不足将返回错误码 insufficient_balance，
 请充值或升级套餐。具体计费规则由平台管理员配置。
 `
 
@@ -520,7 +520,7 @@ target_langs takes an array of language codes; defaults to ["en"]. Supported: 34
 
 ## Balance & Billing
 
-Usage is deducted from your account balance based on actual consumption; every response carries balance_tokens and balance_sentences_approx. Billing rules are configured by platform administrators.
+Usage is deducted from your account balance based on actual consumption; every response carries balance_points (in credits) and balance_sentences_approx. Billing rules are configured by platform administrators.
 `
 
 // ============ 开放 API 辅助接口（KB 统计 / 用量 / Key 轮换） ============
@@ -639,6 +639,7 @@ func (s *Server) handleOpenAPIUsage(w http.ResponseWriter, r *http.Request) {
 	if balance != nil {
 		resp["balance"] = balance.Balance
 		resp["balance_tokens"] = balance.Balance
+		resp["balance_points"] = s.Store.PointsFromTokens(balance.Balance) // ★ S1 积分口径
 		resp["balance_sentences_approx"] = balance.Balance / s.Store.TokenSentenceRate()
 	}
 	writeJSON(w, 200, resp)

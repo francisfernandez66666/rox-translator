@@ -13,6 +13,7 @@ import { FeedbackModalFromMessage } from './modals'
 import { useChat } from '@/hooks/useChat'
 import { myPackage, meContext } from '@/api'
 import { estimateTranslation } from '@/api/translate' // ★ F7：翻译前消耗预估
+import { fmtPoints } from '@/utils/points'
 import { sentenceRateOf, approxSentencesOf } from '@/lib/quotaCalc' // ★ F11：换算抽纯 // ★ E14：删除死导入 request（无调用点）
 import type { ChatMessage } from '@/types'
 import { useT, t, tpl } from '@/i18n'
@@ -263,12 +264,12 @@ export default function ChatWindow() {
       {/* 余额 / 用量条 */}
       {(balance || usage || orgBudget) && (
         <div style={{ background: '#e8f0fe', color: 'var(--td-brand-color, #2f47f5)', fontSize: 12, padding: '4px 6%', display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
-          {balance && <span>{tpl('chat.balanceFmt', { tokens: fmtNum(balance.tokens), sents: fmtNum(balance.approx) })}</span>}
-          {usage && <span>{tpl('chat.todayFmt', { tokens: fmtNum(usage.today), sents: fmtNum(usage.todaySentences) })}</span>}
+          {balance && <span>{tpl('chat.balanceFmt', { points: fmtPoints(balance.tokens), sents: fmtNum(balance.approx) })}</span>}
+          {usage && <span>{tpl('chat.todayFmt', { points: fmtPoints(usage.today), sents: fmtNum(usage.todaySentences) })}</span>}
           {orgBudget && <span>{orgBudget.name} {fmtNum(orgBudget.used)}/{fmtNum(orgBudget.limit)}</span>}
           {estimate && (
             <span style={estimate.low ? { color: '#c66900', fontWeight: 600 } : undefined}>
-              {tpl('chat.estFmt', { min: fmtNum(estimate.min), max: fmtNum(estimate.max) })}
+              {tpl('chat.estFmt', { min: fmtPoints(estimate.min), max: fmtPoints(estimate.max) })}
               {estimate.low && ` · ${t('chat.estLow')}`}
             </span>
           )}

@@ -152,6 +152,9 @@ func (e *Engine) applySegmentGates(ctx context.Context, langTranslations map[str
 	var warnings []string
 	for lc, m := range langTranslations {
 		for orig, tr := range m {
+			if tr == SensitivePlaceholderText { // ★ S8：拦截占位段不进质量闸门
+				continue
+			}
 			fixed, ws := gc.check(orig, lc, tr, retry, e, ctx)
 			if fixed != tr {
 				m[orig] = fixed
