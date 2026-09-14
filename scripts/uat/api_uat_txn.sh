@@ -30,6 +30,8 @@
 #   T33 H4 TM 审核队列契约 + H9 二级裂变漏斗
 #   T34 工单双模式（2026-09-13）：还原文件模式纯文案旁路产物 / 纯文案模式交付 /
 #       白名单分档 / 文本工单无文案产物提示 / OpenAPI delivery 回显 / health 暴露 anydoc_ready
+#   T35 线上反馈回归（2026-09-14）：文件工单 multipart 上传（特殊文件名 PDF/多文件混合）/
+#       bootstrap-demo.sh 配置守护（base_domain 种入 / demo_superadmin / 种子开关可覆盖）
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 # 依赖：mock_llm.py 已启动、uat 服务已启动（run_uat.sh 编排）
 # 用法：BASE_URL=... UAT_DB=... ADMIN_PASS=... [UAT_SERVER_LOG=...] bash scripts/uat/api_uat_txn.sh
@@ -641,6 +643,48 @@ rm -rf "$TMPD34"
 # T34-6 健康检查暴露 anydoc_ready（纯文案模式提取层就绪状态，布尔值——未装依赖时为 false 也须存在该字段）
 H=$(curl -s "$B/api/health" --max-time 20)
 ck T34-health-anydoc-ready '"anydoc_ready":(true|false)' "$H"
+
+# ---------- T35 线上反馈回归（2026-09-14：multipart 上传修复 + 演示站脚本守护） ----------
+# T35-1 文件工单 multipart 上传（★ 历史缺陷：前端 request() 对 FormData 强设 JSON Content-Type
+#       抹掉 boundary → ParseMultipartForm 秒 400「文件解析失败或超过大小上限（40MB）」）。
+#       curl 天然生成正确 boundary，本用例锁定后端契约：含空格/中点/中文的特殊文件名 PDF 建单成功。
+TMPD35=$(mktemp -d)
+python3 - "$TMPD35/翻译助手 2.0 · 业务集成方案.pdf" <<'EOF'
+import sys
+# 手工构造最小合法 1 页 PDF（纯字节，无第三方依赖；页树 Count=1 可被 pdfPageCount 识别）
+body = b"""%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >> endobj
+trailer << /Root 1 0 R /Size 4 >>
+%%EOF
+"""
+open(sys.argv[1], 'wb').write(body)
+EOF
+R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD35/翻译助手 2.0 · 业务集成方案.pdf" -F "target_langs=en" -F "mode=fast" --max-time 60)
+ck T35-pdf-multipart-create '"success":true' "$R"
+TKP=$(echo "$R" | pv "['ticket'].get('id')")
+DP=$(waittk "$H1" "$TKP")
+ck T35-pdf-ticket-terminal '"status":"(completed|rejected)"' "$DP"
+STP=$(echo "$DP" | pv "['ticket'].get('status')")
+if [ "$STP" = "completed" ]; then
+  ck T35-pdf-dl-200 '200' "$(curl -s -o /dev/null -w '%{http_code}' "$B/api/tickets/download?id=$TKP" -H "$H1" --max-time 60)"
+fi
+# T35-2 多文件混合上传（2 文件共享上限口径——multipart 解析不得因多 parts 出错）
+printf '第一行内容。\n第二行内容。\n' > "$TMPD35/a.txt"
+printf '{"k":"v"}\n' > "$TMPD35/b.json"
+R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD35/a.txt" -F "files=@$TMPD35/b.json" -F "target_langs=en" -F "mode=fast" --max-time 60)
+ck T35-multi-upload '"success":true' "$R"
+rm -rf "$TMPD35"
+# T35-3 演示站脚本静态守护（防止 bootstrap-demo.sh 回退丢配置：base_domain 幂等写入 /
+#       demo_superadmin 账号种入 / DEMO_SEED_ACCOUNTS 环境变量开关可覆盖）
+BS="$(cd "$(dirname "$0")" && pwd)/../bootstrap-demo.sh"
+HITBD=$(grep -c "VALUES ('base_domain'" "$BS")
+ck T35-bootstrap-basedomain '^[1-9]' "$HITBD"
+HITSA=$(grep -c "'demo_superadmin'" "$BS")
+ck T35-bootstrap-superadmin '^[1-9]' "$HITSA"
+HITSG=$(grep -c 'DEMO_SEED_ACCOUNTS:-1' "$BS")
+ck T35-bootstrap-seedguard '^[1-9]' "$HITSG"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

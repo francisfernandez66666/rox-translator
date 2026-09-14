@@ -51,6 +51,19 @@ describe('api/core', () => {
     expect(seen!.Authorization).toBe('Bearer tk-test')
   })
 
+  it('★ 2026-09-14 multipart 回归：FormData 请求不得预设 Content-Type（否则 boundary 丢失 → 后端 400「文件解析失败或超过大小上限」）', async () => {
+    let seen: Record<string, string> | undefined
+    vi.stubGlobal('fetch', async (_u: string, init: RequestInit) => {
+      seen = init.headers as Record<string, string>
+      return jsonResponse({ success: true })
+    })
+    const fd = new FormData()
+    fd.append('files', new Blob(['hi'], { type: 'text/plain' }), 'a.txt')
+    await core.request('/api/tickets/create-file', { method: 'POST', headers: core.authHeaders(), body: fd })
+    expect(seen!['Content-Type'], 'FormData 请求必须交由浏览器自动生成 multipart boundary').toBeUndefined()
+    expect(seen!.Authorization).toBe('Bearer tk-test') // 认证头不因此丢失
+  })
+
   it('非 2xx：ApiError 携带 message 与稳定 code（含 error_code 别名）', async () => {
     vi.stubGlobal('fetch', async () => jsonResponse({ success: false, message: '余额不足', error_code: 'insufficient_balance' }, 402))
     await expect(core.request('/pay')).rejects.toMatchObject({

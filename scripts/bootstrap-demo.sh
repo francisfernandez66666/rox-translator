@@ -279,7 +279,7 @@ SEEDSQL
     DEMO_PSQL --tuples-only --command "SELECT setval('${_seq}_id_seq', GREATEST((SELECT COALESCE(MAX(id),1) FROM ${_seq}),1), true)" >/dev/null 2>&1
   done
   # ★ 2026-09-05 平台超管（role=admin/tenant_id=0）：采集面板、行业包/语言文化包平台视角管理入口
-  log "   已种入演示账号（统一密码：Demo#2026Rm!）→ demo_super（平台超管）/ demo_admin / demo_youtube / demo_hr / demo_cs"
+  log "   已种入演示账号（统一密码：Demo#2026Rm!）→ demo_super / demo_superadmin（平台超管，同权限并行演示）/ demo_admin / demo_youtube / demo_hr / demo_cs"
 else
   log "   DEMO_SEED_ACCOUNTS=0，跳过演示账号种入"
 fi
