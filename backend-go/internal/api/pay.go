@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -97,7 +98,18 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Points > 0 {
+		// ★ P1-15 修复（2026-09-14）：积分上限防 int64 溢出——旧实现 points×rate 无上限，
+		//   超大值可溢出为负 tokens 落库成负金额订单（脏数据污染对账链）。
+		const maxPoints = int64(1) << 40 // ≈1.1 万亿积分，远超任何真实充值
+		if req.Points > maxPoints || req.Points > (math.MaxInt64-1)/int64(s.Store.PointsTokensRate()) {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "points 超出允许范围"})
+			return
+		}
 		req.Tokens = req.Points * s.Store.PointsTokensRate()
+		if req.Tokens <= 0 {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "tokens 折算非法"})
+			return
+		}
 	}
 	tid := s.effTenant(r, u)
 	// 确定支付模式：优先请求指定渠道，否则按最终运营策略 payment.mode（默认 mock）。

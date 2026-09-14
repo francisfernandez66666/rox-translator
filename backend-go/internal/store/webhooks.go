@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"syscall"
 	"time"
 	"translator/internal/db"
 )
@@ -265,6 +266,37 @@ func validateWebhookURL(raw string) error {
 	return nil
 }
 
+// webhookHTTPClient 回调投递专用 HTTP 客户端（★ P1-11 修复 2026-09-14）：
+//   ① 禁跟随重定向（CheckRedirect→ErrUseLastResponse）——旧实现用默认 client 跟随 302，
+//      回调指向攻击者服务器后被重定向到 169.254.169.254 等内网元数据地址时，
+//      保存期/投递前的 DNS 白名单校验整体失效（SSRF）；
+//   ② 拨号时校验真实目标 IP（net.Dialer.Control）——校验发生在操作系统实际连接的
+//      地址上，关闭「校验时解析 vs 拨号时再解析」的 DNS rebinding TOCTOU 窗口。
+func webhookHTTPClient() *http.Client {
+	dialer := &net.Dialer{
+		Timeout: 10 * time.Second,
+		Control: func(_, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			ip := net.ParseIP(host)
+			if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+				ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+				return fmt.Errorf("回调地址不允许指向内网/保留地址: %s", host)
+			}
+			return nil
+		},
+	}
+	return &http.Client{
+		Timeout:   10 * time.Second, // 单次投递 10 秒超时
+		Transport: &http.Transport{DialContext: dialer.DialContext},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse // 不跟随重定向，3xx 按非 2xx 投递失败处理
+		},
+	}
+}
+
 // postWebhooks 实际投递：对每个 webhook 起 goroutine 发送（带签名与重试）。
 //
 // ★ 投递前二次校验（2026-08-26 P1-f）：DNS 记录可能在保存后被篡改指向内网
@@ -275,7 +307,7 @@ func (s *Store) postWebhooks(hooks []*Webhook, event string, payload interface{}
 	if err != nil {
 		return
 	}
-	client := &http.Client{Timeout: 10 * time.Second} // 单次投递 10 秒超时
+	client := webhookHTTPClient() // ★ P1-11：禁重定向+拨号时校验 IP
 	for _, h := range hooks {
 		// 拷贝循环变量（goroutine 延迟执行）
 		hook := h
@@ -461,7 +493,7 @@ func (s *Store) RetryDelivery(deliveryID, tid int64) error {
 	db.Exec(s.db, db.CurrentDialect(), "UPDATE webhooks SET last_delivery_at=?, updated_at=? WHERE id=?", now, now, w.ID)
 
 	go func() {
-		client := &http.Client{Timeout: 10 * time.Second}
+		client := webhookHTTPClient() // ★ P1-11：禁重定向+拨号时校验 IP
 		req, err := http.NewRequest(http.MethodPost, w.URL, strings.NewReader(d.Payload))
 		if err != nil {
 			s.updateDeliveryStatus(newDeliveryID, "failed", 0, "", 1, err.Error())

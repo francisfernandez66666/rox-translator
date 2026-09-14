@@ -109,6 +109,10 @@ func (s *Server) sendEmailCode(ip, email string) (bool, string, bool) {
 // verifyEmailCode 校验并一次性消费验证码；错误尝试超限作废。
 func verifyEmailCode(email, code string) bool {
 	key := strings.ToLower(strings.TrimSpace(email))
+	// ★ P1-12 修复（2026-09-14）：per-key 互斥锁串行化「读→判→比→错计/消费」，
+	//   消除分段锁 + Redis 弱一致下的并发穷举窗口（与 handleResetPassword 同口径）。
+	unlock := vcodeLockOf("email:" + key)
+	defer unlock()
 	// ★ 2026-09-09 技术债①：读优先 Redis（跨实例），未命中回退本地 map；错计双写、消费双删
 	ekey := vcodeEmailKey(key)
 	var ec emailCode

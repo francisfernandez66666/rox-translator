@@ -648,13 +648,22 @@ func (e *Engine) translateOneInner(ctx context.Context, zhText string, targetLan
 		crossExamples = append(crossExamples, crossHits...) // 跨部门模糊 → 例句候选（不采用）
 		if len(chainHits) > 0 {
 			best := chainHits[0]
-			res.Candidates = chainHits
-			res.Mode = "模糊匹配"
-			res.MatchedZH = best.Zh
-			res.Translations = e.assignKB(best, targetLangs, &res.NeedModel)
-			// 模糊命中视为高置信，补缺语言走模型兜底
-			if len(res.NeedModel) == 0 {
-				return res, nil
+			// ★ P1-9 修复（2026-09-14）：重叠度门槛——查询串须覆盖候选句一半以上 rune
+			// 才允许整句采用其译文。旧实现仅按「zh LIKE '%输入%' 且长度差 ≤30」取
+			// chainHits[0] 整句采用，「包含查询子串的另一句话」的标准译文会被写进成品
+			// （语义命中路径有 cjkOverlap 门槛，模糊路径此前没有）。不达标者降级为例句参考。
+			qn, cn := len([]rune(zhText)), len([]rune(best.Zh))
+			if qn > 0 && cn > 0 && float64(qn)/float64(cn) >= 0.5 {
+				res.Candidates = chainHits
+				res.Mode = "模糊匹配"
+				res.MatchedZH = best.Zh
+				res.Translations = e.assignKB(best, targetLangs, &res.NeedModel)
+				// 模糊命中视为高置信，补缺语言走模型兜底
+				if len(res.NeedModel) == 0 {
+					return res, nil
+				}
+			} else {
+				crossExamples = append(crossExamples, chainHits...)
 			}
 		}
 	}
@@ -1390,7 +1399,8 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	e.NoteLLMResult(err == nil)
 
 	// 主模型失败 → 记录熔断计数并降级到 fallback 模型
-	if err != nil && (isRateLimited(err) || isNetworkError(err)) {
+	// ★ P1-6（2026-09-14）：5xx/401 一并纳入降级与熔断（isServerError）
+	if err != nil && (isRateLimited(err) || isNetworkError(err) || isServerError(err)) {
 		if hunyuan && !mainOpen {
 			e.breaker.Fail(err.Error())
 		}
@@ -1664,6 +1674,20 @@ func isRateLimited(err error) bool {
 		return se.Code == 429
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "429")
+}
+
+// isServerError 供应商侧服务端错误（★ P1-6 修复 2026-09-14）：5xx（供应商故障）与
+// 401（凭证失效）同样值得触发多供应商降级链与熔断计数——旧实现只认 429/网络错误，
+// 供应商 5xx 风暴时每段直接失败且熔断永不触发。403/400 等请求侧错误不在此列（换供应商无意义）。
+func isServerError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var se *llm.StatusError
+	if errors.As(err, &se) {
+		return se.Code >= 500 || se.Code == 401
+	}
+	return false
 }
 
 // isNetworkError 判断是否为超时/网络/连接错误（这类错误值得降级重试）

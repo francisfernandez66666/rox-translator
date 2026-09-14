@@ -136,15 +136,20 @@ func (s *UsageSink) Record(r usageRecord) {
 		return // billing 未初始化：安全丢弃（与「未启用不计费」一致）
 	}
 	// seed 影子余额（每租户一次 DB 读）
+	// ★ P2-2 修复（2026-09-14）：seed 失败不得置位 shadowOk——旧实现 err!=nil 也标记已 seed，
+	//   shadow 保持 0 → 下一条记录立即负化误中止余额充足租户的在途任务。失败时保持未 seed，
+	//   下次 Record 重试 seed。
 	if !s.shadowOk[r.Tid] {
 		if g, p, err := s.svc.Store.TenantRemainTotal(r.Tid); err == nil {
 			s.shadow[r.Tid] = g + p // 双桶口径（未过期台账 + 永久余额）
+			s.shadowOk[r.Tid] = true
 		}
-		s.shadowOk[r.Tid] = true
+		// err != nil：保持未 seed，shadow 记 0 且本条不判负（下面只在 shadowOk 时才 abort）
 	}
 	s.shadow[r.Tid] -= r.Quantity
-	// ★ 余额不足立即中止（保留实时中止语义）：仅强制计费时生效
-	if s.svc.Enabled() && s.shadow[r.Tid] < 0 && r.Abort != nil {
+	// ★ 余额不足立即中止（保留实时中止语义）：仅强制计费时生效；
+	//   seed 未成功（shadowOk=false）时不判定，避免把「未知余额」当成「零余额」误中止。
+	if s.svc.Enabled() && s.shadowOk[r.Tid] && s.shadow[r.Tid] < 0 && r.Abort != nil {
 		r.Abort()
 	}
 	s.buf = append(s.buf, r)
@@ -240,17 +245,37 @@ func (s *UsageSink) flush() {
 					continue
 				}
 				// ★ 欠费结算（2026-09-12 决策，替代原「丢弃计费」fail-open）：
-				//   ① 中止在途任务（保留原语义）；
-				//   ② 双桶余额清零停用（SettleExhausted）——已消耗的 LLM 成本按「扣到归零」结算，
-				//      杜绝原实现「批次无痕丢弃、白翻不封顶」的收入泄漏；
-				//   ③ critical 告警留痕（不落 ledger、不补扣；充值后从 0 重新计量）。
+				//   ① 中止在途任务（保留原语义）——仅当批次含交互任务（Abort!=nil）；
+				//      ★ P0-1 修复（2026-09-14）：纯后台批次（如 KB 向量重建，Abort 恒 nil）
+				//      不再触发清零停服——后台任务耗穿余额只留痕告警，不能销毁用户付费权益。
+				//   ② 双桶余额按欠费额有界清零停用（SettleExhausted，事务内复核 + 调整流水）——
+				//      已消耗的 LLM 成本按「扣到归零」结算，杜绝收入泄漏；
+				//   ③ critical 告警留痕（充值后从 0 重新计量）。
+				interactive := false
 				for _, r := range recs {
 					if r.Abort != nil {
-						r.Abort()
+						interactive = true
+						break
 					}
 				}
-				if serr := s.svc.Store.SettleExhausted(tid); serr != nil {
-					log.Printf("[usagesink] flush tenant=%d 欠费清零失败: %v", tid, serr)
+				settled := int64(0)
+				if interactive {
+					for _, r := range recs {
+						if r.Abort != nil {
+							r.Abort()
+						}
+					}
+					consumed, serr := s.svc.Store.SettleExhausted(tid, owed)
+					if errors.Is(serr, store.ErrSettleNotNeeded) {
+						// ★ A1 竞态收口：事务内复核发现余额实际足够（并发消费改变事实），回插重试
+						log.Printf("[usagesink] flush tenant=%d 事务内复核余额足够（并发消费），回插重试", tid)
+						failed = append(failed, recs...)
+						continue
+					}
+					if serr != nil {
+						log.Printf("[usagesink] flush tenant=%d 欠费清零失败: %v", tid, serr)
+					}
+					settled = consumed
 				}
 				// ★ C20（2026-09-12）：欠费批次改走 LogUsageBatch——「留痕不扣费」。
 				//   旧实现整批无痕丢弃，已发生的真实 LLM 成本在账本上完全消失，
@@ -269,10 +294,18 @@ func (s *UsageSink) flush() {
 						detail = append(detail, fmt.Sprintf("%s:%d", k, v))
 					}
 				}
-				_ = s.svc.Store.CreateAlert(tid, "critical", "billing_exhausted",
-					fmt.Sprintf("租户本周期用量 %d token 超出剩余余额：服务已停用，双桶余额已清零（该批用量已留痕不扣费：%s，共 %d 笔），充值后从 0 重新计量",
-						owed, strings.Join(detail, " / "), len(recs)))
-				log.Printf("[usagesink] flush tenant=%d 余额不足：已中止在途并清零双桶（欠费 %d token 已留痕）", tid, owed)
+				if interactive {
+					_ = s.svc.Store.CreateAlert(tid, "critical", "billing_exhausted",
+						fmt.Sprintf("租户本周期用量 %d token 超出剩余余额：服务已停用，欠费已按余额有界结算（实耗清零 %d token，已落调整流水；该批用量留痕不扣费：%s，共 %d 笔），充值后从 0 重新计量",
+							owed, settled, strings.Join(detail, " / "), len(recs)))
+					log.Printf("[usagesink] flush tenant=%d 余额不足：已中止在途并按欠费有界清零（结算 %d token）", tid, settled)
+				} else {
+					// 纯后台批次：不清零不停服（P0-1），仅告警留痕待人工处理
+					_ = s.svc.Store.CreateAlert(tid, "critical", "billing_background_exhausted",
+						fmt.Sprintf("后台任务（无交互中止钩子）耗穿租户余额：本批 %d token 已留痕不扣费、未触发停服清零（%s），请人工核查余额与后台任务配额",
+							owed, strings.Join(detail, " / ")))
+					log.Printf("[usagesink] flush tenant=%d 后台批次余额不足：仅留痕不清零（欠费 %d token）", tid, owed)
+				}
 				continue
 			}
 			// 其余错误（如 SQLITE_BUSY/磁盘抖动）：回插缓冲，下一周期重试，避免 fail-open 少计费

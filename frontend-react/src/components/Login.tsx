@@ -128,9 +128,10 @@ export default function Login({ mode, onLogin }: Props) {
       const resp = await login(username, password)
       if (!resp.success || !resp.token) { setError(resp.message || t('login.fail')); return }
       if (mode === 'admin' && roleLevel(resp.user?.role) < 2) { setError(t('login.noAdmin')); return }
-      // 品牌专属域名跳转（需求 1-B）：若后端返回 brand_host 且与当前域不一致，带 token 重定向过去
-      if (resp.brand_host && resp.brand_host !== window.location.host) {
-        const target = window.location.protocol + '//' + resp.brand_host + '/?token=' + encodeURIComponent(resp.token)
+      // 品牌专属域名跳转（需求 1-B / ★ P0-3 修复 2026-09-14）：跨子域改带一次性 sso_code，
+      // 落地后由 App.tsx 经 /api/auth/sso/exchange 兑换 JWT——JWT 不再进地址栏/历史/Referer
+      if (resp.brand_host && resp.sso_code && resp.brand_host !== window.location.host) {
+        const target = window.location.protocol + '//' + resp.brand_host + '/?sso_code=' + encodeURIComponent(resp.sso_code)
         window.location.replace(target)
         return
       }

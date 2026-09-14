@@ -271,8 +271,18 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	if cur, ge := s.Store.GetTicketGlobal(t.ID); ge == nil && cur != nil && cur.Status == store.TicketCancelled {
 		return nil
 	}
+	// ★ P1-5 修复（2026-09-14）：并发认领互斥——CAS 把 draft/queued/rejected 原子推进到
+	//   in_progress，抢不到（已被其他 worker 认领或进入终态）即静默退出。
+	//   旧实现仅挡 completed，in_progress 工单可被第二个 job 再次执行（双跑双扣费）。
+	claimed, cerr := s.Store.ClaimTicketForRun(t.ID)
+	if cerr != nil {
+		return fmt.Errorf("工单认领失败: %w", cerr)
+	}
+	if claimed == 0 {
+		log.Printf("[ticket-run] 工单 %d 已被其他 worker 认领或处于不可执行态，本 job 跳过", t.ID)
+		return nil
+	}
 	t.Status = store.TicketInProgress
-	_ = s.Store.UpdateTicket(t)
 
 	// ★ 心跳保活（评审整改 R3）：长翻译阶段内业务状态不变化，60s 触碰一次 updated_at，
 	//   防止卡死巡检把仍在运行的工单误判重排（重复执行/双扣费的根源）。
@@ -868,7 +878,13 @@ func (s *TicketService) BootResume() {
 	// ★ 修复（2026-08-26 P1-c）：入队类型是 ticket_run，旧 SQL 的 type='ticket' 永远匹配 0 行，
 	//   断点续跑的租约释放形同虚设——统一更正为 ticket_run。
 	if s.DB != nil {
-		s.DB.RawDB().Exec("UPDATE jobs SET status='queued', leased_by='', leased_at='' WHERE type='ticket_run' AND status='running'")
+		// ★ P1-4 修复（2026-09-14）：只回收「无租约」或「租约已陈旧」（120s 未心跳）的
+		//   running 任务——旧实现无条件重置全部 running，多实例部署下任一实例重启会把
+		//   其他实例正在执行的任务重置回队（注释假设「上一进程必然已死」仅单实例成立），
+		//   造成同一工单双跑双扣费。健康 worker 心跳间隔 60s，120s 宽限可稳定区分死活；
+		//   本实例崩溃遗留任务的租约同样在 120s 后被回收，「卡死」顾虑不受损。
+		grace := time.Now().Add(-120 * time.Second).Format(time.RFC3339)
+		s.DB.RawDB().Exec("UPDATE jobs SET status='queued', leased_by='', leased_at='' WHERE type='ticket_run' AND status='running' AND (leased_by='' OR leased_at='' OR leased_at<?)", grace)
 	}
 	if n, err := s.Store.RequeueStalledTickets(0); err == nil && n > 0 {
 		log.Printf("[boot-resume] 已重新排队 %d 个中断工单", n)

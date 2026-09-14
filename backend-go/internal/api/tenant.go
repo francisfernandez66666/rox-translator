@@ -658,7 +658,12 @@ func (s *Server) caddyAskAuthorized(r *http.Request) bool {
 		host = strings.TrimSpace(r.RemoteAddr)
 	}
 	ip := net.ParseIP(host)
-	if ip != nil && ip.IsLoopback() {
+	// ★ P1-13 修复（2026-09-14）：回环放行仅对「直连本机」请求生效。生产形态是
+	//   Caddy 同机反代回 Go——经反代进入的外部请求 RemoteAddr 也是 127.0.0.1，
+	//   旧实现下任何人可通过代理枚举已登记租户子域（R-M6 防护失效）。
+	//   带 X-Forwarded-For 的请求说明经过了代理链，不再信任回环身份，
+	//   必须命中 caddy_ask_allowed CIDR 白名单。
+	if ip != nil && ip.IsLoopback() && r.Header.Get("X-Forwarded-For") == "" {
 		return true
 	}
 	if s.Store != nil {

@@ -9,10 +9,13 @@ package fileproc
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	ledong "github.com/ledongthuc/pdf"
 )
@@ -30,8 +33,16 @@ func extractPdfText(path string, e *Extractor) error {
 
 // extractPdfTextCLI 通过 poppler-utils 的 pdftotext 命令行工具提取全文。
 // CJK 字体编码支持远优于纯 Go 方案；-layout 保持原始排版便于段落切分。
+// ★ P1-10 修复（2026-09-14）：exec.CommandContext + 120s 超时——旧实现裸
+// exec.Command().Output() 无 ctx，恶意/异常 PDF 可挂死 goroutine，且绕过
+// runSubprocess 的超时/进程组击杀资源闸。
 func extractPdfTextCLI(path string, e *Extractor) error {
-	out, err := exec.Command("pdftotext", "-layout", "-enc", "UTF-8", path, "-").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "pdftotext", "-layout", "-enc", "UTF-8", path, "-").Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("pdftotext 执行超时（120s）: %s", filepath.Base(path))
+	}
 	if err != nil {
 		return fmt.Errorf("pdftotext 执行失败: %w", err)
 	}

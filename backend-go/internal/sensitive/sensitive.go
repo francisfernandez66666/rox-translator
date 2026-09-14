@@ -1,10 +1,13 @@
 // ============ 本文件职责中文说明 ============
 // S8 内容安全·敏感词兑底闸（2026-09-14 拍板：开闸前必须上线）：
 //   - 词包：平台级配置文件（一行一词，# 注释；超管维护，mtime 热加载免重启）
-//   - 检测：输入/输出双向命中检测（strings.Contains 口径，大小写折叠）
+//   - 检测：输入/输出双向命中检测（归一化 Contains 口径：小写 + NFKC + 零宽剥离 +
+//     全半角折叠 + 字符间空白剥离，见 normalize / normalizeLoose）
 //   - 处置策略在调用侧（engine：拒译/段落拦截/占位替换 + 审计 + 告警）
 // 设计口径：命中段不进模型（上游供应商侧零暴露），交付物只留占位符；
 // 误杀走人工复核通道（告警 kind=sensitive_block 留证词）。
+// ★ P0-5 修复（2026-09-14）：旧实现仅 ToLower+Contains，全角字母（ＦＩＲＥＡＲＭＳ）、
+//   零宽字符插入（枪\u200b支）、字符间空格（F i r e a r m s）均可绕过合规闸。
 package sensitive
 
 import (
@@ -13,7 +16,46 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
+
+// zeroWidths 零宽/不可见混淆字符集（零宽空格、零宽连接符、双向控制、软连字符、BOM）。
+var zeroWidths = func() map[rune]bool {
+	m := map[rune]bool{}
+	for _, r := range "\u200b\u200c\u200d\u200e\u200f\u2060\u00ad\ufeff\u202a\u202b\u202c\u202d\u202e" {
+		m[r] = true
+	}
+	return m
+}()
+
+// normalize 强归一化：小写 + NFKC（全角→半角）+ 剥离零宽字符。用于词表与文本同口径。
+func normalize(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range strings.ToLower(s) {
+		if zeroWidths[r] {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return norm.NFKC.String(b.String())
+}
+
+// normalizeLoose 宽松归一化：强归一化后再剥离全部空白——用于文本侧第二遍检测，
+// 击穿「F i r e a r m s」式字符间空格混淆（词表侧不做此剥离，避免短语类词误拼）。
+func normalizeLoose(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range normalize(s) {
+		if unicode.IsSpace(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
 
 // Checker 敏感词包扫描器（并发安全；文件变更 mtime 触发热加载）。
 type Checker struct {
@@ -65,7 +107,7 @@ func (c *Checker) reload(force bool) {
 			continue
 		}
 		origin = append(origin, w)
-		words = append(words, strings.ToLower(w))
+		words = append(words, normalize(w)) // ★ P0-5：词表与文本同口径归一化
 	}
 	c.mu.Lock()
 	c.words, c.origin = words, origin
@@ -94,14 +136,18 @@ func (c *Checker) Hits(text string) []string {
 	if len(words) == 0 {
 		return nil
 	}
-	lower := strings.ToLower(text)
+	// ★ P0-5（2026-09-14）：两遍归一化检测——
+	//   第一遍：强归一化（小写+NFKC+零宽剥离），词表与文本同口径，可对齐全角/半角、零宽插入；
+	//   第二遍：宽松口径（再剥离全部空白），击穿字符间空格混淆。
+	lower := normalize(text)
+	loose := normalizeLoose(text)
 	var out []string
 	seen := map[string]bool{}
 	for i, w := range words {
 		if w == "" || seen[w] {
 			continue
 		}
-		if strings.Contains(lower, w) {
+		if strings.Contains(lower, w) || strings.Contains(loose, w) {
 			seen[w] = true
 			out = append(out, origin[i])
 			if len(out) >= 5 {

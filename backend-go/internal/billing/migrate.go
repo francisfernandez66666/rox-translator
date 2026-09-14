@@ -65,10 +65,12 @@ func RunTokenMigration(st *store.Store) {
 	rows.Close()
 
 	converted := int64(0)
+	failed := int64(0)
 	for _, it := range items {
 		tokens := it.sentence * rate
 		if err := st.Charge(it.id, tokens); err != nil {
 			log.Printf("[billing-token-migrate] 租户 %d 充值失败: %v", it.id, err)
+			failed++
 			continue
 		}
 		// 清零句数镜像（token 已承载额度；PackageCode 订阅身份保留）
@@ -81,6 +83,14 @@ func RunTokenMigration(st *store.Store) {
 			"tenant", it.id)
 		converted++
 		log.Printf("[billing-token-migrate] 租户 %d：%d 句 → %d token", it.id, it.sentence, tokens)
+	}
+	// ★ P1-1 修复（2026-09-14）：存在失败租户时不得置位迁移完成标记——
+	//   旧实现无条件置位，Charge 失败的租户句数未折算、token 未入账且重启永不重试，
+	//   存量用户余额凭空消失。未置位时下次启动自动重试（已成功租户句数镜像已清零，
+	//   SentenceBalance>0 过滤天然幂等，不会二次充值）。
+	if failed > 0 {
+		log.Printf("[billing-token-migrate] 完成：成功 %d 个，失败 %d 个——不置位迁移标记，下次启动重试失败租户", converted, failed)
+		return
 	}
 	_ = st.SetConfig("billing_token_migrated", "1")
 	_ = st.SetConfig("billing_token_migrated_at", time.Now().Format(time.RFC3339))

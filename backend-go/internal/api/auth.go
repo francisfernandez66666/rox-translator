@@ -152,15 +152,36 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.LogAudit(auditTID, u.ID, "login", "auth", "用户登录")
 	// 品牌域名跳转：若用户所属租户配置了专属品牌子域，且本次登录不在该子域上，
-	// 返回 brand_host 供前端带 token 重定向过去（需求 1-B）。
+	// 返回 brand_host 供前端重定向过去（需求 1-B）。
+	// ★ P0-3 修复（2026-09-14）：跨子域登录改发一次性 sso_code（60s、单次消费、
+	//   经 /api/auth/sso/exchange 兑换 JWT）——旧实现把裸 JWT 放进重定向 URL
+	//   （进浏览器历史/Referer），且 E3 后前端不再消费 ?token=，链路整体断裂。
 	brandHost := ""
+	brandSSOCode := ""
 	if t, e := s.Ten.GetByID(u.TenantID); e == nil && t.Domain != "" {
 		base := brandingBaseDomain(s)
 		if bh := strings.TrimSpace(t.Domain) + "." + base; r.Host != bh {
 			brandHost = bh
+			if xcode := newSSOExchangeCode(); xcode != "" {
+				payload, _ := json.Marshal(map[string]int64{"uid": u.ID, "tid": u.TenantID})
+				vcodeSet("sso_xchg:"+xcode, payload, 60*time.Second)
+				brandSSOCode = xcode
+			}
 		}
 	}
 	// 返回 JWT 与脱敏后的用户信息（不含密码哈希）
+	// ★ P0-3：需要跨子域跳转时不返回裸 token，仅返回一次性 sso_code（E3 口径对齐）
+	if brandHost != "" && brandSSOCode != "" {
+		writeJSON(w, 200, map[string]interface{}{
+			"success": true, "brand_host": brandHost, "sso_code": brandSSOCode,
+			"user": map[string]interface{}{
+				"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
+				"role": u.Role, "tenant_id": u.TenantID, "email": u.Email,
+				"must_change_pwd": u.MustChangePwd,
+			},
+		})
+		return
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "token": tok, "brand_host": brandHost,
 		"user": map[string]interface{}{
@@ -400,6 +421,11 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	//   ★ 2026-09-09 技术债①：读取优先 Redis（跨实例共享），未命中回退本地 map；
 	//     写入/删除双端同步，保证多实例下任意实例生成的码可被其他实例校验。
 	rkey := vcodeResetKey(u.ID)
+	// ★ P1-12 修复（2026-09-14）：per-key 互斥锁串行化「读→判→比→错计/消费」全流程。
+	//   上方注释宣称的「单次加锁」实为分段锁 + Redis Get/Set 弱一致（vcode.go 自认），
+	//   并发请求可全部读到 attempts=0，一次并发脉冲即近似穷举 6 位码空间。
+	unlockRC := vcodeLockOf("reset:" + rkey)
+	defer unlockRC()
 	// 读：Redis 优先（反序列化失败/未命中回退本地 map）
 	var rc resetCode
 	found := false
@@ -750,12 +776,22 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "部门管理员未绑定部门，无法操作"})
 			return
 		}
-		if target, e := s.Store.GetUser(req.ID, tid); e == nil && target.OrgID > 0 {
-			inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, target.OrgID)
-			if e2 != nil || !inTree {
-				writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作非本部门下账号"})
-				return
-			}
+		// ★ P0-2 修复（2026-09-14）：目标 org_id=0（未分配，注册/SCIM/建号默认值）也必须拒绝——
+		//   旧实现 `target.OrgID > 0` 才做子树校验，org_id=0 时整段校验被跳过，
+		//   部门管理员可重置/接管同租户租户管理员账号（未分配部门）。与 Delete 口径对齐。
+		target, e := s.Store.GetUser(req.ID, tid)
+		if e != nil {
+			writeJSON(w, 404, map[string]interface{}{"success": false, "message": "目标用户不存在"})
+			return
+		}
+		if target.OrgID <= 0 {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作未分配部门的账号"})
+			return
+		}
+		inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, target.OrgID)
+		if e2 != nil || !inTree {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作非本部门下账号"})
+			return
 		}
 	}
 	// 组织归属校验：非超管不能把用户移出本租户组织（租户隔离，仅校验组织存在性）
@@ -853,12 +889,21 @@ func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Req
 			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "部门管理员未绑定部门，无法操作"})
 			return
 		}
-		if target, e := s.Store.GetUser(req.ID, tid); e == nil && target.OrgID > 0 {
-			inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, target.OrgID)
-			if e2 != nil || !inTree {
-				writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作非本部门下账号"})
-				return
-			}
+		// ★ P0-2 修复（2026-09-14）：org_id=0（未分配）目标必须拒绝——旧实现跳过校验，
+		//   部门管理员可重置租户管理员密码完成接管。与 Update/Delete 口径对齐。
+		target, e := s.Store.GetUser(req.ID, tid)
+		if e != nil {
+			writeJSON(w, 404, map[string]interface{}{"success": false, "message": "目标用户不存在"})
+			return
+		}
+		if target.OrgID <= 0 {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作未分配部门的账号"})
+			return
+		}
+		inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, target.OrgID)
+		if e2 != nil || !inTree {
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作非本部门下账号"})
+			return
 		}
 	}
 	// 租户隔离：仅重置生效租户下的用户

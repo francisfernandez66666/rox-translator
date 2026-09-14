@@ -10,6 +10,7 @@ package store
 import (
 	cryptorand "crypto/rand"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -184,26 +185,115 @@ func (s *Store) deduct(tid int64, tokens int64) error {
 	return nil
 }
 
-// SettleExhausted 欠费停用结算（2026-09-12 决策）：批量结算遇余额不足时，把租户双桶
-// （未过期发放台账 + 永久余额）一次性清零——已消耗的 LLM 成本按「扣到归零」结算，
-// 不落 ledger、不补扣；充值后从 0 重新计量。幂等（重复调用结果同为 0）。
-// 参数：tid=租户 ID；返回错误。
-func (s *Store) SettleExhausted(tid int64) error {
-	tx, err := s.db.Begin() // sqlite 下 _txlock=immediate；PG 下两条 UPDATE 各自行锁，语义等价
+// ErrSettleNotNeeded 欠费复核不成立：事务内权威复核发现余额实际足够（此前复核与清零
+// 之间的并发消费已改变事实），调用方应将批次回插重试而非结算清零。
+var ErrSettleNotNeeded = errors.New("欠费复核不成立：余额足够覆盖本批应扣")
+
+// SettleExhausted 欠费停用结算（2026-09-12 决策「扣到归零」；★ P0-1 修复 2026-09-14）。
+// 修复前缺陷：两条 UPDATE 无差别清零全部 quota_grants（含付费 kind='plan'）与永久余额，
+// 且「复核通过 → 清零」跨事务存在 TOCTOU，并发扣减可使复核说够、实际已空被误清零。
+// 修复后语义：
+//   ① 事务内权威复核（与清零同事务，SQLite _txlock=immediate / PG 行锁天然串行）：
+//      双桶可用量 ≥ owed → 返回 ErrSettleNotNeeded（瞬态误报，调用方回插重试）；
+//   ② 有界清零：消耗总量不超过 owed（正常路径 avail<owed → 全清亦不超欠），逐行取走
+//      并按「试用/临期优先 → 付费 plan → 永久余额兜底」的顺序消费；
+//   ③ 调整流水：实际消耗量落 usage_ledger（charge_kind='settle'），清零可审计可追偿，
+//      不再是「无痕归零」。
+// 返回：实际消耗 token 量与错误。
+func (s *Store) SettleExhausted(tid int64, owed int64) (int64, error) {
+	if owed < 0 {
+		owed = 0
+	}
+	d := db.CurrentDialect()
+	tx, err := s.db.Begin() // sqlite 下 _txlock=immediate；PG 下逐行锁
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
-	if _, err := db.Exec(tx, db.CurrentDialect(),
-		`UPDATE quota_grants SET "left"=0 WHERE tenant_id=? AND "left">0`, tid); err != nil {
-		return err
+	// ① 事务内权威复核：复核与清零同一事务，杜绝「复核说够、清零时空」竞态（A1 收口）
+	var grantAvail, balAvail int64
+	if err := db.QueryRow(tx, d,
+		`SELECT COALESCE(SUM("left"),0) FROM quota_grants WHERE tenant_id=? AND "left">0`, tid).Scan(&grantAvail); err != nil {
+		return 0, err
 	}
-	if _, err := db.Exec(tx, db.CurrentDialect(),
-		"UPDATE balance_accounts SET balance=0, updated_at=? WHERE tenant_id=? AND balance>0",
-		time.Now().Format(time.RFC3339), tid); err != nil {
-		return err
+	if err := db.QueryRow(tx, d,
+		"SELECT COALESCE(SUM(balance),0) FROM balance_accounts WHERE tenant_id=?", tid).Scan(&balAvail); err != nil {
+		return 0, err
 	}
-	return tx.Commit()
+	if grantAvail+balAvail >= owed {
+		return 0, ErrSettleNotNeeded
+	}
+	if grantAvail+balAvail <= 0 {
+		// 幂等：本已归零（重复调用/零余额租户），直接提交空事务
+		return 0, tx.Commit()
+	}
+	// ② 有界消费：台账行先于永久余额；台账内试用/临期先于付费 plan（与正常扣减次序同构）
+	now := time.Now().Format(time.RFC3339)
+	consumed := int64(0)
+	rows, qerr := db.Query(tx, d,
+		`SELECT id, "left", kind FROM quota_grants WHERE tenant_id=? AND "left">0
+		 ORDER BY CASE WHEN kind='trial' THEN 0 ELSE 1 END ASC, expires_at ASC`, tid)
+	if qerr != nil {
+		return 0, qerr
+	}
+	type grantRow struct {
+		id   int64
+		left int64
+	}
+	var grants []grantRow
+	for rows.Next() {
+		var g grantRow
+		var kind string
+		if err := rows.Scan(&g.id, &g.left, &kind); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		grants = append(grants, g)
+	}
+	rows.Close()
+	for _, g := range grants {
+		if consumed >= owed {
+			break
+		}
+		take := g.left
+		if take > owed-consumed {
+			take = owed - consumed
+		}
+			if _, err := db.Exec(tx, d, `UPDATE quota_grants SET "left"=? WHERE id=?`,
+			g.left-take, g.id); err != nil {
+			return 0, err
+		}
+		consumed += take
+	}
+	// 永久余额兜底（仅当台账取完仍未覆盖 owed）
+	if consumed < owed {
+		var bid, bleft int64
+		if err := db.QueryRow(tx, d,
+			"SELECT id, balance FROM balance_accounts WHERE tenant_id=? AND balance>0", tid).Scan(&bid, &bleft); err == nil {
+			take := bleft
+			if take > owed-consumed {
+				take = owed - consumed
+			}
+			if _, err := db.Exec(tx, d,
+				"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE id=?",
+				take, now, bid); err != nil {
+				return 0, err
+			}
+			consumed += take
+		} else if !errors.Is(qerr, sql.ErrNoRows) && qerr != nil {
+			// 多行余额账户理论上不存在（单行表）；保守处理首行即可
+			return 0, qerr
+		}
+	}
+	// ③ 调整流水：清零量落 ledger（charge_kind='settle'），杜绝「无痕归零」无法追偿
+	if consumed > 0 {
+		if _, err := db.Exec(tx, d,
+			"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, charge_kind, created_at) VALUES (?,?,?,?,?,?,0,?, 'settle','', 'settle', ?)",
+			tid, 0, "settle_exhausted", "settle", "欠费结算调整", consumed, consumed, now); err != nil {
+			return 0, err
+		}
+	}
+	return consumed, tx.Commit()
 }
 
 // ============ 用量 ============
@@ -227,7 +317,8 @@ func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model, lang s
 		return 0, err // 扣减失败（含余额不足）→ 整体回滚，不落半条
 	}
 	id, err := db.InsertID(tx, db.CurrentDialect(), "id",
-		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+		// ★ P1-2（2026-09-14）：charge_kind 区分实扣('charge')/留痕('log')/结算('settle')，退款与对账只认实扣
+		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, charge_kind, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,'charge',?)",
 		tid, userID, taskType, provider, model, quantity, price, cost, bizKind, bizMode, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return 0, err // 落账失败 → 扣减一并回滚（修复「扣钱无流水」）
@@ -289,7 +380,7 @@ func (s *Store) RecordUsageBatch(tid int64, rows []UsageBatchRow) (int64, error)
 	if err := deductWithGrantsTx(tx, tid, sumCost); err != nil {
 		return 0, err // 余额不足整体回滚
 	}
-	const insertSQL = "INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+	const insertSQL = "INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, charge_kind, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,'charge',?)"
 	var firstID int64
 	for i, pr := range pricedRows {
 		ts := pr.OccurredAt
@@ -316,12 +407,12 @@ func (s *Store) RecordUsageBatch(tid int64, rows []UsageBatchRow) (int64, error)
 }
 
 // LogUsageBatch 仅记录用量、不扣余额的批量版（billing 未强制计费时用于留痕计量）。
-// 单事务多行 INSERT。
+// 单事务多行 INSERT。charge_kind='log'：留痕行不参与退款消耗核算与实扣对账（P1-2）。
 func (s *Store) LogUsageBatch(tid int64, rows []UsageBatchRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	const insertSQL = "INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+	const insertSQL = "INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, charge_kind, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,'log',?)"
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -357,7 +448,8 @@ func (s *Store) LogUsage(tid, userID int64, taskType, provider, model, lang stri
 	// ★ C1（2026-09-12）：与 RecordUsage/批量路径同一 cost 公式，SUM(cost) 可对账
 	price, cost := s.pricingCost(taskType, provider, lang, quantity)
 	_, err := db.Exec(s.db, db.CurrentDialect(),
-		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+		// charge_kind='log'：留痕行不参与退款消耗核算（P1-2）
+		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, charge_kind, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,'log',?)",
 		tid, userID, taskType, provider, model, quantity, price, cost, bizKind, bizMode, time.Now().UTC().Format(time.RFC3339))
 	if err == nil {
 		s.incrementDailyUsage(tid, cost) // ★ 性能优化 B6：同步累加日计数器
@@ -1534,9 +1626,12 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 		// ★ A3 口径统一（含纯充值单——旧实现 pkgID==0 直接跳过消耗核算、无条件全额退）：
 		//   凡非订阅单，剩余 = 发放 − 自支付时刻起的租户级计量合计。quantity 与入账同为「计费 token」
 		//   （含 markup），单位一致；跨订单混池属近似折算，供商务折让使用。
+		// ★ P1-2 修复（2026-09-14）：只认实扣行 charge_kind IN ('','charge')——
+		//   旧实现把「非强制计费期留痕」与「欠费结算留痕（未扣费）」也计入消耗，
+		//   导致 consumed 虚高、应退金额被低估，直接损害退款用户。
 		var consumed int64
 		if err := db.QueryRow(tx, d,
-			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=?",
+			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=? AND charge_kind IN ('','charge')",
 			tid, paidAt).Scan(&consumed); err != nil {
 			return err
 		}

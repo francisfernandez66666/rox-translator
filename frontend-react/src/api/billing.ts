@@ -14,7 +14,7 @@
  * - 商业包管理：套餐列表、订阅、创建、更新、删除
  */
 
-import { request, authHeaders, API_BASE, type AdminResp } from './core'
+import { request, authHeaders, API_BASE, handleUnauthorized, type AdminResp } from './core'
 
 /** 查询当前租户余额 */
 
@@ -181,7 +181,7 @@ export async function adminPackageSettings(): Promise<AdminResp> {
 }
 
 /** 上传套餐中心静态收款码图片（super_admin；multipart 字段 file） */
-/** 管理员：上传收款码图片 */
+/** 管理员：上传收款码图片（★ P1-16：走统一守卫，401 跳登录/非 2xx 抛错） */
 export async function adminQRUpload(file: File): Promise<AdminResp & { qr_url?: string }> {
   const formData = new FormData()
   formData.append('file', file)
@@ -190,6 +190,8 @@ export async function adminQRUpload(file: File): Promise<AdminResp & { qr_url?: 
     headers: authHeaders(),
     body: formData,
   })
+  if (resp.status === 401) handleUnauthorized('/api/admin/packages/qr-upload')
+  if (!resp.ok) return { success: false, message: `上传失败 (${resp.status})` }
   return resp.json()
 }
 

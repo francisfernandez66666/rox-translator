@@ -13,7 +13,9 @@ test.use({ viewport: { width: 390, height: 844 } });
 
 // 登录小件：admin 模式进后台（/admin），home 模式进前台（/）——沿用固定超管账号
 async function login(page: import('@playwright/test').Page, mode: 'admin' | 'home') {
-  await page.goto(`${BASE}/${mode === 'admin' ? 'admin' : ''}`, { waitUntil: 'networkidle' });
+  // ★ 修复（2026-09-14）：home 模式改走 /login——`/` 已是营销 Landing 页（无 .login-card），
+  // 旧路径等待登录卡必超时（UAT 实测 mobile_uat 两条确定性失败即源于此）
+  await page.goto(`${BASE}/${mode === 'admin' ? 'admin' : 'login'}`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.login-card', { timeout: 15000 });
   // 账号 + 密码输入框（注册表单亦有同类输入框，登录卡先渲染）
   const inputs = page.locator('.login-card input').first();

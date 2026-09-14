@@ -4,6 +4,7 @@
 package store
 
 import (
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -30,7 +31,8 @@ func TestSentenceBalanceGuard(t *testing.T) {
 	_ = kdb
 }
 
-// TestSettleExhausted 欠费停用结算：双桶清零 + 幂等（决策 2026-09-12）。
+// TestSettleExhausted 欠费停用结算（★ P0-1 修复 2026-09-14）：
+// 事务内复核 + 有界清零（消耗 ≤ owed）+ 调整流水 + 幂等。
 func TestSettleExhausted(t *testing.T) {
 	st, _ := newKBEnv(t)
 	if _, err := st.db.Exec("INSERT INTO tenants (id, code, name, status) VALUES (7,'t7','欠费测试','active')"); err != nil {
@@ -42,8 +44,17 @@ func TestSettleExhausted(t *testing.T) {
 	if err := st.CreateQuotaGrant(7, "trial", 300, time.Now().Add(24*time.Hour), "test", 0); err != nil {
 		t.Fatalf("发放额度失败: %v", err)
 	}
-	if err := st.SettleExhausted(7); err != nil {
+	// ① 复核防线：余额（800）≥ owed（100）→ 拒绝结算（修复 TOCTOU 误清零）
+	if _, err := st.SettleExhausted(7, 100); !errors.Is(err, ErrSettleNotNeeded) {
+		t.Fatalf("余额足够时应返回 ErrSettleNotNeeded，实得 %v", err)
+	}
+	// ② 欠费（owed=2000 > 可用 800）→ 有界清零且消耗量=可用量
+	consumed, err := st.SettleExhausted(7, 2000)
+	if err != nil {
 		t.Fatalf("SettleExhausted 失败: %v", err)
+	}
+	if consumed != 800 {
+		t.Fatalf("应消耗 800（trial 300 + 余额 500），实得 %d", consumed)
 	}
 	var bal, left int64
 	if err := db.QueryRow(st.db, db.CurrentDialect(), "SELECT balance FROM balance_accounts WHERE tenant_id=7").Scan(&bal); err != nil || bal != 0 {
@@ -52,8 +63,15 @@ func TestSettleExhausted(t *testing.T) {
 	if err := db.QueryRow(st.db, db.CurrentDialect(), `SELECT COALESCE(SUM("left"),0) FROM quota_grants WHERE tenant_id=7`).Scan(&left); err != nil || left != 0 {
 		t.Fatalf("发放台账应清零，实得 %d (err=%v)", left, err)
 	}
-	if err := st.SettleExhausted(7); err != nil {
-		t.Fatalf("SettleExhausted 应幂等，二次调用失败: %v", err)
+	// ③ 调整流水：清零量必须落 ledger（charge_kind='settle'），可追偿可审计
+	var settleCost int64
+	if err := db.QueryRow(st.db, db.CurrentDialect(),
+		`SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=7 AND charge_kind='settle'`).Scan(&settleCost); err != nil || settleCost != 800 {
+		t.Fatalf("欠费结算应落调整流水 800，实得 %d (err=%v)", settleCost, err)
+	}
+	// ④ 幂等：再次调用消耗 0
+	if c2, err := st.SettleExhausted(7, 2000); err != nil || c2 != 0 {
+		t.Fatalf("SettleExhausted 应幂等，二次调用实得 (%d, %v)", c2, err)
 	}
 }
 

@@ -234,6 +234,8 @@ func (s *Store) migrate() error {
 			quantity INTEGER NOT NULL DEFAULT 0,     -- 字符数或句数
 			unit_price INTEGER NOT NULL DEFAULT 0,   -- 每单位 token
 			cost INTEGER NOT NULL DEFAULT 0,         -- 扣减 token
+			-- ★ P1-2（2026-09-14）：'charge'=实扣 / 'log'=留痕不扣费 / 'settle'=欠费结算调整
+			charge_kind TEXT NOT NULL DEFAULT 'charge',
 			created_at TEXT
 		)`,
 		// 按租户+时间查询用量的索引
@@ -583,6 +585,9 @@ var columnAdditions = []colDef{
 	// ★ 用量看板标注（2026-08-26 需求）：业务形态(text/file)与翻译模式(fast/pro)
 	{"usage_ledger", "biz_kind", "ALTER TABLE usage_ledger ADD COLUMN biz_kind TEXT NOT NULL DEFAULT ''"},
 	{"usage_ledger", "biz_mode", "ALTER TABLE usage_ledger ADD COLUMN biz_mode TEXT NOT NULL DEFAULT ''"},
+	// ★ P1-2（2026-09-14）：计费语义标记——'charge'=实扣 / 'log'=留痕不扣费 / 'settle'=欠费结算调整。
+	//   老库存量行默认 'charge'（历史留痕行无法回溯区分，按实扣保守处理并已在代码注释声明）。
+	{"usage_ledger", "charge_kind", "ALTER TABLE usage_ledger ADD COLUMN charge_kind TEXT NOT NULL DEFAULT 'charge'"},
 	{"rate_card", "provider", "ALTER TABLE rate_card ADD COLUMN provider TEXT NOT NULL DEFAULT ''"},
 	{"audit_logs", "before_val", "ALTER TABLE audit_logs ADD COLUMN before_val TEXT NOT NULL DEFAULT ''"},
 	{"audit_logs", "after_val", "ALTER TABLE audit_logs ADD COLUMN after_val TEXT NOT NULL DEFAULT ''"},

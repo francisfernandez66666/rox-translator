@@ -12,42 +12,102 @@
 //
 // 键带业务前缀（vcode:reset:<uid> / vcode:email:<key>），TTL 由调用方传入（秒）。
 // 值 JSON 编码：resetCode{code,expires_at,attempts} / emailCode{code,expires_at,attempts,sent_at}。
-// 原子性：验证码「校验+消费+错计」为读-改-写，Redis 下 Get+Set 读改写；
-// 实例间竞争窗口极小（单码生命周期内通常仅一次校验），可接受的弱一致。
+// 原子性：★ P1-12（2026-09-14）验证码「校验+消费+错计」经 vcodeLockOf per-key 互斥
+// 串行化；Redis 多实例间仍为 Get+Set 弱一致（窗口极小，单码通常仅一次校验）。
 // =============================================
 package api
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"translator/internal/infra/redis"
 )
 
-// vcodeSet 写验证码到 Redis（未启用/故障静默失败；本地 map 由调用方维护）。
+// vcodeMu per-key 互斥锁（★ P1-12 修复 2026-09-14）：
+// 「读 attempts → 判断 → 比对 → attempts++ 回写」是多步非原子流程，并发请求可全部
+// 读到 attempts=0，在 10 分钟窗口内一次并发脉冲即近似穷举 6 位码空间（任意账号接管）。
+// 验证码消费路径（改密码/邮箱码）以本函数取得的锁串行化 check-and-consume。
+var vcodeMu sync.Map // key -> *sync.Mutex
+
+// vcodeLockOf 取得（并惰性创建）指定 key 的互斥锁。返回解锁函数。
+func vcodeLockOf(key string) func() {
+	v, _ := vcodeMu.LoadOrStore(key, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// vcodeLocalFallback 无 Redis 时的进程内回退存储（★ P1-14 修复 2026-09-14）。
+// 旧实现 vcodeSet 在 Redis 未启用时静默丢弃——但 SSO 兑换码（sso_xchg:*）没有
+// 调用方本地 map 兜底，导致「单实例 + 无 Redis」部署下 SSO 登录整体失效。
+// 现统一：Redis 不可用时写本进程 map（带 TTL），读 Redis 未命中回退 map，双删。
+type vcodeEntry struct {
+	val []byte
+	exp time.Time
+}
+
+var vcodeLocal = sync.Map{} // key -> vcodeEntry
+var vcodeLocalWrites int64
+
+func vcodeLocalSet(key string, val []byte, ttl time.Duration) {
+	vcodeLocal.Store(key, vcodeEntry{val: val, exp: time.Now().Add(ttl)})
+	// 惰性清扫：每 256 次写全量清一次过期项，防无界膨胀
+	if n := atomic.AddInt64(&vcodeLocalWrites, 1); n%256 == 0 {
+		now := time.Now()
+		vcodeLocal.Range(func(k, v any) bool {
+			if e, ok := v.(vcodeEntry); ok && now.After(e.exp) {
+				vcodeLocal.Delete(k)
+			}
+			return true
+		})
+	}
+}
+
+func vcodeLocalGet(key string) ([]byte, bool) {
+	v, ok := vcodeLocal.Load(key)
+	if !ok {
+		return nil, false
+	}
+	e := v.(vcodeEntry)
+	if time.Now().After(e.exp) {
+		vcodeLocal.Delete(key)
+		return nil, false
+	}
+	return e.val, true
+}
+
+// vcodeSet 写验证码到 Redis（未启用/故障回退进程内存，★ P1-14）。
 // key=Redis 键（含前缀），val=JSON 字节，ttl=过期时长。
 func vcodeSet(key string, val []byte, ttl time.Duration) {
 	if rdb := redis.Get(); rdb != nil {
 		_ = rdb.Set(context.Background(), key, string(val), ttl)
+		return
 	}
+	vcodeLocalSet(key, val, ttl)
 }
 
-// vcodeGet 读验证码（Redis 优先）；命中返回 (字节, true)，未命中/未启用返回 (nil,false)。
-// 调用方拿到结果后应回退本地 map（若 Redis 未命中）。
+// vcodeGet 读验证码（Redis 优先，未启用回退进程内存）；命中返回 (字节, true)。
+// Redis 已启用但未命中仍返回 false——由调用方回退各自本地 map（跨实例语义不变）。
 func vcodeGet(key string) ([]byte, bool) {
 	if rdb := redis.Get(); rdb != nil {
 		if val, err := rdb.Get(context.Background(), key); err == nil && val != "" {
 			return []byte(val), true
 		}
+		return nil, false
 	}
-	return nil, false
+	return vcodeLocalGet(key)
 }
 
-// vcodeDel 删验证码（消费/作废/超限销毁）。本地 map 由调用方维护。
+// vcodeDel 删验证码（消费/作废/超限销毁；Redis 与内存回退双删）。
 func vcodeDel(key string) {
 	if rdb := redis.Get(); rdb != nil {
 		_ = rdb.Del(context.Background(), key)
+		return
 	}
+	vcodeLocal.Delete(key)
 }
 
 // vcodeResetKey 忘记密码验证码 Redis 键（vcode:reset:<uid>）。

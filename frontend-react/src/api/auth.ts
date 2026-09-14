@@ -30,8 +30,10 @@ export interface LoginResp {
   success: boolean
   message?: string
   token?: string
-  /** 品牌专属域名：当用户所属租户配置了独立子域且本次登录不在该子域时返回，前端据此带 token 跳转过去 */
+  /** 品牌专属域名：当用户所属租户配置了独立子域且本次登录不在该子域时返回，前端据此跳转过去 */
   brand_host?: string
+  /** ★ P0-3（2026-09-14）：跨子域跳转用一次性兑换码（60s、单次消费，落地后经 /api/auth/sso/exchange 换 JWT），JWT 不再进 URL */
+  sso_code?: string
   user?: AuthUser
   /** ★ S1 积分制：1 积分 = N 内部 token（authMe 下发，供前端统一换算展示） */
   points_tokens_rate?: number

@@ -186,7 +186,10 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 	// 自助充值即时到账模式：system_config auto_charge=1 时创建订单即确认到账（内网/测试模式）
 	// ★ C18（2026-09-12）：auto_charge 确认失败不再吞错返回"成功"——
 	//   旧实现用户/面板见到 success 但订单实际 pending（假到账）。
-	if v, _ := s.Store.GetConfig("auto_charge"); v == "1" {
+	// ★ P0-4 修复（2026-09-14）：auto_charge 仅对 super_admin 生效——该开关若在生产误开，
+	//   旧实现任何租户管理员可自报任意大额 tokens 零支付即时入账（无渠道/金额校验）。
+	//   租户管理员的自助订单一律保持 pending 走人工/支付渠道确认。
+	if v, _ := s.Store.GetConfig("auto_charge"); v == "1" && auth.IsSuperAdmin(u) {
 		if perr := s.Store.MarkOrderPaid(o.ID, req.TenantID); perr != nil {
 			writeJSON(w, 200, map[string]interface{}{"success": false,
 				"message": "订单已创建但自动入账失败（保留待支付，可人工确认）: " + store.DebriefDBError(perr),

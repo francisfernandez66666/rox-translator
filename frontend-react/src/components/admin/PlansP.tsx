@@ -19,6 +19,7 @@ import {
   adminPackageSettings, adminPackageSettingsSave, adminQRUpload,
   request,
   authHeaders,
+  API_BASE,
 } from '@/api'
 import { Panel, Field, toastResp, num } from './parts'
 import { fmtTime } from '@/lib/ui'
@@ -236,7 +237,8 @@ async function manualConfirm() {
     if (content && !isImage(content)) {
       void (async () => {
         try {
-          const res = await fetch(`/api/qr/render?text=${encodeURIComponent(content)}`, { headers: authHeaders() })
+          // ★ P1-16：拼 API_BASE（裸相对路径在配置 VITE_API_BASE 跨域部署时断链）
+          const res = await fetch(`${API_BASE}/api/qr/render?text=${encodeURIComponent(content)}`, { headers: authHeaders() })
           if (!res.ok) return
           const blob = await res.blob()
           if (alive) setQrImg(URL.createObjectURL(blob))

@@ -36,6 +36,10 @@
 #       S8 敏感词闸（输入拦截 e2e + 开关往返 + 非法值拒绝）/ S3 一次性邮箱黑名单（内置域+增补域）/
 #       S4 归因落库+漏斗接口鉴权 / S9 Alertmanager 收口鉴权+告警落库+metrics 401/Bearer /
 #       S7 s7_watchlist 表 / S5 首页 HTML
+#   T37 今日修复回归（2026-09-14）：P0-2 org_id=0 越权（子树内放行+未分配 403）/
+#       P0-4 auto_charge 仅超管即时入账（租户管理员 pending）/ P0-3 品牌子域 sso_code 登录链
+#       （无裸 token + 兑换 + 单次消费）/ P0-5 敏感词 Unicode 归一化（全角/零宽/空格拦截）/
+#       P1-15 points 溢出 400 / P1-2 charge_kind 语义枚举守恒
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 # 依赖：mock_llm.py 已启动、uat 服务已启动（run_uat.sh 编排）
 # 用法：BASE_URL=... UAT_DB=... ADMIN_PASS=... [UAT_SERVER_LOG=...] bash scripts/uat/api_uat_txn.sh
@@ -749,6 +753,72 @@ ck T36-metrics-bearer 'translator_info' "$(curl -s $B/metrics -H 'Authorization:
 NW=$(sq "SELECT COUNT(*) FROM s7_watchlist" | tr -d '[:space:]')
 ck T36-s7-table '^[0-9]+$' "$NW"
 ck T36-landing-html 'og:title|能言|LangCross' "$(curl -s $B/)"
+
+# ---------- T37 ★ 今日修复回归批次（2026-09-14，见《UAT_缺陷清单与处置记录_20260914.md》） ----------
+echo "--- T37 今日修复回归（org_id=0 越权/auto_charge 收敛/sso_code 品牌链/敏感词归一化/积分溢出/charge_kind）---"
+
+# ① T37-1（P0-2）：部门管理员不能操作 org_id=0（未分配部门）的同租户账号（含租户管理员）
+#    旧缺陷：子树校验写 target.OrgID>0 才生效，org_id=0（注册/SCIM/建号默认值）整段被跳过
+#    → dept_admin 可重置 tenant_admin 密码完成租户接管。修复后：org_id≤0 一律 403（与 Delete 对齐）。
+ORG37=$(post "$AH" "{\"name\":\"T37研发部\",\"type\":\"dept\",\"tenant_id\":$TAID}" /api/admin/orgs/create)
+ck T37-org-create '"success": *true' "$ORG37"
+OID37=$(echo "$ORG37" | pv '.get("org",{}).get("id") or 0')
+post "$AH" "{\"username\":\"t37_dept\",\"password\":\"uatpass123\",\"display_name\":\"T37部门管理员\",\"role\":\"dept_admin\",\"tenant_id\":$TAID,\"org_id\":$OID37}" /api/admin/users/create >/dev/null
+post "$AH" "{\"username\":\"t37_member\",\"password\":\"uatpass123\",\"display_name\":\"T37部门成员\",\"role\":\"user\",\"tenant_id\":$TAID,\"org_id\":$OID37}" /api/admin/users/create >/dev/null
+post "$AH" "{\"username\":\"t37_ta\",\"password\":\"uatpass123\",\"display_name\":\"T37租管对照\",\"role\":\"tenant_admin\",\"tenant_id\":$TAID}" /api/admin/users/create >/dev/null
+TD37=$(tok t37_dept uatpass123); HD37="Authorization: Bearer $TD37"
+ck T37-dept-login-ok '^.{20,}$' "$TD37"
+MEM37ID=$(sq "SELECT id FROM users WHERE username='t37_member'" | tr -d '[:space:]')
+# 子树内正常授权不被误伤：部门管理员重置本部门成员密码仍应成功（防修过头）
+ck T37-subtree-still-ok '"success": *true' "$(post "$HD37" "{\"id\":$MEM37ID,\"password\":\"DeptOk@37x\"}" /api/admin/users/reset-password)"
+# 核心断言：org_id=0 的租户管理员，部门管理员重置/停用必须 403
+TA37ID=$(sq "SELECT id FROM users WHERE username='t37_ta'" | tr -d '[:space:]')
+R37=$(post "$HD37" "{\"id\":$TA37ID,\"password\":\"Hijack@37x\"}" /api/admin/users/reset-password)
+ck T37-p0x-reset-org0-403 '未分配部门|无权|权限不足' "$R37"
+R37b=$(post "$HD37" "{\"id\":$TA37ID,\"status\":\"disabled\"}" /api/admin/users/update)
+ck T37-p0x-update-org0-403 '未分配部门|无权|权限不足' "$R37b"
+
+# ② T37-2（P0-4）：auto_charge=1 时租户管理员订单保持 pending（仅超管可即时入账）
+dbcfg auto_charge 1
+O37=$(post "$H1" '{"tokens":3000,"money":0}' /api/admin/orders/create)
+ck T37-ta-order-pending '"status":"pending"' "$O37"
+OA37=$(post "$AH" "{\"tenant_id\":$TAID,\"tokens\":3000,\"money\":0}" /api/admin/orders/create)
+ck T37-sa-order-paid '"status":"paid"' "$OA37"
+dbcfg auto_charge 0
+O37c=$(post "$H1" '{"tokens":3000,"money":0}' /api/admin/orders/create)
+ck T37-autocharge-off-pending '"status":"pending"' "$O37c"
+
+# ③ T37-3（P0-3）：品牌子域登录返回一次性 sso_code（不再返回裸 token），兑换后得 JWT、单次消费
+sq "UPDATE tenants SET domain='t37brand' WHERE id=$TAID" >/dev/null
+dbcfg base_domain uat.t37.internal
+BL37=$(curl -s $B/api/auth/login -H "$J" -d '{"username":"uatuser_a","password":"uatpass123"}')
+ck T37-brand-sso-code '"sso_code":"[0-9a-f]{32}"' "$BL37"
+if echo "$BL37" | grep -q '"token"'; then FAIL=$((FAIL+1)); echo "FAIL|T37-brand-no-naked-token"; else PASS=$((PASS+1)); echo "PASS|T37-brand-no-naked-token"; fi
+XCODE37=$(echo "$BL37" | pv '.get("sso_code","")')
+X37=$(curl -s $B/api/auth/sso/exchange -H "$J" -d "{\"code\":\"$XCODE37\"}")
+ck T37-brand-exchange '"success": *true.*"token"' "$X37"
+X37B=$(curl -s $B/api/auth/sso/exchange -H "$J" -d "{\"code\":\"$XCODE37\"}")
+ck T37-brand-exchange-single-use '"success": *false' "$X37B"
+sq "UPDATE tenants SET domain='' WHERE id=$TAID" >/dev/null
+dbcfg base_domain ''
+
+# ④ T37-4（P0-5）：敏感词 Unicode 归一化——全角/零宽/字间空格混淆全部拦截（OpenAPI 同步通道 e2e）
+AK37=$(post "$H1" '{"name":"t37-key"}' /api/apikeys/create | pv '.get("api_key","")')
+S37(){ curl -s $B/openapi/v1/translate -H "Authorization: Bearer $AK37" -H "$J" -d "$1"; }
+ck T37-sens-fullwidth 'sensitive_blocked' "$(S37 '{"text":"请翻译：紫火核弹Ｔ３６ 常规句子","target_lang":"en","source_lang":"zh"}')"
+ck T37-sens-zerowidth 'sensitive_blocked' "$(S37 '{"text":"紫\u200b火\u200b核\u200b弹T36 隐藏词","target_lang":"en","source_lang":"zh"}')"
+ck T37-sens-spaced 'sensitive_blocked' "$(S37 '{"text":"紫 火 核 弹 T36 空格混淆","target_lang":"en","source_lang":"zh"}')"
+
+# ⑤ T37-5（P1-15）：充值 points 非法大值必须 400 拒绝（防 int64 溢出负订单），合法值仍可下单
+ck T37-points-overflow-reject '超出允许范围' "$(curl -s $B/api/pay/create -H "$AH" -H "$J" -d '{"points":2199023255552}')"
+ck T37-points-ok-still-works '"success": *true' "$(curl -s $B/api/pay/create -H "$AH" -H "$J" -d '{"points":100}')"
+
+# ⑥ T37-6（P1-2）：usage_ledger.charge_kind 语义列存在、枚举守恒，且本租户存在实扣行
+CK37=$(sq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=$TAID AND charge_kind NOT IN ('','charge','settle','log')" | tr -d '[:space:]')
+ck T37-charge-kind-enum '^0$' "$CK37"
+CH37=$(sq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=$TAID" | tr -d '[:space:]')
+CKC37=$(sq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=$TAID AND charge_kind IN ('','charge','settle','log')" | tr -d '[:space:]')
+[ "$CH37" = "$CKC37" ] && [ "${CH37:-0}" -gt 0 ] && { PASS=$((PASS+1)); echo "PASS|T37-charge-kind-covered"; } || { FAIL=$((FAIL+1)); echo "FAIL|T37-charge-kind-covered($CKC37/$CH37)"; }
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

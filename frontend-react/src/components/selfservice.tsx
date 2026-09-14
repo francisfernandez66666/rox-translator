@@ -66,9 +66,11 @@ export function BalancePanel() {
       )}
       <Card>
         <h3>{t('ss.myBalance')}</h3>
-        <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtNum(permanent)}</b></div>
-        <div className="ss-row"><span>{t('ss.grantLedger')}</span><b>{fmtNum(grants)}</b></div>
-        <div className="ss-row"><span>{t('ss.totalAvailable')}</span><b>{fmtNum(totalAvailable)}</b></div>
+        {/* ★ P1-18（2026-09-14）：token 余额统一 fmtPoints 积分口径（S1 承诺：token 裸值不再外露），
+            不再与下方面板的 fmtPoints 并存裸 token 展示 */}
+        <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtPoints(permanent)}</b></div>
+        <div className="ss-row"><span>{t('ss.grantLedger')}</span><b>{fmtPoints(grants)}</b></div>
+        <div className="ss-row"><span>{t('ss.totalAvailable')}</span><b>{fmtPoints(totalAvailable)}</b></div>
       </Card>
     </div>
   )
@@ -156,7 +158,7 @@ export function MyPackagePanel() {
         <div className="ss-row"><span>{t('ss.currentPkg')}</span><Tag>{p.package_code ?? '—'}</Tag></div>
         <div className="ss-row"><span>{t('ss.remainingSentences')}</span><b>{t('ss.approxPrefix')}{fmtNum(p.balance_sentences_approx ?? 0)} {t('ss.sentenceUnit')}{t('ss.approxSuffix')}</b></div>
         <div className="ss-row"><span>{t('ss.availableTokens')}</span><b>{fmtPoints(total)}</b></div>
-        <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtNum(p.permanent_balance ?? 0)}</b></div>
+        <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtPoints(p.permanent_balance ?? 0)}</b></div>
       </Card>
     </div>
   )

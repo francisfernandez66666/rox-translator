@@ -184,6 +184,23 @@ func (s *Store) UpdateTicket(t *Ticket) error {
 	return err
 }
 
+// ClaimTicketForRun CAS 认领工单执行权（★ P1-5 修复 2026-09-14）：
+// 仅当工单仍处于可执行态（draft/queued/rejected）时原子翻到 in_progress。
+// 旧实现 runTicket 只挡 completed，同一工单可被两个 worker 并发执行
+// （双份翻译、FinalResult 互相覆盖、实时计费双倍）。返回受影响行数：
+// 0 = 已被其他 worker 认领或已进入终态，调用方必须放弃执行。
+// 参数：id=工单 ID。返回：受影响行数与错误。
+func (s *Store) ClaimTicketForRun(id int64) (int64, error) {
+	res, err := db.Exec(s.db, db.CurrentDialect(),
+		"UPDATE tickets SET status='in_progress', updated_at=? WHERE id=? AND status IN ('draft','queued','rejected')",
+		time.Now().Format(time.RFC3339), id)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // ★ 整改：SetTicketState 改为同步骤 UPSERT（每步骤仅保留一行最新轨迹），
 // 避免细粒度进度（每批初翻/校对）反复 INSERT 撑爆 ticket_state。
 // 同时结算每步执行耗时：首次 running 记录 started_at；running→终态时计算 duration_ms。

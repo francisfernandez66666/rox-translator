@@ -13,7 +13,16 @@
  * - 安全句管理：语言文化规范的增删改查与审核
  */
 
-import { request, authHeaders, API_BASE, type AdminResp } from './core'
+import { request, authHeaders, API_BASE, handleUnauthorized, type AdminResp } from './core'
+
+// ★ P1-16 修复（2026-09-14）：raw fetch 统一守卫——旧实现 `.json()` 裸调用不判 resp.ok、
+// 不触发 401 拦截，登录过期表现为 JSON 解析异常或静默失败而非跳登录。
+async function fetchJSON(url: string, init?: RequestInit): Promise<any> {
+  const resp = await fetch(url, init)
+  if (resp.status === 401) handleUnauthorized(url)
+  if (!resp.ok) throw new Error(`请求失败 (${resp.status})`)
+  return resp.json()
+}
 
 /** 获取行业知识库包列表（不带头条目数 entry_count，后端一次 GROUP BY 附带） */
 export async function kbPackages(): Promise<AdminResp> {
@@ -74,27 +83,24 @@ export async function kbEntriesImport(data: { package_id: number; entries: { sou
 export async function kbRecognizeFile(file: File, mergedName?: string, onProgress?: (pct: number) => void): Promise<AdminResp> {
   if (mergedName) {
     // ★ H5：分片已合并，recognize 直读服务端合并产物
-    const resp = await fetch(`${API_BASE}/api/translation/recognize-kb?merged=${encodeURIComponent(mergedName)}`, {
+    return fetchJSON(`${API_BASE}/api/translation/recognize-kb?merged=${encodeURIComponent(mergedName)}`, {
       method: 'POST', headers: authHeaders(),
     })
-    return resp.json()
   }
   if (file.size > CHUNK_UPLOAD_MIN) {
     const merged = await uploadFileChunked(file, onProgress)
     if (!merged) return { success: false, message: '分片上传失败' }
-    const resp = await fetch(`${API_BASE}/api/translation/recognize-kb?merged=${encodeURIComponent(merged)}`, {
+    return fetchJSON(`${API_BASE}/api/translation/recognize-kb?merged=${encodeURIComponent(merged)}`, {
       method: 'POST', headers: authHeaders(),
     })
-    return resp.json()
   }
   const formData = new FormData()
   formData.append('file', file)
-  const resp = await fetch(`${API_BASE}/api/translation/recognize-kb`, {
+  return fetchJSON(`${API_BASE}/api/translation/recognize-kb`, {
     method: 'POST',
     headers: authHeaders(),
     body: formData,
   })
-  return resp.json()
 }
 
 // ==================== ★ H5 大文件断点续传（分片上传） ====================
@@ -114,27 +120,40 @@ function newUploadId(): string {
 /** 查询已收分片（续传定位；网络失败按 0 处理不影响主流程） */
 export async function uploadStatus(uploadId: string): Promise<{ received: number[]; total: number }> {
   try {
-    const r = await (await fetch(`${API_BASE}/api/upload/status?upload_id=${uploadId}`, { headers: authHeaders() })).json()
+    const r = await fetchJSON(`${API_BASE}/api/upload/status?upload_id=${uploadId}`, { headers: authHeaders() })
     return r.success ? { received: r.received || [], total: r.total || 0 } : { received: [], total: 0 }
   } catch { return { received: [], total: 0 } }
 }
 
+// ★ P1-17 修复（2026-09-14）：uploadId 按「文件名+大小」持久化到 localStorage——
+// 旧实现每次调用 newUploadId() 内存新生成，页面刷新后已收分片定位恒为空，
+// 「断点续传」实际退化为全量重传。合并成功/最终失败后清除，避免脏复用。
+function uploadIdKey(file: File): string {
+  return `kb_upload_id:${file.name}:${file.size}`
+}
+
 /** 分片上传整个文件并合并；返回合并产物名（recognize-kb merged 参数用）。onProgress 0-100 */
-export async function uploadFileChunked(file: File, onProgress?: (pct: number) => void, uploadId = newUploadId()): Promise<string | null> {
+export async function uploadFileChunked(file: File, onProgress?: (pct: number) => void, uploadId?: string): Promise<string | null> {
+  let uid = uploadId || ''
+  if (!uid) {
+    try { uid = localStorage.getItem(uploadIdKey(file)) || '' } catch { /* 隐私模式忽略 */ }
+    if (!uid) uid = newUploadId()
+    try { localStorage.setItem(uploadIdKey(file), uid) } catch { /* 忽略 */ }
+  }
   const total = Math.max(1, Math.ceil(file.size / CHUNK_SIZE))
-  const have = new Set((await uploadStatus(uploadId)).received)
+  const have = new Set((await uploadStatus(uid)).received)
   for (let i = 0; i < total; i++) {
     if (have.has(i)) { onProgress?.(Math.round(((i + 1) / total) * 95)); continue }
     const blob = file.slice(i * CHUNK_SIZE, Math.min(file.size, (i + 1) * CHUNK_SIZE))
     const fd = new FormData()
-    fd.append('upload_id', uploadId)
+    fd.append('upload_id', uid)
     fd.append('index', String(i))
     fd.append('total', String(total))
     fd.append('chunk', blob, `${file.name}.part${i}`)
     let ok = false
     for (let retry = 0; retry < 3 && !ok; retry++) {
       try {
-        const r = await (await fetch(`${API_BASE}/api/upload/chunk`, { method: 'POST', headers: authHeaders(), body: fd })).json()
+        const r = await fetchJSON(`${API_BASE}/api/upload/chunk`, { method: 'POST', headers: authHeaders(), body: fd })
         ok = !!r.success
       } catch { /* 断网重试 */ }
       if (!ok) await new Promise((res) => setTimeout(res, 500 * (retry + 1)))
@@ -143,11 +162,12 @@ export async function uploadFileChunked(file: File, onProgress?: (pct: number) =
     onProgress?.(Math.round(((i + 1) / total) * 95))
   }
   try {
-    const mr = await (await fetch(`${API_BASE}/api/upload/merge`, {
+    const mr = await fetchJSON(`${API_BASE}/api/upload/merge`, {
       method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ upload_id: uploadId, filename: file.name }),
-    })).json()
+      body: JSON.stringify({ upload_id: uid, filename: file.name }),
+    })
     if (!mr.success) return null
+    try { localStorage.removeItem(uploadIdKey(file)) } catch { /* 忽略 */ }
     onProgress?.(100)
     return String(mr.merged)
   } catch { return null }
@@ -157,24 +177,22 @@ export async function uploadFileChunked(file: File, onProgress?: (pct: number) =
 export async function bitextImport(file: File): Promise<AdminResp & { added?: number; skipped?: number }> {
   const formData = new FormData()
   formData.append('file', file)
-  const resp = await fetch(`${API_BASE}/api/translation/import-bitext`, {
+  return fetchJSON(`${API_BASE}/api/translation/import-bitext`, {
     method: 'POST',
     headers: authHeaders(),
     body: formData,
   })
-  return resp.json()
 }
 
 /** TMX 翻译记忆标准格式导入（xml），写入翻译记忆库 */
 export async function tmxImport(file: File): Promise<AdminResp & { tus?: number; added?: number; skipped?: number }> {
   const formData = new FormData()
   formData.append('file', file)
-  const resp = await fetch(`${API_BASE}/api/translation/import-tmx`, {
+  return fetchJSON(`${API_BASE}/api/translation/import-tmx`, {
     method: 'POST',
     headers: authHeaders(),
     body: formData,
   })
-  return resp.json()
 }
 
 /** 导入已识别的 KB 文件到指定包（按包隔离写入） */
