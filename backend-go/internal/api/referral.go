@@ -125,6 +125,7 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 		kRewardDays = "invite_extend_days"       // 注册邀请奖励有效期（天）；register.go 读取，此处暴露给超管
 		kPaidDays   = "inviter_paid_reward_days" // 付费邀请奖励有效期（天）；0=永久（默认）
 	)
+	// GET 按内置默认兜底回显 5 项现值；POST 仅写入显式传入的字段（增量更新）
 	get := func(key string) (string, error) { return s.Store.GetConfig(key) }
 	switch r.Method {
 	case http.MethodGet:
@@ -148,6 +149,7 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 			return
 		}
+		// 三个 token/开关键逐项增量落库：负值归零，未传指针跳过不动既有配置
 		if req.Enabled != nil {
 			v := "1"
 			if !*req.Enabled {

@@ -397,8 +397,8 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/billing/config/save", s.handleBillingConfigSave)
 	s.mux.HandleFunc("/api/billing/quota", s.handleTenantQuota)
 	s.mux.HandleFunc("/api/billing/quota/save", s.handleTenantQuotaSave)
-	s.mux.HandleFunc("/api/admin/reconcile", s.handleAdminReconcile) // ★ F9 三表勾稽对账
-	s.mux.HandleFunc("/api/admin/funnel", s.handleAdminFunnel) // ★ S4 增长漏斗（超管）
+	s.mux.HandleFunc("/api/admin/reconcile", s.handleAdminReconcile)          // ★ F9 三表勾稽对账
+	s.mux.HandleFunc("/api/admin/funnel", s.handleAdminFunnel)                // ★ S4 增长漏斗（超管）
 	s.mux.HandleFunc("/api/alerts/alertmanager", s.handleAlertmanagerWebhook) // ★ S9 同机 Alertmanager 收口（X-Admin-Token）
 	s.mux.HandleFunc("/api/admin/orders/create", s.handleOrderCreate)
 	s.mux.HandleFunc("/api/admin/orders/pay", s.handleOrderPay)

@@ -501,6 +501,7 @@ func scopeVisibleID(scope *kb.PackScope, packID, rowTenant int64) bool {
 // cjkOverlap 计算两条中文的 CJK 字符 Jaccard 重叠率（0~1）
 // 用于区分"同一句的不同表述/标点变体"与"语义相近但非同一句"
 func cjkOverlap(a, b string) float64 {
+	// 两侧各取 CJK 字符集（字母/标点不参与），后续按 Jaccard 计重叠率
 	ca := []rune(ExtractCJK(a))
 	cb := []rune(ExtractCJK(b))
 	if len(ca) == 0 || len(cb) == 0 {
@@ -514,6 +515,7 @@ func cjkOverlap(a, b string) float64 {
 	for _, r := range cb {
 		sb[r] = struct{}{}
 	}
+	// 交集/并集按 rune 去重计数；两串完全相同时并集为 0，视作全等返回 1
 	inter, union := 0, len(sa)+len(sb)
 	for r := range sa {
 		if _, ok := sb[r]; ok {
@@ -1080,6 +1082,7 @@ func buildExamplesPrompt(zhText, targetLang string, examples []*kb.Row) string {
 	used := map[string]bool{}
 	var sb strings.Builder
 	count := 0
+	// 逐命中行筛选：去重、需有目标语译文、仅收 ≤30 字短句（防模型复述长参考块）
 	for _, r := range examples {
 		if r == nil || strings.TrimSpace(r.Zh) == "" {
 			continue
@@ -1104,6 +1107,7 @@ func buildExamplesPrompt(zhText, targetLang string, examples []*kb.Row) string {
 			break
 		}
 	}
+	// 一条合格参考都没有则整体不注入，避免悬空提示头
 	if count == 0 {
 		return ""
 	}
@@ -1179,6 +1183,7 @@ func (e *Engine) pickPrimaryRoute() config.ProviderConfig {
 //	无样本路由三因子均为 1（冷启动等价静态权重）。
 func (e *Engine) pickPrimaryRouteDynamic(rs []config.ProviderConfig) config.ProviderConfig {
 	p95s := make([]float64, len(rs))
+	// 预扫描全部路由取 P95 延迟与平均 token 耗时最小值，作为相对得分基准
 	toks := make([]float64, len(rs))
 	minP95, minTok := 0.0, 0.0
 	for i, r := range rs {
@@ -1191,6 +1196,7 @@ func (e *Engine) pickPrimaryRouteDynamic(rs []config.ProviderConfig) config.Prov
 			minTok = toks[i]
 		}
 	}
+	// 打分 = 权重基数 × 错误率惩罚 × 延迟相对系数 × 吞吐相对系数，取最高者为主路由
 	best, bestScore := rs[0], math.Inf(-1)
 	for i, r := range rs {
 		errRate, _, _ := e.routeHealth(r.APIBase, r.Model)
@@ -1323,6 +1329,7 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	if cultureBlock != "" {
 		sysNote += cultureBlock
 	}
+	// 三级装配 messages：有 KB 参考带提示头 / 仅文化规则 / 兜底纯用户指令
 	var messages []map[string]string
 	if ref != "" {
 		langName := config.LangNames[targetLang]

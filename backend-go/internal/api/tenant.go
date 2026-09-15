@@ -68,6 +68,7 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
 		return
 	}
+	// 解析创建参数：编码/名称/有效期/权限 + 可选初始管理员 + 行业与品牌扩展字段（均选填）
 	var req struct {
 		Code        string `json:"code"`          // 租户唯一编码（必填）
 		Name        string `json:"name"`          // 租户名称
@@ -136,6 +137,7 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
 		return
 	}
+	// 解析更新字段：基础三元组 + 品牌定制（名称/Logo/域名/页脚链接）+ 行业/邀请开关（nil=不改）
 	var req struct {
 		ID            int64  `json:"id"`             // 目标租户 ID
 		Name          string `json:"name"`           // 租户名称
@@ -478,6 +480,7 @@ func (s *Server) handleAdminBrandGrant(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "存储未初始化"})
 		return
 	}
+	// 授权表整体存于 system_config 一个 JSON map（租户id→true），撤销即删键、末段整体写回
 	raw, _ := s.Store.GetConfig(brandGrantsKey)
 	var m map[string]bool
 	if raw != "" {
@@ -563,6 +566,7 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 			"dedicated_register":   false,
 		}
 	}
+	// 未命中任何租户（tid≤0）时按平台默认品牌返回；命中则取租户实体继续装配租户分支
 	var t *tenant.Tenant
 	if tid > 0 {
 		t, _ = s.Ten.GetByID(tid)
@@ -577,6 +581,7 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 			industryName = ip.Name
 		}
 	}
+	// 租户分支输出全量品牌字段 + 四个能力标记（付费解锁/超管授权/根域名/专属注册入口）
 	return map[string]interface{}{
 		"success":              true,
 		"tenant_id":            t.ID,
@@ -618,6 +623,7 @@ func (s *Server) handleCaddyOnDemandAsk(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	// 取 ?domain= 并剥掉端口（Caddy 可能带 :443 询问），空值直接 403
 	domain := r.URL.Query().Get("domain")
 	if i := strings.Index(domain, ":"); i >= 0 {
 		domain = domain[:i]
@@ -626,6 +632,7 @@ func (s *Server) handleCaddyOnDemandAsk(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	// 三类放行逐级判定：基础域 apex → 主站点 primary_host → 已登记租户子域前缀（GetByDomain 命中）
 	base := brandingBaseDomain(s)
 	if domain == base {
 		w.WriteHeader(http.StatusOK)
@@ -706,6 +713,7 @@ func (s *Server) handleFooterLinksSet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
+	// links 非空时先校验为合法 JSON 数组再落库（空串=清空恢复默认）
 	if req.Links != "" {
 		var arr []interface{}
 		if err := json.Unmarshal([]byte(req.Links), &arr); err != nil {
@@ -751,6 +759,7 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
 		return
 	}
+	// 品牌全字段入参：名称（中/英/多语）+ Logo/域名/首页背景 + 登录卡片位置与布局 + 页脚链接
 	var req struct {
 		ID                int64  `json:"id"`
 		BrandName         string `json:"brand_name"`
@@ -808,6 +817,7 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, 200, map[string]interface{}{"success": true, "tenant_id": 0})
 		return
 	}
+	// 租户分支四段独立保存：基础字段/首页背景/登录卡片位置/登录布局，任一失败即中止返回
 	if err := s.Ten.SetBranding(tid, req.BrandName, req.BrandLogo, req.Domain, req.BrandLinks); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
 		return

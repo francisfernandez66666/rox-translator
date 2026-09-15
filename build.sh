@@ -10,8 +10,8 @@
 #   dist/翻译助手.app/Contents/Resources/frontend/   # 前端静态资源（-frontend 指向）
 #   dist/翻译助手.app/Contents/Info.plist
 #
-# 分发提示：ad-hoc 签名仅限本机运行；对外分发需 Apple Developer ID 签名 + 公证
-# （notarytool），届时替换下方 codesign 参数即可，其余流程不变。
+# 分发提示：ad-hoc 签名仅限本机运行；对外分发设 APPLE_DEVELOPER_ID（及公证所需的
+# APPLE_ID/APPLE_APP_PASSWORD/APPLE_TEAM_ID）即自动走 Developer ID 签名+notarytool 公证+staple。
 # ============================================================================
 
 set -euo pipefail
@@ -87,8 +87,53 @@ wait $SRV
 LAUNCH
 chmod +x "$CONTENTS/MacOS/launcher"
 
-echo "==> [4/4] ad-hoc 签名 ..."
-codesign --force --deep --sign - "$APP" 2>/dev/null || echo "（签名跳过）"
+echo "==> [4/4] 签名/公证 ..."
+# ★ P2（2026-09-15）：可选 Developer ID 签名 + 公证流水线——
+#   缺省（未设环境变量）仍走 ad-hoc 本地签名（内部试用零门槛）；
+#   对外分发时设置：
+#     APPLE_DEVELOPER_ID="Your Name (TEAMID)"   # codesign 身份后缀（钥匙串需含 Developer ID Application 私钥）
+#     APPLE_ID="you@example.com"                # Apple ID（公证账号）
+#     APPLE_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"   # App 专用密码（appleid.apple.com 生成）
+#     APPLE_TEAM_ID="TEAMID"                    # 团队 ID
+#   四者齐备即自动完成：Developer ID 签名（hardened runtime）→ notarytool 公证 → staple 装订。
+#   公证失败绝不静默出未签名包：直接报错退出，防分发「下载能过、Gatekeeper 拦死」的哑包。
+if [ -n "${APPLE_DEVELOPER_ID:-}" ]; then
+  ENT="dist/.app-entitlements.plist"  # ★ 必须放包外：签名后删包内文件会破坏 seal
+  cat > "$ENT" <<'ENT_PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <key>com.apple.security.network.client</key><true/>
+  <key>com.apple.security.network.server</key><true/>
+</dict>
+</plist>
+ENT_PLIST
+  echo "    · Developer ID 签名：$APPLE_DEVELOPER_ID"
+  codesign --force --deep --options runtime --timestamp \
+    --entitlements "$ENT" \
+    --sign "Developer ID Application: $APPLE_DEVELOPER_ID" "$APP"
+  if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+    echo "    · 打包公证暂存 zip（notarytool 不接受 .app 直传）"
+    NOTARY_ZIP="dist/$APP_NAME.notary.zip"
+    ditto -c -k --keepParent "$APP" "$NOTARY_ZIP"
+    echo "    · notarytool 提交公证（异步等待苹果回执，通常 1-5 分钟）..."
+    xcrun notarytool submit "$NOTARY_ZIP" \
+      --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+      --wait
+    rm -f "$NOTARY_ZIP"
+    echo "    · stapler 装订票据（离线首启也免联网验签）"
+    xcrun stapler staple "$APP"
+    xcrun stapler validate "$APP"
+  else
+    echo "    ! 已 Developer ID 签名，但 APPLE_ID/APPLE_APP_PASSWORD/APPLE_TEAM_ID 不齐，跳过公证"
+    echo "      （对外分发必须公证，否则 Gatekeeper 直接拦截下载版）"
+  fi
+  rm -f "$ENT"
+else
+  codesign --force --deep --sign - "$APP" 2>/dev/null || echo "（签名跳过）"
+fi
 
 echo ""
 echo "✅ 完成：$APP"

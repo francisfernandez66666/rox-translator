@@ -7,7 +7,11 @@
 package store
 
 import (
+	"log"
+	"sync"
+	"sync/atomic"
 	"time"
+
 	"translator/internal/db"
 )
 
@@ -35,11 +39,44 @@ func (s *Store) LogAudit(tid, userID int64, action, resource, detail string) {
 // LogAuditDiff 记录审计日志（含结构化前后值，供变更轨迹比对）。
 // 参数：tid/userID=租户与操作者，action=动作，resource=资源，detail=描述，
 // beforeVal=操作前值（JSON），afterVal=操作后值（JSON）。
+// ★ P1 防篡改可观测（2026-09-15，见《P0P2待办核实报告_20260915.md》P1-4）：
+//
+//	写入失败不再静默吞掉——失败计数累加（经 /metrics 暴露
+//	translator_audit_write_failures_total，Prometheus 可对「持续增长」告警），
+//	并按 action 限速打日志（每分钟一条，防 DB 故障时日志风暴）。
+//	审计仍是非阻塞旁路：失败不影响业务主流程（与整改前一致）。
 func (s *Store) LogAuditDiff(tid, userID int64, action, resource, detail, beforeVal, afterVal string) {
-	// 写入审计表；失败静默忽略（审计不应阻塞业务主流程）
-	_, _ = db.Exec(s.db, db.CurrentDialect(),
+	// 写入审计表；失败计数+限速日志（审计不应阻塞业务主流程）
+	if _, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO audit_logs (tenant_id, user_id, action, resource, detail, before_val, after_val, created_at) VALUES (?,?,?,?,?,?,?,?)",
-		tid, userID, action, resource, detail, beforeVal, afterVal, time.Now().Format(time.RFC3339))
+		tid, userID, action, resource, detail, beforeVal, afterVal, time.Now().Format(time.RFC3339)); err != nil {
+		noteAuditWriteFailure(action, err)
+	}
+}
+
+// auditWriteFailures 审计写入失败累计计数（/metrics 暴露，供告警评估）。
+var auditWriteFailures int64
+
+// AuditWriteFailures 返回当前审计写入失败累计数（监控端点读取）。
+func AuditWriteFailures() int64 { return atomic.LoadInt64(&auditWriteFailures) }
+
+// auditFailLogAt 失败日志限速表：action → 最近一次打印时间（每分钟至多一条）。
+var (
+	auditFailLogMu sync.Mutex
+	auditFailLogAt = map[string]time.Time{}
+)
+
+// noteAuditWriteFailure 记录一次审计写入失败：计数累加 + 按 action 限速日志。
+func noteAuditWriteFailure(action string, err error) {
+	atomic.AddInt64(&auditWriteFailures, 1)
+	auditFailLogMu.Lock()
+	defer auditFailLogMu.Unlock()
+	if last, ok := auditFailLogAt[action]; ok && time.Since(last) < time.Minute {
+		return // 同 action 一分钟内仅一条
+	}
+	auditFailLogAt[action] = time.Now()
+	log.Printf("[audit] ⚠️ 审计日志写入失败 action=%s（累计 %d 次，见 /metrics translator_audit_write_failures_total）: %v",
+		action, atomic.LoadInt64(&auditWriteFailures), err)
 }
 
 // ListAuditFilter 查询审计日志（租户隔离；可按动作/资源/用户/时间范围过滤）。

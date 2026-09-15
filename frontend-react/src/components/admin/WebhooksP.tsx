@@ -17,6 +17,7 @@ type Any = Record<string, any>
 
 /** Webhook 回调通知面板 */
 export function WebhooksP() {
+  // ===== 面板状态：Webhook 订阅列表、投递记录抽屉（按订阅懒加载） =====
   const [, t] = useT()
   const [rows, setRows] = useState<Any[]>([])
   const [dlg, setDlg] = useState<null | Any>(null)
@@ -25,6 +26,7 @@ export function WebhooksP() {
   const [deliveries, setDeliveries] = useState<Any[]>([])
   const [deliveryStats, setDeliveryStats] = useState<Any>({})
 
+  // load 拉取 Webhook 订阅列表
   const load = useCallback(async () => {
     const r: Any = await apiWebhooks()
     if (r.success) setRows((r.webhooks as Any[]) || [])

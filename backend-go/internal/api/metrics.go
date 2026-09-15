@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"translator/internal/fileproc"
+	"translator/internal/store"
 )
 
 // ============ 系统级指标收集（Prometheus 文本格式导出） ============
@@ -289,6 +290,11 @@ func (s *Server) metricsText() string {
 			}
 		}
 	}
+
+	// ★ P1 防篡改可观测（2026-09-15）：审计写入失败累计——audit_logs 为普通表，
+	// 写入失败若静默丢失则「谁改了数据无留痕」；计数暴露后 Prometheus 可对增长告警。
+	sb.WriteString("# HELP translator_audit_write_failures_total 审计日志写入失败累计数（>0 且持续增长需排查 DB/磁盘）\n# TYPE translator_audit_write_failures_total counter\n")
+	sb.WriteString(fmt.Sprintf("translator_audit_write_failures_total %d\n", store.AuditWriteFailures()))
 
 	return sb.String()
 }

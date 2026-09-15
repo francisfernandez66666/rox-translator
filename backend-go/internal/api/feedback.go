@@ -205,6 +205,7 @@ func (s *Server) handleFeedbackList(w http.ResponseWriter, r *http.Request) {
 		list []*store.Feedback
 		err  error
 	)
+	// 数据范围分叉：超管看平台全部反馈，其他登录用户仅看本人提交
 	if auth.IsSuperAdmin(u) {
 		list, err = s.Store.ListFeedbacks(status)
 	} else {
@@ -217,6 +218,7 @@ func (s *Server) handleFeedbackList(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []*store.Feedback{}
 	}
+	// 预收集提交者集合，按 (user,tenant) 去重查显示名（避免逐条重复查询）
 	nameOf := map[int64]string{}
 	tidOf := map[int64]int64{}
 	for _, f := range list {
@@ -228,6 +230,7 @@ func (s *Server) handleFeedbackList(w http.ResponseWriter, r *http.Request) {
 			nameOf[uid] = usr.DisplayName
 		}
 	}
+	// 组装响应行：WithContext=false 时脱敏 source_text/translations，仅回反馈正文与线程
 	out := make([]map[string]interface{}, 0, len(list))
 	for _, f := range list {
 		srcCtx := ""
@@ -272,6 +275,7 @@ func (s *Server) handleFeedbackReply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请填写回复内容"})
 		return
 	}
+	// 载入反馈并做回复闸口：仅超管或提交者本人可复；resolved 后线程封存
 	f, err := s.Store.GetFeedback(req.ID)
 	if err != nil || f == nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "反馈不存在"})

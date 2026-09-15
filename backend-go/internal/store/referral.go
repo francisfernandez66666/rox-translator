@@ -279,6 +279,9 @@ func (s *Store) RewardPaidPermanent(inviteeUID, tokens, days int64) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	// ★ P1 多实例闭环：邀请人一级付费奖励到账，通知影子失效
+	//   （限时台账分支已由 createQuotaGrantTx 钩子覆盖，此处补永久余额分支的确定性通知）
+	notifyTenantBalanceChanged(inviterTID)
 	// ★ H9 二级返佣（限 2 级防合规风险）：一级发放成功后按分成比例自动结算推荐人；
 	//   幂等沿用 referral_rewards (invitee_uid,type) 唯一占用模式。
 	s.rewardSecondLevel(inviteeUID, inviterUID, email, tokens, days)
@@ -353,6 +356,9 @@ func (s *Store) rewardSecondLevel(inviteeUID, l1UID int64, email string, tokens,
 	}
 	if err := tx.Commit(); err != nil {
 		log.Printf("[referral-l2] commit: %v", err)
+	} else {
+		// ★ P1 多实例闭环：二级返佣到账通知影子失效（限时分支由 createQuotaGrantTx 钩子覆盖）
+		notifyTenantBalanceChanged(l2TID)
 	}
 }
 

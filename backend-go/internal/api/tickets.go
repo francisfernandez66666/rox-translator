@@ -263,6 +263,7 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 	dir := filepath.Join(s.Cfg.UploadDir, "tickets")
 	_ = os.MkdirAll(dir, 0o755)
 	saved := make([]struct{ path, name string }, 0, len(headers))
+	// 逐附件落盘为 纳秒时间戳_原名（防重名覆盖），任一步失败即整体 500 中止
 	for _, hdr := range headers {
 		saveName := fmt.Sprintf("%d_%s", time.Now().UnixNano(), filepath.Base(hdr.Filename))
 		savePath := filepath.Join(dir, saveName)
@@ -448,6 +449,7 @@ func ticketProgressPct(t *store.Ticket, states []*store.TicketState, files []*st
 		return 5
 	}
 	pct := 5
+	// 步骤锚点表（多别名归一）：提取20 → 初翻40 → 校对60 → 回写80
 	W := map[string]int{
 		"upload": 20, "file_extract": 20, "extract": 20,
 		"translate": 40, "file_translate": 40, "init_translation": 40,
@@ -472,6 +474,7 @@ func ticketProgressPct(t *store.Ticket, states []*store.TicketState, files []*st
 			}
 		}
 	}
+	// 任一文件已出产物/报错即视为回写完成（进度保底 80%）
 	for _, f := range files {
 		if f.ResultPath != "" || f.Error != "" {
 			if pct < 80 {
@@ -541,6 +544,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不存在"})
 		return
 	}
+	// 校验链：仅创建者/超管可下载，且须已完成工单
 	if t.CreatedBy != u.ID && !auth.IsSuperAdmin(u) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权下载他人工单结果"})
 		return
@@ -597,6 +601,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// 多产物：逐份读入写 zip 条目（单份读失败跳过，不阻断整包）
 		if len(paths) > 1 {
 			w.Header().Set("Content-Disposition", `attachment; filename="`+baseName+`.zip"`)
 			w.Header().Set("Content-Type", "application/zip")
@@ -828,6 +833,7 @@ func applyApprovedTextOverride(finalResult, approvedText string) string {
 	if json.Unmarshal([]byte(finalResult), &p) != nil || len(p.Translations) == 0 {
 		return ""
 	}
+	// 定位语言：先按译文全文相等命中；命中不了且载荷仅一个语言时直接认定该语言
 	hit := ""
 	for lc, v := range p.Translations {
 		if v == approvedText {
@@ -843,6 +849,7 @@ func applyApprovedTextOverride(finalResult, approvedText string) string {
 	if hit == "" {
 		return ""
 	}
+	// 命中后覆盖对应语言译文并把 sources 标为 approved，整体重组 payload 返回
 	p.Translations[hit] = approvedText
 	if p.Sources == nil {
 		p.Sources = map[string]string{}
@@ -940,6 +947,7 @@ func (s *Server) serveTicketTextDeliverable(w http.ResponseWriter, r *http.Reque
 		s.serveOneFile(w, r, paths[0], names[0])
 		return
 	}
+	// 多份纯文案产物打 zip 下载（单份读失败跳过不阻断整包）
 	w.Header().Set("Content-Disposition", `attachment; filename="`+baseName+"_texts.zip"+`"`)
 	w.Header().Set("Content-Type", "application/zip")
 	zw := zip.NewWriter(w)
@@ -991,6 +999,7 @@ func (s *Server) handleTicketDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
+	// 校验链：登录 → body id 合法 → 工单存在 → 仅创建者/超管 → 进行中/排队中禁删
 	var req struct {
 		ID int64 `json:"id"`
 	}
@@ -1007,6 +1016,7 @@ func (s *Server) handleTicketDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权删除他人工单"})
 		return
 	}
+	// 删除状态闸口：排队/翻译中禁删（避免 worker 写回已删工单），完成/取消才可删
 	if t.Status == store.TicketInProgress || t.Status == store.TicketQueued {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "工单正在翻译中，无法删除"})
 		return
@@ -1043,6 +1053,7 @@ func (s *Server) handleTicketCancel(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权取消他人工单"})
 		return
 	}
+	// 取消闸口：仅创建者/超管，且状态必须是排队中/翻译中
 	if t.Status != store.TicketQueued && t.Status != store.TicketInProgress {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "当前状态不可取消（仅排队中/翻译中）"})
 		return

@@ -61,6 +61,7 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 解析 body 并做入参校验：code/name 必填、ptype 白名单（缺省 paid）、sentences/points 至少一项为正
 	var req struct {
 		TenantID     int64   `json:"tenant_id"`     // 租户 ID（可选，默认 0=平台）
 		Code         string  `json:"code"`          // 包编码（唯一，必填）
@@ -76,6 +77,7 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code/name 不能为空"})
 		return
 	}
+	// ptype 缺省补 paid，随后白名单校验（仅 free/paid/increment）
 	if req.PType == "" {
 		req.PType = store.PackagePaid
 	}
@@ -83,6 +85,7 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "ptype 仅支持 free/paid/increment"})
 		return
 	}
+	// sentences/points 双口径：至少一项为正（★S1 起新包主推 points 积分面值）
 	if req.Sentences <= 0 && req.Points <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "sentences 与 points 至少一项大于 0（积分包填 points）"})
 		return
@@ -141,11 +144,13 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
+	// 读当前包全量字段做基底，逐字段增量覆盖（指针字段 nil=不修改），最后整行写回
 	cur, err := s.Store.GetPackage(req.ID)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "包不存在"})
 		return
 	}
+	// 增量覆盖：仅修改显式传入的字段；ptype 重新白名单校验、points 拒绝负值（nil=不动）
 	if req.TenantID != nil {
 		cur.TenantID = *req.TenantID
 	}
@@ -191,6 +196,7 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 	if req.SortOrder != nil {
 		cur.SortOrder = *req.SortOrder
 	}
+	// 合并完成后整行落库并记 package_update 审计（cur 为原记录+增量字段的合成值）
 	if err := s.Store.UpdatePackage(cur); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -242,6 +248,9 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 		"captcha_site_key":     getCfg("captcha_site_key"),
 		"wecom_webhook_url":    getCfg("wecom_webhook_url"),
 		"dingtalk_webhook_url": getCfg("dingtalk_webhook_url"),
+		// ★ P2 国际化渠道（2026-09-15）：Slack / Teams 群机器人（bot.go 统一消费）
+		"slack_webhook_url": getCfg("slack_webhook_url"),
+		"teams_webhook_url": getCfg("teams_webhook_url"),
 		// ★ Token 实费参数（四期）：均摊系数与句↔token 换算率
 		"billing_markup_multiplier":    markup,
 		"estimate_tokens_per_sentence": tokenRate,
@@ -288,6 +297,8 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		CaptchaSiteKey         *string `json:"captcha_site_key"`         // Turnstile 站点 key（公开下发）
 		CaptchaSecretKey       *string `json:"captcha_secret_key"`       // Turnstile 服务端密钥（只写）
 		WecomWebhookURL        *string `json:"wecom_webhook_url"`        // 企业微信群机器人地址
+		SlackWebhookURL        *string `json:"slack_webhook_url"`        // ★ P2：Slack Incoming Webhook 地址（hooks.slack.com/services/…）
+		TeamsWebhookURL        *string `json:"teams_webhook_url"`        // ★ P2：Teams/M365 连接器 Incoming Webhook 地址
 		DisposableEmailDomains *string `json:"disposable_email_domains"` // ★ S3 防薅：一次性邮箱域增补黑名单（逗号分隔，叠加内置表）
 		DingtalkWebhookURL     *string `json:"dingtalk_webhook_url"`     // 钉钉群机器人地址
 	}
@@ -337,6 +348,8 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		{"wecom_webhook_url", req.WecomWebhookURL},
 		{"disposable_email_domains", req.DisposableEmailDomains},
 		{"dingtalk_webhook_url", req.DingtalkWebhookURL},
+		{"slack_webhook_url", req.SlackWebhookURL},
+		{"teams_webhook_url", req.TeamsWebhookURL},
 	}
 	for _, kv := range cfgKeys {
 		if kv.val != nil {
@@ -344,6 +357,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		}
 	}
 	// ★ 计费参数（Token 实费体系）：均摊系数与换算率，超管可调
+	// 四个参数各自范围校验后以字符串值进 pending 暂存区，循环外统一落库（见下）
 	if req.MarkupMultiplier != nil {
 		if *req.MarkupMultiplier < 1.0 {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "均摊系数不能小于 1.0"})
@@ -365,6 +379,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		}
 		add("points_tokens_rate", strconv.FormatInt(*req.PointsTokensRate, 10))
 	}
+	// 敏感词闸门开关：仅接受 "0"/"1" 字符串（前端开关态直传）
 	if req.SensitiveGate != nil {
 		if *req.SensitiveGate != "0" && *req.SensitiveGate != "1" {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": `sensitive_gate_enabled 仅支持 "0"/"1"`})

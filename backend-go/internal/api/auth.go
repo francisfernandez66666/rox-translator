@@ -238,6 +238,7 @@ func (s *Server) handleMeContext(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
+	// 按登录归属逐级补齐展示字段：部门名（GetOrgByID）→ 租户名/个人账号/邀请开关（Ten.GetByID，查询失败留空不阻断）
 	orgName := ""
 	if u.OrgID > 0 {
 		if o, e := s.Store.GetOrgByID(u.OrgID); e == nil {
@@ -254,6 +255,7 @@ func (s *Server) handleMeContext(w http.ResponseWriter, r *http.Request) {
 			inviteEnabled = t.InviteEnabled
 		}
 	}
+	// 查询所属租户可应用 KB 包（前端导航门控用）后一次性组装返回
 	packs, _ := s.Store.ListApplicablePacks(u.TenantID)
 	writeJSON(w, 200, map[string]interface{}{
 		"success":        true,
@@ -958,6 +960,7 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// 删除闸口：非超管不得删超管；部门管理员限同租户且目标账号在本部门子树内
 	if auth.IsSuperAdmin(target) && !auth.IsSuperAdmin(u) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：不能操作超级管理员"})
 		return

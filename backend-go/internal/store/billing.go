@@ -57,7 +57,10 @@ type UsageLedger struct {
 	Cost      int64  `json:"cost"`       // 本笔总费用（扣减 token 数）
 	BizKind   string `json:"biz_kind"`   // 业务形态：text=文本翻译 / file=文件翻译（空=历史数据）
 	BizMode   string `json:"biz_mode"`   // 翻译模式：fast=快速 / pro=专业校对（空=历史数据）
-	CreatedAt string `json:"created_at"` // 用量发生时间（RFC3339 字符串）
+	// ChargeKind 计费语义（''=实扣旧数据 / charge=实扣 / free=策略免扣 / settle=欠费结算调整留痕）
+	// ★ P1-2 修复（2026-09-14）台账已有列；此处仅列表结构补映射，供报表导出区分「真实消耗 vs 调整」。
+	ChargeKind string `json:"charge_kind,omitempty"`
+	CreatedAt  string `json:"created_at"` // 用量发生时间（RFC3339 字符串）
 }
 
 // RateCard 单价表
@@ -152,6 +155,10 @@ func (s *Store) Charge(tid int64, tokens int64) error {
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE balance_accounts SET balance=balance+?, updated_at=? WHERE tenant_id=?",
 		tokens, time.Now().Format(time.RFC3339), tid)
+	if err == nil {
+		// ★ P1 多实例闭环：充值入账后通知影子余额失效（本进程清缓存 + Redis 广播他实例）
+		notifyTenantBalanceChanged(tid)
+	}
 	return err
 }
 
@@ -193,12 +200,14 @@ var ErrSettleNotNeeded = errors.New("欠费复核不成立：余额足够覆盖�
 // 修复前缺陷：两条 UPDATE 无差别清零全部 quota_grants（含付费 kind='plan'）与永久余额，
 // 且「复核通过 → 清零」跨事务存在 TOCTOU，并发扣减可使复核说够、实际已空被误清零。
 // 修复后语义：
-//   ① 事务内权威复核（与清零同事务，SQLite _txlock=immediate / PG 行锁天然串行）：
-//      双桶可用量 ≥ owed → 返回 ErrSettleNotNeeded（瞬态误报，调用方回插重试）；
-//   ② 有界清零：消耗总量不超过 owed（正常路径 avail<owed → 全清亦不超欠），逐行取走
-//      并按「试用/临期优先 → 付费 plan → 永久余额兜底」的顺序消费；
-//   ③ 调整流水：实际消耗量落 usage_ledger（charge_kind='settle'），清零可审计可追偿，
-//      不再是「无痕归零」。
+//
+//	① 事务内权威复核（与清零同事务，SQLite _txlock=immediate / PG 行锁天然串行）：
+//	   双桶可用量 ≥ owed → 返回 ErrSettleNotNeeded（瞬态误报，调用方回插重试）；
+//	② 有界清零：消耗总量不超过 owed（正常路径 avail<owed → 全清亦不超欠），逐行取走
+//	   并按「试用/临期优先 → 付费 plan → 永久余额兜底」的顺序消费；
+//	③ 调整流水：实际消耗量落 usage_ledger（charge_kind='settle'），清零可审计可追偿，
+//	   不再是「无痕归零」。
+//
 // 返回：实际消耗 token 量与错误。
 func (s *Store) SettleExhausted(tid int64, owed int64) (int64, error) {
 	if owed < 0 {
@@ -259,7 +268,7 @@ func (s *Store) SettleExhausted(tid int64, owed int64) (int64, error) {
 		if take > owed-consumed {
 			take = owed - consumed
 		}
-			if _, err := db.Exec(tx, d, `UPDATE quota_grants SET "left"=? WHERE id=?`,
+		if _, err := db.Exec(tx, d, `UPDATE quota_grants SET "left"=? WHERE id=?`,
 			g.left-take, g.id); err != nil {
 			return 0, err
 		}
@@ -293,7 +302,13 @@ func (s *Store) SettleExhausted(tid int64, owed int64) (int64, error) {
 			return 0, err
 		}
 	}
-	return consumed, tx.Commit()
+	// ★ P1 多实例闭环：欠费清零成功后通知影子失效（影子随后回读到近零真值，
+	//   避免他实例影子停留在清零前的旧余额继续放行消费）
+	if cerr := tx.Commit(); cerr != nil {
+		return consumed, cerr
+	}
+	notifyTenantBalanceChanged(tid)
+	return consumed, nil
 }
 
 // ============ 用量 ============
@@ -682,6 +697,44 @@ func (s *Store) UsageLedgerList(tid int64, limit, offset int) ([]*UsageLedger, e
 		var u UsageLedger
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.UserID, &u.TaskType, &u.Provider, &u.Model, &u.Quantity, &u.UnitPrice, &u.Cost, &u.BizKind, &u.BizMode, &u.CreatedAt); err != nil {
 			continue // 单行解析失败跳过
+		}
+		out = append(out, &u)
+	}
+	return out, nil
+}
+
+// UsageLedgerForExport 用量明细导出查询（★ P2 报表导出 2026-09-15）：
+// 按时间范围（含边界，空串=不限）过滤，供 CSV 报表使用；单查询最大 limit 行（上限 10 万，
+// 超出部分按 id 倒序截断最新段——报表面向「近期用量导出」场景，历史全量走 GDPR 导出）。
+// 时间口径：usage_ledger.created_at 统一 UTC RFC3339（★ C22 写点约定），
+// 故 from/to 按前缀字典序比较即可（from=YYYY-MM-DD 补 00:00:00，to 补 23:59:59）。
+// 参数：tid=租户；from/to=日期字符串（可空）；limit=最大行数。
+func (s *Store) UsageLedgerForExport(tid int64, from, to string, limit int) ([]*UsageLedger, error) {
+	if limit <= 0 || limit > 100000 {
+		limit = 100000 // 导出行数硬上限（防拖库式全量拉取放大内存/IO）
+	}
+	q := "SELECT id, tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, COALESCE(biz_kind,''), COALESCE(biz_mode,''), COALESCE(charge_kind,''), created_at FROM usage_ledger WHERE tenant_id=?"
+	args := []interface{}{tid}
+	if from != "" {
+		q += " AND created_at>=?"
+		args = append(args, from+"T00:00:00")
+	}
+	if to != "" {
+		q += " AND created_at<=?"
+		args = append(args, to+"T23:59:59Z")
+	}
+	q += " ORDER BY id DESC LIMIT ?"
+	args = append(args, limit)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*UsageLedger
+	for rows.Next() {
+		var u UsageLedger
+		if err := rows.Scan(&u.ID, &u.TenantID, &u.UserID, &u.TaskType, &u.Provider, &u.Model, &u.Quantity, &u.UnitPrice, &u.Cost, &u.BizKind, &u.BizMode, &u.ChargeKind, &u.CreatedAt); err != nil {
+			continue // 单行解析失败跳过（与列表查询同口径）
 		}
 		out = append(out, &u)
 	}
@@ -1197,6 +1250,11 @@ func chargePermanentTx(tx *sql.Tx, tid int64, tokens int64) error {
 	_, err := db.Exec(tx, db.CurrentDialect(),
 		"UPDATE balance_accounts SET balance=balance+?, updated_at=? WHERE tenant_id=?",
 		tokens, time.Now().Format(time.RFC3339), tid)
+	if err == nil {
+		// ★ P1 多实例闭环：永久余额入账通知影子失效（事务回滚时多通知一次仅多一次
+		//   DB 回读，无正确性风险；漏通知由影子 TTL(5s) 自愈兜底，见 balancehook.go）
+		notifyTenantBalanceChanged(tid)
+	}
 	return err
 }
 
@@ -1206,6 +1264,10 @@ func createQuotaGrantTx(tx db.Execer, tid int64, kind string, total int64, expir
 		"INSERT INTO quota_grants (tenant_id, kind, total, \"left\", expires_at, source, ref_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
 		// ★ C22：created_at 同样 UTC（与 CreateQuotaGrant 一致）
 		tid, kind, total, total, expires.UTC().Format(time.RFC3339), source, refID, time.Now().UTC().Format(time.RFC3339))
+	if err == nil {
+		// ★ P1 多实例闭环：台账发放（trial/plan/增量）通知影子失效
+		notifyTenantBalanceChanged(tid)
+	}
 	return err
 }
 
@@ -1744,6 +1806,9 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	} else {
 		s.CreateAlert(tid, "info", "refund_revoke", summary)
 	}
+	// ★ P1 多实例闭环：退款收回权益后通知影子失效（本租户 + 买家的双桶均已变动；
+	//   邀请人奖励回收部分若遗漏通知，由其影子 TTL(5s) 自愈兜底）
+	notifyTenantBalanceChanged(tid)
 	return nil
 }
 

@@ -240,6 +240,7 @@ var Flags = map[string]string{
 
 // Default 返回默认配置（密钥一律从环境变量读取，未配置时生成随机临时值并告警）
 func Default() *Config {
+	// 代码级默认值集中定义（字段区不可内插）：供应商端点/模型、熔断与采样阈值、相似度与 CORS 白名单
 	c := &Config{
 		OnlineAPIBase:          "https://api.siliconflow.cn/v1",
 		OnlineAPIKey:           os.Getenv("SILICONFLOW_API_KEY"),
@@ -294,6 +295,7 @@ func Default() *Config {
 		c.AdminToken = randHex(24)
 		log.Println("[config] 警告: 未配置 ADMIN_TOKEN，已生成随机管理凭证（回调校验将无法通过）")
 	}
+	// 环境变量逐项覆盖：CORS 允许来源（逗号分隔，空项剔除），未配置保留本地开发默认
 	if v := os.Getenv("CORS_ALLOWED_ORIGINS"); v != "" {
 		// 逗号分隔的来源列表；空项剔除
 		var origins []string
@@ -304,6 +306,7 @@ func Default() *Config {
 		}
 		c.CORSOrigins = origins
 	}
+	// API 端点/密钥/模型名环境变量覆盖（ONLINE_MODEL 同步改主模型与 Hunyuan 模型）
 	if v := os.Getenv("ONLINE_API_BASE"); v != "" {
 		c.OnlineAPIBase = v
 	}
@@ -320,6 +323,7 @@ func Default() *Config {
 		c.OnlineModel = v
 		c.HunyuanMTModel = v
 	}
+	// 数据目录与派生路径：UserDataDir 缺省回退用户应用支持目录，随后拼出词表/DB/索引/上传/输出路径
 	if v := os.Getenv("USER_DATA_DIR"); v != "" {
 		c.UserDataDir = v
 	}

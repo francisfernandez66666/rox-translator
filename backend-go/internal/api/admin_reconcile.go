@@ -49,6 +49,7 @@ func (s *Server) handleAdminReconcile(w http.ResponseWriter, r *http.Request) {
 		ordByID[o.ID] = &ReconOrderLite{Status: o.Status, Tokens: o.AmountTokens}
 	}
 	// R1/R3/R4：逐订单
+	// 逐订单两段式：①统计其 paid/refunded 流水数并核对每笔 paid 金额（分）；②按订单终态核对流水完整性（见下）
 	for _, o := range orders {
 		var paidRows, refundRows int
 		for _, idx := range byOrder[o.ID] {
@@ -76,6 +77,7 @@ func (s *Server) handleAdminReconcile(w http.ResponseWriter, r *http.Request) {
 				refundRows++
 			}
 		}
+		// 终态核对：paid 须有 paid 流水且无退款行、refunded 须有冲正行、cancelled 不得残留支付行
 		switch o.Status {
 		case "paid":
 			if paidRows == 0 {

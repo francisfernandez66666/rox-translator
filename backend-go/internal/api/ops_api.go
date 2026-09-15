@@ -43,6 +43,7 @@ func (s *Server) opsTenantPolicy(tid int64) ops.OperationsPolicy {
 
 // applyLegacyConfig 存量散键兜底（零感知兼容）：策略未配置时回落既有 system_config 行为。
 func (s *Server) applyLegacyConfig(eff *ops.EffectivePolicy) {
+	// 计费侧散键兜底：强制计费开关、加价倍率、试用 token 数/天数（仅存量键有效且数值合法才覆盖）
 	if v, _ := s.Store.GetConfig("billing_enforced"); v == "0" {
 		eff.Enforced = false
 	}
@@ -61,6 +62,7 @@ func (s *Server) applyLegacyConfig(eff *ops.EffectivePolicy) {
 			eff.Package.TrialDays = int(x)
 		}
 	}
+	// 邀请散键兜底：开关、被邀人奖励 token/天数、日奖励上限
 	if v, _ := s.Store.GetConfig("referral_enabled"); v == "0" {
 		eff.Invite.Enabled = false
 	}
@@ -91,6 +93,7 @@ func (s *Server) applyLegacyConfig(eff *ops.EffectivePolicy) {
 			eff.Invite.PaidRewardDays = int(x)
 		}
 	}
+	// 注册与配额/支付散键兜底：注册开关、邮箱验证、QPS/并发上限、pay_mode、自动扣费
 	if v, _ := s.Store.GetConfig("registration_enabled"); v == "0" {
 		eff.Registration.Enabled = false
 	}
@@ -189,6 +192,7 @@ func (s *Server) handleOpsPolicy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 一次返回四层视图：平台/租户策略原文、基础有效、最终有效 + 各促销窗口激活标记（面板回显用）
 	super := auth.IsSuperAdmin(u)
 	tid := s.effTenant(r, u)
 	plat := s.opsPlatformPolicy()

@@ -185,6 +185,7 @@ func (s *Server) handleMemLeakLog(w http.ResponseWriter, r *http.Request) {
 			lines = n
 		}
 	}
+	// 读泄漏日志尾部 N 行（越界夹回默认 30）；文件缺失时返回空文本不报错
 	data, err := os.ReadFile(filepath.Join(dir, "memleak.log"))
 	logText := ""
 	if err == nil {

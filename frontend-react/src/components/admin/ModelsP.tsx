@@ -29,6 +29,7 @@ const providerPresets: Record<string, { api_base: string; model: string }> = {
 
 /** 模型配置面板 */
 export function ModelsP() {
+  // ===== 面板状态：主模型/embedding/路由表/分阶段配置（各表单独立，保存时只提交变更块） =====
   const [, t, tpl] = useT()
   const { activeTenantId } = useAdmin()
   const [mForm, setMForm] = useState<Any>({ api_base: '', api_key: '', model: '' })
@@ -47,6 +48,7 @@ export function ModelsP() {
     { key: 'review_evals', title: t('models.s5ReviewEvals'), hint: t('models.s5ReviewEvalsHint') },
   ]
 
+  // loadModels 拉取主模型/embedding/多供应商路由（密钥只回掩码，不回明文）
   const loadModels = useCallback(async () => {
     const r = await adminModels()
     if (r.success) {
@@ -57,10 +59,12 @@ export function ModelsP() {
       setKeyState({ translation: !!(d.model && d.model.set), embedding: !!(d.embedding && d.embedding.set), embeddingMasked: (d.embedding?.masked as string) || '', embeddingBase: (d.embedding?.api_base as string) || '' })
     }
   }, [])
+  // loadPolicy 拉取模型调度策略（熔断阈值/采样/兜底链）
   const loadPolicy = useCallback(async () => {
     const r = await adminPolicy()
     if (r.success) setPForm2((r as unknown as { policy?: Any }).policy || {})
   }, [])
+  // loadStages 拉取分阶段模型（初翻/校对/Judge 各自模型）并回填表单
   const loadStages = useCallback(async () => {
     const r = await stageModels()
     if (r.success) {
@@ -73,6 +77,7 @@ export function ModelsP() {
       setStForm(nf)
     }
   }, [])
+  // loadAll 模型面板整体刷新：策略 → 模型 → 阶段（有依赖顺序，避免表单互相覆盖）
   const loadAll = useCallback(async () => { await loadPolicy(); await loadModels(); await loadStages() }, [loadPolicy, loadModels, loadStages])
   useEffect(() => { void loadAll() }, [activeTenantId, loadAll])
 

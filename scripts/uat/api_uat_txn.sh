@@ -770,7 +770,10 @@ TD37=$(tok t37_dept uatpass123); HD37="Authorization: Bearer $TD37"
 ck T37-dept-login-ok '^.{20,}$' "$TD37"
 MEM37ID=$(sq "SELECT id FROM users WHERE username='t37_member'" | tr -d '[:space:]')
 # 子树内正常授权不被误伤：部门管理员重置本部门成员密码仍应成功（防修过头）
-ck T37-subtree-still-ok '"success": *true' "$(post "$HD37" "{\"id\":$MEM37ID,\"password\":\"DeptOk@37x\"}" /api/admin/users/reset-password)"
+# ★ T37-UAT 脚本修复（2026-09-15）：body 先落变量再传 post —— 内联 \" 转义串在
+#   ck "$(...)" 双层命令替换下偶发解析漂移导致 400「请求格式错误」，非产品缺陷。
+T37BODY="{\"id\":$MEM37ID,\"password\":\"DeptOk@37x\"}"
+ck T37-subtree-still-ok '"success": *true' "$(post "$HD37" "$T37BODY" /api/admin/users/reset-password)"
 # 核心断言：org_id=0 的租户管理员，部门管理员重置/停用必须 403
 TA37ID=$(sq "SELECT id FROM users WHERE username='t37_ta'" | tr -d '[:space:]')
 R37=$(post "$HD37" "{\"id\":$TA37ID,\"password\":\"Hijack@37x\"}" /api/admin/users/reset-password)
@@ -819,6 +822,108 @@ ck T37-charge-kind-enum '^0$' "$CK37"
 CH37=$(sq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=$TAID" | tr -d '[:space:]')
 CKC37=$(sq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=$TAID AND charge_kind IN ('','charge','settle','log')" | tr -d '[:space:]')
 [ "$CH37" = "$CKC37" ] && [ "${CH37:-0}" -gt 0 ] && { PASS=$((PASS+1)); echo "PASS|T37-charge-kind-covered"; } || { FAIL=$((FAIL+1)); echo "FAIL|T37-charge-kind-covered($CKC37/$CH37)"; }
+
+# ---------- T38 ★ 用量明细 CSV 导出（2026-09-15 P2 报表导出，见《P0P2待办核实报告_20260915.md》P2-2） ----------
+# 契约：/api/billing/usage?export=csv —— 鉴权/租户隔离与 JSON 口径一致；
+# 非超管脱敏供应商/模型并应用展示系数；超管见真实 provider；from/to 日期区间过滤。
+CSVH=$(mktemp); CSVB=$(mktemp)
+curl -s -D "$CSVH" -o "$CSVB" "$B/api/billing/usage?export=csv" -H "$H1"
+ck T38-ctype-csv 'text/csv' "$(cat "$CSVH")"
+ck T38-disposition-attachment 'attachment; filename=usage_' "$(cat "$CSVH")"
+ck T38-header-cols 'charge_kind,created_at' "$(head -1 "$CSVB")"
+# 数据行数>0（本脚本前序用例已产生实扣流水）
+CSVN=$(( $(wc -l < "$CSVB") - 1 ))
+[ "$CSVN" -gt 0 ] && { PASS=$((PASS+1)); echo "PASS|T38-rows-nonempty"; } || { FAIL=$((FAIL+1)); echo "FAIL|T38-rows-nonempty($CSVN)"; }
+# 非超管：每行 provider/model（第5/6列）必须为 '*' 脱敏
+CSVMASK=$(awk -F, 'NR>1 && $5!="*" {print $5; exit}' "$CSVB")
+[ -z "$CSVMASK" ] && { PASS=$((PASS+1)); echo "PASS|T38-mask-nonadmin"; } || { FAIL=$((FAIL+1)); echo "FAIL|T38-mask-nonadmin($CSVMASK)"; }
+# 日期区间：远古区间应只剩表头（0 数据行）
+CSV0=$(curl -s "$B/api/billing/usage?export=csv&from=2000-01-01&to=2000-01-02" -H "$H1" | wc -l | tr -d '[:space:]')
+[ "$CSV0" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T38-range-empty"; } || { FAIL=$((FAIL+1)); echo "FAIL|T38-range-empty($CSV0)"; }
+# 超管（X-Tenant-ID 切换）：provider 不脱敏，至少一行第5列非 '*'
+CSVS=$(mktemp)
+curl -s -o "$CSVS" "$B/api/billing/usage?export=csv" -H "$AH" -H "X-Tenant-ID: $TAID"
+if awk -F, 'NR>1 && $5!="*" {found=1} END{exit !found}' "$CSVS"; then
+  PASS=$((PASS+1)); echo "PASS|T38-super-real-provider"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T38-super-real-provider"
+fi
+# 未登录不得返回 CSV（鉴权失败走 JSON 错误响应，绝不流式下载）
+CSV401=$(curl -s -i "$B/api/billing/usage?export=csv" | head -6)
+if echo "$CSV401" | grep -q "text/csv"; then FAIL=$((FAIL+1)); echo "FAIL|T38-unauth-not-csv"; else PASS=$((PASS+1)); echo "PASS|T38-unauth-not-csv"; fi
+rm -f "$CSVH" "$CSVB" "$CSVS"
+
+# ---------- T39 ★ 多语言文件任务 zip 打包下载（2026-09-15 P2，OpenAPI 面唯一的多语言打包入口） ----------
+# 契约（按产品实际设计）：单文件工单=1 行 ticket_file，多语言产物在工单服务层
+# zipOutputs 预打包为 <file>_translated.zip 存 result_path（download 直取该 zip）；
+# 多文件工单才有每文件一行、download 端 zip 汇总。语言覆盖以 zip 条目名（_en/_ja）为准。
+TMPD39=$(mktemp -d)
+python3 - "$TMPD39/t39.docx" <<'EOF'
+import sys, zipfile
+zf = zipfile.ZipFile(sys.argv[1],'w')
+zf.writestr('[Content_Types].xml','''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>''')
+zf.writestr('_rels/.rels','''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>''')
+zf.writestr('word/document.xml','''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body><w:p><w:r><w:t>多语言打包回归第一段：天空是蓝色的。</w:t></w:r></w:p>
+<w:p><w:r><w:t>多语言打包回归第二段：书籍是人类进步的阶梯。</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>''')
+zf.close()
+EOF
+R=$(curl -s $B/openapi/v1/tasks -H "Authorization: Bearer $AK" -F "files=@$TMPD39/t39.docx" -F "target_langs=en,ja" -F "mode=fast" --max-time 60)
+TASK39=$(printf '%s' "$R" | python3 -c 'import sys,json
+try: print(json.load(sys.stdin).get("task_id",""))
+except Exception: print("")')
+[ -n "$TASK39" ] && { PASS=$((PASS+1)); echo "PASS|T39-created"; } || { FAIL=$((FAIL+1)); echo "FAIL|T39-created($R)"; }
+# 轮询走 OpenAPI status（与 T5 同法；API 建单 CreatedBy=0，避免依赖内部 detail 可见性）。
+# 注：工单置 completed 与各产物行 result_ready 落库存在毫秒级窗口，联合等待两者齐备再退出，
+#     否则会对「刚 completed 的瞬间快照」误报（2026-09-15 首轮 PG 矩阵实测命中该竞态）。
+ST39=""
+for i in $(seq 1 60); do
+  STAT39=$(curl -s "$B/openapi/v1/tasks/status?id=$TASK39" -H "Authorization: Bearer $AK" --max-time 30)
+  PARSE39=$(printf '%s' "$STAT39" | python3 -c 'import sys,json
+try:
+    d = json.load(sys.stdin)
+    print(d.get("status",""), sum(1 for f in d.get("files", []) if f.get("result_ready")))
+except Exception:
+    print("", 0)')
+  ST39=$(echo "$PARSE39" | awk '{print $1}'); N39=$(echo "$PARSE39" | awk '{print $2}')
+  case "$ST39" in completed|failed) break;; esac
+  sleep 2
+done
+ck T39-completed '^completed$' "$ST39"
+# OpenAPI 出参：ticket_file 行已就绪（单文件工单=1 行，多语言在行内预打包）
+N39=$(printf '%s' "$STAT39" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print(sum(1 for f in d.get("files",[]) if f.get("result_ready")))')
+[ "${N39:-0}" -ge 1 ] && { PASS=$((PASS+1)); echo "PASS|T39-artifact-ready"; } || { FAIL=$((FAIL+1)); echo "FAIL|T39-artifact-ready($N39|${STAT39:0:260})"; }
+# zip 打包下载：PK 魔数 + 条目≥2 + 含 en/ja 语言码文件名
+ZIP39H=$(mktemp); ZIP39=$(mktemp)
+curl -s -D "$ZIP39H" -o "$ZIP39" "$B/openapi/v1/tasks/download?id=$TASK39" -H "Authorization: Bearer $AK" --max-time 60
+ck T39-zip-ctype 'application/zip' "$(cat "$ZIP39H")"
+ZINFO=$(python3 - "$ZIP39" <<'EOF'
+import sys, zipfile
+try:
+    z = zipfile.ZipFile(sys.argv[1])
+    names = z.namelist()
+    print(f"{len(names)}|{'Y' if any('_en' in n for n in names) else 'N'}|{'Y' if any('_ja' in n for n in names) else 'N'}")
+except Exception as e:
+    print(f"0|N|N")
+EOF
+)
+ZC39="${ZINFO%%|*}"; ZEN39=$(echo "$ZINFO" | cut -d'|' -f2); ZJA39=$(echo "$ZINFO" | cut -d'|' -f3)
+[ "${ZC39:-0}" -ge 2 ] && { PASS=$((PASS+1)); echo "PASS|T39-zip-entries"; } || { FAIL=$((FAIL+1)); echo "FAIL|T39-zip-entries($ZINFO)"; }
+ck T39-zip-has-en '\|Y\|' "|$ZEN39|"
+ck T39-zip-has-ja 'Y$' "$ZJA39"
+rm -f "$ZIP39H" "$ZIP39"; rm -rf "$TMPD39"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

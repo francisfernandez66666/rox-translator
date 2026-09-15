@@ -124,6 +124,8 @@ func (s *Store) GrantKBRewardByChars(tid, uid, pkgID, chars int64) (granted bool
 		tokens, time.Now().Format(time.RFC3339), tid); err != nil {
 		return false, 0, used
 	}
+	// ★ P1 多实例闭环：KB 上传奖励入账通知影子失效
+	notifyTenantBalanceChanged(tid)
 	if _, err := db.Exec(tx, db.CurrentDialect(),
 		"INSERT INTO kb_upload_rewards (tenant_id, user_id, package_id, added, tokens, created_at) VALUES (?,?,?,?,?,?)",
 		tid, uid, pkgID, chars, tokens, time.Now().UTC().Format(time.RFC3339)); err != nil {

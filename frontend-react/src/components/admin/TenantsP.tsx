@@ -28,12 +28,14 @@ const industryLabel = (code: string, lang: Lang): string => industryName(code ||
 /** 租户 CRUD、试用开通、充值、导出、状态启停、GDPR 擦除组件 */
 export function TenantsP() {
   const ad = useAdmin()
+  // ===== 面板状态：租户列表、弹窗上下文（新建/编辑/充值）、行业枚举 =====
   const [lang] = useT()
   const [rows, setRows] = useState<TenantInfo[]>([])
   const [dlg, setDlg] = useState<null | 'create' | { edit: TenantInfo } | { order: TenantInfo }>(null)
   const [form, setForm] = useState<Any>({})
   const [indList, setIndList] = useState<Array<{ code: string; name: string; enabled: number }>>([])
 
+  // loadInd 拉取行业枚举（租户表单行业下拉数据源）
   const loadInd = useCallback(async () => {
     try {
       const r = await fetchIndustries()
@@ -42,6 +44,7 @@ export function TenantsP() {
   }, [])
   useEffect(() => { void loadInd() }, [loadInd])
 
+  // load 拉取租户列表
   const load = useCallback(async () => {
     const r: any = await tenantList()
     if (r.success) setRows(r.tenants || [])
@@ -139,6 +142,7 @@ export function TenantsP() {
 
   return (
     <Panel title={t('tenants.title')} extra={<Button theme="primary" onClick={() => { setForm({ permissions: '{}' }); setDlg('create') }}>{t('tenants.create')}</Button>}>
+      {/* 数据表格 */}
       <Table rowKey="id" size="small" data={rows}
              columns={[
                { colKey: 'id', title: t('tenants.colId'), width: 60 },

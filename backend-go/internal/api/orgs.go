@@ -283,6 +283,7 @@ func (s *Server) handleOrgRename(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 解析 id/name 并做组织归属（orgTenant）+ 层级合法性（validateOrg）双闸口后改名；根组织同步租户名见下
 	var req struct {
 		ID   int64  `json:"id"`   // 组织 ID
 		Name string `json:"name"` // 新名称
@@ -323,6 +324,7 @@ func (s *Server) handleOrgMove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 解析 id/parent_id 并确认组织归属当前租户；防成环等层级校验由 store 侧 MoveOrg 完成
 	var req struct {
 		ID       int64 `json:"id"`        // 被移动组织 ID
 		ParentID int64 `json:"parent_id"` // 目标父节点 ID（0=根组织下）
@@ -353,6 +355,7 @@ func (s *Server) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 解析 id 并过组织归属 + validateOrg 双闸口后删除；子组织上移/成员回收由 store 侧 DeleteOrg 处理
 	var req struct {
 		ID int64 `json:"id"` // 组织 ID
 	}

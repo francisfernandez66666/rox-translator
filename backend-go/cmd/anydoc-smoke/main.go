@@ -15,6 +15,8 @@ import (
 	"translator/internal/fileproc"
 )
 
+// main 三步冒烟：① 探测 anydoc 可用性与 Python 路径；② 对入参文档实跑一次提取；
+// ③ 打印结果或映射后的错误话术（与工单侧用户可见文案一致，便于现场定位）。
 func main() {
 	h := fileproc.CheckHealth()
 	fmt.Printf("anydoc_available=%v python=%s\n", h.AnydocAvail, h.PythonPath)

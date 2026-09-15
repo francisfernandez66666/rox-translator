@@ -42,6 +42,7 @@ type MailTplMeta struct {
 
 // mailTplMetas 系统内置的邮件模板清单（不同用处，支持多个）。
 var mailTplMetas = []MailTplMeta{
+	// —— 验证码类：注册/找回密码（占位符 code/brand，10 分钟有效口径写在正文）——
 	{
 		Code: "register_code", Name: "注册验证码",
 		Desc: "用户自助注册时发送的邮箱验证码",
@@ -60,6 +61,7 @@ var mailTplMetas = []MailTplMeta{
 			Body:    "您好，\n\n您的密码重置验证码是：{code}\n\n该验证码 10 分钟内有效，请勿泄露给他人。\n\n—— {brand}",
 		},
 	},
+	// —— 通知类模板：以下按 企业注册提醒/租户通知/导入账号开通/系统告警/欢迎手册 顺序 ——
 	{
 		Code: "enterprise_reg", Name: "企业注册成功提醒",
 		Desc: "企业用户注册成功后，发送给注册人并抄送运营（建议建联）",
@@ -88,6 +90,7 @@ var mailTplMetas = []MailTplMeta{
 			Body:    "您好，\n\n管理员已为您开通 {brand} 账号：\n登录账号：{username}\n初始密码：{password}\n登录地址：{login_url}\n\n出于安全考虑，首次登录后请立即修改密码。\n\n—— {brand}",
 		},
 	},
+	// —— 运营触达类：告警通知与注册欢迎手册（manual 正文见 manualDefaultBody 常量）——
 	{
 		Code: "alert", Name: "系统告警通知",
 		Desc: "系统监控/阈值告警通知（如邀请奖励触顶、余额不足等）",
@@ -316,6 +319,7 @@ func (s *Server) handleAdminMailTemplatesGet(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	custom := s.loadCustomMailTpls()
+	// 以内置默认为底、按字段套用自定义值合并出当前生效内容，is_modified 标记供前端展示「已改」
 	list := make([]map[string]interface{}, 0, len(mailTplMetas))
 	for _, m := range mailTplMetas {
 		t := m.Default
@@ -330,6 +334,7 @@ func (s *Server) handleAdminMailTemplatesGet(w http.ResponseWriter, r *http.Requ
 				t.CC = c.CC
 			}
 		}
+		// 输出结构 = 模板元信息（用途/占位符/默认值）+ 当前生效内容 + is_modified 标记
 		list = append(list, map[string]interface{}{
 			"code":        m.Code,
 			"name":        m.Name,

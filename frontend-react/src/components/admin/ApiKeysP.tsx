@@ -19,6 +19,7 @@ type Any = Record<string, any>
 /** API Key + OpenAPI 文档面板 */
 export function ApiKeysP() {
   const ad = useAdmin()
+  // ===== 面板状态：Key 列表、新建结果、限额编辑、开放文档卡片 =====
   const [, t, tpl] = useT()
   const isSuper = ad.isSuper
   const [keys, setKeys] = useState<Any[]>([])
@@ -35,6 +36,7 @@ export function ApiKeysP() {
   const docsMD = docsLang === 'en' ? docsMDEn : docsMDZh
   const setDocsMD = (v: string) => { if (docsLang === 'en') setDocsMDEn(v); else setDocsMDZh(v) }
 
+  // loadKeys 拉取开放 API Key 列表（兼容 keys / api_keys 两种出参字段）
   const loadKeys = useCallback(async () => {
     const r: Any = await apiApiKeys()
     if (r.success) setKeys((r.keys as Any[]) || (r.api_keys as Any[]) || [])

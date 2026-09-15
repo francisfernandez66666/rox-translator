@@ -126,6 +126,7 @@ func (s *Server) handleOpenAPIDocs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	zhBody := extractBodyInner(renderDocsHTML(s.expandDocsHost(s.getDocsMD("zh"))))
 	enBody := extractBodyInner(renderDocsHTML(s.expandDocsHost(s.getDocsMD("en"))))
+	// 双容器静态页模板（CSS/JS 内联零外链）：zh/en 各一份 body 同时下发，脚本端切换显隐
 	page := `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>能言开放 API 文档</title>
@@ -213,6 +214,7 @@ func (s *Server) handleAdminOpenAPIDocsSave(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文档内容超过 256KB 上限"})
 		return
 	}
+	// lang→配置键映射后整体覆盖落库；MD 空串=恢复内置默认，审计记录字节数与动作语义
 	key := openAPIDocsConfigKeyZh
 	if lang == "en" {
 		key = openAPIDocsConfigKeyEn
@@ -566,6 +568,7 @@ func (s *Server) handleOpenAPITerms(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIForbidden), "message": "API Key 无术语检索权限（需 translate/kb）"})
 		return
 	}
+	// 参数校验：q 必填且 ≤100 字符
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIBadRequest), "message": "q 不能为空"})
@@ -575,6 +578,7 @@ func (s *Server) handleOpenAPITerms(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIBadRequest), "message": "q 超长（≤100 字符）"})
 		return
 	}
+	// 过滤参数：lang 非空须命中 config.AllLangs 白名单；limit 缺省 20
 	lang := strings.TrimSpace(r.URL.Query().Get("lang"))
 	if lang != "" {
 		ok := false
@@ -589,6 +593,7 @@ func (s *Server) handleOpenAPITerms(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// limit 解析容错（非法值保持默认 20），随后按租户全包检索并返回命中列表
 	limit := 20
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, e := strconv.Atoi(v); e == nil {
@@ -628,6 +633,7 @@ func (s *Server) handleOpenAPIUsage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIForbidden), "message": "API Key 无计费权限"})
 		return
 	}
+	// 用量与余额聚合：余额账户存在时同时输出 token/积分双口径与≈句数估算字段
 	usage, total, _ := s.Store.UsageStats(ak.TenantID)
 	balance, _ := s.Store.GetBalance(ak.TenantID)
 	resp := map[string]interface{}{

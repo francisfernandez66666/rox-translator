@@ -124,6 +124,7 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 	fd.Close()
 	defer os.Remove(savePath)
 
+	// 解析导入表为行模型（表头可缺省，按模板固定列序兜底）
 	rows, err := readImportRows(savePath)
 	if err != nil || len(rows) == 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "Excel 解析失败或为空，请使用模板列：用户名称、姓名、部门、角色、邮箱"})
@@ -259,6 +260,7 @@ func readImportRows(path string) ([]importUserRow, error) {
 		// 无表头时按固定列序：用户名称、姓名、部门、角色、邮箱
 		idx = map[string]int{"username": 0, "display": 1, "org": 2, "role": 3, "email": 4}
 	}
+	// 逐行按列索引提取：用户名必填、空姓名回退用户名、角色归一化、邮箱统一小写
 	rows := make([]importUserRow, 0, len(all)-1)
 	for i := 1; i < len(all); i++ {
 		line := all[i]

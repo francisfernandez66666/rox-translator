@@ -528,6 +528,7 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 			OrgName string `json:"org_name"`
 			Cost    int64  `json:"cost"`
 		}
+		// 逐用户合并「用户+部门名+区间消耗」成展示行，同步累计全站总量 total
 		out := make([]orgUsage, 0, len(users))
 		var total int64
 		for _, usr := range users {

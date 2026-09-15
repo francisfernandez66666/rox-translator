@@ -179,6 +179,7 @@ func (c *Crawler) RunSource(ctx context.Context, src *store.KBScrapeSource) (int
 			}
 			phrases = append(phrases, p)
 		}
+		// 条目/安全句两条队列各自攒满 ChunkSize 即刷库，任一 flush 出错立即中止本页
 		if len(batch) >= c.ChunkSize() {
 			n, aerr := c.flushEntries(batch, autoApprove)
 			batch = batch[:0]

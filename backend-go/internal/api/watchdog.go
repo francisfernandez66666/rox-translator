@@ -17,6 +17,7 @@ package api
 // 告警数据由管理后台「系统告警」页面展示。
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math"
@@ -29,6 +30,8 @@ import (
 	"time"
 
 	"translator/internal/auth"
+	"translator/internal/infra/distlock"
+	"translator/internal/infra/redis"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -72,9 +75,9 @@ func (s *Server) startWatchdog() {
 	go func() {
 		ticker := time.NewTicker(time.Duration(interval) * time.Second)
 		defer ticker.Stop()
-		// 定时触发一轮检查
+		// 定时触发一轮检查（★ P1 多实例：单跑者化，防各实例重复生成告警/重复推群）
 		for range ticker.C {
-			s.runWatchdogCheck()
+			s.runExclusive("watchdog-check", time.Minute, s.runWatchdogCheck)
 		}
 	}()
 	// ★ R3 自检探活：本机 /status 连续超时 → critical 告警；可选自动退出由 systemd 拉起。
@@ -162,38 +165,42 @@ func (s *Server) startWatchdog() {
 		}
 		ticker := time.NewTicker(time.Duration(backupHours) * time.Hour)
 		defer ticker.Stop()
-		// 启动后先备份一次，再按周期备份
-		s.runBackup(backupDir, keep)
+		// 启动后先备份一次，再按周期备份（★ P1 多实例：单跑者化，防重复备份文件与重复异地推送）
+		s.runExclusive("db-backup", time.Hour, func() { s.runBackup(backupDir, keep) })
 		for range ticker.C {
-			s.runBackup(backupDir, keep)
+			s.runExclusive("db-backup", time.Hour, func() { s.runBackup(backupDir, keep) })
 		}
 	}()
 	// OOM 内存监控（默认每 60 秒采样，可配置 mem_monitor_interval_sec；0=关闭）
 	s.startMemoryMonitor()
 	// 订阅到期扫描（每日一轮：启动即扫一次；到期摘除 + 7/1 天前提醒）
 	// ★ 任务2.5：同周期顺带扫描体验台账到期前 3 天提醒
-	go func() {
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
+	// ★ P1 多实例：三扫描合并为单任务组，整体单跑者化（到期提醒/摘除通知只发一份）
+	scanDaily := func() {
 		s.runSubscriptionScan()
 		s.runTrialScan()
 		s.runGrowthScan()
-		for range ticker.C {
-			s.runSubscriptionScan()
-			s.runTrialScan()
-			s.runGrowthScan()
-		}
-	}()
-	// 工单产物留存扫描（每日一轮：剩余 7/3/1 天提醒下载；到期清理文件，译文已入 TM 不受影响）
+	}
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
-		s.runTicketRetentionScan()
+		s.runExclusive("subscription-scan", time.Hour, scanDaily)
 		for range ticker.C {
-			s.runTicketRetentionScan()
+			s.runExclusive("subscription-scan", time.Hour, scanDaily)
+		}
+	}()
+	// 工单产物留存扫描（每日一轮：剩余 7/3/1 天提醒下载；到期清理文件，译文已入 TM 不受影响）
+	// ★ P1 多实例：单跑者化（清理与提醒去重标记为全局态，重复执行徒增竞争）
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		s.runExclusive("ticket-retention", time.Hour, s.runTicketRetentionScan)
+		for range ticker.C {
+			s.runExclusive("ticket-retention", time.Hour, s.runTicketRetentionScan)
 		}
 	}()
 	// 泄漏日志（每日一轮：RSS/堆/goroutine 采样 + heap 快照留存；启动即采一次）
+	// 注：内存采样反映本实例进程，各实例独立执行是正确语义，不加分布式锁。
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
@@ -400,6 +407,34 @@ func (s *Server) runTrialScan() {
 				"体验额度将于 "+exp.Format("2006-01-02")+" 到期（剩 "+strconv.Itoa(daysLeft+1)+" 天）。到期后可购买月租套餐或充值永久 token 继续使用。")
 		}
 	}
+}
+
+// runExclusive ★ P1 多实例闭环（2026-09-15，见《P0P2待办核实报告_20260915.md》）：
+// 周期任务单跑者化。多实例部署下，watchdog 的备份/订阅到期扫描/工单留存扫描等若各实例
+// 重复执行，会产生重复备份文件、重复到期提醒邮件/站内信、重复异地推送等混乱；
+// 本助手用分布式锁（infra/distlock，Redis 启用时 SETNX 跨实例抢占）保证同一轮任务
+// 全集群仅一个实例执行，其余实例静默跳过等待下一周期。
+// 降级语义：Redis 未启用（标准单实例形态）时 distlock 内部为进程互斥锁，
+// 同一 key 串行等价直跑，行为与改造前完全一致。
+// 锁 TTL 取舍：取任务最大预期时长；持锁实例中途崩溃时锁到期自动释放，
+// 下轮恢复（最坏重复执行一轮——通知按 expire_notify 档位去重、备份幂等保留 N 份，无资损）。
+// 参数 key: 任务标识（自动加 watchdog: 前缀）；ttl: 锁最长持有时长；fn: 任务体。
+func (s *Server) runExclusive(key string, ttl time.Duration, fn func()) {
+	lock := distlock.New("watchdog:"+key, redis.Get())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ok, release, err := lock.TryLock(ctx, ttl)
+	cancel()
+	if err != nil {
+		// Redis 抖动：降级本地执行（宁可本轮重复，不可任务停摆）
+		log.Printf("[watchdog] %s 分布式锁获取异常，本轮降级本地执行: %v", key, err)
+		fn()
+		return
+	}
+	if !ok {
+		return // 其他实例已抢到本轮执行权
+	}
+	defer release()
+	fn()
 }
 
 // runBackup 执行一次数据库备份并清理旧备份；成功后按 backup_remote_cmd 推送异地（容灾）。

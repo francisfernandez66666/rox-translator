@@ -453,6 +453,8 @@ func (s *Store) GrantPackageSentences(tid int64, pkg *Package) (int64, error) {
 				tokens, time.Now().Format(time.RFC3339), tid); err != nil {
 				return 0, err
 			}
+			// ★ P1 多实例闭环：包折算 token 入账通知影子失效
+			notifyTenantBalanceChanged(tid)
 		}
 	}
 	if err := tx.Commit(); err != nil {

@@ -30,6 +30,10 @@ import urllib.request
 import urllib.error
 import uuid
 
+# ★ P2 发布管线（2026-09-15）：发行版本号（与 pyproject.toml / npm package.json /
+# java pom 三端对齐，scripts/release-sdk.sh 统一 bump；运行时可用于上报与排障）
+__version__ = "1.0.0"
+
 
 class TranslatorError(Exception):
     """开放 API 调用异常：携带 HTTP 状态码、错误码与响应体。"""

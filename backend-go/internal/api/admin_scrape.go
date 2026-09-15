@@ -162,6 +162,7 @@ func (s *Server) handleKBScrapeStaged(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	// 过滤参数透传 store；limit 夹取到 1..500（缺省 200），offset 负值归零
 	packType := q.Get("pack_type")
 	status := q.Get("status")
 	lang := q.Get("lang")
@@ -174,6 +175,7 @@ func (s *Server) handleKBScrapeStaged(w http.ResponseWriter, r *http.Request) {
 	if offset < 0 {
 		offset = 0
 	}
+	// 合并行集查询（条目+安全句同口径），total 为精确总数供前端翻页
 	rows, total, err := s.Store.ListStagedMerged(packType, status, lang, industry, limit, offset)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
@@ -341,6 +343,7 @@ func (s *Server) handleKBScrapeRestore(w http.ResponseWriter, r *http.Request) {
 			reverted++
 		}
 	} else {
+		// 安全句撤销：edits 覆盖 phrase/replacement 回写待审行；已落库的先删正式库安全句
 		items, gerr := s.Store.GetStagedPhrasesAllByIDs(req.IDs)
 		if gerr != nil {
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
@@ -363,6 +366,7 @@ func (s *Server) handleKBScrapeRestore(w http.ResponseWriter, r *http.Request) {
 			reverted++
 		}
 	}
+	// 统一把目标行退回 pending 并计数；成功数 n>0 时失效缓存+重建索引（见下）
 	n, serr := s.Store.SetStagedStatus(req.Kind, req.IDs, "pending")
 	if serr != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": serr.Error()})
@@ -412,6 +416,7 @@ func (s *Server) handleKBRewardConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
+	// 三项开关各自独立 SetConfig（仅传了有效值才动），changed 收集明细供审计追溯
 	changed := []string{}
 	if req.Enabled != nil {
 		v := "0"
@@ -424,6 +429,7 @@ func (s *Server) handleKBRewardConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		changed = append(changed, "enabled="+v)
 	}
+	// 单价/日封顶仅在 >0 时写入（0=不覆盖既有配置，防误清）
 	if req.PerChar > 0 {
 		if err := s.Store.SetConfig("kb_upload_reward_tokens_per_char", strconv.FormatInt(req.PerChar, 10)); err != nil {
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "保存单价失败: " + err.Error()})

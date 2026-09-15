@@ -347,7 +347,7 @@ export function AlertsP() {
   const [regCfg, setRegCfg] = useState<Record<string, string | boolean>>({
     email_verify_enabled: '0', email_notify_enabled: '0',
     captcha_provider: '', captcha_site_key: '', captcha_secret_key: '',
-    wecom_webhook_url: '', dingtalk_webhook_url: '',
+    wecom_webhook_url: '', dingtalk_webhook_url: '', slack_webhook_url: '', teams_webhook_url: '',
   })
 
   /** 加载告警列表 */
@@ -365,7 +365,7 @@ export function AlertsP() {
     if (cfg.success) {
       const c = cfg as Any
       for (const k of ['email_verify_enabled', 'email_notify_enabled',
-        'captcha_provider', 'captcha_site_key', 'wecom_webhook_url', 'dingtalk_webhook_url']) {
+        'captcha_provider', 'captcha_site_key', 'wecom_webhook_url', 'dingtalk_webhook_url', 'slack_webhook_url', 'teams_webhook_url']) {
         if (c[k] !== undefined && c[k] !== '') setRegCfg((p) => ({ ...p, [k]: c[k] }) as Record<string, string | boolean>)
       }
     }
@@ -412,7 +412,7 @@ export function AlertsP() {
       const val = regCfg[k]
       payload[k] = String(val) === 'true' || val === '1' ? '1' : '0'
     }
-    for (const k of ['captcha_provider', 'captcha_site_key', 'wecom_webhook_url', 'dingtalk_webhook_url']) {
+    for (const k of ['captcha_provider', 'captcha_site_key', 'wecom_webhook_url', 'dingtalk_webhook_url', 'slack_webhook_url', 'teams_webhook_url']) {
       payload[k] = String(regCfg[k] || '')
     }
     if (regCfg.captcha_secret_key) payload.captcha_secret_key = String(regCfg.captcha_secret_key)
@@ -501,6 +501,8 @@ export function AlertsP() {
         )}
         <Input value={String(regCfg.wecom_webhook_url || '')} placeholder={t('packages.wecomWebhook')} onChange={(v) => setRegCfg((p) => ({ ...p, wecom_webhook_url: v }))} style={{ marginBottom: 8 }} />
         <Input value={String(regCfg.dingtalk_webhook_url || '')} placeholder={t('packages.dingtalkWebhook')} onChange={(v) => setRegCfg((p) => ({ ...p, dingtalk_webhook_url: v }))} style={{ marginBottom: 8 }} />
+        <Input value={String(regCfg.slack_webhook_url || '')} placeholder={t('packages.slackWebhook')} onChange={(v) => setRegCfg((p) => ({ ...p, slack_webhook_url: v }))} style={{ marginBottom: 8 }} />
+        <Input value={String(regCfg.teams_webhook_url || '')} placeholder={t('packages.teamsWebhook')} onChange={(v) => setRegCfg((p) => ({ ...p, teams_webhook_url: v }))} style={{ marginBottom: 8 }} />
         <Button theme="success" onClick={saveRegCfg}>{t('common.save')}</Button>
       </Panel>
     </Panel>
@@ -652,6 +654,32 @@ export function UsageP() {
     </div>
   )
 
+  // ★ P2 报表导出（2026-09-15，见《P0P2待办核实报告_20260915.md》P2-2）：
+  // 用量明细 CSV 导出——与面板同一鉴权口径（Bearer token + X-Tenant-ID 超管切换），
+  // 日期区间跟随当前选择（from/to 空=全量近 2 万行）；后端 ?export=csv 流式返回。
+  function exportUsageCSV() {
+    const qs = new URLSearchParams({ export: 'csv' })
+    if (usageFrom) qs.set('from', usageFrom)
+    if (usageTo) qs.set('to', usageTo)
+    const url = `${API_BASE}/api/billing/usage?${qs.toString()}`
+    const xhr = new XMLHttpRequest()
+    xhr.open('GET', url, true)
+    const tk = getAuthToken()
+    if (tk) xhr.setRequestHeader('Authorization', `Bearer ${tk}`)
+    const tid = getActiveTenantId()
+    if (tid > 0) xhr.setRequestHeader('X-Tenant-ID', String(tid))
+    xhr.responseType = 'blob'
+    xhr.onload = () => {
+      if (xhr.status !== 200) { void MessagePlugin.error(t('overview.exportFailed')); return }
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(xhr.response)
+      a.download = `usage_${usageFrom || 'all'}_${usageTo || 'now'}.csv`
+      a.click()
+      URL.revokeObjectURL(a.href)
+    }
+    xhr.send()
+  }
+
   return (
     <Panel title={t('usage.dashboardTitle')}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -679,6 +707,8 @@ export function UsageP() {
           <Button size="small" variant="text" onClick={() => { setUsageFrom(''); setUsageTo('') }}>{t('usage.dateClear')}</Button>
         )}
         {(usageFrom || usageTo) && <Tag variant="light" theme="primary">📅 {usageFrom || usageTo}{usageFrom && usageTo && usageFrom !== usageTo ? ` ~ ${usageTo}` : ''}</Tag>}
+        {/* 明细导出按钮：跟随当前日期区间；鉴权与列脱敏在后端统一处理 */}
+        <Button size="small" theme="success" variant="outline" onClick={exportUsageCSV}>{t('usage.exportCsv')}</Button>
       </div>
       <Tabs placement="top" value={usageTab} onChange={(v) => setUsageTab(v as 'me' | 'org' | 'cost')} list={[
         { label: t('usage.tabMine'), value: 'me', panel: meCards(me) },

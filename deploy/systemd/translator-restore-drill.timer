@@ -1,0 +1,16 @@
+# ============================================================================
+# translator-restore-drill.timer — 每周日 03:30 执行备份恢复演练（★ P2 2026-09-15）
+# 选择周日凌晨低峰窗口；Persistent=true 保证宕机错过的演练在恢复后补跑一次。
+# 安装：参见 translator-restore-drill.service 头注。
+# ============================================================================
+[Unit]
+Description=LangCross 备份恢复演练周期触发器（每周日 03:30）
+
+[Timer]
+OnCalendar=Sun *-*-* 03:30:00
+RandomizedDelaySec=600
+Persistent=true
+Unit=translator-restore-drill.service
+
+[Install]
+WantedBy=timers.target

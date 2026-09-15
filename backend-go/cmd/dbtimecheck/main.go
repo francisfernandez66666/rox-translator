@@ -1,3 +1,6 @@
+// ============ main.go · 职责说明 ============
+// cmd/dbtimecheck 一次性工具入口：TEXT 时间列时区基准审计与 UTC 清洗。
+// =============================================
 // ============================================================================
 // dbtimecheck — ★ C22 时间基准审计/清洗演练工具（2026-09-12）。
 // 用途：扫描 TEXT 型时间列的存储格式分布（UTC 'Z' / 带 '+offset' / 无时区），
@@ -46,6 +49,7 @@ func main() {
 	if *driver == "postgres" {
 		d = db.DialectPostgres
 	}
+	// 逐列审计：先校验 tbl.col 白名单，再读全表非空时间串按格式分类计数（UTC/带偏移/无时区/坏值），带偏移值收集进 toFix
 	for _, tc := range cols {
 		parts := strings.SplitN(tc, ".", 2)
 		if len(parts) != 2 || !safeIdent(parts[0]) || !safeIdent(parts[1]) {
@@ -53,6 +57,7 @@ func main() {
 			continue
 		}
 		tbl, col := parts[0], parts[1]
+		// 全表读取该列非空值，逐行分类：'Z' 结尾=合规 UTC；RFC3339 带偏移=待改写；无时区/解析失败=仅报告
 		rows, err := db.Query(conn, d, "SELECT id, "+col+" FROM "+tbl+" WHERE "+col+" <> ''")
 		if err != nil {
 			log.Printf("[%s] 读取失败: %v", tc, err)
@@ -86,6 +91,7 @@ func main() {
 				}
 			}
 		}
+		// 输出该列四类分布；-fix 时开单事务把带偏移值批量改写为 UTC 串，任一行 UPDATE 失败即整体回滚该列
 		rows.Close()
 		if err := rows.Err(); err != nil {
 			log.Printf("[%s] 遍历出错: %v", tc, err)

@@ -52,6 +52,8 @@ type vcodeEntry struct {
 var vcodeLocal = sync.Map{} // key -> vcodeEntry
 var vcodeLocalWrites int64
 
+// vcodeLocalSet 写入内存验证码缓存（Redis 未启用时的本地降级存储）。
+// 参数 key=校验键（邮箱/手机号哈希等）；val=序列化的校验载荷；ttl=有效期。
 func vcodeLocalSet(key string, val []byte, ttl time.Duration) {
 	vcodeLocal.Store(key, vcodeEntry{val: val, exp: time.Now().Add(ttl)})
 	// 惰性清扫：每 256 次写全量清一次过期项，防无界膨胀
@@ -66,6 +68,7 @@ func vcodeLocalSet(key string, val []byte, ttl time.Duration) {
 	}
 }
 
+// vcodeLocalGet 读取内存验证码缓存；过期项视同不存在（并顺手删除）。
 func vcodeLocalGet(key string) ([]byte, bool) {
 	v, ok := vcodeLocal.Load(key)
 	if !ok {

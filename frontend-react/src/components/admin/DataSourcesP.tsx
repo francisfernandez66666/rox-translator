@@ -336,6 +336,7 @@ export default function DataSourcesP() {
           )}
         </div>
         <Tabs value={tab} onChange={(v) => setTab(v as 'sources' | 'staged')}>
+          {/* Tab 面板 */}
           <Tabs.TabPanel value="sources" label={tpl('ds.s54', { a1: sources.length })}>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
               <Button size="small" theme="primary" onClick={() => setShowForm((v) => !v)}>{showForm ? t('ds.s55') : t('ds.s56')}</Button>
@@ -359,8 +360,10 @@ export default function DataSourcesP() {
                 </div>
               </div>
             )}
+            {/* 数据表格 */}
             <Table rowKey="id" data={sources} columns={srcCols} size="small" bordered />
           </Tabs.TabPanel>
+          {/* Tab 面板 */}
           <Tabs.TabPanel value="staged" label={tpl('ds.s75', { a1: stagedTotal })}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
               <RadioGroup value={stagedFilter.pack_type} onChange={(v: string) => setStagedFilter((f) => ({ ...f, pack_type: v }))}>
@@ -395,6 +398,7 @@ export default function DataSourcesP() {
                 <Button size="small" theme="primary" variant="outline" loading={approving} onClick={onBatchRestore}>{t('ds.s86')}</Button>
               )}
             </div>
+            {/* 数据表格 */}
             <Table
               rowKey="key"
               data={mergedRows}

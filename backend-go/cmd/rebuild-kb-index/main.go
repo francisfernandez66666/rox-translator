@@ -37,6 +37,7 @@ import (
 
 // main 一次性向量索引回填工具入口：遍历全量段，调用 Embedding API 重算向量并 Upsert 写回 PG。
 func main() {
+	// ① 解析 -batch/-workers/-limit，越界值兜底回默认（并发另受 EMBED 限流约束）
 	batch := flag.Int("batch", 256, "每批嵌入的段数量")
 	workers := flag.Int("workers", 4, "并发嵌入批数（另受 LLM_EMBED_CONCURRENT 限流约束）")
 	limit := flag.Int("limit", 0, "最多处理的段数（0=不限，调试用）")
@@ -49,6 +50,7 @@ func main() {
 		*batch = 256
 	}
 
+	// ② 前置校验：非 PG 直接退出（npz 索引不在本工具职责内）；Embed Key 缺失仅告警、失败段跳过
 	cfg := config.Default()
 	cfg.LoadConfigFromJSON(".")
 
@@ -60,12 +62,14 @@ func main() {
 		log.Println("[rebuild] 警告: Embedding API Key 未配置，嵌入调用将失败；请配置 ONLINE_API_KEY/EMBED_API_KEY 或后台水合后重试。仍会继续尝试（失败段跳过）。")
 	}
 
+	// ③ 打开 KB 存储并构造 LLM 客户端（嵌入调用出口）
 	kdb, err := kb.Open(cfg.DBPath)
 	if err != nil {
 		log.Fatalf("[rebuild] 打开知识库失败: %v", err)
 	}
 	cli := llm.NewClient(cfg)
 
+	// ④ SIGINT/SIGTERM → cancel ctx：停止取新页并让在途批次尽快退出
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sigCh := make(chan os.Signal, 1)
@@ -111,6 +115,7 @@ func main() {
 			chunk := segs[s:e]
 			sem <- struct{}{}
 			wg.Add(1)
+			// 每批一个 goroutine：信号量限并发；ctx 已取消则整批计失败直接退出
 			go func(chunk []kb.EmbedSeg) {
 				defer wg.Done()
 				defer func() { <-sem }()
@@ -119,6 +124,7 @@ func main() {
 					atomic.AddInt64(&totalDone, int64(len(chunk)))
 					return
 				}
+				// 批内源文本（中文侧）整批送嵌入 API；调用失败或返回数量不匹配时整批计失败跳过
 				texts := make([]string, len(chunk))
 				for i, c := range chunk {
 					texts[i] = c.Zh
@@ -136,6 +142,7 @@ func main() {
 					atomic.AddInt64(&totalDone, int64(len(chunk)))
 					return
 				}
+				// 逐段写回 pgvector（UpsertEmbedding）；每段前检查取消，中断时把剩余段计失败
 				for i, c := range chunk {
 					if ctx.Err() != nil {
 						atomic.AddInt64(&totalFail, int64(len(chunk)-i))
@@ -152,6 +159,7 @@ func main() {
 				atomic.AddInt64(&totalDone, int64(len(chunk)))
 			}(chunk)
 		}
+		// 等本页批次全部落库后按约每 5 页输出一次进度，再取下一页（或按 -limit/取消退出）
 		wg.Wait()
 
 		done := atomic.LoadInt64(&totalDone)

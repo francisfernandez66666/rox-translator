@@ -60,6 +60,8 @@ export const zh: Record<string, string> = {
   'packages.captchaSecretKey': 'Turnstile Secret Key（留空=不修改）',
   'packages.wecomWebhook': '企业微信群机器人 Webhook URL（可选）',
   'packages.dingtalkWebhook': '钉钉群机器人 Webhook URL（可选）',
+  'packages.slackWebhook': 'Slack Incoming Webhook URL（可选，hooks.slack.com/…）',
+  'packages.teamsWebhook': 'Teams Incoming Webhook URL（可选，M365 连接器）',
   'packages.saved': '已保存',
   'admin.packages': '📦 商业包',
   // ---- 支付模式 ----
@@ -130,6 +132,8 @@ export const en: Record<string, string> = {
   'packages.captchaSecretKey': 'Turnstile Secret Key (blank = keep)',
   'packages.wecomWebhook': 'WeCom group bot Webhook URL (optional)',
   'packages.dingtalkWebhook': 'DingTalk group bot Webhook URL (optional)',
+  'packages.slackWebhook': 'Slack Incoming Webhook URL (optional, hooks.slack.com/…)',
+  'packages.teamsWebhook': 'Teams Incoming Webhook URL (optional, M365 connector)',
   'packages.saved': 'Saved',
   'admin.packages': '📦 Packages',
   // ---- 支付模式 ----

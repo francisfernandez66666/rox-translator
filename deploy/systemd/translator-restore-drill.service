@@ -1,0 +1,35 @@
+# ============================================================================
+# translator-restore-drill.service — 备份恢复演练（★ P2 定时化 2026-09-15）
+# 背景（《P0P2待办核实报告_20260915.md》P1-2/P2）：服务内置每日自动备份已具备，
+# 但「恢复演练」从未自动化——同机备份未经演练≠容灾能力成立。本单元每周自动演练
+# 一次，失败经脚本内 alert_intake 上报 S9 告警收口（落平台告警中心+推运营群）。
+# 安装：
+#   sudo cp deploy/systemd/translator-restore-drill.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now translator-restore-drill.timer
+# ============================================================================
+[Unit]
+Description=LangCross 备份恢复演练（容灾验证：最新备份真实还原+行数抽样）
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+# 与主服务同用户（具备读取 backups 目录与本机 PG trust 权限）
+User=translator
+Group=translator
+# 演练脚本与工作目录（按实际部署路径调整）
+ExecStart=/opt/translator/deploy/restore_drill.sh /opt/translator/data/backups
+# 环境变量注入：
+#   DRILL_PG_ADMIN_DSN —— 建库权限管理连接串（PG 演练必需；SQLite 部署可省略）
+#   ALERT_INTAKE_URL   —— 平台告警收口端点（默认本机主服务的 /api/alerts/alertmanager）
+#   ALERT_TOKEN        —— 平台 ADMIN_TOKEN（从 secrets.env 读取，勿写明文进版本库）
+EnvironmentFile=-/etc/translator/secrets.env
+Environment=ALERT_INTAKE_URL=http://127.0.0.1:8787/api/alerts/alertmanager
+# 演练资源占用保护：pg_restore 临时库默认与主库同机，限 CPU/IO 权重防挤占线上
+Nice=10
+IOSchedulingClass=idle
+# 超时：30 分钟未结束视为失败（大库全量还原+抽样正常应远小于此）
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target

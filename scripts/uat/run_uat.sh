@@ -116,7 +116,8 @@ TXN_FAIL=$(echo "$TXN_TAIL" | grep -oE 'FAIL=[0-9]+' | cut -d= -f2)
 # ---------- 6. 前端像素级 UAT ----------
 log "===== 前端 E2E UAT（像素级 + 运行时健康 + 冒烟）====="
 mkdir -p frontend-react/artifacts
-(cd frontend-react && BASE_URL="$BASE_URL" API_URL="$BASE_URL" npx playwright test e2e/ --reporter=line) | tee "$WORK/pixel_uat.log"
+# PW_TARGET 可定向单 spec（缺陷迭代提速；缺省 e2e/ 全量）
+(cd frontend-react && BASE_URL="$BASE_URL" API_URL="$BASE_URL" npx playwright test "${PW_TARGET:-e2e/}" --reporter=line) | tee "$WORK/pixel_uat.log"
 PIX_PASS=$(grep -cE '✓|passed' "$WORK/pixel_uat.log" || true)
 
 # ---------- 7. 汇总 ----------

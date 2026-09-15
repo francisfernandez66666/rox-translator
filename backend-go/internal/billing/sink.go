@@ -48,6 +48,11 @@ type UsageSink struct {
 	buf      []usageRecord
 	shadow   map[int64]int64 // 每租户内存影子余额（token 量，已含 markup）
 	shadowOk map[int64]bool  // 影子是否已 seed
+	// ★ P1 多实例闭环（2026-09-15）：seed 时间戳——影子超 TTL 强制回读 DB 重 seed，
+	// 把「他实例余额变动（充值/退款/任务奖励等）」造成的影子过期窗口从「无限期」
+	// 收敛到 shadowReseedTTL（默认 5 秒）；与跨实例失效广播（shadowsync.go）叠加，
+	// 即使某变动点遗漏广播调用，最迟 5 秒后影子也会自愈到真实值。
+	shadowAt map[int64]time.Time
 
 	flushInterval time.Duration
 	maxBatch      int
@@ -55,6 +60,11 @@ type UsageSink struct {
 	wake chan struct{}
 	stop chan struct{}
 }
+
+// shadowReseedTTL 影子余额最大过期时长：超时后 Record 强制回读 DB 重 seed。
+// 取值权衡：足够短（多实例漂移窗口 ≤5s，且 abort 判定本就有 flush 兜底）、
+// 又足够长（高频租户 Record 密集时不放大 DB 读——每次回读是单行索引查询，5 秒一次可忽略）。
+const shadowReseedTTL = 5 * time.Second
 
 // RecordUsage 进程级入口：把一条实时计量追加到批量缓冲（供 llm.OnUsage 钩子调用）。
 // abort 在余额不足时用于中止整次翻译；可为 nil。
@@ -69,6 +79,7 @@ func RecordUsage(tid, uid int64, taskType, provider, model, lang string, quantit
 var DefaultSink = &UsageSink{
 	shadow:        map[int64]int64{},
 	shadowOk:      map[int64]bool{},
+	shadowAt:      map[int64]time.Time{},
 	flushInterval: 2 * time.Second,
 	maxBatch:      200,
 	wake:          make(chan struct{}, 1),
@@ -77,10 +88,17 @@ var DefaultSink = &UsageSink{
 
 // InitGlobalSink 绑定 Store 与 Service 并启动 flusher（main 启动时调用一次）。
 // svc 可为 nil（billing 未启用时仅做安全兜底，不落库）。
+// ★ P1 多实例闭环（2026-09-15）：Redis 启用时同时启动影子余额跨实例失效订阅
+// （shadowsync.go），充值/退款广播的失效信号由全部实例消费。
 func InitGlobalSink(svc *Service) {
 	DefaultSink.mu.Lock()
 	DefaultSink.svc = svc
 	DefaultSink.mu.Unlock()
+	// ★ P1 多实例闭环（2026-09-15）：把 store 层「租户余额变动」统一钩子接到影子失效——
+	// 所有充值/发放/退款/清零写点（store/balancehook.go）自动触发本进程影子清除与
+	// 跨实例广播；漏接点由 Record 的 TTL 重 seed（shadowReseedTTL=5s）兜底自愈。
+	store.OnTenantBalanceChanged = InvalidateShadow
+	startShadowInvalidateWatcher(DefaultSink) // Redis 未启用时内部直接返回（单实例降级）
 	go DefaultSink.run()
 }
 
@@ -92,12 +110,17 @@ func (s *UsageSink) Invalidate(tid int64) {
 	s.mu.Lock()
 	delete(s.shadowOk, tid)
 	delete(s.shadow, tid)
+	delete(s.shadowAt, tid)
 	s.mu.Unlock()
 }
 
 // InvalidateShadow 进程级入口：使某租户影子余额失效（发放/充值后调用）。
+// ★ P1 多实例闭环（2026-09-15）：除清本进程影子外，Redis 启用时向全部实例广播
+// 失效信号（shadowsync.go）——其他实例的影子缓存同步失效，消除「A 实例充值后
+// B 实例影子负化误中止在途翻译」的多实例缺陷。
 func InvalidateShadow(tid int64) {
 	DefaultSink.Invalidate(tid)
+	broadcastShadowInvalidate(tid)
 }
 
 // Flush 进程级入口：同步冲刷实时计量缓冲（P3 修复——交互路径响应前调用，
@@ -128,6 +151,18 @@ func (s *UsageSink) Stop() {
 	s.flush()
 }
 
+// pendingForLocked 汇总缓冲区内指定租户「已记录未落库」的计费量（调用方须持有 s.mu）。
+// 用途：TTL 重 seed 时扣除本实例在途消费，防止回读 DB 把尚未 flush 的扣减看丢。
+func (s *UsageSink) pendingForLocked(tid int64) int64 {
+	var sum int64
+	for _, r := range s.buf {
+		if r.Tid == tid {
+			sum += r.Quantity
+		}
+	}
+	return sum
+}
+
 // Record 追加一条计量；必要时触发即时中止与唤醒 flusher。
 func (s *UsageSink) Record(r usageRecord) {
 	s.mu.Lock()
@@ -135,14 +170,29 @@ func (s *UsageSink) Record(r usageRecord) {
 		s.mu.Unlock()
 		return // billing 未初始化：安全丢弃（与「未启用不计费」一致）
 	}
+	// 防御：手工构造的 UsageSink（如测试）未初始化影子 map 时补齐，避免 nil map 赋值 panic
+	if s.shadow == nil {
+		s.shadow = map[int64]int64{}
+	}
+	if s.shadowOk == nil {
+		s.shadowOk = map[int64]bool{}
+	}
+	if s.shadowAt == nil {
+		s.shadowAt = map[int64]time.Time{}
+	}
 	// seed 影子余额（每租户一次 DB 读）
 	// ★ P2-2 修复（2026-09-14）：seed 失败不得置位 shadowOk——旧实现 err!=nil 也标记已 seed，
 	//   shadow 保持 0 → 下一条记录立即负化误中止余额充足租户的在途任务。失败时保持未 seed，
 	//   下次 Record 重试 seed。
-	if !s.shadowOk[r.Tid] {
+	// ★ P1 多实例闭环（2026-09-15）：seed 有效期 shadowReseedTTL（默认 5s），过期强制回读
+	//   DB 重 seed——他实例的充值/退款等余额变动即便未收到广播信号，最迟 5 秒后本实例
+	//   影子也会自愈。重 seed 时扣除本实例缓冲内「待落库已用量」（local pending），
+	//   避免 TTL 回读把本实例尚未 flush 的消费看丢（fail-open 少扣风险）。
+	if !s.shadowOk[r.Tid] || time.Since(s.shadowAt[r.Tid]) > shadowReseedTTL {
 		if g, p, err := s.svc.Store.TenantRemainTotal(r.Tid); err == nil {
-			s.shadow[r.Tid] = g + p // 双桶口径（未过期台账 + 永久余额）
+			s.shadow[r.Tid] = g + p - s.pendingForLocked(r.Tid) // 真实双桶 - 本实例缓冲已计
 			s.shadowOk[r.Tid] = true
+			s.shadowAt[r.Tid] = time.Now()
 		}
 		// err != nil：保持未 seed，shadow 记 0 且本条不判负（下面只在 shadowOk 时才 abort）
 	}
@@ -196,10 +246,20 @@ func (s *UsageSink) flush() {
 		for _, r := range batch {
 			byTid[r.Tid] += r.Quantity
 		}
+		if s.shadow == nil {
+			s.shadow = map[int64]int64{}
+		}
+		if s.shadowOk == nil {
+			s.shadowOk = map[int64]bool{}
+		}
+		if s.shadowAt == nil {
+			s.shadowAt = map[int64]time.Time{}
+		}
 		for tid, pending := range byTid {
 			if g, p, err := s.svc.Store.TenantRemainTotal(tid); err == nil {
 				s.shadow[tid] = g + p - pending // 真实余额 - 本批待落库量，保持乐观准确
 				s.shadowOk[tid] = true
+				s.shadowAt[tid] = time.Now() // ★ TTL 基准同步刷新（多实例闭环）
 			}
 		}
 	}

@@ -159,6 +159,7 @@ func (s *Server) handleSaveSegments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 守门链：登录 → 工单存在 → 可编辑权限；body 为批量 edits（index/edited_text/status/note）
 	var req struct {
 		Edits []struct {
 			Index      int    `json:"index"`
@@ -342,6 +343,7 @@ func parseXLSX(path, lang string) ([]baseSeg, bool) {
 		return nil, false
 	}
 	var segs []baseSeg
+	// 跳过表头逐行成段：源文为空的行丢弃，Index 按有效段落连续编号
 	for i := 1; i < len(rows); i++ {
 		row := rows[i]
 		src := cell(row, srcIdx)
@@ -375,6 +377,7 @@ func parseCSVFile(path, lang string) ([]baseSeg, bool) {
 		return nil, false
 	}
 	var segs []baseSeg
+	// 同 xlsx 口径：FieldsPerRecord=-1 容忍不等宽行，空源文行丢弃
 	for i := 1; i < len(records); i++ {
 		row := records[i]
 		src := cell(row, srcIdx)
@@ -459,6 +462,7 @@ func (s *Server) handleExportSegments(w http.ResponseWriter, r *http.Request) {
 		s.editorDeny(w, r)
 		return
 	}
+	// 守门通过后取基础段落，装配逐段覆盖文本表 repl（有编辑译文则优先编辑稿）
 	base, ok := s.extractSegments(t, lang)
 	if !ok || len(base) == 0 {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "该工单不支持在线回写（需 docx 结果文件）"))

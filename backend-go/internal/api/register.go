@@ -383,14 +383,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if req.Email != "" {
 		_ = s.Store.SetUserEmail(nu.ID, inviteTenantID, strings.TrimSpace(req.Email))
 		nu.Email = strings.TrimSpace(req.Email)
-	// ★ S4 归因快照：注册主链路成功后落库（失败不阻断）
-	_ = s.Store.InsertRegAttribution(&store.RegAttribution{
-		UserID: nu.ID, TenantID: nu.TenantID,
-		UTMSource: strings.TrimSpace(req.UTMSource), UTMMedium: strings.TrimSpace(req.UTMMedium),
-		UTMCampaign: strings.TrimSpace(req.UTMCampaign), UTMTerm: strings.TrimSpace(req.UTMTerm),
-		UTMContent: strings.TrimSpace(req.UTMContent), RefCode: strings.TrimSpace(req.Ref),
-		Host: r.Host, LandingPath: req.LandingPath, UserAgent: r.Header.Get("User-Agent"),
-	})
+		// ★ S4 归因快照：注册主链路成功后落库（失败不阻断）
+		_ = s.Store.InsertRegAttribution(&store.RegAttribution{
+			UserID: nu.ID, TenantID: nu.TenantID,
+			UTMSource: strings.TrimSpace(req.UTMSource), UTMMedium: strings.TrimSpace(req.UTMMedium),
+			UTMCampaign: strings.TrimSpace(req.UTMCampaign), UTMTerm: strings.TrimSpace(req.UTMTerm),
+			UTMContent: strings.TrimSpace(req.UTMContent), RefCode: strings.TrimSpace(req.Ref),
+			Host: r.Host, LandingPath: req.LandingPath, UserAgent: r.Header.Get("User-Agent"),
+		})
 	}
 	// ★ 注册成功自动发送《产品手册》PDF 邮件（个人/企业用户均发送；用 info 专用邮箱，附件为手册 PDF）
 	if req.Email != "" {

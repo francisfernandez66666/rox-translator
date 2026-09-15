@@ -39,6 +39,7 @@ func RunTokenMigration(st *store.Store) {
 	if v, _ := st.GetConfig("billing_token_migrated"); v == "1" {
 		return
 	}
+	// 换算率取全局句→token 比率；全表扫 tenants 读 permissions JSON
 	rate := st.TokenSentenceRate()
 	rows, err := st.DB().Query("SELECT id, COALESCE(permissions,'') FROM tenants")
 	if err != nil {
@@ -51,6 +52,7 @@ func RunTokenMigration(st *store.Store) {
 		sentence int64
 	}
 	var items []item
+	// 仅收集句数余额 >0 的租户进搬运清单（解析失败的行静默跳过）
 	for rows.Next() {
 		var id int64
 		var permsRaw string

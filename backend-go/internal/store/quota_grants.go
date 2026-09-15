@@ -114,6 +114,10 @@ func (s *Store) ResetPackageMonthly(tid int64, limit int) (resetRows int64, coun
 	if err := tx.Commit(); err != nil {
 		return 0, 0, false, err
 	}
+	// ★ P1 多实例闭环：月度重置拉回 plan 台账 left（可用量增加），通知影子失效
+	if resetRows > 0 {
+		notifyTenantBalanceChanged(tid)
+	}
 	return resetRows, rc.Count, false, nil
 }
 

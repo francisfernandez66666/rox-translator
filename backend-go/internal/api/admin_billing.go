@@ -10,8 +10,10 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"translator/internal/auth"
 	"translator/internal/billing"
@@ -85,6 +87,42 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		factor = s.usageDisplayFactor()
 	}
 	scale := func(n int64) int64 { return int64(float64(n)*factor + 0.5) }
+	// ★ P2 报表导出（2026-09-15，见《P0P2待办核实报告_20260915.md》P2-2）：
+	//   ?export=csv&from=YYYY-MM-DD&to=YYYY-MM-DD —— 用量明细 CSV 流式下载（财务/对账取数）。
+	//   鉴权与 JSON 口径完全一致（租户管理员+effTenant 隔离）；非超管同样脱敏供应商/模型、
+	//   应用展示系数放大（与面板所见数字对齐，避免「导出比页面多」的口径争议）。
+	if r.URL.Query().Get("export") == "csv" {
+		tid := s.effTenant(r, u)
+		from := r.URL.Query().Get("from")
+		to := r.URL.Query().Get("to")
+		limit := atoiDef(r.URL.Query().Get("limit"), 20000)
+		if limit > 100000 {
+			limit = 100000
+		}
+		recs, uerr := s.Store.UsageLedgerForExport(tid, from, to, limit)
+		if uerr != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": uerr.Error()})
+			return
+		}
+		name := fmt.Sprintf("usage_%d_%s_%s.csv", tid, strings.ReplaceAll(from, "-", ""), strings.ReplaceAll(to, "-", ""))
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", "attachment; filename="+name)
+		// UTF-8 BOM：Excel 直开不乱码（与审计导出同口径）
+		w.Write([]byte{0xEF, 0xBB, 0xBF})
+		fmt.Fprintf(w, "id,tenant_id,user_id,task_type,provider,model,quantity,unit_price,cost,biz_kind,biz_mode,charge_kind,created_at\n")
+		for _, row := range recs {
+			p, m := row.Provider, row.Model
+			qty, cost := row.Quantity, row.Cost
+			if !super {
+				p, m = "*", "*" // 供应商/模型脱敏（与 JSON 口径一致）
+				qty, cost = scale(qty), scale(cost)
+			}
+			fmt.Fprintf(w, "%d,%d,%d,%s,%s,%s,%d,%d,%d,%s,%s,%s,%s\n",
+				row.ID, row.TenantID, row.UserID, csvEscape(row.TaskType), csvEscape(p), csvEscape(m),
+				qty, row.UnitPrice, cost, csvEscape(row.BizKind), csvEscape(row.BizMode), csvEscape(row.ChargeKind), csvEscape(row.CreatedAt))
+		}
+		return
+	}
 	// 用量趋势（最近 7 天）
 	trend, err := s.Store.UsageTrend(s.effTenant(r, u), 7)
 	if err != nil {

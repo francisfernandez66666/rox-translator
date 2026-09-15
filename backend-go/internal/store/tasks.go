@@ -203,6 +203,8 @@ func (s *Store) ClaimUserTask(uid, tid, taskID int64) (ok bool, tokens int64) {
 		t.RewardTokens, now, tenantID); err != nil {
 		return false, 0
 	}
+	// ★ P1 多实例闭环：任务奖励入账通知影子失效
+	notifyTenantBalanceChanged(tenantID)
 	// 领取流水（防刷留痕与审计）
 	if _, err := db.Exec(tx, d, "INSERT INTO user_task_claims (task_id, user_id, tenant_id, reward_tokens, claim_date, created_at) VALUES (?,?,?,?,?,?)",
 		taskID, uid, tenantID, t.RewardTokens, key, now); err != nil {

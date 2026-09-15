@@ -65,6 +65,7 @@ export function OpsP() {
   const [slo, setSlo] = useState<any[]>([])
   const [routes, setRoutes] = useState<any | null>(null)
 
+  // load 拉取运营策略：生效值与草稿分层回填，缺项回落代码默认
   const load = useCallback(async () => {
     try {
       const r = await opsPolicy() as any

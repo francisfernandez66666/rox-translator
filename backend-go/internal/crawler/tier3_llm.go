@@ -73,6 +73,7 @@ func (p *llmProducer) Next(ctx context.Context, deps *SourceDeps, cursor string,
 	if tgtLang == "" {
 		tgtLang = "en"
 	}
+	// 转换 LLM 输出为待审行：空源/空译过滤，L3 生成统一 zh 源语、tier=3，llm_gen: 留痕来源
 	entries := make([]*store.KBStagedEntry, 0, len(out.Entries))
 	for _, e := range out.Entries {
 		if e.SrcText == "" || e.TgtText == "" {
@@ -90,6 +91,7 @@ func (p *llmProducer) Next(ctx context.Context, deps *SourceDeps, cursor string,
 			SourceURL:    "llm_gen:" + p.src.Name,
 		})
 	}
+	// 安全句同款转换：空 phrase 丢弃；kind 白名单兜底与中性词过滤见循环体
 	phrases := make([]*store.KBStagedPhrase, 0, len(out.Phrases))
 	for _, ph := range out.Phrases {
 		if ph.Phrase == "" {
@@ -252,6 +254,7 @@ func stripTrailingCommas(s string) string {
 	buf := make([]byte, 0, len(s))
 	inStr := false
 	esc := false
+	// 逐字符状态机：inStr/esc 隔离字符串字面量，仅结构层逗号参与尾逗号判定
 	for i := 0; i < len(s); i++ {
 		ch := s[i]
 		if inStr {
@@ -298,6 +301,7 @@ func extractJSON(s string) string {
 	s = cleanJSONFence(s)
 	s = stripTrailingCommas(s)
 	s = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "\ufeff")) // 去 BOM
+	// 遍历候选起点：字符串感知的括号配平，首个通过 json.Valid 的完整片段即答案
 	for i := 0; i < len(s); i++ {
 		if s[i] != '{' && s[i] != '[' {
 			continue
@@ -307,6 +311,7 @@ func extractJSON(s string) string {
 		if s[i] == '[' {
 			closeC = ']'
 		}
+		// 每个候选独立状态：深度归零即闭合，扫描到头未闭合则此起点作废
 		depth := 0
 		inStr := false
 		esc := false
@@ -327,6 +332,7 @@ func extractJSON(s string) string {
 				}
 				continue
 			}
+			// 串外才处理结构符：开括号加深，闭括号归零即成候选片段
 			switch ch {
 			case '"':
 				inStr = true
@@ -366,6 +372,7 @@ func parseLLMOutput(content string) (*llmGenOutput, error) {
 		var raw []json.RawMessage
 		if err := json.Unmarshal([]byte(ext), &raw); err == nil {
 			merged := &llmGenOutput{}
+			// 数组元素三种形态逐级尝试：完整对象 → 单条 entry → 单条 phrase，命中即合并
 			for _, item := range raw {
 				var obj llmGenOutput
 				if json.Unmarshal(item, &obj) == nil && (len(obj.Entries) > 0 || len(obj.Phrases) > 0) {
@@ -389,6 +396,7 @@ func parseLLMOutput(content string) (*llmGenOutput, error) {
 			}
 		}
 	}
+	// 两种形态均解析失败：截前 200 字符报错留排查现场
 	msg := extracted
 	if len(msg) > 200 {
 		msg = msg[:200]

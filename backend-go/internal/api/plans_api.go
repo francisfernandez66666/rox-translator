@@ -254,6 +254,7 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	// mock 模式：模拟支付自动到账并发放入账
 	// ★ C18（2026-09-12）：升级单同口径错误传播
+	// 下单后置分支：mock 直接 MarkOrderPaid 结算入账（失败保留待支付单）；manual 挂静态收款码，未配置则引导联系管理员
 	if channel == "mock" {
 		if merr := s.Store.MarkOrderPaid(o.ID, tid); merr != nil {
 			writeJSON(w, 200, map[string]interface{}{"success": false,
@@ -263,6 +264,7 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 		}
 		o.Status = "paid"
 	} else if channel == "manual" {
+		// 手工渠道：有静态收款码则预挂订单，未配置直接拒绝下单并提示补配
 		if v, _ := s.Store.GetConfig("static_qr_image"); v != "" {
 			_ = s.Store.UpdateOrderPrepay(o.OrderNo, "", v)
 			o.QRContent = v

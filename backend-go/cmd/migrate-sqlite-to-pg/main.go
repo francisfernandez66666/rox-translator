@@ -50,6 +50,7 @@ var preferredOrder = []string{
 
 // main 一次性迁移工具入口：解析 -sqlite/-dsn 参数，逐表从 SQLite 拷贝数据到 PostgreSQL。
 func main() {
+	// ① 解析并校验参数：-sqlite 源库路径、-dsn 目标 PG 连接串、-table 单表调试过滤
 	sqlitePath := flag.String("sqlite", "", "源 SQLite 文件路径（必填）")
 	pgDSN := flag.String("dsn", "", "目标 PostgreSQL 连接串（必填）")
 	onlyTable := flag.String("table", "", "仅迁移指定表（调试用）")
@@ -59,6 +60,7 @@ func main() {
 		log.Fatal("用法: migrate-sqlite-to-pg -sqlite <path> -dsn <pg_dsn>")
 	}
 
+	// ② 建立两端连接并探活，任一失败直接退出（避免半途写入）
 	src, err := sql.Open("sqlite", db.SQLiteDSN(*sqlitePath))
 	if err != nil {
 		log.Fatalf("打开 SQLite 失败: %v", err)
@@ -77,6 +79,7 @@ func main() {
 		log.Fatalf("PostgreSQL 探活失败: %v", err)
 	}
 
+	// ③ 列举源表并按 preferredOrder（父表优先）排序，规避 PG 外键插入顺序报错
 	tables, err := listTables(src)
 	if err != nil {
 		log.Fatalf("列举源表失败: %v", err)
@@ -85,6 +88,7 @@ func main() {
 		return orderIdx(tables[i]) < orderIdx(tables[j])
 	})
 
+	// ④ 逐表拷贝：跳过 skipTables 瞬态表与 -table 过滤未命中表；单表失败仅记日志继续，汇总成功行数
 	totalCopied := 0
 	for _, t := range tables {
 		if skipTables[t] {

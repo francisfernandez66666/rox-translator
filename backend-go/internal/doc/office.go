@@ -59,6 +59,7 @@ func parseParagraphs(r io.Reader) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		// 按 token 类型分支：p 起重置缓冲、p 止冲刷成段、CharData 段内累计文本
 		switch t := tok.(type) {
 		case xml.StartElement:
 			if t.Name.Local == "p" {
@@ -100,6 +101,7 @@ func DocxRewrite(src, out string, repl []string) error {
 
 	replFunc := func(w io.Writer) error { return rewriteDocument(rc, w, repl) }
 	found := false
+	// 逐条目重打包：document.xml 换写为改写内容，其余条目原样复制
 	for _, f := range rc.File {
 		if strings.HasSuffix(f.Name, "word/document.xml") {
 			found = true
@@ -121,6 +123,7 @@ func DocxRewrite(src, out string, repl []string) error {
 		}
 		in.Close()
 	}
+	// 收尾：封中心目录后校验 document.xml 曾命中，再整体拷出覆盖目标文件
 	if err := zw.Close(); err != nil {
 		return err
 	}
@@ -150,6 +153,7 @@ func rewriteDocument(rc *zip.ReadCloser, w io.Writer, repl []string) error {
 	dec := xml.NewDecoder(src)
 	paraIdx := -1
 	paraTextEmitted := false
+	// 令牌流透传式重编码：结构原样写出，仅段落首个 w:t 换成替换文本
 	for {
 		tok, err := dec.Token()
 		if err == io.EOF {

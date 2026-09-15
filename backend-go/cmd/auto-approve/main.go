@@ -188,6 +188,8 @@ func main() {
 	}
 
 	// ============ 待审安全句 ============
+	// 分页扫描全部待审安全句：仅统计/处理 pending 状态（其余留痕不动）；dryrun 只计数，
+	// 正式模式逐条 AutoApprovePhrase：嵌入 kb_safety_phrases 正式库并写 approved 留痕行。
 	var phTotal, phApplied int
 	for offset := 0; ; offset += pageSize {
 		items, err := st.ListStagedPhrasesAll(pageSize, offset)
@@ -216,6 +218,7 @@ func main() {
 		}
 	}
 
+	// 汇总输出：dryrun 仅报预览计数（零写入）；正式模式报条目/安全句实际审批完成数
 	if *dry {
 		log.Printf("[auto-approve] 预览：待审条目 %d（将更正源语言 %d），待审安全句 %d。无写入。", entryTotal, entryCleaned, phTotal)
 		return

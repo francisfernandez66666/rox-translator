@@ -144,6 +144,7 @@ func (s *Server) handleImportTMX(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "翻译技能未加载（未传入 -kb）"})
 		return
 	}
+	// 上传→解析链：临时文件用完即删；TMX 需含 ≥2 语言的有效 tu 才继续
 	savePath, err := s.saveUploadedFile(r)
 	if err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文件上传失败"})
@@ -224,6 +225,7 @@ func buildTMX(rows []*kb.Row, moduleFilter string) []byte {
 	sb.WriteString(`<tmx version="1.4">` + "\n")
 	sb.WriteString(`<header creationtool="LangCross 能言" creationtoolversion="2.0" segtype="sentence" adminstatus="managed" datatype="plain text" srclang="zh-CN" ta="langcross" />` + "\n")
 	sb.WriteString("<body>\n")
+	// 逐行渲染：空源文/模块不符/无有效译文跳过；tuv 按语言字典序输出，内容统一 XML 转义
 	for _, r := range rows {
 		if r == nil || strings.TrimSpace(r.Zh) == "" {
 			continue
@@ -231,6 +233,7 @@ func buildTMX(rows []*kb.Row, moduleFilter string) []byte {
 		if moduleFilter != "" && r.Module != moduleFilter {
 			continue
 		}
+		// 收集非空目标语言对（排除 zh 源列）；langs 排序保证导出字节级稳定（可脱库单测）
 		pairs := map[string]string{}
 		for lc, v := range r.Langs {
 			if strings.TrimSpace(v) != "" && lc != "zh" {

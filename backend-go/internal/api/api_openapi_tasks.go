@@ -273,6 +273,7 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 			textExt[k] = true
 		}
 	}
+	// 逐文件扩展名白名单校验；delivery=text 时额外放行 anydoc 老格式（须服务器装有转换依赖）
 	for _, hdr := range headers {
 		ext := strings.ToLower(filepath.Ext(hdr.Filename))
 		if !openAPITaskExtWhitelist[ext] {
@@ -306,6 +307,7 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 	dir := filepath.Join(s.Cfg.UploadDir, "tickets")
 	_ = os.MkdirAll(dir, 0o755)
 	var saved []struct{ path, name string }
+	// 逐个流式落盘（纳秒前缀防重名覆盖）；Open/Create/Copy 任一 IO 失败即 500 返回
 	for _, hdr := range headers {
 		saveName := fmt.Sprintf("%d_%s", time.Now().UnixNano(), filepath.Base(hdr.Filename))
 		savePath := filepath.Join(dir, saveName)
@@ -342,6 +344,7 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 			}
 		}
 	}
+	// 标题缺省用首个文件名自动生成；建 ticket 主记录后挂全部附件并登记产物归属（C1）
 	if title == "" {
 		title = "[API] " + saved[0].name
 		if len(saved) > 1 {
@@ -538,6 +541,7 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPINotFound), "message": "该文件的产物不存在"})
 			return
 		}
+		// 无 file_id：收集存在产物文件的（路径,下载名），单文件直发、多文件打 zip
 		var paths, names []string
 		for _, f := range tfiles {
 			if f.ResultPath != "" {
@@ -547,6 +551,7 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 				}
 			}
 		}
+		// 单产物直接流式返回（打开失败则继续走后续兜底分支）
 		if len(paths) == 1 {
 			fh, oerr := os.Open(paths[0])
 			if oerr == nil {
@@ -556,6 +561,7 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 				return
 			}
 		}
+		// 多产物打 zip：逐份读入写 zip 条目（单份读失败跳过不阻断整包）
 		if len(paths) > 1 {
 			w.Header().Set("Content-Disposition", `attachment; filename="`+baseName+`.zip"`)
 			w.Header().Set("Content-Type", "application/zip")

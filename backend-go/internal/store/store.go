@@ -51,6 +51,7 @@ func New(db *sql.DB) (*Store, error) {
 	s.QuotaGrantMigrate()         // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
 	s.TicketStateTimingMigrate()  // ★ ticket_state 增加 started_at/duration_ms（幂等；进度耗时展示）
 	s.BalanceAccountMigrate()     // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
+	s.OrgSiblingUniqueMigrate()   // ★ P0-2（2026-09-15）：orgs 同级同名唯一约束（存量去重+建索引，幂等）
 	s.BillingIndexMigrate()       // ★ 整改 B5：订单号唯一索引 + Key 哈希检索索引（幂等，撞重复降级告警）
 	s.PackagesTenantMigrate()     // ★ 商业包租户化：packages 加 tenant_id 并改 (tenant_id, code) 复合唯一（幂等）
 	s.ReferralMigrate()           // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）

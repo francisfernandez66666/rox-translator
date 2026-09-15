@@ -21,11 +21,23 @@ const success = new Rate('translate_success'); // 译文交付成功
 const limited = new Counter('translate_limited'); // 限流总次数
 const latency = new Trend('translate_ms', true);
 
+// ★ P1 压测基线量化（2026-09-15，见《P0P2待办核实报告_20260915.md》P1-3）：
+//   阈值预算默认对齐《容量预告与超卖预案_20260914.md》实测定案——
+//   安全档（VU≤8）P99≈10s（单请求真实模型时延 7–8s + 排队），预算取 P99<15s（约 1.5 倍余量）；
+//   系统错误率<1%（09-14 实测恒 0）；可用 env 覆盖：P99_MS=8000 k6 run ...
+const P99_MS = parseInt(__ENV.P99_MS || '15000', 10);
+const ERR_RATE_MAX = parseFloat(__ENV.ERR_RATE_MAX || '0.01');
+
 export const options = {
   scenarios: {
     probe: { executor: 'constant-vus', vus: VUS, duration: DURATION, exec: 'default' },
   },
-  thresholds: { app_errors: ['rate<0.10'] },
+  // ★ 量化验收阈值：超预算的台阶在退出码上判 FAIL（k6 非零退出），可直接做发布/容量闸门。
+  thresholds: {
+    app_errors: [`rate<${Math.max(ERR_RATE_MAX, 0.10)}`], // 粗闸保留（09-14 口径）
+    translate_ms: [`p(99)<${P99_MS}`],                    // P99 时延预算
+    translate_success: [`rate>${1 - ERR_RATE_MAX}`],      // 成功交付率（限流拒绝不计为失败交付面？——见 handleSummary 口径说明）
+  },
   summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
 };
 
@@ -71,17 +83,26 @@ export function handleSummary(data) {
     generated_at: new Date().toISOString(),
     base: BASE,
     vus: VUS, duration: DURATION,
+    budget_p99_ms: P99_MS,
     requests: m.http_reqs ? m.http_reqs.values.count : 0,
     success_samples: samples('translate_success'),
     success_rate: m.translate_success ? m.translate_success.values.rate : null,
     limited_count: m.translate_limited ? m.translate_limited.values.count : 0,
     app_errors_rate: m.app_errors ? m.app_errors.values.rate : null,
+    // ★ 阈值判定结果快照（k6 评估顺序：thresholds 在 summary 前，FAIL 时退出码非零）
+    thresholds_passed: data.thresholds ? Object.values(data.thresholds).every((t) => (Array.isArray(t) ? t.every((x) => x.ok) : true)) : null,
     http_ms: { avg: g('http_req_duration', 'avg'), p95: g('http_req_duration', 'p(95)'), p99: g('http_req_duration', 'p(99)'), max: g('http_req_duration', 'max') },
     translate_ms: { avg: g('translate_ms', 'avg'), p95: g('translate_ms', 'p(95)'), p99: g('translate_ms', 'p(99)'), max: g('translate_ms', 'max') },
   };
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  // ★ 结果归档（P1 基线留痕）：默认写 deploy/loadtest/results/（RESULTS_DIR 可覆盖），
+  //   全量 JSON 一份 + 单台阶 CSV 一份；多台阶矩阵由 run_capacity_matrix.sh 合并为总表。
+  const dir = __ENV.RESULTS_DIR || 'deploy/loadtest/results';
+  const header = 'generated_at,base,vus,requests,success_rate,p99_ms,limited,err_rate,passed\n';
+  const csvRow = `${out.generated_at},${BASE.replace(/https?:\/\//, '')},${VUS},${out.requests},${out.success_rate},${out.translate_ms.p99},${out.limited_count},${out.app_errors_rate},${out.thresholds_passed}\n`;
   return {
-    stdout: '\n===== 容量探针 VU=' + VUS + ' =====\n' + JSON.stringify(out, null, 2) + '\n',
-    [`/tmp/k6_capacity_${ts}.json`]: JSON.stringify(data, null, 2),
+    stdout: '\n===== 容量探针 VU=' + VUS + ' 阈值P99<' + P99_MS + 'ms =====\n' + JSON.stringify(out, null, 2) + '\n',
+    [`${dir}/k6_capacity_${VUS}vu_${ts}.json`]: JSON.stringify(data, null, 2),
+    [`${dir}/k6_capacity_${VUS}vu_${ts}.csv`]: header + csvRow,
   };
 }

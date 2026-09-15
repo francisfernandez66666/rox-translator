@@ -136,6 +136,7 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": true, "packages": pkgs})
 		return
 	}
+	// 租管/超管路径：直接列本租户全部包（部门包/企业包等），附条目数后统一装饰返回
 	pkgs, err := s.Store.ListKBPackages(tid)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
@@ -239,6 +240,7 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 			all = *req.CrossAll
 		}
 		orgs := req.CrossOrgs
+		// 非全公司时：部门管理员创建须并入本部门（保证自身可维护），再落库并回填响应字段
 		if auth.RoleLevel(u.Role) == 2 && !all {
 			has := false
 			for _, o := range orgs {
@@ -385,6 +387,7 @@ func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的只读授权"})
 		return
 	}
+	// 解析过滤与分页参数；count=1 时只回包条目总数，否则按 layer/target_lang/q 分页列出
 	layer, _ := strconv.Atoi(qp.Get("layer"))
 	targetLang := qp.Get("target_lang")
 	keyword := qp.Get("q")
@@ -535,6 +538,7 @@ func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
+	// 解析请求体：id/source_text 必填，target_lang 缺省补 en（layer=0 时保留原层，见下）
 	var req struct {
 		ID         int64  `json:"id"`          // 待更新条目 ID（必填）
 		Layer      int    `json:"layer"`       // 层级（0 时保留原层，由 store 侧校验）
@@ -624,6 +628,7 @@ func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 解析请求体：phrase 必填；lang/kind 缺省补 en/style；replacement 仅 replace 类型有义
 	var req struct {
 		PackageID   int64  `json:"package_id"`  // 所属包 ID（语言文化包）
 		Lang        string `json:"lang"`        // 目标语言代码（默认 en）
@@ -918,6 +923,7 @@ func (s *Server) handleIndustryCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "行业 code 仅允许小写字母/数字/下划线"})
 		return
 	}
+	// code 查重通过后创建平台行业包（宿主固定为租户 0，全局共享）
 	exists, _ := s.Store.IndustryCodeExists(code)
 	if exists {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "行业 code 已存在"})
@@ -945,6 +951,7 @@ func (s *Server) handleIndustryUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可编辑行业"})
 		return
 	}
+	// 解析并校验 body：id>0、name 去空白后非空；通过后更新显示名并审计+失效缓存
 	var req struct {
 		ID   int64  `json:"id"`
 		Name string `json:"name"`
@@ -974,6 +981,7 @@ func (s *Server) handleIndustryStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可启停行业"})
 		return
 	}
+	// 解析并校验 body：id>0、enabled 仅允许 0/1；启停行业包并审计+失效缓存
 	var req struct {
 		ID      int64 `json:"id"`
 		Enabled int   `json:"enabled"`

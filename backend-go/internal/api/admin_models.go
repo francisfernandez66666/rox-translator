@@ -460,6 +460,7 @@ func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
 		return
 	}
+	// 以当前策略为底做增量合并：仅覆盖显式传入且 >0 的数值字段，未传字段保持原值
 	cur, _ := s.Ten.GetPolicyConfig(s.effTenant(r, u))
 	pc := cur
 	if v, ok := req.Policy["high_sim"]; ok && v > 0 {

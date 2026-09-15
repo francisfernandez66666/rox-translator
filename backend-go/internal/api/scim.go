@@ -115,6 +115,7 @@ func (s *Server) handleSCIMUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := cfg.TenantID
+	// 按路径尾段分发：空=列表/创建，数字=单用户操作；令牌仅可见本租户用户
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/scim/v2/Users"), "/")
 	if rest == "" {
 		switch r.Method {
@@ -137,6 +138,7 @@ func (s *Server) handleSCIMUsers(w http.ResponseWriter, r *http.Request) {
 		scimErr(w, 404, "user not found")
 		return
 	}
+	// 单用户端点分发：GET 回显；PUT 解码后 scimUserApply 全量同步；PATCH/DELETE 见下方分支
 	ext := s.Store.SCIMExternalID(id)
 	switch r.Method {
 	case http.MethodGet:
@@ -162,6 +164,7 @@ func (s *Server) handleSCIMUsers(w http.ResponseWriter, r *http.Request) {
 			scimErr(w, 400, "bad patch")
 			return
 		}
+		// PATCH 仅处理 path=active 的操作：true→active false→disabled，其余 path 忽略
 		for _, op := range patch.Operations {
 			if strings.EqualFold(op.Path, "active") {
 				var v bool
@@ -195,6 +198,7 @@ func (s *Server) scimUserList(w http.ResponseWriter, r *http.Request, tid int64)
 	if count <= 0 || count > 100 {
 		count = 100
 	}
+	// 全量拉取后按 filter 内存过滤（SCIM 条件极少），再做 startIndex 窗口切片
 	users, _ := s.Store.ListUsers(tid)
 	filter := r.URL.Query().Get("filter")
 	var items []scimUser
@@ -256,6 +260,7 @@ func (s *Server) scimUserCreate(w http.ResponseWriter, r *http.Request, tid int6
 		scimWrite(w, 200, scimUserOf(ex, su.ExternalID))
 		return
 	}
+	// 新建路径：随机 12 字节占位口令（SCIM 用户不走密码登录），active 缺省为 true，邮箱/展示名做规范化兜底
 	pass := make([]byte, 12)
 	_, _ = rand.Read(pass)
 	hash := auth.PasswordHash(hex.EncodeToString(pass))
@@ -271,6 +276,7 @@ func (s *Server) scimUserCreate(w http.ResponseWriter, r *http.Request, tid int6
 	if display == "" && su.Name != nil {
 		display = strings.TrimSpace(su.Name.Formatted + " " + su.Name.GivenName)
 	}
+	// 创建成功后补写 email/externalId 并记审计；active=false 时立即置 disabled（默认禁用接入）
 	u, err := s.Store.CreateUser(tid, su.UserName, hash, display, "user", 0, cfg.RootOrgID)
 	if err != nil {
 		scimErr(w, 409, "create user failed: "+err.Error())
@@ -323,6 +329,7 @@ func (s *Server) handleSCIMGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	tid := cfg.TenantID
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/scim/v2/Groups"), "/")
+	// Group 与组织树一一对应：GET 列表/单查，POST 在根组织下建 type=scim 的组织
 	switch r.Method {
 	case http.MethodGet:
 		if rest != "" {
@@ -372,6 +379,7 @@ func (s *Server) handleSCIMGroups(w http.ResponseWriter, r *http.Request) {
 			scimErr(w, 400, "bad body")
 			return
 		}
+		// PUT 全量覆盖成员（缺省 members 也清空）；PATCH 仅在传了 members 时动成员表
 		if len(g.Members) > 0 || r.Method == http.MethodPut {
 			s.applyGroupMembers(tid, id, g.Members)
 		}
@@ -528,6 +536,7 @@ func (s *Server) handleTenantSCIM(w http.ResponseWriter, r *http.Request) {
 			"endpoint": scimBaseURL(r) + "/api/scim/v2"})
 		return
 	}
+	// POST：读已有配置（无则先生成新 token），按传入字段增量覆盖后落库并回显接入端点
 	var req struct {
 		Enabled   *bool  `json:"enabled"`
 		Rotate    bool   `json:"rotate"`
@@ -541,6 +550,7 @@ func (s *Server) handleTenantSCIM(w http.ResponseWriter, r *http.Request) {
 	if cfg == nil {
 		cfg = &store.SCIMConfig{TenantID: tid, Token: store.NewSCIMToken()}
 	}
+	// 三开关增量：enabled 独立开关；rotate 重生成 token（泄露即换）；root_org_id 为组/用户挂载点
 	if req.Enabled != nil {
 		cfg.Enabled = *req.Enabled
 	}

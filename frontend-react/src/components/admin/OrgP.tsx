@@ -34,6 +34,7 @@ function fmtNumShort(n: number): string {
 /** 组织树展示、组织 CRUD、用户管理、预算设置、邀请码、组织移动组件 */
 export function OrgP() {
   const ad = useAdmin()
+  // ===== 面板状态：组织树、选中节点、成员列表/分页、预算、批量导入 =====
   const [orgs, setOrgs] = useState<OrgInfo[]>([])
   const [rootOrg, setRootOrg] = useState<OrgInfo | null>(null)
   const [isPlatformView, setIsPlatformView] = useState(false)
@@ -156,6 +157,7 @@ export function OrgP() {
     if (r.success) setOrgUserList(r.users || [])
   }
 
+  // loadAll 组织面板整体刷新：组织树 + 成员列表并行拉取（含平台视图标记）
   const loadAll = useCallback(async () => {
     const [r, ru] = await Promise.all([orgList(), orgUsers()])
     if (r.success) {
@@ -349,6 +351,7 @@ export function OrgP() {
 
   return (
     <Tabs value={tab} onChange={(v) => setTab(v as 'org' | 'invite')}>
+      {/* Tab 面板 */}
       <Tabs.TabPanel value="org" label={t('org.tabOrg')}>
         <Panel title={t('org.title')}>
       <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 12px' }}>{t('org.treeHint')}</p>
@@ -425,6 +428,7 @@ export function OrgP() {
             {selectedOrg === 0 ? tpl('org.allUsersRootTpl', { name: rootOrgName }) : tpl('org.usersInChildren', { name: flatOrgs.find((x) => x.id === selectedOrg)?.name || '' })}
           </h3>
           <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 12px' }}>{t('org.usersHint')}</p>
+          {/* 数据表格 */}
           <Table rowKey="id" size="small" maxHeight={360} data={orgUserList}
                  columns={[
                    { colKey: 'id', title: t('org.colId'), width: 60 },
@@ -488,6 +492,7 @@ export function OrgP() {
 
           <Dialog visible={!!importResult} onClose={() => setImportResult(null)}
                   header={`📥 ${tpl('org.importResultTitle', { total: importResult?.length || 0 })}`} width={520}>
+            {/* 数据表格 */}
             <Table rowKey="username" size="small" maxHeight={360} data={importResult || []}
                    columns={[
                      { colKey: 'username', title: t('org.importResultCol') },
@@ -538,6 +543,7 @@ export function OrgP() {
       </Dialog>
         </Panel>
       </Tabs.TabPanel>
+      {/* Tab 面板 */}
       <Tabs.TabPanel value="invite" label={t('org.tabInvite')}>
         <InvitesP />
       </Tabs.TabPanel>

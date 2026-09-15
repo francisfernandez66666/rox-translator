@@ -25,7 +25,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// main 命令行入口：解析模式开关后初始化配置与存储，再按 resetpw/grant/create/revoke/list 分发。
 func main() {
+	// 参数定义：三个 Key 生命周期操作（create/list/revoke）+ 额度发放 grant + 灾备用 resetpw，公共定位参数 -tid/-user
 	create := flag.Bool("create", false, "签发新 Key")
 	list := flag.Bool("list", false, "列出租户全部 Key")
 	revoke := flag.Int64("revoke", 0, "按 id 回收 Key（配 -tid）")
@@ -62,6 +64,7 @@ func main() {
 		log.Fatalf("存储初始化失败: %v", err)
 	}
 
+	// 按互斥模式分发：重置口令 → 发放额度 → 签发 Key → 回收 Key → 列表；resetpw 直连 UPDATE 仅限演练库
 	switch {
 	case *resetpw > 0:
 		if *pw == "" {
@@ -72,6 +75,7 @@ func main() {
 			log.Fatalf("重置口令失败: %v", err)
 		}
 		fmt.Println("password reset for user", *resetpw)
+	// 额度发放：CreateQuotaGrant 按 -days 计算到期时间，-source 留痕（审计/对账用）
 	case *grant:
 		if *tid <= 0 || *amount <= 0 {
 			log.Fatal("-grant 需要 -tid 与 -amount")

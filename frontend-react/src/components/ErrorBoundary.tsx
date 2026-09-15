@@ -1,21 +1,30 @@
+// ============================================================================
+// components/ErrorBoundary.tsx — 全局错误边界
+// 捕获子树渲染期抛出的异常：避免单个面板抛错导致整页白屏（React 默认行为）。
+// 提供「重试」（本地复位）与「刷新」两条恢复路径；fallback 可自定义兜底 UI。
+// ============================================================================
 import { Component, type ReactNode } from 'react'
 
+/** 错误边界入参：children=被保护子树；fallback=出错时自定义兜底（缺省内置卡片） */
 interface Props {
   children: ReactNode
   fallback?: ReactNode
 }
 
+/** 内部状态：hasError 标记是否进入异常态（供 render 分支），error 保留原始错误 */
 interface State {
   hasError: boolean
   error: Error | null
 }
 
+/** ErrorBoundary 错误边界：把渲染异常转成可见的「页面出错了」卡片 + 重试按钮 */
 export default class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props)
     this.state = { hasError: false, error: null }
   }
 
+  /** 由 React 自动调用：把抛出的异常转为 hasError=true 的内部状态（等价「熔断」） */
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error }
   }
@@ -24,10 +33,12 @@ export default class ErrorBoundary extends Component<Props, State> {
     console.error('[ErrorBoundary]', error, info.componentStack)
   }
 
+  /** handleRetry 本地复位异常态：不清历史，仅允许 React 重新渲染子树 */
   handleRetry = () => {
     this.setState({ hasError: false, error: null })
   }
 
+  /** render 异常态走兜底卡片（优先自定义 fallback），正常态原样渲染子树 */
   render() {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback

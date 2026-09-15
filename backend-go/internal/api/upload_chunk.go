@@ -68,6 +68,7 @@ func (s *Server) handleKBUploadChunk(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "分片解析失败"})
 		return
 	}
+	// 参数校验：upload_id 格式、index/total 范围（总片数上限防滥用）
 	uploadID := r.FormValue("upload_id")
 	idx, _ := strconv.Atoi(r.FormValue("index"))
 	total, _ := strconv.Atoi(r.FormValue("total"))
@@ -93,6 +94,7 @@ func (s *Server) handleKBUploadChunk(w http.ResponseWriter, r *http.Request) {
 	if idx == 0 {
 		s.sweepOldChunks()
 	}
+	// 先写 tmp.part 再原子 rename 为分片名，半写中断不会留下脏分片
 	tmp := filepath.Join(dir, "tmp.part")
 	out, err := os.Create(tmp)
 	if err != nil {
@@ -180,6 +182,7 @@ func (s *Server) handleKBUploadMerge(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "upload_id 非法"})
 		return
 	}
+	// 扩展名须在 KB 白名单内；读 meta 记录比对已收片数是否收齐
 	ext := strings.ToLower(filepath.Ext(req.Filename))
 	if !kbExtWhitelist[ext] {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "不支持的文件类型：" + ext})
@@ -204,6 +207,7 @@ func (s *Server) handleKBUploadMerge(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// 合并落临时 .merging 文件：顺序拼接全部分片，边拷边累计字节防超限
 	name := "kbmerged_" + randHex(12) + "." + ext
 	tmp := name + ".merging"
 	path := filepath.Join(s.kbTempDir(), tmp)
@@ -212,6 +216,7 @@ func (s *Server) handleKBUploadMerge(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
+	// 逐片顺序 io.Copy 追加，累计字节超 chunkMaxActual 即中止清理，防拼出半截文件
 	var written int64
 	for i := 0; i < total; i++ {
 		part, err := os.Open(filepath.Join(dir, chunkPartName(i)))
@@ -232,6 +237,7 @@ func (s *Server) handleKBUploadMerge(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	out.Close()
+	// 收尾：原子改名为正式产物名（kbmerged_xxx.ext）并删除整个分片目录
 	if err := os.Rename(path, filepath.Join(s.kbTempDir(), name)); err != nil {
 		os.Remove(path)
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})

@@ -1,3 +1,6 @@
+// ============ kb_grants.go · 职责说明 ============
+// api 包内部实现文件：KB 包级读/写/管理授权（H3 权限矩阵）。
+// =============================================
 // ============================================================================
 // H3 KB 包级权限矩阵 API：读/写/管理三级授权的鉴权辅助 + 授权管理端点 +
 // 当前用户授权查询（前端导航门控）。
@@ -94,6 +97,7 @@ func (s *Server) handleKBPackGrants(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
+	// POST 授权/撤销：解析 body 后依次过 manage 闸口、包存在性、role 白名单（空串=撤销）
 	var req struct {
 		PackID int64  `json:"pack_id"`
 		UserID int64  `json:"user_id"`

@@ -102,6 +102,7 @@ function startPolling() { stopPolling(); payTimer.current = setInterval(checkSta
 function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current); payTimer.current = null } }
   useEffect(() => () => stopPolling(), [])
 
+  // loadPackage 拉取本租户套餐与支付方式，并同步可购商业包列表
   const loadPackage = useCallback(async () => {
     const r: Any = await myPackage()
     if (r.success) {
@@ -112,14 +113,17 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
     const p: Any = await apiPlans()
     if (p.success) setPlanList((p.plans as Any[]) || [])
   }, [])
+  // loadOrders 拉取充值订单列表（待付/已付/退款全状态）
   const loadOrders = useCallback(async () => {
     const r: Any = await billingOrders()
     if (r.success) setOrders((r.orders as Any[]) || [])
   }, [])
+  // loadInvoices 拉取发票申请列表
   const loadInvoices = useCallback(async () => {
     const r: Any = await billingInvoices()
     if (r.success) setInvoices((r.invoices as Any[]) || [])
   }, [])
+  // loadQuota 拉取租户限流配额（QPS/并发/日字符/日 token）并回填表单
   const loadQuota = useCallback(async () => {
     const r: Any = await billingQuota()
     if (r.success) setQuotaForm({
@@ -127,6 +131,7 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
       max_daily_chars: (r.max_daily_chars as number) || 0, max_daily_tokens: (r.max_daily_tokens as number) ?? 0,
     })
   }, [])
+  // loadPkgs 超管专属：拉取全部商业包配置（普通租户直接跳过）
   const loadPkgs = useCallback(async () => {
     if (!isSuper) return
     const r: Any = await adminPackages()
@@ -147,6 +152,7 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
     if (m.success) setManualOrders((m.orders as Any[]) || [])
   }, [isSuper])
 
+  // loadAll 计费面板整体刷新：租户先取套餐，再并行拉订单/发票/配额/商业包
   const loadAll = useCallback(async () => {
     if (!isSuper) await loadPackage()
     await Promise.all([loadOrders(), loadInvoices(), loadQuota(), loadPkgs()])
@@ -433,6 +439,7 @@ async function confirmManual(o: Any) {
       )}
 
       <Panel title={t('billing.ordersTitle')}>
+        {/* 数据表格 */}
         <Table rowKey="id" size="small" maxHeight={260} data={orders}
                columns={[
                  { colKey: 'order_no', title: t('billing.colOrderNo'), width: 150 },
@@ -446,6 +453,7 @@ async function confirmManual(o: Any) {
                ] as never} />
         {!orders.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 8 }}>{t('plans.noOrder')}</div>}
         <h4 style={{ margin: '14px 0 6px' }}>{t('billing.invoiceMgmt')}</h4>
+        {/* 数据表格 */}
         <Table rowKey="id" size="small" maxHeight={220} data={invoices}
                columns={[
                  { colKey: 'invoice_no', title: t('billing.colInvoiceNo') },
@@ -474,6 +482,7 @@ async function confirmManual(o: Any) {
             ))}
             <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.funnelHint')}</span>
           </Space>
+          {/* 数据表格 */}
           <Table rowKey="source" size="small" data={funnelRows}
                  columns={[
                    { colKey: 'source', title: t('plans.funnelColSource'), width: 160 },
@@ -553,6 +562,7 @@ async function confirmManual(o: Any) {
             <Input type="number" value={num(pkgForm.duration_days)} onChange={(v) => setPkgForm({ ...pkgForm, duration_days: Number(v) || 0 })} placeholder={t('packages.duration')} style={{ width: 120 }} />
             <Button onClick={createPkg}>{t('common.save')}</Button>
           </Space>
+          {/* 数据表格 */}
           <Table rowKey="id" size="small" data={pkgs} style={{ marginTop: 10 }}
                  columns={[
                    { colKey: 'code', title: 'code', width: 140 },
@@ -573,6 +583,7 @@ async function confirmManual(o: Any) {
 
       {isSuper && (
         <Panel title={t('plans.nav.manual')}>
+          {/* 数据表格 */}
           <Table rowKey="id" size="small" data={manualOrders}
                  columns={[
                    { colKey: 'order_no', title: t('billing.colOrderNo'), width: 150 },

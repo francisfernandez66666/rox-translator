@@ -34,6 +34,7 @@ function firstTranslation(finalResult: unknown): string {
 
 /** 反馈 / 审批台 / TM 审核面板 */
 export function TicketsP() {
+  // ===== 面板状态：工单/反馈/复核/审批四类列表与过滤条件、详情弹窗 =====
   const [, t, tpl] = useT()
   const { isSuper, activeTenantId, consumeFeedback } = useAdmin()
   const [feedbacks, setFeedbacks] = useState<Any[]>([])
@@ -48,14 +49,17 @@ export function TicketsP() {
   const [approvalTickets, setApprovalTickets] = useState<Any[]>([])
   const [approveDlg, setApproveDlg] = useState<null | { row: Any; text: string; reason: string; suggestion: string; action: 'approve' | 'reject' }>(null)
 
+  // loadFeedbacks 按状态过滤拉取线上反馈列表
   const loadFeedbacks = useCallback(async () => {
     const r = await feedbackList(statusFilter)
     if (r.success) setFeedbacks((r as unknown as { feedbacks?: Any[] }).feedbacks || [])
   }, [statusFilter])
+  // loadReviews 拉取自迭代对照复核候选（TM review 队列）
   const loadReviews = useCallback(async () => {
     const r = await listTmReview(rvFilter)
     if (r.success) setReviews((r as unknown as { candidates?: Any[] }).candidates || [])
   }, [rvFilter])
+  // loadApproval 拉取待审批工单队列
   const loadApproval = useCallback(async () => {
     const r = await approveList()
     if (r.success) setApprovalTickets((r as unknown as { tickets?: Any[] }).tickets || [])
@@ -143,6 +147,7 @@ export function TicketsP() {
               options={[{ label: t('tmr.pending'), value: 'pending' }, { label: t('tmr.approved'), value: 'approved' }, { label: t('tmr.rejected'), value: 'rejected' }]} />
             <Button size="small" onClick={() => void loadReviews()}>{t('tickets.refresh')}</Button>
           </div>
+          {/* 数据表格 */}
           <Table rowKey="id" size="small" data={reviews}
             columns={[
               { colKey: 'id', title: 'ID', width: 60 },
@@ -221,6 +226,7 @@ export function TicketsP() {
             <Button size="small" onClick={() => void loadFeedbacks()}>{t('tickets.refresh')}</Button>
             <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{tpl('fb.count', { n: feedbacks.length })}</span>
           </div>
+          {/* 数据表格 */}
           <Table rowKey="id" size="small" data={feedbacks} style={{ marginTop: 8 }}
             columns={[
               { colKey: 'id', title: 'ID', width: 60 },
