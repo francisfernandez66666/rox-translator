@@ -14,6 +14,8 @@ import * as pModels from './panels/models'
 import * as pWorkflow from './panels/workflow'
 import * as pApiKeys from './panels/apikeys'
 import * as pWebhooks from './panels/webhooks'
+import * as pSdk from './panels/sdk'
+import * as pHub from './panels/hub'
 import * as pTickets from './panels/tickets'
 import * as pBilling from './panels/billing'
 import * as pUsage from './panels/usage'
@@ -47,7 +49,7 @@ const zh: Dict = {
   ...pModels.zh, ...pWorkflow.zh, ...pApiKeys.zh, ...pWebhooks.zh,
   ...pTickets.zh, ...pBilling.zh, ...pUsage.zh, ...pAlerts.zh,
   ...pInvites.zh, ...pChat.zh, ...pPackages.zh, ...pFeedback.zh,
-  ...pReferral.zh, ...pTasks.zh, ...pOps.zh, ...pIndustries.zh, ...pBrandterms.zh, ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh, ...pLanding.zh,
+  ...pReferral.zh, ...pTasks.zh, ...pSdk.zh, ...pHub.zh, ...pOps.zh, ...pIndustries.zh, ...pBrandterms.zh, ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh, ...pLanding.zh,
 }
 
 // en 英文词典：base 基础字典 + 各面板模块英文文案合并
@@ -57,7 +59,7 @@ const en: Dict = {
   ...pModels.en, ...pWorkflow.en, ...pApiKeys.en, ...pWebhooks.en,
   ...pTickets.en, ...pBilling.en, ...pUsage.en, ...pAlerts.en,
   ...pInvites.en, ...pChat.en, ...pPackages.en, ...pFeedback.en,
-  ...pReferral.en, ...pTasks.en, ...pOps.en, ...pIndustries.en, ...pBrandterms.en, ...pChatwin.en, ...pMybill.en, ...pReconcile.en, ...pLanding.en,
+  ...pReferral.en, ...pTasks.en, ...pSdk.en, ...pHub.en, ...pOps.en, ...pIndustries.en, ...pBrandterms.en, ...pChatwin.en, ...pMybill.en, ...pReconcile.en, ...pLanding.en,
 }
 
 // dicts 按语言索引的词典集合，取词时按当前语言定位

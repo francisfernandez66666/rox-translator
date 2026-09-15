@@ -70,7 +70,7 @@ export async function userBulkImport(file: File): Promise<AdminResp & { created?
 // ==================== 充值订单 ====================
 
 /** 创建充值订单（租户/代币数/金额） */
-export async function adminOrderCreate(data: { tenant_id: number; tokens: number; money: number }): Promise<AdminResp> {
+export async function adminOrderCreate(data: { tenant_id: number; tokens?: number; points?: number; money: number }): Promise<AdminResp> {
   return request('/api/admin/orders/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 

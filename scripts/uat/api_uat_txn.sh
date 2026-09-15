@@ -925,6 +925,57 @@ ck T39-zip-has-en '\|Y\|' "|$ZEN39|"
 ck T39-zip-has-ja 'Y$' "$ZJA39"
 rm -f "$ZIP39H" "$ZIP39"; rm -rf "$TMPD39"
 
+
+# ============================================================================
+# T40（2026-09-15 任务1）：文件工单余额预检「积分口径 + PDF 估算校准」
+#   新个人租户默认体验额度=free_trial_tokens（300000 内部 token=1000 积分）。
+#   a) 700KB 二进制文档（.pdf）：新口径 /12 预估 ≈69k token << 余额 → 放行建单
+#      （旧口径 size/3 预估 ≈269k×1.5=403k > 300k → 误拦，即用户反馈的
+#      「700KB PDF 提示需 402553 token」缺陷的直接回归）。
+#   b) 按余额自适应放大文件（13×余额 字节，封顶 35MB）→ 新口径预估仍超余额 →
+#      拒绝，且文案必须含「积分」且零 token 裸值（对外口径承诺）。
+# ============================================================================
+T40U="t40u_$(date +%s)$RANDOM"
+T40RG=$(reg "$T40U" uatpass123 "T40C$RANDOM" 演练T40 "$T40U@t.test")
+echo "$T40RG" | grep -q '"success": *true' || echo "  [T40] 注册失败: $(echo "$T40RG" | head -c 160)"
+T40TK=$(tok "$T40U" uatpass123)
+H40="Authorization: Bearer $T40TK"
+T40BAL=$(curl -s $B/api/me/package -H "$H40" | pv '.get("balance_tokens",0)')
+T40BAL=${T40BAL:-0}
+echo "  [T40] 新租户余额 token=$T40BAL"
+TMPD40=$(mktemp -d)
+head -c 716800 /dev/urandom > "$TMPD40/t40_small.pdf"
+R40S=$(curl -s $B/api/tickets/create-file -H "$H40" -F "files=@$TMPD40/t40_small.pdf" -F "target_langs=en" -F "mode=fast")
+echo "$R40S" | grep -q '"success":true' && { PASS=$((PASS+1)); echo "PASS|T40-pdf-700k-allowed"; } || { FAIL=$((FAIL+1)); echo "FAIL|T40-pdf-700k-allowed($(echo "$R40S" | head -c 200))"; }
+# 大文件：13×余额字节（/12/1.3×1.5 后 ≈1.25×余额 > 余额）；封顶 35MB（<40MB 上传上限）
+T40BIG=$(( T40BAL * 13 )); [ "$T40BIG" -gt 36700160 ] && T40BIG=36700160
+head -c "$T40BIG" /dev/urandom > "$TMPD40/t40_big.pdf"
+R40B=$(curl -s $B/api/tickets/create-file -H "$H40" -F "files=@$TMPD40/t40_big.pdf" -F "target_langs=en" -F "mode=fast")
+echo "$R40B" | grep -q '"success":false' && echo "$R40B" | grep -q "积分" \
+  && { PASS=$((PASS+1)); echo "PASS|T40-overspend-rejected-points"; } \
+  || { FAIL=$((FAIL+1)); echo "FAIL|T40-overspend-rejected-points(bytes=$T40BIG resp=$(echo "$R40B" | head -c 200))"; }
+if echo "$R40B" | grep -qi "token"; then FAIL=$((FAIL+1)); echo "FAIL|T40-msg-no-raw-token($(echo "$R40B" | head -c 120))"; else PASS=$((PASS+1)); echo "PASS|T40-msg-no-raw-token"; fi
+rm -rf "$TMPD40"
+
+# ============================================================================
+# T41（2026-09-15 任务4）：审计列表「时间倒序」回归防护
+#   背景：SQLite→PG 切流按显式 id 导入但未同步序列 → 新审计拿到低于存量的
+#   低位 id，旧排序 ORDER BY id DESC 把 9 月新记录沉底，界面误显示「审计
+#   停在 8-29」。修复=排序改 created_at DESC, id DESC + migrate 启动自愈
+#   （store.syncSequencesPG）。本段验证：以幂等配置保存触发一条当天审计，
+#   /api/system/audit 首行必须是当天记录，且列表按时间不升序。
+# ============================================================================
+SSAVE '{"disposable_email_domains":""}' >/dev/null   # 幂等触发 package_settings_save 审计
+T41L=$(curl -s "$B/api/system/audit?limit=8" -H "$AH")
+T41TODAY=$(date +%F)
+echo "$T41L" | grep -q "\"created_at\":\"${T41TODAY}" \
+  && { PASS=$((PASS+1)); echo "PASS|T41-audit-head-is-today"; } \
+  || { FAIL=$((FAIL+1)); echo "FAIL|T41-audit-head-is-today($(echo "$T41L" | head -c 200))"; }
+T41ORD=$(echo "$T41L" | python3 -c 'import sys,json;a=[x.get("created_at","") for x in json.load(sys.stdin).get("logs",[])];print("DESC" if a==sorted(a,reverse=True) else "BAD")' 2>/dev/null || echo ERR)
+[ "$T41ORD" = "DESC" ] \
+  && { PASS=$((PASS+1)); echo "PASS|T41-audit-time-desc"; } \
+  || { FAIL=$((FAIL+1)); echo "FAIL|T41-audit-time-desc($T41ORD)"; }
+
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="
 exit 0

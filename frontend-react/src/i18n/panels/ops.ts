@@ -15,7 +15,7 @@ export const zh: Record<string, string> = {
   'ops.effectiveTag': '当前生效',
   // ---- 模式定价 ----
   'ops.modeTitle': '模式定价因子',
-  'ops.modeHint': 'charge=否 即推广期免费（仅留痕不扣 token）；markup 为成本系数（0=沿用全局）；limit_chars 为单次输入上限（0=不限）。',
+  'ops.modeHint': 'charge=否 即推广期免费（仅留痕不扣积分）；markup 为成本系数（0=沿用全局）；limit_chars 为单次输入上限（0=不限）。',
   'ops.modeEnabled': '启用',
   'ops.modeCharge': '扣费',
   'ops.modeMarkup': '成本系数',

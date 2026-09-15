@@ -18,6 +18,7 @@ import {
 import { useAdmin, roleName } from '@/stores/admin'
 import { Panel, Field, toastResp } from './parts'
 import { fmtTime, fmtNum } from '@/lib/ui'
+import { fmtPoints } from '@/utils/points' // ★ S1 积分口径展示
 import { useT, t as tFn } from '@/i18n'
 
 /** 审计动作键→中英文映射名（模块级，避免渲染闭包作用域问题；未命中字典时回退原始动作键） */
@@ -126,7 +127,7 @@ export default function Overview() {
       {health && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
           <HealthCard value={String(health.kb_entries ?? '')} label={t('overview.kbEntries')} />
-          <HealthCard value={String((health.balance as Any)?.balance ?? '')} label={t('overview.balance')} />
+          <HealthCard value={(health.balance as Any)?.balance != null ? `${fmtPoints(Number((health.balance as Any).balance))}` : ''} label={t('overview.balance')} />
           <HealthCard value={`${health.flow_steps_enabled ?? ''}/${health.flow_steps_total ?? ''}`} label={t('overview.flowSteps')} />
           <HealthCard value={String(health.usage ? Object.keys(health.usage as object).length : 0)} label={t('overview.usageTypes')} />
           <HealthCard value={health.breaker_open ? t('overview.breakerOpen') : t('overview.breakerNormal')} label={t('overview.mainModel')} />
@@ -616,10 +617,18 @@ export function UsageP() {
   }, [usageFrom, usageTo])
 
   /** 个人用量：基础费用/句数指标卡片 */
+  // ★ S1 积分口径（2026-09-15）：token 类字段（total/today/tokens_available）折积分展示，
+  //   句数/次数类保持原值；日期字符串（from/to/date）不再当指标卡渲染；字段给中文标签。
+  const ME_TOKEN_FIELDS = ['total', 'today', 'tokens_available']
   const meCards = (d: Any) => !d ? <Empty description="—" /> : (
     <div className="stat-grid">
-      {Object.entries(d).filter(([, v]) => typeof v !== 'object').map(([k, v]) => (
-        <div key={k} className="stat-card"><div style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{k}</div><b>{fmtNum(Number(v))}</b></div>
+      {Object.entries(d).filter(([, v]) => typeof v === 'number').map(([k, v]) => (
+        <div key={k} className="stat-card">
+          <div style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('usage.field.' + k) !== 'usage.field.' + k ? t('usage.field.' + k) : k}</div>
+          {ME_TOKEN_FIELDS.includes(k)
+            ? <b>{fmtPoints(Number(v))} <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--adm-faint)' }}>{t('ss2.unitPoints')}</span></b>
+            : <b>{fmtNum(Number(v))}</b>}
+        </div>
       ))}
     </div>
   )
@@ -627,13 +636,13 @@ export function UsageP() {
   /** 系统用量：组织下用户成本明细表 + 合计 */
   const orgTable = (d: Any) => !d ? <Empty description="—" /> : (
     <div>
-      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 8px' }}>{tpl('usage.orgTotal', { n: fmtNum(d.total || 0) })}</p>
+      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 8px' }}>{tpl('usage.orgTotal', { n: fmtPoints(Number(d.total) || 0) })}</p>
       <Table rowKey="id" size="small" maxHeight={520} data={d.users || []}
         columns={[
           { colKey: 'username', title: t('usage.colUser'), width: 160 },
           { colKey: 'display_name', title: t('usage.colName'), width: 160 },
           { colKey: 'org_name', title: t('usage.colOrg'), width: 160 },
-          { colKey: 'cost', title: t('usage.colCost'), width: 120, cell: ({ row }: any) => fmtNum(row.cost || 0) },
+          { colKey: 'cost', title: t('usage.colCost'), width: 120, cell: ({ row }: any) => fmtPoints(Number(row.cost) || 0) },
         ] as never} />
     </div>
   )
@@ -644,7 +653,7 @@ export function UsageP() {
       <div style={{ flex: 1, minWidth: 320 }}>
         <h4 style={{ fontSize: 14, margin: '4px 0' }}>{t('usage.costBy')}</h4>
         <Table rowKey="k" size="small" data={Object.entries(d.costs || {}).map(([k, v]) => ({ k, v }))}
-          columns={[{ colKey: 'k', title: t('usage.colModel') }, { colKey: 'v', title: t('usage.colCost'), cell: ({ row }: any) => fmtNum(row.v) }] as never} />
+          columns={[{ colKey: 'k', title: t('usage.colModel') }, { colKey: 'v', title: t('usage.colCost'), cell: ({ row }: any) => fmtPoints(Number(row.v)) }] as never} />
       </div>
       <div style={{ flex: 1, minWidth: 320 }}>
         <h4 style={{ fontSize: 14, margin: '4px 0' }}>{t('usage.quantBy')}</h4>

@@ -32,6 +32,7 @@ import { PlansP, ReferralP, WebhooksP, ApiKeysP } from './panels_c'
 import { KbP, ModelsP, WorkflowP, TicketsP } from './panels_d'
 import { OpsP } from './panels_e'
 import { ReconcileP } from './ReconcileP' // ★ F9 对账视图
+import BillingHubP from './BillingHubP'
 
 // 菜单项接口定义：key 对应 admin store 中的面板标识，minLevel 为可见最低角色等级
 interface Item { key: PanelKey; label: string; minLevel: number }
@@ -39,28 +40,23 @@ interface Item { key: PanelKey; label: string; minLevel: number }
 // 菜单项配置：定义所有可展示的面板及其最低角色等级要求
 // ★ 2026-09-03 重组：协议签署并入「系统设置」；开放 API+回调通知并入「外部调用」；
 //   邀请好友+任务中心并入「个人中心」；流程引擎并入「系统设置」（修复白板）。
+// ★ 2026-09-15 Tab 精简（任务3）：一级菜单 20 → 8——「计费与套餐」Hub 收纳
+//   套餐/租户/对账；「系统与运维」Hub 收纳注册触达/邮件模板/流程/协议/审计/
+//   运营策略/模型供应商/品牌页脚；用量明细并入总览、数据源并入知识库、
+//   成员并入组织；旧 key 仍保留在 renderPanel 深链兼容分支中。
 const ITEMS: Item[] = [
+  // ★ Tab 合并精简（2026-09-15）：20 个一级项 → 9 个。原一级 usage/dataSources/invites/
+  //   tenants/plans/reconcile/alerts/audit/mailTpl/footer/brand/models/ops/workflow 等
+  //   并入对应 Hub 子 tab（总览/知识库/组织/计费/外部调用/系统与运维/系统设置）；
+  //   renderPanel 保留旧 key 分支以兼容历史深链/书签（渲染独立面板）。
   { key: 'overview', label: 'admin.menuOverview', minLevel: 2 },
-  { key: 'tenants', label: 'admin.menuTenants', minLevel: 4 },
-  { key: 'plans', label: 'admin.menuPlans', minLevel: 3 },
-  { key: 'personal', label: 'admin.menuPersonal', minLevel: 2 },
-  { key: 'external', label: 'admin.menuExternal', minLevel: 3 },
-  { key: 'org', label: 'admin.menuOrg', minLevel: 3 },
-  { key: 'kb', label: 'admin.menuKb', minLevel: 2 },
-  { key: 'models', label: 'admin.menuModels', minLevel: 4 },
-  { key: 'ops', label: 'admin.menuOps', minLevel: 4 },
-  { key: 'reconcile', label: 'admin.menuReconcile', minLevel: 4 }, // ★ F9
   { key: 'tickets', label: 'admin.menuTickets', minLevel: 2 },
-  { key: 'brand', label: 'admin.menuBrand', minLevel: 3 },
+  { key: 'personal', label: 'admin.menuPersonal', minLevel: 2 },
+  { key: 'kb', label: 'admin.menuKb', minLevel: 2 },
+  { key: 'org', label: 'admin.menuOrg', minLevel: 3 },
+  { key: 'external', label: 'admin.menuExternal', minLevel: 3 },
+  { key: 'billing', label: 'hub.menuBilling', minLevel: 3 },
   { key: 'system', label: 'admin.menuSystem', minLevel: 4 },
-  // ★ E9：以下面板组件早已存在但重组后菜单项与 renderPanel 分支双双丢失（点击/跳转渲染白板）
-  { key: 'invites', label: 'admin.menuInvites', minLevel: 3 },
-  { key: 'usage', label: 'admin.menuUsage', minLevel: 3 },
-  { key: 'alerts', label: 'admin.menuAlerts', minLevel: 4 },
-  { key: 'audit', label: 'admin.menuAudit', minLevel: 4 },
-  { key: 'mailTpl', label: 'admin.menuMailTpl', minLevel: 4 },
-  { key: 'footer', label: 'admin.menuFooter', minLevel: 4 },
-  { key: 'dataSources', label: 'admin.menuDataSources', minLevel: 4 },
 ]
 
 /** 根据当前选中的面板 key 返回对应组件（集中分发，避免在 JSX 中写长 switch） */
@@ -93,6 +89,7 @@ function renderPanel(p: PanelKey) {
     case 'mailTpl': return <MailTplP />
     case 'footer': return <FooterP />
     case 'dataSources': return <DataSourcesP />
+    case 'billing': return <BillingHubP /> // ★ Tab 精简：计费 Hub（套餐/租户/对账）
     default: return null
   }
 }

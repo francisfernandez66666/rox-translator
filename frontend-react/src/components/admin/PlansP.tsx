@@ -443,7 +443,7 @@ async function confirmManual(o: Any) {
         <Table rowKey="id" size="small" maxHeight={260} data={orders}
                columns={[
                  { colKey: 'order_no', title: t('billing.colOrderNo'), width: 150 },
-                 { colKey: 'amount_tokens', title: t('billing.colTokens'), width: 110 },
+                 { colKey: 'amount_tokens', title: t('billing.colTokens'), width: 110, cell: ({ row }: any) => fmtPoints(Number(row.amount_tokens)) },
                  { colKey: 'amount_money', title: t('billing.colAmount'), width: 100, cell: ({ row }: any) => tpl('billing.yuan', { amount: row.amount_money }) },
                  { colKey: 'status', title: t('billing.colStatus'), width: 110, cell: ({ row }: any) => <Tag theme={statusTheme(row.status) as any}>{orderStatusLabel(row.status, t)}</Tag> },
                  { colKey: 'op', title: '', width: 120, cell: ({ row }: any) =>
@@ -587,7 +587,7 @@ async function confirmManual(o: Any) {
           <Table rowKey="id" size="small" data={manualOrders}
                  columns={[
                    { colKey: 'order_no', title: t('billing.colOrderNo'), width: 150 },
-                   { colKey: 'amount_tokens', title: t('billing.colTokens'), width: 120 },
+                   { colKey: 'amount_tokens', title: t('billing.colTokens'), width: 120, cell: ({ row }: any) => fmtPoints(Number(row.amount_tokens)) },
                    { colKey: 'tenant_id', title: t('billing.colTenant'), width: 80, cell: ({ row }: any) => `#${row.tenant_id}` },
                    { colKey: 'created_at', title: t('billing.colTime'), width: 165, cell: ({ row }: any) => fmtTime(row.created_at as string) },
                    { colKey: 'op', title: '', width: 120, cell: ({ row }: any) =>

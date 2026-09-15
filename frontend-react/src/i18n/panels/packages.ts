@@ -28,11 +28,11 @@ export const zh: Record<string, string> = {
   // ---- 强制计费与注册/触达配置 ----
   'packages.enforceTitle': '强制计费开关',
   'packages.markupLabel': '成本均摊系数（≥1.0）：',
-  'packages.markupHint': '全局生效：套餐发放（入账 token）与实时用量扣费统一乘以该系数，保证「1 入账 token = 1 扣费 token」。调整即时生效，仅影响此后新购/新产生的用量。',
+  'packages.markupHint': '全局生效：套餐发放（入账积分）与实时用量扣费统一乘以该系数，保证「1 入账积分 = 1 扣费积分」。调整即时生效，仅影响此后新购/新产生的用量。',
   'packages.rateLabel': '句↔token 换算率：',
   'packages.markupInvalid': '均摊系数不能小于 1.0',
   'packages.rateInvalid': '换算率必须大于 0',
-  'packages.enforceHint': '开启后翻译按实际用量从 token 余额扣减，余额不足停止服务并提示充值；关闭后仅计量不扣减。',
+  'packages.enforceHint': '开启后翻译按实际用量从积分余额扣减，余额不足停止服务并提示充值；关闭后仅计量不扣减。',
   'packages.enforceOn': '强制计费已开启',
   'packages.enforceOff': '强制计费已关闭（仅计量不扣减）',
   'packages.trialTokensLabel': '新租户体验 token：',

@@ -18,19 +18,15 @@ import {
   type OrgInfo,
 } from '@/api'
 import { Panel, Field, toastResp, num } from './parts'
+import { fmtPoints, pointsOf, pointsToTokens } from '@/utils/points' // ★ S1 部门预算积分口径（展示/录入折积分，落库仍 token）
 import { fmtTime } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
-import { InvitesP } from './panels_a'
+import { InvitesP, UsersP } from './panels_a' // ★ Tab 精简（2026-09-15）：成员账户并入组织 Hub 子 tab；租户管理移至「计费与套餐」Hub
 import { t, tpl } from '@/i18n'
 
 type Any = any
 
 /** 数字缩写：≥1万 显示为 x.xw */
-function fmtNumShort(n: number): string {
-  if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + 'w'
-  return String(n)
-}
-
 /** 组织树展示、组织 CRUD、用户管理、预算设置、邀请码、组织移动组件 */
 export function OrgP() {
   const ad = useAdmin()
@@ -60,7 +56,7 @@ export function OrgP() {
 
   const myLevel = ad.myLevel
   const isSuper = ad.isSuper
-  const [tab, setTab] = useState<'org' | 'invite'>('org')
+  const [tab, setTab] = useState<'org' | 'invite' | 'users'>('org') // ★ Tab 精简（2026-09-15）：成员并入组织 Hub
 
   const rootOrgName = useMemo(() => {
     if (rootOrg?.name) return rootOrg.name
@@ -101,7 +97,7 @@ export function OrgP() {
   const budgetText = (o: Any): string => {
     const b = budgetMap[o.id]
     if (!b || !(b.limit > 0)) return t('org.budgetUnset')
-    return `${fmtNumShort(b.used)}/${fmtNumShort(b.limit)}`
+    return `${fmtPoints(b.used)}/${fmtPoints(b.limit)}` // ★ token 原值折积分展示
   }
 
   const isOverBudget = (o: Any): boolean => {
@@ -297,15 +293,15 @@ export function OrgP() {
   function openBudget(o: Any) {
     const b = budgetMap[o.id]
     setBudgetModal({ id: o.id, name: o.name, limit: b?.limit || 0, used: b?.used || 0 })
-    setBudgetInput(b?.limit || 0)
+    setBudgetInput(pointsOf(Number(b?.limit) || 0))
   }
 
   async function saveBudget() {
     if (!budgetModal) return
     if (!(budgetInput >= 0)) { void MessagePlugin.warning(t('org.budgetInvalid')); return }
-    const r: any = await orgTokenLimit(budgetModal.id, Math.floor(budgetInput))
+    const r: any = await orgTokenLimit(budgetModal.id, pointsToTokens(Math.floor(budgetInput)))
     if (!r.success) { void MessagePlugin.error(r.message); return }
-    setBudgetMap((m) => ({ ...m, [budgetModal.id]: { limit: budgetInput, used: budgetModal.used } }))
+    setBudgetMap((m) => ({ ...m, [budgetModal.id]: { limit: pointsToTokens(Math.floor(budgetInput)), used: budgetModal.used } }))
     setBudgetModal(null)
   }
 
@@ -506,7 +502,7 @@ export function OrgP() {
               onConfirm={saveBudget}>
         {budgetModal && (
           <>
-            <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 10px' }}>{tpl('org.budgetHint', { used: fmtNumShort(budgetModal.used) })}</p>
+            <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 10px' }}>{tpl('org.budgetHint', { used: fmtPoints(budgetModal.used) })}</p>
             <label style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--adm-hint)' }}>{t('org.budgetLimit')}</label>
             <Input type="number" value={num(budgetInput)} placeholder={t('org.budgetPlaceholder')} onChange={(v) => setBudgetInput(Number(v))} />
           </>
@@ -546,6 +542,9 @@ export function OrgP() {
       {/* Tab 面板 */}
       <Tabs.TabPanel value="invite" label={t('org.tabInvite')}>
         <InvitesP />
+      </Tabs.TabPanel>
+      <Tabs.TabPanel value="users" label={t('hub.tabUsers')}>
+        <UsersP />
       </Tabs.TabPanel>
     </Tabs>
   )

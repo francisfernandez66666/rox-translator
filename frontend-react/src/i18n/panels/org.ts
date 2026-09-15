@@ -3,7 +3,7 @@
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
 // =============================================
 export const zh: Record<string, string> = {
-  'org.budgetTip': '部门月度 token 预算（本月已用/上限）；∑部门预算=租户总预算',
+  'org.budgetTip': '部门月度积分预算（本月已用/上限）；∑部门预算=租户总预算',
   'org.budgetUnset': '未设预算',
   'org.budgetSet': '分配月度预算',
   'org.budgetPrompt': '为「{name}」分配月度 token 预算（当前 {cur}，0=关闭部门墙）：',
@@ -96,7 +96,7 @@ export const en: Record<string, string> = {
   'org.inviteUsedNo': 'Unused',
   'org.invitesEmpty': 'No invite codes for this org',
   'org.inviteNeedCode': 'Enter an invite code',
-  'org.budgetTip': 'Monthly department token budget (used/limit); sum of departments = tenant total',
+  'org.budgetTip': 'Monthly department credit budget (used/limit); sum of departments = tenant total',
   'org.budgetUnset': 'No budget',
   'org.budgetSet': 'Allocate monthly budget',
   'org.budgetPrompt': 'Allocate monthly token budget for "{name}" (current {cur}, 0 = disable dept wall):',

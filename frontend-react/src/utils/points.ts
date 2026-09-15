@@ -23,6 +23,11 @@ export function pointsOf(tokens: number): number {
   return p === 0 && (tokens || 0) > 0 ? 1 : p
 }
 
+/** 积分数 → 内部 token 数（超管表单以积分录入时反算落库值） */
+export function pointsToTokens(points: number): number {
+  return Math.max(0, Math.round((points || 0) * rate))
+}
+
 /** token 数 → 千分位积分字符串 */
 export function fmtPoints(tokens: number): string {
   return pointsOf(tokens).toLocaleString('en-US')

@@ -56,6 +56,28 @@ func estimateTicketTokens(sourceChars int64, langCount int, markup float64) int6
 	return int64(base * float64(langCount) * markup)
 }
 
+// estimateFileSourceChars 由文件字节数估算可译源字符数（按扩展名分档）。
+// 目的仅为建单前余额粗预检（非计费依据），故取偏保守（低）系数避免误拦：
+//   - 纯文本（.txt/.md/.csv/.srt 等）：字节≈字符，中文 UTF-8 约 3 字节/字 → /3；
+//   - 压缩文本容器（.docx/.xlsx/.pptx/.epub/.odt 等，XML 压缩）→ /6；
+//   - 图文混排二进制（.pdf/.doc/.ppt/.xls 等，图像/字体占大头）→ /12；
+//   - 未知：按 /6 折中。
+func estimateFileSourceChars(name string, size int64) int64 {
+	if size <= 0 {
+		return 0
+	}
+	denom := int64(6)
+	switch strings.ToLower(strings.TrimPrefix(filepath.Ext(name), ".")) {
+	case "txt", "md", "markdown", "csv", "tsv", "srt", "vtt", "json", "xml", "html", "htm", "log", "yml", "yaml":
+		denom = 3
+	case "pdf", "doc", "ppt", "xls", "pptm", "xlsm", "key", "pages", "numbers", "epub", "azw3", "mobi":
+		denom = 12
+	default:
+		denom = 6
+	}
+	return size / denom
+}
+
 // precheckTicketBalance 文件/文本工单建单前置余额预检（改进2，2026-09-10）：
 // 强制计费开启时，估算本次翻译的 token 消耗，若超出剩余余额则直接拒绝建单，
 // 避免「工单创建→队列→跑到中途余额耗尽→整单失败」（此前只查余额>0，不查是否够本次用量）。
@@ -78,10 +100,12 @@ func (s *Server) precheckTicketBalance(tid int64, srcChars int64, langCount int,
 	total := grants + permanent
 	if total <= 0 {
 		// 余额已耗尽：gateUsage.CheckBalance 已拦截，此处兜底给同样文案
-		return &apiErr{"组织 token 已耗尽，请联系管理员及时充值"}
+		return &apiErr{"组织积分已耗尽，请联系管理员及时充值"}
 	}
 	if estimated > total {
-		return &apiErr{fmt.Sprintf("余额不足：本次翻译预估需 %d token，当前余额 %d token，请先充值后再发起", estimated, total)}
+		// ★ S1 积分口径（2026-09-15）：对外零 token 裸值，预估算量与余额一律折算积分展示
+		return &apiErr{fmt.Sprintf("余额不足：本次翻译预估需约 %d 积分，当前余额约 %d 积分，请先充值后再发起",
+			s.Store.PointsFromTokens(estimated), s.Store.PointsFromTokens(total))}
 	}
 	return nil
 }
@@ -315,14 +339,16 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
 		return
 	}
-	// ★ 改进2（2026-09-10）：文件工单建单前余额预检——用上传文件大小估算源字符数
-	//   （UTF-8 中文约 3 字节/字，取 1/3 为保守字符数），预检失败直接拒绝并提示充值，
-	//   避免工单入队后跑到中途因余额耗尽整单失败（precheck 内部归还并发名额）。
+	// ★ 改进2（2026-09-10）：文件工单建单前余额预检——用上传文件大小估算源字符数。
+	//   ★ 2026-09-15 修正（用户反馈 700KB PDF 预估 40 万 token 误拦）：旧口径一律 字节/3，
+	//   把 PDF/Office 二进制容器整包当作可译文本（图像/字体/压缩流占了大头），高估 5~10 倍，
+	//   造成「余额明明够却拒绝建单」。改按文件类型取字节→字符系数；预检只是防中途耗尽的
+	//   粗闸（真实扣费按供应商回传 token 实时计），宁可低估放行，不可高估误拦。
 	{
 		var srcChars int64
 		for _, f := range saved {
 			if fi, serr := os.Stat(f.path); serr == nil {
-				srcChars += fi.Size() / 3 // 文件字节数 → 估算源字符数（保守）
+				srcChars += estimateFileSourceChars(f.name, fi.Size())
 			}
 		}
 		if perr := s.precheckTicketBalance(tid, srcChars, len(strings.Split(targetLangs, ",")), release); perr != nil {

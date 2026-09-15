@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { fmtPoints } from '@/utils/points' // ★ S1 积分展示
+import { fmtPoints, pointsOf, pointsToTokens } from '@/utils/points' // ★ S1 积分展示/录入折算
 import { Button, Dialog, Input, MessagePlugin, Switch, Table, Tag, Textarea } from 'tdesign-react'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
@@ -59,7 +59,7 @@ async function doClaim(row: UserTaskView) {
       void MessagePlugin.error(tpl('tasks.claimFail', { msg: r.message || '' }))
       return
     }
-    void MessagePlugin.success(tpl('tasks.claimedOk', { tokens: r.tokens ?? 0 }))
+    void MessagePlugin.success(tpl('tasks.claimedOk', { points: pointsOf(Number(r.tokens) || 0) }))
     await loadMy()
   }
 
@@ -117,7 +117,7 @@ async function deleteTask(row: UserTask) {
     { colKey: 'id', title: 'ID', width: 70 },
     { colKey: 'task_type', title: t('tasks.colType'), width: 100, cell: ({ row }: Any) => row.task_type === 'daily' ? t('tasks.daily') : t('tasks.once') },
     { colKey: 'title', title: t('tasks.colTitle') },
-    { colKey: 'reward_tokens', title: t('tasks.colReward'), width: 110 },
+    { colKey: 'reward_tokens', title: t('tasks.colReward'), width: 110, cell: ({ row }: Any) => <Tag theme="success" variant="light">+{fmtPoints(Number(row.reward_tokens))}</Tag> },
     { colKey: 'sort_order', title: t('tasks.colSort'), width: 70 },
     { colKey: 'enabled', title: t('tasks.colEnabled'), width: 80, cell: ({ row }: Any) => <Tag theme={row.enabled === 1 ? 'success' : 'default'} variant="light">{row.enabled === 1 ? '✓' : '—'}</Tag> },
     { colKey: 'op', title: t('tasks.colOp'), width: 160, cell: ({ row }: Any) => (
@@ -167,7 +167,8 @@ async function deleteTask(row: UserTask) {
               <Textarea value={String(dlg.description || '')} onChange={(v) => setDlg((d) => (d ? { ...d, description: v } : d))} autosize={{ minRows: 2 }} placeholder="任务说明（可空）" />
             </Field>
             <Field label={t('tasks.rewardLabel')}>
-              <Input type="number" value={String(dlg.reward_tokens ?? 0)} onChange={(v: string) => setDlg((d) => (d ? { ...d, reward_tokens: Number(v) || 0 } : d))} style={{ width: 200 }} />
+              {/* ★ 积分口径录入（2026-09-15）：界面填积分，保存折算回内部 reward_tokens */}
+              <Input type="number" value={String(pointsOf(Number(dlg.reward_tokens) || 0))} onChange={(v: string) => setDlg((d) => (d ? { ...d, reward_tokens: pointsToTokens(Number(v) || 0) } : d))} style={{ width: 200 }} />
             </Field>
             <Field label={t('tasks.sortLabel')}>
               <Input type="number" value={String(dlg.sort_order ?? 0)} onChange={(v: string) => setDlg((d) => (d ? { ...d, sort_order: Number(v) || 0 } : d))} style={{ width: 200 }} />

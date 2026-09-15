@@ -17,7 +17,7 @@ import { fmtPoints } from '@/utils/points'
 import { sentenceRateOf, approxSentencesOf } from '@/lib/quotaCalc' // ★ F11：换算抽纯 // ★ E14：删除死导入 request（无调用点）
 import type { ChatMessage } from '@/types'
 import { useT, t, tpl } from '@/i18n'
-import LangMultiSelect from '@/components/LangMultiSelect'
+import LangMultiSelect, { LangChips } from '@/components/LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
 
 // ============ 本文件职责中文说明 ============
@@ -28,53 +28,7 @@ import ModeToggle from '@/components/ModeToggle'
 
 // ★ 源语言选项（互译方向；auto=自动检测）——用于语言面板顶部的"源语言"选择
 
-// ★ KB 语言名称/国旗（本地兜底，后端返回后覆盖）——知识库支持的高质量目标语言
-const LANG_OPTIONS: Record<string, { label: string; flag: string }> = {
-  en: { label: t('chat.s1'), flag: '🇬🇧' },
-  ru: { label: t('chat.s2'), flag: '🇷🇺' },
-  ar: { label: t('chat.s3'), flag: '🇸🇦' },
-  es: { label: t('chat.s4'), flag: '🇪🇸' },
-  pt: { label: t('chat.s5'), flag: '🇵🇹' },
-  fr: { label: t('chat.s6'), flag: '🇫🇷' },
-  kk: { label: t('chat.s7'), flag: '🇰🇿' },
-  de: { label: t('chat.s8'), flag: '🇩🇪' },
-  zh_hant: { label: t('chat.s9'), flag: '🇹🇼' },
-}
 
-// ★ "其他语言"子选单（非KB语言，AI翻译，直接勾选）——不走知识库的普通 AI 翻译语言
-const OTHER_LANG_OPTIONS: Record<string, { label: string; flag: string }> = {
-  zh: { label: t('chat.s10'), flag: '🇨🇳' },
-  ja: { label: t('chat.s11'), flag: '🇯🇵' },
-  ko: { label: t('chat.s12'), flag: '🇰🇷' },
-  th: { label: t('chat.s13'), flag: '🇹🇭' },
-  vi: { label: t('chat.s14'), flag: '🇻🇳' },
-  mn: { label: t('chat.s15'), flag: '🇲🇳' },
-  ms: { label: t('chat.s16'), flag: '🇲🇾' },
-  id: { label: t('chat.s17'), flag: '🇮🇩' },
-  it: { label: t('chat.s18'), flag: '🇮🇹' },
-  pl: { label: t('chat.s19'), flag: '🇵🇱' },
-  nl: { label: t('chat.s20'), flag: '🇳🇱' },
-  sv: { label: t('chat.s21'), flag: '🇸🇪' },
-  uk: { label: t('chat.s22'), flag: '🇺🇦' },
-  tr: { label: t('chat.s23'), flag: '🇹🇷' },
-  hi: { label: t('chat.s24'), flag: '🇮🇳' },
-  fa: { label: t('chat.s25'), flag: '🇮🇷' },
-  he: { label: t('chat.s26'), flag: '🇮🇱' },
-  el: { label: t('chat.s27'), flag: '🇬🇷' },
-  my: { label: t('chat.s28'), flag: '🇲🇲' },
-  km: { label: t('chat.s29'), flag: '🇰🇭' },
-  lo: { label: t('chat.s30'), flag: '🇱🇦' },
-  tl: { label: t('chat.s31'), flag: '🇵🇭' },
-  gu: { label: t('chat.s32'), flag: '🇮🇳' },
-  ur: { label: t('chat.s33'), flag: '🇵🇰' },
-  te: { label: t('chat.s34'), flag: '🇮🇳' },
-  mr: { label: t('chat.s35'), flag: '🇮🇳' },
-  bn: { label: t('chat.s36'), flag: '🇧🇩' },
-  ta: { label: t('chat.s37'), flag: '🇮🇳' },
-  bo: { label: t('chat.s38'), flag: '🇨🇳' },
-  ug: { label: t('chat.s39'), flag: '🇨🇳' },
-  yue: { label: t('chat.s40'), flag: '🇨🇳' },
-}
 
 // ★ 语言名→代码的本地映射（常见语言中文名/英文名→ISO代码）——用于自定义语言输入解析
 
@@ -111,12 +65,6 @@ export default function ChatWindow() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
-  // ---- 语言显示名：优先 i18n（lang.<code>），缺失回退本地 label ----
-  // 根据语言代码获取展示名，便于在标签中统一显示
-  const langLabel = useCallback((code: string, fallback?: string): string => {
-    const v = t2(`lang.${code}`)
-    return v !== `lang.${code}` ? v : (fallback || code)
-  }, [t2])
 
   // ---- 余额 / 用量加载 ----
   // 从 myPackage 接口读取个人余额、今日用量及企业预算额度
@@ -266,7 +214,7 @@ export default function ChatWindow() {
         <div style={{ background: '#e8f0fe', color: 'var(--td-brand-color, #2f47f5)', fontSize: 12, padding: '4px 6%', display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
           {balance && <span>{tpl('chat.balanceFmt', { points: fmtPoints(balance.tokens), sents: fmtNum(balance.approx) })}</span>}
           {usage && <span>{tpl('chat.todayFmt', { points: fmtPoints(usage.today), sents: fmtNum(usage.todaySentences) })}</span>}
-          {orgBudget && <span>{orgBudget.name} {fmtNum(orgBudget.used)}/{fmtNum(orgBudget.limit)}</span>}
+          {orgBudget && <span>{tpl('chat.orgBudgetFmt', { name: orgBudget.name, used: fmtPoints(orgBudget.used), limit: fmtPoints(orgBudget.limit) })}</span>}
           {estimate && (
             <span style={estimate.low ? { color: '#c66900', fontWeight: 600 } : undefined}>
               {tpl('chat.estFmt', { min: fmtPoints(estimate.min), max: fmtPoints(estimate.max) })}
@@ -303,23 +251,8 @@ export default function ChatWindow() {
 
       {/* 输入区 */}
       <div className="chat-inputbar">
-        {/* 已选文件 / 语言标签行 */}
-        {chat.selectedLangs.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingBottom: 8 }}>
-            {chat.selectedLangs.filter((l) => LANG_OPTIONS[l]).map((l) => (
-              <span key={'l' + l} className="tag tag-lang">
-                {LANG_OPTIONS[l].flag} {langLabel(l, LANG_OPTIONS[l].label)}
-                <Button size="small" variant="text" theme="default" className="tag-close" onClick={() => chat.setSelectedLangs(chat.selectedLangs.filter((x) => x !== l))}>✕</Button>
-              </span>
-            ))}
-            {chat.selectedLangs.filter((l) => !LANG_OPTIONS[l]).map((l) => (
-              <span key={'ol' + l} className="tag tag-other-lang">
-                🤖 {langLabel(l, OTHER_LANG_OPTIONS[l]?.label)}
-                <Button size="small" variant="text" theme="default" className="tag-close" onClick={() => chat.setSelectedLangs(chat.selectedLangs.filter((x) => x !== l))}>✕</Button>
-              </span>
-            ))}
-          </div>
-        )}
+        {/* 已选语言 chip 行（任务⑤：选中结果唯一展示位；组件化与工单页共用） */}
+        <LangChips langs={chat.selectedLangs} onRemove={chat.setSelectedLangs} />
 
         {!!chat.errorMessage && (
           <div style={{ color: '#c62828', fontSize: 13 }}>{chat.errorMessage}</div>

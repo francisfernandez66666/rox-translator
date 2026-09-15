@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { runGuarded } from '@/lib/runGuarded'
 import { Button, Dialog, Input, MessagePlugin, Select, Switch, Table, Tag, Tabs, RadioGroup, Radio } from 'tdesign-react'
 import { useT, t, tpl } from '@/i18n'
+import { fmtPoints } from '@/utils/points' // ★ S1 审批奖励积分数展示
 import { industryName, INDUSTRY_META } from '@/lib/industries'
 import { industries as fetchIndustries } from '@/api/industry'
 import { LANG_META } from '@/lib/langNames'
@@ -185,7 +186,7 @@ export default function DataSourcesP() {
     if (eIds.length) {
       const r = await runGuarded(() => scrapeApprove('entries', eIds, action))
       if (!r) return // ★ E10：网络/超时异常已提示，中断后续
-      if (action === 'approve' && r.rewards?.length) rewardNote = tpl('ds.s13', { a1: r.rewards.reduce((x: number, y) => x + (y.tokens ?? 0), 0) })
+      if (action === 'approve' && r.rewards?.length) rewardNote = tpl('ds.s13', { a1: fmtPoints(r.rewards.reduce((x: number, y: any) => x + (Number(y.tokens) || 0), 0)) })
       if (!toastResp(r, ok ? tpl('ds.s14', { a1: label, a2: r.applied ?? 0, a3: rewardNote }) : undefined)) ok = false
     }
     if (pIds.length) {

@@ -96,14 +96,15 @@ export function TenantsP() {
     xhr.send(JSON.stringify({ id: tt.id }))
   }
 
+  // 直接充值（走创建+支付两步）★ S1 积分口径（2026-09-15）：录入/提示均为积分，传 points 字段
   async function charge(tt: TenantInfo) {
-    const tokens = await promptText({ body: tpl('tenants.chargePrompt', { name: tt.name }) })
-    if (!tokens || Number(tokens) <= 0) return
-    const r: any = await adminOrderCreate({ tenant_id: tt.id, tokens: Number(tokens), money: 0 })
+    const points = await promptText({ body: tpl('tenants.chargePrompt', { name: tt.name }) })
+    if (!points || Number(points) <= 0) return
+    const r: any = await adminOrderCreate({ tenant_id: tt.id, points: Number(points), money: 0 })
     if (!r.success) { void MessagePlugin.error(r.message); return }
     const o = r.order
     if (o && o.id) await adminOrderPay(o.id, tt.id)
-    void MessagePlugin.success(tpl('tenants.charged', { tokens }))
+    void MessagePlugin.success(tpl('tenants.charged', { points }))
     await load()
   }
 
@@ -212,14 +213,14 @@ export function TenantsP() {
               onConfirm={async () => {
                 if (!(dlg && typeof dlg === 'object' && 'order' in dlg)) return
                 const tt = (dlg as { order: TenantInfo }).order
-                const r: any = await adminOrderCreate({ tenant_id: tt.id, tokens: Number(form.tokens || 0), money: Number(form.money || 0) })
+                const r: any = await adminOrderCreate({ tenant_id: tt.id, points: Number(form.tokens || 0), money: Number(form.money || 0) })
                 if (toastResp(r, t('tenants.charged'))) {
                   const oid = Number(r.order?.id ?? r.id ?? 0)
                   if (oid > 0) await adminOrderPay(oid, tt.id)
                   setDlg(null)
                 }
               }}>
-        <Field label="token"><Input type="number" value={num(form.tokens || 0)} onChange={(v) => setForm({ ...form, tokens: v })} /></Field>
+        <Field label={t('tenants.fieldPoints')}><Input type="number" value={num(form.tokens || 0)} onChange={(v) => setForm({ ...form, tokens: v })} /></Field>
         <Field label="¥"><Input type="number" value={num(form.money || 0)} onChange={(v) => setForm({ ...form, money: v })} /></Field>
       </Dialog>
     </Panel>

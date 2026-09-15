@@ -7,7 +7,8 @@ import { useEffect, useState } from 'react'
 import { Button, Table, Input, Space } from 'tdesign-react'
 import { referralMy, fetchReferralQrBlob } from '@/api'
 import { Panel } from './parts'
-import { fmtNum, fmtTime } from '@/lib/ui'
+import { fmtTime } from '@/lib/ui'
+import { fmtPoints } from '@/utils/points' // ★ S1 积分口径：奖励 token 一律折积分展示
 import { useAdmin } from '@/stores/admin'
 import { useT } from '@/i18n'
 
@@ -88,8 +89,8 @@ export function ReferralP() {
             </div>
             <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 12, fontSize: 13, color: 'var(--adm-hint)' }}>
               <span>👥 {t('referral.invitedCount')}：<b>{invited}</b></span>
-              <span>🎁 {t('referral.trialRewards')}：<b>{fmtNum(trialTokens)}</b> token / {trialCount} {t('referral.times')}</span>
-              <span>💰 {t('referral.paidRewards')}：<b>{fmtNum(paidTokens)}</b> token</span>
+              <span>🎁 {t('referral.trialRewards')}：<b>{fmtPoints(trialTokens)}</b> {t('referral.unitPoints')} / {trialCount} {t('referral.times')}</span>
+              <span>💰 {t('referral.paidRewards')}：<b>{fmtPoints(paidTokens)}</b> {t('referral.unitPoints')}</span>
             </div>
           </div>
           {qrUrl && <img src={qrUrl} alt="QR" width={150} height={150} style={{ borderRadius: 8, border: '1px solid #e3e6ef', background: '#fff' }} />}
@@ -108,8 +109,8 @@ export function ReferralP() {
                      : <span style={{ color: 'var(--adm-amber-tx)' }}>⏳ {t('referral.payNo')}</span> },
                  { colKey: 'reward', title: t('referral.colReward'), cell: ({ row }: any) =>
                    row.type === 'trial_stack'
-                     ? <>+{fmtNum(row.tokens as number)} token{row.days ? ` / +${row.days} ${t('referral.daysUnit')}` : ''}</>
-                     : <>+{fmtNum(row.tokens as number)} token</> },
+                     ? <>+{fmtPoints(row.tokens as number)} {t('referral.unitPoints')}{row.days ? ` / +${row.days} ${t('referral.daysUnit')}` : ''}</>
+                     : <>+{fmtPoints(row.tokens as number)} {t('referral.unitPoints')}</> },
                  { colKey: 'created_at', title: t('referral.colTime'), width: 165, cell: ({ row }: any) => fmtTime(row.created_at as string) },
                ] as never} />
         {!records.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 8 }}>{t('referral.empty')}</div>}

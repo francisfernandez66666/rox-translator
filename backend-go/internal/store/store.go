@@ -551,6 +551,13 @@ func (s *Store) migrate() error {
 		if err := s.migrateColumnsPG(); err != nil {
 			return err
 		}
+		// ★ 序列自愈（2026-09-15，审计「8-29 后停写」根因修复）：切流导入保留了显式 id 却未
+		//   setval 序列，新行拿到低位 id——一是排序错乱（新记录沉底看似停更），二是序列追平
+		//   存量 max(id) 后必撞主键、INSERT 静默失败真正丢数据。启动时把所有带 id 序列的表
+		//   的序列推进到 max(id)+1000（幂等，仅向前，绝不下调，留缓冲避免竞态）。
+		if err := s.syncSequencesPG(); err != nil {
+			log.Printf("[migrate] ⚠️ 序列自愈异常（不阻断启动）: %v", err)
+		}
 	}
 	// 初始化默认单价表（幂等）
 	if err := s.seedRateCard(); err != nil {
@@ -746,6 +753,64 @@ func (s *Store) migrateColumnsPG() error {
 	}
 	return nil
 }
+
+// syncSequencesPG 启动时自愈序列漂移（2026-09-15）。
+// 场景：从 SQLite 切流或 pg_restore 到 PG 时保留了显式 id，但 SERIAL/IDENTITY 序列未 setval，
+// 仍停留在导入前的低水位。此后新行会拿到与历史行冲突的低位 id：轻则排序错乱（新数据沉底），
+// 重则序列追平存量 max(id) 后每次 INSERT 撞主键、被旁路逻辑静默吞掉而真正丢数据
+// （审计日志「停写在 8-29」即此）。做法：对每张有 id 序列的表，若 last_value < max(id)
+// 则 setval 到 max(id)+1000。仅向前、幂等、可重复；无表/无 id 列/无序列者跳过。
+func (s *Store) syncSequencesPG() error {
+	d := db.DialectPostgres
+	rows, err := db.Query(s.db, d,
+		`SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE c.relkind = 'r' AND n.nspname = 'public'`)
+	if err != nil {
+		return err
+	}
+	var tables []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err == nil {
+			tables = append(tables, t)
+		}
+	}
+	rows.Close()
+	for _, t := range tables {
+		// 该表 id 列是否有序列（SERIAL 或 IDENTITY）
+		var seq string
+		if err := db.QueryRow(s.db, d, "SELECT pg_get_serial_sequence(?, 'id')", "public."+t).Scan(&seq); err != nil || seq == "" {
+			continue
+		}
+		// id 列是否存在
+		var hasID int
+		if err := db.QueryRow(s.db, d,
+			"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='public' AND table_name=? AND column_name='id'", t).Scan(&hasID); err != nil || hasID == 0 {
+			continue
+		}
+		var maxID int64
+		if err := db.QueryRow(s.db, d, "SELECT COALESCE(MAX(id),0) FROM "+quoteIdentPG(t)).Scan(&maxID); err != nil {
+			continue // 延迟建表等异常跳过
+		}
+		var lastVal int64
+		if err := db.QueryRow(s.db, d, "SELECT last_value FROM "+seq).Scan(&lastVal); err != nil {
+			continue
+		}
+		if lastVal >= maxID {
+			continue // 序列健康，仅向前修，绝不下调
+		}
+		if _, err := db.Exec(s.db, d, "SELECT setval(?, ?, true)", seq, maxID+1000); err == nil {
+			log.Printf("[migrate] 序列自愈：%s last_value %d → %d（历史 max(id)=%d）", t, lastVal, maxID+1000, maxID)
+		}
+	}
+	return nil
+}
+
+// quoteIdentPG 安全包裹 PG 标识符（表名），防拼接注入。
+func quoteIdentPG(ident string) string {
+	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
+}
+
 
 // backfillDailyUsage 部署当日日计数器兜底回填（性能优化 B6）。
 func (s *Store) backfillDailyUsage() {

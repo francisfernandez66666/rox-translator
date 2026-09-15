@@ -15,7 +15,7 @@ import { runGuarded } from '@/lib/runGuarded'
 import { confirmDialog } from '@/components/uiDialogs'
 import type { Ticket, TicketResp } from '@/api/tickets'
 import { TRANSLATE_FILE_ACCEPT, TEXT_DELIVERY_ACCEPT, validateTranslateFile } from '@/api/translate'
-import LangMultiSelect from './LangMultiSelect'
+import LangMultiSelect, { LangChips } from './LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
 import { t, tpl, useLang } from '@/i18n'
 import { langLabel } from '@/lib/langNames'
@@ -357,6 +357,10 @@ export default function TicketsPage() {
           </>
         )}
 
+        {/* ★ 任务⑤（2026-09-15）：已选语言 chip 行（与聊天窗一致，选中结果唯一展示位） */}
+        <div style={{ marginTop: 10 }}>
+          <LangChips langs={langs} onRemove={setLangs} />
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
           <label style={{ fontSize: 13, color: '#555', whiteSpace: 'nowrap' }}>{t('tk.langsLabel')}</label>
           <div style={{ minWidth: 300, flex: 1 }}>

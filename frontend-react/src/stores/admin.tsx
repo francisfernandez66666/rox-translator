@@ -32,6 +32,7 @@ export type PanelKey =
   | 'overview' | 'tenants' | 'plans' | 'referral' | 'org' | 'invites' | 'usage' | 'kb'
   | 'models' | 'workflow' | 'apikeys' | 'webhooks' | 'tickets' | 'audit' | 'alerts' | 'users' | 'agreements' | 'brand' | 'mailTpl' | 'footer' | 'system' | 'dataSources'
   | 'external' | 'personal' | 'ops' | 'reconcile' // ★ F9 对账
+  | 'billing' | 'opsHub' // ★ Tab 精简（2026-09-15）：计费 Hub / 系统与运维 Hub
 
 /** 根据角色 key 返回本地化展示名称（后台侧边栏展示，i18n）；未知角色返回普通用户
  * @param r - 角色标识字符串（如 super_admin / tenant_admin 等）

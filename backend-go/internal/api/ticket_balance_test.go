@@ -43,3 +43,33 @@ func TestEstimateTicketTokensMonotonic(t *testing.T) {
 		t.Fatalf("更多语言估算应更大，single=%d multi=%d", small, many)
 	}
 }
+
+// TestEstimateFileSourceChars 校验按文件类型分档的字节→字符估算（任务1，2026-09-15）。
+// 核心回归点：二进制文档（PDF/Office）不得按“整包皆文本”高估（旧口径 size/3 会误拦 700KB PDF）。
+func TestEstimateFileSourceChars(t *testing.T) {
+	size := int64(700 * 1024)
+	txt := estimateFileSourceChars("a.txt", size)
+	pdf := estimateFileSourceChars("a.pdf", size)
+	docx := estimateFileSourceChars("a.docx", size)
+	unk := estimateFileSourceChars("a", size)
+	if pdf >= txt {
+		t.Fatalf("PDF(二进制)估算字符数应远小于同体积纯文本：pdf=%d txt=%d", pdf, txt)
+	}
+	if pdf > size {
+		t.Fatalf("PDF 估算不应超过字节数：pdf=%d", pdf)
+	}
+	if docx >= txt || docx < pdf {
+		t.Fatalf("docx 应介于纯文本与 pdf 之间：txt=%d docx=%d pdf=%d", txt, docx, pdf)
+	}
+	if unk <= 0 {
+		t.Fatalf("未知扩展名应有折中估算，got=%d", unk)
+	}
+	if estimateFileSourceChars("x.pdf", 0) != 0 {
+		t.Fatal("0 字节应返回 0")
+	}
+	// 关键：700KB PDF 折成 token 预估后应明显低于旧口径（/3）
+	old := size / 3
+	if pdf*2 > old { // 新口径至少比旧口径小一半以上
+		t.Fatalf("PDF 估算未显著收敛：new=%d old(/3)=%d", pdf, old)
+	}
+}

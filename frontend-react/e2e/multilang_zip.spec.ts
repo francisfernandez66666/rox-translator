@@ -21,23 +21,20 @@ async function login(page: Page, user: string, pass: string) {
   await page.addInitScript((tk) => sessionStorage.setItem('auth_token', tk), body.token);
 }
 
-/** 在 LangMultiSelect（TDesign 多选 Select）中按语言名勾选一项：
- *  点击输入框 → 键入过滤词（filterable 自动高亮首项）→ Enter 确认。
- *  比点选项 DOM 更抗「多弹窗残留节点/滚动隐藏」类漂移（首轮实测点击未生效致漏选）。
- *  勾选后强制复核：页面须出现对应语言 tag，失败立即报错而非静默错单。 */
+/** 在 LangMultiSelect（★ 2026-09-15 任务⑤重构：Popup 自绘下拉）中确保勾选某语言：
+ *  点触发器开面板 → 选项行已是选中态则跳过（工单页默认已选 en，toggle 会反选）→
+ *  否则直接点选项行勾选 → 复核面板勾 ✓ 与外部 chip 行（选中结果唯一展示位）。 */
 async function pickLang(page: Page, label: string) {
-  const trigger = page.locator('input[placeholder*="选择目标语言"]').first();
-  const tag = page.locator('.t-tag', { hasText: label }).first();
-  await trigger.click();
-  await trigger.fill(label);
-  await page.keyboard.press('Enter'); // 高亮首项确认勾选（部分版本 Enter 需先有 hover 项）
-  if (!(await tag.isVisible().catch(() => false))) {
-    // 兜底：点击「当前可见弹窗」内的匹配项——限定 :visible，避免命中历史隐藏 popup 的残留节点
-    await page.locator('.t-select-option', { hasText: label }).locator('visible=true').first()
-      .click({ timeout: 5000 });
-  }
-  await page.keyboard.press('Escape'); // 确定性收起弹窗（下次 click 为「打开」而非 toggle 关闭）
-  await expect(tag, `勾选「${label}」后应出现语言标签`).toBeVisible({ timeout: 5000 });
+  await page.locator('[data-testid="lang-multi-trigger"]').first().click();
+  const panel = page.locator('[data-testid="lang-multi-panel"]').first();
+  await expect(panel).toBeVisible({ timeout: 5000 });
+  const opt = panel.locator('[role="option"]', { hasText: label }).first();
+  await expect(opt).toBeVisible({ timeout: 5000 });
+  if ((await opt.getAttribute('aria-selected')) !== 'true') await opt.click();
+  await expect(opt).toHaveAttribute('aria-selected', 'true', { timeout: 5000 });
+  await page.locator('[data-testid="lang-multi-trigger"]').first().click(); // 收起面板
+  await expect(page.locator('[data-testid="lang-chips"] .tag', { hasText: label }).first())
+    .toBeVisible({ timeout: 5000 });
 }
 
 test.describe('多语言文件工单 → zip 打包下载', () => {

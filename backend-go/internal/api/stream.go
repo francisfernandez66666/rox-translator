@@ -468,7 +468,7 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	//   冲刷后双桶已归零/清零，据此改写为用户可行动文案。
 	if res.Error != "" && strings.Contains(res.Error, "未能译出") && s.Store != nil {
 		if g, p, terr := s.Store.TenantRemainTotal(tid); terr == nil && g+p <= 0 {
-			res.Error = "组织 token 余额已耗尽，本次翻译已中止（部分段落已保留在工单中供人工补译），请充值后重新发起"
+			res.Error = "组织积分余额已耗尽，本次翻译已中止（部分段落已保留在工单中供人工补译），请充值后重新发起"
 		}
 	}
 	writeJSON(w, 200, res)

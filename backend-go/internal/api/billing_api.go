@@ -90,7 +90,7 @@ func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 	// 组织墙文案（四期增强）：余额即组织总预算的可用部分
 	if s.Bill.Enabled() {
 		if err := s.Bill.CheckBalance(tid); err != nil {
-			return tid, release, &apiErr{"组织 token 已耗尽，请联系管理员及时充值"}
+			return tid, release, &apiErr{"组织积分已耗尽，请联系管理员及时充值"}
 		}
 	}
 	// ★ 双预算墙之部门墙/组织月度总预算墙（四期增强；独立于强制计费开关——
