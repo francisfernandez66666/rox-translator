@@ -222,7 +222,10 @@ export function useAdmin(): AdminCtx {
   const s = useAdminStore()
   const user = useAuthStore((st) => st.user)
   return useMemo<AdminCtx>(() => {
-    const myLevel = roleLevel(user?.role)
+    // ★ 2026-09-16 对齐后端收紧（iam/auth.go）：level-4 仅平台级账号（tenant_id=0）有效，
+    //   历史旁路产生的「role=admin 且挂具体租户」账号后端已按 3 级处理——前端同步钳级，
+    //   避免展示后端会 403 的超管菜单/退款按钮（纵深防御）。
+    const myLevel = roleLevel(user?.role) >= 4 && (user?.tenant_id ?? 0) !== 0 ? 3 : roleLevel(user?.role)
     const isSuper = myLevel >= 4
     const isTenantAdmin = myLevel >= 3
     const isDeptAdmin = myLevel >= 2

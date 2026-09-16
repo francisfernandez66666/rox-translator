@@ -12,7 +12,7 @@ import MessageBubble from './MessageBubble'
 import { FeedbackModalFromMessage } from './modals'
 import { useChat } from '@/hooks/useChat'
 import { myPackage, meContext } from '@/api'
-import { estimateTranslation } from '@/api/translate' // ★ F7：翻译前消耗预估
+import { estimateTranslation, validateTranslateFile, TRANSLATE_FILE_ACCEPT } from '@/api/translate' // ★ F7：翻译前消耗预估；P2：即时文件翻译校验/accept
 import { fmtPoints } from '@/utils/points'
 import { sentenceRateOf, approxSentencesOf } from '@/lib/quotaCalc' // ★ F11：换算抽纯 // ★ E14：删除死导入 request（无调用点）
 import type { ChatMessage } from '@/types'
@@ -64,6 +64,7 @@ export default function ChatWindow() {
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null) // ★ P2：即时文件翻译（此前 sendFile 无 UI 入口=死代码）
 
 
   // ---- 余额 / 用量加载 ----
@@ -191,6 +192,17 @@ export default function ChatWindow() {
     chat.sendMessage(rawText, options)
   }
 
+  // ---- 即时文件翻译（★ P2 整改：sendFile 此前无 UI 入口，功能形同缺失）----
+  // 与工单通道共用后端校验口径（validateTranslateFile：扩展名白名单 + 40MB），前端先行拦截给反馈
+  async function handleFilePicked(files: FileList | null) {
+    if (!files || files.length === 0) return
+    if (chat.isLoading) { void MessagePlugin.warning(t2('chat.busy')); return }
+    const file = files[0]
+    const err = validateTranslateFile(file)
+    if (err) { void MessagePlugin.error(err); return }
+    await chat.sendFile(file, chat.selectedLangs, '', condenseOn && condenseMax > 0 ? condenseMax : 0)
+  }
+
   const canSend = input.trim().length > 0
 
   return (
@@ -300,6 +312,12 @@ export default function ChatWindow() {
               )}
             </div>
           </div>
+          {/* ★ P2：即时文件翻译入口（sendFile 此前无 UI 调用点=死代码，仅工单通道可用）。
+              注意：title 不能含「发送」子串，否则 Playwright getByRole('发送') 撞 strict mode */}
+          <input ref={fileRef} type="file" accept={TRANSLATE_FILE_ACCEPT} style={{ display: 'none' }}
+                 onChange={(e) => { void handleFilePicked(e.target.files); e.currentTarget.value = '' }} />
+          <Button variant="text" theme="default" size="medium" title={t('chat.attachFile')} aria-label={t('chat.attachFile')}
+                  onClick={() => fileRef.current?.click()}>📎</Button>
           <Button variant="text" theme="default" size="medium" title={t('chat.searchPh')} onClick={() => { setSearchOpen((v) => !v); setSearchQ('') }}>🔍</Button>
           <Button variant="text" theme="default" size="medium" title={t('chat.exportMd')} onClick={exportChat}>⬇</Button>
           <Button variant="text" theme="default" size="medium" icon={<ClearIcon />}

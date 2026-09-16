@@ -52,18 +52,25 @@ test.describe('后台 Tab 合并 + 语言多选去重', () => {
     await expect(page.getByText('pip', { exact: false }).first()).toBeVisible();
   });
 
-  test('T3 聊天语言多选：选中即入 chip，下拉无重复选中态', async ({ page }) => {
+  test('T3 聊天语言多选：选中即入 chip，下拉无重复展示位', async ({ page }) => {
     await login(page, 'uatuser_a', 'uatpass123');
     await page.goto('/');
-    await page.getByTestId('lang-multi-trigger').click();
+    const trigger = page.getByTestId('lang-multi-trigger');
+    await trigger.click();
     const panel = page.getByTestId('lang-multi-panel');
     await expect(panel).toBeVisible();
-    await panel.locator('input').first().fill('英语');
-    await page.keyboard.press('Enter');
-    // 面板内恰一个选中态（勾选即时生效，但不外部重复展示）
-    await expect(panel.locator('[role="option"][aria-selected="true"]')).toHaveCount(1);
-    await page.keyboard.press('Escape');
-    // chip 区仅 1 个已选语言 chip（选中的语言只在 chip 区单点展示）
+    // 默认态：新会话兜底已选英语（useChat.loadLangs 默认 ["en"]）——chip 恰 1 个
     await expect(page.getByTestId('lang-chips').locator('.tag-lang')).toHaveCount(1);
+    await panel.locator('input').first().fill('日语');
+    await page.keyboard.press('Enter');
+    // Enter 勾选首个过滤命中（日语）：面板内选中态=默认英语+日语 共 2（勾选态仅供增删，不是展示位）
+    await expect(panel.locator('[role="option"][aria-selected="true"]')).toHaveCount(2);
+    await page.keyboard.press('Escape');
+    // chip 区同步 2 个已选语言（选中结果唯一展示位=chip 行）
+    await expect(page.getByTestId('lang-chips').locator('.tag-lang')).toHaveCount(2);
+    // 触发器永远不渲染已选语言标签（历史缺陷：Select 下拉与外部 chip 双展示的回归锁）
+    const triggerText = await trigger.textContent();
+    expect(triggerText || '').not.toContain('日语');
+    expect(triggerText || '').not.toContain('英语');
   });
 });

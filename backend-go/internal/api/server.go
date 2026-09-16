@@ -133,6 +133,7 @@ func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist s
 	s.routesOpenAPISpec()
 	// 启动监控看门狗（后台巡检余额/模型健康）
 	s.startWatchdog()
+	s.startUSDTReconciler() // ★ USDT（2026-09-15）：链上对账周期任务（开关默认关，真链冒烟前不自动入账）
 	return s
 }
 

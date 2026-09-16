@@ -15,6 +15,20 @@
 import type { ChatResponse, HealthResponse, ProgressEvent } from '@/types'
 import { API_BASE, authHeaders, request, handleUnauthorized, ApiError } from './core'
 
+/** SSE 空闲超时：后端每 20s 发一帧 `: ping` 注释（不匹配 data: 但计入字节、重置计时）。
+ *  连续 SSE_IDLE_MS 无任何字节 = 判定代理静默断连，主动中断避免 UI 永卡 loading。 */
+const SSE_IDLE_MS = 60_000
+function readWithIdle<T extends { done: boolean; value?: Uint8Array }>(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  onIdle: () => void,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const idle = new Promise<never>((_, rej) => {
+    timer = setTimeout(() => { onIdle(); rej(new ApiError('连接空闲超时，请重试', undefined, 'stream_idle')) }, SSE_IDLE_MS)
+  })
+  return Promise.race([reader.read() as Promise<T>, idle]).finally(() => { if (timer) clearTimeout(timer) }) as Promise<T>
+}
+
 /** SSE 公共解析器：从 ReadableStream 逐行解析 SSE 事件，回调进度，返回最终结果 */
 async function consumeSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -26,33 +40,41 @@ async function consumeSSEStream(
   let buffer = ''
   let finalResult: ChatResponse | null = null
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed.startsWith('data: ')) continue
-      const jsonStr = trimmed.slice(6)
-      if (jsonStr === '[DONE]') continue
-      try {
-        const event: ProgressEvent = JSON.parse(jsonStr)
-        if (event.type === 'progress' && onProgress) {
-          onProgress(event)
-        } else if (event.type === 'delta') {
-          if (onDelta) onDelta(event.lang || '', event.text || '')
-        } else if (event.type === 'done') {
-          finalResult = event.result || null
-        } else if (event.type === 'error') {
-          // ★ E11：SSE error 事件透传稳定错误码（余额不足等可在 UI 差异化处理）
-          throw new ApiError(event.error || errorMessage, undefined, event.error_code)
+  try {
+    while (true) {
+      // ★ 2026-09-16 P2：空闲超时护栏（旧版 reader.read() 在代理静默断连时永挂）
+      const { done, value } = await readWithIdle(reader, () => { void reader.cancel() })
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data: ')) continue
+        const jsonStr = trimmed.slice(6)
+        if (jsonStr === '[DONE]') continue
+        try {
+          const event: ProgressEvent = JSON.parse(jsonStr)
+          if (event.type === 'progress' && onProgress) {
+            onProgress(event)
+          } else if (event.type === 'delta') {
+            if (onDelta) onDelta(event.lang || '', event.text || '')
+          } else if (event.type === 'done') {
+            finalResult = event.result || null
+          } else if (event.type === 'error') {
+            // ★ E11：SSE error 事件透传稳定错误码（余额不足等可在 UI 差异化处理）
+            throw new ApiError(event.error || errorMessage, undefined, event.error_code)
+          }
+        } catch (e) {
+          if (e instanceof Error && !e.message.includes('JSON')) throw e
         }
-      } catch (e) {
-        if (e instanceof Error && !e.message.includes('JSON')) throw e
       }
     }
+  } catch (e) {
+    // 空闲超时/网络错误统一转 ApiError（保留既有 ApiError 原样上抛）
+    if (e instanceof ApiError) throw e
+    if (e instanceof Error && e.name === 'AbortError') throw e
+    throw new ApiError(e instanceof Error ? e.message : String(e), undefined, 'stream_error')
   }
   if (!finalResult) throw new Error('未收到翻译结果')
   return finalResult

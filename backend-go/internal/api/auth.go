@@ -766,6 +766,14 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅超级管理员可分配该角色"})
 			return
 		}
+		// ★ 收口（2026-09-16 安全整改）：等级≥4 角色只允许平台级账号（tenant_id=0）持有——
+		//   users/create 侧本有「super/admin 强制落 tid=0」的不变量，但 update 侧此前缺失，
+		//   实测可造出 role='admin' AND tenant_id>0 的违规行，穿透旧 IsSuperAdmin 完成
+		//   跨租户退款/下载。与 create 口径对齐：非平台归属目标直接拒绝高角色分配。
+		if req.Role != "" && auth.RoleLevel(req.Role) >= 4 && tid > 0 {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "超管级角色仅可分配给平台级账号（tenant_id=0），请先调整归属"})
+			return
+		}
 		// 非租户管理员不能分配租户管理员级角色
 		if req.Role != "" && auth.RoleLevel(req.Role) >= 3 && !auth.IsTenantAdmin(u) {
 			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅租户管理员及以上可分配该角色"})

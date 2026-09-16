@@ -61,6 +61,36 @@ func sseHeaders(w http.ResponseWriter) {
 	h.Set("Connection", "keep-alive")
 }
 
+// sseHeartbeat 周期写 SSE 注释帧（`: ping`）作心跳（2026-09-16 P2 整改）：
+// 前端据此做「空闲断连」判定（收帧即重置计时）——旧版长间隔（代理静默挂起）时
+// 客户端 reader 永挂、UI 卡 loading。注释帧按 SSE 规范被客户端解析器忽略，零侵入。
+// 与 D20 写锁共用序列化；返回 stop 必须在 handler 返回前调用（defer），
+// 防止向已回收的 ResponseWriter 写入。
+func sseHeartbeat(w http.ResponseWriter, flusher http.Flusher, mu *sync.Mutex, every time.Duration) (stop func()) {
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				mu.Lock()
+				fmt.Fprint(w, ": ping\n\n")
+				if flusher != nil {
+					flusher.Flush()
+				}
+				mu.Unlock()
+			}
+		}
+	}()
+	// stop 同步等待心跳协程退出：保证 handler 返回后不再有对 w 的写入
+	return func() { close(done); <-stopped }
+}
+
 // ============ 流式文本翻译 ============
 
 // handleChatStream 流式文本翻译接口（/api/chat/stream，SSE）。
@@ -106,6 +136,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	// ★ D20：SSE 写序列化锁（progress/delta 均来自引擎并发管线）
 	var sseMu sync.Mutex
+	// ★ 心跳：每 20s 一帧注释，防代理/客户端把长间隔误判断连（见 sseHeartbeat）
+	defer sseHeartbeat(w, flusher, &sseMu, 20*time.Second)()
 	// 进度回调：计算百分比（封顶 99%，完成时单独发 100%）并推送 progress 事件
 	prog := func(step string, done, total int) {
 		percent := 0
@@ -138,18 +170,24 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	res := s.Engine.HandleText(ctx, req.Message, req.Options, prog)
-	// 推送完成进度
+	// 推送完成进度（心跳在途：收尾帧同样走写锁序列化）
+	sseMu.Lock()
 	fmt.Fprint(w, sseEvent("progress", map[string]interface{}{"step": "完成", "done": 1, "total": 1, "percent": 100}))
+	sseMu.Unlock()
 	if flusher != nil {
 		flusher.Flush()
 	}
 	if res.Error != "" {
 		// 翻译失败：推送 error 事件并计入失败指标
+		sseMu.Lock()
 		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": res.Error}))
+		sseMu.Unlock()
 		s.metrics.countTranslate("text", false)
 	} else {
 		s.metrics.countTranslate("text", true)
+		sseMu.Lock()
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
+		sseMu.Unlock()
 		// Webhook：翻译完成事件回调租户配置的 URL（异步投递，不阻塞 SSE 返回）
 		s.dispatchTranslateWebhook(tid, "text", req.Message, res)
 	}
@@ -233,7 +271,6 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-
 	// ★ 整改 A2：闸门通过后再落盘——被限流/超额拒绝的请求不再产生孤儿文件；
 	//   创建成功即 defer 清理，任何提前返回路径都不会残留磁盘文件。
 	os.MkdirAll(s.Cfg.UploadDir, 0o755)
@@ -267,6 +304,11 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// ★ 2026-09-16 P2：写锁 + 心跳（与文本流同口径）。心跳延后到此处启动，
+	//   覆盖耗时的 HandleFile 阶段；上方所有提前返回的 SSE 写均无心跳并发，无需锁。
+	var sseMu sync.Mutex
+	defer sseHeartbeat(w, flusher, &sseMu, 20*time.Second)()
+
 	// 进度回调：推送 progress 事件（与文本翻译一致，封顶 99%）
 	prog := func(step string, done, total int) {
 		percent := 0
@@ -276,7 +318,9 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 				percent = 99
 			}
 		}
+		sseMu.Lock()
 		fmt.Fprint(w, sseEvent("progress", map[string]interface{}{"step": step, "done": done, "total": total, "percent": percent}))
+		sseMu.Unlock()
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -287,13 +331,17 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	res := s.Engine.HandleFile(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), engine.ModeFromOptions(options)), tenant.LangFromOptions(options)), savePath, options, prog)
 
 	// 推送完成进度
+	sseMu.Lock()
 	fmt.Fprint(w, sseEvent("progress", map[string]interface{}{"step": "完成", "done": 1, "total": 1, "percent": 100}))
+	sseMu.Unlock()
 	if flusher != nil {
 		flusher.Flush()
 	}
 	if res.Error != "" {
 		// 失败：推送 error 事件并计入失败指标
+		sseMu.Lock()
 		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": res.Error}))
+		sseMu.Unlock()
 		s.metrics.countTranslate("file", false)
 	} else {
 		s.metrics.countTranslate("file", true)
@@ -303,7 +351,9 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 				s.Store.RegisterArtifact(fp, tid, u.ID, 0)
 			}
 		}
+		sseMu.Lock()
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
+		sseMu.Unlock()
 		// Webhook：翻译完成事件回调（异步投递）
 		s.dispatchTranslateWebhook(tid, "file", header.Filename, res)
 	}

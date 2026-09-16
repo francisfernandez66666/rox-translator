@@ -10,7 +10,7 @@ import { Button, Tag, Drawer } from 'tdesign-react'
 import { myPackage, meContext } from '@/api'
 import { pointsOf } from '@/utils/points'
 import { AuthProvider, useAuth } from '@/stores/auth'
-import { AdminProvider } from '@/stores/admin'
+import { AdminProvider, useAdminStore } from '@/stores/admin'
 import { ChatProvider, useChat } from '@/hooks/useChat'
 import { useT, t as gt, tpl as gtpl, toggleLang } from '@/i18n'
 import { setAuthToken, setActiveTenantId, API_BASE } from '@/api'
@@ -192,11 +192,16 @@ function FrontShell() {
         <AccountMenu showAdminConsole={roleLevelSafe(user?.role) >= 2} onGotoAdmin={() => navigate('/admin')} />
       </header>
 
-      {/* ★ E11：余额耗尽（billing_stopped 口径）常驻横幅——旧版仅深藏于自助面板 */}
+      {/* ★ E11：余额耗尽（billing_stopped 口径）常驻横幅——旧版仅深藏于自助面板
+          ★ 2026-09-16 整改：旧版一律跳 /packages（只读页）——租户管理员及以上直跳
+            后台计费 Hub（真正的收银台所在），避免「点充值→落只读页」死胡同 */}
       {depleted && (
         <div style={{ background: '#fff1f0', color: '#a8071a', padding: '6px 16px', fontSize: 13, display: 'flex', gap: 12, alignItems: 'center', borderBottom: '1px solid #ffccc7' }}>
           <span>{t('ss.exhaustedHint')}</span>
-          <Button size="small" theme="danger" onClick={() => navigate('/packages')}>{t('ss.gotoRecharge')}</Button>
+          <Button size="small" theme="danger" onClick={() => {
+            if (roleLevelSafe(user?.role) >= 3) { useAdminStore.getState().gotoPanel('billing'); navigate('/admin') }
+            else navigate('/packages')
+          }}>{t('ss.gotoRecharge')}</Button>
         </div>
       )}
       <div className="app-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>

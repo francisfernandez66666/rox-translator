@@ -106,6 +106,9 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		"subscribed_at":     subAt,
 		"package_expires":   pkgExpires,
 		"pay_mode":          payMode,
+		// ★ USDT（2026-09-15）：收银台渠道显隐依据（仅开关态，地址/汇率等敏感配置不下发公共口）
+		"usdt_enabled": s.Store.GetUSDTCfg().Enabled,
+		"usdt_chains":  s.Store.GetUSDTCfg().Chains,
 	}
 	// ★ 部门预算进度（四期增强；前台「🏢 部门预算 used/limit」徽标数据源）：
 	// 仅当用户归属的部门启用了预算（token_limit>0）时返回 org_budget 与租户总预算
@@ -135,7 +138,9 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		Code string `json:"code"` // 商业包编码（必填）
+		Code      string `json:"code"`       // 商业包编码（必填）
+		Channel   string `json:"channel"`    // ★ USDT（2026-09-15）：可选 usdt（未开放时回运营配置渠道）
+		USDTChain string `json:"usdt_chain"` // 指定链（可空=配置首链）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code 不能为空"})
@@ -167,6 +172,11 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 	} else if payMode == "mock" {
 		channel = "mock"
 	}
+	// ★ USDT（2026-09-15）：请求显式选择 usdt 且开关开启 → 订阅单同样挂链上收款要素
+	usdtSel := req.Channel == "usdt" && s.Store.GetUSDTCfg().Enabled
+	if usdtSel {
+		channel = "usdt"
+	}
 	o, err := s.Store.CreatePackageOrder(tid, pkg, u.ID, channel)
 	if err != nil {
 		log.Printf("[plans] 订阅下单失败 code=%s tid=%d: %v", pkg.Code, tid, err)
@@ -183,6 +193,15 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		o.Status = "paid"
+	} else if usdtSel {
+		payload, errMsg := s.attachUSDTMeta(u, tid, o, o.AmountMoney, req.USDTChain)
+		if errMsg != "" {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": errMsg, "order_no": o.OrderNo})
+			return
+		}
+		s.Store.LogAudit(tid, u.ID, "package_subscribe", "packages", pkg.Code+" channel=usdt")
+		writeJSON(w, 200, map[string]interface{}{"success": true, "order": o, "channel": "usdt", "usdt_pay": payload})
+		return
 	} else if channel == "manual" {
 		// 静态码模式：回填收款码图片；未配置收款码时明确报错而非静默空码（2026-09 debug）
 		if v, _ := s.Store.GetConfig("static_qr_image"); v != "" {

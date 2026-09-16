@@ -20,6 +20,7 @@ cd "$(dirname "$0")/../.." || exit 1
 
 UAT_PORT="${UAT_PORT:-8899}"
 MOCK_LLM_PORT="${MOCK_LLM_PORT:-8901}"
+MOCK_CHAIN_PORT="${MOCK_CHAIN_PORT:-8902}"
 BASE_URL="http://127.0.0.1:${UAT_PORT}"
 WORK=$(mktemp -d)
 ADMIN_INIT_PASSWORD=Admin@1234
@@ -55,8 +56,17 @@ else
     || { echo "❌ 竞态检测发现数据竞争，中止 UAT"; exit 1; }
   log "竞态检测通过"
 fi
-log "构建前端 dist（若缺失）..."
-[ -f frontend-react/dist/index.html ] || (cd frontend-react && npm run build) || { echo "前端构建失败"; exit 1; }
+# ★ P1-1 闸门补防（2026-09-15）：dist「存在即跳过」会让 E2E 对着旧包跑（曾实测 dist 比 HEAD 源码旧
+#   44 分钟而无人察觉）。改为新鲜度判定：src 下任何 .ts/.tsx 比 dist/index.html 新即重建（vite build ~10s）。
+NEED_BUILD=0
+[ -f frontend-react/dist/index.html ] || NEED_BUILD=1
+if [ "$NEED_BUILD" = "0" ] && [ -n "$(find frontend-react/src frontend-react/e2e -newer frontend-react/dist/index.html \( -name '*.ts' -o -name '*.tsx' \) -print -quit)" ]; then
+  log "检测到前端源码比 dist 新，重建 dist..."
+  NEED_BUILD=1
+fi
+if [ "$NEED_BUILD" = "1" ]; then
+  (cd frontend-react && npm run build) || { echo "前端构建失败"; exit 1; }
+fi
 
 # ---------- 2. mock LLM ----------
 log "启动 mock LLM :${MOCK_LLM_PORT}..."
@@ -70,6 +80,18 @@ done
 [ "${OK:-0}" = "1" ] || { echo "mock LLM 启动失败"; exit 1; }
 log "mock LLM 就绪（${i}s）"
 
+# ---------- 2b. mock chain（USDT 收款对账，T42 依赖） ----------
+log "启动 mock chain :${MOCK_CHAIN_PORT}..."
+nohup python3 scripts/uat/mock_chain.py "$MOCK_CHAIN_PORT" > "$WORK/mockchain.log" 2>&1 < /dev/null &
+CHAIN_PID=$!
+OK=0
+for i in $(seq 1 10); do
+  sleep 1
+  if curl -s -m 2 "http://127.0.0.1:${MOCK_CHAIN_PORT}/v1/blocks" >/dev/null 2>&1; then OK=1; break; fi
+done
+[ "${OK:-0}" = "1" ] || { echo "mock chain 启动失败"; exit 1; }
+log "mock chain 就绪（${i}s）"
+
 # ---------- 3. 后端（全新库 + 探活自指向 + 固定超管密码；方言随 DB_DRIVER） ----------
 log "启动后端 :${UAT_PORT}（方言 ${DB_DRIVER}）..."
 rm -f "$WORK/dev.db"*
@@ -79,6 +101,7 @@ printf "# UAT T36 测试词包\n紫火核弹T36\n" > "$WORK/sensitive_words.txt"
 ADMIN_INIT_PASSWORD=$ADMIN_INIT_PASSWORD SELFCHECK_URL="${BASE_URL}/status" \
   ADMIN_TOKEN=uat-admin-token-36 METRICS_TOKEN=uat-metrics-36 \
   SENSITIVE_WORDS_FILE="$WORK/sensitive_words.txt" \
+  USDT_TRON_BASE="http://127.0.0.1:${MOCK_CHAIN_PORT}" USDT_SCAN_INTERVAL_SEC=5 \
   nohup "$WORK/uat-server" -addr "127.0.0.1:${UAT_PORT}" -frontend frontend-react/dist -kbdb "$WORK/dev.db" \
   > "$WORK/server.log" 2>&1 < /dev/null &
 SERVER_PID=$!
@@ -98,10 +121,16 @@ dbcfg register_ip_min_interval_sec 0
 dbcfg register_ip_daily_limit 1000
 dbcfg billing_enforced 1
 dbcfg pay_mode mock
+# ★ T42 USDT：默认开启收款（trc20 单链，地址占位 base58 合规），对账器 2s 轮询；tx 唯一/尾数依赖后端逻辑本身
+dbcfg usdt_enabled 0   # T42 自开自关（避免影响后续前端 E2E 收银台用例）
+dbcfg usdt_chains trc20
+dbcfg usdt_rate_fen_per_usdt 720
+dbcfg usdt_addr_trc20 T4BJRYfnu29GPWdksz7EMUbiqx5CKSZgov
+dbcfg usdt_confirmations_trc20 1
 
 # ---------- 5. 后端 API 全链路（A/B 主链路 + T 交易专项，双方言断言层） ----------
 log "===== 后端 API 全链路 UAT ====="
-export BASE_URL UAT_DB="$WORK/dev.db" UAT_SERVER_LOG="$WORK/server.log" ADMIN_PASS=$ADMIN_INIT_PASSWORD MOCK_LLM_URL="http://127.0.0.1:${MOCK_LLM_PORT}"
+export BASE_URL UAT_DB="$WORK/dev.db" UAT_SERVER_LOG="$WORK/server.log" ADMIN_PASS=$ADMIN_INIT_PASSWORD MOCK_LLM_URL="http://127.0.0.1:${MOCK_LLM_PORT}" MOCK_CHAIN_URL="http://127.0.0.1:${MOCK_CHAIN_PORT}"
 bash scripts/uat/api_uat.sh | tee "$WORK/api_uat.log"
 API_TAIL=$(tail -1 "$WORK/api_uat.log")
 API_PASS=$(echo "$API_TAIL" | grep -oE 'PASS=[0-9]+' | cut -d= -f2)
@@ -117,8 +146,27 @@ TXN_FAIL=$(echo "$TXN_TAIL" | grep -oE 'FAIL=[0-9]+' | cut -d= -f2)
 log "===== 前端 E2E UAT（像素级 + 运行时健康 + 冒烟）====="
 mkdir -p frontend-react/artifacts
 # PW_TARGET 可定向单 spec（缺陷迭代提速；缺省 e2e/ 全量）
-(cd frontend-react && BASE_URL="$BASE_URL" API_URL="$BASE_URL" npx playwright test "${PW_TARGET:-e2e/}" --reporter=line) | tee "$WORK/pixel_uat.log"
-PIX_PASS=$(grep -cE '✓|passed' "$WORK/pixel_uat.log" || true)
+# ★ P2（2026-09-16）：①PWTEST_CHILD_PROCESS_TIMEOUT 把 worker teardown 挂起强杀从
+#   默认 300s 降到 60s——曾实测高负载下偶发「worker did not exit」拖红闸门 10 分钟；
+#   ②首轮失败自动 --last-failed 复跑一轮，区分「真回归」（复跑仍红）与「环境 flaky」
+#   （复跑转绿→WARN 不拦截），消除发布闸门随机误红。
+(cd frontend-react && PWTEST_CHILD_PROCESS_TIMEOUT=60000 BASE_URL="$BASE_URL" API_URL="$BASE_URL" npx playwright test "${PW_TARGET:-e2e/}" --reporter=line) | tee "$WORK/pixel_uat.log"
+# ★ P1-1 闸门补防（2026-09-15）：Playwright 失败必须进退出码——旧实现只 tee 日志不采码，
+#   「发布闸门」对前端 E2E 不设防（HEAD 曾带 2 条红用例合入并被声明全绿）。
+PW_EXIT=${PIPESTATUS[0]}
+PW_FAIL=0
+if [ "${PW_EXIT:-1}" -ne 0 ]; then
+  log "首轮 E2E 非零（exit=${PW_EXIT}），复跑失败用例甄别 flaky..."
+  (cd frontend-react && PWTEST_CHILD_PROCESS_TIMEOUT=60000 BASE_URL="$BASE_URL" API_URL="$BASE_URL" npx playwright test --last-failed --reporter=line) | tee "$WORK/pixel_uat_retry.log"
+  PW_RETRY_EXIT=${PIPESTATUS[0]}
+  if [ "${PW_RETRY_EXIT:-1}" -eq 0 ]; then
+    log "⚠️ 复跑全绿：首轮为环境 flaky（非代码回归），闸门放行并留痕 pixel_uat_retry.log"
+  else
+    PW_FAIL=1
+    echo "❌ 前端 E2E 复跑仍失败（exit=${PW_RETRY_EXIT}），发布闸门拦截"
+  fi
+fi
+[ "$PW_FAIL" = "1" ] && echo "❌ 前端 E2E 失败（exit=${PW_EXIT}），发布闸门拦截"
 
 # ---------- 7. 汇总 ----------
 DUR=$(( $(date +%s) - T0 ))
@@ -126,9 +174,9 @@ log "=============================="
 log "方言：${DB_DRIVER}"
 log "后端 API UAT（A/B 主链路）：PASS=${API_PASS:-0} FAIL=${API_FAIL:-0}"
 log "后端交易专项 UAT（T 套件）：PASS=${TXN_PASS:-0} FAIL=${TXN_FAIL:-0}"
-log "前端像素 UAT：见 pixel_uat.log（截图：frontend-react/artifacts/）"
+log "前端 E2E UAT：exit=${PW_EXIT:-?}（FAIL=${PW_FAIL:-1}）；明细见 pixel_uat.log（截图：frontend-react/artifacts/）"
 log "日志目录：$WORK"
 log "=============================="
-[ "${KEEP:-0}" != "1" ] && { kill $SERVER_PID $MOCK_PID 2>/dev/null || true; }
-[ "${API_FAIL:-1}${TXN_FAIL:-1}" = "00" ] || exit 1
+[ "${KEEP:-0}" != "1" ] && { kill $SERVER_PID $MOCK_PID $CHAIN_PID 2>/dev/null || true; }
+[ "${API_FAIL:-1}${TXN_FAIL:-1}${PW_FAIL:-1}" = "000" ] || exit 1
 exit 0

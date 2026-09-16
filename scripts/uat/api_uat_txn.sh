@@ -36,10 +36,14 @@
 #       S8 敏感词闸（输入拦截 e2e + 开关往返 + 非法值拒绝）/ S3 一次性邮箱黑名单（内置域+增补域）/
 #       S4 归因落库+漏斗接口鉴权 / S9 Alertmanager 收口鉴权+告警落库+metrics 401/Bearer /
 #       S7 s7_watchlist 表 / S5 首页 HTML
+#   T42 USDT 收款全链路（mock_chain：尾数对单/声明 txid/一 tx 一单/M2 自动入账）
 #   T37 今日修复回归（2026-09-14）：P0-2 org_id=0 越权（子树内放行+未分配 403）/
 #       P0-4 auto_charge 仅超管即时入账（租户管理员 pending）/ P0-3 品牌子域 sso_code 登录链
 #       （无裸 token + 兑换 + 单次消费）/ P0-5 敏感词 Unicode 归一化（全角/零宽/空格拦截）/
 #       P1-15 points 溢出 400 / P1-2 charge_kind 语义枚举守恒
+#   T43 今日修复回归（2026-09-16）：RBAC 收紧（高角色禁落租户 400 / 存量违规行降权 403）/
+#       支付渠道 fail-closed（wechat/alipay 显式报错、禁止 mockpay/alipay 占位假码）/
+#       发票冲红闭环（开票→void→同单可重开）
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 # 依赖：mock_llm.py 已启动、uat 服务已启动（run_uat.sh 编排）
 # 用法：BASE_URL=... UAT_DB=... ADMIN_PASS=... [UAT_SERVER_LOG=...] bash scripts/uat/api_uat_txn.sh
@@ -226,7 +230,7 @@ R=$(post "$H1" "{\"url\":\"https://example.com/retry-hook\",\"events\":\"transla
 ck T10-webhook-save-retry '"success":true' "$R"
 WHID2=$(echo "$R" | pv '.get("webhook",{}).get("id") or 0')
 ck T10-webhook-list '"success":true' "$(get "$H1" /api/webhooks)"
-ck T10-webhook-test '"success"' "$(post "$H1" "{\"id\":$WHID}" /api/webhooks/test)"
+R=$(post "$H1" "{\"id\":$WHID}" /api/webhooks/test); ck T10-webhook-test '"success"' "$R"
 # 查询投递历史（空）
 R=$(get "$H1" "/api/webhooks/deliveries?webhook_id=$WHID")
 ck T10-webhook-deliveries '"success":true' "$R"
@@ -975,6 +979,161 @@ T41ORD=$(echo "$T41L" | python3 -c 'import sys,json;a=[x.get("created_at","") fo
 [ "$T41ORD" = "DESC" ] \
   && { PASS=$((PASS+1)); echo "PASS|T41-audit-time-desc"; } \
   || { FAIL=$((FAIL+1)); echo "FAIL|T41-audit-time-desc($T41ORD)"; }
+
+
+# ============================================================================
+# T42（2026-09-15 USDT 收款）全链路（依赖 mock_chain.py，经 USDT_TRON_BASE 注入后端）：
+#   默认关拒单 / 配置口校验（地址/汇率非法拒） / 下单尾数唯一（两单金额互异） /
+#   声明 txid（manual-confirm 必填+格式闸） / 后台确认四项（必填哈希、一笔交易只核一单） /
+#   尾数关闭=精确基额 / M2 链上自动入账（错金额孤儿、确认达阈值入账、入账幂等） /
+#   自开自关不污染后续前端 E2E。
+# ============================================================================
+CHAIN="${MOCK_CHAIN_URL:-http://127.0.0.1:8902}"
+CJ='Content-Type: application/json'
+echo "===== T42 USDT 收款全链路 ====="
+R=$(post "$H1" '{"tokens":8888,"channel":"usdt"}' /api/pay/create)
+ck T42-off-reject '未开放' "$R"
+R=$(SSAVE '{"usdt_addr_trc20":"badaddr"}')
+ck T42-bad-addr-rejected '地址格式非法' "$R"
+R=$(SSAVE '{"usdt_enabled":"1","usdt_addr_trc20":"T4BJRYfnu29GPWdksz7EMUbiqx5CKSZgov"}')
+ck T42-enable-ok2 '"success":true' "$R"
+R=$(SSAVE '{"usdt_rate_fen_per_usdt":0}')
+ck T42-bad-rate-rejected 'usdt_rate_fen_per_usdt' "$R"
+R=$(SSAVE '{"usdt_enabled":"1"}')
+ck T42-enable-ok '"success":true' "$R"
+
+# 下单×2：尾数唯一（同基额两单金额必须互异——无 memo 链上对单的根）
+R=$(post "$H1" '{"tokens":8888,"channel":"usdt","usdt_chain":"trc20"}' /api/pay/create)
+ck T42-order-a '"success":true' "$R"
+OIDA=$(echo "$R" | pv '["order"]["id"]')
+ADDR=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["usdt_pay"]["address"])')
+AMTA=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["usdt_pay"]["amount_micro"])')
+TAILA=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["usdt_pay"]["tail"])')
+R2=$(post "$H1" '{"tokens":8888,"channel":"usdt","usdt_chain":"trc20"}' /api/pay/create)
+OIDB=$(echo "$R2" | pv '["order"]["id"]')
+AMTB=$(echo "$R2" | python3 -c 'import sys,json;print(json.load(sys.stdin)["usdt_pay"]["amount_micro"])')
+TAILCHK=$(python3 -c "x=float('$TAILA');print('OK' if 0.000001<=x<=0.009999 else 'BAD')" 2>/dev/null || echo ERR)
+[ "$TAILCHK" = "OK" ] && [ -n "$ADDR" ] && { PASS=$((PASS+1)); echo "PASS|T42-tail-in-range"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-tail-in-range(tail=$TAILA addr=$ADDR)"; }
+[ "$AMTA" != "$AMTB" ] && { PASS=$((PASS+1)); echo "PASS|T42-tail-unique"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-tail-unique($AMTA==$AMTB)"; }
+ck T42-bad-chain-rejected '未开放' "$(post "$H1" '{"tokens":8888,"channel":"usdt","usdt_chain":"doge"}' /api/pay/create)"
+
+# 客户声明 txid：必填→格式闸→合法声明落库并进人工核对单
+R=$(post "$H1" "{\"order_id\":$OIDA}" /api/pay/manual-confirm)
+ck T42-txid-required '交易哈希' "$R"
+R=$(post "$H1" "{\"order_id\":$OIDA,\"tx_hash\":\"xyz123\"}" /api/pay/manual-confirm)
+ck T42-txid-format '格式' "$R"
+TXA=$(python3 -c "print('a1'*32)")
+R=$(post "$H1" "{\"order_id\":$OIDA,\"tx_hash\":\"$TXA\"}" /api/pay/manual-confirm)
+ck T42-declare-ok '"success":true' "$R"
+ck T42-admin-list-declared "\"declared\":\"$TXA\"" "$(get "$AH" /api/admin/orders/manual)"
+ST=$(sq "SELECT manual_confirm FROM orders WHERE id=$OIDA")
+[ "$ST" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-manual-flag"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-manual-flag($ST)"; }
+
+# 后台确认：无哈希拒 / 合法哈希入账落 payments / 同一笔交易复用到第二单拒（一 tx 一单）
+R=$(post "$AH" "{\"id\":$OIDA,\"tenant_id\":$TAID}" /api/admin/orders/pay)
+ck T42-confirm-need-tx '交易哈希' "$R"
+R=$(post "$AH" "{\"id\":$OIDA,\"tenant_id\":$TAID,\"tx_hash\":\"$TXA\"}" /api/admin/orders/pay)
+ck T42-confirm-ok '"success":true' "$R"
+ST=$(sq "SELECT status FROM orders WHERE id=$OIDA")
+[ "$ST" = "paid" ] && { PASS=$((PASS+1)); echo "PASS|T42-confirmed-paid"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-confirmed-paid($ST)"; }
+N=$(sq "SELECT COUNT(*) FROM payments WHERE order_id=$OIDA AND tx_hash='$TXA'")
+[ "$N" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-payments-tx-hash"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-payments-tx-hash($N)"; }
+R=$(post "$AH" "{\"id\":$OIDB,\"tenant_id\":$TAID,\"tx_hash\":\"$TXA\"}" /api/admin/orders/pay)
+ck T42-tx-reuse-rejected '已关联' "$R"
+ST=$(sq "SELECT status FROM orders WHERE id=$OIDB")
+[ "$ST" = "pending" ] && { PASS=$((PASS+1)); echo "PASS|T42-reuse-order-still-pending"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-reuse-order-still-pending($ST)"; }
+sq "UPDATE orders SET status='cancelled' WHERE id=$OIDB AND status='pending'" >/dev/null   # 清场防尾数冲突
+
+# 尾数开关：关闭=精确基额（fen*1e6/720 四舍五入）
+SSAVE '{"usdt_tail_enabled":"0"}' >/dev/null
+R=$(post "$H1" '{"tokens":8888,"channel":"usdt"}' /api/pay/create)
+OIDX=$(echo "$R" | pv '["order"]["id"]')
+AMTX=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["usdt_pay"]["amount_micro"])')
+MONEY=$(echo "$R" | pv '["order"]["amount_money"]')
+EXPECT=$(python3 -c "import decimal;d=decimal.Decimal;print(int((d(str($MONEY))*100*1000000+d(360))//d(720)))")
+[ "$AMTX" = "$EXPECT" ] && { PASS=$((PASS+1)); echo "PASS|T42-tail-off-exact-base"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-tail-off-exact-base(got=$AMTX want=$EXPECT)"; }
+sq "UPDATE orders SET status='cancelled' WHERE id=$OIDX AND status='pending'" >/dev/null
+SSAVE '{"usdt_tail_enabled":"1"}' >/dev/null
+
+# M2 自动对账（mock 链注入）：错金额=孤儿不入账；精确金额+确认达标=自动入账；重复扫描幂等
+SSAVE '{"usdt_auto_settle":"1"}' >/dev/null
+R=$(post "$H1" '{"tokens":7777,"channel":"usdt"}' /api/pay/create)
+OIDC=$(echo "$R" | pv '["order"]["id"]')
+AMTC=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["usdt_pay"]["amount_micro"])')
+TXW=$(python3 -c "print('f0'*32)")
+curl -s $CHAIN/advance -H "$CJ" -d '{"n":3}' >/dev/null
+curl -s $CHAIN/inject -H "$CJ" -d "{\"to\":\"$ADDR\",\"value\":$((AMTC-7)),\"tx_id\":\"$TXW\"}" >/dev/null
+SEEN=0
+for k in $(seq 1 12); do sleep 2; N=$(sq "SELECT COUNT(*) FROM usdt_deposits WHERE tx_hash='$TXW'"); [ "$N" = "1" ] && { SEEN=1; break; }; done
+[ "$SEEN" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-deposit-ingested"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-deposit-ingested"; }
+sleep 6
+ST=$(sq "SELECT status FROM orders WHERE id=$OIDC")
+[ "$ST" = "pending" ] && { PASS=$((PASS+1)); echo "PASS|T42-wrong-amount-not-settled"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-wrong-amount-not-settled($ST)"; }
+TXC=$(python3 -c "print('c3'*32)")
+curl -s $CHAIN/advance -H "$CJ" -d '{"n":3}' >/dev/null
+curl -s $CHAIN/inject -H "$CJ" -d "{\"to\":\"$ADDR\",\"value\":$AMTC,\"tx_id\":\"$TXC\"}" >/dev/null
+PAID=0
+for k in $(seq 1 24); do sleep 3; ST=$(sq "SELECT status FROM orders WHERE id=$OIDC"); [ "$ST" = "paid" ] && { PAID=1; break; }; done
+[ "$PAID" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-auto-settle-paid"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-auto-settle-paid($ST)"; }
+N=$(sq "SELECT COUNT(*) FROM payments WHERE order_id=$OIDC AND tx_hash='$TXC'")
+[ "$N" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-auto-settle-tx-proof"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-auto-settle-tx-proof($N)"; }
+N=$(sq "SELECT COUNT(*) FROM usdt_deposits WHERE tx_hash='$TXW' AND matched_order_id=0")
+[ "$N" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-orphan-kept-unmatched"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-orphan-kept-unmatched($N)"; }
+sleep 8
+N=$(sq "SELECT COUNT(*) FROM usdt_deposits WHERE tx_hash='$TXC'")
+[ "$N" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-rescan-idempotent"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-rescan-idempotent($N)"; }
+ML=$(get "$AH" /api/admin/orders/manual)
+T41CHK=$(echo "$ML" | python3 -c "import sys,json;ids=[int(o['id']) for o in json.load(sys.stdin).get('orders',[])];print('STILL' if $OIDA in ids else 'GONE')" 2>/dev/null || echo ERR)
+if [ "$T41CHK" = "STILL" ]; then FAIL=$((FAIL+1)); echo "FAIL|T42-paid-left-manual-list"; else PASS=$((PASS+1)); echo "PASS|T42-paid-left-manual-list"; fi
+
+# 收尾自关（不留给前端 E2E）：关闭后下单恢复拒单
+SSAVE '{"usdt_auto_settle":"0"}' >/dev/null
+SSAVE '{"usdt_enabled":"0"}' >/dev/null
+ck T42-disable-reject-again '未开放' "$(post "$H1" '{"tokens":8888,"channel":"usdt"}' /api/pay/create)"
+
+# ---------- T43 今日修复回归（2026-09-16）：RBAC 收紧 / 支付渠道 fail-closed / 发票冲红 ----------
+# 背景：见《核实报告_架构评审发现逐条验证_20260916》。三组断言锁定当日修复，防回归。
+
+# T43-a 支付渠道 fail-closed：微信/支付宝真实协议未接入时必须显式报错，
+#       不得静默回退 mock 出 mockpay:// 假码（旧实现用户扫废码、订单永挂 pending）。
+R=$(post "$H1" '{"points":100,"channel":"wechat"}' /api/pay/create)
+ck T43-wechat-fail-closed '未配置|未接入|暂不可用' "$R"
+echo "$R" | grep -q 'mockpay://' && { FAIL=$((FAIL+1)); echo "FAIL|T43-wechat-no-mock-fallback|wechat 下单失败仍返回 mockpay 假码"; } || { PASS=$((PASS+1)); echo "PASS|T43-wechat-no-mock-fallback"; }
+R=$(post "$H1" '{"points":100,"channel":"alipay"}' /api/pay/create)
+ck T43-alipay-fail-closed '未配置|未接入|暂不可用' "$R"
+echo "$R" | grep -q 'alipay://precreate' && { FAIL=$((FAIL+1)); echo "FAIL|T43-alipay-no-placeholder|alipay 仍返回占位收款码"; } || { PASS=$((PASS+1)); echo "PASS|T43-alipay-no-placeholder"; }
+
+# T43-b RBAC 收紧：等级≥4 角色必须平台级归属（tenant_id=0）。
+# ① users/update 把租户内账号提升为 admin → 400（create 侧不变量的 update 侧收口）
+#   注意：macOS 自带 bash 3.2 对 "$(...)" 内再嵌 \" 的解析有缺陷（body 会被拆坏），
+#   断言一律用「两段式」（先 R=$(post …) 再 ck … "$R"），与 T1 段口径一致。
+BID43=$(sq "SELECT id FROM users WHERE username='uatuser_b' LIMIT 1" | tr -d '[:space:]')
+R=$(post "$AH" "{\"id\":$BID43,\"role\":\"admin\"}" /api/admin/users/update)
+ck T43-update-promote-reject '仅可分配给平台级账号|tenant_id=0' "$R"
+# ② SQL 强插违规行模拟存量数据 → 该账号（旧角色 admin 但挂具体租户）：
+#    跨租户退款 / 分配高角色 必须 403（IsSuperAdmin/RequireRole 收紧后不再按纯等级放行）
+sq "UPDATE users SET role='admin' WHERE id=$BID43"
+BT43=$(tok uatuser_b uatpass123); H43="Authorization: Bearer $BT43"
+R=$(post "$H43" '{"id":999999,"tenant_id":2}' /api/admin/orders/refund)
+ck T43-legacy-admin-refund-403 '权限不足|超级管理员' "$R"
+R=$(post "$H43" "{\"id\":$BID43,\"role\":\"super_admin\"}" /api/admin/users/update)
+ck T43-legacy-admin-promote-403 '权限不足|超级管理员' "$R"
+sq "UPDATE users SET role='tenant_admin' WHERE id=$BID43"   # 还原现场
+
+# T43-c 发票冲红闭环（C16）：已付订单开票 → void 作废 → 同单可重新开票
+B43_0=$(sq "SELECT balance FROM balance_accounts WHERE tenant_id=$TAID")
+R=$(post "$AH" "{\"tenant_id\":$TAID,\"tokens\":10000,\"money\":0}" /api/admin/orders/create)
+OID43=$(echo "$R" | pv '.get("order",{}).get("id") or 0')
+post "$AH" "{\"id\":$OID43,\"tenant_id\":$TAID}" /api/admin/orders/pay >/dev/null
+sleep 3   # 等 sink 冲刷，避免计量混入（同 A3/T1 口径）
+R=$(post "$H1" "{\"order_id\":$OID43,\"title\":\"T43冲红验证\",\"tax_no\":\"TX9043\"}" /api/billing/invoices/create)
+IVID43=$(echo "$R" | pv '.get("invoice",{}).get("id") or 0')
+ck T43-invoice-create '"success"' "$R"
+R=$(post "$H1" "{\"id\":$IVID43}" /api/billing/invoices/void)
+ck T43-invoice-void '"success":true' "$R"
+IVST43=$(sq "SELECT status FROM invoices WHERE id=$IVID43")
+[ "$IVST43" = "void" ] && { PASS=$((PASS+1)); echo "PASS|T43-invoice-void-status"; } || { FAIL=$((FAIL+1)); echo "FAIL|T43-invoice-void-status($IVST43)"; }
+ck T43-invoice-reissue-after-void '"success"' "$(post "$H1" "{\"order_id\":$OID43,\"title\":\"T43冲红后重开\",\"tax_no\":\"TX9043\"}" /api/billing/invoices/create)"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

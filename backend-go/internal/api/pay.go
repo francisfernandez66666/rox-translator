@@ -89,9 +89,10 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Tokens  int64  `json:"tokens"`  // 充值 token 数（旧口径，兼容保留）
-		Points  int64  `json:"points"`  // ★ S1 积分制：充值积分数（优先于 tokens；内部 ×points_tokens_rate 折算）
-		Channel string `json:"channel"` // 支付渠道：mock/wechat/alipay（缺省按 pay_mode）
+		Tokens    int64  `json:"tokens"`     // 充值 token 数（旧口径，兼容保留）
+		Points    int64  `json:"points"`     // ★ S1 积分制：充值积分数（优先于 tokens；内部 ×points_tokens_rate 折算）
+		Channel   string `json:"channel"`    // 支付渠道：mock/wechat/alipay/usdt（缺省按 pay_mode）
+		USDTChain string `json:"usdt_chain"` // ★ USDT：指定链 trc20/erc20/bep20（缺省取配置首链）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Tokens <= 0 && req.Points <= 0) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "points（或 tokens）必须大于 0"})
@@ -126,7 +127,7 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 			req.Channel = "mock"
 		}
 	}
-	if req.Channel != "mock" && req.Channel != "wechat" && req.Channel != "alipay" && req.Channel != "manual" {
+	if req.Channel != "mock" && req.Channel != "wechat" && req.Channel != "alipay" && req.Channel != "manual" && req.Channel != "usdt" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "不支持的支付渠道"})
 		return
 	}
@@ -141,6 +142,12 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 	money := float64(s.Store.TokensToFen(req.Tokens)) / 100.0
 	_ = s.Store.UpdateOrderMoney(o.OrderNo, money)
 	o.AmountMoney = money
+	// ★ USDT 收款（2026-09-15）：独立分支——链上无回调，出收款要素快照（地址+含尾数精确金额+
+	//   汇率快照+24h 窗口），到账走「人工核销（M1）」或「reconciler 自动对账（M2，默认关）」。
+	if req.Channel == "usdt" {
+		s.handlePayCreateUSDT(w, r, u, tid, o, money, req.USDTChain)
+		return
+	}
 	// 静态码模式：返回超管配置的静态收款码图片（不调用渠道）
 	if req.Channel == "manual" {
 		qrContent := ""
@@ -168,8 +175,15 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		TenantID: tid,
 	})
 	if err != nil {
-		// 真实渠道未配置：回退 mock 保证流程可用
-		res, err = (&payment.MockProvider{}).CreateOrder(&payment.PayRequest{OrderNo: o.OrderNo, Amount: amountFen, Subject: "能言 token 充值", TenantID: tid})
+		// ★ 显式失败（2026-09-16 整改）：旧实现静默回退 mock 二维码并把订单渠道改写为
+		//   mock——pay_mode=sdk 但商户配置缺失时，用户扫到 mockpay:// 废码，且 mock 回调
+		//   在非 mock 模式下被拒（handlePayNotify 三道闸），订单只能挂 pending 等超时。
+		//   宁可当场报错让用户/运维感知渠道未就绪，不给出不可支付的收款页。
+		log.Printf("[pay] 渠道 %s 下单失败（订单 %s 保持 pending 待人工处理）: %v", req.Channel, o.OrderNo, err)
+		writeJSON(w, 200, map[string]interface{}{"success": false,
+			"message":   "支付渠道暂不可用（" + req.Channel + "）：" + err.Error(),
+			"order_no":  o.OrderNo})
+		return
 	}
 	if err != nil {
 		log.Printf("[pay] 渠道下单失败: %v", err)
@@ -204,7 +218,12 @@ func (s *Server) handlePayStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "订单不存在"})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "order": o})
+	resp := map[string]interface{}{"success": true, "order": o}
+	// ★ USDT：轮询回显收款要素与进度（pending 期展示地址/金额/窗口；paid 后带链上凭证）
+	if p := s.usdtPayForOrder(o); p != nil {
+		resp["usdt_pay"] = p
+	}
+	writeJSON(w, 200, resp)
 }
 
 // handlePaySimulate 模拟支付到账（仅 pay_mode=mock 的测试模式可用）。
@@ -258,13 +277,26 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		OrderID int64 `json:"order_id"` // 待人工确认的静态码订单 ID
+		OrderID int64  `json:"order_id"` // 待人工确认的订单 ID
+		TxHash  string `json:"tx_hash"`  // ★ USDT（2026-09-15）：链上交易哈希（usdt 渠道必填，仅线索展示，以链上查证为准）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OrderID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请提供 order_id"})
 		return
 	}
 	tid := s.effTenant(r, u)
+	// ★ USDT（2026-09-15）：tx_hash 入口校验（格式校验，链上真实性以后台/对账器查证为准）
+	if existing, _ := s.Store.GetOrder(req.OrderID, tid); existing != nil && existing.Channel == "usdt" {
+		meta, mErr := s.Store.GetUSDTOrderMeta(req.OrderID)
+		if mErr != nil || req.TxHash == "" {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "USDT 订单需提交交易哈希（到账以平台链上查证为准）"})
+			return
+		}
+		if !payment.ValidUSDTTxHash(meta.Chain, req.TxHash) {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "USDT 交易哈希格式非法（链 " + meta.Chain + "，需对应链的合法哈希）"})
+			return
+		}
+	}
 	rebateNote := ""
 	if err := s.Store.MarkOrderManualConfirm(req.OrderID, tid); err != nil {
 		// ★ C19（2026-09-12）：原单已被超时任务取消时不再死路——按原单重建补审单
@@ -278,8 +310,20 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	o, _ := s.Store.GetOrder(req.OrderID, tid)
+	// ★ USDT（2026-09-15）：落客户声明的交易哈希（线索+后台展示；C19 补审单不携带）
+	txNote := ""
+	if o != nil && o.Channel == "usdt" && req.TxHash != "" && rebateNote == "" {
+		if derr := s.Store.SetUSDTDeclaredTxHash(req.OrderID, req.TxHash); derr != nil {
+			log.Printf("[pay-manual-confirm] usdt 声明哈希落库失败 order=%d: %v", req.OrderID, derr)
+		} else {
+			txNote = " tx=" + req.TxHash
+		}
+	}
 	// 写入 critical 级告警（前台告警面板 + 超管可见）
-	msg := "静态码支付待人工确认：租户 #" + strconv.FormatInt(tid, 10) + " 订单 " + o.OrderNo + rebateNote + " 用户已付款，请尽快查看并开通"
+	msg := "静态码支付待人工确认：租户 #" + strconv.FormatInt(tid, 10) + " 订单 " + o.OrderNo + rebateNote + txNote + " 用户已付款，请尽快查看并开通"
+	if o != nil && o.Channel == "usdt" {
+		msg = "USDT 收款待核销：租户 #" + strconv.FormatInt(tid, 10) + " 订单 " + o.OrderNo + rebateNote + txNote + " 用户已声明链上转账，请核对交易哈希后确认到账"
+	}
 	_ = s.Store.CreateAlert(0, "critical", "pay_manual", msg)
 	// ★ 站内信通知平台超管（tenant_id=0, role=admin）：超管铃铛即时可见待确认订单
 	//   注意：CreateNotification 依赖自增序列取主键；若序列失步（如 pg 迁移/回放后
@@ -310,6 +354,12 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 // 返回: 渠道约定格式（成功返回 success 字符串，微信返回 204）。
 func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 	channel := strings.TrimPrefix(r.URL.Path, "/api/pay/notify/")
+	// ★ USDT（2026-09-15）：链上资产无原生回调，本口对 usdt 显式关闭（不扩攻击面）——
+	//   到账只走 reconciler 链上查证或后台人工核销（防「mock 报文注入发币」路径）。
+	if channel == "usdt" {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "USDT 无渠道回调，请通过链上对账或人工核销确认"})
+		return
+	}
 	// ① 凭证（★ 2026-08-30 修复：所有渠道统一先验 X-Admin-Token，再走渠道签名）：
 	//    此前仅 mock 渠道校验 Token，wechat/alipay 直接跳到签名验签→查订单，
 	//    导致无凭证请求也能探测订单是否存在（信息泄露）。

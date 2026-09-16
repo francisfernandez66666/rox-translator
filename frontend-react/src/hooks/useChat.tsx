@@ -24,7 +24,8 @@ import { msgsKeyFor, loadMsgs, serializeForPersist, MAX_MESSAGES } from '@/lib/c
 import { chatStream, translateFileStream, healthCheck, ApiError } from '@/api'
 import { useNavigate, type NavigateFunction } from 'react-router-dom'
 import { confirmDialog } from '@/components/uiDialogs'
-import { useAuth } from '@/stores/auth'
+import { useAuth, useAuthStore, roleLevel } from '@/stores/auth'
+import { useAdminStore } from '@/stores/admin'
 import { t as gt, tpl as gtpl } from '@/i18n'
 import type { ChatMessage } from '@/types'
 
@@ -231,15 +232,35 @@ function createChatStore(msgsKey: string) {
   }))
 }
 
+// 错误码规范化（★ 2026-09-16 P2 整改）：后端存在两套命名口径——业务级大写
+// （errors/codes.go：INSUFFICIENT_BALANCE/QUOTA_EXCEEDED）与 OpenAPI/SSE 小写系
+// （insufficient_balance/daily_quota_exceeded）。统一折叠到小写规范形再判定，
+// 避免大写路径下「余额不足」退化为通用红字、丢失充值引导。
+function normErrCode(raw: string | undefined): string {
+  if (!raw) return ''
+  const k = raw.toLowerCase()
+  if (k === 'insufficient_balance') return 'insufficient_balance'
+  if (k === 'quota_exceeded' || k === 'daily_quota_exceeded') return 'daily_quota_exceeded'
+  return k
+}
+
 // SSE 错误收尾（余额不足给充值引导；其余气泡提示）——从 startSend 抽出复用
 function h6HandleErr(st: ChatState, assistantId: string, e: unknown) {
   const msg = e instanceof Error ? e.message : String(e)
   if (msg === 'AbortError' || String(e).includes('abort')) return
-  const code = e instanceof ApiError ? e.code : undefined
+  const code = normErrCode(e instanceof ApiError ? e.code : undefined)
   if (code === 'insufficient_balance') {
     st.patchMsg(assistantId, { content: gt('chat.quotaExhausted'), progress: undefined })
     void confirmDialog({ header: gt('chat.insufficientTitle'), body: gt('chat.insufficientBody'), confirmText: gt('chat.gotoTopUp') })
-      .then((ok) => { if (ok) st.navigate?.('/packages') })
+      .then((ok) => {
+        if (!ok) return
+        // ★ 2026-09-16：收银台在后台计费 Hub（/admin，租管+可达）——旧版一律跳
+        //   /packages 只读页，对有权付费的租户管理员是死胡同。
+        if (roleLevel(useAuthStore.getState().user?.role) >= 3) {
+          useAdminStore.getState().gotoPanel('billing')
+          st.navigate?.('/admin')
+        } else st.navigate?.('/packages')
+      })
   } else if (code === 'daily_quota_exceeded') {
     st.setFlags({ errorMessage: msg })
     st.patchMsg(assistantId, { content: gtpl('chat.dailyQuotaTpl', { msg }), progress: undefined })

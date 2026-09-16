@@ -1,5 +1,8 @@
 // ============================================================================
-// index.ts — 翻译助手开放 API TypeScript SDK（零第三方依赖，Node 18+ / 浏览器通用）
+// index.ts — 翻译助手开放 API TypeScript SDK（零第三方依赖，Node 18+）
+// ★ 环境说明（2026-09-16 修订宣称）：文本任务/轮询/余额等在浏览器可用；
+//   createFileTask / downloadFile 依赖 Node fs 与 Buffer，仅限 Node 环境。
+//   浏览器端文件任务请使用 @langcross/translator-sdk (js) 的 FormData 变体。
 // 对接端点（异步任务模型）：
 //   POST /openapi/v1/tasks           创建任务（JSON=文本；multipart=文件批量）
 //   GET  /openapi/v1/tasks/status    轮询状态（未完成 status=queued/processing）
@@ -196,7 +199,9 @@ export class TranslatorClient {
       if (st.status === "completed" || st.status === "failed") return st;
       if (Date.now() > deadline) throw new TranslatorError("等待任务超时", undefined, "timeout");
       // 首轮按任务类型定默认间隔（文件任务产物大，60s 更合理）
-      const gap = interval ?? (st as any).type === "files" ? 60 : 15;
+      // ★ 修复（2026-09-16）：旧写法 `interval ?? st.type === "files" ? 60 : 15` 因 ?? 与 ?:
+      //   的优先级实际解析为 `(interval ?? cond) ? 60 : 15`——显式传入的 interval 恒被吞掉。
+      const gap = interval ?? ((st as any).type === "files" ? 60 : 15);
       await new Promise((res) => setTimeout(res, gap * 1000));
     }
   }
@@ -220,6 +225,7 @@ export class TranslatorClient {
    * @param taskId - 任务 ID
    * @param savePath - 本地保存路径
    * @param fileId - 文件 ID（可选，缺省打包 zip 全部）
+   * @remarks Node 环境（依赖 fs 写盘）。浏览器请用 fetch 自行取 Blob。
    */
   async downloadFile(taskId: number, savePath: string, fileId?: number): Promise<void> {
     const url = `/openapi/v1/tasks/download?id=${taskId}${fileId ? `&file_id=${fileId}` : ""}`;

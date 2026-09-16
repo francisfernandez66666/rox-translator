@@ -12,7 +12,7 @@ import {
 import { confirmDialog } from '@/components/uiDialogs'
 import {
   billingQuota, billingQuotaSave,
-  billingOrders, billingInvoices, billingInvoiceCreate,
+  billingOrders, billingInvoices, billingInvoiceCreate, billingInvoiceVoid, adminOrderRefund,
   payCreate, payStatus, paySimulate, payManualConfirm, manualConfirmOrders, adminOrderPay,
   plans as apiPlans, myPackage, packageSubscribe, packageUpgrade,
   adminPackages, adminPackageCreate, adminPackageUpdate, adminPackageDelete,
@@ -48,6 +48,20 @@ function orderStatusLabel(s: string, t: (k: string) => string): string {
   return m[s] || s
 }
 
+// usdtChainLabel 链名展示文案（TRC20/ERC20/BEP20）。
+function usdtChainLabel(c: string): string {
+  return ({ trc20: 'TRC20 (Tron)', erc20: 'ERC20 (Ethereum)', bep20: 'BEP20 (BSC)' } as Record<string, string>)[c] || c
+}
+
+// usdtAddrURL 收款地址的链上浏览器链接（钱包链接核验用）。
+function usdtAddrURL(chain: string, addr: string): string {
+  if (!addr) return ''
+  if (chain === 'trc20') return `https://tronscan.org/#/address/${addr}`
+  if (chain === 'erc20') return `https://etherscan.io/address/${addr}`
+  if (chain === 'bep20') return `https://bscscan.com/address/${addr}`
+  return ''
+}
+
 // statusTheme 订单状态对应的标签配色（tdesign Tag theme）。
 function statusTheme(s: string): string {
   return ({ pending: 'warning', paid: 'success', refunded: 'default', cancelled: 'default' } as Record<string, string>)[s] || 'default'
@@ -69,6 +83,7 @@ export function PlansP() {
   const [curOrder, setCurOrder] = useState<Any | null>(null)
   const orderRef = useRef<Any | null>(null)
   const payTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const payPollBusy = useRef(false) // ★ 轮询在途锁（2026-09-16）：慢响应下不叠加并发请求
   const [payMode, setPayMode] = useState('mock')
   const [payModeCfg, setPayModeCfg] = useState('mock')
   const payModeLabel = ({ mock: t('billing.chMock'), sdk: t('billing.chSdk'), static_qr: t('billing.chStaticQR') } as Record<string, string>)[payMode] || payMode
@@ -82,6 +97,15 @@ export function PlansP() {
   const [tokensPerSentence, setTokensPerSentence] = useState(500)
   const [pointsTokensRate, setPointsTokensRate] = useState(300) // ★ S1 积分汇率（内部 token/积分，仅超管可见）
   const [staticQRImage, setStaticQRImage] = useState('')
+  // ★ USDT（2026-09-15）：超管后台收款配置 + 收银台收款要素
+  const [usdtCfg, setUsdtCfg] = useState<Any>({
+    usdt_enabled: '0', usdt_auto_settle: '0', usdt_tail_enabled: '1',
+    usdt_chains: 'trc20', usdt_rate_fen_per_usdt: 720,
+    usdt_addr_trc20: '', usdt_addr_erc20: '', usdt_addr_bep20: '',
+    usdt_confirmations_trc20: 19, usdt_confirmations_erc20: 12, usdt_confirmations_bep20: 15,
+  })
+  const usdtOn = usdtCfg.usdt_enabled === '1'
+  const manualOrdersUsdt = useRef<Record<string, Any>>({})
   const [manualOrders, setManualOrders] = useState<Any[]>([])
   // ★ S4 增长漏斗（超管看板）：注册→激活→耗尽→首购→续费，按渠道聚合
   const [funnelDays, setFunnelDays] = useState(30)
@@ -96,8 +120,8 @@ export function PlansP() {
     return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
   })()
 
-    // startPolling 支付弹窗打开后每 6s 轮询订单状态（到账即停）
-function startPolling() { stopPolling(); payTimer.current = setInterval(checkStatus, 3000) }
+    // startPolling 支付弹窗打开后每 3s 轮询订单状态（paid/cancelled/refunded 均停）
+function startPolling() { stopPolling(); payPollBusy.current = false; payTimer.current = setInterval(checkStatus, 3000) }
     // stopPolling 停止支付状态轮询
 function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current); payTimer.current = null } }
   useEffect(() => () => stopPolling(), [])
@@ -109,6 +133,10 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
       setPkg(r)
       const pm = r.pay_mode as string
       if (pm) { setPayMode(pm); setPayModeCfg(pm) }
+      // ★ USDT：租户侧收银台渠道显隐（超管配置经 /api/me/package 透出开关态，地址/汇率不下发）
+      if (r.usdt_enabled !== undefined) {
+        setUsdtCfg((c) => ({ ...c, usdt_enabled: r.usdt_enabled ? '1' : '0', usdt_chains: ((r.usdt_chains as string[]) || []).join(',') || c.usdt_chains }))
+      }
     }
     const p: Any = await apiPlans()
     if (p.success) setPlanList((p.plans as Any[]) || [])
@@ -147,9 +175,28 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
       if (typeof cfg.points_tokens_rate === 'number') setPointsTokensRate(cfg.points_tokens_rate)
       if (cfg.pay_mode) setPayModeCfg(cfg.pay_mode as string)
       if (cfg.static_qr_image) setStaticQRImage(cfg.static_qr_image as string)
+      // ★ USDT：回填收款配置（开关/链/地址/汇率/确认数）
+      if (cfg.usdt_enabled !== undefined) {
+        setUsdtCfg({
+          usdt_enabled: String(cfg.usdt_enabled ?? '0'),
+          usdt_auto_settle: String(cfg.usdt_auto_settle ?? '0'),
+          usdt_tail_enabled: String(cfg.usdt_tail_enabled ?? '1'),
+          usdt_chains: String(cfg.usdt_chains ?? 'trc20'),
+          usdt_rate_fen_per_usdt: Number(cfg.usdt_rate_fen_per_usdt) || 720,
+          usdt_addr_trc20: String(cfg.usdt_addr_trc20 ?? ''),
+          usdt_addr_erc20: String(cfg.usdt_addr_erc20 ?? ''),
+          usdt_addr_bep20: String(cfg.usdt_addr_bep20 ?? ''),
+          usdt_confirmations_trc20: Number(cfg.usdt_confirmations_trc20) || 19,
+          usdt_confirmations_erc20: Number(cfg.usdt_confirmations_erc20) || 12,
+          usdt_confirmations_bep20: Number(cfg.usdt_confirmations_bep20) || 15,
+        })
+      }
     }
     const m: Any = await manualConfirmOrders()
-    if (m.success) setManualOrders((m.orders as Any[]) || [])
+    if (m.success) {
+      setManualOrders((m.orders as Any[]) || [])
+      manualOrdersUsdt.current = (m.usdt_info as Record<string, Any>) || {} // ★ USDT 线索映射
+    }
   }, [isSuper])
 
   // loadAll 计费面板整体刷新：租户先取套餐，再并行拉订单/发票/配额/商业包
@@ -162,9 +209,11 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
     // subscribe 订阅套餐：建单→弹收款台
 async function subscribe(pl: Any) {
     const r: Any = await packageSubscribe(String(pl.code))
-    if (!r.success) return
+    // ★ 2026-09-16：业务失败（渠道未开放/余额校验等）不再静默吞掉，给用户可见反馈
+    if (!r.success) { void MessagePlugin.error(String(r.message || t('billing.subscribeFailed'))); return }
     const o = r.order as Any
     if (o) { setOrder(o); setShowCheckout(true); if (o.channel !== 'manual') startPolling() }
+    setUsdtPay((r.usdt_pay as Any) || null)
     await loadPackage()
   }
     // upgrade 升级套餐（补差价折算）
@@ -188,32 +237,53 @@ async function openCheckout() {
     if (Number(chForm.points) <= 0) return
     setChLoading(true)
     try {
-      const channel = chForm.channel === 'auto' ? '' : chForm.channel
-      const r: Any = await payCreate({ points: Number(chForm.points), channel })
+      const rawCh = chForm.channel === 'auto' ? '' : String(chForm.channel)
+      const channel = rawCh.startsWith('usdt:') ? 'usdt' : rawCh
+      if (channel === 'usdt') chForm.usdt_chain = rawCh.slice(5)
+      const r: Any = await payCreate(channel === 'usdt'
+        ? { points: Number(chForm.points), channel, usdt_chain: String(chForm.usdt_chain || '') }
+        : { points: Number(chForm.points), channel })
       if (!toastResp(r)) return
       const o = r.order as Any
       setOrder(o); setShowCheckout(true)
+      setUsdtPay((r.usdt_pay as Any) || null); setUsdtTxInput('')
       if (o && o.channel !== 'manual') startPolling()
+    } catch (e: any) {
+      void MessagePlugin.error(e?.message || t('common.fail'))
     } finally { setChLoading(false) }
   }
   async function resumePay(_o: Any) {
     const r: Any = await payStatus(Number(_o.id))
     const o = (r.success ? (r.order as Any) : _o)
     setOrder(o); setShowCheckout(true)
+    setUsdtPay((r.usdt_pay as Any) || null); setUsdtTxInput('')
     if (o && o.channel !== 'manual') startPolling()
   }
     // closeCheckout 关闭收款弹窗并清理轮询
-function closeCheckout() { setShowCheckout(false); stopPolling(); void loadOrders(); if (!isSuper) void loadPackage() }
-    // checkStatus 单次核对订单支付状态
+function closeCheckout() { setShowCheckout(false); stopPolling(); setUsdtPay(null); setUsdtTxInput(''); void loadOrders(); if (!isSuper) void loadPackage() }
+    // checkStatus 单次核对订单支付状态（3s 轮询）
+  // ★ 2026-09-16 整改：①in-flight 锁防慢响应叠加；②cancelled/refunded 同为终态——
+  //   旧实现只认 paid，USDT 24h 窗口超时被后端置 cancelled 后收银台仍无限轮询、弹窗不收。
 async function checkStatus() {
     const o = orderRef.current
-    if (!o) return
-    const r: Any = await payStatus(Number(o.id))
-    if (r.success) {
-      const no = (r.order as Any) || o
-      setOrder(no)
-      if (no.status === 'paid') stopPolling()
-    }
+    if (!o || payPollBusy.current) return
+    if (document.hidden) return // ★ 标签页切到后台不轮询（回前台自动恢复）
+    payPollBusy.current = true
+    try {
+      const r: Any = await payStatus(Number(o.id))
+      if (r.success) {
+        const no = (r.order as Any) || o
+        setOrder(no)
+        if (r.usdt_pay) setUsdtPay(r.usdt_pay as Any)
+        if (no.status === 'paid') stopPolling()
+        else if (no.status === 'cancelled' || no.status === 'refunded') {
+          stopPolling()
+          void MessagePlugin.warning(t('billing.payOrderGone'))
+          setShowCheckout(false); setUsdtPay(null); setUsdtTxInput('')
+          void loadOrders()
+        }
+      }
+    } finally { payPollBusy.current = false }
   }
     // simulatePay mock 模式下模拟支付成功（联调）
 async function simulatePay() {
@@ -228,14 +298,59 @@ async function manualConfirm() {
     if (!o) return
     setChLoading(true)
     try {
-      const r: Any = await payManualConfirm(Number(o.id))
+      const r: Any = await payManualConfirm(Number(o.id), o.channel === 'usdt' ? usdtTxInput.trim() : '')
       if (r.success) { void MessagePlugin.success(t('billing.manualNotify')); stopPolling(); closeCheckout() }
       else void MessagePlugin.error((r.message as string) || t('billing.iPaidFailed'))
     } catch (e: any) { void MessagePlugin.error(e?.message || t('common.fail')) }
     finally { setChLoading(false) }
   }
 
+  // ★ 2026-09-16 补口（评审发现#4）：后端 /api/admin/orders/refund（超管）与
+  //   /api/billing/invoices/void（租管+）一直健在，前端此前零封装零入口，
+  //   SOP 承诺的退款只能 DBA 直连接口。此处补齐操作闭环。
+async function refundOrder(row: Any) {
+    const ok = await confirmDialog({
+      header: t('billing.refundConfirmTitle'),
+      body: tpl('billing.refundConfirmBody', { no: String(row.order_no ?? ''), money: Number(row.amount_money ?? 0).toFixed(2) }),
+      confirmText: t('billing.refund'),
+    })
+    if (!ok) return
+    const r: Any = await adminOrderRefund({ id: Number(row.id) })
+    if (toastResp(r, t('billing.orderRefunded'))) void loadOrders()
+  }
+  // voidInvoice 发票冲红（作废后同单可重开）
+async function voidInvoice(row: Any) {
+    const ok = await confirmDialog({
+      header: t('billing.voidConfirmTitle'),
+      body: tpl('billing.voidConfirmBody', { no: String(row.invoice_no ?? '') }),
+      confirmText: t('billing.void'),
+    })
+    if (!ok) return
+    const r: Any = await billingInvoiceVoid(Number(row.id))
+    if (toastResp(r, t('billing.invoiceVoided'))) void loadInvoices()
+  }
+
   const [qrImg, setQrImg] = useState('')
+  // ★ USDT：收银台收款要素（下单/轮询响应回填）、pay_uri 二维码、客户声明 txid 输入
+  const [usdtPay, setUsdtPay] = useState<Any | null>(null)
+  const [usdtQr, setUsdtQr] = useState('')
+  const [usdtTxInput, setUsdtTxInput] = useState('')
+  useEffect(() => {
+    let alive = true
+    setUsdtQr('')
+    const uri = usdtPay?.pay_uri as string | undefined
+    if (uri) {
+      void (async () => {
+        try {
+          const res = await fetch(`${API_BASE}/api/qr/render?text=${encodeURIComponent(uri)}`, { headers: authHeaders() })
+          if (!res.ok) return
+          const blob = await res.blob()
+          if (alive) setUsdtQr(URL.createObjectURL(blob))
+        } catch { /* 渲染失败回退文本 */ }
+      })()
+    }
+    return () => { alive = false }
+  }, [usdtPay?.pay_uri])
   useEffect(() => {
     let alive = true
     setQrImg('')
@@ -333,12 +448,37 @@ async function uploadStaticQR(e: ChangeEvent<HTMLInputElement>) {
       void MessagePlugin.error(err?.message || t('common.saveFail'))
     } finally { setQrUploading(false) }
   }
+    // saveUSDT ★ USDT（2026-09-15）：保存超管收款配置（开关/链/钱包地址/汇率/确认数；后端逐项校验）
+async function saveUSDT() {
+    try { await saveUSDTInner() } catch (e: any) { void MessagePlugin.error(e?.message || t('common.saveFail')) }
+  }
+async function saveUSDTInner() {
+    const chains = String(usdtCfg.usdt_chains || '').split(',').map((c) => c.trim()).filter(Boolean)
+    if (usdtOn && !(Number(usdtCfg.usdt_rate_fen_per_usdt) > 0)) { void MessagePlugin.warning(t('billing.usdtRateRequired')); return }
+    if (usdtOn && chains.length && chains.every((c) => !String(usdtCfg['usdt_addr_' + c] || '').trim())) { void MessagePlugin.warning(t('billing.usdtAddrRequired')); return }
+    const r: Any = await adminPackageSettingsSave({
+      usdt_enabled: String(usdtCfg.usdt_enabled), usdt_auto_settle: String(usdtCfg.usdt_auto_settle),
+      usdt_tail_enabled: String(usdtCfg.usdt_tail_enabled), usdt_chains: chains.join(',') || 'trc20',
+      usdt_addr_trc20: String(usdtCfg.usdt_addr_trc20 || ''), usdt_addr_erc20: String(usdtCfg.usdt_addr_erc20 || ''),
+      usdt_addr_bep20: String(usdtCfg.usdt_addr_bep20 || ''), usdt_rate_fen_per_usdt: Number(usdtCfg.usdt_rate_fen_per_usdt) || 0,
+      usdt_confirmations_trc20: Number(usdtCfg.usdt_confirmations_trc20) || 0,
+      usdt_confirmations_erc20: Number(usdtCfg.usdt_confirmations_erc20) || 0,
+      usdt_confirmations_bep20: Number(usdtCfg.usdt_confirmations_bep20) || 0,
+    } as never)
+    toastResp(r, t('common.save'))
+    await loadPkgs()
+  }
     // confirmManual 管理员确认人工到账→积分入双桶
 async function confirmManual(o: Any) {
-    const r: Any = await adminOrderPay(Number(o.id), Number(o.tenant_id) || 0)
-    if (r.success) { void MessagePlugin.success(t('billing.manualConfirmed')); await Promise.all([loadPkgs(), loadOrders()]) }
-    else void MessagePlugin.error((r.message as string) || t('billing.iPaidFailed'))
+    const tx = (manualTxInputs[String(o.id)] || '').trim()
+    if (o.channel === 'usdt' && !tx) { void MessagePlugin.warning(t('billing.usdtTxRequired')); return }
+    try {
+      const r: Any = await adminOrderPay(Number(o.id), Number(o.tenant_id) || 0, tx)
+      if (r.success) { void MessagePlugin.success(t('billing.manualConfirmed')); await Promise.all([loadPkgs(), loadOrders()]) }
+      else void MessagePlugin.error((r.message as string) || t('billing.iPaidFailed'))
+    } catch (e: any) { void MessagePlugin.error(e?.message || t('billing.iPaidFailed')) }
   }
+  const [manualTxInputs, setManualTxInputs] = useState<Record<string, string>>({})
 
   const planGroups = [
     { type: 'paid', title: t('plans.groupPaid'), items: planList.filter((p) => p.ptype === 'paid') },
@@ -351,6 +491,7 @@ async function confirmManual(o: Any) {
     { label: tpl('billing.payModeAuto', { mode: payModeLabel }), value: 'auto' },
     ...(payMode === 'static_qr' ? [{ label: t('billing.chStaticQR'), value: 'manual' }] : []),
     ...(payMode === 'sdk' ? [{ label: t('billing.chWechat'), value: 'wechat' }, { label: t('billing.chAlipay'), value: 'alipay' }] : []),
+    ...(usdtOn ? String(usdtCfg.usdt_chains || '').split(',').filter(Boolean).map((c) => ({ label: `${t('billing.chUsdt')} · ${usdtChainLabel(c.trim())}`, value: `usdt:${c.trim()}` })) : []),
     { label: t('billing.chMock'), value: 'mock' },
   ]
 
@@ -444,11 +585,14 @@ async function confirmManual(o: Any) {
                columns={[
                  { colKey: 'order_no', title: t('billing.colOrderNo'), width: 150 },
                  { colKey: 'amount_tokens', title: t('billing.colTokens'), width: 110, cell: ({ row }: any) => fmtPoints(Number(row.amount_tokens)) },
-                 { colKey: 'amount_money', title: t('billing.colAmount'), width: 100, cell: ({ row }: any) => tpl('billing.yuan', { amount: row.amount_money }) },
+                 { colKey: 'amount_money', title: t('billing.colAmount'), width: 100, cell: ({ row }: any) => tpl('billing.yuan', { amount: Number(row.amount_money ?? 0).toFixed(2) }) },
                  { colKey: 'status', title: t('billing.colStatus'), width: 110, cell: ({ row }: any) => <Tag theme={statusTheme(row.status) as any}>{orderStatusLabel(row.status, t)}</Tag> },
-                 { colKey: 'op', title: '', width: 120, cell: ({ row }: any) =>
+                 { colKey: 'op', title: '', width: 170, cell: ({ row }: any) =>
                      row.status === 'paid'
-                       ? <Button size="small" variant="text" onClick={() => setInvDlg({ order: row, title: '', taxNo: '' })}>开发票</Button>
+                       ? <Space size={4}>
+                           <Button size="small" variant="text" onClick={() => setInvDlg({ order: row, title: '', taxNo: '' })}>{t('billing.invoiceIssue')}</Button>
+                           {isSuper && <Button size="small" variant="text" theme="danger" onClick={() => void refundOrder(row)}>{t('billing.refund')}</Button>}
+                         </Space>
                        : (row.status === 'pending' ? <Button size="small" theme="success" variant="outline" onClick={() => resumePay(row)}>{t('plans.orderContinue')}</Button> : null) },
                ] as never} />
         {!orders.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 8 }}>{t('plans.noOrder')}</div>}
@@ -458,7 +602,9 @@ async function confirmManual(o: Any) {
                columns={[
                  { colKey: 'invoice_no', title: t('billing.colInvoiceNo') },
                  { colKey: 'title', title: t('billing.colTitle') },
-                 { colKey: 'amount_money', title: t('billing.colAmountYuan'), width: 110 },
+                 { colKey: 'amount_money', title: t('billing.colAmountYuan'), width: 110, cell: ({ row }: any) => Number(row.amount_money ?? 0).toFixed(2) },
+                 { colKey: 'op', title: '', width: 90, cell: ({ row }: any) => (row.status === 'void' ? null
+                     : <Button size="small" variant="text" theme="danger" onClick={() => void voidInvoice(row)}>{t('billing.void')}</Button>) },
                ] as never} />
         {!invoices.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 8 }}>{t('billing.noInvoices')}</div>}
       </Panel>
@@ -546,6 +692,40 @@ async function confirmManual(o: Any) {
               )}
             </div>
           )}
+          {/* ★ USDT（2026-09-15）：超管后台配置 USDT 收款（开关/链/钱包地址链接/汇率/确认数） */}
+          <div style={{ marginTop: 12, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
+            <Space size={8} align="center">
+              <span style={{ fontWeight: 600, fontSize: 13 }}>{t('billing.usdtSection')}</span>
+              <Switch value={usdtCfg.usdt_enabled === '1'} onChange={(v) => setUsdtCfg({ ...usdtCfg, usdt_enabled: v ? '1' : '0' })} />
+              <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{usdtOn ? t('billing.usdtOn') : t('billing.usdtOff')}</span>
+              <span style={{ fontSize: 12, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('billing.usdtTail')}</span>
+              <Switch size="small" value={usdtCfg.usdt_tail_enabled === '1'} onChange={(v) => setUsdtCfg({ ...usdtCfg, usdt_tail_enabled: v ? '1' : '0' })} />
+              <span style={{ fontSize: 12, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('billing.usdtAuto')}</span>
+              <Switch size="small" value={usdtCfg.usdt_auto_settle === '1'} onChange={(v) => setUsdtCfg({ ...usdtCfg, usdt_auto_settle: v ? '1' : '0' })} />
+              <Button onClick={saveUSDT}>{t('common.save')}</Button>
+            </Space>
+            <div style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '4px 0 8px' }}>{t('billing.usdtHint')}</div>
+            <Space size={8} align="center" style={{ marginBottom: 6 }}>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('billing.usdtChains')}</span>
+              <Select multiple clearable value={String(usdtCfg.usdt_chains || '').split(',').map((c) => c.trim()).filter(Boolean)}
+                      onChange={(v) => setUsdtCfg({ ...usdtCfg, usdt_chains: ((v as string[]) || []).join(',') })} style={{ minWidth: 260 }}
+                      options={['trc20', 'erc20', 'bep20'].map((c) => ({ label: usdtChainLabel(c), value: c }))} />
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 10 }}>{t('billing.usdtRate')}</span>
+              <Input type="number" value={num(usdtCfg.usdt_rate_fen_per_usdt)} onChange={(v) => setUsdtCfg({ ...usdtCfg, usdt_rate_fen_per_usdt: Number(v) || 0 })} style={{ width: 120 }} />
+            </Space>
+            {['trc20', 'erc20', 'bep20'].map((c) => (
+              <div key={c} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, color: 'var(--adm-hint)', width: 130 }}>{usdtChainLabel(c)}</span>
+                <Input value={String(usdtCfg['usdt_addr_' + c] || '')} onChange={(v) => setUsdtCfg({ ...usdtCfg, ['usdt_addr_' + c]: v })}
+                       placeholder={t('billing.usdtAddrPh')} style={{ width: 340 }} />
+                <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('billing.usdtConf')}</span>
+                <Input type="number" value={num(usdtCfg['usdt_confirmations_' + c])} onChange={(v) => setUsdtCfg({ ...usdtCfg, ['usdt_confirmations_' + c]: Number(v) || 0 })} style={{ width: 70 }} />
+                {usdtAddrURL(c, String(usdtCfg['usdt_addr_' + c] || '')) ? (
+                  <a href={usdtAddrURL(c, String(usdtCfg['usdt_addr_' + c] || ''))} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>{t('billing.usdtWalletLink')} ↗</a>
+                ) : <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('billing.usdtNoAddr')}</span>}
+              </div>
+            ))}
+          </div>
         </Panel>
       )}
 
@@ -583,11 +763,31 @@ async function confirmManual(o: Any) {
 
       {isSuper && (
         <Panel title={t('plans.nav.manual')}>
-          {/* 数据表格 */}
+          {/* 数据表格（★ USDT：渠道列 + 链上线索（声明哈希/精确金额/浏览器外链）+ 确认收款需回填 tx_hash） */}
           <Table rowKey="id" size="small" data={manualOrders}
                  columns={[
                    { colKey: 'order_no', title: t('billing.colOrderNo'), width: 150 },
-                   { colKey: 'amount_tokens', title: t('billing.colTokens'), width: 120, cell: ({ row }: any) => fmtPoints(Number(row.amount_tokens)) },
+                   { colKey: 'channel', title: t('billing.colChannel'), width: 78, cell: ({ row }: any) =>
+                       row.channel === 'usdt' ? <Tag theme="primary">USDT</Tag> : (row.channel === 'manual' ? t('billing.chStaticQR') : String(row.channel || '—')) },
+                   { colKey: 'amount_tokens', title: t('billing.colTokens'), width: 110, cell: ({ row }: any) => fmtPoints(Number(row.amount_tokens)) },
+                   { colKey: 'usdt', title: t('billing.usdtCol'), width: 240, cell: ({ row }: any) => {
+                       const info = manualOrdersUsdt.current[String(row.id)]
+                       if (row.channel !== 'usdt' || !info) return <span style={{ color: 'var(--adm-faint)' }}>—</span>
+                       return (
+                         <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                           <div>{String(info.amount)} USDT · {usdtChainLabel(String(info.chain))}</div>
+                           {info.declared ? (
+                             <a href={String(info.url || '#')} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>
+                               tx:{String(info.declared).slice(0, 14)}… ↗
+                             </a>
+                           ) : <span style={{ color: 'var(--adm-faint)' }}>{t('billing.usdtNoTx')}</span>}
+                         </div>
+                       )
+                     } },
+                   { colKey: 'tx_input', title: t('billing.usdtTxCol'), width: 220, cell: ({ row }: any) =>
+                       row.channel === 'usdt'
+                         ? <Input size="small" value={manualTxInputs[String(row.id)] || ''} onChange={(v) => setManualTxInputs({ ...manualTxInputs, [String(row.id)]: v })} placeholder={t('billing.usdtTxPh')} />
+                         : <span style={{ color: 'var(--adm-faint)' }}>—</span> },
                    { colKey: 'tenant_id', title: t('billing.colTenant'), width: 80, cell: ({ row }: any) => `#${row.tenant_id}` },
                    { colKey: 'created_at', title: t('billing.colTime'), width: 165, cell: ({ row }: any) => fmtTime(row.created_at as string) },
                    { colKey: 'op', title: '', width: 120, cell: ({ row }: any) =>
@@ -608,7 +808,30 @@ async function confirmManual(o: Any) {
           <div>
             {curOrder && (
               <div style={{ textAlign: 'center' }}>
-                {curOrder.channel === 'manual' ? (
+                {curOrder.channel === 'usdt' && usdtPay ? (
+                  /* ★ USDT 收款台：精确金额（含尾数）+ 地址 + pay_uri 二维码 + txid 声明 */
+                  <div style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ padding: '8px 12px', borderRadius: 8, background: 'var(--adm-soft)', textAlign: 'center' }}>
+                      <div style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('billing.usdtAmountLabel')}（{usdtChainLabel(String(usdtPay.chain))}）</div>
+                      <div style={{ fontSize: 24, fontWeight: 700 }}>{String(usdtPay.amount)} USDT</div>
+                      {String(usdtPay.tail) !== '0' && <div style={{ fontSize: 11, color: 'var(--adm-faint)' }}>{tpl('billing.usdtTailNote', { tail: String(usdtPay.tail) })}</div>}
+                    </div>
+                    {usdtQr && <img src={usdtQr} alt="usdt-qr" style={{ width: 168, height: 168, alignSelf: 'center', borderRadius: 8, border: '1px solid var(--adm-line)', background: '#fff' }} />}
+                    <div>
+                      <div style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('billing.usdtAddress')}</div>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <code style={{ flex: 1, wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 6, padding: '6px 8px', fontSize: 12 }}>{String(usdtPay.address)}</code>
+                        <Button size="small" variant="outline" onClick={() => { void navigator.clipboard.writeText(String(usdtPay.address)); void MessagePlugin.success(t('billing.usdtCopied')) }}>{t('billing.usdtCopy')}</Button>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--adm-hint)', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 4 }}>
+                      <span>{tpl('billing.usdtExpires', { time: fmtTime(String(usdtPay.expires_at)) })}</span>
+                      <span>{tpl('billing.usdtConfNeed', { n: Number(usdtPay.confirmations) || 0 })}</span>
+                    </div>
+                    <Input value={usdtTxInput} onChange={(v) => setUsdtTxInput(v)} placeholder={t('billing.usdtTxPh')} style={{ width: '100%' }} />
+                    <div style={{ fontSize: 11, color: 'var(--adm-faint)' }}>{t('billing.usdtCheckoutHint')}</div>
+                  </div>
+                ) : curOrder.channel === 'manual' ? (
                   <div>
                     <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 6 }}>{t('billing.staticQR')}</div>
                     {isImage(curOrder.qr_content as string)
@@ -627,6 +850,9 @@ async function confirmManual(o: Any) {
             )}
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap', marginTop: 12 }}>
               {curOrder?.channel === 'manual' && <Button theme="success" loading={chLoading} onClick={manualConfirm}>{chLoading ? t('billing.processing') : t('billing.iPaid')}</Button>}
+              {curOrder?.channel === 'usdt' && (
+                <Button theme="success" loading={chLoading} disabled={!usdtTxInput.trim()} onClick={manualConfirm}>{t('billing.usdtDeclare')}</Button>
+              )}
               {curOrder?.channel === 'mock' && <Button theme="success" loading={chLoading} onClick={simulatePay}>{t('billing.mockCredit')}</Button>}
               {curOrder && <Button onClick={checkStatus}>{t('billing.refreshStatus')}</Button>}
             </div>

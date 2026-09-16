@@ -151,18 +151,14 @@ type WechatProvider struct {
 }
 
 // CreateOrder 微信 Native 下单：调用 /v3/pay/transactions/native 获取 code_url。
-// 商户资质未配置时返回错误（上层回退 mock）。
+// ★ fail-closed（2026-09-16 整改）：真实协议（HTTP + WECHATPAY2-SHA256-RSA2048 签名）
+//   尚未实现，此前返回本地拼装的假 code_url 会让「配置齐全」的环境把废码呈现给用户。
+//   现显式报错，上层（handlePayCreate）拒绝出单；商户资质到位后在此补齐真实调用。
 func (p *WechatProvider) CreateOrder(req *PayRequest) (*PayResult, error) {
 	if p.cfg.Wechat.AppID == "" || p.cfg.Wechat.MchID == "" || p.cfg.Wechat.APIv3Key == "" {
 		return nil, fmt.Errorf("微信支付未配置（需 APP_ID / MCH_ID / APIv3_KEY）")
 	}
-	// ★ 真实接入点：按微信 Native 支付协议向
-	//   POST https://api.mch.weixin.qq.com/v3/pay/transactions/native
-	// 发送 {appid,mchid,description,out_trade_no,notify_url,amount:{total}}，
-	// 以商户私钥构造 Authorization: WECHATPAY2-SHA256-RSA2048 请求签名，
-	// 响应 code_url 即为二维码内容。此处骨架已就绪，商户号到位后补齐 HTTP 调用。
-	codeURL := fmt.Sprintf("weixin://wxpay/bizpayurl?pr=%s", base64.RawURLEncoding.EncodeToString([]byte(req.OrderNo)))
-	return &PayResult{Channel: "wechat", QRContent: codeURL}, nil
+	return nil, fmt.Errorf("微信 Native 下单尚未接入真实协议（需补齐 api.mch.weixin.qq.com 调用与商户私钥签名），请改用 static_qr/usdt 渠道")
 }
 
 // VerifyNotify 微信回调验签：以 APIv3 密钥 AES-256-GCM 解密 resource 得到订单明文，
@@ -219,15 +215,13 @@ type AlipayProvider struct {
 }
 
 // CreateOrder 支付宝当面付下单：调用 alipay.trade.precreate 获取收款码 qr_code。
+// ★ fail-closed（2026-09-16 整改）：真实协议（RSA2 签名 + openapi.alipay.com 调用）
+//   尚未实现，此前返回 alipay:// 占位串会让配置齐全的环境拿到不可支付的收款码。
 func (p *AlipayProvider) CreateOrder(req *PayRequest) (*PayResult, error) {
 	if p.cfg.Alipay.AppID == "" || p.cfg.Alipay.PrivateKey == "" {
 		return nil, fmt.Errorf("支付宝未配置（需 APP_ID / PRIVATE_KEY）")
 	}
-	// ★ 真实接入点：向网关（openapi.alipay.com/gateway.do）POST
-	//   alipay.trade.precreate，参数 out_trade_no / total_amount / subject / qr_code_timeout_express，
-	//   以应用私钥 RSA2 签名，响应 qr_code 即收款码内容。
-	// 当前未配商户号，返回占位内容以便测试。
-	return &PayResult{Channel: "alipay", QRContent: "alipay://precreate?out=" + req.OrderNo}, nil
+	return nil, fmt.Errorf("支付宝当面付下单尚未接入真实协议（需补齐 gateway.do precreate 与 RSA2 签名），请改用 static_qr/usdt 渠道")
 }
 
 // VerifyNotify 支付宝回调验签：解析表单参数并以支付宝公钥 RSA2 验签 sign，

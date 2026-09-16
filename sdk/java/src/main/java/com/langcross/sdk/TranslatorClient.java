@@ -18,14 +18,16 @@ import java.util.Map;
  *
  * <p>对接端点（异步任务模型）：
  * <ul>
- *   <li>POST /openapi/v1/tasks           — 创建任务（JSON=文本；multipart=文件批量）</li>
+ *   <li>POST /openapi/v1/tasks           — 创建任务（本客户端仅实现 JSON=文本；multipart 文件批量未实现）</li>
  *   <li>GET  /openapi/v1/tasks/status    — 轮询状态（未完成 status=queued/processing）</li>
- *   <li>GET  /openapi/v1/tasks/download  — 文件产物下载</li>
  *   <li>GET  /openapi/v1/balance         — 查询 token 余额与 ≈句数</li>
  *   <li>POST /openapi/v1/kb/stats        — 知识库统计</li>
  *   <li>POST /openapi/v1/billing/usage   — 用量明细</li>
  *   <li>POST /openapi/v1/apikey/rotate   — 轮换 API Key</li>
  * </ul>
+ *
+ * <p>★ 能力边界（2026-09-16 修订宣称）：文件批量翻译与产物下载（/openapi/v1/tasks/download）
+ * 本客户端未实现，需要该能力请用 Python/TypeScript SDK；此处曾误宣称支持，已据实收敛。
  *
  * <p>认证方式：Bearer Token（Authorization: Bearer <api_key>），在管理后台「API Key」面板签发。
  * <p>快速上手：

@@ -99,26 +99,26 @@ func (s *Store) ListAuditFilter(tid int64, action, resource string, userID int64
 		args = append(args, tid)
 	}
 	if action != "" {
-		query += " AND action=?" // 按动作过滤
+		query += " AND a.action=?" // 按动作过滤
 		args = append(args, action)
 	}
 	if resource != "" {
-		query += " AND resource=?" // 按资源类型过滤
+		query += " AND a.resource=?" // 按资源类型过滤
 		args = append(args, resource)
 	}
 	if userID > 0 {
-		query += " AND user_id=?" // 按操作者过滤
+		query += " AND a.user_id=?" // 按操作者过滤
 		args = append(args, userID)
 	}
 	if from != "" {
-		query += " AND created_at>=?" // 起始时间下限
+		query += " AND a.created_at>=?" // 起始时间下限
 		args = append(args, from)
 	}
 	if to != "" {
-		query += " AND created_at<=?" // 截止时间上限（补足当日 23:59:59，覆盖整天）
+		query += " AND a.created_at<=?" // 截止时间上限（补足当日 23:59:59，覆盖整天）
 		args = append(args, to+"T23:59:59Z")
 	}
-	query += " ORDER BY created_at DESC, id DESC LIMIT ?" // ★ 按时间倒序（id 曾有序列漂移，不作排序主键）
+	query += " ORDER BY a.created_at DESC, a.id DESC LIMIT ?" // ★ 按时间倒序（id 曾有序列漂移，不作排序主键；★ T41 回归：超管视图 JOIN tenants/users，列必须限定 a. 前缀防歧义）
 	args = append(args, limit)
 	rows, err := db.Query(s.db, db.CurrentDialect(), query, args...)
 	if err != nil {

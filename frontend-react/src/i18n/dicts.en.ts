@@ -564,7 +564,7 @@ export const baseEn: Record<string,string> = {
   'admin.menuTenants': 'Tenants',
   'admin.menuPlans': 'Plans',
   'admin.menuReferral': 'Referral',
-  'admin.menuOrg': 'Enterprise',
+  'admin.menuOrg': 'Org & Members',
   'admin.menuInvites': 'Invite Codes',
   'admin.menuUsage': 'Usage',
   'admin.menuKb': 'Knowledge Base',

@@ -168,6 +168,13 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
+		// ★ 收口（2026-09-16 安全整改）：批量导入禁止创建 tenant_id>0 的超管级角色
+		//   （admin/super_admin 必须平台级归属，与 users/create 不变量对齐）。
+		if auth.RoleLevel(row.Role) >= 4 && tid > 0 {
+			rr.Message = "超管级角色不能归属具体租户，请在本租户内使用 dept_admin/tenant_admin 等角色"
+			results = append(results, rr)
+			continue
+		}
 		initPwd := randomImportPassword()
 		nu, cerr := s.Store.CreateUser(tid, strings.TrimSpace(row.Username), auth.PasswordHash(initPwd), row.DisplayName, row.Role, u.ID, orgID)
 		if cerr != nil {

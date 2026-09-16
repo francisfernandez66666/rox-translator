@@ -89,10 +89,21 @@ export async function billingInvoiceCreate(data: { order_id: number; title: stri
   return request('/api/billing/invoices/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
+/** 发票冲红/作废（C16：租户管理员及以上，作废后同单可重开） */
+export async function billingInvoiceVoid(id: number): Promise<AdminResp> {
+  return request('/api/billing/invoices/void', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+}
+
+/** 订单退款（★ 2026-09-16 补口：后端 /api/admin/orders/refund 一直健在，前端此前零封装）
+ *  仅超管可调；tenant_id 省略时后端按当前生效租户（X-Tenant-ID）核销。 */
+export async function adminOrderRefund(data: { id: number; tenant_id?: number; reason?: string }): Promise<AdminResp> {
+  return request('/api/admin/orders/refund', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}
+
 // ==================== 在线支付 ====================
 
-/** 发起在线支付下单：为当前租户创建充值订单并返回收款二维码 */
-export async function payCreate(data: { points?: number; tokens?: number; channel: string }): Promise<AdminResp> {
+/** 发起在线支付下单：为当前租户创建充值订单并返回收款二维码（usdt 渠道可带 usdt_chain） */
+export async function payCreate(data: { points?: number; tokens?: number; channel: string; usdt_chain?: string }): Promise<AdminResp> {
   return request('/api/pay/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
@@ -109,9 +120,9 @@ export async function paySimulate(orderId: number): Promise<AdminResp> {
 }
 
 /** 静态码支付「我已付费」（人工确认，通知超管审核开通） */
-/** 用户声明「我已付款」→ 生成人工核对单 */
-export async function payManualConfirm(orderId: number): Promise<AdminResp> {
-  return request('/api/pay/manual-confirm', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ order_id: orderId }) })
+/** 用户声明「我已付款」→ 生成人工核对单（usdt 渠道携带链上交易哈希线索） */
+export async function payManualConfirm(orderId: number, txHash = ''): Promise<AdminResp> {
+  return request('/api/pay/manual-confirm', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ order_id: orderId, tx_hash: txHash }) })
 }
 
 /** 待人工确认订单列表（超管审核开通） */

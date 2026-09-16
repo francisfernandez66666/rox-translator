@@ -17,7 +17,10 @@ dbq(){
   if [ "${DB_DRIVER:-sqlite}" = "postgres" ]; then
     psql "${DB_DSN:?dbq: DB_DRIVER=postgres 需 DB_DSN}" -q -Atc "$1"
   else
-    sqlite3 "${UAT_DB:?dbq: sqlite 需 UAT_DB}" "$1"
+    # ★ 2026-09-16 修复：.timeout 5000 等 WAL 写锁——后端 reconciler/巡检在套件运行期
+    #   仍持续写库，sqlite3 CLI 默认 busy timeout=0，撞锁瞬间报错输出空串，导致
+    #   断言层取值为空、下游请求体拼出 {"id":,...} 这类非法 JSON（T43 曾因此误红）。
+    sqlite3 -cmd '.timeout 5000' "${UAT_DB:?dbq: sqlite 需 UAT_DB}" "$1"
   fi
 }
 

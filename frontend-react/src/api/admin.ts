@@ -74,9 +74,10 @@ export async function adminOrderCreate(data: { tenant_id: number; tokens?: numbe
   return request('/api/admin/orders/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
-/** 确认收款（将订单状态置为已支付）。tenant_id 必须显式传入：超管平台上下文 effTenant=0，靠订单号匹配不到 */
-export async function adminOrderPay(id: number, tenantId?: number): Promise<AdminResp> {
-  return request('/api/admin/orders/pay', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, tenant_id: tenantId ?? 0 }) })
+/** 确认收款（将订单状态置为已支付）。tenant_id 必须显式传入：超管平台上下文 effTenant=0，靠订单号匹配不到。
+ *  txHash：USDT 渠道链上交易哈希（usdt 单必填，唯一防一笔交易复用到两单） */
+export async function adminOrderPay(id: number, tenantId?: number, txHash = ''): Promise<AdminResp> {
+  return request('/api/admin/orders/pay', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, tenant_id: tenantId ?? 0, tx_hash: txHash }) })
 }
 
 // ==================== 邮件模板（仅超管） ====================

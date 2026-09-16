@@ -17,6 +17,7 @@ import (
 
 	"translator/internal/auth"
 	"translator/internal/billing"
+	"translator/internal/payment"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -168,7 +169,28 @@ func (s *Server) handleManualConfirmOrders(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "orders": orders})
+	// ★ USDT：附交易哈希线索（客户声明 + 已结算凭证）与浏览器外链，供财务「四项核对」
+	type txInfo struct {
+		Declared string `json:"declared"`
+		Settled  string `json:"settled"`
+		URL      string `json:"url"`
+		Amount   string `json:"amount"` // USDT 精确应得（含尾数）
+		Chain    string `json:"chain"`
+	}
+	info := map[string]txInfo{}
+	for _, o := range orders {
+		meta, merr := s.Store.GetUSDTOrderMeta(o.ID)
+		if merr != nil {
+			continue
+		}
+		item := txInfo{Declared: meta.ClientTxHash, Settled: meta.MatchedTxHash, Chain: meta.Chain,
+			Amount: payment.FormatUSDTMicro(meta.AmountMicro)}
+		if meta.ClientTxHash != "" {
+			item.URL = payment.ExplorerURL(meta.Chain, meta.ClientTxHash)
+		}
+		info[fmt.Sprint(o.ID)] = item
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "orders": orders, "usdt_info": info})
 }
 
 // handleOrders 查询当前租户的充值 / 订单列表（状态、金额、渠道、时间）。参数 w/r：标准 HTTP；鉴权：租户管理员及以上；按 effTenant 租户隔离；返回 orders 数组。
@@ -248,8 +270,9 @@ func (s *Server) handleOrderPay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID       int64 `json:"id"`        // 待确认支付订单 ID
-		TenantID int64 `json:"tenant_id"` // 订单归属租户（0=当前生效租户）
+		ID       int64  `json:"id"`        // 待确认支付订单 ID
+		TenantID int64  `json:"tenant_id"` // 订单归属租户（0=当前生效租户）
+		TxHash   string `json:"tx_hash"`   // ★ USDT（2026-09-15）：链上交易哈希（usdt 单确认必填，唯一防一笔 tx 复用到两单）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -258,11 +281,38 @@ func (s *Server) handleOrderPay(w http.ResponseWriter, r *http.Request) {
 	if req.TenantID <= 0 {
 		req.TenantID = s.effTenant(r, u)
 	}
+	// ★ USDT：确认前核验哈希格式并预检唯一性（payments.tx_hash 唯一索引为最终防线）
+	o, oerr := s.Store.GetOrder(req.ID, req.TenantID)
+	if oerr == nil && o.Channel == "usdt" {
+		meta, merr := s.Store.GetUSDTOrderMeta(req.ID)
+		if merr != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "USDT 收款要素缺失，请先人工核对订单"})
+			return
+		}
+		if req.TxHash == "" || !payment.ValidUSDTTxHash(meta.Chain, req.TxHash) {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "USDT 订单确认必须提交该链合法格式的交易哈希"})
+			return
+		}
+		if used, uerr := s.Store.PaymentTxHashUsed(req.TxHash); uerr == nil && used {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该交易哈希已关联其他订单（一笔链上交易只能核销一单）"})
+			return
+		}
+	}
 	if err := s.Store.MarkOrderPaid(req.ID, req.TenantID); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_pay", "orders", "")
+	// USDT：链上凭证落 payments.tx_hash + 结算快照（失败不回滚资金入账——critical 告警转人工补记）
+	if oerr == nil && o.Channel == "usdt" {
+		if perr := s.Store.SetPaymentTxHash(req.ID, req.TxHash); perr != nil {
+			_ = s.Store.CreateAlert(0, "critical", "usdt_settle",
+				"USDT 订单 "+o.OrderNo+" 已入账但交易哈希关联失败（可能复用/流水缺失），请人工核对: "+perr.Error())
+		}
+		_ = s.Store.SettleUSDTOrder(req.ID, req.TxHash)
+		s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_pay", "orders", o.OrderNo+" channel=usdt tx="+req.TxHash)
+	} else {
+		s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_pay", "orders", "")
+	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 

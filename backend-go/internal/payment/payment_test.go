@@ -90,21 +90,21 @@ func TestMockProviderCreateMissingOrderNo(t *testing.T) {
 	}
 }
 
-// wechat 未配置资质应报错（引导回退 mock）；已配置可下单并验签加密回调。
+// wechat 未配置资质应报错；已配置仍须 fail-closed（真实协议未接入前禁止吐假 code_url）；
+// 回调验签（AES-256-GCM）独立可用。
 func TestWechatProvider(t *testing.T) {
 	p := &WechatProvider{cfg: &Config{}}
 	if _, err := p.CreateOrder(&PayRequest{OrderNo: "RO1", Amount: 100}); err == nil {
 		t.Fatal("未配置微信资质应报错")
 	}
-	// 已配置
+	// 已配置：真实协议未接入，必须显式报错而非返回本地拼装的废码（2026-09-16 整改）
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		t.Fatal(err)
 	}
 	p2 := &WechatProvider{cfg: &Config{Wechat: WechatConfig{AppID: "app", MchID: "mch", APIv3Key: string(key)}}}
-	res, err := p2.CreateOrder(&PayRequest{OrderNo: "RO1", Amount: 100})
-	if err != nil || res.Channel != "wechat" {
-		t.Fatalf("已配置微信下单失败: %v", err)
+	if _, err := p2.CreateOrder(&PayRequest{OrderNo: "RO1", Amount: 100}); err == nil {
+		t.Fatal("微信真实协议未接入时应 fail-closed 报错（禁止假二维码出单）")
 	}
 	// 加密回调报文（AES-256-GCM，真实 resource 结构）
 	plain := `{"out_trade_no":"RO1","transaction_id":"T1","trade_state":"SUCCESS","amount":{"total":100}}`
@@ -119,7 +119,7 @@ func TestWechatProvider(t *testing.T) {
 	}
 }
 
-// alipay 未配置资质应报错；已配置可下单并以公钥 RSA2 验签回调。
+// alipay 未配置资质应报错；已配置仍须 fail-closed（真实协议未接入前禁止吐占位收款码）。
 func TestAlipayProvider(t *testing.T) {
 	p := &AlipayProvider{cfg: &Config{}}
 	if _, err := p.CreateOrder(&PayRequest{OrderNo: "RO1", Amount: 100}); err == nil {
@@ -135,9 +135,9 @@ func TestAlipayProvider(t *testing.T) {
 	}
 	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
 	p2 := &AlipayProvider{cfg: &Config{Alipay: AlipayConfig{AppID: "app", PrivateKey: "pk", PublicKey: string(pubPEM)}}}
-	res, err := p2.CreateOrder(&PayRequest{OrderNo: "RO1", Amount: 100})
-	if err != nil || res.Channel != "alipay" {
-		t.Fatalf("已配置支付宝下单失败: %v", err)
+	// 已配置：真实协议未接入，必须显式报错而非返回 alipay:// 占位串（2026-09-16 整改）
+	if _, err := p2.CreateOrder(&PayRequest{OrderNo: "RO1", Amount: 100}); err == nil {
+		t.Fatal("支付宝真实协议未接入时应 fail-closed 报错（禁止占位收款码出单）")
 	}
 	// 构造已签名的表单回调
 	form := signAlipayForm(t, priv, map[string]string{

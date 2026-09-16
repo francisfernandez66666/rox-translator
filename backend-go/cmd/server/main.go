@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"log"
@@ -146,7 +147,18 @@ func main() {
 		} else {
 			log.Printf("术语数据库已打开(SQLite): %s", dbPath)
 		}
-		// ★ 多租户迁移：tm_segments 加 tenant_id 列 + 既有数据归入 rox
+	}
+
+	// ★ 运维整改（2026-09-16）：PG 多实例滚动发布迁移单飞——kb/tenant/saas store 共享
+	//   同一连接，全部 schema 迁移在建连后立刻执行；两实例并发跑 CREATE INDEX/回填/
+	//   去重 DELETE 会锁等待与竞态。session 级 advisory lock（第二实例排队等锁，
+	//   sqlite 方言单进程天然互斥跳过），锁覆盖下方整段迁移与 Ensure* 种子。
+	var releaseMigLock func()
+	if db != nil && config.C.DatabaseDriver == "postgres" {
+		releaseMigLock = acquireMigrateLock(db.RawDB())
+	}
+	// ★ 多租户迁移：tm_segments 加 tenant_id 列 + 既有数据归入 rox
+	if db != nil {
 		if err := db.EnsureTenantMigration(); err != nil {
 			log.Printf("警告: 租户迁移失败: %v", err)
 		}
@@ -200,6 +212,9 @@ func main() {
 				log.Printf("警告: 默认余额账户初始化失败: %v", err)
 			}
 		}
+	}
+	if releaseMigLock != nil {
+		releaseMigLock() // 迁移单飞锁：迁移与种子全部完成后释放
 	}
 
 	// ★ 阶段一 PG 切流落地点：--init-db 仅初始化 schema（建表/默认数据）后退出，
@@ -386,13 +401,17 @@ func main() {
 		signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 		sig := <-quit
 		log.Printf("收到退出信号 %v，正在优雅停机…", sig)
-		billing.DefaultSink.Stop() // ★ 性能优化 B2/B3：停机前完成最终批量落库
+		// ★ 停机顺序修正（2026-09-16 账务缺陷）：必须先 Shutdown 等在途请求排空，
+		//   再 Stop 计量 sink。旧顺序先 Stop 后 Shutdown——Stop 已做最终 flush 且 flusher
+		//   协程退出，但随后最长 10s 窗口内 Record() 仍继续入缓冲（Record 不检查 stop 态），
+		//   这批真实 LLM 用量永不落库不扣费（收入泄漏 + 影子余额与 DB 背离）。
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := s.Shutdown(ctx); err != nil {
 			log.Printf("优雅停机超时，强制退出: %v", err)
 			s.Close()
 		}
+		billing.DefaultSink.Stop() // 在途请求已排空：做最终批量落库后退出 flusher
 		log.Println("服务已安全退出")
 	}()
 
@@ -440,6 +459,51 @@ func genRandomPass(n int) string {
 		out[i] = charset[idx.Int64()]
 	}
 	return string(out)
+}
+
+// migrateAdvisoryKey 迁移单飞锁键（translator 专属，避免与其他应用锁冲突）。
+const migrateAdvisoryKey = int64(620250916)
+
+// acquireMigrateLock PG 迁移单飞锁（2026-09-16 运维整改）：
+// 滚动发布时第二实例在 pg_try_advisory_lock 上排队，等第一实例迁移+种子完成后
+// 才开始跑自己的迁移链，消除 CREATE INDEX/回填/去重 DELETE 的并发竞态。
+// 会话级锁：持锁专用连接断开（进程退出）即自动释放；最长排队 10 分钟后放行并告警。
+// 返回 release 必须在迁移段结束后调用；获取失败时返回空函数（不阻塞启动）。
+func acquireMigrateLock(d *sql.DB) (release func()) {
+	ctx := context.Background()
+	conn, err := d.Conn(ctx)
+	if err != nil {
+		log.Printf("[migrate] 迁移单飞锁取专用连接失败（跳过单飞，风险自负）: %v", err)
+		return func() {}
+	}
+	deadline := time.Now().Add(10 * time.Minute)
+	for {
+		var ok bool
+		if qerr := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", migrateAdvisoryKey).Scan(&ok); qerr != nil {
+			log.Printf("[migrate] pg_try_advisory_lock 失败（跳过单飞，风险自负）: %v", qerr)
+			_ = conn.Close()
+			return func() {}
+		}
+		if ok {
+			log.Printf("[migrate] 迁移单飞锁已获取（key=%d）", migrateAdvisoryKey)
+			break
+		}
+		if time.Now().After(deadline) {
+			log.Printf("[migrate] ⚠️ 迁移单飞锁等待超时 10 分钟，继续执行（确认另一实例未卡死）")
+			break
+		}
+		log.Printf("[migrate] 另一实例迁移中，1s 后重试…")
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
+		}
+	}
+	return func() {
+		if _, uerr := conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", migrateAdvisoryKey); uerr != nil {
+			log.Printf("[migrate] 迁移单飞锁释放失败（连接关闭将自动释放）: %v", uerr)
+		}
+		_ = conn.Close()
+	}
 }
 
 // isLoopbackListen 判断监听地址是否仅绑定回环（127.0.0.1/[::1]/localhost:port）。

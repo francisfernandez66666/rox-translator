@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"translator/internal/ops"
+	"translator/internal/payment"
 
 	qrcode "github.com/skip2/go-qrcode"
 
@@ -268,6 +269,18 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 			}
 			return "1"
 		}(),
+		// ★ USDT 收款（2026-09-15）：开关/链/地址/汇率/确认数/自动对账（RPC 凭证走环境变量不在此露出）
+		"usdt_enabled":             getCfg("usdt_enabled"),
+		"usdt_auto_settle":         getCfg("usdt_auto_settle"),
+		"usdt_tail_enabled":        getCfg("usdt_tail_enabled"),
+		"usdt_chains":              getCfg("usdt_chains"),
+		"usdt_addr_trc20":          getCfg("usdt_addr_trc20"),
+		"usdt_addr_erc20":          getCfg("usdt_addr_erc20"),
+		"usdt_addr_bep20":          getCfg("usdt_addr_bep20"),
+		"usdt_rate_fen_per_usdt":   getCfg("usdt_rate_fen_per_usdt"),
+		"usdt_confirmations_trc20": getCfg("usdt_confirmations_trc20"),
+		"usdt_confirmations_erc20": getCfg("usdt_confirmations_erc20"),
+		"usdt_confirmations_bep20": getCfg("usdt_confirmations_bep20"),
 	})
 }
 
@@ -290,6 +303,18 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		SensitiveGate     *string  `json:"sensitive_gate_enabled"`       // ★ S8 敏感词兑底闸："1"/"0"
 		PayMode           *string  `json:"pay_mode"`                     // mock / sdk / static_qr
 		StaticQRImage     *string  `json:"static_qr_image"`              // 静态收款码图片 URL 或 base64
+		// ★ USDT 收款（2026-09-15）：开关/链/地址/汇率/确认数（RPC 凭证走环境变量）
+		USDTEnabled      *string `json:"usdt_enabled"`           // "1"/"0" 总开关（开启需地址+汇率就绪）
+		USDTAutoSettle   *string `json:"usdt_auto_settle"`       // "1"/"0" 自动对账（默认关：仅人工核销）
+		USDTCtailEnabled *string `json:"usdt_tail_enabled"`      // "1"/"0" 金额尾数防混淆（默认开）
+		USDTChains       *string `json:"usdt_chains"`            // 逗号分隔：trc20,erc20,bep20
+		USDTAddrTRC20    *string `json:"usdt_addr_trc20"`        // TRC20 收款地址
+		USDTAddrERC20    *string `json:"usdt_addr_erc20"`        // ERC20 收款地址
+		USDTAddrBEP20    *string `json:"usdt_addr_bep20"`        // BEP20 收款地址
+		USDFtRateFen     *int64  `json:"usdt_rate_fen_per_usdt"` // 汇率：人民币分/USDT（¥7.2→720）
+		USDTConfTRC20    *int64  `json:"usdt_confirmations_trc20"`
+		USDTConfERC20    *int64  `json:"usdt_confirmations_erc20"`
+		USDTConfBEP20    *int64  `json:"usdt_confirmations_bep20"`
 		// 三期注册与触达配置（均可选，传了才更新；secret_key 只写不回显）
 		EmailVerifyEnabled     *string `json:"email_verify_enabled"`     // "1"=注册需邮箱验证码
 		EmailNotifyEnabled     *string `json:"email_notify_enabled"`     // "1"=站内通知同步邮件触达租户管理员
@@ -334,6 +359,122 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	}
 	if req.StaticQRImage != nil {
 		add("static_qr_image", *req.StaticQRImage)
+	}
+	// ★ USDT 收款（2026-09-15）：开关键 + 收款要素（地址/汇率按链校验后才可开启总闸）
+	if req.USDTEnabled != nil {
+		if *req.USDTEnabled != "0" && *req.USDTEnabled != "1" {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": `usdt_enabled 仅支持 "0"/"1"`})
+			return
+		}
+		if *req.USDTEnabled == "1" {
+			// 开启前强校验（允许与地址/汇率同批保存：优先取本请求值，回落库值）
+			rateOK := s.Store.GetConfigInt("usdt_rate_fen_per_usdt") > 0
+			if req.USDFtRateFen != nil {
+				rateOK = *req.USDFtRateFen > 0
+			}
+			if !rateOK {
+				writeJSON(w, 400, map[string]interface{}{"success": false, "message": "USDT 开启失败：请先配置汇率（usdt_rate_fen_per_usdt，人民币分/USDT）"})
+				return
+			}
+			addrOf := func(chain string, reqVal *string) string {
+				if reqVal != nil {
+					return strings.TrimSpace(*reqVal)
+				}
+				v, _ := s.Store.GetConfig("usdt_addr_" + chain)
+				return strings.TrimSpace(v)
+			}
+			found := false
+			for _, c := range []string{"trc20", "erc20", "bep20"} {
+				var rv *string
+				switch c {
+				case "trc20":
+					rv = req.USDTAddrTRC20
+				case "erc20":
+					rv = req.USDTAddrERC20
+				case "bep20":
+					rv = req.USDTAddrBEP20
+				}
+				if a := addrOf(c, rv); a != "" && payment.ValidUSDTAddress(c, a) {
+					found = true
+				}
+			}
+			if !found {
+				writeJSON(w, 400, map[string]interface{}{"success": false, "message": "USDT 开启失败：请先配置至少一条链的合法收款地址"})
+				return
+			}
+		}
+		add("usdt_enabled", *req.USDTEnabled)
+	}
+	if req.USDTAutoSettle != nil {
+		if *req.USDTAutoSettle != "0" && *req.USDTAutoSettle != "1" {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": `usdt_auto_settle 仅支持 "0"/"1"`})
+			return
+		}
+		add("usdt_auto_settle", *req.USDTAutoSettle)
+	}
+	if req.USDTCtailEnabled != nil {
+		if *req.USDTCtailEnabled != "0" && *req.USDTCtailEnabled != "1" {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": `usdt_tail_enabled 仅支持 "0"/"1"`})
+			return
+		}
+		add("usdt_tail_enabled", *req.USDTCtailEnabled)
+	}
+	if req.USDTChains != nil {
+		chains := []string{}
+		for _, c := range strings.Split(*req.USDTChains, ",") {
+			c = payment.NormalizeChain(c)
+			if c == "" {
+				writeJSON(w, 400, map[string]interface{}{"success": false, "message": "usdt_chains 含未知链（可用：trc20/erc20/bep20）"})
+				return
+			}
+			chains = append(chains, c)
+		}
+		if len(chains) == 0 {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "usdt_chains 不能为空"})
+			return
+		}
+		add("usdt_chains", strings.Join(chains, ","))
+	}
+	if req.USDTAddrTRC20 != nil {
+		v := strings.TrimSpace(*req.USDTAddrTRC20)
+		if v != "" && !payment.ValidUSDTAddress("trc20", v) {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "TRC20 收款地址格式非法（T 开头 34 位 base58）"})
+			return
+		}
+		add("usdt_addr_trc20", v)
+	}
+	if req.USDTAddrERC20 != nil {
+		v := strings.TrimSpace(*req.USDTAddrERC20)
+		if v != "" && !payment.ValidUSDTAddress("erc20", v) {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "ERC20 收款地址格式非法（0x+40 位十六进制）"})
+			return
+		}
+		add("usdt_addr_erc20", v)
+	}
+	if req.USDTAddrBEP20 != nil {
+		v := strings.TrimSpace(*req.USDTAddrBEP20)
+		if v != "" && !payment.ValidUSDTAddress("bep20", v) {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "BEP20 收款地址格式非法（0x+40 位十六进制）"})
+			return
+		}
+		add("usdt_addr_bep20", v)
+	}
+	if req.USDFtRateFen != nil {
+		if *req.USDFtRateFen <= 0 || *req.USDFtRateFen > 100_000_000 {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "usdt_rate_fen_per_usdt 非法（分/USDT，如 ¥7.2 → 720）"})
+			return
+		}
+		add("usdt_rate_fen_per_usdt", strconv.FormatInt(*req.USDFtRateFen, 10))
+	}
+	for chain, ptr := range map[string]*int64{"trc20": req.USDTConfTRC20, "erc20": req.USDTConfERC20, "bep20": req.USDTConfBEP20} {
+		if ptr == nil {
+			continue
+		}
+		if *ptr <= 0 || *ptr > 2000 {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "usdt_confirmations 非法（1–2000）"})
+			return
+		}
+		add("usdt_confirmations_"+chain, strconv.FormatInt(*ptr, 10))
 	}
 	// 三期注册与触达配置保存（键名白名单直传；空串=清除配置）
 	cfgKeys := []struct {

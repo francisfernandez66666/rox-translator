@@ -113,7 +113,7 @@ const orderCols = "id, tenant_id, order_no, amount_tokens, amount_money, status,
 func (s *Store) EnsureBalance(tid int64) error {
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT OR IGNORE INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
-		tid, time.Now().Format(time.RFC3339))
+		tid, time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 
@@ -154,7 +154,7 @@ func (s *Store) Charge(tid int64, tokens int64) error {
 	// 余额累加充值 token 数
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE balance_accounts SET balance=balance+?, updated_at=? WHERE tenant_id=?",
-		tokens, time.Now().Format(time.RFC3339), tid)
+		tokens, time.Now().UTC().Format(time.RFC3339), tid)
 	if err == nil {
 		// ★ P1 多实例闭环：充值入账后通知影子余额失效（本进程清缓存 + Redis 广播他实例）
 		notifyTenantBalanceChanged(tid)
@@ -182,7 +182,7 @@ func (s *Store) deduct(tid int64, tokens int64) error {
 	}
 	res, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
-		tokens, time.Now().Format(time.RFC3339), tid, tokens)
+		tokens, time.Now().UTC().Format(time.RFC3339), tid, tokens)
 	if err != nil {
 		return err
 	}
@@ -237,7 +237,7 @@ func (s *Store) SettleExhausted(tid int64, owed int64) (int64, error) {
 		return 0, tx.Commit()
 	}
 	// ② 有界消费：台账行先于永久余额；台账内试用/临期先于付费 plan（与正常扣减次序同构）
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	consumed := int64(0)
 	rows, qerr := db.Query(tx, d,
 		`SELECT id, "left", kind FROM quota_grants WHERE tenant_id=? AND "left">0
@@ -934,7 +934,7 @@ func (s *Store) CreateOrderChannel(tid int64, tokens int64, money float64, creat
 	}
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, qr_content, created_by, created_at) VALUES (?,?,?,?, 'pending', ?, ?, ?, ?, ?)",
-		tid, orderNo, tokens, money, payMethod, channel, qrContent, createdBy, time.Now().Format(time.RFC3339))
+		tid, orderNo, tokens, money, payMethod, channel, qrContent, createdBy, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return nil, err
 	}
@@ -957,7 +957,7 @@ func (s *Store) CreatePackageOrder(tid int64, pkg *Package, createdBy int64, cha
 	money := s.PackageOrderPrice(pkg, tid)
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, qr_content, package_id, created_by, created_at) VALUES (?,?,?,?, 'pending', 'online', ?, '', ?, ?, ?)",
-		tid, orderNo, tokenAmt, money, channel, pkg.ID, createdBy, time.Now().Format(time.RFC3339))
+		tid, orderNo, tokenAmt, money, channel, pkg.ID, createdBy, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return nil, err
 	}
@@ -1080,7 +1080,7 @@ func (s *Store) CreateUpgradeOrder(tid int64, pkg *Package, credit *UpgradeCredi
 	}
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, qr_content, package_id, created_by, created_at, upgrade_from_order, credit_money) VALUES (?,?,?,?, 'pending', 'online', ?, '', ?, ?, ?, ?, ?)",
-		tid, orderNo, tokenAmt, pay, channel, pkg.ID, createdBy, time.Now().Format(time.RFC3339), credit.OldOrderID, credit.CreditMoney)
+		tid, orderNo, tokenAmt, pay, channel, pkg.ID, createdBy, time.Now().UTC().Format(time.RFC3339), credit.OldOrderID, credit.CreditMoney)
 	if err != nil {
 		return nil, err
 	}
@@ -1224,7 +1224,7 @@ func (s *Store) PackageOrderTokenBackfill() {
 func ensureBalanceTx(tx *sql.Tx, tid int64) error {
 	_, err := db.Exec(tx, db.CurrentDialect(),
 		"INSERT OR IGNORE INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
-		tid, time.Now().Format(time.RFC3339))
+		tid, time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 
@@ -1249,7 +1249,7 @@ func chargePermanentTx(tx *sql.Tx, tid int64, tokens int64) error {
 	}
 	_, err := db.Exec(tx, db.CurrentDialect(),
 		"UPDATE balance_accounts SET balance=balance+?, updated_at=? WHERE tenant_id=?",
-		tokens, time.Now().Format(time.RFC3339), tid)
+		tokens, time.Now().UTC().Format(time.RFC3339), tid)
 	if err == nil {
 		// ★ P1 多实例闭环：永久余额入账通知影子失效（事务回滚时多通知一次仅多一次
 		//   DB 回读，无正确性风险；漏通知由影子 TTL(5s) 自愈兜底，见 balancehook.go）
@@ -1282,7 +1282,7 @@ func applyIncrementMirrorTx(tx *sql.Tx, tid int64, sentences int64) error {
 	d := db.CurrentDialect()
 	_, err := db.Exec(tx, d,
 		"UPDATE tenants SET "+db.JSONNumAdd(d, "permissions", "sentence_balance")+", updated_at=? WHERE id=?",
-		sentences, time.Now().Format(time.RFC3339), tid)
+		sentences, time.Now().UTC().Format(time.RFC3339), tid)
 	return err
 }
 
@@ -1417,7 +1417,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		perms.SubscribedAt = nowStr
 		perms.SentenceBalance += pkgSentences
 		if pkgDays > 0 {
-			perms.PackageExpires = time.Now().AddDate(0, 0, pkgDays).Format(time.RFC3339)
+			perms.PackageExpires = time.Now().UTC().AddDate(0, 0, pkgDays).Format(time.RFC3339)
 		} else {
 			perms.PackageExpires = ""
 		}
@@ -1451,7 +1451,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		perms.SubscribedAt = nowStr
 		perms.SentenceBalance += pkgSentences
 		if pkgDays > 0 {
-			perms.PackageExpires = time.Now().AddDate(0, 0, pkgDays).Format(time.RFC3339)
+			perms.PackageExpires = time.Now().UTC().AddDate(0, 0, pkgDays).Format(time.RFC3339)
 		} else {
 			perms.PackageExpires = ""
 		}
@@ -1483,7 +1483,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		perms.SubscribedAt = nowStr
 		perms.SentenceBalance += pkgSentences
 		if pkgDays > 0 {
-			perms.PackageExpires = time.Now().AddDate(0, 0, pkgDays).Format(time.RFC3339)
+			perms.PackageExpires = time.Now().UTC().AddDate(0, 0, pkgDays).Format(time.RFC3339)
 		} else {
 			perms.PackageExpires = ""
 		}
@@ -1525,9 +1525,10 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 //
 //	条件并以 RowsAffected 判定，消除「查询+更新」两步间被并发重复确认的窗口。
 func (s *Store) MarkOrderManualConfirm(orderID, tid int64) error {
-	// 条件更新：仅 manual 渠道、未确认、未支付的订单可被标记
+	// 条件更新：仅 manual/usdt 渠道、未确认、未支付的订单可被标记
+	// （usdt=★ 2026-09-15 静态收款「我已付费+txid」声明进人工/对账队列）
 	res, err := db.Exec(s.db, db.CurrentDialect(),
-		"UPDATE orders SET manual_confirm=1 WHERE id=? AND tenant_id=? AND channel='manual' AND manual_confirm=0 AND status='pending'",
+		"UPDATE orders SET manual_confirm=1 WHERE id=? AND tenant_id=? AND channel IN ('manual','usdt') AND manual_confirm=0 AND status='pending'",
 		orderID, tid)
 	if err != nil {
 		return err
@@ -1564,7 +1565,7 @@ func (s *Store) ReopenManualOrder(orderID, tid int64) (*Order, error) {
 // ListManualConfirmOrders 列出待人工确认的订单（超管 Billing 面板）：manual 渠道 + manual_confirm=1 + pending。
 // 参数：无（全平台）；返回订单列表（按 ID 倒序）。
 func (s *Store) ListManualConfirmOrders() ([]*Order, error) {
-	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+orderCols+" FROM orders WHERE channel='manual' AND manual_confirm=1 AND status='pending' ORDER BY id DESC")
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT "+orderCols+" FROM orders WHERE channel IN ('manual','usdt') AND manual_confirm=1 AND status='pending' ORDER BY id DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -1744,7 +1745,7 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 		if clawed > 0 {
 			if _, err := db.Exec(tx, d,
 				"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
-				clawed, time.Now().Format(time.RFC3339), tid, clawed); err != nil {
+				clawed, time.Now().UTC().Format(time.RFC3339), tid, clawed); err != nil {
 				return err
 			}
 		}
@@ -1754,7 +1755,7 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	if pkgSentences > 0 {
 		if _, err := db.Exec(tx, d,
 			"UPDATE tenants SET "+db.JSONNumAddFloor0(d, "permissions", "sentence_balance")+", updated_at=? WHERE id=?",
-			-pkgSentences, time.Now().Format(time.RFC3339), tid); err != nil {
+			-pkgSentences, time.Now().UTC().Format(time.RFC3339), tid); err != nil {
 			return err
 		}
 	}
@@ -1854,7 +1855,7 @@ func (s *Store) revokePaidReferralIfAllRefunded(buyerUID int64) int64 {
 	if revoked > 0 {
 		if _, err := db.Exec(s.db, d,
 			"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
-			revoked, time.Now().Format(time.RFC3339), inviterTID, revoked); err != nil {
+			revoked, time.Now().UTC().Format(time.RFC3339), inviterTID, revoked); err != nil {
 			log.Printf("[refund] 裂变奖励扣回失败 inviter_tid=%d: %v", inviterTID, err)
 			return 0
 		}
@@ -1918,7 +1919,7 @@ func (s *Store) CreateInvoice(tid, orderID int64, title, taxNo string) (*Invoice
 		return nil, &errTxt{"该订单已有有效发票，如需重开请先作废（冲红）"}
 	}
 	no := "INV" + time.Now().Format("20060102150405") + randSuffix(4) // 生成唯一发票号
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
 	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
 		"INSERT INTO invoices (tenant_id, order_id, invoice_no, amount_money, title, tax_no, status, created_at) VALUES (?,?,?,?,?,?,'issued',?)",
 		tid, orderID, no, money, title, taxNo, now)
@@ -2122,10 +2123,19 @@ func (s *Store) CloseStalePendingOrders() int64 {
 			minutes = x
 		}
 	}
-	cut := time.Now().Add(-time.Duration(minutes) * time.Minute).Format(time.RFC3339)
+	cut := time.Now().UTC().Add(-time.Duration(minutes) * time.Minute).Format(time.RFC3339)
+	// ★ USDT 收款（2026-09-15）：链上转账确认以分钟计，15 分钟窗口不适用——
+	//   usdt 单按 usdt_orders.expires_at（下单快照 24h）到期关单；已点「我已付费」的
+	//   同样豁免（待人工/自动核实，防「钱付了单没了」资损）；无 meta 的异常单按普通窗口兜底。
+	nowUTC := time.Now().UTC().Format(time.RFC3339)
 	res, err := db.Exec(s.db, db.CurrentDialect(), `UPDATE orders SET status='cancelled'
-		WHERE status='pending' AND created_at < ?
-		  AND NOT (channel='manual' AND manual_confirm=1)`, cut)
+		WHERE status='pending'
+		  AND NOT ((channel='manual' OR channel='usdt') AND manual_confirm=1)
+		  AND (
+			(channel<>'usdt' AND created_at < ?)
+			OR (channel='usdt' AND EXISTS (SELECT 1 FROM usdt_orders m WHERE m.order_id=orders.id AND m.expires_at<=?))
+			OR (channel='usdt' AND NOT EXISTS (SELECT 1 FROM usdt_orders m WHERE m.order_id=orders.id) AND created_at < ?)
+		  )`, cut, nowUTC, cut)
 	if err != nil {
 		return 0
 	}

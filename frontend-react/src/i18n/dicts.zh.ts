@@ -566,7 +566,7 @@ export const baseZh: Record<string,string> = {
   'admin.menuTenants': '🏢 租户管理',
   'admin.menuPlans': '💎 套餐中心',
   'admin.menuReferral': '🔗 邀请好友',
-  'admin.menuOrg': '🏢 企业管理',
+  'admin.menuOrg': '🏢 组织与成员',
   'admin.menuInvites': '✉️ 邀请码',
   'admin.menuUsage': '📈 用量看板',
   'admin.menuKb': '📚 知识库',

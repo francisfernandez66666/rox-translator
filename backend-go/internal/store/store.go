@@ -58,6 +58,7 @@ func New(db *sql.DB) (*Store, error) {
 	s.KBSearchIndexMigrate()      // ★ D11：kb_entries 子串检索 trgm GIN（仅 PG，幂等）
 	s.OneidMigrate()              // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
 	s.KBRewardMigrate()           // ★ KB 上传奖励流水表（幂等；任务2.3）
+	s.USDTMigrate()               // ★ USDT 收款（2026-09-15）：usdt_orders/usdt_deposits + 尾数唯一索引（幂等）
 	s.TasksMigrate()              // ★ 任务中心：任务定义 + 领取记录建表（幂等；2026-09-03）
 	s.EnsureBillingDefaults()     // 商业化参数默认值落库（幂等，面板可改）
 	s.orderMoneyBackfill()        // ★ 存量 pending 充值单应收回填（幂等；评审整改 B1，置于默认值落库后以读取到定价键）
@@ -676,6 +677,8 @@ var columnAdditions = []colDef{
 	//   （与 orders.amount_money「元」同名不同单位，勾稽必错）。新增 amount_fen 语义列，
 	//   启动一次性回填旧行，写入点全部改投 amount_fen；amount_money 保留只读兼容。
 	{"payments", "amount_fen", "ALTER TABLE payments ADD COLUMN amount_fen INTEGER NOT NULL DEFAULT 0"},
+	// ★ USDT 收款（2026-09-15）：链上交易哈希挂支付流水（唯一索引防一笔 tx 关联两单，索引建在 USDTMigrate）
+	{"payments", "tx_hash", "ALTER TABLE payments ADD COLUMN tx_hash TEXT NOT NULL DEFAULT ''"},
 	// ★ B2 会话撤销（2026-09-12）：改密/重置后旧 JWT 立即失效（token_version 随签发携带，请求逐次比对）
 	{"users", "token_version", "ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"},
 	// Webhook 重试策略配置
@@ -810,7 +813,6 @@ func (s *Store) syncSequencesPG() error {
 func quoteIdentPG(ident string) string {
 	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
 }
-
 
 // backfillDailyUsage 部署当日日计数器兜底回填（性能优化 B6）。
 func (s *Store) backfillDailyUsage() {
