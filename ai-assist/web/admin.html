@@ -44,9 +44,11 @@
 <body>
 <header>
   <h1>🤖 AI 助手管理台</h1>
+  <span id="tokstate" class="badge off">Token 未验证</span>
   <span class="hint">知识库 · 话术 · 流程 · 功能入口 · 配置</span>
   <div class="sp"></div>
-  <input id="tok" type="password" placeholder="管理 Token（ASSIST_ADMIN_TOKEN）" onchange="saveTok()">
+  <input id="tok" type="password" placeholder="管理 Token（ASSIST_ADMIN_TOKEN）" style="width:280px" onchange="saveTok()">
+  <button class="act" onclick="verifyTok(true)">验证</button>
 </header>
 <nav id="nav"></nav>
 <main id="main"></main>
@@ -65,10 +67,33 @@ let cache = {}
 function saveTok(){ localStorage.setItem('assist_tok', document.getElementById('tok').value) }
 function tok(){ return document.getElementById('tok').value || localStorage.getItem('assist_tok') || '' }
 
+// Token 状态徽标：页面加载即静默校验一次；401 时给出可自助排障的明确文案
+function setTokState(ok, msg){
+  const el = document.getElementById('tokstate')
+  el.className = 'badge' + (ok ? '' : ' off')
+  el.style.background = ok ? '#dcfce7' : '#fee2e2'
+  el.style.color = ok ? '#15803d' : '#b91c1c'
+  el.textContent = ok ? '✅ Token 已验证' : '❌ ' + (msg || '未验证')
+}
+async function verifyTok(rerender){
+  try{
+    const res = await fetch(PRE + '/api/assist/admin/config', { headers: {'X-Assist-Admin': tok()} })
+    if (res.status === 401){
+      setTokState(false, 'Token 不匹配')
+      toast('Token 与服务端不一致。取值：ssh 服务器执行 grep ASSIST_ADMIN_TOKEN /etc/ai-assist/secrets.env，复制 = 后的完整值粘贴右上角（无引号无空格）')
+      return false
+    }
+    if (!res.ok){ setTokState(false, '服务异常 ' + res.status); return false }
+    setTokState(true)
+    if (rerender) render()
+    return true
+  }catch(e){ setTokState(false, '网络/服务不可达'); return false }
+}
+
 function toast(msg){
   const t = document.getElementById('toast')
   t.textContent = msg; t.classList.add('show')
-  setTimeout(()=>t.classList.remove('show'), 2200)
+  setTimeout(()=>t.classList.remove('show'), 4200)
 }
 
 async function api(path, opt={}){
@@ -76,7 +101,7 @@ async function api(path, opt={}){
     ...opt,
     headers: {'Content-Type':'application/json','X-Assist-Admin': tok()},
   })
-  if (res.status === 401){ toast('Token 无效，请先在右上角填入'); throw new Error('unauthorized') }
+  if (res.status === 401){ setTokState(false, 'Token 不匹配'); toast('Token 无效：与服务器 /etc/ai-assist/secrets.env 的 ASSIST_ADMIN_TOKEN 不一致，改正后点「验证」'); throw new Error('unauthorized') }
   return res.json()
 }
 
@@ -293,6 +318,8 @@ async function renderSessions(m){
 // ---------- 启动 ----------
 document.getElementById('tok').value = localStorage.getItem('assist_tok')||''
 renderNav(); render()
+// 启动即校验 token：绿=可用，红=给出取值指引（避免逐 tab 报「加载失败」的排障体验）
+verifyTok(false)
 </script>
 </body>
 </html>
