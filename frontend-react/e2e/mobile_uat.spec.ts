@@ -16,20 +16,19 @@ async function login(page: import('@playwright/test').Page, mode: 'admin' | 'hom
   // ★ 修复（2026-09-14）：home 模式改走 /login——`/` 已是营销 Landing 页（无 .login-card），
   // 旧路径等待登录卡必超时（UAT 实测 mobile_uat 两条确定性失败即源于此）
   await page.goto(`${BASE}/${mode === 'admin' ? 'admin' : 'login'}`, { waitUntil: 'networkidle' });
-  await page.waitForSelector('.login-card', { timeout: 15000 });
+  await page.waitForSelector('.login-card', { timeout: 30000 });
   // 账号 + 密码输入框（注册表单亦有同类输入框，登录卡先渲染）
   const inputs = page.locator('.login-card input').first();
   await inputs.fill('admin');
   await page.locator('.login-card input[type="password"]').first().fill('Admin@1234');
   await page.locator('.login-card button').first().click();
-  await page.waitForTimeout(2000);
+  await page.waitForLoadState('networkidle');
 }
 
 // 移动端后台核对：汉堡可见 → 侧栏默认移出屏外 → 点击滑入 + 遮罩出现 → 点菜单关闭 → 点遮罩关闭 → 无水平溢出
 test('移动端后台：侧边栏转抽屉（汉堡唤起/遮罩关闭/无溢出）', async ({ page }) => {
   await login(page, 'admin');
-  await page.waitForSelector('.admin-shell', { timeout: 15000 });
-  await page.waitForTimeout(1200);
+  await page.waitForSelector('.admin-shell', { timeout: 30000 });
 
   // 汉堡按钮可见
   const toggle = page.locator('.admin-nav-toggle');
@@ -77,7 +76,7 @@ test('移动端后台：侧边栏转抽屉（汉堡唤起/遮罩关闭/无溢出
 // 移动端工作台核对：输入栏可见、页面无水平溢出（验证 .chat-input-row 换行生效）
 test('移动端工作台：输入栏可换行、无横向溢出', async ({ page }) => {
   await login(page, 'home');
-  await page.waitForSelector('.chat-scroll, .app-header', { timeout: 15000 });
+  await page.waitForSelector('.chat-scroll, .app-header', { timeout: 30000 });
   await page.waitForTimeout(1500);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
   console.log('工作台水平溢出:', overflow);
@@ -89,21 +88,26 @@ test('移动端工作台：输入栏可换行、无横向溢出', async ({ page 
 
 // 移动端全站巡检：登录后依次访问自服务/工单/对照编辑各页 + 公开定价页，逐页断言无水平溢出
 test('移动端全站页面无横向溢出巡检', async ({ page }) => {
+  // ★ flaky 根治（2026-09-16 D4）：本用例需登录 + 逐条 networkidle 访问 6 个受保护路由
+  //   + 公开定价页，累计真实耗时贴近默认 30s 上限，故首轮偶发超时（靠 retries=1 兜过）。
+  //   显式抬高本用例超时到 90s，消除边界性 flaky（非产品缺陷，纯测试稳定性）。
+  test.setTimeout(90000);
   await login(page, 'home');
-  await page.waitForSelector('.app-header', { timeout: 15000 });
+  await page.waitForSelector('.app-header', { timeout: 30000 });
   await page.waitForTimeout(1000);
   const routes = ['/billing', '/invites', '/packages', '/my', '/tickets', '/editor'];
   for (const r of routes) {
     await page.goto(`${BASE}${r}`, { waitUntil: 'networkidle' });
-    await page.waitForTimeout(1200);
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
-    console.log(`${r} 水平溢出:`, overflow);
-    expect(overflow, `${r} 不应横向溢出`).toBe(false);
+    // 溢出检测改为轮询至「无溢出」自动收敛，替代固定 1200ms 盲等（渲染慢时更稳）
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2),
+        { message: `${r} 不应横向溢出`, timeout: 8000 })
+      .toBe(false);
   }
   // 公开定价页
   await page.goto(`${BASE}/pricing`, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(1500);
-  const pricingOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
-  console.log('/pricing 水平溢出:', pricingOverflow);
-  expect(pricingOverflow, '/pricing 不应横向溢出').toBe(false);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2),
+      { message: '/pricing 不应横向溢出', timeout: 8000 })
+    .toBe(false);
 });

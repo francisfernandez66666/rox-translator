@@ -75,6 +75,33 @@ func TestSettleExhausted(t *testing.T) {
 	}
 }
 
+// TestSettleExhaustedNoPermAccount 永久余额行缺失时的结算（★ 缺陷核实修复 D1 · 2026-09-16）：
+// 兜底分支只应容忍 sql.ErrNoRows（无账户=无永久余额可清），其余 DB 错误必须上抛——
+// 旧实现误判陈旧变量 qerr（恒 nil），真实错误会被静默吞掉导致部分欠费无痕消失。
+// 本用例锁死「缺账户 + 台账不足」路径：消耗=台账量、无错误、调整流水同额。
+func TestSettleExhaustedNoPermAccount(t *testing.T) {
+	st, _ := newKBEnv(t)
+	if _, err := st.db.Exec("INSERT INTO tenants (id, code, name, status) VALUES (8,'t8','缺账户结算','active')"); err != nil {
+		t.Fatalf("种租户失败: %v", err)
+	}
+	// 只发台账 400，不建 balance_accounts 行（QueryRow 必然 ErrNoRows）
+	if err := st.CreateQuotaGrant(8, "plan", 400, time.Now().Add(24*time.Hour), "test", 0); err != nil {
+		t.Fatalf("发放额度失败: %v", err)
+	}
+	consumed, err := st.SettleExhausted(8, 1000)
+	if err != nil {
+		t.Fatalf("缺永久账户应容忍（ErrNoRows 路径），实得错误: %v", err)
+	}
+	if consumed != 400 {
+		t.Fatalf("应消耗台账 400，实得 %d", consumed)
+	}
+	var settleCost int64
+	if err := db.QueryRow(st.db, db.CurrentDialect(),
+		`SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=8 AND charge_kind='settle'`).Scan(&settleCost); err != nil || settleCost != 400 {
+		t.Fatalf("调整流水应为 400，实得 %d (err=%v)", settleCost, err)
+	}
+}
+
 // TestSaveUserTaskReturnsID 新建任务必须返回自增 ID（PG 下 LastInsertId 恒 0 的回归）。
 func TestSaveUserTaskReturnsID(t *testing.T) {
 	st, _ := newKBEnv(t)

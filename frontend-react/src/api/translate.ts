@@ -18,6 +18,8 @@ import { API_BASE, authHeaders, request, handleUnauthorized, ApiError } from './
 /** SSE 空闲超时：后端每 20s 发一帧 `: ping` 注释（不匹配 data: 但计入字节、重置计时）。
  *  连续 SSE_IDLE_MS 无任何字节 = 判定代理静默断连，主动中断避免 UI 永卡 loading。 */
 const SSE_IDLE_MS = 60_000
+/** 带空闲超时的 reader.read() 包装：每次拿到字节即重置计时；
+ *  空闲超限触发 onIdle（外部据此 abort 请求）并以 AbortError 拒绝本 Promise。 */
 function readWithIdle<T extends { done: boolean; value?: Uint8Array }>(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   onIdle: () => void,

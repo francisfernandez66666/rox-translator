@@ -26,8 +26,8 @@ import { t, tpl } from '@/i18n'
 
 type Any = any
 
-/** 数字缩写：≥1万 显示为 x.xw */
-/** 组织树展示、组织 CRUD、用户管理、预算设置、邀请码、组织移动组件 */
+/** 组织架构面板（超管/租户管理员/部门管理员三级视角）：
+ * 组织树 CRUD、成员表格行内编辑、部门预算（积分口径）、邀请码、组织移动、批量导入 */
 export function OrgP() {
   const ad = useAdmin()
   // ===== 面板状态：组织树、选中节点、成员列表/分页、预算、批量导入 =====
@@ -58,17 +58,20 @@ export function OrgP() {
   const isSuper = ad.isSuper
   const [tab, setTab] = useState<'org' | 'invite' | 'users'>('org') // ★ Tab 精简（2026-09-15）：成员并入组织 Hub
 
+  // 根组织/平台根名：优先根组织名，回退当前激活租户名
   const rootOrgName = useMemo(() => {
     if (rootOrg?.name) return rootOrg.name
     const tt = ad.tenants.find((x) => x.id === ad.activeTenantId)
     return tt?.name || tpl('org.orgHash', { id: ad.activeTenantId })
   }, [rootOrg, ad.tenants, ad.activeTenantId])
 
+  // 平铺组织列表：平台视图剔除所属根组织外的 root 节点，租户视图剔除 root
   const flatOrgs = useMemo(() => {
     if (isPlatformView) return orgs.filter((o) => !(o.type === 'root' && rootOrg && o.id === rootOrg.id))
     return orgs.filter((o) => o.type !== 'root')
   }, [orgs, isPlatformView, rootOrg])
 
+  // 深度优先展开为带层级的线性列表（渲染缩进用）
   const flatTree = useMemo(() => {
     const byParent: Record<number, OrgInfo[]> = {}
     for (const o of flatOrgs) {
@@ -86,25 +89,30 @@ export function OrgP() {
     return out
   }, [flatOrgs, isPlatformView, rootOrg])
 
+  // 递归拼组织全路径名（父 / 子），供下拉选项展示
   const orgPath = (o: OrgInfo): string => {
     if (o.parent_id === 0) return o.name
     const parent = flatOrgs.find((x) => x.id === o.parent_id)
     return parent ? `${orgPath(parent)} / ${o.name}` : o.name
   }
 
+  // 节点类型图标：dept 部门 / org 组织 / root 根
   const orgIcon = (o: OrgInfo): string => (o.type === 'dept' ? '🏷️' : o.type === 'org' ? '🏬' : '🏢')
 
+  // 预算文案：本月已用/限额（token 原值折积分展示）；未设置显示占位
   const budgetText = (o: Any): string => {
     const b = budgetMap[o.id]
     if (!b || !(b.limit > 0)) return t('org.budgetUnset')
     return `${fmtPoints(b.used)}/${fmtPoints(b.limit)}` // ★ token 原值折积分展示
   }
 
+  // 是否超预算（已用 ≥ 限额），命中行标红
   const isOverBudget = (o: Any): boolean => {
     const b = budgetMap[o.id]
     return !!b && b.limit > 0 && b.used >= b.limit
   }
 
+  // 新建用户的角色级联：随所选组织层级与当前登录者权限收敛可选项
   const nuRoleOptions = useMemo(() => {
     const oid = nuOrgId
     if (!oid) {
@@ -116,6 +124,7 @@ export function OrgP() {
     return myLevel >= 2 ? ['dept_admin', 'user'] : ['user']
   }, [nuOrgId, isPlatformView, myLevel, flatOrgs])
 
+  // 切换归属组织：若当前角色不在新可选集内则自动落到首个合法角色
   function onNuOrgChange(v: any) {
     setNuOrgId(v)
     setNu((n: Any) => {
@@ -124,6 +133,7 @@ export function OrgP() {
     })
   }
 
+  // 用户更新统一出口（PUT users/update）：失败弹错误并返回 false 阻断后续刷新
   async function updateUser(u: Any, patch: Any): Promise<boolean> {
     const data: Any = {
       display_name: u.display_name, role: u.role, status: u.status,
@@ -137,6 +147,7 @@ export function OrgP() {
     return true
   }
 
+  // 拉取部门预算汇总（限额/本月已用），非租管无权限时静默跳过
   async function loadBudget() {
     try {
       const r: any = await orgBudgetSummary()
@@ -148,6 +159,7 @@ export function OrgP() {
     } catch { /* 非租管静默 */ }
   }
 
+  // 拉取选中组织（含下级）成员列表
   async function loadOrgUsers() {
     const r: any = await orgUsers(selectedOrg || undefined)
     if (r.success) setOrgUserList(r.users || [])
@@ -171,10 +183,12 @@ export function OrgP() {
     void loadAll(); void loadBudget()
   }, [ad.activeTenantId])
 
+  // 选中组织节点：同步新建用户的默认归属组织
   function selectOrg(id: number) {
     setSelectedOrg(id); setNuOrgId(id); void loadOrgUsers()
   }
 
+  // 建号：用户名/密码强度预检 → adminUserCreate → 成功后清空表单并整体刷新
   async function createUser() {
     if (!nu.username?.trim() || (nu.password?.length ?? 0) < 6) { void MessagePlugin.warning(t('org.userValidation')); return }
     setCreating(true)
@@ -195,6 +209,7 @@ export function OrgP() {
     } finally { setCreating(false) }
   }
 
+  // Excel/CSV 批量导入成员：结果逐行回显（成功/失败原因）
   async function doBulkImport() {
     if (!importFile) { void MessagePlugin.warning(t('org.importNeedFile')); return }
     setImporting(true)
@@ -210,11 +225,13 @@ export function OrgP() {
     } finally { setImporting(false) }
   }
 
+  // 下载批量导入模板（列头与后端解析对齐）
   async function downloadTemplate() {
     const ok = await downloadUserImportTemplate()
     if (!ok) void MessagePlugin.error(t('org.importTplFail'))
   }
 
+  // 管理员重置成员密码（弹窗输入，≥6 位）
   async function resetPwd(u: Any) {
     const pwd = await promptText({ header: t('org.resetPwdPrompt'), body: tpl('org.resetPwdPrompt', { name: u.username }) })
     if (!pwd || pwd.length < 6) { void MessagePlugin.warning(t('org.pwdMinLength')); return }
@@ -223,10 +240,12 @@ export function OrgP() {
     void MessagePlugin.success(t('org.pwdReset'))
   }
 
+  // 启用/停用成员账号
   async function setStatus(u: Any, status: string) {
     if (await updateUser(u, { status })) await loadAll()
   }
 
+  // 删除成员（二次确认）
   async function deleteUser(u: Any) {
     if (!(await confirmDialog({ body: tpl('org.deleteUserConfirm', { name: u.username }) }))) return
     const r: any = await adminUserDelete(u.id)
@@ -234,16 +253,19 @@ export function OrgP() {
     await loadAll()
   }
 
+  // 成员表格行内编辑：显示名/组织/角色单字段更新
   async function editUser(u: Any, field: string, val: string) {
     const v = field === 'org_id' ? Number(val) : val
     if (field === 'display_name' && !String(val).trim()) return
     if (await updateUser(u, { [field]: v })) await loadAll()
   }
 
+  // 按 org 查其租户当前状态（平台视图启停按钮用）
   function tenantStatusOf(tid: number): string {
     return ad.tenants.find((x) => x.id === tid)?.status || 'active'
   }
 
+  // 平台视图整租户启停：确认后 tenantSetStatus 并刷新租户缓存
   async function toggleTenantByOrg(o: OrgInfo) {
     const cur = tenantStatusOf(o.tenant_id)
     const next = cur === 'active' ? 'disabled' : 'active'
@@ -254,8 +276,10 @@ export function OrgP() {
     ad.loadTenants(); await loadAll()
   }
 
+  // 进入"新建子组织"模式：预选父节点并清空名称输入
   function setParent(id: number) { setParentId(id); setNewName('') }
 
+  // 新建组织/部门：父为 0 建 org，否则建 dept（后端校验名称非空）
   async function createOrg() {
     if (!newName.trim()) { void MessagePlugin.warning(t('org.nameRequired')); return }
     const r: any = await orgCreate({ name: newName.trim(), parent_id: parentId, type: parentId === 0 ? 'org' : 'dept' })
@@ -263,6 +287,7 @@ export function OrgP() {
     setNewName(''); await loadAll()
   }
 
+  // 重命名组织；根组织改名同步刷新超管租户缓存
   async function renameOrg(o: OrgInfo) {
     const name = await promptText({ header: t('org.renamePrompt'), body: tpl('org.renamePrompt', { name: o.name }), defaultValue: o.name })
     if (!name || !name.trim()) return
@@ -272,6 +297,7 @@ export function OrgP() {
     await loadAll()
   }
 
+  // 重命名根组织（=租户显示名）
   async function renameRootOrg() {
     if (!rootOrg) return
     const name = await promptText({ header: t('org.renameRoot'), body: t('org.renameRoot'), defaultValue: rootOrg.name })
@@ -282,6 +308,7 @@ export function OrgP() {
     await loadAll()
   }
 
+  // 删除组织（后端守卫：有子节点/成员时拒绝），当前选中则回落到根
   async function deleteOrg(o: OrgInfo) {
     if (!(await confirmDialog({ body: tpl('org.deleteConfirm', { name: o.name }) }))) return
     const r: any = await orgDelete(o.id)
@@ -290,12 +317,14 @@ export function OrgP() {
     await loadAll()
   }
 
+  // 打开部门预算弹窗：限额按积分口径回填（token→积分反算）
   function openBudget(o: Any) {
     const b = budgetMap[o.id]
     setBudgetModal({ id: o.id, name: o.name, limit: b?.limit || 0, used: b?.used || 0 })
     setBudgetInput(pointsOf(Number(b?.limit) || 0))
   }
 
+  // 保存部门月预算：积分→token 正算落库，本地预算表同步回填
   async function saveBudget() {
     if (!budgetModal) return
     if (!(budgetInput >= 0)) { void MessagePlugin.warning(t('org.budgetInvalid')); return }
@@ -305,6 +334,7 @@ export function OrgP() {
     setBudgetModal(null)
   }
 
+  // 打开组织邀请码弹窗并拉取该组织的码列表
   async function openInvites(o: Any) {
     setInviteModal({ id: o.id, name: o.name })
     setInviteItems([])
@@ -314,6 +344,7 @@ export function OrgP() {
     } catch { setInviteItems([]) }
   }
 
+  // 新建邀请码（绑定当前组织）
   async function createInvite() {
     if (!inviteModal) return
     const code = inviteCodeInput.trim()
@@ -324,14 +355,17 @@ export function OrgP() {
     await openInvites(inviteModal)
   }
 
+  // 打开移动组织对话框：回填当前父节点
   function openMove(o: Any) { setMoveParent(Number(o.parent_id ?? 0)); setMoveDlg({ node: o }) }
 
+  // 执行组织移动（后端防环校验），成功后关闭并刷新
   async function doMove() {
     if (!moveDlg) return
     const r: any = await orgMove(moveDlg.node.id, moveParent)
     if (toastResp(r, '已移动')) { setMoveDlg(null); await loadAll() }
   }
 
+  // 建号区标题：当前归属组织名（0=根/平台）
   const addUserHeading = nuOrgId === 0
     ? (isPlatformView ? t('admin.platformRoot') : rootOrgName)
     : (flatOrgs.find((x) => x.id === nuOrgId)?.name || '')

@@ -440,8 +440,17 @@ func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) erro
 	return nil
 }
 
-// lowBalanceThreshold 低额告警绝对阈值（system_config low_balance_alert_tokens，默认100000）。
-func lowBalanceThreshold() int64 {
+// lowBalanceThreshold 低额告警绝对阈值：读 system_config low_balance_alert_tokens。
+// ★ 缺陷核实修复（2026-09-16 D2）：旧实现硬编码 100000 与注释不符——超管改配置不生效。
+// 缺失/非法/非正数回退默认 100000（与 store 种子值口径一致）。
+func (s *TicketService) lowBalanceThreshold() int64 {
+	if s.Store != nil {
+		if v, _ := s.Store.GetConfig("low_balance_alert_tokens"); v != "" {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
 	return 100000
 }
 
@@ -463,7 +472,7 @@ func (s *TicketService) StartStallSweep() {
 			func() {
 				defer release()
 				s.Store.CloseStalePendingOrders()                     // ★ 订单15min超时自动关闭
-				s.Store.TenantLowBalanceAlerts(lowBalanceThreshold()) // ★ 低额提醒(24h去重)
+				s.Store.TenantLowBalanceAlerts(s.lowBalanceThreshold()) // ★ 低额提醒(24h去重)
 				n, rerr := s.Store.RequeueStalledTickets(20 * time.Minute)
 				if rerr != nil {
 					return

@@ -289,9 +289,12 @@ func (s *Store) SettleExhausted(tid int64, owed int64) (int64, error) {
 				return 0, err
 			}
 			consumed += take
-		} else if !errors.Is(qerr, sql.ErrNoRows) && qerr != nil {
-			// 多行余额账户理论上不存在（单行表）；保守处理首行即可
-			return 0, qerr
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			// ★ 缺陷核实修复（2026-09-16 D1）：旧代码误判陈旧变量 qerr（此处恒为 nil），
+			//   真实 DB 错误（连接中断/语句超时/锁等待失败等）被静默吞掉——永久余额未清、
+			//   consumed<owed 的部分欠费无痕消失，违背本函数「杜绝无痕归零」初衷。
+			//   多行余额账户理论上不存在（单行表）；保守处理首行即可。
+			return 0, err
 		}
 	}
 	// ③ 调整流水：清零量落 ledger（charge_kind='settle'），杜绝「无痕归零」无法追偿

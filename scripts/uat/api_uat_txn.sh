@@ -44,6 +44,9 @@
 #   T43 今日修复回归（2026-09-16）：RBAC 收紧（高角色禁落租户 400 / 存量违规行降权 403）/
 #       支付渠道 fail-closed（wechat/alipay 显式报错、禁止 mockpay/alipay 占位假码）/
 #       发票冲红闭环（开票→void→同单可重开）
+#   T44 缺陷核实修复回归锁（2026-09-16 D1-D5）：欠费结算错误分支（qerr 吞错禁回退）/
+#       低额告警阈值接线（low_balance_alert_tokens 实读）/ 备份推送超时+禁入 HTTP 白名单 /
+#       Caddy CSP 头存在——行为侧由 store/service 单测覆盖，此处为源码级防回退闸门
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 # 依赖：mock_llm.py 已启动、uat 服务已启动（run_uat.sh 编排）
 # 用法：BASE_URL=... UAT_DB=... ADMIN_PASS=... [UAT_SERVER_LOG=...] bash scripts/uat/api_uat_txn.sh
@@ -1134,6 +1137,21 @@ ck T43-invoice-void '"success":true' "$R"
 IVST43=$(sq "SELECT status FROM invoices WHERE id=$IVID43")
 [ "$IVST43" = "void" ] && { PASS=$((PASS+1)); echo "PASS|T43-invoice-void-status"; } || { FAIL=$((FAIL+1)); echo "FAIL|T43-invoice-void-status($IVST43)"; }
 ck T43-invoice-reissue-after-void '"success"' "$(post "$H1" "{\"order_id\":$OID43,\"title\":\"T43冲红后重开\",\"tax_no\":\"TX9043\"}" /api/billing/invoices/create)"
+
+# ---------- T44 缺陷核实修复回归锁（2026-09-16 D1-D5，源码级防回退闸门） ----------
+# 行为语义已由 Go 单测覆盖（store.TestSettleExhaustedNoPermAccount /
+# service.TestLowBalanceThresholdWired）；此处锁定「修复点不被悄悄改回去」。
+ROOT44="$(cd "$(dirname "$0")/../.." && pwd)"
+ck T44-settle-err-branch '!errors\.Is\(err, sql\.ErrNoRows\)' "$(grep -A4 'consumed += take' "$ROOT44/backend-go/internal/store/billing.go" | grep -m1 'errors.Is' || echo NONE)"
+if grep -q 'Is(qerr, sql.ErrNoRows)' "$ROOT44/backend-go/internal/store/billing.go"; then
+  FAIL=$((FAIL+1)); echo "FAIL|T44-settle-qerr-ban|D1 修复被回退：SettleExhausted 重新出现 qerr 误判"
+else PASS=$((PASS+1)); echo "PASS|T44-settle-qerr-ban"; fi
+ck T44-lowbalance-wired 'low_balance_alert_tokens' "$(grep -m1 'GetConfig("low_balance_alert_tokens")' "$ROOT44/backend-go/internal/service/ticket.go" || echo NONE)"
+ck T44-backup-cmd-timeout 'exec\.CommandContext\(pushCtx' "$(grep -m1 'exec.CommandContext(pushCtx' "$ROOT44/backend-go/internal/api/watchdog.go" || echo NONE)"
+if grep -q 'backup_remote_cmd' "$ROOT44/backend-go/internal/api/admin_packages.go"; then
+  FAIL=$((FAIL+1)); echo "FAIL|T44-backup-cmd-no-whitelist|backup_remote_cmd 混入 settings HTTP 白名单（admin-RCE 面）"
+else PASS=$((PASS+1)); echo "PASS|T44-backup-cmd-no-whitelist"; fi
+ck T44-csp-header 'Content-Security-Policy' "$(grep -m1 'Content-Security-Policy' "$ROOT44/deploy/caddy/translator.conf" || echo NONE)"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

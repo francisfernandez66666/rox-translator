@@ -27,6 +27,9 @@ const A11Y_PAGES = ['/', '/tickets', '/billing', '/pricing'];
 
 test.describe('G6-a11y axe 无障碍扫描', () => {
   test('登录态关键页 critical 违规为 0', async ({ page }, testInfo) => {
+    // ★ flaky 根治（2026-09-16 D4 配套）：4 页逐页 axe analyze 累计耗时贴默认 30s 上限，
+    //   冷启动/机器负载下偶发超时（retries=1 兜过）。抬到 90s 消除边界性 flaky。
+    test.setTimeout(90000);
     await loginAs(page, 'uatuser_a', 'uatpass123');
     const all: Record<string, unknown[]> = {};
     for (const pathName of A11Y_PAGES) {

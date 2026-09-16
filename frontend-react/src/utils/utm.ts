@@ -6,6 +6,7 @@
 
 export interface UtmSnapshot { utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_term?: string; utm_content?: string }
 
+/** 读取并清洗 localStorage 中的 utm_* 快照（仅保留 5 个约定键、字符串且 ≤120 字符）。 */
 export function readUtm(): UtmSnapshot {
   try {
     const raw = localStorage.getItem('utm')
@@ -20,6 +21,7 @@ export function readUtm(): UtmSnapshot {
   } catch { return {} }
 }
 
+/** 注册提交后一次性消费：清除已存的 utm，防同浏览器重复归因。 */
 export function clearUtm(): void {
   try { localStorage.removeItem('utm') } catch { /* ignore */ }
 }

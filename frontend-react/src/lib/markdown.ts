@@ -2,6 +2,7 @@
 // 气泡 Markdown 轻量渲染（★ F11 自 MessageBubble 抽纯，可脱离组件单测；E17 正则无环视）。
 // =============================================
 
+// 转义 HTML 实体（& < > " '），渲染前先清洗源文本，杜绝 XSS 注入
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }

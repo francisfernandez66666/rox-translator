@@ -449,10 +449,19 @@ func (s *Server) runBackup(backupDir string, keep int) {
 	log.Printf("数据库已备份: %s（保留最近 %d 份）", dest, keep)
 	// 异地推送钩子：backup_remote_cmd 配置 shell 命令，{path} 替换为本份备份路径
 	// （示例：rclone copy {path} remote:translator-backups）；失败仅告警不阻断主流程
+	// ★ 缺陷核实修复（2026-09-16 D3）：改用 CommandContext 加超时（默认 10min），
+	//   杜绝推送命令挂死阻塞整个 watchdog 巡检 goroutine（备份/熔断/告警全线停摆）。
+	//   ⚠️ 该键仅可由运维直写 system_config，绝不可加入 /api/admin/packages/settings/save
+	//   的白名单结构体——否则将升格为 admin 级任意命令执行面（RCE）。
 	if cmdStr, _ := s.Store.GetConfig("backup_remote_cmd"); cmdStr != "" {
 		full := strings.ReplaceAll(cmdStr, "{path}", dest)
-		out, cerr := exec.Command("/bin/sh", "-c", full).CombinedOutput()
-		if cerr != nil {
+		pushCtx, pushCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer pushCancel()
+		out, cerr := exec.CommandContext(pushCtx, "/bin/sh", "-c", full).CombinedOutput()
+		if pushCtx.Err() == context.DeadlineExceeded {
+			log.Printf("异地备份推送超时（10min），已强制终止: %s", dest)
+			_ = s.Store.CreateAlert(0, "warning", "backup", "异地备份推送超时（10min）已终止")
+		} else if cerr != nil {
 			log.Printf("异地备份推送失败: %v, 输出: %s", cerr, string(out))
 			_ = s.Store.CreateAlert(0, "warning", "backup", "异地备份推送失败: "+cerr.Error())
 		} else {
