@@ -187,3 +187,83 @@ func TestFlowByKey(t *testing.T) {
 		t.Fatal("unknown flow should not match")
 	}
 }
+
+// ============================================================================
+// ★ R0 批次回归（2026-09-16）：同义词归一 / LLM 热加载 / 兜底改造与未答登记
+// ============================================================================
+
+// TestSynonymHit R0.1：configs.synonyms 归一表命中（「充钱」→ 关键词「充值」）
+func TestSynonymHit(t *testing.T) {
+	e := newTestEngine(t)
+	_ = e.db.SetConfig("synonyms", "价格=充钱|交钱")
+	if n := e.hitScore("怎么充钱", "价格,计费"); n != 1 {
+		t.Fatalf("synonym miss: n=%d", n)
+	}
+	// 无关同义词组不命中
+	if n := e.hitScore("怎么充钱", "epub"); n != 0 {
+		t.Fatalf("false positive: n=%d", n)
+	}
+	// 改表后指纹失效重载
+	_ = e.db.SetConfig("synonyms", "价格=换汇")
+	if e.synonymHit("怎么充钱", "价格") {
+		t.Fatal("stale synonyms still matching")
+	}
+}
+
+// TestSynonymEndToEnd R0.1：口语问句「怎么充钱」经同义词命中 KB（原三层脱靶场景）
+func TestSynonymEndToEnd(t *testing.T) {
+	e := newTestEngine(t)
+	_, _ = e.db.Create("kb_entries", map[string]any{
+		"key": "kb-recharge", "title": "怎么充值", "priority": 9, "enabled": 1,
+		"content": "去充值与账单页", "keywords": "充值,付款,支付", "link_keys": "billing",
+	})
+	_ = e.db.SetConfig("synonyms", "充值=充钱|交钱")
+	rep := e.Respond("s-syn", "怎么充钱", "/", nil)
+	// R0.2 验收：不再输出空承诺兜底话术，正确命中充值知识并带入口按钮
+	if strings.Contains(rep.Content, "先记下来") || !strings.Contains(rep.Content, "充值与账单") || len(rep.Actions) == 0 {
+		t.Fatalf("synonym e2e: %+v", rep)
+	}
+}
+
+// TestLLMHotReload R0.4：configs 写入 LLM 配置 → 无 env 时惰性重建生效
+func TestLLMHotReload(t *testing.T) {
+	e := newTestEngine(t)
+	if e.LLMMode() != "" {
+		t.Fatalf("initial mode: %s", e.LLMMode())
+	}
+	_ = e.db.SetConfig("llm_base_url", "http://127.0.0.1:1/v1") // 不可达端口，仅验证 Enabled 翻转
+	_ = e.db.SetConfig("llm_api_key", "sk-test")
+	_ = e.db.SetConfig("llm_model", "m1")
+	if e.LLMMode() != "db" {
+		t.Fatalf("after db cfg: %s", e.LLMMode())
+	}
+	// 测试连通应报错但 client 已构建
+	if _, _, _, err := e.LLMTest(); err == nil {
+		t.Fatal("unreachable endpoint should error")
+	}
+}
+
+// TestLLMEnvPriority R0.4：env 显式接入（构造时 providers 非空）不被 configs 覆盖
+func TestLLMEnvPriority(t *testing.T) {
+	db, _ := store.Open(t.TempDir() + "/e2.db")
+	defer db.Close()
+	e := New(db, llm.New([]llm.Provider{{Name: "main", BaseURL: "http://env-host", APIKey: "k", Model: "env-m"}}, 5))
+	_ = db.SetConfig("llm_base_url", "http://db-host")
+	_ = db.SetConfig("llm_api_key", "k2")
+	_ = db.SetConfig("llm_model", "db-m")
+	if e.LLMMode() != "env" {
+		t.Fatalf("env should win: %s", e.LLMMode())
+	}
+}
+
+// TestUnanswered R0.2：零命中登记未答问题（去重+上限）
+func TestUnanswered(t *testing.T) {
+	e := newTestEngine(t)
+	e.recordUnanswered("怎么充钱")
+	e.recordUnanswered("怎么充钱") // 去重
+	e.recordUnanswered("量子翻译")
+	got := e.UnansweredQuestions()
+	if len(got) != 2 || got[0] != "怎么充钱" || got[1] != "量子翻译" {
+		t.Fatalf("unanswered: %v", got)
+	}
+}

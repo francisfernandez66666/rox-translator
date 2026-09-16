@@ -33,6 +33,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+// renderAt 挂件渲染辅助：在指定路由路径下渲染 AiAssist，返回容器查询句柄
 function renderAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>

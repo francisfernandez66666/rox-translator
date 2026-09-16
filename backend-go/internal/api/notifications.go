@@ -85,4 +85,5 @@ func (s *Server) handleNotificationsReadAll(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
+// 占位引用：保留 strconv 导入供后续通知格式化扩展使用（编译期防 unused 撤销）
 var _ = strconv.Itoa // 占位引用（strconv 预留）

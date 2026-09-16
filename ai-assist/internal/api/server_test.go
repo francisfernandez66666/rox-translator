@@ -244,3 +244,73 @@ func TestCORSPreflight(t *testing.T) {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// ============================================================================
+// ★ R0 批次回归（2026-09-16）：config 白名单 / api_key 掩码 / llm 测试连通
+// ============================================================================
+
+// TestConfigWhitelist 未登记 key 一律 400，白名单 key 可写
+func TestConfigWhitelist(t *testing.T) {
+	srv := newTestServer(t)
+	code, _ := doJSON(t, srv, "PUT", "/api/assist/admin/config", "test-token",
+		map[string]any{"key": "arbitrary_key", "value": "x"})
+	if code != 400 {
+		t.Fatalf("non-whitelisted key should 400: %d", code)
+	}
+	code, _ = doJSON(t, srv, "PUT", "/api/assist/admin/config", "test-token",
+		map[string]any{"key": "llm_base_url", "value": "https://api.example.com/v1"})
+	if code != 200 {
+		t.Fatalf("llm_base_url should write: %d", code)
+	}
+}
+
+// TestAPIKeyMasked api_key 读回掩码；掩码值回写被跳过不覆盖明文
+func TestAPIKeyMasked(t *testing.T) {
+	srv := newTestServer(t)
+	_, _ = doJSON(t, srv, "PUT", "/api/assist/admin/config", "test-token",
+		map[string]any{"key": "llm_api_key", "value": "sk-abcdef123456"})
+	_, r := doJSON(t, srv, "GET", "/api/assist/admin/config", "test-token", nil)
+	var masked string
+	for _, c := range r["configs"].([]any) {
+		m := c.(map[string]any)
+		if m["key"] == "llm_api_key" {
+			masked = m["value"].(string)
+		}
+	}
+	if masked != "sk-***56" {
+		t.Fatalf("mask: %q", masked)
+	}
+	// 管理台把掩码原样回传 → 后端 skipped，不覆盖明文
+	_, r2 := doJSON(t, srv, "PUT", "/api/assist/admin/config", "test-token",
+		map[string]any{"key": "llm_api_key", "value": "sk-***56"})
+	if r2["skipped"] != true {
+		t.Fatalf("masked write should skip: %v", r2)
+	}
+}
+
+// TestLLMTestEndpoint 测试连通端点：未接入时返回可读错误
+func TestLLMTestEndpoint(t *testing.T) {
+	srv := newTestServer(t)
+	code, r := doJSON(t, srv, "POST", "/api/assist/admin/llm/test", "test-token", nil)
+	if code != 200 || r["ok"] != false {
+		t.Fatalf("llm test: %d %v", code, r)
+	}
+	if s, _ := r["error"].(string); s == "" {
+		t.Fatal("error message empty")
+	}
+}
+
+// TestSessionsPayload 会话统计含未答清单与 LLM 模式徽标（R0.2/R0.3）
+func TestSessionsPayload(t *testing.T) {
+	srv := newTestServer(t)
+	code, r := doJSON(t, srv, "GET", "/api/assist/admin/sessions", "test-token", nil)
+	if code != 200 {
+		t.Fatalf("sessions: %d", code)
+	}
+	if _, ok := r["unanswered"].([]any); !ok {
+		t.Fatalf("unanswered missing: %v", r)
+	}
+	if m, _ := r["llm_mode"].(string); m != "rule" {
+		t.Fatalf("llm_mode: %v", r["llm_mode"])
+	}
+}

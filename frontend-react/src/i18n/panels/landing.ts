@@ -43,6 +43,7 @@ export const zh: Record<string, string> = {
   'land.fPrivacy': '隐私协议',
   'land.fPricing': '定价',
 }
+// 英文文案字典（与 zh 同 key 对齐，parity.test.ts 守护双语一致性）
 export const en: Record<string, string> = {
   'land.brand': 'LangCross',
   'land.navFeatures': 'Why LangCross',

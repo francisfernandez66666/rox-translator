@@ -103,4 +103,5 @@ func (s *Store) ListInviteCodes() ([]*InviteCode, error) {
 	return out, nil
 }
 
+// 占位引用：保留 database/sql 导入供邀请码扫描扩展使用（编译期防 unused 撤销）
 var _ = sql.ErrNoRows

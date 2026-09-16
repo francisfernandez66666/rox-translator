@@ -51,6 +51,7 @@ type vcodeEntry struct {
 
 // vcodeLocal Redis 未启用时的本地验证码降级存储；vcodeLocalWrites 累计写入数（观测用）。
 var vcodeLocal = sync.Map{} // key -> vcodeEntry
+// vcodeLocalWrites 本地验证码写入计数（/metrics 观测口径）
 var vcodeLocalWrites int64
 
 // vcodeLocalSet 写入内存验证码缓存（Redis 未启用时的本地降级存储）。

@@ -48,6 +48,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/assist/admin/flows", s.guard(s.handleTable("flows")))
 	mux.HandleFunc("/api/assist/admin/features", s.guard(s.handleTable("feature_links")))
 	mux.HandleFunc("/api/assist/admin/sessions", s.guard(s.handleSessions))
+	mux.HandleFunc("/api/assist/admin/llm/test", s.guard(s.handleLLMTest)) // ★ R0.4c 测试连通
 
 	// 健康检查
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +116,7 @@ func newSessionID() string {
 	return fmt.Sprintf("s%d%s", time.Now().UnixMilli(), randHex(4))
 }
 
+// sessMu session upsert 竞态保护（低并发足够；mutex 护 EnsureSession 读-建窗口）
 var sessMu sync.Mutex // session upsert 竞态保护（低并发足够）
 
 // ensureSession 读取或创建会话
@@ -261,6 +263,18 @@ func (s *Server) handleFeatures(w http.ResponseWriter, r *http.Request) {
 // 管理端
 // ============================================================
 
+// configKeyWhitelist 管理端可写的配置键白名单：
+//  - UI 五项：welcome/persona/temperature/max_tokens/quick_chips
+//  - ★ LLM 四项（R0.4）：base_url/api_key/model/model_backup 允许后台在线配置，
+//    engine 侧配合惰性重建实现热加载；api_key_backup 复用主 Key 故不单列。
+//    env（ASSIST_LLM_*）显式配置优先于 configs 表（见 engine.llmClient）。
+var configKeyWhitelist = map[string]bool{
+	"welcome": true, "persona": true, "temperature": true, "max_tokens": true, "quick_chips": true,
+	"llm_base_url": true, "llm_api_key": true, "llm_model": true, "llm_model_backup": true,
+	// R0.1 同义词归一表（逗号分隔：词=同义词1|同义词2，多组换行）
+	"synonyms": true,
+}
+
 // handleConfig GET 读取 / PUT 写入单项配置
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -273,6 +287,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if rows == nil {
 			rows = []store.Row{}
 		}
+		// api_key 掩码回显（防管理台/日志泄露明文），与主站 models 掩码口径一致
+		for i := range rows {
+			if store.Row(rows[i])["key"] == "llm_api_key" {
+				if v, _ := store.Row(rows[i])["value"].(string); v != "" {
+					store.Row(rows[i])["value"] = maskSecret(v)
+				}
+			}
+		}
 		writeJSON(w, 200, map[string]any{"configs": rows})
 	case http.MethodPut:
 		var req struct {
@@ -281,6 +303,16 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Key == "" {
 			writeJSON(w, 400, map[string]any{"error": "key required"})
+			return
+		}
+		// 白名单闸：未登记 key 一律 400（防任意 upsert 静默无效的陷阱）
+		if !configKeyWhitelist[req.Key] {
+			writeJSON(w, 400, map[string]any{"error": "key not allowed: " + req.Key})
+			return
+		}
+		// 掩码值回写拦截：管理台保存时若 value 仍是掩码形态，视为未修改，跳过写库
+		if req.Key == "llm_api_key" && isMaskedSecret(req.Value) {
+			writeJSON(w, 200, map[string]any{"ok": true, "skipped": true})
 			return
 		}
 		if err := s.db.SetConfig(req.Key, req.Value); err != nil {
@@ -292,6 +324,19 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, 405, map[string]any{"error": "method"})
 	}
+}
+
+// maskSecret 敏感值掩码：保留前 3 后 2，中间 ***（主站 maskKey 同思路）
+func maskSecret(s string) string {
+	if len(s) <= 6 {
+		return "***"
+	}
+	return s[:3] + "***" + s[len(s)-2:]
+}
+
+// isMaskedSecret 判断是否为掩码形态（含 "***" 且非空）——掩码值不回写库
+func isMaskedSecret(s string) bool {
+	return s != "" && strings.Contains(s, "***")
 }
 
 // handleTable 通用表 CRUD（管理端）
@@ -391,7 +436,7 @@ func toAnyInt(v any) int {
 	return 0
 }
 
-// handleSessions GET /api/assist/admin/sessions → 会话列表 + 统计
+// handleSessions GET /api/assist/admin/sessions → 会话列表 + 统计 + 未答问题清单（R0.2）
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.ListSessions(100)
 	if err != nil {
@@ -402,10 +447,46 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		rows = []store.Row{}
 	}
 	writeJSON(w, 200, map[string]any{
-		"sessions": rows,
-		"total":    s.db.SessionCount(),
-		"messages": s.db.MessageCount(),
+		"sessions":     rows,
+		"total":        s.db.SessionCount(),
+		"messages":     s.db.MessageCount(),
+		"unanswered":   s.eng.UnansweredQuestions(), // R0.2 运营补料清单
+		"llm_mode":     s.llmMode(),                 // R0.3 生效状态徽标
 	})
+}
+
+// llmMode LLM 接入状态（管理台徽标）：env / db / rule
+func (s *Server) llmMode() string {
+	if s.eng.LLMMode() != "" {
+		return s.eng.LLMMode()
+	}
+	return "rule"
+}
+
+// handleLLMTest POST /api/assist/admin/llm/test → 测试连通（R0.4c）
+// 用当前生效配置发一条 1-token 请求，回显模型名/耗时/错误，供管理台「测试连通」按钮。
+func (s *Server) handleLLMTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]any{"error": "method"})
+		return
+	}
+	start := time.Now()
+	text, model, _, err := s.eng.LLMTest()
+	dur := time.Since(start).Milliseconds()
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error(), "ms": dur})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "model": model, "ms": dur, "sample": truncate(text, 60)})
+}
+
+// truncate 截断字符串（rune 安全）
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 // adminPage 管理页（单文件 HTML）

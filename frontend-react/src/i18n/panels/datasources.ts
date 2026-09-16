@@ -104,6 +104,7 @@ export const zh: Record<string, string> = {
   'ds.s93': '规范/替换词 (replacement)',
   'ds.s94': '保存后该条将回到「待审」筛选页，如需再次启用请重新通过审核。',
 }
+// 英文文案字典（与 zh 同 key 对齐，parity.test.ts 守护双语一致性）
 export const en: Record<string, string> = {
   'ds.s1': 'Official API',
   'ds.s2': 'Limited scrape',

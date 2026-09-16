@@ -56,6 +56,7 @@ export const zh: Record<string, string> = {
   'ss2.invIssued': '已开具',
   'ss2.invVoided': '已冲红',
 }
+// 英文文案字典（与 zh 同 key 对齐，parity.test.ts 守护双语一致性）
 export const en: Record<string, string> = {
   'ss2.trendTitle': 'Usage trend, last 30 days (UTC)',
   'ss2.trendMax': 'Daily peak',

@@ -44,6 +44,7 @@ export const zh: Record<string, string> = {
   'chat.s40': '粤语',
   'chat.s41': '最长字符长度',
 }
+// 英文文案字典（与 zh 同 key 对齐，parity.test.ts 守护双语一致性）
 export const en: Record<string, string> = {
   'chat.s1': 'English',
   'chat.s2': 'Russian',

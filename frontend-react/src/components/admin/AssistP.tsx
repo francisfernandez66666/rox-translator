@@ -7,6 +7,7 @@
 
 import { ASSIST_API } from '@/api/assist'
 
+// AssistP AI 助手管理面板：iframe 全量托管 ai-assist 独立服务管理台
 export default function AssistP() {
   const src = `${ASSIST_API}/assist/admin`
   return (

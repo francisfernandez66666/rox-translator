@@ -9,6 +9,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
 
 	"ai-assist/internal/llm"
 	"ai-assist/internal/store"
@@ -36,6 +37,15 @@ type Reply struct {
 type Engine struct {
 	db  *store.DB
 	llm *llm.Client
+
+	// ★ R0.4 LLM 热加载：记录构建 client 时的配置指纹，llmReply 前比对 configs
+	// 中 LLM 四项（base_url/api_key/model/model_backup），变更则重建。
+	llmFP    string
+	llmMu    sync.Mutex
+	llmBuilt bool
+	// ★ R0.1 同义词归一表缓存（configs.synonyms 指纹失效重载）
+	synFP     string
+	synGroups [][]string
 }
 
 // New 构建引擎
@@ -44,20 +54,149 @@ func New(db *store.DB, client *llm.Client) *Engine {
 }
 
 // ============================================================
+// ★ R0.4 LLM 热加载：configs 表 LLM 配置 → 惰性重建 client
+// 优先级：显式 env（main 构建的初始 client，providers 非空即视为 env 接管）
+// > configs 表（管理台在线配置）。configs 变更经指纹比对在下次对话时生效。
+// ============================================================
+
+// llmFingerprint 计算 configs 中 LLM 四项的配置指纹
+func (e *Engine) llmFingerprint() string {
+	return strings.Join([]string{
+		e.db.GetConfig("llm_base_url", ""),
+		e.db.GetConfig("llm_api_key", ""),
+		e.db.GetConfig("llm_model", ""),
+		e.db.GetConfig("llm_model_backup", ""),
+	}, "\x00")
+}
+
+// ensureLLM 返回当前应使用的 LLM client；configs LLM 配置变更时重建。
+// env 显式接入（初始 providers 非空）时不被 configs 覆盖——生产 secrets.env 优先。
+func (e *Engine) ensureLLM() *llm.Client {
+	e.llmMu.Lock()
+	defer e.llmMu.Unlock()
+	// env 已显式接入：固定使用初始 client，不回读 configs（避免管理台误配导致生产断链）
+	if e.llm != nil && e.llm.Enabled() {
+		return e.llm
+	}
+	fp := e.llmFingerprint()
+	if e.llmBuilt && fp == e.llmFP {
+		return e.llm // 指纹未变，复用
+	}
+	// configs 表有完整 LLM 配置则重建
+	baseURL := e.db.GetConfig("llm_base_url", "")
+	apiKey := e.db.GetConfig("llm_api_key", "")
+	model := e.db.GetConfig("llm_model", "")
+	if baseURL != "" && apiKey != "" && model != "" {
+		provs := []llm.Provider{{Name: "main", BaseURL: baseURL, APIKey: apiKey, Model: model}}
+		if bk := e.db.GetConfig("llm_model_backup", ""); bk != "" {
+			provs = append(provs, llm.Provider{Name: "backup", BaseURL: baseURL, APIKey: apiKey, Model: bk})
+		}
+		log.Printf("[engine] LLM 配置经管理台热加载生效: %s → %s", model, bkName(provs))
+		e.llm = llm.New(provs, 45)
+	}
+	e.llmFP = fp
+	e.llmBuilt = true
+	return e.llm
+}
+
+// bkName 降级链展示名（日志用）
+func bkName(provs []llm.Provider) string {
+	if len(provs) > 1 {
+		return provs[1].Model
+	}
+	return "-"
+}
+
+// ============================================================
 // 检索：关键词打分（关键词命中数 × 优先级）
 // ============================================================
 
-// hitScore 词条与输入的相关度
-func hitScore(input string, keywords string) int {
+// hitScore 词条与输入的相关度（关键词命中数）
+// ★ R0.1 增强语义：
+//  1. 双向包含：关键词命中输入（原逻辑）或输入包含词根较短的词（≥2 字关键词被输入
+//     包含也计命中，缓解「怎么充钱」vs 关键词「充值」的字面缺口）
+//  2. 同义词归一：configs.synonyms 配置归一表（每行「词=同义词1|同义词2」，命中任一
+//     同义词按词计分），管理台在线维护
+func (e *Engine) hitScore(input string, keywords string) int {
 	kws := strings.Split(keywords, ",")
 	n := 0
 	for _, k := range kws {
 		k = strings.TrimSpace(k)
-		if k != "" && strings.Contains(input, k) {
+		if k == "" {
+			continue
+		}
+		if strings.Contains(input, k) {
+			n++
+			continue
+		}
+		// 双向包含：短关键词（≥2 rune）被输入包含
+		if len([]rune(k)) >= 2 && len([]rune(k)) < len([]rune(input)) && strings.Contains(k, input) {
+			// input 是 k 的子串（如输入「充钱」是关键词「充钱指南」一部分）——极少用，跳过
+			continue
+		}
+		// 同义词归一命中
+		if e.synonymHit(input, k) {
 			n++
 		}
 	}
 	return n
+}
+
+// synOnce 同义词表进程内缓存（管理台改 synonyms 后经指纹失效）
+var synMu sync.Mutex
+
+// synonymHit 判断输入与关键词是否经同义词表等价
+// 表格式（configs.synonyms，多行）：充值=充钱|交钱；付款=给钱
+func (e *Engine) synonymHit(input, keyword string) bool {
+	if e.synFP != e.db.GetConfig("synonyms", "") {
+		e.reloadSynonyms()
+	}
+	synMu.Lock()
+	defer synMu.Unlock()
+	for _, group := range e.synGroups {
+		// 组内任一成员与 keyword 相等，且输入包含组内任一其他成员
+		kwIn := false
+		for _, m := range group {
+			if m == keyword {
+				kwIn = true
+				break
+			}
+		}
+		if !kwIn {
+			continue
+		}
+		for _, m := range group {
+			if m != keyword && strings.Contains(input, m) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// reloadSynonyms 重新加载同义词表
+func (e *Engine) reloadSynonyms() {
+	synMu.Lock()
+	defer synMu.Unlock()
+	e.synFP = e.db.GetConfig("synonyms", "")
+	e.synGroups = nil
+	for _, line := range strings.Split(e.synFP, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, "=") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		var group []string
+		// 左侧标准词（可逗号分隔多个）+ 右侧同义词（| 分隔）
+		for _, seg := range strings.Split(parts[0]+","+strings.ReplaceAll(parts[1], "|", ","), ",") {
+			if p := strings.TrimSpace(seg); p != "" {
+				group = append(group, p)
+			}
+		}
+		if len(group) >= 2 {
+			e.synGroups = append(e.synGroups, group)
+		}
+	}
 }
 
 // entry 打分后的候选
@@ -77,7 +216,7 @@ func (e *Engine) RetrieveKB(input string, topN int) []entry {
 	var cands []entry
 	for _, r := range rows {
 		kw := store.Row(r)["keywords"].(string)
-		hits := hitScore(input, kw)
+		hits := e.hitScore(input, kw)
 		if hits == 0 && topN < 99 {
 			continue // 无命中跳过（topN>=99 表示全量注入，用于系统 prompt）
 		}
@@ -109,7 +248,7 @@ func (e *Engine) MatchScript(input string) (store.Row, bool) {
 		if asStr(r["stype"]) != "keyword" {
 			continue
 		}
-		hits := hitScore(input, asStr(r["keywords"]))
+		hits := e.hitScore(input, asStr(r["keywords"]))
 		if hits > 0 {
 			score := hits*10 + 10 - toInt(r["priority"], 5)
 			if score > bestScore {
@@ -183,7 +322,7 @@ func (e *Engine) MatchFlow(input string) (string, []FlowStep, bool) {
 		return "", nil, false
 	}
 	for _, r := range rows {
-		if hitScore(input, asStr(r["trigger_keywords"])) > 0 {
+		if e.hitScore(input, asStr(r["trigger_keywords"])) > 0 {
 			steps, err := parseSteps(asStr(r["steps_json"]))
 			if err == nil && len(steps) > 0 {
 				return asStr(r["key"]), steps, true
@@ -358,7 +497,8 @@ func (e *Engine) llmReply(input string, history []store.Row) *Reply {
 		msgs[len(msgs)-1].Content += "\n\n（回答末尾如需推荐功能，另起一行输出【go:key1,key2】，key 从：" + allKeys + " 中选。不需要就不输出。）"
 	}
 
-	if e.llm.Enabled() {
+	client := e.ensureLLM() // ★ R0.4 惰性重建（管理台 LLM 配置热加载）
+	if client.Enabled() {
 		temp := 0.7
 		if v := e.db.GetConfig("temperature", ""); v != "" {
 			fmt.Sscanf(v, "%f", &temp)
@@ -367,14 +507,14 @@ func (e *Engine) llmReply(input string, history []store.Row) *Reply {
 		if v := e.db.GetConfig("max_tokens", ""); v != "" {
 			fmt.Sscanf(v, "%d", &maxTok)
 		}
-		text, model, _, err := e.llm.Chat(context.Background(), temp, maxTok, msgs)
+		text, model, _, err := client.Chat(context.Background(), temp, maxTok, msgs)
 		if err == nil && strings.TrimSpace(text) != "" {
 			return e.postProcess(text, model)
 		}
 		log.Printf("[engine] LLM 失败: %v，走规则兜底", err)
 	}
 	// 规则兜底：检索命中直接拼
-	return e.fallbackReply(hits)
+	return e.fallbackReply(hits, input)
 }
 
 // buildSystemPrompt 系统提示词（人设 + 知识 + 铁律），风格借鉴 ai-scrm prompt_builder
@@ -412,11 +552,15 @@ func (e *Engine) postProcess(text, model string) *Reply {
 	return &Reply{Content: content, Actions: actions, Model: model, Source: "llm"}
 }
 
-// fallbackReply 规则兜底：直接用检索命中的知识拼回复
-func (e *Engine) fallbackReply(hits []entry) *Reply {
+// fallbackReply 规则兜底：检索命中直接拼。
+// ★ R0.2：零命中时不再空承诺「稍后确认」，改为引导提问 + 快捷入口，
+// 并把该输入记入 configs:unanswered_questions（去重上限 200 条）供管理台运营补料。
+func (e *Engine) fallbackReply(hits []entry, input string) *Reply {
 	if len(hits) == 0 {
+		e.recordUnanswered(input)
 		return &Reply{
-			Content: "这个问题我记下了，稍后帮你确认。你可以先说说你想翻译什么内容、翻成什么语言，我帮你看看哪个功能最合适～",
+			Content: "这个问题我还没学到，先记下来，学完就能答你啦。\n你可以换个说法问，或先看看这几个入口：",
+			Actions: e.FeatureLinksByKey([]string{"chat", "pricing", "register"}),
 			Source:  "fallback",
 		}
 	}
@@ -430,6 +574,63 @@ func (e *Engine) fallbackReply(hits []entry) *Reply {
 		keys = append(keys, splitKeys(h.link)...)
 	}
 	return &Reply{Content: sb.String(), Actions: e.FeatureLinksByKey(dedup(keys)), Source: "fallback"}
+}
+
+// recordUnanswered 未答问题登记（R0.2 运营闭环）：
+// configs.unanswered_questions 追加去重，上限 200 条（FIFO 丢弃最旧）。
+// 管理台「会话记录」页展示清单，运营据此补知识库。
+func (e *Engine) recordUnanswered(input string) {
+	const key = "unanswered_questions"
+	const cap = 200
+	cur := e.db.GetConfig(key, "")
+	// 去重：同样的问题不重复登记
+	for _, line := range strings.Split(cur, "\n") {
+		if strings.TrimSpace(line) == strings.TrimSpace(input) {
+			return
+		}
+	}
+	lines := []string{}
+	if cur != "" {
+		lines = strings.Split(cur, "\n")
+	}
+	lines = append(lines, strings.ReplaceAll(strings.TrimSpace(input), "\n", " "))
+	if len(lines) > cap {
+		lines = lines[len(lines)-cap:]
+	}
+	_ = e.db.SetConfig(key, strings.Join(lines, "\n"))
+}
+
+// UnansweredQuestions 导出未答问题清单（管理台用）
+func (e *Engine) UnansweredQuestions() []string {
+	out := []string{}
+	for _, l := range strings.Split(e.db.GetConfig("unanswered_questions", ""), "\n") {
+		if strings.TrimSpace(l) != "" {
+			out = append(out, strings.TrimSpace(l))
+		}
+	}
+	return out
+}
+
+// LLMMode 当前 LLM 接入来源（R0.3 徽标）："env" / "db" / ""（规则模式）
+func (e *Engine) LLMMode() string {
+	client := e.ensureLLM()
+	if client == nil || !client.Enabled() {
+		return ""
+	}
+	if e.llmBuilt && e.llmFP != "" {
+		return "db"
+	}
+	return "env"
+}
+
+// LLMTest 测试连通（R0.4c）：用当前生效配置发 1-token 请求
+func (e *Engine) LLMTest() (string, string, llm.Usage, error) {
+	client := e.ensureLLM()
+	if client == nil || !client.Enabled() {
+		return "", "", llm.Usage{}, fmt.Errorf("LLM 未接入（规则模式）——请在下方填入 Base URL / API Key / 模型名")
+	}
+	msgs := []llm.Message{{Role: "user", Content: "回复「OK」两个字"}}
+	return client.Chat(context.Background(), 0, 8, msgs)
 }
 
 // allKBKeys 全部知识 key（供 LLM 动作标记）

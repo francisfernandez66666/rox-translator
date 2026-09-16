@@ -52,6 +52,7 @@ type sloSample struct {
 	P99    float64 // 本分钟请求 P99（ms，无样本时 0）
 }
 
+// sloRing SLI 样本环容量：保留 6 小时分钟样本（慢窗口上界）
 const sloRing = 6 * 60 // 保留 6 小时分钟样本（慢窗口上界）
 
 // sloState Server 内 SLO 追踪器（惰性初始化）。

@@ -24,6 +24,7 @@ export const zh: Record<string, string> = {
   'rc.rule.refund_no_flow': '退款无冲正',
   'rc.rule.orphan_payment': '孤儿流水',
 }
+// 英文文案字典（与 zh 同 key 对齐，parity.test.ts 守护双语一致性）
 export const en: Record<string, string> = {
   'rc.title': 'Reconciliation (orders ↔ payments)',
   'rc.hint': 'Cross-check orders vs payment ledger: missing payment / status mismatch / amount deviation / refund without reversal. Super admin only.',

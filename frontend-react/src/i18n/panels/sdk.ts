@@ -14,6 +14,7 @@ export const zh: Record<string, string> = {
   'sdk.changelogHint': '版本变更记录见仓库 sdk/CHANGELOG.md；npm / PyPI 同步发版。',
 }
 
+// 英文文案字典（与 zh 同 key 对齐，parity.test.ts 守护双语一致性）
 export const en: Record<string, string> = {
   'sdk.title': 'Official SDKs',
   'sdk.hint': 'Official SDKs share the OpenAPI contract and API Key auth. Install, initialize the client, then call synchronous text translation or file tickets.',

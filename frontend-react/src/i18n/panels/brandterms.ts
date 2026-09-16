@@ -32,6 +32,7 @@ export const zh: Record<string, string> = {
   'bt.delEntry': '删除该语言译法',
   'bt.addLang': '+补语言',
 }
+// 英文文案字典（与 zh 同 key 对齐，parity.test.ts 守护双语一致性）
 export const en: Record<string, string> = {
   'bt.needBrand': 'Enter the brand name (Chinese)',
   'bt.needEn': 'Enter the unified foreign translation (e.g. ROX)',

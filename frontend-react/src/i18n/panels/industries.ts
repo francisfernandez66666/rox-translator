@@ -32,6 +32,7 @@ export const zh: Record<string, string> = {
   'ind.nameLabel': '行业名称',
   'ind.namePlaceholder': '汽车 / 房产装修 / ...',
 }
+// 英文文案字典（与 zh 同 key 对齐，parity.test.ts 守护双语一致性）
 export const en: Record<string, string> = {
   'ind.hint': 'Industries are carried by platform industry packs; all industry dropdowns (signup/tenant/scrape) pull this dictionary live. New entries take effect immediately; disabled ones disappear from signup; industries referenced by enterprise tenants cannot be deleted (disable instead).',
   'ind.needCodeName': 'Industry code and name are required',

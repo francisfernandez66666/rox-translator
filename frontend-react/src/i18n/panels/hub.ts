@@ -14,6 +14,7 @@ export const zh: Record<string, string> = {
   'hub.tabBrand': '品牌与页脚',
 }
 
+// 英文文案字典（与 zh 同 key 对齐，parity.test.ts 守护双语一致性）
 export const en: Record<string, string> = {
   'hub.menuBilling': '💎 Billing & Plans',
   'hub.tabPlans': 'Plans & Orders',

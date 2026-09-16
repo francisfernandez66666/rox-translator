@@ -17,6 +17,7 @@ import {
 /** 站内路由集合：route 类型按钮据此 SPA 跳转（其余按外链新开窗口） */
 const ROUTE_PATHS = new Set(['/', '/tickets', '/editor', '/billing', '/packages', '/invites', '/pricing', '/register', '/my', '/admin'])
 
+// Bubble 挂件气泡：单条对话消息（role 区分用户/AI，actions 为推荐功能入口按钮）
 interface Bubble {
   role: 'user' | 'assistant'
   content: string
@@ -28,6 +29,7 @@ export function isHiddenPath(path: string): boolean {
   return path === '/login' || path === '/register' || path.startsWith('/login/') || path.startsWith('/register/')
 }
 
+// AiAssist AI 销售/客服常驻挂件主组件：FAB 悬浮球 + 对话面板，展开时拉引导/恢复历史。
 export default function AiAssist() {
   const location = useLocation()
   const navigate = useNavigate()

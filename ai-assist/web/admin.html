@@ -193,25 +193,73 @@ async function delRow(table, id){
 }
 
 // ---------- 配置 ----------
+const CFG_DEFS = {
+  welcome:'欢迎词（会话首次打开时下发）',
+  persona:'人设（系统提示词第一段）',
+  temperature:'温度（0-1）',
+  max_tokens:'回复最大 token',
+  quick_chips:'快捷提问 chips（逗号分隔，前端展示）',
+}
 async function renderConfig(m){
   const data = await api('config')
-  const defs = {
-    welcome:'欢迎词（会话首次打开时下发）',
-    persona:'人设（系统提示词第一段）',
-    temperature:'温度（0-1）',
-    max_tokens:'回复最大 token',
-    quick_chips:'快捷提问 chips（逗号分隔，前端展示）',
-  }
-  const rows = data.configs
-  m.innerHTML = `<div class="card"><b>⚙️ 全局配置</b>
+  const st = await api('sessions')
+  const cur = {}
+  for (const c of (data.configs||[])) cur[c.key] = c.value
+  const mode = st.llm_mode || 'rule'
+  const modeTag = mode==='env' ? '<span class="badge" style="background:#dcfce7;color:#15803d">✅ 已接入（环境变量）</span>'
+    : mode==='db' ? '<span class="badge" style="background:#dbeafe;color:#1d4ed8">✅ 已接入（后台配置）</span>'
+    : '<span class="badge" style="background:#fef3c7;color:#b45309">⚠️ 规则模式（未接 LLM，仅话术/知识库直出）</span>'
+  const llmVal = (k)=>esc(cur[k]||'')
+  m.innerHTML = `
+  <div class="card"><b>🤖 LLM 接入</b> ${modeTag}
+    <p class="hint">OpenAI 兼容接口（硅基流动/智谱/OpenAI 均可）。保存后下一条对话即生效，无需重启。环境变量（ASSIST_LLM_*）显式接入时优先生效。</p>
     <table><tbody>
-    ${rows.map(c=>`<tr><td style="width:220px"><b>${esc(c.key)}</b><br><span class="hint">${esc(defs[c.key]||'')}</span></td>
-      <td><textarea data-k="${esc(c.key)}" style="min-height:52px">${esc(c.value)}</textarea></td></tr>`).join('')}
+      <tr><td style="width:220px"><b>llm_base_url</b><br><span class="hint">如 https://api.siliconflow.cn/v1</span></td>
+          <td><input id="cfg-llm_base_url" style="width:100%" value="${llmVal('llm_base_url')}" placeholder="https://api.siliconflow.cn/v1"></td></tr>
+      <tr><td><b>llm_api_key</b><br><span class="hint">保存后仅显示掩码；留空=清除</span></td>
+          <td><input id="cfg-llm_api_key" type="password" style="width:100%" value="${llmVal('llm_api_key')}" placeholder="sk-..."></td></tr>
+      <tr><td><b>llm_model</b></td>
+          <td><input id="cfg-llm_model" style="width:100%" value="${llmVal('llm_model')}" placeholder="deepseek-ai/DeepSeek-V4-Flash"></td></tr>
+      <tr><td><b>llm_model_backup</b><br><span class="hint">备用模型，主模型失败自动降级</span></td>
+          <td><input id="cfg-llm_model_backup" style="width:100%" value="${llmVal('llm_model_backup')}" placeholder="THUDM/glm-4-9b-chat"></td></tr>
+    </tbody></table>
+    <div class="row" style="margin-top:10px">
+      <button class="pri" onclick="saveLLM()">保存 LLM 配置</button>
+      <button onclick="testLLM()">🔌 测试连通</button>
+      <span id="llm-test-out" class="hint"></span>
+    </div>
+  </div>
+  <div class="card"><b>⚙️ 对话配置</b>
+    <table><tbody>
+    ${Object.keys(CFG_DEFS).map(k=>`<tr><td style="width:220px"><b>${esc(k)}</b><br><span class="hint">${esc(CFG_DEFS[k])}</span></td>
+      <td><textarea data-k="${esc(k)}" style="min-height:52px">${esc(cur[k]||'')}</textarea></td></tr>`).join('')}
     </tbody></table>
     <div class="row" style="margin-top:12px"><button class="pri" onclick="saveConfigs()">保存全部</button></div>
+  </div>
+  <div class="card"><b>📚 同义词归一（R0.1：口语问法对齐知识库关键词）</b>
+    <p class="hint">每行一组：「标准词=同义词1|同义词2」。用户输入命中同义词时按标准词计分（如「充钱」命中「充值」类知识）。</p>
+    <textarea data-k="synonyms" style="min-height:90px" placeholder="充值=充钱|交钱|付钱&#10;翻译=翻|转换">${esc(cur.synonyms||'')}</textarea>
+    <div class="row" style="margin-top:10px"><button class="pri" onclick="saveConfigs()">保存全部</button></div>
   </div>`
 }
-
+async function saveLLM(){
+  try{
+    for (const k of ['llm_base_url','llm_api_key','llm_model','llm_model_backup']){
+      const el = document.getElementById('cfg-'+k)
+      if (!el) continue
+      await api('config', {method:'PUT', body: JSON.stringify({key:k, value: el.value.trim()})})
+    }
+    toast('LLM 配置已保存，下一条对话生效'); render()
+  }catch(e){ toast('保存失败: '+e.message) }
+}
+async function testLLM(){
+  const out = document.getElementById('llm-test-out')
+  out.textContent = '测试中…'
+  try{
+    const r = await api('llm/test', {method:'POST'})
+    out.textContent = r.ok ? `✅ 连通：${r.model}（${r.ms}ms）` : `❌ ${r.error}`
+  }catch(e){ out.textContent = '❌ '+e.message }
+}
 async function saveConfigs(){
   for (const ta of document.querySelectorAll('textarea[data-k]')){
     await api('config', {method:'PUT', body: JSON.stringify({key: ta.dataset.k, value: ta.value})})
@@ -222,11 +270,15 @@ async function saveConfigs(){
 // ---------- 会话 ----------
 async function renderSessions(m){
   const data = await api('sessions')
+  const un = data.unanswered||[]
   m.innerHTML = `
   <div class="card"><div class="stat">
     <div><b>${data.total}</b><br><span class="hint">总会话</span></div>
     <div><b>${data.messages}</b><br><span class="hint">总消息</span></div>
+    <div><b>${un.length}</b><br><span class="hint">待补料问题</span></div>
   </div></div>
+  ${un.length? `<div class="card"><b>❓ 客人问了但我答不上（去知识库补条目，下次就能答了）</b>
+    <table><tbody>${un.map(q=>`<tr><td>${esc(q)}</td></tr>`).join('')}</tbody></table></div>`:''}
   <div class="card"><b>👥 最近会话（最新 100）</b>
   <table><thead><tr><th>会话</th><th>来源页</th><th>消息数</th><th>流程中</th><th>最后活跃</th></tr></thead><tbody>
   ${data.sessions.map(s=>`<tr>
