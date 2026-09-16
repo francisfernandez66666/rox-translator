@@ -15,10 +15,13 @@ import { Panel, Field, num } from './parts'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
 
+/** Any 模型配置出参宽松别名 */
 type Any = Record<string, any>
 
+// 行布局样式（横向排布 + 顶距）
 const rowMt: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }
 
+// 常用 OpenAI 兼容端点预设（供应商 → api_base/默认模型）
 const providerPresets: Record<string, { api_base: string; model: string }> = {
   openai: { api_base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
   gemini: { api_base: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-1.5-flash' },

@@ -707,6 +707,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 绑定联系邮箱（用于找回密码；SetUserEmail 内含占用即拒绝的最终守卫）
+	// 绑定失败不阻断建号（邮箱可由用户后续自助补绑），成功才同步内存副本供返回展示
 	if req.Email != "" {
 		if eerr := s.Store.SetUserEmail(nu.ID, tid, req.Email); eerr == nil {
 			nu.Email = req.Email
@@ -949,6 +950,7 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// 平台上下文（tid=0）下按用户实际归属租户定位
 		if tid <= 0 {
+			// 历史遗留空操作：按空用户名做全局查询无意义，结果被显式丢弃，仅占位保留
 			if matches, e := s.Store.GetUserByUsernameGlobal(""); e == nil {
 				_ = matches
 			}

@@ -54,14 +54,23 @@ import { roleLevelSafe } from '@/lib/ui'
 
 // ---- 懒加载页面组件（路由级代码分割） ----
 const Login = lazy(() => import('./components/Login'))
-const Landing = lazy(() => import('./components/Landing')) // ★ S5 官网落地页（未登录 /）
+// ★ S5 官网落地页（未登录 /）
+const Landing = lazy(() => import('./components/Landing'))
+// ChatWindow 对话翻译主窗口（懒加载分包）
 const ChatWindow = lazy(() => import('./components/ChatWindow'))
+// TicketsPage 文件工单页（懒加载分包）
 const TicketsPage = lazy(() => import('./components/TicketsPage'))
+// EditorPage 在线编辑器页（懒加载分包）
 const EditorPage = lazy(() => import('./components/EditorPage'))
+// AdminDashboard 管理后台壳（懒加载分包，内含全部后台面板）
 const AdminDashboard = lazy(() => import('./components/admin/AdminDashboard'))
+// Bell 顶部站内通知铃铛（懒加载分包）
 const Bell = lazy(() => import('./components/Bell'))
+// AccountMenu 顶部账号菜单（懒加载分包）
 const AccountMenu = lazy(() => import('./components/AccountMenu'))
+// SiteFooter 全站页脚（懒加载分包）
 const SiteFooter = lazy(() => import('./components/SiteFooter'))
+// KbUploadDialog 知识库上传对话框（懒加载分包）
 const KbUploadDialog = lazy(() => import('./components/KbUploadDialog'))
 
 // 小组件保持静态导入（避免过度拆分）

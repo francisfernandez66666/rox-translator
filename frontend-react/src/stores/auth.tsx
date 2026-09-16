@@ -46,6 +46,7 @@ interface AuthState extends AuthCtx {
   setRestoring: (v: boolean) => void
 }
 
+/** useAuthStore 登录态全局 store（uid/token/租户上下文，zustand） */
 export const useAuthStore = create<AuthState>()((set) => ({
   user: null,
   restoring: !!getAuthToken(),

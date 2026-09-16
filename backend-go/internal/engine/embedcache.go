@@ -32,6 +32,7 @@ type embedStore struct {
 	genMB int64 // 当前代累计写入字节（估算）
 }
 
+// globalEmbeds 进程级向量缓存单例（genMB 达阈值整体换代防无限膨胀）。
 var globalEmbeds = &embedStore{m: map[string][]float32{}}
 
 // embedShaKey 原文 → sha1 hex 键。

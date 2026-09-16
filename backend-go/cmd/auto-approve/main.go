@@ -84,6 +84,7 @@ func reconcileStagedHashes(st *store.Store) (int, int) {
 	return del, upd
 }
 
+// pageSize 待审数据分页拉取页大小。
 const pageSize = 500
 
 // main 一次性采集待审数据「清洗+自动审批+嵌入正式库」回填工具入口：

@@ -32,6 +32,7 @@ type ProcMetrics struct {
 	queueWaitTotalNs int64
 }
 
+// globalProcMetrics 进程级转换子进程指标单例（原子累加，无锁）。
 var globalProcMetrics ProcMetrics
 
 // RecordStart 记录子进程启动

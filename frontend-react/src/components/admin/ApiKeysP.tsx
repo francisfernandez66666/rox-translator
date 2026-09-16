@@ -14,6 +14,7 @@ import { maskKey } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { useT } from '@/i18n'
 
+/** Any API Key 面板出参宽松别名 */
 type Any = Record<string, any>
 
 /** API Key + OpenAPI 文档面板 */

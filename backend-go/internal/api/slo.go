@@ -36,6 +36,7 @@ type sloDef struct {
 	IsPct  bool    // true=百分比型（错误率=budget 消耗）；false=阈值型
 }
 
+// sloDefs SLO 目标定义表（可用性 99.9% / 翻译成功率 99% / P99 延迟 8s 上限）。
 var sloDefs = []sloDef{
 	{"availability", "服务可用性", 99.9, true},
 	{"translate_success", "翻译成功率", 99.0, true},

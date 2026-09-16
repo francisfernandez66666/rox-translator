@@ -166,9 +166,10 @@ func RoleLevel(role string) int {
 
 // IsSuperAdmin 判断性谓词，返回布尔值。
 // ★ 收紧（2026-09-16 安全整改）：等级≥4 且必须为平台级账号（tenant_id=0）。
-//   旧实现仅看角色等级，历史/旁路产生的 role='admin' AND tenant_id>0 行会自动获得
-//   全平台权能（跨租户退款 admin_billing.go、跨租户下载产物 stream.go 等）。
-//   平台超管的所有落库路径（CreateUser(0,…)/users/create 高角色强制 tid=0）均满足本谓词。
+//
+//	旧实现仅看角色等级，历史/旁路产生的 role='admin' AND tenant_id>0 行会自动获得
+//	全平台权能（跨租户退款 admin_billing.go、跨租户下载产物 stream.go 等）。
+//	平台超管的所有落库路径（CreateUser(0,…)/users/create 高角色强制 tid=0）均满足本谓词。
 func IsSuperAdmin(u *User) bool {
 	return u != nil && RoleLevel(u.Role) >= 4 && u.TenantID == 0
 }
@@ -185,8 +186,9 @@ func IsDeptAdmin(u *User) bool {
 
 // RequireRole 权限闸门：未登录报错；角色等级低于 required 时返回「权限不足」中文错误。
 // ★ 收紧（2026-09-16 安全整改）：required≥4 时额外要求平台级归属（tenant_id=0），
-//   堵住 requireAdminUser 等 level-4 闸门被租户内旧角色 admin 账号穿透
-//   （如 /api/admin/orders/refund 显式传 tenant_id 跨租户退款的实测路径）。
+//
+//	堵住 requireAdminUser 等 level-4 闸门被租户内旧角色 admin 账号穿透
+//	（如 /api/admin/orders/refund 显式传 tenant_id 跨租户退款的实测路径）。
 func RequireRole(u *User, required int) error {
 	if u == nil {
 		return errors.New("未登录")

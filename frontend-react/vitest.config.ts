@@ -11,6 +11,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     setupFiles: ['./vitest.setup.ts'],
-    include: ['src/**/*.test.ts'],
+    // ★ 2026-09-16：*.dom.test.tsx 走 jsdom（文件级 @vitest-environment 注释兜底），
+    //   admin 组件级测试（PlansP 收银台）加入闸门；其余保持 node 环境。
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
   },
 })

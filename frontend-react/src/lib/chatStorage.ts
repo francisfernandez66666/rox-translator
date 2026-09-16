@@ -9,6 +9,7 @@ import type { ChatMessage } from '@/types'
 export const MAX_MESSAGES = 200
 /** 落盘体积红线：超过则裁剪到 KEEP_ON_BLOAT 条 */
 export const BLOAT_BYTES = 2 * 1024 * 1024
+/** KEEP_ON_BLOAT 超体积裁剪后保留的最近会话条数 */
 export const KEEP_ON_BLOAT = 50
 
 /** msgsKeyFor 账号隔离键（E2）：uid 缺省/0 → ':anon'（不落盘仅内存） */

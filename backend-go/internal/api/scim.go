@@ -24,6 +24,7 @@ import (
 	"translator/internal/store"
 )
 
+// scimCT SCIM 2.0 标准 Content-Type（RFC 7644）。
 const scimCT = "application/scim+json"
 
 // scimUser SCIM User 资源（最小完备子集）。
@@ -224,6 +225,7 @@ func (s *Server) scimUserList(w http.ResponseWriter, r *http.Request, tid int64)
 	})
 }
 
+// scimEqRe 解析 IdP 过滤器 eq 单条件（userName/externalId）。
 var scimEqRe = regexp.MustCompile(`(?i)(userName|externalId)\s+eq\s+"([^"]*)"`)
 
 // scimMatchFilter 仅支持 eq 单条件（IdP 全量同步主用路径）。

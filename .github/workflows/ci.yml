@@ -82,3 +82,63 @@ jobs:
             frontend-react/artifacts
             frontend-react/test-results
           if-no-files-found: ignore
+
+  # ★ 2026-09-16 测试盲区补全（核实与修复_测试盲区补全_20260916.md 三.1）：
+  #   PG 生产方言矩阵进 CI——此前 run_uat.sh 的 PG 主矩阵靠发布机手跑（自律闸门）。
+  #   pgvector 服务容器 + run_uat.sh 全量（API 主链路 + 交易专项 T 套件 + Playwright）；
+  #   race 由 backend job 覆盖故跳过；SDK 行为级测试一并纳入。
+  uat-pg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: backend-go/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend-react/package-lock.json
+      - name: install
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+        working-directory: frontend-react
+      - name: SDK behavior tests（TS node:test + Python unittest）
+        run: |
+          ( cd sdk/typescript && npm install --no-audit --no-fund && npm test )
+          ( cd sdk/python && python3 -m unittest test_translator_sdk )
+      - name: UAT gate（PG 方言 + pgvector：API 主链路 + 交易专项 + Playwright）
+        env:
+          PGPASSWORD: postgres
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y postgresql-client
+          UAT_SKIP_RACE=1 DB_DRIVER=postgres \
+            PG_ADMIN_DSN="postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable" \
+            DB_DSN="postgres://postgres:postgres@127.0.0.1:5432/translator_uat?sslmode=disable" \
+            bash scripts/uat/run_uat.sh
+      - name: upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-pg-artifacts
+          path: |
+            frontend-react/artifacts
+            frontend-react/test-results
+          if-no-files-found: ignore

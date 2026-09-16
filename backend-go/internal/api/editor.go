@@ -198,6 +198,7 @@ func (s *Server) handleSaveSegments(w http.ResponseWriter, r *http.Request) {
 
 // ---- 段落提取 ----
 
+// baseSeg 基础段落（段落提取的中间产物，尚未叠加编辑记录）。
 type baseSeg struct {
 	Index  int
 	Source string

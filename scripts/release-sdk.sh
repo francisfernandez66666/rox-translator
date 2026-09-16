@@ -77,6 +77,13 @@ fi
 [[ "$ts_ver" == "$py_ver" && "$py_ver" == "$mod_ver" && "$mod_ver" == "$java_ver" ]] \
   || die "三端版本不一致（${ts_ver}/${py_ver}/${mod_ver}/${java_ver}）——先执行 bump 再发布"
 
+# ---------- 行为级测试门禁（2026-09-16 测试盲区补全：TS node:test + Python unittest）----------
+say "运行 TS SDK 行为级测试（node:test）"
+( cd "$TS_DIR" && npm install --no-audit --no-fund >/dev/null 2>&1 )
+( cd "$TS_DIR" && npm test --silent ) || die "TS SDK 测试失败——先修绿再发布"
+say "运行 Python SDK 行为级测试（unittest）"
+( cd "$PY_DIR" && python3 -m unittest test_translator_sdk ) || die "Python SDK 测试失败——先修绿再发布"
+
 # ---------- 构建与自检 ----------
 say "构建 TypeScript SDK（tsc → dist/）"
 [[ -d "$TS_DIR/node_modules/typescript" ]] || ( cd "$TS_DIR" && npm install --no-audit --no-fund >/dev/null ) \

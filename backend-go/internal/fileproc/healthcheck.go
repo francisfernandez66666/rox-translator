@@ -11,6 +11,7 @@ import (
 	"sync"
 )
 
+// 依赖探测单例：进程生命周期内只跑一次，结果缓存复用（/api/health anydoc_ready 数据源）。
 var (
 	healthCheckOnce sync.Once
 	healthResult    *HealthResult

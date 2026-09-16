@@ -304,6 +304,7 @@ const slaBodyZh = `
 <h2>响应时限</h2>
 <p>工单支持响应时限：P1 严重故障 2 小时内响应，P2 一般问题 8 小时内响应，P3 咨询 24 小时内响应。</p>`
 
+// slaBodyEn 英文版 SLA 公示页正文（slaBody 中文版见上方）。
 const slaBodyEn = `
 <h2>Availability Target</h2>
 <p>Monthly availability target is 99.5% (excluding scheduled maintenance and force majeure). Availability = (total minutes − unavailable minutes) ÷ total minutes.</p>

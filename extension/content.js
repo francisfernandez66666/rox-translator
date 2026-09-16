@@ -172,7 +172,10 @@
       const t = sel ? String(sel).trim() : "";
       if (!t || t.length < 2 || !cfg.baseUrl) { hideAll(); return; }
       selText = t;
-      const range = sel.getRangeAt(0).getBoundingClientRect();
+      // ★ 健壮性（2026-09-16）：异常选区下 getRangeAt 可能抛错，兜底隐藏而非未捕获异常
+      let range;
+      try { range = sel.getRangeAt(0).getBoundingClientRect(); }
+      catch { hideAll(); return; }
       ensureButton(Math.min(range.left, window.innerWidth - 40), Math.max(4, range.top - 36));
     }, 10);
   });

@@ -270,6 +270,7 @@ function h6HandleErr(st: ChatState, assistantId: string, e: unknown) {
   }
 }
 
+/** ChatStore 单会话 chat store 类型（Context 只传句柄不传状态） */
 type ChatStore = ReturnType<typeof createChatStore>
 
 // Context 只传 store 句柄（不传状态）——zustand 官方多实例模式

@@ -23,6 +23,7 @@ var phTokenRe = regexp.MustCompile(`[⟦\[【]\s*P(\d+)\s*[⟧\]】]`)
 // phGuardKey ctx 标记：本次调用启用了占位符掩码（singleLangRaw 据此注入约束注记）。
 type phGuardKeyT struct{}
 
+// phGuardKey / streamSinkKey / streamSinkInnerKey 各 ctx 键的单例实例（空结构体零开销）。
 var phGuardKey phGuardKeyT
 
 // withPHGuard 在 ctx 标记占位符保护已开启（防止逐层重复包装）。
@@ -81,6 +82,7 @@ func unmaskPlaceholders(out string, toks []string) (string, []int) {
 // ★ D20：流式增量 sink（lang 标签版，api 层注入 ctx；singleLangRaw 调用前按目标语言套壳）
 type streamSinkKeyT struct{}
 
+// streamSinkKey ctx 键单例：外层双参增量 sink（lang 标签版）。
 var streamSinkKey streamSinkKeyT
 
 // WithStreamSink 注入 token 级增量回调（func(targetLang, delta)）。
@@ -97,6 +99,7 @@ func streamSinkFromCtx(ctx context.Context) func(string, string) {
 // 内层单参 sink（按目标语言套壳后供 tryMainModel 消费；与外层不同键防类型混叠）
 type streamSinkInnerKeyT struct{}
 
+// streamSinkInnerKey ctx 键单例：内层单参增量 sink。
 var streamSinkInnerKey streamSinkInnerKeyT
 
 // withStreamSinkInner 挂内层单参流式回调（已按目标语言套壳）。

@@ -21,6 +21,7 @@ interface SdkCard {
   install: string; code: string;
 }
 const SDK_VERSION = '1.0.0'
+// SDK 卡片配置（各语言 SDK 的安装/示例代码块）
 const CARDS: SdkCard[] = [
   {
     key: 'python', icon: '🐍', pkg: 'langcross-translator', version: SDK_VERSION,
@@ -36,7 +37,9 @@ print(result.output_by_lang["en"])`,
     install: 'npm install @langcross/translator-sdk',
     code: `import { TranslatorClient } from '@langcross/translator-sdk'
 
+// 示例代码片段：客户端初始化（文档展示用，非运行实例）
 const client = new TranslatorClient({ apiKey: 'lxk_your_key', baseUrl: 'https://<站点域名>' })
+// 示例代码片段：同步翻译调用（文档展示用）
 const result = await client.translateText('您好，欢迎使用。', ['en', 'ja'])
 console.log(result.outputByLang.en)`,
   },

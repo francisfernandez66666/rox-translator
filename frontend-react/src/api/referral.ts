@@ -14,6 +14,7 @@
 import { request, API_BASE, authHeaders, type AdminResp } from './core'
 
 /** 单条邀请奖励记录（对应后端 store.ReferralRecord） */
+/** ReferralRecord 单条邀请记录（被邀人/奖励/到账态） */
 export interface ReferralRecord {
   invitee_uid: number
   invitee_name: string
@@ -26,6 +27,7 @@ export interface ReferralRecord {
 }
 
 /** 我的邀请主页数据响应（含邀请码/链接/记录/奖励统计） */
+/** ReferralMyResp 我的邀请出参（记录列表 + 汇总） */
 export interface ReferralMyResp extends AdminResp {
   ref_code?: string
   invite_url?: string
@@ -36,6 +38,7 @@ export interface ReferralMyResp extends AdminResp {
   paid_tokens?: number
 }
 
+/** ReferralFunnel 邀请漏斗（注册→付费→奖励转化） */
 export interface ReferralFunnel {
   l1_invited: number; l1_paid: number
   l2_invited: number; l2_paid: number
@@ -68,6 +71,7 @@ export async function fetchReferralQrBlob(): Promise<Blob | null> {
 }
 
 /** 邀请裂变运营参数（仅超管可读写）：总开关/奖励 token/有效期等 */
+/** ReferralConfig 邀请奖励运营配置（开关/奖励额度/日上限） */
 export interface ReferralConfig {
   enabled: boolean // 总开关（关闭后绑定与奖励全部停发）
   reward_tokens: number // 受邀注册→邀请人体验叠加 token

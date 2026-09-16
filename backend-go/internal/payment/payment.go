@@ -152,8 +152,9 @@ type WechatProvider struct {
 
 // CreateOrder 微信 Native 下单：调用 /v3/pay/transactions/native 获取 code_url。
 // ★ fail-closed（2026-09-16 整改）：真实协议（HTTP + WECHATPAY2-SHA256-RSA2048 签名）
-//   尚未实现，此前返回本地拼装的假 code_url 会让「配置齐全」的环境把废码呈现给用户。
-//   现显式报错，上层（handlePayCreate）拒绝出单；商户资质到位后在此补齐真实调用。
+//
+//	尚未实现，此前返回本地拼装的假 code_url 会让「配置齐全」的环境把废码呈现给用户。
+//	现显式报错，上层（handlePayCreate）拒绝出单；商户资质到位后在此补齐真实调用。
 func (p *WechatProvider) CreateOrder(req *PayRequest) (*PayResult, error) {
 	if p.cfg.Wechat.AppID == "" || p.cfg.Wechat.MchID == "" || p.cfg.Wechat.APIv3Key == "" {
 		return nil, fmt.Errorf("微信支付未配置（需 APP_ID / MCH_ID / APIv3_KEY）")
@@ -216,7 +217,8 @@ type AlipayProvider struct {
 
 // CreateOrder 支付宝当面付下单：调用 alipay.trade.precreate 获取收款码 qr_code。
 // ★ fail-closed（2026-09-16 整改）：真实协议（RSA2 签名 + openapi.alipay.com 调用）
-//   尚未实现，此前返回 alipay:// 占位串会让配置齐全的环境拿到不可支付的收款码。
+//
+//	尚未实现，此前返回 alipay:// 占位串会让配置齐全的环境拿到不可支付的收款码。
 func (p *AlipayProvider) CreateOrder(req *PayRequest) (*PayResult, error) {
 	if p.cfg.Alipay.AppID == "" || p.cfg.Alipay.PrivateKey == "" {
 		return nil, fmt.Errorf("支付宝未配置（需 APP_ID / PRIVATE_KEY）")

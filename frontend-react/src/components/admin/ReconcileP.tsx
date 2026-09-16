@@ -8,8 +8,10 @@ import { adminReconcile, type ReconIssue } from '@/api'
 import { Panel } from './parts'
 import { fmtTime } from '@/lib/ui'
 
+/** Any 对账出参宽松别名 */
 type Any = Record<string, unknown>
 
+// 对账规则清单（缺失支付/状态不符/金额不符/退款无流水/孤儿记录…）
 const RULES = ['missing_payment', 'status_mismatch', 'fen_mismatch', 'refund_no_flow', 'orphan_payment']
 
 // ReconcileP 后台对账页：按最近 N 天运行余额对账并展示差异

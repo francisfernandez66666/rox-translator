@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { msgsKeyFor, loadMsgs, serializeForPersist, MAX_MESSAGES } from './chatStorage'
 import type { ChatMessage } from '@/types'
 
+/** msg 构造最小会话消息（测试用厂） */
 function msg(id: string, extra: Partial<ChatMessage> = {}): ChatMessage {
   return { id, role: 'user', content: 'x', timestamp: Date.now(), ...extra } as ChatMessage
 }

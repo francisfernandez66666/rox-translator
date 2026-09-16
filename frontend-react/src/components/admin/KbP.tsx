@@ -24,14 +24,19 @@ import DataSourcesP from './DataSourcesP'
 import BrandTermsP from './BrandTermsP'
 import IndustriesP from './IndustriesP'
 
+/** Any 后端自由 JSON 出参的宽松别名（面板内字段动态取值用） */
 type Any = Record<string, any>
 
+// 行布局样式组（横向排布 + 间距/顶边框变体）
 const rowStyle: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }
+// 行布局变体（顶距 8px）
 const rowMt: any = { ...rowStyle, marginTop: 8 }
+// 行布局变体（顶距 + 虚线顶边框，分组分隔用）
 const rowTop: any = { ...rowStyle, marginTop: 8, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }
 // resStyle 校验结果文字样式：通过=绿色，不通过=红色。
 const resStyle = (ok: boolean): any => ({ color: ok ? '#1a7f37' : '#c0392b', fontSize: 13, marginTop: 6 })
 
+// 安全句支持语言（安全短语料按语言入库）
 const SAFETY_LANGS = ['en', 'ar', 'de', 'es', 'fr', 'id_lang', 'kk', 'pt', 'ru', 'th', 'tr', 'zh_hant']
   .map((x) => ({ label: x === 'id_lang' ? 'id' : x === 'zh_hant' ? 'zh-Hant' : x, value: x }))
 

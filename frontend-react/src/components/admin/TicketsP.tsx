@@ -17,9 +17,12 @@ import { Panel, Field, toastResp } from './parts'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
 
+/** Any 工单出参宽松别名（动态字段取值） */
 type Any = Record<string, any>
 
+// 行/卡片布局样式（横向排布 + 顶距/描边变体）
 const rowMt: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }
+// 卡片容器样式（描边圆角 + 内边距）
 const cardStyle: any = { border: '1px solid var(--adm-line)', borderRadius: 8, padding: 14, marginBottom: 12 }
 
 // firstTranslation 从工单 final_result JSON 中取第一个目标语种的译文（预览用；解析失败返回空串）。

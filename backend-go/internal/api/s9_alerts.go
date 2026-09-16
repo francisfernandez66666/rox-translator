@@ -12,6 +12,7 @@ import (
 	"strings"
 )
 
+// amAlert Alertmanager webhook v2 告警报文（group 内单条；status=firing/resolved）。
 type amAlert struct {
 	Status      string            `json:"status"`
 	Labels      map[string]string `json:"labels"`

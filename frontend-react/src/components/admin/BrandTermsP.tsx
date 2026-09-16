@@ -13,6 +13,7 @@ import { brandTerms, kbPackages, kbEntryAdd, kbEntryUpdate, kbEntryDelete } from
 import { langLabel } from '@/lib/langNames'
 import { useT, tpl as gtpl } from '@/i18n'
 
+/** BrandEntry 品牌固定译法条目（层级/源语/目标语/生效模块） */
 type BrandEntry = {
   id: number
   package_id: number
@@ -24,6 +25,7 @@ type BrandEntry = {
   module: string
 }
 
+/** Props 无入参（品牌术语面板为自足组件） */
 type Props = Record<string, never>
 
 // 品牌术语支持的目标语言（与「极石→ROX」方言表一致；空值后端兜底 en）

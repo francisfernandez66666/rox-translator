@@ -6,7 +6,9 @@
 // ============================================================================
 const vscode = require('vscode')
 
-const SECRET_KEY = 'langcros…iKey'
+// ★ 缺陷修复（2026-09-16 核实与修复_测试盲区补全）：旧值 'langcros…iKey' 含省略号
+//   字符（编辑器粘贴事故）——读写虽一致但属数据完整性隐患，更正为规范键名。
+const SECRET_KEY = 'langcross.apiKey'
 
 // 读取 langcross.* 插件配置（baseUrl / apiKey / 默认语言对）
 function cfg() {
@@ -202,15 +204,17 @@ class LangcrossPanel {
  };
  window.addEventListener('message', (e) => {
    const m = e.data; busy.textContent = '';
+   // ★ XSS 修复（2026-09-16）：esc 提升到监听器顶层——错误消息同样经 HTML 转义后才可入
+   //   innerHTML（旧实现仅 terms/译文路径转义，error 路径直插服务端文本，同文件口径不一致）
+   const esc = (x) => String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;');
    if (m.type === 'terms_result') {
-     const esc = (x) => String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;');
      tres.innerHTML = (m.terms || []).slice(0, 20).map((t) =>
        '<div class="out">' + esc(t.source) + ' → ' + esc(t.target) +
        ' <span style="opacity:.7">(' + esc(t.target_lang) + (t.exact ? ' · 精确' : '') + ')</span></div>').join('')
        || ('<div class="out err">' + esc(m.error || '无命中') + '</div>');
      return;
    }
-   if (m.type === 'error') { res.innerHTML = '<div class="out err">' + m.message + '</div>'; return }
+    if (m.type === 'error') { res.innerHTML = '<div class="out err">' + esc(m.message) + '</div>'; return }
    if (m.type === 'result') {
      const ts = m.translations || {};
      res.innerHTML = Object.keys(ts).map((l) => '<div class="lang">' + l + '</div><div class="out">' +

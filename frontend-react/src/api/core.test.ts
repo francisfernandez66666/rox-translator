@@ -5,6 +5,7 @@
 // ============================================================================
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
+/** Core 动态导入类型（便于单测内 vi.resetModules 后重取） */
 type Core = typeof import('./core')
 let core: Core
 let fakeWindow: { location: { href: string } }
@@ -21,6 +22,7 @@ beforeAll(async () => {
   core = await import('./core')
 })
 
+/** jsonResponse 构造 fetch mock 的 Response（含 JSON 头） */
 function jsonResponse(body: unknown, status = 200): Response {
   return {
     ok: status >= 200 && status < 300,

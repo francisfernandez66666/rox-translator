@@ -97,6 +97,54 @@ type SMTPSender struct {
 	from string // 发件人地址
 }
 
+// buildMailMessage 构造 SMTP 报文（纯文本 / 附件 multipart 两种形态）。
+// ★ 测试补全（2026-09-16）：从 SMTPSender.Send 抽取——报文结构（CRLF/RFC2047 主题/
+// base64 正文/附件 boundary）此前无法单测，现可对字节级断言。
+// 返回完整报文（含头与体）；收件人为空报错。
+func buildMailMessage(from string, m *Message) (string, error) {
+	if m == nil || m.To == "" {
+		return "", fmt.Errorf("收件人邮箱为空")
+	}
+	if len(m.Attachments) == 0 {
+		msg := "From: " + from + "\r\n" +
+			"To: " + m.To + "\r\n"
+		if m.CC != "" {
+			msg += "Cc: " + m.CC + "\r\n"
+		}
+		msg += "Subject: " + encodeMIMEHeader(m.Subject) + "\r\n" +
+			"MIME-Version: 1.0\r\n" +
+			"Content-Type: text/plain; charset=UTF-8\r\n" +
+			"Content-Transfer-Encoding: base64\r\n" +
+			"\r\n" + base64.StdEncoding.EncodeToString([]byte(m.Body))
+		return msg, nil
+	}
+	const boundary = "MIME_boundary_9f3c2a7b"
+	var sb strings.Builder
+	sb.WriteString("From: " + from + "\r\n")
+	sb.WriteString("To: " + m.To + "\r\n")
+	if m.CC != "" {
+		sb.WriteString("Cc: " + m.CC + "\r\n")
+	}
+	sb.WriteString("Subject: " + encodeMIMEHeader(m.Subject) + "\r\n")
+	sb.WriteString("MIME-Version: 1.0\r\n")
+	sb.WriteString("Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n")
+	// 正文段
+	sb.WriteString("--" + boundary + "\r\n")
+	sb.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+	sb.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
+	sb.WriteString(base64.StdEncoding.EncodeToString([]byte(m.Body)) + "\r\n")
+	// 附件段
+	for _, a := range m.Attachments {
+		sb.WriteString("--" + boundary + "\r\n")
+		sb.WriteString("Content-Type: application/pdf\r\n")
+		sb.WriteString("Content-Transfer-Encoding: base64\r\n")
+		sb.WriteString("Content-Disposition: attachment; filename=\"" + a.Name + "\"\r\n\r\n")
+		sb.WriteString(base64.StdEncoding.EncodeToString(a.Data) + "\r\n")
+	}
+	sb.WriteString("--" + boundary + "--\r\n")
+	return sb.String(), nil
+}
+
 // Send 通过 SMTP 发送邮件。
 func (s *SMTPSender) Send(m *Message) error {
 	if m == nil || m.To == "" {
@@ -107,48 +155,10 @@ func (s *SMTPSender) Send(m *Message) error {
 	if s.port != "" {
 		addr = s.host + ":" + s.port
 	}
-	// 构造邮件（含 From/To/Cc/Subject 头）
-	// 主题做 RFC2047 编码（中文主题直接发送会被部分 SMTP 服务端拒收）；
-	// 正文用 base64 传输编码，规避 8bit 非 ASCII 字符问题。
-	// 存在附件时改用 multipart/mixed，文本与附件均为 base64 段。
-	var msg string
-	if len(m.Attachments) == 0 {
-		msg = "From: " + s.from + "\r\n" +
-			"To: " + m.To + "\r\n"
-		if m.CC != "" {
-			msg += "Cc: " + m.CC + "\r\n"
-		}
-		msg += "Subject: " + encodeMIMEHeader(m.Subject) + "\r\n" +
-			"MIME-Version: 1.0\r\n" +
-			"Content-Type: text/plain; charset=UTF-8\r\n" +
-			"Content-Transfer-Encoding: base64\r\n" +
-			"\r\n" + base64.StdEncoding.EncodeToString([]byte(m.Body))
-	} else {
-		const boundary = "MIME_boundary_9f3c2a7b"
-		var sb strings.Builder
-		sb.WriteString("From: " + s.from + "\r\n")
-		sb.WriteString("To: " + m.To + "\r\n")
-		if m.CC != "" {
-			sb.WriteString("Cc: " + m.CC + "\r\n")
-		}
-		sb.WriteString("Subject: " + encodeMIMEHeader(m.Subject) + "\r\n")
-		sb.WriteString("MIME-Version: 1.0\r\n")
-		sb.WriteString("Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n")
-		// 正文段
-		sb.WriteString("--" + boundary + "\r\n")
-		sb.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
-		sb.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
-		sb.WriteString(base64.StdEncoding.EncodeToString([]byte(m.Body)) + "\r\n")
-		// 附件段
-		for _, a := range m.Attachments {
-			sb.WriteString("--" + boundary + "\r\n")
-			sb.WriteString("Content-Type: application/pdf\r\n")
-			sb.WriteString("Content-Transfer-Encoding: base64\r\n")
-			sb.WriteString("Content-Disposition: attachment; filename=\"" + a.Name + "\"\r\n\r\n")
-			sb.WriteString(base64.StdEncoding.EncodeToString(a.Data) + "\r\n")
-		}
-		sb.WriteString("--" + boundary + "--\r\n")
-		msg = sb.String()
+	// 构造邮件（含 From/To/Cc/Subject 头）：结构与编码细节见 buildMailMessage
+	msg, err := buildMailMessage(s.from, m)
+	if err != nil {
+		return err
 	}
 	// ★ 发送通道：465 用隐式 TLS 直连（crypto/tls）；587 用 smtp.SendMail（STARTTLS 自动协商）
 	auth := smtp.PlainAuth("", s.user, s.pass, s.host)

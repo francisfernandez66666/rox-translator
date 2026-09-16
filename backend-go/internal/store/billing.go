@@ -164,6 +164,7 @@ func (s *Store) Charge(tid int64, tokens int64) error {
 
 // Deduct 扣减余额；余额不足时返回 ErrInsufficientBalance。
 // 参数：tid=租户 ID，tokens=待扣减 token 数；返回错误。
+// ErrInsufficientBalance 错误哨兵：永久余额不足（deduct 等守卫式扣减路径返回，供上层识别）。
 var ErrInsufficientBalance = &errTxt{"余额不足"}
 
 // Deduct 扣减租户余额：余额不足时返回 ErrInsufficientBalance。
@@ -770,6 +771,7 @@ func incrementDailyUsageTx(tx *sql.Tx, tid, amount int64) error {
 		return nil
 	}
 	day := time.Now().UTC().Format("2006-01-02")
+	// upsert（SQLite/PG 均支持 ON CONFLICT DO UPDATE）：无当日行则新建，有则在原值上累加
 	_, err := db.Exec(tx, db.CurrentDialect(),
 		`INSERT INTO usage_daily (tenant_id, day, total) VALUES (?,?,?)
 		 ON CONFLICT(tenant_id, day) DO UPDATE SET total=usage_daily.total+?`,
@@ -991,6 +993,7 @@ func (s *Store) PackageOrderPrice(pkg *Package, tid int64) float64 {
 	if e != nil || time.Since(t) > 30*24*time.Hour {
 		return pkg.PriceMoney
 	}
+	// 五折后按分四舍五入（元×100×0.5+0.5 截断）再转回元，避免浮点直接除产生金额毛刺
 	return float64(int64(pkg.PriceMoney*100*0.5+0.5)) / 100
 }
 
@@ -1061,6 +1064,7 @@ func (s *Store) ComputeUpgradeCredit(tid int64, newPkg *Package) (*UpgradeCredit
 	if ratio <= 0 {
 		return nil, &errTxt{"当前套餐已无剩余价值，无法抵扣升级"}
 	}
+	// 抵扣金额按分四舍五入（元×100×剩余率+0.5 截断）再转回元
 	credit := float64(int(oldOrder.AmountMoney*ratio*100+0.5)) / 100.0
 	return &UpgradeCredit{OldOrderID: oldID, CreditMoney: credit, RemainTokens: remain}, nil
 }
@@ -1161,6 +1165,7 @@ func (s *Store) PriceFenPerMillionTokens() int64 {
 // TokensToFen token 数→应收金额（分），四舍五入。
 func (s *Store) TokensToFen(tokens int64) int64 {
 	r := s.PriceFenPerMillionTokens()
+	// +500000 等价 +0.5 分（分母为百万 token），纯整数实现四舍五入
 	return (tokens*r + 500000) / 1000000
 }
 
@@ -1176,6 +1181,7 @@ func (s *Store) UpdateOrderMoney(orderNo string, money float64) error {
 // 仅补 pending（paid 单以已发生的流水为准，不改历史）。
 func (s *Store) orderMoneyBackfill() {
 	rate := float64(s.PriceFenPerMillionTokens()) // 分/百万 token
+	// 分→元换算：rate(分/百万 token) × token 数 ÷ 1e8 = 元，ROUND 保留 2 位小数
 	db.Exec(s.db, db.CurrentDialect(), `UPDATE orders SET amount_money=ROUND(amount_tokens * ? / 100000000.0, 2)
 		WHERE status='pending' AND package_id=0 AND COALESCE(amount_money,0)=0 AND amount_tokens>0`,
 		rate)
@@ -1235,6 +1241,8 @@ func ensureBalanceTx(tx *sql.Tx, tid int64) error {
 // planGrantExpiry ★ C3（2026-09-12）：订阅台账到期 = DurationDays（0=不限期，
 //
 //	以 9999 哨兵表达，字典序比较天然恒真）。旧实现硬编码 t+30 天，无视包配置时长。
+//
+// 注：上方首行「chargePermanentTx 永久余额入账」为历史错位注释，实际归属下方 chargePermanentTx。
 func planGrantExpiry(pkgDays int) time.Time {
 	if pkgDays <= 0 {
 		return time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
@@ -1243,6 +1251,7 @@ func planGrantExpiry(pkgDays int) time.Time {
 }
 
 // chargePermanentTx 事务内扣减永久余额（tokens<=0 直接放行）。
+// 注：方向实为入账（balance 累加 +tokens，充值/发放场景），标题「扣减」为历史措辞。
 func chargePermanentTx(tx *sql.Tx, tid int64, tokens int64) error {
 	if tokens <= 0 {
 		return nil
@@ -1337,6 +1346,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		}
 	}
 	// 应收金额转分：套餐单取包售价，纯充值单按尺子价（分/百万 token）兜底
+	// 元→分四舍五入（+0.5 分）
 	payFen := int64(money*100 + 0.5)
 	if payFen <= 0 {
 		payFen = s.TokensToFen(tokens)
@@ -2001,6 +2011,7 @@ func (s *Store) ListInvoices(tid int64) ([]*Invoice, error) {
 //   - api_keys.key_hash 普通索引：GetAPIKeyByHash 是 OpenAPI 每次调用的热路径，
 //     此前全表扫描。
 func (s *Store) BillingIndexMigrate() {
+	// 先删同名旧索引：下方 partial unique 需占用 idx_orders_no 名称，同名普通索引会顶名冲突
 	db.Exec(s.db, db.CurrentDialect(), `DROP INDEX IF EXISTS idx_orders_no`)
 	if _, err := db.Exec(s.db, db.CurrentDialect(), `CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_no ON orders(tenant_id, order_no) WHERE order_no<>''`); err != nil {
 		log.Printf("[migrate] orders.order_no 唯一索引创建失败（疑存量重复单号，请人工核对）: %v", err)
@@ -2092,6 +2103,7 @@ func (s *Store) UsageAllByUser(from, to string) (map[int64]int64, error) {
 // ============ 商业化参数与巡检（Commit B） ============
 
 // EnsureBillingDefaults 商业化参数默认值落库（幂等；后台面板可改）。
+// 只补缺失键（WHERE NOT EXISTS），不覆盖已有人工改过的配置值。
 func (s *Store) EnsureBillingDefaults() {
 	defaults := [][2]string{
 		{"free_trial_tokens", "300000"},

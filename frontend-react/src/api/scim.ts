@@ -3,6 +3,7 @@
 // ============================================================================
 import { request, authHeaders, type AdminResp } from './core'
 
+/** ScimConfig SCIM 2.0 IdP 同步配置（Token/根组织/启停） */
 export interface ScimConfig {
   tenant_id: number
   token: string
@@ -11,6 +12,7 @@ export interface ScimConfig {
   created_at?: string
 }
 
+/** ScimGetResp 配置读取出参（endpoint 供 IdP 侧回填） */
 export interface ScimGetResp extends AdminResp {
   config?: ScimConfig
   endpoint?: string

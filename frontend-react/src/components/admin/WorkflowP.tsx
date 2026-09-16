@@ -11,6 +11,7 @@ import { fmtTime } from '@/lib/ui'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
 
+/** Any 工单流水线出参宽松别名 */
 type Any = Record<string, any>
 
 /** 流程引擎面板：流程步骤开关配置与模型评估记录 */

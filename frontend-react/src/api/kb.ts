@@ -106,7 +106,8 @@ export async function kbRecognizeFile(file: File, mergedName?: string, onProgres
 // ==================== ★ H5 大文件断点续传（分片上传） ====================
 
 export const CHUNK_SIZE = 4 * 1024 * 1024 // 4MB/片（服务端上限 8MB）
-export const CHUNK_UPLOAD_MIN = 4 * 1024 * 1024 // ≥4MB 自动走分片通道
+/** CHUNK_UPLOAD_MIN 分片上传阈值：文件 ≥4MB 自动走分片通道 */
+export const CHUNK_UPLOAD_MIN = 4 * 1024 * 1024
 
 // 生成分片上传 ID（优先 crypto.randomUUID，降级随机串）
 function newUploadId(): string {
@@ -232,6 +233,7 @@ export async function kbIndexRebuild(): Promise<AdminResp> {
 // ==================== 语言文化规范（安全句 / Gate 闸门） ====================
 
 /** 安全句实体：语言文化规范（风格/禁用词/替换对），含审核状态 */
+/** SafetyPhrase 安全短语（风格/避雷/替换词，语言文化包） */
 export interface SafetyPhrase {
   id: number
   tenant_id: number

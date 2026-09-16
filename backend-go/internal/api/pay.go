@@ -181,8 +181,8 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		//   宁可当场报错让用户/运维感知渠道未就绪，不给出不可支付的收款页。
 		log.Printf("[pay] 渠道 %s 下单失败（订单 %s 保持 pending 待人工处理）: %v", req.Channel, o.OrderNo, err)
 		writeJSON(w, 200, map[string]interface{}{"success": false,
-			"message":   "支付渠道暂不可用（" + req.Channel + "）：" + err.Error(),
-			"order_no":  o.OrderNo})
+			"message":  "支付渠道暂不可用（" + req.Channel + "）：" + err.Error(),
+			"order_no": o.OrderNo})
 		return
 	}
 	if err != nil {

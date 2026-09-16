@@ -12,6 +12,7 @@ import { fmtPoints } from '@/utils/points' // ★ S1 积分口径：奖励 token
 import { useAdmin } from '@/stores/admin'
 import { useT } from '@/i18n'
 
+/** Any 邀请返佣出参宽松别名 */
 type Any = Record<string, any>
 
 /** 推荐奖励面板：邀请码、二维码、邀请记录 */

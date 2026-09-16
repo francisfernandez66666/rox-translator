@@ -9,10 +9,13 @@ import { Button } from 'tdesign-react'
 import { request } from '@/api/core'
 import { t } from '@/i18n'
 
+/** PlanLite 定价页套餐轻量出参（积分/价格/有效期） */
 interface PlanLite { code: string; name: string; ptype: string; points: number; price_money: number; duration_days: number }
 
+// 注册归因采集的 UTM 参数名清单（落 tenants 归因字段）
 const UTMS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content']
 
+/** Landing 官网落地页：品牌展示 + 定价 + 注册归因（未登录首页） */
 export default function Landing() {
   const [plans, setPlans] = useState<PlanLite[]>([])
   const [trial, setTrial] = useState<{ points: number; days: number }>({ points: 1000, days: 14 })

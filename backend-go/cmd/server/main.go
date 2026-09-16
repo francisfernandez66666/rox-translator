@@ -130,6 +130,25 @@ func main() {
 	var db *kb.KBDatabase
 	var kbIndex *kb.Index
 
+	// ★ P0 修复（2026-09-16 双实例 e2e 实测，见《核实与修复_测试盲区补全_20260916.md》）：
+	//   迁移单飞锁必须【先于 kb.Open】获取——双实例并发启动时 kb.Open 的 PG 建表 DDL
+	//   会撞 pg_class_relname_nsp_index 唯一索引竞态（23505），败方 db=nil 退化启动
+	//   ⇒ Store=nil ⇒ 登录 500 + USDT 对账协程空指针 crash 杀进程。
+	//   锁前置后全部 DDL/种子单飞串行；锁持有独立连接（原实现挂 db.RawDB()，
+	//   而 db 恰恰是竞态受害者，鸡生蛋问题）。
+	var releaseMigLock func()
+	if config.C.DatabaseDriver == "postgres" && config.C.DatabaseDSN != "" {
+		if lockDB, lerr := sql.Open("postgres", config.C.DatabaseDSN); lerr == nil {
+			inner := acquireMigrateLock(lockDB)
+			releaseMigLock = func() {
+				inner()
+				_ = lockDB.Close() // 单飞锁随专用连接释放
+			}
+		} else {
+			log.Printf("[migrate] 迁移单飞锁独立连接打开失败（跳过单飞，风险自负）: %v", lerr)
+		}
+	}
+
 	// 打开术语数据库
 	dbPath := *kbDB
 	if dbPath == "" {
@@ -152,11 +171,8 @@ func main() {
 	// ★ 运维整改（2026-09-16）：PG 多实例滚动发布迁移单飞——kb/tenant/saas store 共享
 	//   同一连接，全部 schema 迁移在建连后立刻执行；两实例并发跑 CREATE INDEX/回填/
 	//   去重 DELETE 会锁等待与竞态。session 级 advisory lock（第二实例排队等锁，
-	//   sqlite 方言单进程天然互斥跳过），锁覆盖下方整段迁移与 Ensure* 种子。
-	var releaseMigLock func()
-	if db != nil && config.C.DatabaseDriver == "postgres" {
-		releaseMigLock = acquireMigrateLock(db.RawDB())
-	}
+	//   sqlite 方言单进程天然互斥跳过），锁覆盖 kb.Open、整段迁移与 Ensure* 种子。
+	//   （锁获取已前置到 kb.Open 之前，见上——独立连接版。）
 	// ★ 多租户迁移：tm_segments 加 tenant_id 列 + 既有数据归入 rox
 	if db != nil {
 		if err := db.EnsureTenantMigration(); err != nil {
@@ -215,6 +231,14 @@ func main() {
 	}
 	if releaseMigLock != nil {
 		releaseMigLock() // 迁移单飞锁：迁移与种子全部完成后释放
+	}
+
+	// ★ P0 修复（2026-09-16 双实例 e2e 实测）：PG 生产方言下存储初始化失败必须 fail-fast。
+	//   旧行为退化启动（Store=nil）后：登录/鉴权全 500、USDT 等周期协程空指针 crash，
+	//   假活进程占用端口且 /status 仍报 ok（基础设施层健康），比拒绝启动危险得多。
+	//   fail-fast 交由 supervisor/滚动发布重试；sqlite 单机开发场景不受影响。
+	if config.C.DatabaseDriver == "postgres" && st == nil {
+		log.Fatal("[init] PG 方言下平台存储初始化失败，拒绝退化启动（fail-fast，等待重启重试）")
 	}
 
 	// ★ 阶段一 PG 切流落地点：--init-db 仅初始化 schema（建表/默认数据）后退出，

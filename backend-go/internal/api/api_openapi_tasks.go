@@ -138,6 +138,7 @@ func (s *Server) handleOpenAPITaskCreate(w http.ResponseWriter, r *http.Request)
 		writeTaskError(w, gateErrorCode(gateErr), gateErr.Error()+"。如余额不足请充值或升级套餐")
 		return
 	}
+	// 按 Content-Type 分流：JSON=文本任务；其余（multipart）=文件批量任务
 	ct := r.Header.Get("Content-Type")
 	if strings.HasPrefix(ct, "application/json") {
 		s.openAPITaskCreateText(w, r, tid, ak)
@@ -193,6 +194,7 @@ func (s *Server) openAPITaskCreateText(w http.ResponseWriter, r *http.Request, t
 		Title       string   `json:"title"`        // 自定义标题（可选）
 		Mode        string   `json:"mode"`         // fast | pro（默认 pro）
 	}
+	// 读全量 body 后回填：先经单引号 JSON 规范化再解码（见 singleQuotedJSON）
 	rawBody, _ := io.ReadAll(r.Body)
 	r.Body = io.NopCloser(bytes.NewReader(singleQuotedJSON(rawBody)))
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Text) == "" {
@@ -251,6 +253,7 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	var headers []*multipart.FileHeader
+	// 字段名兼容 files 与 file（单文件场景常写 file，files 为空时回退）
 	if r.MultipartForm != nil {
 		headers = append(headers, r.MultipartForm.File["files"]...)
 		if len(headers) == 0 {
@@ -371,6 +374,7 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		"type": "files", "status": "queued",
 		"file_count": len(saved),
 	}
+	// 任一 PDF 为图像重负载（扫描件，走 OCR 慢链路）时打标，提示客户端处理耗时较长
 	for _, f := range saved {
 		if strings.EqualFold(filepath.Ext(f.name), ".pdf") && delivery != "text" && fileproc.PdfImageHeavy(f.path) {
 			respBody["image_heavy"] = true

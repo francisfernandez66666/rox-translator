@@ -522,7 +522,8 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": cerr.Error()})
 			return
 		}
-		nameMap, _ := s.Store.OrgNameMap()
+		nameMap, _ := s.Store.OrgNameMap() // 部门名缺失仅影响展示列，查询失败忽略
+		// orgUsage 看板展示行：内嵌用户信息 + 部门名 + 区间消耗合计
 		type orgUsage struct {
 			*store.User
 			OrgName string `json:"org_name"`
@@ -573,15 +574,17 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 组装用户明细（含组织名与用量）
+	// 用户清单查询失败降级为空列表（用量合计 total 不受影响，仍按流水统计）
 	users, err := s.Store.ListUsersByOrg(tid, orgIDs)
 	if err != nil {
 		users = []*store.User{}
 	}
-	orgs, _ := s.Store.ListOrgs(tid)
+	orgs, _ := s.Store.ListOrgs(tid) // 组织名映射失败仅影响展示，忽略
 	orgName := map[int64]string{}
 	for _, o := range orgs {
 		orgName[o.ID] = o.Name
 	}
+	// orgUsage 看板展示行：内嵌用户信息 + 部门名 + 区间消耗合计
 	type orgUsage struct {
 		*store.User
 		OrgName string `json:"org_name"`

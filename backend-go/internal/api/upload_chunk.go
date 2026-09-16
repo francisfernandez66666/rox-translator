@@ -23,6 +23,7 @@ import (
 	"time"
 )
 
+// 分片上传常量：单分片 8MB 上限、24h 过期、分片总数与单文件实际字节硬顶（防滥用）。
 const (
 	kbChunkMax     = 8 << 20 // 单分片上限 8MB
 	chunkTTL       = 24 * time.Hour
@@ -30,6 +31,7 @@ const (
 	chunkMaxActual = 500 << 20
 )
 
+// 分片上传入参校验正则：上传会话 ID / 合并产物名 / 分片文件名（防路径穿越）。
 var (
 	uploadIDRe   = regexp.MustCompile(`^[A-Za-z0-9_-]{6,64}$`)
 	mergedNameRe = regexp.MustCompile(`^kbmerged_[0-9a-f]{12}\.[A-Za-z0-9]{1,8}$`)

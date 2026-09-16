@@ -24,6 +24,7 @@ import { useAdmin } from '@/stores/admin'
 import { InvitesP, UsersP } from './panels_a' // ★ Tab 精简（2026-09-15）：成员账户并入组织 Hub 子 tab；租户管理移至「计费与套餐」Hub
 import { t, tpl } from '@/i18n'
 
+/** Any 组织管理出参宽松别名 */
 type Any = any
 
 /** 组织架构面板（超管/租户管理员/部门管理员三级视角）：

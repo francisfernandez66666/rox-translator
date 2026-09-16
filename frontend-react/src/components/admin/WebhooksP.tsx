@@ -13,6 +13,7 @@ import {
 import { Panel, toastResp } from './parts'
 import { useT } from '@/i18n'
 
+/** Any Webhook 出参宽松别名 */
 type Any = Record<string, any>
 
 /** Webhook 回调通知面板 */

@@ -19,6 +19,7 @@ import (
 	"time"
 )
 
+// 并发闸单例：FILEPROC_MAX_CONCURRENT 容量的信号量通道，惰性初始化。
 var (
 	procGateOnce sync.Once
 	procGate     chan struct{}

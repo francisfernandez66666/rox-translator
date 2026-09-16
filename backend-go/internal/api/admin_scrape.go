@@ -77,6 +77,7 @@ func (s *Server) handleKBScrapeSourceCreate(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "pack_type 仅支持 industry/locale"})
 		return
 	}
+	// Tier 优先级限 1..3，越界一律回落最低优先级 3
 	if req.Tier < 1 || req.Tier > 3 {
 		req.Tier = 3
 	}
@@ -100,6 +101,7 @@ func (s *Server) handleKBScrapeSourceUpdate(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "id 必填"})
 		return
 	}
+	// Tier 优先级限 1..3，越界一律回落最低优先级 3
 	if req.Tier < 1 || req.Tier > 3 {
 		req.Tier = 3
 	}
@@ -139,6 +141,7 @@ func (s *Server) handleKBScrapeSourceRun(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	c := crawler.New(s.Store)
+	// 复用全局引擎的 LLM 客户端，供 llm_gen 类数据源生成条目
 	if s.Engine != nil {
 		c.LLM = s.Engine.LLM
 	}

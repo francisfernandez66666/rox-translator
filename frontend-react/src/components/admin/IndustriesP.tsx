@@ -13,6 +13,7 @@ import { Button, Table, Input, Dialog, MessagePlugin, Popconfirm, Space, Tag, Sw
 import { industries, industryCreate, industryUpdate, industryStatus, industryDelete, type IndustryItem } from '@/api/industry'
 import { useT } from '@/i18n'
 
+/** Props 无入参（行业管理为自足组件） */
 type Props = Record<string, never>
 
 /** 表格时间格式：截取到分（2026-09-10T08:00:00+08:00 → 08:00） */

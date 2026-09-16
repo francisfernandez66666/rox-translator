@@ -49,6 +49,7 @@ type vcodeEntry struct {
 	exp time.Time
 }
 
+// vcodeLocal Redis 未启用时的本地验证码降级存储；vcodeLocalWrites 累计写入数（观测用）。
 var vcodeLocal = sync.Map{} // key -> vcodeEntry
 var vcodeLocalWrites int64
 

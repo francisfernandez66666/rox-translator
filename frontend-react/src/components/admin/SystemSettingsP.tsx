@@ -20,6 +20,7 @@ import { WorkflowP, ModelsP } from './panels_d'
 import BrandP from './BrandP'
 import { OpsP } from './panels_e'
 
+/** HubTab 系统与运维 Hub 的 8 个子 Tab（2026-09-15 由 20 收敛） */
 type HubTab = 'settings' | 'mailTpl' | 'workflow' | 'agreements' | 'audit' | 'ops' | 'models' | 'brand'
 
 /** 系统设置 Hub：六类平台配置子 tab（仅超管可达，入口菜单 L4 门控） */

@@ -72,6 +72,7 @@ func (s *Server) handleWebhookSave(w http.ResponseWriter, r *http.Request) {
 		MaxRetries:    req.MaxRetries,
 		RetryInterval: req.RetryInterval,
 	}
+	// 事件缺省订阅翻译完成事件
 	if hook.Events == "" {
 		hook.Events = "translation.completed"
 	}
@@ -137,6 +138,8 @@ func (s *Server) handleWebhookTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 投递 ping 事件（异步，忽略事件订阅过滤，验证回调可达）
+	// 注：DispatchWebhookForce 按租户全量启用 webhook 下发，未按 target.ID 精确投递；
+	//     此处遍历列表仅为校验该 ID 归属本租户且存在。
 	s.Store.DispatchWebhookForce(s.effTenant(r, u), "ping", map[string]interface{}{
 		"event":     "ping",
 		"tenant_id": s.effTenant(r, u),

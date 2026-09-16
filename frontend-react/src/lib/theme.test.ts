@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getTheme, isDark, cycleTheme } from './theme'
 
+/** stubGlobals 打桩 matchMedia（按 systemDark 模拟系统深色偏好） */
 function stubGlobals(systemDark: boolean) {
   const store = new Map<string, string>()
   vi.stubGlobal('localStorage', {

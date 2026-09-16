@@ -11,6 +11,7 @@ import (
 	"sync"
 )
 
+// Redis 客户端单例：双检锁惰性建连，全进程共享同一连接池。
 var (
 	mu       sync.RWMutex
 	instance *Client

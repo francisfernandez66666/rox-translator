@@ -26,6 +26,8 @@ import (
 	"translator/internal/config"
 )
 
+// 对冲重试核心常量：hedgeMaxDelay 对冲等待上限；routeRingSize 路由健康环形缓冲容量；
+// hedgeDelayBase 主/备请求间的基础对冲延迟（超时未返回即并发备路）。
 const (
 	hedgeMaxDelay  = 8 * time.Second
 	routeRingSize  = 256

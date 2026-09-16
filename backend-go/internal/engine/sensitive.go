@@ -4,6 +4,7 @@
 //     交付物该段位置写占位符，其余段照常翻译；
 //   - 输出侧：模型产出再检一遍（兑底），命中同样替换占位符；
 //   - 留痕：LogAudit(sensitive_block/sensitive_output) + CreateAlert（去重由告警侧）。
+//
 // 开关：engine.Sensitive 装载词包 且 system_config sensitive_gate_enabled != "0"。
 package engine
 
@@ -138,4 +139,4 @@ func (e *Engine) sensitiveTextGuardOutput(ctx context.Context, translations map[
 
 // sensitiveReplyBlocked 对客户统一话术（不暴露命中词与规则细节）。
 const sensitiveReplyBlocked = "⚠️ 内容合规审核：本次请求包含平台不予受理的内容，已拒绝翻译并转人工复核通道。" +
-	 "如属误判，请通过工单/客服提交原文复核（Reference: sensitive_review）。"
+	"如属误判，请通过工单/客服提交原文复核（Reference: sensitive_review）。"

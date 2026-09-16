@@ -101,6 +101,7 @@ printf "# UAT T36 测试词包\n紫火核弹T36\n" > "$WORK/sensitive_words.txt"
 ADMIN_INIT_PASSWORD=$ADMIN_INIT_PASSWORD SELFCHECK_URL="${BASE_URL}/status" \
   ADMIN_TOKEN=uat-admin-token-36 METRICS_TOKEN=uat-metrics-36 \
   SENSITIVE_WORDS_FILE="$WORK/sensitive_words.txt" \
+  MAIL_NOOP_PRINT_BODY=1 \
   USDT_TRON_BASE="http://127.0.0.1:${MOCK_CHAIN_PORT}" USDT_SCAN_INTERVAL_SEC=5 \
   nohup "$WORK/uat-server" -addr "127.0.0.1:${UAT_PORT}" -frontend frontend-react/dist -kbdb "$WORK/dev.db" \
   > "$WORK/server.log" 2>&1 < /dev/null &

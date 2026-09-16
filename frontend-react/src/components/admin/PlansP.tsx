@@ -26,6 +26,7 @@ import { fmtTime } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { useT } from '@/i18n'
 
+/** Any 计费 Hub 出参宽松别名 */
 type Any = Record<string, any>
 
 // isImage 判断字符串是否可作图片展示（data:image / 站内二维码 / http(s) 图片扩展名）。
@@ -452,6 +453,7 @@ async function uploadStaticQR(e: ChangeEvent<HTMLInputElement>) {
 async function saveUSDT() {
     try { await saveUSDTInner() } catch (e: any) { void MessagePlugin.error(e?.message || t('common.saveFail')) }
   }
+/** saveUSDTInner 实际保存逻辑（与 try/catch 包装分离，便于独立测试） */
 async function saveUSDTInner() {
     const chains = String(usdtCfg.usdt_chains || '').split(',').map((c) => c.trim()).filter(Boolean)
     if (usdtOn && !(Number(usdtCfg.usdt_rate_fen_per_usdt) > 0)) { void MessagePlugin.warning(t('billing.usdtRateRequired')); return }

@@ -20,6 +20,7 @@ import { t, tpl, useT, type Lang } from '@/i18n'
 import { industryName, industryCodeOf } from '@/lib/industries'
 import { industries as fetchIndustries } from '@/api/industry'
 
+/** Any 租户管理出参宽松别名 */
 type Any = any
 
 /** 行业 code → 当前语言展示名（列表列用） */

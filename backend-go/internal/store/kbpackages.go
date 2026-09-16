@@ -818,6 +818,7 @@ type termCacheVal struct {
 	data []*KBEntry
 }
 
+// termCacheTTL 术语缓存短 TTL：写路径已有 invalidateTermCache 联动，此为兜底时效。
 const termCacheTTL = 60 * time.Second
 
 // invalidateTermCache ★ D11：术语/包写路径联动清缓存（60s 短 TTL 之上再保一道，

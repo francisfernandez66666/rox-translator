@@ -97,6 +97,7 @@ interface AdminState {
   consumeFeedback: () => number
 }
 
+/** useAdminStore 管理后台全局 store（Tab 导航/租户切换/刷新信号） */
 export const useAdminStore = create<AdminState>()((set, get) => ({
   userRole: '',
   tenants: [],

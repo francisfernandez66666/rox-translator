@@ -51,6 +51,12 @@ func (s *Server) startUSDTReconciler() {
 
 // usdtReconcileTick 单轮对账（任一链失败不影响其余链）。
 func (s *Server) usdtReconcileTick() {
+	// ★ P0 防线（2026-09-16 双实例 e2e 实测）：退化组装（Store=nil，PG 下现已 fail-fast
+	//   拒绝启动，此处兜底 sqlite 开发场景）下周期协程空指针会杀掉整个进程——
+	//   USDT 对账属旁路任务，绝不允许其存活态威胁主服务。
+	if s.Store == nil {
+		return
+	}
 	cfg := s.Store.GetUSDTCfg()
 	if !cfg.Enabled || !cfg.AutoSettle {
 		return // 自动对账默认关闭：真链冒烟通过前不产生任何自动入账
