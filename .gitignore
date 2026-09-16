@@ -43,3 +43,7 @@ secrets.env
 #     git rm -r --cached frontend/node_modules
 #     git rm --cached $(git ls-files | grep -E "^\.(DS_Store|.*\.DS_Store)$")
 #     git commit -m "chore: untrack node_modules and .DS_Store"
+
+# ai-assist（AI 销售/客服独立服务）运行时数据
+ai-assist/data/
+ai-assist/assist-server

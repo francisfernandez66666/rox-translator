@@ -1,0 +1,455 @@
+{
+  "configs": {
+    "welcome": "你好，我是能言的 AI 助手 👋 文件翻译、对话翻译、企业术语库、积分充值……你想了解啥？或者直接说你想翻译什么，我帮你看看怎么弄最快。",
+    "persona": "你是「能言」AI翻译平台的销售顾问兼使用指导助手，微信聊天风格，真诚接地气。帮访客选对功能、手把手教用户用产品。你对产品知识了如指掌，回答有根有据不编造。",
+    "temperature": "0.7",
+    "max_tokens": "400",
+    "quick_chips": "怎么上传文件翻译？,积分怎么收费？,企业术语库怎么建？,支持哪些格式？"
+  },
+  "features": [
+    {
+      "key": "chat",
+      "name": "对话翻译",
+      "description": "聊天式即翻即用，支持上下文与风格指令",
+      "url": "/",
+      "ftype": "route",
+      "icon": "💬",
+      "sort": 10,
+      "enabled": 1
+    },
+    {
+      "key": "tickets",
+      "name": "文件翻译",
+      "description": "上传文件整单翻译，原版式交付",
+      "url": "/tickets",
+      "ftype": "route",
+      "icon": "📋",
+      "sort": 20,
+      "enabled": 1
+    },
+    {
+      "key": "editor",
+      "name": "在线编辑器",
+      "description": "译文在线校对修改",
+      "url": "/editor",
+      "ftype": "route",
+      "icon": "✍️",
+      "sort": 30,
+      "enabled": 1
+    },
+    {
+      "key": "billing",
+      "name": "充值与账单",
+      "description": "积分充值、账单明细、发票",
+      "url": "/billing",
+      "ftype": "route",
+      "icon": "💰",
+      "sort": 40,
+      "enabled": 1
+    },
+    {
+      "key": "packages",
+      "name": "我的套餐",
+      "description": "查看余额、订阅与套餐",
+      "url": "/packages",
+      "ftype": "route",
+      "icon": "🎫",
+      "sort": 50,
+      "enabled": 1
+    },
+    {
+      "key": "invites",
+      "name": "邀请有礼",
+      "description": "推荐注册拿奖励，二级分销返佣",
+      "url": "/invites",
+      "ftype": "route",
+      "icon": "🎁",
+      "sort": 60,
+      "enabled": 1
+    },
+    {
+      "key": "pricing",
+      "name": "价格页",
+      "description": "公开价格与套餐一览",
+      "url": "/pricing",
+      "ftype": "route",
+      "icon": "🏷️",
+      "sort": 70,
+      "enabled": 1
+    },
+    {
+      "key": "register",
+      "name": "免费注册",
+      "description": "注册个人版或企业版",
+      "url": "/register",
+      "ftype": "route",
+      "icon": "🚀",
+      "sort": 80,
+      "enabled": 1
+    },
+    {
+      "key": "my",
+      "name": "个人中心",
+      "description": "账号设置、邮箱绑定",
+      "url": "/my",
+      "ftype": "route",
+      "icon": "👤",
+      "sort": 90,
+      "enabled": 1
+    },
+    {
+      "key": "kbadmin",
+      "name": "知识库管理",
+      "description": "企业后台-知识库面板（上传术语/资料）",
+      "url": "/admin",
+      "ftype": "route",
+      "icon": "📚",
+      "sort": 95,
+      "enabled": 1
+    }
+  ],
+  "kb": [
+    {
+      "key": "what-is",
+      "category": "sales",
+      "title": "能言是什么",
+      "keywords": "能言,是什么,介绍,你们,干嘛的,做什么,产品,平台",
+      "link_keys": "register,pricing",
+      "priority": 9,
+      "enabled": 1,
+      "content": "能言是面向企业和团队的 AI 翻译协作平台。三块核心能力：①文件翻译——上传 docx/pptx/xlsx/pdf 等整单翻好，原版式交付；②对话翻译——聊天式即翻即用，支持上下文和风格要求；③知识库与翻译记忆——把你的术语、品牌名、历史译文沉淀下来，越用越准。计费按积分预充值，用多少扣多少，不浪费。个人和企业都能用。"
+    },
+    {
+      "key": "core-capabilities",
+      "category": "sales",
+      "title": "核心能力一览",
+      "keywords": "功能,能力,都能干,可以做什么,有哪些,亮点",
+      "link_keys": "chat,tickets",
+      "priority": 8,
+      "enabled": 1,
+      "content": "核心能力一览：①多格式文件翻译（文档/PPT/表格/PDF/字幕等）；②对话式翻译（上下文审校+风格指令）；③知识库与翻译记忆（术语、品牌名、历史译文沉淀下来，越用越准）；④行业字典（按行业沉淀表达习惯）；⑤术语保护（KB 术语必须按规定译法翻，翻错直接拦截重译）；⑥品牌名统一译法；⑦积分计费（预充值，永久有效）；⑧企业集成（SSO/组织同步/TMX/SDK/OpenAPI/Webhook）。"
+    },
+    {
+      "key": "file-formats",
+      "category": "usage",
+      "title": "支持哪些文件格式",
+      "keywords": "格式,docx,pdf,ppt,xlsx,excel,word,srt,字幕,文件类型,什么文件,txt,csv,md,json,yaml,odt,rtf,epub",
+      "link_keys": "tickets",
+      "priority": 9,
+      "enabled": 1,
+      "content": "支持的文件格式：①还原文件模式（默认）——docx/pptx/xlsx/pdf/txt/csv/md 直接输出译文文件，srt/vtt/json/yaml 以对照表（xlsx）交付，支持多目标语言打包下载；②纯文案模式——额外准入 doc/xls/ppt 老格式、odt/ods/odp、rtf/epub，交付纯文案译文 .md。翻译后版式尽量保持原样，回写失败会自动降级为纯文案 .md 附加交付，整单不会失败。"
+    },
+    {
+      "key": "two-modes",
+      "category": "usage",
+      "title": "还原文件模式 vs 纯文案模式怎么选",
+      "keywords": "模式,区别,还原,纯文案,版式,怎么选,两种",
+      "link_keys": "tickets",
+      "priority": 7,
+      "enabled": 1,
+      "content": "工单有两种模式：①还原文件模式（默认）——交付原格式的译文文件，版式还原，适合要直接给客户/上级看的正式文档；②纯文案模式——只要文字内容不要版式，交付 .md 纯文本，还能多翻老格式（doc/xls/ppt/odt/rtf/epub）。拿不准就用默认的还原模式。"
+    },
+    {
+      "key": "first-file-translate",
+      "category": "usage",
+      "title": "第一次文件翻译怎么做",
+      "keywords": "第一次,怎么用,怎么操作,上传,文件翻译,怎么翻,翻译文件,步骤,教程,新手",
+      "link_keys": "tickets",
+      "priority": 10,
+      "enabled": 1,
+      "content": "文件翻译四步走：①登录后进「文件翻译」页；②上传文件（大于 4MB 会自动分片上传，断点续传，不怕大文件）；③选源语言和目标语言（可多选，交完打包下载）；④建单——系统会先按文件规模做积分预检，确认后开始翻译，完成后回工单页下载译文。全程不用盯着，翻完有站内通知。"
+    },
+    {
+      "key": "chat-translate",
+      "category": "usage",
+      "title": "对话翻译怎么用",
+      "keywords": "对话翻译,聊天,工作台,即翻,上下文,审校,风格",
+      "link_keys": "chat",
+      "priority": 8,
+      "enabled": 1,
+      "content": "对话翻译在工作台（首页）：像聊天一样发文字，立即返回译文。支持三种玩法：①上下文审校——结合前文翻译更连贯；②风格指令——比如「正式一点」「口语化」「保留术语」，直接在对话里说；③知识库生效——你企业配的术语和品牌名会自动保护。适合零碎内容即时翻。"
+    },
+    {
+      "key": "editor",
+      "category": "usage",
+      "title": "在线编辑器是干嘛的",
+      "keywords": "编辑器,校对,修改,人工,润色,editor",
+      "link_keys": "editor",
+      "priority": 6,
+      "enabled": 1,
+      "content": "在线编辑器用来人工校对译文：文件翻完后进编辑器，左右对照源文和译文，直接改不满意的句子，改完再导出。AI 翻 + 人快速校一遍，质量更稳。"
+    },
+    {
+      "key": "kb-setup",
+      "category": "usage",
+      "title": "企业知识库怎么搭",
+      "keywords": "知识库,术语库,术语,上传资料,企业知识,怎么建,搭建,kb,tm,翻译记忆",
+      "link_keys": "kbadmin",
+      "priority": 9,
+      "enabled": 1,
+      "content": "知识库搭建三步：①管理员进后台「知识库」面板；②批量导入术语/品牌名/常用表达（大文件支持分片上传+断点续传）；③设好可见范围就能用。知识库可以按部门/企业分档授权，谁该看到哪部分你说了算。翻译时术语自动保护：命中术语的句子，译文必须用你规定的译法（术语硬闸），翻错会被拦截自动重译。"
+    },
+    {
+      "key": "tm-exchange",
+      "category": "usage",
+      "title": "翻译记忆和 TMX 交换",
+      "keywords": "翻译记忆,tm,tmx,trados,memq,memoq,记忆库",
+      "link_keys": "kbadmin",
+      "priority": 6,
+      "enabled": 1,
+      "content": "翻译记忆（TM）会把你们确认过的译文沉淀成语料，之后相似句子自动参考，越翻越一致。支持 TMX 双向交换——能和 Trados、memoQ 等传统 CAT 工具互通，历史记忆库导入导出都行。"
+    },
+    {
+      "key": "brand-terms",
+      "category": "usage",
+      "title": "品牌名统一译法",
+      "keywords": "品牌,品牌名,译法,统一,专有名词,产品名",
+      "link_keys": "kbadmin",
+      "priority": 7,
+      "enabled": 1,
+      "content": "公司名、产品名这类品牌词可以在知识库里单独配置固定译法。翻译时品牌词全程保护，保证同一个品牌名在所有译文里写法一致，不会这次翻成 A 下次翻成 B。"
+    },
+    {
+      "key": "term-gate",
+      "category": "usage",
+      "title": "术语硬闸是什么",
+      "keywords": "术语硬闸,硬闸,拦截,重译,术语不准",
+      "priority": 6,
+      "enabled": 1,
+      "content": "术语硬闸是质量保险丝：你知识库里的核心术语在源文出现时，译文必须体现规定译法，否则系统直接拦截这句、附上术语提示自动重译，直到符合为止。目的就一个：专业词绝不让 AI 自由发挥。"
+    },
+    {
+      "key": "billing-points",
+      "category": "billing",
+      "title": "积分怎么收费",
+      "keywords": "积分,怎么收费,价格,多少钱,计费,费用,贵不贵,收费,token,充值",
+      "link_keys": "pricing,billing,packages",
+      "priority": 10,
+      "enabled": 1,
+      "content": "计费按积分：①预充值制，积分永久有效不过期；②订阅套餐每月给额度，订阅首月半价（注册 30 天内）；③建翻译单前系统会先按文件规模预检积分够不够，不够不会扣一半就中断；④对话翻译按实际用量扣。具体价格和套餐上「价格页」或站内套餐页看，企业量大可以谈。"
+    },
+    {
+      "key": "billing-insufficient",
+      "category": "billing",
+      "title": "积分不够了会怎样",
+      "keywords": "积分不够,余额不足,用完了,欠费,停止,中断",
+      "link_keys": "billing,packages",
+      "priority": 8,
+      "enabled": 1,
+      "content": "积分不足时：①建单前预检会直接提示，不会扣到一半停下；②翻译中耗尽会即时中止并明确告知，充值后可继续；③页面顶部会出现余额告急横幅，一键直达充值。充值立即到账。"
+    },
+    {
+      "key": "recharge",
+      "category": "billing",
+      "title": "怎么充值",
+      "keywords": "充值,付款,支付,对公,usdt,支付方式,怎么买",
+      "link_keys": "billing,packages",
+      "priority": 9,
+      "enabled": 1,
+      "content": "充值入口：登录后顶部余额徽标或「充值与账单」页。支持在线充值和订阅套餐；海外用户可以用 USDT 付款，链上确认后自动入账。企业可对公转账。充值永久有效。"
+    },
+    {
+      "key": "invoice-refund",
+      "category": "billing",
+      "title": "发票与退款",
+      "keywords": "发票,退款,报销,普票,开票",
+      "priority": 7,
+      "enabled": 1,
+      "content": "支持开票：充值后在「充值与账单」页申请，电子普票交付。已消耗的积分不支持退款，未消耗部分可以联系客服申请，会有专人帮你处理。"
+    },
+    {
+      "key": "invite-referral",
+      "category": "sales",
+      "title": "邀请奖励与分销",
+      "keywords": "邀请,推荐,返佣,分销,奖励,裂变,好友",
+      "link_keys": "invites",
+      "priority": 7,
+      "enabled": 1,
+      "content": "邀请有礼：在「邀请有礼」页生成专属链接/二维码，好友注册你拿奖励。还有二级分销——好友付费买永久包，你拿返佣，限两级。归因数据后台可查，邀请不白邀。"
+    },
+    {
+      "key": "who-for",
+      "category": "sales",
+      "title": "适合谁用",
+      "keywords": "适合,谁用,场景,跨境电商,外贸,团队,个人,企业,译者",
+      "link_keys": "register",
+      "priority": 8,
+      "enabled": 1,
+      "content": "适合这些人：①跨境卖家/外贸——商品页、合同、邮件批量翻；②翻译团队——知识库+TM+术语硬闸保证多人输出一致；③企业出海——单点登录接入现有账号体系，部门隔离+预算管控；④个人译者——编辑器+翻译记忆提效；⑤开发者——OpenAPI+SDK 把翻译嵌进自己的系统。"
+    },
+    {
+      "key": "enterprise-features",
+      "category": "enterprise",
+      "title": "企业版能力",
+      "keywords": "企业,团队,组织,部门,权限,角色,预算,sso,scim,飞书,钉钉,单点登录",
+      "priority": 8,
+      "enabled": 1,
+      "content": "企业版能力：①组织架构——部门隔离，成员按角色授权，知识库读写权限分级管理；②部门预算——翻译消耗按部门管控；③单点登录——支持飞书/钉钉等主流办公套件；④成员与组织自动同步；⑤品牌定制——企业 Logo 与登录页样式可定制。注册时选企业版即可开通。"
+    },
+    {
+      "key": "integrations",
+      "category": "integrations",
+      "title": "API/SDK/扩展",
+      "keywords": "api,openapi,sdk,集成,开发,webhook,回调,chrome,浏览器,插件,vscode,vs code,扩展",
+      "priority": 8,
+      "enabled": 1,
+      "content": "开发者和效率工具：①OpenAPI——API Key 接入，支持整单翻译任务（创建/查询/下载）、同步短文翻译和术语检索；②SDK——Python/TypeScript/Java 三语言；③Webhook——翻译完成后自动回调通知你的系统；④Chrome 划词翻译扩展；⑤VS Code 插件（侧边栏翻译+术语检索）。"
+    },
+    {
+      "key": "security",
+      "category": "security",
+      "title": "数据安全与合规",
+      "keywords": "安全,隐私,数据,合规,敏感词,保密,泄露,审计",
+      "priority": 8,
+      "enabled": 1,
+      "content": "安全与合规：①企业数据隔离，知识库按范围授权，只有你授权的人能看到；②敏感内容兜底——命中敏感词的文本不会送进模型，整单拒译或占位处理；③操作留痕可追溯。你的数据只用于你的翻译，不做共享训练。"
+    },
+    {
+      "key": "quality-bad",
+      "category": "faq",
+      "title": "翻得不满意/失败了怎么办",
+      "keywords": "翻错,不满意,质量,失败,出错,乱,不对,降级,版式",
+      "link_keys": "tickets,editor,chat",
+      "priority": 8,
+      "enabled": 1,
+      "content": "质量问题处理：①版式还原失败会自动降级为纯文案 .md 附加交付，整单不会白翻；②译文可以在「在线编辑器」里人工校对后导出；③把术语、品牌名、行业说法配进知识库，术语硬闸会强制 AI 按你的标准翻，越配越准；④工单页可查看每单状态，异常单直接反馈给客服处理。"
+    },
+    {
+      "key": "languages",
+      "category": "faq",
+      "title": "支持哪些语言",
+      "keywords": "语言,语种,英文,日语,韩语,法语,德语,小语种,中文",
+      "link_keys": "chat,tickets",
+      "priority": 8,
+      "enabled": 1,
+      "content": "支持主流语种互翻，建单/对话时在语言选择器里直接选（支持多目标语言，一次建单打包交付）。冷门语种覆盖以选择器实际列表为准。"
+    },
+    {
+      "key": "cost-estimate",
+      "category": "faq",
+      "title": "翻译一份文件大概多少积分",
+      "keywords": "多少积分,耗多少,扣多少,一份,一页,成本,预算",
+      "link_keys": "billing,pricing",
+      "priority": 8,
+      "enabled": 1,
+      "content": "消耗取决于文件规模和语向，系统在建单前会做积分预检——上传后就能看到这一单大概要多少积分，确认了才扣，不会盲扣。账单明细里每笔消耗都可查。"
+    },
+    {
+      "key": "trial",
+      "category": "faq",
+      "title": "能免费试用吗",
+      "keywords": "免费,试用,体验,先试试,白嫖,赠送",
+      "link_keys": "register,pricing",
+      "priority": 8,
+      "enabled": 1,
+      "content": "可以低成本体验：注册后按站内当期活动赠送体验额度（以注册页展示为准），对话翻译翻几句就能感受质量；再花几块钱积分就能试一单文件翻译。觉得好再充值，积分永久有效不吃亏。"
+    },
+    {
+      "key": "contact-human",
+      "category": "faq",
+      "title": "怎么联系人工",
+      "keywords": "人工,客服,联系,电话,邮箱,找你们,销售,咨询,商务",
+      "priority": 9,
+      "enabled": 1,
+      "content": "人工通道：①站内「反馈」入口提交问题，会有专人跟进；②商务/企业采购可直接说需求（规模、语向、行业），我帮你转给销售顾问对接。紧急问题优先走站内反馈，处理记录可追溯。"
+    },
+    {
+      "key": "bigfile",
+      "category": "usage",
+      "title": "大文件和批量翻译",
+      "keywords": "大文件,批量,很多文件,多个,慢,超时,断点",
+      "link_keys": "tickets",
+      "priority": 7,
+      "enabled": 1,
+      "content": "大文件没问题：超过 4MB 自动分片上传+断点续传，网断了重新传接着走。批量翻译直接一次上传多份、或单文件选多个目标语言，完成后打包下载。翻译在后台异步跑，关页面也不影响，翻完站内+邮件通知。"
+    },
+    {
+      "key": "account-email",
+      "category": "usage",
+      "title": "账号与邮箱",
+      "keywords": "账号,注册,登录,邮箱,密码,忘记,验证码,改绑",
+      "link_keys": "my,register",
+      "priority": 6,
+      "enabled": 1,
+      "content": "账号相关：①注册分个人版/企业版，企业版有组织管理；②忘记密码走登录页「忘记密码」，验证码发到绑定邮箱；③绑定/换绑邮箱在个人中心；④建议绑定邮箱，找回账号全靠它。"
+    }
+  ],
+  "scripts": [
+    {
+      "key": "welcome",
+      "stype": "greeting",
+      "title": "默认欢迎词",
+      "keywords": "",
+      "content": "你好，我是能言的 AI 助手 👋 文件翻译、对话翻译、企业术语库、积分充值……你想了解啥？或者直接说你想翻译什么，我帮你看看怎么弄最快。",
+      "priority": 9,
+      "enabled": 1,
+      "link_keys": ""
+    },
+    {
+      "key": "kb-how",
+      "stype": "keyword",
+      "title": "企业术语库咨询（话术直配）",
+      "keywords": "术语库,知识库,企业知识,建库",
+      "content": "企业术语库在后台「知识库」面板搭：导入术语和品牌名 → 设可见范围 → 翻译自动生效。术语硬闸会强制译文用你的规定译法，专业词不再自由发挥。我带你去看入口？",
+      "priority": 8,
+      "enabled": 1,
+      "link_keys": "kbadmin,tickets"
+    },
+    {
+      "key": "price-how",
+      "stype": "keyword",
+      "title": "价格咨询（话术直配）",
+      "keywords": "价格,多少钱,收费,贵不贵,优惠",
+      "content": "按积分预充值：积分永久有效；订阅首月半价（注册 30 天内）。建单前有积分预检，先看价再扣费，不盲扣。具体套餐价格我带你去价格页看？",
+      "priority": 8,
+      "enabled": 1,
+      "link_keys": "pricing,billing,packages"
+    },
+    {
+      "key": "offtopic",
+      "stype": "keyword",
+      "title": "无关话题引导",
+      "keywords": "",
+      "content": "这个我帮不上太多，咱还是聊翻译～你是想翻文件还是日常对话用？我帮你推荐最省积分的用法。",
+      "priority": 1,
+      "enabled": 1,
+      "link_keys": ""
+    },
+    {
+      "key": "fallback",
+      "stype": "fallback",
+      "title": "兜底回复",
+      "keywords": "",
+      "content": "这个问题我记下了，稍后帮你确认。你可以先说说想翻译什么、翻成什么语言，我先帮你把功能选对。",
+      "priority": 5,
+      "enabled": 1,
+      "link_keys": ""
+    }
+  ],
+  "flows": [
+    {
+      "key": "onboard",
+      "name": "新手三步上手",
+      "description": "引导新用户从注册到完成第一次翻译",
+      "trigger_keywords": "新手,刚开始,第一次,不会用,怎么开始,上手,入门,引导",
+      "enabled": 1,
+      "steps_json": "[{\"ask\":\"好嘞，三步就能上手：第一步，注册个账号。个人版还是企业版？企业的话选企业版，能拉团队、管权限。\",\"wait\":true,\"actions\":[\"register\"]},{\"ask\":\"第二步，翻你的第一份文件：进「文件翻译」页，上传文件 → 选语言 → 建单（会先做积分预检）→ 翻完下载。大于 4MB 自动分片，放心传。\",\"wait\":true,\"actions\":[\"tickets\"]},{\"ask\":\"第三步，日常零碎翻译用「对话翻译」，像聊天一样即发即翻，还能下风格指令（比如「正式一点」）。去试试？有问题随时回来问我～\",\"wait\":true,\"actions\":[\"chat\"]}]"
+    },
+    {
+      "key": "recharge-guide",
+      "name": "充值与积分指引",
+      "description": "引导用户查余额、充值、开发票",
+      "trigger_keywords": "充值,积分不够,余额,付款,开发票,续费",
+      "enabled": 1,
+      "steps_json": "[{\"ask\":\"先看余额：顶部余额徽标或「我的套餐」页都能看，所有页面统一积分口径。\",\"wait\":true,\"actions\":[\"packages\"]},{\"ask\":\"充值在「充值与账单」页：支持在线充值和订阅套餐（首月半价，注册 30 天内）；海外可以 USDT；企业可对公。积分永久有效。\",\"wait\":true,\"actions\":[\"billing\"]},{\"ask\":\"需要报销的话，充值后在账单页申请开票，电子普票。还有什么要确认的随时说～\",\"wait\":true,\"actions\":[\"billing\"]}]"
+    },
+    {
+      "key": "kb-setup-flow",
+      "name": "企业知识库搭建流程",
+      "description": "手把手建术语库/知识库",
+      "trigger_keywords": "建知识库,搭知识库,术语库怎么建,企业术语",
+      "enabled": 1,
+      "steps_json": "[{\"ask\":\"建库第一步：管理员进后台「知识库」面板，支持批量导入术语、品牌名、常用表达，大文件分片上传不怕大。\",\"wait\":true,\"actions\":[\"kbadmin\"]},{\"ask\":\"第二步：设置可见范围——部门 > 跨部门 > 企业 > 行业 > 通用包，五档按优先级生效，谁该看到哪部分你说了算。\",\"wait\":true,\"actions\":[]},{\"ask\":\"第三步：直接开一单翻译验证效果——命中术语的句子会用你的规定译法（术语硬闸保证），翻完在编辑器里复核一遍。要现在去建？\",\"wait\":true,\"actions\":[\"tickets\",\"kbadmin\"]}]"
+    }
+  ]
+}

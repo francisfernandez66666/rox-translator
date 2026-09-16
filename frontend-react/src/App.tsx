@@ -72,6 +72,8 @@ const AccountMenu = lazy(() => import('./components/AccountMenu'))
 const SiteFooter = lazy(() => import('./components/SiteFooter'))
 // KbUploadDialog 知识库上传对话框（懒加载分包）
 const KbUploadDialog = lazy(() => import('./components/KbUploadDialog'))
+// AiAssist AI 销售/客服常驻挂件（除登录/注册页外全站显示；★ autosales）
+const AiAssist = lazy(() => import('./components/AiAssist'))
 
 // 小组件保持静态导入（避免过度拆分）
 import { ReferralPanel, MyPackagePanel, AccountPanel } from './components/selfservice'
@@ -250,6 +252,8 @@ function FrontShell() {
                         onClose={() => setCtxNoEmail(false)}
                         onDone={() => setCtxNoEmail(false)} />
       )}
+      {/* ★ autosales：AI 销售/客服挂件（前台常驻，登录/注册页自动隐藏） */}
+      <Suspense fallback={null}><AiAssist /></Suspense>
     </div>
     </Suspense>
   )
@@ -272,12 +276,16 @@ function Root() {
       return (
         <Suspense fallback={<PageLoading />}>
           <Landing />
+          {/* ★ autosales：落地页常驻 AI 接待挂件 */}
+          <AiAssist />
         </Suspense>
       )
     }
     return (
       <Suspense fallback={<PageLoading />}>
         <Login mode={path.startsWith('/admin') ? 'admin' : 'home'} onLogin={(u) => { onLogin(u); if (path.startsWith('/admin') && roleLevelSafe(u.role) < 2) navigate('/') }} />
+        {/* ★ autosales：挂件内部对 /login、/register 自隐藏，其余未登录路径仍可接待 */}
+        <AiAssist />
       </Suspense>
     )
   }
@@ -285,6 +293,8 @@ function Root() {
     return roleLevelSafe(user.role) >= 2 ? (
       <Suspense fallback={<PageLoading />}>
         <AdminDashboard />
+        {/* ★ autosales：管理后台常驻挂件 */}
+        <AiAssist />
       </Suspense>
     ) : (
       <div style={{ padding: 40 }}>
@@ -292,7 +302,12 @@ function Root() {
       </div>
     )
   }
-  return <FrontShell />
+  return (
+    <>
+      <FrontShell />
+      {/* ★ autosales：FrontShell 内已含挂件，此处不重复渲染 */}
+    </>
+  )
 }
 
 // ---- 应用根组件 ----

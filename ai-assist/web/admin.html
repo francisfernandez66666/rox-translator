@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 助手管理台 · 能言</title>
+<style>
+  :root{--brand:#2f47f5;--bg:#f5f7fa;--card:#fff;--line:#e5e8ef;--txt:#1f2329;--sub:#6b7280}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--txt)}
+  header{background:var(--card);border-bottom:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:16px}
+  header h1{font-size:17px}
+  header .sp{flex:1}
+  header input{width:220px;padding:6px 10px;border:1px solid var(--line);border-radius:6px}
+  nav{display:flex;gap:4px;padding:12px 24px 0;flex-wrap:wrap}
+  nav button{border:none;background:transparent;padding:8px 16px;cursor:pointer;border-radius:8px 8px 0 0;color:var(--sub);font-size:14px}
+  nav button.on{background:var(--brand);color:#fff}
+  main{padding:16px 24px 48px;max-width:1200px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:8px 6px;text-align:left;vertical-align:top}
+  th{color:var(--sub);font-weight:600;background:#fafbfd}
+  td .mini{color:var(--sub);font-size:12px;display:block;max-width:420px;white-space:pre-wrap;max-height:88px;overflow:auto}
+  button.act{border:1px solid var(--line);background:#fff;border-radius:6px;padding:3px 10px;cursor:pointer;font-size:12px}
+  button.act:hover{border-color:var(--brand);color:var(--brand)}
+  button.pri{background:var(--brand);color:#fff;border:none;border-radius:6px;padding:7px 16px;cursor:pointer}
+  input,textarea,select{border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit;width:100%}
+  textarea{min-height:80px;resize:vertical}
+  .form{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .form .full{grid-column:1/-1}
+  .form label{font-size:12px;color:var(--sub);display:block;margin-bottom:4px}
+  .stat{display:flex;gap:24px}
+  .stat b{font-size:24px;color:var(--brand)}
+  .badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eef2ff;color:var(--brand)}
+  .badge.off{background:#f3f4f6;color:#9ca3af}
+  .toast{position:fixed;top:16px;right:16px;background:#1f2329;color:#fff;padding:8px 16px;border-radius:8px;opacity:0;transition:.3s;pointer-events:none}
+  .toast.show{opacity:.95}
+  dialog{border:1px solid var(--line);border-radius:12px;padding:20px;width:min(720px,92vw)}
+  dialog::backdrop{background:rgba(0,0,0,.35)}
+  .hint{color:var(--sub);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🤖 AI 助手管理台</h1>
+  <span class="hint">知识库 · 话术 · 流程 · 功能入口 · 配置</span>
+  <div class="sp"></div>
+  <input id="tok" type="password" placeholder="管理 Token（ASSIST_ADMIN_TOKEN）" onchange="saveTok()">
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<div class="toast" id="toast"></div>
+
+<script>
+const TABS = [
+  ['kb','📚 知识库'], ['scripts','💬 话术'], ['flows','🔀 流程'],
+  ['features','🚪 功能入口'], ['config','⚙️ 配置'], ['sessions','👥 会话记录'],
+]
+// 反代前缀：通过主站 /assist-api 代理访问时，API 请求需带同前缀
+const PRE = location.pathname.includes('/assist-api') ? '/assist-api' : ''
+let tab = 'kb'
+let cache = {}
+
+function saveTok(){ localStorage.setItem('assist_tok', document.getElementById('tok').value) }
+function tok(){ return document.getElementById('tok').value || localStorage.getItem('assist_tok') || '' }
+
+function toast(msg){
+  const t = document.getElementById('toast')
+  t.textContent = msg; t.classList.add('show')
+  setTimeout(()=>t.classList.remove('show'), 2200)
+}
+
+async function api(path, opt={}){
+  const res = await fetch(PRE + '/api/assist/admin/'+path, {
+    ...opt,
+    headers: {'Content-Type':'application/json','X-Assist-Admin': tok()},
+  })
+  if (res.status === 401){ toast('Token 无效，请先在右上角填入'); throw new Error('unauthorized') }
+  return res.json()
+}
+
+function esc(s){ const d=document.createElement('div'); d.textContent=s??''; return d.innerHTML }
+
+// ---------- 渲染 ----------
+function renderNav(){
+  document.getElementById('nav').innerHTML = TABS.map(([k,l]) =>
+    `<button class="${k===tab?'on':''}" onclick="switchTab('${k}')">${l}</button>`).join('')
+}
+function switchTab(k){ tab=k; renderNav(); render() }
+
+async function render(){
+  const m = document.getElementById('main')
+  m.innerHTML = '<p class="hint">加载中…</p>'
+  try{
+    if (tab==='kb') await renderCRUD(m,'kb','知识库条目',['category|分类(sales/usage/billing/faq…)','title|标题','content|内容(用户视角)','keywords|触发词(逗号分隔)','link_keys|关联入口key(逗号分隔)','priority|优先级(1-10)'],['key'])
+    else if (tab==='scripts') await renderCRUD(m,'scripts','话术',['stype|类型(greeting/keyword/fallback)','title|名称','content|话术内容','keywords|触发词(keyword类用)','priority|优先级'],['key'])
+    else if (tab==='flows') await renderCRUD(m,'flows','流程',['name|名称','description|说明','trigger_keywords|触发词(逗号分隔)','steps_json|步骤JSON(steps数组: ask/wait/actions/keys)','priority|'],['key'])
+    else if (tab==='features') await renderCRUD(m,'features','功能入口',['name|名称','description|说明','url|跳转地址','ftype|类型(route=站内路由/link=外链)','icon|图标','sort|排序'],['key'])
+    else if (tab==='config') await renderConfig(m)
+    else if (tab==='sessions') await renderSessions(m)
+  }catch(e){ m.innerHTML = '<p class="hint">加载失败: '+esc(e.message)+'</p>' }
+}
+
+// ---------- 通用 CRUD ----------
+const FIELD_LABELS = {} // id->label 映射由调用方传入
+
+async function renderCRUD(m, table, title, fields, idFields){
+  const data = await api(table)
+  cache[table] = data.rows
+  const cols = fields.map(f=>f.split('|')[0])
+  const html = `
+  <div class="card">
+    <div class="row">
+      <b>${title}</b><span class="hint">共 ${data.rows.length} 条</span>
+      <div class="sp" style="flex:1"></div>
+      <button class="pri" onclick="openForm('${table}', null)">＋ 新增</button>
+    </div>
+    <table><thead><tr>
+      <th>#</th><th>key</th>${cols.map(c=>`<th>${esc(fields.find(f=>f.startsWith(c+'|')).split('|')[1]||c)}</th>`).join('')}<th>启用</th><th>操作</th>
+    </tr></thead><tbody>
+    ${data.rows.map(r=>`<tr>
+      <td>${r.id}</td>
+      <td><span class="badge">${esc(r.key)}</span></td>
+      ${cols.map(c=>{
+        let v = r[c]??''
+        if (c==='steps_json') return `<td><span class="mini">${esc(v)}</span></td>`
+        if (c==='content') return `<td><span class="mini">${esc(String(v).slice(0,160))}</span></td>`
+        return `<td>${esc(String(v).slice(0,60))}</td>`
+      }).join('')}
+      <td>${r.enabled?'<span class="badge">启用</span>':'<span class="badge off">停用</span>'}</td>
+      <td>
+        <button class="act" onclick="openForm('${table}', ${r.id})">编辑</button>
+        <button class="act" onclick="toggleRow('${table}', ${r.id}, ${r.enabled?0:1})">${r.enabled?'停用':'启用'}</button>
+        <button class="act" onclick="delRow('${table}', ${r.id})">删除</button>
+      </td>
+    </tr>`).join('')}
+    </tbody></table>
+  </div>
+  <dialog id="dlg">
+    <h3 id="dlg-title" style="margin-bottom:12px"></h3>
+    <div class="form" id="dlg-form"></div>
+    <div class="row" style="margin-top:16px;justify-content:flex-end">
+      <button class="act" onclick="document.getElementById('dlg').close()">取消</button>
+      <button class="pri" onclick="submitForm('${table}')">保存</button>
+    </div>
+  </dialog>`
+  m.innerHTML = html
+  m._fields = fields; m._idFields = idFields
+}
+
+function openForm(table, id){
+  const m = document.getElementById('main')
+  const fields = m._fields
+  const row = id ? cache[table].find(r=>r.id===id) : {}
+  document.getElementById('dlg-title').textContent = (id?'编辑':'新增')+'（'+table+'）'
+  document.getElementById('dlg-form').innerHTML = fields.map(f=>{
+    const [c,label] = f.split('|')
+    const v = row[c] ?? (c==='priority'||c==='sort' ? 5 : '')
+    if (c==='content' || c==='steps_json')
+      return `<div class="full"><label>${esc(label||c)}</label><textarea id="f-${c}" data-f="${c}">${esc(v)}</textarea></div>`
+    return `<div><label>${esc(label||c)}</label><input id="f-${c}" data-f="${c}" value="${esc(v)}"></div>`
+  }).join('') + `<div class="full"><label>key（唯一标识）</label><input id="f-key" value="${esc(row.key??'')}"></div>
+  <div class="full"><label><input type="checkbox" id="f-enabled" style="width:auto" ${(!id||row.enabled)?'checked':''}> 启用</label></div>`
+  document.getElementById('dlg').showModal()
+}
+
+async function submitForm(table){
+  const m = document.getElementById('main')
+  const body = { key: document.getElementById('f-key').value.trim(), enabled: document.getElementById('f-enabled').checked?1:0 }
+  m._fields.forEach(f=>{
+    const c = f.split('|')[0]
+    const el = document.getElementById('f-'+c)
+    if (!el) return
+    if (c==='priority'||c==='sort') body[c] = parseInt(el.value)||0
+    else body[c] = el.value
+  })
+  const dlg = document.getElementById('dlg')
+  try{
+    await api(table, {method:'POST', body: JSON.stringify(body)})
+    toast('已保存'); dlg.close(); render()
+  }catch(e){ toast('保存失败: '+e.message) }
+}
+
+async function toggleRow(table, id, enabled){
+  await api(table+'?id='+id, {method:'PUT', body: JSON.stringify({enabled})})
+  toast('已更新'); render()
+}
+async function delRow(table, id){
+  if (!confirm('确认删除 #'+id+'？')) return
+  await api(table+'?id='+id, {method:'DELETE'})
+  toast('已删除'); render()
+}
+
+// ---------- 配置 ----------
+async function renderConfig(m){
+  const data = await api('config')
+  const defs = {
+    welcome:'欢迎词（会话首次打开时下发）',
+    persona:'人设（系统提示词第一段）',
+    temperature:'温度（0-1）',
+    max_tokens:'回复最大 token',
+    quick_chips:'快捷提问 chips（逗号分隔，前端展示）',
+  }
+  const rows = data.configs
+  m.innerHTML = `<div class="card"><b>⚙️ 全局配置</b>
+    <table><tbody>
+    ${rows.map(c=>`<tr><td style="width:220px"><b>${esc(c.key)}</b><br><span class="hint">${esc(defs[c.key]||'')}</span></td>
+      <td><textarea data-k="${esc(c.key)}" style="min-height:52px">${esc(c.value)}</textarea></td></tr>`).join('')}
+    </tbody></table>
+    <div class="row" style="margin-top:12px"><button class="pri" onclick="saveConfigs()">保存全部</button></div>
+  </div>`
+}
+
+async function saveConfigs(){
+  for (const ta of document.querySelectorAll('textarea[data-k]')){
+    await api('config', {method:'PUT', body: JSON.stringify({key: ta.dataset.k, value: ta.value})})
+  }
+  toast('配置已保存')
+}
+
+// ---------- 会话 ----------
+async function renderSessions(m){
+  const data = await api('sessions')
+  m.innerHTML = `
+  <div class="card"><div class="stat">
+    <div><b>${data.total}</b><br><span class="hint">总会话</span></div>
+    <div><b>${data.messages}</b><br><span class="hint">总消息</span></div>
+  </div></div>
+  <div class="card"><b>👥 最近会话（最新 100）</b>
+  <table><thead><tr><th>会话</th><th>来源页</th><th>消息数</th><th>流程中</th><th>最后活跃</th></tr></thead><tbody>
+  ${data.sessions.map(s=>`<tr>
+    <td><span class="badge">${esc(s.id)}</span></td>
+    <td>${esc(s.page_url||'-')}</td><td>${s.msg_count}</td>
+    <td>${s.in_flow?esc(s.in_flow):'-'}</td>
+    <td>${esc(String(s.last_at||'').slice(0,19))}</td>
+  </tr>`).join('')}
+  </tbody></table></div>`
+}
+
+// ---------- 启动 ----------
+document.getElementById('tok').value = localStorage.getItem('assist_tok')||''
+renderNav(); render()
+</script>
+</body>
+</html>

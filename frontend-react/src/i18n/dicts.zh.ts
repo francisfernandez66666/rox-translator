@@ -450,6 +450,7 @@ export const baseZh: Record<string,string> = {
   'admin.menuMailTpl': '邮件模板',
   'admin.menuDataSources': '🕷️ 数据采集',
   'admin.menuSystem': '🧭 系统与运维',
+  'admin.menuAssist': '🤖 AI 助手',
   'brand.title': '品牌定制',
   'brand.hint': '自定义子域名前缀、品牌名称与 Logo（以「前缀.lexicorn.cn」访问自动生效）。页脚链接为平台级设置，见本页「页脚链接」子页。',
   'brand.locked': '品牌定制为套餐付费功能，需订阅有效付费套餐（且在有效期内）后才能编辑/解锁；当前租户未满足，仅可查看。',

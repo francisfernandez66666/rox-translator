@@ -33,6 +33,7 @@ import { KbP, ModelsP, WorkflowP, TicketsP } from './panels_d'
 import { OpsP } from './panels_e'
 import { ReconcileP } from './ReconcileP' // ★ F9 对账视图
 import BillingHubP from './BillingHubP'
+import AssistP from './AssistP' // ★ autosales：AI 助手管理
 
 // 菜单项接口定义：key 对应 admin store 中的面板标识，minLevel 为可见最低角色等级
 interface Item { key: PanelKey; label: string; minLevel: number }
@@ -57,6 +58,7 @@ const ITEMS: Item[] = [
   { key: 'external', label: 'admin.menuExternal', minLevel: 3 },
   { key: 'billing', label: 'hub.menuBilling', minLevel: 3 },
   { key: 'system', label: 'admin.menuSystem', minLevel: 4 },
+  { key: 'assist', label: 'admin.menuAssist', minLevel: 3 }, // ★ autosales：AI 助手管理（超管/租户管理员）
 ]
 
 /** 根据当前选中的面板 key 返回对应组件（集中分发，避免在 JSX 中写长 switch） */
@@ -90,6 +92,7 @@ function renderPanel(p: PanelKey) {
     case 'footer': return <FooterP />
     case 'dataSources': return <DataSourcesP />
     case 'billing': return <BillingHubP /> // ★ Tab 精简：计费 Hub（套餐/租户/对账）
+    case 'assist': return <AssistP /> // ★ autosales：AI 助手管理（内嵌 ai-assist 管理台）
     default: return null
   }
 }

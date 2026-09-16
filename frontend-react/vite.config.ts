@@ -20,6 +20,8 @@ export default defineConfig({
       '/office': { target: 'http://127.0.0.1:8787', changeOrigin: true },
       '/metrics': { target: 'http://127.0.0.1:8787', changeOrigin: true },
       '/status': { target: 'http://127.0.0.1:8787', changeOrigin: true },
+      // ★ autosales：ai-assist 独立服务（AI 销售/客服），开发期代理到 8790
+      '/assist-api': { target: 'http://127.0.0.1:8790', changeOrigin: true, rewrite: (p) => p.replace(/^\/assist-api/, '') },
     },
   },
 })
