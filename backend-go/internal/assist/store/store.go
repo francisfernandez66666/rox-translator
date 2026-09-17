@@ -8,14 +8,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
-// DB 数据库句柄
+// DB 数据库句柄：封装 *sql.DB，所有表存取方法均挂在 DB 上。
 type DB struct {
-	sql *sql.DB
+	sql *sql.DB // 底层 SQLite 连接（已设 WAL + 单写者，见 Open）
 }
 
 // Open 打开（必要时创建）SQLite 数据库并建表
@@ -313,6 +314,42 @@ func (d *DB) SetConfig(key, value string) error {
 
 // AllConfigs 全部配置
 func (d *DB) AllConfigs() ([]Row, error) { return d.List("configs", false) }
+
+// ============================================================
+// 主服务库只读桥接（★ 改造 1A，2026-09-17）
+// ============================================================
+
+// ReadMainDBConfig 只读打开主服务 SQLite，读取 system_config 中某个键的原始值。
+//
+// 用途：assist-server 启动时从主库取 assist_admin_token（enc:v1: 密文），
+// 与主后台 /api/admin/assist/token 同源，实现「管理台 Token 免手填」。
+//
+// 只读语义（mode=ro）：绝不建表、绝不写入，避免与主服务写锁竞争、也避免误改业务库。
+// 任何失败（文件不存在/非 SQLite/表缺失）均返回空串——调用方据此回落到 env 或默认值，
+// 不阻断 assist 启动（assist 挂掉只影响挂件，不应因主库读不到而整体不可用）。
+//
+// 注意：主服务切换到 PostgreSQL（DB_DRIVER=postgres）时本函数不可用，
+// 该形态下需以 env ASSIST_ADMIN_TOKEN 为准（部署侧显式配置，优先级本就最高）。
+//
+// 参数：path=主服务 SQLite 文件路径；key=system_config 键名。返回：原始值（无则 ""）。
+func ReadMainDBConfig(path, key string) string {
+	if strings.TrimSpace(path) == "" || strings.TrimSpace(key) == "" {
+		return ""
+	}
+	if _, err := os.Stat(path); err != nil {
+		return "" // 文件不存在：静默回落（常见于主服务尚未初始化）
+	}
+	s, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(2000)")
+	if err != nil {
+		return ""
+	}
+	defer s.Close()
+	var v string
+	if err := s.QueryRow("SELECT value FROM system_config WHERE key=?", key).Scan(&v); err != nil {
+		return ""
+	}
+	return v
+}
 
 // ============================================================
 // 会话与消息

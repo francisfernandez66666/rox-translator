@@ -50,6 +50,7 @@ func New(db *sql.DB) (*Store, error) {
 	s.SCIMMigrate()               // ★ H10 SCIM 2.0 配置表 + users.scim_external_id（幂等）
 	s.QuotaGrantMigrate()         // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
 	s.TicketStateTimingMigrate()  // ★ ticket_state 增加 started_at/duration_ms（幂等；进度耗时展示）
+	s.TicketQualityMigrate()      // ★ 改造 4/5（2026-09-17）：tickets 增加 quality_flagged/qa_errors/qa_warnings（幂等；质检透出）
 	s.BalanceAccountMigrate()     // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
 	s.OrgSiblingUniqueMigrate()   // ★ P0-2（2026-09-15）：orgs 同级同名唯一约束（存量去重+建索引，幂等）
 	s.BillingIndexMigrate()       // ★ 整改 B5：订单号唯一索引 + Key 哈希检索索引（幂等，撞重复降级告警）

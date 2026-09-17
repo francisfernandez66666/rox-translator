@@ -6,22 +6,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"sync"
 
-	"ai-assist/internal/llm"
-	"ai-assist/internal/store"
+	"translator/internal/assist/llm"
+	"translator/internal/assist/store"
+	"translator/internal/observability"
 )
 
 // Action 回复附带的动作按钮（前端渲染为可点击跳转）
 type Action struct {
-	Key   string `json:"key"`
-	Name  string `json:"name"`
-	URL   string `json:"url"`
-	FType string `json:"ftype"`
-	Icon  string `json:"icon"`
+	Key   string `json:"key"`   // 动作唯一标识，用于关联 feature_links 表中的条目
+	Name  string `json:"name"`  // 按钮展示名（前端渲染文案）
+	URL   string `json:"url"`   // 点击后跳转地址（功能入口）
+	FType string `json:"ftype"` // 入口类型，如 route（站内路由）/link（外链），前端据此决定跳转方式
+	Icon  string `json:"icon"`  // 按钮图标标识（前端按约定加载对应图标）
 }
 
 // Reply 一次接待的产出
@@ -71,7 +71,8 @@ func (e *Engine) llmFingerprint() string {
 
 // ensureLLM 返回当前应使用的 LLM client；configs LLM 配置变更时重建。
 // env 显式接入（初始 providers 非空）时不被 configs 覆盖——生产 secrets.env 优先。
-func (e *Engine) ensureLLM() *llm.Client {
+// ★ 改造 1A：签名加 ctx，热加载日志经主仓 observability 输出（slog JSON + trace_id）。
+func (e *Engine) ensureLLM(ctx context.Context) *llm.Client {
 	e.llmMu.Lock()
 	defer e.llmMu.Unlock()
 	// env 已显式接入：固定使用初始 client，不回读 configs（避免管理台误配导致生产断链）
@@ -91,7 +92,8 @@ func (e *Engine) ensureLLM() *llm.Client {
 		if bk := e.db.GetConfig("llm_model_backup", ""); bk != "" {
 			provs = append(provs, llm.Provider{Name: "backup", BaseURL: baseURL, APIKey: apiKey, Model: bk})
 		}
-		log.Printf("[engine] LLM 配置经管理台热加载生效: %s → %s", model, bkName(provs))
+		observability.Info(ctx, "assist.engine LLM 配置经管理台热加载生效",
+			"model", model, "backup", bkName(provs))
 		e.llm = llm.New(provs, 45)
 	}
 	e.llmFP = fp
@@ -365,7 +367,8 @@ func parseSteps(js string) ([]FlowStep, error) {
 
 // Respond 生成回复
 // 优先级：进行中的流程（命中新意图则让位） > 话术直配 > 流程触发 > LLM+知识库
-func (e *Engine) Respond(sessionID, input, pageURL string, history []store.Row) *Reply {
+// ★ 改造 1A：签名加 ctx（HTTP 请求上下文），使 LLM 调用链日志继承 trace_id。
+func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL string, history []store.Row) *Reply {
 	// 1. 进行中的流程：输入命中其他意图（话术/其他流程）则退出流程让位，否则推进步骤
 	if rep := e.advanceFlow(sessionID, input); rep != nil {
 		return rep
@@ -384,7 +387,7 @@ func (e *Engine) Respond(sessionID, input, pageURL string, history []store.Row) 
 		return e.enterFlow(sessionID, key, steps)
 	}
 	// 4. LLM + 知识库
-	return e.llmReply(input, history)
+	return e.llmReply(ctx, input, history)
 }
 
 // advanceFlow 推进进行中的流程；不在流程中或被新意图抢占（已退出）时返回 nil
@@ -472,7 +475,8 @@ func (e *Engine) kbByKey(key string) (store.Row, bool) {
 // ============================================================
 
 // llmReply 组装 prompt 调 LLM；无 LLM 或失败走规则兜底
-func (e *Engine) llmReply(input string, history []store.Row) *Reply {
+// ★ 改造 1A：签名加 ctx，LLM 调用与失败日志均带 trace_id。
+func (e *Engine) llmReply(ctx context.Context, input string, history []store.Row) *Reply {
 	// 检索 top3 知识条目
 	hits := e.RetrieveKB(input, 3)
 	sys := e.buildSystemPrompt(hits)
@@ -497,7 +501,7 @@ func (e *Engine) llmReply(input string, history []store.Row) *Reply {
 		msgs[len(msgs)-1].Content += "\n\n（回答末尾如需推荐功能，另起一行输出【go:key1,key2】，key 从：" + allKeys + " 中选。不需要就不输出。）"
 	}
 
-	client := e.ensureLLM() // ★ R0.4 惰性重建（管理台 LLM 配置热加载）
+	client := e.ensureLLM(ctx) // ★ R0.4 惰性重建（管理台 LLM 配置热加载）
 	if client.Enabled() {
 		temp := 0.7
 		if v := e.db.GetConfig("temperature", ""); v != "" {
@@ -507,11 +511,11 @@ func (e *Engine) llmReply(input string, history []store.Row) *Reply {
 		if v := e.db.GetConfig("max_tokens", ""); v != "" {
 			fmt.Sscanf(v, "%d", &maxTok)
 		}
-		text, model, _, err := client.Chat(context.Background(), temp, maxTok, msgs)
+		text, model, _, err := client.Chat(ctx, temp, maxTok, msgs)
 		if err == nil && strings.TrimSpace(text) != "" {
 			return e.postProcess(text, model)
 		}
-		log.Printf("[engine] LLM 失败: %v，走规则兜底", err)
+		observability.Warn(ctx, "assist.engine LLM 调用失败，走规则兜底", "err", err)
 	}
 	// 规则兜底：检索命中直接拼
 	return e.fallbackReply(hits, input)
@@ -612,8 +616,8 @@ func (e *Engine) UnansweredQuestions() []string {
 }
 
 // LLMMode 当前 LLM 接入来源（R0.3 徽标）："env" / "db" / ""（规则模式）
-func (e *Engine) LLMMode() string {
-	client := e.ensureLLM()
+func (e *Engine) LLMMode(ctx context.Context) string {
+	client := e.ensureLLM(ctx)
 	if client == nil || !client.Enabled() {
 		return ""
 	}
@@ -624,13 +628,13 @@ func (e *Engine) LLMMode() string {
 }
 
 // LLMTest 测试连通（R0.4c）：用当前生效配置发 1-token 请求
-func (e *Engine) LLMTest() (string, string, llm.Usage, error) {
-	client := e.ensureLLM()
+func (e *Engine) LLMTest(ctx context.Context) (string, string, llm.Usage, error) {
+	client := e.ensureLLM(ctx)
 	if client == nil || !client.Enabled() {
 		return "", "", llm.Usage{}, fmt.Errorf("LLM 未接入（规则模式）——请在下方填入 Base URL / API Key / 模型名")
 	}
 	msgs := []llm.Message{{Role: "user", Content: "回复「OK」两个字"}}
-	return client.Chat(context.Background(), 0, 8, msgs)
+	return client.Chat(ctx, 0, 8, msgs)
 }
 
 // allKBKeys 全部知识 key（供 LLM 动作标记）

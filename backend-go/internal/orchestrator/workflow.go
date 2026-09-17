@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 
 	"translator/internal/config"
@@ -19,6 +20,7 @@ import (
 	"translator/internal/gate"
 	"translator/internal/kb"
 	"translator/internal/llm"
+	"translator/internal/notify"
 	"translator/internal/qa"
 	"translator/internal/store"
 	"translator/internal/tenant"
@@ -86,19 +88,23 @@ func (w *Workflow) registerSteps() {
 
 // 工单翻译中间结果（存于 ticket state payload）
 type ticketPayload struct {
-	SourceText       string                 `json:"source_text"`                  // 源文本
-	TargetLangs      []string               `json:"target_langs"`                 // 目标语言列表
-	Translations     map[string]string      `json:"translations"`                 // 语言 → 译文
-	Sources          map[string]string      `json:"sources"`                      // 语言 → 来源（kb/model）
-	Mode             string                 `json:"mode"`                         // 匹配模式标识
-	Examples         []*kb.Row              `json:"examples,omitempty"`           // 知识库命中例句（供 AI 初翻注入术语参考）
-	EvalScores       map[string]float64     `json:"eval_scores"`                  // 语言 → 评估总分
-	ReviewEvalScores map[string]float64     `json:"review_eval_scores,omitempty"` // 语言 → 校对评估总分
-	Gate             *gate.GateResult       `json:"gate"`                         // Gate 校验结果
-	Culture          *culture.CultureResult `json:"culture,omitempty"`            // 语言文化闸门结果
-	QAReport         *qa.Report             `json:"qa_report,omitempty"`          // 确定性 QA 质检报告
-	RetryCount       map[string]int         `json:"retry_count,omitempty"`        // 语言 → 硬闸自动重译次数
-	GateHints        map[string]string      `json:"gate_hints,omitempty"`         // 语言 → 最近一次硬闸打回原因（供审批参考）
+	SourceText       string             `json:"source_text"`                  // 源文本
+	TargetLangs      []string           `json:"target_langs"`                 // 目标语言列表
+	Translations     map[string]string  `json:"translations"`                 // 语言 → 译文
+	Sources          map[string]string  `json:"sources"`                      // 语言 → 来源（kb/model）
+	Mode             string             `json:"mode"`                         // 匹配模式标识
+	Examples         []*kb.Row          `json:"examples,omitempty"`           // 知识库命中例句（供 AI 初翻注入术语参考）
+	EvalScores       map[string]float64 `json:"eval_scores"`                  // 语言 → 评估总分
+	ReviewEvalScores map[string]float64 `json:"review_eval_scores,omitempty"` // 语言 → 校对评估总分
+	// ★ 改造 4（2026-09-17）评估不合格处置：低于 evals_fail_threshold（默认 60）的语言
+	//   打标（工单详情透出「质检存疑」徽标）+ 告警中心/群机器人提醒（同单同语言同阶段幂等一次）
+	QualityFlaggedLangs []string               `json:"quality_flagged_langs,omitempty"` // 评估不达标语言列表
+	EvalNotified        map[string]bool        `json:"eval_notified,omitempty"`         // 提醒幂等标记（key=阶段:语言）
+	Gate                *gate.GateResult       `json:"gate"`                            // Gate 校验结果
+	Culture             *culture.CultureResult `json:"culture,omitempty"`               // 语言文化闸门结果
+	QAReport            *qa.Report             `json:"qa_report,omitempty"`             // 确定性 QA 质检报告
+	RetryCount          map[string]int         `json:"retry_count,omitempty"`           // 语言 → 硬闸自动重译次数
+	GateHints           map[string]string      `json:"gate_hints,omitempty"`            // 语言 → 最近一次硬闸打回原因（供审批参考）
 }
 
 // parseTicketLang 从 target_langs 逗号分隔字符串解析语言列表。
@@ -306,7 +312,9 @@ func (w *Workflow) runEvalsInitial(ctx context.Context, t *store.Ticket) error {
 		}
 		if err == nil {
 			p.EvalScores[lc] = total // 记录总分
-			_, _ = w.Engine.Evals.SaveRecord(ctx, t.TenantID, t.CreatedBy, t.ID, "translate", lc, p.SourceText, tr, scores, total, "passed")
+			// ★ 改造 4：低于阈值 → 打标 + 运营提醒（返回 failed 供评估记录落库）
+			disp := w.applyEvalDisposition(t, p, lc, total, "initial")
+			_, _ = w.Engine.Evals.SaveRecord(ctx, t.TenantID, t.CreatedBy, t.ID, "translate", lc, p.SourceText, tr, scores, total, disp)
 		}
 	}
 	w.savePayload(t, p)
@@ -357,11 +365,96 @@ func (w *Workflow) runEvalsReview(ctx context.Context, t *store.Ticket) error {
 		}
 		if err == nil {
 			p.ReviewEvalScores[lc] = total
-			_, _ = w.Engine.Evals.SaveRecord(ctx, t.TenantID, t.CreatedBy, t.ID, "review", lc, p.SourceText, tr, scores, total, "passed")
+			// ★ 改造 4：校对评估同样执行阈值处置（打标 + 提醒，阶段标记 review）
+			disp := w.applyEvalDisposition(t, p, lc, total, "review")
+			_, _ = w.Engine.Evals.SaveRecord(ctx, t.TenantID, t.CreatedBy, t.ID, "review", lc, p.SourceText, tr, scores, total, disp)
 		}
 	}
 	w.savePayload(t, p)
 	return nil
+}
+
+// applyEvalDisposition 评估不合格处置（★ 改造 4，2026-09-17）：
+// 评估总分低于 system_config.evals_fail_threshold（默认 60；配置为 0 或负数=关闭处置仅记录。
+// 注意不用 ConfigInt——其既有约定把 <=0 回落默认值，与本开关语义冲突）时：
+//  1. 该语言计入 payload.QualityFlaggedLangs（工单详情「质检存疑」徽标数据源）；
+//  2. 告警中心（alerts 表，kind=eval_quality，幂等去重）+ 群机器人四渠道提醒运营；
+//     可用 system_config.evals_alert_enabled=0 单独关掉「提醒」（打标与落库保留）——
+//     与 evals_fail_threshold<=0 的「整体关闭处置」是两个粒度；
+//  3. 同工单同语言同阶段只提醒一次（payload.EvalNotified 幂等标记）。
+//
+// 不做自动打回重译——gate 硬闸负责确定性规则重译；Judge 主观分重译易震荡烧钱，仅人工决策。
+// 参数：t=工单，p=工单 payload（本函数会修改其打标/提醒字段），lc=目标语言，total=评估总分，
+//
+//	taskType="initial"（初翻评估）/"review"（校对评估）。
+//
+// 返回：评估记录 status（"passed"/"failed"）。
+func (w *Workflow) applyEvalDisposition(t *store.Ticket, p *ticketPayload, lc string, total float64, taskType string) string {
+	const defaultThreshold = 60
+	status := "passed"
+	if w.Store == nil {
+		return status
+	}
+	// raw 读取（非 ConfigInt）：空=默认 60；解析成功且 <=0 = 处置关闭
+	threshold := defaultThreshold
+	if raw, err := w.Store.GetConfig("evals_fail_threshold"); err == nil && strings.TrimSpace(raw) != "" {
+		if n, perr := strconv.Atoi(strings.TrimSpace(raw)); perr == nil {
+			threshold = n
+		}
+	}
+	if threshold <= 0 {
+		return status // 处置关闭：仅记录分数，不打标不提醒
+	}
+	if total >= float64(threshold) {
+		return status
+	}
+	status = "failed"
+	// 打标：去重追加不达标语言
+	flagged := false
+	for _, f := range p.QualityFlaggedLangs {
+		if f == lc {
+			flagged = true
+			break
+		}
+	}
+	if !flagged {
+		p.QualityFlaggedLangs = append(p.QualityFlaggedLangs, lc)
+	}
+	// ★ 改造 4：工单表 quality_flagged=1（列表/详情接口零成本透出，前端「质检存疑」徽标数据源）
+	if err := w.Store.SetTicketQualityFlagged(t.ID); err != nil {
+		log.Printf("[evals] 质检存疑打标落库失败（不影响评估）: %v", err)
+	}
+	// ★ 改造 4：提醒单独开关（默认开）。置 0 = 只打标不打扰运营（灰度期静默观察用）。
+	// 判定放在幂等标记之前：未真正提醒就不该记 EvalNotified，否则开回开关后这条再也不会提醒。
+	if raw, err := w.Store.GetConfig("evals_alert_enabled"); err == nil {
+		if v := strings.TrimSpace(raw); v == "0" || strings.EqualFold(v, "false") || strings.EqualFold(v, "off") {
+			return status
+		}
+	}
+	// 运营提醒：同单同语言同阶段幂等一次
+	key := taskType + ":" + lc
+	if p.EvalNotified == nil {
+		p.EvalNotified = map[string]bool{}
+	}
+	if p.EvalNotified[key] {
+		return status
+	}
+	p.EvalNotified[key] = true
+	stageLabel := "初翻"
+	if taskType == "review" {
+		stageLabel = "校对"
+	}
+	no := t.TicketNo
+	if no == "" {
+		no = fmt.Sprintf("#%d", t.ID)
+	}
+	msg := fmt.Sprintf("工单 %s 语言 %s %s评估总分 %.1f 低于阈值 %d，已标记待人工复核", no, lc, stageLabel, total, threshold)
+	if err := w.Store.CreateAlert(t.TenantID, "warning", "eval_quality", msg); err != nil {
+		log.Printf("[evals] 质量告警写入失败（不影响处置）: %v", err)
+	}
+	notify.Bots(w.Store, "翻译质量低于阈值", msg)
+	log.Printf("[evals] %s", msg)
+	return status
 }
 
 // kbTermHits 按源文子串匹配 L1 术语（同 runKBMatch 的口径，供硬闸校验与重译参考复用）。
@@ -574,6 +667,11 @@ func (w *Workflow) runQA(ctx context.Context, t *store.Ticket) error {
 	}
 	p.QAReport = qa.Check(p.SourceText, p.Translations)
 	w.savePayload(t, p)
+	// ★ 改造 5（2026-09-17）：质检摘要落 tickets 列，供工单列表零成本渲染质检徽标
+	//   （此前前端全仓零透出，用户仅下载 xlsx 才能看到 QA 列）。
+	if err := w.Store.SetTicketQASummary(t.ID, p.QAReport.Errors, p.QAReport.Warnings); err != nil {
+		log.Printf("[qa] 质检摘要落库失败（不影响质检报告）: %v", err)
+	}
 	return nil
 }
 

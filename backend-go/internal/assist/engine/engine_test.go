@@ -2,11 +2,12 @@
 package engine
 
 import (
+	"context"
 	"strings"
 	"testing"
 
-	"ai-assist/internal/llm"
-	"ai-assist/internal/store"
+	"translator/internal/assist/llm"
+	"translator/internal/assist/store"
 )
 
 // newTestEngine 建带固定夹具的引擎（临时库）
@@ -96,7 +97,7 @@ func TestScriptMatch(t *testing.T) {
 	if !ok || asStr(sc["key"]) != "sc-price" {
 		t.Fatalf("script match: %v %v", ok, sc)
 	}
-	rep := e.Respond("s", "多少钱啊", "/", nil)
+	rep := e.Respond(context.Background(), "s", "多少钱啊", "/", nil)
 	if rep.Source != "rule" || rep.Content != "按积分计费" {
 		t.Fatalf("respond: %+v", rep)
 	}
@@ -110,17 +111,17 @@ func TestFlowLifecycle(t *testing.T) {
 	e := newTestEngine(t)
 	newSession(t, e, "s1")
 	// 触发第一步
-	rep := e.Respond("s1", "我是新手", "/", nil)
+	rep := e.Respond(context.Background(), "s1", "我是新手", "/", nil)
 	if rep.Source != "flow" || !strings.HasPrefix(rep.Content, "第一步") || len(rep.Actions) != 1 {
 		t.Fatalf("step0: %+v", rep)
 	}
 	// 推进第二步
-	rep = e.Respond("s1", "好", "/", nil)
+	rep = e.Respond(context.Background(), "s1", "好", "/", nil)
 	if !strings.HasPrefix(rep.Content, "第二步") {
 		t.Fatalf("step1: %+v", rep)
 	}
 	// 走完 → 退出流程
-	rep = e.Respond("s1", "好", "/", nil)
+	rep = e.Respond(context.Background(), "s1", "好", "/", nil)
 	if rep.Source != "flow" {
 		t.Fatalf("done msg: %+v", rep)
 	}
@@ -128,7 +129,7 @@ func TestFlowLifecycle(t *testing.T) {
 		t.Fatal("flow should be cleared")
 	}
 	// 退出后再问价格 → 话术直配（不再被流程吞掉）
-	rep = e.Respond("s1", "多少钱", "/", nil)
+	rep = e.Respond(context.Background(), "s1", "多少钱", "/", nil)
 	if rep.Source != "rule" {
 		t.Fatalf("after flow: %+v", rep)
 	}
@@ -138,8 +139,8 @@ func TestFlowLifecycle(t *testing.T) {
 func TestFlowYield(t *testing.T) {
 	e := newTestEngine(t)
 	newSession(t, e, "s2")
-	_ = e.Respond("s2", "我是新手", "/", nil) // 进入流程
-	rep := e.Respond("s2", "多少钱", "/", nil)
+	_ = e.Respond(context.Background(), "s2", "我是新手", "/", nil) // 进入流程
+	rep := e.Respond(context.Background(), "s2", "多少钱", "/", nil)
 	if rep.Source != "rule" {
 		t.Fatalf("yield to script: %+v", rep)
 	}
@@ -166,11 +167,11 @@ func TestPostProcess(t *testing.T) {
 // TestFallbackReply 无 LLM 且无命中时的兜底文案；有命中时直出知识
 func TestFallbackReply(t *testing.T) {
 	e := newTestEngine(t)
-	rep := e.llmReply("完全无关的问题xyz", nil)
+	rep := e.llmReply(context.Background(), "完全无关的问题xyz", nil)
 	if rep.Source != "fallback" || rep.Content == "" {
 		t.Fatalf("fallback empty: %+v", rep)
 	}
-	rep = e.llmReply("epub 支持", nil)
+	rep = e.llmReply(context.Background(), "epub 支持", nil)
 	if !strings.Contains(rep.Content, "支持 epub") || len(rep.Actions) != 1 {
 		t.Fatalf("kb fallback: %+v", rep)
 	}
@@ -218,7 +219,7 @@ func TestSynonymEndToEnd(t *testing.T) {
 		"content": "去充值与账单页", "keywords": "充值,付款,支付", "link_keys": "billing",
 	})
 	_ = e.db.SetConfig("synonyms", "充值=充钱|交钱")
-	rep := e.Respond("s-syn", "怎么充钱", "/", nil)
+	rep := e.Respond(context.Background(), "s-syn", "怎么充钱", "/", nil)
 	// R0.2 验收：不再输出空承诺兜底话术，正确命中充值知识并带入口按钮
 	if strings.Contains(rep.Content, "先记下来") || !strings.Contains(rep.Content, "充值与账单") || len(rep.Actions) == 0 {
 		t.Fatalf("synonym e2e: %+v", rep)
@@ -228,17 +229,17 @@ func TestSynonymEndToEnd(t *testing.T) {
 // TestLLMHotReload R0.4：configs 写入 LLM 配置 → 无 env 时惰性重建生效
 func TestLLMHotReload(t *testing.T) {
 	e := newTestEngine(t)
-	if e.LLMMode() != "" {
-		t.Fatalf("initial mode: %s", e.LLMMode())
+	if e.LLMMode(context.Background()) != "" {
+		t.Fatalf("initial mode: %s", e.LLMMode(context.Background()))
 	}
 	_ = e.db.SetConfig("llm_base_url", "http://127.0.0.1:1/v1") // 不可达端口，仅验证 Enabled 翻转
 	_ = e.db.SetConfig("llm_api_key", "sk-test")
 	_ = e.db.SetConfig("llm_model", "m1")
-	if e.LLMMode() != "db" {
-		t.Fatalf("after db cfg: %s", e.LLMMode())
+	if e.LLMMode(context.Background()) != "db" {
+		t.Fatalf("after db cfg: %s", e.LLMMode(context.Background()))
 	}
 	// 测试连通应报错但 client 已构建
-	if _, _, _, err := e.LLMTest(); err == nil {
+	if _, _, _, err := e.LLMTest(context.Background()); err == nil {
 		t.Fatal("unreachable endpoint should error")
 	}
 }
@@ -251,8 +252,8 @@ func TestLLMEnvPriority(t *testing.T) {
 	_ = db.SetConfig("llm_base_url", "http://db-host")
 	_ = db.SetConfig("llm_api_key", "k2")
 	_ = db.SetConfig("llm_model", "db-m")
-	if e.LLMMode() != "env" {
-		t.Fatalf("env should win: %s", e.LLMMode())
+	if e.LLMMode(context.Background()) != "env" {
+		t.Fatalf("env should win: %s", e.LLMMode(context.Background()))
 	}
 }
 

@@ -47,6 +47,8 @@
 #   T44 缺陷核实修复回归锁（2026-09-16 D1-D5）：欠费结算错误分支（qerr 吞错禁回退）/
 #       低额告警阈值接线（low_balance_alert_tokens 实读）/ 备份推送超时+禁入 HTTP 白名单 /
 #       Caddy CSP 头存在——行为侧由 store/service 单测覆盖，此处为源码级防回退闸门
+#   T46 质检闭环 API 透出（改造 4/5，2026-09-17）：详情接口 quality 视图（QA 报告/评估分/存疑语言）
+#       + tickets.quality_flagged 列经详情接口零成本透出（前端「质检存疑」徽标数据源）
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 # 依赖：mock_llm.py 已启动、uat 服务已启动（run_uat.sh 编排）
 # 用法：BASE_URL=... UAT_DB=... ADMIN_PASS=... [UAT_SERVER_LOG=...] bash scripts/uat/api_uat_txn.sh
@@ -332,7 +334,7 @@ for i in $(seq 1 30); do
 done
 wait
 S16=$(cat "$D16"/r*.json 2>/dev/null | grep -c '"success":true')
-E16=$(cat "$D16"/r*.json 2>/dev/null | grep -c 'insufficient\|余额不足\|耗尽\|"success":false')
+E16=$(cat "$D16"/r*.json 2>/dev/null | grep -cE 'insufficient|余额不足|耗尽|"success":false')
 [ $((S16 + E16)) -eq 30 ] && [ "$S16" -ge 1 ] && { PASS=$((PASS+1)); echo "PASS|T16-all-resolved(ok=$S16 refused=$E16)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T16-all-resolved(ok=$S16 refused=$E16)"; }
 sleep 4
 TOT1=$(get "$H16" /api/billing/balance | pv '.get("total_available",0)')
@@ -1190,6 +1192,30 @@ print(m)' 2>/dev/null)
 else
   PASS=$((PASS+1)); echo "PASS|T45-log-skip(未提供 UAT_SERVER_LOG，仅 run_uat 全流程可检)"
 fi
+
+# ---------- T46（改造 4/5，2026-09-17）质检闭环 API 透出 ----------
+# 改造 5：工单详情接口新增 quality 视图（qa_report / eval_scores / review_eval_scores / quality_flagged_langs），
+#         此前仅 xlsx 下载有 QA 列、界面零透出；改造 4：tickets.quality_flagged 列经详情/列表零成本透出
+#         （前端「质检存疑」徽标数据源，由 workflow.applyEvalDisposition 打标）。
+# 注意：T6/T45 会改变 uatuser_a 口令并使首部 H1 令牌失效，故此处重新鉴权取专用令牌。
+T46T=$(tok uatuser_a uatpass123); H46="Authorization: Bearer $T46T"
+[ ${#T46T} -gt 10 ] 2>/dev/null || { FAIL=$((FAIL+1)); echo "FAIL|T46-auth|uatuser_a 重新登录失败"; }
+R=$(post "$H46" '{"title":"T46质检透出","source_text":"hello quality check sentence","target_langs":"en","mode":"fast"}' /api/tickets/create)
+TKID=$(echo "$R" | pv '.get("ticket",{}).get("id") or 0')
+[ "$TKID" -gt 0 ] 2>/dev/null || { FAIL=$((FAIL+1)); echo "FAIL|T46-ticket-create|got[$R]"; }
+ck T46-ticket-create '"success":true' "$R"
+D46="$(get "$H46" "/api/tickets/detail?id=$TKID")"
+ck T46-quality-field-present '"quality"' "$D46"
+# 注入 final_result 质检 JSON（模拟 runQA / applyEvalDisposition 落库），验证 parseTicketQuality 解析路径
+sq "UPDATE tickets SET final_result='{\"eval_scores\":{\"en\":42.5},\"review_eval_scores\":{\"en\":80.0},\"quality_flagged_langs\":[\"en\"]}' WHERE id=$TKID"
+D46B="$(get "$H46" "/api/tickets/detail?id=$TKID")"
+ck T46-quality-eval-scores '"eval_scores"' "$D46B"
+ck T46-quality-review-scores '"review_eval_scores"' "$D46B"
+ck T46-quality-flagged-langs '"quality_flagged_langs"' "$D46B"
+# 改造 4：打标落库（quality_flagged=1）经详情接口透出
+sq "UPDATE tickets SET quality_flagged=1 WHERE id=$TKID"
+D46C="$(get "$H46" "/api/tickets/detail?id=$TKID")"
+ck T46-quality-flagged-col '"quality_flagged":1' "$D46C"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

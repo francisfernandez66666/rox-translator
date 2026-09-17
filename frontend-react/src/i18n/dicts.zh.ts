@@ -318,7 +318,18 @@ export const baseZh: Record<string,string> = {
   'tk.modeFast': '快速（无知识库）', 'tk.modePro': '专业校对',
   'tk.modeFastShort': '快速', 'tk.modeProShort': '专业校对',
   'tk.modeTip': '⚡快速：AI初翻+校对，十秒级｜🎓专业校对：知识库+评估+硬闸全流水线',
+  // tk.qaSummary：详情抽屉质检报告区块的汇总行文案（错误/警告计数），由 QualityBlock 渲染
   'tk.qaSummary': '{errors} 处错误 / {warnings} 处警告',
+  // ★ 改造 4/5（2026-09-17）：用户侧质检报告透出 + 质检存疑徽标
+  'tk.qaTitle': '质检报告', 'tk.qaPass': '质检通过', 'tk.qaFail': '质检未通过',
+  'tk.qaErrors': '{n} 项错误', 'tk.qaWarnings': '{n} 项提示', 'tk.qaClean': '暂未发现质量问题',
+  'tk.qaFlagged': '质检存疑', 'tk.qaFlaggedTip': '机器评估分数低于阈值，已标记待人工复核。',
+  'tk.qaColLang': '语言', 'tk.qaColRule': '规则', 'tk.qaColLevel': '级别', 'tk.qaColDetail': '说明',
+  'tk.qaLevelError': '错误', 'tk.qaLevelWarning': '提示', 'tk.qaNoIssues': '未发现问题。',
+  'tk.qaErrorNote': '错误项为系统已自动重译（最多 8 次）后仍存在的问题，建议人工复核。',
+  'tk.evalScores': '机器评估分（满分 100）', 'tk.evalInitial': '初翻', 'tk.evalReview': '校对',
+  'tk.qaRuleEmpty': '空译文', 'tk.qaRuleSame': '与原文相同', 'tk.qaRuleNumber': '数字不一致',
+  'tk.qaRulePlaceholder': '占位符不一致', 'tk.qaRuleLength': '长度异常', 'tk.qaRulePunctuation': '标点异常',
   'tk.createHint': '创建后进入异步队列，完成后站内信通知下载；大文件翻译请使用此模式',
   'tk.myTickets': '我的工单',
   'tk.colNo': '工单号',

@@ -1,130 +1,35 @@
 // ============ crypto.go · 职责说明 ============
-// store 包 API Key 明文的静态加密实现（AES-256-GCM）。
+// store 包静态加密入口（AES-256-GCM）。
+//
+// ★ 改造 2（2026-09-17）：实现已下沉至 internal/secret，本文件仅保留同名薄委托，
+// 使既有 90+ 调用点（store.EncryptSecret / store.DecryptSecret …）零改动，
+// 同时让非存储层代码（如 internal/assist）能直接复用加密能力而不反向依赖业务存储层。
+//
 //   - 签发时把明文加密落库（key_enc 列），使「任意时刻可复制」成为可能；
-//   - 加密密钥由 JWT_SECRET 派生（SHA-256 → 32 字节）；未配置时回退固定开发密钥
+//   - 加密密钥由 JWT_SECRET 派生（SHA-256 → 32 字节）；未配置时回退随机进程密钥
 //     （仅本地/测试用，生产必须设置 JWT_SECRET）；
 //   - Reveal 接口仅在租户管理员鉴权 + 租户隔离下解密返回。
 //
 // =============================================
 package store
 
-import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"io"
-	"log"
-	"os"
-	"strings"
-	"sync"
-)
+import "translator/internal/secret"
 
-// aeadKeyOnce 保证「JWT_SECRET 缺失时的随机派生密钥」在进程内只生成一次（否则加解密密钥不一致）。
-var (
-	aeadKeyOnce sync.Once
-	aeadKeyRand []byte
-)
-
-// deriveAEADKey 由 JWT_SECRET 派生 32 字节 AES 密钥。
-// 生产必须设置 JWT_SECRET；若缺失，退回进程级随机密钥（仅本地/测试用，且不可被外部推算），
-// 杜绝原「SHA256("|rox-apikey-enc")」这一公开常量导致的密钥明文可被还原的风险。
-func deriveAEADKey() []byte {
-	secret := os.Getenv("JWT_SECRET")
-	if secret != "" {
-		sum := sha256.Sum256([]byte(secret + "|rox-apikey-enc"))
-		return sum[:]
-	}
-	// 缺失：生成稳定随机密钥并告警（每次启动时不同；多副本需共享 JWT_SECRET）。
-	aeadKeyOnce.Do(func() {
-		b := make([]byte, 32)
-		if _, err := rand.Read(b); err != nil {
-			log.Printf("[crypto] 警告: 随机源不可用，AES 密钥派生回退空值（加密将不可用，请设置 JWT_SECRET）")
-			aeadKeyRand = nil
-			return
-		}
-		aeadKeyRand = b
-		log.Printf("[crypto] 警告: JWT_SECRET 未设置，AES 静态加密使用随机进程密钥（重启后旧密文不可解密，生产请设置 JWT_SECRET）")
-	})
-	if aeadKeyRand == nil {
-		return make([]byte, 32) // 极端降级：空密钥（加密无意义但避免 nil panic）
-	}
-	return aeadKeyRand
-}
+// SecretEncPrefix 静态加密密文前缀（enc:v1:）——区分「已加密」与「历史明文」。
+const SecretEncPrefix = secret.SecretEncPrefix
 
 // EncryptPlain AES-256-GCM 加密：返回 base64(nonce||ciphertext)。
-func EncryptPlain(plain string) string {
-	key := deriveAEADKey()
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return ""
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return ""
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-		return ""
-	}
-	ct := gcm.Seal(nonce, nonce, []byte(plain), nil)
-	return base64.StdEncoding.EncodeToString(ct)
-}
+func EncryptPlain(plain string) string { return secret.EncryptPlain(plain) }
 
 // DecryptPlain 解密 base64(nonce||ciphertext)；失败返回空串。
-func DecryptPlain(enc string) string {
-	raw, err := base64.StdEncoding.DecodeString(enc)
-	if err != nil {
-		return ""
-	}
-	key := deriveAEADKey()
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return ""
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return ""
-	}
-	ns := gcm.NonceSize()
-	if len(raw) < ns {
-		return ""
-	}
-	plain, err := gcm.Open(nil, raw[:ns], raw[ns:], nil)
-	if err != nil {
-		return string("") // 认证失败：静默返回空（调用方应告警）
-	}
-	return string(plain)
-}
-
-// SecretEncPrefix 静态加密密文前缀：区分「已加密」与「历史明文」，支持平滑迁移。
-const SecretEncPrefix = secretEncPrefix
-
-// secretEncPrefix 前缀常量本体。
-const secretEncPrefix = "enc:v1:"
+func DecryptPlain(enc string) string { return secret.DecryptPlain(enc) }
 
 // EncryptSecret 带前缀的通用静态加密（评审整改 D3）：用于 model_routes 等配置内的供应商 Key。
-func EncryptSecret(plain string) string {
-	if plain == "" {
-		return ""
-	}
-	return secretEncPrefix + EncryptPlain(plain)
-}
+func EncryptSecret(plain string) string { return secret.EncryptSecret(plain) }
 
 // DecryptSecret 与 EncryptSecret 配对；无前缀的输入按历史明文原样返回（兼容旧库）。
 // 解密失败返回空串——调用方应打告警并跳过该条目（典型原因：JWT_SECRET 轮换未同步重存）。
-func DecryptSecret(stored string) string {
-	if stored == "" {
-		return ""
-	}
-	if !strings.HasPrefix(stored, secretEncPrefix) {
-		return stored // 历史明文
-	}
-	return DecryptPlain(strings.TrimPrefix(stored, secretEncPrefix))
-}
+func DecryptSecret(stored string) string { return secret.DecryptSecret(stored) }
 
 // IsSecretMasked 判断是否为前端掩码串（sk-**** 形态）——保存链路据此回填旧值。
-func IsSecretMasked(s string) bool {
-	return strings.Contains(s, "****")
-}
+func IsSecretMasked(s string) bool { return secret.IsSecretMasked(s) }

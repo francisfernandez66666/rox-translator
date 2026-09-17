@@ -547,7 +547,41 @@ func (s *Server) handleTicketDetail(w http.ResponseWriter, r *http.Request) {
 	states, _ := s.Store.TicketStates(id)
 	// ★ 文件工单附带各文件处理状态（前端进度面板渲染用）
 	tfiles, _ := s.Store.TicketFiles(id)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t, "states": states, "files": tfiles, "progress": ticketProgressPct(t, states, tfiles)})
+	// ★ 改造 5（2026-09-17）用户侧 QA 报告透出：从 FinalResult payload 解析
+	//   质检报告/评估分/不达标语言，详情接口一并返回（此前仅 xlsx 下载有 QA 列，界面零透出）。
+	quality := parseTicketQuality(t.FinalResult)
+	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t, "states": states, "files": tfiles, "progress": ticketProgressPct(t, states, tfiles), "quality": quality})
+}
+
+// ticketQualityView 工单质量视图（改造 5）：从 FinalResult JSON 抽取用户侧可读的
+// 质检报告、各语言评估分与评估不达标语言。解析失败（旧数据/非 JSON）返回零值结构不报错。
+type ticketQualityView struct {
+	QAReport         *qa.Report         `json:"qa_report,omitempty"`             // 确定性 QA 报告（空译文/同文/数字/占位符/漏翻/标点）
+	EvalScores       map[string]float64 `json:"eval_scores,omitempty"`           // 语言 → 初翻评估总分（0-100）
+	ReviewEvalScores map[string]float64 `json:"review_eval_scores,omitempty"`    // 语言 → 校对评估总分
+	FlaggedLangs     []string           `json:"quality_flagged_langs,omitempty"` // 评估低于阈值语言（「质检存疑」徽标数据源）
+}
+
+// parseTicketQuality 从 final_result JSON 解析质量视图（改造 5）。
+func parseTicketQuality(finalResult string) ticketQualityView {
+	out := ticketQualityView{}
+	if strings.TrimSpace(finalResult) == "" {
+		return out
+	}
+	var p struct {
+		QAReport            *qa.Report         `json:"qa_report"`
+		EvalScores          map[string]float64 `json:"eval_scores"`
+		ReviewEvalScores    map[string]float64 `json:"review_eval_scores"`
+		QualityFlaggedLangs []string           `json:"quality_flagged_langs"`
+	}
+	if err := json.Unmarshal([]byte(finalResult), &p); err != nil {
+		return out
+	}
+	out.QAReport = p.QAReport
+	out.EvalScores = p.EvalScores
+	out.ReviewEvalScores = p.ReviewEvalScores
+	out.FlaggedLangs = p.QualityFlaggedLangs
+	return out
 }
 
 // handleTicketDownload 下载工单翻译结果（创建者或超管）。

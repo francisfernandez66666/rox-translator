@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================================
-# scripts/uat/assist_uat.sh — ai-assist（AI 销售/客服助手）自动化 UAT
-# 覆盖（2026-09-16 R0 批次 + 既有链路回归）：
+# scripts/uat/assist_uat.sh — 主站 AI 助手（assist）自动化 UAT
+# 覆盖（2026-09-16 R0 批次 + 既有链路回归 + 2026-09-17 改造 1A 融合项）：
 #   C 端：greeting/chips、话术直配(rule)、流程触发与推进(flow)、知识兜底(fallback)、
 #         history 回显、features、超长截断、缺参 400、错方法 405
 #   R0.1 同义词归一：口语「怎么充钱」命中充值知识（原三层脱靶场景）
@@ -9,14 +9,18 @@
 #   R0.4 管理台：config key 白名单闸、api_key 掩码回显与回写 skip、
 #         LLM 配置热加载（llm_mode rule→db）、测试连通端点（不可达可读报错）
 #   管理端：401 鉴权、四表 CRUD、sessions 统计载荷
-# 依赖：无（自起 ai-assist mock 模式，临时 SQLite，端口默认 8793）
+#   ★ 改造 1A（2026-09-17）：内嵌 seed 生效（不依赖外置文件）、内嵌管理页可达、
+#         管理台 Token 主库桥接（MAIN_DB → system_config.assist_admin_token）与 env 优先级契约
+# 依赖：无（自起 assist mock 模式，临时 SQLite，端口默认 8793/8794）
 # 用法：bash scripts/uat/assist_uat.sh
 # ============================================================================
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 
 PORT="${ASSIST_UAT_PORT:-8793}"
+PORT2="${ASSIST_UAT_PORT2:-8794}"
 B="http://127.0.0.1:${PORT}"
+B2="http://127.0.0.1:${PORT2}"
 J='Content-Type: application/json'
 TOK="uat-assist-$(date +%s)"
 WORK=$(mktemp -d)
@@ -27,15 +31,16 @@ ck(){ if echo "$3" | grep -qE "$2"; then PASS=$((PASS+1)); echo "PASS|$1"; else 
 
 log(){ echo "[assist_uat] $*"; }
 
-# ---------- 0. 构建 ----------
-log "构建 ai-assist..."
-(cd ai-assist && go build -o "$BIN" ./cmd/server) || { echo "构建失败"; exit 1; }
+# ---------- 0. 构建（★ 改造 1A：源码已并入主 module，入口改为 cmd/assist-server）----------
+log "构建 assist-server（主仓单 module）..."
+(cd backend-go && go build -o "$BIN" ./cmd/assist-server) || { echo "构建失败"; exit 1; }
 
-# ---------- 1. 启动（mock 规则模式 + 全新临时库）----------
-log "启动 ai-assist :${PORT}（mock 规则模式）..."
+# ---------- 1. 启动（mock 规则模式 + 全新临时库；★ 不配 ASSIST_SEED/ASSIST_WEB）----------
+# ★ 改造 1A：显式不传 ASSIST_SEED / ASSIST_WEB —— 验证 seed 与管理页均为二进制内嵌，
+#   部署不再需要投放 web/ 与 seed/ 目录；内嵌若失效，下方 A1/A2/E1/E2 会直接红。
+log "启动 assist :${PORT}（mock 规则模式，内嵌 seed + 内嵌管理页）..."
 ASSIST_MOCK=1 ASSIST_ADMIN_TOKEN="$TOK" ASSIST_ADDR="127.0.0.1:${PORT}" \
-  ASSIST_DB="$WORK/assist.db" ASSIST_SEED=ai-assist/seed/seed.json \
-  ASSIST_WEB=ai-assist/web \
+  ASSIST_DB="$WORK/assist.db" \
   nohup "$BIN" > "$WORK/assist.log" 2>&1 < /dev/null &
 PID=$!
 OK=0
@@ -43,7 +48,7 @@ for i in $(seq 1 10); do
   sleep 1
   if curl -s -m 2 "$B/health" | grep -q '"ok":true'; then OK=1; break; fi
 done
-[ "${OK:-0}" = "1" ] || { echo "ai-assist 启动失败"; tail -5 "$WORK/assist.log"; kill $PID 2>/dev/null; exit 1; }
+[ "${OK:-0}" = "1" ] || { echo "assist 启动失败"; tail -5 "$WORK/assist.log"; kill $PID 2>/dev/null; exit 1; }
 log "就绪（${i}s）"
 
 AH="X-Assist-Admin: $TOK"
@@ -77,7 +82,7 @@ ck A6-chat-405 '^405$' "$R"
 R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"s_syn\",\"message\":\"怎么充钱\",\"page\":\"/\"}")
 ck B1-synonym-recharge '充值|余额|套餐|积分' "$R"
 ck B1-synonym-not-fallback-empty '"source":"' "$R"
-if echo "$R" | grep -q '这个问题我记下了\|这个问题我还没学到'; then
+if echo "$R" | grep -qE '这个问题我记下了|这个问题我还没学到'; then
   FAIL=$((FAIL+1)); echo "FAIL|B1-synonym-hit|got fallback text"
 else
   PASS=$((PASS+1)); echo "PASS|B1-synonym-hit"
@@ -131,14 +136,69 @@ ck D3-crud-delete '"ok":true' "$R"
 # ---------- 7. 管理页托管 ----------
 C=$(curl -s -o /dev/null -w '%{http_code}' "$B/assist/admin")
 ck E1-admin-page '^200$' "$C"
+# ★ 改造 1A：管理页为二进制内嵌（未配 ASSIST_WEB）——内容必须是真实页面而非 404 占位
+R=$(curl -s "$B/assist/admin")
+ck E2-admin-embedded 'AI 助手管理台' "$R"
+
+# ---------- 8. ★ 改造 1A：管理台 Token 主库桥接 + env 优先级 ----------
+# 构造最小主库（仅 system_config 表）：验证 assist 以只读方式读到该 Token。
+# 注：写入值为明文——DecryptSecret 对无 enc:v1: 前缀的历史明文原样返回（兼容路径），
+#     主后台经 /api/assist 写入时是 enc:v1: 密文，两条路径共用同一读取函数。
+MAINDB="$WORK/main.db"
+DBTOK="uat-dbtoken-$(date +%s)"
+python3 - "$MAINDB" "$DBTOK" <<'PY'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("CREATE TABLE system_config(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)")
+conn.execute("INSERT INTO system_config(key,value,updated_at) VALUES('assist_admin_token',?,datetime('now'))", (sys.argv[2],))
+conn.commit(); conn.close()
+PY
+
+log "启动 assist :${PORT2}（无 ASSIST_ADMIN_TOKEN，改由主库桥接取 Token）..."
+ASSIST_MOCK=1 ASSIST_ADDR="127.0.0.1:${PORT2}" ASSIST_DB="$WORK/assist2.db" \
+  MAIN_DB="$MAINDB" \
+  nohup "$BIN" > "$WORK/assist2.log" 2>&1 < /dev/null &
+PID2=$!
+OK2=0
+for i in $(seq 1 10); do
+  sleep 1
+  if curl -s -m 2 "$B2/health" | grep -q '"ok":true'; then OK2=1; break; fi
+done
+[ "${OK2:-0}" = "1" ] || { echo "assist2 启动失败"; tail -5 "$WORK/assist2.log"; kill $PID2 2>/dev/null; exit 1; }
+
+# 8a. 主库 Token 生效（env 未配 → 回落到 DB）
+C=$(curl -s -o /dev/null -w '%{http_code}' "$B2/api/assist/admin/kb" -H "X-Assist-Admin: $DBTOK")
+ck F1-dbtoken-works '^200$' "$C"
+# 8b. 非法 Token 仍被拒（桥接不放松鉴权）
+C=$(curl -s -o /dev/null -w '%{http_code}' "$B2/api/assist/admin/kb" -H "X-Assist-Admin: wrong-token")
+ck F2-dbtoken-reject-wrong '^401$' "$C"
+{ kill $PID2 2>/dev/null; wait $PID2 2>/dev/null; } 2>/dev/null || true
+
+# 8c. env 优先级高于主库（同库同 Token，env 显式配置应压过 DB 值）
+ENVTOK="uat-envtoken-$(date +%s)"
+ASSIST_MOCK=1 ASSIST_ADMIN_TOKEN="$ENVTOK" ASSIST_ADDR="127.0.0.1:${PORT2}" \
+  ASSIST_DB="$WORK/assist3.db" MAIN_DB="$MAINDB" \
+  nohup "$BIN" > "$WORK/assist3.log" 2>&1 < /dev/null &
+PID3=$!
+OK3=0
+for i in $(seq 1 10); do
+  sleep 1
+  if curl -s -m 2 "$B2/health" | grep -q '"ok":true'; then OK3=1; break; fi
+done
+[ "${OK3:-0}" = "1" ] || { echo "assist3 启动失败"; tail -5 "$WORK/assist3.log"; kill $PID3 2>/dev/null; exit 1; }
+C=$(curl -s -o /dev/null -w '%{http_code}' "$B2/api/assist/admin/kb" -H "X-Assist-Admin: $ENVTOK")
+ck F3-env-priority-works '^200$' "$C"
+C=$(curl -s -o /dev/null -w '%{http_code}' "$B2/api/assist/admin/kb" -H "X-Assist-Admin: $DBTOK")
+ck F4-env-priority-overrides-db '^401$' "$C"
+{ kill $PID3 2>/dev/null; wait $PID3 2>/dev/null; } 2>/dev/null || true
 
 # ---------- 汇总 ----------
 DUR=$(( $(date +%s) - START ))
 log "=============================="
-log "ai-assist UAT：PASS=$PASS FAIL=$FAIL DUR=${DUR}s"
+log "assist UAT：PASS=$PASS FAIL=$FAIL DUR=${DUR}s"
 log "日志目录：$WORK"
 log "=============================="
-kill $PID 2>/dev/null || true
+{ kill $PID 2>/dev/null; wait $PID 2>/dev/null; } 2>/dev/null || true
 rm -rf "$WORK"
 [ "$FAIL" = "0" ] || exit 1
 exit 0

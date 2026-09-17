@@ -1,0 +1,136 @@
+// ============ secret.go · 职责说明 ============
+// 静态加密工具（AES-256-GCM），供 store 及需要读写密文配置的其它包共用。
+//
+// ★ 改造 2（2026-09-17）：自 internal/store/crypto.go 下沉而来。原实现寄生在 store 包内，
+// 导致「只读一个密文配置」也必须依赖整个业务存储层（如 ai-assist 融合后需要解密
+// assist_admin_token，却不想拉起 billing/kb 等全部表）。下沉后：
+//   - internal/store 保留同名薄委托，既有 90+ 调用点零改动；
+//   - internal/assist/* 直接复用本包，不反向依赖业务存储层。
+//
+// 密钥：由 JWT_SECRET 派生（SHA-256 → 32 字节）；缺失时回退进程级随机密钥
+// （仅本地/测试，生产必须设置 JWT_SECRET，否则重启后旧密文不可解密）。
+// =============================================
+// Package secret 提供静态加密/解密（密文带 enc:v1: 前缀，兼容历史明文）。
+package secret
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"io"
+	"log"
+	"os"
+	"strings"
+	"sync"
+)
+
+// aeadKeyOnce 保证「JWT_SECRET 缺失时的随机派生密钥」在进程内只生成一次（否则加解密密钥不一致）。
+var (
+	aeadKeyOnce sync.Once
+	aeadKeyRand []byte
+)
+
+// deriveAEADKey 由 JWT_SECRET 派生 32 字节 AES 密钥。
+// 生产必须设置 JWT_SECRET；若缺失，退回进程级随机密钥（仅本地/测试用，且不可被外部推算），
+// 杜绝原「SHA256("|rox-apikey-enc")」这一公开常量导致的密钥明文可被还原的风险。
+func deriveAEADKey() []byte {
+	secret := os.Getenv("JWT_SECRET")
+	if secret != "" {
+		sum := sha256.Sum256([]byte(secret + "|rox-apikey-enc"))
+		return sum[:]
+	}
+	// 缺失：生成稳定随机密钥并告警（每次启动时不同；多副本需共享 JWT_SECRET）。
+	aeadKeyOnce.Do(func() {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			log.Printf("[crypto] 警告: 随机源不可用，AES 密钥派生回退空值（加密将不可用，请设置 JWT_SECRET）")
+			aeadKeyRand = nil
+			return
+		}
+		aeadKeyRand = b
+		log.Printf("[crypto] 警告: JWT_SECRET 未设置，AES 静态加密使用随机进程密钥（重启后旧密文不可解密，生产请设置 JWT_SECRET）")
+	})
+	if aeadKeyRand == nil {
+		return make([]byte, 32) // 极端降级：空密钥（加密无意义但避免 nil panic）
+	}
+	return aeadKeyRand
+}
+
+// EncryptPlain AES-256-GCM 加密：返回 base64(nonce||ciphertext)。
+func EncryptPlain(plain string) string {
+	key := deriveAEADKey()
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return ""
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return ""
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+		return ""
+	}
+	ct := gcm.Seal(nonce, nonce, []byte(plain), nil)
+	return base64.StdEncoding.EncodeToString(ct)
+}
+
+// DecryptPlain 解密 base64(nonce||ciphertext)；失败返回空串。
+func DecryptPlain(enc string) string {
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		return ""
+	}
+	key := deriveAEADKey()
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return ""
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return ""
+	}
+	ns := gcm.NonceSize()
+	if len(raw) < ns {
+		return ""
+	}
+	plain, err := gcm.Open(nil, raw[:ns], raw[ns:], nil)
+	if err != nil {
+		return string("") // 认证失败：静默返回空（调用方应告警）
+	}
+	return string(plain)
+}
+
+// secretEncPrefix 前缀常量本体。
+const secretEncPrefix = "enc:v1:"
+
+// SecretEncPrefix 静态加密密文前缀：区分「已加密」与「历史明文」，支持平滑迁移。
+const SecretEncPrefix = secretEncPrefix
+
+// EncryptSecret 带前缀的通用静态加密（评审整改 D3）：用于 model_routes 等配置内的供应商 Key。
+// 空串原样返回（保持「未配置」语义，不产出空密文）。
+func EncryptSecret(plain string) string {
+	if plain == "" {
+		return ""
+	}
+	return secretEncPrefix + EncryptPlain(plain)
+}
+
+// DecryptSecret 与 EncryptSecret 配对；无前缀的输入按历史明文原样返回（兼容旧库）。
+// 解密失败返回空串——调用方应打告警并跳过该条目（典型原因：JWT_SECRET 轮换未同步重存）。
+func DecryptSecret(stored string) string {
+	if stored == "" {
+		return ""
+	}
+	if !strings.HasPrefix(stored, secretEncPrefix) {
+		return stored // 历史明文
+	}
+	return DecryptPlain(strings.TrimPrefix(stored, secretEncPrefix))
+}
+
+// IsSecretMasked 判断是否为前端掩码串（sk-**** 形态）——保存链路据此回填旧值。
+func IsSecretMasked(s string) bool {
+	return strings.Contains(s, "****")
+}

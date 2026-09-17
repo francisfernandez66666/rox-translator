@@ -9,6 +9,9 @@
 #   （构建+mock LLM/chain+API 主链路+交易专项+Playwright，race 由 backend job 覆盖
 #   故 UAT_SKIP_RACE=1 跳过），把「Playwright 不在 CI 闸门」的缺口补上。
 #   PG 方言矩阵仍在发布机手跑（schema/方言差异未 100% 等价）。
+# ★ 改造 1A（2026-09-17）：AI 助手（assist）并入主 module 后，
+#   - 其 27 个单测函数已随 backend job 的 ./internal/... 自动纳入 CI（此前零覆盖）；
+#   - 新增 assist job 跑 scripts/uat/assist_uat.sh（自起 mock 服务，无外部依赖）。
 # ============================================================================
 name: ci
 
@@ -32,6 +35,21 @@ jobs:
       - name: go test -race
         run: go test -race -count=1 ./internal/... ./cmd/...
         working-directory: backend-go
+
+  # ★ 改造 1A（2026-09-17）：AI 助手（assist）UAT 进闸门。
+  #   此前 assist_uat.sh 与 ai-assist 的 27 个单测都只能手工跑（ci.yml 零处提及 assist）；
+  #   融合后单测已由 backend job 覆盖，本 job 补上端到端 UAT（自起 mock 服务，无外部依赖）。
+  assist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: backend-go/go.sum
+      - name: assist UAT（内嵌 seed/管理页 + 管理台 Token 桥接 + 管理端 CRUD）
+        run: bash scripts/uat/assist_uat.sh
 
   frontend:
     runs-on: ubuntu-latest

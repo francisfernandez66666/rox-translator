@@ -2,16 +2,18 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 
-	"ai-assist/internal/engine"
-	"ai-assist/internal/llm"
-	"ai-assist/internal/store"
+	"translator/internal/assist/engine"
+	"translator/internal/assist/llm"
+	"translator/internal/assist/store"
 )
 
 // newTestServer 建临时库 + seed 夹具 + 无 LLM 的测试服务
@@ -209,18 +211,28 @@ func TestAdminCRUD(t *testing.T) {
 	}
 }
 
-// TestHealthAndAdminPage 健康检查与管理台静态页
+// TestHealthAndAdminPage 健康检查与管理台页面
+// ★ 改造 1A（2026-09-17）：管理台改为随二进制内嵌（web.AdminHTML），
+// 测试环境无 web 目录也应稳定 200 且吐真实页面——原「缺文件必 404」断言已过时。
 func TestHealthAndAdminPage(t *testing.T) {
 	srv := newTestServer(t)
 	code, r := doJSON(t, srv, "GET", "/health", "", nil)
 	if code != 200 || r["ok"] != true {
 		t.Fatalf("health: %d %+v", code, r)
 	}
-	// 管理页文件缺失时应 404（测试环境无 web 目录）
-	resp, _ := http.Get(srv.URL + "/assist/admin")
-	resp.Body.Close()
-	if resp.StatusCode != 404 {
-		t.Fatalf("missing admin page should 404, got %d", resp.StatusCode)
+	// 管理页：内嵌资源兜底，无外置 web 目录也必须可用（部署零外部文件依赖）
+	t.Setenv("ASSIST_WEB", "")
+	resp, err := http.Get(srv.URL + "/assist/admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("内嵌管理页应 200，实际 %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(body, []byte("AI 助手管理台")) {
+		t.Fatalf("管理页内容异常（应含标题『AI 助手管理台』），长度 %d", len(body))
 	}
 }
 

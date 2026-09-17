@@ -1,16 +1,30 @@
-# ai-assist systemd unit 模板（★ autosales，2026-09-16 已上线主站）
-# 安装：cp deploy/systemd/ai-assist.service /etc/systemd/system/
-#       mkdir -p /etc/ai-assist && vi /etc/ai-assist/secrets.env  # 见下
-#       chown -R translator:translator /opt/ai-assist
-#       systemctl daemon-reload && systemctl enable --now ai-assist
+# AI 助手（assist）systemd unit 模板（★ autosales；2026-09-17 改造 1A 融合后更新）
+#
+# 变化（改造 1A，相对原 ai-assist.service）：
+#   - 二进制与主服务同仓同 module，产物名 translator-assist（源 backend-go/cmd/assist-server）；
+#   - 管理台页面与初始 seed 已随二进制内嵌，**不再需要**投放 web/ 与 seed/ 目录；
+#   - 管理台 Token 解析链：env ASSIST_ADMIN_TOKEN（优先，保底）→ 主库 system_config.assist_admin_token
+#     （enc:v1: 密文，可在主后台「AI 助手 → 管理 Token」轮换）。主服务以 SQLite 运行且同机时，
+#     可只配 MAIN_DB 而不配 ASSIST_ADMIN_TOKEN；主服务为 PostgreSQL 时必须显式配 ASSIST_ADMIN_TOKEN。
+#
+# 安装：
+#   cp deploy/systemd/ai-assist.service /etc/systemd/system/
+#   mkdir -p /etc/ai-assist && vi /etc/ai-assist/secrets.env   # 见下
+#   install -m 0755 backend-go/dist/translator-assist /opt/ai-assist/bin/translator-assist
+#   chown -R translator:translator /opt/ai-assist
+#   systemctl daemon-reload && systemctl enable --now ai-assist
 #
 # /etc/ai-assist/secrets.env（0600）：
 #   ASSIST_ADDR=127.0.0.1:8790
 #   ASSIST_DB=/opt/ai-assist/data/assist.db
-#   ASSIST_SEED=/opt/ai-assist/seed/seed.json
-#   ASSIST_WEB=/opt/ai-assist/web
 #   ASSIST_CORS=https://langcross.lexicorn.cn
-#   ASSIST_ADMIN_TOKEN=<openssl rand -hex 24>
+#   # 主库桥接（SQLite 形态；读 system_config.assist_admin_token，管理台免手填）
+#   MAIN_DB=/opt/translator/data/tm.sqlite3
+#   # 可选：显式管理台 Token（优先级高于主库；主服务为 PostgreSQL 时必须配置）
+#   #ASSIST_ADMIN_TOKEN=<openssl rand -hex 24>
+#   # 可选：外置覆盖管理页/seed（默认用二进制内嵌资源，无需投放）
+#   #ASSIST_WEB=/opt/ai-assist/web
+#   #ASSIST_SEED=/opt/ai-assist/seed/seed.json
 #   # LLM（OpenAI 兼容；不配则走知识库/话术规则兜底）：
 #   #ASSIST_LLM_BASE_URL=https://api.siliconflow.cn/v1
 #   #ASSIST_LLM_API_KEY=sk-xxxx
@@ -27,7 +41,7 @@ User=translator
 Group=translator
 WorkingDirectory=/opt/ai-assist
 EnvironmentFile=/etc/ai-assist/secrets.env
-ExecStart=/opt/ai-assist/bin/assist-server
+ExecStart=/opt/ai-assist/bin/translator-assist
 Restart=always
 RestartSec=3
 StandardOutput=append:/opt/ai-assist/data/assist.log

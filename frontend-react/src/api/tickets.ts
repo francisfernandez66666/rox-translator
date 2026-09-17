@@ -35,8 +35,50 @@ export interface Ticket {
   delivery?: string
   /** ★ 纯文案 .md 产物路径（还原模式兜底附加物 / 纯文案模式主产物） */
   text_result_path?: string
+  /** ★ 改造 4（2026-09-17）：质检存疑标记 1=有语言评估总分低于阈值，需人工复核（列表徽标数据源） */
+  quality_flagged?: number
+  /** ★ 改造 5：确定性质检 error 级问题数（列表徽标数据源，由 runQA 落列） */
+  qa_errors?: number
+  /** ★ 改造 5：确定性质检 warning 级提示数 */
+  qa_warnings?: number
   created_at: string
   updated_at: string
+}
+
+/** 单条质检问题（对应后端 qa.Issue，改造 5 用户侧透出） */
+export interface QAReportIssue {
+  /** 目标语言代码 */
+  lang: string
+  /** 规则名：empty/same/number/placeholder/length/punctuation */
+  rule: string
+  /** 级别：error（已自动重译后仍存在）/ warning */
+  level: 'error' | 'warning' | string
+  /** 人读说明 */
+  detail: string
+}
+
+/** 确定性质检报告（对应后端 qa.Report） */
+export interface QAReport {
+  /** error 级问题数 */
+  errors: number
+  /** warning 级问题数 */
+  warnings: number
+  /** 问题明细（后端上限 50 条） */
+  issues?: QAReportIssue[]
+  /** 无 error 视为通过 */
+  pass: boolean
+}
+
+/** ★ 改造 4/5：工单质量视图（详情接口 quality 字段） */
+export interface TicketQuality {
+  /** 确定性质检报告（空译文/同文/数字/占位符/漏翻/标点） */
+  qa_report?: QAReport | null
+  /** 语言 → 初翻评估总分（0-100） */
+  eval_scores?: Record<string, number>
+  /** 语言 → 校对评估总分 */
+  review_eval_scores?: Record<string, number>
+  /** 评估低于阈值语言（「质检存疑」徽标数据源） */
+  quality_flagged_langs?: string[]
 }
 
 /** 工单接口统一响应结构：tickets 列表/ticket 单对象/states 流程状态/ files 结果文件 */
@@ -47,6 +89,8 @@ export interface TicketResp {
   ticket?: Ticket
   states?: unknown[]
   files?: { id: number; file_name: string; result_path: string; text_result_path?: string; error: string }[]
+  /** ★ 改造 4/5：详情接口附带的质量视图（列表接口不返回） */
+  quality?: TicketQuality
 }
 
 /** 获取工单列表（mine=true 仅查看自己创建的） */
@@ -82,7 +126,7 @@ export async function ticketRun(id: number): Promise<TicketResp> {
   return request('/api/tickets/run', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }
 
-/** 获取工单详情（含步骤状态轨迹） */
+/** 获取工单详情（含步骤状态轨迹；并附带 QA 质量视图 quality 字段，列表接口 myTickets 不返回该字段） */
 export async function ticketDetail(id: number): Promise<TicketResp> {
   return request(`/api/tickets/detail?id=${id}`, { headers: authHeaders() })
 }

@@ -12,10 +12,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sync"
 	"time"
+
+	"translator/internal/observability"
 )
 
 // Message OpenAI 兼容消息
@@ -39,14 +40,14 @@ type Provider struct {
 	Model   string
 }
 
-// Client 降级链客户端
+// Client 降级链客户端：按 providers 顺序依次尝试，单条消息内失败自动降下一个模型。
 type Client struct {
-	mu        sync.RWMutex
-	providers []Provider
-	fails     map[int]int       // 连续失败次数
-	coolUntil map[int]time.Time // 冷却截止
-	http      *http.Client
-	budget    time.Duration
+	mu        sync.RWMutex      // 保护下方可变字段的并发读写
+	providers []Provider        // 按优先级排列的模型候选列表
+	fails     map[int]int       // 各 provider 连续失败次数（下标 → 次数），达阈值进冷却
+	coolUntil map[int]time.Time // 各 provider 冷却截止时间，未到期则本次跳过
+	http      *http.Client      // 复用底层 HTTP 连接
+	budget    time.Duration     // 整条降级链的总超时预算（防挂死叠加超时）
 }
 
 // New 构建客户端；providers 按优先级排列
@@ -87,7 +88,9 @@ func (c *Client) Chat(ctx context.Context, temperature float64, maxTokens int, m
 		p := c.providers[i]
 		c.mu.RUnlock()
 		if cool {
-			log.Printf("[llm] provider[%d] %s 冷却中，跳过", i, p.Model)
+			// ★ 改造 1A：接主仓 observability（slog JSON + trace_id），不再散落 log.Printf
+			observability.Warn(ctx, "assist.llm provider 冷却中，跳过",
+				"provider_index", i, "model", p.Model)
 			continue
 		}
 
@@ -109,8 +112,9 @@ func (c *Client) Chat(ctx context.Context, temperature float64, maxTokens int, m
 			return text, p.Model, usage, nil
 		}
 		lastErr = err
-		log.Printf("[llm] provider[%d] %s 失败: %v，降级", i, p.Model, err)
-		c.markFail(i)
+		observability.Warn(ctx, "assist.llm provider 调用失败，降级",
+			"provider_index", i, "model", p.Model, "err", err)
+		c.markFail(ctx, i)
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("all providers cooling down")
@@ -171,7 +175,8 @@ func (c *Client) markOK(i int) {
 }
 
 // markFail 调用失败：累计失败计数，连续 3 次进入 5 分钟冷却
-func (c *Client) markFail(i int) {
+// ★ 改造 1A：签名加 ctx，冷却日志经 observability 输出以继承 trace_id。
+func (c *Client) markFail(ctx context.Context, i int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.fails[i]++
@@ -179,7 +184,8 @@ func (c *Client) markFail(i int) {
 	if c.fails[i] >= 3 {
 		c.coolUntil[i] = time.Now().Add(5 * time.Minute)
 		delete(c.fails, i)
-		log.Printf("[llm] provider[%d] 连续失败进冷却 5 分钟", i)
+		observability.Warn(ctx, "assist.llm provider 连续失败进冷却",
+			"provider_index", i, "cooldown", "5m")
 	}
 }
 

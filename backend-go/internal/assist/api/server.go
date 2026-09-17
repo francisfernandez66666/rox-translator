@@ -2,10 +2,10 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,8 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"ai-assist/internal/engine"
-	"ai-assist/internal/store"
+	"translator/internal/assist/engine"
+	"translator/internal/assist/store"
+	"translator/internal/assist/web"
+	"translator/internal/observability"
 )
 
 // Server HTTP 服务
@@ -120,7 +122,7 @@ func newSessionID() string {
 var sessMu sync.Mutex // session upsert 竞态保护（低并发足够）
 
 // ensureSession 读取或创建会话
-func (s *Server) ensureSession(id, pageURL string) (store.Row, bool) {
+func (s *Server) ensureSession(ctx context.Context, id, pageURL string) (store.Row, bool) {
 	sessMu.Lock()
 	defer sessMu.Unlock()
 	sess, _ := s.db.SessionRow(id)
@@ -128,7 +130,7 @@ func (s *Server) ensureSession(id, pageURL string) (store.Row, bool) {
 		return sess, false
 	}
 	if err := s.db.EnsureSession(id, pageURL); err != nil {
-		log.Printf("[api] session create err: %v", err)
+		observability.Error(ctx, "assist.api 会话创建失败", "err", err)
 	}
 	sess, _ = s.db.SessionRow(id)
 	return sess, sess != nil
@@ -145,7 +147,7 @@ func (s *Server) handleGreeting(w http.ResponseWriter, r *http.Request) {
 	if sid == "" {
 		sid = newSessionID()
 	}
-	s.ensureSession(sid, page)
+	s.ensureSession(r.Context(), sid, page)
 	text := s.db.GetConfig("welcome", "")
 	if text == "" {
 		text = s.eng.Greeting()
@@ -195,12 +197,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		req.Message = req.Message[:2000]
 	}
 	sid := req.Session
-	s.ensureSession(sid, req.Page)
+	s.ensureSession(r.Context(), sid, req.Page)
 
 	_ = s.db.AddMessage(sid, "user", req.Message, nil)
 	history, _ := s.db.History(sid, 12)
 
-	rep := s.eng.Respond(sid, req.Message, req.Page, history)
+	rep := s.eng.Respond(r.Context(), sid, req.Message, req.Page, history)
 	_ = s.db.AddMessage(sid, "assistant", rep.Content, actionMaps(rep.Actions))
 	_ = s.db.TouchSession(sid)
 
@@ -264,10 +266,10 @@ func (s *Server) handleFeatures(w http.ResponseWriter, r *http.Request) {
 // ============================================================
 
 // configKeyWhitelist 管理端可写的配置键白名单：
-//  - UI 五项：welcome/persona/temperature/max_tokens/quick_chips
-//  - ★ LLM 四项（R0.4）：base_url/api_key/model/model_backup 允许后台在线配置，
-//    engine 侧配合惰性重建实现热加载；api_key_backup 复用主 Key 故不单列。
-//    env（ASSIST_LLM_*）显式配置优先于 configs 表（见 engine.llmClient）。
+//   - UI 五项：welcome/persona/temperature/max_tokens/quick_chips
+//   - ★ LLM 四项（R0.4）：base_url/api_key/model/model_backup 允许后台在线配置，
+//     engine 侧配合惰性重建实现热加载；api_key_backup 复用主 Key 故不单列。
+//     env（ASSIST_LLM_*）显式配置优先于 configs 表（见 engine.llmClient）。
 var configKeyWhitelist = map[string]bool{
 	"welcome": true, "persona": true, "temperature": true, "max_tokens": true, "quick_chips": true,
 	"llm_base_url": true, "llm_api_key": true, "llm_model": true, "llm_model_backup": true,
@@ -316,7 +318,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.db.SetConfig(req.Key, req.Value); err != nil {
-			log.Printf("[api] config set %s err: %v", req.Key, err)
+			observability.Error(r.Context(), "assist.api 配置写入失败", "key", req.Key, "err", err)
 			writeJSON(w, 500, map[string]any{"error": "db"})
 			return
 		}
@@ -362,7 +364,7 @@ func (s *Server) handleTable(table string) http.HandlerFunc {
 			normalizeRow(table, data)
 			id, err := s.db.Create(table, data)
 			if err != nil {
-				log.Printf("[api] create %s err: %v", table, err)
+				observability.Error(r.Context(), "assist.api 记录创建失败", "table", table, "err", err)
 				writeJSON(w, 500, map[string]any{"error": err.Error()})
 				return
 			}
@@ -447,18 +449,18 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		rows = []store.Row{}
 	}
 	writeJSON(w, 200, map[string]any{
-		"sessions":     rows,
-		"total":        s.db.SessionCount(),
-		"messages":     s.db.MessageCount(),
-		"unanswered":   s.eng.UnansweredQuestions(), // R0.2 运营补料清单
-		"llm_mode":     s.llmMode(),                 // R0.3 生效状态徽标
+		"sessions":   rows,
+		"total":      s.db.SessionCount(),
+		"messages":   s.db.MessageCount(),
+		"unanswered": s.eng.UnansweredQuestions(), // R0.2 运营补料清单
+		"llm_mode":   s.llmMode(r.Context()),      // R0.3 生效状态徽标
 	})
 }
 
 // llmMode LLM 接入状态（管理台徽标）：env / db / rule
-func (s *Server) llmMode() string {
-	if s.eng.LLMMode() != "" {
-		return s.eng.LLMMode()
+func (s *Server) llmMode(ctx context.Context) string {
+	if s.eng.LLMMode(ctx) != "" {
+		return s.eng.LLMMode(ctx)
 	}
 	return "rule"
 }
@@ -471,7 +473,7 @@ func (s *Server) handleLLMTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
-	text, model, _, err := s.eng.LLMTest()
+	text, model, _, err := s.eng.LLMTest(r.Context())
 	dur := time.Since(start).Milliseconds()
 	if err != nil {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error(), "ms": dur})
@@ -490,24 +492,24 @@ func truncate(s string, n int) string {
 }
 
 // adminPage 管理页（单文件 HTML）
+// ★ 改造 1A（2026-09-17）：默认吐内嵌资源（web.AdminHTML，随二进制编译，零外部文件依赖）；
+// ASSIST_WEB 显式指向的目录内存在 admin.html 时优先用外置文件（运维临时改页面用）。
 func (s *Server) adminPage(w http.ResponseWriter, r *http.Request) {
-	p := filepath.Join(s.webDir(), "admin.html")
-	b, err := os.ReadFile(p)
-	if err != nil {
-		w.WriteHeader(404)
-		_, _ = w.Write([]byte("admin page missing: " + p))
+	// 外置覆盖优先（存在才生效，避免 env 残留指向不存在路径导致 404）
+	if v := os.Getenv("ASSIST_WEB"); v != "" {
+		if b, err := os.ReadFile(filepath.Join(v, "admin.html")); err == nil {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write(b)
+			return
+		}
+	}
+	if len(web.AdminHTML) > 0 {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(web.AdminHTML)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(b)
-}
-
-// webDir 管理页静态目录（env 覆盖，默认 web）
-func (s *Server) webDir() string {
-	if v := os.Getenv("ASSIST_WEB"); v != "" {
-		return v
-	}
-	return "web"
+	w.WriteHeader(404)
+	_, _ = w.Write([]byte("admin page missing"))
 }
 
 // ============================================================

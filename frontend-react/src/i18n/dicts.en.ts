@@ -227,7 +227,18 @@ export const baseEn: Record<string,string> = {
   'tk.modeFast': 'Fast (no KB)', 'tk.modePro': 'Pro Review',
   'tk.modeFastShort': 'Fast', 'tk.modeProShort': 'Pro Review',
   'tk.modeTip': '⚡ Fast: AI draft + review, ~seconds | 🎓 Pro: full pipeline with KB + evals + hard gate',
+  // tk.qaSummary: summary line of the QA report block in the detail drawer (error/warning counts), rendered by QualityBlock
   'tk.qaSummary': '{errors} errors / {warnings} warnings',
+  // ★ 改造 4/5（2026-09-17）：用户侧质检报告透出 + 质检存疑徽标
+  'tk.qaTitle': 'Quality Report', 'tk.qaPass': 'QA passed', 'tk.qaFail': 'QA failed',
+  'tk.qaErrors': '{n} errors', 'tk.qaWarnings': '{n} warnings', 'tk.qaClean': 'No quality issues detected',
+  'tk.qaFlagged': 'QA flagged', 'tk.qaFlaggedTip': 'Machine evaluation scored below threshold; flagged for manual review.',
+  'tk.qaColLang': 'Language', 'tk.qaColRule': 'Rule', 'tk.qaColLevel': 'Level', 'tk.qaColDetail': 'Detail',
+  'tk.qaLevelError': 'Error', 'tk.qaLevelWarning': 'Warning', 'tk.qaNoIssues': 'No issues found.',
+  'tk.qaErrorNote': 'Errors persisted after automatic retranslation (up to 8 attempts); manual review recommended.',
+  'tk.evalScores': 'Evaluation scores (out of 100)', 'tk.evalInitial': 'Draft', 'tk.evalReview': 'Review',
+  'tk.qaRuleEmpty': 'Empty', 'tk.qaRuleSame': 'Unchanged', 'tk.qaRuleNumber': 'Number mismatch',
+  'tk.qaRulePlaceholder': 'Placeholder mismatch', 'tk.qaRuleLength': 'Length anomaly', 'tk.qaRulePunctuation': 'Punctuation',
   'tk.createHint': 'Queued for async processing; you will be notified on completion. Use this mode for large files.',
   'tk.myTickets': 'My Jobs',
   'tk.colNo': 'No.',

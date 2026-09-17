@@ -13,7 +13,7 @@ import {
 } from '@/api'
 import { runGuarded } from '@/lib/runGuarded'
 import { confirmDialog } from '@/components/uiDialogs'
-import type { Ticket, TicketResp } from '@/api/tickets'
+import type { Ticket, TicketResp, TicketQuality, QAReportIssue } from '@/api/tickets'
 import { TRANSLATE_FILE_ACCEPT, TEXT_DELIVERY_ACCEPT, validateTranslateFile } from '@/api/translate'
 import LangMultiSelect, { LangChips } from './LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
@@ -47,6 +47,130 @@ const STEP_WEIGHT: Record<string, number> = {
 const fmtKB = (bytes: number): string => {
   const kb = bytes / 1024
   return kb >= 1024 ? (kb / 1024).toFixed(1) + 'MB' : kb.toFixed(kb % 1 ? 1 : 0) + 'KB'
+}
+
+// ============ ★ 改造 4/5（2026-09-17）：质检透出 ============
+// 背景：确定性质检（qa.Report）此前只落 xlsx 对照表「QA」列，界面零透出；评估分落 payload 后
+// 即「死数据」。本次把两者透出到列表徽标 + 详情抽屉，让付费用户直接看见质检投入。
+
+// 质检规则名 → 词典键（未知规则回退原始规则名，避免新增规则时丢展示）
+const QA_RULE_KEYS: Record<string, string> = {
+  empty: 'tk.qaRuleEmpty', same: 'tk.qaRuleSame', number: 'tk.qaRuleNumber',
+  placeholder: 'tk.qaRulePlaceholder', length: 'tk.qaRuleLength', punctuation: 'tk.qaRulePunctuation',
+}
+// 渲染期取词（随语言切换生效）
+const qaRuleLabel = (rule: string): string => { const k = QA_RULE_KEYS[rule]; return k ? t(k) : rule }
+
+// 徽标基础样式（error 红 / warning 黄 / 存疑橙，均带浅底圆角）
+const badgeStyle = (bg: string, fg: string): React.CSSProperties => ({
+  display: 'inline-flex', alignItems: 'center', gap: 3, background: bg, color: fg,
+  border: `1px solid ${fg}33`, borderRadius: 10, padding: '1px 7px', fontSize: 11.5, whiteSpace: 'nowrap',
+})
+
+// QualityBadges 列表行质检徽标（★ 改造 5）：
+//   qa_errors>0 → 红「N 项错误」；仅 warnings → 黄「N 项提示」；quality_flagged=1 → 橙「质检存疑」。
+// 三者皆无返回 null，保持无质检工单行干净。
+function QualityBadges({ row }: { row: Ticket }) {
+  const errs = row.qa_errors || 0
+  const warns = row.qa_warnings || 0
+  const flagged = row.quality_flagged === 1
+  if (!errs && !warns && !flagged) return null
+  return (
+    <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
+      {errs > 0 && (
+        <span style={badgeStyle('#fdecea', '#c5221f')} title={t('tk.qaErrorNote')}>
+          ● {tpl('tk.qaErrors', { n: errs })}
+        </span>
+      )}
+      {errs === 0 && warns > 0 && (
+        <span style={badgeStyle('#fff6e0', '#b26a00')}>● {tpl('tk.qaWarnings', { n: warns })}</span>
+      )}
+      {flagged && (
+        <span style={badgeStyle('#fff1e6', '#b45309')} title={t('tk.qaFlaggedTip')}>
+          ⚑ {t('tk.qaFlagged')}
+        </span>
+      )}
+    </span>
+  )
+}
+
+// QualityBlock 详情抽屉「质检报告」区块（★ 改造 5）：
+//   Pass/Errors/Warnings 汇总行 + Issues 明细（语言/规则/级别/说明）+ 各语言评估分。
+// 无任何质检数据（草稿/未跑到质检步骤）返回 null，不占位、不误导。
+function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: 'zh' | 'en'; flagged?: boolean }) {
+  const scoreKeysAll = q ? Array.from(new Set([...Object.keys(q.eval_scores || {}), ...Object.keys(q.review_eval_scores || {})])) : []
+  // 无 QA 报告、无评估分且未被列标记存疑 → 不渲染（草稿/未跑到质检步骤，不占位）
+  if (!q?.qa_report && !scoreKeysAll.length && !flagged) return null
+  const rep = q?.qa_report
+  const evalScores = q?.eval_scores || {}
+  const reviewScores = q?.review_eval_scores || {}
+  const flaggedLangs = q?.quality_flagged_langs || []
+  const scoreKeys = scoreKeysAll
+
+  // 语言 → 「初翻 87.5 · 校对 90.2」；不达标语言加 ⚑ 前缀
+  const fmtScore = (lc: string): string => {
+    const parts: string[] = []
+    if (typeof evalScores[lc] === 'number') parts.push(`${t('tk.evalInitial')} ${evalScores[lc].toFixed(1)}`)
+    if (typeof reviewScores[lc] === 'number') parts.push(`${t('tk.evalReview')} ${reviewScores[lc].toFixed(1)}`)
+    return parts.join(' · ')
+  }
+
+  return (
+    <div style={{ marginTop: 12, borderTop: '1px solid #eceff5', paddingTop: 10 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>🔎 {t('tk.qaTitle')}</div>
+
+      {rep && (
+        <>
+          <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={badgeStyle(rep.pass ? '#e6f4ea' : '#fdecea', rep.pass ? '#2e7d32' : '#c5221f')}>
+              {rep.pass ? `✔ ${t('tk.qaPass')}` : `✖ ${t('tk.qaFail')}`}
+            </span>
+            <span style={{ color: '#555' }}>{tpl('tk.qaSummary', { errors: rep.errors, warnings: rep.warnings })}</span>
+          </div>
+          {rep.errors > 0 && (
+            <div style={{ fontSize: 11.5, color: '#c5221f', marginTop: 6, lineHeight: 1.5 }}>⚠️ {t('tk.qaErrorNote')}</div>
+          )}
+          {rep.issues && rep.issues.length > 0 ? (
+            <div style={{ marginTop: 8, maxHeight: 180, overflowY: 'auto', border: '1px solid #eceff5', borderRadius: 6 }}>
+              {rep.issues.map((it: QAReportIssue, i: number) => (
+                <div key={`${it.lang}-${it.rule}-${i}`}
+                     style={{ display: 'flex', gap: 6, alignItems: 'flex-start', padding: '5px 8px', fontSize: 11.5, borderTop: i ? '1px solid #f2f4f8' : 'none' }}>
+                  <span style={badgeStyle('#eef2f9', '#41506b')}>{langLabel(it.lang, lang)}</span>
+                  <span style={badgeStyle('#f4f5f7', '#5b6472')}>{qaRuleLabel(it.rule)}</span>
+                  <span style={badgeStyle(it.level === 'error' ? '#fdecea' : '#fff6e0', it.level === 'error' ? '#c5221f' : '#b26a00')}>
+                    {it.level === 'error' ? t('tk.qaLevelError') : t('tk.qaLevelWarning')}
+                  </span>
+                  <span style={{ flex: 1, color: '#555', wordBreak: 'break-word' }}>{it.detail}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 11.5, color: '#2e7d32', marginTop: 6 }}>{t('tk.qaNoIssues')}</div>
+          )}
+        </>
+      )}
+
+      {scoreKeys.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 12, color: '#555', marginBottom: 4 }}>{t('tk.evalScores')}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {scoreKeys.map((lc) => (
+              <div key={lc} style={{ fontSize: 11.5, display: 'flex', gap: 6, alignItems: 'center' }}>
+                <span style={badgeStyle('#eef2f9', '#41506b')}>
+                  {flaggedLangs.includes(lc) ? '⚑ ' : ''}{langLabel(lc, lang)}
+                </span>
+                <span style={{ color: flaggedLangs.includes(lc) ? '#b45309' : '#555' }}>{fmtScore(lc)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(flaggedLangs.length > 0 || flagged) && (
+        <div style={{ fontSize: 11.5, color: '#b45309', marginTop: 8, lineHeight: 1.5 }}>⚑ {t('tk.qaFlaggedTip')}</div>
+      )}
+    </div>
+  )
 }
 
 // 默认导出组件：翻译工单页，提供建单、工单列表、进度气泡与反馈（等价 Vue TicketsPage）
@@ -142,6 +266,7 @@ export default function TicketsPage() {
       const w = STEP_WEIGHT[x.step]
       if (!w) continue
       if (x.status === 'success' || x.status === 'skipped') pct = Math.max(pct, w)
+      // 进行中的步骤按权重减 10 当作当前进度（比上一完成步骤更靠前，最低 10%），体现「正在做」
       else if (x.status === 'running') pct = Math.max(pct, w - 10 > 10 ? w - 10 : w)
     }
     if (fs.some((f: any) => f.result_path || f.error)) pct = Math.max(pct, 80)
@@ -405,6 +530,9 @@ export default function TicketsPage() {
               cell: ({ row }: any) => <span title={row.title}>{row.file_path ? (row.delivery === 'text' ? '📄 ' : '📐 ') : ''}{row.title}</span> },
             { colKey: 'status', title: t('users.colStatus'), width: 110,
               cell: ({ row }: any) => <span>{statusLabel(row.status)}</span> },
+            // ★ 改造 5：质检徽标列（error/warning 计数 + 质检存疑），无质检数据不渲染
+            { colKey: 'quality', title: t('tk.qaTitle'), width: 190,
+              cell: ({ row }: any) => <QualityBadges row={row as Ticket} /> },
             { colKey: 'target_langs', title: t('tk.colLangs'), width: 150,
               cell: ({ row }: any) => (
                 <span>
@@ -447,7 +575,9 @@ export default function TicketsPage() {
       </div>
 
       {/* 进度气泡（Dialog 承载，等价 Vue Teleport 气泡内容） */}
-      <Dialog visible={!!detail} onClose={() => { setDetail(null); stopDetailPoll() }} width={380} footer={null}
+      {/* ★ 改造 5：宽度按是否有质检数据自适应——质检明细表需要更宽的可读区（380 → 620） */}
+      <Dialog visible={!!detail} onClose={() => { setDetail(null); stopDetailPoll() }}
+              width={detail?.quality ? 620 : 380} footer={null}
               header={detail?.ticket?.title || t('tk.progress')}>
         {pct !== null && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '10px 0 6px' }}>
@@ -471,6 +601,8 @@ export default function TicketsPage() {
         ) : (
           <p style={{ fontSize: 12, color: '#888', margin: '8px 0 0' }}>{t('tk.noSteps')}</p>
         )}
+        {/* ★ 改造 5：详情抽屉「质检报告」区块（确定性 QA 汇总 + Issues 明细 + 各语言评估分） */}
+        <QualityBlock q={detail?.quality} lang={lang} flagged={detail?.ticket?.quality_flagged === 1} />
         {/* ★ 工单双模式（2026-09-13）：还原模式已完成文件工单提供「仅下载译文文案(.md)」次级入口
             （版式不满意或对还原产物降级交付时直接取文案）；纯文案模式主产物即 .md，不重复展示 */}
         {canDownloadTextArtifact ? (

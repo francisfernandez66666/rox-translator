@@ -107,3 +107,27 @@ export async function mailTemplatesSave(templates: Record<string, { subject?: st
 export async function meContext(): Promise<AdminResp> {
   return request('/api/me/context', { headers: authHeaders() })
 }
+
+// ==================== AI 助手管理台 Token（★ 改造 1A，仅超管） ====================
+
+/** AI 助手管理台 Token 响应：token=明文（仅超管会话可见）；source=env/db/none */
+export interface AssistTokenResp extends AdminResp {
+  token?: string
+  /** 生效来源：env（部署侧环境变量）/ db（库内密文，可在后台轮换）/ none（未配置） */
+  source?: 'env' | 'db' | 'none' | string
+  has_token?: boolean
+}
+
+/**
+ * 读取 AI 助手管理台 Token（仅超管）。
+ * 用途：AssistP 免去用户手工粘贴 Token —— 拉到后写入同源 localStorage('assist_tok')，
+ * iframe（/assist-api/assist/admin，同源）加载时自行读取并校验。
+ */
+export async function adminAssistToken(): Promise<AssistTokenResp> {
+  return request('/api/admin/assist/token', { headers: authHeaders() })
+}
+
+/** 轮换/清除 AI 助手管理台 Token（仅超管；空串=清除库内配置并回落 env）。前端在调用成功后重新注入同源 localStorage 并重建 iframe 使新 Token 生效。 */
+export async function adminAssistTokenRotate(token: string): Promise<AdminResp> {
+  return request('/api/admin/assist/token', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ token }) })
+}
