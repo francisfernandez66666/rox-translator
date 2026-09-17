@@ -75,11 +75,15 @@ curl -s -X POST https://rox-test.lexicorn.cn/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"demo_admin","password":"Demo#2026Rm!"}'
 
-# 平台超管（演示库手种：demo_super，role=admin / tenant_id=0，密码同上；
-#   用于采集面板、行业包/语言文化包平台视角管理——企业视角 demo_admin 看不到行业包）
+# 平台超管（演示库种入：demo_super / demo_superadmin，role=admin / tenant_id=0，密码同上；
+#   用于采集面板、行业包/语言文化包平台视角管理——企业视角 demo_admin 看不到行业包；
+#   ★ 2026-09-14 新增 demo_superadmin，与 demo_super 同权限，供并行演示/避免互踢）
 curl -s -X POST https://rox-test.lexicorn.cn/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"demo_super","password":"Demo#2026Rm!"}'
+curl -s -X POST https://rox-test.lexicorn.cn/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"demo_superadmin","password":"Demo#2026Rm!"}'
 
 # ⑤ 服务状态
 systemctl status translator-demo
@@ -106,6 +110,11 @@ journalctl -u translator-demo -n 30
 > 另注意：演示库 `primary_host` 必须保持主站 `langcross.lexicorn.cn`（**不可**改成演示域）。
 > 若改成演示域，品牌接口会把 `rox-test` 判为主站前缀而返回平台品牌（空），租户1的品牌定制
 > （logo/首页背景/网页标题）在演示站不展示——数据本身已随克隆带入，只是解析层被跳过。
+> ★ 2026-09-14 补充（B11 硬编码收敛遗留）：自 2026-09-12 起代码不再内置 `lexicorn.cn` 基础域兜底，
+> 子域→租户品牌解析改由 `system_config.base_domain` 驱动。**演示库缺 `base_domain` 时，`rox-test`
+> 会命中空前缀 → 落回平台默认空品牌 → 演示站 logo/登录背景/网页标题全部丢失**（克隆的生产库同样
+> 缺此列）。`bootstrap-demo.sh` 第 3 步已自动按 `DEMO_DOMAIN` 推导并写入 `base_domain`（幂等，可 `BRAND_BASE_DOMAIN`
+> 覆盖）；升级后若演示站品牌消失，重跑本脚本即可恢复。
 > 邮件说明：演示库已同步 `alert_email=noreply@lexicorn.cn` / `alert_email_cc=575160894@qq.com`
 > （供「我已付费」通知链路验证），但演示服务本身未配置 SMTP，邮件为 Noop（仅入 jobs 队列并打印日志，不真实外发）。
 

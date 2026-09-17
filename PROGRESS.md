@@ -1,6 +1,212 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-11（P0-P2 全链路修复 + Webhook 重试/死信机制）
+> 最后更新：2026-09-17（〇-XLII：架构融合与质量闭环——ai-assist 并入主 module / evals 不合格处置 / 用户侧 QA 透出 / store 冻结下沉 / P0 闸门红点清零）
+
+### 〇-XLII、架构融合与质量闭环（2026-09-17，未部署）
+
+> 来源：《改造方案_架构融合与质量闭环_20260917.md》（基于 2026-09-17 全量 UAT 实测 + 全码阅读核实）。
+> 落地记录与偏差说明见《改造完成情况_架构融合与质量闭环_20260917.md》。
+
+| 序 | 项 | 内容 | 要点 |
+|---|------|------|------|
+| P0 | e2e 闸门红点清零 | `e2e/_tmp_admin.spec.ts`、`e2e/_tmp_iframe.spec.ts` 移入 `e2e-manual/` 并加 skip 守卫 | 二者写死生产站 `langcross.lexicorn.cn` 且依赖 CI 不存在变量 → 闸门长期必红、钝化回归敏感度；`testDir=./e2e` 天然不含新目录。Playwright 34/1 红 → **33/33 全绿零豁免** |
+| 3 | LLM 路由补测试 | `llm/client_test.go`(14) + `engine/stagemodel_crypto_test.go`(2) + `engine/pickroute_test.go`(4) | 补上 `CallChatFallback` 429→等待→`HunyuanFallbackModel` 降级重试、坏 JSON/500/超时三分支、SSE 首块、stage_models 密文解密与密钥继承、静态路由全 0 权重/单路由/开关两路径（全 httptest，不依赖外网） |
+| 4 | evals 不合格处置 | `workflow.go applyEvalDisposition` + tickets 表 `quality_flagged`/`qa_errors`/`qa_warnings` 三列（`db.EnsureColumns` 幂等）+ 告警中心 `kind=eval_quality` + 群机器人四渠道 | 修复 `SaveRecord(...,"passed")` **硬编码状态**（评估分数此前落库即死数据）；阈值 `evals_fail_threshold`（默认 60，<=0 关处置）；提醒 `evals_alert_enabled` 可单独关（只打标不打扰）；同单同语言同阶段限频 1 次；**不做自动重译**（Judge 主观分重译易震荡，仅人工决策）。单测 12 例（含阈值 59.9/60/60.1、限频幂等、打标单向性） |
+| 5 | 用户侧 QA 报告透出 | 工单详情响应增 `quality` 字段（`ticketQualityView` 独立解析，不改既有结构）；`TicketsPage.tsx` 列表质检列（红「N 项错误」/黄「N 项提示」/「质检存疑」）+ 详情「质检报告」区块（汇总 + Issues 明细表 + 五维评估分） | 此前前端全仓 grep `qa_report` **零命中**，付费用户仅在下载 xlsx 后能看到质检投入；error 文案强调「已自动重译后仍存在，建议人工复核」。vitest 4 例（徽标三分支） |
+| 1A | ai-assist 融合 | `ai-assist/*` → `backend-go/internal/assist/*` + `cmd/assist-server`；删独立 `go.mod/go.sum`；`go:embed` 内嵌管理页与 seed；日志统一 slog；ctx 贯穿；Token 经主后台 `/api/admin/assist/token` 免手填下发；systemd 改单二进制 `translator-assist`；CI 补 `assist` job | **数据隔离保留**（独立 SQLite 不并入业务库）；生效 Token 链 env > 主库 `assist_admin_token`（enc:v1:）> 默认值；`assist_uat.sh` 27→**32 断言**（+内嵌页、Token 桥接与 env 优先级契约）；单测 +9（Go 5 / vitest 4） |
+| 2 | store 归组/冻结/下沉 | 加密能力下沉 `internal/secret`（`store/crypto.go` 改名同薄委托，90+ 调用点零改动）；新增 `store/README.md` 六域索引；新增仓库级 `AGENTS.md` | **`billing.go`(2201 行) 与 `kbpackages.go`(1371 行) 只减不增**；`store.go` 不承接业务方法；基础包禁止反向 import store；新列一律 `db.EnsureColumns` 幂等。第三步物理拆包（webhooks/referral → `internal/biz/*`）按方案留待评估后排期 |
+
+回归：`go build`/`go vet`/`go test -race ./...`（26 包，含 assist 4 包）全绿；`run_uat.sh`（PG 方言）API **67/0** · T **308/0** · Playwright **33/33**；`assist_uat.sh` **32/32**；前端 `tsc` 净 + vitest **87/87** + `vite build` 绿。
+
+闸门排查（2 处环境陷阱 → 顺带修 1 个真实脚本缺陷）：① `api_uat_txn.sh` T16 拒绝计数用 BRE `grep -c 'a\|b\|c'`——`\|` 为 GNU 扩展，非 GNU grep 下静默 0 命中致 `S+E==30` 恒假（响应体落盘取证确认语义正确：3 成功 + 20 QPS 限流 + 7 并发限流），已改 `grep -cE`；`assist_uat.sh` 同类负向断言（会「永远通过」）一并修正，全仓仅此 2 处，已立为 `AGENTS.md` 第 7 条约定。② T28 分片上传 4 断言失败为本机沙箱对 `~/Library/Application Support/能言/_uploads/**` 的 unlink 拦截（旧批次残留），清残留后 7/7 全过。
+
+（遗留：`internal/openapi`、`internal/observability`、`internal/infra/ratelimit` 仍无测试文件；assist 管理页仍为单文件内联 JS，React 化留 B 阶段。）
+
+### 〇-XLI、ai-assist R0 批次与全量评审核实（2026-09-16，提交 4ff889a，主站已部署）
+
+> 来源：①autosales 批次上线后的全仓端到端评审（API 67/T 308/双实例 8/vitest 79/ai-assist 22 场景手工端到端，产出《核实报告_AI顾问缺陷与RAG改造_20260916.md》）；②用户实测反馈「AI 顾问不调 LLM 只机械回复」——三层根因（LLM env-only 无配置入口且无热加载 / hitScore 纯关键词子串匹配无语义 / 兜底话术空承诺）全部代码级核实并当日修复。
+
+| 项 | 内容 | 要点 |
+|---|------|------|
+| R0.4 | 管理台 LLM 配置 | handleConfig key 白名单闸（堵任意 upsert 静默无效陷阱）；llm_base_url/api_key/model/model_backup 四键后台在线配置；api_key 掩码回显+掩码回写 skip；engine.ensureLLM 惰性重建（指纹变更重建 client，保存即生效免重启，env 显式接入优先）；`/api/assist/admin/llm/test` 测试连通；管理台 LLM 接入卡（表单/连通按钮/env-db-rule 三态徽标） |
+| R0.1 | 同义词归一检索 | hitScore 增 configs.synonyms 归一表（管理台在线编辑，指纹失效重载）；seed 预置 充值/翻译/价格 三组；修复用户实测「怎么充钱」三层全脱靶；顺带修正 what-is 条目超泛关键词「是什么」（任何 XX是什么 误命中） |
+| R0.2 | 兜底改造+运营闭环 | 零命中不再空承诺（改引导话术+快捷入口）；未答问题去重登记（上限200 FIFO）→管理台「待补料问题」清单（运营补知识库数据飞轮最小闭环） |
+| R0.3 | 状态可见 | sessions 载荷增 llm_mode（env/db/rule）/unanswered；管理台徽标常显 |
+| 评审修复 | e2e 断言漂移 | admin_tabs_lang 菜单断言 8→9（autosales 新增 AI 助手菜单致发布闸门双红，复跑甄别确认非 flaky），补 AI 助手菜单可见断言 |
+| 安全项甄别 | P1-3 三连属实 | 会话 ID LCG 可预测/chat 无限流/admin_token query 传参（均已代码级确认，与 CORS 白名单一并列为 R1 同批待办） |
+
+自动化：新增 `scripts/uat/assist_uat.sh`（**27 断言**：C端链路/同义词/兜底改造/白名单/掩码/热加载/连通/CRUD/管理页）；ai-assist 单测 +9；vitest 79；注释扫描归零（missing_comments 4 包 + 前端 12 文件补齐，office.go 3 处为嵌入 HTML 内 JS 误报）。清理测试数据（artifacts/test-results/pycache/DS_Store/tmp 残留）。
+
+部署（当日 23:05）：ai-assist 交叉编译（sha 8d7a8a7f…）→ 备份+mv rename 替换 bin/web/seed → 线上 synonyms 经管理 API 写入 → 公网验收 health/greeting/**「怎么充钱」命中充值引导**/管理台 200/白名单 400 全过。主站 translator 本次未动。老部署注意：synonyms seed 不重灌，需管理台粘贴一次（已记《部署指南》§十三）。
+
+### 〇-XL、缺陷核实修复批次与两站部署（2026-09-16，提交 5f721b5，两站已部署）
+
+> 来源：全量代码评测 + 双方言全量 UAT（PG/SQLite 各 API 67 · T 295 · E2E 全绿）后，对产出结论逐条回到代码核实（详见《缺陷核实报告_20260916.md》——含 3 项「原判定不成立/降级」的诚实修正：JWT fail-fast 已有 REQUIRE_PROD_SECRETS 闸、backup_remote_cmd 无 HTTP 写入路径、README 主基线数字与实测一致）。
+
+| 项 | 修复 | 要点 |
+|---|------|------|
+| D1（P2·资损留痕） | `SettleExhausted` qerr 吞错 | 永久余额兜底分支误判陈旧 `qerr`（恒 nil），真实 DB 错误被静默吞掉、部分欠费无痕消失；改判 `err` 且非 ErrNoRows 即上抛；新增 `TestSettleExhaustedNoPermAccount` 锁死分支语义 |
+| D2（P3·配置未接线） | 低额告警阈值 | `lowBalanceThreshold` 硬编码 100000 → 实读 `low_balance_alert_tokens`（非法回退默认）；新增 service 包首批单测 `TestLowBalanceThresholdWired` |
+| D3（P3·运维） | 备份推送超时 | `backup_remote_cmd` 改 `CommandContext`+10min 超时（超时单独告警）；注释禁止该键混入 settings HTTP 白名单（防 admin-RCE 面升格） |
+| D4（测试稳定性） | e2e flaky 根治 | `mobile_uat` 全文件盲等→`expect.poll`/`networkidle`、selector 15s→30s、`setTimeout(90s)`；`a11y_errors` axe 扫描同样贴线超时一并抬限——复跑 **33/33 首过 0 flaky** |
+| D5（传输安全） | Caddy CSP | `translator.conf` 新增 CSP：资源域收敛本站 + 仅放行 Turnstile/office.js 必需外链；`script-src` 暂留 `unsafe-inline`（后端渲染页/品牌注入/office taskpane 均内联脚本，待 nonce 化收紧，已注记） |
+| 处置决定 | 支付渠道 | 暂无商户资质：微信/支付宝在线收单**维持 fail-closed 占位**（mock/static_qr/USDT/人工入账可用），不接真实 SDK；回调验签实现保留，资质到位仅需补 CreateOrder 真实调用 |
+
+自动化与注释：`api_uat_txn.sh` 新增 **T44 源码级回归锁 ×6**（D1-D3/D5 修复点防回退），T 套件 295→**301**；全仓中文注释核查（后端 2010 函数文件级+函数级 0 缺口、前端补 `utm.ts`/`markdown.ts`/`translate.ts`/`OrgP.tsx` 函数级注释，密度达标）。
+
+两站部署（当日 13:13-13:15）：主站 `translator-server` + web + 三管线脚本 + Caddy（validate 通过 reload），演示站同版本二进制（★ 踩坑记录：`cp` 覆盖运行中二进制撞 `Text file busy`——演示站二进制需 stop→cp→start 或 rename；主站用 `mv` rename 无此问题；已补进《部署指南》§五 与两站 sha 比对规范）；外网验收两站 health 200、CSP/HSTS 生效、`demo_admin` 登录成功、重启后零 error 日志。旧版留底：两站 `bin/translator-server.bak.20260916_*`、`web_old.*`、`/etc/caddy/translator.conf.bak.20260916`。
+
+回归：go build/vet/22 包 test 绿；vitest 63；API 67 · T 301 · E2E 33 全绿（run_uat_confirm）。
+
+### 〇-XXXIX、架构评审核实与修复批次（2026-09-16，提交 aa6269f）
+
+> 来源：对《架构评审报告》全部发现做端到端 UAT 逐条核实（详见 `核实报告_架构评审发现逐条验证_20260916.md`，含 P0/P1/P2 修复记录表与「评审误报/不适用」甄别），P0/P1/P2 修复全部落地。回归：API 67 · T 295（含 T43×11 新断言）· E2E 33 · tsc 0 错 · vitest 63 全绿（SQLite 闸门；PG 主矩阵在当日早些轮次同样全绿）。
+
+| 级 | 修复 | 要点 |
+|---|------|------|
+| **P0 ×3** | ① 支付渠道 fail-closed | 微信/支付宝真实协议未接入时下单显式报错（暂不可用），删除「下单失败静默回退 mock 出 `mockpay://` 假码」路径（用户扫废码、订单永挂 pending）；`payment_test.go` 契约更新 |
+| | ② 停机顺序 | `main.go` Shutdown→Sink.Stop，在途计量事件不因先停 sink 丢失 |
+| | ③ RBAC 收紧 | 高角色（等级≥4）必须平台级归属 `tenant_id=0`（IsSuperAdmin/RequireRole）；`users/update` 收口（对租户内账号提权→400）+ `user_import` 同口径；存量违规行（role=admin 挂具体租户）实测被 403 拦截（跨租户退款 exploit 已封） |
+| **P1 ×5** | 前端资金闭环 | 退款/发票冲红前端封装（`adminOrderRefund`/`billingInvoiceVoid`）+ PlansP 按钮；支付状态轮询加终态短路+in-flight 锁+`document.hidden` 暂停；subscribe 失败 toast；余额耗尽横幅+useChat 充值引导（租管+跳计费 Hub）；TS SDK `waitTask` 优先级 bug 修复（v1.0.1）+ Java SDK 删除虚假宣称 |
+| **P2 ×7** | 体验/基建 | SSE 心跳（20s `: ping` 注释帧，与 D20 sseMu 共锁+stop join）+ 前端 60s 空闲判连；`normErrCode` 错误码大小写/别名折叠；聊天 📎 即时文件翻译；playwright 超时收敛+trace retain-on-failure；`run_uat.sh` flaky 自愈（首轮非零自动 `--last-failed` 复跑甄别）；CI 新增 e2e job（SQLite 方言）；迁移段 PG advisory lock（`acquireMigrateLock` 防多实例并发迁移）；billing 17 处时间写点/比较点统一 UTC（orders TEXT 列字典序可比） |
+
+UAT 基建加固（本批踩坑沉淀）：`dblib.sh` sqlite3 加 `.timeout 5000`（后端 reconciler 运行期写库，CLI 默认 busy timeout=0 撞锁取空导致断言假红）；`api_uat_txn.sh` 断言一律两段式（macOS bash 3.2 对 `"$()"` 内嵌 `\"` 的解析缺陷会把请求体拆坏）；手工探活 server 必须带 `SELFCHECK_URL`，e2e 需 `BASE_URL`/`API_URL` 同时指向被测端口；mock 残留进程（8901/8902）会让 T42 假红——跑闸门前先 `pkill -f 'mock_llm|mock_chain'`。
+
+——以下为历史记录——
+
+
+## 〇-XXXVIII、线上体验与运维五项批次（2026-09-15 晚，提交 c5f3376，两站已部署）
+
+> 来源：用户线上实测反馈五项。全量回归：go test 22 包 · vitest 63 · API 67 · T 255 · Playwright 29 全绿。
+
+| # | 任务 | 落地 |
+|---|------|------|
+| 1 | **token→积分口径统一**（余额不足提示露裸 token、700KB PDF 估 40 万 token） | 后端建单预检/账单/中止文案改积分（`PointsFromTokens`，保留「余额/耗尽」关键词供 `gateErrorCode` 映射）；新增 `estimateFileSourceChars` 按扩展名分档（纯文本/3、pdf·doc·ppt·xls 等二进制容器/12、未知/6，旧口径 size/3 把 PDF 整包当文本→高估 4 倍）；前端 15+ 面板（个人中心/任务/价目/租户/组织预算/用量/对账/推荐/数据源/聊天预算条）token 标签全量折积分，录入侧 `pointsToTokens` 反算落库；回归 **T40×3**（自适应读余额：700KB 放行/超支拒绝且零 token 裸值） |
+| 2 | 还原模式积分提醒 | `tk.deliveryRestoreTip` 双语言加 ⚠️「还原文件可能消耗更多积分，日常使用建议纯文案模式」 |
+| 3 | **后台一级 Tab 20→8 精简** | 总览(+用量明细)｜工单｜个人中心｜知识库(+数据源)｜组织与成员(+成员账户)｜**计费与套餐 Hub**(套餐/租户/对账,L4 门控)｜外部调用(+**SDK 子页**三端安装指引)｜**系统与运维 Hub**(注册触达/邮件模板/流程/协议/审计/运营策略/模型供应商/品牌页脚)；`renderPanel` 保留旧 key 深链兼容；e2e `admin_tabs_lang` 3 例 |
+| 4 | **审计日志「停在 8-29」根因修复** | 根因=SQLite→PG 切流按显式 id 导入但序列未同步：新审计拿低位 id，`ORDER BY id DESC` 将其沉底（界面误示停更）+序列逼近存量后主键冲突静默丢写（~20 条）。DB 层：生产两库 9+9 表 `setval(max(id)+1000)` 热修；代码层：`store.syncSequencesPG()` migrate 启动自愈（幂等，只向前）+ 审计列表改 `created_at DESC, id DESC`；回归 **T41×2** |
+| 5 | **语言多选双展示去重** | `LangMultiSelect` 由 TDesign 多选 Select 重写为 Popup+自绘分组勾选列表（触发器永远单行占位），选中语言唯一展示位=外部 `<LangChips/>`（聊天+工单接入）；e2e M1 适配新 DOM + `admin_tabs_lang` T3 例 |
+
+部署与验证：主站+演示站新二进制（md5 一致）与前端 dist（同 hash）上线，`deploy_check.sh` 两站 9 项全过；主库 audit_logs 序列推进至 1516（9-15 新行正常落库）。
+
+
+## 〇-XXXVII、P0/P1/P2 待办收尾批次（2026-09-15：核实报告逐项落地，除支付渠道外全部清零）
+
+> 来源：《P0P2待办核实报告_20260915.md》（对 2026-09-11/14 两份待办的逐条源码核实，含两处初判修正：备份本就由 watchdog 自动执行、群通知已支持企微/钉钉）。除「真实支付渠道接入」外全部完成。详见核实报告第五节《落地记录》。
+
+| 块 | 内容 |
+|---|---|
+| **P0 ×1** | orgs 同级同名唯一约束：`store/orgmigrate.go` 先去重（同租户同父同名保留最小 id）再建 `idx_orgs_sibling_unique` 唯一索引（双方言迁移链挂载）；此前 API 层 `IsUniqueViolation` 防重复分支实为死代码（表无约束），现真实生效；Go 单测 `orgmigrate_test.go` 锁冲突→400 路径 |
+| **P1 ×4** | ① 影子余额多实例闭环（sink.go）：seed 5s TTL 过期强制回读重播种（扣本实例缓冲量防少扣）+ `store/balancehook.go` 全资金写点钩子（Charge/Refund/Settle/发放/认领/奖励 11 处）→ 本进程 `Invalidate` + Redis `shadow:invalidate` RPUSH/BLPOP 广播（`billing/shadowsync.go`）② watchdog 四类周期任务 `runExclusive` 分布式锁（watchdog-check/db-backup/subscription-scan/ticket-retention；Redis 异常降级本地；内存巡检保持实例本地）③ k6 容量基线量化：`P99_MS/ERR_RATE_MAX` 阈值环境变量 + `thresholds_passed` 出参 + JSON/CSV 归档 `deploy/loadtest/results/` + `run_capacity_matrix.sh` 多台阶矩阵 ④ 审计写失败可观测：`store/audit.go` 原子计数 + 同 action 1 分钟限速日志，`/metrics` 新增 `translator_audit_write_failures_total` |
+| **P2 ×6** | ① restore_drill 定时化：`translator-restore-drill.{service,timer}`（每周日 03:30，Persistent 补跑）+ 脚本 PG 分支（pg_restore 到临时库校验后清理）+ 失败回投 S9 告警口 ② 用量报表 CSV 导出：`UsageLedgerForExport`（日期区间/10 万行硬顶/charge_kind 语义列）+ `?export=csv`（非超管脱敏与展示系数和面板同口径）+ 用量看板导出按钮 ③ 多语言打包下载回归：UAT **T39**（OpenAPI 单文件×双语→行内 `zipOutputs` 预打包 zip，契约按 `service/ticket.go` 实况修正）+ Playwright **M1**（工单页勾选英/日双语→zip 字节断言）④ SDK 发布管线：`scripts/release-sdk.sh`（ts/py/java 三室版本同步校验→tsc 构建+导出面冒烟→sdist/wheel+venv 安装冒烟→npm pack 预演→`--publish` 显式开闸）+ TS `prepublishOnly`（顺带修潜伏缺陷：devDep 缺 `@types/node` 致 tsc 从未干净编译）+ Python `pyproject.toml`/`__version__` + `sdk/CHANGELOG.md` ⑤ Slack/Teams 通知渠道：`bot.go` 四渠道（Slack `{"text"}`、Teams MessageCard）+ 配置读写键 + 后台表单 + `bot_test.go` 双单测 ⑥ 桌面分发：`build.sh` 可选 Developer ID 签名（hardened runtime）+ notarytool 公证 + staple（`APPLE_DEVELOPER_ID/APPLE_ID/APPLE_APP_PASSWORD/APPLE_TEAM_ID` 四元组触发；缺省仍 ad-hoc） |
+| **测试资产** | UAT T 套件 235→**250**（新增 T38 用量 CSV 导出 8 断言：鉴权/隔离/脱敏/区间/未登录非 CSV + T39 多语言 zip 6 断言）；Playwright 27→**28**（M1）；Go 新增/补充单测 ×5：`orgmigrate_test`/`bot_test`（四渠道 payload+关闭零请求）/`sink_test` 影子 TTL 重播种/`lock_test`（distlock 非阻塞）/`watchdog_lock_test`（runExclusive 无 Redis 降级）/`audit_fail_test`；`run_uat.sh` 新增 `PW_TARGET` 定向 e2e 开关；race 28 包全绿；vitest 61/61、tsc 通过 |
+| **注释补齐** | 全仓中文注释审计：后端 202 个 Go 文件（非 test）100% 含中文职责横幅+函数注释；补齐 `vcode.go`/`anydoc-smoke` 两处缺失函数 doc、`ErrorBoundary.tsx` 全文件注释、admin 面板（KbP/OrgP/ModelsP/PlansP/TenantsP/TicketsP/WebhooksP/ApiKeysP/panels_e/DataSourcesP）加载函数 doc ×19 与 JSX 分区注释、KbP 21 个操作函数 doc（纯注释零代码改动，tsc/vitest/构建复验全绿） |
+
+
+## 〇-XXXVI、全仓字节级缺陷修复批次（2026-09-14 晚：5×P0 + 14×P1 修复，双方言 UAT 全绿）
+
+> 来源：4 路并行深读代码审查（计费交易/翻译引擎/前后端契约/安全多租户），逐条源码复核后修复；台账见《UAT_缺陷清单与处置记录_20260914.md》。定性为特性的 2 项（重试/对冲 token 实扣计费、文件部分失败整单计费）按实扣口径保留。
+
+| 块 | 内容 |
+|---|---|
+| **P0 资金/接管级 ×5** | ① `SettleExhausted` 重写（store/billing.go）：欠费结算改事务内权威复核（ErrSettleNotNeeded 回插）+ 有界清零（消耗≤owed、试用/临期优先）+ `charge_kind='settle'` 调整流水；**纯后台批次（KB 重建等 abort=nil）不再触发清零停服**，仅告警留痕。② 部门管理员 org_id=0 绕过（api/auth.go reset/update 两处）：未分配部门目标一律 403，与 Delete 三处口径对齐。③ 品牌子域登录链：登录返回一次性 sso_code（60s/单次消费/走 sso/exchange），不再返回裸 JWT；前端 Login.tsx 改跳 `/?sso_code=`。④ `auto_charge` 即时入账仅 super_admin 生效，租户管理员订单恒 pending。⑤ 敏感词闸 Unicode 归一化（internal/sensitive）：小写+NFKC+零宽剥离+宽松空白剥离双遍检测，全角/零宽/字间空格混淆实测全部命中、干净文本零误报 |
+| **P1 资金错误/安全/可靠性 ×14** | token 迁移失败不置位标记（重启幂等重试）；`usage_ledger.charge_kind` 语义列（charge/log/settle，建表+补列迁移，退款消耗核算只认实扣行——修复少退款）；sink 影子余额 seed 失败不再误中止在途任务；BootResume 只回收租约陈旧（>120s 无心跳）任务（多实例双跑防线）；工单 CAS 认领互斥（ClaimTicketForRun，draft/queued/rejected→in_progress 原子推进）；供应商 5xx/401 纳入降级链与熔断（isServerError）；KB 模糊匹配 ≥50% 重叠门槛（防串句译文采用）；pdftotext CommandContext 120s 超时；Webhook 投递禁跟随重定向 + Dialer.Control 拨号时校验真实 IP（SSRF/重binding 双封）；验证码校验 per-key 互斥锁串行化（改密+邮箱码）；caddy-ask 回环放行拒 XFF 请求（防代理枚举租户子域）；vcode 层进程内存回退（无 Redis 部署 SSO/验证码可用）；充值 points 溢出上限 400；前端 kb.ts 统一 fetchJSON 守卫（401 跳登录/非 2xx 抛错）+ 分片 uploadId 落 localStorage（断点续传真实可用）+ selfservice 余额统一积分口径 |
+| **测试资产** | UAT 新增 **T37 今日修复回归套件**（19 断言：org_id=0 子树内放行+未分配 403 / auto_charge 双向 / sso_code 全链无裸 token+单次消费 / 敏感词三种 Unicode 混淆 e2e / points 溢出 / charge_kind 枚举守恒），交易专项 216→**235**；敏感词归一化 Go 单测 ×3（TestHitsNormalization/TestHitsFullwidthCJK/TestNormalize）；mobile_uat 两条 E2E 修复（home 登录改走 /login）；Playwright 25→**27** 全过 |
+| **回归结论** | PG 主矩阵（race+API 67+T 235+Playwright 27）与 SQLite 矩阵全部全绿；前端 vitest 61/61、tsc/build 通过 |
+
+## 〇-XXXV、商业化 D-1 验收批次（2026-09-14 晚：压测/硬扣费/灾修/全链路四项全过）
+
+| 块 | 内容 |
+|---|---|
+| **k6 容量压测** | 新写台阶探针（`deploy/loadtest/k6.js`：constant-vus、随机串绕 TM 缓存、rate_limited 归过载不归系统错误）。实测主站同步翻译：**goodput 平台期 ≈0.85 req/s（LLM 上游约束）**，VU=4 P95≈8s / VU=8 13s / VU=16 24s；VU=24 时租户并发闸（临时 20）温和拒绝 141 次、系统错误 0、熔断未开、宿主机内存最低 36%。压测痕迹全清理（quota 恢复 10/3、Key disabled、grant 删除、临时工具删除）。定案文档《容量预告与超卖预案_20260914.md》（安全并发/承诺话术/五类超卖触发-动作/加容量路径） |
+| **opskey 运维工具**（新） | `backend-go/cmd/opskey`：-create/-list/-revoke（API Key 现场签发回收）、-grant（额度）、-resetpw（仅 scratch 用）。生产连库走 secrets.env；本次为压测与演练配套 |
+| **billing_enforced 复核** | 生产实为**已开启**（billing_enforced=1+token 迁移完成）；压测实证完整硬扣费链：扣减→清零→insufficient_balance 停服→sink 实时 `billing_exhausted` critical 告警。演示站刻意保持关（避免打断演示账号） |
+| **灾备演练（RPO/RTO）** | 真实计划备份 51MB → scratch `pg_restore` **RTO=8s**、9 关键表行数对账全 ok（指南 §十一-B 复测命令固化）。隐患处置：同日多次重启会挤掉日备（按份数清理）→ `backup_keep=14`。**异地副本闭环（当晚）**：拉取式本地副本 `deploy/fetch_backups_local.sh`（Mac cron 每日 10:00，rsync 最新 3 份+sha256 远端/本地比对+留 7 份，服务器零改动零凭据下发；首拉 3×51MB 校验一致；本地 pg client 15 读不了 PG16 TOC，完整性以 sha256 为准） |
+| **全链路演练（19/19）** | `deploy/chain_drill.sh`：生产备份→scratch→同二进制起 :8799 一次性实例→注册(UTM 归因✅/礼包 1000 分✅/默认 Key✅)→真实翻译扣费✅→耗尽硬停✅→充值 manual 单✅→「我已付费」✅→超管确认到账 3000 分✅→退款 refunded+额度回收✅。**发现生产孤儿余额行 tid3/4（已删租户，注册撞号捡走 5 万）**→ 生产清理+审计+脚本防御性清扫；告警两路定性（sink 即时/watchdog 300s 周期）；退款=按剩余率折算核实与 SOP 一致 |
+| **验证** | `go test ./...` 全仓 ok；S9 收口新单测（鉴权 403/firing 落库 critical/resolved 忽略）；chain_drill 重放最终 19/19 全绿；行动清单第四批四项 [x]（仅剩用户侧：secret 轮换/S0 24h 观察/异地备份） |
+
+## 〇-XXXIV、商业化试运营开闸批次（2026-09-14，S0-S9 全部完成，主站上线）
+
+> 依据《商业化试运营_差距与行动计划_20260914.md》逐节点落地；所有改动**只应用主站** translator（43.108.86.140，演示站未动）。核心叙事：从「token 额度」全面切换为「**积分预付费**」客户口径，同时补齐品牌、官网、反薅、归因、触达、合规闸、监控与运营 SOP。
+
+| 块 | 内容 |
+|---|---|
+| **S0 容量扩容** | 主站 drop-in：`MemoryMax=1229M/GOMEMLIMIT=900MiB/LLM_CHAT_CONCURRENT=3/worker=4`（实测总内存 1613M，留 PG/系统余量）；PG `shared_buffers` 640MB→256MB。24h swap/mem_pressure 观察挂账 |
+| **S1 积分制计费（核心）** | **1 积分 = 300 内部 token**（`points_tokens_rate`，`/api/auth/me` 下发、前端 `utils/points.ts` 统一换算）；`packages.points` 列迁移 + v4 九档价目灌生产（试用 1000 分/14d，¥99/3000 分月、¥299/10000 分月、¥999/¥2999 年付，充值 299/1299/4599/19999 对应 3000~300000 分且 `duration_days=0`=**永久**）；**首月半价**（注册 30 天内 paid 订阅单五折，充值不折，store 单测锁价）；账目三修（rate_card 收敛+唯一索引、model_routes enc:v1、`price_fen_per_million_tokens=29900`）；**公开面零 token 裸值**（/api/plans 出 `free_trial_points`、balanceOut 出 `balance_points` 系，`openapi_show_tokens=0` 可整体隐藏，SDK 兼容默认保留）；前端 ChatWindow/MyBilling/App 顶栏/selfservice/PlansP/中英 i18n/公开 /pricing 页全部积分化；白皮书升 v1.1 |
+| **S8 敏感词兜底闸**（开闸前置） | 新包 `internal/sensitive`（词包 mtime 热加载、大小写不敏感、生产 40 词五类）+ engine 双向挂接：**输入命中不进模型**（文本整单拒译/文件段级占位 `[已拦截·REDACTED]`）、输出兜底替换；审计 `sensitive_block/output` + 告警 + 超管 Switch（`sensitive_gate_enabled`）。部署指南 §八-B7 |
+| **S2 品牌包** | 《品牌一页纸.md》（名称四层用法/定位句/slogan/卖点/禁用词）；index.html 标题、README 副标题、terms/privacy 中英署名「能言（Lexicorn）团队」（生产验证） |
+| **S3 反薅** | `disposable.go` 一次性邮箱黑名单（内置 70+ 域+config 增补+子域匹配，挂注册/发码/换绑×2）；**Cloudflare Turnstile 生产点亮**（site/secret 仅存 system_config，注册链路顺序验证：格式→黑名单→人机） |
+| **S4 归因+漏斗** | Landing UTM 五参捕获（localStorage 一次性消费）→ 注册随 `landing_path/host/UA/ref` 落 `registration_attribution`；`GET /api/admin/funnel`（注册→激活→耗尽→首购→续费五环节按 utm_source/裂变码聚合）+ PlansP「📈 增长漏斗」面板（7/30/90 天） |
+| **S5 官网首页** | `components/Landing.tsx`：未登录 `/` → 营销首页（hero/三卖点/积分价目卡（/api/plans 动态）/FAQ/信任条/CTA/UTM 捕获），i18n `panels/landing.ts` 38 键中英；index.html SEO（description/og/canonical/JSON-LD） |
+| **S7 触达序列** | `s7_watchlist` 观察表 + watchdog `runGrowthScan` 日扫：余额清零满 48h 且从未付费→**一次性挽回礼包**（167 积分/7 天）站内+邮件+群+审计；到期摘除 T+3 老客回访（去重）；续费窗口补 T-3 触达（`notified_renew3`）；store 单测 7 场景 |
+| **S9 最小监控** | 同机三件套 **全回环零对外暴露**：prometheus(apt 2.45, 127.0.0.1:9090, MemoryMax=280M, TSDB 14d) + alertmanager(v0.27.0 二进制, 9093, 96M) + node_exporter(9100)；抓取经 `credentials_file` 带 METRICS_TOKEN；6 条规则（TranslatorDown/LLMBreakerOpen/LLMHighErrorRate/HostMemory×2/HostDiskLow）→ **新收口端点** `POST /api/alerts/alertmanager`（`s9_alerts.go`，X-Admin-Token 或 ?token= 常量时间比较）→ 平台告警中心（`kind=prom:*`）+运营群推送；AM→app→DB 全链冒烟通过（实耗 ~110M，avail 652M）。部署指南 §八-B8 |
+| **S6 运营 SOP** | 《试运营收款发票退款SOP_20260914.md》：到账确认三对+SLA≤2h+双人接单+每周盘 pending；普票口径（确认后补开/专票不承诺）；退款消耗门槛制（<10% 全退）+台账；报价单/意向单最小模板；话术 A-F |
+| **验证与质量** | `go test ./...` 全绿（含新增 sensitive/disposable/s7/points 定价/Alertmanager 收口单测）；前端 tsc 干净、vitest **54/54**、vite build；生产逐项验证：points 列+汇率 300、/api/plans 无 token 泄漏、/pricing 半价文案、词包 40 条加载、黑名单 mailinator 拦截、漏斗接口 403、/metrics 无 token 401、三监控服务 active+回环、冒烟告警落库；行动清单 S0-S9 全 [x] |
+| **踩坑记录** | ① App.tsx 曾被脚本「先读快照后回写」truncate 成 0 字节——git 恢复+重放，教训：**批处理每段独立读写，禁止跨段共享快照**；② 主站监听 8787 非 8080；③ alertmanager 配置 600 root:root 导致服务用户读不到（改 root:alertmanager 640）；④ apt 无 alertmanager 包（universe 未开），走 GitHub 二进制 |
+| **遗留（第四批 D-1）** | 灾修演练（RPO/RTO）、k6 压测定并发、`billing_enforced=1`（演示站试跑→主站）、全链路演练、S0 24h 观察；用户侧：SiliconFlow key 轮换、Turnstile secret 轮换建议 |
+
+## 〇-XXXIII、线上反馈三项修复（2026-09-14，提交 fbefe5a…31e6b1f）
+
+| 块 | 内容 |
+|---|---|
+| **① 后台暗色适配** | 暗色模式此前仅前台适配，后台黑白混杂。修复：admin 目录 ~165 处内联硬编码浅色（#667 提示灰/#f7f9fc 软面板/#fff 卡片/黄蓝紫提示盒/绿橙状态色等）统一收敛为 `--adm-*` 语义令牌（亮色值与历史一一对应，零视觉回归）；theme.css 暗色块补 TDesign 漏配轨（`--td-bg-color-specialcomponent` 输入框底、`--td-brand-color-light` 菜单选中/浅 Tag、`--td-brand-color` 暗色文本）；补 `.panel-card/.stat-card/.ticket-progress-float/.download-card/.tag` 等自绘类暗色覆写。**刻意保留白底**：登录页预览 Mock 卡、QR 码图（对比度需要）。新增 e2e `D1`：暗色下后台骨架取色 + 近白块扫描（≤2）+ 代表面板抽查 |
+| **② 文件工单上传 400** | 「766KB PDF 报『文件解析失败或超过大小上限（40MB）』」根因：React 重写后 `core.ts request()` 无条件预设 `Content-Type: application/json`，FormData 请求的 multipart boundary 被抹掉 → 后端 `ParseMultipartForm` 0.4ms 即 400（误导文案）。**影响所有走 request() 的 multipart 上传**（文件工单/用户批量导入/KB 导入等，自 React 重写起即坏）。修复：body 为 FormData 时不再设 Content-Type（交浏览器生成 boundary）；调用方显式传入者优先。新增 e2e `U1` 上传建单回归 + 线上演示站真实浏览器验证通过 |
+| **③ 演示站新超管** | `demo_superadmin / Demo#2026Rm!`（tenant 0 平台超管）：live 演示库已种入并登录验证；bootstrap-demo.sh SEEDSQL 同步（重跑幂等）。顺带修脚本 bug：`DEMO_SEED_ACCOUNTS=0` 跳过开关此前被无条件 `=1` 覆盖（文档承诺失效）；`base_domain` 幂等写入（同日早前 B11 修复延续） |
+| **部署** | 主站+演示站前端 dist 已同步（web 快照，权限口径按 bootstrap：主站 translator:translator、演示站 root:caddy + o+rX）；线上验证：演示站 /admin 暗色骨架 rgb(20,22,26)/零近白块/菜单选中半透明蓝，U1 浏览器上传建单通过 |
+| **验证** | 全量 UAT 绿：A49/B67/T188（**T35 新增 6 断言**：特殊文件名 PDF multipart 建单/终态、多文件混合上传、bootstrap-demo 配置守护×3）、Playwright **27/27**（含 D1/U1 两条新增）、tsc 干净、vitest **52/52**（含 core.request FormData 不预设 Content-Type 回归单测）、build 通过 |
+
+## 〇-XXXII、工单文件翻译双模式（还原文件 / 纯文案）+ anydoc 接入（2026-09-14，提交 6f45a27…5493e9f）
+
+> 需求：无版式还原诉求时直接输出纯文本译文，并接入开源 anydoc（firecrawl/anydoc，Rust 核心，MIT）扩大文件准入面。方案评估结论：anydoc 为**单向转换**（doc/ppt/xls/odf/rtf/epub → Markdown），无 MD→office 反向能力（版式/字体必丢，保真度劣于既有原位 XML 回写）——因此定位是**纯文案模式的提取层**而非替换回写链路。方案全文《改造方案_anydoc接入·工单文件翻译双模式_20260913.md》。
+
+| 块 | 内容 |
+|---|---|
+| **前端模式选择** | 工单建单页（文件模式）新增「交付方式」：还原文件模式（默认）/ 纯文案模式，选择记忆于 localStorage；纯文案模式动态放宽 accept 与校验话术（老格式仅在纯文案模式支持）；标题列模式徽标；详情页新增「下载译文 .md」 |
+| **纯文案管线** | `HandleFile` 增 `delivery=text` 路径：anydoc 独占格式（doc/docm/ppt 系/xls 系/odt/ods/odp/rtf/epub）经 `anydoc_md.py` 子命令壳（venv `firecrawl-anydoc`，复用 runSubprocess 资源闸+nice+超时治理）→ GFM → 既有 MD 翻译管线 → 交付 `.md`；PDF/原生格式走既有 Go 提取器不经 anydoc |
+| **还原模式兜底** | 成功后同步产出纯文案 .md 旁路产物（`persistTextOutputs`：单语言直存 / 多语言 `{工单号}_texts.zip`，RegisterArtifact 归属登记）；**版式回写失败重试 3 次后自动降级**为 .md 交付：工单成功、`file_writeback` 置 warning、创建人站内信 |
+| **准入与安全边界** | 建单分层白名单（restore 12 种 / text 12+anydoc 独占 16 种）；anydoc 独占格式需 `anydoc_ready` 依赖就绪否则 400；不做 hosted OCR（数据主权，扫描 PDF 两模式均拒）；`ANYDOC_TIMEOUT_SEC`（默认 60s）/`ANYDOC_SCRIPT` 可调 |
+| **接口** | create-file/OpenAPI 任务表单 `delivery=restore|text`（status 回显）；`download?id=&fmt=text[&file_id=]` 取译文 .md；`/api/health` 暴露 `anydoc_ready`；错误话术 friendlyAnydocError（损坏/加密/扫描/依赖缺失分类） |
+| **存储** | `tickets.delivery`、`tickets.text_result_path`、`ticket_files.text_result_path` 三列（SQLite+PG 双方言幂等迁移） |
+| **测试** | 单测：fileproc（WriteTranslationMd/friendlyAnydocError/白名单）、engine（optionString/anydocSourceExt）、api（normalizeTaskDelivery + **handleHealth anydoc_ready 出参**）；UAT **T34 新增 14 断言**（旁路产物注册、fmt=text 下载、白名单分层、纯文案工单无原格式产物、OpenAPI delivery 回显、**health anydoc_ready 暴露**）；全量：A49/B67/T182 全绿、Playwright 25/25、`go test -race` 四包通过、vitest 51/51、tsc/build 干净；anydoc 端到端冒烟（临时 venv + 生产 translator 身份，RTF→GFM/detect/损坏文件友好错误）通过 |
+| **部署** | venv 新增 `pip install firecrawl-anydoc`；`anydoc_md.py` 随二进制同步至 `bin/`；`cmd/anydoc-smoke` 部署自检；部署指南 §一/§五/§八-B6/§十/§十二 同步更新。**2026-09-14 生产发版**（主站 43.108.86.140 + 同日演示站 rox-test 同步快照：二进制/前端/`anydoc_md.py`，数据与密钥不动）：`/api/health` `anydoc_ready=true`，translator 身份 RTF→GFM 服务端冒烟通过，`deploy_check.sh` 8/8；捕获并修复 healthcheck 解释器探测偏差（探测 PATH 系统 python3 而子进程走 venv `pyBin()`，导致 `anydoc_ready` 误报 false，提交 7e01396） |
+| **发版后修复（★ 演示站品牌丢失）** | 演示站换装 B11+ 二进制后 `rox-test` 子域租户品牌（logo/登录背景/标题）静默消失——根因：B11（09-12）移除 `lexicorn.cn` 硬编码兜底后，子域→租户品牌解析必须显式有 `system_config.base_domain`，而两站库与部署清单从未配置过该项（主站 `rox` 子域同踩，属存量隐患）。修复：两站库补 `base_domain`/`primary_host` 并实测注入恢复（`极石` logo/`brand_granted:true`）；`bootstrap-demo.sh` 第 3 步幂等推导写入 `base_domain`（并修 `DEMO_SEED_ACCOUNTS=0` 开关被无条件覆盖的脚本 bug）；演示站按手册重跑 bootstrap 完成标准部署（SPA 反代注入/Caddy/systemd 全对齐）；回归单测 `api/branding_test.go` 锁定解析与降级语义；部署指南 §八-B 新增两配置项说明 + §十二 故障表补「升级后子域品牌丢失」条目 |
+| **文档** | README 核心能力补双模式条目（并修正「不降级」过时表述）；部署指南/产品支持文档同步；改造方案文档留档 |
+
+## 〇-XXXI、H1-H12 规划能力落地 + UAT 全批次覆盖（2026-09-13，提交 5168fed）
+
+> 第二阶段（原 F12 规划）12 项能力一次性交付（仅 Chrome 商店上架不做）；UAT 断言从「S/A/B 批次」补齐到覆盖 S–H 全部批次（T 套件 114→168）；UAT 期间捕获并修复 1 个权限越权缺陷与 2 个前端回归缺陷。详录《修改文档_全面缺陷修复与前端增强_20260912.md》批次 8。
+
+| 块 | 内容 |
+|---|---|
+| **H1-H2 术语链路** | Gate 命中强制替换+违规自动重翻闭环；Constrained Decoding 双轨（`x_term_constraints` 载荷，路由 `supports_constraints` AND 口径，不支持模型自动降级） |
+| **H3 包级权限矩阵** | `kb_pack_grants` 表 read/write/manage 三档 + `/api/admin/kb-packages/grants\|mine` + 面板授权弹窗；★ UAT T30 捕获越权：6 处 `kbPackGrantedSkip` 仅跳过校验、无成员正向准入 → 补硬闸（成员必须持 write/manage 授权才可写，read 仅可读），回归测试 `h3_writegate_test` |
+| **H4-H5** | TM 自动审核（QA 分≥80 直通 SaveBack，低分入人审）；KB/TM 分片上传断点续传（≤8MB/片、24h TTL、前端 >4MB 自动分片+续传+重试） |
+| **H6-H7 智能路由** | 滑窗延迟统计 + Hedged Requests 并行对冲（`HEDGE_ENABLED` 默认关）；成本/延迟感知动态权重 + `/api/admin/ops/routes` 可视化（`DYNAMIC_ROUTING` 默认关） |
+| **H8 状态统一** | auth/admin/branding/chat 四栈迁 Zustand，Provider 退化副作用壳；★ 回归修复 2 处：FrontShell lazy 组件缺 Suspense 边界（React #426 白屏）、StrictMode 双挂载会话恢复误清 token（401 风暴） |
+| **H9-H10** | 二级裂变漏斗（付费永久包→上级返佣 `referral_l2_pct`，防环+幂等）+ `/api/referral/funnel` 看板；SCIM 2.0 Users/Groups 全端点（eq filter/PATCH active/组↔部门映射/独立 Bearer token）+ 租户自助配置 |
+| **H11 SLO** | 三 SLO（可用性 99.9/成功率 99/P99≤8s）分钟环采样、多窗口 burn rate 双窗同判自动开合告警；`/api/admin/ops/slo` |
+| **H12 编辑器生态** | `vscode-extension/`（零构建：侧边栏工作台/选中翻译/术语检索/SecretStorage）；`GET /api/translation/export-tmx`（TMX 1.4）与 import-tmx 成 Trados/memoQ 双向闭环；`GET /openapi/v1/terms` 术语检索端点（spec 同步） |
+| **UAT 全批次覆盖** | T25-T33 新增 54 断言：SSO 兑换拒绝/计费配置鉴权/usage 镜像/spec 路径/分片全链/SCIM 生命周期/权限矩阵全组合/TMX/SLO 端点/裂变漏斗；T 套件 **168/168**，A/B 主链路 67/67，e2e 25/25，`go test -race` 通过；**PG 与 SQLite 双矩阵全绿** |
+| **测试卫生** | 单测固定 `DatabaseDriver="sqlite"`（防 config.C 环境变量污染方言）；hedge 计数器 atomic 化；observeRoute 懒初始化入锁 |
+| **中文注释补齐** | 后端 47 处 + 前端 21 处 + 插件 3 处函数/类型级注释（Go 导出与非导出函数注释覆盖复查全量）；gofmt 全仓归一 |
+| **验证** | `DB_DRIVER=postgres run_uat.sh` EXIT=0（含 race 门禁）；SQLite 矩阵 EXIT=0；tsc 干净、vitest 51/51、双端构建通过 |
+
+## 〇-XXX、PG 方言全量修复 + UAT 双方言矩阵（2026-09-12，提交 80f0f22）
+
+> 生产已切 PostgreSQL 但 UAT 仅覆盖 SQLite，导致一批 PG 专属缺陷长期漏检。本次全链路重研修复 8 项方言缺陷，并把 UAT 工具链双方言化（同一套断言跑两种方言）。
+
+| 块 | 内容 |
+|---|---|
+| **P0 邀请奖励停发** | `tenant.SetPersonal/SetInviteEnabled` Go bool 直绑 INTEGER 列在 lib/pq 下报错且被吞——改显式 1/0；`register.go` 不再忽略 SetPersonal 错误并记日志 |
+| **P0 增量包结算必挂** | `json_set/json_extract`（SQLite JSON1）内联于 billing.go/packages.go/quota_grants.go——新增 `internal/db/jsonops.go` 双方言助手（JSONNumAdd/JSONNumGE/JSONSetFalse/JSONExtractNum/JSONTicketIDExpr，jsonb 实现 + 标识符白名单防注入） |
+| **P1 卡死工单永不重排** | `RequeueStalledTickets` 同款 JSON1 → JSONTicketIDExpr 方言分支 |
+| **P1 任务中心不可用** | `SaveUserTask` 用 `LastInsertId()`（lib/pq 不支持恒返 0）→ `db.InsertID`（RETURNING） |
+| **P1 欠费丢弃计费** | `billing/sink.go` 余额不足整批结算失败静默丢弃——按决策改「清零停用」：新增 `SettleExhausted`（双桶清零、不落 ledger、充值后从 0 计量）+ 写 `billing_exhausted` 告警 + 对话提示真因文案 |
+| **P2 健康位混淆** | `/status` 业务告警≥10 翻转 `ok:false` 误导监控——`ok` 收敛为纯基础设施位（DB+熔断），新增 `db_ok`/`degraded` 独立位 |
+| **P2 驱动错误透吐** | 新增 `store/dberr.go`（IsUniqueViolation/DebriefDBError），auth/orgs/tenant/pay/plans/admin_packages/register 等 8 处端点脱敏（PG 不再泄漏约束名/SQLSTATE） |
+| **UAT 双方言矩阵** | 新增 `scripts/uat/dblib.sh`（dbq/dbcfg/dbjson 断言层方言路由）；api_uat/api_uat_txn 全部 sqlite3 硬编码改造；`run_uat.sh` 支持 `DB_DRIVER=postgres`（自动重建测试库+pgvector+txn 套件并入编排）；新增 T15 修复锁定段（脱敏/健康位/句数镜像/个人标记/任务 ID） |
+| **测试与注释** | 新增 Go 回归测试 13 个（jsonops 双方言含 PG 真实执行 + store 修复项）；e2e P3/P5 异步竞态断言修复（即时读取→轮询等待）；前后端注释覆盖复查补齐（Go 导出函数 100%、前端组件/工具函数补 11 处） |
+| **验证** | go build/vet/test 全绿；**SQLite 与 PG 双方言 UAT 均 67/67 + 79/79、e2e 16 过 3 刻意跳（tenant_label 产品缺口）**；tsc 干净、vitest 24/24 |
 
 ## 〇-XXIX、P0-P2 全链路修复 + Webhook 重试/死信机制（2026-09-11，提交 60edcfa）
 
@@ -504,7 +710,7 @@
 | **C. 统一错误码+结构化日志** | 新增 `internal/errors` 枚举 + `log/slog` + `X-Trace-ID` 中间件；auth 关键路径已迁移，其余渐进 | ✅ 已落地（commit 76f4410） |
 | **D. 对照编辑器（新 feature）** | `translation_edits` 表 + `GET/POST /api/tickets/segments` + 前端双栏编辑器（术语高亮+逐段通过/驳回批注）；文本+文件（MVP 先 xlsx/csv/对照表，docx/pdf 二期） | ✅ 已落地（commit 76f4410，见 〇-H） |
 
-**明确不做（当前过度设计）**：Redis Cluster / etcd / gRPC Sidecar / K8s 微服务拆分 / 多区域；SSO/SCIM/白标/CAT 插件/混沌工程/SDK 自动发布流水线——等具体企业客户或规模化运维诉求出现再做。
+**明确不做（当前过度设计）**：Redis Cluster / etcd / gRPC Sidecar / K8s 微服务拆分 / 多区域；混沌工程 / SDK 自动发布流水线——等规模化运维诉求出现再做。（原列的 SSO/SCIM/白标/CAT 插件已于 2026-09 落地：SSO/OIDC、SCIM 2.0、租户品牌子域名、TMX 双向交换 + VS Code 插件，见 〇-XXXI；Chrome 商店上架维持不做，自托管扩展即可。）
 
 ## 〇-H、部署验证 + 全量注释 + 安全修复（2026-08-30）
 
@@ -542,7 +748,7 @@
 | 服务 | `translator.service`（Go 单二进制，/status 返回 v3, ok:true）；前端已切换为 React + TDesign（frontend/ 旧 Vue 栈已下线） |
 | 反代 | Caddy（自动 HTTPS），配置片段 `/etc/caddy/translator.conf` |
 | 数据库 | PostgreSQL 16 + pgvector 0.6.0（同机自建，非托管 RDS）；历史 SQLite 保留于 `/opt/translator/data/backups/` |
-| 计费 | Token 实时计量（每次 LLM 调用即上报用量；余额扣除受 billing_enforced 控制，billing_enforced=0 暂未启用扣费，超管随时开启；余额不足中止整次任务避免白嫖——★ 2026-09-10 中止时对话明确提示「余额不足请充值」，工单建单前按源规模预检余额）；**运营策略（计费因子流程引擎）**已上线——平台统一策略 + 活跃时间窗，★ 2026-09-07 起仅超管平台级可写，超管后台「运营策略」面板可视化配置，因子覆盖体验/邀请/任务中心/注册/限额/翻译模式/支付/文件上限（详见 〇-XX） |
+| 计费 | Token 实时计量（每次 LLM 调用即上报用量；余额扣除受 billing_enforced 控制，billing_enforced=0 暂未启用扣费，超管随时开启；★ 2026-09-12 欠费策略定稿：批量结算遇余额不足即「双桶清零停用+billing_exhausted 告警」，已消耗成本按扣到归零结算、不补扣，充值后从 0 重新计量；对话/流式即时提示真因，文件/文本工单建单前按源规模预检余额）；**运营策略（计费因子流程引擎）**已上线——平台统一策略 + 活跃时间窗，★ 2026-09-07 起仅超管平台级可写，超管后台「运营策略」面板可视化配置，因子覆盖体验/邀请/任务中心/注册/限额/翻译模式/支付/文件上限（详见 〇-XX） |
 | 部署脚本 | 后端交叉编译（GOOS=linux GOARCH=amd64）→ scp 二进制；前端 `npm run build` → scp dist 静态资源；ssh 重启 `translator.service`（详见 README 快速开始） |
 
 ## 二、核心能力（全部已上线）
@@ -598,7 +804,7 @@
 - **前端弹窗规范**：应用内弹窗统一走 TDesign `Dialog`/`DialogPlugin`（`confirmDialog`/`promptText` 封装于 `frontend-react/src/components/uiDialogs.tsx`，取消按钮触发 `onClose` 保证 resolve(false)）；禁用浏览器 alert/confirm 于关键交互
 - **lxml 陷阱**：元素代理对象回收后 id() 复用，严禁按 id() 去重节点
 - **python-docx 陷阱**：`para.runs` 每次访问返回新代理列表；`run.text=` 会删除该 run 的 drawing/pict 子元素
-- **SQLite 并发红线（仅本地开发/旧库适用；生产已切 PostgreSQL，DB_DRIVER=postgres）**：DSN `_txlock=immediate` 全局生效；事务内严禁经独立连接再写库（会撞 busy_timeout 静默失败——UAT-2 教训）；句数镜像一律 json_set 原子语句或 IMMEDIATE 事务
+- **SQLite 并发红线（仅本地开发/旧库适用；生产已切 PostgreSQL，DB_DRIVER=postgres）**：DSN `_txlock=immediate` 全局生效；事务内严禁经独立连接再写库（会撞 busy_timeout 静默失败——UAT-2 教训）；句数镜像等 JSON 读写一律走 `db.JSONNumAdd/JSONNumGE/JSONSetFalse` 双方言助手（★ 2026-09-12：禁止再内联 json_set/json_extract，PG 无 JSON1）；自增 ID 一律 `db.InsertID`（RETURNING），禁用 LastInsertId
 - **新增环境变量（第四批）**：`TRUST_PROXY_XFF=1`（反代取真实IP，直连勿开）；`FILE_HARDGATE_MAX_SEC`（硬闸补漏墙钟预算，默认600s）
 - **邮件相关环境变量**：`MAIL_ENABLED` / `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS`（默认发信箱 `noreply@lexicorn.cn`，SMTP 端口 465）；`INFO_SMTP_ENABLED` / `INFO_SMTP_USER` / `INFO_SMTP_PASS`（产品手册等专用发信箱 `info@lexicorn.cn`，默认 `smtp.mxhichina.com:465`）。均在 systemd `translator.service` 的 `Environment` 中配置。
 - **注册行业口径**：缺选/错选行业→通用行业(general)兜底不再拒绝；通用包由 EnsureDefaultPackages 在租户1幂等创建

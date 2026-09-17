@@ -1,0 +1,84 @@
+# AGENTS.md — 工程约定（本仓全体贡献者／AI 助手必读）
+
+> 建立于 2026-09-17（改造 2 第二步）。这里只记**必须遵守的硬约定**，不重复产品文档。
+> 详细架构与部署见 [README.md](README.md)、《部署指南.md》。
+
+---
+
+## 一、代码组织约定
+
+### 1. store 冻结规则（★ 强制）
+
+`backend-go/internal/store/` 是单一数据访问包（74 文件 / 约 16.8k 行），被 `internal/api/` 90+ 文件引用。
+为控制复杂度增长，确立以下冻结规则：
+
+1. **`billing.go`（2201 行）与 `kbpackages.go`（1371 行）只减不增。**
+   新方法按域新建文件（`billing_refund.go` / `kbpackages_acl.go`），或归入已有窄域文件。
+   **禁止**往这两个文件追加新方法。
+2. **`store.go` 不承接业务方法**，只保留连接/迁移编排与真正的通用工具。
+3. **通用能力下沉到基础包**（`internal/secret`、`internal/db` 等），store 用薄委托引用；
+   **禁止基础包 import `internal/store`**（会产生循环依赖，且让「读一个配置」被迫拉起整个存储层）。
+4. **新增列走幂等补列**：`db.EnsureColumns(...)`，仿 `store.TicketQualityFlaggedMigrate()`；
+   禁止一次性 `ALTER TABLE` 直执行。
+5. 域索引与完整规则见 [backend-go/internal/store/README.md](backend-go/internal/store/README.md)。
+
+### 2. 日志与观测
+
+- 后端统一用 `internal/observability` 的 slog（JSON + trace_id），**不要用标准库 `log.Printf`**。
+- 子服务（如 assist-server）也必须接同一口径，禁止自建日志格式。
+
+### 3. 密钥与配置
+
+- 密文配置一律 `internal/secret.EncryptSecret` / `DecryptSecret`（`enc:v1:` 前缀，兼容历史明文）。
+- 明文优先序：**环境变量 > 数据库配置**。密文 key 在管理台以掩码（含 `****`）回显，
+  保存链路用 `IsSecretMasked` 判断并回填旧值，禁止把掩码写回库。
+
+### 4. 数据库方言
+
+- 所有 SQL 必须同时支持 SQLite（本地/CI 快跑）与 PostgreSQL（生产）。
+  用 `db.CurrentDialect()` 分支或 `db.Exec(s.db, db.CurrentDialect(), ...)`，禁止硬编码方言语法。
+- 列迁移、`COALESCE` 取值、时间函数是历史高频踩坑点。
+
+### 5. 前端约定
+
+- 风格计量单位统一**积分口径**，公开接口零 token 裸值。
+- 组件测试用 vitest + jsdom（`*.dom.test.tsx`），i18n 词条中英双语同步补（`dicts.zh.ts` / `dicts.en.ts`）。
+
+### 6. e2e 断言红线
+
+- **禁止在 `frontend-react/e2e/` 写死外部/生产域名或依赖 CI 不存在的环境变量的用例。**
+  这类用例会永久性把发布闸门拖红，钝化对真回归的敏感度（2026-09-17 已因此清理 `_tmp_admin.spec.ts` / `_tmp_iframe.spec.ts`）。
+- 需要人工环境（生产探针、手工 Token 等）的用例一律放 `frontend-react/e2e-manual/`，
+  并在文件头加 `test.skip(!process.env.XXX, '...')` 守卫，附「为何手工」的注释。
+- 生产探针职责由 `deploy/` 下的冒烟脚本承担，不进 Playwright 矩阵。
+
+### 7. Shell 脚本断言写法（UAT 脚本）
+
+- **正则交替一律用 `grep -E 'a|b'`，禁止 BRE 的 `grep 'a\|b'`。** `\|` 是 GNU 扩展，
+  BSD grep 之外的实现（如部分精简 shell 环境与容器基础镜像自带的 grep）会把它当字面量，
+  **静默返回 0 命中**——断言会「永远通过/永远失败」而不报错，是最难发现的一类闸门失效。
+  （2026-09-17 实测：`scripts/uat/api_uat_txn.sh` T16 因该写法恒判 refused=0 而误报失败。）
+- 断言脚本避免依赖外部环境的行为差异；涉及金额/计数的断言优先用 `-E` + 明确锚点。
+
+---
+
+## 二、提交前闸门（必须全绿）
+
+```bash
+cd backend-go && go build ./... && go vet ./... && go test -race ./...
+cd ../frontend-react && npx tsc --noEmit && npm test && npx vite build
+bash scripts/uat/assist_uat.sh                    # AI 顾问（自起临时实例，不碰生产）
+bash scripts/uat/run_uat.sh                       # 全链路主矩阵（PG 方言，发布闸门）
+bash scripts/uat/multi_instance_e2e.sh            # 多实例红线
+```
+
+改动触及计费/对账时，`run_uat.sh` **必须**跑 PG 方言（SQLite 快跑不能替代）。
+
+---
+
+## 三、改动原则
+
+- 优先**薄委托 + 零改动调用点**的收敛手法（见 `store/crypto.go` 下沉 `internal/secret`），
+  避免大爆炸式重构：改动面 >3000 行且无行为收益的重构不做。
+- 修复缺陷时同步补一条能复现的自动化断言（单测或 UAT 断言），否则视为未完成。
+- 涉及 DB schema 的改动必须写成幂等迁移，保证老库启动自动升级。
