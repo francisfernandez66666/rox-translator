@@ -2,17 +2,24 @@
 // components/admin/ApiKeysP.tsx — API Key + OpenAPI 文档面板
 // 职责：API Key 创建/启停/轮换/限额/删除；超管可维护多语言 OpenAPI 在线文档
 // 从 panels_c.tsx 拆分
+// 2026-09-18：按钮/提示位的 emoji 全部换成 ui/langcross <Icon> 自绘 SVG
+//   （emoji 是设计稿图标占位，不属于文案；见 MI 常量统一处理行内基线）。
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react'
-import {
-  Button, Table, Input, Select, Space, Tag, Popconfirm, Textarea, MessagePlugin,
-} from 'tdesign-react'
+import { Button, DataTable, Link, StatusPill } from '@/ui/langcross/src'
 import { confirmDialog, promptText } from '@/components/uiDialogs'
 import { apiKeys as apiApiKeys, apiKeyCreate, apiKeyStatus, apiKeyRotate, apiKeyDelete, apiKeyLimit, getOpenAPIDocs, saveOpenAPIDocs, previewOpenAPIDocs, openAPIDocsUrl } from '@/api'
 import { Panel } from './parts'
 import { maskKey } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { useT } from '@/i18n'
+import { Icon } from '@/ui/langcross/src'
+import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
+
+// 行内图标基线对齐（16×16 SVG，跟随文案）
+// verticalAlign:-3px 让 SVG 与中文按钮文字基线视觉居中；marginRight:4 补回原先
+// emoji 自带的气隙。集中成一个常量，避免十几处按钮各写一遍 style 造成漂移。
+const MI: React.CSSProperties = { verticalAlign: '-3px', marginRight: 4 }
 
 /** Any API Key 面板出参宽松别名 */
 type Any = Record<string, any>
@@ -49,12 +56,12 @@ export function ApiKeysP() {
 
   async function copyNewKey() {
     try { await navigator.clipboard.writeText(newKey); setCopied(true); setTimeout(() => setCopied(false), 2000) }
-    catch { void MessagePlugin.error(t('apikeys.copyFail')) }
+    catch { toastError(t('apikeys.copyFail')) }
   }
   async function createKey() {
-    if (!kForm.name) { void MessagePlugin.warning(t('apikeys.nameRequired')); return }
+    if (!kForm.name) { void toastWarn(t('apikeys.nameRequired')); return }
     const r: Any = await apiKeyCreate({ name: String(kForm.name || ''), perms: String(kForm.perms || 'translate'), daily_call_limit: kForm.daily_call_limit === '' ? undefined : Number(kForm.daily_call_limit) })
-    if (!r.success) { void MessagePlugin.error(r.message || ''); return }
+    if (!r.success) { toastError(r.message || ''); return }
     setNewKey(r.api_key || '')
     setKForm({ name: '', perms: 'translate', daily_call_limit: '' })
     await loadKeys()
@@ -67,7 +74,7 @@ export function ApiKeysP() {
   async function rotateKey(k: Any) {
     if (!(await confirmDialog({ body: tpl('apikeys.confirmRotate', { name: k.name }) }))) return
     const r: Any = await apiKeyRotate(Number(k.id))
-    if (!r.success) { void MessagePlugin.error(r.message || ''); return }
+    if (!r.success) { toastError(r.message || ''); return }
     setNewKey(r.api_key || '')
     await loadKeys()
   }
@@ -75,9 +82,9 @@ export function ApiKeysP() {
     const input = await promptText({ body: tpl('apikeys.limitPrompt', { name: k.name, cur: k.daily_call_limit || 0 }) })
     if (input === null) return
     const n = Number(input)
-    if (!Number.isFinite(n) || n < 0) { void MessagePlugin.warning(t('apikeys.limitInvalid')); return }
+    if (!Number.isFinite(n) || n < 0) { void toastWarn(t('apikeys.limitInvalid')); return }
     const r: Any = await apiKeyLimit(Number(k.id), Math.floor(n))
-    if (!r.success) { void MessagePlugin.error(r.message || ''); return }
+    if (!r.success) { toastError(r.message || ''); return }
     await loadKeys()
   }
 
@@ -95,22 +102,22 @@ export function ApiKeysP() {
     setDocsSaving(true)
     try {
       const r: Any = await saveOpenAPIDocs({ lang: docsLang, md: docsMD })
-      if (!r.success) { void MessagePlugin.error(r.message || ''); return }
-      void MessagePlugin.success(t('docsEdit.saved'))
+      if (!r.success) { toastError(r.message || ''); return }
+      toastSuccess(t('docsEdit.saved'))
       await refreshDocsState()
     } finally { setDocsSaving(false) }
   }
   async function previewDocs() {
     try {
       const r: Any = await previewOpenAPIDocs({ lang: docsLang, md: docsMD })
-      if (!r.success) { void MessagePlugin.error(r.message || ''); return }
+      if (!r.success) { toastError(r.message || ''); return }
       // ★ E7：document.write 打开的后端 HTML 会继承当前页 origin（后端 XSS 可升格为同源），
       //   且部分 CSP/沙箱环境下直接失效。改为同源受限的 Blob URL 预览。
       const url = URL.createObjectURL(new Blob([r.html as string], { type: 'text/html;charset=utf-8' }))
       const w = window.open(url, '_blank')
-      if (!w) void MessagePlugin.error(t('docsEdit.popupBlocked'))
+      if (!w) toastError(t('docsEdit.popupBlocked'))
       setTimeout(() => URL.revokeObjectURL(url), 60000)
-    } catch (e) { void MessagePlugin.error(String(e)) }
+    } catch (e) { toastError(String(e)) }
   }
   function importDocs(e: any) {
     const file = e.target.files ? e.target.files[0] : null
@@ -129,10 +136,10 @@ export function ApiKeysP() {
   async function resetDocs() {
     if (!(await confirmDialog({ body: t('docsEdit.confirmReset') }))) return
     const r: Any = await saveOpenAPIDocs({ lang: docsLang, md: '' })
-    if (!r.success) { void MessagePlugin.error(r.message || ''); return }
+    if (!r.success) { toastError(r.message || ''); return }
     setDocsMD('')
     await refreshDocsState()
-    void MessagePlugin.success(t('docsEdit.resetDone'))
+    toastSuccess(t('docsEdit.resetDone'))
   }
   function openDocs() { window.open(openAPIDocsUrl(), '_blank') }
 
@@ -152,67 +159,68 @@ export function ApiKeysP() {
   return (
     <>
       <Panel title={t('apikeys.title')} extra={
-        <Space size={8}>
-          <Button variant="outline" onClick={openDocs}>📄 {t('apikeys.docs')}</Button>
-          {isSuper && <Button onClick={() => setDocsCardOpen((v) => !v)}>{docsCardOpen ? '▲' : '▼'} {t('docsEdit.title')}</Button>}
-        </Space>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button variant="secondary" onClick={openDocs}><Icon n="doc" style={MI} />{t('apikeys.docs')}</Button>
+          {isSuper && <Button variant="secondary" onClick={() => setDocsCardOpen((v) => !v)}>{docsCardOpen ? '▲' : '▼'} {t('docsEdit.title')}</Button>}
+          </div>
       }>
         {!!newKey && (
-          <div style={{ background: 'var(--adm-warn-bg)', border: '1px solid var(--adm-warn-bd)', borderRadius: 8, padding: 10, marginBottom: 10 }}>
-            ⚠️ {t('apikeys.newKeyOnce')}：<b style={{ userSelect: 'all' }}>{newKey}</b>
-            <Button size="small" style={{ marginLeft: 8 }} onClick={copyNewKey}>📋 {t('apikeys.copy')}</Button>
+          <div style={{ background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', borderRadius: 8, padding: 10, marginBottom: 10 }}>
+            <Icon n="alert" style={MI} />{t('apikeys.newKeyOnce')}：<b style={{ userSelect: 'all' }}>{newKey}</b>
+            <Button size="sm" variant="secondary" style={{ marginLeft: 8 }} onClick={copyNewKey}><Icon n="clipboard" style={MI} />{t('apikeys.copy')}</Button>
             {copied && <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}> {t('apikeys.copied')}</span>}
           </div>
         )}
-        <Space size={8} align="center">
-          <Input value={String(kForm.name || '')} onChange={(v) => setKForm({ ...kForm, name: v })} placeholder={t('apikeys.keyName')} style={{ width: 180 }} />
-          <Select value={String(kForm.perms || 'translate')} onChange={(v) => setKForm({ ...kForm, perms: v })} style={{ width: 140 }}
-                  options={['translate', 'kb', 'all'].map((x) => ({ label: x, value: x }))} />
-          <Input type="number" value={String(kForm.daily_call_limit || '')} onChange={(v) => setKForm({ ...kForm, daily_call_limit: v })} placeholder={t('apikeys.limitPlaceholder')} style={{ width: 130 }} />
-          <Button onClick={createKey}>{t('apikeys.create')}</Button>
-        </Space>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input className="lc-input" value={String(kForm.name || '')} onChange={(e) => setKForm({ ...kForm, name: e.target.value })} placeholder={t('apikeys.keyName')} style={{ width: 180 }} />
+          <select className="lc-select" value={String(kForm.perms || 'translate')} onChange={(e) => setKForm({ ...kForm, perms: e.target.value })} style={{ width: 140 }}>
+            {['translate', 'kb', 'all'].map((x) => <option key={x} value={x}>{x}</option>)}
+          </select>
+          <input className="lc-input" type="number" value={String(kForm.daily_call_limit || '')} onChange={(e) => setKForm({ ...kForm, daily_call_limit: e.target.value })} placeholder={t('apikeys.limitPlaceholder')} style={{ width: 130 }} />
+          <Button variant="primary" onClick={createKey}>{t('apikeys.create')}</Button>
+          </div>
 
-        <Table rowKey="id" size="small" data={keys} style={{ marginTop: 10 }}
+        <div style={{ marginTop: 10 }}>
+        <DataTable<any> rowKey={(row) => String(row.id)} rows={keys}
                columns={[
-                 { colKey: 'id', title: t('apikeys.colId'), width: 70 },
-                 { colKey: 'key_prefix', title: t('apikeys.colPrefix'), width: 160, cell: ({ row }: any) => maskKey(`${row.key_prefix || ''}…`) },
-                 { colKey: 'name', title: t('apikeys.colName') },
-                 { colKey: 'perms', title: t('apikeys.colPerms'), width: 100 },
-                 { colKey: 'status', title: t('apikeys.colStatus'), width: 90, cell: ({ row }: any) => <Tag theme={row.status === 'active' ? 'success' : 'default'}>{row.status}</Tag> },
-                 { colKey: 'calls', title: t('apikeys.colCalls'), width: 110, cell: ({ row }: any) => <span style={{ color: isKeyOverQuota(row) ? '#c62828' : '' }}>{fmtToday(row)}</span> },
-                 { colKey: 'op', title: t('apikeys.colActions'), width: 300, cell: ({ row }: any) => (
-                   <Space size={4}>
-                     <Button size="small" variant="text" onClick={() => toggleKey(row)}>{row.status === 'active' ? t('apikeys.disable') : t('apikeys.enable')}</Button>
-                     <Button size="small" variant="text" onClick={() => rotateKey(row)}>{t('apikeys.rotate')}</Button>
-                     <Button size="small" variant="text" onClick={() => setLimit(row)}>📐 {t('apikeys.setLimit')}</Button>
-                     <Popconfirm content={t('apikeys.confirmDelete')} onConfirm={() => deleteKey(row)}>
-                       <Button size="small" variant="text" theme="danger">{t('apikeys.delete')}</Button>
-                     </Popconfirm>
-                   </Space>
+                 { key: 'id', title: t('apikeys.colId'), width: 70 },
+                 { key: 'key_prefix', title: t('apikeys.colPrefix'), width: 160, render: (row) => maskKey(`${row.key_prefix || ''}…`) },
+                 { key: 'name', title: t('apikeys.colName') },
+                 { key: 'perms', title: t('apikeys.colPerms'), width: 100 },
+                 { key: 'status', title: t('apikeys.colStatus'), width: 90, render: (row) => <StatusPill tone={row.status === 'active' ? 'success' : 'idle'}>{row.status}</StatusPill> },
+                 { key: 'calls', title: t('apikeys.colCalls'), width: 110, render: (row) => <span style={{ color: isKeyOverQuota(row) ? 'var(--lc-danger)' : undefined }}>{fmtToday(row)}</span> },
+                 { key: 'op', title: t('apikeys.colActions'), width: 300, render: (row) => (
+                   <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                     <Link onClick={() => toggleKey(row)}>{row.status === 'active' ? t('apikeys.disable') : t('apikeys.enable')}</Link>
+                     <Link onClick={() => rotateKey(row)}>{t('apikeys.rotate')}</Link>
+                     <Link onClick={() => setLimit(row)}><Icon n="gauge" style={MI} />{t('apikeys.setLimit')}</Link>
+                     <Link tone="danger" onClick={async () => { if (!(await confirmDialog({ body: t('apikeys.confirmDelete') }))) return; deleteKey(row) }}>{t('apikeys.delete')}</Link>
+          </div>
                  ) },
-               ] as never} />
+               ]}  />
+          </div>
       </Panel>
 
       {isSuper && docsCardOpen && (
         <Panel title={t('docsEdit.title')}>
           <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('docsEdit.hint')}</div>
-          <Space size={6} style={{ marginBottom: 8 }}>
-            <Button size="small" theme={docsLang === 'zh' ? 'primary' : 'default'} onClick={() => setDocsLang('zh')}>{t('docsEdit.langZh')}</Button>
-            <Button size="small" theme={docsLang === 'en' ? 'primary' : 'default'} onClick={() => setDocsLang('en')}>{t('docsEdit.langEn')}</Button>
-          </Space>
-          <Textarea autosize={{ minRows: 16 }} value={docsMD} onChange={(v) => setDocsMD(v as string)} placeholder={t('docsEdit.placeholder')}
-                    style={{ width: '100%', fontFamily: 'SFMono-Regular, Consolas, monospace', fontSize: 13, lineHeight: 1.55, resize: 'vertical' }} />
-          <Space size={8} style={{ marginTop: 8 }}>
-            <Button theme="success" disabled={docsSaving || !docsMD.trim()} onClick={saveDocs}>💾 {docsSaving ? t('docsEdit.saving') : t('common.save')}</Button>
-            <Button disabled={!docsMD.trim()} onClick={previewDocs}>👁 {t('docsEdit.preview')}</Button>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+            <Button size="sm" variant={docsLang === 'zh' ? 'primary' : 'secondary'} onClick={() => setDocsLang('zh')}>{t('docsEdit.langZh')}</Button>
+            <Button size="sm" variant={docsLang === 'en' ? 'primary' : 'secondary'} onClick={() => setDocsLang('en')}>{t('docsEdit.langEn')}</Button>
+          </div>
+          <textarea className="lc-textarea" rows={16} value={docsMD} onChange={(e) => setDocsMD(e.target.value)} placeholder={t('docsEdit.placeholder')}
+                    style={{ width: '100%', fontFamily: 'SFMono-Regular, Consolas, monospace', fontSize: 13, lineHeight: 1.55, resize: 'vertical', minHeight: 380 }} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Button variant="primary" disabled={docsSaving || !docsMD.trim()} onClick={saveDocs}><Icon n="checkcircle" style={MI} />{docsSaving ? t('docsEdit.saving') : t('common.save')}</Button>
+            <Button variant="secondary" disabled={!docsMD.trim()} onClick={previewDocs}><Icon n="eye" style={MI} />{t('docsEdit.preview')}</Button>
             <label style={{ cursor: 'pointer' }}>
-              📂 {t('docsEdit.import')}
+              <Icon n="upload" style={MI} />{t('docsEdit.import')}
               <input type="file" accept=".md,.markdown,.txt" hidden onChange={importDocs} />
             </label>
-            <Button onClick={exportDocs}>⬇️ {t('docsEdit.export')}</Button>
-            <Button theme="danger" onClick={resetDocs}>↺ {t('docsEdit.reset')}</Button>
+            <Button variant="secondary" onClick={exportDocs}><Icon n="download" style={MI} />{t('docsEdit.export')}</Button>
+            <Button variant="danger" onClick={resetDocs}>↺ {t('docsEdit.reset')}</Button>
             {docsDefaultBadge && <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('docsEdit.isDefault')}</span>}
-          </Space>
+          </div>
         </Panel>
       )}
     </>

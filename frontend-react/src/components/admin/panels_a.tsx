@@ -3,9 +3,8 @@
 // 职责：后台面板 A，包含概览、用户管理、系统告警、审计日志、用量统计与邀请码管理。
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import {
-  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Tabs, Empty, MessagePlugin, DateRangePicker,
-} from 'tdesign-react'
+import { Button, DataTable, Dialog, EmptyState, Link, StatusPill, Switch, Tabs } from '@/ui/langcross/src'
+// confirmDialog 已不再使用（危险操作改走 promptText/直接执行）
 import { promptText } from '@/components/uiDialogs'
 import {
   systemHealth, systemAudit, systemAlerts, alertResolve, alertSilence, alertUnsilence,
@@ -20,6 +19,7 @@ import { Panel, Field, toastResp } from './parts'
 import { fmtTime, fmtNum } from '@/lib/ui'
 import { fmtPoints } from '@/utils/points' // ★ S1 积分口径展示
 import { useT, t as tFn } from '@/i18n'
+import { toastError, toastWarn } from '@/lib/toastBus'
 
 /** 审计动作键→中英文映射名（模块级，避免渲染闭包作用域问题；未命中字典时回退原始动作键） */
 function auditActionLabel(a: string): string {
@@ -47,7 +47,7 @@ function shortDiffJSON(s: string): string {
 /** 指标卡片组件：仅做展示，value 可直接为 React 节点 */
 function HealthCard({ value, label }: { value: React.ReactNode; label: string }) {
   return (
-    <div style={{ minWidth: 120, border: '1px solid var(--adm-line)', borderRadius: 8, padding: '10px 14px' }}>
+    <div style={{ minWidth: 120, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: '10px 14px' }}>
       <b style={{ fontSize: 18, display: 'block' }}>{value}</b>
       <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{label}</span>
     </div>
@@ -96,7 +96,7 @@ export default function Overview() {
     if (tid > 0) xhr.setRequestHeader('X-Tenant-ID', String(tid))
     xhr.responseType = 'blob'
     xhr.onload = () => {
-      if (xhr.status !== 200) { void MessagePlugin.error(t('overview.exportFailed')); return }
+      if (xhr.status !== 200) { toastError(t('overview.exportFailed')); return }
       // 创建临时链接触发下载
       const a = document.createElement('a')
       a.href = URL.createObjectURL(xhr.response)
@@ -113,17 +113,21 @@ export default function Overview() {
   }
 
   return (
-    <Tabs value={ovTab} onChange={(v) => setOvTab(v as 'system' | 'usage')}>
+    <>
+      <Tabs activeKey={ovTab} onChange={(k) => setOvTab(k as 'system' | 'usage')} items={[
+        { key: 'system', label: t('overview.tabSystem') },
+        { key: 'usage', label: t('overview.tabUsage') },
+      ]} />
       {/* 系统看板 Tab */}
-      <Tabs.TabPanel value="system" label={t('overview.tabSystem')}>
+      {ovTab === 'system' && (
         <Panel title={t('overview.title')}
-          extra={<Space>
-            <Button onClick={loadDash}>{t('overview.refresh')}</Button>
-            {isSuper && <Button theme="success" onClick={exportAuditCSV}>{t('overview.exportAuditCsv')}</Button>}
-            <Button onClick={openMetrics}>{t('overview.prometheus')}</Button>
-          </Space>}>
+          extra={<div style={{ display: 'flex', gap: 8 }}>
+            <Button variant="secondary" onClick={loadDash}>{t('overview.refresh')}</Button>
+            {isSuper && <Button variant="primary" onClick={exportAuditCSV}>{t('overview.exportAuditCsv')}</Button>}
+            <Button variant="secondary" onClick={openMetrics}>{t('overview.prometheus')}</Button>
+          </div>}>
       {/* 健康指标卡片网格 */}
-      {!health && <Empty description={t('overview.refresh')} />}
+      {!health && <EmptyState title={t('overview.refresh')} />}
       {health && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
           <HealthCard value={String(health.kb_entries ?? '')} label={t('overview.kbEntries')} />
@@ -139,29 +143,29 @@ export default function Overview() {
       {audit.length > 0 && (
         <div style={{ marginTop: 16 }}>
           <h3 style={{ fontSize: 14 }}>{t('overview.recentAudit')}</h3>
-          <Table rowKey="id" size="small" maxHeight={360} data={audit as never}
+          <DataTable<any> rowKey={(row) => String(row.id)} rows={audit as never}
             columns={[
-              { colKey: 'created_at', title: t('overview.colTime'), width: 165, cell: ({ row }: any) => fmtTime(row.created_at) },
-              { colKey: 'tenant', title: t('audit.tenant'), width: 130, cell: ({ row }: any) => (
+              { key: 'created_at', title: t('overview.colTime'), width: 165, render: (row) => fmtTime(row.created_at) },
+              { key: 'tenant', title: t('audit.tenant'), width: 130, render: (row) => (
                 <>{row.tenant_name || '—'}{row.username && <span style={{ color: 'var(--adm-faint)' }}> @{row.username}</span>}</>
               ) },
-              { colKey: 'action', title: t('overview.colAction'), width: 150, cell: ({ row }: any) => auditActionLabel(row.action) },
-              { colKey: 'resource', title: t('overview.colResource'), width: 110 },
-              { colKey: 'detail', title: t('overview.colDetail'), ellipsis: true },
-              { colKey: 'change', title: t('overview.colChange'), ellipsis: true, cell: ({ row }: any) =>
+              { key: 'action', title: t('overview.colAction'), width: 150, render: (row) => auditActionLabel(row.action) },
+              { key: 'resource', title: t('overview.colResource'), width: 110 },
+              { key: 'detail', title: t('overview.colDetail'), dim: true, render: (row) => String(row.detail ?? '—') },
+              { key: 'change', title: t('overview.colChange'), dim: true, render: (row) =>
                 (row.before_val && row.after_val)
                   ? tpl('overview.diffOldNew', { old: shortDiffJSON(row.before_val), new: shortDiffJSON(row.after_val) })
                   : '—' },
-            ] as never} />
+            ]}  />
         </div>
       )}
         </Panel>
-      </Tabs.TabPanel>
+      )}
       {/* 用量看板 Tab */}
-      <Tabs.TabPanel value="usage" label={t('overview.tabUsage')}>
+      {ovTab === 'usage' && (
         <UsageP />
-      </Tabs.TabPanel>
-    </Tabs>
+      )}
+    </>
   )
 }
 
@@ -236,9 +240,9 @@ export function UsersP() {
 
   /** 创建用户并清空表单 */
   async function createUser() {
-    if (!uForm.username || !uForm.password) { void MessagePlugin.warning(t('users.required')); return }
+    if (!uForm.username || !uForm.password) { void toastWarn(t('users.required')); return }
     const r = await adminUserCreate({ ...uForm } as never)
-    if (!r.success) { void MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     setUForm({ username: '', password: '', display_name: '', role: 'user', tenant_id: activeTenantId || 1, org_id: 0 })
     setDlg(false); void load()
   }
@@ -249,7 +253,7 @@ export function UsersP() {
     if (field === 'org_id') data.org_id = Number(val)
     else data[field] = val
     const r = await adminUserUpdate(Number(u.id), data as never)
-    if (!r.success) void MessagePlugin.error(r.message)
+    if (!r.success) toastError(r.message)
     void load()
   }
 
@@ -259,7 +263,7 @@ export function UsersP() {
       display_name: u.display_name, role: u.role,
       status: u.status === 'active' ? 'disabled' : 'active', org_id: u.org_id || 0,
     } as never)
-    if (!r.success) void MessagePlugin.error(r.message)
+    if (!r.success) toastError(r.message)
     void load()
   }
 
@@ -267,61 +271,62 @@ export function UsersP() {
   async function resetPwd(u: Any) {
     const pwd = await promptText({ header: t('users.resetPwdPrompt'), body: tpl('users.resetPwdPrompt', { name: String(u.username ?? '') }) })
     if (!pwd) return
-    void adminUserResetPassword(Number(u.id), pwd).then((r) => { if (!r.success) void MessagePlugin.error(r.message) })
+    void adminUserResetPassword(Number(u.id), pwd).then((r) => { if (!r.success) toastError(r.message) })
   }
 
   return (
     <Panel title={t('users.title')}
-      extra={<Button theme="primary" onClick={() => { setUForm({ username: '', password: '', display_name: '', role: 'user', tenant_id: activeTenantId || 1, org_id: 0 }); setDlg(true) }}>{t('users.create')}</Button>}>
+      extra={<Button variant="primary" onClick={() => { setUForm({ username: '', password: '', display_name: '', role: 'user', tenant_id: activeTenantId || 1, org_id: 0 }); setDlg(true) }}>{t('users.create')}</Button>}>
       {/* 用户列表表格 */}
-      <Table rowKey="id" size="small" data={rows}
+      <DataTable<any> rowKey={(row) => String(row.id)} rows={rows}
         columns={[
-          { colKey: 'id', title: t('users.colId'), width: 70 },
-          { colKey: 'username', title: t('users.colUsername') },
-          { colKey: 'display_name', title: t('users.colName'), cell: ({ row }: any) =>
-            <Input size="small" value={String(row.display_name ?? '')} onChange={(v) => editUser(row, 'display_name', v)} /> },
-          { colKey: 'org', title: t('users.colOrg'), cell: ({ row }: any) =>
-            <Select size="small" value={Number(row.org_id || 0)} onChange={(v) => editUser(row, 'org_id', v as number)}
-              options={orgOptions.map((o) => ({ label: o.name, value: o.id }))} /> },
-          { colKey: 'role', title: t('users.colRole'), width: 140, cell: ({ row }: any) =>
-            <Select size="small" value={String(row.role)} onChange={(v) => editUser(row, 'role', v as string)}
-              options={roleOptions.map((r) => ({ label: t('users.role.' + r), value: r }))} /> },
-          { colKey: 'status', title: t('users.colStatus'), width: 90, cell: ({ row }: any) =>
-            <Tag theme={row.status === 'active' ? 'success' : 'default'}>{row.status === 'active' ? t('users.enable') : row.status === 'disabled' ? t('users.disable') : row.status}</Tag> },
-          { colKey: 'last_login_at', title: t('users.colLastLogin'), width: 165, cell: ({ row }: any) => fmtTime(row.last_login_at) },
-          { colKey: 'op', title: t('users.colActions'), width: 200, cell: ({ row }: any) => (
-            <Space size={4}>
-              <Button size="small" variant="text" onClick={() => resetPwd(row)}>{t('users.resetPwd')}</Button>
-              <Popconfirm content={t('users.disable') + '/' + t('users.enable')} onConfirm={async () => { await toggleUser(row) }}>
-                <Button size="small" variant="text" theme={row.status === 'active' ? 'danger' : 'primary'}>{row.status === 'active' ? t('users.disable') : t('users.enable')}</Button>
-              </Popconfirm>
-              <Popconfirm content={t('common.delete')} onConfirm={async () => { toastResp(await adminUserDelete(Number(row.id)), t('common.delete')); void load() }}>
-                <Button size="small" variant="text" theme="danger">{t('common.delete')}</Button>
-              </Popconfirm>
-            </Space>
+          { key: 'id', title: t('users.colId'), width: 70 },
+          { key: 'username', title: t('users.colUsername') },
+          { key: 'display_name', title: t('users.colName'), render: (row) =>
+            <input className="lc-input" value={String(row.display_name ?? '')} onChange={(e) => editUser(row, 'display_name', e.target.value)} /> },
+          { key: 'org', title: t('users.colOrg'), render: (row) =>
+            <select className="lc-select" value={String(Number(row.org_id || 0))} onChange={(e) => editUser(row, 'org_id', Number(e.target.value))}>
+              {orgOptions.map((o) => <option key={o.id} value={String(o.id)}>{o.name}</option>)}
+            </select> },
+          { key: 'role', title: t('users.colRole'), width: 140, render: (row) =>
+            <select className="lc-select" value={String(row.role)} onChange={(e) => editUser(row, 'role', e.target.value)}>
+              {roleOptions.map((r) => <option key={r} value={r}>{t('users.role.' + r)}</option>)}
+            </select> },
+          { key: 'status', title: t('users.colStatus'), width: 90, render: (row) =>
+            <StatusPill tone={row.status === 'active' ? 'success' : 'idle'}>{row.status === 'active' ? t('users.enable') : row.status === 'disabled' ? t('users.disable') : row.status}</StatusPill> },
+          { key: 'last_login_at', title: t('users.colLastLogin'), width: 165, render: (row) => fmtTime(row.last_login_at) },
+          { key: 'op', title: t('users.colActions'), width: 200, render: (row) => (
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Link onClick={() => resetPwd(row)}>{t('users.resetPwd')}</Link>
+              <Link tone="danger" onClick={async () => { await toggleUser(row) }}>{row.status === 'active' ? t('users.disable') : t('users.enable')}</Link>
+              <Link tone="danger" onClick={async () => { toastResp(await adminUserDelete(Number(row.id)), t('common.delete')); void load() }}>{t('common.delete')}</Link>
+            </div>
           ) },
-        ] as never} />
+        ]}  />
 
       {/* 创建用户弹窗 */}
-      <Dialog visible={dlg} onClose={() => setDlg(false)} header={t('users.create')} width={460}
+      <Dialog open={dlg} onCancel={() => setDlg(false)} title={t('users.create')}
         onConfirm={async () => { await createUser() }}>
-        <Field label={t('users.usernamePlaceholder')}><Input value={String(uForm.username || '')} onChange={(v) => setUForm((p: Any) => ({ ...p, username: v }))} /></Field>
-        <Field label={t('users.passPlaceholder')}><Input type="password" autocomplete="new-password" value={String(uForm.password || '')} onChange={(v) => setUForm((p: Any) => ({ ...p, password: v }))} /></Field>
-        <Field label={t('users.displayNamePlaceholder')}><Input value={String(uForm.display_name || '')} onChange={(v) => setUForm((p: Any) => ({ ...p, display_name: v }))} /></Field>
+        <Field label={t('users.usernamePlaceholder')}><input className="lc-input" value={String(uForm.username || '')} onChange={(e) => setUForm((p: Any) => ({ ...p, username: e.target.value }))} /></Field>
+        <Field label={t('users.passPlaceholder')}><input className="lc-input" type="password" autoComplete="new-password" value={String(uForm.password || '')} onChange={(e) => setUForm((p: Any) => ({ ...p, password: e.target.value }))} /></Field>
+        <Field label={t('users.displayNamePlaceholder')}><input className="lc-input" value={String(uForm.display_name || '')} onChange={(e) => setUForm((p: Any) => ({ ...p, display_name: e.target.value }))} /></Field>
         {/* 超管可选择租户 */}
         {isSuper && (
           <Field label={t('users.colOrg')}>
-            <Select value={Number(uForm.tenant_id || 1)} onChange={(v) => { setUForm((p: Any) => ({ ...p, tenant_id: v })); onCascadeChange() }}
-              options={tenants.map((tt: any) => ({ label: tpl('users.orgItem', { id: tt.id, code: tt.code }), value: tt.id }))} />
+            <select className="lc-select" value={String(Number(uForm.tenant_id || 1))} onChange={(e) => { setUForm((p: Any) => ({ ...p, tenant_id: Number(e.target.value) })); onCascadeChange() }}>
+              {tenants.map((tt: any) => <option key={tt.id} value={String(tt.id)}>{tpl('users.orgItem', { id: tt.id, code: tt.code })}</option>)}
+            </select>
           </Field>
         )}
         <Field label={t('users.colOrg')}>
-          <Select value={Number(uForm.org_id || 0)} onChange={(v) => { setUForm((p: Any) => ({ ...p, org_id: v })); onCascadeChange() }}
-            options={[{ id: 0, name: t('org.rootOption') }, ...cascadeOrgs.map((o) => ({ id: o.id, name: o.name, type: o.type }))].map((o: any) => ({ label: o.type === 'root' ? `🏢 ${o.name}` : o.name, value: o.id }))} />
+          <select className="lc-select" value={String(Number(uForm.org_id || 0))} onChange={(e) => { setUForm((p: Any) => ({ ...p, org_id: Number(e.target.value) })); onCascadeChange() }}>
+            {([{ id: 0, name: t('org.rootOption'), type: '' }, ...cascadeOrgs.map((o) => ({ id: o.id, name: o.name, type: o.type }))] as any[]).map((o) => <option key={o.id} value={String(o.id)}>{o.type === 'root' ? ` ${o.name}` : o.name}</option>)}
+          </select>
         </Field>
         <Field label={t('users.colRole')}>
-          <Select value={String(uForm.role || 'user')} onChange={(v) => setUForm((p: Any) => ({ ...p, role: v }))}
-            options={cascadeRoles.map((r) => ({ label: t('users.role.' + r), value: r }))} />
+          <select className="lc-select" value={String(uForm.role || 'user')} onChange={(e) => setUForm((p: Any) => ({ ...p, role: e.target.value }))}>
+            {cascadeRoles.map((r) => <option key={r} value={r}>{t('users.role.' + r)}</option>)}
+          </select>
         </Field>
       </Dialog>
     </Panel>
@@ -423,57 +428,65 @@ export function AlertsP() {
 
   return (
     <Panel title={t('alerts.title')}
-      extra={<Space size={8}>
-        <Select value={status} onChange={(v) => setStatus(v as string)} style={{ width: 120 }}
-          options={[{ label: t('alerts.all'), value: '' }, { label: t('alerts.open'), value: 'open' }, { label: t('alerts.resolved'), value: 'resolved' }]} />
-        <Select value={fLevel} onChange={(v) => setFLevel(v as string)} style={{ width: 110 }}
-          options={[{ label: `${t('alerts.fLevel')}·${t('alerts.all')}`, value: '' }, ...levelOpts.map((l) => ({ label: l, value: l }))]} />
-        <Select value={fKind} onChange={(v) => setFKind(v as string)} style={{ width: 130 }}
-          options={[{ label: `${t('alerts.fKind')}·${t('alerts.all')}`, value: '' }, ...kindOpts.map((k) => ({ label: k, value: k }))]} />
-        <Button onClick={load}>{t('alerts.refresh')}</Button>
-      </Space>}>
+      extra={<div style={{ display: 'flex', gap: 8 }}>
+        <select className="lc-select" value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: 120 }}>
+          <option value="">{t('alerts.all')}</option>
+          <option value="open">{t('alerts.open')}</option>
+          <option value="resolved">{t('alerts.resolved')}</option>
+        </select>
+        <select className="lc-select" value={fLevel} onChange={(e) => setFLevel(e.target.value)} style={{ width: 110 }}>
+          <option value="">{`${t('alerts.fLevel')}·${t('alerts.all')}`}</option>
+          {levelOpts.map((l) => <option key={l} value={l}>{l}</option>)}
+        </select>
+        <select className="lc-select" value={fKind} onChange={(e) => setFKind(e.target.value)} style={{ width: 130 }}>
+          <option value="">{`${t('alerts.fKind')}·${t('alerts.all')}`}</option>
+          {kindOpts.map((k) => <option key={k} value={k}>{k}</option>)}
+        </select>
+        <Button variant="secondary" onClick={load}>{t('alerts.refresh')}</Button>
+      </div>}>
       {/* 告警列表表格 */}
       {/* ★ F9：生效中的静音规则条 */}
       {silences.length > 0 && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
           {silences.map((sv) => (
-            <Tag key={`${sv.tenant_id}:${sv.kind}`} variant="light" title={t('alerts.silUntil').replace('{t}', fmtTime(sv.until))}>
-              {sv.kind}@#{sv.tenant_id} · {t('alerts.silUntil').replace('{t}', fmtTime(sv.until))}{' '}
-              <Button size="small" variant="text" onClick={() => void doUnsilence(sv)}>{t('alerts.unsilence')}</Button>
-            </Tag>
+            <span key={`${sv.tenant_id}:${sv.kind}`} title={t('alerts.silUntil').replace('{t}', fmtTime(sv.until))}>
+              <StatusPill tone="idle">
+                {sv.kind}@#{sv.tenant_id} · {t('alerts.silUntil').replace('{t}', fmtTime(sv.until))}{' '}
+                <Link onClick={() => void doUnsilence(sv)}>{t('alerts.unsilence')}</Link>
+              </StatusPill>
+            </span>
           ))}
         </div>
       )}
-      <Table rowKey="id" size="small" data={viewRows}
+      <DataTable<any> rowKey={(row) => String(row.id)} rows={viewRows}
         columns={[
-          { colKey: 'level', title: t('alerts.colLevel'), width: 90, cell: ({ row }: any) => <Tag theme={row.level === 'critical' ? 'danger' : row.level === 'warning' ? 'warning' : 'default'}>{row.level}</Tag> },
-          { colKey: 'kind', title: t('alerts.colKind'), width: 130 },
-          { colKey: 'tenant_id', title: t('alerts.colTenant'), width: 90, cell: ({ row }: any) => `#${row.tenant_id}` },
-          { colKey: 'message', title: t('alerts.colContent'), ellipsis: true },
-          { colKey: 'status', title: t('alerts.colStatus'), width: 90, cell: ({ row }: any) => row.status === 'open' ? t('alerts.open') : t('alerts.resolved') },
-          { colKey: 'created_at', title: t('alerts.colTime'), width: 160, cell: ({ row }: any) => fmtTime(row.created_at) },
-          { colKey: 'op', title: '', width: 150, cell: ({ row }: any) =>
+          { key: 'level', title: t('alerts.colLevel'), width: 90, render: (row) => <StatusPill tone={row.level === 'critical' ? 'danger' : row.level === 'warning' ? 'warn' : 'idle'}>{row.level}</StatusPill> },
+          { key: 'kind', title: t('alerts.colKind'), width: 130 },
+          { key: 'tenant_id', title: t('alerts.colTenant'), width: 90, render: (row) => `#${row.tenant_id}` },
+          { key: 'message', title: t('alerts.colContent'), dim: true, render: (row) => String(row.message ?? '—') },
+          { key: 'status', title: t('alerts.colStatus'), width: 90, render: (row) => row.status === 'open' ? t('alerts.open') : t('alerts.resolved') },
+          { key: 'created_at', title: t('alerts.colTime'), width: 160, render: (row) => fmtTime(row.created_at) },
+          { key: 'op', title: '', width: 150, render: (row) =>
             row.status === 'open'
-              ? <Space size={4}>
-                <Button size="small" variant="text" onClick={() => resolveAlert(row)}>{t('alerts.close')}</Button>
-                <Button size="small" variant="text" onClick={() => setSilDlg({ kind: String(row.kind), tenant_id: Number(row.tenant_id) })}>{t('alerts.silence')}</Button>
-              </Space>
-              : <Tag theme="success">{t('alerts.resolved')}</Tag> },
-        ] as never} />
+              ? <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <Link onClick={() => resolveAlert(row)}>{t('alerts.close')}</Link>
+                <Link onClick={() => setSilDlg({ kind: String(row.kind), tenant_id: Number(row.tenant_id) })}>{t('alerts.silence')}</Link>
+              </div>
+              : <StatusPill tone="success">{t('alerts.resolved')}</StatusPill> },
+        ]}  />
       {!viewRows.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 12 }}>{t('alerts.empty')}</div>}
 
       {/* ★ F9：静音时长选择弹层 */}
-      <Dialog header={`${t('alerts.silenceTitle')}（${silDlg?.kind ?? ''}@#${silDlg?.tenant_id ?? ''}）`} visible={!!silDlg} onClose={() => setSilDlg(null)}
-        onConfirm={() => void doSilence()} confirmBtn={t('alerts.silence')} cancelBtn={t('common.cancel')} width={380}>
+      <Dialog title={`${t('alerts.silenceTitle')}（${silDlg?.kind ?? ''}@#${silDlg?.tenant_id ?? ''}）`} open={!!silDlg} onCancel={() => setSilDlg(null)}
+        onConfirm={() => void doSilence()} confirmText={t('alerts.silence')} cancelText={t('common.cancel')}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 13 }}>{t('alerts.silDur')}</span>
-          <Select value={silMin} onChange={(v) => setSilMin(String(v))} style={{ width: 150 }}
-            options={[
-              { label: t('alerts.dur1h'), value: '60' },
-              { label: t('alerts.dur12h'), value: '720' },
-              { label: t('alerts.dur24h'), value: '1440' },
-              { label: t('alerts.dur7d'), value: '10080' },
-            ]} />
+          <select className="lc-select" value={silMin} onChange={(e) => setSilMin(e.target.value)} style={{ width: 150 }}>
+            <option value="60">{t('alerts.dur1h')}</option>
+            <option value="720">{t('alerts.dur12h')}</option>
+            <option value="1440">{t('alerts.dur24h')}</option>
+            <option value="10080">{t('alerts.dur7d')}</option>
+          </select>
         </div>
       </Dialog>
 
@@ -481,30 +494,32 @@ export function AlertsP() {
       <Panel title={t('packages.regNotifyTitle')}>
         <div style={{ fontSize: 13, color: 'var(--adm-faint)', marginBottom: 8 }}>{t('packages.regNotifyHint')}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <Switch value={regCfg.email_verify_enabled === '1' || regCfg.email_verify_enabled === true} onChange={(v) => setSwitch('email_verify_enabled', v as boolean)} />
+          <Switch checked={regCfg.email_verify_enabled === '1' || regCfg.email_verify_enabled === true} onChange={(e) => setSwitch('email_verify_enabled', e.target.checked)} />
           <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.emailVerify')}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <Switch value={regCfg.email_notify_enabled === '1' || regCfg.email_notify_enabled === true} onChange={(v) => setSwitch('email_notify_enabled', v as boolean)} />
+          <Switch checked={regCfg.email_notify_enabled === '1' || regCfg.email_notify_enabled === true} onChange={(e) => setSwitch('email_notify_enabled', e.target.checked)} />
           <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.emailNotify')}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ fontSize: 13, color: 'var(--adm-hint)', minWidth: 130 }}>{t('packages.captchaProvider')}</span>
-          <Select value={String(regCfg.captcha_provider || '')} onChange={(v) => setRegCfg((p) => ({ ...p, captcha_provider: v as string }))} style={{ width: 160 }}
-            options={[{ label: t('packages.captchaOff'), value: '' }, { label: 'Turnstile', value: 'turnstile' }]} />
+          <select className="lc-select" value={String(regCfg.captcha_provider || '')} onChange={(e) => setRegCfg((p) => ({ ...p, captcha_provider: e.target.value }))} style={{ width: 160 }}>
+            <option value="">{t('packages.captchaOff')}</option>
+            <option value="turnstile">Turnstile</option>
+          </select>
         </div>
         {/* Turnstile 验证码配置（仅当启用 Turnstile 时显示） */}
         {regCfg.captcha_provider === 'turnstile' && (
           <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-            <Input value={String(regCfg.captcha_site_key || '')} placeholder={t('packages.captchaSiteKey')} onChange={(v) => setRegCfg((p) => ({ ...p, captcha_site_key: v }))} />
-            <Input type="password" value={String(regCfg.captcha_secret_key || '')} placeholder={t('packages.captchaSecretKey')} onChange={(v) => setRegCfg((p) => ({ ...p, captcha_secret_key: v }))} />
+            <input className="lc-input" value={String(regCfg.captcha_site_key || '')} placeholder={t('packages.captchaSiteKey')} onChange={(e) => setRegCfg((p) => ({ ...p, captcha_site_key: e.target.value }))} />
+            <input className="lc-input" type="password" value={String(regCfg.captcha_secret_key || '')} placeholder={t('packages.captchaSecretKey')} onChange={(e) => setRegCfg((p) => ({ ...p, captcha_secret_key: e.target.value }))} />
           </div>
         )}
-        <Input value={String(regCfg.wecom_webhook_url || '')} placeholder={t('packages.wecomWebhook')} onChange={(v) => setRegCfg((p) => ({ ...p, wecom_webhook_url: v }))} style={{ marginBottom: 8 }} />
-        <Input value={String(regCfg.dingtalk_webhook_url || '')} placeholder={t('packages.dingtalkWebhook')} onChange={(v) => setRegCfg((p) => ({ ...p, dingtalk_webhook_url: v }))} style={{ marginBottom: 8 }} />
-        <Input value={String(regCfg.slack_webhook_url || '')} placeholder={t('packages.slackWebhook')} onChange={(v) => setRegCfg((p) => ({ ...p, slack_webhook_url: v }))} style={{ marginBottom: 8 }} />
-        <Input value={String(regCfg.teams_webhook_url || '')} placeholder={t('packages.teamsWebhook')} onChange={(v) => setRegCfg((p) => ({ ...p, teams_webhook_url: v }))} style={{ marginBottom: 8 }} />
-        <Button theme="success" onClick={saveRegCfg}>{t('common.save')}</Button>
+        <input className="lc-input" value={String(regCfg.wecom_webhook_url || '')} placeholder={t('packages.wecomWebhook')} onChange={(e) => setRegCfg((p) => ({ ...p, wecom_webhook_url: e.target.value }))} style={{ marginBottom: 8 }} />
+        <input className="lc-input" value={String(regCfg.dingtalk_webhook_url || '')} placeholder={t('packages.dingtalkWebhook')} onChange={(e) => setRegCfg((p) => ({ ...p, dingtalk_webhook_url: e.target.value }))} style={{ marginBottom: 8 }} />
+        <input className="lc-input" value={String(regCfg.slack_webhook_url || '')} placeholder={t('packages.slackWebhook')} onChange={(e) => setRegCfg((p) => ({ ...p, slack_webhook_url: e.target.value }))} style={{ marginBottom: 8 }} />
+        <input className="lc-input" value={String(regCfg.teams_webhook_url || '')} placeholder={t('packages.teamsWebhook')} onChange={(e) => setRegCfg((p) => ({ ...p, teams_webhook_url: e.target.value }))} style={{ marginBottom: 8 }} />
+        <Button variant="primary" onClick={saveRegCfg}>{t('common.save')}</Button>
       </Panel>
     </Panel>
   )
@@ -558,35 +573,37 @@ export function AuditP() {
       extra={<Button onClick={exportCsv}>{t('audit.export')}</Button>}>
       <p className="ad-hint" style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('audit.hint')}</p>
       {/* 筛选条件：操作类型、日期范围 */}
-      <Space style={{ marginBottom: 8 }}>
-        <Select value={fAction} onChange={(v) => setFAction(v as string)} style={{ width: 180 }}
-          options={[{ label: t('audit.allActions'), value: '' }, ...actions.map((a) => ({ label: auditActionLabel(a), value: a }))]} />
-        <input type="date" value={fFrom} onChange={(e) => setFFrom(e.target.value)} style={{ height: 30, border: '1px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select className="lc-select" value={fAction} onChange={(e) => setFAction(e.target.value)} style={{ width: 180 }}>
+          <option value="">{t('audit.allActions')}</option>
+          {actions.map((a) => <option key={a} value={a}>{auditActionLabel(a)}</option>)}
+        </select>
+        <input type="date" value={fFrom} onChange={(e) => setFFrom(e.target.value)} style={{ height: 30, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
         <span style={{ color: 'var(--adm-faint)' }}>→</span>
-        <input type="date" value={fTo} onChange={(e) => setFTo(e.target.value)} style={{ height: 30, border: '1px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
-        <Button onClick={load}>{t('common.refresh')}</Button>
-      </Space>
+        <input type="date" value={fTo} onChange={(e) => setFTo(e.target.value)} style={{ height: 30, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
+        <Button variant="secondary" onClick={load}>{t('common.refresh')}</Button>
+      </div>
 
       {/* 审计日志表格 */}
-      <Table rowKey="id" size="small" maxHeight={520} data={rows}
+      <DataTable<any> rowKey={(row) => String(row.id)} rows={rows}
         columns={[
-          { colKey: 'created_at', title: t('overview.colTime'), width: 165, cell: ({ row }: any) => fmtTime(row.created_at) },
-          { colKey: 'operator', title: t('audit.operator'), width: 140, cell: ({ row }: any) => row.username || row.user_id || '—' },
-          { colKey: 'action', title: t('overview.colAction'), width: 150 },
-          { colKey: 'resource', title: t('overview.colResource'), width: 110 },
-          { colKey: 'detail', title: t('overview.colDetail'), ellipsis: true },
-          { colKey: 'change', title: t('overview.colChange'), ellipsis: true, cell: ({ row }: any) =>
+          { key: 'created_at', title: t('overview.colTime'), width: 165, render: (row) => fmtTime(row.created_at) },
+          { key: 'operator', title: t('audit.operator'), width: 140, render: (row) => row.username || row.user_id || '—' },
+          { key: 'action', title: t('overview.colAction'), width: 150 },
+          { key: 'resource', title: t('overview.colResource'), width: 110 },
+          { key: 'detail', title: t('overview.colDetail'), dim: true, render: (row) => String(row.detail ?? '—') },
+          { key: 'change', title: t('overview.colChange'), dim: true, render: (row) =>
             (row.before_val && row.after_val)
               ? tpl('overview.diffOldNew', { old: shortDiffJSON(row.before_val), new: shortDiffJSON(row.after_val) })
               : '—' },
-        ] as never} />
+        ]}  />
       {!rows.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 12 }}>{t('audit.empty')}</div>}
     </Panel>
   )
 }
 
-/** 错误提示封装：动态导入 tdesign 的 MessagePlugin.error，规避循环依赖/SSR 问题 */
-function MessagePluginError(m: string) { void import('tdesign-react').then((M) => M.MessagePlugin.error(m)) }
+/** 错误提示封装：走 toastBus（非组件调用点也可用），规避循环依赖 */
+function MessagePluginError(m: string) { toastError(m) }
 
 // ==================== 用量看板面板（Vue Usage.vue） ====================
 
@@ -620,7 +637,7 @@ export function UsageP() {
   // ★ S1 积分口径（2026-09-15）：token 类字段（total/today/tokens_available）折积分展示，
   //   句数/次数类保持原值；日期字符串（from/to/date）不再当指标卡渲染；字段给中文标签。
   const ME_TOKEN_FIELDS = ['total', 'today', 'tokens_available']
-  const meCards = (d: Any) => !d ? <Empty description="—" /> : (
+  const meCards = (d: Any) => !d ? <EmptyState title="—" /> : (
     <div className="stat-grid">
       {Object.entries(d).filter(([, v]) => typeof v === 'number').map(([k, v]) => (
         <div key={k} className="stat-card">
@@ -634,31 +651,31 @@ export function UsageP() {
   )
 
   /** 系统用量：组织下用户成本明细表 + 合计 */
-  const orgTable = (d: Any) => !d ? <Empty description="—" /> : (
+  const orgTable = (d: Any) => !d ? <EmptyState title="—" /> : (
     <div>
       <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 8px' }}>{tpl('usage.orgTotal', { n: fmtPoints(Number(d.total) || 0) })}</p>
-      <Table rowKey="id" size="small" maxHeight={520} data={d.users || []}
+      <DataTable<any> rowKey={(row) => String(row.id)} rows={d.users || []}
         columns={[
-          { colKey: 'username', title: t('usage.colUser'), width: 160 },
-          { colKey: 'display_name', title: t('usage.colName'), width: 160 },
-          { colKey: 'org_name', title: t('usage.colOrg'), width: 160 },
-          { colKey: 'cost', title: t('usage.colCost'), width: 120, cell: ({ row }: any) => fmtPoints(Number(row.cost) || 0) },
-        ] as never} />
+          { key: 'username', title: t('usage.colUser'), width: 160 },
+          { key: 'display_name', title: t('usage.colName'), width: 160 },
+          { key: 'org_name', title: t('usage.colOrg'), width: 160 },
+          { key: 'cost', title: t('usage.colCost'), width: 120, render: (row) => fmtPoints(Number(row.cost) || 0) },
+        ]}  />
     </div>
   )
 
   /** 模型成本：按模型的成本/用量两张表 */
-  const costTables = (d: Any) => !d ? <Empty description="—" /> : (
+  const costTables = (d: Any) => !d ? <EmptyState title="—" /> : (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
       <div style={{ flex: 1, minWidth: 320 }}>
         <h4 style={{ fontSize: 14, margin: '4px 0' }}>{t('usage.costBy')}</h4>
-        <Table rowKey="k" size="small" data={Object.entries(d.costs || {}).map(([k, v]) => ({ k, v }))}
-          columns={[{ colKey: 'k', title: t('usage.colModel') }, { colKey: 'v', title: t('usage.colCost'), cell: ({ row }: any) => fmtPoints(Number(row.v)) }] as never} />
+        <DataTable<any> rowKey={(row) => String(row.k)} rows={Object.entries(d.costs || {}).map(([k, v]) => ({ k, v }))}
+          columns={[{ key: 'k', title: t('usage.colModel') }, { key: 'v', title: t('usage.colCost'), render: (row) => fmtPoints(Number(row.v)) }]}  />
       </div>
       <div style={{ flex: 1, minWidth: 320 }}>
         <h4 style={{ fontSize: 14, margin: '4px 0' }}>{t('usage.quantBy')}</h4>
-        <Table rowKey="k" size="small" data={Object.entries(d.quants || {}).map(([k, v]) => ({ k, v }))}
-          columns={[{ colKey: 'k', title: t('usage.colModel') }, { colKey: 'v', title: t('usage.colCount'), cell: ({ row }: any) => fmtNum(row.v) }] as never} />
+        <DataTable<any> rowKey={(row) => String(row.k)} rows={Object.entries(d.quants || {}).map(([k, v]) => ({ k, v }))}
+          columns={[{ key: 'k', title: t('usage.colModel') }, { key: 'v', title: t('usage.colCount'), render: (row) => fmtNum(row.v) }]}  />
       </div>
     </div>
   )
@@ -679,7 +696,7 @@ export function UsageP() {
     if (tid > 0) xhr.setRequestHeader('X-Tenant-ID', String(tid))
     xhr.responseType = 'blob'
     xhr.onload = () => {
-      if (xhr.status !== 200) { void MessagePlugin.error(t('overview.exportFailed')); return }
+      if (xhr.status !== 200) { toastError(t('overview.exportFailed')); return }
       const a = document.createElement('a')
       a.href = URL.createObjectURL(xhr.response)
       a.download = `usage_${usageFrom || 'all'}_${usageTo || 'now'}.csv`
@@ -695,35 +712,26 @@ export function UsageP() {
         <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('usage.dateQuery')}</span>
         {/* 腾讯 TDesign 日期范围选择器（2026-09-05）：任选起止日期 → 分别写入 usageFrom/usageTo，
             空=累计+当日口径（后端 from/to 均缺省）；单日区间可视同按日查询 */}
-        <DateRangePicker
-          mode="date"
-          valueType="YYYY-MM-DD"
-          clearable
-          allowInput
-          style={{ width: 260 }}
-          value={usageFrom && usageTo ? [usageFrom, usageTo] : []}
-          onChange={(v) => {
-            // TDesign 返回 [起, 止] 数组（valueType=YYYY-MM-DD），取前 10 位规范化为日期
-            const arr = (Array.isArray(v) ? v : []) as (string | Date)[]
-            const from = arr[0] ? String(arr[0]).slice(0, 10) : ''
-            const to = arr[1] ? String(arr[1]).slice(0, 10) : ''
-            setUsageFrom(from)
-            setUsageTo(to)
-          }}
-          placeholder={[t('usage.dateFrom'), t('usage.dateTo')]}
-        />
+        <input className="lc-input" type="date" value={usageFrom} placeholder={t('usage.dateFrom')}
+          onChange={(e) => setUsageFrom(e.target.value)} style={{ width: 150 }} />
+        <span style={{ color: 'var(--adm-hint)' }}>–</span>
+        <input className="lc-input" type="date" value={usageTo} placeholder={t('usage.dateTo')}
+          onChange={(e) => setUsageTo(e.target.value)} style={{ width: 150 }} />
         {(usageFrom || usageTo) && (
-          <Button size="small" variant="text" onClick={() => { setUsageFrom(''); setUsageTo('') }}>{t('usage.dateClear')}</Button>
+          <Button size="sm" variant="secondary" onClick={() => { setUsageFrom(''); setUsageTo('') }}>{t('usage.dateClear')}</Button>
         )}
-        {(usageFrom || usageTo) && <Tag variant="light" theme="primary">📅 {usageFrom || usageTo}{usageFrom && usageTo && usageFrom !== usageTo ? ` ~ ${usageTo}` : ''}</Tag>}
+        {(usageFrom || usageTo) && <StatusPill tone="idle"> {usageFrom || usageTo}{usageFrom && usageTo && usageFrom !== usageTo ? ` ~ ${usageTo}` :''}</StatusPill>}
         {/* 明细导出按钮：跟随当前日期区间；鉴权与列脱敏在后端统一处理 */}
-        <Button size="small" theme="success" variant="outline" onClick={exportUsageCSV}>{t('usage.exportCsv')}</Button>
+        <Button size="sm" variant="secondary" onClick={exportUsageCSV}>{t('usage.exportCsv')}</Button>
       </div>
-      <Tabs placement="top" value={usageTab} onChange={(v) => setUsageTab(v as 'me' | 'org' | 'cost')} list={[
-        { label: t('usage.tabMine'), value: 'me', panel: meCards(me) },
-        { label: t('usage.tabOrg'), value: 'org', panel: orgTable(org) },
-        ...(cost ? [{ label: t('usage.tabCost'), value: 'cost', panel: costTables(cost) }] : []),
+      <Tabs activeKey={usageTab} onChange={(k) => setUsageTab(k as 'me' | 'org' | 'cost')} items={[
+        { key: 'me', label: t('usage.tabMine') },
+        { key: 'org', label: t('usage.tabOrg') },
+        ...(cost ? [{ key: 'cost', label: t('usage.tabCost') }] : []),
       ]} />
+      {usageTab === 'me' && meCards(me)}
+      {usageTab === 'org' && orgTable(org)}
+      {usageTab === 'cost' && cost && costTables(cost)}
     </Panel>
   )
 }
@@ -754,34 +762,36 @@ export function InvitesP() {
 
   return (
     <Panel title={t('invites.title')}
-      extra={<Button theme="primary" onClick={() => { setCode(''); setTenantId(0); setDlg(true) }}>{t('invites.create')}</Button>}>
+      extra={<Button variant="primary" onClick={() => { setCode(''); setTenantId(0); setDlg(true) }}>{t('invites.create')}</Button>}>
       <p className="ad-hint" style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('invites.hint')}</p>
       {/* 邀请码列表表格 */}
-      <Table rowKey="id" size="small" data={rows}
+      <DataTable<any> rowKey={(row) => String(row.id)} rows={rows}
         columns={[
-          { colKey: 'code', title: t('invites.colCode') },
-          { colKey: 'tenant_id', title: t('invites.colTenant'), width: 110, cell: ({ row }: any) => row.tenant_id > 0 ? `#${row.tenant_id}` : t('invites.newOrg') },
-          { colKey: 'used', title: t('invites.colStatus'), width: 90, cell: ({ row }: any) => <Tag theme={Number(row.used) === 1 ? 'default' : 'success'}>{Number(row.used) === 1 ? t('invites.used') : t('invites.unused')}</Tag> },
-          { colKey: 'used_by', title: t('invites.colUsedBy'), width: 140 },
-          { colKey: 'created_at', title: t('invites.colCreatedAt'), width: 165, cell: ({ row }: any) => fmtTime(row.created_at) },
-          { colKey: 'used_at', title: t('invites.colUsedAt'), width: 165, cell: ({ row }: any) => fmtTime(row.used_at) },
-        ] as never} />
+          { key: 'code', title: t('invites.colCode') },
+          { key: 'tenant_id', title: t('invites.colTenant'), width: 110, render: (row) => row.tenant_id > 0 ? `#${row.tenant_id}` : t('invites.newOrg') },
+          { key: 'used', title: t('invites.colStatus'), width: 90, render: (row) => <StatusPill tone={Number(row.used) === 1 ? 'idle' : 'success'}>{Number(row.used) === 1 ? t('invites.used') : t('invites.unused')}</StatusPill> },
+          { key: 'used_by', title: t('invites.colUsedBy'), width: 140 },
+          { key: 'created_at', title: t('invites.colCreatedAt'), width: 165, render: (row) => fmtTime(row.created_at) },
+          { key: 'used_at', title: t('invites.colUsedAt'), width: 165, render: (row) => fmtTime(row.used_at) },
+        ]}  />
       {!rows.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 12 }}>{t('invites.empty')}</div>}
 
       {/* 创建邀请码弹窗 */}
-      <Dialog visible={dlg} onClose={() => setDlg(false)} header={t('invites.create')} onConfirm={async () => {
-        if (!code.trim()) { void MessagePlugin.warning(t('invites.codeRequired')); return }
+      <Dialog open={dlg} onCancel={() => setDlg(false)} title={t('invites.create')} onConfirm={async () => {
+        if (!code.trim()) { void toastWarn(t('invites.codeRequired')); return }
         // 企业用户（非超管）创建邀请码只能绑定本企业，忽略前端选择的租户
         const tid = isSuper ? tenantId : activeTenantId
         const r = await inviteCodeCreate({ code: code.trim(), tenant_id: tid })
         if (toastResp(r, t('invites.create'))) { setDlg(false); void load() }
       }}>
-        <Field label={t('invites.codePlaceholder')}><Input value={code} onChange={setCode} /></Field>
+        <Field label={t('invites.codePlaceholder')}><input className="lc-input" value={code} onChange={(e) => setCode(e.target.value)} /></Field>
         {/* 仅超管可选择归属租户；企业用户强制绑定本企业 */}
         {isSuper && (
           <Field label={t('invites.colTenant')}>
-            <Select value={tenantId} onChange={(v) => setTenantId(v as number)}
-              options={[{ label: t('invites.newOrg'), value: 0 }, ...tenants.map((tt: any) => ({ label: `${tt.name} (#${tt.id})`, value: tt.id }))]} />
+            <select className="lc-select" value={String(tenantId)} onChange={(e) => setTenantId(Number(e.target.value))}>
+              <option value="0">{t('invites.newOrg')}</option>
+              {tenants.map((tt: any) => <option key={tt.id} value={String(tt.id)}>{`${tt.name} (#${tt.id})`}</option>)}
+            </select>
           </Field>
         )}
       </Dialog>
@@ -797,7 +807,7 @@ export function AgreementsP() {
   // 用户列表数据
   const [rows, setRows] = useState<Any[]>([])
   // 表格加载中状态
-  const [loading, setLoading] = useState(false)
+  const [, setLoading] = useState(false)
 
   /** 加载用户列表（获取协议签署状态） */
   const load = useCallback(async () => {
@@ -814,27 +824,27 @@ export function AgreementsP() {
 
   // 表格列定义
   const columns = [
-    { colKey: 'username', title: t('agreements.user'), width: 160 },
-    { colKey: 'role', title: t('agreements.role'), width: 130, cell: ({ row }: Any) => roleName(row.role) },
-    { colKey: 'email', title: t('agreements.email'), width: 200 },
+    { key: 'username', title: t('agreements.user'), width: 160 },
+    { key: 'role', title: t('agreements.role'), width: 130, render: (row: Any) => roleName(row.role) },
+    { key: 'email', title: t('agreements.email'), width: 200 },
     {
-      colKey: 'status', title: t('agreements.status'), width: 110,
-      cell: ({ row }: Any) => {
+      key: 'status', title: t('agreements.status'), width: 110,
+      render: (row: Any) => {
         const ok = (row.agreed_at || '').trim() !== ''
-        return <Tag theme={ok ? 'success' : 'warning'} variant="light">{ok ? t('agreements.signed') : t('agreements.unsigned')}</Tag>
+        return <StatusPill tone={ok ? 'success' : 'warn'}>{ok ? t('agreements.signed') : t('agreements.unsigned')}</StatusPill>
       },
     },
     {
-      colKey: 'agreed_at', title: t('agreements.signedAt'), width: 180,
-      cell: ({ row }: Any) => (row.agreed_at ? fmtTime(row.agreed_at) : '—'),
+      key: 'agreed_at', title: t('agreements.signedAt'), width: 180,
+      render: (row: Any) => (row.agreed_at ? fmtTime(row.agreed_at) : '—'),
     },
-  ] as never
+  ]
 
   return (
     <Panel title={t('agreements.title')}>
       <div style={{ color: 'var(--adm-hint)', marginBottom: 12 }}>{t('agreements.desc')}</div>
       <div style={{ marginBottom: 12 }}>{tpl('agreements.total', { n: rows.length, m: signed })}</div>
-      <Table rowKey="id" size="small" loading={loading} data={rows as never} columns={columns} />
+      <DataTable<any> rowKey={(row) => String(row.id)} rows={rows as never} columns={columns}  />
     </Panel>
   )
 }

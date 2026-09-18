@@ -52,3 +52,57 @@ groups:
         annotations:
           summary: "goroutine 数异常偏高"
           description: "go_goroutines={{ $value }}，疑似泄漏或信号量未释放，请排查 /debug/pprof/goroutine。"
+
+      # ★ P2-7（2026-09-18 透明度批次）以下规则：把「翻译失败率 / 队列积压 /
+      #   模型退化输出 / 分布式锁降级 / 子进程失败」纳入自动告警——此前 5 条规则
+      #   全集中在 LLM 与进程存活，业务质量红灯只能靠人看日志。
+
+      # 翻译失败率过高（10 分钟窗口，按 ok/fail 计数比）
+      - alert: TranslationFailRateHigh
+        expr: sum(rate(translator_translations_total{result="fail"}[10m])) / clamp_min(sum(rate(translator_translations_total[10m])), 1e-9) > 0.1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "翻译失败率超过 10%"
+          description: "近 10 分钟 translator_translations_total fail 占比 {{ $value | humanizePercentage }}，检查模型可用性、积分余额与文件管线。"
+
+      # 任务队列积压（queued 长期排高 = worker 全忙/卡死/信号量饿死）
+      - alert: JobsBacklogHigh
+        expr: translator_jobs_queued > 50
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "翻译任务队列积压"
+          description: "translator_jobs_queued={{ $value }} 持续 15 分钟，可能 worker 不足或卡死；结合 stall 巡检日志排查。"
+
+      # 模型退化输出抬头（P0-4 观测指标，清洗照常交付但需人工看样本）
+      - alert: SuspectOutputSpike
+        expr: sum(increase(translator_suspect_output_total[1h])) > 5
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "检出疑似模型退化输出"
+          description: "近 1 小时 translator_suspect_output_total 增长 {{ $value }}，抽样核对该语言交付质量（伪标签/复读）。"
+
+      # 分布式锁异常降级发生（Redis 抖动，周期任务正走本进程兜底路径）
+      - alert: DistlockDegradeDetected
+        expr: increase(translator_distlock_errors_total[30m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "分布式锁异常，周期任务已降级本地执行"
+          description: "近 30 分钟 translator_distlock_errors_total 增长 {{ $value }}，Redis 可能不可用；多实例下存在偶发重复执行。"
+
+      # 文件子进程失败/超时抬头（docx/pdf 管线健康度）
+      - alert: FileprocFailuresHigh
+        expr: increase(translator_fileproc_failures_total[15m]) + increase(translator_fileproc_timeouts_total[15m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "文件处理子进程频繁失败/超时"
+          description: "近 15 分钟 fileproc 失败+超时 {{ $value }} 次，检查 Python 依赖、LibreOffice 与资源闸水位。"

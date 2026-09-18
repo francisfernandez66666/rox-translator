@@ -2,6 +2,9 @@
 // components/admin/SdkP.tsx — 官方 SDK 集成面板（外部调用 Hub 第三子 tab，2026-09-15）
 // 职责：向集成方展示 Python / TypeScript / Java 三端 SDK 的安装方式、
 //       最小接入示例与文档入口；内容随版本发布（scripts/release-sdk.sh）保持同步。
+// 2026-09-18（UI 融合）：Tag/Space 换为 ui/langcross 的 Badge + flex 布局；卡片改用
+//       --lc-border-card / --lc-panel 变量描边，代码块底色转暗；语言 emoji 图标位（SdkCard.icon）
+//       暂置空串保留占位，接 <Icon> 时在此补图标名即可，不影响复制与渲染逻辑。
 // ============================================================================
 
 /**
@@ -12,7 +15,7 @@
  */
 
 import { useState } from 'react'
-import { Button, Tag, Space } from 'tdesign-react'
+import { Badge, Button } from '@/ui/langcross/src'
 import { useT } from '@/i18n'
 
 // SDK 三端元信息与示例片段（片段内 API 基址与 Key 为占位符）
@@ -24,7 +27,7 @@ const SDK_VERSION = '1.0.0'
 // SDK 卡片配置（各语言 SDK 的安装/示例代码块）
 const CARDS: SdkCard[] = [
   {
-    key: 'python', icon: '🐍', pkg: 'langcross-translator', version: SDK_VERSION,
+    key: 'python', icon: '', pkg: 'langcross-translator', version: SDK_VERSION,
     install: 'pip install langcross-translator',
     code: `from langcross_translator import TranslatorClient
 
@@ -33,7 +36,7 @@ result = client.translate_text("您好，欢迎使用。", target_langs=["en", "
 print(result.output_by_lang["en"])`,
   },
   {
-    key: 'typescript', icon: '🟦', pkg: '@langcross/translator-sdk', version: SDK_VERSION,
+    key: 'typescript', icon: '', pkg: '@langcross/translator-sdk', version: SDK_VERSION,
     install: 'npm install @langcross/translator-sdk',
     code: `import { TranslatorClient } from '@langcross/translator-sdk'
 
@@ -44,7 +47,7 @@ const result = await client.translateText('您好，欢迎使用。', ['en', 'ja
 console.log(result.outputByLang.en)`,
   },
   {
-    key: 'java', icon: '☕', pkg: 'com.langcross:translator-sdk', version: SDK_VERSION,
+    key: 'java', icon: '', pkg: 'com.langcross:translator-sdk', version: SDK_VERSION,
     install: '<!-- Maven 源码分发（见仓库 sdk/java） -->',
     code: `TranslatorClient client = TranslatorClient.builder()
     .apiKey("lxk_your_key").baseUrl("https://<站点域名>").build();
@@ -68,18 +71,18 @@ export default function SdkP() {
       <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: 0 }}>{t('sdk.hint')}</p>
 
       {CARDS.map((c) => (
-        <div key={c.key} style={{ border: '1px solid var(--td-border-color, #e3e6ef)', borderRadius: 10, padding: 14 }}>
-          <Space size={8} align="center" style={{ marginBottom: 8 }}>
+        <div key={c.key} style={{ border: '1.2px solid var(--lc-border-card)', borderRadius: 10, padding: 14, background: 'var(--lc-panel)', boxShadow: 'var(--lc-panel-highlight)' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
             <span style={{ fontSize: 16 }}>{c.icon}</span>
             <b>{t('sdk.name.' + c.key)}</b>
-            <code style={{ fontSize: 12, background: '#f5f7fb', padding: '1px 6px', borderRadius: 4 }}>{c.pkg}</code>
-            <Tag theme="primary" variant="light">v{c.version}</Tag>
-          </Space>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <code style={{ flex: 1, fontSize: 12, background: '#0b1021', color: '#9fe8b8', padding: '6px 10px', borderRadius: 6, overflowX: 'auto', whiteSpace: 'nowrap' }}>$ {c.install}</code>
-            <Button size="small" variant="outline" onClick={() => void copy(c.key + 'i', c.install)}>{copied === c.key + 'i' ? t('sdk.copied') : t('sdk.copy')}</Button>
+            <code style={{ fontSize: 12, background: '#0E1014', padding: '1px 6px', borderRadius: 4 }}>{c.pkg}</code>
+            <Badge>v{c.version}</Badge>
           </div>
-          <pre style={{ fontSize: 12, background: '#f5f7fb', padding: '8px 10px', borderRadius: 6, overflowX: 'auto', margin: 0, whiteSpace: 'pre' }}>{c.code}</pre>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <code style={{ flex: 1, fontSize: 12, background:'var(--lc-inset)', color:'var(--lc-text-1)', padding:'6px 10px', borderRadius: 6, overflowX:'auto', whiteSpace:'nowrap'}}>$ {c.install}</code>
+            <Button size="sm" variant="secondary" onClick={() => void copy(c.key + 'i', c.install)}>{copied === c.key + 'i' ? t('sdk.copied') : t('sdk.copy')}</Button>
+          </div>
+          <pre style={{ fontSize: 12, background:'#0E1014', padding:'8px 10px', borderRadius: 6, overflowX:'auto', margin: 0, whiteSpace:'pre'}}>{c.code}</pre>
         </div>
       ))}
 

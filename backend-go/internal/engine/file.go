@@ -63,6 +63,11 @@ type FileTranslateData struct {
 	// Translations 原文→译文映射（语言维度），供工单执行器回写 tm_segments 长期沉淀；
 	// 不序列化进 SSE/HTTP 响应（体量大且前端无需）。
 	Translations map[string]map[string]string `json:"-"`
+	// SourceSegments 提取顺序的源文分段（与 Translations 的键一一对应）。
+	// ★ 2026-09-18：Translations 是 map，**没有顺序**，无法据此还原「第 i 段」。工单层要把
+	//   「源文段→译文段」的精确配对落进 ticket_segments 真值表（PDF 工单的对照编辑器靠它
+	//   才不错位，详见 store/segments.go），故把有序源文段一并带出。同样不序列化。
+	SourceSegments []string `json:"-"`
 }
 
 // writebackDelivery 写回交付形态（纯函数，便于单测）：
@@ -316,16 +321,19 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	if err != nil || len(texts) == 0 {
 		return &FileTranslateResult{Skill: "translation", Error: "无法从文件提取文本或文件为空"}
 	}
-	// ★ PDF：改用 pdf2docx 提取段落（键与写回目标一致，表格/短文本必中），
-	//   缓存 DOCX 供多语言写回复用；失败回退 pdftotext 键（产物降级 xlsx 对照表）。
-	//   图片内容按产品策略不翻译（2026-08-25 OCR 已整体移除）。
-	//   纯文案模式不走此链（提取已由 anydoc 完成，交付 .md 无需坐标级对齐）。
-	var pdfCacheDocx string
+	// ★ PDF（2026-09-18 新链）：原地替换（redact+overlay）——原版式/原字体/不越界。
+	//   提取键与写回目标完全一致（同一矢量栅格切分口径），不再产出 pdf2docx 缓存 DOCX。
+	//   图片内容按产品策略不翻译；纯文案模式不走此链（anydoc 提取，交付 .md）。
 	if !deliveryText && strings.EqualFold(filepath.Ext(filePath), ".pdf") {
-		if t2, cache, e2 := fileproc.ExtractTextsPdfDocx(ctx, filePath); e2 == nil && len(t2) > 0 && cache != "" {
+		if t2, e2 := fileproc.ExtractTextsPdfOverlay(ctx, filePath); e2 == nil && len(t2) > 0 {
+			// 整体替换而非合并：新键的切分口径与写回目标严格同一（见 pdf_overlay.py 的
+			// _merged_segments），混用会让「段序」与「译文键」错位，真值表也落不对。
 			texts = t2
-			pdfCacheDocx = cache
-			defer os.Remove(cache)
+		} else if e2 != nil {
+			// 提取失败不判死：overlay 依赖部署环境的 pymupdf，缺依赖/超时只意味着拿不到
+			// 单元格级切分，上面 ExtractTexts 的既有 PDF 文本键（pdftotext，缺则纯 Go 库）
+			// 仍能出译文——降级为版式重建交付，绝不因新链不可用把整单打回。
+			log.Printf("[file] PDF overlay 提取失败（回退既有提取键）: %v", e2)
 		}
 	}
 
@@ -759,21 +767,30 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				case ".pptx":
 					aerr = fileproc.ApplyPptx(filePath, outPath, tr)
 				case ".pdf":
-					// ★ D4（2026-09-12）：三级链——缓存 DOCX 复用 → pdf2docx 现场转换 →
-					//   纯 Go/fpdf2 版式重建（WriteTranslatedPDF，原为死代码）。
-					//   旧实现前两级失败即整单判失败，pdf2docx 不可用的部署永远产不出 PDF。
-					//   第三级丢原排版但保内容交付（版式重建，未命中段落回退原文）。
-					if pdfCacheDocx != "" {
-						// 两阶段：复用提取期缓存 DOCX（键对齐，图片/排版零破坏）
-						if perr := fileproc.ApplyTranslatedPdfFromDocx(ctx, outPath, pdfCacheDocx, tr, lc); perr == nil {
-							break
+					// ★ 2026-09-18 新链：原地替换（redact+overlay）——原版式/原字体/
+					//   不越界/自适应（单元格矢量线钳制换行宽度，字号 1.0→0.45 逐级自适应）。
+					//   失败降级 fpdf 版式重建（WriteTranslatedPDF），再败走既有纯文案 .md 双模式。
+					//   旧 pdf2docx→DOCX→LibreOffice 重建链自本日起退役（版式漂移/白块/
+					//   字体探测等全部问题源头），代码暂留供回滚，不再被本路径调用。
+					// ⚠️ 上行「字号 1.0→0.45 逐级自适应」是链路上线初期的旧口径，现已废止：
+					//   pdf_overlay.py 定稿为「字号照搬原文、不缩字不丢文」，溢出一律靠换行 +
+					//   向下扩容消化（详见该文件 cmd_apply 的字号照搬原则）。勿据旧注释改代码。
+					// 入参是**原始 PDF**而非任何中间 DOCX：写回只做文字层手术，
+					// 版式载体必须保持原件（键=提取时的同一矢量栅格切分，见上面 texts）。
+					// ★ P0-7（2026-09-18）：返回命中统计，零命中/低命中由 fileproc 判错，
+					//   与子进程失败同走「降级版式重建」路径——不再交付未翻译原样件。
+					if st, perr := fileproc.ApplyTranslatedPdfOverlay(ctx, outPath, filePath, tr, lc); perr == nil {
+						if st.Overflow > 0 {
+							log.Printf("[file] %s PDF 原地替换完成（%d/%d 段，其中 %d 段轻微越界仍原字号写出）", lc, st.Replaced, st.Requested, st.Overflow)
 						}
-						if perr := fileproc.WriteTranslatedPDFviaDocx(ctx, outPath, filePath, tr, lc); perr == nil {
-							break
-						}
+						break
+					} else {
+						log.Printf("[file] %s PDF 原地替换失败，降级版式重建: %v", lc, perr)
 					}
+					// 兜底重建只需要「有序段列表 + 原文→译文映射」，不依赖 overlay 的几何信息，
+					// 故原地替换崩了仍能用同一份 tr 兜底，不至于这一语言颗粒无收。
 					if perr := fileproc.WriteTranslatedPDF(ctx, outPath, texts, tr); perr == nil {
-						log.Printf("[file] %s PDF 保版式写回不可用，已降级版式重建交付", lc)
+						log.Printf("[file] %s PDF 原地替换不可用，已降级版式重建交付", lc)
 						break
 					} else {
 						log.Printf("[file] %s PDF 版式重建兜底失败: %v", lc, perr)
@@ -869,15 +886,17 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		Skill: "translation",
 		Reply: reply,
 		Data: FileTranslateData{
-			TotalTexts:    len(texts),
-			TargetLangs:   finalLangs,
-			LangNames:     langNames,
-			KBHits:        kbHits,
-			ModelHits:     modelHits,
-			Untranslated:  untranslated,     // 语言→未译出段数（>0 时审批台可见）
-			Translations:  langTranslations, // 原文→译文（不序列化），工单执行器回写 TM
-			GateWarnings:  gateWarnings,     // 整改 R1：主路径输出质量/文化闸门警告
-			DegradedLangs: degraded,         // ★ 双模式：版式还原失败已降级纯文案的语言
+			TotalTexts:   len(texts),
+			TargetLangs:  finalLangs,
+			LangNames:    langNames,
+			KBHits:       kbHits,
+			ModelHits:    modelHits,
+			Untranslated: untranslated,     // 语言→未译出段数（>0 时审批台可见）
+			Translations: langTranslations, // 原文→译文（不序列化），工单执行器回写 TM
+			// 有序源文段（不序列化）：工单执行器据此把精确配对落 ticket_segments 真值表
+			SourceSegments: texts,
+			GateWarnings:   gateWarnings, // 整改 R1：主路径输出质量/文化闸门警告
+			DegradedLangs:  degraded,     // ★ 双模式：版式还原失败已降级纯文案的语言
 		},
 		Files:      filesOut,
 		TextFiles:  textOut, // ★ 还原模式纯文案旁路产物（工单执行器登记为附加交付物）

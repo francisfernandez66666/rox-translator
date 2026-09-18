@@ -84,3 +84,29 @@ func TestModeOverrideFastAPITask(t *testing.T) {
 		}
 	}
 }
+
+// TestModeOverrideBypassLabel ★ P0-5（2026-09-18）断言：旁路必须返回可审计的标识，
+// 供 Execute 落 mode_override 轨迹行（旧实现旁路后不留任何痕迹，闸门缺失不可见）。
+func TestModeOverrideBypassLabel(t *testing.T) {
+	cases := []struct {
+		name string
+		t    *store.Ticket
+		want string
+	}{
+		{"fast 内部单", &store.Ticket{Mode: "fast", CreatedBy: 7}, "fast"},
+		{"pro API 单", &store.Ticket{Mode: "pro", CreatedBy: 0}, "api_task"},
+		{"fast API 单", &store.Ticket{Mode: "fast", CreatedBy: 0}, "fast+api_task"},
+		{"pro 内部单不旁路", &store.Ticket{Mode: "", CreatedBy: 7}, ""},
+	}
+	for _, c := range cases {
+		fd := newTestFlow()
+		if got := applyModeOverride(fd, c.t); got != c.want {
+			t.Errorf("%s: bypass label=%q want %q", c.name, got, c.want)
+		}
+	}
+	// 已批准重跑优先于模式标签
+	fd := newTestFlow()
+	if got := applyModeOverride(fd, &store.Ticket{Mode: "fast", CreatedBy: 0, Status: store.TicketApproved}); got != "approved_rerun" {
+		t.Errorf("approved_rerun 应优先，得 %q", got)
+	}
+}

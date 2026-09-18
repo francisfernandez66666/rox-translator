@@ -20,7 +20,7 @@ export const zh: Record<string, string> = {
 'docsEdit.resetDone': '已恢复内置默认文档',
   // ---- API Key 管理 ----
   'apikeys.title': '开放 API Key',
-  'apikeys.docs': '📄 查看 API 文档',
+'apikeys.docs':'查看 API 文档',
   'apikeys.keyName': 'Key 名称',
   'apikeys.create': '签发 Key',
   'apikeys.newKeyOnce': '新 Key（仅显示一次）',
@@ -68,7 +68,7 @@ export const en: Record<string, string> = {
   'docsEdit.resetDone': 'Built-in default restored',
   // ---- API Key 管理 ----
   'apikeys.title': 'Open API Keys',
-  'apikeys.docs': '📄 View API Docs',
+'apikeys.docs':'View API Docs',
   'apikeys.keyName': 'Key name',
   'apikeys.create': 'Issue Key',
   'apikeys.newKeyOnce': 'New key (shown only once)',

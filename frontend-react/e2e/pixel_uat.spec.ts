@@ -42,7 +42,9 @@ test.describe('像素级 UAT', () => {
     const ta = page.getByPlaceholder(/输入要翻译的文本/);
     await expect(ta).toBeVisible();
     await ta.fill('今天天气怎么样，适合出门吗？');
-    await page.getByRole('button', { name: '发送' }).click();
+    // ★ 2026-09-18 UI 迁移（图 07-translate）：工作台主按钮文案「发送」→「翻译」。
+    //   用兼容正则锁「触发翻译的主按钮」语义而非字面文案，措辞再变也不会误红。
+    await page.getByRole('button', { name: /^(发送|翻译|Send|Translate)$/ }).click();
     await expect(page.getByText(/TranslatedEN|翻译结果/).first()).toBeVisible({ timeout: 60000 });
     await shot(page, 'p2_workbench');
   });

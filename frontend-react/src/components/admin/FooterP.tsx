@@ -1,9 +1,14 @@
 // ============================================================================
 // components/admin/FooterP.tsx — 平台级页脚链接（仅超管）
 // 职责：维护对所有租户统一生效的页脚链接，页脚链接与租户无关。
+// 2026-09-18（UI 融合）：面板控件整体从 TDesign 迁到 ui/langcross ——
+//   Button/Icon/Link 取组件库，输入框改原生 input + lc-input 样式，
+//   提示改走 lib/toastBus（toastSuccess/toastError，不再直连 MessagePlugin）；
+//   行内删除由「✕ 文本按钮」改为 Link + <Icon n="close">，无障碍名挂在外层 span 上。
 // ============================================================================
 import { useEffect, useState } from 'react'
-import { Button, Input, MessagePlugin, Space } from 'tdesign-react'
+import { Button, Icon, Link } from '@/ui/langcross/src'
+import { toastSuccess, toastError } from '@/lib/toastBus'
 import { useT } from '@/i18n'
 import { Panel } from './parts'
 import { footerLinksGet, footerLinksSet, BrandLink } from '@/api/branding'
@@ -34,10 +39,10 @@ export default function FooterP() {
     setSaving(true)
     try {
       const j = await footerLinksSet(JSON.stringify(links))
-      if (j.success) MessagePlugin.success(t('brand.saved'))
-      else MessagePlugin.error(j.message || 'error')
+      if (j.success) toastSuccess(t('brand.saved'))
+      else toastError(j.message || 'error')
     } catch (e: any) {
-      MessagePlugin.error(e?.message || 'error')
+      toastError(e?.message || 'error')
     } finally {
       setSaving(false)
     }
@@ -60,21 +65,24 @@ export default function FooterP() {
       ) : (
         <div style={{ maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 14 }}>
           {/* 链接列表：每行包含中文标签、英文标签、URL 与删除按钮 */}
-          <Space direction="vertical" style={{ width: '100%' }} size={8}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
             {links.map((l, i) => (
               <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <Input value={l.label} onChange={(v) => setLink(i, 'label', v)} placeholder={t('brand.linkLabel')} style={{ width: 140 }} />
-                <Input value={l.label_en} onChange={(v) => setLink(i, 'label_en', v)} placeholder={t('brand.linkLabelEn')} style={{ width: 140 }} />
-                <Input value={l.url} onChange={(v) => setLink(i, 'url', v)} placeholder={t('brand.linkUrl')} style={{ flex: 1 }} />
-                <Button size="small" variant="text" theme="danger" onClick={() => removeLink(i)}>✕</Button>
+                <input className="lc-input" value={l.label} onChange={(e) => setLink(i, 'label', e.target.value)} placeholder={t('brand.linkLabel')} style={{ width: 140 }} />
+                <input className="lc-input" value={l.label_en} onChange={(e) => setLink(i, 'label_en', e.target.value)} placeholder={t('brand.linkLabelEn')} style={{ width: 140 }} />
+                <input className="lc-input" value={l.url} onChange={(e) => setLink(i, 'url', e.target.value)} placeholder={t('brand.linkUrl')} style={{ flex: 1 }} />
+                {/* aria-label 必须挂在 button 本身（Link 已透传）：挂外层 span 不给内部按钮命名，axe button-name 仍判 critical */}
+                <Link tone="danger" onClick={() => removeLink(i)} aria-label={t('common.delete')}><Icon n="close" /></Link>
               </div>
             ))}
-          </Space>
+          </div>
           {/* 新增链接按钮 */}
-          <Button size="small" variant="outline" theme="primary" onClick={addLink}>+ {t('brand.addLink')}</Button>
-          {/* 保存按钮 */}
+          <Button size="sm" variant="secondary" onClick={addLink}>+ {t('brand.addLink')}</Button>
+          {/* 保存按钮
+              ui/langcross Button 无 loading 属性（不像 TDesign），故用 disabled={saving}
+              表达「提交中不可重复点」，避免连点重复写库。 */}
           <div>
-            <Button theme="primary" loading={saving} onClick={save}>{t('brand.save')}</Button>
+            <Button variant="primary" disabled={saving} onClick={save}>{t('brand.save')}</Button>
           </div>
         </div>
       )}

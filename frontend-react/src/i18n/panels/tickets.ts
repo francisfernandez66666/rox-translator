@@ -27,6 +27,20 @@ export const zh: Record<string, string> = {
   'tickets.noApproval': '暂无待审批工单',
   'tickets.errorSourceRequired': '源文本必填',
   'tickets.runDone': '工单 {no} 流程执行完成',
+  // ---- 翻译工单页（用户端）UI 键 ----
+  'tickets.filterAll': '全部',
+  'tickets.filterRunning': '进行中',
+  'tickets.filterCompleted': '已完成',
+  'tickets.filterPending': '待处理',
+  'tickets.filterApproval': '待审批',
+  'tickets.filterRejected': '已驳回',
+  'tickets.createTitle2': '创建翻译工单',
+  'tickets.tabText': '文本',
+  'tickets.tabFile': '文件',
+  'tickets.targetLang2': '目标语言',
+  'tickets.statusFilter': '状态筛选',
+  'tickets.editorTitle': '对照编辑',
+  'tickets.emptyHint': '暂无工单，先在上方创建一份翻译工单。',
 }
 
 // 英文文案词典：键与上方 zh 一一对应。
@@ -55,4 +69,18 @@ export const en: Record<string, string> = {
   'tickets.noApproval': 'No tickets awaiting approval',
   'tickets.errorSourceRequired': 'Source text is required',
   'tickets.runDone': 'Workflow for ticket {no} completed',
+  // ---- 翻译工单页（用户端）UI 键 ----
+  'tickets.filterAll': 'All',
+  'tickets.filterRunning': 'In progress',
+  'tickets.filterCompleted': 'Completed',
+  'tickets.filterPending': 'Pending',
+  'tickets.filterApproval': 'Awaiting approval',
+  'tickets.filterRejected': 'Rejected',
+  'tickets.createTitle2': 'Create translation ticket',
+  'tickets.tabText': 'Text',
+  'tickets.tabFile': 'File',
+  'tickets.targetLang2': 'Target language',
+  'tickets.statusFilter': 'Status filter',
+  'tickets.editorTitle': 'Comparison editor',
+  'tickets.emptyHint': 'No tickets yet — create one above to get started.',
 }

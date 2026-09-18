@@ -35,7 +35,8 @@ test.describe('G6-a11y axe 无障碍扫描', () => {
     for (const pathName of A11Y_PAGES) {
       await page.goto(pathName);
       await page.waitForTimeout(900);
-      // /pricing、/docs/terms 等为服务端直出静态营销页（无 #root SPA 容器），按整页扫描
+      // /docs/terms 等为服务端直出静态文档页（无 #root SPA 容器），按整页扫描；
+      // ★ P2-6（2026-09-18）：/pricing 已归一 SPA，命中 hasRoot 分支按 #root 扫描
       const hasRoot = await page.evaluate(() => !!document.querySelector('#root'));
       const results = await (hasRoot ? new AxeBuilder({ page }).include('#root') : new AxeBuilder({ page })).analyze();
       all[pathName] = results.violations;

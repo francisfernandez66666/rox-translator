@@ -7,17 +7,18 @@
 //   并给出可覆盖因子的名称/公式速查，替代裸 JSON 输入框。
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Dialog, Input, Select, Switch, Tag, Textarea, MessagePlugin, DateRangePicker } from 'tdesign-react'
+import { Badge, Button, Dialog, StatusPill, Switch } from '@/ui/langcross/src'
 import { Panel, Field, toastResp } from './parts'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
 import { opsPolicy, opsSlo, opsRoutes, opsPolicySave, opsWindowSave, opsPackageReset } from '@/api/ops'
+import { toastSuccess, toastError } from '@/lib/toastBus'
 
 // 数字输入小件：Input 数值化（tdesign Input onChange 返回字符串）
 function NumInput({ value, onChange, style, disabled }: { value: number; onChange: (n: number) => void; style?: React.CSSProperties; disabled?: boolean }) {
   return (
-    <Input value={String(value ?? 0)} style={{ width: 110, ...style }} disabled={disabled}
-      onChange={(v) => { const n = Number(v); onChange(Number.isFinite(n) ? n : 0) }} />
+    <input className="lc-input" value={String(value ?? 0)} style={{ width: 110, ...style }} disabled={disabled}
+      onChange={(e) => { const n = Number(e.target.value); onChange(Number.isFinite(n) ? n : 0) }} />
   )
 }
 
@@ -125,16 +126,16 @@ export function OpsP() {
     try {
       const r = await opsPackageReset() as any
       if (r.success) {
-        void MessagePlugin.success(`${t('ops.pkgResetDone')}（${r.remaining}）`)
+        toastSuccess(`${t('ops.pkgResetDone')}（${r.remaining}）`)
         void load()
-      } else void MessagePlugin.error(r.message || '')
+      } else toastError(r.message || '')
     } catch { /* ignore */ }
   }
   // 保存推广窗口（校验 overrides JSON，合法后提交并刷新窗口列表）
   const saveWindow = async () => {
     if (!winDlg) return
     let overrides: any = {}
-    try { overrides = winDlg.overrides ? JSON.parse(winDlg.overrides) : {} } catch { void MessagePlugin.error('overrides JSON 非法'); return }
+    try { overrides = winDlg.overrides ? JSON.parse(winDlg.overrides) : {} } catch { toastError('overrides JSON 非法'); return }
     const ok = toastResp(await opsWindowSave({
       id: winDlg.id || `win_${Date.now()}`, name: winDlg.name, start: winDlg.start, end: winDlg.end,
       priority: Number(winDlg.priority) || 0, tz: winDlg.tz || '', overrides,
@@ -222,9 +223,9 @@ export function OpsP() {
         <div style={{ margin: '0 0 12px', fontSize: 12, color: 'var(--adm-hint)' }}>
           <span style={{ marginRight: 8 }}>{`路由实时统计（动态权重 ${routes.dynamic_routing ? '开' : '关'} / 竞速 ${routes.hedge_enabled ? '开' : '关'}）`}</span>
           {(routes.routes || []).map((x: any) => (
-            <Tag key={x.route} theme={x.err_rate > 0.2 ? 'danger' : x.err_rate > 0.05 ? 'warning' : 'success'} variant="light" style={{ marginRight: 6 }}>
+            <StatusPill key={x.route} tone={x.err_rate > 0.2 ? 'danger' : x.err_rate > 0.05 ? 'warn' : 'success'}>
               {String(x.route).split('|').pop()} P50 {Math.round(x.p50_ms)}ms · P95 {Math.round(x.p95_ms)}ms · 错误 {(x.err_rate * 100).toFixed(1)}% · tok/次 {Math.round(x.tokens_per_call)}
-            </Tag>
+            </StatusPill>
           ))}
         </div>
       )}
@@ -234,24 +235,26 @@ export function OpsP() {
             const burn = Number(x.burn_1h || 0)
             const lv = burn >= 2 ? 'danger' : burn >= 1 ? 'warning' : 'success'
             return (
-              <Tag key={x.key} theme={lv as any} variant="outline" title={`1h burn=${x.burn_1h} 6h burn=${x.burn_6h}${x.budget_left_pct != null ? ` 预算剩余 ${x.budget_left_pct}%` : ''}`}>
-                SLO {x.name} {x.target}{x.key === 'latency_p99' ? 'ms' : '%'} · 燃烧率 {burn}
-              </Tag>
+              <span key={x.key} title={`1h burn=${x.burn_1h} 6h burn=${x.burn_6h}${x.budget_left_pct != null ? ` 预算剩余 ${x.budget_left_pct}%` : ''}`}>
+                <StatusPill tone={lv as 'success' | 'danger' | 'warn'}>
+                  SLO {x.name} {x.target}{x.key === 'latency_p99' ? 'ms' : '%'} · 燃烧率 {burn}
+                </StatusPill>
+              </span>
             )
           })}
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
-        <Tag theme="primary" variant="outline">{t('ops.platformScope')}</Tag>
+        <Badge>{t('ops.platformScope')}</Badge>
         {windows.filter((w) => w.active).map((w) => (
-          <Tag key={w.id} theme="success">{t('ops.effectiveTag')}: {w.name || w.id}</Tag>
+          <StatusPill key={w.id} tone="success">{t('ops.effectiveTag')}: {w.name || w.id}</StatusPill>
         ))}
         <div style={{ flex: 1 }} />
-        <Button variant="outline" onClick={() => void load()}>↻</Button>
-        <Button theme="primary" disabled={!isSuper} onClick={() => void save()}>{t('ops.save')}</Button>
+        <Button variant="secondary" onClick={() => void load()}>↻</Button>
+        <Button variant="primary" disabled={!isSuper} onClick={() => void save()}>{t('ops.save')}</Button>
       </div>
       {!isSuper && (
-        <p style={{ fontSize: 12, color: 'var(--adm-warn-tx)', margin: '0 0 12px', background: 'var(--adm-warn-bg)', border: '1px solid var(--adm-warn-bd)', borderRadius: 6, padding: '6px 10px' }}>{t('ops.superOnlyHint')}</p>
+        <p style={{ fontSize: 12, color: 'var(--adm-warn-tx)', margin: '0 0 12px', background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', borderRadius: 6, padding: '6px 10px' }}>{t('ops.superOnlyHint')}</p>
       )}
 
       {/* 模式定价因子 */}
@@ -259,9 +262,9 @@ export function OpsP() {
         {['fast', 'pro'].map((m) => (
           <div key={m} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', flexWrap: 'wrap', opacity: isSuper ? 1 : 0.55 }}>
             <b style={{ width: 110 }}>{m === 'fast' ? t('ops.modeFast') : t('ops.modePro')}</b>
-            <label>{t('ops.modeEnabled')}<Switch disabled={!isSuper} value={!!mode(m).enabled} onChange={(v: any) => setMode(m, { enabled: !!v })} /></label>
-            <label>{t('ops.modeCharge')}<Switch disabled={!isSuper} value={!!mode(m).charge} onChange={(v: any) => setMode(m, { charge: !!v })} /></label>
-            {!mode(m).charge && <Tag theme="warning">{t('ops.modeFreeTag')}</Tag>}
+            <label>{t('ops.modeEnabled')}<Switch disabled={!isSuper} checked={!!mode(m).enabled} onChange={(e) => setMode(m, { enabled: e.target.checked })} /></label>
+            <label>{t('ops.modeCharge')}<Switch disabled={!isSuper} checked={!!mode(m).charge} onChange={(e) => setMode(m, { charge: e.target.checked })} /></label>
+            {!mode(m).charge && <StatusPill tone="warn">{t('ops.modeFreeTag')}</StatusPill>}
             <label>{t('ops.modeMarkup')}<NumInput disabled={!isSuper} value={mode(m).markup || 0} onChange={(n) => setMode(m, { markup: n })} /></label>
             <label>{t('ops.modeLimitChars')}<NumInput disabled={!isSuper} value={mode(m).limit_chars || 0} onChange={(n) => setMode(m, { limit_chars: n })} /></label>
           </div>
@@ -270,7 +273,7 @@ export function OpsP() {
 
       {/* 推广期时间窗（★ 2026-09：DateRangePicker + 因子名称/公式速查） */}
       <Panel title={t('ops.promoTitle')} extra={
-        <Button variant="outline" size="small" disabled={!isSuper} onClick={() => setWinDlg({ index: -1, id: '', name: '', start: '', end: '', priority: 0, tz: '', overrides: '{}' })}>{t('ops.promoAdd')}</Button>
+        <Button variant="secondary" size="sm" disabled={!isSuper} onClick={() => setWinDlg({ index: -1, id: '', name: '', start: '', end: '', priority: 0, tz: '', overrides: '{}' })}>{t('ops.promoAdd')}</Button>
       }>
         <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('ops.promoHint')}</p>
         {windows.map((w, i) => (
@@ -278,21 +281,21 @@ export function OpsP() {
             <code style={{ fontSize: 12 }}>{w.id}</code>
             <span style={{ width: 120 }}>{w.name || '-'}</span>
             <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{w.start} ~ {w.end}</span>
-            <Tag variant="outline">p={w.priority}</Tag>
-            {w.active && <Tag theme="success">{t('ops.promoActive')}</Tag>}
-            <Button size="small" variant="outline" disabled={!isSuper} onClick={() => setWinDlg({ index: i, id: w.id, name: w.name, start: w.start, end: w.end, priority: w.priority, tz: w.tz || '', overrides: JSON.stringify(w.overrides || {}) })}>{t('ops.promoEdit')}</Button>
+            <Badge mono>p={w.priority}</Badge>
+            {w.active && <StatusPill tone="success">{t('ops.promoActive')}</StatusPill>}
+            <Button size="sm" variant="secondary" disabled={!isSuper} onClick={() => setWinDlg({ index: i, id: w.id, name: w.name, start: w.start, end: w.end, priority: w.priority, tz: w.tz || '', overrides: JSON.stringify(w.overrides || {}) })}>{t('ops.promoEdit')}</Button>
           </div>
         ))}
       </Panel>
 
       {/* 套餐因子 */}
       <Panel title={t('ops.pkgTitle')} extra={
-        <Button variant="outline" size="small" disabled={!isSuper} onClick={() => { if (window.confirm(t('ops.pkgResetConfirm'))) void doReset() }}>{t('ops.pkgResetBtn')}</Button>
+        <Button variant="secondary" size="sm" disabled={!isSuper} onClick={() => { if (window.confirm(t('ops.pkgResetConfirm'))) void doReset() }}>{t('ops.pkgResetBtn')}</Button>
       }>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', opacity: isSuper ? 1 : 0.55 }}>
           <Field label={t('ops.pkgTrialTokens')}><NumInput disabled={!isSuper} value={pol.package.trial_tokens || 0} onChange={(n) => setPkg({ trial_tokens: n })} /></Field>
           <Field label={t('ops.pkgTrialDays')}><NumInput disabled={!isSuper} value={pol.package.trial_days || 0} onChange={(n) => setPkg({ trial_days: n })} /></Field>
-          <Field label={t('ops.pkgResetEnabled')}><Switch disabled={!isSuper} value={!!pol.package.monthly_reset_enabled} onChange={(v: any) => setPkg({ monthly_reset_enabled: !!v })} /></Field>
+          <Field label={t('ops.pkgResetEnabled')}><Switch disabled={!isSuper} checked={!!pol.package.monthly_reset_enabled} onChange={(e) => setPkg({ monthly_reset_enabled: e.target.checked })} /></Field>
           <Field label={t('ops.pkgResetLimit')}><NumInput disabled={!isSuper} value={pol.package.monthly_reset_limit || 0} onChange={(n) => setPkg({ monthly_reset_limit: n })} /></Field>
         </div>
       </Panel>
@@ -300,7 +303,7 @@ export function OpsP() {
       {/* 邀请奖励因子（总开关 = 前台「邀请好友」入口是否生效） */}
       <Panel title={t('ops.inviteTitle')}>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', opacity: isSuper ? 1 : 0.55 }}>
-          <Field label={t('ops.inviteEnabled')}><Switch disabled={!isSuper} value={!!pol.invite.enabled} onChange={(v: any) => setInvite({ enabled: !!v })} /></Field>
+          <Field label={t('ops.inviteEnabled')}><Switch disabled={!isSuper} checked={!!pol.invite.enabled} onChange={(e) => setInvite({ enabled: e.target.checked })} /></Field>
           <Field label={t('ops.inviteTokens')}><NumInput disabled={!isSuper} value={pol.invite.reward_tokens || 0} onChange={(n) => setInvite({ reward_tokens: n })} /></Field>
           <Field label={t('ops.inviteDays')}><NumInput disabled={!isSuper} value={pol.invite.reward_days || 0} onChange={(n) => setInvite({ reward_days: n })} /></Field>
           <Field label={t('ops.invitePaidTokens')}><NumInput disabled={!isSuper} value={pol.invite.paid_reward_tokens || 0} onChange={(n) => setInvite({ paid_reward_tokens: n })} /></Field>
@@ -312,7 +315,7 @@ export function OpsP() {
       {/* 任务中心奖励因子（★ 2026-09 新增总开关） */}
       <Panel title={t('ops.taskTitle')}>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', opacity: isSuper ? 1 : 0.55 }}>
-          <Field label={t('ops.taskEnabled')}><Switch disabled={!isSuper} value={!!pol.task.enabled} onChange={(v: any) => setTask({ enabled: !!v })} /></Field>
+          <Field label={t('ops.taskEnabled')}><Switch disabled={!isSuper} checked={!!pol.task.enabled} onChange={(e) => setTask({ enabled: e.target.checked })} /></Field>
           <span style={{ fontSize: 12, color: 'var(--adm-faint)', maxWidth: 420, lineHeight: 1.7 }}>{t('ops.taskHint')}</span>
         </div>
       </Panel>
@@ -320,10 +323,10 @@ export function OpsP() {
       {/* 注册 / 限额 / 支付 / 内容因子 */}
       <Panel title={t('ops.regTitle')}>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', opacity: isSuper ? 1 : 0.55 }}>
-          <Field label={t('ops.regEnabled')}><Switch disabled={!isSuper} value={!!pol.registration.enabled} onChange={(v: any) => setReg({ enabled: !!v })} /></Field>
+          <Field label={t('ops.regEnabled')}><Switch disabled={!isSuper} checked={!!pol.registration.enabled} onChange={(e) => setReg({ enabled: e.target.checked })} /></Field>
           <Field label={t('ops.regIpInterval')}><NumInput disabled={!isSuper} value={pol.registration.ip_min_interval_sec || 0} onChange={(n) => setReg({ ip_min_interval_sec: n })} /></Field>
           <Field label={t('ops.regIpDaily')}><NumInput disabled={!isSuper} value={pol.registration.ip_daily_limit || 0} onChange={(n) => setReg({ ip_daily_limit: n })} /></Field>
-          <Field label={t('ops.regEmailVerify')}><Switch disabled={!isSuper} value={!!pol.registration.email_verify_enabled} onChange={(v: any) => setReg({ email_verify_enabled: !!v })} /></Field>
+          <Field label={t('ops.regEmailVerify')}><Switch disabled={!isSuper} checked={!!pol.registration.email_verify_enabled} onChange={(e) => setReg({ email_verify_enabled: e.target.checked })} /></Field>
         </div>
       </Panel>
 
@@ -343,7 +346,7 @@ export function OpsP() {
               <option value="">-</option><option value="mock">mock</option><option value="wechat">wechat</option><option value="alipay">alipay</option><option value="static_qr">static_qr</option>
             </select>
           </Field>
-          <Field label={t('ops.payAutoCharge')}><Switch disabled={!isSuper} value={!!pol.payment.auto_charge} onChange={(v: any) => setPay({ auto_charge: !!v })} /></Field>
+          <Field label={t('ops.payAutoCharge')}><Switch disabled={!isSuper} checked={!!pol.payment.auto_charge} onChange={(e) => setPay({ auto_charge: e.target.checked })} /></Field>
         </div>
       </Panel>
 
@@ -354,47 +357,40 @@ export function OpsP() {
       </Panel>
 
       {/* 推广窗口编辑弹窗 */}
-      <Dialog header={t('ops.promoEditTitle')} visible={!!winDlg} style={{ width: 560 }}
-        onClose={() => setWinDlg(null)}
-        footer={
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <Button variant="outline" onClick={() => setWinDlg(null)}>Cancel</Button>
-            <Button theme="primary" onClick={() => void saveWindow()}>{t('ops.promoSave')}</Button>
-          </div>
-        }>
+      <Dialog title={t('ops.promoEditTitle')} open={!!winDlg}
+        onCancel={() => setWinDlg(null)}
+        confirmText={t('ops.promoSave')} onConfirm={() => void saveWindow()}>
         {winDlg && (
           <div style={{ display: 'grid', gap: 10 }}>
-            <Field label="ID"><Input value={winDlg.id} onChange={(v) => setWinDlg({ ...winDlg, id: v as string })} /></Field>
-            <Field label={t('ops.promoName')}><Input value={winDlg.name} onChange={(v) => setWinDlg({ ...winDlg, name: v as string })} /></Field>
+            <Field label="ID"><input className="lc-input" value={winDlg.id} onChange={(e) => setWinDlg({ ...winDlg, id: e.target.value as string })} /></Field>
+            <Field label={t('ops.promoName')}><input className="lc-input" value={winDlg.name} onChange={(e) => setWinDlg({ ...winDlg, name: e.target.value as string })} /></Field>
             <Field label={t('ops.promoRange')}>
-              <DateRangePicker
-                mode="date"
-                enableTimePicker
-                valueType="YYYY-MM-DD HH:mm"
-                clearable
-                allowInput
-                style={{ width: '100%' }}
-                value={winDlg.start && winDlg.end ? [winDlg.start, winDlg.end] : []}
-                onChange={(v) => {
-                  const arr = (Array.isArray(v) ? v : []) as (string | Date)[]
-                  setWinDlg({ ...winDlg, start: arr[0] ? String(arr[0]).slice(0, 16) : '', end: arr[1] ? String(arr[1]).slice(0, 16) : '' })
-                }}
-                placeholder={[t('ops.promoStart'), t('ops.promoEnd')]}
-              />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input className="lc-input" type="datetime-local" value={(winDlg.start || '').replace(' ', 'T')}
+                  onChange={(e) => setWinDlg({ ...winDlg, start: (e.target.value || '').replace('T', ' ') })}
+                  aria-label={t('ops.promoStart')} style={{ flex: 1 }} />
+                <span style={{ color: 'var(--adm-hint)' }}>–</span>
+                <input className="lc-input" type="datetime-local" value={(winDlg.end || '').replace(' ', 'T')}
+                  onChange={(e) => setWinDlg({ ...winDlg, end: (e.target.value || '').replace('T', ' ') })}
+                  aria-label={t('ops.promoEnd')} style={{ flex: 1 }} />
+              </div>
             </Field>
             <Field label={t('ops.promoPriority')}><NumInput value={winDlg.priority} onChange={(n) => setWinDlg({ ...winDlg, priority: n })} /></Field>
             <Field label={t('ops.foTitle')}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, border: '1px solid var(--adm-line)', borderRadius: 8, padding: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 8 }}>
                 {OV_FIELDS.map((f) => (
                   <label key={f.path} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
                     <span style={{ minWidth: 118, color: 'var(--adm-hint)' }}>{f.label}</span>
                     {f.kind === 'bool' ? (
-                      <Select size="small" style={{ width: 90 }} value={ovGet(ovParse(), f.path)}
-                              onChange={(v: any) => ovPatch(f, String(v ?? ''))}
-                              options={[{ value: '', label: '—' }, { value: '1', label: t('ops.foOn') }, { value: '0', label: t('ops.foOff') }]} />
+                      <select className="lc-select" style={{ width: 90 }} value={String(ovGet(ovParse(), f.path) ?? '')}
+                              onChange={(e) => ovPatch(f, e.target.value)}>
+                        <option value="">—</option>
+                        <option value="1">{t('ops.foOn')}</option>
+                        <option value="0">{t('ops.foOff')}</option>
+                      </select>
                     ) : (
-                      <Input size="small" type="number" style={{ width: 110 }} value={ovGet(ovParse(), f.path)} placeholder="—"
-                             onChange={(v: any) => ovPatch(f, String(v ?? ''))} />
+                      <input className="lc-input" type="number" style={{ width: 110 }} value={ovGet(ovParse(), f.path)} placeholder="—"
+                             onChange={(e) => ovPatch(f, String(e.target.value ?? ''))} />
                     )}
                   </label>
                 ))}
@@ -403,16 +399,18 @@ export function OpsP() {
             <details>
               <summary style={{ fontSize: 12, color: 'var(--adm-faint)', cursor: 'pointer' }}>{t('ops.foRaw')}</summary>
               {ovHasExtra && <p style={{ fontSize: 12, color: 'var(--adm-amber-tx)', margin: '4px 0' }}>{t('ops.foExtraKeys')}</p>}
-              <Textarea value={winDlg.overrides} onChange={(v) => setWinDlg({ ...winDlg, overrides: v as string })} />
+              <textarea className="lc-textarea" rows={5} value={winDlg.overrides}
+                onChange={(e) => setWinDlg({ ...winDlg, overrides: e.target.value })}
+                style={{ width: '100%', resize: 'vertical' }} />
             </details>
             <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: 0 }}>{t('ops.promoOverridesHint')}</p>
             <code style={{ fontSize: 11, color: 'var(--adm-hint)', background: 'var(--adm-soft)', borderRadius: 6, padding: '6px 8px', wordBreak: 'break-all' }}>{t('ops.promoOverridesExample')}</code>
             <div style={{ borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
               <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--adm-hint)', marginBottom: 6 }}>{t('ops.promoFactorsTitle')}</div>
-              <div style={{ maxHeight: 220, overflow: 'auto', border: '1px solid var(--adm-line)', borderRadius: 8 }}>
+              <div style={{ maxHeight: 220, overflow: 'auto', border: '1.2px solid var(--adm-line)', borderRadius: 8 }}>
                 {OVERRIDE_FACTORS.map((f) => (
                   <div key={f.factor} style={{ display: 'flex', gap: 8, padding: '5px 10px', fontSize: 12, borderBottom: '1px solid var(--adm-line)' }}>
-                    <code style={{ color: 'var(--td-brand-color-active, #1f33d6)', minWidth: 240, flexShrink: 0 }}>{f.factor}</code>
+                    <code style={{ color: 'var(--lc-text-1)', minWidth: 240, flexShrink: 0 }}>{f.factor}</code>
                     <span style={{ color: 'var(--adm-hint)' }}>{f.formula}</span>
                   </div>
                 ))}

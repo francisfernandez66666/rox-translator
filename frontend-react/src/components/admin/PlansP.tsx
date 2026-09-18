@@ -2,14 +2,19 @@
 // components/admin/PlansP.tsx — 套餐中心面板
 // 职责：计费配置、套餐订阅、充值、订单/发票、配额与超管商业包管理
 // 从 panels_c.tsx 拆分
+// 2026-09-18（UI 融合）：金额/余额等强调数字的品牌蓝兜底色改为暗色主题正文色
+//   （统一落到 var(--lc-text-1)；旧 var(--td-brand-color-active, #E7E9EA) 兜底已无必要，
+//   暗底上不再出现旧版深蓝）；收款台/静态码预览边框同步转暗；
+//   订单标题、按钮文案的 emoji 前缀清理。计费、轮询、退款与权限判断逻辑均未动。
+// 2026-09-18（组件迁移）：TDesign 组件整体迁移至项目自带 langcross 纯黑组件库
+//   （Button / DataTable / Dialog / Switch / StatusPill / Badge / Link），业务逻辑不变。
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fmtPoints } from '@/utils/points' // ★ S1 积分展示
 import type { ChangeEvent } from 'react'
-import {
-  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, MessagePlugin,
-} from 'tdesign-react'
+import { Button, DataTable, Dialog, Switch, StatusPill, Badge, Link, type StatusTone } from '@/ui/langcross/src'
 import { confirmDialog } from '@/components/uiDialogs'
+import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
 import {
   billingQuota, billingQuotaSave,
   billingOrders, billingInvoices, billingInvoiceCreate, billingInvoiceVoid, adminOrderRefund,
@@ -63,9 +68,9 @@ function usdtAddrURL(chain: string, addr: string): string {
   return ''
 }
 
-// statusTheme 订单状态对应的标签配色（tdesign Tag theme）。
-function statusTheme(s: string): string {
-  return ({ pending: 'warning', paid: 'success', refunded: 'default', cancelled: 'default' } as Record<string, string>)[s] || 'default'
+// statusTheme 订单状态对应的标签配色（langcross StatusPill tone）。
+function statusTheme(s: string): StatusTone {
+  return ({ pending: 'warn', paid: 'success', refunded: 'idle', cancelled: 'idle' } as Record<string, StatusTone>)[s] || 'idle'
 }
 
 // PlansP 套餐中心面板主组件：计费配置、套餐/订阅管理、充值订单、发票与超管商业包操作入口。
@@ -211,7 +216,7 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
 async function subscribe(pl: Any) {
     const r: Any = await packageSubscribe(String(pl.code))
     // ★ 2026-09-16：业务失败（渠道未开放/余额校验等）不再静默吞掉，给用户可见反馈
-    if (!r.success) { void MessagePlugin.error(String(r.message || t('billing.subscribeFailed'))); return }
+    if (!r.success) { void toastError(String(r.message || t('billing.subscribeFailed'))); return }
     const o = r.order as Any
     if (o) { setOrder(o); setShowCheckout(true); if (o.channel !== 'manual') startPolling() }
     setUsdtPay((r.usdt_pay as Any) || null)
@@ -228,7 +233,7 @@ async function upgrade(pl: Any) {
     if (!ok) return
     const r: Any = await packageUpgrade(String(pl.code))
     if (!toastResp(r)) return
-    if (r.credit_money > 0) void MessagePlugin.success(tpl('billing.upgradeCredit', { money: r.credit_money }))
+    if (r.credit_money > 0) void toastSuccess(tpl('billing.upgradeCredit', { money: r.credit_money }))
     const o = r.order as Any
     if (o) { setOrder(o); setShowCheckout(true); if (o.channel !== 'manual') startPolling() }
     await loadPackage()
@@ -250,7 +255,7 @@ async function openCheckout() {
       setUsdtPay((r.usdt_pay as Any) || null); setUsdtTxInput('')
       if (o && o.channel !== 'manual') startPolling()
     } catch (e: any) {
-      void MessagePlugin.error(e?.message || t('common.fail'))
+      void toastError(e?.message || t('common.fail'))
     } finally { setChLoading(false) }
   }
   async function resumePay(_o: Any) {
@@ -279,7 +284,7 @@ async function checkStatus() {
         if (no.status === 'paid') stopPolling()
         else if (no.status === 'cancelled' || no.status === 'refunded') {
           stopPolling()
-          void MessagePlugin.warning(t('billing.payOrderGone'))
+          void toastWarn(t('billing.payOrderGone'))
           setShowCheckout(false); setUsdtPay(null); setUsdtTxInput('')
           void loadOrders()
         }
@@ -300,9 +305,9 @@ async function manualConfirm() {
     setChLoading(true)
     try {
       const r: Any = await payManualConfirm(Number(o.id), o.channel === 'usdt' ? usdtTxInput.trim() : '')
-      if (r.success) { void MessagePlugin.success(t('billing.manualNotify')); stopPolling(); closeCheckout() }
-      else void MessagePlugin.error((r.message as string) || t('billing.iPaidFailed'))
-    } catch (e: any) { void MessagePlugin.error(e?.message || t('common.fail')) }
+      if (r.success) { void toastSuccess(t('billing.manualNotify')); stopPolling(); closeCheckout() }
+      else void toastError((r.message as string) || t('billing.iPaidFailed'))
+    } catch (e: any) { void toastError(e?.message || t('common.fail')) }
     finally { setChLoading(false) }
   }
 
@@ -384,7 +389,7 @@ async function saveQuota() {
   const [pkgForm, setPkgForm] = useState<Any>({ code: '', name: '', ptype: 'paid', sentences: 0, points: 1000, price_money: 0, duration_days: 30 })
     // createPkg 新建套餐
 async function createPkg() {
-    if (!pkgForm.code || !pkgForm.name) { void MessagePlugin.warning(t('packages.nameRequired')); return }
+    if (!pkgForm.code || !pkgForm.name) { void toastWarn(t('packages.nameRequired')); return }
     const r: Any = await adminPackageCreate(pkgForm as any)
     if (toastResp(r)) { setPkgForm({ code: '', name: '', ptype: 'paid', sentences: 0, points: 1000, price_money: 0, duration_days: 30 }); void loadPkgs() }
   }
@@ -410,11 +415,11 @@ async function saveEnforce() { const r: Any = await adminPackageSettingsSave({ b
 async function saveSensitiveGate() { const r: Any = await adminPackageSettingsSave({ sensitive_gate_enabled: sensitiveGate ? '1' : '0' } as never); toastResp(r, t('common.save')) }
     // saveBillingParams S1 积分汇率 + S3 一次性邮箱黑名单保存
 async function saveBillingParams() {
-    if (!(freeTrialTokens > 0)) { void MessagePlugin.warning(t('packages.trialTokensInvalid')); return }
-    if (!(freeTrialDays > 0)) { void MessagePlugin.warning(t('packages.trialDaysInvalid')); return }
-    if (!(markupMultiplier >= 1)) { void MessagePlugin.warning(t('packages.markupInvalid')); return }
-    if (!(tokensPerSentence > 0)) { void MessagePlugin.warning(t('packages.rateInvalid')); return }
-    if (!(pointsTokensRate > 0)) { void MessagePlugin.warning(t('packages.rateInvalid')); return }
+    if (!(freeTrialTokens > 0)) { void toastWarn(t('packages.trialTokensInvalid')); return }
+    if (!(freeTrialDays > 0)) { void toastWarn(t('packages.trialDaysInvalid')); return }
+    if (!(markupMultiplier >= 1)) { void toastWarn(t('packages.markupInvalid')); return }
+    if (!(tokensPerSentence > 0)) { void toastWarn(t('packages.rateInvalid')); return }
+    if (!(pointsTokensRate > 0)) { void toastWarn(t('packages.rateInvalid')); return }
     const r: Any = await adminPackageSettingsSave({
       free_trial_tokens: freeTrialTokens, free_trial_days: freeTrialDays,
       billing_markup_multiplier: markupMultiplier, estimate_tokens_per_sentence: tokensPerSentence,
@@ -443,21 +448,21 @@ async function uploadStaticQR(e: ChangeEvent<HTMLInputElement>) {
         const s = await adminPackageSettingsSave({ static_qr_image: r.qr_url } as never)
         toastResp(s, t('common.save'))
       } else {
-        void MessagePlugin.error((r.message as string) || t('common.saveFail'))
+        void toastError((r.message as string) || t('common.saveFail'))
       }
     } catch (err: any) {
-      void MessagePlugin.error(err?.message || t('common.saveFail'))
+      void toastError(err?.message || t('common.saveFail'))
     } finally { setQrUploading(false) }
   }
     // saveUSDT ★ USDT（2026-09-15）：保存超管收款配置（开关/链/钱包地址/汇率/确认数；后端逐项校验）
 async function saveUSDT() {
-    try { await saveUSDTInner() } catch (e: any) { void MessagePlugin.error(e?.message || t('common.saveFail')) }
+    try { await saveUSDTInner() } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
   }
 /** saveUSDTInner 实际保存逻辑（与 try/catch 包装分离，便于独立测试） */
 async function saveUSDTInner() {
     const chains = String(usdtCfg.usdt_chains || '').split(',').map((c) => c.trim()).filter(Boolean)
-    if (usdtOn && !(Number(usdtCfg.usdt_rate_fen_per_usdt) > 0)) { void MessagePlugin.warning(t('billing.usdtRateRequired')); return }
-    if (usdtOn && chains.length && chains.every((c) => !String(usdtCfg['usdt_addr_' + c] || '').trim())) { void MessagePlugin.warning(t('billing.usdtAddrRequired')); return }
+    if (usdtOn && !(Number(usdtCfg.usdt_rate_fen_per_usdt) > 0)) { void toastWarn(t('billing.usdtRateRequired')); return }
+    if (usdtOn && chains.length && chains.every((c) => !String(usdtCfg['usdt_addr_' + c] || '').trim())) { void toastWarn(t('billing.usdtAddrRequired')); return }
     const r: Any = await adminPackageSettingsSave({
       usdt_enabled: String(usdtCfg.usdt_enabled), usdt_auto_settle: String(usdtCfg.usdt_auto_settle),
       usdt_tail_enabled: String(usdtCfg.usdt_tail_enabled), usdt_chains: chains.join(',') || 'trc20',
@@ -473,12 +478,12 @@ async function saveUSDTInner() {
     // confirmManual 管理员确认人工到账→积分入双桶
 async function confirmManual(o: Any) {
     const tx = (manualTxInputs[String(o.id)] || '').trim()
-    if (o.channel === 'usdt' && !tx) { void MessagePlugin.warning(t('billing.usdtTxRequired')); return }
+    if (o.channel === 'usdt' && !tx) { void toastWarn(t('billing.usdtTxRequired')); return }
     try {
       const r: Any = await adminOrderPay(Number(o.id), Number(o.tenant_id) || 0, tx)
-      if (r.success) { void MessagePlugin.success(t('billing.manualConfirmed')); await Promise.all([loadPkgs(), loadOrders()]) }
-      else void MessagePlugin.error((r.message as string) || t('billing.iPaidFailed'))
-    } catch (e: any) { void MessagePlugin.error(e?.message || t('billing.iPaidFailed')) }
+      if (r.success) { void toastSuccess(t('billing.manualConfirmed')); await Promise.all([loadPkgs(), loadOrders()]) }
+      else void toastError((r.message as string) || t('billing.iPaidFailed'))
+    } catch (e: any) { void toastError(e?.message || t('billing.iPaidFailed')) }
   }
   const [manualTxInputs, setManualTxInputs] = useState<Record<string, string>>({})
 
@@ -499,11 +504,14 @@ async function confirmManual(o: Any) {
 
   return (
     <>
+      {/* 当前套餐概览（租户视角；超管在平台上下文无需看本租户余额，故 !isSuper 才渲染） */}
       {!isSuper && (
         <Panel title={t('plans.nav.current')}>
+          {/* 四张余额卡：全部走积分口径（fmtPoints 折 token→积分，公开界面不露 token 裸值）。
+              可用余额/本月已用为主题色（兜底 #E7E9EA）、剩余赠送为琥珀色、永久额度为成功色。 */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10 }}>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtPoints(pkg.balance_tokens as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('usage.currentBalance')}</span>
+              <b style={{ fontSize: 20, color:'var(--lc-text-1)'}}>{fmtPoints(pkg.balance_tokens as number)}</b><span style={{ fontSize: 12, color:'var(--adm-faint)'}}>{t('usage.currentBalance')}</span>
             </div>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
               <b style={{ fontSize: 20, color: 'var(--adm-amber-tx)' }}>{fmtPoints(pkg.sub_grants_left as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balanceGrants')}</span>
@@ -512,7 +520,7 @@ async function confirmManual(o: Any) {
               <b style={{ fontSize: 20, color: 'var(--adm-ok-tx)' }}>{fmtPoints(pkg.permanent_balance as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balancePermanent')}</span>
             </div>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: 'var(--td-brand-color-active, #1f33d6)' }}>{fmtPoints(pkg.tokens_used_month as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.usedMonth')}</span>
+              <b style={{ fontSize: 20, color:'var(--lc-text-1)'}}>{fmtPoints(pkg.tokens_used_month as number)}</b><span style={{ fontSize: 12, color:'var(--adm-faint)'}}>{t('plans.usedMonth')}</span>
             </div>
           </div>
           <div style={{ marginTop: 10, fontSize: 13, color: 'var(--adm-hint)' }}>
@@ -525,12 +533,12 @@ async function confirmManual(o: Any) {
             const hasPlan = !!(pkg.package_code && pkg.package_code !== 'trial')
             if (total > 0 || hasPlan) return null
             return (
-              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--adm-warn-bg)', border: '1px solid var(--adm-warn-bd)', fontSize: 13, color: 'var(--adm-warn-tx)', lineHeight: 1.7 }}>
+              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', fontSize: 13, color: 'var(--adm-warn-tx)', lineHeight: 1.7 }}>
                 {t('plans.exhaustedHint')}
-                <Space size={6} style={{ marginTop: 6 }}>
-                  <Button size="small" theme="warning" onClick={() => { document.getElementById('plans-shop')?.scrollIntoView({ behavior: 'smooth' }) }}>{t('plans.goSubscribe')}</Button>
-                  <Button size="small" variant="outline" theme="warning" onClick={() => { document.getElementById('plans-topup')?.scrollIntoView({ behavior: 'smooth' }) }}>{t('plans.goTopup')}</Button>
-                </Space>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+                  <Button size="sm" variant="secondary" onClick={() => { document.getElementById('plans-shop')?.scrollIntoView({ behavior: 'smooth' }) }}>{t('plans.goSubscribe')}</Button>
+                  <Button size="sm" variant="secondary" onClick={() => { document.getElementById('plans-topup')?.scrollIntoView({ behavior: 'smooth' }) }}>{t('plans.goTopup')}</Button>
+                </div>
               </div>
             )
           })()}
@@ -544,9 +552,9 @@ async function confirmManual(o: Any) {
               <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--adm-hint)', margin: '10px 0 6px' }}>{g.title}</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 12 }}>
                 {g.items.map((pl) => (
-                  <div key={pl.id} style={{ border: '1px solid var(--adm-line)', borderRadius: 8, padding: 14, display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--adm-card)' }}>
+                  <div key={pl.id} style={{ border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 14, display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--adm-card)' }}>
                     <div style={{ fontWeight: 600, fontSize: 14 }}>{pl.name}</div>
-                    <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--td-brand-color-active, #1f33d6)' }}>¥{pl.price_money}<small style={{ fontSize: 12, color: 'var(--adm-faint)', fontWeight: 400 }}>{pl.ptype === 'paid' ? ` /${pl.duration_days}d` : ''}</small></div>
+                    <div style={{ fontSize: 22, fontWeight: 700, color:'var(--lc-text-1)'}}>¥{pl.price_money}<small style={{ fontSize: 12, color:'var(--adm-faint)', fontWeight: 400 }}>{pl.ptype ==='paid'? ` /${pl.duration_days}d` :''}</small></div>
                     {pl.ptype === 'paid' && Number(pl.price_money) > 0 && (
                       <div style={{ fontSize: 12, color: '#c66900' }}>{t('plans.halfOffBadge')}</div>
                     )}
@@ -554,7 +562,7 @@ async function confirmManual(o: Any) {
                       <li>{Number(pl.points) > 0 ? tpl('billing.pkgPoints', { n: pl.points }) : tpl('billing.pkgSentences', { n: pl.sentences })}</li>
                       <li>{t('packages.type.' + pl.ptype)}</li>
                     </ul>
-                    <Button theme="success" onClick={() => {
+                    <Button variant="primary" onClick={() => {
                       if (isUpgradePlan(pl)) upgrade(pl)
                       else subscribe(pl)
                     }}>{isUpgradePlan(pl) ? t('plans.upgrade') : t('billing.subscribeNow')}</Button>
@@ -570,125 +578,136 @@ async function confirmManual(o: Any) {
       {!isSuper && (
         <Panel id="plans-topup" title={t('plans.nav.topup')}>
           <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('billing.onlineTopUpHint')}</div>
-          <Space size={8} align="center">
-            <Select value={chForm.channel} onChange={(v) => setChForm({ ...chForm, channel: v as string })} style={{ width: 200 }} options={chOptions} />
-            <Input type="number" value={String(chForm.points)} onChange={(v) => setChForm({ ...chForm, points: Number(v) || 0 })} placeholder={t('billing.tokenCount')} style={{ width: 180 }} />
-            <Button theme="success" loading={chLoading} onClick={openCheckout}>{chLoading ? t('billing.ordering') : t('billing.goPay')}</Button>
-          </Space>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select className="lc-select" value={chForm.channel} onChange={(e) => setChForm({ ...chForm, channel: e.target.value })} style={{ width: 200 }}>
+              {chOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <input className="lc-input" type="number" value={String(chForm.points)} onChange={(e) => setChForm({ ...chForm, points: Number(e.target.value) || 0 })} placeholder={t('billing.tokenCount')} style={{ width: 180 }} />
+            <Button variant="primary" disabled={chLoading} onClick={openCheckout}>{chLoading ? t('billing.ordering') : t('billing.goPay')}</Button>
+          </div>
           {curOrder && curOrder.status === 'pending' && (
-            <p style={{ color: 'var(--td-brand-color-active, #1f33d6)', fontSize: 13, marginTop: 8 }}>{tpl('billing.currentOrder', { orderNo: curOrder.order_no, amount: fmtPoints(curOrder.amount_tokens), money: Number(curOrder.amount_money ?? 0).toFixed(2) })}</p>
+            <p style={{ color: 'var(--lc-text-1)', fontSize: 13, marginTop: 8 }}>{tpl('billing.currentOrder', { orderNo: curOrder.order_no, amount: fmtPoints(curOrder.amount_tokens), money: Number(curOrder.amount_money ?? 0).toFixed(2) })}</p>
           )}
         </Panel>
       )}
 
       <Panel title={t('billing.ordersTitle')}>
         {/* 数据表格 */}
-        <Table rowKey="id" size="small" maxHeight={260} data={orders}
-               columns={[
-                 { colKey: 'order_no', title: t('billing.colOrderNo'), width: 150 },
-                 { colKey: 'amount_tokens', title: t('billing.colTokens'), width: 110, cell: ({ row }: any) => fmtPoints(Number(row.amount_tokens)) },
-                 { colKey: 'amount_money', title: t('billing.colAmount'), width: 100, cell: ({ row }: any) => tpl('billing.yuan', { amount: Number(row.amount_money ?? 0).toFixed(2) }) },
-                 { colKey: 'status', title: t('billing.colStatus'), width: 110, cell: ({ row }: any) => <Tag theme={statusTheme(row.status) as any}>{orderStatusLabel(row.status, t)}</Tag> },
-                 { colKey: 'op', title: '', width: 170, cell: ({ row }: any) =>
-                     row.status === 'paid'
-                       ? <Space size={4}>
-                           <Button size="small" variant="text" onClick={() => setInvDlg({ order: row, title: '', taxNo: '' })}>{t('billing.invoiceIssue')}</Button>
-                           {isSuper && <Button size="small" variant="text" theme="danger" onClick={() => void refundOrder(row)}>{t('billing.refund')}</Button>}
-                         </Space>
-                       : (row.status === 'pending' ? <Button size="small" theme="success" variant="outline" onClick={() => resumePay(row)}>{t('plans.orderContinue')}</Button> : null) },
-               ] as never} />
-        {!orders.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 8 }}>{t('plans.noOrder')}</div>}
+        <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+          <DataTable rowKey={(row) => String((row as Any).id)} rows={orders} emptyText={t('plans.noOrder')}
+                 columns={[
+                   { key: 'order_no', title: t('billing.colOrderNo'), width: 150 },
+                   { key: 'amount_tokens', title: t('billing.colTokens'), width: 110, render: (row) => fmtPoints(Number((row as Any).amount_tokens)) },
+                   { key: 'amount_money', title: t('billing.colAmount'), width: 100, render: (row) => tpl('billing.yuan', { amount: Number((row as Any).amount_money ?? 0).toFixed(2) }) },
+                   { key: 'status', title: t('billing.colStatus'), width: 110, render: (row) => <StatusPill tone={statusTheme((row as Any).status)}>{orderStatusLabel((row as Any).status, t)}</StatusPill> },
+                   { key: 'op', title: '', width: 170, render: (row) => {
+                       const r = row as Any
+                       return r.status === 'paid'
+                         ? (<div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                             <Link onClick={() => setInvDlg({ order: r, title: '', taxNo: '' })}>{t('billing.invoiceIssue')}</Link>
+                             {isSuper && <Link tone="danger" onClick={() => void refundOrder(r)}>{t('billing.refund')}</Link>}
+                           </div>)
+                         : (r.status === 'pending' ? <Button size="sm" variant="secondary" onClick={() => resumePay(r)}>{t('plans.orderContinue')}</Button> : null)
+                     } },
+                 ]} />
+        </div>
         <h4 style={{ margin: '14px 0 6px' }}>{t('billing.invoiceMgmt')}</h4>
         {/* 数据表格 */}
-        <Table rowKey="id" size="small" maxHeight={220} data={invoices}
-               columns={[
-                 { colKey: 'invoice_no', title: t('billing.colInvoiceNo') },
-                 { colKey: 'title', title: t('billing.colTitle') },
-                 { colKey: 'amount_money', title: t('billing.colAmountYuan'), width: 110, cell: ({ row }: any) => Number(row.amount_money ?? 0).toFixed(2) },
-                 { colKey: 'op', title: '', width: 90, cell: ({ row }: any) => (row.status === 'void' ? null
-                     : <Button size="small" variant="text" theme="danger" onClick={() => void voidInvoice(row)}>{t('billing.void')}</Button>) },
-               ] as never} />
-        {!invoices.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 8 }}>{t('billing.noInvoices')}</div>}
+        <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+          <DataTable rowKey={(row) => String((row as Any).id)} rows={invoices} emptyText={t('billing.noInvoices')}
+                 columns={[
+                   { key: 'invoice_no', title: t('billing.colInvoiceNo') },
+                   { key: 'title', title: t('billing.colTitle') },
+                   { key: 'amount_money', title: t('billing.colAmountYuan'), width: 110, render: (row) => Number((row as Any).amount_money ?? 0).toFixed(2) },
+                   { key: 'op', title: '', width: 90, render: (row) => ((row as Any).status === 'void' ? null
+                       : <Link tone="danger" onClick={() => void voidInvoice(row as Any)}>{t('billing.void')}</Link>) },
+                 ]} />
+        </div>
       </Panel>
 
       <Panel title={t('plans.nav.quota')}>
         <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('billing.quotaHint')}</div>
-        <Space size={8} align="center">
-          <Input type="number" value={num(quotaForm.qps)} onChange={(v) => setQuotaForm({ ...quotaForm, qps: Number(v) || 0 })} placeholder={t('billing.quotaQps')} style={{ width: 140 }} />
-          <Input type="number" value={num(quotaForm.concurrent)} onChange={(v) => setQuotaForm({ ...quotaForm, concurrent: Number(v) || 0 })} placeholder={t('billing.quotaConcurrent')} style={{ width: 140 }} />
-          <Input type="number" value={num(quotaForm.max_daily_chars)} onChange={(v) => setQuotaForm({ ...quotaForm, max_daily_chars: Number(v) || 0 })} placeholder={t('billing.quotaDailyChars')} style={{ width: 160 }} />
-          <Input type="number" value={num(quotaForm.max_daily_tokens)} onChange={(v) => setQuotaForm({ ...quotaForm, max_daily_tokens: Number(v) || 0 })} placeholder={t('billing.quotaDailyTokens')} style={{ width: 160 }} />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input className="lc-input" type="number" value={num(quotaForm.qps)} onChange={(e) => setQuotaForm({ ...quotaForm, qps: Number(e.target.value) || 0 })} placeholder={t('billing.quotaQps')} style={{ width: 140 }} />
+          <input className="lc-input" type="number" value={num(quotaForm.concurrent)} onChange={(e) => setQuotaForm({ ...quotaForm, concurrent: Number(e.target.value) || 0 })} placeholder={t('billing.quotaConcurrent')} style={{ width: 140 }} />
+          <input className="lc-input" type="number" value={num(quotaForm.max_daily_chars)} onChange={(e) => setQuotaForm({ ...quotaForm, max_daily_chars: Number(e.target.value) || 0 })} placeholder={t('billing.quotaDailyChars')} style={{ width: 160 }} />
+          <input className="lc-input" type="number" value={num(quotaForm.max_daily_tokens)} onChange={(e) => setQuotaForm({ ...quotaForm, max_daily_tokens: Number(e.target.value) || 0 })} placeholder={t('billing.quotaDailyTokens')} style={{ width: 160 }} />
           <Button onClick={saveQuota}>{t('billing.saveQuota')}</Button>
-        </Space>
+        </div>
       </Panel>
 
       {isSuper && (
         <Panel title={t('plans.funnelTitle')}>
-          <Space size={8} align="center" style={{ marginBottom: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
             {[7, 30, 90].map((d) => (
-              <Button key={d} size="small" variant={funnelDays === d ? 'base' : 'outline'} theme="primary" onClick={() => setFunnelDays(d)}>{t('plans.funnelDays').replace('{d}', String(d))}</Button>
+              <Button key={d} size="sm" variant={funnelDays === d ? 'primary' : 'secondary'} onClick={() => setFunnelDays(d)}>{t('plans.funnelDays').replace('{d}', String(d))}</Button>
             ))}
             <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.funnelHint')}</span>
-          </Space>
+          </div>
           {/* 数据表格 */}
-          <Table rowKey="source" size="small" data={funnelRows}
+          <DataTable rowKey={(row) => String((row as Any).source)} rows={funnelRows} emptyText={t('plans.funnelEmpty')}
                  columns={[
-                   { colKey: 'source', title: t('plans.funnelColSource'), width: 160 },
-                   { colKey: 'registered', title: t('plans.funnelColReg'), width: 90 },
-                   { colKey: 'activated', title: t('plans.funnelColAct'), width: 90 },
-                   { colKey: 'exhausted', title: t('plans.funnelColExh'), width: 90 },
-                   { colKey: 'first_pay', title: t('plans.funnelColPay'), width: 90 },
-                   { colKey: 'renewed', title: t('plans.funnelColRenew'), width: 90 },
-                 ] as never} />
-          {!funnelRows.length && <div style={{ color: 'var(--adm-faint)', fontSize: 13, marginTop: 6 }}>{t('plans.funnelEmpty')}</div>}
+                   { key: 'source', title: t('plans.funnelColSource'), width: 160 },
+                   { key: 'registered', title: t('plans.funnelColReg'), width: 90 },
+                   { key: 'activated', title: t('plans.funnelColAct'), width: 90 },
+                   { key: 'exhausted', title: t('plans.funnelColExh'), width: 90 },
+                   { key: 'first_pay', title: t('plans.funnelColPay'), width: 90 },
+                   { key: 'renewed', title: t('plans.funnelColRenew'), width: 90 },
+                 ]} />
         </Panel>
       )}
 
+      {/* 商业运营参数（仅超管 L4）：计费强制开关 + 敏感词兑底闸（S8）+ 试用额度与加价系数。
+          两个开关各自独立保存（saveEnforce / saveSensitiveGate），避免一次改动连带写回另一项。
+          状态文字 2026-09-18 起改为「开=正文浅色加粗 / 关=灰」，不再用绿灰双色区分。 */}
       {isSuper && (
         <Panel title={t('plans.nav.ops')}>
-          <Space size={8} align="center">
-            <Switch value={billingEnforced} onChange={(v) => setBillingEnforced(v as boolean)} />
-            <span style={{ color: billingEnforced ? '#2e7d32' : '#888', fontWeight: 600 }}>{billingEnforced ? t('billing.enforcedOn') : t('billing.enforcedOff')}</span>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Switch checked={billingEnforced} onChange={(e) => setBillingEnforced(e.target.checked)} />
+            <span style={{ color: billingEnforced ?'var(--lc-text-1)':'var(--lc-text-3)', fontWeight: 600 }}>{billingEnforced ? t('billing.enforcedOn') : t('billing.enforcedOff')}</span>
             <Button onClick={saveEnforce}>{t('common.save')}</Button>
             <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 16 }}>{t('packages.sensitiveGateLabel')}</span>
-            <Switch value={sensitiveGate} onChange={(v) => setSensitiveGate(v as boolean)} />
+            <Switch checked={sensitiveGate} onChange={(e) => setSensitiveGate(e.target.checked)} />
             <Button onClick={saveSensitiveGate}>{t('common.save')}</Button>
-          </Space>
+          </div>
           <div style={{ marginTop: 12 }}>
-            <Space size={8} align="center">
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.trialTokensLabel')}</span>
-              <Input type="number" value={num(freeTrialTokens)} onChange={(v) => setFreeTrialTokens(Number(v) || 0)} style={{ width: 120 }} />
+              <input className="lc-input" type="number" value={num(freeTrialTokens)} onChange={(e) => setFreeTrialTokens(Number(e.target.value) || 0)} style={{ width: 120 }} />
               <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.trialDaysLabel')}</span>
-              <Input type="number" value={num(freeTrialDays)} onChange={(v) => setFreeTrialDays(Number(v) || 0)} style={{ width: 80 }} />
+              <input className="lc-input" type="number" value={num(freeTrialDays)} onChange={(e) => setFreeTrialDays(Number(e.target.value) || 0)} style={{ width: 80 }} />
               <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('packages.markupLabel')}</span>
-              <Input type="number" value={num(markupMultiplier)} onChange={(v) => setMarkupMultiplier(Math.max(0, Number(v) || 0))} style={{ width: 120 }} />
+              <input className="lc-input" type="number" value={num(markupMultiplier)} onChange={(e) => setMarkupMultiplier(Math.max(0, Number(e.target.value) || 0))} style={{ width: 120 }} />
               <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('packages.rateLabel')}</span>
-              <Input type="number" value={num(tokensPerSentence)} onChange={(v) => setTokensPerSentence(Math.max(0, Number(v) || 0))} style={{ width: 120 }} />
+              <input className="lc-input" type="number" value={num(tokensPerSentence)} onChange={(e) => setTokensPerSentence(Math.max(0, Number(e.target.value) || 0))} style={{ width: 120 }} />
               <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('packages.pointsRateLabel')}</span>
-              <Input type="number" value={num(pointsTokensRate)} onChange={(v) => setPointsTokensRate(Math.max(0, Number(v) || 0))} style={{ width: 110 }} />
+              <input className="lc-input" type="number" value={num(pointsTokensRate)} onChange={(e) => setPointsTokensRate(Math.max(0, Number(e.target.value) || 0))} style={{ width: 110 }} />
               <Button onClick={saveBillingParams}>{t('common.save')}</Button>
-            </Space>
+            </div>
             <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginTop: 6 }}>{t('packages.markupHint')}</div>
           </div>
           <div style={{ marginTop: 12 }}>
-            <Space size={8} align="center">
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.payModeTitle')}</span>
-              <Select value={payModeCfg} onChange={(v) => setPayModeCfg(v as string)} style={{ width: 200 }}
-                      options={[{ label: t('packages.payMock'), value: 'mock' }, { label: t('packages.paySdk'), value: 'sdk' }, { label: t('packages.payStaticQR'), value: 'static_qr' }]} />
+              <select className="lc-select" value={payModeCfg} onChange={(e) => setPayModeCfg(e.target.value)} style={{ width: 200 }}>
+                <option value="mock">{t('packages.payMock')}</option>
+                <option value="sdk">{t('packages.paySdk')}</option>
+                <option value="static_qr">{t('packages.payStaticQR')}</option>
+              </select>
               <Button onClick={savePayMode}>{t('common.save')}</Button>
-            </Space>
+            </div>
           </div>
           {payModeCfg === 'static_qr' && (
             <div style={{ marginTop: 8 }}>
               <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginBottom: 4 }}>{t('packages.staticQRHint')}</div>
-              <Space size={8} align="center">
-                <Input value={staticQRImage} onChange={(v) => setStaticQRImage(v)} placeholder={t('packages.staticQRPlaceholder')} style={{ width: 360 }} />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input className="lc-input" value={staticQRImage} onChange={(e) => setStaticQRImage(e.target.value)} placeholder={t('packages.staticQRPlaceholder')} style={{ width: 360 }} />
                 <input type="file" accept=".png,.jpg,.jpeg,.gif,.webp" style={{ fontSize: 12 }} onChange={uploadStaticQR} disabled={qrUploading} />
                 {qrUploading && <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>…</span>}
                 <Button onClick={saveStaticQR}>{t('common.save')}</Button>
-              </Space>
+              </div>
               {isImage(staticQRImage) && (
-                <div style={{ marginTop: 8, display: 'inline-block', border: '1px dashed #d0d5e0', borderRadius: 8, padding: 8 }}>
+                <div style={{ marginTop: 8, display: 'inline-block', border: '1px dashed var(--lc-border-card)', borderRadius: 8, padding: 8 }}>
                   <img src={staticQRImage} alt="qr" style={{ maxWidth: 160, maxHeight: 160, borderRadius: 6, display: 'block' }} />
                 </div>
               )}
@@ -696,32 +715,34 @@ async function confirmManual(o: Any) {
           )}
           {/* ★ USDT（2026-09-15）：超管后台配置 USDT 收款（开关/链/钱包地址链接/汇率/确认数） */}
           <div style={{ marginTop: 12, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
-            <Space size={8} align="center">
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 600, fontSize: 13 }}>{t('billing.usdtSection')}</span>
-              <Switch value={usdtCfg.usdt_enabled === '1'} onChange={(v) => setUsdtCfg({ ...usdtCfg, usdt_enabled: v ? '1' : '0' })} />
+              <Switch checked={usdtCfg.usdt_enabled === '1'} onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_enabled: e.target.checked ? '1' : '0' })} />
               <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{usdtOn ? t('billing.usdtOn') : t('billing.usdtOff')}</span>
               <span style={{ fontSize: 12, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('billing.usdtTail')}</span>
-              <Switch size="small" value={usdtCfg.usdt_tail_enabled === '1'} onChange={(v) => setUsdtCfg({ ...usdtCfg, usdt_tail_enabled: v ? '1' : '0' })} />
+              <Switch checked={usdtCfg.usdt_tail_enabled === '1'} onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_tail_enabled: e.target.checked ? '1' : '0' })} />
               <span style={{ fontSize: 12, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('billing.usdtAuto')}</span>
-              <Switch size="small" value={usdtCfg.usdt_auto_settle === '1'} onChange={(v) => setUsdtCfg({ ...usdtCfg, usdt_auto_settle: v ? '1' : '0' })} />
+              <Switch checked={usdtCfg.usdt_auto_settle === '1'} onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_auto_settle: e.target.checked ? '1' : '0' })} />
               <Button onClick={saveUSDT}>{t('common.save')}</Button>
-            </Space>
+            </div>
             <div style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '4px 0 8px' }}>{t('billing.usdtHint')}</div>
-            <Space size={8} align="center" style={{ marginBottom: 6 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
               <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('billing.usdtChains')}</span>
-              <Select multiple clearable value={String(usdtCfg.usdt_chains || '').split(',').map((c) => c.trim()).filter(Boolean)}
-                      onChange={(v) => setUsdtCfg({ ...usdtCfg, usdt_chains: ((v as string[]) || []).join(',') })} style={{ minWidth: 260 }}
-                      options={['trc20', 'erc20', 'bep20'].map((c) => ({ label: usdtChainLabel(c), value: c }))} />
+              <select className="lc-select" multiple value={String(usdtCfg.usdt_chains || '').split(',').map((c: string) => c.trim()).filter(Boolean)}
+                      onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_chains: Array.from(e.target.selectedOptions).map((o) => o.value).join(',') })} style={{ minWidth: 260 }}
+                      >
+                {['trc20', 'erc20', 'bep20'].map((c) => <option key={c} value={c}>{usdtChainLabel(c)}</option>)}
+              </select>
               <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 10 }}>{t('billing.usdtRate')}</span>
-              <Input type="number" value={num(usdtCfg.usdt_rate_fen_per_usdt)} onChange={(v) => setUsdtCfg({ ...usdtCfg, usdt_rate_fen_per_usdt: Number(v) || 0 })} style={{ width: 120 }} />
-            </Space>
+              <input className="lc-input" type="number" value={num(usdtCfg.usdt_rate_fen_per_usdt)} onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_rate_fen_per_usdt: Number(e.target.value) || 0 })} style={{ width: 120 }} />
+            </div>
             {['trc20', 'erc20', 'bep20'].map((c) => (
               <div key={c} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 12, color: 'var(--adm-hint)', width: 130 }}>{usdtChainLabel(c)}</span>
-                <Input value={String(usdtCfg['usdt_addr_' + c] || '')} onChange={(v) => setUsdtCfg({ ...usdtCfg, ['usdt_addr_' + c]: v })}
+                <input className="lc-input" value={String(usdtCfg['usdt_addr_' + c] || '')} onChange={(e) => setUsdtCfg({ ...usdtCfg, ['usdt_addr_' + c]: e.target.value })}
                        placeholder={t('billing.usdtAddrPh')} style={{ width: 340 }} />
                 <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('billing.usdtConf')}</span>
-                <Input type="number" value={num(usdtCfg['usdt_confirmations_' + c])} onChange={(v) => setUsdtCfg({ ...usdtCfg, ['usdt_confirmations_' + c]: Number(v) || 0 })} style={{ width: 70 }} />
+                <input className="lc-input" type="number" value={num(usdtCfg['usdt_confirmations_' + c])} onChange={(e) => setUsdtCfg({ ...usdtCfg, ['usdt_confirmations_' + c]: Number(e.target.value) || 0 })} style={{ width: 70 }} />
                 {usdtAddrURL(c, String(usdtCfg['usdt_addr_' + c] || '')) ? (
                   <a href={usdtAddrURL(c, String(usdtCfg['usdt_addr_' + c] || ''))} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>{t('billing.usdtWalletLink')} ↗</a>
                 ) : <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('billing.usdtNoAddr')}</span>}
@@ -733,48 +754,54 @@ async function confirmManual(o: Any) {
 
       {isSuper && (
         <Panel title={t('plans.nav.pkgMgmt')}>
-          <Space size={8} align="center">
-            <Input value={String(pkgForm.code || '')} onChange={(v) => setPkgForm({ ...pkgForm, code: v })} placeholder={t('packages.code')} style={{ width: 140 }} />
-            <Input value={String(pkgForm.name || '')} onChange={(v) => setPkgForm({ ...pkgForm, name: v })} placeholder={t('packages.name')} style={{ width: 160 }} />
-            <Select value={String(pkgForm.ptype || 'paid')} onChange={(v) => setPkgForm({ ...pkgForm, ptype: v })} style={{ width: 140 }}
-                    options={[{ label: t('packages.type.paid'), value: 'paid' }, { label: t('packages.type.increment'), value: 'increment' }, { label: t('packages.type.free'), value: 'free' }]} />
-            <Input type="number" value={num(pkgForm.sentences)} onChange={(v) => setPkgForm({ ...pkgForm, sentences: Number(v) || 0 })} placeholder={t('packages.sentences')} style={{ width: 120 }} />
-            <Input type="number" value={num(pkgForm.points)} onChange={(v) => setPkgForm({ ...pkgForm, points: Number(v) || 0 })} placeholder={t('packages.points')} style={{ width: 110 }} />
-            <Input type="number" value={num(pkgForm.price_money)} onChange={(v) => setPkgForm({ ...pkgForm, price_money: Number(v) || 0 })} placeholder={t('packages.price')} style={{ width: 120 }} />
-            <Input type="number" value={num(pkgForm.duration_days)} onChange={(v) => setPkgForm({ ...pkgForm, duration_days: Number(v) || 0 })} placeholder={t('packages.duration')} style={{ width: 120 }} />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input className="lc-input" value={String(pkgForm.code || '')} onChange={(e) => setPkgForm({ ...pkgForm, code: e.target.value })} placeholder={t('packages.code')} style={{ width: 140 }} />
+            <input className="lc-input" value={String(pkgForm.name || '')} onChange={(e) => setPkgForm({ ...pkgForm, name: e.target.value })} placeholder={t('packages.name')} style={{ width: 160 }} />
+            <select className="lc-select" value={String(pkgForm.ptype || 'paid')} onChange={(e) => setPkgForm({ ...pkgForm, ptype: e.target.value })} style={{ width: 140 }}>
+              <option value="paid">{t('packages.type.paid')}</option>
+              <option value="increment">{t('packages.type.increment')}</option>
+              <option value="free">{t('packages.type.free')}</option>
+            </select>
+            <input className="lc-input" type="number" value={num(pkgForm.sentences)} onChange={(e) => setPkgForm({ ...pkgForm, sentences: Number(e.target.value) || 0 })} placeholder={t('packages.sentences')} style={{ width: 120 }} />
+            <input className="lc-input" type="number" value={num(pkgForm.points)} onChange={(e) => setPkgForm({ ...pkgForm, points: Number(e.target.value) || 0 })} placeholder={t('packages.points')} style={{ width: 110 }} />
+            <input className="lc-input" type="number" value={num(pkgForm.price_money)} onChange={(e) => setPkgForm({ ...pkgForm, price_money: Number(e.target.value) || 0 })} placeholder={t('packages.price')} style={{ width: 120 }} />
+            <input className="lc-input" type="number" value={num(pkgForm.duration_days)} onChange={(e) => setPkgForm({ ...pkgForm, duration_days: Number(e.target.value) || 0 })} placeholder={t('packages.duration')} style={{ width: 120 }} />
             <Button onClick={createPkg}>{t('common.save')}</Button>
-          </Space>
+          </div>
           {/* 数据表格 */}
-          <Table rowKey="id" size="small" data={pkgs} style={{ marginTop: 10 }}
-                 columns={[
-                   { colKey: 'code', title: 'code', width: 140 },
-                   { colKey: 'name', title: t('packages.name') },
-                   { colKey: 'ptype', title: t('packages.type'), width: 100, cell: ({ row }: any) => t('packages.type.' + row.ptype) },
-                   { colKey: 'sentences', title: t('packages.sentences'), width: 90 },
-                   { colKey: 'points', title: t('packages.points'), width: 90 },
-                   { colKey: 'price_money', title: `¥${t('packages.price')}`, width: 90 },
-                   { colKey: 'enabled', title: t('common.status'), width: 90, cell: ({ row }: any) =>
-                     <Button size="small" variant={row.enabled ? 'outline' : 'text'} theme={row.enabled ? 'success' : 'default'} onClick={() => togglePkg(row)}>{row.enabled ? t('common.active') : t('common.disabled')}</Button> },
-                   { colKey: 'op', title: '', width: 90, cell: ({ row }: any) =>
-                     <Popconfirm content={t('packages.deletePkgConfirm')} onConfirm={() => deletePkg(row)}>
-                       <Button size="small" variant="text" theme="danger">✕</Button>
-                     </Popconfirm> },
-                 ] as never} />
+          <div style={{ marginTop: 10 }}>
+            <DataTable rowKey={(row) => String((row as Any).id)} rows={pkgs}
+                   columns={[
+                     { key: 'code', title: 'code', width: 140 },
+                     { key: 'name', title: t('packages.name') },
+                     { key: 'ptype', title: t('packages.type'), width: 100, render: (row) => t('packages.type.' + (row as Any).ptype) },
+                     { key: 'sentences', title: t('packages.sentences'), width: 90 },
+                     { key: 'points', title: t('packages.points'), width: 90 },
+                     { key: 'price_money', title: `¥${t('packages.price')}`, width: 90 },
+                     { key: 'enabled', title: t('common.status'), width: 90, render: (row) =>
+                       (row as Any).enabled
+                         ? <Button size="sm" variant="secondary" onClick={() => togglePkg(row as Any)}>{t('common.active')}</Button>
+                         : <Link onClick={() => togglePkg(row as Any)}>{t('common.disabled')}</Link> },
+                     { key: 'op', title: '', width: 90, render: (row) =>
+                       <Link tone="danger" onClick={() => deletePkg(row as Any)}>{t('common.delete')}</Link> },
+                   ]} />
+          </div>
         </Panel>
       )}
 
       {isSuper && (
         <Panel title={t('plans.nav.manual')}>
           {/* 数据表格（★ USDT：渠道列 + 链上线索（声明哈希/精确金额/浏览器外链）+ 确认收款需回填 tx_hash） */}
-          <Table rowKey="id" size="small" data={manualOrders}
+          <DataTable rowKey={(row) => String((row as Any).id)} rows={manualOrders} emptyText={t('billing.noManualOrders')}
                  columns={[
-                   { colKey: 'order_no', title: t('billing.colOrderNo'), width: 150 },
-                   { colKey: 'channel', title: t('billing.colChannel'), width: 78, cell: ({ row }: any) =>
-                       row.channel === 'usdt' ? <Tag theme="primary">USDT</Tag> : (row.channel === 'manual' ? t('billing.chStaticQR') : String(row.channel || '—')) },
-                   { colKey: 'amount_tokens', title: t('billing.colTokens'), width: 110, cell: ({ row }: any) => fmtPoints(Number(row.amount_tokens)) },
-                   { colKey: 'usdt', title: t('billing.usdtCol'), width: 240, cell: ({ row }: any) => {
-                       const info = manualOrdersUsdt.current[String(row.id)]
-                       if (row.channel !== 'usdt' || !info) return <span style={{ color: 'var(--adm-faint)' }}>—</span>
+                   { key: 'order_no', title: t('billing.colOrderNo'), width: 150 },
+                   { key: 'channel', title: t('billing.colChannel'), width: 78, render: (row) =>
+                       (row as Any).channel === 'usdt' ? <Badge>USDT</Badge> : ((row as Any).channel === 'manual' ? t('billing.chStaticQR') : String((row as Any).channel || '—')) },
+                   { key: 'amount_tokens', title: t('billing.colTokens'), width: 110, render: (row) => fmtPoints(Number((row as Any).amount_tokens)) },
+                   { key: 'usdt', title: t('billing.usdtCol'), width: 240, render: (row) => {
+                       const r = row as Any
+                       const info = manualOrdersUsdt.current[String(r.id)]
+                       if (r.channel !== 'usdt' || !info) return <span style={{ color: 'var(--adm-faint)' }}>—</span>
                        return (
                          <div style={{ fontSize: 12, lineHeight: 1.6 }}>
                            <div>{String(info.amount)} USDT · {usdtChainLabel(String(info.chain))}</div>
@@ -786,25 +813,24 @@ async function confirmManual(o: Any) {
                          </div>
                        )
                      } },
-                   { colKey: 'tx_input', title: t('billing.usdtTxCol'), width: 220, cell: ({ row }: any) =>
-                       row.channel === 'usdt'
-                         ? <Input size="small" value={manualTxInputs[String(row.id)] || ''} onChange={(v) => setManualTxInputs({ ...manualTxInputs, [String(row.id)]: v })} placeholder={t('billing.usdtTxPh')} />
+                   { key: 'tx_input', title: t('billing.usdtTxCol'), width: 220, render: (row) =>
+                       (row as Any).channel === 'usdt'
+                         ? <input className="lc-input" value={manualTxInputs[String((row as Any).id)] || ''} onChange={(e) => setManualTxInputs({ ...manualTxInputs, [String((row as Any).id)]: e.target.value })} placeholder={t('billing.usdtTxPh')} />
                          : <span style={{ color: 'var(--adm-faint)' }}>—</span> },
-                   { colKey: 'tenant_id', title: t('billing.colTenant'), width: 80, cell: ({ row }: any) => `#${row.tenant_id}` },
-                   { colKey: 'created_at', title: t('billing.colTime'), width: 165, cell: ({ row }: any) => fmtTime(row.created_at as string) },
-                   { colKey: 'op', title: '', width: 120, cell: ({ row }: any) =>
-                     <Button size="small" theme="success" variant="outline" onClick={() => confirmManual(row)}>{t('billing.confirmPayment')}</Button> },
-                 ] as never} />
-          {!manualOrders.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 8 }}>{t('billing.noManualOrders')}</div>}
+                   { key: 'tenant_id', title: t('billing.colTenant'), width: 80, render: (row) => `#${(row as Any).tenant_id}` },
+                   { key: 'created_at', title: t('billing.colTime'), width: 165, render: (row) => fmtTime((row as Any).created_at as string) },
+                   { key: 'op', title: '', width: 120, render: (row) =>
+                     <Button size="sm" variant="secondary" onClick={() => confirmManual(row as Any)}>{t('billing.confirmPayment')}</Button> },
+                 ]} />
         </Panel>
       )}
 
-      <Dialog visible={showCheckout} onClose={closeCheckout} header={t('billing.checkout')} width={380}>
+      <Dialog open={showCheckout} onCancel={closeCheckout} title={t('billing.checkout')}>
         {curOrder && curOrder.status === 'paid' ? (
           <div style={{ textAlign: 'center', padding: '10px 0' }}>
-            <div style={{ width: 52, height: 52, lineHeight: '52px', borderRadius: '50%', background: 'var(--adm-ok-bg)', color: 'var(--adm-ok-tx)', fontSize: 28, margin: '0 auto 8px' }}>✓</div>
+ <div style={{ width: 52, height: 52, lineHeight:'52px', borderRadius:'50%', background:'var(--adm-ok-bg)', color:'var(--adm-ok-tx)', fontSize: 28, margin:'0 auto 8px'}}></div>
             <p>{tpl('billing.paySuccess', { amount: fmtPoints(curOrder.amount_tokens) })}</p>
-            <Button theme="success" onClick={closeCheckout}>{t('billing.done')}</Button>
+            <Button variant="primary" onClick={closeCheckout}>{t('billing.done')}</Button>
           </div>
         ) : (
           <div>
@@ -818,58 +844,58 @@ async function confirmManual(o: Any) {
                       <div style={{ fontSize: 24, fontWeight: 700 }}>{String(usdtPay.amount)} USDT</div>
                       {String(usdtPay.tail) !== '0' && <div style={{ fontSize: 11, color: 'var(--adm-faint)' }}>{tpl('billing.usdtTailNote', { tail: String(usdtPay.tail) })}</div>}
                     </div>
-                    {usdtQr && <img src={usdtQr} alt="usdt-qr" style={{ width: 168, height: 168, alignSelf: 'center', borderRadius: 8, border: '1px solid var(--adm-line)', background: '#fff' }} />}
+                    {usdtQr && <img src={usdtQr} alt="usdt-qr" style={{ width: 168, height: 168, alignSelf: 'center', borderRadius: 8, border: '1.2px solid var(--adm-line)', background: '#fff' }} />}
                     <div>
                       <div style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('billing.usdtAddress')}</div>
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                         <code style={{ flex: 1, wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 6, padding: '6px 8px', fontSize: 12 }}>{String(usdtPay.address)}</code>
-                        <Button size="small" variant="outline" onClick={() => { void navigator.clipboard.writeText(String(usdtPay.address)); void MessagePlugin.success(t('billing.usdtCopied')) }}>{t('billing.usdtCopy')}</Button>
+                        <Button size="sm" variant="secondary" onClick={() => { void navigator.clipboard.writeText(String(usdtPay.address)); void toastSuccess(t('billing.usdtCopied')) }}>{t('billing.usdtCopy')}</Button>
                       </div>
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--adm-hint)', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 4 }}>
                       <span>{tpl('billing.usdtExpires', { time: fmtTime(String(usdtPay.expires_at)) })}</span>
                       <span>{tpl('billing.usdtConfNeed', { n: Number(usdtPay.confirmations) || 0 })}</span>
                     </div>
-                    <Input value={usdtTxInput} onChange={(v) => setUsdtTxInput(v)} placeholder={t('billing.usdtTxPh')} style={{ width: '100%' }} />
+                    <input className="lc-input" value={usdtTxInput} onChange={(e) => setUsdtTxInput(e.target.value)} placeholder={t('billing.usdtTxPh')} style={{ width: '100%' }} />
                     <div style={{ fontSize: 11, color: 'var(--adm-faint)' }}>{t('billing.usdtCheckoutHint')}</div>
                   </div>
                 ) : curOrder.channel === 'manual' ? (
                   <div>
                     <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 6 }}>{t('billing.staticQR')}</div>
                     {isImage(curOrder.qr_content as string)
-                      ? <img src={curOrder.qr_content} style={{ maxWidth: 200, borderRadius: 8, border: '1px solid var(--adm-line)', margin: '8px 0' }} alt="qr" />
+                      ? <img src={curOrder.qr_content} style={{ maxWidth: 200, borderRadius: 8, border: '1.2px solid var(--adm-line)', margin: '8px 0' }} alt="qr" />
                       : qrImg
-                        ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '1px solid #eee', margin: '8px 0', background: '#fff' }} alt="qr" />
+                        ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '1.2px solid var(--lc-border-card)', margin: '8px 0', background: '#fff' }} alt="qr" />
                         : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 8, padding: 12, fontSize: 12, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>}
                   </div>
                 ) : (
                   qrImg
-                    ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '1px solid #eee', margin: '8px 0', background: '#fff' }} alt="qr" />
+                    ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '1.2px solid var(--lc-border-card)', margin: '8px 0', background: '#fff' }} alt="qr" />
                     : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 8, padding: 12, fontSize: 12, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>
                 )}
                 <p style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{tpl('billing.orderNo', { orderNo: curOrder.order_no })}</p>
               </div>
             )}
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap', marginTop: 12 }}>
-              {curOrder?.channel === 'manual' && <Button theme="success" loading={chLoading} onClick={manualConfirm}>{chLoading ? t('billing.processing') : t('billing.iPaid')}</Button>}
+              {curOrder?.channel === 'manual' && <Button variant="primary" disabled={chLoading} onClick={manualConfirm}>{chLoading ? t('billing.processing') : t('billing.iPaid')}</Button>}
               {curOrder?.channel === 'usdt' && (
-                <Button theme="success" loading={chLoading} disabled={!usdtTxInput.trim()} onClick={manualConfirm}>{t('billing.usdtDeclare')}</Button>
+                <Button variant="primary" disabled={chLoading || !usdtTxInput.trim()} onClick={manualConfirm}>{t('billing.usdtDeclare')}</Button>
               )}
-              {curOrder?.channel === 'mock' && <Button theme="success" loading={chLoading} onClick={simulatePay}>{t('billing.mockCredit')}</Button>}
+              {curOrder?.channel === 'mock' && <Button variant="primary" disabled={chLoading} onClick={simulatePay}>{t('billing.mockCredit')}</Button>}
               {curOrder && <Button onClick={checkStatus}>{t('billing.refreshStatus')}</Button>}
             </div>
           </div>
         )}
       </Dialog>
 
-      <Dialog visible={!!invDlg} onClose={() => setInvDlg(null)} header={t('billing.invoiceDialogTitle')} width={440}
+      <Dialog open={!!invDlg} onCancel={() => setInvDlg(null)} title={t('billing.invoiceDialogTitle')}
                onConfirm={async () => {
                 if (!invDlg) return
                 const r = await billingInvoiceCreate({ order_id: Number(invDlg.order.id), title: invDlg.title, tax_no: invDlg.taxNo })
                 if (toastResp(r, t('billing.invoiceApplied'))) setInvDlg(null)
               }}>
-        <Field label={t('billing.invoiceTitleField')}><Input value={invDlg?.title || ''} onChange={(v) => setInvDlg((d) => (d ? { ...d, title: v } : d))} /></Field>
-        <Field label={t('billing.invoiceTaxField')}><Input value={invDlg?.taxNo || ''} onChange={(v) => setInvDlg((d) => (d ? { ...d, taxNo: v } : d))} /></Field>
+        <Field label={t('billing.invoiceTitleField')}><input className="lc-input" value={invDlg?.title || ''} onChange={(e) => setInvDlg((d) => (d ? { ...d, title: e.target.value } : d))} /></Field>
+        <Field label={t('billing.invoiceTaxField')}><input className="lc-input" value={invDlg?.taxNo || ''} onChange={(e) => setInvDlg((d) => (d ? { ...d, taxNo: e.target.value } : d))} /></Field>
       </Dialog>
     </>
   )

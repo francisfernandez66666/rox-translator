@@ -1,0 +1,219 @@
+/* ============================================================================
+   langcross / css / motion.css — 纯黑 UI 动效层（全站共用）
+
+   与「纯黑 UI 动效十原则」一一对应，任何页面不得自行发明时长/缓动：
+     1. 抽象进度没形体          → 进度必须带上检查点的名字（见 components/progress）
+     2. 黑底别用几何形状做光    → 只用 opacity / transform / filter，不画光斑
+     3. 峰值是一个时刻不是一段  → --lc-mo-peak 只给一次性闪，不给常驻
+     4. 峰值前先压暗攒落差      → .lc-mo-sink（慢）→ .lc-mo-release（快），收放不对称
+     5. 描边是边界，按对比度定  → 本文件只管动效，不改颜色
+     6. 自适应是每级自己流体    → 动效尺度一律固定 px 位移，不用 vw
+     7. 仪器不能早于被测对象    → 容器先位、内容后到；.lc-mo-stagger 负责节拍
+     8. 三次以内的重复组等速    → --lc-mo-step: 260ms 供三连点灯用
+     9. stagger 用 animation    → 一律 animation-delay，禁用 transition-delay 做序列
+    10. 调节奏只从铺垫里省时间  → 动作与 hold 的时长不可压缩
+
+   约束：只动 opacity / transform / filter（不触发重排）；
+        全部尊重 prefers-reduced-motion（文件末尾统一兜底）。
+   ============================================================================ */
+
+:root {
+  /* —— 时长：分三档，对应「反馈 / 释放 / 沉淀」 —— */
+  --lc-mo-tap: 140ms;     /* 按压等即时反馈 */
+  --lc-mo-enter: 360ms;   /* 进场（内容到位） */
+  --lc-mo-release: 280ms; /* 释放：亮起来要快 */
+  --lc-mo-sink: 500ms;    /* 沉淀：暗下去要慢（收放不对称，值必须大于 release） */
+  --lc-mo-step: 260ms;    /* 三连点灯等速步进（原则 8） */
+  --lc-mo-hold: 320ms;    /* 峰值后的停留（观众读内容的时间，不可压缩） */
+
+  /* —— 缓动 —— */
+  --lc-mo-out: cubic-bezier(.16, 1, .3, 1);      /* 进场：快出慢收 */
+  --lc-mo-in: cubic-bezier(.4, 0, .2, 1);        /* 退场：起步缓 */
+  --lc-mo-both: cubic-bezier(.32, .72, .28, 1);  /* 双向通用 */
+}
+
+/* ============================================================================
+   一、关键帧
+   ============================================================================ */
+
+/* 内容进场：下方向上浮入（默认叙事元素） */
+@keyframes lc-mo-up {
+  from { opacity: 0; transform: translate3d(0, 8px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* 内容进场：上方向下沉入（下拉、顶部横幅） */
+@keyframes lc-mo-down {
+  from { opacity: 0; transform: translate3d(0, -8px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* 内容进场：左/右滑入（侧栏、抽屉） */
+@keyframes lc-mo-right {
+  from { opacity: 0; transform: translate3d(-10px, 0, 0); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes lc-mo-left {
+  from { opacity: 0; transform: translate3d(10px, 0, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* 仅淡入（遮罩、背景层） */
+@keyframes lc-mo-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* 浮层登场：从锚点方向放大（origin 由使用方设 --lc-mo-origin） */
+@keyframes lc-mo-pop {
+  from { opacity: 0; transform: scale(.94); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* 退场：浮层收起（比进场快，且方向可逆） */
+@keyframes lc-mo-pop-out {
+  from { opacity: 1; transform: none; }
+  to   { opacity: 0; transform: scale(.96); }
+}
+
+/* 峰值：一次性闪到最亮再回落 —— 峰值是一个时刻（原则 3） */
+@keyframes lc-mo-peak {
+  0%   { filter: brightness(1); }
+  12%  { filter: brightness(1.55); }
+  100% { filter: brightness(1); }
+}
+
+/* 打字指示：三枚圆点等速呼吸（原则 8：三次等速） */
+@keyframes lc-mo-dot {
+  0%, 60%, 100% { opacity: .28; transform: translate3d(0, 0, 0); }
+  30%           { opacity: 1;   transform: translate3d(0, -3px, 0); }
+}
+
+/* 光标闪烁（打字机真身） */
+@keyframes lc-mo-caret { 50% { opacity: 0; } }
+
+/* 不定量进度：细丝来回（用于「尚未知道长度」的等待） */
+@keyframes lc-mo-bar {
+  from { transform: translate3d(-101%, 0, 0); }
+  to   { transform: translate3d(101%, 0, 0); }
+}
+
+/* 旋转（按钮内 spinner） */
+@keyframes lc-mo-spin { to { transform: rotate(360deg); } }
+
+/* 骨架呼吸（与 components.css 的 lc-breathe 同节奏，供本层独立使用） */
+@keyframes lc-mo-breathe { 0%, 100% { opacity: .62; } 50% { opacity: 1; } }
+
+/* ============================================================================
+   二、进场工具类
+   ============================================================================ */
+
+.lc-mo-up,
+.lc-mo-down,
+.lc-mo-right,
+.lc-mo-left,
+.lc-mo-fade,
+.lc-mo-pop { animation-duration: var(--lc-mo-enter); animation-timing-function: var(--lc-mo-out); animation-fill-mode: both; }
+
+.lc-mo-up    { animation-name: lc-mo-up; }
+.lc-mo-down  { animation-name: lc-mo-down; }
+.lc-mo-right { animation-name: lc-mo-right; }
+.lc-mo-left  { animation-name: lc-mo-left; }
+.lc-mo-fade  { animation-name: lc-mo-fade; }
+.lc-mo-pop   { animation-name: lc-mo-pop; transform-origin: var(--lc-mo-origin, 50% 100%); }
+
+/* 节拍：叙事元素按 60ms 逐级现身（原则 7：仪器不早于被测对象） */
+.lc-mo-d1 { animation-delay: 60ms; }
+.lc-mo-d2 { animation-delay: 120ms; }
+.lc-mo-d3 { animation-delay: 180ms; }
+.lc-mo-d4 { animation-delay: 240ms; }
+.lc-mo-d5 { animation-delay: 300ms; }
+.lc-mo-d6 { animation-delay: 360ms; }
+
+/* 容器内子级自动等速 stagger（最多 8 级，超出即同拍，避免尾部拖太久） */
+.lc-mo-stagger > * { animation: lc-mo-up var(--lc-mo-enter) var(--lc-mo-out) both; }
+.lc-mo-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.lc-mo-stagger > *:nth-child(2) { animation-delay: 60ms; }
+.lc-mo-stagger > *:nth-child(3) { animation-delay: 120ms; }
+.lc-mo-stagger > *:nth-child(4) { animation-delay: 180ms; }
+.lc-mo-stagger > *:nth-child(5) { animation-delay: 240ms; }
+.lc-mo-stagger > *:nth-child(6) { animation-delay: 300ms; }
+.lc-mo-stagger > *:nth-child(7) { animation-delay: 360ms; }
+.lc-mo-stagger > *:nth-child(8) { animation-delay: 420ms; }
+.lc-mo-stagger > *:nth-child(n+9) { animation-delay: 480ms; }
+
+/* ============================================================================
+   三、滚动揭示（配合 useReveal hook 添加 .is-in）
+   ============================================================================ */
+
+.lc-reveal {
+  opacity: 0;
+  transform: translate3d(0, 12px, 0);
+  transition: opacity var(--lc-mo-enter) var(--lc-mo-out),
+              transform var(--lc-mo-enter) var(--lc-mo-out);
+}
+.lc-reveal.is-in { opacity: 1; transform: none; }
+/* 组内逐级揭示：靠 transition-delay 会让后退时错乱，这里改用 CSS 变量注入的固定延迟 */
+.lc-reveal[data-reveal-delay="60"]  { transition-delay: 60ms; }
+.lc-reveal[data-reveal-delay="120"] { transition-delay: 120ms; }
+.lc-reveal[data-reveal-delay="180"] { transition-delay: 180ms; }
+.lc-reveal[data-reveal-delay="240"] { transition-delay: 240ms; }
+.lc-reveal[data-reveal-delay="300"] { transition-delay: 300ms; }
+
+/* ============================================================================
+   四、交互反馈（按压 / 悬浮 / 抬升）
+   ============================================================================ */
+
+.lc-mo-press { transition: transform var(--lc-mo-tap) var(--lc-mo-both); }
+.lc-mo-press:active { transform: scale(.97); }
+
+.lc-mo-lift { transition: transform var(--lc-mo-release) var(--lc-mo-out), border-color var(--lc-mo-release) var(--lc-mo-out); }
+.lc-mo-lift:hover { transform: translate3d(0, -2px, 0); }
+
+/* 浮层开关按钮：按压回弹（不改变尺寸，只动 scale） */
+.lc-mo-tap { transition: transform var(--lc-mo-tap) var(--lc-mo-both); }
+.lc-mo-tap:hover { transform: scale(1.06); }
+.lc-mo-tap:active { transform: scale(.92); }
+
+/* ============================================================================
+   五、黑底专属：峰值时序（压暗 → 释放）
+   用法：容器加 .lc-mo-seq，JS 先加 .is-sink（压暗），再加 .is-release（闪一下）
+   ============================================================================ */
+
+.lc-mo-seq {
+  will-change: filter;
+  transition: filter var(--lc-mo-release) var(--lc-mo-out); /* 默认：放出来快 */
+}
+.lc-mo-seq.is-sink {
+  filter: brightness(.84);
+  transition: filter var(--lc-mo-sink) var(--lc-mo-in);     /* 沉下去慢 */
+}
+.lc-mo-seq.is-release { animation: lc-mo-peak 420ms var(--lc-mo-out) 1; }
+
+/* ============================================================================
+   六、打字指示（三枚点）
+   ============================================================================ */
+
+.lc-mo-typing { display: inline-flex; align-items: center; gap: 4px; }
+.lc-mo-typing i {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: currentColor; opacity: .28;
+  animation: lc-mo-dot 900ms var(--lc-mo-both) infinite;
+}
+.lc-mo-typing i:nth-child(2) { animation-delay: 150ms; }
+.lc-mo-typing i:nth-child(3) { animation-delay: 300ms; }
+
+/* ============================================================================
+   七、兜底：偏好减少动效 → 一律直出终态（不留半透明/偏移残留）
+   ============================================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-mo-up, .lc-mo-down, .lc-mo-right, .lc-mo-left, .lc-mo-fade, .lc-mo-pop,
+  .lc-mo-stagger > * {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .lc-reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+  .lc-mo-seq, .lc-mo-seq.is-sink { filter: none !important; transition: none !important; }
+  .lc-mo-seq.is-release { animation: none !important; }
+  .lc-mo-typing i { animation: none !important; opacity: .7 !important; }
+  .lc-mo-press, .lc-mo-lift, .lc-mo-tap { transition: none !important; transform: none !important; }
+}

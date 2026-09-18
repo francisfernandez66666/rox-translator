@@ -3,7 +3,7 @@
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
 // =============================================
 export const zh: Record<string, string> = {
-  'admin.referral': '🔗 邀请好友',
+'admin.referral':'邀请好友',
   'referral.title': '邀请好友 · 多邀多得',
   'referral.hint': '把专属链接或二维码发给朋友：对方注册成功→您的体验包 +1,000 积分、有效期 +14 天（自动叠加）；对方首笔付费套餐到账→您再得 1,667 永久积分。同一人重复邀请无效。',
   'referral.myCode': '我的专属邀请码',
@@ -31,20 +31,20 @@ export const zh: Record<string, string> = {
   'referral.rwPaid': '付费永久奖励',
   'referral.empty': '暂无邀请记录，快去邀请好友吧',
   // ---- 运营参数（超管） ----
-  'referral.cfgTitle': '⚙️ 运营参数（仅超级管理员）',
+'referral.cfgTitle':'运营参数（仅超级管理员）',
   'referral.cfgEnabled': '启用邀请裂变',
   'referral.cfgRewardTokens': '受邀注册奖励 token（邀请人获得）',
   'referral.cfgPaidTokens': '首笔付费奖励 token（0 天=永久）',
   'referral.cfgRewardDays': '注册邀请奖励有效期（天）',
   'referral.cfgPaidDays': '付费邀请奖励有效期（天，0=永久）',
   'referral.cfgSave': '保存参数',
-  'referral.cfgSaved': '✅ 邀请参数已更新，立即生效',
+'referral.cfgSaved':'邀请参数已更新，立即生效',
 }
 
 // 英文字典（与上方 zh 同键一一对应）
 // 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
-  'admin.referral': '🔗 Referrals',
+'admin.referral':'Referrals',
   'referral.title': 'Invite Friends · Earn More',
   'referral.hint': 'Share your link or QR code: when a friend registers, your trial pack gains +1,000 credits and +14 days (stacking); on their first paid plan you earn 1,667 permanent credits. Re-inviting the same person has no effect.',
   'referral.myCode': 'My Invite Code',
@@ -72,12 +72,12 @@ export const en: Record<string, string> = {
   'referral.rwPaid': 'Paid Permanent',
   'referral.empty': 'No referral records yet — start inviting!',
   // ---- 运营参数（超管） ----
-  'referral.cfgTitle': '⚙️ Settings (super admin only)',
+'referral.cfgTitle':'Settings (super admin only)',
   'referral.cfgEnabled': 'Enable referral program',
   'referral.cfgRewardTokens': 'Signup reward tokens (to inviter)',
   'referral.cfgPaidTokens': 'First-paid reward tokens (0 days = permanent)',
   'referral.cfgRewardDays': 'Signup reward validity (days)',
   'referral.cfgPaidDays': 'First-paid reward validity (days, 0 = permanent)',
   'referral.cfgSave': 'Save settings',
-  'referral.cfgSaved': '✅ Referral settings updated',
+'referral.cfgSaved':'Referral settings updated',
 }

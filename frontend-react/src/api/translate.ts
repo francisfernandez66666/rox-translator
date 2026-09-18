@@ -31,7 +31,9 @@ function readWithIdle<T extends { done: boolean; value?: Uint8Array }>(
   return Promise.race([reader.read() as Promise<T>, idle]).finally(() => { if (timer) clearTimeout(timer) }) as Promise<T>
 }
 
-/** SSE 公共解析器：从 ReadableStream 逐行解析 SSE 事件，回调进度，返回最终结果 */
+/** SSE 公共解析器：从 ReadableStream 逐行解析 SSE 事件，回调进度，返回最终结果
+ *  事件分流：progress→onProgress；delta→onDelta(lang,text)（D20 逐字流式，不参与最终结果）；
+ *  done→取 event.result 作为返回值；error→抛 ApiError（携带 error_code 稳定码）。 */
 async function consumeSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   onProgress?: (event: ProgressEvent) => void,
@@ -82,7 +84,9 @@ async function consumeSSEStream(
   return finalResult
 }
 
-/** SSE 流式聊天接口 */
+/** SSE 流式聊天接口
+ *  @param onDelta 末位可选：单目标语言时把 token 级增量回灌给调用方（D20），
+ *                 不传则只走 progress/done，行为与旧版一致 */
 export async function chatStream(
   message: string,
   skill?: string,

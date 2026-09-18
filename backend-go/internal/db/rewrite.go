@@ -67,6 +67,29 @@ func RewriteStmts(sqlText string, d Dialect) string {
 	return b.String()
 }
 
+// splitStmts 拆分多语句 SQL 文本：先逐行剥离 -- 行注释避免残留，再按分号切分并过滤空句。
+// ★ P2-2（2026-09-18）自 db/migrate.go（Runner 影子框架，已删）迁入——唯一调用方是本文件 RewriteStmts。
+func splitStmts(sqlText string) []string {
+	var cleaned strings.Builder
+	for _, line := range strings.Split(sqlText, "\n") {
+		if idx := strings.Index(line, "--"); idx >= 0 {
+			line = line[:idx]
+		}
+		cleaned.WriteString(line)
+		cleaned.WriteString("\n")
+	}
+	parts := strings.Split(cleaned.String(), ";")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		s := strings.TrimSpace(p)
+		if s == "" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 // ExecDDL 按当前方言翻译并执行单条 DDL 语句（CREATE/INDEX 等）。
 // 调用方传入的 sqlText 应为 SQLite 方言（作为唯一真源），PostgreSQL 下自动改写。
 // 参数：conn=数据库连接；d=方言；sqlText=DDL 语句；返回执行错误。

@@ -33,6 +33,7 @@ import (
 	"translator/internal/evals"
 	"translator/internal/kb"
 	"translator/internal/llm"
+	"translator/internal/observability"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -2049,10 +2050,14 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 	ctx = e.WithUsageRecorder(ctx)
 
 	// 预加载所有知识库包类型，用于判断当前行是否属于全局包。
+	// ★ P1-5（2026-09-18）：改走 db.Query 方言包装——旧写法裸用 *sql.DB 的 `Query`，
+	//   lib/pq（PG）不认 SQLite 占位符且错误被 err==nil 分支吞掉，PG 生产下静默失效。
 	packType := map[int64]string{}
 	if e.St != nil {
-		rows, err := e.St.DB().Query("SELECT id, pack_type FROM kb_packages")
-		if err == nil {
+		rows, err := db.Query(e.St.DB(), db.CurrentDialect(), "SELECT id, pack_type FROM kb_packages")
+		if err != nil {
+			observability.Error(ctx, "engine 预加载 kb_packages 包类型失败（全局包判定将退化为按非全局处理）", "err", err)
+		} else {
 			for rows.Next() {
 				var id int64
 				var pt string
@@ -2196,7 +2201,7 @@ func (e *Engine) cultureRules(ctx context.Context, tid int64, targetLang string)
 	if ce, ok := e.cultureCache[key]; ok && time.Now().Before(ce.ExpiresAt) {
 		return ce.Text, ce.Rules
 	}
-	rows, err := e.St.DB().Query(`
+	rows, err := db.Query(e.St.DB(), db.CurrentDialect(), `
 		SELECT sp.phrase, COALESCE(sp.kind,'style'), COALESCE(sp.replacement,'')
 		FROM kb_safety_phrases sp
 		JOIN kb_packages pkg ON pkg.id = sp.package_id
@@ -2204,6 +2209,8 @@ func (e *Engine) cultureRules(ctx context.Context, tid int64, targetLang string)
 AND COALESCE(pkg.enabled,1)=1 AND pkg.pack_type='locale'
 	  AND pkg.tenant_id IN (?, 0)`, targetLang, tid)
 	if err != nil {
+		// ★ P1-5（2026-09-18）：吞错改显式告警——旧实现静默返回空，PG 下文化闸整链失效不可见
+		observability.Error(ctx, "cultureRules 查询语言文化规则失败（本租户文化闸退化为无规则）", "err", err, "lang", targetLang, "tenant", tid)
 		return "", nil
 	}
 	defer rows.Close()

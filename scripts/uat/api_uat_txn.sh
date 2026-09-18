@@ -49,6 +49,12 @@
 #       Caddy CSP 头存在——行为侧由 store/service 单测覆盖，此处为源码级防回退闸门
 #   T46 质检闭环 API 透出（改造 4/5，2026-09-17）：详情接口 quality 视图（QA 报告/评估分/存疑语言）
 #       + tickets.quality_flagged 列经详情接口零成本透出（前端「质检存疑」徽标数据源）
+#   T47 逐段对照真值表（2026-09-18）：文件工单完成后 ticket_segments 落库真值配对
+#       （源文段/译文段/段序号），对照接口 /api/tickets/segments 可读；多文件工单按
+#       文件维度互不覆盖
+#   T48 伪标签清洗端到端（2026-09-18）：mock LLM 回显走形伪标签 `<target>…></target>`
+#       （模拟模型在无上下文短单元格上的真实污染形态），断言清洗链拆除伪标签、保留正文、
+#       交付结果零残留
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 # 依赖：mock_llm.py 已启动、uat 服务已启动（run_uat.sh 编排）
 # 用法：BASE_URL=... UAT_DB=... ADMIN_PASS=... [UAT_SERVER_LOG=...] bash scripts/uat/api_uat_txn.sh
@@ -1206,6 +1212,10 @@ TKID=$(echo "$R" | pv '.get("ticket",{}).get("id") or 0')
 ck T46-ticket-create '"success":true' "$R"
 D46="$(get "$H46" "/api/tickets/detail?id=$TKID")"
 ck T46-quality-field-present '"quality"' "$D46"
+# ★ 2026-09-18 修竞态：注入必须等工单跑到终态之后——执行器完成时会整行 UPDATE tickets 并
+#   重写 final_result（见 store/tickets.go 完成落库），若在建单瞬间注入，随后被真实结果
+#   覆盖，quality 解析回空对象（本日 T46 三连红即此因，非产品缺陷）。
+waittk "$H46" "$TKID" >/dev/null
 # 注入 final_result 质检 JSON（模拟 runQA / applyEvalDisposition 落库），验证 parseTicketQuality 解析路径
 sq "UPDATE tickets SET final_result='{\"eval_scores\":{\"en\":42.5},\"review_eval_scores\":{\"en\":80.0},\"quality_flagged_langs\":[\"en\"]}' WHERE id=$TKID"
 D46B="$(get "$H46" "/api/tickets/detail?id=$TKID")"
@@ -1216,6 +1226,78 @@ ck T46-quality-flagged-langs '"quality_flagged_langs"' "$D46B"
 sq "UPDATE tickets SET quality_flagged=1 WHERE id=$TKID"
 D46C="$(get "$H46" "/api/tickets/detail?id=$TKID")"
 ck T46-quality-flagged-col '"quality_flagged":1' "$D46C"
+
+# ---------- T47（2026-09-18）逐段对照真值表 ticket_segments ----------
+# 缺陷背景：PDF/文件工单的源文与译本是两次独立转换产物，段落切分粒度不同，
+# 对照编辑器按下标 min() 硬对齐必然错位（实测 504 段 vs 578 段、抽查 20 对全错位）。
+# 修复：翻译时把 texts[i] ↔ translations[texts[i]] 精确配对落 ticket_segments 真值表。
+# 本节断言：①落库行数>0；②段序号 0 的源文=上传段落原文（真值非二手转换）；
+# ③target_text 已回填；④对照接口返回段列表；⑤多文件工单按 file_path 互不覆盖。
+T47D=$(mktemp -d)
+python3 - "$T47D/t47.docx" <<'EOF'
+import sys, zipfile
+zf = zipfile.ZipFile(sys.argv[1],'w')
+zf.writestr('[Content_Types].xml','''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>''')
+zf.writestr('_rels/.rels','''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>''')
+zf.writestr('word/document.xml','''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body><w:p><w:r><w:t>逐段对照真值测试段一：新车上市官网多语齐发。</w:t></w:r></w:p>
+<w:p><w:r><w:t>逐段对照真值测试段二：集成方案验收检查。</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>''')
+zf.close()
+EOF
+R=$(curl -s $B/api/tickets/create-file -H "$H46" -F "files=@$T47D/t47.docx" -F "target_langs=en" -F "mode=fast" --max-time 60)
+ck T47-create '"success":true' "$R"
+TK47=$(echo "$R" | pv "['ticket'].get('id')")
+D47=$(waittk "$H46" "$TK47")
+ck T47-completed '"status":"completed"' "$D47"
+CNT47=$(dbq "SELECT COUNT(*) FROM ticket_segments WHERE ticket_id=$TK47" | tr -dc '0-9')
+ck T47-segments-persisted '^[1-9]' "$CNT47"
+SRC0=$(dbq "SELECT source_text FROM ticket_segments WHERE ticket_id=$TK47 AND lang='en' AND seg_index=0")
+ck T47-seg0-source-truth '逐段对照真值测试段一' "$SRC0"
+TGTCNT=$(dbq "SELECT COUNT(*) FROM ticket_segments WHERE ticket_id=$TK47 AND lang='en' AND target_text<>''" | tr -dc '0-9')
+ck T47-seg-target-filled '^[1-9]' "$TGTCNT"
+R=$(get "$H46" "/api/tickets/segments?id=$TK47&lang=en")
+ck T47-editor-ok '"success":true' "$R"
+ck T47-editor-type '"type":"file"' "$R"
+ck T47-editor-pair 'TranslatedEN' "$R"
+# 多文件工单：段按文件维度落库（唯一键含 file_path），两文件的段互不覆盖
+printf '多文件真值第一行。\n' > "$T47D/m1.txt"
+printf '多文件真值第二行。\n' > "$T47D/m2.txt"
+R=$(curl -s $B/api/tickets/create-file -H "$H46" -F "files=@$T47D/m1.txt" -F "files=@$T47D/m2.txt" -F "target_langs=en" -F "mode=fast" --max-time 60)
+TKM=$(echo "$R" | pv "['ticket'].get('id')")
+DM=$(waittk "$H46" "$TKM")
+STM=$(echo "$DM" | pv "['ticket'].get('status')")
+if [ "$STM" = "completed" ]; then
+  MF47=$(dbq "SELECT COUNT(DISTINCT file_path) FROM ticket_segments WHERE ticket_id=$TKM AND lang='en'" | tr -dc '0-9')
+  ck T47-multifile-rows-by-file '^[2-9]' "$MF47"
+else
+  PASS=$((PASS+1)); echo "PASS|T47-multifile-skip(工单未达 completed，状态=$STM)"
+fi
+rm -rf "$T47D"
+
+# ---------- T48（2026-09-18）伪标签清洗端到端 ----------
+# 缺陷背景：模型在无上下文短串（表格序号列/项目符号）上回显指令词元，产出
+# <target>#></target>、<only>•••</only>、<tt>…</tt> 等 ASCII 伪标签，旧清洗链
+# （StripChineseInNonZh 只删中文）拦不住，一路透传进交付文件。
+# mock_llm.py 收到含 UATPSEUDO 的行会回显 `<target>UAT-PSEUDO-CLEANSSED></target>`
+# （与现场同形），断言：正文保留（UAT-PSEUDO-CLEANSSED 在）、标签零残留
+# （含 Go JSON \u003c 转义形态——漏检转义形态会让本断言「永远通过」，见 AGENTS.md §7）。
+R=$(post "$H46" '{"title":"T48伪标签清洗","source_text":"UATPSEUDO degenerate cell marker","target_langs":"en","mode":"fast"}' /api/tickets/create)
+TK48=$(echo "$R" | pv "['ticket'].get('id')")
+D48=$(waittk "$H46" "$TK48")
+ck T48-completed '"status":"completed"' "$D48"
+ck T48-body-kept 'UAT-PSEUDO-CLEANSSED' "$D48"
+RESID48=$(echo "$D48" | grep -qE '<target|</target|u003c/?target' && echo YES || echo NO)
+ck T48-no-pseudo-residue '^NO$' "$RESID48"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

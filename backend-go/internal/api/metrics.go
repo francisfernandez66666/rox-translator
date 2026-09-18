@@ -21,7 +21,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"translator/internal/db"
+	"translator/internal/engine"
 	"translator/internal/fileproc"
+	"translator/internal/infra/distlock"
 	"translator/internal/store"
 )
 
@@ -263,6 +266,24 @@ func (s *Server) metricsText() string {
 	sb.WriteString("# HELP translator_fileproc_avg_duration_ms 子进程平均执行时间（毫秒）\n# TYPE translator_fileproc_avg_duration_ms gauge\n")
 	sb.WriteString(fmt.Sprintf("translator_fileproc_avg_duration_ms %.2f\n", procSnap.AvgDurationMs))
 
+	// ★ P0-4（2026-09-18）：模型退化输出观测计数（engine/postprocess 检出，清洗仍照常交付）
+	sb.WriteString("# HELP translator_suspect_output_total 检出疑似模型退化输出总数（按目标语言）\n# TYPE translator_suspect_output_total counter\n")
+	{
+		sus := engine.SuspectOutputSnapshot()
+		langs := make([]string, 0, len(sus))
+		for l := range sus {
+			langs = append(langs, l)
+		}
+		sort.Strings(langs)
+		for _, l := range langs {
+			sb.WriteString(fmt.Sprintf("translator_suspect_output_total{lang=%q} %d\n", l, sus[l]))
+		}
+	}
+
+	// ★ P1-4（2026-09-18）：分布式锁异常累计次数——非 0 说明周期任务正在走「保守降级本进程执行」路径
+	sb.WriteString("# HELP translator_distlock_errors_total Redis 分布式锁获取异常总数（调用方已降级本地执行）\n# TYPE translator_distlock_errors_total counter\n")
+	sb.WriteString(fmt.Sprintf("translator_distlock_errors_total %d\n", distlock.ErrCount()))
+
 	// 平台规模（租户/余额/KB 全平台汇总，仅聚合不泄露租户明细）
 	if s.Store != nil {
 		if tenants, err := s.Ten.List(); err == nil {
@@ -288,6 +309,14 @@ func (s *Server) metricsText() string {
 				sb.WriteString("# HELP translator_kb_entries_total 知识库条目总数\n# TYPE translator_kb_entries_total gauge\n")
 				sb.WriteString(fmt.Sprintf("translator_kb_entries_total %d\n", total))
 			}
+		}
+		// ★ P2-7（2026-09-18）：队列积压深度——jobs 表 queued 态计数，供告警规则判断
+		// worker 全忙/卡死导致的排队长尾（此前只有熔断/错误率，积压不可见）。
+		var queued int
+		if err := db.QueryRow(s.Store.DB(), db.CurrentDialect(),
+			"SELECT COUNT(*) FROM jobs WHERE status='queued'").Scan(&queued); err == nil {
+			sb.WriteString("# HELP translator_jobs_queued 排队中的任务数（持续升高说明 worker 不足或卡死）\n# TYPE translator_jobs_queued gauge\n")
+			sb.WriteString(fmt.Sprintf("translator_jobs_queued %d\n", queued))
 		}
 	}
 

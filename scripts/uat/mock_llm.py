@@ -18,9 +18,18 @@ def fake_translate(text):
     for line in text.split('\n'):
         m = NUM.match(line)
         if m:
-            out.append(f"{m.group(1)}{m.group(2)}{m.group(3)} TranslatedEN({m.group(4)[:20]})")
+            if 'UATPSEUDO' in m.group(4):
+                # UAT T48 触发器：模拟模型在无上下文短串上回显指令词元的「走形伪标签」形态
+                # （实测交付 PDF 里的 `<target>#></target>`），必须被 stripPseudoTags 拆掉
+                # 且保留标签体正文——若清洗链回退，T48 断言会立即抓到现场残留。
+                out.append(f"{m.group(1)}{m.group(2)}{m.group(3)} <target>UAT-PSEUDO-CLEANSSED></target>")
+            else:
+                out.append(f"{m.group(1)}{m.group(2)}{m.group(3)} TranslatedEN({m.group(4)[:20]})")
         elif line.strip():
-            out.append(f"TranslatedEN({line.strip()[:30]})")
+            if 'UATPSEUDO' in line:
+                out.append("<target>UAT-PSEUDO-CLEANSSED></target>")
+            else:
+                out.append(f"TranslatedEN({line.strip()[:30]})")
         else:
             out.append(line)
     return '\n'.join(out)

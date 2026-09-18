@@ -18,6 +18,7 @@ import (
 	"translator/internal/crawler"
 	"translator/internal/infra/distlock"
 	"translator/internal/infra/redis"
+	"translator/internal/observability"
 )
 
 // startPackScraper 启动数据采集调度器（由 startWatchdog 调用）。
@@ -49,10 +50,12 @@ func (s *Server) startPackScraper() {
 			// 分布式锁：抢不到说明他实例正在采集，直接跳过本轮（非阻塞）
 			ok, release, err := lock.TryLock(context.Background(), lockTTL)
 			if err != nil {
-				log.Printf("[crawler] 采集分布式锁获取失败（跳过本轮）: %v", err)
-				return
-			}
-			if !ok {
+				// ★ P1-4（2026-09-18）：Redis 异常不再跳过本轮——保守降级本进程执行。
+				//   进程内已有 running 单飞防重入，采集本身按块断点续传（幂等），
+				//   多实例同时抖出重复采集的代价远小于数据源长期不更新的停摆。
+				observability.Warn(context.Background(), "采集分布式锁异常，本轮保守降级本进程执行", "err", err.Error())
+				release = func() {}
+			} else if !ok {
 				return // 他实例持锁中，跳过
 			}
 			defer release()

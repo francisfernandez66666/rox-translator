@@ -2,9 +2,12 @@
 // 复用后台既有逻辑：识别（recognize-kb，需部门管理员及以上）→ 选包 → 导入（import-kb，自动 embed）。
 // 普通用户无此入口；后端 requireDeptAdmin 再次校验权限。
 // 可选包按角色过滤（后端已做）：超管可见全部；租户管理员仅企业包/部门包；部门管理员仅本部门及子部门部门包。
-// 部门包按组织层级以多级下拉框（Cascader）展示，叶子即包名（一级只显示名字）。
+// 部门包按组织层级以多级下拉框（原 Cascader）展示，叶子即包名（一级只显示名字）。
+// 呈现层替换：TDesign Dialog→受控浮层（复用 lc-dialog 样式）、Cascader→两级 Select、
+//             Tag→Badge(mono)、MessagePlugin→useToast、Button→langcross Button。
 import { useEffect, useState } from 'react'
-import { Dialog, Button, Cascader, Tag, MessagePlugin } from 'tdesign-react'
+import { createPortal } from 'react-dom'
+import { Button, Badge, useToast } from '@/ui/langcross/src'
 import { t, tpl } from '@/i18n'
 import { kbRecognizeFile, kbPackages, kbImportFile } from '@/api/kb'
 import { orgList, type OrgInfo } from '@/api/org'
@@ -36,7 +39,9 @@ interface Pkg {
   cross_orgs?: number[]
 }
 
-// COpt 多级下拉（Cascader）选项结构：label/value 及可选子节点
+// COpt 多级下拉（原 Cascader）选项结构：label/value 及可选子节点
+// value 用负数当「目录节点」哨兵（-部门ID / -2 行业 / -3 语言文化 / -4 跨部门）：
+// 真实包 ID 恒为正，负值只用于展开二级，永远不会被当成可导入的包提交
 interface COpt {
   label: string
   value: number
@@ -77,7 +82,7 @@ function orgTreeOptions(orgs: OrgInfo[], deptByOrg: Map<number, Pkg[]>, startPar
   return build(startParent)
 }
 
-// 由知识包列表 + 组织树构建前台上传弹窗所用的 Cascader 选项（企业包/部门包(组织树)/行业包/语言文化包）。
+// 由知识包列表 + 组织树构建前台上传弹窗所用的两级选包选项（企业包/部门包(组织树)/行业包/语言文化包）。
 // 抽出为导出函数，供后台知识库面板复用，保证前后台「选包」交互完全一致。
 export function buildKbCascaderOptions(pkgs: Pkg[], orgs: OrgInfo[]): COpt[] {
   const rootOrg = orgs.find((o) => o.type === 'root')
@@ -133,6 +138,7 @@ function pkgScopeText(p: Pkg, t: (k: string) => string, tpl: (k: string, vars?: 
 /** KbUploadDialog · 职责说明：前台顶部栏「上传知识库」弹窗，识别文件 → 选择知识包 → 导入（自动 embed） */
 export default function KbUploadDialog({ visible, onClose }: Props) {
   const ad = useAdmin()
+  const { toast } = useToast()
   const [file, setFile] = useState<File | null>(null)
   const [recognizing, setRecognizing] = useState(false)
   const [uploadPct, setUploadPct] = useState(0) // ★ H5 分片上传进度
@@ -140,6 +146,8 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
   const [pkgs, setPkgs] = useState<Pkg[]>([])
   const [orgs, setOrgs] = useState<OrgInfo[]>([])
   const [pkgId, setPkgId] = useState<number>(0)
+  // 两级选包：catValue = 选中的一级（分类/目录）；有子级时才出现二级
+  const [catValue, setCatValue] = useState<number | ''>('')
   const [importing, setImporting] = useState(false)
   const [result, setResult] = useState<Any | null>(null)
 
@@ -149,7 +157,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
   // 打开时加载可导入的知识库包（后端按角色过滤）；组织树优先用全局（登录已加载）
   useEffect(() => {
     if (!visible) return
-    setFile(null); setRecognized(null); setResult(null); setPkgId(0)
+    setFile(null); setRecognized(null); setResult(null); setPkgId(0); setCatValue('')
     ;(async () => {
       try {
         const r = await kbPackages()
@@ -165,6 +173,14 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
     })()
   }, [visible])
 
+  // Esc 关闭（等价 TDesign Dialog 默认行为）
+  useEffect(() => {
+    if (!visible) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [visible, onClose])
+
   // startRecognize 识别所选知识文件（recognize-kb），成功后在结果中记录 temp_id 供导入使用
   async function startRecognize() {
     if (!file) return
@@ -173,9 +189,9 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
       // ★ H5：大文件（≥4MB）自动分片续传上传，进度可见
       const r = await kbRecognizeFile(file, undefined, (pct) => setUploadPct(pct))
       if (r.success) setRecognized(r as Any)
-      else MessagePlugin.error(r.message || t('kb.recognizeFailed'))
+      else toast({ title: r.message || t('kb.recognizeFailed'), tone: 'error' })
     } catch (err: any) {
-      MessagePlugin.error(t('kb.recognizeErr').replace('{msg}', err?.message || t('kb.networkErr')))
+      toast({ title: t('kb.recognizeErr').replace('{msg}', err?.message || t('kb.networkErr')), tone: 'error' })
     } finally { setRecognizing(false); setUploadPct(0) }
   }
 
@@ -186,7 +202,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
     try {
       const r = await kbImportFile({ temp_id: String(recognized.temp_id), package_id: pkgId })
       setResult(r as Any)
-      if (r.success) { setFile(null); setRecognized(null); setPkgId(0) }
+      if (r.success) { setFile(null); setRecognized(null); setPkgId(0); setCatValue('') }
     } catch (err: any) {
       setResult({ success: false, message: t('kb.importErr').replace('{msg}', err?.message || t('kb.networkErr')) })
     } finally { setImporting(false) }
@@ -195,77 +211,127 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
   // options 由已加载的知识包列表与组织树构建选包下拉选项（企业包/部门包组织树/行业包/语言文化包）
   const options = buildKbCascaderOptions(pkgs, effectiveOrgs)
 
-  return (
-    <Dialog
-      visible={visible}
-      onClose={onClose}
-      header={t('kb.topbarUpload')}
-      footer={false}
-      width={560}
+  // 两级选包联动：选中一级后，若无子级则直接写入 pkgId；有子级则等待二级选择
+  // 比对统一转字符串：原生 <select> 的 value 只会是字符串，而目录哨兵是负数，
+  // 用 === 直接比 number 会因类型不同恒 false（表现为二级列表永远选不中）
+  const catOpt = options.find((o) => String(o.value) === String(catValue)) || null
+  const subOpts = catOpt?.children || []
+  const subOpt = subOpts.find((c) => String(c.value) === String(pkgId)) || null
+
+  function onPickCat(v: number) {
+    setCatValue(v)
+    const opt = options.find((o) => o.value === v)
+    if (opt && !opt.children) setPkgId(v) // 叶子（如企业包、单包部门）：直接选包
+    else setPkgId(0) // 父级（行业/语言/跨部门/多包部门）：等待二级子项
+  }
+  function onPickSub(v: number) { setPkgId(v) }
+
+  // 二级展示文案
+  const subDisplay = subOpt?.label ?? t('kb.selectPkg')
+
+  if (!visible) return null
+
+  // portal 到 body：顶栏容器带 overflow/stacking context，就地渲染会被裁切且压不住页面内容
+  return createPortal(
+    <div
+      className="lc-overlay"
+      // 用 mousedown + 严格 sameNode 判定：只有按下点正好落在遮罩自身才关闭，
+      // 从对话框内起手的文字拖选、松手在遮罩上都不会误关（click 判定就会）
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div style={{ fontSize: 13, color: '#556', marginBottom: 12 }}>{t('kb.topbarHint')}</div>
+      <div className="lc-dialog" role="dialog" aria-modal="true" style={{ width: 560 }}>
+        <div className="lc-dialog__title">{t('kb.topbarUpload')}</div>
+        <div className="lc-dialog__body">
+          <div style={{ fontSize: 13, color: 'var(--lc-text-3)', marginBottom: 12 }}>{t('kb.topbarHint')}</div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
         <input
           type="file"
           accept=".csv,.xlsx,.xls"
-          onChange={(e: any) => { setFile(e.target.files?.[0] || null); setRecognized(null); setResult(null); setPkgId(0); e.currentTarget.value = '' }}
-        />
-        <Button onClick={() => void startRecognize()} disabled={!file || recognizing} loading={recognizing}>
+              onChange={(e: any) => { setFile(e.target.files?.[0] || null); setRecognized(null); setResult(null); setPkgId(0); setCatValue(''); e.currentTarget.value = '' }}
+            />
+            <Button variant="secondary" onClick={() => void startRecognize()} disabled={!file || recognizing}>
           {recognizing ? (uploadPct > 0 && uploadPct < 100 ? `${t('kb.uploading')} ${uploadPct}%` : t('kb.recognizing')) : t('kb.recognize')}
-        </Button>
-      </div>
+            </Button>
+          </div>
 
       {file && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#334', marginBottom: 12 }}>
-          <span>📄 {t('kb.fileSelected')}{file.name}{fileExt(file.name) && ` (${fileExt(file.name)})`}</span>
-          <Button size="small" variant="text" theme="danger" onClick={() => { setFile(null); setRecognized(null); setResult(null); setPkgId(0) }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--lc-text-2)', marginBottom: 12 }}>
+              <span> {t('kb.fileSelected')}{file.name}{fileExt(file.name) && ` (${fileExt(file.name)})`}</span>
+              <Button size="sm" variant="danger" onClick={() => { setFile(null); setRecognized(null); setResult(null); setPkgId(0); setCatValue('') }}>
             {t('kb.fileRemove')}
-          </Button>
-        </div>
-      )}
+              </Button>
+            </div>
+          )}
 
       {recognized && (
         <div style={{ fontSize: 13, marginBottom: 12 }}>
           <div>
             {t('kb.kbTotal').replace('{total}', recognized.total).replace('{n}', (recognized.lang_cols || []).length)}
             {(recognized.new_langs || []).length > 0 && (
-              <span> {t('kb.kbNewLangs')} {(recognized.new_langs || []).map((l: string) => <Tag key={l} size="small">{l}</Tag>)}</span>
-            )}
-          </div>
+                  <span> {t('kb.kbNewLangs')} {(recognized.new_langs || []).map((l: string) => <Badge key={l} mono>{l}</Badge>)}</span>
+                )}
+              </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10 }}>
             {options.length === 0 ? (
-              <span style={{ fontSize: 13, color: '#888' }}>{t('kb.noPkg')}</span>
+                  <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{t('kb.noPkg')}</span>
             ) : (
-              <Cascader
-                value={pkgId || undefined}
-                onChange={(v: any) => setPkgId(Number(v))}
-                options={options}
-                placeholder={t('kb.selectPkg')}
-                style={{ minWidth: 320 }}
-              />
-            )}
-            <Button theme="success" onClick={() => void startImport()} disabled={!pkgId || importing} loading={importing}>
+                  <>
+                    <select
+                      className="lc-select"
+                      aria-label={t('kb.selectPkg')}
+                      value={catValue === '' ? '' : String(catValue)}
+                      onChange={(e) => onPickCat(Number(e.target.value))}
+                      style={{ minWidth: 200 }}
+                    >
+                      <option value="">{t('kb.selectPkg')}</option>
+                      {options.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                    {subOpts.length > 0 && (
+                      <select
+                        className="lc-select"
+                        aria-label={t('kb.selectPkg')}
+                        value={subOpt ? String(pkgId) : ''}
+                        onChange={(e) => onPickSub(Number(e.target.value))}
+                        style={{ minWidth: 200 }}
+                      >
+                        <option value="">{subDisplay}</option>
+                        {subOpts.map((c) => (
+                          <option key={c.value} value={c.value}>{c.label}</option>
+                        ))}
+                      </select>
+                    )}
+                  </>
+                )}
+                <Button variant="primary" onClick={() => void startImport()} disabled={!pkgId || importing}>
               {t('kb.import')}
-            </Button>
+                </Button>
             {pkgId > 0 ? (() => {
               const p = pkgs.find((x) => x.id === pkgId)
               return p ? (
-                <span style={{ fontSize: 12, color: '#889' }}>
+                    <span style={{ fontSize: 12, color: 'var(--lc-text-3)' }}>
                   {t('kb.scopePrefix')}{pkgScopeText(p, t, tpl)}
                 </span>
               ) : null
             })() : null}
-          </div>
-        </div>
-      )}
+              </div>
+            </div>
+          )}
 
       {result && (
-        <div style={{ fontSize: 13, color: result.success ? '#2e7d32' : '#c62828' }}>
+            <div style={{ fontSize: 13, color: result.success ? 'var(--lc-text)' : 'var(--lc-danger)' }}>
           {result.message || (result.success ? t('kb.import') + ' OK' : t('kb.importErr').replace('{msg}', ''))}
+            </div>
+          )}
         </div>
-      )}
-    </Dialog>
+        <div className="lc-dialog__actions">
+          <button type="button" className="lc-btn lc-btn--secondary" style={{ padding: '8px 16px', fontSize: 13 }} onClick={onClose}>{t('common.close')}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   )
 }
 

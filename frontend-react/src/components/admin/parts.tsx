@@ -3,7 +3,7 @@
 // 被 panels_a~d 共享：Panel 容器、Field 字段行、toastResp 结果提示、num 数字格式化。
 // ============================================================================
 import type { ReactNode } from 'react'
-import { MessagePlugin } from 'tdesign-react'
+import { toastSuccess, toastError } from '@/lib/toastBus'
 
 // ============ 本文件职责中文说明 ============
 // 后台面板公共小部件：Panel 容器、Field 字段行、toastResp 提示、num 数字格式化助手。
@@ -25,10 +25,10 @@ export function Panel({ title, extra, id, children }: { title: string; extra?: R
 /** 统一错误提示：非 success 响应 toast（修复 Vue 版各面板各自为战） */
 export function toastResp(r: { success?: boolean; message?: string }, okMsg?: string): boolean {
   if (r.success) {
-    if (okMsg) void MessagePlugin.success(okMsg)
+    if (okMsg) void toastSuccess(okMsg)
     return true
   }
-  void MessagePlugin.error(r.message || '操作失败')
+  void toastError(r.message || '操作失败')
   return false
 }
 
@@ -42,5 +42,5 @@ export function Field({ label, children }: { label: string; children: ReactNode 
   )
 }
 
-/** num 数字输入框取值助手：TDesign.Input.value 仅接受 string */
+/** num 数字输入框取值助手：input.value 仅接受 string */
 export const num = (v: unknown): string => String(Number(v ?? 0))

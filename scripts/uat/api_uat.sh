@@ -29,9 +29,29 @@ echo "=== A 阶段：公开接口 / 认证 / 计费 / 翻译 / 交易 ==="
 # ---------- A1 健康与公开接口 ----------
 ck A1-status '"ok":true' "$(curl -s $B/status)"
 ck A1-plans '"success":true' "$(curl -s $B/api/plans)"
-ck A1-pricing-page '<' "$(curl -s $B/pricing | head -c 60)"
+# ★ P2-6（2026-09-18）/pricing 归一断言：Go 服务端渲染版已删除，直连应回退 SPA 壳（含 id="root"）；
+#   并反向断言旧内嵌页（<title>定价 - 能言</title> 直出 HTML）不再出现，防止双实现回归。
+PRICING_HTML=$(curl -s $B/pricing)
+ck A1-pricing-spa-shell 'id="root"' "$PRICING_HTML"
+if echo "$PRICING_HTML" | grep -qE '定价 - 能言'; then FAIL=$((FAIL+1)); echo "FAIL|A1-pricing-go-page-gone|Go版pricing未清除"; else PASS=$((PASS+1)); echo "PASS|A1-pricing-go-page-gone"; fi
 ck A1-register-config '"success":true' "$(curl -s $B/api/auth/register-config)"
 ck A1-langs 'kb_langs' "$(curl -s $B/api/translation/langs)"
+
+# ---------- A1b 销售留资（★ P1-3：匿名 POST /api/lead，落 feedbacks lead 通道） ----------
+# 先清本 IP 的留资限流窗口：rate_limits 持久化跨运行，重跑套件时不能被上一轮的 5s 间隔卡住
+dbq "DELETE FROM rate_limits WHERE scope LIKE 'guard_%' AND key LIKE 'lead:%'" >/dev/null 2>&1
+dbq "DELETE FROM feedbacks WHERE target_type='lead' AND content LIKE '%UATLead%'" >/dev/null 2>&1
+ck A1b-lead-method '仅支持 POST' "$(curl -s $B/api/lead)"
+ck A1b-lead-ok '"success":true' "$(curl -s $B/api/lead -H "$J" -d '{"company":"UATLead公司","email":"Sales@UAT-Lead.com","langs":"English,日本語","message":"请提供企业报价","source":"pricing"}')"
+# 落库口径：公司原样、邮箱小写归一、来源走白名单（pricing 保留）——三处任一不符即断言红
+ck A1b-lead-db '^1$' "$(dbq "SELECT COUNT(*) FROM feedbacks WHERE target_type='lead' AND content LIKE '%UATLead公司%' AND content LIKE '%sales@uat-lead.com%' AND content LIKE '%来源：pricing%'")"
+ck A1b-lead-bademail '有效的联系邮箱' "$(curl -s $B/api/lead -H "$J" -d '{"company":"UATLead公司","email":"not-an-email"}')"
+ck A1b-lead-nocompany '公司/团队名称' "$(curl -s $B/api/lead -H "$J" -d '{"company":"   ","email":"a@b.co"}')"
+# 蜜罐命中：假成功但不落库（给 bot 成功信号、不给运营留垃圾）
+ck A1b-lead-honeypot-fake '"success":true' "$(curl -s $B/api/lead -H "$J" -d '{"company":"Bot公司","email":"bot@spam.xyz","site":"http://seo-spam"}')"
+ck A1b-lead-honeypot-nodb '^0$' "$(dbq "SELECT COUNT(*) FROM feedbacks WHERE target_type='lead' AND content LIKE '%Bot公司%'")"
+# 同 IP 二次有效提交：5s 最小间隔限流（校验失败的请求不计数，故此处必是上一条触发）
+ck A1b-lead-ratelimit '提交过于频繁' "$(curl -s $B/api/lead -H "$J" -d '{"company":"UATLead公司2","email":"x2@y.co"}')"
 
 # ---------- A2 管理员登录 ----------
 AT=$(tok $ADMIN_USER $ADMIN_PASS)
@@ -120,6 +140,9 @@ PKGID=$(echo "$KBP" | pv '.get("package",{}).get("id") or d.get("data",{}).get("
 KB=$(curl -s $B/api/admin/kb-entries/add -H "$H1" -H "$J" -d "{\"package_id\":$PKGID,\"source_text\":\"登录\",\"target_lang\":\"en\",\"target_text\":\"Log In\",\"module\":\"uat\",\"remark\":\"UAT术语\"}")
 ck A11-kb-add '"success":true' "$KB"
 ck A11-kb-stats '"success":true' "$(curl -s "$B/api/translation/kb-stats" -H "$H1")"
+# ★ P0-2（2026-09-18）反向断言：匿名不得读租户 KB 统计（旧实现落默认租户 1 泄漏）
+C=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/translation/kb-stats")
+ck A11-kb-stats-anon-401 '^401$' "$C"
 
 # ---------- A12 OpenAPI：密钥 + 同步翻译 + 错误密钥 ----------
 AK=$(curl -s $B/api/apikeys/create -H "$H1" -H "$J" -d '{"name":"uat-key"}')

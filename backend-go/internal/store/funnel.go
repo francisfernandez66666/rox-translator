@@ -14,17 +14,17 @@ import (
 
 // RegAttribution 注册归因快照（UTM 五参 + 邀请码 + 访问域 + UA）。
 type RegAttribution struct {
-	UserID       int64  `json:"user_id"`
-	TenantID     int64  `json:"tenant_id"`
-	UTMSource    string `json:"utm_source"`
-	UTMMedium    string `json:"utm_medium"`
-	UTMCampaign  string `json:"utm_campaign"`
-	UTMTerm      string `json:"utm_term"`
-	UTMContent   string `json:"utm_content"`
-	RefCode      string `json:"ref_code"`
-	Host         string `json:"host"`
-	LandingPath  string `json:"landing_path"`
-	UserAgent    string `json:"user_agent"`
+	UserID      int64  `json:"user_id"`
+	TenantID    int64  `json:"tenant_id"`
+	UTMSource   string `json:"utm_source"`
+	UTMMedium   string `json:"utm_medium"`
+	UTMCampaign string `json:"utm_campaign"`
+	UTMTerm     string `json:"utm_term"`
+	UTMContent  string `json:"utm_content"`
+	RefCode     string `json:"ref_code"`
+	Host        string `json:"host"`
+	LandingPath string `json:"landing_path"`
+	UserAgent   string `json:"user_agent"`
 }
 
 // InsertRegAttribution 注册成功后落归因（失败仅日志级：注册主链路绝不因归因受阻）。
@@ -39,13 +39,13 @@ func (s *Store) InsertRegAttribution(a *RegAttribution) error {
 
 // FunnelRow 漏斗单行（按渠道）。
 type FunnelRow struct {
-	Source    string `json:"source"`    // utm_source（空=direct 自然量）
-	Referral  string `json:"referral"`  // ref_code（裂变码前 8 位聚合：ref:<code>）
-	Registered int64 `json:"registered"`
-	Activated  int64 `json:"activated"`  // 激活：用户名下有真实用量流水
-	Exhausted  int64 `json:"exhausted"`  // 耗尽：租户曾发放额度且当前双桶可用=0
-	FirstPay   int64 `json:"first_pay"`  // 首购：租户 ≥1 笔已付订单
-	Renewed    int64 `json:"renewed"`    // 续费：租户 ≥2 笔已付订单
+	Source     string `json:"source"`   // utm_source（空=direct 自然量）
+	Referral   string `json:"referral"` // ref_code（裂变码前 8 位聚合：ref:<code>）
+	Registered int64  `json:"registered"`
+	Activated  int64  `json:"activated"` // 激活：用户名下有真实用量流水
+	Exhausted  int64  `json:"exhausted"` // 耗尽：租户曾发放额度且当前双桶可用=0
+	FirstPay   int64  `json:"first_pay"` // 首购：租户 ≥1 笔已付订单
+	Renewed    int64  `json:"renewed"`   // 续费：租户 ≥2 笔已付订单
 }
 
 // FunnelStats 时间窗内注册 cohort 的五环节漏斗（按 utm_source 聚合）。

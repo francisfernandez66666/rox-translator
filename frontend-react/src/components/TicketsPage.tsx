@@ -4,9 +4,8 @@
 //       5s 列表轮询）、取消/删除/下载（blob 带鉴权）、已完成工单反馈。
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  Button, Input, Table, Dialog, MessagePlugin, Progress, Space, Textarea, Switch, // ★ E14：Select/Tooltip 死导入移除
-} from 'tdesign-react'
+import { Button, DataTable, Link, Switch } from '@/ui/langcross/src'
+import { toastSuccess, toastError } from '@/lib/toastBus'
 import {
   myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail,
   ticketDownload, ticketDelete, ticketCancel, createFeedback,
@@ -19,6 +18,7 @@ import LangMultiSelect, { LangChips } from './LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
 import { t, tpl, useLang } from '@/i18n'
 import { langLabel } from '@/lib/langNames'
+import { Icon } from '@/ui/langcross/src'
 
 // ============ 本文件职责中文说明 ============
 // 翻译工单页面：建单、列表、进度、取消/删除/下载与反馈。
@@ -31,6 +31,8 @@ const STEP_KEYS: Record<string, string> = {
   culture_gate: 'tk.stepCulture', qa: 'tk.stepQa', file_extract: 'tk.stepExtract',
   file_translate: 'tk.stepTranslate', approval: 'tk.stepApproval', feedback: 'tk.stepFeedback',
   file_qa: 'tk.stepQa', file_writeback: 'tk.stepWriteback', writeback: 'tk.stepWriteback',
+  // ★ P0-5（2026-09-18）：工单模式旁路的审计留痕步骤，进度气泡需显示中文标签而非裸 key
+  mode_override: 'tk.stepModeOverride',
 }
 // ★ F2：步骤名经 STEP_KEYS→词典取词（渲染期调用 t，随语言切换生效）
 const stepName = (step: string): string => { const k = STEP_KEYS[step]; return k ? t(k) : step }
@@ -87,7 +89,7 @@ function QualityBadges({ row }: { row: Ticket }) {
       )}
       {flagged && (
         <span style={badgeStyle('#fff1e6', '#b45309')} title={t('tk.qaFlaggedTip')}>
-          ⚑ {t('tk.qaFlagged')}
+          <Icon n="alert" /> {t('tk.qaFlagged')}
         </span>
       )}
     </span>
@@ -107,7 +109,7 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: 'zh' | 'e
   const flaggedLangs = q?.quality_flagged_langs || []
   const scoreKeys = scoreKeysAll
 
-  // 语言 → 「初翻 87.5 · 校对 90.2」；不达标语言加 ⚑ 前缀
+  // 语言 → 「初翻 87.5 · 校对 90.2」；不达标语言加前缀
   const fmtScore = (lc: string): string => {
     const parts: string[] = []
     if (typeof evalScores[lc] === 'number') parts.push(`${t('tk.evalInitial')} ${evalScores[lc].toFixed(1)}`)
@@ -116,27 +118,27 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: 'zh' | 'e
   }
 
   return (
-    <div style={{ marginTop: 12, borderTop: '1px solid #eceff5', paddingTop: 10 }}>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>🔎 {t('tk.qaTitle')}</div>
+    <div style={{ marginTop: 12, borderTop: '1px solid #2A2F3A', paddingTop: 10 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('tk.qaTitle')}</div>
 
       {rep && (
         <>
           <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={badgeStyle(rep.pass ? '#e6f4ea' : '#fdecea', rep.pass ? '#2e7d32' : '#c5221f')}>
-              {rep.pass ? `✔ ${t('tk.qaPass')}` : `✖ ${t('tk.qaFail')}`}
+            <span style={badgeStyle(rep.pass ? 'rgba(231,233,234,0.10)' : '#fdecea', rep.pass ? '#E7E9EA' : '#c5221f')}>
+              {rep.pass ? `${t('tk.qaPass')}` : `${t('tk.qaFail')}`}
             </span>
             <span style={{ color: '#555' }}>{tpl('tk.qaSummary', { errors: rep.errors, warnings: rep.warnings })}</span>
           </div>
           {rep.errors > 0 && (
-            <div style={{ fontSize: 11.5, color: '#c5221f', marginTop: 6, lineHeight: 1.5 }}>⚠️ {t('tk.qaErrorNote')}</div>
+            <div style={{ fontSize: 11.5, color: 'var(--lc-danger)', marginTop: 6, lineHeight: 1.5 }}><Icon n="alert" /> {t('tk.qaErrorNote')}</div>
           )}
           {rep.issues && rep.issues.length > 0 ? (
-            <div style={{ marginTop: 8, maxHeight: 180, overflowY: 'auto', border: '1px solid #eceff5', borderRadius: 6 }}>
+            <div style={{ marginTop: 8, maxHeight: 180, overflowY: 'auto', border: '1.2px solid #2A2F3A', borderRadius: 6 }}>
               {rep.issues.map((it: QAReportIssue, i: number) => (
                 <div key={`${it.lang}-${it.rule}-${i}`}
-                     style={{ display: 'flex', gap: 6, alignItems: 'flex-start', padding: '5px 8px', fontSize: 11.5, borderTop: i ? '1px solid #f2f4f8' : 'none' }}>
-                  <span style={badgeStyle('#eef2f9', '#41506b')}>{langLabel(it.lang, lang)}</span>
-                  <span style={badgeStyle('#f4f5f7', '#5b6472')}>{qaRuleLabel(it.rule)}</span>
+                     style={{ display: 'flex', gap: 6, alignItems: 'flex-start', padding: '5px 8px', fontSize: 11.5, borderTop: i ? '1px solid #2A2F3A' : 'none' }}>
+                  <span style={badgeStyle('rgba(231,233,234,0.16)', '#9AA0AA')}>{langLabel(it.lang, lang)}</span>
+                  <span style={badgeStyle('rgba(231,233,234,0.16)', '#9AA0AA')}>{qaRuleLabel(it.rule)}</span>
                   <span style={badgeStyle(it.level === 'error' ? '#fdecea' : '#fff6e0', it.level === 'error' ? '#c5221f' : '#b26a00')}>
                     {it.level === 'error' ? t('tk.qaLevelError') : t('tk.qaLevelWarning')}
                   </span>
@@ -145,7 +147,7 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: 'zh' | 'e
               ))}
             </div>
           ) : (
-            <div style={{ fontSize: 11.5, color: '#2e7d32', marginTop: 6 }}>{t('tk.qaNoIssues')}</div>
+            <div style={{ fontSize: 11.5, color: '#E7E9EA', marginTop: 6 }}>{t('tk.qaNoIssues')}</div>
           )}
         </>
       )}
@@ -156,8 +158,8 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: 'zh' | 'e
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             {scoreKeys.map((lc) => (
               <div key={lc} style={{ fontSize: 11.5, display: 'flex', gap: 6, alignItems: 'center' }}>
-                <span style={badgeStyle('#eef2f9', '#41506b')}>
-                  {flaggedLangs.includes(lc) ? '⚑ ' : ''}{langLabel(lc, lang)}
+                <span style={badgeStyle('rgba(231,233,234,0.16)', '#9AA0AA')}>
+                  {langLabel(lc, lang)}
                 </span>
                 <span style={{ color: flaggedLangs.includes(lc) ? '#b45309' : '#555' }}>{fmtScore(lc)}</span>
               </div>
@@ -167,7 +169,7 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: 'zh' | 'e
       )}
 
       {(flaggedLangs.length > 0 || flagged) && (
-        <div style={{ fontSize: 11.5, color: '#b45309', marginTop: 8, lineHeight: 1.5 }}>⚑ {t('tk.qaFlaggedTip')}</div>
+        <div style={{ fontSize: 11.5, color: 'var(--lc-warn, #D29922)', marginTop: 8, lineHeight: 1.5 }}><Icon n="alert" /> {t('tk.qaFlaggedTip')}</div>
       )}
     </div>
   )
@@ -227,7 +229,6 @@ export default function TicketsPage() {
   }, [load])
 
   // 详情轮询：打开气泡期间每 3s 刷新；工单完成自动停止
-  // 启动工单详情轮询，完成态到达后自动停止
   // ★ E6：轮询回调经 ref 读取当前工单 id——旧实现闭包捕获 startDetailPoll 创建时刻的
   //   detail（打开详情时往往还是 null），轮询永远空转不刷新。
   const detailIdRef = useRef<number | null>(null)
@@ -310,7 +311,7 @@ export default function TicketsPage() {
     const next = [...files]
     for (const f of list) {
       const reason = validateTranslateFile(f, delivery === 'text')
-      if (reason) { void MessagePlugin.error(reason); continue }
+      if (reason) { toastError(reason); continue }
       if (!exist.has(f.name + f.size)) { next.push(f); exist.add(f.name + f.size) }
     }
     setFiles(next)
@@ -339,20 +340,20 @@ export default function TicketsPage() {
         if (!files.length) return
         r = await ticketCreateFile([...files], { title: title.trim(), target_langs: langsJoined, mode: qualityMode, max_length: maxLength, delivery })
       }
-      if (!r.success) { void MessagePlugin.error(r.message || t('tk.createFail')); setCreating(false); return }
+      if (!r.success) { toastError(r.message || t('tk.createFail')); setCreating(false); return }
       setTitle(''); setText(''); setFiles([])
       void load()
     } catch (e: any) {
-      void MessagePlugin.error(e?.message || t('tk.createFail'))
+      toastError(e?.message || t('tk.createFail'))
     } finally { setCreating(false) }
   }
 
   // 运行草稿态工单
-  async function run(row: Ticket) {
     // ★ E10：网络/超时异常同样可见（旧实现仅业务失败提示，异常被 unhandled rejection 吞）
+  async function run(row: Ticket) {
     const r = await runGuarded(() => ticketRun(row.id), { fallback: t('tk.runFail') })
     if (!r) return
-    if (!r.success) { void MessagePlugin.error(r.message || t('tk.runFail')); return }
+    if (!r.success) { toastError(r.message || t('tk.runFail')); return }
     void load()
   }
   // 取消排队/进行中的工单（需确认；确认按钮置文案「确认取消」避免与弹窗取消同级歧义）
@@ -360,7 +361,7 @@ export default function TicketsPage() {
     if (!(await confirmDialog({ body: tpl('tk.cancelConfirm', { no: row.ticket_no || row.id }), confirmText: t('tk.confirmCancelAction') }))) return
     const r = await runGuarded(() => ticketCancel(row.id), { fallback: t('tk.opFail') })
     if (!r) return
-    if (!r.success) { void MessagePlugin.error(r.message || t('tk.opFail')); return }
+    if (!r.success) { toastError(r.message || t('tk.opFail')); return }
     void load()
   }
   // 删除已完成/已取消的工单（需确认）
@@ -368,21 +369,21 @@ export default function TicketsPage() {
     if (!(await confirmDialog({ body: tpl('tk.deleteConfirm', { no: row.ticket_no }), confirmText: t('tk.confirmDeleteAction') }))) return
     const r = await runGuarded(() => ticketDelete(row.id), { fallback: t('tk.opFail') })
     if (!r) return
-    if (!r.success) { void MessagePlugin.error(r.message || t('tk.opFail')); return }
+    if (!r.success) { toastError(r.message || t('tk.opFail')); return }
     void load()
   }
   // 下载工单结果（带防重入标记）
   async function download(row: Ticket) {
     if (downloadingId !== null) return
     setDownloadingId(row.id)
-    try { await ticketDownload(row.id) } catch (e: any) { void MessagePlugin.error(e?.message || t('tk.downloadFail')) }
+    try { await ticketDownload(row.id) } catch (e: any) { toastError(e?.message || t('tk.downloadFail')) }
     finally { setDownloadingId(null) }
   }
   // ★ 工单双模式（2026-09-13）：仅下载译文纯文案（.md，不取还原产物）
   async function downloadText(row: Ticket) {
     if (downloadingId !== null) return
     setDownloadingId(row.id)
-    try { await ticketDownload(row.id, { fmt: 'text' }) } catch (e: any) { void MessagePlugin.error(e?.message || t('tk.downloadFail')) }
+    try { await ticketDownload(row.id, { fmt: 'text' }) } catch (e: any) { toastError(e?.message || t('tk.downloadFail')) }
     finally { setDownloadingId(null) }
   }
 
@@ -416,65 +417,66 @@ export default function TicketsPage() {
 
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 24px', width: '100%', minWidth: 0 }}>
-      <h2 style={{ margin: '0 0 4px' }}>📋 {t('tk.entry')}</h2>
-      <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>{t('tk.createHint')}</p>
+      <style>{CSS_TK}</style>
+      <h2 style={{ margin: '0 0 4px' }}>{t('tk.entry')}</h2>
+      <p style={{ fontSize: 12, color: 'var(--lc-text-3)', margin: '0 0 12px' }}>{t('tk.createHint')}</p>
 
       {/* ===== 创建工单 ===== */}
-      <div style={{ border: '1px solid #e3e6ef', borderRadius: 8, padding: 16, marginBottom: 18 }}>
+      <div style={{ border: '1.2px solid #464C58', borderRadius: 8, padding: 16, marginBottom: 18 }}>
         {imageHeavyHint && (
-          <div style={{ background: '#fff8e1', border: '1px solid #f0c674', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 12 }}>
-            ⚠️ {t('tk.imageHeavyHint')}
-            <Button size="small" variant="text" theme="default" style={{ marginLeft: 8 }} onClick={() => setImageHeavyHint(false)}>✕</Button>
+          <div style={{ background: 'rgba(210,153,34,0.10)', border: '1.2px solid #f0c674', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 12 }}>
+            <Icon n="alert" /> {t('tk.imageHeavyHint')}
+            <Link onClick={() => setImageHeavyHint(false)} aria-label={t('common.close')}><Icon n="close" /></Link>
           </div>
         )}
         <h3 style={{ margin: '0 0 10px' }}>{t('tk.createTitle')}</h3>
 
-        <Space size={8} style={{ marginBottom: 10 }}>
-          <Button variant={mode === 'text' ? 'base' : 'outline'} theme="primary" onClick={() => setMode('text')}>📝 {t('tk.modeText')}</Button>
-          <Button variant={mode === 'file' ? 'base' : 'outline'} theme="primary" onClick={() => setMode('file')}>📎 {t('tk.modeFile')}</Button>
-        </Space>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+          <Button variant={mode === 'text' ? 'primary' : 'secondary'} onClick={() => setMode('text')}>{t('tk.modeText')}</Button>
+          <Button variant={mode === 'file' ? 'primary' : 'secondary'} onClick={() => setMode('file')}>{t('tk.modeFile')}</Button>
+        </div>
 
         {/* ★ 工单双模式（2026-09-13）：文件工单交付方式——还原文件 / 纯文案 */}
         {mode === 'file' && (
           <div style={{ marginBottom: 10 }}>
-            <Space size={8}>
-              <span style={{ fontSize: 13, color: '#555' }}>{t('tk.deliveryLabel')}</span>
-              <Button size="small" variant={delivery === 'restore' ? 'base' : 'outline'} theme="primary"
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{t('tk.deliveryLabel')}</span>
+              <Button size="sm" variant={delivery === 'restore' ? 'primary' : 'secondary'}
                 onClick={() => { setDelivery('restore'); localStorage.setItem('ticket_delivery', 'restore') }}>
                 {t('tk.deliveryRestore')}
               </Button>
-              <Button size="small" variant={delivery === 'text' ? 'base' : 'outline'} theme="primary"
+              <Button size="sm" variant={delivery === 'text' ? 'primary' : 'secondary'}
                 onClick={() => { setDelivery('text'); localStorage.setItem('ticket_delivery', 'text') }}>
                 {t('tk.deliveryText')}
               </Button>
-            </Space>
-            <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--lc-text-3)', marginTop: 4 }}>
               {delivery === 'text' ? t('tk.deliveryTextTip') : t('tk.deliveryRestoreTip')}
             </div>
           </div>
         )}
 
-        <Input value={title} onChange={setTitle} aria-label={t('tk.titlePlaceholder')} placeholder={t('tk.titlePlaceholder')} style={{ width: '100%', marginBottom: 8 }} />
+        <input className="lc-input" value={title} onChange={(e) => setTitle(e.target.value)} aria-label={t('tk.titlePlaceholder')} placeholder={t('tk.titlePlaceholder')} style={{ width: '100%', marginBottom: 8 }} />
 
         {mode === 'text' ? (
-          <Textarea autosize={{ minRows: 4, maxRows: 14 }} value={text} onChange={setText} aria-label={t('tk.textPlaceholder')} placeholder={t('tk.textPlaceholder')} style={{ width: '100%' }} />
+          <textarea className="lc-textarea" rows={4} value={text} onChange={(e) => setText(e.target.value)} aria-label={t('tk.textPlaceholder')} placeholder={t('tk.textPlaceholder')} style={{ width: '100%', minHeight: 110, maxHeight: 360, resize: 'vertical' }} />
         ) : (
           <>
               <div onClick={() => document.getElementById('tk-file-input')?.click()}
-                  style={{ border: '2px dashed #c9d4e3', borderRadius: 8, padding: 34, textAlign: 'center', cursor: 'pointer', color: '#667', background: '#fafbfd' }}>
+                style={{ border: '2px dashed #464C58', borderRadius: 8, padding: 34, textAlign: 'center', cursor: 'pointer', color: 'var(--lc-text-3)', background: '#0E1014' }}>
                 <input id="tk-file-input" type="file" multiple hidden accept={delivery === 'text' ? TEXT_DELIVERY_ACCEPT : TRANSLATE_FILE_ACCEPT} onChange={onFileSelect} />
-                <div>📎 {delivery === 'text' ? t('tk.fileHintText') : t('tk.fileHint')}<br /><span style={{ fontSize: 12 }}>{t('tk.multiHint')}</span></div>
-              </div>
+              <div>{delivery === 'text' ? t('tk.fileHintText') : t('tk.fileHint')}<br /><span style={{ fontSize: 12 }}>{t('tk.multiHint')}</span></div>
+            </div>
               {files.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, alignItems: 'center' }}>
                   {files.map((f, idx) => (
-                    <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#f5f7fb', border: '1px solid #d8dee6', borderRadius: 8, padding: '3px 10px', fontSize: 12, maxWidth: 320 }}>
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📄 {f.name}</span>
+                  <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#0E1014', border: '1.2px solid #464C58', borderRadius: 8, padding: '3px 10px', fontSize: 12, maxWidth: 320 }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
                       <span style={{ color: '#999', fontSize: 11.5 }}>{fmtKB(f.size)}</span>
-                      <Button size="small" variant="text" theme="danger" onClick={() => removeFileAt(idx)}>✕</Button>
-                    </div>
-                  ))}
-                <div style={{ width: '100%', fontSize: 12, color: '#888' }}>
+                    <Link tone="danger" onClick={() => removeFileAt(idx)} aria-label={`${t('common.delete')}: ${f.name}`}><Icon n="close" /></Link>
+                  </div>
+                ))}
+                <div style={{ width: '100%', fontSize: 12, color: 'var(--lc-text-3)' }}>
                   {tpl('tk.filesCount', { n: files.length })} · {(files.reduce((a, f) => a + f.size, 0) / 1024).toFixed(0)} KB
                 </div>
               </div>
@@ -502,39 +504,37 @@ export default function TicketsPage() {
             {condenseOn && (
               <input type="number" min={1} max={10000} value={condenseMax}
                 onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
-                style={{ width: '100%', boxSizing: 'border-box', height: 30, fontSize: 12, border: '1px solid #d8dee6', borderRadius: 6, padding: '0 6px' }}
+                style={{ width: '100%', boxSizing: 'border-box', height: 30, fontSize: 12, border: '1.2px solid #464C58', borderRadius: 6, padding: '0 6px' }}
                 title={t('tk.condenseMaxTitle')} />
             )}
           </div>
-          <Button theme="primary" loading={creating} onClick={create} style={{ marginLeft: 'auto' }}>
+          <Button variant="primary" disabled={creating} onClick={create} style={{ marginLeft: 'auto' }}>
             {creating ? t('tk.submitting') : t('tk.create')}
           </Button>
         </div>
       </div>
 
       {/* ===== 我的工单 ===== */}
-      <div style={{ border: '1px solid #e3e6ef', borderRadius: 8, padding: 16 }}>
+      <div style={{ border: '1.2px solid #464C58', borderRadius: 8, padding: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <h3 style={{ margin: 0 }}>{t('tk.myTickets')}</h3>
-          <Button size="small" variant="outline" onClick={load}>🔄</Button>
+          <Button size="sm" variant="secondary" onClick={load} aria-label={t('common.refresh')}><Icon n="refresh" /></Button>
         </div>
-        <Table
-          rowKey="id"
-          data={tickets}
-          size="small"
+        <DataTable<Ticket>
+          rowKey={(row) => String(row.id)}
+          rows={tickets}
           columns={[
-            { colKey: 'ticket_no', title: t('tk.colNo'), width: 170,
-              cell: ({ row }: any) => <code>{row.ticket_no || row.id}</code> },
-            { colKey: 'title', title: t('users.colName'), width: 220, ellipsis: true,
-              // ★ 双模式徽标：文件工单 📐 还原文件 / 📄 纯文案（文本工单无标记）
-              cell: ({ row }: any) => <span title={row.title}>{row.file_path ? (row.delivery === 'text' ? '📄 ' : '📐 ') : ''}{row.title}</span> },
-            { colKey: 'status', title: t('users.colStatus'), width: 110,
-              cell: ({ row }: any) => <span>{statusLabel(row.status)}</span> },
+            { key: 'ticket_no', title: t('tk.colNo'), width: 170, mono: true,
+              render: (row) => <code>{row.ticket_no || row.id}</code> },
+            { key: 'title', title: t('users.colName'), width: 220,
+              render: (row) => <span title={row.title}>{row.title}</span> },
+            { key: 'status', title: t('users.colStatus'), width: 110,
+              render: (row) => <span>{statusLabel(row.status)}</span> },
             // ★ 改造 5：质检徽标列（error/warning 计数 + 质检存疑），无质检数据不渲染
-            { colKey: 'quality', title: t('tk.qaTitle'), width: 190,
-              cell: ({ row }: any) => <QualityBadges row={row as Ticket} /> },
-            { colKey: 'target_langs', title: t('tk.colLangs'), width: 150,
-              cell: ({ row }: any) => (
+            { key: 'quality', title: t('tk.qaTitle'), width: 190,
+              render: (row) => <QualityBadges row={row} /> },
+            { key: 'target_langs', title: t('tk.colLangs'), width: 150,
+              render: (row) => (
                 <span>
                   {String(row.target_langs || '')
                     .split(',')
@@ -544,46 +544,50 @@ export default function TicketsPage() {
                     .join('、')}
                 </span>
               ) },
-            { colKey: 'created_at', title: t('tk.colCreatedAt'), width: 160, // ★ E16：本域键（旧借 users.colLastLogin）
-              cell: ({ row }: any) => fmtTime(row.created_at) },
-            { colKey: 'op', title: t('org.colActions'), width: 280,
-              cell: ({ row }: any) => (
-                <Space size={4}>
+            { key: 'created_at', title: t('tk.colCreatedAt'), width: 160, // E16：本域键（旧借 users.colLastLogin）
+              render: (row) => fmtTime(row.created_at) },
+            { key: 'op', title: t('org.colActions'), width: 280,
+              render: (row) => (
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
                   {row.status === 'draft' && (
-                    <Button size="small" variant="text" theme="primary" onClick={() => run(row)}>{t('tk.run')}</Button>
+                    <Link onClick={() => run(row)}>{t('tk.run')}</Link>
                   )}
                   {row.status === 'completed' && (
-                    <Button size="small" variant="text" theme="primary" disabled={downloadingId === row.id} onClick={() => download(row)}>
-                      {downloadingId === row.id ? '⏳' : '⬇'} {downloadingId === row.id ? t('tk.submitting') : t('tk.download')}
-                    </Button>
+                    <span style={{ opacity: downloadingId === row.id ? 0.5 : undefined }}>
+                      <Link onClick={() => download(row)}>
+                        {downloadingId === row.id ? t('tk.submitting') : t('tk.download')}
+                      </Link>
+                    </span>
                   )}
                   {row.status === 'completed' && (
-                    <Button size="small" variant="text" theme="primary" onClick={() => openFeedback(row)}>💬 {t('fb.entry')}</Button>
+                    <Link onClick={() => openFeedback(row)}><Icon n="chat" /> {t('fb.entry')}</Link>
                   )}
                   {['completed', 'cancelled'].includes(row.status) && (
-                    <Button size="small" variant="text" theme="danger" onClick={() => deleteTicket(row)}>🗑 {t('common.delete')}</Button>
+                    <Link tone="danger" onClick={() => deleteTicket(row)}><Icon n="trash" /> {t('common.delete')}</Link>
                   )}
                   {['queued', 'in_progress'].includes(row.status) && (
-                    <Button size="small" variant="text" theme="warning" onClick={() => cancelTicket(row)}>✕ {t('tk.cancel')}</Button>
+                    <Link onClick={() => cancelTicket(row)}>{t('tk.cancel')}</Link>
                   )}
-                  <Button size="small" variant="text" theme="default" onClick={() => toggleDetail(row)}>{t('tk.detail')}</Button>
-                </Space>
+                  <Link onClick={() => toggleDetail(row)}>{t('tk.detail')}</Link>
+                </div>
               ) },
           ]}
-          empty={t('tk.empty')}
+          emptyText={t('tk.empty')}
         />
       </div>
 
       {/* 进度气泡（Dialog 承载，等价 Vue Teleport 气泡内容） */}
       {/* ★ 改造 5：宽度按是否有质检数据自适应——质检明细表需要更宽的可读区（380 → 620） */}
-      <Dialog visible={!!detail} onClose={() => { setDetail(null); stopDetailPoll() }}
-              width={detail?.quality ? 620 : 380} footer={null}
-              header={detail?.ticket?.title || t('tk.progress')}>
+      {detail && (
+      <div className="tk-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) { setDetail(null); stopDetailPoll() } }}>
+      <div className="tk-dialog" style={{ width: detail.quality ? 620 : 380 }}>
+        <div className="tk-dialog__title">{detail.ticket?.title || t('tk.progress')}</div>
+        <div className="tk-dialog__body">
         {pct !== null && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '10px 0 6px' }}>
-            <Progress theme="plump" percentage={pct} style={{ flex: 1 }} />
-            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--td-brand-color, #2f47f5)', minWidth: 42 }}>{pct}%</span>
-            {stepLabel && <span style={{ fontSize: 12, color: '#666' }}>{stepLabel}</span>}
+            <div className="tk-progress" style={{ flex: 1 }}><div className="tk-progress__bar" style={{ width: `${pct}%` }} /></div>
+            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--lc-text-1)', minWidth: 42 }}>{pct}%</span>
+            {stepLabel && <span style={{ fontSize: 12, color: 'var(--lc-text-3)' }}>{stepLabel}</span>}
           </div>
         )}
         {states.length > 0 ? (
@@ -592,34 +596,37 @@ export default function TicketsPage() {
               <div key={st.id} className={`st-${st.status}`} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, padding: '3px 0' }}>
                 <span style={{ flex: 1, color: '#555' }}>{stepName(st.step)}</span>
                 <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4,
-                  background: st.status === 'success' ? '#e6f4ea' : st.status === 'running' ? '#e8f0fe' : st.status === 'error' ? '#fce8e6' : '#eee',
-                  color: st.status === 'success' ? '#2e7d32' : st.status === 'running' ? 'var(--td-brand-color, #2f47f5)' : st.status === 'error' ? '#c5221f' : '#888' }}>{st.status}</span>
-                {st.error && <span style={{ color: '#c5221f', fontSize: 11 }}>⚠️ {st.error}</span>}
+                  background: st.status === 'success' ? 'rgba(231,233,234,0.10)' : st.status === 'running' ? 'rgba(231,233,234,0.16)' : st.status === 'error' ? 'rgba(229,72,77,0.10)' : '#16181C',
+                  color: st.status === 'success' ? 'var(--lc-text-1)' : st.status === 'running' ? 'var(--lc-text-2)' : st.status === 'error' ? 'var(--lc-danger)' : 'var(--lc-text-3)' }}>{st.status}</span>
+                {st.error && <span style={{ color: 'var(--lc-danger)', fontSize: 11 }}><Icon n="alert" /> {st.error}</span>}
               </div>
             ))}
           </div>
         ) : (
-          <p style={{ fontSize: 12, color: '#888', margin: '8px 0 0' }}>{t('tk.noSteps')}</p>
+          <p style={{ fontSize: 12, color: 'var(--lc-text-3)', margin: '8px 0 0' }}>{t('tk.noSteps')}</p>
         )}
         {/* ★ 改造 5：详情抽屉「质检报告」区块（确定性 QA 汇总 + Issues 明细 + 各语言评估分） */}
         <QualityBlock q={detail?.quality} lang={lang} flagged={detail?.ticket?.quality_flagged === 1} />
         {/* ★ 工单双模式（2026-09-13）：还原模式已完成文件工单提供「仅下载译文文案(.md)」次级入口
-            （版式不满意或对还原产物降级交付时直接取文案）；纯文案模式主产物即 .md，不重复展示 */}
+            （版式不满意或对还原产物降级交付时直接取文案）；纯文案模式主产物即 .md，不重复显示 */}
         {canDownloadTextArtifact ? (
           <div style={{ marginTop: 10 }}>
-            <Button size="small" variant="outline" theme="default" onClick={() => detail && detail.ticket && downloadText(detail.ticket)}>
-              📄 {t('tk.downloadMd')}
+            <Button size="sm" variant="secondary" onClick={() => detail && detail.ticket && downloadText(detail.ticket)}>
+              <Icon n="doc" /> {t('tk.downloadMd')}
             </Button>
           </div>
         ) : null}
-      </Dialog>
+        </div>
+      </div>
+      </div>
+      )}
 
       {/* 用户反馈弹窗（已完成工单 → 平台） */}
       {feedbackTarget && (
         <TicketFeedbackModal
           target={feedbackTarget}
           onClose={() => setFeedbackTarget(null)}
-          onSubmitted={() => { void MessagePlugin.success(t('fb.done')); setFeedbackTarget(null) }}
+          onSubmitted={() => { toastSuccess(t('fb.done')); setFeedbackTarget(null) }}
         />
       )}
     </div>
@@ -649,30 +656,33 @@ function TicketFeedbackModal({ target, onClose, onSubmitted }: {
         with_context: withContext,
         mode: target.mode,
       })
-      if (!r.success) { void MessagePlugin.error(r.message); return }
+      if (!r.success) { toastError(r.message); return }
       onSubmitted()
     } catch (e: any) {
-      void MessagePlugin.error(e instanceof Error ? e.message : String(e))
+      toastError(e instanceof Error ? e.message : String(e))
     } finally { setSubmitting(false) }
   }
 
   return (
-    <Dialog header={t('fb.title')} visible onClose={onClose} width={520}
-            footer={
-              <>
-                <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-                <Button disabled={!content.trim() || submitting} loading={submitting} onClick={submit}>
-                  {submitting ? t('fb.submitting') : t('fb.submit')}
-                </Button>
-              </>
-            }>
-      <p style={{ fontSize: 12, color: '#888', margin: '0 0 10px' }}>{t('fb.hint')}</p>
-      <Textarea autosize={{ minRows: 4 }} maxlength={1000} value={content} onChange={(v) => setContent(v as string)} aria-label={t('fb.placeholder')} placeholder={t('fb.placeholder')} />
+    <div className="tk-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="tk-dialog" style={{ width: 520 }}>
+        <div className="tk-dialog__title">{t('fb.title')}</div>
+        <div className="tk-dialog__body">
+          <p style={{ fontSize: 12, color: 'var(--lc-text-3)', margin: '0 0 10px' }}>{t('fb.hint')}</p>
+          <textarea className="lc-textarea" rows={4} maxLength={1000} value={content} onChange={(e) => setContent(e.target.value)} aria-label={t('fb.placeholder')} placeholder={t('fb.placeholder')} />
       <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Switch size="small" value={withContext} onChange={(v) => setWithContext(v as boolean)} />
-        <span style={{ fontSize: 13, color: '#667' }}>{t('fb.withContext')}</span>
+            <Switch checked={withContext} onChange={(e) => setWithContext(e.target.checked)} />
+            <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{t('fb.withContext')}</span>
+          </div>
+        </div>
+        <div className="tk-dialog__actions">
+          <Button variant="secondary" onClick={onClose}>{t('common.cancel')}</Button>
+          <Button variant="primary" disabled={!content.trim() || submitting} onClick={submit}>
+                  {submitting ? t('fb.submitting') : t('fb.submit')}
+          </Button>
+        </div>
       </div>
-    </Dialog>
+    </div>
   )
 }
 
@@ -680,3 +690,14 @@ function TicketFeedbackModal({ target, onClose, onSubmitted }: {
 function fmtTime(s: string): string {
   try { return new Date(s).toLocaleString() } catch { return s }
 }
+
+// 页面级样式：tk- 前缀（防与组件库/其他页面类名重名）
+const CSS_TK = `
+.tk-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:1200}
+.tk-dialog{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:14px;box-shadow:var(--lc-panel-highlight);max-width:calc(100vw - 32px);max-height:86vh;overflow:auto}
+.tk-dialog__title{padding:18px 24px 0;font-size:16px;font-weight:600;color:var(--lc-text)}
+.tk-dialog__body{padding:14px 24px 6px}
+.tk-dialog__actions{display:flex;justify-content:flex-end;gap:10px;padding:12px 24px 20px}
+.tk-progress{height:8px;border-radius:999px;background:var(--lc-inset);overflow:hidden}
+.tk-progress__bar{height:100%;background:var(--lc-text-1);border-radius:999px;transition:width .3s}
+`

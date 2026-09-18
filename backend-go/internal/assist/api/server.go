@@ -3,7 +3,11 @@ package api
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,18 +30,47 @@ type Server struct {
 	eng  *engine.Engine
 	adm  string // admin token
 	cors string
+	// sessKey 会话能力令牌（tok）的 HMAC 密钥：由 admin token 派生（重启后老访客仍可读
+	// 自己的历史）；admin token 为空时退化为进程随机密钥。★ P0-1（2026-09-18）：
+	// C 端接口从「sid 自证」升级为「sid+tok 能力令牌」，防止无鉴权读任意会话历史。
+	sessKey []byte
 }
 
 // NewServer 构建
 func NewServer(db *store.DB, eng *engine.Engine, adminToken, cors string) *Server {
-	return &Server{db: db, eng: eng, adm: adminToken, cors: cors}
+	s := &Server{db: db, eng: eng, adm: adminToken, cors: cors}
+	if adminToken != "" {
+		sum := sha256.Sum256([]byte("assist-sess|" + adminToken))
+		s.sessKey = sum[:]
+	} else {
+		s.sessKey = make([]byte, 32)
+		if _, err := rand.Read(s.sessKey); err != nil {
+			panic("assist.api 会话密钥初始化失败: " + err.Error())
+		}
+	}
+	return s
+}
+
+// sessTok 计算会话能力令牌：HMAC-SHA256(sessKey, sid) 的 hex。
+// 参数 sid: 会话 ID。返回: 64 位 hex 令牌；仅持有者（服务端签发）可用该 sid 收发消息。
+func (s *Server) sessTok(sid string) string {
+	m := hmac.New(sha256.New, s.sessKey)
+	m.Write([]byte(sid))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+// validSess 常数时间校验 sid 对应的能力令牌。
+// 参数 sid/tok: 会话 ID 与待验令牌。返回: 是否有效。
+func (s *Server) validSess(sid, tok string) bool {
+	want := s.sessTok(sid)
+	return subtle.ConstantTimeCompare([]byte(tok), []byte(want)) == 1
 }
 
 // Handler 汇总路由
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// C 端（挂件调用，免登录，session 自证）
+	// C 端（挂件调用，免登录；会话以 sid+tok 能力令牌自证，★ P0-1）
 	mux.HandleFunc("/api/assist/greeting", s.handleGreeting)
 	mux.HandleFunc("/api/assist/chat", s.handleChat)
 	mux.HandleFunc("/api/assist/history", s.handleHistory)
@@ -113,9 +146,15 @@ func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 // C 端接口
 // ============================================================
 
-// newSessionID 生成会话 ID
+// newSessionID 生成会话 ID：时间前缀（便于排查）+ crypto/rand 8 字节 hex。
+// ★ P0-1（2026-09-18）：旧实现用「时间^pid」做种子的 LCG 伪随机，同窗口 sid 可预测，
+// 已换密码学随机源。
 func newSessionID() string {
-	return fmt.Sprintf("s%d%s", time.Now().UnixMilli(), randHex(4))
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("s%d", time.Now().UnixNano()) // 理论不可达；退化仍保证唯一
+	}
+	return fmt.Sprintf("s%d%s", time.Now().UnixMilli(), hex.EncodeToString(b))
 }
 
 // sessMu session upsert 竞态保护（低并发足够；mutex 护 EnsureSession 读-建窗口）
@@ -136,7 +175,9 @@ func (s *Server) ensureSession(ctx context.Context, id, pageURL string) (store.R
 	return sess, sess != nil
 }
 
-// handleGreeting GET /api/assist/greeting?session=&page= → 欢迎词 + 会话 id + 快捷提问 + 功能入口
+// handleGreeting GET/POST /api/assist/greeting?session=&tok=&page= → 欢迎词 + 会话 id + 能力令牌 + 快捷提问
+// ★ P0-1：入参 session 仅在 tok 校验通过时复用（老访客续会话）；否则一律新开
+// （防伪造 sid 蹭他人上下文）。响应新增 tok，前端与 sid 同存。
 func (s *Server) handleGreeting(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		writeJSON(w, 405, map[string]any{"error": "method"})
@@ -144,7 +185,7 @@ func (s *Server) handleGreeting(w http.ResponseWriter, r *http.Request) {
 	}
 	sid := strings.TrimSpace(r.URL.Query().Get("session"))
 	page := strings.TrimSpace(r.URL.Query().Get("page"))
-	if sid == "" {
+	if sid == "" || !s.validSess(sid, strings.TrimSpace(r.URL.Query().Get("tok"))) {
 		sid = newSessionID()
 	}
 	s.ensureSession(r.Context(), sid, page)
@@ -155,6 +196,7 @@ func (s *Server) handleGreeting(w http.ResponseWriter, r *http.Request) {
 	_ = s.db.AddMessage(sid, "assistant", text, nil)
 	writeJSON(w, 200, map[string]any{
 		"session":  sid,
+		"tok":      s.sessTok(sid),
 		"greeting": text,
 		"chips":    chipsOf(s.db.GetConfig("quick_chips", "")),
 	})
@@ -173,7 +215,8 @@ func chipsOf(s string) []string {
 	return out
 }
 
-// handleChat POST /api/assist/chat {session, message, page}
+// handleChat POST /api/assist/chat {session, tok, message, page}
+// ★ P0-1：tok 校验失败按 401 拒绝（前端走「重新 greet」自愈路径），不再允许任意写他人会话。
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, 405, map[string]any{"error": "method"})
@@ -181,6 +224,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Session string `json:"session"`
+		Tok     string `json:"tok"`
 		Message string `json:"message"`
 		Page    string `json:"page"`
 	}
@@ -191,6 +235,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	req.Message = strings.TrimSpace(req.Message)
 	if req.Session == "" || req.Message == "" {
 		writeJSON(w, 400, map[string]any{"error": "session and message required"})
+		return
+	}
+	if !s.validSess(req.Session, strings.TrimSpace(req.Tok)) {
+		writeJSON(w, 401, map[string]any{"error": "invalid session"})
 		return
 	}
 	if len(req.Message) > 2000 {
@@ -226,11 +274,17 @@ func actionMaps(as []engine.Action) []map[string]string {
 	return out
 }
 
-// handleHistory GET /api/assist/history?session=&limit=20
+// handleHistory GET /api/assist/history?session=&tok=&limit=20
+// ★ P0-1（2026-09-18）：旧实现无任何归属校验，拿到/猜到 sid 即可读全部对话；
+// 现要求 greet 下发的能力令牌 tok（HMAC(sid)）匹配才返回。
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	sid := strings.TrimSpace(r.URL.Query().Get("session"))
 	if sid == "" {
 		writeJSON(w, 400, map[string]any{"error": "session required"})
+		return
+	}
+	if !s.validSess(sid, strings.TrimSpace(r.URL.Query().Get("tok"))) {
+		writeJSON(w, 401, map[string]any{"error": "invalid session"})
 		return
 	}
 	limit := 20
@@ -523,14 +577,5 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// randHex 随机 hex（无外部依赖，uint64 环形序列避免溢出为负）
-func randHex(n int) string {
-	const hexd = "0123456789abcdef"
-	b := make([]byte, n*2)
-	var x uint64 = uint64(time.Now().UnixNano()) ^ uint64(os.Getpid())<<20
-	for i := range b {
-		x = x*6364136223846793005 + 1442695040888963407
-		b[i] = hexd[(x>>33)%16]
-	}
-	return string(b)
-}
+// randHex 随机 hex（LCG 伪随机）已于 2026-09-18 P0-1 整改中删除：
+// 它曾被 newSessionID 用于会话 ID，但种子含时间/pid、可被预测，安全场景一律用 crypto/rand。

@@ -1,15 +1,20 @@
 // ============================================================================
-// components/admin/AdminDashboard.tsx — 后台控制台整体布局与导航（TDesign Menu 版）
+// components/admin/AdminDashboard.tsx — 后台控制台整体布局与导航
+// （2026-09-18 起为 AdminShell 版；此前为 TDesign Menu 版）
 // 职责：提供左侧菜单、顶部工具栏，并按权限渲染对应子面板。
 // 映射 Vue 版：frontend/src/components/admin/AdminDashboard.vue（或同目录下菜单壳组件）。
 // 权限矩阵与 Vue 版一致：L4 全量；L3 无 Tenants/Models/Workflow/Audit/Alerts；
 // L2 仅 Overview/Usage/Kb/Tickets。超管含租户切换器。
 // ★ 移动端自适应（2026-09-07）：≤900px 侧边栏转抽屉（汉堡按钮唤起 + 遮罩点关），
 //   桌面端仍为固定侧栏，行为互不影响。
+//   注：该抽屉逻辑已于 2026-09-18 上移到 ui/langcross AdminShell 内部
+//   （自带 burger + scrim + drawer 状态），本文件不再持有 navOpen 本地状态。
+// 2026-09-18 UI 融合：壳层（侧栏/顶栏/内容区）、按钮、状态胶囊、图标全部改用
+//   ui/langcross 组件；菜单图标由 emoji 文案改为 16×16 自绘 SVG（见 Item.icon）。
 // ============================================================================
-import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Menu, Select, Tag } from 'tdesign-react'
+import { Button, StatusPill, AdminShell } from '@/ui/langcross/src'
+import type { NavItem } from '@/ui/langcross/src'
 import { useAdmin } from '@/stores/admin'
 import type { PanelKey } from '@/stores/admin'
 import { t, toggleLang, useLang } from '@/i18n'
@@ -17,6 +22,8 @@ import Bell from '@/components/Bell'
 import AccountMenu from '@/components/AccountMenu'
 import SiteFooter from '@/components/SiteFooter'
 import { useBranding } from '@/branding'
+import { Icon } from '@/ui/langcross/src'
+import type { IconName } from '@/ui/langcross/src'
 
 import Overview from './panels_a'
 import MailTplP from './MailTplP'
@@ -36,7 +43,8 @@ import BillingHubP from './BillingHubP'
 import AssistP from './AssistP' // ★ autosales：AI 助手管理
 
 // 菜单项接口定义：key 对应 admin store 中的面板标识，minLevel 为可见最低角色等级
-interface Item { key: PanelKey; label: string; minLevel: number }
+// icon 为 16×16 SVG 图标名（UI-ANNOTATIONS §3.1-13 侧栏九项；§0.1：emoji 只是图标占位）
+interface Item { key: PanelKey; label: string; minLevel: number; icon: IconName }
 
 // 菜单项配置：定义所有可展示的面板及其最低角色等级要求
 // ★ 2026-09-03 重组：协议签署并入「系统设置」；开放 API+回调通知并入「外部调用」；
@@ -50,15 +58,15 @@ const ITEMS: Item[] = [
   //   tenants/plans/reconcile/alerts/audit/mailTpl/footer/brand/models/ops/workflow 等
   //   并入对应 Hub 子 tab（总览/知识库/组织/计费/外部调用/系统与运维/系统设置）；
   //   renderPanel 保留旧 key 分支以兼容历史深链/书签（渲染独立面板）。
-  { key: 'overview', label: 'admin.menuOverview', minLevel: 2 },
-  { key: 'tickets', label: 'admin.menuTickets', minLevel: 2 },
-  { key: 'personal', label: 'admin.menuPersonal', minLevel: 2 },
-  { key: 'kb', label: 'admin.menuKb', minLevel: 2 },
-  { key: 'org', label: 'admin.menuOrg', minLevel: 3 },
-  { key: 'external', label: 'admin.menuExternal', minLevel: 3 },
-  { key: 'billing', label: 'hub.menuBilling', minLevel: 3 },
-  { key: 'system', label: 'admin.menuSystem', minLevel: 4 },
-  { key: 'assist', label: 'admin.menuAssist', minLevel: 3 }, // ★ autosales：AI 助手管理（超管/租户管理员）
+  { key: 'overview', label: 'admin.menuOverview', minLevel: 2, icon: 'chart' },
+  { key: 'tickets', label: 'admin.menuTickets', minLevel: 2, icon: 'chat' },
+  { key: 'personal', label: 'admin.menuPersonal', minLevel: 2, icon: 'user' },
+  { key: 'kb', label: 'admin.menuKb', minLevel: 2, icon: 'book' },
+  { key: 'org', label: 'admin.menuOrg', minLevel: 3, icon: 'building' },
+  { key: 'external', label: 'admin.menuExternal', minLevel: 3, icon: 'satellite' },
+  { key: 'billing', label: 'hub.menuBilling', minLevel: 3, icon: 'gem' },
+  { key: 'system', label: 'admin.menuSystem', minLevel: 4, icon: 'gear' },
+  { key: 'assist', label: 'admin.menuAssist', minLevel: 3, icon: 'robot' }, // ★ autosales：AI 助手管理（超管/租户管理员）
 ]
 
 /** 根据当前选中的面板 key 返回对应组件（集中分发，避免在 JSX 中写长 switch） */
@@ -115,75 +123,70 @@ export default function AdminDashboard() {
     return true
   })
 
-  // ★ 移动端抽屉导航状态（≤900px 时侧边栏转抽屉，点菜单/遮罩关闭）
-  const [navOpen, setNavOpen] = useState(false)
-  // 选择菜单项：切面板并关闭移动端抽屉
-  const onMenuChange = (v: PanelKey) => { ad.gotoPanel(v); setNavOpen(false) }
+  // ★ 菜单项映射为 AdminShell nav（TDesign Menu → AdminShell nav）
+  //   label 在此处预先用 t() 求值：AdminShell 只渲染纯文本，无法自己解 i18n key；
+  //   本组件订阅了 useLang()，语言切换会重渲染从而刷新这里的文案。
+  //   icon 传 <Icon /> 节点而非名字：NavItem.icon 是 ReactNode 图标位。
+  const nav: NavItem[] = visible.map((i) => ({
+    key: i.key,
+    label: t(i.label),
+    icon: <Icon n={i.icon} />,
+  }))
+
+  // 顶栏右侧集群：语言切换、铃铛、租户切换器（超管）、角色/租户标签、账号菜单
+  // marginLeft:auto —— AdminShell 顶栏左侧固定放汉堡按钮，右侧内容整体靠右对齐
+  const topbar = (
+    <div className="lc-topbar-cluster" style={{ display: 'flex', alignItems: 'center', gap: 12, marginLeft: 'auto' }}>
+      <Button size="sm" variant="secondary" onClick={toggleLang}>{lang === 'zh' ? 'EN' : '中文'}</Button>
+          <Bell />
+          {ad.isSuper && (
+        <>
+          {/* 角色标签：Tag → StatusPill（tone=idle，与新版中性胶囊样式一致） */}
+          <StatusPill tone="idle">{t('admin.tagPlatformAdmin')}</StatusPill>
+          {/* 超管租户切换器：TDesign Select → 原生 select + lc-select 样式。
+              值走字符串，故 onChange 必须 Number() 还原成租户 ID 再存 store。 */}
+          <select
+            className="lc-select"
+                style={{ width: 240 }}
+                value={ad.activeTenantId}
+            onChange={(e) => ad.switchTenant(Number(e.target.value))}
+          >
+            <option value={0}>{t('admin.tenantRoot')}</option>
+            {ad.tenants.map((x) => (
+              <option key={x.id} value={x.id}>{`#${x.id} ${x.name}`}</option>
+            ))}
+          </select>
+        </>
+      )}
+          {/* 部门管理员：组织级标签 */}
+      {ad.myLevel === 2 && <StatusPill tone="idle">{t('admin.tagDept')}</StatusPill>}
+          {/* ★ F1：非超管顶栏显示其管理范围租户名 */}
+      {!ad.isSuper && !!ad.tenantName && <StatusPill tone="idle">{ad.tenantName}</StatusPill>}
+      {/* ★ E8：走 router navigate（pushState+合成 popstate 与 react-router 脱节） */}
+      <AccountMenu showWorkbench onGotoWorkbench={() => navigate('/')} />
+    </div>
+  )
 
   return (
-    <div className="admin-shell">
-      {/* 移动端汉堡按钮（桌面端由 CSS 隐藏） */}
-      <button type="button" className="admin-nav-toggle" aria-label="nav" onClick={() => setNavOpen(true)}>☰</button>
-      {/* 移动端抽屉遮罩 */}
-      {navOpen && <div className="admin-side-mask" onClick={() => setNavOpen(false)} />}
-
-      {/* 侧边栏：品牌 Logo、菜单列表、语言切换按钮（移动端为抽屉） */}
-      <aside className={'admin-side' + (navOpen ? ' open' : '')}>
-        <div style={{ fontWeight: 800, color: 'var(--td-brand-color-active, #1f33d6)', padding: '6px 10px 14px' }}>
-          {branding.brandLogo
-            ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 60 }} />
-            : `🌐 ${branding.brandName || t('admin.title')}`}
-        </div>
-        {/* 侧边菜单：点击切换面板 */}
-        <Menu value={ad.panel} onChange={(v) => onMenuChange(v as PanelKey)} style={{ border: 'none' }}>
-          {visible.map((i) => (
-            <Menu.MenuItem key={i.key} value={i.key}>{t(i.label)}</Menu.MenuItem>
-          ))}
-        </Menu>
-        {/* 语言切换按钮置于侧边栏底部，常驻可见 */}
-        <div style={{ marginTop: 'auto', padding: '10px 10px 0' }}>
-          <Button size="small" variant="outline" block onClick={toggleLang}>{lang === 'zh' ? 'EN' : '中文'}</Button>
-        </div>
-      </aside>
-
-      {/* 主内容区：顶部工具栏 + 当前面板 */}
-      <main className="admin-main">
-        {/* 顶部工具栏：通知铃铛、租户切换器（超管）、管理范围标签、账号菜单 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-          {/* 右侧占位，把管理范围标签与租户切换器推到 admin 下拉菜单左侧 */}
-          <div style={{ flex: 1 }} />
-          <Bell />
-          {/* 超管专属：平台标识与租户切换器（置于 admin 下拉左侧） */}
-          {ad.isSuper && (
-            <>
-              <Tag theme="primary" variant="light">{t('admin.tagPlatformAdmin')}</Tag>
-              <Select
-                value={ad.activeTenantId}
-                onChange={(v) => ad.switchTenant(Number(v))}
-                style={{ width: 240 }}
-                clearable={false}
-                options={[
-                  { label: t('admin.tenantRoot'), value: 0 },
-                  ...ad.tenants.map((x) => ({ label: `#${x.id} ${x.name}`, value: x.id })),
-                ]}
-                placeholder={t('admin.tenantSwitchPlaceholder')}
-              />
-            </>
-          )}
-          {/* 部门管理员：组织级标签 */}
-          {ad.myLevel === 2 && <Tag variant="light">{t('admin.tagDept')}</Tag>}
-          {/* ★ F1：非超管顶栏显示其管理范围租户名 */}
-          {!ad.isSuper && !!ad.tenantName && <Tag theme="primary" variant="light">{ad.tenantName}</Tag>}
-          <AccountMenu showWorkbench onGotoWorkbench={() => {
-            // ★ E8：走 router navigate（pushState+合成 popstate 与 react-router 脱节）
-            navigate('/')
-          }} />
-        </div>
-
-        {/* 根据当前选中的面板 key 渲染对应子面板 */}
+    <>
+      {/* AdminShell 自带侧栏语言按钮为静态占位，此处用顶栏的语言切换替代，故隐藏之 */}
+      <style>{'.adm-shell .lc-side-lang{display:none}'}</style>
+      <AdminShell
+        className="adm-shell"
+        nav={nav}
+        activeKey={ad.panel}
+        onNavigate={(k) => ad.gotoPanel(k as PanelKey)}
+        // 有自定义 Logo 时不再重复渲染品牌名文字（Logo 图内已含品牌字），置空由 appIcon 表达
+        appName={branding.brandLogo ? '' : (branding.brandName || t('admin.title'))}
+        // Logo 按侧栏 24px 高度等比缩放，objectFit 交给浏览器按原始比例拉伸
+        appIcon={branding.brandLogo ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 24 }} /> : undefined}
+        topbar={topbar}
+      >
+        {/* 按当前面板 key 渲染子面板：这里不再做等级校验（菜单可见性已由 visible 过滤），
+            并保留旧 key 分支以兼容历史深链/书签 */}
         {renderPanel(ad.panel)}
         <SiteFooter />
-      </main>
-    </div>
+      </AdminShell>
+    </>
   )
 }

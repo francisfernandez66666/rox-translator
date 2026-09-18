@@ -20,6 +20,9 @@ export const zh: Record<string, string> = {
   'ss2.tabRewards': '邀请奖励',
   'ss2.tabInvoices': '发票',
   'ss2.allStatus': '全部状态',
+  // ★ a11y（批次5 2026-09-18）：axe select-name 违规修复——两个筛选 select 无可访问名称
+  'ss2.statusFilterAria': '按订单状态筛选',
+  'ss2.bizFilterAria': '按业务类型筛选',
   'ss2.stPaid': '已支付',
   'ss2.stPending': '待支付',
   'ss2.stRefunded': '已退款',
@@ -76,6 +79,8 @@ export const en: Record<string, string> = {
   'ss2.tabRewards': 'Referral rewards',
   'ss2.tabInvoices': 'Invoices',
   'ss2.allStatus': 'All statuses',
+  'ss2.statusFilterAria': 'Filter orders by status',
+  'ss2.bizFilterAria': 'Filter ledger by business type',
   'ss2.stPaid': 'Paid',
   'ss2.stPending': 'Pending',
   'ss2.stRefunded': 'Refunded',

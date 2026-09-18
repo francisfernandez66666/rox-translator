@@ -232,6 +232,13 @@ func (s *Server) extractSegments(t *store.Ticket, lang string) ([]baseSeg, bool)
 // extractOfficeSegments 抽取 docx/pdf 工单的源文/译文段落对照。
 // 源文取原始上传文件段落；译文取翻译结果文件（docx/pdf）段落，按段落索引对齐。
 // 未生成结果文件时返回 supported=false（前端提示「翻译完成后可在线编辑」）。
+//
+// ★ 2026-09-18 PDF 分支改走真值表：PDF 工单的源文与译本是**两次独立**的 pdf2docx 转换产物，
+// 段落切分粒度必然不同（实测同一工单源 504 段 / 译本 578 段），按下标 min() 硬对齐会让双栏
+// 编辑器显示成「大量块不匹配」（抽查 20 对 100% 错位）。翻译时手上本就有
+// texts[i] ↔ translations[texts[i]] 的精确配对，已落进 ticket_segments（独立表，前端无感知），
+// 这里优先读它。读不到（历史工单 / 落库失败 / 非文件工单）时静默回退原有口径。
+// docx 分支保持原样：写回在同一份文件上进行，两侧段落结构一致，按下标对齐本来就是对的。
 func (s *Server) extractOfficeSegments(t *store.Ticket, lang string) ([]baseSeg, bool) {
 	var srcParas []string
 	var err error
@@ -239,6 +246,10 @@ func (s *Server) extractOfficeSegments(t *store.Ticket, lang string) ([]baseSeg,
 	case doc.IsOfficeDoc(t.FilePath):
 		srcParas, err = doc.DocxParagraphs(t.FilePath)
 	case doc.IsPDF(t.FilePath):
+		// 真值优先：命中即返回，段落数与段序号都来自翻译当时的提取顺序
+		if segs, ok := s.segmentsFromStore(t, lang); ok {
+			return segs, true
+		}
 		srcParas, err = doc.PDFToParagraphs(t.FilePath)
 	default:
 		return nil, false
@@ -270,6 +281,30 @@ func (s *Server) extractOfficeSegments(t *store.Ticket, lang string) ([]baseSeg,
 	// 按段落下标一一对齐源文与目标文，构成可编辑片段
 	for i := 0; i < n; i++ {
 		segs = append(segs, baseSeg{Index: i, Source: srcParas[i], Target: tgtParas[i]})
+	}
+	return segs, true
+}
+
+// segmentsFromStore 从 ticket_segments 真值表取「源文段→译文段」逐段对照。
+// 参数：t=工单（用 ID + FilePath 定位）；lang=目标语言。
+// 返回：(段列表, 是否命中)。表里没有该工单该文件该语言的记录时返回 (nil, false)，
+// 调用方据此回退旧口径——「没有数据」不是错误，不要把历史工单变成不可用。
+// Index 直接用落库时的 seg_index（写入时按提取顺序 0..n-1 连续，故对外仍是连续下标）。
+//
+// ⚠️ 段序号口径切换的连带影响（已知取舍）：translation_edits 也按 seg_index 挂段，
+// 历史 PDF 工单若在旧口径（源/译两份独立转换结果按下标 min() 硬对齐）下存过编辑记录，
+// 切到真值口径后段号会整体重排（两侧段数本就不同），旧批注可能落到别的段上。
+// 两种口径无法同时对齐，选择以「当前真值口径」为准；旧数据段数更少/错位本就不可信。
+func (s *Server) segmentsFromStore(t *store.Ticket, lang string) ([]baseSeg, bool) {
+	rows, err := s.Store.GetTicketSegments(t.ID, t.FilePath, lang)
+	if err != nil || len(rows) == 0 {
+		// 查询失败也一律当「未命中」走回退：真值表是附加数据，不能因为它抖动就让
+		// 对照编辑器整页 500（回退用的旧口径本就可用）。
+		return nil, false
+	}
+	segs := make([]baseSeg, 0, len(rows))
+	for _, r := range rows {
+		segs = append(segs, baseSeg{Index: r.SegIndex, Source: r.Source, Target: r.Target})
 	}
 	return segs, true
 }

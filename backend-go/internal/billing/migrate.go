@@ -13,6 +13,7 @@ import (
 	"log"
 	"time"
 
+	"translator/internal/db"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -41,7 +42,8 @@ func RunTokenMigration(st *store.Store) {
 	}
 	// 换算率取全局句→token 比率；全表扫 tenants 读 permissions JSON
 	rate := st.TokenSentenceRate()
-	rows, err := st.DB().Query("SELECT id, COALESCE(permissions,'') FROM tenants")
+	// ★ P1-5（2026-09-18）：改走 db.Query 方言包装（全仓裸 *sql.DB 清零口径）
+	rows, err := db.Query(st.DB(), db.CurrentDialect(), "SELECT id, COALESCE(permissions,'') FROM tenants")
 	if err != nil {
 		log.Printf("[billing-token-migrate] 读取租户失败: %v", err)
 		return

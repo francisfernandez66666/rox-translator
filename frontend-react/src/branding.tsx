@@ -4,6 +4,8 @@
 // 首页背景图层、网页标题、聊天气泡配色等），通过 React Context 向全站下发。
 // 品牌只由「访问域名」决定：根域名=平台品牌，租户专属子域=该租户品牌；
 // 支持服务端在 index.html 注入 window.__BRANDING__ 以首屏即生效、避免闪烁。
+// 2026-09-17 纯黑换肤：本文件只涉及「配色常量」（首页背景兜底色、气泡/面板 CSS 变量），
+// 品牌解析与下发链路不变。
 // ============================================================================
 
 /**
@@ -116,7 +118,9 @@ export function BrandBgLayer({ src, styleJson }: { src: string; styleJson?: stri
   const s = parseBgStyle(styleJson)
   if (!src) return null
   return (
-    <div style={{ position: 'absolute', inset: '-5%', zIndex: 0, backgroundColor: '#0d1b3e', overflow: 'hidden' }}>
+    // 兜底底色用近黑 #050607（旧版 #0d1b3e 是深蓝）：纯黑主题下图片四周若留白，
+    // 露出的必须是同色系黑底，而不是闪出一圈蓝。
+    <div style={{ position:'absolute', inset:'-5%', zIndex: 0, backgroundColor:'#050607', overflow:'hidden'}}>
       <img src={src} alt="" style={{
         position: 'absolute', left: `${s.x}%`, top: `${s.y}%`,
         transform: `translate(-50%, -50%) scale(${s.scale})`,
@@ -199,20 +203,27 @@ export function BrandingProvider({ tenantId, children }: { tenantId?: number; ch
   // 注入工作台/聊天气泡配色（ChatWindow、MessageBubble 等引用的 CSS 变量）。
   // 品牌数据暂无独立主色字段，统一以平台主色派生，避免与 TDesign 令牌冲突；
   // 组件卸载时清除，避免多租户间变量泄漏。
+  //
+  // 2026-09-17 纯黑换肤：以下取值整体转暗——用户气泡=半透明白（rgba 231,233,234,.06）、
+  // AI 气泡=面板黑 #0E1014、描边 #3A404C；主动发出的消息（msg-out）改为白底黑字，
+  // 与交付包「正向=白」一致（原 #2f47f5 蓝底白字废止）。
+  // 注意：这批 --bubble-*/--bg/--panel/--text/--border/--muted/--msg-out-* 是历史
+  // Vue 版配色的挂点，当前 React 代码已无 var() 消费方（气泡样式改由 theme.css 与
+  // .lc-* 类决定），此处仅作为品牌可覆色的注入钩子保留。
   useEffect(() => {
     const root = document.documentElement
     const palette: Record<string, string> = {
-      '--bubble-user-bg': '#e3f2fd',
-      '--bubble-user-border': '#2f47f5',
-      '--bubble-ai-bg': '#f4f6fa',
-      '--bubble-ai-border': '#e3e6ef',
-      '--bg': '#fafbfd',
-      '--panel': '#ffffff',
+      '--bubble-user-bg': 'rgba(231,233,234,0.06)',
+      '--bubble-user-border': '#E7E9EA',
+      '--bubble-ai-bg': '#0E1014',
+      '--bubble-ai-border': '#3A404C',
+      '--bg': '#0E1014',
+      '--panel': '#0E1014',
       '--text': '#141b2d',
-      '--border': '#e7eaf0',
+      '--border': '#3A404C',
       '--muted': '#525c70',
-      '--msg-out-bg': '#2f47f5',
-      '--msg-out-color': '#ffffff',
+      '--msg-out-bg': '#E7E9EA',
+      '--msg-out-color': '#000000',
     }
     Object.entries(palette).forEach(([k, v]) => root.style.setProperty(k, v))
     return () => { Object.keys(palette).forEach((k) => root.style.removeProperty(k)) }

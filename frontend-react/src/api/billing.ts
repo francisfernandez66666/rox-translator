@@ -210,6 +210,8 @@ export async function adminQRUpload(file: File): Promise<AdminResp & { qr_url?: 
 /** 管理员：保存计费设置（积分汇率/敏感词闸/一次性邮箱域，S1/S3/S8） */
 export async function adminPackageSettingsSave(data: {
   billing_enforced?: string
+  // 口径区分（★ S1 积分制）：体验额度用 free_trial_points（积分），公开面不再传 token 裸值；
+  // 而 estimate_tokens_per_sentence / billing_markup_multiplier 是后端换算系数，仍保持 token 口径。
   free_trial_points?: number // ★ S1 积分制：公开出参只露积分（token 裸值不再对外）
   free_trial_days?: number
   billing_markup_multiplier?: number

@@ -2,6 +2,7 @@
 // components/admin/ExternalCallsP.tsx — 外部调用面板（功能②）
 // 职责：把「开放 API（ApiKeysP）」「回调通知（WebhooksP）」「官方 SDK（SdkP）」面板合并为
 //       单一「外部调用」菜单，内部以 Tabs 分页承载，减少后台侧边栏菜单层级。
+// 2026-09-18（UI 融合）：tab 壳换成 ui/langcross Tabs（items 声明式），面板改为外部条件挂载。
 // ============================================================================
 
 /**
@@ -13,27 +14,28 @@
  */
 
 import { useState } from 'react'
-import { Tabs } from 'tdesign-react'
+import { Tabs } from '@/ui/langcross/src'
 import { useT } from '@/i18n'
 import { ApiKeysP, WebhooksP } from './panels_c'
 import SdkP from './SdkP'
 
-/** 外部调用面板组件：开放 API / 回调通知 两子 tab */
+/** 外部调用面板组件：开放 API / 回调通知 / 官方 SDK 三子 tab */
 export default function ExternalCallsP() {
   const [, t] = useT()
   const [tab, setTab] = useState<'apikeys' | 'webhooks' | 'sdk'>('apikeys')
 
   return (
-    <Tabs value={tab} onChange={(v) => setTab(v as 'apikeys' | 'webhooks' | 'sdk')}>
-      <Tabs.TabPanel value="apikeys" label={t('apikeys.title')}>
-        <ApiKeysP />
-      </Tabs.TabPanel>
-      <Tabs.TabPanel value="webhooks" label={t('webhooks.title')}>
-        <WebhooksP />
-      </Tabs.TabPanel>
-      <Tabs.TabPanel value="sdk" label={t('sdk.title')}>
-        <SdkP />
-      </Tabs.TabPanel>
-    </Tabs>
+    <>
+      {/* langcross Tabs 只出 tab 头，不含面板容器：下面的条件渲染即“懒加载”，
+          未点开的子面板不挂载、不发请求（三个面板各自拉列表，省掉两次无用请求） */}
+      <Tabs activeKey={tab} onChange={(k) => setTab(k as 'apikeys' | 'webhooks' | 'sdk')} items={[
+        { key: 'apikeys', label: t('apikeys.title') },
+        { key: 'webhooks', label: t('webhooks.title') },
+        { key: 'sdk', label: t('sdk.title') },
+      ]} />
+      {tab === 'apikeys' && <ApiKeysP />}
+      {tab === 'webhooks' && <WebhooksP />}
+      {tab === 'sdk' && <SdkP />}
+    </>
   )
 }

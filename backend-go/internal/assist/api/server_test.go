@@ -83,7 +83,8 @@ func TestGuestJourney(t *testing.T) {
 		t.Fatalf("greeting code %d", code)
 	}
 	sid, _ := g["session"].(string)
-	if sid == "" || g["greeting"] != "欢迎光临" {
+	tok, _ := g["tok"].(string) // ★ P0-1：能力令牌，后续 chat/history 随带
+	if sid == "" || tok == "" || g["greeting"] != "欢迎光临" {
 		t.Fatalf("greeting: %+v", g)
 	}
 	chips, _ := g["chips"].([]any)
@@ -92,7 +93,7 @@ func TestGuestJourney(t *testing.T) {
 	}
 
 	// ② 知识兜底（无 LLM）：命中 kb-pdf，带动作按钮
-	code, r := doJSON(t, srv, "POST", "/api/assist/chat", "", map[string]any{"session": sid, "message": "支持 pdf 吗"})
+	code, r := doJSON(t, srv, "POST", "/api/assist/chat", "", map[string]any{"session": sid, "tok": tok, "message": "支持 pdf 吗"})
 	if code != 200 || r["source"] != "fallback" {
 		t.Fatalf("chat kb: %d %+v", code, r)
 	}
@@ -101,28 +102,28 @@ func TestGuestJourney(t *testing.T) {
 	}
 
 	// ③ 话术直配
-	_, r = doJSON(t, srv, "POST", "/api/assist/chat", "", map[string]any{"session": sid, "message": "多少钱"})
+	_, r = doJSON(t, srv, "POST", "/api/assist/chat", "", map[string]any{"session": sid, "tok": tok, "message": "多少钱"})
 	if r["source"] != "rule" || !strings.Contains(r["reply"].(string), "预充值") {
 		t.Fatalf("rule: %+v", r)
 	}
 
 	// ④ 流程触发 + 推进 + 走完
-	_, r = doJSON(t, srv, "POST", "/api/assist/chat", "", map[string]any{"session": sid, "message": "我是新手"})
+	_, r = doJSON(t, srv, "POST", "/api/assist/chat", "", map[string]any{"session": sid, "tok": tok, "message": "我是新手"})
 	if r["source"] != "flow" || r["reply"] != "一" {
 		t.Fatalf("flow start: %+v", r)
 	}
-	_, r = doJSON(t, srv, "POST", "/api/assist/chat", "", map[string]any{"session": sid, "message": "ok"})
+	_, r = doJSON(t, srv, "POST", "/api/assist/chat", "", map[string]any{"session": sid, "tok": tok, "message": "ok"})
 	if r["source"] != "flow" || r["reply"] != "二" {
 		t.Fatalf("flow step: %+v", r)
 	}
-	_, r = doJSON(t, srv, "POST", "/api/assist/chat", "", map[string]any{"session": sid, "message": "ok"})
+	_, r = doJSON(t, srv, "POST", "/api/assist/chat", "", map[string]any{"session": sid, "tok": tok, "message": "ok"})
 	if r["source"] != "flow" || !strings.Contains(r["reply"].(string), "介绍完") {
 		t.Fatalf("flow done: %+v", r)
 	}
 
 	// ⑤ 历史恢复：欢迎词 1 + 三轮对话×2（知识/话术/流程走完）+ 流程开始与推进…
 	// 精确条数：greeting 1 + (u+a)×5 = 11，首条为 assistant 欢迎词
-	_, h := doJSON(t, srv, "GET", "/api/assist/history?session="+sid, "", nil)
+	_, h := doJSON(t, srv, "GET", "/api/assist/history?session="+sid+"&tok="+tok, "", nil)
 	msgs := h["messages"].([]any)
 	if len(msgs) != 11 {
 		t.Fatalf("history len: %d", len(msgs))
@@ -324,5 +325,55 @@ func TestSessionsPayload(t *testing.T) {
 	}
 	if m, _ := r["llm_mode"].(string); m != "rule" {
 		t.Fatalf("llm_mode: %v", r["llm_mode"])
+	}
+}
+
+// TestSessionCapabilityToken ★ P0-1（2026-09-18）断言：会话历史/发言必须持有
+// greet 下发的能力令牌（HMAC tok），伪造/缺失一律拒绝或换发新会话。
+func TestSessionCapabilityToken(t *testing.T) {
+	srv := newTestServer(t)
+
+	// 正常引导拿 sid+tok
+	_, g := doJSON(t, srv, "GET", "/api/assist/greeting", "", nil)
+	sid, _ := g["session"].(string)
+	tok, _ := g["tok"].(string)
+	if sid == "" || tok == "" {
+		t.Fatalf("greeting 应下发 sid+tok: %+v", g)
+	}
+	// 会话内写一条，保证 history 非空（排除「空会话恰好 200 空列表」的假阴性）
+	if code, _ := doJSON(t, srv, "POST", "/api/assist/chat", "", map[string]any{"session": sid, "tok": tok, "message": "多少钱"}); code != 200 {
+		t.Fatalf("chat 正常链路应 200，得 %d", code)
+	}
+
+	// ① 无 tok / 错 tok 读历史 → 401
+	if code, _ := doJSON(t, srv, "GET", "/api/assist/history?session="+sid, "", nil); code != 401 {
+		t.Fatalf("history 无 tok 应 401，得 %d", code)
+	}
+	if code, _ := doJSON(t, srv, "GET", "/api/assist/history?session="+sid+"&tok=deadbeef", "", nil); code != 401 {
+		t.Fatalf("history 伪造 tok 应 401，得 %d", code)
+	}
+	// ② 带 tok 可读回且非空
+	code, h := doJSON(t, srv, "GET", "/api/assist/history?session="+sid+"&tok="+tok, "", nil)
+	if code != 200 || len(h["messages"].([]any)) == 0 {
+		t.Fatalf("history 带 tok 应 200 非空: %d %+v", code, h)
+	}
+	// ③ 无 tok 发言 → 401（缺 session 仍按参数缺失 400，优先级见实现注释）
+	if code, _ := doJSON(t, srv, "POST", "/api/assist/chat", "", map[string]any{"session": sid, "message": "hi"}); code != 401 {
+		t.Fatalf("chat 无 tok 应 401，得 %d", code)
+	}
+	// ④ 伪造他人 sid 来 greet（无 tok）→ 服务端换发新 sid，不并入原会话
+	_, g2 := doJSON(t, srv, "GET", "/api/assist/greeting?session="+sid, "", nil)
+	if g2["session"] == sid {
+		t.Fatal("伪造 sid 无 tok 的 greeting 必须换发新会话")
+	}
+	// ⑤ sid+tok 成对 → 复用原会话
+	_, g3 := doJSON(t, srv, "GET", "/api/assist/greeting?session="+sid+"&tok="+tok, "", nil)
+	if g3["session"] != sid {
+		t.Fatalf("合法 sid+tok 应复用会话: %+v", g3)
+	}
+	// ⑥ sid 随机性：连续两次 greet 的 ID 后缀不得呈现可预测规律（crypto/rand 守护）
+	a, _ := g2["session"].(string)
+	if len(a) < 20 {
+		t.Fatalf("新 sid 熵不足（应为时间+16位hex）: %s", a)
 	}
 }

@@ -2,11 +2,11 @@
 // components/admin/OrgP.tsx — 组织架构面板
 // 职责：组织树展示、组织 CRUD、用户管理、预算设置、邀请码、组织移动
 // 从 panels_b.tsx 拆分
+// 2026-09-18（UI 融合）：树节点/弹窗标题的 emoji 前缀清理（orgIcon 暂退化为空串），
+//   若干图形按钮改由 title 表意；权限收敛（L3 起可维护组织与预算、超管独占租户启停）未变。
 // ============================================================================
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  Button, Table, Dialog, Input, Select, Tag, Space, MessagePlugin, Tabs,
-} from 'tdesign-react'
+import { Button, DataTable, Dialog, Icon, Link, StatusPill, Tabs } from '@/ui/langcross/src'
 import { confirmDialog, promptText } from '@/components/uiDialogs'
 import {
   orgList, orgCreate, orgRename, orgMove, orgDelete, orgUsers,
@@ -23,6 +23,7 @@ import { fmtTime } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { InvitesP, UsersP } from './panels_a' // ★ Tab 精简（2026-09-15）：成员账户并入组织 Hub 子 tab；租户管理移至「计费与套餐」Hub
 import { t, tpl } from '@/i18n'
+import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
 
 /** Any 组织管理出参宽松别名 */
 type Any = any
@@ -98,7 +99,9 @@ export function OrgP() {
   }
 
   // 节点类型图标：dept 部门 / org 组织 / root 根
-  const orgIcon = (o: OrgInfo): string => (o.type === 'dept' ? '🏷️' : o.type === 'org' ? '🏬' : '🏢')
+  // 2026-09-18：三类 emoji 图标随 emoji 清理被置空，函数退化为恒返回空串；
+  //   保留签名与调用点（树节点前缀位）不改，后续接 ui/langcross <Icon> 时在此按 type 分发。
+ const orgIcon = (o: OrgInfo): string => (o.type ==='dept'?'': o.type ==='org'?'':'')
 
   // 预算文案：本月已用/限额（token 原值折积分展示）；未设置显示占位
   const budgetText = (o: Any): string => {
@@ -144,7 +147,7 @@ export function OrgP() {
     const r: any = await request('/api/admin/users/update', {
       method: 'POST', headers: authHeaders(), body: JSON.stringify({ id: u.id, ...data }),
     })
-    if (!r.success) { void MessagePlugin.error(r.message); return false }
+    if (!r.success) { toastError(r.message); return false }
     return true
   }
 
@@ -191,7 +194,7 @@ export function OrgP() {
 
   // 建号：用户名/密码强度预检 → adminUserCreate → 成功后清空表单并整体刷新
   async function createUser() {
-    if (!nu.username?.trim() || (nu.password?.length ?? 0) < 6) { void MessagePlugin.warning(t('org.userValidation')); return }
+    if (!nu.username?.trim() || (nu.password?.length ?? 0) < 6) { void toastWarn(t('org.userValidation')); return }
     setCreating(true)
     try {
       const r: any = await adminUserCreate({
@@ -201,44 +204,44 @@ export function OrgP() {
         role: nu.role,
         org_id: nuOrgId || undefined,
       })
-      if (!r.success) { void MessagePlugin.error(r.message); return }
-      void MessagePlugin.success(tpl('org.userCreated', { name: nu.username }))
+      if (!r.success) { toastError(r.message); return }
+      toastSuccess(tpl('org.userCreated', { name: nu.username }))
       setNu({ username: '', password: '', display_name: '', role: 'user' })
       await loadAll()
     } catch (e) { // ★ E10：创建用户网络错误可见（旧实现 try/finally 静默）
-      void MessagePlugin.error(e instanceof Error ? e.message : '创建失败')
+      toastError(e instanceof Error ? e.message : '创建失败')
     } finally { setCreating(false) }
   }
 
   // Excel/CSV 批量导入成员：结果逐行回显（成功/失败原因）
   async function doBulkImport() {
-    if (!importFile) { void MessagePlugin.warning(t('org.importNeedFile')); return }
+    if (!importFile) { void toastWarn(t('org.importNeedFile')); return }
     setImporting(true)
     try {
       const r: any = await userBulkImport(importFile)
-      if (!r.success) { void MessagePlugin.error(r.message); return }
+      if (!r.success) { toastError(r.message); return }
       setImportResult(r.results || [])
-      void MessagePlugin.success(tpl('org.importDone', { ok: r.created || 0, fail: r.failed || 0 }))
+      toastSuccess(tpl('org.importDone', { ok: r.created || 0, fail: r.failed || 0 }))
       setImportFile(null)
       await loadAll()
     } catch (e) { // ★ E10
-      void MessagePlugin.error(e instanceof Error ? e.message : '导入失败')
+      toastError(e instanceof Error ? e.message : '导入失败')
     } finally { setImporting(false) }
   }
 
   // 下载批量导入模板（列头与后端解析对齐）
   async function downloadTemplate() {
     const ok = await downloadUserImportTemplate()
-    if (!ok) void MessagePlugin.error(t('org.importTplFail'))
+    if (!ok) toastError(t('org.importTplFail'))
   }
 
   // 管理员重置成员密码（弹窗输入，≥6 位）
   async function resetPwd(u: Any) {
     const pwd = await promptText({ header: t('org.resetPwdPrompt'), body: tpl('org.resetPwdPrompt', { name: u.username }) })
-    if (!pwd || pwd.length < 6) { void MessagePlugin.warning(t('org.pwdMinLength')); return }
+    if (!pwd || pwd.length < 6) { void toastWarn(t('org.pwdMinLength')); return }
     const r: any = await adminUserResetPassword(u.id, pwd)
-    if (!r.success) { void MessagePlugin.error(r.message); return }
-    void MessagePlugin.success(t('org.pwdReset'))
+    if (!r.success) { toastError(r.message); return }
+    toastSuccess(t('org.pwdReset'))
   }
 
   // 启用/停用成员账号
@@ -250,7 +253,7 @@ export function OrgP() {
   async function deleteUser(u: Any) {
     if (!(await confirmDialog({ body: tpl('org.deleteUserConfirm', { name: u.username }) }))) return
     const r: any = await adminUserDelete(u.id)
-    if (!r.success) { void MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     await loadAll()
   }
 
@@ -273,7 +276,7 @@ export function OrgP() {
     const key = next === 'disabled' ? 'org.disableTenantConfirm' : 'org.enableTenantConfirm'
     if (!(await confirmDialog({ body: tpl(key, { name: o.name }) }))) return
     const r: any = await tenantSetStatus(o.tenant_id, next)
-    if (!r.success) { void MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     ad.loadTenants(); await loadAll()
   }
 
@@ -282,9 +285,9 @@ export function OrgP() {
 
   // 新建组织/部门：父为 0 建 org，否则建 dept（后端校验名称非空）
   async function createOrg() {
-    if (!newName.trim()) { void MessagePlugin.warning(t('org.nameRequired')); return }
+    if (!newName.trim()) { void toastWarn(t('org.nameRequired')); return }
     const r: any = await orgCreate({ name: newName.trim(), parent_id: parentId, type: parentId === 0 ? 'org' : 'dept' })
-    if (!r.success) { void MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     setNewName(''); await loadAll()
   }
 
@@ -293,7 +296,7 @@ export function OrgP() {
     const name = await promptText({ header: t('org.renamePrompt'), body: tpl('org.renamePrompt', { name: o.name }), defaultValue: o.name })
     if (!name || !name.trim()) return
     const r: any = await orgRename(o.id, name.trim())
-    if (!r.success) { void MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     if (isSuper && o.type === 'root') ad.loadTenants()
     await loadAll()
   }
@@ -304,7 +307,7 @@ export function OrgP() {
     const name = await promptText({ header: t('org.renameRoot'), body: t('org.renameRoot'), defaultValue: rootOrg.name })
     if (!name || !name.trim()) return
     const r: any = await orgRename(rootOrg.id, name.trim())
-    if (!r.success) { void MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     if (isSuper) ad.loadTenants()
     await loadAll()
   }
@@ -313,7 +316,7 @@ export function OrgP() {
   async function deleteOrg(o: OrgInfo) {
     if (!(await confirmDialog({ body: tpl('org.deleteConfirm', { name: o.name }) }))) return
     const r: any = await orgDelete(o.id)
-    if (!r.success) { void MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     if (selectedOrg === o.id) setSelectedOrg(0)
     await loadAll()
   }
@@ -328,9 +331,9 @@ export function OrgP() {
   // 保存部门月预算：积分→token 正算落库，本地预算表同步回填
   async function saveBudget() {
     if (!budgetModal) return
-    if (!(budgetInput >= 0)) { void MessagePlugin.warning(t('org.budgetInvalid')); return }
+    if (!(budgetInput >= 0)) { void toastWarn(t('org.budgetInvalid')); return }
     const r: any = await orgTokenLimit(budgetModal.id, pointsToTokens(Math.floor(budgetInput)))
-    if (!r.success) { void MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     setBudgetMap((m) => ({ ...m, [budgetModal.id]: { limit: pointsToTokens(Math.floor(budgetInput)), used: budgetModal.used } }))
     setBudgetModal(null)
   }
@@ -349,9 +352,9 @@ export function OrgP() {
   async function createInvite() {
     if (!inviteModal) return
     const code = inviteCodeInput.trim()
-    if (!code) { void MessagePlugin.warning(t('org.inviteNeedCode')); return }
+    if (!code) { void toastWarn(t('org.inviteNeedCode')); return }
     const r: any = await inviteCodeCreate({ code, tenant_id: inviteModal.id, org_id: inviteModal.id })
-    if (!r.success) { void MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     setInviteCodeInput('')
     await openInvites(inviteModal)
   }
@@ -381,22 +384,26 @@ export function OrgP() {
   ]
 
   return (
-    <Tabs value={tab} onChange={(v) => setTab(v as 'org' | 'invite')}>
+    <>
+    <Tabs activeKey={tab} onChange={(k) => setTab(k as 'org' | 'invite')} items={[
+      { key: 'org', label: t('org.tabOrg') },
+      { key: 'invite', label: t('org.tabInvite') },
+      { key: 'users', label: t('hub.tabUsers') },
+    ]} />
       {/* Tab 面板 */}
-      <Tabs.TabPanel value="org" label={t('org.tabOrg')}>
+      {tab === 'org' && (<>
         <Panel title={t('org.title')}>
       <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 12px' }}>{t('org.treeHint')}</p>
 
       {myLevel >= 3 && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-          <Select value={parentId} onChange={(v) => setParentId(Number(v))} style={{ minWidth: 200 }}
-                  options={[
-                    ...(myLevel >= 3 ? [{ label: tpl('org.rootOptionTpl', { name: rootOrgName }), value: 0 }] : []),
-                    ...flatTree.map((o) => ({ label: orgPath(o), value: o.id })),
-                  ]} />
-          <Input value={newName} placeholder={t('org.namePlaceholder')}
-                 onChange={(v) => setNewName(v)} onEnter={createOrg} style={{ flex: 1, minWidth: 160 }} />
-          <Button theme="primary" onClick={createOrg}>{parentId === 0 ? t('org.create') : t('org.createDept')}</Button>
+          <select className="lc-select" value={String(parentId)} onChange={(e) => setParentId(Number(e.target.value))} style={{ minWidth: 200 }}>
+            {myLevel >= 3 && <option value="0">{tpl('org.rootOptionTpl', { name: rootOrgName })}</option>}
+            {flatTree.map((o) => <option key={o.id} value={String(o.id)}>{orgPath(o)}</option>)}
+          </select>
+          <input className="lc-input" value={newName} placeholder={t('org.namePlaceholder')}
+                 onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') createOrg() }} style={{ flex: 1, minWidth: 160 }} />
+          <Button variant="primary" onClick={createOrg}>{parentId === 0 ? t('org.create') : t('org.createDept')}</Button>
         </div>
       )}
 
@@ -404,49 +411,56 @@ export function OrgP() {
         <div style={{ minWidth: 280, flex: '1 1 320px' }}>
           <div
             onClick={() => selectOrg(0)}
-            style={{ padding: '8px 10px', borderRadius: 8, cursor: 'pointer', background: selectedOrg === 0 ? '#e8f3ff' : '#f5f7fa', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+            style={{ padding: '8px 10px', borderRadius: 8, cursor: 'pointer', background: selectedOrg === 0 ? 'var(--lc-raised, #16181C)' : 'var(--lc-inset, #0E1014)', border: '1.2px solid var(--lc-border-card)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
           >
-            <span>🏢 {rootOrgName}（{isPlatformView || isSuper ? t('org.typePlatform') : t('org.typeRoot')}）</span>
+            <span> {rootOrgName}（{isPlatformView || isSuper ? t('org.typePlatform') : t('org.typeRoot')}）</span>
             {myLevel >= 3 && (
-              <Button size="small" variant="text" title={t('org.renameRoot')} onClick={(e) => { e.stopPropagation(); renameRootOrg() }}>✎</Button>
+ <Button size="sm" variant="secondary" title={t('org.renameRoot')} aria-label={t('org.renameRoot')} onClick={(e) => { e.stopPropagation(); renameRootOrg() }}><Icon n="pencil" /></Button>
             )}
           </div>
           {flatTree.map((o) => (
             <div
               key={o.id}
               onClick={() => selectOrg(o.id)}
-              style={{ padding: `8px 10px 8px ${8 + o._depth * 18}px`, borderRadius: 8, cursor: 'pointer', margin: '4px 0', background: selectedOrg === o.id ? 'var(--adm-info-bg)' : 'var(--adm-card)', border: '1px solid var(--adm-line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
+              style={{ padding: `8px 10px 8px ${8 + o._depth * 18}px`, borderRadius: 8, cursor: 'pointer', margin: '4px 0', background: selectedOrg === o.id ? 'var(--adm-info-bg)' : 'var(--adm-card)', border: '1.2px solid var(--adm-line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
             >
               <span>
                 <span style={{ opacity: 0.6, marginRight: 4 }}>⠿</span>
                 {orgIcon(o)} {o.name}
               </span>
+              {/* 行内操作区（权限逐级收敛）：
+                  预算芯片/邀请/重命名/删除 = 租管及以上（myLevel>=3）；
+                  启停租户 = 仅超管且节点为租户根（isSuper && type==='root'）；
+                  新增子部门 = 任何能看到本面板的角色。
+                  stopPropagation 必加：按钮嵌在「点击选中组织」的节点里，否则会连带切换选中项。
+                  注：重命名/邀请/删除三枚按钮原为 ✎/🎟️/✕ 图形字符，emoji 清理后已无可视内容，
+                  目前只靠 title 悬浮提示，待接 <Icon> 恢复可见性。 */}
               <span style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
                 {o.type !== 'root' && myLevel >= 3 && (
                   <span className={isOverBudget(o) ? 'budget-over' : ''}
                         title={t('org.budgetSet')}
                         onClick={(e) => { e.stopPropagation(); openBudget(o) }}
-                        style={{ cursor: 'pointer', fontSize: 12, color: isOverBudget(o) ? '#c62828' : '#667', border: `1px solid ${isOverBudget(o) ? '#c62828' : '#d0d7de'}`, borderRadius: 8, padding: '0 6px' }}>
-                    💰 {budgetText(o)}
+                        style={{ cursor: 'pointer', fontSize: 12, color: isOverBudget(o) ? 'var(--lc-danger)' : 'var(--lc-text-3)', border: `1.2px solid ${isOverBudget(o) ? 'var(--lc-danger)' : 'var(--lc-border-card)'}`, borderRadius: 8, padding: '0 6px' }}>
+                     {budgetText(o)}
                   </span>
                 )}
                 {o.type !== 'root' && myLevel >= 3 && (
-                  <Button size="small" variant="text" title={t('org.inviteEntry')} onClick={(e) => { e.stopPropagation(); openInvites(o) }}>🎟️</Button>
+ <Button size="sm" variant="secondary" title={t('org.inviteEntry')} aria-label={t('org.inviteEntry')} onClick={(e) => { e.stopPropagation(); openInvites(o) }}><Icon n="key" /></Button>
                 )}
                 {isSuper && o.type === 'root' && (
-                  <Button size="small" variant="text"
+                  <Button size="sm" variant="secondary"
                           onClick={(e) => { e.stopPropagation(); toggleTenantByOrg(o) }}>
                     {tenantStatusOf(o.tenant_id) === 'active' ? t('tenants.disable') : t('tenants.enable')}
                   </Button>
                 )}
-                <Button size="small" variant="text" title={t('org.addChild')} onClick={(e) => { e.stopPropagation(); setParent(o.id) }}>+</Button>
+                <Button size="sm" variant="secondary" title={t('org.addChild')} aria-label={t('org.addChild')} onClick={(e) => { e.stopPropagation(); setParent(o.id) }}><Icon n="plus" /></Button>
                 {myLevel >= 3 && (
-                  <Button size="small" variant="text" title={t('org.rename')} onClick={(e) => { e.stopPropagation(); renameOrg(o) }}>✎</Button>
+ <Button size="sm" variant="secondary" title={t('org.rename')} aria-label={t('org.rename')} onClick={(e) => { e.stopPropagation(); renameOrg(o) }}><Icon n="pencil" /></Button>
                 )}
                 {o.type !== 'root' && myLevel >= 3 && (
                   <>
-                    <Button size="small" variant="text" title={t('org.move')} onClick={(e) => { e.stopPropagation(); openMove(o) }}>⇄</Button>
-                    <Button size="small" variant="text" theme="danger" title={t('org.delete')} onClick={(e) => { e.stopPropagation(); deleteOrg(o) }}>✕</Button>
+                    <Button size="sm" variant="secondary" title={t('org.move')} aria-label={t('org.move')} onClick={(e) => { e.stopPropagation(); openMove(o) }}><Icon n="swap" /></Button>
+ <Button size="sm" variant="danger" title={t('org.delete')} aria-label={t('org.delete')} onClick={(e) => { e.stopPropagation(); deleteOrg(o) }}><Icon n="trash" /></Button>
                   </>
                 )}
               </span>
@@ -460,59 +474,68 @@ export function OrgP() {
           </h3>
           <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 12px' }}>{t('org.usersHint')}</p>
           {/* 数据表格 */}
-          <Table rowKey="id" size="small" maxHeight={360} data={orgUserList}
+          <DataTable<any> rowKey={(row) => String(row.id)} rows={orgUserList}
                  columns={[
-                   { colKey: 'id', title: t('org.colId'), width: 60 },
-                   { colKey: 'username', title: t('org.colUsername'), width: 110 },
-                   { colKey: 'display_name', title: t('org.colName'), cell: ({ row }: any) => (
-                     <Input size="small" value={String(row.display_name ?? '')}
-                            onChange={(v) => editUser(row, 'display_name', v)} />
+                   { key: 'id', title: t('org.colId'), width: 60 },
+                   { key: 'username', title: t('org.colUsername'), width: 110 },
+                   { key: 'display_name', title: t('org.colName'), render: (row) => (
+                     <input className="lc-input" value={String(row.display_name ?? '')}
+                            onChange={(e) => editUser(row, 'display_name', e.target.value)} />
                    ) },
-                   { colKey: 'org', title: t('org.colOrg'), width: 160, cell: ({ row }: any) => (
-                     <Select size="small" value={Number(row.org_id || 0)} onChange={(v) => editUser(row, 'org_id', String(v))}
-                             options={userOrgOptions} />
+                   { key: 'org', title: t('org.colOrg'), width: 160, render: (row) => (
+                     <select className="lc-select" value={String(Number(row.org_id || 0))} onChange={(e) => editUser(row, 'org_id', e.target.value)}>
+                       {(userOrgOptions as Array<{ id: number; name: string } | { label: string; value: number }>).map((o, oi) => {
+                         const val = 'id' in o ? String(o.id) : String(o.value)
+                         const lab = 'name' in o ? o.name : o.label
+                         return <option key={oi} value={val}>{lab}</option>
+                       })}
+                     </select>
                    ) },
-                   { colKey: 'role', title: t('org.colRole'), width: 130, cell: ({ row }: any) => (
-                     <Select size="small" value={String(row.role)} onChange={(v) => editUser(row, 'role', String(v))}
-                             options={ad.roleOptions.map((r) => ({ label: t('users.role.' + r), value: r }))} />
+                   { key: 'role', title: t('org.colRole'), width: 130, render: (row) => (
+                     <select className="lc-select" value={String(row.role)} onChange={(e) => editUser(row, 'role', e.target.value)}>
+                       {ad.roleOptions.map((r: string) => <option key={r} value={r}>{t('users.role.' + r)}</option>)}
+                     </select>
                    ) },
-                   { colKey: 'last_login_at', title: t('org.colLastLogin'), width: 140, cell: ({ row }: any) => fmtTime(row.last_login_at as string) },
-                   { colKey: 'op', title: t('org.colActions'), width: 200, cell: ({ row }: any) => (
-                     <Space size={2}>
-                       <Button size="small" variant="text" onClick={() => resetPwd(row)}>{t('org.resetPwd')}</Button>
+                   { key: 'last_login_at', title: t('org.colLastLogin'), width: 140, render: (row) => fmtTime(row.last_login_at as string) },
+                   { key: 'op', title: t('org.colActions'), width: 200, render: (row) => (
+                     <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                       <Link onClick={() => resetPwd(row)}>{t('org.resetPwd')}</Link>
                        {row.status === 'disabled'
-                         ? <Button size="small" variant="text" onClick={() => setStatus(row, 'active')}>{t('org.enable')}</Button>
-                         : <Button size="small" variant="text" theme="danger" onClick={() => setStatus(row, 'disabled')}>{t('org.disable')}</Button>}
-                       <Button size="small" variant="text" theme="danger" onClick={() => deleteUser(row)}>✕</Button>
-                     </Space>
+                         ? <Link onClick={() => setStatus(row, 'active')}>{t('org.enable')}</Link>
+                         : <Link tone="danger" onClick={() => setStatus(row, 'disabled')}>{t('org.disable')}</Link>}
+                       <Link tone="danger" onClick={async () => { if (!(await confirmDialog({ body: t('common.delete') }))) return; deleteUser(row) }}>{t('common.delete')}</Link>
+                     </div>
                    ) },
-                 ] as never} />
+                  ]} />
           {!orgUserList.length && <div style={{ fontSize: 12, color: 'var(--adm-faint)', padding: 8 }}>{t('org.noUsers')}</div>}
 
-          <div style={{ marginTop: 16, border: '1px solid var(--adm-line)', borderRadius: 8, padding: 14 }}>
+          <div style={{ marginTop: 16, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 14 }}>
             <h3 style={{ margin: '0 0 10px' }}>{tpl('org.addUser', { org: addUserHeading })}</h3>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-              <Input value={String(nu.username || '')} placeholder={t('org.usernamePlaceholder')} onChange={(v) => setNu((n: Any) => ({ ...n, username: v }))} style={{ flex: 1, minWidth: 140 }} />
-              <Input type="password" autocomplete="new-password" value={String(nu.password || '')} placeholder={t('org.passPlaceholder')} onChange={(v) => setNu((n: Any) => ({ ...n, password: v }))} style={{ flex: 1, minWidth: 140 }} />
-              <Input value={String(nu.display_name || '')} placeholder={t('org.displayNamePlaceholder')} onChange={(v) => setNu((n: Any) => ({ ...n, display_name: v }))} style={{ flex: 1, minWidth: 140 }} />
+              <input className="lc-input" value={String(nu.username || '')} placeholder={t('org.usernamePlaceholder')} onChange={(e) => setNu((n: Any) => ({ ...n, username: e.target.value }))} style={{ flex: 1, minWidth: 140 }} />
+              <input className="lc-input" type="password" autoComplete="new-password" value={String(nu.password || '')} placeholder={t('org.passPlaceholder')} onChange={(e) => setNu((n: Any) => ({ ...n, password: e.target.value }))} style={{ flex: 1, minWidth: 140 }} />
+              <input className="lc-input" value={String(nu.display_name || '')} placeholder={t('org.displayNamePlaceholder')} onChange={(e) => setNu((n: Any) => ({ ...n, display_name: e.target.value }))} style={{ flex: 1, minWidth: 140 }} />
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
               <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('org.orgLabel')}</span>
-              <Select value={nuOrgId} onChange={onNuOrgChange} style={{ flex: 1, minWidth: 160 }} options={orgSelectOptions} />
+              <select className="lc-select" value={String(nuOrgId)} onChange={(e) => onNuOrgChange(e.target.value)} style={{ flex: 1, minWidth: 160 }}>
+                {(orgSelectOptions as Array<{ label: string; value: number }>).map((o) => <option key={o.value} value={String(o.value)}>{o.label}</option>)}
+              </select>
               <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('org.roleLabel')}</span>
-              <Select value={String(nu.role)} onChange={(v) => setNu((n: Any) => ({ ...n, role: v }))}
-                      options={nuRoleOptions.map((r) => ({ label: t('users.role.' + r), value: r }))} />
+              <select className="lc-select" value={String(nu.role)} onChange={(e) => setNu((n: Any) => ({ ...n, role: e.target.value }))}>
+                {nuRoleOptions.map((r: string) => <option key={r} value={r}>{t('users.role.' + r)}</option>)}
+              </select>
               <span style={{ fontSize: 12, color: 'var(--adm-faint)', flex: 1, minWidth: 120 }}>{t('org.cascadeHint')}</span>
-              <Button theme="primary" disabled={creating} onClick={createUser}>{creating ? t('org.creating') : t('org.addUserBtn')}</Button>
+              <Button variant="primary" disabled={creating} onClick={createUser}>{creating ? t('org.creating') : t('org.addUserBtn')}</Button>
               {myLevel >= 3 && (
                 <>
-                  <Button variant="outline" onClick={() => void downloadTemplate()}
-                          title={t('org.importTplHint')}>📄 {t('org.importTplBtn')}</Button>
+                  <Button variant="secondary" onClick={() => void downloadTemplate()}
+                          title={t('org.importTplHint')}> {t('org.importTplBtn')}</Button>
                   <input ref={importFileRef} type="file" hidden accept=".xlsx,.xls,.csv"
                          onChange={(e) => { setImportFile(e.target.files?.[0] || null); e.target.value = '' }} />
-                  <Button variant="outline" disabled={importing} onClick={() => importFileRef.current?.click()}
+                  <Button variant="secondary" disabled={importing} onClick={() => importFileRef.current?.click()}
                           title={t('org.importHint')}>{importing ? t('org.importing') : t('org.importBtn')}</Button>
-                  <Button variant="outline" disabled={importing || !importFile} onClick={doBulkImport}
+                  <Button variant="secondary" disabled={importing || !importFile} onClick={doBulkImport}
                           title={importFile ? importFile.name : ''}>↗</Button>
                 </>
               )}
@@ -521,66 +544,64 @@ export function OrgP() {
         </div>
       </div>
 
-          <Dialog visible={!!importResult} onClose={() => setImportResult(null)}
-                  header={`📥 ${tpl('org.importResultTitle', { total: importResult?.length || 0 })}`} width={520}>
+          <Dialog open={!!importResult} onCancel={() => setImportResult(null)}
+                  title={`${tpl('org.importResultTitle', { total: importResult?.length || 0 })}`}>
             {/* 数据表格 */}
-            <Table rowKey="username" size="small" maxHeight={360} data={importResult || []}
+            <DataTable<any> rowKey={(row) => String(row.username)} rows={importResult || []}
                    columns={[
-                     { colKey: 'username', title: t('org.importResultCol') },
-                     { colKey: 'ok', title: t('org.importResultStatus'), width: 70, cell: ({ row }: any) => row.ok ? <Tag theme="success">{t('org.importResultOk')}</Tag> : <Tag theme="danger">{t('org.importResultFail')}</Tag> },
-                     { colKey: 'message', title: '', cell: ({ row }: any) => <span style={{ fontSize: 12, color: row.ok ? '#666' : '#c62828' }}>{row.message}</span> },
-                   ] as never} />
+                     { key: 'username', title: t('org.importResultCol') },
+                     { key: 'ok', title: t('org.importResultStatus'), width: 70, render: (row) => row.ok ? <StatusPill tone="success">{t('org.importResultOk')}</StatusPill> : <StatusPill tone="danger">{t('org.importResultFail')}</StatusPill> },
+                     { key: 'message', title: '', render: (row) => <span style={{ fontSize: 12, color: row.ok ? 'var(--lc-text-3)' : 'var(--lc-danger)' }}>{row.message}</span> },
+                  ]} />
           </Dialog>
 
-      <Dialog visible={!!budgetModal} onClose={() => setBudgetModal(null)}
-              header={`💰 ${t('org.budgetTitle')} · ${budgetModal?.name || ''}`} width={440}
+      <Dialog open={!!budgetModal} onCancel={() => setBudgetModal(null)}
+              title={`${t('org.budgetTitle')} · ${budgetModal?.name || ''}`}
               onConfirm={saveBudget}>
         {budgetModal && (
           <>
             <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 10px' }}>{tpl('org.budgetHint', { used: fmtPoints(budgetModal.used) })}</p>
             <label style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--adm-hint)' }}>{t('org.budgetLimit')}</label>
-            <Input type="number" value={num(budgetInput)} placeholder={t('org.budgetPlaceholder')} onChange={(v) => setBudgetInput(Number(v))} />
+            <input className="lc-input" type="number" value={num(budgetInput)} placeholder={t('org.budgetPlaceholder')} onChange={(e) => setBudgetInput(Number(e.target.value))} />
           </>
         )}
       </Dialog>
 
-      <Dialog visible={!!inviteModal} onClose={() => setInviteModal(null)}
-              header={`🎟️ ${t('org.inviteTitle')} · ${inviteModal?.name || ''}`} width={440}>
+      <Dialog open={!!inviteModal} onCancel={() => setInviteModal(null)}
+ title={`${t('org.inviteTitle')} · ${inviteModal?.name || ''}`}>
         {inviteModal && (
           <>
             <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 10px' }}>{t('org.inviteHint')}</p>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-              <Input value={inviteCodeInput} placeholder={t('org.inviteInputPlaceholder')} onChange={(v) => setInviteCodeInput(v)} style={{ flex: 1 }} />
-              <Button theme="primary" disabled={!inviteCodeInput.trim()} onClick={createInvite}>➕ {t('org.inviteCreate')}</Button>
+              <input className="lc-input" value={inviteCodeInput} placeholder={t('org.inviteInputPlaceholder')} onChange={(e) => setInviteCodeInput(e.target.value)} style={{ flex: 1 }} />
+ <Button variant="primary"disabled={!inviteCodeInput.trim()} onClick={createInvite}> {t('org.inviteCreate')}</Button>
             </div>
             {inviteItems.length ? (
-              <Table rowKey="id" size="small" data={inviteItems}
+              <DataTable<any> rowKey={(row) => String(row.id)} rows={inviteItems}
                      columns={[
-                       { colKey: 'code', title: t('org.inviteCode'), cell: ({ row }: any) => <code>{row.code}</code> },
-                       { colKey: 'status', title: t('org.inviteStatus'), cell: ({ row }: any) => (Number(row.used_count) > 0 ? tpl('org.inviteUsed', { n: row.used_count }) : t('org.inviteUnused')) },
-                     ] as never} />
+                       { key: 'code', title: t('org.inviteCode'), render: (row) => <code>{row.code}</code> },
+                       { key: 'status', title: t('org.inviteStatus'), render: (row) => (Number(row.used_count) > 0 ? tpl('org.inviteUsed', { n: row.used_count }) : t('org.inviteUnused')) },
+                  ]} />
             ) : <p style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('org.inviteNoCodes')}</p>}
           </>
         )}
       </Dialog>
 
-      <Dialog visible={!!moveDlg} onClose={() => setMoveDlg(null)} header="移动组织" width={440} onConfirm={doMove}>
+      <Dialog open={!!moveDlg} onCancel={() => setMoveDlg(null)} title="移动组织" onConfirm={doMove}>
         {moveDlg && (
           <Field label="移动到">
-            <Select value={moveParent} onChange={(v) => setMoveParent(Number(v))}
-                    options={[{ label: t('org.rootOption'), value: 0 }, ...flatTree.filter((o) => o.id !== moveDlg.node.id).map((o) => ({ label: `#${o.id} ${o.name}`, value: o.id }))]} />
+            <select className="lc-select" value={String(moveParent)} onChange={(e) => setMoveParent(Number(e.target.value))}>
+              <option value="0">{t('org.rootOption')}</option>
+              {flatTree.filter((o) => o.id !== moveDlg.node.id).map((o) => <option key={o.id} value={String(o.id)}>{`#${o.id} ${o.name}`}</option>)}
+            </select>
           </Field>
         )}
       </Dialog>
         </Panel>
-      </Tabs.TabPanel>
+      </>)}
       {/* Tab 面板 */}
-      <Tabs.TabPanel value="invite" label={t('org.tabInvite')}>
-        <InvitesP />
-      </Tabs.TabPanel>
-      <Tabs.TabPanel value="users" label={t('hub.tabUsers')}>
-        <UsersP />
-      </Tabs.TabPanel>
-    </Tabs>
+      {tab === 'invite' && <InvitesP />}
+      {tab === 'users' && <UsersP />}
+    </>
   )
 }

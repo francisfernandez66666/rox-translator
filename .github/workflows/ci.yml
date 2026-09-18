@@ -32,6 +32,26 @@ jobs:
       - name: go vet
         run: go vet ./...
         working-directory: backend-go
+      # ★ P0-6（2026-09-18）：管线 Python 自检进闸门。旧 CI 不装 pymupdf/python-docx，
+      #   fileproc 的 selftest 用例在 go test 下恒「退出码 2=依赖缺失→skip」，
+      #   产物级回归（缩进损坏/表格几何/零命中口径）CI 完全看不见。
+      #   此处显式安装依赖并直跑两脚本 selftest：任何非 0（含 2）一律红灯。
+      - name: pipeline python selftests（pdf_overlay / docx_translate）
+        run: |
+          python3 -m pip install --quiet pymupdf python-docx
+          run_selftest() {
+            local script=$1 name=$2
+            python3 "$script" selftest
+            local rc=$?
+            if [ $rc -eq 2 ]; then
+              echo "::error::$name 自检因依赖缺失被跳过（CI 必须实跑，skip 即红灯）"
+              return 1
+            fi
+            return $rc
+          }
+          run_selftest internal/fileproc/pdf_overlay.py pdf_overlay || exit 1
+          run_selftest internal/fileproc/docx_translate.py docx_translate || exit 1
+        working-directory: backend-go
       - name: go test -race
         run: go test -race -count=1 ./internal/... ./cmd/...
         working-directory: backend-go

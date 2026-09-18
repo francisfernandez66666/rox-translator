@@ -3,7 +3,7 @@
 // 新一级菜单名 + Hub 内子 Tab 平铺文案（避免沿用带 emoji 的旧菜单标签）。
 // =============================================
 export const zh: Record<string, string> = {
-  'hub.menuBilling': '💎 计费与套餐',
+'hub.menuBilling':'计费与套餐',
   'hub.tabPlans': '套餐与订单',
   'hub.tabInvites': '邀请码',
   'hub.tabUsers': '成员账户',
@@ -16,7 +16,7 @@ export const zh: Record<string, string> = {
 
 // 英文文案字典（与 zh 同 key 对齐，parity.test.ts 守护双语一致性）
 export const en: Record<string, string> = {
-  'hub.menuBilling': '💎 Billing & Plans',
+'hub.menuBilling':'Billing & Plans',
   'hub.tabPlans': 'Plans & Orders',
   'hub.tabInvites': 'Invite Codes',
   'hub.tabUsers': 'Members',

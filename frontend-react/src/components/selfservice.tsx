@@ -11,7 +11,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fmtPoints } from '@/utils/points' // ★ S1 积分展示
 import { useNavigate } from 'react-router-dom'
-import { Card, Tag, Loading, Button, Switch, MessagePlugin } from 'tdesign-react'
+import { Badge, Button, SkeletonCard, Switch } from '@/ui/langcross/src'
+import { toastSuccess, toastError } from '@/lib/toastBus'
 import { myPackage } from '@/api/billing'
 import { referralMy, referralFunnel, type ReferralMyResp, type ReferralFunnel } from '@/api/referral'
 import { scimConfigGet, scimConfigSave } from '@/api/scim'
@@ -45,8 +46,8 @@ export function BalancePanel() {
   //   原 /api/billing/balance 后端 handleBalance 需租户管理员（requireTenantAdmin），
   //   普通用户访问「我的余额」（/billing）会 403 显示错误卡片——本页为端用户自服务。
   const { data, err, loading } = useAsync(() => myPackage(), [])
-  if (loading) return <Loading className="ss-loading" />
-  if (err) return <Card><Tag theme="danger">{err}</Tag></Card>
+  if (loading) return <div className="ss-loading"><SkeletonCard /></div>
+  if (err) return <div className="ssc-card"><span className="ssc-err">{err}</span></div>
   const p = (data as any) ?? {}
   // ★ 双桶口径：permanent_balance=永久余额、sub_grants_left=未过期台账、balance_tokens=可用总额
   const permanent = Number(p.permanent_balance ?? 0)
@@ -54,24 +55,25 @@ export function BalancePanel() {
   const totalAvailable = Number(p.balance_tokens ?? 0) // ★ C26：句数镜像不可当 token 兜底
   return (
     <div className="ss-grid">
+      <style>{CSS_SSC}</style>
       {totalAvailable <= 0 && (
-        <Card>
-          <div style={{ padding: '10px 14px', borderRadius: 8, background: '#fff7e6', border: '1px solid #ffd591', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
+        <div className="ssc-card">
+          <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
             {t('ss.exhaustedHint')}
             <div style={{ marginTop: 6 }}>
-              <Button size="small" theme="warning" onClick={() => { navigate('/packages') }}>{t('ss.gotoRecharge')}</Button>
+              <Button size="sm" variant="primary" onClick={() => { navigate('/packages') }}>{t('ss.gotoRecharge')}</Button>
             </div>
           </div>
-        </Card>
+        </div>
       )}
-      <Card>
+      <div className="ssc-card">
         <h3>{t('ss.myBalance')}</h3>
         {/* ★ P1-18（2026-09-14）：token 余额统一 fmtPoints 积分口径（S1 承诺：token 裸值不再外露），
             不再与下方面板的 fmtPoints 并存裸 token 展示 */}
         <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtPoints(permanent)}</b></div>
         <div className="ss-row"><span>{t('ss.grantLedger')}</span><b>{fmtPoints(grants)}</b></div>
         <div className="ss-row"><span>{t('ss.totalAvailable')}</span><b>{fmtPoints(totalAvailable)}</b></div>
-      </Card>
+      </div>
     </div>
   )
 }
@@ -85,33 +87,34 @@ export function ReferralPanel() {
     const r = await referralFunnel()
     return r.success ? ({ ...(r.funnel as ReferralFunnel), pct: r.l2_pct ?? 0 } as any) : null as any
   }, [])
-  if (loading) return <Loading className="ss-loading" />
-  if (err) return <Card><Tag theme="danger">{err}</Tag></Card>
+  if (loading) return <div className="ss-loading"><SkeletonCard /></div>
+  if (err) return <div className="ssc-card"><span className="ssc-err">{err}</span></div>
   const d = data as ReferralMyResp
   const code = d?.ref_code ?? ''
   const url = d?.invite_url ?? ''
   const records = d?.records ?? []
   return (
     <div className="ss-grid">
-      <Card>
+      <style>{CSS_SSC}</style>
+      <div className="ssc-card">
         <h3>{t('ss.myReferral')}</h3>
         <div className="ss-row">
           <span>{t('ss.myCode')}</span>
           <div className="ss-copy">
-            <Tag>{code}</Tag>
-            <Button size="small" variant="outline" onClick={() => { navigator.clipboard?.writeText(code) }}>{t('ss.copy')}</Button>
+            <Badge mono>{code}</Badge>
+            <Button size="sm" variant="secondary" onClick={() => { navigator.clipboard?.writeText(code) }}>{t('ss.copy')}</Button>
           </div>
         </div>
-        {url && <div className="ss-row"><span>{t('ss.inviteLink')}</span><Tag>{url}</Tag></div>}
+        {url && <div className="ss-row"><span>{t('ss.inviteLink')}</span><Badge mono>{url}</Badge></div>}
         <div className="ss-stats">
           <div className="ss-stat"><span>{t('ss.trialStacked')}</span><b>{fmtPoints(d?.trial_tokens ?? 0)}</b></div>
           <div className="ss-stat"><span>{t('ss.paidBonus')}</span><b>{fmtPoints(d?.paid_tokens ?? 0)}</b></div>
           <div className="ss-stat"><span>{t('ss.invitedCount')}</span><b>{d?.invited ?? 0}</b></div>
         </div>
-      </Card>
+      </div>
       {/* ★ H9 归因看板：2 级邀请树漏斗（仅个人推广场景展示） */}
       {(ctxData as any)?.is_personal !== false && fd && (
-        <Card>
+        <div className="ssc-card">
           <h3>{t('ss.funnelTitle')}</h3>
           <div className="ss-stats">
             <div className="ss-stat"><span>{t('ss.funnelL1')}</span><b>{(fd as any).l1_invited ?? 0}</b></div>
@@ -119,14 +122,14 @@ export function ReferralPanel() {
             <div className="ss-stat"><span>{t('ss.funnelL2')}</span><b>{(fd as any).l2_invited ?? 0}</b></div>
             <div className="ss-stat"><span>{t('ss.funnelL2Share')}</span><b>{fmtPoints((fd as any).reward_tokens_l2 ?? 0)}{(fd as any).pct ? `（${(fd as any).pct}%）` : ''}</b></div>
           </div>
-          <div style={{ fontSize: 12, color: '#889', marginTop: 8 }}>{t('ss.funnelHint')}</div>
-        </Card>
+          <div style={{ fontSize: 12, color: 'var(--lc-text-4)', marginTop: 8 }}>{t('ss.funnelHint')}</div>
+        </div>
       )}
-      {records.length > 0 && <Card>
+      {records.length > 0 && <div className="ssc-card">
         <h3>{t('ss.referralRecords')}</h3>
         <table className="ss-table"><thead><tr><th>{t('ss.refTypeHeader')}</th><th>{t('ss.refTokenHeader')}</th><th>{t('ss.refDateHeader')}</th></tr></thead>
           <tbody>{records.map((r, i) => <tr key={i}><td>{r.type === 'paid_perm' ? t('ss.refTypePaid') : r.type === 'paid_perm_l2' ? t('ss.refTypePaidL2') : t('ss.refTypeTrial')}</td><td>{fmtPoints(r.tokens)}</td><td>{r.created_at?.slice(0, 10)}</td></tr>)}</tbody></table>
-      </Card>}
+      </div>}
     </div>
   )
 }
@@ -136,30 +139,31 @@ export function MyPackagePanel() {
   const navigate = useNavigate()
   const [, t] = useT()
   const { data, err, loading } = useAsync(() => myPackage(), [])
-  if (loading) return <Loading className="ss-loading" />
-  if (err) return <Card><Tag theme="danger">{err}</Tag></Card>
+  if (loading) return <div className="ss-loading"><SkeletonCard /></div>
+  if (err) return <div className="ssc-card"><span className="ssc-err">{err}</span></div>
   const p = (data as any) ?? {}
   const total = Number(p.tokens ?? p.balance_tokens ?? 0)
   const hasPlan = !!(p.package_code && p.package_code !== 'trial')
   return (
     <div className="ss-grid">
+      <style>{CSS_SSC}</style>
       {total <= 0 && !hasPlan && (
-        <Card>
-          <div style={{ padding: '10px 14px', borderRadius: 8, background: '#fff7e6', border: '1px solid #ffd591', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
+        <div className="ssc-card">
+          <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
             {t('ss.exhaustedHint')}
             <div style={{ marginTop: 6 }}>
-              <Button size="small" theme="warning" onClick={() => { navigate('/billing') }}>{t('ss.gotoTopUp')}</Button>
+              <Button size="sm" variant="primary" onClick={() => { navigate('/billing') }}>{t('ss.gotoTopUp')}</Button>
             </div>
           </div>
-        </Card>
+        </div>
       )}
-      <Card>
+      <div className="ssc-card">
         <h3>{t('ss.myPackage')}</h3>
-        <div className="ss-row"><span>{t('ss.currentPkg')}</span><Tag>{p.package_code ?? '—'}</Tag></div>
+        <div className="ss-row"><span>{t('ss.currentPkg')}</span><Badge mono>{p.package_code ?? '—'}</Badge></div>
         <div className="ss-row"><span>{t('ss.remainingSentences')}</span><b>{t('ss.approxPrefix')}{fmtNum(p.balance_sentences_approx ?? 0)} {t('ss.sentenceUnit')}{t('ss.approxSuffix')}</b></div>
         <div className="ss-row"><span>{t('ss.availableTokens')}</span><b>{fmtPoints(total)}</b></div>
         <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtPoints(p.permanent_balance ?? 0)}</b></div>
-      </Card>
+      </div>
     </div>
   )
 }
@@ -171,27 +175,28 @@ export function AccountPanel() {
   const { user } = useAuth()
   const { data, err, loading } = useAsync(() => meContext(), [])
   const ctx = (data as any) ?? {}
-  if (loading) return <Loading className="ss-loading" />
-  if (err) return <Card><Tag theme="danger">{err}</Tag></Card>
+  if (loading) return <div className="ss-loading"><SkeletonCard /></div>
+  if (err) return <div className="ssc-card"><span className="ssc-err">{err}</span></div>
   // 是否个人用户租户：企业用户/平台超管不参与「邀请好友 · 多邀多得」，隐藏邀请入口（2026-09）
   const isPersonal = ctx.is_personal !== false
   return (
     <div className="ss-grid">
-      <Card>
+      <style>{CSS_SSC}</style>
+      <div className="ssc-card">
         <h3>{t('ss.myAccount')}</h3>
         <div className="ss-row"><span>{t('ss.username')}</span><b>{ctx.username ?? user?.username ?? '—'}</b></div>
-        <div className="ss-row"><span>{t('ss.email')}</span><Tag>{ctx.email ?? user?.email ?? t('ss.emailUnbound')}</Tag></div>
-        <div className="ss-row"><span>{t('ss.role')}</span><Tag>{ctx.role ?? user?.role ?? '—'}</Tag></div>
+        <div className="ss-row"><span>{t('ss.email')}</span><Badge>{ctx.email ?? user?.email ?? t('ss.emailUnbound')}</Badge></div>
+        <div className="ss-row"><span>{t('ss.role')}</span><Badge>{ctx.role ?? user?.role ?? '—'}</Badge></div>
         <div className="ss-row"><span>{t('ss.tenant')}</span><b>{ctx.tenant_name ?? ctx.tenant_id ?? '—'}</b></div>
-      </Card>
-      <Card>
+      </div>
+      <div className="ssc-card">
         <h3>{t('ss.quickLinks')}</h3>
         <div className="ss-quick">
-          <Button size="small" variant="outline" onClick={() => { navigate('/billing') }}>{t('ss.navBalance')}</Button>
-          {isPersonal && <Button size="small" variant="outline" onClick={() => { navigate('/invites') }}>{t('ss.navReferral')}</Button>}
-          <Button size="small" variant="outline" onClick={() => { navigate('/packages') }}>{t('ss.navPackage')}</Button>
+          <Button size="sm" variant="secondary" onClick={() => { navigate('/billing') }}>{t('ss.navBalance')}</Button>
+          {isPersonal && <Button size="sm" variant="secondary" onClick={() => { navigate('/invites') }}>{t('ss.navReferral')}</Button>}
+          <Button size="sm" variant="secondary" onClick={() => { navigate('/packages') }}>{t('ss.navPackage')}</Button>
         </div>
-      </Card>
+      </div>
       {/* ★ H10 SCIM 2.0 自助配置：仅租户管理员/超管可见 */}
       {['tenant_admin', 'super_admin', 'admin'].includes(String(ctx.role ?? user?.role ?? '')) && <ScimCard />}
     </div>
@@ -212,26 +217,34 @@ function ScimCard() {
     setBusy(true)
     const r = await scimConfigSave(patch)
     setBusy(false)
-    if (r.success) { setCfg(r as any); void MessagePlugin.success(t('ss.scimSaved')) }
-    else void MessagePlugin.error(r.message || '')
+    if (r.success) { setCfg(r as any); toastSuccess(t('ss.scimSaved')) }
+    else toastError(r.message || '')
   }
   if (!cfg) return null
   const enabled = !!cfg.config?.enabled
   const token = String(cfg.config?.token || '')
   return (
-    <Card>
+    <div className="ssc-card">
       <h3>{t('ss.scimTitle')}</h3>
       <div className="ss-row"><span>{t('ss.scimStatus')}</span>
-        <Switch size="small" value={enabled} disabled={busy} onChange={(v: any) => void save({ enabled: !!v })} /></div>
-      <div className="ss-row"><span>{t('ss.scimEndpoint')}</span><Tag>{cfg.endpoint ?? '—'}</Tag></div>
+        <Switch checked={enabled} disabled={busy} onChange={(e) => void save({ enabled: e.target.checked })} /></div>
+      <div className="ss-row"><span>{t('ss.scimEndpoint')}</span><Badge mono>{cfg.endpoint ?? '—'}</Badge></div>
       <div className="ss-row"><span>{t('ss.scimToken')}</span>
         <div className="ss-copy">
-          <Tag>{token ? `${token.slice(0, 6)}${'•'.repeat(10)}${token.slice(-4)}` : '—'}</Tag>
-          {token && <Button size="small" variant="outline" onClick={() => { navigator.clipboard?.writeText(token) }}>{t('ss.copy')}</Button>}
-          <Button size="small" variant="outline" disabled={busy} onClick={() => void save({ rotate: true })}>{t('ss.scimRotate')}</Button>
+          <Badge mono>{token ? `${token.slice(0, 6)}${'•'.repeat(10)}${token.slice(-4)}` : '—'}</Badge>
+          {token && <Button size="sm" variant="secondary" onClick={() => { navigator.clipboard?.writeText(token) }}>{t('ss.copy')}</Button>}
+          <Button size="sm" variant="secondary" disabled={busy} onClick={() => void save({ rotate: true })}>{t('ss.scimRotate')}</Button>
         </div>
       </div>
-      <div style={{ fontSize: 12, color: '#889', marginTop: 8 }}>{t('ss.scimHint')}</div>
-    </Card>
+      <div style={{ fontSize: 12, color: 'var(--lc-text-4)', marginTop: 8 }}>{t('ss.scimHint')}</div>
+    </div>
   )
 }
+
+// 页面级样式：ssc- 前缀（防与组件库/其他页面类名重名）
+const CSS_SSC = `
+.ssc-card{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:14px;padding:18px;box-shadow:var(--lc-panel-highlight)}
+.ssc-card h3{margin:0 0 6px;font-size:15px}
+.ssc-err{color:var(--lc-danger);font-size:13px}
+.ssc-card + style{display:none}
+`

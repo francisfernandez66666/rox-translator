@@ -13,6 +13,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"translator/internal/infra/redis"
@@ -47,6 +48,14 @@ func (l *localLock) TryLock(ctx context.Context, ttl time.Duration) (bool, func(
 
 // ---- Redis 实现 ----
 
+// errCount ★ P1-4（2026-09-18）：Redis 锁获取异常的累计次数。
+// 调用方（stall 巡检/采集轮/watchdog）在 err 时按「保守降级本进程执行」处理——
+// 宁可偶发重复执行也不让周期任务静默停摆；该计数器让降级发生的频次进 /metrics 可告警。
+var errCount atomic.Uint64
+
+// ErrCount 返回 Redis 分布式锁获取异常的累计次数（供 metrics 渲染与测试断言）。
+func ErrCount() uint64 { return errCount.Load() }
+
 type redisLock struct {
 	rdb *redis.Client
 	key string
@@ -58,8 +67,13 @@ type redisLock struct {
 func (l *redisLock) TryLock(ctx context.Context, ttl time.Duration) (bool, func(), error) {
 	token := randToken()
 	ok, err := l.rdb.SetNX(ctx, l.key, token, ttl)
-	if err != nil || !ok {
+	if err != nil {
+		// ★ P1-4：基础设施异常与「他人持锁」是两回事——计数并由调用方保守降级
+		errCount.Add(1)
 		return false, nil, err
+	}
+	if !ok {
+		return false, nil, nil
 	}
 	// 看门狗：ttl 过半续期，避免长任务持锁过期被他人抢占
 	stop := make(chan struct{})

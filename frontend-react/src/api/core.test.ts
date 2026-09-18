@@ -1,6 +1,6 @@
 // ============================================================================
 // core.test.ts — API 基础设施回归（★ F11：E4 headers 合并 / E5 401 处理 /
-// 超时语义 / 统一错误码透传）
+// 超时语义 / 统一错误码透传；另含 2026-09-14 multipart（FormData 不预设 Content-Type）回归）
 // node 环境：先 stub sessionStorage/window，再动态 import core（模块顶层读 storage）。
 // ============================================================================
 import { beforeAll, describe, expect, it, vi } from 'vitest'
@@ -53,6 +53,9 @@ describe('api/core', () => {
     expect(seen!.Authorization).toBe('Bearer tk-test')
   })
 
+  // 回归锁：与上一条 E4 互补——E4 保证「调用方自带 headers 时默认的 Content-Type 与
+  // 认证头不被吞掉」，本条保证「body 为 FormData 时不得预设 Content-Type，
+  // 必须留给浏览器生成 multipart boundary」（任何一侧回退都会红）。
   it('★ 2026-09-14 multipart 回归：FormData 请求不得预设 Content-Type（否则 boundary 丢失 → 后端 400「文件解析失败或超过大小上限」）', async () => {
     let seen: Record<string, string> | undefined
     vi.stubGlobal('fetch', async (_u: string, init: RequestInit) => {

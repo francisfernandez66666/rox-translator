@@ -267,11 +267,12 @@ func validateWebhookURL(raw string) error {
 }
 
 // webhookHTTPClient 回调投递专用 HTTP 客户端（★ P1-11 修复 2026-09-14）：
-//   ① 禁跟随重定向（CheckRedirect→ErrUseLastResponse）——旧实现用默认 client 跟随 302，
-//      回调指向攻击者服务器后被重定向到 169.254.169.254 等内网元数据地址时，
-//      保存期/投递前的 DNS 白名单校验整体失效（SSRF）；
-//   ② 拨号时校验真实目标 IP（net.Dialer.Control）——校验发生在操作系统实际连接的
-//      地址上，关闭「校验时解析 vs 拨号时再解析」的 DNS rebinding TOCTOU 窗口。
+//
+//	① 禁跟随重定向（CheckRedirect→ErrUseLastResponse）——旧实现用默认 client 跟随 302，
+//	   回调指向攻击者服务器后被重定向到 169.254.169.254 等内网元数据地址时，
+//	   保存期/投递前的 DNS 白名单校验整体失效（SSRF）；
+//	② 拨号时校验真实目标 IP（net.Dialer.Control）——校验发生在操作系统实际连接的
+//	   地址上，关闭「校验时解析 vs 拨号时再解析」的 DNS rebinding TOCTOU 窗口。
 func webhookHTTPClient() *http.Client {
 	dialer := &net.Dialer{
 		Timeout: 10 * time.Second,

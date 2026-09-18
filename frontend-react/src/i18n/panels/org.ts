@@ -8,7 +8,7 @@ export const zh: Record<string, string> = {
   'org.budgetSet': '分配月度预算',
   'org.budgetPrompt': '为「{name}」分配月度 token 预算（当前 {cur}，0=关闭部门墙）：',
   'org.budgetInvalid': '请输入不小于 0 的整数',
-  'org.invitesTitle': '🎟️ 邀请码',
+'org.invitesTitle':'邀请码',
   'org.invitesHint': '为「{name}」生成邀请码；受邀用户将加入该组织层级',
   'org.invitePlaceholder': '自定义邀请码',
   'org.inviteCreate': '生成邀请码',
@@ -86,7 +86,7 @@ export const zh: Record<string, string> = {
 
 // 英文字典（与上方 zh 同键一一对应）
 export const en: Record<string, string> = {
-  'org.invitesTitle': '🎟️ Invite Codes',
+'org.invitesTitle':'Invite Codes',
   'org.invitesHint': 'Generate codes for "{name}"; invitees join this org level',
   'org.invitePlaceholder': 'Custom invite code',
   'org.inviteCreate': 'Generate',

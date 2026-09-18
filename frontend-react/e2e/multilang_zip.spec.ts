@@ -43,7 +43,8 @@ test.describe('多语言文件工单 → zip 打包下载', () => {
     await login(page, process.env.UAT_USER || 'uatuser_a', process.env.UAT_PASS || 'uatpass123');
     await page.goto('/tickets');
     // 切「文件」模式并选文件（复用 U1 已验证的 #tk-file-input 约定）
-    await page.getByRole('button', { name: /📎/ }).click();
+    // ★ 2026-09-18 UI 迁移：模式按钮 emoji → i18n 文案「文件」
+    await page.getByRole('button', { name: /^文件$/ }).click();
     const input = page.locator('#tk-file-input');
     await expect(input).toBeAttached({ timeout: 10000 });
     await input.setInputFiles([{

@@ -176,13 +176,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/status", s.handlePublicStatus)
 	s.mux.HandleFunc("/api/health", s.handleHealth)
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
-	// 公开商业页面（无需登录）：定价 / 条款 / SLA / 隐私 / 套餐 / 注册行业
-	s.mux.HandleFunc("/pricing", s.handlePublicPricing)
+	// 公开商业页面（无需登录）：条款 / SLA / 隐私 / 套餐 / 注册行业
+	// ★ P2-6（2026-09-18）：/pricing 双实现归一——删除 Go 服务端渲染版，
+	//   统一走 SPA 兜底（App.tsx 访客/登录态均可直达 PricingPage），消除文案漂移。/api/plans 保留。
 	s.mux.HandleFunc("/docs/terms", s.handlePublicTerms)
 	s.mux.HandleFunc("/docs/sla", s.handlePublicSLA)
 	s.mux.HandleFunc("/docs/privacy", s.handlePublicPrivacy)
 	s.mux.HandleFunc("/api/plans", s.handlePlans)
 	s.mux.HandleFunc("/api/register/industries", s.handleRegisterIndustries)
+	// ★ P1-3（2026-09-18）：营销留资（匿名 POST，IP 限流+蜜罐+可选 Turnstile，落 feedbacks 通道）
+	s.mux.HandleFunc("/api/lead", s.handleLeadCreate)
 	s.mux.HandleFunc("/office/manifest.xml", s.handleOfficeManifest)
 	s.mux.HandleFunc("/office/taskpane.html", s.handleOfficeTaskPane)
 	s.mux.HandleFunc("/api/admin/memleak/capture", s.handleMemLeakCapture)
@@ -789,7 +792,13 @@ func (s *Server) handleTranslationLangs(w http.ResponseWriter, r *http.Request) 
 
 // handleKBStats 知识库统计接口（/api/translation/kb-stats）：返回当前租户的 KB 条目统计。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。返回 total_tm_entries/lang_stats/total_segments/tenant_id。
+// ★ P0-2（2026-09-18）：旧实现无登录校验，匿名请求经 withTenant 落默认租户 1，
+// 等于把 rox 租户的 KB 规模公开；现与 estimate 同口径要求登录态。
 func (s *Server) handleKBStats(w http.ResponseWriter, r *http.Request) {
+	if s.authUser(r) == nil {
+		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		return
+	}
 	// 知识库未加载时返回提示
 	if s.DB == nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "翻译技能未加载"})

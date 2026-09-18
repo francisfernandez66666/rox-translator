@@ -1,6 +1,8 @@
 // ============ types/index.ts · 职责说明 ============
 // 前端共享 TypeScript 类型定义
 // 集中定义聊天、流式进度与健康检查等数据结构的类型。
+// 这些类型只描述与后端的传输契约（SSE 事件 / ChatResponse / HealthResponse），
+// 不含展示层字段；2026-09-17 换肤未改动任何字段，仅整理注释。
 // =============================================
 
 /** 技能信息：技能名称 + 描述 + 触发关键词（供后端技能路由与前端展示用） */
@@ -63,6 +65,9 @@ export interface ProgressEvent {
   percent?: number   // 进度百分比
   result?: ChatResponse // 完成时返回的最终结果
   error?: string     // 错误信息
+ // —— 以下三个字段为流式改造新增：error_code 供 UI 精准分流（充值 / 次日再试），
+ //    lang + text 由 api/translate.ts 的 consumeSSEStream 透传给 onDelta，
+ //    hooks/useChat 再按目标语言过滤、逐字回灌到助手气泡（D20）——
   error_code?: string // ★ E11：稳定错误码（insufficient_balance / daily_quota_exceeded）
   lang?: string      // ★ D20：delta 事件的目标语言
   text?: string      // ★ D20：delta 增量文本

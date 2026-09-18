@@ -1,0 +1,90 @@
+/* ============================================================
+ * LangCross UI · 设计令牌（与画布「00 · 设计令牌」区一一对应）
+ * 描边按「对 #000 的对比度」定档，不按视觉印象；全站无蓝无绿（X/Grok 单色）。
+ * ============================================================ */
+:root {
+  /* —— 面 —— */
+  --lc-bg: #000000;            /* 页面底 */
+  --lc-deep: #050607;          /* 最深内嵌 */
+  --lc-inset: #0A0B0D;         /* 内嵌块 / 输入框底 / 空状态卡 */
+  --lc-panel: #0E1014;         /* 面板 / 对话框 / 抽屉 */
+  --lc-raised: #16181C;        /* 浮面 / Toast / 徽章 / 骨架条 / 菜单 */
+
+  /* —— 文档口径别名（UI-ANNOTATIONS §1.1 的 surface-N / border-N / text-N 命名）——
+     同一批色值两套名字：组件库内部沿用上方面名，新页面按文档口径书写，互不冲突。 */
+  --lc-surface-1: var(--lc-panel);   /* #0E1014 卡片 / 认证卡 / Dialog 面 */
+  --lc-surface-2: var(--lc-raised);  /* #16181C 次级卡 / Tab 活跃底 / Toast 面 */
+  --lc-surface-3: var(--lc-inset);   /* #0A0B0D 输入框底 / 空状态底 */
+  --lc-surface-4: var(--lc-deep);    /* #050607 页脚条 */
+  --lc-text-1: var(--lc-text);       /* #E7E9EA 主文字 / 正向活跃态 / 主按钮底 */
+  --lc-text-5: #8A9099;              /* 价格单位 / 辅助数字（文档 §1.1 独有档） */
+  --lc-border-1: var(--lc-border-strong);   /* #8B939F 6.0:1 最高对比 */
+  --lc-border-2: var(--lc-border-done);     /* #6E7683 4.7:1 完成态 */
+  --lc-border-3: var(--lc-border-input);    /* #5A6270 3.9:1 输入框 */
+  --lc-border-4: var(--lc-border-faint);    /* #464C58 3.2:1 分隔 / 轨道 */
+  --lc-border-5: var(--lc-border-pill);     /* #545A65 3.9:1 胶囊 / 次按钮 */
+  --lc-border-6: var(--lc-border-card);     /* #464C58 3.2:1 卡片 */
+  --lc-border-7: var(--lc-border-card-dim); /* #343B47 2.6:1 骨架 / 空状态 */
+
+  /* —— 描边（对 #000 的对比度；第 11 轮整体上提 1-2 档修「偏浅偏细」） —— */
+  --lc-border-strong: #8B939F; /* 6.0:1  对话外框 / 强调物件边界 */
+  --lc-border-done: #6E7683;   /* 4.7:1  完成态 / 次按钮 hover 边 */
+  --lc-border-input: #5A6270;  /* 3.9:1  输入边 / 起点块 */
+  --lc-border-faint: #464C58;  /* 3.2:1  常规分隔 / 量尺轨道 */
+  --lc-border-pill: #545A65;   /* 3.9:1  语种胶囊 / 次按钮描边（2026-09-18 用户裁定：整体提亮一档，对齐 X 风格） */
+  --lc-border-card: #464C58;   /* 3.2:1  卡片常规边（Toast / 菜单 / 抽屉；同上提亮一档） */
+  --lc-border-card-dim: #343B47; /* 骨架屏 / 空状态卡边（随整体提亮上移） */
+  --lc-border-danger-edge: #402323; /* 危险对话框整框描边 */
+
+  /* —— 文字 —— */
+  --lc-text: #E7E9EA;
+  --lc-text-2: #9AA0AA;
+  --lc-text-3: #71767B;
+  --lc-text-4: #536471;        /* 占位 / 弱说明 */
+  --lc-disabled: #4A4F55;
+
+  /* —— 语义色（X/Grok 单色：全站无蓝无绿，绿色永久禁用） —— */
+  --lc-success: #E7E9EA;       /* 正向 / 活跃 = 白（第 11 轮由 #3FB950 转单色） */
+  --lc-danger: #E5484D;        /* 语义红：判错 / 错误提示 */
+  --lc-red: #F85149;           /* 危险红：删除按钮 / 红底动作 */
+  --lc-warn: #D29922;
+
+  /* —— 字体 —— */
+  --lc-font: "Noto Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --lc-font-latin: "Inter", "SF Pro Text", -apple-system, Arial, sans-serif;
+  --lc-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* —— 圆角 —— */
+  --lc-r-bar: 6px;             /* 骨架条 / 小按钮 */
+  --lc-r-ctl: 8px;             /* 按钮 / 输入框 */
+  --lc-r-toast: 10px;          /* Toast / 提示条 / 菜单 */
+  --lc-r-card: 12px;           /* 空状态卡 / 骨架卡 / 展示卡 */
+  --lc-r-modal: 14px;          /* 对话框 / 抽屉 */
+
+  /* —— 效果 —— */
+  --lc-panel-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.055); /* 面板顶缘受光 */
+  --lc-overlay: rgba(0, 0, 0, 0.72);                              /* 浮层遮罩 72% 黑 */
+
+  /* —— 尺寸 —— */
+  --lc-topbar-h: 56px;         /* 内部页统一顶栏 */
+  --lc-workbench-topbar-h: 38px; /* 用户工作台顶栏（实测，UI-ANNOTATIONS §2.2） */
+  --lc-ctl-h: 36px;            /* 输入框高 */
+  --lc-btn-pad-y: 10px;
+  --lc-btn-pad-x: 18px;
+  --lc-toast-top: 72px;        /* Toast 距顶 */
+  --lc-toast-right: 24px;      /* Toast 距右 */
+  --lc-sidebar-w: 238px;       /* 后台侧栏宽 */
+  --lc-shell-topbar-h: 48px;   /* 后台顶栏高（实测 48，UI-ANNOTATIONS §2.3） */
+  --lc-table-row-h: 46px;      /* 表格行高 */
+  --lc-ctl-h-sm: 32px;         /* 工具栏小输入高 */
+
+  /* —— 移动端（390 基准） —— */
+  --lc-statusbar-h: 44px;      /* 系统状态栏 */
+  --lc-mob-topbar-h: 52px;     /* 移动端导航顶栏 */
+  --lc-tabbar-h: 62px;         /* 底部浮动 Tab Bar 胶囊高 */
+  --lc-tabbar-bottom: 20px;    /* 胶囊距屏底 */
+  --lc-mob-pad: 16px;          /* 移动端页边距 */
+
+  /* —— 响应式断点（供 @media 引用，CSS 变量不能用于媒体查询） —— */
+  /* ≤900px：后台侧栏转抽屉 / 指标卡重排；≤620px：页头纵排 / 双栏转单列 */
+}

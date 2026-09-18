@@ -1,80 +1,177 @@
 /* ============================================================================
-    theme.css — React 版主题（TDesign 之上补齐原 Vue 版的视觉个性）
-    仅保留三类规则：①登录页渐变 ②聊天气泡/文件卡 ③后台布局微调
-    ============================================================================ */
+   theme.css — LangCross 纯黑单色主题（X/Grok 单色体系）
+   ---------------------------------------------------------------------------
+   2026-09-17 全量换肤：源《langcross-handoff》交付包（README-OPENCODE.md §2）。
+
+   换肤策略（关键）：本项目后台约有 130 处 tsx 内联样式引用 --adm-* 语义变量，
+   前台引用 --npz-*，TDesign 组件引用 --td-*。因此本文件只需把这三套变量
+   整体重定义到 --lc-* 纯黑令牌上，即可让全站（含内联样式）一次性转为纯黑单色，
+   无需逐个改写 140 个组件文件。
+
+   交付包硬规则：全站无蓝无绿。
+     - 正向 / 活跃 / 成功 = 白 #E7E9EA（--lc-success，原绿色 #2e7d32 已废止）
+   ============================================================================ */
 
 /* ---- 全局复位：去掉默认 body 外边距，避免登录页背景四周露出白边 ---- */
 html, body, #root { margin: 0; padding: 0; height: 100%; }
 * { box-sizing: border-box; }
 
-/* ---- 弹性列主内容区：允许子层收缩到视口宽（防宽表格/固定列把页面撑出横向滚动）---- */
+/* ---- 弹性列主内容区：允许子层收缩到视口宽（防宽表格把页面撑出横向滚动）---- */
 .app-main > * { min-width: 0; }
 
-/* ---- 统一 TDesign 主题令牌（覆盖默认蓝灰，收敛为更饱和的蓝靛主色，统一圆角） ----
-   目标：① 全站按钮/输入/标签/菜单沿用同一套 TDesign 设计变量，解决圆角方角不一致；
-        ② 提升主色饱和度与选中态对比（原选中浅底偏灰发淡）。 */
+/* ============================================================================
+   一、变量重定义：把 --td-*（TDesign）/ --npz-*（前台）/ --adm-*（后台）整体
+       重定义到 --lc-* 纯黑令牌。以下分三块，但都是 :root 作用域（默认即纯黑，
+       主题开关到 dark 也不会回退亮色）。
+   ============================================================================ */
+
+/* —— 1. TDesign 令牌重定义（覆盖默认蓝，收敛为纯黑单色）——
+   品牌轨：原蓝主色全色阶 → 白色单色阶；浅色轨 → 半透明白。 */
 :root {
-  /* 主色梯度（-1 最浅选中底 … -10 最深）；提高饱和，选中态对比更清晰 */
-  --td-brand-color: #2f47f5;
-  --td-brand-color-hover: #5168ff;
-  --td-brand-color-active: #1f33d6;
-  --td-brand-color-focus: #2f47f5;
-  --td-brand-color-light: #dde3ff;
-  --td-brand-color-light-hover: #ccd6ff;
-  --td-brand-color-light-active: #b9c7ff;
-  --td-brand-color-1: #e9edff;
-  --td-brand-color-2: #d6deff;
-  --td-brand-color-3: #c2ccff;
-  --td-brand-color-4: #a6b2ff;
-  --td-brand-color-5: #8693f7;
-  --td-brand-color-6: #6479f5;
-  --td-brand-color-7: #455be8;
-  --td-brand-color-8: #2f47f5;
-  --td-brand-color-9: #1f33d6;
-  --td-brand-color-10: #16229e;
-  /* 统一圆角：对齐 TDesign 原生控件圆角，消除方圆混用 */
+  /* —— 品牌轨：原蓝主色全色阶 → 白色单色阶 —— */
+  --td-brand-color: #E7E9EA;
+  --td-brand-color-hover: #FFFFFF;
+  --td-brand-color-active: #C9CDD2;
+  --td-brand-color-focus: #E7E9EA;
+  /* 浅色轨：菜单选中项 / 浅色 Tag 底色（原浅蓝近白 → 半透明白） */
+  --td-brand-color-light: rgba(231, 233, 234, 0.14);
+  --td-brand-color-light-hover: rgba(231, 233, 234, 0.22);
+  --td-brand-color-light-active: rgba(231, 233, 234, 0.30);
+  --td-brand-color-1: rgba(231, 233, 234, 0.06);
+  --td-brand-color-2: rgba(231, 233, 234, 0.10);
+  --td-brand-color-3: rgba(231, 233, 234, 0.16);
+  --td-brand-color-4: rgba(231, 233, 234, 0.24);
+  --td-brand-color-5: #B8BCC2;
+  --td-brand-color-6: #C9CDD2;
+  --td-brand-color-7: #D8DBDF;
+  --td-brand-color-8: #E7E9EA;
+  --td-brand-color-9: #C9CDD2;
+  --td-brand-color-10: #9AA0AA;
+
+  /* —— 语义色：绿 → 白（交付包：绿色永久禁用）；红 / 琥珀保留 —— */
+  --td-success-color: #E7E9EA;
+  --td-success-color-1: rgba(231, 233, 234, 0.06);
+  --td-success-color-4: #C9CDD2;
+  --td-success-color-5: #E7E9EA;
+  --td-error-color-1: rgba(229, 72, 77, 0.08);
+  --td-error-color-2: rgba(229, 72, 77, 0.16);
+  --td-error-color-3: rgba(229, 72, 77, 0.26);
+  --td-warning-color: #D29922;
+  --td-warning-color-1: rgba(210, 153, 34, 0.08);
+  --td-warning-color-2: rgba(210, 153, 34, 0.16);
+  --td-warning-color-3: rgba(210, 153, 34, 0.28);
+  --td-warning-color-4: #D29922;
+
+  /* —— 面：纯黑体系（与 --lc-* 一一对应）—— */
+  --td-bg-color-container: #0E1014;
+  --td-bg-color-container-active: #202329;
+  /* ★ 输入框 / 文本域底：漏配会导致表单控件保持白底 */
+  --td-bg-color-specialcomponent: #0A0B0D;
+  --td-bg-color-secondarycontainer: #0A0B0D;
+  --td-bg-color-component: #16181C;
+  --td-text-color-primary: #E7E9EA;
+  --td-text-color-secondary: #9AA0AA;
+  --td-text-color-placeholder: #71767B;
+  --td-text-color-anti: #000000;      /* 白底上的文字（主按钮）必须为黑 */
+  --td-border-level-2-color: #464C58;
+  --td-component-border: #5A6270;
+  --td-component-stroke: #5A6270;
+  --td-mask-disabled: rgba(0, 0, 0, 0.6);
+
+  /* —— 阴影：纯黑投影 —— */
+  --td-shadow-2: 0 4px 24px rgba(0, 0, 0, 0.55);
+  --td-shadow-3: 0 8px 40px rgba(0, 0, 0, 0.6);
+
+  /* —— 圆角：对齐 TDesign 原生控件，消除方圆混用 —— */
   --td-radius-default: 6px;
   --td-radius-small: 4px;
   --td-radius-large: 10px;
   --td-radius-control: 6px;
   --td-radius-round: 999px;
   --td-radius-circle: 50%;
-  /* 选中/激活态描边更清晰、底色更明显（解决选中态过淡） */
-  --td-component-stroke: #cdd6ea;
-  --td-bg-color-container-active: #dbe2ff;
-  --td-text-color-primary: #141b2d;
-  --td-text-color-secondary: #525c70;
+
+  color-scheme: dark;
 }
 
-/* ---- 登录页渐变背景（复刻 Login.vue） ---- */
+/* ============================================================================
+   二、前台语义变量 --npz-*：亮面 → 纯黑
+   ============================================================================ */
+:root {
+  --npz-page-bg: #000000;   /* 页面底 */
+  --npz-surface: #0E1014;   /* 卡片 / 面板 */
+  --npz-surface-2: #16181C; /* 浮面 / hover */
+  --npz-text-1: #E7E9EA;    /* 主文字 */
+  --npz-text-2: #9AA0AA;    /* 次文字 */
+  --npz-line: #464C58;      /* 分隔 / 边 */
+}
+
+/* ============================================================================
+   三、后台语义变量 --adm-*（约 130 处 tsx 内联样式引用，本次整体换肤）
+       提示盒三件套（黄/蓝/紫）→ 琥珀 / 中性白 / 中性白，绿色成功态 → 白
+   ============================================================================ */
+:root {
+  --adm-hint: #9AA0AA;
+  --adm-faint: #71767B;
+  --adm-body: #E7E9EA;
+  --adm-soft: #0A0B0D;       /* 软面板 / 输入框底 */
+  --adm-line: #464C58;       /* 分隔线 */
+  --adm-card: #0E1014;       /* 卡片面 */
+  --adm-warn-bg: rgba(210, 153, 34, 0.10);
+  --adm-warn-bd: rgba(210, 153, 34, 0.32);
+  --adm-warn-tx: #D29922;
+  --adm-info-bg: rgba(231, 233, 234, 0.06);
+  --adm-info-bd: rgba(231, 233, 234, 0.14);
+  --adm-info-tx: #E7E9EA;
+  --adm-purp-bg: rgba(231, 233, 234, 0.05);
+  --adm-purp-bd: rgba(231, 233, 234, 0.14);
+  --adm-err-bg: rgba(229, 72, 77, 0.10);
+  --adm-err-bd: rgba(229, 72, 77, 0.26);
+  --adm-err-tx: #E5484D;
+  --adm-ok-tx: #E7E9EA;
+  --adm-ok-bg: rgba(231, 233, 234, 0.06);
+  --adm-amber-tx: #D29922;
+}
+
+/* ============================================================================
+   四、登录页：原蓝渐变 → 纯黑 + 面板卡片（AuthCard 400 / 圆角 14）
+   ============================================================================ */
 .login-wrap {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, var(--td-brand-color-active, #1f33d6) 0%, #3949ab 50%, #1557b0 100%);
+  background: #000000;
   position: relative;
 }
 .login-card {
-  background: #fff;
-  border-radius: 18px;
+  background: var(--npz-surface);
+  border-radius: 14px;
   padding: 40px 36px;
   width: 400px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
   position: relative;
   z-index: 1;
+  border: 1.2px solid var(--npz-line);
 }
-.login-logo { font-size: 22px; font-weight: 700; color: var(--td-brand-color-active, #1f33d6); margin-bottom: 6px; }
-.login-sub { font-size: 13px; color: #888; margin-bottom: 22px; }
+/* 品牌字标与副标题：原品牌蓝 #1f33d6 / 灰 #888 → 白色主文字 + --npz-text-2
+   （.login-lang 是登录卡右上角语言切换器的历史类名，当前组件树未检索到引用） */
+.login-logo { font-size: 22px; font-weight: 700; color: #E7E9EA; margin-bottom: 6px; }
+.login-sub { font-size: 13px; color: var(--npz-text-2); margin-bottom: 22px; }
 .login-lang { position: absolute; top: 18px; inset-inline-end: 24px; z-index: 1; }
+
+/* ============================================================================
+   五、聊天区（含前台工作台头部、消息气泡、进度条、翻译结果、匹配报告、
+       反馈入口、下载卡、输入条、标签 chip）
+   ============================================================================ */
 
 /* ---- 前台工作台头部 ---- */
 .app-header {
   display: flex; align-items: center; gap: 14px;
-  padding: 10px 20px; border-bottom: 1px solid #e7eaf0; background: #fff;
+  padding: 10px 20px; border-bottom: 1px solid var(--npz-line); background: var(--npz-page-bg);
   position: sticky; top: 0; z-index: 20;
 }
-.brand { font-weight: 800; color: var(--td-brand-color-active, #1f33d6); font-size: 17px; }
+/* 工作台品牌字标：原品牌蓝 → 白色主文字（App.tsx 的 .brand，logo 图片模式不受影响） */
+.brand { font-weight: 800; color: #E7E9EA; font-size: 17px; }
 
 /* ---- 聊天区 ---- */
 .chat-scroll { flex: 1; overflow-y: auto; padding: 18px 6%; scroll-behavior: smooth; }
@@ -82,24 +179,30 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .bubble-row.user { flex-direction: row-reverse; }
 .avatar {
   width: 34px; height: 34px; border-radius: 50%; flex: none;
-  display: flex; align-items: center; justify-content: center; font-size: 13px; color: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 13px; color: #000;
 }
-.avatar-ai { background: var(--td-brand-color-active, #1f33d6); }
-.avatar-user { background: #43a047; }
+/* 头像底色：AI=白、用户=次级灰（原品牌蓝 #1f33d6 / 绿 #43a047，绿色按交付规则废止）；
+   文字固定黑色，保证在白/灰底上仍有对比度 */
+.avatar-ai { background: #E7E9EA; }
+.avatar-user { background: #9AA0AA; }
 .bubble {
   max-width: 78%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.65;
-  background: #f4f6fa; color: #222; word-break: break-word;
+  background: var(--npz-surface); color: var(--npz-text-1); word-break: break-word;
 }
-.bubble-row.user .bubble { background: #e3f2fd; }
-.bubble .md pre { background: #27293d; color: #e6e6fa; padding: 10px; border-radius: 8px; overflow: auto; }
-.bubble .md code { background: rgba(31,51,214,.08); padding: 1px 5px; border-radius: 4px; }
+/* 用户气泡：原浅蓝 #e3f2fd → 浮面令牌 --npz-surface-2，与 AI 气泡靠层级而非色相区分 */
+.bubble-row.user .bubble { background: var(--npz-surface-2); }
+/* 气泡内 Markdown 排版：原深蓝紫语法底 #27293d / 蓝雾行内码 → 纯黑 #0A0B0D + 半透明白；
+   表格边线由写死的 #d8dee6 改为 --npz-line，随主题令牌走 */
+.bubble .md pre { background: #0A0B0D; color: #E7E9EA; padding: 10px; border-radius: 8px; overflow: auto; }
+.bubble .md code { background: rgba(231, 233, 234, 0.10); padding: 1px 5px; border-radius: 4px; }
 .bubble .md table { border-collapse: collapse; margin: 8px 0; }
-.bubble .md th, .bubble .md td { border: 1px solid #d8dee6; padding: 4px 8px; font-size: 13px; }
+.bubble .md th, .bubble .md td { border: 1.2px solid var(--npz-line); padding: 4px 8px; font-size: 13px; }
 
+/* ---- 多语言译文对照表：虚线分隔与语言 chip 由靛蓝底（#dfe4ee / #e8eaf6）→ 中性线 + 半透明白 ---- */
 .tr-translations { width: 100%; border-collapse: collapse; margin-top: 8px; }
-.tr-translations td { border-top: 1px dashed #dfe4ee; padding: 6px 4px; vertical-align: top; font-size: 13.5px; }
+.tr-translations td { border-top: 1px dashed var(--npz-line); padding: 6px 4px; vertical-align: top; font-size: 13.5px; }
 .tr-lang-chip {
-  display: inline-block; background: #e8eaf6; color: var(--td-brand-color-active, #1f33d6); border-radius: 10px;
+  display: inline-block; background: rgba(231, 233, 234, 0.08); color: #E7E9EA; border-radius: 10px;
   padding: 0 8px; font-size: 12px; line-height: 20px; margin-inline-end: 6px; white-space: nowrap;
 }
 
@@ -108,202 +211,237 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .message-row.user { flex-direction: row-reverse; }
 .bubble-badge { margin-bottom: 6px; }
 
+/* 技能徽标：原绿底 → 中性半透明白底（无绿） */
 .skill-badge {
   display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11px;
-  background: rgba(46, 125, 50, 0.12); color: var(--td-brand-color, #2f47f5); font-weight: 500;
+  background: rgba(231, 233, 234, 0.10); color: #E7E9EA; font-weight: 500;
 }
 
+/* ---- AI 回复的 Markdown 正文排版：标题下划线 / 引用左边线 / 分隔线原用浅灰实线（#dadce0、
+        #e8eaed）与品牌蓝，现统一为 --npz-line 与白色引用边；引用底、行内码底改半透明白 ---- */
 .bubble-text { word-break: break-word; overflow-wrap: break-word; }
 .bubble-text p { margin: 0 0 8px 0; line-height: 1.7; }
 .bubble-text p:last-child { margin-bottom: 0; }
-.bubble-text h1 { font-size: 18px; font-weight: 700; margin: 16px 0 8px 0; padding-bottom: 4px; border-bottom: 1px solid #dadce0; }
-.bubble-text h2 { font-size: 16px; font-weight: 700; margin: 14px 0 6px 0; padding-bottom: 3px; border-bottom: 1px solid #e8eaed; }
+.bubble-text h1 { font-size: 18px; font-weight: 700; margin: 16px 0 8px 0; padding-bottom: 4px; border-bottom: 1px solid var(--npz-line); }
+.bubble-text h2 { font-size: 16px; font-weight: 700; margin: 14px 0 6px 0; padding-bottom: 3px; border-bottom: 1px solid var(--npz-line); }
 .bubble-text h3 { font-size: 15px; font-weight: 600; margin: 12px 0 6px 0; }
 .bubble-text h4 { font-size: 14px; font-weight: 600; margin: 10px 0 4px 0; }
 .bubble-text h5, .bubble-text h6 { font-size: 13px; font-weight: 600; margin: 8px 0 4px 0; }
 .bubble-text ul, .bubble-text ol { margin: 4px 0 8px 0; padding-inline-start: 20px; }
 .bubble-text li { margin-bottom: 2px; line-height: 1.6; }
-.bubble-text blockquote { margin: 8px 0; padding: 4px 12px; border-inline-start: 3px solid var(--td-brand-color, #2f47f5); background: rgba(47,71,245,.05); color: #5f6368; border-radius: 0 4px 4px 0; }
-.bubble-text code { background: rgba(0,0,0,.06); padding: 1px 5px; border-radius: 3px; font-size: 13px; font-family: 'SF Mono', Menlo, Consolas, monospace; }
-.bubble-text hr { border: none; border-top: 1px solid #dadce0; margin: 12px 0; }
+.bubble-text blockquote {
+  margin: 8px 0; padding: 4px 12px; border-inline-start: 3px solid #E7E9EA;
+  background: rgba(231, 233, 234, 0.06); color: var(--npz-text-2); border-radius: 0 4px 4px 0;
+}
+.bubble-text code {
+  background: rgba(231, 233, 234, 0.10); padding: 1px 5px; border-radius: 3px; font-size: 13px;
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+}
+.bubble-text hr { border: none; border-top: 1px solid var(--npz-line); margin: 12px 0; }
 .bubble-text strong { font-weight: 600; }
 .bubble-text em { font-style: italic; }
 
-/* 进度条 */
+/* ---- 进度条（抽象进度须带检查点名字，见交付包 §2.4 原则 1）---- */
 .progress-area { margin-bottom: 10px; }
 .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; flex-wrap: wrap; }
-.progress-step { font-size: 13px; color: #5f6368; }
-.progress-lang { font-size: 12px; font-weight: 600; color: var(--td-brand-color, #2f47f5); background: #e8f0fe; padding: 1px 6px; border-radius: 4px; }
-.progress-detail { font-size: 12px; color: #9e9e9e; }
-.progress-percent { font-size: 13px; font-weight: 600; color: var(--td-brand-color, #2f47f5); font-family: 'SF Mono', Menlo, monospace; }
-.progress-bar-bg { width: 100%; height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden; }
-.progress-bar-fill { height: 100%; background: linear-gradient(90deg, var(--td-brand-color, #2f47f5), #4fc3f7); border-radius: 3px; transition: width .3s ease; }
+.progress-step { font-size: 13px; color: var(--npz-text-2); }
+.progress-lang { font-size: 12px; font-weight: 600; color: #000; background: #E7E9EA; padding: 1px 6px; border-radius: 4px; }
+.progress-detail { font-size: 12px; color: #71767B; }
+.progress-percent { font-size: 13px; font-weight: 600; color: #E7E9EA; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
+.progress-bar-bg { width: 100%; height: 6px; background: #2A2F3A; border-radius: 3px; overflow: hidden; }
+.progress-bar-fill { height: 100%; background: #E7E9EA; border-radius: 3px; transition: width .3s ease; }
 
-/* 翻译结果 */
+/* ---- 翻译检查点动效（移植 hero-stream.html 的 MOT 峰值逻辑，遵循 §2.4 原则 2/3/4/5/8/9）----
+   黑底不用几何形状做光，靠内容自身 filter:brightness 抬中间调；峰值是一个「时刻」而非一段，
+   可截出一张明显最亮的静帧。所有动画只动 opacity / transform / filter，不触发重排。
+   颜色全部取自现有纯黑单色令牌（白 #E7E9EA / 次级灰），无蓝无绿。 */
+@keyframes cpPeak {
+  0%   { filter: brightness(.84); }  /* 与压暗无缝衔接 */
+  18%  { filter: brightness(1.6); }  /* 峰值帧：明显最亮的一刻 */
+  100% { filter: brightness(1); }
+}
+/* 三连点亮：检查点文字（step / lang / detail）先压暗，再等速 260ms 步进点亮，只动 opacity/transform */
+.cp-light.cp-pre { opacity: .3; transform: translateY(6px); }
+.cp-light.cp-lit { opacity: 1; transform: none; transition: opacity .42s ease, transform .46s cubic-bezier(.16, 1, .3, 1); }
+/* 检查点本身等速 900ms：主检查点文字（.progress-step）用更长的节奏收束 */
+.progress-step.cp-light.cp-lit { transition: opacity .9s ease, transform .9s cubic-bezier(.16, 1, .3, 1); }
+
+/* ---- 翻译结果 ---- */
 .translation-results { display: flex; flex-direction: column; gap: 8px; }
 .lang-row { display: flex; gap: 8px; align-items: baseline; }
-.lang-label { min-width: 56px; font-size: 12px; color: #5f6368; font-weight: 500; flex-shrink: 0; }
-.lang-text { font-size: 14px; color: #202124; line-height: 1.5; white-space: pre-wrap; flex: 1; }
+.lang-label { min-width: 56px; font-size: 12px; color: var(--npz-text-2); font-weight: 500; flex-shrink: 0; }
+.lang-text { font-size: 14px; color: var(--npz-text-1); line-height: 1.5; white-space: pre-wrap; flex: 1; }
 .source-badge { font-size: 11px; padding: 1px 6px; border-radius: 4px; font-weight: 500; flex-shrink: 0; white-space: nowrap; }
-.source-kb { background: #e8f0fe; color: var(--td-brand-color, #2f47f5); }
-.source-model { background: #e3f2fd; color: #1565c0; }
-.translation-mode { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid #e8e8e8; }
+/* 译文来源徽标：知识库命中=白、模型翻译=琥珀（原来两者都是蓝底，仅靠深浅区分） */
+.source-kb { background: rgba(231, 233, 234, 0.10); color: #E7E9EA; }
+.source-model { background: rgba(210, 153, 34, 0.14); color: #D29922; }
+.translation-mode { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--npz-line); }
 .mode-badge { font-size: 12px; padding: 2px 8px; border-radius: 4px; font-weight: 500; }
-.mode-exact { background: #e8f0fe; color: var(--td-brand-color, #2f47f5); }
-.mode-fuzzy { background: #fff3e0; color: #e65100; }
-.mode-semantic { background: #f3e5f5; color: #6a1b9a; }
-.mode-model { background: #e3f2fd; color: #1565c0; }
-.mode-match-text { font-size: 12px; color: #9e9e9e; }
+/* 匹配模式四态：原蓝/橙/紫/蓝 → 白 / 琥珀 / 灰 / 白（无蓝无紫） */
+.mode-exact { background: rgba(231, 233, 234, 0.12); color: #E7E9EA; }
+.mode-fuzzy { background: rgba(210, 153, 34, 0.14); color: #D29922; }
+.mode-semantic { background: rgba(231, 233, 234, 0.06); color: var(--npz-text-2); }
+.mode-model { background: rgba(231, 233, 234, 0.12); color: #E7E9EA; }
+.mode-match-text { font-size: 12px; color: #71767B; }
 
-/* 匹配度报告 */
-.match-report { margin-top: 10px; padding-top: 10px; border-top: 1px solid #e0e0e0; }
-.report-title { font-size: 12px; font-weight: 600; color: #5f6368; margin-bottom: 6px; }
+/* ---- 匹配度报告 ---- */
+.match-report { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--npz-line); }
+.report-title { font-size: 12px; font-weight: 600; color: var(--npz-text-2); margin-bottom: 6px; }
 .report-grid { display: flex; flex-wrap: wrap; gap: 6px; }
-.report-item { display: flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 6px; background: #fff; border-radius: 4px; }
+.report-item { display: flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 6px; background: var(--npz-surface); border-radius: 4px; }
 .report-status { font-size: 12px; }
-.report-lang { color: #5f6368; }
+.report-lang { color: var(--npz-text-2); }
 
-/* 反馈入口 */
+/* ---- 反馈入口 ---- */
 .msg-feedback-row { margin-top: 6px; display: flex; justify-content: flex-end; }
-.feedback-btn { border: none; background: transparent; color: #5f6368; font-size: 12px; cursor: pointer; padding: 2px 8px; border-radius: 10px; }
-.feedback-btn:hover { background: rgba(47,71,245,.08); color: var(--td-brand-color, #2f47f5); }
+.feedback-btn { border: none; background: transparent; color: var(--npz-text-2); font-size: 12px; cursor: pointer; padding: 2px 8px; border-radius: 10px; }
+.feedback-btn:hover { background: rgba(231, 233, 234, 0.10); color: #E7E9EA; }
 
-/* 下载卡图标 */
+/* ---- 下载卡图标：原蓝/红/绿 → 白 / 红 / 琥珀（无绿） ---- */
 .card-icon { flex-shrink: 0; width: 42px; height: 42px; border-radius: 10px; display: flex; align-items: center; justify-content: center; }
-.icon-docx, .icon-pptx, .icon-xlsx { width: 42px; height: 42px; border-radius: 10px; color: #fff; font-size: 20px; font-weight: 800; font-family: 'Segoe UI', 'SF Pro', sans-serif; letter-spacing: -1px; }
-.icon-docx { background: var(--td-brand-color, #2f47f5); }
-.icon-pptx { background: #d4422e; }
-.icon-xlsx { background: #1e8e3e; }
-.icon-file { display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 10px; background: #f5f5f5; font-size: 22px; }
+.icon-docx, .icon-pptx, .icon-xlsx {
+  width: 42px; height: 42px; border-radius: 10px; color: #000; font-size: 20px; font-weight: 800;
+  font-family: 'Segoe UI', 'SF Pro', sans-serif; letter-spacing: -1px;
+}
+.icon-docx { background: #E7E9EA; }
+.icon-pptx { background: #F85149; color: #fff; }
+.icon-xlsx { background: #D29922; color: #000; }
+.icon-file {
+  display: flex; align-items: center; justify-content: center; width: 42px; height: 42px;
+  border-radius: 10px; background: var(--npz-surface-2); font-size: 22px; color: var(--npz-text-2);
+}
 .card-info { flex: 1; min-width: 0; }
-.card-filename { font-size: 14px; font-weight: 600; color: #202124; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.card-meta { font-size: 12px; color: #5f6368; margin-top: 2px; }
-.image-download-btn { display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px; border-radius: 8px; background: #f1f3f4; color: #5f6368; font-size: 13px; text-decoration: none; transition: all .2s; align-self: flex-start; }
-.image-download-btn:hover { background: #e8eaed; color: #202124; }
+.card-filename { font-size: 14px; font-weight: 600; color: var(--npz-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-meta { font-size: 12px; color: var(--npz-text-2); margin-top: 2px; }
+.image-download-btn {
+  display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px; border-radius: 8px;
+  background: var(--npz-surface-2); color: var(--npz-text-2); font-size: 13px; text-decoration: none;
+  transition: all .2s; align-self: flex-start;
+}
+.image-download-btn:hover { background: #202329; color: #E7E9EA; }
 
 .file-downloads { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
 .image-preview { position: relative; }
 .preview-img {
   max-width: 320px; max-height: 220px; border-radius: 10px; cursor: zoom-in;
-  border: 1px solid #e3e6ef; object-fit: cover; background: #fff;
-  display: flex; align-items: center; justify-content: center; color: #99a;
+  border: 1.2px solid var(--npz-line); object-fit: cover; background: var(--npz-surface);
+  display: flex; align-items: center; justify-content: center; color: #71767B;
 }
 .preview-loading { min-width: 120px; min-height: 80px; }
 .download-card {
-  display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid #e3e6ef;
-  border-radius: 12px; padding: 10px 12px; max-width: 340px;
+  display: flex; align-items: center; gap: 10px; background: var(--npz-surface);
+  border: 1.2px solid var(--npz-line); border-radius: 12px; padding: 10px 12px; max-width: 340px;
 }
 .card-btn { font-size: 18px; cursor: pointer; text-decoration: none; }
 
 .chat-inputbar {
-  border-top: 1px solid #e7eaf0; background: #fff; padding: 12px 6% 16px;
+  border-top: 1px solid var(--npz-line); background: #000000; padding: 12px 6% 16px;
   display: flex; flex-direction: column; gap: 8px;
 }
 .lang-tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 
-/* 已选文件 / 语言标签 chip（与翻译工单页文件 chip 视觉对齐） */
-.tag { display: inline-flex; align-items: center; gap: 4px; background: #f5f7fb; border: 1px solid #d8dee6; border-radius: 14px; padding: 3px 8px; font-size: 12px; color: #444; line-height: 1.4; }
-.tag-file { background: #eef3fb; border-color: #d4e0f2; }
-.tag-lang { background: #eef6ee; border-color: #d2e8d2; }
-.tag-other-lang { background: #f6f0fb; border-color: #e6d9f2; }
-/* 标签内统一的关闭按钮（TDesign Button size=small，三处一致） */
+/* ---- 已选文件 / 语言标签 chip：原浅蓝 / 浅绿 / 浅紫 → 统一中性（无蓝无绿无紫） ---- */
+.tag {
+  display: inline-flex; align-items: center; gap: 4px; background: var(--npz-surface-2);
+  border: 1.2px solid var(--npz-line); border-radius: 14px; padding: 3px 8px;
+  font-size: 12px; color: var(--npz-text-1); line-height: 1.4;
+}
+.tag-file { background: rgba(231, 233, 234, 0.08); border-color: rgba(231, 233, 234, 0.18); }
+.tag-lang { background: rgba(231, 233, 234, 0.06); border-color: rgba(231, 233, 234, 0.14); }
+.tag-other-lang { background: rgba(231, 233, 234, 0.04); border-color: rgba(231, 233, 234, 0.10); }
 .tag-close { margin-inline-start: 2px; }
 
-/* ---- 后台布局 ---- */
-.admin-shell { display: flex; min-height: 100vh; background: #f4f6fa; }
-.admin-side { width: 232px; background: #fff; border-inline-end: 1px solid #e7eaf0; padding: 14px 10px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+/* ============================================================================
+   六、后台布局（侧栏 238 / 面板 #0E1014，与 AdminShell 对齐）
+   ============================================================================ */
+.admin-shell { display: flex; min-height: 100vh; background: #000000; }
+.admin-side {
+  width: 238px; background: #0A0B0D; border-inline-end: 1px solid var(--npz-line);
+  padding: 14px 10px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+}
 .admin-main { flex: 1; padding: 18px 22px; min-width: 0; }
-.panel-card { background: #fff; border-radius: 12px; padding: 18px; border: 1px solid #eceff5; }
+/* 面板卡：原白底 #fff + #eceff5 细边 → 纯黑面 + 1.2px 描边（交付包卡片规格） */
+.panel-card { background: var(--npz-surface); border-radius: 12px; padding: 18px; border: 1.2px solid var(--npz-line); }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
-.stat-card { background: #fff; border: 1px solid #eceff5; border-radius: 12px; padding: 14px 16px; }
-.stat-card b { font-size: 22px; color: var(--td-brand-color-active, #1f33d6); }
+/* 统计卡组错落现身：60ms 等速步进、最多 6 级（原则 8/9）。
+   只给卡片本体加 animation，不动容器 —— 容器若带 transform 会造出包含块。 */
+.stat-grid > * { animation: lc-mo-up var(--lc-mo-enter) var(--lc-mo-out) both; }
+.stat-grid > *:nth-child(2) { animation-delay: 60ms; }
+.stat-grid > *:nth-child(3) { animation-delay: 120ms; }
+.stat-grid > *:nth-child(4) { animation-delay: 180ms; }
+.stat-grid > *:nth-child(5) { animation-delay: 240ms; }
+.stat-grid > *:nth-child(n+6) { animation-delay: 300ms; }
+.stat-card { background: var(--npz-surface); border: 1.2px solid var(--npz-line); border-radius: 12px; padding: 14px 16px; }
+.stat-card b { font-size: 22px; color: #E7E9EA; }
 
-.ref-cfg { margin-top: 16px; background: rgba(255,152,0,.06); border: 1px solid rgba(255,152,0,.25); border-radius: 10px; padding: 14px 16px; max-width: 560px; }
-
-/* 工单进度气泡（Teleport 等价：fixed 定位） */
-.ticket-progress-float {
-  position: fixed; inset-inline-end: 26px; bottom: 26px; width: 300px; z-index: 60;
-  background: #fff; border: 1px solid #e3e6ef; border-radius: 14px; padding: 14px;
-  box-shadow: 0 10px 30px rgba(31,51,214,.15);
+/* 推荐配置提示盒：底色/描边由品牌橙 rgba(255,152,0,…) 换成交付包保留的琥珀 #D29922 淡化底
+   （注意：仓库内未检索到使用该类的组件，仅 mobile.css 有对应宽度适配，属遗留样式） */
+.ref-cfg {
+  margin-top: 16px; background: rgba(210, 153, 34, 0.08); border: 1.2px solid rgba(210, 153, 34, 0.28);
+  border-radius: 10px; padding: 14px 16px; max-width: 560px;
 }
 
-/* ---- 弹窗内字段（等价 Vue 各 Modal 的内联/局部类）---- */
-.fb-hint { margin: 0 0 10px; font-size: 12px; color: #888; }
-.eb-hint { font-size: 12.5px; color: #888; margin: 8px 0 12px; }
+/* ---- 工单进度气泡（fixed 定位）---- */
+.ticket-progress-float {
+  position: fixed; inset-inline-end: 26px; bottom: 26px; width: 300px; z-index: 60;
+  background: var(--npz-surface); border: 1.2px solid var(--npz-line); border-radius: 14px; padding: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+
+/* ============================================================================
+   七、弹窗内字段（等价 Vue 各 Modal 的内联/局部类）
+   ============================================================================ */
+.fb-hint { margin: 0 0 10px; font-size: 12px; color: var(--npz-text-2); }
+.eb-hint { font-size: 12.5px; color: var(--npz-text-2); margin: 8px 0 12px; }
 .eb-old-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-.eb-old-label { font-size: 12px; color: #666; white-space: nowrap; }
-.eb-old-addr { font-size: 13px; color: #555; word-break: break-all; }
-.fb-addr { font-size: 13px; color: #555; word-break: break-all; }
+.eb-old-label { font-size: 12px; color: var(--npz-text-2); white-space: nowrap; }
+.eb-old-addr { font-size: 13px; color: var(--npz-text-1); word-break: break-all; }
+.fb-addr { font-size: 13px; color: var(--npz-text-1); word-break: break-all; }
 .pwd-code-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .pwd-code-input { flex: 1; }
 .eb-code-row { display: flex; gap: 8px; margin-top: 8px; }
 .eb-code-input { flex: 1; }
 .fb-msg { margin-top: 6px; font-size: 12.5px; }
-.login-ok-hint { color: #2e7d32; font-size: 12.5px; margin-top: 6px; }
-.login-error { color: #c5221f; font-size: 12.5px; margin-top: 6px; }
-.eb-ok { color: #2e7d32; font-size: 12.5px; margin-top: 6px; }
-.eb-err { color: #c5221f; font-size: 12.5px; margin-top: 6px; }
+/* 成功态：绿 → 白；错误态：红 */
+.login-ok-hint, .eb-ok { color: #E7E9EA; font-size: 12.5px; margin-top: 6px; }
+.login-error, .eb-err { color: #E5484D; font-size: 12.5px; margin-top: 6px; }
 .fb-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-.fb-check { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13px; color: #444; cursor: pointer; }
-.fb-ctx-preview { color: #999; font-size: 12px; }
-.fb-confirm-row { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: #333; margin: 6px 0 4px; }
+.fb-check { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13px; color: var(--npz-text-1); cursor: pointer; }
+.fb-ctx-preview { color: #71767B; font-size: 12px; }
+.fb-confirm-row { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--npz-text-1); margin: 6px 0 4px; }
 
-/* ★ F4 无障碍基线：键盘焦点可见 + 动效偏好尊重（WCAG 2.4.7 / 2.3.3） */
-:focus-visible { outline: 2px solid var(--td-brand-color, #2f47f5); outline-offset: 1px; border-radius: 2px; }
+/* ============================================================================
+   八、无障碍基线：键盘焦点可见（白描边，不用蓝）+ 动效偏好尊重
+   WCAG 2.4.7 / 2.3.3
+   ============================================================================ */
+:focus-visible { outline: 2px solid #E7E9EA; outline-offset: 1px; border-radius: 2px; }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+  }
 }
 
-/* ============ ★ F5 暗黑模式（TDesign --td-* 变量 + 自绘 CSS 双轨覆写） ============ */
-:root { --npz-page-bg: #fafbfd; --npz-surface: #ffffff; --npz-text-1: #1d2129; --npz-text-2: #5f6368; --npz-line: #e7eaf0; }
-/* ---- 管理后台语义色令牌（★ 2026-09-14 后台暗色适配）：
-   历史上 admin 组件内联硬编码 ~130 处浅色（#667 提示灰、#f7f9fc 软面板、#fff 卡片、
-   黄/蓝/紫提示盒三件套等），暗色下黑白混杂。统一收敛为语义变量：亮色值与历史逐一对应
-   （零视觉回归），暗色块整体换暗；tsx 内联样式以 var(--adm-*) 引用。 ---- */
-:root {
-  --adm-hint: #667; --adm-faint: #999; --adm-body: #333;
-  --adm-soft: #f7f9fc; --adm-line: #e3e6ef; --adm-card: #ffffff;
-  --adm-warn-bg: #fff7e6; --adm-warn-bd: #ffd591; --adm-warn-tx: #ad6800;
-  --adm-info-bg: #eef4ff; --adm-info-bd: #c9ddff; --adm-info-tx: #335;
-  --adm-purp-bg: #f3f0ff; --adm-purp-bd: #d6c8ff;
-  --adm-ok-tx: #1a7f37; --adm-ok-bg: #e8f5e9; --adm-amber-tx: #b26a00;
-}
-html[data-theme='dark'] {
-  --npz-page-bg: #14161a; --npz-surface: #1d2025; --npz-text-1: #e6e8eb; --npz-text-2: #9aa0a6; --npz-line: #2c3038;
-  --adm-hint: #9aa0a6; --adm-faint: #7d8590; --adm-body: #d5d9df;
-  --adm-soft: #23262d; --adm-line: #3a3f48; --adm-card: #1d2025;
-  --adm-warn-bg: rgba(230,179,65,.10); --adm-warn-bd: rgba(230,179,65,.32); --adm-warn-tx: #e3b341;
-  --adm-info-bg: rgba(96,152,255,.10); --adm-info-bd: rgba(96,152,255,.32); --adm-info-tx: #b8c7e6;
-  --adm-purp-bg: rgba(158,120,255,.12); --adm-purp-bd: rgba(158,120,255,.34);
-  --adm-ok-tx: #4ac26b; --adm-ok-bg: rgba(74,194,107,.14); --adm-amber-tx: #e3b341;
-  /* TDesign 变量轨：组件容器/文字/边框整体换暗 */
-  --td-bg-color-page: #14161a; --td-bg-color-container: #1d2025; --td-bg-color-container-hover: #262a31;
-  --td-bg-color-specialcomponent: #23262d; /* 输入框/文本域底（★ D1 回归：漏配则表单控件保持白底） */
-  --td-bg-color-secondarycontainer: #23262d; --td-bg-color-component: #2c3038; --td-bg-color-component-hover: #363b45;
-  --td-text-color-primary: #e6e8eb; --td-text-color-secondary: #b4b9c0; --td-text-color-placeholder: #6f757e;
-  --td-text-color-disabled: #55595f; --td-border-level-1-color: #2c3038; --td-border-level-2-color: #3a3f48;
-  --td-component-stroke: #2c3038; --td-component-border: #3a3f48; --td-mask-active: rgba(0,0,0,.7); --td-shadow-1: 0 1px 10px rgba(0,0,0,.4);
-  /* 品牌浅色轨：菜单选中项/浅色系 Tag 底色（默认亮蓝近白 → 暗色下必须转半透明暗蓝） */
-  --td-brand-color: #5168ff; --td-brand-color-hover: #6d80ff; --td-brand-color-light: rgba(81,104,255,.16);
-  --td-brand-color-light-hover: rgba(81,104,255,.24); --td-brand-color-light-active: rgba(81,104,255,.32);
-  color-scheme: dark;
-}
+/* ============================================================================
+   九、暗色分支下的类级覆写（与 :root 同值，防止主题开关回退亮色）
+   ============================================================================ */
 html[data-theme='dark'] body { background: var(--npz-page-bg); color: var(--npz-text-1); }
-html[data-theme='dark'] .app-header { background: var(--npz-surface); border-bottom-color: var(--npz-line); }
+html[data-theme='dark'] .app-header { background: var(--npz-page-bg); border-bottom-color: var(--npz-line); }
 html[data-theme='dark'] .bubble { background: var(--npz-surface); border-color: var(--npz-line); }
-html[data-theme='dark'] .bubble-text code, html[data-theme='dark'] .bubble-text pre { background: #23262d; }
-html[data-theme='dark'] .bubble-text blockquote { background: rgba(47,71,245,.12); }
+html[data-theme='dark'] .bubble-text code, html[data-theme='dark'] .bubble-text pre { background: #0A0B0D; }
+html[data-theme='dark'] .bubble-text blockquote { background: rgba(231, 233, 234, 0.06); }
 html[data-theme='dark'] .admin-shell { background: var(--npz-page-bg); }
-html[data-theme='dark'] .admin-side { background: var(--npz-surface); border-inline-end-color: var(--npz-line); }
-html[data-theme='dark'] .admin-side-mask { background: rgba(0,0,0,.55); }
+html[data-theme='dark'] .admin-side { background: #0A0B0D; border-inline-end-color: var(--npz-line); }
+html[data-theme='dark'] .admin-side-mask { background: rgba(0, 0, 0, 0.55); }
 /* 后台自绘卡片/统计块/浮动进度卡/共享标签与下载卡（inline 语义变量之外的类级覆写） */
 html[data-theme='dark'] .panel-card, html[data-theme='dark'] .stat-card { background: var(--npz-surface); border-color: var(--npz-line); }
 html[data-theme='dark'] .ticket-progress-float { background: var(--npz-surface); border-color: var(--npz-line); }
 html[data-theme='dark'] .download-card, html[data-theme='dark'] .preview-img { background: var(--npz-surface); border-color: var(--npz-line); }
 html[data-theme='dark'] .tag { background: var(--adm-soft); border-color: var(--adm-line); color: var(--adm-body); }
-html[data-theme='dark'] .tag-file { background: rgba(96,152,255,.12); border-color: rgba(96,152,255,.3); }
-html[data-theme='dark'] .tag-lang { background: rgba(70,180,100,.14); border-color: rgba(70,180,100,.32); }
-html[data-theme='dark'] .tag-other-lang { background: rgba(158,120,255,.12); border-color: rgba(158,120,255,.3); }
+/* 三种 tag 一律转中性，不再用蓝/绿/紫区分 */
+html[data-theme='dark'] .tag-file { background: rgba(231, 233, 234, 0.08); border-color: rgba(231, 233, 234, 0.18); }
+html[data-theme='dark'] .tag-lang { background: rgba(231, 233, 234, 0.06); border-color: rgba(231, 233, 234, 0.14); }
+html[data-theme='dark'] .tag-other-lang { background: rgba(231, 233, 234, 0.04); border-color: rgba(231, 233, 234, 0.10); }
 html[data-theme='dark'] .fb-hint, html[data-theme='dark'] .eb-hint, html[data-theme='dark'] .eb-old-label,
 html[data-theme='dark'] .eb-old-addr, html[data-theme='dark'] .fb-addr, html[data-theme='dark'] .fb-check { color: var(--adm-hint); }
 html[data-theme='dark'] .image-download-btn { background: var(--adm-soft); color: var(--adm-hint); }
@@ -313,6 +451,7 @@ html[data-theme='dark'] .bubble .md th, html[data-theme='dark'] .bubble .md td {
 html[data-theme='dark'] .t-card, html[data-theme='dark'] .t-dialog, html[data-theme='dark'] .t-drawer,
 html[data-theme='dark'] .t-popup__content, html[data-theme='dark'] .t-select__list, html[data-theme='dark'] .t-textarea { background: var(--npz-surface); }
 html[data-theme='dark'] .t-table, html[data-theme='dark'] .t-table th, html[data-theme='dark'] .t-table td { background: var(--npz-surface); border-color: var(--npz-line); }
+/* 设置页（ss-*）分区列表：分隔线走 --npz-line，表头底色由写死的 #23262d 改回令牌 --npz-surface-2 */
 html[data-theme='dark'] .ss-row, html[data-theme='dark'] .ss-table th, html[data-theme='dark'] .ss-table td { border-color: var(--npz-line); }
-html[data-theme='dark'] .ss-table th { background: #23262d; }
+html[data-theme='dark'] .ss-table th { background: var(--npz-surface-2); }
 html[data-theme='dark'] .ss-row span { color: var(--npz-text-2); }

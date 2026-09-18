@@ -1,8 +1,11 @@
 // ============ i18n/parity.test.ts · 职责说明 ============
 // 国际化字典静态逻辑测试：
 //   - 每个面板/基础字典的中文键与英文键必须一一对应（缺译/多译即失败）；
-//   - 合并后的全局字典取词行为：命中返回原文、缺失回退中文、再缺失回退键名。
+//   - 合并后的全局词典取词行为：命中返回原文、缺失回退中文、再缺失回退键名。
 // 覆盖 2026-09 新增强译键（ops.task*/promo*/billing.iPaidFailed 等）的成对性。
+// 2026-09-17/18 追加守护：panels/auth（登录/注册/AI 接管引导全套键）纳入逐面板对等性；
+// 同期 landing/chat/tickets 因换肤重排了键序、剥掉了词条里的 emoji 前缀——
+// 键序不参与断言（只比集合），但「文本非空」断言会拦住把键留着、文案清空成占位的回退。
 // =============================================
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -35,6 +38,13 @@ import * as pChatwin from './panels/chatwin'
 import * as pDatasources from './panels/datasources'
 import * as pMybill from './panels/mybilling'
 import * as pLanding from './panels/landing'
+// 2026-09-17 新增面板：认证域（登录/注册/找回密码/AI 接管引导）
+import * as pAuth from './panels/auth'
+// ★ 2026-09-18 缺口修复：index.ts 已合并 sdk / hub / reconcile 三面板，但本守护的
+//   PANELS 表漏收 → 这三份词典的 zh/en 键不对等、空值漏译永远不会被闸门发现。
+import * as pSdk from './panels/sdk'
+import * as pHub from './panels/hub'
+import * as pReconcile from './panels/reconcile'
 
 // 与 i18n/index.ts 保持同序的面板模块表（保证合并口径一致）
 const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<string, string> } }[] = [
@@ -51,6 +61,9 @@ const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<stri
   { name: 'industries', mod: pIndustries }, { name: 'brandterms', mod: pBrandterms },
   { name: 'chatwin', mod: pChatwin }, { name: 'datasources', mod: pDatasources },
   { name: 'mybilling', mod: pMybill }, { name: 'landing', mod: pLanding },
+  // 与 i18n/index.ts 的合并顺序对齐：新增面板同样追加在末尾
+  { name: 'auth', mod: pAuth },
+  { name: 'sdk', mod: pSdk }, { name: 'hub', mod: pHub }, { name: 'reconcile', mod: pReconcile },
 ]
 
 describe('i18n 中英词典键值对等性', () => {
@@ -97,7 +110,7 @@ describe('全局词典取词行为', () => {
   })
 })
 
-// ★ F2：组件中文字面量扫描——迁移后这 8 个文件的代码（去注释）不得含 CJK 字符串字面量/JSX 文本
+// ★ F2：组件中文字面量扫描——迁移后这 9 个文件的代码（去注释）不得含 CJK 字符串字面量/JSX 文本
 describe('F2 组件 i18n 覆盖扫描', () => {
   const files = [
     'src/components/EditorPage.tsx', 'src/components/TicketsPage.tsx', 'src/components/ChatWindow.tsx',

@@ -9,12 +9,16 @@
 //
 // 注：/assist-api 是**同源**路径反代（Caddy uri strip_prefix），故父页面与 iframe
 // 共用同一 localStorage；若部署为跨域 iframe，本注入会失效，需回退手工粘贴。
+//
+// 2026-09-18（UI 融合）：面板底色随全站暗色主题调整（iframe 容器底 #0E1014、
+//   状态条改用中性灰边框/浅色字），标题与状态文案去掉 emoji 前缀改由颜色表意。
 // ============================================================================
 
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Input, MessagePlugin } from 'tdesign-react'
+import { Button } from '@/ui/langcross/src'
 import { ASSIST_API } from '@/api/assist'
 import { adminAssistToken, adminAssistTokenRotate } from '@/api'
+import { toastSuccess, toastError } from '@/lib/toastBus'
 
 /** 管理台读取 Token 的 localStorage 键（与 assist web/admin.html 约定一致） */
 const ASSIST_TOK_KEY = 'assist_tok'
@@ -66,13 +70,13 @@ export default function AssistP() {
     setRotating(true)
     try {
       const r = await adminAssistTokenRotate(rotateVal.trim())
-      if (!r.success) { void MessagePlugin.error(r.message || '保存失败'); return }
-      void MessagePlugin.success(rotateVal.trim() ? 'Token 已更新' : 'Token 已清除（回落环境变量）')
+      if (!r.success) { toastError(r.message || '保存失败'); return }
+      toastSuccess(rotateVal.trim() ? 'Token 已更新' : 'Token 已清除（回落环境变量）')
       setRotateVal('')
       await loadToken()
       setReloadKey((k) => k + 1)
     } catch (e: any) {
-      void MessagePlugin.error(e?.message || '保存失败')
+      toastError(e?.message || '保存失败')
     } finally { setRotating(false) }
   }
 
@@ -82,28 +86,32 @@ export default function AssistP() {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>🤖 AI 助手管理</h2>
+        <h2 style={{ margin: 0 }}> AI 助手管理</h2>
         <span style={{ color: '#6b7280', fontSize: 13 }}>
           知识库 · 话术 · 流程 · 功能入口 · 配置（数据存于 AI 助手独立服务，与业务库隔离）
         </span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
-          <Button size="small" variant="outline" onClick={() => { void loadToken().then(() => setReloadKey((k) => k + 1)) }}>
+          <Button size="sm" variant="secondary" onClick={() => { void loadToken().then(() => setReloadKey((k) => k + 1)) }}>
             重新加载
           </Button>
         </span>
       </div>
 
-      {/* 管理 Token 状态条（改造 1A：免手填；异常时给出可自助的处置路径） */}
+      {/* 管理 Token 状态条（改造 1A：免手填；异常时给出可自助的处置路径）
+          三态配色：ready=绿底浅灰字、checking=灰底灰字、manual/error=暖橙警示底；
+          文案不再用 emoji 前缀，状态由颜色 + 文字表达。
+          注意：ready 分支的底色仍是浅色 #f0fdf4 而文字改成浅色 #E7E9EA，
+          明暗档未同步（浅底配浅字几乎不可读），后续需一并把底色换深色。 */}
       <div style={{
         fontSize: 12, borderRadius: 8, padding: '8px 12px', marginBottom: 8,
         background: phase === 'ready' ? '#f0fdf4' : phase === 'checking' ? '#f8fafc' : '#fff7ed',
-        border: `1px solid ${phase === 'ready' ? '#bbf7d0' : phase === 'checking' ? '#e2e8f0' : '#fed7aa'}`,
-        color: phase === 'ready' ? '#15803d' : phase === 'checking' ? '#64748b' : '#b45309',
+        border: `1px solid ${phase ==='ready'?'#464C58': phase ==='checking'?'#e2e8f0':'#fed7aa'}`,
+        color: phase ==='ready'?'#E7E9EA': phase ==='checking'?'#9AA0AA':'#b45309',
       }}>
-        {phase === 'checking' && '⏳ 正在获取管理 Token…'}
-        {phase === 'ready' && `✅ 管理 Token 已自动注入（来源：${srcLabel}），无需手工粘贴`}
-        {phase === 'manual' && `⚠️ ${errMsg}`}
-        {phase === 'error' && `❌ 获取管理 Token 失败：${errMsg}`}
+        {phase === 'checking' && '正在获取管理 Token…'}
+ {phase ==='ready'&& ` 管理 Token 已自动注入（来源：${srcLabel}），无需手工粘贴`}
+ {phase ==='manual'&& ` ${errMsg}`}
+ {phase ==='error'&& ` 获取管理 Token 失败：${errMsg}`}
       </div>
 
       {phase === 'manual' && (
@@ -115,22 +123,25 @@ export default function AssistP() {
 
       {(phase === 'manual' || phase === 'ready') && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Input
+          <input
+            className="lc-input"
             value={rotateVal}
-            onChange={setRotateVal}
+            onChange={(e) => setRotateVal(e.target.value)}
             type="password"
             placeholder="设置/轮换管理 Token（留空=清除库内配置，回落环境变量）"
             style={{ maxWidth: 420 }}
             aria-label="管理 Token"
           />
-          <Button size="small" theme="primary" loading={rotating} onClick={rotate}>保存 Token</Button>
+          <Button size="sm" variant="primary" disabled={rotating} onClick={rotate}>保存 Token</Button>
         </div>
       )}
 
       {phase === 'checking' ? null : (
+        // iframe 容器：底色与内嵌 assist 管理台一致（#0E1014），
+        // 目的是页面加载瞬间不闪白；高度按视口扣掉上方说明区，minHeight 保证小屏可滚动。
         <div style={{
-          border: '1px solid #e5e8ef', borderRadius: 10, overflow: 'hidden',
-          height: 'calc(100vh - 250px)', minHeight: 460, background: '#fff',
+          border: '1.2px solid var(--lc-border-card)', borderRadius: 10, overflow: 'hidden',
+          height: 'calc(100vh - 250px)', minHeight: 460, background: '#0E1014',
         }}>
           <iframe
             key={reloadKey}

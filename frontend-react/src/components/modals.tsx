@@ -1,11 +1,13 @@
 // ============================================================================
-// components/modals.tsx — 四个应用内弹窗（TDesign Dialog 实现）
+// components/modals.tsx — 四个应用内弹窗（langcross Dialog 实现）
 // FeedbackModal（翻译结果/工单反馈）/ PasswordModal（改密：验证码+确认密码）/
 // EmailBindModal（绑定/换绑邮箱）/ DeactivateModal（自助注销）
 // 行为、表单字段、i18n 键均与 Vue 对应组件对齐；成功后回调父级刷新。
+// 呈现层替换：TDesign Dialog→受控 Dialog、Input/Textarea/Checkbox→langcross 同名组件、
+//             Button(variant=outline/theme)→langcross Button、MessagePlugin→useToast。
 // ============================================================================
 import { useState } from 'react'
-import { Dialog, Input, Button, MessagePlugin, Textarea, Checkbox } from 'tdesign-react'
+import { Dialog, Input, Button, Textarea, Checkbox, useToast } from '@/ui/langcross/src'
 import {
   createFeedback, sendPwdCode, submitNewPassword,
   meEmailCode, updateEmail, deactivateAccount,
@@ -30,6 +32,7 @@ export interface FeedbackTarget {
 
 // 反馈弹窗：输入反馈内容并可选择附带源文/译文上下文，提交到平台
 export function FeedbackModal(props: { target: FeedbackTarget; onClose: () => void }) {
+  const { toast } = useToast()
   const [content, setContent] = useState('')
   const [withContext, setWithContext] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -45,7 +48,7 @@ export function FeedbackModal(props: { target: FeedbackTarget; onClose: () => vo
 
   // 提交反馈：校验非空 → 调用接口 → 成功提示并关闭弹窗
   async function submit() {
-    if (!content.trim()) { void MessagePlugin.warning(t('fb.needContent')); return }
+    if (!content.trim()) { toast({ title: t('fb.needContent'), tone: 'warn' }); return }
     setSubmitting(true)
     try {
       const r = await createFeedback({
@@ -57,29 +60,27 @@ export function FeedbackModal(props: { target: FeedbackTarget; onClose: () => vo
         translations: props.target.type === 'text' ? props.target.translations : undefined,
         mode: props.target.mode,
       })
-      if (r.success) { void MessagePlugin.success(t('fb.done')); props.onClose() }
-      else void MessagePlugin.error(r.message || t('fb.fail'))
+      if (r.success) { toast({ title: t('fb.done'), tone: 'success' }); props.onClose() }
+      else toast({ title: r.message || t('fb.fail'), tone: 'error' })
     } catch (e) { // ★ E10：异常必须可见（旧实现 try/finally，网络错误静默）
-      void MessagePlugin.error(e instanceof Error ? e.message : '提交失败')
+      toast({ title: e instanceof Error ? e.message : '提交失败', tone: 'error' })
     } finally { setSubmitting(false) }
   }
 
   return (
-    <Dialog header={t('fb.title')} visible onClose={props.onClose} width={520}
-            footer={
-              <>
-                <Button variant="outline" onClick={props.onClose}>{t('common.cancel')}</Button>
-                <Button disabled={!content.trim() || submitting} loading={submitting} onClick={submit}>
-                  {submitting ? t('fb.submitting') : t('fb.submit')}
-                </Button>
-              </>
-            }>
+    <Dialog
+      open
+      title={t('fb.title')}
+      onCancel={props.onClose}
+      confirmText={submitting ? t('fb.submitting') : t('fb.submit')}
+      onConfirm={submit}
+    >
       <p className="fb-hint">{t('fb.hint')}</p>
-      <Textarea autosize={{ minRows: 4 }} maxlength={1000} value={content} onChange={(v) => setContent(v as string)}
+      <Textarea rows={4} maxLength={1000} value={content} onChange={(e) => setContent(e.target.value)}
                 aria-label={t('fb.placeholder')} placeholder={t('fb.placeholder')} />
       {hasContext && (
         <label className="fb-check">
-          <Checkbox checked={withContext} onChange={(v) => setWithContext(v as boolean)} />
+          <Checkbox checked={withContext} onChange={(e) => setWithContext(e.target.checked)} />
           <span style={{ marginLeft: 6 }}>{t('fb.withContext')}</span>
           {withContext && ctxPreview && <span className="fb-ctx-preview">（{ctxPreview}）</span>}
         </label>
@@ -91,6 +92,7 @@ export function FeedbackModal(props: { target: FeedbackTarget; onClose: () => vo
 // ---------------- PasswordModal ----------------
 // 修改密码弹窗：邮箱验证码 + 新密码 + 确认密码
 export function PasswordModal(props: { onClose: () => void; onDone?: () => void; email?: string }) {
+  const { toast } = useToast()
   const { user } = useAuth()
   const username = user?.username || ''
   const email = props.email || ''
@@ -128,7 +130,7 @@ export function PasswordModal(props: { onClose: () => void; onDone?: () => void;
       const r = await submitNewPassword({ username, code: code.trim(), new_password: newPwd })
       if (!r.success) { setMsgOk(false); setMsg(r.message || t('pwd.codeBad')); return }
       setMsgOk(true)
-      void MessagePlugin.success(t('pwd.done'))
+      toast({ title: t('pwd.done'), tone: 'success' })
       props.onDone?.()
       props.onClose()
     } catch (e) {
@@ -138,7 +140,13 @@ export function PasswordModal(props: { onClose: () => void; onDone?: () => void;
   }
 
   return (
-    <Dialog header={t('pwd.title')} visible onClose={props.onClose} width={440}>
+    <Dialog
+      open
+      title={t('pwd.title')}
+      onCancel={props.onClose}
+      confirmText={submitting ? t('pwd.submitting') : t('pwd.submit')}
+      onConfirm={submit}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <p className="fb-hint">{tpl('pwd.hint', { user: username })}</p>
         {email && (
@@ -148,24 +156,18 @@ export function PasswordModal(props: { onClose: () => void; onDone?: () => void;
           </div>
         )}
         <div className="pwd-code-row">
-          <Input className="pwd-code-input" value={code} onChange={setCode} placeholder={t('login.verificationCode')} />
-          <Button disabled={cooldown > 0} loading={submitting} onClick={sendCode}>
+          <Input className="pwd-code-input" value={code} onChange={(e) => setCode(e.target.value)} placeholder={t('login.verificationCode')} />
+          <Button variant="secondary" disabled={cooldown > 0} onClick={sendCode}>
             {cooldown > 0 ? tpl('login.codeResend', { n: cooldown }) : t('login.sendCode')}
           </Button>
         </div>
         <form onSubmit={(e) => e.preventDefault()}>
-          <Input type="password" autocomplete="new-password" value={newPwd} onChange={setNewPwd} placeholder={t('login.newPassword')} />
-          <Input type="password" autocomplete="new-password" value={confirmPwd} onChange={setConfirmPwd} placeholder={t('pwd.confirmPlaceholder')} />
+          <Input type="password" autoComplete="new-password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} placeholder={t('login.newPassword')} />
+          <Input type="password" autoComplete="new-password" value={confirmPwd} onChange={(e) => setConfirmPwd(e.target.value)} placeholder={t('pwd.confirmPlaceholder')} />
         </form>
         {!!msg && (
           <div className={msgOk ? 'login-ok-hint' : 'login-error'}>{msg}</div>
         )}
-        <div className="fb-actions">
-          <Button variant="outline" onClick={props.onClose}>{t('common.cancel')}</Button>
-          <Button theme="primary" disabled={submitting || !code || !newPwd} loading={submitting} onClick={submit}>
-            {submitting ? t('pwd.submitting') : t('pwd.submit')}
-          </Button>
-        </div>
       </div>
     </Dialog>
   )
@@ -207,7 +209,7 @@ export function EmailBindModal(props: { hasOldEmail: boolean; oldEmail?: string;
       setMsg(r.message || t('pwd.codeSent'))
       setOk(true)
     } catch (e) { // ★ E10
-      { setOk(false); setMsg(e instanceof Error ? e.message : String(t('pwd.sendFail'))); }
+      { setOk(false); setMsg(e instanceof Error ? e.message : String(t('pwd.sendFail'))) }
     } finally { setSendingNew(false) }
   }
 
@@ -222,7 +224,7 @@ export function EmailBindModal(props: { hasOldEmail: boolean; oldEmail?: string;
       setMsg(r.message || t('pwd.codeSent'))
       setOk(true)
     } catch (e) { // ★ E10
-      { setOk(false); setMsg(e instanceof Error ? e.message : String(t('pwd.sendFail'))); }
+      { setOk(false); setMsg(e instanceof Error ? e.message : String(t('pwd.sendFail'))) }
     } finally { setSendingOld(false) }
   }
 
@@ -243,16 +245,13 @@ export function EmailBindModal(props: { hasOldEmail: boolean; oldEmail?: string;
   }
 
   return (
-    <Dialog header={props.dismissible ? t('emailBind.changeTitle') : t('emailBind.title')}
-            visible onClose={props.onClose} closeBtn={props.dismissible !== false} width={460}
-            footer={
-              <>
-                <Button variant="outline" onClick={props.onClose}>{t('common.cancel')}</Button>
-                <Button theme="primary" disabled={!valid} loading={saving} onClick={save}>
-                  {saving ? t('common.save') + '…' : t('emailBind.save')}
-                </Button>
-              </>
-            }>
+    <Dialog
+      open
+      title={props.dismissible ? t('emailBind.changeTitle') : t('emailBind.title')}
+      onCancel={props.onClose}
+      confirmText={saving ? t('common.save') + '…' : t('emailBind.save')}
+      onConfirm={save}
+    >
       <p className="eb-hint">{t('emailBind.reason')}</p>
       {props.oldEmail && (
         <div className="eb-old-row">
@@ -262,16 +261,16 @@ export function EmailBindModal(props: { hasOldEmail: boolean; oldEmail?: string;
       )}
       {props.oldEmail && (
         <div className="eb-code-row">
-          <Input className="eb-code-input" value={oldCode} onChange={setOldCode} placeholder={t('emailBind.oldCodePlaceholder')} />
-          <Button variant="outline" disabled={oldCooldown > 0} loading={sendingOld} onClick={sendOldCode}>
+          <Input className="eb-code-input" value={oldCode} onChange={(e) => setOldCode(e.target.value)} placeholder={t('emailBind.oldCodePlaceholder')} />
+          <Button variant="secondary" disabled={oldCooldown > 0} onClick={sendOldCode}>
             {oldCooldown > 0 ? tpl('login.codeResend', { n: oldCooldown }) : t('login.sendCode')}
           </Button>
         </div>
       )}
-      <Input type="text" value={newEmail} onChange={setNewEmail} placeholder={t('emailBind.newEmailPlaceholder')} onEnter={save} />
+      <Input type="text" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder={t('emailBind.newEmailPlaceholder')} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
       <div className="eb-code-row">
-        <Input className="eb-code-input" value={code} onChange={setCode} placeholder={t('login.verificationCode')} onEnter={save} />
-        <Button variant="outline" disabled={newCooldown > 0 || !valid || sendingNew} loading={sendingNew} onClick={sendNewCode}>
+        <Input className="eb-code-input" value={code} onChange={(e) => setCode(e.target.value)} placeholder={t('login.verificationCode')} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
+        <Button variant="secondary" disabled={newCooldown > 0 || !valid || sendingNew} onClick={sendNewCode}>
           {newCooldown > 0 ? tpl('login.codeResend', { n: newCooldown }) : t('login.sendCode')}
         </Button>
       </div>
@@ -283,45 +282,45 @@ export function EmailBindModal(props: { hasOldEmail: boolean; oldEmail?: string;
 // ---------------- DeactivateModal ----------------
 // 自助注销账号弹窗：需勾选确认后方可注销
 export function DeactivateModal(props: { onClose: () => void }) {
+  const { toast } = useToast()
   const { logout } = useAuth()
   const [acknowledged, setAcknowledged] = useState(false)
   const [busy, setBusy] = useState(false)
 
   // 执行注销：需先勾选确认 → 调用接口 → 成功提示、登出并关闭
   async function submit() {
-    if (!acknowledged) { void MessagePlugin.warning(t('deact.needConfirm')); return }
+    if (!acknowledged) { toast({ title: t('deact.needConfirm'), tone: 'warn' }); return }
     setBusy(true)
     try {
       const r = await deactivateAccount()
-      if (!r.success) { void MessagePlugin.error(r.message || t('deact.fail')); return }
-      void MessagePlugin.success(t('deact.done'))
+      if (!r.success) { toast({ title: r.message || t('deact.fail'), tone: 'error' }); return }
+      toast({ title: t('deact.done'), tone: 'success' })
       logout()
       props.onClose()
     } catch (e) { // ★ E10
-      void MessagePlugin.error(e instanceof Error ? e.message : String(t('deact.fail')))
+      toast({ title: e instanceof Error ? e.message : String(t('deact.fail')), tone: 'error' })
     } finally { setBusy(false) }
   }
 
   return (
-    <Dialog header={t('deact.title')} visible onClose={props.onClose} width={400}
-            footer={
-              <>
-                <Button variant="outline" onClick={props.onClose}>{t('common.cancel')}</Button>
-                <Button theme="danger" disabled={!acknowledged || busy} loading={busy} onClick={submit}>
-                  {busy ? t('deact.processing') : t('deact.confirm')}
-                </Button>
-              </>
-            }>
+    <Dialog
+      open
+      title={t('deact.title')}
+      danger
+      onCancel={props.onClose}
+      confirmText={busy ? t('deact.processing') : t('deact.confirm')}
+      onConfirm={submit}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <p style={{ fontSize: 13.5, color: '#333', lineHeight: 1.6, margin: 0 }}>{t('deact.line1')}</p>
-        <ul style={{ margin: '0 0 4px 18px', fontSize: 13, color: '#555', lineHeight: 1.8 }}>
+        <p style={{ fontSize: 13.5, color: 'var(--lc-text-2)', lineHeight: 1.6, margin: 0 }}>{t('deact.line1')}</p>
+        <ul style={{ margin: '0 0 4px 18px', fontSize: 13, color: 'var(--lc-text-3)', lineHeight: 1.8 }}>
           <li>{t('deact.point1')}</li>
           <li>{t('deact.point2')}</li>
           <li>{t('deact.point3')}</li>
         </ul>
         <label className="fb-confirm-row">
-          <Checkbox checked={acknowledged} onChange={(v) => setAcknowledged(v as boolean)} />
-          <span style={{ fontSize: 13, color: '#333' }}>{t('deact.ack')}</span>
+          <Checkbox checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} />
+          <span style={{ fontSize: 13, color: 'var(--lc-text-2)' }}>{t('deact.ack')}</span>
         </label>
       </div>
     </Dialog>

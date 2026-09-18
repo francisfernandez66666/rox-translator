@@ -30,11 +30,13 @@ import (
 	"time"
 
 	"translator/internal/billing"
+	"translator/internal/db"
 	"translator/internal/engine"
 	"translator/internal/infra/distlock"
 	"translator/internal/infra/redis"
 	"translator/internal/kb"
 	"translator/internal/mail"
+	"translator/internal/observability"
 	"translator/internal/orchestrator"
 	"translator/internal/queue"
 	"translator/internal/store"
@@ -466,12 +468,18 @@ func (s *TicketService) StartStallSweep() {
 		for range t.C {
 			// 非阻塞获取：拿不到说明其他实例正在巡检，本实例直接跳过本轮（尽力而为）。
 			got, release, err := lock.TryLock(context.Background(), 6*time.Minute)
-			if err != nil || !got {
+			// ★ P1-4（2026-09-18）：Redis 异常与「他实例持锁」语义不同——异常时原写法
+			//   `err != nil || !got → continue` 会让全集群巡检静默停摆；改为保守降级
+			//   本进程执行（关单/低额提醒/重排均幂等，宁可偶发重复不可停摆）。
+			if err != nil {
+				observability.Warn(context.Background(), "stall 巡检分布式锁异常，本轮保守降级本进程执行", "err", err.Error())
+				release = func() {}
+			} else if !got {
 				continue
 			}
 			func() {
 				defer release()
-				s.Store.CloseStalePendingOrders()                     // ★ 订单15min超时自动关闭
+				s.Store.CloseStalePendingOrders()                       // ★ 订单15min超时自动关闭
 				s.Store.TenantLowBalanceAlerts(s.lowBalanceThreshold()) // ★ 低额提醒(24h去重)
 				n, rerr := s.Store.RequeueStalledTickets(20 * time.Minute)
 				if rerr != nil {
@@ -648,6 +656,9 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				s.Store.SetTicketState(t.ID, "file_translate", "running",
 					fmt.Sprintf("progress=%d/%d", doneN, len(files)))
 				mu.Lock()
+				// ★ 逐段对照真值落库（2026-09-18）：按文件维度（ticket_segments 唯一键含 file_path），
+				//   多文件工单各文件的段不会互相覆盖。
+				s.persistTicketSegments(t, tf.FilePath, res)
 				s.bumpTmHitsFromTranslations(t.TenantID, res.Data.Translations) // ★ 自闭环计数（不自动入库）
 				// ★ 漏翻可见性：聚合各文件未译出段数，收尾统一落轨迹+通知
 				unTotal += int64(untranslatedTotal(res.Data.Untranslated))
@@ -731,6 +742,10 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				strings.Join(res.Data.DegradedLangs, "/")),
 			"ticket", t.ID)
 	}
+	// ★ 逐段对照真值落库（2026-09-18，独立表 ticket_segments，前端无感知）：
+	//   必须在 HandleFile 之后、结果还在手上时落——SourceSegments/Translations 都是不序列化的
+	//   字段，落库晚了就拿不到「提取顺序 ↔ 译文」的精确配对（对照编辑器会退回按下标硬对齐）。
+	s.persistTicketSegments(t, t.FilePath, res)
 	s.bumpTmHitsFromTranslations(t.TenantID, res.Data.Translations) // ★ 自闭环计数（不自动入库）
 	return nil
 }
@@ -781,6 +796,52 @@ func zipOutputs(paths []string, zipName string) (string, error) {
 // persistTextOutputs ★ 工单双模式（2026-09-13）：纯文案 .md 旁路产物的归属登记与汇总。
 // 单语言直接返回该文件路径；多语言打包为 {ticket_no}_texts.zip；全部产物登记归属（C1 口径）。
 // 返回空串表示无可用旁路产物（生成失败/列表为空，不影响主交付）。
+// persistTicketSegments 把「源文段 → 译文段」的**精确配对**落进 ticket_segments 真值表。
+//
+// 为什么需要：PDF 文件工单的源文与译本是**两次独立**的 pdf2docx 转换产物，段落切分粒度
+// 必然不同（实测同一工单源 504 段 / 译本 578 段）。对照编辑器旧实现按下标 min() 硬对齐，
+// 抽查 20 对全部错位（源「新车上市当天官网多语齐发」↔ 译「Method B: Integrate into Skills
+// for calling via Lark」），前端双栏编辑器显示成「大量块不匹配」。而翻译这一段当时手上本就有
+// SourceSegments[i] ↔ Translations[lang][SourceSegments[i]] 的真值，直接落库即可。
+//
+// 独立性：写的是**新增的独立表**，不改 translation_edits / tickets 的任何字段；对照接口
+// （EditorSegment）形状不变，故前端无感知。写失败只记日志——附加数据，缺了自动回退旧口径。
+// 未译出的段也写入（target 留空），保证段序号与源文一侧严格对齐，不产生「跳号」。
+// 参数：t=工单；filePath=本次处理的源文件；res=引擎文件翻译结果（含不序列化的真值字段）。
+// ⚠️ 注释归位提示：上方三行「persistTextOutputs ★ 工单双模式…」是 persistTextOutputs
+// 的原注释，因本函数插在两者之间而暂落进本 doc 块内，整理时应移回 persistTextOutputs 之上。
+func (s *TicketService) persistTicketSegments(t *store.Ticket, filePath string, res *engine.FileTranslateResult) {
+	// 防御性早退：失败结果（只带 Error 的 FileTranslateResult）与测试/历史构造的 res
+	// 都没有有序源文段。此时**不能**改用 Translations 的 map 键补写——map 无顺序，
+	// 写出来的 seg_index 是随机序，宁可什么都不写让读取侧回退旧口径。
+	if t == nil || res == nil || filePath == "" || len(res.Data.SourceSegments) == 0 {
+		return
+	}
+	src := res.Data.SourceSegments
+	for lang, tr := range res.Data.Translations {
+		if len(tr) == 0 {
+			// 该语言一条「原文→译文」都没有：写一张全空 target 的表没有信息量，
+			// 还会让 segmentsFromStore 命中并把空段喂给编辑器，不如留空走回退。
+			continue
+		}
+		rows := make([]store.TicketSegment, 0, len(src))
+		for i, s0 := range src {
+			rows = append(rows, store.TicketSegment{
+				SegIndex: i,
+				Source:   s0,
+				Target:   strings.TrimSpace(tr[s0]), // 未命中=未译出，留空保持段序对齐
+			})
+		}
+		if err := s.Store.SaveTicketSegments(t.TenantID, t.ID, filePath, lang, rows); err != nil {
+			// 失败**不返回 error**：主交付物此时已落盘，真值表只是对照编辑器的附加数据，
+			// 缺了只是回退到旧的按下标对齐口径，没理由把整单打回重跑（重跑还要再吃一遍积分）。
+			// 日志口径沿用本文件既有的标准库 log（observability 需要 ctx，本函数没有 ctx 形参）。
+			log.Printf("[segments] 逐段对照真值落库失败（工单 %d / %s，不影响交付）: %v", t.ID, lang, err)
+		}
+	}
+}
+
+// persistTextOutputs 登记纯文案旁路产物（还原模式）。
 func (s *TicketService) persistTextOutputs(t *store.Ticket, ownerUID int64, paths []string) string {
 	var exist []string
 	for _, p := range paths {
@@ -893,7 +954,11 @@ func (s *TicketService) BootResume() {
 		//   造成同一工单双跑双扣费。健康 worker 心跳间隔 60s，120s 宽限可稳定区分死活；
 		//   本实例崩溃遗留任务的租约同样在 120s 后被回收，「卡死」顾虑不受损。
 		grace := time.Now().Add(-120 * time.Second).Format(time.RFC3339)
-		s.DB.RawDB().Exec("UPDATE jobs SET status='queued', leased_by='', leased_at='' WHERE type='ticket_run' AND status='running' AND (leased_by='' OR leased_at='' OR leased_at<?)", grace)
+		// ★ P1-5（2026-09-18）：旧写法 RawDB().Exec 裸用 `?` 占位符——lib/pq（PG 生产）
+		//   下直接报错且错误被丢弃，崩溃租约回收在 PG 上从未生效；改走 db.Exec 方言包装。
+		if _, rerr := db.Exec(s.DB.RawDB(), db.CurrentDialect(), "UPDATE jobs SET status='queued', leased_by='', leased_at='' WHERE type='ticket_run' AND status='running' AND (leased_by='' OR leased_at='' OR leased_at<?)", grace); rerr != nil {
+			log.Printf("[boot-resume] 租约回收 SQL 执行失败: %v", rerr)
+		}
 	}
 	if n, err := s.Store.RequeueStalledTickets(0); err == nil && n > 0 {
 		log.Printf("[boot-resume] 已重新排队 %d 个中断工单", n)

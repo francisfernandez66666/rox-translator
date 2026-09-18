@@ -24,14 +24,16 @@ test.describe('后台 Tab 合并 + 语言多选去重', () => {
   test('T1 一级菜单收敛为 9 项，旧计费菜单收进 Hub 子 tab', async ({ page }) => {
     await login(page, 'admin', 'Admin@1234');
     await page.goto('/admin');
-    const side = page.locator('.admin-side');
+    // ★ 2026-09-18 UI 迁移：后台外壳 TDesign Menu → ui/langcross AdminShell，
+    //   锚点 .admin-side→.lc-sidebar、.t-menu__item→.lc-side-item（面板 .panel-card 不变）
+    const side = page.locator('.lc-sidebar');
     // 新一级菜单存在（按 i18n 中文标签匹配）
     for (const label of ['计费与套餐', '系统与运维', '外部调用', '组织与成员', '总览']) {
       await expect(side.getByText(label).first(), `一级菜单缺「${label}」`).toBeVisible();
     }
     // 一级导航条目总数=9（overview/tickets/personal/kb/org/external/billing/system
     // + assist：2026-09-16 autosales 批次新增「🤖 AI 助手」，断言随菜单同步）
-    const n = await side.locator('.t-menu__item').count();
+    const n = await side.locator('.lc-side-item').count();
     expect(n, `一级菜单数=${n}，应收敛为 9`).toBe(9);
     // AI 助手菜单可见（超管 L4 满足 minLevel 3）
     await expect(side.getByText('AI 助手').first(), '一级菜单缺「AI 助手」').toBeVisible();
@@ -47,7 +49,8 @@ test.describe('后台 Tab 合并 + 语言多选去重', () => {
   test('T2 外部调用 Hub 含 SDK 子 tab', async ({ page }) => {
     await login(page, 'admin', 'Admin@1234');
     await page.goto('/admin');
-    await page.locator('.admin-side').getByText('外部调用').first().click();
+    // ★ 2026-09-18 UI 迁移：.admin-side→.lc-sidebar
+    await page.locator('.lc-sidebar').getByText('外部调用').first().click();
     await expect(page.getByText('官方 SDK').first()).toBeVisible();
     await page.getByText('官方 SDK').first().click();
     // SDK 页三端安装标识（TS / Python / 桌面端）

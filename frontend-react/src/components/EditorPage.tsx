@@ -3,9 +3,11 @@
 // 双栏：左=源文（只读）+ 术语高亮；右=可编辑译文 + 通过/驳回批注。
 // 文本工单解析 FinalResult；文件工单解析 xlsx/csv 对照表产物（后端负责）。
 // 逐段保存至后端 translation_edits，状态 pending/approved/rejected。
+// 呈现层已迁 @/ui/langcross/src：TDesign Dialog/Select/Textarea/Tag/MessagePlugin
+// → 原生 select/textarea + lc-* 类 + StatusPill + useToast（一屏一个 primary）。
 // ============================================================================
 import { useCallback, useMemo, useState } from 'react'
-import { Button, Input, Select, Textarea, Tag, MessagePlugin } from 'tdesign-react'
+import { Button, Input, StatusPill, useToast } from '@/ui/langcross/src'
 import { t, tpl, useLang } from '@/i18n'
 import { getSegments, getSegmentsByKey, saveSegments, type EditorSegment, type SegmentEdit } from '@/api/tickets'
 
@@ -26,6 +28,8 @@ const statusOptions = () => [
 /** 将源文中命中的术语串包裹为高亮 <mark> */
 function highlightTerms(text: string, terms: string[]): React.ReactNode {
   if (!terms.length) return text
+  // 术语来自知识库（可能含 . + ( ) 等正则元字符）：必须逐个转义后再拼交替式，
+  // 否则 new RegExp 会抛错或把「C++」当量词误匹配；长度 ≤1 的词到处命中、噪声大于收益，直接丢
   const escaped = terms
     .filter((t) => t && t.length > 1)
     .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
@@ -34,7 +38,7 @@ function highlightTerms(text: string, terms: string[]): React.ReactNode {
   const parts = text.split(re)
   return parts.map((p, i) =>
     terms.includes(p) ? (
-      <mark key={i} style={{ background: '#fff3a3', padding: '0 2px', borderRadius: 2 }}>{p}</mark>
+      <mark key={i} style={{ background: 'rgba(210,153,34,0.30)', color: '#E7E9EA', padding: '0 2px', borderRadius: 2 }}>{p}</mark>
     ) : (
       <span key={i}>{p}</span>
     ),
@@ -44,6 +48,8 @@ function highlightTerms(text: string, terms: string[]): React.ReactNode {
 /** EditorPage · 职责说明：对照编辑器页面，双栏展示源文与可编辑译文，支持逐段修改/通过/驳回并保存到后端 */
 export default function EditorPage() {
   useLang() // ★ F2：语言切换即时重渲染（状态选项等）
+  // 组件内提示走 ToastProvider；本页所有反馈（保存成功/失败、需先解析工单）都经它，不再引 MessagePlugin
+  const { toast } = useToast()
 
   const [ticketId, setTicketId] = useState('')
   const [lang, setLang] = useState('en')
@@ -58,7 +64,7 @@ export default function EditorPage() {
   const load = useCallback(async () => {
     const raw = String(ticketId || '').trim()
     if (!raw) {
-      void MessagePlugin.warning(t('tk.edNeedId'))
+      toast({ title: t('tk.edNeedId'), tone: 'warn' })
       return
     }
     const id = Number(raw)
@@ -68,7 +74,7 @@ export default function EditorPage() {
       try {
         const resp = await getSegmentsByKey(raw, lang)
         if (!resp.success) {
-          void MessagePlugin.error(resp.message || t('tk.edLoadFail'))
+          toast({ title: resp.message || t('tk.edLoadFail'), tone: 'error' })
           return
         }
         setSegments(resp.segments || [])
@@ -87,7 +93,7 @@ export default function EditorPage() {
         }
         setRows(init)
       } catch (e) {
-        void MessagePlugin.error(tpl('tk.edLoadFailErr', { err: String(e) }))
+        toast({ title: tpl('tk.edLoadFailErr', { err: String(e) }), tone: 'error' })
       } finally {
         setLoading(false)
       }
@@ -97,7 +103,7 @@ export default function EditorPage() {
     try {
       const resp = await getSegments(id, lang)
       if (!resp.success) {
-        void MessagePlugin.error(resp.message || t('tk.edLoadFail'))
+        toast({ title: resp.message || t('tk.edLoadFail'), tone: 'error' })
         return
       }
       setSegments(resp.segments || [])
@@ -114,7 +120,7 @@ export default function EditorPage() {
       }
       setRows(init)
     } catch (e) {
-      void MessagePlugin.error(tpl('tk.edLoadFailErr', { err: String(e) }))
+      toast({ title: tpl('tk.edLoadFailErr', { err: String(e) }), tone: 'error' })
     } finally {
       setLoading(false)
     }
@@ -149,24 +155,24 @@ export default function EditorPage() {
     //   仍照发请求（?id=NaN）。数字 ID 已由 load 回填归一，此处仅兜底拦截。
     const id = Number(ticketId)
     if (!Number.isInteger(id) || id <= 0) {
-      void MessagePlugin.warning(t('tk.edResolveFirst'))
+      toast({ title: t('tk.edResolveFirst'), tone: 'warn' })
       return
     }
     if (!dirtyEdits.length) {
-      void MessagePlugin.info(t('tk.edNoChanges'))
+      toast({ title: t('tk.edNoChanges'), tone: 'success' })
       return
     }
     setLoading(true)
     try {
       const resp = await saveSegments(id, lang, dirtyEdits)
       if (resp.success) {
-        void MessagePlugin.success(tpl('tk.edSavedN', { n: Number(resp.saved ?? dirtyEdits.length) }))
+        toast({ title: tpl('tk.edSavedN', { n: Number(resp.saved ?? dirtyEdits.length) }), tone: 'success' })
         await load()
       } else {
-        void MessagePlugin.error(resp.message || t('tk.edSaveFail'))
+        toast({ title: resp.message || t('tk.edSaveFail'), tone: 'error' })
       }
     } catch (e) {
-      void MessagePlugin.error(tpl('tk.edSaveFailErr', { err: String(e) }))
+      toast({ title: tpl('tk.edSaveFailErr', { err: String(e) }), tone: 'error' })
     } finally {
       setLoading(false)
     }
@@ -176,36 +182,42 @@ export default function EditorPage() {
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: 16, width: '100%', minWidth: 0 }}>
       <h2 style={{ margin: '8px 0' }}>{t('tk.edTitle')}</h2>
       <div className="editor-toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-        <Input placeholder={t("tk.edIdPlaceholder")} value={ticketId} onChange={(v) => setTicketId(String(v))} style={{ width: 160 }} />
-        <Select
-          value={lang}
-          onChange={(v) => setLang(String(v))}
-          options={langs.map((l) => ({ label: l, value: l }))}
-          style={{ width: 140 }}
-          placeholder={t('tk.edColLang')}
-        />
-        <Button theme="primary" onClick={load} loading={loading}>{t('tk.edLoad')}</Button>
-        <Button theme="success" onClick={save} loading={loading} disabled={!segments.length}>{t('tk.edSave')}</Button>
-        {dirtyEdits.length > 0 && <Tag theme="warning">{tpl('tk.pendingSaveFmt', { n: dirtyEdits.length })}</Tag>}
+        <Input placeholder={t("tk.edIdPlaceholder")} value={ticketId} onChange={(e) => setTicketId(String(e.target.value))} style={{ width: 160 }} />
+        {/* 语种下拉：空值项复用列头文案作占位。选空时后端 parseTicketIDLang 会回退到
+            工单首个目标语种（再兜底 en），故「不选」也是可用路径而不是错误态 */}
+        <select className="lc-input" value={lang} onChange={(e) => setLang(e.target.value)} style={{ width: 140 }}>
+          <option value="">{t('tk.edColLang')}</option>
+          {langs.map((l) => (
+            <option key={l} value={l}>{l}</option>
+          ))}
+        </select>
+        <Button variant="secondary" onClick={load} disabled={loading}>{t('tk.edLoad')}</Button>
+        <Button variant="primary" onClick={save} disabled={loading || !segments.length}>{t('tk.edSave')}</Button>
+        {dirtyEdits.length > 0 && <StatusPill tone="warn">{tpl('tk.pendingSaveFmt', { n: dirtyEdits.length })}</StatusPill>}
       </div>
 
+      {/* type=unsupported：后端判定「文件工单但格式无法逐段对照」（非 xlsx/csv 对照表），
+          此时只给提示横幅、不渲染空表格，避免用户对着空编辑器以为数据丢了 */}
       {type === 'unsupported' && (
-        <div style={{ padding: 12, background: '#fff7e6', border: '1px solid #ffd591', borderRadius: 6, marginBottom: 12 }}>
+        <div style={{ padding: 12, background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', borderRadius: 6, marginBottom: 12 }}>
           {t('tk.fileOnlyEditTip')}
         </div>
       )}
 
+      {/* 命中术语仅作概览（后端最多回 200 条）：只渲染前 30 个，其余仍参与左侧高亮 */}
       {terms.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           <span style={{ color: '#888', marginRight: 6 }}>{t('tk.edTermsHit')}</span>
           {terms.slice(0, 30).map((t, i) => (
-            <Tag key={i} style={{ marginRight: 4 }}>{t}</Tag>
+            <StatusPill key={i} tone="idle" className="ed-term">{t}</StatusPill>
           ))}
         </div>
       )}
 
       {segments.map((s) => {
         const r = rowOf(s)
+        // 状态底色只用 6%~10% 低透明层（纯黑体系禁止大色块铺底）：通过=提亮、驳回=语义红薄底，
+        // pending 保持面板底色
         return (
           <div
             key={s.index}
@@ -215,10 +227,10 @@ export default function EditorPage() {
               gridTemplateColumns: '1fr 1fr',
               gap: 12,
               padding: 12,
-              border: '1px solid #eee',
+              border: '1.2px solid #464C58',
               borderRadius: 8,
               marginBottom: 12,
-              background: r.status === 'approved' ? '#f6ffed' : r.status === 'rejected' ? '#fff1f0' : '#fff',
+              background: r.status ==='approved'?'rgba(231,233,234,0.06)': r.status ==='rejected'?'rgba(229,72,77,0.10)':'#0E1014',
             }}
           >
             <div>
@@ -229,23 +241,29 @@ export default function EditorPage() {
               <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
                 {tpl('tk.edTargetTpl', { state: s.target ? t('tk.edHas') : t('tk.edEmpty') })}
               </div>
-              <Textarea
+              <textarea
+                className="lc-textarea"
                 value={r.edited_text}
-                onChange={(v) => update(s.index, { edited_text: String(v) })}
+                onChange={(e) => update(s.index, { edited_text: e.target.value })}
                 aria-label={t('tk.edTargetAria')}
-                autosize={{ minRows: 2, maxRows: 8 }}
+                rows={3}
+                style={{ minHeight: 56, maxHeight: 220, resize: 'vertical' }}
               />
               <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
-                <Select
+                <select
+                  className="lc-select"
                   value={r.status}
-                  onChange={(v) => update(s.index, { status: String(v) })}
-                  options={statusOptions()}
+                  onChange={(e) => update(s.index, { status: e.target.value })}
                   style={{ width: 120 }}
-                />
+                >
+                  {statusOptions().map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
                 <Input
                   placeholder={t('tk.edNotePlaceholder')}
                   value={r.note}
-                  onChange={(v) => update(s.index, { note: String(v) })}
+                  onChange={(e) => update(s.index, { note: e.target.value })}
                   style={{ flex: 1 }}
                 />
               </div>

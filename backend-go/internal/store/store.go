@@ -472,6 +472,28 @@ func (s *Store) migrate() error {
 			updated_at TEXT
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_translation_edits_uniq ON translation_edits(ticket_id, lang, seg_index)`,
+		// ---------- ticket_segments 逐段对照真值表（文件工单的源文→译文权威配对） ----------
+		// ★ 2026-09-18 新增。独立于 translation_edits（那张表存的是「人改了什么」，本表存的是
+		//   「系统当初把哪段译成了哪段」）。存在的理由：PDF 工单的源文与译本是两次**独立**
+		//   pdf2docx 转换的产物，段落切分粒度必然不同（实测同一单 504 段 vs 578 段），
+		//   靠下标对齐必然错位；而翻译当时手上有 texts[i] ↔ translations[texts[i]] 的精确
+		//   配对，落这张表即可让对照编辑器直接读真值。前端接口形状不变（无感知）。
+		`CREATE TABLE IF NOT EXISTS ticket_segments (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id INTEGER NOT NULL DEFAULT 0,         -- 所属租户 ID
+			ticket_id INTEGER NOT NULL DEFAULT 0,         -- 关联工单 ID
+			file_path TEXT NOT NULL DEFAULT '',           -- 该段所属源文件（多文件工单区分用；单文件=工单主文件）
+			lang TEXT NOT NULL DEFAULT '',                -- 目标语言
+			seg_index INTEGER NOT NULL DEFAULT 0,         -- 段序号（= 该文件提取顺序下标）
+			source_text TEXT NOT NULL DEFAULT '',         -- 源文段落（提取顺序）
+			target_text TEXT NOT NULL DEFAULT '',         -- 该段译文（未译出为空）
+			created_at TEXT,
+			updated_at TEXT
+		)`,
+		// 唯一键比 translation_edits 多一列 file_path：多文件工单里每个源文件各有自己的一套
+		// 段序（都从 0 起），不含 file_path 就会互相顶掉。SaveTicketSegments 的「先删后插」
+		// 也正是按 (ticket_id, file_path, lang) 三元组清理，重跑幂等且不误伤同单其他文件。
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_ticket_segments_uniq ON ticket_segments(ticket_id, lang, file_path, seg_index)`,
 		// ---------- notifications 站内信（通用通知中心） ----------
 		`CREATE TABLE IF NOT EXISTS notifications (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

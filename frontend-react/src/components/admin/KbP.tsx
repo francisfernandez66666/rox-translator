@@ -2,11 +2,16 @@
 // components/admin/KbP.tsx — 知识库管理面板
 // 职责：知识包 CRUD、条目管理、文件导入、语言文化规范（安全句）
 // 从 panels_d.tsx 拆分
+// 2026-09-18（UI 融合）：导入校验结果文字改暗色档位（通过=中性浅色、失败=红），
+//   子 tab 文案去 emoji 前缀；权限与接口口径未变。
+// 2026-09-18（langcross 迁移）：TDesign 全量替换为 @/ui/langcross 纯黑组件库，
+//   业务/接口/权限/i18n 键未变；表格分页改用自制 KbPager（DataTable 无 pagination prop）。
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Button, Table, Dialog, Input, Select, Switch, Tag, Space, Popconfirm, Textarea, MessagePlugin, Tabs,
-} from 'tdesign-react'
+  Button, DataTable, Dialog, Input, Textarea, Switch, StatusPill, Link, Tabs,
+} from '@/ui/langcross/src'
+import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
 import { confirmDialog } from '@/components/uiDialogs'
 import {
   kbPackages, kbPackageCreate, kbPackageDelete, kbEntries, kbEntryAdd, kbEntryDelete, kbEntryUpdate,
@@ -33,8 +38,9 @@ const rowStyle: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap:
 const rowMt: any = { ...rowStyle, marginTop: 8 }
 // 行布局变体（顶距 + 虚线顶边框，分组分隔用）
 const rowTop: any = { ...rowStyle, marginTop: 8, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }
-// resStyle 校验结果文字样式：通过=绿色，不通过=红色。
-const resStyle = (ok: boolean): any => ({ color: ok ? '#1a7f37' : '#c0392b', fontSize: 13, marginTop: 6 })
+// resStyle 校验结果文字样式：通过=中性浅色（2026-09-18 起不再用绿色，暗色主题下与正文同档），
+//   不通过=红色（只有失败才需要抢眼）。
+const resStyle = (ok: boolean): any => ({ color: ok ? 'var(--lc-success)' : 'var(--lc-danger)', fontSize: 13, marginTop: 6 })
 
 // 安全句支持语言（安全短语料按语言入库）
 const SAFETY_LANGS = ['en', 'ar', 'de', 'es', 'fr', 'id_lang', 'kk', 'pt', 'ru', 'th', 'tr', 'zh_hant']
@@ -223,14 +229,14 @@ export function KbP() {
 
   // createPackage 新建知识包：按角色裁剪类型（≤2 级只能部门/跨部门），创建后刷新列表。
   async function createPackage() {
-    if (!pForm.code || !pForm.name) { MessagePlugin.warning(t('kb.errorCodeNameRequired')); return }
+    if (!pForm.code || !pForm.name) { toastWarn(t('kb.errorCodeNameRequired')); return }
     const data: Any = { code: String(pForm.code), name: String(pForm.name), pack_type: String(pForm.pack_type), role: 'source' }
     if (pForm.pack_type === 'cross_dept') {
       data.cross_all = !!pForm.cross_all
       if (!data.cross_all) data.cross_orgs = (pForm.cross_orgs || []).map((x: Any) => Number(x))
     }
     const r = await kbPackageCreate(data as never)
-    if (!r.success) { MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     setPForm({ code: '', name: '', pack_type: 'department', cross_all: false, cross_orgs: [] })
     await loadPackages()
   }
@@ -238,21 +244,21 @@ export function KbP() {
   async function togglePackage(p: Any) {
     const next = p.enabled === 0 ? 1 : 0
     const r = await kbPackageStatus(Number(p.id), next)
-    if (!r.success) { MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     await loadPackages()
   }
   // toggleShare 切换部门包是否跨部门共享（share_cross_dept）。
   async function toggleShare(p: Any) {
     const next = (p.share_cross_dept ?? 1) === 1 ? 0 : 1
     const r = await kbPackageShare(Number(p.id), next)
-    if (!r.success) { MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     await loadPackages()
   }
   // removePackage 删除知识包（连带条目；二次确认后执行）。
   async function removePackage(p: Any) {
     if (!(await confirmDialog({ body: tpl('kb.confirmDeletePackage', { name: String(p.name) }) }))) return
     const r = await kbPackageDelete(Number(p.id))
-    if (!r.success) { MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     await loadPackages()
   }
   // openGrants 打开包授权抽屉：拉取该包读/写/管理三级成员与被授权用户列表。
@@ -261,7 +267,7 @@ export function KbP() {
     setGForm({ user_id: null, role: 'read' })
     const r = await kbPackGrants(Number(p.id))
     setGrantList(r.success ? ((r as Any).grants || []) : [])
-    if (!r.success) MessagePlugin.error(r.message)
+    if (!r.success) toastError(r.message)
     if (grantUsers.length === 0) {
       const ur = await adminUsers()
       if (ur.success) setGrantUsers(((ur as Any).users || []).filter((u: Any) => u.status !== 'disabled'))
@@ -272,8 +278,8 @@ export function KbP() {
     const uid = userId ?? Number(gForm.user_id)
     if (!grantPkg || !uid) return
     const r = await kbPackGrantSet({ pack_id: Number(grantPkg.id), user_id: uid, role })
-    if (!r.success) { MessagePlugin.error(r.message); return }
-    MessagePlugin.success(role ? '授权已更新' : '已撤销授权')
+    if (!r.success) { toastError(r.message); return }
+    toastSuccess(role ? '授权已更新' : '已撤销授权')
     const rr = await kbPackGrants(Number(grantPkg.id))
     setGrantList(rr.success ? ((rr as Any).grants || []) : [])
   }
@@ -284,8 +290,8 @@ export function KbP() {
     setRebuilding(true)
     try {
       const r = await kbIndexRebuild()
-      if (!r.success) { MessagePlugin.error(r.message); return }
-      MessagePlugin.success(tpl('kb.rebuildDone', { n: (r as unknown as { embedded?: number }).embedded ?? 0 }))
+      if (!r.success) { toastError(r.message); return }
+      toastSuccess(tpl('kb.rebuildDone', { n: (r as unknown as { embedded?: number }).embedded ?? 0 }))
     } finally { setRebuilding(false) }
   }
 
@@ -319,26 +325,26 @@ export function KbP() {
   }
   // addEntry 新增一条对照条目（源句+目标语译文），保存后局部刷新计数。
   async function addEntry(pkgId: number) {
-    if (!eForm.source_text) { MessagePlugin.warning(t('kb.errorSourceRequired')); return }
+    if (!eForm.source_text) { toastWarn(t('kb.errorSourceRequired')); return }
     const r = await kbEntryAdd({
       package_id: pkgId, layer: Number(eForm.layer || 2), source_text: String(eForm.source_text),
       target_lang: String(eForm.target_lang || 'en'), target_text: String(eForm.target_text), module: String(eForm.module || ''),
     } as never)
-    if (!r.success) { MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     setEForm({ source_text: '', layer: 2, target_lang: 'en', target_text: '', module: '' })
     await loadEntries({ id: pkgId })
     await loadPackages()
   }
   // saveEntry 保存条目编辑（编辑态复用同一表单，按 editingId 区分增/改）。
   async function saveEntry(pkgId: number | null) {
-    if (!eForm.source_text) { MessagePlugin.warning(t('kb.errorSourceRequired')); return }
+    if (!eForm.source_text) { toastWarn(t('kb.errorSourceRequired')); return }
     if (editingId != null) {
       const r = await kbEntryUpdate({
         id: editingId, layer: Number(eForm.layer || 2), source_text: String(eForm.source_text),
         target_lang: String(eForm.target_lang || 'en'), target_text: String(eForm.target_text), module: String(eForm.module || ''),
       } as never)
-      if (!r.success) { MessagePlugin.error(r.message); return }
-      MessagePlugin.success(t('kb.saved'))
+      if (!r.success) { toastError(r.message); return }
+      toastSuccess(t('kb.saved'))
       setEditingId(null)
       setEForm({ source_text: '', layer: 2, target_lang: 'en', target_text: '', module: '' })
       if (pkgId != null) await loadEntries({ id: pkgId })
@@ -353,10 +359,11 @@ export function KbP() {
     setEditingId(Number(e.id))
     setEForm({ source_text: String(e.source_text || ''), layer: Number(e.layer) || 2, target_lang: String(e.target_lang || 'en'), target_text: String(e.target_text || ''), module: String(e.module || '') })
   }
-  // removeEntry 删除单条条目。
+  // removeEntry 删除单条条目（走二次确认，安全句不允许误删）。
   async function removeEntry(e: Any) {
+    if (!(await confirmDialog({ body: t('kb.delete') }))) return
     const r = await kbEntryDelete(Number(e.id))
-    if (!r.success) { MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     const p = pkgs.find((x: Any) => x.id === selectedPkg)
     if (p) await loadEntries(p)
   }
@@ -368,9 +375,9 @@ export function KbP() {
       if (parts.length < 3 || !parts[0]) continue
       items.push({ source_text: parts[0], target_lang: parts[1], target_text: parts[2], layer: parts.length >= 4 && Number(parts[3]) ? Number(parts[3]) : 2 })
     }
-    if (!items.length) { MessagePlugin.warning(t('kb.errorNoValidLine')); return }
+    if (!items.length) { toastWarn(t('kb.errorNoValidLine')); return }
     const r = await kbEntriesImport({ package_id: pkgId, entries: items } as never)
-    if (!r.success) { MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     setBulkTextMsg(tpl('kb.bulkResult', { added: (r as unknown as { added?: number }).added ?? 0, skipped: (r as unknown as { skipped?: number }).skipped ?? 0 }))
     setBulkText('')
     await loadEntries({ id: pkgId })
@@ -415,31 +422,31 @@ export function KbP() {
       package_id: safetyPkgId, lang: String(sf.lang), phrase: sf.phrase.trim(),
       kind: String(sf.kind), replacement: sf.kind === 'replace' ? sf.replacement.trim() : '',
     } as never)
-    if (!r.success) { MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     setSf({ ...sf, phrase: '', replacement: '' })
     await reloadSafety()
   }
   // setSafetyStatus 审核安全句状态（approve 生效 / reject 驳回）。
   async function setSafetyStatus(sp: Any, status: string) {
     const r = await safetyPhraseStatus(Number(sp.id), status)
-    if (!r.success) { MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     await reloadSafety()
   }
-  // removeSafety 删除安全句。
+  // removeSafety 删除安全句（内部已二次确认）。
   async function removeSafety(sp: Any) {
     if (!(await confirmDialog({ body: t('kb.deleteConfirm') }))) return
     const r = await safetyPhraseDelete(Number(sp.id))
-    if (!r.success) { MessagePlugin.error(r.message); return }
+    if (!r.success) { toastError(r.message); return }
     await reloadSafety()
   }
   // importSafety 批量导入安全句 JSON（数组：{lang,kind,phrase,replacement}）。
   async function importSafety() {
     let items: Any[]
-    try { items = JSON.parse(bulkJson) } catch { MessagePlugin.warning(t('kb.bulkInvalid')); return }
-    if (!Array.isArray(items) || !items.length) { MessagePlugin.warning(t('kb.bulkInvalid')); return }
+    try { items = JSON.parse(bulkJson) } catch { toastWarn(t('kb.bulkInvalid')); return }
+    if (!Array.isArray(items) || !items.length) { toastWarn(t('kb.bulkInvalid')); return }
     const r = await safetyBulkImport(safetyPkgId, items as never)
-    if (!r.success) { MessagePlugin.error(r.message); return }
-    MessagePlugin.success(tpl('kb.bulkDone', { n: (r as unknown as { added?: number }).added ?? 0 }))
+    if (!r.success) { toastError(r.message); return }
+    toastSuccess(tpl('kb.bulkDone', { n: (r as unknown as { added?: number }).added ?? 0 }))
     setBulkJson('')
     await reloadSafety()
   }
@@ -449,11 +456,20 @@ export function KbP() {
   return (
     <>
       <h2 style={{ margin: '4px 0 12px' }}>{t('kb.title')}</h2>
-      <Tabs value={kbTab} onChange={(v) => setKbTab(String(v))}>
-        {/* Tab 面板 */}
-        <Tabs.TabPanel value="kb" label={`📚 ${t('kb.title')}`}>
+      {/* 知识库工作台区：kb（包/条目/安全句）为主 tab；
+          「行业管理」「数据源采集」为平台级中台配置，仅 isSuper（L4）挂出，
+          租管看不到这两个 tab；「品牌名」所有可见本面板的角色均可维护。
+          注：tab 文案原带 emoji 前缀，2026-09-18 emoji 清理后残留一个前导空格（未影响功能）。 */}
+      <Tabs activeKey={kbTab} onChange={(k) => setKbTab(k)} items={[
+        { key: 'kb', label: t('kb.title') },
+        ...(isSuper ? [{ key: 'industries', label: '行业管理' }] : []),
+        { key: 'brand', label: '品牌名' },
+        ...(isSuper ? [{ key: 'scrape', label: t('admin.menuDataSources') }] : []),
+      ]} />
+      {/* ===== kb 主 tab：知识包 / 条目 / 安全句 ===== */}
+      {kbTab === 'kb' && (<>
       {/* 顶部工具卡：上传入口 + 包类型过滤 */}
-      <Panel title={t('kb.uploadTitle')} extra={<Button theme="primary" onClick={() => setKbDlg(true)}>{t('kb.topbarUpload')}</Button>}>
+      <Panel title={t('kb.uploadTitle')} extra={<Button variant="primary" onClick={() => setKbDlg(true)}>{t('kb.topbarUpload')}</Button>}>
         <div style={{ ...rowStyle, marginBottom: 6 }}><span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('kb.uploadHint')}</span></div>
         <div style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('kb.uploadSameAsFrontend')}</div>
       </Panel>
@@ -461,9 +477,9 @@ export function KbP() {
       <Panel title={t('kb.alignTitle')}>
         <div style={rowTop}>
           <input type="file" accept=".csv,.xlsx,.xls" onChange={(e: any) => { setBitextFile(e.target.files?.[0] || null); setBitextMsg(''); e.currentTarget.value = '' }} />
-          <Button onClick={() => void startBitextImport()} disabled={!bitextFile || bitextImporting} loading={bitextImporting}>{bitextImporting ? t('kb.bitextImporting') : t('kb.bitextImport')}</Button>
+          <Button onClick={() => void startBitextImport()} disabled={!bitextFile || bitextImporting}>{bitextImporting ? t('kb.bitextImporting') : t('kb.bitextImport')}</Button>
           <input type="file" accept=".tmx,.xml" onChange={(e: any) => { setTmxFile(e.target.files?.[0] || null); setTmxMsg(''); e.currentTarget.value = '' }} style={{ marginLeft: 8 }} />
-          <Button onClick={() => void startTmxImport()} disabled={!tmxFile || tmxImporting} loading={tmxImporting}>{tmxImporting ? t('kb.tmxImporting') : t('kb.tmxImport')}</Button>
+          <Button onClick={() => void startTmxImport()} disabled={!tmxFile || tmxImporting}>{tmxImporting ? t('kb.tmxImporting') : t('kb.tmxImport')}</Button>
         </div>
         {bitextMsg && <div style={resStyle(bitextOk)}>{bitextMsg}</div>}
         {tmxMsg && <div style={resStyle(tmxOk)}>{tmxMsg}</div>}
@@ -472,9 +488,11 @@ export function KbP() {
       <KbUploadDialog visible={kbDlg} onClose={() => setKbDlg(false)} />
 
       <div style={rowMt}>
-        <Input value={String(pForm.code || '')} onChange={(v: any) => setPForm({ ...pForm, code: v })} placeholder={t('kb.codePlaceholder')} style={{ minWidth: 160 }} />
-        <Input value={String(pForm.name || '')} onChange={(v: any) => setPForm({ ...pForm, name: v })} placeholder={t('kb.namePlaceholder')} style={{ minWidth: 180 }} />
-        <Select value={String(pForm.pack_type)} onChange={(v: any) => setPForm({ ...pForm, pack_type: v })} options={packTypeOptions} style={{ minWidth: 180 }} />
+        <Input value={String(pForm.code || '')} onChange={(e) => setPForm({ ...pForm, code: e.target.value })} placeholder={t('kb.codePlaceholder')} style={{ minWidth: 160 }} />
+        <Input value={String(pForm.name || '')} onChange={(e) => setPForm({ ...pForm, name: e.target.value })} placeholder={t('kb.namePlaceholder')} style={{ minWidth: 180 }} />
+        <select className="lc-select" value={String(pForm.pack_type)} onChange={(e) => setPForm({ ...pForm, pack_type: e.target.value })} style={{ minWidth: 180 }}>
+          {packTypeOptions.map((o: Any) => <option key={String(o.value)} value={String(o.value)}>{o.label}</option>)}
+        </select>
         <Button onClick={() => void createPackage()}>{t('kb.createPackage')}</Button>
       </div>
       {pForm.pack_type === 'cross_dept' && (
@@ -502,210 +520,235 @@ export function KbP() {
       )}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
         <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('kb.entriesHint')}</span>
-        {isSuper && <Button size="small" disabled={rebuilding} onClick={() => void rebuildIndex()}>{rebuilding ? t('kb.rebuilding') : t('kb.rebuildIndex')}</Button>}
+        {isSuper && <Button size="sm" disabled={rebuilding} onClick={() => void rebuildIndex()}>{rebuilding ? t('kb.rebuilding') : t('kb.rebuildIndex')}</Button>}
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '10px 0 6px' }}>
         <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('kb.filterType')}</span>
-        <Select value={pkgTypeFilter} onChange={(v: any) => setPkgTypeFilter(String(v))}
-          options={[
-            { label: t('kb.filterAll'), value: '' },
-            { label: t('kb.typeTenant'), value: 'tenant' },
-            { label: t('kb.typeIndustry'), value: 'industry' },
-            { label: t('kb.typeLocale'), value: 'locale' },
-            { label: t('kb.typeDepartment'), value: 'department' },
-            { label: t('kb.typeCrossDept'), value: 'cross_dept' },
-          ]} style={{ width: 180 }} />
+        <select className="lc-select" value={pkgTypeFilter} onChange={(e) => setPkgTypeFilter(e.target.value)} style={{ width: 180 }}>
+          <option value="">{t('kb.filterAll')}</option>
+          <option value="tenant">{t('kb.typeTenant')}</option>
+          <option value="industry">{t('kb.typeIndustry')}</option>
+          <option value="locale">{t('kb.typeLocale')}</option>
+          <option value="department">{t('kb.typeDepartment')}</option>
+          <option value="cross_dept">{t('kb.typeCrossDept')}</option>
+        </select>
       </div>
       {/* 知识包列表：展示名/类型作用域/条目数/状态，行操作（启停/共享/授权/删除） */}
-      <Table rowKey="id" size="small" data={filteredPkgs} style={{ marginTop: 8 }}
-        columns={[
-           { colKey: 'id', title: 'ID', width: 60 },
-           { colKey: 'code', title: t('kb.codePlaceholder'), width: 120 },
-           { colKey: 'name', title: t('kb.namePlaceholder'), cell: ({ row }: any) => packDisplayName(row, orgMap) },
-           { colKey: 'pack_type', title: t('kb.colType'), width: 130, cell: ({ row }: any) => packTypeLabel(row, t) },
-           { colKey: 'scope', title: t('kb.colScope'), width: 180, cell: ({ row }: any) => packScopeLabel(row, t, tpl) },
-           { colKey: 'enabled', title: '启用', width: 80, cell: ({ row }: any) =>
-             <Switch size="small" value={row.enabled !== 0} onChange={async () => { await togglePackage(row) }} /> },
-           { colKey: 'share_cross_dept', title: t('kb.colCross'), width: 110, cell: ({ row }: any) =>
-             row.pack_type === 'department'
-               ? <Switch size="small" value={(row.share_cross_dept ?? 1) === 1} onChange={async () => { await toggleShare(row) }} />
-               : <span /> },
-          { colKey: 'op', title: t('org.colActions'), width: 200, cell: ({ row }: any) => (
-            <Space size={2}>
-              <Button size="small" variant="text" onClick={() => openEntries(row)}>{tpl('kb.viewEntries', { count: entriesMap[Number(row.id)] || 0 })}</Button>
-              <Button size="small" variant="text" onClick={() => void openGrants(row)}>授权</Button>
-              <Popconfirm content={tpl('kb.confirmDeletePackage', { name: String(row.name) })} onConfirm={async () => { await removePackage(row) }}>
-                <Button size="small" variant="text" theme="danger">{t('kb.deletePackage')}</Button>
-              </Popconfirm>
-            </Space>
-          ) },
-        ] as never} />
+      <div style={{ marginTop: 8 }}>
+      <DataTable<any> rowKey={(row) => String(row.id)} rows={filteredPkgs} columns={[
+        { key: 'id', title: 'ID', width: 60 },
+        { key: 'code', title: t('kb.codePlaceholder'), width: 120 },
+        { key: 'name', title: t('kb.namePlaceholder'), width: 160, render: (row) => packDisplayName(row, orgMap) },
+        { key: 'pack_type', title: t('kb.colType'), width: 130, render: (row) => packTypeLabel(row, t) },
+        { key: 'scope', title: t('kb.colScope'), width: 180, render: (row) => packScopeLabel(row, t, tpl) },
+        { key: 'enabled', title: '启用', width: 80, render: (row) =>
+          <Switch checked={row.enabled !== 0} onChange={() => { void togglePackage(row) }} /> },
+        { key: 'share_cross_dept', title: t('kb.colCross'), width: 110, render: (row) =>
+          row.pack_type === 'department'
+            ? <Switch checked={(row.share_cross_dept ?? 1) === 1} onChange={() => { void toggleShare(row) }} />
+            : <span /> },
+        { key: 'op', title: t('org.colActions'), width: 200, render: (row) => (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Link onClick={() => openEntries(row)}>{tpl('kb.viewEntries', { count: entriesMap[Number(row.id)] || 0 })}</Link>
+            <Link onClick={() => void openGrants(row)}>授权</Link>
+            <Link tone="danger" onClick={() => void removePackage(row)}>{t('kb.deletePackage')}</Link>
+          </div>
+        ) },
+      ]} />
+      </div>
 
       {/* 条目管理弹窗：分页过滤查询 + 行内编辑/删除 + 批量文本导入 */}
-      <Dialog visible={selectedPkg !== null} onClose={() => setSelectedPkg(null)}
-        header={selectedPkg ? `${tpl('kb.viewEntries', { count: entriesMap[selectedPkg] || 0 })} #${selectedPkg}` : ''} width={900} footer={false}>
+      <Dialog open={selectedPkg !== null} onCancel={() => setSelectedPkg(null)}
+        title={selectedPkg ? `${tpl('kb.viewEntries', { count: entriesMap[selectedPkg] || 0 })} #${selectedPkg}` : ''}
+        confirmText={t('common.close')} onConfirm={() => setSelectedPkg(null)}>
         <div style={rowMt}>
-          <Input value={String(eForm.source_text || '')} onChange={(v: any) => setEForm({ ...eForm, source_text: v })} placeholder={t('kb.sourcePlaceholder')} style={{ flex: 1 }} />
-          <Select value={String(eForm.layer)} onChange={(v: any) => setEForm({ ...eForm, layer: Number(v) })}
-            options={[1, 2, 3, 4].map((n) => ({ label: t('kb.layer' + n), value: n }))} style={{ width: 120 }} />
-          <Input value={String(eForm.target_lang || '')} onChange={(v: any) => setEForm({ ...eForm, target_lang: v })} placeholder={t('kb.targetLangPlaceholder')} style={{ width: 120 }} />
-          <Input value={String(eForm.target_text || '')} onChange={(v: any) => setEForm({ ...eForm, target_text: v })} placeholder={t('kb.translationPlaceholder')} style={{ flex: 1 }} />
-          {editingId != null && <Button variant="outline" onClick={() => { setEditingId(null); setEForm({ source_text: '', layer: 2, target_lang: 'en', target_text: '', module: '' }) }}>{t('kb.cancelEdit')}</Button>}
-          <Button theme="primary" onClick={() => selectedPkg != null && void saveEntry(selectedPkg)}>{editingId != null ? t('kb.saveEdit') : t('kb.add')}</Button>
+          <Input value={String(eForm.source_text || '')} onChange={(e) => setEForm({ ...eForm, source_text: e.target.value })} placeholder={t('kb.sourcePlaceholder')} style={{ flex: 1 }} />
+          <select className="lc-select" value={String(eForm.layer)} onChange={(e) => setEForm({ ...eForm, layer: Number(e.target.value) })}
+            style={{ width: 120 }}>
+            {[1, 2, 3, 4].map((n) => <option key={n} value={String(n)}>{t('kb.layer' + n)}</option>)}
+          </select>
+          <Input value={String(eForm.target_lang || '')} onChange={(e) => setEForm({ ...eForm, target_lang: e.target.value })} placeholder={t('kb.targetLangPlaceholder')} style={{ width: 120 }} />
+          <Input value={String(eForm.target_text || '')} onChange={(e) => setEForm({ ...eForm, target_text: e.target.value })} placeholder={t('kb.translationPlaceholder')} style={{ flex: 1 }} />
+          {editingId != null && <Button variant="secondary" onClick={() => { setEditingId(null); setEForm({ source_text: '', layer: 2, target_lang: 'en', target_text: '', module: '' }) }}>{t('kb.cancelEdit')}</Button>}
+          <Button variant="primary" onClick={() => selectedPkg != null && void saveEntry(selectedPkg)}>{editingId != null ? t('kb.saveEdit') : t('kb.add')}</Button>
         </div>
         <details style={{ marginTop: 8 }}>
           <summary>{t('kb.bulkImportSummary')}</summary>
-          <Textarea autosize={{ minRows: 4 }} value={bulkText} onChange={(v: any) => setBulkText(v)} placeholder={t('kb.bulkPlaceholder')} />
+          <Textarea value={bulkText} onChange={(e) => setBulkText(e.target.value)} placeholder={t('kb.bulkPlaceholder')} style={{ minHeight: 90 }} />
           <Button style={{ marginTop: 6 }} onClick={() => selectedPkg != null && void bulkImport(selectedPkg)}>{t('kb.bulkImport')}</Button>
           {bulkTextMsg && <span style={{ marginLeft: 10, fontSize: 12, color: 'var(--adm-ok-tx)' }}>{bulkTextMsg}</span>}
         </details>
         <div style={{ ...rowMt, marginBottom: 8 }}>
-          <Select value={String(entryFilter.layer ?? 0)} onChange={(v: any) => {
-            const f = { ...entryFilter, layer: Number(v) }
+          <select className="lc-select" value={String(entryFilter.layer ?? 0)} onChange={(e) => {
+            const f = { ...entryFilter, layer: Number(e.target.value) }
             setEntryFilter(f); setEntryPage(1); void queryEntries(Number(selectedPkg), f, 1)
-          }}
-            options={[{ label: t('kb.allLayer'), value: '0' }, { label: t('kb.layer1'), value: '1' }, { label: t('kb.layer2'), value: '2' }, { label: t('kb.layer3'), value: '3' }, { label: t('kb.layer4'), value: '4' }]} style={{ width: 140 }} />
+          }} style={{ width: 140 }}>
+            <option value="0">{t('kb.allLayer')}</option>
+            <option value="1">{t('kb.layer1')}</option>
+            <option value="2">{t('kb.layer2')}</option>
+            <option value="3">{t('kb.layer3')}</option>
+            <option value="4">{t('kb.layer4')}</option>
+          </select>
           <Input placeholder={t('kb.targetLangPlaceholder')} value={String(entryFilter.target_lang || '')}
-            onChange={(v: string) => setEntryFilter((f: Any) => ({ ...f, target_lang: v.trim() }))}
-            onEnter={() => { const f = entryFilter; setEntryPage(1); void queryEntries(Number(selectedPkg), f, 1) }} style={{ width: 150 }} />
+            onChange={(e) => setEntryFilter((f: Any) => ({ ...f, target_lang: e.target.value.trim() }))}
+            onKeyDown={(e) => { if (e.key === 'Enter') { const f = entryFilter; setEntryPage(1); void queryEntries(Number(selectedPkg), f, 1) } }} style={{ width: 150 }} />
           <Input placeholder={t('kb.searchEntries')} value={String(entryFilter.q || '')}
-            onChange={(v: string) => setEntryFilter((f: Any) => ({ ...f, q: v }))}
-            onEnter={() => { const f = entryFilter; setEntryPage(1); void queryEntries(Number(selectedPkg), f, 1) }} style={{ flex: 1 }} />
-          <Button theme="primary" size="small" onClick={() => { const f = entryFilter; setEntryPage(1); void queryEntries(Number(selectedPkg), f, 1) }}>{t('kb.search')}</Button>
+            onChange={(e) => setEntryFilter((f: Any) => ({ ...f, q: e.target.value }))}
+            onKeyDown={(e) => { if (e.key === 'Enter') { const f = entryFilter; setEntryPage(1); void queryEntries(Number(selectedPkg), f, 1) } }} style={{ flex: 1 }} />
+          <Button variant="primary" size="sm" onClick={() => { const f = entryFilter; setEntryPage(1); void queryEntries(Number(selectedPkg), f, 1) }}>{t('kb.search')}</Button>
         </div>
         {/* 数据表格 */}
-        <Table rowKey="id" size="small" maxHeight={360} data={entries} style={{ marginTop: 8 }}
-          pagination={{
-            current: entryPage,
-            pageSize: entryPageSize,
-            total: entryTotal,
-            showJumper: true,
-            onChange: async (pi: unknown) => {
-              const p = typeof pi === 'number' ? pi : Number((pi as { current?: number })?.current || 1)
-              if (p === entryPage) return
-              setEntryPage(p)
-              await queryEntries(Number(selectedPkg), entryFilter, p)
-            },
-          }}
-          columns={[
-            { colKey: 'id', title: 'ID', width: 70 },
-            { colKey: 'layer', title: t('kb.colLayer'), width: 60, cell: ({ row }: any) => `L${row.layer}` },
-            { colKey: 'source_text', title: t('kb.colSource'), ellipsis: true },
-            { colKey: 'target_lang', title: t('kb.colLang'), width: 90 },
-            { colKey: 'target_text', title: t('kb.colTranslation'), ellipsis: true },
-            { colKey: 'op', title: '', width: 130, cell: ({ row }: any) => (
-              <Space size={4}>
-                <Button size="small" variant="text" theme="primary" onClick={() => void startEditEntry(row)}>{t('kb.edit')}</Button>
-                <Popconfirm content={t('kb.delete')} onConfirm={async () => { await removeEntry(row) }}>
-                  <Button size="small" variant="text" theme="danger">{t('kb.delete')}</Button>
-                </Popconfirm>
-              </Space>
-            ) },
-          ] as never} />
+        <div style={{ maxHeight: 360, overflow: 'auto', marginTop: 8 }}>
+        <DataTable<any> rowKey={(row) => String(row.id)} rows={entries} columns={[
+          { key: 'id', title: 'ID', width: 70 },
+          { key: 'layer', title: t('kb.colLayer'), width: 60, render: (row) => `L${row.layer}` },
+          { key: 'source_text', title: t('kb.colSource'), dim: true, render: (row) => String(row.source_text ?? '—') },
+          { key: 'target_lang', title: t('kb.colLang'), width: 90 },
+          { key: 'target_text', title: t('kb.colTranslation'), dim: true, render: (row) => String(row.target_text ?? '—') },
+          { key: 'op', title: '', width: 130, render: (row) => (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Link onClick={() => void startEditEntry(row)}>{t('kb.edit')}</Link>
+              <Link tone="danger" onClick={async () => { if (!(await confirmDialog({ body: t('kb.delete') }))) return; removeEntry(row) }}>{t('kb.delete')}</Link>
+            </div>
+          ) },
+        ]} />
+        </div>
+        <KbPager page={entryPage} pageSize={entryPageSize} total={entryTotal}
+          onGo={(p) => { if (p === entryPage) return; setEntryPage(p); void queryEntries(Number(selectedPkg), entryFilter, p) }} />
       </Dialog>
 
       {/* ===== 语言文化规范（安全句）区：过滤条 + 新增表单 + 审核列表 ===== */}
       <Panel title={t('kb.safetyTitle')}>
         <div style={{ fontSize: 12, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('kb.safetyHint')}</div>
         <div style={rowMt}>
-          <Select value={safetyPkgId} onChange={(v: any) => applySafetyQuery({ pkg_id: Number(v), status: safetyStatusFilter, ...safetyFilter, q: safetyQ })}
-            options={localePackages.map((p: Any) => ({ label: packDisplayName(p, orgMap), value: Number(p.id) }))} style={{ minWidth: 200 }} placeholder={t('kb.selectPkg')} />
-          <Select value={safetyStatusFilter} onChange={(v: any) => applySafetyQuery({ pkg_id: safetyPkgId, status: String(v), ...safetyFilter, q: safetyQ })}
-            options={[{ label: t('kb.allStatus'), value: '' }, { label: t('kb.pending'), value: 'pending' }, { label: t('kb.approved'), value: 'approved' }, { label: t('kb.rejected'), value: 'rejected' }]} style={{ width: 140 }} />
-          <Select value={String(safetyFilter.lang || '')} onChange={(v: any) => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, lang: String(v), kind: safetyFilter.kind, q: safetyQ })}
-            options={[{ label: t('kb.allLang'), value: '' }, ...SAFETY_LANGS.map((l: Any) => ({ label: String(l), value: String(l) }))]} style={{ width: 100 }} />
-          <Select value={String(safetyFilter.kind || '')} onChange={(v: any) => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, lang: safetyFilter.lang, kind: String(v), q: safetyQ })}
-            options={[{ label: t('kb.allKind'), value: '' }, { label: t('kb.kindStyle'), value: 'style' }, { label: t('kb.kindForbidden'), value: 'forbidden' }, { label: t('kb.kindReplace'), value: 'replace' }]} style={{ width: 110 }} />
+          <select className="lc-select" value={String(safetyPkgId)} onChange={(e) => applySafetyQuery({ pkg_id: Number(e.target.value), status: safetyStatusFilter, ...safetyFilter, q: safetyQ })}
+            style={{ minWidth: 200 }}>
+            <option value="">{t('kb.selectPkg')}</option>
+            {localePackages.map((p: Any) => <option key={Number(p.id)} value={String(Number(p.id))}>{packDisplayName(p, orgMap)}</option>)}
+          </select>
+          <select className="lc-select" value={safetyStatusFilter} onChange={(e) => applySafetyQuery({ pkg_id: safetyPkgId, status: String(e.target.value), ...safetyFilter, q: safetyQ })}
+            style={{ width: 140 }}>
+            <option value="">{t('kb.allStatus')}</option>
+            <option value="pending">{t('kb.pending')}</option>
+            <option value="approved">{t('kb.approved')}</option>
+            <option value="rejected">{t('kb.rejected')}</option>
+          </select>
+          <select className="lc-select" value={String(safetyFilter.lang || '')} onChange={(e) => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, lang: String(e.target.value), kind: safetyFilter.kind, q: safetyQ })}
+            style={{ width: 100 }}>
+            <option value="">{t('kb.allLang')}</option>
+            {SAFETY_LANGS.map((l: Any) => <option key={String(l.value)} value={String(l.value)}>{String(l.label)}</option>)}
+          </select>
+          <select className="lc-select" value={String(safetyFilter.kind || '')} onChange={(e) => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, lang: safetyFilter.lang, kind: String(e.target.value), q: safetyQ })}
+            style={{ width: 110 }}>
+            <option value="">{t('kb.allKind')}</option>
+            <option value="style">{t('kb.kindStyle')}</option>
+            <option value="forbidden">{t('kb.kindForbidden')}</option>
+            <option value="replace">{t('kb.kindReplace')}</option>
+          </select>
           <Input placeholder={t('kb.searchSafety')} value={safetyQ}
-            onChange={(v: string) => setSafetyQ(v)}
-            onEnter={() => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ })}
+            onChange={(e) => setSafetyQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ }) }}
             style={{ flex: 1, minWidth: 180 }} />
-          <Button size="small" theme="primary" onClick={() => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ })}>{t('kb.search')}</Button>
+          <Button size="sm" variant="primary" onClick={() => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ })}>{t('kb.search')}</Button>
           <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{tpl('kb.safetyCount', { n: safetyTotal })}</span>
         </div>
         <div style={rowMt}>
-          <Select value={String(sf.lang)} onChange={(v: any) => setSf({ ...sf, lang: v })} options={SAFETY_LANGS} style={{ width: 110 }} />
-          <Select value={String(sf.kind)} onChange={(v: any) => setSf({ ...sf, kind: v })}
-            options={[{ label: t('kb.kindStyle'), value: 'style' }, { label: t('kb.kindForbidden'), value: 'forbidden' }, { label: t('kb.kindReplace'), value: 'replace' }]} style={{ width: 130 }} />
-          <Input value={String(sf.phrase || '')} onChange={(v: any) => setSf({ ...sf, phrase: v })} placeholder={phrasePlaceholder} style={{ flex: 1 }} />
-          {sf.kind === 'replace' && <Input value={String(sf.replacement || '')} onChange={(v: any) => setSf({ ...sf, replacement: v })} placeholder={t('kb.replacementPlaceholder')} style={{ flex: 1 }} />}
-          <Button theme="success" disabled={!safetyPkgId || !sf.phrase.trim()} onClick={() => void addSafety()}>{t('users.create')}</Button>
+          <select className="lc-select" value={String(sf.lang)} onChange={(e) => setSf({ ...sf, lang: e.target.value })} style={{ width: 110 }}>
+            {SAFETY_LANGS.map((l: Any) => <option key={String(l.value)} value={String(l.value)}>{String(l.label)}</option>)}
+          </select>
+          <select className="lc-select" value={String(sf.kind)} onChange={(e) => setSf({ ...sf, kind: e.target.value })}
+            style={{ width: 130 }}>
+            <option value="style">{t('kb.kindStyle')}</option>
+            <option value="forbidden">{t('kb.kindForbidden')}</option>
+            <option value="replace">{t('kb.kindReplace')}</option>
+          </select>
+          <Input value={String(sf.phrase || '')} onChange={(e) => setSf({ ...sf, phrase: e.target.value })} placeholder={phrasePlaceholder} style={{ flex: 1 }} />
+          {sf.kind === 'replace' && <Input value={String(sf.replacement || '')} onChange={(e) => setSf({ ...sf, replacement: e.target.value })} placeholder={t('kb.replacementPlaceholder')} style={{ flex: 1 }} />}
+          <Button variant="primary" disabled={!safetyPkgId || !sf.phrase.trim()} onClick={() => void addSafety()}>{t('users.create')}</Button>
         </div>
         <div style={rowMt}>
-          <Input value={bulkJson} onChange={(v: any) => setBulkJson(v)} placeholder={t('kb.bulkPlaceholder')} style={{ flex: 1 }} />
+          <Input value={bulkJson} onChange={(e) => setBulkJson(e.target.value)} placeholder={t('kb.bulkPlaceholder')} style={{ flex: 1 }} />
           <Button disabled={!safetyPkgId || !bulkJson.trim()} onClick={() => void importSafety()}>{t('kb.bulkImport')}</Button>
         </div>
         {/* 数据表格 */}
-        <Table rowKey="id" size="small" data={filteredSafety} style={{ marginTop: 8 }}
-          pagination={{
-            current: safetyPage,
-            pageSize: SAFETY_PAGE_SIZE,
-            total: safetyTotal,
-            showJumper: true,
-            onChange: async (pi: unknown) => {
-              const p = typeof pi === 'number' ? pi : Number((pi as { current?: number })?.current || 1)
-              if (p === safetyPage) return
-              setSafetyPage(p)
-              await querySafety({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ, page: p })
-            },
-          }}
-          columns={[
-            { colKey: 'lang', title: t('kb.colLang'), width: 80 },
-            { colKey: 'kind', title: t('kb.colKind'), width: 110, cell: ({ row }: any) => kindLabel(row.kind) },
-            { colKey: 'phrase', title: t('kb.colRule') },
-            ...(hasReplace ? [{ colKey: 'replacement', title: t('kb.colReplacement'), cell: ({ row }: any) => (row.kind === 'replace' ? (row.replacement || '—') : '') }] : []),
-            { colKey: 'status', title: t('kb.colStatus'), width: 90, cell: ({ row }: any) =>
-              <Tag theme={(row.status || 'approved') === 'approved' ? 'success' : 'default'}>{(row.status || 'approved') === 'approved' ? t('kb.approved') : statusLabel(row.status)}</Tag> },
-            { colKey: 'source', title: t('kb.colSource'), width: 90, cell: ({ row }: any) => (row.source === 'llm' ? 'LLM' : t('kb.srcManual')) },
-            { colKey: 'op', title: t('org.colActions'), width: 200, cell: ({ row }: any) => (
-              <Space size={4}>
-                {(row.status || 'approved') !== 'approved' && <Button size="small" variant="text" onClick={() => void setSafetyStatus(row, 'approved')}>{t('kb.approve')}</Button>}
-                {(row.status || 'approved') === 'pending' && <Button size="small" variant="text" theme="danger" onClick={() => void setSafetyStatus(row, 'rejected')}>{t('kb.reject')}</Button>}
-                <Popconfirm content={t('kb.deleteConfirm')} onConfirm={() => void removeSafety(row)}><Button size="small" variant="text" theme="danger">✕</Button></Popconfirm>
-              </Space>
-            ) },
-          ] as never} />
+        <div style={{ marginTop: 8 }}>
+        <DataTable<any> rowKey={(row) => String(row.id)} rows={filteredSafety} columns={[
+          { key: 'lang', title: t('kb.colLang'), width: 80 },
+          { key: 'kind', title: t('kb.colKind'), width: 110, render: (row) => kindLabel(row.kind) },
+          { key: 'phrase', title: t('kb.colRule') },
+          ...(hasReplace ? [{ key: 'replacement', title: t('kb.colReplacement'), dim: true, render: (row: Any) => (row.kind === 'replace' ? (row.replacement || '—') : '') }] : []),
+          { key: 'status', title: t('kb.colStatus'), width: 90, render: (row) =>
+            <StatusPill tone={(row.status || 'approved') === 'approved' ? 'success' : 'idle'}>{(row.status || 'approved') === 'approved' ? t('kb.approved') : statusLabel(row.status)}</StatusPill> },
+          { key: 'source', title: t('kb.colSource'), width: 90, render: (row) => (row.source === 'llm' ? 'LLM' : t('kb.srcManual')) },
+          { key: 'op', title: t('org.colActions'), width: 200, render: (row) => (
+            // 行内动作按状态条件渲染：非 approved 才给「通过」、pending 才给「驳回」；
+            // 删除走二次确认（安全句直接影响线上翻译兜底，不允许误点）。
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {(row.status || 'approved') !== 'approved' && <Link onClick={() => void setSafetyStatus(row, 'approved')}>{t('kb.approve')}</Link>}
+              {(row.status || 'approved') === 'pending' && <Link tone="danger" onClick={() => void setSafetyStatus(row, 'rejected')}>{t('kb.reject')}</Link>}
+              <Link tone="danger" onClick={() => void removeSafety(row)}>{t('kb.delete')}</Link>
+            </div>
+          ) },
+        ]} />
+        </div>
+        <KbPager page={safetyPage} pageSize={SAFETY_PAGE_SIZE} total={safetyTotal}
+          onGo={(p) => { if (p === safetyPage) return; setSafetyPage(p); void querySafety({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ, page: p }) }} />
         </Panel>
-        </Tabs.TabPanel>
-        {isSuper && (
-          <Tabs.TabPanel value="industries" label={`🏭 行业管理`}>
-            <IndustriesP />
-          </Tabs.TabPanel>
-        )}
-        {/* Tab 面板 */}
-        <Tabs.TabPanel value="brand" label={`🏷️ 品牌名`}>
-          <BrandTermsP />
-        </Tabs.TabPanel>
-        {isSuper && (
-          <Tabs.TabPanel value="scrape" label={`🕷️ ${t('admin.menuDataSources')}`}>
-            <DataSourcesP />
-          </Tabs.TabPanel>
-        )}
-      </Tabs>
+      </>)}
+
+      {/* Tab 面板条件渲染：行业管理 / 品牌名 / 数据源采集 */}
+      {kbTab === 'industries' && isSuper && <IndustriesP />}
+      {kbTab === 'brand' && <BrandTermsP />}
+      {kbTab === 'scrape' && isSuper && <DataSourcesP />}
+
       {/* 包授权弹窗：读/写/管理三级成员列表 + 添加授权（仅包管理者可见入口） */}
-      <Dialog visible={grantPkg !== null} onClose={() => setGrantPkg(null)}
-        header={`包级授权 · ${grantPkg ? String(grantPkg.name) : ''}`} width={640} footer={false}>
+      <Dialog open={grantPkg !== null} onCancel={() => setGrantPkg(null)}
+        title={`包级授权 · ${grantPkg ? String(grantPkg.name) : ''}`}
+        confirmText={t('common.close')} onConfirm={() => setGrantPkg(null)}>
         <div style={rowStyle}>
-          <Select filterable value={gForm.user_id} onChange={(v: any) => setGForm({ ...gForm, user_id: v })}
-            options={grantUsers.map((u: Any) => ({ label: `${u.display_name || u.username}（${u.username}）`, value: Number(u.id) }))}
-            placeholder="选择用户" style={{ width: 260 }} />
-          <Select value={String(gForm.role)} onChange={(v: any) => setGForm({ ...gForm, role: String(v) })} style={{ width: 130 }}
-            options={[{ label: '只读 read', value: 'read' }, { label: '编辑 write', value: 'write' }, { label: '管理 manage', value: 'manage' }]} />
-          <Button theme="primary" size="small" onClick={() => void setGrant(String(gForm.role))}>授权</Button>
+          <select className="lc-select" value={gForm.user_id == null ? '' : String(gForm.user_id)} onChange={(e) => setGForm({ ...gForm, user_id: e.target.value ? Number(e.target.value) : null })}
+            style={{ width: 260 }}>
+            <option value="">选择用户</option>
+            {grantUsers.map((u: Any) => <option key={Number(u.id)} value={String(Number(u.id))}>{`${u.display_name || u.username}（${u.username}）`}</option>)}
+          </select>
+          <select className="lc-select" value={String(gForm.role)} onChange={(e) => setGForm({ ...gForm, role: String(e.target.value) })} style={{ width: 130 }}>
+            <option value="read">只读 read</option>
+            <option value="write">编辑 write</option>
+            <option value="manage">管理 manage</option>
+          </select>
+          <Button variant="primary" size="sm" onClick={() => void setGrant(String(gForm.role))}>授权</Button>
           <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>读 &lt; 写 &lt; 管理（高级别含低级别）；部门管理员及以上天然拥有全部权限</span>
         </div>
         {/* 数据表格 */}
-        <Table rowKey="id" size="small" data={grantList} style={{ marginTop: 10 }}
-          columns={[
-            { colKey: 'username', title: '用户', cell: ({ row }: any) => `${row.display_name || row.username || '#'+row.user_id}` },
-            { colKey: 'role', title: '级别', width: 110, cell: ({ row }: any) =>
-              <Tag size="small" theme={row.role === 'manage' ? 'warning' : row.role === 'write' ? 'primary' : 'default'}>{row.role}</Tag> },
-            { colKey: 'created_at', title: '时间', width: 160, cell: ({ row }: any) => String(row.created_at || '').slice(0, 16) },
-            { colKey: 'op', title: '操作', width: 80, cell: ({ row }: any) => (
-              <Button size="small" variant="text" theme="danger" onClick={() => void setGrant('', Number(row.user_id))}>撤销</Button>) },
-          ] as never} />
+        <div style={{ marginTop: 10 }}>
+        <DataTable<any> rowKey={(row) => String(row.id)} rows={grantList} columns={[
+          { key: 'username', title: '用户', render: (row) => `${row.display_name || row.username || '#' + row.user_id}` },
+          { key: 'role', title: '级别', width: 110, render: (row) =>
+            <StatusPill tone={row.role === 'manage' ? 'warn' : 'idle'}>{row.role}</StatusPill> },
+          { key: 'created_at', title: '时间', width: 160, render: (row) => String(row.created_at || '').slice(0, 16) },
+          { key: 'op', title: '操作', width: 80, render: (row) => (
+            <Link tone="danger" onClick={() => void setGrant('', Number(row.user_id))}>撤销</Link>) },
+        ]} />
+        </div>
       </Dialog>
     </>
+  )
+}
+
+/** 知识包/安全句列表分页器：上一页 / 页码 / 下一页 + 跳页（DataTable 无内置分页，配套自制）。 */
+function KbPager({ page, pageSize, total, onGo }: {
+  page: number; pageSize: number; total: number; onGo: (p: number) => void
+}) {
+  const pages = Math.max(1, Math.ceil(total / pageSize))
+  if (pages <= 1) return null
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', marginTop: 10, flexWrap: 'wrap' }}>
+      <Button size="sm" variant="secondary" disabled={page <= 1} onClick={() => onGo(page - 1)}>{'‹'}</Button>
+      <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{page} / {pages}</span>
+      <Button size="sm" variant="secondary" disabled={page >= pages} onClick={() => onGo(page + 1)}>{'›'}</Button>
+      <input className="lc-input" type="number" value={page} min={1} max={pages} style={{ width: 64 }}
+        onChange={(e) => { const v = Number(e.target.value); if (v >= 1 && v <= pages) onGo(v) }} />
+    </div>
   )
 }

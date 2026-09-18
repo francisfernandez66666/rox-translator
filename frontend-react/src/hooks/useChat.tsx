@@ -6,6 +6,10 @@
 // 实现说明：ChatProvider 用 zustand vanilla createStore 建「每路由实例一份」的
 // 独立 store（避免多实例/测试间串状态），Context 仅传递 store 句柄；
 // useChat() 公开签名与旧版一致。
+// 2026-09-17/18 纯黑换肤：行为链路未变，只动了两处表现层——
+// ① 消息持久化的纯函数（lib/chatStorage：msgsKeyFor/loadMsgs/serializeForPersist）
+//    继续从独立模块引入，本文件只负责何时落盘；
+// ② 错误气泡文案不再前缀 emoji（见 h6HandleErr 注释）。
 // ============================================================================
 
 /**
@@ -154,7 +158,7 @@ function createChatStore(msgsKey: string) {
       const assistantId = generateId()
       const assistantMsg: ChatMessage = { id: assistantId, role: 'assistant', content: '', skill: '', timestamp: Date.now(), progress: { step: gt('chat.preparing'), percent: 0 } }
       set((s) => {
-        const next = [...s.messages, userMsg, assistantMsg].slice(-MAX_MESSAGES)
+        const next = [...s.messages, userMsg, assistantMsg].slice(-MAX_MESSAGES) // 超上限（200）即裁掉最旧消息，保留尾部
         s.schedulePersist(next, s.selectedLangs) // ★ E1：发送即落盘
         return { messages: next, isLoading: true }
       })
@@ -247,7 +251,7 @@ function normErrCode(raw: string | undefined): string {
 // SSE 错误收尾（余额不足给充值引导；其余气泡提示）——从 startSend 抽出复用
 function h6HandleErr(st: ChatState, assistantId: string, e: unknown) {
   const msg = e instanceof Error ? e.message : String(e)
-  if (msg === 'AbortError' || String(e).includes('abort')) return
+  if (msg === 'AbortError' || String(e).includes('abort')) return // 用户主动 stop（AbortController）不算错误：直接返回，保留气泡已生成内容与停止文案
   const code = normErrCode(e instanceof ApiError ? e.code : undefined)
   if (code === 'insufficient_balance') {
     st.patchMsg(assistantId, { content: gt('chat.quotaExhausted'), progress: undefined })
@@ -262,11 +266,15 @@ function h6HandleErr(st: ChatState, assistantId: string, e: unknown) {
         } else st.navigate?.('/packages')
       })
   } else if (code === 'daily_quota_exceeded') {
+    // 日额度超限≠余额耗尽：明日自动重置，充值解决不了，故只透出后端原因（词条带「明日自动恢复」），
+    // 不弹充值引导、也不走通用红字兜底，避免把限额说成欠费。
     st.setFlags({ errorMessage: msg })
     st.patchMsg(assistantId, { content: gtpl('chat.dailyQuotaTpl', { msg }), progress: undefined })
   } else {
     st.setFlags({ errorMessage: msg })
-    st.patchMsg(assistantId, { content: `❌ ${msg}`, progress: undefined })
+    // 通用失败兜底：气泡正文只放错误文案本身——旧版带 ❌ 前缀，纯黑换肤后不再用
+    // emoji 表意（字符串里只剩一个占位空格），错误态由 errorMessage 与顶部提示承担。
+    st.patchMsg(assistantId, { content: ` ${msg}`, progress: undefined })
   }
 }
 

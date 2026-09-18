@@ -9,6 +9,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"translator/internal/infra/redis"
 )
 
 func TestLocalLockTryLockRelease(t *testing.T) {
@@ -47,4 +49,29 @@ func TestNewNilRedisFallsBackLocal(t *testing.T) {
 		t.Fatalf("localLock 首次必成: ok=%v err=%v", ok, err)
 	}
 	rel()
+}
+
+// ★ P1-4（2026-09-18）：Redis 可达性异常必须作为 err 透出（调用方据此保守降级本进程执行），
+// 且每次异常计入 ErrCount（/metrics translator_distlock_errors_total 可告警）。
+// 用死地址客户端（127.0.0.1:1 立即拒连）复现「Redis 抖动」，区分于「他人持锁」的 (false,nil,nil)。
+func TestRedisLockErrorSurfacedAndCounted(t *testing.T) {
+	dead := redis.New("127.0.0.1:1", "") // 构造不拨号成功也返回客户端，命令期报错
+	if dead == nil {
+		t.Fatal("dead client 不应为 nil")
+	}
+	l := New("uat:lock:dead", dead)
+	if _, isRedis := l.(*redisLock); !isRedis {
+		t.Fatal("非 nil redis 应走 redisLock")
+	}
+	before := ErrCount()
+	ok, rel, err := l.TryLock(context.Background(), time.Second)
+	if err == nil {
+		t.Fatal("死地址 TryLock 必须返回 err（供调用方降级），不能与「他人持锁」混同")
+	}
+	if ok || rel != nil {
+		t.Fatal("错误路径不应给锁/释放函数")
+	}
+	if got := ErrCount(); got != before+1 {
+		t.Fatalf("ErrCount 应 +1: before=%d after=%d", before, got)
+	}
 }

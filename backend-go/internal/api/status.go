@@ -13,6 +13,8 @@ import (
 	"context"
 	"net/http"
 	"time"
+
+	"translator/internal/db"
 )
 
 // handleStatusStatus 公开状态接口（无需登录）。
@@ -34,11 +36,12 @@ func (s *Server) handlePublicStatus(w http.ResponseWriter, r *http.Request) {
 	// 工单队列深度：jobs 表 queued/running 计数（存储不可用则省略）
 	if s.Store != nil {
 		var queued, running int64
+		// ★ P1-5（2026-09-18）：统一走 db 方言包装，禁止裸 *sql.DB（全仓清零口径）
 		// 统计待处理任务数
-		_ = s.Store.DB().QueryRowContext(context.Background(),
+		_ = db.QueryRow(s.Store.DB(), db.CurrentDialect(),
 			"SELECT COUNT(*) FROM jobs WHERE status='queued'").Scan(&queued)
 		// 统计执行中任务数
-		_ = s.Store.DB().QueryRowContext(context.Background(),
+		_ = db.QueryRow(s.Store.DB(), db.CurrentDialect(),
 			"SELECT COUNT(*) FROM jobs WHERE status='running'").Scan(&running)
 		resp["queue"] = map[string]int64{"queued": queued, "running": running}
 	}

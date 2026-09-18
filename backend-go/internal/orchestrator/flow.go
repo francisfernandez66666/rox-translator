@@ -107,7 +107,13 @@ func (e *Executor) Execute(ctx context.Context, ticket *store.Ticket, onStep fun
 	flow := e.GetFlow(ticket.TenantID)
 	tid := ticket.TenantID
 
-	applyModeOverride(flow, ticket)
+	bypass := applyModeOverride(flow, ticket)
+	// ★ P0-5（2026-09-18）：模式旁路落轨迹（step=mode_override），工单详情/审批台
+	// 经 TicketStates 自动可见「本单未经哪些闸门」，旁路不再静默。
+	if bypass != "" {
+		_ = e.Store.SetTicketState(ticket.ID, "mode_override", "success",
+			fmt.Sprintf(`{"bypass":%q,"note":"按工单模式关闭部分流程步骤（设计内旁路，仅供审计与披露）"}`, bypass))
+	}
 
 	for _, step := range flow.Steps {
 		if ctx.Err() != nil {
@@ -206,7 +212,11 @@ func (e *Executor) runner(key string) (RunFunc, bool) {
 // ★ 整改 C4：已批准工单重跑 = 仅 QA 复核 + TM 回写——生成/校对/闸门步骤全部短路，
 //
 //	任何自动化环节不得再改动人工终稿，从根上消除「审批后被机器翻案为 rejected」。
-func applyModeOverride(flow *FlowDef, ticket *store.Ticket) {
+//
+// ★ P0-5（2026-09-18）：返回旁路标识（fast/api_task/approved_rerun），由 Execute 写入
+//
+//	工单步骤轨迹 mode_override 行——旁路上仍是设计内行为，但必须对审批台与租户可见。
+func applyModeOverride(flow *FlowDef, ticket *store.Ticket) string {
 	if ticket.Status == store.TicketApproved {
 		for _, st := range flow.Steps {
 			switch st.Key {
@@ -216,15 +226,17 @@ func applyModeOverride(flow *FlowDef, ticket *store.Ticket) {
 				st.Enabled = true // 仅质检刷新与 TM 回写
 			}
 		}
-		return
+		return "approved_rerun"
 	}
 	fast := strings.EqualFold(ticket.Mode, "fast")
 	apiTask := ticket.CreatedBy == 0
 	if !fast && !apiTask {
-		return
+		return ""
 	}
-	for _, st := range flow.Steps {
-		if fast {
+	labels := []string{}
+	if fast {
+		labels = append(labels, "fast")
+		for _, st := range flow.Steps {
 			switch st.Key {
 			case "kb_match", "evals_initial", "evals_review", "gate", "culture_gate", "feedback":
 				st.Enabled = false // 快速模式：无知识库/无评估/无硬闸/无文化闸/不自迭代
@@ -232,13 +244,17 @@ func applyModeOverride(flow *FlowDef, ticket *store.Ticket) {
 				st.Enabled = true // 快速模式语义保证：初翻+校对+质检 必开
 			}
 		}
-		if apiTask {
+	}
+	if apiTask {
+		labels = append(labels, "api_task")
+		for _, st := range flow.Steps {
 			switch st.Key {
 			case "approval", "feedback":
 				st.Enabled = false // API 任务全自动闭环：不停人工审批台、不做未审自迭代
 			}
 		}
 	}
+	return strings.Join(labels, "+")
 }
 
 // skipper 取步骤跳过判断（加锁读 map）。

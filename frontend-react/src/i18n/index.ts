@@ -2,9 +2,14 @@
 // 前端国际化核心模块（React 版，无框架耦合）
 // 字典与 Vue 版完全同源：base 字典（dicts.zh/en.ts）+ panels/*.ts 合并。
 // 语言切换通过极简外部 store + useSyncExternalStore 驱动重渲染。
+// 2026-09-17/18：新增 panels/auth（登录/注册/AI 接管引导）面板并纳入合并；
+// 同期全站词条去除 emoji 前缀（改由 LangCross <Icon/> 渲染），本合并逻辑不变。
 // =============================================
 
 import { useSyncExternalStore } from 'react'
+// ---- 面板词典模块 ----
+// 每个后台/前台面板自带 { zh, en } 两份同键词典，此处逐个 import 后在下方 spread 合并；
+// 新增面板必须同步登记到 i18n/parity.test.ts 的 PANELS 表，否则中英对等性不受守护。
 import * as pOverview from './panels/overview'
 import * as pTenants from './panels/tenants'
 import * as pOrg from './panels/org'
@@ -34,6 +39,9 @@ import * as pDs from './panels/datasources'
 import * as pMybill from './panels/mybilling'
 import * as pLanding from './panels/landing'
 import * as pReconcile from './panels/reconcile'
+// 2026-09-17 新增：认证域（登录/注册/找回密码/AI 接管注册引导）文案，
+// 从 dicts 基础字典与组件硬编码里独立出来，供 Login / AiRegisterFlow 取词。
+import * as pAuth from './panels/auth'
 import { baseZh } from './dicts.zh'
 import { baseEn } from './dicts.en'
 
@@ -43,23 +51,25 @@ export type Lang = 'zh' | 'en'
 type Dict = Record<string, string>
 
 // zh 中文词典：base 基础字典 + 各面板模块中文文案合并
+// 合并语义：后面的 spread 覆盖前面的同名键，故新增面板一律追加在末尾（base 最低优先级）。
 const zh: Dict = {
   ...baseZh,
   ...pOverview.zh, ...pTenants.zh, ...pOrg.zh, ...pUsers.zh, ...pKb.zh,
   ...pModels.zh, ...pWorkflow.zh, ...pApiKeys.zh, ...pWebhooks.zh,
   ...pTickets.zh, ...pBilling.zh, ...pUsage.zh, ...pAlerts.zh,
   ...pInvites.zh, ...pChat.zh, ...pPackages.zh, ...pFeedback.zh,
-  ...pReferral.zh, ...pTasks.zh, ...pSdk.zh, ...pHub.zh, ...pOps.zh, ...pIndustries.zh, ...pBrandterms.zh, ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh, ...pLanding.zh,
+  ...pReferral.zh, ...pTasks.zh, ...pSdk.zh, ...pHub.zh, ...pOps.zh, ...pIndustries.zh, ...pBrandterms.zh, ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh, ...pLanding.zh, ...pAuth.zh,
 }
 
 // en 英文词典：base 基础字典 + 各面板模块英文文案合并
+// 顺序与上方 zh 严格一致：任何一侧漏登记，parity.test.ts 的逐面板对等性即失效。
 const en: Dict = {
   ...baseEn,
   ...pOverview.en, ...pTenants.en, ...pOrg.en, ...pUsers.en, ...pKb.en,
   ...pModels.en, ...pWorkflow.en, ...pApiKeys.en, ...pWebhooks.en,
   ...pTickets.en, ...pBilling.en, ...pUsage.en, ...pAlerts.en,
   ...pInvites.en, ...pChat.en, ...pPackages.en, ...pFeedback.en,
-  ...pReferral.en, ...pTasks.en, ...pSdk.en, ...pHub.en, ...pOps.en, ...pIndustries.en, ...pBrandterms.en, ...pChatwin.en, ...pMybill.en, ...pReconcile.en, ...pLanding.en,
+  ...pReferral.en, ...pTasks.en, ...pSdk.en, ...pHub.en, ...pOps.en, ...pIndustries.en, ...pBrandterms.en, ...pChatwin.en, ...pMybill.en, ...pReconcile.en, ...pLanding.en, ...pAuth.en,
 }
 
 // dicts 按语言索引的词典集合，取词时按当前语言定位

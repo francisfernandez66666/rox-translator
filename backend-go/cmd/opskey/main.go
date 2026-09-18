@@ -19,6 +19,7 @@ import (
 
 	"translator/internal/auth"
 	"translator/internal/config"
+	dbx "translator/internal/db" // 局部变量 db 是 *sql.DB，包名需别名（P1-5）
 	"translator/internal/store"
 
 	_ "github.com/lib/pq"
@@ -71,7 +72,9 @@ func main() {
 			log.Fatal("-resetpw 需要 -pw")
 		}
 		hash := auth.PasswordHash(*pw)
-		if _, err := st.DB().Exec("UPDATE users SET password_hash=$1 WHERE id=$2", hash, *resetpw); err != nil {
+		// ★ P1-5（2026-09-18）：旧写法裸用 PG 占位符 `$1/$2`，SQLite（本地/演练库默认方言）
+		// 下直接报错；统一走 db.Exec 方言包装，以 SQLite 语法为真源。
+		if _, err := dbx.Exec(st.DB(), dbx.CurrentDialect(), "UPDATE users SET password_hash=? WHERE id=?", hash, *resetpw); err != nil {
 			log.Fatalf("重置口令失败: %v", err)
 		}
 		fmt.Println("password reset for user", *resetpw)

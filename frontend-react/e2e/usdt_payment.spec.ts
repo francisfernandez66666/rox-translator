@@ -38,7 +38,8 @@ test.describe('USDT 收款（超管配置 + 租户收银台）', () => {
       usdt_enabled: '1', usdt_chains: 'trc20', usdt_addr_trc20: TRC20, usdt_rate_fen_per_usdt: 720,
     });
     await page.goto('/admin');
-    await page.locator('.admin-side').getByText('计费与套餐').first().click();
+    // ★ 2026-09-18 UI 迁移：后台侧栏 .admin-side→.lc-sidebar；收银台已换 langcross 组件（U2 用 select.lc-select/.lc-dialog）
+    await page.locator('.lc-sidebar').getByText('计费与套餐').first().click();
     await page.getByText('套餐与订单').first().click();
 
     // 配置分区存在：USDT 标题 + 已开启徽标 + 地址回显
@@ -69,19 +70,19 @@ test.describe('USDT 收款（超管配置 + 租户收银台）', () => {
     // 换租户身份（uatuser_a 为租户管理员）
     await login(page, 'uatuser_a', 'uatpass123');
     await page.goto('/admin');
-    await page.locator('.admin-side').getByText('计费与套餐').first().click();
+    await page.locator('.lc-sidebar').getByText('计费与套餐').first().click();
 
-    // 渠道下拉出现 USDT · TRC-20
+    // 渠道下拉出现 USDT · TRC-20（★ 2026-09-18 UI 迁移：TDesign Select→原生 select.lc-select，
+    // 选项 value=usdt:<链>，selectOption 比旧「点开面板再选项」更稳）
     const topup = page.locator('#plans-topup');
     await expect(topup, '充值面板未渲染').toBeVisible();
-    await topup.locator('.t-select__wrap, .t-select').first().click();
-    const usdtOpt = page.locator('.t-select-option', { hasText: 'USDT · TRC20' }).last()
-    await expect(usdtOpt, 'USDT 渠道选项未出现').toBeVisible({ timeout: 5000 })
-    await usdtOpt.click()
+    const chSel = topup.locator('select.lc-select').first();
+    await expect(chSel.locator('option[value="usdt:trc20"]'), 'USDT 渠道选项未出现').toBeAttached({ timeout: 5000 });
+    await chSel.selectOption('usdt:trc20');
 
-    // 去支付 → 收银台展示 USDT 精确金额 + 收款地址 + 复制
+    // 去支付 → 收银台展示 USDT 精确金额 + 收款地址 + 复制（★ 弹窗迁移：.t-dialog→.lc-dialog）
     await topup.locator('button:has-text("去支付")').click();
-    const dlg = page.locator('.t-dialog:has-text("收银台")');
+    const dlg = page.locator('.lc-dialog:has-text("收银台")');
     await expect(dlg, '收银台未弹出').toBeVisible();
     await expect(dlg.getByText('应付金额')).toBeVisible();
     await expect(dlg.getByText('USDT').first()).toBeVisible();
@@ -93,15 +94,16 @@ test.describe('USDT 收款（超管配置 + 租户收银台）', () => {
     expect(/\d+\.\d{3,}\s*USDT/.test(amtText), `尾数金额缺失: ${amtText.slice(0, 120)}`).toBeTruthy();
 
     // 「我已转账（声明哈希）」：未填 txHash 禁用；填入后解禁（不真正提交，避免留审核单）
-    // 注：tdesign disabled Button 渲染为 div.t-button.t-is-disabled（非 <button> 元素）
-    const declare = dlg.locator('.t-button:has-text("我已转账")');
+    // 注：langcross Button 的禁用态是原生 <button disabled>（旧 TDesign div.t-is-disabled 已废弃）
+    const declare = dlg.locator('button:has-text("我已转账")');
     await expect(declare).toBeVisible();
-    await expect(declare, '未填哈希不应可提交').toHaveClass(/t-is-disabled/);
+    await expect(declare, '未填哈希不应可提交').toBeDisabled();
     await dlg.getByPlaceholder('链上交易哈希（txHash）').fill('a1'.repeat(32));
-    await expect(declare, '填哈希后声明按钮应解禁').not.toHaveClass(/t-is-disabled/);
+    await expect(declare, '填哈希后声明按钮应解禁').toBeEnabled();
 
-    // 关单恢复
-    await dlg.locator('.t-dialog__close').click();
+    // 关单恢复（★ 新 Dialog 无 X 关闭钮：Esc 走 onCancel 即关单）
+    await page.keyboard.press('Escape');
+    await expect(dlg, 'Esc 后收银台应关闭').toBeHidden();
     await saveSettings(page, adminTok, { usdt_enabled: '0', usdt_addr_trc20: '' });
   });
 });

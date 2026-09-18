@@ -58,17 +58,25 @@ R=$(curl -s "$B/api/assist/greeting?page=/")
 ck A1-greeting '"greeting"' "$R"
 ck A1-chips '积分怎么收费' "$R"
 SID=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["session"])')
+# ★ P0-1（2026-09-18）：greeting 同时下发会话能力令牌 tok，chat/history 必须随带
+TOK=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tok"])')
+if [ -z "$TOK" ]; then echo "FAIL|A1-tok-missing"; FAIL=$((FAIL+1)); fi
 
-R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SID\",\"message\":\"怎么收费？价格多少\",\"page\":\"/\"}")
+R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SID\",\"tok\":\"$TOK\",\"message\":\"怎么收费？价格多少\",\"page\":\"/\"}")
 ck A2-chat-rule '"source":"rule"' "$R"
 
-curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SID\",\"message\":\"我是新手不会用\"}" >/dev/null
-R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SID\",\"message\":\"个人版\"}")
+curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SID\",\"tok\":\"$TOK\",\"message\":\"我是新手不会用\"}" >/dev/null
+R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SID\",\"tok\":\"$TOK\",\"message\":\"个人版\"}")
 ck A3-flow-advance '"source":"flow"' "$R"
 
-R=$(curl -s "$B/api/assist/history?session=$SID&limit=20")
+R=$(curl -s "$B/api/assist/history?session=$SID&tok=$TOK&limit=20")
 ck A4-history 'assistant' "$R"
 ck A4-history-user 'user' "$R"
+# ★ P0-1 反向断言：无/伪令牌读历史必须 401
+C=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/assist/history?session=$SID")
+ck A4-history-no-tok-401 '^401$' "$C"
+C=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/assist/history?session=$SID&tok=deadbeef")
+ck A4-history-bad-tok-401 '^401$' "$C"
 
 R=$(curl -s "$B/api/assist/features")
 ck A5-features '"features"' "$R"
@@ -79,7 +87,14 @@ R=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$B/api/assist/chat")
 ck A6-chat-405 '^405$' "$R"
 
 # ---------- 3. R0.1 同义词归一：怎么充钱 ----------
-R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"s_syn\",\"message\":\"怎么充钱\",\"page\":\"/\"}")
+# ★ 修复（2026-09-18 闸门回归）：B1/B2 各用全新会话，不再复用 $SID——
+#   复用会让 B1「怎么充钱」进入的 recharge-guide 流程把 B2 的无意义输入当作流程答案吞掉，
+#   兜底话术与未答登记都不再发生（假失败）。tok 是与 sid 绑定的 HMAC 能力令牌，
+#   新会话必须重新 greeting 取 sid+tok，不能自造 sid。
+RB=$(curl -s "$B/api/assist/greeting?page=/")
+SID_SYN=$(echo "$RB" | python3 -c 'import sys,json;print(json.load(sys.stdin)["session"])')
+TOK_SYN=$(echo "$RB" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tok"])')
+R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SID_SYN\",\"tok\":\"$TOK_SYN\",\"message\":\"怎么充钱\",\"page\":\"/\"}")
 ck B1-synonym-recharge '充值|余额|套餐|积分' "$R"
 ck B1-synonym-not-fallback-empty '"source":"' "$R"
 if echo "$R" | grep -qE '这个问题我记下了|这个问题我还没学到'; then
@@ -89,7 +104,10 @@ else
 fi
 
 # ---------- 4. R0.2 兜底改造 + 未答登记 ----------
-R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"s_un\",\"message\":\" xyzzy量子波动速翻布拉布拉 \"}")
+RB=$(curl -s "$B/api/assist/greeting?page=/")
+SID_UN=$(echo "$RB" | python3 -c 'import sys,json;print(json.load(sys.stdin)["session"])')
+TOK_UN=$(echo "$RB" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tok"])')
+R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SID_UN\",\"tok\":\"$TOK_UN\",\"message\":\" xyzzy量子波动速翻布拉布拉 \"}")
 ck B2-fallback-guide '先记下来|换个说法|入口' "$R"
 ck B2-fallback-actions '"actions":\[{' "$R"
 R=$(curl -s "$B/api/assist/admin/sessions" -H "$AH")

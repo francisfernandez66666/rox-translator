@@ -14,6 +14,11 @@ data/dev.db
 data/dev.db-shm
 data/dev.db-wal
 data/*.npz.tmp
+# ★ 2026-09-18 清理：上面 data/ 规则锚定仓库根，匹配不到子目录，补全三类运行产物——
+# backend-go 本地开发库、外部 AI 工具会话产物、vite 配置重载时生成的 timestamp 临时文件
+backend-go/data/
+.workbuddy/
+vite.config.ts.timestamp-*.mjs
 
 # ============ 前端自动化测试产物（不入仓库） ============
 frontend-react/artifacts/

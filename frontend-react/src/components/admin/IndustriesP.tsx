@@ -9,9 +9,11 @@
 // ============================================================================
 import { useEffect, useState } from 'react'
 import { runGuarded } from '@/lib/runGuarded'
-import { Button, Table, Input, Dialog, MessagePlugin, Popconfirm, Space, Tag, Switch } from 'tdesign-react'
+import { Button, DataTable, Dialog, Switch, StatusPill, Link } from '@/ui/langcross/src'
+import { confirmDialog } from '@/components/uiDialogs'
 import { industries, industryCreate, industryUpdate, industryStatus, industryDelete, type IndustryItem } from '@/api/industry'
 import { useT } from '@/i18n'
+import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
 
 /** Props 无入参（行业管理为自足组件） */
 type Props = Record<string, never>
@@ -30,6 +32,7 @@ export default function IndustriesP(_props: Props) {
   const [code, setCode] = useState('')   // 新建行业 code（小写字母/数字/下划线）
   const [name, setName] = useState('')   // 行业显示名（中/英文均可）
 
+  /** 拉取行业字典（承载体为租户 0 的 pack_type=industry 平台包），失败时保留旧列表 */
   const load = async () => {
     const r = await runGuarded(() => industries())
     if (!r) return // ★ E10：网络/超时异常已提示，中断后续
@@ -41,15 +44,15 @@ export default function IndustriesP(_props: Props) {
   const doCreate = async () => {
     const c = code.trim()
     const n = name.trim()
-    if (!c || !n) { void MessagePlugin.warning(t('ind.needCodeName')); return }
+    if (!c || !n) { void toastWarn(t('ind.needCodeName')); return }
     const r = await runGuarded(() => industryCreate({ code: c, name: n }))
     if (!r) return // ★ E10：网络/超时异常已提示，中断后续
     if (r.success) {
-      void MessagePlugin.success(t('ind.created'))
+      toastSuccess(t('ind.created'))
       setDlg(null); setCode(''); setName('')
       await load()
     } else {
-      void MessagePlugin.error(r.message || t('ind.createFail'))
+      toastError(r.message || t('ind.createFail'))
     }
   }
 
@@ -57,15 +60,15 @@ export default function IndustriesP(_props: Props) {
   const doUpdate = async () => {
     if (!(dlg && dlg.mode === 'edit')) return
     const n = name.trim()
-    if (!n) { void MessagePlugin.warning(t('ind.needName')); return }
+    if (!n) { void toastWarn(t('ind.needName')); return }
     const r = await runGuarded(() => industryUpdate(dlg.row.id, n))
     if (!r) return // ★ E10：网络/超时异常已提示，中断后续
     if (r.success) {
-      void MessagePlugin.success(t('ind.saved'))
+      toastSuccess(t('ind.saved'))
       setDlg(null)
       await load()
     } else {
-      void MessagePlugin.error(r.message || t('ind.saveFail'))
+      toastError(r.message || t('ind.saveFail'))
     }
   }
 
@@ -74,10 +77,10 @@ export default function IndustriesP(_props: Props) {
     const r = await runGuarded(() => industryStatus(row.id, enabled))
     if (!r) return // ★ E10：网络/超时异常已提示，中断后续
     if (r.success) {
-      void MessagePlugin.success(enabled === 1 ? t('ind.enabledMsg') : t('ind.disabledMsg'))
+      toastSuccess(enabled === 1 ? t('ind.enabledMsg') : t('ind.disabledMsg'))
       await load()
     } else {
-      void MessagePlugin.error(r.message || t('ind.opFail'))
+      toastError(r.message || t('ind.opFail'))
     }
   }
 
@@ -86,10 +89,10 @@ export default function IndustriesP(_props: Props) {
     const r = await runGuarded(() => industryDelete(row.id))
     if (!r) return // ★ E10：网络/超时异常已提示，中断后续
     if (r.success) {
-      void MessagePlugin.success(t('ind.deleted'))
+      toastSuccess(t('ind.deleted'))
       await load()
     } else {
-      void MessagePlugin.error(r.message || t('ind.deleteFail'))
+      toastError(r.message || t('ind.deleteFail'))
     }
   }
 
@@ -98,46 +101,44 @@ export default function IndustriesP(_props: Props) {
       <div style={{ marginBottom: 10, fontSize: 13, color: 'var(--adm-hint)' }}>
         {t('ind.hint')}
       </div>
-      <Button theme="primary" onClick={() => { setCode(''); setName(''); setDlg({ mode: 'create' }) }}>{t('ind.new')}</Button>
-      <Table rowKey="id" size="small" data={rows}
+      <Button variant="primary" onClick={() => { setCode(''); setName(''); setDlg({ mode: 'create' }) }}>{t('ind.new')}</Button>
+      <DataTable<any> rowKey={(row) => String(row.id)} rows={rows}
              columns={[
-               { colKey: 'id', title: 'ID', width: 50 },
-               { colKey: 'code', title: t('ind.colCode'), width: 130, cell: ({ row }: any) => <code>{row.code}</code> },
-               { colKey: 'name', title: t('ind.colName') },
-               { colKey: 'entry_count', title: t('ind.colEntries'), width: 90, cell: ({ row }: any) => row.entry_count || 0 },
-               { colKey: 'enabled', title: t('ind.colStatus'), width: 90, cell: ({ row }: any) => (
-                 <Tag theme={row.enabled === 1 ? 'success' : 'default'}>{row.enabled === 1 ? t('ind.on') : t('ind.off')}</Tag>
+               { key: 'id', title: 'ID', width: 50 },
+               { key: 'code', title: t('ind.colCode'), width: 130, render: (row) => <code>{row.code}</code> },
+               { key: 'name', title: t('ind.colName') },
+               { key: 'entry_count', title: t('ind.colEntries'), width: 90, render: (row) => row.entry_count || 0 },
+               { key: 'enabled', title: t('ind.colStatus'), width: 90, render: (row) => (
+                 <StatusPill tone={row.enabled === 1 ? 'success' : 'idle'}>{row.enabled === 1 ? t('ind.on') : t('ind.off')}</StatusPill>
                ) },
-               { colKey: 'created_at', title: t('ind.colCreated'), width: 100, cell: ({ row }: any) => shortTime(row.created_at) },
-               { colKey: 'op', title: t('ind.colOp'), width: 260, cell: ({ row }: any) => (
-                 <Space size={2}>
-                   <Switch size="small" value={row.enabled === 1}
-                           onChange={(v: boolean) => void doToggle(row, v ? 1 : 0)} />
-                   <Button size="small" variant="text" onClick={() => { setName(row.name); setDlg({ mode: 'edit', row }) }}>{t('ind.edit')}</Button>
-                   <Popconfirm content={t('ind.deleteConfirm')} onConfirm={() => doDelete(row)}>
-                     <Button size="small" variant="text" theme="danger">{t('ind.del')}</Button>
-                   </Popconfirm>
-                 </Space>
+               { key: 'created_at', title: t('ind.colCreated'), width: 100, render: (row) => shortTime(row.created_at) },
+               { key: 'op', title: t('ind.colOp'), width: 260, render: (row) => (
+                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                   <Switch checked={row.enabled === 1}
+                           onChange={(e) => void doToggle(row, e.target.checked ? 1 : 0)} />
+                   <Link onClick={() => { setName(row.name); setDlg({ mode: 'edit', row }) }}>{t('ind.edit')}</Link>
+                   <Link tone="danger" onClick={async () => { if (!(await confirmDialog({ body: t('ind.deleteConfirm') }))) return; doDelete(row) }}>{t('ind.del')}</Link>
+                 </div>
                ) },
-             ] as never} />
+             ]}  />
 
       {/* 新建行业弹窗 */}
-      <Dialog visible={!!dlg && dlg.mode === 'create'} onClose={() => setDlg(null)} header={t('ind.newTitle')} width={440} onConfirm={doCreate}>
+      <Dialog open={!!dlg && dlg.mode === 'create'} onCancel={() => setDlg(null)} title={t('ind.newTitle')} onConfirm={doCreate}>
         <div style={{ marginBottom: 12 }}>
           <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>{t('ind.codeLabel')}</div>
-          <Input value={code} onChange={(v) => setCode(String(v))} placeholder="auto / realestate / ..." />
+          <input className="lc-input" value={code} onChange={(e) => setCode(String(e.target.value))} placeholder="auto / realestate / ..." />
         </div>
         <div>
           <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>{t('ind.nameLabel')}</div>
-          <Input value={name} onChange={(v) => setName(String(v))} placeholder={t('ind.namePlaceholder')} />
+          <input className="lc-input" value={name} onChange={(e) => setName(String(e.target.value))} placeholder={t('ind.namePlaceholder')} />
         </div>
       </Dialog>
 
       {/* 编辑行业名弹窗 */}
-      <Dialog visible={!!dlg && dlg.mode === 'edit'} onClose={() => setDlg(null)} header={t('ind.editTitle')} width={440} onConfirm={doUpdate}>
+      <Dialog open={!!dlg && dlg.mode === 'edit'} onCancel={() => setDlg(null)} title={t('ind.editTitle')} onConfirm={doUpdate}>
         <div>
           <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>{t('ind.nameLabel')}</div>
-          <Input value={name} onChange={(v) => setName(String(v))} />
+          <input className="lc-input" value={name} onChange={(e) => setName(String(e.target.value))} />
         </div>
       </Dialog>
     </>

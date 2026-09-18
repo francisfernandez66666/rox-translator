@@ -3,9 +3,11 @@
 // =============================================
 
 // ============ 本文件职责中文说明 ============
-// 公开商业页面：无需登录即可访问的产品介绍与合规文档。
-//   - /pricing 定价页（商业套餐展示 + 常见问题；内部计价参数不对公网暴露）
+// 公开合规文档页：无需登录即可访问的服务条款与协议。
 //   - /docs/terms 服务条款、/docs/sla 服务等级协议、/docs/privacy 数据保护条款（DPA）
+//
+// ★ P2-6（2026-09-18）：原 /pricing 服务端渲染版已删除——定价页双实现
+// （Go 内嵌 HTML 与 SPA PricingPage）文案漂移，统一归一到 SPA（走 spa.go 兜底）。
 //
 // 实现：直接由后端渲染内嵌 HTML（与 SPA 无关，public 无需登录），
 //
@@ -18,14 +20,6 @@ import (
 	"fmt"
 	"net/http"
 )
-
-// handlePublicPricing 定价页：token 单价表 + 充值说明。
-func (s *Server) handlePublicPricing(w http.ResponseWriter, r *http.Request) {
-	// 设置 HTML 内容类型
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// 返回预定义的定价页 HTML
-	fmt.Fprint(w, pricingHTML)
-}
 
 // handlePublicTerms 服务条款页。
 func (s *Server) handlePublicTerms(w http.ResponseWriter, r *http.Request) {
@@ -128,74 +122,6 @@ table{display:block;overflow-x:auto;font-size:13px}
 func publicDocPage(title, body string) string {
 	return publicLayout(title, `<h1>`+title+`</h1>`+body)
 }
-
-// pricingHTML 定价页正文（套餐卡片由前端 fetch /api/plans 动态渲染；样式统一品牌蓝）。
-const pricingHTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>定价 - 能言</title>
-<style>
-:root{--brand:#2b3ee8;--brand-hover:#4a5cf0;--brand-active:#1c2bd0;--brand-light:#e7ebff;--text:#1a2233;--text-2:#5a6478;--border:#e3e6ef;--bg:#f4f6fa}
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:var(--text);background:var(--bg);line-height:1.75;font-size:15px}
-.header{background:linear-gradient(135deg,#2b3ee8 0%,#1c2bd0 100%);color:#fff;padding:0 24px;display:flex;justify-content:space-between;align-items:center;height:60px;position:sticky;top:0;z-index:20}
-.header .brand{font-size:18px;font-weight:700;letter-spacing:.3px}
-.header a{color:#fff;text-decoration:none;margin-left:18px;font-size:14px}
-.header a:hover{opacity:.85}
-.wrap{max-width:920px;margin:32px auto;padding:0 20px}
-.card{background:#fff;border-radius:12px;padding:32px 36px;box-shadow:0 2px 12px rgba(26,35,126,.06);border:1px solid var(--border)}
-h1{font-size:24px;font-weight:700;margin-bottom:6px;color:var(--brand)}
-h2{font-size:18px;font-weight:600;margin:26px 0 10px;padding-left:11px;border-left:4px solid var(--brand);color:var(--text);line-height:1.4}
-p{margin:9px 0;color:#2b3145}
-a{color:var(--brand);text-decoration:none}
-a:hover{text-decoration:underline}
-.footer{text-align:center;color:var(--text-2);font-size:13px;padding:28px;line-height:2}
-.footer a{color:var(--text-2);margin:0 6px}
-.footer a:hover{color:var(--brand)}
-.note{background:var(--brand-light);border-left:4px solid var(--brand);padding:12px 16px;border-radius:8px;font-size:14px;color:var(--text-2);margin:16px 0}
-#plansBox{display:flex;flex-wrap:wrap;gap:14px;margin:14px 0}
-.plan{border:1px solid var(--border);border-radius:12px;padding:18px 20px;min-width:240px;flex:1 1 240px;background:#fff;transition:.2s}
-.plan:hover{border-color:var(--brand);box-shadow:0 4px 16px rgba(43,62,232,.12)}
-.plan b{font-size:16px;color:var(--text)}
-.plan .meta{color:var(--text-2);font-size:13px;margin:6px 0}
-.plan .price{color:var(--brand-active);font-weight:700;font-size:18px}
-.plan .tag2{display:inline-block;margin-top:6px;font-size:12px;color:var(--brand-active);background:var(--brand-light);border-radius:999px;padding:2px 12px}
-@media (max-width:720px){
-.header{flex-wrap:wrap;height:auto;padding:12px 14px;gap:6px;row-gap:8px}
-.header a{font-size:13px;margin-left:10px}
-.wrap{padding:0 12px;margin:16px auto}
-.card{padding:20px 16px}
-h1{font-size:20px}h2{font-size:16px}
-#plansBox .plan{flex:1 1 100%;min-width:0}
-}
-</style></head><body>
-<div class="header"><div class="brand">🌐 能言 LangCross</div><div><a href="/pricing">定价 Pricing</a><a href="/docs/terms">用户协议 Terms</a><a href="/docs/sla">SLA</a><a href="/docs/privacy">隐私协议 Privacy</a><a href="/admin" style="background:#fff;color:var(--brand);padding:7px 16px;border-radius:8px;font-weight:600">管理后台</a></div></div>
-<div class="wrap">
-<div class="card">
-<h1>定价 Pricing</h1>
-<p>新用户注册即送<b>免费体验积分</b>；翻译按积分计量，套餐订阅或积分充值均可，<b>新客注册 30 天内订阅首月 5 折</b>。充值 / 用量明细请在<a href="/admin">管理后台</a>查看。</p>
-<h2>商业套餐 Plans</h2>
-<div id="plansBox"><p>加载中…</p></div>
-<div class="note">💡 积分到账后按实际用量扣减：不同模式消耗不同（专业校对约 1 积分/300 token、快速模式约 3 倍效率、知识库/嵌入不加收）；订阅积分当期有效，充值积分永久有效。具体以用量明细为准。</div>
-<h2>常见问题 FAQ</h2>
-<p><b>Q：如何计费？</b> 以积分为计量单位，按每次翻译任务的实际消耗扣减；专业校对模式包含知识库匹配与多轮质量保障环节，消耗高于快速模式。</p>
-<p><b>Q：额度用完后怎么办？</b> 可订阅付费包或购买增量包，到账后立即恢复；也可联系管理员充值。</p>
-<p><b>Q：支持哪些支付方式？</b> 支持微信 / 支付宝在线支付（对接中），静态二维码扫码 + 人工确认，当前可使用线下转账 + 管理员充值。</p>
-</div></div>
-<div class="footer">© 2026 能言 LangCross · 翻译平台 · <a href="/docs/terms">用户协议</a> · <a href="/docs/privacy">隐私协议</a></div>
-<script>
-fetch('/api/plans').then(r=>r.json()).then(d=>{
-  const types={free:'免费体验',paid:'付费包',increment:'增量包'};
-  const cards=(d.plans||[]).map(p=>{
-    const face=p.points>0?p.points.toLocaleString()+' 积分':(p.sentences||0)+' 句';
-    return '<div class="plan"><b>'+p.name+'</b><div class="meta">'+face+' · '+(types[p.ptype]||p.ptype)+'</div>'+
-      '<div class="price">¥'+p.price_money+'</div><div class="meta">'+(p.duration_days>0?'/ '+p.duration_days+' 天':'· 永久有效')+'</div>'+
-      (p.ptype==='free' ? '<span class="tag2">注册即送</span>' : p.ptype==='paid' ? '<span class="tag2">新客首月 5 折</span>' : '<span class="tag2">即购即到账</span>')+
-      '</div>';
-  }).join('');
-  document.getElementById('plansBox').innerHTML=cards || '<p>暂无上架套餐，请联系管理员</p>';
-}).catch(()=>{document.getElementById('plansBox').innerHTML='<p>套餐加载失败</p>'});
-</script>
-</body></html>`
 
 // termsBody 用户协议正文（中英双语，面向翻译平台）。
 const termsBody = `

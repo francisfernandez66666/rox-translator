@@ -4,10 +4,12 @@
 //   - 检测：输入/输出双向命中检测（归一化 Contains 口径：小写 + NFKC + 零宽剥离 +
 //     全半角折叠 + 字符间空白剥离，见 normalize / normalizeLoose）
 //   - 处置策略在调用侧（engine：拒译/段落拦截/占位替换 + 审计 + 告警）
+//
 // 设计口径：命中段不进模型（上游供应商侧零暴露），交付物只留占位符；
 // 误杀走人工复核通道（告警 kind=sensitive_block 留证词）。
 // ★ P0-5 修复（2026-09-14）：旧实现仅 ToLower+Contains，全角字母（ＦＩＲＥＡＲＭＳ）、
-//   零宽字符插入（枪\u200b支）、字符间空格（F i r e a r m s）均可绕过合规闸。
+//
+//	零宽字符插入（枪\u200b支）、字符间空格（F i r e a r m s）均可绕过合规闸。
 package sensitive
 
 import (

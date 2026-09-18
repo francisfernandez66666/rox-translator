@@ -4,10 +4,11 @@
 // 支持 {var} 占位符；模板内容存于服务端，超管可随时修改并即时生效。
 // ============================================================================
 import { useEffect, useState } from 'react'
-import { Button, Input, MessagePlugin, Textarea } from 'tdesign-react'
+import { Button } from '@/ui/langcross/src'
 import { useT } from '@/i18n'
 import { Panel } from './parts'
 import { mailTemplatesGet, mailTemplatesSave, type MailTplItem } from '@/api/admin'
+import { toastSuccess, toastError } from '@/lib/toastBus'
 
 /** 邮件模板面板组件（仅超管）：列出全部模板，逐项编辑主题/正文/抄送并保存 */
 export default function MailTplP() {
@@ -51,14 +52,14 @@ export default function MailTplP() {
         [code]: { subject: it.subject, body: it.body, cc: it.cc },
       })
       if (j.success) {
-        MessagePlugin.success(t('mailTpl.saved'))
+        toastSuccess(t('mailTpl.saved'))
         // 更新列表中的模板为已修改状态
         setList((arr) => arr.map((x) => (x.code === code ? { ...x, subject: it.subject, body: it.body, cc: it.cc, is_modified: true } : x)))
       } else {
-        MessagePlugin.error(j.message || 'error')
+        toastError(j.message || 'error')
       }
     } catch (e: any) {
-      MessagePlugin.error(e?.message || 'error')
+      toastError(e?.message || 'error')
     } finally {
       setSaving(null)
     }
@@ -76,12 +77,12 @@ export default function MailTplP() {
           setDraft((d) => ({ ...d, [code]: { ...def, is_modified: false } }))
           setList((arr) => arr.map((x) => (x.code === code ? { ...x, is_modified: false } : x)))
         }
-        MessagePlugin.success(t('mailTpl.resetOk'))
+        toastSuccess(t('mailTpl.resetOk'))
       } else {
-        MessagePlugin.error(j.message || 'error')
+        toastError(j.message || 'error')
       }
     } catch (e: any) {
-      MessagePlugin.error(e?.message || 'error')
+      toastError(e?.message || 'error')
     } finally {
       setSaving(null)
     }
@@ -98,7 +99,7 @@ export default function MailTplP() {
           {list.map((it) => {
             const d = draft[it.code] || it
             return (
-              <div key={it.code} style={{ border: '1px solid var(--adm-line)', borderRadius: 8, padding: 14 }}>
+              <div key={it.code} style={{ border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 14 }}>
                 {/* 模板标题与代码标识 */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                   <strong style={{ fontSize: 14 }}>{it.name}</strong>
@@ -116,21 +117,21 @@ export default function MailTplP() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div>
                     <div style={{ fontSize: 13, marginBottom: 4 }}>{t('mailTpl.subject')}</div>
-                    <Input value={d.subject} onChange={(v) => setField(it.code, 'subject', v)} placeholder={it.subject} />
+                    <input className="lc-input" value={d.subject} onChange={(e) => setField(it.code, 'subject', e.target.value)} placeholder={it.subject} />
                   </div>
                   <div>
                     <div style={{ fontSize: 13, marginBottom: 4 }}>{t('mailTpl.body')}</div>
-                    <Textarea value={d.body} onChange={(v) => setField(it.code, 'body', v)} placeholder={it.body} autosize={{ minRows: 4, maxRows: 10 }} />
+                    <textarea className="lc-textarea" rows={4} value={d.body} onChange={(e) => setField(it.code, 'body', e.target.value)} placeholder={it.body} style={{ width: '100%', minHeight: 96, maxHeight: 260, resize: 'vertical' }} />
                   </div>
                   <div>
                     <div style={{ fontSize: 13, marginBottom: 4 }}>{t('mailTpl.cc')}</div>
-                    <Input value={d.cc} onChange={(v) => setField(it.code, 'cc', v)} placeholder={t('mailTpl.ccPlaceholder')} />
+                    <input className="lc-input" value={d.cc} onChange={(e) => setField(it.code, 'cc', e.target.value)} placeholder={t('mailTpl.ccPlaceholder')} />
                   </div>
                   {/* 保存与重置按钮 */}
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <Button theme="primary" loading={saving === it.code} onClick={() => save(it.code)}>{t('mailTpl.save')}</Button>
+                    <Button variant="primary" disabled={saving === it.code} onClick={() => save(it.code)}>{t('mailTpl.save')}</Button>
                     {it.is_modified && (
-                      <Button theme="default" variant="outline" loading={saving === it.code} onClick={() => reset(it.code)}>{t('mailTpl.reset')}</Button>
+                      <Button variant="secondary" disabled={saving === it.code} onClick={() => reset(it.code)}>{t('mailTpl.reset')}</Button>
                     )}
                   </div>
                 </div>

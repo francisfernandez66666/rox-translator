@@ -36,7 +36,9 @@ test.describe('后台暗色适配 + 文件工单上传回归', () => {
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await expect(page.locator('body')).toBeVisible();
     await page.waitForTimeout(1200); // 等面板异步渲染
-    for (const sel of ['.admin-shell', '.admin-side', '.panel-card']) {
+    // ★ 2026-09-18 UI 迁移：后台外壳换 LangCross 皮肤，锚点 .admin-shell→.lc-shell、
+    //   .admin-side→.lc-sidebar（.panel-card 保留）；旧类名已删，取不到元素会漏检暗色骨架。
+    for (const sel of ['.lc-shell', '.lc-sidebar', '.panel-card']) {
       const el = page.locator(sel).first();
       if (await el.count()) {
         const bg = rgb(await el.evaluate((n) => getComputedStyle(n).backgroundColor));
@@ -90,11 +92,12 @@ test.describe('后台暗色适配 + 文件工单上传回归', () => {
   test('U1 文件工单上传建单成功（multipart boundary 回归）', async ({ page }) => {
     await login(page, process.env.UAT_USER || 'uatuser_a', process.env.UAT_PASS || 'uatpass123');
     await page.goto('/tickets');
-    await page.getByRole('button', { name: /📎/ }).click(); // 切换「文件」模式
+    // ★ 2026-09-18 UI 迁移：模式切换钮由 emoji（📎/📝）改为 i18n 文案「文件」「文本」
+    await page.getByRole('button', { name: /^文件$/ }).click(); // 切换「文件」模式
     const input = page.locator('#tk-file-input');
     await expect(input).toBeAttached({ timeout: 10000 });
     await input.setInputFiles([{ name: 'e2e_upload.txt', mimeType: 'text/plain', buffer: Buffer.from('今天天气怎么样，适合出门吗？\n第二行内容。\n') }]);
-    await page.getByRole('button', { name: /📝/ }).isVisible(); // 模式按钮仍渲染（防止选择器漂移）
+    await page.getByRole('button', { name: /^文本$/ }).isVisible(); // 模式按钮仍渲染（防止选择器漂移）
     const title = page.locator('input[placeholder*="工单标题"]');
     await expect(title).toBeVisible();
     await title.fill('E2E上传回归单');

@@ -8,10 +8,11 @@
 // 保证「云端知识库单独可配」。
 // ============================================================================
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Table, Input, Select, Dialog, MessagePlugin, Tag } from 'tdesign-react'
+import { Badge, Button, DataTable, Dialog } from '@/ui/langcross/src'
 import { brandTerms, kbPackages, kbEntryAdd, kbEntryUpdate, kbEntryDelete } from '@/api/kb'
 import { langLabel } from '@/lib/langNames'
 import { useT, tpl as gtpl } from '@/i18n'
+import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
 
 /** BrandEntry 品牌固定译法条目（层级/源语/目标语/生效模块） */
 type BrandEntry = {
@@ -57,7 +58,7 @@ export default function BrandTermsP(_props: Props) {
   const [packages, setPackages] = useState<PkgItem[]>([])
   const [pkgId, setPkgId] = useState(0)           // 当前选中的知识库包 ID
   const [terms, setTerms] = useState<BrandEntry[]>([])
-  const [loading, setLoading] = useState(false)
+  const [, setLoading] = useState(false)
   const [brandInput, setBrandInput] = useState('')   // 新增品牌名（中文，如「极石」）
   const [brandEn, setBrandEn] = useState('')          // 该品牌名统一外语译法（如 ROX）
   const [dlg, setDlg] = useState(false)               // 新增弹窗
@@ -91,17 +92,17 @@ export default function BrandTermsP(_props: Props) {
   const addBrand = async () => {
     const brand = brandInput.trim()
     const en = brandEn.trim()
-    if (!brand) { MessagePlugin.warning(t('bt.needBrand')); return }
-    if (!en) { MessagePlugin.warning(t('bt.needEn')); return }
+    if (!brand) { toastWarn(t('bt.needBrand')); return }
+    if (!en) { toastWarn(t('bt.needEn')); return }
     try {
       for (const lc of BRAND_LANGS) {
         await kbEntryAdd({ package_id: pkgId, layer: 1, source_text: brand, target_lang: lc, target_text: en, module: 'brand' })
       }
-      MessagePlugin.success(gtpl('bt.added', { en }))
+      toastSuccess(gtpl('bt.added', { en }))
       setBrandInput(''); setBrandEn(''); setDlg(false)
       await load()
     } catch (e) {
-      MessagePlugin.error(gtpl('bt.addFail', { err: String((e as any)?.message || e) }))
+      toastError(gtpl('bt.addFail', { err: String((e as any)?.message || e) }))
     }
   }
 
@@ -113,9 +114,9 @@ export default function BrandTermsP(_props: Props) {
     if (!text) return
     try {
       await kbEntryAdd({ package_id: pkgId, layer: 1, source_text: brand, target_lang: lang.trim(), target_text: text.trim(), module: 'brand' })
-      MessagePlugin.success(gtpl('bt.langAdded', { lang: lang.trim() }))
+      toastSuccess(gtpl('bt.langAdded', { lang: lang.trim() }))
       await load()
-    } catch (e) { MessagePlugin.error(gtpl('bt.langFail', { err: String((e as any)?.message || e) })) }
+    } catch (e) { toastError(gtpl('bt.langFail', { err: String((e as any)?.message || e) })) }
   }
 
   /** 修改单语言译法 */
@@ -125,17 +126,17 @@ export default function BrandTermsP(_props: Props) {
     if (!text || text.trim() === e.target_text) return
     try {
       await kbEntryUpdate({ id: e.id, layer: 1, source_text: g.brand, target_lang: lang, target_text: text.trim(), module: 'brand' })
-      MessagePlugin.success(t('bt.updated'))
+      toastSuccess(t('bt.updated'))
       await load()
-    } catch (err) { MessagePlugin.error(gtpl('bt.updateFail', { err: String((err as any)?.message || err) })) }
+    } catch (err) { toastError(gtpl('bt.updateFail', { err: String((err as any)?.message || err) })) }
   }
 
   const removeEntry = async (id: number) => {
     try {
       await kbEntryDelete(id)
-      MessagePlugin.success(t('bt.entryDeleted'))
+      toastSuccess(t('bt.entryDeleted'))
       await load()
-    } catch (e) { MessagePlugin.error(gtpl('bt.deleteFail', { err: String((e as any)?.message || e) })) }
+    } catch (e) { toastError(gtpl('bt.deleteFail', { err: String((e as any)?.message || e) })) }
   }
 
   const inputStyle = { minWidth: 180 } as const
@@ -148,27 +149,24 @@ export default function BrandTermsP(_props: Props) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('bt.pkgLabel')}</span>
-          <Select value={pkgId} onChange={(v: any) => setPkgId(Number(v ?? 0))} style={{ minWidth: 240 }}
-            options={packages.map(p => ({ label: `${p.name || p.code}`, value: p.id }))} />
+          <select className="lc-select" value={String(pkgId)} onChange={(e) => setPkgId(Number(e.target.value))} style={{ minWidth: 240 }}>
+            {packages.map(p => <option key={p.id} value={String(p.id)}>{`${p.name || p.code}`}</option>)}
+          </select>
         </div>
         <div style={{ fontSize: 13, color: 'var(--adm-hint)' }}>
           {t('bt.hint')}
         </div>
-        <Button theme="primary" onClick={() => setDlg(true)}>{t('bt.new')}</Button>
+        <Button variant="primary" onClick={() => setDlg(true)}>{t('bt.new')}</Button>
       </div>
 
-      <Dialog header={t('bt.newTitle')} visible={dlg} onClose={() => setDlg(false)} footer={null} width={420}>
+      <Dialog title={t('bt.newTitle')} open={dlg} onCancel={() => setDlg(false)} confirmText={t('bt.save')} cancelText={t('bt.cancel')} onConfirm={() => void addBrand()}>
         <div style={rowTop}>
           <span style={{ width: 110, fontSize: 13 }}>{t('bt.brandLabel')}</span>
-          <Input value={brandInput} onChange={(v: any) => setBrandInput(String(v ?? ''))} placeholder={t('bt.brandPlaceholder')} style={inputStyle} />
+          <input className="lc-input" value={brandInput} onChange={(e) => setBrandInput(String(e.target.value ?? ''))} placeholder={t('bt.brandPlaceholder')} style={inputStyle} />
         </div>
         <div style={rowTop}>
           <span style={{ width: 110, fontSize: 13 }}>{t('bt.enLabel')}</span>
-          <Input value={brandEn} onChange={(v: any) => setBrandEn(String(v ?? ''))} placeholder="ROX" style={inputStyle} />
-        </div>
-        <div style={{ ...rowTop, marginTop: 16, justifyContent: 'flex-end' }}>
-          <Button onClick={() => setDlg(false)}>{t('bt.cancel')}</Button>
-          <Button theme="primary" onClick={() => void addBrand()}>{t('bt.save')}</Button>
+          <input className="lc-input" value={brandEn} onChange={(e) => setBrandEn(String(e.target.value ?? ''))} placeholder="ROX" style={inputStyle} />
         </div>
       </Dialog>
 
@@ -176,26 +174,29 @@ export default function BrandTermsP(_props: Props) {
       {groups.length === 0 ? (
         <div style={{ color: 'var(--adm-faint)', fontSize: 13, padding: '16px 0' }}>{pkgId <= 0 ? t('bt.needPkg') : t('bt.empty')}</div>
       ) : (
-        <Table size="small" rowKey="brand" loading={loading} data={groups} maxHeight={520}
-          columns={[
-            { colKey: 'brand', title: t('bt.colBrand'), width: 160, cell: ({ row }: any) => <Tag theme="primary" variant="light">{row.brand}</Tag> },
-            { colKey: 'langs', title: t('bt.colLangs'), minWidth: 480, cell: ({ row }: any) => (
+        <DataTable<any> rowKey={(row) => String(row.brand)} rows={groups} columns={[
+            { key: 'brand', title: t('bt.colBrand'), width: 160, render: (row) => <Badge>{row.brand}</Badge> },
+            { key: 'langs', title: t('bt.colLangs'), width: '55%', render: (row) => (
               <div style={rowStyle}>
                 {BRAND_LANGS.filter(lc => row.langs[lc] !== undefined).map(lc => {
                   const entry = terms.find(t => t.source_text === row.brand && t.target_lang === lc)
                   return (
+                    /* 单语言条目芯片：语言缩写 + 规定译法 + 行内「编辑 / 删除」动作。
+                       编辑按钮文字色由品牌蓝改为中性浅色（#E7E9EA），与暗色主题正文一致；
+                       删除按钮原为 ✕ 图形字符，emoji 清理后只剩 aria-label（无可视字符），
+                       后续需补 <Icon n="close" /> 才能看见入口。 */
                     <span key={lc} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--adm-soft)', borderRadius: 5, padding: '2px 8px', fontSize: 12 }}>
                       <span style={{ color: 'var(--adm-faint)', width: 26 }}>{langLabel(lc, 'zh') || lc}</span>
                       <b style={{ color: 'var(--npz-text-1)' }}>{row.langs[lc]}</b>
-                      {entry && <button type="button" aria-label={t('bt.editShort')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', cursor: 'pointer', color: '#4a7dff', marginInlineStart: 2 }} onClick={() => void editLang(row, entry, lc)}>{t('bt.editShort')}</button>}
-                      {entry && <button type="button" aria-label={t('bt.delEntry')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', cursor: 'pointer', color: '#d45656', marginInlineStart: 2 }} onClick={() => void removeEntry(entry.id)}>✕</button>}
+                      {entry && <button type="button"aria-label={t('bt.editShort')} style={{ border:'none', background:'none', padding: 0, font:'inherit', cursor:'pointer', color:'#E7E9EA', marginInlineStart: 2 }} onClick={() => void editLang(row, entry, lc)}>{t('bt.editShort')}</button>}
+ {entry && <button type="button"aria-label={t('bt.delEntry')} style={{ border:'none', background:'none', padding: 0, font:'inherit', cursor:'pointer', color:'#d45656', marginInlineStart: 2 }} onClick={() => void removeEntry(entry.id)}></button>}
                     </span>
                   )
                 })}
                 <button type="button" aria-label={t('bt.addLang')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', cursor: 'pointer', color: 'var(--adm-faint)', fontSize: 12 }} onClick={() => void addSingleLang(row.brand)}>{t('bt.addLang')}</button>
               </div>
             ) },
-          ] as never} />
+          ]}  />
       )}
     </div>
   )
