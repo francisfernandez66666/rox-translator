@@ -20,12 +20,18 @@
    **禁止基础包 import `internal/store`**（会产生循环依赖，且让「读一个配置」被迫拉起整个存储层）。
 4. **新增列走幂等补列**：`db.EnsureColumns(...)`，仿 `store.TicketQualityFlaggedMigrate()`；
    禁止一次性 `ALTER TABLE` 直执行。
+   迁移**唯一入口**即 `db.EnsureColumns`/`db.ExecDDL`——原 `internal/db/migrate.go` 的 Runner
+   影子框架（版本表 `schema_migrations` + `RegisteredMigrations` 模板）生产零调用，
+   已于 2026-09-18 P2-2 删除，禁止重建（`internal/db/guard_test.go` 的 `TestNoShadowMigrationRunner` 会红灯）。
 5. 域索引与完整规则见 [backend-go/internal/store/README.md](backend-go/internal/store/README.md)。
 
 ### 2. 日志与观测
 
 - 后端统一用 `internal/observability` 的 slog（JSON + trace_id），**不要用标准库 `log.Printf`**。
 - 子服务（如 assist-server）也必须接同一口径，禁止自建日志格式。
+- 存量 `log.Printf` 受棘轮闸门约束**只减不增**：`internal/observability/logratchet_test.go`
+  （基线 179，2026-09-18 P2-3 建立）。迁移优先级 engine → fileproc → orchestrator，按包随改动顺带清，
+  每降一批同步下调该文件里的 `logPrintfBaseline`。
 
 ### 3. 密钥与配置
 
