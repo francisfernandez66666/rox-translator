@@ -5,6 +5,10 @@
 
 // 内存版 localStorage 桩（仅需 getItem/setItem/removeItem 最小接口）
 const store = new Map<string, string>()
+// ★ 2026-09-20 测试默认钉 zh：i18n 冷启动在无 app_lang 时改走「浏览器语言自动检测」，
+// 测试环境 navigator 语言标不可控（jsdom=en-US / node=无），不钉死会让大批
+// 断言中文文案的用例随机翻红；需要其他语种的用例自行 setLang 或 removeItem。
+store.set('app_lang', 'zh')
 ;(globalThis as Record<string, unknown>).localStorage = {
   getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
   setItem: (k: string, v: string) => { store.set(k, String(v)) },

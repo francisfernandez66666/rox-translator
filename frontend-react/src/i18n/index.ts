@@ -128,10 +128,27 @@ const locales: Partial<Record<Lang, Dict>> = {
 const dicts = { zh, en, ...locales } as Record<Lang, Dict>
 
 // ---- 极简外部语言 store ----
-// currentLang 当前语言（首次从 localStorage 读取；★ #23 读到未知代码一律回落 zh，
-// 防止旧版本存的野值或手工改 storage 让全站取词踩空）
+// ★ 2026-09-20 外国人可读（用户反馈④）：首次访问（localStorage 无 app_lang）不再
+// 一律落中文，而是按浏览器语言自动选 UI 语种——中文系按区域分简/繁，命中语种表
+// 直接用该语种，其余非中文一律回落英文（land.* 等长尾键本就 lang→en→zh 回退，
+// 英文落地页对非中文访客完整可读）。用户手动切换后写 app_lang，永久覆盖检测值。
+function detectBrowserLang(): Lang {
+  try {
+    const cands = navigator.languages?.length ? Array.from(navigator.languages) : [navigator.language || '']
+    for (const raw of cands) {
+      const tag = (raw || '').toLowerCase()
+      if (!tag) continue
+      if (tag.startsWith('zh')) return /(^|[-_])(tw|hk|mo|hant)/.test(tag) ? 'zh_hant' : 'zh'
+      const two = tag.slice(0, 2) as Lang
+      if (LANG_OPTIONS.some((o) => o.code === two)) return two
+    }
+  } catch { /* 非浏览器环境（SSR/测试）忽略检测 */ }
+  return 'en'
+}
+// currentLang 当前语言（localStorage 有效值 > 浏览器检测；★ #23 存的野值一律重检测，
+// 防止旧版本脏数据让全站取词踩空）
 const stored = localStorage.getItem('app_lang') as Lang | null
-let currentLang: Lang = stored && LANG_OPTIONS.some((o) => o.code === stored) ? stored : 'zh'
+let currentLang: Lang = stored && LANG_OPTIONS.some((o) => o.code === stored) ? stored : detectBrowserLang()
 
 // ★ F3：RTL 方向接线——document.dir 随语言切换（ar/fa/he/ur/ps/ku/dv 为从右到左）。
 //   ★ #23：阿拉伯语已进 UI 语种表，本钩子正式生效；

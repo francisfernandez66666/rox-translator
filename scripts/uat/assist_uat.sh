@@ -86,6 +86,19 @@ ck A6-chat-400 '^400$' "$R"
 R=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$B/api/assist/chat")
 ck A6-chat-405 '^405$' "$R"
 
+# ---------- 2b. ★ 2026-09-20 复合意图让位（生产漏接修复：「印度语能翻译吗，一个字多少钱」
+# 旧逻辑被价格话术直配抢答，语言侧信息全程不参与；现话术降为素材融合应答）----------
+RC=$(curl -s "$B/api/assist/greeting?page=/")
+SID_CI=$(echo "$RC" | python3 -c 'import sys,json;print(json.load(sys.stdin)["session"])')
+TOK_CI=$(echo "$RC" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tok"])')
+R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SID_CI\",\"tok\":\"$TOK_CI\",\"message\":\"印度语能翻译吗，一个字多少钱\",\"page\":\"/\"}")
+ck CI1-not-price-only '"source":"(llm|fallback)"' "$R"
+ck CI1-lang-info '印地语|印度语' "$R"
+ck CI1-price-info '积分|预充值' "$R"
+# 纯价格问句仍走毫秒级话术直配（让位逻辑不得误伤单意图快答）
+R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SID_CI\",\"tok\":\"$TOK_CI\",\"message\":\"多少钱\",\"page\":\"/\"}")
+ck CI2-pure-price-rule '"source":"rule"' "$R"
+
 # ---------- 3. R0.1 同义词归一：怎么充钱 ----------
 # ★ 修复（2026-09-18 闸门回归）：B1/B2 各用全新会话，不再复用 $SID——
 #   复用会让 B1「怎么充钱」进入的 recharge-guide 流程把 B2 的无意义输入当作流程答案吞掉，

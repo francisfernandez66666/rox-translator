@@ -268,3 +268,34 @@ func TestUnanswered(t *testing.T) {
 		t.Fatalf("unanswered: %v", got)
 	}
 }
+
+// TestCompoundIntentYield ★ 2026-09-20 生产漏接回归锁：
+// 「印度语能翻译吗，一个字多少钱」同时含语言咨询与价格咨询两个意图，
+// 旧逻辑被「价格咨询」话术直配抢答（Source=rule），语言侧知识全程不参与——
+// 修复后话术降为素材让位融合应答；纯价格问句仍走毫秒级直配（不退化）。
+func TestCompoundIntentYield(t *testing.T) {
+	e := newTestEngine(t)
+	_, _ = e.db.Create("kb_entries", map[string]any{
+		"key": "kb-lang", "category": "faq", "title": "支持哪些语言", "priority": 8, "enabled": 1,
+		"content": "支持印地语（俗称印度语）等 40+ 语种互翻", "keywords": "语言,语种,印度语,印地语", "link_keys": "chat",
+	})
+	// 生产二次踩坑回归锁：计费知识经运营滚成「大条目」（关键词与价格话术全交集、
+	// 多字命中分数压过语言条目）。旧实现只比对 RetrieveKB 第一条，看到同域即不让位，
+	// 语言侧信息照样被吞——必须越过同域高分条目继续找跨领域命中。
+	_, _ = e.db.Create("kb_entries", map[string]any{
+		"key": "kb-billing-big", "category": "billing", "title": "积分怎么收费", "priority": 10, "enabled": 1,
+		"content": "积分永久有效，先预检后扣费", "keywords": "积分,价格,多少钱,收费,充值,一个字,字数", "link_keys": "billing",
+	})
+	rep := e.Respond(context.Background(), "s-ci", "印度语能翻译吗，一个字多少钱", "/", nil)
+	if rep.Source == "rule" {
+		t.Fatalf("复合问句不应被价格话术单侧直配抢答，Source=%s content=%s", rep.Source, rep.Content)
+	}
+	if !strings.Contains(rep.Content, "印度语") || !strings.Contains(rep.Content, "按积分计费") {
+		t.Fatalf("应并排呈现语言+价格两侧信息: %s", rep.Content)
+	}
+	// 纯价格问句：无跨领域命中，维持话术直配快答
+	rep2 := e.Respond(context.Background(), "s-ci2", "多少钱", "/", nil)
+	if rep2.Source != "rule" || rep2.Content != "按积分计费" {
+		t.Fatalf("纯价格问句应仍直配: source=%s content=%s", rep2.Source, rep2.Content)
+	}
+}

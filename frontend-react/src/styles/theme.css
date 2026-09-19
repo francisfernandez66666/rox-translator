@@ -307,15 +307,15 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
    视觉语言与 HeroDemo hd-* 同源但独立成组：错词位 .ws-w 灰字，struck 时转语义红并
    展开 ::before 红线（scaleX 过冲 3.5% 像手划）；正词位 .ws-r 白字，glow 辉光打底、
    lock 定版缩放。只动 opacity/transform/text-shadow，不触发重排；纯黑口径无新色相。 */
-.ws { display: inline-flex; align-items: baseline; gap: 10px; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; min-width: 0; }
+.ws { display: inline-flex; align-items: baseline; gap: 12px; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; min-width: 0; }
 /* ★ 多语言循环：语种标签前置（EN/RU/…），灰一档小字，不参与打字动画 */
-.ws-tag { flex: none; font-size: 9.5px; letter-spacing: .08em; color: #565B63; border: 1px solid #2A2F3A; border-radius: 4px; padding: 1px 4px; transform: translateY(-1px); }
-.ws-w { position: relative; display: inline-block; color: #8E949C; font-size: 12px; transition: color .28s ease; }
+.ws-tag { flex: none; font-size: 11.5px; letter-spacing: .08em; color: #878D95; border: 1px solid #2A2F3A; border-radius: 4px; padding: 1px 5px; transform: translateY(-1px); }
+.ws-w { position: relative; display: inline-block; color: #9AA0AA; font-size: 14px; transition: color .28s ease; }
 .ws-w.struck { color: var(--lc-danger, #E5484D); animation: wsStrikeFlash .72s ease-out both; }
 /* 红线是文字节点 ::before：与错词分开两层，划掉动画（scaleX）不牵连文字重排 */
 .ws-w .ws-wt::before { content: ''; position: absolute; left: -2px; right: -2px; top: 55%; height: 1.6px; background: var(--lc-danger, #E5484D); transform: scaleX(0); transform-origin: left center; }
 .ws-w.struck .ws-wt::before { transform: scaleX(1); animation: wsStrikeIn .36s cubic-bezier(.34, 0, .2, 1) both; }
-.ws-r { display: inline-block; color: #E7E9EA; font-size: 13px; font-weight: 700; min-height: 1em; transition: text-shadow .62s ease; }
+.ws-r { display: inline-block; color: #E7E9EA; font-size: 15px; font-weight: 700; min-height: 1em; transition: text-shadow .62s ease; }
 .ws-r.glow { text-shadow: 0 0 16px rgba(255, 255, 255, .5); }
 .ws-r.lock { animation: wsRLock .42s cubic-bezier(.34, 1.4, .44, 1) both; }
 /* typing 光标：与 B1 .draft-caret 同一节奏（step-end 闪烁），打完摘类 */
@@ -323,17 +323,20 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 @keyframes wsStrikeIn { 0% { transform: scaleX(0); } 74% { transform: scaleX(1.035); } 100% { transform: scaleX(1); } }
 @keyframes wsStrikeFlash { 0% { text-shadow: none; } 20% { text-shadow: 0 0 18px rgba(229, 72, 77, .62); } 100% { text-shadow: none; } }
 @keyframes wsRLock { 0% { transform: scale(1.05); text-shadow: 0 0 17px rgba(255, 255, 255, .65); } 55% { transform: scale(.994); } 100% { transform: scale(1); text-shadow: 0 0 16px rgba(255, 255, 255, .5); } }
-/* 大档：全屏加载位（App 冷启/路由懒加载）用，字号与 HeroDemo 演示位接近 */
-.ws--lg .ws-w { font-size: 15px; }
-.ws--lg .ws-r { font-size: 18px; }
+/* 大档：全屏加载位（App 冷启/路由懒加载）用（★ 2026-09-20 用户反馈「太小看不清」整体上调一档） */
+.ws--lg { gap: 16px; }
+.ws--lg .ws-tag { font-size: 13px; }
+.ws--lg .ws-w { font-size: 22px; }
+.ws--lg .ws-r { font-size: 26px; }
 /* ★ #24 小档：聊天草稿头与逐段上屏行内——字号贴齐各自 11~12px 文本基线，间距收窄 */
-.draft-ws { gap: 7px; }
-.draft-ws .ws-w { font-size: 11px; }
-.draft-ws .ws-r { font-size: 11.5px; }
-.file-segs-ws { gap: 6px; }
-.file-segs-ws .ws-w { font-size: 10px; }
-.file-segs-ws .ws-r { font-size: 10.5px; }
-.file-segs-ws .ws-tag { font-size: 8.5px; }
+.draft-ws { gap: 9px; }
+.draft-ws .ws-w { font-size: 13px; }
+.draft-ws .ws-r { font-size: 14px; }
+.draft-ws .ws-tag { font-size: 10px; }
+.file-segs-ws { gap: 8px; }
+.file-segs-ws .ws-w { font-size: 12px; }
+.file-segs-ws .ws-r { font-size: 13px; }
+.file-segs-ws .ws-tag { font-size: 10px; }
 @media (prefers-reduced-motion: reduce) {
   .ws-w.struck, .ws-r.lock { animation: none; }
   .ws-w .ws-wt::before { animation: none; }

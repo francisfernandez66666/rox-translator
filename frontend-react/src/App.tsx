@@ -96,11 +96,12 @@ import { LangSelect } from './components/LangSelect'
 // 替代原 tdesign-react 的 Button/Tag/Drawer —— 换肤期不再引 TDesign 组件。
 import { Badge, Button, Drawer, Icon } from '@/ui/langcross/src'
 
-// 页面加载中占位组件（★ D2 #24：旋转圈已换成落地页同源的「划掉错词→亮起正词」换词动效 + 提示文字），
+// 页面加载中占位组件（★ D2 #24：旋转圈已换成落地页同源的「划掉错词→亮起正词」换词动效 + 提示文字；
+// ★ 2026-09-20 反馈③：minHeight 100dvh 撑满首屏，动效真正垂直居中而非挤在半高容器里），
 // 路由懒加载时展示
 function PageLoading() {
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
+    <div style={{ flex: 1, minHeight: '100dvh', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
       <WordSwap className="ws--lg" ariaLabel={gt('app.loading')} />
       <p style={{ fontSize: 16, color: '#9AA0AA' }}>{gt('app.loading')}</p>
     </div>

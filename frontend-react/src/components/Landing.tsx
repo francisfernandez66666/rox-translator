@@ -34,6 +34,7 @@ import { useT } from '@/i18n' // useT() → [语种, t, tpl]；版权行用 tpl 
 import { useBranding } from '@/branding' // 租户品牌信息：brandName 为空即回落产品名
 import { openAPIDocsUrl } from '@/api/core' // 公开 API 文档地址（同源 /openapi/docs）
 import { LeadForm } from '@/components/LeadForm' // ★ P1-3 收尾留资表单（自带状态，唯一例外）
+import { LangSelect } from '@/components/LangSelect' // ★ 2026-09-20 反馈④：落地页对非中文访客给出手动切换入口（12 语种，与顶栏同一组件）
 import { INDUSTRY_META, industryName } from '@/lib/industries' // 覆盖范围区块：行业包与本页术语大卡同源的一份事实
 import { PERSONA_FALLBACK } from '@/lib/personas' // 覆盖范围区块：八个角色 code 与后端 persona 包对齐
 
@@ -222,6 +223,8 @@ export default function Landing() {
           ))}
         </nav>
         <div className="lc-nav-cta">
+          {/* ★ 反馈④：语言切换放在登录旁——外国访客第一眼能找到的位置；纯黑描边按钮与营销导航同色系 */}
+          <LangSelect />
           {/* 登录用文字链（低权重），试用用实心按钮（本页唯一主投）：两种强度不并列，避免选择困难 */}
           <a className="lc-nav-login" href="/login">{t('land.navLogin')}</a>
           <Pill size="sm" href="/register">{t('land.ctaFree')}</Pill>

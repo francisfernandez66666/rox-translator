@@ -69,19 +69,41 @@ describe('locales 部分词典覆盖（★ #23）', () => {
       for (const k of picks) expect(t(k), `${lang} 取词 ${k}`).toBe(dict[k])
     }
   })
-  it('持久化与未知值回落：setLang 写 app_lang；初始读到未知代码回落 zh', async () => {
+  it('持久化与未知值回落：setLang 写 app_lang；初始读到未知代码走浏览器检测', async () => {
     // ① setLang 必须同步落盘（外国用户切语种后刷新不丢）
     setLang('ar')
     expect(getLang()).toBe('ar')
     expect(localStorage.getItem('app_lang')).toBe('ar')
-    // ② 旧版本/手工改出的野值不得让全站取词踩空：重导入模块模拟冷启动
+    // ② 旧版本/手工改出的野值不得让全站取词踩空：重导入模块模拟冷启动，
+    //    ★ 2026-09-20 起回落口径从「一律 zh」改为「按浏览器语言检测」（此处 navigator=vi → en）
     setLang('zh')
-    const zhVal = t(CORE_KEYS[0])
     localStorage.setItem('app_lang', 'klingon')
+    vi.stubGlobal('navigator', { language: 'vi-VN', languages: ['vi-VN'] })
     vi.resetModules()
     const fresh = await import('./index')
-    expect(fresh.getLang()).toBe('zh')
-    expect(fresh.t(CORE_KEYS[0])).toBe(zhVal)
+    expect(fresh.getLang()).toBe('en') // 语种表外语言回落英文（land.*/长尾键英文完整）
     localStorage.setItem('app_lang', 'zh')
+    vi.unstubAllGlobals()
+  })
+  it('★ 浏览器语言自动检测（反馈④外国人可读）：语种表内直达、中文分简繁、表外回落 en', async () => {
+    // 每组：mock navigator → 冷启动期望语种（app_lang 留空 = 首次访问场景）
+    const cases: Array<[string[], Lang]> = [
+      [['fr-FR', 'en-US'], 'fr'], // 取第一优先语言，哪怕次选是英语
+      [['zh-TW'], 'zh_hant'], // 台湾/港澳/繁体标记 → 繁中
+      [['zh-HK', 'zh-CN'], 'zh_hant'],
+      [['zh-CN', 'en'], 'zh'], // 简中浏览器仍是简中
+      [['ja'], 'ja'],
+      [['vi-VN'], 'en'], // 语种表外 → 英文回退
+      [[''], 'en'], // 空语言标 → 英文
+    ]
+    for (const [langs, want] of cases) {
+      localStorage.removeItem('app_lang')
+      vi.stubGlobal('navigator', { language: langs[0] || '', languages: langs })
+      vi.resetModules()
+      const fresh = await import('./index')
+      expect(fresh.getLang(), `navigator.languages=${langs.join(',')} → ${want}`).toBe(want)
+    }
+    vi.unstubAllGlobals()
+    localStorage.setItem('app_lang', 'zh') // 复位测试默认语种，后续用例不受影响
   })
 })

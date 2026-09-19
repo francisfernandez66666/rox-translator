@@ -83,3 +83,35 @@ describe('落地页 · 演示入口退役（#22）', () => {
     expect(links.length).toBeGreaterThanOrEqual(3)
   })
 })
+
+// ★ 2026-09-20 用户反馈批次回归锁：①②质量验证数字卡改口径（降本 80%–90%/质量可验证），
+// ④落地页给外国访客的语言切换入口 + 非中文语种整页英文回退
+describe('落地页 · 质量数字口径与多语言入口（2026-09-20）', () => {
+  it('⑥ 质量数字卡改口径：含「降本 80%–90%」「质量可验证」，旧「逐段/几十万」大数字退役', () => {
+    render(<Landing />)
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('降本 80%–90%')
+    expect(text).toContain('质量可验证')
+    expect(text).not.toContain('显著占优（专业大模型交叉校验结论）') // 旧长句零残留
+  })
+
+  it('⑦ 顶部导航挂 LangSelect（12 语种切换入口对访客可见）', () => {
+    render(<Landing />)
+    const btn = document.querySelector('header .lang-sel-btn') as HTMLElement
+    expect(btn).toBeTruthy()
+    expect(btn.textContent).toContain('简体中文') // 当前语种自称
+  })
+
+  it('⑧ 俄语界面落地页：land.* 词条全部走英文回退（不再对访客露中文文案）', () => {
+    setLang('ru')
+    render(<Landing />)
+    // LANDING_CSS 以 <style> 注入，其中文注释会混进 textContent——先摘掉样式节点再取可见文本
+    document.querySelectorAll('style').forEach((s) => s.remove())
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('80–90% lower cost') // 质量数字卡英文口径（en 回退）
+    // 中文词条零出现（演示数据例外：术语对照卡/curl 示例按产品设计保留中文源）
+    const zhOnly = ['免费试用', '留言获取方案', '价格方案', '常见问题', '质量验证', '支持哪些语言']
+    for (const s of zhOnly) expect(text, `俄语界面不应出现中文文案「${s}」`).not.toContain(s)
+    setLang('zh')
+  })
+})

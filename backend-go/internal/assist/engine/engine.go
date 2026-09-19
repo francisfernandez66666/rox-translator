@@ -207,6 +207,7 @@ type entry struct {
 	content string
 	link    string
 	score   int
+	kw      string // 该条目的原始关键词串（★ 复合意图让位判定用，不参与渲染）
 }
 
 // RetrieveKB 检索知识库 topN（enabled，按命中关键词数+优先级排序）
@@ -228,6 +229,7 @@ func (e *Engine) RetrieveKB(input string, topN int) []entry {
 			content: asStr(r["content"]),
 			link:    asStr(r["link_keys"]),
 			score:   hits*10 + 10 - prio,
+			kw:      kw,
 		})
 	}
 	sort.Slice(cands, func(i, j int) bool { return cands[i].score > cands[j].score })
@@ -375,6 +377,22 @@ func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL string, 
 	}
 	// 2. 关键词话术直配（免 LLM，毫秒级）
 	if sc, ok := e.MatchScript(input); ok {
+		// ★ 2026-09-20 生产漏接修复：复合意图（如「印度语能翻译吗，一个字多少钱」=
+		// 语言能力 + 价格）命中话术时，若知识库还检索到另一领域的条目，直配单话术
+		// 会只答一半——把话术降为素材之一，让位给 LLM 融合应答
+		// （LLM 未接入时 fallback 也会把两侧知识并排拼出）。
+		if scEntry, comp := e.compoundIntent(input, sc); comp {
+			hits := []entry{scEntry}
+			for _, h := range e.RetrieveKB(input, 3) {
+				if h.title != scEntry.title { // 同一内容既配话术又进知识库时不重复注入
+					hits = append(hits, h)
+				}
+			}
+			if len(hits) > 4 {
+				hits = hits[:4]
+			}
+			return e.llmReplyWith(ctx, input, history, hits)
+		}
 		content := asStr(sc["content"])
 		if content == "" {
 			content = asStr(sc["title"])
@@ -470,15 +488,75 @@ func (e *Engine) kbByKey(key string) (store.Row, bool) {
 	return nil, false
 }
 
+// compoundIntent 判定「话术直配是否该为新意图让位」并给出融合素材：
+// 在知识库前几条命中里找与话术关键词零交集的跨领域条目；只要该条目真实命中
+// （hitScore≥1）即判复合。刻意不比命中数或总分——计费域知识经多轮运营关键词
+// 越滚越大（价格/多少钱/一个字…），数值对比会让同域大条目永远压过新领域小条目，
+// 「问了两件事却只答一件」正是生产踩过的坑。复合时话术降为素材之一，连同跨领域
+// 知识一起交给融合应答。纯单意图（如只问「多少钱」，命中全属计费域、无跨领域
+// 竞争者）不让位，维持毫秒级直配快答。
+// 返回 true 时素材即话术 entry（调用方拼在 RetrieveKB 结果前即可）。
+func (e *Engine) compoundIntent(input string, sc store.Row) (entry, bool) {
+	hits := e.RetrieveKB(input, 4)
+	if len(hits) == 0 {
+		return entry{}, false
+	}
+	scKws := kwTokenSet(asStr(sc["keywords"]))
+	var cross *entry
+	for i := range hits {
+		h := &hits[i]
+		sameDomain := false
+		for tok := range kwTokenSet(h.kw) {
+			if scKws[tok] {
+				sameDomain = true // 与话术同领域（如价格话术 vs 积分计费知识），不构成复合
+				break
+			}
+		}
+		if !sameDomain {
+			cross = h // RetrieveKB 已按分数排好序，取最高分的跨领域命中
+			break
+		}
+	}
+	if cross == nil {
+		return entry{}, false
+	}
+	content := asStr(sc["content"])
+	if content == "" {
+		content = asStr(sc["title"])
+	}
+	return entry{
+		title:   asStr(sc["title"]),
+		content: content,
+		link:    asStr(sc["link_keys"]),
+		score:   cross.score, // 与让位对象同权重，作为素材并列进 prompt/兜底
+		kw:      asStr(sc["keywords"]),
+	}, true
+}
+
+// kwTokenSet 关键词串转小写 token 集合（比对两域关键词是否相交用）
+func kwTokenSet(s string) map[string]bool {
+	set := map[string]bool{}
+	for _, k := range strings.Split(s, ",") {
+		if k = strings.ToLower(strings.TrimSpace(k)); k != "" {
+			set[k] = true
+		}
+	}
+	return set
+}
+
 // ============================================================
 // LLM 回复：系统 prompt + 检索知识 + 历史对话
 // ============================================================
 
 // llmReply 组装 prompt 调 LLM；无 LLM 或失败走规则兜底
-// ★ 改造 1A：签名加 ctx，LLM 调用与失败日志均带 trace_id。
+// ★ 改造 1A：签名加 ctx，LLM 调用链日志带 trace_id。
 func (e *Engine) llmReply(ctx context.Context, input string, history []store.Row) *Reply {
-	// 检索 top3 知识条目
-	hits := e.RetrieveKB(input, 3)
+	return e.llmReplyWith(ctx, input, history, e.RetrieveKB(input, 3))
+}
+
+// llmReplyWith 同 llmReply，但素材检索结果由调用方给定
+// （★ 复合意图让位时传入「话术素材 + 检索知识」合并表，避免二次检索丢序）
+func (e *Engine) llmReplyWith(ctx context.Context, input string, history []store.Row, hits []entry) *Reply {
 	sys := e.buildSystemPrompt(hits)
 	var msgs []llm.Message
 	msgs = append(msgs, llm.Message{Role: "system", Content: sys})
