@@ -97,11 +97,13 @@ REG=$(curl -s --max-time 15 -X POST "$BASE/api/auth/register" -H 'Content-Type: 
 KEY=$(echo "$REG" | python3 -c "import sys,json;print(json.load(sys.stdin).get('api_key',''))" 2>/dev/null)
 if [ -n "$KEY" ]; then
   bal=$(curl -s "$BASE/openapi/v1/balance" -H "Authorization: Bearer $KEY")
-  total=$(echo "$bal" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('balance_tokens',-1))" 2>/dev/null)
-  grants=$(echo "$bal" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('sub_grants_left',-1))" 2>/dev/null)
-  perm=$(echo "$bal" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('permanent_balance',-1))" 2>/dev/null)
+  # ★ 2026-09-19 积分口径：balance 出参为 balance_points/points_grants/points_permanent，零 token 裸值
+  echo "$bal" | grep -qE '"[a-z_]*tokens"' && bad "balance 出参含 token 裸值（应纯积分口径）" || ok "balance 出参零 token 裸值"
+  total=$(echo "$bal" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('balance_points',-1))" 2>/dev/null)
+  grants=$(echo "$bal" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('points_grants',-1))" 2>/dev/null)
+  perm=$(echo "$bal" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('points_permanent',-1))" 2>/dev/null)
   [ "${total:-0}" -gt 0 ] && [ "${grants:--1}" -ge 0 ] && [ "${perm:--1}" -ge 0 ] \
-    && ok "双桶出参 total=$total grants=$grants perm=$perm" || bad "双桶出参异常: $bal"
+    && ok "双桶出参(积分) total=$total grants=$grants perm=$perm" || bad "双桶出参异常: $bal"
 else
   bad "注册未返回 api_key"
 fi
