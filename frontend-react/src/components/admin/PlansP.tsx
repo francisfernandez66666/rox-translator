@@ -93,15 +93,13 @@ export function PlansP() {
   const [payMode, setPayMode] = useState('mock')
   const [payModeCfg, setPayModeCfg] = useState('mock')
   const payModeLabel = ({ mock: t('billing.chMock'), sdk: t('billing.chSdk'), static_qr: t('billing.chStaticQR') } as Record<string, string>)[payMode] || payMode
-  const [quotaForm, setQuotaForm] = useState<Any>({ qps: 10, concurrent: 3, max_daily_chars: 0, max_daily_tokens: 0 })
+  const [quotaForm, setQuotaForm] = useState<Any>({ qps: 10, concurrent: 3, max_daily_chars: 0, max_daily_points: 0 })
   const [pkgs, setPkgs] = useState<Any[]>([])
   const [billingEnforced, setBillingEnforced] = useState(false)
   const [sensitiveGate, setSensitiveGate] = useState(true) // ★ S8 敏感词兑底闸开关
-  const [freeTrialTokens, setFreeTrialTokens] = useState(300000)
+  const [freeTrialPoints, setFreeTrialPoints] = useState(1000)
   const [freeTrialDays, setFreeTrialDays] = useState(14)
   const [markupMultiplier, setMarkupMultiplier] = useState(1.5)
-  const [tokensPerSentence, setTokensPerSentence] = useState(500)
-  const [pointsTokensRate, setPointsTokensRate] = useState(300) // ★ S1 积分汇率（内部 token/积分，仅超管可见）
   const [staticQRImage, setStaticQRImage] = useState('')
   // ★ USDT（2026-09-15）：超管后台收款配置 + 收银台收款要素
   const [usdtCfg, setUsdtCfg] = useState<Any>({
@@ -157,12 +155,12 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
     const r: Any = await billingInvoices()
     if (r.success) setInvoices((r.invoices as Any[]) || [])
   }, [])
-  // loadQuota 拉取租户限流配额（QPS/并发/日字符/日 token）并回填表单
+  // loadQuota 拉取租户限流配额（QPS/并发/日字符/日积分）并回填表单
   const loadQuota = useCallback(async () => {
     const r: Any = await billingQuota()
     if (r.success) setQuotaForm({
       qps: (r.qps as number) || 10, concurrent: (r.concurrent as number) || 3,
-      max_daily_chars: (r.max_daily_chars as number) || 0, max_daily_tokens: (r.max_daily_tokens as number) ?? 0,
+      max_daily_chars: (r.max_daily_chars as number) || 0, max_daily_points: (r.max_daily_points as number) ?? 0,
     })
   }, [])
   // loadPkgs 超管专属：拉取全部商业包配置（普通租户直接跳过）
@@ -174,11 +172,9 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
     if (cfg.success) {
       setBillingEnforced(cfg.billing_enforced === '1' || cfg.billing_enforced === true)
       if (cfg.sensitive_gate_enabled !== undefined) setSensitiveGate(cfg.sensitive_gate_enabled !== '0') // ★ S8
-      if (cfg.free_trial_tokens) setFreeTrialTokens(Number(cfg.free_trial_tokens))
+      if (cfg.free_trial_points) setFreeTrialPoints(Number(cfg.free_trial_points))
       if (cfg.free_trial_days) setFreeTrialDays(Number(cfg.free_trial_days))
       if (typeof cfg.billing_markup_multiplier === 'number') setMarkupMultiplier(cfg.billing_markup_multiplier)
-      if (cfg.estimate_tokens_per_sentence) setTokensPerSentence(Number(cfg.estimate_tokens_per_sentence))
-      if (typeof cfg.points_tokens_rate === 'number') setPointsTokensRate(cfg.points_tokens_rate)
       if (cfg.pay_mode) setPayModeCfg(cfg.pay_mode as string)
       if (cfg.static_qr_image) setStaticQRImage(cfg.static_qr_image as string)
       // ★ USDT：回填收款配置（开关/链/地址/汇率/确认数）
@@ -381,7 +377,7 @@ async function saveQuota() {
       qps: Math.max(1, Number(quotaForm.qps) || 0),
       concurrent: Math.max(1, Number(quotaForm.concurrent) || 0),
       max_daily_chars: Math.max(0, Number(quotaForm.max_daily_chars) || 0),
-      max_daily_tokens: Math.max(0, Number(quotaForm.max_daily_tokens) || 0),
+      max_daily_points: Math.max(0, Number(quotaForm.max_daily_points) || 0),
     })
     await loadQuota()
   }
@@ -413,17 +409,14 @@ async function loadFunnel() {
 async function saveEnforce() { const r: Any = await adminPackageSettingsSave({ billing_enforced: billingEnforced ? '1' : '0' } as never); toastResp(r, t('common.save')) }
     // saveSensitiveGate S8 敏感词合规闸开关
 async function saveSensitiveGate() { const r: Any = await adminPackageSettingsSave({ sensitive_gate_enabled: sensitiveGate ? '1' : '0' } as never); toastResp(r, t('common.save')) }
-    // saveBillingParams S1 积分汇率 + S3 一次性邮箱黑名单保存
+    // saveBillingParams S3 一次性邮箱黑名单 + 体验额度/加价系数保存
 async function saveBillingParams() {
-    if (!(freeTrialTokens > 0)) { void toastWarn(t('packages.trialTokensInvalid')); return }
+    if (!(freeTrialPoints > 0)) { void toastWarn(t('packages.trialPointsInvalid')); return }
     if (!(freeTrialDays > 0)) { void toastWarn(t('packages.trialDaysInvalid')); return }
     if (!(markupMultiplier >= 1)) { void toastWarn(t('packages.markupInvalid')); return }
-    if (!(tokensPerSentence > 0)) { void toastWarn(t('packages.rateInvalid')); return }
-    if (!(pointsTokensRate > 0)) { void toastWarn(t('packages.rateInvalid')); return }
     const r: Any = await adminPackageSettingsSave({
-      free_trial_tokens: freeTrialTokens, free_trial_days: freeTrialDays,
-      billing_markup_multiplier: markupMultiplier, estimate_tokens_per_sentence: tokensPerSentence,
-      points_tokens_rate: pointsTokensRate,
+      free_trial_points: freeTrialPoints, free_trial_days: freeTrialDays,
+      billing_markup_multiplier: markupMultiplier,
     } as never)
     toastResp(r, t('common.save'))
   }
@@ -507,20 +500,20 @@ async function confirmManual(o: Any) {
       {/* 当前套餐概览（租户视角；超管在平台上下文无需看本租户余额，故 !isSuper 才渲染） */}
       {!isSuper && (
         <Panel title={t('plans.nav.current')}>
-          {/* 四张余额卡：全部走积分口径（fmtPoints 折 token→积分，公开界面不露 token 裸值）。
+          {/* 四张余额卡：接口出口即积分口径（/api/me/package 不再透出 token 裸值）。
               可用余额/本月已用为主题色（兜底 #E7E9EA）、剩余赠送为琥珀色、永久额度为成功色。 */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10 }}>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color:'var(--lc-text-1)'}}>{fmtPoints(pkg.balance_tokens as number)}</b><span style={{ fontSize: 12, color:'var(--adm-faint)'}}>{t('usage.currentBalance')}</span>
+              <b style={{ fontSize: 20, color:'var(--lc-text-1)'}}>{fmtPoints(pkg.points_balance as number)}</b><span style={{ fontSize: 12, color:'var(--adm-faint)'}}>{t('usage.currentBalance')}</span>
             </div>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: 'var(--adm-amber-tx)' }}>{fmtPoints(pkg.sub_grants_left as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balanceGrants')}</span>
+              <b style={{ fontSize: 20, color: 'var(--adm-amber-tx)' }}>{fmtPoints(pkg.points_grants_left as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balanceGrants')}</span>
             </div>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: 'var(--adm-ok-tx)' }}>{fmtPoints(pkg.permanent_balance as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balancePermanent')}</span>
+              <b style={{ fontSize: 20, color: 'var(--adm-ok-tx)' }}>{fmtPoints(pkg.points_permanent_balance as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balancePermanent')}</span>
             </div>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color:'var(--lc-text-1)'}}>{fmtPoints(pkg.tokens_used_month as number)}</b><span style={{ fontSize: 12, color:'var(--adm-faint)'}}>{t('plans.usedMonth')}</span>
+              <b style={{ fontSize: 20, color:'var(--lc-text-1)'}}>{fmtPoints(pkg.points_used_month as number)}</b><span style={{ fontSize: 12, color:'var(--adm-faint)'}}>{t('plans.usedMonth')}</span>
             </div>
           </div>
           <div style={{ marginTop: 10, fontSize: 13, color: 'var(--adm-hint)' }}>
@@ -529,7 +522,7 @@ async function confirmManual(o: Any) {
             {' · '}{tpl('billing.myPackageBalance', { balance: pkg.balance_sentences_approx ?? pkg.sentence_balance ?? '—' })}
           </div>
           {(() => {
-            const total = Number(pkg.balance_tokens ?? 0)
+            const total = Number(pkg.points_balance ?? 0)
             const hasPlan = !!(pkg.package_code && pkg.package_code !== 'trial')
             if (total > 0 || hasPlan) return null
             return (
@@ -582,11 +575,11 @@ async function confirmManual(o: Any) {
             <select className="lc-select" value={chForm.channel} onChange={(e) => setChForm({ ...chForm, channel: e.target.value })} style={{ width: 200 }}>
               {chOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
-            <input className="lc-input" type="number" value={String(chForm.points)} onChange={(e) => setChForm({ ...chForm, points: Number(e.target.value) || 0 })} placeholder={t('billing.tokenCount')} style={{ width: 180 }} />
+            <input className="lc-input" type="number" value={String(chForm.points)} onChange={(e) => setChForm({ ...chForm, points: Number(e.target.value) || 0 })} placeholder={t('billing.pointsAmount')} style={{ width: 180 }} />
             <Button variant="primary" disabled={chLoading} onClick={openCheckout}>{chLoading ? t('billing.ordering') : t('billing.goPay')}</Button>
           </div>
           {curOrder && curOrder.status === 'pending' && (
-            <p style={{ color: 'var(--lc-text-1)', fontSize: 13, marginTop: 8 }}>{tpl('billing.currentOrder', { orderNo: curOrder.order_no, amount: fmtPoints(curOrder.amount_tokens), money: Number(curOrder.amount_money ?? 0).toFixed(2) })}</p>
+            <p style={{ color: 'var(--lc-text-1)', fontSize: 13, marginTop: 8 }}>{tpl('billing.currentOrder', { orderNo: curOrder.order_no, amount: fmtPoints(curOrder.amount_points), money: Number(curOrder.amount_money ?? 0).toFixed(2) })}</p>
           )}
         </Panel>
       )}
@@ -597,7 +590,7 @@ async function confirmManual(o: Any) {
           <DataTable rowKey={(row) => String((row as Any).id)} rows={orders} emptyText={t('plans.noOrder')}
                  columns={[
                    { key: 'order_no', title: t('billing.colOrderNo'), width: 150 },
-                   { key: 'amount_tokens', title: t('billing.colTokens'), width: 110, render: (row) => fmtPoints(Number((row as Any).amount_tokens)) },
+                   { key: 'amount_points', title: t('billing.colPoints'), width: 110, render: (row) => fmtPoints(Number((row as Any).amount_points)) },
                    { key: 'amount_money', title: t('billing.colAmount'), width: 100, render: (row) => tpl('billing.yuan', { amount: Number((row as Any).amount_money ?? 0).toFixed(2) }) },
                    { key: 'status', title: t('billing.colStatus'), width: 110, render: (row) => <StatusPill tone={statusTheme((row as Any).status)}>{orderStatusLabel((row as Any).status, t)}</StatusPill> },
                    { key: 'op', title: '', width: 170, render: (row) => {
@@ -631,7 +624,7 @@ async function confirmManual(o: Any) {
           <input className="lc-input" type="number" value={num(quotaForm.qps)} onChange={(e) => setQuotaForm({ ...quotaForm, qps: Number(e.target.value) || 0 })} placeholder={t('billing.quotaQps')} style={{ width: 140 }} />
           <input className="lc-input" type="number" value={num(quotaForm.concurrent)} onChange={(e) => setQuotaForm({ ...quotaForm, concurrent: Number(e.target.value) || 0 })} placeholder={t('billing.quotaConcurrent')} style={{ width: 140 }} />
           <input className="lc-input" type="number" value={num(quotaForm.max_daily_chars)} onChange={(e) => setQuotaForm({ ...quotaForm, max_daily_chars: Number(e.target.value) || 0 })} placeholder={t('billing.quotaDailyChars')} style={{ width: 160 }} />
-          <input className="lc-input" type="number" value={num(quotaForm.max_daily_tokens)} onChange={(e) => setQuotaForm({ ...quotaForm, max_daily_tokens: Number(e.target.value) || 0 })} placeholder={t('billing.quotaDailyTokens')} style={{ width: 160 }} />
+          <input className="lc-input" type="number" value={num(quotaForm.max_daily_points)} onChange={(e) => setQuotaForm({ ...quotaForm, max_daily_points: Number(e.target.value) || 0 })} placeholder={t('billing.quotaDailyPoints')} style={{ width: 160 }} />
           <Button onClick={saveQuota}>{t('billing.saveQuota')}</Button>
         </div>
       </Panel>
@@ -672,16 +665,12 @@ async function confirmManual(o: Any) {
           </div>
           <div style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.trialTokensLabel')}</span>
-              <input className="lc-input" type="number" value={num(freeTrialTokens)} onChange={(e) => setFreeTrialTokens(Number(e.target.value) || 0)} style={{ width: 120 }} />
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.trialPointsLabel')}</span>
+              <input className="lc-input" type="number" value={num(freeTrialPoints)} onChange={(e) => setFreeTrialPoints(Number(e.target.value) || 0)} style={{ width: 120 }} />
               <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.trialDaysLabel')}</span>
               <input className="lc-input" type="number" value={num(freeTrialDays)} onChange={(e) => setFreeTrialDays(Number(e.target.value) || 0)} style={{ width: 80 }} />
               <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('packages.markupLabel')}</span>
               <input className="lc-input" type="number" value={num(markupMultiplier)} onChange={(e) => setMarkupMultiplier(Math.max(0, Number(e.target.value) || 0))} style={{ width: 120 }} />
-              <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('packages.rateLabel')}</span>
-              <input className="lc-input" type="number" value={num(tokensPerSentence)} onChange={(e) => setTokensPerSentence(Math.max(0, Number(e.target.value) || 0))} style={{ width: 120 }} />
-              <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('packages.pointsRateLabel')}</span>
-              <input className="lc-input" type="number" value={num(pointsTokensRate)} onChange={(e) => setPointsTokensRate(Math.max(0, Number(e.target.value) || 0))} style={{ width: 110 }} />
               <Button onClick={saveBillingParams}>{t('common.save')}</Button>
             </div>
             <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginTop: 6 }}>{t('packages.markupHint')}</div>
@@ -797,7 +786,7 @@ async function confirmManual(o: Any) {
                    { key: 'order_no', title: t('billing.colOrderNo'), width: 150 },
                    { key: 'channel', title: t('billing.colChannel'), width: 78, render: (row) =>
                        (row as Any).channel === 'usdt' ? <Badge>USDT</Badge> : ((row as Any).channel === 'manual' ? t('billing.chStaticQR') : String((row as Any).channel || '—')) },
-                   { key: 'amount_tokens', title: t('billing.colTokens'), width: 110, render: (row) => fmtPoints(Number((row as Any).amount_tokens)) },
+                   { key: 'amount_points', title: t('billing.colPoints'), width: 110, render: (row) => fmtPoints(Number((row as Any).amount_points)) },
                    { key: 'usdt', title: t('billing.usdtCol'), width: 240, render: (row) => {
                        const r = row as Any
                        const info = manualOrdersUsdt.current[String(r.id)]
@@ -829,7 +818,7 @@ async function confirmManual(o: Any) {
         {curOrder && curOrder.status === 'paid' ? (
           <div style={{ textAlign: 'center', padding: '10px 0' }}>
  <div style={{ width: 52, height: 52, lineHeight:'52px', borderRadius:'50%', background:'var(--adm-ok-bg)', color:'var(--adm-ok-tx)', fontSize: 28, margin:'0 auto 8px'}}></div>
-            <p>{tpl('billing.paySuccess', { amount: fmtPoints(curOrder.amount_tokens) })}</p>
+            <p>{tpl('billing.paySuccess', { amount: fmtPoints(curOrder.amount_points) })}</p>
             <Button variant="primary" onClick={closeCheckout}>{t('billing.done')}</Button>
           </div>
         ) : (

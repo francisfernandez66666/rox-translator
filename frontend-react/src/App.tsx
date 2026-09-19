@@ -16,7 +16,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { myPackage, meContext } from '@/api'
-import { pointsOf } from '@/utils/points'
 import { AuthProvider, useAuth } from '@/stores/auth'
 import { AdminProvider, useAdminStore } from '@/stores/admin'
 import { ChatProvider, useChat } from '@/hooks/useChat'
@@ -146,14 +145,11 @@ function FrontShell() {
         }
       } catch { /* ignore */ }
       try {
-        const p = await myPackage() as unknown as { success?: boolean; balance_tokens?: number; balance_sentences_approx?: number }
-        if (p.success && typeof p.balance_tokens === 'number') {
-          const approx = typeof p.balance_sentences_approx === 'number'
-            ? p.balance_sentences_approx
-            : Math.floor(p.balance_tokens / 500)
+        const p = await myPackage() as unknown as { success?: boolean; points_balance?: number; balance_sentences_approx?: number }
+        if (p.success && typeof p.points_balance === 'number') {
           const nf = new Intl.NumberFormat()
-          setPkgLine(gtpl('app.pkgLineFmt', { points: nf.format(pointsOf(p.balance_tokens)), approx: nf.format(approx) }))
-          setDepleted(p.balance_tokens <= 0) // ★ E11：billing_stopped 顶部横幅信号
+          setPkgLine(gtpl('app.pkgLineFmt', { points: nf.format(p.points_balance), approx: nf.format(p.balance_sentences_approx ?? 0) }))
+          setDepleted(p.points_balance <= 0) // ★ E11：billing_stopped 顶部横幅信号
         }
       } catch { /* ignore */ }
     })()

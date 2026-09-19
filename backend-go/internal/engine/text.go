@@ -29,8 +29,10 @@ type TextTranslateResult struct {
 	Data  TextTranslateData `json:"data"`  // 结构化翻译数据
 	Files []string          `json:"files"` // 关联文件（文本翻译通常为空）
 	Error string            `json:"error"` // 失败原因（成功时为空）
-	// ★ 2026-09-03 需求：每次翻译结果携带实际消耗的 LLM token 数（全链路真实用量）
-	TokensUsed int64 `json:"tokens_used"`
+	// ★ 2026-09-03 需求：每次翻译结果携带实际用量（全链路真实用量）。
+	// 2026-09-19 积分口径：token 裸值仅内部计量（不外发），对外只出 points_used。
+	TokensUsed int64 `json:"-"`
+	PointsUsed int64 `json:"points_used"`
 }
 
 // TextTranslateData 文本翻译结构化数据
@@ -474,5 +476,6 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 			GateWarnings:       gateWarnings,
 		},
 		TokensUsed: tokensUsed,
+		PointsUsed: e.PointsOfTokens(tokensUsed),
 	}
 }

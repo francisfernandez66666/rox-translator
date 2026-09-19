@@ -18,7 +18,7 @@ import {
   type OrgInfo,
 } from '@/api'
 import { Panel, Field, toastResp, num } from './parts'
-import { fmtPoints, pointsOf, pointsToTokens } from '@/utils/points' // ★ S1 部门预算积分口径（展示/录入折积分，落库仍 token）
+import { fmtPoints } from '@/utils/points' // ★ S1 部门预算积分口径（接口出入参即积分）
 import { fmtTime } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { InvitesP, UsersP } from './panels_a' // ★ Tab 精简（2026-09-15）：成员账户并入组织 Hub 子 tab；租户管理移至「计费与套餐」Hub
@@ -103,11 +103,11 @@ export function OrgP() {
   //   保留签名与调用点（树节点前缀位）不改，后续接 ui/langcross <Icon> 时在此按 type 分发。
  const orgIcon = (o: OrgInfo): string => (o.type ==='dept'?'': o.type ==='org'?'':'')
 
-  // 预算文案：本月已用/限额（token 原值折积分展示）；未设置显示占位
+  // 预算文案：本月已用/限额（积分口径，接口出口即积分）；未设置显示占位
   const budgetText = (o: Any): string => {
     const b = budgetMap[o.id]
     if (!b || !(b.limit > 0)) return t('org.budgetUnset')
-    return `${fmtPoints(b.used)}/${fmtPoints(b.limit)}` // ★ token 原值折积分展示
+    return `${fmtPoints(b.used)}/${fmtPoints(b.limit)}`
   }
 
   // 是否超预算（已用 ≥ 限额），命中行标红
@@ -157,7 +157,7 @@ export function OrgP() {
       const r: any = await orgBudgetSummary()
       if (r.success) {
         const m: Record<number, { limit: number; used: number }> = {}
-        for (const d of r.summary?.depts || []) m[d.org_id] = { limit: d.token_limit, used: d.used_this_month }
+        for (const d of r.summary?.depts || []) m[d.org_id] = { limit: d.limit_points, used: d.used_points }
         setBudgetMap(m)
       }
     } catch { /* 非租管静默 */ }
@@ -321,20 +321,21 @@ export function OrgP() {
     await loadAll()
   }
 
-  // 打开部门预算弹窗：限额按积分口径回填（token→积分反算）
+  // 打开部门预算弹窗：限额即积分，直接回填
   function openBudget(o: Any) {
     const b = budgetMap[o.id]
     setBudgetModal({ id: o.id, name: o.name, limit: b?.limit || 0, used: b?.used || 0 })
-    setBudgetInput(pointsOf(Number(b?.limit) || 0))
+    setBudgetInput(Number(b?.limit) || 0)
   }
 
-  // 保存部门月预算：积分→token 正算落库，本地预算表同步回填
+  // 保存部门月预算（积分口径，接口出入参同为积分），本地预算表同步回填
   async function saveBudget() {
     if (!budgetModal) return
     if (!(budgetInput >= 0)) { void toastWarn(t('org.budgetInvalid')); return }
-    const r: any = await orgTokenLimit(budgetModal.id, pointsToTokens(Math.floor(budgetInput)))
+    const limitPoints = Math.floor(budgetInput)
+    const r: any = await orgTokenLimit(budgetModal.id, limitPoints)
     if (!r.success) { toastError(r.message); return }
-    setBudgetMap((m) => ({ ...m, [budgetModal.id]: { limit: pointsToTokens(Math.floor(budgetInput)), used: budgetModal.used } }))
+    setBudgetMap((m) => ({ ...m, [budgetModal.id]: { limit: limitPoints, used: budgetModal.used } }))
     setBudgetModal(null)
   }
 

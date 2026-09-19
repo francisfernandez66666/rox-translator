@@ -67,9 +67,9 @@ def sdk_client(responses):
 class AuthAndBase(unittest.TestCase):
     def test_base_url_stripped_and_bearer_header(self):
         with sdk_client([((lambda u, h, b: u.endswith("/openapi/v1/balance")),
-                          200, {"balance_tokens": 321})]) as (cli, rec):
+                          200, {"balance_points": 321})]) as (cli, rec):
             bal = cli.balance()
-        self.assertEqual(bal["balance_tokens"], 321)
+        self.assertEqual(bal["balance_points"], 321)
         self.assertEqual(rec.calls[0]["url"], "https://api.example.com/openapi/v1/balance")
         self.assertEqual(rec.bearer(), "Bearer rk_test_key")
 

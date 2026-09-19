@@ -52,7 +52,7 @@ test.describe('像素级 UAT', () => {
   test('P3 自服务页渲染（余额/套餐/账号·企业 + 邀请·个人）', async ({ page }) => {
     await login(page);
     for (const [path, expectTxt, name] of [
-      ['/billing', /余额|token|充值/i, 'p3_billing'],
+      ['/billing', /余额|积分|充值/i, 'p3_billing'],
       ['/packages', /套餐|包|订阅/i, 'p3_packages'],
       ['/my', /账号|昵称|邮箱/i, 'p3_my'],
     ] as const) {

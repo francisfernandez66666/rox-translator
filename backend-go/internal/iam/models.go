@@ -40,6 +40,10 @@ type User struct {
 	// MustChangePwd 首次登录强制改密标记（1=登录后必须先改密，改密成功后自动清零）。
 	// ★ 租户 Excel 批量导入用户（2026-09-02 功能）创建账号时置 1。
 	MustChangePwd int `json:"must_change_pwd"`
+	// JobRole 职业角色编码（2026-09-19 需求）：fullstack/frontend/backend/pm/pj/uiux/ops/sales 等，
+	// 取值 = 平台角色包（kb_packages.pack_type='persona'）的 code；空=未选角色。
+	// ★ 仅绑定用户层级，不与企业耦合：退出企业仍存在，个人用户可自行维护（转岗/转行语义）。
+	JobRole string `json:"job_role"`
 }
 
 // EffectiveUserStatus 计算生效状态：deactivating（注销宽限期）在次日起降级为 disabled。
@@ -85,10 +89,12 @@ type Org struct {
 	ParentID int64  `json:"parent_id"` // 父组织 ID（0=挂根组织下；平台视图下租户根指向平台根 ID）
 	Name     string `json:"name"`      // 组织名称（根组织可改名并同步租户名）
 	Type     string `json:"type"`      // 类型：root(根组织) / org(组织) / dept(部门)
-	// ★ 部门预算（四期增强）：租管为每个部门分配月度 token 预算，∑部门预算=租户总预算；
-	//   部门月用量达到预算即触发「部门墙」拦截并提醒部门管理员
-	TokenLimit    int64  `json:"token_limit"`     // 月度 token 预算上限（0=未启用部门墙）
-	UsedThisMonth int64  `json:"used_this_month"` // 本月已消耗（动态计算，非落库字段）
+	// ★ 部门预算（四期增强）：租管为每个部门分配月度预算，∑部门预算=租户总预算；
+	//   部门月用量达到预算即触发「部门墙」拦截并提醒部门管理员。
+	//   2026-09-19 积分口径：token 裸值不再随组织列表出参（预算展示走
+	//   /api/admin/org-budget 的积分视图 orgBudgetViewJSON）。
+	TokenLimit    int64  `json:"-"` // 月度 token 预算上限（0=未启用部门墙；内部计量不外发）
+	UsedThisMonth int64  `json:"-"` // 本月已消耗（动态计算，非落库字段；内部计量不外发）
 	CreatedAt     string `json:"created_at"`      // 创建时间（RFC3339 字符串）
 	UpdatedAt     string `json:"updated_at"`      // 更新时间（RFC3339 字符串）
 }

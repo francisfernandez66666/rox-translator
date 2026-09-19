@@ -7,7 +7,7 @@
 //   POST /openapi/v1/tasks           创建任务（JSON=文本；multipart=文件批量）
 //   GET  /openapi/v1/tasks/status    轮询状态（未完成 status=queued/processing）
 //   GET  /openapi/v1/tasks/download  文件产物下载
-//   GET  /openapi/v1/balance         查询 token 余额与 ≈句数
+//   GET  /openapi/v1/balance         查询积分余额与 ≈句数
 //   POST /openapi/v1/kb/stats · /openapi/v1/billing/usage · /openapi/v1/apikey/rotate
 // 认证方式：Bearer Token（Authorization: Bearer <api_key>），在管理后台「API Key」面板签发
 //
@@ -48,7 +48,7 @@ export interface TaskStatus {
 
 /** 余额查询响应 */
 export interface Balance {
-  balance_tokens: number; // 剩余 token 数
+  balance_points: number; // 剩余积分数
 }
 
 /** 翻译 API 调用异常 */
@@ -236,9 +236,9 @@ export class TranslatorClient {
   }
 
   /**
-   * 查询租户余额 token。
+   * 查询租户余额（积分）。
    *
-   * @returns {balance_tokens, balance_sentences_approx}
+   * @returns {balance_points, balance_sentences_approx}
    */
   async balance(): Promise<Balance> {
     return this.request("GET", "/openapi/v1/balance");

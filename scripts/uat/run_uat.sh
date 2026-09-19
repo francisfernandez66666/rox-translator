@@ -52,8 +52,10 @@ if [ "${UAT_SKIP_RACE:-0}" = "1" ]; then
   log "跳过 go test -race（UAT_SKIP_RACE=1）"
 else
   log "竞态检测 go test -race ./internal/...（数分钟）..."
-  (cd backend-go && go test -race -count=1 ./internal/...) \
-    || { echo "❌ 竞态检测发现数据竞争，中止 UAT"; exit 1; }
+  # ★ -timeout 30m（2026-09-19）：store 包高负载下单跑实测 952s，默认 10m/包会假超时；
+  #   失败文案同步改中性（旧文案把任何非零退出——含超时——都报成"数据竞争"，误导定位）
+  (cd backend-go && go test -race -count=1 -timeout 30m ./internal/...) \
+    || { echo "❌ 竞态检测未通过（数据竞争或测试失败/超时，见上方 go test 输出），中止 UAT"; exit 1; }
   log "竞态检测通过"
 fi
 # ★ P1-1 闸门补防（2026-09-15）：dist「存在即跳过」会让 E2E 对着旧包跑（曾实测 dist 比 HEAD 源码旧

@@ -55,11 +55,17 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 			enabled++
 		}
 	}
+	// 余额折积分出参（token 裸值不再外发，2026-09-19）
+	balanceView := map[string]interface{}{}
+	if balance != nil {
+		balanceView["balance_points"] = s.Store.PointsFromTokens(balance.Balance)
+		balanceView["updated_at"] = balance.UpdatedAt
+	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "health": map[string]interface{}{
 		"version":            "2.0.0-go",
 		"kb_entries":         total,
 		"kb_lang_stats":      perLang,
-		"balance":            balance,
+		"balance":            balanceView,
 		"usage":              usage,
 		"flow_steps_enabled": enabled,
 		"flow_steps_total":   len(steps),

@@ -297,7 +297,7 @@ const defaultDocsMDZh = `# 能言开放 API
 | POST | /openapi/v1/tasks | translate | 创建任务：JSON=文本；multipart=文件批量（≤20个/30MB） |
 | GET | /openapi/v1/tasks/status?id= | translate | 轮询状态与结果 |
 | GET | /openapi/v1/tasks/download?id=&file_id= | translate | 文件产物下载（缺省 zip 全部） |
-| GET | /openapi/v1/balance | * | 查询 token 余额与 ≈句数 |
+| GET | /openapi/v1/balance | * | 查询积分余额与 ≈句数 |
 | GET | /openapi/v1/kb/stats | kb | 知识库条目统计 |
 | GET | /openapi/v1/billing/usage | billing | 用量明细 |
 | POST | /openapi/v1/apikey/rotate | all | 轮换 API Key（旧 Key 立即失效） |
@@ -312,7 +312,7 @@ curl -sS -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
 {'text':'请检查制动系统','target_langs':['en','de'],'mode':'pro'}
 EOF
 # ← 202 {'success':true,'task_id':123,'ticket_no':'T...','status':'queued',
-#        'mode':'pro','poll_interval_sec':15,'balance_tokens':12500000,...}
+#        'mode':'pro','poll_interval_sec':15,'balance_points':41667,...}
 ~~~
 
 ## ② 创建文件批量任务（mode=fast 快速 / pro 专业校对，默认 pro）
@@ -330,14 +330,10 @@ curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
 ~~~
 curl 'https://{{OPENAPI_HOST}}/openapi/v1/tasks/status?id=123' -H 'Authorization: Bearer <API_KEY>'
 # 处理中 → {'status':'processing','steps':[...]}
-# 文本完成 → {'status':'completed','translations':{'en':'Check the brake system.'},'tokens_used':1832}
+# 文本完成 → {'status':'completed','translations':{'en':'Check the brake system.'},'points_used':187}
 # 文件完成 → {'status':'completed','files':[...],'download':'/openapi/v1/tasks/download?id=123'}
 # 失败     → {'status':'failed','error_code':'insufficient_balance','message':'余额不足（积分），请充值积分或升级套餐'}
 ~~~
-
-## 支持的语言与计费规则
-
-target_langs 传语言代码数组；缺省 ["en"]。
 
 ## 支持的语言与计费规则
 
@@ -380,10 +376,7 @@ target_langs 传语言代码数组；缺省 ["en"]。支持以下 34 种语言�
 | te | 泰卢固语 | 知识库+AI |
 | mr | 马拉地语 | 知识库+AI |
 
-**计费口径**：消耗句数 = 源句数 × 目标语言数（多语言按倍数累增）；token ≈ 句 × 500 × 均摊系数。
-mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
-
-**计费口径**：消耗句数 = 源句数 × 目标语言数（多语言按倍数累增）；token ≈ 句 × 500 × 均摊系数。
+**计费口径**：消耗句数 = 源句数 × 目标语言数（多语言按倍数累增）；扣费按积分余额结算，积分余量与 ≈句数同屏展示。
 mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
 
 ## 文件批量任务要点
@@ -406,8 +399,8 @@ mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
 ## 余额与计费
 
 翻译按实际用量从账户余额扣减；每次响应携带 balance_points（当前积分余额）与
-balance_sentences_approx（≈句数）。额度以积分计（1 积分对应固定内部计量单位，详见套餐说明）。额度不足将返回错误码 insufficient_balance，
-请充值或升级套餐。具体计费规则由平台管理员配置。
+balance_sentences_approx（≈句数）。额度均以积分计，具体计费规则由平台管理员配置。
+额度不足将返回错误码 insufficient_balance，请充值或升级套餐。
 `
 
 // defaultDocsMDEn 英文默认文档。
@@ -424,7 +417,7 @@ All endpoints authenticate with **Authorization: Bearer YOUR_API_KEY**. Issue ke
 | POST | /openapi/v1/tasks | translate | Create task: JSON = text; multipart = batch files (up to 20 files / 30MB) |
 | GET | /openapi/v1/tasks/status?id= | translate | Poll status & result |
 | GET | /openapi/v1/tasks/download?id=&file_id= | translate | Download artifacts (zip when omitted) |
-| GET | /openapi/v1/balance | * | Token balance & sentence conversion |
+| GET | /openapi/v1/balance | * | Points balance & sentence estimate |
 | GET | /openapi/v1/kb/stats | kb | Knowledge base statistics |
 | GET | /openapi/v1/billing/usage | billing | Usage details |
 | POST | /openapi/v1/apikey/rotate | all | Rotate API Key (old key invalidates immediately) |
@@ -436,7 +429,7 @@ POST https://{{OPENAPI_HOST}}/openapi/v1/tasks
 {'text':'Check the brake system.','target_langs':['en','de'],'mode':'pro'}
 ~~~
 
-Response (202): {"task_id":123,"status":"queued","poll_interval_sec":15,"balance_tokens":12500000}
+Response (202): {"task_id":123,"status":"queued","poll_interval_sec":15,"balance_points":41667}
 
 ## Create a batch file task (mode=fast / pro, default pro)
 
@@ -449,14 +442,10 @@ curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks -H 'Authorization: Bearer
 ~~~json
 GET /openapi/v1/tasks/status?id=123
 pending    -> {'status':'processing','steps':[...]}
-text done  -> {'status':'completed','translations':{'en':'...'},'tokens_used':1832}
+text done  -> {'status':'completed','translations':{'en':'...'},'points_used':187}
 files done -> {'status':'completed','files':[...],'download':'/openapi/v1/tasks/download?id=123'}
 failed     -> {'status':'failed','error_code':'insufficient_balance'}
 ~~~
-
-## Supported languages & billing rules
-
-target_langs takes an array of language codes; defaults to ["en"].
 
 ## Supported languages & billing rules
 
@@ -499,9 +488,7 @@ target_langs takes an array of language codes; defaults to ["en"]. Supported: 34
 | te | Telugu | AI direct |
 | mr | Marathi | AI direct |
 
-**Billing**: sentences consumed = source sentences × target language count (multi-target multiplies). tokens ≈ sentences × 500 × markup factor. mode=pro includes KB matching and full review pipeline, consuming more than fast.
-
-**Billing**: sentences consumed = source sentences × target language count (multi-target multiplies). tokens ≈ sentences × 500 × markup factor. mode=pro includes KB matching and full review pipeline, consuming more than fast.
+**Billing**: sentences consumed = source sentences × target language count (multi-target multiplies). Charges settle against your points balance; responses show points left and the ≈ sentence estimate. mode=pro includes KB matching and full review pipeline, consuming more than fast.
 
 ## Batch file task notes
 
@@ -633,19 +620,17 @@ func (s *Server) handleOpenAPIUsage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIForbidden), "message": "API Key 无计费权限"})
 		return
 	}
-	// 用量与余额聚合：余额账户存在时同时输出 token/积分双口径与≈句数估算字段
+	// 用量与余额聚合（★ 2026-09-19 积分口径）：费用/余额一律折积分出参，token 裸值不再外发
 	usage, total, _ := s.Store.UsageStats(ak.TenantID)
 	balance, _ := s.Store.GetBalance(ak.TenantID)
 	resp := map[string]interface{}{
 		"success":   true,
 		"tenant_id": ak.TenantID,
-		"usage":     usage,
-		"total":     total,
+		"usage":     s.pointsMapJSON(usage),
+		"total":     s.Store.PointsFromTokens(total),
 	}
 	if balance != nil {
-		resp["balance"] = balance.Balance
-		resp["balance_tokens"] = balance.Balance
-		resp["balance_points"] = s.Store.PointsFromTokens(balance.Balance) // ★ S1 积分口径
+		resp["balance_points"] = s.Store.PointsFromTokens(balance.Balance)
 		resp["balance_sentences_approx"] = balance.Balance / s.Store.TokenSentenceRate()
 	}
 	writeJSON(w, 200, resp)

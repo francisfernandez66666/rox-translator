@@ -48,9 +48,9 @@ func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 
 // handleMyPackage 当前租户包信息接口（登录用户）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。
-// 返回: success=true 时携带 balance_tokens（token 余额，主单位）/balance_sentences_approx（≈句数）/
+// 返回: success=true 时携带 points_balance（积分余额）/balance_sentences_approx（≈句数）/
 //
-//	package_code/subscribed_at/package_expires/pay_mode；旧字段 sentence_balance 兼容保留。
+//	package_code/subscribed_at/package_expires/pay_mode；★ 2026-09-19 积分口径：token 裸值字段全部下线。
 func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
@@ -60,16 +60,14 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 	tid := s.effTenant(r, u)
 	var pkgCode, subAt, pkgExpires string
 	grants, permanent, tokens, approx := int64(0), int64(0), int64(0), int64(0)
-	sentenceMirror := int64(0)
 	// 平台上下文（tid<=0）无计费概念：余额返回 0
 	if tid > 0 {
-		// ★ 双桶出参（评审整改 A1）：tokens=台账+永久可用总额
+		// ★ 双桶出参（评审整改 A1）：tokens=台账+永久可用总额（仅内部折算，不外发）
 		grants, permanent, tokens, approx = s.balancePayload(tid)
 		if perms, err := s.Store.GetTenantPerms(tid); err == nil {
 			pkgCode = perms.PackageCode
 			subAt = perms.SubscribedAt
 			pkgExpires = perms.PackageExpires
-			sentenceMirror = perms.SentenceBalance
 		}
 	}
 	payMode := "mock"
@@ -91,38 +89,34 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := map[string]interface{}{
 		"success":                  true,
-		"tokens_used_today":        usedToday,
-		"tokens_used_month":        usedMonth,
-		"balance_tokens":           tokens,
+		"points_used_today":        s.Store.PointsFromTokens(usedToday),
+		"points_used_month":        s.Store.PointsFromTokens(usedMonth),
+		"points_balance":           s.Store.PointsFromTokens(tokens),
 		"balance_sentences_approx": approx,
-		// ★ S1 积分制对外展示口径（前端余额/用量条只显积分）
-		"points_balance":    s.Store.PointsFromTokens(tokens),
-		"points_used_month": s.Store.PointsFromTokens(usedMonth),
-		"points_used_today": s.Store.PointsFromTokens(usedToday),
-		"sub_grants_left":   grants,         // ★ 未过期台账合计（双桶明细）
-		"permanent_balance": permanent,      // ★ 永久余额（双桶明细）
-		"sentence_balance":  sentenceMirror, // ★ C26 弃用镜像（只增流水）；前端应读 balance_sentences_approx
-		"package_code":      pkgCode,
-		"subscribed_at":     subAt,
-		"package_expires":   pkgExpires,
-		"pay_mode":          payMode,
+		"points_grants_left":       s.Store.PointsFromTokens(grants),    // ★ 未过期台账合计（双桶明细，积分口径）
+		"points_permanent_balance": s.Store.PointsFromTokens(permanent), // ★ 永久余额（双桶明细，积分口径）
+		"package_code":             pkgCode,
+		"subscribed_at":            subAt,
+		"package_expires":          pkgExpires,
+		"pay_mode":                 payMode,
 		// ★ USDT（2026-09-15）：收银台渠道显隐依据（仅开关态，地址/汇率等敏感配置不下发公共口）
 		"usdt_enabled": s.Store.GetUSDTCfg().Enabled,
 		"usdt_chains":  s.Store.GetUSDTCfg().Chains,
 	}
 	// ★ 部门预算进度（四期增强；前台「🏢 部门预算 used/limit」徽标数据源）：
-	// 仅当用户归属的部门启用了预算（token_limit>0）时返回 org_budget 与租户总预算
+	// 仅当用户归属的部门启用了预算（token_limit>0）时返回 org_budget 与租户总预算（积分口径）
 	if tid > 0 && u.OrgID > 0 {
 		if sum, err := s.Store.GetOrgBudgetSummary(tid); err == nil {
 			for _, d := range sum.Depts {
 				if d.OrgID == u.OrgID {
 					resp["org_budget"] = map[string]interface{}{
 						"org_id": d.OrgID, "name": d.Name,
-						"limit": d.TokenLimit, "used_this_month": d.UsedThisMonth,
+						"points_limit": s.Store.PointsFromTokens(d.TokenLimit),
+						"points_used_this_month": s.Store.PointsFromTokens(d.UsedThisMonth),
 					}
 				}
 			}
-			resp["tenant_budget_total"] = sum.TotalLimit
+			resp["points_tenant_budget_total"] = s.Store.PointsFromTokens(sum.TotalLimit)
 		}
 	}
 	writeJSON(w, 200, resp)
@@ -189,7 +183,7 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 		if merr := s.Store.MarkOrderPaid(o.ID, tid); merr != nil {
 			writeJSON(w, 200, map[string]interface{}{"success": false,
 				"message": "下单成功但模拟入账失败（订单保留待支付）: " + store.DebriefDBError(merr),
-				"order":   o})
+				"order":   s.orderViewJSON(o)})
 			return
 		}
 		o.Status = "paid"
@@ -200,7 +194,7 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		s.Store.LogAudit(tid, u.ID, "package_subscribe", "packages", pkg.Code+" channel=usdt")
-		writeJSON(w, 200, map[string]interface{}{"success": true, "order": o, "channel": "usdt", "usdt_pay": payload})
+		writeJSON(w, 200, map[string]interface{}{"success": true, "order": s.orderViewJSON(o), "channel": "usdt", "usdt_pay": payload})
 		return
 	} else if channel == "manual" {
 		// 静态码模式：回填收款码图片；未配置收款码时明确报错而非静默空码（2026-09 debug）
@@ -217,7 +211,7 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	s.Store.LogAudit(tid, u.ID, "package_subscribe", "packages", pkg.Code)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "order": o})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "order": s.orderViewJSON(o)})
 }
 
 // handlePackageUpgrade 套餐升级（登录租户管理员）：付费包 paid→更高价 paid 包。
@@ -278,7 +272,7 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 		if merr := s.Store.MarkOrderPaid(o.ID, tid); merr != nil {
 			writeJSON(w, 200, map[string]interface{}{"success": false,
 				"message": "升级单已创建但模拟入账失败（订单保留待支付）: " + store.DebriefDBError(merr),
-				"order":   o})
+				"order":   s.orderViewJSON(o)})
 			return
 		}
 		o.Status = "paid"
@@ -298,11 +292,14 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 	s.Store.LogAudit(tid, u.ID, "package_upgrade", "packages", newPkg.Code+
 		fmt.Sprintf("（抵扣 ¥%.2f）", credit.CreditMoney))
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "order": o, "credit_money": credit.CreditMoney,
+		"success": true, "order": s.orderViewJSON(o), "credit_money": credit.CreditMoney,
 	})
 }
 
-// 说明：行业来源 = 默认租户（tenant 1）的 industry 类型 KB 包；超管在默认租户下创建行业包即成为注册选项。
+// 说明：行业来源 = 平台共享包宿主租户（SharedHostTenant=0）的 industry 类型 KB 包，
+// 即 ListIndustries 这一行业字典唯一数据源；超管创建行业包即成为注册选项。
+// ★ 2026-09-19 修复：原实现硬编码查租户 1——共享包 2026-09-04 已迁到租户 0，
+// 该接口一直在返回空列表（见 kbpackages.go 的 SharedHostTenant 注释）。
 // ★ 2026-09 修复：①跳过旧版占位包（code=industry，名为"行业包"，非真实行业）；
 //
 //	②同 code 合并去重（历史遗留可能出现多个 general/同码包）；
@@ -311,7 +308,7 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。
 // 返回: success=true 时携带 industries 数组（code/name）。
 func (s *Server) handleRegisterIndustries(w http.ResponseWriter, r *http.Request) {
-	pkgs, err := s.Store.ListKBPackages(1)
+	pkgs, err := s.Store.ListIndustries()
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -319,8 +316,8 @@ func (s *Server) handleRegisterIndustries(w http.ResponseWriter, r *http.Request
 	seen := map[string]bool{}
 	industries := []map[string]string{}
 	for _, p := range pkgs {
-		// 仅 industry 类型包作为注册行业选项；跳过旧版占位「行业包」
-		if p.PackType != store.PackIndustry || p.Code == "industry" {
+		// ListIndustries 已过滤 pack_type=industry；这里只跳过旧版占位「行业包」
+		if p.Code == "industry" {
 			continue
 		}
 		if seen[p.Code] {

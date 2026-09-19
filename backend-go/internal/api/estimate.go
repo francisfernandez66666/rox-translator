@@ -20,9 +20,10 @@ import (
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 text 或 segment_count、target_langs、mode）。
 // 返回: success=true 时携带：
 //
-//	tokens_min/tokens_max=预估消耗区间（已含均摊系数）；cost_sentences≈句数换算；
-//	balance_tokens=当前 token 余额；balance_sentences_approx=余额≈句数；
+//	points_min/points_max=预估消耗区间（积分口径，已含均摊系数）；cost_sentences_approx≈句数换算；
+//	points_balance=当前积分余额；balance_sentences_approx=余额≈句数；
 //	activated=租户是否已开通；hint=未开通提示。
+//	★ 2026-09-19 积分口径：token 裸值出参（tokens_min/tokens_max/balance_tokens）全部下线。
 func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Request) {
 	// 用户鉴权
 	u := s.authUser(r)
@@ -81,19 +82,15 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 			hint = "额度已用尽，请购买订阅套餐或充值积分"
 		}
 	}
-	// 返回预估结果
+	// 返回预估结果（★ 积分口径唯一出参，token 折算仅发生在内部）
 	writeJSON(w, 200, map[string]interface{}{
 		"success":                  true,
 		"sentences":                units,
-		"tokens_min":               minTokens,
-		"tokens_max":               maxTokens,
+		"points_min":               s.Store.PointsFromTokens(minTokens),
+		"points_max":               s.Store.PointsFromTokens(maxTokens),
 		"cost_sentences_approx":    maxTokens / rate, // 上限≈句数（保守展示）
-		"balance_tokens":           tokens,
+		"points_balance":           s.Store.PointsFromTokens(tokens),
 		"balance_sentences_approx": approxBal,
-		// ★ S1 积分制对外展示口径（前端只显积分，token 字段保留供内部/超管链路）
-		"points_min":     s.Store.PointsFromTokens(minTokens),
-		"points_max":     s.Store.PointsFromTokens(maxTokens),
-		"points_balance": s.Store.PointsFromTokens(tokens),
 		"sufficient":     !s.Bill.Enabled() || tokens > 0,
 		"activated":      activated,
 		"hint":           hint,

@@ -49,8 +49,8 @@ export interface ChatResponse {
   }
   // 返回的附件文件路径列表
   files?: string[]
-  // ★ 2026-09-03 需求：本次翻译实际消耗的 LLM token 数（即时翻译/文件翻译）
-  tokens_used?: number
+  // ★ 2026-09-19 积分口径：本次翻译实际消耗（积分，后端由内部 token 折算）
+  points_used?: number
   // 后端返回的错误信息
   error?: string
 }
@@ -81,7 +81,7 @@ export interface ChatMessage {
   skill?: string          // 命中的技能名称
   data?: ChatResponse['data'] // 结构化响应数据
   files?: string[]        // 附件文件路径列表
-  tokens_used?: number    // ★ 2026-09-03 需求：本次翻译消耗的 token 数
+  points_used?: number    // ★ 2026-09-19 积分口径：本次翻译消耗（积分）
   timestamp: number       // 消息时间戳（毫秒）
   progress?: {
     step: string    // 当前进度步骤文案

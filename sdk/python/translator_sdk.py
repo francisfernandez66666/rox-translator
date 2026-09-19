@@ -4,7 +4,7 @@
 #   POST /openapi/v1/tasks           创建任务（JSON=文本；multipart=文件批量）
 #   GET  /openapi/v1/tasks/status    轮询状态（未完成 status=queued/processing）
 #   GET  /openapi/v1/tasks/download  文件产物下载
-#   GET  /openapi/v1/balance         查询 token 余额与 ≈句数
+#   GET  /openapi/v1/balance         查询积分余额与 ≈句数
 #   POST /openapi/v1/kb/stats · /openapi/v1/billing/usage · /openapi/v1/apikey/rotate
 # 认证方式：API Key（Bearer），在管理后台「API Key」面板签发
 #
@@ -223,8 +223,8 @@ class TranslatorClient:
 
     # ---------- 余额与辅助接口 ----------
     def balance(self) -> dict:
-        """查询 token 余额与 ≈句数换算：
-        {balance_tokens, balance_sentences_approx}"""
+        """查询积分余额与 ≈句数：
+        {balance_points, balance_sentences_approx}"""
         return self._get("/openapi/v1/balance")
 
     def kb_stats(self) -> dict:

@@ -208,7 +208,8 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 
 // handleAdminPackageSettings 读取商业包全局设置（super_admin）：强制计费开关 / 体验额度 / 支付模式 / 静态码配置。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。
-// 返回: success=true 时携带 billing_enforced / free_trial_tokens / free_trial_days / pay_mode / static_qr_image。
+// 返回: success=true 时携带 billing_enforced / free_trial_points / free_trial_days / pay_mode / static_qr_image。
+// ★ 2026-09-19 积分口径：体验额度以积分回显；句↔token 换算率与积分汇率不再经本接口透出。
 func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
@@ -229,19 +230,20 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 	if v, _ := s.Store.GetConfig("static_qr_image"); v != "" {
 		staticQR = v
 	}
-	// ★ Token 实费参数：均摊系数与句↔token 换算率（默认值 ★ C6 单一来源）
+	// ★ Token 实费参数：均摊系数（换算率与积分汇率属内部记账口径，★ 2026-09-19 起不在本接口回显/保存，
+	//   仅可经运营配置 system_config 直改）
 	markup := ops.DefaultMarkupMultiplier()
 	if v, _ := s.Store.GetConfig("billing_markup_multiplier"); v != "" {
 		if f, perr := strconv.ParseFloat(v, 64); perr == nil && f >= 1.0 {
 			markup = f
 		}
 	}
-	tokenRate := s.Store.TokenSentenceRate()
 	// 三期注册与触达配置：邮箱验证 / 人机验证 / 群机器人（secret_key 只写不回显）
 	getCfg := func(k string) string { v, _ := s.Store.GetConfig(k); return v }
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "billing_enforced": enforced,
-		"free_trial_tokens": freeTokens, "free_trial_days": freeDays,
+		// ★ 2026-09-19 积分口径：体验额度以积分回显（内部仍按 token 记账）
+		"free_trial_points": s.Store.PointsFromTokens(freeTokens), "free_trial_days": freeDays,
 		"pay_mode": payMode, "static_qr_image": staticQR,
 		"email_verify_enabled": getCfg("email_verify_enabled"),
 		"email_notify_enabled": getCfg("email_notify_enabled"),
@@ -252,11 +254,8 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 		// ★ P2 国际化渠道（2026-09-15）：Slack / Teams 群机器人（bot.go 统一消费）
 		"slack_webhook_url": getCfg("slack_webhook_url"),
 		"teams_webhook_url": getCfg("teams_webhook_url"),
-		// ★ Token 实费参数（四期）：均摊系数与句↔token 换算率
-		"billing_markup_multiplier":    markup,
-		"estimate_tokens_per_sentence": tokenRate,
-		// ★ S1 积分制：积分↔内部计量 token 汇率（对外只露积分，超管可见真实口径）
-		"points_tokens_rate": s.Store.PointsTokensRate(),
+		// ★ Token 实费参数（四期）：成本均摊系数（无量纲，保留）
+		"billing_markup_multiplier": markup,
 		// ★ S3 防薅：一次性邮箱域黑名单（运营增补部分；内置表不随出参重复）
 		"disposable_email_domains": func() string {
 			v, _ := s.Store.GetConfig("disposable_email_domains")
@@ -285,7 +284,7 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 }
 
 // handleAdminPackageSettingsSave 保存商业包全局设置（super_admin）。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 billing_enforced/free_trial_tokens/free_trial_days/pay_mode/static_qr_image 可选字段）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 billing_enforced/free_trial_points/free_trial_days/pay_mode/static_qr_image 可选字段）。
 // 返回: success=true 表示保存成功。
 func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
@@ -294,15 +293,13 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		return
 	}
 	var req struct {
-		BillingEnforced   *string  `json:"billing_enforced"`             // 强制计费开关："1"/"0"
-		FreeTrialTokens   *int64   `json:"free_trial_tokens"`            // 新租户体验 token 数
-		FreeTrialDays     *int64   `json:"free_trial_days"`              // 体验有效期（天）
-		MarkupMultiplier  *float64 `json:"billing_markup_multiplier"`    // 成本均摊系数（≥1.0）
-		TokensPerSentence *int64   `json:"estimate_tokens_per_sentence"` // 句↔token 换算率（>0）
-		PointsTokensRate  *int64   `json:"points_tokens_rate"`           // ★ S1 积分汇率：1 积分=N 内部 token（>0）
-		SensitiveGate     *string  `json:"sensitive_gate_enabled"`       // ★ S8 敏感词兑底闸："1"/"0"
-		PayMode           *string  `json:"pay_mode"`                     // mock / sdk / static_qr
-		StaticQRImage     *string  `json:"static_qr_image"`              // 静态收款码图片 URL 或 base64
+		BillingEnforced   *string  `json:"billing_enforced"`          // 强制计费开关："1"/"0"
+		FreeTrialPoints   *int64   `json:"free_trial_points"`         // ★ 积分口径：新租户体验积分数（内部折 token 落库）
+		FreeTrialDays     *int64   `json:"free_trial_days"`           // 体验有效期（天）
+		MarkupMultiplier  *float64 `json:"billing_markup_multiplier"` // 成本均摊系数（≥1.0）
+		SensitiveGate     *string  `json:"sensitive_gate_enabled"`    // ★ S8 敏感词兑底闸："1"/"0"
+		PayMode           *string  `json:"pay_mode"`                  // mock / sdk / static_qr
+		StaticQRImage     *string  `json:"static_qr_image"`           // 静态收款码图片 URL 或 base64
 		// ★ USDT 收款（2026-09-15）：开关/链/地址/汇率/确认数（RPC 凭证走环境变量）
 		USDTEnabled      *string `json:"usdt_enabled"`           // "1"/"0" 总开关（开启需地址+汇率就绪）
 		USDTAutoSettle   *string `json:"usdt_auto_settle"`       // "1"/"0" 自动对账（默认关：仅人工核销）
@@ -343,9 +340,9 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		}
 		add("billing_enforced", *req.BillingEnforced)
 	}
-	// ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days
-	if req.FreeTrialTokens != nil && *req.FreeTrialTokens > 0 {
-		add("free_trial_tokens", strconv.FormatInt(*req.FreeTrialTokens, 10))
+	// ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days（积分入参折 token 落库）
+	if req.FreeTrialPoints != nil && *req.FreeTrialPoints > 0 {
+		add("free_trial_tokens", strconv.FormatInt(s.Store.TokensFromPoints(*req.FreeTrialPoints), 10))
 	}
 	if req.FreeTrialDays != nil && *req.FreeTrialDays > 0 {
 		add("free_trial_days", strconv.FormatInt(*req.FreeTrialDays, 10))
@@ -505,20 +502,6 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 			return
 		}
 		add("billing_markup_multiplier", strconv.FormatFloat(*req.MarkupMultiplier, 'f', 2, 64))
-	}
-	if req.TokensPerSentence != nil {
-		if *req.TokensPerSentence <= 0 {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "换算率必须大于 0"})
-			return
-		}
-		add("estimate_tokens_per_sentence", strconv.FormatInt(*req.TokensPerSentence, 10))
-	}
-	if req.PointsTokensRate != nil {
-		if *req.PointsTokensRate <= 0 {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "积分汇率必须大于 0"})
-			return
-		}
-		add("points_tokens_rate", strconv.FormatInt(*req.PointsTokensRate, 10))
 	}
 	// 敏感词闸门开关：仅接受 "0"/"1" 字符串（前端开关态直传）
 	if req.SensitiveGate != nil {

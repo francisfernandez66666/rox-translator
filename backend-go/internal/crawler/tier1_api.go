@@ -67,6 +67,13 @@ func (p *wiktionaryProducer) seedTerms(ctx context.Context, f *fetchBase) ([]str
 		p.seed = seeds
 		return seeds, nil
 	}
+	// ★ 角色功能（2026-09-19）：persona 角色包按 role code 匹配内置角色种子词
+	if p.src.PackType == "persona" {
+		if seeds, ok := builtinPersonaSeeds[p.src.Industry]; ok && len(seeds) > 0 {
+			p.seed = seeds
+			return seeds, nil
+		}
+	}
 	p.seed = builtinGeneralSeeds
 	return builtinGeneralSeeds, nil
 }
@@ -183,6 +190,19 @@ var builtinIndustrySeeds = map[string][]string{
 var builtinGeneralSeeds = []string{
 	"欢迎", "您好", "谢谢", "对不起", "请问", "价格", "发货", "退款", "服务", "客服",
 	"您好吗", "再见", "请", "不客气", "没关系", "加油", "合作", "订单", "支付", "发票",
+}
+
+// builtinPersonaSeeds 职业角色种子词（★ 角色功能 2026-09-19；按 src.Industry=role code 匹配）。
+// code 与 store.builtinPersonas 角色字典、personaNames 一一对齐；超管可用数据源 base_url 词表覆盖。
+var builtinPersonaSeeds = map[string][]string{
+	"fullstack": {"全栈", "接口", "部署", "数据库", "缓存", "微服务", "网关", "容器", "发布", "回滚"},
+	"frontend":  {"组件", "样式", "响应式", "状态管理", "构建", "打包", "渲染", "交互", "适配", "首屏"},
+	"backend":   {"并发", "事务", "索引", "队列", "限流", "熔断", "日志", "分布式", "一致性", "鉴权"},
+	"pm":        {"需求", "迭代", "里程碑", "用户故事", "优先级", "验收", "原型", "竞品", "评审", "排期"},
+	"pj":        {"甘特图", "关键路径", "资源调配", "风险", "干系人", "交付物", "变更", "依赖", "例会", "工时"},
+	"uiux":      {"线框图", "高保真", "可用性", "设计规范", "组件库", "交互稿", "走查", "无障碍", "对比度", "用户测试"},
+	"ops":       {"拉新", "留存", "促活", "转化", "裂变", "社群", "内容", "活动", "渠道", "数据看板"},
+	"sales":     {"线索", "商机", "报价", "签约", "回款", "续约", "客户画像", "拜访", "渠道", "佣金"},
 }
 
 // IndustrySeedWords 导出指定行业的关键词种子（供企业包行业化筛选提示词复用；

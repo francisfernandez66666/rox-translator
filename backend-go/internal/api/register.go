@@ -81,6 +81,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		EmailCode   string `json:"email_code"`    // 邮箱验证码（email_verify_enabled=1 时必填）
 		Captcha     string `json:"captcha_token"` // 人机验证 token（captcha_provider=turnstile 时必填）
 		Industry    string `json:"industry"`      // 所属行业（新租户注册时必填，来自行业包 code）
+	JobRole     string `json:"job_role"`      // ★ 角色功能（2026-09-19）：职业角色（角色包 persona code，可空；无效值静默忽略不阻断注册）
 		RoleChoice  string `json:"role_choice"`   // 角色选择（兼容旧客户端）：admin=我是管理员(建企业) / user=我是普通用户(邀请码加入)
 		Type        string `json:"type"`          // 注册类型：personal=个人用户 / enterprise=企业用户（默认）
 		Ref         string `json:"ref"`           // 个人邀请码（可选，邀请裂变：?ref=<个人码> 链接携带）
@@ -378,6 +379,16 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().Format(time.RFC3339)
 		_ = s.Store.SetUserAgreed(nu.ID, inviteTenantID, now)
 		nu.AgreedAt = now
+	}
+	// ★ 角色功能（2026-09-19）：注册时选择的职业角色落库（所有注册分支统一在此写入——
+	//   个人/企业管理员/受邀成员/专属域名共用同一账号创建点）。job_role 仅绑用户层级：
+	//   校验「启用中角色包 code」，无效/停用值静默忽略（不阻断注册，与行业回落同口径）。
+	if code := strings.ToLower(strings.TrimSpace(req.JobRole)); code != "" {
+		if _, perr := s.Store.FindEnabledPersonaByCode(code); perr == nil {
+			if serr := s.Store.SetJobRole(nu.ID, inviteTenantID, code); serr == nil {
+				nu.JobRole = code
+			}
+		}
 	}
 	// 绑定联系邮箱（用于找回密码）
 	if req.Email != "" {

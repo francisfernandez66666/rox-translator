@@ -80,7 +80,7 @@ curl -s $A_URL/api/auth/register -H 'Content-Type: application/json' \
 UID_TOKEN=$(curl -s $A_URL/api/auth/login -H 'Content-Type: application/json' -d "{\"username\":\"multi_u_$TS\",\"password\":\"uatpass123\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
 UH="Authorization: Bearer $UID_TOKEN"
 TID=$(dbq "SELECT tenant_id FROM users WHERE username='multi_u_$TS'" | tr -d '[:space:]')
-curl -s $A_URL/api/admin/orders/create -H "$AH" -H 'Content-Type: application/json' -d "{\"tenant_id\":$TID,\"tokens\":8000,\"money\":0}" >/dev/null
+curl -s $A_URL/api/admin/orders/create -H "$AH" -H 'Content-Type: application/json' -d "{\"tenant_id\":$TID,\"points\":27,\"money\":0}" >/dev/null
 OID=$(dbq "SELECT id FROM orders WHERE tenant_id=$TID AND status='pending' ORDER BY id DESC LIMIT 1" | tr -d '[:space:]')
 curl -s $A_URL/api/admin/orders/pay -H "$AH" -H 'Content-Type: application/json' -d "{\"id\":$OID,\"tenant_id\":$TID}" >/dev/null
 sleep 1
@@ -141,7 +141,7 @@ EQ3=$(python3 -c "print(1 if abs($L3 - ($TOT0 - $TOT1)) < 1 else 0)" 2>/dev/null
 rm -rf "$D3"
 
 # ---------- M4：A 二次充值 → 5s 内 B 恢复可消费（TTL 重播种闭环） ----------
-curl -s $A_URL/api/admin/orders/create -H "$AH" -H 'Content-Type: application/json' -d "{\"tenant_id\":$TID,\"tokens\":50000,\"money\":0}" >/dev/null
+curl -s $A_URL/api/admin/orders/create -H "$AH" -H 'Content-Type: application/json' -d "{\"tenant_id\":$TID,\"points\":167,\"money\":0}" >/dev/null
 OID4=$(dbq "SELECT id FROM orders WHERE tenant_id=$TID AND status='pending' ORDER BY id DESC LIMIT 1" | tr -d '[:space:]')
 curl -s $A_URL/api/admin/orders/pay -H "$AH" -H 'Content-Type: application/json' -d "{\"id\":$OID4,\"tenant_id\":$TID}" >/dev/null
 sleep 5

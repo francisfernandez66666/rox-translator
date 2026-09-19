@@ -25,7 +25,8 @@ func myPage(r *http.Request) (page, size int) {
 	return
 }
 
-// handleMyBillingOverview 账单概览：余额 + 近 30 天日用量序列（趋势图数据）。
+// handleMyBillingOverview 账单概览：积分余额 + 近 30 天日用量序列（趋势图数据）。
+// ★ 2026-09-19 积分口径：token 余额/日消耗裸值下线，一律折积分出参。
 func (s *Server) handleMyBillingOverview(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
@@ -33,22 +34,25 @@ func (s *Server) handleMyBillingOverview(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	billing.Flush() // 冲刷计量缓冲，保证余额即时（与 handleBalance 口径一致）
-	b, err := s.Store.GetBalance(u.TenantID)
+	_, err := s.Store.GetBalance(u.TenantID)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
 	grants, _, total, approx := s.balancePayload(u.TenantID)
+	daily := make([]map[string]interface{}, 0, 32)
+	for _, p := range s.Store.MyDailyUsage(u.TenantID, u.ID, 30) {
+		daily = append(daily, map[string]interface{}{
+			"date": p.Date, "cost_points": s.Store.PointsFromTokens(p.Cost), "count": p.Count,
+		})
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success":          true,
-		"balance":          b.Balance,
-		"grants_left":      grants,
-		"total_available":  total,
-		"approx_sentences": approx,
-		// ★ S1 积分制：对外展示口径（1 积分=points_tokens_rate 内部 token；前端余额/用量只显积分）
+		"points_grants":    s.Store.PointsFromTokens(grants),
 		"points_available": s.Store.PointsFromTokens(total),
+		"approx_sentences": approx,
 		"billing_enforced": s.Bill != nil && s.Bill.Enabled(),
-		"daily":            s.Store.MyDailyUsage(u.TenantID, u.ID, 30),
+		"daily":            daily,
 	})
 }
 
@@ -71,7 +75,7 @@ func (s *Server) handleMyOrders(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		filtered = append(filtered, &orderJSON{
-			ID: o.ID, OrderNo: o.OrderNo, Tokens: o.AmountTokens, Money: o.AmountMoney,
+			ID: o.ID, OrderNo: o.OrderNo, Points: s.Store.PointsFromTokens(o.AmountTokens), Money: o.AmountMoney,
 			Status: o.Status, Channel: o.Channel, PayMethod: o.PayMethod,
 			ManualConfirm: o.ManualConfirm, CreatedAt: o.CreatedAt, PaidAt: o.PaidAt,
 		})
@@ -84,7 +88,7 @@ func (s *Server) handleMyOrders(w http.ResponseWriter, r *http.Request) {
 type orderJSON struct {
 	ID            int64   `json:"id"`
 	OrderNo       string  `json:"order_no"`
-	Tokens        int64   `json:"amount_tokens"`
+	Points        int64   `json:"amount_points"`
 	Money         float64 `json:"amount_money"`
 	Status        string  `json:"status"`
 	Channel       string  `json:"channel"`
@@ -120,7 +124,7 @@ func (s *Server) handleMyLedger(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "total": total, "page": page, "size": size, "rows": rows})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "total": total, "page": page, "size": size, "rows": s.ledgerRowsJSON(rows)})
 }
 
 // handleMyRewards 本人邀请奖励明细分页（复用 ListReferrals ≤100 行内存分页）。
@@ -132,7 +136,7 @@ func (s *Server) handleMyRewards(w http.ResponseWriter, r *http.Request) {
 	}
 	all := s.Store.ListReferrals(u.ID)
 	page, size := myPage(r)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "total": len(all), "page": page, "size": size, "rewards": pagedSlice(all, page, size)})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "total": len(all), "page": page, "size": size, "rewards": s.referralRecordsJSON(pagedSlice(all, page, size))})
 }
 
 // handleMyInvoices 本租户发票分页（状态由数据直出：pending/issued/cancelled）。

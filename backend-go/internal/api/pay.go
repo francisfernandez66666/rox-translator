@@ -76,8 +76,8 @@ func (s *Server) payProviderFor(channel string) payment.Provider {
 }
 
 // handlePayCreate 发起在线支付：为当前租户创建充值订单并生成收款二维码。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 tokens/channel）。
-// 返回: success=true 时携带 order（含 qr_content 二维码内容）与 channel。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 points/channel，points 为积分数）。
+// 返回: success=true 时携带 order（amount_points 积分口径，含 qr_content 二维码内容）与 channel。
 // 支付模式说明：
 //   - pay_mode=static_qr：订单 channel=manual，二维码内容为超管配置的 static_qr_image（URL/base64）
 //   - pay_mode=sdk：走 wechat/alipay 适配器下单
@@ -89,16 +89,15 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Tokens    int64  `json:"tokens"`     // 充值 token 数（旧口径，兼容保留）
-		Points    int64  `json:"points"`     // ★ S1 积分制：充值积分数（优先于 tokens；内部 ×points_tokens_rate 折算）
+		Points    int64  `json:"points"`     // ★ 积分口径唯一入参：充值积分数（内部折算 token 落库）
 		Channel   string `json:"channel"`    // 支付渠道：mock/wechat/alipay/usdt（缺省按 pay_mode）
 		USDTChain string `json:"usdt_chain"` // ★ USDT：指定链 trc20/erc20/bep20（缺省取配置首链）
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Tokens <= 0 && req.Points <= 0) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "points（或 tokens）必须大于 0"})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Points <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "points 必须大于 0"})
 		return
 	}
-	if req.Points > 0 {
+	{
 		// ★ P1-15 修复（2026-09-14）：积分上限防 int64 溢出——旧实现 points×rate 无上限，
 		//   超大值可溢出为负 tokens 落库成负金额订单（脏数据污染对账链）。
 		const maxPoints = int64(1) << 40 // ≈1.1 万亿积分，远超任何真实充值
@@ -106,12 +105,8 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "points 超出允许范围"})
 			return
 		}
-		req.Tokens = req.Points * s.Store.PointsTokensRate()
-		if req.Tokens <= 0 {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "tokens 折算非法"})
-			return
-		}
 	}
+	tokens := s.Store.TokensFromPoints(req.Points)
 	tid := s.effTenant(r, u)
 	// 确定支付模式：优先请求指定渠道，否则按最终运营策略 payment.mode（默认 mock）。
 	// ★ 2026-09：支付模式收敛到运营策略引擎（payment.mode），存量 system_config pay_mode
@@ -132,14 +127,14 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 创建订单（先落 pending，再取二维码回填）
-	o, err := s.Store.CreateOrderChannel(tid, req.Tokens, 0, u.ID, req.Channel, "")
+	o, err := s.Store.CreateOrderChannel(tid, tokens, 0, u.ID, req.Channel, "")
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
 	// ★ 应收金额落库（评审整改 B1）：amount_money=token 数×定价（元）——
 	//   此前恒 0，导致回调核对无单一事实源、发票开出 0 元单。
-	money := float64(s.Store.TokensToFen(req.Tokens)) / 100.0
+	money := float64(s.Store.TokensToFen(tokens)) / 100.0
 	_ = s.Store.UpdateOrderMoney(o.OrderNo, money)
 	o.AmountMoney = money
 	// ★ USDT 收款（2026-09-15）：独立分支——链上无回调，出收款要素快照（地址+含尾数精确金额+
@@ -162,7 +157,7 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		o.QRContent = qrContent
 		o.Channel = "manual"
 		s.Store.LogAudit(tid, u.ID, "pay_create", "orders", o.OrderNo+" channel=manual")
-		writeJSON(w, 200, map[string]interface{}{"success": true, "order": o, "qr_content": qrContent, "channel": "manual", "manual_confirm": true})
+		writeJSON(w, 200, map[string]interface{}{"success": true, "order": s.orderViewJSON(o), "qr_content": qrContent, "channel": "manual", "manual_confirm": true})
 		return
 	}
 	// 调用渠道下单获取二维码（mock 直接生成；真实渠道需商户号）
@@ -171,7 +166,7 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 	res, err := s.payProviderFor(req.Channel).CreateOrder(&payment.PayRequest{
 		OrderNo:  o.OrderNo,
 		Amount:   amountFen,
-		Subject:  "能言 token 充值",
+		Subject:  "能言积分充值",
 		TenantID: tid,
 	})
 	if err != nil {
@@ -195,7 +190,7 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 	o.QRContent = res.QRContent
 	o.Channel = res.Channel
 	s.Store.LogAudit(tid, u.ID, "pay_create", "orders", o.OrderNo)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "order": o, "qr_content": res.QRContent, "channel": res.Channel})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "order": s.orderViewJSON(o), "qr_content": res.QRContent, "channel": res.Channel})
 }
 
 // handlePayStatus 查询订单支付状态（前端收银台轮询）。
@@ -218,7 +213,7 @@ func (s *Server) handlePayStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "订单不存在"})
 		return
 	}
-	resp := map[string]interface{}{"success": true, "order": o}
+	resp := map[string]interface{}{"success": true, "order": s.orderViewJSON(o)}
 	// ★ USDT：轮询回显收款要素与进度（pending 期展示地址/金额/窗口；paid 后带链上凭证）
 	if p := s.usdtPayForOrder(o); p != nil {
 		resp["usdt_pay"] = p

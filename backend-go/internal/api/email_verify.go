@@ -217,12 +217,23 @@ func (s *Server) handleRegisterConfig(w http.ResponseWriter, r *http.Request) {
 			industries = append(industries, industryItem{Code: p.Code, Name: p.Name})
 		}
 	}
+	// ★ 角色功能（2026-09-19）：职业角色字典同口径公开下发（仅启用中；注册表单角色下拉动态拉取）
+	personas := []industryItem{}
+	if ps, err := s.Store.ListPersonas(); err == nil {
+		for _, p := range ps {
+			if p.Enabled == 0 {
+				continue
+			}
+			personas = append(personas, industryItem{Code: p.Code, Name: p.Name})
+		}
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success":              true,
 		"email_verify_enabled": ev,
 		"captcha_enabled":      s.captchaEnabled(),
 		"captcha_site_key":     s.captchaSiteKey(),
 		"industries":           industries,
+		"personas":             personas,
 	})
 }
 

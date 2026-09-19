@@ -70,9 +70,9 @@ export async function billingQuota(): Promise<AdminResp> {
   return request('/api/billing/quota', { headers: authHeaders() })
 }
 
-/** 保存当前租户配额（QPS/并发/每日字符与 token 上限） */
+/** 保存当前租户配额（QPS/并发/每日字符与积分上限） */
 /** 保存租户配额（qps/并发，管理员） */
-export async function billingQuotaSave(data: { qps: number; concurrent: number; max_daily_chars: number; max_daily_tokens?: number }): Promise<AdminResp> {
+export async function billingQuotaSave(data: { qps: number; concurrent: number; max_daily_chars: number; max_daily_points?: number }): Promise<AdminResp> {
   return request('/api/billing/quota/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
@@ -102,8 +102,8 @@ export async function adminOrderRefund(data: { id: number; tenant_id?: number; r
 
 // ==================== 在线支付 ====================
 
-/** 发起在线支付下单：为当前租户创建充值订单并返回收款二维码（usdt 渠道可带 usdt_chain） */
-export async function payCreate(data: { points?: number; tokens?: number; channel: string; usdt_chain?: string }): Promise<AdminResp> {
+/** 发起在线支付下单：为当前租户创建充值订单并返回收款二维码（points=充值积分数；usdt 渠道可带 usdt_chain） */
+export async function payCreate(data: { points: number; channel: string; usdt_chain?: string }): Promise<AdminResp> {
   return request('/api/pay/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
@@ -186,7 +186,7 @@ export async function adminPackageDelete(id: number): Promise<AdminResp> {
 }
 
 /** 读取商业包全局设置（句数强制开关/试用句数/支付模式/静态码等） */
-/** 管理员：读取计费设置（汇率/合规闸/黑名单等，积分口径） */
+/** 管理员：读取计费设置（体验积分/强制计费/合规闸/黑名单等，出参一律积分口径） */
 export async function adminPackageSettings(): Promise<AdminResp> {
   return request('/api/admin/packages/settings', { headers: authHeaders() })
 }
@@ -207,15 +207,14 @@ export async function adminQRUpload(file: File): Promise<AdminResp & { qr_url?: 
 }
 
 /** 保存商业包全局设置（仅传的字段更新；对齐后端 handleAdminPackageSettingsSave） */
-/** 管理员：保存计费设置（积分汇率/敏感词闸/一次性邮箱域，S1/S3/S8） */
+/** 管理员：保存计费设置（强制计费/体验积分/敏感词闸/一次性邮箱域，S1/S3/S8） */
 export async function adminPackageSettingsSave(data: {
   billing_enforced?: string
-  // 口径区分（★ S1 积分制）：体验额度用 free_trial_points（积分），公开面不再传 token 裸值；
-  // 而 estimate_tokens_per_sentence / billing_markup_multiplier 是后端换算系数，仍保持 token 口径。
-  free_trial_points?: number // ★ S1 积分制：公开出参只露积分（token 裸值不再对外）
+  // 口径区分（★ 2026-09-19 积分口径）：体验额度用 free_trial_points（积分），公开面不再传 token 裸值；
+  // billing_markup_multiplier 是无量纲系数，保留原名。
+  free_trial_points?: number // 新租户体验积分数（后端按内部汇率折 token 记账）
   free_trial_days?: number
   billing_markup_multiplier?: number
-  estimate_tokens_per_sentence?: number
   pay_mode?: string
   static_qr_image?: string
   email_verify_enabled?: string

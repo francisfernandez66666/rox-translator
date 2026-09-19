@@ -223,10 +223,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
 		return
 	}
-	// ★ S1 积分制（2026-09-14）：随会话上下文下发积分汇率（1 积分=N 内部 token），
-	//   前端全部余额/用量展示用它统一换算成积分；该值不含成本信息（成本率不外发）。
-	writeJSON(w, 200, map[string]interface{}{"success": true, "user": u,
-		"points_tokens_rate": s.Store.PointsTokensRate()})
+	// ★ 积分口径全面上线（2026-09-19）：不再下发积分↔token 汇率——所有余额/用量
+	//   字段由后端直接折算成积分出参，前端零换算。
+	writeJSON(w, 200, map[string]interface{}{"success": true, "user": u})
 }
 
 // handleMeContext 前台身份上下文：账号/所属租户/组织部门 + 可应用知识库包类型。
@@ -257,12 +256,19 @@ func (s *Server) handleMeContext(w http.ResponseWriter, r *http.Request) {
 	}
 	// 查询所属租户可应用 KB 包（前端导航门控用）后一次性组装返回
 	packs, _ := s.Store.ListApplicablePacks(u.TenantID)
+	// ★ 角色功能（2026-09-19）：追加当前用户的角色包（persona 按用户装配，不在租户级查询内）
+	if u.JobRole != "" {
+		if p, perr := s.Store.FindEnabledPersonaByCode(u.JobRole); perr == nil && p != nil {
+			packs = append(packs, &store.PackBrief{ID: p.ID, PackType: store.PackPersona, Name: p.Name, Enabled: p.Enabled})
+		}
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success":        true,
 		"username":       u.Username,
 		"display_name":   u.DisplayName,
 		"email":          u.Email,
 		"role":           u.Role,
+		"job_role":       u.JobRole,
 		"tenant_id":      u.TenantID,
 		"tenant_name":    tenantName,
 		"is_personal":    isPersonal,

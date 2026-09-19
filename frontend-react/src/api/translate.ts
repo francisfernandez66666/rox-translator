@@ -120,17 +120,20 @@ export async function chatStream(
 }
 
 /** 健康检查（10 秒超时：后端挂起时快速判定离线，不无限等待） */
-// ★ F7：翻译前 token 消耗预估（/api/translation/estimate，后端已具备）
+// ★ F7：翻译前积分消耗预估（/api/translation/estimate；2026-09-19 起全积分口径）
 export interface EstimateResp {
   success: boolean
   sentences: number
-  tokens_min: number
-  tokens_max: number
-  balance_tokens: number
+  points_min: number
+  points_max: number
+  cost_sentences_approx: number
+  points_balance: number
+  balance_sentences_approx: number
   sufficient: boolean
+  activated?: boolean
   hint?: string
 }
-// 翻译前预估 token 消耗与费用（失败静默返回 null，不打断输入）
+// 翻译前预估积分消耗与余额（失败静默返回 null，不打断输入）
 export async function estimateTranslation(text: string, targetLangs: string[], mode = 'pro'): Promise<EstimateResp | null> {
   try {
     const j = await request<EstimateResp>('/api/translation/estimate', { method: 'POST', body: JSON.stringify({ text, target_langs: targetLangs, mode }) })

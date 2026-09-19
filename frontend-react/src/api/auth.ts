@@ -35,8 +35,6 @@ export interface LoginResp {
   /** ★ P0-3（2026-09-14）：跨子域跳转用一次性兑换码（60s、单次消费，落地后经 /api/auth/sso/exchange 换 JWT），JWT 不再进 URL */
   sso_code?: string
   user?: AuthUser
-  /** ★ S1 积分制：1 积分 = N 内部 token（authMe 下发，供前端统一换算展示） */
-  points_tokens_rate?: number
 }
 
 /** 账号密码登录，成功返回 JWT token 与用户信息 */
@@ -51,8 +49,7 @@ export async function changePassword(old_password: string, new_password: string)
   return request('/api/auth/change-password', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ old_password, new_password }) })
 }
 
-/** 校验当前 token 对应的用户信息（用于会话恢复） */
-/** 当前用户信息（会话恢复、积分汇率注入源） */
+/** 校验当前 token 对应的用户信息（用于会话恢复；出参积分口径，前端零换算） */
 export async function authMe(): Promise<LoginResp> {
   return request('/api/auth/me', { headers: authHeaders() })
 }
@@ -62,7 +59,7 @@ export async function authMe(): Promise<LoginResp> {
  * @param data 注册字段（username/password 必填，其余可选；ref 为邀请裂变个人码）
  */
 /** 自助注册：组织名/邮箱验证码/Turnstile/邀请码/UTM 归因一并上报 */
-export async function authRegister(data: { username: string; password: string; type?: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string; role_choice?: string; ref?: string; agreed?: boolean; brand_name?: string; brand_name_en?: string; brand_names?: string; landing_path?: string; utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_term?: string; utm_content?: string }): Promise<AdminResp> {
+export async function authRegister(data: { username: string; password: string; type?: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string; job_role?: string; role_choice?: string; ref?: string; agreed?: boolean; brand_name?: string; brand_name_en?: string; brand_names?: string; landing_path?: string; utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_term?: string; utm_content?: string }): Promise<AdminResp> {
   return request('/api/auth/register', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 

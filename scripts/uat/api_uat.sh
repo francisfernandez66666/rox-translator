@@ -71,9 +71,28 @@ ck A3-dup-username '已存在|占用|exists' "$(curl -s $B/api/admin/users/creat
 ck A3-bad-login '密码|失败|incorrect|invalid|UNAUTHORIZED' "$(curl -s $B/api/auth/login -H "$J" -d '{"username":"uatuser_a","password":"wrongpass"}')"
 ck A3-no-agree '同意|协议' "$(curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_x","password":"uatpass123","code":"uatcorpD","name":"X","email":"uat_x@test.com"}')"
 
+# ---------- A3p 职业角色（2026-09-19：job_role 绑用户不绑企业 + persona 角色包） ----------
+# ① 出厂字典：PersonaMigrate 种入 8 角色，公开接口与注册配置必须能读到（注册下拉数据源）
+ck A3p-personas-public '"success":true' "$(curl -s $B/api/register/personas)"
+ck A3p-personas-seeded 'sales' "$(curl -s $B/api/register/personas)"
+ck A3p-config-personas '"personas"' "$(curl -s $B/api/auth/register-config)"
+# ② 个人注册带 job_role=sales → 落库 users.job_role，/api/auth/me 回读（个人分支同样生效）
+ck A3p-register-role '"success":true' "$(curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_rp","password":"uatpass123","type":"personal","name":"角色测试","email":"uat_rp@test.com","agreed":true,"job_role":"sales"}')"
+ck A3p-role-db 'sales' "$(dbq "SELECT job_role FROM users WHERE username='uatuser_rp' LIMIT 1")"
+RP_T=$(tok uatuser_rp uatpass123); RP_H="Authorization: Bearer $RP_T"
+ck A3p-role-me '"job_role":"sales"' "$(curl -s $B/api/auth/me -H "$RP_H")"
+# ③ 转岗：本人可改（POST /api/me/job-role）；未知角色拒绝——后端按启用中 persona 字典校验
+ck A3p-switch-role '"success":true' "$(curl -s $B/api/me/job-role -H "$RP_H" -H "$J" -d '{"job_role":"pm"}')"
+ck A3p-switch-db 'pm' "$(dbq "SELECT job_role FROM users WHERE username='uatuser_rp' LIMIT 1")"
+ck A3p-bad-role-reject '不存在|已停用' "$(curl -s $B/api/me/job-role -H "$RP_H" -H "$J" -d '{"job_role":"no_such_role"}')"
+# ④ 注册带非法角色：静默忽略（建号成功、角色不落库），不阻断注册主链路
+ck A3p-bad-reg-role-ignored '"success":true' "$(curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_rq","password":"uatpass123","type":"personal","name":"忽略测试","email":"uat_rq@test.com","agreed":true,"job_role":"no_such_role"}')"
+RJ=$(dbq "SELECT COALESCE(job_role,'') FROM users WHERE username='uatuser_rq' LIMIT 1" | tr -d '[:space:]')
+[ "$RJ" != "no_such_role" ] && { PASS=$((PASS+1)); echo "PASS|A3p-bad-reg-role-empty"; } || { FAIL=$((FAIL+1)); echo "FAIL|A3p-bad-reg-role-empty|got[$RJ]"; }
+
 # ---------- A4 注册赠送余额 ----------
 BAL1=$(curl -s "$B/api/billing/balance" -H "$H1")
-ck A4-balance-shape 'total_available' "$BAL1"
+ck A4-balance-shape 'points_available' "$BAL1"
 echo "INFO|balance-userA|$BAL1"
 
 # ---------- A5 模型路由指向 mock LLM ----------
@@ -103,7 +122,7 @@ ck A8-insufficient-block '耗尽|不足|insufficient' "$CH2"
 echo "INFO|A8-reply|${CH2:0:200}"
 
 # ---------- A9 支付链路：下单→模拟支付→幂等→发票 ----------
-ORD=$(curl -s $B/api/pay/create -H "$H1" -H "$J" -d '{"tokens":1000000,"channel":"mock"}')
+ORD=$(curl -s $B/api/pay/create -H "$H1" -H "$J" -d '{"points":3333,"channel":"mock"}')
 ck A9-pay-create '"success":true' "$ORD"
 OID=$(echo "$ORD" | pv '.get("order_id") or d.get("order",{}).get("id") or 0')
 echo "INFO|order-id|$OID"
@@ -199,7 +218,7 @@ zf.writestr('word/document.xml','''<?xml version="1.0" encoding="UTF-8" standalo
 zf.close()
 EOF
 FT=$(curl -s $B/api/translate -H "$H1" -F "file=@$TMPD/hello.docx" -F "target_langs=en" --max-time 120)
-ck A16-file-translate '文件翻译完成|tokens_used' "$FT"
+ck A16-file-translate '文件翻译完成|points_used' "$FT"
 echo "INFO|file-result|${FT:0:260}"
 rm -rf "$TMPD"
 
@@ -222,10 +241,10 @@ JSON
 ck B1-ops-policy-save '"success":true' "$(curl -s $B/api/admin/ops/policy/save -H "$AH" -H "$J" -d "$OPS_PAYLOAD")"
 
 # ---------- B2 fast 免费（charge=false）：翻译成功、台账 biz_mode=fast、双桶余额不变 ----------
-B2B1=$(curl -s "$B/api/billing/balance" -H "$H1" | pv '.get("total_available") or 0')
+B2B1=$(curl -s "$B/api/billing/balance" -H "$H1" | pv '.get("points_available") or 0')
 CHF=$(curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"测试文本。","options":{"target_langs":["en"],"mode":"fast"}}')
 ck B2-fast-chat-free 'TranslatedEN' "$CHF"
-B2B2=$(curl -s "$B/api/billing/balance" -H "$H1" | pv '.get("total_available") or 0')
+B2B2=$(curl -s "$B/api/billing/balance" -H "$H1" | pv '.get("points_available") or 0')
 [ -n "$B2B1" ] && [ "$B2B1" = "$B2B2" ] && { PASS=$((PASS+1)); echo "PASS|B2-free-no-deduct($B2B1==$B2B2)"; } || { FAIL=$((FAIL+1)); echo "FAIL|B2-free-no-deduct($B2B1->$B2B2)"; }
 B2LED=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=$TAID AND biz_mode='fast'")
 [ "$B2LED" -ge 1 ] && { PASS=$((PASS+1)); echo "PASS|B2-fast-ledger(biz_mode=fast rows=$B2LED)"; } || { FAIL=$((FAIL+1)); echo "FAIL|B2-fast-ledger|rows=$B2LED"; }
@@ -284,10 +303,10 @@ TODAY=$(python3 -c 'from datetime import datetime,timedelta;from zoneinfo import
 WS=$(echo "$TODAY" | cut -d' ' -f1); WE=$(echo "$TODAY" | cut -d' ' -f2)
 WINDOW_PAYLOAD=$(printf '{"window":{"id":"uat_promo","name":"UAT推广期","start":"%s 00:00","end":"%s 23:59","priority":10,"overrides":{"billing":{"mode_rules":{"fast":{"charge":false}}}}}}' "$WS" "$WE")
 curl -s $B/api/admin/ops/policy/window/save -H "$AH" -H "$J" -d "$WINDOW_PAYLOAD" >/dev/null
-B8B1=$(curl -s "$B/api/billing/balance" -H "$H1" | pv '.get("total_available") or 0')
+B8B1=$(curl -s "$B/api/billing/balance" -H "$H1" | pv '.get("points_available") or 0')
 CHF3=$(curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"窗口覆盖测试。","options":{"target_langs":["en"],"mode":"fast"}}')
 ck B8-window-fast-free 'TranslatedEN' "$CHF3"
-B8B2=$(curl -s "$B/api/billing/balance" -H "$H1" | pv '.get("total_available") or 0')
+B8B2=$(curl -s "$B/api/billing/balance" -H "$H1" | pv '.get("points_available") or 0')
 [ -n "$B8B1" ] && [ "$B8B1" = "$B8B2" ] && { PASS=$((PASS+1)); echo "PASS|B8-window-override-no-deduct($B8B1==$B8B2)"; } || { FAIL=$((FAIL+1)); echo "FAIL|B8-window-override($B8B1->$B8B2)"; }
 
 echo "==B-PASS=$PASS FAIL=$FAIL=="

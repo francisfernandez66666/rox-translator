@@ -751,8 +751,9 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	s.Store.LogAudit(tid, u.ID, "kb_file_import", "kb_entries", req.TempID)
 	s.invKB()             // ★ 文件导入写通 tm_segments：失效 CJK 缓存
 	s.rebuildIndexAsync() // 异步重建向量索引（增量入库）
-	// ★ KB 上传奖励（功能⑥）：按实际载入的源文字符数 × 单字符单价发永久 token，
+	// ★ KB 上传奖励（功能⑥）：按实际载入的源文字符数发放永久余额，
 	//   单租户日封顶防刷；总开关与单价由超管后台设置。仅「文件导入」路径发奖。
+	//   2026-09-19：对外出参统一积分口径（内部仍按 token 记账，token 裸值不外发）。
 	reward := map[string]interface{}{}
 	if tid > 0 && added > 0 {
 		totalChars := int64(0)
@@ -766,15 +767,16 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 		}
 		if granted, tokens, used := s.Store.GrantKBRewardByChars(tid, u.ID, req.PackageID, totalChars); granted {
 			reward = map[string]interface{}{
-				"granted": true, "tokens": tokens, "daily_used": used,
-				"chars": totalChars, "per_char": s.Store.KBRewardTokensPerChar(),
+				"granted": true, "reward_points": s.Store.PointsFromTokens(tokens),
+				"daily_used_points": s.Store.PointsFromTokens(used), "chars": totalChars,
 			}
 			s.Store.LogAudit(tid, u.ID, "kb_upload_reward", "balance_accounts",
 				strconv.FormatInt(tokens, 10))
 		} else {
 			reward = map[string]interface{}{
-				"granted": false, "daily_used": used, "cap": s.Store.KBRewardDailyCap(),
-				"enabled": s.Store.KBRewardEnabled(), "per_char": s.Store.KBRewardTokensPerChar(),
+				"granted": false, "daily_used_points": s.Store.PointsFromTokens(used),
+				"daily_cap_points": s.Store.PointsFromTokens(s.Store.KBRewardDailyCap()),
+				"enabled":          s.Store.KBRewardEnabled(),
 			}
 		}
 	}

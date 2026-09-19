@@ -573,6 +573,7 @@ func (k *KBDatabase) FetchRowTenant(id, tenantID int64, scope *PackScope) (*Row,
 		_, inCross := scope.CrossDeptPacks[r.PackID]
 		visible := (r.TenantID == tenantID && (r.PackID == 0 || scope.TenantPackIDs[r.PackID] || inChain)) ||
 			scope.SharedPackIDs[r.PackID] ||
+			scope.PersonaPackIDs[r.PackID] ||
 			scope.UniversalPackIDs[r.PackID] ||
 			(scope.AllowCrossDept && inCross)
 		if !visible {
@@ -665,8 +666,8 @@ func (k *KBDatabase) FuzzyHits(zhShort string, limit int, tenantID int64) ([]*Ro
 // 可见域四选一：①链内/企业/共享包行（pack_id ∈ 三集合并集）②本租户历史无主行(pack_id=0)
 // ③跨部门回退层（allow 时并入）。返回 SQL 片段与按序占位参数。
 func scopeVisibleSQL(scope *PackScope, includeCross bool, tenantID int64) (string, []interface{}) {
-	// 收集可见包 ID 集：链内 + 企业 + 共享（+ 跨部门可选）
-	ids := make([]int64, 0, len(scope.ChainPacks)+len(scope.TenantPackIDs)+len(scope.SharedPackIDs)+len(scope.UniversalPackIDs))
+	// 收集可见包 ID 集：链内 + 企业 + 共享 + 角色（+ 跨部门可选）
+	ids := make([]int64, 0, len(scope.ChainPacks)+len(scope.TenantPackIDs)+len(scope.SharedPackIDs)+len(scope.PersonaPackIDs)+len(scope.UniversalPackIDs))
 	for id := range scope.ChainPacks {
 		ids = append(ids, id)
 	}
@@ -674,6 +675,9 @@ func scopeVisibleSQL(scope *PackScope, includeCross bool, tenantID int64) (strin
 		ids = append(ids, id)
 	}
 	for id := range scope.SharedPackIDs {
+		ids = append(ids, id)
+	}
+	for id := range scope.PersonaPackIDs {
 		ids = append(ids, id)
 	}
 	for id := range scope.UniversalPackIDs {
@@ -801,8 +805,8 @@ func (k *KBDatabase) FuzzyHitsScoped(zhShort string, limit int, tenantID int64, 
 		}
 		if _, inChain := scope.ChainPacks[r.PackID]; inChain || r.PackID == 0 || scope.TenantPackIDs[r.PackID] {
 			chain = append(chain, r) // 采用域：链内/企业/历史行
-		} else if scope.SharedPackIDs[r.PackID] || scope.UniversalPackIDs[r.PackID] {
-			chain = append(chain, r) // 共享层/通用语言习惯包同属直接采用域
+		} else if scope.SharedPackIDs[r.PackID] || scope.PersonaPackIDs[r.PackID] || scope.UniversalPackIDs[r.PackID] {
+			chain = append(chain, r) // 共享层/角色层/通用语言习惯包同属直接采用域
 		} else {
 			cross = append(cross, r) // 跨部门：仅例句参考
 		}

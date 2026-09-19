@@ -1,23 +1,25 @@
 // ============================================================================
-// components/modals.tsx — 四个应用内弹窗（langcross Dialog 实现）
+// components/modals.tsx — 应用内弹窗集合（langcross Dialog 实现）
 // FeedbackModal（翻译结果/工单反馈）/ PasswordModal（改密：验证码+确认密码）/
-// EmailBindModal（绑定/换绑邮箱）/ DeactivateModal（自助注销）
+// EmailBindModal（绑定/换绑邮箱）/ DeactivateModal（自助注销）/ JobRoleModal（职业角色维护）
 // 行为、表单字段、i18n 键均与 Vue 对应组件对齐；成功后回调父级刷新。
 // 呈现层替换：TDesign Dialog→受控 Dialog、Input/Textarea/Checkbox→langcross 同名组件、
 //             Button(variant=outline/theme)→langcross Button、MessagePlugin→useToast。
 // ============================================================================
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Dialog, Input, Button, Textarea, Checkbox, useToast } from '@/ui/langcross/src'
 import {
   createFeedback, sendPwdCode, submitNewPassword,
   meEmailCode, updateEmail, deactivateAccount,
 } from '@/api'
+import { registerPersonas, setMyJobRole } from '@/api/persona'
+import { PERSONA_FALLBACK } from '@/lib/personas'
 import type { ChatMessage } from '@/types'
 import { t, tpl } from '@/i18n'
 import { useAuth } from '@/stores/auth'
 
 // ============ 本文件职责中文说明 ============
-// 四个应用内弹窗：反馈、改密、换绑邮箱、自助注销。
+// 应用内弹窗：反馈、改密、换绑邮箱、自助注销、职业角色维护。
 // ========================================
 
 // ---------------- FeedbackModal ----------------
@@ -336,5 +338,57 @@ export function FeedbackModalFromMessage(props: { message: ChatMessage; onClose:
       target={{ type: 'text', source_text: d.source_text, translations: d.translations, mode: String(d.mode || '') }}
       onClose={props.onClose}
     />
+  )
+}
+
+// ---------------- JobRoleModal ----------------
+// 职业角色维护弹窗（2026-09-19）：角色只绑用户不绑企业，转岗/转行随时切换，
+// 清空即回落通用翻译。选项动态取后端角色字典（租户0 persona 包），接口失败落本地兜底词库。
+export function JobRoleModal(props: { current: string; onClose: () => void; onSaved?: (code: string) => void }) {
+  const { toast } = useToast()
+  const [list, setList] = useState<Array<{ code: string; name: string }>>(PERSONA_FALLBACK)
+  const [sel, setSel] = useState(props.current)
+  const [saving, setSaving] = useState(false)
+  // 角色字典拉取失败静默保留兜底：下拉仍可用，保存由后端按启用中字典二次校验
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await registerPersonas()
+        if (r.success && Array.isArray(r.personas) && r.personas.length > 0) setList(r.personas)
+      } catch { /* ignore */ }
+    })()
+  }, [])
+  async function submit() {
+    setSaving(true)
+    try {
+      const r = await setMyJobRole(sel)
+      if (r.success) {
+        toast({ title: sel ? t('role.saved') : t('role.cleared'), tone: 'success' })
+        props.onSaved?.(sel)
+        props.onClose()
+      } else {
+        toast({ title: r.message || t('role.saveFail'), tone: 'error' })
+      }
+    } catch (e) { // ★ E10：异常必须可见
+      toast({ title: e instanceof Error ? e.message : t('role.saveFail'), tone: 'error' })
+    } finally { setSaving(false) }
+  }
+  return (
+    <Dialog
+      open
+      title={t('role.title')}
+      onCancel={props.onClose}
+      confirmText={t('common.save')}
+      onConfirm={submit}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <p style={{ fontSize: 13, color: 'var(--lc-text-2)', lineHeight: 1.6, margin: 0 }}>{t('role.hint')}</p>
+        <select className="lc-input" value={sel} disabled={saving}
+                aria-label={t('role.title')} onChange={(e) => setSel(e.target.value)}>
+          <option value="">{t('role.none')}</option>
+          {list.map((x) => <option key={x.code} value={x.code}>{x.name}</option>)}
+        </select>
+      </div>
+    </Dialog>
   )
 }

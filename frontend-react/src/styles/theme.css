@@ -71,7 +71,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
   --td-bg-color-component: #16181C;
   --td-text-color-primary: #E7E9EA;
   --td-text-color-secondary: #9AA0AA;
-  --td-text-color-placeholder: #71767B;
+  --td-text-color-placeholder: #878D95;
   --td-text-color-anti: #000000;      /* 白底上的文字（主按钮）必须为黑 */
   --td-border-level-2-color: #464C58;
   --td-component-border: #5A6270;
@@ -111,7 +111,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
    ============================================================================ */
 :root {
   --adm-hint: #9AA0AA;
-  --adm-faint: #71767B;
+  --adm-faint: #878D95;
   --adm-body: #E7E9EA;
   --adm-soft: #0A0B0D;       /* 软面板 / 输入框底 */
   --adm-line: #464C58;       /* 分隔线 */
@@ -246,7 +246,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; flex-wrap: wrap; }
 .progress-step { font-size: 13px; color: var(--npz-text-2); }
 .progress-lang { font-size: 12px; font-weight: 600; color: #000; background: #E7E9EA; padding: 1px 6px; border-radius: 4px; }
-.progress-detail { font-size: 12px; color: #71767B; }
+.progress-detail { font-size: 12px; color: #878D95; }
 .progress-percent { font-size: 13px; font-weight: 600; color: #E7E9EA; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
 .progress-bar-bg { width: 100%; height: 6px; background: #2A2F3A; border-radius: 3px; overflow: hidden; }
 .progress-bar-fill { height: 100%; background: #E7E9EA; border-radius: 3px; transition: width .3s ease; }
@@ -282,7 +282,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .mode-fuzzy { background: rgba(210, 153, 34, 0.14); color: #D29922; }
 .mode-semantic { background: rgba(231, 233, 234, 0.06); color: var(--npz-text-2); }
 .mode-model { background: rgba(231, 233, 234, 0.12); color: #E7E9EA; }
-.mode-match-text { font-size: 12px; color: #71767B; }
+.mode-match-text { font-size: 12px; color: #878D95; }
 
 /* ---- 匹配度报告 ---- */
 .match-report { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--npz-line); }
@@ -325,7 +325,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .preview-img {
   max-width: 320px; max-height: 220px; border-radius: 10px; cursor: zoom-in;
   border: 1.2px solid var(--npz-line); object-fit: cover; background: var(--npz-surface);
-  display: flex; align-items: center; justify-content: center; color: #71767B;
+  display: flex; align-items: center; justify-content: center; color: #878D95;
 }
 .preview-loading { min-width: 120px; min-height: 80px; }
 .download-card {
@@ -407,7 +407,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .login-error, .eb-err { color: #E5484D; font-size: 12.5px; margin-top: 6px; }
 .fb-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .fb-check { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13px; color: var(--npz-text-1); cursor: pointer; }
-.fb-ctx-preview { color: #71767B; font-size: 12px; }
+.fb-ctx-preview { color: #878D95; font-size: 12px; }
 .fb-confirm-row { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--npz-text-1); margin: 6px 0 4px; }
 
 /* ============================================================================

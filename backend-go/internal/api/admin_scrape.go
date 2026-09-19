@@ -72,9 +72,9 @@ func (s *Server) handleKBScrapeSourceCreate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	switch req.PackType {
-	case "industry", "locale":
+	case "industry", "locale", "persona": // ★ 角色功能（2026-09-19）：persona 角色包纳入采集口径
 	default:
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "pack_type 仅支持 industry/locale"})
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "pack_type 仅支持 industry/locale/persona"})
 		return
 	}
 	// Tier 优先级限 1..3，越界一律回落最低优先级 3
@@ -269,7 +269,8 @@ func (s *Server) handleKBScrapeApprove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": serr.Error()})
 		return
 	}
-	// 功能⑥ 审批触发奖励：用户投稿（tenant_id>0）通过后按源文字符数发永久 token
+	// 功能⑥ 审批触发奖励：用户投稿（tenant_id>0）通过后按源文字符数发放永久余额
+	// （内部 token 记账，出参折积分，2026-09-19）
 	rewards := []map[string]interface{}{}
 	if req.Action == "approve" {
 		for tidX, chars := range rewardChars {
@@ -278,8 +279,8 @@ func (s *Server) handleKBScrapeApprove(w http.ResponseWriter, r *http.Request) {
 			}
 			if granted, tokens, used := s.Store.GrantKBRewardByChars(tidX, 0, 0, chars); granted {
 				rewards = append(rewards, map[string]interface{}{
-					"tenant_id": tidX, "tokens": tokens, "chars": chars, "daily_used": used,
-					"per_char": s.Store.KBRewardTokensPerChar(),
+					"tenant_id": tidX, "reward_points": s.Store.PointsFromTokens(tokens),
+					"chars": chars, "daily_used_points": s.Store.PointsFromTokens(used),
 				})
 				s.Store.LogAudit(tidX, 0, "kb_review_reward", "balance_accounts",
 					strings.Join([]string{strconv.FormatInt(chars, 10), strconv.FormatInt(tokens, 10)}, "/"))

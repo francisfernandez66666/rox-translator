@@ -1,6 +1,6 @@
 // ============================================================================
 // components/admin/TaskCenterP.tsx — 任务中心面板（功能③：个人中心 → 任务中心）
-// 职责：用户视角展示启用任务并一键领取（永久 token 奖励）；超管可增删改任务定义。
+// 职责：用户视角展示启用任务并一键领取（永久积分奖励）；超管可增删改任务定义。
 // 依赖后端：/api/admin/tasks*（超管）与 /api/me/tasks*（登录用户，见 api/tasks.ts）
 // 2026-09-18（UI 融合）：领取状态与「启用」列的 ✓/✅ 图形字符随 emoji 清理移除，
 //   状态改由 Tag 配色（success/default/warning）+ 文案表意；奖励额仍按积分口径录入与展示。
@@ -10,11 +10,11 @@
  * TaskCenterP.tsx · 职责说明
  * 任务中心面板：
  * - 用户视图：列出启用任务（每日/一次性），显示本人领取状态，未领取可一键领取
- * - 超管视图：新增/编辑/启停/删除任务，配置任务类型（daily/once）、标题、说明与永久 token 奖励
+ * - 超管视图：新增/编辑/启停/删除任务，配置任务类型（daily/once）、标题、说明与永久积分奖励
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { fmtPoints, pointsOf, pointsToTokens } from '@/utils/points' // ★ S1 积分展示/录入折算
+import { fmtPoints } from '@/utils/points' // ★ S1 积分展示
 import { Badge, Button, DataTable, Dialog, StatusPill, Switch, type TableColumn } from '@/ui/langcross/src'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
@@ -63,7 +63,7 @@ async function doClaim(row: UserTaskView) {
       toastError(tpl('tasks.claimFail', { msg: r.message || '' }))
       return
     }
-    toastSuccess(tpl('tasks.claimedOk', { points: pointsOf(Number(r.tokens) || 0) }))
+    toastSuccess(tpl('tasks.claimedOk', { points: Number(r.points) || 0 }))
     await loadMy()
   }
 
@@ -79,7 +79,7 @@ async function saveTask() {
         task_type: (dlg.task_type as 'daily' | 'once') || 'daily',
         title: String(dlg.title || '').trim(),
         description: String(dlg.description || '').trim(),
-        reward_tokens: Number(dlg.reward_tokens) || 0,
+        reward_points: Number(dlg.reward_points) || 0,
         enabled: dlg.enabled === undefined ? 1 : Number(dlg.enabled),
         sort_order: Number(dlg.sort_order) || 0,
       })
@@ -105,7 +105,7 @@ async function deleteTask(row: UserTask) {
     ) },
     { key: 'title', title: t('tasks.colTitle') },
     { key: 'description', title: t('tasks.colDesc'), render: (row) => row.description || '—' },
-    { key: 'reward_tokens', title: t('tasks.colReward'), width: 110, render: (row) => <Badge>+{fmtPoints(Number(row.reward_tokens))}</Badge> },
+    { key: 'reward_points', title: t('tasks.colReward'), width: 110, render: (row) => <Badge>+{fmtPoints(Number(row.reward_points))}</Badge> },
     { key: 'status', title: '状态', width: 100, render: (row) => row.claimed
  ? <Badge> {t('tasks.claimed')}</Badge>
       : <StatusPill tone="warn">{t('tasks.claim')}</StatusPill> },
@@ -121,7 +121,7 @@ async function deleteTask(row: UserTask) {
     { key: 'id', title: 'ID', width: 70 },
     { key: 'task_type', title: t('tasks.colType'), width: 100, render: (row) => row.task_type === 'daily' ? t('tasks.daily') : t('tasks.once') },
     { key: 'title', title: t('tasks.colTitle') },
-    { key: 'reward_tokens', title: t('tasks.colReward'), width: 110, render: (row) => <Badge>+{fmtPoints(Number(row.reward_tokens))}</Badge> },
+    { key: 'reward_points', title: t('tasks.colReward'), width: 110, render: (row) => <Badge>+{fmtPoints(Number(row.reward_points))}</Badge> },
     { key: 'sort_order', title: t('tasks.colSort'), width: 70 },
  { key:'enabled', title: t('tasks.colEnabled'), width: 80, render: (row) => <StatusPill tone={row.enabled === 1 ? 'success' : 'idle'}>{row.enabled === 1 ? '' : '—'}</StatusPill> },
     { key: 'op', title: t('tasks.colOp'), width: 160, render: (row) => (
@@ -142,7 +142,7 @@ async function deleteTask(row: UserTask) {
 
       {/* 超管任务管理 */}
       {isSuper && (
-        <Panel title={t('tasks.adminTitle')} extra={<Button variant="primary" onClick={() => setDlg({ id: 0, task_type: 'daily', title: '', description: '', reward_tokens: 10000, enabled: 1, sort_order: 0 })}>＋ {t('tasks.add')}</Button>}>
+        <Panel title={t('tasks.adminTitle')} extra={<Button variant="primary" onClick={() => setDlg({ id: 0, task_type: 'daily', title: '', description: '', reward_points: 100, enabled: 1, sort_order: 0 })}>＋ {t('tasks.add')}</Button>}>
           <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('tasks.adminHint')}</p>
           <DataTable<any> rowKey={(row) => String(row.id)} rows={adminRows as Any[]} columns={adminCols}  />
         </Panel>
@@ -166,8 +166,8 @@ async function deleteTask(row: UserTask) {
               <textarea className="lc-textarea" rows={2} value={String(dlg.description || '')} onChange={(e) => setDlg((d) => (d ? { ...d, description: e.target.value } : d))} placeholder="任务说明（可空）" style={{ width: '100%', resize: 'vertical' }} />
             </Field>
             <Field label={t('tasks.rewardLabel')}>
-              {/* ★ 积分口径录入（2026-09-15）：界面填积分，保存折算回内部 reward_tokens */}
-              <input className="lc-input" type="number" value={String(pointsOf(Number(dlg.reward_tokens) || 0))} onChange={(e) => setDlg((d) => (d ? { ...d, reward_tokens: pointsToTokens(Number(e.target.value) || 0) } : d))} style={{ width: 200 }} />
+              {/* 积分口径录入：界面填积分，接口出入参同为积分（内部汇率折算在后端完成） */}
+              <input className="lc-input" type="number" value={String(dlg.reward_points ?? 0)} onChange={(e) => setDlg((d) => (d ? { ...d, reward_points: Number(e.target.value) || 0 } : d))} style={{ width: 200 }} />
             </Field>
             <Field label={t('tasks.sortLabel')}>
               <input className="lc-input" type="number" value={String(dlg.sort_order ?? 0)} onChange={(e) => setDlg((d) => (d ? { ...d, sort_order: Number(e.target.value) || 0 } : d))} style={{ width: 200 }} />

@@ -693,7 +693,7 @@
    画布 57:18 实测 31×19 @ (878,218)，卡右缘 910 / 上缘 210 → top 8、right 1 */
 .lc-auth-card__corner { position: absolute; top: 8px; right: 1px; display: flex; gap: 6px; }
 /* 画布认证屏（57:6/57:8 登录、57:31/57:33/57:38/57:45 注册）的占位文字实测 #9AA0AA = --lc-text-2，
-   比全局 --lc-text-4 #536471 亮两档。认证流程内以画布为准；
+   比全局 --lc-text-4 #7A828E 亮两档。认证流程内以画布为准；
    全局 .lc-input 的占位是否统一提亮是另一件事，未在此改动。 */
 .lc-auth-card .lc-input::placeholder { color: var(--lc-text-2); }
 

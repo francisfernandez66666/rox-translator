@@ -49,10 +49,11 @@ export function BalancePanel() {
   if (loading) return <div className="ss-loading"><SkeletonCard /></div>
   if (err) return <div className="ssc-card"><span className="ssc-err">{err}</span></div>
   const p = (data as any) ?? {}
-  // ★ 双桶口径：permanent_balance=永久余额、sub_grants_left=未过期台账、balance_tokens=可用总额
-  const permanent = Number(p.permanent_balance ?? 0)
-  const grants = Number(p.sub_grants_left ?? 0)
-  const totalAvailable = Number(p.balance_tokens ?? 0) // ★ C26：句数镜像不可当 token 兜底
+  // ★ 双桶口径（/api/me/package 积分出参）：points_permanent_balance=永久余额、
+  //   points_grants_left=未过期台账合计、points_balance=可用总额（接口已无 token 裸值）
+  const permanent = Number(p.points_permanent_balance ?? 0)
+  const grants = Number(p.points_grants_left ?? 0)
+  const totalAvailable = Number(p.points_balance ?? 0)
   return (
     <div className="ss-grid">
       <style>{CSS_SSC}</style>
@@ -68,8 +69,7 @@ export function BalancePanel() {
       )}
       <div className="ssc-card">
         <h3>{t('ss.myBalance')}</h3>
-        {/* ★ P1-18（2026-09-14）：token 余额统一 fmtPoints 积分口径（S1 承诺：token 裸值不再外露），
-            不再与下方面板的 fmtPoints 并存裸 token 展示 */}
+        {/* 余额一律积分口径展示（接口出口即积分，前端无换算逻辑） */}
         <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtPoints(permanent)}</b></div>
         <div className="ss-row"><span>{t('ss.grantLedger')}</span><b>{fmtPoints(grants)}</b></div>
         <div className="ss-row"><span>{t('ss.totalAvailable')}</span><b>{fmtPoints(totalAvailable)}</b></div>
@@ -107,8 +107,8 @@ export function ReferralPanel() {
         </div>
         {url && <div className="ss-row"><span>{t('ss.inviteLink')}</span><Badge mono>{url}</Badge></div>}
         <div className="ss-stats">
-          <div className="ss-stat"><span>{t('ss.trialStacked')}</span><b>{fmtPoints(d?.trial_tokens ?? 0)}</b></div>
-          <div className="ss-stat"><span>{t('ss.paidBonus')}</span><b>{fmtPoints(d?.paid_tokens ?? 0)}</b></div>
+          <div className="ss-stat"><span>{t('ss.trialStacked')}</span><b>{fmtPoints(d?.trial_points ?? 0)}</b></div>
+          <div className="ss-stat"><span>{t('ss.paidBonus')}</span><b>{fmtPoints(d?.paid_points ?? 0)}</b></div>
           <div className="ss-stat"><span>{t('ss.invitedCount')}</span><b>{d?.invited ?? 0}</b></div>
         </div>
       </div>
@@ -120,21 +120,21 @@ export function ReferralPanel() {
             <div className="ss-stat"><span>{t('ss.funnelL1')}</span><b>{(fd as any).l1_invited ?? 0}</b></div>
             <div className="ss-stat"><span>{t('ss.funnelL1Paid')}</span><b>{(fd as any).l1_paid ?? 0}</b></div>
             <div className="ss-stat"><span>{t('ss.funnelL2')}</span><b>{(fd as any).l2_invited ?? 0}</b></div>
-            <div className="ss-stat"><span>{t('ss.funnelL2Share')}</span><b>{fmtPoints((fd as any).reward_tokens_l2 ?? 0)}{(fd as any).pct ? `（${(fd as any).pct}%）` : ''}</b></div>
+            <div className="ss-stat"><span>{t('ss.funnelL2Share')}</span><b>{fmtPoints((fd as any).reward_points_l2 ?? 0)}{(fd as any).pct ? `（${(fd as any).pct}%）` : ''}</b></div>
           </div>
           <div style={{ fontSize: 12, color: 'var(--lc-text-4)', marginTop: 8 }}>{t('ss.funnelHint')}</div>
         </div>
       )}
       {records.length > 0 && <div className="ssc-card">
         <h3>{t('ss.referralRecords')}</h3>
-        <table className="ss-table"><thead><tr><th>{t('ss.refTypeHeader')}</th><th>{t('ss.refTokenHeader')}</th><th>{t('ss.refDateHeader')}</th></tr></thead>
-          <tbody>{records.map((r, i) => <tr key={i}><td>{r.type === 'paid_perm' ? t('ss.refTypePaid') : r.type === 'paid_perm_l2' ? t('ss.refTypePaidL2') : t('ss.refTypeTrial')}</td><td>{fmtPoints(r.tokens)}</td><td>{r.created_at?.slice(0, 10)}</td></tr>)}</tbody></table>
+        <table className="ss-table"><thead><tr><th>{t('ss.refTypeHeader')}</th><th>{t('ss.refPointsHeader')}</th><th>{t('ss.refDateHeader')}</th></tr></thead>
+          <tbody>{records.map((r, i) => <tr key={i}><td>{r.type === 'paid_perm' ? t('ss.refTypePaid') : r.type === 'paid_perm_l2' ? t('ss.refTypePaidL2') : t('ss.refTypeTrial')}</td><td>{fmtPoints(r.reward_points)}</td><td>{r.created_at?.slice(0, 10)}</td></tr>)}</tbody></table>
       </div>}
     </div>
   )
 }
 
-// 我的套餐面板：展示当前套餐、剩余句数、可用 token 与永久余额
+// 我的套餐面板：展示当前套餐、剩余句数、可用积分与永久余额
 export function MyPackagePanel() {
   const navigate = useNavigate()
   const [, t] = useT()
@@ -142,7 +142,7 @@ export function MyPackagePanel() {
   if (loading) return <div className="ss-loading"><SkeletonCard /></div>
   if (err) return <div className="ssc-card"><span className="ssc-err">{err}</span></div>
   const p = (data as any) ?? {}
-  const total = Number(p.tokens ?? p.balance_tokens ?? 0)
+  const total = Number(p.points_balance ?? 0)
   const hasPlan = !!(p.package_code && p.package_code !== 'trial')
   return (
     <div className="ss-grid">
@@ -161,8 +161,8 @@ export function MyPackagePanel() {
         <h3>{t('ss.myPackage')}</h3>
         <div className="ss-row"><span>{t('ss.currentPkg')}</span><Badge mono>{p.package_code ?? '—'}</Badge></div>
         <div className="ss-row"><span>{t('ss.remainingSentences')}</span><b>{t('ss.approxPrefix')}{fmtNum(p.balance_sentences_approx ?? 0)} {t('ss.sentenceUnit')}{t('ss.approxSuffix')}</b></div>
-        <div className="ss-row"><span>{t('ss.availableTokens')}</span><b>{fmtPoints(total)}</b></div>
-        <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtPoints(p.permanent_balance ?? 0)}</b></div>
+        <div className="ss-row"><span>{t('ss.availablePoints')}</span><b>{fmtPoints(total)}</b></div>
+        <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtPoints(p.points_permanent_balance ?? 0)}</b></div>
       </div>
     </div>
   )

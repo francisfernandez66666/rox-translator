@@ -251,8 +251,13 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 		creatorUID = t.APIUserID
 	}
 	if creatorUID > 0 {
-		if cu, uerr := s.Store.GetUser(creatorUID, t.TenantID); uerr == nil && cu != nil && cu.OrgID > 0 {
-			ctx = engine.WithUserOrg(ctx, cu.OrgID)
+		if cu, uerr := s.Store.GetUser(creatorUID, t.TenantID); uerr == nil && cu != nil {
+			if cu.OrgID > 0 {
+				ctx = engine.WithUserOrg(ctx, cu.OrgID)
+			}
+			if cu.JobRole != "" { // ★ 角色功能（2026-09-19）：工单按创建人职业角色装配角色包
+				ctx = engine.WithUserJobRole(ctx, cu.JobRole)
+			}
 		}
 	}
 	// ★ 余额预检（强制计费时）：可用额度 = 未过期台账 + 永久余额（双桶口径，评审整改 A1），
@@ -423,7 +428,7 @@ func (s *TicketService) dispatchCompletedWebhook(ctx context.Context, t *store.T
 		"ticket_no":   t.TicketNo,
 		"type":        map[bool]string{true: "files", false: "text"}[t.FilePath != ""],
 		"title":       t.Title,
-		"tokens_used": prompt + completion,
+		"points_used": s.Store.PointsFromTokens(prompt + completion), // 积分口径（token 裸值不外发，2026-09-19）
 		"time":        time.Now().Format(time.RFC3339),
 	})
 }

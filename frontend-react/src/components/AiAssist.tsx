@@ -191,7 +191,7 @@ export default function AiAssist() {
           border-bottom:1.2px solid #2A2F3A}
         .na-head-ic{width:28px;height:28px;border-radius:9px;background:#0A0B0D;border:1.2px solid #464C58;
           display:flex;align-items:center;justify-content:center;color:#E7E9EA;flex:none}
-        .na-head .na-sub{font-size:11px;color:#71767B;line-height:1.3}
+        .na-head .na-sub{font-size:11px;color:#878D95;line-height:1.3}
         .na-close{margin-left:auto;background:none;border:1.2px solid #464C58;color:#9AA0AA;
           width:26px;height:26px;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:none}
         .na-list{flex:1;overflow-y:auto;padding:14px 12px;background:#0E1014;display:flex;flex-direction:column;gap:12px}
@@ -213,7 +213,7 @@ export default function AiAssist() {
         .na-input{display:flex;gap:8px;padding:10px 12px;border-top:1.2px solid #2A2F3A;background:#0E1014}
         .na-input input{flex:1;background:#0A0B0D;border:1.2px solid #5A6270;border-radius:10px;padding:8px 12px;
           font-size:13px;outline:none;color:#E7E9EA;font-family:inherit}
-        .na-input input::placeholder{color:#71767B}
+        .na-input input::placeholder{color:#878D95}
         .na-send{border:none;background:#E7E9EA;color:#000;border-radius:10px;padding:8px 18px;cursor:pointer;font-size:13px;font-family:inherit}
         .na-send:disabled{opacity:.42;cursor:not-allowed}
         .na-offline{font-size:11px;color:#D29922;background:rgba(210,153,34,0.10);border:1.2px solid rgba(210,153,34,0.32);border-radius:8px;padding:2px 8px;margin-right:6px}

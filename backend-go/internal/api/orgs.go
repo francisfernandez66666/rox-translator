@@ -480,8 +480,9 @@ func findOrgByID(orgs []*store.Org, id int64) *store.Org {
 	return nil
 }
 
-// handleOrgTokenLimit 设置部门月度 token 预算（租户管理员及以上；0=关闭该部门的部门墙）。
+// handleOrgTokenLimit 设置部门月度积分预算（租户管理员及以上；0=关闭该部门的部门墙）。
 // 约束：∑部门预算 = 租户总预算由面板语义保证（每次调整即重排构成），后端仅做非负校验。
+// 入参为积分（内部 token 记账，2026-09-19 起换算不外露）。
 func (s *Server) handleOrgTokenLimit(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
@@ -489,10 +490,10 @@ func (s *Server) handleOrgTokenLimit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		OrgID int64 `json:"org_id"` // 组织 ID
-		Limit int64 `json:"limit"`  // 月度 token 预算（≥0）
+		OrgID       int64 `json:"org_id"`       // 组织 ID
+		LimitPoints int64 `json:"limit_points"` // 月度积分预算（≥0）
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OrgID <= 0 || req.Limit < 0 {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OrgID <= 0 || req.LimitPoints < 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
@@ -501,18 +502,39 @@ func (s *Server) handleOrgTokenLimit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "组织不存在"})
 		return
 	}
-	if err := s.Store.SetOrgTokenLimit(req.OrgID, req.Limit); err != nil {
+	limit := s.Store.TokensFromPoints(req.LimitPoints)
+	if err := s.Store.SetOrgTokenLimit(req.OrgID, limit); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "org_token_limit", "orgs",
-		fmt.Sprintf("%d limit=%d", req.OrgID, req.Limit))
-	// 同步预算总览给前端（总预算=∑部门预算、全租户本月已用）
+		fmt.Sprintf("%d limit=%d", req.OrgID, limit))
+	// 同步预算总览给前端（积分口径；总预算=∑部门预算、全租户本月已用）
 	sum, _ := s.Store.GetOrgBudgetSummary(s.effTenant(r, u))
-	writeJSON(w, 200, map[string]interface{}{"success": true, "summary": sum})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "summary": s.orgBudgetViewJSON(sum)})
 }
 
-// handleOrgBudgetSummary 部门预算总览接口（租管面板展示：各部门预算/已用 + 总预算）。
+// orgBudgetViewJSON 部门预算总览折积分出参（内部 store 结构保持 token）。
+func (s *Server) orgBudgetViewJSON(sum *store.OrgBudgetSummary) map[string]interface{} {
+	out := map[string]interface{}{"total_limit_points": int64(0), "used_this_month_points": int64(0), "depts": []map[string]interface{}{}}
+	if sum == nil {
+		return out
+	}
+	out["total_limit_points"] = s.Store.PointsFromTokens(sum.TotalLimit)
+	out["used_this_month_points"] = s.Store.PointsFromTokens(sum.UsedThisMonth)
+	depts := []map[string]interface{}{}
+	for _, d := range sum.Depts {
+		depts = append(depts, map[string]interface{}{
+			"org_id": d.OrgID, "name": d.Name,
+			"limit_points": s.Store.PointsFromTokens(d.TokenLimit),
+			"used_points":  s.Store.PointsFromTokens(d.UsedThisMonth),
+		})
+	}
+	out["depts"] = depts
+	return out
+}
+
+// handleOrgBudgetSummary 部门预算总览接口（租管面板展示：各部门预算/已用 + 总预算；积分口径）。
 func (s *Server) handleOrgBudgetSummary(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
@@ -524,5 +546,5 @@ func (s *Server) handleOrgBudgetSummary(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "summary": sum})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "summary": s.orgBudgetViewJSON(sum)})
 }

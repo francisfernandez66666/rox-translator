@@ -338,12 +338,13 @@ func (s *Server) handleTenantQuota(w http.ResponseWriter, r *http.Request) {
 	}
 	tid := qu.TenantID
 	writeJSON(w, 200, map[string]interface{}{
-		"success":          true,
-		"tenant_id":        tid,
-		"qps":              s.quotaQPS(tid),
-		"concurrent":       s.quotaConcurrent(tid),
-		"max_daily_chars":  s.quotaDaily(tid),
-		"max_daily_tokens": s.quotaDailyTokens(tid),
+		"success":         true,
+		"tenant_id":       tid,
+		"qps":             s.quotaQPS(tid),
+		"concurrent":      s.quotaConcurrent(tid),
+		"max_daily_chars": s.quotaDaily(tid),
+		// ★ 2026-09-19 积分口径：每日 token 上限折积分出参（0=未配置）
+		"max_daily_points": s.Store.PointsFromTokens(s.quotaDailyTokens(tid)),
 	})
 }
 
@@ -361,7 +362,7 @@ func (s *Server) handleTenantQuotaSave(w http.ResponseWriter, r *http.Request) {
 		QPS            int    `json:"qps"`              // 每秒请求数上限
 		Concurrent     int    `json:"concurrent"`       // 并发请求数上限
 		MaxDailyChars  int64  `json:"max_daily_chars"`  // 每日字符上限（0=不限，旧口径）
-		MaxDailyTokens *int64 `json:"max_daily_tokens"` // ★ 每日 token 上限（D4；nil=不修改）
+		MaxDailyPoints *int64 `json:"max_daily_points"` // ★ 每日积分上限（D4 token 口径的积分入参；nil=不修改）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -412,8 +413,8 @@ func (s *Server) handleTenantQuotaSave(w http.ResponseWriter, r *http.Request) {
 		if t, err := s.Ten.GetByID(tid); err == nil {
 			perms := tenant.ParsePerms(t.Permissions)
 			perms.MaxDailyChars = req.MaxDailyChars
-			if req.MaxDailyTokens != nil {
-				perms.MaxDailyTokens = max(0, *req.MaxDailyTokens) // D4：token 口径优先于字符口径
+			if req.MaxDailyPoints != nil {
+				perms.MaxDailyTokens = s.Store.TokensFromPoints(*req.MaxDailyPoints) // D4：token 口径优先于字符口径（积分入参折算落库）
 			}
 			b, _ := json.Marshal(perms)
 			_ = s.Ten.Update(t.ID, t.Name, t.ExpiresAt, string(b))
@@ -491,9 +492,11 @@ func (s *Server) handleUsageMe(w http.ResponseWriter, r *http.Request) {
 		est = tokens / rate
 	}
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "total": total, "today": today, "count": cnt,
-		"tokens_available": tokens, "sentences_estimate": est,
-		"sentence_balance": est, // ★ C26：兼容旧前端键——语义已改为反推值（非镜像）
+		// ★ 2026-09-19 积分口径：total/today 折积分出参；tokens_available 下线改 points_available；
+		//   sentence_balance 保留（句数估算，非 token）
+		"success": true, "total": s.Store.PointsFromTokens(total), "today": s.Store.PointsFromTokens(today), "count": cnt,
+		"points_available": s.Store.PointsFromTokens(tokens), "sentences_estimate": est,
+		"sentence_balance": est,
 		"from":             from, "to": to, "date": to,
 	})
 }
@@ -539,16 +542,16 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 			if on == "" {
 				on = "平台"
 			}
-			out = append(out, orgUsage{User: usr, OrgName: on, Cost: c})
+			out = append(out, orgUsage{User: usr, OrgName: on, Cost: s.Store.PointsFromTokens(c)})
 		}
 		// ★ 2026-09-05 修复：系统/未登录任务（user_id=0，如全站批量 LLM 调用）的用量
 		//   未出现在 users 列表，但不计入 total 会让「全站仅后台任务」的日期按日查询恒为 0。
 		//   单独归一行（沙箱用户）并入 total，保证日期口径连续一致。
 		if c0 := costByUser[0]; c0 > 0 {
 			total += c0
-			out = append(out, orgUsage{User: &store.User{ID: 0, Username: "system", DisplayName: "系统/后台任务", Role: "system", TenantID: 0, OrgID: 0, Status: "active"}, OrgName: "平台", Cost: c0})
+			out = append(out, orgUsage{User: &store.User{ID: 0, Username: "system", DisplayName: "系统/后台任务", Role: "system", TenantID: 0, OrgID: 0, Status: "active"}, OrgName: "平台", Cost: s.Store.PointsFromTokens(c0)})
 		}
-		writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": 0, "total": total, "from": from, "to": to, "date": to})
+		writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": 0, "total": s.Store.PointsFromTokens(total), "from": from, "to": to, "date": to})
 		return
 	}
 	orgID := int64(0)
@@ -595,15 +598,15 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 	for _, usr := range users {
 		c := costByUser[usr.ID]
 		orgTotal += c
-		out = append(out, orgUsage{User: usr, OrgName: orgName[usr.OrgID], Cost: c})
+		out = append(out, orgUsage{User: usr, OrgName: orgName[usr.OrgID], Cost: s.Store.PointsFromTokens(c)})
 	}
 	// ★ 2026-09-05 修复：系统/未登录任务（user_id=0，如批量 LLM 调用）并入 total，
 	//   避免「当日仅系统任务」时按日查询 total 恒为 0，且明细可见该部分消耗。
 	if c0 := costByUser[0]; c0 > 0 {
 		orgTotal += c0
-		out = append(out, orgUsage{User: &store.User{ID: 0, Username: "system", DisplayName: "系统/后台任务", Role: "system", TenantID: tid, OrgID: 0, Status: "active"}, OrgName: "系统", Cost: c0})
+		out = append(out, orgUsage{User: &store.User{ID: 0, Username: "system", DisplayName: "系统/后台任务", Role: "system", TenantID: tid, OrgID: 0, Status: "active"}, OrgName: "系统", Cost: s.Store.PointsFromTokens(c0)})
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": orgID, "total": orgTotal, "from": from, "to": to, "date": to})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": orgID, "total": s.Store.PointsFromTokens(orgTotal), "from": from, "to": to, "date": to})
 }
 
 // usageDateRange 解析用量看板日期区间参数。
@@ -634,7 +637,8 @@ func (s *Server) handleUsageCost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "costs": costs, "quants": quants})
+	// ★ 2026-09-19 积分口径：模型费用合计折积分出参（quants 仍为用量单位数）
+	writeJSON(w, 200, map[string]interface{}{"success": true, "costs": s.pointsMapJSON(costs), "quants": quants})
 }
 
 // 编译期引用占位：保留 strings 导入（模板片段按构建标签条件编译时使用）。

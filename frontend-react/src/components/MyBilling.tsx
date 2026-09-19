@@ -34,7 +34,7 @@ function TrendCard() {
   for (let i = days - 1; i >= 0; i--) {
     const dt = new Date(today.getTime() - i * 86400000).toISOString().slice(0, 10)
     const hit = byDate.get(dt)
-    bars.push({ date: dt, cost: hit?.cost ?? 0, count: hit?.count ?? 0 })
+    bars.push({ date: dt, cost: hit?.cost_points ?? 0, count: hit?.count ?? 0 })
   }
   // 下限取 1：整月无消耗时 max 为 0，下面 cost/max 会算出 Infinity/NaN 把 SVG 坐标打坏
   const max = Math.max(1, ...bars.map((b) => b.cost))
@@ -111,7 +111,7 @@ function OrdersTab() {
       </tr></thead><tbody>
         {rows.map((o) => (
           <tr key={o.id}>
-            <td>{o.order_no}</td><td>{fmtPoints(o.amount_tokens)}</td><td>{o.amount_money.toFixed(2)}</td>
+            <td>{o.order_no}</td><td>{fmtPoints(o.amount_points)}</td><td>{o.amount_money.toFixed(2)}</td>
             {/* 状态词按枚举首字母大写拼词典键（ss2.stPaid / stPending / stRefunded / stCancelled）：
                 ⚠ 新增状态必须同步 i18n/panels/mybilling.ts，否则 t() 取不到词会把键名直接显示出来。
                 manual_confirm=1 的线下/静态码单在超管确认前一直是 pending，追加「待管理员确认」免得用户以为卡死 */}
@@ -154,11 +154,9 @@ function LedgerTab() {
                 ⚠ 台账还会出现 biz_kind='settle'（额度结算清零行），没有 ss2.bizSettle 词条时会露出键名 */}
             <td>{l.biz_kind ? t(`ss2.biz${l.biz_kind.charAt(0).toUpperCase()}${l.biz_kind.slice(1)}`) : '-'}</td>
             <td>{l.biz_mode === 'fast' ? t('ss2.modeFast') : l.biz_mode === 'pro' ? t('ss2.modePro') : '-'}</td>
-            {/* fmtPoints 的入参是内部 token、出口才是积分（除以 me 下发的 points_tokens_rate）：
-                ledger.cost 落库就是 token 原值，直接传即可，不要自己再折算一遍。
-                ⚠ quantity 按后端注释是「字符数/句数」而不是 token，套 fmtPoints 会被再除一次汇率，
-                与列名「用量」不符——历史遗留口径，改之前先和后端确认 quantity 到底存什么 */}
-            <td>{fmtPoints(l.quantity)}</td><td>{fmtPoints(l.cost)}</td><td>{l.model || '-'}</td>
+            {/* 接口出口字段已是积分口径（cost_points 由后端换算），前端直接展示不再折算。
+                ⚠ quantity 按后端注释是「字符数/句数」而不是积分，套 fmtPoints 只做千分位格式化 */}
+            <td>{fmtPoints(l.quantity)}</td><td>{fmtPoints(l.cost_points)}</td><td>{l.model || '-'}</td>
           </tr>
         ))}
         {!rows.length && <tr><td colSpan={6} style={{ color: 'var(--lc-text-3)' }}>{t('ss2.empty')}</td></tr>}
@@ -179,7 +177,7 @@ function RewardsTab() {
   return (
     <div>
       <table className="ss-table"><thead><tr>
-        <th>{t('ss2.colInvitee')}</th><th>{t('ss2.colRwType')}</th><th>{t('ss2.colTokens')}</th><th>{t('ss2.colDays')}</th><th>{t('ss2.colRwPaid')}</th><th>{t('ss2.colTime')}</th>
+        <th>{t('ss2.colInvitee')}</th><th>{t('ss2.colRwType')}</th><th>{t('ss2.colPoints')}</th><th>{t('ss2.colDays')}</th><th>{t('ss2.colRwPaid')}</th><th>{t('ss2.colTime')}</th>
       </tr></thead><tbody>
         {rows.map((rw) => (
           // 推荐奖励行来自 ListReferrals、接口没给自增 id，只能用「被邀请人 + 奖励类型」拼复合键
@@ -187,7 +185,7 @@ function RewardsTab() {
             <td>{rw.invitee_name}{rw.invitee_email ? ` (${rw.invitee_email})` : ''}</td>
             {/* 未知 type 原样显示而不报错：奖励类型可能先在后端扩展，字典还没补 */}
             <td>{rw.type === 'trial_stack' ? t('ss2.rwTrial') : rw.type === 'paid_perm' ? t('ss2.rwPaidPerm') : rw.type}</td>
-            <td>{fmtPoints(rw.tokens)}</td><td>{rw.days > 0 ? rw.days : '-'}</td>
+            <td>{fmtPoints(rw.reward_points)}</td><td>{rw.days > 0 ? rw.days : '-'}</td>
             <td>{rw.paid ? t('ss2.yes') : t('ss2.no')}</td><td>{rw.created_at.slice(0, 10)}</td>
           </tr>
         ))}

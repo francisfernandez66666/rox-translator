@@ -536,6 +536,8 @@ func ScopeVisibility(rowTenant, pack, caller int64, scope *PackScope) (visible, 
 		return true, true // 直接采用域
 	case scope.SharedPackIDs[pack]:
 		return true, true // 行业包同属采用域
+	case scope.PersonaPackIDs[pack]:
+		return true, true // 角色包（用户 job_role 装配）同属采用域
 	case scope.UniversalPackIDs[pack]:
 		return true, true // 通用语言习惯包（全用户可见、采用域、最低优先级）
 	case scope.AllowCrossDept:

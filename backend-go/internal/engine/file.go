@@ -39,8 +39,10 @@ type FileTranslateResult struct {
 	// ★ 工单双模式（2026-09-13）：还原模式（delivery=restore）完成后各语言的纯文案 .md
 	//   旁路产物（兜底交付，不占主产物位）；纯文案模式（text）主产物即 .md，本字段留空。
 	TextFiles []string `json:"text_files,omitempty"`
-	// ★ 2026-09-03 需求：文件翻译结果携带实际消耗的 LLM token 数
-	TokensUsed int64 `json:"tokens_used"`
+	// ★ 2026-09-03 需求：文件翻译结果携带实际用量。
+	// 2026-09-19 积分口径：token 裸值仅内部计量（不外发），对外只出 points_used。
+	TokensUsed int64 `json:"-"`
+	PointsUsed int64 `json:"points_used"`
 }
 
 // FileTranslateData 文件翻译数据
@@ -901,6 +903,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		Files:      filesOut,
 		TextFiles:  textOut, // ★ 还原模式纯文案旁路产物（工单执行器登记为附加交付物）
 		TokensUsed: tokensUsed,
+		PointsUsed: e.PointsOfTokens(tokensUsed),
 	}
 }
 

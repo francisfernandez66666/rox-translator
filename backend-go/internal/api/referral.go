@@ -43,9 +43,9 @@ func (s *Server) handleReferralMy(w http.ResponseWriter, r *http.Request) {
 	code := s.Store.EnsureRefCode(u.ID)
 	// 构造专属注册链接
 	inviteURL := inviteBaseURL(r) + "/register?ref=" + code
-	// 查询邀请奖励记录
+	// 查询邀请奖励记录（★ 2026-09-19 积分口径：记录与汇总一律折积分出参）
 	records := s.Store.ListReferrals(u.ID)
-	// 汇总统计数据：累计邀请人数、体验叠加次数与 token、付费永久奖励 token
+	// 汇总统计数据：累计邀请人数、体验叠加次数与积分、付费永久奖励积分
 	invited := len(records)
 	trialCount, trialTokens, paidTokens := 0, int64(0), int64(0)
 	for _, rec := range records {
@@ -57,14 +57,14 @@ func (s *Server) handleReferralMy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]interface{}{
-		"success":      true,
-		"ref_code":     code,
-		"invite_url":   inviteURL,
-		"records":      records,
-		"invited":      invited,
-		"trial_count":  trialCount,
-		"trial_tokens": trialTokens,
-		"paid_tokens":  paidTokens,
+		"success":       true,
+		"ref_code":      code,
+		"invite_url":    inviteURL,
+		"records":       s.referralRecordsJSON(records),
+		"invited":       invited,
+		"trial_count":   trialCount,
+		"trial_points":  s.Store.PointsFromTokens(trialTokens),
+		"paid_points":   s.Store.PointsFromTokens(paidTokens),
 	})
 }
 
@@ -107,11 +107,12 @@ func sysReferralCfgInt64(get func(string) (string, error), key string, def int64
 }
 
 // handleAdminReferralConfig 邀请裂变运营参数（仅超管；2026-08-26 U3 需求）：
-//   - GET  /api/admin/referral/config → {enabled, reward_tokens, paid_reward_tokens}
-//   - POST 同路径，body 三个可选字段增量更新（enabled/reward_tokens/paid_reward_tokens）
+//   - GET  /api/admin/referral/config → {enabled, reward_points, paid_reward_points, reward_days, paid_reward_days}
+//   - POST 同路径，body 可选字段增量更新（enabled/reward_points/paid_reward_points/reward_days/paid_reward_days）
 //
 // 配置键：referral_enabled（"0"=关闭，缺省开启）/ invite_reward_tokens /
-// inviter_paid_reward_tokens。token 入参负值归零。
+// inviter_paid_reward_tokens。★ 2026-09-19 积分口径：接口出入参一律积分，
+// 服务端按汇率折算落库（配置键名保持 token 记账口径不变）。负值归零。
 func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil || !auth.IsSuperAdmin(u) {
@@ -130,18 +131,19 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, 200, map[string]interface{}{
-			"success":            true,
-			"enabled":            s.Store.ReferralEnabled(),
-			"reward_tokens":      sysReferralCfgInt64(get, kReward, 300000),
-			"paid_reward_tokens": sysReferralCfgInt64(get, kPaid, 500000),
+			"success": true,
+			"enabled": s.Store.ReferralEnabled(),
+			// ★ 积分口径：奖励额度回显折积分（默认值仍按内置 token 口径折算）
+			"reward_points":      s.Store.PointsFromTokens(sysReferralCfgInt64(get, kReward, 300000)),
+			"paid_reward_points": s.Store.PointsFromTokens(sysReferralCfgInt64(get, kPaid, 500000)),
 			"reward_days":        sysReferralCfgInt64(get, kRewardDays, 14),
 			"paid_reward_days":   sysReferralCfgInt64(get, kPaidDays, 0),
 		})
 	case http.MethodPost:
 		var req struct {
 			Enabled      *bool  `json:"enabled"`
-			RewardTokens *int64 `json:"reward_tokens"`
-			PaidTokens   *int64 `json:"paid_reward_tokens"`
+			RewardPoints *int64 `json:"reward_points"`
+			PaidPoints   *int64 `json:"paid_reward_points"`
 			RewardDays   *int64 `json:"reward_days"`
 			PaidDays     *int64 `json:"paid_reward_days"`
 		}
@@ -149,7 +151,7 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 			return
 		}
-		// 三个 token/开关键逐项增量落库：负值归零，未传指针跳过不动既有配置
+		// 各键逐项增量落库：积分入参折回 token 记账值，负值归零，未传指针跳过不动既有配置
 		if req.Enabled != nil {
 			v := "1"
 			if !*req.Enabled {
@@ -157,17 +159,17 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 			}
 			_ = s.Store.SetConfig(kEnabled, v)
 		}
-		if req.RewardTokens != nil {
-			if *req.RewardTokens < 0 {
-				*req.RewardTokens = 0
+		if req.RewardPoints != nil {
+			if *req.RewardPoints < 0 {
+				*req.RewardPoints = 0
 			}
-			_ = s.Store.SetConfig(kReward, strconv.FormatInt(*req.RewardTokens, 10))
+			_ = s.Store.SetConfig(kReward, strconv.FormatInt(s.Store.TokensFromPoints(*req.RewardPoints), 10))
 		}
-		if req.PaidTokens != nil {
-			if *req.PaidTokens < 0 {
-				*req.PaidTokens = 0
+		if req.PaidPoints != nil {
+			if *req.PaidPoints < 0 {
+				*req.PaidPoints = 0
 			}
-			_ = s.Store.SetConfig(kPaid, strconv.FormatInt(*req.PaidTokens, 10))
+			_ = s.Store.SetConfig(kPaid, strconv.FormatInt(s.Store.TokensFromPoints(*req.PaidPoints), 10))
 		}
 		// 注册邀请奖励有效期（天）：至少 1 天，避免 0 天立刻过期
 		if req.RewardDays != nil {
@@ -202,9 +204,20 @@ func (s *Server) handleReferralFunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	f := s.Store.InviteFunnel(u.ID)
 	l2pct := s.Store.ReferralL2Pct()
+	// ★ 2026-09-19 积分口径：漏斗奖励合计折积分出参
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "funnel": f, "l2_pct": l2pct,
-		"referrals": s.Store.ListReferrals(u.ID),
+		"success": true,
+		"funnel": map[string]interface{}{
+			"l1_invited":       f.L1Invited,
+			"l1_paid":          f.L1Paid,
+			"l2_invited":       f.L2Invited,
+			"l2_paid":          f.L2Paid,
+			"reward_points_l1": s.Store.PointsFromTokens(f.RewardTokensL1),
+			"reward_points_l2": s.Store.PointsFromTokens(f.RewardTokensL2),
+			"reg_rewards":      f.RegRewards,
+		},
+		"l2_pct":    l2pct,
+		"referrals": s.referralRecordsJSON(s.Store.ListReferrals(u.ID)),
 	})
 }
 

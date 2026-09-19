@@ -3,15 +3,15 @@
 // 职责：邀请码、二维码、邀请记录展示
 // 从 panels_c.tsx 拆分
 // 2026-09-18（UI 融合）：按钮/统计行/状态列的 emoji 前缀清理，邀请码大字色改用
-//   主题色变量兜底（变量缺失时回落到暗色主题的正文浅色）；奖励额度仍一律经
-//   fmtPoints 折积分展示。
+//   主题色变量兜底（变量缺失时回落到暗色主题的正文浅色）；奖励额度一律
+//   积分口径（接口出口即积分，fmtPoints 只做千分位格式化）。
 // ============================================================================
 import { useEffect, useState } from 'react'
 import { Button, DataTable } from '@/ui/langcross/src'
 import { referralMy, fetchReferralQrBlob } from '@/api'
 import { Panel } from './parts'
 import { fmtTime } from '@/lib/ui'
-import { fmtPoints } from '@/utils/points' // ★ S1 积分口径：奖励 token 一律折积分展示
+import { fmtPoints } from '@/utils/points' // ★ S1 积分口径：千分位格式化
 import { useAdmin } from '@/stores/admin'
 import { useT } from '@/i18n'
 
@@ -29,8 +29,8 @@ export function ReferralP() {
   const [qrUrl, setQrUrl] = useState('')
   const [invited, setInvited] = useState(0)
   const [trialCount, setTrialCount] = useState(0)
-  const [trialTokens, setTrialTokens] = useState(0)
-  const [paidTokens, setPaidTokens] = useState(0)
+  const [trialPoints, setTrialPoints] = useState(0)
+  const [paidPoints, setPaidPoints] = useState(0)
 
   // 拉取我的邀请数据 + 生成二维码：非个人用户直接跳过（不发无意义的请求）；
   // 二维码走 blob（后端出图，前端只挂 objectURL），故能随「下载二维码」按钮直接落盘。
@@ -45,8 +45,8 @@ export function ReferralP() {
           setRecords((r.records as Any[]) || [])
           setInvited((r.invited as number) || 0)
           setTrialCount((r.trial_count as number) || 0)
-          setTrialTokens((r.trial_tokens as number) || 0)
-          setPaidTokens((r.paid_tokens as number) || 0)
+          setTrialPoints((r.trial_points as number) || 0)
+          setPaidPoints((r.paid_points as number) || 0)
         }
       } catch { /* ignore */ }
       const blob = await fetchReferralQrBlob()
@@ -96,11 +96,11 @@ export function ReferralP() {
               <Button onClick={copyLink}> {t('referral.copy')}</Button>
             </div>
             {/* 三项汇总：邀请人数 / 试用奖励（积分 + 次数）/ 付费奖励（积分）。
-                token 原值一律经 fmtPoints 折算，界面上不出现 token 裸值。 */}
+                接口出口即积分口径，界面直接展示。 */}
             <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 12, fontSize: 13, color: 'var(--adm-hint)' }}>
               <span> {t('referral.invitedCount')}：<b>{invited}</b></span>
-              <span> {t('referral.trialRewards')}：<b>{fmtPoints(trialTokens)}</b> {t('referral.unitPoints')} / {trialCount} {t('referral.times')}</span>
-              <span> {t('referral.paidRewards')}：<b>{fmtPoints(paidTokens)}</b> {t('referral.unitPoints')}</span>
+              <span> {t('referral.trialRewards')}：<b>{fmtPoints(trialPoints)}</b> {t('referral.unitPoints')} / {trialCount} {t('referral.times')}</span>
+              <span> {t('referral.paidRewards')}：<b>{fmtPoints(paidPoints)}</b> {t('referral.unitPoints')}</span>
             </div>
           </div>
           {qrUrl && <img src={qrUrl} alt="QR" width={150} height={150} style={{ borderRadius: 8, border: '1.2px solid var(--lc-border-card)', background: '#fff' }} />}
@@ -122,8 +122,8 @@ export function ReferralP() {
                      : <span style={{ color: 'var(--adm-amber-tx)' }}>{t('referral.payNo')}</span> },
                  { key: 'reward', title: t('referral.colReward'), render: (row) =>
                    row.type === 'trial_stack'
-                     ? <>+{fmtPoints(row.tokens as number)} {t('referral.unitPoints')}{row.days ? ` / +${row.days} ${t('referral.daysUnit')}` : ''}</>
-                     : <>+{fmtPoints(row.tokens as number)} {t('referral.unitPoints')}</> },
+                     ? <>+{fmtPoints(row.reward_points as number)} {t('referral.unitPoints')}{row.days ? ` / +${row.days} ${t('referral.daysUnit')}` : ''}</>
+                     : <>+{fmtPoints(row.reward_points as number)} {t('referral.unitPoints')}</> },
                  { key: 'created_at', title: t('referral.colTime'), width: 165, render: (row) => fmtTime(row.created_at as string) },
                ]}  />
         {!records.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 8 }}>{t('referral.empty')}</div>}

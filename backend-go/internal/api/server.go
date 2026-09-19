@@ -184,6 +184,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/docs/privacy", s.handlePublicPrivacy)
 	s.mux.HandleFunc("/api/plans", s.handlePlans)
 	s.mux.HandleFunc("/api/register/industries", s.handleRegisterIndustries)
+	s.mux.HandleFunc("/api/register/personas", s.handleRegisterPersonas) // ★ 角色功能（2026-09-19）：公开角色字典
 	// ★ P1-3（2026-09-18）：营销留资（匿名 POST，IP 限流+蜜罐+可选 Turnstile，落 feedbacks 通道）
 	s.mux.HandleFunc("/api/lead", s.handleLeadCreate)
 	s.mux.HandleFunc("/office/manifest.xml", s.handleOfficeManifest)
@@ -336,6 +337,12 @@ func (s *Server) routesAdminKB() {
 	s.mux.HandleFunc("/api/admin/industries/update", s.handleIndustryUpdate)
 	s.mux.HandleFunc("/api/admin/industries/status", s.handleIndustryStatus)
 	s.mux.HandleFunc("/api/admin/industries/delete", s.handleIndustryDelete)
+	// ★ 角色功能（2026-09-19）：角色字典管理（persona 包，宿主租户0；镜像行业字典接口）
+	s.mux.HandleFunc("/api/admin/personas", s.handleAdminPersonas)
+	s.mux.HandleFunc("/api/admin/personas/create", s.handlePersonaCreate)
+	s.mux.HandleFunc("/api/admin/personas/update", s.handlePersonaUpdate)
+	s.mux.HandleFunc("/api/admin/personas/status", s.handlePersonaStatus)
+	s.mux.HandleFunc("/api/admin/personas/delete", s.handlePersonaDelete)
 	s.mux.HandleFunc("/api/admin/kb-entries", s.handleKBEntries)
 	s.mux.HandleFunc("/api/admin/brand-terms", s.handleBrandTerms) // ★ 2026-09-10 品牌名设置前端可见（知识库单独可配）
 	s.mux.HandleFunc("/api/admin/kb-entries/add", s.handleKBEntryAdd)
@@ -427,6 +434,7 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/me/package", s.handleMyPackage)
 	s.mux.HandleFunc("/api/me/context", s.handleMeContext)
 	s.mux.HandleFunc("/api/me/update-email", s.handleUpdateEmail)
+	s.mux.HandleFunc("/api/me/job-role", s.handleMyJobRole) // ★ 角色功能（2026-09-19）：自助维护职业角色（转岗语义）
 	s.mux.HandleFunc("/api/me/deactivate", s.handleDeactivateAccount) // ★ 自助注销（2026-08-26 需求）
 	s.mux.HandleFunc("/api/me/email-code", s.handleMeEmailCode)
 	s.mux.HandleFunc("/api/admin/tm-review/list", s.handleTmReviewList)

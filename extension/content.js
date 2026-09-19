@@ -113,7 +113,7 @@
       highlightSel();
       const lines = Object.entries(data.translations).map(([lc, v]) => lc + ": " + v);
       if (data.mode) lines.push("模式: " + data.mode);
-      if (data.tokens_used) lines.push("消耗: " + data.tokens_used + " token");
+      if (data.points_used) lines.push("消耗: " + data.points_used + " 积分");
       if (data.source_text) lines.push("原文: " + data.source_text);
       showBubble(x, y, lines.join("\n"));
     } catch (e) {

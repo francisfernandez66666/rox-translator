@@ -18,7 +18,6 @@ import { useEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { create } from 'zustand'
 import { authMe, setAuthToken, getAuthToken } from '@/api'
-import { setPointsRate } from '@/utils/points'
 import type { AuthUser } from '@/api'
 
 /** roleLevel 角色等级：super_admin/admin=4 · tenant_admin/approver=3 · dept_admin=2 · 其他=1
@@ -78,10 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch { r = null }
       // StrictMode 双挂载下本实例可能已被取代（alive=false）：静默忽略，
       // 仅当响应确实无效才清凭证（旧写法把 alive=false 也当失败清 token，引发 401 风暴）
-      // 汇率必须先于 onLogin 写入：utils/points 的 rate 默认 300，onLogin 一置好 user
-      // 就触发整树重渲染；顺序颠倒会让首屏积分/套餐数字先用 300 算一遍再跳变一次
       if (r && r.success && r.user) {
-        setPointsRate(r.points_tokens_rate) // ★ S1 积分汇率注入（展示层统一换算）
         if (alive) onLogin(r.user)
       }
       else if (!alive) { /* 被新实例接管，由其负责状态 */ }

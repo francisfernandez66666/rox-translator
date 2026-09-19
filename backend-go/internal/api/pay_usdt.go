@@ -82,10 +82,10 @@ func (s *Server) handlePayCreateUSDT(w http.ResponseWriter, r *http.Request, u *
 		if payload == nil && strings.Contains(errMsg, "未开放") {
 			code = 403
 		}
-		writeJSON(w, code, map[string]interface{}{"success": false, "message": errMsg, "order": o})
+		writeJSON(w, code, map[string]interface{}{"success": false, "message": errMsg, "order": s.orderViewJSON(o)})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "order": o, "channel": "usdt", "usdt_pay": payload})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "order": s.orderViewJSON(o), "channel": "usdt", "usdt_pay": payload})
 }
 
 // usdtPayPayload 由订单快照 + 运行配置组装出参。

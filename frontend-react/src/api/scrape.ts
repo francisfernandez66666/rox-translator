@@ -125,7 +125,7 @@ export async function scrapeStaged(params: { pack_type?: string; status?: string
 }
 
 /** 批量审批：通过（落正式库+热加载）/ 驳回 */
-export async function scrapeApprove(kind: 'entries' | 'phrases', ids: number[], action: 'approve' | 'reject'): Promise<AdminResp & { updated?: number; applied?: number; rewards?: { tenant_id?: number; tokens?: number; chars?: number; per_char?: number }[] }> {
+export async function scrapeApprove(kind: 'entries' | 'phrases', ids: number[], action: 'approve' | 'reject'): Promise<AdminResp & { updated?: number; applied?: number; rewards?: { tenant_id?: number; reward_points?: number; chars?: number; daily_used_points?: number }[] }> {
   return request('/api/admin/kb-scrape/approve', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ kind, ids, action }) })
 }
 

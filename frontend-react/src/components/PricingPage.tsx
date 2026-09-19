@@ -6,6 +6,7 @@
 // 视觉规则：纯黑底、面板 #0E1014、描边 1.2px #464C58、主按钮白底黑字、无蓝无绿。
 // ============================================================================
 import { Button, IdeaIcon } from '@/ui/langcross/src'
+import { useNavigate } from 'react-router-dom'
 import { useT } from '@/i18n'
 import { useBranding } from '@/branding'
 import { useAuth } from '@/stores/auth'
@@ -14,9 +15,6 @@ import type { PlanLite } from './usePlans'
 
 // FAQ：固定三条（设计图 05）
 const FAQ_INDEXES = [1, 2, 3] as const
-
-// go 沿用现有页面跳转方式（整页跳转，不做 SPA 路由切换）
-const go = (to: string) => { window.location.href = to }
 
 /** BrandMark 品牌圆点图标（租户未配置 brand_logo 时的默认标记） */
 function BrandMark() {
@@ -36,6 +34,8 @@ export default function PricingPage() {
   // plans 是全量上架包；trial 只用来兜「有效期」那一行文案（包没配 duration_days 时回落体验天数）
   const { plans, trial } = usePlans()
   const brand = branding.brandName || t('land.brand')
+  // SPA 路由跳转：/pricing 与 /admin 都在路由表内，整页跳转会白付一次全量重载（2026-09-19 修）
+  const navigate = useNavigate()
 
   // 套餐类型 → 卡面文案（后端 ptype：free / increment / paid）
   const typeLabel = (ptype: string) =>
@@ -62,14 +62,15 @@ export default function PricingPage() {
           <span>{brand}</span>
         </a>
         <nav className="lc-prc-links">
-          <a href="/pricing">{t('land.pNavPricing')}</a>
+          {/* 「定价」是当前页，渲染成无链接文本：放 href="/pricing" 等于每次点击整页重载自己 */}
+          <span>{t('land.pNavPricing')}</span>
           <a href="/docs/terms">{t('land.pNavTerms')}</a>
           <a href="/docs/sla">{t('land.pNavSla')}</a>
           <a href="/docs/privacy">{t('land.pNavPrivacy')}</a>
           {/* 同一位置只放一枚按钮：已登录给「进入后台」，未登录给「免费注册」，不摆两个入口抢视线 */}
           {user
-            ? <Button size="sm"onClick={() => go('/admin')}>{t('land.pAdmin')}</Button>
-            : <Button size="sm"onClick={() => go('/register')}>{t('land.pRegBtn')}</Button>}
+            ? <Button size="sm" onClick={() => navigate('/admin')}>{t('land.pAdmin')}</Button>
+            : <Button size="sm" onClick={() => navigate('/register')}>{t('land.pRegBtn')}</Button>}
         </nav>
       </header>
 
@@ -88,8 +89,9 @@ export default function PricingPage() {
               {/* 金额原样渲染后端 price_money（单位=元）：折扣、涨价一律在后台改包，前端不做二次换算 */}
               <div className="lc-prc-price">¥{p.price_money}</div>
               <div className="lc-prc-period">{periodText(p)}</div>
-              {/* 卡底是徽标不是按钮（文档 §3.1-05：徽标 10 Medium 白底黑字） */}
-              <span className="lc-prc-badge">{cardAction(p.ptype)}</span>
+              {/* 卡底徽标保持设计稿视觉口径（§3.1-05：10 Medium 白底黑字），但实装为动作入口：
+                  未登录→注册领体验额度；已登录→管理后台（订阅/购买都在那里结算）。不再是只能看的死徽标 */}
+              <a className="lc-prc-badge" href={user ? '/admin' : '/register'}>{cardAction(p.ptype)}</a>
             </article>
           ))}
         </div>
@@ -135,7 +137,9 @@ const PRICING_CSS = `
 .lc-prc-meta{font-size:11px;color:var(--lc-text-2)}
 .lc-prc-price{font-size:22px;font-weight:700;line-height:1.15;font-family:var(--lc-font-latin)}
 .lc-prc-period{font-size:11px;color:var(--lc-text-5)}
-.lc-prc-badge{align-self:flex-start;margin-top:6px;padding:3px 8px;font-size:10px;font-weight:500;line-height:1.4;color:#000;background:var(--lc-text-1);border-radius:var(--lc-r-bar)}
+.lc-prc-badge{align-self:flex-start;margin-top:6px;padding:3px 8px;font-size:10px;font-weight:500;line-height:1.4;color:#000;background:var(--lc-text-1);border-radius:var(--lc-r-bar);transition:filter var(--lc-mo-release) var(--lc-mo-out)}
+/* 徽标即入口：hover 提亮一档给"可按"反馈，视觉重量不变 */
+.lc-prc-badge:hover{filter:brightness(1.15)}
 .lc-prc-note{display:flex;gap:10px;margin:24px 0 0;padding:16px 18px;font-size:12.5px;line-height:1.85;color:var(--lc-text-2);background:var(--lc-inset);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-card)}
 .lc-prc-noteicon{flex:none;color:var(--lc-text-3)}
 .lc-prc-faq{margin-bottom:4px}

@@ -21,6 +21,7 @@ import { t, useT, toggleLang } from '@/i18n'
 import { useBranding, DEFAULT_BRAND_NAME } from '@/branding'
 import { roleLevel } from '@/stores/auth'
 import { industryCodeOf, industryOptions } from '@/lib/industries'
+import { PERSONA_FALLBACK } from '@/lib/personas'
 import AiRegisterFlow from './AiRegisterFlow'
 
 /** Login 入参：mode 区分前台(home)/后台(admin)登录；onLogin 登录成功后回调上层挂载工作台 */
@@ -72,13 +73,16 @@ export default function Login({ mode, onLogin }: Props) {
   const [roleChoice, setRoleChoice] = useState<'admin' | 'member'>('admin')
   // 注册表单聚合到一个对象：字段随「个人/企业 × 管理员/成员」分支增减，散成 9 个 useState 只会让重置更难维护
   // orgEn（组织英文名）为本次设计稿新增字段，后端暂无独立列，只在表单里占位不提交
-  const [form, setForm] = useState({ code: '', name: '', invite: '', email: '', emailCode: '', industry: '', brandName: '', brandNameEn: '', orgEn: '' })
+  const [form, setForm] = useState({ code: '', name: '', invite: '', email: '', emailCode: '', industry: '', jobRole: '', brandName: '', brandNameEn: '', orgEn: '' })
   const [agreed, setAgreed] = useState(false)
   // 邮箱验证 / 人机验证两个开关由 registerConfig 下发（后台可关），不能前端写死
   const [emailVerifyOn, setEmailVerifyOn] = useState(false)
   const [captchaOn, setCaptchaOn] = useState(false)
   // 2026-09-10 行业字典动态化：超管在后台「行业管理」维护，注册下拉优先用后端返回值，空则回落本地词库
   const [industries, setIndustries] = useState<Array<{ code: string; name: string }>>([])
+  // 2026-09-19 职业角色字典：与行业同口径由 registerConfig 下发（租户0 persona 包），
+  // 角色只绑用户不绑企业——个人/企业所有分支都展示同一下拉
+  const [personas, setPersonas] = useState<Array<{ code: string; name: string }>>(PERSONA_FALLBACK)
   const [codeCooldown, setCooldown] = useState(0)
   const captchaBoxRef = useRef<HTMLDivElement>(null) // Turnstile 挂载容器（脚本会往里塞 iframe）
   const captchaTokenRef = useRef('') // token 用 ref 而非 state：回调写入时不需要触发重渲染
@@ -110,6 +114,8 @@ export default function Login({ mode, onLogin }: Props) {
           if ((c as unknown as { captcha_enabled?: boolean }).captcha_enabled && key) renderTurnstile(key)
           const inds = (c as unknown as { industries?: Array<{ code: string; name: string }> }).industries
           if (Array.isArray(inds) && inds.length > 0) setIndustries(inds)
+          const ps = (c as unknown as { personas?: Array<{ code: string; name: string }> }).personas
+          if (Array.isArray(ps) && ps.length > 0) setPersonas(ps)
         }
       } catch { /* ignore */ }
     })()
@@ -252,6 +258,8 @@ export default function Login({ mode, onLogin }: Props) {
         email_code: form.emailCode || undefined,
         captcha_token: captchaTokenRef.current || undefined,
         industry: (regType === 'enterprise' ? (form.industry ? industryCodeOf(form.industry) : undefined) : undefined),
+        // job_role 不带分支条件：角色绑用户不绑企业，个人/企业管理员/成员注册时都生效
+        job_role: form.jobRole || undefined,
         brand_name: (regType === 'enterprise' && roleChoice === 'admin' ? (form.brandName.trim() || undefined) : undefined),
         brand_name_en: (regType === 'enterprise' && roleChoice === 'admin' ? (form.brandNameEn.trim() || undefined) : undefined),
         ref,
@@ -488,6 +496,16 @@ export default function Login({ mode, onLogin }: Props) {
         </Field>
         <Field label={t('auth.fieldEmail')}>
           <Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder={t('auth.fieldEmail')} />
+        </Field>
+        {/* 职业角色（2026-09-19）：个人/企业所有分支共用——角色只绑用户不绑企业，
+            选填（后端对未知/空 code 静默忽略），注册后可在账号菜单随时改（转岗） */}
+        <Field label={t('auth.jobRole')}>
+          <select className="lc-input" value={form.jobRole} onChange={(e) => setForm({ ...form, jobRole: e.target.value })}>
+            <option value="">{t('auth.selectJobRole')}</option>
+            {personas.map((x) => (
+              <option key={x.code} value={x.code}>{x.name}</option>
+            ))}
+          </select>
         </Field>
         {/* 邮箱验证码：只在后台开了邮箱验证（emailVerifyOn）时出现；发码按钮进 60s 冷却防刷 */}
             {emailVerifyOn && (

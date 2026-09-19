@@ -1,7 +1,8 @@
 // ============================================================================
 // components/AiRegisterFlow.tsx — AI 接管注册引导（交付包 §5 / demo-register-ai-motion.html）
 // 点「免费注册」后传统表单闪烁三次并整页 120ms 退出，由本面板接管问答：
-//   ① 账号类型 ② 企业→企业身份 ③ 管理员→行业 4 选 1 ④ 按分支裁剪的账号信息表单
+//   ① 账号类型 ② 企业→企业身份 ③ 管理员→行业 4 选 1 →（各分支）职业角色问答（2026-09-19）
+//     ④ 按分支裁剪的账号信息表单
 //     （用户名自动带入 + OTP 6 格 + 管理员组织中英名 / 员工组织编码）
 //   ⑤ 管理员提交后追加品牌固定译名预配 chips ⑥ 检查点三连 + 完成摘要卡
 // 支持「← 上一步」（首步隐藏、完成后禁用）；尊重 prefers-reduced-motion；generation 计数器防竞态。
@@ -9,6 +10,8 @@
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { authRegister, login, sendEmailCode, setAuthToken, setActiveTenantId, type AuthUser } from '@/api'
+import { registerPersonas } from '@/api/persona'
+import { PERSONA_FALLBACK } from '@/lib/personas'
 import { useT } from '@/i18n'
 import { useBranding } from '@/branding'
 
@@ -49,19 +52,21 @@ interface Msg {
     type: string
     identity: string
     industry?: string // 仅管理员分支有（配了哪个行业词库）
+    persona?: string // 职业角色显示名（2026-09-19，跳过则不展示）
     username: string
     email: string
     inviteLeft?: boolean // 个人分支：明示「好友邀请码已留空」，避免用户以为漏填
   }
 }
 
-// 行业四选一（设计固定词库，对齐 demo）
-// 存的是词典键而不是译文：t() 在调用处取，切语言时选项文案自动跟随
+// 行业四选一：code 必须对齐后端内置行业字典（auto/ecommerce/education/b2b），
+// 2026-09-19 修复：原先把词典键当 code 透传，后端 FindIndustryByCode 恒不命中、
+// 所有 AI 注册的企业都落进「通用行业」兜底包
 const INDUSTRIES = [
-  { t:'auth.aiInd1', d:'auth.aiInd1Desc'},
-  { t:'auth.aiInd2', d:'auth.aiInd2Desc'},
-  { t:'auth.aiInd3', d:'auth.aiInd3Desc'},
-  { t:'auth.aiInd4', d:'auth.aiInd4Desc'},
+  { t:'auth.aiInd1', d:'auth.aiInd1Desc', code:'auto'},
+  { t:'auth.aiInd2', d:'auth.aiInd2Desc', code:'ecommerce'},
+  { t:'auth.aiInd3', d:'auth.aiInd3Desc', code:'education'},
+  { t:'auth.aiInd4', d:'auth.aiInd4Desc', code:'b2b'},
 ]
 
 /**
@@ -89,7 +94,9 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
   const genRef = useRef(0) // 代际：上一步 / 重挂时 ++，进行中的打字与定时器自行熄火
   const idRef = useRef(0) // 消息自增 id（同时也是「本步起点」的界标，见 stepRender.startId）
   // 已选答案放 ref 而不是 state：问答分支只在下一次渲染时读，不需要为它重渲染
-  const selRef = useRef<{ type?:'personal'|'enterprise'; role?:'admin'|'staff'; industryCode?: string; industryName?: string }>({})
+  const selRef = useRef<{ type?:'personal'|'enterprise'; role?:'admin'|'staff'; industryCode?: string; industryName?: string; personaCode?: string; personaName?: string }>({})
+  // 角色问答选项（2026-09-19）：动态取后端角色字典，失败/为空落本地兜底词库
+  const [personaList, setPersonaList] = useState<Array<{ code: string; name: string }>>(PERSONA_FALLBACK)
 
   const [msgs, setMsgs] = useState<Msg[]>([]) // 整条聊天流（消息是不可变更新的数组）
   const [stepLabel, setStepLabel] = useState('') // 进度条左侧「第 x / y 步 · 名称」
@@ -217,6 +224,21 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
     })
   }, [addMsg, typeText, alive, reduced, t])
 
+  // 角色问答（2026-09-19）：三条分支共用，选项动态取角色字典 + 「暂不选择」兜底；
+  // 答完统一交给 advanceAfterPersona 按已选身份推进到账号信息步
+  const askPersona = useCallback((my: number) => {
+    const m = addMsg({ side:'ai', full: t('auth.aiAskPersona'), text: reduced ? t('auth.aiAskPersona') :''})
+    void typeText(m, t('auth.aiAskPersona'), my).then((ok) => {
+      if (!ok || !alive(my)) return
+      addMsg({
+        side: 'ai', opts: [
+          ...personaList.map((x) => ({ t: x.name, d: '' })),
+          { t: t('auth.aiSkipPersona'), d: t('auth.aiSkipPersonaDesc') },
+        ],
+      })
+    })
+  }, [addMsg, typeText, alive, reduced, t, personaList])
+
   const askAccount = useCallback((my: number, kind:'personal'|'staff'|'admin') => {
     // 带没带用户名用不同话术：带了说「已带入（可修改）」，没带就请用户在本步填写
     const kindKey = kind ==='personal'?'Personal': kind ==='admin'?'Admin':'Staff'
@@ -228,11 +250,20 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
     })
   }, [addMsg, typeText, alive, reduced, t, usernameBrought])
 
+  // 角色答完后的推进：账号信息步的序号/总步数按分支排布
+  // （个人：类型1→角色2→账号3/4；员工：类型1→身份2→角色3→账号4/5；管理员：类型1→身份2→行业3→角色4→账号5/6）
+  const advanceAfterPersona = useCallback((_my: number) => {
+    const sel = selRef.current
+    const kind: 'personal'|'staff'|'admin' = sel.type === 'personal' ? 'personal' : sel.role === 'admin' ? 'admin' : 'staff'
+    const [idx, total] = kind === 'admin' ? [5, 6] : kind === 'staff' ? [4, 5] : [3, 4]
+    stepRender(idx, total, t('auth.aiStepAccount'), (m) => askAccount(m, kind))
+  }, [stepRender, t, askAccount])
+
   // 收尾：检查点三连 + 完成摘要
   const finish = useCallback(async (my: number, kind:'personal'|'staff'|'admin', industryName?: string) => {
     setFinished(true); setBackDisabled(true); setBackHidden(true)
-    // 三条分支各自的总步数：管理员多两问（企业身份 + 行业），员工只多一问身份，个人最短
-    const total = kind ==='admin'? 5 : kind ==='staff'? 4 : 3
+    // 三条分支各自的总步数（2026-09-19 起含角色问答一步）：管理员 6、员工 5、个人 4
+    const total = kind ==='admin'? 6 : kind ==='staff'? 5 : 4
     setStepLabel(`第 ${total} / ${total} 步 · ${t('auth.aiRegisterDone')}`)
     setTrackPct(100)
     const finishKey = kind ==='personal'?'auth.aiFinishingPersonal': kind ==='admin'?'auth.aiFinishingAdmin':'auth.aiFinishingStaff'
@@ -283,6 +314,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
         type: selRef.current.type ==='personal'? t('auth.aiPersonal') : t('auth.aiEnterprise'),
         identity,
         industry: kind ==='admin'? industryName : undefined,
+        persona: selRef.current.personaName || undefined,
         username: aiForm.username,
         email: aiForm.email,
         inviteLeft: kind === 'personal',
@@ -306,7 +338,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
     // 账号类型
     if (label === t('auth.aiPersonal')) {
       sel.type = 'personal'
-      stepRender(2, 3, t('auth.aiStepAccount'), (my) => askAccount(my, 'personal'))
+      stepRender(2, null, t('auth.aiStepPersona'), (my) => askPersona(my))
       return
     }
     if (label === t('auth.aiEnterprise')) {
@@ -319,21 +351,35 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
       const roleLabel = label.slice((t('auth.aiEnterprise') +'·').length)
       if (roleLabel.startsWith(t('auth.roleAdmin'))) {
         sel.role = 'admin'
-        stepRender(3, 5, t('auth.industry'), (my) => askIndustry(my))
+        stepRender(3, 6, t('auth.industry'), (my) => askIndustry(my))
       } else {
         sel.role = 'staff'
-        stepRender(3, 4, t('auth.aiStepAccount'), (my) => askAccount(my, 'staff'))
+        stepRender(3, 5, t('auth.aiStepPersona'), (my) => askPersona(my))
       }
       return
     }
-    // 行业四选一
+    // 行业四选一：答完进角色问答
     const ind = INDUSTRIES.find((x) => t(x.t) === label)
     if (ind) {
       sel.industryName = t(ind.t)
-      sel.industryCode = ind.t // 以词典键作 code 透传（后端按词库对齐）
-      stepRender(4, 5, t('auth.aiStepAccount'), (my) => askAccount(my, 'admin'))
+      sel.industryCode = ind.code // 真实行业 code：后端按 kb_packages.code 精确命中
+      stepRender(4, 6, t('auth.aiStepPersona'), (my) => askPersona(my))
+      return
     }
-  }, [alive, addMsg, t, stepRender, askAccount, askRole, askIndustry, reduced])
+    // 角色问答（2026-09-19）：选中记下 code+显示名，「暂不选择」落空值，答完统一推进
+    if (label === t('auth.aiSkipPersona')) {
+      sel.personaCode = ''
+      sel.personaName = ''
+      advanceAfterPersona(my)
+      return
+    }
+    const per = personaList.find((x) => x.name === label)
+    if (per) {
+      sel.personaCode = per.code // 真实角色 code：后端按 kb_packages.code（persona 包）校验
+      sel.personaName = per.name
+      advanceAfterPersona(my)
+    }
+  }, [alive, addMsg, t, stepRender, askAccount, askRole, askIndustry, askPersona, advanceAfterPersona, personaList, reduced])
 
   // 账号信息表单提交：调用真实注册接口
   // 前置校验命中只 return、不弹提示：字段前有 * 必填标记，AI 气泡不该把用户已填内容冲掉。
@@ -360,6 +406,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
         brand_name: kind ==='admin'? aiForm.orgCn.trim() : undefined,
         brand_name_en: kind ==='admin'? aiForm.orgEn.trim() : undefined,
         industry: kind ==='admin'? sel.industryCode : undefined,
+        job_role: sel.personaCode || undefined, // 角色绑用户不绑企业：三条分支共用（跳过=不下发）
         invite: kind ==='staff'? aiForm.orgCode.trim() : undefined,
         agreed: true, // 问答流程里没有单独的协议勾选步骤（只有传统表单有），提交即视为已同意
       })
@@ -399,10 +446,17 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
     genRef.current++
     setMsgs([])
     stepStack.current = []
+    // 角色问答选项预取（公开接口，仅启用中角色）：失败保留本地兜底词库
+    ;(async () => {
+      try {
+        const r = await registerPersonas()
+        if (r.success && Array.isArray(r.personas) && r.personas.length > 0) setPersonaList(r.personas)
+      } catch { /* ignore */ }
+    })()
     if (dedicatedRegister) {
-      // 品牌专属域名进来的用户身份已定（企业员工），前两问直接跳过，总步数按 4 步算
+      // 品牌专属域名进来的用户身份已定（企业员工），类型/身份两问直接跳过，角色仍要一问（总步数 5）
       selRef.current = { type:'enterprise', role:'staff'}
-      stepRender(1, 4, t('auth.aiStepAccount'), (my) => askAccount(my, 'staff'))
+      stepRender(1, 5, t('auth.aiStepPersona'), (my) => askPersona(my))
     } else {
       stepRender(1, null, t('auth.aiAskType'), askType)
     }
@@ -508,6 +562,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
                   <div className="ar-kv"><span className="ar-kv-k">{t('auth.aiSummaryType')}</span><span className="ar-kv-v">{m.done.type}</span></div>
                   <div className="ar-kv"><span className="ar-kv-k">{t('auth.aiSummaryIdentity')}</span><span className="ar-kv-v">{m.done.identity}</span></div>
                   {m.done.industry && <div className="ar-kv"><span className="ar-kv-k">{t('auth.aiSummaryIndustry')}</span><span className="ar-kv-v">{m.done.industry}</span></div>}
+                  {m.done.persona && <div className="ar-kv"><span className="ar-kv-k">{t('auth.aiSummaryRole')}</span><span className="ar-kv-v">{m.done.persona}</span></div>}
                   <div className="ar-kv"><span className="ar-kv-k">{t('auth.aiSummaryUsername')}</span><span className="ar-kv-v">{m.done.username}</span></div>
                   <div className="ar-kv"><span className="ar-kv-k">{t('auth.aiSummaryEmail')}</span><span className="ar-kv-v">{m.done.email}</span></div>
                   {m.done.inviteLeft && <div className="ar-kv"><span className="ar-kv-k">{t('auth.aiSummaryInvite')}</span><span className="ar-kv-v">{t('auth.aiInviteLeft')}</span></div>}

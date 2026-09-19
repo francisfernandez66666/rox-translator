@@ -101,9 +101,9 @@ func (s *Server) handleFlowRunTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := wf.Executor.Execute(r.Context(), t, nil); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error(), "ticket": t})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error(), "ticket": s.ticketJSON(t)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "flow_run", "tickets", t.TicketNo)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": s.ticketJSON(t)})
 }

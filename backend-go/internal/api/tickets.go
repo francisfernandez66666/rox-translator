@@ -129,18 +129,17 @@ func (s *Server) handleTickets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// ★ 运行中工单附实时进度百分比（后端唯一真源；仅运行中才查状态，避免全量 N+1）
-	type ticketWithProgress struct {
-		*store.Ticket
-		Progress int `json:"progress"`
-	}
-	out := make([]ticketWithProgress, 0, len(tickets))
+	// 出参折积分口径（tokens_billed → points_billed，2026-09-19）
+	out := make([]map[string]interface{}, 0, len(tickets))
 	for _, t := range tickets {
+		tv := s.ticketJSON(t)
 		if t.Status != "queued" && t.Status != "in_progress" {
 			p := 0
 			if t.Status == "completed" || t.Status == "rejected" {
 				p = 100
 			}
-			out = append(out, ticketWithProgress{t, p})
+			tv["progress"] = p
+			out = append(out, tv)
 			continue
 		}
 		states, _ := s.Store.TicketStates(t.ID)
@@ -149,7 +148,8 @@ func (s *Server) handleTickets(w http.ResponseWriter, r *http.Request) {
 		if t.Status == "in_progress" {
 			pct = ticketProgressPct(t, states, tfiles)
 		}
-		out = append(out, ticketWithProgress{t, pct})
+		tv["progress"] = pct
+		out = append(out, tv)
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "tickets": out})
 }
@@ -216,7 +216,7 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 		_ = s.Store.UpdateTicket(t)
 		_, _ = s.TicketSvc.EnqueueTicketRun(context.Background(), t.ID)
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": s.ticketJSON(t)})
 }
 
 // handleTicketCreateFile 文件工单创建（multipart：file/title/target_langs）。
@@ -388,7 +388,7 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		// ★ 整改 C6：入队用 Background（请求 ctx 响应后即取消）
 		_, _ = s.TicketSvc.EnqueueTicketRun(context.Background(), t.ID)
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": s.ticketJSON(t)})
 }
 
 // handleTicketRun 运行工单流程接口（FlowDef 编排，tenant_admin 及以上）。
@@ -450,7 +450,7 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_enqueue", "tickets", t.TicketNo)
-	resp := map[string]interface{}{"success": true, "ticket": t, "queued": true}
+	resp := map[string]interface{}{"success": true, "ticket": s.ticketJSON(t), "queued": true}
 	if strings.EqualFold(filepath.Ext(t.FilePath), ".pdf") && fileproc.PdfImageHeavy(t.FilePath) {
 		resp["image_heavy"] = true
 	}
@@ -550,7 +550,7 @@ func (s *Server) handleTicketDetail(w http.ResponseWriter, r *http.Request) {
 	// ★ 改造 5（2026-09-17）用户侧 QA 报告透出：从 FinalResult payload 解析
 	//   质检报告/评估分/不达标语言，详情接口一并返回（此前仅 xlsx 下载有 QA 列，界面零透出）。
 	quality := parseTicketQuality(t.FinalResult)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t, "states": states, "files": tfiles, "progress": ticketProgressPct(t, states, tfiles), "quality": quality})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": s.ticketJSON(t), "states": states, "files": tfiles, "progress": ticketProgressPct(t, states, tfiles), "quality": quality})
 }
 
 // ticketQualityView 工单质量视图（改造 5）：从 FinalResult JSON 抽取用户侧可读的
@@ -795,7 +795,7 @@ func (s *Server) handleApproveList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "tickets": tickets})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "tickets": s.ticketsViewJSON(tickets)})
 }
 
 // handleApproveAction 审批操作接口：approve（批准）/ reject（驳回，带意见）。
@@ -873,11 +873,11 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 	//   短路（见 orchestrator.applyModeOverride），二次质检失败也不会翻案人工结论。
 	if req.Action == "approve" && s.TicketSvc != nil {
 		if _, enqErr := s.TicketSvc.EnqueueTicketRun(context.Background(), t.ID); enqErr == nil {
-			writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t, "queued": true})
+			writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": s.ticketJSON(t), "queued": true})
 			return
 		}
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": t})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": s.ticketJSON(t)})
 }
 
 // applyApprovedTextOverride 把审批员修订的终稿合并进工单载荷 JSON。

@@ -82,29 +82,29 @@ export async function orgUsers(orgId?: number): Promise<any> {
 }
 
 // ============================================================================
-// 部门预算（四期）：租管为部门分配月度 token 预算（∑部门预算=租户总预算）
+// 部门预算（四期）：租管为部门分配月度积分预算（∑部门预算=租户总预算）
 // ============================================================================
 
-/** OrgBudgetDept 预算总览中的部门项 */
+/** OrgBudgetDept 预算总览中的部门项（积分口径） */
 export interface OrgBudgetDept {
   org_id: number
   name: string
-  token_limit: number      // 部门月度预算（0=未启用）
-  used_this_month: number  // 含子树本月消耗
+  limit_points: number // 部门月度预算（0=未启用）
+  used_points: number  // 含子树本月消耗
 }
 
-/** orgBudgetSummary 预算总览：总预算=∑部门预算；全租户本月已用 */
+/** orgBudgetSummary 预算总览（积分口径）：总预算=∑部门预算；全租户本月已用 */
 export async function orgBudgetSummary(): Promise<AdminResp & {
-  summary?: { total_limit: number; used_this_month: number; depts: OrgBudgetDept[] }
+  summary?: { total_limit_points: number; used_this_month_points: number; depts: OrgBudgetDept[] }
 }> {
   return request('/api/admin/org-budget', { headers: authHeaders() })
 }
 
-/** orgTokenLimit 设置部门月度 token 预算（0=关闭该部门的部门墙）。 */
-export async function orgTokenLimit(orgId: number, limit: number): Promise<AdminResp> {
+/** orgTokenLimit 设置部门月度积分预算（0=关闭该部门的部门墙）。 */
+export async function orgTokenLimit(orgId: number, limitPoints: number): Promise<AdminResp> {
   return request('/api/admin/orgs/token-limit', {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ org_id: orgId, limit }),
+    body: JSON.stringify({ org_id: orgId, limit_points: limitPoints }),
   })
 }

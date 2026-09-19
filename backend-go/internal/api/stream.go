@@ -664,14 +664,17 @@ func timeNow() int64 {
 	return time.Now().UnixNano()
 }
 
-// userOrgCtx 组装带用户组织/用户的请求上下文（KB 部门包祖先链继承 + 实时计费归属依据，
-// 2026-08-26；性能优化 B1 修正 user_id 归属）。已登录用户取其 org_id 与 id；
-// 匿名/超管平台上下文返回原 ctx（org=0 → 仅企业/共享层；user=0）。
+// userOrgCtx 组装带用户组织/职业角色/用户的请求上下文（KB 部门包祖先链继承 + 实时计费归属依据，
+// 2026-08-26；性能优化 B1 修正 user_id 归属；2026-09-19 角色功能补 job_role 注入）。
+// 已登录用户取其 org_id、job_role 与 id；匿名/超管平台上下文返回原 ctx（org=0 → 仅企业/共享层；user=0）。
 func (s *Server) userOrgCtx(r *http.Request) context.Context {
 	ctx := r.Context()
 	if u := s.authUser(r); u != nil {
 		if u.OrgID > 0 {
 			ctx = engine.WithUserOrg(ctx, u.OrgID)
+		}
+		if u.JobRole != "" {
+			ctx = engine.WithUserJobRole(ctx, u.JobRole)
 		}
 		ctx = tenant.WithUser(ctx, u.ID)
 	}

@@ -91,7 +91,7 @@ echo "=== T 阶段：功能与交易专项深度 UAT ==="
 
 # ---------- T1 线下订单全生命周期 ----------
 B0=$(sq "SELECT balance FROM balance_accounts WHERE tenant_id=$TAID")
-R=$(post "$AH" "{\"tenant_id\":$TAID,\"tokens\":50000,\"money\":0}" /api/admin/orders/create)
+R=$(post "$AH" "{\"tenant_id\":$TAID,\"points\":200,\"money\":0}" /api/admin/orders/create)
 ck T1-order-create '"success":true' "$R"
 OID1=$(echo "$R" | pv '.get("order",{}).get("id") or 0')
 ST1=$(echo "$R" | pv '.get("order",{}).get("status","")')
@@ -106,7 +106,7 @@ ck T1-order-pay '"success":true' "$R"
 ST2=$(sq "SELECT status FROM orders WHERE id=$OID1")
 [ "$ST2" = "paid" ] && { PASS=$((PASS+1)); echo "PASS|T1-order-marked-paid"; } || { FAIL=$((FAIL+1)); echo "FAIL|T1-order-marked-paid($ST2)"; }
 B1=$(( $(sq "SELECT balance FROM balance_accounts WHERE tenant_id=$TAID") - B0 ))
-[ "$B1" = "50000" ] && { PASS=$((PASS+1)); echo "PASS|T1-balance-credit(+$B1)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T1-balance-credit(+$B1, want +50000)"; }
+[ "$B1" = "60000" ] && { PASS=$((PASS+1)); echo "PASS|T1-balance-credit(+$B1)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T1-balance-credit(+$B1, want +60000(200积分×300))"; }
 R=$(post "$AH" "{\"id\":$OID1,\"tenant_id\":$TAID}" /api/admin/orders/refund)
 ck T1-order-refund '"success":true' "$R"
 ST3=$(sq "SELECT status FROM orders WHERE id=$OID1")
@@ -118,7 +118,7 @@ ck T1-refund-dup '已退款|refunded|失败|不存在' "$R"
 
 # ---------- T2 静态码人工确认链路 ----------
 dbcfg static_qr_image 'data:image/png;base64,UATQR' 2>/dev/null
-R=$(post "$H1" '{"tokens":8888,"channel":"manual"}' /api/pay/create)
+R=$(post "$H1" '{"points":30,"channel":"manual"}' /api/pay/create)
 ck T2-manual-create '"success":true' "$R"
 ck T2-manual-qr 'UATQR' "$R"
 OID2=$(echo "$R" | pv '.get("order",{}).get("id") or 0')
@@ -133,7 +133,7 @@ ST4=$(sq "SELECT status FROM orders WHERE id=$OID2")
 [ "$ST4" = "paid" ] && { PASS=$((PASS+1)); echo "PASS|T2-manual-paid"; } || { FAIL=$((FAIL+1)); echo "FAIL|T2-manual-paid($ST4)"; }
 
 # ---------- T3 发票金额一致性（B1） ----------
-R=$(post "$H1" '{"tokens":123456,"channel":"mock"}' /api/pay/create)
+R=$(post "$H1" '{"points":412,"channel":"mock"}' /api/pay/create)
 OID3=$(echo "$R" | pv '.get("order",{}).get("id") or 0')
 post "$H1" "{\"order_id\":$OID3}" /api/pay/simulate >/dev/null
 AM3=$(sq "SELECT amount_money FROM orders WHERE id=$OID3")
@@ -206,7 +206,7 @@ AKB=$(curl -s $B/api/apikeys/create -H "$H2" -H "$J" -d '{"name":"b-key"}' | pv 
 ck T7-openapi-insufficient 'insufficient|余额不足|耗尽' "$(curl -s $B/openapi/v1/translate -H "$J" -H "Authorization: Bearer $AKB" --max-time 60 -d '{"text":"余额不足应当被拦截的开放接口翻译","target_lang":"en"}')"
 
 # ---------- T8 任务中心 ----------
-R=$(post "$AH" '{"title":"UAT任务-每日打卡","reward_tokens":5000,"kind":"daily","enabled":1,"sort_order":1}' /api/admin/tasks/save)
+R=$(post "$AH" '{"title":"UAT任务-每日打卡","reward_points":17,"kind":"daily","enabled":1,"sort_order":1}' /api/admin/tasks/save)
 ck T8-task-save '"success":true' "$R"
 TASK8=$(echo "$R" | pv '.get("id") or 0')
 ck T8-me-tasks '"success":true' "$(get "$H6" /api/me/tasks)"
@@ -271,13 +271,13 @@ BTERM=$(sq "SELECT COUNT(*) FROM kb_entries WHERE tenant_id=$TAID AND package_id
 # ---------- T13 支付回调安全闸 ----------
 ck T13-notify-no-token '拒绝|403' "$(curl -s $B/api/pay/notify/mock -H "$J" -d '{}')"
 ck T13-notify-bad-token '拒绝|403' "$(curl -s $B/api/pay/notify/mock -H "X-Admin-Token: wrong-token" -H "$J" -d '{"order_no":"x","amount":1}')"
-R=$(post "$H1" '{"tokens":777,"channel":"mock"}' /api/pay/create)
+R=$(post "$H1" '{"points":3,"channel":"mock"}' /api/pay/create)
 ONO=$(echo "$R" | pv '.get("order",{}).get("order_no","")')
 R=$(curl -s $B/api/pay/notify/mock -H "X-Admin-Token: $AT" -H "$J" -d "{\"order_no\":\"$ONO\",\"amount\":1}")
 ck T13-notify-wrong-amount '金额不符|验签|拒绝' "$R"
 
 # ---------- T14 权限边界 ----------
-R=$(post "$H1" "{\"tenant_id\":$TBID,\"tokens\":100}" /api/admin/orders/create)
+R=$(post "$H1" "{\"tenant_id\":$TBID,\"points\":1}" /api/admin/orders/create)
 ck T14-tenant-admin-cross-charge '权限不足|403' "$R"
 R=$(post "$H1" '{"scope":"platform","policy":{}}' /api/admin/ops/policy/save)
 ck T14-ops-save-non-super '超级管理员|超管|403' "$R"
@@ -318,7 +318,7 @@ IP=$(dbq "SELECT is_personal FROM tenants WHERE id=$NTID")
 [ "$IP" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T15-personal-db"; } || { FAIL=$((FAIL+1)); echo "FAIL|T15-personal-db(got $IP)"; }
 
 # ⑥ 任务自增 ID（InsertID 修复）：超管建任务返回正 ID，用户可领取（T8 已测领取，此处锁 DB）
-TID15=$(post "$AH" '{"task_type":"once","title":"T15任务","description":"d","reward_tokens":100,"enabled":1,"sort_order":9}' /api/admin/tasks/save | pv '.get("id") or 0')
+TID15=$(post "$AH" '{"task_type":"once","title":"T15任务","description":"d","reward_points":1,"enabled":1,"sort_order":9}' /api/admin/tasks/save | pv '.get("id") or 0')
 [ "${TID15:-0}" -gt 0 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|T15-task-id($TID15)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T15-task-id(got $TID15)"; }
 
 # ---------- T16（G1）并发扣费压力：30 路并发翻译耗尽余额 —— 不透支、不双扣 ----------
@@ -326,13 +326,13 @@ T16U="uatuser_t16$(date +%s)"
 curl -s $B/api/auth/register -H "$J" -d "{\"username\":\"$T16U\",\"password\":\"uatpass123\",\"type\":\"personal\",\"name\":\"T16压力\",\"email\":\"$T16U@test.com\",\"agreed\":true}" >/dev/null
 T16T=$(tok $T16U uatpass123); H16="Authorization: Bearer $T16T"
 T16D=$(sq "SELECT tenant_id FROM users WHERE username='$T16U' LIMIT 1" | tr -d '[:space:]')
-R=$(post "$AH" "{\"tenant_id\":$T16D,\"tokens\":8000,\"money\":0}" /api/admin/orders/create)
+R=$(post "$AH" "{\"tenant_id\":$T16D,\"points\":27,\"money\":0}" /api/admin/orders/create)
 OID16=$(echo "$R" | pv '.get("order",{}).get("id") or 0')
 post "$AH" "{\"id\":$OID16,\"tenant_id\":$T16D}" /api/admin/orders/pay >/dev/null
 # 个人租户注册自带 30 万试用余额，压测前直接钉到 8000 tokens，逼出真实「抢余额」竞争
 dbq "UPDATE balance_accounts SET balance=8000 WHERE tenant_id=$T16D"
 AK16=$(post "$H16" '{"name":"t16-key"}' /api/apikeys/create | pv '.get("api_key","")')
-TOT0=$(get "$H16" /api/billing/balance | pv '.get("total_available",0)')
+TOT0=$(get "$H16" /api/billing/balance | pv '.get("points_available",0)')
 D16=$(mktemp -d)
 for i in $(seq 1 30); do
   curl -s $B/openapi/v1/translate -H "$J" -H "Authorization: Bearer $AK16" --max-time 120 \
@@ -343,13 +343,13 @@ S16=$(cat "$D16"/r*.json 2>/dev/null | grep -c '"success":true')
 E16=$(cat "$D16"/r*.json 2>/dev/null | grep -cE 'insufficient|余额不足|耗尽|"success":false')
 [ $((S16 + E16)) -eq 30 ] && [ "$S16" -ge 1 ] && { PASS=$((PASS+1)); echo "PASS|T16-all-resolved(ok=$S16 refused=$E16)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T16-all-resolved(ok=$S16 refused=$E16)"; }
 sleep 4
-TOT1=$(get "$H16" /api/billing/balance | pv '.get("total_available",0)')
+TOT1=$(get "$H16" /api/billing/balance | pv '.get("points_available",0)')
 [ "${TOT1:-0}" -ge 0 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|T16-no-negative-balance($TOT1)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T16-no-negative-balance($TOT1)"; }
 AL16=$(sq "SELECT COUNT(*) FROM alerts WHERE tenant_id=$T16D AND kind='balance' AND level='critical'" | tr -d '[:space:]')
 [ "${AL16:-0}" -le 1 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|T16-no-false-settle-alert(critical=$AL16)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T16-no-false-settle-alert(critical=$AL16)"; }
 L16=$(sq "SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=$T16D" | tr -d '[:space:]')
-EQ16=$(python3 -c "print(1 if abs($L16 - ($TOT0 - $TOT1)) < 1 else 0)" 2>/dev/null || echo 0)
-[ "$EQ16" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T16-no-double-deduct(ledger=$L16 consumed=$((TOT0 - TOT1)))"; } || { FAIL=$((FAIL+1)); echo "FAIL|T16-no-double-deduct(ledger=$L16 consumed=$((TOT0 - TOT1)))"; }
+EQ16=$(python3 -c "print(1 if abs($L16 - ($TOT0 - $TOT1)*300) <= 900 else 0)" 2>/dev/null || echo 0)   # 积分差折回 token（每次四舍五入≤±1 积分）
+[ "$EQ16" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T16-no-double-deduct(ledger=$L16 consumed=$(( (TOT0 - TOT1)*300 )))"; } || { FAIL=$((FAIL+1)); echo "FAIL|T16-no-double-deduct(ledger=$L16 consumed=$(( (TOT0 - TOT1)*300 )))"; }
 rm -rf "$D16"
 
 # ---------- T17（G4）同租户工单隐私：非创建者不可见详情 ----------
@@ -394,15 +394,15 @@ if echo "$R" | grep -q 'root:'; then FAIL=$((FAIL+1)); echo "FAIL|T20-traversal-
 
 # ---------- T21（G4）已消耗订单退款：实退金额按未消耗比例折算（A3） ----------
 R=$(post "$H1" '{"name":"t21-key"}' /api/apikeys/create); AK21=$(echo "$R" | pv '.get("api_key","")')
-R=$(post "$H1" '{"tokens":40000,"channel":"mock"}' /api/pay/create)
+R=$(post "$H1" '{"points":133,"channel":"mock"}' /api/pay/create)
 OID21=$(echo "$R" | pv '.get("order",{}).get("id") or 0')
 post "$H1" "{\"order_id\":$OID21}" /api/pay/simulate >/dev/null
 sleep 4
-T21A0=$(get "$H1" /api/billing/balance | pv '.get("total_available",0)')
+T21A0=$(get "$H1" /api/billing/balance | pv '.get("points_available",0)')
 curl -s $B/openapi/v1/translate -H "$J" -H "Authorization: Bearer $AK21" --max-time 60 \
   -d '{"text":"退款窗口计量句 one sentence for consumption window check","target_lang":"en","mode":"pro"}' >/dev/null
 sleep 4
-T21A1=$(get "$H1" /api/billing/balance | pv '.get("total_available",0)')
+T21A1=$(get "$H1" /api/billing/balance | pv '.get("points_available",0)')
 CONSUMED21=$((T21A0 - T21A1))
 [ "$CONSUMED21" -gt 0 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|T21-consumption-window(+$CONSUMED21)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T21-consumption-window($CONSUMED21)"; }
 R=$(post "$AH" "{\"id\":$OID21,\"tenant_id\":$TAID}" /api/admin/orders/refund)
@@ -412,7 +412,7 @@ ST21=$(sq "SELECT status FROM orders WHERE id=$OID21" | tr -d '[:space:]')
 RM21=$(sq "SELECT COALESCE(refund_money,0) FROM orders WHERE id=$OID21" | tr -d '[:space:]')
 AM21=$(sq "SELECT amount_money FROM orders WHERE id=$OID21" | tr -d '[:space:]')
 LT21=$(python3 -c "print(1 if 0 < $RM21 < $AM21 else 0)" 2>/dev/null || echo 0)
-[ "$LT21" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T21-partial-refund(实退 $RM21 < 全额 ${AM21} ，已消耗 $CONSUMED21 tokens)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T21-partial-refund(refund=$RM21 amount=$AM21 consumed=$CONSUMED21)"; }
+[ "$LT21" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T21-partial-refund(实退 $RM21 < 全额 ${AM21} ，已消耗 $CONSUMED21 积分)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T21-partial-refund(refund=$RM21 amount=$AM21 consumed=$CONSUMED21)"; }
 
 # ---------- T22（G4）退款联动撤销裂变付费奖励（revokePaidReferralIfAllRefunded） ----------
 I22="uatuser_i22$(date +%s)"
@@ -468,9 +468,9 @@ ck T24-scan-idempotent '"success":true' "$(post "$AH" '{}' /api/admin/ops/watchd
 ck T25-sso-exchange-bad-code '"success":false' "$(post '' '{"code":"bogus-code-0001"}' /api/auth/sso/exchange)"
 ck T25-billing-config-anon-denied '"success":false' "$(curl -s $B/api/billing/config)"
 
-# ---------- T26（C26 token 真账）usage/me 展示口径字段 ----------
+# ---------- T26（C26→积分口径）usage/me 展示字段 ----------
 R=$(get "$H1" /api/billing/usage/me)
-ck T26-usage-me-tokens-field '"tokens_available"' "$R"
+ck T26-usage-me-points-field '"points_available"' "$R"
 ck T26-usage-me-sentences-approx '"sentences_estimate"' "$R"
 
 # ---------- T27（F10/H12）OpenAPI 规范自动导出含全部端点 ----------
@@ -720,12 +720,15 @@ PL=$(get "$AH" /api/plans)
 ck T36-plans-free-points '"free_trial_points":1000' "$PL"
 if echo "$PL" | grep -qE 'free_trial_tokens'; then FAIL=$((FAIL+1)); echo "FAIL|T36-plans-no-token-naked"; else PASS=$((PASS+1)); echo "PASS|T36-plans-no-token-naked"; fi
 ck T36-overview-points '"points_available":' "$(get "$H1" /api/billing/my/overview)"
-ck T36-me-rate '"points_tokens_rate":300' "$(curl -s $B/api/auth/me -H "$H1")"
-ck T36-settings-show '"points_tokens_rate":300' "$(SSET)"
-ck T36-settings-rate-zero-reject '"success": *false' "$(SSAVE '{"points_tokens_rate":0}')"
-ck T36-settings-rate-400 '"success": *true' "$(SSAVE '{"points_tokens_rate":400}')"
-ck T36-settings-rate-echo '"points_tokens_rate":400' "$(SSET)"
-SSAVE '{"points_tokens_rate":300}' >/dev/null   # 还原
+# ★ 2026-09-19 积分口径：auth/me 与 settings 出参零 token 裸键，汇率不再下发
+MEJ=$(curl -s $B/api/auth/me -H "$H1")
+if echo "$MEJ" | grep -qE '"[a-z_]*tokens"'; then FAIL=$((FAIL+1)); echo "FAIL|T36-me-no-token-naked"; else PASS=$((PASS+1)); echo "PASS|T36-me-no-token-naked"; fi
+SETJ=$(SSET)
+ck T36-settings-show '"free_trial_points":' "$SETJ"
+if echo "$SETJ" | grep -qE '"[a-z_]*tokens"'; then FAIL=$((FAIL+1)); echo "FAIL|T36-settings-no-token-naked"; else PASS=$((PASS+1)); echo "PASS|T36-settings-no-token-naked"; fi
+ck T36-settings-points-400 '"success": *true' "$(SSAVE '{"free_trial_points":400}')"
+ck T36-settings-points-echo '"free_trial_points":400' "$(SSET)"
+SSAVE '{"free_trial_points":1000}' >/dev/null   # 还原默认体验积分（1000）
 
 # ② S8 敏感词闸（词包见 run_uat 注入：紫火核弹T36；输入命中不进模型）
 AK36=$(post "$H1" '{"name":"t36-key"}' /api/apikeys/create | pv '.get("api_key","")')
@@ -798,12 +801,12 @@ ck T37-p0x-update-org0-403 '未分配部门|无权|权限不足' "$R37b"
 
 # ② T37-2（P0-4）：auto_charge=1 时租户管理员订单保持 pending（仅超管可即时入账）
 dbcfg auto_charge 1
-O37=$(post "$H1" '{"tokens":3000,"money":0}' /api/admin/orders/create)
+O37=$(post "$H1" '{"points":10,"money":0}' /api/admin/orders/create)
 ck T37-ta-order-pending '"status":"pending"' "$O37"
-OA37=$(post "$AH" "{\"tenant_id\":$TAID,\"tokens\":3000,\"money\":0}" /api/admin/orders/create)
+OA37=$(post "$AH" "{\"tenant_id\":$TAID,\"points\":10,\"money\":0}" /api/admin/orders/create)
 ck T37-sa-order-paid '"status":"paid"' "$OA37"
 dbcfg auto_charge 0
-O37c=$(post "$H1" '{"tokens":3000,"money":0}' /api/admin/orders/create)
+O37c=$(post "$H1" '{"points":10,"money":0}' /api/admin/orders/create)
 ck T37-autocharge-off-pending '"status":"pending"' "$O37c"
 
 # ③ T37-3（P0-3）：品牌子域登录返回一次性 sso_code（不再返回裸 token），兑换后得 JWT、单次消费
@@ -955,15 +958,15 @@ T40RG=$(reg "$T40U" uatpass123 "T40C$RANDOM" 演练T40 "$T40U@t.test")
 echo "$T40RG" | grep -q '"success": *true' || echo "  [T40] 注册失败: $(echo "$T40RG" | head -c 160)"
 T40TK=$(tok "$T40U" uatpass123)
 H40="Authorization: Bearer $T40TK"
-T40BAL=$(curl -s $B/api/me/package -H "$H40" | pv '.get("balance_tokens",0)')
+T40BAL=$(curl -s $B/api/me/package -H "$H40" | pv '.get("points_balance",0)')
 T40BAL=${T40BAL:-0}
-echo "  [T40] 新租户余额 token=$T40BAL"
+echo "  [T40] 新租户余额 points=$T40BAL"
 TMPD40=$(mktemp -d)
 head -c 716800 /dev/urandom > "$TMPD40/t40_small.pdf"
 R40S=$(curl -s $B/api/tickets/create-file -H "$H40" -F "files=@$TMPD40/t40_small.pdf" -F "target_langs=en" -F "mode=fast")
 echo "$R40S" | grep -q '"success":true' && { PASS=$((PASS+1)); echo "PASS|T40-pdf-700k-allowed"; } || { FAIL=$((FAIL+1)); echo "FAIL|T40-pdf-700k-allowed($(echo "$R40S" | head -c 200))"; }
-# 大文件：13×余额字节（/12/1.3×1.5 后 ≈1.25×余额 > 余额）；封顶 35MB（<40MB 上传上限）
-T40BIG=$(( T40BAL * 13 )); [ "$T40BIG" -gt 36700160 ] && T40BIG=36700160
+# 大文件：积分余额×汇率300×13 字节（预检按内部 token 估算，/12/1.3×1.5 后仍超余额）；封顶 35MB（<40MB 上传上限）
+T40BIG=$(( T40BAL * 300 * 13 )); [ "$T40BIG" -gt 36700160 ] && T40BIG=36700160
 head -c "$T40BIG" /dev/urandom > "$TMPD40/t40_big.pdf"
 R40B=$(curl -s $B/api/tickets/create-file -H "$H40" -F "files=@$TMPD40/t40_big.pdf" -F "target_langs=en" -F "mode=fast")
 echo "$R40B" | grep -q '"success":false' && echo "$R40B" | grep -q "积分" \
@@ -1002,7 +1005,7 @@ T41ORD=$(echo "$T41L" | python3 -c 'import sys,json;a=[x.get("created_at","") fo
 CHAIN="${MOCK_CHAIN_URL:-http://127.0.0.1:8902}"
 CJ='Content-Type: application/json'
 echo "===== T42 USDT 收款全链路 ====="
-R=$(post "$H1" '{"tokens":8888,"channel":"usdt"}' /api/pay/create)
+R=$(post "$H1" '{"points":30,"channel":"usdt"}' /api/pay/create)
 ck T42-off-reject '未开放' "$R"
 R=$(SSAVE '{"usdt_addr_trc20":"badaddr"}')
 ck T42-bad-addr-rejected '地址格式非法' "$R"
@@ -1014,19 +1017,19 @@ R=$(SSAVE '{"usdt_enabled":"1"}')
 ck T42-enable-ok '"success":true' "$R"
 
 # 下单×2：尾数唯一（同基额两单金额必须互异——无 memo 链上对单的根）
-R=$(post "$H1" '{"tokens":8888,"channel":"usdt","usdt_chain":"trc20"}' /api/pay/create)
+R=$(post "$H1" '{"points":30,"channel":"usdt","usdt_chain":"trc20"}' /api/pay/create)
 ck T42-order-a '"success":true' "$R"
 OIDA=$(echo "$R" | pv '["order"]["id"]')
 ADDR=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["usdt_pay"]["address"])')
 AMTA=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["usdt_pay"]["amount_micro"])')
 TAILA=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["usdt_pay"]["tail"])')
-R2=$(post "$H1" '{"tokens":8888,"channel":"usdt","usdt_chain":"trc20"}' /api/pay/create)
+R2=$(post "$H1" '{"points":30,"channel":"usdt","usdt_chain":"trc20"}' /api/pay/create)
 OIDB=$(echo "$R2" | pv '["order"]["id"]')
 AMTB=$(echo "$R2" | python3 -c 'import sys,json;print(json.load(sys.stdin)["usdt_pay"]["amount_micro"])')
 TAILCHK=$(python3 -c "x=float('$TAILA');print('OK' if 0.000001<=x<=0.009999 else 'BAD')" 2>/dev/null || echo ERR)
 [ "$TAILCHK" = "OK" ] && [ -n "$ADDR" ] && { PASS=$((PASS+1)); echo "PASS|T42-tail-in-range"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-tail-in-range(tail=$TAILA addr=$ADDR)"; }
 [ "$AMTA" != "$AMTB" ] && { PASS=$((PASS+1)); echo "PASS|T42-tail-unique"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-tail-unique($AMTA==$AMTB)"; }
-ck T42-bad-chain-rejected '未开放' "$(post "$H1" '{"tokens":8888,"channel":"usdt","usdt_chain":"doge"}' /api/pay/create)"
+ck T42-bad-chain-rejected '未开放' "$(post "$H1" '{"points":30,"channel":"usdt","usdt_chain":"doge"}' /api/pay/create)"
 
 # 客户声明 txid：必填→格式闸→合法声明落库并进人工核对单
 R=$(post "$H1" "{\"order_id\":$OIDA}" /api/pay/manual-confirm)
@@ -1057,7 +1060,7 @@ sq "UPDATE orders SET status='cancelled' WHERE id=$OIDB AND status='pending'" >/
 
 # 尾数开关：关闭=精确基额（fen*1e6/720 四舍五入）
 SSAVE '{"usdt_tail_enabled":"0"}' >/dev/null
-R=$(post "$H1" '{"tokens":8888,"channel":"usdt"}' /api/pay/create)
+R=$(post "$H1" '{"points":30,"channel":"usdt"}' /api/pay/create)
 OIDX=$(echo "$R" | pv '["order"]["id"]')
 AMTX=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["usdt_pay"]["amount_micro"])')
 MONEY=$(echo "$R" | pv '["order"]["amount_money"]')
@@ -1068,7 +1071,7 @@ SSAVE '{"usdt_tail_enabled":"1"}' >/dev/null
 
 # M2 自动对账（mock 链注入）：错金额=孤儿不入账；精确金额+确认达标=自动入账；重复扫描幂等
 SSAVE '{"usdt_auto_settle":"1"}' >/dev/null
-R=$(post "$H1" '{"tokens":7777,"channel":"usdt"}' /api/pay/create)
+R=$(post "$H1" '{"points":26,"channel":"usdt"}' /api/pay/create)
 OIDC=$(echo "$R" | pv '["order"]["id"]')
 AMTC=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["usdt_pay"]["amount_micro"])')
 TXW=$(python3 -c "print('f0'*32)")
@@ -1100,7 +1103,7 @@ if [ "$T41CHK" = "STILL" ]; then FAIL=$((FAIL+1)); echo "FAIL|T42-paid-left-manu
 # 收尾自关（不留给前端 E2E）：关闭后下单恢复拒单
 SSAVE '{"usdt_auto_settle":"0"}' >/dev/null
 SSAVE '{"usdt_enabled":"0"}' >/dev/null
-ck T42-disable-reject-again '未开放' "$(post "$H1" '{"tokens":8888,"channel":"usdt"}' /api/pay/create)"
+ck T42-disable-reject-again '未开放' "$(post "$H1" '{"points":30,"channel":"usdt"}' /api/pay/create)"
 
 # ---------- T43 今日修复回归（2026-09-16）：RBAC 收紧 / 支付渠道 fail-closed / 发票冲红 ----------
 # 背景：见《核实报告_架构评审发现逐条验证_20260916》。三组断言锁定当日修复，防回归。
@@ -1133,7 +1136,7 @@ sq "UPDATE users SET role='tenant_admin' WHERE id=$BID43"   # 还原现场
 
 # T43-c 发票冲红闭环（C16）：已付订单开票 → void 作废 → 同单可重新开票
 B43_0=$(sq "SELECT balance FROM balance_accounts WHERE tenant_id=$TAID")
-R=$(post "$AH" "{\"tenant_id\":$TAID,\"tokens\":10000,\"money\":0}" /api/admin/orders/create)
+R=$(post "$AH" "{\"tenant_id\":$TAID,\"points\":34,\"money\":0}" /api/admin/orders/create)
 OID43=$(echo "$R" | pv '.get("order",{}).get("id") or 0')
 post "$AH" "{\"id\":$OID43,\"tenant_id\":$TAID}" /api/admin/orders/pay >/dev/null
 sleep 3   # 等 sink 冲刷，避免计量混入（同 A3/T1 口径）

@@ -11,7 +11,7 @@ import type { MenuItem } from '@/ui/langcross/src'
 import { useAuth } from '@/stores/auth'
 import { useT } from '@/i18n'
 import { meContext } from '@/api'
-import { PasswordModal, EmailBindModal, DeactivateModal } from './modals'
+import { PasswordModal, EmailBindModal, DeactivateModal, JobRoleModal } from './modals'
 
 // 菜单图标内联样式：基线对齐 + 与文案留 8px（图标 16×16，文案左对齐）
 const MI: React.CSSProperties = { verticalAlign: '-3px', marginRight: 8, flex: 'none' }
@@ -35,10 +35,13 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
   const [, t] = useT() // ★ E14：lang 未使用
   // 当前用户邮箱，用于改密验证码与换绑弹窗
   const [curEmail, setCurEmail] = useState('')
+  // 当前职业角色 code（2026-09-19）：与邮箱同一次 meContext 取回，供角色弹窗预置
+  const [curJobRole, setCurJobRole] = useState('')
   // 弹窗开关状态
   const [openPwd, setOpenPwd] = useState(false)
   const [openBind, setOpenBind] = useState(false)
   const [openDeact, setOpenDeact] = useState(false)
+  const [openRole, setOpenRole] = useState(false)
   // ContextMenu 开关与锚点坐标
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 })
@@ -50,7 +53,10 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
     ;(async () => {
       try {
         const c = await meContext()
-        if (c.success) setCurEmail(String((c as unknown as { email?: string }).email || ''))
+        if (c.success) {
+          setCurEmail(String((c as unknown as { email?: string }).email || ''))
+          setCurJobRole(String((c as unknown as { job_role?: string }).job_role || ''))
+        }
       } catch { /* 忽略接口错误 */ }
     })()
   }, [user])
@@ -66,6 +72,8 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
     { content: <><Icon n="lock" style={MI} />{t('pwd.title')}</>, value: 'pwd', onClick: () => setOpenPwd(true) },
     // 换绑邮箱：打开绑定/换绑邮箱弹窗
     { content: <><Icon n="mail" style={MI} />{t('menu.changeEmail')}</>, value: 'email', onClick: () => setOpenBind(true) },
+    // 职业角色维护（2026-09-19）：角色只绑用户不绑企业，转岗/转行随时切换
+    { content: <><Icon n="user" style={MI} />{t('role.menu')}</>, value: 'role', onClick: () => setOpenRole(true) },
     // 仅普通用户可注销账号
     ...(user?.role === 'user' ? [{ content: <><Icon n="trash" style={MI} />{t('menu.deactivate')}</>, value: 'deact', onClick: () => setOpenDeact(true) }] : []),
     // 退出登录并提示（末项 danger，ContextMenu 会自动在其上方加 1px 分隔）
@@ -115,6 +123,7 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
       {openBind && <EmailBindModal hasOldEmail={!!curEmail} oldEmail={curEmail} onClose={() => setOpenBind(false)} />}
       {/* 账号注销弹窗 */}
       {openDeact && <DeactivateModal onClose={() => setOpenDeact(false)} />}
+      {openRole && <JobRoleModal current={curJobRole} onClose={() => setOpenRole(false)} onSaved={(code) => setCurJobRole(code)} />}
     </>
   )
 }

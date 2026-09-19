@@ -44,10 +44,10 @@ installFetch();
 
 test('baseUrl 去尾斜杠 + Bearer 认证头与 JSON Content-Type', async () => {
   resetFetch();
-  responders = [{ match: (u) => u.endsWith('/openapi/v1/balance'), body: { balance_tokens: 123 } }];
+  responders = [{ match: (u) => u.endsWith('/openapi/v1/balance'), body: { balance_points: 123 } }];
   const cli = new TranslatorClient('https://api.example.com///', 'rk_test_key');
   const bal = await cli.balance();
-  assert.equal(bal.balance_tokens, 123);
+  assert.equal(bal.balance_points, 123);
   assert.equal(calls[0].url, 'https://api.example.com/openapi/v1/balance');
   assert.equal(calls[0].init.headers['Authorization'], 'Bearer rk_test_key');
 });

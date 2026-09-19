@@ -60,25 +60,18 @@ func writeTaskError(w http.ResponseWriter, code, message string) {
 	})
 }
 
-// balanceOut 组装余额出参字段（★ 双桶口径，评审整改 A1）：
-// balance_tokens=可用总额（台账+永久，主单位）；sub_grants_left/permanent_balance 为明细；
-// balance_sentences_approx 按总额折算。老调用方只读 balance_tokens 即获得正确总额。
+// balanceOut 组装余额出参字段（★ 双桶口径，评审整改 A1 + 2026-09-19 积分口径）：
+// balance_points=可用总额（台账+永久，积分）；points_grants/points_permanent 为明细；
+// balance_sentences_approx 按总额折算句数。token 裸值不再对 API 客户透出
+// （存量 openapi_show_tokens 配置键自 2026-09-19 起不再生效）。
 func (s *Server) balanceOut(tid int64) map[string]interface{} {
 	grants, permanent, total, approx := s.balancePayload(tid)
-	// ★ S1 积分制（2026-09-14）：对外新增 balance_points 积分口径；token 字段默认保留
-	//   （存量 SDK 兼容），system_config openapi_show_tokens=0 时对 API 客户隐藏。
-	out := map[string]interface{}{
+	return map[string]interface{}{
 		"balance_points":           s.Store.PointsFromTokens(total),
 		"points_grants":            s.Store.PointsFromTokens(grants),
 		"points_permanent":         s.Store.PointsFromTokens(permanent),
 		"balance_sentences_approx": approx,
 	}
-	if v, _ := s.Store.GetConfig("openapi_show_tokens"); v != "0" {
-		out["balance_tokens"] = total
-		out["sub_grants_left"] = grants
-		out["permanent_balance"] = permanent
-	}
-	return out
 }
 
 // normalizeTaskMode 归一化模式参数："fast"=快速；其余一律 pro 专业校对。
@@ -447,7 +440,7 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 	switch status {
 	case "completed":
 		// ★ 用量出参：本单实费计费 token 数（真实用量×均摊系数，完成时落库 tickets.tokens_billed）
-		resp["tokens_used"] = t.TokensBilled
+		resp["points_used"] = s.Store.PointsFromTokens(t.TokensBilled)
 		if isFile {
 			tfiles, _ := s.Store.TicketFiles(t.ID)
 			files := make([]map[string]interface{}, 0, len(tfiles))
@@ -607,7 +600,7 @@ func (s *Server) ticketExpiry(ticketID int64) (string, bool) {
 	return exp, true
 }
 
-// handleOpenAPIBalance 查询租户 token 余额与 ≈句数（任意权限的有效 Key 均可查询）。
+// handleOpenAPIBalance 查询租户积分余额与 ≈句数（任意权限的有效 Key 均可查询）。
 func (s *Server) handleOpenAPIBalance(w http.ResponseWriter, r *http.Request) {
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {
@@ -624,7 +617,7 @@ func (s *Server) handleOpenAPIBalance(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]interface{}{
 		"success":   true,
 		"tenant_id": ak.TenantID,
-		"currency":  "tokens",
+		"currency":  "points",
 	}
 	for k, v := range s.balanceOut(ak.TenantID) {
 		resp[k] = v
@@ -646,7 +639,7 @@ const syncTranslateMaxChars = 5000
 // handleOpenAPITranslateSync 同步文本翻译接口（API Key 鉴权）：
 //   - 请求体：{"text": "待翻译文本", "target_langs": ["en"], "mode": "fast"|"pro"}
 //   - 响应体：{"success": true, "translations": {"en": "..."}, "source_text": "...",
-//     "mode": "...", "tokens_used": N}
+//     "mode": "...", "points_used": N}
 //   - 错误码与任务接口同口径：invalid_api_key / key_quota_exceeded /
 //     forbidden / insufficient_balance / text_too_long
 func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Request) {
@@ -710,10 +703,15 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 	// ★ 注入 Key 归属用户组织（2026-08-26 KB继承链）：OpenAPI 调用与站内同租户同权
 	// ★ 交互标记（评审整改 R6）：划译求快，允许抢占 LLM 保留槽
 	// ★ 整改 R-L1：注入用量收集器（WithUsageRecorder），否则 UsageTokens 恒为 0、
-	//   响应 tokens_used 永远为 0（真实计费在 OnUsage 已发生，仅展示字段错）。
+	//   响应 points_used 永远为 0（真实计费在 OnUsage 已发生，仅展示字段错）。
 	syncCtx := r.Context()
-	if cu, uerr := s.Store.GetUser(ak.UserID, ak.TenantID); uerr == nil && cu != nil && cu.OrgID > 0 {
-		syncCtx = engine.WithUserOrg(syncCtx, cu.OrgID)
+	if cu, uerr := s.Store.GetUser(ak.UserID, ak.TenantID); uerr == nil && cu != nil {
+		if cu.OrgID > 0 {
+			syncCtx = engine.WithUserOrg(syncCtx, cu.OrgID)
+		}
+		if cu.JobRole != "" { // ★ 角色功能（2026-09-19）：OpenAPI 与站内同权——Key 归属用户的角色包同样生效
+			syncCtx = engine.WithUserJobRole(syncCtx, cu.JobRole)
+		}
 	}
 	syncCtx = s.Engine.WithUsageRecorder(syncCtx)
 	syncCtx = llm.WithInteractive(syncCtx)
@@ -740,6 +738,6 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 		"translations": res.Data.Translations,
 		"source_text":  res.Data.SourceText,
 		"mode":         res.Data.Mode,
-		"tokens_used":  charged,
+		"points_used":  s.Store.PointsFromTokens(charged),
 	})
 }

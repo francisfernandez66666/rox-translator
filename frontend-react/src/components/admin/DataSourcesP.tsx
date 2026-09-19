@@ -1,5 +1,5 @@
 // ============================================================================
-// components/admin/DataSourcesP.tsx — 行业包/语言文化包自动采集面板（超管 L4）
+// components/admin/DataSourcesP.tsx — 行业包/语言文化包/角色包自动采集面板（超管 L4）
 // 职责：数据源 CRUD/启停/手动采集 + 待审增量批量审批（通过→热加载）+ 概览。
 // 依赖后端：/api/admin/kb-scrape/*（见 api/scrape.ts）。
 // 2026-09-18（UI 融合）：仅调整「最近状态」列配色（成功态由绿色改为中性浅色，
@@ -12,6 +12,7 @@ import { useT, t, tpl } from '@/i18n'
 import { fmtPoints } from '@/utils/points' // ★ S1 审批奖励积分数展示
 import { industryName, INDUSTRY_META } from '@/lib/industries'
 import { industries as fetchIndustries } from '@/api/industry'
+import { personas as fetchPersonas } from '@/api/persona'
 import { LANG_META } from '@/lib/langNames'
 import { Panel, toastResp } from './parts'
 import { confirmDialog } from '@/components/uiDialogs'
@@ -66,6 +67,8 @@ export default function DataSourcesP() {
 
   // ★ 2026-09-10 行业字典动态化：待审筛选/数据源行业下拉动态拉取（超管在「行业管理」维护）
   const [indList, setIndList] = useState<Array<{ code: string; name: string }>>([])
+  // ★ 2026-09-19 角色采集源：persona 包同样走本面板采集，role code 展示需角色字典
+  const [roleList, setRoleList] = useState<Array<{ code: string; name: string }>>([])
   useEffect(() => {
     (async () => {
       try {
@@ -74,7 +77,20 @@ export default function DataSourcesP() {
         if (r.success && r.industries) setIndList(r.industries)
       } catch { /* ignore */ }
     })()
+    ;(async () => {
+      try {
+        const r = await runGuarded(() => fetchPersonas())
+        if (!r) return
+        if (r.success && r.personas) setRoleList(r.personas)
+      } catch { /* ignore */ }
+    })()
   }, [])
+  // 采集源「行业/角色」列显示名：persona 源按角色字典翻译 role code，其余走行业字典
+  const scopeName = (row: { pack_type?: string; industry?: string }) => {
+    if (!row.industry) return '—'
+    if (row.pack_type === 'persona') return roleList.find((x) => x.code === row.industry)?.name || row.industry
+    return industryName(row.industry, lang)
+  }
 
   // ---- 待审池（服务端分页） ----
   const [tab, setTab] = useState<'sources' | 'staged'>('sources')
@@ -190,9 +206,9 @@ export default function DataSourcesP() {
     if (eIds.length) {
       const r = await runGuarded(() => scrapeApprove('entries', eIds, action))
       if (!r) return //  E10：网络/超时异常已提示，中断后续
-      // 只有 approve 才发奖励：r.rewards 是后端逐贡献者的发放明细（内部 token 原值），
-      // 前端求和后按积分口径回显，避免把 token 裸值暴露给运营界面（S1 口径）。
-      if (action === 'approve' && r.rewards?.length) rewardNote = tpl('ds.s13', { a1: fmtPoints(r.rewards.reduce((x: number, y: any) => x + (Number(y.tokens) || 0), 0)) })
+      // 只有 approve 才发奖励：r.rewards 是后端逐贡献者的发放明细（reward_points 积分口径），
+      // 前端求和后直接回显。
+      if (action === 'approve' && r.rewards?.length) rewardNote = tpl('ds.s13', { a1: fmtPoints(r.rewards.reduce((x: number, y: any) => x + (Number(y.reward_points) || 0), 0)) })
       if (!toastResp(r, ok ? tpl('ds.s14', { a1: label, a2: r.applied ?? 0, a3: rewardNote }) : undefined)) ok = false
     }
     if (pIds.length) {
@@ -275,9 +291,9 @@ export default function DataSourcesP() {
   const srcCols: TableColumn<ScrapeSource>[] = [
     { key: 'name', title: t('ds.s22') },
     { key: 'kind', title: t('ds.s23'), render: (row) => kindName(row.kind) },
-    { key: 'pack_type', title: t('ds.s24'), render: (row) => row.pack_type === 'industry' ? t('ds.s25') : t('ds.s26') },
+    { key: 'pack_type', title: t('ds.s24'), render: (row) => row.pack_type === 'industry' ? t('ds.s25') : row.pack_type === 'persona' ? t('ds.sPersona') : t('ds.s26') },
     { key: 'lang', title: t('ds.s27'), render: (row) => row.lang ? langLabelCN(row.lang) : t('ds.s28') },
-    { key: 'industry', title: t('ds.s29'), render: (row) => row.industry ? industryName(row.industry, lang) : '—' },
+    { key: 'industry', title: t('ds.s29'), render: (row) => scopeName(row) },
     { key: 'tier', title: t('ds.s30'), render: (row) => tierTag(row.tier) },
     { key: 'base_url', title: 'URL', render: (row) => row.base_url ? <span style={{ wordBreak: 'break-all' }}>{row.base_url}</span> : '—' },
     // 最近采集状态：2026-09-18 起成功态不再用绿色强调（改中性字色 #E7E9EA），
@@ -295,8 +311,8 @@ export default function DataSourcesP() {
         onChange={() => setSelectedKeys((ks) => toggleRowKeyIn(ks, String(row.key)))} style={{ accentColor: 'var(--lc-text-1)' }} />
     ) },
     { key: 'id', title: 'ID', width: 70 },
-    { key: 'pack_type', title: t('ds.s34'), width: 90, render: (row) => row.pack_type === 'industry' ? <Badge>{t('ds.s35')}</Badge> : <StatusPill tone="success">{t('ds.s36')}</StatusPill> },
-    { key: 'industry', title: t('ds.s37'), width: 110, render: (row) => row.industry ? <Badge>{industryName(row.industry, lang)}</Badge> : '—' },
+    { key: 'pack_type', title: t('ds.s34'), width: 90, render: (row) => row.pack_type === 'industry' ? <Badge>{t('ds.s35')}</Badge> : row.pack_type === 'persona' ? <Badge>{t('ds.sPersona')}</Badge> : <StatusPill tone="success">{t('ds.s36')}</StatusPill> },
+    { key: 'industry', title: t('ds.s37'), width: 110, render: (row) => row.industry ? <Badge>{scopeName(row)}</Badge> : '—' },
     { key: 'tier', title: t('ds.s38'), width: 90, render: (row) => tierTag(row.tier) },
     { key: 'lang', title: t('ds.s39'), width: 90 },
     { key: 'src', title: t('ds.s40') },
@@ -369,6 +385,7 @@ export default function DataSourcesP() {
                   <select className="lc-select" value={form.pack_type} onChange={(e) => setForm((f) => ({ ...f, pack_type: e.target.value }))}>
                     <option value="locale">{t('ds.s64')}</option>
                     <option value="industry">{t('ds.s65')}</option>
+                    <option value="persona">{t('ds.sPersona')}</option>
                   </select></div>
                 <div><div style={{ marginBottom: 4 }}>{t('ds.s66')}</div><input className="lc-input" value={form.lang} onChange={(e) => setForm((f) => ({ ...f, lang: e.target.value }))} placeholder="en" /></div>
                 <div><div style={{ marginBottom: 4 }}>{t('ds.s67')}</div><input className="lc-input" value={form.industry} onChange={(e) => setForm((f) => ({ ...f, industry: e.target.value }))} placeholder="auto / general" /></div>
@@ -393,7 +410,7 @@ export default function DataSourcesP() {
           {tab === 'staged' && (<>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', gap: 0 }}>
-                {([['', t('ds.s76')], ['industry', t('ds.s77')], ['locale', t('ds.s78')]] as const).map(([v, l]) => (
+                {([['', t('ds.s76')], ['industry', t('ds.s77')], ['persona', t('ds.sPersonaFilter')], ['locale', t('ds.s78')]] as const).map(([v, l]) => (
                   <Button key={v} size="sm" variant={stagedFilter.pack_type === v ? 'primary' : 'secondary'}
                     onClick={() => setStagedFilter((f) => ({ ...f, pack_type: v }))}>{l}</Button>
                 ))}

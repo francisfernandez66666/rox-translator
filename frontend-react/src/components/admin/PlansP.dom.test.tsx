@@ -21,7 +21,7 @@ vi.mock('@/api', () => {
     billingQuotaSave: vi.fn(async () => ok()),
     billingOrders: vi.fn(async () => ok({
       orders: [{
-        id: 1, order_no: 'T1-ROTEST01', status: 'paid', amount_tokens: 90000,
+        id: 1, order_no: 'T1-ROTEST01', status: 'paid', amount_points: 300,
         amount_money: 99, channel: 'mock', created_at: '2026-09-16T00:00:00Z',
       }],
     })),
@@ -35,7 +35,7 @@ vi.mock('@/api', () => {
     payManualConfirm: vi.fn(async () => ok()),
     manualConfirmOrders: vi.fn(async () => ok({ orders: [] })),
     plans: vi.fn(async () => ok({ plans: [] })),
-    myPackage: vi.fn(async () => ok({ balance_tokens: 300000, package_code: '', balance_sentences_approx: 600 })),
+    myPackage: vi.fn(async () => ok({ points_balance: 1000, points_grants_left: 2, points_permanent_balance: 300, points_used_month: 45, package_code: '', balance_sentences_approx: 600 })),
     packageSubscribe: vi.fn(async () => ok()),
     packageUpgrade: vi.fn(async () => ok()),
     adminPackages: vi.fn(async () => ok({
@@ -49,7 +49,7 @@ vi.mock('@/api', () => {
     adminPackageDelete: vi.fn(async () => ok()),
     // S1 积分制 + USDT 收款配置（开关开启 → 应渲染 TRC20 地址输入）
     adminPackageSettings: vi.fn(async () => ok({
-      points_tokens_rate: 300, sensitive_gate_enabled: '1',
+      free_trial_points: 1000, sensitive_gate_enabled: '1',
       usdt_enabled: '1', usdt_auto_settle: '0', usdt_tail_enabled: '1',
       usdt_chains: ['trc20'], usdt_rate_fen_per_usdt: 720,
       usdt_addr_trc20: 'T4BJRYfnu29GPWdksz7EMUbiqx5CKSZgov',

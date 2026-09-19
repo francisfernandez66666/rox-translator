@@ -16,8 +16,9 @@ import (
 	"translator/internal/db"
 )
 
-// userCols 用户表查询列清单（Scan 顺序契约；email/deactivate_at/agreed_at 为老库可空列，COALESCE 兜底）。
-const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at, COALESCE(deactivate_at,''), COALESCE(agreed_at,''), COALESCE(must_change_pwd,0), COALESCE(token_version,0)"
+// userCols 用户表查询列清单（Scan 顺序契约；email/deactivate_at/agreed_at/job_role 为老库可空列，COALESCE 兜底）。
+// ★ 补列必须同步全部 Scan 目标（行式 Scan 有 4 处复制此清单，漏改会静默吞行——2026-08-26 事故口径）。
+const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at, COALESCE(deactivate_at,''), COALESCE(agreed_at,''), COALESCE(must_change_pwd,0), COALESCE(token_version,0), COALESCE(job_role,'')"
 
 // orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
 // orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
@@ -59,7 +60,7 @@ func NewStore(db *sql.DB) *Store {
 func scanUser(row *sql.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion)
+		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +154,7 @@ func (s *Store) GetUserByUsernameGlobal(username string) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole); err != nil {
 			continue
 		}
 		out = append(out, &u)
@@ -172,7 +173,7 @@ func (s *Store) ListUsers(tid int64) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole); err != nil {
 			continue
 		}
 		u.PasswordHash = ""
@@ -223,7 +224,7 @@ func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole); err != nil {
 			continue
 		}
 		u.PasswordHash = ""
@@ -255,6 +256,13 @@ func (s *Store) SetUserAgreed(id, tid int64, at string) error {
 // ★ Excel 批量导入用户（2026-09-02 功能）：建号后置 1，用户改密成功后自动清零。
 func (s *Store) SetMustChangePwd(id, tid int64, flag int) error {
 	_, err := s.execW("UPDATE users SET must_change_pwd=?, updated_at=? WHERE id=? AND tenant_id=?", flag, time.Now().Format(time.RFC3339), id, tid)
+	return err
+}
+
+// SetJobRole 更新用户职业角色编码（2026-09-19 需求；code=角色包 persona code，空串=清除）。
+// 角色仅绑定用户层级（users.job_role），不随企业归属变化——退出企业仍存在，可自行维护（转岗语义）。
+func (s *Store) SetJobRole(id, tid int64, code string) error {
+	_, err := s.execW("UPDATE users SET job_role=?, updated_at=? WHERE id=? AND tenant_id=?", code, time.Now().Format(time.RFC3339), id, tid)
 	return err
 }
 
@@ -558,7 +566,7 @@ func (s *Store) ListAllUsers() ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole); err != nil {
 			continue
 		}
 		u.PasswordHash = ""

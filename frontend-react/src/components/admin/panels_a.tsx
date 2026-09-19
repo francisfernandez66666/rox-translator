@@ -131,7 +131,7 @@ export default function Overview() {
       {health && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
           <HealthCard value={String(health.kb_entries ?? '')} label={t('overview.kbEntries')} />
-          <HealthCard value={(health.balance as Any)?.balance != null ? `${fmtPoints(Number((health.balance as Any).balance))}` : ''} label={t('overview.balance')} />
+          <HealthCard value={(health.balance as Any)?.balance_points != null ? `${fmtPoints(Number((health.balance as Any).balance_points))}` : ''} label={t('overview.balance')} />
           <HealthCard value={`${health.flow_steps_enabled ?? ''}/${health.flow_steps_total ?? ''}`} label={t('overview.flowSteps')} />
           <HealthCard value={String(health.usage ? Object.keys(health.usage as object).length : 0)} label={t('overview.usageTypes')} />
           <HealthCard value={health.breaker_open ? t('overview.breakerOpen') : t('overview.breakerNormal')} label={t('overview.mainModel')} />
@@ -634,15 +634,15 @@ export function UsageP() {
   }, [usageFrom, usageTo])
 
   /** 个人用量：基础费用/句数指标卡片 */
-  // ★ S1 积分口径（2026-09-15）：token 类字段（total/today/tokens_available）折积分展示，
+  // ★ 积分口径：total/today/points_available 出参已是积分，卡片补「积分」单位；
   //   句数/次数类保持原值；日期字符串（from/to/date）不再当指标卡渲染；字段给中文标签。
-  const ME_TOKEN_FIELDS = ['total', 'today', 'tokens_available']
+  const ME_POINTS_FIELDS = ['total', 'today', 'points_available']
   const meCards = (d: Any) => !d ? <EmptyState title="—" /> : (
     <div className="stat-grid">
       {Object.entries(d).filter(([, v]) => typeof v === 'number').map(([k, v]) => (
         <div key={k} className="stat-card">
           <div style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('usage.field.' + k) !== 'usage.field.' + k ? t('usage.field.' + k) : k}</div>
-          {ME_TOKEN_FIELDS.includes(k)
+          {ME_POINTS_FIELDS.includes(k)
             ? <b>{fmtPoints(Number(v))} <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--adm-faint)' }}>{t('ss2.unitPoints')}</span></b>
             : <b>{fmtNum(Number(v))}</b>}
         </div>

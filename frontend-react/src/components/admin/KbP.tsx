@@ -28,6 +28,7 @@ import KbUploadDialog from '@/components/KbUploadDialog'
 import DataSourcesP from './DataSourcesP'
 import BrandTermsP from './BrandTermsP'
 import IndustriesP from './IndustriesP'
+import PersonasP from './PersonasP'
 
 /** Any 后端自由 JSON 出参的宽松别名（面板内字段动态取值用） */
 type Any = Record<string, any>
@@ -52,6 +53,7 @@ function packTypeLabel(p: Any, t: (k: string) => string): string {
   if (p.pack_type === 'cross_dept') return t('kb.typeCrossDept')
   if (p.pack_type === 'tenant') return t('kb.typeTenant')
   if (p.pack_type === 'industry') return t('kb.typeIndustry')
+  if (p.pack_type === 'persona') return t('kb.typePersona')
   if (p.pack_type === 'locale') return t('kb.typeLocale')
   return String(p.pack_type)
 }
@@ -60,6 +62,7 @@ function packTypeLabel(p: Any, t: (k: string) => string): string {
 function packScopeLabel(p: Any, t: (k: string) => string, tpl: (k: string, vars?: Record<string, string | number>) => string): string {
   if (p.pack_type === 'locale') return t('kb.scopeUniversal')
   if (p.pack_type === 'industry') return t('kb.scopeIndustry')
+  if (p.pack_type === 'persona') return t('kb.scopePersona')
   if (p.pack_type === 'tenant') return t('kb.scopeTenant')
   if (p.pack_type === 'department') return (p.share_cross_dept ?? 1) === 1 ? t('kb.scopeCross') : t('kb.scopeDept')
   if (p.pack_type === 'cross_dept') return p.cross_all ? t('kb.scopeCrossAll') : tpl('kb.scopeCrossDepts', { n: (p.cross_orgs || []).length })
@@ -149,6 +152,7 @@ export function KbP() {
     ]
     if (isSuper) {
       base.push({ value: 'industry', label: t('kb.typeIndustry') })
+      base.push({ value: 'persona', label: t('kb.typePersona') })
       base.push({ value: 'locale', label: t('kb.typeLocale') })
     }
     return base
@@ -463,6 +467,7 @@ export function KbP() {
       <Tabs activeKey={kbTab} onChange={(k) => setKbTab(k)} items={[
         { key: 'kb', label: t('kb.title') },
         ...(isSuper ? [{ key: 'industries', label: '行业管理' }] : []),
+        ...(isSuper ? [{ key: 'personas', label: t('persona.tab') }] : []),
         { key: 'brand', label: '品牌名' },
         ...(isSuper ? [{ key: 'scrape', label: t('admin.menuDataSources') }] : []),
       ]} />
@@ -529,6 +534,7 @@ export function KbP() {
           <option value="">{t('kb.filterAll')}</option>
           <option value="tenant">{t('kb.typeTenant')}</option>
           <option value="industry">{t('kb.typeIndustry')}</option>
+          <option value="persona">{t('kb.typePersona')}</option>
           <option value="locale">{t('kb.typeLocale')}</option>
           <option value="department">{t('kb.typeDepartment')}</option>
           <option value="cross_dept">{t('kb.typeCrossDept')}</option>
@@ -699,6 +705,7 @@ export function KbP() {
 
       {/* Tab 面板条件渲染：行业管理 / 品牌名 / 数据源采集 */}
       {kbTab === 'industries' && isSuper && <IndustriesP />}
+      {kbTab === 'personas' && isSuper && <PersonasP />}
       {kbTab === 'brand' && <BrandTermsP />}
       {kbTab === 'scrape' && isSuper && <DataSourcesP />}
 

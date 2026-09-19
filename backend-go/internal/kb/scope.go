@@ -3,7 +3,7 @@
 //
 // 语义总图（业务优先级，2026-08-29 调整）：
 //
-//	部门(链内部门包，按祖先距离就近) > 跨部门 > 企业包 > 行业包/文化包 > 无scope兜底
+//	部门(链内部门包，按祖先距离就近) > 跨部门 > 企业包 > 行业包/文化包 > 角色包 > 无scope兜底
 //	注：跨部门仅作例句参考（InChain=false，绝不直接采用），但业务展示优先级排在企业/行业之上。
 //
 // 类型归属本包（kb）的原因：检索层 FindExact/FuzzyHits/ScopedSearch 直接消费，
@@ -20,6 +20,8 @@ type PackScope struct {
 	ChainPacks       map[int64]int    // 链内部门包：包ID → 祖先距离（0=本部门,1=父,...）
 	TenantPackIDs    map[int64]bool   // 企业包集合（pack_id=0 历史行语义上归此层）
 	SharedPackIDs    map[int64]bool   // 行业包集合（注册行业匹配；含宿主租户1的行业包；全行业+超管可见）
+	PersonaPackIDs   map[int64]bool   // 角色包集合（persona；按用户 job_role 装配；宿主租户0；2026-09-19）
+	JobRole          string           // 发起用户的职业角色编码（缓存键组件：不同角色用户不得串缓存）
 	UniversalPackIDs map[int64]bool   // 通用语言习惯包（locale）：全用户可见、最低优先级档（无scope）
 	AllowCrossDept   bool             // 租户策略开关 kb_cross_dept_fallback（默认开）
 	CrossDeptPacks   map[int64]string // 跨部门候选部门包：包ID → 包名（打标用；开关关或无可共享包时为空）
@@ -37,7 +39,7 @@ func (s *PackScope) Distance(packID int64) (int, bool) {
 // Rank 计算行的全局排序秩（越小越优先）——业务优先级裁决依据：
 //
 //	部门(链内部门包，按祖先距离 0..N) > 跨部门(100) > 企业包/历史无主行(200)
-//	> 行业包/文化包(300) > 无scope兜底(400)。
+//	> 行业包/文化包(300) > 角色包(350) > 无scope兜底(400)。
 //
 // 注：跨部门仅作例句参考（InChain=false），但业务展示优先级排在企业/行业之上。
 // 参数 packID=行归属包 ID（0=历史无主行），rowTenant=行宿主租户。
@@ -60,6 +62,9 @@ func (s *PackScope) Rank(packID int64, rowTenant int64) int {
 	if s.SharedPackIDs[packID] {
 		return 300 // 行业包
 	}
+	if s.PersonaPackIDs[packID] {
+		return 350 // 角色包（用户级职业术语，次于行业通用术语）
+	}
 	if s.UniversalPackIDs[packID] {
 		return 400 // 通用语言习惯包（无scope，全用户可见，最低档）
 	}
@@ -74,8 +79,8 @@ func (s *PackScope) InChain(packID int64) bool {
 	if _, ok := s.ChainPacks[packID]; ok {
 		return true
 	}
-	// 企业包与历史行也视作"链内"层级（直接采用域），供模糊采用判定复用
-	return packID == 0 || s.TenantPackIDs[packID] || s.SharedPackIDs[packID] || s.UniversalPackIDs[packID]
+	// 企业包与历史行也视作"链内"层级（直接采用域），供模糊采用判定复用；角色包同属采用域
+	return packID == 0 || s.TenantPackIDs[packID] || s.SharedPackIDs[packID] || s.PersonaPackIDs[packID] || s.UniversalPackIDs[packID]
 }
 
 // CrossName 返回跨部门包的展示名（打标「🌐跨部门命中（来自X）」用）。

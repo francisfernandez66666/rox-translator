@@ -20,7 +20,7 @@ import java.util.Map;
  * <ul>
  *   <li>POST /openapi/v1/tasks           — 创建任务（本客户端仅实现 JSON=文本；multipart 文件批量未实现）</li>
  *   <li>GET  /openapi/v1/tasks/status    — 轮询状态（未完成 status=queued/processing）</li>
- *   <li>GET  /openapi/v1/balance         — 查询 token 余额与 ≈句数</li>
+ *   <li>GET  /openapi/v1/balance         — 查询积分余额与 ≈句数</li>
  *   <li>POST /openapi/v1/kb/stats        — 知识库统计</li>
  *   <li>POST /openapi/v1/billing/usage   — 用量明细</li>
  *   <li>POST /openapi/v1/apikey/rotate   — 轮换 API Key</li>
@@ -40,7 +40,7 @@ import java.util.Map;
  *
  *   // 查询余额
  *   JsonNode balance = cli.balance();
- *   System.out.println("剩余 token: " + balance.get("balance_tokens"));
+ *   System.out.println("剩余积分: " + balance.get("balance_points"));
  * }</pre>
  *
  * <p>错误处理：余额不足时抛出 TranslatorError，error_code == "insufficient_balance"
@@ -182,9 +182,9 @@ public class TranslatorClient {
     }
 
     /**
-     * 查询租户余额 token。
+     * 查询租户余额（积分）。
      *
-     * @return {balance_tokens, balance_sentences_approx}
+     * @return {balance_points, balance_sentences_approx}
      */
     public JsonNode balance() {
         return request("GET", "/openapi/v1/balance", null, null);

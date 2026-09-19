@@ -1,7 +1,7 @@
 // ============================================================================
 // components/Landing.tsx — 官网营销首页（2026-09-18 按画布 721173146990823 屏 6:1 重建）
-// 区块顺序严格对齐画布：导航 → Hero(左文案+右演示卡) → 解决方案三步 → 核心功能
-// bento → 价格三档 → 活动奖励 → FAQ → 收尾 CTA → 页脚。
+// 区块顺序：导航 → Hero(左文案+右演示卡) → 解决方案三步 → 核心功能 bento →
+// 覆盖范围 → 开发者集成 → 价格三档 → 活动奖励 → 更新日志 → FAQ → 关于我们 → 收尾 CTA → 页脚。
 // 动效：Hero 文案 lc-mo-up 节拍入场；演示卡移植 hero-stream.html 三检查点翻译流
 // （原文打字 → 比对状态 → 量尺现身 → 术语逐处 判错/纠正 → 回写峰值 → 定稿）；
 // 其余区块 useReveal 滚动现身，组内 60ms 等速 stagger（动效原则 8）。
@@ -11,8 +11,8 @@
    1. useReveal 与 motion.css 的 .lc-reveal 配对使用——只挂类名不调 hook，元素会永远停在 opacity:0；
    2. 图标一律取自 langcross 线性图标集，禁止混入其它图标库（官网视觉的唯一来源）；
    3. 文案 100% 走 useT 的 land.* 键，词条在 src/i18n/panels/landing.ts，中英两份必须同步补
-      （AGENTS.md 约定 5；本文件不出现任何裸中文文案，只有演示卡数据是例外，见下方 DEMO_* 注释）。 */
-import { useEffect, useRef } from 'react'
+      （AGENTS.md 约定 5；本文件不出现任何裸中文文案，例外只有两处演示数据：DEMO_* 与 DEV_SAMPLE）。 */
+import { useEffect, useRef, useState } from 'react'
 import { useReveal } from '@/ui/langcross/src'
 import {
   ArrowRightIcon,
@@ -29,9 +29,12 @@ import {
   UsersIcon,
 } from '@/ui/langcross/src'
 // 图标在这里只承担「装饰性图示」，不带独立点击语义：卡片图标位固定 24，行内箭头/勾选 14~18
-import { useT } from '@/i18n' // useT() → [语种, t, tpl]；本文件只用 t，语种位以 [, t] 跳过
+import { useT } from '@/i18n' // useT() → [语种, t, tpl]；版权行用 tpl 插值品牌名
 import { useBranding } from '@/branding' // 租户品牌信息：brandName 为空即回落产品名
+import { openAPIDocsUrl } from '@/api/core' // 公开 API 文档地址（同源 /openapi/docs）
 import { LeadForm } from '@/components/LeadForm' // ★ P1-3 收尾留资表单（自带状态，唯一例外）
+import { INDUSTRY_META, industryName } from '@/lib/industries' // 覆盖范围区块：行业包与本页术语大卡同源的一份事实
+import { PERSONA_FALLBACK } from '@/lib/personas' // 覆盖范围区块：八个角色 code 与后端 persona 包对齐
 
 /* —— Hero 演示卡固定内容（画布 6:55 / hero-stream.html 现役三处，改文案必须回查行业叫法） —— */
 const DEMO_SRC = '新车发布启动会定在下周，需进行竞品对标，赋能经销商的销售线索转化。' // 汽车甲方口吻整句，故意埋 3 处机翻易错说法
@@ -44,6 +47,22 @@ const DEMO_TERMS = [
   { w: 'compare', r: 'benchmark', cn: '竞品对标' },
   { w: 'clue', r: 'lead', cn: '销售线索' },
 ] as const // as const：长度与字面量类型都锁死，节拍时长直接取 .length 才不会漂
+
+/* —— 覆盖范围 / 开发者区块的固定数据（与 DEMO_* 同属"演示数据"例外，不走 land.* 键） —— */
+// 文件工单实际可解析的格式（取自后端 internal/fileproc 白名单的对外主流档位；
+// docm/xlsm/ppsm 等宏变体与 ttc 字体包同在，故全站口径写「30+」而不是这里数出来的 20）
+const FILE_FORMATS = [
+  'DOC', 'DOCX', 'PPT', 'PPTX', 'XLS', 'XLSX', 'PDF', 'TXT', 'MD', 'JSON',
+  'XML', 'YAML', 'CSV', 'RTF', 'SRT', 'VTT', 'EPUB', 'ODT', 'ODS', 'ODP',
+] as const
+// 示例 curl 逐字段对齐后端 openapi.v1.json：X-API-Key 鉴权头、text 必填、
+// target_langs 数组、mode ∈ fast|pro。域名与 Key 用环境变量占位，复制过去即可直接跑
+const DEV_SAMPLE = [
+  'curl -X POST "$LANGCROSS_HOST/openapi/v1/translate" \\',
+  '  -H "X-API-Key: $LANGCROSS_API_KEY" \\',
+  '  -H "Content-Type: application/json" \\',
+  `  -d '{"text":"${DEMO_SRC}","target_langs":["en"],"mode":"pro"}'`,
+].join('\n')
 
 /* 时序参数（ms）：移植自 hero-stream.html，节奏只改这一处 */
 const T = {
@@ -65,7 +84,15 @@ function HeroDemo() {
   const [, t] = useT() // 语种位留空：演示卡只有文案随语种变，动画节拍靠 statusStr 变化重挂
   const branding = useBranding()
   const demoRef = useRef<HTMLDivElement>(null) // 挂在最外层 .hd 上：所有 data-hd 查询都以它为根，不污染 document
-  const statusStr = t('land.demoStatus') // 「正在比对汽车行业术语库 · 命中 3 处待校准」——长度参与总时长折算
+  // 复制按钮：用户主动点击才写剪贴板（写操作不弹权限），1.6s 后标签回弹
+  const [copied, setCopied] = useState(false)
+  const copyFinal = () => {
+    navigator.clipboard?.writeText(DEMO_FINAL).then(() => {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    }).catch(() => { /* 非安全上下文剪贴板不可用：静默失败，演示不受影响 */ })
+  }
+  const statusStr = t('land.demoStatus') // 「正在比对汽车行业术语库 · 命中 3 处术语」——长度参与总时长折算
 
   useEffect(() => {
     const root = demoRef.current
@@ -440,8 +467,7 @@ function HeroDemo() {
             <div className="hd-rule" data-hd="rule" /> {/* 下笔线：ceremony 起手写出，给峰值一个"落笔"动作 */}
             <div className="hd-result" data-hd="result">
               <div className="hd-rhead">
-                {/* 结果框头：完成图标 + 结论 + 统计；右侧"复制"是纯示意（pointer-events:none + aria-hidden），
-                    首页不做真实剪贴板写入，免得误触权限弹窗打断演示 */}
+                {/* 结果框头：完成图标 + 结论 + 统计；右侧"复制"写入定稿译文（真实按钮，带已复制反馈） */}
                 <span className="hd-rleft">
                   <span className="hd-rcheck">
                     <span className="hd-ring" data-hd="ring" />
@@ -454,10 +480,10 @@ function HeroDemo() {
                   <span className="hd-rlabel" data-hd="rlabel">{t('land.demoDone')}</span>
                   <span className="hd-rsub" data-hd="meta">{t('land.demoMeta')}</span> {/* 统计口径与 DEMO_TERMS 条数一致（3 / 3） */}
                 </span>
-                <span className="hd-dlbtn" aria-hidden="true">
-                  <ClipboardIcon size={16} />
-                  <span>{t('land.demoCopy')}</span>
-                </span>
+                <button type="button" className="hd-dlbtn" onClick={copyFinal}>
+                  {copied ? <CheckIcon size={16} /> : <ClipboardIcon size={16} />}
+                  <span>{copied ? t('land.demoCopied') : t('land.demoCopy')}</span>
+                </button>
               </div>
               <div className="hd-fwrap" data-hd="fwrap">
                 {/* 定稿译文：同样是 ghost 占位 + 真身覆盖，外层 ::after 负责审校扫光 */}
@@ -472,11 +498,37 @@ function HeroDemo() {
   )
 }
 
+/** 开发者示例代码块：复制按钮写真实 curl（与演示卡同一套剪贴板降级口径，1.6s 回弹） */
+function DevSample() {
+  const [, t] = useT()
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard?.writeText(DEV_SAMPLE).then(() => {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    }).catch(() => { /* 非安全上下文剪贴板不可用：静默失败，代码块仍可读可手动选中复制 */ })
+  }
+  return (
+    <div className="lc-code lc-reveal">
+      <div className="lc-code-bar">
+        {/* 端点标签写死在代码块上：它和 DEV_SAMPLE 是同一份契约的两半，改路径必须两处同改 */}
+        <span>POST /openapi/v1/translate</span>
+        <button type="button" className="lc-code-copy" onClick={copy}>
+          {copied ? <CheckIcon size={14} /> : <ClipboardIcon size={14} />}
+          <span>{copied ? t('land.devCopied') : t('land.devCopy')}</span>
+        </button>
+      </div>
+      {/* pre 保留反斜杠续行：white-space:pre + overflow-x，窄屏横向滚动而不打散命令行 */}
+      <pre className="lc-code-body">{DEV_SAMPLE}</pre>
+    </div>
+  )
+}
+
 /** 胶囊按钮（画布一律 radius 999：主=白底黑字 / 次=描边 / 卡内=浮面底） */
 function Pill(props: {
   variant?: 'pri' | 'ghost' | 'soft' | 'dark' // pri 主投（白底黑字）/ ghost 描边次投 / soft 卡内浮面 / dark 反相卡上的实心黑
   size?: 'sm' | 'md' | 'lg' // 三档定高 42 / 50 / 56：导航用 sm，收尾用 lg，其余一律 md
-  href: string // 只做链接跳转：导航与 CTA 链接用 <a> 而非 <button>（LeadForm 是本页唯一带状态组件），右键新窗口打开也仍然可用
+  href: string // 只做链接跳转：导航与 CTA 链接用 <a> 而非 <button>（带状态的只有 LeadForm/HeroDemo/DevSample 三处），右键新窗口打开也仍然可用
   children: React.ReactNode
 }) {
   const v = props.variant ?? 'pri' // 默认主投：页面上出现次数最多的那颗就是它
@@ -496,13 +548,45 @@ function FIcon(props: { children: React.ReactNode }) {
   return <span className="lc-ficon">{props.children}</span>
 }
 
+// 导航五锚点表：id=页内区块元素 id，key=文案键。导航 JSX 与滚动高亮（scrollspy）共用这一份，
+// 增删区块只改这张表，链接与高亮判定不会各自漂移
+const NAV_SECTIONS = [
+  { id: 'solution', key: 'land.navSolution' },
+  { id: 'features', key: 'land.navFeatures' },
+  { id: 'pricing', key: 'land.navPricing' },
+  { id: 'rewards', key: 'land.navRewards' },
+  { id: 'faq', key: 'land.navFaq' },
+] as const
+
 /** Landing 官网营销首页：未登录 `/` 落地页 */
 export default function Landing() {
-  const [, t] = useT()
+  const [lang, t, tpl] = useT() // lang 给覆盖范围区块：行业 chip 按当前语种取中/英文名
   const branding = useBranding()
   const brand = branding.brandName || t('land.brand') // 品牌租户化了就用租户名，否则回落产品名
   // deps 传 []：只在挂载时扫一次 .lc-reveal。首页 DOM 结构是静态的，没必要随文案变化重建观察器
   const revealRef = useReveal<HTMLDivElement>([])
+
+  // 导航滚动高亮（scrollspy）：给"滚动位置和导航高亮一致"那句注释补上真实逻辑——
+  // 滚过哪个区块的顶线（140px），对应导航链接就点亮；区块之间保持上一块常亮，不做闪烁
+  const [activeSec, setActiveSec] = useState('')
+  useEffect(() => {
+    let raf = 0
+    const onScroll = () => {
+      if (raf) return // rAF 节流：滚动事件每秒可触发上百次，高亮判定一帧一次就够
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        let cur = ''
+        for (const { id } of NAV_SECTIONS) {
+          const el = document.getElementById(id)
+          if (el && el.getBoundingClientRect().top <= 140) cur = id
+        }
+        setActiveSec(cur)
+      })
+    }
+    onScroll() // 挂载即判一次：带 hash 深链进来（/#pricing）首屏就该有正确高亮
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => { window.removeEventListener('scroll', onScroll); if (raf) cancelAnimationFrame(raf) }
+  }, [])
 
   // Hero 入场：先整块下沉压暗（.is-sink）再回弹释放（.is-release）——峰值前先压暗做落差
   const heroRef = useRef<HTMLElement>(null)
@@ -544,9 +628,9 @@ export default function Landing() {
       feats: [t('land.planEntF1'), t('land.planEntF2'), t('land.planEntF3')],
     },
   ]
-  // 首页 FAQ 固定四条产品疑问（land.cfaqN.q / .a 两段式键名）；
-  // 计费类问题留给 /pricing 的 pFaqN*（两套不重复，避免同一份答案抄两遍）
-  const faqs = [1, 2, 3, 4].map((i) => ({ q: t(`land.cfaq${i}.q`), a: t(`land.cfaq${i}.a`) })) // 键名按序号拼：缺词会把 "land.cfaq5.q" 直接渲染出来，漏词条一眼可见
+  // 首页 FAQ 八条（land.cfaqN.q / .a 两段式键名，N=1..8）：覆盖行业/质量/API/安全/计费/体验额度/文件格式/共建奖励；
+  // /pricing 的 pFaqN* 只讲支付与到账，两套不重复，避免同一份答案抄两遍
+  const faqs = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => ({ q: t(`land.cfaq${i}.q`), a: t(`land.cfaq${i}.a`) })) // 键名按序号拼：缺词会把 "land.cfaq9.q" 直接渲染出来，漏词条一眼可见
 
   return (
     <div className="lc-mkt" ref={revealRef}>
@@ -567,12 +651,10 @@ export default function Landing() {
           <span>{brand}</span> {/* 品牌名：租户改名后导航、页脚、演示卡页眉三处同时跟着变 */}
         </a>
         <nav className="lc-nav-links">
-          {/* 5 个锚点顺序 = 页面区块顺序：让"滚动位置"和"导航高亮直觉"始终一致 */}
-          <a href="#solution">{t('land.navSolution')}</a>
-          <a href="#features">{t('land.navFeatures')}</a>
-          <a href="#pricing">{t('land.navPricing')}</a>
-          <a href="#rewards">{t('land.navRewards')}</a>
-          <a href="#faq">{t('land.navFaq')}</a>
+          {/* 5 个锚点顺序 = 页面区块顺序：滚动到哪块，对应链接由 scrollspy 点亮（.on） */}
+          {NAV_SECTIONS.map(({ id, key }) => (
+            <a key={id} href={`#${id}`} className={activeSec === id ? 'on' : undefined}>{t(key)}</a>
+          ))}
         </nav>
         <div className="lc-nav-cta">
           {/* 登录用文字链（低权重），试用用实心按钮（本页唯一主投）：两种强度不并列，避免选择困难 */}
@@ -596,9 +678,9 @@ export default function Landing() {
             <p className="lc-hero-sub lc-mo-up lc-mo-d3">{t('land.heroSub')}</p>
             {/* d1~d5 每档差 60ms（motion.css）：徽章→标题→副题→按钮→信任指标逐拍落位，读作"页面在呼吸"而非整体闪现 */}
             <div className="lc-hero-ctas lc-mo-up lc-mo-d4">
-              {/* 两颗 CTA 都去 /register：预约演示也不跳转去填表单，先进产品再谈需求 */}
+              {/* 主 CTA 去 /register；「预约演示」锚到本页收尾留资表单（#cta）：页内已有真表单，不再空转去注册页 */}
               <Pill href="/register">{t('land.ctaFree')}</Pill>
-              <Pill variant="ghost" href="/register">{t('land.ctaDemo')}</Pill>
+              <Pill variant="ghost" href="#cta">{t('land.ctaDemo')}</Pill>
             </div>
             <div className="lc-hero-trust lc-mo-up lc-mo-d5">
               {/* 信任指标用可核对的事实句（行业数/语言数/是否人工审校），不用形容词：与 FAQ 的口径互相兜住 */}
@@ -653,8 +735,9 @@ export default function Landing() {
           <p className="lc-sec-sub">{t('land.featuresSub')}</p>
         </div>
         <div className="lc-bento-top">
-          <article className="lc-fcard lc-fcard--big lc-reveal lc-mo-lift">
-            {/* 大卡是整段的主角：只它有演示内容，因此独享 32px 内边距与更宽的列 */}
+          <article id="terms" className="lc-fcard lc-fcard--big lc-reveal lc-mo-lift">
+            {/* 大卡是整段的主角：只它有演示内容，因此独享 32px 内边距与更宽的列；
+                id="terms" 给页脚「行业术语库」链接当落点——滚到位直接停在术语对照卡上 */}
             <FIcon><BookIcon size={24} /></FIcon>
             <h3 className="lc-fcard-t">{t('land.fc.terms.t')}</h3>
             <p className="lc-fcard-d">{t('land.fc.terms.d')}</p>
@@ -692,6 +775,84 @@ export default function Landing() {
               <p className="lc-fcard-d">{t(`land.fc.${k}.d`)}</p>
             </article>
           ))}
+        </div>
+      </section>
+
+      {/* 4b. 覆盖范围：统计带 + 行业/角色/文件格式三组 chips。
+          三组数据全部取自系统真实运行清单（行业 INDUSTRY_META、角色 PERSONA_FALLBACK、
+          格式 fileproc 白名单档位），不是排版装饰——这一区块的说服力就来自"名字都可核对" */}
+      <section id="coverage" className="lc-sec">
+        <div className="lc-sec-head lc-reveal">
+          <p className="lc-sec-label">{t('land.secCoverage')}</p>
+          <h2 className="lc-sec-title">{t('land.coverageTitle')}</h2>
+          <p className="lc-sec-sub">{t('land.coverageSub')}</p>
+        </div>
+        <div className="lc-cov-stats">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="lc-cov-stat lc-reveal lc-mo-lift" data-reveal-delay={String((i - 1) * 60)}>
+              {/* 数字走等宽字体：四个统计位并排，字宽不齐会毁掉这一行的"仪表盘感" */}
+              <b>{t(`land.st${i}.n`)}</b>
+              <span>{t(`land.st${i}.l`)}</span>
+            </div>
+          ))}
+        </div>
+        <div className="lc-cov-groups">
+          <div className="lc-cov-group lc-reveal">
+            <h3 className="lc-cov-t">{t('land.covIndustries')}</h3>
+            <p className="lc-cov-d">{t('land.covIndustriesNote')}</p>
+            <div className="lc-chips">
+              {/* 与术语大卡/注册表单同一份 INDUSTRY_META：后端加行业包时这里自动多一枚 chip */}
+              {Object.values(INDUSTRY_META).map((m) => (
+                <span key={m.code} className="lc-chip">{industryName(m.code, lang)}</span>
+              ))}
+            </div>
+          </div>
+          <div className="lc-cov-group lc-reveal">
+            <h3 className="lc-cov-t">{t('land.covRoles')}</h3>
+            <p className="lc-cov-d">{t('land.covRolesNote')}</p>
+            <div className="lc-chips">
+              {/* 展示名走 land.role.* 词条（code 与后端 persona 包对齐），en 语种下不露中文兜底名 */}
+              {PERSONA_FALLBACK.map((p) => (
+                <span key={p.code} className="lc-chip">{t(`land.role.${p.code}`)}</span>
+              ))}
+            </div>
+          </div>
+          <div className="lc-cov-group lc-reveal">
+            <h3 className="lc-cov-t">{t('land.covFiles')}</h3>
+            <p className="lc-cov-d">{t('land.covFilesNote')}</p>
+            <div className="lc-chips">
+              {FILE_FORMATS.map((f) => (
+                <span key={f} className="lc-chip lc-chip--mono">{f}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* 4c. 开发者集成：左栏定位 + 右栏三张能力卡与可复制的真实 curl 示例。
+          端点/鉴权头/字段逐一对齐后端 openapi.v1.json，示例跑不通就是缺陷 */}
+      <section id="developers" className="lc-sec">
+        <div className="lc-dev">
+          <div className="lc-dev-head lc-reveal">
+            <p className="lc-sec-label">{t('land.secDev')}</p>
+            <h2 className="lc-sec-title">{t('land.devTitle')}</h2>
+            <p className="lc-dev-sub">{t('land.devSub')}</p>
+            {/* 文档链走同源 /openapi/docs 真页（新标签打开）：这里是本区块唯一出口，不再摆注册按钮抢动作 */}
+            <a className="lc-dev-doc" href={openAPIDocsUrl()} target="_blank" rel="noopener">
+              <TerminalIcon size={16} />{t('land.devDocBtn')}<ArrowRightIcon size={14} />
+            </a>
+          </div>
+          <div className="lc-dev-body">
+            <div className="lc-dev-feats">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="lc-dev-feat lc-reveal lc-mo-lift" data-reveal-delay={String((i - 1) * 60)}>
+                  <h3 className="lc-dev-t">{t(`land.dev${i}.t`)}</h3>
+                  <p className="lc-dev-d">{t(`land.dev${i}.d`)}</p>
+                </div>
+              ))}
+            </div>
+            <DevSample />
+          </div>
         </div>
       </section>
 
@@ -755,6 +916,28 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* 6b. 更新日志：条目取 land.clN.date/.t/.d（N=1..5），全部对应真实发布记录。
+          这里就是"更新日志"链接的落点——页脚不再造指向不存在页面的死链，新增发版只加词条不改结构 */}
+      <section id="changelog" className="lc-sec">
+        <div className="lc-sec-head lc-reveal">
+          <p className="lc-sec-label">{t('land.secChangelog')}</p>
+          <h2 className="lc-sec-title">{t('land.changelogTitle')}</h2>
+          <p className="lc-sec-sub">{t('land.changelogSub')}</p>
+        </div>
+        <div className="lc-cl-list">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="lc-cl-item lc-reveal" data-reveal-delay={String((i - 1) * 60)}>
+              {/* 日期独立成列：等宽字体保证五条日期左右对齐成一条竖线，读作台账而非散文 */}
+              <span className="lc-cl-date">{t(`land.cl${i}.date`)}</span>
+              <div>
+                <h3 className="lc-cl-t">{t(`land.cl${i}.t`)}</h3>
+                <p className="lc-cl-d">{t(`land.cl${i}.d`)}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {/* 7. FAQ：左标题栏 360 + 右问答列表（1px 分隔线） */}
       {/* 问答一律展开、不做折叠：只有四条，折叠会把"给答案"变成"要多点一次"，也让问题文字不可选中 */}
       <section id="faq" className="lc-sec">
@@ -775,12 +958,34 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* 7b. 关于我们：左定位右三条"工作方式"（与 FAQ 同网格参数，不另造一套版式）。
+          只写页内可验证的事实：术语包/共建奖励在上方区块都在，OpenAPI 文档在页脚可直达 */}
+      <section id="about" className="lc-sec">
+        <div className="lc-about">
+          <div className="lc-about-head lc-reveal">
+            <p className="lc-sec-label">{t('land.secAbout')}</p>
+            <h2 className="lc-sec-title">{t('land.aboutTitle')}</h2>
+            <p className="lc-about-p">{t('land.aboutP')}</p>
+            {/* 这里只放次级幽灵按钮：最终转化动作仍归收尾 CTA 白块，一屏不抢两颗主投 */}
+            <Pill variant="ghost" href="#cta">{t('land.aboutBtn')}</Pill>
+          </div>
+          <div className="lc-about-pts">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="lc-about-pt lc-reveal" data-reveal-delay={String((i - 1) * 60)}>
+                <h3 className="lc-about-t"><CheckIcon size={16} />{t(`land.about${i}.t`)}</h3>
+                <p className="lc-about-d">{t(`land.about${i}.d`)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* 8. 收尾 CTA：白底圆角块 */}
       {/* 整页唯一一次大面积反相：把最后的动作与上面的黑底论证在视觉上切断，读作"到这里可以决定了" */}
-      <section className="lc-cta-wrap">
+      <section id="cta" className="lc-cta-wrap">
         <div className="lc-cta lc-reveal">
           <h2 className="lc-cta-t">{t('land.ctaTitle')}</h2>
-          <p className="lc-cta-sub">{t('land.ctaSub')}</p> {/* 副标是三条降风险承诺（无需卡/可退/随时取消），不是口号 */}
+          <p className="lc-cta-sub">{t('land.ctaSub')}</p> {/* 副标只写可兑现的降风险承诺（无需卡/注册送体验额度） */}
           {/* 收尾只留一颗按钮且用最大档 lg：这里再放个次按钮，等于替用户留了"再想想"的门 */}
           <Pill variant="dark" size="lg" href="/register">{t('land.ctaFree')}</Pill>
           {/* ★ P1-3 留资表单：不注册也能让销售跟上进来——匿名 POST /api/lead（限流+蜜罐+可选验证码） */}
@@ -807,33 +1012,38 @@ export default function Landing() {
           </div>
           <div className="lc-foot-cols">
             <div className="lc-foot-col">
-              {/* 三条产品链接目前都锚到 #features：官网尚无独立的 API/更新日志页，
-                  宁可不跳也不造死链——新增二级页时记得回来把 href 逐条换掉 */}
+              {/* 产品列全部锚到页内真区块：术语库落点是大卡 #terms，不是一律甩给 #features */}
               <b>{t('land.footProduct')}</b>
-              <a href="#features">{t('land.footTermsLib')}</a>
-              <a href="#features">{t('land.footApiDoc')}</a>
-              <a href="#features">{t('land.footChangelog')}</a>
+              <a href="#features">{t('land.footFeatures')}</a>
+              <a href="#terms">{t('land.footTermsLib')}</a>
+              <a href="#pricing">{t('land.footPricingLink')}</a>
+              <a href="#cta">{t('land.footDemo')}</a>
             </div>
             <div className="lc-foot-col">
+              {/* 公司列四条同样有真实落点：关于我们/更新日志是页内新区块，
+                  共建奖励=活动区（邀请+知识库两条合作路径都在线上生效），联系我们=留资表单 */}
               <b>{t('land.footCompany')}</b>
-              <a href="#solution">{t('land.footAbout')}</a>
-              <a href="#rewards">{t('land.footJoin')}</a>
-              <a href="#faq">{t('land.footContact')}</a>
+              <a href="#about">{t('land.footAbout')}</a>
+              <a href="#changelog">{t('land.footChangelog')}</a>
+              <a href="#rewards">{t('land.footCoCreate')}</a>
+              <a href="#cta">{t('land.footContact')}</a>
             </div>
             <div className="lc-foot-col">
               <b>{t('land.footRes')}</b>
+              {/* API 文档指向后端真实公开页 /openapi/docs；帮助中心锚到页内 FAQ；
+                  法务三条走同域 /docs/* 静态页，与 Login、/pricing 页脚共用同一批路径，改路由要三处一起改 */}
+              <a href={openAPIDocsUrl()} target="_blank" rel="noopener">{t('land.footApiDoc')}</a>
               <a href="#faq">{t('land.footHelp')}</a>
-              {/* 法务两条走同域 /docs/* 静态页，与 Login、/pricing 页脚共用同一批路径，改路由要三处一起改 */}
-              <a href="/docs/privacy">{t('land.fPrivacy')}</a>
               <a href="/docs/terms">{t('land.fTerms')}</a>
+              <a href="/docs/privacy">{t('land.fPrivacy')}</a>
+              <a href="/docs/sla">{t('land.footSla')}</a>
             </div>
           </div>
         </div>
         {/* 分隔线用 1px 空 div 而不是 border：这里要的是"上 40 下 20"的不对称呼吸，border 只能贴一边 */}
         <div className="lc-foot-div" />
-        {/* 版权串里的品牌名硬编码在 land.copyright 词条内，不会随租户改名联动（与上方 {brand} 不同源）：
-            多品牌租户上线前要把它挪成模板串，见 AGENTS.md 约定 5 的租户化口径 */}
-        <div className="lc-foot-bot">{t('land.copyright')}</div>
+        {/* 版权行走 {brand} 模板插值：租户改名后与导航/页脚品牌区同源联动（2026-09-19 修硬编码品牌名破口） */}
+        <div className="lc-foot-bot">{tpl('land.copyright', { brand })}</div>
       </footer>
     </div>
   )
@@ -856,6 +1066,8 @@ const LANDING_CSS = `
 /* 只过渡 color：导航是定位工具，hover 时不许位移，否则整条栏像在被推动 */
 .lc-nav-links a{transition:color var(--lc-mo-release) var(--lc-mo-out)}
 .lc-nav-links a:hover{color:var(--lc-text)}
+/* scrollspy 当前区块链接升到最强字色：与 hover 同色但常驻，靠"哪颗最亮"回答"我读到哪了" */
+.lc-nav-links a.on{color:var(--lc-text)}
 /* 右侧两块用 margin-left:auto 顶到最右：中间锚点靠自身 gap 排，不参与挤压 */
 .lc-nav-cta{margin-left:auto;display:flex;align-items:center;gap:20px}
 .lc-nav-login{font-size:15px;font-weight:500;transition:color var(--lc-mo-release) var(--lc-mo-out)}
@@ -918,6 +1130,9 @@ const LANDING_CSS = `
 /* —— 区块共用 —— */
 /* 每个区块统一 80px 内边距：区块之间的"呼吸"全由它给，不再额外加 margin，避免两处调同一间距 */
 .lc-sec{padding:80px}
+/* 锚点避让：吸顶导航高 76px，缺这条时点导航/页脚锚点会把区块标题顶进导航底下（2026-09-19 修）；
+   .lc-fcard--big 也要挂：页脚「行业术语库」跳 #terms，落点是大卡而不是区块头 */
+.lc-sec,.lc-cta-wrap,.lc-fcard--big{scroll-margin-top:96px}
 /* 标题组与内容固定 48px：所有区块同一条呼吸线，读者能预判"下面就是正文" */
 .lc-sec-head{display:flex;flex-direction:column;gap:14px;margin-bottom:48px}
 /* 小标签与标题只差一个字号档：靠字重与色阶分层级，不引入新颜色 */
@@ -936,8 +1151,8 @@ const LANDING_CSS = `
 .lc-step-num{font-family:var(--lc-font-mono);font-size:14px;font-weight:500;color:var(--lc-text-4)}
 .lc-step-t{margin:0;font-size:20px;font-weight:600;color:var(--lc-text-1)}
 .lc-step-d{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
-/* 箭头单独定色 #434952（比 --lc-text-4 更弱）：它是流程记号，不该参与正文对比度 */
-.lc-step-arrow{flex:none;display:flex;align-items:center;color:#434952}
+/* 箭头单独定色 #6A717A（对 #000 约 4.4:1）：它是流程记号，够看见但不与正文抢对比 */
+.lc-step-arrow{flex:none;display:flex;align-items:center;color:#6A717A}
 
 /* —— 4. 核心功能 bento —— */
 /* 776fr/480fr 直接抄画布两列宽度：写 fr 不写 px，才能在区块内边距收缩时按比例跟着缩 */
@@ -961,8 +1176,47 @@ const LANDING_CSS = `
 .lc-td-cn{flex:1;font-size:14px;font-weight:500;color:var(--lc-text-1);min-width:0}
 /* bad/good 同用等宽字体、只差色阶：让"错"与"对"是同一个位置的两种状态，而不是两种东西 */
 .lc-td-bad{font-family:var(--lc-font-mono);font-size:13px;color:var(--lc-text-4)}
-.lc-td-arrow{color:#434952;flex:none}
+.lc-td-arrow{color:#6A717A;flex:none}
 .lc-td-good{font-family:var(--lc-font-mono);font-size:13px;font-weight:500;color:var(--lc-text-1)}
+
+/* —— 4b. 覆盖范围 —— */
+/* 统计带四等分：数字是这一区块的主角，等宽排一排才读成"面板读数"而不是四段散文 */
+.lc-cov-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:24px;margin-bottom:44px}
+.lc-cov-stat{display:flex;flex-direction:column;gap:8px;padding:26px 28px;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:16px;min-width:0}
+.lc-cov-stat b{font-family:var(--lc-font-mono);font-size:clamp(28px,2.4vw,34px);font-weight:700;line-height:1.1;color:var(--lc-text-1)}
+.lc-cov-stat span{font-size:13px;line-height:20px;color:var(--lc-text-3)}
+.lc-cov-groups{display:flex;flex-direction:column;gap:30px}
+.lc-cov-group{display:flex;flex-direction:column;gap:10px}
+.lc-cov-t{margin:0;font-size:18px;font-weight:600;color:var(--lc-text-1)}
+.lc-cov-d{margin:0;font-size:14px;line-height:22px;color:var(--lc-text-3);max-width:760px}
+/* chips 用描边胶囊不用色块：本页的"标签"语法只有一种（同 Hero 语种标签），不为一排格式名新造视觉元素 */
+.lc-chips{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px}
+.lc-chip{padding:7px 14px;border:1.2px solid var(--lc-border-card);border-radius:999px;font-size:13px;color:var(--lc-text-2);background:var(--lc-bg);white-space:nowrap}
+.lc-chip--mono{font-family:var(--lc-font-mono);letter-spacing:.02em;font-size:12px}
+
+/* —— 4c. 开发者集成 —— */
+/* 网格参数照抄 FAQ（360px + 1fr / gap 80）：又一个"左目录右正文"区块，不另造版式 */
+.lc-dev{display:grid;grid-template-columns:360px 1fr;gap:80px;align-items:start}
+.lc-dev-head{display:flex;flex-direction:column;gap:14px;align-items:flex-start}
+.lc-dev-sub{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
+/* 文档出口是文字链+图标不是大按钮：这一区块的动作密度本来就低，别和收尾 CTA 抢主投 */
+.lc-dev-doc{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:var(--lc-text-1);transition:opacity var(--lc-mo-release) var(--lc-mo-out)}
+.lc-dev-doc:hover{opacity:.75}
+.lc-dev-doc svg{flex:none}
+.lc-dev-body{display:flex;flex-direction:column;gap:24px;min-width:0}
+.lc-dev-feats{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.lc-dev-feat{display:flex;flex-direction:column;gap:8px;padding:24px;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:16px;min-width:0}
+.lc-dev-t{margin:0;font-size:16px;font-weight:600;color:var(--lc-text-1)}
+.lc-dev-d{margin:0;font-size:13.5px;line-height:22px;color:var(--lc-text-3)}
+/* 代码块底色用 --lc-deep（与大卡演示行同语法）：页内"嵌进去的界面片段"共用一种深度 */
+.lc-code{border:1.2px solid var(--lc-border-card);border-radius:16px;overflow:hidden;background:var(--lc-deep)}
+.lc-code-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 18px;border-bottom:1px solid var(--lc-border-faint);font-family:var(--lc-font-mono);font-size:12px;letter-spacing:.02em;color:var(--lc-text-3)}
+/* 复制按钮与小号胶囊按钮同形（28 高/8 圆角）：按钮语汇总是在 .hd-dlbtn 一档，不新开尺寸 */
+.lc-code-copy{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:#C8CCD1;font:500 12px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)}
+.lc-code-copy:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
+.lc-code-copy svg{display:block}
+/* white-space:pre：curl 的反斜杠续行是内容的一部分，折行会把它变成一条读不懂的长句；窄屏靠横向滚动 */
+.lc-code-body{margin:0;padding:18px 20px;overflow-x:auto;font-family:var(--lc-font-mono);font-size:13px;line-height:22px;color:var(--lc-text-2);white-space:pre}
 
 /* —— 5. 价格方案 —— */
 /* 三档等宽：价格要能横向对读，一旦不等宽就变成"各说各话"，比较关系直接消失 */
@@ -978,13 +1232,14 @@ const LANDING_CSS = `
 /* 价位是卡内唯一的大字号（36px）：读价格的人只看这一行，其余都要给它让位 */
 .lc-plan-price{font-size:36px;font-weight:700;line-height:1.15}
 .lc-plan-desc{margin:0;font-size:15px;color:var(--lc-text-3)}
-/* 反相卡里的次级文字只能用 text-4（最深的那档灰）：黑底常用的浅灰放到白底上直接不可读 */
-.lc-plan--pro .lc-plan-desc{color:var(--lc-text-4)}
+/* 反相卡的次级文字必须走 on-light 档：黑底体系里的浅灰放到白底上直接不可读（2026-09-19 对比度整改） */
+.lc-plan--pro .lc-plan-desc{color:var(--lc-text-on-light)}
 /* 列表上边距只留 8px：按钮与功能点是一组，间距拉到 gap 会被读成两段内容 */
 .lc-plan-feats{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:12px}
 .lc-plan-feats li{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--lc-text-3)}
-.lc-plan-feats svg{color:#70757A;flex:none}
-.lc-plan--pro .lc-plan-feats li{color:var(--lc-text-4)}
+.lc-plan-feats svg{color:var(--lc-text-3);flex:none}
+.lc-plan--pro .lc-plan-feats li{color:var(--lc-text-on-light)}
+.lc-plan--pro .lc-plan-feats svg{color:var(--lc-text-on-light)}
 
 /* —— 6. 活动奖励 —— */
 /* 两卡等宽（1fr 1fr）：拉新与内容贡献是两条独立增长路径，做成大小卡会被读成主次 */
@@ -1013,8 +1268,29 @@ const LANDING_CSS = `
 .lc-faq-q{margin:0;font-size:18px;font-weight:600;color:var(--lc-text-1)}
 .lc-faq-a{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
 
+/* —— 6b. 更新日志 —— */
+/* 单列限宽 820：这是"台账"不是正文流，行长失控会让日期列与内容读成两栏报纸 */
+.lc-cl-list{display:flex;flex-direction:column;max-width:820px}
+/* 分隔线口径与 FAQ 条目完全一致：同一页里"逐条可读"的内容用同一种线 */
+.lc-cl-item{display:grid;grid-template-columns:112px 1fr;gap:24px;padding:20px 0;border-top:1px solid var(--lc-border-faint)}
+/* 日期等宽字体：五条日期数位天然对齐，左侧收成一根竖线 */
+.lc-cl-date{font-family:var(--lc-font-mono);font-size:13px;color:var(--lc-text-3);padding-top:4px}
+.lc-cl-t{margin:0;font-size:16px;font-weight:600;color:var(--lc-text-1)}
+.lc-cl-d{margin:6px 0 0;font-size:14px;line-height:22px;color:var(--lc-text-3)}
+
+/* —— 7b. 关于我们 —— */
+/* 网格参数照抄 FAQ（360px + 1fr / gap 80）：两个"左目录右正文"区块不该各造一套版式 */
+.lc-about{display:grid;grid-template-columns:360px 1fr;gap:80px}
+.lc-about-head{display:flex;flex-direction:column;gap:14px;align-items:flex-start}
+.lc-about-p{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
+.lc-about-pt{border-top:1px solid var(--lc-border-faint);padding:20px 0;display:flex;flex-direction:column;gap:8px}
+/* 标题 18px 与 FAQ 问题同档：三条是"陈述"不是"问答"，但阅读层级要一致 */
+.lc-about-t{margin:0;font-size:18px;font-weight:600;color:var(--lc-text-1);display:flex;align-items:center;gap:10px}
+.lc-about-t svg{color:var(--lc-text-3);flex:none}
+.lc-about-d{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
+
 /* —— 8. 收尾 CTA —— */
-/* 上边距给 0：它紧贴 FAQ，靠白块本身的反相与上文切开，不需要再留一段黑 */
+/* 上边距给 0：它紧贴上一区块（关于我们），靠白块本身的反相与上文切开，不需要再留一段黑 */
 .lc-cta-wrap{padding:0 80px 80px}
 /* 整页唯一的大面积白 + 居中排版：读到这里只剩一个动作，因此取消所有左对齐的信息密度 */
 .lc-cta{display:flex;flex-direction:column;align-items:center;gap:20px;padding:60px 80px;background:var(--lc-text-1);border-radius:20px;text-align:center}
@@ -1022,7 +1298,7 @@ const LANDING_CSS = `
 /* 白块里的次级文字同样只能取最深那档灰：比 #000 弱一级，既读得清又不抢标题 */
 .lc-cta-sub{margin:0;font-size:16px;color:var(--lc-text-4)}
 
-/* —— 8b. 收尾留资表单（★ P1-3；结构见 components/LeadForm.tsx，本页唯一带状态组件） —— */
+/* —— 8b. 收尾留资表单（★ P1-3；结构见 components/LeadForm.tsx，带状态组件之一，另两处是 HeroDemo/DevSample） —— */
 /* 分隔线两侧各一段 1px 短线：把"免费自助注册"与"留资等回电"两条路在视觉上并置成二选一 */
 .lc-lead-sep{display:flex;align-items:center;gap:14px;width:100%;max-width:560px;font-size:13px;color:var(--lc-text-4)}
 .lc-lead-sep::before,.lc-lead-sep::after{content:'';flex:1;height:1px;background:rgba(0,0,0,.12)}
@@ -1088,6 +1364,11 @@ const LANDING_CSS = `
   .lc-plans{grid-template-columns:1fr} /* 价格竖排后靠 DOM 顺序读：免费→专业→企业，推荐档仍在中间 */
   .lc-rewards{grid-template-columns:1fr}
   .lc-faq{grid-template-columns:1fr;gap:32px} /* 标题栏与问答之间只需一小段距离，80px 会把答案推到首屏外 */
+  .lc-about{grid-template-columns:1fr;gap:32px} /* 与 FAQ 同口径：单列后 80px 会把三条方式推出首屏 */
+  .lc-dev{grid-template-columns:1fr;gap:32px} /* 同上：左栏定长在窄屏只会把右栏正文挤瘪 */
+  .lc-dev-feats{grid-template-columns:1fr} /* 三张能力卡竖排：路径文案 /openapi/v1/… 较长，横排会挤到折行 */
+  .lc-cov-stats{grid-template-columns:repeat(2,1fr)} /* 四联排两联：单列会让统计带比它要引出的内容还长 */
+  .lc-cl-item{grid-template-columns:1fr;gap:4px} /* 日期升到标题正上方：112px 定长在窄屏只会挤瘪正文 */
   .lc-steps{flex-direction:column}
   .lc-steps-slot{align-items:flex-start}
   .lc-step-arrow{transform:rotate(90deg);padding-left:28px} /* 箭头旋转并左缩进到卡的内边距线上 */
@@ -1177,7 +1458,7 @@ const LANDING_CSS = `
 .hd-srctext.typing::after{content:'';display:inline-block;width:2px;height:14px;margin-left:3px;vertical-align:-3px;background:currentColor;animation:hdBlink .9s steps(1) infinite}
 
 /* 状态行：min-height 先占好一格，文案打出来前后都不许顶动下面的量尺 */
-.hd-status{margin-top:14px;min-height:22px;display:flex;align-items:center;gap:10px;font-size:13px;line-height:22px;color:#3E4247;opacity:0;transition:opacity .45s ease}
+.hd-status{margin-top:14px;min-height:22px;display:flex;align-items:center;gap:10px;font-size:13px;line-height:22px;color:var(--lc-text-3);opacity:0;transition:opacity .45s ease}
 .hd-status.in{opacity:1}
 /* 脉冲点常驻无限循环：它表达"系统还活着"，一旦停了观众会以为演示结束 */
 .hd-pulse{width:6px;height:6px;border-radius:999px;background:var(--lc-text-4);flex:none;animation:hdPulse 1.4s ease-in-out infinite}
@@ -1189,9 +1470,9 @@ const LANDING_CSS = `
 .hd-steps{margin-top:16px;margin-bottom:16px}
 .hd-slabels{display:flex;margin-bottom:8px}
 /* flex:1 把整条尺按术语条数等分：标签落点与 JS 写进 style 的百分比共用同一套比例，天然对齐 */
-.hd-sl{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-size:12px;line-height:16px;letter-spacing:.02em;color:#3F444B;white-space:nowrap;opacity:0;transition:color .5s ease}
+.hd-sl{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-size:12px;line-height:16px;letter-spacing:.02em;color:#666C74;white-space:nowrap;opacity:0;transition:color .5s ease}
 /* 序号单独 10px + 等宽数字：01/02/03 的字宽必须一致，否则后面的中文标签会左右跳动 */
-.hd-sl i{font-style:normal;font-family:var(--lc-font-latin);font-size:10px;font-weight:600;letter-spacing:0;font-variant-numeric:tabular-nums;color:#33383F;transition:color .5s ease}
+.hd-sl i{font-style:normal;font-family:var(--lc-font-latin);font-size:10px;font-weight:600;letter-spacing:0;font-variant-numeric:tabular-nums;color:#5F656D;transition:color .5s ease}
 /* done→cur 只换颜色、不换字重：字重一变行宽就抖，量尺只是背景信息，抖动比对比度低更难受 */
 .hd-sl.done{color:#8A9099}.hd-sl.done i{color:#C8CCD1}
 .hd-sl.cur{color:var(--lc-text-1)}.hd-sl.cur i{color:#fff}
@@ -1339,8 +1620,9 @@ const LANDING_CSS = `
 /* 统计副标平时压到最暗一档：先给结论再给数字；.lit 由 JS 在盖章之后再挂，顺序反了会抢峰值 */
 .hd-rsub{font-size:12px;color:var(--lc-text-4);transition:color .55s ease;white-space:nowrap}
 .hd-rsub.lit{color:var(--lc-text-2)}
-/* 右侧"复制"是纯示意：pointer-events:none + 外层 aria-hidden，首页不做真实剪贴板写入，免得权限弹窗打断演示 */
-.hd-dlbtn{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;color:#C8CCD1;font-size:12px;font-weight:500;line-height:1;pointer-events:none;user-select:none}
+/* 右侧"复制"是真实按钮：点击把定稿译文写入剪贴板并短暂显示"已复制"（font 继承自 .hd-rhead 语境） */
+.hd-dlbtn{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:#C8CCD1;font:500 12px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)}
+.hd-dlbtn:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
 .hd-dlbtn svg{display:block}
 /* display:block 消掉行内 SVG 的基线下沉：图标与 12px 文案要在 28px 高的胶囊里精确居中 */
 

@@ -547,6 +547,19 @@ func (s *Store) PointsFromTokens(tokens int64) int64 {
 	return (tokens + r/2) / r
 }
 
+// TokensFromPoints 积分 → 内部计量 token（写入口折算：对外接口只收积分，落库仍按 token）。
+// 负值归零；rate<=0 时按默认 300 口径（与 PointsTokensRate 兜底一致，防配置异常丢额度）。
+func (s *Store) TokensFromPoints(points int64) int64 {
+	if points <= 0 {
+		return 0
+	}
+	r := s.PointsTokensRate()
+	if r <= 0 {
+		r = 300
+	}
+	return points * r
+}
+
 // MarkupMultiplier 成本均摊系数（billing_markup_multiplier，默认 1.5，强制 ≥1.0）。
 // 对外计费与权益发放统一乘以该系数：扣费侧（用量实时计量）与入账侧（包订单发放）共用同一口径，
 // 保证「1 入账 token = 1 扣费 token」的单位一致；后台可调。

@@ -1,13 +1,13 @@
 // ============================================================================
 // api/tasks.ts — 任务中心域接口
-// 职责：超管任务定义管理（每日/一次性任务 + 永久 token 奖励）+ 用户领取
+// 职责：超管任务定义管理（每日/一次性任务 + 永久积分奖励）+ 用户领取
 // 对应后端：/api/admin/tasks*（超管）与 /api/me/tasks*（登录用户）
 // ============================================================================
 
 /**
  * api/tasks.ts · 职责说明
  * 封装「任务中心」相关接口：
- * - 超管：任务列表 / 新增/更新任务（task_type=daily|once + reward_tokens 永久 token 奖励）/ 删除任务
+ * - 超管：任务列表 / 新增/更新任务（task_type=daily|once + reward_points 永久积分奖励）/ 删除任务
  * - 用户：我的任务列表（含领取状态）/ 一键领取奖励（奖励入永久余额）
  */
 
@@ -19,7 +19,7 @@ export interface UserTask {
   task_type: 'daily' | 'once' // daily=每日任务 / once=一次性任务
   title: string // 任务标题
   description: string // 任务说明（可空）
-  reward_tokens: number // 奖励 token 数（永久余额）
+  reward_points: number // 奖励积分数（永久余额）
   enabled: number // 1=启用 0=停用
   sort_order: number // 排序
   created_at: string
@@ -53,6 +53,6 @@ export async function myTasks(): Promise<AdminResp & { tasks?: UserTaskView[] }>
 }
 
 /** 一键领取任务奖励（奖励入永久余额） */
-export async function claimTask(id: number): Promise<AdminResp & { tokens?: number }> {
+export async function claimTask(id: number): Promise<AdminResp & { points?: number }> {
   return request('/api/me/tasks/claim', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
 }

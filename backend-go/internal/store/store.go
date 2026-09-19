@@ -68,6 +68,7 @@ func New(db *sql.DB) (*Store, error) {
 	s.KBScrapeMigrate()           // ★ 行业/语言文化包自动采集：数据源 + 待审池建表（幂等；2026-09-01）
 	s.SeedDefaultScrapeSources()  // ★ 功能③：通用行业兜底包默认采集源（幂等；无任何 general 源时补建）
 	s.MigrateSharedHostToZero()   // ★ 2026-09-04 共享包宿主迁移：租户1的行业/语言文化包迁至租户0（幂等）
+	s.PersonaMigrate()            // ★ 角色功能（2026-09-19）：users.job_role 补列 + 出厂角色包种入租户0（幂等）
 	s.RepairAutoincrementSeqs()   // ★ 2026-09-03 通知串号根因：sqlite_sequence 与 max(id) 失步修复（幂等）
 	return s, nil
 }

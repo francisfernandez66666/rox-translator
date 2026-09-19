@@ -15,7 +15,6 @@ import { useChat } from '@/hooks/useChat'
 import { myPackage, meContext } from '@/api'
 import { estimateTranslation, validateTranslateFile, TRANSLATE_FILE_ACCEPT } from '@/api/translate'
 import { fmtPoints } from '@/utils/points'
-import { sentenceRateOf, approxSentencesOf } from '@/lib/quotaCalc'
 import type { ChatMessage } from '@/types'
 import { useT, t, tpl } from '@/i18n'
 import LangMultiSelect, { LangChips } from '@/components/LangMultiSelect'
@@ -63,13 +62,13 @@ export default function ChatWindow() {
   const [condenseOn, setCondenseOn] = useState(false)
   const [condenseMax, setCondenseMax] = useState(200)
   // ★ F7：输入预估（防抖 600ms）/ 会话搜索 / 导出
-  const [estimate, setEstimate] = useState<{ min: number; max: number; low: boolean } | null>(null)
+  const [estimate, setEstimate] = useState<{ min: number; max: number; s: number; low: boolean } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQ, setSearchQ] = useState('')
 
-  // ★ 余额 / 用量
-  const [balance, setBalance] = useState<{ tokens: number; approx: number } | null>(null)
-  const [usage, setUsage] = useState<{ today: number; todaySentences: number } | null>(null)
+  // ★ 余额 / 用量（2026-09-19 全积分口径：API 出参即积分，前端零换算）
+  const [balance, setBalance] = useState<{ points: number; approx: number } | null>(null)
+  const [usage, setUsage] = useState<{ today: number } | null>(null)
   const [orgBudget, setOrgBudget] = useState<{ limit: number; used: number; name: string } | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -77,26 +76,19 @@ export default function ChatWindow() {
   const fileRef = useRef<HTMLInputElement>(null)
 
   // ---- 余额 / 用量加载 ----
-  // 从 myPackage 接口读取个人余额、今日用量及企业预算额度
+  // 从 myPackage 接口读取个人余额、今日用量及企业预算额度（均为积分）
   const loadBalance = useCallback(async () => {
     try {
       const r: any = await myPackage()
       if (r && r.success) {
-        if (typeof r.balance_tokens === 'number') {
-          setBalance({
-            tokens: r.balance_tokens,
-            approx: r.balance_sentences_approx ?? approxSentencesOf(r.balance_tokens),
-          })
+        if (typeof r.points_balance === 'number') {
+          setBalance({ points: r.points_balance, approx: r.balance_sentences_approx ?? 0 })
         }
-        const today = typeof r.tokens_used_today === 'number' ? r.tokens_used_today : null
-        if (today !== null) {
-          // ★ 修复（2026-09-02 前端契约审计）：后端 /api/me/package 无 estimate_rate 字段。
-          //   改用余额行「可用 token ÷ ≈句数」反推实际换算率（无余额时兜底 500 句/token）。
-          const rate = sentenceRateOf(r.balance_tokens, r.balance_sentences_approx)
-          setUsage({ today, todaySentences: Math.floor(today / rate) })
+        if (typeof r.points_used_today === 'number') {
+          setUsage({ today: r.points_used_today })
         }
-        if (r.org_budget && r.org_budget.limit > 0) {
-          setOrgBudget({ limit: r.org_budget.limit, used: r.org_budget.used_this_month, name: r.org_budget.name })
+        if (r.org_budget && r.org_budget.points_limit > 0) {
+          setOrgBudget({ limit: r.org_budget.points_limit, used: r.org_budget.points_used_this_month, name: r.org_budget.name })
         } else {
           setOrgBudget(null)
         }
@@ -130,7 +122,7 @@ export default function ChatWindow() {
     localStorage.setItem('translate_mode', m)
   }
 
-  // F7：输入内容变化防抖预估 token 消耗
+  // F7：输入内容变化防抖预估积分消耗（后端直接给积分区间与 ≈句数，零换算）
   useEffect(() => {
     const text = input.trim()
     if (!text || chat.selectedLangs.length === 0) { setEstimate(null); return }
@@ -138,7 +130,7 @@ export default function ChatWindow() {
     const timer = setTimeout(async () => {
       const r = await estimateTranslation(text, chat.selectedLangs, mode)
       if (!alive || !r) return
-      setEstimate({ min: r.tokens_min, max: r.tokens_max, low: r.balance_tokens < r.tokens_max })
+      setEstimate({ min: r.points_min, max: r.points_max, s: r.cost_sentences_approx ?? 0, low: r.points_balance < r.points_max })
     }, 600)
     return () => { alive = false; clearTimeout(timer) }
   }, [input, chat.selectedLangs, mode])
@@ -240,13 +232,13 @@ export default function ChatWindow() {
       {/* 余额 / 用量条 */}
       {(balance || usage || orgBudget) && (
         <div style={{ background: 'rgba(231,233,234,0.06)', color: '#9AA0AA', fontSize: 12, padding: '6px 6%', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid #1a1d22' }}>
-          {balance && <span>{tpl('chat.balanceTokens', { n: fmtPoints(balance.tokens), s: fmtNum(balance.approx) })}</span>}
-          {usage && <span>{tpl('chat.usedTokens', { n: fmtPoints(usage.today), s: fmtNum(usage.todaySentences) })}</span>}
+          {balance && <span>{tpl('chat.balanceTokens', { n: fmtPoints(balance.points), s: fmtNum(balance.approx) })}</span>}
+          {usage && <span>{tpl('chat.usedTokens', { n: fmtPoints(usage.today) })}</span>}
           {orgBudget && <span>{tpl('chat.orgBudgetFmt', { name: orgBudget.name, used: fmtPoints(orgBudget.used), limit: fmtPoints(orgBudget.limit) })}</span>}
-          {/* 预估消耗：句数按 500 句/token 与余额行同口径换算；low（预估上限已超余额）转琥珀加粗 */}
+          {/* 预估消耗：积分区间与 ≈句数都由后端直出（零换算）；low（预估上限已超余额）转琥珀加粗 */}
           {estimate && (
             <span style={estimate.low ? { color: '#D29922', fontWeight: 600 } : undefined}>
-              {tpl('chat.estimateTokens', { min: fmtPoints(estimate.min), max: fmtPoints(estimate.max), s: fmtNum(Math.round((estimate.min + estimate.max) / 2 / 500)), bal: balance ? fmtPoints(balance.tokens) : '0' })}
+              {tpl('chat.estimateTokens', { min: fmtPoints(estimate.min), max: fmtPoints(estimate.max), s: fmtNum(estimate.s), bal: balance ? fmtPoints(balance.points) : '0' })}
               {estimate.low && ` · ${t('chat.estLow')}`}
             </span>
           )}
@@ -272,7 +264,7 @@ export default function ChatWindow() {
         <div style={{ ...CARD, position: 'sticky', top: 0, zIndex: 5, padding: 16, marginBottom: 16, boxShadow: '0 8px 24px rgba(0,0,0,.4)' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: '#E7E9EA', letterSpacing: '.04em' }}>{t('chat.srcLabel')}</span>
-            <span style={{ fontSize: 12, color: '#71767B' }}>{t('chat.sourceAuto')}</span>
+            <span style={{ fontSize: 12, color: '#878D95' }}>{t('chat.sourceAuto')}</span>
           </div>
           {/* F3：dir="auto" 让阿/法等 RTL 文本按内容方向渲染。
               用原生 textarea + 组件库 .lc-textarea 类：autoResize 需要 ref 到真实节点量 scrollHeight；
@@ -297,7 +289,7 @@ export default function ChatWindow() {
           />
           {/* 已选语言 chips + 目标语言选择 */}
           <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            <span style={{ fontSize: 12, color: '#71767B', whiteSpace: 'nowrap' }}>{t('chat.targetLangLabel')}</span>
+            <span style={{ fontSize: 12, color: '#878D95', whiteSpace: 'nowrap' }}>{t('chat.targetLangLabel')}</span>
             <div style={{ minWidth: 260, flex: 1 }}>
               <LangMultiSelect value={chat.selectedLangs} onChange={chat.setSelectedLangs} />
             </div>
@@ -355,7 +347,7 @@ export default function ChatWindow() {
 
         {/* 空状态：欢迎语 */}
         {!chat.messages.length && !chat.isLoading && (
-          <div style={{ textAlign: 'center', padding: '56px 12px', color: '#71767B' }}>
+          <div style={{ textAlign: 'center', padding: '56px 12px', color: '#878D95' }}>
             <div style={{ fontSize: 15, color: '#9AA0AA', marginBottom: 8 }}>{t('chat.welcome')}</div>
             <div style={{ fontSize: 13, maxWidth: 520, margin: '0 auto', lineHeight: 1.8 }}>
               {t2('chat.welcomeSub')}

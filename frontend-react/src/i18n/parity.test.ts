@@ -33,6 +33,7 @@ import * as pReferral from './panels/referral'
 import * as pTasks from './panels/tasks'
 import * as pOps from './panels/ops'
 import * as pIndustries from './panels/industries'
+import * as pPersonas from './panels/personas'
 import * as pBrandterms from './panels/brandterms'
 import * as pChatwin from './panels/chatwin'
 import * as pDatasources from './panels/datasources'
@@ -58,7 +59,7 @@ const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<stri
   { name: 'chat', mod: pChat }, { name: 'packages', mod: pPackages },
   { name: 'feedback', mod: pFeedback }, { name: 'referral', mod: pReferral },
   { name: 'tasks', mod: pTasks }, { name: 'ops', mod: pOps },
-  { name: 'industries', mod: pIndustries }, { name: 'brandterms', mod: pBrandterms },
+  { name: 'industries', mod: pIndustries }, { name: 'personas', mod: pPersonas }, { name: 'brandterms', mod: pBrandterms },
   { name: 'chatwin', mod: pChatwin }, { name: 'datasources', mod: pDatasources },
   { name: 'mybilling', mod: pMybill }, { name: 'landing', mod: pLanding },
   // 与 i18n/index.ts 的合并顺序对齐：新增面板同样追加在末尾
@@ -114,7 +115,7 @@ describe('全局词典取词行为', () => {
 describe('F2 组件 i18n 覆盖扫描', () => {
   const files = [
     'src/components/EditorPage.tsx', 'src/components/TicketsPage.tsx', 'src/components/ChatWindow.tsx',
-    'src/components/admin/DataSourcesP.tsx', 'src/components/admin/IndustriesP.tsx', 'src/components/admin/BrandTermsP.tsx',
+    'src/components/admin/DataSourcesP.tsx', 'src/components/admin/IndustriesP.tsx', 'src/components/admin/PersonasP.tsx', 'src/components/admin/BrandTermsP.tsx',
     'src/App.tsx', 'src/hooks/useChat.tsx', 'src/components/MyBilling.tsx',
   ]
   it('8 个组件文件无残留中文字面量（注释除外）', () => {

@@ -28,7 +28,8 @@ func newIAMTestStore(t *testing.T) *Store {
 		id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, username TEXT, password_hash TEXT,
 		display_name TEXT, role TEXT, status TEXT, created_by INTEGER, last_login_at TEXT NOT NULL DEFAULT '', org_id INTEGER,
 		email TEXT DEFAULT '', created_at TEXT, updated_at TEXT, deactivate_at TEXT DEFAULT '',
-		agreed_at TEXT DEFAULT '', must_change_pwd INTEGER DEFAULT 0, token_version INTEGER DEFAULT 0)`); err != nil {
+		agreed_at TEXT DEFAULT '', must_change_pwd INTEGER DEFAULT 0, token_version INTEGER DEFAULT 0,
+		job_role TEXT DEFAULT '')`); err != nil {
 		t.Fatal(err)
 	}
 	return NewStore(conn)

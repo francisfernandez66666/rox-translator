@@ -8,7 +8,7 @@
  * 封装邀请裂变（推荐奖励）相关的所有接口，包括：
  * - 邀请主页：获取我的邀请码、邀请链接、邀请记录、奖励统计
  * - 二维码获取：带鉴权的邀请二维码图片下载
- * - 运营参数（超管）：总开关、奖励 token 数、有效期等配置
+ * - 运营参数（超管）：总开关、奖励积分数、有效期等配置
  */
 
 import { request, API_BASE, authHeaders, type AdminResp } from './core'
@@ -20,7 +20,7 @@ export interface ReferralRecord {
   invitee_name: string
   invitee_email?: string // 被邀人注册邮箱快照（2026-08-26 前台记录需求）
   type: string // trial_stack=体验叠加 | paid_perm=付费永久奖励
-  tokens: number
+  reward_points: number
   days: number
   paid: boolean
   created_at: string
@@ -34,15 +34,15 @@ export interface ReferralMyResp extends AdminResp {
   records?: ReferralRecord[]
   invited?: number
   trial_count?: number
-  trial_tokens?: number
-  paid_tokens?: number
+  trial_points?: number
+  paid_points?: number
 }
 
 /** ReferralFunnel 邀请漏斗（注册→付费→奖励转化） */
 export interface ReferralFunnel {
   l1_invited: number; l1_paid: number
   l2_invited: number; l2_paid: number
-  reward_tokens_l1: number; reward_tokens_l2: number
+  reward_points_l1: number; reward_points_l2: number
   reg_rewards: number
 }
 
@@ -70,12 +70,12 @@ export async function fetchReferralQrBlob(): Promise<Blob | null> {
   }
 }
 
-/** 邀请裂变运营参数（仅超管可读写）：总开关/奖励 token/有效期等 */
-/** ReferralConfig 邀请奖励运营配置（开关/奖励额度/日上限） */
+/** 邀请裂变运营参数（仅超管可读写）：总开关/奖励积分额度/有效期等 */
+/** ReferralConfig 邀请奖励运营配置（开关/奖励额度/日上限，均为积分口径） */
 export interface ReferralConfig {
   enabled: boolean // 总开关（关闭后绑定与奖励全部停发）
-  reward_tokens: number // 受邀注册→邀请人体验叠加 token
-  paid_reward_tokens: number // 受邀人首笔付费→邀请人奖励 token
+  reward_points: number // 受邀注册→邀请人体验叠加积分
+  paid_reward_points: number // 受邀人首笔付费→邀请人奖励积分
   reward_days: number // 注册邀请奖励有效期（天）；register.go 读取
   paid_reward_days: number // 付费邀请奖励有效期（天）；0=永久
 }
@@ -92,8 +92,8 @@ export async function referralConfigSave(cfg: Partial<ReferralConfig>): Promise<
     headers: authHeaders(),
     body: JSON.stringify({
       enabled: cfg.enabled,
-      reward_tokens: cfg.reward_tokens,
-      paid_reward_tokens: cfg.paid_reward_tokens,
+      reward_points: cfg.reward_points,
+      paid_reward_points: cfg.paid_reward_points,
       reward_days: cfg.reward_days,
       paid_reward_days: cfg.paid_reward_days,
     }),

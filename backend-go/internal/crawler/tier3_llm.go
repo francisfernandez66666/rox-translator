@@ -195,6 +195,16 @@ func (p *llmProducer) buildPrompt(deps *SourceDeps, batch int) string {
 			langName, tgtLang, batch+1, llmBatchSize))
 		return sb.String()
 	}
+	// persona 包（★ 角色功能 2026-09-19）：按职业角色生成岗位高频术语
+	if p.src.PackType == "persona" {
+		role := personaName(p.src.Industry)
+		sb.WriteString(fmt.Sprintf(
+			"你是资深互联网行业翻译专家。请针对职业角色「%s」与目标语言「%s」（%s）输出第 %d 批「该岗位日常工作高频专业用词 zh→%s 对照」。\n"+
+				"严格只输出 JSON，格式：{\"entries\":[{\"src\":\"中文\",\"tgt\":\"%s\"}]}\n"+
+				"每批 %d 条（该角色会议/文档/工单中真实高频出现的术语与行话，地道、避免直译腔），共输出一次 JSON，不要任何多余文字。",
+			role, langName, tgtLang, batch+1, tgtLang, langName, llmBatchSize))
+		return sb.String()
+	}
 	// industry 包
 	industry := industryName(p.src.Industry)
 	sb.WriteString(fmt.Sprintf(
@@ -221,6 +231,24 @@ var industryNames = map[string]string{
 	"auto": "汽车", "realestate": "房产/装修", "b2b": "企业服务/B2B",
 	"education": "教育/留学", "ecommerce": "跨境独立站", "wedding": "婚庆/高端服务",
 	"retail": "电商/零售", "media": "自媒体/内容创作",
+}
+
+// personaNames 角色 code → 中文名（★ 角色功能 2026-09-19；与 store.builtinPersonas 角色字典对齐）。
+var personaNames = map[string]string{
+	"fullstack": "全栈工程师", "frontend": "前端开发", "backend": "后端开发",
+	"pm": "产品经理", "pj": "项目经理", "uiux": "UI/UX 设计",
+	"ops": "运营", "sales": "销售",
+}
+
+// personaName 角色 code → 中文展示名（供 LLM 提示词使用；未知 code 回退原文）。
+func personaName(code string) string {
+	if n, ok := personaNames[code]; ok {
+		return n
+	}
+	if code == "" {
+		return "职场通用"
+	}
+	return code
 }
 
 // cleanJSONFence 去除 Markdown 代码块包裹（```json / ```JSON / ``` 等围栏形式）。

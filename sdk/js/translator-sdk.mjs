@@ -4,7 +4,7 @@
 //   POST /openapi/v1/tasks           创建任务（JSON=文本；multipart=文件批量）
 //   GET  /openapi/v1/tasks/status    轮询状态
 //   GET  /openapi/v1/tasks/download  文件产物下载
-//   GET  /openapi/v1/balance         查询 token 余额与 ≈句数
+//   GET  /openapi/v1/balance         查询积分余额与 ≈句数
 // 用法示例：
 //   import { TranslatorClient } from "./translator-sdk.mjs";
 //   const cli = new TranslatorClient("https://translator.example.com", "rk_xxx");
@@ -149,7 +149,7 @@ export class TranslatorClient {
     }
   }
 
-  /** 查询 token 余额与 ≈句数：{balance_tokens, balance_sentences_approx}。 */
+  /** 查询积分余额与 ≈句数：{balance_points, balance_sentences_approx}。 */
   balance() {
     return this.#fetch("/openapi/v1/balance");
   }

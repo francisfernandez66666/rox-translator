@@ -38,8 +38,8 @@ func (s *Server) usageDisplayFactor() float64 {
 
 // ============ 计费/充值/用量 ============
 
-// handleBalance 余额查询（★ 双桶口径，评审整改 A1：balance 为永久余额，
-// 另附 sub_grants_left 未过期台账与 total_available 可用总额）
+// handleBalance 余额查询（★ 双桶口径，评审整改 A1：永久余额 + 未过期台账 + 可用总额）。
+// ★ 2026-09-19 积分口径：token 裸值出参下线，一律折积分（approx_sentences 保留句数估算）。
 func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
@@ -49,15 +49,19 @@ func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 	tid := s.effTenant(r, u)
 	// ★ P3 修复：余额查询前冲刷计量缓冲，返回即时余额
 	billing.Flush()
-	b, err := s.Store.GetBalance(tid)
+	_, err = s.Store.GetBalance(tid)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	grants, _, _, _ := s.balancePayload(tid)
+	grants, permanent, total, approx := s.balancePayload(tid)
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "balance": b,
-		"sub_grants_left": grants, "total_available": b.Balance + grants,
+		"success": true,
+		// 双桶明细（积分口径）：permanent=永久、grants=未过期台账、total=可用总额
+		"points_permanent":   s.Store.PointsFromTokens(permanent),
+		"points_grants_left": s.Store.PointsFromTokens(grants),
+		"points_available":   s.Store.PointsFromTokens(total),
+		"approx_sentences":   approx,
 	})
 }
 
@@ -110,7 +114,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", "attachment; filename="+name)
 		// UTF-8 BOM：Excel 直开不乱码（与审计导出同口径）
 		w.Write([]byte{0xEF, 0xBB, 0xBF})
-		fmt.Fprintf(w, "id,tenant_id,user_id,task_type,provider,model,quantity,unit_price,cost,biz_kind,biz_mode,charge_kind,created_at\n")
+		fmt.Fprintf(w, "id,tenant_id,user_id,task_type,provider,model,quantity,cost_points,biz_kind,biz_mode,charge_kind,created_at\n")
 		for _, row := range recs {
 			p, m := row.Provider, row.Model
 			qty, cost := row.Quantity, row.Cost
@@ -118,9 +122,10 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 				p, m = "*", "*" // 供应商/模型脱敏（与 JSON 口径一致）
 				qty, cost = scale(qty), scale(cost)
 			}
-			fmt.Fprintf(w, "%d,%d,%d,%s,%s,%s,%d,%d,%d,%s,%s,%s,%s\n",
+			// ★ 2026-09-19 积分口径：费用列折积分出参，内部单价（token/单位）不再外发
+			fmt.Fprintf(w, "%d,%d,%d,%s,%s,%s,%d,%d,%s,%s,%s,%s\n",
 				row.ID, row.TenantID, row.UserID, csvEscape(row.TaskType), csvEscape(p), csvEscape(m),
-				qty, row.UnitPrice, cost, csvEscape(row.BizKind), csvEscape(row.BizMode), csvEscape(row.ChargeKind), csvEscape(row.CreatedAt))
+				qty, s.Store.PointsFromTokens(cost), csvEscape(row.BizKind), csvEscape(row.BizMode), csvEscape(row.ChargeKind), csvEscape(row.CreatedAt))
 		}
 		return
 	}
@@ -150,9 +155,11 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 			row.Cost = scale(row.Cost)
 		}
 	}
+	// ★ 2026-09-19 积分口径：token 费用类数字全部折积分出参（quantity 仍为字符/句数）
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "usage": usage, "total": total, "display_factor": factor,
-		"provider_usage": providerUsage, "trend": trend, "ledger": ledger,
+		"success": true, "usage": s.pointsMapJSON(usage), "total": s.Store.PointsFromTokens(total),
+		"display_factor": factor, "provider_usage": s.pointsMapJSON(providerUsage),
+		"trend": s.pointsMapJSON(trend), "ledger": s.ledgerRowsJSON(ledger),
 	})
 }
 
@@ -190,7 +197,7 @@ func (s *Server) handleManualConfirmOrders(w http.ResponseWriter, r *http.Reques
 		}
 		info[fmt.Sprint(o.ID)] = item
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "orders": orders, "usdt_info": info})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "orders": s.ordersViewJSON(orders), "usdt_info": info})
 }
 
 // handleOrders 查询当前租户的充值 / 订单列表（状态、金额、渠道、时间）。参数 w/r：标准 HTTP；鉴权：租户管理员及以上；按 effTenant 租户隔离；返回 orders 数组。
@@ -205,7 +212,7 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "orders": orders})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "orders": s.ordersViewJSON(orders)})
 }
 
 // handleOrderCreate 创建充值订单（super_admin 为任意租户 / tenant_admin 为本租户自助充值）
@@ -217,13 +224,14 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		TenantID int64   `json:"tenant_id"` // 充值目标租户（0=当前生效租户）
-		Tokens   int64   `json:"tokens"`    // 充值 token 数量（必填，>0）
+		Points   int64   `json:"points"`    // ★ 积分口径：充值积分数（必填，>0；内部折 token 记账）
 		Money    float64 `json:"money"`     // 充值金额（元，可选记录）
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Tokens <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "tokens 必须大于 0"})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Points <= 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "points 必须大于 0"})
 		return
 	}
+	tokens := s.Store.TokensFromPoints(req.Points)
 	if req.TenantID <= 0 {
 		req.TenantID = s.effTenant(r, u)
 	}
@@ -232,14 +240,14 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：只能为本租户充值"})
 		return
 	}
-	o, err := s.Store.CreateOrder(req.TenantID, req.Tokens, req.Money, u.ID)
+	o, err := s.Store.CreateOrder(req.TenantID, tokens, req.Money, u.ID)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
 	// ★ 未显式给金额时按定价回填（评审整改 B1）：发票/对账取数来源
-	if req.Money <= 0 && req.Tokens > 0 {
-		money := float64(s.Store.TokensToFen(req.Tokens)) / 100.0
+	if req.Money <= 0 && tokens > 0 {
+		money := float64(s.Store.TokensToFen(tokens)) / 100.0
 		_ = s.Store.UpdateOrderMoney(o.OrderNo, money)
 		o.AmountMoney = money
 	}
@@ -253,13 +261,13 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 		if perr := s.Store.MarkOrderPaid(o.ID, req.TenantID); perr != nil {
 			writeJSON(w, 200, map[string]interface{}{"success": false,
 				"message": "订单已创建但自动入账失败（保留待支付，可人工确认）: " + store.DebriefDBError(perr),
-				"order":   o})
+				"order":   s.orderViewJSON(o)})
 			return
 		}
 		o.Status = "paid"
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_create", "orders", o.OrderNo)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "order": o})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "order": s.orderViewJSON(o)})
 }
 
 // handleOrderPay 确认支付（super_admin，线下转账）

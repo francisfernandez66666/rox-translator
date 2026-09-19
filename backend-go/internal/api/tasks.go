@@ -18,24 +18,61 @@ import (
 )
 
 // handleAdminTasks 任务列表（超管后台：含停用项，按 sort_order 排序）。
+// ★ 2026-09-19 积分口径：reward_tokens 出参下线，一律折成 reward_points。
 func (s *Server) handleAdminTasks(w http.ResponseWriter, r *http.Request) {
 	_, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "tasks": s.Store.ListUserTasks()})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "tasks": s.taskViews(s.Store.ListUserTasks())})
+}
+
+// taskJSON 任务定义出参视图（token 奖励折成积分，其余字段同名透传）。
+type taskJSON struct {
+	ID          int64  `json:"id"`
+	TaskType    string `json:"task_type"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	RewardPoints int64  `json:"reward_points"` // ★ 积分口径（内部按汇率折回 token 记账）
+	Enabled     int    `json:"enabled"`
+	SortOrder   int    `json:"sort_order"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// taskViews 任务定义列表 → 积分口径出参。
+func (s *Server) taskViews(list []*store.UserTask) []taskJSON {
+	out := make([]taskJSON, 0, len(list))
+	for _, t := range list {
+		out = append(out, taskJSON{
+			ID: t.ID, TaskType: t.TaskType, Title: t.Title, Description: t.Description,
+			RewardPoints: s.Store.PointsFromTokens(t.RewardTokens),
+			Enabled:      t.Enabled, SortOrder: t.SortOrder,
+			CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
+		})
+	}
+	return out
 }
 
 // handleAdminTaskSave 新增/更新任务（超管）。
-// body: id（>0 更新）/ task_type(daily|once) / title / description / reward_tokens / enabled / sort_order。
+// body: id（>0 更新）/ task_type(daily|once) / title / description / reward_points / enabled / sort_order。
+// ★ 积分口径：reward_points 入参，服务端按汇率折算成永久 token 落库。
 func (s *Server) handleAdminTaskSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
 		return
 	}
-	var req store.UserTask
+	var req struct {
+		ID           int64  `json:"id"`
+		TaskType     string `json:"task_type"`
+		Title        string `json:"title"`
+		Description  string `json:"description"`
+		RewardPoints *int64 `json:"reward_points"`
+		Enabled      *int   `json:"enabled"`
+		SortOrder    *int   `json:"sort_order"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
@@ -44,7 +81,17 @@ func (s *Server) handleAdminTaskSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "任务标题不能为空"})
 		return
 	}
-	id, err := s.Store.SaveUserTask(&req)
+	task := store.UserTask{ID: req.ID, TaskType: req.TaskType, Title: req.Title, Description: req.Description}
+	if req.RewardPoints != nil {
+		task.RewardTokens = s.Store.TokensFromPoints(*req.RewardPoints)
+	}
+	if req.Enabled != nil {
+		task.Enabled = *req.Enabled
+	}
+	if req.SortOrder != nil {
+		task.SortOrder = *req.SortOrder
+	}
+	id, err := s.Store.SaveUserTask(&task)
 	if err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
 		return
@@ -88,7 +135,27 @@ func (s *Server) handleMyTasks(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": true, "tasks": []interface{}{}, "disabled": true})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "tasks": s.Store.ListUserTaskViews(u.ID)})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "tasks": s.taskViewList(s.Store.ListUserTaskViews(u.ID))})
+}
+
+// taskViewJSON 用户视角任务出参（积分口径 + 本人领取状态）。
+type taskViewJSON struct {
+	taskJSON
+	Claimed   bool   `json:"claimed"`
+	ClaimedAt string `json:"claimed_at"`
+}
+
+// taskViewList 用户任务视图列表 → 积分口径出参。
+func (s *Server) taskViewList(list []*store.UserTaskView) []taskViewJSON {
+	out := make([]taskViewJSON, 0, len(list))
+	for _, v := range list {
+		tv := taskViewJSON{Claimed: v.Claimed, ClaimedAt: v.ClaimedAt}
+		if len(s.taskViews([]*store.UserTask{&v.UserTask})) > 0 {
+			tv.taskJSON = s.taskViews([]*store.UserTask{&v.UserTask})[0]
+		}
+		out = append(out, tv)
+	}
+	return out
 }
 
 // handleClaimTask 用户领取任务奖励（登录用户：每日任务当日一次 / 一次性任务终身一次）。
@@ -115,5 +182,5 @@ func (s *Server) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "任务不可领取（已领取/已停用/奖励为 0）"})
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "tokens": tokens})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "points": s.Store.PointsFromTokens(tokens)})
 }

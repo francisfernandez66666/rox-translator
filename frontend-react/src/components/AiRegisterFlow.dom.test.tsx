@@ -52,12 +52,21 @@ function mount(prefill: string) {
   )
 }
 
-/** 走到账号信息表单步：点第一个选项（个人版），等 .ar-form 出现 */
+/** 走到账号信息表单步：点第一个选项（个人版）→ 角色问答点「暂不选择」→ 等 .ar-form 出现
+    （2026-09-19 起个人分支在账号表单前多一问职业角色，选项来自角色字典 + 跳过项） */
 async function reachForm(container: HTMLElement) {
   await waitFor(() => {
     const opts = container.querySelectorAll<HTMLButtonElement>('.ar-opt')
     if (opts.length === 0) throw new Error('options not ready')
     fireEvent.click(opts[0])
+  }, { timeout: 3000 })
+  await waitFor(() => {
+    const groups = container.querySelectorAll('.ar-opts')
+    if (groups.length < 2) throw new Error('persona options not ready')
+    const btns = Array.from(groups[groups.length - 1].querySelectorAll<HTMLButtonElement>('button'))
+    const skip = btns.find((b) => (b.textContent || '').includes('暂不选择'))
+    if (!skip) throw new Error('skip option missing')
+    fireEvent.click(skip)
   }, { timeout: 3000 })
   await waitFor(() => {
     expect(container.querySelector('.ar-form')).not.toBeNull()

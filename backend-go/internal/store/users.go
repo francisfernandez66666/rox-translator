@@ -123,6 +123,11 @@ func (s *Store) SetMustChangePwd(id, tid int64, flag int) error {
 	return s.iam.SetMustChangePwd(id, tid, flag)
 }
 
+// SetJobRole 委托 iam.Store：更新用户职业角色编码（persona 包 code；空串=清除）。
+func (s *Store) SetJobRole(id, tid int64, code string) error {
+	return s.iam.SetJobRole(id, tid, code)
+}
+
 // EnsureAdmin 委托 iam.Store
 func (s *Store) EnsureAdmin(tid int64, username, passHash, displayName, email string) error {
 	return s.iam.EnsureAdmin(tid, username, passHash, displayName, email)

@@ -232,6 +232,18 @@ func (e *Engine) UsageTokens(ctx context.Context) (int64, int64) {
 	return 0, 0
 }
 
+// PointsOfTokens 内部计量 token → 对外积分口径（2026-09-19 全面积分口径：
+// token 裸值不再随结果外发，出参统一折积分）。St 缺失（单测/降级）时按默认汇率 300 折算。
+func (e *Engine) PointsOfTokens(tokens int64) int64 {
+	if e != nil && e.St != nil {
+		return e.St.PointsFromTokens(tokens)
+	}
+	if tokens <= 0 {
+		return 0
+	}
+	return (tokens + 150) / 300
+}
+
 // NoteUsageModel 记录本次实际使用的供应商与模型（单语翻译成功路径调用）
 func (e *Engine) NoteUsageModel(ctx context.Context, provider, model string) {
 	if rec, ok := ctx.Value(usageCtxKey{}).(*usageRecord); ok {
@@ -496,7 +508,7 @@ func scopeVisibleID(scope *kb.PackScope, packID, rowTenant int64) bool {
 	if scope.TenantPackIDs[packID] {
 		return true // 企业包
 	}
-	return scope.SharedPackIDs[packID] || scope.UniversalPackIDs[packID] // 行业包 / 通用语言习惯包
+	return scope.SharedPackIDs[packID] || scope.PersonaPackIDs[packID] || scope.UniversalPackIDs[packID] // 行业包 / 角色包 / 通用语言习惯包
 }
 
 // cjkOverlap 计算两条中文的 CJK 字符 Jaccard 重叠率（0~1）
