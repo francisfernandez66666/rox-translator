@@ -18,4 +18,4 @@ console.log(task.status, task.files);
 约束（同 Python SDK）：
 - 成功响应**不含** `success` 字段，以 `task_id` 存在为准；
 - 业务错误为 `{success:false, error_code, message}` 或 HTTP 4xx/5xx；
-- 所有计量按 token 计费，受租户余额与每日配额约束。
+- 所有计量按积分展示，受租户余额与每日配额约束。

@@ -18,7 +18,7 @@ from translator_sdk import TranslatorClient
 cli = TranslatorClient("https://translator.example.com", "你的APIKey")
 r = cli.translate_and_wait("蓝牙钥匙已激活", ["en", "ja"], mode="pro")
 print(r["translations"])   # {"en": "...", "ja": "..."}
-print(r["tokens_used"])    # 本次消耗 token
+print(r["points_used"])    # 本次消耗积分
 ```
 
 ```js
@@ -59,7 +59,7 @@ const blob = await cli.downloadFile(t.task_id);
 - `get_task(id)` — 轮询；未完成 `status=queued/processing`，终态 `completed/failed`
 - `wait_task(id)` / `translate_and_wait(text, ...)` — 阻塞等待封装
 - `download_file(id, path, file_id?)` — 文件产物下载（缺省 zip）
-- `balance()` — 查询 token 余额与 ≈句数换算
+- `balance()` — 查询积分余额与 ≈句数估算
 - `kb_stats()` / `usage()` / `rotate_api_key()` — 辅助接口
 
 ## 错误处理（独立错误码）
@@ -75,8 +75,8 @@ const blob = await cli.downloadFile(t.task_id);
 
 ## 计费说明
 
-按任务全链路真实 LLM token 消耗 × 均摊系数（默认 1.5）从余额扣减；
-每次轮询响应均携带 `balance_tokens` 与 `balance_sentences_approx`。
+按任务全链路真实用量从账户积分余额扣减（计费规则由平台管理员配置）；
+每次轮询响应均携带 `balance_points`（当前积分余额）与 `balance_sentences_approx`。
 
 ## 前置条件
 

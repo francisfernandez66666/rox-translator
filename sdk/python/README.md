@@ -11,7 +11,7 @@ from translator_sdk import TranslatorClient, __version__
 
 cli = TranslatorClient(base_url="https://your-langcross-host", api_key="rk_xxx")
 print(cli.translate_text("今天天气不错", ["en", "ja"]))   # {'en': ..., 'ja': ...}
-print(cli.balance())                                       # token 余额与 ≈句数
+print(cli.balance())                                       # 积分余额与 ≈句数
 ```
 
 - 认证：管理后台「API Key」面板签发的 Bearer Key

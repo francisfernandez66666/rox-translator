@@ -5,11 +5,11 @@ LangCross 纯黑 UI 的 React 组件库。零运行时依赖（React 之外）�
 ## 接入
 
 ```tsx
-// 入口引入一次（顺序：先 token 后组件）
-import "@langcross/ui/css/tokens.css";
-import "@langcross/ui/css/components.css";
+// 入口引入一次（顺序：先 token 后组件）——实际以仓库相对路径引入，见 src/main.tsx
+import "./ui/langcross/css/tokens.css";
+import "./ui/langcross/css/components.css";
 
-import { ToastProvider } from "@langcross/ui";
+import { ToastProvider } from "@/ui/langcross/src";
 
 export default function App() {
   return <ToastProvider>{/* ... */}</ToastProvider>;
@@ -33,7 +33,7 @@ export default function App() {
 | 08 页面骨架 | `PageHeader` `Toolbar`/`ToolbarInput` `AuthCard` | 页头 20/600 + 灰描述 + 右侧动作；筛选行 gap 8；认证卡 400 宽 panel，外层配 `.lc-auth-bg` |
 | 09 移动端（画布「移动端 UI · 390」页提炼） | `MobScreen` `StatusBar` `MobTopBar` `TabBar` `ListCard` `MStat`/`MStatGrid` `MSearch` `MSection` `MobButton` | 390 基准：状态栏 44 + 顶栏 52 + 内容栈（16 边距/gap 12）；TabBar 浮动胶囊 62 高 r36，活跃项实心白底黑字；列表卡 = 状态点 + 标题/meta/摘要 + 操作区 |
 
-可视化预览：直接双击打开 `demo.html`（后台总览整页 + 基础件全景 + 认证卡）、`demo-mobile.html`(390 移动端 4 屏)、`demo-mobile-motion.html`（移动端动效演示：进场节拍 / TabBar 换场 / 翻译流程检查点 / 抽屉，尊重 prefers-reduced-motion）。
+可视化预览：`demo.html` / `demo-mobile.html` / `demo-mobile-motion.html` 三份演示页随设计交接包（`前端及UI相关/langcross-handoff.zip`）分发，未入库；仓库内效果以落地页 `/`、定价页 `/pricing` 与后台 `/admin` 为准。
 
 ## 移动端动效约定（与全站纯黑动效十原则对应）
 
