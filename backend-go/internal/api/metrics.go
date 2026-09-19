@@ -25,6 +25,7 @@ import (
 	"translator/internal/engine"
 	"translator/internal/fileproc"
 	"translator/internal/infra/distlock"
+	"translator/internal/llm"
 	"translator/internal/store"
 )
 
@@ -246,6 +247,21 @@ func (s *Server) metricsText() string {
 		sb.WriteString("# HELP translator_llm_error_rate LLM 调用窗口错误率(0~1)\n# TYPE translator_llm_error_rate gauge\n")
 		sb.WriteString(fmt.Sprintf("translator_llm_error_rate %v\n", s.Engine.ErrorRate()))
 	}
+
+	// ★ B1（2026-09-19 流式与性能增强方案）：prompt 缓存命中 + 流式 TTFT 观测。
+	//   积分口径红线——cached_tokens 属内部成本信号，只出现在 /metrics（监控侧），
+	//   严禁进用户面页面与公开接口响应；B4 前缀重组的收益验证全靠这组序列。
+	obs := llm.Observability()
+	sb.WriteString("# HELP translator_llm_prompt_tokens_total chat 累计输入 token（缓存命中率分母）\n# TYPE translator_llm_prompt_tokens_total counter\n")
+	sb.WriteString(fmt.Sprintf("translator_llm_prompt_tokens_total %d\n", obs.PromptTokens))
+	sb.WriteString("# HELP translator_llm_cached_tokens_total chat 累计命中 prompt 缓存的输入 token\n# TYPE translator_llm_cached_tokens_total counter\n")
+	sb.WriteString(fmt.Sprintf("translator_llm_cached_tokens_total %d\n", obs.CachedTokens))
+	sb.WriteString("# HELP translator_llm_cache_hit_rate prompt 缓存命中率（0~1，进程累计口径）\n# TYPE translator_llm_cache_hit_rate gauge\n")
+	sb.WriteString(fmt.Sprintf("translator_llm_cache_hit_rate %v\n", obs.CacheRate))
+	sb.WriteString("# HELP translator_llm_stream_calls_total 流式调用完成数（usage 可信）\n# TYPE translator_llm_stream_calls_total counter\n")
+	sb.WriteString(fmt.Sprintf("translator_llm_stream_calls_total %d\n", obs.StreamCalls))
+	sb.WriteString("# HELP translator_llm_stream_ttft_avg_ms 流式平均首 token 延迟（ms，请求发出→首个非空 delta）\n# TYPE translator_llm_stream_ttft_avg_ms gauge\n")
+	sb.WriteString(fmt.Sprintf("translator_llm_stream_ttft_avg_ms %.1f\n", obs.StreamTtftAvgMs))
 
 	// 子进程监控指标（fileproc 包收集）
 	procSnap := fileproc.GetProcMetrics().Snapshot()

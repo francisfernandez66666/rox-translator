@@ -10,6 +10,12 @@
 // ① 消息持久化的纯函数（lib/chatStorage：msgsKeyFor/loadMsgs/serializeForPersist）
 //    继续从独立模块引入，本文件只负责何时落盘；
 // ② 错误气泡文案不再前缀 emoji（见 h6HandleErr 注释）。
+// ★ 2026-09-19 B1 流式双态：delta 不再只消费单语言、也不再写进 content 被量尺挡住——
+//   逐语言累积原始流并按帧合批写入 message.draft（清洗见 lib/draftClean），
+//   done/error/停止统一清空；useChat() 消费端按字段拆分订阅（详见该函数注释）。
+// ★ 2026-09-19 B3（方案 A2）：文件翻译逐段上屏——translateFileStream 的 segment_done/
+//   segment_final/segments_sealed 事件累积进 message.segments（lang→状态桶），
+//   done 弃行切下载卡；error 保留行并标 segmentsAborted（非交付物，不做假成功）；停止清空。
 // ============================================================================
 
 /**
@@ -25,13 +31,14 @@
 import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { createStore, useStore } from 'zustand'
 import { msgsKeyFor, loadMsgs, serializeForPersist, MAX_MESSAGES } from '@/lib/chatStorage' // ★ F11 持久化纯函数
+import { cleanDraft } from '@/lib/draftClean' // ★ B1 流式双态：初译草稿的 <t> 契约清洗
 import { chatStream, translateFileStream, healthCheck, ApiError } from '@/api'
 import { useNavigate, type NavigateFunction } from 'react-router-dom'
 import { confirmDialog } from '@/components/uiDialogs'
 import { useAuth, useAuthStore, roleLevel } from '@/stores/auth'
 import { useAdminStore } from '@/stores/admin'
 import { t as gt, tpl as gtpl } from '@/i18n'
-import type { ChatMessage } from '@/types'
+import type { ChatMessage, FileSegBucket, FileSegmentEvent } from '@/types'
 
 // ★ E2：聊天记录存储键按账号隔离（chat_msgs_v1:<uid>）。
 // 旧全局键 chat_msgs_v1 无法归属、历史上跨账号可见——一次性清除，不做迁移（避免错误归属他人记录）。
@@ -162,21 +169,47 @@ function createChatStore(msgsKey: string) {
         s.schedulePersist(next, s.selectedLangs) // ★ E1：发送即落盘
         return { messages: next, isLoading: true }
       })
+      // ★ B1 流式双态：逐语言 token 增量全量收集 → draft 初译层（取代旧 D20「仅单语言消费」方案——
+      //   旧方案把 streamed 写进 content，却被气泡里 progress↔content 互斥开关挡住实际不可见，
+      //   且多语言时只有一门能流。现在：按语言累积原始流，最多每帧一次刷入 store（rAF 合帧，
+      //   无 rAF 环境退 16ms 定时器；vitest stub 即走此分支），展示前按后端 <t> 契约清洗
+      //   （lib/draftClean，口径锚点 postprocess.go）。浑元/熔断/流式失败三条降级路径无 delta
+      //   时 draft 为空，UI 自动回退三关量尺。）
+      const rawByLang: Record<string, string> = {}
+      let flushQueued = false   // 合帧标志：同帧内多条 delta 只触发一次 store 写入
+      let streamClosed = false  // 收尾标记：done/stop/error 落定后在途帧不得再回灌 draft
+      const scheduleFlush = () => {
+        if (flushQueued || streamClosed) return
+        flushQueued = true
+        const run = () => { flushQueued = false; if (!streamClosed) flushDraft() }
+        if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+          window.requestAnimationFrame(run)
+        } else {
+          setTimeout(run, 16) // 无 rAF 环境（vitest 的 window 桩）退 16ms 定时器，语义等价
+        }
+      }
+      const flushDraft = () => {
+        const draft: Record<string, string> = {}
+        for (const [lang, raw] of Object.entries(rawByLang)) {
+          const cleaned = cleanDraft(raw) // 半截标签已剥除，空进度（契约刚开个头）不占行
+          if (cleaned) draft[lang] = cleaned
+        }
+        get().patchMsg(assistantId, { draft })
+      }
       try {
-        // ★ D20：单目标语言时消费 token 级增量，逐字渲染进助手气泡
-        const onlyLang = Array.isArray(opts.target_langs) && opts.target_langs.length === 1 ? String(opts.target_langs[0]) : null
-        let streamed = ''
         const res = await chatStream(text, 'translation', opts, (ev) => {
           if (ev.type === 'progress') get().patchMsg(assistantId, { progress: { step: ev.step || '', percent: ev.percent ?? 0 } })
         }, abort.signal, (lang, delta) => {
-          if (!onlyLang || lang !== onlyLang) return
-          streamed += delta
-          get().patchMsg(assistantId, { content: streamed })
+          rawByLang[lang] = (rawByLang[lang] ?? '') + delta
+          scheduleFlush()
         })
-        get().patchMsg(assistantId, { ...res, progress: undefined } as Partial<ChatMessage>)
+        streamClosed = true
+        get().patchMsg(assistantId, { ...res, progress: undefined, draft: undefined } as Partial<ChatMessage>)
       } catch (e) {
+        streamClosed = true
         h6HandleErr(get(), assistantId, e)
       } finally {
+        streamClosed = true
         set({ isLoading: false, abort: null })
       }
     },
@@ -198,19 +231,42 @@ function createChatStore(msgsKey: string) {
         s.schedulePersist(next, s.selectedLangs)
         return { messages: next, isLoading: true }
       })
+      // ★ B3（方案 A2）：逐段实时状态——segment_done/final/sealed 按语言累积进 message.segments。
+      //   事件天然按批（≤15 段）到帧，无需 draft 那套 rAF 合帧；done 落定即弃（切下载卡），
+      //   中断（error）保留行但标记「非交付物」（A2 风险披露：绝不做假成功），停止随 draft 一并清空。
+      const segByLang: Record<string, FileSegBucket> = {}
+      let segClosed = false
+      const onSegment = (ev: FileSegmentEvent) => {
+        if (segClosed) return
+        const bucket = (segByLang[ev.lang] = segByLang[ev.lang] ?? { sealed: false, rows: {} })
+        if (ev.kind === 'segments_sealed') bucket.sealed = true
+        else if (ev.index != null) {
+          bucket.rows[ev.index] = { text: ev.text ?? '', final: ev.kind === 'segment_final', placeholder: !!ev.placeholder }
+        }
+        get().patchMsg(assistantId, { segments: { ...segByLang } } as Partial<ChatMessage>)
+      }
       try {
         const res = await translateFileStream(file, targetLangs, true, (ev) => {
           if (ev.type === 'progress') get().patchMsg(assistantId, { progress: { step: ev.step || '', percent: ev.percent ?? 0 } })
-        }, abort.signal, userMessage, mode, maxLength)
-        get().patchMsg(assistantId, { ...res, progress: undefined } as Partial<ChatMessage>)
+        }, abort.signal, userMessage, mode, maxLength, onSegment)
+        segClosed = true
+        get().patchMsg(assistantId, { ...res, progress: undefined, segments: undefined } as Partial<ChatMessage>)
       } catch (e) {
+        segClosed = true
         h6HandleErr(get(), assistantId, e)
+        // 中断收尾：已上屏段落保留展示但标为非交付物（h6HandleErr 对 AbortError 早返回，
+        // 停止路径由 stopGeneration 统一清行，这里只补非停止的真实中断）
+        const msg = e instanceof Error ? e.message : String(e)
+        if (msg !== 'AbortError' && !String(e).includes('abort')) {
+          get().patchMsg(assistantId, { segmentsAborted: true } as Partial<ChatMessage>)
+        }
       } finally {
         set({ isLoading: false, abort: null })
       }
     },
 
     // 中断当前 SSE 请求，并为未完成的 AI 气泡设置停止文案
+    // ★ B1：停止同样清空 draft——草稿是未定稿初译，停在一半的尖括号/残句不适合留存展示
     stopGeneration: () => {
       get().abort?.abort()
       set({ abort: null, isLoading: false })
@@ -218,8 +274,9 @@ function createChatStore(msgsKey: string) {
         const next = [...s.messages]
         for (let i = next.length - 1; i >= 0; i--) {
           if (next[i].role === 'assistant') {
-            if (!next[i].content) next[i] = { ...next[i], content: gt('chat.stopped'), progress: undefined }
-            else next[i] = { ...next[i], progress: undefined }
+            // ★ B3：停止同 done/error 收尾口径——逐段实时行与 draft 一并清空（半途中断的段落不是交付物）
+            if (!next[i].content) next[i] = { ...next[i], content: gt('chat.stopped'), progress: undefined, draft: undefined, segments: undefined }
+            else next[i] = { ...next[i], progress: undefined, draft: undefined, segments: undefined }
             break
           }
         }
@@ -249,12 +306,13 @@ function normErrCode(raw: string | undefined): string {
 }
 
 // SSE 错误收尾（余额不足给充值引导；其余气泡提示）——从 startSend 抽出复用
+// ★ B1：三条错误分支同 done/停止口径，收尾一律清空 draft（在途合帧由 streamClosed 挡住）
 function h6HandleErr(st: ChatState, assistantId: string, e: unknown) {
   const msg = e instanceof Error ? e.message : String(e)
   if (msg === 'AbortError' || String(e).includes('abort')) return // 用户主动 stop（AbortController）不算错误：直接返回，保留气泡已生成内容与停止文案
   const code = normErrCode(e instanceof ApiError ? e.code : undefined)
   if (code === 'insufficient_balance') {
-    st.patchMsg(assistantId, { content: gt('chat.quotaExhausted'), progress: undefined })
+    st.patchMsg(assistantId, { content: gt('chat.quotaExhausted'), progress: undefined, draft: undefined })
     void confirmDialog({ header: gt('chat.insufficientTitle'), body: gt('chat.insufficientBody'), confirmText: gt('chat.gotoTopUp') })
       .then((ok) => {
         if (!ok) return
@@ -269,12 +327,12 @@ function h6HandleErr(st: ChatState, assistantId: string, e: unknown) {
     // 日额度超限≠余额耗尽：明日自动重置，充值解决不了，故只透出后端原因（词条带「明日自动恢复」），
     // 不弹充值引导、也不走通用红字兜底，避免把限额说成欠费。
     st.setFlags({ errorMessage: msg })
-    st.patchMsg(assistantId, { content: gtpl('chat.dailyQuotaTpl', { msg }), progress: undefined })
+    st.patchMsg(assistantId, { content: gtpl('chat.dailyQuotaTpl', { msg }), progress: undefined, draft: undefined })
   } else {
     st.setFlags({ errorMessage: msg })
     // 通用失败兜底：气泡正文只放错误文案本身——旧版带 ❌ 前缀，纯黑换肤后不再用
     // emoji 表意（字符串里只剩一个占位空格），错误态由 errorMessage 与顶部提示承担。
-    st.patchMsg(assistantId, { content: ` ${msg}`, progress: undefined })
+    st.patchMsg(assistantId, { content: ` ${msg}`, progress: undefined, draft: undefined })
   }
 }
 
@@ -323,17 +381,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>
 }
 
-/** 在函数组件中读取聊天状态；必须在 <ChatProvider> 内使用，否则抛出错误 */
+/** 在函数组件中读取聊天状态；必须在 <ChatProvider> 内使用，否则抛出错误
+ *  ★ B1 订阅收敛：旧版 useStore(store) 无选择器——store 任意切片变化（含流式期间
+ *  每 token 一次的 messages 更新）都会让所有 useChat() 消费方整页重渲染。
+ *  现按字段拆分订阅：动作函数在 store 创建后永不替换，从 getState() 直取；
+ *  消费方仍随 messages 重渲染（这是渲染流式文本的必要条件），但语言偏好、
+ *  健康标记等旁路字段不再互相牵连。公开契约 ChatCtx 保持不变。 */
 export function useChat(): ChatCtx {
   const store = useContext(Ctx)
   if (!store) throw new Error(gt('chat.providerGuard'))
-  const s = useStore(store)
+  const messages = useStore(store, (s) => s.messages)
+  const isLoading = useStore(store, (s) => s.isLoading)
+  const selectedLangs = useStore(store, (s) => s.selectedLangs)
+  const isBackendOnline = useStore(store, (s) => s.isBackendOnline)
+  const isBackendLoading = useStore(store, (s) => s.isBackendLoading)
+  const isBackendChecking = useStore(store, (s) => s.isBackendChecking)
+  const errorMessage = useStore(store, (s) => s.errorMessage)
+  // 动作引用稳定（建店时一次性 set），无需参与订阅
+  const { setSelectedLangs, sendMessage, sendFile, stopGeneration, clearMessages, retryHealth } = store.getState()
   return useMemo<ChatCtx>(() => ({
-    messages: s.messages, isLoading: s.isLoading, selectedLangs: s.selectedLangs,
-    setSelectedLangs: s.setSelectedLangs,
-    isBackendOnline: s.isBackendOnline, isBackendLoading: s.isBackendLoading,
-    isBackendChecking: s.isBackendChecking, errorMessage: s.errorMessage,
-    sendMessage: s.sendMessage, sendFile: s.sendFile,
-    stopGeneration: s.stopGeneration, clearMessages: s.clearMessages, retryHealth: s.retryHealth,
-  }), [s])
+    messages, isLoading, selectedLangs, setSelectedLangs,
+    isBackendOnline, isBackendLoading, isBackendChecking, errorMessage,
+    sendMessage, sendFile, stopGeneration, clearMessages, retryHealth,
+  }), [messages, isLoading, selectedLangs, isBackendOnline, isBackendLoading, isBackendChecking, errorMessage])
 }

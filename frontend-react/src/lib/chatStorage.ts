@@ -1,7 +1,7 @@
 // ============================================================================
 // lib/chatStorage.ts — 聊天记录持久化纯函数（★ F11；自 useChat 抽提，语义不变）
 // 键规则（E2）：chat_msgs_v1:<uid>，按账号隔离；匿名（:anon）不落聊天记录。
-// 落盘规则（E1）：进度字段剥离、上限 MAX_MESSAGES（取尾部）、>2MB 裁最近 50 条。
+// 落盘规则（E1）：进度/初译草稿字段剥离、上限 MAX_MESSAGES（取尾部）、>2MB 裁最近 50 条。
 // ============================================================================
 import type { ChatMessage } from '@/types'
 
@@ -31,10 +31,14 @@ export function loadMsgs(raw: string | null): ChatMessage[] {
 /**
  * serializeForPersist 落盘序列化（E1 回填持久化 + 进度剥离 + 2MB 裁剪）。
  * 返回 null 表示不落盘（匿名会话）。
+ * ★ B1：draft（流式初译草稿）与 progress 同样剥离——草稿是会话进行态，
+ * 刷新后无在途 SSE 可续，恢复出来只会留下假"初译中"，故一律不落盘。
+ * ★ B3：segments/segmentsAborted（文件逐段实时态）同口径剥离——进行中文件的
+ * 段落状态只活在当次 SSE 连接里，落盘只会过期复活。
  */
 export function serializeForPersist(key: string, msgs: ChatMessage[]): string | null {
   if (key.endsWith(':anon')) return null
   let arr = msgs
   if (arr.length > KEEP_ON_BLOAT && JSON.stringify(arr).length > BLOAT_BYTES) arr = arr.slice(-KEEP_ON_BLOAT)
-  return JSON.stringify(arr.map((m) => ({ ...m, progress: undefined })))
+  return JSON.stringify(arr.map((m) => ({ ...m, progress: undefined, draft: undefined, segments: undefined, segmentsAborted: undefined })))
 }

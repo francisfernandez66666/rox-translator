@@ -66,3 +66,59 @@ func TestDetectSourceLangFullWidth(t *testing.T) {
 		}
 	}
 }
+
+// TestParseTargetLangsZh ★ #23（外语→简体中文）：目标语言识别必须认「中文/简体中文/
+// Chinese」等别名，并与 zh_hant 撞词时稳定去重（"繁体中文" 字面含 "中文"，
+// map 遍历序随机，不去重则目标语言在 zh/zh_hant 间漂移——本测试同时锁两个方向）。
+func TestParseTargetLangsZh(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{`把这段话翻译成简体中文`, []string{"zh"}},
+		{"please translate this into Chinese", []string{"zh"}},
+		{`翻成繁体中文：你好`, []string{"zh_hant"}}, // 去重：不得同时冒出 zh
+		{`translate to traditional chinese`, []string{"zh_hant"}},
+		{`中国制造 出口合同`, nil}, // 「中国」不是别名：正文含国名不得误触发
+	}
+	for _, c := range cases {
+		got := ParseTargetLangs(c.in)
+		if len(got) != len(c.want) {
+			t.Errorf("ParseTargetLangs(%q) = %v, want %v", c.in, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("ParseTargetLangs(%q) = %v, want %v", c.in, got, c.want)
+				break
+			}
+		}
+	}
+}
+
+// TestSplitOptionsZhTarget ★ #23：zh 刻意不进 TranslateLangs（KB/TM 列契约口径），
+// 目标语言 zh 必须落入 directOther 纯模型直翻链，而非 KB 检索链。
+func TestSplitOptionsZhTarget(t *testing.T) {
+	kb, other, hasOther := SplitOptions([]string{"zh", "en"})
+	if len(kb) != 1 || kb[0] != "en" {
+		t.Errorf("kbTarget = %v, want [en]", kb)
+	}
+	if len(other) != 1 || other[0] != "zh" {
+		t.Errorf("directOther = %v, want [zh]", other)
+	}
+	if hasOther {
+		t.Errorf("hasOther should be false")
+	}
+}
+
+// TestTranslateInstructionZh ★ #23：目标 zh 的提示词双链（中文界面→中文指令、
+// 外语界面→英文指令）都已存在，这里锁死不回退——外语用户翻回简体中文是最常用方向。
+// （contains 辅助复用同包 cjk_overlap_test.go 的既有实现）
+func TestTranslateInstructionZh(t *testing.T) {
+	if got := translateInstruction("ru", "zh", "ru"); got == "" || !contains(got, "Simplified Chinese") {
+		t.Errorf("英文界面 zh 指令异常: %q", got)
+	}
+	if got := translateInstruction("ru", "zh", "zh"); !contains(got, "简体中文") {
+		t.Errorf("中文界面 zh 指令异常: %q", got)
+	}
+}

@@ -10,7 +10,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE } from '@/api'
 import { CloseIcon } from '@/ui/langcross/src'
-import { t } from '@/i18n'
+import { t, useLang } from '@/i18n'
+// ★ #23（2026-09-19）：语言名展示改走 langLabel（zh* 取中文名，其余界面语言取英文名），
+//   目标语言列表不再对国外用户恒显中文
+import { langLabel } from '@/lib/langNames'
 
 // ============ 本文件职责中文说明 ============
 // 目标语言多选组件（CSS 自绘下拉）+ 共用已选语言 chip 行 LangChips。
@@ -57,16 +60,19 @@ export function langDisplay(code: string): { flag: string; label: string } {
   return hit ? { flag: hit.flag || '', label: hit.label } : { flag: '', label: code }
 }
 
-/** 已选语言 chip 行（选中结果的唯一展示位）：每项可移除 */
+/** 已选语言 chip 行（选中结果的唯一展示位）：每项可移除
+ *  ★ #23：chip 名称走 langLabel，随界面语言取中/英 */
 export function LangChips({ langs, onRemove }: { langs: string[]; onRemove: (next: string[]) => void }) {
+  const lang = useLang()
   if (!langs.length) return null
   return (
     <div data-testid="lang-chips" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingBottom: 8 }}>
       {langs.map((l) => {
         const d = langDisplay(l)
+        const label = langLabel(l, lang) === l ? d.label : langLabel(l, lang)
         return (
           <span key={l} className="tag tag-lang" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            {d.flag} {d.label}
+            {d.flag} {label}
             <button type="button" className="lms-chip-close"
  aria-label={`remove-${l}`} onClick={() => onRemove(langs.filter((x) => x !== l))}>
               <CloseIcon size={10} />
@@ -87,6 +93,7 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
   const [custom, setCustom] = useState('')
   const [query, setQuery] = useState('')
   const [extraCodes, setExtraCodes] = useState<string[]>([])
+  const lang = useLang() // ★ #23：语言名按界面语言取中/英
   // 从后端加载 KB 支持语言（新语言升级进 KB 区，名称/国旗覆盖本地兜底）
   const [apiKb, setApiKb] = useState<Array<{ code: string; label: string; flag?: string }>>([])
   const rootRef = useRef<HTMLDivElement>(null)
@@ -116,21 +123,35 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
   }, [open])
 
   // 构造分组选项：KB 分组 + 其他语言分组 + 自定义语言分组（如有）
+  // ★ #23：label 一律经 langLabel 本地化（zh*→中文名；其余界面语言→英文名），
+  //   KB 区含后端追加的 zh（简体中文，外语→中文方向），未知代码原样显示
   const options = useMemo<Opt[]>(() => {
-    const kbSet = kbLangs?.length ? kbLangs : KB_LANGS.map((x) => x.code)
+    // ★ #23：默认 KB 名单跟随后端返回（/langs 现含 zh 纯模型条目——外语→简体中文方向）；
+    //   后端未就绪时回落本地九语。显式传入的 kbLangs 仍最优先。
+    const kbSet = kbLangs?.length ? kbLangs
+      : (apiKb.length ? apiKb.map((x) => x.code) : KB_LANGS.map((x) => x.code))
     // 合并顺序：先本地兜底、再用后端条目覆盖同名键——后端只回 code+name 时不会把本地 flag 冲没，
     // 反之新升级进 KB 的语言也能立刻出现
     const kbMap = new Map<string, { code: string; label: string; flag?: string }>()
     for (const x of [...KB_LANGS, ...apiKb]) kbMap.set(x.code, { ...(kbMap.get(x.code) || {}), ...x })
+    const disp = (code: string, fallback: string) => {
+      const l = langLabel(code, lang)
+      return l === code ? fallback || code : l // 表内无此码（自定义语言）→ 用兜底名
+    }
     const out: Opt[] = []
     for (const x of [...kbMap.values()].filter((x) => kbSet.includes(x.code)))
-      out.push({ group: t('chat.kbGroup'), code: x.code, flag: x.flag || '', label: x.label })
-    for (const x of OTHER_LANGS)
-      out.push({ group: t('chat.otherGroup'), code: x.code, flag: x.flag || '', label: x.label })
+      out.push({ group: t('chat.kbGroup'), code: x.code, flag: x.flag || '', label: disp(x.code, x.label) })
+    // ★ #23 修复（e2e T3 红灯）：后端 /langs 扩容后 kbSet 覆盖 ja/ko/th 等「其他常用语」，
+    //   本地 OTHER_LANGS 若原样再推一遍会在面板出现重复 option（勾选态计数翻车）。
+    //   规则：已进 KB 组的代码从其他语言组剔除，其余保持非 KB 展示位。
+    for (const x of OTHER_LANGS) {
+      if (kbSet.includes(x.code)) continue
+      out.push({ group: t('chat.otherGroup'), code: x.code, flag: x.flag || '', label: disp(x.code, x.label) })
+    }
     for (const c of extraCodes)
-      out.push({ group: t('chat.customGroup'), code: c, flag: '', label: langDisplay(c).label })
+      out.push({ group: t('chat.customGroup'), code: c, flag: '', label: langLabel(c, lang) })
     return out
-  }, [kbLangs, extraCodes, apiKb])
+  }, [kbLangs, extraCodes, apiKb, lang])
 
   // 面板内可见选项（按搜索词过滤 名称/代码）
   const shown = useMemo(() => {

@@ -43,6 +43,8 @@ vi.mock('@/api', async () => {
 beforeEach(() => { cleanup() })
 
 describe('工单模式旁路审计轨迹（P0-5）', () => {
+  // 显式 20s 超时：本用例动态 import 整棵 TicketsPage 组件树，单跑即 ~4s，
+  // 全量 27 文件并发时逼近 vitest 默认 5s 产生负载性假红（2026-09-20 实测）
   it('进度抽屉把 mode_override 步骤渲染为中文标签「模式旁路」而非裸 key', async () => {
     const TicketsPage = (await import('./TicketsPage')).default
     render(<TicketsPage />)
@@ -53,5 +55,5 @@ describe('工单模式旁路审计轨迹（P0-5）', () => {
     // ★ 核心断言：新轨迹行有标签（若 STEP_KEYS 缺映射会显示 "mode_override" 裸 key）
     expect(screen.getAllByText('模式旁路').length).toBe(1)
     expect(screen.queryByText('mode_override')).toBeNull()
-  })
+  }, 20_000)
 })

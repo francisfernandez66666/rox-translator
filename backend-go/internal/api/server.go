@@ -784,8 +784,11 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 
 // handleTranslationLangs 语言列表接口（/api/translation/langs）：返回知识库支持的语言代码/名称/旗帜。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。返回 kb_langs 数组。
+// ★ #23（2026-09-19）：数组尾部追加 zh（简体中文）——外语→中文方向的目标语言，
+//   走纯模型直翻（不在 TranslateLangs，故 kb 标记 false，前端选它时后端 SplitOptions
+//   自动归入 directOther），让国外用户能把任意语言翻回简体中文。
 func (s *Server) handleTranslationLangs(w http.ResponseWriter, r *http.Request) {
-	langs := make([]map[string]string, 0, len(config.TranslateLangs))
+	langs := make([]map[string]string, 0, len(config.TranslateLangs)+1)
 	// 遍历全局语言配置组装语言元信息
 	for _, code := range config.TranslateLangs {
 		langs = append(langs, map[string]string{
@@ -793,8 +796,12 @@ func (s *Server) handleTranslationLangs(w http.ResponseWriter, r *http.Request) 
 			"name":    config.LangNames[code],
 			"name_en": config.LangNamesEn[code],
 			"flag":    config.Flags[code],
+			"kb":      "true",
 		})
 	}
+	langs = append(langs, map[string]string{
+		"code": "zh", "name": config.LangNames["zh"], "name_en": config.LangNamesEn["zh"], "flag": "", "kb": "false",
+	})
 	writeJSON(w, 200, map[string]interface{}{"kb_langs": langs})
 }
 

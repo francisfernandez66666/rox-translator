@@ -19,6 +19,7 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,6 +83,12 @@ type Engine struct {
 	cultureCache   map[string]cultureEntry
 	cultureEntries map[string][]cultureRule // 同 key 的结构化条目（L2 用）
 
+	// ★ B4（方案 B Phase 1.3）批量固定术语层缓存：key= tid|lang，TTL 60s。
+	//   文件批量主负载是「同前缀 × N 批」形态，此层让同租户同语言的所有批次共享
+	//   「指令+编号契约+术语层摘要」的 system 前缀（并补齐批量路径此前缺失的术语注入）。
+	termLayerMu    sync.Mutex
+	termLayerCache map[string]termLayerEntry
+
 	// ★ 2026-09-09 可靠性改造测试钩子：单语翻译器（nil 时默认走 SingleLangTranslate）。
 	//   仅测试注入 fake 用，生产恒为 nil，不影响既有行为。
 	singleLangFn func(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang, stage string) (string, error)
@@ -106,11 +113,19 @@ type cultureEntry struct {
 	ExpiresAt time.Time
 }
 
+// termLayerEntry 批量术语层渲染文本缓存条目（★ B4）。
+type termLayerEntry struct {
+	Text      string
+	ExpiresAt time.Time
+}
+
 // ★ 性能优化（不换库 Phase A4，1G 机器）：进程级缓存封顶，防止长运行无限增长。
 const (
 	cjkCacheScopeMax = 128              // CJK 分片数上限（超过整代清空，惰性重建）
 	cultureCacheMax  = 4096             // 文化闸门缓存条目上限（超过整代清空）
 	cultureCacheTTL  = 60 * time.Second // 单条有效期（原有语义保留）
+	termLayerMax     = 1024             // 批量术语层缓存条目上限（超过整代清空）
+	termLayerTopN    = 60               // 术语层摘要取前 N 条（渲染文本按租户×语言一份）
 )
 
 // tenantID 从 ctx 取租户 id；未指定时回退默认租户 rox（id=1）
@@ -1088,13 +1103,18 @@ func contractNoteZh() string {
 // buildExamplesPrompt 从知识库命中行构造术语/句对参考，注入翻译 prompt
 // 目的是让模型兜底翻译时沿用知识库里的标准专有词与术语译法（如 蓝牙钥匙→Bluetooth-Schlüssel）
 // 只注入短句（中文 ≤30 字）作为术语参考，长流程句跳过，避免模型把参考块当翻译目标复述
+// ★ B4（杀手③拆除）：合格行按源术语字典序定序、去掉 1./2./3. 编号——
+//
+//	旧版按检索相关度排序 + 条数编号，命中集少一条则其后全部行号漂移，
+//	既撕裂缓存前缀也造成同词不同 request 表述不一致；定序去号后单行增删只影响该行。
+//	该块现注入 user（紧邻原文前），头部自带「不得复述」约束（旧版靠 system 尾部 sysNote）。
 func buildExamplesPrompt(zhText, targetLang string, examples []*kb.Row) string {
 	if len(examples) == 0 {
 		return ""
 	}
 	used := map[string]bool{}
-	var sb strings.Builder
-	count := 0
+	type termRef struct{ zh, tr string }
+	var refs []termRef
 	// 逐命中行筛选：去重、需有目标语译文、仅收 ≤30 字短句（防模型复述长参考块）
 	for _, r := range examples {
 		if r == nil || strings.TrimSpace(r.Zh) == "" {
@@ -1111,20 +1131,102 @@ func buildExamplesPrompt(zhText, targetLang string, examples []*kb.Row) string {
 			continue
 		}
 		used[r.Zh] = true
-		if count == 0 {
-			sb.WriteString("知识库术语参考（仅用于沿用其专有词/术语译法）：\n")
-		}
-		count++
-		sb.WriteString(fmt.Sprintf("%d. %s → %s\n", count, r.Zh, tr))
-		if count >= 5 {
-			break
-		}
+		refs = append(refs, termRef{r.Zh, tr})
 	}
 	// 一条合格参考都没有则整体不注入，避免悬空提示头
-	if count == 0 {
+	if len(refs) == 0 {
 		return ""
 	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].zh < refs[j].zh })
+	if len(refs) > 5 {
+		refs = refs[:5]
+	}
+	var sb strings.Builder
+	sb.WriteString("知识库术语参考（仅用于沿用其专有词/术语译法，不得复述以下参考内容）：\n")
+	for _, r := range refs {
+		sb.WriteString(r.zh + " → " + r.tr + "\n")
+	}
 	return sb.String()
+}
+
+// batchTermLayer ★ B4（方案 B Phase 1.3）：租户×目标语言的固定术语层摘要。
+// 取租户可见域（自有包 + 平台共享 locale 包，enabled）内的 L1 术语条目，
+// 按 source_text 字典序、id 升序取前 termLayerTopN 条渲染成「源 → 译」清单。
+// 与单语路径的 per-request 检索不同，这里是**租户级静态层**：渲染文本按 (tenant,lang)
+// 缓存 60s，供文件批量主负载的全部批次共享同一 system 前缀（缓存可前置工程），
+// 同时补齐调研发现的「批量路径完全没有术语注入」的质量口径不一致。
+// 查询失败显式告警并返回空（批量翻译照常进行，不阻断）。
+func (e *Engine) batchTermLayer(ctx context.Context, tid int64, targetLang string) string {
+	if e.St == nil || tid <= 0 || targetLang == "" {
+		return ""
+	}
+	key := fmt.Sprintf("%d|%s", tid, targetLang)
+	e.termLayerMu.Lock()
+	defer e.termLayerMu.Unlock()
+	if te, ok := e.termLayerCache[key]; ok && time.Now().Before(te.ExpiresAt) {
+		return te.Text
+	}
+	rows, err := db.Query(e.St.DB(), db.CurrentDialect(), `
+		SELECT e.source_text, e.target_text
+		FROM kb_entries e
+		JOIN kb_packages p ON p.id = e.package_id
+		WHERE e.layer=1 AND e.target_lang=?
+		  AND e.source_text <> '' AND e.target_text <> ''
+		  AND COALESCE(p.enabled,1)=1
+		  AND (p.tenant_id=? OR (p.tenant_id=0 AND p.pack_type='locale'))
+		ORDER BY e.source_text, e.id
+		LIMIT ?`, targetLang, tid, termLayerTopN*2) // 超采 2 倍给 Go 侧超长过滤留余量
+	if err != nil {
+		observability.Error(ctx, "batchTermLayer 查询租户术语层失败（批量路径本轮无术语注入）", "err", err, "lang", targetLang, "tenant", tid)
+		return ""
+	}
+	defer rows.Close()
+	var pairs []string
+	for rows.Next() && len(pairs) < termLayerTopN {
+		var src, tgt string
+		if err := rows.Scan(&src, &tgt); err != nil {
+			continue
+		}
+		// 与单语路径同口径：只收 ≤30 字短术语，防模型复述长句
+		if len([]rune(src)) > 30 {
+			continue
+		}
+		pairs = append(pairs, src+" → "+tgt)
+	}
+	text := ""
+	if len(pairs) > 0 {
+		text = "\n【租户术语层（源文遇到以下术语必须采用对应译法；本清单不是待译内容，不得复述）】\n" + strings.Join(pairs, "\n") + "\n"
+	}
+	if e.termLayerCache == nil {
+		e.termLayerCache = map[string]termLayerEntry{}
+	}
+	if len(e.termLayerCache) >= termLayerMax {
+		e.termLayerCache = map[string]termLayerEntry{}
+	}
+	e.termLayerCache[key] = termLayerEntry{Text: text, ExpiresAt: time.Now().Add(cultureCacheTTL)}
+	return text
+}
+
+// assembleTranslateMessages ★ B4（方案 B Phase 1）三段前缀族装配（纯函数便于单测断言）：
+//
+//	system = 固定翻译规范头（instrCore：指令骨架+输出契约）+ 文化块（排序稳定）——
+//	  有/无 KB 命中逐字节一致（杀手①④拆除），构成可缓存前缀段；
+//	user   = 逐请求注记 dynNotes（保护令牌/缩翻）+ 本次检索术语 ref（紧邻原文前）+ 原文。
+func assembleTranslateMessages(instrCore, dynNotes, ref, cultureBlock, zhText string) []map[string]string {
+	var ub strings.Builder
+	if dynNotes != "" {
+		ub.WriteString(dynNotes)
+		ub.WriteString("\n\n")
+	}
+	if ref != "" {
+		ub.WriteString(ref)
+		ub.WriteString("\n")
+	}
+	ub.WriteString(zhText)
+	return []map[string]string{
+		{"role": "system", "content": instrCore + cultureBlock},
+		{"role": "user", "content": ub.String()},
+	}
 }
 
 // resolveModel 解析当前请求使用的模型配置（平台统一网关，2026-08-26 BYOK 移除）。
@@ -1301,16 +1403,22 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	if outer := streamSinkFromCtx(ctx); outer != nil {
 		ctx = withStreamSinkInner(ctx, func(d string) { outer(lang, d) })
 	}
-	instruction := translateInstruction(sourceLang, targetLang, uiLangFromCtx(ctx))
-	// ★ 输出契约（2026-09-09）：要求模型用 <t>…</t> 包裹最终译文，白名单提取根治注释残留
-	instruction += outputContractNote(uiLangFromCtx(ctx))
+	// ★ B4（方案 B Phase 1）前缀重组：system 只放「固定翻译规范头」——
+	//   指令骨架 + 输出契约 + 文化块（排序稳定），同 (源语言,目标语言,界面语言,租户)
+	//   的全部请求共享同一 system 前缀（拆掉旧版杀手①④：per-request 术语 ref
+	//   曾占 system 头部、有/无命中两套 system 形态互不为前缀）。
+	//   逐请求可变项（保护令牌/缩翻注记、本次检索术语 ref）全部下移 user 尾部、
+	//   紧邻待译文本——ref 在 user 中「仅用于沿用译法」的表述由 buildExamplesPrompt 自带。
+	ui := uiLangFromCtx(ctx)
+	instrCore := translateInstruction(sourceLang, targetLang, ui) + outputContractNote(ui)
+	var dynNotes strings.Builder
 	if phGuardFromCtx(ctx) {
 		// ★ D19：掩码保护令牌逐字保留约束（配合 singleLang 的 mask/unmask 闭环）
-		instruction += " 文本中的 ⟦P数字⟧ 形式的保护令牌必须逐字原样保留（连同方括号），不得翻译、删除、合并或改动。"
+		dynNotes.WriteString("文本中的 ⟦P数字⟧ 形式的保护令牌必须逐字原样保留（连同方括号），不得翻译、删除、合并或改动。")
 	}
 	// ★ 缩翻（任务7）：启用时向指令追加最长字符限制，提示模型精简输出
 	if ml := maxLengthFromCtx(ctx); ml > 0 {
-		instruction += fmt.Sprintf(" 译文总长度（含标点）不得超过 %d 个字符。请在保留原意与关键信息的前提下尽量精简，不要额外解释，只输出译文。", ml)
+		dynNotes.WriteString(fmt.Sprintf(" 译文总长度（含标点）不得超过 %d 个字符。请在保留原意与关键信息的前提下尽量精简，不要额外解释，只输出译文。", ml))
 	}
 	ref := buildExamplesPrompt(zhText, targetLang, examples)
 
@@ -1332,35 +1440,12 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 		ctx = llm.WithTermConstraints(ctx, cs)
 	}
 
-	// 术语参考放入 system 消息（模型不会复述 system 内容），user 只含指令+待翻译文本
-	// ★ Gate L1：语言文化规范注入（approved 安全句按目标语言，60s 缓存）
+	// ★ Gate L1：语言文化规范注入（approved 安全句按目标语言，60s 缓存，ORDER BY id 行序稳定）
 	cultureBlock := ""
 	if tid := tenant.FromContext(ctx); tid > 0 {
 		cultureBlock, _ = e.cultureRules(ctx, tid, targetLang)
 	}
-	sysNote := "翻译时请沿用以上参考中的专有词/术语译法，但只输出待翻译文本的翻译结果，不得输出或复述参考内容。"
-	if cultureBlock != "" {
-		sysNote += cultureBlock
-	}
-	// 三级装配 messages：有 KB 参考带提示头 / 仅文化规则 / 兜底纯用户指令
-	var messages []map[string]string
-	if ref != "" {
-		langName := config.LangNames[targetLang]
-		if langName == "" {
-			langName = targetLang
-		}
-		messages = []map[string]string{
-			{"role": "system", "content": ref + "\n" + sysNote},
-			{"role": "user", "content": instruction + "\n\n" + zhText},
-		}
-	} else if cultureBlock != "" {
-		messages = []map[string]string{
-			{"role": "system", "content": strings.TrimPrefix(sysNote, "翻译时请沿用以上参考中的专有词/术语译法，但只输出待翻译文本的翻译结果，不得输出或复述参考内容。\n")},
-			{"role": "user", "content": instruction + "\n\n" + zhText},
-		}
-	} else {
-		messages = []map[string]string{{"role": "user", "content": instruction + "\n\n" + zhText}}
-	}
+	messages := assembleTranslateMessages(instrCore, dynNotes.String(), ref, cultureBlock, zhText)
 
 	base, key, model := e.resolveModel(ctx)
 	// 阶段独立模型：配置了该阶段（stage_models）则优先使用；未配置回退 resolveModel
@@ -1740,9 +1825,24 @@ func isNetworkError(err error) bool {
 
 // ============ 批量翻译（文件翻译用） ============
 
+// headsample 取前 n 段文本（★ #23 批量源语言检测的采样窗口）：
+// 8 段已足够脚本统计定方向，避免对整文件做 rune 全量扫描。
+func headsample(texts []string, n int) []string {
+	if len(texts) <= n {
+		return texts
+	}
+	return texts[:n]
+}
+
+// BatchChunkDone 批量段回调（★B3/A2 升级形态）：在旧进度 (done,total) 之外，
+// 携带本块起始下标 start 与本块源文/译文切片（与 texts[start:start+len(sources)] 对齐），
+// 使文件管线能在每批（动态批 5/8/15 段）完成时立即逐段发 segment_done 上屏，
+// 不再等整语言翻完。results 可能含空串或 "[翻译失败]"（调用方过滤）。
+type BatchChunkDone func(done, total, start int, sources, results []string)
+
 // BatchTranslate 批量单语翻译，等价 call_online_llm_single_lang_batch
 // 返回与输入等长的译文列表，失败填 "[翻译失败]"
-func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang string, batchSize int, onBatchDone func(done, total int)) []string {
+func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang string, batchSize int, onBatchDone BatchChunkDone) []string {
 	cfg := e.Cfg
 	result := make([]string, len(texts))
 	if len(texts) == 0 {
@@ -1791,15 +1891,29 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 	sem := make(chan struct{}, envPositiveInt("LLM_BATCH_CONCURRENCY", 4))
 
 	// runChunk 翻译一个段块并按 <sN> 标记解析写回 result[start:]；返回命中数。
+	// ★ B4（方案 B Phase 1.3）前缀重组：「指令骨架 + 编号契约 + 租户固定术语层摘要」
+	//   上移为 system 消息、在 BatchTranslate 层只组装一次——同租户同语言的全部批次
+	//   （含并发的多批并发）共享逐字节一致的稳定前缀（全仓唯一可缓存前缀族，做厚到
+	//   接近主流厂商 1024-token 门槛）；user 只含每批可变的 <sN> 段块。
+	//   编号契约不进 outputContractNote（<t> 契约与 <sN> 解析互斥，维持既有 parseBatchOutput 链）。
+	// ★ #23（2026-09-19）源语言去硬编码：旧版指令永远声称源文是中文（translateInstruction("zh",…)），
+	//   外语用户上传文件时提示词与事实相悖（模型偶尔因此原样回显）。改为对全量段头做
+	//   一次脚本统计（DetectSourceLang 纯本地字符分类，零 LLM 调用、成本可忽略），
+	//   中文文件判定结果仍是 zh——稳定前缀口径不变，只是外语文件批次换为准确指令。
+	batchSrc := DetectSourceLang(strings.Join(headsample(texts, 8), "\n"))
+	sysBatch := translateInstruction(batchSrc, targetLang, uiLangFromCtx(ctx)) +
+		e.batchTermLayer(ctx, e.tenantID(ctx), targetLang) +
+		"\n请按编号逐条翻译用户消息中的条目，用 <sN>...</sN> 包裹每条翻译结果："
 	runChunk := func(start int, chunk []string) int {
 		// 构造 <sN> 标记
 		var sb strings.Builder
 		for i, t := range chunk {
 			sb.WriteString(fmt.Sprintf("<s%d>%s</s%d>\n", i+1, t, i+1))
 		}
-		instruction := translateInstruction("zh", targetLang, uiLangFromCtx(ctx))
-		userPrompt := instruction + "\n\n请按编号逐条翻译，用 <sN>...</sN> 包裹每条翻译结果：\n\n" + sb.String()
-		messages := []map[string]string{{"role": "user", "content": userPrompt}}
+		messages := []map[string]string{
+			{"role": "system", "content": sysBatch},
+			{"role": "user", "content": sb.String()},
+		}
 
 		maxTokens := 2048
 		totalChars := 0
@@ -1863,7 +1977,8 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 				poorMu.Unlock()
 			}
 			if onBatchDone != nil {
-				onBatchDone(start+len(chunk), len(texts))
+				// ★B3：本块译文快照随进度一并上报（此时本 goroutine 持有该块写权，读取安全）
+				onBatchDone(start+len(chunk), len(texts), start, chunk, result[start:start+len(chunk)])
 			}
 		}(start, chunk)
 	}
@@ -2199,6 +2314,8 @@ func (e *Engine) Rebuilding() bool { return e.rebuilding.Load() }
 
 // cultureRules 加载租户可应用语言文化包中指定目标语言的已审核规则（60s 缓存）。
 // 返回渲染后的提示词块（L1）与结构化规则（L2 硬过滤）；无规则返回空。
+// ★ B4（杀手②拆除）：SQL 补 ORDER BY sp.id——旧版无排序，行序随 SQLite/PG 物理顺序
+// 漂移，60s TTL 重载后文化块文本可能整段变化，直接撕裂缓存前缀。
 func (e *Engine) cultureRules(ctx context.Context, tid int64, targetLang string) (string, []cultureRule) {
 	if e.St == nil || tid <= 0 || targetLang == "" {
 		return "", nil
@@ -2219,7 +2336,8 @@ func (e *Engine) cultureRules(ctx context.Context, tid int64, targetLang string)
 		JOIN kb_packages pkg ON pkg.id = sp.package_id
 		WHERE COALESCE(sp.status,'approved')='approved' AND sp.lang=?
 AND COALESCE(pkg.enabled,1)=1 AND pkg.pack_type='locale'
-	  AND pkg.tenant_id IN (?, 0)`, targetLang, tid)
+	  AND pkg.tenant_id IN (?, 0)
+		ORDER BY sp.id`, targetLang, tid)
 	if err != nil {
 		// ★ P1-5（2026-09-18）：吞错改显式告警——旧实现静默返回空，PG 下文化闸整链失效不可见
 		observability.Error(ctx, "cultureRules 查询语言文化规则失败（本租户文化闸退化为无规则）", "err", err, "lang", targetLang, "tenant", tid)

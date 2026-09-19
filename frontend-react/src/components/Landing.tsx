@@ -1,9 +1,10 @@
 // ============================================================================
 // components/Landing.tsx — 官网营销首页（2026-09-18 按画布 721173146990823 屏 6:1 重建）
-// 区块顺序：导航 → Hero(左文案+右演示卡) → 解决方案三步 → 核心功能 bento →
-// 覆盖范围 → 开发者集成 → 价格三档 → 活动奖励 → 更新日志 → FAQ → 关于我们 → 收尾 CTA → 页脚。
-// 动效：Hero 文案 lc-mo-up 节拍入场；演示卡移植 hero-stream.html 三检查点翻译流
-// （原文打字 → 比对状态 → 量尺现身 → 术语逐处 判错/纠正 → 回写峰值 → 定稿）；
+// 区块顺序：导航 → Hero(左文案+右留资引导卡) → 解决方案三步 → 核心功能 bento →
+// 覆盖范围 → 质量验证 → 开发者集成 → 价格三档 → 活动奖励 → 更新日志 → FAQ → 关于我们 → 收尾 CTA → 页脚。
+// 动效：Hero 文案 lc-mo-up 节拍入场；★ 2026-09-19 #22：原「三检查点翻译流演示卡」（HeroDemo）
+// 连同两颗「预约演示」按钮一起退役，转化入口统一为「留言获取方案」（锚到 #cta 留资表单）；
+// 其「划掉错词→亮起正词」动效已抽到 components/WordSwap + theme.css，供产品内加载态复用（#24）。
 // 其余区块 useReveal 滚动现身，组内 60ms 等速 stagger（动效原则 8）。
 // 视觉：纯黑底、卡片描边 var(--lc-border-card) 1.2px、主按钮白底黑字、无蓝无绿。
 // ============================================================================
@@ -36,11 +37,8 @@ import { LeadForm } from '@/components/LeadForm' // ★ P1-3 收尾留资表单�
 import { INDUSTRY_META, industryName } from '@/lib/industries' // 覆盖范围区块：行业包与本页术语大卡同源的一份事实
 import { PERSONA_FALLBACK } from '@/lib/personas' // 覆盖范围区块：八个角色 code 与后端 persona 包对齐
 
-/* —— Hero 演示卡固定内容（画布 6:55 / hero-stream.html 现役三处，改文案必须回查行业叫法） —— */
+/* —— 术语对照固定数据（★ #22 HeroDemo 退役后仍留两份用途：术语大卡静态对照 + 开发者 curl 示例） —— */
 const DEMO_SRC = '新车发布启动会定在下周，需进行竞品对标，赋能经销商的销售线索转化。' // 汽车甲方口吻整句，故意埋 3 处机翻易错说法
-const DEMO_FINAL =
-  // 定稿译文：与 DEMO_TERMS 的 r 字段逐一对应（kickoff/benchmark/lead），演示卡与功能卡共用同一份事实
-  'The new model launch kickoff is next week — we need to run a competitor benchmark, and empower dealers on lead conversion.'
 const DEMO_TERMS = [
   // 三检查点唯一数据源：w=机翻初译（判错项），r=行业正译（纠正项），cn=中文术语（量尺标签 + 行内主语）
   { w: 'start', r: 'kickoff', cn: '发布启动会' },
@@ -63,440 +61,6 @@ const DEV_SAMPLE = [
   '  -H "Content-Type: application/json" \\',
   `  -d '{"text":"${DEMO_SRC}","target_langs":["en"],"mode":"pro"}'`,
 ].join('\n')
-
-/* 时序参数（ms）：移植自 hero-stream.html，节奏只改这一处 */
-const T = {
-  enter: 240, cnSpeed: 62, cnHold: 220, arrowIn: 180, arrowHold: 40, // 单行入场 / 中文打字 / 中文停留 / 箭头进 / 箭头停
-  wordSpeed: 42, wordHold: 200, strike: 340, rightSpeed: 46, // 初译打字 / 初译停留 / 划掉动画 / 正解打字
-  lock: 460, glowHold: 300, hold: 840, exit: 320, gap: 200, // 正解定版 / 辉光余韵 / 读题停留 / 退场 / 行间空隙
-  srcSpeed: 42, srcHold: 460, statusSpeed: 34, statusHold: 200, // 原文段：打字与读完停留；状态段同构
-  armHold: 660, breath: 600, peak: 460, sweepAt: 240, settleAt: 440, // 量尺蓄力 / 爆发前吸气 / 峰值时长 / 峰值后扫光·落定偏移
-  unmergeAt: 660, finalSpeed: 16, proof: 700, resultHold: 2400, // 亮度回收偏移 / 定稿打字（明显慢于初译，以示"终稿"）/ 审校光 / 结果可读停留
-  tailLead: 340, tailHold: 850, // 盖章前置留白 / 尾拍退场
-}
-/* 打字机每字实际耗时 = speed + random()*speed*0.5，均值即 1.25×speed；
-   顶部进度条总时长要靠它折算，否则条会跑在字前面干等 */
-const TYPE_AVG = 1.25
-const LEAD = 200 // 每轮 reset 之后先静一拍再下笔：避免循环接缝处上一帧还没落定就冒字
-
-/** 三检查点翻译流演示卡（hero-stream.html 的 React 移植） */
-function HeroDemo() {
-  const [, t] = useT() // 语种位留空：演示卡只有文案随语种变，动画节拍靠 statusStr 变化重挂
-  const branding = useBranding()
-  const demoRef = useRef<HTMLDivElement>(null) // 挂在最外层 .hd 上：所有 data-hd 查询都以它为根，不污染 document
-  // 复制按钮：用户主动点击才写剪贴板（写操作不弹权限），1.6s 后标签回弹
-  const [copied, setCopied] = useState(false)
-  const copyFinal = () => {
-    navigator.clipboard?.writeText(DEMO_FINAL).then(() => {
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1600)
-    }).catch(() => { /* 非安全上下文剪贴板不可用：静默失败，演示不受影响 */ })
-  }
-  const statusStr = t('land.demoStatus') // 「正在比对汽车行业术语库 · 命中 3 处术语」——长度参与总时长折算
-
-  useEffect(() => {
-    const root = demoRef.current
-    if (!root) return // 首帧 ref 未就位（理论上不会发生）时直接放弃，不抛错
-    // 20+ 个动画目标全部用 data-hd 选择器一次性取齐：比 20 个 useRef 干净，
-    // 且这些节点在 JSX 里是静态结构（不随状态增删），缓存引用不会失效
-    const el = (n: string) => root.querySelector<HTMLElement>(`[data-hd="${n}"]`)
-    // 下面统一用 ! 断言而不是逐个判空：节点改成条件渲染时，第一帧就会在控制台报
-    // "classList of null"，比"动画静默不播"更容易被发现（这类演出坏一半最难查）
-    const panel = el('panel')! // 卡外壳：整卡的明暗/边框/下沉状态都挂在它身上
-    const barfill = el('barfill')! // 顶部 1px 进度条：跑满时长 = 一轮完整循环（--dur）
-    const srcEl = el('src')! // 原文打字区（盖在 ghost 占位之上的"真身"）
-    const statusEl = el('status')! // 比对状态文案本体：逐字打出来
-    const statusLn = el('statusline')! // 状态行容器：只负责整行淡入，不参与打字
-    const stepsEl = el('steps')! // 量尺区：armed=蓄力完成，hot=峰值高亮
-    const rowEl = el('row')! // 术语行：一次只演一条，靠 in/out 上下场
-    const idxEl = el('idx')! // 行首序号 01/02/03：红色即"此处判错"的信号色
-    const cnEl = el('cn')! // 本行要讲的中文术语
-    const arrowEl = el('arrow')! // 中→英推进箭头：中文打完才出现
-    const wEl = el('w')! // 机翻初译词位：struck 类给它挂删除红线
-    const wtEl = el('wt')! // 初译的文字节点：红线是它的 ::before，二者必须分开
-    const rEl = el('r')! // 行业正译词：全卡字号最大的一行，也是"判对"的落点
-    const resultEl = el('result')! // 回写结果框：in/sweep/settled/stamp 四段状态依次叠加
-    const finalEl = el('final')! // 定稿译文打字区（同样是 ghost 之上的真身）
-    const ruleEl = el('rule')! // 爆发前的下笔线：从左写出再隐去，给峰值一个起手
-    const flashEl = el('flash')! // 爆发光斑：一次性 burst，只允许"一帧全爆"
-    const markEl = el('mark')! // 完成对勾：draw 画线 + glow 辉光
-    const ringEl = el('ring')! // 对勾外扩散环：与 draw 同时起，撑出"落章"体积
-    const labelEl = el('rlabel')! // 「翻译完成」标签：stamp 时闪一次白
-    const metaEl = el('meta')! // 「3 / 3 处术语已校准」副标：lit 之后才转亮
-    const wrapEl = el('fwrap')! // 定稿文字外层：::after 就是那道审校扫光
-    const gfill = el('gfill')! // 量尺已填充段：宽度按"第几条"百分比推进
-    const bead = el('bead')! // 尺珠：与 gfill 同步走位，每判完一条 snap 脉冲一次
-    const labels = Array.from(root.querySelectorAll<HTMLElement>('.hd-sl')) // 量尺下三个中文标签：cur=正在判、done=已过
-
-    // 代际计数器：effect 重跑 / 卸载时 ++gen，各 await 之后比对 g !== gen 即 return，
-    // 防止上一轮残留的异步链继续往新 DOM 上写字（语言切换时最容易撞到这个竞态）
-    let gen = 0
-    const sleep = (ms: number) => new Promise<void>((res) => window.setTimeout(res, ms))
-    // 逐字打字：每字后都查一次代际，被打断时立刻弃疗（不查会让上一轮的字继续吐进新文本）
-    const type = async (node: HTMLElement, text: string, speed: number, g: number) => {
-      node.textContent = '' // 起点必须是零：缺字/串字都从这一行防住
-      node.classList.add('typing') // typing 只负责光标（::after 闪烁），打完立刻摘；多个节点共用同一动画名
-      for (let i = 0; i < text.length; i++) {
-        if (g !== gen) return
-        node.textContent += text.charAt(i) // 直写 textContent 而不是 setState：每秒几十次打字不该压给 React 渲染
-        await sleep(speed + Math.random() * speed * 0.5) // 非匀速才像人敲（均值 1.25×speed，即 TYPE_AVG）
-      }
-      node.classList.remove('typing')
-    }
-    // 重播一次性动画：先摘类 → 读 offsetWidth 强制重排（否则同一帧内摘加同类，浏览器视为无变化）→ 再加回
-    const replay = (n: HTMLElement, c: string) => {
-      n.classList.remove(c)
-      void n.offsetWidth
-      n.classList.add(c)
-    }
-    // 单行（一条术语）复位：只清这一行的类与文本，量尺/进度条状态要跨行保留
-    const clearRow = () => {
-      rowEl.classList.remove('in', 'out', 'lit') // 三个都是"一次性上下场/脉冲"类，留着会让下一行直接跳到终态
-      wEl.classList.remove('struck')
-      wtEl.textContent = ''
-      arrowEl.classList.remove('in')
-      idxEl.classList.remove('pop')
-      rEl.textContent = ''
-      rEl.classList.remove('typing', 'glow', 'lock') // 正解行三种状态同源：漏摘任何一个，下一行就自带"已判完"的错觉
-      cnEl.textContent = ''
-      cnEl.classList.remove('in')
-      void rowEl.offsetWidth // 落地一次重排：保证下面重新 add('in') 时入场动画真的从头播
-    }
-    // 整轮复位：把演示卡擦回空白（循环的每一轮都从这里起步，也保证重挂时无残留态）
-    const reset = () => {
-      srcEl.textContent = ''
-      srcEl.classList.remove('typing')
-      statusEl.textContent = ''
-      statusLn.classList.remove('in')
-      barfill.classList.remove('run') // 进度条靠动画跑，必须摘类回到 width:0
-      clearRow()
-      stepsEl.classList.remove('armed', 'hot')
-      labels.forEach((s) => s.classList.remove('done', 'cur')) // 三个量尺标签回到"未处理"（opacity 由 armed 动画给）
-      gfill.style.width = '0%'
-      bead.style.left = '0%' // 尺珠与填充段用 style 直写而非类：它们带 1.05s 过渡，走类会和动画抢时序
-      bead.classList.remove('snap')
-      resultEl.classList.remove('in', 'sweep', 'settled', 'stamp') // 结果框四段状态一次清空，漏一段下一轮就会"提前完成"
-      /* 下面六条清的都是"一次性动画"的挂载类：它们带 forwards/终帧，不摘下一轮就会直接跳到结束画面 */
-      markEl.classList.remove('draw', 'glow')
-      ringEl.classList.remove('go')
-      ruleEl.classList.remove('write')
-      flashEl.classList.remove('burst')
-      labelEl.classList.remove('stamp')
-      wrapEl.classList.remove('proof')
-      panel.classList.remove('bright', 'blaze', 'punch', 'drop', 'dim') // 整卡明暗五态全清：峰值/落章/下沉/压暗都不该跨轮存活
-      metaEl.classList.remove('lit')
-      finalEl.textContent = ''
-      finalEl.classList.remove('typing', 'done')
-      void panel.offsetWidth // 同 clearRow：把「全部摘类」这一帧落定，新一轮的动画才有起跳点
-    }
-    /* MOT：蓄力（下笔线）→ 一帧全爆 → 余韵逐拍衰减 */
-    const ceremony = (g: number) => {
-      // 峰值不是一条长动画，而是"同时点亮一组元素"的编排：下面每个 set 都独立带代际校验，
-      // 用户中途切语言/离开页面时，未触发的节拍会被静默丢弃，不会留下半截高亮
-      const set = (ms: number, fn: () => void) => {
-        window.setTimeout(() => { if (g === gen) fn() }, ms)
-      }
-      ruleEl.classList.add('write')
-      set(T.peak, () => {
-        panel.classList.remove('dim') // 与前一拍的压暗同帧交换：暗→亮的落差就是"峰值"本身
-        // 下面七条同一帧挂：峰值的强度来自"多处一起亮"，拆成两帧就会被读成两个独立事件
-        flashEl.classList.add('burst')
-        resultEl.classList.add('in')
-        markEl.classList.add('draw', 'glow')
-        ringEl.classList.add('go')
-        labelEl.classList.add('stamp')
-        stepsEl.classList.add('hot') // 量尺进入热态：填充段与标签在 CSS 里改成 0.1s 硬切，跟住这一拍
-        panel.classList.add('bright')
-      })
-      set(T.peak + T.sweepAt, () => resultEl.classList.add('sweep')) // 峰值后 240ms：审校光斜扫过结果框
-      set(T.peak + T.settleAt, () => {
-        resultEl.classList.add('settled') // 440ms：描边转"完成色"，副标转亮，视觉从爆发切回可读
-        metaEl.classList.add('lit')
-      })
-      set(T.peak + T.unmergeAt, () => {
-        panel.classList.remove('bright') // 660ms：亮度与热态一起回收，同时把最后一个标签判为已过
-        stepsEl.classList.remove('hot')
-        labels.forEach((s) => { s.classList.remove('cur'); s.classList.add('done') })
-      })
-    }
-    /** 终态快照：供「偏好减少动效」使用，内容与演出结果完全一致 */
-    const staticState = () => {
-      // 偏好减少动效：直接呈现终态（量尺三格全过、回写区落定）
-      // 写法：只挂"终帧"状态类，不排任何计时——动画由文件末尾的 reduced-motion 规则统一掐掉
-      srcEl.textContent = DEMO_SRC
-      statusEl.textContent = statusStr
-      statusLn.classList.add('in')
-      stepsEl.classList.add('armed')
-      labels.forEach((s) => s.classList.add('done'))
-      gfill.style.width = '100%'
-      bead.style.left = '100%' // 终值直写：该分支下 CSS 已把过渡与动画全关掉，不会自己滑过去
-      const last = DEMO_TERMS[DEMO_TERMS.length - 1] // 术语行是同一位置的绝对定位，终态只需摆出最后一条
-      idxEl.textContent = '03' // 与 DEMO_TERMS 条数手工绑定：增减术语时这一行必须同步改
-      cnEl.textContent = last.cn
-      cnEl.classList.add('in')
-      arrowEl.classList.add('in')
-      wtEl.textContent = last.w
-      wEl.classList.add('struck') // 保留红线：终态也要讲清"这里被纠正过"，只给正解等于丢掉卖点
-      // 以下六条按演出的收尾顺序补齐画面：正解 → 行 → 结果框 → 对勾 → 统计 → 定稿，少挂一类就会露出"半成品"
-      rEl.textContent = last.r
-      rowEl.classList.add('in')
-      resultEl.classList.add('in', 'settled')
-      markEl.classList.add('draw')
-      metaEl.classList.add('lit')
-      finalEl.textContent = DEMO_FINAL
-    }
-
-    // 减少动效：整条计时链根本不启动（不是"播完再跳"），信息一字不少只是不动；
-    // matchMedia?.() 的可选链会短路后面整条表达式，没有该 API 的环境（jsdom）安全地拿到 undefined
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-      staticState()
-      return () => { gen++ } // 这条分支没有计时链要断，但清理函数形状与主分支保持一致，便于两处对照
-    }
-
-    /* 顶部进度条时长 = 整段循环时长。
-       打字机每字耗时是 speed + random()*speed*0.5（均值 1.25×speed），
-       必须乘 TYPE_AVG，否则进度条会提前跑完干等下一轮。 */
-    const typed = (n: number, speed: number) => Math.round(n * speed * TYPE_AVG) // 一段打字的期望耗时
-    // 一条术语行的耗时 = 入 → 中文打字 → 停 → 箭头 → 初译打字 → 停 → 划掉 → 正解打字 → 定版 → 余韵 → 读题 → 退 → 间隙；
-    // 必须和下面 play() 里的 await 顺序逐拍对齐，改动画顺序时这里同步改，否则进度条与演出脱节
-    const rowMs = DEMO_TERMS.reduce((sum, tm) => sum
-      + T.enter
-      + typed(tm.cn.length, T.cnSpeed) + T.cnHold
-      + T.arrowIn + T.arrowHold
-      + typed(tm.w.length, T.wordSpeed) + T.wordHold
-      + T.strike
-      + typed(tm.r.length, T.rightSpeed) + T.lock + T.glowHold
-      + T.hold + T.exit + T.gap, 0)
-    // 一整轮：静一拍 → 原文 → 状态行 → 量尺蓄力 → 三条术语 → 吸气 → 峰值 → 定稿打字 → 审校光 → 结果停留 → 尾拍
-    const totalMs = LEAD
-      + typed(DEMO_SRC.length, T.srcSpeed) + T.srcHold
-      + typed(statusStr.length, T.statusSpeed) + T.statusHold + T.armHold
-      + rowMs
-      + T.breath + T.peak
-      + typed(DEMO_FINAL.length, T.finalSpeed) + T.proof + T.resultHold
-      + T.tailLead + T.tailHold
-    root.style.setProperty('--dur', `${totalMs}ms`) // 只交给 CSS 的 .hd-barfill 用（见文末 var(--dur)）
-
-    // 一轮完整演出：原文打字 → 状态行 → 量尺蓄力 → 三条术语逐处判错/纠正 → 回写峰值 → 定稿 → 自循环
-    async function play() {
-      const g = ++gen // 每轮占一个新代际，上一轮若有悬空 await 会自然熄火
-      reset() // 每轮都从空白起跳：也是首次挂载时唯一的"清场"入口
-      await sleep(LEAD)
-      if (g !== gen) return
-      barfill.classList.add('run') // 进度条与演出同帧起跑，二者时长同源于 --dur，不会各跑各的
-
-      await type(srcEl, DEMO_SRC, T.srcSpeed, g) // 第一拍先给"题面"：观众得先读懂原文，后面才看得懂纠正
-      if (g !== gen) return
-      await sleep(T.srcHold)
-      if (g !== gen) return
-
-      statusLn.classList.add('in') // 状态行先淡入再打字：光标得先有承载体
-      await type(statusEl, statusStr, T.statusSpeed, g) // 词条里的「3 处」与 DEMO_TERMS 条数靠人工对齐：加术语必须同步改中英两份词条
-      if (g !== gen) return
-      await sleep(T.statusHold)
-      if (g !== gen) return
-
-      stepsEl.classList.add('armed') // 量尺轨道展开 + 三个标签逐拍入场（全由 .armed 驱动，无需 JS 排期）
-      await sleep(T.armHold)
-      if (g !== gen) return
-
-      for (let i = 0; i < DEMO_TERMS.length; i++) {
-        const term = DEMO_TERMS[i]
-        if (g !== gen) return
-        clearRow() // 三条术语复用同一行 DOM：只做复位+重放，不条件渲染（结构一动 data-hd 缓存就失效）
-        idxEl.textContent = i < 9 ? `0${i + 1}` : String(i + 1) // 序号固定两位，配 tabular-nums 三行左缘才齐
-        labels.forEach((s, k) => s.classList.toggle('cur', k === i)) // 量尺标签：当前这条高亮，其余回到未处理态
-        // 进度先行（走到本条的 60% 处）：字还没判完，尺子先跟上，视觉才像"正在处理这一项"
-        const to = `${((i + 0.6) / DEMO_TERMS.length) * 100}%`
-        gfill.style.width = to
-        bead.style.left = to
-        rowEl.classList.add('in') // 行入场与序号 pop 同帧，读作"这一项开始"
-        replay(idxEl, 'pop')
-        await sleep(T.enter)
-        if (g !== gen) return
-
-        cnEl.classList.add('in') // 中文术语先位移到位、紧接着逐字打出：位移与打字分两拍才有层次
-        await type(cnEl, term.cn, T.cnSpeed, g)
-        if (g !== gen) return
-        await sleep(T.cnHold)
-        if (g !== gen) return
-
-        arrowEl.classList.add('in') // 箭头只做一次横向推进，暗示"从这里开始换成外语"
-        await sleep(T.arrowIn + T.arrowHold)
-        if (g !== gen) return
-
-        await type(wtEl, term.w, T.wordSpeed, g)
-        if (g !== gen) return
-        await sleep(T.wordHold) // 停顿给"这词看着没问题"的错觉，红线才有判错感
-        if (g !== gen) return
-
-        wEl.classList.add('struck') // 判错：红线 scaleX 展开 + 一次红色 text-shadow 脉冲
-        await sleep(T.strike)
-        if (g !== gen) return
-
-        rEl.classList.add('glow') // 正解先带辉光再打字：把视线钉在字号最大的那一栏
-        await type(rEl, term.r, T.rightSpeed, g)
-        if (g !== gen) return
-
-        // 判完一处的同步反馈：正解定版缩放 + 整行提亮 + 尺珠脉冲 + 标签转「已过」
-        replay(rEl, 'lock')
-        replay(rowEl, 'lit')
-        replay(bead, 'snap')
-        labels[i].classList.remove('cur') // 只动当前这一个标签：整组 forEach 会让"已过"提前蔓延
-        labels[i].classList.add('done')
-        replay(panel, 'drop') // 整卡轻微下沉一帧：给「这一条判定完成」一个可感的落点
-        const landed = `${((i + 1) / DEMO_TERMS.length) * 100}%` // 本条落定：尺子补齐到整格
-        gfill.style.width = landed
-        bead.style.left = landed
-
-        await sleep(T.lock)
-        if (g !== gen) return
-        rEl.classList.remove('lock') // lock 与 glow 分两拍退：同帧摘掉会让正解从最亮直接掉回基线，看着像闪烁
-        await sleep(T.glowHold)
-        if (g !== gen) return
-        rEl.classList.remove('glow')
-
-        await sleep(T.hold)
-        if (g !== gen) return
-
-        // 最后一条走完先整卡压暗：ceremony 的爆发需要前置落差，一路亮着就没有峰值（动效原则 3）
-        if (i === DEMO_TERMS.length - 1) panel.classList.add('dim')
-        rowEl.classList.remove('in')
-        rowEl.classList.add('out') // out 的退场曲线自带 .26s 延迟：整行错峰上移淡出，比 in 更慢
-        await sleep(T.exit + T.gap)
-        if (g !== gen) return
-      }
-
-      await sleep(T.breath) // 爆发前的一拍吸气：dim 之后不立刻点亮，留出让眼睛归位的时间
-      if (g !== gen) return
-      ceremony(g) // 峰值编排交给独立函数：play() 只排期，不掺动画细节
-      await sleep(T.peak)
-      if (g !== gen) return
-
-      await type(finalEl, DEMO_FINAL, T.finalSpeed, g) // 定稿比初译慢近三倍（16 vs 42ms/字）：过程要快，结论要读
-      if (g !== gen) return
-
-      // 定稿盖章：审校光扫过 → 结果框描边闪一下 → 文本点亮一次 → 面板爆发收势
-      wrapEl.classList.add('proof')
-      resultEl.classList.add('stamp')
-      finalEl.classList.add('done')
-      panel.classList.add('blaze', 'punch') // blaze 给最亮的一帧边框、punch 给闪白+冲击位移，缺一半就不像"落章"
-      markEl.classList.remove('glow')
-      void markEl.offsetWidth // 对勾的辉光是同一动画名，必须先摘后加重排才会二次触发
-      markEl.classList.add('glow')
-      await sleep(T.tailLead)
-      if (g !== gen) return
-
-      metaEl.classList.add('lit') // 统计副标放在盖章之后再亮：先给结论再给数字，顺序反了会抢峰值
-      await sleep(T.proof + T.resultHold) // 结果至少停 2.4s：读完一整句英文译文的下限
-      if (g !== gen) return
-      await sleep(T.tailHold)
-      if (g !== gen) return
-      play() // 自循环：结果停留够久（观众读完）后回到空白重放，而不是挂一个 setInterval
-    }
-    play()
-    return () => { gen++ } // 卸载只 ++ 代际：悬空 await 与 ceremony 里未触发的 setTimeout 会自行熄火
-    // 依赖 statusStr：切语言后备案文本长度变了，整段节拍时长必须按新语种重排，只能重挂一次 effect
-  }, [statusStr])
-
-  const brand = branding.brandName || t('land.brand') // 页眉品牌与整页同源：租户改名后演示卡不留旧产品名
-  return (
-    <div className="hd" ref={demoRef}>
-      {/* 演示卡整棵树是静态结构：动画只切类名与 textContent，绝不条件渲染节点，
-          否则 effect 开头缓存的 23 个 data-hd 句柄会集体失效 */}
-      <div className="hd-panel" data-hd="panel">
-        <i className="hd-barfill" data-hd="barfill" /> {/* 循环进度条：时长取 JS 写入的 --dur */}
-        <div className="hd-bar">
-          {/* 仿编辑器标题栏：三点 + 品牌 + 语种标签，纯装饰，不带任何跳转 */}
-          <span className="hd-dots"><i /><i /><i /></span>
-          <span className="hd-name">
-            <b>{brand}</b>
-            <em>{t('land.demoSub')}</em> {/* 「· 术语择优引擎」：定位短语，≤620px 隐藏让位给语种标签 */}
-          </span>
-          <span className="hd-tag">{t('land.demoTag')}</span> {/* 「汽车行业 · ZH → EN」：必须与 DEMO_SRC 的行业一致 */}
-        </div>
-        <div className="hd-stream">
-          <div className="hd-src">
-            <span className="hd-srctag">{t('land.demoSrcTag')}</span>
-            <div className="hd-srcwrap">
-              {/* ghost 只用来撑高度，真身绝对定位覆盖其上：打字过程中行框不塌不跳（文末另有说明） */}
-              <div className="hd-srctext ghost" aria-hidden="true">{DEMO_SRC}</div>
-              <div className="hd-srctext" data-hd="src" />
-            </div>
-          </div>
-          <div className="hd-status" data-hd="statusline">
-            {/* 状态行：脉冲点常驻 + 文案逐字打出，两者合成"系统正在干活"的观感 */}
-            <i className="hd-pulse" />
-            <span data-hd="status" />
-          </div>
-          <div className="hd-steps" data-hd="steps">
-            <div className="hd-slabels">
-              {/* 三个量尺标签直接由 DEMO_TERMS 生成：与术语行同源，增删一条时标签/行/节拍时长三处一起跟随 */}
-              {DEMO_TERMS.map((tm, i) => (
-                <span className="hd-sl" key={tm.w}>
-                  <i>{i < 9 ? `0${i + 1}` : i + 1}</i>
-                  {tm.cn}
-                </span>
-              ))}
-            </div>
-            <div className="hd-gauge">
-              {/* 量尺三段：轨道（.armed 时从左往右展开）+ 已填充段 + 尺珠，后两者的百分比由 JS 直写 style */}
-              <i className="hd-gtrack" />
-              <i className="hd-gfill" data-hd="gfill" />
-              <i className="hd-gbead" data-hd="bead" />
-            </div>
-          </div>
-          <div className="hd-track" data-hd="track">
-            {/* hd-track 至少 128px 高：术语行是绝对定位的覆盖层（不占流），结果框才不会被三条轮播顶得上跳下窜 */}
-            <div className="hd-row" data-hd="row">
-              <span className="hd-idx" data-hd="idx">01</span> {/* 写死的 01 只是首帧占位，play() 每条都会覆写 */}
-              <span className="hd-cn" data-hd="cn" />
-              <span className="hd-arrow" data-hd="arrow">
-                {/* 箭头单独画 SVG（非图标集）：24×13 的细长双段线在图标集里没有对应尺寸 */}
-                <svg width="24" height="13" viewBox="0 0 24 13" fill="none" aria-hidden="true">
-                  <path d="M1 6.5H21M21 6.5L15.7 2M21 6.5L15.7 11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </span>
-              <span className="hd-swap">
-                {/* 初译与正译同基线并排：正译字号更大（30~50 vs 21~38），"判对"的分量靠字号压过"判错" */}
-                <span className="hd-w" data-hd="w"><span className="hd-wt" data-hd="wt" /></span>
-                <span className="hd-r" data-hd="r" />
-              </span>
-            </div>
-            <div className="hd-flash" data-hd="flash" /> {/* 爆发光斑：贴在轨道中线，一次性 burst */}
-            <div className="hd-rule" data-hd="rule" /> {/* 下笔线：ceremony 起手写出，给峰值一个"落笔"动作 */}
-            <div className="hd-result" data-hd="result">
-              <div className="hd-rhead">
-                {/* 结果框头：完成图标 + 结论 + 统计；右侧"复制"写入定稿译文（真实按钮，带已复制反馈） */}
-                <span className="hd-rleft">
-                  <span className="hd-rcheck">
-                    <span className="hd-ring" data-hd="ring" />
-                    <svg className="hd-mark" data-hd="mark" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
-                      {/* 这段 path 实际长约 14.6px，CSS 里 stroke-dasharray/offset 取 15（略放大保证起笔完全藏住），
-                          draw 才是"一笔写出"而不是淡入 */}
-                      <path d="M2.6 7.9L6 11.3L12.4 3.9" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </span>
-                  <span className="hd-rlabel" data-hd="rlabel">{t('land.demoDone')}</span>
-                  <span className="hd-rsub" data-hd="meta">{t('land.demoMeta')}</span> {/* 统计口径与 DEMO_TERMS 条数一致（3 / 3） */}
-                </span>
-                <button type="button" className="hd-dlbtn" onClick={copyFinal}>
-                  {copied ? <CheckIcon size={16} /> : <ClipboardIcon size={16} />}
-                  <span>{copied ? t('land.demoCopied') : t('land.demoCopy')}</span>
-                </button>
-              </div>
-              <div className="hd-fwrap" data-hd="fwrap">
-                {/* 定稿译文：同样是 ghost 占位 + 真身覆盖，外层 ::after 负责审校扫光 */}
-                <div className="hd-final ghost" aria-hidden="true">{DEMO_FINAL}</div>
-                <div className="hd-final" data-hd="final" />
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 /** 开发者示例代码块：复制按钮写真实 curl（与演示卡同一套剪贴板降级口径，1.6s 回弹） */
 function DevSample() {
@@ -528,7 +92,7 @@ function DevSample() {
 function Pill(props: {
   variant?: 'pri' | 'ghost' | 'soft' | 'dark' // pri 主投（白底黑字）/ ghost 描边次投 / soft 卡内浮面 / dark 反相卡上的实心黑
   size?: 'sm' | 'md' | 'lg' // 三档定高 42 / 50 / 56：导航用 sm，收尾用 lg，其余一律 md
-  href: string // 只做链接跳转：导航与 CTA 链接用 <a> 而非 <button>（带状态的只有 LeadForm/HeroDemo/DevSample 三处），右键新窗口打开也仍然可用
+  href: string // 只做链接跳转：导航与 CTA 链接用 <a> 而非 <button>（带状态的只有 LeadForm/DevSample 两处），右键新窗口打开也仍然可用
   children: React.ReactNode
 }) {
   const v = props.variant ?? 'pri' // 默认主投：页面上出现次数最多的那颗就是它
@@ -548,11 +112,12 @@ function FIcon(props: { children: React.ReactNode }) {
   return <span className="lc-ficon">{props.children}</span>
 }
 
-// 导航五锚点表：id=页内区块元素 id，key=文案键。导航 JSX 与滚动高亮（scrollspy）共用这一份，
+// 导航六锚点表：id=页内区块元素 id，key=文案键。导航 JSX 与滚动高亮（scrollspy）共用这一份，
 // 增删区块只改这张表，链接与高亮判定不会各自漂移
 const NAV_SECTIONS = [
   { id: 'solution', key: 'land.navSolution' },
   { id: 'features', key: 'land.navFeatures' },
+  { id: 'quality', key: 'land.navQuality' }, // ★ 2026-09-19 质量验证升为核心卖点，进导航
   { id: 'pricing', key: 'land.navPricing' },
   { id: 'rewards', key: 'land.navRewards' },
   { id: 'faq', key: 'land.navFaq' },
@@ -638,8 +203,8 @@ export default function Landing() {
           内容是模块级常量，重渲染时字符串不变，不会重复生成 style 节点 */}
       <style>{LANDING_CSS}</style>
 
-      {/* 1. 顶部导航：白块 Logo + 品牌名 | 5 个锚点 | 登录 + 免费试用 */}
-      {/* 锚点只 5 个且全部指向本页 id：不引二级页与外链，先让人在同一屏读完整套论证再决定去注册 */}
+      {/* 1. 顶部导航：白块 Logo + 品牌名 | 6 个锚点 | 登录 + 免费试用 */}
+      {/* 锚点只 6 个且全部指向本页 id：不引二级页与外链，先让人在同一屏读完整套论证再决定去注册 */}
       <header className="lc-mkt-nav lc-mo-left">
         <a className="lc-nav-brand" href="/">
           {/* Logo：白色 8px 圆角块 + 两笔一实一虚的笔画，虚笔（opacity .45）示意"双语对照"；页脚复用同一段 */}
@@ -651,7 +216,7 @@ export default function Landing() {
           <span>{brand}</span> {/* 品牌名：租户改名后导航、页脚、演示卡页眉三处同时跟着变 */}
         </a>
         <nav className="lc-nav-links">
-          {/* 5 个锚点顺序 = 页面区块顺序：滚动到哪块，对应链接由 scrollspy 点亮（.on） */}
+          {/* 6 个锚点顺序 = 页面区块顺序：滚动到哪块，对应链接由 scrollspy 点亮（.on） */}
           {NAV_SECTIONS.map(({ id, key }) => (
             <a key={id} href={`#${id}`} className={activeSec === id ? 'on' : undefined}>{t(key)}</a>
           ))}
@@ -663,9 +228,9 @@ export default function Landing() {
         </div>
       </header>
 
-      {/* 2. Hero：左文案（徽章/双行标题/副题/双 CTA/信任指标）+ 右演示卡 */}
+      {/* 2. Hero：左文案（徽章/双行标题/副题/双 CTA/信任指标）+ 右留资引导卡（★ #22：原演示卡退役） */}
       {/* 左栏定宽 500px、右栏 flex:1（尺寸都在 CSS .lc-hero-copy/.lc-hero-demo）：
-          文案要窄到一行十几字好读，演示卡要尽量宽才放得下术语行；<1200px 折成上下两段 */}
+          文案要窄到一行十几字好读，引导卡要尽量宽才放得下三条承诺；<1200px 折成上下两段 */}
       <section className="lc-hero" ref={heroRef}>
         <div className="lc-hero-in">
           <div className="lc-hero-copy">
@@ -678,9 +243,9 @@ export default function Landing() {
             <p className="lc-hero-sub lc-mo-up lc-mo-d3">{t('land.heroSub')}</p>
             {/* d1~d5 每档差 60ms（motion.css）：徽章→标题→副题→按钮→信任指标逐拍落位，读作"页面在呼吸"而非整体闪现 */}
             <div className="lc-hero-ctas lc-mo-up lc-mo-d4">
-              {/* 主 CTA 去 /register；「预约演示」锚到本页收尾留资表单（#cta）：页内已有真表单，不再空转去注册页 */}
+              {/* 主 CTA 去 /register；副 CTA「留言获取方案」锚到本页收尾留资表单（#cta）：页内已有真表单，不再空转去注册页 */}
               <Pill href="/register">{t('land.ctaFree')}</Pill>
-              <Pill variant="ghost" href="#cta">{t('land.ctaDemo')}</Pill>
+              <Pill variant="ghost" href="#cta">{t('land.ctaLead')}</Pill>
             </div>
             <div className="lc-hero-trust lc-mo-up lc-mo-d5">
               {/* 信任指标用可核对的事实句（行业数/语言数/是否人工审校），不用形容词：与 FAQ 的口径互相兜住 */}
@@ -690,8 +255,19 @@ export default function Landing() {
             </div>
           </div>
           <div className="lc-hero-demo lc-mo-up lc-mo-d3">
-            {/* 演示卡用 d3 与副题同拍：再晚就成"二次加载"，更早则抢标题的读序 */}
-            <HeroDemo />
+            {/* 留资引导卡用 d3 与副题同拍：再晚就成"二次加载"，更早则抢标题的读序。
+                卡上只有锚点按钮没有表单——表单全页唯一一份留在 #cta 收尾区，避免双提交口 */}
+            <div className="lc-hero-lead">
+              <span className="lh-tag">{t('land.heroLeadTag')}</span>
+              <h2 className="lh-t">{t('land.heroLeadTitle')}</h2>
+              <p className="lh-d">{t('land.heroLeadSub')}</p>
+              <ul className="lh-pts">
+                {[1, 2, 3].map((i) => (
+                  <li key={i}><CheckCircleIcon size={16} />{t(`land.heroLeadP${i}`)}</li>
+                ))}
+              </ul>
+              <Pill variant="ghost" href="#cta">{t('land.heroLeadBtn')}</Pill>
+            </div>
           </div>
         </div>
       </section>
@@ -829,7 +405,48 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* 4c. 开发者集成：左栏定位 + 右栏三张能力卡与可复制的真实 curl 示例。
+      {/* 4c. 质量验证（★ 2026-09-19 核心卖点）：统计带 + 两种校验方法卡 + 四条对比结论 + 一句话收口。
+          数字全部来自对外交叉盲评结论（GPT/Gemini 双模型独立评估、专业大模型交叉校验），不写无法核实的口径；
+          视觉复用覆盖范围区块的统计带与功能卡语法，不引入新视觉语言 */}
+      <section id="quality" className="lc-sec">
+        <div className="lc-sec-head lc-reveal">
+          <p className="lc-sec-label">{t('land.secQuality')}</p>
+          <h2 className="lc-sec-title">{t('land.qualityTitle')}</h2>
+          <p className="lc-sec-sub">{t('land.qualitySub')}</p>
+        </div>
+        <div className="lc-cov-stats lc-qa-stats">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="lc-cov-stat lc-reveal lc-mo-lift" data-reveal-delay={String((i - 1) * 60)}>
+              <b>{t(`land.qs${i}.n`)}</b>
+              <span>{t(`land.qs${i}.l`)}</span>
+            </div>
+          ))}
+        </div>
+        <div className="lc-qa-methods">
+          {[
+            { k: 'qaExt', Icon: CheckCircleIcon },
+            { k: 'qaInt', Icon: ShieldIcon },
+          ].map(({ k, Icon }, i) => (
+            <article key={k} className="lc-fcard lc-reveal lc-mo-lift" data-reveal-delay={String(i * 60)}>
+              <FIcon><Icon size={24} /></FIcon>
+              <h3 className="lc-fcard-t">{t(`land.${k}.t`)}</h3>
+              <p className="lc-fcard-d">{t(`land.${k}.d`)}</p>
+            </article>
+          ))}
+        </div>
+        <div className="lc-qa-points lc-reveal">
+          {/* 四条结论行：border-top 分隔的清单式排版，与「关于我们」区块同一语法——结论要读，不要看 */}
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="lc-qa-pt">
+              <h3 className="lc-qa-t"><CheckIcon size={16} />{t(`land.qp${i}.t`)}</h3>
+              <p className="lc-qa-d">{t(`land.qp${i}.d`)}</p>
+            </div>
+          ))}
+        </div>
+        <p className="lc-qa-final lc-reveal">{t('land.qaFinal')}</p>
+      </section>
+
+      {/* 4d. 开发者集成：左栏定位 + 右栏三张能力卡与可复制的真实 curl 示例。
           端点/鉴权头/字段逐一对齐后端 openapi.v1.json，示例跑不通就是缺陷 */}
       <section id="developers" className="lc-sec">
         <div className="lc-dev">
@@ -1017,7 +634,7 @@ export default function Landing() {
               <a href="#features">{t('land.footFeatures')}</a>
               <a href="#terms">{t('land.footTermsLib')}</a>
               <a href="#pricing">{t('land.footPricingLink')}</a>
-              <a href="#cta">{t('land.footDemo')}</a>
+              <a href="#cta">{t('land.footLead')}</a>
             </div>
             <div className="lc-foot-col">
               {/* 公司列四条同样有真实落点：关于我们/更新日志是页内新区块，
@@ -1117,8 +734,18 @@ const LANDING_CSS = `
 .lc-hero-trust{display:flex;align-items:center;gap:26px;font-size:14px;color:var(--lc-text-3)}
 .lc-hero-trust span{display:inline-flex;align-items:center;gap:8px}
 .lc-hero-trust svg{color:var(--lc-text-2)}
-/* min-width:0 是 flex 老坑：不写它，演示卡里的长英文会把右栏顶到溢出、整页出现横向滚动 */
+/* min-width:0 是 flex 老坑：不写它，右栏卡里的长英文会把右栏顶到溢出、整页出现横向滚动 */
 .lc-hero-demo{flex:1;display:flex;justify-content:center;min-width:0}
+/* ★ #22 Hero 右栏「留言获取方案」引导卡（原演示卡退役）：与页内其他卡共用一套卡语
+   （1.2px 描边 + radius 16 + --lc-bg），刻意弱于 #cta 白块——这里只种草，转化动作留给表单 */
+.lc-hero-lead{width:100%;max-width:520px;display:flex;flex-direction:column;align-items:flex-start;gap:14px;padding:28px 30px;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:16px}
+.lh-tag{font:500 11px/1 var(--lc-font-mono);letter-spacing:.08em;color:var(--lc-text-3);border:1px solid var(--lc-border-pill);border-radius:999px;padding:5px 10px}
+.lh-t{margin:0;font-size:19px;font-weight:600;line-height:28px;color:var(--lc-text-1)}
+.lh-d{margin:0;font-size:13.5px;line-height:22px;color:var(--lc-text-3)}
+/* 三条承诺竖排小间距：读成清单而不是段落；图标取 --lc-text-2 与信任指标同档 */
+.lh-pts{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;width:100%;font-size:13.5px;line-height:21px;color:var(--lc-text-2)}
+.lh-pts li{display:flex;align-items:flex-start;gap:8px}
+.lh-pts svg{flex:none;margin-top:2px;color:var(--lc-text-3)}
 
 /* Hero 入场：整块下沉压暗 → 回弹释放（峰值前先压暗做落差） */
 .lc-hero.is-sink{filter:brightness(.84);transform:translateY(6px)}
@@ -1194,7 +821,21 @@ const LANDING_CSS = `
 .lc-chip{padding:7px 14px;border:1.2px solid var(--lc-border-card);border-radius:999px;font-size:13px;color:var(--lc-text-2);background:var(--lc-bg);white-space:nowrap}
 .lc-chip--mono{font-family:var(--lc-font-mono);letter-spacing:.02em;font-size:12px}
 
-/* —— 4c. 开发者集成 —— */
+/* —— 4c. 质量验证（核心卖点） —— */
+/* 统计带复用上区块 .lc-cov-stat；只把下边距收紧一档（32px），因为方法卡紧跟其后不需要大间隔 */
+.lc-qa-stats{margin-bottom:32px}
+/* 方法两卡：与功能 bento 的小卡同款 .lc-fcard，只改网格为对半 */
+.lc-qa-methods{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.lc-qa-points{display:flex;flex-direction:column;max-width:920px;margin-top:44px}
+/* 结论行用 border-top 清单而非卡片：这里是"要读的文字"，卡片边框会把四条读成一个一个的孤立卖点 */
+.lc-qa-pt{display:flex;flex-direction:column;gap:8px;padding:20px 0;border-top:1px solid var(--lc-border-faint)}
+.lc-qa-t{display:flex;align-items:center;gap:10px;margin:0;font-size:18px;font-weight:600;color:var(--lc-text-1)}
+.lc-qa-t svg{color:var(--lc-text-3);flex:none}
+.lc-qa-d{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
+/* 收口句用强描边框：全区块唯一的"结论容器"，靠边框强度而非底色区分（本页无彩底） */
+.lc-qa-final{margin:44px 0 0;padding:26px 30px;border:1.2px solid var(--lc-border-strong);border-radius:16px;font-size:17px;line-height:28px;font-weight:600;color:var(--lc-text-1)}
+
+/* —— 4d. 开发者集成 —— */
 /* 网格参数照抄 FAQ（360px + 1fr / gap 80）：又一个"左目录右正文"区块，不另造版式 */
 .lc-dev{display:grid;grid-template-columns:360px 1fr;gap:80px;align-items:start}
 .lc-dev-head{display:flex;flex-direction:column;gap:14px;align-items:flex-start}
@@ -1211,7 +852,7 @@ const LANDING_CSS = `
 /* 代码块底色用 --lc-deep（与大卡演示行同语法）：页内"嵌进去的界面片段"共用一种深度 */
 .lc-code{border:1.2px solid var(--lc-border-card);border-radius:16px;overflow:hidden;background:var(--lc-deep)}
 .lc-code-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 18px;border-bottom:1px solid var(--lc-border-faint);font-family:var(--lc-font-mono);font-size:12px;letter-spacing:.02em;color:var(--lc-text-3)}
-/* 复制按钮与小号胶囊按钮同形（28 高/8 圆角）：按钮语汇总是在 .hd-dlbtn 一档，不新开尺寸 */
+/* 复制按钮与小号胶囊按钮同形（28 高/8 圆角）：按钮语汇总只有一档尺寸，不新开 */
 .lc-code-copy{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:#C8CCD1;font:500 12px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)}
 .lc-code-copy:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
 .lc-code-copy svg{display:block}
@@ -1298,7 +939,7 @@ const LANDING_CSS = `
 /* 白块里的次级文字同样只能取最深那档灰：比 #000 弱一级，既读得清又不抢标题 */
 .lc-cta-sub{margin:0;font-size:16px;color:var(--lc-text-4)}
 
-/* —— 8b. 收尾留资表单（★ P1-3；结构见 components/LeadForm.tsx，带状态组件之一，另两处是 HeroDemo/DevSample） —— */
+/* —— 8b. 收尾留资表单（★ P1-3；结构见 components/LeadForm.tsx，本页带状态组件之一，另一处是 DevSample；★ #22 HeroDemo 已退役） —— */
 /* 分隔线两侧各一段 1px 短线：把"免费自助注册"与"留资等回电"两条路在视觉上并置成二选一 */
 .lc-lead-sep{display:flex;align-items:center;gap:14px;width:100%;max-width:560px;font-size:13px;color:var(--lc-text-4)}
 .lc-lead-sep::before,.lc-lead-sep::after{content:'';flex:1;height:1px;background:rgba(0,0,0,.12)}
@@ -1358,11 +999,12 @@ const LANDING_CSS = `
   .lc-mkt-nav{padding:0 40px}
   .lc-cta-wrap,.lc-foot{padding-left:40px;padding-right:40px}
 }
-/* 980px：所有多列 grid 收单列；三步流程转竖排并把箭头旋转 90°；导航锚点直接隐藏（五个锚点不是必读信息，
+/* 980px：所有多列 grid 收单列；三步流程转竖排并把箭头旋转 90°；导航锚点直接隐藏（六个锚点不是必读信息，
    宁可少一个入口也不在这里造汉堡菜单） */
 @media (max-width:980px){
   .lc-plans{grid-template-columns:1fr} /* 价格竖排后靠 DOM 顺序读：免费→专业→企业，推荐档仍在中间 */
   .lc-rewards{grid-template-columns:1fr}
+  .lc-qa-methods{grid-template-columns:1fr} /* 两张方法卡竖排：并排时盲评说明整段会被压成窄条 */
   .lc-faq{grid-template-columns:1fr;gap:32px} /* 标题栏与问答之间只需一小段距离，80px 会把答案推到首屏外 */
   .lc-about{grid-template-columns:1fr;gap:32px} /* 与 FAQ 同口径：单列后 80px 会把三条方式推出首屏 */
   .lc-dev{grid-template-columns:1fr;gap:32px} /* 同上：左栏定长在窄屏只会把右栏正文挤瘪 */
@@ -1394,295 +1036,5 @@ const LANDING_CSS = `
   .lc-nav-cta .lc-mkt-btn--sm{height:36px;padding:0 14px;font-size:13px}
 }
 
-/* ================= Hero 演示卡（hero-stream.html 移植，类名 hd-*） ================= */
-/* 这一段的类名一律 hd-* 前缀且只在本文件出现：演示卡是独立"器件"，不与上方营销布局互相覆写。
-   状态类（in/out/done/cur/armed/hot/bright/blaze/dim…）全由 JS 切挂，CSS 只负责"长什么样"。 */
-/* 卡片定宽 720：与画布演示区等宽，父级 flex 居中，max-width 让窄屏等比收缩而不换结构 */
-.hd{width:720px;max-width:100%}
-/* overflow:hidden 是给 .hd-barfill 与扫光用的：它们都靠"跑出去一截"实现动画，不能露出圆角外 */
-/* 底色与页面同黑，所以"卡片感"只能靠最高一档描边（--lc-border-strong 6.0:1）+ 顶缘那 1px 内受光做出来 */
-.hd-panel{
-  background:var(--lc-bg);
-  border:1.2px solid var(--lc-border-strong);
-  border-radius:16px;overflow:hidden;position:relative;
-  box-shadow:var(--lc-panel-highlight);
-  transition:border-color .62s ease,filter .16s linear;
-  animation:hdBoot .62s cubic-bezier(.16,1,.3,1) both;
-}
-/* 挂载时的起手动画：只做一次（both 锁终值），10px 上浮 + 微缩放，让卡片"落位"而不是淡入 */
-@keyframes hdBoot{from{opacity:0;transform:translateY(10px) scale(.994)}to{opacity:1;transform:none}}
-/* dim：术语判完最后一条时整卡压暗，为 ceremony 的爆发蓄落差（动效原则 3） */
-.hd-panel.dim{filter:brightness(.84);transition:filter .5s cubic-bezier(.4,0,.2,1)}
-/* bright / blaze 是峰值的"亮两级"，只动描边颜色：整卡不动几何，避免和 drop/punch 的 transform 抢 */
-.hd-panel.bright{border-color:#7B818C}
-.hd-panel.blaze{border-color:#B0B6BF}
-/* drop：每判完一条术语让整卡下沉不到 1px——几乎看不见，但"落定了"的感觉靠它 */
-.hd-panel.drop{animation:hdPanelDrop .24s cubic-bezier(.3,1.3,.5,1)}
-@keyframes hdPanelDrop{0%{transform:translateY(0)}35%{transform:translateY(.9px)}100%{transform:translateY(0)}}
-/* punch：落章时"闪白 + 冲击"两条动画并行——亮度走 filter、位移走 transform，各占一条才不会互盖 */
-.hd-panel.punch{animation:hdFlash .5s cubic-bezier(.16,1,.3,1),hdImpact .52s cubic-bezier(.2,.9,.2,1)}
-@keyframes hdFlash{0%{filter:brightness(1)}20%{filter:brightness(1.65)}100%{filter:brightness(1)}}
-@keyframes hdImpact{0%{transform:translateY(0)}13%{transform:translateY(1.6px)}40%{transform:translateY(-.7px)}68%{transform:translateY(.3px)}100%{transform:translateY(0)}}
-
-/* 顶部循环进度条：时长由 JS 写进 --dur（按当前语种文案长度折算），CSS 只管线性跑满 */
-.hd-barfill{position:absolute;top:0;left:0;height:1px;width:0;background:var(--lc-text-1);opacity:.5}
-/* var(--dur) 带 24000ms 兜底：单测/静态预览里没有 JS，也要能看到这条线在跑 */
-.hd-barfill.run{animation:hdSweep var(--dur,24000ms) linear forwards}
-@keyframes hdSweep{from{width:0}to{width:100%}}
-
-/* 标题栏定高 46px：它只是"窗口感"，不参与内容高度计算 */
-.hd-bar{height:46px;display:flex;align-items:center;justify-content:space-between;padding:0 32px;border-bottom:1px solid var(--lc-border-faint)}
-/* 三点用第一/第三点拉开明暗：三颗同色会像"禁用态"，有一颗最亮才像窗口 */
-.hd-dots{display:inline-flex;align-items:center;gap:6px;flex:none}
-.hd-dots i{width:10px;height:10px;border-radius:999px;background:var(--lc-text-4)}
-.hd-dots i:nth-child(1){background:var(--lc-text-1)}
-.hd-dots i:nth-child(2){background:var(--lc-text-3)}
-/* 品牌名与副标基线对齐：字号相同但字重与色阶不同，用 center 会让 em 看起来偏低 */
-.hd-name{display:inline-flex;align-items:baseline;white-space:nowrap}
-.hd-name b{font-size:13px;font-weight:600;color:var(--lc-text-1);letter-spacing:.02em}
-.hd-name em{margin-left:5px;font-style:normal;font-size:13px;font-weight:600;color:var(--lc-text-2);letter-spacing:.02em}
-/* 语种标签用拉丁字体族：里面是 "ZH → EN" 这类拉丁字形，用中文字体拿不到正确的箭头与字距 */
-.hd-tag{font-size:12px;color:var(--lc-text-4);font-family:var(--lc-font-latin);letter-spacing:.03em;border:1.2px solid var(--lc-border-pill);border-radius:999px;padding:5px 12px;white-space:nowrap}
-
-/* —— 原文区 —— */
-.hd-stream{padding:30px 32px 20px}
-.hd-src{border:1.2px solid var(--lc-border-input);border-radius:14px;padding:16px 18px}
-.hd-srctag{display:block;font-size:12px;letter-spacing:.06em;color:var(--lc-text-4);margin-bottom:8px}
-.hd-srcwrap{position:relative}
-/* min-height 一格：ghost 与真身都在，这里再兜一层，避免首帧空白时输入框塌陷 */
-.hd-srctext{font-size:15px;line-height:26px;color:#B4B9C0;min-height:26px}
-/* ghost 用 visibility 不用 display：要它继续占位撑高，真身才能绝对定位盖上去（打字时不跳行高） */
-.hd-srctext.ghost{visibility:hidden}
-.hd-srcwrap .hd-srctext:not(.ghost){position:absolute;left:0;top:0;right:0}
-/* 光标：::after 画 2px 竖条并 steps(1) 硬闪（0.9s 一轮），三处打字区共用同一套 hdBlink 节拍 */
-.hd-srctext.typing::after{content:'';display:inline-block;width:2px;height:14px;margin-left:3px;vertical-align:-3px;background:currentColor;animation:hdBlink .9s steps(1) infinite}
-
-/* 状态行：min-height 先占好一格，文案打出来前后都不许顶动下面的量尺 */
-.hd-status{margin-top:14px;min-height:22px;display:flex;align-items:center;gap:10px;font-size:13px;line-height:22px;color:var(--lc-text-3);opacity:0;transition:opacity .45s ease}
-.hd-status.in{opacity:1}
-/* 脉冲点常驻无限循环：它表达"系统还活着"，一旦停了观众会以为演示结束 */
-.hd-pulse{width:6px;height:6px;border-radius:999px;background:var(--lc-text-4);flex:none;animation:hdPulse 1.4s ease-in-out infinite}
-@keyframes hdPulse{0%,100%{opacity:.3}50%{opacity:1}}
-
-/* 量尺区（.hd-steps）= 上排三个步骤标签 + 下排一条刻度尺。标签由 DEMO_TERMS 直接生成，
-   所以条数/宽度都是自适应的，加删术语不必回来改这里；.armed 由 play() 在状态行打完字后挂上
-   （减少动效分支则由 staticState 直接挂），挂上之前整块保持透明。 */
-.hd-steps{margin-top:16px;margin-bottom:16px}
-.hd-slabels{display:flex;margin-bottom:8px}
-/* flex:1 把整条尺按术语条数等分：标签落点与 JS 写进 style 的百分比共用同一套比例，天然对齐 */
-.hd-sl{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-size:12px;line-height:16px;letter-spacing:.02em;color:#666C74;white-space:nowrap;opacity:0;transition:color .5s ease}
-/* 序号单独 10px + 等宽数字：01/02/03 的字宽必须一致，否则后面的中文标签会左右跳动 */
-.hd-sl i{font-style:normal;font-family:var(--lc-font-latin);font-size:10px;font-weight:600;letter-spacing:0;font-variant-numeric:tabular-nums;color:#5F656D;transition:color .5s ease}
-/* done→cur 只换颜色、不换字重：字重一变行宽就抖，量尺只是背景信息，抖动比对比度低更难受 */
-.hd-sl.done{color:#8A9099}.hd-sl.done i{color:#C8CCD1}
-.hd-sl.cur{color:var(--lc-text-1)}.hd-sl.cur i{color:#fff}
-/* 数字"上钩"只在 armed 之后允许：没点亮就播会和下面 .armed 的入场节拍（.20/.29/.38s）抢跑 */
-.hd-steps.armed .hd-sl.cur i{animation:hdNumHook .4s cubic-bezier(.16,1,.3,1)}
-@keyframes hdNumHook{0%{transform:none}30%{transform:translateY(-2.5px)}100%{transform:none}}
-
-/* —— 刻度尺本体：12px 高的相对定位容器，三段全部绝对定位，共用同一条中线（top:50% + 负 margin）—— */
-.hd-gauge{position:relative;height:12px}
-/* 轨道：scaleX(0) 起步，.armed 时展开成 1——先"把尺子画出来"，再在上面量 */
-.hd-gtrack{position:absolute;left:0;right:0;top:50%;height:2px;margin-top:-1px;border-radius:2px;background:var(--lc-border-faint);transform:scaleX(0);transform-origin:left}
-/* 已判定段：width 由 JS 直写百分比（走到本条的 60% 处），1.05s 缓动比单条节拍长一点，像"慢慢追上去" */
-.hd-gfill{position:absolute;left:0;top:50%;height:2px;margin-top:-1px;width:0;border-radius:2px;background:linear-gradient(90deg,rgba(255,255,255,.30) 0%,rgba(255,255,255,.75) 70%,#fff 100%);box-shadow:0 0 10px rgba(255,255,255,.40);transition:width 1.05s cubic-bezier(.22,1,.28,1)}
-/* 尺珠：3×12 竖条带光晕，left 用与 gfill 完全相同的时长与曲线，两者走位永远同步不脱节 */
-.hd-gbead{position:absolute;left:0;top:50%;width:3px;height:12px;margin:-6px 0 0 -1.5px;border-radius:2px;background:#fff;box-shadow:0 0 12px rgba(255,255,255,.95),0 0 3px #fff;opacity:0;transition:left 1.05s cubic-bezier(.22,1,.28,1)}
-/* 外扩 36px 径向光用伪元素而不是 box-shadow：box-shadow 出不了珠子自身轮廓，做不出这团"热度" */
-.hd-gbead::before{content:'';position:absolute;left:50%;top:50%;width:36px;height:36px;margin:-18px 0 0 -18px;border-radius:50%;background:radial-gradient(closest-side,rgba(255,255,255,.26) 0%,rgba(255,255,255,0) 100%)}
-/* 内层 16px 圆环：平时 scale(.35)+透明，只有 .snap 才炸一次，用作"这一条判完了"的打点 */
-.hd-gbead::after{content:'';position:absolute;left:50%;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;border:1.2px solid rgba(255,255,255,.9);opacity:0;transform:scale(.35)}
-/* forwards 停在透明终态：摘掉 .snap 时不会看到圆环"倒放"回去 */
-.hd-gbead.snap::after{animation:hdBeadPulse .62s cubic-bezier(.2,.8,.2,1) forwards}
-@keyframes hdBeadPulse{0%{opacity:0;transform:scale(.35)}12%{opacity:.95;transform:scale(.6)}100%{opacity:0;transform:scale(2.6)}}
-/* —— 以下四条 .armed 规则是"点亮"的一次性编排，全部交给 CSS 排期，JS 只负责加一个类 —— */
-.hd-steps.armed .hd-gtrack{transform:none;transition:transform .46s cubic-bezier(.22,1,.28,1)}
-.hd-steps.armed .hd-sl{animation:hdSlIn .44s cubic-bezier(.16,1,.3,1) both}
-.hd-steps.armed .hd-sl:nth-child(1){animation-delay:.20s}
-/* 相邻标签错 90ms：能数出"一条一条"，又不至于慢到打断演示整体节奏（一轮约 24s） */
-.hd-steps.armed .hd-sl:nth-child(2){animation-delay:.29s}
-.hd-steps.armed .hd-sl:nth-child(3){animation-delay:.38s}
-@keyframes hdSlIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
-/* 珠子上场排在最后（.46s）：轨道铺完、标签点亮完，它才有"沿着尺子滑"的前置条件 */
-.hd-steps.armed .hd-gbead{animation:hdBeadIn .34s ease .46s both}
-@keyframes hdBeadIn{from{opacity:0}to{opacity:1}}
-/* .hot = ceremony 峰值那 660ms 的高亮档：填充/珠子/标签统一转纯白，过渡一律压到 0.1s 线性硬切，
-   才有"通电"的感觉；JS 摘掉 .hot 后自动回落到上面这些 .5s 缓动，收势不需要额外写代码 */
-.hd-steps.hot .hd-gfill{background:#fff;box-shadow:0 0 18px rgba(255,255,255,.95);transition:background .1s linear,box-shadow .1s linear}
-.hd-steps.hot .hd-gbead{box-shadow:0 0 22px #fff,0 0 6px #fff;transition:box-shadow .1s linear}
-.hd-steps.hot .hd-sl{color:#fff;transition:color .1s linear}
-
-/* —— 术语行轨道 —— */
-/* 层级关系：.hd-result 是这里唯一占流的子节点（透明时也保留位置），.hd-row/.hd-flash/.hd-rule 都是覆盖层。
-   min-height 先兜住一格，结果框内容短的时候轨道也不会缩。 */
-.hd-track{position:relative;min-height:128px;display:flex;align-items:center}
-/* 一行 = 序号 | 中文 | 箭头 | 初译 → 正译；绝对定位钉在同一处，三条轮播复用这一个 DOM（clearRow 只做复位） */
-/* blur 与位移同时消解，观感是"对焦到这一行"而不是普通淡入；transform 曲线控制点 >1，入场带一点回弹 */
-.hd-row{position:absolute;left:0;right:0;top:12px;height:64px;display:flex;align-items:center;gap:16px;opacity:0;transform:translateY(20px);filter:blur(3px);transition:opacity .30s cubic-bezier(.2,.85,.25,1),transform .46s cubic-bezier(.16,1.06,.3,1),filter .30s ease}
-.hd-row.in{opacity:1;transform:none;filter:blur(0)}
-/* 离场改的是另一套曲线（.4,0,.6,1，不回弹）+ 每条 transition 都带 .26s 延迟：
-   先原地停一拍让上一行读完，再向上散掉，也避免与下一条入场叠成"两行同时在" */
-.hd-row.out{opacity:0;transform:translateY(-26px);filter:blur(3px);transition:opacity .40s cubic-bezier(.4,0,.7,1) .26s,transform .46s cubic-bezier(.4,0,.6,1) .26s,filter .40s ease-in .26s}
-/* 子元素再快一档（.16s）各自淡出，整行不会像一块板那样消失 */
-.hd-row.out .hd-idx,.hd-row.out .hd-cn,.hd-row.out .hd-arrow,.hd-row.out .hd-w{opacity:0;transform:translateY(-5px);transition:opacity .16s ease-in,transform .16s ease-in}
-.hd-row.lit{animation:hdRowLit .48s ease-out}
-@keyframes hdRowLit{0%{filter:brightness(1)}16%{filter:brightness(1.6)}100%{filter:brightness(1)}}
-/* 命中确认只动 filter:brightness，不碰 color/宽度：这两样已被 struck 与 glow 占用，同属性会互相覆写 */
-
-/* 序号：默认就是危险色——它标的是"被判错的那条初译"；24px 定宽 + 等宽数字，三条轮播左缘才齐 */
-.hd-idx{align-self:center;flex:none;width:24px;font-family:var(--lc-font-latin);font-size:14px;font-weight:600;color:var(--lc-danger);font-variant-numeric:tabular-nums}
-.hd-idx.pop{animation:hdIdxPop .46s cubic-bezier(.2,.9,.3,1) both}
-@keyframes hdIdxPop{0%{transform:scale(1.38);color:#fff}100%{transform:scale(1);color:var(--lc-danger)}}
-/* 白起纯基线收：pop 与 .hd-row.in 同帧挂，读作"这一项开始了"，所以起帧要最亮 */
-.hd-swap{display:flex;align-items:baseline;gap:19px;min-width:0}
-/* 初译/正译字号差近一倍，只有 baseline 对齐才能让两栏像同一句话；align-items:center 会让小字看着下沉 */
-.hd-w{position:relative;flex:none;display:inline-block;white-space:nowrap;width:clamp(74px,22.917vw,165px);font-family:var(--lc-font-latin);font-size:clamp(21px,5.278vw,38px);font-weight:600;line-height:clamp(32px,7.778vw,56px);color:#8E949C;letter-spacing:-.015em;transition:color .28s ease}
-.hd-w .hd-wt{position:relative;display:inline-block}
-/* 文本挂内层 .hd-wt：外层是定宽的排版单元，内层才等于"词的实际宽度"，删除线不能画到空白上去 */
-.hd-w .hd-wt::before{content:'';position:absolute;left:-4px;right:-4px;top:56%;height:3px;margin-top:-1.5px;background:var(--lc-danger);border-radius:2px;transform:scaleX(0);transform-origin:left center}
-.hd-w.struck{color:var(--lc-danger);animation:hdStrikeFlash .72s ease-out both}
-.hd-w.struck .hd-wt::before{transform:scaleX(1);animation:hdStrikeIn .36s cubic-bezier(.34,0,.2,1) both}
-/* 用 scaleX 而不是 width：展开不触发重排，箭头与正译的位置在判错瞬间纹丝不动 */
-@keyframes hdStrikeIn{0%{transform:scaleX(0)}74%{transform:scaleX(1.035)}100%{transform:scaleX(1)}}
-/* 过冲 3.5% 再收回：像笔锋多拖了一下，比匀速划到端点更像"人手画的线" */
-@keyframes hdStrikeFlash{0%{text-shadow:0 0 0 rgba(229,72,77,0)}20%{text-shadow:0 0 18px rgba(229,72,77,.62)}100%{text-shadow:0 0 0 rgba(229,72,77,0)}}
-/* 只亮 20% 那一拍：闪一下是"判错"，常亮会去抢正译栏（字号最大那栏）的注意力 */
-.hd-wt.typing::after{content:'';display:inline-block;width:2px;height:clamp(19px,4.167vw,30px);margin-left:3px;vertical-align:-5px;background:currentColor;animation:hdBlink .9s steps(1) infinite}
-.hd-arrow{flex:none;display:flex;align-items:center;color:var(--lc-border-faint);opacity:0;transform:translateX(-5px);transition:opacity .22s ease,transform .22s ease,color .28s ease}
-/* 箭头单独 .in 提亮（描边色→#A0A5AC）：出场排在中文之后、初译之前，用次序表达"从这里开始换外语" */
-.hd-arrow.in{opacity:1;transform:none;color:#A0A5AC}
-.hd-r{font-family:var(--lc-font-latin);font-size:clamp(30px,6.944vw,50px);font-weight:800;line-height:clamp(42px,8.333vw,60px);color:#fff;letter-spacing:-.028em;white-space:nowrap;min-width:1px;text-shadow:0 0 0 rgba(255,255,255,0);transition:text-shadow .62s ease}
-/* min-width:1px 兜住空文本帧——glow 比打字先挂，那一刻栏里还没字；text-shadow .62s 长过渡让辉光是"渗出来"的 */
-.hd-r.glow{text-shadow:0 0 16px rgba(255,255,255,.5)}
-.hd-r.lock{animation:hdRLock .42s cubic-bezier(.2,.9,.3,1) both}
-@keyframes hdRLock{0%{transform:scale(1.05);text-shadow:0 0 17px rgba(255,255,255,.72)}55%{transform:scale(.994)}100%{transform:scale(1);text-shadow:0 0 16px rgba(255,255,255,.5)}}
-/* 终值停在 glow 的辉光上（both 锁住）：所以摘掉 .lock 后 glow 接手，两拍之间没有亮度断层 */
-.hd-r.typing::after{content:'';display:inline-block;width:2px;height:clamp(26px,5.833vw,42px);margin-left:5px;vertical-align:-9px;background:#fff;animation:hdBlink .9s steps(1) infinite}
-@keyframes hdBlink{0%,49%{opacity:1}50%,100%{opacity:0}}
-/* steps(1) = 硬切而不是渐隐：四处打字区（原文 / 初译 / 正译 / 定稿）都挂这一条 hdBlink，光标节拍全站一致 */
-.hd-cn{flex:none;width:clamp(78px,12.778vw,92px);font-size:clamp(14px,2.361vw,17px);font-weight:500;color:#B4B9C0;letter-spacing:.04em;white-space:nowrap;opacity:0;transform:translateX(-7px);transition:opacity .30s cubic-bezier(.2,.85,.25,1),transform .38s cubic-bezier(.16,1.08,.3,1)}
-/* 中文栏定宽：JS 是逐字往里写的，不定宽的话箭头与初译会跟着字数的增加一路右移 */
-.hd-cn.in{opacity:1;transform:none}
-
-/* —— 回写结果框：峰值一次给"框出现→斜扫光→描边转完成色→落章"四段，段段独立挂类（in/sweep/settled/stamp）—— */
-/* 起手 transform:scale(.992) 而不是 scale(.9)：结果框里全是正文，位移过大会读不清；overflow:hidden 给 ::before/::after 的两道扫光裁边 */
-.hd-result{position:relative;overflow:hidden;width:100%;padding:16px 18px;border:1.2px solid var(--lc-border-input);border-radius:14px;opacity:0;transform:scale(.992);transform-origin:50% 50%;transition:opacity .3s ease-out,transform .42s cubic-bezier(.16,1,.3,1),border-color .7s ease}
-.hd-result.in{opacity:1;transform:none}
-/* settled 只换描边、.7s 慢过渡：爆发收势后要把"这是最终结果"这件事安静地说完，不该再有动静 */
-.hd-result.settled{border-color:var(--lc-border-done)}
-/* 下笔线与光斑都是 .hd-track 的子节点（不是结果框的），top:44px 正好压在术语行中线（行 top:12 + 高 64 的一半） */
-.hd-rule{position:absolute;left:0;right:0;top:44px;height:2px;margin-top:-1px;background:linear-gradient(90deg,rgba(255,255,255,0) 0%,#fff 6%,#fff 94%,rgba(255,255,255,0) 100%);box-shadow:0 0 10px rgba(255,255,255,.4);opacity:0;transform:scaleX(0);transform-origin:left center;pointer-events:none}
-/* 两端透明渐变是"笔迹"的起收笔；pointer-events:none 保证覆盖层不吃掉卡片上的选中/悬停 */
-.hd-rule.write{animation:hdWriteIn .46s cubic-bezier(.3,0,.2,1) forwards}
-@keyframes hdWriteIn{0%{opacity:0;transform:scaleX(0)}14%{opacity:.95}70%{opacity:.95}100%{opacity:0;transform:scaleX(1)}}
-/* 70%→100% 这段是"写完就淡掉"：峰值那帧线已经没用了，留着会和结果框抢注意力 */
-.hd-flash{position:absolute;left:50%;top:44px;width:min(420px,90%);height:150px;transform:translate(-50%,-50%) scale(.55);border-radius:50%;pointer-events:none;background:radial-gradient(closest-side,rgba(255,255,255,.09) 0%,rgba(255,255,255,.05) 48%,rgba(255,255,255,0) 78%);opacity:0}
-/* 光斑亮度只到 .09：整卡已经是纯黑底，再亮就成"白闪"，会刺眼且显得廉价 */
-.hd-flash.burst{animation:hdBurst .6s cubic-bezier(.16,1,.3,1) forwards}
-@keyframes hdBurst{0%{opacity:0;transform:translate(-50%,-50%) scale(.52)}10%{opacity:1;transform:translate(-50%,-50%) scale(.9)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.28)}}
-/* 10% 处就到最大亮度、之后只扩散不增亮：能量"释放在前"才像被击中，平均分布会像呼吸灯 */
-/* ::before = 整框白闪（落章那一拍填充），::after = 斜向扫光，两条各占一个伪元素才能同框不同步 */
-.hd-result::before{content:'';position:absolute;inset:0;border-radius:inherit;background:#fff;opacity:0;pointer-events:none}
-.hd-result.stamp::before{animation:hdStampFill .56s cubic-bezier(.16,1,.3,1) forwards}
-@keyframes hdStampFill{0%{opacity:0}18%{opacity:.13}100%{opacity:0}}
-/* 峰值只到 .13：白闪是"衬"一下内容，不是把内容盖掉 */
-.hd-result.stamp{animation:hdStampRing .8s cubic-bezier(.16,1,.3,1) forwards}
-@keyframes hdStampRing{0%{box-shadow:0 0 0 1px rgba(255,255,255,0),0 0 0 rgba(255,255,255,0)}12.5%{box-shadow:0 0 0 1px rgba(255,255,255,.55),0 0 30px rgba(255,255,255,.20)}100%{box-shadow:0 0 0 1px rgba(255,255,255,0),0 0 0 rgba(255,255,255,0)}}
-/* 两层 box-shadow（1px 硬描边 + 30px 外晕）分别承担"章的边缘"和"章的余温"，只用一层会要么太硬要么太散 */
-.hd-result::after{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(100deg,transparent 0%,rgba(255,255,255,.085) 48%,transparent 92%);opacity:0;transform:translateX(-100%)}
-.hd-result.sweep::after{animation:hdSweepLight .84s cubic-bezier(.3,0,.2,1) forwards}
-@keyframes hdSweepLight{0%{opacity:0;transform:translateX(-100%)}22%{opacity:1}100%{opacity:0;transform:translateX(100%)}}
-/* 100deg 斜向而不是 90deg：横向平移像"进度条"，带角度才像"审校笔扫过" */
-
-/* —— 结果框头部：完成图标 + 结论 + 统计 在左，示意按钮在右 —— */
-.hd-rhead{display:flex;align-items:center;margin-bottom:10px}
-/* 左半单独包一层并给 min-width:0：三段文案是 nowrap 的，不收缩就会把右边的按钮挤出框 */
-.hd-rleft{display:flex;align-items:center;gap:8px;min-width:0}
-/* 必须自己当定位父：对勾圆环 .hd-ring 是它的绝对定位子节点，两者中心要重合 */
-.hd-rcheck{display:flex;align-items:center;position:relative}
-/* dasharray/dashoffset 同为 15（略大于 path 实际长度）：起笔完全藏在起点之外，draw 才是"写出来" */
-.hd-mark path{stroke-dasharray:15;stroke-dashoffset:15}
-.hd-mark.draw path{animation:hdDraw .34s cubic-bezier(.2,.8,.2,1) forwards}
-@keyframes hdDraw{to{stroke-dashoffset:0}}
-/* draw 改 stroke-dashoffset、glow 改 filter：两条动画属性不相交，所以能在同一元素上并行播 */
-.hd-mark.glow{animation:hdMarkGlow .72s ease-out forwards}
-/* drop-shadow 而非 box-shadow：SVG 里只有那两笔折线，box-shadow 会照矩形边框发光 */
-@keyframes hdMarkGlow{0%{filter:drop-shadow(0 0 0 rgba(255,255,255,0))}8%{filter:drop-shadow(0 0 8px rgba(255,255,255,.95))}100%{filter:drop-shadow(0 0 0 rgba(255,255,255,0))}}
-.hd-ring{position:absolute;left:50%;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:999px;border:1.2px solid rgba(255,255,255,.85);opacity:0;transform:scale(.5);pointer-events:none}
-.hd-ring.go{animation:hdRing .92s cubic-bezier(.2,.8,.2,1) forwards}
-@keyframes hdRing{0%{opacity:0;transform:scale(.5)}6%{opacity:.9}100%{opacity:0;transform:scale(3.2)}}
-/* 扩散到 3.2 倍才收：这是"落章"的余波，收得比对勾快会让人只看到一圈闪光 */
-.hd-rlabel{font-size:14px;font-weight:500;color:var(--lc-text-1);white-space:nowrap}
-/* 结论标签的 .stamp 与对勾 .glow 在 JS 里同帧挂：两处亮点同时出现才像"盖章"，错开会被读成两个事件 */
-.hd-rlabel.stamp{animation:hdLabelGlow .8s ease-out forwards}
-/* 100% 帧显式写回 var(--lc-text-1)：forwards 锁的就是终帧，不写回来文案会永久停在纯白 */
-@keyframes hdLabelGlow{0%{color:var(--lc-text-1);text-shadow:none}7%{color:#fff;text-shadow:0 0 12px rgba(255,255,255,.85)}100%{color:var(--lc-text-1);text-shadow:none}}
-/* 统计副标平时压到最暗一档：先给结论再给数字；.lit 由 JS 在盖章之后再挂，顺序反了会抢峰值 */
-.hd-rsub{font-size:12px;color:var(--lc-text-4);transition:color .55s ease;white-space:nowrap}
-.hd-rsub.lit{color:var(--lc-text-2)}
-/* 右侧"复制"是真实按钮：点击把定稿译文写入剪贴板并短暂显示"已复制"（font 继承自 .hd-rhead 语境） */
-.hd-dlbtn{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:#C8CCD1;font:500 12px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)}
-.hd-dlbtn:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
-.hd-dlbtn svg{display:block}
-/* display:block 消掉行内 SVG 的基线下沉：图标与 12px 文案要在 28px 高的胶囊里精确居中 */
-
-/* —— 定稿译文区：与原文区同一套"ghost 撑高 + 真身覆盖"，外层再叠一条审校窄光 —— */
-.hd-fwrap{position:relative}
-.hd-final{font-family:var(--lc-font-latin);font-size:16px;line-height:28px;color:var(--lc-text-1)}
-/* 拉丁字体族：DEMO_FINAL 是整句英文，用中文栈会让字距与连字都变形（中英混排时才需要中文兜底） */
-.hd-final.ghost{visibility:hidden}
-.hd-fwrap .hd-final:not(.ghost){position:absolute;left:0;top:0;right:0}
-/* 真身靠 :not(.ghost) 挑出来，不需要额外的 data-hd 类：ghost 与真身共用 .hd-final，样式只写一份 */
-.hd-final.done{animation:hdProofLight 1s cubic-bezier(.16,1,.3,1) forwards}
-@keyframes hdProofLight{0%{color:var(--lc-text-1);text-shadow:none}10%{color:#fff;text-shadow:0 0 15px rgba(255,255,255,.62)}100%{color:var(--lc-text-1);text-shadow:none}}
-/* 1s 里只有前 10% 是亮的：定稿要"被点亮一次"，然后立刻退回可读基线，常亮会让正文失去对比度 */
-.hd-final.typing::after{content:'';display:inline-block;width:2px;height:15px;margin-left:3px;vertical-align:-3px;background:var(--lc-text-1);animation:hdBlink .9s steps(1) infinite}
-/* 光带本身就是这张伪元素的背景（宽 16px、不重复），动画只挪 background-position：
-   伪元素始终 inset:0 覆盖整块，尺寸不变所以不会引起重排 */
-.hd-fwrap::after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,.16) 35%,rgba(255,255,255,.95) 50%,rgba(255,255,255,.16) 65%,rgba(255,255,255,0) 100%);background-size:16px 100%;background-repeat:no-repeat;background-position:-16px 0;opacity:0}
-.hd-fwrap.proof::after{animation:hdProof .7s cubic-bezier(.4,0,.2,1) forwards}
-@keyframes hdProof{0%{background-position:-16px 0;opacity:0}12%{background-position:0 0;opacity:.8}88%{opacity:.8}100%{background-position:100% 0;opacity:0}}
-/* 12%~88% 恒定 .8：中段不衰减，光带经过文字时亮度稳定，才像"一道审校灯"而不是反光 */
-
-/* 演示卡窄屏：术语行折两行（第一行 序号+中文，第二行 箭头+初译 正解） */
-@media (max-width:620px){
-  /* 左右内边距 32→16：窄屏先把标题栏与内容区的留白让出来，卡片宽度全给文字 */
-  .hd-bar{padding:0 16px}
-  .hd-name em{display:none}
-  /* 副标整块撤掉而不是缩小：这一栏放不下两段文字，语种标签（ZH → EN）才是演示的语境信息 */
-  .hd-stream{padding:20px 16px 16px}
-  /* 换 grid 具名区域重排：DOM 一个节点都不动，JS 缓存的 data-hd 句柄在窄屏继续有效 */
-  .hd-row{top:50%;height:auto;display:grid;grid-template-columns:auto 1fr;grid-template-areas:"idx cn" "arrow swap";align-items:center;column-gap:clamp(8px,2.222vw,16px);row-gap:clamp(2px,.556vw,4px);transform:translateY(calc(-50% + 20px))}
-  /* 绝对定位的行改由 translateY 自己居中：基态 = 居中再下沉 20px，.in = 居中，.out = 居中再上移 26px，三处必须成套 */
-  .hd-row.in{transform:translateY(-50%)}
-  .hd-row.out{transform:translateY(calc(-50% - 26px))}
-  /* 下面四条只把已有节点指派进对应格子，读写次序仍由 DOM 决定（idx→cn→arrow→swap 逐拍点亮不变） */
-  .hd-idx{grid-area:idx}
-  .hd-cn{grid-area:cn}
-  .hd-arrow{grid-area:arrow}
-  .hd-swap{grid-area:swap;justify-content:flex-start;min-width:0}
-  /* 下笔线与光斑跟到新的视觉中线：宽屏写死的 44px 是"单行时的行中线"，折两行后那个位置已经不是中线 */
-  .hd-rule,.hd-flash{top:50%}
-  /* clamp 上限（165px/38px、50px）在窄屏根本用不到，实际生效的是中间的 vw 项；下调 min 是为了不顶破 320px 视口 */
-  .hd-w{font-size:clamp(17px,5.278vw,38px);line-height:clamp(26px,7.778vw,56px)}
-  .hd-r{font-size:clamp(24px,6.944vw,50px);line-height:clamp(34px,8.333vw,60px)}
-}
-
-/* 无障碍：偏好减少动效时，演示卡直接呈现终态，所有爆发一律不播 */
-@media (prefers-reduced-motion: reduce){
-  /* 兜底策略：只关 animation / transition，不关任何颜色与布局——终态的"信息"要完整保留（staticState 已把文本与刻度写好） */
-  .hd-panel{animation:none !important}
-  /* 逐条给终值：opacity/transform 一律直接落到位，"不播动画"不等于"看不到内容" */
-  .hd-steps .hd-sl,.hd-steps .hd-gbead{opacity:1 !important;animation:none !important}
-  .hd-steps .hd-gtrack{transform:none !important;transition:none !important}
-  /* 尺珠与填充段的 left/width 过渡也关掉：staticState 是直写 100% 的，留着过渡会让终态又"滑"一次 */
-  .hd-gfill,.hd-gbead{transition:none !important}
-  /* 下面这条是"一次性爆发"黑名单（峰值、落章、划词、定稿光全在内）：只关 animation，颜色与字色一概不动，
-     所以"被判错的初译"仍然是红划线红字，信息量不减。持续型的位移淡入（如 .hd-row）没全列进来，
-     要更严格的话可以再补——目前靠 JS 侧的 staticState 分支直接摆终态 */
-  .hd-flash.burst,.hd-panel.punch,.hd-mark.glow,.hd-rlabel.stamp,.hd-result.stamp,.hd-result.stamp::before,.hd-final.done,.hd-fwrap.proof::after,.hd-idx.pop,.hd-w.struck,.hd-w.struck .hd-wt::before,.hd-r.lock,.hd-row.lit,.hd-gbead.snap::after,.hd-panel.drop,.hd-panel.bright,.hd-panel.blaze{animation:none !important}
-}
 `
 
-/* 说明：hd-final / hd-src 的「真身」用绝对定位覆盖 ghost 占位（打字时高度不跳），
-   由上方 CSS 的 :not(.ghost) 定位规则实现，与 hero-stream.html 的 #src/#final 一致。 */

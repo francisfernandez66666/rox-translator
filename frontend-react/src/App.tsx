@@ -19,7 +19,7 @@ import { myPackage, meContext } from '@/api'
 import { AuthProvider, useAuth } from '@/stores/auth'
 import { AdminProvider, useAdminStore } from '@/stores/admin'
 import { ChatProvider, useChat } from '@/hooks/useChat'
-import { useT, t as gt, tpl as gtpl, toggleLang } from '@/i18n'
+import { useT, t as gt, tpl as gtpl } from '@/i18n'
 import { setAuthToken, setActiveTenantId, API_BASE } from '@/api'
 import { applyTheme, cycleTheme, getTheme, watchSystemTheme } from '@/lib/theme'
 watchSystemTheme()
@@ -88,15 +88,20 @@ const AiAssist = lazy(() => import('./components/AiAssist'))
 import { ReferralPanel, MyPackagePanel, AccountPanel } from './components/selfservice'
 import BillingCenter from './components/MyBilling' // ★ F8 账单中心（趋势+明细）
 import { EmailBindModal } from './components/modals'
+// ★ D2 #24：全站加载态复用落地页「划掉错词→亮起正词」换词动效（实现与样式唯一份在 WordSwap/theme.css）
+import WordSwap from './components/WordSwap'
+// ★ #23：12 语种界面语言下拉（顶栏/登录卡/后台共用）
+import { LangSelect } from './components/LangSelect'
 // LangCross 纯黑组件库：前台骨架只依赖这四个件（Button/Badge/Drawer/Icon），
 // 替代原 tdesign-react 的 Button/Tag/Drawer —— 换肤期不再引 TDesign 组件。
 import { Badge, Button, Drawer, Icon } from '@/ui/langcross/src'
 
-// 页面加载中占位组件（旋转动画 + 提示文字），路由懒加载时展示
+// 页面加载中占位组件（★ D2 #24：旋转圈已换成落地页同源的「划掉错词→亮起正词」换词动效 + 提示文字），
+// 路由懒加载时展示
 function PageLoading() {
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
-      <div style={{ width: 48, height: 48, border: '4px solid var(--lc-border-card, #3A404C)', borderTopColor: 'var(--lc-text-1, #E7E9EA)', borderRadius: '50%', animation: 'appspin 0.8s linear infinite' }} />
+      <WordSwap className="ws--lg" ariaLabel={gt('app.loading')} />
       <p style={{ fontSize: 16, color: '#9AA0AA' }}>{gt('app.loading')}</p>
     </div>
   )
@@ -106,7 +111,7 @@ function PageLoading() {
 function FrontShell() {
   const chat = useChat()
   const { user } = useAuth()
-  const [lang, t] = useT()
+  const [, t] = useT() // ★ #23：lang 位不再消费（切换器移进 LangSelect），仅订阅语言刷新
   const location = useLocation()
   const navigate = useNavigate()
   const branding = useBranding()
@@ -166,7 +171,7 @@ function FrontShell() {
   return (
     <Suspense fallback={<PageLoading />}>
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--npz-page-bg, #0E1014)' }}>
-      <style>{'@keyframes appspin{to{transform:rotate(360deg)}}'}</style>
+      {/* ★ D2 #24：appspin 旋转 keyframes 已随两处 spinner 退役（全站唯一消费点消失） */}
       {/* 前台自助区 + 顶栏的局部类：纯黑换肤后卡片/表格/抽屉一律走白字灰边
           （#E7E9EA / #3A404C），.ss-ghost-btn（顶栏幽灵按钮）与 .app-tab
           （工作台 Tab）直接引用 --lc-* 令牌，hover 只改色不投影。 */}
@@ -227,8 +232,8 @@ function FrontShell() {
         <Bell />
         {/* ★ F5：明暗主题三态切换（auto/light/dark，localStorage 记忆，auto 跟随系统） */}
         <button className="ss-ghost-btn" title={t(`app.theme.${themeNow}`)} onClick={() => { cycleTheme(); setThemeTick((n) => n + 1) }}>{themeIcon}</button>
-        {/* 语言钮标的是「点完切到的目标语言」：中文态用 EN 字面量，其余态取 app.langSwitch 词条 */}
-        <button className="ss-ghost-btn" onClick={toggleLang}>{lang === 'zh' ? 'EN' : t('app.langSwitch')}</button>
+        {/* ★ #23：二元 EN 切换钮退役，换 12 语种 LangSelect 下拉（词表源 @/i18n LANG_OPTIONS） */}
+        <LangSelect align="right" />
         <AccountMenu showAdminConsole={roleLevelSafe(user?.role) >= 2} onGotoAdmin={() => navigate('/admin')} />
       </header>
 
@@ -247,10 +252,10 @@ function FrontShell() {
       )}
       <div className="app-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         {chat.isBackendLoading ? (
-          // 后端冷启动占位：spinner 描边 #3A404C + 高光用 --lc-text（白），
-          // 替代旧的浅灰底 + TDesign 蓝，纯黑页面上不再闪白
+          // 后端冷启动占位（★ D2 #24）：spinner 换成与路由懒加载同一份 WordSwap 换词动效，
+          // 纯黑页面上不再闪白，两处加载态共用唯一实现
           <div className="loading-screen" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
-            <div className="loading-spinner" style={{ width: 48, height: 48, border: '4px solid #3A404C', borderTopColor: 'var(--lc-text)', borderRadius: '50%', animation: 'appspin 0.8s linear infinite' }} />
+            <WordSwap className="ws--lg" ariaLabel={t('app.starting')} />
             <p style={{ fontSize: 16, color: '#9AA0AA' }}>{t('app.starting')}</p>
           </div>
         ) : (

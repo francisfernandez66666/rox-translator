@@ -12,7 +12,7 @@
  * - 文件校验：翻译文件格式和大小校验（白名单 + 40MB 上限）
  */
 
-import type { ChatResponse, HealthResponse, ProgressEvent } from '@/types'
+import type { ChatResponse, FileSegmentEvent, HealthResponse, ProgressEvent } from '@/types'
 import { API_BASE, authHeaders, request, handleUnauthorized, ApiError } from './core'
 
 /** SSE 空闲超时：后端每 20s 发一帧 `: ping` 注释（不匹配 data: 但计入字节、重置计时）。
@@ -33,12 +33,15 @@ function readWithIdle<T extends { done: boolean; value?: Uint8Array }>(
 
 /** SSE 公共解析器：从 ReadableStream 逐行解析 SSE 事件，回调进度，返回最终结果
  *  事件分流：progress→onProgress；delta→onDelta(lang,text)（D20 逐字流式，不参与最终结果）；
- *  done→取 event.result 作为返回值；error→抛 ApiError（携带 error_code 稳定码）。 */
-async function consumeSSEStream(
+ *  ★B3 segment_done/segment_final/segments_sealed→onSegment（文件逐段上屏，不参与最终结果）；
+ *  done→取 event.result 作为返回值；error→抛 ApiError（携带 error_code 稳定码）。
+ *  （导出仅供单测喂假 reader；业务侧一律走 chatStream/translateFileStream。） */
+export async function consumeSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   onProgress?: (event: ProgressEvent) => void,
   errorMessage = '翻译出错',
   onDelta?: (lang: string, text: string) => void, // ★ D20：token 级流式增量
+  onSegment?: (event: FileSegmentEvent) => void,  // ★ B3：文件翻译逐段事件
 ): Promise<ChatResponse> {
   const decoder = new TextDecoder()
   let buffer = ''
@@ -63,6 +66,20 @@ async function consumeSSEStream(
             onProgress(event)
           } else if (event.type === 'delta') {
             if (onDelta) onDelta(event.lang || '', event.text || '')
+          } else if (event.type === 'segment_done' || event.type === 'segment_final') {
+            // ★ B3：done→draft、final→target 拉平成统一 text 字段，消费端不再判别协议键
+            if (onSegment) onSegment({
+              kind: event.type,
+              lang: event.lang || '',
+              index: event.index,
+              source: event.source,
+              sourceHash: event.source_hash,
+              text: event.type === 'segment_final' ? event.target : event.draft,
+              stage: event.stage,
+              placeholder: event.placeholder === true,
+            })
+          } else if (event.type === 'segments_sealed') {
+            if (onSegment) onSegment({ kind: 'segments_sealed', lang: event.lang || '' })
           } else if (event.type === 'done') {
             finalResult = event.result || null
           } else if (event.type === 'error') {
@@ -147,7 +164,9 @@ export async function healthCheck(): Promise<HealthResponse> {
 }
 
 
-/** SSE 流式文件翻译 */
+/** SSE 流式文件翻译
+ *  @param onSegment ★ B3（方案 A2）：逐段事件回调（segment_done/segment_final/segments_sealed），
+ *                   供聊天气泡实时上屏；不传则行为与旧版一致 */
 export async function translateFileStream(
   file: File,
   targetLangs?: string[],
@@ -157,6 +176,7 @@ export async function translateFileStream(
   userMessage: string = "",
   mode?: string,
   maxLength?: number,
+  onSegment?: (event: FileSegmentEvent) => void,
 ): Promise<ChatResponse> {
   const formData = new FormData()
   formData.append('file', file)
@@ -191,7 +211,7 @@ export async function translateFileStream(
   const reader = response.body?.getReader()
   if (!reader) throw new Error('无法读取流式响应')
 
-  return consumeSSEStream(reader, onProgress, '文件翻译出错')
+  return consumeSSEStream(reader, onProgress, '文件翻译出错', undefined, onSegment)
 }
 
 // ============ 翻译文件格式/大小校验（即时翻译与工单翻译共用，保证两端一致） ============

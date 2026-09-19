@@ -12,6 +12,8 @@ package api
 // 业务要点：
 //   - 所有翻译入口先过配额闸门（gateUsage），成功后按用量计量（meterUsage + countTranslate 指标）
 //   - 进度事件 progress 逐步推送（step/done/total/percent），结束推送 done/error
+//   - ★ B3：文件流式翻译另推逐段事件 segment_done/segment_final/segments_sealed
+//     （边翻边上屏；segments_sealed/error 分支补 billing.Flush，载荷全积分口径零 token）
 //   - 上传文件保存到 UploadDir（uniqueName 保证文件名唯一），处理完成后删除
 
 import (
@@ -213,7 +215,8 @@ func (s *Server) dispatchTranslateWebhook(tid int64, kind, source string, res in
 
 // handleTranslateFileStream 流式文件翻译接口（/api/translate/stream，SSE）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（multipart：file + target_langs + message）。
-// 事件流：progress 进度事件 → done（携带 result）或 error 事件。
+// 事件流：progress 进度事件 → ★B3 逐段事件 segment_done/segment_final/segments_sealed
+// → done（携带 result）或 error 事件。
 // 流程：保存上传文件 → 解析语言参数 → 配额闸门 → 引擎流式处理 → 计量 → 清理文件。
 func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Request) {
 	// ★ 安全止血（整改 A1）：强制登录（在解析 multipart 前拒绝，匿名零成本）
@@ -309,6 +312,23 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	var sseMu sync.Mutex
 	defer sseHeartbeat(w, flusher, &sseMu, 20*time.Second)()
 
+	// ★ B3（方案 A2）：逐段事件通道——segment_done/segment_final/segments_sealed
+	//   与 progress/心跳共用 sseMu 序列化写。载荷字段全积分口径（lang/index/source/
+	//   source_hash/draft/target/stage/placeholder），零 token 裸值（AGENTS.md 约定 5）。
+	//   segments_sealed 分支顺手 billing.Flush：该语言计量已定盘，余额/台账即时可见
+	//   （此前 SSE 文件路径全程不 Flush，长文件期间余额滞后 - 方案 A2 第 5 条）。
+	emitSeg := func(kind string, payload map[string]interface{}) {
+		sseMu.Lock()
+		fmt.Fprint(w, sseEvent(kind, payload))
+		sseMu.Unlock()
+		if flusher != nil {
+			flusher.Flush()
+		}
+		if kind == "segments_sealed" {
+			billing.Flush()
+		}
+	}
+
 	// 进度回调：推送 progress 事件（与文本翻译一致，封顶 99%）
 	prog := func(step string, done, total int) {
 		percent := 0
@@ -328,7 +348,8 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 
 	// 调用引擎处理文件翻译
 	// ★ 注入用户组织（2026-08-26 KB继承链）+ 模式（2026-09-05 计费策略引擎）
-	res := s.Engine.HandleFile(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), engine.ModeFromOptions(options)), tenant.LangFromOptions(options)), savePath, options, prog)
+	// ★ B3：末参传入逐段事件回调，翻译期间实时推 segment_done/segment_final/segments_sealed
+	res := s.Engine.HandleFile(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), engine.ModeFromOptions(options)), tenant.LangFromOptions(options)), savePath, options, prog, emitSeg)
 
 	// 推送完成进度
 	sseMu.Lock()
@@ -357,6 +378,9 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 		// Webhook：翻译完成事件回调（异步投递）
 		s.dispatchTranslateWebhook(tid, "file", header.Filename, res)
 	}
+	// ★ B3（方案 A2 第 5 条）：SSE 文件路径补齐计量冲刷——error 分支（含中途失败未及
+	//   sealed 的场景）与 done 收尾各兜底一次，与非流式 handleTranslateFile 同口径。
+	billing.Flush()
 }
 
 // ============ 非流式兼容接口 ============
@@ -498,7 +522,7 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	}
 	// 调用引擎处理文件翻译（非流式）
 	// ★ 注入用户组织（2026-08-26 KB继承链）+ 模式（2026-09-05 计费策略引擎）
-	res := s.Engine.HandleFile(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), mode), tenant.LangFromOptions(options)), savePath, options, nil)
+	res := s.Engine.HandleFile(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), mode), tenant.LangFromOptions(options)), savePath, options, nil, nil)
 	if res.Error == "" {
 		s.metrics.countTranslate("file", true)
 		// ★ 归属登记（评审整改 C1）

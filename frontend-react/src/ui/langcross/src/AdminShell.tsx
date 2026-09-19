@@ -18,6 +18,9 @@ export interface AdminShellProps {
   appIcon?: ReactNode;
   /** 顶栏右侧集群：铃铛 / 角色胶囊 / 租户胶囊 / 账号胶囊 */
   topbar?: ReactNode;
+  /** ★ #23：侧栏底部插槽（真实用法=LangSelect 语言下拉）。
+   *  旧版这里硬写一个无 onClick 的「EN」装饰按钮属假交互，已换成受控插槽；不传则底部留空。 */
+  sideFoot?: ReactNode;
   /** 右下角悬浮 AI 按钮（不传则不渲染） */
   fab?: ReactNode;
   /** 内容区是否收窄内边距（默认 40/24） */
@@ -77,6 +80,7 @@ export function AdminShell({
   appName = "能言管理后台",
  appIcon = "",
   topbar,
+  sideFoot,
   fab,
   flush = false,
   className = "",
@@ -108,9 +112,7 @@ export function AdminShell({
           ))}
         </nav>
         <div className="lc-sidebar__foot">
-          <button type="button"className="lc-side-lang">
-            EN
-          </button>
+          {sideFoot ?? null}
         </div>
       </aside>
       {drawerOpen ? <div className="lc-shell-scrim"onClick={closeDrawer} aria-hidden /> : null}

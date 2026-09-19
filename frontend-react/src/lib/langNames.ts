@@ -67,11 +67,12 @@ export const LANG_META: Record<string, LangMeta> = {
  *  换肤后 flag 恒为空串，实际返回纯名称；保留 m.flag 分支是为了日后恢复图形标识时
  *  不必再改调用点（届时应换成图标/图片资源，而非 emoji）。
  * @param code - 语言代码（如 "en" / "ja"）
- * @param lang - 当前界面语言，决定取中文名还是英文名
+ * @param lang - 当前界面语言，决定取中文名还是英文名（★ #23 起收 12 语种代码：
+ *               只有 zh* 取中文名，其余语种一律英文名——语言名没有 12 份的词条表）
  */
-export function langLabel(code: string, lang: 'zh' | 'en'): string {
+export function langLabel(code: string, lang: string): string {
   const m = LANG_META[code]
   if (!m) return code
-  const name = lang === 'en' ? (m.en || m.zh) : (m.zh || m.en)
+  const name = lang.startsWith('zh') ? (m.zh || m.en) : (m.en || m.zh)
   return m.flag ? `${m.flag} ${name}` : name
 }

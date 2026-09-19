@@ -17,7 +17,8 @@ import {
   setAuthToken, setActiveTenantId,
   type AuthUser,
 } from '@/api'
-import { t, useT, toggleLang } from '@/i18n'
+import { t, useT } from '@/i18n'
+import { LangSelect } from '@/components/LangSelect' // ★ #23：12 语种语言下拉
 import { useBranding, DEFAULT_BRAND_NAME } from '@/branding'
 import { roleLevel } from '@/stores/auth'
 import { industryCodeOf, industryOptions } from '@/lib/industries'
@@ -314,12 +315,8 @@ export default function Login({ mode, onLogin }: Props) {
   // 登录卡标题渲染品牌名而不是「登录」（画布 57:4 实测；Login.auth.dom.test ① 守这条）
   const brandName = branding.brandName || DEFAULT_BRAND_NAME
 
-  // 卡右上角语言胶囊，三个认证屏共用
-  const langPill = (
-    <button type="button" className="auth-lang" onClick={toggleLang} aria-label={t('app.langSwitch')}>
-      {lang === 'zh' ? 'EN' : t('app.langSwitch')}
-    </button>
-  )
+  // 卡右上角语言入口（★ #23：原 zh/en 胶囊换成 12 语种 LangSelect，三个认证屏共用）
+  const langPill = <LangSelect align="right" />
 
   // 登录屏（卡宽 380、标题=品牌名、底部两行居中链接、密码框右端眼睛、卡右上角 EN 胶囊）
   if (view === 'signin') {

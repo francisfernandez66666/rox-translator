@@ -3,13 +3,18 @@
 // 能力：Markdown 渲染（h1–h6 / **bold** / *em* 含 lookbehind）、技能徽章、
 //      翻译进度条、多语言译文表（模式/来源徽章）、match_report、
 //      附件图片内联预览 + 全类型下载（blob 鉴权）、反馈入口。
+// ★ 2026-09-19 B1 流式双态：新增 draft 初译层——流式期间逐语言渲染「初译草稿行 +
+//   细进度条」（content/draft 不再被量尺互斥吞掉），无 delta 的降级路径回退三关量尺；
+//   组件用 memo 包裹，配合 useChat 的按帧合批把重渲染收敛到每帧一次。
 // ============================================================================
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE, getAuthToken } from '@/api'
 import type { ChatMessage } from '@/types'
-import { t } from '@/i18n'
+import { t, tpl } from '@/i18n'
 import { renderMarkdown } from '@/lib/markdown' // ★ F11：渲染纯函数抽提至 lib/markdown
 import { SkillBadge } from './SkillBadge'
+// ★ D2 #24：进行态加载动效（划掉错词→亮起正词），与 App 加载页/落地页共用同一实现
+import WordSwap from './WordSwap'
 
 // ============ 本文件职责中文说明 ============
 // 聊天气泡组件：渲染单条消息（Markdown、译文表、附件预览、反馈入口）。
@@ -54,6 +59,10 @@ function cpSleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+// ★ B3：单语言逐段行的渲染上限（大文件几百段全量渲染会拖慢流式帧；超限只展示
+// 最近若干条并给出截断提示——完整段落在 done 后的编辑器/工单里逐条可见）
+const SEG_ROW_CAP = 120
+
 // MessageBubble 入参：message 为单条聊天消息；onFeedback 为点击反馈按钮时的回调
 // source（双语对照用的上一条原文）只在渲染期需要，故在组件签名处内联扩展、不进 Props
 interface Props {
@@ -61,8 +70,8 @@ interface Props {
   onFeedback?: (m: ChatMessage) => void
 }
 
-// 默认导出组件：渲染单条聊天气泡，区分用户/AI、翻译结果表、附件预览与反馈入口
-export default function MessageBubble({ message, onFeedback, source }: Props & { source?: string }) {
+// 组件实现（默认导出在文件末尾包 memo）：渲染单条聊天气泡，区分用户/AI、翻译结果表、附件预览与反馈入口
+function MessageBubble({ message, onFeedback, source }: Props & { source?: string }) {
   // 移动端标记（窗口宽度 ≤ 768px）；typeof window 兜底：SSR/单测环境无 window，初值不能直接读
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' && window.innerWidth <= 768)
   const [copied, setCopied] = useState(false) // ★ F7 复制反馈
@@ -196,11 +205,30 @@ export default function MessageBubble({ message, onFeedback, source }: Props & {
 
   const matchedZh = String((message.data as any)?.matched_zh || '')
   const progress = message.progress
+  // ★ B1 流式双态：draft=逐语言初译草稿（useChat 按帧合批写入、lib/draftClean 已按后端契约清洗）。
+  //   有草稿时由草稿区承接「进行中」呈现（量尺降级为草稿区底部细进度条）；
+  //   浑元/熔断/流式失败三条降级路径无 delta，draft 为空，照旧走三关量尺。
+  const draftEntries = useMemo(
+    () => (isAssistant ? Object.entries(message.draft ?? {}).filter(([, v]) => !!v) : []),
+    [isAssistant, message.draft],
+  )
+  const showDraft = draftEntries.length > 0 && !hasTranslations // 译文表是定稿态，出现即盖过草稿
+  const draftPct = Math.max(0, Math.min(100, progress?.percent ?? 0))
+  // 检查点分段口径与量尺一致：≥67% 进入第三关「术语校准」，徽章从初译切到审校
+  const draftReviewing = draftPct >= 67
   // 进度态判据从「percent<100」放宽为「有 progress」：useChat 在 done/error/停止时都会把
   // progress 置 undefined，靠字段本身收尾比靠数值更可靠（也不会 99%→100% 瞬间量尺直接消失）
-  const showProgress = isAssistant && !!progress
-  // 三态互斥：有译文表就只出译文表；进度在就只出量尺，避免同一气泡叠两套呈现
-  const showMarkdown = !!message.content && !hasTranslations && !showProgress
+  const showProgress = isAssistant && !!progress && !showDraft
+  // ★ B3（方案 A2）文件翻译逐段实时上屏：行键=首次出现段序号（SSE segment_* 事件累积，
+  //   useChat 维护）。仅「尚未拿到附件」时渲染——done 一到切下载卡；中断时顶部挂
+  //   「非交付物」警示横幅（A2 风险披露：已上屏 draft 绝不做假成功）。
+  const segEntries = useMemo(
+    () => (isAssistant ? Object.entries(message.segments ?? {}).filter(([, b]) => Object.keys(b.rows).length > 0) : []),
+    [isAssistant, message.segments],
+  )
+  const showSegments = segEntries.length > 0 && !message.files?.length
+  // 呈现互斥：译文表 > 草稿区 > 量尺 > Markdown，同一气泡不同时叠两套进行态
+  const showMarkdown = !!message.content && !hasTranslations && !showProgress && !showDraft
   const html = useMemo(() => (showMarkdown ? renderMarkdown(message.content || '') : ''), [showMarkdown, message.content])
 
   // 外层 .lc-mo-up：气泡进场只动 opacity/transform，motion.css 里已带 prefers-reduced-motion 兜底
@@ -215,6 +243,75 @@ export default function MessageBubble({ message, onFeedback, source }: Props & {
         {/* 技能徽章 */}
         {isAssistant && message.skill && (
           <div className="bubble-badge"><SkillBadge skill={message.skill} /></div>
+        )}
+
+        {/* ★ B1 初译草稿区（流式双态主呈现）：逐语言草稿行 + 阶段徽章 + 细进度条。
+            内容为未定稿初译（审校/硬闸还可能改写），故样式刻意弱于译文表：小字号、灰字、光标闪烁 */}
+        {showDraft && (
+          <div className="draft-area" data-testid="draft-area">
+            <div className="draft-head">
+              <span className={`draft-stage${draftReviewing ? ' draft-stage--review' : ''}`} data-testid="draft-stage">
+                {draftReviewing ? t('chat.draftReviewing') : t('chat.draftStreaming')}
+              </span>
+              {/* ★ D2 #24：加载动效复用落地页「划掉错词→亮起正词」换词演出（WordSwap 唯一实现） */}
+              <WordSwap className="draft-ws" ariaLabel={t('chat.draftStreaming')} />
+              {!!progress && <span className="draft-pct">{draftPct}%</span>}
+            </div>
+            {draftEntries.map(([lang, text]) => (
+              <div className="draft-row" key={lang}>
+                <span className="draft-lang">{getLangName(message.data, lang)}</span>
+                <span className="draft-text" dir="auto">{text}<span className="draft-caret" aria-hidden="true" /></span>
+              </div>
+            ))}
+            {/* 细进度条：量尺在草稿态的降级形态，仍走同一 percent 数据源 */}
+            {!!progress && (
+              <div className="draft-bar" role="progressbar" aria-valuenow={draftPct} aria-valuemin={0} aria-valuemax={100}>
+                <div className="draft-bar-fill" style={{ width: `${draftPct}%` }} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ★ B3（方案 A2）逐段实时区：与量尺共存（量尺管总进度、这里管「翻到哪儿了」）。
+            行状态：初译行弱样式（可能被审校/闸门改写）；final/gated 行提亮；
+            敏感词占位行不展示内容、只标「已拦截」（A2 第 6 条前端口径） */}
+        {showSegments && (
+          <div className="file-segs" data-testid="file-segs">
+            {message.segmentsAborted && (
+              <div className="file-segs-warn" data-testid="file-segs-warn">{t('chat.segAborted')}</div>
+            )}
+            {segEntries.map(([lang, bucket]) => {
+              const idxs = Object.keys(bucket.rows).map(Number).sort((a, b) => a - b)
+              const shown = idxs.length > SEG_ROW_CAP ? idxs.slice(-SEG_ROW_CAP) : idxs
+              return (
+                <div className="file-segs-lang" key={lang} data-testid="file-segs-lang">
+                  <div className="file-segs-langhead">
+                    <span className="file-segs-langname">{getLangName(message.data, lang)}</span>
+                    {bucket.sealed
+                      ? <span className="file-segs-sealed" data-testid="file-segs-sealed">{t('chat.segSealed')}</span>
+                      : <span className="file-segs-live">{t('chat.segLive')}</span>}
+                    {/* ★ D2 #24：未定稿的实时区挂换词加载动效；sealed 后演出停止（该区已是终稿） */}
+                    {!bucket.sealed && <WordSwap className="file-segs-ws" ariaLabel={t('chat.segLive')} />}
+                    <span className="file-segs-count">{tpl('chat.segArrivedFmt', { n: idxs.length })}</span>
+                  </div>
+                  {shown.map((i) => {
+                    const r = bucket.rows[i]
+                    return (
+                      <div key={i} className={`file-seg-row${r.final ? ' file-seg-row--final' : ''}`} data-testid="file-seg-row">
+                        <span className="file-seg-idx">#{i + 1}</span>
+                        {r.placeholder
+                          ? <span className="file-seg-blocked">{t('chat.segBlocked')}</span>
+                          : <span className="file-seg-text" dir="auto">{r.text}</span>}
+                      </div>
+                    )
+                  })}
+                  {idxs.length > shown.length && (
+                    <div className="file-segs-trunc">{tpl('chat.segTruncFmt', { n: shown.length })}</div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         )}
 
         {/* 翻译检查点进度（带检查点名字的三关量尺：术语检索 / 机器翻译 / 术语校准）*/}
@@ -385,3 +482,8 @@ export default function MessageBubble({ message, onFeedback, source }: Props & {
     </div>
   )
 }
+
+// ★ B1：memo 包裹——流式期间 ChatWindow 随 messages 每帧最多重渲染一次，
+// 未变化的旧气泡 props 全等即可整棵跳过（旧链路每 token 全量重渲染 + renderMarkdown
+// 整文重排是等待焦虑的主要前端放大器）
+export default memo(MessageBubble)

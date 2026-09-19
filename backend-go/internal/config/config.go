@@ -30,6 +30,11 @@ type ProviderConfig struct {
 	// ★ H2：供应商声明支持术语约束解码（logit/guided 扩展）。全部启用路由都为 true 时，
 	//   引擎随请求注入 x_term_constraints；否则保持 H1 事后强制闭环（双轨降级）。
 	SupportsConstraints bool `json:"supports_constraints"`
+	// ★ B5（方案 B Phase 2 能力位）：供应商声明支持「自动前缀缓存」（隐式命中型，
+	//   DeepSeek/OpenAI/通义/豆包路线——无需任何请求体改动，前缀逐字节一致即命中）。
+	//   本期只做声明位：供 Phase 3 灰度窗格按路由统计 cached/prompt 比与 TTFT，
+	//   不做需额外 API 的显式缓存对象管理（Gemini cachedContent 一类，防存储费倒挂）。
+	SupportsCache bool `json:"supports_cache"`
 }
 
 // 流程阶段标识（stage_models 的键）
@@ -207,9 +212,12 @@ var AllLangs = []string{"en", "ru", "ar", "es", "pt", "fr", "kk", "de", "zh_hant
 	"gu", "ur", "te", "mr"}
 
 // LangNames：语言代码 → 中文名
+// ★ #23（2026-09-19）：新增 "zh"——外语→简体中文方向的目标语言展示名
+// （纯模型直翻路径 TranslateOtherLang 用这个名字组织提示词与前端回显；
+// 注意 zh 刻意不进 TranslateLangs/AllLangs，那两张表是 KB/TM 列契约口径）
 var LangNames = map[string]string{
 	"en": "英语", "ru": "俄语", "ar": "阿拉伯语", "es": "西班牙语", "pt": "葡萄牙语",
-	"fr": "法语", "kk": "哈萨克语（哈萨克斯坦）", "de": "德语", "zh_hant": "繁体中文",
+	"fr": "法语", "kk": "哈萨克语（哈萨克斯坦）", "de": "德语", "zh_hant": "繁体中文", "zh": "简体中文",
 	"ms": "马来语", "id_lang": "印尼语", "th": "泰语", "tr": "土耳其语",
 	"it": "意大利语", "pl": "波兰语", "sv": "瑞典语",
 	"ja": "日语", "ko": "韩语", "mn": "蒙古语", "vi": "越南语", "id": "印尼语",
@@ -219,10 +227,10 @@ var LangNames = map[string]string{
 	"bn": "孟加拉语", "ta": "泰米尔语", "bo": "藏语", "ug": "维吾尔语", "yue": "粤语",
 }
 
-// LangNamesEn：语言代码 → 英文名（与 LangNames 同源，供英文界面使用）
+// LangNamesEn：语言代码 → 英文名（与 LangNames 同源，供英文界面使用；★ #23 同步补 zh）
 var LangNamesEn = map[string]string{
 	"en": "English", "ru": "Russian", "ar": "Arabic", "es": "Spanish", "pt": "Portuguese",
-	"fr": "French", "kk": "Kazakh (Kazakhstan)", "de": "German", "zh_hant": "Traditional Chinese",
+	"fr": "French", "kk": "Kazakh (Kazakhstan)", "de": "German", "zh_hant": "Traditional Chinese", "zh": "Chinese (Simplified)",
 	"ms": "Malay", "id_lang": "Indonesian", "th": "Thai", "tr": "Turkish",
 	"it": "Italian", "pl": "Polish", "sv": "Swedish",
 	"ja": "Japanese", "ko": "Korean", "mn": "Mongolian", "vi": "Vietnamese", "id": "Indonesian",

@@ -43,6 +43,24 @@ describe('chatStorage（E1/E2 持久化与隔离）', () => {
     expect(JSON.parse(raw)[0].progress).toBeUndefined()
   })
 
+  it('★ B1：落盘同样剥离 draft（初译草稿是会话进行态，刷新后无在途 SSE 可续）', () => {
+    const raw = serializeForPersist('chat_msgs_v1:7', [msg('a', { draft: { en: 'Hallo' } })])!
+    const back = JSON.parse(raw)[0]
+    expect(back.draft).toBeUndefined()
+    expect(raw).not.toContain('Hallo')
+  })
+
+  it('★ B3：落盘剥离 segments/segmentsAborted（逐段实时态同属进行态，刷新后不复活半成品）', () => {
+    const raw = serializeForPersist('chat_msgs_v1:7', [msg('a', {
+      segments: { en: { sealed: false, rows: { 0: { text: '半成品段落', final: false, placeholder: false } } } },
+      segmentsAborted: true,
+    })])!
+    const back = JSON.parse(raw)[0]
+    expect(back.segments).toBeUndefined()
+    expect(back.segmentsAborted).toBeUndefined()
+    expect(raw).not.toContain('半成品段落')
+  })
+
   it('>2MB 且 >50 条时裁剪到最近 50 条', () => {
     const fat = Array.from({ length: 80 }, (_, i) => ({ ...msg(`f${i}`), content: 'x'.repeat(40000) }))
     const raw = serializeForPersist('chat_msgs_v1:7', fat as ChatMessage[])!

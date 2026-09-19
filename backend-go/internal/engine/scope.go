@@ -116,7 +116,8 @@ func crossDeptFallbackEnabled(_ context.Context, e *Engine, tid int64) bool {
 // cjkCacheScopeKey 生成 CJK 缓存的作用域键：「租户|组织链指纹|跨部门开关|职业角色」。
 // 组织树移动/开关切换/job_role 变更都会改变键 → 旧缓存自然失效（新键重建），无需主动清理。
 // ★ job_role 必须在键内：角色包（persona）按用户装配，两个不同角色的用户可见域不同，
-//   不隔离会互相串缓存（2026-09-19 角色功能引入时的正确性约束）。
+//
+//	不隔离会互相串缓存（2026-09-19 角色功能引入时的正确性约束）。
 func cjkCacheScopeKey(scope *kb.PackScope) string {
 	sum := sha1.Sum([]byte(kb.ChainKey(scope.Chain)))
 	return strconv.FormatInt(scope.TenantID, 10) + "|" + hex.EncodeToString(sum[:8]) + "|" +

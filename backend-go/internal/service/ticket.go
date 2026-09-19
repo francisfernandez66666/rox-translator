@@ -617,7 +617,9 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				sem <- struct{}{}
 				defer func() { <-sem }()
 				res := s.Engine.HandleFile(ctx, tf.FilePath,
-					map[string]interface{}{"target_langs": langs, "mode": mode, "delivery": delivery}, progFn)
+					// ★B3：工单队列通道不接逐段事件（emit=nil，方案 A2 前端改动点 4：段落中间态
+					//   需落库+轮询暴露，放二期）；体验口径见 API 文档「SSE 通道有实时段落、任务通道完成后可得」。
+					map[string]interface{}{"target_langs": langs, "mode": mode, "delivery": delivery}, progFn, nil)
 				mu.Lock()
 				defer mu.Unlock()
 				if res.Error != "" || len(res.Files) == 0 {
@@ -697,9 +699,9 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 		}
 		return nil
 	}
-	// 旧单文件路径
+	// 旧单文件路径（★B3：emit=nil 同队列通道口径，不接逐段事件）
 	s.Store.SetTicketState(t.ID, "file_translate", "running", "single")
-	res := s.Engine.HandleFile(ctx, t.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode, "delivery": delivery}, progFn)
+	res := s.Engine.HandleFile(ctx, t.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode, "delivery": delivery}, progFn, nil)
 	if res.Error != "" {
 		return fmt.Errorf("%s", res.Error)
 	}

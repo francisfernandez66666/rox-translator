@@ -25,19 +25,20 @@ export const INDUSTRY_META: Record<string, IndustryMeta> = {
   media: { code: 'media', zh: '自媒体/内容创作', en: 'Content Creation & Media' },
 }
 
-/** 行业 code → 当前语言展示名（未知 code 回退 code 本身，供表单/表格展示） */
+/** 行业 code → 当前语言展示名（未知 code 回退 code 本身，供表单/表格展示）
+ *  ★ #23：12 语种下只有 zh* 取中文名，其余语种落英文名（行业表无 12 份词条） */
 export function industryName(code: string, lang: Lang): string {
   if (!code) return ''
   const m = INDUSTRY_META[code]
   if (!m) return code
-  return lang === 'en' ? m.en : m.zh
+  return lang.startsWith('zh') ? m.zh : m.en
 }
 
 /** 行业下拉选项（值=中文名，label 按当前语言自适应；后端仍按 code 存储） */
 export function industryOptions(lang: Lang): Array<{ value: string; label: string; code: string }> {
   return Object.values(INDUSTRY_META).map((m) => ({
     value: m.zh, // 值用中文名（后端存储用 code 由调用方转换）
-    label: lang === 'en' ? m.en : m.zh,
+    label: lang.startsWith('zh') ? m.zh : m.en,
     code: m.code,
   }))
 }

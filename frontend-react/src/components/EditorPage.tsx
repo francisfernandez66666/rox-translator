@@ -5,8 +5,22 @@
 // 逐段保存至后端 translation_edits，状态 pending/approved/rejected。
 // 呈现层已迁 @/ui/langcross/src：TDesign Dialog/Select/Textarea/Tag/MessagePlugin
 // → 原生 select/textarea + lc-* 类 + StatusPill + useToast（一屏一个 primary）。
+// ★ 2026-09-19 B2 计算收敛（性能方案 C0，先于 C1 虚拟化）：
+//   ① 术语高亮正则从「每段每次渲染重编译」收敛为每次加载编译一次（buildTermMatcher，
+//      词数封顶 + 长词优先），命中判定用 Set；
+//   ② 行拆成 memo 化 SegRow：译文/批注改非受控（defaultValue+onBlur 提交），
+//      键入期间零状态更新、零整表重渲染（旧版 578 段每敲一键全表重排）；
+//   ③ update 稳定引用（useCallback 空依赖读 prev），不再从闭包 rows 取旧值；
+//   ④ loadSeq 进 key：重新加载即整表重挂载，非受控框复位到服务端最新值。
+// ★ 2026-09-19 B5 虚拟化（方案 C1，接在 B2 计算收敛之后）：
+//   大表（>VIRTUALIZE_THRESHOLD 段）改 react-virtuoso 窗口滚动列表——DOM 里只保留
+//   视口±缓冲的行（578 段大表不再一次性挂 578 个 textarea）；行高动态（源文长短、
+//   textarea 手动拉伸）由 defaultItemHeight 起步 + 组件内 ResizeObserver 自动校正。
+//   小表保持直渲染（零虚拟化开销，测试/编辑语义不变）；#seg-N 锚点直达在两种形态
+//   下都可用（虚拟化走 scrollToIndex 先对齐再等挂载，非虚拟化走原生 scrollIntoView）。
 // ============================================================================
-import { useCallback, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { Button, Input, StatusPill, useToast } from '@/ui/langcross/src'
 import { t, tpl, useLang } from '@/i18n'
 import { getSegments, getSegmentsByKey, saveSegments, type EditorSegment, type SegmentEdit } from '@/api/tickets'
@@ -25,19 +39,34 @@ const statusOptions = () => [
   { label: t('tk.edStatusRejected'), value: 'rejected' },
 ]
 
-/** 将源文中命中的术语串包裹为高亮 <mark> */
-function highlightTerms(text: string, terms: string[]): React.ReactNode {
-  if (!terms.length) return text
-  // 术语来自知识库（可能含 . + ( ) 等正则元字符）：必须逐个转义后再拼交替式，
-  // 否则 new RegExp 会抛错或把「C++」当量词误匹配；长度 ≤1 的词到处命中、噪声大于收益，直接丢
-  const escaped = terms
-    .filter((t) => t && t.length > 1)
-    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  if (!escaped.length) return text
-  const re = new RegExp(`(${escaped.join('|')})`, 'g')
-  const parts = text.split(re)
+/** ★ B5 小表直渲染阈值：超过该段数才进 virtuoso 窗口列表。
+ *  50 段以内 DOM 压力可忽略，直渲染保住「全行在场」的编辑/测试语义（B2 断言依赖）。 */
+const VIRTUALIZE_THRESHOLD = 50
+
+// ============ ★ B2 术语高亮匹配器（纯函数，编译成本从 O(段数×词数×渲染) 收敛到 O(词数)） ============
+/** 参与高亮的术语条数封顶：后端最多回 200 条，全量拼交替式会让每段的 split 正则在
+ *  大表上重新变贵；按长度降序保留前 60 条（长术语优先命中，短词被长词覆盖损失最小）。 */
+const HIGHLIGHT_TERM_CAP = 60
+
+interface TermMatcher { re: RegExp | null; set: Set<string> }
+
+/** buildTermMatcher 编译一次高亮匹配器：去重、丢 ≤1 字词（噪声大于收益）、转义正则元字符
+ *  （术语来自知识库，可能含 . + ( )，不转义会把「C++」当量词）、长词优先排序后封顶。 */
+function buildTermMatcher(terms: string[]): TermMatcher {
+  const usable = Array.from(new Set(terms.filter((x) => !!x && x.length > 1)))
+    .sort((a, b) => b.length - a.length)
+    .slice(0, HIGHLIGHT_TERM_CAP)
+  if (!usable.length) return { re: null, set: new Set() }
+  const escaped = usable.map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  return { re: new RegExp(`(${escaped.join('|')})`, 'g'), set: new Set(usable) }
+}
+
+/** highlightWith 把源文中命中的术语串包裹为 <mark>（split 捕获组法与旧版一致，仅换查找结构） */
+function highlightWith(text: string, m: TermMatcher): React.ReactNode {
+  if (!m.re) return text
+  const parts = text.split(m.re)
   return parts.map((p, i) =>
-    terms.includes(p) ? (
+    m.set.has(p) ? (
       <mark key={i} style={{ background: 'rgba(210,153,34,0.30)', color: '#E7E9EA', padding: '0 2px', borderRadius: 2 }}>{p}</mark>
     ) : (
       <span key={i}>{p}</span>
@@ -45,9 +74,82 @@ function highlightTerms(text: string, terms: string[]): React.ReactNode {
   )
 }
 
+// ============ ★ B2 行组件：memo 化，仅自身值/术语/状态选项变化时重渲染 ============
+interface SegRowProps {
+  s: EditorSegment
+  editedText: string
+  status: string
+  note: string
+  matcher: TermMatcher
+  opts: { label: string; value: string }[]
+  update: (idx: number, patch: Partial<RowState>) => void
+}
+
+const SegRow = memo(function SegRow({ s, editedText, status, note, matcher, opts, update }: SegRowProps) {
+  // 状态底色只用 6%~10% 低透明层（纯黑体系禁止大色块铺底）：通过=提亮、驳回=语义红薄底，
+  // pending 保持面板底色
+  return (
+    <div
+      id={`seg-${s.index}`}
+      className="ed-seg"
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 12,
+        padding: 12,
+        border: '1.2px solid #464C58',
+        borderRadius: 8,
+        marginBottom: 12,
+        background: status === 'approved' ? 'rgba(231,233,234,0.06)' : status === 'rejected' ? 'rgba(229,72,77,0.10)' : '#0E1014',
+      }}
+    >
+      <div>
+        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{tpl('tk.srcIdxFmt', { i: s.index + 1 })}</div>
+        <div style={{ whiteSpace: 'pre-wrap', minHeight: 40 }}>{highlightWith(s.source, matcher)}</div>
+      </div>
+      <div>
+        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
+          {tpl('tk.edTargetTpl', { state: s.target ? t('tk.edHas') : t('tk.edEmpty') })}
+        </div>
+        {/* ★ B2 非受控：defaultValue 只做初值，键入不进 state——blur 时值有变化才提交一行。
+            点「保存」前 mousedown 已触发 blur，未模糊的编辑不会丢（同 Excel 提交语义） */}
+        <textarea
+          className="lc-textarea"
+          defaultValue={editedText}
+          onBlur={(e) => { const v = e.target.value; if (v !== editedText) update(s.index, { edited_text: v }) }}
+          aria-label={t('tk.edTargetAria')}
+          rows={3}
+          style={{ minHeight: 56, maxHeight: 220, resize: 'vertical' }}
+        />
+        <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
+          {/* 状态选择保持受控：低频离散操作，改一次整表也仅重算一次 dirtyEdits */}
+          <select
+            className="lc-select"
+            value={status}
+            onChange={(e) => update(s.index, { status: e.target.value })}
+            style={{ width: 120 }}
+          >
+            {opts.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+          {/* 批注同样非受控（原生 input 承接原 <Input>，同 lc-input 样式） */}
+          <input
+            className="lc-input"
+            defaultValue={note}
+            placeholder={t('tk.edNotePlaceholder')}
+            onBlur={(e) => { const v = e.target.value; if (v !== note) update(s.index, { note: v }) }}
+            style={{ flex: 1 }}
+          />
+        </div>
+      </div>
+    </div>
+  )
+})
+
 /** EditorPage · 职责说明：对照编辑器页面，双栏展示源文与可编辑译文，支持逐段修改/通过/驳回并保存到后端 */
 export default function EditorPage() {
-  useLang() // ★ F2：语言切换即时重渲染（状态选项等）
+  const langCode = useLang() // ★ F2：语言切换即时重渲染（状态选项等）
   // 组件内提示走 ToastProvider；本页所有反馈（保存成功/失败、需先解析工单）都经它，不再引 MessagePlugin
   const { toast } = useToast()
 
@@ -59,6 +161,34 @@ export default function EditorPage() {
   const [terms, setTerms] = useState<string[]>([])
   const [rows, setRows] = useState<Record<number, RowState>>({})
   const [loading, setLoading] = useState(false)
+  // ★ B2：每次成功加载 +1 并进 SegRow 的 key——非受控框只认初值，
+  // 换 key 强制整表重挂载，重新加载后 DOM 值与 rows state 必然一致
+  const [loadSeq, setLoadSeq] = useState(0)
+
+  // ★ B2：高亮匹配器随术语表编译一次（旧版在每段每次渲染里 new RegExp）
+  const matcher = useMemo(() => buildTermMatcher(terms), [terms])
+  // 状态选项随语言切换重建（新引用令所有 SegRow 同帧刷新文案）
+  const opts = useMemo(() => statusOptions(), [langCode])
+
+  // ★ B5：大表进 virtuoso；ref 用于 #seg-N 锚点直达时先对齐窗口
+  const virtualized = segments.length > VIRTUALIZE_THRESHOLD
+  const virtuosoRef = useRef<VirtuosoHandle>(null)
+
+  // ★ B5 锚点直达：/editor#seg-<index> 在加载完成后滚到对应段。
+  //   虚拟化形态下目标行可能未挂载，必须先 scrollToIndex 让窗口覆盖它；
+  //   延迟一拍等首帧布局完成（数据刚落库时行高仍按 defaultItemHeight 估算）。
+  useEffect(() => {
+    const m = /^#seg-(\d+)$/.exec(window.location.hash || '')
+    if (!m || !segments.length) return
+    const target = Number(m[1])
+    const pos = segments.findIndex((s) => s.index === target)
+    if (pos < 0) return
+    const timer = setTimeout(() => {
+      if (virtualized) virtuosoRef.current?.scrollToIndex({ index: pos, align: 'start' })
+      else document.getElementById(`seg-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 60)
+    return () => clearTimeout(timer)
+  }, [segments, virtualized])
 
   // load 加载工单分段：输入为数字 ID 走 getSegments，为工单号（T 开头）走 getSegmentsByKey，并初始化每行的编辑态
   const load = useCallback(async () => {
@@ -92,6 +222,7 @@ export default function EditorPage() {
           }
         }
         setRows(init)
+        setLoadSeq((n) => n + 1) // ★ B2：整表重挂载，非受控框复位到刚拉取的服务端值
       } catch (e) {
         toast({ title: tpl('tk.edLoadFailErr', { err: String(e) }), tone: 'error' })
       } finally {
@@ -119,6 +250,7 @@ export default function EditorPage() {
         }
       }
       setRows(init)
+      setLoadSeq((n) => n + 1) // ★ B2：同上，数字 ID 分支加载成功后整表重挂载
     } catch (e) {
       toast({ title: tpl('tk.edLoadFailErr', { err: String(e) }), tone: 'error' })
     } finally {
@@ -130,12 +262,15 @@ export default function EditorPage() {
   const rowOf = (s: EditorSegment): RowState =>
     rows[s.index] || { edited_text: s.edited_text || s.target, status: s.status || 'pending', note: s.note || '' }
 
-  // getRow 按序号取本地编辑态，无记录时返回空默认值
-  const getRow = (idx: number): RowState => rows[idx] || { edited_text: '', status: 'pending', note: '' }
-
   // update 局部更新某分段的编辑态字段（与已有状态合并）
-  const update = (idx: number, patch: Partial<RowState>) =>
-    setRows((prev) => ({ ...prev, [idx]: { ...getRow(idx), ...patch } }))
+  // ★ B2 稳定引用：空依赖 useCallback + updater 内读 prev（旧版从闭包 rows 经 getRow 取旧值，
+  //   每次渲染都是新函数，会把 memo 化的 SegRow 全部击穿）
+  const update = useCallback((idx: number, patch: Partial<RowState>) => {
+    setRows((prev) => ({
+      ...prev,
+      [idx]: { ...(prev[idx] || { edited_text: '', status: 'pending', note: '' }), ...patch },
+    }))
+  }, [])
 
   // dirtyEdits 对比系统原值，筛出有改动的分段列表（供保存时提交给后端）
   const dirtyEdits = useMemo<SegmentEdit[]>(() => {
@@ -204,7 +339,8 @@ export default function EditorPage() {
         </div>
       )}
 
-      {/* 命中术语仅作概览（后端最多回 200 条）：只渲染前 30 个，其余仍参与左侧高亮 */}
+      {/* 命中术语仅作概览（后端最多回 200 条）：只渲染前 30 个；
+          ★ B2 高亮另按「长词优先 + 前 60 条」封顶（buildTermMatcher），防大词表拖慢每段 split */}
       {terms.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           <span style={{ color: '#888', marginRight: 6 }}>{t('tk.edTermsHit')}</span>
@@ -214,63 +350,36 @@ export default function EditorPage() {
         </div>
       )}
 
-      {segments.map((s) => {
-        const r = rowOf(s)
-        // 状态底色只用 6%~10% 低透明层（纯黑体系禁止大色块铺底）：通过=提亮、驳回=语义红薄底，
-        // pending 保持面板底色
-        return (
-          <div
-            key={s.index}
-            className="ed-seg"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: 12,
-              padding: 12,
-              border: '1.2px solid #464C58',
-              borderRadius: 8,
-              marginBottom: 12,
-              background: r.status ==='approved'?'rgba(231,233,234,0.06)': r.status ==='rejected'?'rgba(229,72,77,0.10)':'#0E1014',
-            }}
-          >
-            <div>
-              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{tpl('tk.srcIdxFmt', { i: s.index + 1 })}</div>
-              <div style={{ whiteSpace: 'pre-wrap', minHeight: 40 }}>{highlightTerms(s.source, terms)}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
-                {tpl('tk.edTargetTpl', { state: s.target ? t('tk.edHas') : t('tk.edEmpty') })}
-              </div>
-              <textarea
-                className="lc-textarea"
-                value={r.edited_text}
-                onChange={(e) => update(s.index, { edited_text: e.target.value })}
-                aria-label={t('tk.edTargetAria')}
-                rows={3}
-                style={{ minHeight: 56, maxHeight: 220, resize: 'vertical' }}
-              />
-              <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
-                <select
-                  className="lc-select"
-                  value={r.status}
-                  onChange={(e) => update(s.index, { status: e.target.value })}
-                  style={{ width: 120 }}
-                >
-                  {statusOptions().map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
-                <Input
-                  placeholder={t('tk.edNotePlaceholder')}
-                  value={r.note}
-                  onChange={(e) => update(s.index, { note: e.target.value })}
-                  style={{ flex: 1 }}
-                />
-              </div>
-            </div>
-          </div>
-        )
-      })}
+      {/* ★ B2 行渲染：memo 化 SegRow + loadSeq 前缀 key（重载即整表重挂载复位非受控框）。
+          键入不再触发父级 state，578 段大表敲一键只更新一个 textarea 的 DOM。
+          ★ B5：大表（>阈值）套 virtuoso 窗口列表——DOM 行数收敛到视口±缓冲；
+          computeItemKey 仍带 loadSeq 前缀，重载后行组件必然重挂载。 */}
+      {virtualized ? (
+        <Virtuoso
+          ref={virtuosoRef}
+          useWindowScroll
+          data={segments}
+          defaultItemHeight={150}
+          initialItemCount={8}
+          increaseViewportBy={{ top: 400, bottom: 800 }}
+          computeItemKey={(_, s) => `${loadSeq}:${s.index}`}
+          itemContent={(_, s) => {
+            const r = rowOf(s)
+            return (
+              <SegRow s={s} editedText={r.edited_text} status={r.status} note={r.note}
+                      matcher={matcher} opts={opts} update={update} />
+            )
+          }}
+        />
+      ) : (
+        segments.map((s) => {
+          const r = rowOf(s)
+          return (
+            <SegRow key={`${loadSeq}:${s.index}`} s={s} editedText={r.edited_text} status={r.status} note={r.note}
+                    matcher={matcher} opts={opts} update={update} />
+          )
+        })
+      )}
 
       {!loading && segments.length === 0 && (
         <div style={{ color: '#999', padding: 24, textAlign: 'center' }}>{t('tk.edEmptyHint')}</div>

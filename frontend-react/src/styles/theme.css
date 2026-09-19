@@ -251,6 +251,110 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .progress-bar-bg { width: 100%; height: 6px; background: #2A2F3A; border-radius: 3px; overflow: hidden; }
 .progress-bar-fill { height: 100%; background: #E7E9EA; border-radius: 3px; transition: width .3s ease; }
 
+/* ---- ★ B1 流式双态：初译草稿区（量尺的降级替代；定稿前刻意弱呈现）----
+   纯黑口径：只用白/灰单色，无新色相；草稿行小字号灰字，与译文表（定稿态）拉开层级。 */
+.draft-area { margin-bottom: 10px; }
+.draft-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; }
+.draft-stage {
+  font-size: 11px; font-weight: 600; letter-spacing: .06em; color: #E7E9EA;
+  border: 1px solid #3F444B; border-radius: 999px; padding: 1px 8px;
+}
+.draft-stage--review { color: #000; background: #E7E9EA; border-color: #E7E9EA; }
+.draft-pct { font-size: 12px; font-weight: 600; color: var(--npz-text-2); font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
+.draft-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
+.draft-lang { flex: none; min-width: 44px; font-size: 11px; color: #878D95; line-height: 20px; letter-spacing: .04em; }
+.draft-text { font-size: 13px; line-height: 1.7; color: var(--npz-text-2); white-space: pre-wrap; word-break: break-word; }
+/* 行尾光标：闪烁关键帧复用 langcross motion.css 的 lc-mo-caret（全站已引入） */
+.draft-caret { display: inline-block; width: 2px; height: 1em; margin-inline-start: 2px; vertical-align: -2px; background: #E7E9EA; animation: lc-mo-caret 1s step-end infinite; }
+.draft-bar { position: relative; height: 2px; margin-top: 8px; background: #2A2F3A; border-radius: 2px; overflow: hidden; }
+.draft-bar-fill { height: 100%; background: linear-gradient(90deg, rgba(231, 233, 234, .35), #E7E9EA); border-radius: 2px; transition: width .4s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .draft-caret { animation: none; opacity: .7; }
+  .draft-bar-fill { transition: none; }
+}
+
+/* ---- ★ B3 逐段上屏：文件翻译段落实时区（段级事件驱动的滚动列表）----
+   纯黑口径延续 B1：只有白/灰单色层级，无新色相、无大色块。
+   初译行（未定稿）弱样式灰字，final/gated 行提亮——与草稿区/译文表的层级逻辑一致。 */
+.file-segs {
+  margin-bottom: 10px; padding: 8px 10px;
+  border: 1px solid #2A2F3A; border-radius: 8px;
+  max-height: 320px; overflow-y: auto; overscroll-behavior: contain;
+}
+/* 中断横幅：语义红 10% 低浓度描边条（禁大色块），只提示「非最终交付物」 */
+.file-segs-warn {
+  font-size: 12px; line-height: 1.6; color: #E98286;
+  border: 1px solid rgba(229, 72, 77, .35); background: rgba(229, 72, 77, .10);
+  border-radius: 6px; padding: 4px 8px; margin-bottom: 8px;
+}
+.file-segs-lang + .file-segs-lang { margin-top: 8px; }
+.file-segs-langhead { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.file-segs-langname { font-size: 11px; color: #878D95; letter-spacing: .04em; }
+.file-segs-live { font-size: 10px; font-weight: 600; letter-spacing: .06em; color: var(--npz-text-2); border: 1px solid #3F444B; border-radius: 999px; padding: 0 6px; }
+.file-segs-sealed { font-size: 10px; font-weight: 600; letter-spacing: .06em; color: #000; background: #E7E9EA; border-radius: 999px; padding: 0 6px; }
+.file-segs-count { font-size: 11px; color: #878D95; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; margin-inline-start: auto; }
+.file-seg-row { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; }
+.file-seg-idx { flex: none; font-size: 10px; color: #565B63; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
+/* 初译行：次级灰小字（还可能被审校/闸门改写）；final 行提亮为主文本色 */
+.file-seg-text { font-size: 12.5px; line-height: 1.65; color: var(--npz-text-2); white-space: pre-wrap; word-break: break-word; }
+.file-seg-row--final .file-seg-text { color: #E7E9EA; }
+.file-seg-row--final .file-seg-idx { color: #878D95; }
+/* 敏感拦截占位行：不展示内容文本，只给拦截标注 */
+.file-seg-blocked { font-size: 11px; font-style: normal; color: #878D95; }
+.file-segs-trunc { font-size: 11px; color: #565B63; text-align: center; padding-top: 4px; }
+
+/* ---- ★ D1 WordSwap 共享换词动效（#24：落地页「划掉错词→亮起正词」移植为加载态通用动效）----
+   视觉语言与 HeroDemo hd-* 同源但独立成组：错词位 .ws-w 灰字，struck 时转语义红并
+   展开 ::before 红线（scaleX 过冲 3.5% 像手划）；正词位 .ws-r 白字，glow 辉光打底、
+   lock 定版缩放。只动 opacity/transform/text-shadow，不触发重排；纯黑口径无新色相。 */
+.ws { display: inline-flex; align-items: baseline; gap: 10px; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; min-width: 0; }
+/* ★ 多语言循环：语种标签前置（EN/RU/…），灰一档小字，不参与打字动画 */
+.ws-tag { flex: none; font-size: 9.5px; letter-spacing: .08em; color: #565B63; border: 1px solid #2A2F3A; border-radius: 4px; padding: 1px 4px; transform: translateY(-1px); }
+.ws-w { position: relative; display: inline-block; color: #8E949C; font-size: 12px; transition: color .28s ease; }
+.ws-w.struck { color: var(--lc-danger, #E5484D); animation: wsStrikeFlash .72s ease-out both; }
+/* 红线是文字节点 ::before：与错词分开两层，划掉动画（scaleX）不牵连文字重排 */
+.ws-w .ws-wt::before { content: ''; position: absolute; left: -2px; right: -2px; top: 55%; height: 1.6px; background: var(--lc-danger, #E5484D); transform: scaleX(0); transform-origin: left center; }
+.ws-w.struck .ws-wt::before { transform: scaleX(1); animation: wsStrikeIn .36s cubic-bezier(.34, 0, .2, 1) both; }
+.ws-r { display: inline-block; color: #E7E9EA; font-size: 13px; font-weight: 700; min-height: 1em; transition: text-shadow .62s ease; }
+.ws-r.glow { text-shadow: 0 0 16px rgba(255, 255, 255, .5); }
+.ws-r.lock { animation: wsRLock .42s cubic-bezier(.34, 1.4, .44, 1) both; }
+/* typing 光标：与 B1 .draft-caret 同一节奏（step-end 闪烁），打完摘类 */
+.ws-w .ws-wt.typing::after, .ws-r.typing::after { content: ''; display: inline-block; width: 1.5px; height: 1em; background: #E7E9EA; margin-left: 2px; vertical-align: -.12em; animation: lc-mo-caret 1s step-end infinite; }
+@keyframes wsStrikeIn { 0% { transform: scaleX(0); } 74% { transform: scaleX(1.035); } 100% { transform: scaleX(1); } }
+@keyframes wsStrikeFlash { 0% { text-shadow: none; } 20% { text-shadow: 0 0 18px rgba(229, 72, 77, .62); } 100% { text-shadow: none; } }
+@keyframes wsRLock { 0% { transform: scale(1.05); text-shadow: 0 0 17px rgba(255, 255, 255, .65); } 55% { transform: scale(.994); } 100% { transform: scale(1); text-shadow: 0 0 16px rgba(255, 255, 255, .5); } }
+/* 大档：全屏加载位（App 冷启/路由懒加载）用，字号与 HeroDemo 演示位接近 */
+.ws--lg .ws-w { font-size: 15px; }
+.ws--lg .ws-r { font-size: 18px; }
+/* ★ #24 小档：聊天草稿头与逐段上屏行内——字号贴齐各自 11~12px 文本基线，间距收窄 */
+.draft-ws { gap: 7px; }
+.draft-ws .ws-w { font-size: 11px; }
+.draft-ws .ws-r { font-size: 11.5px; }
+.file-segs-ws { gap: 6px; }
+.file-segs-ws .ws-w { font-size: 10px; }
+.file-segs-ws .ws-r { font-size: 10.5px; }
+.file-segs-ws .ws-tag { font-size: 8.5px; }
+@media (prefers-reduced-motion: reduce) {
+  .ws-w.struck, .ws-r.lock { animation: none; }
+  .ws-w .ws-wt::before { animation: none; }
+  .ws-w .ws-wt.typing::after, .ws-r.typing::after { animation: none; }
+}
+
+/* ---- ★ #23 LangSelect 界面语言下拉（12 语种，取代 zh/en 二元 toggle）----
+   顶栏/登录卡/后台三处共用；纯黑口径：描边 #2A2F3A、悬停次级灰、当前项白字打勾。
+   菜单绝对值定位不挤布局，--right 贴触发钮右缘向左展开防窄屏溢出。 */
+.lang-sel { position: relative; display: inline-flex; }
+.lang-sel-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid #2A2F3A; border-radius: 8px; background: none; color: #C8CCD1; font: 500 12px/1 var(--lc-font, 'Inter', sans-serif); cursor: pointer; transition: border-color .18s ease, color .18s ease; }
+.lang-sel-btn:hover, .lang-sel-btn.is-open { border-color: #4A505C; color: #E7E9EA; }
+.lang-sel-cur { white-space: nowrap; }
+.lang-sel-menu { position: absolute; top: calc(100% + 6px); inset-inline-start: 0; z-index: 60; min-width: 148px; max-height: 320px; overflow-y: auto; padding: 4px; background: #16181C; border: 1px solid #2A2F3A; border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .5); }
+.lang-sel-menu--right { inset-inline-start: auto; inset-inline-end: 0; }
+.lang-sel-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 6px 9px; border: none; border-radius: 7px; background: none; color: #B6BBC3; font: 400 12.5px/1.4 var(--lc-font, 'Inter', sans-serif); cursor: pointer; text-align: start; }
+.lang-sel-item:hover { background: #1F2228; color: #E7E9EA; }
+.lang-sel-item.is-cur { color: #E7E9EA; font-weight: 600; }
+.lang-sel-native { white-space: nowrap; }
+.lang-sel-check { color: #E7E9EA; }
+
 /* ---- 翻译检查点动效（移植 hero-stream.html 的 MOT 峰值逻辑，遵循 §2.4 原则 2/3/4/5/8/9）----
    黑底不用几何形状做光，靠内容自身 filter:brightness 抬中间调；峰值是一个「时刻」而非一段，
    可截出一张明显最亮的静帧。所有动画只动 opacity / transform / filter，不触发重排。

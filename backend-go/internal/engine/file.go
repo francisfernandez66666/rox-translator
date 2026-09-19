@@ -4,6 +4,8 @@
 // 从用户 prompt 中解析"其他语言"（正则 + LLM 语言识别兜底），
 // 含 pro 模式批量审校、硬闸补漏（墙钟预算+零进展熔断）与漏翻可见性（Untranslated），
 // 翻译完成后按语言分别写回 translated/ 目录下独立文件并统计 KB/模型命中数。
+// ★B3（方案 A2）：主流程挂载逐段事件回调 emit（segment_done/segment_final/segments_sealed），
+// 让 SSE 通道边翻边上屏；发射器与协议见 file_events.go，工单/非流式路径 emit=nil 零开销。
 // ========================================
 package engine
 
@@ -224,7 +226,9 @@ func (e *Engine) normalizeFileBrandTerms(ctx context.Context, texts []string, la
 }
 
 // HandleFile 文件翻译主流程（复刻 skill.py _handle_file_translate）
-func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[string]interface{}, prog Progress) *FileTranslateResult {
+// ★B3（方案 A2）：新增逐段事件回调 emit（与 prog 同闭包风格，仅 SSE 文件通道注入；
+// 工单 worker / 非流式接口传 nil，事件层整体空转零开销）。事件协议与稳定键见 file_events.go。
+func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[string]interface{}, prog Progress, emit SegmentEmit) *FileTranslateResult {
 	// 注入请求级用量记录器（供计量成本核算）
 	ctx = e.WithUsageRecorder(ctx)
 	// ★ 文件/后台批任务：走专用 LLM 信号量池（容量更大、与交互池隔离），
@@ -415,6 +419,20 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	// 各语言直接预填占位交付；其余段照常翻译。
 	blockedSeg := e.sensitiveBlockedSegments(ctx, texts, append(append([]string{}, kbLangs...), directOther...), addTrans)
 
+	// ★B3（A2）：逐段事件发射器（emit=nil 时 nil-safe 全空转，工单/非流式路径零开销）。
+	// 挂载点=方案 A2 第 2 条：KB 直译即中即推 / 批回调按块推初翻 / 语言收尾 diff+封印。
+	se := newSegEmitter(emit, texts, blockedSeg)
+	if se.on() {
+		// 拦截段已预填占位：立即补推 segment_done，前端把这些行标成「已拦截」而非空白
+		for _, lc := range append(append([]string{}, kbLangs...), directOther...) {
+			for _, t := range texts {
+				if blockedSeg[t] {
+					se.done(lc, t, langTranslations[lc][t])
+				}
+			}
+		}
+	}
+
 	// KB 语言：先 KB 直配，未命中的批量模型
 	var wg sync.WaitGroup
 	if len(kbLangs) > 0 {
@@ -449,6 +467,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 							if v, ok := r.Translations[lc]; ok && v != "" {
 								kbHitIdx[i] = true
 								kbVal[i] = v
+								se.done(lc, t, v) // ★B3：KB 直译命中即推（A2 挂载点1，替代攒齐屏障的上屏时延）
 							}
 						}
 						done := atomic.AddInt64(&kbDoneC, 1)
@@ -480,7 +499,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					//   使模型输出 ROX 而非音译 Киджиш；返回的 batch 仍按原 needTexts 索引对应。
 					protSrc, _ := protectSourceByLang(needTexts, brandTermsAll[lc])
 					batch := e.BatchTranslate(ctx, protSrc, lc, 15,
-						func(done, total int) { prog("file_translate|初翻|"+lc, done, total) })
+						// ★B3：段回调升级为「进度+逐段 segment_done」；gidx=needModelIdx 将批下标映射回
+						// texts 全局段号（事件带原始源文而非品牌保护后的 protSrc，保证前端行对得上号）
+						se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, needModelIdx))
 					// ★ pro 模式批量审校：本块一次 LLM 调用逐条修正，失败/不符原样保留
 					if !fast {
 						batch = e.reviewBatchSafe(ctx, protSrc, batch, lc,
@@ -491,6 +512,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 						if batch[i] != "" && batch[i] != "[翻译失败]" && batch[i] != texts[idx] {
 							addTrans(lc, texts[idx], batch[i])
 							addModelHit()
+							se.final(lc, texts[idx], batch[i], "reviewed") // ★B3：审校后终稿（同文自动去重）
 						}
 					}
 				}
@@ -518,7 +540,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			}
 			protSrc, _ := protectSourceByLang(sendTexts, brandTermsAll[lc])
 			batch := e.BatchTranslate(ctx, protSrc, lc, 15,
-				func(done, total int) { prog("file_translate|初翻|"+lc, done, total) })
+				// ★B3：同 KB 路径——进度 + 逐段 segment_done（sendIdx 映射回全局段号/原始源文）
+				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, sendIdx))
 			// ★ pro 模式批量审校（同上：整块一次调用）
 			if !fast {
 				batch = e.reviewBatchSafe(ctx, protSrc, batch, lc,
@@ -531,6 +554,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				if batch[i] != "" && batch[i] != "[翻译失败]" && batch[i] != t {
 					addTrans(lc, t, batch[i])
 					addModelHit()
+					if !fast {
+						se.final(lc, t, batch[i], "reviewed") // ★B3：fast 模式无审校，终稿统一留给收尾 sweep
+					}
 				}
 			}
 		}(lc)
@@ -566,9 +592,11 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				break
 			}
 			still := []string{}
-			for _, t := range texts {
+			stillIdx := []int{} // ★B3：与 still 等长的 texts 全局段号映射（逐段事件行键）
+			for i, t := range texts {
 				if _, ok := langTranslations[lc][t]; !ok {
 					still = append(still, t)
+					stillIdx = append(stillIdx, i)
 				}
 			}
 			if len(still) == 0 {
@@ -601,7 +629,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			// 对短段回显的纠正率高于逐段单发。品牌保护同前：源文品牌名先替换为规定译法防音译。
 			protStill, _ := protectSourceByLang(still, brandTermsAll[lc])
 			batch := e.BatchTranslate(ctx, protStill, lc, 10,
-				func(done, total int) { prog("file_translate|初翻|"+lc, done, total) })
+				// ★B3：硬闸重译块同样逐段推进度+segment_done（补漏段此前无行，前端据此补行）
+				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, stillIdx))
 			for i, m := range still {
 				if v := batch[i]; v != "" && v != "[翻译失败]" && v != m {
 					addTrans(lc, m, v)
@@ -622,6 +651,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				}
 				if v, ok := r.Translations[lc]; ok && v != "" && v != "[翻译失败]" && v != m {
 					addTrans(lc, m, v)
+					se.done(lc, m, v) // ★B3：逐段兜底补译成功即推初翻上屏
 				}
 			}
 		}
@@ -666,6 +696,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		log.Println(result)
 	}
 	gateWarnings := e.applySegmentGates(ctx, langTranslations, true)
+	// ★B3（A2 挂载点3·语言收尾）：品牌归一/敏感词兑底/质量闸门三道覆写全部落地后，
+	// 对「最后已发文本」做 diff 补推 segment_final(stage=gated)，随后逐语言 segments_sealed。
+	se.sweep(langTranslations, finalLangs)
 
 	isXlsxInput := ext == ".xlsx"
 

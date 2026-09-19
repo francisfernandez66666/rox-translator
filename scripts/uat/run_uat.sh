@@ -54,7 +54,11 @@ else
   log "竞态检测 go test -race ./internal/...（数分钟）..."
   # ★ -timeout 30m（2026-09-19）：store 包高负载下单跑实测 952s，默认 10m/包会假超时；
   #   失败文案同步改中性（旧文案把任何非零退出——含超时——都报成"数据竞争"，误导定位）
-  (cd backend-go && go test -race -count=1 -timeout 30m ./internal/...) \
+  # ★ 预检方言钉死 sqlite（2026-09-20）：单测族一律内存 SQLite（各测试已自钉方言，如
+  #   langs_zh/admin_models_cache/h5_chunk），但 PG 模式上方导出的 DB_DRIVER/DB_DSN 仍会
+  #   经 config.Default() 副作用泄漏方言——历史上两次造成整包 api 假红。预检职责=竞态
+  #   检测（sqlite 语义即可），PG 方言覆盖由后置 UAT 矩阵（连真 PG 库）承担，不在此处。
+  (cd backend-go && env DB_DRIVER=sqlite DB_DSN= go test -race -count=1 -timeout 30m ./internal/...) \
     || { echo "❌ 竞态检测未通过（数据竞争或测试失败/超时，见上方 go test 输出），中止 UAT"; exit 1; }
   log "竞态检测通过"
 fi

@@ -99,7 +99,8 @@ function QualityBadges({ row }: { row: Ticket }) {
 // QualityBlock 详情抽屉「质检报告」区块（★ 改造 5）：
 //   Pass/Errors/Warnings 汇总行 + Issues 明细（语言/规则/级别/说明）+ 各语言评估分。
 // 无任何质检数据（草稿/未跑到质检步骤）返回 null，不占位、不误导。
-function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: 'zh' | 'en'; flagged?: boolean }) {
+// ★ #23：lang 放宽到 12 语种代码（仅透传给 langLabel 决定语言名取中/英）
+function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: string; flagged?: boolean }) {
   const scoreKeysAll = q ? Array.from(new Set([...Object.keys(q.eval_scores || {}), ...Object.keys(q.review_eval_scores || {})])) : []
   // 无 QA 报告、无评估分且未被列标记存疑 → 不渲染（草稿/未跑到质检步骤，不占位）
   if (!q?.qa_report && !scoreKeysAll.length && !flagged) return null

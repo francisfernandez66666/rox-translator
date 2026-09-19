@@ -13,11 +13,12 @@
 //   ui/langcross 组件；菜单图标由 emoji 文案改为 16×16 自绘 SVG（见 Item.icon）。
 // ============================================================================
 import { useNavigate } from 'react-router-dom'
-import { Button, StatusPill, AdminShell } from '@/ui/langcross/src'
+import { StatusPill, AdminShell } from '@/ui/langcross/src'
 import type { NavItem } from '@/ui/langcross/src'
 import { useAdmin } from '@/stores/admin'
 import type { PanelKey } from '@/stores/admin'
-import { t, toggleLang, useLang } from '@/i18n'
+import { t, useLang } from '@/i18n'
+import { LangSelect } from '@/components/LangSelect' // ★ #23：12 语种语言下拉
 import Bell from '@/components/Bell'
 import AccountMenu from '@/components/AccountMenu'
 import SiteFooter from '@/components/SiteFooter'
@@ -109,8 +110,8 @@ function renderPanel(p: PanelKey) {
 export default function AdminDashboard() {
   const navigate = useNavigate()
   const ad = useAdmin()
-  // 订阅语言变化，使菜单与角色标签随 UI 语言切换刷新
-  const lang = useLang()
+  // 订阅语言变化，使菜单与角色标签随 UI 语言切换刷新（★ #23：切换动作移交 LangSelect，这里不再取语种值）
+  useLang()
   // 租户级品牌定制
   const branding = useBranding()
 
@@ -137,7 +138,8 @@ export default function AdminDashboard() {
   // marginLeft:auto —— AdminShell 顶栏左侧固定放汉堡按钮，右侧内容整体靠右对齐
   const topbar = (
     <div className="lc-topbar-cluster" style={{ display: 'flex', alignItems: 'center', gap: 12, marginLeft: 'auto' }}>
-      <Button size="sm" variant="secondary" onClick={toggleLang}>{lang === 'zh' ? 'EN' : '中文'}</Button>
+      {/* ★ #23：后台顶栏语言钮同样换 12 语种 LangSelect（旧 zh/en 互切按钮退役） */}
+      <LangSelect align="right" />
           <Bell />
           {ad.isSuper && (
         <>
@@ -169,8 +171,8 @@ export default function AdminDashboard() {
 
   return (
     <>
-      {/* AdminShell 自带侧栏语言按钮为静态占位，此处用顶栏的语言切换替代，故隐藏之 */}
-      <style>{'.adm-shell .lc-side-lang{display:none}'}</style>
+      {/* ★ #23：AdminShell 侧栏底部假「EN」钮已换成 sideFoot 插槽；语言切换实装在顶栏
+          （窄屏侧栏收进抽屉，顶栏入口始终可达），故不占侧栏插槽 */}
       <AdminShell
         className="adm-shell"
         nav={nav}

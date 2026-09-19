@@ -4,6 +4,9 @@
 // 语言切换通过极简外部 store + useSyncExternalStore 驱动重渲染。
 // 2026-09-17/18：新增 panels/auth（登录/注册/AI 接管引导）面板并纳入合并；
 // 同期全站词条去除 emoji 前缀（改由 LangCross <Icon/> 渲染），本合并逻辑不变。
+// ★ #23（2026-09-19）：Lang 从 zh|en 扩到 12 语种（zh/en/ru/fr/ar/es/pt/de/ja/ko/th/zh_hant）。
+//   取词回退链 lang→en→zh：新语种只要求覆盖「核心集」（CORE_PREFIXES 命中的键，
+//   见 locales/*.ts 部分词典），未翻键自动落英文/中文，页面永不露裸 key。
 // =============================================
 
 import { useSyncExternalStore } from 'react'
@@ -45,9 +48,45 @@ import * as pReconcile from './panels/reconcile'
 import * as pAuth from './panels/auth'
 import { baseZh } from './dicts.zh'
 import { baseEn } from './dicts.en'
+// ★ #23：新语种部分词典（locales/<code>.ts）——只覆盖核心集键，其余走 lang→en→zh 回退链
+import { dict as locRu } from './locales/ru'
+import { dict as locFr } from './locales/fr'
+import { dict as locAr } from './locales/ar'
+import { dict as locEs } from './locales/es'
+import { dict as locPt } from './locales/pt'
+import { dict as locDe } from './locales/de'
+import { dict as locJa } from './locales/ja'
+import { dict as locKo } from './locales/ko'
+import { dict as locTh } from './locales/th'
+import { dict as locZhHant } from './locales/zh-hant'
 
-// 语言类型：'zh' 中文 / 'en' 英文（i18n 全部取词与切换基于此类型）
-export type Lang = 'zh' | 'en'
+// 语言类型：★ #23 扩为 12 语种（界面语言代码与翻译目标语代码刻意分开——
+// zh_hant 只是 UI 代码，翻译目标语走 lib/langNames 的 40+ 语代码表）
+export type Lang =
+  | 'zh' | 'en'
+  | 'ru' | 'fr' | 'ar' | 'es' | 'pt' | 'de' | 'ja' | 'ko' | 'th' | 'zh_hant'
+
+// 语言下拉菜单的唯一数据源：native 用该语言自称（不随界面语言翻译，避免
+// 「俄语界面里看不到俄语选项」的经典坑）；en 名做 aria 兜底
+export const LANG_OPTIONS: ReadonlyArray<{ code: Lang; native: string; en: string }> = [
+  { code: 'zh', native: '简体中文', en: 'Chinese (Simplified)' },
+  { code: 'zh_hant', native: '繁體中文', en: 'Chinese (Traditional)' },
+  { code: 'en', native: 'English', en: 'English' },
+  { code: 'ru', native: 'Русский', en: 'Russian' },
+  { code: 'fr', native: 'Français', en: 'French' },
+  { code: 'ar', native: 'العربية', en: 'Arabic' },
+  { code: 'es', native: 'Español', en: 'Spanish' },
+  { code: 'pt', native: 'Português', en: 'Portuguese' },
+  { code: 'de', native: 'Deutsch', en: 'German' },
+  { code: 'ja', native: '日本語', en: 'Japanese' },
+  { code: 'ko', native: '한국어', en: 'Korean' },
+  { code: 'th', native: 'ไทย', en: 'Thai' },
+]
+
+// 核心集前缀：新语种部分词典必须 100% 覆盖这些前缀下的全部键（locales 测试逐语种断言）。
+// 选段口径=外国用户真实要操作的链路：应用外壳(app/common/menu) + 登录注册(login/auth)
+// + 聊天工作台(chat/msg/pwd)；管理后台等长尾走英文回退。
+export const CORE_PREFIXES: ReadonlyArray<string> = ['app.', 'common.', 'menu.', 'login.', 'auth.', 'chat.', 'msg.', 'pwd.']
 // Dict 字典类型：key 为文案标识，value 为对应语言的展示文本
 type Dict = Record<string, string>
 
@@ -73,15 +112,29 @@ const en: Dict = {
   ...pReferral.en, ...pTasks.en, ...pSdk.en, ...pHub.en, ...pOps.en, ...pIndustries.en, ...pPersonas.en, ...pBrandterms.en, ...pChatwin.en, ...pDs.en, ...pMybill.en, ...pReconcile.en, ...pLanding.en, ...pAuth.en,
 }
 
-// dicts 按语言索引的词典集合，取词时按当前语言定位
-const dicts: Record<Lang, Dict> = { zh, en }
+// 核心集键清单（按 CORE_PREFIXES 从英文全量词典筛出、排序冻结）：locales 覆盖测试与
+// 翻译生产都以这一份为准——新键若落在核心前缀下，十份部分词典必须同步补，测试即红灯
+export const CORE_KEYS: ReadonlyArray<string> = Object.keys(en).filter((k) => CORE_PREFIXES.some((p) => k.startsWith(p))).sort()
+
+// 新语种部分词典：键空间是核心集（CORE_PREFIXES 命中键），locales 测试逐语种守护
+const locales: Partial<Record<Lang, Dict>> = {
+  ru: locRu, fr: locFr, ar: locAr, es: locEs, pt: locPt,
+  de: locDe, ja: locJa, ko: locKo, th: locTh, zh_hant: locZhHant,
+}
+
+// dicts 按语言索引的词典集合，取词时按当前语言定位；
+// ★ 回退链在 t() 里做（lang→en→zh），此处只登记各语种已有的部分词典
+// （zh/en 全量词典写在展开位之前会触发 TS 重复键告警，统一用一次断言收口）
+const dicts = { zh, en, ...locales } as Record<Lang, Dict>
 
 // ---- 极简外部语言 store ----
-// currentLang 当前语言（首次从 localStorage 读取，默认中文）
-let currentLang: Lang = (localStorage.getItem('app_lang') as Lang) || 'zh'
+// currentLang 当前语言（首次从 localStorage 读取；★ #23 读到未知代码一律回落 zh，
+// 防止旧版本存的野值或手工改 storage 让全站取词踩空）
+const stored = localStorage.getItem('app_lang') as Lang | null
+let currentLang: Lang = stored && LANG_OPTIONS.some((o) => o.code === stored) ? stored : 'zh'
 
 // ★ F3：RTL 方向接线——document.dir 随语言切换（ar/fa/he/ur/ps/ku/dv 为从右到左）。
-//   当前 UI 语言仅 zh/en（LTR），本钩子为品牌语言扩展（阿拉伯语界面等）预置；
+//   ★ #23：阿拉伯语已进 UI 语种表，本钩子正式生效；
 //   工作台/账单核心样式已改逻辑属性（margin-inline-* 等），dir=rtl 即镜像生效。
 const RTL_LANGS = new Set(['ar', 'fa', 'he', 'ur', 'ps', 'ku', 'dv'])
 // 按语言切换页面文字方向（RTL 语言设 dir=rtl）
@@ -106,10 +159,13 @@ export function setLang(l: Lang) {
   emit()
 }
 
-// 在当前中文/英文之间切换语言
-export function toggleLang() {
-  setLang(currentLang === 'zh' ? 'en' : 'zh')
+// getLang 读取当前语言（非 Hook，供命令式场景与测试断言使用）
+export function getLang(): Lang {
+  return currentLang
 }
+
+// 在当前界面语言之间切换的职责移交 LangSelect 下拉菜单（★ #23：12 语种下
+// 二元 toggle 已无意义），这里只保留 setLang 单入口
 
 // subscribe 注册语言订阅回调，返回用于取消订阅的函数
 function subscribe(cb: () => void) {
@@ -127,9 +183,9 @@ export function useLang(): Lang {
 }
 
 /** t 纯函数取词（非响应式；组件内请配合 useLang 使用以获得切换刷新） */
-/** 文案取词：key → 当前语言文本（缺词回退中文） */
+/** 文案取词：key → 当前语言文本；★ #23 回退链 lang→en→zh，未翻键不露裸 key */
 export function t(key: string): string {
-  return dicts[currentLang][key] || dicts.zh[key] || key
+  return dicts[currentLang][key] || en[key] || zh[key] || key
 }
 
 /** tpl 带参数取词：{name} 占位符替换 */

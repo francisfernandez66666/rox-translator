@@ -75,6 +75,16 @@ export const zh: Record<string, string> = {
   'chat.cpTranslate': '机器翻译',
   'chat.cpCalibrate': '术语校准',
   'chat.cpDone': '翻译完成',
+  // ---- ★ B1 流式双态：初译草稿区阶段徽章 ----
+  'chat.draftStreaming': '初译中',
+  'chat.draftReviewing': '审校中',
+  // ★ B3（方案 A2）文件翻译逐段上屏
+  'chat.segLive': '实时段落',
+  'chat.segSealed': '已定稿',
+  'chat.segBlocked': '敏感内容已拦截',
+  'chat.segAborted': '翻译已中断，以上段落不是最终交付物',
+  'chat.segArrivedFmt': '已上屏 {n} 段',
+  'chat.segTruncFmt': '仅显示最近 {n} 段',
   // ---- 即时翻译页区块标签 ----
   'chat.srcLabel': '原文',
   'chat.resultLabel': '译文',
@@ -264,6 +274,16 @@ export const en: Record<string, string> = {
   'chat.sourceAuto': 'Auto detect',
   'chat.cpTranslate': 'Machine translation',
   'chat.cpDone': 'Translation complete',
+  // ★ B1 streaming dual-state: draft-stage badges
+  'chat.draftStreaming': 'Drafting',
+  'chat.draftReviewing': 'Reviewing',
+  // ★ B3（方案 A2）file translation per-segment live feed
+  'chat.segLive': 'Live segments',
+  'chat.segSealed': 'Finalized',
+  'chat.segBlocked': 'Blocked content',
+  'chat.segAborted': 'Translation interrupted — the segments above are not a final deliverable',
+  'chat.segArrivedFmt': '{n} segments arrived',
+  'chat.segTruncFmt': 'Showing the latest {n} segments',
   'chat.checkpointPrefix': 'Checkpoint',
   'chat.srcLabel': 'Source text',
   'chat.targetLangLabel': 'Target language',

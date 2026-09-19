@@ -154,7 +154,10 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	for _, rt := range req.Routes {
-		merged = append(merged, config.ProviderConfig{Provider: rt.Provider, APIBase: rt.APIBase, APIKey: rt.APIKey, Model: rt.Model, Weight: rt.Weight})
+		// ★ B5（方案 B Phase 2 同批必修）：结构体透传，不再逐字段手构——
+		//   旧写法会静默吞掉 ProviderConfig 的新能力位（SupportsConstraints 曾被丢过，
+		//   SupportsCache 若同样处理将永远存不进库）。
+		merged = append(merged, rt)
 	}
 	// 掩码密钥回填（★ 2026-08-26 修复脆弱匹配）：
 	//   旧逻辑按「api_base+model 双字段相等」找旧路由——管理员只改 model 名即匹配失败，

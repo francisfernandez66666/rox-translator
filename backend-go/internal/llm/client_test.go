@@ -4,6 +4,7 @@
 //   - CallChatFallback 429→降级模型重试 / 非 429 不重试 / 等待期取消止损（D9）
 //   - StreamChat SSE 首块解析与 usage 计费口径 / 缺 usage 判不可信（D20）/ 非流式端点拒绝
 //   - UsageCollector / OnUsage 计费钩子
+//   - ★ B1 观测面：prompt_tokens_details.cached_tokens 归集与流式 TTFT 样本（差值断言）
 //
 // 全部用 httptest 本地 mock 端点，不依赖外网。
 // =============================================
@@ -341,5 +342,70 @@ func TestCallChat429SSE(t *testing.T) {
 	var se *StatusError
 	if !errors.As(err, &se) || se.Code != 429 {
 		t.Fatalf("流式 429 应为 StatusError，得到: %v", err)
+	}
+}
+
+// ============ ★ B1 观测面（prompt 缓存命中 + 流式 TTFT，2026-09-19） ============
+// 计数是进程级原子量（同包其他用例会并发累加），断言一律用「调用前后差值」。
+
+// TestObservabilityCachedTokensNonStream 非流式：usage.prompt_tokens_details.cached_tokens
+// 应进观测计数，且不影响 OnUsage 计费口径（仍按 prompt/completion 原值回调）。
+func TestObservabilityCachedTokensNonStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],
+		  "usage":{"prompt_tokens":1200,"completion_tokens":30,"prompt_tokens_details":{"cached_tokens":1024}}}`)
+	}))
+	defer srv.Close()
+
+	before := Observability()
+	c := newTestClient(t, nil)
+	var hookedPrompt, hookedComp int64
+	c.OnUsage = func(ctx context.Context, model string, p, comp int64) error {
+		hookedPrompt, hookedComp = p, comp
+		return nil
+	}
+	if _, _, err := c.CallChat(context.Background(), srv.URL+"/v1", "k", "m", nil, 8, false, 0.1); err != nil {
+		t.Fatalf("调用不应报错: %v", err)
+	}
+	after := Observability()
+	if dp, dc := after.PromptTokens-before.PromptTokens, after.CachedTokens-before.CachedTokens; dp != 1200 || dc != 1024 {
+		t.Fatalf("观测计数差值不符: prompt+%d cached+%d（期望 1200/1024）", dp, dc)
+	}
+	if hookedPrompt != 1200 || hookedComp != 30 {
+		t.Fatalf("计费钩子口径不应被观测改动: %d/%d", hookedPrompt, hookedComp)
+	}
+}
+
+// TestObservabilityStreamTTFT 流式：完成调用计数 +1、TTFT 样本 +1、cached 归集。
+func TestObservabilityStreamTTFT(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		f := w.(http.Flusher)
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"He\"}}]}\n\n")
+		f.Flush()
+		time.Sleep(20 * time.Millisecond) // 拉开首 token 与后续块的间隔，TTFT 样本可测
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"llo\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = io.WriteString(w, "data: {\"usage\":{\"prompt_tokens\":110,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":96}}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		f.Flush()
+	}))
+	defer srv.Close()
+
+	before := Observability()
+	c := newTestClient(t, nil)
+	if _, _, err := c.StreamChat(context.Background(), srv.URL+"/v1", "k", "m", nil, 8, 0.1, nil); err != nil {
+		t.Fatalf("流式调用不应报错: %v", err)
+	}
+	after := Observability()
+	if after.StreamCalls-before.StreamCalls != 1 {
+		t.Fatalf("流式完成计数应 +1，实际 +%d", after.StreamCalls-before.StreamCalls)
+	}
+	if dp, dc := after.PromptTokens-before.PromptTokens, after.CachedTokens-before.CachedTokens; dp != 110 || dc != 96 {
+		t.Fatalf("流式观测归集不符: prompt+%d cached+%d（期望 110/96）", dp, dc)
+	}
+	// TTFT 每调用恰记 1 个样本（首个非空 delta 触发）；均值为全局量不做精确断言
+	if after.TtftSamples-before.TtftSamples != 1 {
+		t.Fatalf("TTFT 样本应 +1，实际 +%d", after.TtftSamples-before.TtftSamples)
 	}
 }

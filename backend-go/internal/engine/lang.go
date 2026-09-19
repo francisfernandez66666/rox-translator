@@ -28,6 +28,10 @@ var langAliases = map[string][]string{
 
 // 其他语言别名（前端子选单或 prompt 解析用）
 var otherLangAliases = map[string][]string{
+	// ★ #23（2026-09-19）：新增 "zh"——外语→简体中文方向的 prompt 识别。
+	//   别名刻意不收「中国」「汉语方言」等宽泛词，避免 "中国制造" 一类正文误触发；
+	//   与 zh_hant 的撞词（"繁体中文" 含 "中文"）由 ParseTargetLangs 的去重规则兜住。
+	"zh":  {"zh", "chinese", "simplified chinese", "mandarin", "中文", "简体中文", "简体", "普通话", "汉语"},
 	"ja":  {"ja", "japanese", "日语", "日文", "日本"},
 	"ko":  {"ko", "korean", "韩语", "韩文", "韩国"},
 	"th":  {"th", "thai", "泰语", "泰文", "泰国"},
@@ -100,7 +104,30 @@ func ParseTargetLangs(userInput string) []string {
 			}
 		}
 	}
+	// ★ #23 撞词去重：zh_hant 的别名「繁体中文/traditional chinese」字面包含 zh 的
+	//   别名「中文/chinese」，"翻成繁体中文" 会同时命中两者。map 遍历序随机，
+	//   不做兜底则目标语言列表在 zh/zh_hant 间漂移——规则：两者同现时判定用户
+	//   要的是繁体（zh 更宽的词是子串误伤），丢弃 zh。
+	if hasLang(found, "zh") && hasLang(found, "zh_hant") {
+		out := found[:0]
+		for _, lc := range found {
+			if lc != "zh" {
+				out = append(out, lc)
+			}
+		}
+		found = out
+	}
 	return found
+}
+
+// hasLang 目标语言列表内是否含指定代码（ParseTargetLangs 去重规则用）
+func hasLang(langs []string, lc string) bool {
+	for _, l := range langs {
+		if l == lc {
+			return true
+		}
+	}
+	return false
 }
 
 // isASCIIWord 判断字符串是否仅由 ASCII 字母/数字组成（用于区分词边界匹配与 contains 匹配）

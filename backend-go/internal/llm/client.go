@@ -343,10 +343,61 @@ type ChatResponse struct {
 type Usage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`     // 输入 token 数
 	CompletionTokens int64 `json:"completion_tokens"` // 输出 token 数
+	// ★ B1 缓存度量（2026-09-19）：OpenAI 兼容 usage.prompt_tokens_details.cached_tokens。
+	//   仅进程内观测（/metrics），供应商不回传时保持 0；计费口径不变，仍按 prompt-completion 结算。
+	PromptTokensDetails struct {
+		CachedTokens int64 `json:"cached_tokens"` // 命中 prompt 缓存的输入 token 数
+	} `json:"prompt_tokens_details"`
 }
 
 // Total 返回输入+输出合计 token 数。
 func (u Usage) Total() int64 { return u.PromptTokens + u.CompletionTokens }
+
+// ============ ★ B1 LLM 观测面（prompt 缓存命中 + 流式首 token 延迟，2026-09-19） ============
+// 进程级累计计数器，与计费链路（OnUsage/usage_ledger）解耦——只供 /metrics 导出，
+// 用于观察 B4 前缀重组后缓存是否真实生效、以及流式 TTFT 的改善幅度。
+// 红线：cached_tokens 属内部成本信号，一律不进用户面页面与公开接口响应（积分口径）。
+var (
+	obsPromptTokens atomic.Int64 // chat 累计输入 token（缓存命中率分母；embed 不计，保持口径纯净）
+	obsCachedTokens atomic.Int64 // 其中命中 prompt 缓存的输入 token（分子）
+	obsStreamCalls  atomic.Int64 // 完成且可信计费的流式调用次数
+	obsTtftSumMs    atomic.Int64 // TTFT 样本毫秒合计
+	obsTtftCnt      atomic.Int64 // TTFT 样本数（每调用 1 个：首个非空 delta）
+)
+
+// LLMObservability /metrics 快照形状（字段全为内部观测口径）
+type LLMObservability struct {
+	PromptTokens    int64   // chat 累计输入 token
+	CachedTokens    int64   // 累计命中缓存的输入 token
+	CacheRate       float64 // 缓存命中率 0~1（无样本时 0）
+	StreamCalls     int64   // 流式调用完成数
+	StreamTtftAvgMs float64 // 平均首 token 延迟 ms（无样本时 0）
+	TtftSamples     int64   // TTFT 样本数（子毫秒调用会记 0ms，样本数用于判断均值可信度）
+}
+
+// Observability 取进程级 LLM 观测快照（api 层 /metrics 导出用）。
+func Observability() LLMObservability {
+	p, c, n := obsPromptTokens.Load(), obsCachedTokens.Load(), obsTtftCnt.Load()
+	var rate, ttft float64
+	if p > 0 {
+		rate = float64(c) / float64(p)
+	}
+	if n > 0 {
+		ttft = float64(obsTtftSumMs.Load()) / float64(n)
+	}
+	return LLMObservability{PromptTokens: p, CachedTokens: c, CacheRate: rate,
+		StreamCalls: obsStreamCalls.Load(), StreamTtftAvgMs: ttft, TtftSamples: n}
+}
+
+// recordChatUsageObs 归集一次 chat 调用（非流式/流式共用）的输入侧观测：prompt 与缓存命中量。
+func recordChatUsageObs(prompt, cached int64) {
+	if prompt > 0 {
+		obsPromptTokens.Add(prompt)
+	}
+	if cached > 0 {
+		obsCachedTokens.Add(cached)
+	}
+}
 
 // ============ Token 用量收集器（ctx 传播，计费聚合用） ============
 
@@ -560,6 +611,8 @@ func (c *Client) doChat(ctx context.Context, endpoint, apiKey string, payload ch
 	if uc := CollectorFrom(ctx); uc != nil {
 		uc.Add(cr.Usage.PromptTokens, cr.Usage.CompletionTokens)
 	}
+	// ★ B1 观测面：输入侧 prompt 与缓存命中量归集（仅 /metrics，计费行为不变）
+	recordChatUsageObs(cr.Usage.PromptTokens, cr.Usage.PromptTokensDetails.CachedTokens)
 	// ★ 实时计费：每次 chat 调用后立即扣减，余额不足则中止翻译（边工作边计费，防白嫖）
 	if c.OnUsage != nil {
 		if err := c.OnUsage(ctx, model, cr.Usage.PromptTokens, cr.Usage.CompletionTokens); err != nil {
@@ -614,6 +667,9 @@ func (c *Client) StreamChat(ctx context.Context, baseURL, apiKey, model string,
 	defer c.inflight.Add(-1)
 	defer rel()
 
+	// ★ B1：TTFT 起点取「请求发出前一刻」（信号量排队时间不计入模型首 token 延迟，
+	// 排队劣化由 [llm-queue] 日志与路由耗时统计另行承担）
+	ttftStart := time.Now()
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return "", "", err
@@ -634,10 +690,12 @@ func (c *Client) StreamChat(ctx context.Context, baseURL, apiKey, model string,
 	}
 
 	var (
-		full       strings.Builder
-		finish     string
-		prompt     int64
-		completion int64
+		full         strings.Builder
+		finish       string
+		prompt       int64
+		completion   int64
+		cached       int64 // ★ B1：usage.prompt_tokens_details.cached_tokens（内部观测，不参与计费判定）
+		ttftRecorded bool
 	)
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -660,6 +718,10 @@ func (c *Client) StreamChat(ctx context.Context, baseURL, apiKey, model string,
 			Usage *struct {
 				PromptTokens     int64 `json:"prompt_tokens"`
 				CompletionTokens int64 `json:"completion_tokens"`
+				// ★ B1：部分兼容端点在尾包 usage 里回传缓存命中明细（无则为 0，不影响计费）
+				PromptTokensDetails struct {
+					CachedTokens int64 `json:"cached_tokens"`
+				} `json:"prompt_tokens_details"`
 			} `json:"usage"`
 		}
 		if json.Unmarshal([]byte(data), &chunk) != nil {
@@ -667,6 +729,12 @@ func (c *Client) StreamChat(ctx context.Context, baseURL, apiKey, model string,
 		}
 		for _, ch := range chunk.Choices {
 			if ch.Delta.Content != "" {
+				// ★ B1：首个非空 delta 即 TTFT 样本（每调用只记 1 个）
+				if !ttftRecorded {
+					ttftRecorded = true
+					obsTtftSumMs.Add(time.Since(ttftStart).Milliseconds())
+					obsTtftCnt.Add(1)
+				}
 				full.WriteString(ch.Delta.Content)
 				if onDelta != nil {
 					onDelta(ch.Delta.Content)
@@ -679,6 +747,7 @@ func (c *Client) StreamChat(ctx context.Context, baseURL, apiKey, model string,
 		if chunk.Usage != nil {
 			prompt = chunk.Usage.PromptTokens
 			completion = chunk.Usage.CompletionTokens
+			cached = chunk.Usage.PromptTokensDetails.CachedTokens
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -687,6 +756,9 @@ func (c *Client) StreamChat(ctx context.Context, baseURL, apiKey, model string,
 	if prompt == 0 && completion == 0 {
 		return "", "", errNoStreamUsage
 	}
+	// ★ B1 观测面：流式调用完成后归集（走到这里即 usage 可信）
+	recordChatUsageObs(prompt, cached)
+	obsStreamCalls.Add(1)
 	if uc := CollectorFrom(ctx); uc != nil {
 		uc.Add(prompt, completion)
 	}

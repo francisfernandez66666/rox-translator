@@ -337,7 +337,8 @@ curl 'https://{{OPENAPI_HOST}}/openapi/v1/tasks/status?id=123' -H 'Authorization
 
 ## 支持的语言与计费规则
 
-target_langs 传语言代码数组；缺省 ["en"]。支持以下 34 种语言（Hunyuan-MT 全量）：
+target_langs 传语言代码数组；缺省 ["en"]。支持以下 34 种知识库语言（Hunyuan-MT 全量），
+另有 zh（简体中文）作为纯 AI 目标语言，供「外语→中文」方向使用：
 
 | 代码 | 语言 | 翻译范围 |
 |------|------|----------|
@@ -350,6 +351,7 @@ target_langs 传语言代码数组；缺省 ["en"]。支持以下 34 种语言�
 | kk | 哈萨克语 | 知识库匹配+AI |
 | de | 德语 | 知识库匹配+AI |
 | zh_hant | 繁体中文 | 知识库匹配+AI |
+| zh | 简体中文 | 纯 AI 直译（外语→中文方向） |
 | ja | 日语 | 知识库+AI |
 | ko | 韩语 | 知识库+AI |
 | th | 泰语 | 知识库+AI |
@@ -449,7 +451,7 @@ failed     -> {'status':'failed','error_code':'insufficient_balance'}
 
 ## Supported languages & billing rules
 
-target_langs takes an array of language codes; defaults to ["en"]. Supported: 34 languages (Hunyuan-MT full set):
+target_langs takes an array of language codes; defaults to ["en"]. Supported: 34 knowledge-base languages (Hunyuan-MT full set), plus zh (Simplified Chinese) as a pure-AI target for the foreign-language→Chinese direction:
 
 | Code | Language | Scope |
 |------|----------|-------|
@@ -462,6 +464,7 @@ target_langs takes an array of language codes; defaults to ["en"]. Supported: 34
 | kk | Kazakh | Knowledge base + AI |
 | de | German | Knowledge base + AI |
 | zh_hant | Traditional Chinese | Knowledge base + AI |
+| zh | Simplified Chinese | Pure AI translation (foreign → Chinese direction) |
 | ja | Japanese | AI direct |
 | ko | Korean | AI direct |
 | th | Thai | AI direct |

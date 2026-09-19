@@ -103,19 +103,22 @@ describe('登录屏 · 设计稿对齐（画布 57:2 / 57:3）', () => {
     expect(pwd.type).toBe('password')
   })
 
-  it('⑤ 卡右上角有语言胶囊，点击可切换语言', () => {
+  it('⑤ 卡右上角语言入口为 12 语种下拉（★ #23 取代旧 zh/en 胶囊），选择即切换', () => {
     renderLogin()
-    const pill = card().querySelector('.lc-auth-card__corner .auth-lang') as HTMLButtonElement
-    expect(pill).toBeTruthy()
-    expect(pill.textContent?.trim()).toBe('EN')
+    const btn = card().querySelector('.lc-auth-card__corner .lang-sel-btn') as HTMLButtonElement
+    expect(btn).toBeTruthy()
+    // 中文态触发钮显示当前语种自称（LANG_OPTIONS 首位 native）
+    expect(btn.textContent).toContain('简体中文')
 
-    fireEvent.click(pill)
+    fireEvent.click(btn)
+    const items = card().querySelectorAll('.lang-sel-menu [role="option"]')
+    expect(items.length).toBe(12) // 中/英/俄/法/阿/西/葡/德/日/韩/泰/繁中
+    const en = [...items].find((el) => el.textContent?.includes('English')) as HTMLElement
+    fireEvent.click(en)
+    // 切到英文后卡片重渲染（品牌标题仍在=渲染未崩），触发钮回显当前语种
     expect(card().querySelector('.lc-auth-card__title')?.textContent).toBe(DEFAULT_BRAND_NAME)
-    // 切到英文后胶囊显示回切目标（与顶栏同一套约定：app.langSwitch 的当前语言译名）
-    expect(card().querySelector('.lc-auth-card__corner .auth-lang')?.textContent?.trim())
-      .toBe(t('app.langSwitch'))
-    expect(card().querySelector('.lc-auth-card__corner .auth-lang')?.textContent?.trim())
-      .not.toBe('EN')
+    expect(card().querySelector('.lang-sel-btn')?.textContent).toContain('English')
+    setLang('zh') // 复位，别把英文态漏给后续用例
   })
 
   it('⑥ 字段没有可见 label，但仍保留可访问名', () => {
