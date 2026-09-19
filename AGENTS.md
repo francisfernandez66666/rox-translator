@@ -44,11 +44,20 @@
 - 所有 SQL 必须同时支持 SQLite（本地/CI 快跑）与 PostgreSQL（生产）。
   用 `db.CurrentDialect()` 分支或 `db.Exec(s.db, db.CurrentDialect(), ...)`，禁止硬编码方言语法。
 - 列迁移、`COALESCE` 取值、时间函数是历史高频踩坑点。
+- **新增/改动后端单测必须自钉方言**：`config.Default()` 读 `DB_DRIVER` env 且**副作用写全局 `config.C`**，
+  run_uat PG 模式下会泄漏方言给同包后续内存 SQLite 测试（`no such table: information_schema.tables` 假红，
+  2026-09-19/20 两连败）。模板：`old := config.C; cfg := config.Default(); cfg.DatabaseDriver = "sqlite"; config.C = cfg; t.Cleanup(restore)`，
+  并整包 `env DB_DRIVER=postgres DB_DSN=... go test -count=1 ./internal/<pkg>/` 自检一遍（单测 `-run` 不复现）。
+  G3 预检另钉 `env DB_DRIVER=sqlite`，PG 方言覆盖由 UAT 矩阵承担。
 
 ### 5. 前端约定
 
 - 风格计量单位统一**积分口径**，公开接口零 token 裸值。
-- 组件测试用 vitest + jsdom（`*.dom.test.tsx`），i18n 词条中英双语同步补（`dicts.zh.ts` / `dicts.en.ts`）。
+- 组件测试用 vitest + jsdom（`*.dom.test.tsx`）。
+- **i18n 为 12 语种口径**（★ 2026-09-20）：zh/en 全量词典（`panels/*.ts` 双语同步），其余十语种只覆盖
+  `CORE_KEYS` 核心集（`src/i18n/locales/*.ts`，前缀 app/common/menu/login/auth/chat/msg/pwd）——
+  新键命中这些前缀时十份 locale 必须同步补，`locales.core.test.ts` 覆盖闸门会红灯；长尾键走 lang→en→zh 回退链。
+  语言切换唯一入口 `LangSelect`（禁再造 toggle 按钮），语种名统一 `langLabel()` 取中/英。
 
 ### 6. e2e 断言红线
 
