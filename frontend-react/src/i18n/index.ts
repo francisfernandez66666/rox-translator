@@ -5,8 +5,9 @@
 // 2026-09-17/18：新增 panels/auth（登录/注册/AI 接管引导）面板并纳入合并；
 // 同期全站词条去除 emoji 前缀（改由 LangCross <Icon/> 渲染），本合并逻辑不变。
 // ★ #23（2026-09-19）：Lang 从 zh|en 扩到 12 语种（zh/en/ru/fr/ar/es/pt/de/ja/ko/th/zh_hant）。
-//   取词回退链 lang→en→zh：新语种只要求覆盖「核心集」（CORE_PREFIXES 命中的键，
-//   见 locales/*.ts 部分词典），未翻键自动落英文/中文，页面永不露裸 key。
+// ★ #32（2026-09-20 全站十语种）：locales/*.ts 十份词典升级为 ALL_KEYS 全量口径（2532 键逐键覆盖），
+//   历史 CORE_KEYS 核心集口径已并入全量（CORE_KEYS 仅作键集前缀工具保留）。
+//   取词回退链 lang→en→zh 仍在，但正常情况下不再触发——仅词典缺键或全新面板键未同步时兜底。
 // =============================================
 
 import { useSyncExternalStore } from 'react'
@@ -113,8 +114,12 @@ const en: Dict = {
 }
 
 // 核心集键清单（按 CORE_PREFIXES 从英文全量词典筛出、排序冻结）：locales 覆盖测试与
-// 翻译生产都以这一份为准——新键若落在核心前缀下，十份部分词典必须同步补，测试即红灯
+// 翻译生产都以这一份为准。★ 2026-09-20 全站十语种后升级为 ALL_KEYS 全量口径，
+// 本清单保留给历史批次对照（多语言批次记忆/文档引用的是 453 这个数）。
 export const CORE_KEYS: ReadonlyArray<string> = Object.keys(en).filter((k) => CORE_PREFIXES.some((p) => k.startsWith(p))).sort()
+// 全量键清单（★ 全站十语种）：十份 locales/*.ts 必须逐键覆盖这份表，
+// locales.core.test.ts 的全量闸门以此为基准——新增面板键而某语种没跟上即红灯
+export const ALL_KEYS: ReadonlyArray<string> = Object.keys(en).sort()
 
 // 新语种部分词典：键空间是核心集（CORE_PREFIXES 命中键），locales 测试逐语种守护
 const locales: Partial<Record<Lang, Dict>> = {

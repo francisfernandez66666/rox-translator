@@ -73,7 +73,7 @@ export const en: Record<string, string> = {
   'usage.totalUsage': 'Total usage (credits)',
   'usage.providerCount': 'Providers used',
   'usage.trendTitle': 'Last 7 days usage trend',
-  'usage.trendTip': '{date}: {val} 积分',
+  'usage.trendTip': '{date}: {val} credits',
   'usage.peak': 'Peak {max} credits',
   'usage.byTaskType': 'By task type',
   'usage.noUsage': 'No usage',

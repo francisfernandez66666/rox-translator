@@ -113,13 +113,14 @@ describe('落地页 · 质量数字口径与多语言入口（2026-09-20）', ()
     expect(btn.textContent).toContain('简体中文') // 当前语种自称
   })
 
-  it('⑧ 俄语界面落地页：land.* 词条全部走英文回退（不再对访客露中文文案）', () => {
+  it('⑧ 俄语界面落地页：land.* 词条直接出俄语（★ 2026-09-20 全站十语种后不再走英文回退）', () => {
     setLang('ru')
     render(<Landing />)
     // LANDING_CSS 以 <style> 注入，其中文注释会混进 textContent——先摘掉样式节点再取可见文本
     document.querySelectorAll('style').forEach((s) => s.remove())
     const text = document.body.textContent ?? ''
-    expect(text).toContain('80–90% lower cost') // 质量数字卡英文口径（en 回退）
+    expect(text).toContain('Дешевле на 80–90%') // 质量数字卡俄语全量口径（land.qs4.n）
+    expect(text).not.toContain('80–90% lower cost') // 英文回退链不应再被触发
     // 中文词条零出现（演示数据例外：术语对照卡/curl 示例按产品设计保留中文源）
     const zhOnly = ['免费试用', '留言获取方案', '价格方案', '常见问题', '质量验证', '支持哪些语言']
     for (const s of zhOnly) expect(text, `俄语界面不应出现中文文案「${s}」`).not.toContain(s)

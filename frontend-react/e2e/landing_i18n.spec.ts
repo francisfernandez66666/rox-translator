@@ -28,12 +28,11 @@ test.describe('落地页多语言（反馈④）', () => {
 test.describe('首次访问浏览器语言自动检测', () => {
   // locale 覆盖 config 的 zh-CN 钉底，模拟法国新访客（上下文 localStorage 天然为空）
   test.use({ locale: 'fr-FR' });
-  test('fr-FR → Français + 英文回退落地页', async ({ page }) => {
+  test('fr-FR → Français + 落地页全量法语（★ 2026-09-20 全站十语种后不再走英文回退）', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('header .lang-sel-btn')).toContainText('Français');
-    // land.* 长尾键走 lang→en→zh 回退：法语访客看到英文营销文案而非中文
-    // （'Start free' 在落地页出现多处——顶栏/收尾 CTA/页脚，strict 模式取首个即可）
-    await expect(page.locator('.lc-nav-cta')).toContainText('Start free');
+    // land.* 长尾键已在 locales/fr.ts 全量覆盖（2532 键口径）：法语访客直接看到法语 CTA
+    await expect(page.locator('.lc-nav-cta')).toContainText('Essayer gratuitement');
     await expect(page.getByText('免费试用')).toHaveCount(0);
   });
 });
