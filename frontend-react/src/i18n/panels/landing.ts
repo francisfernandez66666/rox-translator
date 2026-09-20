@@ -18,20 +18,22 @@ export const zh: Record<string, string> = {
   'land.heroTitle1': '让每一句话，',
   'land.heroTitle2': '精准跨越行业边界',
   'land.heroSub': '能言 LangCross 面向汽车、电商、教育、零售、媒体等行业，提供懂术语、懂场景、懂业务的专业翻译，为出海企业扫清语言障碍。',
-  // ★ #22：原「预约演示」ctaDemo 与 Hero 演示卡 8 键（demoSub…demoCopied）随 HeroDemo 退役删除；
-  //   对外口径统一为「留言获取方案」，落点仍是页内 #cta 留资表单（LeadForm）。
+  // ★ #22：原「预约演示」按钮（ctaDemo）退役，对外口径统一为「留言获取方案」，落点是页内 #cta 留资表单；
+  //   但 HeroDemo 演示卡的 8 键（demoSub…demoCopied）当时被连带删除属误解需求——
+  //   ★ 2026-09-20 更正：首页演示卡原样恢复，加载态动效（WordSwap）是它的副本，词条一并归位。
   'land.ctaLead': '留言获取方案',
   'land.trust1': '20+ 行业术语库',
   'land.trust2': '40+ 语言互译',
   'land.trust3': 'AI 质检 + 人工审校',
-  // —— Hero 留资引导卡（替代演示卡；卡上只有锚点按钮，表单唯一一份在 #cta） ——
-  'land.heroLeadTag': '1 对 1 行业方案',
-  'land.heroLeadTitle': '不确定翻译效果？先聊聊您的场景',
-  'land.heroLeadSub': '留下行业与目标语言，我们按您的业务梳理术语和场景，给出可直接试用的落地方案。',
-  'land.heroLeadP1': '按行业匹配术语库，方案附专属词表',
-  'land.heroLeadP2': '1 个工作日内回复，附样例译文',
-  'land.heroLeadP3': '40+ 语言方向，小语种同样覆盖',
-  'land.heroLeadBtn': '留言获取方案',
+  // —— Hero 演示卡（三检查点翻译流）文案 ——
+  'land.demoSub': '· 行业术语匹配',
+  'land.demoTag': '汽车行业 · ZH → EN',
+  'land.demoSrcTag': '原文 · 中文',
+  'land.demoStatus': '正在比对汽车行业术语库 · 命中 3 处术语',
+  'land.demoDone': '翻译完成',
+  'land.demoMeta': '3 / 3 处术语已注入译文',
+  'land.demoCopy': '复制',
+  'land.demoCopied': '已复制',
   // —— 解决方案 · 三步流程 ——
   'land.secSolution': '解决方案',
   'land.solutionTitle': '懂行业，才懂翻译',
@@ -300,14 +302,15 @@ export const en: Record<string, string> = {
   'land.trust1': '20+ industry term bases',
   'land.trust2': '40+ languages',
   'land.trust3': 'AI QA + human review',
-  // —— Hero lead card (replaces the retired demo card) ——
-  'land.heroLeadTag': '1-on-1 industry plan',
-  'land.heroLeadTitle': 'Not sure how it translates? Tell us your scenario first',
-  'land.heroLeadSub': 'Leave your industry and target languages and we will map the terminology and context for your business — with a plan you can try directly.',
-  'land.heroLeadP1': 'Industry-matched term bases, plan includes a custom glossary',
-  'land.heroLeadP2': 'Reply within 1 business day, with sample translations',
-  'land.heroLeadP3': '40+ language directions, low-resource ones too',
-  'land.heroLeadBtn': 'Get a tailored plan',
+  // —— Hero word-swap demo card (★ 2026-09-20 fix: homepage demo card restored, the loading animation is a copy of it) ——
+  'land.demoSub': '· Industry term matching',
+  'land.demoTag': 'Automotive · ZH → EN',
+  'land.demoSrcTag': 'Source · Chinese',
+  'land.demoStatus': 'Matching automotive term base · 3 terms hit',
+  'land.demoDone': 'Translation complete',
+  'land.demoMeta': '3 / 3 terms injected',
+  'land.demoCopy': 'Copy',
+  'land.demoCopied': 'Copied',
   // —— Solutions · 3 steps ——
   'land.secSolution': 'Solutions',
   'land.solutionTitle': 'Know the industry, then translate',

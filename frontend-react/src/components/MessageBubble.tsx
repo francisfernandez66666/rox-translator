@@ -10,7 +10,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE, getAuthToken } from '@/api'
 import type { ChatMessage } from '@/types'
-import { t, tpl } from '@/i18n'
+import { t, tpl, useLang } from '@/i18n'
 import { renderMarkdown } from '@/lib/markdown' // ★ F11：渲染纯函数抽提至 lib/markdown
 import { SkillBadge } from './SkillBadge'
 // ★ D2 #24：进行态加载动效（划掉错词→亮起正词），与 App 加载页/落地页共用同一实现
@@ -72,6 +72,9 @@ interface Props {
 
 // 组件实现（默认导出在文件末尾包 memo）：渲染单条聊天气泡，区分用户/AI、翻译结果表、附件预览与反馈入口
 function MessageBubble({ message, onFeedback, source }: Props & { source?: string }) {
+  // ★ 语言订阅（#31 修复）：本组件是 memo 包装，切语言时 props 不变、父级重渲染也进不来，
+  //   气泡里的 msg.*/chat.* 文案会停在旧语种——这里显式订阅语言 store，切换即重挂渲染。
+  useLang()
   // 移动端标记（窗口宽度 ≤ 768px）；typeof window 兜底：SSR/单测环境无 window，初值不能直接读
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' && window.innerWidth <= 768)
   const [copied, setCopied] = useState(false) // ★ F7 复制反馈

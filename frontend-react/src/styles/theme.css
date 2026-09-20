@@ -323,11 +323,14 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 @keyframes wsStrikeIn { 0% { transform: scaleX(0); } 74% { transform: scaleX(1.035); } 100% { transform: scaleX(1); } }
 @keyframes wsStrikeFlash { 0% { text-shadow: none; } 20% { text-shadow: 0 0 18px rgba(229, 72, 77, .62); } 100% { text-shadow: none; } }
 @keyframes wsRLock { 0% { transform: scale(1.05); text-shadow: 0 0 17px rgba(255, 255, 255, .65); } 55% { transform: scale(.994); } 100% { transform: scale(1); text-shadow: 0 0 16px rgba(255, 255, 255, .5); } }
-/* 大档：全屏加载位（App 冷启/路由懒加载）用（★ 2026-09-20 用户反馈「太小看不清」整体上调一档） */
-.ws--lg { gap: 16px; }
-.ws--lg .ws-tag { font-size: 13px; }
-.ws--lg .ws-w { font-size: 22px; }
-.ws--lg .ws-r { font-size: 26px; }
+/* 大档：全屏加载位（App 冷启/路由懒加载）用（★ 2026-09-20 用户反馈「太小看不清」后再要求【扩大两倍】，
+   整组尺寸 = 基础档 ×2；首页 Hero 演示卡不走此档，维持 hd-* 原始尺寸） */
+.ws--lg { gap: 32px; }
+.ws--lg .ws-tag { font-size: 23px; padding: 3px 10px; border-radius: 6px; }
+.ws--lg .ws-w { font-size: 44px; }
+.ws--lg .ws-r { font-size: 52px; }
+/* 红线与光标随字阶同步加粗，否则 44px 错词配 1.6px 细线会显得没划实 */
+.ws--lg .ws-w .ws-wt::before { height: 3px; top: 52%; }
 /* ★ #24 小档：聊天草稿头与逐段上屏行内——字号贴齐各自 11~12px 文本基线，间距收窄 */
 .draft-ws { gap: 9px; }
 .draft-ws .ws-w { font-size: 13px; }

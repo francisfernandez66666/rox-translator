@@ -1,8 +1,9 @@
 // ============================================================================
-// Landing.dom.test.tsx — 落地页转化入口回归（★ #22，2026-09-19）
-// 锁定需求：「预约演示」两颗按钮与 HeroDemo 演示卡整体退役，转化入口统一为
-// 「留言获取方案」——全页 ≥2 处锚到 #cta 真表单，旧演示卡节点/词条零残留。
-// 同时兜住 #24 前置：动画唯一来源已迁到 WordSwap，页面不得再挂双演示动效。
+// Landing.dom.test.tsx — 落地页转化入口与演示卡回归（#22 → ★ 2026-09-20 更正）
+// 锁定需求：HeroDemo 三检查点演示卡【常驻】——#22 曾将其退役换成留资引导卡，属误解需求，
+//   用户要的是把换词动效【复制】到产品加载态（WordSwap），首页原卡原样保留；
+//   引导卡同步撤销（页面底部 #cta 留资表单全页唯一）。
+//   转化入口口径不变：全页零「预约演示」，≥2 处锚到 #cta 真表单。
 // 运行：npx vitest run src/components/Landing.dom.test.tsx
 // ============================================================================
 // @vitest-environment jsdom
@@ -33,35 +34,44 @@ afterEach(() => {
   setLang('zh') // 别把英文态漏给后面的用例
 })
 
-describe('落地页 · 演示入口退役（#22）', () => {
-  it('① 全页零「预约演示」文案、零 HeroDemo 节点（旧按钮/演示卡彻底退役）', () => {
+describe('落地页 · 演示卡常驻与转化入口（#22 更正，2026-09-20）', () => {
+  it('① Hero 演示卡在位（hd-* 节点恢复），「预约演示」文案仍零出现，引导卡不留残骸', () => {
     render(<Landing />)
     const text = document.body.textContent ?? ''
     expect(text).not.toContain('预约演示')
     expect(text).not.toContain('预约产品演示')
-    // 演示卡整组类名（hd-* / data-hd）不应再出现在 DOM
-    expect(document.querySelector('[data-hd]')).toBeNull()
-    expect(document.querySelector('[class^="hd-"], [class*=" hd-"]')).toBeNull()
+    // 演示卡整组节点归位：卡壳 + data-hd 演出锚点（20+ 个）必须存在
+    expect(document.querySelector('.hd-panel')).toBeTruthy()
+    expect(document.querySelectorAll('[data-hd]').length).toBeGreaterThan(15)
+    // ★ 更正点：Hero 右栏只此一张演示卡，#22 的留资引导卡（及其按钮）已撤销
+    expect(document.querySelector('.lc-hero-lead')).toBeNull()
+    expect(text).not.toContain('不确定翻译效果')
   })
 
-  it('② 「留言获取方案」入口 ≥2 处且全部锚到页内 #cta 真表单', () => {
+  it('② 「留言获取方案」入口 ≥2 处且全部锚到页内 #cta 真表单（全页唯一一份）', () => {
     render(<Landing />)
     const label = t('land.ctaLead') // zh 态 = 「留言获取方案」
     const links = [...document.querySelectorAll('a[href="#cta"]')].filter(
       (a) => a.textContent?.includes(label),
     )
-    // Hero 双 CTA + 引导卡按钮 + 页脚列，至少 3 处；只锚 #cta，不再有跳注册的假演示
-    expect(links.length).toBeGreaterThanOrEqual(3)
+    // Hero 副 CTA + 页脚列；引导卡按钮随卡撤销后不再计数，只锚 #cta 不跳注册
+    expect(links.length).toBeGreaterThanOrEqual(2)
     expect(document.querySelector('.lc-lead')).toBeTruthy() // #cta 区确有 LeadForm 表单
+    expect(document.querySelectorAll('.lc-lead-btn').length).toBe(1) // 留资表单全页唯一（LeadForm 非 <form> 标签，按提交按钮计）
   })
 
-  it('③ Hero 右栏留资引导卡：标题/副题 + 三条承诺齐全（实装非空壳）', () => {
+  it('③ 演示卡实装非空壳：题面/定稿 ghost、行业标签、完成态文案齐备', () => {
     render(<Landing />)
-    const card = document.querySelector('.lc-hero-lead') as HTMLElement
-    expect(card).toBeTruthy()
-    expect(card.textContent).toContain(t('land.heroLeadTitle'))
-    expect(card.textContent).toContain(t('land.heroLeadSub'))
-    expect(card.querySelectorAll('.lh-pts li').length).toBe(3)
+    const card = document.querySelector('.hd-panel') as HTMLElement
+    const text = card.textContent ?? ''
+    // ghost 占位为静态 JSX（打字真身为空节点），测试不依赖计时链跑到哪一拍
+    expect(text).toContain('竞品对标') // DEMO_SRC 题面
+    expect(text).toContain('benchmark') // DEMO_FINAL 定稿译文
+    expect(text).toContain(t('land.demoTag')) // 「汽车行业 · ZH → EN」
+    expect(text).toContain(t('land.demoDone')) // 「翻译完成」
+    expect(text).toContain(t('land.demoMeta')) // 「3 / 3 处术语已注入译文」
+    expect(card.querySelectorAll('[data-hd="cn"]').length).toBe(1) // 量尺标签行由 DEMO_TERMS 生成
+    expect(text).toContain('发布启动会')
   })
 
   it('④ 留资表单按钮已改口径：提交留言而非预约演示', () => {
@@ -71,16 +81,17 @@ describe('落地页 · 演示入口退役（#22）', () => {
     expect(btn.textContent).not.toContain('演示')
   })
 
-  it('⑤ 英文态同样零 Book a demo、入口为 Get a tailored plan', () => {
+  it('⑤ 英文态：Book a demo 零出现、演示卡词条为英文、入口 Get a tailored plan', () => {
     setLang('en')
     render(<Landing />)
     const text = document.body.textContent ?? ''
     expect(text.toLowerCase()).not.toContain('book a demo')
     expect(text.toLowerCase()).not.toContain('book a product demo')
+    expect(text).toContain('Automotive · ZH → EN') // 演示卡英文词条（land.demoTag）
     const links = [...document.querySelectorAll('a[href="#cta"]')].filter((a) =>
       a.textContent?.includes(t('land.ctaLead')),
     )
-    expect(links.length).toBeGreaterThanOrEqual(3)
+    expect(links.length).toBeGreaterThanOrEqual(2)
   })
 })
 
