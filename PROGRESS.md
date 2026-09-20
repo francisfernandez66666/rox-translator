@@ -1,6 +1,28 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-20（〇-XLVI：落地页文案/动效/多语言入口四项反馈 + AI 助手复合意图让位修复）
+> 最后更新：2026-09-21（〇-XLVII：全站十语种 2532 键全量词典落地，#32）
+
+### 〇-XLVII、全站十语种全量词典（2026-09-21，提交 47c0ff0·已推送 origin/autosales，未部署）
+
+> 来源：#32 全站十语种——把 〇-XLV 的「核心 453 键部分词典 + 长尾键 lang→en→zh 回退」口径升级为
+> **十语种 × ALL_KEYS 2532 键逐键全量覆盖**（该 453 键口径自本条起作废）。
+> 生产：`frontend-react/src/i18n/locales/{ru,fr,ar,es,pt,de,ja,ko,th,zh-hant}.ts` 全部重写为全量词典
+> （中文文件头注释、无 default export）；术语按已发货 core 词典基准逐语种对齐（积分=créditos/points/
+> Punkte/кредиты/ポイント/포인트/คะแนน/نقاط/積分 等，文件→檔案仅 file 义），禁盲替（fr créditer 动词义误替已回滚）。
+> 管线固化在 `~/i18n_persist`（src 分片/raw/out/gaps + merge_locales.py 校验闸门 + FIXUPS.md 修复台账；
+> 曾因 /tmp 清空丢过中间产物，**禁用 /tmp**）。
+> 闸门升级：`locales.core.test.ts` 改全量口径——①键数逐语种 ==2532 且无越界键；②非空 + `{placeholder}`
+> 与英文源逐键一致；③非 CJK 七语种零汉字残留扫描（豁免英文源本身含汉字的键，如「极石」）；
+> ④zh_hant OpenCC 不变式扫描（`cc.convert(v)` 须等于 v，臺/台、覈/核 豁免）。
+> 口径升级吸收回退类断言（既有经验再验证）：Landing.dom ⑧（ru 落英文）改判俄语文案、e2e landing_i18n
+> fr 用例改判 'Essayer gratuitement'；新增 `e2e/all_langs_full.spec.ts` 十语种整页抽查（每语种落地页
+> 出该语种译文 + 导航无中文残留，10/10）。
+> 附带修正：`usage.trendTip` 英文源残存中文「积分」→ '{date}: {val} credits'。
+> 闸门全绿：后端 race 30 包 / tsc + vitest 181 + vite build（主块 gzip 609.93 kB 为十余份全量词典，
+> 属预期体量）/ run_uat PG：A88·T326·E2E 45（35+10）/ assist_uat 38 / 多实例 8；另 Playwright 浏览器
+> 十语种真机抽查 11/11。
+> 文档同步：README §界面多语言/§测试 改全量口径与 45/181 计数；AGENTS.md §5 i18n 条款改 ALL_KEYS 全量。
+> 部署：随本批六步链执行（见下条发版记录）。
 
 ### 〇-XLVI、用户反馈四项 + 助手复合意图修复（2026-09-20，提交 bd34c36·主站已部署，演示站未部署）
 

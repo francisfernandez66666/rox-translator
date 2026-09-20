@@ -80,7 +80,7 @@ DB_DRIVER=postgres DB_DSN='postgres://user:pass@127.0.0.1:5432/translator?sslmod
 - **品牌名统一译法**：知识库可独立配置品牌名（module=brand）；对话与文件翻译在翻译前做品牌保护并翻后归一化
 - **租户与组织隔离**：多租户、角色权限、部门预算
 - **职业角色知识库包**（★ 2026-09-19）：用户可设 `job_role`（15+ 预置角色词典），按角色装配 persona 包定向术语与语气；后台「角色包」面板统一管理
-- **界面多语言 12 语种**（★ 2026-09-20）：中/英/俄/法/阿/西/葡/德/日/韩/泰/繁中——核心 453 键十语种专属部分词典（`src/i18n/locales/*.ts` + 覆盖闸门 `locales.core.test.ts`），长尾键 lang→en→zh 回退链；LangSelect 下拉统一入口（顶栏/登录卡/管理台/落地页），阿语自动 RTL 镜像；★ 首访无 app_lang 时按浏览器语言自动选 UI 语种（`detectBrowserLang`：中文系分简/繁、命中语种表用该语种、其余回落英文；配合 lang→en→zh 回退，非中文访客落地页整页可读——测试须 vitest 预置 app_lang=zh / Playwright 钉 locale=zh-CN 防随机翻红）；翻译方向新增**外语→简体中文**（纯模型直翻链：`/api/translation/langs` 追加 zh·kb=false、别名解析与繁中撞词去重、批量源语言共享检测、OpenAPI 与站内同权）——国外用户可整站使用并把任意语言翻回中文
+- **界面多语言 12 语种**（★ 2026-09-20 建核心集 → 2026-09-21 全站十语种升级）：中/英/俄/法/阿/西/葡/德/日/韩/泰/繁中——十语种 **全量 2532 键逐键覆盖**（`src/i18n/locales/*.ts` + 全量覆盖闸门 `locales.core.test.ts`：键集逐键一致、占位符与英文源对齐、非 CJK 语种零汉字残留扫描、zh_hant OpenCC 简体残留扫描），新增面板键必须十份 locale 同步补译否则闸门红灯（lang→en→zh 回退链仅作兜底保留）；LangSelect 下拉统一入口（顶栏/登录卡/管理台/落地页），阿语自动 RTL 镜像；★ 首访无 app_lang 时按浏览器语言自动选 UI 语种（`detectBrowserLang`：中文系分简/繁、命中语种表用该语种、其余回落英文；配合 lang→en→zh 回退，非中文访客落地页整页可读——测试须 vitest 预置 app_lang=zh / Playwright 钉 locale=zh-CN 防随机翻红）；翻译方向新增**外语→简体中文**（纯模型直翻链：`/api/translation/langs` 追加 zh·kb=false、别名解析与繁中撞词去重、批量源语言共享检测、OpenAPI 与站内同权）——国外用户可整站使用并把任意语言翻回中文
 - **流式逐段上屏与性能收敛**（★ 2026-09-19/20 B1–B5）：聊天流式「初译草稿 + 细进度」双态共存（draft 按后端契约清洗、合帧）；文件翻译 SSE 逐段事件（segment_done/final/sealed）气泡与对照编辑器实时填充、语言封段即 Flush 计费；对照编辑器 memo 行 + react-virtuoso 虚拟化（数百段大文件键入零整表重渲染）；prompt 前缀重组（指令契约下移/文化块定序/批量租户术语层 60s 缓存）+ `/metrics` 观测 cached_tokens/TTFT（内部成本信号仅监控侧，界面与 API 零 token 裸值）；全站加载态复用落地页划词换词动效并 12 语种轮播（WordSwap 唯一实现）
 - **品牌定制与登录页布局**：按子域名解析租户品牌（名称/Logo/背景图）；登录页支持全屏背景或左右分栏
 - **积分计费**：对外（前端界面与全部 API 出参）只有积分一种计量口径，积分↔内部记账换算与汇率全部收敛在服务端，任何接口不下发 token 裸值与汇率（★ 2026-09-19 全面落地：余额/预算/奖励/账单/工单/用量/订单/邀请零 token 裸值，前端零换算）；内部账本与成本核算仍以 token 为唯一事实源（双桶台账：发放额度+永久余额）；预充值永久有效、订阅首月半价（注册 30 天内）、余额不足即时中止、建单前按源规模预检；发票口径见运营 SOP
@@ -114,12 +114,12 @@ DB_DRIVER=postgres DB_DSN='postgres://user:pass@127.0.0.1:5432/translator?sslmod
 
 ```bash
 cd backend-go && go test -race ./...           # 单元测试（PG 方言助手/迁移锁/nil 防线回归，无 PG 实例自动跳过）
-bash scripts/uat/run_uat.sh                    # 全链路 UAT 主矩阵（PostgreSQL 方言=生产同构，发布闸门：内置 race 全量单测预检（方言钉死内存 SQLite，PG 覆盖归矩阵）+ API A/B 主链路 88（含 A1b 留资 8 断言、/pricing 归一 SPA 壳断言） + 功能/交易专项 326（含 T42 USDT 全链 mock_chain 驱动、T43/T44 修复回归、T45 密码找回全链路） + Playwright 35（mobile_uat/a11y 超时已根治，0 flaky；含落地页多语言 landing_i18n）；首轮非零自动 --last-failed 复跑甄别 flaky）
+bash scripts/uat/run_uat.sh                    # 全链路 UAT 主矩阵（PostgreSQL 方言=生产同构，发布闸门：内置 race 全量单测预检（方言钉死内存 SQLite，PG 覆盖归矩阵）+ API A/B 主链路 88（含 A1b 留资 8 断言、/pricing 归一 SPA 壳断言） + 功能/交易专项 326（含 T42 USDT 全链 mock_chain 驱动、T43/T44 修复回归、T45 密码找回全链路） + Playwright 45（mobile_uat/a11y 超时已根治，0 flaky；含落地页多语言 landing_i18n 与十语种整页抽查 all_langs_full）；首轮非零自动 --last-failed 复跑甄别 flaky）
 bash scripts/uat/assist_uat.sh                 # AI 顾问 UAT（38 断言：C端链路/同义词/兜底改造/config 白名单与掩码/LLM 热加载/测试连通/CRUD/内嵌管理页/主库 Token 桥接与 env 优先级/复合意图让位 CI1·CI2）
 bash scripts/uat/multi_instance_e2e.sh         # 双实例 e2e（JWT 互通/USDT 对账锁/双桶并发勾稽/优雅停机，验证多实例红线）
 PW_TARGET=e2e/xxx.spec.ts bash scripts/uat/run_uat.sh  # 迭代调试：只跑指定 e2e（缺省全量）
 DB_DRIVER=sqlite UAT_SKIP_RACE=1 bash scripts/uat/run_uat.sh  # SQLite 方言本地快跑（兼容参考）
-cd frontend-react && npx vitest run            # 前端单测（180 用例，含多语言 locales 覆盖闸门与浏览器语言检测/逐段流式上屏/编辑器虚拟化与计算收敛/留资表单/登录链路 jsdom 测试）
+cd frontend-react && npx vitest run            # 前端单测（181 用例，含多语言 locales 全量覆盖闸门与浏览器语言检测/逐段流式上屏/编辑器虚拟化与计算收敛/留资表单/登录链路 jsdom 测试）
 cd sdk/typescript && npm test                  # TS SDK 行为级测试（8 用例）
 cd sdk/python && python3 -m unittest test_translator_sdk  # Python SDK 测试（13 用例）
 ```

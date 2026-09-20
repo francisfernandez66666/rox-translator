@@ -54,9 +54,11 @@
 
 - 风格计量单位统一**积分口径**，公开接口零 token 裸值。
 - 组件测试用 vitest + jsdom（`*.dom.test.tsx`）。
-- **i18n 为 12 语种口径**（★ 2026-09-20）：zh/en 全量词典（`panels/*.ts` 双语同步），其余十语种只覆盖
-  `CORE_KEYS` 核心集（`src/i18n/locales/*.ts`，前缀 app/common/menu/login/auth/chat/msg/pwd）——
-  新键命中这些前缀时十份 locale 必须同步补，`locales.core.test.ts` 覆盖闸门会红灯；长尾键走 lang→en→zh 回退链。
+- **i18n 为 12 语种口径**（★ 2026-09-20 全站十语种升级）：zh/en 全量词典（`panels/*.ts` 双语同步），
+  其余十语种 `src/i18n/locales/*.ts` 为 **ALL_KEYS 全量词典**（2532 键逐键覆盖，`locales.core.test.ts`
+  全量闸门红灯拦截；历史 CORE_KEYS 核心集口径已并入全量）——新增面板键必须十份 locale 同步补译，
+  生产管线与术语基准见项目记忆「多语言批次」。lang→en→zh 回退链仅作全新键未同步时的临时兜底，
+  不视为正常状态。
   语言切换唯一入口 `LangSelect`（禁再造 toggle 按钮），语种名统一 `langLabel()` 取中/英。
 - **首访语言自动检测**（★ 2026-09-20）：无有效 `app_lang` 时按浏览器语言选语种（中文系分简/繁，
   命中语种表用该语种，其余回落 en）。测试必须钉底：vitest 在 `vitest.setup.ts` 预置 `app_lang=zh`、
