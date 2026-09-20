@@ -58,6 +58,9 @@
   `CORE_KEYS` 核心集（`src/i18n/locales/*.ts`，前缀 app/common/menu/login/auth/chat/msg/pwd）——
   新键命中这些前缀时十份 locale 必须同步补，`locales.core.test.ts` 覆盖闸门会红灯；长尾键走 lang→en→zh 回退链。
   语言切换唯一入口 `LangSelect`（禁再造 toggle 按钮），语种名统一 `langLabel()` 取中/英。
+- **首访语言自动检测**（★ 2026-09-20）：无有效 `app_lang` 时按浏览器语言选语种（中文系分简/繁，
+  命中语种表用该语种，其余回落 en）。测试必须钉底：vitest 在 `vitest.setup.ts` 预置 `app_lang=zh`、
+  Playwright 在 `playwright.config.ts` 钉 `locale:'zh-CN'`，中文断言用例再自行覆盖，否则随机翻红。
 
 ### 6. e2e 断言红线
 

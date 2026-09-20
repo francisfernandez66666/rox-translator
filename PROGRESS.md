@@ -1,8 +1,30 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-20（〇-XLV：流式与性能增强 B1–B5 / 界面多语言 12 语种 + 外语→简体中文 / 落地页「留言获取方案」改造 / 加载动效多语言轮播）
+> 最后更新：2026-09-20（〇-XLVI：落地页文案/动效/多语言入口四项反馈 + AI 助手复合意图让位修复）
 
-### 〇-XLV、流式性能增强 + 系统多语言（2026-09-19/20，已提交 ed14bc9·未部署）
+### 〇-XLVI、用户反馈四项 + 助手复合意图修复（2026-09-20，提交 bd34c36·主站已部署，演示站未部署）
+
+> 来源：用户反馈①–④ + AI 销售助手「印度语能翻译吗，一个字多少钱」漏接报告。
+> ①② 落地页质量数字口径改写：qs3「逐段」→「质量可验证」、qs4「几十万」→「降本 80%–90%」（zh/en 同步，
+>    Landing.dom 断言锁新旧文案）；③ WordSwap 加载动效整体上调一档（大档 22/26px）+ PageLoading
+>    minHeight 100dvh 撑满首屏真居中；④ 外国人可读：落地页顶栏挂 LangSelect（12 语种）+ 首访按浏览器
+>    语言自动选 UI 语种（detectBrowserLang，中文系分简/繁、其余落英文；land.* 长尾键 lang→en→zh 回退
+>    保证非中文访客看到完整英文落地页；10 语种落地页全文案翻译留作后续）。
+>    测试钉底：vitest.setup app_lang=zh、playwright.config locale=zh-CN（否则自动检测会翻红既有断言）。
+> 助手修复（根因是架构不是 LLM）：话术关键词直配（Source=rule）整体绕过 LLM，「价格咨询」话术被
+>    「多少钱」抢答后语言侧知识全程不参与。新增 compoundIntent 让位判定：直配命中时若知识库还存在
+>    与话术关键词**零交集**的跨领域命中（不比命中数/总分——计费域运营关键词滚太大，数值对比会永久
+>    压制新领域条目，即二次踩坑点），话术降为素材之一，与跨领域知识一并交 LLM 融合应答（无 LLM 时
+>    fallback 并排拼出两侧）；纯单意图仍毫秒级直配不退化。seed 同步扩关键词（languages 补印度语/印地语/
+>    hindi/西语/阿拉伯语/俄语等；billing-points 补一个字/按字/字数，并明确「不按字词单独计价、统一折积分」）。
+> 断言锁：engine 单测 TestCompoundIntentYield（含同域大条目压制回归锁）、assist_uat CI1/CI2（2b 段）、
+>    locales.core 浏览器检测矩阵（㉑）+ 冷启动回落改判 en、e2e/landing_i18n.spec.ts 两条（切换持久 +
+>    fr-FR 访客落英文）。闸门全绿：后端 race 30 包 / 前端 tsc+180 测试+vite build / assist_uat 38/0 /
+>    run_uat PG：A88·T326·E2E 35/35 / 多实例 8/0。
+> 部署注意：seed 仅首次启动生效——生产 ai-assist 库的 kb_entries（languages/billing-points）关键词与
+>    文案需经管理台 API 同步更新，否则线上仍复现漏接（二进制替换只带引擎让位逻辑）。
+
+### 〇-XLV、流式性能增强 + 系统多语言（2026-09-19/20，已提交 ed14bc9·主站已部署 2026-09-20，演示站未部署）
 
 > 来源：《流式与性能增强方案_20260919.md》（B1–B5 全部落地）+ 用户三合一需求（#22 留言获取方案 / #23 十二语种前后端 / #24-25 加载动效复用与多语言轮播）。
 > 要点：①B1 流式双态（初译草稿+细进度共存、draft 清洗合帧）与 B3 文件逐段 SSE 上屏（sealed 即 Flush 计费）；
@@ -13,6 +35,10 @@
 > 12 语种轮播为全站加载态唯一实现。闸门：后端 race / 前端 176 测试 / PG UAT A88·T326·E2E 33 全绿 /
 > 多实例 8/0 / assist_uat 34/0。附带修复：langs_zh_test 方言污染、run_uat G3 预检钉 sqlite、
 > LangMultiSelect KB 扩容重复 option 去重（e2e T3 回归锁）。
+> 发版（2026-09-20，用户指示**只部署主站**）：二进制 sha256 `3e4a43e0…` mv rename 替换 + /opt/translator/web
+> 整目录换源（旧目录留作 web_old），service active，三管线脚本齐备；deploy_check.sh 服务器本机 8/8 全过；
+> 线上 /langs 35 条（末条 zh/kb=false）、index 引用新资产 `index-DTvE5hO7.js`（12 语种切换 + WordSwap 轮播已生效）。
+> 演示站（translator-demo）按指示未动，与主站存在一个批次版本差。
 
 ### 〇-XLIV、积分口径全面落地 + 角色包 + UI 实装收尾（2026-09-19，已部署双站）
 
