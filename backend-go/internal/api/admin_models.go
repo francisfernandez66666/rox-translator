@@ -82,7 +82,7 @@ func (s *Server) llmKeyState(key string) (bool, string) {
 // 返回 model 单模型 + routes 多供应商路由。
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 读全局配置
@@ -120,7 +120,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -174,7 +174,7 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	s.Cfg.ModelRoutes = merged
 	b, _ := json.Marshal(encryptRoutes(merged))
 	if err := s.Store.SetConfig("model_routes", string(b)); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 若单模型字段非空，同时更新全局默认单模型（引擎回退链的最终兜底）
@@ -236,7 +236,7 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 // handleModelRoutes 读取模型路由策略（super_admin）。★ 输出掩码（评审整改 D3）
 func (s *Server) handleModelRoutes(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	routes := s.loadRoutesDecrypted()
@@ -253,7 +253,7 @@ func (s *Server) handleModelRoutes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -291,7 +291,7 @@ func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 	s.Cfg.ModelRoutes = req.Routes
 	b, _ := json.Marshal(encryptRoutes(req.Routes))
 	if err := s.Store.SetConfig("model_routes", string(b)); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "model_routes_save", "system", fmt.Sprintf("%d 条", len(req.Routes)))
@@ -304,7 +304,7 @@ func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 // 返回 4 个阶段（kb_match/ai_initial/evals/review）的模型配置；未配置的返回空项以便前端渲染。
 func (s *Server) handleStageModels(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	stages := config.StageModels{}
@@ -338,7 +338,7 @@ func (s *Server) handleStageModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -395,7 +395,7 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 	}
 	b, _ := json.Marshal(stored)
 	if err := s.Store.SetConfig("stage_models", string(b)); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "stage_models_save", "system", fmt.Sprintf("%d 阶段", len(req.Stages)))
@@ -408,7 +408,7 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	pc := tenant.PolicyConfig{}
@@ -447,7 +447,7 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -491,7 +491,7 @@ func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
 		pc.DataFeedbackOptOut = &v
 	}
 	if err := s.Ten.SetPolicyConfig(s.effTenant(r, u), pc); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "policy_save", "tenants", "")

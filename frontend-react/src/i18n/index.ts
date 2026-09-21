@@ -47,6 +47,10 @@ import * as pReconcile from './panels/reconcile'
 // 2026-09-17 新增：认证域（登录/注册/找回密码/AI 接管注册引导）文案，
 // 从 dicts 基础字典与组件硬编码里独立出来，供 Login / AiRegisterFlow 取词。
 import * as pAuth from './panels/auth'
+// ★ 2026-09-21 #41：优惠券（超管券管理 + 收银台试算）
+import * as pCoupons from './panels/coupons'
+// ★ 2026-09-21 #34：AI 助手管理面板（原生 React 重做，取代 iframe 内嵌管理台）
+import * as pAssist from './panels/assist'
 import { baseZh } from './dicts.zh'
 import { baseEn } from './dicts.en'
 // ★ #23：新语种部分词典（locales/<code>.ts）——只覆盖核心集键，其余走 lang→en→zh 回退链
@@ -99,7 +103,7 @@ const zh: Dict = {
   ...pModels.zh, ...pWorkflow.zh, ...pApiKeys.zh, ...pWebhooks.zh,
   ...pTickets.zh, ...pBilling.zh, ...pUsage.zh, ...pAlerts.zh,
   ...pInvites.zh, ...pChat.zh, ...pPackages.zh, ...pFeedback.zh,
-  ...pReferral.zh, ...pTasks.zh, ...pSdk.zh, ...pHub.zh, ...pOps.zh, ...pIndustries.zh, ...pPersonas.zh, ...pBrandterms.zh, ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh, ...pLanding.zh, ...pAuth.zh,
+  ...pReferral.zh, ...pTasks.zh, ...pSdk.zh, ...pHub.zh, ...pOps.zh, ...pIndustries.zh, ...pPersonas.zh, ...pBrandterms.zh, ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh, ...pLanding.zh, ...pAuth.zh, ...pCoupons.zh, ...pAssist.zh,
 }
 
 // en 英文词典：base 基础字典 + 各面板模块英文文案合并
@@ -110,7 +114,7 @@ const en: Dict = {
   ...pModels.en, ...pWorkflow.en, ...pApiKeys.en, ...pWebhooks.en,
   ...pTickets.en, ...pBilling.en, ...pUsage.en, ...pAlerts.en,
   ...pInvites.en, ...pChat.en, ...pPackages.en, ...pFeedback.en,
-  ...pReferral.en, ...pTasks.en, ...pSdk.en, ...pHub.en, ...pOps.en, ...pIndustries.en, ...pPersonas.en, ...pBrandterms.en, ...pChatwin.en, ...pDs.en, ...pMybill.en, ...pReconcile.en, ...pLanding.en, ...pAuth.en,
+  ...pReferral.en, ...pTasks.en, ...pSdk.en, ...pHub.en, ...pOps.en, ...pIndustries.en, ...pPersonas.en, ...pBrandterms.en, ...pChatwin.en, ...pDs.en, ...pMybill.en, ...pReconcile.en, ...pLanding.en, ...pAuth.en, ...pCoupons.en, ...pAssist.en,
 }
 
 // 核心集键清单（按 CORE_PREFIXES 从英文全量词典筛出、排序冻结）：locales 覆盖测试与

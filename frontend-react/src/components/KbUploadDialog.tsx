@@ -242,7 +242,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
       <div className="lc-dialog" role="dialog" aria-modal="true" style={{ width: 560 }}>
         <div className="lc-dialog__title">{t('kb.topbarUpload')}</div>
         <div className="lc-dialog__body">
-          <div style={{ fontSize: 13, color: 'var(--lc-text-3)', marginBottom: 12 }}>{t('kb.topbarHint')}</div>
+          <div style={{ fontSize: 14, color: 'var(--lc-text-3)', marginBottom: 12 }}>{t('kb.topbarHint')}</div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
         <input
@@ -256,7 +256,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
           </div>
 
       {file && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--lc-text-2)', marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: 'var(--lc-text-2)', marginBottom: 12 }}>
               <span> {t('kb.fileSelected')}{file.name}{fileExt(file.name) && ` (${fileExt(file.name)})`}</span>
               <Button size="sm" variant="danger" onClick={() => { setFile(null); setRecognized(null); setResult(null); setPkgId(0); setCatValue('') }}>
             {t('kb.fileRemove')}
@@ -265,7 +265,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
           )}
 
       {recognized && (
-        <div style={{ fontSize: 13, marginBottom: 12 }}>
+        <div style={{ fontSize: 14, marginBottom: 12 }}>
           <div>
             {t('kb.kbTotal').replace('{total}', recognized.total).replace('{n}', (recognized.lang_cols || []).length)}
             {(recognized.new_langs || []).length > 0 && (
@@ -274,7 +274,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
               </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10 }}>
             {options.length === 0 ? (
-                  <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{t('kb.noPkg')}</span>
+                  <span style={{ fontSize: 14, color: 'var(--lc-text-3)' }}>{t('kb.noPkg')}</span>
             ) : (
                   <>
                     <select
@@ -311,7 +311,7 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
             {pkgId > 0 ? (() => {
               const p = pkgs.find((x) => x.id === pkgId)
               return p ? (
-                    <span style={{ fontSize: 12, color: 'var(--lc-text-3)' }}>
+                    <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>
                   {t('kb.scopePrefix')}{pkgScopeText(p, t, tpl)}
                 </span>
               ) : null
@@ -321,13 +321,13 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
           )}
 
       {result && (
-            <div style={{ fontSize: 13, color: result.success ? 'var(--lc-text)' : 'var(--lc-danger)' }}>
+            <div style={{ fontSize: 14, color: result.success ? 'var(--lc-text)' : 'var(--lc-danger)' }}>
           {result.message || (result.success ? t('kb.import') + ' OK' : t('kb.importErr').replace('{msg}', ''))}
             </div>
           )}
         </div>
         <div className="lc-dialog__actions">
-          <button type="button" className="lc-btn lc-btn--secondary" style={{ padding: '8px 16px', fontSize: 13 }} onClick={onClose}>{t('common.close')}</button>
+          <button type="button" className="lc-btn lc-btn--secondary" style={{ padding: '8px 16px', fontSize: 14 }} onClick={onClose}>{t('common.close')}</button>
         </div>
       </div>
     </div>,

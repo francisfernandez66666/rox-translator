@@ -102,8 +102,8 @@ export async function adminOrderRefund(data: { id: number; tenant_id?: number; r
 
 // ==================== 在线支付 ====================
 
-/** 发起在线支付下单：为当前租户创建充值订单并返回收款二维码（points=充值积分数；usdt 渠道可带 usdt_chain） */
-export async function payCreate(data: { points: number; channel: string; usdt_chain?: string }): Promise<AdminResp> {
+/** 发起在线支付下单：为当前租户创建充值订单并返回收款二维码（points=充值积分数；usdt 渠道可带 usdt_chain；coupon=券码，选填） */
+export async function payCreate(data: { points: number; channel: string; usdt_chain?: string; coupon?: string }): Promise<AdminResp> {
   return request('/api/pay/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
 
@@ -144,16 +144,25 @@ export async function myPackage(): Promise<AdminResp> {
   return request('/api/me/package', { headers: authHeaders() })
 }
 
-/** 订阅/兑换商业包（创建待支付订单或直接发放免费包） */
-/** 订阅套餐（创建订单，支持首月半价） */
-export async function packageSubscribe(code: string): Promise<AdminResp> {
-  return request('/api/package/subscribe', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ code }) })
+/** 订阅/兑换商业包（创建待支付订单或直接发放免费包）；coupon=券码（选填，#41 与充值单同口径：折钱不折量） */
+export async function packageSubscribe(code: string, coupon = ''): Promise<AdminResp> {
+  return request('/api/package/subscribe', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ code, coupon }) })
 }
 
 /** 套餐升级（付费包→更高价付费包）：旧包剩余价值按比例抵扣新包应付，新包即时生效 */
 /** 升级套餐（按剩余天数折算补差） */
 export async function packageUpgrade(code: string): Promise<AdminResp> {
   return request('/api/package/upgrade', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ code }) })
+}
+
+/** 读取自动续费开关（#41）：返回 auto_renew + 当前包编码 */
+export async function autoRenewGet(): Promise<AdminResp> {
+  return request('/api/package/auto-renew', { headers: authHeaders() })
+}
+
+/** 设置自动续费（#41）：开启后到期前 3 天自动生成同包续费订单并站内信提醒付款（不代扣） */
+export async function autoRenewSet(enabled: boolean): Promise<AdminResp> {
+  return request('/api/package/auto-renew', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ enabled }) })
 }
 
 // ==================== 商业包管理（super_admin） ====================

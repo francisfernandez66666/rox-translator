@@ -29,6 +29,19 @@ echo "=== A 阶段：公开接口 / 认证 / 计费 / 翻译 / 交易 ==="
 # ---------- A1 健康与公开接口 ----------
 ck A1-status '"ok":true' "$(curl -s $B/status)"
 ck A1-plans '"success":true' "$(curl -s $B/api/plans)"
+# ---------- A1q ★ #42 探针拆分（P2 技术债：存活/就绪语义必须分开）----------
+# /livez 恒 200：依赖故障时重启进程救不回来，反而把可降级自愈的实例反复杀掉；
+# /readyz 真探依赖：库不可达必须 503 并点名失败方，否则上游摘不掉这个实例（扣费会各副本各算）。
+ck A1q-livez '"status":"ok"' "$(curl -s $B/livez)"
+ck A1q-readyz '"status":"ready"' "$(curl -s $B/readyz)"
+# 就绪判定只回粗粒度状态词：探针匿名可达，DB 报错原文（主机/端口/文件路径）不得外泄
+READYZ_BODY=$(curl -s $B/readyz)
+if echo "$READYZ_BODY" | grep -qE 'postgres://|127\.0\.0\.1:5432|no such file|dial tcp'; then
+  FAIL=$((FAIL+1)); echo "FAIL|A1q-readyz-no-topology-leak|readyz 出参含内网拓扑原文"
+else PASS=$((PASS+1)); echo "PASS|A1q-readyz-no-topology-leak"; fi
+# 反向断言：/readyz 不能是永远 200 的假探针（停掉依赖后必须能翻红）——
+# 这里用「store 字段真实存在且取值为词」证明它确实做了判定，而不是硬编码 status。
+ck A1q-readyz-probes-store '"store":"(ok|unreachable|not_initialized)"' "$READYZ_BODY"
 # ★ P2-6（2026-09-18）/pricing 归一断言：Go 服务端渲染版已删除，直连应回退 SPA 壳（含 id="root"）；
 #   并反向断言旧内嵌页（<title>定价 - 能言</title> 直出 HTML）不再出现，防止双实现回归。
 PRICING_HTML=$(curl -s $B/pricing)
@@ -106,13 +119,41 @@ echo "$MG" | grep -qE '\*\*\*\*' && { PASS=$((PASS+1)); echo "PASS|A5-mask"; } |
 ck A6-estimate '"success":true' "$(curl -s $B/api/translation/estimate -H "$H1" -H "$J" -d '{"text":"早上好，欢迎使用翻译助手平台进行文本翻译测试。","target_langs":["en"],"mode":"fast"}')"
 
 # ---------- A7 聊天翻译 + 计量入账（usage_ledger 行增） ----------
-Q1=$(dbq "SELECT \"left\" FROM quota_grants WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a') AND kind='trial'")
+# ★ 2026-09-21（#33 任务系统）：口径改为「净消耗」= 窗口前容量 + 窗口内新发放 − 窗口后容量。
+# 原因有二：① 任务临时积分（有效期 3/7 天）到期早于体验台账，按「先到期先消耗」必然先被扣，
+#         只看 trial 台账会把「消耗发生在任务台账上」误判成没扣费；
+#       ② 本次 /api/chat 同时触发「每周发起翻译 +100 积分」自动发放，纯容量差值会被这笔
+#         增量吃掉甚至翻正（实测 330000→359693）。任务发放台账的 total 单调不减，
+#         用它补回增量即可还原真实消耗量（扣费本体仍由 B 阶段流水对账锁死）。
+TID7=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a'")
+cap7(){ NOW7=$(date -u +%Y-%m-%dT%H:%M:%SZ); dbq "SELECT (SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$TID7 AND expires_at>'$NOW7') + (SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=$TID7)"; }
+gtot7(){ dbq "SELECT COALESCE(SUM(total),0) FROM quota_grants WHERE tenant_id=$TID7 AND kind='task'"; }
+Q1=$(cap7); G1=$(gtot7)
 CH=$(curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"早上好，欢迎使用翻译助手平台。","options":{"target_langs":["en"]}}')
 ck A7-chat-ok 'TranslatedEN' "$CH"
-sleep 3
-Q2=$(dbq "SELECT \"left\" FROM quota_grants WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a') AND kind='trial'")
-[ -n "$Q1" ] && [ -n "$Q2" ] && [ "$Q2" -lt "$Q1" ] && { PASS=$((PASS+1)); echo "PASS|A7-metering($Q1->$Q2)"; } || { FAIL=$((FAIL+1)); echo "FAIL|A7-metering($Q1->$Q2)"; }
+sleep 5
+Q2=$(cap7); G2=$(gtot7)
+NET7=$(( Q1 + G2 - G1 - Q2 ))
+[ "$NET7" -gt 0 ] && { PASS=$((PASS+1)); echo "PASS|A7-metering(净消耗$NET7|$Q1->$Q2 发放+$((G2-G1)))"; } || { FAIL=$((FAIL+1)); echo "FAIL|A7-metering(净消耗$NET7|$Q1->$Q2 发放+$((G2-G1)))"; }
 ck A7-usage-me '"success":true' "$(curl -s "$B/api/billing/usage/me" -H "$H1")"
+
+# ---------- A7s ★ 即时翻译 SSE 收尾必须已落库（2026-09-22 E2E TF2 抓到的缺陷锁） ----------
+# 为什么单独一条：/api/chat（非流式）响应前会 billing.Flush()，但界面走的是
+#   /api/chat/stream —— 该路径曾全程不冲刷，计量留在内存缓冲等 2s ticker 落库，
+#   而前端在收到 done 帧后只刷新一次余额条，于是稳定读到旧值（用户表现为
+#   「翻译完余额/今日已耗不动，再操作一次才跳」，E2E TF2 直接翻红）。
+# 断言口径：done 帧之后**不 sleep**、立刻读 /api/me/package 的 points_used_today 必须已增加
+#   —— 一旦把 Flush 挪回 handler 末尾（done 帧之后），这里就会重新变红。
+#   用「今日已耗」而非「余额」判定：发起翻译会同步发放每周任务积分，余额可能被补成正增量。
+sleep 2
+USED1=$(curl -s $B/api/me/package -H "$H1" | pv '.get("points_used_today", -1)')
+SS=$(curl -s -N $B/api/chat/stream -H "$H1" -H "$J" --max-time 90 \
+  -d "{\"message\":\"A7s 流式计量落库回归断言 $$-$RANDOM-$RANDOM，设备需在傍晚前送达。\",\"skill\":\"translation\",\"options\":{\"target_langs\":[\"en\"]}}")
+ck A7s-stream-done '"type":"done"' "$SS"
+USED2=$(curl -s $B/api/me/package -H "$H1" | pv '.get("points_used_today", -1)')
+[ -n "$USED1" ] && [ -n "$USED2" ] && [ "$USED2" -gt "$USED1" ] \
+  && { PASS=$((PASS+1)); echo "PASS|A7s-stream-metering-sync(今日已耗 $USED1->$USED2)"; } \
+  || { FAIL=$((FAIL+1)); echo "FAIL|A7s-stream-metering-sync(今日已耗 $USED1->$USED2，done 帧后计量未即时可见)"; }
 
 # ---------- A8 余额不足硬闸（清零 userB 双台账，billing_enforced=1） ----------
 BID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_b'")

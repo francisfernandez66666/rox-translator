@@ -1,160 +1,494 @@
 // ============================================================================
-// components/admin/AssistP.tsx — AI 助手管理面板（★ autosales；改造 1A 更新）
-// 职责：内嵌 AI 助手服务的管理台（知识库/话术/流程/功能入口/配置/会话）。
+// components/admin/AssistP.tsx — AI 助手管理面板（★ #34 前端重做，2026-09-21）
 //
-// 说明（改造 1A，2026-09-17）：assist 服务已融合进主仓单 module，管理台 Token
-// 不再要求用户手工粘贴——本面板挂载时经主后台 /api/admin/assist/token（仅超管）
-// 拉取生效 Token，写入同源 localStorage('assist_tok')，iframe 内的管理台页面
-// 加载时自行读取该键并静默校验（绿=已验证 / 红=不匹配）。
+// 这版把「iframe 内嵌 assist 自带管理台」整个换成原生 React 面板，目的是让 AI 助手管理
+// 与后台其它面板**同一套交互**：同一套 LangCross 组件、同一套暗色主题、同一套 i18n（12 语种）、
+// 同一套 Toast/确认弹窗，并且只走主后台同源接口（api/assistAdmin.ts）。
 //
-// 注：/assist-api 是**同源**路径反代（Caddy uri strip_prefix），故父页面与 iframe
-// 共用同一 localStorage；若部署为跨域 iframe，本注入会失效，需回退手工粘贴。
+// 三条硬口径（改动前请先读）：
+//   1. 管理 Token 不进浏览器：读写由主后台 /api/admin/assist/* 代理，服务端注入 X-Assist-Admin；
+//      面板只展示 Token「来源」（env/db/none），轮换入口保留（旧 iframe 版能力不能缩水）。
+//   2. fail-closed：服务不可达或 Token 未配置时，状态条直接给处置指引，各页签不渲染假数据；
+//      真实商户凭据缺失时同理（不静默回退）。
+//   3. 功能尺寸对齐旧管理台（internal/assist/web/admin.html）：四类数据 CRUD + 启停 + 删除确认、
+//      LLM 四项配置与连通测试、对话配置六项、同义词归一、会话统计与未答问题清单，一项不少；
+//      assist 自带页面仍可通过「备用管理台」链接直达（未删除，只是不再是主路径）。
 //
-// 2026-09-18（UI 融合）：面板底色随全站暗色主题调整（iframe 容器底 #0E1014、
-//   状态条改用中性灰边框/浅色字），标题与状态文案去掉 emoji 前缀改由颜色表意。
+// 数据面（assist 独立服务的表结构，见 backend-go/internal/assist/store/store.go）：
+//   kb_entries(key,category,title,content,keywords,link_keys,priority,enabled)
+//   scripts(key,stype,title,keywords,link_keys,content,priority,enabled)
+//   flows(key,name,description,trigger_keywords,steps_json,enabled)
+//   feature_links(key,name,description,url,ftype,icon,sort,enabled)
 // ============================================================================
-
-import { useCallback, useEffect, useState } from 'react'
-import { Button } from '@/ui/langcross/src'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Button, DataTable, Dialog, InlineBanner, StatusPill, Switch, Tabs } from '@/ui/langcross/src'
+import { confirmDialog } from '@/components/uiDialogs'
+import { toastError, toastSuccess } from '@/lib/toastBus'
+import { runGuarded } from '@/lib/runGuarded'
+import { useT } from '@/i18n'
+import { Panel, Field } from './parts'
 import { ASSIST_API } from '@/api/assist'
-import { adminAssistToken, adminAssistTokenRotate } from '@/api'
-import { toastSuccess, toastError } from '@/lib/toastBus'
+import { adminAssistTokenRotate } from '@/api'
+import {
+  AssistBizError, assistAdminConfig, assistAdminConfigSet, assistAdminCreate, assistAdminDelete,
+  assistAdminLLMTest, assistAdminList, assistAdminSessions, assistAdminStatus, assistAdminUpdate,
+} from '@/api/assistAdmin'
+import type { AssistArea, AssistRow, AssistSessionsResp } from '@/api/assistAdmin'
 
-/** 管理台读取 Token 的 localStorage 键（与 assist web/admin.html 约定一致） */
-const ASSIST_TOK_KEY = 'assist_tok'
+type Any = Record<string, any>
 
-/** 加载态：checking=正在取 Token | ready=已注入可渲染 | manual=拿不到 Token 需手工填 | error=接口异常 */
-type Phase = 'checking' | 'ready' | 'manual' | 'error'
+/** 表单字段描述：kind 决定控件；options 仅 select 用（值 + 文案 i18n 键） */
+interface FormField {
+  field: string
+  labelKey: string
+  kind: 'text' | 'textarea' | 'number' | 'select'
+  options?: [string, string][]
+  wide?: boolean
+}
 
-// AssistP AI 助手管理面板：iframe 托管 assist 管理台 + 管理 Token 自动注入
+/** 区域定义：列展示 + 表单字段 + 空值默认（与 assist 侧建表默认值一致，避免提交漏字段） */
+interface AreaDef {
+  area: AssistArea
+  tabKey: string
+  titleKey: string
+  cols: { field: string; labelKey: string; width: number; wide?: boolean }[]
+  fields: FormField[]
+  defaults: AssistRow
+}
+
+/** AREAS 四类管理对象的唯一事实源（新增一类只改这里，表格与表单自动跟随） */
+const AREAS: AreaDef[] = [
+  {
+    area: 'kb', tabKey: 'kb', titleKey: 'assist.tabKb',
+    cols: [
+      { field: 'key', labelKey: 'assist.colKey', width: 140 },
+      { field: 'category', labelKey: 'assist.fCategory', width: 100 },
+      { field: 'title', labelKey: 'assist.fTitle', width: 180, wide: true },
+      { field: 'keywords', labelKey: 'assist.fKeywords', width: 180, wide: true },
+      { field: 'priority', labelKey: 'assist.fPriority', width: 80 },
+    ],
+    fields: [
+      { field: 'category', labelKey: 'assist.fCategory', kind: 'text' },
+      { field: 'title', labelKey: 'assist.fTitle', kind: 'text' },
+      { field: 'content', labelKey: 'assist.fContent', kind: 'textarea', wide: true },
+      { field: 'keywords', labelKey: 'assist.fKeywords', kind: 'text', wide: true },
+      { field: 'link_keys', labelKey: 'assist.fLinkKeys', kind: 'text' },
+      { field: 'priority', labelKey: 'assist.fPriority', kind: 'number' },
+    ],
+    defaults: { category: 'usage', title: '', content: '', keywords: '', link_keys: '', priority: 5, enabled: 1 },
+  },
+  {
+    area: 'scripts', tabKey: 'scripts', titleKey: 'assist.tabScripts',
+    cols: [
+      { field: 'key', labelKey: 'assist.colKey', width: 140 },
+      { field: 'stype', labelKey: 'assist.fStype', width: 100 },
+      { field: 'title', labelKey: 'assist.fTitle', width: 160, wide: true },
+      { field: 'content', labelKey: 'assist.fContent', width: 240, wide: true },
+      { field: 'keywords', labelKey: 'assist.fKeywords', width: 160, wide: true },
+    ],
+    fields: [
+      { field: 'stype', labelKey: 'assist.fStype', kind: 'select', options: [['keyword', 'assist.stKeyword'], ['greeting', 'assist.stGreeting'], ['fallback', 'assist.stFallback']] },
+      { field: 'title', labelKey: 'assist.fTitle', kind: 'text' },
+      { field: 'content', labelKey: 'assist.fContent', kind: 'textarea', wide: true },
+      { field: 'keywords', labelKey: 'assist.fKeywords', kind: 'text', wide: true },
+      { field: 'link_keys', labelKey: 'assist.fLinkKeys', kind: 'text' },
+      { field: 'priority', labelKey: 'assist.fPriority', kind: 'number' },
+    ],
+    defaults: { stype: 'keyword', title: '', content: '', keywords: '', link_keys: '', priority: 5, enabled: 1 },
+  },
+  {
+    area: 'flows', tabKey: 'flows', titleKey: 'assist.tabFlows',
+    cols: [
+      { field: 'key', labelKey: 'assist.colKey', width: 140 },
+      { field: 'name', labelKey: 'assist.fName', width: 160, wide: true },
+      { field: 'trigger_keywords', labelKey: 'assist.fTrigger', width: 200, wide: true },
+      { field: 'steps_json', labelKey: 'assist.fSteps', width: 240, wide: true },
+    ],
+    fields: [
+      { field: 'name', labelKey: 'assist.fName', kind: 'text' },
+      { field: 'description', labelKey: 'assist.fDesc', kind: 'text', wide: true },
+      { field: 'trigger_keywords', labelKey: 'assist.fTrigger', kind: 'text', wide: true },
+      { field: 'steps_json', labelKey: 'assist.fSteps', kind: 'textarea', wide: true },
+    ],
+    defaults: { name: '', description: '', trigger_keywords: '', steps_json: '[]', enabled: 1 },
+  },
+  {
+    area: 'features', tabKey: 'features', titleKey: 'assist.tabFeatures',
+    cols: [
+      { field: 'key', labelKey: 'assist.colKey', width: 140 },
+      { field: 'name', labelKey: 'assist.fName', width: 160, wide: true },
+      { field: 'url', labelKey: 'assist.fUrl', width: 220, wide: true },
+      { field: 'ftype', labelKey: 'assist.fFtype', width: 100 },
+      { field: 'sort', labelKey: 'assist.fSort', width: 80 },
+    ],
+    fields: [
+      { field: 'name', labelKey: 'assist.fName', kind: 'text' },
+      { field: 'description', labelKey: 'assist.fDesc', kind: 'text', wide: true },
+      { field: 'url', labelKey: 'assist.fUrl', kind: 'text', wide: true },
+      { field: 'ftype', labelKey: 'assist.fFtype', kind: 'select', options: [['route', 'assist.ftRoute'], ['link', 'assist.ftLink']] },
+      { field: 'icon', labelKey: 'assist.fIcon', kind: 'text' },
+      { field: 'sort', labelKey: 'assist.fSort', kind: 'number' },
+    ],
+    defaults: { name: '', description: '', url: '', ftype: 'route', icon: '', sort: 50, enabled: 1 },
+  },
+]
+
+/** 对话配置六项 + LLM 四项：键名直接用 assist 侧真实配置键（运维排查时要能对上），文案只给说明 */
+const CHAT_CFG = ['welcome', 'persona', 'temperature', 'max_tokens', 'quick_chips']
+const LLM_CFG = ['llm_base_url', 'llm_api_key', 'llm_model', 'llm_model_backup']
+
+/** 面板页签 */
+type Tab = 'overview' | 'config' | 'kb' | 'scripts' | 'flows' | 'features'
+
+// AssistP AI 助手管理面板（仅超管；后端代理双端把关）
 export default function AssistP() {
-  const [phase, setPhase] = useState<Phase>('checking')
-  const [source, setSource] = useState<string>('')
-  const [errMsg, setErrMsg] = useState('')
-  // iframe 重挂载计数：Token 变更后强制刷新（改 key 触发重建，避免缓存旧页面）
-  const [reloadKey, setReloadKey] = useState(0)
+  const [, t] = useT()
+  const [tab, setTab] = useState<Tab>('overview')
+  const [status, setStatus] = useState<Any | null>(null)
   const [rotateVal, setRotateVal] = useState('')
   const [rotating, setRotating] = useState(false)
+  const [bizErr, setBizErr] = useState('')
 
-  // 拉取 Token 并注入同源 localStorage；注入成功才渲染 iframe（避免先渲染再刷新的闪烁）
-  const loadToken = useCallback(async () => {
-    setPhase('checking')
-    try {
-      const r = await adminAssistToken()
-      if (!r.success) {
-        setErrMsg(r.message || '读取失败')
-        setPhase(r.message && /超管|权限|403/.test(r.message) ? 'manual' : 'error')
-        return
-      }
-      const tok = (r.token || '').trim()
-      if (!tok) {
-        // 未配置（source=none）：不覆盖用户可能已手工填过的值
-        setErrMsg('主后台尚未配置管理 Token（可由超管在下方设置，或配置环境变量 ASSIST_ADMIN_TOKEN）')
-        setPhase('manual')
-        return
-      }
-      try { localStorage.setItem(ASSIST_TOK_KEY, tok) } catch { /* 隐私模式：忽略，回落手工填 */ }
-      setSource(r.source || '')
-      setPhase('ready')
-    } catch (e: any) {
-      setErrMsg(e?.message || '接口异常')
-      setPhase('error')
-    }
+  // 概览数据（会话统计 + 未答问题 + LLM 生效模式）
+  const [sess, setSess] = useState<AssistSessionsResp | null>(null)
+  // 数据类页签的行缓存与表单弹窗
+  const [rowsMap, setRowsMap] = useState<Record<string, AssistRow[]>>({})
+  const [form, setForm] = useState<{ def: AreaDef; row: Any } | null>(null)
+  const [busy, setBusy] = useState(false)
+  // 配置页签
+  const [cfg, setCfg] = useState<Record<string, string>>({})
+  const [testOut, setTestOut] = useState('')
+  const [testing, setTesting] = useState(false)
+
+  const refreshStatus = useCallback(async () => {
+    const r = await runGuarded(() => assistAdminStatus())
+    if (r) setStatus(r)
   }, [])
 
-  useEffect(() => { void loadToken() }, [loadToken])
+  useEffect(() => { void refreshStatus() }, [refreshStatus])
 
-  // 轮换 Token（超管）：写库后重新注入并重建 iframe
-  async function rotate() {
+  // bizFail 统一处理业务失败：代理层 fail-closed 的 message 已是给用户看的处置指引
+  function bizFail(e: unknown) {
+    const msg = e instanceof AssistBizError ? e.message : String((e as any)?.message || e)
+    setBizErr(msg)
+    void toastError(msg)
+  }
+
+  const loadSessions = useCallback(async () => {
+    try {
+      setSess(await assistAdminSessions())
+      setBizErr('')
+    } catch (e) { bizFail(e) }
+  }, [])
+
+  const loadArea = useCallback(async (area: AssistArea) => {
+    try {
+      const rs = await assistAdminList(area)
+      setRowsMap((m) => ({ ...m, [area]: rs }))
+      setBizErr('')
+    } catch (e) { bizFail(e) }
+  }, [])
+
+  const loadConfig = useCallback(async () => {
+    try {
+      const list = await assistAdminConfig()
+      const m: Record<string, string> = {}
+      for (const c of list) m[c.key] = String(c.value ?? '')
+      setCfg(m)
+      setBizErr('')
+    } catch (e) { bizFail(e) }
+  }, [])
+
+  // 切页签按需拉数据（失败态不缓存空列表，重试只需再点一次页签）
+  useEffect(() => {
+    if (tab === 'overview') void loadSessions()
+    else if (tab === 'config') { void loadConfig(); void loadSessions() }
+    else void loadArea(tab as AssistArea)
+  }, [tab, loadSessions, loadConfig, loadArea])
+
+  // saveToken 轮换/清除管理 Token（保留旧面板能力：空串=清除库内、回落环境变量）
+  async function saveToken() {
     if (rotating) return
     setRotating(true)
     try {
       const r = await adminAssistTokenRotate(rotateVal.trim())
-      if (!r.success) { toastError(r.message || '保存失败'); return }
-      toastSuccess(rotateVal.trim() ? 'Token 已更新' : 'Token 已清除（回落环境变量）')
+      if (!r.success) { void toastError(String(r.message || t('assist.saveFail'))); return }
+      void toastSuccess(t('assist.tokenSaved'))
       setRotateVal('')
-      await loadToken()
-      setReloadKey((k) => k + 1)
-    } catch (e: any) {
-      toastError(e?.message || '保存失败')
+      await refreshStatus()
+      // Token 变更后当前页签数据可能已不可用，立即重拉一次，避免「保存成功但列表还是空的」
+      if (tab === 'overview') await loadSessions()
+      else if (tab === 'config') await loadConfig()
+      else await loadArea(tab as AssistArea)
     } finally { setRotating(false) }
   }
 
-  // 将 Token 生效来源映射为中文展示文案（env=部署侧环境变量 / db=库内密文 / 其他=空）
-  const srcLabel = source === 'env' ? '环境变量 ASSIST_ADMIN_TOKEN' : source === 'db' ? '主后台库内配置' : ''
+  // saveRow 新增/编辑提交：数字字段转数，空 key 直接拦（assist 侧 key 是 UNIQUE 且被前端当主展示列）
+  async function saveRow() {
+    if (!form || busy) return
+    const { def, row } = form
+    const key = String(row.key || '').trim()
+    if (!key) { void toastError(t('assist.needKey')); return }
+    const payload: Any = { ...def.defaults, ...row, key }
+    for (const f of def.fields) if (f.kind === 'number') payload[f.field] = Number(payload[f.field]) || 0
+    payload.enabled = Number(row.enabled ?? 1) ? 1 : 0
+    setBusy(true)
+    try {
+      const id = Number(row.id) || 0
+      if (id > 0) await assistAdminUpdate(def.area, id, payload)
+      else await assistAdminCreate(def.area, payload)
+      void toastSuccess(t('assist.saved'))
+      setForm(null)
+      await loadArea(def.area)
+    } catch (e) { bizFail(e) } finally { setBusy(false) }
+  }
+
+  // toggleRow 启停：只改 enabled，会话侧立即生效（assist 读表时按 enabled=1 过滤）
+  async function toggleRow(def: AreaDef, row: AssistRow, on: boolean) {
+    try {
+      await assistAdminUpdate(def.area, Number(row.id), { enabled: on ? 1 : 0 })
+      await loadArea(def.area)
+    } catch (e) { bizFail(e) }
+  }
+
+  async function removeRow(def: AreaDef, row: AssistRow) {
+    if (!(await confirmDialog({ body: t('assist.deleteConfirm'), confirmText: t('common.delete') }))) return
+    try {
+      await assistAdminDelete(def.area, Number(row.id))
+      void toastSuccess(t('assist.deleted'))
+      await loadArea(def.area)
+    } catch (e) { bizFail(e) }
+  }
+
+  // saveCfgGroup 批量保存配置：掩码值（含 ***）由 assist 侧自行跳过写库，前端原样提交即可
+  async function saveCfgKeys(keys: string[]) {
+    try {
+      for (const k of keys) await assistAdminConfigSet(k, String(cfg[k] ?? ''))
+      void toastSuccess(t('assist.saved'))
+      await loadConfig()
+    } catch (e) { bizFail(e) }
+  }
+
+  async function testLLM() {
+    if (testing) return
+    setTesting(true)
+    setTestOut('')
+    try {
+      const r = await assistAdminLLMTest()
+      setTestOut(r.ok ? t('assist.llmOk').replace('{model}', String(r.model || '')).replace('{ms}', String(r.ms ?? 0))
+        : t('assist.llmFail').replace('{error}', String(r.error || t('assist.unknown'))))
+    } catch (e) { bizFail(e) } finally { setTesting(false) }
+  }
+
+  const srcLabel = useMemo(() => {
+    const s = String(status?.token_src ?? '')
+    return s === 'env' ? t('assist.srcEnv') : s === 'db' ? t('assist.srcDb') : t('assist.srcNone')
+  }, [status, t])
+
+  const tabs = [
+    { key: 'overview', label: t('assist.tabOverview') },
+    { key: 'config', label: t('assist.tabConfig') },
+    { key: 'kb', label: t('assist.tabKb') },
+    { key: 'scripts', label: t('assist.tabScripts') },
+    { key: 'flows', label: t('assist.tabFlows') },
+    { key: 'features', label: t('assist.tabFeatures') },
+  ]
+
+  const reachable = status?.reachable === true
+  // 色带口径（InlineBanner 只有 success/warn/error 三档）：不可达=error（红，功能真的不能用），
+  // 未配置 Token 与检测中=warn（黄，按提示补一下就通），全绿才 success。
+  const bannerTone: 'success' | 'warn' | 'error' = !status
+    ? 'warn'
+    : !reachable
+      ? 'error'
+      : status.token_src === 'none'
+        ? 'warn'
+        : 'success'
+  const bannerText = !status
+    ? t('assist.checking')
+    : !reachable
+      ? t('assist.downHint')
+      : status.token_src === 'none'
+        ? t('assist.noTokenHint')
+        : t('assist.readyHint').replace('{src}', srcLabel)
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}> AI 助手管理</h2>
-        <span style={{ color: '#6b7280', fontSize: 13 }}>
-          知识库 · 话术 · 流程 · 功能入口 · 配置（数据存于 AI 助手独立服务，与业务库隔离）
-        </span>
-        <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
-          <Button size="sm" variant="secondary" onClick={() => { void loadToken().then(() => setReloadKey((k) => k + 1)) }}>
-            重新加载
-          </Button>
-        </span>
-      </div>
-
-      {/* 管理 Token 状态条（改造 1A：免手填；异常时给出可自助的处置路径）
-          三态配色：ready=绿底浅灰字、checking=灰底灰字、manual/error=暖橙警示底；
-          文案不再用 emoji 前缀，状态由颜色 + 文字表达。
-          注意：ready 分支的底色仍是浅色 #f0fdf4 而文字改成浅色 #E7E9EA，
-          明暗档未同步（浅底配浅字几乎不可读），后续需一并把底色换深色。 */}
-      <div style={{
-        fontSize: 12, borderRadius: 8, padding: '8px 12px', marginBottom: 8,
-        background: phase === 'ready' ? '#f0fdf4' : phase === 'checking' ? '#f8fafc' : '#fff7ed',
-        border: `1px solid ${phase ==='ready'?'#464C58': phase ==='checking'?'#e2e8f0':'#fed7aa'}`,
-        color: phase ==='ready'?'#E7E9EA': phase ==='checking'?'#9AA0AA':'#b45309',
-      }}>
-        {phase === 'checking' && '正在获取管理 Token…'}
- {phase ==='ready'&& ` 管理 Token 已自动注入（来源：${srcLabel}），无需手工粘贴`}
- {phase ==='manual'&& ` ${errMsg}`}
- {phase ==='error'&& ` 获取管理 Token 失败：${errMsg}`}
-      </div>
-
-      {phase === 'manual' && (
-        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8, lineHeight: 1.7 }}>
-          兜底：可在下方填入与 AI 助手服务一致的 Token（环境变量 <code>ASSIST_ADMIN_TOKEN</code>，
-          或主后台库内配置），保存后管理台即自动使用；也可在管理台右上角手工粘贴。
-        </div>
-      )}
-
-      {(phase === 'manual' || phase === 'ready') && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+      <Panel title={t('assist.title')} extra={<Button size="sm" variant="secondary" onClick={() => void refreshStatus()}>{t('assist.recheck')}</Button>}>
+        <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 10 }}>{t('assist.subtitle')}</div>
+        <InlineBanner tone={bannerTone}>{bannerText}</InlineBanner>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
           <input
-            className="lc-input"
-            value={rotateVal}
-            onChange={(e) => setRotateVal(e.target.value)}
-            type="password"
-            placeholder="设置/轮换管理 Token（留空=清除库内配置，回落环境变量）"
-            style={{ maxWidth: 420 }}
-            aria-label="管理 Token"
+            className="lc-input" type="password" aria-label={t('assist.tokenLabel')} value={rotateVal}
+            placeholder={t('assist.tokenPh')} onChange={(e) => setRotateVal(e.target.value)} style={{ maxWidth: 420 }}
           />
-          <Button size="sm" variant="primary" disabled={rotating} onClick={rotate}>保存 Token</Button>
+          <Button size="sm" variant="primary" disabled={rotating} onClick={() => void saveToken()}>{t('assist.tokenSave')}</Button>
+          <a className="lc-link" href={`${ASSIST_API}/assist/admin`} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>
+            {t('assist.legacyAdmin')}
+          </a>
         </div>
+        {bizErr && <div style={{ marginTop: 8 }}><InlineBanner tone="error">{bizErr}</InlineBanner></div>}
+      </Panel>
+
+      {/* data-testid 只给 e2e 用：侧边栏也有「知识库」等同类文案，页签必须限定在本面板内点击，
+          否则 Playwright 的 .first() 会命中侧栏菜单并把面板切走（2026-09-21 A3 假失败根因） */}
+      <div style={{ marginTop: 14 }} data-testid="assist-tabs">
+        <Tabs items={tabs} activeKey={tab} onChange={(k) => setTab(k as Tab)} />
+      </div>
+
+      {tab === 'overview' && (
+        <Panel title={t('assist.tabOverview')}>
+          <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap', fontSize: 14 }}>
+            <span>{t('assist.statSessions')}：<b>{sess?.total ?? '—'}</b></span>
+            <span>{t('assist.statMessages')}：<b>{sess?.messages ?? '—'}</b></span>
+            <span>{t('assist.statUnanswered')}：<b>{sess?.unanswered.length ?? '—'}</b></span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              LLM
+              <StatusPill tone={sess?.llm_mode === 'rule' ? 'warn' : 'success'}>
+                {sess?.llm_mode === 'env' ? t('assist.modeEnv') : sess?.llm_mode === 'db' ? t('assist.modeDb') : t('assist.modeRule')}
+              </StatusPill>
+            </span>
+          </div>
+          {(sess?.unanswered.length ?? 0) > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 14, marginBottom: 6 }}>{t('assist.unansweredTitle')}</div>
+              <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, lineHeight: 1.9 }}>
+                {sess!.unanswered.map((q, i) => <li key={i}>{q}</li>)}
+              </ul>
+            </div>
+          )}
+          <div style={{ marginTop: 14 }}>
+            <DataTable
+              rowKey={(r) => String((r as Any).id)} rows={(sess?.sessions as Any[]) || []} emptyText={t('assist.noRows')}
+              columns={[
+                { key: 'id', title: t('assist.colSession'), width: 200, render: (r) => <code>{String((r as Any).id)}</code> },
+                { key: 'page_url', title: t('assist.colPage'), width: 220, render: (r) => String((r as Any).page_url || '-') },
+                { key: 'msg_count', title: t('assist.colMsgCount'), width: 90 },
+                { key: 'in_flow', title: t('assist.colFlow'), width: 140, render: (r) => String((r as Any).in_flow || '-') },
+                { key: 'last_at', title: t('assist.colLastAt'), width: 190, render: (r) => String((r as Any).last_at || '').slice(0, 19) },
+              ]}
+            />
+          </div>
+        </Panel>
       )}
 
-      {phase === 'checking' ? null : (
-        // iframe 容器：底色与内嵌 assist 管理台一致（#0E1014），
-        // 目的是页面加载瞬间不闪白；高度按视口扣掉上方说明区，minHeight 保证小屏可滚动。
-        <div style={{
-          border: '1.2px solid var(--lc-border-card)', borderRadius: 10, overflow: 'hidden',
-          height: 'calc(100vh - 250px)', minHeight: 460, background: '#0E1014',
-        }}>
-          <iframe
-            key={reloadKey}
-            src={`${ASSIST_API}/assist/admin`}
-            title="AI 助手管理台"
-            style={{ width: '100%', height: '100%', border: 'none' }}
-          />
-        </div>
+      {tab === 'config' && (
+        <Panel title={t('assist.tabConfig')}>
+          <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('assist.llmHint')}</div>
+          {LLM_CFG.map((k) => (
+            <Field key={k} label={k}>
+              <input
+                className="lc-input" style={{ width: 420 }} value={cfg[k] ?? ''}
+                type={k === 'llm_api_key' ? 'password' : 'text'} aria-label={k}
+                onChange={(e) => setCfg({ ...cfg, [k]: e.target.value })}
+              />
+            </Field>
+          ))}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '6px 0 16px' }}>
+            <Button variant="primary" size="sm" onClick={() => void saveCfgKeys(LLM_CFG)}>{t('assist.llmSave')}</Button>
+            <Button variant="secondary" size="sm" disabled={testing} onClick={() => void testLLM()}>{t('assist.llmTest')}</Button>
+            {testOut && <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{testOut}</span>}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('assist.cfgHint')}</div>
+          {CHAT_CFG.map((k) => (
+            <Field key={k} label={k}>
+              <textarea
+                className="lc-textarea" style={{ minHeight: 56, width: '100%', maxWidth: 620 }} value={cfg[k] ?? ''}
+                aria-label={k} onChange={(e) => setCfg({ ...cfg, [k]: e.target.value })}
+              />
+            </Field>
+          ))}
+          <Field label="synonyms">
+            <textarea
+              className="lc-textarea" style={{ minHeight: 88, width: '100%', maxWidth: 620 }} value={cfg.synonyms ?? ''}
+              placeholder={t('assist.synPh')} aria-label="synonyms"
+              onChange={(e) => setCfg({ ...cfg, synonyms: e.target.value })}
+            />
+          </Field>
+          <div style={{ fontSize: 12.5, color: 'var(--adm-hint)', margin: '4px 0 10px' }}>{t('assist.synHint')}</div>
+          <Button variant="primary" size="sm" onClick={() => void saveCfgKeys([...CHAT_CFG, 'synonyms'])}>{t('assist.cfgSave')}</Button>
+        </Panel>
       )}
 
-      <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 8 }}>
-        服务部署与反代配置见 <code>backend-go/internal/assist/README.md</code>；管理台页面与初始数据已随二进制内嵌，无需投放静态文件。
-      </p>
+      {tab !== 'overview' && tab !== 'config' && (() => {
+        const def = AREAS.find((a) => a.tabKey === tab)!
+        return (
+          <Panel title={t(def.titleKey)} extra={
+            <Button size="sm" variant="primary" onClick={() => setForm({ def, row: { ...def.defaults, id: 0, key: '', enabled: 1 } })}>
+              {t('assist.create')}
+            </Button>
+          }>
+            <DataTable
+              rowKey={(r) => String((r as Any).id)} rows={rowsMap[def.area] || []} emptyText={t('assist.noRows')}
+              columns={[
+                ...def.cols.map((c) => ({
+                  key: c.field, title: t(c.labelKey), width: c.width,
+                  render: (r: Any) => (c.wide ? String(r[c.field] ?? '') : <code>{String(r[c.field] ?? '')}</code>),
+                })),
+                {
+                  key: 'enabled', title: t('common.status'), width: 130, render: (r: Any) => (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Switch checked={Number(r.enabled) === 1} onChange={(e) => void toggleRow(def, r as AssistRow, e.target.checked)} />
+                      <StatusPill tone={Number(r.enabled) === 1 ? 'success' : 'idle'}>
+                        {Number(r.enabled) === 1 ? t('assist.enabled') : t('ind.off')}
+                      </StatusPill>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'op', title: '', width: 150, render: (r: Any) => (
+                    <div style={{ display: 'flex', gap: 12 }}>
+                      <a className="lc-link" onClick={() => setForm({ def, row: { ...def.defaults, ...r } })}>{t('coupons.edit')}</a>
+                      <a className="lc-link" style={{ color: 'var(--lc-danger, #f87171)' }} onClick={() => void removeRow(def, r as AssistRow)}>{t('common.delete')}</a>
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          </Panel>
+        )
+      })()}
+
+      {form && (
+        <Dialog
+          open onCancel={() => setForm(null)} onConfirm={() => void saveRow()}
+          title={`${Number(form.row.id) > 0 ? t('assist.editTitle') : t('assist.create')}${t(form.def.titleKey)}`}
+          confirmText={t('common.save')} cancelText={t('common.cancel')}
+        >
+          <Field label={t('assist.colKey')}>
+            {/* key 是 assist 侧的唯一定位标识（话术/知识命中都按它），编辑时不允许改，避免断引用 */}
+            <input className="lc-input" style={{ width: 240 }} value={String(form.row.key ?? '')} aria-label={t('assist.colKey')}
+              disabled={Number(form.row.id) > 0} onChange={(e) => setForm({ ...form, row: { ...form.row, key: e.target.value } })} />
+          </Field>
+          {form.def.fields.map((f) => (
+            <Field key={f.field} label={t(f.labelKey)}>
+              {f.kind === 'textarea' && (
+                <textarea className="lc-textarea" style={{ minHeight: 76, width: '100%' }} aria-label={t(f.labelKey)}
+                  value={String(form.row[f.field] ?? '')} onChange={(e) => setForm({ ...form, row: { ...form.row, [f.field]: e.target.value } })} />
+              )}
+              {f.kind === 'number' && (
+                <input className="lc-input" style={{ width: 140 }} type="number" min={0} aria-label={t(f.labelKey)}
+                  value={String(form.row[f.field] ?? '')} onChange={(e) => setForm({ ...form, row: { ...form.row, [f.field]: e.target.value } })} />
+              )}
+              {f.kind === 'select' && (
+                <select className="lc-select" style={{ width: 200 }} aria-label={t(f.labelKey)}
+                  value={String(form.row[f.field] ?? f.options?.[0]?.[0] ?? '')}
+                  onChange={(e) => setForm({ ...form, row: { ...form.row, [f.field]: e.target.value } })}>
+                  {(f.options || []).map(([v, k]) => <option key={v} value={v}>{t(k)}</option>)}
+                </select>
+              )}
+              {f.kind === 'text' && (
+                <input className="lc-input" style={{ width: f.wide ? '100%' : 300, maxWidth: 460 }} aria-label={t(f.labelKey)}
+                  value={String(form.row[f.field] ?? '')} onChange={(e) => setForm({ ...form, row: { ...form.row, [f.field]: e.target.value } })} />
+              )}
+            </Field>
+          ))}
+          <Field label={t('assist.enabled')}>
+            <Switch checked={Number(form.row.enabled ?? 1) === 1}
+              onChange={(e) => setForm({ ...form, row: { ...form.row, enabled: e.target.checked ? 1 : 0 } })} />
+          </Field>
+        </Dialog>
+      )}
     </div>
   )
 }

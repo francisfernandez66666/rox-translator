@@ -525,7 +525,7 @@ func (s *Server) handleSCIMMeta(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTenantSCIM(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -563,7 +563,7 @@ func (s *Server) handleTenantSCIM(w http.ResponseWriter, r *http.Request) {
 		cfg.RootOrgID = *req.RootOrgID
 	}
 	if err := s.Store.UpsertSCIMConfig(cfg); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "scim_config", "scim", mapBoolStr(cfg.Enabled))

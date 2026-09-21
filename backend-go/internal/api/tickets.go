@@ -125,7 +125,7 @@ func (s *Server) handleTickets(w http.ResponseWriter, r *http.Request) {
 	// 租户隔离：仅查询生效租户下的工单
 	tickets, err := s.Store.ListTickets(s.effTenant(r, u), u.ID, onlyMine)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ 运行中工单附实时进度百分比（后端唯一真源；仅运行中才查状态，避免全量 N+1）
@@ -198,7 +198,7 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 	// 创建工单（归属生效租户）
 	t, err := s.Store.CreateTicket(s.effTenant(r, u), u.ID, req.Title, req.SourceText, "", req.TargetLangs)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ 翻译模式随创建请求落库（fast=快速 / pro=专业校对；空值归一化为 pro）
@@ -363,7 +363,7 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 	// 创建工单（file_path 记首个文件，兼容旧列表展示；全部文件入 ticket_files 表）
 	t, err := s.Store.CreateTicket(s.effTenant(r, u), u.ID, title, "", saved[0].path, targetLangs)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ 文件任务模式落库（multipart mode 字段；空=pro）
@@ -786,13 +786,13 @@ func (s *Server) handleApproveList(w http.ResponseWriter, r *http.Request) {
 	}
 	// 权限校验：需角色等级 >= 2（approver/admin/tenant_admin/super_admin）
 	if err := auth.RequireRole(u, 2); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 租户隔离：仅列出生效租户下待审批工单
 	tickets, err := s.Store.ListPendingApproval(s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "tickets": s.ticketsViewJSON(tickets)})
@@ -809,7 +809,7 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 	}
 	// 权限校验：需角色等级 >= 2
 	if err := auth.RequireRole(u, 2); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -861,7 +861,7 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.UpdateTicket(t); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 审批审计
@@ -1082,7 +1082,7 @@ func (s *Server) handleTicketDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeleteTicketWithFiles(req.ID, s.effTenant(r, u)); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_delete", "tickets", t.TicketNo)

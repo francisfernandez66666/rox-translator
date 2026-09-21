@@ -227,7 +227,8 @@ func (c *Crawler) RunSource(ctx context.Context, src *store.KBScrapeSource) (int
 // resolvePack 解析数据源目标包（宿主=平台租户0，共享包迁移后唯一口径）。
 // locale/industry/persona → 租户0 按 (pack_type, code) 匹配；找不到时返回错误（提示先建对应包）。
 // ★ 2026-09-19 修复：原查询固定租户1——共享包 2026-09-04 已迁租户0（MigrateSharedHostToZero），
-//   与 /api/register/industries 同款失效（解析恒报「目标包不存在」）。
+//
+//	与 /api/register/industries 同款失效（解析恒报「目标包不存在」）。
 func (c *Crawler) resolvePack(src *store.KBScrapeSource) (*SourceDeps, error) {
 	// 宿主租户0 全包列表，按 code 匹配
 	pkgs, err := c.St.ListKBPackages(0)

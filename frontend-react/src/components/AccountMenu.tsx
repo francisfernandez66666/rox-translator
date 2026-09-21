@@ -131,7 +131,7 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
 // —— 触发按钮（am- 前缀，避免与组件库类名重名）——
 const AM_CSS = `
 .am-trigger{display:inline-flex;align-items:center;gap:4px;background:transparent;border:0;color:var(--lc-text);
-  font-size:13px;cursor:pointer;font-family:var(--lc-font);padding:6px 8px;border-radius:var(--lc-r-bar)}
+  font-size:14px;cursor:pointer;font-family:var(--lc-font);padding:6px 8px;border-radius:var(--lc-r-bar)}
 .am-trigger:hover{color:var(--lc-text);background:var(--lc-raised)}
 .am-trigger:focus-visible{outline:1.2px solid var(--lc-border-input);outline-offset:2px}
 `

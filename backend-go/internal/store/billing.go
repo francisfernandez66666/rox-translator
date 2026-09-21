@@ -1808,6 +1808,11 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	if claw := s.revokePaidReferralIfAllRefunded(buyerUID); claw > 0 {
 		summary += fmt.Sprintf("；已回收邀请人付费奖励 %d token", claw)
 	}
+	// ★ #33（2026-09-21）任务奖励同源回收：「邀请好友且任意充值 +1000 永久积分」的唯一触发源
+	// 同样是这笔付费。只回收裂变奖励而放过任务积分，等于留下「付费→退款」白嫖任务积分的口子。
+	if tclaw := s.RevokeTaskRewardForInvitee(buyerUID, TaskKeyInvitePaid); tclaw > 0 {
+		summary += fmt.Sprintf("；已回收邀请人任务奖励 %d token", tclaw)
+	}
 	// ★ A3 发票冲红提示：本单存在已开具发票时告警留痕（税务冲红对接属资质遗留项）
 	var invCount int64
 	_ = db.QueryRow(s.db, d, "SELECT COUNT(*) FROM invoices WHERE order_id=? AND status='issued'", orderID).Scan(&invCount)

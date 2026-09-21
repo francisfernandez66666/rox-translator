@@ -126,4 +126,21 @@ describe('落地页 · 质量数字口径与多语言入口（2026-09-20）', ()
     for (const s of zhOnly) expect(text, `俄语界面不应出现中文文案「${s}」`).not.toContain(s)
     setLang('zh')
   })
+
+  // ★ #39（2026-09-21 评审缺陷）：落地页价格卡禁止出现具体金额数字。
+  //   真实价目唯一事实源是 /api/plans（由 /pricing 渲染）；落地页一旦抄进「¥99/月」这类
+  //   数字，后台调价就会造成首页与定价页两个价格源打架，且改价要动 12 份词典 + 发版。
+  //   本断言把这条口径钉死：只有引流档的「¥0 起步」允许出现货币数字。
+  it('⑨ 价格卡零具体金额（价格源唯一归 /api/plans，落地页不抄数字）', () => {
+    render(<Landing />)
+    const cards = Array.from(document.querySelectorAll('.lc-plan-price'))
+    expect(cards.length).toBeGreaterThanOrEqual(3)
+    for (const el of cards) {
+      const txt = (el.textContent ?? '').trim()
+      // 只放行「¥0」这一种数字（引流档）；任何非零金额都算价目外泄
+      const money = txt.match(/[¥$€]\s*\d+(?:[.,]\d+)*/g) ?? []
+      const offending = money.filter((m) => !/^[¥$€]\s*0$/.test(m))
+      expect(offending, `落地页价格卡出现具体金额，价目事实源漂移：「${txt}」`).toEqual([])
+    }
+  })
 })

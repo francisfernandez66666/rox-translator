@@ -348,11 +348,22 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 		}
 		t.Status = store.TicketRejected
 		t.RejectReason = runErr.Error()
-		_ = s.Store.UpdateTicket(t)
-		_ = s.Store.CreateNotification(t.CreatedBy,
-			fmt.Sprintf("翻译工单失败：%s", t.Title),
-			fmt.Sprintf("工单号 %s 失败原因：%s", t.TicketNo, runErr.Error()),
-			"ticket", t.ID)
+		// ★ #40②（2026-09-21）：状态 + 失败通知同事务落库（旧实现两条独立写且忽略错误，
+		//   会出现「工单已判失败但无人收到通知」）；写失败必须大声记录，不再 `_ =` 吞掉。
+		notify := &store.Notification{
+			UserID:  t.CreatedBy,
+			Title:   fmt.Sprintf("翻译工单失败：%s", t.Title),
+			Body:    fmt.Sprintf("工单号 %s 失败原因：%s", t.TicketNo, runErr.Error()),
+			RefType: "ticket",
+			RefID:   t.ID,
+		}
+		if applied, ferr := s.Store.FinishTicket(&store.TicketFinishInput{
+			Ticket: t, Notify: notify, ExcludeStatuses: []string{"cancelled"},
+		}); ferr != nil {
+			observability.Error(ctx, "工单失败收尾写库出错（状态/通知未落库，需人工核对）", "ticket_no", t.TicketNo, "err", ferr.Error())
+		} else if !applied {
+			observability.Warn(ctx, "工单失败收尾守卫命中（已取消），放弃失败态与通知写入", "ticket_no", t.TicketNo)
+		}
 		return runErr
 	}
 	// ★ 收尾守卫（评审整改 R3）：复查当前状态——
@@ -373,7 +384,6 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	billed := s.chargeTokens(ctx, t)
 	t.TokensBilled = billed
 	t.Status = store.TicketCompleted
-	_ = s.Store.UpdateTicket(t)
 	// 产物保留期打点：ticket_retention_days（默认 14 天；0=永久）。到期由后台每日扫描清理文件，
 	// 核心译文不受影响——文本工单存 final_result、文件工单回写 tm_segments 长期沉淀。
 	retentionDays := 14
@@ -383,15 +393,35 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 		}
 	}
 	expireHint := "结果文件长期保留"
+	expiresAt := ""
 	if retentionDays > 0 {
 		exp := time.Now().AddDate(0, 0, retentionDays)
-		_ = s.Store.SetTicketExpiry(t.ID, exp.Format(time.RFC3339))
+		expiresAt = exp.Format(time.RFC3339)
 		expireHint = fmt.Sprintf("结果文件保留 %d 天（至 %s），请尽快下载", retentionDays, exp.Format("2006-01-02"))
 	}
-	_ = s.Store.CreateNotification(t.CreatedBy,
-		fmt.Sprintf("翻译工单完成：%s", t.Title),
-		fmt.Sprintf("工单号 %s 翻译完成。%s；译文已沉淀至翻译记忆长期有效。", t.TicketNo, expireHint),
-		"ticket", t.ID)
+	// ★ #40②（2026-09-21）：完成态 + 到期打点 + 站内信收进一个事务（旧实现三条独立写且 `_ =`
+	//   吞错，会留下「已完成却无 result_expires_at」——留存扫描永远漏掉这类工单，产物无限堆积）。
+	//   守卫把上面「先查后改」的 R3 判断下沉为条件 UPDATE，堵住 TOCTOU 窗口。
+	applied, ferr := s.Store.FinishTicket(&store.TicketFinishInput{
+		Ticket:    t,
+		ExpiresAt: expiresAt,
+		Notify: &store.Notification{
+			UserID:  t.CreatedBy,
+			Title:   fmt.Sprintf("翻译工单完成：%s", t.Title),
+			Body:    fmt.Sprintf("工单号 %s 翻译完成。%s；译文已沉淀至翻译记忆长期有效。", t.TicketNo, expireHint),
+			RefType: "ticket",
+			RefID:   t.ID,
+		},
+		ExcludeStatuses: []string{"cancelled", store.TicketQueued},
+	})
+	if ferr != nil {
+		observability.Error(ctx, "工单完成收尾写库出错（状态/到期/通知未落库，需人工核对）", "ticket_no", t.TicketNo, "err", ferr.Error())
+		return ferr
+	}
+	if !applied {
+		observability.Warn(ctx, "工单完成收尾守卫命中（已取消或被巡检重排），放弃收尾与 webhook", "ticket_no", t.TicketNo)
+		return nil
+	}
 	// ★ Webhook 完成回调（OpenAPI 轮询之外的推送通道）：带 task_id 与 token 消耗
 	s.dispatchCompletedWebhook(ctx, t)
 	return nil
@@ -463,7 +493,9 @@ func (s *TicketService) lowBalanceThreshold() int64 {
 
 // StartStallSweep 卡死工单巡检：每 5 分钟扫描 in_progress 且 updated_at 超过 20 分钟的工单，
 // 重置为 queued 触发断点续传（worker 收尾前已有取消复查，重排安全）。防信号量饿死类静默卡死。
-// ★ 同周期顺带执行商业化巡检：订单15min超时自动关闭（CloseStalePendingOrders）+ 低额提醒（24h去重）。
+// ★ 同周期顺带执行商业化巡检：订单15min超时自动关闭（CloseStalePendingOrders）
+//   - 超时单的券额度回收（ReleaseStaleCouponRedemptions，#41）+ 低额提醒（24h去重）。
+//
 // 阶段二：多实例部署下用分布式锁保证巡检同一时刻仅一个实例执行（避免重复告警/重复下单关闭）。
 func (s *TicketService) StartStallSweep() {
 	// 分布式锁（Redis 启用时跨实例互斥；未启用则进程内锁，单实例行为不变）。
@@ -484,7 +516,10 @@ func (s *TicketService) StartStallSweep() {
 			}
 			func() {
 				defer release()
-				s.Store.CloseStalePendingOrders()                       // ★ 订单15min超时自动关闭
+				s.Store.CloseStalePendingOrders() // ★ 订单15min超时自动关闭
+				// ★ 优惠券（#41）：上一步把超时单置 cancelled 后，这里释放其占用的券核销额度，
+				//   否则「下单没用券成功、单又超时」的失败尝试会把总配额吃干净（活动还没开始就显示已抢完）。
+				s.Store.ReleaseStaleCouponRedemptions()
 				s.Store.TenantLowBalanceAlerts(s.lowBalanceThreshold()) // ★ 低额提醒(24h去重)
 				n, rerr := s.Store.RequeueStalledTickets(20 * time.Minute)
 				if rerr != nil {
@@ -633,7 +668,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				// ★ 多语言产物打包 zip 存入 result_path
 				zipPath := ""
 				if len(res.Files) > 1 {
-					zp, zerr := zipOutputs(res.Files, strings.TrimSuffix(filepath.Base(tf.FilePath), filepath.Ext(tf.FilePath))+"_translated.zip")
+					zp, zerr := zipOutputs(res.Files, zipDeliveryName(res.Files, langs, tf.FilePath))
 					if zerr == nil {
 						zipPath = zp
 					}
@@ -778,6 +813,32 @@ func failedCount(s *store.Store, ticketID int64) int64 {
 	return n
 }
 
+// zipDeliveryName 给多语言产物压缩包起名（工单 T20260921…：英文交付包顶着中文原件名
+// `产品方案书_translated.zip` 是体验缺陷——RC-4 已把**产物文件**名翻成目标语，压缩包名漏改了）。
+// 口径：取第一个产物的 base（已是目标语名字）并剥掉其 `_<语言码>[_text]` 尾巴，
+// 因为包里含多种语言、不该只挂一种语言的标记；剥不到就用整个 base，
+// 无产物时回落原件名。**只做字符串整理，不碰文件系统**，落盘仍由 zipOutputs 负责。
+func zipDeliveryName(files []string, langs []string, srcPath string) string {
+	name := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
+	if len(files) > 0 {
+		if base := strings.TrimSuffix(filepath.Base(files[0]), filepath.Ext(files[0])); base != "" {
+			name = base
+			for _, lc := range langs { // 先 `_lang_text`（纯文案旁路）再 `_lang`（主件）
+				for _, sfx := range []string{"_" + lc + "_text", "_" + lc} {
+					if strings.HasSuffix(name, sfx) {
+						name = strings.TrimSuffix(name, sfx)
+						break
+					}
+				}
+			}
+			if name == "" {
+				name = base // 整名就是一个语言标记（极端命名），用回原 base 不出空文件名
+			}
+		}
+	}
+	return name + "_translated.zip"
+}
+
 // zipOutputs 将多个产物文件打包为一个 zip（供下载一次获取全部语言版本）。
 func zipOutputs(paths []string, zipName string) (string, error) {
 	outDir := filepath.Dir(paths[0])
@@ -800,9 +861,6 @@ func zipOutputs(paths []string, zipName string) (string, error) {
 	return zipPath, w.Close()
 }
 
-// persistTextOutputs ★ 工单双模式（2026-09-13）：纯文案 .md 旁路产物的归属登记与汇总。
-// 单语言直接返回该文件路径；多语言打包为 {ticket_no}_texts.zip；全部产物登记归属（C1 口径）。
-// 返回空串表示无可用旁路产物（生成失败/列表为空，不影响主交付）。
 // persistTicketSegments 把「源文段 → 译文段」的**精确配对**落进 ticket_segments 真值表。
 //
 // 为什么需要：PDF 文件工单的源文与译本是**两次独立**的 pdf2docx 转换产物，段落切分粒度
@@ -815,8 +873,6 @@ func zipOutputs(paths []string, zipName string) (string, error) {
 // （EditorSegment）形状不变，故前端无感知。写失败只记日志——附加数据，缺了自动回退旧口径。
 // 未译出的段也写入（target 留空），保证段序号与源文一侧严格对齐，不产生「跳号」。
 // 参数：t=工单；filePath=本次处理的源文件；res=引擎文件翻译结果（含不序列化的真值字段）。
-// ⚠️ 注释归位提示：上方三行「persistTextOutputs ★ 工单双模式…」是 persistTextOutputs
-// 的原注释，因本函数插在两者之间而暂落进本 doc 块内，整理时应移回 persistTextOutputs 之上。
 func (s *TicketService) persistTicketSegments(t *store.Ticket, filePath string, res *engine.FileTranslateResult) {
 	// 防御性早退：失败结果（只带 Error 的 FileTranslateResult）与测试/历史构造的 res
 	// 都没有有序源文段。此时**不能**改用 Translations 的 map 键补写——map 无顺序，

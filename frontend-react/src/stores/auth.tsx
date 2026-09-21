@@ -17,7 +17,7 @@
 import { useEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { create } from 'zustand'
-import { authMe, setAuthToken, getAuthToken } from '@/api'
+import { authMe, setAuthToken, getAuthToken, setUnauthorizedHandler } from '@/api'
 import type { AuthUser } from '@/api'
 
 /** roleLevel 角色等级：super_admin/admin=4 · tenant_admin/approver=3 · dept_admin=2 · 其他=1
@@ -65,6 +65,12 @@ export const authStore = useAuthStore
  */
 /** 认证状态根：登录/登出/会话恢复（含 S1 积分汇率注入） */
 export function AuthProvider({ children }: { children: ReactNode }) {
+  useEffect(() => {
+    // ★ P0-6：向 api/core 注入 401 复位钩子——任何请求通道收到 401 即 user→null，
+    // Root 守卫在当前路径原地出登录页（登录后回到失效前页面，回跳不丢）
+    setUnauthorizedHandler(() => useAuthStore.setState({ user: null, restoring: false }))
+    return () => setUnauthorizedHandler(null)
+  }, [])
   useEffect(() => {
     let alive = true
     const { setRestoring, onLogin } = useAuthStore.getState()

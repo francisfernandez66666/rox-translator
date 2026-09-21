@@ -81,12 +81,14 @@ func main() {
 			log.Fatalf("[init] 生产密钥强校验已开启（REQUIRE_PROD_SECRETS=1），缺少环境变量: %s；请参照部署指南 §六 配置后重启", strings.Join(missing, ", "))
 		}
 	}
+	// ★ 生产标记（S1 方言闸门与 #40 Redis 闸门共用一份判定，避免两处口径漂移）：
+	//   REQUIRE_PROD_SECRETS=1（systemd drop-in）或 APP_ENV=prod/production 任一即视为生产。
+	envFlag := strings.ToUpper(strings.TrimSpace(os.Getenv("APP_ENV")))
+	prodMark := os.Getenv("REQUIRE_PROD_SECRETS") == "1" || envFlag == "PROD" || envFlag == "PRODUCTION"
 	// ★ S1（2026-09-12 决策：存储统一 PostgreSQL，SQLite 退出生产）：
 	//   生产强拒 PG 外选项——REQUIRE_PROD_SECRETS=1 或 APP_ENV=prod/production 时 SQLite 直接 FATAL；
 	//   非回环监听（对外可达）同样禁止 SQLite；仅回环监听允许 SQLite 作为开发/测试便捷态（大声告警）。
 	if config.C.DatabaseDriver != "postgres" {
-		envFlag := strings.ToUpper(strings.TrimSpace(os.Getenv("APP_ENV")))
-		prodMark := os.Getenv("REQUIRE_PROD_SECRETS") == "1" || envFlag == "PROD" || envFlag == "PRODUCTION"
 		if prodMark {
 			log.Fatalf("[config] S1 拒绝启动：生产标记（REQUIRE_PROD_SECRETS/APP_ENV）已开启但 DB_DRIVER=%s；生产唯一受支持方言为 postgres，请设置 DB_DRIVER + DB_DSN 后重启", config.C.DatabaseDriver)
 		}
@@ -104,13 +106,45 @@ func main() {
 	cfg.UploadDir = uploadDir
 
 	// ★ 阶段二：Redis 单例初始化（REDIS_ADDR 非空启用分布式能力，空则降级进程内实现）。
+	// ★ #40（2026-09-21 评审缺陷①）：Redis 是分布式锁/限流/并发名额的唯一后端，此前「静默降级为进程内」
+	//   等于每个副本各数各的锁——正是工单收尾守卫（service/ticket.go R3）要防的双份扣费/双份通知来源。
+	//   现把降级升级为「显式声明 + 可观测」：
+	//   ① REQUIRE_REDIS=1（★ 多副本部署必须开）→ 未配地址或探活失败一律拒绝启动，不留含糊空间；
+	//   ② 生产标记但未声明 REQUIRE_REDIS → 大声 ERROR/WARN 后放行。原因：现役主站为单副本，
+	//      其 secrets.env 是否带 REDIS_ADDR 无法在本地核实，硬闸门会让下一次发布直接停站；
+	//      扩副本前必须先接 Redis 并显式开 REQUIRE_REDIS（见 deploy/systemd/prod.conf、部署指南 §八-D）；
+	//   ③ 无论放行与否，判定结果写进 redis.Availability() 并由 /api/health 暴露
+	//      （distributed=redis|unreachable|in-process），监控可据此告警，不再是「能跑但没人知道会炸」。
 	redis.Init(cfg.RedisAddr, cfg.RedisPassword)
+	var redisErr error // 探活只做一次：失败原因既进日志文案也进健康检查
 	if redis.Enabled() {
-		if err := redis.Ping(); err != nil {
-			log.Printf("[init] 警告: Redis 探活失败（%v），分布式能力降级为进程内实现", err)
-		} else {
-			log.Printf("[init] Redis 已启用: %s", cfg.RedisAddr)
+		redisErr = redis.Ping()
+	}
+	requireRedis := os.Getenv("REQUIRE_REDIS") == "1"
+	switch {
+	case redis.Enabled() && redisErr != nil:
+		redis.SetAvailability("unreachable")
+		if requireRedis {
+			log.Fatalf("[init] #40 拒绝启动：REQUIRE_REDIS=1 但 REDIS_ADDR=%s 探活失败（%v）；分布式锁/限流不可用会放大为重复扣费，请修复 Redis 或撤掉 REQUIRE_REDIS", cfg.RedisAddr, redisErr)
 		}
+		if prodMark {
+			log.Printf("[init] ❗ #40 生产环境 Redis 探活失败（%v）：锁/限流/并发名额逐次降级为进程内实现，多副本在此状态下会产生重复扣费/重复通知——单副本可继续，扩副本前必须修复 Redis 并设 REQUIRE_REDIS=1", redisErr)
+		} else {
+			log.Printf("[init] ⚠️ 非生产环境 Redis 探活失败（%v）：分布式锁/限流/并发名额降级为进程内实现，多副本部署禁止带此状态", redisErr)
+		}
+	case !redis.Enabled():
+		redis.SetAvailability("in-process")
+		if requireRedis {
+			log.Fatalf("[init] #40 拒绝启动：REQUIRE_REDIS=1（多副本口径）但未配置 REDIS_ADDR；缺 Redis 时锁/配额只在单进程内生效，请配置 Redis 或撤掉 REQUIRE_REDIS")
+		}
+		if prodMark {
+			log.Printf("[init] ❗ #40 生产环境未配置 REDIS_ADDR：分布式锁/限流/并发名额走进程内实现，仅单副本安全；扩副本前必须接 Redis 并设 REQUIRE_REDIS=1（见 deploy/systemd/prod.conf）")
+		} else {
+			log.Printf("[init] Redis 未配置（非生产）：分布式锁/限流/并发名额走进程内实现")
+		}
+	default:
+		redis.SetAvailability("redis")
+		log.Printf("[init] Redis 已启用: %s", cfg.RedisAddr)
 	}
 
 	// 解析前端 dist 目录（默认 ../frontend/dist，存在 index.html 才启用）
@@ -420,9 +454,26 @@ func main() {
 
 	// 优雅停机：监听 SIGTERM/SIGINT，先停止接收新请求并等待在途请求完成（最多 10 秒）再退出。
 	// 保障：systemd restart / 手动重启时正在进行的翻译任务不会被强行掐断，SQLite 数据一致。
+	// ★ #55（2026-09-22）：quit 与 signal.Notify 提到 goroutine 外先装好，
+	//   这样下面注册的看门狗自愈钩子一定能把信号送进同一条停机链路（不存在「信号先于监听」竞态）。
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+
+	// ★ 看门狗自愈重启改为「优雅停机」而非后台协程直接 os.Exit（报告 §4.1-10）：
+	//   os.Exit 会跳过下面整段停机链路，尤其 billing.DefaultSink.Stop() 的最终批量落库
+	//   ——缓冲区里已发生未落库的 LLM 用量会随进程消失（收入泄漏、影子余额与 DB 背离）。
+	//   这里只委托「发一个和 systemd 重启完全等价的信号」，停机顺序保持唯一真源在本文件；
+	//   api 包侧另有宽限期兜底（超时未退出才 flush + 硬退），确保自愈能力不被委托失败吞掉。
+	api.RegisterSelfRestartHook(func(reason string) {
+		// 这两条在运行期触发（slog 早已初始化），故走 observability 口径而非标准库 log，
+		// 不抬 log.Printf 存量基线（AGENTS.md 二 / 棘轮 cmd/ 盲区已于 #55 补齐）
+		observability.Warn(context.Background(), "看门狗请求自愈重启（转 SIGTERM 走优雅停机）", "reason", reason)
+		if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+			observability.Error(context.Background(), "向自身发送 SIGTERM 失败，进程将由 api 侧宽限期兜底硬退出", "err", err.Error())
+		}
+	})
+
 	go func() {
-		quit := make(chan os.Signal, 1)
-		signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 		sig := <-quit
 		log.Printf("收到退出信号 %v，正在优雅停机…", sig)
 		// ★ 停机顺序修正（2026-09-16 账务缺陷）：必须先 Shutdown 等在途请求排空，

@@ -9,10 +9,9 @@
  * SystemSettingsP.tsx · 职责说明
  * Tabs：告警与注册触达（AlertsP）｜ 邮件模板 ｜ 流程引擎 ｜ 协议签署 ｜
  *       审计日志 ｜ 运营策略（OpsP）｜ 模型与供应商（ModelsP）｜ 品牌与页脚（BrandP）
- * 2026-09-18（UI 融合）：Tabs 由 tdesign-react 换为 ui/langcross —— TDesign 的
- *   <Tabs><Tabs.TabPanel value label>子面板</Tabs.TabPanel></Tabs> 声明式写法，改为
- *   langcross 的「items 声明表头 + activeKey 受控 + 子面板在外部按 tab 条件挂载」。
- *   本文件只做 tab 编排，不含任何数据请求，因此各子面板逻辑未受影响。
+ * 2026-09-18（UI 融合）：Tabs 采用 ui/langcross 的「items 声明表头 + activeKey
+ *   受控 + 子面板在外部按 tab 条件挂载」写法（不同于旧组件库的 <Tabs.TabPanel>
+ *   子面板内联写法）。本文件只做 tab 编排，不含任何数据请求，因此各子面板逻辑未受影响。
  */
 
 import { useState } from 'react'

@@ -29,7 +29,7 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 	// 查询当前用户的站内信列表（最新在前，最多 100 条）
 	list, err := s.Store.ListNotifications(u.ID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "notifications": list})
@@ -44,7 +44,7 @@ func (s *Server) handleNotificationsUnread(w http.ResponseWriter, r *http.Reques
 	}
 	n, err := s.Store.UnreadCount(u.ID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "unread": n})
@@ -65,7 +65,7 @@ func (s *Server) handleNotificationsRead(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.Store.MarkNotificationRead(req.ID, u.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
@@ -79,7 +79,7 @@ func (s *Server) handleNotificationsReadAll(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := s.Store.MarkAllNotificationsRead(u.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})

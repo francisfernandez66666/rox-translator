@@ -16,16 +16,26 @@ import (
 )
 
 // UserTask 任务中心任务定义。
+// ★ #33（2026-09-21）：在人工领取（GrantMode=manual）之外补齐事件自动发放字段，
+// 老行默认 manual/daily，历史任务行为不变。
 type UserTask struct {
 	ID           int64  `json:"id"`            // 任务 ID
 	TaskType     string `json:"task_type"`     // daily=每日任务 / once=一次性任务
 	Title        string `json:"title"`         // 任务标题
 	Description  string `json:"description"`   // 任务说明（可空）
-	RewardTokens int64  `json:"reward_tokens"` // 奖励 token 数（永久余额）
+	RewardTokens int64  `json:"reward_tokens"` // 奖励 token 数（内部记账口径；对外一律折成积分）
 	Enabled      int    `json:"enabled"`       // 1=启用（用户可见可领取）0=停用（隐藏）
 	SortOrder    int    `json:"sort_order"`    // 排序（越小越靠前）
 	CreatedAt    string `json:"created_at"`    // 创建时间 RFC3339
 	UpdatedAt    string `json:"updated_at"`    // 更新时间 RFC3339
+
+	TaskKey     string `json:"task_key"`     // 事件任务标识（空=超管自定义手工任务）
+	GrantMode   string `json:"grant_mode"`   // manual=用户点击领取 / auto=事件自动发放
+	Period      string `json:"period"`       // daily|weekly|once|event（决定去重键粒度）
+	ValidDays   int    `json:"valid_days"`   // >0=临时积分有效天数；0=永久积分
+	StackExpiry int    `json:"stack_expiry"` // 1=到期叠加（日/周叠加），0=固定 now+valid_days
+	CapPerDay   int    `json:"cap_per_day"`  // 每日发放上限（0=不限）
+	CapPerWeek  int    `json:"cap_per_week"` // 每周发放上限（0=不限）
 }
 
 // UserTaskClaim 用户领取记录。
@@ -44,9 +54,29 @@ type UserTaskView struct {
 	UserTask
 	Claimed   bool   `json:"claimed"`    // 是否已领取（daily=今日；once=曾领取）
 	ClaimedAt string `json:"claimed_at"` // 最近领取时间（空=未领取）
+	// ★ #33：事件自动发放任务的本期进度（手工领取任务为 nil）
+	Reward *TaskRewardStat `json:"reward,omitempty"`
+}
+
+// taskCols 任务定义统一查询列（新增列只改这一处，避免 SELECT/Scan 漂移）。
+const taskCols = `id, task_type, title, COALESCE(description,''), reward_tokens, enabled, sort_order,
+	COALESCE(created_at,''), COALESCE(updated_at,''), COALESCE(task_key,''), COALESCE(grant_mode,'manual'),
+	COALESCE(period,'daily'), COALESCE(valid_days,0), COALESCE(stack_expiry,1), COALESCE(cap_per_day,0), COALESCE(cap_per_week,0)`
+
+// scanTask 把一行任务定义扫描进结构体。
+func scanTask(sc interface{ Scan(dest ...any) error }) (*UserTask, error) {
+	var t UserTask
+	err := sc.Scan(&t.ID, &t.TaskType, &t.Title, &t.Description, &t.RewardTokens, &t.Enabled, &t.SortOrder,
+		&t.CreatedAt, &t.UpdatedAt, &t.TaskKey, &t.GrantMode, &t.Period, &t.ValidDays, &t.StackExpiry,
+		&t.CapPerDay, &t.CapPerWeek)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
 }
 
 // TasksMigrate 建表与索引（幂等，随 Store.New 迁移链调用）。
+// ★ #33 的事件发放列/表由 TaskRewardMigrate 补齐（同一迁移链、紧随其后）。
 func (s *Store) TasksMigrate() {
 	d := db.CurrentDialect()
 	db.Exec(s.db, d, `CREATE TABLE IF NOT EXISTS user_tasks (
@@ -75,22 +105,22 @@ func (s *Store) TasksMigrate() {
 // ListUserTasks 列出全部任务定义（超管后台，含停用项，按 sort_order 排序）。
 func (s *Store) ListUserTasks() []*UserTask {
 	rows, err := db.Query(s.db, db.CurrentDialect(),
-		"SELECT id, task_type, title, COALESCE(description,''), reward_tokens, enabled, sort_order, COALESCE(created_at,''), COALESCE(updated_at,'') FROM user_tasks ORDER BY sort_order, id")
+		"SELECT "+taskCols+" FROM user_tasks ORDER BY sort_order, id")
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
 	var out []*UserTask
 	for rows.Next() {
-		var t UserTask
-		if err := rows.Scan(&t.ID, &t.TaskType, &t.Title, &t.Description, &t.RewardTokens, &t.Enabled, &t.SortOrder, &t.CreatedAt, &t.UpdatedAt); err == nil {
-			out = append(out, &t)
+		if t, e := scanTask(rows); e == nil {
+			out = append(out, t)
 		}
 	}
 	return out
 }
 
 // SaveUserTask 新增或更新任务定义（id=0 新增，>0 更新）。
+// 事件发放列（grant_mode/period/valid_days/cap_*）为空时落默认值，保证手工任务行为不变。
 func (s *Store) SaveUserTask(t *UserTask) (int64, error) {
 	now := time.Now().Format(time.RFC3339)
 	if t.TaskType != "once" {
@@ -102,22 +132,56 @@ func (s *Store) SaveUserTask(t *UserTask) (int64, error) {
 	if t.SortOrder < 0 {
 		t.SortOrder = 0
 	}
+	if t.GrantMode != "auto" {
+		t.GrantMode = "manual"
+	}
+	switch t.Period {
+	case "weekly", "once", "event":
+	default:
+		t.Period = "daily"
+	}
+	if t.ValidDays < 0 {
+		t.ValidDays = 0
+	}
+	if t.CapPerDay < 0 {
+		t.CapPerDay = 0
+	}
+	if t.CapPerWeek < 0 {
+		t.CapPerWeek = 0
+	}
+	if t.StackExpiry < 0 {
+		t.StackExpiry = 1 // 显式 0=不叠加（到期固定 now+valid_days）；负值回落默认叠加
+	}
 	d := db.CurrentDialect()
 	if t.ID > 0 {
 		_, err := db.Exec(s.db, d,
-			"UPDATE user_tasks SET task_type=?, title=?, description=?, reward_tokens=?, enabled=?, sort_order=?, updated_at=? WHERE id=?",
-			t.TaskType, t.Title, t.Description, t.RewardTokens, t.Enabled, t.SortOrder, now, t.ID)
+			"UPDATE user_tasks SET task_type=?, title=?, description=?, reward_tokens=?, enabled=?, sort_order=?, updated_at=?, task_key=?, grant_mode=?, period=?, valid_days=?, stack_expiry=?, cap_per_day=?, cap_per_week=? WHERE id=?",
+			t.TaskType, t.Title, t.Description, t.RewardTokens, t.Enabled, t.SortOrder, now,
+			t.TaskKey, t.GrantMode, t.Period, t.ValidDays, t.StackExpiry, t.CapPerDay, t.CapPerWeek, t.ID)
 		return t.ID, err
 	}
 	// ★ 2026-09-12 PG 方言修复：lib/pq 不支持 LastInsertId（恒返 0），
 	// 建任务返回 id=0 → 前台无法领取，任务中心在 PG 下整体不可用。改经 InsertID（RETURNING）。
 	id, err := db.InsertID(s.db, d, "id",
-		"INSERT INTO user_tasks (task_type, title, description, reward_tokens, enabled, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
-		t.TaskType, t.Title, t.Description, t.RewardTokens, t.Enabled, t.SortOrder, now, now)
+		"INSERT INTO user_tasks (task_type, title, description, reward_tokens, enabled, sort_order, created_at, updated_at, task_key, grant_mode, period, valid_days, stack_expiry, cap_per_day, cap_per_week) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		t.TaskType, t.Title, t.Description, t.RewardTokens, t.Enabled, t.SortOrder, now, now,
+		t.TaskKey, t.GrantMode, t.Period, t.ValidDays, t.StackExpiry, t.CapPerDay, t.CapPerWeek)
 	if err != nil {
 		return 0, err
 	}
 	return id, nil
+}
+
+// GetUserTask 按 ID 读取单条任务定义（不存在返回 nil）。超管保存前的原值兜底用。
+func (s *Store) GetUserTask(id int64) *UserTask {
+	if id <= 0 {
+		return nil
+	}
+	t, err := scanTask(db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+taskCols+" FROM user_tasks WHERE id=?", id))
+	if err != nil {
+		return nil
+	}
+	return t
 }
 
 // DeleteUserTask 删除任务定义（同时清理其领取记录）。
@@ -130,8 +194,9 @@ func (s *Store) DeleteUserTask(id int64) error {
 	return err
 }
 
-// ListUserTaskViews 用户视角任务列表：启用任务 + 本人领取状态。
-// daily：今日已领置 claimed；once：曾领取置 claimed。
+// ListUserTaskViews 用户视角任务列表：启用任务 + 本人领取/发放状态。
+// 手工任务（grant_mode=manual）：daily 查今日、once 查 once 标记 → claimed；
+// ★ #33 事件任务（grant_mode=auto）：claimed 取本周期是否已自动发放，并附周期进度 reward。
 func (s *Store) ListUserTaskViews(uid int64) []*UserTaskView {
 	tasks := s.ListUserTasks()
 	if len(tasks) == 0 {
@@ -144,6 +209,21 @@ func (s *Store) ListUserTaskViews(uid int64) []*UserTaskView {
 			continue // 停用任务用户不可见
 		}
 		v := &UserTaskView{UserTask: *t}
+		if t.GrantMode == "auto" {
+			st := s.TaskRewardStatOf(uid, t.ID)
+			v.Reward = &st
+			switch t.Period {
+			case "once":
+				v.Claimed = st.TotalCount > 0
+			case "event":
+				v.Claimed = false // 可叠加型（每位好友一次），无「已领完」终态
+			default: // daily / weekly
+				v.Claimed = st.TodayCount > 0
+			}
+			v.ClaimedAt = st.LastGranted
+			out = append(out, v)
+			continue
+		}
 		// 查询领取状态：daily 查今日，once 查 once 标记
 		var claimedAt string
 		_ = db.QueryRow(s.db, db.CurrentDialect(),
@@ -165,7 +245,8 @@ func (t *UserTask) claimDateKey(today string) string {
 }
 
 // ClaimUserTask 用户领取任务奖励（事务原子：去重校验 + 永久余额累加 + 领取流水）。
-// 返回：ok=是否领取成功（false=已领过/停用/奖励为 0），tokens=实际发放 token 数。
+// 返回：ok=是否领取成功（false=已领过/停用/奖励为 0/事件自动发放任务），tokens=实际发放 token 数。
+// ★ #33：grant_mode=auto 的任务由系统事件自动发放，不接受手工领取（避免双发）。
 func (s *Store) ClaimUserTask(uid, tid, taskID int64) (ok bool, tokens int64) {
 	d := db.CurrentDialect()
 	now := time.Now().Format(time.RFC3339)
@@ -176,12 +257,11 @@ func (s *Store) ClaimUserTask(uid, tid, taskID int64) (ok bool, tokens int64) {
 	}
 	defer tx.Rollback()
 	// 读取任务定义并校验启用
-	var t UserTask
-	if err := db.QueryRow(tx, d, "SELECT id, task_type, title, COALESCE(description,''), reward_tokens, enabled, sort_order, COALESCE(created_at,''), COALESCE(updated_at,'') FROM user_tasks WHERE id=?", taskID).
-		Scan(&t.ID, &t.TaskType, &t.Title, &t.Description, &t.RewardTokens, &t.Enabled, &t.SortOrder, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	t, err := scanTask(db.QueryRow(tx, d, "SELECT "+taskCols+" FROM user_tasks WHERE id=?", taskID))
+	if err != nil {
 		return false, 0
 	}
-	if t.Enabled != 1 || t.RewardTokens <= 0 {
+	if t.Enabled != 1 || t.RewardTokens <= 0 || t.GrantMode == "auto" {
 		return false, 0
 	}
 	key := t.claimDateKey(today)

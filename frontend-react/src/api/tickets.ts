@@ -13,7 +13,7 @@
  * - 通知中心：站内信列表、未读数量、标记已读
  */
 
-import { request, authHeaders, API_BASE, type AdminResp } from './core'
+import { request, authHeaders, API_BASE, handleUnauthorized, handleForbidden, ApiError, type AdminResp } from './core'
 
 /** 翻译工单信息结构：含编号/标题/状态/原文/目标语言/审批人等 */
 export interface Ticket {
@@ -133,13 +133,19 @@ export async function ticketDetail(id: number): Promise<TicketResp> {
 
 /** 下载工单结果文件（fetch→blob 触发保存，需鉴权头）；fmt='text' 仅下载译文纯文案(.md) */
 export async function ticketDownload(id: number, opts?: { fmt?: 'text'; fileId?: number }): Promise<void> {
+  // ★ §4.2-2：结果文件走 fetch→blob（需二进制响应，无法经 request() 的 JSON 出口），属正当裸用；
+  //   但 401/403 必须与统一 client 同源——复用 core 的 handleUnauthorized/handleForbidden，
+  //   不再像旧实现那样把越权当普通 Error 抛出、丢失登录态失效与权限提示语义。
   let url = `${API_BASE}/api/tickets/download?id=${id}`
   if (opts?.fmt) url += `&fmt=${encodeURIComponent(opts.fmt)}`
   if (opts?.fileId) url += `&file_id=${opts.fileId}`
   const r = await fetch(url, { headers: authHeaders() })
+  if (r.status === 401) handleUnauthorized(url)
   if (!r.ok) {
     let msg = `HTTP ${r.status}`
     try { msg = (await r.json()).message || msg } catch {}
+    // 403 越权：文案走统一解析器（本地化既有键）、附稳定码 FORBIDDEN，与 request() 口径一致
+    if (r.status === 403) throw new ApiError(handleForbidden(msg), 403, 'FORBIDDEN')
     throw new Error(msg)
   }
   // 从 Content-Disposition 提取文件名；无则用默认名
@@ -151,7 +157,8 @@ export async function ticketDownload(id: number, opts?: { fmt?: 'text'; fileId?:
   a.href = url2
   a.download = m ? m[1] : `ticket_${id}.xlsx`
   a.click()
-  URL.revokeObjectURL(url2)
+  // 延迟释放 blob：立即 revoke 会在部分浏览器取消尚未开始的下载（口径同 ChatWindow 导出）
+  setTimeout(() => URL.revokeObjectURL(url2), 5000)
 }
 
 /** 获取我的站内信列表 */

@@ -38,6 +38,13 @@ type conn struct {
 	c     net.Conn
 	r     *bufio.Reader
 	inUse bool
+	// dirty 标记「这条连接的字节流已不再可信」：写半途失败、或读到 IO/协议错误（Redis 的
+	// -ERR 错误回复不算，它是完整的一条回复，流仍对齐）。
+	// ★ 修复（2026-09-22，#56-④ 端到端测试实测发现）：此前 put 无任何健康判定，出错连接原样回池，
+	//   服务端只断开一次连接，坏连接就会随池轮转被反复取出，限流/锁/信号量在重启前持续降级为进程内；
+	//   数组解析中途出错还会把半截回复留在缓冲里，下一条命令读到上一条回复的尾巴（跨请求串值）。
+	//   现在脏连接一律 Close 不回池，下一条命令自动重建（失败一次即自愈）。
+	dirty bool
 }
 
 // New 创建客户端并预热 minIdle 条连接；addr 为空返回 nil（调用方降级进程内）。
@@ -92,8 +99,13 @@ func (c *Client) get() (*conn, error) {
 }
 
 // put 把用完的连接归还连接池；池满则直接关闭（避免闲置连接堆积）。
+// 脏连接（本次往返出过错）绝不回池：详见 conn.dirty 的说明。
 func (c *Client) put(cc *conn) {
 	if cc == nil {
+		return
+	}
+	if cc.dirty {
+		_ = cc.c.Close()
 		return
 	}
 	select {
@@ -181,7 +193,13 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	return out, e
 }
 
-// GetInt 读取整数（未命中/非整数返回 0）。
+// GetInt 读取整数计数（★ #42 更正 finding ⑤ 的失真注释，代码行为不变）：
+// 参数：ctx 控制本次命令；key 计数键。
+// 返回：
+//   - 键不存在 / 值为空串 → (0, nil)，即「未命中按 0 计」，调用方可直接用于限流比较；
+//   - 值不是合法整数（被别的实现写歪、或被手工 SET 成非数字）→ (0, *strconv.NumError)，
+//     **不会**静默当 0：限流把脏值当 0 等于放行全部请求，必须让调用方看到错误并按降级口径处理；
+//   - 连接/命令失败 → (0, err)。
 func (c *Client) GetInt(ctx context.Context, key string) (int64, error) {
 	s, err := c.Get(ctx, key)
 	if err != nil {
@@ -339,6 +357,8 @@ func (c *Client) RPop(ctx context.Context, key string) (string, error) {
 }
 
 // BLPop 阻塞弹出（信号量获取，带超时）；超时返回 ("", nil)。
+// 参数：ctx 控制等待上限；key 队列名；timeout 服务端阻塞秒数（写进 BLPOP 命令）。
+// 返回：弹出的元素值；无数据（服务端超时/ctx 到期）时为空串。
 func (c *Client) BLPop(ctx context.Context, key string, timeout time.Duration) (string, error) {
 	nc, err := c.dial()
 	if err != nil {
@@ -349,24 +369,18 @@ func (c *Client) BLPop(ctx context.Context, key string, timeout time.Duration) (
 	e := nc.do(ctx, func(r *bufio.Reader) error {
 		return nc.writeCmd("BLPOP", key, strconv.FormatFloat(timeout.Seconds(), 'f', 1, 64))
 	}, func(r *bufio.Reader) error {
+		// ★ #42（Redis 报告 finding ④）语义更正：readReply 对 RESP 数组的口径是
+		//   「递归解析各元素并返回最后一个非空元素」，因此 BLPOP 的 [key, val] 到这里**已经是 val**，
+		//   不是形如 "[key,val]" 的字符串。旧实现在此又补了一段 `if strings.HasPrefix(v, "[")` 的
+		//   「按逗号取第二段」解析：该分支对真数组回复恒不成立（死代码），
+		//   却会被**字面以 '[' 开头的元素值**命中（如队列消息 "[] 待办" 或 "[a,b] 片段"），
+		//   把用户数据按第一个逗号截断——静默改数据比死代码更糟。故整段删除，只按原值返回。
+		//   空串即超时：服务端 nil 多回复（*-1）与空数组都在 readReply 折成 ""。
 		v, err := nc.readReply()
 		if err != nil {
 			return err
 		}
-		// BLPOP 成功返回数组 [key, val]
-		if strings.HasPrefix(v, "[]") || v == "" {
-			return nil // 超时（空数组）
-		}
-		// 解析 [key, val]：简单取第二个元素
-		if strings.HasPrefix(v, "[") {
-			parts := strings.SplitN(v, ",", 2)
-			if len(parts) == 2 {
-				out = strings.TrimSpace(parts[1])
-				out = strings.TrimSuffix(strings.TrimPrefix(out, "\""), "\"")
-			}
-		} else {
-			out = v
-		}
+		out = v
 		return nil
 	})
 	if errors.Is(e, errTimeout) {
@@ -382,7 +396,17 @@ var errTimeout = errors.New("timeout")
 // do 在单条连接上执行一次完整的 RESP 读写（写命令→读回复），
 // 先按 ctx 截止时间设置 socket 超时，避免卡死；任一阶段出错即返回。
 func (cc *conn) do(ctx context.Context, write func(*bufio.Reader) error, read func(*bufio.Reader) error) error {
+	// ★ 已取消的 ctx 必须立即返回（2026-09-22，#56-④ 实测发现）：此前只靠 SetDeadline 传截止时间，
+	//   而「只有 cancel、无 deadline」的 ctx 会走到默认 5 秒兜底超时——请求早就放弃了还白占 5 秒，
+	//   高并发降级场景下等于把 Redis 故障放大成线程堆积。此时尚未发出任何字节，流仍对齐，
+	//   故**不**置 dirty（连接可以复用）。
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := cc.c.SetDeadline(deadline(ctx)); err != nil {
+		// SetDeadline 失败只有「连接已被关闭」这一类原因（含本地 Close 与对端断开后的
+		// 句柄失效）：这条连接已经废了，标脏交给 put 丢弃、由 get 重建。
+		cc.dirty = true
 		return err
 	}
 	if err := write(cc.r); err != nil {
@@ -421,17 +445,29 @@ func (cc *conn) writeCmd(cmd string, args ...string) error {
 		writeBulk(a)
 	}
 	_, err := cc.c.Write([]byte(sb.String()))
+	if err != nil {
+		// 写失败可能只送出一半命令：服务端会把它当成一条完整命令回包，
+		// 之后所有读取都会错一位 ⇒ 连接必须丢弃。
+		cc.dirty = true
+	}
 	return err
 }
 
 // readReply 读取一条 RESP 回复，返回字符串形态（整型/状态/批量均转字符串；错误返回 error）。
+//
+// 脏连接判定（★ 2026-09-22 修复，见 conn.dirty）：只有 IO/协议畸形错误才置 dirty。
+// 服务端的 -ERR 错误回复是**一条完整回复**（字节流仍对齐），连接可以继续用；
+// 而读到一半失败（长度声明大于实际内容、数组元素出错、未知类型字节…）会让后续读取全部错位，
+// 必须丢弃连接，否则下一条命令会读到上一条回复的尾巴。
 func (cc *conn) readReply() (string, error) {
 	line, err := cc.r.ReadString('\n')
 	if err != nil {
+		cc.dirty = true
 		return "", err
 	}
 	line = strings.TrimRight(line, "\r\n")
 	if len(line) == 0 {
+		cc.dirty = true
 		return "", fmt.Errorf("redis: 空响应")
 	}
 	switch line[0] {
@@ -442,6 +478,7 @@ func (cc *conn) readReply() (string, error) {
 	case '$':
 		n, err := strconv.Atoi(line[1:])
 		if err != nil {
+			cc.dirty = true
 			return "", err
 		}
 		if n == -1 {
@@ -449,12 +486,14 @@ func (cc *conn) readReply() (string, error) {
 		}
 		buf := make([]byte, n+2)
 		if _, err := io.ReadFull(cc.r, buf); err != nil {
+			cc.dirty = true
 			return "", err
 		}
 		return string(buf[:n]), nil
 	case '*':
 		n, err := strconv.Atoi(line[1:])
 		if err != nil {
+			cc.dirty = true
 			return "", err
 		}
 		if n <= 0 {
@@ -465,6 +504,12 @@ func (cc *conn) readReply() (string, error) {
 		for i := 0; i < n; i++ {
 			v, err := cc.readReply()
 			if err != nil {
+				// 元素出错即停止读剩余元素：若不是最后一个（i < n-1），缓冲里就留下了
+				// 本条回复未读的尾巴 ⇒ 下一条命令会读到它（跨请求串值），连接必须丢弃。
+				// 最后一个元素出错则流仍对齐（-ERR 本身是一条完整回复），可以回池。
+				if i < n-1 {
+					cc.dirty = true
+				}
 				return "", err
 			}
 			if v != "" {
@@ -475,6 +520,8 @@ func (cc *conn) readReply() (string, error) {
 	case '-':
 		return "", fmt.Errorf("redis error: %s", line[1:])
 	default:
+		// 未知类型字节：无法得知该回复占多少字节，流已不可对齐 ⇒ 丢弃连接。
+		cc.dirty = true
 		return "", fmt.Errorf("redis: 未知响应 %q", line)
 	}
 }

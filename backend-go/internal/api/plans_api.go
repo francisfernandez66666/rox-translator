@@ -17,12 +17,13 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"translator/internal/db"
 
+	"translator/internal/observability"
 	"translator/internal/store"
 )
 
@@ -33,7 +34,7 @@ func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 	// 查询所有上架的商业包
 	pkgs, err := s.Store.ListEnabledCommercialPackages()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days（旧键 trial_sentences 已下线）
@@ -59,6 +60,7 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 	}
 	tid := s.effTenant(r, u)
 	var pkgCode, subAt, pkgExpires string
+	autoRenew := false
 	grants, permanent, tokens, approx := int64(0), int64(0), int64(0), int64(0)
 	// 平台上下文（tid<=0）无计费概念：余额返回 0
 	if tid > 0 {
@@ -68,6 +70,7 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 			pkgCode = perms.PackageCode
 			subAt = perms.SubscribedAt
 			pkgExpires = perms.PackageExpires
+			autoRenew = perms.AutoRenew // ★ #41 自动续费开关（订阅页开关初值）
 		}
 	}
 	payMode := "mock"
@@ -98,6 +101,7 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		"package_code":             pkgCode,
 		"subscribed_at":            subAt,
 		"package_expires":          pkgExpires,
+		"auto_renew":               autoRenew, // ★ #41：订阅页自动续费开关初值
 		"pay_mode":                 payMode,
 		// ★ USDT（2026-09-15）：收银台渠道显隐依据（仅开关态，地址/汇率等敏感配置不下发公共口）
 		"usdt_enabled": s.Store.GetUSDTCfg().Enabled,
@@ -111,7 +115,7 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 				if d.OrgID == u.OrgID {
 					resp["org_budget"] = map[string]interface{}{
 						"org_id": d.OrgID, "name": d.Name,
-						"points_limit": s.Store.PointsFromTokens(d.TokenLimit),
+						"points_limit":           s.Store.PointsFromTokens(d.TokenLimit),
 						"points_used_this_month": s.Store.PointsFromTokens(d.UsedThisMonth),
 					}
 				}
@@ -128,13 +132,14 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
 		Code      string `json:"code"`       // 商业包编码（必填）
 		Channel   string `json:"channel"`    // ★ USDT（2026-09-15）：可选 usdt（未开放时回运营配置渠道）
 		USDTChain string `json:"usdt_chain"` // 指定链（可空=配置首链）
+		Coupon    string `json:"coupon"`     // ★ 优惠券（#41）：券码，空=不用券
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code 不能为空"})
@@ -148,12 +153,12 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 	}
 	// 免费体验包不走支付：直接发放
 	if pkg.PType == store.PackageFree {
-		if _, err := s.Store.GrantPackageSentences(s.effTenant(r, u), pkg); err != nil {
-			log.Printf("[plans] 免费包发放失败 code=%s: %v", pkg.Code, err)
+		if _, err := s.Store.GrantPackageSentences(tid, pkg); err != nil {
+			observability.Error(r.Context(), "免费包发放失败", "code", pkg.Code, "err", err)
 			writeJSON(w, 200, map[string]interface{}{"success": false, "message": store.DebriefDBError(err)})
 			return
 		}
-		s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_free_claim", "packages", pkg.Code)
+		s.Store.LogAudit(tid, u.ID, "package_free_claim", "packages", pkg.Code)
 		writeJSON(w, 200, map[string]interface{}{"success": true, "message": "免费体验句数已发放"})
 		return
 	}
@@ -173,9 +178,22 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 	}
 	o, err := s.Store.CreatePackageOrder(tid, pkg, u.ID, channel)
 	if err != nil {
-		log.Printf("[plans] 订阅下单失败 code=%s tid=%d: %v", pkg.Code, tid, err)
+		observability.Error(r.Context(), "订阅下单失败", "code", pkg.Code, "tid", strconv.FormatInt(tid, 10), "err", err)
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": store.DebriefDBError(err)})
 		return
+	}
+	// ★ 优惠券（#41 商业洞三，2026-09-21）：建单后、渠道出码前核销，orders.amount_money 直接
+	//   改写为折后实付 → 回调金额核对/退款/开票三条链路自动对齐，无需折扣专用分支。
+	//   注意只改金额，不改 amount_tokens/句数（那是商品数量，打折的应该是钱不是货）。
+	if code := store.NormalizeCouponCode(req.Coupon); code != "" {
+		paid, disc, cerr := s.couponApply(o.ID, tid, code, store.CouponKindSubscribe, o.AmountMoney)
+		if cerr != nil {
+			s.replyCouponFailure(w, r, tid, u.ID, o.OrderNo, code, cerr)
+			return
+		}
+		o.AmountMoney = paid
+		s.Store.LogAudit(tid, u.ID, "coupon_redeem", "orders",
+			o.OrderNo+" code="+code+" discount="+strconv.FormatFloat(disc, 'f', 2, 64))
 	}
 	// mock 模式：模拟支付自动到账并发放句数（测试/演示）
 	// ★ C18（2026-09-12）：确认失败错误传播 + 响应带真实状态（订单留 pending 可重试）
@@ -209,6 +227,18 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 			})
 			return
 		}
+	} else {
+		// ★ #41（2026-09-21）补收款空洞：pay_mode=sdk 时订阅单过去只落 pending、从不调渠道取码，
+		//   收银台弹窗因此永远没有二维码（只有 /api/pay/create 会取码）。现与充值单共用 payChannelQR，
+		//   同口径带有效期、渠道未就绪时明确报错（不回退 mock 废码），订单留 pending 可重试。
+		if _, _, cerr := s.payChannelQR(o, o.AmountMoney, "能言订阅套餐 "+pkg.Code); cerr != nil {
+			observability.Error(r.Context(), "订阅单渠道取码失败", "tid", strconv.FormatInt(tid, 10),
+				"order", o.OrderNo, "channel", o.Channel, "err", cerr.Error())
+			writeJSON(w, 200, map[string]interface{}{
+				"success": false, "message": payChannelQRErrorMessage(o.Channel, cerr), "order_no": o.OrderNo,
+			})
+			return
+		}
 	}
 	s.Store.LogAudit(tid, u.ID, "package_subscribe", "packages", pkg.Code)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "order": s.orderViewJSON(o)})
@@ -225,14 +255,24 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
-		Code string `json:"code"` // 新包编码（必填，付费包）
+		Code   string `json:"code"`   // 新包编码（必填，付费包）
+		Coupon string `json:"coupon"` // ★ #41：升级单不叠券——收到券码明确拒绝而非静默忽略
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code 不能为空"})
+		return
+	}
+	// ★ 升级单不叠券（#41 口径边界，2026-09-21）：升级应付已是「新包售价 − 旧包剩余价值抵扣」，
+	//   再叠一层券会让收银台预览（按整包价试算）与实付（按差额核销）两张皮，且促销与余额抵扣
+	//   双重让利无上限可守。故此处显式拒绝，而不是让前端以为券生效了。
+	if code := store.NormalizeCouponCode(req.Coupon); code != "" {
+		writeJSON(w, 200, map[string]interface{}{
+			"success": false, "message": "升级单已含旧包余额抵扣，不再叠加优惠券（券适用于新购与充值）",
+		})
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -249,7 +289,7 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 	// 计算旧包剩余价值抵扣（含校验：有生效订阅、目标高于当前付费包售价）
 	credit, err := s.Store.ComputeUpgradeCredit(tid, newPkg)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 支付渠道（与订阅一致）：sdk / static_qr / mock（默认 mock）
@@ -262,7 +302,7 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	o, err := s.Store.CreateUpgradeOrder(tid, newPkg, credit, u.ID, channel)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// mock 模式：模拟支付自动到账并发放入账
@@ -288,6 +328,16 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+	} else {
+		// ★ #41（2026-09-21）：升级单与订阅单同一收款空洞，同一修法（共用 payChannelQR）。
+		if _, _, cerr := s.payChannelQR(o, o.AmountMoney, "能言套餐升级 "+newPkg.Code); cerr != nil {
+			observability.Error(r.Context(), "升级单渠道取码失败", "tid", strconv.FormatInt(tid, 10),
+				"order", o.OrderNo, "channel", o.Channel, "err", cerr.Error())
+			writeJSON(w, 200, map[string]interface{}{
+				"success": false, "message": payChannelQRErrorMessage(o.Channel, cerr), "order_no": o.OrderNo,
+			})
+			return
+		}
 	}
 	s.Store.LogAudit(tid, u.ID, "package_upgrade", "packages", newPkg.Code+
 		fmt.Sprintf("（抵扣 ¥%.2f）", credit.CreditMoney))
@@ -310,7 +360,7 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRegisterIndustries(w http.ResponseWriter, r *http.Request) {
 	pkgs, err := s.Store.ListIndustries()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	seen := map[string]bool{}

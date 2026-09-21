@@ -92,7 +92,7 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 		}
 		// 部门管理员：目标包须在本部门及子部门内（部门包），或跨部门包须涵盖本部门（含子树/全公司仅超管租管）。
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 	}
@@ -271,12 +271,19 @@ func (s *Server) kbTempDir() string {
 	return dir
 }
 
-// saveUploadedFile 保存上传的 multipart 文件到上传目录。
+// saveUploadedFile 保存上传的 multipart 文件到上传目录（知识库表格口径：xlsx/xls/csv）。
 // 参数 r: HTTP 请求（含 "file" 表单字段）。返回: 保存后的文件路径或错误。
 // 文件名按 kb_<唯一名> 命名避免冲突。
 func (s *Server) saveUploadedFile(r *http.Request) (string, error) {
-	// 解析 multipart 表单（上限 20MB，仅允许 xlsx/xls/csv）
-	if err := parseUpload(r, kbUploadMax, kbExtWhitelist); err != nil {
+	return s.saveUploadedFileWith(r, kbExtWhitelist)
+}
+
+// saveUploadedFileWith 按调用方给定的扩展名白名单保存上传文件（★ #38：TMX 走自己的白名单）。
+// 参数 r: HTTP 请求（含 "file" 表单字段）；whitelist: 该入口允许的文件扩展名。
+// 返回: 保存后的文件路径或错误（错误原文含「不支持的文件类型」等可直接回显的提示）。
+func (s *Server) saveUploadedFileWith(r *http.Request, whitelist map[string]bool) (string, error) {
+	// 解析 multipart 表单（上限 20MB，扩展名按入参白名单）
+	if err := parseUpload(r, kbUploadMax, whitelist); err != nil {
 		return "", err
 	}
 	file, header, err := r.FormFile("file")
@@ -421,7 +428,7 @@ type kbRecognizeMeta struct {
 func (s *Server) handleRecognizeKB(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需租户管理员及以上（前台普通用户不再允许上传 KB）
 	if _, err := s.requireDeptAdmin(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 知识库未加载（未传入 -kb）时拒绝识别
@@ -573,7 +580,7 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需租户管理员及以上
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 知识库未加载时拒绝导入
@@ -616,7 +623,7 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	// 部门管理员：目标包须在本部门及子部门内（部门包），或跨部门包须涵盖本部门（含子树/全公司仅超管租管）。
 	// 复用后台维护权限口径（deptKBScope），保证导入与维护权限一致。
 	if err := s.deptKBScope(u, tid, pkg); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 
@@ -756,6 +763,9 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	//   2026-09-19：对外出参统一积分口径（内部仍按 token 记账，token 裸值不外发）。
 	reward := map[string]interface{}{}
 	if tid > 0 && added > 0 {
+		// ★ #33 任务系统：上传自己的知识库并解析成功 → +600 永久积分（终身一次、不叠加）。
+		// 与上面的字符计量奖励相互独立：那条是运营单价奖励，这条是任务中心长期任务。
+		s.grantTaskEvent(r, u.ID, store.TaskKeyKBUpload, "")
 		totalChars := int64(0)
 		for i := 0; i < len(records) && i < 100000; i++ {
 			for k, v := range records[i] {

@@ -43,6 +43,14 @@ var kbExtWhitelist = map[string]bool{
 	".csv":  true,
 }
 
+// ★ #38（2026-09-21 评审缺陷）：TMX 导入此前复用了 kbExtWhitelist，
+// 而白名单只有 xlsx/xls/csv —— 前端 KbP 的「导入 TMX」按钮 accept=".tmx,.xml" 选完文件
+// 必被后端拒（且错误被吞成「文件上传失败」），能力等于不存在。单列一份 TMX 白名单。
+var tmxExtWhitelist = map[string]bool{
+	".tmx": true,
+	".xml": true,
+}
+
 // 上传大小上限（字节）
 const (
 	translateUploadMax = 40 << 20 // 翻译文件 40MB（原 200MB，过大文件易撑爆 1.6G 内存服务器）

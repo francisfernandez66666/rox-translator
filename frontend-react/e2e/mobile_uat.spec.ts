@@ -82,7 +82,7 @@ test('移动端后台：侧边栏转抽屉（汉堡唤起/遮罩关闭/无溢出
 // 移动端工作台核对：输入栏可见、页面无水平溢出（验证 .chat-input-row 换行生效）
 test('移动端工作台：输入栏可换行、无横向溢出', async ({ page }) => {
   await login(page, 'home');
-  await page.waitForSelector('.chat-scroll, .app-header', { timeout: 30000 });
+  await page.waitForSelector('.cw-dialog, .app-header', { timeout: 30000 });
   await page.waitForTimeout(1500);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
   console.log('工作台水平溢出:', overflow);

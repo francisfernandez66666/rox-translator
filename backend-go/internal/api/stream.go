@@ -116,7 +116,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	// 空消息：返回系统问候语（不消耗配额）
 	if strings.TrimSpace(req.Message) == "" {
-		result := map[string]interface{}{"skill": "system", "reply": "你好！我是能言，可以帮你翻译多语言文本和文件。"}
+		result := map[string]interface{}{"skill": "system", "reply": "你好！我是能言，把要翻译的文本发给我就行。"}
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": result}))
 		if flusher != nil {
 			flusher.Flush()
@@ -172,6 +172,13 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	res := s.Engine.HandleText(ctx, req.Message, req.Options, prog)
+	// ★ P3 补齐（2026-09-22，E2E TF2 抓到）：即时翻译 SSE 收尾前同步冲刷计量缓冲。
+	//   此前本路径全程不 Flush（非流式 /api/chat、文件流、账单接口都有），用量只进内存
+	//   缓冲、等 2s ticker 才落库；而前端是在收到 done 帧后才刷新余额/今日已耗，
+	//   于是稳定读到落库前的旧值——用户表现为「翻译完余额不动，刷新页面才变」。
+	//   必须放在 done/error 终帧**之前**（而非 handler 返回前）：客户端的刷新与 handler
+	//   尾部并发，只有先落库再告知完成，才能保证那一次刷新看到的是新值。
+	billing.Flush()
 	// 推送完成进度（心跳在途：收尾帧同样走写锁序列化）
 	sseMu.Lock()
 	fmt.Fprint(w, sseEvent("progress", map[string]interface{}{"step": "完成", "done": 1, "total": 1, "percent": 100}))
@@ -187,6 +194,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		s.metrics.countTranslate("text", false)
 	} else {
 		s.metrics.countTranslate("text", true)
+		s.grantTranslateTask(r, tid) // ★ #33 任务系统：发起翻译奖励（日 ≤1、周 ≤5）
 		sseMu.Lock()
 		fmt.Fprint(w, sseEvent("done", map[string]interface{}{"result": res}))
 		sseMu.Unlock()
@@ -226,7 +234,7 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	}
 	// 解析 multipart 表单（上限 40MB，仅允许 docx/pptx/xlsx/pdf）
 	if err := parseUpload(r, translateUploadMax, translateExtWhitelist); err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		writeJSON(w, 400, map[string]string{"error": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 取上传文件
@@ -366,6 +374,7 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 		s.metrics.countTranslate("file", false)
 	} else {
 		s.metrics.countTranslate("file", true)
+		s.grantTranslateTask(r, tid) // ★ #33 任务系统：发起翻译奖励（日 ≤1、周 ≤5）
 		// ★ 归属登记（评审整改 C1）：产物可被 /api/download 按 tenant/user 校验
 		if u := s.authUser(r); u != nil && s.Store != nil {
 			for _, fp := range res.Files {
@@ -428,6 +437,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.metrics.countTranslate("text", false)
 	} else {
 		s.metrics.countTranslate("text", true)
+		s.grantTranslateTask(r, tid) // ★ #33 任务系统：发起翻译奖励（日 ≤1、周 ≤5）
 		// Webhook：翻译完成事件回调（异步投递）
 		s.dispatchTranslateWebhook(tid, "text", req.Message, res)
 	}
@@ -447,7 +457,7 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	}
 	// 解析 multipart 表单（上限 40MB，仅允许 docx/pptx/xlsx/pdf）
 	if err := parseUpload(r, translateUploadMax, translateExtWhitelist); err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		writeJSON(w, 400, map[string]string{"error": publicErrMessage(r.Context(), err)})
 		return
 	}
 	file, header, err := r.FormFile("file")
@@ -525,6 +535,7 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	res := s.Engine.HandleFile(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), mode), tenant.LangFromOptions(options)), savePath, options, nil, nil)
 	if res.Error == "" {
 		s.metrics.countTranslate("file", true)
+		s.grantTranslateTask(r, tid) // ★ #33 任务系统：发起翻译奖励（日 ≤1、周 ≤5）
 		// ★ 归属登记（评审整改 C1）
 		if u := s.authUser(r); u != nil && s.Store != nil {
 			for _, fp := range res.Files {

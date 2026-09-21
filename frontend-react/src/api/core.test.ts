@@ -1,6 +1,9 @@
 // ============================================================================
 // core.test.ts — API 基础设施回归（★ F11：E4 headers 合并 / E5 401 处理 /
 // 超时语义 / 统一错误码透传；另含 2026-09-14 multipart（FormData 不预设 Content-Type）回归）
+// ★ 2026-09-22 §4.2-11 盲区补齐：追加非 JSON 错误体容错、非 2xx 无 message 回退、
+//   handleForbidden 收口（未注册/注册两态）、bizErrorCode 双字段提取（code 优先）——
+//   这几条是「改回旧写法就静默退化、却无人报警」的高价值行为，务必常驻。
 // node 环境：先 stub sessionStorage/window，再动态 import core（模块顶层读 storage）。
 // ============================================================================
 import { beforeAll, describe, expect, it, vi } from 'vitest'
@@ -76,32 +79,57 @@ describe('api/core', () => {
     })
   })
 
-  it('E5：401 清 token 并跳登录一次（authRedirecting 去重）', async () => {
+  it('★ P0-6：401 清 token 并触发复位钩子（原地落登录、不再整页跳首页丢回跳）', async () => {
     core.setAuthToken('will-expire')
     expect(core.getAuthToken()).toBe('will-expire')
     fakeWindow.location.href = 'http://localhost/'
-    let redirectSeen = 0
-    vi.stubGlobal('fetch', async () => {
-      const r = jsonResponse({ success: false }, 401)
-      return r
-    })
+    let hookCalls = 0
+    core.setUnauthorizedHandler(() => { hookCalls++ })
+    vi.stubGlobal('fetch', async () => jsonResponse({ success: false }, 401))
     await expect(core.request('/api/me')).rejects.toBeTruthy()
-    redirectSeen = fakeWindow.location.href === '/' ? 1 : 0
     expect(core.getAuthToken()).toBe('')
-    expect(redirectSeen).toBe(1)
-    // 二次 401：token 仍清、不再重复跳转（去重标志）
-    fakeWindow.location.href = 'http://localhost/'
+    expect(hookCalls).toBe(1)
+    expect(fakeWindow.location.href, '不得再整页跳转（回跳目标=当前路径，由 Root 守卫原地出登录页）').toBe('http://localhost/')
+    // 二次 401：钩子幂等可重入（复位 user→null 无副作用），token 保持为空
     await expect(core.request('/api/me2')).rejects.toBeTruthy()
-    expect(fakeWindow.location.href).toBe('http://localhost/')
+    expect(hookCalls).toBe(2)
+    core.setUnauthorizedHandler(null) // 复位：后续用例不受钩子影响
   })
 
-  it('E5：登录接口自身 401 不触发跳转/清 token', async () => {
+  it('E5：登录接口自身 401 不清 token、不触发复位钩子', async () => {
     core.setAuthToken('keep-me')
+    let hookCalls = 0
+    core.setUnauthorizedHandler(() => { hookCalls++ })
     fakeWindow.location.href = 'http://localhost/'
     vi.stubGlobal('fetch', async () => jsonResponse({ success: false, message: '密码错误' }, 401))
     await expect(core.request('/api/auth/login', { method: 'POST' })).rejects.toBeTruthy()
     expect(core.getAuthToken()).toBe('keep-me')
+    expect(hookCalls).toBe(0)
     expect(fakeWindow.location.href).toBe('http://localhost/')
+  })
+
+  // 回归锁（★ §4.2-3 403 统一处理）：403 是与 401 语义不同的「已登录但越权」，
+  //   必须钉三件事——① 抛 ApiError(status=403, code=FORBIDDEN) 供调用方分支；
+  //   ② 不清登录态、不触发 401 复位钩子（用户仍在线，误清会把好用户踢下线）；
+  //   ③ 对外文案收口到 handleForbidden：注册解析器时用其结果，未注册时回落后端 message。
+  it('★ §4.2-3：403 抛 FORBIDDEN、不清登录态、文案走统一解析器（未注册时回落后端 message）', async () => {
+    core.setAuthToken('still-valid')
+    let unauthorizedCalls = 0
+    core.setUnauthorizedHandler(() => { unauthorizedCalls++ })
+    // 未注册解析器：对外文案回落后端 message
+    vi.stubGlobal('fetch', async () => jsonResponse({ success: false, message: '仅超管可操作' }, 403))
+    await expect(core.request('/api/admin/nuke')).rejects.toMatchObject({
+      name: 'ApiError', message: '仅超管可操作', code: 'FORBIDDEN', status: 403,
+    })
+    expect(core.getAuthToken(), '403 不得清登录态').toBe('still-valid')
+    expect(unauthorizedCalls, '403 不得触发 401 复位钩子').toBe(0)
+    // 注册解析器：文案统一收口到本地化既有键（这里用假解析器模拟 ToastBridge 注入）
+    core.setForbiddenCopyResolver(() => '无权限访问')
+    await expect(core.request('/api/admin/nuke')).rejects.toMatchObject({
+      message: '无权限访问', code: 'FORBIDDEN', status: 403,
+    })
+    core.setForbiddenCopyResolver(null) // 复位：后续用例不受解析器影响
+    core.setUnauthorizedHandler(null)
   })
 
   it('超时：timeoutMs 内未决 → 明确中文错误（区别于外部 abort）', async () => {
@@ -109,5 +137,54 @@ describe('api/core', () => {
       init.signal!.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))
     }))
     await expect(core.request('/slow', { timeoutMs: 20 })).rejects.toThrow(/超时/)
+  })
+
+  // 回归锁（§4.2-11 盲区补齐）：非 JSON 错误体容错——后端偶发返回 HTML 错误页/纯文本
+  //   （网关 502、栈溢出页等）时，response.json() 会抛，若不做兜底 request() 会把「解析失败」
+  //   当成未知异常冒泡，调用方拿不到可读 message。改坏表现：非 JSON 响应直接抛 SyntaxError。
+  it('非 JSON 错误体：回落「请求失败 (状态码): 原文」而非抛出 JSON 解析异常', async () => {
+    vi.stubGlobal('fetch', async () => ({
+      ok: false, status: 502,
+      json: async () => { throw new SyntaxError('Unexpected token <') },
+      text: async () => '<html>Bad Gateway</html>',
+    } as unknown as Response))
+    await expect(core.request('/api/x')).rejects.toMatchObject({
+      name: 'ApiError', status: 502,
+      // 回退链：json 失败 → text 原文拼进 message，且不得吞成 SyntaxError
+      message: '请求失败 (502): <html>Bad Gateway</html>',
+    })
+  })
+
+  // 非 2xx 但错误体是合法 JSON 且 message/error 皆缺：仍走 text 回退，不产生空 message。
+  it('错误体 JSON 无 message/error：回落到「请求失败 (码): 原文」不出现空文案', async () => {
+    vi.stubGlobal('fetch', async () => ({
+      ok: false, status: 400,
+      json: async () => ({ success: false }), // 无 message/error/code
+      text: async () => '{"success":false}',
+    } as unknown as Response))
+    await expect(core.request('/api/bad')).rejects.toMatchObject({
+      name: 'ApiError', status: 400, message: '请求失败 (400): {"success":false}',
+    })
+  })
+
+  // handleForbidden 是 403 对外文案的唯一收口：未注册解析器且后端无 message 时给固定兜底串，
+  //   注册后一律用解析器结果（忽略后端原文）。改坏表现：越权提示随各处后端文案漂移或出现空串。
+  it('handleForbidden：未注册回落固定兜底串、注册后统一取解析器结果', () => {
+    core.setForbiddenCopyResolver(null)
+    expect(core.handleForbidden('')).toBe('无权限访问该资源')
+    expect(core.handleForbidden('后端越权原文')).toBe('后端越权原文') // 未注册时用后端 message
+    core.setForbiddenCopyResolver((msg) => `本地化[${msg}]`)
+    expect(core.handleForbidden('后端越权原文'), '注册后一律走解析器（本地化既有键口径）').toBe('本地化[后端越权原文]')
+    core.setForbiddenCopyResolver(null)
+  })
+
+  // bizErrorCode：业务错误常以 HTTP 200 + success:false 下发，不抛异常，靠此从响应体取稳定码。
+  //   兼容 code / error_code 双字段且 code 优先。改坏表现：充值引导/限额提示因取不到码而失效。
+  it('bizErrorCode：优先 code、回落 error_code、非对象安全返回 undefined', () => {
+    expect(core.bizErrorCode({ code: 'INSUFFICIENT_BALANCE' })).toBe('INSUFFICIENT_BALANCE')
+    expect(core.bizErrorCode({ error_code: 'daily_quota_exceeded' })).toBe('daily_quota_exceeded')
+    expect(core.bizErrorCode({ code: 'a', error_code: 'b' }), 'code 优先于 error_code').toBe('a')
+    expect(core.bizErrorCode(null)).toBeUndefined()
+    expect(core.bizErrorCode('字符串')).toBeUndefined()
   })
 })

@@ -128,7 +128,7 @@ func (s *Server) handleOpenAPITaskCreate(w http.ResponseWriter, r *http.Request)
 	tid, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
-		writeTaskError(w, gateErrorCode(gateErr), gateErr.Error()+"。如余额不足请充值或升级套餐")
+		writeTaskError(w, gateErrorCode(gateErr), gateUserMessage(gateErr))
 		return
 	}
 	// 按 Content-Type 分流：JSON=文本任务；其余（multipart）=文件批量任务
@@ -176,6 +176,18 @@ func gateErrorCode(err error) string {
 		return string(errors.OpenAPIDailyQuota)
 	default:
 		return string(errors.OpenAPIRejected)
+	}
+}
+
+// gateUserMessage 生成配额闸门的对外文案（★ #40 评审缺陷：限流不得说成余额不足）。
+// 旧实现无条件在错误后拼「如余额不足请充值或升级套餐」，把 429（QPS/并发）也写成余额问题，
+// 误导接入方去充值而不是退避重试。这里复用 gateErrorCode 的同一套分类，只给余额/日额类补提示。
+func gateUserMessage(err error) string {
+	switch gateErrorCode(err) {
+	case string(errors.OpenAPIInsufficient), string(errors.OpenAPIDailyQuota):
+		return err.Error() + "。如余额不足请充值或升级套餐"
+	default:
+		return err.Error()
 	}
 }
 
@@ -663,7 +675,7 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 	_, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
-		writeTaskError(w, gateErrorCode(gateErr), gateErr.Error()+"。如余额不足请充值或升级套餐")
+		writeTaskError(w, gateErrorCode(gateErr), gateUserMessage(gateErr))
 		return
 	}
 	// ④ 解析请求体

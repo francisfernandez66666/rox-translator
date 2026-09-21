@@ -66,6 +66,9 @@ type Perms struct {
 	NotifiedExp1    bool   `json:"notified_exp1,omitempty"`      // 到期提醒 1 天档已发送（去重标记）
 	NotifiedExp3    bool   `json:"notified_exp3,omitempty"`      // ★ 体验台账到期前 3 天提醒已发送（去重标记；任务2.5）
 	NotifiedRenew3  bool   `json:"notified_renew3,omitempty"`    // ★ S7 续费 T-3 触达已发送（去重；续订成交复位）
+	// ★ 自动续费（#41 商业洞二，2026-09-21）：租户管理员开关。开启后到期前 T-3 自动创建
+	//   同包续费订单并通知管理员付款（免密代扣需与渠道另签周期扣款协议，见 api/pay_renew.go 说明）。
+	AutoRenew bool `json:"auto_renew,omitempty"`
 }
 
 // 租户状态常量

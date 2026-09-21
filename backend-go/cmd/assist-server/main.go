@@ -11,7 +11,8 @@
 //   - 统一观测：slog JSON 日志器（observability.NewLogger），与主服务同格式、带 trace_id；
 //   - 鉴权贯通：管理台 Token 优先取 env ASSIST_ADMIN_TOKEN（保底），回落到主库
 //     system_config.assist_admin_token（enc:v1: 密文，可经主后台轮换），
-//     用户不再需要在管理台手工粘贴 Token。
+//     用户不再需要在管理台手工粘贴 Token；★ P0-2（2026-09-21）起两级皆空拒绝启动，
+//     内置默认 token 已删除。
 //
 // =============================================
 package main
@@ -85,8 +86,15 @@ func main() {
 		slog.Warn("assist seed 跳过", "err", err)
 	}
 
-	// ★ 改造 1A：管理台 Token 解析链 env → 主库 system_config（密文）→ 默认值
+	// ★ 改造 1A：管理台 Token 解析链 env → 主库 system_config（密文）
+	// ★ P0-2（2026-09-21）：内置默认 token 已删除——两级解析均为空时拒绝启动。
+	// 空 Token 若放行，guard 的常数时间比较会把「空请求头」误判为合法（"" == ""），
+	// 等于管理面无鉴权裸奔，故缺失必须 fail-fast 而非静默降级。
 	adminToken, tokenSrc := resolveAdminToken(cfg)
+	if strings.TrimSpace(adminToken) == "" {
+		slog.Error("assist 管理台 Token 未配置：请设 ASSIST_ADMIN_TOKEN 或在主库 system_config 配置 assist_admin_token，拒绝启动")
+		os.Exit(1)
+	}
 
 	srv := api.NewServer(db, eng, adminToken, cfg.CORSOrigin)
 	slog.Info("assist 服务启动",
@@ -120,13 +128,14 @@ func buildLLM(cfg *config.Config) *llm.Client {
 
 // resolveAdminToken 解析生效的管理台 Token（★ 改造 1A）。
 // 优先级：env ASSIST_ADMIN_TOKEN（部署侧保底）→ 主库 system_config.assist_admin_token
-// （enc:v1: 密文，与主后台 /api/admin/assist/token 同源，可在后台轮换）→ 内置默认值。
-// 参数：cfg=服务配置。返回：Token 明文与来源标识（env/db/default）。
+// （enc:v1: 密文，与主后台 /api/admin/assist/token 同源，可在后台轮换）。
+// ★ P0-2（2026-09-21）：内置默认值已删除，两级皆空返回 ""，由 main 启动期拒绝。
+// 参数：cfg=服务配置。返回：Token 明文与来源标识（env/db/none）。
 func resolveAdminToken(cfg *config.Config) (string, string) {
 	if v := strings.TrimSpace(os.Getenv("ASSIST_ADMIN_TOKEN")); v != "" {
 		return v, "env"
 	}
-	// 主库可能尚未初始化（或未配置路径）：读不到就回落到内置默认值，不阻断启动
+	// 主库可能尚未初始化（或未配置路径）：读不到返回空串，由调用方拒绝启动
 	mainDBPath := strings.TrimSpace(cfg.MainDBPath)
 	if mainDBPath == "" {
 		mainDBPath = strings.TrimSpace(os.Getenv("MAIN_DB"))
@@ -136,7 +145,7 @@ func resolveAdminToken(cfg *config.Config) (string, string) {
 			return tok, "db"
 		}
 	}
-	return cfg.AdminToken, "default"
+	return "", "none" // ★ P0-2：不再有内置默认值，空即由启动期拒绝
 }
 
 // readMainDBAdminToken 只读方式打开主服务 SQLite，读取并解密 assist_admin_token。

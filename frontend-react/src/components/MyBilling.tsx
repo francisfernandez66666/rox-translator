@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import { fmtPoints } from '@/utils/points' // ★ S1 积分展示
 import { Button, Tabs } from '@/ui/langcross/src'
 import { t } from '@/i18n'
+import { runGuarded } from '@/lib/runGuarded' // ★ #42：明细加载失败必须有可见出口（见各 Tab 的取数注释）
 import {
   myOverview, myOrders, myLedger, myRewards, myInvoices,
   type OverviewResp, type MyOrder, type MyLedgerRow, type MyReward, type MyInvoice,
@@ -21,7 +22,15 @@ import { BalancePanel } from './selfservice'
 // ---------- 用量趋势图（近 30 天，UTC 日；SVG 柱状无第三方依赖） ----------
 function TrendCard() {
   const [ov, setOv] = useState<OverviewResp | null>(null)
-  useEffect(() => { void myOverview().then((r) => { if (r.success) setOv(r) }).catch(() => { /* 静默 */ }) }, [])
+  // ★ #42（前端坏味道：数据加载的空 catch）：旧写法 `.catch(() => {/* 静默 */})` 把网络/鉴权错误
+  //   整口吞掉，趋势图于是按「全月零消耗」画出来——用户看到的是「我这个月没用量」，而不是「取数失败」，
+  //   属于最伤的一种误导。现走 runGuarded 弹后端原文（不新增 i18n 键），成功路径与旧实现完全一致。
+  useEffect(() => {
+    void (async () => {
+      const r = await runGuarded(() => myOverview())
+      if (r?.success) setOv(r)
+    })()
+  }, [])
   // 30 与后端 MyDailyUsage(tid, uid, 30) 的窗口保持一致
   const days = 30
   // 后端按 GROUP BY 日聚合，只回「有 ledger 行」的日子；这里先转 Map 便于按日 O(1) 回查
@@ -61,10 +70,10 @@ function TrendCard() {
           <text x={0} y={H + 14} fontSize={10} fill="var(--lc-text-3)">{bars[0].date}</text>
           <text x={W} y={H + 14} fontSize={10} fill="var(--lc-text-3)" textAnchor="end">{bars[days - 1].date}</text>
         </svg>
-      ) : <div style={{ fontSize: 12, color: 'var(--lc-text-3)' }}>{t('ss2.loading')}</div>}
+      ) : <div style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{t('ss2.loading')}</div>}
       {/* 纵轴没有刻度，改为在底部标出「最高单日」当作唯一参照值。
           ⚠ 整月无消耗时 max 是除零兜底的 1，fmtPoints(1) 因「非零最小显示 1 积分」规则会显示 1 而不是 0 */}
-      <div style={{ fontSize: 12, color: 'var(--lc-text-4)', marginTop: 4 }}>{t('ss2.trendMax')}：{fmtPoints(max)} {t('ss2.unitPoints')}</div>
+      <div style={{ fontSize: 13, color: 'var(--lc-text-4)', marginTop: 4 }}>{t('ss2.trendMax')}：{fmtPoints(max)} {t('ss2.unitPoints')}</div>
     </div>
   )
 }
@@ -76,7 +85,7 @@ function Pager(props: { page: number; total: number; size: number; onPage: (p: n
   // ⚠ 调用处写死的 size=10 必须与 api/mybilling 里 page() 的默认 size 一致，否则页数与后端真实切片对不上
   const pages = Math.max(1, Math.ceil(props.total / props.size))
   return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 12 }}>
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 13 }}>
       <Button size="sm" variant="secondary" disabled={props.page <= 1} onClick={() => props.onPage(props.page - 1)}>{t('ss2.prev')}</Button>
       <span>{t('ss2.pageOf').replace('{p}', String(props.page)).replace('{n}', String(pages))}</span>
       <Button size="sm" variant="secondary" disabled={props.page >= pages} onClick={() => props.onPage(props.page + 1)}>{t('ss2.next')}</Button>
@@ -91,9 +100,13 @@ function OrdersTab() {
   const [status, setStatus] = useState('')
   const [rows, setRows] = useState<MyOrder[]>([])
   const [total, setTotal] = useState(0)
-  // page/status 任一变化都重新拉取：筛选交给后端做（分页必须先过滤再切页，前端过滤会算错 total）
+  // page/status 任一变化都重新拉取：筛选交给后端做（分页必须先过滤再切页，前端过滤会算错 total）。
+  // ★ #42：原 `.catch(() => {/* 静默 */})` 让取数失败长成一个空表 + 「暂无数据」，改走 runGuarded。
   useEffect(() => {
-    void myOrders(page, status).then((r) => { setRows(r.orders ?? []); setTotal(r.total ?? 0) }).catch(() => { /* 静默 */ })
+    void (async () => {
+      const r = await runGuarded(() => myOrders(page, status))
+      if (r) { setRows(r.orders ?? []); setTotal(r.total ?? 0) }
+    })()
   }, [page, status])
   return (
     <div>
@@ -133,8 +146,12 @@ function LedgerTab() {
   const [biz, setBiz] = useState('')
   const [rows, setRows] = useState<MyLedgerRow[]>([])
   const [total, setTotal] = useState(0)
+  // ★ #42：口径同 OrdersTab —— 取数失败原先静默成空表，现走 runGuarded 把后端原文弹出来。
   useEffect(() => {
-    void myLedger(page, biz).then((r) => { setRows(r.rows ?? []); setTotal(r.total ?? 0) }).catch(() => { /* 静默 */ })
+    void (async () => {
+      const r = await runGuarded(() => myLedger(page, biz))
+      if (r) { setRows(r.rows ?? []); setTotal(r.total ?? 0) }
+    })()
   }, [page, biz])
   return (
     <div>
@@ -172,7 +189,11 @@ function RewardsTab() {
   const [rows, setRows] = useState<MyReward[]>([])
   const [total, setTotal] = useState(0)
   useEffect(() => {
-    void myRewards(page).then((r) => { setRows(r.rewards ?? []); setTotal(r.total ?? 0) }).catch(() => { /* 静默 */ })
+    // ★ #42：原空 catch 让「拉取失败」和「这个月没有奖励」长成同一张空表
+    void (async () => {
+      const r = await runGuarded(() => myRewards(page))
+      if (r) { setRows(r.rewards ?? []); setTotal(r.total ?? 0) }
+    })()
   }, [page])
   return (
     <div>
@@ -202,7 +223,11 @@ function InvoicesTab() {
   const [rows, setRows] = useState<MyInvoice[]>([])
   const [total, setTotal] = useState(0)
   useEffect(() => {
-    void myInvoices(page).then((r) => { setRows(r.invoices ?? []); setTotal(r.total ?? 0) }).catch(() => { /* 静默 */ })
+    // ★ #42：同上，发票列表取数失败必须可见（用户会以为申请没落单）
+    void (async () => {
+      const r = await runGuarded(() => myInvoices(page))
+      if (r) { setRows(r.invoices ?? []); setTotal(r.total ?? 0) }
+    })()
   }, [page])
   return (
     <div>

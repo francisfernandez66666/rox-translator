@@ -59,7 +59,7 @@ func randomImportPassword() string {
 func (s *Server) handleUserImportTemplate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 生成带表头、说明行与示例行的模板工作簿
@@ -94,13 +94,13 @@ func (s *Server) handleUserImportTemplate(w http.ResponseWriter, r *http.Request
 func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	tid := s.effTenant(r, u)
 	// 解析并落盘上传的 xlsx（白名单与大小限制复用 KB 导入）
 	if err := parseUpload(r, kbUploadMax, map[string]bool{".xlsx": true, ".xls": true, ".csv": true}); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	file, header, err := r.FormFile("file")

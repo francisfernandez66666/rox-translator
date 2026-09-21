@@ -23,7 +23,7 @@ func (s *Server) handleAdminFunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := s.Store.FunnelStats(time.Now().AddDate(0, 0, -days))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "days": days, "rows": rows})

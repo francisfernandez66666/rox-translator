@@ -81,12 +81,12 @@ func (s *Server) handleKBPackGrants(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.requireKBPackPerm(r, u, "manage", pkgID); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		list, err := s.Store.ListKBPackGrants(s.kbTenant(r, u), pkgID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		writeJSON(w, 200, map[string]interface{}{"success": true, "grants": list})
@@ -108,7 +108,7 @@ func (s *Server) handleKBPackGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.requireKBPackPerm(r, u, "manage", req.PackID); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	tid := s.kbTenant(r, u)
@@ -135,7 +135,7 @@ func (s *Server) handleKBPackGrants(w http.ResponseWriter, r *http.Request) {
 		err = s.Store.GrantKBPack(tid, req.PackID, req.UserID, role)
 	}
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "kb_pack_grant", "kb_packages",
@@ -153,7 +153,7 @@ func (s *Server) handleKBPackMine(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := s.Store.ListKBPackGrantsByUser(s.effTenant(r, u), u.ID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if list == nil {

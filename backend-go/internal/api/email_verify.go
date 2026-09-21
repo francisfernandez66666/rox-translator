@@ -173,7 +173,7 @@ func (s *Server) handleEmailCode(w http.ResponseWriter, r *http.Request) {
 	}
 	// 人机验证：防脚本刷短信/邮件接口
 	if err := s.verifyCaptcha(r, req.CaptchaToken); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 单 IP 每日发码上限（复用注册护栏的窗口逻辑，独立计数键）

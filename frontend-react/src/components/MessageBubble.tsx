@@ -8,7 +8,7 @@
 //   组件用 memo 包裹，配合 useChat 的按帧合批把重渲染收敛到每帧一次。
 // ============================================================================
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { API_BASE, getAuthToken } from '@/api'
+import { API_BASE, getAuthToken, handleUnauthorized } from '@/api'
 import type { ChatMessage } from '@/types'
 import { t, tpl, useLang } from '@/i18n'
 import { renderMarkdown } from '@/lib/markdown' // ★ F11：渲染纯函数抽提至 lib/markdown
@@ -92,7 +92,16 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
   // 缓存已通过鉴权拉取的附件 blob URL，避免重复请求
   const [blobUrls, setBlobUrls] = useState<Record<string, string>>({})
   const aliveRef = useRef(true)
-  useEffect(() => () => { aliveRef.current = false }, [])
+  // ★ §4.2-1（2026-09-22 质量债批）：登记本气泡创建过的全部 objectURL，供卸载时集中 revoke。
+  //   URL.createObjectURL 生成的引用不随 React 卸载自动回收，旧实现 create 了从不 revoke，
+  //   每打开一条带附件的消息就永久泄漏一块 Blob 内存（随会话线性增长）。这里补 create↔revoke 配对。
+  const createdUrlsRef = useRef<Set<string>>(new Set())
+  useEffect(() => () => {
+    aliveRef.current = false
+    // 卸载释放：把本组件拉取过、仍挂在 state 里的 blob URL 全部收回并清空登记表
+    createdUrlsRef.current.forEach((u) => URL.revokeObjectURL(u))
+    createdUrlsRef.current.clear()
+  }, [])
 
   // 翻译检查点动效编排状态（移植 hero-stream.html 的 MOT 峰值逻辑，遵循 §2.4 原则 2/3/4/5/8/9）。
   // 只加视觉/动效，不改动任何后端字段解析、API、i18n 文案或进度数值来源。
@@ -102,15 +111,24 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
   const genRef = useRef(0)                        // generation 计数器：中止上一轮、避免叠加/竞态
 
   // 带 JWT 鉴权下载附件并转为 blob URL；失败返回空串
+  // ★ §4.2-2 正当豁免（组件侧 blob 拉取）：这里必须裸用 fetch —— 附件是二进制产物，
+  //   request() 的出口固定 response.json()，套上去会把文件流解析成乱码，故走 fetch→blob。
+  //   但裸用不等于裸奔：旧实现对 401 与其余非 2xx 一律 `return ''`，登录态过期时用户只看到
+  //   「附件图片打不开、点了没反应」，界面还停在已登录态（半登录状态）。现补 handleUnauthorized，
+  //   与 core.request 同口径清登录态并落回登录页。
   async function loadBlobUrl(fp: string): Promise<string> {
     if (blobUrls[fp]) return blobUrls[fp]
     try {
       const resp = await fetch(`${API_BASE}/api/download/?path=${encodeURIComponent(fp)}`, {
         headers: { Authorization: `Bearer ${getAuthToken()}` },
       })
+      if (resp.status === 401) { handleUnauthorized('/api/download/'); return '' }
       if (!resp.ok) return ''
       const url = URL.createObjectURL(await resp.blob())
-      if (aliveRef.current) setBlobUrls((prev) => ({ ...prev, [fp]: url }))
+      // 拉取期间组件可能已卸载：此时无人再 revoke，立即就地释放，避免登记到已销毁实例的集合里泄漏
+      if (!aliveRef.current) { URL.revokeObjectURL(url); return '' }
+      createdUrlsRef.current.add(url) // 纳入登记表，卸载时统一释放（create↔revoke 配对）
+      setBlobUrls((prev) => ({ ...prev, [fp]: url }))
       return url
     } catch { return '' }
   }
@@ -195,14 +213,26 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
   }, [message.data])
   const hasTranslations = transRows.length > 0
 
-  // 匹配模式徽章（Vue：按中文数据串判定 exact/fuzzy/semantic/online）
-  // 根据 message.data.mode 文本判定翻译命中模式并选择对应样式徽章
-  // 兜底走 online：mode 缺失/为空时也保证译文表头部有一枚徽章，不再返回 null 留空档
+  // 匹配模式徽章：结构化字段优先 + 兼容旧中文文案（★ §4.2-4 质量债批）
+  // WHY：旧判定纯靠 `mode.includes('精确命中')` 等中文串，后端 engine 里 res.Mode 是人读描述串，
+  //   改文案即静默退化为默认态；且实测后端语义命中下发的是「语义命中」，旧代码写死匹配「语义高相似」
+  //   ——两者从不相等，语义徽章此前是**恒不命中的死分支**（真语义命中被误判成 online）。
+  // 现口径：先看后端可能补的结构化枚举（match_type/mode_code：exact|fuzzy|semantic|model），命中即用；
+  //   否则回落中文串 includes 判定，并把后端真实值「语义命中」一并纳入（修上面那条死分支）。
+  // TODO(后端配合)：engine 的 TextTranslateData/TranslateResult 仅有 mode 字符串 + similarity，
+  //   无稳定 match_type 枚举；建议后端补 `match_type`（exact/fuzzy/semantic/model）以彻底摆脱文案耦合。
   const modeBadge = useMemo(() => {
-    const mode = String((message.data as any)?.mode || '')
-    if (mode.includes('精确命中')) return { label: t('msg.exactHit'), cls: 'mode-exact' }
-    if (mode.includes('模糊')) return { label: t('msg.fuzzy'), cls: 'mode-fuzzy' }
-    if (mode.includes('语义高相似')) return { label: t('msg.semantic'), cls: 'mode-semantic' }
+    const data = message.data as Record<string, unknown> | undefined
+    const code = String(data?.match_type ?? data?.mode_code ?? '').trim().toLowerCase()
+    const mode = String(data?.mode || '')
+    const isExact = code === 'exact' || mode.includes('精确命中')
+    const isFuzzy = code === 'fuzzy' || mode.includes('模糊')
+    // 语义：结构化枚举 / 后端真实文案「语义命中」/ 历史「语义高相似」/ 带 similarity 分数，任一即判语义
+    const isSemantic = code === 'semantic' || data?.similarity != null
+      || mode.includes('语义命中') || mode.includes('语义高相似')
+    if (isExact) return { label: t('msg.exactHit'), cls: 'mode-exact' }
+    if (isFuzzy) return { label: t('msg.fuzzy'), cls: 'mode-fuzzy' }
+    if (isSemantic) return { label: t('msg.semantic'), cls: 'mode-semantic' }
     return { label: t('msg.online'), cls: 'mode-model' }
   }, [message.data])
 
@@ -336,14 +366,14 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
                       const cur = !done && i === idx
                       return (
                         <span key={nm} style={{
-                          fontSize: 12, lineHeight: '16px', letterSpacing: '.02em',
+                          fontSize: 13, lineHeight: '16px', letterSpacing: '.02em',
                           color: cur ? '#E7E9EA' : lit ? '#C8CCD1' : '#3F444B',
                           display: 'inline-flex', alignItems: 'baseline', gap: 6,
                           transition: 'color .5s ease',
                         }}>
                           <i style={{
                             fontStyle: 'normal', fontFamily: '"Inter","SF Pro Text",Arial,sans-serif',
-                            fontSize: 10, fontWeight: 600,
+                            fontSize: 11, fontWeight: 600,
                             color: cur ? '#FFFFFF' : lit ? '#C8CCD1' : '#33383F',
                             transition: 'color .5s ease',
                           }}>{String(i + 1).padStart(2, '0')}</i>
@@ -367,8 +397,8 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
                     }} />
                   </div>
                   {/* 当前步骤文案 + 百分比 */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 12 }}>
-                    <span style={{ color: '#9AA0AA' }}>{done ? t('chat.cpDone') : (progress!.step || t('chat.cpTranslate'))}</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 13 }}>
+                    <span style={{ color: 'var(--lc-text-2)' }}>{done ? t('chat.cpDone') : (progress!.step || t('chat.cpTranslate'))}</span>
                     <span style={{ color: '#E7E9EA', fontFamily: '"JetBrains Mono",monospace', fontWeight: 600 }}>{pct}%</span>
                   </div>
                 </div>
@@ -398,7 +428,7 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
             {/* 反馈入口：仅对翻译结果 */}
             <div className="msg-feedback-row">
               <button type="button" className="msg-fb-btn" title={t('fb.entryTip')} onClick={() => onFeedback?.(message)}
-                      style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 12, color: '#E7E9EA', cursor: 'pointer' }}>
+                      style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 13, color: '#E7E9EA', cursor: 'pointer' }}>
                  {t('fb.entry')}
               </button>
             </div>
@@ -413,12 +443,12 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
           <div className="msg-srcbar" style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 6 }}>
             {!!source && (
               <details>
-                <summary style={{ fontSize: 12, color: '#889', cursor: 'pointer' }}>{t('msg.showSrc')}</summary>
-                <div dir="auto" style={{ fontSize: 12, color: '#667', whiteSpace: 'pre-wrap', marginTop: 4, padding: '4px 8px', background: 'rgba(128,128,128,.08)', borderRadius: 4 }}>{source}</div>
+                <summary style={{ fontSize: 13, color: '#889', cursor: 'pointer' }}>{t('msg.showSrc')}</summary>
+                <div dir="auto" style={{ fontSize: 13, color: '#667', whiteSpace: 'pre-wrap', marginTop: 4, padding: '4px 8px', background: 'rgba(128,128,128,.08)', borderRadius: 4 }}>{source}</div>
               </details>
             )}
             {!!message.content && (
-              <button type="button" aria-label={t('msg.copy')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 12, color: '#E7E9EA', cursor: 'pointer' }}
+              <button type="button" aria-label={t('msg.copy')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 13, color: '#E7E9EA', cursor: 'pointer' }}
                       onClick={() => { void navigator.clipboard?.writeText(message.content || ''); setCopied(true); window.setTimeout(() => setCopied(false), 1500) }}>
                 {copied ? t('msg.copied') : t('msg.copy')}
               </button>

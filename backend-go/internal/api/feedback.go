@@ -123,7 +123,7 @@ func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// 创建反馈记录
 	if err := s.Store.CreateFeedback(f); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 告警触达（复用告警面板/邮件/群机器人链路）
@@ -150,7 +150,7 @@ func truncateRunes(s string, n int) string {
 func (s *Server) handleAdminFeedbackResolve(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -212,7 +212,7 @@ func (s *Server) handleFeedbackList(w http.ResponseWriter, r *http.Request) {
 		list, err = s.Store.ListFeedbacksByUser(u.ID, status)
 	}
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if list == nil {

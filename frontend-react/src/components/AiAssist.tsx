@@ -191,32 +191,32 @@ export default function AiAssist() {
           border-bottom:1.2px solid #2A2F3A}
         .na-head-ic{width:28px;height:28px;border-radius:9px;background:#0A0B0D;border:1.2px solid #464C58;
           display:flex;align-items:center;justify-content:center;color:#E7E9EA;flex:none}
-        .na-head .na-sub{font-size:11px;color:#878D95;line-height:1.3}
-        .na-close{margin-left:auto;background:none;border:1.2px solid #464C58;color:#9AA0AA;
+        .na-head .na-sub{font-size:12px;color:var(--lc-text-3);line-height:1.3}
+        .na-close{margin-left:auto;background:none;border:1.2px solid #464C58;color:var(--lc-text-2);
           width:26px;height:26px;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:none}
         .na-list{flex:1;overflow-y:auto;padding:14px 12px;background:#0E1014;display:flex;flex-direction:column;gap:12px}
         .na-row{display:flex}
         .na-row.me{justify-content:flex-end}
-        .na-bubble{max-width:82%;padding:9px 12px;border-radius:12px;font-size:13.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word}
+        .na-bubble{max-width:82%;padding:9px 12px;border-radius:12px;font-size:14.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word}
         .na-row.ai .na-bubble{background:#0A0B0D;border:1.2px solid #31363D;color:#C8CCD1;border-top-left-radius:4px}
         .na-row.me .na-bubble{background:#E7E9EA;color:#000;border-top-right-radius:4px}
         .na-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
         /* 推荐入口：深底面板上必须是浅字浅描边（原来 #0A0B0D 文字在 #0E1014 底上等于不可见） */
         .na-act{display:inline-flex;align-items:center;gap:5px;border:1.2px solid #464C58;background:#16181C;
-          color:#C8CCD1;border-radius:999px;padding:4px 11px;font-size:12px;cursor:pointer;white-space:nowrap;
+          color:#C8CCD1;border-radius:999px;padding:4px 11px;font-size:13px;cursor:pointer;white-space:nowrap;
           font-family:inherit}
         .na-act:hover{background:#E7E9EA;border-color:#E7E9EA;color:#000}
         .na-chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px;border-top:1.2px solid #2A2F3A;background:#0E1014}
-        .na-chip{border:1.2px dashed #464C58;background:transparent;color:#9AA0AA;border-radius:999px;padding:4px 11px;
-          font-size:12px;cursor:pointer;font-family:inherit}
+        .na-chip{border:1.2px dashed #464C58;background:transparent;color:var(--lc-text-2);border-radius:999px;padding:4px 11px;
+          font-size:13px;cursor:pointer;font-family:inherit}
         .na-chip:hover{border-color:#5A6270;color:#E7E9EA}
         .na-input{display:flex;gap:8px;padding:10px 12px;border-top:1.2px solid #2A2F3A;background:#0E1014}
         .na-input input{flex:1;background:#0A0B0D;border:1.2px solid #5A6270;border-radius:10px;padding:8px 12px;
-          font-size:13px;outline:none;color:#E7E9EA;font-family:inherit}
-        .na-input input::placeholder{color:#878D95}
-        .na-send{border:none;background:#E7E9EA;color:#000;border-radius:10px;padding:8px 18px;cursor:pointer;font-size:13px;font-family:inherit}
+          font-size:14px;outline:none;color:#E7E9EA;font-family:inherit}
+        .na-input input::placeholder{color:var(--lc-text-3)}
+        .na-send{border:none;background:#E7E9EA;color:#000;border-radius:10px;padding:8px 18px;cursor:pointer;font-size:14px;font-family:inherit}
         .na-send:disabled{opacity:.42;cursor:not-allowed}
-        .na-offline{font-size:11px;color:#D29922;background:rgba(210,153,34,0.10);border:1.2px solid rgba(210,153,34,0.32);border-radius:8px;padding:2px 8px;margin-right:6px}
+        .na-offline{font-size:12px;color:#D29922;background:rgba(210,153,34,0.10);border:1.2px solid rgba(210,153,34,0.32);border-radius:8px;padding:2px 8px;margin-right:6px}
         .na-offline + .na-close{margin-left:8px}
         @media (max-width:640px){
           .na-panel{right:8px;left:8px;bottom:78px;width:auto;height:min(70vh,560px)}

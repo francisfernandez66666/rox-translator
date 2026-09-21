@@ -13,32 +13,32 @@
 // ★ 2026-09-19 B1 流式双态：delta 不再只消费单语言、也不再写进 content 被量尺挡住——
 //   逐语言累积原始流并按帧合批写入 message.draft（清洗见 lib/draftClean），
 //   done/error/停止统一清空；useChat() 消费端按字段拆分订阅（详见该函数注释）。
-// ★ 2026-09-19 B3（方案 A2）：文件翻译逐段上屏——translateFileStream 的 segment_done/
-//   segment_final/segments_sealed 事件累积进 message.segments（lang→状态桶），
-//   done 弃行切下载卡；error 保留行并标 segmentsAborted（非交付物，不做假成功）；停止清空。
+// ★ 2026-09-21 #36：即时翻译不再支持文件翻译——本 store 的 sendFile（SSE 文件流）与
+//   ChatWindow 的上传入口一并移除；逐段上屏的展示层（MessageBubble 读 message.segments）
+//   保留，历史会话里已落盘的逐段数据仍可正常回看。文件翻译走「文档翻译」工单页。
 // ============================================================================
 
 /**
  * hooks/useChat.tsx · 职责说明
  * 聊天全局状态（Zustand 路由级 store）：
  * - 消息管理：消息列表的增删改查、持久化到 localStorage
- * - SSE 收发：文本翻译和文件翻译的流式请求、进度回调、中断控制
+ * - SSE 收发：文本翻译的流式请求、进度回调、中断控制
  * - 健康检查：后端服务状态检测、离线自动重试（30×1s）
  * - 语言选择：目标语言列表的管理和持久化
  */
 
-// 依赖引入：React 基础 Hooks、zustand、API（SSE 流式聊天/文件翻译/健康检查）与类型
+// 依赖引入：React 基础 Hooks、zustand、API（SSE 流式聊天/健康检查）与类型
 import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { createStore, useStore } from 'zustand'
 import { msgsKeyFor, loadMsgs, serializeForPersist, MAX_MESSAGES } from '@/lib/chatStorage' // ★ F11 持久化纯函数
 import { cleanDraft } from '@/lib/draftClean' // ★ B1 流式双态：初译草稿的 <t> 契约清洗
-import { chatStream, translateFileStream, healthCheck, ApiError } from '@/api'
+import { chatStream, healthCheck, ApiError } from '@/api'
 import { useNavigate, type NavigateFunction } from 'react-router-dom'
 import { confirmDialog } from '@/components/uiDialogs'
 import { useAuth, useAuthStore, roleLevel } from '@/stores/auth'
 import { useAdminStore } from '@/stores/admin'
 import { t as gt, tpl as gtpl } from '@/i18n'
-import type { ChatMessage, FileSegBucket, FileSegmentEvent } from '@/types'
+import type { ChatMessage } from '@/types'
 
 // ★ E2：聊天记录存储键按账号隔离（chat_msgs_v1:<uid>）。
 // 旧全局键 chat_msgs_v1 无法归属、历史上跨账号可见——一次性清除，不做迁移（避免错误归属他人记录）。
@@ -65,7 +65,6 @@ interface ChatCtx {
   isBackendChecking: boolean
   errorMessage: string
   sendMessage: (text: string, options?: Record<string, unknown>) => Promise<void>
-  sendFile: (file: File, langs?: string[], userMessage?: string, maxLength?: number) => Promise<void>
   stopGeneration: () => void
   clearMessages: () => void
   retryHealth: () => Promise<void>
@@ -204,63 +203,26 @@ function createChatStore(msgsKey: string) {
           scheduleFlush()
         })
         streamClosed = true
-        get().patchMsg(assistantId, { ...res, progress: undefined, draft: undefined } as Partial<ChatMessage>)
+        // ★ 修复（2026-09-22）：旧实现整包 `{ ...res }` 把后端 ChatResponse 的 `reply`
+        //   原样并进消息，而展示层读的是 `message.content`（ChatMessage 根本没有 reply 字段，
+        //   靠 `as Partial<ChatMessage>` 断言绕过 excess-property 检查才没报类型错）。
+        //   后果：无 token 增量的降级路径（浑元/熔断/流式失败）done 后 content 仍是建气泡时的
+        //   空串 ⇒ 纯文本问答（如「支持哪些语言」）气泡一片空白。故显式 reply→content 映射，
+        //   其余结构化字段按名取，不再整包 spread（防止再混入未定义字段污染持久化）。
+        get().patchMsg(assistantId, {
+          content: res.reply || '',
+          skill: res.skill,
+          data: res.data,
+          files: res.files,
+          points_used: res.points_used,
+          progress: undefined,
+          draft: undefined,
+        })
       } catch (e) {
         streamClosed = true
         h6HandleErr(get(), assistantId, e)
       } finally {
         streamClosed = true
-        set({ isLoading: false, abort: null })
-      }
-    },
-
-    sendFile: async (file: File, langs?: string[], userMessage = '', maxLength = 0) => {
-      const s0 = get()
-      if (s0.isLoading) return
-      const label = userMessage || file.name
-      const targetLangs = langs && langs.length > 0 ? langs : s0.selectedLangs
-      const mode = localStorage.getItem('translate_mode') || 'pro'
-      s0.setFlags({ errorMessage: '' })
-      const abort = new AbortController()
-      set({ abort })
-      const userMsg: ChatMessage = { id: generateId(), role: 'user', content: label.trim(), timestamp: Date.now() }
-      const assistantId = generateId()
-      const assistantMsg: ChatMessage = { id: assistantId, role: 'assistant', content: '', skill: '', timestamp: Date.now(), progress: { step: gt('chat.preparing'), percent: 0 } }
-      set((s) => {
-        const next = [...s.messages, userMsg, assistantMsg].slice(-MAX_MESSAGES)
-        s.schedulePersist(next, s.selectedLangs)
-        return { messages: next, isLoading: true }
-      })
-      // ★ B3（方案 A2）：逐段实时状态——segment_done/final/sealed 按语言累积进 message.segments。
-      //   事件天然按批（≤15 段）到帧，无需 draft 那套 rAF 合帧；done 落定即弃（切下载卡），
-      //   中断（error）保留行但标记「非交付物」（A2 风险披露：绝不做假成功），停止随 draft 一并清空。
-      const segByLang: Record<string, FileSegBucket> = {}
-      let segClosed = false
-      const onSegment = (ev: FileSegmentEvent) => {
-        if (segClosed) return
-        const bucket = (segByLang[ev.lang] = segByLang[ev.lang] ?? { sealed: false, rows: {} })
-        if (ev.kind === 'segments_sealed') bucket.sealed = true
-        else if (ev.index != null) {
-          bucket.rows[ev.index] = { text: ev.text ?? '', final: ev.kind === 'segment_final', placeholder: !!ev.placeholder }
-        }
-        get().patchMsg(assistantId, { segments: { ...segByLang } } as Partial<ChatMessage>)
-      }
-      try {
-        const res = await translateFileStream(file, targetLangs, true, (ev) => {
-          if (ev.type === 'progress') get().patchMsg(assistantId, { progress: { step: ev.step || '', percent: ev.percent ?? 0 } })
-        }, abort.signal, userMessage, mode, maxLength, onSegment)
-        segClosed = true
-        get().patchMsg(assistantId, { ...res, progress: undefined, segments: undefined } as Partial<ChatMessage>)
-      } catch (e) {
-        segClosed = true
-        h6HandleErr(get(), assistantId, e)
-        // 中断收尾：已上屏段落保留展示但标为非交付物（h6HandleErr 对 AbortError 早返回，
-        // 停止路径由 stopGeneration 统一清行，这里只补非停止的真实中断）
-        const msg = e instanceof Error ? e.message : String(e)
-        if (msg !== 'AbortError' && !String(e).includes('abort')) {
-          get().patchMsg(assistantId, { segmentsAborted: true } as Partial<ChatMessage>)
-        }
-      } finally {
         set({ isLoading: false, abort: null })
       }
     },
@@ -274,7 +236,8 @@ function createChatStore(msgsKey: string) {
         const next = [...s.messages]
         for (let i = next.length - 1; i >= 0; i--) {
           if (next[i].role === 'assistant') {
-            // ★ B3：停止同 done/error 收尾口径——逐段实时行与 draft 一并清空（半途中断的段落不是交付物）
+            // ★ B3：停止同 done/error 收尾口径——逐段实时行与 draft 一并清空（半途中断的段落不是交付物；
+            //   #36 后即时翻译无文件流，此清理对历史会话中残留的 segments 字段同样生效）
             if (!next[i].content) next[i] = { ...next[i], content: gt('chat.stopped'), progress: undefined, draft: undefined, segments: undefined }
             else next[i] = { ...next[i], progress: undefined, draft: undefined, segments: undefined }
             break
@@ -398,10 +361,10 @@ export function useChat(): ChatCtx {
   const isBackendChecking = useStore(store, (s) => s.isBackendChecking)
   const errorMessage = useStore(store, (s) => s.errorMessage)
   // 动作引用稳定（建店时一次性 set），无需参与订阅
-  const { setSelectedLangs, sendMessage, sendFile, stopGeneration, clearMessages, retryHealth } = store.getState()
+  const { setSelectedLangs, sendMessage, stopGeneration, clearMessages, retryHealth } = store.getState()
   return useMemo<ChatCtx>(() => ({
     messages, isLoading, selectedLangs, setSelectedLangs,
     isBackendOnline, isBackendLoading, isBackendChecking, errorMessage,
-    sendMessage, sendFile, stopGeneration, clearMessages, retryHealth,
+    sendMessage, stopGeneration, clearMessages, retryHealth,
   }), [messages, isLoading, selectedLangs, isBackendOnline, isBackendLoading, isBackendChecking, errorMessage])
 }

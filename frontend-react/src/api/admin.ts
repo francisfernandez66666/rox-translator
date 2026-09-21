@@ -12,22 +12,37 @@
  * - 身份上下文：获取当前用户的账号/租户/组织部门信息
  */
 
-import { request, authHeaders, API_BASE, type AdminResp } from './core'
+import { request, authHeaders, API_BASE, handleUnauthorized, handleForbidden, type AdminResp } from './core'
 
 /** 下载批量导入用户 Excel 模板（带表头/填写说明/示例行，保存为用户导入模板.xlsx） */
 export async function downloadUserImportTemplate(): Promise<boolean> {
+  // ★ §4.2-2：模板是二进制产物，必须 fetch→blob（无法经 JSON client），属正当裸用；
+  //   但旧实现对任何非 2xx 一律静默 `return false`——登录态失效（401）时用户点了没反应也不知为何。
+  //   现补 401（清态回登录）与 403（越权，走统一文案后再回落 false）。
+  //   注意：本函数契约是 boolean（调用方 OrgP.downloadTemplate 未 try/catch），故不抛异常、
+  //   只把鉴权失败转成「明确 false + 已触发的统一副作用」，避免制造未捕获拒绝。
+  const url = `${API_BASE}/api/admin/users/import-template`
   const token = authHeaders()['Authorization']
-  const res = await fetch(`${API_BASE}/api/admin/users/import-template`, {
+  const res = await fetch(url, {
     headers: token ? { Authorization: token } : {},
   })
+  if (res.status === 401) { handleUnauthorized(url); return false }
+  if (res.status === 403) {
+    let msg = ''
+    try { msg = (await res.json()).message || '' } catch { /* 非 JSON 错误体 */ }
+    // 触发统一 403 处理（本地化文案在此解析），保持 boolean 契约由调用方提示失败
+    handleForbidden(msg)
+    return false
+  }
   if (!res.ok) return false
   const blob = await res.blob()
-  const url = URL.createObjectURL(blob)
+  const url2 = URL.createObjectURL(blob)
   const a = document.createElement('a')
-  a.href = url
+  a.href = url2
   a.download = '用户导入模板.xlsx'
   a.click()
-  URL.revokeObjectURL(url)
+  // 延迟释放：立即 revoke 在部分浏览器会取消尚未开始的下载（口径同 ChatWindow/tickets 导出）
+  setTimeout(() => URL.revokeObjectURL(url2), 5000)
   return true
 }
 

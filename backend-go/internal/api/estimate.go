@@ -91,8 +91,8 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 		"cost_sentences_approx":    maxTokens / rate, // 上限≈句数（保守展示）
 		"points_balance":           s.Store.PointsFromTokens(tokens),
 		"balance_sentences_approx": approxBal,
-		"sufficient":     !s.Bill.Enabled() || tokens > 0,
-		"activated":      activated,
-		"hint":           hint,
+		"sufficient":               !s.Bill.Enabled() || tokens > 0,
+		"activated":                activated,
+		"hint":                     hint,
 	})
 }

@@ -35,7 +35,7 @@ const assistAdminTokenKey = "assist_admin_token"
 func (s *Server) handleAdminAssistToken(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	switch r.Method {
@@ -60,7 +60,7 @@ func (s *Server) handleAdminAssistToken(w http.ResponseWriter, r *http.Request) 
 		tok := strings.TrimSpace(req.Token)
 		// 空串 = 清除库内配置（回落到 env 或默认值），便于排障
 		if err := s.Store.SetConfig(assistAdminTokenKey, store.EncryptSecret(tok)); err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		action := "assist_token_rotate"

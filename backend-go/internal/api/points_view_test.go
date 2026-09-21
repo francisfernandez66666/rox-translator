@@ -1,9 +1,11 @@
 // ============ points_view_test.go · 职责说明 ============
 // 对外展示口径折算助手（points_view.go）的出参契约回归测试（★ 2026-09-19 积分口径全面上线）。
 // 锁定三条铁律，任何一条被改回去即红灯：
-//   ① token 裸值键（amount_tokens/tokens_billed/cost/unit_price/tokens）绝不出现在出参视图；
-//   ② 折算后的积分键（amount_points/points_billed/cost_points/reward_points）值正确（默认汇率 300）；
-//   ③ 其余业务字段原样透传，视图不做额外增删。
+//
+//	① token 裸值键（amount_tokens/tokens_billed/cost/unit_price/tokens）绝不出现在出参视图；
+//	② 折算后的积分键（amount_points/points_billed/cost_points/reward_points）值正确（默认汇率 300）；
+//	③ 其余业务字段原样透传，视图不做额外增删。
+//
 // =============================================
 package api
 

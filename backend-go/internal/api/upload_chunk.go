@@ -90,7 +90,7 @@ func (s *Server) handleKBUploadChunk(w http.ResponseWriter, r *http.Request) {
 	}
 	dir := s.chunkDirPath(uploadID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if idx == 0 {
@@ -100,7 +100,7 @@ func (s *Server) handleKBUploadChunk(w http.ResponseWriter, r *http.Request) {
 	tmp := filepath.Join(dir, "tmp.part")
 	out, err := os.Create(tmp)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	n, err := io.Copy(out, io.LimitReader(f, kbChunkMax+1))
@@ -112,7 +112,7 @@ func (s *Server) handleKBUploadChunk(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := os.Rename(tmp, filepath.Join(dir, chunkPartName(idx))); err != nil {
 		os.Remove(tmp)
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 记录 total 供 status/merge 校验（简单文件，避免内存态）
@@ -215,7 +215,7 @@ func (s *Server) handleKBUploadMerge(w http.ResponseWriter, r *http.Request) {
 	path := filepath.Join(s.kbTempDir(), tmp)
 	out, err := os.Create(path)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 逐片顺序 io.Copy 追加，累计字节超 chunkMaxActual 即中止清理，防拼出半截文件
@@ -242,7 +242,7 @@ func (s *Server) handleKBUploadMerge(w http.ResponseWriter, r *http.Request) {
 	// 收尾：原子改名为正式产物名（kbmerged_xxx.ext）并删除整个分片目录
 	if err := os.Rename(path, filepath.Join(s.kbTempDir(), name)); err != nil {
 		os.Remove(path)
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	_ = os.RemoveAll(dir)

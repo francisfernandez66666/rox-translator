@@ -269,7 +269,19 @@ func (s *Server) usageModel(r *http.Request, tid int64) (provider, model string)
 
 // handleBillingConfig 读取计费配置接口（是否强制计费 + 各租户 QPS/并发）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。返回 success 与 billing_enforced 布尔值。
+//
+// ★ #42（2026-09-22 P2 技术债收尾）僵尸路由标注——**保留不删，仅打废弃信号**：
+//
+//	本接口的读语义已被 /api/admin/packages/settings 完全覆盖（该接口除 billing_enforced 外
+//	还回显 free_trial_points/days、pay_mode、static_qr_image，见 admin_packages.go:210），
+//	前端唯一读路径已切到后者（frontend-react/src/api/billing.ts:200），写路径为
+//	/api/billing/config/save（仍在用，非僵尸）。本仓库外仍可能有运维脚本调用，
+//	且 scripts/uat/api_uat_txn.sh:490（T25-billing-config-anon-denied）在断言其 403 口径，
+//	按「实装优先、禁止删除既有功能」的硬约定，**删除必须先取得用户确认**。
+//	废弃信号（RFC 8594）：Deprecation 头 + Link 指向后继资源，在鉴权分支之前设置。
 func (s *Server) handleBillingConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("Link", `</api/admin/packages/settings>; rel="successor-version"`)
 	if s.Store == nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
 		return
@@ -277,14 +289,18 @@ func (s *Server) handleBillingConfig(w http.ResponseWriter, r *http.Request) {
 	// ★ B5（2026-09-12）：计费开关暴露平台运营策略，仅 tenant_admin 及以上可读
 	// （前端唯一调用方为管理后台套餐页，收紧无兼容影响）
 	if _, err := s.requireTenantAdmin(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 强制计费状态：由计费服务 Enabled() 判定
 	enforced := s.Bill != nil && s.Bill.Enabled()
+	// ★ #42：T25 断言的是 403 分支的 `"success":false` 子串，本成功体追加键不影响该正则；
+	//   错误分支刻意不加键，避免脱敏文案之外的响应结构漂移。
 	writeJSON(w, 200, map[string]interface{}{
 		"success":          true,
 		"billing_enforced": enforced,
+		"deprecated":       true,                           // ★ #42 废弃声明（配合 Deprecation 响应头）
+		"replacement":      "/api/admin/packages/settings", // ★ #42 正式替代路径
 	})
 }
 
@@ -294,7 +310,7 @@ func (s *Server) handleBillingConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBillingConfigSave(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -316,7 +332,7 @@ func (s *Server) handleBillingConfigSave(w http.ResponseWriter, r *http.Request)
 		val = "1"
 	}
 	if err := s.Store.SetConfig("billing_enforced", val); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 审计：记录开关变更前后值（on/off）
@@ -355,7 +371,7 @@ func (s *Server) handleTenantQuotaSave(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 tenant_admin 及以上权限
 	au, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -477,7 +493,7 @@ func (s *Server) handleUsageMe(w http.ResponseWriter, r *http.Request) {
 	from, to := usageDateRange(r)
 	total, today, cnt, err := s.Store.UsageByUser(u.TenantID, u.ID, from, to)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ C26（2026-09-12）：token 为唯一真账，剩余句数=可用 token÷折算率反推。
@@ -507,7 +523,7 @@ func (s *Server) handleUsageMe(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -564,7 +580,7 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 	orgIDs := []int64{}
 	if orgID > 0 {
 		if err := s.validateOrg(tid, orgID); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		if ids, derr := s.Store.OrgDescendantIDs(tid, orgID); derr == nil {
@@ -573,7 +589,7 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	costByUser, err := s.Store.UsageByOrg(tid, orgIDs, from, to)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 组装用户明细（含组织名与用量）
@@ -629,12 +645,12 @@ func usageDateRange(r *http.Request) (from, to string) {
 // 返回: success=true 时携带 costs（map[provider/model]=cost）与 quants（map[provider/model]=quantity）。
 func (s *Server) handleUsageCost(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	costs, quants, err := s.Store.CostByModel()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ 2026-09-19 积分口径：模型费用合计折积分出参（quants 仍为用量单位数）

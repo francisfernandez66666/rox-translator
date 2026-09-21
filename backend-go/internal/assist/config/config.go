@@ -57,9 +57,12 @@ func getbool(k string) bool {
 // Load 读取配置
 func Load() *Config {
 	return &Config{
-		Addr:           getenv("ASSIST_ADDR", "127.0.0.1:8790"),
-		DBPath:         getenv("ASSIST_DB", "data/assist.db"),
-		AdminToken:     getenv("ASSIST_ADMIN_TOKEN", "change-me-please"),
+		Addr:   getenv("ASSIST_ADDR", "127.0.0.1:8790"),
+		DBPath: getenv("ASSIST_DB", "data/assist.db"),
+		// ★ P0-2（2026-09-21 评估报告整改）：删除内置兜底 token（原 "change-me-please"）。
+		// 生效链 env ASSIST_ADMIN_TOKEN → 主库 system_config.assist_admin_token；两者皆空由
+		// cmd/assist-server 启动期拒绝，杜绝弱口令常驻暴露的管理面。
+		AdminToken:     getenv("ASSIST_ADMIN_TOKEN", ""),
 		CORSOrigin:     getenv("ASSIST_CORS", "*"),
 		SeedFile:       getenv("ASSIST_SEED", ""),
 		WebDir:         getenv("ASSIST_WEB", ""),

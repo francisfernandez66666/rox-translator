@@ -36,7 +36,7 @@ func (s *Server) handleTenantList(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	_ = u
@@ -47,7 +47,7 @@ func (s *Server) handleTenantList(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := s.Ten.List()
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "tenants": list})
@@ -60,7 +60,7 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	_ = u
@@ -129,7 +129,7 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	_ = u
@@ -197,7 +197,7 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTenantInviteEnabledGet(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 解析当前生效租户：请求上下文注入了 X-Tenant-ID 则用其值，否则用当前用户自身租户
@@ -227,7 +227,7 @@ func (s *Server) handleTenantStatus(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	_ = u
@@ -263,7 +263,7 @@ func (s *Server) handleTenantDelete(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	_ = u
@@ -465,7 +465,7 @@ func (s *Server) setPlatformBranding(m map[string]string) error {
 // 仅超管(roleLevel>=4)可调用；开通后该租户（含其租户管理员）即可编辑品牌，无需付费套餐。
 func (s *Server) handleAdminBrandGrant(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -699,7 +699,7 @@ func (s *Server) handleFooterLinksGet(w http.ResponseWriter, r *http.Request) {
 // handleFooterLinksSet 保存平台级页脚链接（仅超管）。links 为 JSON 数组字符串 [{label,label_en,url}]。
 func (s *Server) handleFooterLinksSet(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if s.Store == nil {
@@ -752,7 +752,7 @@ func validateBrandPayloads(logo, homeBg string) string {
 func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if s.Ten == nil {
@@ -846,7 +846,7 @@ func (s *Server) handleTenantExport(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	_, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -863,7 +863,7 @@ func (s *Server) handleTenantExport(w http.ResponseWriter, r *http.Request) {
 	// 导出该租户全部业务数据
 	data, err := s.Store.ExportTenantData(req.ID)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 格式化 JSON 并作为附件下载
@@ -880,7 +880,7 @@ func (s *Server) handleTenantErase(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -901,7 +901,7 @@ func (s *Server) handleTenantErase(w http.ResponseWriter, r *http.Request) {
 	}
 	// 清除租户全部业务数据（GDPR 删除权；★ C5：含磁盘产物清理的完整版入口）
 	if err := s.Store.EraseTenantDataFull(req.ID); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 清除操作审计

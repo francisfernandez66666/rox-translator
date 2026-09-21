@@ -14,6 +14,7 @@ import {
 } from '@/api'
 import { registerPersonas, setMyJobRole } from '@/api/persona'
 import { PERSONA_FALLBACK } from '@/lib/personas'
+import { useCountdown } from '@/lib/useCountdown'
 import type { ChatMessage } from '@/types'
 import { t, tpl } from '@/i18n'
 import { useAuth } from '@/stores/auth'
@@ -105,7 +106,9 @@ export function PasswordModal(props: { onClose: () => void; onDone?: () => void;
   const [msg, setMsg] = useState('')
   const [msgOk, setMsgOk] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [cooldown, setCooldown] = useState(0)
+  // ★ #42：冷却倒计时改走 useCountdown——旧写法在弹窗关闭后仍会继续 tick（无卸载清理），
+  //   且句柄只活在回调闭包里，二次触发会并存两个定时器把 60s 打成 30s。
+  const cd = useCountdown(60)
 
   // 发送改密验证码（带 60s 倒计时冷却）
   async function sendCode() {
@@ -113,10 +116,7 @@ export function PasswordModal(props: { onClose: () => void; onDone?: () => void;
       const r = await sendPwdCode({ username, email })
       setMsgOk(true)
       setMsg(r.message || t('pwd.codeSent'))
-      setCooldown(60)
-      const iv = window.setInterval(() => {
-        setCooldown((c) => { if (c <= 1) { window.clearInterval(iv); return 0 } return c - 1 })
-      }, 1000)
+      cd.start()
     } catch (e) {
       setMsgOk(false)
       setMsg(e instanceof Error ? e.message : String(e))
@@ -159,8 +159,8 @@ export function PasswordModal(props: { onClose: () => void; onDone?: () => void;
         )}
         <div className="pwd-code-row">
           <Input className="pwd-code-input" value={code} onChange={(e) => setCode(e.target.value)} placeholder={t('login.verificationCode')} />
-          <Button variant="secondary" disabled={cooldown > 0} onClick={sendCode}>
-            {cooldown > 0 ? tpl('login.codeResend', { n: cooldown }) : t('login.sendCode')}
+          <Button variant="secondary" disabled={cd.left > 0} onClick={sendCode}>
+            {cd.left > 0 ? tpl('login.codeResend', { n: cd.left }) : t('login.sendCode')}
           </Button>
         </div>
         <form onSubmit={(e) => e.preventDefault()}>
@@ -184,30 +184,24 @@ export function EmailBindModal(props: { hasOldEmail: boolean; oldEmail?: string;
   const [msg, setMsg] = useState('')
   const [ok, setOk] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [newCooldown, setNewCooldown] = useState(0)
-  const [oldCooldown, setOldCooldown] = useState(0)
+  // ★ #42：两个冷却各自一个 useCountdown（旧写法是共用一个 startCd 手写 setInterval：
+  //   弹窗关闭后定时器仍在跳，且同一状态被二次触发会并存两个递减源，60s 冷却提前见底）。
+  const newCd = useCountdown(60)
+  const oldCd = useCountdown(60)
   const [sendingNew, setSendingNew] = useState(false)
   const [sendingOld, setSendingOld] = useState(false)
 
   // valid 新邮箱格式校验（简单正则：非空用户名 + 域名）
   const valid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(newEmail.trim())
 
-  // 通用倒计时启动：置 60 并在每秒递减至 0 后清除定时器
-  function startCd(setter: (v: number | ((prev: number) => number)) => void) {
-    setter(60)
-    const iv = window.setInterval(() => {
-      setter((c: number) => { if (c <= 1) { window.clearInterval(iv); return 0 } return c - 1 })
-    }, 1000)
-  }
-
   // 向新邮箱发送验证码并启动新邮箱倒计时
   async function sendNewCode() {
-    if (!valid || newCooldown > 0 || sendingNew) return
+    if (!valid || newCd.left > 0 || sendingNew) return
     setSendingNew(true)
     try {
       const r = await meEmailCode(newEmail.trim())
       if (!r.success) { setOk(false); setMsg(r.message || t('pwd.sendFail')); return }
-      startCd(setNewCooldown)
+      newCd.start()
       setMsg(r.message || t('pwd.codeSent'))
       setOk(true)
     } catch (e) { // ★ E10
@@ -217,12 +211,12 @@ export function EmailBindModal(props: { hasOldEmail: boolean; oldEmail?: string;
 
   // 向旧邮箱发送验证码并启动旧邮箱倒计时（仅在换绑时可用）
   async function sendOldCode() {
-    if (!props.oldEmail || oldCooldown > 0 || sendingOld) return
+    if (!props.oldEmail || oldCd.left > 0 || sendingOld) return
     setSendingOld(true)
     try {
       const r = await meEmailCode(props.oldEmail)
       if (!r.success) { setOk(false); setMsg(r.message || t('pwd.sendFail')); return }
-      startCd(setOldCooldown)
+      oldCd.start()
       setMsg(r.message || t('pwd.codeSent'))
       setOk(true)
     } catch (e) { // ★ E10
@@ -264,16 +258,16 @@ export function EmailBindModal(props: { hasOldEmail: boolean; oldEmail?: string;
       {props.oldEmail && (
         <div className="eb-code-row">
           <Input className="eb-code-input" value={oldCode} onChange={(e) => setOldCode(e.target.value)} placeholder={t('emailBind.oldCodePlaceholder')} />
-          <Button variant="secondary" disabled={oldCooldown > 0} onClick={sendOldCode}>
-            {oldCooldown > 0 ? tpl('login.codeResend', { n: oldCooldown }) : t('login.sendCode')}
+          <Button variant="secondary" disabled={oldCd.left > 0} onClick={sendOldCode}>
+            {oldCd.left > 0 ? tpl('login.codeResend', { n: oldCd.left }) : t('login.sendCode')}
           </Button>
         </div>
       )}
       <Input type="text" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder={t('emailBind.newEmailPlaceholder')} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
       <div className="eb-code-row">
         <Input className="eb-code-input" value={code} onChange={(e) => setCode(e.target.value)} placeholder={t('login.verificationCode')} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
-        <Button variant="secondary" disabled={newCooldown > 0 || !valid || sendingNew} onClick={sendNewCode}>
-          {newCooldown > 0 ? tpl('login.codeResend', { n: newCooldown }) : t('login.sendCode')}
+        <Button variant="secondary" disabled={newCd.left > 0 || !valid || sendingNew} onClick={sendNewCode}>
+          {newCd.left > 0 ? tpl('login.codeResend', { n: newCd.left }) : t('login.sendCode')}
         </Button>
       </div>
       {!!msg && <p className={ok ? 'eb-ok' : 'eb-err'}>{msg}</p>}
@@ -314,15 +308,15 @@ export function DeactivateModal(props: { onClose: () => void }) {
       onConfirm={submit}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <p style={{ fontSize: 13.5, color: 'var(--lc-text-2)', lineHeight: 1.6, margin: 0 }}>{t('deact.line1')}</p>
-        <ul style={{ margin: '0 0 4px 18px', fontSize: 13, color: 'var(--lc-text-3)', lineHeight: 1.8 }}>
+        <p style={{ fontSize: 14.5, color: 'var(--lc-text-2)', lineHeight: 1.6, margin: 0 }}>{t('deact.line1')}</p>
+        <ul style={{ margin: '0 0 4px 18px', fontSize: 14, color: 'var(--lc-text-3)', lineHeight: 1.8 }}>
           <li>{t('deact.point1')}</li>
           <li>{t('deact.point2')}</li>
           <li>{t('deact.point3')}</li>
         </ul>
         <label className="fb-confirm-row">
           <Checkbox checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} />
-          <span style={{ fontSize: 13, color: 'var(--lc-text-2)' }}>{t('deact.ack')}</span>
+          <span style={{ fontSize: 14, color: 'var(--lc-text-2)' }}>{t('deact.ack')}</span>
         </label>
       </div>
     </Dialog>
@@ -382,7 +376,7 @@ export function JobRoleModal(props: { current: string; onClose: () => void; onSa
       onConfirm={submit}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <p style={{ fontSize: 13, color: 'var(--lc-text-2)', lineHeight: 1.6, margin: 0 }}>{t('role.hint')}</p>
+        <p style={{ fontSize: 14, color: 'var(--lc-text-2)', lineHeight: 1.6, margin: 0 }}>{t('role.hint')}</p>
         <select className="lc-input" value={sel} disabled={saving}
                 aria-label={t('role.title')} onChange={(e) => setSel(e.target.value)}>
           <option value="">{t('role.none')}</option>

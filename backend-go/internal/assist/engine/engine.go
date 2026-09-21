@@ -6,9 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"translator/internal/assist/llm"
 	"translator/internal/assist/store"
@@ -46,6 +48,15 @@ type Engine struct {
 	// ★ R0.1 同义词归一表缓存（configs.synonyms 指纹失效重载）
 	synFP     string
 	synGroups [][]string
+
+	// ★ 分级召回第 3 级（默认关闭，见 vector.go）：知识向量索引缓存。
+	// vecMu 保护全部 vec* 字段；vecCoolUntil 为嵌入失败熔断窗口。
+	vecMu        sync.Mutex
+	vecModel     string
+	vecFP        string
+	vecKeys      []string
+	vecMat       [][]float32
+	vecCoolUntil time.Time
 }
 
 // New 构建引擎
@@ -203,40 +214,197 @@ func (e *Engine) reloadSynonyms() {
 
 // entry 打分后的候选
 type entry struct {
+	key     string
 	title   string
 	content string
 	link    string
 	score   int
-	kw      string // 该条目的原始关键词串（★ 复合意图让位判定用，不参与渲染）
+	kw      string  // 该条目的原始关键词串（★ 复合意图让位判定用，不参与渲染）
+	via     string  // 命中通道：exact（第 1 级精确/同义词）/ fuzzy（第 2 级相似度）/ vector（第 3 级嵌入）
+	sim     float64 // fuzzy/vector 通道的原始相似度（exact 时为命中关键词数），供日志观测与同分排序
 }
 
-// RetrieveKB 检索知识库 topN（enabled，按命中关键词数+优先级排序）
+// 分级召回命中标识
+const (
+	viaExact  = "exact"
+	viaFuzzy  = "fuzzy"
+	viaVector = "vector"
+)
+
+// 分级打分口径（WHY）：score 决定素材排序与兜底判定，三级严格分层——
+//   - exact：hits*10 + (10-prio)，单次命中恒 ≥10（seed 内 prio ≤10）；
+//   - fuzzy：8 - prio*8/10 ∈ [1,8]，恒低于任何一次精确命中——相似度是「救零命中」
+//     的弱信号，永远不能压过运营精心维护的关键词命中；
+//   - vector：4 - prio*4/10 ∈ [1,4]，恒低于 fuzzy（语义召回误伤面最大，权重最低）。
+//
+// 若管理台把 priority 配到 >10 会破坏该不变式，属运营侧自伤，不做代码兜底。
+func fuzzyTierScore(prio int) int {
+	s := 8 - prio*8/10
+	if s < 1 {
+		s = 1
+	}
+	return s
+}
+
+func vectorTierScore(prio int) int {
+	s := vecScoreBase - prio*vecScoreBase/10
+	if s < 1 {
+		s = 1
+	}
+	return s
+}
+
+// RetrieveKB 检索知识库 topN（enabled，分级召回：精确/同义词 → 相似度 → 向量）。
+// 保留原签名（ctx 无关调用方/单测用），内部委托 retrieveKB。
 func (e *Engine) RetrieveKB(input string, topN int) []entry {
+	return e.retrieveKB(context.Background(), input, topN)
+}
+
+// retrieveKB 分级检索主实现。ctx 仅用于观测日志与第 3 级嵌入调用。
+// topN>=99 特例维持原语义：全量注入系统 prompt（此时跳过第 2/3 级，零网络）。
+func (e *Engine) retrieveKB(ctx context.Context, input string, topN int) []entry {
 	rows, err := e.db.List("kb_entries", true)
 	if err != nil {
 		return nil
 	}
 	var cands []entry
+	exactKeys := map[string]bool{}
+	prioByKey := map[string]int{}
 	for _, r := range rows {
 		kw := store.Row(r)["keywords"].(string)
-		hits := e.hitScore(input, kw)
-		if hits == 0 && topN < 99 {
-			continue // 无命中跳过（topN>=99 表示全量注入，用于系统 prompt）
-		}
 		prio := toInt(r["priority"], 5)
-		cands = append(cands, entry{
-			title:   asStr(r["title"]),
-			content: asStr(r["content"]),
-			link:    asStr(r["link_keys"]),
-			score:   hits*10 + 10 - prio,
-			kw:      kw,
-		})
+		prioByKey[asStr(r["key"])] = prio
+		hits := e.hitScore(input, kw)
+		if hits > 0 {
+			exactKeys[asStr(r["key"])] = true
+			cands = append(cands, entry{
+				key:     asStr(r["key"]),
+				title:   asStr(r["title"]),
+				content: asStr(r["content"]),
+				link:    asStr(r["link_keys"]),
+				score:   hits*10 + 10 - prio,
+				kw:      kw,
+				via:     viaExact,
+				sim:     float64(hits),
+			})
+			continue
+		}
+		if topN >= 99 {
+			// 全量注入模式原本就带全部条目（score 仅按优先级），无需相似度
+			cands = append(cands, entry{
+				key:     asStr(r["key"]),
+				title:   asStr(r["title"]),
+				content: asStr(r["content"]),
+				link:    asStr(r["link_keys"]),
+				score:   10 - prio,
+				kw:      kw,
+				via:     viaExact,
+			})
+		}
 	}
-	sort.Slice(cands, func(i, j int) bool { return cands[i].score > cands[j].score })
-	if len(cands) > topN {
-		cands = cands[:topN]
+	if topN < 99 {
+		cands = e.appendFuzzyHits(cands, exactKeys, prioByKey, input, rows)
+		cands = e.appendVectorHits(ctx, cands, input, rows)
+		sort.SliceStable(cands, func(i, j int) bool {
+			if cands[i].score != cands[j].score {
+				return cands[i].score > cands[j].score
+			}
+			return cands[i].sim > cands[j].sim // 同分按相似度降序，稳定可观测
+		})
+		if len(cands) > topN {
+			cands = cands[:topN]
+		}
+		e.logRecall(ctx, input, cands)
 	}
 	return cands
+}
+
+// appendFuzzyHits 第 2 级：对第 1 级零命中的条目做相似度打分，达阈值的以弱分入池。
+func (e *Engine) appendFuzzyHits(cands []entry, exactKeys map[string]bool, prioByKey map[string]int, input string, rows []store.Row) []entry {
+	for _, r := range rows {
+		key := asStr(r["key"])
+		if exactKeys[key] {
+			continue
+		}
+		kw := store.Row(r)["keywords"].(string)
+		title := asStr(r["title"])
+		sim, ok := fuzzyEntryScore(input, kw, title)
+		if !ok {
+			continue
+		}
+		cands = append(cands, entry{
+			key:     key,
+			title:   title,
+			content: asStr(r["content"]),
+			link:    asStr(r["link_keys"]),
+			score:   fuzzyTierScore(prioByKey[key]),
+			kw:      kw,
+			via:     viaFuzzy,
+			sim:     sim,
+		})
+	}
+	return cands
+}
+
+// appendVectorHits 第 3 级（默认关闭）：向量召回补齐仍零命中的条目。
+// 关闭/不可用/失败时原样返回 cands——对前端零感知（详见 vector.go 头注释）。
+func (e *Engine) appendVectorHits(ctx context.Context, cands []entry, input string, rows []store.Row) []entry {
+	if !e.vectorEnabled(ctx) {
+		return cands
+	}
+	inCands := map[string]bool{}
+	for _, c := range cands {
+		inCands[c.key] = true
+	}
+	for _, vh := range e.vectorRecall(ctx, input) {
+		if inCands[vh.key] {
+			continue // 已被第 1/2 级收编的条目不重复注入
+		}
+		for _, r := range rows {
+			if asStr(r["key"]) != vh.key {
+				continue
+			}
+			kw := store.Row(r)["keywords"].(string)
+			cands = append(cands, entry{
+				key:     vh.key,
+				title:   asStr(r["title"]),
+				content: asStr(r["content"]),
+				link:    asStr(r["link_keys"]),
+				score:   vectorTierScore(toInt(r["priority"], 5)),
+				kw:      kw,
+				via:     viaVector,
+				sim:     vh.sim,
+			})
+			break
+		}
+	}
+	return cands
+}
+
+// logRecall 命中分数观测（分级召回改造的「可观测」交付物）：
+// exact-only 走 Debug（默认日志级别下不刷屏）；有 fuzzy/vector 参与走 Info，
+// 运营调阈值、排查「为什么答非所问」时按 trace_id 可直接看到通道与分数。
+func (e *Engine) logRecall(ctx context.Context, input string, cands []entry) {
+	if len(cands) == 0 {
+		return
+	}
+	soft := false
+	parts := make([]string, 0, len(cands))
+	for _, c := range cands {
+		if c.via != viaExact {
+			soft = true
+		}
+		parts = append(parts, fmt.Sprintf("%s:%s:%d:%.2f", c.key, c.via, c.score, c.sim))
+	}
+	in := input
+	if len([]rune(in)) > 40 {
+		in = string([]rune(in)[:40])
+	}
+	if soft {
+		observability.Info(ctx, "assist.engine 分级召回命中", "input", in, "hits", strings.Join(parts, "|"))
+	} else {
+		observability.Log(ctx, slog.LevelDebug, "assist.engine 召回命中(exact)", "input", in, "hits", strings.Join(parts, "|"))
+	}
 }
 
 // MatchScript 命中单条话术（keyword 类，命中即返回优先级最高的一条）
@@ -381,10 +549,10 @@ func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL string, 
 		// 语言能力 + 价格）命中话术时，若知识库还检索到另一领域的条目，直配单话术
 		// 会只答一半——把话术降为素材之一，让位给 LLM 融合应答
 		// （LLM 未接入时 fallback 也会把两侧知识并排拼出）。
-		if scEntry, comp := e.compoundIntent(input, sc); comp {
+		if scEntry, comp := e.compoundIntent(ctx, input, sc); comp {
 			hits := []entry{scEntry}
-			for _, h := range e.RetrieveKB(input, 3) {
-				if h.title != scEntry.title { // 同一内容既配话术又进知识库时不重复注入
+			for _, h := range e.retrieveKB(ctx, input, 3) {
+				if h.key != scEntry.key && h.title != scEntry.title { // 同一内容既配话术又进知识库时不重复注入
 					hits = append(hits, h)
 				}
 			}
@@ -496,8 +664,10 @@ func (e *Engine) kbByKey(key string) (store.Row, bool) {
 // 知识一起交给融合应答。纯单意图（如只问「多少钱」，命中全属计费域、无跨领域
 // 竞争者）不让位，维持毫秒级直配快答。
 // 返回 true 时素材即话术 entry（调用方拼在 RetrieveKB 结果前即可）。
-func (e *Engine) compoundIntent(input string, sc store.Row) (entry, bool) {
-	hits := e.RetrieveKB(input, 4)
+// ★ 分级召回（2026-09-22）：让位判定只认第 1 级精确/同义词命中（via==exact），
+// fuzzy/vector 弱信号不得触发让位——维持「单意图直配、双意图融合」的既有语义。
+func (e *Engine) compoundIntent(ctx context.Context, input string, sc store.Row) (entry, bool) {
+	hits := e.retrieveKB(ctx, input, 4)
 	if len(hits) == 0 {
 		return entry{}, false
 	}
@@ -505,6 +675,11 @@ func (e *Engine) compoundIntent(input string, sc store.Row) (entry, bool) {
 	var cross *entry
 	for i := range hits {
 		h := &hits[i]
+		if h.via != viaExact {
+			continue // ★ 分级召回约束：让位判定只认第 1 级真实命中——fuzzy/vector 是弱信号，
+		}
+		// 若允许弱信号触发让位，「多少钱」这类单意图快答可能被近义知识带偏，
+		// 破坏 CI2/UAT A2 的毫秒级直配语义
 		sameDomain := false
 		for tok := range kwTokenSet(h.kw) {
 			if scKws[tok] {
@@ -525,6 +700,7 @@ func (e *Engine) compoundIntent(input string, sc store.Row) (entry, bool) {
 		content = asStr(sc["title"])
 	}
 	return entry{
+		key:     asStr(sc["key"]), // ★ 分级召回：素材带 key 供融合链路去重与观测归因
 		title:   asStr(sc["title"]),
 		content: content,
 		link:    asStr(sc["link_keys"]),
@@ -551,7 +727,7 @@ func kwTokenSet(s string) map[string]bool {
 // llmReply 组装 prompt 调 LLM；无 LLM 或失败走规则兜底
 // ★ 改造 1A：签名加 ctx，LLM 调用链日志带 trace_id。
 func (e *Engine) llmReply(ctx context.Context, input string, history []store.Row) *Reply {
-	return e.llmReplyWith(ctx, input, history, e.RetrieveKB(input, 3))
+	return e.llmReplyWith(ctx, input, history, e.retrieveKB(ctx, input, 3))
 }
 
 // llmReplyWith 同 llmReply，但素材检索结果由调用方给定

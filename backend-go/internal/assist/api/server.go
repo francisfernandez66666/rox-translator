@@ -130,6 +130,12 @@ func (s *Server) corsMW(next http.Handler) http.Handler {
 // guard 管理端鉴权（X-Assist-Admin 头，常数时间比较）
 func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// ★ P0-2 纵深防御：服务端未配置 Token 时管理面一律 401（防止空 adm 与空请求头
+		// 在 ConstantTimeCompare 下相等而误放行）
+		if s.adm == "" {
+			writeJSON(w, 401, map[string]any{"error": "unauthorized"})
+			return
+		}
 		tok := r.Header.Get("X-Assist-Admin")
 		if tok == "" {
 			tok = r.URL.Query().Get("admin_token")
@@ -329,6 +335,9 @@ var configKeyWhitelist = map[string]bool{
 	"llm_base_url": true, "llm_api_key": true, "llm_model": true, "llm_model_backup": true,
 	// R0.1 同义词归一表（逗号分隔：词=同义词1|同义词2，多组换行）
 	"synonyms": true,
+	// ★ 分级召回第 3 级（默认关闭）：embed_recall=on 启用向量召回，
+	// embed_model 为 OpenAI 兼容嵌入模型名（凭证复用 llm_base_url/llm_api_key）。
+	"embed_recall": true, "embed_model": true,
 }
 
 // handleConfig GET 读取 / PUT 写入单项配置

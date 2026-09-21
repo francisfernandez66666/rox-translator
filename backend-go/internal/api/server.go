@@ -175,6 +175,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	s.mux.HandleFunc("/status", s.handlePublicStatus)
 	s.mux.HandleFunc("/api/health", s.handleHealth)
+	// ★ #42（2026-09-22）探针拆分：/livez 只判进程存活（零依赖检查，Redis/DB 故障绝不翻红，
+	//   否则编排器会去重启一个本可降级自愈的进程）；/readyz 真探依赖（DB 可达 + Redis 可达），
+	//   不就绪 503 让上游摘流量。口径与决策记录见 health_probes.go 文件头。
+	//   两条均无鉴权、无租户数据，已登记进 route_auth_gate_test.go 的 publicRouteAllowlist。
+	s.mux.HandleFunc("/livez", s.handleLivez)
+	s.mux.HandleFunc("/readyz", s.handleReadyz)
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
 	// 公开商业页面（无需登录）：条款 / SLA / 隐私 / 套餐 / 注册行业
 	// ★ P2-6（2026-09-18）：/pricing 双实现归一——删除 Go 服务端渲染版，
@@ -203,6 +209,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/openapi-docs/preview", s.handleAdminOpenAPIDocsPreview)
 	// ★ 改造 1A（2026-09-17）：AI 助手管理台 Token 下发/轮换（仅超管；前端 AssistP 免手填）
 	s.mux.HandleFunc("/api/admin/assist/token", s.handleAdminAssistToken)
+	// ★ #34（2026-09-21）：AI 助手管理面改为原生 React 面板 + 主后台受管代理（仅超管）。
+	//   管理 Token 由服务端注入 X-Assist-Admin，浏览器不再持有；白名单见 admin_assist_proxy.go。
+	s.mux.HandleFunc("/api/admin/assist/status", s.handleAdminAssistStatus)
+	for p := range assistProxyRoutes {
+		s.mux.HandleFunc(p, s.handleAdminAssistProxy)
+	}
 	// 翻译核心（聊天/文件/下载/语言/KB 统计）
 	s.routesTranslate()
 	// ★ SaaS 租户管理（管理后台）
@@ -400,12 +412,17 @@ func (s *Server) routesAdminSystem() {
 
 // routesBilling 注册计费/充值/用量/配额/发票/商业包路由。
 func (s *Server) routesBilling() {
+	// ★ #42（2026-09-22）僵尸路由（前端零调用方，仅兼容外部/运维脚本）：已打 Deprecation + Link 头，
+	//   正式替代 /api/billing/my/overview；**删除须先取得用户确认**，详见 admin_billing.go:41 注释。
 	s.mux.HandleFunc("/api/billing/balance", s.handleBalance)
+	// ★ #42 核实结论：/api/billing/usage **不是**僵尸路由——admin/panels_a.tsx:690 仍在调用，保留原样。
 	s.mux.HandleFunc("/api/billing/usage", s.handleUsage)
 	s.mux.HandleFunc("/api/billing/usage/me", s.handleUsageMe)
 	s.mux.HandleFunc("/api/billing/usage/org", s.handleUsageOrg)
 	s.mux.HandleFunc("/api/billing/usage/cost", s.handleUsageCost)
 	s.mux.HandleFunc("/api/billing/orders", s.handleOrders)
+	// ★ #42（2026-09-22）僵尸路由：读语义已被 /api/admin/packages/settings 覆盖（前端已切该接口），
+	//   已打 Deprecation + Link 头；**删除须先取得用户确认**，详见 billing_api.go:270 注释。
 	s.mux.HandleFunc("/api/billing/config", s.handleBillingConfig)
 	s.mux.HandleFunc("/api/billing/config/save", s.handleBillingConfigSave)
 	s.mux.HandleFunc("/api/billing/quota", s.handleTenantQuota)
@@ -434,7 +451,7 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/me/package", s.handleMyPackage)
 	s.mux.HandleFunc("/api/me/context", s.handleMeContext)
 	s.mux.HandleFunc("/api/me/update-email", s.handleUpdateEmail)
-	s.mux.HandleFunc("/api/me/job-role", s.handleMyJobRole) // ★ 角色功能（2026-09-19）：自助维护职业角色（转岗语义）
+	s.mux.HandleFunc("/api/me/job-role", s.handleMyJobRole)           // ★ 角色功能（2026-09-19）：自助维护职业角色（转岗语义）
 	s.mux.HandleFunc("/api/me/deactivate", s.handleDeactivateAccount) // ★ 自助注销（2026-08-26 需求）
 	s.mux.HandleFunc("/api/me/email-code", s.handleMeEmailCode)
 	s.mux.HandleFunc("/api/admin/tm-review/list", s.handleTmReviewList)
@@ -443,6 +460,8 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/admin/tm-review/adopt", s.handleTmReviewAdopt)
 	s.mux.HandleFunc("/api/package/subscribe", s.handlePackageSubscribe)
 	s.mux.HandleFunc("/api/package/upgrade", s.handlePackageUpgrade)
+	// ★ 自动续费开关（#41）：GET 回读当前态、POST 置位
+	s.mux.HandleFunc("/api/package/auto-renew", s.handleAutoRenew)
 	s.mux.HandleFunc("/api/admin/packages", s.handleAdminPackages)
 	s.mux.HandleFunc("/api/admin/packages/create", s.handleAdminPackageCreate)
 	s.mux.HandleFunc("/api/admin/packages/update", s.handleAdminPackageUpdate)
@@ -461,6 +480,12 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/pay/notify/", s.handlePayNotify)
 	// 待人工确认订单（超管审核开通）
 	s.mux.HandleFunc("/api/admin/orders/manual", s.handleManualConfirmOrders)
+	// ★ 优惠券（#41 商业洞三，2026-09-21）：租户侧试算 + 超管券模板与核销流水
+	s.mux.HandleFunc("/api/coupon/preview", s.handleCouponPreview)
+	s.mux.HandleFunc("/api/admin/coupons", s.handleAdminCoupons)
+	s.mux.HandleFunc("/api/admin/coupons/save", s.handleAdminCouponSave)
+	s.mux.HandleFunc("/api/admin/coupons/delete", s.handleAdminCouponDelete)
+	s.mux.HandleFunc("/api/admin/coupons/redemptions", s.handleAdminCouponRedemptions)
 }
 
 // routesAPIKeys 注册租户开放 API Key 管理路由。
@@ -479,6 +504,8 @@ func (s *Server) routesTasks() {
 	s.mux.HandleFunc("/api/admin/tasks", s.handleAdminTasks)
 	s.mux.HandleFunc("/api/admin/tasks/save", s.handleAdminTaskSave)
 	s.mux.HandleFunc("/api/admin/tasks/delete", s.handleAdminTaskDelete)
+	// ★ #33 任务系统：超管手动重置任务临时积分消耗量（有效期不变）
+	s.mux.HandleFunc("/api/admin/tasks/reset-consumption", s.handleAdminTaskResetConsumption)
 	s.mux.HandleFunc("/api/me/tasks", s.handleMyTasks)
 	s.mux.HandleFunc("/api/me/tasks/claim", s.handleClaimTask)
 }
@@ -755,7 +782,7 @@ type ChatRequest struct {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{
 		"status":  "ok",
-		"version": "2.0.0-go",
+		"version": probeVersion,
 		"skills":  []string{"translation"},
 		// ★ 2026-09-03 云端诊断：暴露核心模块初始化状态——
 		//   任一项 false 即对应模块未就绪（登录/翻译/租户接口会 500「平台存储未初始化」）。
@@ -765,6 +792,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"kb_ready":     s.DB != nil,
 		// ★ 工单双模式（2026-09-13）：anydoc 纯文案提取层是否就绪（venv firecrawl-anydoc + 脚本，healthcheck 缓存）
 		"anydoc_ready": fileproc.AnydocAvailable(),
+		// ★ #40（2026-09-21）：分布式能力口径——redis=跨实例聚合可用；
+		//   in-process=未配 REDIS_ADDR（仅单副本安全）；unreachable=配了但探活失败（逐次降级）。
+		//   监控/巡检可直接对该字段做告警，不再依赖翻启动日志；
+		//   本端点无鉴权，故刻意只暴露状态词、不暴露 REDIS_ADDR 内网地址。
+		"distributed": redis.Availability(),
 	})
 }
 
@@ -785,8 +817,9 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 // handleTranslationLangs 语言列表接口（/api/translation/langs）：返回知识库支持的语言代码/名称/旗帜。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。返回 kb_langs 数组。
 // ★ #23（2026-09-19）：数组尾部追加 zh（简体中文）——外语→中文方向的目标语言，
-//   走纯模型直翻（不在 TranslateLangs，故 kb 标记 false，前端选它时后端 SplitOptions
-//   自动归入 directOther），让国外用户能把任意语言翻回简体中文。
+//
+//	走纯模型直翻（不在 TranslateLangs，故 kb 标记 false，前端选它时后端 SplitOptions
+//	自动归入 directOther），让国外用户能把任意语言翻回简体中文。
 func (s *Server) handleTranslationLangs(w http.ResponseWriter, r *http.Request) {
 	langs := make([]map[string]string, 0, len(config.TranslateLangs)+1)
 	// 遍历全局语言配置组装语言元信息
@@ -823,7 +856,7 @@ func (s *Server) handleKBStats(w http.ResponseWriter, r *http.Request) {
 	tid := s.currentTenant(r)
 	total, perLang, seg, err := s.DB.Stats(tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{

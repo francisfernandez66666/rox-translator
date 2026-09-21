@@ -13,7 +13,7 @@
  * - 账号注销：自助注销账号
  */
 
-import { request, authHeaders, type AdminResp } from './core'
+import { request, authHeaders, API_BASE, type AdminResp } from './core'
 
 /** 登录用户信息结构：含 id/用户名/显示名/角色/所属租户 */
 export interface AuthUser {
@@ -41,6 +41,27 @@ export interface LoginResp {
 /** 登录：用户名+密码，返回会话 token 与用户/组织上下文 */
 export async function login(username: string, password: string): Promise<LoginResp> {
   return request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) })
+}
+
+/** SSOProvider 已接入的身份源（IdP）：name 回传后端，display_name 用于按钮文案 */
+export interface SSOProvider { name: string; display_name: string }
+
+/**
+ * ssoProviders 查询已启用的 IdP（★ #38 前端接线）。
+ * 服务端未配置 SSO 时回 {enabled:false, providers:[]}，调用方据此整块不渲染按钮，
+ * 不能在登录页留一排点了只会报错的死按钮。
+ */
+export async function ssoProviders(): Promise<{ success?: boolean; enabled: boolean; providers: SSOProvider[] }> {
+  return request('/api/sso/providers')
+}
+
+/**
+ * ssoLoginUrl SSO 发起地址（/api/sso/login?provider=）。
+ * 必须以浏览器整页跳转消费：该端点回 302 到 IdP 授权页并下发 state cookie，
+ * fetch 会把它当跨域 XHR 解析而丢掉整个重定向链。
+ */
+export function ssoLoginUrl(provider: string): string {
+  return `${API_BASE}/api/sso/login?provider=${encodeURIComponent(provider)}`
 }
 
 /** 登录后自助修改密码（校验原密码）。首登强制改密（must_change_pwd=1）时用于设置新密码 */

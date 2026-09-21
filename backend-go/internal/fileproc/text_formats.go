@@ -2,6 +2,7 @@
 // fileproc 包纯文本类格式提取器。
 // 包含 srt/vtt 字幕、md Markdown、json、yaml、txt/csv 文本的提取。
 // 全部复用 Extractor 的去重与规整逻辑；输出为待翻译文本片段列表。
+// ★ md 的「哪一段可译、哪一段是骨架」判定不在本文件，统一在 md_structure.go（提取与写回共用）。
 // 另提供 WriteComparisonXlsx：无原格式回写能力的格式（pdf/txt/csv/srt/vtt/md/json/yaml）
 // 统一降级生成「源文+译文」xlsx 对照表作为翻译产物。
 // =============================================
@@ -11,20 +12,18 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
 )
 
-// markdown 行内语法正则：图片 / 链接 / 强调标记 / 分隔线
-var (
-	imgRe      = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
-	linkRe     = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
-	emphasisRe = regexp.MustCompile(`\*\*([^*]+)\*\*|\*([^*]+)\*|__([^_]+)__|_([^_]+)_|` + "`" + `([^` + "`" + `]+)` + "`" + `|~~([^~]+)~~`)
-	sepRe      = regexp.MustCompile(`^(-{3,}|={3,}|\*{3,}|#{1,6})$`)
-)
+// ★ 结构层重做（2026-09-22）后删除的四条正则：imgRe / linkRe / emphasisRe / sepRe。
+// 它们服务的是「提取时把整行剥成一个裸文本键」的旧模型，其中 emphasisRe 有 6 个捕获组却用
+// ReplaceAllString(t,"$1") 回填，导致 *斜体*、`code`、~~删除~~ **连内容一起**从产物里消失（RC-5，
+// 实测 ** 381→0、16 个反引号内技术标识符被整段删除）。新模型改为「骨架落在 span 之外、行内标记
+// 照原样送模型并就地替换」，剥标记这一步本身不再存在，故不留兼容壳（留着只会被后来人当入口误用）。
+// 结构判定统一在 md_structure.go。
 
 // extractLines 逐行清洗后加入提取器（txt/csv/md/yaml 共用的行模式基座）。
 // 参数：path=文件路径，e=提取器，clean=行级清洗函数（返回 "" 表示丢弃该行）。
@@ -90,46 +89,34 @@ func isCueNoise(line string) bool {
 	return false
 }
 
-// extractMarkdown 提取 Markdown 正文：
-// 围栏代码块整段剔除；剥离图片/链接语法与强调标记后入正文；纯结构行（分隔线/仅标题符）丢弃。
+// extractMarkdown 提取 Markdown 正文：逐行走 md_structure 的统一判定层。
+// ★ 口径改造（2026-09-22，工单 T20260921075004EF8）：旧实现在这里做四件事——
+// 围栏整段剔除、剥图片/链接语法、emphasisRe 剥行内标记、sepRe 丢分隔线——
+// 结果「提取出的是一个裸文本键、写回时整行覆盖」，一次性造成了 6 类线上缺陷
+// （行内标记连内容被删、表格降级散文、纯结构行进翻译表导致 prompt 泄漏、围栏整块不译、
+// 无空格结构前缀把 `#` 送模型）。现在全部收敛到 mdParseLine：
+// 这里只负责「把每个可译片段的键交给提取器」，骨架由写回侧按同一判定就地保留。
 // 参数：path=文件路径，e=提取器。
 func extractMarkdown(path string, e *Extractor) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	inCode := false
+	// ctx 跨行推进围栏/块注释状态：必须与写回侧同一顺序、同一函数，否则键对不上（口径漂移）
+	ctx := &mdLineCtx{}
 	for _, raw := range strings.Split(string(b), "\n") {
-		t := strings.TrimSpace(strings.TrimRight(raw, "\r"))
-		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
-			inCode = !inCode // 围栏开合翻转（围栏行与块内容均不入库）
-			continue
-		}
-		if inCode || t == "" || sepRe.MatchString(t) {
-			continue
-		}
-		// ★ D5：结构前缀（# > - 数字.）不进翻译键——写回侧负责原样粘回，
-		//   模型只见文本节点，标记零破坏。
-		t = mdStructPrefixRe.ReplaceAllString(t, "")
-		t = imgRe.ReplaceAllString(t, "")
-		t = linkRe.ReplaceAllString(t, "$1")
-		t = emphasisRe.ReplaceAllString(t, "$1")
-		t = strings.TrimSpace(t)
-		if t != "" {
-			e.add(t)
+		for _, sp := range mdParseLine(raw, ctx) {
+			e.add(sp.key)
 		}
 	}
 	return nil
 }
 
-// ApplyAlignedText ★ D5（2026-09-12）：txt/csv/md 按「原文件行序」对齐写回。
-// 旧实现从去重提取表重建全文：空行、重复行、代码围栏、分隔线全部丢失，
-// md 行内标记被剥毁。现在未命中的行原样保留，命中行按提取侧同款规整键匹配，
-// 并做 md 结构保护：
-//   - 围栏（```/~~~）内与分隔线行永不替换；
-//   - 命中行重新粘回结构前缀（#/>/-/数字列表）；
-//   - 整行仅一个链接时输出 [译文](url)，保住 URL；
-//
+// ApplyAlignedText ★ D5（2026-09-12）+ 结构层重做（2026-09-22）：txt/csv/md 按「原文件行序」对齐写回。
+// txt/csv：整行为键（旧口径不变），未命中行原样保留，译文做换行归一。
+// md：走 md_structure 的 span 模型——**只在可译片段区间内就地替换，片段外的字节（结构前缀、
+// 管道/框线、围栏标记与语言标注、缩进、URL、代码语句、注释标记）逐字节不动**。
+// 由此天然获得三条不变式：产物与原文行数 1:1、表格列数守恒、行内标记不丢。
 // 参数：ext=.txt/.csv/.md；srcPath=原文件；outPath=输出；translations=键→译文。
 func ApplyAlignedText(ext, srcPath, outPath string, translations map[string]string) error {
 	b, err := os.ReadFile(srcPath)
@@ -141,54 +128,86 @@ func ApplyAlignedText(ext, srcPath, outPath string, translations map[string]stri
 		nl = "\r\n"
 	}
 	lines := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
-	inCode := false
+	// 锚点重算（RC-6）要对照「原文标题 ↔ 译文标题」，必须先留一份未改写的原文行
+	srcLines := append([]string(nil), lines...)
 	md := ext == ".md"
+	ctx := &mdLineCtx{}
 	for i, raw := range lines {
+		if md {
+			lines[i] = mdApplyLine(raw, ctx, translations)
+			continue
+		}
 		t := strings.TrimSpace(raw)
-		if md && (strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")) {
-			inCode = !inCode // 围栏行与块内容原样保留
+		if t == "" {
 			continue
 		}
-		if t == "" || (md && (inCode || sepRe.MatchString(t))) {
-			continue
-		}
-		pfx := ""
-		body := strings.TrimSpace(raw)
-		if md {
-			pfx = mdStructPrefixRe.FindString(raw) // 含尾部空白，原样粘回
-			body = strings.TrimSpace(strings.TrimPrefix(body, strings.TrimSpace(pfx)))
-		}
-		key := body
-		if md {
-			key = imgRe.ReplaceAllString(key, "")
-			key = linkRe.ReplaceAllString(key, "$1")
-			key = emphasisRe.ReplaceAllString(key, "$1")
-			key = strings.TrimSpace(key)
-		}
-		tr, ok := translations[key]
-		if !ok || tr == "" {
+		tr, ok := translations[t]
+		if !ok {
 			continue // ★ 未命中保留原文（旧实现同样保留，但整表重建时该行位置已错乱）
 		}
-		out := strings.TrimSpace(tr)
-		if md {
-			// 整行唯一链接：译文回装进链接保住 URL（键已去标记，直接整行替换会丢地址）
-			if m := singleLinkRe.FindStringSubmatch(body); len(m) == 3 {
-				out = "[" + out + "](" + m[2] + ")"
-			}
+		if out := mdFoldNewlines(tr); out != "" {
+			lines[i] = out
 		}
-		if pfx != "" {
-			out = pfx + out
-		}
-		lines[i] = out
+	}
+	// ★ RC-6（2026-09-22）：链接目标被骨架保护 ⇒ 目录链接文字翻了、`#中文锚点` 没翻，
+	//   译文目录整段点不动。这里按「原文标题 ↔ 译文标题」成对重算锚点（不改任何正文与真实 URL）。
+	if md {
+		lines = mdRemapAnchors(srcLines, lines)
 	}
 	return os.WriteFile(outPath, []byte(strings.Join(lines, nl)), 0o644)
 }
 
-// mdStructPrefixRe 行首结构前缀（缩进 + 标题/引用/列表/编号）。
-var mdStructPrefixRe = regexp.MustCompile(`^([ \t]*(?:#{1,6}|>|[-*+]|\d+[.)])[ \t]+)`)
+// mdApplyLine 对一行做 span 级就地替换，返回新行（无命中时返回原行，逐字节相同）。
+func mdApplyLine(raw string, ctx *mdLineCtx, translations map[string]string) string {
+	spans := mdParseLine(raw, ctx)
+	line := strings.TrimRight(raw, "\r") // 与 mdParseLine 的偏移量基准保持一致
+	if len(spans) == 0 {
+		return line
+	}
+	out := line
+	hitStart := -1 // 最左侧被替换片段的位置（倒序遍历结束后即为第一个命中片段的起点）
+	// ★ 从行尾往行首替换：span 互不重叠且按升序生成，倒序替换才能保证「前面那些 span 的偏移量」
+	//   不被后面替换造成的长度变化打断（正序替换第二个 span 就会错位到别的内容上）。
+	for i := len(spans) - 1; i >= 0; i-- {
+		sp := spans[i]
+		tr, ok := translations[sp.key]
+		if !ok {
+			continue
+		}
+		rep := mdNormalizeTranslation(tr, sp.cell)
+		if rep == "" || rep == sp.key {
+			continue // 空译文或同文回显：等于没翻，保留原文更诚实
+		}
+		rep = mdProtectLinkTargets(sp.key, rep)
+		out = out[:sp.start] + rep + out[sp.end:]
+		hitStart = sp.start
+	}
+	if pfxLen := mdSplitPrefix(line); pfxLen > 0 && hitStart == pfxLen {
+		// RC-1 的另一半：源文件写的是 `#标题`（标记后无空白），只粘回标记会得到 `#Title`——
+		// CommonMark 里它**不再是标题**（渲染成字面量），层级当场丢失，故补一个空格。
+		// 只有「第一个被替换的片段紧贴前缀」时才处理：否则会把表格中间的 cell 前也塞进空格。
+		out = mdEnsurePrefixSpace(out, pfxLen)
+	}
+	return out
+}
 
-// singleLinkRe 整行单链接：[text](url)
-var singleLinkRe = regexp.MustCompile(`^\[([^\]]*)\]\(([^)]+)\)$`)
+// mdEnsurePrefixSpace 结构前缀若不以空白收尾（`#标题`/`-列表项`/`1.编号项` 这类无空格写法），
+// 补一个空格使其仍是合法的 markdown 标记。原文本来有空格的绝不改动（不做无谓的格式抖动）。
+func mdEnsurePrefixSpace(line string, pfxLen int) string {
+	if pfxLen <= 0 || pfxLen > len(line) {
+		return line
+	}
+	if line[pfxLen-1] == ' ' || line[pfxLen-1] == '\t' {
+		return line // 原写法已有空白分隔，保持逐字节一致
+	}
+	if pfxLen >= len(line) || line[pfxLen] == ' ' || line[pfxLen] == '\t' {
+		return line // 防御：前缀已含尾部空白时不该再补
+	}
+	if strings.TrimSpace(line[:pfxLen]) == "" {
+		return line // 纯缩进前缀（列表续行/代码缩进）：塞空格会改缩进语义
+	}
+	return line[:pfxLen] + " " + line[pfxLen:]
+}
 
 // extractJSON 递归收集 JSON 中全部字符串值（键名不入库）。
 func extractJSON(path string, e *Extractor) error {

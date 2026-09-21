@@ -3,7 +3,8 @@
 // 能力：文本/多文件建单（fast/pro）、列表 Table、进度气泡（开气泡期间 3s 详情轮询 +
 //       5s 列表轮询）、取消/删除/下载（blob 带鉴权）、已完成工单反馈。
 // ============================================================================
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import { Button, DataTable, Link, Switch } from '@/ui/langcross/src'
 import { toastSuccess, toastError } from '@/lib/toastBus'
 import {
@@ -66,7 +67,7 @@ const qaRuleLabel = (rule: string): string => { const k = QA_RULE_KEYS[rule]; re
 // 徽标基础样式（error 红 / warning 黄 / 存疑橙，均带浅底圆角）
 const badgeStyle = (bg: string, fg: string): React.CSSProperties => ({
   display: 'inline-flex', alignItems: 'center', gap: 3, background: bg, color: fg,
-  border: `1px solid ${fg}33`, borderRadius: 10, padding: '1px 7px', fontSize: 11.5, whiteSpace: 'nowrap',
+  border: `1px solid ${fg}33`, borderRadius: 10, padding: '1px 7px', fontSize: 12.5, whiteSpace: 'nowrap',
 })
 
 // QualityBadges 列表行质检徽标（★ 改造 5）：
@@ -120,24 +121,24 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: string; f
 
   return (
     <div style={{ marginTop: 12, borderTop: '1px solid #2A2F3A', paddingTop: 10 }}>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('tk.qaTitle')}</div>
+      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{t('tk.qaTitle')}</div>
 
       {rep && (
         <>
-          <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span style={badgeStyle(rep.pass ? 'rgba(231,233,234,0.10)' : '#fdecea', rep.pass ? '#E7E9EA' : '#c5221f')}>
               {rep.pass ? `${t('tk.qaPass')}` : `${t('tk.qaFail')}`}
             </span>
             <span style={{ color: '#555' }}>{tpl('tk.qaSummary', { errors: rep.errors, warnings: rep.warnings })}</span>
           </div>
           {rep.errors > 0 && (
-            <div style={{ fontSize: 11.5, color: 'var(--lc-danger)', marginTop: 6, lineHeight: 1.5 }}><Icon n="alert" /> {t('tk.qaErrorNote')}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--lc-danger)', marginTop: 6, lineHeight: 1.5 }}><Icon n="alert" /> {t('tk.qaErrorNote')}</div>
           )}
           {rep.issues && rep.issues.length > 0 ? (
             <div style={{ marginTop: 8, maxHeight: 180, overflowY: 'auto', border: '1.2px solid #2A2F3A', borderRadius: 6 }}>
               {rep.issues.map((it: QAReportIssue, i: number) => (
                 <div key={`${it.lang}-${it.rule}-${i}`}
-                     style={{ display: 'flex', gap: 6, alignItems: 'flex-start', padding: '5px 8px', fontSize: 11.5, borderTop: i ? '1px solid #2A2F3A' : 'none' }}>
+                     style={{ display: 'flex', gap: 6, alignItems: 'flex-start', padding: '5px 8px', fontSize: 12.5, borderTop: i ? '1px solid #2A2F3A' : 'none' }}>
                   <span style={badgeStyle('rgba(231,233,234,0.16)', '#9AA0AA')}>{langLabel(it.lang, lang)}</span>
                   <span style={badgeStyle('rgba(231,233,234,0.16)', '#9AA0AA')}>{qaRuleLabel(it.rule)}</span>
                   <span style={badgeStyle(it.level === 'error' ? '#fdecea' : '#fff6e0', it.level === 'error' ? '#c5221f' : '#b26a00')}>
@@ -148,17 +149,17 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: string; f
               ))}
             </div>
           ) : (
-            <div style={{ fontSize: 11.5, color: '#E7E9EA', marginTop: 6 }}>{t('tk.qaNoIssues')}</div>
+            <div style={{ fontSize: 12.5, color: '#E7E9EA', marginTop: 6 }}>{t('tk.qaNoIssues')}</div>
           )}
         </>
       )}
 
       {scoreKeys.length > 0 && (
         <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: 12, color: '#555', marginBottom: 4 }}>{t('tk.evalScores')}</div>
+          <div style={{ fontSize: 13, color: '#555', marginBottom: 4 }}>{t('tk.evalScores')}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             {scoreKeys.map((lc) => (
-              <div key={lc} style={{ fontSize: 11.5, display: 'flex', gap: 6, alignItems: 'center' }}>
+              <div key={lc} style={{ fontSize: 12.5, display: 'flex', gap: 6, alignItems: 'center' }}>
                 <span style={badgeStyle('rgba(231,233,234,0.16)', '#9AA0AA')}>
                   {langLabel(lc, lang)}
                 </span>
@@ -170,8 +171,82 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: string; f
       )}
 
       {(flaggedLangs.length > 0 || flagged) && (
-        <div style={{ fontSize: 11.5, color: 'var(--lc-warn, #D29922)', marginTop: 8, lineHeight: 1.5 }}><Icon n="alert" /> {t('tk.qaFlaggedTip')}</div>
+        <div style={{ fontSize: 12.5, color: 'var(--lc-warn, #D29922)', marginTop: 8, lineHeight: 1.5 }}><Icon n="alert" /> {t('tk.qaFlaggedTip')}</div>
       )}
+    </div>
+  )
+}
+
+// ============ ★ 任务 #43（2026-09-22）：自绘弹窗无障碍收口 ============
+// 背景：全量 UAT §4.2 实测「a11y 仅剩 1 处真缺口」即本页两处 tk-overlay 自绘弹窗——
+//   既没有 role/aria-modal（读屏不知道进入模态），也不能 Esc 关闭、Tab 会跑到弹窗背后的列表按钮上、
+//   关闭后焦点掉回 document.body（键盘用户被迫从头 Tab 回来）。
+// 为什么不直接薄委托 ui/langcross 的 Dialog：
+//   ① 进度气泡是纯信息卡，Dialog 强制渲染「取消/确定」动作条且宽度固定 440，套进来就是行为变更；
+//   ② 现成 Dialog/Drawer 只做到「Esc + 初始聚焦取消按钮」，**Tab 焦点圈定与关闭后焦点归还全仓无实现可复用**
+//      （grep role="dialog" 命中 Dialog/Drawer/KbUploadDialog 三处，均无 trap）。
+//   故此处按同一 aria 口径（role=dialog + aria-modal + aria-labelledby + Esc 走 onClose）
+//   补齐缺失的三件事，并让本页两个弹窗共用同一个实现（TkDialog），不再各写一份。
+
+// 弹窗内可聚焦元素：与浏览器 Tab 序列一致的元素集合（自绘弹窗里有原生 input/textarea）
+const DIALOG_FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+
+// useDialogA11y：挂载时把焦点送进弹窗、Tab 圈定在弹窗内、Esc 关闭、卸载后焦点归还触发元素。
+// 依赖数组只放 ref —— 弹窗开关由父级条件渲染控制（开=挂载、关=卸载），生命周期即模态生命周期，
+// 不能随父级重渲染重绑监听（进度气泡每 3s 轮询刷新 detail，会不停摘挂 keydown）。
+function useDialogA11y(panelRef: RefObject<HTMLElement>, onClose: () => void) {
+  // onClose 用 ref 透传：避免闭包捕获首次渲染的回调（父级 state 变化后就是过期函数）
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+
+  useEffect(() => {
+    const panel = panelRef.current
+    if (!panel) return
+    // 打开前的焦点元素：多为列表行内的「进度」/「反馈」链接，关闭后原路归还
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    panel.focus()
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); closeRef.current(); return }
+      if (e.key !== 'Tab') return
+      const items = Array.from(panel.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE))
+        .filter((el) => !el.hasAttribute('hidden') && el.getAttribute('aria-hidden') !== 'true')
+      // 无可聚焦内容（纯信息气泡）：焦点留在面板自身，Tab 不外逃
+      if (!items.length) { e.preventDefault(); panel.focus(); return }
+      const first = items[0]
+      const last = items[items.length - 1]
+      const active = document.activeElement
+      if (!panel.contains(active)) { e.preventDefault(); first.focus(); return } // 焦点被外部抢走，拉回弹窗
+      if (e.shiftKey && (active === first || active === panel)) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus() }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      // 关闭后归还焦点：元素可能因列表刷新被卸载，此时不强塞（否则会 focus 到失效节点）
+      if (opener && opener.isConnected) opener.focus()
+    }
+  }, [panelRef])
+}
+
+// TkDialog：本页自绘弹窗的唯一实现（进度气泡 / 工单反馈共用）
+function TkDialog({ title, width, testid, onClose, children }: {
+  title: ReactNode
+  width?: number
+  testid: string
+  onClose: () => void
+  children: ReactNode
+}) {
+  const panelRef = useRef<HTMLDivElement>(null)
+  const titleId = useId() // aria-labelledby 指向标题节点，读屏进入弹窗即报出标题
+  useDialogA11y(panelRef, onClose)
+  return (
+    <div className="tk-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div ref={panelRef} className="tk-dialog" data-testid={testid} style={{ width }}
+           role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+        <div className="tk-dialog__title" id={titleId}>{title}</div>
+        {children}
+      </div>
     </div>
   )
 }
@@ -420,12 +495,12 @@ export default function TicketsPage() {
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 24px', width: '100%', minWidth: 0 }}>
       <style>{CSS_TK}</style>
       <h2 style={{ margin: '0 0 4px' }}>{t('tk.entry')}</h2>
-      <p style={{ fontSize: 12, color: 'var(--lc-text-3)', margin: '0 0 12px' }}>{t('tk.createHint')}</p>
+      <p style={{ fontSize: 13, color: 'var(--lc-text-3)', margin: '0 0 12px' }}>{t('tk.createHint')}</p>
 
       {/* ===== 创建工单 ===== */}
       <div style={{ border: '1.2px solid #464C58', borderRadius: 8, padding: 16, marginBottom: 18 }}>
         {imageHeavyHint && (
-          <div style={{ background: 'rgba(210,153,34,0.10)', border: '1.2px solid #f0c674', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 12 }}>
+          <div style={{ background: 'rgba(210,153,34,0.10)', border: '1.2px solid #f0c674', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 13 }}>
             <Icon n="alert" /> {t('tk.imageHeavyHint')}
             <Link onClick={() => setImageHeavyHint(false)} aria-label={t('common.close')}><Icon n="close" /></Link>
           </div>
@@ -441,7 +516,7 @@ export default function TicketsPage() {
         {mode === 'file' && (
           <div style={{ marginBottom: 10 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{t('tk.deliveryLabel')}</span>
+              <span style={{ fontSize: 14, color: 'var(--lc-text-3)' }}>{t('tk.deliveryLabel')}</span>
               <Button size="sm" variant={delivery === 'restore' ? 'primary' : 'secondary'}
                 onClick={() => { setDelivery('restore'); localStorage.setItem('ticket_delivery', 'restore') }}>
                 {t('tk.deliveryRestore')}
@@ -451,33 +526,35 @@ export default function TicketsPage() {
                 {t('tk.deliveryText')}
               </Button>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--lc-text-3)', marginTop: 4 }}>
+            <div style={{ fontSize: 13, color: 'var(--lc-text-3)', marginTop: 4 }}>
               {delivery === 'text' ? t('tk.deliveryTextTip') : t('tk.deliveryRestoreTip')}
             </div>
           </div>
         )}
 
-        <input className="lc-input" value={title} onChange={(e) => setTitle(e.target.value)} aria-label={t('tk.titlePlaceholder')} placeholder={t('tk.titlePlaceholder')} style={{ width: '100%', marginBottom: 8 }} />
+        {/* data-testid 供 e2e 锚定（★ 任务 #43）：标题/原文两个输入框是本页唯二的文本输入位，
+            用 placeholder 当锚点会随 12 语种词典变化而翻红，故给稳定测试标识 */}
+        <input className="lc-input" data-testid="tk-title" value={title} onChange={(e) => setTitle(e.target.value)} aria-label={t('tk.titlePlaceholder')} placeholder={t('tk.titlePlaceholder')} style={{ width: '100%', marginBottom: 8 }} />
 
         {mode === 'text' ? (
-          <textarea className="lc-textarea" rows={4} value={text} onChange={(e) => setText(e.target.value)} aria-label={t('tk.textPlaceholder')} placeholder={t('tk.textPlaceholder')} style={{ width: '100%', minHeight: 110, maxHeight: 360, resize: 'vertical' }} />
+          <textarea className="lc-textarea" data-testid="tk-source" rows={4} value={text} onChange={(e) => setText(e.target.value)} aria-label={t('tk.textPlaceholder')} placeholder={t('tk.textPlaceholder')} style={{ width: '100%', minHeight: 110, maxHeight: 360, resize: 'vertical' }} />
         ) : (
           <>
               <div onClick={() => document.getElementById('tk-file-input')?.click()}
                 style={{ border: '2px dashed #464C58', borderRadius: 8, padding: 34, textAlign: 'center', cursor: 'pointer', color: 'var(--lc-text-3)', background: '#0E1014' }}>
                 <input id="tk-file-input" type="file" multiple hidden accept={delivery === 'text' ? TEXT_DELIVERY_ACCEPT : TRANSLATE_FILE_ACCEPT} onChange={onFileSelect} />
-              <div>{delivery === 'text' ? t('tk.fileHintText') : t('tk.fileHint')}<br /><span style={{ fontSize: 12 }}>{t('tk.multiHint')}</span></div>
+              <div>{delivery === 'text' ? t('tk.fileHintText') : t('tk.fileHint')}<br /><span style={{ fontSize: 13 }}>{t('tk.multiHint')}</span></div>
             </div>
               {files.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, alignItems: 'center' }}>
                   {files.map((f, idx) => (
-                  <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#0E1014', border: '1.2px solid #464C58', borderRadius: 8, padding: '3px 10px', fontSize: 12, maxWidth: 320 }}>
+                  <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#0E1014', border: '1.2px solid #464C58', borderRadius: 8, padding: '3px 10px', fontSize: 13, maxWidth: 320 }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
-                      <span style={{ color: '#999', fontSize: 11.5 }}>{fmtKB(f.size)}</span>
+                      <span style={{ color: '#999', fontSize: 12.5 }}>{fmtKB(f.size)}</span>
                     <Link tone="danger" onClick={() => removeFileAt(idx)} aria-label={`${t('common.delete')}: ${f.name}`}><Icon n="close" /></Link>
                   </div>
                 ))}
-                <div style={{ width: '100%', fontSize: 12, color: 'var(--lc-text-3)' }}>
+                <div style={{ width: '100%', fontSize: 13, color: 'var(--lc-text-3)' }}>
                   {tpl('tk.filesCount', { n: files.length })} · {(files.reduce((a, f) => a + f.size, 0) / 1024).toFixed(0)} KB
                 </div>
               </div>
@@ -490,7 +567,7 @@ export default function TicketsPage() {
           <LangChips langs={langs} onRemove={setLangs} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
-          <label style={{ fontSize: 13, color: '#555', whiteSpace: 'nowrap' }}>{t('tk.langsLabel')}</label>
+          <label style={{ fontSize: 14, color: '#555', whiteSpace: 'nowrap' }}>{t('tk.langsLabel')}</label>
           <div style={{ minWidth: 300, flex: 1 }}>
             <LangMultiSelect value={langs} onChange={setLangs} />
           </div>
@@ -498,14 +575,14 @@ export default function TicketsPage() {
             onChange={(val) => { setQualityMode(val); localStorage.setItem('translate_mode', val) }} />
           {/* ★ 缩翻（任务7）：勾选并输入最长字符限制，提示模型精简输出。
               预留定宽槽位（72px）——勾选只显隐输入框、不改变行宽，避免模式切换/创建按钮位置跳动 */}
-          <label style={{ fontSize: 13, color: '#555', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+          <label style={{ fontSize: 14, color: '#555', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
             <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> {t('app.condense')}
           </label>
           <div style={{ width: 72, flexShrink: 0 }}>
             {condenseOn && (
               <input type="number" min={1} max={10000} value={condenseMax}
                 onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
-                style={{ width: '100%', boxSizing: 'border-box', height: 30, fontSize: 12, border: '1.2px solid #464C58', borderRadius: 6, padding: '0 6px' }}
+                style={{ width: '100%', boxSizing: 'border-box', height: 30, fontSize: 13, border: '1.2px solid #464C58', borderRadius: 6, padding: '0 6px' }}
                 title={t('tk.condenseMaxTitle')} />
             )}
           </div>
@@ -577,34 +654,37 @@ export default function TicketsPage() {
         />
       </div>
 
-      {/* 进度气泡（Dialog 承载，等价 Vue Teleport 气泡内容） */}
+      {/* 进度气泡（TkDialog 承载：role=dialog / aria-modal / Esc / 焦点进出见 useDialogA11y） */}
       {/* ★ 改造 5：宽度按是否有质检数据自适应——质检明细表需要更宽的可读区（380 → 620） */}
       {detail && (
-      <div className="tk-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) { setDetail(null); stopDetailPoll() } }}>
-      <div className="tk-dialog" style={{ width: detail.quality ? 620 : 380 }}>
-        <div className="tk-dialog__title">{detail.ticket?.title || t('tk.progress')}</div>
+      <TkDialog
+        title={detail.ticket?.title || t('tk.progress')}
+        width={detail.quality ? 620 : 380}
+        testid="tk-progress-dialog"
+        onClose={() => { setDetail(null); stopDetailPoll() }}
+      >
         <div className="tk-dialog__body">
         {pct !== null && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '10px 0 6px' }}>
             <div className="tk-progress" style={{ flex: 1 }}><div className="tk-progress__bar" style={{ width: `${pct}%` }} /></div>
             <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--lc-text-1)', minWidth: 42 }}>{pct}%</span>
-            {stepLabel && <span style={{ fontSize: 12, color: 'var(--lc-text-3)' }}>{stepLabel}</span>}
+            {stepLabel && <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{stepLabel}</span>}
           </div>
         )}
         {states.length > 0 ? (
           <div style={{ marginTop: 8, maxHeight: 200, overflowY: 'auto' }}>
             {states.map((st: any) => (
-              <div key={st.id} className={`st-${st.status}`} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, padding: '3px 0' }}>
+              <div key={st.id} className={`st-${st.status}`} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, padding: '3px 0' }}>
                 <span style={{ flex: 1, color: '#555' }}>{stepName(st.step)}</span>
-                <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4,
+                <span style={{ fontSize: 12, padding: '1px 6px', borderRadius: 4,
                   background: st.status === 'success' ? 'rgba(231,233,234,0.10)' : st.status === 'running' ? 'rgba(231,233,234,0.16)' : st.status === 'error' ? 'rgba(229,72,77,0.10)' : '#16181C',
                   color: st.status === 'success' ? 'var(--lc-text-1)' : st.status === 'running' ? 'var(--lc-text-2)' : st.status === 'error' ? 'var(--lc-danger)' : 'var(--lc-text-3)' }}>{st.status}</span>
-                {st.error && <span style={{ color: 'var(--lc-danger)', fontSize: 11 }}><Icon n="alert" /> {st.error}</span>}
+                {st.error && <span style={{ color: 'var(--lc-danger)', fontSize: 12 }}><Icon n="alert" /> {st.error}</span>}
               </div>
             ))}
           </div>
         ) : (
-          <p style={{ fontSize: 12, color: 'var(--lc-text-3)', margin: '8px 0 0' }}>{t('tk.noSteps')}</p>
+          <p style={{ fontSize: 13, color: 'var(--lc-text-3)', margin: '8px 0 0' }}>{t('tk.noSteps')}</p>
         )}
         {/* ★ 改造 5：详情抽屉「质检报告」区块（确定性 QA 汇总 + Issues 明细 + 各语言评估分） */}
         <QualityBlock q={detail?.quality} lang={lang} flagged={detail?.ticket?.quality_flagged === 1} />
@@ -618,8 +698,7 @@ export default function TicketsPage() {
           </div>
         ) : null}
         </div>
-      </div>
-      </div>
+      </TkDialog>
       )}
 
       {/* 用户反馈弹窗（已完成工单 → 平台） */}
@@ -665,15 +744,13 @@ function TicketFeedbackModal({ target, onClose, onSubmitted }: {
   }
 
   return (
-    <div className="tk-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="tk-dialog" style={{ width: 520 }}>
-        <div className="tk-dialog__title">{t('fb.title')}</div>
+    <TkDialog title={t('fb.title')} width={520} testid="tk-feedback-dialog" onClose={onClose}>
         <div className="tk-dialog__body">
-          <p style={{ fontSize: 12, color: 'var(--lc-text-3)', margin: '0 0 10px' }}>{t('fb.hint')}</p>
+          <p style={{ fontSize: 13, color: 'var(--lc-text-3)', margin: '0 0 10px' }}>{t('fb.hint')}</p>
           <textarea className="lc-textarea" rows={4} maxLength={1000} value={content} onChange={(e) => setContent(e.target.value)} aria-label={t('fb.placeholder')} placeholder={t('fb.placeholder')} />
       <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
             <Switch checked={withContext} onChange={(e) => setWithContext(e.target.checked)} />
-            <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{t('fb.withContext')}</span>
+            <span style={{ fontSize: 14, color: 'var(--lc-text-3)' }}>{t('fb.withContext')}</span>
           </div>
         </div>
         <div className="tk-dialog__actions">
@@ -682,8 +759,7 @@ function TicketFeedbackModal({ target, onClose, onSubmitted }: {
                   {submitting ? t('fb.submitting') : t('fb.submit')}
           </Button>
         </div>
-      </div>
-    </div>
+    </TkDialog>
   )
 }
 
@@ -696,6 +772,9 @@ function fmtTime(s: string): string {
 const CSS_TK = `
 .tk-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:1200}
 .tk-dialog{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:14px;box-shadow:var(--lc-panel-highlight);max-width:calc(100vw - 32px);max-height:86vh;overflow:auto}
+/* 面板自身是 tabIndex=-1 的程序化焦点位（读屏在此朗读 aria-labelledby 标题），
+   不是可交互控件：给它画焦点环只会糊一整圈边框，视觉噪声且与卡片描边混淆 */
+.tk-dialog:focus{outline:none}
 .tk-dialog__title{padding:18px 24px 0;font-size:16px;font-weight:600;color:var(--lc-text)}
 .tk-dialog__body{padding:14px 24px 6px}
 .tk-dialog__actions{display:flex;justify-content:flex-end;gap:10px;padding:12px 24px 20px}

@@ -917,7 +917,7 @@ export default function Landing() {
             <article key={p.key} className={`lc-plan lc-reveal lc-mo-lift${p.pro ? ' lc-plan--pro' : ''}`} data-reveal-delay={String(i * 60)}>
               {p.pro && <span className="lc-plan-badge">{t('land.planBadge')}</span>} {/* 徽标只此一处：两侧靠"没有徽标"表达非推荐 */}
               <h3 className="lc-plan-name">{p.name}</h3>
-              <div className="lc-plan-price">{p.price}</div> {/* 价位取词典不取 /api/plans：落地页不该因后台调价而变样，那是 /pricing 的活 */}
+              <div className="lc-plan-price">{p.price}</div> {/* ★ #39：卡面只写档位口径（¥0 起步 / 积分套餐 / 定制），不抄具体金额——价目事实源唯一在 /api/plans，由 /pricing 渲染；本条口径由 Landing.dom.test ⑨ 钉死 */}
               <p className="lc-plan-desc">{p.desc}</p>
               {/* 反相卡上不能再放白底按钮（会糊成一片），所以 pro 用 dark、其余两档用 soft */}
               <Pill variant={p.pro ? 'dark' : 'soft'} href={p.href}>{p.btn}</Pill>

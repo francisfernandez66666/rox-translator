@@ -175,7 +175,7 @@ function setLang(l){
 func (s *Server) handleAdminOpenAPIDocsGet(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	mdZh := s.getDocsMD("zh")
@@ -194,7 +194,7 @@ func (s *Server) handleAdminOpenAPIDocsGet(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleAdminOpenAPIDocsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -220,7 +220,7 @@ func (s *Server) handleAdminOpenAPIDocsSave(w http.ResponseWriter, r *http.Reque
 		key = openAPIDocsConfigKeyEn
 	}
 	if err := s.Store.SetConfig(key, req.MD); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	note := "自定义文档已发布"
@@ -235,7 +235,7 @@ func (s *Server) handleAdminOpenAPIDocsSave(w http.ResponseWriter, r *http.Reque
 // handleAdminOpenAPIDocsPreview 超管预览渲染结果（不落库；lang 缺省 zh）。
 func (s *Server) handleAdminOpenAPIDocsPreview(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -592,7 +592,7 @@ func (s *Server) handleOpenAPITerms(w http.ResponseWriter, r *http.Request) {
 	}
 	hits, err := s.Store.SearchTerms(ak.TenantID, 0, q, lang, limit)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "count": len(hits), "terms": hits})
@@ -653,12 +653,12 @@ func (s *Server) handleOpenAPIKeyRotate(w http.ResponseWriter, r *http.Request) 
 	}
 	// 轮换：删除旧 key 并签发同权限新 key（密钥仅明文返回一次）
 	if err := s.Store.DeleteAPIKey(ak.ID, ak.TenantID); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInternal), "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInternal), "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	newKey, err := s.Store.CreateAPIKey(ak.TenantID, ak.UserID, ak.Name, ak.Perms, ak.DailyCallLimit) // 轮换保留原归属用户
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInternal), "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInternal), "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{

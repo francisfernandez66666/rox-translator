@@ -13,6 +13,9 @@ export const zh: Record<string, string> = {
   'auth.username': '用户名',
   'auth.password': '密码',
   'auth.signIn': '登 录',
+  // ★ #38（2026-09-21）：第三方身份源（SSO/OIDC）登录入口；loginWith 的 {name} 由后端 display_name 填充
+  'auth.orSso': '或使用企业身份源登录',
+  'auth.loginWith': '使用 {name} 登录',
   'auth.forgot': '忘记密码？',
   'auth.noAccount': '没有账号？',
   'auth.freeRegister': '免费注册',
@@ -52,6 +55,7 @@ export const zh: Record<string, string> = {
   'auth.backToLogin': '返回登录',
   'auth.needAgree': '请阅读并同意《用户协议》与《隐私协议》',
   'auth.orgCodeRequired': '请填写组织编码',
+  'auth.orgInvite': '组织邀请码',
   'auth.orgNameRequired': '请填写组织中文名',
   'auth.inviteRequired': '普通成员须凭企业邀请码加入，请填写邀请码',
   'auth.dedicatedInfo': '您正通过「{name}」的专属入口注册，将自动加入该企业。',
@@ -141,6 +145,7 @@ export const zh: Record<string, string> = {
   // —— 占位 / 兜底状态（避免硬编码中文）——
   'auth.pwdPlaceholder': '8 位以上，含字母与数字',
   'auth.orgCodeStaffPlaceholder': '向企业管理员获取',
+  'auth.selectIndustry': '请选择所属行业',
   'auth.orgCnPlaceholder': '与企业执照名称一致',
   'auth.captchaRequired': '请先完成人机验证',
   'auth.sendCodeFail': '验证码发送失败',
@@ -171,6 +176,9 @@ export const en: Record<string, string> = {
   'auth.username': 'Username',
   'auth.password': 'Password',
   'auth.signIn': 'Sign in',
+  // ★ #38（2026-09-21）：第三方身份源（SSO/OIDC）登录入口；loginWith 的 {name} 由后端 display_name 填充
+  'auth.orSso': 'Or sign in with your corporate identity',
+  'auth.loginWith': 'Sign in with {name}',
   'auth.forgot': 'Forgot password?',
   'auth.noAccount': "Don't have an account?",
   'auth.freeRegister': 'Get started free',
@@ -210,6 +218,7 @@ export const en: Record<string, string> = {
   'auth.backToLogin': 'Back to sign in',
   'auth.needAgree': 'Please read and agree to the Terms of Service and Privacy Policy',
   'auth.orgCodeRequired': 'Please enter the org code',
+  'auth.orgInvite': 'Organization invite code',
   'auth.orgNameRequired': 'Please enter the organization name',
   'auth.inviteRequired': 'Members must join with an invite code; please enter it',
   'auth.dedicatedInfo': 'You are signing up via the dedicated entry of «{name}» and will auto-join this org.',
@@ -299,6 +308,7 @@ export const en: Record<string, string> = {
   // —— Placeholders / fallback status (avoid hardcoded Chinese) ——
   'auth.pwdPlaceholder': '8+ chars, letters and numbers',
   'auth.orgCodeStaffPlaceholder': 'Get it from your org admin',
+  'auth.selectIndustry': 'Select an industry',
   'auth.orgCnPlaceholder': 'Same as your business license name',
   'auth.captchaRequired': 'Please complete human verification first',
   'auth.sendCodeFail': 'Failed to send the code',

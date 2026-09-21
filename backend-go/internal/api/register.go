@@ -81,7 +81,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		EmailCode   string `json:"email_code"`    // 邮箱验证码（email_verify_enabled=1 时必填）
 		Captcha     string `json:"captcha_token"` // 人机验证 token（captcha_provider=turnstile 时必填）
 		Industry    string `json:"industry"`      // 所属行业（新租户注册时必填，来自行业包 code）
-	JobRole     string `json:"job_role"`      // ★ 角色功能（2026-09-19）：职业角色（角色包 persona code，可空；无效值静默忽略不阻断注册）
+		JobRole     string `json:"job_role"`      // ★ 角色功能（2026-09-19）：职业角色（角色包 persona code，可空；无效值静默忽略不阻断注册）
 		RoleChoice  string `json:"role_choice"`   // 角色选择（兼容旧客户端）：admin=我是管理员(建企业) / user=我是普通用户(邀请码加入)
 		Type        string `json:"type"`          // 注册类型：personal=个人用户 / enterprise=企业用户（默认）
 		Ref         string `json:"ref"`           // 个人邀请码（可选，邀请裂变：?ref=<个人码> 链接携带）
@@ -171,7 +171,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	// 人机验证（captcha_provider=turnstile 时校验；自助注册与受邀加入均拦截）
 	if err := s.verifyCaptcha(r, req.Captcha); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ 注册类型（个人用户 / 企业用户）：
@@ -483,6 +483,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				switch gerr := s.Store.GrantTrialStack(inviterUID, inviterTID, nu.ID, refTokens, refDays, maxDaily); {
 				case gerr == nil:
 					s.Store.LogAudit(inviteTenantID, nu.ID, "referral_bind", "user", fmt.Sprintf("受邀绑定邀请人 uid=%d", inviterUID))
+					// ★ #33 任务系统：好友注册成功 → 邀请人 +500 临时积分（有效期 14 天、可叠加、按受邀人去重）。
+					// 与体验叠加奖励同点触发：裂变日上限触顶（ErrReferralCap）时本笔不发，防绕开防刷闸门。
+					s.grantTaskEvent(r, inviterUID, store.TaskKeyInviteReg, "invitee:"+strconv.FormatInt(nu.ID, 10))
 				case errors.Is(gerr, store.ErrReferralCap):
 					s.Store.CreateAlert(inviterTID, "critical", "referral_cap",
 						fmt.Sprintf("邀请人 uid=%d 今日奖励已达上限 %d 笔，本笔(+%d token/%d天)已拒发，请人工核实",
@@ -532,7 +535,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -570,7 +573,7 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 	}
 	pb, _ := json.Marshal(perms)
 	if err := s.Ten.Update(t.ID, t.Name, t.ExpiresAt, string(pb)); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 充值 token 余额（叠加新台账行，独立到期日）
@@ -691,12 +694,12 @@ func (s *Server) wasInviteBind(invite string) bool {
 func (s *Server) handleInviteCodes(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	codes, err := s.Store.ListInviteCodes()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 企业用户（非超管）仅可管理本企业邀请码：按当前生效租户过滤
@@ -718,7 +721,7 @@ func (s *Server) handleInviteCodes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleInviteCodeCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {

@@ -49,6 +49,31 @@ test.describe('像素级 UAT', () => {
     await shot(page, 'p2_workbench');
   });
 
+  // ★ #36 + #35（2026-09-21 用户反馈）结构/可读性双断言：
+  //   #36 即时翻译的输入框与译文合并进同一张对话框卡（旧版是「输入卡 + 下方消息流」两块），
+  //      同时文件翻译入口从即时翻译下线（文件翻译统一走工单通道），故卡内不得再有 file input；
+  //   #35 登录后字号/对比度整体上调一档，这里用 getComputedStyle 钉住实测值，防字号回潮。
+  test('P2b 工作台合并对话框结构 + 字号对比度上调', async ({ page }) => {
+    await login(page);
+    await page.goto('/');
+    const dialog = page.locator('.cw-dialog');
+    await expect(dialog).toBeVisible();
+    // 输入框在对话框卡的滚动区内（合并后的唯一结构口径）
+    await expect(dialog.locator('.cw-dialog-body textarea')).toBeVisible();
+    await expect(dialog.locator('.cw-dialog-foot')).toBeVisible();
+    // 文件入口下线：全站工作台不应再挂隐藏的原生 file input
+    expect(await page.locator('input[type="file"]').count(), '即时翻译已移除文件上传入口').toBe(0);
+    // 字号：输入区 ≥14px、正文气泡 ≥15px（theme.css §十 + 组件 CW_CSS 共同口径）
+    const taFs = await dialog.locator('.cw-dialog-body textarea').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(taFs, `输入框字号 ${taFs}px 偏小（#35 已上调，勿回退）`).toBeGreaterThanOrEqual(14);
+    const welcomeFs = await dialog.locator('.cw-welcome').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(welcomeFs, `欢迎语字号 ${welcomeFs}px 偏小`).toBeGreaterThanOrEqual(14);
+    // 对比度：弱说明文字走 --lc-text-3（#979EAA = rgb(151, 158, 170)）
+    const welcomeColor = await dialog.locator('.cw-welcome').evaluate((el) => getComputedStyle(el).color);
+    expect(['rgb(151, 158, 170)', 'rgb(162, 168, 178)'], `弱文字色仍偏暗：${welcomeColor}`).toContain(welcomeColor);
+    await shot(page, 'p2b_workbench_merged');
+  });
+
   test('P3 自服务页渲染（余额/套餐/账号·企业 + 邀请·个人）', async ({ page }) => {
     await login(page);
     for (const [path, expectTxt, name] of [

@@ -2,12 +2,13 @@
 // api/persona_api.go — 职业角色（job_role）接口层（2026-09-19 角色功能）
 //   - GET  /api/register/personas      公开：启用中的角色字典（注册表单角色下拉）
 //   - POST /api/me/job-role            登录用户自助维护自己的职业角色（个人/企业通用；
-//                                      角色仅绑用户层级，退出企业仍存在——转岗/转行语义）
+//     角色仅绑用户层级，退出企业仍存在——转岗/转行语义）
 //   - GET  /api/admin/personas         角色管理列表（部门管理员以上，与行业字典同口径）
 //   - POST /api/admin/personas/create  新建角色包（仅超管；宿主租户0 pack_type='persona'）
 //   - POST /api/admin/personas/update  改名（仅超管）
 //   - POST /api/admin/personas/status  启停（仅超管）
 //   - POST /api/admin/personas/delete  删除（仅超管；仍被 users.job_role 引用时拒绝，停用替代）
+//
 // 行业字典（admin_kb.go 行业 CRUD）的镜像实现；job_role 校验一律「启用中的角色包 code」。
 // ============================================================================
 package api
@@ -43,7 +44,7 @@ func (s *Server) handleRegisterPersonas(w http.ResponseWriter, r *http.Request) 
 	if s.Store != nil {
 		pkgs, err := s.Store.ListPersonas()
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		for _, p := range pkgs {
@@ -80,7 +81,7 @@ func (s *Server) handleMyJobRole(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.Store.SetJobRole(u.ID, u.TenantID, code); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 角色变更影响检索可见域与 CJK 缓存键 → 统一失效（与包启停同口径）
@@ -93,12 +94,12 @@ func (s *Server) handleMyJobRole(w http.ResponseWriter, r *http.Request) {
 // 响应：{ success, personas: [{id,code,name,enabled,entry_count}] }
 func (s *Server) handleAdminPersonas(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireDeptAdmin(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	pkgs, err := s.Store.ListPersonas()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	counts, _ := s.Store.CountEntriesByPackages(store.SharedHostTenant)
@@ -113,7 +114,7 @@ func (s *Server) handleAdminPersonas(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePersonaCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -140,7 +141,7 @@ func (s *Server) handlePersonaCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := s.Store.CreateKBPackage(store.SharedHostTenant, 0, code, strings.TrimSpace(req.Name), store.PackPersona, store.PackRoleSource)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(store.SharedHostTenant, u.ID, "persona_create", "kb_packages", code)
@@ -152,7 +153,7 @@ func (s *Server) handlePersonaCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePersonaUpdate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -168,7 +169,7 @@ func (s *Server) handlePersonaUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.UpdatePersona(req.ID, strings.TrimSpace(req.Name)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(store.SharedHostTenant, u.ID, "persona_update", "kb_packages", fmt.Sprintf("id=%d name=%s", req.ID, req.Name))
@@ -180,7 +181,7 @@ func (s *Server) handlePersonaUpdate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePersonaStatus(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -196,7 +197,7 @@ func (s *Server) handlePersonaStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.TogglePersona(req.ID, req.Enabled); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(store.SharedHostTenant, u.ID, "persona_status", "kb_packages", fmt.Sprintf("id=%d enabled=%d", req.ID, req.Enabled))
@@ -210,7 +211,7 @@ func (s *Server) handlePersonaStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePersonaDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -234,7 +235,7 @@ func (s *Server) handlePersonaDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeletePersona(req.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(store.SharedHostTenant, u.ID, "persona_delete", "kb_packages", pkg.Code)

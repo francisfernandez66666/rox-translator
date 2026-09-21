@@ -2,6 +2,8 @@
 // FlowDef 流程引擎：Step/Edge/Compensation 编排执行器。
 // 支持按租户 flow_config 动态启停步骤、条件跳过、失败自动补偿重试（≤2 次）、
 // 每步状态写入工单轨迹表（ticket_state），全部执行成功返回 nil。
+// 步骤内部 panic 由 runGuarded 兜成该步失败（写 failed 轨迹 + 工单 rejected），
+// 绝不让工单停在 running/in_progress 的中间态。
 // 含已批准工单重跑保护（C4）：已批准工单重跑时仅执行 QA + TM 回写，不再改动人工终稿。
 // =============================================
 
@@ -16,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"translator/internal/observability"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -147,7 +150,7 @@ func (e *Executor) Execute(ctx context.Context, ticket *store.Ticket, onStep fun
 
 		// 标记运行中并执行步骤
 		_ = e.Store.SetTicketState(ticket.ID, step.Key, "running", "")
-		err := runFn(ctx, ticket)
+		err := runGuarded(step.Key, runFn, ctx, ticket)
 		if err == nil {
 			_ = e.Store.SetTicketState(ticket.ID, step.Key, "success", "")
 			if onStep != nil {
@@ -168,7 +171,7 @@ func (e *Executor) Execute(ctx context.Context, ticket *store.Ticket, onStep fun
 				if ctx.Err() != nil {
 					break
 				}
-				err2 := runFn(ctx, ticket)
+				err2 := runGuarded(step.Key, runFn, ctx, ticket)
 				if err2 == nil {
 					_ = e.Store.SetTicketState(ticket.ID, step.Key, "success", "")
 					if onStep != nil {
@@ -205,6 +208,29 @@ func (e *Executor) runner(key string) (RunFunc, bool) {
 	defer e.mu.Unlock()
 	fn, ok := e.Runs[key]
 	return fn, ok
+}
+
+// runGuarded 执行单个步骤函数并兜住其 panic（★ #56 装配回归补齐，2026-09-23 评审 §4.4）。
+//
+// 为什么必须有这层：Execute 此前直接 `runFn(ctx, ticket)`，任一步骤内部 panic 会沿调用栈
+// 冒到上游 goroutine（service.runTextTicket 的 worker / admin 手工重跑的 HTTP 处理），后果是
+//  1. 该步轨迹永远停在 running、工单状态永远停在 in_progress——既不成功也不失败，
+//     只能等 20 分钟卡死巡检（StartStallSweep）重排，用户侧表现为「无限处理中」；
+//  2. 后续步骤（含 approval/feedback）连同 onStep 进度回调一起蒸发，审批台看不到任何失败原因。
+//
+// 现把 panic 折算成与该步骤 `return err` 完全等价的错误值，交给 Execute 既有失败路径处理
+// （写 failed 轨迹 + 工单置 rejected + 返回错误），不新增语义分支；与 engine.recoverPipeline
+// （文件/文本管线 goroutine 兜底）同一口径：**只兜崩溃，绝不吞掉工单状态更新**。
+// 参数：key=步骤标识（仅用于日志与错误文案定位），fn=步骤执行函数。
+// 返回：步骤自身错误，或 "步骤内部崩溃: <panic 值>"。
+func runGuarded(key string, fn RunFunc, ctx context.Context, ticket *store.Ticket) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			observability.Error(ctx, "流程步骤执行 panic 已兜底为失败", "step", key, "ticket_id", ticket.ID, "panic", fmt.Sprint(r))
+			err = fmt.Errorf("步骤内部崩溃: %v", r)
+		}
+	}()
+	return fn(ctx, ticket)
 }
 
 // applyModeOverride 按工单模式就地覆盖流程步骤启停（不落库，仅本次执行生效）。

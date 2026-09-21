@@ -7,14 +7,11 @@ import { useCallback, useEffect, useState } from 'react'
 import { Badge, Button, DataTable, Drawer, Link, StatusPill } from '@/ui/langcross/src'
 import { confirmDialog } from '@/components/uiDialogs'
 import {
-  webhooks as apiWebhooks, webhookSave, webhookDelete, webhookTest, webhookDeliveries, webhookRetry,
+  webhooks as apiWebhooks, webhookSave, webhookDelete, webhookTest, webhookDeliveries, webhookRetry, type Any,
 } from '@/api'
 import { Panel, toastResp } from './parts'
 import { useT } from '@/i18n'
 import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
-
-/** Any Webhook 出参宽松别名 */
-type Any = Record<string, any>
 
 /** Webhook 回调通知面板 */
 export function WebhooksP() {
@@ -72,7 +69,7 @@ export function WebhooksP() {
 
   return (
     <Panel title={t('webhooks.title')} extra={<Button variant="primary" onClick={() => setDlg({ url: '', secret: '', events: 'translation.completed', max_retries: 3, retry_interval: 60 })}>＋ {t('webhooks.saveConfig')}</Button>}>
-      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 10px' }}>{t('webhooks.hint')}</p>
+      <p style={{ fontSize: 14, color: 'var(--adm-hint)', margin: '0 0 10px' }}>{t('webhooks.hint')}</p>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
         <input className="lc-input" value={String(dlg?.url || '')} onChange={(e) => setDlg((d) => (d ? { ...d, url: e.target.value } : d))} placeholder={t('webhooks.urlPlaceholder')} style={{ flex: 1, minWidth: 240 }} />
         <input className="lc-input" value={String(dlg?.secret || '')} onChange={(e) => setDlg((d) => (d ? { ...d, secret: e.target.value } : d))} placeholder={t('webhooks.secretPlaceholder')} style={{ width: 200 }} />

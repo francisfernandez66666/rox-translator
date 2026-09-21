@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, DataTable, Link, StatusPill } from '@/ui/langcross/src'
 import { confirmDialog, promptText } from '@/components/uiDialogs'
-import { apiKeys as apiApiKeys, apiKeyCreate, apiKeyStatus, apiKeyRotate, apiKeyDelete, apiKeyLimit, getOpenAPIDocs, saveOpenAPIDocs, previewOpenAPIDocs, openAPIDocsUrl } from '@/api'
+import { apiKeys as apiApiKeys, apiKeyCreate, apiKeyStatus, apiKeyRotate, apiKeyDelete, apiKeyLimit, getOpenAPIDocs, saveOpenAPIDocs, previewOpenAPIDocs, openAPIDocsUrl, type Any } from '@/api'
 import { Panel } from './parts'
 import { maskKey } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
@@ -20,9 +20,6 @@ import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
 // verticalAlign:-3px 让 SVG 与中文按钮文字基线视觉居中；marginRight:4 补回原先
 // emoji 自带的气隙。集中成一个常量，避免十几处按钮各写一遍 style 造成漂移。
 const MI: React.CSSProperties = { verticalAlign: '-3px', marginRight: 4 }
-
-/** Any API Key 面板出参宽松别名 */
-type Any = Record<string, any>
 
 /** API Key + OpenAPI 文档面板 */
 export function ApiKeysP() {
@@ -168,7 +165,7 @@ export function ApiKeysP() {
           <div style={{ background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', borderRadius: 8, padding: 10, marginBottom: 10 }}>
             <Icon n="alert" style={MI} />{t('apikeys.newKeyOnce')}：<b style={{ userSelect: 'all' }}>{newKey}</b>
             <Button size="sm" variant="secondary" style={{ marginLeft: 8 }} onClick={copyNewKey}><Icon n="clipboard" style={MI} />{t('apikeys.copy')}</Button>
-            {copied && <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}> {t('apikeys.copied')}</span>}
+            {copied && <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}> {t('apikeys.copied')}</span>}
           </div>
         )}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -203,13 +200,13 @@ export function ApiKeysP() {
 
       {isSuper && docsCardOpen && (
         <Panel title={t('docsEdit.title')}>
-          <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('docsEdit.hint')}</div>
+          <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('docsEdit.hint')}</div>
           <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
             <Button size="sm" variant={docsLang === 'zh' ? 'primary' : 'secondary'} onClick={() => setDocsLang('zh')}>{t('docsEdit.langZh')}</Button>
             <Button size="sm" variant={docsLang === 'en' ? 'primary' : 'secondary'} onClick={() => setDocsLang('en')}>{t('docsEdit.langEn')}</Button>
           </div>
           <textarea className="lc-textarea" rows={16} value={docsMD} onChange={(e) => setDocsMD(e.target.value)} placeholder={t('docsEdit.placeholder')}
-                    style={{ width: '100%', fontFamily: 'SFMono-Regular, Consolas, monospace', fontSize: 13, lineHeight: 1.55, resize: 'vertical', minHeight: 380 }} />
+                    style={{ width: '100%', fontFamily: 'SFMono-Regular, Consolas, monospace', fontSize: 14, lineHeight: 1.55, resize: 'vertical', minHeight: 380 }} />
           <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <Button variant="primary" disabled={docsSaving || !docsMD.trim()} onClick={saveDocs}><Icon n="checkcircle" style={MI} />{docsSaving ? t('docsEdit.saving') : t('common.save')}</Button>
             <Button variant="secondary" disabled={!docsMD.trim()} onClick={previewDocs}><Icon n="eye" style={MI} />{t('docsEdit.preview')}</Button>
@@ -219,7 +216,7 @@ export function ApiKeysP() {
             </label>
             <Button variant="secondary" onClick={exportDocs}><Icon n="download" style={MI} />{t('docsEdit.export')}</Button>
             <Button variant="danger" onClick={resetDocs}>↺ {t('docsEdit.reset')}</Button>
-            {docsDefaultBadge && <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('docsEdit.isDefault')}</span>}
+            {docsDefaultBadge && <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('docsEdit.isDefault')}</span>}
           </div>
         </Panel>
       )}

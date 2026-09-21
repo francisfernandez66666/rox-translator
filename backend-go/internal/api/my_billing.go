@@ -36,7 +36,7 @@ func (s *Server) handleMyBillingOverview(w http.ResponseWriter, r *http.Request)
 	billing.Flush() // 冲刷计量缓冲，保证余额即时（与 handleBalance 口径一致）
 	_, err := s.Store.GetBalance(u.TenantID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	grants, _, total, approx := s.balancePayload(u.TenantID)
@@ -65,7 +65,7 @@ func (s *Server) handleMyOrders(w http.ResponseWriter, r *http.Request) {
 	}
 	all, err := s.Store.ListOrders(u.TenantID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	status := r.URL.Query().Get("status")
@@ -121,7 +121,7 @@ func (s *Server) handleMyLedger(w http.ResponseWriter, r *http.Request) {
 	page, size := myPage(r)
 	rows, total, err := s.Store.MyLedgerPage(u.TenantID, u.ID, r.URL.Query().Get("biz_kind"), size, (page-1)*size)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "total": total, "page": page, "size": size, "rows": s.ledgerRowsJSON(rows)})
@@ -148,7 +148,7 @@ func (s *Server) handleMyInvoices(w http.ResponseWriter, r *http.Request) {
 	}
 	all, err := s.Store.ListInvoices(u.TenantID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	page, size := myPage(r)

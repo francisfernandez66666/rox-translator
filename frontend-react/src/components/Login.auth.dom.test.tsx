@@ -21,7 +21,7 @@
 // ============================================================================
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, cleanup, fireEvent } from '@testing-library/react'
+import { render, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { setLang, t } from '@/i18n'
 import { ToastProvider } from '@/ui/langcross/src'
 import Login from './Login'
@@ -42,6 +42,10 @@ vi.mock('@/api', () => ({
   changePassword: vi.fn(),
   setAuthToken: vi.fn(),
   setActiveTenantId: vi.fn(),
+  // ★ #38：登录卡会拉取 SSO 身份源；默认「未启用」，SSO 用例里再单独改返回值
+  ssoProviders: vi.fn(async () => ({ enabled: false, providers: [] as { name: string; display_name: string }[] })),
+  // 纯函数拼接也要给：'@/api' 是整体替换式 mock，漏一个导出被调用就是 undefined is not a function
+  ssoLoginUrl: (p: string) => `/api/sso/login?provider=${encodeURIComponent(p)}`,
 }))
 
 // 只把 useBranding 的远端品牌置空（回落默认品牌），DEFAULT_BRAND_NAME 仍取真实常量
@@ -167,5 +171,41 @@ describe('注册屏 · 整屏可渲染（回归：void 元素被喂 children）'
     expect(cb.checked).toBe(false)
     fireEvent.click(cb)
     expect(cb.checked).toBe(true)
+  })
+})
+
+// ============================================================================
+// ★ #38（2026-09-21）登录屏 SSO 身份源入口回归
+// 缺陷背景：后端 /api/sso/{providers,login,callback} 三件套早已齐备，登录页却没有任何入口，
+//   接了 IdP 的客户仍然只能用密码登录（配置白做）。
+// 守护点：① 未启用（enabled=false / 请求失败）时整块不渲染——不能留死按钮；
+//   ② 启用时按 display_name 出入口；③ 入口必须是 <a href="/api/sso/login?provider=…">，
+//      用 fetch 走接口会把 302 到 IdP 的重定向链连同 state cookie 一起丢掉。
+// ============================================================================
+const { ssoProviders } = await import('@/api')
+
+describe('登录屏 · SSO 身份源入口（#38）', () => {
+  beforeEach(() => { vi.mocked(ssoProviders).mockReset() })
+
+  it('⑨ 未启用 SSO 时不渲染任何第三方入口', async () => {
+    vi.mocked(ssoProviders).mockResolvedValue({ enabled: false, providers: [] })
+    renderLogin()
+    await waitFor(() => expect(ssoProviders).toHaveBeenCalled())
+    expect(document.querySelector('.auth-sso')).toBeFalsy()
+  })
+
+  it('⑩ 启用后按 display_name 渲染链接入口，href 指向 SSO 发起端点', async () => {
+    vi.mocked(ssoProviders).mockResolvedValue({
+      enabled: true,
+      providers: [{ name: 'okta', display_name: 'Okta' }, { name: 'feishu', display_name: '' }],
+    })
+    renderLogin()
+    await waitFor(() => expect(document.querySelectorAll('.auth-sso a').length).toBe(2))
+    const links = [...document.querySelectorAll('.auth-sso a')] as HTMLAnchorElement[]
+    expect(links[0].textContent).toContain('Okta')
+    // display_name 缺省时回落 name，入口文案不会变成「使用  登录」这种空槽
+    expect(links[1].textContent).toContain('feishu')
+    expect(links[0].getAttribute('href')).toContain('/api/sso/login?provider=okta')
+    expect(links[1].getAttribute('href')).toContain('/api/sso/login?provider=feishu')
   })
 })

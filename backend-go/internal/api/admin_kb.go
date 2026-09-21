@@ -111,7 +111,7 @@ func (s *Server) invKB() {
 func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	tid := s.kbTenant(r, u)
@@ -123,12 +123,12 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 		}
 		orgIDs, err := s.Store.OrgDescendantIDs(tid, u.OrgID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		pkgs, err := s.Store.ListDeptPackages(tid, orgIDs)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		s.attachEntryCounts(tid, pkgs)
@@ -139,7 +139,7 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 	// 租管/超管路径：直接列本租户全部包（部门包/企业包等），附条目数后统一装饰返回
 	pkgs, err := s.Store.ListKBPackages(tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.attachEntryCounts(tid, pkgs)
@@ -184,7 +184,7 @@ func (s *Server) attachEntryCounts(tid int64, pkgs []*store.KBPackage) {
 func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -224,7 +224,7 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 		p, err = s.Store.CreateKBPackage(tid, 0, req.Code, req.Name, req.PackType, req.Role)
 	}
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ 部门包创建时携带跨部门共享初始态（可选；仅 department 类型有意义）
@@ -299,12 +299,12 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 	}
 	if err := s.Store.UpdateKBPackage(req.ID, tid, req.Name); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ 可选：同请求内调整跨部门共享开关（复用独立 setter，权限已在上方校验）
@@ -361,11 +361,11 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// 维护权限：跨部门包须涵盖本部门（含子树/全公司仅超管租管）；部门包须归属本部门
 	if err := s.deptKBScope(u, s.kbTenant(r, u), pkg); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if err := s.Store.DeleteKBPackage(req.ID, s.kbTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_package_delete", "kb_packages", "")
@@ -398,7 +398,7 @@ func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 	if countOnly {
 		total, err := s.Store.CountEntries(tid, pkgID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		writeJSON(w, 200, map[string]interface{}{"success": true, "total": total})
@@ -406,7 +406,7 @@ func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, total, err := s.Store.ListEntriesPage(tid, pkgID, layer, targetLang, keyword, page, pageSize)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "entries": entries, "total": total})
@@ -429,7 +429,7 @@ func (s *Server) handleBrandTerms(w http.ResponseWriter, r *http.Request) {
 	tid := s.kbTenant(r, u)
 	terms, err := s.Store.ListBrandTerms(tid, pkgID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "terms": terms, "total": len(terms)})
@@ -474,7 +474,7 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 	}
@@ -486,7 +486,7 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.Store.SaveEntry(tid, req.PackageID, req.Layer, "zh", req.SourceText, req.TargetLang, req.TargetText, req.Module)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_entry_add", "kb_entries", req.SourceText)
@@ -522,7 +522,7 @@ func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.Store.DeleteEntry(req.ID, s.kbTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_entry_delete", "kb_entries", "")
@@ -585,7 +585,7 @@ func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 	}
@@ -593,7 +593,7 @@ func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
 		req.Layer = cur.Layer
 	}
 	if err := s.Store.UpdateEntry(req.ID, tid, req.Layer, req.SourceText, req.TargetLang, req.TargetText, req.Module); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "kb_entry_update", "kb_entries", req.SourceText)
@@ -605,7 +605,7 @@ func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSafetyPhrases(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	qp := r.URL.Query()
@@ -615,7 +615,7 @@ func (s *Server) handleSafetyPhrases(w http.ResponseWriter, r *http.Request) {
 	phrases, total, err := s.Store.ListSafetyPhrasesPage(s.kbTenant(r, u), pkgID,
 		qp.Get("lang"), qp.Get("kind"), qp.Get("status"), qp.Get("q"), page, pageSize)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "phrases": phrases, "total": total})
@@ -625,7 +625,7 @@ func (s *Server) handleSafetyPhrases(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 解析请求体：phrase 必填；lang/kind 缺省补 en/style；replacement 仅 replace 类型有义
@@ -648,7 +648,7 @@ func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.Store.SaveSafetyPhraseEx(s.kbTenant(r, u), req.PackageID, req.Lang, req.Phrase, req.Kind, req.Replacement)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_add", "kb_safety_phrases", req.Phrase)
@@ -659,7 +659,7 @@ func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSafetyPhraseDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -670,7 +670,7 @@ func (s *Server) handleSafetyPhraseDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := s.Store.DeleteSafetyPhrase(req.ID, s.kbTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_delete", "kb_safety_phrases", "")
@@ -712,12 +712,12 @@ func (s *Server) handleKBPackageStatus(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 	}
 	if err := s.Store.SetKBPackageEnabled(req.ID, req.Enabled); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "kb_package_status", "kb_packages", fmt.Sprintf("pkg=%d enabled=%d", req.ID, req.Enabled))
@@ -762,12 +762,12 @@ func (s *Server) handleKBPackageShare(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 	}
 	if err := s.Store.SetKBPackageCrossDeptShare(req.ID, tid, req.Share); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "kb_package_share", "kb_packages", fmt.Sprintf("pkg=%d share=%d", req.ID, req.Share))
@@ -780,7 +780,7 @@ func (s *Server) handleKBPackageShare(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKBIndexRebuild(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	_ = u
@@ -821,7 +821,7 @@ func (s *Server) rebuildIndexAsync() {
 func (s *Server) handleSafetyPhraseBulkImport(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -835,7 +835,7 @@ func (s *Server) handleSafetyPhraseBulkImport(w http.ResponseWriter, r *http.Req
 	tid := s.kbTenant(r, u)
 	added, err := s.Store.BulkImportSafetyPhrases(tid, req.PackageID, req.Items)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "safety_bulk_import", "kb_safety_phrases", fmt.Sprintf("imported=%d pending_review", added))
@@ -846,7 +846,7 @@ func (s *Server) handleSafetyPhraseBulkImport(w http.ResponseWriter, r *http.Req
 func (s *Server) handleSafetyPhraseStatus(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -858,7 +858,7 @@ func (s *Server) handleSafetyPhraseStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := s.Store.SetSafetyPhraseStatus(req.ID, s.kbTenant(r, u), req.Status); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_status", "kb_safety_phrases", req.Status)
@@ -874,12 +874,12 @@ func (s *Server) handleSafetyPhraseStatus(w http.ResponseWriter, r *http.Request
 // 响应：{ success, industries: [{id,code,name,enabled,entry_count}] }
 func (s *Server) handleIndustries(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireDeptAdmin(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	inds, err := s.Store.ListIndustries()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 附带条目计数（面板角标展示语料量）
@@ -895,7 +895,7 @@ func (s *Server) handleIndustries(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleIndustryCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -931,7 +931,7 @@ func (s *Server) handleIndustryCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := s.Store.CreateKBPackage(store.SharedHostTenant, 0, code, strings.TrimSpace(req.Name), store.PackIndustry, store.PackRoleSource)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(store.SharedHostTenant, u.ID, "industry_create", "kb_packages", code)
@@ -944,7 +944,7 @@ func (s *Server) handleIndustryCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleIndustryUpdate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -961,7 +961,7 @@ func (s *Server) handleIndustryUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.UpdateIndustry(req.ID, strings.TrimSpace(req.Name)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(store.SharedHostTenant, u.ID, "industry_update", "kb_packages", fmt.Sprintf("id=%d name=%s", req.ID, req.Name))
@@ -974,7 +974,7 @@ func (s *Server) handleIndustryUpdate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleIndustryStatus(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -991,7 +991,7 @@ func (s *Server) handleIndustryStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.ToggleIndustry(req.ID, req.Enabled); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(store.SharedHostTenant, u.ID, "industry_status", "kb_packages", fmt.Sprintf("id=%d enabled=%d", req.ID, req.Enabled))
@@ -1005,7 +1005,7 @@ func (s *Server) handleIndustryStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleIndustryDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -1030,7 +1030,7 @@ func (s *Server) handleIndustryDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeleteIndustry(req.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(store.SharedHostTenant, u.ID, "industry_delete", "kb_packages", pkg.Code)

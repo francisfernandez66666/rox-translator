@@ -57,14 +57,14 @@ func (s *Server) handleReferralMy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]interface{}{
-		"success":       true,
-		"ref_code":      code,
-		"invite_url":    inviteURL,
-		"records":       s.referralRecordsJSON(records),
-		"invited":       invited,
-		"trial_count":   trialCount,
-		"trial_points":  s.Store.PointsFromTokens(trialTokens),
-		"paid_points":   s.Store.PointsFromTokens(paidTokens),
+		"success":      true,
+		"ref_code":     code,
+		"invite_url":   inviteURL,
+		"records":      s.referralRecordsJSON(records),
+		"invited":      invited,
+		"trial_count":  trialCount,
+		"trial_points": s.Store.PointsFromTokens(trialTokens),
+		"paid_points":  s.Store.PointsFromTokens(paidTokens),
 	})
 }
 

@@ -2,9 +2,15 @@
 // 在线支付网关抽象层：统一定义支付提供商接口，并实现三种适配器：
 //   - mock：默认模式（pay_mode=mock），本地/测试可跑通「下单→出码→回调→到账」全链路，
 //     二维码为占位图，无需任何商户资质。
-//   - wechat：微信支付 Native（v3），预留商户号 / APIv3 密钥 / 回调地址等环境变量配置，
-//     拿到商户号后配置即可启用（签名与下单结构已按官方协议骨架实现）。
-//   - alipay：支付宝当面付（预下单），预留 AppID / 应用私钥 / 网关等环境变量配置。
+//   - wechat：微信支付 Native（v3）。下单走真实协议（api.mch.weixin.qq.com
+//     /v3/pay/transactions/native + WECHATPAY2-SHA256-RSA2048 请求签名，见 gateway_sdk.go），
+//     回调用 APIv3 密钥 AES-256-GCM 解密 resource 验签。
+//   - alipay：支付宝当面付（openapi.alipay.com/gateway.do + alipay.trade.precreate，
+//     RSA2 签名为 SHA256withRSA），回调以支付宝公钥 RSA2 验签并复核 app_id/seller_id。
+//
+// ★ fail-closed 口径（2026-09-16 建立、2026-09-21 #41 保留）：真实协议已实装，
+// 但商户资质（AppID/商户号/序列号/私钥/回调地址）任一项缺失即拒绝出单并列出缺哪几项，
+// 绝不返回本地拼装的假 code_url / alipay:// 占位串。人工开启步骤见 gateway_sdk.go 文件头。
 //
 // 适配器通过 `pay_mode` 系统配置切换；未配置时默认 mock。
 // =============================================
@@ -26,6 +32,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -38,31 +45,39 @@ type Config struct {
 	Wechat     WechatConfig
 	Alipay     AlipayConfig
 	NotifyBase string // 回调地址前缀（用于拼接 /api/pay/notify/:channel）
+	// HTTPClient 渠道 HTTP 客户端；nil 时使用 15 秒超时的默认客户端。
+	// 测试注入 httptest.Server.Client()，生产可换带代理/自定义 TLS 的实例（★ #41）。
+	HTTPClient *http.Client
 }
 
 // WechatConfig 微信支付（Native v3）配置
 type WechatConfig struct {
 	AppID      string // 商户绑定 AppID
 	MchID      string // 商户号
-	APIv3Key   string // APIv3 密钥（32 字节）
-	PrivateKey string // 商户私钥（PEM，用于请求签名）
+	APIv3Key   string // APIv3 密钥（32 字节，回调解密用）
+	PrivateKey string // 商户 API 私钥（apiclient_key.pem，PKCS#8/PKCS#1 均可）
+	SerialNo   string // 商户 API 证书序列号（请求签名 Authorization 头必填）
+	NotifyURL  string // 异步回调地址（空则由 NotifyBase + /api/pay/notify/wechat 拼出）
+	BaseURL    string // 接口域名（默认 https://api.mch.weixin.qq.com，测试可覆盖）
 }
 
 // AlipayConfig 支付宝当面付配置
 type AlipayConfig struct {
 	AppID      string // 开放平台应用 ID
-	PrivateKey string // 应用私钥（PEM）
-	PublicKey  string // 支付宝公钥
+	PrivateKey string // 应用私钥（PEM 或裸 base64，PKCS#8/PKCS#1 均可）
+	PublicKey  string // 支付宝公钥（回调验签 + 下单响应验签）
 	Gateway    string // 网关地址（默认 https://openapi.alipay.com/gateway.do）
 	SellerID   string // 商户卖家 ID（可选；配置后回调须核对，★ A5）
+	NotifyURL  string // 异步回调地址（空则由 NotifyBase + /api/pay/notify/alipay 拼出）
 }
 
 // PayRequest 发起支付的下单请求
 type PayRequest struct {
-	OrderNo  string // 商户订单号（RO + 时间戳 + 随机后缀）
-	Amount   int64  // 金额（分）
-	Subject  string // 订单标题（如「能言 token 充值」）
-	TenantID int64  // 归属租户（幂等与回调对账用）
+	OrderNo       string // 商户订单号（RO + 时间戳 + 随机后缀）
+	Amount        int64  // 金额（分）
+	Subject       string // 订单标题（如「能言 token 充值」）
+	TenantID      int64  // 归属租户（幂等与回调对账用）
+	ExpireMinutes int    // 收款码有效期（分钟，0 = 用渠道默认；★ #41 传给渠道防挂单）
 }
 
 // PayResult 下单结果：二维码内容 + 渠道标识
@@ -145,21 +160,22 @@ func (p *MockProvider) VerifyNotify(rawBody []byte, _ map[string]string) (*Notif
 // ============ 微信 Native v3 适配器 ============
 
 // WechatProvider 微信支付 Native（v3）适配器。
-// 说明：未配置商户资质时返回错误，由上层回退 mock；配置后按官方协议下单。
+// 说明：资质齐全时调用官方接口真实出码；任一资质缺失即 fail-closed 拒绝出单。
 type WechatProvider struct {
 	cfg *Config
 }
 
 // CreateOrder 微信 Native 下单：调用 /v3/pay/transactions/native 获取 code_url。
-// ★ fail-closed（2026-09-16 整改）：真实协议（HTTP + WECHATPAY2-SHA256-RSA2048 签名）
+// ★ fail-closed（2026-09-16 建立 → 2026-09-21 #41 实装协议）：真实协议已在
 //
-//	尚未实现，此前返回本地拼装的假 code_url 会让「配置齐全」的环境把废码呈现给用户。
-//	现显式报错，上层（handlePayCreate）拒绝出单；商户资质到位后在此补齐真实调用。
+//	gateway_sdk.go 补齐（HTTP + WECHATPAY2-SHA256-RSA2048 签名）。资质不完整时
+//	wechatMissingCreds 列出缺失项并返回错误，上层（handlePayCreate）拒绝出单，
+//	不会出现「配置齐全却拿到废码」的情况。
 func (p *WechatProvider) CreateOrder(req *PayRequest) (*PayResult, error) {
-	if p.cfg.Wechat.AppID == "" || p.cfg.Wechat.MchID == "" || p.cfg.Wechat.APIv3Key == "" {
-		return nil, fmt.Errorf("微信支付未配置（需 APP_ID / MCH_ID / APIv3_KEY）")
+	if missing := wechatMissingCreds(p.cfg); len(missing) > 0 {
+		return nil, fmt.Errorf("微信支付资质未配置：%s（补齐后重启服务即生效，见 internal/payment/gateway_sdk.go 文件头）", strings.Join(missing, " / "))
 	}
-	return nil, fmt.Errorf("微信 Native 下单尚未接入真实协议（需补齐 api.mch.weixin.qq.com 调用与商户私钥签名），请改用 static_qr/usdt 渠道")
+	return wechatNativeCreate(p.cfg, req)
 }
 
 // VerifyNotify 微信回调验签：以 APIv3 密钥 AES-256-GCM 解密 resource 得到订单明文，
@@ -216,14 +232,15 @@ type AlipayProvider struct {
 }
 
 // CreateOrder 支付宝当面付下单：调用 alipay.trade.precreate 获取收款码 qr_code。
-// ★ fail-closed（2026-09-16 整改）：真实协议（RSA2 签名 + openapi.alipay.com 调用）
+// ★ fail-closed（2026-09-16 建立 → 2026-09-21 #41 实装协议）：真实协议（RSA2 签名 +
 //
-//	尚未实现，此前返回 alipay:// 占位串会让配置齐全的环境拿到不可支付的收款码。
+//	gateway.do 调用）已在 gateway_sdk.go 补齐；资质缺失时列出缺失项并拒绝出单，
+//	不再返回 alipay:// 占位串。
 func (p *AlipayProvider) CreateOrder(req *PayRequest) (*PayResult, error) {
-	if p.cfg.Alipay.AppID == "" || p.cfg.Alipay.PrivateKey == "" {
-		return nil, fmt.Errorf("支付宝未配置（需 APP_ID / PRIVATE_KEY）")
+	if missing := alipayMissingCreds(p.cfg); len(missing) > 0 {
+		return nil, fmt.Errorf("支付宝资质未配置：%s（补齐后重启服务即生效，见 internal/payment/gateway_sdk.go 文件头）", strings.Join(missing, " / "))
 	}
-	return nil, fmt.Errorf("支付宝当面付下单尚未接入真实协议（需补齐 gateway.do precreate 与 RSA2 签名），请改用 static_qr/usdt 渠道")
+	return alipayPrecreate(p.cfg, req)
 }
 
 // VerifyNotify 支付宝回调验签：解析表单参数并以支付宝公钥 RSA2 验签 sign，

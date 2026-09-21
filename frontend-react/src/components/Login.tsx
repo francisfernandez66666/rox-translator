@@ -15,7 +15,7 @@ import {
   login, authRegister, sendEmailCode, registerConfig,
   forgotPassword, resetPassword, changePassword,
   setAuthToken, setActiveTenantId,
-  type AuthUser,
+  ssoProviders, ssoLoginUrl, type AuthUser, type SSOProvider,
 } from '@/api'
 import { t, useT } from '@/i18n'
 import { LangSelect } from '@/components/LangSelect' // ★ #23：12 语种语言下拉
@@ -23,6 +23,7 @@ import { useBranding, DEFAULT_BRAND_NAME } from '@/branding'
 import { roleLevel } from '@/stores/auth'
 import { industryCodeOf, industryOptions } from '@/lib/industries'
 import { PERSONA_FALLBACK } from '@/lib/personas'
+import { useCountdown } from '@/lib/useCountdown' // ★ #42：验证码冷却收口（自带卸载清理 + 幂等重启）
 import AiRegisterFlow from './AiRegisterFlow'
 
 /** Login 入参：mode 区分前台(home)/后台(admin)登录；onLogin 登录成功后回调上层挂载工作台 */
@@ -84,13 +85,24 @@ export default function Login({ mode, onLogin }: Props) {
   // 2026-09-19 职业角色字典：与行业同口径由 registerConfig 下发（租户0 persona 包），
   // 角色只绑用户不绑企业——个人/企业所有分支都展示同一下拉
   const [personas, setPersonas] = useState<Array<{ code: string; name: string }>>(PERSONA_FALLBACK)
-  const [codeCooldown, setCooldown] = useState(0)
+  // ★ #42：验证码冷却改走 useCountdown（旧写法 setInterval 的句柄只活在闭包里：
+  //   离开登录页时定时器不会被清，且二次触发会并存两个递减源把 60s 冷却打成 30s）
+  const codeCd = useCountdown(60)
   const captchaBoxRef = useRef<HTMLDivElement>(null) // Turnstile 挂载容器（脚本会往里塞 iframe）
   const captchaTokenRef = useRef('') // token 用 ref 而非 state：回调写入时不需要触发重渲染
   // 忘记密码
   const [forgotMsg, setForgotMsg] = useState('')
   const [forgotSent, setForgotSent] = useState(false) // 已发码 → 同一张卡切换成「填码 + 新密码」形态
   const [forgot, setForgot] = useState({ username: '', email: '', code: '', newPassword: '' })
+  // ★ #38（2026-09-21）：已启用的 IdP 列表；空数组=后端未接 SSO，登录卡不渲染第三方登录区块
+  const [ssoList, setSsoList] = useState<SSOProvider[]>([])
+
+  // 拉取 SSO 身份源：仅前台登录卡展示（回调固定落 SSO_FRONTEND_URL 根路径，后台卡跳过去会回不到 /admin）
+  useEffect(() => {
+    if (mode !== 'home') return
+    // 查询失败（网络抖动 / 老后端无该端点）按「未启用 SSO」处理：登录主链路不能被辅助入口的可用性拖住
+    void ssoProviders().then((r) => { if (r?.enabled) setSsoList(r.providers || []) }).catch(() => { /* 静默 */ })
+  }, [mode])
 
   // 进入 /register 或带 ?ref= 自动展开注册并捕获邀请码
   useEffect(() => {
@@ -220,9 +232,7 @@ export default function Login({ mode, onLogin }: Props) {
     } catch (e) { toast({ title: (e as Error).message || t('auth.sendCodeFail'), tone: 'error' }); return } // E10：网络/超时必须显式提示，早先是 unhandled rejection（用户只见无响应）
     if (r.success) {
       toast({ title: r.noop ? t('pwd.codeNoop') : t('pwd.codeSent'), tone: 'success' })
-      setCooldown(60)
-      // 冷却用 interval 逐秒自减而不是单个 timeout：按钮文案要实时显示「{n}s 后重发」，到 0 自己清掉定时器
-      const iv = window.setInterval(() => setCooldown((c) => { if (c <= 1) { window.clearInterval(iv); return 0 } return c - 1 }), 1000)
+      codeCd.start() // 冷却 60s（到 0 自动停；组件卸载即停，见 lib/useCountdown.ts）
     } else toast({ title: r.message || t('pwd.sendFail'), tone: 'error' })
   }
 
@@ -352,13 +362,28 @@ export default function Login({ mode, onLogin }: Props) {
               autoComplete="current-password"
               onKeyDown={(e) => { if (e.key === 'Enter') doLogin() }}
               trailing={(
-                <button type="button" className="lc-input-affix auth-pwd-eye" aria-pressed={showPwd} onClick={() => setShowPwd((v) => !v)} aria-label={t('auth.togglePwd')}>
+                // aria-label 用现成的 showPwd/hidePwd 两键：原写法引用了词典里不存在的 auth.togglePwd，
+                // 屏幕阅读器会念出键名字符串（★ #38 顺带修，属 a11y 缺陷）
+                <button type="button" className="lc-input-affix auth-pwd-eye" aria-pressed={showPwd} onClick={() => setShowPwd((v) => !v)} aria-label={showPwd ? t('auth.hidePwd') : t('auth.showPwd')}>
                   {showPwd ? <EyeOffIcon /> : <EyeIcon />}
                 </button>
               )}
             />
           </Field>
           {!!error && <div className="auth-err">{error}</div>}
+          {/* ★ #38：第三方身份源登录入口。用 <a href> 而非按钮 + location.assign——
+              /api/sso/login 回 302 到 IdP 且要下发 state cookie，fetch 会把整条重定向链吃掉；
+              原生链接还顺带保住中键新开、复制链接这些浏览器默认能力。 */}
+          {ssoList.length > 0 && (
+            <div className="auth-sso">
+              <div className="auth-sso-sep"><span>{t('auth.orSso')}</span></div>
+              {ssoList.map((p) => (
+                <a key={p.name} className="lc-btn lc-btn--secondary" href={ssoLoginUrl(p.name)}>
+                  {tplF('auth.loginWith', { name: p.display_name || p.name })}
+                </a>
+              ))}
+            </div>
+          )}
         </AuthCard>
         <ForcePwdDialog open={forceOpen} msg={forceMsg} busy={forceBusy} old={forceOld} newP={forceNew} confirm={forceConfirm}
           onOld={setForceOld} onNew={setForceNew} onConfirmPwd={setForceConfirm} onSubmit={submitForcePwd}
@@ -453,7 +478,7 @@ export default function Login({ mode, onLogin }: Props) {
             {typeChoice === 'enterprise' && (
               <div className="auth-seg-row">
                 <button type="button" className={'auth-seg' + (roleChoice === 'admin' ? ' auth-seg--on' : '')} onClick={() => setRoleChoice('admin')}>{t('auth.roleAdmin')}</button>
-                <button type="button" className={'auth-seg' + (roleChoice === 'member' ? ' auth-seg--on' : '')} onClick={() => setRoleChoice('member')}>{t('auth.roleMember')}</button>
+                <button type="button" className={'auth-seg' + (roleChoice === 'member' ? ' auth-seg--on' : '')} onClick={() => setRoleChoice('member')}>{t('auth.roleStaff')}</button>
               </div>
             )}
           </>
@@ -509,8 +534,8 @@ export default function Login({ mode, onLogin }: Props) {
           <Field label={t('auth.fieldEmailCode')}>
             <div style={{ display: 'flex', gap: 8 }}>
               <Input style={{ flex: 1 }} value={form.emailCode} onChange={(e) => setForm({ ...form, emailCode: e.target.value })} placeholder={t('auth.fieldEmailCode')} />
-              <Button variant="secondary" disabled={codeCooldown > 0} onClick={doSendCode}>
-                {codeCooldown > 0 ? tplF('auth.codeResend', { n: codeCooldown }) : t('auth.sendCode')}
+              <Button variant="secondary" disabled={codeCd.left > 0} onClick={doSendCode}>
+                {codeCd.left > 0 ? tplF('auth.codeResend', { n: codeCd.left }) : t('auth.sendCode')}
               </Button>
             </div>
           </Field>
@@ -596,6 +621,12 @@ const CSS_AUTH = `
    纯黑体系里不引入成功绿，避免一处绿把整屏配色基调带偏 */
 .auth-err{color:var(--lc-danger);font-size:13px;line-height:1.6;}
 .auth-ok{color:var(--lc-text-2);font-size:13px;line-height:1.6;}
+/* ★ #38 第三方登录区：分隔线用一条 1.2px 细线 + 居中文字（纯黑体系不引入品牌色块），
+   按钮等宽纵排，避免两个 IdP 时长短不齐看着像残排 */
+.auth-sso{display:flex;flex-direction:column;gap:8px;margin-top:4px;}
+.auth-sso-sep{display:flex;align-items:center;gap:8px;color:var(--lc-text-3);font-size:12px;}
+.auth-sso-sep::before,.auth-sso-sep::after{content:"";flex:1;height:1px;background:var(--lc-border-card,#26282E);}
+.auth-sso .lc-btn{width:100%;justify-content:center;text-decoration:none;}
 /* 分段选择器（个人/企业、管理员/成员）：画布是两枚等宽胶囊，故用按钮组而不是 Radio */
 .auth-seg-row{display:flex;gap:8px;}
 .auth-seg{flex:1;height:36px;border-radius:var(--lc-r-ctl);border:1.2px solid var(--lc-border-pill);background:transparent;color:var(--lc-text-2);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--lc-font);}

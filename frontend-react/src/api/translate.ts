@@ -1,15 +1,17 @@
 // ============================================================================
 // api/translate.ts — 翻译域接口
-// 职责：SSE 流式聊天翻译、文件翻译、健康检查（均基于 core 的 fetch 能力）
+// 职责：SSE 流式聊天翻译、健康检查（均基于 core 的 fetch 能力）、翻译文件校验工具
+//       （★ #36 2026-09-21：SSE 流式文件翻译函数已随即时翻译下线文件入口而移除，
+//        文件翻译走工单 /api/tickets/create-file；本文件的校验工具仍被工单页使用）
 // ============================================================================
 
 /**
  * api/translate.ts · 职责说明
- * 封装翻译相关的所有接口，包括：
- * - 文本翻译：SSE 流式聊天翻译，支持进度回调和中断
- * - 文件翻译：SSE 流式文件翻译，支持多语言和进度回调
+ * 封装翻译相关的接口与工具，包括：
+ * - 文本翻译：SSE 流式聊天翻译，支持进度回调、逐字增量和中断
+ * - SSE 解析：consumeSSEStream 公共解析器（单测直接喂假 reader 覆盖）
  * - 健康检查：后端服务状态检测（10 秒超时）
- * - 文件校验：翻译文件格式和大小校验（白名单 + 40MB 上限）
+ * - 文件校验：翻译文件格式和大小校验（白名单 + 40MB 上限，供工单翻译页使用）
  */
 
 import type { ChatResponse, FileSegmentEvent, HealthResponse, ProgressEvent } from '@/types'
@@ -35,7 +37,7 @@ function readWithIdle<T extends { done: boolean; value?: Uint8Array }>(
  *  事件分流：progress→onProgress；delta→onDelta(lang,text)（D20 逐字流式，不参与最终结果）；
  *  ★B3 segment_done/segment_final/segments_sealed→onSegment（文件逐段上屏，不参与最终结果）；
  *  done→取 event.result 作为返回值；error→抛 ApiError（携带 error_code 稳定码）。
- *  （导出仅供单测喂假 reader；业务侧一律走 chatStream/translateFileStream。） */
+ *  （导出仅供单测喂假 reader；业务侧一律走 chatStream。） */
 export async function consumeSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   onProgress?: (event: ProgressEvent) => void,
@@ -113,6 +115,9 @@ export async function chatStream(
   onDelta?: (lang: string, text: string) => void, // ★ D20
 ): Promise<ChatResponse> {
   const body = JSON.stringify({ message, skill: skill || '', options: options || {} })
+  // ★ §4.2-2 正当豁免：SSE 流式通道必须裸用 fetch——request() 封装会把整份响应 response.json()
+  //   一次性解析后返回，拿不到可读 stream，无法逐帧回调 progress/delta/done。故这里直连 fetch，
+  //   并复用 handleUnauthorized 手工处理 401（见下方），与统一 client 的鉴权语义保持一致。
   const response = await fetch(`${API_BASE}/api/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -164,57 +169,13 @@ export async function healthCheck(): Promise<HealthResponse> {
 }
 
 
-/** SSE 流式文件翻译
- *  @param onSegment ★ B3（方案 A2）：逐段事件回调（segment_done/segment_final/segments_sealed），
- *                   供聊天气泡实时上屏；不传则行为与旧版一致 */
-export async function translateFileStream(
-  file: File,
-  targetLangs?: string[],
-  useOnline: boolean = true,
-  onProgress?: (event: ProgressEvent) => void,
-  signal?: AbortSignal,
-  userMessage: string = "",
-  mode?: string,
-  maxLength?: number,
-  onSegment?: (event: FileSegmentEvent) => void,
-): Promise<ChatResponse> {
-  const formData = new FormData()
-  formData.append('file', file)
-  if (targetLangs && targetLangs.length > 0) {
-    formData.append('target_langs', targetLangs.join(','))
-  }
-  formData.append('use_online', String(useOnline))
-  if (userMessage) formData.append('message', userMessage)
-  // ★ 双模式：fast 快速（无KB）/ pro 专业校对；随表单透传后端
-  if (mode) formData.append('mode', mode)
-  // ★ 缩翻（任务7）：最长字符限制随表单透传后端（>0 启用缩翻）
-  if (maxLength && maxLength > 0) formData.append('max_length', String(maxLength))
+// ★ #36（2026-09-21）：原 `translateFileStream`（POST /api/translate/stream 的 SSE 文件翻译）
+// 已随「即时翻译不再支持文件翻译」下线——前端唯一调用方是即时翻译工作台的上传按钮。
+// 后端路由仍保留（老客户端/桌面端兼容），文件翻译的产品入口统一为「文档翻译」工单
+// （TicketsPage → /api/tickets/create-file，走工单审批/交付/保留期链路）。
+// 下面的格式/大小校验函数仍被工单页使用，务必保留。
 
-  // 文件上传用登录令牌认证头（不带租户头），与后端文件翻译接口对齐
-  const response = await fetch(`${API_BASE}/api/translate/stream`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: formData,
-    signal,
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    // ★ E5：文件流式翻译 401 同上
-    if (response.status === 401) {
-      handleUnauthorized('/api/translate/stream')
-      throw new ApiError('登录已过期，请重新登录', 401)
-    }
-    throw new Error(`文件翻译失败 (${response.status}): ${errorText}`)
-  }
-
-  const reader = response.body?.getReader()
-  if (!reader) throw new Error('无法读取流式响应')
-
-  return consumeSSEStream(reader, onProgress, '文件翻译出错', undefined, onSegment)
-}
-
-// ============ 翻译文件格式/大小校验（即时翻译与工单翻译共用，保证两端一致） ============
+// ============ 翻译文件格式/大小校验（工单翻译入口使用，与后端白名单一致） ============
 // 与后端 translateExtWhitelist 保持一致：docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml/yml
 export const TRANSLATE_FILE_EXTS = [
   '.docx', '.xlsx', '.pptx', '.pdf', '.txt', '.csv', '.srt', '.vtt', '.md', '.json', '.yaml', '.yml',
@@ -226,7 +187,7 @@ export const TEXT_DELIVERY_ONLY_EXTS = [
   '.xls', '.xlsm', '.xlsb', '.odt', '.ods', '.odp', '.rtf', '.epub',
 ] as const
 
-// 文件选择框 accept 属性（即时翻译与工单翻译共用，避免两端格式不一致）
+// 文件选择框 accept 属性（★ #36 后仅工单翻译页使用，保持与后端白名单一致）
 export const TRANSLATE_FILE_ACCEPT = TRANSLATE_FILE_EXTS.join(',')
 
 // 纯文案模式的 accept（还原文件模式既有 12 种 + anydoc 独占老格式/ODF/RTF/EPUB）
@@ -239,7 +200,7 @@ export const TRANSLATE_FILE_MAX_BYTES = 40 * 1024 * 1024
  * 校验待翻译文件：返回错误原因字符串（含「为什么不能翻译」）或 null（通过）。
  * - 格式不在白名单：提示支持的格式
  * - 体积超过上限：提示具体大小与上限
- * @param deliveryText 工单「纯文案模式」放宽格式准入（即时翻译不适用，保持默认 false）
+ * @param deliveryText 工单「纯文案模式」放宽格式准入（默认 false=还原文件模式口径）
  */
 export function validateTranslateFile(file: File, deliveryText = false): string | null {
   const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()

@@ -31,13 +31,13 @@ const (
 
 // leadReq 留资表单请求体。Site 为蜜罐字段：人眼不可见，bot 全会填。
 type leadReq struct {
-	Company  string `json:"company"`       // 公司/团队名称（必填）
-	Email    string `json:"email"`         // 联系邮箱（必填）
-	Langs    string `json:"langs"`         // 意向语言（逗号分隔，可空）
-	Message  string `json:"message"`       // 补充留言（可空）
-	Source   string `json:"source"`        // 来源页：landing | pricing | footer（可空，默认 landing）
-	Captcha  string `json:"captcha_token"` // Turnstile token（后台开启人机验证时必填）
-	Site     string `json:"site"`          // ★ 蜜罐：真人恒为空
+	Company string `json:"company"`       // 公司/团队名称（必填）
+	Email   string `json:"email"`         // 联系邮箱（必填）
+	Langs   string `json:"langs"`         // 意向语言（逗号分隔，可空）
+	Message string `json:"message"`       // 补充留言（可空）
+	Source  string `json:"source"`        // 来源页：landing | pricing | footer（可空，默认 landing）
+	Captcha string `json:"captcha_token"` // Turnstile token（后台开启人机验证时必填）
+	Site    string `json:"site"`          // ★ 蜜罐：真人恒为空
 }
 
 // handleLeadCreate POST /api/lead：匿名留资提交。
@@ -81,7 +81,7 @@ func (s *Server) handleLeadCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// 人机验证（与注册同口径：仅在后台配置 turnstile 时强制）
 	if err := s.verifyCaptcha(r, req.Captcha); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 落库：复用 feedbacks 通道（target_type='lead'），content 为结构化摘要行

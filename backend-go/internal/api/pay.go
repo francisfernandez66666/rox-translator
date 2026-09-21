@@ -13,7 +13,8 @@ package api
 //     订单标记待人工确认 + 写入告警 + 邮件通知超管尽快查看开通。
 // 渠道：mock（默认）/ wechat / alipay / static_qr（静态收款码，人工确认），
 // 由 system_config pay_mode（或环境变量 PAY_MODE）决定：
-//   - sdk：走 wechat/alipay 适配器（需商户号）
+//   - sdk：走 wechat/alipay 适配器（★ #41 2026-09-21 已实装真实下单协议，需商户资质；
+//     资质不全时适配器 fail-closed 拒绝出单，本口明确报错不回退 mock）
 //   - static_qr：返回超管配置的静态收款码图片（static_qr_image），人工确认到账
 //   - mock：模拟支付（测试）
 // 金额：入参为 token 数量，按 system_config price_fen_per_million_tokens（★ S1 口径修复：
@@ -64,15 +65,34 @@ func (s *Server) payProviderFor(channel string) payment.Provider {
 		mode = "wechat"
 	}
 	cfg.Mode = mode
-	// 环境变量覆盖（商户号到位后配置）
+	// 环境变量覆盖（商户号到位后配置，全部为 fail-closed 必备资质，缺项见 payment/gateway_sdk.go 文件头）
+	cfg.NotifyBase = os.Getenv("PAY_NOTIFY_BASE")
 	cfg.Wechat.AppID = os.Getenv("PAY_WECHAT_APP_ID")
 	cfg.Wechat.MchID = os.Getenv("PAY_WECHAT_MCH_ID")
 	cfg.Wechat.APIv3Key = os.Getenv("PAY_WECHAT_APIv3_KEY")
+	cfg.Wechat.SerialNo = os.Getenv("PAY_WECHAT_SERIAL_NO")
+	cfg.Wechat.PrivateKey = os.Getenv("PAY_WECHAT_PRIVATE_KEY")
+	cfg.Wechat.NotifyURL = os.Getenv("PAY_WECHAT_NOTIFY_URL")
 	cfg.Alipay.AppID = os.Getenv("PAY_ALIPAY_APP_ID")
 	cfg.Alipay.PrivateKey = os.Getenv("PAY_ALIPAY_PRIVATE_KEY")
 	cfg.Alipay.PublicKey = os.Getenv("PAY_ALIPAY_PUBLIC_KEY")
 	cfg.Alipay.SellerID = os.Getenv("PAY_ALIPAY_SELLER_ID")
+	cfg.Alipay.Gateway = os.Getenv("PAY_ALIPAY_GATEWAY")
+	cfg.Alipay.NotifyURL = os.Getenv("PAY_ALIPAY_NOTIFY_URL")
 	return payment.NewProvider(cfg)
+}
+
+// payQRExpireMinutes ★ #41：渠道收款码有效期（分钟），与本地 pending 单超时同读
+// order_pending_timeout_min（缺省 15 分钟，见 store.CloseStalePendingOrders）。
+// 上限 1440 防误配成「隔天还能扫」的长窗。
+func (s *Server) payQRExpireMinutes() int {
+	minutes := 15
+	if v, _ := s.Store.GetConfig("order_pending_timeout_min"); v != "" {
+		if x, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && x > 0 && x <= 1440 {
+			minutes = x
+		}
+	}
+	return minutes
 }
 
 // handlePayCreate 发起在线支付：为当前租户创建充值订单并生成收款二维码。
@@ -85,13 +105,14 @@ func (s *Server) payProviderFor(channel string) payment.Provider {
 func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
 		Points    int64  `json:"points"`     // ★ 积分口径唯一入参：充值积分数（内部折算 token 落库）
 		Channel   string `json:"channel"`    // 支付渠道：mock/wechat/alipay/usdt（缺省按 pay_mode）
 		USDTChain string `json:"usdt_chain"` // ★ USDT：指定链 trc20/erc20/bep20（缺省取配置首链）
+		Coupon    string `json:"coupon"`     // ★ 优惠券（#41）：券码，空=不用券
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Points <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "points 必须大于 0"})
@@ -129,7 +150,7 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 	// 创建订单（先落 pending，再取二维码回填）
 	o, err := s.Store.CreateOrderChannel(tid, tokens, 0, u.ID, req.Channel, "")
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ 应收金额落库（评审整改 B1）：amount_money=token 数×定价（元）——
@@ -137,6 +158,21 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 	money := float64(s.Store.TokensToFen(tokens)) / 100.0
 	_ = s.Store.UpdateOrderMoney(o.OrderNo, money)
 	o.AmountMoney = money
+	// ★ 优惠券（#41 商业洞三，2026-09-21）：券在「建单之后、渠道出码之前」核销。
+	//   ApplyCouponToOrder 把 orders.amount_money 直接改写为折后实付，于是回调金额核对、
+	//   退款、开票三条链路的「应收单一事实源」自动对齐，无需任何专门的折扣分支。
+	//   核销失败时订单留 pending（由 order_pending_timeout_min 超时收敛）并当场回错——
+	//   绝不在券已失效的状态下继续给出可扫的收款码。
+	if code := store.NormalizeCouponCode(req.Coupon); code != "" {
+		paid, disc, cerr := s.couponApply(o.ID, tid, code, store.CouponKindRecharge, money)
+		if cerr != nil {
+			s.replyCouponFailure(w, r, tid, u.ID, o.OrderNo, code, cerr)
+			return
+		}
+		money, o.AmountMoney = paid, paid
+		s.Store.LogAudit(tid, u.ID, "coupon_redeem", "orders",
+			o.OrderNo+" code="+code+" discount="+strconv.FormatFloat(disc, 'f', 2, 64))
+	}
 	// ★ USDT 收款（2026-09-15）：独立分支——链上无回调，出收款要素快照（地址+含尾数精确金额+
 	//   汇率快照+24h 窗口），到账走「人工核销（M1）」或「reconciler 自动对账（M2，默认关）」。
 	if req.Channel == "usdt" {
@@ -161,36 +197,65 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 调用渠道下单获取二维码（mock 直接生成；真实渠道需商户号）
-	// 定价单一事实源：应收分 = 订单落库 amount_money×100（B1 回填值）
-	amountFen := int64(money*100 + 0.5)
-	res, err := s.payProviderFor(req.Channel).CreateOrder(&payment.PayRequest{
-		OrderNo:  o.OrderNo,
-		Amount:   amountFen,
-		Subject:  "能言积分充值",
-		TenantID: tid,
-	})
+	// 定价单一事实源：应收分 = 订单落库 amount_money×100（B1 回填值；有券则为折后实付）
+	qrContent, channel, err := s.payChannelQR(o, money, "能言积分充值")
 	if err != nil {
 		// ★ 显式失败（2026-09-16 整改）：旧实现静默回退 mock 二维码并把订单渠道改写为
 		//   mock——pay_mode=sdk 但商户配置缺失时，用户扫到 mockpay:// 废码，且 mock 回调
 		//   在非 mock 模式下被拒（handlePayNotify 三道闸），订单只能挂 pending 等超时。
 		//   宁可当场报错让用户/运维感知渠道未就绪，不给出不可支付的收款页。
-		log.Printf("[pay] 渠道 %s 下单失败（订单 %s 保持 pending 待人工处理）: %v", req.Channel, o.OrderNo, err)
+		// ★ #41 + #37：资质缺失提示原样透传（运维照做即可开启收款）；网络/协议类只回通用文案，
+		//   细节（url.Error、DNS、证书、渠道原文）只进日志，不吐给客户端。
+		log.Printf("[pay] 渠道 %s 下单失败（订单 %s 保持 pending 待人工处理）: %v", o.Channel, o.OrderNo, err)
 		writeJSON(w, 200, map[string]interface{}{"success": false,
-			"message":  "支付渠道暂不可用（" + req.Channel + "）：" + err.Error(),
+			"message":  payChannelQRErrorMessage(channel, err),
 			"order_no": o.OrderNo})
 		return
 	}
+	s.Store.LogAudit(tid, u.ID, "pay_create", "orders", o.OrderNo)
+	writeJSON(w, 200, map[string]interface{}{"success": true, "order": s.orderViewJSON(o), "qr_content": qrContent, "channel": channel})
+}
+
+// payChannelQR ★ #41（2026-09-21）：向渠道下单取收款码并回填订单——pay/create 与
+// package/subscribe、package/upgrade 三条链路共用同一取码口径与失败文案。
+// 抽出来不只是去重：此前订阅链路在 pay_mode=sdk 下只落 pending 单、不调渠道，
+// 弹窗拿不到二维码，等于「有价格没收款」。
+// 参数 o=已落库的 pending 单（用 o.Channel 选适配器）；money=应收（元，券折让后的实付）；
+// subject=渠道侧订单标题。返回 (二维码内容, 实际渠道, 错误)；错误由调用方经
+// payChannelQRErrorMessage → payPublicHint 收敛对外文案。
+func (s *Server) payChannelQR(o *store.Order, money float64, subject string) (string, string, error) {
+	res, err := s.payProviderFor(o.Channel).CreateOrder(&payment.PayRequest{
+		OrderNo:  o.OrderNo,
+		Amount:   int64(money*100 + 0.5),
+		Subject:  subject,
+		TenantID: o.TenantID,
+		// ★ #41：把收款码有效期传给渠道，与本地 pending 单超时（order_pending_timeout_min）同口径，
+		//   避免渠道侧仍可支付、本地单已 cancelled 的「付了钱没到账」窗口。
+		ExpireMinutes: s.payQRExpireMinutes(),
+	})
 	if err != nil {
-		log.Printf("[pay] 渠道下单失败: %v", err)
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "下单失败: " + store.DebriefDBError(err)})
-		return
+		return "", o.Channel, err
 	}
-	// 回填二维码与渠道
 	_ = s.Store.UpdateOrderPrepay(o.OrderNo, "", res.QRContent)
 	o.QRContent = res.QRContent
 	o.Channel = res.Channel
-	s.Store.LogAudit(tid, u.ID, "pay_create", "orders", o.OrderNo)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "order": s.orderViewJSON(o), "qr_content": res.QRContent, "channel": res.Channel})
+	return res.QRContent, res.Channel, nil
+}
+
+// payChannelQRErrorMessage 渠道取码失败的统一对外文案（三处下单链路共用）。
+func payChannelQRErrorMessage(channel string, err error) string {
+	return "支付渠道暂不可用（" + channel + "）" + payPublicHint(err)
+}
+
+// payPublicHint 渠道下单错误的对外文案收敛（★ #41 + #37 脱敏口径）：
+// 「资质未配置」是可执行的运维提示，原样给出；其余（网络、TLS、渠道原始报文）统一为通用提示，
+// 原始错误由调用方写日志。返回值自带前缀冒号，可直接拼在「支付渠道暂不可用（wechat）」后。
+func payPublicHint(err error) string {
+	msg := err.Error()
+	if strings.Contains(msg, "资质未配置") {
+		return "：" + msg
+	}
+	return "：下单失败，请稍后重试或改用其他付款方式"
 }
 
 // handlePayStatus 查询订单支付状态（前端收银台轮询）。
@@ -199,7 +264,7 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePayStatus(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -228,7 +293,7 @@ func (s *Server) handlePayStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePaySimulate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 仅 mock 模式开放（★ 整改 A6 + 2026-09 运营策略：payment.mode 未显式为 mock 时一律拒绝——
@@ -251,7 +316,7 @@ func (s *Server) handlePaySimulate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.MarkOrderPaid(req.OrderID, s.effTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "pay_simulate", "orders", o.OrderNo)
@@ -268,7 +333,7 @@ func (s *Server) handlePaySimulate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -300,7 +365,7 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 			req.OrderID = no.ID
 			rebateNote = fmt.Sprintf("（原订单 #%d 超时取消，已自动重建补审单）", origID)
 		} else {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 	}

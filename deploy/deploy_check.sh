@@ -57,6 +57,29 @@ check(){ local desc="$1" want="$2" got="$3"; [ "$got" = "$want" ] && ok "$desc (
 echo "==> [1/7] 基础探活"
 check "/api/health"        200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/api/health")"
 check "/status"            200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/status")"
+# ★ #42（2026-09-22）探针拆分验收：/livez 只判进程存活（依赖抖动时也必须 200，否则编排器会去
+#   重启本可降级自愈的实例）；/readyz 真探依赖（库不可达必须 503，让上游把这个实例摘掉，
+#   否则多副本各算一份扣费）。
+#   ★ 口径：两条走**内网直连**（LOCAL_BASE），不在 Caddy 里对公网开 handle——
+#   探针虽只回状态词，但公网可达的「依赖健康」信号本身就是可用性情报；与 /metrics 内网抓取同口径。
+#   因此从开发机远程跑本脚本时这两项记为跳过（不是失败），必须在服务器本机验收。
+case "$BASE" in
+  *127.0.0.1:*|*localhost:*) PROBE_ON_SERVER=1 ;;
+  *) PROBE_ON_SERVER=0 ;;
+esac
+if [ "$PROBE_ON_SERVER" = "1" ]; then
+  check "/livez(内网)"     200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$LOCAL_BASE/livez")"
+  check "/readyz(内网)"    200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$LOCAL_BASE/readyz")"
+  # 就绪探针只输出粗粒度状态词：DB 报错原文（内网主机/端口/文件路径）不得出现在响应里
+  RZBODY=$(curl -s --max-time 8 "$LOCAL_BASE/readyz")
+  if echo "$RZBODY" | grep -Eq 'postgres://|dial tcp|no such file|127\.0\.0\.1:5432'; then
+    bad "/readyz 响应含内网拓扑原文（探针必须只回状态词）"
+  else
+    ok "/readyz 无拓扑泄露（$(echo "$RZBODY" | head -c 120)）"
+  fi
+else
+  echo "  ↷ /livez /readyz 跳过（公网 base 不暴露探针，需服务器本机执行：curl 127.0.0.1:8787/readyz）"
+fi
 
 echo "==> [2/7] D1 metrics 收敛（公网响应体不得出现指标特征；SPA 兜底页/401 均视为安全）"
 body=$(curl -s --max-time 8 "$BASE/metrics" | head -c 2000)

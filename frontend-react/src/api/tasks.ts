@@ -19,17 +19,36 @@ export interface UserTask {
   task_type: 'daily' | 'once' // daily=每日任务 / once=一次性任务
   title: string // 任务标题
   description: string // 任务说明（可空）
-  reward_points: number // 奖励积分数（永久余额）
+  reward_points: number // 奖励积分数（临时/永久由 valid_days 决定，见 reward_kind）
   enabled: number // 1=启用 0=停用
   sort_order: number // 排序
   created_at: string
   updated_at: string
+  // ★ #33（2026-09-21）任务系统：事件自动发放口径（手工任务 grant_mode=manual，其余字段为默认值）
+  task_key?: string // 事件任务标识（空=超管自定义手工任务）
+  grant_mode?: 'manual' | 'auto' // manual=用户点击领取 / auto=事件自动发放
+  period?: 'daily' | 'weekly' | 'once' | 'event' // 计数周期（决定去重粒度）
+  valid_days?: number // >0=临时积分有效天数；0=永久积分
+  stack_expiry?: number // 1=到期叠加（日/周叠加）；0=固定 now+valid_days
+  cap_per_day?: number // 每日发放上限（0=不限）
+  cap_per_week?: number // 每周发放上限（0=不限）
+  reward_kind?: 'temporary' | 'permanent' | string // 出参派生：临时/永久积分
+}
+
+/** 事件自动发放任务的本期进度（对应后端 store.TaskRewardStat） */
+export interface TaskRewardStat {
+  today_count: number // 今日已发放次数
+  week_count: number // 本周已发放次数
+  total_count: number // 历史累计发放次数
+  last_expiry: string // 最近一次临时积分到期时间（永久类为空）
+  last_granted: string // 最近一次发放时间
 }
 
 /** 用户视角任务（含本人领取状态） */
 export interface UserTaskView extends UserTask {
-  claimed: boolean // 是否已领取（daily=今日；once=曾领取）
+  claimed: boolean // 是否已领取（手工）/ 本周期是否已自动发放
   claimed_at: string // 最近领取时间（空=未领取）
+  reward?: TaskRewardStat // ★ #33 事件任务的周期进度（手工任务无此字段）
 }
 
 /** 超管任务列表响应 */
@@ -55,4 +74,15 @@ export async function myTasks(): Promise<AdminResp & { tasks?: UserTaskView[] }>
 /** 一键领取任务奖励（奖励入永久余额） */
 export async function claimTask(id: number): Promise<AdminResp & { points?: number }> {
   return request('/api/me/tasks/claim', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+}
+
+/**
+ * ★ #33 特殊任务（仅超管）：重置「已订阅全部用户」的任务积分消耗量。
+ * 把未过期的任务临时积分台账拉回满额（已消耗完的同样重置），有效期一律不改写。
+ * 参数 subscribedOnly=true（默认）只影响有未过期订阅台账的租户；false 覆盖全部租户。
+ */
+export async function adminTaskResetConsumption(subscribedOnly = true): Promise<AdminResp & { tenants?: number; reset_rows?: number }> {
+  return request('/api/admin/tasks/reset-consumption', {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ subscribed_only: subscribedOnly }),
+  })
 }

@@ -189,7 +189,7 @@ func (s *Server) effPayMode(tid int64) string {
 func (s *Server) handleOpsPolicy(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 一次返回四层视图：平台/租户策略原文、基础有效、最终有效 + 各促销窗口激活标记（面板回显用）
@@ -228,7 +228,7 @@ func (s *Server) handleOpsPolicy(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOpsPolicySave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -264,7 +264,7 @@ func (s *Server) handleOpsPolicySave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOpsWindowSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -285,7 +285,7 @@ func (s *Server) handleOpsWindowSave(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ B6：单窗保存同样过覆盖禁项校验（id 非空在上方已隐含，此处禁项）
 	if err := ops.ValidateWindowOverrides(req.Window); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	pol := s.opsPlatformPolicy()
@@ -316,7 +316,7 @@ func (s *Server) handleOpsWindowSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePackageReset(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	tid := s.effTenant(r, u)

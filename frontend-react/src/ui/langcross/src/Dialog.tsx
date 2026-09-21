@@ -1,7 +1,15 @@
+// ============ Dialog.tsx · 职责说明 ============
+// langcross 设计系统的模态对话框基件：全站确认框、条目表单弹窗（含后台 AI 助手面板）
+// 都由它渲染，统一 role="alertdialog" + aria-modal，故 Playwright 用 getByRole('alertdialog')
+// 定位、用 Label 取字段——新增调用点不要再自造遮罩层，否则焦点陷阱/Esc 语义会分叉。
+// 关闭语义固定走 onCancel（Esc 与遮罩点击同一路径），确认按钮不自动关框（由调用方控制），
+// 这是「确认失败留在框内可重试」的产品口径，改动会让用户丢输入。
+// =============================================
 import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "./Button";
+import { useFocusTrap } from "./focusTrap";
 
 export interface DialogProps {
   open: boolean;
@@ -20,6 +28,7 @@ export interface DialogProps {
 /**
  * 对话框：440 宽 / 圆角 14 / 遮罩 72% 黑 / 顶缘高光。
  * Esc 与遮罩点击走 onCancel；确认不自动关——由调用方在 onConfirm 里控制。
+ * ★ a11y（#43）：Tab 焦点由 useFocusTrap 收在框内循环，关闭后还给打开前的元素。
  */
 export function Dialog({
   open,
@@ -33,6 +42,8 @@ export function Dialog({
   dismissOnOverlay = true,
 }: DialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(boxRef, open);
 
   useEffect(() => {
     if (!open) return;
@@ -53,7 +64,12 @@ export function Dialog({
         if (dismissOnOverlay && e.target === e.currentTarget) onCancel?.();
       }}
     >
-      <div className={`lc-dialog ${danger ?"lc-dialog--danger":""}`.trim()} role="alertdialog"aria-modal="true">
+      <div
+        ref={boxRef}
+        className={`lc-dialog ${danger ? "lc-dialog--danger" : ""}`.trim()}
+        role="alertdialog"
+        aria-modal="true"
+      >
         <div className="lc-dialog__title">{title}</div>
         {children ? <div className="lc-dialog__body">{children}</div> : null}
         <div className="lc-dialog__actions">
@@ -66,7 +82,7 @@ export function Dialog({
           >
             {cancelText}
           </button>
-          <Button variant={danger ?"danger":"primary"} onClick={onConfirm}>
+          <Button variant={danger ? "danger" : "primary"} onClick={onConfirm}>
             {confirmText}
           </Button>
         </div>

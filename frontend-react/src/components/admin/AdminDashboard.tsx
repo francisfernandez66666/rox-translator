@@ -67,7 +67,10 @@ const ITEMS: Item[] = [
   { key: 'external', label: 'admin.menuExternal', minLevel: 3, icon: 'satellite' },
   { key: 'billing', label: 'hub.menuBilling', minLevel: 3, icon: 'gem' },
   { key: 'system', label: 'admin.menuSystem', minLevel: 4, icon: 'gear' },
-  { key: 'assist', label: 'admin.menuAssist', minLevel: 3, icon: 'robot' }, // ★ autosales：AI 助手管理（超管/租户管理员）
+  // ★ 口径必须与后端一致：/api/admin/assist/* 代理用 requireAdminUser（等级 4）把关，
+  //   菜单若放 minLevel 3 就是给租户管理员一条「看得见、点进去全线 403」的死路
+  //   （2026-09-21 全量 UAT A5 红灯实证，非测试误报）。
+  { key: 'assist', label: 'admin.menuAssist', minLevel: 4, icon: 'robot' }, // ★ autosales：AI 助手管理（仅超管）
 ]
 
 /** 根据当前选中的面板 key 返回对应组件（集中分发，避免在 JSX 中写长 switch） */
@@ -101,7 +104,7 @@ function renderPanel(p: PanelKey) {
     case 'footer': return <FooterP />
     case 'dataSources': return <DataSourcesP />
     case 'billing': return <BillingHubP /> // ★ Tab 精简：计费 Hub（套餐/租户/对账）
-    case 'assist': return <AssistP /> // ★ autosales：AI 助手管理（内嵌 ai-assist 管理台）
+    case 'assist': return <AssistP /> // ★ autosales：AI 助手管理（原生面板，读写经主后台同源代理）
     default: return null
   }
 }

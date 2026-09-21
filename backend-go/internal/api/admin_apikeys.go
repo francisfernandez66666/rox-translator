@@ -21,12 +21,12 @@ import (
 func (s *Server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	keys, err := s.Store.ListAPIKeys(s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "keys": keys})
@@ -36,7 +36,7 @@ func (s *Server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -55,7 +55,7 @@ func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	plain, err := s.Store.CreateAPIKey(tidForKey, u.ID, req.Name, req.Perms, req.DailyLimit)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "apikey_create", "api_keys", req.Name)
@@ -66,7 +66,7 @@ func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIKeyStatus(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -78,7 +78,7 @@ func (s *Server) handleAPIKeyStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.SetAPIKeyStatus(req.ID, s.effTenant(r, u), req.Status); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
@@ -88,7 +88,7 @@ func (s *Server) handleAPIKeyStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -105,12 +105,12 @@ func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeleteAPIKey(req.ID, tid); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	plain, err := s.Store.CreateAPIKey(tid, old.UserID, old.Name, old.Perms, old.DailyCallLimit) // 轮换继承旧限额与归属用户
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "apikey_rotate", "api_keys", old.Name)
@@ -121,7 +121,7 @@ func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -132,7 +132,7 @@ func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeleteAPIKey(req.ID, s.effTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
@@ -143,7 +143,7 @@ func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIKeyLimit(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -190,7 +190,7 @@ func (s *Server) issueDefaultAPIKeyFor(tid, userID int64, name string) string {
 func (s *Server) handleAPIKeyReveal(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {

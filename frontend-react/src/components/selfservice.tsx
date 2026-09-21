@@ -17,6 +17,7 @@ import { myPackage } from '@/api/billing'
 import { referralMy, referralFunnel, type ReferralMyResp, type ReferralFunnel } from '@/api/referral'
 import { scimConfigGet, scimConfigSave } from '@/api/scim'
 import { meContext } from '@/api'
+import { orgList, type OrgInfo } from '@/api/org'
 import { useAuth } from '@/stores/auth'
 import { fmtNum } from '@/lib/ui'
 import { useT } from '@/i18n'
@@ -59,7 +60,7 @@ export function BalancePanel() {
       <style>{CSS_SSC}</style>
       {totalAvailable <= 0 && (
         <div className="ssc-card">
-          <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
+          <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', fontSize: 14, color: '#ad6800', lineHeight: 1.7 }}>
             {t('ss.exhaustedHint')}
             <div style={{ marginTop: 6 }}>
               <Button size="sm" variant="primary" onClick={() => { navigate('/packages') }}>{t('ss.gotoRecharge')}</Button>
@@ -122,7 +123,7 @@ export function ReferralPanel() {
             <div className="ss-stat"><span>{t('ss.funnelL2')}</span><b>{(fd as any).l2_invited ?? 0}</b></div>
             <div className="ss-stat"><span>{t('ss.funnelL2Share')}</span><b>{fmtPoints((fd as any).reward_points_l2 ?? 0)}{(fd as any).pct ? `（${(fd as any).pct}%）` : ''}</b></div>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--lc-text-4)', marginTop: 8 }}>{t('ss.funnelHint')}</div>
+          <div style={{ fontSize: 13, color: 'var(--lc-text-4)', marginTop: 8 }}>{t('ss.funnelHint')}</div>
         </div>
       )}
       {records.length > 0 && <div className="ssc-card">
@@ -149,7 +150,7 @@ export function MyPackagePanel() {
       <style>{CSS_SSC}</style>
       {total <= 0 && !hasPlan && (
         <div className="ssc-card">
-          <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', fontSize: 13, color: '#ad6800', lineHeight: 1.7 }}>
+          <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', fontSize: 14, color: '#ad6800', lineHeight: 1.7 }}>
             {t('ss.exhaustedHint')}
             <div style={{ marginTop: 6 }}>
               <Button size="sm" variant="primary" onClick={() => { navigate('/billing') }}>{t('ss.gotoTopUp')}</Button>
@@ -204,16 +205,23 @@ export function AccountPanel() {
 }
 
 // ScimCard ★ H10：IdP 用户/组织同步开通卡片（开关 + 端点/令牌展示 + 轮换）
+// ★ #38（2026-09-21）：补「同步挂载点」选择——SCIM 推送的用户/组织此前只能落到租户根，
+//   租户想把同步结果隔离到某个子部门时只能事后再手工搬；后端 root_org_id 早已落库，缺的只是入口。
 function ScimCard() {
   const [, t] = useT()
   const [cfg, setCfg] = useState<{ config?: any; endpoint?: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [orgs, setOrgs] = useState<OrgInfo[]>([])
   const load = useCallback(async () => {
     const r = await scimConfigGet()
     if (r.success) setCfg(r as any)
   }, [])
   useEffect(() => { void load() }, [load])
-  const save = async (patch: { enabled?: boolean; rotate?: boolean }) => {
+  // 组织列表取不到不影响主卡片：挂载点下拉退化为「仅根组织」一项
+  useEffect(() => {
+    void orgList().then((r) => { if (r.success) setOrgs(r.orgs || []) }).catch(() => { /* 静默 */ })
+  }, [])
+  const save = async (patch: { enabled?: boolean; rotate?: boolean; root_org_id?: number }) => {
     setBusy(true)
     const r = await scimConfigSave(patch)
     setBusy(false)
@@ -223,6 +231,13 @@ function ScimCard() {
   if (!cfg) return null
   const enabled = !!cfg.config?.enabled
   const token = String(cfg.config?.token || '')
+  const rootOrgId = Number(cfg.config?.root_org_id ?? 0)
+  // 超管看到的组织树是平台级（跨租户），必须按本配置所属租户再过滤一遍，否则下拉会列出别家部门
+  const cfgTenantId = Number(cfg.config?.tenant_id ?? 0)
+  const mountOptions = orgs.filter((o) => o.parent_id > 0 && (!cfgTenantId || o.tenant_id === cfgTenantId))
+  // 指向的组织已被删除时补一条 #id 占位项：否则 select 找不到匹配 option 会静默显示第一项，
+  // 用户以为挂载点还在，下次保存就把 root_org_id 改写回 0
+  const mountMissing = rootOrgId > 0 && !mountOptions.some((o) => o.id === rootOrgId)
   return (
     <div className="ssc-card">
       <h3>{t('ss.scimTitle')}</h3>
@@ -236,7 +251,16 @@ function ScimCard() {
           <Button size="sm" variant="secondary" disabled={busy} onClick={() => void save({ rotate: true })}>{t('ss.scimRotate')}</Button>
         </div>
       </div>
-      <div style={{ fontSize: 12, color: 'var(--lc-text-4)', marginTop: 8 }}>{t('ss.scimHint')}</div>
+      {/* 同步挂载点：0＝租户根组织；其余为本租户已建组织/部门（下拉只列非根项，根另起一条明确文案） */}
+      <div className="ss-row"><span>{t('ss.scimRootOrg')}</span>
+        <select className="lc-select" value={String(rootOrgId)} disabled={busy}
+          onChange={(e) => void save({ root_org_id: Number(e.target.value) })}>
+          <option value="0">{t('ss.scimRootOrgTenant')}</option>
+          {mountMissing && <option value={String(rootOrgId)}>{`#${rootOrgId}`}</option>}
+          {mountOptions.map((o) => <option key={o.id} value={String(o.id)}>{o.name}</option>)}
+        </select>
+      </div>
+      <div style={{ fontSize: 13, color: 'var(--lc-text-4)', marginTop: 8 }}>{t('ss.scimHint')}</div>
     </div>
   )
 }
@@ -245,6 +269,6 @@ function ScimCard() {
 const CSS_SSC = `
 .ssc-card{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:14px;padding:18px;box-shadow:var(--lc-panel-highlight)}
 .ssc-card h3{margin:0 0 6px;font-size:15px}
-.ssc-err{color:var(--lc-danger);font-size:13px}
+.ssc-err{color:var(--lc-danger);font-size:14px}
 .ssc-card + style{display:none}
 `

@@ -11,6 +11,7 @@
  * - 登录态管理：token 和租户 ID 的读写与持久化
  * - 通用请求封装：自动附带认证头、超时控制、错误处理
  * - 401 拦截：登录态失效时自动清 token 并跳转登录页
+ * - 403 统一处理：越权访问集中识别，对外文案走既有 i18n 键、附稳定错误码 FORBIDDEN
  * - 文件下载地址：生成带认证的文件下载 URL
  */
 
@@ -36,18 +37,51 @@ export function getAuthToken(): string {
   return authToken
 }
 
-// 全局 401 拦截：登录态失效时清 token 并跳回登录页。
-// 登录/注册等自身接口返回 401（如凭证错误）不触发跳转，避免循环。
-let authRedirecting = false
-// handleUnauthorized 统一处理 401 响应：清除登录态并跳转回登录页（登录/注册接口自身除外，避免循环）
+// 全局 401 拦截：登录态失效时清 token 并落回登录页。
+// 登录/注册等自身接口返回 401（如凭证错误）不触发，避免循环。
+// ★ P0-6（2026-09-21 评估报告 E8 整改）：旧实现 `href='/'` 与注释「跳登录页」自相矛盾，
+//   且把用户从当前页踢回首页丢掉了回跳目标。现改为：清 token + 调 AuthProvider 注册的
+//   状态复位钩子（user→null），Root 未登录守卫在**当前路径**原地渲染 Login——
+//   登录成功即回到失效前页面，回跳天然成立，无需 URL 参数；营销门面（/、/pricing 等）
+//   只清态不强改视图，访客浏览不受打扰。
+let resetAuthState: (() => void) | null = null
+/** 注册 401 时的登录态复位钩子（由 stores/auth AuthProvider 挂载时注入，避免 api→stores 反向依赖） */
+export function setUnauthorizedHandler(fn: (() => void) | null) {
+  resetAuthState = fn
+}
+// handleUnauthorized 统一处理 401 响应：清除登录态并落回登录页（登录/注册接口自身除外，避免循环）
 // ★ E5：导出给 SSE 等手工 fetch 通道复用（chat/translate stream 此前无 401 处理）
 export function handleUnauthorized(url: string) {
   if (url.includes('/api/auth/login') || url.includes('/api/auth/register')) return
   setAuthToken('') // 清除本地 token（同步清空内存与 sessionStorage）
-  if (!authRedirecting) {
-    authRedirecting = true
-    window.location.href = '/'
-  }
+  resetAuthState?.() // 复位全局 user → Root 守卫在当前路径出登录页（回跳=原路径）
+}
+
+// ============================================================================
+// 403 统一处理（★ 2026-09-22 §4.2-3 前端质量债批）
+// 背景：旧 core 只判 401，403（已登录但越权）与其余非 2xx 混在一起，前端无从区分、
+//   也拿不到统一的本地化「无权限」文案。这里补齐集中识别：
+//   - request() 及各裸 fetch 通道命中 403 时统一走 handleForbidden()，产出对外文案 +
+//     稳定错误码 'FORBIDDEN'，调用方 catch 到的 ApiError.status=403 可据此分支。
+// ★ WHY 文案不在此直接 import i18n：core 是 api 基础设施、被所有域模块引用；
+//   i18n 模块加载期即读 localStorage（见 i18n/index.ts），而 core.test.ts 跑在 **node 环境**
+//   （仅 stub sessionStorage/window），静态 import i18n 会让整个 api 层测试在模块解析期即崩。
+//   且「基础设施层」不应反向依赖「UI 文案层」。故沿用 401 的钩子注入口径：由上层（ToastBridge）
+//   在运行时注册解析器，用既有键 admin.forbid 提供本地化文案；未注册（单测/SSR）时回落入参/后端 message。
+// ★ 刻意不新增 i18n 键（本批硬约束），复用全站权限文案 admin.forbid；若后端 message 更具体可并入 desc。
+// ============================================================================
+let forbiddenCopy: ((backendMessage: string) => string) | null = null
+/** 注册 403 对外文案解析器（由 ToastBridge 挂载时注入，避免 api→i18n 反向依赖；传 null 复位） */
+export function setForbiddenCopyResolver(fn: ((backendMessage: string) => string) | null) {
+  forbiddenCopy = fn
+}
+/**
+ * 统一处理 403：返回对外可读文案（优先已注册的本地化解析器，回落原后端 message）。
+ * 与 handleUnauthorized 不同，403 不清登录态（用户仍在线，只是无该资源权限），
+ * 仅把文案收口到一处，保证任一请求通道（client / 裸 fetch）的越权提示一致。
+ */
+export function handleForbidden(backendMessage = ''): string {
+  return forbiddenCopy ? forbiddenCopy(backendMessage) : (backendMessage || '无权限访问该资源')
 }
 
 /** 设置并持久化超管生效租户 ID（用于租户切换器） */
@@ -98,6 +132,8 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   const isFormBody = typeof FormData !== 'undefined' && options?.body instanceof FormData
   const baseHeaders: Record<string, string> = isFormBody ? {} : { 'Content-Type': 'application/json' }
   try {
+    // ★ §4.2-2 正当豁免（1/2）：此处 fetch 就是「统一 client」本体，全站 request() 经此出口，
+    //   不能再自我收敛到 request()，故裸用 fetch 是唯一正确写法。SSE 通道见 api/translate.ts 的豁免说明。
     const response = await fetch(fullUrl, {
       ...restOptions,
       headers: { ...baseHeaders, ...authHeaders(), ...(optHeaders as Record<string, string>) },
@@ -120,6 +156,11 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       if (!message) {
         const text = await response.text().catch(() => '')
         message = `请求失败 (${response.status}): ${text}`
+      }
+      // ★ §4.2-3：403 越权集中识别——对外文案走统一解析器（本地化既有键），并钉稳定错误码
+      //   FORBIDDEN（后端未回 code 时补），调用方据此分支；不清登录态（用户仍在线）。
+      if (response.status === 403) {
+        throw new ApiError(handleForbidden(message), 403, errCode || 'FORBIDDEN')
       }
       const err = new ApiError(message, response.status, errCode)
       throw err

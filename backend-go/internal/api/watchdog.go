@@ -27,11 +27,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"translator/internal/auth"
+	"translator/internal/billing"
 	"translator/internal/infra/distlock"
 	"translator/internal/infra/redis"
+	"translator/internal/observability"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -135,8 +138,14 @@ func (s *Server) startWatchdog() {
 					log.Printf("[watchdog-selfcheck] 自动重启触发（watchdog_selfcheck_restart 默认开启，本小时第 %d 次）", n+1)
 					_ = s.Store.CreateAlert(0, "critical", "selfcheck", "服务无响应，自动重启以恢复")
 					markSelfRestart()
-					// os.Exit 触发 systemd Restart=always 拉起新进程
-					os.Exit(1)
+					// ★ #55（2026-09-22，报告 §4.1-10）：此处**不再直接 os.Exit**。
+					//   旧写法让后台协程硬退出进程 ⇒ cmd/server/main.go 的优雅停机链路
+					//   （http.Shutdown 排空在途请求 → billing.DefaultSink.Stop() 最终批量落库）
+					//   整段被跳过：缓冲区里「已发生未落库」的 LLM 计量直接丢失
+					//   （收入泄漏 + 影子余额与 DB 背离），正是 #39 spool 要根治的场景。
+					//   现在改走 requestGracefulSelfRestart：优先委托 main 注册的 SIGTERM 自杀钩子
+					//   （复用生产停机同一套顺序），无钩子时兜底同步 flush 计量缓冲后再退出。
+					requestGracefulSelfRestart("watchdog 自检连续超时，自愈重启")
 				}
 			}
 		}
@@ -197,6 +206,17 @@ func (s *Server) startWatchdog() {
 		s.runExclusive("ticket-retention", time.Hour, s.runTicketRetentionScan)
 		for range ticker.C {
 			s.runExclusive("ticket-retention", time.Hour, s.runTicketRetentionScan)
+		}
+	}()
+	// ★ #39（2026-09-21 评审缺陷）：订单↔流水三表勾稽定时化。
+	//   旧实现只有超管手点 /api/admin/reconcile 才算一次，重复收款/缺账常拖数周才被发现；
+	//   现每日自动跑一轮，硬异常写 alerts（同 kind open 幂等去重）+ 走 alert_email 告警邮件。
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		s.runExclusive("reconcile-scan", time.Hour, s.runReconcileScan)
+		for range ticker.C {
+			s.runExclusive("reconcile-scan", time.Hour, s.runReconcileScan)
 		}
 	}()
 	// 泄漏日志（每日一轮：RSS/堆/goroutine 采样 + heap 快照留存；启动即采一次）
@@ -265,6 +285,7 @@ func (s *Server) runTicketRetentionScan() {
 //   - 已到期（now ≥ package_expires_at）：摘除订阅身份（ExpirePackage），句数余额保留，
 //     写审计（actor=system）并通知租户管理员
 //   - 剩余 ≤7 天 / ≤1 天：分别发送一次通知中心提醒（NotifiedExp7/NotifiedExp1 标记去重）
+//   - ★ #41 自动续费：开启 auto_renew 的租户在 T-3 窗口内自动生成同包续费单（见 pay_renew.go）
 func (s *Server) runSubscriptionScan() {
 	if s.Store == nil || s.Ten == nil {
 		return
@@ -303,6 +324,11 @@ func (s *Server) runSubscriptionScan() {
 		// 未到期：按剩余天数分档提醒（每档只发一次）
 		daysLeft := int(time.Until(exp).Hours() / 24)
 		expDate := exp.Format("2006-01-02")
+		// ★ 自动续费（#41）：T-3 窗口内自动生成同包续费单（同包已有 pending 单则跳过），
+		//   并站内信 + 告警引导管理员付款；每日扫描一轮，未付的旧单被超时任务关闭后可再建。
+		if perms.AutoRenew {
+			s.maybeCreateRenewalOrder(t.ID, perms, daysLeft)
+		}
 		if daysLeft <= 7 && !perms.NotifiedExp7 {
 			_ = s.Store.SetNotifiedExpFlag(t.ID, "notified_exp7") // ★ B1：单字段原子置位，不再整体覆盖
 			s.notifyTenantAdmins(t.ID, "订阅即将到期",
@@ -637,4 +663,86 @@ func markSelfRestart() {
 	}
 	keep = append(keep, strconv.FormatInt(time.Now().Unix(), 10))
 	_ = os.WriteFile(path, []byte(strings.Join(keep, "\n")+"\n"), 0644)
+}
+
+// ============ 自愈重启的优雅退出委托（★ #55，2026-09-22） ============
+
+// selfRestartGrace 优雅停机兜底窗口：main 侧的 http.Shutdown 超时为 10 秒，
+// 这里取 25 秒（>10s 排空 + sink 最终批量落库耗时），到期仍活着才硬退，
+// 保证「自愈重启」这个能力本身不会因委托失败而变成「进程卡死不再重启」。
+// 声明成变量而非常量：单测把它调短以覆盖「宽限期到点兜底硬退」这条真实路径（见 watchdog_test.go）。
+var selfRestartGrace = 25 * time.Second
+
+// gracefulExit 真正的硬退出动作（os.Exit + billing.Flush），声明成变量便于单测替换，
+// 否则一旦调用就把测试进程干掉。
+var gracefulExit = func(code int) {
+	// ★ 报告 §4.1-10 的根因即「os.Exit 跳过 billing 最终 flush」：
+	//   无论走钩子失败兜底还是无钩子兜底，退出前**必须**同步冲刷实时计量缓冲，
+	//   把「已发生未落库」的 LLM 用量先写进账本（Flush 无待落库时立即返回）。
+	billing.Flush()
+	os.Exit(code)
+}
+
+// selfRestartHook 由 cmd/server/main.go 启动时注册的优雅停机委托（见 RegisterSelfRestartHook）。
+// 用 RWMutex 而非 atomic.Value：注册一次、读取在低频故障路径，无需无锁技巧，语义更直白。
+var (
+	selfRestartMu   sync.RWMutex
+	selfRestartHook func(reason string)
+)
+
+// RegisterSelfRestartHook 注册「自愈重启」的优雅停机委托（仅 cmd/server/main.go 调用一次）。
+//
+// 参数：hook 负责触发与 SIGTERM 等价的停机流程（main 侧即向自身发 SIGTERM，
+// 复用 signal.Notify 那条链路：Shutdown 排空在途请求 → DefaultSink.Stop 最终落库 → 退出）。
+//
+// WHY 用注册钩子而不是 api 包直接 syscall.Kill：api 不知道监听地址/停机顺序，
+// 也不该在库代码里发信号——把「怎么退」留在唯一知道答案的 main，看门狗只负责「该退了」。
+func RegisterSelfRestartHook(hook func(reason string)) {
+	selfRestartMu.Lock()
+	selfRestartHook = hook
+	selfRestartMu.Unlock()
+}
+
+// requestGracefulSelfRestart 请求进程自我重启：优先委托 main 的优雅停机路径，
+// 无钩子（如单测、其他二进制复用 api 包）时退化为「同步 flush 计量后 os.Exit」。
+//
+// 本函数**不阻塞**调用方协程：钩子调用后立即返回，由 main 的停机协程完成退出；
+// 若宽限期结束进程仍在（钩子实现有 bug、信号被吞），后台兜底硬退，避免锁死进程永不重启。
+func requestGracefulSelfRestart(reason string) {
+	selfRestartMu.RLock()
+	hook := selfRestartHook
+	selfRestartMu.RUnlock()
+	if hook != nil {
+		// 日志口径：AGENTS.md 二——新增代码走 observability slog，不再抬 log.Printf 存量
+		observability.Warn(context.Background(), "watchdog 触发自愈重启（优雅停机）", "reason", reason)
+		defer func() {
+			if r := recover(); r != nil {
+				// 钩子 panic 不能吞掉重启本身——记录后走 flush + 硬退兜底。
+				observability.Error(context.Background(), "优雅停机钩子 panic，转兜底硬退出", "panic", fmt.Sprint(r))
+				gracefulExit(1)
+			}
+		}()
+		hook(reason)
+		// 兜底看门狗：优雅停机若未生效，宽限期后 flush + 硬退，保证 systemd 能拉起新进程。
+		// WHY 先取快照再起协程：宽限期与退出动作都是包级变量（单测会临时改写并在用例结束时复原），
+		//   协程内直接读它们会与复原写入构成数据竞争（go test -race 实测会红）。
+		//   起协程瞬间捕获一次，语义也更准确：宽限期按「发起重启那一刻」的配置算。
+		grace := selfRestartGrace
+		exit := gracefulExit
+		go graceFallback(grace, exit)
+		return
+	}
+	observability.Warn(context.Background(), "watchdog-selfcheck 未注册优雅停机钩子，直接 flush 计量缓冲后退出", "reason", reason)
+	gracefulExit(1)
+}
+
+// graceFallback 宽限期兜底：睡满 grace 后若进程仍活着，说明 main 侧优雅停机没走完
+// （钩子实现有 bug / 信号被吞），执行 flush + 硬退。
+//
+// 单独成函数并显式收参，是为了让「到点必退」这条路径可被单测直接验证
+// （含真实 os.Exit 的 gracefulExit 不可在测试里调用），而不必改动包级变量。
+func graceFallback(grace time.Duration, exit func(int)) {
+	time.Sleep(grace)
+	observability.Error(context.Background(), "优雅停机超过宽限仍未退出，执行兜底 flush 并硬退出", "grace", grace.String())
+	exit(1)
 }

@@ -61,7 +61,7 @@ export function ReconcileP() {
         <Button size="sm" variant="secondary" disabled={loading} onClick={() => void load()}>{t('rc.refresh')}</Button>
       </div>
     }>
-      <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('rc.hint')}</p>
+      <p style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('rc.hint')}</p>
       <div style={{ marginBottom: 8 }}>
         <Badge>{t('rc.summary').replace('{o}', String(summary.orders)).replace('{p}', String(summary.pays)).replace('{i}', String(rows.length))}</Badge>
       </div>

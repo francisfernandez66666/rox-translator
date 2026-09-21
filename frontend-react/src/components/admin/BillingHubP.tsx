@@ -18,28 +18,32 @@ import { useAdmin } from '@/stores/admin'
 import { PlansP } from './panels_c'
 import { TenantsP } from './TenantsP'
 import { ReconcileP } from './ReconcileP'
+import { CouponsP } from './CouponsP'
 
-/** 计费与套餐 Hub：套餐/订单（L3）+ 租户/对账（L4 门控） */
+/** 计费与套餐 Hub：套餐/订单（L3）+ 租户/对账/优惠券（L4 门控） */
 export default function BillingHubP() {
   const [, t] = useT()
   const { myLevel } = useAdmin()
-  const [tab, setTab] = useState<'plans' | 'tenants' | 'reconcile'>('plans')
+  const [tab, setTab] = useState<'plans' | 'tenants' | 'reconcile' | 'coupons'>('plans')
 
   // 子 tab 列表按等级动态裁剪：L3 只给「套餐价目」，租户与对账（平台级资金视图）仅 L4 出现
   const items = [
     { key: 'plans', label: t('hub.tabPlans') },
     ...(myLevel >= 4 ? [{ key: 'tenants', label: t('hub.tabTenants') }] : []),
     ...(myLevel >= 4 ? [{ key: 'reconcile', label: t('hub.tabReconcile') }] : []),
+    // ★ #41 优惠券：券模板与核销流水是平台级经营资产，仅超管可见（后端亦 requireSuperAdmin）
+    ...(myLevel >= 4 ? [{ key: 'coupons', label: t('hub.tabCoupons') }] : []),
   ]
   return (
     <>
       {/* langcross Tabs 只渲染 tab 头，面板内容由这里条件挂载：
           切走即卸载、切回重新挂载并重取数据（子面板之间不共享状态），
           因此这里除 tab 可见性外再判一次 myLevel>=4，双保险防止越权面板被渲染 */}
-      <Tabs activeKey={tab} onChange={(k) => setTab(k as 'plans' | 'tenants' | 'reconcile')} items={items} />
+      <Tabs activeKey={tab} onChange={(k) => setTab(k as 'plans' | 'tenants' | 'reconcile' | 'coupons')} items={items} />
       {tab === 'plans' && <PlansP />}
       {tab === 'tenants' && myLevel >= 4 && <TenantsP />}
       {tab === 'reconcile' && myLevel >= 4 && <ReconcileP />}
+      {tab === 'coupons' && myLevel >= 4 && <CouponsP />}
     </>
   )
 }

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -120,6 +121,80 @@ func (c *Client) Chat(ctx context.Context, temperature float64, maxTokens int, m
 		lastErr = fmt.Errorf("all providers cooling down")
 	}
 	return "", "", Usage{}, lastErr
+}
+
+// ============================================================
+// 嵌入调用（★ 分级召回第 3 级，engine/vector.go 唯一消费方）
+// 与 chat 同 base_url / api_key（OpenAI 兼容网关两家共用，主服务
+// internal/llm 的 embeddings 调用即同款协议），模型名由调用方传入。
+// 默认不被触发：engine 侧 embed_recall 开关关闭时本方法零调用、零网络请求。
+// ============================================================
+
+// Embed 批量文本嵌入，返回 L2 归一化向量（点积即余弦相似度）。
+// 参数：model=嵌入模型名（如 BAAI/bge-m3）；texts=待嵌入文本。
+// 失败语义：显式返回 error，由调用方降级（向量召回回落字面召回），不 panic。
+func (c *Client) Embed(ctx context.Context, model string, texts []string) ([][]float32, error) {
+	if !c.Enabled() {
+		return nil, fmt.Errorf("no llm provider")
+	}
+	if model == "" {
+		return nil, fmt.Errorf("embed model 未配置")
+	}
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	c.mu.RLock()
+	p := c.providers[0] // 嵌入固定走主 provider（降级链对向量无意义，失败即回落）
+	c.mu.RUnlock()
+
+	body, _ := json.Marshal(map[string]any{"model": model, "input": texts})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, trimSlash(p.BaseURL)+"/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.APIKey)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	rb, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 向量响应可较大，限读 8MB
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("embedding http %d: %.200s", resp.StatusCode, string(rb))
+	}
+	var out struct {
+		Data []struct {
+			Embedding []float64 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rb, &out); err != nil {
+		return nil, err
+	}
+	vecs := make([][]float32, 0, len(out.Data))
+	for _, d := range out.Data {
+		v := make([]float32, len(d.Embedding))
+		var sum float64
+		for j, x := range d.Embedding {
+			f := float32(x)
+			v[j] = f
+			sum += float64(f) * float64(f)
+		}
+		if sum > 0 { // L2 归一：检索侧点积即余弦，与主服务 kb 嵌入口径一致
+			norm := float32(math.Sqrt(sum))
+			for j := range v {
+				v[j] /= norm
+			}
+		}
+		vecs = append(vecs, v)
+	}
+	if len(vecs) == 0 {
+		return nil, fmt.Errorf("embedding 响应为空")
+	}
+	return vecs, nil
 }
 
 // chatOne 单次 Chat Completions 调用

@@ -15,9 +15,15 @@
 # ============================================================================
 name: ci
 
+# ★ #55（2026-09-22，报告 §3.1 / §6 P0-1）：触发分支必须覆盖**长期开发分支**。
+#   此前 push 只列 main/master，autosales 上的 184 个未提交改动与 45 个未跟踪文件
+#   从未进过任何闸门 ⇒ gofmt 不合格、红灯 spec 长期潜伏无人察觉（§3 三条红灯即实例）。
+#   取舍说明：不改成 branches: ['**'] 是因为 e2e / uat-pg 两个 job 各带 Playwright +
+#   全量 UAT（单次数十分钟），任意临时分支推送即触发会把 runner 时间烧在探索性提交上；
+#   改为「显式列出常驻开发分支」。以后新开长期分支时把分支名加进本列表即可（PR 触发不受影响）。
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, autosales]
   pull_request:
 
 jobs:
@@ -29,6 +35,19 @@ jobs:
         with:
           go-version: '1.25'
           cache-dependency-path: backend-go/go.sum
+      # ★ #55（2026-09-22）：gofmt 进闸门。此前全仓检索证实 gofmt 从未被任何闸门约束
+      #   （ci.yml / AGENTS.md / scripts 零命中），HEAD 上就有 7 个文件格式不合格。
+      #   两道保险：① shell 直查 internal/cmd（快、报错即文件名清单）；
+      #   ② internal/gofmt_gate_test.go（随 go test 覆盖 cmd/ 之外全仓 + 豁免清单腐化检查）。
+      - name: gofmt gate（零格式债）
+        run: |
+          bad=$(gofmt -l internal cmd)
+          if [ -n "$bad" ]; then
+            echo "::error::以下文件未 gofmt（执行 cd backend-go && gofmt -w <file>）："
+            echo "$bad"
+            exit 1
+          fi
+        working-directory: backend-go
       - name: go vet
         run: go vet ./...
         working-directory: backend-go

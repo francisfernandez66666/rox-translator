@@ -24,8 +24,9 @@
   .app-header .brand { font-size: 15px; }
   .app-header .pkg-line-tag { display: none; }   /* 余额徽标窄屏隐藏，改由抽屉内「套餐 / 账单」入口查看 */
 
-  /* ---- 聊天区 ---- */
-  .chat-scroll { padding: 14px 4%; }
+  /* ---- 聊天区（★ #36）：合并对话框的窄屏外边距由组件自带 media query 下发
+     （frontend-react/src/components/ChatWindow.tsx CW_CSS），此处不再覆写——
+     组件的 <style> 在文档流里晚于本文件，同特异度下这里写了也不生效。 ---- */
 
   /* ---- 面板 / 字段 / 表格 ---- */
   .panel-card { padding: 14px; overflow-x: auto; }
@@ -49,9 +50,10 @@
 @media (max-width: 640px) {
   .app-header { gap: 6px; }
   .app-header .brand img { height: 40px !important; }
-  .app-header > .t-button { font-size: 13px; padding: 0 8px; }
-  .chat-scroll { padding: 12px 3%; }
-  .bubble { max-width: 94%; padding: 9px 12px; font-size: 13.5px; }
+  .app-header > .t-button { font-size: 14px; padding: 0 8px; }
+  /* 合并对话框（#36）手机端外边距见 ChatWindow CW_CSS 的 @media(max-width:640px) 分支 */
+  /* ★ #35（2026-09-21）：手机气泡不再缩到 13.5px，与桌面同档 15px——用户反馈小屏更需可读字号 */
+  .bubble { max-width: 94%; padding: 9px 12px; font-size: 15px; }
   .avatar { width: 28px; height: 28px; font-size: 11px; }
   .message-row { padding: 0 10px; gap: 8px; }
   .panel-card { padding: 12px; }

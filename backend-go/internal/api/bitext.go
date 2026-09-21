@@ -34,7 +34,7 @@ func (s *Server) handleImportBitext(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需部门管理员及以上权限
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 检查知识库是否已加载
@@ -137,7 +137,7 @@ func trimSpace(s string) string {
 func (s *Server) handleImportTMX(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if s.DB == nil {
@@ -145,9 +145,11 @@ func (s *Server) handleImportTMX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 上传→解析链：临时文件用完即删；TMX 需含 ≥2 语言的有效 tu 才继续
-	savePath, err := s.saveUploadedFile(r)
+	// ★ #38：走 TMX 专用白名单（.tmx/.xml），并把真实校验失败原因回给前端
+	//   （旧实现一律吞成「文件上传失败」，用户无从知道是类型不对还是超了 20MB）
+	savePath, err := s.saveUploadedFileWith(r, tmxExtWhitelist)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文件上传失败"})
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	defer os.Remove(savePath)
@@ -288,7 +290,7 @@ func xmlEscape(str string) string {
 func (s *Server) handleExportTMX(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if s.DB == nil {

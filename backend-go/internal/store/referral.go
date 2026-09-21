@@ -396,6 +396,10 @@ func (s *Store) ReferralPaidReward(inviteeUID int64) error {
 	if inviteeUID <= 0 {
 		return nil
 	}
+	// ★ #33 任务系统（2026-09-21）：受邀好友任意充值成功 → 邀请人 +1000 永久积分（可叠加、按好友去重）。
+	// 刻意放在裂变总开关门禁之前：任务发放由 task.enabled 独立门禁（GrantTaskReward 内部判定），
+	// 不因运营侧关闭「邀请裂变奖励」而静默丢失任务奖励。
+	s.GrantTaskRewardToInviter(inviteeUID, TaskKeyInvitePaid)
 	// ★ 总开关门禁（2026-08-26 U3 + 2026-09 运营策略）：后台/策略关闭裂变后不再发放任何奖励
 	if !s.ReferralEnabled() {
 		return nil

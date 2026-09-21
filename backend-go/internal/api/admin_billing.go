@@ -40,10 +40,25 @@ func (s *Server) usageDisplayFactor() float64 {
 
 // handleBalance 余额查询（★ 双桶口径，评审整改 A1：永久余额 + 未过期台账 + 可用总额）。
 // ★ 2026-09-19 积分口径：token 裸值出参下线，一律折积分（approx_sentences 保留句数估算）。
+//
+// ★ #42（2026-09-22 P2 技术债收尾）僵尸路由标注——**保留不删，仅打废弃信号**：
+//
+//	前端已无调用方（selfservice.tsx 的「我的余额」改走 /api/me/package，账单页走
+//	/api/billing/my/overview，见 frontend-react/src/api/mybilling.ts:47），但
+//	scripts/uat/api_uat.sh A4/A13/B2/B8、api_uat_txn.sh T14/T16/T21 仍在打本接口，
+//	外部/运维脚本无法在此仓库内穷举核实；按「实装优先、禁止删除既有功能」的硬约定，
+//	**删除必须先取得用户确认**，本轮只做废弃声明。
+//	正式替代路径：/api/billing/my/overview（租户自服务余额+账单一体化口径）。
+//
+// 废弃信号口径（RFC 8594）：Deprecation 响应头 + Link 指向后继资源，
+//
+//	在鉴权分支之前设置，保证 403/错误响应同样带信号（表头先于 WriteHeader 写）。
 func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("Link", `</api/billing/my/overview>; rel="successor-version"`)
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -51,10 +66,13 @@ func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 	billing.Flush()
 	_, err = s.Store.GetBalance(tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	grants, permanent, total, approx := s.balancePayload(tid)
+	// ★ #42：响应体同为 JSON 对象且 UAT 只按 key 取值/断言子串（A4-balance-shape 判 points_available、
+	//   api_uat.sh:254 等用 .get("points_available")），追加键不会破任何既有断言，故补显式废弃字段，
+	//   让只看 body 的调用方也能感知迁移目标。
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true,
 		// 双桶明细（积分口径）：permanent=永久、grants=未过期台账、total=可用总额
@@ -62,6 +80,8 @@ func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 		"points_grants_left": s.Store.PointsFromTokens(grants),
 		"points_available":   s.Store.PointsFromTokens(total),
 		"approx_sentences":   approx,
+		"deprecated":         true,                       // ★ #42 废弃声明（配合 Deprecation 响应头）
+		"replacement":        "/api/billing/my/overview", // ★ #42 正式替代路径
 	})
 }
 
@@ -69,12 +89,12 @@ func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	usage, total, err := s.Store.UsageStats(s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 多供应商成本核算：按 provider 拆分用量（★ 仅超管可见；非超管不暴露供应商维度）
@@ -168,12 +188,12 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 // 返回: success=true 时携带 orders 数组（仅 manual 渠道 + manual_confirm=1 + pending）。
 func (s *Server) handleManualConfirmOrders(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	orders, err := s.Store.ListManualConfirmOrders()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ USDT：附交易哈希线索（客户声明 + 已结算凭证）与浏览器外链，供财务「四项核对」
@@ -204,12 +224,12 @@ func (s *Server) handleManualConfirmOrders(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	orders, err := s.Store.ListOrders(s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "orders": s.ordersViewJSON(orders)})
@@ -219,7 +239,7 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -242,7 +262,7 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	o, err := s.Store.CreateOrder(req.TenantID, tokens, req.Money, u.ID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ 未显式给金额时按定价回填（评审整改 B1）：发票/对账取数来源
@@ -274,7 +294,7 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrderPay(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -307,7 +327,7 @@ func (s *Server) handleOrderPay(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.Store.MarkOrderPaid(req.ID, req.TenantID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// USDT：链上凭证落 payments.tx_hash + 结算快照（失败不回滚资金入账——critical 告警转人工补记）
@@ -328,7 +348,7 @@ func (s *Server) handleOrderPay(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrderRefund(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -343,7 +363,7 @@ func (s *Server) handleOrderRefund(w http.ResponseWriter, r *http.Request) {
 		req.TenantID = s.effTenant(r, u)
 	}
 	if err := s.Store.RefundOrder(req.ID, req.TenantID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ 订阅身份清理（评审整改 B3）：paid 套餐退款后撤销 PackageCode 镜像，
@@ -368,12 +388,12 @@ func (s *Server) handleOrderRefund(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleInvoices(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	inv, err := s.Store.ListInvoices(s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "invoices": inv})
@@ -383,7 +403,7 @@ func (s *Server) handleInvoices(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleInvoiceCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -409,7 +429,7 @@ func (s *Server) handleInvoiceCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleInvoiceVoid(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -420,7 +440,7 @@ func (s *Server) handleInvoiceVoid(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.VoidInvoice(req.ID, s.effTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "invoice_void", "billing", strconv.FormatInt(req.ID, 10))

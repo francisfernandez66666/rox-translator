@@ -4,9 +4,11 @@
    2026-09-17 全量换肤：源《langcross-handoff》交付包（README-OPENCODE.md §2）。
 
    换肤策略（关键）：本项目后台约有 130 处 tsx 内联样式引用 --adm-* 语义变量，
-   前台引用 --npz-*，TDesign 组件引用 --td-*。因此本文件只需把这三套变量
-   整体重定义到 --lc-* 纯黑令牌上，即可让全站（含内联样式）一次性转为纯黑单色，
-   无需逐个改写 140 个组件文件。
+   前台引用 --npz-*。因此本文件只需把这两套变量整体重定义到 --lc-* 纯黑令牌上，
+   即可让全站（含内联样式）一次性转为纯黑单色，无需逐个改写组件文件。
+   注：旧的 --td-*（TDesign）令牌层已于 2026-09-22 随 tdesign-react 依赖一并删除
+   —— TDesign 组件早已全量迁到 @/ui/langcross，全站对 --td-* 的真实 var() 引用为 0，
+   保留只会误导后来者（★ §4.2-5 前端质量债批）。
 
    交付包硬规则：全站无蓝无绿。
      - 正向 / 活跃 / 成功 = 白 #E7E9EA（--lc-success，原绿色 #2e7d32 已废止）
@@ -20,81 +22,18 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .app-main > * { min-width: 0; }
 
 /* ============================================================================
-   一、变量重定义：把 --td-*（TDesign）/ --npz-*（前台）/ --adm-*（后台）整体
-       重定义到 --lc-* 纯黑令牌。以下分三块，但都是 :root 作用域（默认即纯黑，
-       主题开关到 dark 也不会回退亮色）。
+   一、根作用域：仅保留 color-scheme。
+       （原 --td-*（TDesign）令牌重定义层已删除：tdesign-react 依赖与全站 TDesign
+        组件均已下线，本文件对 --td-* 的真实 var() 引用为 0，留着即死变量层。）
    ============================================================================ */
-
-/* —— 1. TDesign 令牌重定义（覆盖默认蓝，收敛为纯黑单色）——
-   品牌轨：原蓝主色全色阶 → 白色单色阶；浅色轨 → 半透明白。 */
 :root {
-  /* —— 品牌轨：原蓝主色全色阶 → 白色单色阶 —— */
-  --td-brand-color: #E7E9EA;
-  --td-brand-color-hover: #FFFFFF;
-  --td-brand-color-active: #C9CDD2;
-  --td-brand-color-focus: #E7E9EA;
-  /* 浅色轨：菜单选中项 / 浅色 Tag 底色（原浅蓝近白 → 半透明白） */
-  --td-brand-color-light: rgba(231, 233, 234, 0.14);
-  --td-brand-color-light-hover: rgba(231, 233, 234, 0.22);
-  --td-brand-color-light-active: rgba(231, 233, 234, 0.30);
-  --td-brand-color-1: rgba(231, 233, 234, 0.06);
-  --td-brand-color-2: rgba(231, 233, 234, 0.10);
-  --td-brand-color-3: rgba(231, 233, 234, 0.16);
-  --td-brand-color-4: rgba(231, 233, 234, 0.24);
-  --td-brand-color-5: #B8BCC2;
-  --td-brand-color-6: #C9CDD2;
-  --td-brand-color-7: #D8DBDF;
-  --td-brand-color-8: #E7E9EA;
-  --td-brand-color-9: #C9CDD2;
-  --td-brand-color-10: #9AA0AA;
-
-  /* —— 语义色：绿 → 白（交付包：绿色永久禁用）；红 / 琥珀保留 —— */
-  --td-success-color: #E7E9EA;
-  --td-success-color-1: rgba(231, 233, 234, 0.06);
-  --td-success-color-4: #C9CDD2;
-  --td-success-color-5: #E7E9EA;
-  --td-error-color-1: rgba(229, 72, 77, 0.08);
-  --td-error-color-2: rgba(229, 72, 77, 0.16);
-  --td-error-color-3: rgba(229, 72, 77, 0.26);
-  --td-warning-color: #D29922;
-  --td-warning-color-1: rgba(210, 153, 34, 0.08);
-  --td-warning-color-2: rgba(210, 153, 34, 0.16);
-  --td-warning-color-3: rgba(210, 153, 34, 0.28);
-  --td-warning-color-4: #D29922;
-
-  /* —— 面：纯黑体系（与 --lc-* 一一对应）—— */
-  --td-bg-color-container: #0E1014;
-  --td-bg-color-container-active: #202329;
-  /* ★ 输入框 / 文本域底：漏配会导致表单控件保持白底 */
-  --td-bg-color-specialcomponent: #0A0B0D;
-  --td-bg-color-secondarycontainer: #0A0B0D;
-  --td-bg-color-component: #16181C;
-  --td-text-color-primary: #E7E9EA;
-  --td-text-color-secondary: #9AA0AA;
-  --td-text-color-placeholder: #878D95;
-  --td-text-color-anti: #000000;      /* 白底上的文字（主按钮）必须为黑 */
-  --td-border-level-2-color: #464C58;
-  --td-component-border: #5A6270;
-  --td-component-stroke: #5A6270;
-  --td-mask-disabled: rgba(0, 0, 0, 0.6);
-
-  /* —— 阴影：纯黑投影 —— */
-  --td-shadow-2: 0 4px 24px rgba(0, 0, 0, 0.55);
-  --td-shadow-3: 0 8px 40px rgba(0, 0, 0, 0.6);
-
-  /* —— 圆角：对齐 TDesign 原生控件，消除方圆混用 —— */
-  --td-radius-default: 6px;
-  --td-radius-small: 4px;
-  --td-radius-large: 10px;
-  --td-radius-control: 6px;
-  --td-radius-round: 999px;
-  --td-radius-circle: 50%;
-
   color-scheme: dark;
 }
 
 /* ============================================================================
    二、前台语义变量 --npz-*：亮面 → 纯黑
+       （--npz-* / --adm-* 两套整体重定义到 --lc-* 纯黑令牌，:root 作用域，
+        默认即纯黑，主题开关到 dark 也不回退亮色。）
    ============================================================================ */
 :root {
   --npz-page-bg: #000000;   /* 页面底 */
@@ -156,7 +95,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 /* 品牌字标与副标题：原品牌蓝 #1f33d6 / 灰 #888 → 白色主文字 + --npz-text-2
    （.login-lang 是登录卡右上角语言切换器的历史类名，当前组件树未检索到引用） */
 .login-logo { font-size: 22px; font-weight: 700; color: #E7E9EA; margin-bottom: 6px; }
-.login-sub { font-size: 13px; color: var(--npz-text-2); margin-bottom: 22px; }
+.login-sub { font-size: 14px; color: var(--npz-text-2); margin-bottom: 22px; }
 .login-lang { position: absolute; top: 18px; inset-inline-end: 24px; z-index: 1; }
 
 /* ============================================================================
@@ -174,19 +113,21 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .brand { font-weight: 800; color: #E7E9EA; font-size: 17px; }
 
 /* ---- 聊天区 ---- */
-.chat-scroll { flex: 1; overflow-y: auto; padding: 18px 6%; scroll-behavior: smooth; }
+/* ★ #36（2026-09-21）：即时翻译改为「输入与译文同卡」的合并对话框后，滚动区收进卡内的
+   .cw-dialog-body（flex/overflow/padding/scroll-behavior 随组件 CW_CSS 下发），页面级
+   .chat-scroll 已无消费者，规则随之删除（旧规则在此处留一条说明即可，勿再复活）。 */
 .bubble-row { display: flex; margin-bottom: 16px; gap: 10px; }
 .bubble-row.user { flex-direction: row-reverse; }
 .avatar {
   width: 34px; height: 34px; border-radius: 50%; flex: none;
-  display: flex; align-items: center; justify-content: center; font-size: 13px; color: #000;
+  display: flex; align-items: center; justify-content: center; font-size: 14px; color: #000;
 }
 /* 头像底色：AI=白、用户=次级灰（原品牌蓝 #1f33d6 / 绿 #43a047，绿色按交付规则废止）；
    文字固定黑色，保证在白/灰底上仍有对比度 */
 .avatar-ai { background: #E7E9EA; }
 .avatar-user { background: #9AA0AA; }
 .bubble {
-  max-width: 78%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.65;
+  max-width: 78%; padding: 10px 14px; border-radius: 14px; font-size: 15px; line-height: 1.65;
   background: var(--npz-surface); color: var(--npz-text-1); word-break: break-word;
 }
 /* 用户气泡：原浅蓝 #e3f2fd → 浮面令牌 --npz-surface-2，与 AI 气泡靠层级而非色相区分 */
@@ -196,14 +137,14 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .bubble .md pre { background: #0A0B0D; color: #E7E9EA; padding: 10px; border-radius: 8px; overflow: auto; }
 .bubble .md code { background: rgba(231, 233, 234, 0.10); padding: 1px 5px; border-radius: 4px; }
 .bubble .md table { border-collapse: collapse; margin: 8px 0; }
-.bubble .md th, .bubble .md td { border: 1.2px solid var(--npz-line); padding: 4px 8px; font-size: 13px; }
+.bubble .md th, .bubble .md td { border: 1.2px solid var(--npz-line); padding: 4px 8px; font-size: 14px; }
 
 /* ---- 多语言译文对照表：虚线分隔与语言 chip 由靛蓝底（#dfe4ee / #e8eaf6）→ 中性线 + 半透明白 ---- */
 .tr-translations { width: 100%; border-collapse: collapse; margin-top: 8px; }
-.tr-translations td { border-top: 1px dashed var(--npz-line); padding: 6px 4px; vertical-align: top; font-size: 13.5px; }
+.tr-translations td { border-top: 1px dashed var(--npz-line); padding: 6px 4px; vertical-align: top; font-size: 14.5px; }
 .tr-lang-chip {
   display: inline-block; background: rgba(231, 233, 234, 0.08); color: #E7E9EA; border-radius: 10px;
-  padding: 0 8px; font-size: 12px; line-height: 20px; margin-inline-end: 6px; white-space: nowrap;
+  padding: 0 8px; font-size: 13px; line-height: 20px; margin-inline-end: 6px; white-space: nowrap;
 }
 
 /* ---- 消息气泡（与 Vue MessageBubble 等价结构）---- */
@@ -213,7 +154,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 
 /* 技能徽标：原绿底 → 中性半透明白底（无绿） */
 .skill-badge {
-  display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11px;
+  display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px;
   background: rgba(231, 233, 234, 0.10); color: #E7E9EA; font-weight: 500;
 }
 
@@ -226,7 +167,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .bubble-text h2 { font-size: 16px; font-weight: 700; margin: 14px 0 6px 0; padding-bottom: 3px; border-bottom: 1px solid var(--npz-line); }
 .bubble-text h3 { font-size: 15px; font-weight: 600; margin: 12px 0 6px 0; }
 .bubble-text h4 { font-size: 14px; font-weight: 600; margin: 10px 0 4px 0; }
-.bubble-text h5, .bubble-text h6 { font-size: 13px; font-weight: 600; margin: 8px 0 4px 0; }
+.bubble-text h5, .bubble-text h6 { font-size: 14px; font-weight: 600; margin: 8px 0 4px 0; }
 .bubble-text ul, .bubble-text ol { margin: 4px 0 8px 0; padding-inline-start: 20px; }
 .bubble-text li { margin-bottom: 2px; line-height: 1.6; }
 .bubble-text blockquote {
@@ -234,7 +175,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
   background: rgba(231, 233, 234, 0.06); color: var(--npz-text-2); border-radius: 0 4px 4px 0;
 }
 .bubble-text code {
-  background: rgba(231, 233, 234, 0.10); padding: 1px 5px; border-radius: 3px; font-size: 13px;
+  background: rgba(231, 233, 234, 0.10); padding: 1px 5px; border-radius: 3px; font-size: 14px;
   font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
 }
 .bubble-text hr { border: none; border-top: 1px solid var(--npz-line); margin: 12px 0; }
@@ -244,10 +185,10 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 /* ---- 进度条（抽象进度须带检查点名字，见交付包 §2.4 原则 1）---- */
 .progress-area { margin-bottom: 10px; }
 .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; flex-wrap: wrap; }
-.progress-step { font-size: 13px; color: var(--npz-text-2); }
-.progress-lang { font-size: 12px; font-weight: 600; color: #000; background: #E7E9EA; padding: 1px 6px; border-radius: 4px; }
-.progress-detail { font-size: 12px; color: #878D95; }
-.progress-percent { font-size: 13px; font-weight: 600; color: #E7E9EA; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
+.progress-step { font-size: 14px; color: var(--npz-text-2); }
+.progress-lang { font-size: 13px; font-weight: 600; color: #000; background: #E7E9EA; padding: 1px 6px; border-radius: 4px; }
+.progress-detail { font-size: 13px; color: #878D95; }
+.progress-percent { font-size: 14px; font-weight: 600; color: #E7E9EA; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
 .progress-bar-bg { width: 100%; height: 6px; background: #2A2F3A; border-radius: 3px; overflow: hidden; }
 .progress-bar-fill { height: 100%; background: #E7E9EA; border-radius: 3px; transition: width .3s ease; }
 
@@ -256,14 +197,14 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .draft-area { margin-bottom: 10px; }
 .draft-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; }
 .draft-stage {
-  font-size: 11px; font-weight: 600; letter-spacing: .06em; color: #E7E9EA;
+  font-size: 12px; font-weight: 600; letter-spacing: .06em; color: #E7E9EA;
   border: 1px solid #3F444B; border-radius: 999px; padding: 1px 8px;
 }
 .draft-stage--review { color: #000; background: #E7E9EA; border-color: #E7E9EA; }
-.draft-pct { font-size: 12px; font-weight: 600; color: var(--npz-text-2); font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
+.draft-pct { font-size: 13px; font-weight: 600; color: var(--npz-text-2); font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
 .draft-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
-.draft-lang { flex: none; min-width: 44px; font-size: 11px; color: #878D95; line-height: 20px; letter-spacing: .04em; }
-.draft-text { font-size: 13px; line-height: 1.7; color: var(--npz-text-2); white-space: pre-wrap; word-break: break-word; }
+.draft-lang { flex: none; min-width: 44px; font-size: 12px; color: #878D95; line-height: 20px; letter-spacing: .04em; }
+.draft-text { font-size: 14px; line-height: 1.7; color: var(--npz-text-2); white-space: pre-wrap; word-break: break-word; }
 /* 行尾光标：闪烁关键帧复用 langcross motion.css 的 lc-mo-caret（全站已引入） */
 .draft-caret { display: inline-block; width: 2px; height: 1em; margin-inline-start: 2px; vertical-align: -2px; background: #E7E9EA; animation: lc-mo-caret 1s step-end infinite; }
 .draft-bar { position: relative; height: 2px; margin-top: 8px; background: #2A2F3A; border-radius: 2px; overflow: hidden; }
@@ -283,25 +224,25 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 }
 /* 中断横幅：语义红 10% 低浓度描边条（禁大色块），只提示「非最终交付物」 */
 .file-segs-warn {
-  font-size: 12px; line-height: 1.6; color: #E98286;
+  font-size: 13px; line-height: 1.6; color: #E98286;
   border: 1px solid rgba(229, 72, 77, .35); background: rgba(229, 72, 77, .10);
   border-radius: 6px; padding: 4px 8px; margin-bottom: 8px;
 }
 .file-segs-lang + .file-segs-lang { margin-top: 8px; }
 .file-segs-langhead { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.file-segs-langname { font-size: 11px; color: #878D95; letter-spacing: .04em; }
-.file-segs-live { font-size: 10px; font-weight: 600; letter-spacing: .06em; color: var(--npz-text-2); border: 1px solid #3F444B; border-radius: 999px; padding: 0 6px; }
-.file-segs-sealed { font-size: 10px; font-weight: 600; letter-spacing: .06em; color: #000; background: #E7E9EA; border-radius: 999px; padding: 0 6px; }
-.file-segs-count { font-size: 11px; color: #878D95; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; margin-inline-start: auto; }
+.file-segs-langname { font-size: 12px; color: #878D95; letter-spacing: .04em; }
+.file-segs-live { font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--npz-text-2); border: 1px solid #3F444B; border-radius: 999px; padding: 0 6px; }
+.file-segs-sealed { font-size: 11px; font-weight: 600; letter-spacing: .06em; color: #000; background: #E7E9EA; border-radius: 999px; padding: 0 6px; }
+.file-segs-count { font-size: 12px; color: #878D95; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; margin-inline-start: auto; }
 .file-seg-row { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; }
-.file-seg-idx { flex: none; font-size: 10px; color: #565B63; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
+.file-seg-idx { flex: none; font-size: 11px; color: #565B63; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
 /* 初译行：次级灰小字（还可能被审校/闸门改写）；final 行提亮为主文本色 */
-.file-seg-text { font-size: 12.5px; line-height: 1.65; color: var(--npz-text-2); white-space: pre-wrap; word-break: break-word; }
+.file-seg-text { font-size: 13.5px; line-height: 1.65; color: var(--npz-text-2); white-space: pre-wrap; word-break: break-word; }
 .file-seg-row--final .file-seg-text { color: #E7E9EA; }
 .file-seg-row--final .file-seg-idx { color: #878D95; }
 /* 敏感拦截占位行：不展示内容文本，只给拦截标注 */
-.file-seg-blocked { font-size: 11px; font-style: normal; color: #878D95; }
-.file-segs-trunc { font-size: 11px; color: #565B63; text-align: center; padding-top: 4px; }
+.file-seg-blocked { font-size: 12px; font-style: normal; color: #878D95; }
+.file-segs-trunc { font-size: 12px; color: #565B63; text-align: center; padding-top: 4px; }
 
 /* ---- ★ D1 WordSwap 共享换词动效（#24：落地页「划掉错词→亮起正词」移植为加载态通用动效）----
    视觉语言与 HeroDemo hd-* 同源但独立成组：错词位 .ws-w 灰字，struck 时转语义红并
@@ -309,7 +250,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
    lock 定版缩放。只动 opacity/transform/text-shadow，不触发重排；纯黑口径无新色相。 */
 .ws { display: inline-flex; align-items: baseline; gap: 12px; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; min-width: 0; }
 /* ★ 多语言循环：语种标签前置（EN/RU/…），灰一档小字，不参与打字动画 */
-.ws-tag { flex: none; font-size: 11.5px; letter-spacing: .08em; color: #878D95; border: 1px solid #2A2F3A; border-radius: 4px; padding: 1px 5px; transform: translateY(-1px); }
+.ws-tag { flex: none; font-size: 12.5px; letter-spacing: .08em; color: #878D95; border: 1px solid #2A2F3A; border-radius: 4px; padding: 1px 5px; transform: translateY(-1px); }
 .ws-w { position: relative; display: inline-block; color: #9AA0AA; font-size: 14px; transition: color .28s ease; }
 .ws-w.struck { color: var(--lc-danger, #E5484D); animation: wsStrikeFlash .72s ease-out both; }
 /* 红线是文字节点 ::before：与错词分开两层，划掉动画（scaleX）不牵连文字重排 */
@@ -333,13 +274,13 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .ws--lg .ws-w .ws-wt::before { height: 3px; top: 52%; }
 /* ★ #24 小档：聊天草稿头与逐段上屏行内——字号贴齐各自 11~12px 文本基线，间距收窄 */
 .draft-ws { gap: 9px; }
-.draft-ws .ws-w { font-size: 13px; }
+.draft-ws .ws-w { font-size: 14px; }
 .draft-ws .ws-r { font-size: 14px; }
-.draft-ws .ws-tag { font-size: 10px; }
+.draft-ws .ws-tag { font-size: 11px; }
 .file-segs-ws { gap: 8px; }
-.file-segs-ws .ws-w { font-size: 12px; }
-.file-segs-ws .ws-r { font-size: 13px; }
-.file-segs-ws .ws-tag { font-size: 10px; }
+.file-segs-ws .ws-w { font-size: 13px; }
+.file-segs-ws .ws-r { font-size: 14px; }
+.file-segs-ws .ws-tag { font-size: 11px; }
 @media (prefers-reduced-motion: reduce) {
   .ws-w.struck, .ws-r.lock { animation: none; }
   .ws-w .ws-wt::before { animation: none; }
@@ -379,32 +320,32 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 /* ---- 翻译结果 ---- */
 .translation-results { display: flex; flex-direction: column; gap: 8px; }
 .lang-row { display: flex; gap: 8px; align-items: baseline; }
-.lang-label { min-width: 56px; font-size: 12px; color: var(--npz-text-2); font-weight: 500; flex-shrink: 0; }
-.lang-text { font-size: 14px; color: var(--npz-text-1); line-height: 1.5; white-space: pre-wrap; flex: 1; }
-.source-badge { font-size: 11px; padding: 1px 6px; border-radius: 4px; font-weight: 500; flex-shrink: 0; white-space: nowrap; }
+.lang-label { min-width: 56px; font-size: 13px; color: var(--npz-text-2); font-weight: 500; flex-shrink: 0; }
+.lang-text { font-size: 15px; color: var(--npz-text-1); line-height: 1.5; white-space: pre-wrap; flex: 1; }
+.source-badge { font-size: 12px; padding: 1px 6px; border-radius: 4px; font-weight: 500; flex-shrink: 0; white-space: nowrap; }
 /* 译文来源徽标：知识库命中=白、模型翻译=琥珀（原来两者都是蓝底，仅靠深浅区分） */
 .source-kb { background: rgba(231, 233, 234, 0.10); color: #E7E9EA; }
 .source-model { background: rgba(210, 153, 34, 0.14); color: #D29922; }
 .translation-mode { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--npz-line); }
-.mode-badge { font-size: 12px; padding: 2px 8px; border-radius: 4px; font-weight: 500; }
+.mode-badge { font-size: 13px; padding: 2px 8px; border-radius: 4px; font-weight: 500; }
 /* 匹配模式四态：原蓝/橙/紫/蓝 → 白 / 琥珀 / 灰 / 白（无蓝无紫） */
 .mode-exact { background: rgba(231, 233, 234, 0.12); color: #E7E9EA; }
 .mode-fuzzy { background: rgba(210, 153, 34, 0.14); color: #D29922; }
 .mode-semantic { background: rgba(231, 233, 234, 0.06); color: var(--npz-text-2); }
 .mode-model { background: rgba(231, 233, 234, 0.12); color: #E7E9EA; }
-.mode-match-text { font-size: 12px; color: #878D95; }
+.mode-match-text { font-size: 13px; color: #878D95; }
 
 /* ---- 匹配度报告 ---- */
 .match-report { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--npz-line); }
-.report-title { font-size: 12px; font-weight: 600; color: var(--npz-text-2); margin-bottom: 6px; }
+.report-title { font-size: 13px; font-weight: 600; color: var(--npz-text-2); margin-bottom: 6px; }
 .report-grid { display: flex; flex-wrap: wrap; gap: 6px; }
-.report-item { display: flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 6px; background: var(--npz-surface); border-radius: 4px; }
-.report-status { font-size: 12px; }
+.report-item { display: flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 6px; background: var(--npz-surface); border-radius: 4px; }
+.report-status { font-size: 13px; }
 .report-lang { color: var(--npz-text-2); }
 
 /* ---- 反馈入口 ---- */
 .msg-feedback-row { margin-top: 6px; display: flex; justify-content: flex-end; }
-.feedback-btn { border: none; background: transparent; color: var(--npz-text-2); font-size: 12px; cursor: pointer; padding: 2px 8px; border-radius: 10px; }
+.feedback-btn { border: none; background: transparent; color: var(--npz-text-2); font-size: 13px; cursor: pointer; padding: 2px 8px; border-radius: 10px; }
 .feedback-btn:hover { background: rgba(231, 233, 234, 0.10); color: #E7E9EA; }
 
 /* ---- 下载卡图标：原蓝/红/绿 → 白 / 红 / 琥珀（无绿） ---- */
@@ -422,10 +363,10 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 }
 .card-info { flex: 1; min-width: 0; }
 .card-filename { font-size: 14px; font-weight: 600; color: var(--npz-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.card-meta { font-size: 12px; color: var(--npz-text-2); margin-top: 2px; }
+.card-meta { font-size: 13px; color: var(--npz-text-2); margin-top: 2px; }
 .image-download-btn {
   display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px; border-radius: 8px;
-  background: var(--npz-surface-2); color: var(--npz-text-2); font-size: 13px; text-decoration: none;
+  background: var(--npz-surface-2); color: var(--npz-text-2); font-size: 14px; text-decoration: none;
   transition: all .2s; align-self: flex-start;
 }
 .image-download-btn:hover { background: #202329; color: #E7E9EA; }
@@ -454,7 +395,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .tag {
   display: inline-flex; align-items: center; gap: 4px; background: var(--npz-surface-2);
   border: 1.2px solid var(--npz-line); border-radius: 14px; padding: 3px 8px;
-  font-size: 12px; color: var(--npz-text-1); line-height: 1.4;
+  font-size: 13px; color: var(--npz-text-1); line-height: 1.4;
 }
 .tag-file { background: rgba(231, 233, 234, 0.08); border-color: rgba(231, 233, 234, 0.18); }
 .tag-lang { background: rgba(231, 233, 234, 0.06); border-color: rgba(231, 233, 234, 0.14); }
@@ -501,24 +442,24 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 /* ============================================================================
    七、弹窗内字段（等价 Vue 各 Modal 的内联/局部类）
    ============================================================================ */
-.fb-hint { margin: 0 0 10px; font-size: 12px; color: var(--npz-text-2); }
-.eb-hint { font-size: 12.5px; color: var(--npz-text-2); margin: 8px 0 12px; }
+.fb-hint { margin: 0 0 10px; font-size: 13px; color: var(--npz-text-2); }
+.eb-hint { font-size: 13.5px; color: var(--npz-text-2); margin: 8px 0 12px; }
 .eb-old-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-.eb-old-label { font-size: 12px; color: var(--npz-text-2); white-space: nowrap; }
-.eb-old-addr { font-size: 13px; color: var(--npz-text-1); word-break: break-all; }
-.fb-addr { font-size: 13px; color: var(--npz-text-1); word-break: break-all; }
+.eb-old-label { font-size: 13px; color: var(--npz-text-2); white-space: nowrap; }
+.eb-old-addr { font-size: 14px; color: var(--npz-text-1); word-break: break-all; }
+.fb-addr { font-size: 14px; color: var(--npz-text-1); word-break: break-all; }
 .pwd-code-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .pwd-code-input { flex: 1; }
 .eb-code-row { display: flex; gap: 8px; margin-top: 8px; }
 .eb-code-input { flex: 1; }
-.fb-msg { margin-top: 6px; font-size: 12.5px; }
+.fb-msg { margin-top: 6px; font-size: 13.5px; }
 /* 成功态：绿 → 白；错误态：红 */
-.login-ok-hint, .eb-ok { color: #E7E9EA; font-size: 12.5px; margin-top: 6px; }
-.login-error, .eb-err { color: #E5484D; font-size: 12.5px; margin-top: 6px; }
+.login-ok-hint, .eb-ok { color: #E7E9EA; font-size: 13.5px; margin-top: 6px; }
+.login-error, .eb-err { color: #E5484D; font-size: 13.5px; margin-top: 6px; }
 .fb-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-.fb-check { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13px; color: var(--npz-text-1); cursor: pointer; }
-.fb-ctx-preview { color: #878D95; font-size: 12px; }
-.fb-confirm-row { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--npz-text-1); margin: 6px 0 4px; }
+.fb-check { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 14px; color: var(--npz-text-1); cursor: pointer; }
+.fb-ctx-preview { color: #878D95; font-size: 13px; }
+.fb-confirm-row { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; color: var(--npz-text-1); margin: 6px 0 4px; }
 
 /* ============================================================================
    八、无障碍基线：键盘焦点可见（白描边，不用蓝）+ 动效偏好尊重
@@ -565,3 +506,53 @@ html[data-theme='dark'] .t-table, html[data-theme='dark'] .t-table th, html[data
 html[data-theme='dark'] .ss-row, html[data-theme='dark'] .ss-table th, html[data-theme='dark'] .ss-table td { border-color: var(--npz-line); }
 html[data-theme='dark'] .ss-table th { background: var(--npz-surface-2); }
 html[data-theme='dark'] .ss-row span { color: var(--npz-text-2); }
+
+/* ============================================================================
+   十、★ #35（2026-09-21 用户反馈）：登录后前后台字体偏小、次级文字对比度偏低
+       → 全站整体上调一档
+   ---------------------------------------------------------------------------
+   为什么写在这里而不是组件库源文件：src/ui/langcross/** 是交付包冻结区（见 UI
+   迁移指南），禁止改动。所以全部用「页面级覆写」实现，且必须注意导入顺序——
+   main.tsx 中本文件先于 tokens.css / components.css，同特异度会被后者反向覆盖：
+     1) 令牌覆写用 :root:root，把特异度从 (0,1,0) 提到 (0,2,0)；
+     2) 类级覆写用 html 前缀（如 html .lc-table），(0,1,1) > (0,1,0)。
+   字号口径：基础 14→15、正文与表格 13→14、标签与说明 12→13、极小徽标 10/11→11/12。
+   只抬字号与文字色，不动间距/控件高度/圆角，避免破坏交付包版式比例。
+   对比度实测（对 #000 页面底 / 对 #0E1014 卡面，两档都要过 AA 4.5:1）：
+     text-2 8.78 / 7.96 · text-3 7.79 / 7.06 · text-4 6.80 / 6.16。
+   ============================================================================ */
+:root:root {
+  --lc-text-2: #A2A8B2;   /* 原 #9AA0AA（7.98 / 7.24） */
+  --lc-text-3: #979EAA;   /* 原 #878D95（6.27 / 5.69） */
+  --lc-text-4: #8C93A0;   /* 原 #7A828E（5.41 / 4.91） */
+  --lc-text-5: #979EAA;   /* 价格单位 / 辅助数字，与 text-3 同档（原 #8A9099） */
+  --npz-text-2: #A2A8B2;  /* 前台次文字（约 60 处内联样式走此令牌，一处改全站生效） */
+  --adm-hint: #A2A8B2;    /* 后台提示文案 */
+  --adm-faint: #979EAA;   /* 后台弱说明 */
+}
+
+/* —— 组件库字号上调（只覆写，不改 langcross 源文件）—— */
+html .lc-root { font-size: 15px; line-height: 23px; }
+html .lc-input, html .lc-textarea, html .lc-toolbar__input, html .lc-msearch { font-size: 14px; }
+html .lc-field__label, html .lc-field__error, html .lc-select, html .lc-pill,
+html .lc-chip, html .lc-side-lang, html .lc-shell-pill, html .lc-footer-bar,
+html .lc-toolbar__count, html .lc-stat__label, html .lc-toast__desc, html .lc-empty__desc,
+html .lc-auth-card__desc, html .lc-auth-card__foot, html .lc-mcard__body,
+html .lc-mstat__label { font-size: 13px; }
+html .lc-auth-card__foot .lc-link { font-size: 13px; }
+html .lc-btn--sm { font-size: 13px; }
+html .lc-badge { font-size: 11px; }
+html .lc-table, html .lc-kv__key, html .lc-kv__val, html .lc-banner, html .lc-menu__item,
+html .lc-empty__title, html .lc-side-item, html .lc-side-item__icon, html .lc-tab,
+html .lc-page-head__desc, html .lc-table__empty, html .lc-link, html .lc-dialog__body,
+html .lc-dialog__actions .lc-btn, html .lc-mcard__title, html .lc-msection { font-size: 14px; }
+html .lc-table th, html .lc-table td--mono, html .lc-table .lc-table__mono { font-size: 13px; }
+html .lc-dialog__body { line-height: 23px; }
+html .lc-statusbar__glyph, html .lc-mcard__meta, html .lc-mstat__delta { font-size: 12px; }
+html .lc-tabbar__item { font-size: 11px; }
+
+/* —— 前台/后台自有类里的写死灰字（未走令牌的历史内联值）同步提亮 —— */
+html .progress-detail, html .draft-lang, html .file-segs-langname, html .file-segs-count,
+html .file-seg-blocked, html .file-segs-trunc, html .mode-match-text, html .ws-tag,
+html .fb-ctx-preview { color: var(--lc-text-3); }
+html .file-seg-idx { color: var(--lc-text-4); }

@@ -3,7 +3,7 @@
 // BuildPackScope 保持原三参口径不动（冻结规则 + 90+ 调用点稳定），
 // 新增薄包装 BuildUserPackScope：在原可见范围上叠加「当前用户 job_role 命中的角色包」。
 // 装配规则：宿主租户0、pack_type='persona'、enabled=1、code=job_role 的包 → PersonaPackIDs
-//（优先级 350 档，见 kb.PackScope.Rank）；job_role 为空或包不存在 → 不叠加，行为与旧一致。
+// （优先级 350 档，见 kb.PackScope.Rank）；job_role 为空或包不存在 → 不叠加，行为与旧一致。
 // ============================================================================
 package store
 

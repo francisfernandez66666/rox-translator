@@ -15,9 +15,10 @@ import { confirmDialog, promptText } from '@/components/uiDialogs'
 import {
   tenantList, tenantCreate, tenantUpdate, tenantSetStatus, tenantDelete,
   tenantGrantTrial, tenantErase, adminOrderCreate, adminOrderPay,
-  API_BASE, getAuthToken,
+  API_BASE, getAuthToken, handleUnauthorized,
   type TenantInfo,
 } from '@/api'
+import { runGuarded } from '@/lib/runGuarded'
 import { Panel, Field, toastResp, num } from './parts'
 import { useAdmin } from '@/stores/admin'
 import { t, tpl, useT, type Lang } from '@/i18n'
@@ -54,9 +55,11 @@ export function TenantsP() {
   useEffect(() => { void loadInd() }, [loadInd])
 
   // load 拉取租户列表
+  // ★ #42（前端坏味道：取数错误不可见）：旧写法裸 await，接口一挂就是一条未捕获 rejection +
+  //   一张空表，超管完全看不出是「没有租户」还是「请求失败」；改走 runGuarded 统一提示口径。
   const load = useCallback(async () => {
-    const r: any = await tenantList()
-    if (r.success) setRows(r.tenants || [])
+    const r = await runGuarded(() => tenantList())
+    if (r?.success) setRows(r.tenants || [])
   }, [])
   useEffect(() => { void load() }, [load])
 
@@ -104,6 +107,10 @@ export function TenantsP() {
     if (tk) xhr.setRequestHeader('Authorization', `Bearer ${tk}`)
     xhr.responseType = 'blob'
     xhr.onload = () => {
+      // ★ #42（§4.2-2 组件侧补漏）：401 单独立即交给 core 统一清态回登录。
+      //   旧写法把 401 混进「非 200」只弹一句「导出失败」——会话早已过期却仍停在后台，
+      //   用户反复点导出也只得到同一句提示。XHR/blob 通道不经 request()，401 口径必须自己补齐。
+      if (xhr.status === 401) { handleUnauthorized(url); return }
       // 失败时响应体也是 blob，读不到后端 message，只能回退到通用「导出失败」文案
       if (xhr.status !== 200) { toastError(t('tenants.exportFailed')); return }
       const a = document.createElement('a')

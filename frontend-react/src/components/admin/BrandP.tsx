@@ -198,14 +198,14 @@ export default function BrandP() {
       ]} />
       {tab === 'brand' && (
         <>
-          <p style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 12 }}>{t('brand.hint')}</p>
-      <div style={{ fontSize: 13, color: 'var(--adm-info-tx)', background: 'var(--adm-info-bg)', border: '1.2px solid var(--adm-info-bd)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.6 }}>
+          <p style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 12 }}>{t('brand.hint')}</p>
+      <div style={{ fontSize: 14, color: 'var(--adm-info-tx)', background: 'var(--adm-info-bg)', border: '1.2px solid var(--adm-info-bd)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.6 }}>
          {t('brand.featureDedicated')}
       </div>
       {/* 超管：租户选择器 */}
       {isSuper && (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.tenantSelect')}</div>
+          <div style={{ fontSize: 14, marginBottom: 4 }}>{t('brand.tenantSelect')}</div>
           <select className="lc-select" value={String(targetTenantId)} onChange={(e) => ad.switchTenant(Number(e.target.value))} style={{ width: 320 }}>
             {isSuper && <option value="1">{t('brand.tenantRoot')}</option>}
             {ad.tenants.map((x) => <option key={x.id} value={String(x.id)}>{`#${x.id} ${x.name}`}</option>)}
@@ -214,7 +214,7 @@ export default function BrandP() {
       )}
       {/* 超管：品牌定制授权开关（仅对非平台根租户生效） */}
       {isSuper && targetTenantId > 1 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--adm-purp-bg)', border: '1.2px solid var(--adm-purp-bd)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--adm-purp-bg)', border: '1.2px solid var(--adm-purp-bd)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 14 }}>
           <span>{tpl('brand.grantLabel', { id: targetTenantId })}</span>
           <Switch checked={brandGranted} disabled={granting} onChange={(e) => toggleGrant(e.target.checked)} />
           {brandGranted && <StatusPill tone="success">{t('brand.grantedTag')}</StatusPill>}
@@ -222,7 +222,7 @@ export default function BrandP() {
       )}
       {/* 未获得编辑权限时显示锁定提示 */}
       {!editable && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', color: 'var(--adm-warn-tx)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', color: 'var(--adm-warn-tx)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 14 }}>
           <span>{t('brand.locked')}</span>
           {brandGranted && <StatusPill tone="success">{t('brand.grantedTag')}</StatusPill>}
         </div>
@@ -233,46 +233,46 @@ export default function BrandP() {
         <div style={{ maxWidth: 560, display: 'flex', flexDirection: 'column', gap: 14 }}>
           {/* 品牌名称输入 */}
           <div>
-            <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.name')}</div>
+            <div style={{ fontSize: 14, marginBottom: 4 }}>{t('brand.name')}</div>
             <input className="lc-input" value={name} disabled={!editable} onChange={(e) => setName(e.target.value)} placeholder="能言 LangCross" />
           </div>
 
           {/* 品牌英文名输入（固定用法种入企业知识库，防止翻译漂移） */}
           <div>
-            <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.nameEn')}</div>
+            <div style={{ fontSize: 14, marginBottom: 4 }}>{t('brand.nameEn')}</div>
             <input className="lc-input" value={nameEn} disabled={!editable} onChange={(e) => setNameEn(String(e.target.value ?? ''))} placeholder="LangCross" />
           </div>
 
            {/* Logo 上传与预览
                预览框用深色虚线（#464C58）：暗色面板下浅色/透明 PNG Logo 也能看清边界 */}
            <div>
-             <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.logo')}</div>
+             <div style={{ fontSize: 14, marginBottom: 4 }}>{t('brand.logo')}</div>
              <input type="file" accept="image/*" disabled={!editable} onChange={onLogoFile} />
              {logo && (
                <div style={{ marginTop: 8, padding: 12, border:'1px dashed #464C58', borderRadius: 8, display:'inline-block'}}>
                   <img src={logo} alt="logo" style={{ height: 108, maxWidth: 420, objectFit: 'contain', display: 'block' }} />
                </div>
              )}
-             <div style={{ fontSize: 13, margin: '8px 0 4px' }}>{t('brand.logoUrl')}</div>
+             <div style={{ fontSize: 14, margin: '8px 0 4px' }}>{t('brand.logoUrl')}</div>
              <input className="lc-input" value={logo} disabled={!editable} onChange={(e) => setLogo(e.target.value)} placeholder="https://…/logo.png" />
            </div>
 
            {/* 子域名前缀输入 */}
            <div>
-             <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.domain')}</div>
+             <div style={{ fontSize: 14, marginBottom: 4 }}>{t('brand.domain')}</div>
                 <input className="lc-input" value={domain} disabled={!editable || targetTenantId === 1} onChange={(e) => setDomain(String(e.target.value ?? ''))} placeholder="请输入你想要的域名名称" />
-              <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginTop: 4 }}>
+              <div style={{ fontSize: 13, color: 'var(--adm-faint)', marginTop: 4 }}>
                 你将改的是 {domain || '前缀'}.lexicorn.cn
               </div>
             </div>
 
             {/* 首页背景图配置：文件上传 + 登录页布局选择 */}
             <div>
-              <div style={{ fontSize: 13, marginBottom: 4 }}>{t('brand.homeBg')}</div>
+              <div style={{ fontSize: 14, marginBottom: 4 }}>{t('brand.homeBg')}</div>
               <input type="file" accept="image/*" disabled={!editable} onChange={onHomeBgFile} />
               {/* 登录页布局：全屏背景 + 遮罩 / 左右分栏（容器在左或右） */}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', marginTop: 8 }}>
-                <div style={{ fontSize: 13 }}>{t('brand.loginLayout')}</div>
+                <div style={{ fontSize: 14 }}>{t('brand.loginLayout')}</div>
                 <select className="lc-select" value={loginLayout.mode} disabled={!editable}
                         onChange={(e) => setLoginLayout((l) => ({ ...l, mode: e.target.value as 'full' | 'split' }))}
                         style={{ width: 160 }}>
@@ -281,7 +281,7 @@ export default function BrandP() {
                 </select>
                 {loginLayout.mode === 'split' && (
                   <>
-                    <div style={{ fontSize: 13 }}>{t('brand.loginSide')}</div>
+                    <div style={{ fontSize: 14 }}>{t('brand.loginSide')}</div>
                     <select className="lc-select" value={loginLayout.side} disabled={!editable}
                             onChange={(e) => setLoginLayout((l) => ({ ...l, side: e.target.value as 'left' | 'right' }))}
                             style={{ width: 160 }}>
@@ -304,7 +304,7 @@ export default function BrandP() {
                           {/* 左侧：登录表单容器（可拖拽调整卡片位置） */}
                           <div ref={splitFormRef} style={{ flex: 1, position:'relative', background:'rgba(231,233,234,0.06)', overflow:'hidden'}}>
                             <div onMouseDown={(e) => { e.preventDefault(); cardDragRef.current = { startX: e.clientX, startY: e.clientY, x0: loginCardPos.x, y0: loginCardPos.y, el: splitFormRef.current } }}
-                              style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 120, height: 80, background:'#0E1014', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 11, color:'#889', cursor:'move'}}>
+                              style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 120, height: 80, background:'#0E1014', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 12, color:'#889', cursor:'move'}}>
                               {t('brand.cardPreview')}
                             </div>
                           </div>
@@ -318,7 +318,7 @@ export default function BrandP() {
                           {/* 右侧：登录表单容器（可拖拽调整卡片位置） */}
                           <div ref={splitFormRef} style={{ flex: 1, position:'relative', background:'rgba(231,233,234,0.06)', overflow:'hidden'}}>
                             <div onMouseDown={(e) => { e.preventDefault(); cardDragRef.current = { startX: e.clientX, startY: e.clientY, x0: loginCardPos.x, y0: loginCardPos.y, el: splitFormRef.current } }}
-                              style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 120, height: 80, background:'#0E1014', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 11, color:'#889', cursor:'move'}}>
+                              style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 120, height: 80, background:'#0E1014', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 12, color:'#889', cursor:'move'}}>
                               {t('brand.cardPreview')}
                             </div>
                           </div>
@@ -343,19 +343,19 @@ export default function BrandP() {
                       {/* 可拖拽的登录卡片预览 */}
                       <div
                         onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); cardDragRef.current = { startX: e.clientX, startY: e.clientY, x0: loginCardPos.x, y0: loginCardPos.y, el: bgPreviewRef.current } }}
-                        style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 140, height: 90, background:'#0E1014', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.25)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 11, color:'#889', cursor:'move'}}
+                        style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 140, height: 90, background:'#0E1014', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.25)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 12, color:'#889', cursor:'move'}}
                       >
                         {t('brand.cardPreview')}
                       </div>
                       {/* 背景图拖拽提示文字 */}
-                      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#cdd', fontSize: 12, pointerEvents: 'none' }}>
+                      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#cdd', fontSize: 13, pointerEvents: 'none' }}>
                         {t('brand.homeBgDragHint')}
                       </div>
                     </div>
                   )}
                   {/* 背景图显示模式、缩放比例、重置按钮 */}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', marginTop: 10, maxWidth: 420 }}>
-                    <div style={{ fontSize: 13 }}>{t('brand.homeBgMode')}</div>
+                    <div style={{ fontSize: 14 }}>{t('brand.homeBgMode')}</div>
                     <select className="lc-select"
                       value={homeBgStyle.mode}
                       onChange={(e) => setHomeBgStyle((s) => ({ ...s, mode: e.target.value as BgStyle['mode'] }))}
@@ -363,11 +363,11 @@ export default function BrandP() {
                       <option value="cover">{t('brand.bgCover')}</option>
                       <option value="contain">{t('brand.bgContain')}</option>
                     </select>
-                    <div style={{ fontSize: 13, minWidth: 96 }}>{t('brand.homeBgZoom')}</div>
+                    <div style={{ fontSize: 14, minWidth: 96 }}>{t('brand.homeBgZoom')}</div>
                     <input type="range" min={0.5} max={3} step={0.1} value={homeBgStyle.scale}
                             onChange={(e) => setHomeBgStyle((s) => ({ ...s, scale: Number(e.target.value) }))}
                             style={{ width: 160, accentColor: 'var(--lc-text-1)' }} />
-                    <span style={{ fontSize: 12, color: 'var(--adm-faint)', minWidth: 40 }}>{homeBgStyle.scale.toFixed(1)}x</span>
+                    <span style={{ fontSize: 13, color: 'var(--adm-faint)', minWidth: 40 }}>{homeBgStyle.scale.toFixed(1)}x</span>
                     <Button size="sm" variant="secondary" onClick={() => setHomeBgStyle({ scale: 1, x: 50, y: 50, mode: 'cover' })}>
                       {t('brand.homeBgReset')}
                     </Button>
@@ -377,9 +377,9 @@ export default function BrandP() {
                   </div>
                 </div>
               )}
-              <div style={{ fontSize: 13, margin: '8px 0 4px' }}>{t('brand.homeBgUrl')}</div>
+              <div style={{ fontSize: 14, margin: '8px 0 4px' }}>{t('brand.homeBgUrl')}</div>
               <input className="lc-input" value={homeBg} disabled={!editable} onChange={(e) => setHomeBg(e.target.value)} placeholder="https://…/bg.png" />
-              <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginTop: 4 }}>{t('brand.homeBgHint')}</div>
+              <div style={{ fontSize: 13, color: 'var(--adm-faint)', marginTop: 4 }}>{t('brand.homeBgHint')}</div>
             </div>
 
            {/* 保存按钮（仅可编辑时显示） */}

@@ -11,7 +11,7 @@ import {
   adminUsers, adminUserCreate, adminUserUpdate, adminUserDelete, adminUserResetPassword,
   usageMe, usageOrg, usageCost, inviteCodes, inviteCodeCreate,
   orgList, adminPackageSettings, adminPackageSettingsSave,
-  API_BASE, authHeaders, getAuthToken, getActiveTenantId,
+  API_BASE, authHeaders, getAuthToken, getActiveTenantId, handleUnauthorized,
   type OrgInfo,
 } from '@/api'
 import { useAdmin, roleName } from '@/stores/admin'
@@ -20,6 +20,7 @@ import { fmtTime, fmtNum } from '@/lib/ui'
 import { fmtPoints } from '@/utils/points' // ★ S1 积分口径展示
 import { useT, t as tFn } from '@/i18n'
 import { toastError, toastWarn } from '@/lib/toastBus'
+import { runGuarded } from '@/lib/runGuarded' // ★ #42：取数失败必须有可见出口（见 loadDash / 用量看板注释）
 
 /** 审计动作键→中英文映射名（模块级，避免渲染闭包作用域问题；未命中字典时回退原始动作键） */
 function auditActionLabel(a: string): string {
@@ -49,7 +50,7 @@ function HealthCard({ value, label }: { value: React.ReactNode; label: string })
   return (
     <div style={{ minWidth: 120, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: '10px 14px' }}>
       <b style={{ fontSize: 18, display: 'block' }}>{value}</b>
-      <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{label}</span>
+      <span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{label}</span>
     </div>
   )
 }
@@ -65,17 +66,16 @@ export default function Overview() {
   // 总览内部分屏：系统看板（运行状态+审计日志）/ 用量看板（个人+系统用量）
   const [ovTab, setOvTab] = useState<'system' | 'usage'>('system')
 
-  /** 拉取 health 与 audit 数据；非超管清空 audit */
+  /** 拉取 health 与 audit 数据；非超管清空 audit
+   *  ★ #42（前端坏味道：数据加载的空 catch）：两处 catch 吞错后，概览页把「后端挂了」渲染成
+   *  「健康指标全空 + 审计日志零条」，超管会误判成系统无事发生；改走 runGuarded 弹后端原文
+   *  （不新增 i18n 键），成功路径与旧实现一致。 */
   const loadDash = useCallback(async () => {
-    try {
-      const h = await systemHealth()
-      if (h.success) setHealth(((h as unknown as Any).health as Any) ?? null)
-    } catch { /* 忽略接口错误 */ }
+    const h = await runGuarded(() => systemHealth())
+    if (h?.success) setHealth(((h as unknown as Any).health as Any) ?? null)
     if (isSuper || myLevel >= 3) {
-      try {
-        const a = await systemAudit()
-        if (a.success) setAudit(((a as unknown as Any).logs as Any[]) || [])
-      } catch { /* 忽略接口错误 */ }
+      const a = await runGuarded(() => systemAudit())
+      if (a?.success) setAudit(((a as unknown as Any).logs as Any[]) || [])
     } else {
       setAudit([])
     }
@@ -96,6 +96,9 @@ export default function Overview() {
     if (tid > 0) xhr.setRequestHeader('X-Tenant-ID', String(tid))
     xhr.responseType = 'blob'
     xhr.onload = () => {
+      // ★ #42（§4.2-2 组件侧补漏）：裸 XHR 不经 request()，401 必须显式交给 core 收口，
+      //   否则登录过期时只弹一句「导出失败」，人还留在后台（同 AuditP.exportCsv 的口径）。
+      if (xhr.status === 401) { handleUnauthorized(url); return }
       if (xhr.status !== 200) { toastError(t('overview.exportFailed')); return }
       // 创建临时链接触发下载
       const a = document.createElement('a')
@@ -480,7 +483,7 @@ export function AlertsP() {
       <Dialog title={`${t('alerts.silenceTitle')}（${silDlg?.kind ?? ''}@#${silDlg?.tenant_id ?? ''}）`} open={!!silDlg} onCancel={() => setSilDlg(null)}
         onConfirm={() => void doSilence()} confirmText={t('alerts.silence')} cancelText={t('common.cancel')}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 13 }}>{t('alerts.silDur')}</span>
+          <span style={{ fontSize: 14 }}>{t('alerts.silDur')}</span>
           <select className="lc-select" value={silMin} onChange={(e) => setSilMin(e.target.value)} style={{ width: 150 }}>
             <option value="60">{t('alerts.dur1h')}</option>
             <option value="720">{t('alerts.dur12h')}</option>
@@ -492,17 +495,17 @@ export function AlertsP() {
 
       {/* 注册与触达配置区域 */}
       <Panel title={t('packages.regNotifyTitle')}>
-        <div style={{ fontSize: 13, color: 'var(--adm-faint)', marginBottom: 8 }}>{t('packages.regNotifyHint')}</div>
+        <div style={{ fontSize: 14, color: 'var(--adm-faint)', marginBottom: 8 }}>{t('packages.regNotifyHint')}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <Switch checked={regCfg.email_verify_enabled === '1' || regCfg.email_verify_enabled === true} onChange={(e) => setSwitch('email_verify_enabled', e.target.checked)} />
-          <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.emailVerify')}</span>
+          <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('packages.emailVerify')}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <Switch checked={regCfg.email_notify_enabled === '1' || regCfg.email_notify_enabled === true} onChange={(e) => setSwitch('email_notify_enabled', e.target.checked)} />
-          <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.emailNotify')}</span>
+          <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('packages.emailNotify')}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <span style={{ fontSize: 13, color: 'var(--adm-hint)', minWidth: 130 }}>{t('packages.captchaProvider')}</span>
+          <span style={{ fontSize: 14, color: 'var(--adm-hint)', minWidth: 130 }}>{t('packages.captchaProvider')}</span>
           <select className="lc-select" value={String(regCfg.captcha_provider || '')} onChange={(e) => setRegCfg((p) => ({ ...p, captcha_provider: e.target.value }))} style={{ width: 160 }}>
             <option value="">{t('packages.captchaOff')}</option>
             <option value="turnstile">Turnstile</option>
@@ -557,7 +560,11 @@ export function AuditP() {
 
   /** 导出 CSV：fetch blob 并触发下载 */
   async function exportCsv() {
-    const resp = await fetch(`${API_BASE}/api/system/audit?export=csv`, { headers: authHeaders() })
+    const csvUrl = `${API_BASE}/api/system/audit?export=csv`
+    const resp = await fetch(csvUrl, { headers: authHeaders() })
+    // ★ #42：裸 fetch 的 401 必须走统一收口。旧写法只弹「导出失败 (401)」——会话已过期还停在
+    //   后台空面板上，用户反复点导出也回不到登录页（走 request() 的通道不会这样，故此处补齐口径）。
+    if (resp.status === 401) { handleUnauthorized(csvUrl); return }
     if (!resp.ok) { void MessagePluginError(`导出失败 (${resp.status})`); return }
     const blob = await resp.blob()
     const url = URL.createObjectURL(blob)
@@ -571,7 +578,7 @@ export function AuditP() {
   return (
     <Panel title={t('audit.title')}
       extra={<Button onClick={exportCsv}>{t('audit.export')}</Button>}>
-      <p className="ad-hint" style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('audit.hint')}</p>
+      <p className="ad-hint" style={{ fontSize: 14, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('audit.hint')}</p>
       {/* 筛选条件：操作类型、日期范围 */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <select className="lc-select" value={fAction} onChange={(e) => setFAction(e.target.value)} style={{ width: 180 }}>
@@ -625,11 +632,16 @@ export function UsageP() {
   const [usageTo, setUsageTo] = useState('')
 
   // 并行拉取三类用量数据（剔除 success/message 等接口元字段）；日期变化时重新拉取
+  // ★ #42：三段空 catch 换 runGuarded——失败时最坏的表现是「成本」页签整块凭空消失
+  //   （cost 为 null 即不渲染该页签）而没有任何原因；分开兜底保留「一块失败不清空另一块」的旧语义。
   useEffect(() => {
     void (async () => {
-      try { const r = await usageMe(usageFrom || undefined, usageTo || undefined); if (r.success) { const { success, message, ...d } = r as Any; setMe(d) } } catch {}
-      try { const r = await usageOrg(undefined, usageFrom || undefined, usageTo || undefined); if (r.success) { const { success, message, ...d } = r as Any; setOrg(d) } } catch {}
-      try { const r = await usageCost(); if (r.success) { const { success, message, ...d } = r as Any; setCost(d) } } catch {}
+      const me = await runGuarded(() => usageMe(usageFrom || undefined, usageTo || undefined))
+      if (me?.success) { const { success, message, ...d } = me as Any; setMe(d) }
+      const org = await runGuarded(() => usageOrg(undefined, usageFrom || undefined, usageTo || undefined))
+      if (org?.success) { const { success, message, ...d } = org as Any; setOrg(d) }
+      const cost = await runGuarded(() => usageCost())
+      if (cost?.success) { const { success, message, ...d } = cost as Any; setCost(d) }
     })()
   }, [usageFrom, usageTo])
 
@@ -641,9 +653,9 @@ export function UsageP() {
     <div className="stat-grid">
       {Object.entries(d).filter(([, v]) => typeof v === 'number').map(([k, v]) => (
         <div key={k} className="stat-card">
-          <div style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('usage.field.' + k) !== 'usage.field.' + k ? t('usage.field.' + k) : k}</div>
+          <div style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('usage.field.' + k) !== 'usage.field.' + k ? t('usage.field.' + k) : k}</div>
           {ME_POINTS_FIELDS.includes(k)
-            ? <b>{fmtPoints(Number(v))} <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--adm-faint)' }}>{t('ss2.unitPoints')}</span></b>
+            ? <b>{fmtPoints(Number(v))} <span style={{ fontSize: 13, fontWeight: 400, color: 'var(--adm-faint)' }}>{t('ss2.unitPoints')}</span></b>
             : <b>{fmtNum(Number(v))}</b>}
         </div>
       ))}
@@ -653,7 +665,7 @@ export function UsageP() {
   /** 系统用量：组织下用户成本明细表 + 合计 */
   const orgTable = (d: Any) => !d ? <EmptyState title="—" /> : (
     <div>
-      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 8px' }}>{tpl('usage.orgTotal', { n: fmtPoints(Number(d.total) || 0) })}</p>
+      <p style={{ fontSize: 14, color: 'var(--adm-hint)', margin: '0 0 8px' }}>{tpl('usage.orgTotal', { n: fmtPoints(Number(d.total) || 0) })}</p>
       <DataTable<any> rowKey={(row) => String(row.id)} rows={d.users || []}
         columns={[
           { key: 'username', title: t('usage.colUser'), width: 160 },
@@ -696,6 +708,9 @@ export function UsageP() {
     if (tid > 0) xhr.setRequestHeader('X-Tenant-ID', String(tid))
     xhr.responseType = 'blob'
     xhr.onload = () => {
+      // ★ #42（§4.2-2 组件侧补漏）：与同文件 exportAuditCSV / AuditP.exportCsv 同一口径——
+      //   XHR 不经 request()，401 必须显式交给 core 清登录态，否则会话过期只弹「导出失败」、人留在假登录页。
+      if (xhr.status === 401) { handleUnauthorized(url); return }
       if (xhr.status !== 200) { toastError(t('overview.exportFailed')); return }
       const a = document.createElement('a')
       a.href = URL.createObjectURL(xhr.response)
@@ -709,7 +724,7 @@ export function UsageP() {
   return (
     <Panel title={t('usage.dashboardTitle')}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('usage.dateQuery')}</span>
+        <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('usage.dateQuery')}</span>
         {/* 腾讯 TDesign 日期范围选择器（2026-09-05）：任选起止日期 → 分别写入 usageFrom/usageTo，
             空=累计+当日口径（后端 from/to 均缺省）；单日区间可视同按日查询 */}
         <input className="lc-input" type="date" value={usageFrom} placeholder={t('usage.dateFrom')}
@@ -763,7 +778,7 @@ export function InvitesP() {
   return (
     <Panel title={t('invites.title')}
       extra={<Button variant="primary" onClick={() => { setCode(''); setTenantId(0); setDlg(true) }}>{t('invites.create')}</Button>}>
-      <p className="ad-hint" style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('invites.hint')}</p>
+      <p className="ad-hint" style={{ fontSize: 14, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('invites.hint')}</p>
       {/* 邀请码列表表格 */}
       <DataTable<any> rowKey={(row) => String(row.id)} rows={rows}
         columns={[

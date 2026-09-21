@@ -99,6 +99,11 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
 
   // 挂载时从后端拉取 KB 语言列表，覆盖/补充本地兜底选项
+  // ★ §4.2-2 正当豁免（公开字典端点）：/api/translation/langs 在路由鉴权白名单内
+  //   （见 backend-go internal/api/route_auth_gate_test.go：「落地页/翻译页下拉数据源，公开」），
+  //   不带 Authorization 也不会 401，因此不经 core.request()：套上去等于把登录凭证发给一个匿名接口。
+  //   失败口径同样是刻意的——拉不到就保留本文件顶部的 KB_LANGS 内置兜底语言表，
+  //   选择器照常可用，不打断用户当前的勾选动作，故不弹提示。
   useEffect(() => {
     ;(async () => {
       try {
@@ -203,7 +208,7 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
       <div style={{ maxHeight: 280, overflowY: 'auto', padding: '4px 0' }}>
         {grouped.map(([g, opts]) => (
           <div key={g}>
-            <div style={{ fontSize: 12, color: 'var(--lc-text-3)', padding: '4px 12px' }}>{g}</div>
+            <div style={{ fontSize: 13, color: 'var(--lc-text-3)', padding: '4px 12px' }}>{g}</div>
             {opts.map((o) => {
               const on = value.includes(o.code)
               return (
@@ -212,7 +217,7 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
                 <div key={o.code} role="option" aria-selected={on} data-lang={o.code}
                      onClick={() => toggle(o.code)}
                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', cursor: 'pointer',
-                              background: on ? 'rgba(231,233,234,0.10)' : undefined, fontSize: 13 }}>
+                              background: on ? 'rgba(231,233,234,0.10)' : undefined, fontSize: 14 }}>
                   <span style={{ width: 18 }}>{o.flag}</span>
                   <span style={{ flex: 1 }}>{o.label}</span>
                   {on && <span style={{ color: 'var(--lc-text)', fontWeight: 700 }}></span>}
@@ -221,7 +226,7 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
             })}
           </div>
         ))}
-        {!shown.length && <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--lc-text-3)' }}>{t('chat.noLangHit')}</div>}
+        {!shown.length && <div style={{ padding: '10px 12px', fontSize: 13, color: 'var(--lc-text-3)' }}>{t('chat.noLangHit')}</div>}
       </div>
       <div style={{ padding: '8px 12px', borderTop: '1px solid var(--lc-border-faint)', display: 'flex', gap: 6, alignItems: 'center' }}
            onClick={(e) => e.stopPropagation()}>
@@ -243,7 +248,7 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
               onClick={() => setOpen((v) => !v)}
               style={{ color: value.length ? 'var(--lc-text)' : 'var(--lc-text-3)' }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t('chat.langPlaceholder')}</span>
-        <span aria-hidden style={{ fontSize: 10 }}>▾</span>
+        <span aria-hidden style={{ fontSize: 11 }}>▾</span>
       </button>
       {open && panel}
       <style>{CSS_LMS}</style>
@@ -253,10 +258,10 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
 
 // 页面级样式：lms- 前缀（防与组件库/其他页面类名重名）
 const CSS_LMS = `
-.lms-trigger{width:100%;height:var(--lc-ctl-h);padding:0 12px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:6px;background:var(--lc-inset);border:1.2px solid var(--lc-border-input);border-radius:var(--lc-r-ctl);font-size:13px;font-family:var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out)}
+.lms-trigger{width:100%;height:var(--lc-ctl-h);padding:0 12px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:6px;background:var(--lc-inset);border:1.2px solid var(--lc-border-input);border-radius:var(--lc-r-ctl);font-size:14px;font-family:var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out)}
 .lms-trigger:hover{border-color:var(--lc-border-pill)}
 .lms-panel{position:absolute;top:calc(100% + 6px);left:0;z-index:40;background:var(--lc-inset);border:1.2px solid var(--lc-border-card);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.5),var(--lc-panel-highlight)}
-.lms-search{height:30px;font-size:13px}
+.lms-search{height:30px;font-size:14px}
 .lms-chip-close{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--lc-text-3);cursor:pointer}
 .lms-chip-close:hover{color:var(--lc-text)}
 `

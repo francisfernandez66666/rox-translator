@@ -41,6 +41,10 @@ import * as pMybill from './panels/mybilling'
 import * as pLanding from './panels/landing'
 // 2026-09-17 新增面板：认证域（登录/注册/找回密码/AI 接管引导）
 import * as pAuth from './panels/auth'
+// ★ 2026-09-21 #41：优惠券面板词典
+import * as pCoupons from './panels/coupons'
+// ★ 2026-09-21 #34：AI 助手管理面板词典（原生面板，取代 iframe）
+import * as pAssist from './panels/assist'
 // ★ 2026-09-18 缺口修复：index.ts 已合并 sdk / hub / reconcile 三面板，但本守护的
 //   PANELS 表漏收 → 这三份词典的 zh/en 键不对等、空值漏译永远不会被闸门发现。
 import * as pSdk from './panels/sdk'
@@ -64,6 +68,10 @@ const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<stri
   { name: 'mybilling', mod: pMybill }, { name: 'landing', mod: pLanding },
   // 与 i18n/index.ts 的合并顺序对齐：新增面板同样追加在末尾
   { name: 'auth', mod: pAuth },
+  // ★ 2026-09-21 #41：优惠券面板（券管理 + 收银台试算）
+  { name: 'coupons', mod: pCoupons },
+  // ★ 2026-09-21 #34：AI 助手管理面板
+  { name: 'assist', mod: pAssist },
   { name: 'sdk', mod: pSdk }, { name: 'hub', mod: pHub }, { name: 'reconcile', mod: pReconcile },
 ]
 

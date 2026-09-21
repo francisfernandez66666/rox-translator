@@ -59,7 +59,7 @@ export default function FooterP() {
 
   return (
     <Panel title={t('footer.title')}>
-      <p style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 12 }}>{t('footer.hint')}</p>
+      <p style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 12 }}>{t('footer.hint')}</p>
       {!loaded ? (
         <div style={{ color: 'var(--adm-faint)' }}>…</div>
       ) : (

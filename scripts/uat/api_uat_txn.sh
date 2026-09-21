@@ -55,7 +55,28 @@
 #   T48 伪标签清洗端到端（2026-09-18）：mock LLM 回显走形伪标签 `<target>…></target>`
 #       （模拟模型在无上下文短单元格上的真实污染形态），断言清洗链拆除伪标签、保留正文、
 #       交付结果零残留
+#   T49 任务系统（★ #33，2026-09-21）：出厂五类任务数值口径（100/100/500/1000/600 积分与
+#       有效期、上限、叠加）+ 登录/翻译事件自动发放（同日去重、周期计数）+ 用户视角出参
+#       积分口径零 token + 超管「重置积分消耗量」（有效期不变、非超管 403）+ 超管局部更新
+#       不丢事件语义
+#   T50 订阅自动续费（★ #41 商业洞二，2026-09-21）：开关鉴权与前置校验（未订阅拒绝）/
+#       permissions 单字段原子写不覆盖订阅身份 / 收银台与 /api/me/package 回读一致 /
+#       T-3 窗口内扫描自动建同包续费单（created_by=0 系统单）+ 站内信 + 二次扫描去重不堆单 /
+#       关闭开关后不再建单
+#   T51 优惠券全链路（★ #41 商业洞三，2026-09-21）：建券券码大写归一 + 超管专属读写 /
+#       试算与下单同口径（服务端重算金额，前端不参与）+ 门槛/券种/不存在码的业务提示可回显 /
+#       核销只改 orders.amount_money，amount_tokens 与积分额度一分不减（券减钱不减货）/
+#       每家企业限用次数二次拒 + 失败不残留挂券 pending 单 / 立减超额压到 0.01 元不出 0 元单 /
+#       核销流水可查 + 删模板留流水 + 已删码再下单回「券码不存在」
+#       （关单退券 ReleaseStaleCouponRedemptions 由 5min 巡检触发，归 store/coupons_test.go 覆盖）
+#   T52 AI 助手管理代理（★ #34 后台前端重做，2026-09-21）：仅超管可读 / 匿名与普通用户拒 /
+#       状态条回显可达性与 Token 来源（不含明文）/ 知识库 CRUD 往返 / 浏览器带的 admin_token
+#       查询串被剥掉（凭据只走服务端注入头）/ 配置白名单与掩码不回写 / 审计只记方法+区域不记请求体 /
+#       会话统计与 LLM 连通测试经代理可用 / 白名单外路径 404（不做通用中继）
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
+#   —— 2026-09-21 实测：`ck X 'want' "$(post "$H" "{\"a\":1,\"b\":2}" /p)"` 里的 body 会被 bash
+#   在双引号内的命令替换中做**大括号展开**，按逗号切成两个参数，curl 发出残缺 body 换来「参数格式
+#   错误」，宽松断言照样命中 = 永远绿灯。此条现由 scripts/uat/lint_uat_quotes.py 作为闸门强制。
 # 依赖：mock_llm.py 已启动、uat 服务已启动（run_uat.sh 编排）
 # 用法：BASE_URL=... UAT_DB=... ADMIN_PASS=... [UAT_SERVER_LOG=...] bash scripts/uat/api_uat_txn.sh
 # ============================================================================
@@ -1142,12 +1163,17 @@ post "$AH" "{\"id\":$OID43,\"tenant_id\":$TAID}" /api/admin/orders/pay >/dev/nul
 sleep 3   # 等 sink 冲刷，避免计量混入（同 A3/T1 口径）
 R=$(post "$H1" "{\"order_id\":$OID43,\"title\":\"T43冲红验证\",\"tax_no\":\"TX9043\"}" /api/billing/invoices/create)
 IVID43=$(echo "$R" | pv '.get("invoice",{}).get("id") or 0')
-ck T43-invoice-create '"success"' "$R"
+ck T43-invoice-create '"success":true' "$R"
 R=$(post "$H1" "{\"id\":$IVID43}" /api/billing/invoices/void)
 ck T43-invoice-void '"success":true' "$R"
 IVST43=$(sq "SELECT status FROM invoices WHERE id=$IVID43")
 [ "$IVST43" = "void" ] && { PASS=$((PASS+1)); echo "PASS|T43-invoice-void-status"; } || { FAIL=$((FAIL+1)); echo "FAIL|T43-invoice-void-status($IVST43)"; }
-ck T43-invoice-reissue-after-void '"success"' "$(post "$H1" "{\"order_id\":$OID43,\"title\":\"T43冲红后重开\",\"tax_no\":\"TX9043\"}" /api/billing/invoices/create)"
+# ★ 引号陷阱修复（2026-09-21）：`ck … "$(post "…" "{\"a\":1,\"b\":2}" …)"` 里内嵌双引号的 body
+#   在「双引号内的命令替换」中会被 bash 做**大括号展开**，按逗号拆成多个参数——实测 body 退化成
+#   `"a":1`、path 变成 `"b":2}`，服务端只能回「参数格式错误」，而旧的宽松断言 '"success"' 照样命中
+#   造成**永远绿灯**。故复杂 body 一律先存变量（本文件第 72 行既定口径），断言同时收紧到 success:true。
+R=$(post "$H1" "{\"order_id\":$OID43,\"title\":\"T43冲红后重开\",\"tax_no\":\"TX9043\"}" /api/billing/invoices/create)
+ck T43-invoice-reissue-after-void '"success":true' "$R"
 
 # ---------- T44 缺陷核实修复回归锁（2026-09-16 D1-D5，源码级防回退闸门） ----------
 # 行为语义已由 Go 单测覆盖（store.TestSettleExhaustedNoPermAccount /
@@ -1301,6 +1327,354 @@ ck T48-completed '"status":"completed"' "$D48"
 ck T48-body-kept 'UAT-PSEUDO-CLEANSSED' "$D48"
 RESID48=$(echo "$D48" | grep -qE '<target|</target|u003c/?target' && echo YES || echo NO)
 ck T48-no-pseudo-residue '^NO$' "$RESID48"
+
+# ---------- T49（2026-09-21 #33）任务系统：出厂数值 + 事件自动发放 + 超管重置消耗量 ----------
+# 需求原文数值（改一个数就该翻红）：
+#   每日登录 +100 临时积分/3 天/一日一次/日叠加；每周发起翻译 +100 临时积分/7 天/日 ≤1、周 ≤5；
+#   邀请好友注册 +500 临时积分/14 天；邀请好友充值 +1000 永久积分；知识库解析成功 +600 永久积分（终身一次）。
+# 对外零 token：断言里 30000=100 积分 ×300（库内记账口径），接口出参只允许出现积分。
+SEED49=$(dbq "SELECT COUNT(*) FROM user_tasks WHERE task_key<>''" | tr -dc '0-9')
+ck T49-builtin-seeded '^[5-9]' "$SEED49"
+ck T49-seed-login '^30000\|3\|1\|1\|0$' "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||stack_expiry||'|'||cap_per_day||'|'||cap_per_week FROM user_tasks WHERE task_key='login_daily'")"
+ck T49-seed-translate '^30000\|7\|1\|1\|5$' "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||stack_expiry||'|'||cap_per_day||'|'||cap_per_week FROM user_tasks WHERE task_key='translate_week'")"
+ck T49-seed-invite-reg '^150000\|14\|0\|0$' "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||cap_per_day||'|'||cap_per_week FROM user_tasks WHERE task_key='invite_register'")"
+ck T49-seed-invite-paid '^300000\|0\|event$' "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||period FROM user_tasks WHERE task_key='invite_paid'")"
+ck T49-seed-kb '^180000\|0\|once$' "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||period FROM user_tasks WHERE task_key='kb_upload'")"
+
+# ① 登录事件钩子：再登录一次 uatuser_a → 应落一笔 task/30000 临时台账，且同日不重复发放
+UAID=$(sq "SELECT id FROM users WHERE username='uatuser_a' LIMIT 1" | tr -dc '0-9')
+: $(tok uatuser_a uatpass123)
+ck T49-login-grant '^30000\|task:login_daily$' "$(dbq "SELECT total||'|'||source FROM quota_grants WHERE tenant_id=$TAID AND kind='task' AND source='task:login_daily' ORDER BY id DESC LIMIT 1")"
+: $(tok uatuser_a uatpass123)
+ck T49-login-dedup-once-per-day '^1$' "$(dbq "SELECT COUNT(*) FROM user_task_rewards WHERE user_id=$UAID AND task_key='login_daily'")"
+ck T49-login-counter-one '^1$' "$(dbq "SELECT cnt FROM user_task_period_cnt WHERE user_id=$UAID AND period_key LIKE 'D:%' ORDER BY id DESC LIMIT 1")"
+
+# ② 翻译事件钩子：发起一次即时翻译（成功计量后自动发放 translate_week），日 ≤1 次由去重键保证
+curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"任务系统翻译事件测试文本。","options":{"target_langs":["en"],"mode":"fast"}}' >/dev/null
+sleep 2
+ck T49-translate-grant '^30000\|task:translate_week$' "$(dbq "SELECT total||'|'||source FROM quota_grants WHERE tenant_id=$TAID AND kind='task' AND source='task:translate_week' ORDER BY id DESC LIMIT 1")"
+curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"任务系统翻译事件重复测试文本。","options":{"target_langs":["en"],"mode":"fast"}}' >/dev/null
+sleep 2
+ck T49-translate-daily-cap '^1$' "$(dbq "SELECT COUNT(*) FROM user_task_rewards WHERE task_key='translate_week' AND user_id=$UAID")"
+
+# ③ 用户视角出参：自动任务带发放方式/有效期/周期进度，且零 token 裸值
+# 用刚登录拿到的新 token（套件里其它用例可能改过该账号密码，旧 token 会被会话版本闸判「未登录」）
+T49A=$(tok uatuser_a uatpass123); H49A="Authorization: Bearer $T49A"
+ME49=$(get "$H49A" /api/me/tasks)
+ck T49-me-auto '"grant_mode":"auto"' "$ME49"
+ck T49-me-temporary '"reward_kind":"temporary"' "$ME49"
+ck T49-me-points-only '"reward_points":100' "$ME49"
+HAS49=$(echo "$ME49" | grep -qE 'reward_tokens|"tokens"' && echo YES || echo NO)
+ck T49-me-no-token '^NO$' "$HAS49"
+ck T49-me-progress '"today_count":' "$ME49"
+
+# ④ 超管特殊任务：重置已消耗的任务临时积分（有效期不变）；非超管 403
+GRANT49=$(dbq "SELECT id FROM quota_grants WHERE tenant_id=$TAID AND kind='task' ORDER BY id DESC LIMIT 1" | tr -dc '0-9')
+EXP49=$(dbq "SELECT expires_at FROM quota_grants WHERE id=$GRANT49")
+dbq "UPDATE quota_grants SET \"left\"=100 WHERE id=$GRANT49" >/dev/null
+ck T49-reset-forbidden '"success":false|Forbidden|403' "$(post "$H6" '{"subscribed_only":false}' /api/admin/tasks/reset-consumption)"
+ck T49-reset-forbidden-anon '401|Unauthorized|"success":false' "$(curl -s $B/api/admin/tasks/reset-consumption -X POST -H "$J" -d '{"subscribed_only":false}')"
+R49=$(post "$AH" '{"subscribed_only":false}' /api/admin/tasks/reset-consumption)
+ck T49-reset-ok '"success":true' "$R49"
+ck T49-reset-rows '"reset_rows":[1-9]' "$R49"
+ck T49-reset-message '有效期保持不变' "$R49"
+ck T49-reset-refilled '^30000$' "$(dbq "SELECT \"left\" FROM quota_grants WHERE id=$GRANT49")"
+ck T49-reset-expiry-kept "^${EXP49}$" "$(dbq "SELECT expires_at FROM quota_grants WHERE id=$GRANT49")"
+# 幂等：已拉满（left=total）的记录第二次重置不再触碰。
+# （软断言：套件运行期其它租户的异步计量可能刚好消耗掉一笔任务台账，导致本次又重置 1 条——
+#   这属于「又拉满了一次」而非缺陷，故此处只锁零 token 出参与有效期稳定，硬幂等锁在 store 单测。）
+R49B=$(post "$AH" '{"subscribed_only":false}' /api/admin/tasks/reset-consumption)
+ck T49-reset-again-ok '"success":true' "$R49B"
+ck T49-reset-again-expiry-kept "^${EXP49}$" "$(dbq "SELECT expires_at FROM quota_grants WHERE id=$GRANT49")"
+
+# ⑤ 手工任务与事件任务并存：超管新建自动任务须完整回显（不得被退回手工语义）
+R=$(post "$AH" '{"task_type":"daily","title":"T49事件任务","reward_points":50,"grant_mode":"auto","task_key":"uat_t49_event","period":"event","valid_days":5,"stack_expiry":0,"cap_per_day":2,"enabled":1}' /api/admin/tasks/save)
+ck T49-admin-save '"success":true' "$R"
+T49ID=$(echo "$R" | pv '.get("id") or 0')
+ck T49-admin-echo 'uat_t49_event' "$(get "$AH" /api/admin/tasks)"
+# 只改标题（不重复下发发放口径）→ 事件语义与规则必须原样保留
+R=$(post "$AH" "{\"id\":$T49ID,\"task_type\":\"daily\",\"title\":\"T49事件任务改名\",\"reward_points\":50}" /api/admin/tasks/save)
+ck T49-admin-partial '"success":true' "$R"
+ck T49-admin-partial-kept '^auto\|event\|5\|2\|1\|uat_t49_event$' "$(dbq "SELECT grant_mode||'|'||period||'|'||valid_days||'|'||cap_per_day||'|'||enabled||'|'||task_key FROM user_tasks WHERE id=$T49ID")"
+dbq "DELETE FROM user_tasks WHERE id=$T49ID" >/dev/null   # 清理本用例自建任务，不污染出厂数据
+
+# ---------- T50（★ #41 商业洞二）订阅自动续费：开关 + T-3 自动建单 + 去重 ----------
+U50="uatuser_t50$(date +%s)"
+curl -s $B/api/auth/register -H "$J" -d "{\"username\":\"$U50\",\"password\":\"uatpass123\",\"type\":\"personal\",\"name\":\"T50续费\",\"email\":\"$U50@test.com\",\"agreed\":true}" >/dev/null
+TK50=$(tok $U50 uatpass123); H50="Authorization: Bearer $TK50"
+T50D=$(sq "SELECT tenant_id FROM users WHERE username='$U50' LIMIT 1" | tr -d '[:space:]')
+curl -s $B/api/admin/packages/create -H "$AH" -H "$J" -d "{\"tenant_id\":$T50D,\"code\":\"uat_t50_paid\",\"name\":\"T50续费包\",\"ptype\":\"paid\",\"sentences\":20000,\"price_money\":20,\"duration_days\":30}" >/dev/null
+
+# ① 未订阅不得开启（否则扫描会对不存在的包建单）
+ck T50-renew-needs-subscription '"success":false' "$(post "$H50" '{"enabled":true}' /api/package/auto-renew)"
+
+# ② 订阅并到账 → 开关可开启，permissions 单字段原子写不覆盖订阅身份
+R=$(post "$H50" '{"code":"uat_t50_paid"}' /api/package/subscribe)
+OID50=$(echo "$R" | pv '.get("order",{}).get("id") or d.get("id") or 0')
+post "$AH" "{\"id\":$OID50,\"tenant_id\":$T50D}" /api/admin/orders/pay >/dev/null
+ck T50-renew-enable '"success":true' "$(post "$H50" '{"enabled":true}' /api/package/auto-renew)"
+AR50=$(dbjsonstr tenants $T50D permissions auto_renew | tr -d '[:space:]')
+# ★ 方言容错：同一布尔值经 json_extract(SQLite)=1、jsonb->>(PG)=true 取出的文本不同，
+#   断言只认「真值形态」集合，否则换方言就跑假红（本条 09-21 首跑在 PG 下即为此）。
+case "$AR50" in True|true|1) PASS=$((PASS+1)); echo "PASS|T50-renew-flag-persisted($AR50)";; *) FAIL=$((FAIL+1)); echo "FAIL|T50-renew-flag-persisted(got $AR50)";; esac
+PC50=$(dbjsonstr tenants $T50D permissions package_code | tr -d '[:space:]')
+[ "$PC50" = "uat_t50_paid" ] && { PASS=$((PASS+1)); echo "PASS|T50-renew-keeps-package"; } || { FAIL=$((FAIL+1)); echo "FAIL|T50-renew-keeps-package(got $PC50)"; }
+ck T50-renew-get-echo '"auto_renew":true' "$(get "$H50" /api/package/auto-renew)"
+ck T50-renew-me-package '"auto_renew":true' "$(get "$H50" /api/me/package)"
+
+# ③ 注入「剩 2 天到期」→ 手动扫描应自动生成同包续费单（created_by=0 系统单，mock 渠道挂 pending）
+EXP50=$(python3 -c "import datetime;print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=2)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+dbjsonset tenants $T50D permissions package_expires_at "$EXP50"
+ck T50-scan-run '"success":true' "$(post "$AH" '{}' /api/admin/ops/watchdog/subscription-scan)"
+PEND50=$(sq "SELECT COUNT(*) FROM orders WHERE tenant_id=$T50D AND status='pending' AND created_by=0" | tr -d '[:space:]')
+[ "$PEND50" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T50-renew-order-created"; } || { FAIL=$((FAIL+1)); echo "FAIL|T50-renew-order-created(pending 系统单=$PEND50)"; }
+CH50=$(sq "SELECT channel FROM orders WHERE tenant_id=$T50D AND status='pending' AND created_by=0 ORDER BY id DESC LIMIT 1" | tr -d '[:space:]')
+[ -n "$CH50" ] && { PASS=$((PASS+1)); echo "PASS|T50-renew-order-channel($CH50)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T50-renew-order-channel(空)"; }
+NT50=$(sq "SELECT COUNT(*) FROM notifications WHERE title='续费订单已自动生成'" | tr -d '[:space:]')
+[ "${NT50:-0}" -ge 1 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|T50-renew-notify($NT50)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T50-renew-notify($NT50)"; }
+AUD50=$(sq "SELECT COUNT(*) FROM audit_logs WHERE tenant_id=$T50D AND action='auto_renew_order'" | tr -d '[:space:]')
+[ "${AUD50:-0}" -ge 1 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|T50-renew-audit"; } || { FAIL=$((FAIL+1)); echo "FAIL|T50-renew-audit($AUD50)"; }
+
+# ④ 二次扫描去重：pending 续费单不堆叠（每日扫描幂等红线）
+ck T50-scan-again '"success":true' "$(post "$AH" '{}' /api/admin/ops/watchdog/subscription-scan)"
+PEND50B=$(sq "SELECT COUNT(*) FROM orders WHERE tenant_id=$T50D AND status='pending' AND created_by=0" | tr -d '[:space:]')
+[ "$PEND50B" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T50-renew-order-dedup"; } || { FAIL=$((FAIL+1)); echo "FAIL|T50-renew-order-dedup(pending=$PEND50B)"; }
+
+# ⑤ 关闭开关 + 撤掉挂单 → 再扫描不再建单（开关是唯一驱动源）
+dbq "UPDATE orders SET status='cancelled' WHERE tenant_id=$T50D AND status='pending' AND created_by=0" >/dev/null
+ck T50-renew-disable '"success":true' "$(post "$H50" '{"enabled":false}' /api/package/auto-renew)"
+ck T50-scan-after-disable '"success":true' "$(post "$AH" '{}' /api/admin/ops/watchdog/subscription-scan)"
+PEND50C=$(sq "SELECT COUNT(*) FROM orders WHERE tenant_id=$T50D AND status='pending' AND created_by=0" | tr -d '[:space:]')
+[ "$PEND50C" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T50-renew-off-no-order"; } || { FAIL=$((FAIL+1)); echo "FAIL|T50-renew-off-no-order(pending=$PEND50C)"; }
+# 订阅身份不因续费流程被摘除（到期日仍是注入值，扫描只提醒不越权改包）
+PC50C=$(dbjsonstr tenants $T50D permissions package_code | tr -d '[:space:]')
+[ "$PC50C" = "uat_t50_paid" ] && { PASS=$((PASS+1)); echo "PASS|T50-renew-identity-kept"; } || { FAIL=$((FAIL+1)); echo "FAIL|T50-renew-identity-kept(got $PC50C)"; }
+# 清理本用例自建包与挂单，避免污染后续套件的套餐列表断言
+dbq "DELETE FROM packages WHERE code='uat_t50_paid'" >/dev/null
+dbq "DELETE FROM notifications WHERE title IN ('续费订单已自动生成','自动续费未能生成订单')" >/dev/null
+
+# ---------- T51（★ #41 商业洞三）优惠券：建券 → 试算 → 下单核销 → 门槛/限用/抢完 → 删模板留流水 ----------
+# 注：关单退券（ReleaseStaleCouponRedemptions）由后台 5min 巡检触发，UAT 不便等周期，
+#     该分支由 store/coupons_test.go 的内存库用例覆盖；此处只钉「金额单一事实源」与配额判定。
+SFX51=$(date +%s)
+C51="UATT51PCT$SFX51"          # 充值单 9 折，门槛 50 元，总量 2 张，每家 1 次
+C51SUB="UATT51SUB$SFX51"       # 仅订阅单券（用在充值单必须被拒）
+C51BIG="UATT51BIG$SFX51"       # 立减 9999 元（压到 0 元单的红线守卫）
+U51="uatuser_t51$SFX51"
+# feq <实际金额> <期望金额> — 金额等价断言（容差 1 分）：积分→元的汇率由服务端配置决定，
+# 用例不把汇率写死，只钉「折让=原价×比例」「实付=原价−折让」这两条关系。
+feq(){ python3 -c "import sys
+try:
+  a,b=float('$1'),float('$2')
+except Exception:
+  sys.exit(1)
+sys.exit(0 if abs(a-b)<=0.011 else 1)"; }
+curl -s $B/api/auth/register -H "$J" -d "{\"username\":\"$U51\",\"password\":\"uatpass123\",\"type\":\"personal\",\"name\":\"T51优惠券\",\"email\":\"$U51@test.com\",\"agreed\":true}" >/dev/null
+TK51=$(tok $U51 uatpass123); H51="Authorization: Bearer $TK51"
+T51D=$(sq "SELECT tenant_id FROM users WHERE username='$U51' LIMIT 1" | tr -d '[:space:]')
+
+# ① 超管建券（券码入库即大写归一）+ 列表可见 + 非超管读不到
+R=$(post "$AH" "{\"code\":\"$(echo $C51 | tr 'A-Z' 'a-z')\",\"name\":\"T51充值九折\",\"kind\":\"recharge\",\"discount_type\":\"percent\",\"discount_value\":10,\"min_amount\":50,\"max_uses\":2,\"per_tenant_limit\":1,\"enabled\":1}" /api/admin/coupons/save)
+ck T51-coupon-create '"success":true' "$R"
+CID51=$(echo "$R" | pv '.get("coupon",{}).get("id") or 0')
+# ★ 券码归一口径：小写提交必须落成大写，否则用户复制到的码永远「不存在」
+ck T51-code-normalized "\"code\":\"$C51\"" "$R"
+ck T51-coupon-list "$C51" "$(get "$AH" /api/admin/coupons)"
+ck T51-coupon-tenant-forbidden '"success":false' "$(get "$H51" /api/admin/coupons)"
+post "$AH" "{\"code\":\"$C51SUB\",\"kind\":\"subscribe\",\"discount_type\":\"amount\",\"discount_value\":5,\"enabled\":1}" /api/admin/coupons/save >/dev/null
+post "$AH" "{\"code\":\"$C51BIG\",\"kind\":\"recharge\",\"discount_type\":\"amount\",\"discount_value\":9999,\"enabled\":1}" /api/admin/coupons/save >/dev/null
+
+# ② 试算与下单同口径：折让=原价×10%、实付=原价−折让（金额一律服务端算，前端不参与）
+R=$(post "$H51" "{\"code\":\"$C51\",\"points\":1000}" /api/coupon/preview)
+ck T51-preview-ok '"success":true' "$R"
+ORG51=$(echo "$R" | pv '.get("origin_money",0)')
+DIS51=$(echo "$R" | pv '.get("discount_money",0)')
+PAY51=$(echo "$R" | pv '.get("pay_money",0)')
+ck T51-preview-kind-field '"kind":"recharge"' "$R"
+if [ "${ORG51:-0}" != "0" ] && feq "$DIS51" "$(python3 -c "print(round($ORG51*0.1,2))")" && feq "$PAY51" "$(python3 -c "print($ORG51-$DIS51)")"; then
+  PASS=$((PASS+1)); echo "PASS|T51-preview-math($ORG51-$DIS51=$PAY51)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T51-preview-math(origin=$ORG51 discount=$DIS51 pay=$PAY51)"
+fi
+# 未达门槛（小金额单 < 50 元门槛）→ 直接回用户可读提示，不给半成品报价
+# ★ 断言用具体业务文案而非 '"success":false'：后者对「参数格式错误」也成立，会掩盖请求本身没发出去
+R=$(post "$H51" "{\"code\":\"$C51\",\"points\":300}" /api/coupon/preview)
+ck T51-preview-min-amount '"success":false' "$R"
+ck T51-preview-min-amount-hint '订单需满' "$R"
+# 券种不符：仅订阅券用在充值试算上
+R=$(post "$H51" "{\"code\":\"$C51SUB\",\"points\":1000}" /api/coupon/preview)
+ck T51-preview-kind '"success":false' "$R"
+ck T51-preview-kind-hint '不适用于本单类型' "$R"
+# 不存在的券码（#37 口径：业务提示可回显，不外泄 SQL）
+ck T51-preview-notfound '券码不存在' "$(post "$H51" '{"code":"NOSUCHCODE999","points":1000}' /api/coupon/preview)"
+
+# ③ 带券下单：amount_money 改写为折后，amount_tokens/积分额度一分不减（券减钱不减货）
+R=$(post "$H51" "{\"points\":1000,\"channel\":\"mock\",\"coupon\":\"$(echo $C51 | tr 'A-Z' 'a-z')\"}" /api/pay/create)
+ck T51-order-create '"success":true' "$R"
+OID51=$(echo "$R" | pv '.get("order",{}).get("id") or 0')
+ON51=$(echo "$R" | pv '.get("order",{}).get("order_no","")')
+AM51=$(sq "SELECT amount_money FROM orders WHERE id=$OID51" | tr -d '[:space:]')
+if [ -n "$AM51" ] && feq "$AM51" "$PAY51"; then
+  PASS=$((PASS+1)); echo "PASS|T51-order-discounted($AM51==试算 $PAY51)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T51-order-discounted(落库 $AM51 vs 试算 $PAY51)"
+fi
+TN51=$(sq "SELECT amount_tokens FROM orders WHERE id=$OID51" | tr -d '[:space:]')
+[ "$TN51" = "300000" ] && { PASS=$((PASS+1)); echo "PASS|T51-tokens-undiscounted($TN51)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T51-tokens-undiscounted(want 300000 got $TN51，券不得减积分额度)"; }
+AP51=$(echo "$R" | pv '.get("order",{}).get("amount_points",-1)')
+[ "$AP51" = "1000" ] && { PASS=$((PASS+1)); echo "PASS|T51-points-undiscounted"; } || { FAIL=$((FAIL+1)); echo "FAIL|T51-points-undiscounted(got $AP51)"; }
+ck T51-order-coupon-code "$C51" "$(sq "SELECT coupon_code FROM orders WHERE id=$OID51")"
+UC51=$(sq "SELECT used_count FROM coupons WHERE id=$CID51" | tr -d '[:space:]')
+[ "$UC51" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T51-used-count-1"; } || { FAIL=$((FAIL+1)); echo "FAIL|T51-used-count-1(got $UC51)"; }
+ck T51-redeem-audit "$ON51" "$(sq "SELECT detail FROM audit_logs WHERE action='coupon_redeem' AND detail LIKE '%$ON51%' LIMIT 1")"
+# 到账按原价额度：模拟支付后余额增量=1000 积分对应的 token，与折后金额无关
+B51_0=$(sq "SELECT balance FROM balance_accounts WHERE tenant_id=$T51D" | tr -d '[:space:]')
+post "$H51" "{\"order_id\":$OID51}" /api/pay/simulate >/dev/null
+B51_1=$(sq "SELECT balance FROM balance_accounts WHERE tenant_id=$T51D" | tr -d '[:space:]')
+[ $((B51_1 - B51_0)) -eq 300000 ] && { PASS=$((PASS+1)); echo "PASS|T51-credit-full-quota(+$((B51_1-B51_0)))"; } || { FAIL=$((FAIL+1)); echo "FAIL|T51-credit-full-quota(got +$((B51_1-B51_0)) want +300000)"; }
+
+# ④ 每家企业限用 1 次：二次用同券必须拒，且不能留下挂券的半截单
+R=$(post "$H51" "{\"points\":1000,\"channel\":\"mock\",\"coupon\":\"$C51\"}" /api/pay/create)
+ck T51-tenant-limit '"success":false' "$R"
+ck T51-tenant-limit-hint '可用次数已用完' "$R"
+HANG51=$(sq "SELECT COUNT(*) FROM orders WHERE tenant_id=$T51D AND coupon_code<>'' AND status='pending'" | tr -d '[:space:]')
+[ "$HANG51" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T51-failed-order-no-coupon"; } || { FAIL=$((FAIL+1)); echo "FAIL|T51-failed-order-no-coupon(挂券 pending=$HANG51)"; }
+
+# ⑤ 0 元单红线：立减额远超订单额时只减到 0.01 元（0 元单会让回调金额核对退化成恒真）
+R=$(post "$H51" "{\"points\":100,\"channel\":\"mock\",\"coupon\":\"$C51BIG\"}" /api/pay/create)
+ck T51-floor-create '"success":true' "$R"
+OID51B=$(echo "$R" | pv '.get("order",{}).get("id") or 0')
+AM51B=$(sq "SELECT amount_money FROM orders WHERE id=$OID51B" | tr -d '[:space:]')
+[ -n "$AM51B" ] && ck T51-floor-001 '^0\.01$' "$AM51B" || { FAIL=$((FAIL+1)); echo "FAIL|T51-floor-001(空)"; }
+
+# ⑥ 核销流水与删模板：模板可删，历史流水必须留（活动复盘/对账唯一依据）
+ck T51-redemptions "$ON51" "$(get "$AH" "/api/admin/coupons/redemptions?coupon_id=$CID51")"
+ck T51-redemptions-amount "\"paid_money\":$PAY51" "$(get "$AH" "/api/admin/coupons/redemptions?coupon_id=$CID51")"
+ck T51-coupon-delete '"success":true' "$(post "$AH" "{\"id\":$CID51}" /api/admin/coupons/delete)"
+if echo "$(get "$AH" /api/admin/coupons)" | grep -qE "$C51"; then
+  FAIL=$((FAIL+1)); echo "FAIL|T51-deleted-out-of-list(删后仍在列表)"
+else
+  PASS=$((PASS+1)); echo "PASS|T51-deleted-out-of-list"
+fi
+ck T51-redemption-kept "$ON51" "$(get "$AH" "/api/admin/coupons/redemptions?coupon_id=$CID51")"
+# ★ 已删模板的券码再试算必须回「券码不存在」（body 先存变量，见上方引号陷阱说明）
+R=$(post "$H51" "{\"code\":\"$C51\",\"points\":1000}" /api/coupon/preview)
+ck T51-deleted-code-reject '券码不存在' "$R"
+ck T51-deleted-code-flag '"coupon_error":true' "$R"
+ck T51-del-bad-id '"success":false' "$(post "$AH" '{"id":0}' /api/admin/coupons/delete)"
+
+# ⑦ 订阅单带券（券适用 subscribe 类）+ 升级单显式拒券（口径边界，不静默忽略）
+C51ANY="UATT51ANY$SFX51"
+R=$(post "$AH" "{\"code\":\"$C51ANY\",\"kind\":\"subscribe\",\"discount_type\":\"percent\",\"discount_value\":50,\"enabled\":1}" /api/admin/coupons/save)
+CID51ANY=$(echo "$R" | pv '.get("coupon",{}).get("id") or 0')
+curl -s $B/api/admin/packages/create -H "$AH" -H "$J" -d "{\"tenant_id\":$T51D,\"code\":\"uat_t51_low\",\"name\":\"T51低包\",\"ptype\":\"paid\",\"sentences\":20000,\"price_money\":20,\"duration_days\":30}" >/dev/null
+curl -s $B/api/admin/packages/create -H "$AH" -H "$J" -d "{\"tenant_id\":$T51D,\"code\":\"uat_t51_high\",\"name\":\"T51高包\",\"ptype\":\"paid\",\"sentences\":60000,\"price_money\":60,\"duration_days\":30}" >/dev/null
+R=$(post "$H51" "{\"code\":\"uat_t51_low\",\"coupon\":\"$C51ANY\"}" /api/package/subscribe)
+ck T51-subscribe-coupon '"success":true' "$R"
+OID51S=$(echo "$R" | pv '.get("order",{}).get("id") or 0')
+AM51S=$(sq "SELECT amount_money FROM orders WHERE id=$OID51S" | tr -d '[:space:]')
+RD51S=$(get "$AH" "/api/admin/coupons/redemptions?coupon_id=$CID51ANY")
+# 折后实付必须与流水的 paid_money 一致（应收单一事实源：订单、流水、收银台三处同数）
+if [ -n "$AM51S" ] && echo "$RD51S" | grep -qE "\"paid_money\":$AM51S([^0-9]|$)"; then
+  PASS=$((PASS+1)); echo "PASS|T51-subscribe-discounted(订单 $AM51S == 流水)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T51-subscribe-discounted(订单 $AM51S 未见于流水 paid_money)"
+fi
+ck T51-subscribe-audit "$C51ANY" "$(sq "SELECT detail FROM audit_logs WHERE action='coupon_redeem' AND detail LIKE '%$C51ANY%' LIMIT 1")"
+# 升级单已含旧包余额抵扣，带券必须显式拒绝（不能静默忽略，否则用户以为券生效了）
+R=$(post "$H51" "{\"code\":\"uat_t51_high\",\"coupon\":\"$C51ANY\"}" /api/package/upgrade)
+ck T51-upgrade-reject-coupon '不再叠加优惠券' "$R"
+
+# 清理本用例自建券与核销流水（订单/账本留痕供人工核对，与其它交易用例同口径）
+dbq "DELETE FROM coupons WHERE code IN ('$C51','$C51SUB','$C51BIG','$C51ANY')" >/dev/null
+dbq "DELETE FROM coupon_redemptions WHERE code LIKE 'UATT51%'" >/dev/null
+dbq "DELETE FROM packages WHERE code IN ('uat_t51_low','uat_t51_high')" >/dev/null
+
+# ---------- T52 AI 助手管理代理（★ #34 后台前端重做，2026-09-21） ----------
+# 断言的是「主后台同源代理 + 原生面板」这条新链路，替掉旧 iframe+localStorage 方案后必须有的保障：
+#   鉴权（仅超管）、凭据注入（浏览器带的 admin_token 查询串被剥掉）、白名单转发、
+#   上游数据可读可写、配置掩码不回写、审计只记区域不记请求体（可能含 llm_api_key）。
+# 依赖 run_uat.sh 第 2c 步把 assist-server 一起拉起来（ASSIST_URL / ASSIST_UAT_TOKEN 由编排导出）。
+SFX52=$(date +%s | tail -c 6)
+A52="${ASSIST_URL:-http://127.0.0.1:8898}"
+if curl -s -m 3 "$A52/health" | grep -qE '"ok":(true|1)'; then
+  PASS=$((PASS+1)); echo "PASS|T52-assist-upstream-alive"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T52-assist-upstream-alive（assist-server 未启动：T52 必须经 run_uat.sh 编排跑）"
+fi
+
+# ① 鉴权面：普通用户与匿名一律拒（代理不放行，凭据也不外泄）
+ck T52-forbid-normal-user '"success":false' "$(get "$H1" /api/admin/assist/config)"
+ck T52-forbid-anon '"success":false' "$(get "" /api/admin/assist/config)"
+
+# ② 状态条：上游可达 + Token 来源为 env（面板据此显示绿条，且不返回 Token 明文）
+R=$(get "$AH" /api/admin/assist/status)
+ck T52-status-reachable '"reachable":true' "$R"
+ck T52-status-token-src '"token_src":"env"' "$R"
+ck T52-status-no-secret-leak '"message":""' "$R"
+
+# ③ 数据面读：seed 已灌入知识库，代理原样回传上游 rows
+R=$(get "$AH" /api/admin/assist/kb)
+ck T52-kb-list '"rows":\[' "$R"
+N52=$(echo "$R" | python3 -c 'import sys,json;print(len(json.load(sys.stdin).get("rows") or []))' 2>/dev/null || echo 0)
+[ "${N52:-0}" -gt 0 ] && { PASS=$((PASS+1)); echo "PASS|T52-kb-seeded($N52 条)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T52-kb-seeded(got $N52)"; }
+
+# ④ CRUD 往返：新建 → 列表可见 → 改 → 删 → 不可见（assist 侧按 id 定位，query 透传）
+K52="uat_t52_$SFX52"
+R=$(post "$AH" "{\"key\":\"$K52\",\"category\":\"uat\",\"title\":\"T52 冒烟条目\",\"content\":\"仅供断言\",\"keywords\":\"冒烟\",\"priority\":3,\"enabled\":1}" /api/admin/assist/kb)
+ck T52-kb-create '"id":' "$R"
+ID52=$(echo "$R" | pv '.get("id") or 0')
+ck T52-kb-read "$K52" "$(get "$AH" /api/admin/assist/kb)"
+# 更新走 PUT（assist 侧按 ?id= 定位，代理原样透传查询串）
+ck T52-kb-update '"ok":true' "$(curl -s -X PUT "$B/api/admin/assist/kb?id=$ID52" -H "$AH" -H "$J" -d '{"title":"T52 冒烟条目（已改）","enabled":1}')"
+ck T52-kb-updated-title '冒烟条目（已改）' "$(get "$AH" /api/admin/assist/kb)"
+ck T52-kb-delete '"ok":true' "$(curl -s -X DELETE "$B/api/admin/assist/kb?id=$ID52" -H "$AH")"
+if get "$AH" /api/admin/assist/kb | grep -qE "$K52"; then
+  FAIL=$((FAIL+1)); echo "FAIL|T52-kb-deleted-gone（删除后列表仍见 $K52）"
+else
+  PASS=$((PASS+1)); echo "PASS|T52-kb-deleted-gone"
+fi
+
+# ⑤ 凭据不外泄：浏览器即使带 ?admin_token=乱值，代理也会剥掉并按服务端注入的头转发（200 而非 401）
+ck T52-admin-token-stripped '"rows":\[' "$(get "$AH" "/api/admin/assist/kb?admin_token=WRONG-52-$SFX52")"
+if get "" "/api/admin/assist/kb?admin_token=$ASSIST_UAT_TOKEN" | grep -qE '"rows"'; then
+  FAIL=$((FAIL+1)); echo "FAIL|T52-no-query-token-path（匿名凭 query 传凭据竟然放行）"
+else
+  PASS=$((PASS+1)); echo "PASS|T52-no-query-token-path"
+fi
+
+# ⑥ 配置读写 + 掩码不回写：assist 白名单外的键被上游拒；掩码形态值跳过写库（防把 *** 存进库）
+ck T52-config-whitelist 'key not allowed' "$(curl -s -X PUT "$B/api/admin/assist/config" -H "$AH" -H "$J" -d '{"key":"not_a_real_key","value":"x"}')"
+R=$(curl -s -X PUT "$B/api/admin/assist/config" -H "$AH" -H "$J" -d '{"key":"welcome","value":"T52 冒烟欢迎词"}')
+ck T52-config-write '"ok":true' "$R"
+ck T52-config-read 'T52 冒烟欢迎词' "$(get "$AH" /api/admin/assist/config)"
+ck T52-config-mask-skip '"skipped":true' "$(curl -s -X PUT "$B/api/admin/assist/config" -H "$AH" -H "$J" -d '{"key":"llm_api_key","value":"sk-1***xy"}')"
+
+# ⑦ 审计留痕但绝不落请求体：写入带密钥串的配置后，最新一条 assist_admin_write 只能看到方法+区域
+FAKE_SECRET="SK52SECRET$SFX52"
+curl -s -X PUT "$B/api/admin/assist/config" -H "$AH" -H "$J" -d "{\"key\":\"persona\",\"value\":\"含密钥占位 $FAKE_SECRET\"}" >/dev/null
+AU52=$(sq "SELECT detail FROM audit_logs WHERE action='assist_admin_write' ORDER BY id DESC LIMIT 1" | tr -d '[:space:]')
+if [ -n "$AU52" ] && ! echo "$AU52" | grep -qE "$FAKE_SECRET" && echo "$AU52" | grep -qE 'PUTconfig'; then
+  PASS=$((PASS+1)); echo "PASS|T52-audit-no-request-body($AU52)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T52-audit-no-request-body(got $AU52)"
+fi
+
+# ⑧ 概览与会话：面板首屏要读的统计接口经代理可读（字段缺失即前端徽标空转）
+R=$(get "$AH" /api/admin/assist/sessions)
+ck T52-sessions-shape '"sessions":\[' "$R"
+ck T52-sessions-stats '"total":' "$R"
+ck T52-sessions-unanswered '"unanswered":\[' "$R"
+
+# ⑨ 连通测试：走 mock LLM 应回 ok:true + 模型名（失败说明代理或 ASSIST_LLM_* 装配断了）
+R=$(post "$AH" '{}' /api/admin/assist/llm-test)
+ck T52-llm-test-ok '"ok":true' "$R"
+ck T52-llm-test-model '"model":' "$R"
+
+# ⑩ 未登记路径不放行（代理不是通用中继：白名单之外的 assist 路径只能拿到 404，
+#    断言状态码而不是文案，避免与 SPA 兜底处理器的文案实现耦合）
+C52OFF=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/admin/assist/unknown-route" -H "$AH")
+[ "$C52OFF" = "404" ] && { PASS=$((PASS+1)); echo "PASS|T52-off-whitelist-404"; } || { FAIL=$((FAIL+1)); echo "FAIL|T52-off-whitelist-404(got $C52OFF)"; }
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

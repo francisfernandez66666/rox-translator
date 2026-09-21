@@ -103,7 +103,7 @@ function PageLoading() {
   return (
     <div style={{ flex: 1, minHeight: '100dvh', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
       <WordSwap className="ws--lg" ariaLabel={gt('app.loading')} />
-      <p style={{ fontSize: 16, color: '#9AA0AA' }}>{gt('app.loading')}</p>
+      <p style={{ fontSize: 16, color: 'var(--lc-text-2)' }}>{gt('app.loading')}</p>
     </div>
   )
 }
@@ -180,7 +180,7 @@ function FrontShell() {
         .ss-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
         .ss-grid .ssc-card{width:100%}
         .ss-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #3A404C}
-        .ss-row span{color:#9AA0AA}.ss-row b{font-size:18px;color:#E7E9EA}
+        .ss-row span{color:var(--lc-text-2)}.ss-row b{font-size:18px;color:#E7E9EA}
         .ss-copy{display:flex;align-items:center;gap:8px}
         .ss-stats{display:flex;gap:24px;padding:12px 0}
         .ss-stat{text-align:center}
@@ -217,7 +217,7 @@ function FrontShell() {
                 onClick={() => switchTab('editor')}><Icon n="pencil" style={{ verticalAlign: '-3px', marginRight: 6 }} />{t('app.tabEditor')}</button>
         <div style={{ flex: 1 }} />
         {/* ★ F1：租户身份徽标——个人用户「个人版」，企业用户显示所属租户名（title 全文） */}
-        <span className="tenant-tag" title={tenantTag || t('app.personalPlan')} style={{ fontSize: 12, color: '#9AA0AA', whiteSpace: 'nowrap' }}>
+        <span className="tenant-tag" title={tenantTag || t('app.personalPlan')} style={{ fontSize: 13, color: 'var(--lc-text-2)', whiteSpace: 'nowrap' }}>
           {tenantTag
             ? <><Icon n="building" style={{ verticalAlign: '-3px', marginRight: 4 }} />{tenantTag.length > 12 ? tenantTag.slice(0, 12) + '…' : tenantTag}</>
             : <><Icon n="user" style={{ verticalAlign: '-3px', marginRight: 4 }} />{t('app.personalPlan')}</>}
@@ -243,7 +243,7 @@ function FrontShell() {
             后台计费 Hub（真正的收银台所在），避免「点充值→落只读页」死胡同 */}
       {depleted && (
         // 配色随纯黑主题调整：半透明红底 + #E5484D 文字（旧的 #fff1f0 浅底浅字在暗色下不可读）
-        <div style={{ background: 'rgba(229,72,77,0.10)', color: '#E5484D', padding: '6px 16px', fontSize: 13, display: 'flex', gap: 12, alignItems: 'center', borderBottom: '1px solid rgba(229,72,77,0.30)' }}>
+        <div style={{ background: 'rgba(229,72,77,0.10)', color: '#E5484D', padding: '6px 16px', fontSize: 14, display: 'flex', gap: 12, alignItems: 'center', borderBottom: '1px solid rgba(229,72,77,0.30)' }}>
           <span>{t('ss.exhaustedHint')}</span>
           <Button size="sm" variant="danger" onClick={() => {
             if (roleLevelSafe(user?.role) >= 3) { useAdminStore.getState().gotoPanel('billing'); navigate('/admin') }
@@ -257,7 +257,7 @@ function FrontShell() {
           // 纯黑页面上不再闪白，两处加载态共用唯一实现
           <div className="loading-screen" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
             <WordSwap className="ws--lg" ariaLabel={t('app.starting')} />
-            <p style={{ fontSize: 16, color: '#9AA0AA' }}>{t('app.starting')}</p>
+            <p style={{ fontSize: 16, color: 'var(--lc-text-2)' }}>{t('app.starting')}</p>
           </div>
         ) : (
           <Suspense fallback={<PageLoading />}>

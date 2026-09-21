@@ -196,6 +196,37 @@ export async function tmxImport(file: File): Promise<AdminResp & { tus?: number;
   })
 }
 
+/**
+ * tmxExport 导出翻译记忆为 TMX 1.4（Trados / memoQ 桥，与 tmxImport 成双向闭环）。
+ * 走 fetch→blob 而非 <a href>：端点要求鉴权头，裸链接会被 401 挡下；
+ * 文件名优先取响应 Content-Disposition，取不到再回落本地时间戳命名。
+ * opts.module='approved' 只导已审核句对；opts.lang 只导该目标语非空的句对（增量迁移常用）。
+ */
+export async function tmxExport(opts?: { lang?: string; module?: string }): Promise<void> {
+  const q = new URLSearchParams()
+  if (opts?.lang) q.set('lang', opts.lang)
+  if (opts?.module) q.set('module', opts.module)
+  const url = `${API_BASE}/api/translation/export-tmx${q.toString() ? '?' + q.toString() : ''}`
+  const r = await fetch(url, { headers: authHeaders() })
+  if (r.status === 401) { handleUnauthorized(url); throw new Error('未登录') }
+  if (!r.ok) {
+    // 失败时后端回的是 JSON 而非文件：解析出 message 抛给调用方，避免「点了没反应」
+    let msg = `HTTP ${r.status}`
+    try { msg = (await r.json()).message || msg } catch { /* 非 JSON 响应保留状态码 */ }
+    throw new Error(msg)
+  }
+  const cd = r.headers.get('Content-Disposition') || ''
+  const m = cd.match(/filename="?([^";]+)"?/)
+  const blob = await r.blob()
+  const objUrl = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = objUrl
+  a.download = m ? m[1] : `langcross_tm_${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}.tmx`
+  a.click()
+  // 立刻 revoke 在部分浏览器会截断下载，交给下一轮事件循环
+  setTimeout(() => URL.revokeObjectURL(objUrl), 1000)
+}
+
 /** 导入已识别的 KB 文件到指定包（按包隔离写入） */
 export async function kbImportFile(data: { temp_id: string; package_id: number }): Promise<AdminResp> {
   return request('/api/translation/import-kb', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })

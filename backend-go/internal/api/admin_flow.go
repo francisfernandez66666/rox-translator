@@ -22,7 +22,7 @@ import (
 func (s *Server) handleFlowConfig(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	steps := flowStepsForTenant(s.Ten, s.effTenant(r, u))
@@ -50,7 +50,7 @@ func flowStepsForTenant(ts *tenant.Store, tid int64) []store.FlowStep {
 func (s *Server) handleFlowSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -69,7 +69,7 @@ func (s *Server) handleFlowSave(w http.ResponseWriter, r *http.Request) {
 		cfg.Steps[st.Key] = st.Enable
 	}
 	if err := s.Ten.SetFlowConfig(s.effTenant(r, u), cfg); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "flow_save", "tenants", "流程步骤配置更新")
@@ -80,7 +80,7 @@ func (s *Server) handleFlowSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleFlowRunTicket(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -101,7 +101,7 @@ func (s *Server) handleFlowRunTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := wf.Executor.Execute(r.Context(), t, nil); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error(), "ticket": s.ticketJSON(t)})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err), "ticket": s.ticketJSON(t)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "flow_run", "tickets", t.TicketNo)

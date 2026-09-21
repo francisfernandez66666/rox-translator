@@ -83,6 +83,12 @@ func newChanSem(capacity int) *chanSem {
 // Acquire 阻塞获取一个许可；ctx 取消则立即返回错误。
 // 返回的释放函数必须被调用一次归还许可。
 func (s *chanSem) Acquire(ctx context.Context) (func(), error) {
+	// ★ 先显式查一次 ctx：Go 的 select 在两个 case 同时就绪时**随机**挑选，
+	//   槽位空着 + ctx 已取消时会有一半概率把许可发给一个已经不存在的请求，
+	//   与本函数「ctx 取消则立即返回错误」的契约相悖（也白白占住一个供应商名额）。
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	select {
 	case s.ch <- struct{}{}:
 		return func() { <-s.ch }, nil

@@ -30,7 +30,7 @@ import (
 func (s *Server) requireSuperAdmin(w http.ResponseWriter, r *http.Request) (*store.User, error) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return nil, err
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -47,7 +47,7 @@ func (s *Server) handleKBScrapeSources(w http.ResponseWriter, r *http.Request) {
 	}
 	sources, err := s.Store.ListScrapeSources()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "sources": sources})
@@ -148,7 +148,7 @@ func (s *Server) handleKBScrapeSourceRun(w http.ResponseWriter, r *http.Request)
 	c.Probe = func() bool { return s.lowOccupancyForScrape() }
 	done, err := c.RunDaily(r.Context())
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 自动审批模式：采集即落正式库，采集后失效 KB 缓存 + 异步重建向量索引
@@ -181,7 +181,7 @@ func (s *Server) handleKBScrapeStaged(w http.ResponseWriter, r *http.Request) {
 	// 合并行集查询（条目+安全句同口径），total 为精确总数供前端翻页
 	rows, total, err := s.Store.ListStagedMerged(packType, status, lang, industry, limit, offset)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{

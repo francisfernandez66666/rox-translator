@@ -104,11 +104,11 @@ const SegRow = memo(function SegRow({ s, editedText, status, note, matcher, opts
       }}
     >
       <div>
-        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{tpl('tk.srcIdxFmt', { i: s.index + 1 })}</div>
+        <div style={{ fontSize: 13, color: '#999', marginBottom: 4 }}>{tpl('tk.srcIdxFmt', { i: s.index + 1 })}</div>
         <div style={{ whiteSpace: 'pre-wrap', minHeight: 40 }}>{highlightWith(s.source, matcher)}</div>
       </div>
       <div>
-        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
+        <div style={{ fontSize: 13, color: '#999', marginBottom: 4 }}>
           {tpl('tk.edTargetTpl', { state: s.target ? t('tk.edHas') : t('tk.edEmpty') })}
         </div>
         {/* ★ B2 非受控：defaultValue 只做初值，键入不进 state——blur 时值有变化才提交一行。

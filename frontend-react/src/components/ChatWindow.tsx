@@ -1,19 +1,23 @@
 // ============================================================================
-// components/ChatWindow.tsx — 前台即时翻译工作台（按 UI 图 07-translate 重建）
-// 结构：离线横幅 + 余额/用量条 + 原文输入 → 语言选择 → 译文输出区（带检查点动效）。
+// components/ChatWindow.tsx — 前台即时翻译工作台（★ #36 2026-09-21 对话框合并版）
+// 结构：离线横幅 + 余额/用量条 + **一张占满除页眉页脚外整屏的对话框**；
+//       原文输入、译文结果气泡、语言选择与操作按钮全部收进这一个框内。
+// ★ #36 同时移除即时翻译的文件翻译入口（上传按钮/隐藏 file input/校验/发送）：
+//       文件翻译统一走「文档翻译」工单页（TicketsPage → /api/tickets/create-file），
+//       即时翻译只做文本，避免同一份文件两条口径不一致的链路。
 // 业务逻辑/API 全部保留，仅重写呈现层，文案走词典（无硬编码中文）。
 // 呈现层已迁至 @/ui/langcross/src 纯黑组件库（TDesign 全部移除）。
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Button, Input, useToast,
-  UploadIcon, SearchIcon, DownloadIcon, TrashIcon, CloseIcon,
+  SearchIcon, DownloadIcon, TrashIcon, CloseIcon,
 } from '@/ui/langcross/src'
 import MessageBubble from './MessageBubble'
 import { FeedbackModalFromMessage } from './modals'
 import { useChat } from '@/hooks/useChat'
 import { myPackage, meContext } from '@/api'
-import { estimateTranslation, validateTranslateFile, TRANSLATE_FILE_ACCEPT } from '@/api/translate'
+import { estimateTranslation } from '@/api/translate'
 import { fmtPoints } from '@/utils/points'
 import type { ChatMessage } from '@/types'
 import { useT, t, tpl } from '@/i18n'
@@ -44,7 +48,7 @@ function Spinner() {
   return <span className="cw-spin" aria-hidden="true" />
 }
 
-// 默认导出组件：前台即时翻译工作台
+// 默认导出组件：前台即时翻译工作台（输入与结果同框）
 export default function ChatWindow() {
   const [lang, t2] = useT()
   // 组件内提示直接取 ToastProvider 的 hook；非组件环境（lib 层、深层回调）走 lib/toastBus
@@ -59,6 +63,9 @@ export default function ChatWindow() {
   )
 
   // ★ 缩翻（任务7）：勾选+最长字符限制（0=未启用）
+  // ★ #36（2026-09-21）：文件翻译入口下线后，缩翻改为对**文本翻译**生效——
+  //   options.max_length 在引擎文本路径同样被消费（engine/text.go maxLengthOption），
+  //   因此保留控件并接进 handleSend，而不是连带删掉一个用户已在用的功能。
   const [condenseOn, setCondenseOn] = useState(false)
   const [condenseMax, setCondenseMax] = useState(200)
   // ★ F7：输入预估（防抖 600ms）/ 会话搜索 / 导出
@@ -71,9 +78,9 @@ export default function ChatWindow() {
   const [usage, setUsage] = useState<{ today: number } | null>(null)
   const [orgBudget, setOrgBudget] = useState<{ limit: number; used: number; name: string } | null>(null)
 
+  // scrollRef 现在指向合并框内的滚动区（原文输入 + 结果气泡都在其中）
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
 
   // ---- 余额 / 用量加载 ----
   // 从 myPackage 接口读取个人余额、今日用量及企业预算额度（均为积分）
@@ -107,12 +114,12 @@ export default function ChatWindow() {
     if (chat.messages.length) void loadBalance()
   }, [chat.messages.length, loadBalance])
 
-  // ---- 进度/消息变化自动滚底 ----
+  // ---- 进度/消息变化自动滚底（滚动发生在合并框内部，不再滚动整页）----
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [chat.messages])
 
-  // ---- 输入框初始自适应高度（取代 TDesign autosize）----
+  // ---- 输入区初始自适应高度 ----
   useEffect(() => { autoResize() }, [])
 
   // ---- 切换模式并持久化 ----
@@ -149,6 +156,13 @@ export default function ChatWindow() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // 窗口尺寸变化时重算输入区高度（合并后输入区高度按视口比例封顶，见 autoResize）
+  useEffect(() => {
+    const onResize = () => autoResize()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
   // F7：导出当前会话为 Markdown（纯前端拼装，不经后端，故不额外消耗积分）
   function exportChat() {
     const lines: string[] = ['# ' + t('chat.exportTitle'), '']
@@ -166,13 +180,15 @@ export default function ChatWindow() {
   }
 
   // ---- textarea 自动高度 ----
-  // 先置 auto 再读 scrollHeight：否则高度会被上一次赋值撑住、量不到真实内容高度；
-  // 上限 220px 是工作台输入卡的可视高度预算（再高会挤掉下方译文区，超长应上传文件翻译）
+  // 先置 auto 再读 scrollHeight：否则高度会被上一次赋值撑住、量不到真实内容高度。
+  // ★ #36：合并后对话框自身占满整屏，输入区上限改按视口高度比例（40%）封顶——
+  //   既允许长文本一眼看全，又给同框内的结果气泡留出可读空间（剩余靠内部滚动）。
   function autoResize() {
     const el = inputRef.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, 220) + 'px'
+    const cap = Math.max(160, Math.min(520, Math.round(window.innerHeight * 0.4)))
+    el.style.height = Math.min(el.scrollHeight, cap) + 'px'
   }
 
   // 停止生成：只中断前端流式读取；本轮已消耗的 token 不退还（产品规则，故同步 toast 告知）
@@ -187,21 +203,14 @@ export default function ChatWindow() {
   async function handleSend() {
     const rawText = input.trim()
     if (!rawText) return
-    setInput('')
-    const options: Record<string, unknown> = { target_langs: chat.selectedLangs, lang }
-    chat.sendMessage(rawText, options)
-  }
-
-  // ---- 即时文件翻译 ----
-  // 与工单通道共用后端校验口径（validateTranslateFile：扩展名白名单 + 40MB 上限），
-  // 前端先行拦截给反馈，避免大文件传到一半才被后端拒；选中上一份即丢弃旧任务（一次一份）
-  async function handleFilePicked(files: FileList | null) {
-    if (!files || files.length === 0) return
+    // 合并后文件入口不存在，进行中的翻译是唯一并发源：保留「忙」提示口径
     if (chat.isLoading) { toast({ title: t2('chat.busy'), tone: 'warn' }); return }
-    const file = files[0]
-    const err = validateTranslateFile(file)
-    if (err) { toast({ title: err, tone: 'error' }); return }
-    await chat.sendFile(file, chat.selectedLangs, '', condenseOn && condenseMax > 0 ? condenseMax : 0)
+    setInput('')
+    autoResize()
+    const options: Record<string, unknown> = { target_langs: chat.selectedLangs, lang }
+    // ★ #36：缩翻接到文本翻译（0=未启用，后端 maxLengthOption 自行忽略）
+    if (condenseOn && condenseMax > 0) options.max_length = condenseMax
+    chat.sendMessage(rawText, options)
   }
 
   const canSend = input.trim().length > 0
@@ -211,14 +220,15 @@ export default function ChatWindow() {
     : chat.messages
 
   return (
-    /* minHeight:0 必须显式给：flex 列里的滚动子项默认 min-height:auto，
-       不置 0 则消息区会把容器撑高、内部 overflow 永不生效（整页滚而非区域滚） */
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 57px)', minHeight: 0, background: '#000' }}>
+    /* 外层高度 = 视口减去页眉（即时翻译页无页脚，SiteFooter 只在抽屉内渲染）；
+       minHeight:0 必须显式给：flex 列里的滚动子项默认 min-height:auto，
+       不置 0 则内部 overflow 永不生效（整页滚而非框内滚）。 */
+    <div className="cw-root" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 57px)', minHeight: 0, background: '#000' }}>
       <style>{CW_CSS}</style>
       {/* 离线横幅 */}
       {!chat.isBackendOnline && (
         <div style={{ background: 'rgba(210,153,34,0.10)', borderBottom: '1px solid rgba(210,153,34,0.32)', padding: '8px 6%', display: 'flex', gap: 10, alignItems: 'center' }}>
-          <span style={{ fontSize: 13, color: '#D29922' }}>
+          <span style={{ fontSize: 14, color: '#D29922' }}>
             {t2('chat.offline')}
           </span>
           {!chat.isBackendLoading && (
@@ -231,9 +241,11 @@ export default function ChatWindow() {
 
       {/* 余额 / 用量条 */}
       {(balance || usage || orgBudget) && (
-        <div style={{ background: 'rgba(231,233,234,0.06)', color: '#9AA0AA', fontSize: 12, padding: '6px 6%', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid #1a1d22' }}>
-          {balance && <span>{tpl('chat.balanceTokens', { n: fmtPoints(balance.points), s: fmtNum(balance.approx) })}</span>}
-          {usage && <span>{tpl('chat.usedTokens', { n: fmtPoints(usage.today) })}</span>}
+        <div style={{ background: 'rgba(231,233,234,0.06)', color: 'var(--lc-text-2)', fontSize: 13, padding: '6px 6%', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid #1a1d22' }}>
+          {/* data-testid 只给 e2e 用（★ 任务 #43 翻译主流程端到端）：余额/今日已耗是扣费可见性的
+              唯一界面口径，锚点必须与 i18n 文案解耦——文案随 12 语种变，锚点不能跟着变。 */}
+          {balance && <span data-testid="chat-balance">{tpl('chat.balanceTokens', { n: fmtPoints(balance.points), s: fmtNum(balance.approx) })}</span>}
+          {usage && <span data-testid="chat-usage">{tpl('chat.usedTokens', { n: fmtPoints(usage.today) })}</span>}
           {orgBudget && <span>{tpl('chat.orgBudgetFmt', { name: orgBudget.name, used: fmtPoints(orgBudget.used), limit: fmtPoints(orgBudget.limit) })}</span>}
           {/* 预估消耗：积分区间与 ≈句数都由后端直出（零换算）；low（预估上限已超余额）转琥珀加粗 */}
           {estimate && (
@@ -251,26 +263,39 @@ export default function ChatWindow() {
           <Input autoFocus aria-label={t('chat.searchPh')} placeholder={t('chat.searchPh')} value={searchQ}
                  onChange={(e) => setSearchQ(e.target.value)}
                  trailing={searchQ ? (
-                   <button type="button" className="cw-search-clear" aria-label={t('chat.clear')} onClick={() => setSearchQ('')}>
+                   <button type="button" className="cw-search-clear" aria-label={t('chat.searchClear')} onClick={() => setSearchQ('')}>
                      <CloseIcon size={14} />
                    </button>
                  ) : null} />
         </div>
       )}
 
-      {/* 原文输入 → 语言选择 → 译文输出 */}
-      <div className="chat-scroll" ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '16px 6%', minHeight: 0 }}>
-        {/* 输入卡：置顶吸顶，译文在下方展开 */}
-        <div style={{ ...CARD, position: 'sticky', top: 0, zIndex: 5, padding: 16, marginBottom: 16, boxShadow: '0 8px 24px rgba(0,0,0,.4)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#E7E9EA', letterSpacing: '.04em' }}>{t('chat.srcLabel')}</span>
-            <span style={{ fontSize: 12, color: '#878D95' }}>{t('chat.sourceAuto')}</span>
-          </div>
+      {/* ★ #36 合并对话框：flex:1 吃满剩余整屏，内部三段式（框头 / 滚动区 / 框脚） */}
+      <div className="cw-dialog" style={{ ...CARD, boxShadow: '0 8px 24px rgba(0,0,0,.4)' }}>
+        {/* 框头：原文标签 + 会话工具（搜索 / 导出 / 清空） */}
+        <div className="cw-dialog-head">
+          <span style={{ fontSize: 14, fontWeight: 600, color: '#E7E9EA', letterSpacing: '.04em' }}>{t('chat.srcLabel')}</span>
+          <span style={{ fontSize: 13, color: 'var(--lc-text-3)', flex: 1 }}>{t('chat.sourceAuto')}</span>
+          {/* 纯图标按钮：title 给鼠标悬浮、aria-label 给读屏，二者缺一不可 */}
+          <button type="button" className="cw-icon-btn" title={t('chat.searchPh')} aria-label={t('chat.searchPh')}
+                  onClick={() => { setSearchOpen((v) => !v); setSearchQ('') }}>
+            <SearchIcon size={16} />
+          </button>
+          <button type="button" className="cw-icon-btn" title={t('chat.exportMd')} aria-label={t('chat.exportMd')} onClick={exportChat}>
+            <DownloadIcon size={16} />
+          </button>
+          <button type="button" className="cw-icon-btn" title={t('chat.clearChat')} aria-label={t('chat.clearChat')} onClick={() => { chat.clearMessages() }}>
+            <TrashIcon size={16} />
+          </button>
+        </div>
+
+        {/* 滚动区：原文输入 + 结果气泡同框（气泡放进对话框里，而不是对话框下方） */}
+        <div className="cw-dialog-body" ref={scrollRef}>
           {/* F3：dir="auto" 让阿/法等 RTL 文本按内容方向渲染。
               用原生 textarea + 组件库 .lc-textarea 类：autoResize 需要 ref 到真实节点量 scrollHeight；
               Enter 发送 / Shift+Enter 换行（与工单页一致的肌肉记忆） */}
           <textarea
-            className="lc-textarea"
+            className="lc-textarea cw-input"
             ref={inputRef}
             dir="auto"
             aria-label={t('chat.placeholder')}
@@ -278,91 +303,70 @@ export default function ChatWindow() {
             value={input}
             onChange={(e) => { setInput(e.target.value); autoResize() }}
             placeholder={t('chat.placeholder')}
-            rows={2}
+            rows={3}
             style={{ width: '100%', background: '#0A0B0D', borderColor: '#5A6270' }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault()
+                e.preventDefault()
                 void handleSend()
               }
             }}
           />
-          {/* 已选语言 chips + 目标语言选择 */}
-          <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            <span style={{ fontSize: 12, color: '#878D95', whiteSpace: 'nowrap' }}>{t('chat.targetLangLabel')}</span>
+
+          {/* 空状态：欢迎语（首轮翻译前的引导，文案不再提文件） */}
+          {!chat.messages.length && !chat.isLoading && (
+            <div className="cw-welcome">
+              <div style={{ fontSize: 15, color: 'var(--lc-text-2)', marginBottom: 8 }}>{t('chat.welcome')}</div>
+              <div style={{ fontSize: 14, maxWidth: 520, margin: '0 auto', lineHeight: 1.8 }}>
+                {t2('chat.welcomeSub')}
+              </div>
+            </div>
+          )}
+
+          {/* 消息流：assistant 气泡的 source=其上一条 user 消息（上下文展示） */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {shownMessages.map((m) => {
+              const src = m.role !== 'user'
+              ? [...chat.messages].slice(0, chat.messages.indexOf(m)).reverse().find((x) => x.role === 'user')?.content
+              : undefined
+            return <MessageBubble key={m.id} message={m} source={src} onFeedback={setFeedbackMsg} />
+            })}
+          </div>
+        </div>
+
+        {/* 框脚：目标语言 + 模式/缩翻 + 主按钮（常驻不随滚动消失） */}
+        <div className="cw-dialog-foot">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            <span style={{ fontSize: 13, color: 'var(--lc-text-3)', whiteSpace: 'nowrap' }}>{t('chat.targetLangLabel')}</span>
             <div style={{ minWidth: 260, flex: 1 }}>
               <LangMultiSelect value={chat.selectedLangs} onChange={chat.setSelectedLangs} />
             </div>
           </div>
-          <div style={{ marginTop: 6 }}>
-        <LangChips langs={chat.selectedLangs} onRemove={chat.setSelectedLangs} />
-          </div>
-
-        {!!chat.errorMessage && (
-            <div style={{ color: '#F85149', fontSize: 13, marginTop: 8 }}>{chat.errorMessage}</div>
+          <LangChips langs={chat.selectedLangs} onRemove={chat.setSelectedLangs} />
+          {!!chat.errorMessage && (
+            <div style={{ color: '#F85149', fontSize: 14 }}>{chat.errorMessage}</div>
           )}
-
-          {/* 操作行：双模式 / 缩翻 / 上传 / 搜索 / 导出 / 清空 / 主按钮翻译 */}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
+          <div className="cw-dialog-acts">
             <ModeToggle value={mode} onChange={setMode2} />
-            <label style={{ fontSize: 12, color: '#9AA0AA', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+            <label style={{ fontSize: 13, color: 'var(--lc-text-2)', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
               <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> {t('app.condense')}
             </label>
             <div style={{ width: 72, flexShrink: 0 }}>
               {condenseOn && (
                 <input type="number" min={1} max={10000} value={condenseMax}
                   onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
-                  style={{ width: '100%', boxSizing: 'border-box', height: 28, fontSize: 12, background: '#0A0B0D', border: '1.2px solid #5A6270', borderRadius: 6, padding: '0 6px', color: '#E7E9EA' }}
+                  style={{ width: '100%', boxSizing: 'border-box', height: 28, fontSize: 13, background: '#0A0B0D', border: '1.2px solid #5A6270', borderRadius: 6, padding: '0 6px', color: '#E7E9EA' }}
                   title={t('chat.s41')} />
               )}
             </div>
-            {/* 弹性占位：把「附件/搜索/导出/清空 + 主按钮」整组推到行尾，窄屏 flexWrap 换行也不散开 */}
+            {/* 弹性占位：把主按钮推到行尾；行尾再留 68px 让位给右下角 AI 助手浮球（.na-fab 固定定位） */}
             <div style={{ flex: 1 }} />
-            {/* 隐藏的原生 file input：由图标按钮触发点击。选完即清空 value，
-                否则连续选同一个文件不会再触发 change（重传同一份是常态） */}
-          <input ref={fileRef} type="file" accept={TRANSLATE_FILE_ACCEPT} style={{ display: 'none' }}
-                 onChange={(e) => { void handleFilePicked(e.target.files); e.currentTarget.value = '' }} />
-            {/* 纯图标按钮：迁移后按钮内不再有文字，title 给鼠标悬浮、aria-label 给读屏，二者缺一不可 */}
-            <button type="button" className="cw-icon-btn" title={t('chat.attachFile')} aria-label={t('chat.attachFile')}
-                    onClick={() => fileRef.current?.click()}>
-              <UploadIcon size={16} />
-            </button>
-            <button type="button" className="cw-icon-btn" title={t('chat.searchPh')} onClick={() => { setSearchOpen((v) => !v); setSearchQ('') }}>
-              <SearchIcon size={16} />
-            </button>
-            <button type="button" className="cw-icon-btn" title={t('chat.exportMd')} onClick={exportChat}>
-              <DownloadIcon size={16} />
-            </button>
-            <button type="button" className="cw-icon-btn" title={t('chat.clearChat')} aria-label={t('chat.clearChat')} onClick={() => { chat.clearMessages() }}>
-              <TrashIcon size={16} />
-            </button>
-
-          {chat.isLoading ? (
+            {chat.isLoading ? (
               <Button variant="primary" icon={<StopGlyph />} onClick={handleStop}>{t2('chat.stop')}</Button>
-          ) : (
+            ) : (
               <Button variant="primary" disabled={!canSend} onClick={() => void handleSend()}>{t('chat.translate')}</Button>
             )}
           </div>
-        </div>
-
-        {/* 空状态：欢迎语 */}
-        {!chat.messages.length && !chat.isLoading && (
-          <div style={{ textAlign: 'center', padding: '56px 12px', color: '#878D95' }}>
-            <div style={{ fontSize: 15, color: '#9AA0AA', marginBottom: 8 }}>{t('chat.welcome')}</div>
-            <div style={{ fontSize: 13, maxWidth: 520, margin: '0 auto', lineHeight: 1.8 }}>
-              {t2('chat.welcomeSub')}
-            </div>
-          </div>
-        )}
-
-        {/* 消息流：assistant 气泡的 source=其上一条 user 消息（上下文展示） */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {shownMessages.map((m) => {
-            const src = m.role !== 'user'
-            ? [...chat.messages].slice(0, chat.messages.indexOf(m)).reverse().find((x) => x.role === 'user')?.content
-            : undefined
-          return <MessageBubble key={m.id} message={m} source={src} onFeedback={setFeedbackMsg} />
-          })}
         </div>
       </div>
 
@@ -373,7 +377,17 @@ export default function ChatWindow() {
 }
 
 // —— 页面级样式（cw- 前缀，避免与组件库类名重名）——
+// .cw-dialog 用 flex:1 + min-height:0 吃满外层剩余高度；内部滚动只发生在 .cw-dialog-body。
+// .cw-dialog-acts 的右内边距是给固定定位的 AI 助手浮球让位，避免遮住主按钮。
 const CW_CSS = `
+.cw-root{box-sizing:border-box}
+.cw-dialog{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;margin:12px 6% 14px}
+.cw-dialog-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1.2px solid #22262E;flex-wrap:wrap}
+.cw-dialog-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
+.cw-dialog-body .bubble-row{max-width:100%}
+.cw-dialog-foot{border-top:1.2px solid #22262E;padding:10px 14px 12px;display:flex;flex-direction:column;gap:8px}
+.cw-dialog-acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding-right:68px}
+.cw-welcome{text-align:center;padding:32px 12px;color:var(--lc-text-3)}
 .cw-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;
   border:1.2px solid var(--lc-border-pill);background:transparent;color:var(--lc-text-2);border-radius:var(--lc-r-ctl);cursor:pointer;padding:0;line-height:0}
 .cw-icon-btn:hover{color:var(--lc-text);border-color:var(--lc-border-done)}
@@ -382,7 +396,19 @@ const CW_CSS = `
 .cw-search-clear:hover{color:var(--lc-text)}
 .cw-spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(231,233,234,.35);border-top-color:#E7E9EA;border-radius:50%;animation:cw-spin .7s linear infinite}
 @keyframes cw-spin{to{transform:rotate(360deg)}}
+@media (max-width:900px){
+  /* 平板：卡片左右外边距 6%→4%（旧 mobile.css 的 .chat-scroll 内边距口径，
+     #36 合并对话框后必须由组件自己下发，否则会被本块的 .cw-dialog 规则盖掉） */
+  .cw-dialog{margin:10px 4% 12px}
+}
+@media (max-width:640px){
+  /* 窄屏：整框贴边留白收窄，浮球右下仍占位，故主按钮行右内边距减半 */
+  .cw-dialog{margin:8px 3% 10px}
+  .cw-dialog-acts{padding-right:40px}
+  .cw-input{min-height:96px}
+}
 @media (prefers-reduced-motion: reduce){
   .cw-spin{animation:none}
+  .cw-dialog-body{scroll-behavior:auto}
 }
 `

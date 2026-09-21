@@ -93,10 +93,10 @@ type Org struct {
 	//   部门月用量达到预算即触发「部门墙」拦截并提醒部门管理员。
 	//   2026-09-19 积分口径：token 裸值不再随组织列表出参（预算展示走
 	//   /api/admin/org-budget 的积分视图 orgBudgetViewJSON）。
-	TokenLimit    int64  `json:"-"` // 月度 token 预算上限（0=未启用部门墙；内部计量不外发）
-	UsedThisMonth int64  `json:"-"` // 本月已消耗（动态计算，非落库字段；内部计量不外发）
-	CreatedAt     string `json:"created_at"`      // 创建时间（RFC3339 字符串）
-	UpdatedAt     string `json:"updated_at"`      // 更新时间（RFC3339 字符串）
+	TokenLimit    int64  `json:"-"`          // 月度 token 预算上限（0=未启用部门墙；内部计量不外发）
+	UsedThisMonth int64  `json:"-"`          // 本月已消耗（动态计算，非落库字段；内部计量不外发）
+	CreatedAt     string `json:"created_at"` // 创建时间（RFC3339 字符串）
+	UpdatedAt     string `json:"updated_at"` // 更新时间（RFC3339 字符串）
 }
 
 // 组织类型常量。

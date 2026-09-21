@@ -98,7 +98,7 @@ export default function IndustriesP(_props: Props) {
 
   return (
     <>
-      <div style={{ marginBottom: 10, fontSize: 13, color: 'var(--adm-hint)' }}>
+      <div style={{ marginBottom: 10, fontSize: 14, color: 'var(--adm-hint)' }}>
         {t('ind.hint')}
       </div>
       <Button variant="primary" onClick={() => { setCode(''); setName(''); setDlg({ mode: 'create' }) }}>{t('ind.new')}</Button>
@@ -125,11 +125,11 @@ export default function IndustriesP(_props: Props) {
       {/* 新建行业弹窗 */}
       <Dialog open={!!dlg && dlg.mode === 'create'} onCancel={() => setDlg(null)} title={t('ind.newTitle')} onConfirm={doCreate}>
         <div style={{ marginBottom: 12 }}>
-          <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>{t('ind.codeLabel')}</div>
+          <div style={{ marginBottom: 4, fontSize: 14, color: 'var(--adm-hint)' }}>{t('ind.codeLabel')}</div>
           <input className="lc-input" value={code} onChange={(e) => setCode(String(e.target.value))} placeholder="auto / realestate / ..." />
         </div>
         <div>
-          <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>{t('ind.nameLabel')}</div>
+          <div style={{ marginBottom: 4, fontSize: 14, color: 'var(--adm-hint)' }}>{t('ind.nameLabel')}</div>
           <input className="lc-input" value={name} onChange={(e) => setName(String(e.target.value))} placeholder={t('ind.namePlaceholder')} />
         </div>
       </Dialog>
@@ -137,7 +137,7 @@ export default function IndustriesP(_props: Props) {
       {/* 编辑行业名弹窗 */}
       <Dialog open={!!dlg && dlg.mode === 'edit'} onCancel={() => setDlg(null)} title={t('ind.editTitle')} onConfirm={doUpdate}>
         <div>
-          <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>{t('ind.nameLabel')}</div>
+          <div style={{ marginBottom: 4, fontSize: 14, color: 'var(--adm-hint)' }}>{t('ind.nameLabel')}</div>
           <input className="lc-input" value={name} onChange={(e) => setName(String(e.target.value))} />
         </div>
       </Dialog>

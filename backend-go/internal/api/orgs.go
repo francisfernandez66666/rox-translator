@@ -47,7 +47,7 @@ func (s *Server) routesOrgs() {
 func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 部门管理员：仅本部门及子部门组织树（只读视图）
@@ -59,17 +59,17 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 		}
 		root, err := s.Store.GetRootOrg(tid)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		orgIDs, err := s.Store.OrgDescendantIDs(tid, u.OrgID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		all, err := s.Store.ListOrgs(tid)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		orgSet := map[int64]bool{}
@@ -122,7 +122,7 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 			}
 			orgs, err := s.Store.ListOrgs(tid)
 			if err != nil {
-				writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+				writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 				return
 			}
 			writeJSON(w, 200, map[string]interface{}{"success": true, "orgs": orgs, "root": root, "tenant_id": tid, "platform": false})
@@ -131,7 +131,7 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 		// 平台上下文（tid=0）→ 展示平台组织树（所有租户）
 		root, err := s.Store.EnsurePlatformRootOrg("能言")
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		// 确保所有租户都有根组织行（首次或迁移后）
@@ -146,7 +146,7 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 		}
 		orgs, err := s.Store.ListPlatformOrgs(root.ID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		writeJSON(w, 200, map[string]interface{}{"success": true, "orgs": orgs, "root": root, "tenant_id": 0, "platform": true})
@@ -171,7 +171,7 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 	}
 	orgs, err := s.Store.ListOrgs(tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "orgs": orgs, "root": root, "tenant_id": tid, "platform": false})
@@ -214,7 +214,7 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	// 层级设置权限：仅超管（任意租户）与租户管理员（本租户）；部门管理员不动结构
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -242,7 +242,7 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	// 父节点归属校验（非根时父节点必须属于本租户）
 	if req.ParentID > 0 {
 		if err := s.validateOrg(tid, req.ParentID); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 	}
@@ -280,7 +280,7 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrgRename(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 解析 id/name 并做组织归属（orgTenant）+ 层级合法性（validateOrg）双闸口后改名；根组织同步租户名见下
@@ -294,15 +294,15 @@ func (s *Server) handleOrgRename(w http.ResponseWriter, r *http.Request) {
 	}
 	tid, err := s.orgTenant(r, u, req.ID)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if err := s.validateOrg(tid, req.ID); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if err := s.Store.RenameOrg(req.ID, strings.TrimSpace(req.Name)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 根组织改名同步租户名（保持组织树与租户列表一致）
@@ -321,7 +321,7 @@ func (s *Server) handleOrgRename(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrgMove(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 解析 id/parent_id 并确认组织归属当前租户；防成环等层级校验由 store 侧 MoveOrg 完成
@@ -335,11 +335,11 @@ func (s *Server) handleOrgMove(w http.ResponseWriter, r *http.Request) {
 	}
 	tid, err := s.orgTenant(r, u, req.ID)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if err := s.Store.MoveOrg(tid, req.ID, req.ParentID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "org_move", "orgs", "")
@@ -352,7 +352,7 @@ func (s *Server) handleOrgMove(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 解析 id 并过组织归属 + validateOrg 双闸口后删除；子组织上移/成员回收由 store 侧 DeleteOrg 处理
@@ -365,15 +365,15 @@ func (s *Server) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	tid, err := s.orgTenant(r, u, req.ID)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if err := s.validateOrg(tid, req.ID); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if err := s.Store.DeleteOrg(req.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "org_delete", "orgs", "")
@@ -386,7 +386,7 @@ func (s *Server) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrgUsers(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -416,7 +416,7 @@ func (s *Server) handleOrgUsers(w http.ResponseWriter, r *http.Request) {
 	if auth.IsSuperAdmin(u) && tid <= 0 && orgID <= 0 {
 		users, err := s.Store.ListAllUsers()
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		nameMap, _ := s.Store.OrgNameMap()
@@ -439,18 +439,18 @@ func (s *Server) handleOrgUsers(w http.ResponseWriter, r *http.Request) {
 	orgIDs := []int64{}
 	if orgID > 0 {
 		if err := s.validateOrg(tid, orgID); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		orgIDs, err = s.Store.OrgDescendantIDs(tid, orgID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 	}
 	users, err := s.Store.ListUsersByOrg(tid, orgIDs)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 补充组织名（前端展示树形归属）
@@ -486,7 +486,7 @@ func findOrgByID(orgs []*store.Org, id int64) *store.Org {
 func (s *Server) handleOrgTokenLimit(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -504,7 +504,7 @@ func (s *Server) handleOrgTokenLimit(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := s.Store.TokensFromPoints(req.LimitPoints)
 	if err := s.Store.SetOrgTokenLimit(req.OrgID, limit); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "org_token_limit", "orgs",
@@ -538,12 +538,12 @@ func (s *Server) orgBudgetViewJSON(sum *store.OrgBudgetSummary) map[string]inter
 func (s *Server) handleOrgBudgetSummary(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	sum, err := s.Store.GetOrgBudgetSummary(s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "summary": s.orgBudgetViewJSON(sum)})

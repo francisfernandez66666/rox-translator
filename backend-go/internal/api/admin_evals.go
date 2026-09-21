@@ -25,12 +25,12 @@ import (
 func (s *Server) handleEvalsList(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	records, err := s.Store.ListEvalRecords(s.effTenant(r, u), 100)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "records": records})
@@ -42,7 +42,7 @@ func (s *Server) handleEvalsList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	total, perLang, _, _ := s.DB.Stats(s.effTenant(r, u))
@@ -86,7 +86,7 @@ func llmErrorRateStr(eng *engine.Engine) string {
 func (s *Server) handleSystemAudit(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	q := r.URL.Query()
@@ -100,7 +100,7 @@ func (s *Server) handleSystemAudit(w http.ResponseWriter, r *http.Request) {
 		atoiDef(q.Get("limit"), 100),
 	)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// CSV 导出（ISO 17100 审计留痕）
@@ -115,7 +115,7 @@ func (s *Server) handleSystemAudit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -126,7 +126,7 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	status := q.Get("status")
 	alerts, err := s.Store.ListAlerts(tid, status, atoiDef(q.Get("limit"), 100))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "alerts": alerts, "silences": s.Store.ActiveSilences(tid)})
@@ -137,7 +137,7 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAlertSilence(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -154,7 +154,7 @@ func (s *Server) handleAlertSilence(w http.ResponseWriter, r *http.Request) {
 		tid = req.TenantID // 超管：0=平台级，>0=指定租户
 	}
 	if err := s.Store.SilenceAlert(tid, req.Kind, req.Minutes, u.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "alert_silence", "alerts", req.Kind)
@@ -165,7 +165,7 @@ func (s *Server) handleAlertSilence(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAlertUnsilence(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -181,7 +181,7 @@ func (s *Server) handleAlertUnsilence(w http.ResponseWriter, r *http.Request) {
 		tid = req.TenantID
 	}
 	if err := s.Store.UnsilenceAlert(tid, req.Kind); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "alert_unsilence", "alerts", req.Kind)
@@ -192,7 +192,7 @@ func (s *Server) handleAlertUnsilence(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAlertResolve(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -203,7 +203,7 @@ func (s *Server) handleAlertResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.ResolveAlert(req.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "alert_resolve", "alerts", strconv.FormatInt(req.ID, 10))

@@ -42,12 +42,12 @@ const qrImageUploadMax = 5 << 20
 // 返回: success=true 时携带 packages 数组（含下架包）。
 func (s *Server) handleAdminPackages(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	pkgs, err := s.Store.ListCommercialPackages()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "packages": pkgs})
@@ -59,7 +59,7 @@ func (s *Server) handleAdminPackages(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 解析 body 并做入参校验：code/name 必填、ptype 白名单（缺省 paid）、sentences/points 至少一项为正
@@ -126,7 +126,7 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -199,7 +199,7 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 	}
 	// 合并完成后整行落库并记 package_update 审计（cur 为原记录+增量字段的合成值）
 	if err := s.Store.UpdatePackage(cur); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_update", "packages", cur.Code)
@@ -212,7 +212,7 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 // ★ 2026-09-19 积分口径：体验额度以积分回显；句↔token 换算率与积分汇率不再经本接口透出。
 func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days（旧键 trial_sentences 已下线）
@@ -289,17 +289,17 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
-		BillingEnforced   *string  `json:"billing_enforced"`          // 强制计费开关："1"/"0"
-		FreeTrialPoints   *int64   `json:"free_trial_points"`         // ★ 积分口径：新租户体验积分数（内部折 token 落库）
-		FreeTrialDays     *int64   `json:"free_trial_days"`           // 体验有效期（天）
-		MarkupMultiplier  *float64 `json:"billing_markup_multiplier"` // 成本均摊系数（≥1.0）
-		SensitiveGate     *string  `json:"sensitive_gate_enabled"`    // ★ S8 敏感词兑底闸："1"/"0"
-		PayMode           *string  `json:"pay_mode"`                  // mock / sdk / static_qr
-		StaticQRImage     *string  `json:"static_qr_image"`           // 静态收款码图片 URL 或 base64
+		BillingEnforced  *string  `json:"billing_enforced"`          // 强制计费开关："1"/"0"
+		FreeTrialPoints  *int64   `json:"free_trial_points"`         // ★ 积分口径：新租户体验积分数（内部折 token 落库）
+		FreeTrialDays    *int64   `json:"free_trial_days"`           // 体验有效期（天）
+		MarkupMultiplier *float64 `json:"billing_markup_multiplier"` // 成本均摊系数（≥1.0）
+		SensitiveGate    *string  `json:"sensitive_gate_enabled"`    // ★ S8 敏感词兑底闸："1"/"0"
+		PayMode          *string  `json:"pay_mode"`                  // mock / sdk / static_qr
+		StaticQRImage    *string  `json:"static_qr_image"`           // 静态收款码图片 URL 或 base64
 		// ★ USDT 收款（2026-09-15）：开关/链/地址/汇率/确认数（RPC 凭证走环境变量）
 		USDTEnabled      *string `json:"usdt_enabled"`           // "1"/"0" 总开关（开启需地址+汇率就绪）
 		USDTAutoSettle   *string `json:"usdt_auto_settle"`       // "1"/"0" 自动对账（默认关：仅人工核销）
@@ -536,12 +536,12 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 func (s *Server) handleAdminQRUpload(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 大小/扩展名校验（复用 parseUpload，仅允许图片白名单）
 	if err := parseUpload(r, qrImageUploadMax, qrImageWhitelist); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	file, header, err := r.FormFile("file")
@@ -625,7 +625,7 @@ func (s *Server) handleQRRender(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminPackageDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -636,7 +636,7 @@ func (s *Server) handleAdminPackageDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := s.Store.DeletePackage(req.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_delete", "packages", strconv.FormatInt(req.ID, 10))

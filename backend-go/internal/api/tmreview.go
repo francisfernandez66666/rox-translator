@@ -40,7 +40,7 @@ func (s *Server) handleTmReviewList(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := s.Store.ListTmReviews(r.URL.Query().Get("status"))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if list == nil {
@@ -74,7 +74,7 @@ func (s *Server) handleTmReviewApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	// 写入正式翻译记忆库（module='manual'）
 	if _, err := s.DB.SaveBack(cr.Zh, map[string]string{cr.Lang: cr.Trans}, "manual", cr.TenantID); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.invKB() // ★ KB 内容变更：失效引擎 CJK 精确缓存（新术语立即可命中）
@@ -125,11 +125,11 @@ func (s *Server) handleTmReviewAdopt(w http.ResponseWriter, r *http.Request) {
 		Trans: strings.TrimSpace(req.Trans), Source: "feedback", RefType: "feedback", RefID: req.FeedbackID,
 	}
 	if err := s.Store.CreateTmReview(cr); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	if _, err := s.DB.SaveBack(cr.Zh, map[string]string{cr.Lang: cr.Trans}, "manual", cr.TenantID); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.invKB() // ★ KB 内容变更：失效引擎 CJK 精确缓存（新术语立即可命中）

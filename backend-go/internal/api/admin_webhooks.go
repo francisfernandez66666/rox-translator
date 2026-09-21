@@ -26,13 +26,13 @@ func nowRFC3339() string {
 func (s *Server) handleWebhooks(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	tid := s.effTenant(r, u)
 	hooks, err := s.Store.ListWebhooks(tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "webhooks": hooks})
@@ -42,7 +42,7 @@ func (s *Server) handleWebhooks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWebhookSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -77,7 +77,7 @@ func (s *Server) handleWebhookSave(w http.ResponseWriter, r *http.Request) {
 		hook.Events = "translation.completed"
 	}
 	if err := s.Store.UpsertWebhook(hook); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "webhook_save", "webhooks", strconv.FormatInt(hook.ID, 10))
@@ -88,7 +88,7 @@ func (s *Server) handleWebhookSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWebhookDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -99,7 +99,7 @@ func (s *Server) handleWebhookDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeleteWebhook(req.ID, s.effTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "webhook_delete", "webhooks", strconv.FormatInt(req.ID, 10))
@@ -110,7 +110,7 @@ func (s *Server) handleWebhookDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWebhookTest(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -123,7 +123,7 @@ func (s *Server) handleWebhookTest(w http.ResponseWriter, r *http.Request) {
 	// 校验 webhook 归属
 	hooks, err := s.Store.ListWebhooks(s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var target *store.Webhook
@@ -153,7 +153,7 @@ func (s *Server) handleWebhookTest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWebhookDeliveries(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	webhookIDStr := r.URL.Query().Get("webhook_id")
@@ -170,7 +170,7 @@ func (s *Server) handleWebhookDeliveries(w http.ResponseWriter, r *http.Request)
 	tid := s.effTenant(r, u)
 	deliveries, err := s.Store.ListDeliveries(webhookID, tid, limit)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 统计
@@ -186,7 +186,7 @@ func (s *Server) handleWebhookDeliveries(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleWebhookRetry(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -197,7 +197,7 @@ func (s *Server) handleWebhookRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.RetryDelivery(req.DeliveryID, s.effTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "webhook_retry", "webhook_deliveries", strconv.FormatInt(req.DeliveryID, 10))

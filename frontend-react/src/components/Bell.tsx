@@ -108,15 +108,15 @@ export default function Bell() {
       {open && (
         <div className="bell-panel" role="menu">
           <div className="bell-head">
-            <b style={{ fontSize: 13 }}>{t('bell.title')}</b>
+            <b style={{ fontSize: 14 }}>{t('bell.title')}</b>
             <button type="button" className="bell-readall" onClick={markAll}>{t('bell.readAll')}</button>
           </div>
           {items.length === 0 && <EmptyState title={t('bell.empty')} />}
           {items.map((n) => (
             <div key={n.id} className="bell-item" onClick={() => onItemClick(n)}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{n.title}</div>
-              <div style={{ fontSize: 12, color: 'var(--lc-text-3)', marginTop: 2, whiteSpace: 'pre-wrap' }}>{n.body}</div>
-              <div style={{ fontSize: 11, color: 'var(--lc-text-4)', marginTop: 2 }}>{fmtTime(n.created_at)}</div>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{n.title}</div>
+              <div style={{ fontSize: 13, color: 'var(--lc-text-3)', marginTop: 2, whiteSpace: 'pre-wrap' }}>{n.body}</div>
+              <div style={{ fontSize: 12, color: 'var(--lc-text-4)', marginTop: 2 }}>{fmtTime(n.created_at)}</div>
             </div>
           ))}
         </div>
@@ -137,7 +137,7 @@ const BELL_CSS = `
   padding:8px;background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-modal);
   box-shadow:var(--lc-panel-highlight)}
 .bell-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-.bell-readall{background:none;border:0;color:var(--lc-text-3);font-size:12px;cursor:pointer;font-family:var(--lc-font);padding:0}
+.bell-readall{background:none;border:0;color:var(--lc-text-3);font-size:13px;cursor:pointer;font-family:var(--lc-font);padding:0}
 .bell-readall:hover{color:var(--lc-text);text-decoration:underline}
 .bell-item{padding:8px 6px;border-bottom:1px solid var(--lc-border-faint);cursor:pointer}
 .bell-item:last-child{border-bottom:0}

@@ -16,15 +16,22 @@
 package billing
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"translator/internal/observability"
 	"translator/internal/store"
 )
+
+// sinkBufferCap ★ #39（2026-09-21）：缓冲硬上限（条）。触顶丢最旧属最后防线，
+// 现在丢弃不再是静默的——按租户统计后写 critical 告警（见 flush 尾部）。
+const sinkBufferCap = 50000
 
 // usageRecord 单条待落库计量（携带 abort 回调以支持余额不足即时中止）。
 type usageRecord struct {
@@ -99,6 +106,10 @@ func InitGlobalSink(svc *Service) {
 	// 跨实例广播；漏接点由 Record 的 TTL 重 seed（shadowReseedTTL=5s）兜底自愈。
 	store.OnTenantBalanceChanged = InvalidateShadow
 	startShadowInvalidateWatcher(DefaultSink) // Redis 未启用时内部直接返回（单实例降级）
+	// ★ #39（2026-09-21）：先回收上次停机残留的 spool（补账），再放行 flusher。
+	if svc != nil && svc.Store != nil {
+		DefaultSink.recoverSpool()
+	}
 	go DefaultSink.run()
 }
 
@@ -142,6 +153,8 @@ func (s *UsageSink) Flush() {
 }
 
 // Stop 停止 flusher（优雅停机时调用，执行一次最终 flush）。
+// ★ #39（2026-09-21）：最终 flush 后仍留在缓冲的记录不再随进程消失——转磁盘 spool，
+// 下次启动自动回收落账（停机路径拿不到落库结果，故只告警不向上抛错）。
 func (s *UsageSink) Stop() {
 	select {
 	case <-s.stop:
@@ -149,6 +162,9 @@ func (s *UsageSink) Stop() {
 		close(s.stop)
 	}
 	s.flush()
+	if n, _ := s.spoolPending(); n > 0 {
+		observability.Error(context.Background(), "优雅停机仍有未落库计量，已转 spool 待下次启动回收", "rows", strconv.Itoa(n))
+	}
 }
 
 // pendingForLocked 汇总缓冲区内指定租户「已记录未落库」的计费量（调用方须持有 s.mu）。
@@ -377,10 +393,31 @@ func (s *UsageSink) flush() {
 		s.mu.Lock()
 		// 内存护栏：缓冲超过 5 万条时丢弃最旧部分，防止持续故障下无限膨胀
 		s.buf = append(failed, s.buf...)
-		if len(s.buf) > 50000 {
-			s.buf = s.buf[len(s.buf)-50000:]
+		// ★ #39（2026-09-21 评审缺陷⑩）：触顶丢弃此前是静默的——真实 LLM 成本既不落账
+		//   也不告警，属于无声收入泄漏。现按租户统计丢弃量并逐租户写 critical 告警，
+		//   把「账都没有」变成「有账可追」（金额/笔数足以人工补录或豁免）。
+		dropped := map[int64]struct {
+			tokens int64
+			rows   int
+		}{}
+		if n := len(s.buf) - sinkBufferCap; n > 0 {
+			for _, r := range s.buf[:n] {
+				c := dropped[r.Tid]
+				c.tokens += r.Quantity
+				c.rows++
+				dropped[r.Tid] = c
+			}
+			s.buf = s.buf[n:]
 		}
 		s.mu.Unlock()
+		for tid, c := range dropped {
+			observability.Error(context.Background(), "计量缓冲触顶丢弃（收入泄漏，需人工补录）",
+				"tenant_id", strconv.FormatInt(tid, 10), "tokens", strconv.FormatInt(c.tokens, 10), "rows", strconv.Itoa(c.rows))
+			if s.svc != nil && s.svc.Store != nil {
+				_ = s.svc.Store.CreateAlert(tid, "critical", "usage_sink_dropped",
+					fmt.Sprintf("计量落库持续失败导致缓冲触顶丢弃：%d 笔 / %d token 未落账未扣费，请核对 DB 写入状况并人工补录", c.rows, c.tokens))
+			}
+		}
 		select {
 		case s.wake <- struct{}{}:
 		default:

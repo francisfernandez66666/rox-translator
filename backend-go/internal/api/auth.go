@@ -150,6 +150,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if auditTID <= 0 {
 		auditTID = 1
 	}
+	// ★ #33 任务系统：每日登录任务（+100 临时积分，一日一次、有效期 3 天、日叠加）。
+	// 此刻请求还没有 Authorization 头，生效租户显式传入；旁路调用，失败只留痕不影响登录。
+	s.grantTaskEventOnTenant(r, auditTID, u.ID, store.TaskKeyLoginDaily, "")
 	s.Store.LogAudit(auditTID, u.ID, "login", "auth", "用户登录")
 	// 品牌域名跳转：若用户所属租户配置了专属品牌子域，且本次登录不在该子域上，
 	// 返回 brand_host 供前端重定向过去（需求 1-B）。
@@ -306,7 +309,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	// 仅允许修改自己租户下的账号（u.ID 绑定 u.TenantID，防跨租户篡改）
 	if err := s.Store.ResetPassword(u.ID, u.TenantID, auth.PasswordHash(req.NewPassword)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	// 记录修改密码审计
@@ -476,7 +479,7 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	vcodeDel(rkey)
 	// 更新密码
 	if err := s.Store.ResetPassword(u.ID, u.TenantID, auth.PasswordHash(req.NewPassword)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.regGuard.record("pwd-reset:" + ip) // 重置成功才计数（限流窗口按成功动作推进）
@@ -517,7 +520,7 @@ func (s *Server) handleDeactivateAccount(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.Store.DeactivateSelf(u.ID, u.TenantID); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	revoked := s.Store.DisableAPIKeysByUser(u.TenantID, u.ID) // ★ 连带停用名下全部 API Key
@@ -572,7 +575,7 @@ func (s *Server) infoMailer() mail.Sender {
 func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -580,12 +583,12 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	if auth.RoleLevel(u.Role) == 2 && u.OrgID > 0 {
 		orgIDs, err := s.Store.OrgDescendantIDs(tid, u.OrgID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		users, err := s.Store.ListUsersByOrg(tid, orgIDs)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		writeJSON(w, 200, map[string]interface{}{"success": true, "users": users})
@@ -595,7 +598,7 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	if auth.IsSuperAdmin(u) && tid <= 0 {
 		users, err := s.Store.ListAllUsers()
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		writeJSON(w, 200, map[string]interface{}{"success": true, "users": users})
@@ -604,7 +607,7 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	// 租户隔离：仅列出生效租户（超管可切换）下的用户
 	users, err := s.Store.ListUsers(tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "users": users})
@@ -616,7 +619,7 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -675,7 +678,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	// 组织归属校验：非平台级用户组织必须属于归属租户
 	if tid > 0 {
 		if err := s.validateOrg(tid, req.OrgID); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 	}
@@ -731,7 +734,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -814,7 +817,7 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 	// 组织归属校验：非超管不能把用户移出本租户组织（租户隔离，仅校验组织存在性）
 	if req.OrgID != nil {
 		if err := s.validateOrg(tid, *req.OrgID); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": err.Error()})
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 			return
 		}
 		// 部门管理员：目标组织也须在本部门子树内
@@ -840,7 +843,7 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 		orgID = target.OrgID
 	}
 	if err := s.Store.UpdateUser(req.ID, tid, req.DisplayName, req.Role, req.Status, orgID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	afterJSON, _ := json.Marshal(map[string]string{"role": req.Role, "status": req.Status, "display_name": req.DisplayName})
@@ -872,7 +875,7 @@ func (s *Server) validateOrg(tid, orgID int64) error {
 func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -925,7 +928,7 @@ func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Req
 	}
 	// 租户隔离：仅重置生效租户下的用户
 	if err := s.Store.ResetPassword(req.ID, tid, auth.PasswordHash(req.Password)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(u.TenantID, u.ID, "user_reset_pwd", "users", "")
@@ -937,7 +940,7 @@ func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Req
 func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	var req struct {
@@ -993,7 +996,7 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.Store.DeleteUser(req.ID, tid); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(u.TenantID, u.ID, "user_delete", "users", target.Username)
@@ -1056,7 +1059,7 @@ func (s *Server) handleUpdateEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.SetUserEmail(u.ID, u.TenantID, email); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": err.Error()})
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(u.TenantID, u.ID, "update_email", "users", email)
