@@ -1,0 +1,58 @@
+{
+  "chat.placeholder": {
+    "zh": "输入要翻译的文本",
+    "en": "Enter the text to translate",
+    "ar": "أدخل النص المراد ترجمته",
+    "de": "Zu übersetzenden Text eingeben",
+    "es": "Escribe el texto que quieres traducir",
+    "fr": "Saisissez le texte à traduire",
+    "ja": "翻訳するテキストを入力",
+    "ko": "번역할 텍스트를 입력하세요",
+    "pt": "Digite o texto a traduzir",
+    "ru": "Введите текст для перевода",
+    "th": "พิมพ์ข้อความที่ต้องการแปล",
+    "zh-hant": "輸入要翻譯的文字"
+  },
+  "chat.welcome": {
+    "zh": "输入文本，选择目标语言后开始翻译",
+    "en": "Enter text, choose target languages, then translate",
+    "ar": "أدخل النص واختر اللغات الهدف ثم ابدأ الترجمة",
+    "de": "Text eingeben, Zielsprachen wählen, übersetzen",
+    "es": "Escribe un texto, elige los idiomas y traduce",
+    "fr": "Saisissez un texte, choisissez les langues, traduisez",
+    "ja": "テキストを入力し、対象言語を選んで翻訳",
+    "ko": "텍스트를 입력하고 목표 언어를 선택해 번역하세요",
+    "pt": "Digite um texto, escolha os idiomas e traduza",
+    "ru": "Введите текст, выберите языки и переводите",
+    "th": "พิมพ์ข้อความ เลือกภาษาปลายทาง แล้วเริ่มแปล",
+    "zh-hant": "輸入文字，選擇目標語言後開始翻譯"
+  },
+  "chat.welcomeSub": {
+    "zh": "译文会直接显示在这个对话框里，支持 40+ 语言互译。",
+    "en": "Translations appear right inside this dialog, covering 40+ languages.",
+    "ar": "تظهر الترجمة داخل هذه الأداة مباشرة، مع دعم أكثر من 40 لغة.",
+    "de": "Übersetzungen erscheinen direkt in diesem Dialog – mit über 40 Sprachen.",
+    "es": "Las traducciones aparecen aquí mismo, con más de 40 idiomas.",
+    "fr": "Les traductions s'affichent directement dans cette boîte, avec plus de 40 langues.",
+    "ja": "訳文はこのダイアログ内にそのまま表示されます。40以上の言語に対応。",
+    "ko": "번역 결과가 이 대화상자에 바로 표시됩니다. 40개 이상 언어를 지원합니다.",
+    "pt": "As traduções aparecem aqui mesmo, com mais de 40 idiomas.",
+    "ru": "Перевод появляется прямо в этом окне; доступно более 40 языков.",
+    "th": "คำแปลจะแสดงในกล่องนี้โดยตรง รองรับมากกว่า 40 ภาษา",
+    "zh-hant": "譯文會直接顯示在這個對話框裡，支援 40+ 語言互譯。"
+  },
+  "chat.assistPlaceholder": {
+    "zh": "想了解什么？比如：怎么让译文更贴合行业术语",
+    "en": "What would you like to know? e.g. how to match industry terminology",
+    "ar": "ما الذي تريد معرفته؟ مثلا: كيف أجعل الترجمة أدق في المصطلحات",
+    "de": "Was möchten Sie wissen? Zum Beispiel: Wie halte ich Fachbegriffe konsistent?",
+    "es": "¿Qué quieres saber? Por ejemplo: cómo mantener la terminología coherente",
+    "fr": "Que souhaitez-vous savoir ? Par exemple : comment garder une terminologie cohérente",
+    "ja": "何を知りたいですか？例：業界用語を揃える方法",
+    "ko": "무엇이 궁금하세요? 예를 들어 업계 용어를 맞추는 방법",
+    "pt": "O que você quer saber? Por exemplo: como manter a terminologia consistente",
+    "ru": "Что хотите узнать? Например: как выдержать отраслевую терминологию",
+    "th": "อยากทราบอะไร? เช่น ทำให้ศัพท์เฉพาะทางสอดคล้องกัน",
+    "zh-hant": "想瞭解什麼？比如：怎麼讓譯文更貼合行業術語"
+  }
+}
