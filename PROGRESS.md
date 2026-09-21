@@ -2,7 +2,7 @@
 
 > 最后更新：2026-09-22（〇-XLVIII：任务系统 #33 + 评估报告缺陷批 #34–#43 + 文件管线保真 RC-1~RC-6）
 
-### 〇-XLVIII、任务系统与评估报告缺陷批（2026-09-22，代码提交 713c43d·文档仅本地）
+### 〇-XLVIII、任务系统与评估报告缺陷批（2026-09-22，代码提交 106ce50·decd6b9 已推送 origin/autosales·文档仅本地·主站已部署，演示站未部署）
 
 > 来源：《全量架构与商业价值评估_20260920.md》《全量UAT实测与架构商业评价_20260921.md》
 > 《缺陷记录_工单T20260921075004EF8_md标题中文未译_20260921.md》三份文档的缺陷/缺失整合，
@@ -24,6 +24,9 @@
 > 待用户决策未擅动（见任务 #65）：①交付物文件名带内部纳秒时间戳前缀（需先做每文件独立产物子目录才可安全剥离）；
 > ②超管无租户时任务奖励发放按 WARN `bad_task` 刷屏（语义应为 `no_tenant` @ Info）。
 > 仍阻塞：#41 微信/支付宝真实验签待商户凭证与资质（P1-1）、发票与多币种待开票资质（P1-2）；#59 store 层 ctx 穿透为已批准延期项。
+> 报告口径修正两项：评估报告称 `/api/billing/usage` 为僵尸路由——**不属实**，用量看板与 CSV 导出仍在消费；`/api/billing/balance`、`/api/billing/config` 已标 deprecated 但仍在线（删除需用户确认，未擅动）。`plans_api.go` 的「今日已耗」查询实际取月初时间戳（口径瑕疵，展示值偏大），列为待决策。
+>
+> **部署（2026-09-22 07:21，主站三件同批）**：`translator-server` sha256 `e1210e26…`、`translator-assist` sha256 `f545d463…` scp→`mv` rename 替换（旧二进制留 `.bak.20260922_072155`）+ `/opt/translator/web` 换源（新资产 `index-CfLqzgP_.js`，旧目录留 `web_old.20260922_072155`），两服务 restart 后 active、journalctl 零 panic。验收：`deploy_check.sh` 服务器本机内网 base **11/11**（`/livez` 200、`/readyz` `{"status":"ready","store":"ok","distributed":"in-process"}` 且无拓扑泄露）、公网 base **8/8**；venv `PDF_LIB_OK`/`ANYDOC_OK`、四管线脚本齐备未变；`user_tasks` 五类出厂任务随启动幂等入库（对外 100/100/500/1000/600 积分，内部 token 30000/30000/150000/300000/180000）；assist 令牌链路线上实测（greeting 签发 sid+tok → chat 命中充值引导；伪造 sid 无 tok 返回 401）。**演示站按前令未部署，版本差再扩一批次。**
 
 ### 〇-XLVII、全站十语种全量词典（2026-09-21，提交 47c0ff0·已推送 origin/autosales·主站已部署，演示站未部署）
 
