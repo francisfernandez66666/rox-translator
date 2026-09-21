@@ -9,10 +9,11 @@
 
 ### 1. store 冻结规则（★ 强制）
 
-`backend-go/internal/store/` 是单一数据访问包（74 文件 / 约 16.8k 行），被 `internal/api/` 90+ 文件引用。
+`backend-go/internal/store/` 是单一数据访问包（49 个非测试文件 / 约 14.2k 行；含 40 个单测文件为 89 文件 / 约 20.7k 行），
+被 `internal/api/` 中 43 个非测试文件直接 import。
 为控制复杂度增长，确立以下冻结规则：
 
-1. **`billing.go`（2201 行）与 `kbpackages.go`（1371 行）只减不增。**
+1. **`billing.go`（2206 行）与 `kbpackages.go`（1371 行）只减不增**（行数口径＝含注释的非测试行数，规则本身指「不追加新方法」；2026-09-22 实测校准）。**
    新方法按域新建文件（`billing_refund.go` / `kbpackages_acl.go`），或归入已有窄域文件。
    **禁止**往这两个文件追加新方法。
 2. **`store.go` 不承接业务方法**，只保留连接/迁移编排与真正的通用工具。
@@ -30,7 +31,9 @@
 - 后端统一用 `internal/observability` 的 slog（JSON + trace_id），**不要用标准库 `log.Printf`**。
 - 子服务（如 assist-server）也必须接同一口径，禁止自建日志格式。
 - 存量 `log.Printf` 受棘轮闸门约束**只减不增**：`internal/observability/logratchet_test.go`
-  （基线 179，2026-09-18 P2-3 建立）。迁移优先级 engine → fileproc → orchestrator，按包随改动顺带清，
+  （分根设基线 `internal` 176 / `cmd` 69，2026-09-18 P2-3 建立、2026-09-22 #42 纳入 `cmd/` 盲区并
+  随迁移下调 `internal` 基线；总数不设基线，防「cmd 新增被 internal 下降掩盖」）。
+  迁移优先级 engine → fileproc → orchestrator，按包随改动顺带清，
   每降一批同步下调该文件里的 `logPrintfBaseline`。
 
 ### 3. 密钥与配置

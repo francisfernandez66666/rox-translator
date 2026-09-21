@@ -85,6 +85,7 @@ DB_DRIVER=postgres DB_DSN='postgres://user:pass@127.0.0.1:5432/translator?sslmod
 - **品牌定制与登录页布局**：按子域名解析租户品牌（名称/Logo/背景图）；登录页支持全屏背景或左右分栏
 - **积分计费**：对外（前端界面与全部 API 出参）只有积分一种计量口径，积分↔内部记账换算与汇率全部收敛在服务端，任何接口不下发 token 裸值与汇率（★ 2026-09-19 全面落地：余额/预算/奖励/账单/工单/用量/订单/邀请零 token 裸值，前端零换算）；内部账本与成本核算仍以 token 为唯一事实源（双桶台账：发放额度+永久余额）；预充值永久有效、订阅首月半价（注册 30 天内）、余额不足即时中止、建单前按源规模预检；发票口径见运营 SOP
 - **邀请裂变**：推荐注册、邀请奖励；二级分销漏斗（限 2 级、付费永久包触发上级返佣、归因看板）
+- **任务中心与增长激励（★ 2026-09-22 #33）**：五类任务由服务端事件自动触发发放（`store/task_rewards.go` + `api/task_hooks.go`），奖励定义入库可由超管维护——每日登录 +100（3 天有效、日叠加）、每周发起翻译 +100（每天 1 次、每周 5 次上限、7 天有效）、邀请好友注册成功 +500（14 天有效、可叠加）、受邀好友任意充值 +1000 **永久**积分、上传专属知识库并解析成功 +600 **永久**积分（一次性）；临时积分落在独立台账 `kind='task'`（月度套餐重置、体验到期提醒均按各自 kind 过滤，不误伤任务桶），消耗遵循「先到期先消耗」，叠加发放顺延到期日；超管「任务重置」动作可把已订阅用户（可选全体）的任务临时积分余额拉回发放额度、**有效期不变**（审计留痕）
 - **企业集成**：SCIM 2.0 用户/组织同步（Entra/Okta 兼容，租户自助配置）、SSO/OIDC（飞书/钉钉）、TMX 双向翻译记忆交换（Trados/memoQ 对接）、VS Code 插件与 Chrome 划词扩展
 - **包级权限矩阵**：知识库包 读/写/管理 三级授权（部门管理员按范围、普通成员按授权硬闸）
 - **大文件导入**：KB/TM 批量导入分片上传 + 断点续传（>4MB 前端自动分片）
@@ -114,12 +115,12 @@ DB_DRIVER=postgres DB_DSN='postgres://user:pass@127.0.0.1:5432/translator?sslmod
 
 ```bash
 cd backend-go && go test -race ./...           # 单元测试（PG 方言助手/迁移锁/nil 防线回归，无 PG 实例自动跳过）
-bash scripts/uat/run_uat.sh                    # 全链路 UAT 主矩阵（PostgreSQL 方言=生产同构，发布闸门：内置 race 全量单测预检（方言钉死内存 SQLite，PG 覆盖归矩阵）+ API A/B 主链路 88（含 A1b 留资 8 断言、/pricing 归一 SPA 壳断言） + 功能/交易专项 326（含 T42 USDT 全链 mock_chain 驱动、T43/T44 修复回归、T45 密码找回全链路） + Playwright 45（mobile_uat/a11y 超时已根治，0 flaky；含落地页多语言 landing_i18n 与十语种整页抽查 all_langs_full）；首轮非零自动 --last-failed 复跑甄别 flaky）
+bash scripts/uat/run_uat.sh                    # 全链路 UAT 主矩阵（PostgreSQL 方言=生产同构，发布闸门：内置 race 全量单测预检（方言钉死内存 SQLite，PG 覆盖归矩阵）+ API A/B 主链路 94（含 A1b 留资 8 断言、/pricing 归一 SPA 壳断言、A7s 流式计量 done 帧前同步落库断言） + 功能/交易专项 436（含 T42 USDT 全链 mock_chain 驱动、T43/T44 修复回归、T45 密码找回全链路、任务系统奖励与双桶台账断言） + Playwright 54（mobile_uat/a11y 超时已根治，0 flaky；含落地页多语言 landing_i18n、十语种整页抽查 all_langs_full、TF2 翻译后余额/今日已耗即时上屏断言）；首轮非零自动 --last-failed 复跑甄别 flaky）
 bash scripts/uat/assist_uat.sh                 # AI 顾问 UAT（38 断言：C端链路/同义词/兜底改造/config 白名单与掩码/LLM 热加载/测试连通/CRUD/内嵌管理页/主库 Token 桥接与 env 优先级/复合意图让位 CI1·CI2）
-bash scripts/uat/multi_instance_e2e.sh         # 双实例 e2e（JWT 互通/USDT 对账锁/双桶并发勾稽/优雅停机，验证多实例红线）
+bash scripts/uat/multi_instance_e2e.sh         # 双实例 e2e（8 断言：JWT 互通/USDT 对账锁/双桶并发勾稽/优雅停机，验证多实例红线）
 PW_TARGET=e2e/xxx.spec.ts bash scripts/uat/run_uat.sh  # 迭代调试：只跑指定 e2e（缺省全量）
 DB_DRIVER=sqlite UAT_SKIP_RACE=1 bash scripts/uat/run_uat.sh  # SQLite 方言本地快跑（兼容参考）
-cd frontend-react && npx vitest run            # 前端单测（181 用例，含多语言 locales 全量覆盖闸门与浏览器语言检测/逐段流式上屏/编辑器虚拟化与计算收敛/留资表单/登录链路 jsdom 测试）
+cd frontend-react && npx vitest run            # 前端单测（43 文件 / 280 用例，含多语言 locales 全量覆盖闸门与浏览器语言检测/逐段流式上屏/编辑器虚拟化与计算收敛/留资表单/登录链路 jsdom 测试）
 cd sdk/typescript && npm test                  # TS SDK 行为级测试（8 用例）
 cd sdk/python && python3 -m unittest test_translator_sdk  # Python SDK 测试（13 用例）
 ```
