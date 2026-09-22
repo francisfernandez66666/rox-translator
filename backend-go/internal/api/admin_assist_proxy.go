@@ -35,6 +35,9 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -205,6 +208,39 @@ func (s *Server) handleAdminAssistStatus(w http.ResponseWriter, r *http.Request)
 		"token_src": tokSrc, // env / db / none
 		"message":   msg,
 	})
+}
+
+// assistAdminPutConfig 服务端→assist 的内部配置写入（★ 〇-LK：管理 Token 保存后同步）。
+// 与面板代理转发的区别：调用方是主后台自己（不经浏览器、不带主站鉴权），
+// 凭据由参数给出而非读生效链——因为 Token 刚被改掉， assist 侧认的还是旧值。
+// 参数：cred=assist 当前接受的 Token；body=assist /admin/config 的 PUT 报文。
+// 返回：是否写入成功；失败原因只进日志不进响应（Token 相关细节不外泄）。
+func (s *Server) assistAdminPutConfig(ctx context.Context, cred, body string) (bool, error) {
+	if strings.TrimSpace(cred) == "" {
+		return false, nil // 无凭据可推：等同于「需要重启 assist」，不是错误
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, s.assistBaseURL()+"/api/assist/admin/config", strings.NewReader(body))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("X-Assist-Admin", cred)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := assistClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 400 {
+		return false, errors.New("assist 返回 " + strconv.Itoa(resp.StatusCode))
+	}
+	// 上游明确 skipped（掩码回写拦截）不算同步成功，前端据此提示「助手侧尚未生效」
+	var out map[string]any
+	_ = json.Unmarshal(payload, &out)
+	if skipped, _ := out["skipped"].(bool); skipped {
+		return false, nil
+	}
+	return true, nil
 }
 
 // probeAssist 探活上游 /health（2s 超时，面板挂载即调用，不能拖慢首屏）。

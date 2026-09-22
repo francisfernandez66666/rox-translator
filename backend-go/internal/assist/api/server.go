@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,27 +29,85 @@ import (
 type Server struct {
 	db   *store.DB
 	eng  *engine.Engine
-	adm  string // admin token
+	adm  string // 启动期解析到的管理 Token（env 或主库桥接），是候选之一而非唯一
 	cors string
-	// sessKey 会话能力令牌（tok）的 HMAC 密钥：由 admin token 派生（重启后老访客仍可读
-	// 自己的历史）；admin token 为空时退化为进程随机密钥。★ P0-1（2026-09-18）：
-	// C 端接口从「sid 自证」升级为「sid+tok 能力令牌」，防止无鉴权读任意会话历史。
+	// sessKey 会话能力令牌（tok）的 HMAC 密钥。
+	// ★ 〇-LK（2026-09-22）口径变更：密钥**不再由管理 Token 派生**，而是首次启动随机生成
+	//   并持久化到自身 configs.sess_key。老做法把两件事绑在一起，导致「换管理 Token /
+	//   重启服务 = 所有访客的 tok 同时作废」，挂件历史随之读不出来（用户反馈的
+	//   「刷新一次页面就没了」的后端根因）。会话密钥与管理员凭据本就互不相干，分开存放后
+	//   轮换 Token 只影响管理面，访客会话不受牵连。
 	sessKey []byte
+	// ★ 〇-LK 管理 Token 热生效：生效值 = configs.admin_token（主后台面板托管）优先，
+	//   其次启动快照（env ASSIST_ADMIN_TOKEN / 主库桥接）。带 TTL 缓存，
+	//   面板推送写入 configs 后立即失效 → 改完即用，不必重启服务。
+	tokMu sync.RWMutex
+	tok   string
+	tokAt time.Time
 }
+
+// adminTokenTTL 管理 Token 的缓存时长。取 60s 与 engine 的 LLM 配置、store 的词表缓存同量级：
+// 既让「面板保存后最迟一分钟自然生效」（推送不到的兜底路径），也不给每个管理请求都加一次 SQLite 读。
+const adminTokenTTL = 60 * time.Second
 
 // NewServer 构建
 func NewServer(db *store.DB, eng *engine.Engine, adminToken, cors string) *Server {
 	s := &Server{db: db, eng: eng, adm: adminToken, cors: cors}
-	if adminToken != "" {
-		sum := sha256.Sum256([]byte("assist-sess|" + adminToken))
-		s.sessKey = sum[:]
-	} else {
-		s.sessKey = make([]byte, 32)
-		if _, err := rand.Read(s.sessKey); err != nil {
-			panic("assist.api 会话密钥初始化失败: " + err.Error())
+	// 会话密钥：读已持久化的 configs.sess_key；缺失则随机生成并落库（幂等，重启后老访客仍可用）
+	s.sessKey = loadOrGenSessKey(db)
+	s.tok = s.readAdminToken()
+	return s
+}
+
+// loadOrGenSessKey 取会话 HMAC 密钥（64 位 hex 存储，32 字节裸钥）。
+// 参数 db=assist 存储。返回：32 字节密钥；库里没有/格式损坏时生成新的并写回。
+func loadOrGenSessKey(db *store.DB) []byte {
+	if v := strings.TrimSpace(db.GetConfig("sess_key", "")); v != "" {
+		if b, err := hex.DecodeString(v); err == nil && len(b) == 32 {
+			return b
 		}
 	}
-	return s
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("assist.api 会话密钥初始化失败: " + err.Error())
+	}
+	if err := db.SetConfig("sess_key", hex.EncodeToString(b)); err != nil {
+		// 落库失败只影响「重启后老会话要重新 greet」，不影响本次运行，记日志不阻断启动
+		slog.Warn("assist 会话密钥持久化失败（本次运行仍可用，重启后访客需重新开场）", "err", err)
+	}
+	return b
+}
+
+// readAdminToken 直读当前生效的管理 Token：configs.admin_token > 启动快照。
+// 为什么库内值压过 env：这是「面板可管理」的前提——env 是部署侧保底，
+// 若它一直压着面板保存的值，改 Token 就永远要重启（与主后台模型配置「后台优先于环境变量」同口径）。
+func (s *Server) readAdminToken() string {
+	if v := strings.TrimSpace(s.db.GetConfig("admin_token", "")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(s.adm)
+}
+
+// adminToken 带 TTL 的生效 Token（可能为空 = 管理面关闭）。
+func (s *Server) adminToken() string {
+	s.tokMu.RLock()
+	cached, fresh := s.tok, time.Since(s.tokAt) < adminTokenTTL
+	s.tokMu.RUnlock()
+	if fresh {
+		return cached
+	}
+	v := s.readAdminToken()
+	s.tokMu.Lock()
+	s.tok, s.tokAt = v, time.Now()
+	s.tokMu.Unlock()
+	return v
+}
+
+// invalidateAdminToken 让缓存立即失效（configs.admin_token 刚被改过）。
+func (s *Server) invalidateAdminToken() {
+	s.tokMu.Lock()
+	s.tokAt = time.Time{}
+	s.tokMu.Unlock()
 }
 
 // sessTok 计算会话能力令牌：HMAC-SHA256(sessKey, sid) 的 hex。
@@ -127,12 +186,15 @@ func (s *Server) corsMW(next http.Handler) http.Handler {
 	})
 }
 
-// guard 管理端鉴权（X-Assist-Admin 头，常数时间比较）
+// guard 管理端鉴权（X-Assist-Admin 头，常数时间比较）。
+// ★ 〇-LK：生效值走 adminToken()（configs 优先、带 TTL），因此主后台面板保存新 Token 后
+// 这里即刻放行，不再「改一次 Token 重启一次服务」。
 func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// ★ P0-2 纵深防御：服务端未配置 Token 时管理面一律 401（防止空 adm 与空请求头
+		// ★ P0-2 纵深防御：服务端未配置 Token 时管理面一律 401（防止空生效值与空请求头
 		// 在 ConstantTimeCompare 下相等而误放行）
-		if s.adm == "" {
+		want := s.adminToken()
+		if want == "" {
 			writeJSON(w, 401, map[string]any{"error": "unauthorized"})
 			return
 		}
@@ -140,7 +202,7 @@ func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 		if tok == "" {
 			tok = r.URL.Query().Get("admin_token")
 		}
-		if subtle.ConstantTimeCompare([]byte(tok), []byte(s.adm)) != 1 {
+		if subtle.ConstantTimeCompare([]byte(tok), []byte(want)) != 1 {
 			writeJSON(w, 401, map[string]any{"error": "unauthorized"})
 			return
 		}
@@ -199,7 +261,13 @@ func (s *Server) handleGreeting(w http.ResponseWriter, r *http.Request) {
 	if text == "" {
 		text = s.eng.Greeting()
 	}
-	_ = s.db.AddMessage(sid, "assistant", text, nil)
+	// ★ 〇-LK（2026-09-22）欢迎语去重：旧实现每次 greeting 都无条件 AddMessage，
+	// 而挂件在同一 sid 上重复 greet 是常态（令牌失效自愈、跨页复用会话），
+	// 于是台账里堆出一串重复欢迎语：既让管理台「消息总数」虚高，也让
+	// history 恢复时看到好几条一模一样的开场白。已有消息的会话只回文本、不再落库。
+	if rows, _ := s.db.History(sid, 1); len(rows) == 0 {
+		_ = s.db.AddMessage(sid, "assistant", text, nil)
+	}
 	writeJSON(w, 200, map[string]any{
 		"session":  sid,
 		"tok":      s.sessTok(sid),
@@ -338,7 +406,18 @@ var configKeyWhitelist = map[string]bool{
 	// ★ 分级召回第 3 级（默认关闭）：embed_recall=on 启用向量召回，
 	// embed_model 为 OpenAI 兼容嵌入模型名（凭证复用 llm_base_url/llm_api_key）。
 	"embed_recall": true, "embed_model": true,
+	// ★ 〇-LK（2026-09-22）：管理 Token 也纳入可后台配置项，与 llm_api_key 同一套做法
+	//（掩码回显 + 掩码不回写 + 写完立即失效缓存）。写入需先通过 guard，
+	// 所以这条白名单只对「已经持有旧 Token 的调用方（主后台代理）」开放，不会降低门槛。
+	"admin_token": true,
 }
+
+// maskedCfgKeys 读取时按掩码回显的配置键（明文绝不进管理面响应体）。
+var maskedCfgKeys = map[string]bool{"llm_api_key": true, "admin_token": true}
+
+// hiddenCfgKeys 完全不在管理面列出的内部键：sess_key 是访客会话令牌的 HMAC 密钥，
+// 展示它对运维没有价值，却会把「凭据列表」变长一格。
+var hiddenCfgKeys = map[string]bool{"sess_key": true}
 
 // handleConfig GET 读取 / PUT 写入单项配置
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -352,15 +431,23 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if rows == nil {
 			rows = []store.Row{}
 		}
-		// api_key 掩码回显（防管理台/日志泄露明文），与主站 models 掩码口径一致
-		for i := range rows {
-			if store.Row(rows[i])["key"] == "llm_api_key" {
-				if v, _ := store.Row(rows[i])["value"].(string); v != "" {
-					store.Row(rows[i])["value"] = maskSecret(v)
+		// 敏感项掩码回显（防管理台/日志泄露明文），与主站 models 掩码口径一致：
+		// 内部键（sess_key）整行剔除，密钥类只回掩码。
+		out := make([]store.Row, 0, len(rows))
+		for _, raw := range rows {
+			row := store.Row(raw)
+			k, _ := row["key"].(string)
+			if hiddenCfgKeys[k] {
+				continue
+			}
+			if maskedCfgKeys[k] {
+				if v, _ := row["value"].(string); v != "" {
+					row["value"] = maskSecret(v)
 				}
 			}
+			out = append(out, row)
 		}
-		writeJSON(w, 200, map[string]any{"configs": rows})
+		writeJSON(w, 200, map[string]any{"configs": out})
 	case http.MethodPut:
 		var req struct {
 			Key   string `json:"key"`
@@ -375,8 +462,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]any{"error": "key not allowed: " + req.Key})
 			return
 		}
+		// 空值清除必须走主后台的显式 clear 流程：configs.admin_token 优先于启动快照，
+		// 若允许这里写空串等于给了一个「一把关掉管理面」的半吊子口子。
+		if req.Key == "admin_token" && strings.TrimSpace(req.Value) == "" {
+			writeJSON(w, 400, map[string]any{"error": "value not allowed for key: " + req.Key})
+			return
+		}
 		// 掩码值回写拦截：管理台保存时若 value 仍是掩码形态，视为未修改，跳过写库
-		if req.Key == "llm_api_key" && isMaskedSecret(req.Value) {
+		if maskedCfgKeys[req.Key] && isMaskedSecret(req.Value) {
 			writeJSON(w, 200, map[string]any{"ok": true, "skipped": true})
 			return
 		}
@@ -384,6 +477,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			observability.Error(r.Context(), "assist.api 配置写入失败", "key", req.Key, "err", err)
 			writeJSON(w, 500, map[string]any{"error": "db"})
 			return
+		}
+		// ★ 〇-LK：管理 Token 刚变，立即失效缓存，让新值即刻生效、旧值即刻失效（不必重启）
+		if req.Key == "admin_token" {
+			s.invalidateAdminToken()
+			observability.Info(r.Context(), "assist 管理 Token 已更新（配置热生效）")
 		}
 		writeJSON(w, 200, map[string]any{"ok": true})
 	default:

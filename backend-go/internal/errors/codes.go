@@ -25,6 +25,14 @@ const (
 	ErrNotFound     ErrorCode = "NOT_FOUND"
 	ErrConflict     ErrorCode = "CONFLICT"
 	ErrRateLimited  ErrorCode = "RATE_LIMITED"
+	// ErrMethodNotAllowed 路径存在但方法不在允许集合内（405）。
+	// 此前本包只有 4xx 的 400/401/403/404/409，代理类 handler 只能内联手搓 405，
+	// 补进枚举是为了让「统一错误出口」真的覆盖到传输层状态（见 api 包错误写法棘轮）。
+	ErrMethodNotAllowed ErrorCode = "METHOD_NOT_ALLOWED"
+	// ErrUpstreamUnavailable 同源代理的上游服务不可达/响应中断（502）。
+	// 与 ErrInternal(500) 区分：这不是本进程出错，而是被代理的服务没起来或断了，
+	// 运维与前端兜底策略完全不同（502 该提示「检查服务是否启动」，500 该查 trace_id）。
+	ErrUpstreamUnavailable ErrorCode = "UPSTREAM_UNAVAILABLE"
 )
 
 // 业务级错误码
@@ -104,6 +112,10 @@ func (e *APIError) HTTPStatus() int {
 		return http.StatusNotFound
 	case ErrConflict:
 		return http.StatusConflict
+	case ErrMethodNotAllowed:
+		return http.StatusMethodNotAllowed
+	case ErrUpstreamUnavailable:
+		return http.StatusBadGateway
 	case ErrInsufficientBalance:
 		return http.StatusPaymentRequired
 	case ErrInternal, ErrTranslationFailed, ErrModelUnreachable, ErrCircuitBreakerOpen, ErrQuotaReserved:

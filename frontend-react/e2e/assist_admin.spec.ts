@@ -11,6 +11,9 @@
 //   A5 普通用户即便直接敲 /admin 也拿不到管理数据（后端 403，前端不渲染面板）；
 //   A6 ★ 权限口径双向回归：超管侧「AI 助手」入口必须可见且可点开面板
 //      （A5 只守住「非超管看不到」这一向，minLevel 改错方向会连超管一起关死且 A5 反变绿）。
+//   A7 ★ 管理 Token 保存语义（〇-LK 对齐模型密钥范式）：面板只显示掩码态、输入框不回填、
+//      password + new-password、留空即禁用保存、env 占位时给锁定提示且不给「清除」按钮。
+//      故意不做真轮换：UAT 编排里 Token 由环境变量下发，轮换一次会把同批其余用例的代理链路一起改坏。
 // 运行：BASE_URL=http://127.0.0.1:8899 npx playwright test e2e/assist_admin.spec.ts
 //      （由 scripts/uat/run_uat.sh 统一编排：主服务 + assist-server + mock LLM）
 // ============================================================================
@@ -133,5 +136,42 @@ test.describe('后台 AI 助手管理面板（#34）', () => {
     // 点开后必须真的挂上原生面板（页签容器有 testid），而不是停在原面板/白屏
     await expect(page.getByTestId('assist-tabs'), '入口可点但面板未挂载').toBeVisible({ timeout: 20000 });
     await expect(nav.getByRole('button', { name: 'AI 助手', exact: true })).toHaveClass(/lc-side-item--active/);
+  });
+
+  // ★ A7（〇-LK，2026-09-22）：用户口径「我截图的配置，请参考我其他 llm 配置的方式重新做」。
+  //   Token 区改成与 ModelsP 同一套掩码语义后，这几条是浏览器层的真值：
+  //   面板只显示掩码（明文永不下发）、输入框永不回填、留空禁点保存、
+  //   env 占位时给锁定提示并且**不给**清除按钮（清了库内值也不影响生效位，按钮只会误导）。
+  //   不做真轮换：UAT 的 Token 由 ASSIST_ADMIN_TOKEN 下发，改一次会把同批其余用例的代理链路一起换掉。
+  test('A7 管理 Token 区：掩码态显示 + 留空不可保存 + env 占位锁定提示', async ({ page }) => {
+    await login(page, 'admin', process.env.ADMIN_PASS || 'Admin@1234');
+    const bodies: string[] = [];
+    page.on('response', async (r) => { if (r.url().includes('/api/admin/assist/token')) bodies.push(await r.text().catch(() => '')); });
+
+    await openAssist(page);
+    const input = page.getByLabel('管理 Token');
+    await expect(input, 'Token 区必须渲染').toBeVisible({ timeout: 20000 });
+    await expect(input).toHaveAttribute('type', 'password');
+    await expect(input).toHaveAttribute('autocomplete', 'new-password');
+    // 输入框永不回填（掩码也只出现在只读文本里，不出现在 value 上）
+    await expect(input).toHaveValue('');
+    await expect(page.locator('body')).toContainText(/明文不经过浏览器/, { timeout: 20000 });
+    // 已配置：出现掩码串（形如 abcd****wxyz），且响应体里没有明文
+    await expect(page.locator('body')).toContainText(/已配置/);
+    await expect(page.locator('code', { hasText: /\*{4}/ }).first()).toBeVisible();
+    await expect.poll(() => bodies.join('\n'), { timeout: 15000 }).toContain('"masked"');
+    expect(bodies.join('\n'), 'Token 接口响应体不得出现明文 Token').not.toContain(ASSIST_TOKEN);
+
+    const save = page.getByRole('button', { name: '保存 Token' });
+    await expect(save, '留空时保存必须禁用（旧版空串=清除库内，属误删风险）').toBeDisabled();
+    await input.fill('e2e-placeholder');
+    await expect(save).toBeEnabled();
+    //  ★ 负向锁：不把测试值提交上去（点保存会真轮换），所以清空后回到禁用态即可
+    await input.fill('');
+    await expect(save).toBeDisabled();
+
+    // env 覆盖（run_uat.sh 就是用环境变量下发 Token 的）：锁定提示 + 无清除按钮
+    await expect(page.locator('body')).toContainText(/占住了生效位/);
+    await expect(page.getByRole('button', { name: '清除库内 Token' })).toHaveCount(0);
   });
 });

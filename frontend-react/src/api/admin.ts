@@ -125,24 +125,38 @@ export async function meContext(): Promise<AdminResp> {
 
 // ==================== AI 助手管理台 Token（★ 改造 1A，仅超管） ====================
 
-/** AI 助手管理台 Token 响应：token=明文（仅超管会话可见）；source=env/db/none */
+/**
+ * AI 助手管理 Token 的状态出参（★ 〇-LK 对齐 ModelsP 的密钥范式）。
+ * 后端 GET 只回掩码态，明文永不下发：token 字段已随 #34 原生面板改造一并删除
+ * （旧 iframe 需要它写 localStorage，原生面板由服务端注入请求头，浏览器不需要任何凭据）。
+ */
 export interface AssistTokenResp extends AdminResp {
-  token?: string
   /** 生效来源：env（部署侧环境变量）/ db（库内密文，可在后台轮换）/ none（未配置） */
   source?: 'env' | 'db' | 'none' | string
-  has_token?: boolean
+  /** 是否已生效配置（source !== none 的便捷位） */
+  set?: boolean
+  /** 生效 Token 的掩码（前4****后4）；未配置时为 '****'，按 set 判定是否显示 */
+  masked?: string
+  /** 库内密文解密后的掩码——env 覆盖时仍能看出库里存的是哪一个 */
+  db_masked?: string
+  /** true = 环境变量占住生效位，库内值要等 env 移除后才生效（面板据此置灰并解释） */
+  env_overridden?: boolean
+  /** POST 才回：本次是否真的写了库（留空/掩码回写 = false） */
+  changed?: boolean
+  /** POST 才回：是否已同步到助手服务（false = 助手侧需重启才认新 Token） */
+  pushed?: boolean
 }
 
-/**
- * 读取 AI 助手管理台 Token（仅超管）。
- * 用途：AssistP 免去用户手工粘贴 Token —— 拉到后写入同源 localStorage('assist_tok')，
- * iframe（/assist-api/assist/admin，同源）加载时自行读取并校验。
- */
+/** 读取 AI 助手管理 Token 状态（仅超管；只回掩码与来源，不回明文） */
 export async function adminAssistToken(): Promise<AssistTokenResp> {
   return request('/api/admin/assist/token', { headers: authHeaders() })
 }
 
-/** 轮换/清除 AI 助手管理台 Token（仅超管；空串=清除库内配置并回落 env）。前端在调用成功后重新注入同源 localStorage 并重建 iframe 使新 Token 生效。 */
-export async function adminAssistTokenRotate(token: string): Promise<AdminResp> {
-  return request('/api/admin/assist/token', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ token }) })
+/**
+ * 保存（轮换）或清除 AI 助手管理 Token（仅超管）。
+ * 与模型密钥同一套语义：token 留空 = 不修改；清除必须显式传 clear=true，
+ * 否则「清空输入框再保存」会把凭据误删。返回体带 changed/pushed 供吐司分级提示。
+ */
+export async function adminAssistTokenRotate(token: string, clear = false): Promise<AssistTokenResp> {
+  return request('/api/admin/assist/token', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ token, clear }) })
 }

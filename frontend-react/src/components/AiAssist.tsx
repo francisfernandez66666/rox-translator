@@ -2,7 +2,8 @@
 // components/AiAssist.tsx — AI 销售/客服常驻挂件
 // 常驻范围：除登录/注册页外全站显示（官网落地页/前台工作台/管理后台）。
 // 能力：会话引导（欢迎词+快捷提问）、AI 对话、推荐功能入口按钮（深链跳转）、
-//       历史恢复（localStorage 会话复用）、离线降级提示。
+//       历史恢复（★ 三层：localStorage 消息缓存即时回显 → 服务端 history 对账 → 新会话 greet）、
+//       离线降级提示。
 // 接口：api/assist.ts（ai-assist 独立服务，同源 /assist-api 反代）
 //
 // 动效（2026-09-18 接入 css/motion.css）：
@@ -17,6 +18,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import {
   assistChat, assistGreet, assistHistory,
   getAssistSid, setAssistSid, setAssistTok,
+  loadAssistMsgs, saveAssistMsgs,
   type AssistAction, type AssistChatResp, type AssistMsg,
 } from '@/api/assist'
 import { Icon, ArrowRightIcon } from '@/ui/langcross/src'
@@ -90,12 +92,21 @@ export default function AiAssist() {
   // ★ initedRef 而非 effect 依赖做「一次性」：本 effect 依赖 location.pathname/search，
   //   用户在站内跳转时它会重跑；没有这个 ref 每次跳页都会把历史冲掉、重新 greet 一个新会话。
   //   注意它只「拉一次」，不锁面板状态——收起再展开仍复用已加载的会话。
+  // ★ 恢复顺序（2026-09-22 用户反馈「刷新一次页面就没了」）：本地缓存 → 服务端 history → 新会话 greet。
+  //   缓存负责「立刻看见上次聊的内容」，服务端负责「跨设备/换浏览器的权威内容」；
+  //   只有两者都拿不到东西时才 greet，避免把用户已经看过的对话覆盖成一句欢迎词。
   useEffect(() => {
     if (!expanded || initedRef.current) return
     initedRef.current = true
     ;(async () => {
+      const cache = loadAssistMsgs()
+      if (cache.msgs.length) {
+        setBubbles(cache.msgs)
+        sidRef.current = cache.sid || getAssistSid()
+        scrollBottom()
+      }
+      const sid = getAssistSid()
       try {
-        const sid = getAssistSid()
         if (sid) {
           // 历史恢复：只取 user/assistant 两种角色（接口返回的行不保证都是对话气泡，
           // 其余角色直接丢弃而不是渲染成空框）；actions 可能以 JSON 文本列回传，故走 safeParse
@@ -112,6 +123,9 @@ export default function AiAssist() {
             return
           }
         }
+        // 服务端没有可恢复的历史（无 sid，或 tok 失效被 401 归一清掉）：
+        // 本地有缓存就到此为止——不发 greet 覆盖已见内容，等用户下次发送时由 send 的 401 自愈换新会话
+        if (cache.msgs.length) { setOffline(!sid); return }
         // 新会话：拉欢迎词 + chips（★ P0-1：落存服务端下发的能力令牌 tok，后续 history/chat 随带）
         const g = await assistGreet(location.pathname + location.search)
         sidRef.current = g.session
@@ -122,11 +136,20 @@ export default function AiAssist() {
         setOffline(false)
         scrollBottom()
       } catch {
+        // 请求本身失败（断网/反代不可达）：有缓存只标离线，无缓存才降级成一句提示
+        if (!cache.msgs.length) setBubbles([{ role: 'assistant', content: t('chat.assistOffline') }])
         setOffline(true)
-        setBubbles([{ role: 'assistant', content: t('chat.assistOffline') }])
       }
     })()
   }, [expanded, location.pathname, location.search, scrollBottom, t])
+
+  // 缓存回写：气泡列表一变就落盘（空数组不写——恢复完成前的瞬间不该把上次内容清掉）。
+  // 走 effect 而不是在每个 setBubbles 调用点补写，是为了不让「发送/回复/恢复」三条路径各写一遍、
+  // 漏一条就出现缓存与界面不一致。
+  useEffect(() => {
+    if (!bubbles.length) return
+    saveAssistMsgs(sidRef.current || getAssistSid(), bubbles)
+  }, [bubbles])
 
   // 发送消息
   // busy 同时充当「并发锁」与输入框 disabled 的来源：挂件全站常驻，点推荐入口跳页后

@@ -764,6 +764,8 @@ export const baseEn: Record<string,string> = {
   // ★ 2026-09-21 #34：assistant admin proxy audit actions
   'audit.action.assist_admin_write': "Update AI assistant config",
   'audit.action.assist_token_read': "Read AI assistant admin token",
+  'audit.action.assist_token_rotate': 'Rotate AI assistant admin token',
+  'audit.action.assist_token_clear': 'Clear AI assistant admin token',
   // ★ #41 free plan claim (plans_api.go LogAudit), needs all 12 locales
   'audit.action.package_free_claim': "Claim free plan",
 }

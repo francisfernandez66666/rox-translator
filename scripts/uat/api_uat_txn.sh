@@ -111,6 +111,12 @@ pv(){ python3 -c "import sys,json;d=json.load(sys.stdin);print(d$1)"; }
 sq(){ dbq "$1"; }
 post(){ local h="$1" body="$2" path="$3"; curl -s $B"$path" -H "$h" -H "$J" -d "$body"; }
 get(){ local h="$1" path="$2"; curl -s $B"$path" -H "$h"; }
+# mny_norm — 金额文本的方言归一（★ 2026-09-23 SQLite 快跑假红修复）
+# 为什么需要：同一列 PG 的 numeric 直读回 "5" / "10.8"，SQLite 的 REAL 直读回 "5.0" / "5.00"，
+# 值完全相同、文本不同。金额锁比的是「直读回来的字符串」，不归一就会让本地快跑
+# （DB_DRIVER=sqlite）恒红 T51/T54 两条，假红会钝化对真回归的敏感度。
+# 只对纯数字字段动手（含 | 分隔的多列拼接），币种一类的文本字段原样保留。
+mny_norm(){ printf '%s' "$1" | awk -F'|' 'BEGIN{OFS="|"} {for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+\.[0-9]+$/) { sub(/0+$/, "", $i); sub(/\.$/, "", $i) } print }'; }
 
 AT=$(tok $ADMIN_USER $ADMIN_PASS); AH="Authorization: Bearer $AT"
 T1=$(tok uatuser_a uatpass123); H1="Authorization: Bearer $T1"
@@ -1588,7 +1594,7 @@ curl -s $B/api/admin/packages/create -H "$AH" -H "$J" -d "{\"tenant_id\":$T51D,\
 R=$(post "$H51" "{\"code\":\"uat_t51_low\",\"coupon\":\"$C51ANY\"}" /api/package/subscribe)
 ck T51-subscribe-coupon '"success":true' "$R"
 OID51S=$(echo "$R" | pv '.get("order",{}).get("id") or 0')
-AM51S=$(sq "SELECT amount_money FROM orders WHERE id=$OID51S" | tr -d '[:space:]')
+AM51S=$(mny_norm "$(sq "SELECT amount_money FROM orders WHERE id=$OID51S" | tr -d '[:space:]')")
 RD51S=$(get "$AH" "/api/admin/coupons/redemptions?coupon_id=$CID51ANY")
 # 折后实付必须与流水的 paid_money 一致（应收单一事实源：订单、流水、收银台三处同数）
 if [ -n "$AM51S" ] && echo "$RD51S" | grep -qE "\"paid_money\":$AM51S([^0-9]|$)"; then
@@ -1863,7 +1869,7 @@ ck T54-me-quote '"quote_currency":"CNY"' "$MP54"
 #   2026-09-14 拍板）——报价快照落在折让之后，恰好锁住「快照跟随最终应收」口径。
 R=$(post "$H54" '{"code":"uat_t54_pkg"}' /api/package/subscribe)
 OID54=$(echo "$R" | pv '.get("order",{}).get("id") or d.get("id") or 0')
-SNAP54=$(sq "SELECT currency||'|'||fx_rate||'|'||money_cny FROM orders WHERE id=$OID54" | tr -d '[:space:]')
+SNAP54=$(mny_norm "$(sq "SELECT currency||'|'||fx_rate||'|'||money_cny FROM orders WHERE id=$OID54" | tr -d '[:space:]')")
 [ "$SNAP54" = "CNY|1|10.8" ] && { PASS=$((PASS+1)); echo "PASS|T54-order-quote-snapshot"; } || { FAIL=$((FAIL+1)); echo "FAIL|T54-order-quote-snapshot(want CNY|1|10.8(首月半价后实付) got $SNAP54)"; }
 AMT54=$(sq "SELECT amount_money FROM orders WHERE id=$OID54" | tr -d '[:space:]')
 [ "${AMT54%.*}" = "10" ] && { PASS=$((PASS+1)); echo "PASS|T54-settlement-still-cny($AMT54)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T54-settlement-still-cny(amount_money=$AMT54 want 10.8(半价实付))"; }
