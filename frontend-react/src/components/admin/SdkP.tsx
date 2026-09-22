@@ -12,6 +12,8 @@
  * - 三端卡片：包名 / 安装命令 / 快速开始代码片段（一键复制）
  * - 版本与变更：当前 SDK 基线版本 + CHANGELOG 位置说明
  * - 鉴权提示：SDK 使用开放 API Key（引导至「开放 API」子 tab 创建）
+ * - ★ 2026-09-23 起另挂「浏览器划词插件」下载卡：zip 由 `scripts/build_extension.sh` 产出、
+ *   随 `public/extensions/` 进 dist，本站只做同源直下，没有应用商店渠道
  */
 
 import { useState } from 'react'
@@ -24,6 +26,8 @@ interface SdkCard {
   install: string; code: string;
 }
 const SDK_VERSION = '1.0.0'
+// 浏览器划词插件的托管下载名（latest 是稳定链接，带版本号的同包也在同目录，便于回溯）
+const EXT_ZIP = '/extensions/langcross-extension-latest.zip'
 // SDK 卡片配置（各语言 SDK 的安装/示例代码块）
 const CARDS: SdkCard[] = [
   {
@@ -85,6 +89,17 @@ export default function SdkP() {
           <pre style={{ fontSize: 12, background:'#0E1014', padding:'8px 10px', borderRadius: 6, overflowX:'auto', margin: 0, whiteSpace:'pre'}}>{c.code}</pre>
         </div>
       ))}
+
+      {/* ★ 2026-09-23 补扩展交付渠道：zip 由 scripts/build_extension.sh 产出并随 public/ 进 dist，
+          这里只挂 latest 固定名——版本号唯一事实源是 extension/manifest.json，界面不复刻第二份，
+          否则每发一版都要改前端（历史上「改了没处发」就是因为整条链都不存在）。 */}
+      <div style={{ border: '1.2px solid var(--lc-border-card)', borderRadius: 10, padding: 14, background: 'var(--lc-panel)', boxShadow: 'var(--lc-panel-highlight)' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <b>{t('sdk.extTitle')}</b>
+          <a href={EXT_ZIP} style={{ fontSize: 13 }}>{t('sdk.extDownload')}</a>
+        </div>
+        <p style={{ fontSize: 12, color: 'var(--adm-hint)', margin: 0 }}>{t('sdk.extDesc')}</p>
+      </div>
 
       <p style={{ fontSize: 12, color: 'var(--adm-faint)', margin: 0 }}>{t('sdk.keysHint')} · {t('sdk.changelogHint')}</p>
     </div>
