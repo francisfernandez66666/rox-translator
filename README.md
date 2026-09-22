@@ -115,12 +115,12 @@ DB_DRIVER=postgres DB_DSN='postgres://user:pass@127.0.0.1:5432/translator?sslmod
 
 ```bash
 cd backend-go && go test -race ./...           # 单元测试（PG 方言助手/迁移锁/nil 防线回归，无 PG 实例自动跳过）
-bash scripts/uat/run_uat.sh                    # 全链路 UAT 主矩阵（PostgreSQL 方言=生产同构，发布闸门：内置 race 全量单测预检（方言钉死内存 SQLite，PG 覆盖归矩阵）+ API A/B 主链路 96（含 A1b 留资 8 断言、/pricing 归一 SPA 壳断言、A7s 流式计量 done 帧前同步落库断言） + 功能/交易专项 479（含 T42 USDT 全链 mock_chain 驱动、T43/T44 修复回归、T45 密码找回全链路、任务系统奖励与双桶台账断言） + Playwright 54（mobile_uat/a11y 超时已根治，0 flaky；含落地页多语言 landing_i18n、十语种整页抽查 all_langs_full、TF2 翻译后余额/今日已耗即时上屏断言）；首轮非零自动 --last-failed 复跑甄别 flaky）
+bash scripts/uat/run_uat.sh                    # 全链路 UAT 主矩阵（PostgreSQL 方言=生产同构，发布闸门：内置 race 全量单测预检（方言钉死内存 SQLite，PG 覆盖归矩阵）+ API A/B 主链路 96（含 A1b 留资 8 断言、/pricing 归一 SPA 壳断言、A7s 流式计量 done 帧前同步落库断言） + 功能/交易专项 510（含 T42 USDT 全链 mock_chain 驱动、T43/T44 修复回归、T45 密码找回全链路、任务系统奖励与双桶台账断言、★ T55 支付渠道凭据管理台配置：白名单键不留半套凭据/敏感项密文与掩码/掩码再提交不覆盖真值/库配置端到端流到下单链路/fail-closed 不出 mockpay） + Playwright 54（mobile_uat/a11y 超时已根治，0 flaky；含落地页多语言 landing_i18n、十语种整页抽查 all_langs_full、TF2 翻译后余额/今日已耗即时上屏断言）；首轮非零自动 --last-failed 复跑甄别 flaky）
 bash scripts/uat/assist_uat.sh                 # AI 顾问 UAT（38 断言：C端链路/同义词/兜底改造/config 白名单与掩码/LLM 热加载/测试连通/CRUD/内嵌管理页/主库 Token 桥接与 env 优先级/复合意图让位 CI1·CI2）
 bash scripts/uat/multi_instance_e2e.sh         # 双实例 e2e（8 断言：JWT 互通/USDT 对账锁/双桶并发勾稽/优雅停机，验证多实例红线）
 PW_TARGET=e2e/xxx.spec.ts bash scripts/uat/run_uat.sh  # 迭代调试：只跑指定 e2e（缺省全量）
 DB_DRIVER=sqlite UAT_SKIP_RACE=1 bash scripts/uat/run_uat.sh  # SQLite 方言本地快跑（兼容参考）
-cd frontend-react && npx vitest run            # 前端单测（47 文件 / 308 用例，含多语言 locales 全量覆盖闸门与浏览器语言检测/逐段流式上屏/编辑器虚拟化与计算收敛/留资表单/登录链路 jsdom 测试、★ #74 宽限期提示与 #75 多币种报价配置/商店卡双币渲染的 PlansP dom 测试）
+cd frontend-react && npx vitest run            # 前端单测（47 文件 / 324 用例，含多语言 locales 全量覆盖闸门与浏览器语言检测/逐段流式上屏/编辑器虚拟化与计算收敛/留资表单/登录链路 jsdom 测试、★ #74 宽限期提示与 #75 多币种报价配置/商店卡双币渲染的 PlansP dom 测试、★ src/styles/readability.test.ts「UI 交付真值闸门」——令牌值等值锁 + 历次提亮产物负向清零）
 cd sdk/typescript && npm test                  # TS SDK 行为级测试（8 用例）
 cd sdk/python && python3 -m unittest test_translator_sdk  # Python SDK 测试（13 用例）
 ```
