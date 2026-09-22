@@ -1,8 +1,37 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-22（〇-LI：白色两档定档 + 后端直出页/扩展面单色还原 + 四类真值锁，代码已推送 5f04be5·主站已部署 2026-09-22（前后端两件 + web 换源 + assist 外置页同步）·演示站未部署）
+> 最后更新：2026-09-22（〇-LJ：即时翻译工作台形态回退为两段式（功能一项未减），代码已推送 8d88313·主站部署待用户下令·演示站未部署）
 
-### 〇-LI、白色两档定档与后端/扩展渲染面还原批（2026-09-22，★ 代码已推送 5f04be5·文档仅本地不推送·主站已部署（translator-server + translator-assist 两二进制 + web 换源）·演示站未部署）
+### 〇-LJ、即时翻译工作台形态回退批（2026-09-22，★ 代码已推送 8d88313·主站未部署（纯前端批，待用户下令）·演示站未部署）
+
+> 来源：用户 2026-09-22 反馈「我原来的即时翻译气泡对话框去哪里了，怎么变成这种输入然后下方出结果的样式了」
+> → 定位到 〇-XLVIII 的 #36（提交 `106ce50`）把「吸顶输入卡 + 下方气泡列表」合并成一张吃满整屏的对话框，
+> 与〇-L/〇-LI 的白色与字阶还原无关（那两批只动尺寸与配色，未动 DOM 形态）。
+> 用户裁决「**回退形态，保留功能**」：只还原两段式结构，#36 之后新增的能力一项不减。
+
+| 块 | 交付 |
+|----|------|
+| **形态回退（`ChatWindow.tsx`）** | `.cw-dialog`（框头/滚动区/框脚三段、flex 吃满整屏）整体撤除，恢复**一块滚动舞台 `.cw-stage`**：第一块是 **吸顶输入卡 `.cw-card`**（`position:sticky; top:0; zIndex:5` 走内联，卡头 原文标签/自动检测/搜索·导出·清空 → textarea → 目标语言 + 语种 chips → 双模式/缩翻/主按钮），其下依次是欢迎空态与 **`.cw-results` 译文气泡列表**；`autoResize` 上限由「视口 40%、520px」回到吸顶卡的「220px、35% 视口」预算（卡再高会把下方译文挤没，长文该走文档翻译工单页） |
+| **功能保留清单（一项未减）** | 会话搜索·导出 Markdown·清空、缩翻 `max_length` 接文本链路、字数预估与余额/组织预算条、目标语言多选与 chips、气泡上下文（assistant 取上一条 user 为 source）与反馈入口、离线横幅与重试、专业校对/快速双模式；**文件翻译入口维持 #36 的下线决定**（统一走「文档翻译」工单页，工作台仍零 `input[type=file]`） |
+| **三层形态锁改向** | ① `ChatWindow.dom.test.tsx` ①：`.cw-stage` 含 `.cw-card` 与 `.cw-results`、卡片在结果列表之前（`compareDocumentPosition & FOLLOWING`）、textarea 在卡内不在结果区、气泡在 `.cw-results` 内，吸顶由 `card.style.position==='sticky'` 钉（jsdom 无法解析 `<style>` 层叠，故读内联值）；② `pixel_uat.spec.ts` P2b 改名「工作台两段式结构」并加 `getComputedStyle(card).position==='sticky'` 运行时锁，字阶/灰阶/顶栏三档等值锁原样保留；③ `mobile_uat.spec.ts` 等待选择器 `.cw-dialog`→`.cw-card`。截图产物随改名重导：`p2b_workbench_merged.png` → `p2b_workbench_two_stage.png` |
+| **文案十二语种同步** | `chat.welcomeSub` 由「译文会直接显示在这个对话框里」改为「**译文会显示在输入框下方**，支持 40+ 语言互译。」，`panels/chat.ts`（zh/en）+ 10 份 `locales/*.ts` 共 12 语种一次改齐；`theme.css` 聊天区注释同步（`.chat-scroll` 与 `.cw-dialog*` 均标为已无消费者、勿再复活） |
+
+> 闸门（2026-09-22 全绿）：`tsc --noEmit` 干净；vitest **47 files·344 tests**；`vite build` → `index-DE2xH-NT.js` / `index-DtdiKHPp.css`；
+> `UAT_SKIP_RACE=1 bash scripts/uat/run_uat.sh`（PG 方言）：API A/B **96/0**、交易专项 T **510/0**、
+> **Playwright 55 passed + 1 skipped**（P2b 以「两段式」新锁通过，0 flaky），`RUN_UAT_EXIT=0`。
+> 本批为纯前端形态批，未碰 `backend-go/`，故后端单测与 assist 侧不重跑（〇-LI 已全绿）。
+> **发布链（含一次口径偏离，如实记录）**：代码提交 **8d88313**（16 文件，零 .md / 零流程图）已推送 `origin/autosales`。
+> ⚠️ 因 `autosales` 是线性单分支、上批两份「仅本地」文档提交（`d9ae957`、`6a68c25`）与并轨 merge（`7acefe3`）
+> 正好排在本次代码提交之前，push 连带把它们推到了远端——**「文档不外推」在本批被祖先链击穿**。
+> 不改写已推送历史（force-push 属破坏性且需用户明令），故只做口径修正：此后若仍要求「文档仅本地」，
+> 必须把文档提交放到**永不推送的独立分支**（如 `docs-local`），在 `autosales` 上只落代码提交；
+> 否则默认按「文档随代码一并入远端」处理，不再声明「仅本地」。
+> **待用户决策（本批未擅动）**：①主站部署（纯前端换源，需用户下令，见 部署指南）；②文档提交是否迁到永不推送的独立分支（上一条口径偏离的根治办法）；
+> ③`/opt/translator/web_old.*` 39 份归档（67M）是否清理；④演示站落后 4 个批次是否补部署；
+> ⑤assist `kb_entries` 关键词手工同步；⑥浏览器扩展（`extension/`）至今**无任何交付渠道**（无打包脚本、无托管 zip、manifest 仍 1.0.0），是否补发版链。
+
+
+### 〇-LI、白色两档定档与后端/扩展渲染面还原批（2026-09-22，★ 代码已推送 5f04be5·文档当时仅本地提交（★ 后随 〇-LJ 的代码 push 被祖先链带入远端，见 〇-LJ 发布链）·主站已部署（translator-server + translator-assist 两二进制 + web 换源）·演示站未部署）
 
 > 来源：〇-L 之后用户仍判「白色不纯、偏蓝显脏」。逐像素取证把根因定位到两类，而不是第三轮提亮：
 > ① **白色两档被混用**——主按钮 / 主 CTA / 反相白卡 / 徽标 / 用户气泡 / FAB 这些"实心白件"取了
@@ -25,7 +54,7 @@
 | **浏览器扩展还原** | `extension/popup.html` 靛蓝主色→纯黑单色（主按钮白底黑字、输入走 #0A0B0D + 1.2px 描边、成功态不标绿、select 内联样式并入统一规则）；`extension/content.css` 划词圆钮→纯白实心件（与主站 FAB 同档）、结果气泡→#0E1014 面板 + 1.2px #3A404C、术语高亮自造 #FFD54F 归位 §1.1 警示琥珀 #D29922 |
 | **真值锁（四类闸门各补一处）** | ① `readability.test.ts` 新增 **G 段**：白底件逐点等值（11 点 + ErrorBoundary 内联特例）+ 按钮/CTA/徽标/气泡类选择器禁取 #E7E9EA/`var(--lc-text|-text-1|-success)` 做背景的负向锁（CSS-in-JS 选择器需规范化反引号，末级裸元素 i/span/svg 豁免）；新增 **H 段**：扩展 popup/content.css 旧靛蓝·浅底·绿族清零 + 取 §1.1 令牌。② 新建 `backend-go/internal/api/public_ui_test.go`：/docs 三页 + /openapi/docs + office 窗格逐页断言，外加 **`TestAllServedHtmlPagesMonochrome` 全量扫描**——凡源码含 `<!DOCTYPE html` 即进射程（这个盲区已被发现四次，逐页点名必然再漏）。③ 新建 `internal/assist/web/admin_ui_test.go`：assist 管理台令牌等值 + 主按钮白底 + 遮罩 72% 黑，扫描前先剥 `/* */`、`<!-- -->`、`//` 注释（本仓「旧值 → 真值」说明注释里全是历史色值，不剥就是命中注释自己的老坑）。④ `pixel_uat.spec.ts` 新增 **P6b**（营销页主投/收尾白块运行时 `getComputedStyle` = rgb(255,255,255)）、**P6c**（/openapi/docs 纯黑底 + 语言钮白底；/office/taskpane 走 fetch 校样式壳，避开 Office.js 外网依赖） |
 | **闸门实跑** | `go build`/`vet`/`go test -race ./...` **GO_TEST_EXIT=0**（40 包含测试全过、零 FAIL 零 DATA RACE）；`tsc` 干净；vitest **47 文件 / 344 用例**（本批 +20：G 段 15 + H 段 5）；`vite build` 成功（`index-yT1ZziZi.js` / `index-DtdiKHPp.css`）；`run_uat.sh` PG 主矩阵 **RUN_UAT_EXIT=0**：A/B **96/0** + T 套件 **510/0** + Playwright **55 passed / 1 skipped**；`assist_uat.sh` **38/0**；`multi_instance_e2e.sh` **8/0**。本地预览实测 `.lc-mkt-btn--pri`/`.lc-cta`/`.lc-plan--pro` = rgb(255,255,255)、body = rgb(0,0,0) |
-| **发布链** | 代码提交 **5f04be5**（16 文件，零 .md / 零流程图）已推送 `origin/autosales`：本地曾排在两份「仅本地」文档提交之后，为守住「文档不外推」，在 48c8c22 上 cherry-pick 出纯代码提交后推送，再 merge 并轨（rebase 改写历史被自动化安全闸门拦下，故用 merge，不改写已推送内容）。文档更新只本地提交 |
+| **发布链** | 代码提交 **5f04be5**（16 文件，零 .md / 零流程图）已推送 `origin/autosales`：本地曾排在两份「仅本地」文档提交之后，为守住「文档不外推」，在 48c8c22 上 cherry-pick 出纯代码提交后推送，再 merge 并轨（rebase 改写历史被自动化安全闸门拦下，故用 merge，不改写已推送内容）。文档更新只本地提交〔★ 更正：这两份「仅本地」文档提交已随 〇-LJ 的代码 push 进入远端，见 〇-LJ 发布链〕 |
 | **主站部署与线上验收** | 2026-09-22 21:19 两件二进制 mv rename 替换（`translator-server` `fa2f8ca0…` / `translator-assist` `798d420c…`，旧件留 `.bak.20260922_211905`）+ `/opt/translator/web` 两步换源（`index-yT1ZziZi.js`/`index-DtdiKHPp.css` 首页已引用，旧目录留 `web_old.20260922_211951`），`deploy_check.sh` 内网 **11/11** · 公网 **8/8**。线上四渲染面令牌实测：/docs 三页与 /openapi/docs 旧色 **0 命中** + `--lc-bg:#000000`、/office/taskpane.html 走 `var(--lc-bg)`/`var(--lc-white)`（唯一"命中"落在我自己写的历史色注释里，非样式值）、CSS 已含 `--lc-fill-white: #FFFFFF`。⚠️ **验收时抓到一处真缺陷**：assist 管理台页面换二进制后线上仍旧配色——生产 `ASSIST_WEB=/opt/ai-assist/web` 让**外置 09-17 旧页覆盖 `go:embed` 内嵌新页**（外置优先，`internal/assist/api/server.go` adminPage）。当日两步 `mv` 同步外置 `admin.html`（留 `admin.html.bak.20260922_212841`）+ `systemctl restart ai-assist`，公网 `/assist-api/assist/admin` 复测 200 / 19139 字节、`--bg:#000000`·`--white:#FFFFFF`·`background:var(--white);color:#000000` 齐、旧配色 0 命中。口径已入 AGENTS §5 与《部署指南》§十三：**今后碰 `internal/assist/web/*`，只换二进制不够，必须同步外置页或撤销 `ASSIST_WEB`。**同日 21:45 收尾（用户下令撤销）**：`secrets.env` 的 `ASSIST_WEB` 行改注释（备份 `/root/ai-assist.secrets.env.bak.20260922_214541`）、外置旧页挪走留档 `/opt/ai-assist/web/admin.html.inert.20260922_214541`、`systemctl restart ai-assist`。复测：进程 env `ASSIST_WEB` 计数 0、`/assist/admin` 由 `go:embed` 直出（本机与公网 sha256 `a9c3495e…` 逐字节等于仓库 `internal/assist/web/admin.html`）、`/health` ok、journal 零 error、挂件链路通过（greeting 签发 tok → chat 出 reply，无 tok 401）。**内嵌页自此为单一事实源，改 `internal/assist/web/*` 只需换二进制**；`ASSIST_SEED` 仍保留（只影响首启灌 seed） |
 
 > 遗留：生产 `ai-assist` 库 `kb_entries` 关键词人工同步（承接 〇-XLVI/XLVIII）；`/opt/translator/` 下 `web_old.*` 归档实测已 **39 份 / 67M**（磁盘 66% 用、余 13G）待清理决策；演示站按前令未部署（版本差再扩一批）。已闭：assist `ASSIST_WEB` 外置覆盖按用户下令已撤销（内嵌页为单一事实源）。
@@ -99,7 +128,7 @@
 | **任务系统（#33）** | `internal/store/task_rewards.go`（去重占位 → 周期计数 → 租户校验 → 临时积分入 `quota_grants`（可叠加到期）/永久积分入余额，发放与流水同事务）+ `internal/api/task_hooks.go`（登录/发起翻译/邀请充值/知识库解析四个自动触发点）+ 前端「任务中心」`TaskCenterP`。数值按用户原文：每日登录 100（3 天有效、日叠加）；每周发起翻译 100（周 ≤5 次、日 ≤1 次、7 天、周叠加）；邀请注册 500（14 天可叠加）；邀请且任意充值 1000 **永久**；自建知识库解析成功 600 **永久**一次性；超管「重置已订阅全部用户消耗量（有效期不变）」特殊动作。与 2026-08 旧「任务中心」（超管自定义每日/一次性任务）共存：旧表 `user_tasks` 走永久 token 台账，新 `user_tasks` 种子 + 周期口径由 `bumpTaskCounter` 管 |
 | **后台 AI 助手前端重做（#34）** | `components/admin/AssistP.tsx` 重做（条目 CRUD/启停/Token/嵌入页五 tab，`data-testid="assist-tabs"`）+ `src/api/assistAdmin.ts`；E2E `e2e/assist_admin.spec.ts` A1–A6 全绿，后端 assist_uat 38/38（前后端真链路，非 mock 面板） |
 | **字号与对比度（#35）** | 登录后前后台正文/表格/输入控件字号阶梯上调 + 文本对比度按 WCAG AA 校（`src/styles/readability.test.ts` 锁住最小值），页脚死链与假复制按钮等同批实装 |
-| **即时翻译对话框合并（#36）** | 输入框与结果气泡合并为一个占满页眉页脚下方整区的对话框；**即时翻译不再支持文件翻译**（文件走工单），提示词与 UI 里的文件翻译话术同步清除，缩翻 `max_length` 改接文本链路保留 |
+| **即时翻译对话框合并（#36）** | 输入框与结果气泡合并为一个占满页眉页脚下方整区的对话框〔★ 该**形态**已于 〇-LJ（2026-09-22）按用户口径回退为「吸顶输入卡 + 下方气泡」两段式；本批带来的**功能**（文件入口下线、缩翻接文本、搜索/导出/清空）全部保留〕 |页眉页脚下方整区的对话框；**即时翻译不再支持文件翻译**（文件走工单），提示词与 UI 里的文件翻译话术同步清除，缩翻 `max_length` 改接文本链路保留 |
 | **文件管线保真 RC-1~RC-6（工单 T20260921075004EF8 原件/译文逐条比对）** | ①表格分隔行入翻译表 ⇒ 内部提示词泄漏进交付物（9 处，P0）②回显/同文判定统一收口 + KB 命中补同文守卫（P0）③`emphasisRe` 只回填 `$1` ⇒ 行内标记与内容被删（RC-5，P0）④表格行降级为散文 ⇒ 按单元格骨架逐列替换（P1）⑤译文含换行破坏行对齐 ⇒ 产物与原文行数 1:1（P1）⑥围栏内容三类分派（RC-3）⑦**产物文件名翻译（RC-4，原为零实现）**⑧目录锚点同步（RC-6）⑨结构指纹保真闸门 + 未译段清单透出（P1，漏译不再静默通过）⑩md 结构前缀支持无空格写法（RC-1） |
 | **评估报告缺陷批** | #37 错误脱敏（对外 message 收敛 `errmsg.go` + `publicErrMessage`）/assist 硬编码 token/SDK Node22/401 回跳；#38 TMX 导出导入 + SCIM/SSO 配置界面接线；#39 落地页价格改走 `/api/plans` + 对账定时化 + 计量 sink 落盘 spool（停机不丢账）；#40 Redis 由隐形强依赖改显式（`REQUIRE_REDIS=1` fail-closed）+ 工单扣费事务 + 限流文案；#41 自动续费开关（`store/autorenew.go` + 订阅页）与优惠券（`coupons*`）；#42 探针拆分 `/livez`(恒 200) 与 `/readyz`(真探依赖)、gofmt 门禁、`errorstyle_gate_test.go`（writeJSON 基线 741 只减不增）、`route_auth_gate_test.go` 公开路由白名单、`archguard` 分层守卫；#43 主流程 E2E `translate_flow` + a11y 焦点陷阱（`focusTrap.ts`，Dialog/Drawer） |
 | **★ 本批抓到的真缺陷（P1）** | **即时翻译 SSE 收尾不冲刷计量缓冲**：`/api/chat/stream` 全程不调 `billing.Flush()`（非流式 `/api/chat`、账单接口、文件流都有），用量留在内存缓冲等 2s ticker 落库，而前端在 done 帧后只刷新一次余额条 ⇒ 稳定读到旧值，用户表现为「翻译完余额/今日已耗不动，再操作一次才跳」。修法在终帧之前 Flush（放 handler 末尾仍是竞态）。快速锁：`api_uat.sh` 新增 A7s（done 后不 sleep 立读 `points_used_today` 必须增加）；界面级锁：E2E TF2。同批修 RC-4 提示词残留进交付文件名（`file_name.go` 加 `isFilenameEchoResidue` 结构闸，M1 保持原断言不弱化） |
