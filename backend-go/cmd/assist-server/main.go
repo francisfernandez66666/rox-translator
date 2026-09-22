@@ -86,13 +86,15 @@ func main() {
 		slog.Warn("assist seed 跳过", "err", err)
 	}
 
-	// ★ 改造 1A：管理台 Token 解析链 env → 主库 system_config（密文）
-	// ★ P0-2（2026-09-21）：内置默认 token 已删除——两级解析均为空时拒绝启动。
+	// ★ 改造 1A：管理台 Token 解析链 env → 主库 system_config（密文）→ 自身 configs（面板托管）
+	// ★ P0-2（2026-09-21）：内置默认 token 已删除——三级解析均为空时拒绝启动。
 	// 空 Token 若放行，guard 的常数时间比较会把「空请求头」误判为合法（"" == ""），
 	// 等于管理面无鉴权裸奔，故缺失必须 fail-fast 而非静默降级。
-	adminToken, tokenSrc := resolveAdminToken(cfg)
+	// ★ 〇-LK（2026-09-22）：启动快照只是**兜底候选**，运行期 guard 按 configs.admin_token 优先
+	// 读取（见 internal/assist/api 的 readAdminToken），所以主后台改 Token 不需要重启本服务。
+	adminToken, tokenSrc := resolveAdminToken(cfg, db)
 	if strings.TrimSpace(adminToken) == "" {
-		slog.Error("assist 管理台 Token 未配置：请设 ASSIST_ADMIN_TOKEN 或在主库 system_config 配置 assist_admin_token，拒绝启动")
+		slog.Error("assist 管理台 Token 未配置：请设 ASSIST_ADMIN_TOKEN、在主库 system_config 配置 assist_admin_token，或在本服务 configs 写入 admin_token，拒绝启动")
 		os.Exit(1)
 	}
 
@@ -126,16 +128,19 @@ func buildLLM(cfg *config.Config) *llm.Client {
 	return llm.New(providers, cfg.LLMTimeoutSec)
 }
 
-// resolveAdminToken 解析生效的管理台 Token（★ 改造 1A）。
+// resolveAdminToken 解析启动期的管理台 Token 快照（★ 改造 1A，★ 〇-LK 补第三级）。
 // 优先级：env ASSIST_ADMIN_TOKEN（部署侧保底）→ 主库 system_config.assist_admin_token
-// （enc:v1: 密文，与主后台 /api/admin/assist/token 同源，可在后台轮换）。
-// ★ P0-2（2026-09-21）：内置默认值已删除，两级皆空返回 ""，由 main 启动期拒绝。
-// 参数：cfg=服务配置。返回：Token 明文与来源标识（env/db/none）。
-func resolveAdminToken(cfg *config.Config) (string, string) {
+// （enc:v1: 密文，与主后台 /api/admin/assist/token 同源）→ 自身 configs.admin_token
+// （主后台面板保存后推送过来的值；主库是 PostgreSQL 时桥接读不到，这一级就是唯一可用来源）。
+// 注意：这只是**启动快照**——运行期 guard 按 configs.admin_token 优先重读，
+// 所以「面板改 Token → 即刻生效」不依赖本函数的顺序，重启后本函数也会把 configs 值捡回来。
+// ★ P0-2（2026-09-21）：内置默认值已删除，三级皆空返回 ""，由 main 启动期拒绝。
+// 参数：cfg=服务配置，db=assist 自身存储。返回：Token 明文与来源标识（env/db/config/none）。
+func resolveAdminToken(cfg *config.Config, db *store.DB) (string, string) {
 	if v := strings.TrimSpace(os.Getenv("ASSIST_ADMIN_TOKEN")); v != "" {
 		return v, "env"
 	}
-	// 主库可能尚未初始化（或未配置路径）：读不到返回空串，由调用方拒绝启动
+	// 主库可能尚未初始化（或未配置路径）：读不到返回空串，继续回落自身 configs
 	mainDBPath := strings.TrimSpace(cfg.MainDBPath)
 	if mainDBPath == "" {
 		mainDBPath = strings.TrimSpace(os.Getenv("MAIN_DB"))
@@ -144,6 +149,9 @@ func resolveAdminToken(cfg *config.Config) (string, string) {
 		if tok := readMainDBAdminToken(mainDBPath); tok != "" {
 			return tok, "db"
 		}
+	}
+	if v := strings.TrimSpace(db.GetConfig("admin_token", "")); v != "" {
+		return v, "config"
 	}
 	return "", "none" // ★ P0-2：不再有内置默认值，空即由启动期拒绝
 }

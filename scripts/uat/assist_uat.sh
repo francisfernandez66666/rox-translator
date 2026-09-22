@@ -11,6 +11,8 @@
 #   管理端：401 鉴权、四表 CRUD、sessions 统计载荷
 #   ★ 改造 1A（2026-09-17）：内嵌 seed 生效（不依赖外置文件）、内嵌管理页可达、
 #         管理台 Token 主库桥接（MAIN_DB → system_config.assist_admin_token）与 env 优先级契约
+#   ★ 〇-LK（2026-09-22）G 段：管理 Token 保存即生效（旧值即刻失效）、该键掩码与空值拒绝、
+#         同会话重复 greet 不再堆重复欢迎语、换 Token 重启后老访客 tok 仍可用（sess_key 已持久化）
 # 依赖：无（自起 assist mock 模式，临时 SQLite，端口默认 8793/8794）
 # 用法：bash scripts/uat/assist_uat.sh
 # ============================================================================
@@ -222,6 +224,62 @@ ck F3-env-priority-works '^200$' "$C"
 C=$(curl -s -o /dev/null -w '%{http_code}' "$B2/api/assist/admin/kb" -H "X-Assist-Admin: $DBTOK")
 ck F4-env-priority-overrides-db '^401$' "$C"
 { kill $PID3 2>/dev/null; wait $PID3 2>/dev/null; } 2>/dev/null || true
+
+# ---------- 9. ★ 〇-LK（2026-09-22）：Token 热生效 / 访客密钥解耦 / 欢迎语去重 ----------
+# 这一段专门锁用户反馈的两件事：「ai 助手要带缓存，不然刷新一次页面就没了」与
+# 「配置请参考我其他 llm 配置的方式重新做」。三件都是改坏就直接影响使用：
+#   G1-G3 管理 Token 保存即生效（configs.admin_token 优先于启动快照，且不留双凭据窗口）；
+#   G4-G5 该键的读取掩码 / 空值拒绝（清除只能走主后台显式 clear）；
+#   G6 同一会话重复 greet 不再堆重复欢迎语（台账与 history 恢复都受影响）；
+#   G7 换管理 Token 并重启后，老访客的会话令牌仍然有效（sess_key 已持久化、与 Token 解耦）。
+# 放在最后：轮换会让前面用的 $AH 失效，temp 库随即销毁，不影响其它断言。
+OLDTOK="${AH#X-Assist-Admin: }"
+NEWTOK="uat-rotated-$(date +%s)"
+R=$(curl -s -X PUT "$B/api/assist/admin/config" -H "$AH" -H "$J" -d "{\"key\":\"admin_token\",\"value\":\"$NEWTOK\"}")
+ck G1-rotate-write '"ok":true' "$R"
+C=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/assist/admin/kb" -H "X-Assist-Admin: $NEWTOK")
+ck G2-new-token-live '^200$' "$C"
+C=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/assist/admin/kb" -H "X-Assist-Admin: $OLDTOK")
+ck G3-old-token-dead '^401$' "$C"
+# G4：管理面列配置时 admin_token 只能以掩码出现（明文既不进响应也不进日志）
+R=$(curl -s "$B/api/assist/admin/config" -H "X-Assist-Admin: $NEWTOK")
+if echo "$R" | grep -q "$NEWTOK"; then
+  FAIL=$((FAIL+1)); echo "FAIL|G4-admin-token-masked|明文泄露"
+else
+  PASS=$((PASS+1)); echo "PASS|G4-admin-token-masked"
+fi
+ck G4b-token-listed 'admin_token' "$R"
+ck G4c-token-masked '\*{3,}' "$R"# G5：空值写入拒绝（空串清除会把管理面一把关掉，属显式 clear 流程的职责）
+C=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "$B/api/assist/admin/config" -H "X-Assist-Admin: $NEWTOK" -H "$J" -d '{"key":"admin_token","value":""}')
+ck G5-empty-token-400 '^400$' "$C"
+
+# G6：欢迎语去重（同一 sid 连续 greet 三次，台账里只留一条开场白）
+RG=$(curl -s "$B/api/assist/greeting?page=/")
+SID_G=$(echo "$RG" | python3 -c 'import sys,json;print(json.load(sys.stdin)["session"])')
+TOK_G=$(echo "$RG" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tok"])')
+for i in 1 2 3; do curl -s "$B/api/assist/greeting?session=$SID_G&tok=$TOK_G&page=/" >/dev/null; done
+NA=$(curl -s "$B/api/assist/history?session=$SID_G&tok=$TOK_G&limit=50" \
+  | python3 -c 'import sys,json;print(sum(1 for m in json.load(sys.stdin).get("messages",[]) if m.get("role")=="assistant"))')
+if [ "$NA" = "1" ]; then PASS=$((PASS+1)); echo "PASS|G6-greet-dedup"; else FAIL=$((FAIL+1)); echo "FAIL|G6-greet-dedup|want 1 got $NA"; fi
+
+# G7：sess_key 与 Token 解耦——换 Token 重启后，老访客的 tok 仍可续用（刷新页面不再丢对话）
+{ kill $PID 2>/dev/null; wait $PID 2>/dev/null; } 2>/dev/null || true
+log "重启 assist :${PORT}（新 ASSIST_ADMIN_TOKEN，同一 ASSIST_DB）验证会话密钥不随 Token 变化..."
+ASSIST_MOCK=1 ASSIST_ADMIN_TOKEN="uat-restarted-$(date +%s)" ASSIST_ADDR="127.0.0.1:${PORT}" \
+  ASSIST_DB="$WORK/assist.db" \
+  nohup "$BIN" > "$WORK/assist-restart.log" 2>&1 < /dev/null &
+PID=$!
+OKR=0
+for i in $(seq 1 10); do
+  sleep 1
+  if curl -s -m 2 "$B/health" | grep -q '"ok":true'; then OKR=1; break; fi
+done
+[ "${OKR:-0}" = "1" ] || { echo "assist 重启失败"; tail -5 "$WORK/assist-restart.log"; exit 1; }
+C=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/assist/history?session=$SID_G&tok=$TOK_G&limit=50")
+ck G7-sess-key-survives-restart '^200$' "$C"
+# 反向：老会话的 tok 不是任何人都能续——伪令牌仍须 401（否则 G7 就成了「不设防」）
+C=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/assist/history?session=$SID_G&tok=deadbeef")
+ck G8-fake-tok-still-401 '^401$' "$C"
 
 # ---------- 汇总 ----------
 DUR=$(( $(date +%s) - START ))

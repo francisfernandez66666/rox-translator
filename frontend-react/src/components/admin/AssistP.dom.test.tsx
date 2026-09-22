@@ -1,14 +1,18 @@
 // ============================================================================
-// AssistP.dom.test.tsx — AI 助手管理面板组件测试（★ #34 前端重做，2026-09-21）
+// AssistP.dom.test.tsx — AI 助手管理面板组件测试（★ #34 前端重做，2026-09-21；
+// ★ 〇-LK 2026-09-22 管理 Token 区按 ModelsP 范式重做后同步改锁）
 // 旧版锁的是「Token 注入 localStorage + iframe」，那正是本次要废除的形态，故整体重写。
-// 现在锁住四条改坏就有实际风险的行为：
+// 现在锁住五条改坏就有实际风险的行为：
 //   ① 凭据不进浏览器：面板不渲染 iframe、不写 localStorage('assist_tok')，
 //      状态横幅只回显上游可达性与 Token 来源（env/db/none）；
 //   ② fail-closed 可读：服务不可达 / Token 未配置 / 上游业务失败时给出处置指引，
 //      而不是白屏或把「拿不到数据」显示成空列表；
 //   ③ 数据面 CRUD：切页签按需拉列表、新建提交补齐区域默认值、key 为空本地拦下不发请求、
 //      编辑态 key 输入禁用（assist 侧按 key 命中，改 key 等于换条目）、删除需二次确认；
-//   ④ 配置与连通测试：LLM 四项回填掩码密钥、「测试连通」回显模型与耗时、Token 轮换后重拉数据。
+//   ④ 配置与连通测试：LLM 四项回填掩码密钥、「测试连通」回显模型与耗时；
+//   ⑤ ★ Token 保存语义（与模型密钥同口径）：只显示掩码不回填空值、留空/掩码不发请求、
+//      清除必须显式点按钮并二次确认（传 clear=true）、env 覆盖时给锁定提示、
+//      助手侧未确认收到时提示「需重启」而不是只说「已保存」。
 // 接口层用 vi.mock 的 importOriginal 形态：保留真实 AssistBizError（面板靠 instanceof 分流），
 // 只把网络函数换成 spy——换成自造错误类会让 instanceof 恒 false，掩盖真实分支。
 // 运行：npx vitest run src/components/admin/AssistP.dom.test.tsx
@@ -23,7 +27,7 @@ import { toastError } from '@/lib/toastBus'
 
 const m = vi.hoisted(() => ({
   status: vi.fn(), sessions: vi.fn(), list: vi.fn(), create: vi.fn(), update: vi.fn(),
-  del: vi.fn(), config: vi.fn(), configSet: vi.fn(), llmTest: vi.fn(), rotate: vi.fn(),
+  del: vi.fn(), config: vi.fn(), configSet: vi.fn(), llmTest: vi.fn(), rotate: vi.fn(), tokGet: vi.fn(),
 }))
 
 vi.mock('@/api/assistAdmin', async (importOriginal) => {
@@ -42,8 +46,8 @@ vi.mock('@/api/assistAdmin', async (importOriginal) => {
   }
 })
 
-// 主后台 Token 轮换接口（面板保留的能力：后端写库为密文，前端只提交一次明文）
-vi.mock('@/api', () => ({ adminAssistTokenRotate: m.rotate }))
+// 主后台 Token 接口：读取只回掩码态、保存/清除回状态 + changed/pushed（〇-LK 起前端再也拿不到明文）
+vi.mock('@/api', () => ({ adminAssistToken: m.tokGet, adminAssistTokenRotate: m.rotate }))
 
 vi.mock('@/api/assist', () => ({ ASSIST_API: '/assist-api' }))
 
@@ -81,7 +85,9 @@ beforeEach(() => {
   ])
   m.configSet.mockResolvedValue({ ok: true })
   m.llmTest.mockResolvedValue({ ok: true, model: 'gpt-4o-mini', ms: 412 })
-  m.rotate.mockResolvedValue({ success: true })
+  // Token 读取：只回掩码态（后端已不下发明文），面板据此渲染「已配置 + 来源 + 掩码」
+  m.tokGet.mockResolvedValue({ success: true, source: 'db', set: true, masked: 'abcd****wxyz', db_masked: 'abcd****wxyz', env_overridden: false })
+  m.rotate.mockResolvedValue({ success: true, changed: true, pushed: true, source: 'db', set: true, masked: 'abcd****wxyz', db_masked: 'abcd****wxyz', env_overridden: false })
 })
 
 describe('AI 助手面板 · 凭据不外泄（#34 核心约束）', () => {
@@ -106,7 +112,9 @@ describe('AI 助手面板 · 凭据不外泄（#34 核心约束）', () => {
   })
 
   it('Token 未配置：提示补配置路径（fail-closed 的可读版本）', async () => {
+    // 横幅来源以 Token 接口为准（代理状态只是回落），所以这里两处都报 none
     m.status.mockResolvedValue({ success: true, base_url: 'http://127.0.0.1:8790', reachable: true, token_src: 'none', message: '' })
+    m.tokGet.mockResolvedValue({ success: true, source: 'none', set: false, masked: '****', db_masked: '', env_overridden: false })
     render(<AssistP />)
     await vi.waitFor(() => { expect(document.body.textContent).toMatch(/尚未配置管理 Token/) })
   })
@@ -183,6 +191,86 @@ describe('AI 助手面板 · 数据面 CRUD', () => {
   })
 })
 
+// ===== ⑤ 管理 Token 保存语义（★ 〇-LK：与模型密钥 ModelsP 同一套口径） =====
+describe('AI 助手面板 · 管理 Token', () => {
+  const tokInput = () => document.querySelector('input[aria-label="管理 Token"]') as HTMLInputElement
+  const saveBtn = () => Array.from(document.querySelectorAll('button')).find((b) => b.textContent?.includes('保存 Token')) as HTMLButtonElement
+  // 面板挂载即并发拉 status + token，掩码态要等接口回包后那一帧才渲染，
+  // 因此所有显示断言都走 waitFor（直接读 textContent 会抢到 tokState 仍是 null 的帧，测试随机翻红）
+  const shown = (re: RegExp) => vi.waitFor(() => { expect(document.body.textContent).toMatch(re) })
+
+  it('显示掩码而不回填明文：password 型、new-password、初值为空', async () => {
+    render(<AssistP />)
+    await shown(/abcd\*{4}wxyz/)
+    const el = tokInput()
+    expect(el.type).toBe('password')
+    expect(el.getAttribute('autocomplete')).toBe('new-password')
+    // 输入框刻意留空：回填掩码会让「直接点保存」把 **** 当成新值提交（后端已拦，但 UI 不该给机会）
+    expect(el.value).toBe('')
+    await shown(/已配置/)
+    await shown(/明文不经过浏览器/)
+  })
+
+  it('留空时保存按钮禁用：不可能把「清空输入框再保存」当成删除凭据', async () => {
+    render(<AssistP />)
+    await shown(/abcd\*{4}wxyz/)
+    expect(saveBtn().disabled).toBe(true)
+    expect(m.rotate).not.toHaveBeenCalled()
+    fireEvent.change(tokInput(), { target: { value: 'x' } })
+    expect(saveBtn().disabled).toBe(false)
+  })
+
+  it('掩码被当值提交：本地拦下（含 **** 一律不发请求）', async () => {
+    const { toastWarn } = await import('@/lib/toastBus')
+    render(<AssistP />)
+    await shown(/abcd\*{4}wxyz/)
+    fireEvent.change(tokInput(), { target: { value: 'abcd****wxyz' } })
+    fireEvent.click(saveBtn())
+    await vi.waitFor(() => { expect(toastWarn).toHaveBeenCalledWith(expect.stringContaining('掩码')) })
+    expect(m.rotate).not.toHaveBeenCalled()
+  })
+
+  it('保存成功且助手侧已同步：重拉状态与当前页签，明文不进 localStorage', async () => {
+    render(<AssistP />)
+    await vi.waitFor(() => { expect(m.sessions).toHaveBeenCalled() })
+    fireEvent.change(tokInput(), { target: { value: 'new-secret-token' } })
+    fireEvent.click(saveBtn())
+    // clear 参数默认 false：显式传出来，避免「留空=清除」的旧语义复活
+    await vi.waitFor(() => { expect(m.rotate).toHaveBeenCalledWith('new-secret-token', false) })
+    await vi.waitFor(() => { expect(m.sessions.mock.calls.length).toBeGreaterThanOrEqual(2) })
+    expect(m.status.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(localStorage.getItem('assist_tok')).toBeNull()
+    expect(document.body.innerHTML).not.toContain('new-secret-token')
+  })
+
+  it('助手侧未确认收到：提示需重启 translator-assist（不能只报「已保存」）', async () => {
+    m.rotate.mockResolvedValue({ success: true, changed: true, pushed: false, source: 'db', set: true, masked: 'abcd****wxyz', env_overridden: false })
+    const { toastWarn } = await import('@/lib/toastBus')
+    render(<AssistP />)
+    await shown(/abcd\*{4}wxyz/)
+    fireEvent.change(tokInput(), { target: { value: 'rotate-me' } })
+    fireEvent.click(saveBtn())
+    await vi.waitFor(() => { expect(toastWarn).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('translator-assist')) })
+  })
+
+  it('清除走显式二次确认并传 clear=true', async () => {
+    render(<><AssistP /><DialogHost /></>)
+    await shown(/清除库内 Token/)
+    fireEvent.click(screen.getByText('清除库内 Token'))
+    await shown(/确定清除主后台库内的管理 Token/)
+    expect(m.rotate).not.toHaveBeenCalled()
+    fireEvent.click(dialogConfirm())
+    await vi.waitFor(() => { expect(m.rotate).toHaveBeenCalledWith('', true) })
+  })
+
+  it('来源为 env 时不给清除按钮：清除库内值不影响生效位，按钮存在只会误导', async () => {
+    m.tokGet.mockResolvedValue({ success: true, source: 'env', set: true, masked: 'envv****abcd', db_masked: '', env_overridden: true })
+    render(<AssistP />)
+    await shown(/环境变量 ASSIST_ADMIN_TOKEN 占住了生效位/)
+    expect(screen.queryByText('清除库内 Token')).toBeNull()
+  })
+})
+
 describe('AI 助手面板 · 配置与连通测试', () => {
   it('配置页签回填掩码密钥；「测试连通」回显模型与耗时', async () => {
     render(<AssistP />)
@@ -201,16 +289,5 @@ describe('AI 助手面板 · 配置与连通测试', () => {
     fireEvent.click(screen.getByText('测试连通'))
     await vi.waitFor(() => { expect(m.llmTest).toHaveBeenCalled() })
     await vi.waitFor(() => { expect(document.body.textContent).toMatch(/连通正常：gpt-4o-mini，耗时 412ms/) })
-  })
-
-  it('轮换 Token 成功后重拉状态与当前页签，且明文不进 localStorage', async () => {
-    render(<AssistP />)
-    await vi.waitFor(() => { expect(m.sessions).toHaveBeenCalled() })
-    fireEvent.change(document.querySelector('input[aria-label="管理 Token"]') as HTMLInputElement, { target: { value: 'new-secret-token' } })
-    fireEvent.click(screen.getByText('保存 Token'))
-    await vi.waitFor(() => { expect(m.rotate).toHaveBeenCalledWith('new-secret-token') })
-    await vi.waitFor(() => { expect(m.sessions.mock.calls.length).toBeGreaterThanOrEqual(2) })
-    expect(m.status.mock.calls.length).toBeGreaterThanOrEqual(2)
-    expect(localStorage.getItem('assist_tok')).toBeNull()
   })
 })

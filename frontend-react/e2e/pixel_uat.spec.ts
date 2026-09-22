@@ -94,23 +94,44 @@ test.describe('像素级 UAT', () => {
   //      等值锁（真值来自 前端及UI相关/UI-ANNOTATIONS.md 与交付包）——这里用 getComputedStyle
   //      实测的是「渲染出来的值等于交付值」，与 readability.test.ts 的源码级锁互补：
   //      单测拦「CSS 里被改回去」，本处拦「运行时内联样式/换肤把值盖掉」。
-  test('P2b 工作台合并对话框结构 + 字阶/灰阶按交付真值', async ({ page }) => {
+  test('P2b 工作台合并对话框结构（消息在上、输入贴底）+ 字阶/灰阶按交付真值', async ({ page }) => {
     await login(page);
     await page.goto('/');
     // 结构锁走 class（.cw-dialog*）而非文案：文案受 i18n 与措辞调整影响，
-    // 而「输入区在滚动区内、操作区在 foot 内」这套 DOM 形态才是 #36 的交付口径。
+    // 而「消息流在滚动区、输入区在框脚」这套 DOM 形态才是交付口径。
     const dialog = page.locator('.cw-dialog');
     await expect(dialog).toBeVisible();
-    // 输入框在对话框卡的滚动区内（合并后的唯一结构口径）
-    await expect(dialog.locator('.cw-dialog-body textarea')).toBeVisible();
-    await expect(dialog.locator('.cw-dialog-foot')).toBeVisible();
+    // ★ 〇-LK（2026-09-22）形态定稿：输入区必须在**框脚**、消息流在它上方。
+    //   上一版这里锁的是「输入框在滚动区内」，滚动区第一位就是输入框——
+    //   用户看后判「你们家对话框是放顶部的啊」，故本锁连同下面的几何锁一起改向。
+    await expect(dialog.locator('.cw-dialog-foot textarea')).toBeVisible();
+    expect(await dialog.locator('.cw-dialog-body textarea').count(), '输入框不得回到消息流里').toBe(0);
+    await expect(dialog.locator('.cw-dialog-body')).toBeVisible();
+    // 几何锁（运行时实测，防「DOM 顺序对但 CSS 把它顶回上面」）。
+    // 口径修正（2026-09-22）：这里量的是「框脚整体贴住对话框底沿」+「输入框落在对话框下半部」，
+    // 不是「textarea 底沿 == 对话框底沿」——交付形态里 .cw-dialog-foot 内 composer 之下还排着
+    // 语种行与操作行（实测 142px），拿 textarea 底沿量贴底会把这套正常排版判成缺陷。
+    const geo = await dialog.evaluate((el) => {
+      const d = el.getBoundingClientRect();
+      const ta = el.querySelector('.cw-dialog-foot textarea')!.getBoundingClientRect();
+      const foot = el.querySelector('.cw-dialog-foot')!.getBoundingClientRect();
+      const body = el.querySelector('.cw-dialog-body')!.getBoundingClientRect();
+      return { dialogTop: d.top, dialogBottom: d.bottom, height: d.height, taTop: ta.top, footBottom: foot.bottom, footTop: foot.top, bodyTop: body.top };
+    });
+    expect(geo.taTop, `输入框顶边 ${geo.taTop} 不应高于消息流顶边 ${geo.bodyTop}`).toBeGreaterThan(geo.bodyTop);
+    // 框脚必须承在对话框最底部（亚像素容差 4px）：它一旦被顶回消息流中间，就是「输入框放顶部」的原缺陷形态
+    expect(Math.abs(geo.dialogBottom - geo.footBottom), `框脚未贴对话框底沿（差 ${geo.dialogBottom - geo.footBottom}px）`).toBeLessThan(4);
+    expect(geo.footTop, '框脚必须低于消息流起点').toBeGreaterThan(geo.bodyTop);
+    // 输入区占住下半部：45% 分位给消息流留了多数高度，输入框若跑到上半部即为形态回退
+    expect(geo.taTop, `输入框未落在对话框下半部（top ${geo.taTop}，对话框 ${geo.dialogTop}~${geo.dialogBottom}）`)
+      .toBeGreaterThan(geo.dialogTop + geo.height * 0.45);
     // 文件入口下线：全站工作台不应再挂隐藏的原生 file input
     expect(await page.locator('input[type="file"]').count(), '即时翻译已移除文件上传入口').toBe(0);
     // 字号真值等值锁（★ 2026-09-22 全站还原批）：本批把 #35/#67/#68 的「整档 +1px / 顶栏提档」
     // 全部撤除，字阶回到交付 UI 口径，所以这里由「≥ 下限」改成「恰等于真值档」——
     // 单向下限锁正是把配色与字阶一路推离交付稿的元凶（它只拦变小，不拦变大）。
     // 输入框 13 = 组件库 .lc-textarea 冻结档（第 1 轮交付值），不是页面层自选值。
-    const taFs = await dialog.locator('.cw-dialog-body textarea').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    const taFs = await dialog.locator('.cw-dialog-foot textarea').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     expect(taFs, `输入框字号 ${taFs}px ≠ 组件库真值 13px`).toBe(13);
     // 正文气泡 14 = theme.css .bubble（交付包正文档）
     const bubbleFs = await page.locator('.bubble').first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize)).catch(() => -1);

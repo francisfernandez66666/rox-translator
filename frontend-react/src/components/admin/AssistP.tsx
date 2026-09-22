@@ -7,7 +7,10 @@
 //
 // 三条硬口径（改动前请先读）：
 //   1. 管理 Token 不进浏览器：读写由主后台 /api/admin/assist/* 代理，服务端注入 X-Assist-Admin；
-//      面板只展示 Token「来源」（env/db/none），轮换入口保留（旧 iframe 版能力不能缩水）。
+//      面板只显示「已配置/未配置 + 来源 + 掩码」，保存语义与模型配置（ModelsP）完全一致
+//      （★ 〇-LK 按用户口径「参考我其他 llm 配置的方式重新做」）：输入框不回填、type=password、
+//      autoComplete=new-password，留空=不修改，清除必须点「清除」按钮（显式 clear=true），
+//      环境变量占住生效位时给锁定提示而不是静默显示「未配置」。
 //   2. fail-closed：服务不可达或 Token 未配置时，状态条直接给处置指引，各页签不渲染假数据；
 //      真实商户凭据缺失时同理（不静默回退）。
 //   3. 功能尺寸对齐旧管理台（internal/assist/web/admin.html）：四类数据 CRUD + 启停 + 删除确认、
@@ -23,12 +26,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, DataTable, Dialog, InlineBanner, StatusPill, Switch, Tabs } from '@/ui/langcross/src'
 import { confirmDialog } from '@/components/uiDialogs'
-import { toastError, toastSuccess } from '@/lib/toastBus'
+import { toastError, toastSuccess, toastWarn } from '@/lib/toastBus'
 import { runGuarded } from '@/lib/runGuarded'
 import { useT } from '@/i18n'
 import { Panel, Field } from './parts'
 import { ASSIST_API } from '@/api/assist'
-import { adminAssistTokenRotate } from '@/api'
+import { adminAssistToken, adminAssistTokenRotate } from '@/api'
+import type { AssistTokenResp } from '@/api'
 import {
   AssistBizError, assistAdminConfig, assistAdminConfigSet, assistAdminCreate, assistAdminDelete,
   assistAdminLLMTest, assistAdminList, assistAdminSessions, assistAdminStatus, assistAdminUpdate,
@@ -145,6 +149,8 @@ export default function AssistP() {
   const [, t] = useT()
   const [tab, setTab] = useState<Tab>('overview')
   const [status, setStatus] = useState<Any | null>(null)
+  // tokState：管理 Token 的掩码态（set/掩码/来源/env 覆盖），来自 /api/admin/assist/token
+  const [tokState, setTokState] = useState<AssistTokenResp | null>(null)
   const [rotateVal, setRotateVal] = useState('')
   const [rotating, setRotating] = useState(false)
   const [bizErr, setBizErr] = useState('')
@@ -165,7 +171,14 @@ export default function AssistP() {
     if (r) setStatus(r)
   }, [])
 
-  useEffect(() => { void refreshStatus() }, [refreshStatus])
+  // refreshTok 拉 Token 掩码态：与 refreshStatus 分开拉，代理层状态只说「通不通」，
+  // Token 是否配置、配在哪一处由主后台库自己回答（assist 服务挂了也要能改 Token）
+  const refreshTok = useCallback(async () => {
+    const r = await runGuarded(() => adminAssistToken())
+    if (r?.success) setTokState(r)
+  }, [])
+
+  useEffect(() => { void refreshStatus(); void refreshTok() }, [refreshStatus, refreshTok])
 
   // bizFail 统一处理业务失败：代理层 fail-closed 的 message 已是给用户看的处置指引
   function bizFail(e: unknown) {
@@ -206,21 +219,50 @@ export default function AssistP() {
     else void loadArea(tab as AssistArea)
   }, [tab, loadSessions, loadConfig, loadArea])
 
-  // saveToken 轮换/清除管理 Token（保留旧面板能力：空串=清除库内、回落环境变量）
+  // applyTokenResp 用保存接口的返回体刷新掩码态并分级提示（保存/清除共用）
+  function applyTokenResp(r: AssistTokenResp) {
+    if (r.success === false) { void toastError(String(r.message || t('assist.saveFail'))); return }
+    setTokState(r)
+    setRotateVal('')
+    void refreshStatus()
+    // Token 变更后当前页签数据可能已不可用，立即重拉一次，避免「保存成功但列表还是空的」
+    if (tab === 'overview') void loadSessions()
+    else if (tab === 'config') void loadConfig()
+    else void loadArea(tab as AssistArea)
+  }
+
+  // saveToken 保存（轮换）管理 Token。口径与 ModelsP 的密钥一致：
+  //   留空或仍是掩码 = 不修改（不误删），清除走「清除」按钮显式传 clear=true。
   async function saveToken() {
     if (rotating) return
+    const next = rotateVal.trim()
+    // 掩码串（含 ****）被当成新值提交会把凭据改成字面的 ****——直接拦下，别发请求
+    if (next.includes('****')) { void toastWarn(t('assist.tokenMaskTyped')); return }
+    if (!next) { void toastWarn(t('assist.tokenUnchanged')); return }
     setRotating(true)
     try {
-      const r = await adminAssistTokenRotate(rotateVal.trim())
+      // clear 显式传 false：清除凭据这件事只允许走 clearToken 那条带二次确认的路径
+      const r = await adminAssistTokenRotate(next, false)
       if (!r.success) { void toastError(String(r.message || t('assist.saveFail'))); return }
-      void toastSuccess(t('assist.tokenSaved'))
-      setRotateVal('')
-      await refreshStatus()
-      // Token 变更后当前页签数据可能已不可用，立即重拉一次，避免「保存成功但列表还是空的」
-      if (tab === 'overview') await loadSessions()
-      else if (tab === 'config') await loadConfig()
-      else await loadArea(tab as AssistArea)
-    } finally { setRotating(false) }
+      // 分级提示：助手侧同步成功=即时生效；同步失败=还要重启 translator-assist（不能只说「已保存」）
+      if (r.changed && r.pushed) void toastSuccess(t('assist.tokenPushed'))
+      else if (r.changed && !r.pushed) void toastWarn(t('assist.tokenSaved'), t('assist.tokenNotPushed'))
+      else void toastWarn(t('assist.tokenUnchanged'))
+      applyTokenResp(r)
+    } catch (e) { bizFail(e) } finally { setRotating(false) }
+  }
+
+  // clearToken 显式清除库内 Token（回落环境变量）——必须二次确认，旧版「空串=清除」太易误触
+  async function clearToken() {
+    if (rotating) return
+    if (!(await confirmDialog({ body: t('assist.tokenClearConfirm'), confirmText: t('common.delete') }))) return
+    setRotating(true)
+    try {
+      const r = await adminAssistTokenRotate('', true)
+      if (!r.success) { void toastError(String(r.message || t('assist.saveFail'))); return }
+      void toastSuccess(t('assist.tokenCleared'))
+      applyTokenResp(r)
+    } catch (e) { bizFail(e) } finally { setRotating(false) }
   }
 
   // saveRow 新增/编辑提交：数字字段转数，空 key 直接拦（assist 侧 key 是 UNIQUE 且被前端当主展示列）
@@ -281,9 +323,10 @@ export default function AssistP() {
   }
 
   const srcLabel = useMemo(() => {
-    const s = String(status?.token_src ?? '')
+    // 优先取 Token 接口自己的来源；拉不到时回落代理状态，两者口径同为 env/db/none
+    const s = String(tokState?.source ?? status?.token_src ?? '')
     return s === 'env' ? t('assist.srcEnv') : s === 'db' ? t('assist.srcDb') : t('assist.srcNone')
-  }, [status, t])
+  }, [status, tokState, t])
 
   const tabs = [
     { key: 'overview', label: t('assist.tabOverview') },
@@ -295,38 +338,63 @@ export default function AssistP() {
   ]
 
   const reachable = status?.reachable === true
+  // tokenSrc：两处来源同口径（env/db/none），Token 接口先到位就用它，避免代理慢半拍时横幅说「未配置」
+  const tokenSrc = String(tokState?.source ?? status?.token_src ?? '')
   // 色带口径（InlineBanner 只有 success/warn/error 三档）：不可达=error（红，功能真的不能用），
   // 未配置 Token 与检测中=warn（黄，按提示补一下就通），全绿才 success。
   const bannerTone: 'success' | 'warn' | 'error' = !status
     ? 'warn'
     : !reachable
       ? 'error'
-      : status.token_src === 'none'
+      : tokenSrc === 'none'
         ? 'warn'
         : 'success'
   const bannerText = !status
     ? t('assist.checking')
     : !reachable
       ? t('assist.downHint')
-      : status.token_src === 'none'
+      : tokenSrc === 'none'
         ? t('assist.noTokenHint')
         : t('assist.readyHint').replace('{src}', srcLabel)
 
   return (
     <div>
-      <Panel title={t('assist.title')} extra={<Button size="sm" variant="secondary" onClick={() => void refreshStatus()}>{t('assist.recheck')}</Button>}>
+      <Panel title={t('assist.title')} extra={
+        <Button size="sm" variant="secondary" onClick={() => { void refreshStatus(); void refreshTok() }}>{t('assist.recheck')}</Button>
+      }>
         <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 10 }}>{t('assist.subtitle')}</div>
         <InlineBanner tone={bannerTone}>{bannerText}</InlineBanner>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+
+        {/* ===== 管理 Token 区（★ 〇-LK：与 ModelsP 密钥区同一套范式） =====
+            显示行只回掩码态；输入框刻意不回填任何已有值（后端也不下发），
+            所以「打开面板 → 直接点保存」不可能把凭据清空，这与旧版 iframe 手填 Token 的体验断层是两回事。 */}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 }}>
+          <StatusPill tone={tokState?.set ? 'success' : 'warn'}>
+            {tokState?.set ? t('assist.tokenSet') : t('assist.tokenUnset')}
+          </StatusPill>
+          <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('assist.tokenSrcLabel')}：{srcLabel}</span>
+          {tokState?.set && <code style={{ fontSize: 12.5 }}>{tokState.masked}</code>}
+          <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('assist.tokenMaskNote')}</span>
+        </div>
+        {tokState?.env_overridden && (
+          <div style={{ marginTop: 8 }}><InlineBanner tone="warn">{t('assist.tokenEnvLocked')}</InlineBanner></div>
+        )}
+        <form onSubmit={(e) => { e.preventDefault(); void saveToken() }}
+          style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+          {/* autoComplete="new-password"：屏蔽密码管理器对凭据框的自动填充/保存（与模型密钥框同口径） */}
           <input
-            className="lc-input" type="password" aria-label={t('assist.tokenLabel')} value={rotateVal}
-            placeholder={t('assist.tokenPh')} onChange={(e) => setRotateVal(e.target.value)} style={{ maxWidth: 420 }}
+            className="lc-input" type="password" autoComplete="new-password" aria-label={t('assist.tokenLabel')}
+            value={rotateVal} placeholder={t('assist.tokenPh')} disabled={rotating}
+            onChange={(e) => setRotateVal(e.target.value)} style={{ maxWidth: 420 }}
           />
-          <Button size="sm" variant="primary" disabled={rotating} onClick={() => void saveToken()}>{t('assist.tokenSave')}</Button>
+          <Button size="sm" variant="primary" type="submit" disabled={rotating || !rotateVal.trim()}>{t('assist.tokenSave')}</Button>
+          {tokState?.set && tokState?.source === 'db' && (
+            <Button size="sm" variant="danger" disabled={rotating} onClick={() => void clearToken()}>{t('assist.tokenClear')}</Button>
+          )}
           <a className="lc-link" href={`${ASSIST_API}/assist/admin`} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>
             {t('assist.legacyAdmin')}
           </a>
-        </div>
+        </form>
         {bizErr && <div style={{ marginTop: 8 }}><InlineBanner tone="error">{bizErr}</InlineBanner></div>}
       </Panel>
 

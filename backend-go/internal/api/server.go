@@ -215,6 +215,10 @@ func (s *Server) routes() {
 	for p := range assistProxyRoutes {
 		s.mux.HandleFunc(p, s.handleAdminAssistProxy)
 	}
+	// ★ 2026-09-22：C 端挂件访客端点的同源转发（/assist-api/*）。此前该前缀只存在于 vite dev
+	//   proxy 与生产 Caddy，「主服务直出 dist」的形态（单二进制本地跑、run_uat 发布闸门）下
+	//   挂件全部落进 SPA 兜底 → 助手永远「联系不上」，链路根本没被验过。白名单见 assist_open_proxy.go。
+	s.mux.HandleFunc(assistOpenPrefix+"/", s.handleAssistOpenProxy)
 	// 翻译核心（聊天/文件/下载/语言/KB 统计）
 	s.routesTranslate()
 	// ★ SaaS 租户管理（管理后台）

@@ -1,12 +1,16 @@
 // ============================================================================
-// components/ChatWindow.tsx — 前台即时翻译工作台（★ 形态定档：整屏合并对话框，2026-09-22 〇-LJ）
+// components/ChatWindow.tsx — 前台即时翻译工作台（★ 形态定档：整屏合并 AI 对话框，2026-09-22 〇-LJ/〇-LK）
 // 结构：离线横幅 + 余额/用量条 + **一张占满除页眉页脚外整屏的对话框**；
-//       原文输入、译文结果气泡、语言选择与操作按钮全部收进这一个框内。
-// ★ 形态沿革（避免再被改错方向）：#36（09-21，106ce50）把「吸顶输入卡 + 下方气泡」合并成
-//   本文件这套整屏单框；〇-LJ 曾按「回退形态」把它改回两段式，用户看后判**方向错**——
-//   要的就是这种「像 AI 对话框一样一整屏组合起来」的单框，同日改回并**定档**。
+//       框内三段自上而下 = 会话工具条 / 消息流（原文与译文气泡，内部滚动）/ **输入区常驻底部**。
+// ★ 形态沿革（避免再被改错方向）：
+//   #36（09-21，106ce50）把「吸顶输入卡 + 下方气泡」合并成整屏单框；
+//   〇-LJ 曾按「回退形态」把它改回两段式，用户判**方向错**（要的是单框），同日改回；
+//   但单框内我把 textarea 摆在了滚动区最上面，用户再看判**仍错**——
+//   「你们家对话框是放顶部的啊」：AI 对话页的输入永远在**底部**，历史在它上方长。
+//   〇-LK 因此定稿：**输入区（原文标签 + textarea + 目标语言 + 模式 + 主按钮）整体贴底**，
+//   框头只留会话级工具（搜索/导出/清空），标题用 app.tabWorkbench。
 //   形态锁三处（本文件 .cw-dialog* + ChatWindow.dom.test.tsx ① + pixel_uat.spec.ts P2b）
-//   已按单框钉死；再要改形态必须先看用户截图口径，不要凭「回退」二字反推。
+//   已按「单框 + 输入在底」钉死；再改形态必须先复述目标形态向用户确认，不要凭措辞反推。
 // ★ #36 同时移除即时翻译的文件翻译入口（上传按钮/隐藏 file input/校验/发送）：
 //       文件翻译统一走「文档翻译」工单页（TicketsPage → /api/tickets/create-file），
 //       即时翻译只做文本，避免同一份文件两条口径不一致的链路。
@@ -200,13 +204,14 @@ export default function ChatWindow() {
 
   // ---- textarea 自动高度 ----
   // 先置 auto 再读 scrollHeight：否则高度会被上一次赋值撑住、量不到真实内容高度。
-  // ★ #36：合并后对话框自身占满整屏，输入区上限改按视口高度比例（40%）封顶——
-  //   既允许长文本一眼看全，又给同框内的结果气泡留出可读空间（剩余靠内部滚动）。
+  // ★ 〇-LK（2026-09-22）：输入框移到底部 composer 后上限收紧（视口 28%，封顶 240px）——
+  //   贴在底部的输入区若还能长到半屏，会把上面的消息流挤没，就不是对话页而是表单了。
+  //   超过上限后 textarea 自身滚动，长文照样能看全。
   function autoResize() {
     const el = inputRef.current
     if (!el) return
     el.style.height = 'auto'
-    const cap = Math.max(160, Math.min(520, Math.round(window.innerHeight * 0.4)))
+    const cap = Math.max(96, Math.min(240, Math.round(window.innerHeight * 0.28)))
     el.style.height = Math.min(el.scrollHeight, cap) + 'px'
   }
 
@@ -299,10 +304,11 @@ export default function ChatWindow() {
 
       {/* ★ #36 合并对话框：flex:1 吃满剩余整屏，内部三段式（框头 / 滚动区 / 框脚） */}
       <div className="cw-dialog" style={{ ...CARD, boxShadow: '0 8px 24px rgba(0,0,0,.4)' }}>
-        {/* 框头：原文标签 + 会话工具（搜索 / 导出 / 清空） */}
+        {/* 框头：会话标题 + 工具（搜索 / 导出 / 清空）。★ 〇-LK：「原文/自动检测」标签
+            跟着输入框挪到了底部 composer，框头只留会话级操作——顶部是历史，底部是输入。 */}
         <div className="cw-dialog-head">
-          <span style={{ fontSize: 13, fontWeight: 600, color: '#E7E9EA', letterSpacing: '.04em' }}>{t('chat.srcLabel')}</span>
-          <span style={{ fontSize: 12, color: 'var(--lc-text-3)', flex: 1 }}>{t('chat.sourceAuto')}</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#E7E9EA', letterSpacing: '.04em' }}>{t('app.tabWorkbench')}</span>
+          <span style={{ flex: 1 }} />
           {/* 纯图标按钮：title 给鼠标悬浮、aria-label 给读屏，二者缺一不可 */}
           <button type="button" className="cw-icon-btn" title={t('chat.searchPh')} aria-label={t('chat.searchPh')}
                   onClick={() => { setSearchOpen((v) => !v); setSearchQ('') }}>
@@ -316,32 +322,9 @@ export default function ChatWindow() {
           </button>
         </div>
 
-        {/* 滚动区：原文输入 + 结果气泡同框（气泡放进对话框里，而不是对话框下方） */}
+        {/* 滚动区：会话消息流（★ 〇-LK：输入框不再放这里——AI 对话的输入永远在底部，
+            气泡在其上方往上长；把 textarea 摆在最上面是「表单」不是「对话」） */}
         <div className="cw-dialog-body" ref={scrollRef}>
-          {/* F3：dir="auto" 让阿/法等 RTL 文本按内容方向渲染。
-              用原生 textarea + 组件库 .lc-textarea 类：autoResize 需要 ref 到真实节点量 scrollHeight；
-              Enter 发送 / Shift+Enter 换行（与工单页一致的肌肉记忆）
-              内联只覆写底色与描边：底色取最深一档 #0A0B0D 让输入区从卡面 #0E1014 里「凹」下去，
-              描边走 --lc-border-input 令牌（★ #68：写死暗值会被 readability.test.ts 的描边锁判红） */}
-          <textarea
-            className="lc-textarea cw-input"
-            ref={inputRef}
-            dir="auto"
-            aria-label={t('chat.placeholder')}
-            data-testid="translate-input"
-            value={input}
-            onChange={(e) => { setInput(e.target.value); autoResize() }}
-            placeholder={t('chat.placeholder')}
-            rows={3}
-            style={{ width: '100%', background: '#0A0B0D', borderColor: 'var(--lc-border-input)' }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                void handleSend()
-              }
-            }}
-          />
-
           {/* 空状态：欢迎语（首轮翻译前的引导，文案不再提文件） */}
           {!chat.messages.length && !chat.isLoading && (
             <div className="cw-welcome">
@@ -366,8 +349,38 @@ export default function ChatWindow() {
           </div>
         </div>
 
-        {/* 框脚：目标语言 + 模式/缩翻 + 主按钮（常驻不随滚动消失） */}
+        {/* 框脚 = 对话输入区（composer）：原文输入 + 目标语言 + 模式/缩翻 + 主按钮，
+            整块常驻底部，不随消息流滚动——与主流 AI 对话页一致。 */}
         <div className="cw-dialog-foot">
+          <div className="cw-composer">
+            <div className="cw-composer-label">
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#E7E9EA', letterSpacing: '.04em' }}>{t('chat.srcLabel')}</span>
+              <span style={{ fontSize: 12, color: 'var(--lc-text-3)' }}>{t('chat.sourceAuto')}</span>
+            </div>
+            {/* F3：dir="auto" 让阿/法等 RTL 文本按内容方向渲染。
+                用原生 textarea + 组件库 .lc-textarea 类：autoResize 需要 ref 到真实节点量 scrollHeight；
+                Enter 发送 / Shift+Enter 换行（与工单页一致的肌肉记忆）
+                内联只覆写底色与描边：底色取最深一档 #0A0B0D 让输入区从卡面 #0E1014 里「凹」下去，
+                描边走 --lc-border-input 令牌（★ #68：写死暗值会被 readability.test.ts 的描边锁判红） */}
+            <textarea
+              className="lc-textarea cw-input"
+              ref={inputRef}
+              dir="auto"
+              aria-label={t('chat.placeholder')}
+              data-testid="translate-input"
+              value={input}
+              onChange={(e) => { setInput(e.target.value); autoResize() }}
+              placeholder={t('chat.placeholder')}
+              rows={3}
+              style={{ width: '100%', background: '#0A0B0D', borderColor: 'var(--lc-border-input)' }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  void handleSend()
+                }
+              }}
+            />
+          </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
             <span style={{ fontSize: 12, color: 'var(--lc-text-3)', whiteSpace: 'nowrap' }}>{t('chat.targetLangLabel')}</span>
             <div style={{ minWidth: 260, flex: 1 }}>
@@ -421,6 +434,10 @@ const CW_CSS = `
 .cw-dialog-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
 .cw-dialog-body .bubble-row{max-width:100%}
 .cw-dialog-foot{border-top:1.2px solid var(--lc-border-faint);padding:10px 14px 12px;display:flex;flex-direction:column;gap:8px}
+/* 底部 composer：原文标签 + 输入框（★ 〇-LK 起输入区固定贴在对话框底部，消息流在其上方滚动） */
+.cw-composer{display:flex;flex-direction:column;gap:6px}
+.cw-composer-label{display:flex;align-items:baseline;gap:8px}
+.cw-composer .cw-input{min-height:76px;max-height:240px;resize:none}
 .cw-dialog-acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding-right:68px}
 .cw-welcome{text-align:center;padding:32px 12px;color:var(--lc-text-3)}
 .cw-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;

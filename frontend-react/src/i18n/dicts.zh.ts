@@ -766,6 +766,8 @@ export const baseZh: Record<string,string> = {
   // ★ 2026-09-21 #34：AI 助手管理代理（assist_token_read 为存量漏译，一并补上并从棘轮基线删除）
   'audit.action.assist_admin_write': "维护 AI 助手配置",
   'audit.action.assist_token_read': "读取 AI 助手管理凭据",
+  'audit.action.assist_token_rotate': '轮换 AI 助手管理凭据',
+  'audit.action.assist_token_clear': '清除 AI 助手管理凭据',
   // ★ #41 收银台免费包领取（plans_api.go LogAudit）：审计页动作码补译，闸门要求 12 语种同步
   'audit.action.package_free_claim': "领取免费套餐",
 }

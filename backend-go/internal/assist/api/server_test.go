@@ -377,3 +377,138 @@ func TestSessionCapabilityToken(t *testing.T) {
 		t.Fatalf("新 sid 熵不足（应为时间+16位hex）: %s", a)
 	}
 }
+
+// TestAdminTokenHotRotate 管理 Token 保存即生效（★ 〇-LK，2026-09-22）。
+// 为什么要这条：主后台面板按「其他 LLM 配置」范式重做后，保存动作是把新值 PUT 到这里的
+// configs.admin_token，由用户判定「改完不用重启」。若仍读启动快照，运维就得换二进制，
+// 而重启会连带换掉访客会话密钥（见 TestSessKeySurvivesRestart），所以这条是链路的关键。
+// 同时锁三条边界：白名单允许该键、空值拒绝（清除只能走主后台显式 clear）、列配置只回掩码。
+func TestAdminTokenHotRotate(t *testing.T) {
+	srv := newTestServer(t)
+
+	// ① 旧 Token 可用（启动快照口径）
+	if code, _ := doJSON(t, srv, "GET", "/api/assist/admin/kb", "test-token", nil); code != 200 {
+		t.Fatalf("初始 Token 应可用，得 %d", code)
+	}
+	// ② 写入新值：立即生效，旧值立即失效（不留双凭据窗口，否则轮换等于没换）
+	if code, resp := doJSON(t, srv, "PUT", "/api/assist/admin/config", "test-token",
+		map[string]any{"key": "admin_token", "value": "rotated-token"}); code != 200 || resp["ok"] != true {
+		t.Fatalf("写入 admin_token 应 200 ok，得 %d %+v", code, resp)
+	}
+	if code, _ := doJSON(t, srv, "GET", "/api/assist/admin/kb", "rotated-token", nil); code != 200 {
+		t.Fatalf("新 Token 应即时生效，得 %d", code)
+	}
+	if code, _ := doJSON(t, srv, "GET", "/api/assist/admin/kb", "test-token", nil); code != 401 {
+		t.Fatalf("旧 Token 应立即失效，得 %d", code)
+	}
+	// ③ 空值拒绝：清空 configs 会让管理面回落启动快照，属「一把关掉」的误操作路径
+	if code, _ := doJSON(t, srv, "PUT", "/api/assist/admin/config", "rotated-token",
+		map[string]any{"key": "admin_token", "value": "  "}); code != 400 {
+		t.Fatalf("admin_token 空值应 400，得 %d", code)
+	}
+	// ④ 列配置只回掩码，明文不进响应（与 llm_api_key 同一口径）
+	code, resp := doJSON(t, srv, "GET", "/api/assist/admin/config", "rotated-token", nil)
+	if code != 200 {
+		t.Fatalf("列配置应 200，得 %d", code)
+	}
+	raw, _ := json.Marshal(resp)
+	if strings.Contains(string(raw), "rotated-token") {
+		t.Fatal("配置列表泄露 admin_token 明文")
+	}
+	if !strings.Contains(string(raw), "admin_token") || !strings.Contains(string(raw), "***") {
+		t.Fatalf("配置列表应以掩码回显 admin_token: %s", raw)
+	}
+	// ⑤ 掩码回写视为未修改：面板「打开即保存」不得把 **** 写成凭据
+	if code, resp := doJSON(t, srv, "PUT", "/api/assist/admin/config", "rotated-token",
+		map[string]any{"key": "admin_token", "value": "rota****token"}); code != 200 || resp["skipped"] != true {
+		t.Fatalf("掩码回写应 skipped，得 %d %+v", code, resp)
+	}
+	if code, _ := doJSON(t, srv, "GET", "/api/assist/admin/kb", "rotated-token", nil); code != 200 {
+		t.Fatalf("掩码回写后原 Token 必须仍可用，得 %d", code)
+	}
+}
+
+// TestGreetDedupesWelcome 同一会话重复 greet 不再堆重复欢迎语（★ 〇-LK）。
+// 挂件在同一 sid 上重复 greet 是常态（令牌失效自愈、跨页复用会话），旧实现每次都落库，
+// 于是 history 恢复时看到好几条开场白、管理台「消息总数」虚高。
+func TestGreetDedupesWelcome(t *testing.T) {
+	srv := newTestServer(t)
+	_, g := doJSON(t, srv, "GET", "/api/assist/greeting?page=/", "", nil)
+	sid, _ := g["session"].(string)
+	tok, _ := g["tok"].(string)
+	for i := 0; i < 3; i++ {
+		code, gi := doJSON(t, srv, "GET", "/api/assist/greeting?session="+sid+"&tok="+tok, "", nil)
+		if code != 200 || gi["session"] != sid {
+			t.Fatalf("合法 sid+tok 第 %d 次 greet 应复用会话: %d %+v", i+1, code, gi)
+		}
+	}
+	_, h := doJSON(t, srv, "GET", "/api/assist/history?session="+sid+"&tok="+tok, "", nil)
+	msgs, _ := h["messages"].([]any)
+	n := 0
+	for _, m := range msgs {
+		if row, ok := m.(map[string]any); ok && row["role"] == "assistant" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("重复 greet 后欢迎语应只有 1 条，实得 %d（%+v）", n, msgs)
+	}
+	// 新会话仍要有开场白：去重只针对「已有消息的会话」，不能把 greet 做成空响应
+	_, g2 := doJSON(t, srv, "GET", "/api/assist/greeting?page=/", "", nil)
+	_, h2 := doJSON(t, srv, "GET", "/api/assist/history?session="+g2["session"].(string)+"&tok="+g2["tok"].(string), "", nil)
+	if len(h2["messages"].([]any)) == 0 {
+		t.Fatal("新会话应落一条欢迎语")
+	}
+}
+
+// TestSessKeySurvivesRestart 访客会话密钥与 Token/进程解耦（★ 〇-LK，直接对应
+// 用户反馈「ai 助手要带缓存，不然刷新一次页面就没了很尴尬的」的服务端根因）。
+// sessKey 旧做法由管理 Token 派生：换 Token 或重启服务 → 所有访客 tok 作废 →
+// 挂件 greet 被 401 打回、会话被换发新 sid，历史在界面上「消失」。现在密钥随机生成并
+// 持久化到 configs.sess_key，因此换 Token 重启后老访客仍能续上原会话；伪令牌照旧 401。
+func TestSessKeySurvivesRestart(t *testing.T) {
+	dbPath := t.TempDir() + "/assist.db"
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	srv1 := httptest.NewServer(NewServer(db, engine.New(db, llm.New(nil, 5)), "token-before-restart", "*").Handler())
+	_, g := doJSON(t, srv1, "GET", "/api/assist/greeting?page=/", "", nil)
+	sid, _ := g["session"].(string)
+	tok, _ := g["tok"].(string)
+	if sid == "" || tok == "" {
+		t.Fatalf("greeting 应下发 sid+tok: %+v", g)
+	}
+	if code, _ := doJSON(t, srv1, "POST", "/api/assist/chat", "", map[string]any{"session": sid, "tok": tok, "message": "多少钱"}); code != 200 {
+		t.Fatalf("chat 应 200，得 %d", code)
+	}
+	srv1.Close()
+	db.Close()
+
+	// 「重启」：同一库文件 + 新管理 Token（等价于运维换 Token 后重启 translator-assist）
+	db2, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = db2.Close() })
+	srv2 := httptest.NewServer(NewServer(db2, engine.New(db2, llm.New(nil, 5)), "token-after-restart", "*").Handler())
+	t.Cleanup(srv2.Close)
+
+	code, h := doJSON(t, srv2, "GET", "/api/assist/history?session="+sid+"&tok="+tok, "", nil)
+	if code != 200 {
+		t.Fatalf("换 Token 重启后老访客 tok 应仍可用，得 %d", code)
+	}
+	if len(h["messages"].([]any)) < 2 {
+		t.Fatalf("重启后应能读回原会话消息: %+v", h["messages"])
+	}
+	// 反向：密钥解耦不等于不设防，伪造 tok 依旧 401
+	if code, _ := doJSON(t, srv2, "GET", "/api/assist/history?session="+sid+"&tok=deadbeef", "", nil); code != 401 {
+		t.Fatalf("重启后伪造 tok 应 401，得 %d", code)
+	}
+	// sess_key 属内部键：不得出现在管理面配置列表里
+	if code, resp := doJSON(t, srv2, "GET", "/api/assist/admin/config", "token-after-restart", nil); code != 200 {
+		t.Fatalf("列配置应 200，得 %d", code)
+	} else if raw, _ := json.Marshal(resp); strings.Contains(string(raw), "sess_key") {
+		t.Fatal("sess_key 不应在管理面列出")
+	}
+}

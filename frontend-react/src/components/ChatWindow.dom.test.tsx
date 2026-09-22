@@ -1,8 +1,9 @@
 // ============================================================================
-// ChatWindow.dom.test.tsx — 即时翻译工作台组件测试（★ 形态定档：整屏合并对话框，2026-09-22 〇-LJ）
+// ChatWindow.dom.test.tsx — 即时翻译工作台组件测试（★ 形态定档：整屏合并 AI 对话框，2026-09-22 〇-LJ/〇-LK）
 // 锁住四条口径：
-//   ① 对话框合并：原文输入与译文结果气泡在同一个 .cw-dialog 容器内（气泡不再排在框外），
-//      合并框吃满剩余高度由 CSS flex 承担，此处断言 DOM 归属关系；
+//   ① 对话框合并 + 对话页布局：气泡与输入框同在一张 .cw-dialog 内，且**消息流在上、
+//      输入区（textarea）常驻底部 .cw-dialog-foot**（输入摆最上面是用户判错的形态）；
+//      合并框吃满剩余高度由 CSS flex 承担，此处断言 DOM 归属与先后顺序；
 //   ② 即时翻译不再支持文件翻译：不得再渲染任何 file input / 上传按钮，文案不得提「上传」；
 //   ③ 缩翻控件在文件入口下线后仍有意义：勾选后把 max_length 透传给 sendMessage（文本路径）；
 //   ④ 提示词去文件化：输入框占位与欢迎语按新文案渲染（防止改回「或点＋上传文件」）。
@@ -69,7 +70,7 @@ beforeEach(() => {
 })
 
 describe('即时翻译工作台（#36 合并对话框）', () => {
-  it('① 原文输入与结果气泡同在一个对话框容器内', async () => {
+  it('① 单框结构：消息流在上、输入区常驻底部（★ 〇-LK 形态定稿）', async () => {
     mocks.chat.messages = [
       { id: 'u1', role: 'user', content: '早上好', timestamp: Date.now() },
       { id: 'a1', role: 'assistant', content: 'Good morning', timestamp: Date.now() },
@@ -79,11 +80,19 @@ describe('即时翻译工作台（#36 合并对话框）', () => {
     expect(dialog).toBeTruthy()
     await waitFor(() => expect(container.querySelectorAll('.bubble-row').length).toBe(2))
     // 气泡与输入框都在合并框内（旧版气泡排在输入卡之外）
-    expect(dialog!.contains(container.querySelector('[data-testid="translate-input"]')!)).toBe(true)
+    const input = container.querySelector('[data-testid="translate-input"]')!
+    expect(dialog!.contains(input)).toBe(true)
     expect(dialog!.contains(container.querySelector('.bubble-row')!)).toBe(true)
-    // 内部滚动区承载消息（整页不再滚动）
-    const body = dialog!.querySelector('.cw-dialog-body')
-    expect(body && body.contains(container.querySelector('.bubble-row')!)).toBe(true)
+    // 内部滚动区只承载消息（整页不再滚动）
+    const body = dialog!.querySelector('.cw-dialog-body')!
+    expect(body.contains(container.querySelector('.bubble-row')!)).toBe(true)
+    // ★ 输入区必须在框脚（composer），不能回到滚动区顶部——
+    //   「对话框放最上面」是用户 2026-09-22 明确判错的形态，这条是本形态的唯一源码级锁。
+    const foot = dialog!.querySelector('.cw-dialog-foot')!
+    expect(foot.contains(input), '输入框必须贴在对话框底部（.cw-dialog-foot 内）').toBe(true)
+    expect(body.contains(input), '输入框不得再出现在消息流里').toBe(false)
+    // DOM 顺序即视觉顺序：消息流在前、输入区在后
+    expect(!!(body.compareDocumentPosition(foot) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
   })
 
   it('② 不再渲染任何文件上传入口，页面文案不提「上传/文件翻译」', () => {
