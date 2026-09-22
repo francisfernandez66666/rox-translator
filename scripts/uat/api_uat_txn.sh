@@ -83,6 +83,12 @@
 #       /api/plans 与 /api/me/package 恒 quote_currency=CNY、price_display=人民币原价 /
 #       下单快照恒落 CNY|1 且 money_cny=amount_money=实付（新租户首月半价后 10.8，快照落在
 #       最终应收之后）双写（结算事实源红线）/ 配置键复原
+#   T55 支付渠道凭据管理台配置（★ #74，2026-09-22 补 HTTP 级常设锁）：读写口鉴权（匿名/普通用户拒）/
+#       白名单外键整单拒收且不留半套凭据 / 开关只认 0/1/空、回调与网关必须完整 URL（非法值不落库）/
+#       敏感项 enc:v1 密文落库 + 掩码回显 + 响应零明文 + 掩码再提交不覆盖真密文（同批其它字段照常保存）/
+#       库配置端到端流到下单链路（已填项不再出现在渠道侧缺项清单）/ 凭据不全 fail-closed 不出 mockpay 假码 /
+#       enabled=0 时提示「已停用」优先于「未配置」/ 保存进审计 / 空串=清除（删行、回显空）
+#       （env > DB 优先级需注入 PAY_* 环境变量、跑中途改不了 UAT 服务环境，故由 pay_channels_test.go 进程内覆盖）
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 #   —— 2026-09-21 实测：`ck X 'want' "$(post "$H" "{\"a\":1,\"b\":2}" /p)"` 里的 body 会被 bash
 #   在双引号内的命令替换中做**大括号展开**，按逗号切成两个参数，curl 发出残缺 body 换来「参数格式
@@ -1869,6 +1875,116 @@ dbq "DELETE FROM quota_grants WHERE tenant_id=$TD54" >/dev/null
 dbq "DELETE FROM balance_accounts WHERE tenant_id=$TD54" >/dev/null
 dbq "DELETE FROM users WHERE username='$U54'" >/dev/null
 dbq "DELETE FROM tenants WHERE id=$TD54" >/dev/null
+
+# ---------- T55（★ #74 支付渠道凭据管理台化，2026-09-22 补 HTTP 级常设锁）----------
+# 覆盖口径：读写口的鉴权 / 白名单键（未知键整单拒收且不留半套凭据）/ 开关与地址形态校验 /
+#   敏感项 enc:v1 密文落库 + 掩码回显 + 掩码再提交不覆盖真值 / 空串=清除 /
+#   保存链路留审计 / **库配置真的流到下单链路**（缺项清单不再点名已填项）/ fail-closed 不降级 mock。
+# 与单测的分工：env > DB 的优先级需要往进程里注入 PAY_* 环境变量，UAT 服务是 run_uat.sh
+#   以固定环境启动的、跑中途无法改环境，故那一条由 pay_channels_test.go 在进程内覆盖；
+#   本处锁的是「HTTP 口进得去、出来的值与库里/渠道侧一致」这一段，两者互补不重复。
+echo "--- T55 支付渠道凭据管理台配置 ---"
+# 口径同 T46 的注释：T6/T45 会改 uatuser_a 口令并使脚本开头取的 H1 失效，
+# 这里必须重新登录取专用令牌——否则下面的「普通用户被拒」会对着「未登录」恒真，
+# 而「普通用户下单」三条直接红在鉴权层，测不到支付链路。
+T55U=$(tok uatuser_a uatpass123); H55="Authorization: Bearer $T55U"
+[ ${#T55U} -gt 10 ] 2>/dev/null || { FAIL=$((FAIL+1)); echo "FAIL|T55-auth|uatuser_a 重新登录失败"; }
+# ① 鉴权：匿名与普通用户都拿不到配置口（回显里含商户号等经营信息）
+case "$(get '' /api/admin/pay/channels)" in *'"success":true'*) FAIL=$((FAIL+1)); echo "FAIL|T55-anon-forbidden";; *) PASS=$((PASS+1)); echo "PASS|T55-anon-forbidden";; esac
+case "$(get "$H55" /api/admin/pay/channels)" in *'"success":true'*) FAIL=$((FAIL+1)); echo "FAIL|T55-user-forbidden";; *) PASS=$((PASS+1)); echo "PASS|T55-user-forbidden";; esac
+RC55=$(get "$AH" /api/admin/pay/channels)
+ck T55-admin-echo '"success":true' "$RC55"
+ck T55-echo-shape '"fields":\{' "$RC55"
+# env_overridden 在 UAT 恒空（服务未注入任何 PAY_* 变量）：这一条同时是「本文件后续断言
+# 看到的生效值确实来自库」的前提——一旦将来 run_uat 注入了 PAY_* 变量，这里先红，
+# 提醒去把下面的缺项清单口径改成 env 值，而不是让断言对着 env 值假绿。
+ck T55-no-env-takeover '"env_overridden":\{\}' "$RC55"
+
+# ② 白名单闸：未知键必须在写库之前整体拒绝（SetPayConfigField 也拒，但那已在第二个循环里，
+#    排在前面的合法字段会先落库 = 半套凭据，比整单失败难查得多）
+B55='{"fields":{"paych_wechat_app_id":"uat55wxappid","paych_not_a_key":"x"}}'
+R=$(post "$AH" "$B55" /api/admin/pay/channels/save)
+ck T55-unknown-key-reject '"success":false' "$R"
+ck T55-unknown-key-msg '未知的支付渠道配置项' "$R"
+N55=$(sq "SELECT COUNT(*) FROM system_config WHERE key='paych_wechat_app_id'" | tr -d '[:space:]')
+[ "$N55" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T55-unknown-key-no-halfwrite"; } || { FAIL=$((FAIL+1)); echo "FAIL|T55-unknown-key-no-halfwrite(未知键连带把合法字段写进了库)"; }
+
+# ③ 字段形态校验：开关只认 0/1/空；回调与网关必须是完整 URL（相对路径能存进来，
+#    但渠道永远调不到，表现为「配了却收不到款」，必须在保存时拦住）
+B55='{"fields":{"paych_wechat_enabled":"2"}}'
+R=$(post "$AH" "$B55" /api/admin/pay/channels/save)
+ck T55-enabled-bad-value '"success":false' "$R"
+B55='{"fields":{"paych_wechat_notify_url":"pay.example.com/wx"}}'
+R=$(post "$AH" "$B55" /api/admin/pay/channels/save)
+ck T55-relative-url-reject '完整地址' "$R"
+N55=$(sq "SELECT COUNT(*) FROM system_config WHERE key='paych_wechat_notify_url'" | tr -d '[:space:]')
+[ "$N55" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T55-bad-url-no-write"; } || { FAIL=$((FAIL+1)); echo "FAIL|T55-bad-url-no-write(非法地址仍落了库)"; }
+
+# ④ 正常保存：非敏感项明文可回显
+B55='{"fields":{"paych_wechat_app_id":"uat55wxappid","paych_notify_base":"https://pay.example.com"}}'
+R=$(post "$AH" "$B55" /api/admin/pay/channels/save)
+ck T55-save-plain '"success":true' "$R"
+RC55=$(get "$AH" /api/admin/pay/channels)
+ck T55-echo-plain-value '"paych_wechat_app_id":"uat55wxappid"' "$RC55"
+
+# ⑤ 敏感项三条锁：密文落库 / 掩码回显 / 掩码再提交保留真值
+#    （第三条是本轮最容易回归的一条：管理员打开页面不动密钥栏直接点保存，
+#      表单把回显的 "********" 原样提交回来，若直接写库就等于把真密钥抹掉了。）
+SECRET55="uat55apiv3key-0123456789abcdef"   # 恰好 32 字节，与微信 APIv3 密钥同规格
+B55='{"fields":{"paych_wechat_apiv3_key":"'"$SECRET55"'"}}'
+R=$(post "$AH" "$B55" /api/admin/pay/channels/save)
+ck T55-save-secret '"success":true' "$R"
+CIPH55=$(sq "SELECT value FROM system_config WHERE key='paych_wechat_apiv3_key'" | tr -d '[:space:]')
+case "$CIPH55" in enc:v1:*) PASS=$((PASS+1)); echo "PASS|T55-secret-cipher-at-rest";; *) FAIL=$((FAIL+1)); echo "FAIL|T55-secret-cipher-at-rest(敏感项未加密落库: ${CIPH55:0:16})";; esac
+RC55=$(get "$AH" /api/admin/pay/channels)
+ck T55-secret-masked-echo '"paych_wechat_apiv3_key":"\*\*\*\*\*\*\*\*"' "$RC55"
+case "$RC55" in *"$SECRET55"*) FAIL=$((FAIL+1)); echo "FAIL|T55-echo-leaks-plaintext";; *) PASS=$((PASS+1)); echo "PASS|T55-echo-leaks-plaintext";; esac
+B55='{"fields":{"paych_wechat_apiv3_key":"********","paych_wechat_mch_id":"uat55mch"}}'
+R=$(post "$AH" "$B55" /api/admin/pay/channels/save)
+ck T55-mask-resubmit-ok '"success":true' "$R"
+CIPH55B=$(sq "SELECT value FROM system_config WHERE key='paych_wechat_apiv3_key'" | tr -d '[:space:]')
+[ "$CIPH55B" = "$CIPH55" ] && { PASS=$((PASS+1)); echo "PASS|T55-mask-not-written-back"; } || { FAIL=$((FAIL+1)); echo "FAIL|T55-mask-not-written-back(掩码提交覆盖了真密文)"; }
+MCH55=$(sq "SELECT value FROM system_config WHERE key='paych_wechat_mch_id'" | tr -d '[:space:]')
+[ "$MCH55" = "uat55mch" ] && { PASS=$((PASS+1)); echo "PASS|T55-sibling-field-saved"; } || { FAIL=$((FAIL+1)); echo "FAIL|T55-sibling-field-saved(got $MCH55)"; }
+
+# ⑥ 库配置真的流到下单链路：本步之前经管理台填了 app_id / mch_id / apiv3_key（32 字节）
+#    与 notify_base，缺项清单就不得再点名这三项（否则说明 payGatewayConfig() 没把库值送进
+#    provider，读写口自说自话）；同时从未填的 private_key 必须仍被点名，证明不是清单整体失效。
+R=$(post "$H55" '{"points":100,"channel":"wechat"}' /api/pay/create)
+ck T55-wechat-failclosed '资质未配置' "$R"
+echo "$R" | grep -qE 'PAY_WECHAT_APP_ID' && { FAIL=$((FAIL+1)); echo "FAIL|T55-db-value-reaches-provider(已填 app_id 仍被判缺失)"; } || { PASS=$((PASS+1)); echo "PASS|T55-db-value-reaches-provider"; }
+echo "$R" | grep -qE 'PAY_WECHAT_PRIVATE_KEY' && { PASS=$((PASS+1)); echo "PASS|T55-missing-list-still-strict"; } || { FAIL=$((FAIL+1)); echo "FAIL|T55-missing-list-still-strict(缺项清单未点名从未填的 private_key: ${R:0:160})"; }
+echo "$R" | grep -qE 'mockpay://' && { FAIL=$((FAIL+1)); echo "FAIL|T55-no-mock-fallback"; } || { PASS=$((PASS+1)); echo "PASS|T55-no-mock-fallback"; }
+
+# ⑦ 管理台停用（enabled=0）优先于凭据齐全度：给出「已停用」而非「未配置」，
+#    且绝不回退 mock 出假码（#41 整改口径：配置了却给出废码比不出码更贵）
+B55='{"fields":{"paych_wechat_enabled":"0"}}'
+R=$(post "$AH" "$B55" /api/admin/pay/channels/save)
+ck T55-save-switch-off '"success":true' "$R"
+R=$(post "$H55" '{"points":100,"channel":"wechat"}' /api/pay/create)
+ck T55-switch-off-msg '已停用' "$R"
+echo "$R" | grep -qE 'mockpay://' && { FAIL=$((FAIL+1)); echo "FAIL|T55-switch-off-no-mock"; } || { PASS=$((PASS+1)); echo "PASS|T55-switch-off-no-mock"; }
+
+# ⑧ 留痕：保存动作进审计（谁在什么时候改了收款凭据，出账纠纷时要能回溯）
+AU55=$(sq "SELECT detail FROM audit_logs WHERE action='pay_channels_save' ORDER BY id DESC LIMIT 1")
+ck T55-save-audited 'paych_wechat' "$AU55"
+
+# ⑨ 空串=清除（管理台「清空」语义），删行而非留空值迷惑读路径
+B55='{"fields":{"paych_wechat_apiv3_key":""}}'
+R=$(post "$AH" "$B55" /api/admin/pay/channels/save)
+ck T55-clear-secret '"success":true' "$R"
+N55=$(sq "SELECT COUNT(*) FROM system_config WHERE key='paych_wechat_apiv3_key'" | tr -d '[:space:]')
+[ "$N55" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T55-clear-deletes-row"; } || { FAIL=$((FAIL+1)); echo "FAIL|T55-clear-deletes-row(清空后仍留行)"; }
+RC55=$(get "$AH" /api/admin/pay/channels)
+ck T55-cleared-echo-empty '"paych_wechat_apiv3_key":""' "$RC55"
+
+# ⑩ 清理：本用例写入的 paych_* 键删净，避免把 UAT 库留在「半套微信凭据」状态
+dbq "DELETE FROM system_config WHERE key IN ('paych_wechat_app_id','paych_wechat_mch_id','paych_wechat_apiv3_key','paych_wechat_enabled','paych_notify_base')" >/dev/null
+dbq "DELETE FROM audit_logs WHERE action='pay_channels_save'" >/dev/null
+# 本用例的两次 wechat 下单失败各留下一张 pending 单（与 T43 同源，订单先建、取码才失败），
+# 由 order_pending_timeout_min 巡检收口，此处只报数不判定，避免造出一条恒真的假绿断言。
+ORD55=$(sq "SELECT COUNT(*) FROM orders WHERE channel='wechat' AND status='pending'" | tr -d '[:space:]')
+echo "INFO|T55-leftover-wechat-pending=$ORD55"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

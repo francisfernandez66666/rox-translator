@@ -113,8 +113,9 @@ export default function Bell() {
   return (
     <div className="bell-wrap" ref={wrapRef}>
       {/* 样式随组件注入（与 TicketsPage 的 tk- 同口径：bell- 前缀只此一处在用）。
-          注意顶栏内边距的最终值不在这里：theme.css §十一 用 `html .bell-trigger{padding:9px}`
-          提权覆写了下面的 6px（#67 顶栏放大），改字号/间距要两处一起看。 */}
+          字阶按 UI 真值 T 系（标题 13 / 正文 12 / 时间 11）；历史上 theme.css §十一 曾用
+          `html .bell-trigger{padding:9px}` 提权覆写并放大本浮层字阶（#67/#68），
+          2026-09-22 全站还原时该覆写层已删除，本文件即唯一来源。 */}
       <style>{BELL_CSS}</style>
       {/* aria-expanded 让读屏报出「已展开/已折叠」；未读变化不做 aria-live 播报，
           顶栏每 30s 刷一次，实时播报会持续打断用户 */}
@@ -128,17 +129,17 @@ export default function Bell() {
       {open && (
         <div className="bell-panel" role="menu">
           <div className="bell-head">
-            <b style={{ fontSize: 15 }}>{t('bell.title')}</b>
+            <b style={{ fontSize: 13 }}>{t('bell.title')}</b>
             <button type="button" className="bell-readall" onClick={markAll}>{t('bell.readAll')}</button>
           </div>
           {/* 空态与列表并存：无通知时只出 EmptyState（items 为空，map 自然产不出节点） */}
           {items.length === 0 && <EmptyState title={t('bell.empty')} />}
           {items.map((n) => (
             <div key={n.id} className="bell-item" onClick={() => onItemClick(n)}>
-              <div style={{ fontWeight: 600, fontSize: 15 }}>{n.title}</div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{n.title}</div>
               {/* pre-wrap 保住后端正文里的换行（工单/反馈摘要常带 \n），否则整段塌成一行 */}
-              <div style={{ fontSize: 14, color: 'var(--lc-text-3)', marginTop: 2, whiteSpace: 'pre-wrap' }}>{n.body}</div>
-              <div style={{ fontSize: 13, color: 'var(--lc-text-4)', marginTop: 2 }}>{fmtTime(n.created_at)}</div>
+              <div style={{ fontSize: 12, color: 'var(--lc-text-3)', marginTop: 2, whiteSpace: 'pre-wrap' }}>{n.body}</div>
+              <div style={{ fontSize: 11, color: 'var(--lc-text-4)', marginTop: 2 }}>{fmtTime(n.created_at)}</div>
             </div>
           ))}
         </div>
@@ -155,9 +156,9 @@ const BELL_CSS = `
 .bell-trigger:hover{color:var(--lc-text)}
 /* 焦点环用 :focus-visible 而非 :focus：鼠标点击铃铛不画环，键盘 Tab 过来才出（顶栏不需要每次都糊一圈） */
 .bell-trigger:focus-visible{outline:1.2px solid var(--lc-border-input);outline-offset:2px}
-/* 未读数徽标挂在铃铛右上角「外侧」：#67 把顶栏字号/内边距放大后，铃铛只有 18px，
-   徽标压在 top/right:-1 会盖住铃铛右上沿（截图里像「铃铛被切掉一半」），故外移。 */
-.bell-count{position:absolute;top:-7px;right:-9px}
+/* 未读数徽标挂在铃铛右上角（★ 2026-09-22 还原：#67 放大顶栏时曾外移到 -7/-9
+   避免压住 18px 铃铛，现随字阶回档回到贴角 -1/-1）。 */
+.bell-count{position:absolute;top:-1px;right:-1px}
 /* 浮层 z-index:60 只在顶栏这个层叠上下文（.app-header 为 sticky + z-index:20，见 theme.css）
    内部比大小——够盖住下方页面内容，但对外盖不过页面级模态遮罩（如工单页 .tk-overlay 的 1200）。
    宽 340 + max-height 420 的固定盒：条目在 refresh 里已截到 20 条，靠自身 overflow-y 滚动，不做虚拟列表。 */
@@ -165,7 +166,7 @@ const BELL_CSS = `
   padding:8px;background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-modal);
   box-shadow:var(--lc-panel-highlight)}
 .bell-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-.bell-readall{background:none;border:0;color:var(--lc-text-3);font-size:13px;cursor:pointer;font-family:var(--lc-font);padding:0}
+.bell-readall{background:none;border:0;color:var(--lc-text-3);font-size:12px;cursor:pointer;font-family:var(--lc-font);padding:0}
 .bell-readall:hover{color:var(--lc-text);text-decoration:underline}
 .bell-item{padding:8px 6px;border-bottom:1px solid var(--lc-border-faint);cursor:pointer}
 .bell-item:last-child{border-bottom:0}

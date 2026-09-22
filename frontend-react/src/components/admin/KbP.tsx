@@ -38,7 +38,7 @@ const rowMt: any = { ...rowStyle, marginTop: 8 }
 const rowTop: any = { ...rowStyle, marginTop: 8, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }
 // resStyle 校验结果文字样式：通过=中性浅色（2026-09-18 起不再用绿色，暗色主题下与正文同档），
 //   不通过=红色（只有失败才需要抢眼）。
-const resStyle = (ok: boolean): any => ({ color: ok ? 'var(--lc-success)' : 'var(--lc-danger)', fontSize: 14, marginTop: 6 })
+const resStyle = (ok: boolean): any => ({ color: ok ? 'var(--lc-success)' : 'var(--lc-danger)', fontSize: 13, marginTop: 6 })
 
 // 安全句支持语言（安全短语料按语言入库）
 const SAFETY_LANGS = ['en', 'ar', 'de', 'es', 'fr', 'id_lang', 'kk', 'pt', 'ru', 'th', 'tr', 'zh_hant']
@@ -486,8 +486,8 @@ export function KbP() {
       {kbTab === 'kb' && (<>
       {/* 顶部工具卡：上传入口 + 包类型过滤 */}
       <Panel title={t('kb.uploadTitle')} extra={<Button variant="primary" onClick={() => setKbDlg(true)}>{t('kb.topbarUpload')}</Button>}>
-        <div style={{ ...rowStyle, marginBottom: 6 }}><span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('kb.uploadHint')}</span></div>
-        <div style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{t('kb.uploadSameAsFrontend')}</div>
+        <div style={{ ...rowStyle, marginBottom: 6 }}><span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('kb.uploadHint')}</span></div>
+        <div style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('kb.uploadSameAsFrontend')}</div>
       </Panel>
       {/* 快速对照添加卡：免建包直投个人草稿层的轻量入口 */}
       <Panel title={t('kb.alignTitle')}>
@@ -519,15 +519,15 @@ export function KbP() {
       </div>
       {pForm.pack_type === 'cross_dept' && (
         <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
-          <label style={{ fontSize: 14 }}>
+          <label style={{ fontSize: 13 }}>
             <input type="checkbox" checked={!!pForm.cross_all} onChange={(e: any) => setPForm({ ...pForm, cross_all: e.target.checked, cross_orgs: e.target.checked ? [] : (pForm.cross_orgs || []) })} />
             {' '}{t('kb.scopeCrossAll')}
           </label>
           {!pForm.cross_all && (
             <>
-              <span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{tpl('kb.scopeCrossDepts', { n: (pForm.cross_orgs || []).length })}:</span>
+              <span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{tpl('kb.scopeCrossDepts', { n: (pForm.cross_orgs || []).length })}:</span>
               {deptOrgs.map((o: OrgInfo) => (
-                <label key={o.id} style={{ fontSize: 14 }}>
+                <label key={o.id} style={{ fontSize: 13 }}>
                   <input type="checkbox" checked={(pForm.cross_orgs || []).includes(o.id)} onChange={(e: any) => {
                     const set = new Set<number>(pForm.cross_orgs || [])
                     if (e.target.checked) set.add(o.id); else set.delete(o.id)
@@ -541,12 +541,12 @@ export function KbP() {
         </div>
       )}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-        <span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('kb.entriesHint')}</span>
+        <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('kb.entriesHint')}</span>
         {isSuper && <Button size="sm" disabled={rebuilding} onClick={() => void rebuildIndex()}>{rebuilding ? t('kb.rebuilding') : t('kb.rebuildIndex')}</Button>}
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '10px 0 6px' }}>
-        <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('kb.filterType')}</span>
+        <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('kb.filterType')}</span>
         <select className="lc-select" value={pkgTypeFilter} onChange={(e) => setPkgTypeFilter(e.target.value)} style={{ width: 180 }}>
           <option value="">{t('kb.filterAll')}</option>
           <option value="tenant">{t('kb.typeTenant')}</option>
@@ -600,7 +600,7 @@ export function KbP() {
           <summary>{t('kb.bulkImportSummary')}</summary>
           <Textarea value={bulkText} onChange={(e) => setBulkText(e.target.value)} placeholder={t('kb.bulkPlaceholder')} style={{ minHeight: 90 }} />
           <Button style={{ marginTop: 6 }} onClick={() => selectedPkg != null && void bulkImport(selectedPkg)}>{t('kb.bulkImport')}</Button>
-          {bulkTextMsg && <span style={{ marginLeft: 10, fontSize: 13, color: 'var(--adm-ok-tx)' }}>{bulkTextMsg}</span>}
+          {bulkTextMsg && <span style={{ marginLeft: 10, fontSize: 12, color: 'var(--adm-ok-tx)' }}>{bulkTextMsg}</span>}
         </details>
         <div style={{ ...rowMt, marginBottom: 8 }}>
           <select className="lc-select" value={String(entryFilter.layer ?? 0)} onChange={(e) => {
@@ -643,7 +643,7 @@ export function KbP() {
 
       {/* ===== 语言文化规范（安全句）区：过滤条 + 新增表单 + 审核列表 ===== */}
       <Panel title={t('kb.safetyTitle')}>
-        <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('kb.safetyHint')}</div>
+        <div style={{ fontSize: 12, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('kb.safetyHint')}</div>
         <div style={rowMt}>
           <select className="lc-select" value={String(safetyPkgId)} onChange={(e) => applySafetyQuery({ pkg_id: Number(e.target.value), status: safetyStatusFilter, ...safetyFilter, q: safetyQ })}
             style={{ minWidth: 200 }}>
@@ -674,7 +674,7 @@ export function KbP() {
             onKeyDown={(e) => { if (e.key === 'Enter') applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ }) }}
             style={{ flex: 1, minWidth: 180 }} />
           <Button size="sm" variant="primary" onClick={() => applySafetyQuery({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ })}>{t('kb.search')}</Button>
-          <span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{tpl('kb.safetyCount', { n: safetyTotal })}</span>
+          <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{tpl('kb.safetyCount', { n: safetyTotal })}</span>
         </div>
         <div style={rowMt}>
           <select className="lc-select" value={String(sf.lang)} onChange={(e) => setSf({ ...sf, lang: e.target.value })} style={{ width: 110 }}>
@@ -742,7 +742,7 @@ export function KbP() {
             <option value="manage">管理 manage</option>
           </select>
           <Button variant="primary" size="sm" onClick={() => void setGrant(String(gForm.role))}>授权</Button>
-          <span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>读 &lt; 写 &lt; 管理（高级别含低级别）；部门管理员及以上天然拥有全部权限</span>
+          <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>读 &lt; 写 &lt; 管理（高级别含低级别）；部门管理员及以上天然拥有全部权限</span>
         </div>
         {/* 数据表格 */}
         <div style={{ marginTop: 10 }}>
@@ -769,7 +769,7 @@ function KbPager({ page, pageSize, total, onGo }: {
   return (
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', marginTop: 10, flexWrap: 'wrap' }}>
       <Button size="sm" variant="secondary" disabled={page <= 1} onClick={() => onGo(page - 1)}>{'‹'}</Button>
-      <span style={{ fontSize: 14, color: 'var(--lc-text-3)' }}>{page} / {pages}</span>
+      <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{page} / {pages}</span>
       <Button size="sm" variant="secondary" disabled={page >= pages} onClick={() => onGo(page + 1)}>{'›'}</Button>
       <input className="lc-input" type="number" value={page} min={1} max={pages} style={{ width: 64 }}
         onChange={(e) => { const v = Number(e.target.value); if (v >= 1 && v <= pages) onGo(v) }} />

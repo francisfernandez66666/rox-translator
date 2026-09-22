@@ -165,7 +165,7 @@ export function ApiKeysP() {
           <div style={{ background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', borderRadius: 8, padding: 10, marginBottom: 10 }}>
             <Icon n="alert" style={MI} />{t('apikeys.newKeyOnce')}：<b style={{ userSelect: 'all' }}>{newKey}</b>
             <Button size="sm" variant="secondary" style={{ marginLeft: 8 }} onClick={copyNewKey}><Icon n="clipboard" style={MI} />{t('apikeys.copy')}</Button>
-            {copied && <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}> {t('apikeys.copied')}</span>}
+            {copied && <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}> {t('apikeys.copied')}</span>}
           </div>
         )}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -200,13 +200,13 @@ export function ApiKeysP() {
 
       {isSuper && docsCardOpen && (
         <Panel title={t('docsEdit.title')}>
-          <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('docsEdit.hint')}</div>
+          <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('docsEdit.hint')}</div>
           <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
             <Button size="sm" variant={docsLang === 'zh' ? 'primary' : 'secondary'} onClick={() => setDocsLang('zh')}>{t('docsEdit.langZh')}</Button>
             <Button size="sm" variant={docsLang === 'en' ? 'primary' : 'secondary'} onClick={() => setDocsLang('en')}>{t('docsEdit.langEn')}</Button>
           </div>
           <textarea className="lc-textarea" rows={16} value={docsMD} onChange={(e) => setDocsMD(e.target.value)} placeholder={t('docsEdit.placeholder')}
-                    style={{ width: '100%', fontFamily: 'SFMono-Regular, Consolas, monospace', fontSize: 14, lineHeight: 1.55, resize: 'vertical', minHeight: 380 }} />
+                    style={{ width: '100%', fontFamily: 'SFMono-Regular, Consolas, monospace', fontSize: 13, lineHeight: 1.55, resize: 'vertical', minHeight: 380 }} />
           <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <Button variant="primary" disabled={docsSaving || !docsMD.trim()} onClick={saveDocs}><Icon n="checkcircle" style={MI} />{docsSaving ? t('docsEdit.saving') : t('common.save')}</Button>
             <Button variant="secondary" disabled={!docsMD.trim()} onClick={previewDocs}><Icon n="eye" style={MI} />{t('docsEdit.preview')}</Button>
@@ -216,7 +216,7 @@ export function ApiKeysP() {
             </label>
             <Button variant="secondary" onClick={exportDocs}><Icon n="download" style={MI} />{t('docsEdit.export')}</Button>
             <Button variant="danger" onClick={resetDocs}>↺ {t('docsEdit.reset')}</Button>
-            {docsDefaultBadge && <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('docsEdit.isDefault')}</span>}
+            {docsDefaultBadge && <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('docsEdit.isDefault')}</span>}
           </div>
         </Panel>
       )}

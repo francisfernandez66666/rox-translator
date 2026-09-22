@@ -22,27 +22,27 @@
   --lc-border-2: var(--lc-border-done);     /* #6E7683 4.7:1 完成态 */
   --lc-border-3: var(--lc-border-input);    /* #5A6270 3.9:1 输入框 */
   --lc-border-4: var(--lc-border-faint);    /* #464C58 3.2:1 分隔 / 轨道 */
-  --lc-border-5: var(--lc-border-pill);     /* #545A65 3.9:1 胶囊 / 次按钮 */
-  --lc-border-6: var(--lc-border-card);     /* #464C58 3.2:1 卡片 */
-  --lc-border-7: var(--lc-border-card-dim); /* #343B47 2.6:1 骨架 / 空状态 */
+  --lc-border-5: var(--lc-border-pill);     /* #424956 3.0:1 胶囊 / 次按钮 */
+  --lc-border-6: var(--lc-border-card);     /* #3A404C 2.5:1 卡片 */
+  --lc-border-7: var(--lc-border-card-dim); /* #2A2F3A 1.9:1 骨架 / 空状态 */
 
-  /* —— 描边（对 #000 的对比度；第 11 轮整体上提 1-2 档修「偏浅偏细」） —— */
+  /* —— 描边（对 #000 的对比度；2026-09-22 全站还原 UI 交付真值，撤销历次提亮） —— */
   --lc-border-strong: #8B939F; /* 6.0:1  对话外框 / 强调物件边界 */
   --lc-border-done: #6E7683;   /* 4.7:1  完成态 / 次按钮 hover 边 */
   --lc-border-input: #5A6270;  /* 3.9:1  输入边 / 起点块 */
   --lc-border-faint: #464C58;  /* 3.2:1  常规分隔 / 量尺轨道 */
-  --lc-border-pill: #545A65;   /* 3.9:1  语种胶囊 / 次按钮描边（2026-09-18 用户裁定：整体提亮一档，对齐 X 风格） */
-  --lc-border-card: #464C58;   /* 3.2:1  卡片常规边（Toast / 菜单 / 抽屉；同上提亮一档） */
-  --lc-border-card-dim: #343B47; /* 骨架屏 / 空状态卡边（随整体提亮上移） */
+  --lc-border-pill: #424956;   /* 3.0:1  语种胶囊 / 次按钮描边（交付包真值） */
+  --lc-border-card: #3A404C;   /* 2.5:1  卡片常规边（Toast / 菜单 / 抽屉；交付包真值） */
+  --lc-border-card-dim: #2A2F3A; /* 骨架屏 / 空状态卡边（交付包真值） */
   --lc-border-danger-edge: #402323; /* 危险对话框整框描边 */
 
-  /* —— 文字 ——（2026-09-19 用户反馈整体对比度不足：text-3/text-4 各提一档，均按对 #000 实测）
-     text-2 ≈ 8.0:1 · text-3 ≈ 6.3:1 · text-4 ≈ 5.4:1（内嵌卡面上仍 ≥4.5:1，AA 达标） */
+  /* —— 文字 ——（2026-09-22 还原交付包真值，撤销 09-19 提档）——
+     按 UI-ANNOTATIONS §1.1：text-2 #9AA0AA · text-3 #71767B · text-4 #536471 */
   --lc-text: #E7E9EA;
   --lc-text-2: #9AA0AA;
-  --lc-text-3: #878D95;
-  --lc-text-4: #7A828E;        /* 占位 / 弱说明 */
-  --lc-text-on-light: #4A5158; /* 反相白卡（如专业版套餐卡）上的次级文字，对 #E7E9EA ≈ 6.6:1 */
+  --lc-text-3: #71767B;
+  --lc-text-4: #536471;        /* 占位 / 弱说明 / 页脚版权 */
+  --lc-text-on-light: #4A5158; /* 反相白卡（专业版套餐卡）上的次级文字，随白底反相口径保留 */
   --lc-disabled: #4A4F55;
 
   /* —— 语义色（X/Grok 单色：全站无蓝无绿，绿色永久禁用） —— */

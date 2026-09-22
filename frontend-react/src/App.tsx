@@ -11,6 +11,8 @@
 //   - 工作台 Tab 与头部幽灵按钮改吃本文件内联的 .app-tab / .ss-ghost-btn 类
 //     （纯黑主题下无需组件库皮肤，避免 TDesign 蓝底残留）；
 //   - 新增公开路由 /pricing（未登录访客亦可直达，见 Root 内的营销门面分支）。
+// 2026-09-22 全站还原 UI 真值（用户指令）：顶栏按 UI-ANNOTATIONS §2.2 收为 38 高、
+//   品牌 14、Tab 13 胶囊；#67 放大的内联字阶（汉堡 24/品牌 23/租户徽标 15 等）全部还原。
 // ============================================================================
 
 import { lazy, Suspense, useEffect, useState } from 'react'
@@ -120,7 +122,7 @@ function PageLoading({ label = gt('app.loading'), onBeat }: { label?: string; on
     // dvh（非 vh）是为了移动端地址栏收起/展开时不把动效顶偏。gap 20 让动效与文字不粘连。
     <div style={{ flex: 1, minHeight: '100dvh', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
       <WordSwap className="ws--lg" ariaLabel={label} onBeat={onBeat} />
-      <p style={{ fontSize: 18, color: 'var(--lc-text-2)' }}>{label}</p>
+      <p style={{ fontSize: 16, color: 'var(--lc-text-2)' }}>{label}</p>
     </div>
   )
 }
@@ -214,35 +216,33 @@ function FrontShell() {
             selfservice 的自助面板（ReferralPanel/MyPackagePanel/AccountPanel）与 MyBilling（账单表格）
             直接复用，所以这些页面只在 FrontShell 下可达，单独挂载（不经本外壳）就会掉样式
             ——MyBilling.tsx 尾部亦已注明这一依赖。
-          ⚠ 顶栏字号的最终值有两处，改一处不够：本文件的 .app-tab/.ss-ghost-btn 与
-            styles/theme.css §十一 的 `html .app-header .app-tab`（#67/#68 整档放大与 nowrap）。
-            那边用 html 前缀、令牌覆写用 :root:root，是为了把特异度从 (0,1,0) 抬到 (0,1,1)/(0,2,0)：
-            src/ui/langcross 是冻结交付包（禁改 tokens.css/components.css），字号上调只能写在页面级
-            CSS，而 main.tsx 里 theme.css 先于组件库 CSS 导入，同特异度会被组件库反向覆盖。 */}
+          ⚠ 顶栏字号唯一来源就是本文件与 theme.css 基线：历史上 theme.css §十一 曾用
+            `html .app-header` 前缀整档放大顶栏控件（#67/#68），2026-09-22 全站还原 UI 真值时
+            已随该层一并删除（真值见《UI-ANNOTATIONS.md》§2.2：顶栏 38 高、品牌 14、导航 13 胶囊）。 */}
       <style>{`
         .ss-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
         .ss-grid .ssc-card{width:100%}
-        .ss-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--lc-border-faint)}
+        .ss-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--lc-border-faint)}
         .ss-row span{color:var(--lc-text-2)}.ss-row b{font-size:18px;color:#E7E9EA}
         .ss-copy{display:flex;align-items:center;gap:8px}
         .ss-stats{display:flex;gap:24px;padding:12px 0}
         .ss-stat{text-align:center}
         .ss-stat b{display:block;font-size:20px;color:#E7E9EA}
         .ss-table{width:100%;border-collapse:collapse}
-        .ss-table th,.ss-table td{border:1.2px solid var(--lc-border-faint);padding:8px 10px;text-align:left;font-size:15px}
-        .ss-table th{background:#191D24;color:#E7E9EA}
+        .ss-table th,.ss-table td{border:1.2px solid var(--lc-border-faint);padding:6px 8px;text-align:left}
+        .ss-table th{background:var(--npz-surface-2);color:#E7E9EA}
         .ss-quick{display:flex;flex-wrap:wrap;gap:8px}
         .ss-drawer-nav{display:flex;flex-direction:column;padding:8px 0;border-bottom:1px solid var(--lc-border-faint)}
-        .ss-drawer-item{padding:14px 16px;cursor:pointer;border-bottom:1px solid var(--lc-border-faint);font-size:17px;color:#E7E9EA}
+        .ss-drawer-item{padding:12px 16px;cursor:pointer;border-bottom:1px solid var(--lc-border-faint);font-size:15px;color:#E7E9EA}
         .ss-drawer-item:hover{background:rgba(231,233,234,0.10)}
         .ss-loading{display:flex;justify-content:center;padding:40px}
-        /* ★ #67（2026-09-22 用户反馈「页眉、tab 都太小看不清楚」）：顶栏控件整档放大——
-           幽灵按钮 14→16px/32→38px 高，工作台 Tab 14→17px/40px 高并加粗到 600。
-           对标 X/Grok 黑色 UI 的导航字阶。★ #68：本文件的描边全部改走 --lc-border-faint
-           （旧 #3A404C→#4A505C 仍是 2~3:1，在纯黑上「看不见边」），令牌一处调全站跟随。 */
-        .ss-ghost-btn{display:inline-flex;align-items:center;justify-content:center;height:38px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--lc-text-2);font-size:16px;font-family:var(--lc-font);cursor:pointer;transition:color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}
+        /* 顶栏控件字阶（★ 2026-09-22 还原 UI-ANNOTATIONS §2.2 真值）：幽灵按钮 14px/32 高、
+           工作台 Tab 13px 胶囊（活跃=面 #16181C + 文字 #E7E9EA，即 --lc-raised/--lc-text）；
+           历史上 #67/#68 曾整档放大到 16/17px 与 38/40 高，已随页面级覆写层一并撤销。
+           描边/分隔统一走 --lc-* 令牌，hover 只改色不投影。 */
+        .ss-ghost-btn{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:var(--lc-text-2);font-size:14px;font-family:var(--lc-font);cursor:pointer;transition:color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}
         .ss-ghost-btn:hover{color:var(--lc-text);background:var(--lc-raised)}
-        .app-tab{display:inline-flex;align-items:center;height:40px;padding:0 18px;border:0;border-radius:10px;background:transparent;color:var(--lc-text-2);font-size:17px;font-weight:600;font-family:var(--lc-font);cursor:pointer;transition:color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}
+        .app-tab{display:inline-flex;align-items:center;height:28px;padding:0 14px;border:0;border-radius:999px;background:transparent;color:var(--lc-text-2);font-size:13px;font-family:var(--lc-font);cursor:pointer;transition:color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}
         .app-tab:hover{color:var(--lc-text)}
         .app-tab--on{background:var(--lc-raised);color:var(--lc-text)}
       `}</style>
@@ -251,15 +251,16 @@ function FrontShell() {
           图标一律 <Icon/>（文字按钮仍保留 i18n 取词，零 emoji）。 */}
       <header className="app-header">
         {/* 「更多」抽屉入口：常驻按钮（theme.css/mobile.css 里没有隐藏它的规则，宽窄屏都在），
-            抽屉里装自助区入口与页脚。字号 24 只是把单图标抬到与 #67 放大后的 Tab 同档；
+            抽屉里装自助区入口与页脚。图标 18 与 §2.2 品牌 Logo 18×18 同档；
             无文字故只有 aria-label，读屏按 t('app.openNav') 播报 */}
-        <button className="ss-ghost-btn" onClick={() => setMenuOpen(true)} aria-label={t('app.openNav')} style={{ fontSize: 24, padding: '0 10px' }}><Icon n="menu" style={{ verticalAlign: '-3px' }} /></button>
+        <button className="ss-ghost-btn" onClick={() => setMenuOpen(true)} aria-label={t('app.openNav')} style={{ fontSize: 18, padding: '0 8px' }}><Icon n="menu" style={{ verticalAlign: '-3px' }} /></button>
         <span className="brand">
-          {/* 白标：租户配了 logo 就出图（alt 用品牌名），否则出「品牌图标 + 品牌名」，
-              品牌名缺省回落到 app.title（内置「能言」），不留空品牌位 */}
+          {/* 白标：租户配了 logo 就出图（alt 用品牌名），否则出「品牌名」前缀一枚 18 图标，
+              品牌名缺省回落到 app.title（内置「能言」），不留空品牌位。
+              字阶/字重由 theme.css .brand（§2.2 真值 14）统一给，图片高度收进 38 高顶栏。 */}
           {branding.brandLogo
-            ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 60 }} />
-            : <span style={{ fontSize: 23, fontWeight: 800 }}><Icon n="brand" style={{ verticalAlign: '-4px', marginRight: 8 }} />{branding.brandName || t('app.title')}</span>}
+            ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 24 }} />
+            : <span><Icon n="brand" style={{ fontSize: 18, verticalAlign: '-3px', marginRight: 8 }} />{branding.brandName || t('app.title')}</span>}
         </span>
         {/* 三个工作台 Tab：选中态从 URL 反推（见上面的 tab 推导），本组件不再持有 Tab state——
             浏览器前进/后退、深链进来都能让高亮自动跟上，单一事实源是地址栏 */}
@@ -271,9 +272,9 @@ function FrontShell() {
                 onClick={() => switchTab('editor')}><Icon n="pencil" style={{ verticalAlign: '-3px', marginRight: 6 }} />{t('app.tabEditor')}</button>
         <div style={{ flex: 1 }} /> {/* 空占位把后面的控件推到行尾（顶栏无 justify-content:space-between，靠它撑） */}
         {/* ★ F1：租户身份徽标——个人用户「个人版」，企业用户显示所属租户名（title 全文）
-            超过 12 字就地截断加省略号：顶栏 #67 放大字号后一行放不下长租户名，
-            完整值交给 title 悬浮提示（nowrap 由 theme.css §十一 的 .app-header 子项统一给） */}
-        <span className="tenant-tag" title={tenantTag || t('app.personalPlan')} style={{ fontSize: 15, color: 'var(--lc-text-2)', whiteSpace: 'nowrap' }}>
+            超过 12 字就地截断加省略号：顶栏一行放不下长租户名（§2.2 顶栏不折行），
+            完整值交给 title 悬浮提示；字号 12 = §2.2「套餐标识」真值档 */}
+        <span className="tenant-tag" title={tenantTag || t('app.personalPlan')} style={{ fontSize: 12, color: 'var(--lc-text-2)', whiteSpace: 'nowrap' }}>
           {tenantTag
             ? <><Icon n="building" style={{ verticalAlign: '-3px', marginRight: 4 }} />{tenantTag.length > 12 ? tenantTag.slice(0, 12) + '…' : tenantTag}</>
             : <><Icon n="user" style={{ verticalAlign: '-3px', marginRight: 4 }} />{t('app.personalPlan')}</>}
@@ -304,8 +305,9 @@ function FrontShell() {
           ★ 2026-09-16 整改：旧版一律跳 /packages（只读页）——租户管理员及以上直跳
             后台计费 Hub（真正的收银台所在），避免「点充值→落只读页」死胡同 */}
       {depleted && (
-        // 配色随纯黑主题调整：半透明红底 + #E5484D 文字（旧的 #fff1f0 浅底浅字在暗色下不可读）
-        <div style={{ background: 'rgba(229,72,77,0.10)', color: '#E5484D', padding: '6px 16px', fontSize: 14, display: 'flex', gap: 12, alignItems: 'center', borderBottom: '1px solid rgba(229,72,77,0.30)' }}>
+        // 配色随纯黑主题调整：半透明红底 + #E5484D 文字（旧的 #fff1f0 浅底浅字在暗色下不可读）；
+        // 字号 12 = §2.2 InlineBanner 文案真值档
+        <div style={{ background: 'rgba(229,72,77,0.10)', color: '#E5484D', padding: '4px 16px', fontSize: 12, display: 'flex', gap: 12, alignItems: 'center', borderBottom: '1px solid rgba(229,72,77,0.30)' }}>
           <span>{t('ss.exhaustedHint')}</span>
           <Button size="sm" variant="danger" onClick={() => {
             // 用 useAdminStore.getState() 而不是 useAdmin()：顶栏只为点一下钮取个 action，
@@ -327,7 +329,7 @@ function FrontShell() {
           // WordSwap 从第一拍数起，只有各自真的见过 loading 才会补拍（不会互相借用对方的拍数）
           <div className="loading-screen" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
             <WordSwap className="ws--lg" ariaLabel={t('app.starting')} onBeat={bootGate.onBeat} />
-            <p style={{ fontSize: 18, color: 'var(--lc-text-2)' }}>{t('app.starting')}</p>
+            <p style={{ fontSize: 16, color: 'var(--lc-text-2)' }}>{t('app.starting')}</p>
           </div>
         ) : (
           <Suspense fallback={<PageLoading />}>

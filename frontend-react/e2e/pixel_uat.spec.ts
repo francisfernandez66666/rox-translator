@@ -85,11 +85,14 @@ test.describe('像素级 UAT', () => {
     await shot(page, 'p2_workbench');
   });
 
-  // ★ #36 + #35（2026-09-21 用户反馈）结构/可读性双断言：
+  // ★ #36 + UI 真值（2026-09-22 口径改向）结构/字阶双断言：
   //   #36 即时翻译的输入框与译文合并进同一张对话框卡（旧版是「输入卡 + 下方消息流」两块），
   //      同时文件翻译入口从即时翻译下线（文件翻译统一走工单通道），故卡内不得再有 file input；
-  //   #35 登录后字号/对比度整体上调一档，这里用 getComputedStyle 钉住实测值，防字号回潮。
-  test('P2b 工作台合并对话框结构 + 字号对比度上调', async ({ page }) => {
+  //   字阶/灰阶这一半原先钉的是「#35 整体上调一档」的结果，现已随全站按 UI 交付稿还原改为
+  //      等值锁（真值来自 前端及UI相关/UI-ANNOTATIONS.md 与交付包）——这里用 getComputedStyle
+  //      实测的是「渲染出来的值等于交付值」，与 readability.test.ts 的源码级锁互补：
+  //      单测拦「CSS 里被改回去」，本处拦「运行时内联样式/换肤把值盖掉」。
+  test('P2b 工作台合并对话框结构 + 字阶/灰阶按交付真值', async ({ page }) => {
     await login(page);
     await page.goto('/');
     // 结构锁走 class（.cw-dialog*）而非文案：文案受 i18n 与措辞调整影响，
@@ -101,41 +104,47 @@ test.describe('像素级 UAT', () => {
     await expect(dialog.locator('.cw-dialog-foot')).toBeVisible();
     // 文件入口下线：全站工作台不应再挂隐藏的原生 file input
     expect(await page.locator('input[type="file"]').count(), '即时翻译已移除文件上传入口').toBe(0);
-    // 字号：输入区 ≥14px、正文气泡 ≥15px（theme.css §十 + 组件 CW_CSS 共同口径）
+    // 字号真值等值锁（★ 2026-09-22 全站还原批）：本批把 #35/#67/#68 的「整档 +1px / 顶栏提档」
+    // 全部撤除，字阶回到交付 UI 口径，所以这里由「≥ 下限」改成「恰等于真值档」——
+    // 单向下限锁正是把配色与字阶一路推离交付稿的元凶（它只拦变小，不拦变大）。
+    // 输入框 13 = 组件库 .lc-textarea 冻结档（第 1 轮交付值），不是页面层自选值。
     const taFs = await dialog.locator('.cw-dialog-body textarea').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
-    expect(taFs, `输入框字号 ${taFs}px 偏小（#35 已上调，勿回退）`).toBeGreaterThanOrEqual(14);
-    const welcomeFs = await dialog.locator('.cw-welcome').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
-    expect(welcomeFs, `欢迎语字号 ${welcomeFs}px 偏小`).toBeGreaterThanOrEqual(14);
-    // 对比度：弱说明文字走 --lc-text-3。★ #68（2026-09-22 用户「对比度整体再提升」）把
-    // 该令牌又提了一档，写死 rgb 白名单会随每次调色翻红——改成按 WCAG 实计算：
-    // 弱文字对工作台卡面（#0E1014）对比度必须 ≥6:1（与 readability.test.ts 同口径）。
+    expect(taFs, `输入框字号 ${taFs}px ≠ 组件库真值 13px`).toBe(13);
+    // 正文气泡 14 = theme.css .bubble（交付包正文档）
+    const bubbleFs = await page.locator('.bubble').first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize)).catch(() => -1);
+    if (bubbleFs >= 0) expect(bubbleFs, `气泡字号 ${bubbleFs}px ≠ 真值 14px`).toBe(14);
+    // 弱说明文字：颜色必须落在真值灰阶集合内（提亮批自造的 #878D95/#7A828E/#9AA2AF 一律红灯），
+    // 并顺手核对该灰阶对卡面 #0E1014 的实际比值是否等于真值口径（≥4:1，图形/弱文字档）。
     const welcomeColor = await dialog.locator('.cw-welcome').evaluate((el) => getComputedStyle(el).color);
-    expect(contrastOnCard(welcomeColor), `弱文字对比度不足（${welcomeColor}）`).toBeGreaterThanOrEqual(6);
-    // ★ #67（2026-09-22 用户「页眉、tab 都太小」）：顶栏字阶下限 + 「词不许断行」。
-    //   放大后 1280 宽一度把品牌/Tab 压成两行（「能/言」「即时/翻译」），
-    //   故除字号外再钉一条：控件实高不得超过单行档（40px 高 + 容差），换行即红。
-    const brand = page.locator('.app-header .brand span').first();
-    // 品牌可能是图片 logo（.brand 下无 span），此时只查 Tab——字号锁不能因品牌形态而假红
-    // 21px 这档与 src/styles/readability.test.ts 的 #67 静态锁同口径：
-    // 那边钉源码里的覆写值，这边钉浏览器实测计算值，运行时换肤/内联样式绕过 CSS 文件时只有这边会红。
-    if (await brand.count()) {
-      expect(await brand.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), '品牌字号回退').toBeGreaterThanOrEqual(21);
-    }
+    const TRUTH_RGB = ['#E7E9EA', '#9AA0AA', '#71767B', '#8A9099', '#536471']
+      .map((h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(','));
+    const welcomeRgb = (welcomeColor.match(/\d+(\s*,\s*\d+){2}/) || [''])[0].replace(/\s/g, '');
+    expect(TRUTH_RGB, `弱文字色不在真值灰阶内：${welcomeColor}`).toContain(welcomeRgb);
+    expect(contrastOnCard(welcomeColor, '#000000'), `真值灰阶在页面底上不应低于 3.4:1（${welcomeColor}）`).toBeGreaterThanOrEqual(3.4);
+    // 顶栏按 §2.2 骨架真值：行高 38、品牌 14 Bold、导航 13px 胶囊、语种钮 12px。
+    // 三条锁配对使用：字号等值防「调档」，实高 ≤38 防「折行/撑破行」，行高本身防顶栏被改厚。
+    const headerH = await page.locator('.app-header').evaluate((el) => el.getBoundingClientRect().height);
+    expect(headerH, `顶栏实高 ${headerH}px ≠ §2.2 的 38px`).toBe(38);
+    const brand = page.locator('.app-header .brand').first();
+    // 品牌可能是图片 logo（此时 .brand 内只有 <img>），字号锁改为落在 img 的宿主上量，
+    // 不能因为白标形态不同就假红。
+    expect(await brand.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), '品牌字号 ≠ §2.2 真值 14px').toBe(14);
     const tab = page.locator('.app-header .app-tab').first();
     // 三个工作台 Tab 共用同一条 .app-tab 规则，取首个即可代表该字阶档（不必逐个数）。
     // 高度锁之前必须先断可见：隐藏元素 getBoundingClientRect() 恒为 0，
-    // `<=46` 会静默通过——那正是「断言永远绿」一类的假绿，比翻红更危险。
+    // `<=38` 会静默通过——那正是「断言永远绿」一类的假绿，比翻红更危险。
+    await expect(tab, '工作台 Tab 未渲染').toBeVisible();
     const tabFs = await tab.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
-    expect(tabFs, `工作台 Tab 字号 ${tabFs}px 偏小`).toBeGreaterThanOrEqual(16);
+    expect(tabFs, `工作台 Tab 字号 ${tabFs}px ≠ §2.2 真值 13px`).toBe(13);
     const tabH = await tab.evaluate((el) => el.getBoundingClientRect().height);
-    expect(tabH, `工作台 Tab 实高 ${tabH}px ⇒ 文案已折行`).toBeLessThanOrEqual(46);
+    expect(tabH, `工作台 Tab 实高 ${tabH}px ⇒ 文案已折行或控件被撑高`).toBeLessThanOrEqual(38);
     const langBtn = page.locator('.app-header .lang-sel-btn').first();
     await expect(langBtn, '顶栏语种下拉未渲染').toBeVisible();
-    // 语种钮同锁（#67）：#23 把二元 EN 切换换成 12 语种下拉后，中文语种名（如「简体中文」）
-    // 一度把钮撑成两行，故字号下限与「单行实高」两条都要钉，缺一漏一半回归。
+    // 语种钮同锁：#23 把二元 EN 切换换成 12 语种下拉后，中文语种名（如「简体中文」）
+    // 一度把钮撑成两行，故字号真值与「单行实高」两条都要钉，缺一漏一半回归。
     const langH = await langBtn.evaluate((el) => el.getBoundingClientRect().height);
-    expect(langH, `语种钮实高 ${langH}px ⇒ 文案已折行`).toBeLessThanOrEqual(46);
-    expect(await langBtn.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), '语种钮字号回退').toBeGreaterThanOrEqual(14);
+    expect(langH, `语种钮实高 ${langH}px ⇒ 文案已折行`).toBeLessThanOrEqual(38);
+    expect(await langBtn.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), '语种钮字号 ≠ 真值 12px').toBe(12);
     await shot(page, 'p2b_workbench_merged');
   });
 

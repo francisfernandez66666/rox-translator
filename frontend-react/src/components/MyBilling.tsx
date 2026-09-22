@@ -70,10 +70,10 @@ function TrendCard() {
           <text x={0} y={H + 14} fontSize={10} fill="var(--lc-text-3)">{bars[0].date}</text>
           <text x={W} y={H + 14} fontSize={10} fill="var(--lc-text-3)" textAnchor="end">{bars[days - 1].date}</text>
         </svg>
-      ) : <div style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{t('ss2.loading')}</div>}
+      ) : <div style={{ fontSize: 12, color: 'var(--lc-text-3)' }}>{t('ss2.loading')}</div>}
       {/* 纵轴没有刻度，改为在底部标出「最高单日」当作唯一参照值。
           ⚠ 整月无消耗时 max 是除零兜底的 1，fmtPoints(1) 因「非零最小显示 1 积分」规则会显示 1 而不是 0 */}
-      <div style={{ fontSize: 13, color: 'var(--lc-text-4)', marginTop: 4 }}>{t('ss2.trendMax')}：{fmtPoints(max)} {t('ss2.unitPoints')}</div>
+      <div style={{ fontSize: 12, color: 'var(--lc-text-4)', marginTop: 4 }}>{t('ss2.trendMax')}：{fmtPoints(max)} {t('ss2.unitPoints')}</div>
     </div>
   )
 }
@@ -85,7 +85,7 @@ function Pager(props: { page: number; total: number; size: number; onPage: (p: n
   // ⚠ 调用处写死的 size=10 必须与 api/mybilling 里 page() 的默认 size 一致，否则页数与后端真实切片对不上
   const pages = Math.max(1, Math.ceil(props.total / props.size))
   return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 13 }}>
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 12 }}>
       <Button size="sm" variant="secondary" disabled={props.page <= 1} onClick={() => props.onPage(props.page - 1)}>{t('ss2.prev')}</Button>
       <span>{t('ss2.pageOf').replace('{p}', String(props.page)).replace('{n}', String(pages))}</span>
       <Button size="sm" variant="secondary" disabled={props.page >= pages} onClick={() => props.onPage(props.page + 1)}>{t('ss2.next')}</Button>

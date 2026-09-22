@@ -439,7 +439,7 @@ export default function AssistP() {
                   key: 'op', title: '', width: 150, render: (r: Any) => (
                     <div style={{ display: 'flex', gap: 12 }}>
                       <a className="lc-link" onClick={() => setForm({ def, row: { ...def.defaults, ...r } })}>{t('coupons.edit')}</a>
-                      <a className="lc-link" style={{ color: 'var(--lc-danger, #f87171)' }} onClick={() => void removeRow(def, r as AssistRow)}>{t('common.delete')}</a>
+                      <a className="lc-link" style={{ color: 'var(--lc-danger, #E5484D)' }} onClick={() => void removeRow(def, r as AssistRow)}>{t('common.delete')}</a>
                     </div>
                   ),
                 },

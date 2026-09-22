@@ -204,7 +204,7 @@ export default function TaskCenterP() {
   return (
     <div>
       <Panel title={t('tasks.title')}>
-        <p style={{ fontSize: 14, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('tasks.hint')}</p>
+        <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('tasks.hint')}</p>
         <DataTable<any> rowKey={(row) => String(row.id)} rows={myRows as Any[]} columns={myCols}  />
         {!myRows.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 16 }}>{t('tasks.empty')}</div>}
       </Panel>
@@ -219,7 +219,7 @@ export default function TaskCenterP() {
             grant_mode: 'manual', task_key: '', period: 'daily', valid_days: 0, stack_expiry: 0, cap_per_day: 0, cap_per_week: 0,
           })}>＋ {t('tasks.add')}</Button>
         </div>}>
-          <p style={{ fontSize: 14, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('tasks.adminHint')}</p>
+          <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('tasks.adminHint')}</p>
           <DataTable<any> rowKey={(row) => String(row.id)} rows={adminRows as Any[]} columns={adminCols}  />
         </Panel>
       )}

@@ -83,7 +83,7 @@ export default class ErrorBoundary extends Component<Props, State> {
               // 硬跳转（不是 navigate）：整页重载才能顺带丢掉可能已经脏掉的 store / 模块级单例状态
               onClick={() => { window.location.href = '/' }}
               style={{
-                padding: '8px 24px', borderRadius: 6, border: '1.2px solid var(--lc-border-card, #6A7280)',
+                padding: '8px 24px', borderRadius: 6, border: '1.2px solid var(--lc-border-card, #3A404C)',
                 background: 'transparent', color: 'var(--lc-text-1, #E7E9EA)', fontSize: 14, cursor: 'pointer',
               }}
             >

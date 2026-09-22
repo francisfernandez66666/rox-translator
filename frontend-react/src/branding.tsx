@@ -207,6 +207,9 @@ export function BrandingProvider({ tenantId, children }: { tenantId?: number; ch
   // 2026-09-17 纯黑换肤：以下取值整体转暗——用户气泡=半透明白（rgba 231,233,234,.06）、
   // AI 气泡=面板黑 #0E1014、描边 #3A404C；主动发出的消息（msg-out）改为白底黑字，
   // 与交付包「正向=白」一致（原 #2f47f5 蓝底白字废止）。
+  // ★ 2026-09-22 还原批：--text/--muted 两条漏网的历史浅底暗字值（#141b2d/#525c70，
+  //   蓝调、只可能在白底上读）随本 palette 的暗色口径一并对齐纯黑真值
+  //   （主文字 #E7E9EA / 三级灰 #71767B）。
   // 注意：这批 --bubble-*/--bg/--panel/--text/--border/--muted/--msg-out-* 是历史
   // Vue 版配色的挂点，当前 React 代码已无 var() 消费方（气泡样式改由 theme.css 与
   // .lc-* 类决定），此处仅作为品牌可覆色的注入钩子保留。
@@ -219,9 +222,9 @@ export function BrandingProvider({ tenantId, children }: { tenantId?: number; ch
       '--bubble-ai-border': '#3A404C',
       '--bg': '#0E1014',
       '--panel': '#0E1014',
-      '--text': '#141b2d',
+      '--text': '#E7E9EA',
       '--border': '#3A404C',
-      '--muted': '#525c70',
+      '--muted': '#71767B',
       '--msg-out-bg': '#E7E9EA',
       '--msg-out-color': '#000000',
     }

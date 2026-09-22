@@ -49,7 +49,7 @@ export default function ModeToggle({ value, onChange, fastFirst = false }: Props
 // 只过渡颜色与背景、时长统一取 --lc-mo-* 动效令牌，方便在 prefers-reduced-motion 下一并收敛
 const CSS_MT = `
 .mt-seg{display:inline-flex;background:var(--lc-inset);border:1.2px solid var(--lc-border-card);border-radius:8px;padding:2px;gap:2px}
-.mt-seg__item{height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:var(--lc-text-3);font-size:14px;font-family:var(--lc-font);cursor:pointer;transition:color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}
+.mt-seg__item{height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:var(--lc-text-3);font-size:13px;font-family:var(--lc-font);cursor:pointer;transition:color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}
 .mt-seg__item:hover{color:var(--lc-text)}
 .mt-seg__item--on{background:var(--lc-raised);color:var(--lc-text)}
 `

@@ -625,7 +625,7 @@ const CSS_AUTH = `
    按钮等宽纵排，避免两个 IdP 时长短不齐看着像残排 */
 .auth-sso{display:flex;flex-direction:column;gap:8px;margin-top:4px;}
 .auth-sso-sep{display:flex;align-items:center;gap:8px;color:var(--lc-text-3);font-size:12px;}
-.auth-sso-sep::before,.auth-sso-sep::after{content:"";flex:1;height:1px;background:var(--lc-border-card,#26282E);}
+.auth-sso-sep::before,.auth-sso-sep::after{content:"";flex:1;height:1px;background:var(--lc-border-card,#3A404C);}
 .auth-sso .lc-btn{width:100%;justify-content:center;text-decoration:none;}
 /* 分段选择器（个人/企业、管理员/成员）：画布是两枚等宽胶囊，故用按钮组而不是 Radio */
 .auth-seg-row{display:flex;gap:8px;}

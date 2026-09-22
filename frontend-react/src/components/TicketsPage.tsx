@@ -2,6 +2,8 @@
 // components/TicketsPage.tsx — 翻译工单页（Vue TicketsPage 等价实现）
 // 能力：文本/多文件建单（fast/pro）、列表 Table、进度气泡（开气泡期间 3s 详情轮询 +
 //       5s 列表轮询；排队/执行中显示 WordSwap 多语言换词动效）、取消/删除/下载（blob 带鉴权）、已完成工单反馈。
+// 2026-09-22 全站还原 UI 真值：本文件字号回退 #35 的整体 +1px（11.5/12/13 档），
+//       质检徽章由浅色主题遗留（#fdecea/#c5221f 等）改为交付包语义档（danger/warn 10% 底 + 真值前景）。
 // ============================================================================
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
@@ -78,7 +80,7 @@ const qaRuleLabel = (rule: string): string => { const k = QA_RULE_KEYS[rule]; re
 // 它取的是 --lc-text/#E7E9EA 一档，与「通过」这种中性结论对齐。
 const badgeStyle = (bg: string, fg: string): React.CSSProperties => ({
   display: 'inline-flex', alignItems: 'center', gap: 3, background: bg, color: fg,
-  border: `1px solid ${fg}33`, borderRadius: 10, padding: '1px 7px', fontSize: 12.5, whiteSpace: 'nowrap',
+  border: `1px solid ${fg}33`, borderRadius: 10, padding: '1px 7px', fontSize: 11.5, whiteSpace: 'nowrap',
 })
 
 // QualityBadges 列表行质检徽标（★ 改造 5）：
@@ -92,15 +94,15 @@ function QualityBadges({ row }: { row: Ticket }) {
   return (
     <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
       {errs > 0 && (
-        <span style={badgeStyle('#fdecea', '#c5221f')} title={t('tk.qaErrorNote')}>
+        <span style={badgeStyle('rgba(229,72,77,0.10)', '#E5484D')} title={t('tk.qaErrorNote')}>
           ● {tpl('tk.qaErrors', { n: errs })}
         </span>
       )}
       {errs === 0 && warns > 0 && (
-        <span style={badgeStyle('#fff6e0', '#b26a00')}>● {tpl('tk.qaWarnings', { n: warns })}</span>
+        <span style={badgeStyle('rgba(210,153,34,0.10)', '#D29922')}>● {tpl('tk.qaWarnings', { n: warns })}</span>
       )}
       {flagged && (
-        <span style={badgeStyle('#fff1e6', '#b45309')} title={t('tk.qaFlaggedTip')}>
+        <span style={badgeStyle('rgba(210,153,34,0.10)', '#D29922')} title={t('tk.qaFlaggedTip')}>
           <Icon n="alert" /> {t('tk.qaFlagged')}
         </span>
       )}
@@ -132,27 +134,27 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: string; f
 
   return (
     <div style={{ marginTop: 12, borderTop: '1px solid var(--npz-line)', paddingTop: 10 }}>
-      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{t('tk.qaTitle')}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('tk.qaTitle')}</div>
 
       {rep && (
         <>
-          <div style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={badgeStyle(rep.pass ? 'rgba(231,233,234,0.10)' : '#fdecea', rep.pass ? '#E7E9EA' : '#c5221f')}>
+          <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={badgeStyle(rep.pass ? 'rgba(231,233,234,0.10)' : 'rgba(229,72,77,0.10)', rep.pass ? '#E7E9EA' : '#E5484D')}>
               {rep.pass ? `${t('tk.qaPass')}` : `${t('tk.qaFail')}`}
             </span>
             <span style={{ color: 'var(--lc-text-2)' }}>{tpl('tk.qaSummary', { errors: rep.errors, warnings: rep.warnings })}</span>
           </div>
           {rep.errors > 0 && (
-            <div style={{ fontSize: 12.5, color: 'var(--lc-danger)', marginTop: 6, lineHeight: 1.5 }}><Icon n="alert" /> {t('tk.qaErrorNote')}</div>
+            <div style={{ fontSize: 11.5, color: 'var(--lc-danger)', marginTop: 6, lineHeight: 1.5 }}><Icon n="alert" /> {t('tk.qaErrorNote')}</div>
           )}
           {rep.issues && rep.issues.length > 0 ? (
             <div style={{ marginTop: 8, maxHeight: 180, overflowY: 'auto', border: '1.2px solid var(--npz-line)', borderRadius: 6 }}>
               {rep.issues.map((it: QAReportIssue, i: number) => (
                 <div key={`${it.lang}-${it.rule}-${i}`}
-                     style={{ display: 'flex', gap: 6, alignItems: 'flex-start', padding: '5px 8px', fontSize: 12.5, borderTop: i ? '1px solid var(--npz-line)' : 'none' }}>
+                     style={{ display: 'flex', gap: 6, alignItems: 'flex-start', padding: '5px 8px', fontSize: 11.5, borderTop: i ? '1px solid var(--npz-line)' : 'none' }}>
                   <span style={badgeStyle('rgba(231,233,234,0.16)', 'var(--lc-text-2)')}>{langLabel(it.lang, lang)}</span>
                   <span style={badgeStyle('rgba(231,233,234,0.16)', 'var(--lc-text-2)')}>{qaRuleLabel(it.rule)}</span>
-                  <span style={badgeStyle(it.level === 'error' ? '#fdecea' : '#fff6e0', it.level === 'error' ? '#c5221f' : '#b26a00')}>
+                  <span style={badgeStyle(it.level === 'error' ? 'rgba(229,72,77,0.10)' : 'rgba(210,153,34,0.10)', it.level === 'error' ? '#E5484D' : '#D29922')}>
                     {it.level === 'error' ? t('tk.qaLevelError') : t('tk.qaLevelWarning')}
                   </span>
                   <span style={{ flex: 1, color: 'var(--lc-text-2)', wordBreak: 'break-word' }}>{it.detail}</span>
@@ -160,21 +162,21 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: string; f
               ))}
             </div>
           ) : (
-            <div style={{ fontSize: 12.5, color: '#E7E9EA', marginTop: 6 }}>{t('tk.qaNoIssues')}</div>
+            <div style={{ fontSize: 11.5, color: '#E7E9EA', marginTop: 6 }}>{t('tk.qaNoIssues')}</div>
           )}
         </>
       )}
 
       {scoreKeys.length > 0 && (
         <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: 13, color: 'var(--lc-text-2)', marginBottom: 4 }}>{t('tk.evalScores')}</div>
+          <div style={{ fontSize: 12, color: 'var(--lc-text-2)', marginBottom: 4 }}>{t('tk.evalScores')}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             {scoreKeys.map((lc) => (
-              <div key={lc} style={{ fontSize: 12.5, display: 'flex', gap: 6, alignItems: 'center' }}>
+              <div key={lc} style={{ fontSize: 11.5, display: 'flex', gap: 6, alignItems: 'center' }}>
                 <span style={badgeStyle('rgba(231,233,234,0.16)', 'var(--lc-text-2)')}>
                   {langLabel(lc, lang)}
                 </span>
-                <span style={{ color: flaggedLangs.includes(lc) ? '#b45309' : 'var(--lc-text-2)' }}>{fmtScore(lc)}</span>
+                <span style={{ color: flaggedLangs.includes(lc) ? 'var(--lc-warn)' : 'var(--lc-text-2)' }}>{fmtScore(lc)}</span>
               </div>
             ))}
           </div>
@@ -182,7 +184,7 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: string; f
       )}
 
       {(flaggedLangs.length > 0 || flagged) && (
-        <div style={{ fontSize: 12.5, color: 'var(--lc-warn, #D29922)', marginTop: 8, lineHeight: 1.5 }}><Icon n="alert" /> {t('tk.qaFlaggedTip')}</div>
+        <div style={{ fontSize: 11.5, color: 'var(--lc-warn, #D29922)', marginTop: 8, lineHeight: 1.5 }}><Icon n="alert" /> {t('tk.qaFlaggedTip')}</div>
       )}
     </div>
   )
@@ -545,12 +547,12 @@ export default function TicketsPage() {
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 24px', width: '100%', minWidth: 0 }}>
       <style>{CSS_TK}</style>
       <h2 style={{ margin: '0 0 4px' }}>{t('tk.entry')}</h2>
-      <p style={{ fontSize: 13, color: 'var(--lc-text-3)', margin: '0 0 12px' }}>{t('tk.createHint')}</p>
+      <p style={{ fontSize: 12, color: 'var(--lc-text-3)', margin: '0 0 12px' }}>{t('tk.createHint')}</p>
 
       {/* ===== 创建工单 ===== */}
       <div style={{ border: '1.2px solid var(--lc-border-card)', borderRadius: 8, padding: 16, marginBottom: 18 }}>
         {imageHeavyHint && (
-          <div style={{ background: 'rgba(210,153,34,0.10)', border: '1.2px solid #f0c674', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 13 }}>
+          <div style={{ background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 12 }}>
             <Icon n="alert" /> {t('tk.imageHeavyHint')}
             <Link onClick={() => setImageHeavyHint(false)} aria-label={t('common.close')}><Icon n="close" /></Link>
           </div>
@@ -566,7 +568,7 @@ export default function TicketsPage() {
         {mode === 'file' && (
           <div style={{ marginBottom: 10 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span style={{ fontSize: 14, color: 'var(--lc-text-3)' }}>{t('tk.deliveryLabel')}</span>
+              <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{t('tk.deliveryLabel')}</span>
               <Button size="sm" variant={delivery === 'restore' ? 'primary' : 'secondary'}
                 onClick={() => { setDelivery('restore'); localStorage.setItem('ticket_delivery', 'restore') }}>
                 {t('tk.deliveryRestore')}
@@ -576,7 +578,7 @@ export default function TicketsPage() {
                 {t('tk.deliveryText')}
               </Button>
             </div>
-            <div style={{ fontSize: 13, color: 'var(--lc-text-3)', marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: 'var(--lc-text-3)', marginTop: 4 }}>
               {delivery === 'text' ? t('tk.deliveryTextTip') : t('tk.deliveryRestoreTip')}
             </div>
           </div>
@@ -593,18 +595,18 @@ export default function TicketsPage() {
               <div onClick={() => document.getElementById('tk-file-input')?.click()}
                 style={{ border: '2px dashed var(--lc-border-input)', borderRadius: 8, padding: 34, textAlign: 'center', cursor: 'pointer', color: 'var(--lc-text-3)', background: '#0E1014' }}>
                 <input id="tk-file-input" type="file" multiple hidden accept={delivery === 'text' ? TEXT_DELIVERY_ACCEPT : TRANSLATE_FILE_ACCEPT} onChange={onFileSelect} />
-              <div>{delivery === 'text' ? t('tk.fileHintText') : t('tk.fileHint')}<br /><span style={{ fontSize: 13 }}>{t('tk.multiHint')}</span></div>
+              <div>{delivery === 'text' ? t('tk.fileHintText') : t('tk.fileHint')}<br /><span style={{ fontSize: 12 }}>{t('tk.multiHint')}</span></div>
             </div>
               {files.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, alignItems: 'center' }}>
                   {files.map((f, idx) => (
-                  <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#0E1014', border: '1.2px solid var(--lc-border-card)', borderRadius: 8, padding: '3px 10px', fontSize: 13, maxWidth: 320 }}>
+                  <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#0E1014', border: '1.2px solid var(--lc-border-card)', borderRadius: 8, padding: '3px 10px', fontSize: 12, maxWidth: 320 }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
-                      <span style={{ color: 'var(--lc-text-3)', fontSize: 12.5 }}>{fmtKB(f.size)}</span>
+                      <span style={{ color: 'var(--lc-text-3)', fontSize: 11.5 }}>{fmtKB(f.size)}</span>
                     <Link tone="danger" onClick={() => removeFileAt(idx)} aria-label={`${t('common.delete')}: ${f.name}`}><Icon n="close" /></Link>
                   </div>
                 ))}
-                <div style={{ width: '100%', fontSize: 13, color: 'var(--lc-text-3)' }}>
+                <div style={{ width: '100%', fontSize: 12, color: 'var(--lc-text-3)' }}>
                   {tpl('tk.filesCount', { n: files.length })} · {(files.reduce((a, f) => a + f.size, 0) / 1024).toFixed(0)} KB
                 </div>
               </div>
@@ -617,7 +619,7 @@ export default function TicketsPage() {
           <LangChips langs={langs} onRemove={setLangs} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
-          <label style={{ fontSize: 14, color: 'var(--lc-text-2)', whiteSpace: 'nowrap' }}>{t('tk.langsLabel')}</label>
+          <label style={{ fontSize: 13, color: 'var(--lc-text-2)', whiteSpace: 'nowrap' }}>{t('tk.langsLabel')}</label>
           <div style={{ minWidth: 300, flex: 1 }}>
             <LangMultiSelect value={langs} onChange={setLangs} />
           </div>
@@ -625,14 +627,14 @@ export default function TicketsPage() {
             onChange={(val) => { setQualityMode(val); localStorage.setItem('translate_mode', val) }} />
           {/* ★ 缩翻（任务7）：勾选并输入最长字符限制，提示模型精简输出。
               预留定宽槽位（72px）——勾选只显隐输入框、不改变行宽，避免模式切换/创建按钮位置跳动 */}
-          <label style={{ fontSize: 14, color: 'var(--lc-text-2)', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+          <label style={{ fontSize: 13, color: 'var(--lc-text-2)', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
             <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> {t('app.condense')}
           </label>
           <div style={{ width: 72, flexShrink: 0 }}>
             {condenseOn && (
               <input type="number" min={1} max={10000} value={condenseMax}
                 onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
-                style={{ width: '100%', boxSizing: 'border-box', height: 30, fontSize: 13, border: '1.2px solid var(--lc-border-card)', borderRadius: 6, padding: '0 6px' }}
+                style={{ width: '100%', boxSizing: 'border-box', height: 30, fontSize: 12, border: '1.2px solid var(--lc-border-card)', borderRadius: 6, padding: '0 6px' }}
                 title={t('tk.condenseMaxTitle')} />
             )}
           </div>
@@ -721,7 +723,7 @@ export default function TicketsPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '10px 0 6px' }}>
             <div className="tk-progress" style={{ flex: 1 }}><div className="tk-progress__bar" style={{ width: `${pct}%` }} /></div>
             <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--lc-text-1)', minWidth: 42 }}>{pct}%</span>
-            {stepLabel && <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{stepLabel}</span>}
+            {stepLabel && <span style={{ fontSize: 12, color: 'var(--lc-text-3)' }}>{stepLabel}</span>}
           </div>
         )}
         {/* ★ 2026-09-22 用户追加需求：执行进度也上全站同一份换词动效（WordSwap）——
@@ -743,17 +745,17 @@ export default function TicketsPage() {
             {states.map((st: any) => (
               // 类名 st-${st.status}（st-success / st-running …）是 Vue 版遗留，本仓无任何 CSS 定义；
               // 真正的配色全在下面的内联 style 三元里，改样式请动内联值而不是去找 .st-* 规则。
-              <div key={st.id} className={`st-${st.status}`} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, padding: '3px 0' }}>
+              <div key={st.id} className={`st-${st.status}`} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, padding: '3px 0' }}>
                 <span style={{ flex: 1, color: 'var(--lc-text-2)' }}>{stepName(st.step)}</span>
-                <span style={{ fontSize: 12, padding: '1px 6px', borderRadius: 4,
+                <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4,
                   background: st.status === 'success' ? 'rgba(231,233,234,0.10)' : st.status === 'running' ? 'rgba(231,233,234,0.16)' : st.status === 'error' ? 'rgba(229,72,77,0.10)' : '#16181C',
                   color: st.status === 'success' ? 'var(--lc-text-1)' : st.status === 'running' ? 'var(--lc-text-2)' : st.status === 'error' ? 'var(--lc-danger)' : 'var(--lc-text-3)' }}>{st.status}</span>
-                {st.error && <span style={{ color: 'var(--lc-danger)', fontSize: 12 }}><Icon n="alert" /> {st.error}</span>}
+                {st.error && <span style={{ color: 'var(--lc-danger)', fontSize: 11 }}><Icon n="alert" /> {st.error}</span>}
               </div>
             ))}
           </div>
         ) : (
-          <p style={{ fontSize: 13, color: 'var(--lc-text-3)', margin: '8px 0 0' }}>{t('tk.noSteps')}</p>
+          <p style={{ fontSize: 12, color: 'var(--lc-text-3)', margin: '8px 0 0' }}>{t('tk.noSteps')}</p>
         )}
         {/* ★ 改造 5：详情抽屉「质检报告」区块（确定性 QA 汇总 + Issues 明细 + 各语言评估分） */}
         <QualityBlock q={detail?.quality} lang={lang} flagged={detail?.ticket?.quality_flagged === 1} />
@@ -815,11 +817,11 @@ function TicketFeedbackModal({ target, onClose, onSubmitted }: {
   return (
     <TkDialog title={t('fb.title')} width={520} testid="tk-feedback-dialog" onClose={onClose}>
         <div className="tk-dialog__body">
-          <p style={{ fontSize: 13, color: 'var(--lc-text-3)', margin: '0 0 10px' }}>{t('fb.hint')}</p>
+          <p style={{ fontSize: 12, color: 'var(--lc-text-3)', margin: '0 0 10px' }}>{t('fb.hint')}</p>
           <textarea className="lc-textarea" rows={4} maxLength={1000} value={content} onChange={(e) => setContent(e.target.value)} aria-label={t('fb.placeholder')} placeholder={t('fb.placeholder')} />
       <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
             <Switch checked={withContext} onChange={(e) => setWithContext(e.target.checked)} />
-            <span style={{ fontSize: 14, color: 'var(--lc-text-3)' }}>{t('fb.withContext')}</span>
+            <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{t('fb.withContext')}</span>
           </div>
         </div>
         <div className="tk-dialog__actions">

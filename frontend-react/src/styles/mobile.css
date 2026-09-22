@@ -1,6 +1,6 @@
 /* ============================================================================
     mobile.css — 移动端 / 窄屏自适应（叠加在 theme.css 之上）
-    断点：901~1400px 笔记本窄窗；≤900px 平板竖屏/小窗；≤640px 手机。
+    断点：≤900px 平板竖屏/小窗；≤640px 手机。
     原则：不改桌面布局；仅收窄 padding、允许换行、宽表格横向滚动。
     ★ 2026-09-18 死规则清理（UI 迁移 LangCross 后）：
       - 登录卡（.login-card、.login-split 系列、.login-logo、.login-sub、.login-wrap）与
@@ -16,27 +16,12 @@
     配色：本文件只处理断点行为，不定义颜色。
     ============================================================================ */
 
-/* ============ 901~1400px（笔记本窄窗） ============ */
-/* ★ #67（2026-09-22 截图复核）：顶栏字阶放大后 1280 宽放不下整排控件，账号菜单被挤到
-   顶栏第二行。余额/套餐徽标（.pkg-line-tag）与顶栏下方那行「余额 … 积分 … 今日已耗 …」
-   本是同一份数据，窄窗先隐它（与 ≤900px 同口径、信息不丢），即可保住单行布局。 */
-@media (min-width: 901px) and (max-width: 1400px) {
-  /* 选择器带上 .app-header 前缀而不是裸类：一是限定只隐顶栏那枚徽标
-     （同名类在别处也可能出现），二是本条只声明 display，与 theme.css §十一 那条
-     `html .app-header .pkg-line-tag{white-space:nowrap}` 各管一个属性、互不压制；
-     日后若要在窄屏改同一属性，记得同步加 html 前缀，否则会被桌面档（0,2,1）压住。 */
-  .app-header .pkg-line-tag { display: none; }
-}
-
 /* ============ ≤900px（平板竖屏 / 窄窗） ============ */
 @media (max-width: 900px) {
 
-  /* ---- 前台头部：允许换行，收窄内边距 ----
-     ★ #67（2026-09-22）：字阶跟桌面同步放大（品牌 15→18），但仍比桌面档小一级，
-     换行后不至于把首屏吃掉太多高度。本文件选择器带 .app-header 前缀，特异度 (0,2,0)
-     高于 theme.css §十一 的 html 前缀 (0,1,1)，所以窄屏以这里为准，不会被桌面档盖回。 */
+  /* ---- 前台头部：允许换行，收窄内边距 ---- */
   .app-header { flex-wrap: wrap; row-gap: 6px; padding: 8px 12px; }
-  .app-header .brand { font-size: 18px; }
+  .app-header .brand { font-size: 15px; }
   .app-header .pkg-line-tag { display: none; }   /* 余额徽标窄屏隐藏，改由抽屉内「套餐 / 账单」入口查看 */
 
   /* ---- 聊天区（★ #36）：合并对话框的窄屏外边距由组件自带 media query 下发
@@ -72,18 +57,15 @@
 @media (max-width: 640px) {
   .app-header { gap: 6px; }
   /* 品牌 Logo 图片高度：App.tsx 用内联 style 给 <img> 定尺寸，故这里只能 !important 才改得动；
-     只压图片不压 .brand 文字（文字档由上面 ≤900 那条的 18px 一路带到手机，不再降），
+     只压图片不压 .brand 文字（文字档由上面 ≤900 那条的 15px 一路带到手机，不再降），
      避免出现「图小字大」的错位字标。 */
   .app-header .brand img { height: 40px !important; }
-  /* ★ #67：手机档 Tab 收一档（桌面 17px/40px → 15px/36px），三个 Tab 换行后仍留得出品牌 */
-  .app-header .app-tab { height: 36px; padding: 0 12px; font-size: 15px; }
   /* .t-button：TDesign 的类名只在运行时 DOM 上出现、grep 源码是查不到的，所以判死活要看 DOM。
      现状记录：顶栏按钮已是 LangCross 的 .lc-btn（App.tsx 不再 import tdesign），本条当前无命中，
      与文件头「保留 .t-*」的口径一并留存，别按 grep 结果误删别处仍在用的 .t-* 规则。 */
-  .app-header > .t-button { font-size: 14px; padding: 0 8px; }
+  .app-header > .t-button { font-size: 13px; padding: 0 8px; }
   /* 合并对话框（#36）手机端外边距见 ChatWindow CW_CSS 的 @media(max-width:640px) 分支 */
-  /* ★ #35（2026-09-21）：手机气泡不再缩到 13.5px，与桌面同档 15px——用户反馈小屏更需可读字号 */
-  .bubble { max-width: 94%; padding: 9px 12px; font-size: 15px; }
+  .bubble { max-width: 94%; padding: 9px 12px; font-size: 13.5px; }
   .avatar { width: 28px; height: 28px; font-size: 11px; }
   .message-row { padding: 0 10px; gap: 8px; }
   .panel-card { padding: 12px; }

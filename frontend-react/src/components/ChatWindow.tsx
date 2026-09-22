@@ -235,11 +235,13 @@ export default function ChatWindow() {
 
   return (
     /* 外层高度 = 视口减去页眉（即时翻译页无页脚，SiteFooter 只在抽屉内渲染）；
+       39 = 顶栏 38 + 1px 下边框（★ 2026-09-22 还原 UI-ANNOTATIONS §2.2 顶栏真值高 38；
+       旧值 57 是 10px 上下内边距时代的实测耦合值，勿凭手感回调——顶栏改尺寸时此处必须同步）。
        minHeight:0 必须显式给：flex 列里的滚动子项默认 min-height:auto，
        不置 0 则内部 overflow 永不生效（整页滚而非框内滚）。
        background:#000 与 theme.css 的 html,body 底色同值：懒加载占位/回弹露出的底色
        必须与本页一致，否则切页瞬间会闪一块异色（#66 换词动效糊白底那次的成因）。 */
-    <div className="cw-root" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 57px)', minHeight: 0, background: '#000' }}>
+    <div className="cw-root" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 39px)', minHeight: 0, background: '#000' }}>
       <style>{CW_CSS}</style>
       {/* 离线横幅：琥珀薄底 + 语义色文字（交付包里唯一的非单色告警档），
           不用红色——后端不可达多是网络抖动/发版窗口，属「待恢复」而非「用户出错」。
@@ -247,7 +249,7 @@ export default function ChatWindow() {
           那段窗口里再给一个手动重试，等于和后台轮询抢同一个 health 接口。 */}
       {!chat.isBackendOnline && (
         <div style={{ background: 'rgba(210,153,34,0.10)', borderBottom: '1px solid rgba(210,153,34,0.32)', padding: '8px 6%', display: 'flex', gap: 10, alignItems: 'center' }}>
-          <span style={{ fontSize: 14, color: '#D29922' }}>
+          <span style={{ fontSize: 13, color: '#D29922' }}>
             {t2('chat.offline')}
           </span>
           {!chat.isBackendLoading && (
@@ -258,9 +260,10 @@ export default function ChatWindow() {
         </div>
       )}
 
-      {/* 余额 / 用量条 */}
+      {/* 余额 / 用量条：§2.2「余额条 高20 · 11px #9AA0AA · 左缩进 60」——11 号字按 1.45 行高约 16，
+          上下各 2 内边距即凑足 20 高；多段并排放不下时仍靠 flexWrap 换行，故用 minHeight 不钉死。 */}
       {(balance || usage || orgBudget) && (
-        <div style={{ background: 'rgba(231,233,234,0.06)', color: 'var(--lc-text-2)', fontSize: 13, padding: '6px 6%', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid var(--lc-border-faint)' }}>
+        <div style={{ background: 'rgba(231,233,234,0.06)', color: 'var(--lc-text-2)', fontSize: 11, minHeight: 20, padding: '2px 6%', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid var(--lc-border-faint)' }}>
           {/* data-testid 只给 e2e 用（★ 任务 #43 翻译主流程端到端）：余额/今日已耗是扣费可见性的
               唯一界面口径，锚点必须与 i18n 文案解耦——文案随 12 语种变，锚点不能跟着变。 */}
           {balance && <span data-testid="chat-balance">{tpl('chat.balanceTokens', { n: fmtPoints(balance.points), s: fmtNum(balance.approx) })}</span>}
@@ -293,8 +296,8 @@ export default function ChatWindow() {
       <div className="cw-dialog" style={{ ...CARD, boxShadow: '0 8px 24px rgba(0,0,0,.4)' }}>
         {/* 框头：原文标签 + 会话工具（搜索 / 导出 / 清空） */}
         <div className="cw-dialog-head">
-          <span style={{ fontSize: 14, fontWeight: 600, color: '#E7E9EA', letterSpacing: '.04em' }}>{t('chat.srcLabel')}</span>
-          <span style={{ fontSize: 13, color: 'var(--lc-text-3)', flex: 1 }}>{t('chat.sourceAuto')}</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#E7E9EA', letterSpacing: '.04em' }}>{t('chat.srcLabel')}</span>
+          <span style={{ fontSize: 12, color: 'var(--lc-text-3)', flex: 1 }}>{t('chat.sourceAuto')}</span>
           {/* 纯图标按钮：title 给鼠标悬浮、aria-label 给读屏，二者缺一不可 */}
           <button type="button" className="cw-icon-btn" title={t('chat.searchPh')} aria-label={t('chat.searchPh')}
                   onClick={() => { setSearchOpen((v) => !v); setSearchQ('') }}>
@@ -338,7 +341,7 @@ export default function ChatWindow() {
           {!chat.messages.length && !chat.isLoading && (
             <div className="cw-welcome">
               <div style={{ fontSize: 15, color: 'var(--lc-text-2)', marginBottom: 8 }}>{t('chat.welcome')}</div>
-              <div style={{ fontSize: 14, maxWidth: 520, margin: '0 auto', lineHeight: 1.8 }}>
+              <div style={{ fontSize: 13, maxWidth: 520, margin: '0 auto', lineHeight: 1.8 }}>
                 {t2('chat.welcomeSub')}
               </div>
             </div>
@@ -361,25 +364,25 @@ export default function ChatWindow() {
         {/* 框脚：目标语言 + 模式/缩翻 + 主按钮（常驻不随滚动消失） */}
         <div className="cw-dialog-foot">
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            <span style={{ fontSize: 13, color: 'var(--lc-text-3)', whiteSpace: 'nowrap' }}>{t('chat.targetLangLabel')}</span>
+            <span style={{ fontSize: 12, color: 'var(--lc-text-3)', whiteSpace: 'nowrap' }}>{t('chat.targetLangLabel')}</span>
             <div style={{ minWidth: 260, flex: 1 }}>
               <LangMultiSelect value={chat.selectedLangs} onChange={chat.setSelectedLangs} />
             </div>
           </div>
           <LangChips langs={chat.selectedLangs} onRemove={chat.setSelectedLangs} />
           {!!chat.errorMessage && (
-            <div style={{ color: '#F85149', fontSize: 14 }}>{chat.errorMessage}</div>
+            <div style={{ color: '#F85149', fontSize: 13 }}>{chat.errorMessage}</div>
           )}
           <div className="cw-dialog-acts">
             <ModeToggle value={mode} onChange={setMode2} />
-            <label style={{ fontSize: 13, color: 'var(--lc-text-2)', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+            <label style={{ fontSize: 12, color: 'var(--lc-text-2)', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
               <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> {t('app.condense')}
             </label>
             <div style={{ width: 72, flexShrink: 0 }}>
               {condenseOn && (
                 <input type="number" min={1} max={10000} value={condenseMax}
                   onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
-                  style={{ width: '100%', boxSizing: 'border-box', height: 28, fontSize: 13, background: '#0A0B0D', border: '1.2px solid var(--lc-border-input)', borderRadius: 6, padding: '0 6px', color: '#E7E9EA' }}
+                  style={{ width: '100%', boxSizing: 'border-box', height: 28, fontSize: 12, background: '#0A0B0D', border: '1.2px solid var(--lc-border-input)', borderRadius: 6, padding: '0 6px', color: '#E7E9EA' }}
                   title={t('chat.s41')} />
               )}
             </div>

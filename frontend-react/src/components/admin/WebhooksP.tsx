@@ -69,7 +69,7 @@ export function WebhooksP() {
 
   return (
     <Panel title={t('webhooks.title')} extra={<Button variant="primary" onClick={() => setDlg({ url: '', secret: '', events: 'translation.completed', max_retries: 3, retry_interval: 60 })}>＋ {t('webhooks.saveConfig')}</Button>}>
-      <p style={{ fontSize: 14, color: 'var(--adm-hint)', margin: '0 0 10px' }}>{t('webhooks.hint')}</p>
+      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 10px' }}>{t('webhooks.hint')}</p>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
         <input className="lc-input" value={String(dlg?.url || '')} onChange={(e) => setDlg((d) => (d ? { ...d, url: e.target.value } : d))} placeholder={t('webhooks.urlPlaceholder')} style={{ flex: 1, minWidth: 240 }} />
         <input className="lc-input" value={String(dlg?.secret || '')} onChange={(e) => setDlg((d) => (d ? { ...d, secret: e.target.value } : d))} placeholder={t('webhooks.secretPlaceholder')} style={{ width: 200 }} />
@@ -84,7 +84,7 @@ export function WebhooksP() {
                { key: 'id', title: t('webhooks.colId'), width: 70 },
                { key: 'url', title: t('webhooks.colUrl'), render: (row) => <span style={{ wordBreak: 'break-all' }}>{row.url}</span> },
                { key: 'events', title: t('webhooks.colEvents'), width: 200 },
-               { key: 'failure_count', title: t('webhooks.failureCount'), width: 80, render: (row) => <span style={{ color: (row.failure_count || 0) > 0 ? '#e34d59' : undefined }}>{row.failure_count || 0}</span> },
+               { key: 'failure_count', title: t('webhooks.failureCount'), width: 80, render: (row) => <span style={{ color: (row.failure_count || 0) > 0 ? 'var(--lc-danger)' : undefined }}>{row.failure_count || 0}</span> },
                { key: 'enabled', title: t('webhooks.colStatus'), width: 90, render: (row) => <StatusPill tone={row.enabled ? 'success' : 'idle'}>{row.enabled ? t('webhooks.enable') : t('webhooks.disable')}</StatusPill> },
                { key: 'op', title: t('webhooks.colActions'), width: 320, render: (row) => (
                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>

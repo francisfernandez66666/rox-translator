@@ -308,15 +308,15 @@ export function DeactivateModal(props: { onClose: () => void }) {
       onConfirm={submit}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <p style={{ fontSize: 14.5, color: 'var(--lc-text-2)', lineHeight: 1.6, margin: 0 }}>{t('deact.line1')}</p>
-        <ul style={{ margin: '0 0 4px 18px', fontSize: 14, color: 'var(--lc-text-3)', lineHeight: 1.8 }}>
+        <p style={{ fontSize: 13.5, color: 'var(--lc-text-2)', lineHeight: 1.6, margin: 0 }}>{t('deact.line1')}</p>
+        <ul style={{ margin: '0 0 4px 18px', fontSize: 13, color: 'var(--lc-text-3)', lineHeight: 1.8 }}>
           <li>{t('deact.point1')}</li>
           <li>{t('deact.point2')}</li>
           <li>{t('deact.point3')}</li>
         </ul>
         <label className="fb-confirm-row">
           <Checkbox checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} />
-          <span style={{ fontSize: 14, color: 'var(--lc-text-2)' }}>{t('deact.ack')}</span>
+          <span style={{ fontSize: 13, color: 'var(--lc-text-2)' }}>{t('deact.ack')}</span>
         </label>
       </div>
     </Dialog>
@@ -376,7 +376,7 @@ export function JobRoleModal(props: { current: string; onClose: () => void; onSa
       onConfirm={submit}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <p style={{ fontSize: 14, color: 'var(--lc-text-2)', lineHeight: 1.6, margin: 0 }}>{t('role.hint')}</p>
+        <p style={{ fontSize: 13, color: 'var(--lc-text-2)', lineHeight: 1.6, margin: 0 }}>{t('role.hint')}</p>
         <select className="lc-input" value={sel} disabled={saving}
                 aria-label={t('role.title')} onChange={(e) => setSel(e.target.value)}>
           <option value="">{t('role.none')}</option>

@@ -1129,8 +1129,9 @@ const LANDING_CSS = `
 /* 主投=白底黑字：整页唯一一处实心白，强度最高，同屏通常只让它出现一次 */
 .lc-mkt .lc-mkt-btn--pri{background:var(--lc-text-1);color:#000}
 .lc-mkt .lc-mkt-btn--pri:hover{opacity:.88}
-/* 描边次投：#546470 比 --lc-border-card 亮一档，边框才读得出"可点"而不是"分隔线" */
-.lc-mkt .lc-mkt-btn--ghost{border:1.2px solid #546470;color:var(--lc-text-1);background:transparent}
+/* 描边次投走令牌 --lc-border-pill（#424956）：2026-09-22 还原批把自造的 #546470 归位到令牌，
+   比卡片描边亮一档，边框才读得出"可点"而不是"分隔线" */
+.lc-mkt .lc-mkt-btn--ghost{border:1.2px solid var(--lc-border-pill);color:var(--lc-text-1);background:transparent}
 .lc-mkt .lc-mkt-btn--ghost:hover{border-color:var(--lc-border-done)}
 /* 卡内浮面底：给非高亮价格档用，强度低于主投但仍是实心，不会和卡片背景糊在一起 */
 .lc-mkt .lc-mkt-btn--soft{background:var(--lc-raised);color:var(--lc-text-1)}
@@ -1150,8 +1151,9 @@ const LANDING_CSS = `
 .lc-hero-in{display:flex;align-items:center;gap:60px;width:100%}
 /* 左栏 flex:none + 定宽 500：文案行长要锁死，宽屏也不许把句子拉散（超宽靠右栏吸收） */
 .lc-hero-copy{flex:none;width:500px;display:flex;flex-direction:column;gap:24px}
-/* 徽章底色 #17171C、描边 #31363D 是画布原值：它比卡片底略抬，又不到 raised 的强度 */
-.lc-hero-badge{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;padding:8px 14px;border-radius:20px;background:#17171C;border:1.2px solid #31363D;font-size:14px;font-weight:500;color:var(--lc-text-3)}
+/* 徽章底色走 --lc-raised（#16181C 徽章面令牌值）、描边 #31363D 是演示画布原值：
+   比卡片底略抬，又不到 input 描边的强度 */
+.lc-hero-badge{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;padding:8px 14px;border-radius:20px;background:var(--lc-raised);border:1.2px solid #31363D;font-size:14px;font-weight:500;color:var(--lc-text-3)}
 .lc-hero-badge i{width:8px;height:8px;border-radius:4px;background:var(--lc-text-1);flex:none}
 /* 3.89vw = 56px / 1440px 设计宽：clamp 的上界与画布字号一致，下界保证手机两行不断句 */
 .lc-hero-h1{margin:0;font-size:clamp(34px,3.89vw,56px);line-height:1.21;font-weight:700;letter-spacing:.2px;color:var(--lc-text-1)}
@@ -1197,8 +1199,9 @@ const LANDING_CSS = `
 .lc-step-num{font-family:var(--lc-font-mono);font-size:14px;font-weight:500;color:var(--lc-text-4)}
 .lc-step-t{margin:0;font-size:20px;font-weight:600;color:var(--lc-text-1)}
 .lc-step-d{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
-/* 箭头单独定色 #6A717A（对 #000 约 4.4:1）：它是流程记号，够看见但不与正文抢对比 */
-.lc-step-arrow{flex:none;display:flex;align-items:center;color:#6A717A}
+/* 箭头单独走 --lc-text-3（★ 2026-09-22 还原：自造的 #6A717A 归位令牌）：
+   它是流程记号，够看见但不与正文抢对比 */
+.lc-step-arrow{flex:none;display:flex;align-items:center;color:var(--lc-text-3)}
 
 /* —— 4. 核心功能 bento —— */
 /* 776fr/480fr 直接抄画布两列宽度：写 fr 不写 px，才能在区块内边距收缩时按比例跟着缩 */
@@ -1222,7 +1225,7 @@ const LANDING_CSS = `
 .lc-td-cn{flex:1;font-size:14px;font-weight:500;color:var(--lc-text-1);min-width:0}
 /* bad/good 同用等宽字体、只差色阶：让"错"与"对"是同一个位置的两种状态，而不是两种东西 */
 .lc-td-bad{font-family:var(--lc-font-mono);font-size:13px;color:var(--lc-text-4)}
-.lc-td-arrow{color:#6A717A;flex:none}
+.lc-td-arrow{color:var(--lc-text-3);flex:none}
 .lc-td-good{font-family:var(--lc-font-mono);font-size:13px;font-weight:500;color:var(--lc-text-1)}
 
 /* —— 4b. 覆盖范围 —— */
@@ -1381,7 +1384,7 @@ const LANDING_CSS = `
 .lc-lead-hp{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .lc-lead-captcha{align-self:flex-start}
 /* 报错只用判错红（与演示卡划线同色系），不引入第二套告警色 */
-.lc-lead-err{margin:0;font-size:13px;color:#c0392b}
+.lc-lead-err{margin:0;font-size:13px;color:var(--lc-danger)}
 /* 提交按钮 = 白块上的主投反相（与收尾 Pill 同形）：同屏两颗黑胶囊只有一颗是"最终动作" */
 .lc-lead-btn{align-self:flex-start;height:46px;padding:0 26px;border:0;border-radius:999px;background:#000;color:#fff;font-size:15px;font-weight:600;cursor:pointer}
 .lc-lead-btn:disabled{opacity:.55;cursor:default}
@@ -1531,9 +1534,9 @@ const LANDING_CSS = `
 .hd-steps{margin-top:16px;margin-bottom:16px}
 .hd-slabels{display:flex;margin-bottom:8px}
 /* flex:1 把整条尺按术语条数等分：标签落点与 JS 写进 style 的百分比共用同一套比例，天然对齐 */
-.hd-sl{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-size:12px;line-height:16px;letter-spacing:.02em;color:#666C74;white-space:nowrap;opacity:0;transition:color .5s ease}
+.hd-sl{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-size:12px;line-height:16px;letter-spacing:.02em;color:#3F444B;white-space:nowrap;opacity:0;transition:color .5s ease}
 /* 序号单独 10px + 等宽数字：01/02/03 的字宽必须一致，否则后面的中文标签会左右跳动 */
-.hd-sl i{font-style:normal;font-family:var(--lc-font-latin);font-size:10px;font-weight:600;letter-spacing:0;font-variant-numeric:tabular-nums;color:#5F656D;transition:color .5s ease}
+.hd-sl i{font-style:normal;font-family:var(--lc-font-latin);font-size:10px;font-weight:600;letter-spacing:0;font-variant-numeric:tabular-nums;color:#33383F;transition:color .5s ease}
 /* done→cur 只换颜色、不换字重：字重一变行宽就抖，量尺只是背景信息，抖动比对比度低更难受 */
 .hd-sl.done{color:#8A9099}.hd-sl.done i{color:#C8CCD1}
 .hd-sl.cur{color:var(--lc-text-1)}.hd-sl.cur i{color:#fff}

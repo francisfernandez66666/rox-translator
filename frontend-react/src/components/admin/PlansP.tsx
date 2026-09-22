@@ -731,19 +731,19 @@ async function confirmManual(o: Any) {
               可用余额/本月已用为主题色（兜底 #E7E9EA）、剩余赠送为琥珀色、永久额度为成功色。 */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10 }}>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color:'var(--lc-text-1)'}}>{fmtPoints(pkg.points_balance as number)}</b><span style={{ fontSize: 13, color:'var(--adm-faint)'}}>{t('usage.currentBalance')}</span>
+              <b style={{ fontSize: 20, color:'var(--lc-text-1)'}}>{fmtPoints(pkg.points_balance as number)}</b><span style={{ fontSize: 12, color:'var(--adm-faint)'}}>{t('usage.currentBalance')}</span>
             </div>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: 'var(--adm-amber-tx)' }}>{fmtPoints(pkg.points_grants_left as number)}</b><span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('plans.balanceGrants')}</span>
+              <b style={{ fontSize: 20, color: 'var(--adm-amber-tx)' }}>{fmtPoints(pkg.points_grants_left as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balanceGrants')}</span>
             </div>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color: 'var(--adm-ok-tx)' }}>{fmtPoints(pkg.points_permanent_balance as number)}</b><span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('plans.balancePermanent')}</span>
+              <b style={{ fontSize: 20, color: 'var(--adm-ok-tx)' }}>{fmtPoints(pkg.points_permanent_balance as number)}</b><span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.balancePermanent')}</span>
             </div>
             <div style={{ background: 'var(--adm-soft)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <b style={{ fontSize: 20, color:'var(--lc-text-1)'}}>{fmtPoints(pkg.points_used_month as number)}</b><span style={{ fontSize: 13, color:'var(--adm-faint)'}}>{t('plans.usedMonth')}</span>
+              <b style={{ fontSize: 20, color:'var(--lc-text-1)'}}>{fmtPoints(pkg.points_used_month as number)}</b><span style={{ fontSize: 12, color:'var(--adm-faint)'}}>{t('plans.usedMonth')}</span>
             </div>
           </div>
-          <div style={{ marginTop: 10, fontSize: 14, color: 'var(--adm-hint)' }}>
+          <div style={{ marginTop: 10, fontSize: 13, color: 'var(--adm-hint)' }}>
             {tpl('billing.myPackageCode', { code: (pkg.package_code as string) || '—' })}
             {pkgExpiresLabel ? ` · ${t('plans.expiresAt')}: ${pkgExpiresLabel}` : ''}
             {' · '}{tpl('billing.myPackageBalance', { balance: pkg.balance_sentences_approx ?? pkg.sentence_balance ?? '—' })}
@@ -768,7 +768,7 @@ async function confirmManual(o: Any) {
             //   提示条沿用本页 exhaustedHint 的 warn 令牌口径（--adm-warn-*，不写字面色值）。
             if (!pkg.in_grace) return null
             return (
-              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', fontSize: 14, color: 'var(--adm-warn-tx)', lineHeight: 1.7 }}>
+              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', fontSize: 13, color: 'var(--adm-warn-tx)', lineHeight: 1.7 }}>
                 <b>{tpl('plans.graceTitle', { date: toLocalDate(pkg.grace_expires as string) || '—' })}</b>
                 <div style={{ marginTop: 2 }}>{t('plans.graceBody')}</div>
               </div>
@@ -779,7 +779,7 @@ async function confirmManual(o: Any) {
             const hasPlan = !!(pkg.package_code && pkg.package_code !== 'trial')
             if (total > 0 || hasPlan) return null
             return (
-              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', fontSize: 14, color: 'var(--adm-warn-tx)', lineHeight: 1.7 }}>
+              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', fontSize: 13, color: 'var(--adm-warn-tx)', lineHeight: 1.7 }}>
                 {t('plans.exhaustedHint')}
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
                   <Button size="sm" variant="secondary" onClick={() => { document.getElementById('plans-shop')?.scrollIntoView({ behavior: 'smooth' }) }}>{t('plans.goSubscribe')}</Button>
@@ -802,14 +802,14 @@ async function confirmManual(o: Any) {
                     <div style={{ fontWeight: 600, fontSize: 14 }}>{pl.name}</div>
                     {/* ★ #75 多币种报价：非 CNY 报价时大字走后端换算好的 price_display（本币价），
                         人民币原价降级为辅助行——下单实扣仍是 ¥ 金额（amount_money），这里只改"看"的口径 */}
-                    <div style={{ fontSize: 22, fontWeight: 700, color:'var(--lc-text-1)' }}>{pl.quote_currency && pl.quote_currency !== 'CNY' ? fmtQuoteMoney(Number(pl.price_display ?? pl.price_money), String(pl.quote_currency)) : `¥${pl.price_money}`}<small style={{ fontSize: 13, color:'var(--adm-faint)', fontWeight: 400 }}>{pl.ptype ==='paid'? ` /${pl.duration_days}d` :''}</small></div>
+                    <div style={{ fontSize: 22, fontWeight: 700, color:'var(--lc-text-1)' }}>{pl.quote_currency && pl.quote_currency !== 'CNY' ? fmtQuoteMoney(Number(pl.price_display ?? pl.price_money), String(pl.quote_currency)) : `¥${pl.price_money}`}<small style={{ fontSize: 12, color:'var(--adm-faint)', fontWeight: 400 }}>{pl.ptype ==='paid'? ` /${pl.duration_days}d` :''}</small></div>
                     {pl.quote_currency && pl.quote_currency !== 'CNY' && (
                       <div style={{ fontSize: 12, color: 'var(--adm-faint)' }}>≈ ¥{pl.price_money}</div>
                     )}
                     {pl.ptype === 'paid' && Number(pl.price_money) > 0 && (
-                      <div style={{ fontSize: 13, color: '#c66900' }}>{t('plans.halfOffBadge')}</div>
+                      <div style={{ fontSize: 12, color: 'var(--lc-warn)' }}>{t('plans.halfOffBadge')}</div>
                     )}
-                    <ul style={{ margin: '0 0 4px 16px', padding: 0, fontSize: 14, color: 'var(--adm-hint)', lineHeight: 1.7 }}>
+                    <ul style={{ margin: '0 0 4px 16px', padding: 0, fontSize: 13, color: 'var(--adm-hint)', lineHeight: 1.7 }}>
                       <li>{Number(pl.points) > 0 ? tpl('billing.pkgPoints', { n: pl.points }) : tpl('billing.pkgSentences', { n: pl.sentences })}</li>
                       <li>{t('packages.type.' + pl.ptype)}</li>
                     </ul>
@@ -819,7 +819,7 @@ async function confirmManual(o: Any) {
                     }}>{isUpgradePlan(pl) ? t('plans.upgrade') : t('billing.subscribeNow')}</Button>
                   </div>
                 ))}
-                {!g.items.length && <div style={{ color: 'var(--adm-faint)', fontSize: 14 }}>{t('billing.noPlans')}</div>}
+                {!g.items.length && <div style={{ color: 'var(--adm-faint)', fontSize: 13 }}>{t('billing.noPlans')}</div>}
               </div>
             </div>
           ))}
@@ -828,7 +828,7 @@ async function confirmManual(o: Any) {
 
       {!isSuper && (
         <Panel id="plans-topup" title={t('plans.nav.topup')}>
-          <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('billing.onlineTopUpHint')}</div>
+          <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('billing.onlineTopUpHint')}</div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <select className="lc-select" value={chForm.channel} onChange={(e) => setChForm({ ...chForm, channel: e.target.value })} style={{ width: 200 }}>
               {chOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -846,7 +846,7 @@ async function confirmManual(o: Any) {
             </p>
           )}
           {curOrder && curOrder.status === 'pending' && (
-            <p style={{ color: 'var(--lc-text-1)', fontSize: 14, marginTop: 8 }}>{tpl('billing.currentOrder', { orderNo: curOrder.order_no, amount: fmtPoints(curOrder.amount_points), money: Number(curOrder.amount_money ?? 0).toFixed(2) })}</p>
+            <p style={{ color: 'var(--lc-text-1)', fontSize: 13, marginTop: 8 }}>{tpl('billing.currentOrder', { orderNo: curOrder.order_no, amount: fmtPoints(curOrder.amount_points), money: Number(curOrder.amount_money ?? 0).toFixed(2) })}</p>
           )}
           {/* ★ #75：外币报价租户的收银台辅助行——把人民币应收折算成本币"约价"给客户看。
               缺该币种倍率时整行不渲染（fail-closed：宁可不显示，也不给一个错的近似值）；
@@ -892,7 +892,7 @@ async function confirmManual(o: Any) {
       </Panel>
 
       <Panel title={t('plans.nav.quota')}>
-        <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('billing.quotaHint')}</div>
+        <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('billing.quotaHint')}</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <input className="lc-input" type="number" value={num(quotaForm.qps)} onChange={(e) => setQuotaForm({ ...quotaForm, qps: Number(e.target.value) || 0 })} placeholder={t('billing.quotaQps')} style={{ width: 140 }} />
           <input className="lc-input" type="number" value={num(quotaForm.concurrent)} onChange={(e) => setQuotaForm({ ...quotaForm, concurrent: Number(e.target.value) || 0 })} placeholder={t('billing.quotaConcurrent')} style={{ width: 140 }} />
@@ -908,7 +908,7 @@ async function confirmManual(o: Any) {
             {[7, 30, 90].map((d) => (
               <Button key={d} size="sm" variant={funnelDays === d ? 'primary' : 'secondary'} onClick={() => setFunnelDays(d)}>{t('plans.funnelDays').replace('{d}', String(d))}</Button>
             ))}
-            <span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('plans.funnelHint')}</span>
+            <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('plans.funnelHint')}</span>
           </div>
           {/* 数据表格 */}
           <DataTable rowKey={(row) => String((row as Any).source)} rows={funnelRows} emptyText={t('plans.funnelEmpty')}
@@ -932,25 +932,25 @@ async function confirmManual(o: Any) {
             <Switch checked={billingEnforced} onChange={(e) => setBillingEnforced(e.target.checked)} />
             <span style={{ color: billingEnforced ?'var(--lc-text-1)':'var(--lc-text-3)', fontWeight: 600 }}>{billingEnforced ? t('billing.enforcedOn') : t('billing.enforcedOff')}</span>
             <Button onClick={saveEnforce}>{t('common.save')}</Button>
-            <span style={{ fontSize: 14, color: 'var(--adm-hint)', marginLeft: 16 }}>{t('packages.sensitiveGateLabel')}</span>
+            <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 16 }}>{t('packages.sensitiveGateLabel')}</span>
             <Switch checked={sensitiveGate} onChange={(e) => setSensitiveGate(e.target.checked)} />
             <Button onClick={saveSensitiveGate}>{t('common.save')}</Button>
           </div>
           <div style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('packages.trialPointsLabel')}</span>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.trialPointsLabel')}</span>
               <input className="lc-input" type="number" value={num(freeTrialPoints)} onChange={(e) => setFreeTrialPoints(Number(e.target.value) || 0)} style={{ width: 120 }} />
-              <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('packages.trialDaysLabel')}</span>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.trialDaysLabel')}</span>
               <input className="lc-input" type="number" value={num(freeTrialDays)} onChange={(e) => setFreeTrialDays(Number(e.target.value) || 0)} style={{ width: 80 }} />
-              <span style={{ fontSize: 14, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('packages.markupLabel')}</span>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('packages.markupLabel')}</span>
               <input className="lc-input" type="number" value={num(markupMultiplier)} onChange={(e) => setMarkupMultiplier(Math.max(0, Number(e.target.value) || 0))} style={{ width: 120 }} />
               <Button onClick={saveBillingParams}>{t('common.save')}</Button>
             </div>
-            <div style={{ fontSize: 13, color: 'var(--adm-faint)', marginTop: 6 }}>{t('packages.markupHint')}</div>
+            <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginTop: 6 }}>{t('packages.markupHint')}</div>
           </div>
           <div style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('packages.payModeTitle')}</span>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.payModeTitle')}</span>
               <select className="lc-select" value={payModeCfg} onChange={(e) => setPayModeCfg(e.target.value)} style={{ width: 200 }}>
                 <option value="mock">{t('packages.payMock')}</option>
                 <option value="sdk">{t('packages.paySdk')}</option>
@@ -961,11 +961,11 @@ async function confirmManual(o: Any) {
           </div>
           {payModeCfg === 'static_qr' && (
             <div style={{ marginTop: 8 }}>
-              <div style={{ fontSize: 13, color: 'var(--adm-faint)', marginBottom: 4 }}>{t('packages.staticQRHint')}</div>
+              <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginBottom: 4 }}>{t('packages.staticQRHint')}</div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <input className="lc-input" value={staticQRImage} onChange={(e) => setStaticQRImage(e.target.value)} placeholder={t('packages.staticQRPlaceholder')} style={{ width: 360 }} />
-                <input type="file" accept=".png,.jpg,.jpeg,.gif,.webp" style={{ fontSize: 13 }} onChange={uploadStaticQR} disabled={qrUploading} />
-                {qrUploading && <span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>…</span>}
+                <input type="file" accept=".png,.jpg,.jpeg,.gif,.webp" style={{ fontSize: 12 }} onChange={uploadStaticQR} disabled={qrUploading} />
+                {qrUploading && <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>…</span>}
                 <Button onClick={saveStaticQR}>{t('common.save')}</Button>
               </div>
               {isImage(staticQRImage) && (
@@ -978,36 +978,36 @@ async function confirmManual(o: Any) {
           {/* ★ USDT（2026-09-15）：超管后台配置 USDT 收款（开关/链/钱包地址链接/汇率/确认数） */}
           <div style={{ marginTop: 12, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span style={{ fontWeight: 600, fontSize: 14 }}>{t('billing.usdtSection')}</span>
+              <span style={{ fontWeight: 600, fontSize: 13 }}>{t('billing.usdtSection')}</span>
               <Switch checked={usdtCfg.usdt_enabled === '1'} onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_enabled: e.target.checked ? '1' : '0' })} />
-              <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{usdtOn ? t('billing.usdtOn') : t('billing.usdtOff')}</span>
-              <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('billing.usdtTail')}</span>
+              <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{usdtOn ? t('billing.usdtOn') : t('billing.usdtOff')}</span>
+              <span style={{ fontSize: 12, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('billing.usdtTail')}</span>
               <Switch checked={usdtCfg.usdt_tail_enabled === '1'} onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_tail_enabled: e.target.checked ? '1' : '0' })} />
-              <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('billing.usdtAuto')}</span>
+              <span style={{ fontSize: 12, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('billing.usdtAuto')}</span>
               <Switch checked={usdtCfg.usdt_auto_settle === '1'} onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_auto_settle: e.target.checked ? '1' : '0' })} />
               <Button onClick={saveUSDT}>{t('common.save')}</Button>
             </div>
-            <div style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '4px 0 8px' }}>{t('billing.usdtHint')}</div>
+            <div style={{ fontSize: 12, color: 'var(--adm-faint)', margin: '4px 0 8px' }}>{t('billing.usdtHint')}</div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
-              <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('billing.usdtChains')}</span>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('billing.usdtChains')}</span>
               <select className="lc-select" multiple value={String(usdtCfg.usdt_chains || '').split(',').map((c: string) => c.trim()).filter(Boolean)}
                       onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_chains: Array.from(e.target.selectedOptions).map((o) => o.value).join(',') })} style={{ minWidth: 260 }}
                       >
                 {['trc20', 'erc20', 'bep20'].map((c) => <option key={c} value={c}>{usdtChainLabel(c)}</option>)}
               </select>
-              <span style={{ fontSize: 14, color: 'var(--adm-hint)', marginLeft: 10 }}>{t('billing.usdtRate')}</span>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)', marginLeft: 10 }}>{t('billing.usdtRate')}</span>
               <input className="lc-input" type="number" value={num(usdtCfg.usdt_rate_fen_per_usdt)} onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_rate_fen_per_usdt: Number(e.target.value) || 0 })} style={{ width: 120 }} />
             </div>
             {['trc20', 'erc20', 'bep20'].map((c) => (
               <div key={c} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 13, color: 'var(--adm-hint)', width: 130 }}>{usdtChainLabel(c)}</span>
+                <span style={{ fontSize: 12, color: 'var(--adm-hint)', width: 130 }}>{usdtChainLabel(c)}</span>
                 <input className="lc-input" value={String(usdtCfg['usdt_addr_' + c] || '')} onChange={(e) => setUsdtCfg({ ...usdtCfg, ['usdt_addr_' + c]: e.target.value })}
                        placeholder={t('billing.usdtAddrPh')} style={{ width: 340 }} />
-                <span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('billing.usdtConf')}</span>
+                <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('billing.usdtConf')}</span>
                 <input className="lc-input" type="number" value={num(usdtCfg['usdt_confirmations_' + c])} onChange={(e) => setUsdtCfg({ ...usdtCfg, ['usdt_confirmations_' + c]: Number(e.target.value) || 0 })} style={{ width: 70 }} />
                 {usdtAddrURL(c, String(usdtCfg['usdt_addr_' + c] || '')) ? (
-                  <a href={usdtAddrURL(c, String(usdtCfg['usdt_addr_' + c] || ''))} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>{t('billing.usdtWalletLink')} ↗</a>
-                ) : <span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('billing.usdtNoAddr')}</span>}
+                  <a href={usdtAddrURL(c, String(usdtCfg['usdt_addr_' + c] || ''))} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>{t('billing.usdtWalletLink')} ↗</a>
+                ) : <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('billing.usdtNoAddr')}</span>}
               </div>
             ))}
           </div>
@@ -1146,7 +1146,7 @@ async function confirmManual(o: Any) {
                        const info = manualOrdersUsdt.current[String(r.id)]
                        if (r.channel !== 'usdt' || !info) return <span style={{ color: 'var(--adm-faint)' }}>—</span>
                        return (
-                         <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+                         <div style={{ fontSize: 12, lineHeight: 1.6 }}>
                            <div>{String(info.amount)} USDT · {usdtChainLabel(String(info.chain))}</div>
                            {info.declared ? (
                              <a href={String(info.url || '#')} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>
@@ -1183,40 +1183,40 @@ async function confirmManual(o: Any) {
                   /* ★ USDT 收款台：精确金额（含尾数）+ 地址 + pay_uri 二维码 + txid 声明 */
                   <div style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <div style={{ padding: '8px 12px', borderRadius: 8, background: 'var(--adm-soft)', textAlign: 'center' }}>
-                      <div style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('billing.usdtAmountLabel')}（{usdtChainLabel(String(usdtPay.chain))}）</div>
+                      <div style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('billing.usdtAmountLabel')}（{usdtChainLabel(String(usdtPay.chain))}）</div>
                       <div style={{ fontSize: 24, fontWeight: 700 }}>{String(usdtPay.amount)} USDT</div>
-                      {String(usdtPay.tail) !== '0' && <div style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{tpl('billing.usdtTailNote', { tail: String(usdtPay.tail) })}</div>}
+                      {String(usdtPay.tail) !== '0' && <div style={{ fontSize: 11, color: 'var(--adm-faint)' }}>{tpl('billing.usdtTailNote', { tail: String(usdtPay.tail) })}</div>}
                     </div>
                     {usdtQr && <img src={usdtQr} alt="usdt-qr" style={{ width: 168, height: 168, alignSelf: 'center', borderRadius: 8, border: '1.2px solid var(--adm-line)', background: '#fff' }} />}
                     <div>
-                      <div style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('billing.usdtAddress')}</div>
+                      <div style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('billing.usdtAddress')}</div>
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        <code style={{ flex: 1, wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 6, padding: '6px 8px', fontSize: 13 }}>{String(usdtPay.address)}</code>
+                        <code style={{ flex: 1, wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 6, padding: '6px 8px', fontSize: 12 }}>{String(usdtPay.address)}</code>
                         <Button size="sm" variant="secondary" onClick={() => { void navigator.clipboard.writeText(String(usdtPay.address)); void toastSuccess(t('billing.usdtCopied')) }}>{t('billing.usdtCopy')}</Button>
                       </div>
                     </div>
-                    <div style={{ fontSize: 13, color: 'var(--adm-hint)', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 4 }}>
+                    <div style={{ fontSize: 12, color: 'var(--adm-hint)', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 4 }}>
                       <span>{tpl('billing.usdtExpires', { time: fmtTime(String(usdtPay.expires_at)) })}</span>
                       <span>{tpl('billing.usdtConfNeed', { n: Number(usdtPay.confirmations) || 0 })}</span>
                     </div>
                     <input className="lc-input" value={usdtTxInput} onChange={(e) => setUsdtTxInput(e.target.value)} placeholder={t('billing.usdtTxPh')} style={{ width: '100%' }} />
-                    <div style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('billing.usdtCheckoutHint')}</div>
+                    <div style={{ fontSize: 11, color: 'var(--adm-faint)' }}>{t('billing.usdtCheckoutHint')}</div>
                   </div>
                 ) : curOrder.channel === 'manual' ? (
                   <div>
-                    <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 6 }}>{t('billing.staticQR')}</div>
+                    <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 6 }}>{t('billing.staticQR')}</div>
                     {isImage(curOrder.qr_content as string)
                       ? <img src={curOrder.qr_content} style={{ maxWidth: 200, borderRadius: 8, border: '1.2px solid var(--adm-line)', margin: '8px 0' }} alt="qr" />
                       : qrImg
                         ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '1.2px solid var(--lc-border-card)', margin: '8px 0', background: '#fff' }} alt="qr" />
-                        : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 8, padding: 12, fontSize: 13, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>}
+                        : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 8, padding: 12, fontSize: 12, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>}
                   </div>
                 ) : (
                   qrImg
                     ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '1.2px solid var(--lc-border-card)', margin: '8px 0', background: '#fff' }} alt="qr" />
-                    : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 8, padding: 12, fontSize: 13, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>
+                    : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 8, padding: 12, fontSize: 12, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>
                 )}
-                <p style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{tpl('billing.orderNo', { orderNo: curOrder.order_no })}</p>
+                <p style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{tpl('billing.orderNo', { orderNo: curOrder.order_no })}</p>
               </div>
             )}
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap', marginTop: 12 }}>

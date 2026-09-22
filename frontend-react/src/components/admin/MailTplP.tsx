@@ -90,7 +90,7 @@ export default function MailTplP() {
 
   return (
     <Panel title={t('mailTpl.title')}>
-      <p style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 14 }}>{t('mailTpl.hint')}</p>
+      <p style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 14 }}>{t('mailTpl.hint')}</p>
       {!loaded ? (
         <div style={{ color: 'var(--adm-faint)' }}>…</div>
       ) : (
@@ -103,28 +103,28 @@ export default function MailTplP() {
                 {/* 模板标题与代码标识 */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                   <strong style={{ fontSize: 14 }}>{it.name}</strong>
-                  <code style={{ fontSize: 13, color: 'var(--adm-faint)', background: 'var(--adm-soft)', padding: '1px 6px', borderRadius: 4 }}>{it.code}</code>
+                  <code style={{ fontSize: 12, color: 'var(--adm-faint)', background: 'var(--adm-soft)', padding: '1px 6px', borderRadius: 4 }}>{it.code}</code>
                   {it.is_modified && (
-                    <span style={{ fontSize: 13, color: 'var(--adm-warn-tx)', background: 'var(--adm-warn-bg)', padding: '1px 6px', borderRadius: 4 }}>{t('mailTpl.modified')}</span>
+                    <span style={{ fontSize: 12, color: 'var(--adm-warn-tx)', background: 'var(--adm-warn-bg)', padding: '1px 6px', borderRadius: 4 }}>{t('mailTpl.modified')}</span>
                   )}
                 </div>
                 {/* 模板描述与可用变量 */}
-                <div style={{ fontSize: 13, color: 'var(--adm-faint)', marginBottom: 10 }}>{it.desc}</div>
-                <div style={{ fontSize: 13, color: 'var(--adm-ok-tx)', marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginBottom: 10 }}>{it.desc}</div>
+                <div style={{ fontSize: 12, color: 'var(--adm-ok-tx)', marginBottom: 10 }}>
                   {t('mailTpl.vars')}：{it.vars.map((v) => `{${v}}`).join('  ')}
                 </div>
                 {/* 模板编辑区域：主题、正文、抄送 */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div>
-                    <div style={{ fontSize: 14, marginBottom: 4 }}>{t('mailTpl.subject')}</div>
+                    <div style={{ fontSize: 13, marginBottom: 4 }}>{t('mailTpl.subject')}</div>
                     <input className="lc-input" value={d.subject} onChange={(e) => setField(it.code, 'subject', e.target.value)} placeholder={it.subject} />
                   </div>
                   <div>
-                    <div style={{ fontSize: 14, marginBottom: 4 }}>{t('mailTpl.body')}</div>
+                    <div style={{ fontSize: 13, marginBottom: 4 }}>{t('mailTpl.body')}</div>
                     <textarea className="lc-textarea" rows={4} value={d.body} onChange={(e) => setField(it.code, 'body', e.target.value)} placeholder={it.body} style={{ width: '100%', minHeight: 96, maxHeight: 260, resize: 'vertical' }} />
                   </div>
                   <div>
-                    <div style={{ fontSize: 14, marginBottom: 4 }}>{t('mailTpl.cc')}</div>
+                    <div style={{ fontSize: 13, marginBottom: 4 }}>{t('mailTpl.cc')}</div>
                     <input className="lc-input" value={d.cc} onChange={(e) => setField(it.code, 'cc', e.target.value)} placeholder={t('mailTpl.ccPlaceholder')} />
                   </div>
                   {/* 保存与重置按钮 */}
