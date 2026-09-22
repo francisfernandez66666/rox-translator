@@ -87,8 +87,9 @@
   `readability.test.ts` H 段；运行时侧由 `pixel_uat.spec.ts` P6/P6b/P6c 补。
   **部署口径**：改动落在 ②③ 必须换 `translator-server`，落在 ④ 必须换 `translator-assist`，
   落在 ⑤ 需重打扩展包——只换 `/opt/translator/web` 一律不生效。
-  ⚠️ ④ 额外一层：生产 `secrets.env` 留着 `ASSIST_WEB=/opt/ai-assist/web`，**外置文件优先于 `go:embed`**，
-  所以换二进制仍可能是旧页——改 `internal/assist/web/*` 必须同步外置 `admin.html`（2026-09-22 〇-LI 踩过）。
+  ⚠️ ④ 曾有一层坑：生产 `secrets.env` 一度留着 `ASSIST_WEB=/opt/ai-assist/web`，**外置文件优先于 `go:embed`**，
+  换二进制仍是旧页——2026-09-22 〇-LI 收尾已**撤销该 env 并挪走外置页**，内嵌 `admin.html` 为单一事实源。
+  若运维再显式配 `ASSIST_WEB`，同步外置文件的口径立即恢复生效（`internal/assist/api/server.go` adminPage）。
 
 ### 6. e2e 断言红线
 
