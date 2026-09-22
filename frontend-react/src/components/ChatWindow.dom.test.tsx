@@ -1,11 +1,11 @@
 // ============================================================================
-// ChatWindow.dom.test.tsx — 即时翻译工作台组件测试（★ 2026-09-22 形态回退版）
+// ChatWindow.dom.test.tsx — 即时翻译工作台组件测试（★ 形态定档：整屏合并对话框，2026-09-22 〇-LJ）
 // 锁住四条口径：
-//   ① 形态＝两段式：吸顶输入卡在上、译文结果气泡在其下方展开（两者不同容器），
-//      这条是「回退形态、保留功能」的形态锁——一旦有人再把输入和气泡合并进同一个框，即红灯；
-//   ② 即时翻译不支持文件翻译（#36 决定保留）：不得再渲染任何 file input / 上传按钮，文案不得提「上传」；
-//   ③ 缩翻控件有意义：勾选后把 max_length 透传给 sendMessage（文本路径）；
-//   ④ 提示词与欢迎语按两段式文案渲染（十二语种 welcomeSub 同步为「显示在输入框下方」）。
+//   ① 对话框合并：原文输入与译文结果气泡在同一个 .cw-dialog 容器内（气泡不再排在框外），
+//      合并框吃满剩余高度由 CSS flex 承担，此处断言 DOM 归属关系；
+//   ② 即时翻译不再支持文件翻译：不得再渲染任何 file input / 上传按钮，文案不得提「上传」；
+//   ③ 缩翻控件在文件入口下线后仍有意义：勾选后把 max_length 透传给 sendMessage（文本路径）；
+//   ④ 提示词去文件化：输入框占位与欢迎语按新文案渲染（防止改回「或点＋上传文件」）。
 // 运行：npx vitest run src/components/ChatWindow.dom.test.tsx
 // ============================================================================
 // @vitest-environment jsdom
@@ -68,32 +68,22 @@ beforeEach(() => {
   ;(Element.prototype as any).scrollTo = (Element.prototype as any).scrollTo || vi.fn()
 })
 
-describe('即时翻译工作台（吸顶输入卡 + 下方气泡列表）', () => {
-  it('① 输入卡吸顶在上、结果气泡在其下方展开（两段式形态锁）', async () => {
+describe('即时翻译工作台（#36 合并对话框）', () => {
+  it('① 原文输入与结果气泡同在一个对话框容器内', async () => {
     mocks.chat.messages = [
       { id: 'u1', role: 'user', content: '早上好', timestamp: Date.now() },
       { id: 'a1', role: 'assistant', content: 'Good morning', timestamp: Date.now() },
     ]
     const { container } = renderWindow()
-    const stage = container.querySelector('.cw-stage')
-    const card = container.querySelector('.cw-card') as HTMLElement | null
-    const results = container.querySelector('.cw-results')
-    expect(stage).toBeTruthy()
-    expect(card).toBeTruthy()
-    expect(results).toBeTruthy()
+    const dialog = container.querySelector('.cw-dialog')
+    expect(dialog).toBeTruthy()
     await waitFor(() => expect(container.querySelectorAll('.bubble-row').length).toBe(2))
-    // 卡与结果区同属一块滚动舞台，且卡排在结果区之前（译文在输入下方展开）
-    expect(stage!.contains(card!)).toBe(true)
-    expect(stage!.contains(results!)).toBe(true)
-    expect(card!.compareDocumentPosition(results!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    // 输入框只在吸顶卡内，不在结果区里（合并形态的判据正是两者同容器）
-    const ta = container.querySelector('[data-testid="translate-input"]')!
-    expect(card!.contains(ta)).toBe(true)
-    expect(results!.contains(ta)).toBe(false)
-    expect(results!.contains(container.querySelector('.bubble-row')!)).toBe(true)
-    // 吸顶由内联样式承担：jsdom 不解析 <style>，故只认 element.style，合并版没有这条即红灯
-    expect(card!.style.position).toBe('sticky')
-    expect(card!.style.top).toBe('0px')
+    // 气泡与输入框都在合并框内（旧版气泡排在输入卡之外）
+    expect(dialog!.contains(container.querySelector('[data-testid="translate-input"]')!)).toBe(true)
+    expect(dialog!.contains(container.querySelector('.bubble-row')!)).toBe(true)
+    // 内部滚动区承载消息（整页不再滚动）
+    const body = dialog!.querySelector('.cw-dialog-body')
+    expect(body && body.contains(container.querySelector('.bubble-row')!)).toBe(true)
   })
 
   it('② 不再渲染任何文件上传入口，页面文案不提「上传/文件翻译」', () => {
@@ -127,12 +117,12 @@ describe('即时翻译工作台（吸顶输入卡 + 下方气泡列表）', () =
     expect(options.max_length).toBeUndefined()
   })
 
-  it('④ 提示词与欢迎语按两段式口径渲染（不提文件、不提「对话框内」）', () => {
+  it('④ 提示词已去文件化：占位符与欢迎语按新文案渲染', () => {
     renderWindow()
     const ta = screen.getByTestId('translate-input') as HTMLTextAreaElement
     expect(ta.placeholder).toBe('输入要翻译的文本')
     expect(ta.getAttribute('aria-label')).toBe('输入要翻译的文本')
     expect(screen.getByText('输入文本，选择目标语言后开始翻译')).toBeTruthy()
-    expect(screen.getByText(/译文会显示在输入框下方/)).toBeTruthy()
+    expect(screen.getByText(/译文会直接显示在这个对话框里/)).toBeTruthy()
   })
 })

@@ -894,7 +894,7 @@ export const dict: Record<string, string> = {
   "chat.usedTip": "今日實際消耗（含不計費情境，帳本全程留痕）；多語言翻譯按語言數增加消耗",
   "chat.usedTokens": "今日已耗 {n} 積分",
   "chat.welcome": "輸入文字，選擇目標語言後開始翻譯",
-  "chat.welcomeSub": "譯文會顯示在輸入框下方，支援 40+ 語言互譯。",
+  "chat.welcomeSub": "譯文會直接顯示在這個對話框裡，支援 40+ 語言互譯。",
   "common.active": "啟用",
   "common.cancel": "取消",
   "common.close": "關閉",

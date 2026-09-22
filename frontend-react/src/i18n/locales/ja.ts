@@ -894,7 +894,7 @@ export const dict: Record<string, string> = {
   "chat.usedTip": "本日の実消費（課金対象外も含み、台帳に全記録）。多言語翻訳は言語数に応じて消費が増えます",
   "chat.usedTokens": "本日消費 {n} ポイント",
   "chat.welcome": "テキストを入力し、対象言語を選んで翻訳",
-  "chat.welcomeSub": "訳文は入力欄の下に表示されます。40以上の言語に対応。",
+  "chat.welcomeSub": "訳文はこのダイアログ内にそのまま表示されます。40以上の言語に対応。",
   "common.active": "有効",
   "common.cancel": "キャンセル",
   "common.close": "閉じる",
