@@ -98,6 +98,12 @@
 - 需要人工环境（生产探针、手工 Token 等）的用例一律放 `frontend-react/e2e-manual/`，
   并在文件头加 `test.skip(!process.env.XXX, '...')` 守卫，附「为何手工」的注释。
 - 生产探针职责由 `deploy/` 下的冒烟脚本承担，不进 Playwright 矩阵。
+- **链路型用例（依赖后端真实接口才有意义的 e2e，如助手挂件、流式对话）必须自带「可达探针」。**
+  前端普遍有离线兜底（横幅 / 「暂时联系不上」空态），转发链断掉时**界面照样渲染**，断言会对着兜底态一路绿灯。
+  写法：断言前先 `expect(离线标志元素).toBe(0)` + `expect(链路应下发的标识，如会话 sid).toBeTruthy()`，
+  失败信息直接点明「⇒ /xxx-api 链路没通」，而不是留给后人去猜。
+  （2026-09-23 实测：`/assist-api` 在主服务直出 dist 的形态下没有转发方，落进 SPA 兜底返回整页 `index.html`，
+  `assist_widget_cache.spec.ts` W1/W2 全程在离线态假绿，直到 W3 才以「拿不到 sid」暴露——见 `e2e/assist_widget_cache.spec.ts` 的 `expectLiveLink`。）
 
 ### 7. Shell 脚本断言写法（UAT 脚本）
 
@@ -106,6 +112,22 @@
   **静默返回 0 命中**——断言会「永远通过/永远失败」而不报错，是最难发现的一类闸门失效。
   （2026-09-17 实测：`scripts/uat/api_uat_txn.sh` T16 因该写法恒判 refused=0 而误报失败。）
 - 断言脚本避免依赖外部环境的行为差异；涉及金额/计数的断言优先用 `-E` + 明确锚点。
+- **金额/数值「直读等值锁」必须先过方言归一 `mny_norm`（`scripts/uat/api_uat_txn.sh`）再比对。**
+  同一列 SQLite 回吐 `5.0`/`1.0`，PostgreSQL numeric 回 `5`/`10.8`——直接字符串相等会在两种方言下各红一次，
+  而这类红**不是**回归。（2026-09-23 实测：T51/T54 金额与 `fx_rate` 直读锁。）
+- **`DB_DRIVER=sqlite` 的本地快跑不是发布闸门。** 它只用于快速自检；数值文本、时间函数、`RETURNING`
+  与锁语义都有差异，计费/对账相关改动必须以 PG 方言跑 `run_uat.sh` 才算通过（见下方 §二）。
+
+### 8. Handler 错误返回口径（★ 2026-09-23 〇-LK 立为硬约定）
+
+- **新增/改动的 HTTP handler，错误响应一律走 `s.writeError(w, r, apierrors.New(code, msg))`，禁止新写内联
+  `writeJSON(w, 4xx/5xx, map{...})`。** 全包棘轮 `TestErrorStyleRatchet`（基线 741）按**整包**计数，
+  新文件里第 1 处内联错误响应就会顶红闸门——这不是形式问题，内联体缺统一错误码，
+  前端与 SDK 无法按 code 分支处理。
+- 白名单转发（如 `assist_open_proxy.go`）里「上游原样透传」的 4xx **不算**内联错误响应：那是上游状态码，
+  不新造错误体；本层自己的失败（构造失败、上游不可达、读取中断）必须走 `writeError`。
+- 缺错误码就在 `internal/errors/codes.go` 补（`ErrMethodNotAllowed`→405、`ErrUpstreamUnavailable`→502 即本批新增），
+  同步登记 HTTP 映射，别在 handler 里手写状态码。
 
 ---
 

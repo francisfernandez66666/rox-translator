@@ -1,6 +1,40 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-22（〇-LJ：即时翻译工作台**形态定档＝整屏合并 AI 对话框**（本批先误改两段式 `8d88313`、后按用户截图改回单框 `43da5aa`，功能一项未减），代码已推送 43da5aa·主站已部署（纯前端换源，两二进制未动）·演示站未部署）
+> 最后更新：2026-09-23（〇-LK：AI 助手三修——挂件刷新不丢对话（本地缓存 + `sess_key` 与 Token 解耦）、管理 Token 对齐 LLM 配置范式（掩码/留空不改/显式清除/保存即热生效）、即时翻译输入区改到**框脚贴底**；同批补防「`/assist-api` 在主服务形态下断链致闸门假绿」。代码已推送 **87a589f**·文档仅本地·**主站未部署（等用户下令）**·演示站未部署）
+
+### 〇-LK、AI 助手会话可用性与配置口径批（2026-09-23，★ 代码已推送 87a589f（同一改动在本地分支上另号 e1b9e46，并轨 merge 06a8424）·文档仅本地·**主站未部署（本批用户指令止于第 4 步「更新文档」，未下部署令）**·演示站未部署）
+
+> 来源＝用户三条反馈：①「另外 ai 助手要带缓存，不然刷新一次页面就没了很尴尬的」；
+> ②「我截图的配置，请参考我其他 llm 配置的方式重新做」（assist 管理 Token 那一栏）；
+> ③「你们家对话框是放顶部的啊，会不会做 ai 对话页面」（附即时翻译工作台截图）。
+> 施工中还照出一个**闸门盲区**（见下第 ④ 块），属本轮补防而非用户直接反馈。
+
+| 块 | 交付 |
+|----|------|
+| **① 挂件刷新不丢对话（`AiAssist.tsx` + `api/assist.ts`）** | 恢复序改为**本地缓存 → 服务端 history → 新会话 greet** 三层：`ny_assist_msgs`（`{sid,msgs}`，40 条上限）由 `bubbles` 变化统一回写（走 effect 而非各调用点补写，空数组不写以免恢复中途清空），缓存定位「即时可见 + 离线兜底」，服务端 history 回来以服务端为准对账；**只有两者都空**才 greet，避免把已看过的对话覆盖成一句欢迎词；tok 失效（401）时保留缓存、只标离线，等下次 send 的 401 自愈换新会话。服务端根因同批修掉：`sess_key` 改为随机生成并持久化 `configs.sess_key`（旧实现由**管理 Token** 派生，assist 重启或 Token 轮换即作废全部访客 tok），且 `sess_key` 完全不在管理面列出（`hiddenCfgKeys`）；`handleGreeting` 改为「该会话已有历史则不再叠欢迎词」 |
+| **② 管理 Token 对齐 LLM 配置范式（`admin_assist.go` + `AssistP.tsx`）** | 出参改**掩码态**：`source(env/db/none)` + `set` + `masked` + `db_masked` + `env_overridden`，明文一律不出后端进程；保存留空＝不修改、掩码值回写＝`skipped`、清除走显式 `clear:true` + 前端二次确认；`env` 占用生效位时面板置灰并解释（InlineBanner）；输入框 `type=password` + `autoComplete=new-password` + 不回填。生效链：`configs.admin_token` > 启动快照，带 60s TTL 与 `invalidateAdminToken()`，主后台保存后**推送 assist 即刻热生效**（`pushed:false` 时明确提示需重启 `translator-assist`），前端不再显示明文 Token、iframe 老路径（#34 后不存在）的 `token`/`has_token` 字段删除 |
+| **③ 即时翻译工作台输入区贴底（`ChatWindow.tsx`）** | 〇-LJ 定档的「整屏合并单框」保留，但把输入区从滚动区里挪进**框脚**：`.cw-dialog-head`（工具条）/`.cw-dialog-body`（消息流，唯一滚动区）/`.cw-dialog-foot > .cw-composer`（输入贴底 + 语种行 + 操作行常驻），`autoResize` 上限改 `max(96, min(240, innerHeight*0.28))`；功能一项未减（会话搜索/导出/清空、缩翻、预估与余额、校对模式、反馈入口）。三层锁同步改向：`ChatWindow.dom.test.tsx` 结构锁、`pixel_uat` P2b 运行时几何锁、`mobile_uat` 选择器 |
+| **④ 补防：`/assist-api` 三条转发路径与「离线假绿」** | 挂件写死同源前缀 `/assist-api`，此前该前缀**只存在于 vite dev proxy 与生产 Caddy**——「主服务直出 dist」的形态（单二进制本地跑、发布闸门 `uat-server -frontend dist`）下每个请求都落进 SPA 兜底拿回 `index.html`，挂件全程显示「助手暂时联系不上」，而 W1/W2 因「缓存与界面照样一致」**照样绿**：闸门里助手链路从未真跑通过。现补主服务侧白名单转发 `internal/api/assist_open_proxy.go`（只放 greeting/chat/history/features，`/assist-api/api/assist/admin/*` 一律 404 不给管理面旁路、不注入任何凭据、上游 4xx 原样透传、请求体 1MB 与响应 4MB 限长、不可达回 502），并在 e2e 加 `expectLiveLink` 可达探针（无离线徽标 + greet 必须下发过 sid），三条用例各过一遍 |
+| **⑤ 测试接入（覆盖本轮全部开发内容）** | Go：`TestAdminTokenHotRotate`（写新 Token 后新值 200/旧值 401、拒空、掩码回显不外泄、掩码回写 skip）、`TestGreetDedupesWelcome`、`TestSessKeySurvivesRestart`（同库重启后老 `sid+tok` 仍可读史、伪 tok 仍 401）、`TestAssistOpenProxy*` 6 例（转发/白名单外 404/方法 405/上游 401 透传/不可达 502/不注入凭据）；`assist_uat.sh` 新增 **G1–G8**（原 38 → **48 断言**）；e2e 新增 `assist_widget_cache.spec.ts` W1–W3 与 `assist_admin.spec.ts` **A7**（Token 区掩码态，注释写明**故意不做真轮换**，否则同批其余用例的代理链路一起被改坏）；vitest 新增 AssistP 管理 Token 7 例 + AiAssist 缓存单测；`api_uat_txn.sh` 新增 `mny_norm` 方言归一（SQLite 把数值列回吐成 `5.0`/`1.0`，金额直读等值锁 T51/T54 在本地快跑恒假红） |
+| **⑥ i18n 与错误码口径** | `assist.*` 新增 12 键（`tokenSet/tokenUnset/tokenSrcLabel/tokenMaskNote/tokenClear/tokenClearConfirm/tokenCleared/tokenPushed/tokenNotPushed/tokenEnvLocked/tokenUnchanged/tokenMaskTyped`）＋改值 `tokenPh/tokenSaved`，`panels/assist.ts`(zh/en) + 10 份 `locales/*.ts` 全量同步；`audit.action.assist_token_rotate/assist_token_clear` 补进 12 份词典（漏译棘轮回基线 32）。`internal/errors` 新增统一错误码 `METHOD_NOT_ALLOWED`(405) 与 `UPSTREAM_UNAVAILABLE`(502)，新 handler 零内联错误响应（#42 棘轮被本批新文件顶红过一次 746>741，按闸门提示改走 `s.writeError` 后回到 741） |
+
+> 闸门（2026-09-23，全绿）：`go build ./...` + `go vet` + `gofmt -l` 干净；`go test -race ./internal/...` 通过；
+> `run_uat.sh`（PG 方言，发布闸门）A/B **96/0**、交易专项 T **510/0**、Playwright **59 passed + 1 skipped**
+> （`RUN_UAT_EXIT=0`）；`assist_uat.sh` **48/0**；`multi_instance_e2e.sh` **8/0**；
+> vitest **47 文件 / 359 用例**；`npx tsc --noEmit` 与 `vite build` 0 错。
+> ⚠️ 同口径 `DB_DRIVER=sqlite UAT_SKIP_RACE=1` 快跑曾报 T51/T54 两条金额假红（跨方言数值文本差异，
+> 已由 ⑤ 的 `mny_norm` 归一）——**SQLite 快跑不是发布闸门，判定只认 PG 那一跑**。
+> 测试数据清理：三套脚本各自临时库（`$WORK/dev.db`、`assist.db`、PG `translator_uat` 每次重建），
+> 新增断言无外置产物；`/opt/translator/web_old.*` 累积 **41 份**（磁盘 66%、余 14G）。
+> **发布链**：按「代码提交 → push → 才提交文档」口径执行——本地代码提交 `e1b9e46`（37 文件、**零 .md**），
+> 在 `origin/autosales` 之上另落纯代码提交 **87a589f** 推送（`git diff --name-only 43da5aa 87a589f` 实核
+> 37 文件、`.md` 计数 0），再 merge 回本地并轨（`06a8424`），本批文档提交全部留在本地侧。
+> **主站部署状态：未执行**。本批同时动了 `internal/api/*`（含新文件 `assist_open_proxy.go`）、
+> `internal/assist/*` 与前端 dist，按 §五/§十三 口径发版需 **`translator-server` + `translator-assist` 两二进制 +
+> `web` 换源**三件齐上（只换 web 则挂件缓存的服务端根因与 Token 热生效都不生效）。
+> **待用户决策（本批未擅动）**：①本批是否部署主站（三件齐上）；②文档提交是否迁到永不推送的独立分支；
+> ③`web_old.*` 41 份归档是否清理；④演示站落后 6 个批次是否补部署；⑤assist `kb_entries` 关键词手工同步；
+> ⑥浏览器扩展（`extension/`）至今无交付渠道。
 
 ### 〇-LJ、即时翻译工作台形态定档批（2026-09-22，★ 代码已推送 43da5aa·主站已部署（仅换源 `/opt/translator/web`，`translator-server`/`translator-assist` 两二进制未替换、服务未重启）·演示站未部署）
 
@@ -16,7 +50,7 @@
 |----|------|
 | **定档形态（`ChatWindow.tsx`）** | 除页眉页脚外**一张吃满整屏的对话框 `.cw-dialog`**（`flex:1 + min-height:0`，卡面 #0E1014 + 描边 + 阴影），内部三段：**框头**（原文标签 / 自动检测 / 会话搜索·导出 Markdown·清空）→ **滚动区 `.cw-dialog-body`**（原文 textarea 与译文结果气泡**同框**、框内滚动，输入不再独占一张卡）→ **框脚 `.cw-dialog-foot`**（目标语言多选 + 已选 chips、专业校对/快速、缩翻、翻译/停止主按钮，常驻不随滚动消失）；`autoResize` 上限按视口 40%、520px 封顶（合并框内给气泡留可读空间）。中间态 `.cw-stage/.cw-card/.cw-results` 三段类名**已全部撤除**，`theme.css` 与组件注释同步标注「勿再复活」 |
 | **功能保留清单（两次往返一项未减）** | 会话搜索·导出 Markdown·清空、缩翻 `max_length` 接文本链路、字数预估与余额/组织预算条、目标语言多选与 chips、气泡上下文（assistant 取上一条 user 为 source）与反馈入口、离线横幅与重试、专业校对/快速双模式；**文件翻译入口维持 #36 的下线决定**（统一走「文档翻译」工单页，工作台仍零 `input[type=file]`） |
-| **三层形态锁回到单框口径** | ① `ChatWindow.dom.test.tsx` ①：输入框与气泡都必须在 `.cw-dialog` 内、且同在其滚动区 `.cw-dialog-body` 内（旧两段式锁的 `.cw-stage`/`compareDocumentPosition`/内联 `position:sticky` 断言一并撤）；② `pixel_uat.spec.ts` P2b 恢复「工作台合并对话框结构」标题，锁 `.cw-dialog-body textarea` 与 `.cw-dialog-foot` 可见、全站零 `input[type=file]`，字阶 13/14、真值灰阶集合、顶栏 38px 高等**等值锁原样保留**；③ `mobile_uat.spec.ts` 等待选择器回到 `.cw-dialog`。截图产物名回到 `p2b_workbench_merged.png` |
+| **三层形态锁回到单框口径** | ① `ChatWindow.dom.test.tsx` ①：输入框与气泡都必须在 `.cw-dialog` 内、且同在其滚动区 `.cw-dialog-body` 内（旧两段式锁的 `.cw-stage`/`compareDocumentPosition`/内联 `position:sticky` 断言一并撤）；② `pixel_uat.spec.ts` P2b 恢复「工作台合并对话框结构」标题，锁 `.cw-dialog-body textarea` 与 `.cw-dialog-foot` 可见、全站零 `input[type=file]`，字阶 13/14、真值灰阶集合、顶栏 38px 高等**等值锁原样保留**；③ `mobile_uat.spec.ts` 等待选择器回到 `.cw-dialog`。截图产物名回到 `p2b_workbench_merged.png` **（★ 本行的「输入框在滚动区内」已被 〇-LK 改向：用户看后判「你们家对话框是放顶部的啊」，输入区现落在 `.cw-dialog-foot` 框脚，DOM 与三层锁以 〇-LK 为准）** |
 | **文案十二语种同步** | `chat.welcomeSub` 回到「**译文会直接显示在这个对话框里**，支持 40+ 语言互译。」，`panels/chat.ts`（zh/en）+ 10 份 `locales/*.ts` 共 12 语种一次改齐（中间态「显示在输入框下方」口径全部作废） |
 
 > 闸门（两次往返各自全绿，2026-09-22）：`tsc --noEmit` 干净；vitest **47 files·344 tests**；`vite build`

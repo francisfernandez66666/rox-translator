@@ -115,12 +115,12 @@ DB_DRIVER=postgres DB_DSN='postgres://user:pass@127.0.0.1:5432/translator?sslmod
 
 ```bash
 cd backend-go && go test -race ./...           # 单元测试（PG 方言助手/迁移锁/nil 防线回归，无 PG 实例自动跳过）
-bash scripts/uat/run_uat.sh                    # 全链路 UAT 主矩阵（PostgreSQL 方言=生产同构，发布闸门：内置 race 全量单测预检（方言钉死内存 SQLite，PG 覆盖归矩阵）+ API A/B 主链路 96（含 A1b 留资 8 断言、/pricing 归一 SPA 壳断言、A7s 流式计量 done 帧前同步落库断言） + 功能/交易专项 510（含 T42 USDT 全链 mock_chain 驱动、T43/T44 修复回归、T45 密码找回全链路、任务系统奖励与双桶台账断言、★ T55 支付渠道凭据管理台配置：白名单键不留半套凭据/敏感项密文与掩码/掩码再提交不覆盖真值/库配置端到端流到下单链路/fail-closed 不出 mockpay） + Playwright 56（mobile_uat/a11y 超时已根治，0 flaky；含 P6b/P6c 白底实心件与后端直出页运行时 getComputedStyle 实测；含落地页多语言 landing_i18n、十语种整页抽查 all_langs_full、TF2 翻译后余额/今日已耗即时上屏断言）；首轮非零自动 --last-failed 复跑甄别 flaky）
-bash scripts/uat/assist_uat.sh                 # AI 顾问 UAT（38 断言：C端链路/同义词/兜底改造/config 白名单与掩码/LLM 热加载/测试连通/CRUD/内嵌管理页/主库 Token 桥接与 env 优先级/复合意图让位 CI1·CI2）
+bash scripts/uat/run_uat.sh                    # 全链路 UAT 主矩阵（PostgreSQL 方言=生产同构，发布闸门：内置 race 全量单测预检（方言钉死内存 SQLite，PG 覆盖归矩阵）+ API A/B 主链路 96（含 A1b 留资 8 断言、/pricing 归一 SPA 壳断言、A7s 流式计量 done 帧前同步落库断言） + 功能/交易专项 510（含 T42 USDT 全链 mock_chain 驱动、T43/T44 修复回归、T45 密码找回全链路、任务系统奖励与双桶台账断言、★ T55 支付渠道凭据管理台配置：白名单键不留半套凭据/敏感项密文与掩码/掩码再提交不覆盖真值/库配置端到端流到下单链路/fail-closed 不出 mockpay） + Playwright 60（mobile_uat/a11y 超时已根治，0 flaky；含 P6b/P6c 白底实心件与后端直出页运行时 getComputedStyle 实测；含落地页多语言 landing_i18n、十语种整页抽查 all_langs_full、TF2 翻译后余额/今日已耗即时上屏断言；★ 〇-LK 新增 P2b 工作台框脚几何等值锁（量 .cw-dialog-foot 贴对话框底沿 + 输入框落下半部，不拿 textarea 底沿误判交付形态）、A7 管理 Token 掩码区、assist_widget_cache W1–W3 挂件刷新不丢对话——三条用例各带 expectLiveLink 可达探针，防「离线兜底话术」把链路断链照成假绿）；首轮非零自动 --last-failed 复跑甄别 flaky）
+bash scripts/uat/assist_uat.sh                 # AI 顾问 UAT（48 断言：C端链路/同义词/兜底改造/config 白名单与掩码/LLM 热加载/测试连通/CRUD/内嵌管理页/主库 Token 桥接与 env 优先级/复合意图让位 CI1·CI2、★ 〇-LK G1–G8 管理 Token 保存即热生效（新值 200/旧值 401）、掩码不外泄、拒空值、greet 去重、进程重启后老 sid+tok 仍可用（sess_key 已与 Token 解耦））
 bash scripts/uat/multi_instance_e2e.sh         # 双实例 e2e（8 断言：JWT 互通/USDT 对账锁/双桶并发勾稽/优雅停机，验证多实例红线）
 PW_TARGET=e2e/xxx.spec.ts bash scripts/uat/run_uat.sh  # 迭代调试：只跑指定 e2e（缺省全量）
 DB_DRIVER=sqlite UAT_SKIP_RACE=1 bash scripts/uat/run_uat.sh  # SQLite 方言本地快跑（兼容参考）
-cd frontend-react && npx vitest run            # 前端单测（47 文件 / 344 用例，含多语言 locales 全量覆盖闸门与浏览器语言检测/逐段流式上屏/编辑器虚拟化与计算收敛/留资表单/登录链路 jsdom 测试、★ #74 宽限期提示与 #75 多币种报价配置/商店卡双币渲染的 PlansP dom 测试、★ src/styles/readability.test.ts「UI 交付真值闸门」八组锁 A-H——令牌值等值锁 + 历次提亮产物负向清零 + G 白色填充档等值（实心白件必须 #FFFFFF，禁拿文字档 #E7E9EA 做整块填充）+ H 扩展面同口径）
+cd frontend-react && npx vitest run            # 前端单测（47 文件 / 359 用例，含多语言 locales 全量覆盖闸门与浏览器语言检测/逐段流式上屏/编辑器虚拟化与计算收敛/留资表单/登录链路 jsdom 测试、★ #74 宽限期提示与 #75 多币种报价配置/商店卡双币渲染的 PlansP dom 测试、★ 〇-LK AiAssist 缓存三层恢复单测 + AssistP「管理 Token」7 例（掩码显示/password 不回填/留空禁用/掩码提交本地拦下/pushed:false 提示/清除二次确认/env 占位无清除钮）、★ src/styles/readability.test.ts「UI 交付真值闸门」八组锁 A-H——令牌值等值锁 + 历次提亮产物负向清零 + G 白色填充档等值（实心白件必须 #FFFFFF，禁拿文字档 #E7E9EA 做整块填充）+ H 扩展面同口径）
 cd sdk/typescript && npm test                  # TS SDK 行为级测试（8 用例）
 cd sdk/python && python3 -m unittest test_translator_sdk  # Python SDK 测试（13 用例）
 ```
@@ -137,6 +137,11 @@ UAT 断言层双方言（`scripts/uat/dblib.sh`），同一套用例覆盖两种
 - 生产形态为单个 Go 二进制 + `frontend-react/dist` 静态资源
 - 数据库：PostgreSQL 16 + pgvector（同机自建）
 - Go 服务通过 `-frontend` 参数托管前端 dist
+- C 端 AI 助手挂件的 `/assist-api` 前缀有**三条等效转发路径**（★ 〇-LK）：vite dev proxy（本地开发）、
+  生产 Caddy `handle /assist-api/*`、主服务二进制自带白名单转发
+  （`internal/api/assist_open_proxy.go`，只放 greeting/chat/history/features 四个访客端点、
+  管理面旁路一律 404）。第三条是补防：缺了它，「主服务直出 dist」的形态（含发布闸门）里挂件
+  会静默落进 SPA 兜底拿回 index.html，前端表现为「助手联系不上」的离线假绿。
 - `deploy/` 目录提供：
   - systemd 服务模板与 drop-in 配置
   - Caddy 反向代理与安全头配置
