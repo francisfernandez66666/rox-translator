@@ -894,7 +894,7 @@ export const dict: Record<string, string> = {
   "chat.usedTip": "Tatsächlicher Verbrauch von heute (inklusive nicht abgerechneter Vorgänge, vollständig protokolliert); bei mehrsprachiger Übersetzung steigt der Verbrauch mit der Anzahl der Zielsprachen",
   "chat.usedTokens": "Heute {n} Punkte verbraucht",
   "chat.welcome": "Text eingeben, Zielsprachen wählen, übersetzen",
-  "chat.welcomeSub": "Übersetzungen erscheinen direkt in diesem Dialog – mit über 40 Sprachen.",
+  "chat.welcomeSub": "Übersetzungen erscheinen unterhalb des Eingabefelds – mit über 40 Sprachen.",
   "common.active": "Aktiv",
   "common.cancel": "Abbrechen",
   "common.close": "Schließen",

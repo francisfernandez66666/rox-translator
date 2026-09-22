@@ -138,7 +138,7 @@ export const zh: Record<string, string> = {
   'msg.type.gif': '图片',
   'msg.type.webp': '图片',
   'chat.estimateLine': '预计消耗 {cost} 句 · 余额 {balance} 句',
-  'chat.welcomeSub': '译文会直接显示在这个对话框里，支持 40+ 语言互译。',
+  'chat.welcomeSub': '译文会显示在输入框下方，支持 40+ 语言互译。',
   'chat.copyResult': '复制译文',
   'chat.langCount': '{n}语',
   'chat.translating': '翻译中...',
@@ -216,7 +216,7 @@ export const en: Record<string, string> = {
   'chat.skillLabel': 'Translate',
   'chat.placeholder': 'Enter the text to translate',
   'chat.welcome': 'Enter text, choose target languages, then translate',
-  'chat.welcomeSub': 'Translations appear right inside this dialog, covering 40+ languages.',
+  'chat.welcomeSub': 'Translations appear below the input box, covering 40+ languages.',
   // ---- 翻译检查点（动效量尺三关）----
   'chat.cpRetrieve': 'Term retrieval',
 'chat.kbRemove':'Remove',

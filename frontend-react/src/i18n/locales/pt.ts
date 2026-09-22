@@ -894,7 +894,7 @@ export const dict: Record<string, string> = {
   "chat.usedTip": "Consumo real do dia (inclui cenários não faturados, tudo registrado no livro-razão); traduções multilíngues consomem mais conforme o número de idiomas",
   "chat.usedTokens": "{n} pontos consumidos hoje",
   "chat.welcome": "Digite um texto, escolha os idiomas e traduza",
-  "chat.welcomeSub": "As traduções aparecem aqui mesmo, com mais de 40 idiomas.",
+  "chat.welcomeSub": "As traduções aparecem abaixo do campo de texto, com mais de 40 idiomas.",
   "common.active": "Ativado",
   "common.cancel": "Cancelar",
   "common.close": "Fechar",

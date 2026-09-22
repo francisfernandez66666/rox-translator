@@ -87,37 +87,45 @@ test.describe('像素级 UAT', () => {
     await shot(page, 'p2_workbench');
   });
 
-  // ★ #36 + UI 真值（2026-09-22 口径改向）结构/字阶双断言：
-  //   #36 即时翻译的输入框与译文合并进同一张对话框卡（旧版是「输入卡 + 下方消息流」两块），
-  //      同时文件翻译入口从即时翻译下线（文件翻译统一走工单通道），故卡内不得再有 file input；
+  // ★ 2026-09-22 形态回退 + UI 真值：结构/字阶双断言
+  //   结构口径＝「滚动舞台 .cw-stage 内：吸顶输入卡 .cw-card 在上、译文气泡 .cw-results 在下」
+  //      两段式（#36 曾合并成一张吃满整屏的对话框，用户判「原来的气泡对话框没了」，已回退）；
+  //   文件翻译入口维持 #36 下线决定（统一走「文档翻译」工单页），卡内不得再有 file input；
   //   字阶/灰阶这一半原先钉的是「#35 整体上调一档」的结果，现已随全站按 UI 交付稿还原改为
   //      等值锁（真值来自 前端及UI相关/UI-ANNOTATIONS.md 与交付包）——这里用 getComputedStyle
   //      实测的是「渲染出来的值等于交付值」，与 readability.test.ts 的源码级锁互补：
   //      单测拦「CSS 里被改回去」，本处拦「运行时内联样式/换肤把值盖掉」。
-  test('P2b 工作台合并对话框结构 + 字阶/灰阶按交付真值', async ({ page }) => {
+  test('P2b 工作台两段式结构（吸顶输入卡 + 下方气泡）+ 字阶/灰阶按交付真值', async ({ page }) => {
     await login(page);
     await page.goto('/');
-    // 结构锁走 class（.cw-dialog*）而非文案：文案受 i18n 与措辞调整影响，
-    // 而「输入区在滚动区内、操作区在 foot 内」这套 DOM 形态才是 #36 的交付口径。
-    const dialog = page.locator('.cw-dialog');
-    await expect(dialog).toBeVisible();
-    // 输入框在对话框卡的滚动区内（合并后的唯一结构口径）
-    await expect(dialog.locator('.cw-dialog-body textarea')).toBeVisible();
-    await expect(dialog.locator('.cw-dialog-foot')).toBeVisible();
+    // 结构锁走 class 而非文案：文案受 i18n 与措辞调整影响，DOM 形态才是这次的交付口径。
+    const stage = page.locator('.cw-stage');
+    const card = page.locator('.cw-card');
+    await expect(stage).toBeVisible();
+    await expect(card).toBeVisible();
+    await expect(card.locator('textarea')).toBeVisible();
+    // 输入卡必须真的吸顶（position 由内联样式下发，运行时算出来才算数）
+    expect(await card.evaluate((el) => getComputedStyle(el).position), '输入卡未吸顶').toBe('sticky');
+    // 译文结果区排在输入卡之后，且与输入框不同容器（合并形态会在这一步翻红）
+    expect(await stage.evaluate((el) => {
+      const c = el.querySelector('.cw-card'), r = el.querySelector('.cw-results');
+      return !!c && !!r && !!(c.compareDocumentPosition(r!) & Node.DOCUMENT_POSITION_FOLLOWING)
+        && !r!.contains(el.querySelector('[data-testid="translate-input"]')!);
+    }), '译文区须在吸顶卡下方展开').toBe(true);
     // 文件入口下线：全站工作台不应再挂隐藏的原生 file input
     expect(await page.locator('input[type="file"]').count(), '即时翻译已移除文件上传入口').toBe(0);
     // 字号真值等值锁（★ 2026-09-22 全站还原批）：本批把 #35/#67/#68 的「整档 +1px / 顶栏提档」
     // 全部撤除，字阶回到交付 UI 口径，所以这里由「≥ 下限」改成「恰等于真值档」——
     // 单向下限锁正是把配色与字阶一路推离交付稿的元凶（它只拦变小，不拦变大）。
     // 输入框 13 = 组件库 .lc-textarea 冻结档（第 1 轮交付值），不是页面层自选值。
-    const taFs = await dialog.locator('.cw-dialog-body textarea').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    const taFs = await card.locator('textarea').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     expect(taFs, `输入框字号 ${taFs}px ≠ 组件库真值 13px`).toBe(13);
     // 正文气泡 14 = theme.css .bubble（交付包正文档）
     const bubbleFs = await page.locator('.bubble').first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize)).catch(() => -1);
     if (bubbleFs >= 0) expect(bubbleFs, `气泡字号 ${bubbleFs}px ≠ 真值 14px`).toBe(14);
     // 弱说明文字：颜色必须落在真值灰阶集合内（提亮批自造的 #878D95/#7A828E/#9AA2AF 一律红灯），
     // 并顺手核对该灰阶对卡面 #0E1014 的实际比值是否等于真值口径（≥4:1，图形/弱文字档）。
-    const welcomeColor = await dialog.locator('.cw-welcome').evaluate((el) => getComputedStyle(el).color);
+    const welcomeColor = await page.locator('.cw-welcome').evaluate((el) => getComputedStyle(el).color);
     const TRUTH_RGB = ['#E7E9EA', '#9AA0AA', '#71767B', '#8A9099', '#536471']
       .map((h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(','));
     const welcomeRgb = (welcomeColor.match(/\d+(\s*,\s*\d+){2}/) || [''])[0].replace(/\s/g, '');
@@ -147,7 +155,8 @@ test.describe('像素级 UAT', () => {
     const langH = await langBtn.evaluate((el) => el.getBoundingClientRect().height);
     expect(langH, `语种钮实高 ${langH}px ⇒ 文案已折行`).toBeLessThanOrEqual(38);
     expect(await langBtn.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), '语种钮字号 ≠ 真值 12px').toBe(12);
-    await shot(page, 'p2b_workbench_merged');
+    // 截图名随 〇-LJ 形态回退改名：merged（#36 合并框）→ two_stage（吸顶输入卡 + 下方气泡）。
+    await shot(page, 'p2b_workbench_two_stage');
   });
 
   test('P3 自服务页渲染（余额/套餐/账号·企业 + 邀请·个人）', async ({ page }) => {
