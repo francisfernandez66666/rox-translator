@@ -54,7 +54,7 @@ DB_DRIVER=postgres DB_DSN='postgres://user:pass@127.0.0.1:5432/translator?sslmod
 ├── frontend-react/    # React 前端（自研组件库 src/ui/langcross）
 ├── deploy/            # systemd、Caddy、冒烟/压测/演练脚本
 ├── scripts/           # 数据库初始化、切流与 UAT 自动化脚本（scripts/uat）
-├── extension/         # Chrome 自托管扩展（划词翻译，开发者模式加载）
+├── extension/         # Chrome 自托管扩展（划词翻译；★ 2026-09-23 起有交付链：scripts/build_extension.sh 打包 → frontend-react/public/extensions/*.zip 随 dist 上线）
 ├── vscode-extension/  # VS Code 插件（侧边栏翻译 + 术语检索，零构建）
 ├── sdk/               # OpenAPI SDK（Python/TypeScript/Java）
 ├── data/              # 运行时数据（本地 SQLite 开发库 / 向量缓存文件；生产业务数据在 PostgreSQL）
@@ -86,7 +86,7 @@ DB_DRIVER=postgres DB_DSN='postgres://user:pass@127.0.0.1:5432/translator?sslmod
 - **积分计费**：对外（前端界面与全部 API 出参）只有积分一种计量口径，积分↔内部记账换算与汇率全部收敛在服务端，任何接口不下发 token 裸值与汇率（★ 2026-09-19 全面落地：余额/预算/奖励/账单/工单/用量/订单/邀请零 token 裸值，前端零换算）；内部账本与成本核算仍以 token 为唯一事实源（双桶台账：发放额度+永久余额）；预充值永久有效、订阅首月半价（注册 30 天内）、余额不足即时中止、建单前按源规模预检；发票口径见运营 SOP
 - **邀请裂变**：推荐注册、邀请奖励；二级分销漏斗（限 2 级、付费永久包触发上级返佣、归因看板）
 - **任务中心与增长激励（★ 2026-09-22 #33）**：五类任务由服务端事件自动触发发放（`store/task_rewards.go` + `api/task_hooks.go`），奖励定义入库可由超管维护——每日登录 +100（3 天有效、日叠加）、每周发起翻译 +100（每天 1 次、每周 5 次上限、7 天有效）、邀请好友注册成功 +500（14 天有效、可叠加）、受邀好友任意充值 +1000 **永久**积分、上传专属知识库并解析成功 +600 **永久**积分（一次性）；临时积分落在独立台账 `kind='task'`（月度套餐重置、体验到期提醒均按各自 kind 过滤，不误伤任务桶），消耗遵循「先到期先消耗」，叠加发放顺延到期日；超管「任务重置」动作可把已订阅用户（可选全体）的任务临时积分余额拉回发放额度、**有效期不变**（审计留痕）
-- **企业集成**：SCIM 2.0 用户/组织同步（Entra/Okta 兼容，租户自助配置）、SSO/OIDC（飞书/钉钉）、TMX 双向翻译记忆交换（Trados/memoQ 对接）、VS Code 插件与 Chrome 划词扩展
+- **企业集成**：SCIM 2.0 用户/组织同步（Entra/Okta 兼容，租户自助配置）、SSO/OIDC（飞书/钉钉）、TMX 双向翻译记忆交换（Trados/memoQ 对接）、VS Code 插件与 Chrome 划词扩展（★ 2026-09-23：扩展改由**本站自托管下载**，后台「SDK 与集成」页挂 `/extensions/langcross-extension-latest.zip`，无商店渠道、解压后开发者模式加载）
 - **包级权限矩阵**：知识库包 读/写/管理 三级授权（部门管理员按范围、普通成员按授权硬闸）
 - **大文件导入**：KB/TM 批量导入分片上传 + 断点续传（>4MB 前端自动分片）
 - **可观测性**：SLO/SLI 多窗口 burn-rate 告警（可用性/翻译成功率/P99）、路由级 P50/P95/单位成本可视化、Prometheus /metrics
@@ -115,12 +115,13 @@ DB_DRIVER=postgres DB_DSN='postgres://user:pass@127.0.0.1:5432/translator?sslmod
 
 ```bash
 cd backend-go && go test -race ./...           # 单元测试（PG 方言助手/迁移锁/nil 防线回归，无 PG 实例自动跳过）
-bash scripts/uat/run_uat.sh                    # 全链路 UAT 主矩阵（PostgreSQL 方言=生产同构，发布闸门：内置 race 全量单测预检（方言钉死内存 SQLite，PG 覆盖归矩阵）+ API A/B 主链路 96（含 A1b 留资 8 断言、/pricing 归一 SPA 壳断言、A7s 流式计量 done 帧前同步落库断言） + 功能/交易专项 510（含 T42 USDT 全链 mock_chain 驱动、T43/T44 修复回归、T45 密码找回全链路、任务系统奖励与双桶台账断言、★ T55 支付渠道凭据管理台配置：白名单键不留半套凭据/敏感项密文与掩码/掩码再提交不覆盖真值/库配置端到端流到下单链路/fail-closed 不出 mockpay） + Playwright 60（mobile_uat/a11y 超时已根治，0 flaky；含 P6b/P6c 白底实心件与后端直出页运行时 getComputedStyle 实测；含落地页多语言 landing_i18n、十语种整页抽查 all_langs_full、TF2 翻译后余额/今日已耗即时上屏断言；★ 〇-LK 新增 P2b 工作台框脚几何等值锁（量 .cw-dialog-foot 贴对话框底沿 + 输入框落下半部，不拿 textarea 底沿误判交付形态）、A7 管理 Token 掩码区、assist_widget_cache W1–W3 挂件刷新不丢对话——三条用例各带 expectLiveLink 可达探针，防「离线兜底话术」把链路断链照成假绿）；首轮非零自动 --last-failed 复跑甄别 flaky）
+bash scripts/uat/run_uat.sh                    # 全链路 UAT 主矩阵（PostgreSQL 方言=生产同构，发布闸门：内置 race 全量单测预检（方言钉死内存 SQLite，PG 覆盖归矩阵）+ API A/B 主链路 96（含 A1b 留资 8 断言、/pricing 归一 SPA 壳断言、A7s 流式计量 done 帧前同步落库断言） + 功能/交易专项 510（含 T42 USDT 全链 mock_chain 驱动、T43/T44 修复回归、T45 密码找回全链路、任务系统奖励与双桶台账断言、★ T55 支付渠道凭据管理台配置：白名单键不留半套凭据/敏感项密文与掩码/掩码再提交不覆盖真值/库配置端到端流到下单链路/fail-closed 不出 mockpay） + Playwright 62（mobile_uat/a11y 超时已根治，0 flaky；含 P6b/P6c 白底实心件与后端直出页运行时 getComputedStyle 实测；含落地页多语言 landing_i18n、十语种整页抽查 all_langs_full、TF2 翻译后余额/今日已耗即时上屏断言；★ 〇-LK 新增 P2b 工作台框脚几何等值锁（量 .cw-dialog-foot 贴对话框底沿 + 输入框落下半部，不拿 textarea 底沿误判交付形态）、A7 管理 Token 掩码区、assist_widget_cache W1–W3 挂件刷新不丢对话——三条用例各带 expectLiveLink 可达探针，防「离线兜底话术」把链路断链照成假绿；★ 〇-LL 新增 extension_download 两例（latest + 带版本号 zip 各一），判据是 200 **且返回体不是 SPA 兜底的 index.html** 且首两字节为 `PK` 魔数且体积合理——`spa.go` 对不存在路径会回退成 index.html 且仍是 200，只判状态码必假绿）；首轮非零自动 --last-failed 复跑甄别 flaky）
 bash scripts/uat/assist_uat.sh                 # AI 顾问 UAT（48 断言：C端链路/同义词/兜底改造/config 白名单与掩码/LLM 热加载/测试连通/CRUD/内嵌管理页/主库 Token 桥接与 env 优先级/复合意图让位 CI1·CI2、★ 〇-LK G1–G8 管理 Token 保存即热生效（新值 200/旧值 401）、掩码不外泄、拒空值、greet 去重、进程重启后老 sid+tok 仍可用（sess_key 已与 Token 解耦））
 bash scripts/uat/multi_instance_e2e.sh         # 双实例 e2e（8 断言：JWT 互通/USDT 对账锁/双桶并发勾稽/优雅停机，验证多实例红线）
 PW_TARGET=e2e/xxx.spec.ts bash scripts/uat/run_uat.sh  # 迭代调试：只跑指定 e2e（缺省全量）
 DB_DRIVER=sqlite UAT_SKIP_RACE=1 bash scripts/uat/run_uat.sh  # SQLite 方言本地快跑（兼容参考）
-cd frontend-react && npx vitest run            # 前端单测（47 文件 / 359 用例，含多语言 locales 全量覆盖闸门与浏览器语言检测/逐段流式上屏/编辑器虚拟化与计算收敛/留资表单/登录链路 jsdom 测试、★ #74 宽限期提示与 #75 多币种报价配置/商店卡双币渲染的 PlansP dom 测试、★ 〇-LK AiAssist 缓存三层恢复单测 + AssistP「管理 Token」7 例（掩码显示/password 不回填/留空禁用/掩码提交本地拦下/pushed:false 提示/清除二次确认/env 占位无清除钮）、★ src/styles/readability.test.ts「UI 交付真值闸门」八组锁 A-H——令牌值等值锁 + 历次提亮产物负向清零 + G 白色填充档等值（实心白件必须 #FFFFFF，禁拿文字档 #E7E9EA 做整块填充）+ H 扩展面同口径）
+cd frontend-react && npx vitest run            # 前端单测（48 文件 / 363 用例，含多语言 locales 全量覆盖闸门与浏览器语言检测/逐段流式上屏/编辑器虚拟化与计算收敛/留资表单/登录链路 jsdom 测试、★ #74 宽限期提示与 #75 多币种报价配置/商店卡双币渲染的 PlansP dom 测试、★ 〇-LK AiAssist 缓存三层恢复单测 + AssistP「管理 Token」7 例（掩码显示/password 不回填/留空禁用/掩码提交本地拦下/pushed:false 提示/清除二次确认/env 占位无清除钮）、★ src/styles/readability.test.ts「UI 交付真值闸门」八组锁 A-H——令牌值等值锁 + 历次提亮产物负向清零 + G 白色填充档等值（实心白件必须 #FFFFFF，禁拿文字档 #E7E9EA 做整块填充）+ H 扩展面同口径、★ 〇-LL src/extensionPackage.test.ts（托管 zip 与 extension/ 源码**内容指纹等值** + manifest 版本与包名/后台下载链接一致，防「改了源码忘了重打包」））
+bash scripts/build_extension.sh --check         # 扩展漂移闸门（同上，独立可单跑；不带 --check 即按 manifest.version 重打包并刷新 latest）
 cd sdk/typescript && npm test                  # TS SDK 行为级测试（8 用例）
 cd sdk/python && python3 -m unittest test_translator_sdk  # Python SDK 测试（13 用例）
 ```
@@ -146,6 +147,21 @@ UAT 断言层双方言（`scripts/uat/dblib.sh`），同一套用例覆盖两种
   - systemd 服务模板与 drop-in 配置
   - Caddy 反向代理与安全头配置
   - 部署检查、冒烟、负载测试、灾难恢复演练脚本
+  - `deploy/logrotate/translator.conf`（★ 2026-09-23）：两份文件日志（`/opt/translator/log/translator.log`、
+    `/opt/ai-assist/data/assist.log`）的轮转策略，`copytruncate` + `daily`/`maxsize 200M` + `rotate 7`。
+    装它的原因：主站日志曾无机制回收地长到 **2.85 GB**（占盘 7%）；`assist.log` 属 root:root，
+    故**不能加 `su translator`**（会让 copytruncate 静默失败），也别改成 restart 式 create。
+- 浏览器扩展交付（★ 2026-09-23）：`scripts/build_extension.sh [版本]` 按 `extension/manifest.json` 的
+  `version`（唯一事实源）打包，产物落 `frontend-react/public/extensions/`（`langcross-extension-<ver>.zip`
+  + `-latest.zip` + 各自 `.sha256` **内容指纹**），随前端 dist 一起换源即上线——`/extensions/*.zip` 走
+  `spa.go` 静态直出，**不需要动后端二进制**。`.sha256` 记的是「按固定顺序 name+NUL+bytes+NUL 归一」的内容指纹
+  而非 zip 字节哈希（zip 里有 mtime，同源码两次打包字节不同），比对/排障都按这个口径。
+- AI 顾问知识库同步（★ 2026-09-23）：`scripts/assist_kb_sync.py` 把仓库 `internal/assist/seed/seed.json`
+  与生产 `assist.db` 的 `kb_entries` 做逐字段比对并按需回写（seed 只在**首启空表**灌入，老库不会自动跟进，
+  关键词漂移是机制性的），默认只读打印差异、`--apply` 才写、写前自动备份；UPDATE 恒带 `updated_at=CURRENT_TIMESTAMP`，
+  否则进程内的向量索引指纹不变、会静默继续用旧嵌入。
+- 提交与推送口径：文档一律**只本地提交**，GitHub 上只放代码——`scripts/push_code_only.sh [--apply]` 把推出去的
+  提交直接建在 `origin/<分支>` 之上并按文件清单接管代码状态，三道校验（零 `.md`、零 `前端及UI相关/`、与本地树逐文件等价）。
 - 详细步骤见《部署指南.md》
 
 ---

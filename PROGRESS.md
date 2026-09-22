@@ -1,8 +1,35 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-23（〇-LK：AI 助手三修——挂件刷新不丢对话（本地缓存 + `sess_key` 与 Token 解耦）、管理 Token 对齐 LLM 配置范式（掩码/留空不改/显式清除/保存即热生效）、即时翻译输入区改到**框脚贴底**；同批补防「`/assist-api` 在主服务形态下断链致闸门假绿」。代码已推送 **87a589f**·文档仅本地·**主站未部署（等用户下令）**·演示站未部署）
+> 最后更新：2026-09-23（〇-LL：按用户四条指令收拢的一天——**主站部署（〇-LK 三件齐上）·磁盘治理与日志轮转根治·assist 生产库知识库同步（收口 09-20 的「待人工执行」）·浏览器扩展交付链从零建到线上可下载**；同批建立「文档不外推」的机械闸门 `scripts/push_code_only.sh` 并修掉它首跑丢新文件的缺陷。代码已推送 **8395f3c·1ff038c**·文档仅本地·**主站已部署并换源后复跑验收**·演示站未部署）
 
-### 〇-LK、AI 助手会话可用性与配置口径批（2026-09-23，★ 代码已推送 87a589f（同一改动在本地分支上另号 e1b9e46，并轨 merge 06a8424）·文档仅本地·**主站未部署（本批用户指令止于第 4 步「更新文档」，未下部署令）**·演示站未部署）
+### 〇-LL、主站部署 + 磁盘治理 + assist 知识库同步 + 扩展交付链批（2026-09-23，★ 代码已推送 **8395f3c + 1ff038c**（本地代码提交 `b51097d`、修复提交 `b6e9efc`，并轨 merge `192a1db`·`623bba3`）·文档仅本地·**主站已部署**（〇-LK 两二进制 + web 两次换源，末次 06:27）·演示站未部署）
+
+> 来源＝用户四条指令：「1.阅读部署文档，主站部署。2.清理磁盘过时内容。3.assist kb_entries 关键词帮我同步（采集链没覆盖的部分）。4.extension/ 至今无交付渠道：无打包脚本、无托管 zip、manifest 还停 1.0.0，这些帮我做了。」
+> 做完接固定收尾四步：①自查是否全部做完 ②自动化测试接入今日开发内容 + 清测试数据 ③前后端全量中文注释 + commit/push（**不带文档和流程图**）④更新项目文档、去掉过时内容。
+> 另按用户在 AskUserQuestion 里的顺带选择做了三件：文档迁独立分支（`docs-local`）、清理 `web_old` 归档、补扩展交付链；**演示站补部署未被选择，按前令仍未动**。
+
+| 块 | 交付 |
+|----|------|
+| **① 主站部署（〇-LK 欠的三件齐上）** | 先按《部署指南》§五/§十三核对口径：本批 〇-LK 同时动了 `internal/api/*`（含新文件 `assist_open_proxy.go`）与 `internal/assist/*` + 前端 dist ⇒ **`translator-server` + `translator-assist` 两二进制 + `web` 换源三件必须一起上，只换 web 则挂件缓存的服务端根因与 Token 热生效都不生效**。05:02 两件 scp→`mv` rename 替换（`translator-server` sha256 `7ea4814b…`、`translator-assist` sha256 `64a16a21…`，旧件留 `.bak.20260923_050316`）→ 05:03:16 `systemctl restart translator ai-assist` 两服务 active → `/opt/translator/web` 两步换源（旧目录留 `web_old.20260923_050316`）。至此 〇-LK 顶部记的「主站未部署」状态作废 |
+| **② 磁盘治理与「日志没人回收」的根治** | 先看构成再动手：整盘 66% 用、余 13G，大头**不是** 41 份 `web_old`（各 2.9M，合计 ~120M），而是 `/opt/translator/log/translator.log` **2.85 GB**（占整盘 7%）——两服务都用 systemd `StandardOutput=append:` 写文件日志，而 `/etc/logrotate.d/` 里**根本没有对应条目**，即除了手动 gzip+截断没有任何机制回收。处置：旧日志归档压缩为 `translator.log.20260923.gz`（107 M，保留可查）→ 新增并安装 `deploy/logrotate/translator.conf`（`daily` + `maxsize 200M` + `rotate 7` + `compress delaycompress` + **`copytruncate`**，**不加 `su`**：`assist.log` 是 root:root，加 su 会让截断失败而静默不轮转）→ `logrotate -d` 判读 + `-f` 实跑（`translator.log.1`／`assist.log.1` 生成，两份活动日志归零）→ `web_old.*` 裁到**最近 4 份**。结果：磁盘 **66% → 39%（余 23 G）**，日志目录 2.9 G → 103 M |
+| **③ assist 生产库知识库同步（收口自 09-20 的「待人工执行」）** | 先定范围再改：`assist.db` 与仓库 `internal/assist/seed/seed.json` 逐字段比对（`category/title/content/keywords/link_keys/priority/enabled`），差异**恰好 3 行**（`languages`／`billing-points`／`what-is`）；再做三方对照 `git show bd34c36^` 证明是**旧 seed 停在库里**而非线上被人工改过（改动方向与 〇-XLVI/XLVIII 的 seed 修订完全一致），才敢以 seed 为准回写。落地：`python3 scripts/assist_kb_sync.py --apply`——默认只读、写前 `.backup` 出带时间戳的库备份（`assist.db.bak.20260923_054618`，98304 B；用 sqlite3 `.backup` 且经 stdin 送 dot-command，**不是 `cp`**——WAL 态下 `cp` 拷不到一致快照，且 `.backup` 作为命令行参数会被 sqlite3 拒收）、只 UPDATE/INSERT **绝不 DELETE**、写后重读复核；UPDATE **恒带 `updated_at=CURRENT_TIMESTAMP`**（第 3 级向量索引失效指纹 = `embed_model` + 每行 `key`+`updated_at`，不 bump 就静默沿用旧嵌入；顺带查明生产没配 `embed_recall`/`embed_model`，第 3 级本就是关的）。同批确认 `scripts`/`flows`/`feature_links`/`configs` **零漂移**，没有第二处人工同步欠账 |
+| **④ 扩展交付链（从零建到「客户点得开」）** | 版本口径：`extension/manifest.json` 的 `version` 为**唯一事实源**（1.0.0→**1.1.0**），任何脚本/文件名/测试都现读不复制。新增 `scripts/build_extension.sh`：显式白名单 7 文件（`manifest.json background.js content.js content.css popup.html popup.js INSTALL.txt`，不让 `.DS_Store` 混进用户包）→ 产出 `frontend-react/public/extensions/langcross-extension-<ver>.zip` + `-latest.zip` + 各自 `.sha256`；`--check` 为漂移闸门（防「改了源码忘了重打包，站点还在发旧包」），带版本号参数即 bump manifest 后重打。**为什么 zip 进仓库**：站点是自托管形态（无对象存储、无 CI 产物仓），zip 不进仓库就等于没有下载入口，体积 11.6 KB 可接受。前台侧：后台「SDK 与集成」页新增下载卡（`SdkP.tsx` 挂 `/extensions/langcross-extension-latest.zip`），文案 3 键 × **12 语种**（`sdk.extTitle/extDesc/extDownload`）；包内 `extension/INSTALL.txt` 写自托管安装步骤（**刻意不叫 `.md`**——纯代码推送过滤器按 `*.md` 排除，叫 .md 会和它登记的指纹分家）。上线：06:27 随 dist 换源（`/extensions/*` 走 `spa.go` 静态直出，**不动后端二进制**），线上实测 200 / 11634 B、首两字节 `PK`，且下载体逐文件**内容指纹 `d88ac536…` 与仓库 `.sha256` 登记值、`--check` 输出三者相等** |
+| **⑤ 测试接入（覆盖本批全部开发内容）** | vitest 新增 `src/extensionPackage.test.ts` **4 例**（托管 zip 与源码内容指纹等值、manifest 版本↔包名↔页面链接一致、`--check` 同口径）→ 48 文件 / **363 用例**；Playwright 新增 `e2e/extension_download.spec.ts` **2 例**（latest 与带版本号包各一）→ 62 用例，判据按 AGENTS §6 的可达探针写：**200 + 响应体不是 SPA 兜底的 `index.html` + 首两字节 `PK` + 体积合理**（只判 200 必假绿，`spa.go` 对不存在路径也回 200）；`build_extension.sh --check` 入 §二 闸门清单。**测试数据**：三套脚本各自临时库（`$WORK/dev.db`、`$WORK/assist.db`、PG `translator_uat` 每次重建），新断言无外置产物；本地散件（`/tmp/vprobe`、`/tmp/extchk`、`/tmp/dl.bin`、打包 tar、服务器侧探针备份）已全部清理 |
+| **⑥ 全量中文注释 + 只推代码（并修掉「只推代码」机制自身的首跑缺陷）** | `scripts/missing_comments_ts.py` 报 4 处顶层声明缺注释 → 补齐（`extensionPackage.test.ts` 三个路径常量、`extension_download.spec.ts` 的 `VER`）后 tsc/vitest/build 复跑绿。新增 `scripts/push_code_only.sh`（把「文档不外推」从流程约束变成机制：推出去的提交直接长在 `origin/<分支>` 上，内容取本地代码文件的目标状态，并排除 `*.md` 与 `前端及UI相关/`）。**首跑即抓出它自己的真缺陷**：`git checkout -b $TMP $BASE` 会把 BASE 里不存在的新增文件从磁盘删掉，于是 `[ -e "$ROOT/$f" ]` 恒假、25 个代码文件只推上去 13 个（`8395f3c`）——修复为「取/删判定问 git 对象库 `git cat-file -e`」+ 新增**第三道与本地树逐文件等价校验**（`b6e9efc`），补齐余下 12 文件（`1ff038c`）。两次推送各自实核 `.md` 计数 0，再 merge 并轨回本地（`192a1db`·`623bba3`），本批文档提交全部留在本地侧 |
+
+> 闸门（2026-09-23，全绿）：`go build ./...` + `go vet` + `gofmt -l` 干净、`go test -race ./...` **GO_TEST_EXIT=0**；
+> `npx tsc --noEmit` 干净；vitest **48 文件 / 363 用例**；`vite build` 成功（末次资产 `index-DRdu9cyA.js` / `index-DtdiKHPp.css`）；
+> `run_uat.sh`（PG 方言，发布闸门）**RUN_UAT_EXIT=0**：A/B **96/0** + 交易专项 T **510/0** + Playwright **61 passed / 1 skipped**（62 用例，skip 项是 `ADMIN_PASS` 环境守卫）；
+> `assist_uat.sh` **48/0**；`multi_instance_e2e.sh` **8/0**；`build_extension.sh --check` 绿。
+> 线上验收（**在 06:27 最后一次换源之后复跑**，不是换源前）：`deploy_check.sh` 服务器本机内网 base（127.0.0.1:8787）**11/11**、公网 base **8/8**；
+> `journalctl -u translator -u ai-assist --since "09-23 05:03" -p err` **零条**；扩展包线上下载三连比对见 ④。
+> **待用户决策（本批未擅动）**：①生产 `assist.db` 里留着 2 条验收探针会话（`s1790111179931c8622fc58e0791b5` 1 条消息、`s1790111144170f377da468c159705` 0 条；库现状 13 会话／53 消息）——
+> 删除属跨网直接改生产核心数据，被自动化安全闸门拦下（缺显式授权与备份验证），需人工执行或另行下令，回滚备份见 ③；
+> ②演示站仍未部署（本批又扩两批次：〇-LK 与 〇-LL 都只上了主站）。已闭：assist 知识库同步、扩展交付链、`web_old` 归档清理、日志轮转机制；
+> 文档侧「不外推」改为**双保险**——`docs-local` 分支（永不推送）+ `scripts/push_code_only.sh`（推的提交直接长在 `origin/<分支>` 上）。
+> ⚠️ 诚实口径：`autosales` 的**历史里仍夹着此前的文档提交**（如 `9f2a0af`），没有改写已推送历史来清它们，泄漏由脚本那半兜住。
+
+### 〇-LK、AI 助手会话可用性与配置口径批（2026-09-23，★ 代码已推送 87a589f（同一改动在本地分支上另号 e1b9e46，并轨 merge 06a8424）·文档仅本地·**主站已部署（当时止于「未下部署令」，09-23 〇-LL 按令三件齐上，见顶部 〇-LL ①）**·演示站未部署）
 
 > 来源＝用户三条反馈：①「另外 ai 助手要带缓存，不然刷新一次页面就没了很尴尬的」；
 > ②「我截图的配置，请参考我其他 llm 配置的方式重新做」（assist 管理 Token 那一栏）；
@@ -25,16 +52,18 @@
 > ⚠️ 同口径 `DB_DRIVER=sqlite UAT_SKIP_RACE=1` 快跑曾报 T51/T54 两条金额假红（跨方言数值文本差异，
 > 已由 ⑤ 的 `mny_norm` 归一）——**SQLite 快跑不是发布闸门，判定只认 PG 那一跑**。
 > 测试数据清理：三套脚本各自临时库（`$WORK/dev.db`、`assist.db`、PG `translator_uat` 每次重建），
-> 新增断言无外置产物；`/opt/translator/web_old.*` 累积 **41 份**（磁盘 66%、余 14G）。
+> 新增断言无外置产物；`/opt/translator/web_old.*` 累积 **41 份**（磁盘 66%、余 14G）。〔★ 本行末尾的磁盘状态已被同批 〇-LL 治理取代：裁至最近 4 份 + 日志轮转落地，66% → **39%、余 23 G**〕
 > **发布链**：按「代码提交 → push → 才提交文档」口径执行——本地代码提交 `e1b9e46`（37 文件、**零 .md**），
 > 在 `origin/autosales` 之上另落纯代码提交 **87a589f** 推送（`git diff --name-only 43da5aa 87a589f` 实核
 > 37 文件、`.md` 计数 0），再 merge 回本地并轨（`06a8424`），本批文档提交全部留在本地侧。
-> **主站部署状态：未执行**。本批同时动了 `internal/api/*`（含新文件 `assist_open_proxy.go`）、
+> **主站部署状态：未执行**〔★ **已由同批 〇-LL 执行**，见顶部 〇-LL 块 ①：05:02 两件二进制 `mv` rename 替换 + 05:03:16 重启 + web 换源〕。本批同时动了 `internal/api/*`（含新文件 `assist_open_proxy.go`）、
 > `internal/assist/*` 与前端 dist，按 §五/§十三 口径发版需 **`translator-server` + `translator-assist` 两二进制 +
 > `web` 换源**三件齐上（只换 web 则挂件缓存的服务端根因与 Token 热生效都不生效）。
-> **待用户决策（本批未擅动）**：①本批是否部署主站（三件齐上）；②文档提交是否迁到永不推送的独立分支；
-> ③`web_old.*` 41 份归档是否清理；④演示站落后 6 个批次是否补部署；⑤assist `kb_entries` 关键词手工同步；
-> ⑥浏览器扩展（`extension/`）至今无交付渠道。
+> **当时的待用户决策清单（★ 除④演示站外全部已在本批 〇-LL 落地）**：①本批是否部署主站（三件齐上）→ **已部署**；
+> ②文档提交是否迁到永不推送的独立分支 → **已建 `docs-local` + `scripts/push_code_only.sh` 双保险**；
+> ③`web_old.*` 41 份归档是否清理 → **已裁至最近 4 份，并补日志轮转根治大头**；
+> ④演示站落后 6 个批次是否补部署 → **未选，仍未部署**；⑤assist `kb_entries` 关键词手工同步 → **已用 `scripts/assist_kb_sync.py` 收口**；
+> ⑥浏览器扩展（`extension/`）至今无交付渠道 → **已建交付链并随 dist 上线**。
 
 ### 〇-LJ、即时翻译工作台形态定档批（2026-09-22，★ 代码已推送 43da5aa·主站已部署（仅换源 `/opt/translator/web`，`translator-server`/`translator-assist` 两二进制未替换、服务未重启）·演示站未部署）
 
@@ -80,7 +109,7 @@
 > `/opt/translator/web_old.*` 累积 **41 份**（磁盘 66%、余 14G）。**演示站按前令未部署（版本差再扩两批次）**。
 > **待用户决策（本批未擅动）**：①文档提交是否迁到永不推送的独立分支（上文口径偏离的根治办法）；
 > ②`/opt/translator/web_old.*` 41 份归档是否清理；③演示站落后 5 个批次是否补部署；
-> ④assist `kb_entries` 关键词手工同步；⑤浏览器扩展（`extension/`）至今**无任何交付渠道**（无打包脚本、无托管 zip、manifest 仍 1.0.0），是否补发版链。
+> ④assist `kb_entries` 关键词手工同步（★ 已闭：〇-LL 用 `scripts/assist_kb_sync.py` 同步）；⑤浏览器扩展（`extension/`）至今**无任何交付渠道**（无打包脚本、无托管 zip、manifest 仍 1.0.0），是否补发版链（★ 已闭：〇-LL 建 `scripts/build_extension.sh` + 托管 zip + 后台下载卡，manifest 升 1.1.0 并随 dist 上线）。
 
 
 ### 〇-LI、白色两档定档与后端/扩展渲染面还原批（2026-09-22，★ 代码已推送 5f04be5·文档当时仅本地提交（★ 后随 〇-LJ 的代码 push 被祖先链带入远端，见 〇-LJ 发布链）·主站已部署（translator-server + translator-assist 两二进制 + web 换源）·演示站未部署）
@@ -109,7 +138,7 @@
 | **发布链** | 代码提交 **5f04be5**（16 文件，零 .md / 零流程图）已推送 `origin/autosales`：本地曾排在两份「仅本地」文档提交之后，为守住「文档不外推」，在 48c8c22 上 cherry-pick 出纯代码提交后推送，再 merge 并轨（rebase 改写历史被自动化安全闸门拦下，故用 merge，不改写已推送内容）。文档更新只本地提交〔★ 更正：这两份「仅本地」文档提交已随 〇-LJ 的代码 push 进入远端，见 〇-LJ 发布链〕 |
 | **主站部署与线上验收** | 2026-09-22 21:19 两件二进制 mv rename 替换（`translator-server` `fa2f8ca0…` / `translator-assist` `798d420c…`，旧件留 `.bak.20260922_211905`）+ `/opt/translator/web` 两步换源（`index-yT1ZziZi.js`/`index-DtdiKHPp.css` 首页已引用，旧目录留 `web_old.20260922_211951`），`deploy_check.sh` 内网 **11/11** · 公网 **8/8**。线上四渲染面令牌实测：/docs 三页与 /openapi/docs 旧色 **0 命中** + `--lc-bg:#000000`、/office/taskpane.html 走 `var(--lc-bg)`/`var(--lc-white)`（唯一"命中"落在我自己写的历史色注释里，非样式值）、CSS 已含 `--lc-fill-white: #FFFFFF`。⚠️ **验收时抓到一处真缺陷**：assist 管理台页面换二进制后线上仍旧配色——生产 `ASSIST_WEB=/opt/ai-assist/web` 让**外置 09-17 旧页覆盖 `go:embed` 内嵌新页**（外置优先，`internal/assist/api/server.go` adminPage）。当日两步 `mv` 同步外置 `admin.html`（留 `admin.html.bak.20260922_212841`）+ `systemctl restart ai-assist`，公网 `/assist-api/assist/admin` 复测 200 / 19139 字节、`--bg:#000000`·`--white:#FFFFFF`·`background:var(--white);color:#000000` 齐、旧配色 0 命中。口径已入 AGENTS §5 与《部署指南》§十三：**今后碰 `internal/assist/web/*`，只换二进制不够，必须同步外置页或撤销 `ASSIST_WEB`。**同日 21:45 收尾（用户下令撤销）**：`secrets.env` 的 `ASSIST_WEB` 行改注释（备份 `/root/ai-assist.secrets.env.bak.20260922_214541`）、外置旧页挪走留档 `/opt/ai-assist/web/admin.html.inert.20260922_214541`、`systemctl restart ai-assist`。复测：进程 env `ASSIST_WEB` 计数 0、`/assist/admin` 由 `go:embed` 直出（本机与公网 sha256 `a9c3495e…` 逐字节等于仓库 `internal/assist/web/admin.html`）、`/health` ok、journal 零 error、挂件链路通过（greeting 签发 tok → chat 出 reply，无 tok 401）。**内嵌页自此为单一事实源，改 `internal/assist/web/*` 只需换二进制**；`ASSIST_SEED` 仍保留（只影响首启灌 seed） |
 
-> 遗留：生产 `ai-assist` 库 `kb_entries` 关键词人工同步（承接 〇-XLVI/XLVIII）；`/opt/translator/` 下 `web_old.*` 归档实测已 **39 份 / 67M**（磁盘 66% 用、余 13G）待清理决策；演示站按前令未部署（版本差再扩一批）。已闭：assist `ASSIST_WEB` 外置覆盖按用户下令已撤销（内嵌页为单一事实源）。
+> 遗留（★ 前两项已由同批 〇-LL 收口：`assist_kb_sync.py` 同步完 3 行 kb 关键词、`web_old` 裁至最近 4 份并补 logrotate，磁盘 66%→39%）：生产 `ai-assist` 库 `kb_entries` 关键词人工同步（承接 〇-XLVI/XLVIII）；`/opt/translator/` 下 `web_old.*` 归档实测已 **39 份 / 67M**（磁盘 66% 用、余 13G）待清理决策；演示站按前令未部署（版本差再扩一批）。已闭：assist `ASSIST_WEB` 外置覆盖按用户下令已撤销（内嵌页为单一事实源）。
 
 ---
 
@@ -132,7 +161,7 @@
 | **闸门实跑** | `go build`/`vet`/`test -race ./...` 全绿；`tsc --noEmit` 干净；vitest **47 文件 / 324 用例**全绿；`vite build` 成功；`run_uat.sh`（PG 主矩阵）**RUN_UAT_EXIT=0**：A/B 96/0 + T 套件 **510/0**（本批 +31）+ Playwright 53 passed/1 skipped；`assist_uat.sh` 38/0；`multi_instance_e2e.sh` 8/0 |
 | **主站发版** | 纯前端批：`translator-server`/`translator-assist` 两二进制**不替换**、`systemctl` **不重启**（静态目录整目录替换对运行中进程无影响）；先解到 `web.new` 校验首页引用、再两步 `mv` 换名（少一个 404 窗口），线上资产 `index-VzNqyYQ_.js`/`index-B65eZ4VL.css`，旧目录留 `web_old.20260922_192828`；`deploy_check.sh` 内网 **11/11** + 公网 **8/8**；线上 CSS 实测四真值令牌在、`html .app-header`/`:root:root` 覆写层零残留、12 个提亮字面值与蓝调遮罩零命中、`body` 实算背景 `rgb(0,0,0)`。演示站按前令未部署 |
 
-> 遗留：生产 `ai-assist` 库 `kb_entries` 关键词仍需人工随术语批次同步（非本批范围）。
+> 遗留（★ 已由 〇-LL 收口）：生产 `ai-assist` 库 `kb_entries` 关键词仍需人工随术语批次同步（非本批范围）。
 
 ---
 

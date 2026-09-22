@@ -85,8 +85,13 @@
   ②③④⑤ 的锁分别在各侧自有闸门里：Go 侧 `public_ui_test.go`（含 `TestAllServedHtmlPagesMonochrome`
   全量扫描——源码含 `<!DOCTYPE html` 即进射程）、`assist/web/admin_ui_test.go`、
   `readability.test.ts` H 段；运行时侧由 `pixel_uat.spec.ts` P6/P6b/P6c 补。
-  **部署口径**：改动落在 ②③ 必须换 `translator-server`，落在 ④ 必须换 `translator-assist`，
-  落在 ⑤ 需重打扩展包——只换 `/opt/translator/web` 一律不生效。
+  **部署口径**：改动落在 ②③ 必须换 `translator-server`，落在 ④ 必须换 `translator-assist`；
+  落在 ⑤ **必须 `bash scripts/build_extension.sh [版本号]` 重打托管 zip**（★ 2026-09-23 起扩展有交付链：产物落
+  `frontend-react/public/extensions/`，随前端 dist 换源即上线，`/extensions/*.zip` 走 `spa.go` 静态直出、不动后端二进制），
+  **只改 `extension/` 源码而不重打包 = 线上仍是旧包**；`.sha256` 记的是「固定顺序 name+NUL+bytes+NUL 归一」的
+  **内容指纹**而非 zip 字节哈希（zip 内含 mtime，同源码两次打包字节不同），比对排障按这个口径，
+  漂移由 `build_extension.sh --check` 与 `src/extensionPackage.test.ts` 拦。
+  落在 ②③④ 而**只换 `/opt/translator/web`** 一律不生效（① 的组件内联样式在 dist 里，换前端即生效）。
   ⚠️ ④ 曾有一层坑：生产 `secrets.env` 一度留着 `ASSIST_WEB=/opt/ai-assist/web`，**外置文件优先于 `go:embed`**，
   换二进制仍是旧页——2026-09-22 〇-LI 收尾已**撤销该 env 并挪走外置页**，内嵌 `admin.html` 为单一事实源。
   若运维再显式配 `ASSIST_WEB`，同步外置文件的口径立即恢复生效（`internal/assist/api/server.go` adminPage）。
@@ -104,6 +109,10 @@
   失败信息直接点明「⇒ /xxx-api 链路没通」，而不是留给后人去猜。
   （2026-09-23 实测：`/assist-api` 在主服务直出 dist 的形态下没有转发方，落进 SPA 兜底返回整页 `index.html`，
   `assist_widget_cache.spec.ts` W1/W2 全程在离线态假绿，直到 W3 才以「拿不到 sid」暴露——见 `e2e/assist_widget_cache.spec.ts` 的 `expectLiveLink`。）
+- **同一兜底陷阱也污染「静态产物可下载性」用例。** `spa.go` 对**不存在的路径**会回退成 `index.html` 且**状态码仍是 200**，
+  所以「文件在仓库里 ≠ 线上点得开」。凡断言托管物（`/extensions/*.zip` 等）的用例，判据必须是
+  200 **+ 响应体不是 HTML 兜底 + 格式魔数（zip 为 `PK`）+ 体积合理**，只判 `status === 200` 一律视为无效断言
+  （锁见 `e2e/extension_download.spec.ts`；版本号从 `extension/manifest.json` 现读，禁止写死后成为落后于版本的假绿源）。
 
 ### 7. Shell 脚本断言写法（UAT 脚本）
 
@@ -129,6 +138,26 @@
 - 缺错误码就在 `internal/errors/codes.go` 补（`ErrMethodNotAllowed`→405、`ErrUpstreamUnavailable`→502 即本批新增），
   同步登记 HTTP 映射，别在 handler 里手写状态码。
 
+### 9. 提交与推送：文档不外推（★ 2026-09-23 〇-LL 立为硬约定）
+
+- 远端（GitHub `origin`）**只放代码**：任意层级的 `*.md` 与 `前端及UI相关/`（UI 交付包、流程图）一律不进推送。
+- **靠历史结构保证，不靠人记住命令。** `autosales` 是线性单分支，2026-09-22 〇-LJ 出过一次事故：排在纯代码提交
+  前面的两份「仅本地」文档提交成了它的祖先，`git push` 按祖先链打包，文档被一起推上远端——
+  **「文档不外推」是被历史结构击穿的**，而不是某条命令写错。
+- 两半做法（①是流程，②是机制，②专门用来兜住忘记①的情况）：
+  ① 文档提交放到**永不推送**的 `docs-local` 分支；正常批次 `autosales` 上只有代码提交，push 天然干净。
+  ② 推送一律走 `scripts/push_code_only.sh`（先不带参数干跑看清单与判定，确认后再 `--apply`）：
+  推出去的那个提交**永远直接从 `origin/<分支>` 长出来**，内容 = 本地代码文件的目标状态。
+- 改这个脚本前必读的两条（都是首跑真踩出来的）：
+  - 判定「某路径该取还是该删」必须问 git 对象库（`git cat-file -e "$BR:$f"`），**不能问工作区**（`[ -e "$ROOT/$f" ]`）——
+    `git checkout -b $TMP $BASE` 会把 BASE 里不存在的新增文件从磁盘删掉，于是 `[ -e ]` 恒假、新文件被当成「已删除」，
+    首跑 25 个代码文件只推上去 13 个（`b6e9efc` 修）。
+  - 三道校验缺一不可：纯代码提交内零 `.md`/零 UI 目录 → 推送后与本地树**逐文件等价**
+    （`git diff --name-only "$BR" HEAD -- ':(exclude)*.md' ':(exclude)前端及UI相关/'` 必须为空）→ 任一红即停在本地不推。
+- **force-push 与改写已推送历史需用户明令**；脚本只做普通 merge 并轨，冲突即停手交人工。
+- 顺序口径仍然有效：一批工作 **代码提交 → push → 才提交文档**；顺序反了就是把文档送进了推送的祖先链。
+- 文档里写「仅本地提交」时必须与实际一致——历史上那类偏离正是事故的来源。
+
 ---
 
 ## 二、提交前闸门（必须全绿）
@@ -139,7 +168,10 @@ cd ../frontend-react && npx tsc --noEmit && npm test && npx vite build
 bash scripts/uat/assist_uat.sh                    # AI 顾问（自起临时实例，不碰生产）
 bash scripts/uat/run_uat.sh                       # 全链路主矩阵（PG 方言，发布闸门）
 bash scripts/uat/multi_instance_e2e.sh            # 多实例红线
+bash scripts/build_extension.sh --check           # 扩展漂移闸门（动过 extension/ 却没重打 zip 时红灯；vitest 同口径）
 ```
+
+改动全绿后**按 §一·9 的口径推送**（`scripts/push_code_only.sh` 干跑 → `--apply`），不要裸 `git push`。
 
 改动触及计费/对账时，`run_uat.sh` **必须**跑 PG 方言（SQLite 快跑不能替代）。
 
@@ -151,3 +183,7 @@ bash scripts/uat/multi_instance_e2e.sh            # 多实例红线
   避免大爆炸式重构：改动面 >3000 行且无行为收益的重构不做。
 - 修复缺陷时同步补一条能复现的自动化断言（单测或 UAT 断言），否则视为未完成。
 - 涉及 DB schema 的改动必须写成幂等迁移，保证老库启动自动升级。
+- **改了 assist 的 `seed/seed.json` 不等于线上改了。** seed 只在**首启空表**时灌库，存量库不跟进，
+  所以关键词/文案修订必须随批跑一次 `python3 scripts/assist_kb_sync.py --host <服务器>`（默认只读打差异，
+  确认后 `--apply`，写前自动备份）——这一步此前长期挂「待人工执行」，2026-09-23 已由脚本收口，
+  口径见《部署指南》§十三。同理「线上管理台在线改的内容」优先级高于 seed，脚本**绝不 DELETE**。
