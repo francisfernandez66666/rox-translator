@@ -140,9 +140,10 @@ html, body { background: #000000; }
   width: 34px; height: 34px; border-radius: 50%; flex: none;
   display: flex; align-items: center; justify-content: center; font-size: 13px; color: #000;
 }
-/* 头像底色：AI=白、用户=次级灰（原品牌蓝 #1f33d6 / 绿 #43a047，绿色按交付规则废止）；
+/* 头像底色：AI=纯白实心件（与主按钮同档 --lc-fill-white，承载黑色字形不许用偏冷的 #E7E9EA）、
+   用户=次级灰（原品牌蓝 #1f33d6 / 绿 #43a047，绿色按交付规则废止）；
    文字固定黑色，保证在白/灰底上仍有对比度 */
-.avatar-ai { background: #E7E9EA; }
+.avatar-ai { background: var(--lc-fill-white); }
 .avatar-user { background: #9AA0AA; }
 .bubble {
   max-width: 78%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.65;
@@ -204,7 +205,9 @@ html, body { background: #000000; }
 .progress-area { margin-bottom: 10px; }
 .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; flex-wrap: wrap; }
 .progress-step { font-size: 13px; color: var(--npz-text-2); }
-.progress-lang { font-size: 12px; font-weight: 600; color: #000; background: #E7E9EA; padding: 1px 6px; border-radius: 4px; }
+/* 语种徽标是「信息强调」小徽标（与交付稿 05-pricing 的「注册即送 / 即购即刻到账」同族）：
+   白底黑字取纯白档，不用偏冷的 #E7E9EA；活跃/状态类小胶囊（Tab 活跃、当前阶段）仍走 --lc-success。 */
+.progress-lang { font-size: 12px; font-weight: 600; color: #000; background: var(--lc-fill-white); padding: 1px 6px; border-radius: 4px; }
 .progress-detail { font-size: 12px; color: var(--lc-text-3); }
 .progress-percent { font-size: 13px; font-weight: 600; color: #E7E9EA; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
 /* 进度槽底走 --lc-border-faint（#464C58）：UI-ANNOTATIONS §1.1 里「量尺轨道」的真值档，
@@ -387,7 +390,9 @@ html, body { background: #000000; }
   width: 42px; height: 42px; border-radius: 10px; color: #000; font-size: 20px; font-weight: 800;
   font-family: 'Segoe UI', 'SF Pro', sans-serif; letter-spacing: -1px;
 }
-.icon-docx { background: #E7E9EA; }
+/* DOCX 图标是 42px 的实心反白件（黑色字形压在白面上）：与主按钮同取纯白档，
+   用 #E7E9EA 会在这么大一块面上读出蓝灰调、显脏。PPTX/XLSX 各自的红/琥珀语义色不变。 */
+.icon-docx { background: var(--lc-fill-white); }
 .icon-pptx { background: #F85149; color: #fff; }
 .icon-xlsx { background: #D29922; color: #000; }
 .icon-file {

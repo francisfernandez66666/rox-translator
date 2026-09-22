@@ -16,7 +16,12 @@
   --lc-surface-2: var(--lc-raised);  /* #16181C 次级卡 / Tab 活跃底 / Toast 面 */
   --lc-surface-3: var(--lc-inset);   /* #0A0B0D 输入框底 / 空状态底 */
   --lc-surface-4: var(--lc-deep);    /* #050607 页脚条 */
-  --lc-text-1: var(--lc-text);       /* #E7E9EA 主文字 / 正向活跃态 / 主按钮底 */
+  --lc-text-1: var(--lc-text);       /* #E7E9EA 主文字 / 正向活跃态（小控件与指示条） */
+  /* 实心白填充档：主按钮 / 主 CTA / 反相白卡 / 用户气泡。交付真值 = react/css/components.css
+     `.lc-btn--primary{background:#FFFFFF}`，并经零偏移截图（05-pricing、06-marketing-home）
+     逐像素复核：所有白底件（免费注册按钮、注册即送徽标、底部 CTA 按钮）均为 #FFFFFF，无一处取 #E7E9EA。
+     #E7E9EA 只留给「文字」与 --lc-success 语义的小控件（复选框/开关/Tab 活跃/进度条/光标点）。 */
+  --lc-fill-white: #FFFFFF;
   --lc-text-5: #8A9099;              /* 价格单位 / 辅助数字（文档 §1.1 独有档） */
   --lc-border-1: var(--lc-border-strong);   /* #8B939F 6.0:1 最高对比 */
   --lc-border-2: var(--lc-border-done);     /* #6E7683 4.7:1 完成态 */

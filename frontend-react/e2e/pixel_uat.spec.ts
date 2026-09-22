@@ -7,6 +7,8 @@
 //   P4 工单 / 对照编辑
 //   P5 后台管理各面板（overview/models/kb/tickets/system/personal）
 //   P6 公开页：pricing / docs
+//   P6b 主投白底件运行时渲染为纯白 #FFFFFF（getComputedStyle 实测）
+//   P6c 后端直出的 /openapi/docs 与 /office/taskpane 渲染为 §1.1 单色纯黑
 //   P7 像素级检查：关键元素可见 + 无横向溢出（scrollWidth<=clientWidth）
 // 全部截图存 artifacts/ 供人工复核
 // 运行：BASE_URL=http://127.0.0.1:8899 npx playwright test e2e/pixel_uat.spec.ts
@@ -259,6 +261,59 @@ test.describe('像素级 UAT', () => {
       expect(overflow, `${path} 横向溢出`).toBeFalsy();
       await shot(page, name);
     }
+    // ★ 2026-09-22 白色填充还原批：/docs/* 三页由后端直出内嵌 HTML（public.go），
+    //   前端那套令牌锁扫不到它——历史上它就带着旧的蓝靛浅底主题跑了很多批。
+    //   这里补一条运行时实测：页面底必须纯黑、主按钮必须纯白，浅底主题一旦复活立刻红灯。
+    await page.goto('/docs/terms');
+    const docBodyBg = await page.locator('body').evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(docBodyBg, '/docs/terms 页面底 ≠ §1.1 --lc-bg #000000').toBe('rgb(0, 0, 0)');
+    const docBtnBg = await page.locator('.header .btn').first().evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(docBtnBg, '/docs/terms 管理后台按钮 ≠ 交付真值白底 #FFFFFF').toBe('rgb(255, 255, 255)');
+    const docCardBg = await page.locator('.card').first().evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(docCardBg, '/docs/terms 内容面板 ≠ §1.1 surface-1 #0E1014').toBe('rgb(14, 16, 20)');
+  });
+
+  // P6b 主投白底件运行时必须是纯白（2026-09-22 白色填充还原批新增）
+  // 为什么还要一条 e2e：readability.test.ts 的 G 锁读源码，挡不住样式表级联把
+  // background 覆写回灰档（历史上 §十/§十一 覆写层就是这么把颜色改跑的）。
+  // 这里读 getComputedStyle 拿真实渲染值，rgb(255,255,255) 才是交付真值。
+  test('P6b 营销页主按钮与收尾白块渲染为纯白', async ({ page }) => {
+    await page.goto('/');
+    // 未登录访问 '/' 由 Root 直出营销页；先等主投按钮挂载，选择器一旦改名本条直接红灯
+    // （而不是 catch 成假绿）。
+    const pri = page.locator('.lc-mkt-btn--pri').first();
+    await expect(pri, '营销页主投按钮 .lc-mkt-btn--pri 未渲染，请同步本锁').toBeVisible({ timeout: 30000 });
+    expect(await pri.evaluate((el) => getComputedStyle(el).backgroundColor),
+      '主投按钮底色 ≠ 交付真值 #FFFFFF（#E7E9EA 是文字/活跃档，做整块填充会显脏偏蓝）').toBe('rgb(255, 255, 255)');
+    const cta = page.locator('.lc-cta');
+    await expect(cta, '收尾白块 .lc-cta 未渲染，请同步本锁').toBeAttached({ timeout: 30000 });
+    expect(await cta.evaluate((el) => getComputedStyle(el).backgroundColor),
+      '收尾白块底色 ≠ #FFFFFF').toBe('rgb(255, 255, 255)');
+    await shot(page, 'p6b_white_fill');
+  });
+
+  // P6c 另两处后端直出页的运行时单色实测（2026-09-22 白色填充还原批新增）
+  // /openapi/docs（goldmark 渲染壳）与 /office/taskpane.html（Word 加载项窗格）此前整套是
+  // Google 蓝 + indigo + 白底，和 /docs/* 属同一类「前端令牌扫不到」的盲区。
+  // 单测（public_ui_test.go）锁源码字面量，这里补真实渲染值，两侧都钉住。
+  test('P6c 开放 API 文档页与 Office 窗格渲染为单色纯黑', async ({ page }) => {
+    await page.goto('/openapi/docs');
+    await expect(page.locator('h1').first(), '/openapi/docs 未渲染出正文，请同步本锁').toBeVisible({ timeout: 30000 });
+    expect(await page.locator('body').evaluate((el) => getComputedStyle(el).backgroundColor),
+      '/openapi/docs 页面底 ≠ §1.1 --lc-bg #000000').toBe('rgb(0, 0, 0)');
+    expect(await page.locator('.lang-btn.on').first().evaluate((el) => getComputedStyle(el).backgroundColor),
+      '语言切换活跃档 ≠ 交付真值白底 #FFFFFF').toBe('rgb(255, 255, 255)');
+    await shot(page, 'p6c_openapi_docs');
+
+    // Office 窗格页会拉 Office.js（外网 CDN），CI 取不到时 office.initialize 会挂住不渲染，
+    // 因此只断言样式壳本身（源码级字面量由 backend-go 的 TestOfficeTaskPaneMonochromeTruth 承担）。
+    const pane = await page.evaluate(async () => {
+      const res = await fetch('/office/taskpane.html');
+      return { status: res.status, text: await res.text() };
+    });
+    expect(pane.status, '/office/taskpane.html 不可达').toBe(200);
+    expect(pane.text, 'Office 窗格仍是浅底/蓝主题').toContain('background:var(--lc-bg)');
+    expect(pane.text, 'Office 窗格主按钮仍是蓝底').toContain('background:var(--lc-white);color:#000000');
   });
 
   test('P7 整体无横向溢出（登录态关键页）', async ({ page }) => {

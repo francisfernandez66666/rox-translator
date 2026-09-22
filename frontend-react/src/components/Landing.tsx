@@ -647,7 +647,7 @@ export default function Landing() {
         <a className="lc-nav-brand" href="/">
           {/* Logo：白色 8px 圆角块 + 两笔一实一虚的笔画，虚笔（opacity .45）示意"双语对照"；页脚复用同一段 */}
           <svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true">
-            <rect width="30" height="30" rx="8" fill="#E7E9EA" />
+            <rect width="30" height="30" rx="8" fill="#FFFFFF" />
             <path d="M9.5 10.5v5.2a4.3 4.3 0 0 0 8.6 0V12" stroke="#000" strokeWidth="2.4" fill="none" strokeLinecap="round" />
             <path d="M20.5 19.5v-5.2a4.3 4.3 0 0 0-8.6 0V18" stroke="#000" strokeWidth="2.4" fill="none" strokeLinecap="round" opacity=".45" />
           </svg>
@@ -1048,7 +1048,7 @@ export default function Landing() {
             <a className="lc-nav-brand" href="/">
               {/* Logo 与导航那枚是同一份内联 SVG：官网只此一个标识，不引图片资源，免得首屏多一次请求 */}
               <svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true">
-                <rect width="30" height="30" rx="8" fill="#E7E9EA" />
+                <rect width="30" height="30" rx="8" fill="#FFFFFF" />
                 <path d="M9.5 10.5v5.2a4.3 4.3 0 0 0 8.6 0V12" stroke="#000" strokeWidth="2.4" fill="none" strokeLinecap="round" />
             <path d="M20.5 19.5v-5.2a4.3 4.3 0 0 0-8.6 0V18" stroke="#000" strokeWidth="2.4" fill="none" strokeLinecap="round" opacity=".45" />
               </svg>
@@ -1126,8 +1126,10 @@ const LANDING_CSS = `
 .lc-mkt-btn:active{transform:scale(.97)}
 /* 变体选择器带 .lc-mkt 前缀：压过 .lc-mkt a{color:inherit} 的 (0,1,1)，
    否则白底按钮上的白字 / 黑底按钮上的黑字会被 inherit 覆盖成隐形（实测踩坑） */
-/* 主投=白底黑字：整页唯一一处实心白，强度最高，同屏通常只让它出现一次 */
-.lc-mkt .lc-mkt-btn--pri{background:var(--lc-text-1);color:#000}
+/* 主投=纯白底黑字：交付真值 .lc-btn--primary{background:#FFFFFF}（不是 #E7E9EA——
+   那档灰只用于文字与活跃指示，拿来做整块填充会在纯黑底上读出冷调、显脏）。
+   整页唯一一处实心白，强度最高，同屏通常只让它出现一次 */
+.lc-mkt .lc-mkt-btn--pri{background:var(--lc-fill-white);color:#000}
 .lc-mkt .lc-mkt-btn--pri:hover{opacity:.88}
 /* 描边次投走令牌 --lc-border-pill（#424956）：2026-09-22 还原批把自造的 #546470 归位到令牌，
    比卡片描边亮一档，边框才读得出"可点"而不是"分隔线" */
@@ -1287,8 +1289,8 @@ const LANDING_CSS = `
 /* align-items:flex-start：卡内元素顶对齐，价格数字长短不同也不会把下面的按钮错开 */
 .lc-plan{display:flex;flex-direction:column;align-items:flex-start;gap:20px;padding:32px;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:16px}
 .lc-plan:hover{border-color:var(--lc-border-pill)}
-/* 反相档底色与描边同色：白卡上再画一圈浅边只会显脏，高亮靠"整块变白"完成 */
-.lc-plan--pro{background:var(--lc-text-1);border-color:var(--lc-text-1);color:#000}
+/* 反相档底色与描边同为纯白：白卡上再画一圈浅边只会显脏，高亮靠"整块变白"完成 */
+.lc-plan--pro{background:var(--lc-fill-white);border-color:var(--lc-fill-white);color:#000}
 /* 徽标在白色卡上用实心黑：与它所在的反相卡共用同一套黑白语言，不引入第三种强调色 */
 .lc-plan-badge{padding:6px 14px;border-radius:999px;background:#000;color:#fff;font-size:13px;font-weight:600}
 .lc-plan-name{margin:0;font-size:20px;font-weight:600}
@@ -1355,8 +1357,8 @@ const LANDING_CSS = `
 /* —— 8. 收尾 CTA —— */
 /* 上边距给 0：它紧贴上一区块（关于我们），靠白块本身的反相与上文切开，不需要再留一段黑 */
 .lc-cta-wrap{padding:0 80px 80px}
-/* 整页唯一的大面积白 + 居中排版：读到这里只剩一个动作，因此取消所有左对齐的信息密度 */
-.lc-cta{display:flex;flex-direction:column;align-items:center;gap:20px;padding:60px 80px;background:var(--lc-text-1);border-radius:20px;text-align:center}
+/* 整页唯一的大面积纯白（--lc-fill-white，与主按钮同档）+ 居中排版：读到这里只剩一个动作，因此取消所有左对齐的信息密度 */
+.lc-cta{display:flex;flex-direction:column;align-items:center;gap:20px;padding:60px 80px;background:var(--lc-fill-white);border-radius:20px;text-align:center}
 .lc-cta-t{margin:0;font-size:clamp(24px,2.22vw,32px);font-weight:700;color:#000}
 /* 白块里的次级文字同样只能取最深那档灰：比 #000 弱一级，既读得清又不抢标题 */
 .lc-cta-sub{margin:0;font-size:16px;color:var(--lc-text-4)}

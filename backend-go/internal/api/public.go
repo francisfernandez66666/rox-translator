@@ -11,7 +11,9 @@
 //
 // 实现：直接由后端渲染内嵌 HTML（与 SPA 无关，public 无需登录），
 //
-//	文案中英双语内联，页面样式与整体品牌一致。
+//	文案中英双语内联；页面外壳按 UI-ANNOTATIONS §3.1-05 公开页骨架走
+//	X/Grok 单色纯黑体系（#000 底 / #0E1014 面板 / #E7E9EA 主文字 / 白底黑字主按钮），
+//	与前端 tokens.css 同一批真值，历史蓝靛浅底主题已于 2026-09-22 全站还原批废止。
 //
 // ========================================
 package api
@@ -26,7 +28,7 @@ func (s *Server) handlePublicTerms(w http.ResponseWriter, r *http.Request) {
 	// 设置 HTML 内容类型
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// 返回服务条款页（中英双语）
-	fmt.Fprint(w, publicDocPage("用户协议 / User Agreement", termsBody))
+	fmt.Fprint(w, publicDocPage("用户协议 / User Agreement", termsBody, "terms"))
 }
 
 // handlePublicSLA 服务等级协议页（中英文切换）。
@@ -34,12 +36,12 @@ func (s *Server) handlePublicSLA(w http.ResponseWriter, r *http.Request) {
 	// 设置 HTML 内容类型
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// 返回服务等级协议页（支持中英文切换）
-	fmt.Fprint(w, publicDocPageLang("服务等级协议 / SLA", slaBodyZh, slaBodyEn))
+	fmt.Fprint(w, publicDocPageLang("服务等级协议 / SLA", slaBodyZh, slaBodyEn, "sla"))
 }
 
 // publicDocPageLang 支持中英文切换的文档页（如 SLA）：顶栏提供「中文 / English」切换，
 // 默认展示中文，切换后仅渲染对应语言段落，并记忆选择到 localStorage。
-func publicDocPageLang(title, zh, en string) string {
+func publicDocPageLang(title, zh, en, active string) string {
 	body := `<h1>` + title + `</h1>
 <div class="lang-switch" style="margin:6px 0 18px;display:flex;gap:8px">
   <button id="btnZh" class="ls ls-on" onclick="setLang('zh')">中文</button>
@@ -48,8 +50,10 @@ func publicDocPageLang(title, zh, en string) string {
 <div id="secZh">` + zh + `</div>
 <div id="secEn" style="display:none">` + en + `</div>
 <style>
-.lang-switch .ls{border:1px solid var(--border);background:#fff;color:var(--text-2);font-size:13px;padding:6px 16px;border-radius:8px;cursor:pointer;transition:.2s}
-.lang-switch .ls-on{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:600}
+/* 语种切换按交付包的次按钮/主按钮两档：未选=描边透明底，选中=白底黑字（同 .lc-btn--primary） */
+.lang-switch .ls{border:1.2px solid var(--lc-pill);background:transparent;color:var(--lc-text-2);font-size:12px;font-weight:500;padding:6px 16px;border-radius:8px;cursor:pointer;transition:.2s}
+.lang-switch .ls:hover{color:var(--lc-text);border-color:var(--lc-line)}
+.lang-switch .ls-on{background:var(--lc-white);border-color:var(--lc-white);color:#000000;font-weight:600}
 </style>
 <script>
 function setLang(l){var z=document.getElementById('secZh'),e=document.getElementById('secEn'),bz=document.getElementById('btnZh'),be=document.getElementById('btnEn');
@@ -58,69 +62,100 @@ function setLang(l){var z=document.getElementById('secZh'),e=document.getElement
 }
 try{var s=localStorage.getItem('doc_lang');if(s==='en')setLang('en')}catch(_){}
 </script>`
-	return publicLayout(title, body)
+	return publicLayout(title, body, active)
 }
 
 // handlePublicPrivacy 数据保护条款（DPA）页。
 func (s *Server) handlePublicPrivacy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, publicDocPage("隐私协议 / Privacy Policy", privacyBody))
+	fmt.Fprint(w, publicDocPage("隐私协议 / Privacy Policy", privacyBody, "privacy"))
 }
 
 // publicLayout 公共页面外壳（品牌导航 + 内容区 + 页脚）。
-// 视觉风格统一为「能言」TDesign 设计语言：蓝靛主色、统一圆角、浅底卡片，
-// 与管理后台 / 登录页配色一致（替换原绿色主题）。
-func publicLayout(title, body string) string {
+//
+// ★ 2026-09-22 全站 UI 还原批：本外壳原先是「TDesign 蓝靛主色 + 浅底卡片」
+// （--brand #2b3ee8、渐变头、#f4f6fa 底），与交付 UI 完全脱节——交付口径是
+// X/Grok 单色纯黑体系、全站无蓝无绿（UI-ANNOTATIONS §1.1 与 §3.1-05 公开页骨架）。
+// 现按 §3.1-05 逐档对齐：页面底 #000000、导航品牌 15/Bold/#FFFFFF、
+// 导航项 12/Medium/#9AA0AA（当前页 #FFFFFF）、管理后台=白底黑字按钮、
+// 内容面板 #0E1014 + 1.2px #3A404C + r14 + 顶缘受光、页脚面 #050607 文字 #536471。
+// active 传当前页 key（pricing/terms/sla/privacy），用于点亮导航活跃档。
+func publicLayout(title, body, active string) string {
+	// 导航四项按 §3.1-05 的顺序与文案；当前页挂 .on 走 #FFFFFF 活跃档，其余 #9AA0AA。
+	nav := docNavLink(active, "pricing", "/pricing", "定价 Pricing") +
+		docNavLink(active, "terms", "/docs/terms", "用户协议 Terms") +
+		docNavLink(active, "sla", "/docs/sla", "SLA") +
+		docNavLink(active, "privacy", "/docs/privacy", "隐私协议 Privacy")
 	return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>` + title + ` - 能言</title>
 <style>
-:root{--brand:#2b3ee8;--brand-hover:#4a5cf0;--brand-active:#1c2bd0;--brand-light:#e7ebff;--text:#1a2233;--text-2:#5a6478;--border:#e3e6ef;--bg:#f4f6fa}
+/* 令牌取自 UI-ANNOTATIONS §1.1（面/文字/描边三族），与前端 tokens.css 同名同值；
+   本页是后端直出的静态 HTML，拿不到前端样式表，只能把同一批真值再声明一遍。 */
+:root{
+  --lc-bg:#000000;--lc-panel:#0E1014;--lc-surface:#16181C;--lc-inset:#0A0B0D;--lc-foot:#050607;
+  --lc-text:#E7E9EA;--lc-text-2:#9AA0AA;--lc-text-3:#71767B;--lc-text-4:#536471;
+  --lc-line:#464C58;--lc-pill:#424956;--lc-card-line:#3A404C;
+  --lc-white:#FFFFFF;--lc-warn:#D29922;--lc-danger:#E5484D;
+}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:var(--text);background:var(--bg);line-height:1.75;font-size:15px}
-.header{background:linear-gradient(135deg,#2b3ee8 0%,#1c2bd0 100%);color:#fff;padding:0 24px;display:flex;justify-content:space-between;align-items:center;height:60px;position:sticky;top:0;z-index:20}
-.header .brand{font-size:18px;font-weight:700;letter-spacing:.3px;display:flex;align-items:center;gap:8px}
+body{font-family:'Noto Sans SC',-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;color:var(--lc-text);background:var(--lc-bg);line-height:1.75;font-size:14px}
+.header{background:var(--lc-bg);padding:0 40px;display:flex;justify-content:space-between;align-items:center;height:56px;position:sticky;top:0;z-index:20}
+.header .brand{font-size:15px;font-weight:700;letter-spacing:.3px;color:var(--lc-white);display:flex;align-items:center;gap:8px}
 .header nav{display:flex;align-items:center;gap:6px}
-.header nav a{color:#fff;text-decoration:none;font-size:14px;padding:6px 12px;border-radius:8px;transition:background .2s}
-.header nav a:hover{background:rgba(255,255,255,.16)}
-.header .btn{background:#fff;color:var(--brand);text-decoration:none;font-size:14px;font-weight:600;padding:7px 16px;border-radius:8px;margin-left:8px;transition:opacity .2s}
+.header nav a{color:var(--lc-text-2);text-decoration:none;font-size:12px;font-weight:500;padding:6px 12px;border-radius:8px;transition:color .2s}
+.header nav a:hover{color:var(--lc-text)}
+.header nav a.on{color:var(--lc-white)}
+/* 白底主按钮：交付真值 .lc-btn--primary{background:#FFFFFF;color:#000000}，不是 #E7E9EA */
+.header .btn{background:var(--lc-white);color:#000000;text-decoration:none;font-size:12px;font-weight:500;padding:7px 16px;border-radius:8px;margin-left:8px;transition:opacity .2s}
 .header .btn:hover{opacity:.88}
 .wrap{max-width:920px;margin:32px auto;padding:0 20px}
-.card{background:#fff;border-radius:12px;padding:32px 36px;box-shadow:0 2px 12px rgba(26,35,126,.06);border:1px solid var(--border)}
-h1{font-size:24px;font-weight:700;margin-bottom:6px;color:var(--brand)}
-.doc-meta{color:var(--text-2);font-size:13px;margin-bottom:8px}
-h2{font-size:18px;font-weight:600;margin:26px 0 10px;padding-left:11px;border-left:4px solid var(--brand);color:var(--text);line-height:1.4}
-h3{font-size:15px;font-weight:600;margin:18px 0 8px;color:var(--text)}
-p{margin:9px 0;color:#2b3145}
-a{color:var(--brand);text-decoration:none}
+/* 内容面板：§1.3 卡片描边 1.2px + 面板顶缘受光高光 */
+.card{background:var(--lc-panel);border-radius:14px;padding:32px 36px;box-shadow:inset 0 1px 0 rgba(255,255,255,.055);border:1.2px solid var(--lc-card-line)}
+h1{font-size:22px;font-weight:700;margin-bottom:6px;color:var(--lc-text)}
+.doc-meta{color:var(--lc-text-3);font-size:12px;margin-bottom:8px}
+h2{font-size:16px;font-weight:600;margin:26px 0 10px;padding-left:11px;border-left:2px solid var(--lc-text);color:var(--lc-text);line-height:1.4}
+h3{font-size:15px;font-weight:600;margin:18px 0 8px;color:var(--lc-text)}
+p{margin:9px 0;color:var(--lc-text-2)}
+b,strong{color:var(--lc-text);font-weight:600}
+a{color:var(--lc-text);text-decoration:none}
 a:hover{text-decoration:underline}
-.footer{text-align:center;color:var(--text-2);font-size:13px;padding:28px;line-height:2}
-.footer a{color:var(--text-2);margin:0 6px}
-.footer a:hover{color:var(--brand)}
-hr{border:none;border-top:1px solid var(--border);margin:24px 0}
+.footer{background:var(--lc-foot);text-align:center;color:var(--lc-text-4);font-size:12px;padding:28px;line-height:2}
+.footer a{color:var(--lc-text-4);margin:0 6px}
+.footer a:hover{color:var(--lc-text-2)}
+hr{border:none;border-top:1px solid var(--lc-card-line);margin:24px 0}
 table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
-th,td{border:1px solid var(--border);padding:10px 12px;text-align:left}
-th{background:var(--brand-light);color:var(--brand-active);font-weight:600}
-.tag{display:inline-block;background:var(--brand-light);color:var(--brand-active);border-radius:999px;padding:2px 12px;font-size:12px;font-weight:500}
+th,td{border:1px solid var(--lc-line);padding:10px 12px;text-align:left}
+th{background:var(--lc-surface);color:var(--lc-text);font-weight:600}
+td{color:var(--lc-text-2)}
+.tag{display:inline-block;background:var(--lc-surface);color:var(--lc-text);border:1.2px solid var(--lc-pill);border-radius:999px;padding:2px 12px;font-size:12px;font-weight:500}
 @media (max-width:720px){
 .header{flex-wrap:wrap;height:auto;padding:12px 14px;gap:8px;row-gap:8px}
 .header nav{flex-wrap:wrap;gap:4px}
-.header nav a{font-size:13px;padding:5px 8px}
+.header nav a{font-size:12px;padding:5px 8px}
 .wrap{padding:0 12px;margin:16px auto}
 .card{padding:20px 16px}
 h1{font-size:20px}h2{font-size:16px}
 table{display:block;overflow-x:auto;font-size:13px}
 }
 </style></head><body>
-<div class="header"><div class="brand">🌐 能言 LangCross</div><nav><a href="/pricing">定价 Pricing</a><a href="/docs/terms">用户协议 Terms</a><a href="/docs/sla">SLA</a><a href="/docs/privacy">隐私协议 Privacy</a><a class="btn" href="/admin">管理后台</a></nav></div>
+<div class="header"><div class="brand">🌐 能言 LangCross</div><nav>` + nav + `<a class="btn" href="/admin">管理后台</a></nav></div>
 <div class="wrap"><div class="card">` + body + `</div></div>
 <div class="footer">© 2026 能言 LangCross · 翻译平台<br><a href="/docs/terms">用户协议</a> · <a href="/docs/privacy">隐私协议</a> · <a href="/admin">管理后台</a></div>
 </body></html>`
 }
 
+// docNavLink 单个导航项：active==key 时输出 .on（导航活跃档 #FFFFFF，其余 #9AA0AA）。
+func docNavLink(active, key, href, label string) string {
+	if active == key {
+		return `<a class="on" href="` + href + `">` + label + `</a>`
+	}
+	return `<a href="` + href + `">` + label + `</a>`
+}
+
 // publicDocPage 合规文档页包装（条款/SLA/DPA 共用外壳）。
-func publicDocPage(title, body string) string {
-	return publicLayout(title, `<h1>`+title+`</h1>`+body)
+func publicDocPage(title, body, active string) string {
+	return publicLayout(title, `<h1>`+title+`</h1>`+body, active)
 }
 
 // termsBody 用户协议正文（中英双语，面向翻译平台）。
