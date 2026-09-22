@@ -12,15 +12,17 @@ import { useAdmin } from '@/stores/admin'
 
 // ============ 本文件职责中文说明 ============
 // 站内通知铃铛：未读轮询、下拉列表与已读操作。
+// 挂载点有两处：前台顶栏（App.tsx 的 FrontShell，懒加载）与后台顶栏（admin/AdminDashboard，静态 import），
+// 所以浮层不依赖任何外壳 CSS，样式与定位全在本文件自带。
 // ========================================
 
-// 站内通知条目数据结构
+// 站内通知条目数据结构（字段口径同后端 /api/notifications 列表项，不做前端改名）
 interface NoticeItem {
   id: number
   title: string
   body: string
-  ref_type?: string
-  ref_id?: number
+  ref_type?: string // 关联对象类型：feedback / ticket / quota / kb_scrape，决定点击跳去哪
+  ref_id?: number // 关联对象 ID，含义随 ref_type 变（可为 0/缺省）
   created_at: string
 }
 
@@ -29,9 +31,9 @@ export default function Bell() {
   const [unread, setUnread] = useState(0)
   const [items, setItems] = useState<NoticeItem[]>([])
   const [open, setOpen] = useState(false)
-  const { gotoPanel, isSuper, openFeedback } = useAdmin()
-  const timerRef = useRef<number | null>(null)
-  const wrapRef = useRef<HTMLDivElement>(null)
+  const { gotoPanel, isSuper, openFeedback } = useAdmin() // 后台跳转与超管判定都取自 admin store，铃铛自己不管路由
+  const timerRef = useRef<number | null>(null) // 30s 轮询句柄：用 ref 而非 state，改它不该触发重渲染
+  const wrapRef = useRef<HTMLDivElement>(null) // 「点击外部」判定基准：铃铛钮 + 浮层都在这层里
 
   // 刷新未读数；下拉展开时同步拉取最近 20 条通知列表
   // 列表只在 open 时才请求：收起状态下 30s 轮询只多打一个轻量的 unread 接口，省掉一次列表查询。
@@ -39,23 +41,31 @@ export default function Bell() {
   const refresh = useCallback(async () => {
     try {
       const u = await notificationsUnread()
+      // `|| 0` 把缺省字段与 0 统一成数字 0，避免把 undefined 塞进 state 后徽标处比不出大小
       if (u.success) setUnread(Number((u as unknown as { unread?: number }).unread || 0))
       if (open) {
         const r = await notifications()
         // 后端一次最多回 100 条且无分页参数，这里再截到 20：浮层高 420px 也放不下更多，纯粹是自我上限
         if (r.success) setItems(((r as unknown as { notifications?: NoticeItem[] }).notifications || []).slice(0, 20))
       }
-    } catch { /* 忽略 */ }
+    } catch { /* 忽略 */ } // 顶栏铃铛是旁路信息：拉不到就保持上一次的读数，不 toast 不打断操作
   }, [open])
 
   // 挂载即刷新并启动 30s 未读轮询；卸载时清除定时器
+  // deps 挂 refresh：open 一翻转就要换绑成「会顺带拉列表」的那版定时器回调，
+  // 所以收起/展开会把 30s 计时重新开始计（顶栏可接受的小偏差，换来少一个 ref 转发）。
+  // 定时器本身不 await 上一轮：慢响应按到达先后互相覆盖（后写赢），未读数这种幂等值无所谓。
   useEffect(() => {
-    void refresh()
+    void refresh() // void 显式丢弃 promise：这里不关心结果，只触发
     timerRef.current = window.setInterval(refresh, 30000)
+    // 与工单列表轮询不同，这里没有 document.hidden 判断：收起时也只打一个轻量 unread 接口
     return () => { if (timerRef.current) window.clearInterval(timerRef.current) }
   }, [refresh])
 
   // 点击浮层外部关闭（等价 TDesign Popup 的 trigger="click" 点击外部收起）
+  // 监听随 open 挂/卸，收起态不在 document 上留全局 mousedown；
+  // 铃铛钮与浮层都在 wrapRef 子树内，「点内部」由 contains 一次判掉，无需各元素 stopPropagation。
+  // 用 mousedown 而不是 click：按下那一瞬就收起，浮层不会在该次点击落到别处时还杵着。
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
@@ -72,7 +82,7 @@ export default function Bell() {
     await notificationRead(id)
     void refresh()
   }
-  // 标记全部已读并刷新列表
+  // 标记全部已读并刷新列表（不本地 setUnread(0)：以服务端回读为准，避免并发新通知被抹掉读数）
   async function markAll() {
     await notificationsReadAll()
     void refresh()
@@ -80,16 +90,20 @@ export default function Bell() {
 
   // 点击通知：先标记已读，再按类型跳转（feedback→超管反馈面板，其余→工单页）
   function onItemClick(n: NoticeItem) {
-    void markRead(n.id)
+    void markRead(n.id) // 不 await：跳转要立刻发生，已读失败不该把用户卡在铃铛里
     // feedback 类通知 → 超管打开反馈处理面板；其余跳转工单
     // ref_id 的含义随 ref_type 变（feedback=反馈单 ID、ticket=工单 ID、quota=组织/租户 ID、kb_scrape=0），
     // 只有 feedback 分支会真的读它，所以强转写在这一行里；非超管打不开反馈面板，退化成工单列表
+    // 注：gotoPanel / openFeedback 都来自 admin store，落点是后台 /admin 的工单面板
+    //     （store 内 set panel + navigate('/admin')），不是前台 /tickets；跳转也不带 ref_id，
+    //     所以除 feedback 外的通知只做到「把你送到工单面板」，不定位到具体那条工单。
     if (isSuper && n.ref_type === 'feedback') openFeedback(n.ref_id as number)
     else gotoPanel('tickets')
-    setOpen(false)
+    setOpen(false) // 收起浮层：已在后台时点通知不会触发路由跳转，浮层得自己收，否则一直盖在内容上
   }
 
   // 切换浮层；展开时刷新列表
+  // 展开额外打一次 refresh 而非等 30s 轮询：用户点开就是要看最新内容，等轮询会看到旧列表
   function toggle() {
     const next = !open
     setOpen(next)
@@ -98,9 +112,15 @@ export default function Bell() {
 
   return (
     <div className="bell-wrap" ref={wrapRef}>
+      {/* 样式随组件注入（与 TicketsPage 的 tk- 同口径：bell- 前缀只此一处在用）。
+          注意顶栏内边距的最终值不在这里：theme.css §十一 用 `html .bell-trigger{padding:9px}`
+          提权覆写了下面的 6px（#67 顶栏放大），改字号/间距要两处一起看。 */}
       <style>{BELL_CSS}</style>
+      {/* aria-expanded 让读屏报出「已展开/已折叠」；未读变化不做 aria-live 播报，
+          顶栏每 30s 刷一次，实时播报会持续打断用户 */}
       <button type="button" className="bell-trigger" onClick={toggle} aria-label={t('bell.title')} aria-expanded={open}>
         <BellIcon size={18} />
+        {/* 未读为 0 时整个徽标不渲染（而非显示 0），铃铛回到纯图标 */}
         {unread > 0 && <Badge className="bell-count">{unread}</Badge>}
       </button>
       {/* 浮层自绘：绝对定位挂在 .bell-wrap(position:relative) 之下，替代原 Popup 的 popper 定位。
@@ -108,15 +128,17 @@ export default function Bell() {
       {open && (
         <div className="bell-panel" role="menu">
           <div className="bell-head">
-            <b style={{ fontSize: 14 }}>{t('bell.title')}</b>
+            <b style={{ fontSize: 15 }}>{t('bell.title')}</b>
             <button type="button" className="bell-readall" onClick={markAll}>{t('bell.readAll')}</button>
           </div>
+          {/* 空态与列表并存：无通知时只出 EmptyState（items 为空，map 自然产不出节点） */}
           {items.length === 0 && <EmptyState title={t('bell.empty')} />}
           {items.map((n) => (
             <div key={n.id} className="bell-item" onClick={() => onItemClick(n)}>
-              <div style={{ fontWeight: 600, fontSize: 14 }}>{n.title}</div>
-              <div style={{ fontSize: 13, color: 'var(--lc-text-3)', marginTop: 2, whiteSpace: 'pre-wrap' }}>{n.body}</div>
-              <div style={{ fontSize: 12, color: 'var(--lc-text-4)', marginTop: 2 }}>{fmtTime(n.created_at)}</div>
+              <div style={{ fontWeight: 600, fontSize: 15 }}>{n.title}</div>
+              {/* pre-wrap 保住后端正文里的换行（工单/反馈摘要常带 \n），否则整段塌成一行 */}
+              <div style={{ fontSize: 14, color: 'var(--lc-text-3)', marginTop: 2, whiteSpace: 'pre-wrap' }}>{n.body}</div>
+              <div style={{ fontSize: 13, color: 'var(--lc-text-4)', marginTop: 2 }}>{fmtTime(n.created_at)}</div>
             </div>
           ))}
         </div>
@@ -131,8 +153,14 @@ const BELL_CSS = `
 .bell-trigger{position:relative;display:inline-flex;align-items:center;justify-content:center;padding:6px;
   background:transparent;border:0;color:var(--lc-text-2);cursor:pointer;font-family:var(--lc-font);border-radius:var(--lc-r-bar)}
 .bell-trigger:hover{color:var(--lc-text)}
+/* 焦点环用 :focus-visible 而非 :focus：鼠标点击铃铛不画环，键盘 Tab 过来才出（顶栏不需要每次都糊一圈） */
 .bell-trigger:focus-visible{outline:1.2px solid var(--lc-border-input);outline-offset:2px}
-.bell-count{position:absolute;top:-1px;right:-1px}
+/* 未读数徽标挂在铃铛右上角「外侧」：#67 把顶栏字号/内边距放大后，铃铛只有 18px，
+   徽标压在 top/right:-1 会盖住铃铛右上沿（截图里像「铃铛被切掉一半」），故外移。 */
+.bell-count{position:absolute;top:-7px;right:-9px}
+/* 浮层 z-index:60 只在顶栏这个层叠上下文（.app-header 为 sticky + z-index:20，见 theme.css）
+   内部比大小——够盖住下方页面内容，但对外盖不过页面级模态遮罩（如工单页 .tk-overlay 的 1200）。
+   宽 340 + max-height 420 的固定盒：条目在 refresh 里已截到 20 条，靠自身 overflow-y 滚动，不做虚拟列表。 */
 .bell-panel{position:absolute;top:calc(100% + 8px);right:0;z-index:60;width:340px;max-height:420px;overflow-y:auto;
   padding:8px;background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-modal);
   box-shadow:var(--lc-panel-highlight)}

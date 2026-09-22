@@ -73,6 +73,8 @@ func New(db *sql.DB) (*Store, error) {
 	s.MigrateSharedHostToZero()   // ★ 2026-09-04 共享包宿主迁移：租户1的行业/语言文化包迁至租户0（幂等）
 	s.PersonaMigrate()            // ★ 角色功能（2026-09-19）：users.job_role 补列 + 出厂角色包种入租户0（幂等）
 	s.CouponMigrate()             // ★ #41 商业洞三（2026-09-21）：优惠券模板/核销流水表 + orders 券列（幂等）
+	s.RenewalGraceMigrate()       // ★ #74（2026-09-23）：自动续费建单重试台账 renewal_attempts（同日唯一键，幂等）
+	s.EnsureCurrencyMigration()   // ★ #75（2026-09-23）：orders 报价快照列 currency/fx_rate/money_cny + 存量回填（幂等）
 	s.RepairAutoincrementSeqs()   // ★ 2026-09-03 通知串号根因：sqlite_sequence 与 max(id) 失步修复（幂等）
 	return s, nil
 }

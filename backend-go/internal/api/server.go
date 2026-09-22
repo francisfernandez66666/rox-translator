@@ -469,6 +469,11 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/admin/packages/settings", s.handleAdminPackageSettings)
 	s.mux.HandleFunc("/api/admin/packages/settings/save", s.handleAdminPackageSettingsSave)
 	s.mux.HandleFunc("/api/admin/packages/qr-upload", s.handleAdminQRUpload)
+	// ★ 2026-09-22 支付渠道凭据管理台可配（微信/支付宝商户参数，敏感项加密落库+掩码回显）
+	s.mux.HandleFunc("/api/admin/pay/channels", s.handleAdminPayChannels)
+	s.mux.HandleFunc("/api/admin/pay/channels/save", s.handleAdminPayChannelsSave)
+	// ★ #75（2026-09-23）多币种报价：报价币种 + 汇率倍率的超管配置口（GET 回显 / POST 保存，无密文项）
+	s.mux.HandleFunc("/api/admin/config/quote-currency", s.handleAdminQuoteCurrency)
 	s.mux.HandleFunc("/api/qr-image/", s.handleQRImage)
 	// 通用二维码文本渲染（收银台把 mock/wechat/alipay 的 qr_content 渲染为可扫码图片；需登录）
 	s.mux.HandleFunc("/api/qr/render", s.handleQRRender)

@@ -66,9 +66,17 @@ type Perms struct {
 	NotifiedExp1    bool   `json:"notified_exp1,omitempty"`      // 到期提醒 1 天档已发送（去重标记）
 	NotifiedExp3    bool   `json:"notified_exp3,omitempty"`      // ★ 体验台账到期前 3 天提醒已发送（去重标记；任务2.5）
 	NotifiedRenew3  bool   `json:"notified_renew3,omitempty"`    // ★ S7 续费 T-3 触达已发送（去重；续订成交复位）
-	// ★ 自动续费（#41 商业洞二，2026-09-21）：租户管理员开关。开启后到期前 T-3 自动创建
-	//   同包续费订单并通知管理员付款（免密代扣需与渠道另签周期扣款协议，见 api/pay_renew.go 说明）。
+	// ★ 自动续费（#41 商业洞二，2026-09-21）：租户管理员开关。开启后到期前 T-N 天起按日重试
+	//   创建同包续费订单并通知管理员付款（免密代扣需与渠道另签周期扣款协议，见 api/pay_renew.go 说明）。
 	AutoRenew bool `json:"auto_renew,omitempty"`
+	// ★ 续费宽限期（#74，2026-09-23）：开启自动续费的租户到期后不立刻摘身份，先进入 N 天宽限期
+	//   （N 见 api/subscription_grace.go 的配置优先序），宽限期内身份与额度全部保留。
+	// GraceExpiresAt 宽限期截止时刻（RFC3339，空=未在宽限期）；由订阅扫描写入，
+	//   订阅身份摘除（ExpirePackage）时一并清空。判定有效性以「晚于本期到期时刻」为准，
+	//   上期遗留的旧值天然失效（续费走 MarkOrderPaid 只改订阅两键，不会来清这两个键）。
+	GraceExpiresAt string `json:"grace_expires_at,omitempty"`
+	// NotifiedGrace 「已进入宽限期」站内通知已发送（去重标记，避免每日扫描重复轰炸）。
+	NotifiedGrace bool `json:"notified_grace,omitempty"`
 }
 
 // 租户状态常量

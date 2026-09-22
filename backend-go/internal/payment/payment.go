@@ -30,6 +30,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -39,7 +40,15 @@ import (
 	"time"
 )
 
-// Config 支付网关配置（由环境变量 / system_config 注入）
+// ErrPayChannelDisabled 渠道被管理台显式停用（paych_*_enabled=0）。
+// 为什么单独做哨兵错误而不是只拼文案：api 层要区分「运维可执行的提示」（原样透传给前端，
+// 告诉他去哪恢复）与「渠道/网络故障」（统一收敛成通用文案，不外泄细节，见 #41+#37 脱敏口径）。
+var ErrPayChannelDisabled = errors.New("支付渠道已停用")
+
+// Config 支付网关配置。
+// 注入来源与优先序（★ 2026-09-22 支付渠道凭据可管理台配置）：**环境变量 > 数据库配置**，
+// 合并动作在 api 层完成（internal/api/pay_channels.go 的 payGatewayConfig），
+// payment 包只接收合成后的最终值——本包不 import store，保持「协议实现」与「配置来源」解耦。
 type Config struct {
 	Mode       string // 支付模式：mock / wechat / alipay
 	Wechat     WechatConfig
@@ -59,6 +68,14 @@ type WechatConfig struct {
 	SerialNo   string // 商户 API 证书序列号（请求签名 Authorization 头必填）
 	NotifyURL  string // 异步回调地址（空则由 NotifyBase + /api/pay/notify/wechat 拼出）
 	BaseURL    string // 接口域名（默认 https://api.mch.weixin.qq.com，测试可覆盖）
+	// PlatformCert 微信支付平台证书/公钥（管理台可配，随配置一并注入）。
+	// 现状：回调解密走 APIv3 密钥（AES-256-GCM）即足以证明报文来自微信，本字段暂不参与验签；
+	// 保留它是为了让「平台证书验签」升级不必再动配置读取链路。
+	PlatformCert string
+	// Disabled 管理台把该渠道显式停用（paych_wechat_enabled=0）。
+	// 为什么默认值是 false（未停用）：既有部署只配了环境变量，库里没有任何开关值，
+	// 把「未配置」当「停用」会让升级即断流；只有管理台点了「停用」才拦。
+	Disabled bool
 }
 
 // AlipayConfig 支付宝当面付配置
@@ -69,9 +86,15 @@ type AlipayConfig struct {
 	Gateway    string // 网关地址（默认 https://openapi.alipay.com/gateway.do）
 	SellerID   string // 商户卖家 ID（可选；配置后回调须核对，★ A5）
 	NotifyURL  string // 异步回调地址（空则由 NotifyBase + /api/pay/notify/alipay 拼出）
+	Disabled   bool   // 管理台显式停用该渠道（语义同 WechatConfig.Disabled）
 }
 
 // PayRequest 发起支付的下单请求
+// ★ #75（2026-09-23）多币种报价：本结构刻意不带 Currency 字段——微信/支付宝对本系统
+// 的收款主体永远是人民币（Native v3 报文 amount.currency 恒 "CNY"，见 gateway_sdk.go），
+// 外币只是面向客户的报价展示口径（orders.currency/fx_rate 快照，见 store/currency.go）。
+// 签约外币收单后可在此加入 Currency（仍须白名单 + 只允许渠道实际支持的币种），
+// 在此之前任何"用户传外币就按外币扣"的路径都是伪造资金流，禁止开这个口子。
 type PayRequest struct {
 	OrderNo       string // 商户订单号（RO + 时间戳 + 随机后缀）
 	Amount        int64  // 金额（分）
@@ -172,8 +195,11 @@ type WechatProvider struct {
 //	wechatMissingCreds 列出缺失项并返回错误，上层（handlePayCreate）拒绝出单，
 //	不会出现「配置齐全却拿到废码」的情况。
 func (p *WechatProvider) CreateOrder(req *PayRequest) (*PayResult, error) {
+	if p.cfg != nil && p.cfg.Wechat.Disabled {
+		return nil, fmt.Errorf("%w：微信支付已在管理台停用（配置项 paych_wechat_enabled=0，恢复启用后即可收款）", ErrPayChannelDisabled)
+	}
 	if missing := wechatMissingCreds(p.cfg); len(missing) > 0 {
-		return nil, fmt.Errorf("微信支付资质未配置：%s（补齐后重启服务即生效，见 internal/payment/gateway_sdk.go 文件头）", strings.Join(missing, " / "))
+		return nil, fmt.Errorf("微信支付资质未配置：%s（补齐后即时生效，可经环境变量或管理台「支付渠道凭据」填写，见 internal/payment/gateway_sdk.go 文件头）", strings.Join(missing, " / "))
 	}
 	return wechatNativeCreate(p.cfg, req)
 }
@@ -237,8 +263,11 @@ type AlipayProvider struct {
 //	gateway.do 调用）已在 gateway_sdk.go 补齐；资质缺失时列出缺失项并拒绝出单，
 //	不再返回 alipay:// 占位串。
 func (p *AlipayProvider) CreateOrder(req *PayRequest) (*PayResult, error) {
+	if p.cfg != nil && p.cfg.Alipay.Disabled {
+		return nil, fmt.Errorf("%w：支付宝已在管理台停用（配置项 paych_alipay_enabled=0，恢复启用后即可收款）", ErrPayChannelDisabled)
+	}
 	if missing := alipayMissingCreds(p.cfg); len(missing) > 0 {
-		return nil, fmt.Errorf("支付宝资质未配置：%s（补齐后重启服务即生效，见 internal/payment/gateway_sdk.go 文件头）", strings.Join(missing, " / "))
+		return nil, fmt.Errorf("支付宝资质未配置：%s（补齐后即时生效，可经环境变量或管理台「支付渠道凭据」填写，见 internal/payment/gateway_sdk.go 文件头）", strings.Join(missing, " / "))
 	}
 	return alipayPrecreate(p.cfg, req)
 }

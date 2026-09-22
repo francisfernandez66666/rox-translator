@@ -10,6 +10,12 @@
 // 2026-09-21（★ #41 商业洞三）：充值/订阅下单链路接入优惠券——券码选填、试算走
 //   /api/coupon/preview（与下单同一算法，前端不自算金额），建单成功即清空券码防止重复核销；
 //   自动续费开关（#44）随套餐卡渲染，仅付费包可见。折让只减钱不减积分，口径见 store/coupons.go。
+// 2026-09-22（支付渠道凭据管理台可配）：「运营配置」面板内新增微信/支付宝商户参数区块
+//   （/api/admin/pay/channels[/save]）。敏感项后端加密落库、只以掩码回显，表单原样回提
+//   不会冲掉真密钥；被环境变量接管的字段置灰并标出变量名（取值优先级 env > 库配置）。
+// 2026-09-23（★ #74 订阅续费宽限期）：当前套餐区新增宽限期提示条——订阅已到期但开启
+//   自动续费时（/api/me/package 的 in_grace/grace_expires），显示「已到期 · 宽限期至
+//   {本地日期}」并说明身份/额度保留与逾期移除规则。仅消费后端新出参，计费逻辑未动。
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fmtPoints } from '@/utils/points' // ★ S1 积分展示
@@ -25,6 +31,9 @@ import {
   couponPreview,
   adminPackages, adminPackageCreate, adminPackageUpdate, adminPackageDelete,
   adminPackageSettings, adminPackageSettingsSave, adminQRUpload,
+  adminPayChannels, adminPayChannelsSave, PAY_CH_FIELDS,
+  type PayChField,
+  adminQuoteCurrency, adminQuoteCurrencySave,
   request,
   authHeaders,
   API_BASE,
@@ -32,6 +41,7 @@ import {
   type Any,
 } from '@/api'
 import { Panel, Field, toastResp, num } from './parts'
+import { fmtQuoteMoney, cnyToQuote } from '@/components/quoteFmt' // ★ #75 报价展示口径集中在 quoteFmt
 import { fmtTime } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { useT } from '@/i18n'
@@ -69,6 +79,49 @@ function usdtAddrURL(chain: string, addr: string): string {
   if (chain === 'bep20') return `https://bscscan.com/address/${addr}`
   return ''
 }
+
+// toLocalDate RFC3339 → 本地 YYYY-MM-DD（★ #74 宽限期提示用）。
+// 刻意与 CouponsP.tsx 的 toLocal 同一手法（getFullYear/padStart 取本地时区），
+// 而不是上方 pkgExpiresLabel 的 toISOString().slice(0,10)——那是 UTC 口径，
+// 时区边界附近会把「宽限期截止日」错显一天。非法/空值一律回空串，由调用侧兜 '—'。
+function toLocalDate(rfc?: string): string {
+  if (!rfc) return ''
+  const d = new Date(rfc)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+// 支付渠道凭据字段分组（★ 2026-09-22）：字段键与后端 internal/store/billing_payconfig.go
+// 的 system_config 白名单同名（paych_ 前缀），label 为 i18n 键（12 语种全量覆盖）。
+// area=true 走多行输入：商户私钥/平台证书是 PEM 全文，单行框既放不下也难核对。
+const PAY_CH_GROUPS: Array<{ title: string; switchKey: PayChField; fields: Array<{ key: PayChField; label: string; area?: boolean }> }> = [
+  {
+    title: 'billing.chWechat',
+    switchKey: 'paych_wechat_enabled',
+    fields: [
+      { key: 'paych_wechat_app_id', label: 'billing.paychAppId' },
+      { key: 'paych_wechat_mch_id', label: 'billing.paychMchId' },
+      { key: 'paych_wechat_serial_no', label: 'billing.paychSerialNo' },
+      { key: 'paych_wechat_apiv3_key', label: 'billing.paychApiV3Key' },
+      { key: 'paych_wechat_private_key', label: 'billing.paychPrivateKey', area: true },
+      { key: 'paych_wechat_platform_cert', label: 'billing.paychPlatformCert', area: true },
+      { key: 'paych_wechat_notify_url', label: 'billing.paychNotifyUrl' },
+    ],
+  },
+  {
+    title: 'billing.chAlipay',
+    switchKey: 'paych_alipay_enabled',
+    fields: [
+      { key: 'paych_alipay_app_id', label: 'billing.paychAppId' },
+      { key: 'paych_alipay_private_key', label: 'billing.paychPrivateKey', area: true },
+      { key: 'paych_alipay_public_key', label: 'billing.paychPublicKey', area: true },
+      { key: 'paych_alipay_seller_id', label: 'billing.paychSellerId' },
+      { key: 'paych_alipay_gateway', label: 'billing.paychGateway' },
+      { key: 'paych_alipay_notify_url', label: 'billing.paychNotifyUrl' },
+    ],
+  },
+]
 
 // statusTheme 订单状态对应的标签配色（langcross StatusPill tone）。
 function statusTheme(s: string): StatusTone {
@@ -111,6 +164,23 @@ export function PlansP() {
     usdt_confirmations_trc20: 19, usdt_confirmations_erc20: 12, usdt_confirmations_bep20: 15,
   })
   const usdtOn = usdtCfg.usdt_enabled === '1'
+  // ★ 2026-09-22 支付渠道凭据（微信 Native v3 / 支付宝当面付）：
+  //   payCfg=管理台表单值（敏感项为后端掩码 "********"，原样回提即保持不动），
+  //   payCfgEnv=被环境变量接管的字段（键→变量名）；这些栏位置灰，避免「改了不生效」的坑。
+  const [payCfg, setPayCfg] = useState<Record<string, string>>({})
+  const [payCfgEnv, setPayCfgEnv] = useState<Record<string, string>>({})
+  const [payCfgReady, setPayCfgReady] = useState(false)
+  // ★ 2026-09-23 多币种报价（#75）：超管表单值 = 报价币种 + 倍率表全量（字符串承载，
+  //   空串=该币种不报价；不含 CNY——结算基准恒为 1 不可配）。
+  //   quoteEnv=被环境变量接管的配置项（quote_currency / fx_rates → 变量名），对应栏位置灰；
+  //   quoteReady=GET 成功回显过才允许提交（表单空白直提等于把线上汇率整批清空，同 payCfgReady 的坑）。
+  const [quoteCfg, setQuoteCfg] = useState<{ currency: string; rates: Record<string, string> }>({ currency: 'CNY', rates: {} })
+  const [quoteSupported, setQuoteSupported] = useState<string[]>([])
+  const [quoteEnv, setQuoteEnv] = useState<Record<string, string>>({})
+  const [quoteReady, setQuoteReady] = useState(false)
+  // ★ #75 C 端报价口径：/api/me/package 透出的 quote_currency + fx_rates_snapshot，
+  //   收银台据此把人民币实收金额折算成本币展示值（仅展示，实扣仍是 CNY）。
+  const [myQuote, setMyQuote] = useState<{ code: string; rates: Record<string, number> }>({ code: 'CNY', rates: {} })
   const manualOrdersUsdt = useRef<Record<string, Any>>({})
   const [manualOrders, setManualOrders] = useState<Any[]>([])
   // ★ S4 增长漏斗（超管看板）：注册→激活→耗尽→首购→续费，按渠道聚合
@@ -150,6 +220,8 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
       if (r.usdt_enabled !== undefined) {
         setUsdtCfg((c) => ({ ...c, usdt_enabled: r.usdt_enabled ? '1' : '0', usdt_chains: ((r.usdt_chains as string[]) || []).join(',') || c.usdt_chains }))
       }
+      // ★ #75：收银台报价口径（后端 Resolve 已做「缺倍率回落 CNY」的 fail-closed，前端拿来即用）
+      setMyQuote({ code: String(r.quote_currency || 'CNY'), rates: (r.fx_rates_snapshot as Record<string, number>) || {} })
     }
     const p: Any = await apiPlans()
     if (p.success) setPlanList((p.plans as Any[]) || [])
@@ -207,6 +279,30 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
     if (m.success) {
       setManualOrders((m.orders as Any[]) || [])
       manualOrdersUsdt.current = (m.usdt_info as Record<string, Any>) || {} // ★ USDT 线索映射
+    }
+    // ★ 2026-09-22：支付渠道凭据回显（独立接口，敏感项为掩码）
+    const pc: Any = await adminPayChannels()
+    if (pc.success) {
+      setPayCfg((pc.fields as Record<string, string>) || {})
+      setPayCfgEnv((pc.env_overridden as Record<string, string>) || {})
+      setPayCfgReady(true)
+    } else {
+      setPayCfgReady(false) // 未取到现值就不允许提交：否则表单空值会把线上凭据整批清掉
+    }
+    // ★ 2026-09-23（#75）：报价配置回显（独立接口）。rates 含 CNY:1 基准项，表单不渲染它
+    // （恒为 1 不可配，提交时也整表不带 CNY——后端 SetFxRates 会拒收非 1 的 CNY）。
+    const qc: Any = await adminQuoteCurrency()
+    if (qc.success) {
+      setQuoteSupported((qc.supported_currencies as string[]) || [])
+      setQuoteEnv((qc.env_overridden as Record<string, string>) || {})
+      const rates: Record<string, string> = {}
+      for (const [k, v] of Object.entries((qc.rates as Record<string, number>) || {})) {
+        if (k !== 'CNY') rates[k] = String(v)
+      }
+      setQuoteCfg({ currency: String(qc.currency || 'CNY'), rates })
+      setQuoteReady(true)
+    } else {
+      setQuoteReady(false) // 同 payCfgReady：没回显成功就禁提交，防整表清空
     }
   }, [isSuper])
 
@@ -542,6 +638,63 @@ async function saveUSDTInner() {
     toastResp(r, t('common.save'))
     await loadPkgs()
   }
+    // savePayChannels ★ 2026-09-22：保存支付渠道凭据（微信/支付宝商户参数）。
+    // 只提交「已回显过的字段」：GET 失败时 payCfg 为空，此时提交等于把线上凭据整批清空——
+    // 故先由 Save 按钮的 disabled 兜住，这里再校验一次键集，双保险。
+    // 敏感项原样回提后端掩码即可：后端识别 "****" 后不会写库（真密钥保持不动）。
+async function savePayChannels() {
+    const known = new Set<string>(PAY_CH_FIELDS as readonly string[])
+    const fields: Partial<Record<PayChField, string>> = {}
+    for (const [k, v] of Object.entries(payCfg)) {
+      if (known.has(k)) fields[k as PayChField] = String(v ?? '')
+    }
+    if (!Object.keys(fields).length) { void toastWarn(t('common.saveFail')); return }
+    try {
+      const r: Any = await adminPayChannelsSave(fields)
+      if (toastResp(r, t('common.save'))) await loadPkgs()
+    } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
+  }
+  // payChInput 渲染一个支付渠道凭据输入项（area=true 用多行框承载 PEM 全文）。
+  // 被环境变量接管的字段置灰但仍随保存回传：置灰只是防误改，值不能丢
+  // （丢了就等于「清除该项」，与灰掉的语义相反）。
+  function payChInput(key: PayChField, area: boolean) {
+    const envName = payCfgEnv[key] || ''
+    const value = String(payCfg[key] ?? '')
+    const onCh = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setPayCfg((c) => ({ ...c, [key]: e.target.value }))
+    return (
+      <>
+        {area ? (
+          <textarea className="lc-input" rows={3} value={value} disabled={!!envName} onChange={onCh}
+                    style={{ width: '100%', maxWidth: 520, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }} />
+        ) : (
+          <input className="lc-input" type="text" value={value} disabled={!!envName} onChange={onCh} style={{ width: 360 }} />
+        )}
+        {envName ? <span style={{ fontSize: 12, color: 'var(--adm-amber-tx)' }}>{envName} · {t('billing.paychEnvOn')}</span> : null}
+      </>
+    )
+  }
+
+    // saveQuoteCfg ★ 2026-09-23（#75）：保存报价币种与汇率倍率（整表覆盖）。
+    // 客户端先做两道与服务端一致的门：倍率必须是有限正数（脏输入不进请求，
+    // 免得 NaN 序列化后变 null 让后端报一句看不懂的话）；选了非 CNY 币种
+    // 就必须已填该币种倍率——「配了币种没配汇率」= 客户看到外币价却回落人民币，两头不讨好。
+  async function saveQuoteCfg() {
+    const rates: Record<string, number> = {}
+    for (const [code, raw] of Object.entries(quoteCfg.rates)) {
+      const s = String(raw ?? '').trim()
+      if (!s) continue // 空倍率 = 该币种不报价（覆盖保存语义）
+      const n = Number(s)
+      if (!Number.isFinite(n) || n <= 0) { void toastWarn(t('billing.quoteNeedRate')); return }
+      rates[code] = n
+    }
+    const code = String(quoteCfg.currency || 'CNY')
+    if (code !== 'CNY' && rates[code] === undefined) { void toastWarn(t('billing.quoteNeedRate')); return }
+    try {
+      const r: Any = await adminQuoteCurrencySave({ currency: code, rates })
+      if (toastResp(r, t('common.save'))) await loadPkgs() // 回读生效值：清洗掉的脏键以服务端结果为准
+    } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
+  }
+
     // confirmManual 管理员确认人工到账→积分入双桶
 async function confirmManual(o: Any) {
     const tx = (manualTxInputs[String(o.id)] || '').trim()
@@ -610,6 +763,18 @@ async function confirmManual(o: Any) {
             )
           })()}
           {(() => {
+            // ★ 宽限期提示（#74，2026-09-23）：订阅已到期但开了自动续费时，后端在宽限期内
+            //   保留订阅身份与剩余额度（/api/me/package 的 in_grace/grace_expires）。
+            //   提示条沿用本页 exhaustedHint 的 warn 令牌口径（--adm-warn-*，不写字面色值）。
+            if (!pkg.in_grace) return null
+            return (
+              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', fontSize: 14, color: 'var(--adm-warn-tx)', lineHeight: 1.7 }}>
+                <b>{tpl('plans.graceTitle', { date: toLocalDate(pkg.grace_expires as string) || '—' })}</b>
+                <div style={{ marginTop: 2 }}>{t('plans.graceBody')}</div>
+              </div>
+            )
+          })()}
+          {(() => {
             const total = Number(pkg.points_balance ?? 0)
             const hasPlan = !!(pkg.package_code && pkg.package_code !== 'trial')
             if (total > 0 || hasPlan) return null
@@ -635,7 +800,12 @@ async function confirmManual(o: Any) {
                 {g.items.map((pl) => (
                   <div key={pl.id} style={{ border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 14, display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--adm-card)' }}>
                     <div style={{ fontWeight: 600, fontSize: 14 }}>{pl.name}</div>
-                    <div style={{ fontSize: 22, fontWeight: 700, color:'var(--lc-text-1)'}}>¥{pl.price_money}<small style={{ fontSize: 13, color:'var(--adm-faint)', fontWeight: 400 }}>{pl.ptype ==='paid'? ` /${pl.duration_days}d` :''}</small></div>
+                    {/* ★ #75 多币种报价：非 CNY 报价时大字走后端换算好的 price_display（本币价），
+                        人民币原价降级为辅助行——下单实扣仍是 ¥ 金额（amount_money），这里只改"看"的口径 */}
+                    <div style={{ fontSize: 22, fontWeight: 700, color:'var(--lc-text-1)' }}>{pl.quote_currency && pl.quote_currency !== 'CNY' ? fmtQuoteMoney(Number(pl.price_display ?? pl.price_money), String(pl.quote_currency)) : `¥${pl.price_money}`}<small style={{ fontSize: 13, color:'var(--adm-faint)', fontWeight: 400 }}>{pl.ptype ==='paid'? ` /${pl.duration_days}d` :''}</small></div>
+                    {pl.quote_currency && pl.quote_currency !== 'CNY' && (
+                      <div style={{ fontSize: 12, color: 'var(--adm-faint)' }}>≈ ¥{pl.price_money}</div>
+                    )}
                     {pl.ptype === 'paid' && Number(pl.price_money) > 0 && (
                       <div style={{ fontSize: 13, color: '#c66900' }}>{t('plans.halfOffBadge')}</div>
                     )}
@@ -677,6 +847,12 @@ async function confirmManual(o: Any) {
           )}
           {curOrder && curOrder.status === 'pending' && (
             <p style={{ color: 'var(--lc-text-1)', fontSize: 14, marginTop: 8 }}>{tpl('billing.currentOrder', { orderNo: curOrder.order_no, amount: fmtPoints(curOrder.amount_points), money: Number(curOrder.amount_money ?? 0).toFixed(2) })}</p>
+          )}
+          {/* ★ #75：外币报价租户的收银台辅助行——把人民币应收折算成本币"约价"给客户看。
+              缺该币种倍率时整行不渲染（fail-closed：宁可不显示，也不给一个错的近似值）；
+              文案必须点明"实扣人民币"，避免客户按本币金额付款造成资金差错。 */}
+          {curOrder && curOrder.status === 'pending' && myQuote.code !== 'CNY' && Number(myQuote.rates[myQuote.code] || 0) > 0 && Number(curOrder.amount_money ?? 0) > 0 && (
+            <p style={{ color: 'var(--adm-faint)', fontSize: 13, marginTop: 2 }}>{tpl('billing.quoteApprox', { local: fmtQuoteMoney(cnyToQuote(Number(curOrder.amount_money), Number(myQuote.rates[myQuote.code])), myQuote.code) })}</p>
           )}
         </Panel>
       )}
@@ -835,6 +1011,87 @@ async function confirmManual(o: Any) {
               </div>
             ))}
           </div>
+          {/* ★ 2026-09-22 支付渠道凭据：微信 Native v3 / 支付宝当面付的商户参数改为管理台可配
+              （敏感项加密落库、掩码回显）。挂在「运营配置」面板内而不是一级导航——它和
+              pay_mode / 静态码 / USDT 同属「怎么收款」这一件事，拆开放反而找不到。
+              环境变量接管的栏位置灰并标出变量名：优先级是 env > 库配置（应急/灰度闸门），
+              不写清楚就会出现「保存成功但仍在用旧密钥」这种极难自查的坑。 */}
+          <div style={{ marginTop: 12, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{t('billing.paychSection')}</span>
+              <Button onClick={savePayChannels} disabled={!payCfgReady}>{t('common.save')}</Button>
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '4px 0 8px' }}>{t('billing.paychHint')}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)', width: 170 }}>{t('billing.paychNotifyBase')}</span>
+              {payChInput('paych_notify_base', false)}
+            </div>
+            {PAY_CH_GROUPS.map((g) => (
+              <div key={g.switchKey} style={{ marginTop: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 600, fontSize: 13 }}>{t(g.title)}</span>
+                  <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('billing.paychEnabled')}</span>
+                  <select className="lc-select" value={String(payCfg[g.switchKey] ?? '')} style={{ width: 160 }}
+                          onChange={(e) => setPayCfg((c) => ({ ...c, [g.switchKey]: e.target.value }))}
+                          >
+                    <option value="">{t('billing.paychFollow')}</option>
+                    <option value="1">{t('common.active')}</option>
+                    <option value="0">{t('common.disabled')}</option>
+                  </select>
+                </div>
+                {g.fields.map((f) => (
+                  <div key={f.key} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, color: 'var(--adm-hint)', width: 170 }}>{t(f.label)}</span>
+                    {payChInput(f.key, !!f.area)}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+          {/* ★ 2026-09-23（#75）多币种报价：报价币种 + 汇率倍率（超管口）。只改客户「看到的本币价」，
+              收单事实源恒为人民币（外币实扣需外币收单签约，未签约前禁止扩口径）；
+              下单时币种/倍率会快照进 orders（currency/fx_rate/money_cny），所以汇率改动不影响历史单。
+              整表覆盖保存：清空某币种倍率 = 该币种不再报价（前端换算拿不到倍率即回落 CNY）。
+              ★ 2026-09-22 用户决策关闭封存：整块以「后端白名单含外币币种」为渲染条件——
+              store 层 quoteFeatureOpen=false 时 GET 只回 ['CNY']，本区块自动隐藏；
+              重开（后端翻开关）后界面零改动复原。 */}
+          {quoteSupported.some((c) => c !== 'CNY') && (
+          <div style={{ marginTop: 12, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{t('billing.quoteSection')}</span>
+              <Button onClick={saveQuoteCfg} disabled={!quoteReady}>{t('common.save')}</Button>
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '4px 0 8px' }}>{t('billing.quoteHint')}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)', width: 170 }}>{t('billing.quoteCurrencyLabel')}</span>
+              <select className="lc-select" style={{ width: 160 }} value={quoteCfg.currency}
+                      disabled={!!quoteEnv.quote_currency}
+                      onChange={(e) => setQuoteCfg((c) => ({ ...c, currency: e.target.value }))}
+              >
+                {(quoteSupported.length ? quoteSupported : ['CNY']).map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              {quoteEnv.quote_currency ? <span style={{ fontSize: 12, color: 'var(--adm-amber-tx)' }}>{quoteEnv.quote_currency} · {t('billing.paychEnvOn')}</span> : null}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, color: 'var(--adm-hint)', width: 170 }}>{t('billing.quoteRatesLabel')}</span>
+              <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('billing.quoteCnyNote')}</span>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 4, marginLeft: 170 }}>
+              {quoteSupported.filter((c) => c !== 'CNY').map((c) => (
+                <label key={c} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                  <b>{c}</b>
+                  <input className="lc-input" type="number" step="0.0001" min="0" style={{ width: 110 }}
+                         placeholder={t('billing.quoteRatePh')} disabled={!!quoteEnv.fx_rates}
+                         value={quoteCfg.rates[c] ?? ''}
+                         onChange={(e) => setQuoteCfg((cur) => ({ ...cur, rates: { ...cur.rates, [c]: e.target.value } }))} />
+                </label>
+              ))}
+            </div>
+            {quoteEnv.fx_rates ? (
+              <div style={{ fontSize: 12, color: 'var(--adm-amber-tx)', marginTop: 6 }}>{quoteEnv.fx_rates} · {t('billing.paychEnvOn')}</div>
+            ) : null}
+          </div>
+          )}
         </Panel>
       )}
 

@@ -19,7 +19,9 @@ interface State {
   error: Error | null
 }
 
-/** ErrorBoundary 错误边界：把渲染异常转成可见的「页面出错了」卡片 + 重试按钮 */
+/** ErrorBoundary 错误边界：把渲染异常转成可见的「页面出错了」卡片 + 重试按钮
+ *  必须是 class 组件：React 只提供 componentDidCatch / getDerivedStateFromError 两个
+ *  类生命周期钩子，函数组件没有等价物（要函数式只能引第三方 react-error-boundary）。 */
 export default class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props)
@@ -51,6 +53,10 @@ export default class ErrorBoundary extends Component<Props, State> {
       return (
         // 兜底卡片占满整个视口：崩溃时页面布局已不可信，全屏居中比「嵌在原位的一块红框」更容易被看到
         // 配色走 --lc-* 纯黑单色令牌；崩溃页在 i18n 初始化前也可能渲染，故保留硬编码中文兜底文案
+        // ★ 每个 var() 都带字面兜底值（如 var(--lc-text-1, #E7E9EA)）：本页可能就是令牌层
+        //   （theme.css / 组件库 CSS）随模块一起崩掉的那一次，变量取不到时也不能退成浏览器默认的黑字。
+        //   兜底值同时不受 readability.test.ts 的「#68 描边禁写死暗值」闸门影响——
+        //   该锁显式跳过含 var( 的声明，只拦真正的写死字面值。
         <div style={{
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
           minHeight: '100vh', gap: 16, fontFamily: 'system-ui, sans-serif', padding: 24, textAlign: 'center',
@@ -62,6 +68,8 @@ export default class ErrorBoundary extends Component<Props, State> {
             {this.state.error?.message || '未知错误，请尝试刷新页面'}
           </p>
           <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+            {/* 一主一次：主按钮反白填充（描边跟着填充走白，故取 --lc-text-1 而不是描边令牌，
+                否则边比底暗，按钮会「缺一个角」）；次按钮透明底 + 描边令牌。 */}
             <button
               onClick={this.handleRetry}
               style={{
@@ -75,7 +83,7 @@ export default class ErrorBoundary extends Component<Props, State> {
               // 硬跳转（不是 navigate）：整页重载才能顺带丢掉可能已经脏掉的 store / 模块级单例状态
               onClick={() => { window.location.href = '/' }}
               style={{
-                padding: '8px 24px', borderRadius: 6, border: '1.2px solid var(--lc-border-card, #3A404C)',
+                padding: '8px 24px', borderRadius: 6, border: '1.2px solid var(--lc-border-card, #6A7280)',
                 background: 'transparent', color: 'var(--lc-text-1, #E7E9EA)', fontSize: 14, cursor: 'pointer',
               }}
             >

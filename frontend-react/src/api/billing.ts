@@ -236,3 +236,54 @@ export async function adminPackageSettingsSave(data: {
 }): Promise<AdminResp> {
   return request('/api/admin/packages/settings/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
+
+// ============================================================================
+// ★ 2026-09-22 支付渠道凭据管理台可配（微信 Native v3 / 支付宝当面付）
+// 字段键名与后端 internal/store/billing_payconfig.go 的白名单一一对应（paych_ 前缀）。
+// 敏感项（APIv3 密钥、商户/应用私钥）回显恒为掩码 "********"：表单原样回提即可保留库内真值，
+// 后端识别掩码后不会写库（见 SetPayConfigField）——所以前端不需要「留空即不改」的特殊约定。
+// ============================================================================
+
+/** 支付渠道配置字段名（与 system_config 键同名，集中声明防手写串键） */
+export const PAY_CH_FIELDS = [
+  'paych_notify_base',
+  'paych_wechat_enabled', 'paych_wechat_app_id', 'paych_wechat_mch_id', 'paych_wechat_serial_no',
+  'paych_wechat_apiv3_key', 'paych_wechat_private_key', 'paych_wechat_platform_cert', 'paych_wechat_notify_url',
+  'paych_alipay_enabled', 'paych_alipay_app_id', 'paych_alipay_private_key', 'paych_alipay_public_key',
+  'paych_alipay_seller_id', 'paych_alipay_gateway', 'paych_alipay_notify_url',
+] as const
+// PayChField：支付渠道凭据配置键的联合类型（#74），与 PAY_CH_FIELDS 逐键同源，防手写漂移
+export type PayChField = (typeof PAY_CH_FIELDS)[number]
+
+/** 管理台：读取支付渠道凭据（敏感项掩码回显；env_overridden=配置键→接管该字段的环境变量名） */
+export async function adminPayChannels(): Promise<AdminResp & { fields?: Record<string, string>; env_overridden?: Record<string, string> }> {
+  return request('/api/admin/pay/channels', { headers: authHeaders() })
+}
+
+/** 管理台：保存支付渠道凭据（值留空=清除该项；掩码值=保持不动） */
+export async function adminPayChannelsSave(fields: Partial<Record<PayChField, string>>): Promise<AdminResp> {
+  return request('/api/admin/pay/channels/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ fields }) })
+}
+
+// ============================================================================
+// ★ 2026-09-23 多币种报价（#75）：报价币种/汇率倍率的超管配置口
+// （/api/admin/config/quote-currency）。口径红线：只做「展示报价」——
+// 微信/支付宝收单恒为人民币，外币价只是客户在定价页/收银台看到的本币口径，
+// 下单时后端把币种+倍率快照进 orders.currency/fx_rate/money_cny 留审计，不参与资金判定。
+// rates 为整体覆盖保存（与后端 SetFxRates 一致：空倍率=该币种不报价）。
+// ============================================================================
+
+/** 管理台：回显生效报价配置（币种、倍率表、白名单币种、env 接管标注） */
+export async function adminQuoteCurrency(): Promise<AdminResp & {
+  currency?: string
+  rates?: Record<string, number>
+  supported_currencies?: string[]
+  env_overridden?: Record<string, string>
+}> {
+  return request('/api/admin/config/quote-currency', { headers: authHeaders() })
+}
+
+/** 管理台：保存报价币种与汇率倍率（currency 空串=不表态；rates 不含 CNY——基准恒为 1） */
+export async function adminQuoteCurrencySave(data: { currency: string; rates: Record<string, number> }): Promise<AdminResp & { currency?: string; rates?: Record<string, number> }> {
+  return request('/api/admin/config/quote-currency', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+}

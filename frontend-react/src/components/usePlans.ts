@@ -15,6 +15,10 @@ export interface PlanLite {
   points: number          // 积分（S1 对外唯一额度口径，前端不感知 token 裸值）
   price_money: number     // 售价，单位＝元（后端 packages.price_money 同为元，渲染时不做分→元换算）
   duration_days: number   // 有效期天数；后端发放时 0＝不限期（不写 PackageExpires），措辞由调用方定
+  // ★ #75（2026-09-23）多币种报价：后端 /api/plans 每行附带换算好的本币展示价。
+  //   老接口无这两字段（缓存/灰度期），全部按可选处理并回落 ¥price_money 原口径。
+  price_display?: number    // 报价币种金额（2 位；CNY 报价时等于 price_money）
+  quote_currency?: string   // 本行 price_display 的币种（顶层 quote_currency 的同值冗余，渲染免查表）
 }
 
 /** TrialLite 新用户注册赠送额度（/api/plans 的 free_trial_points / free_trial_days） */

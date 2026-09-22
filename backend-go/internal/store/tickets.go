@@ -14,6 +14,9 @@ import (
 )
 
 // Ticket 工单
+// 时间字段（created_at/updated_at/result_expires_at 等）一律存 RFC3339 文本而非原生日期类型：
+// 同一份 SQL 要在 SQLite（本地/CI）与 PostgreSQL（生产）两侧跑，文本列可免去方言日期函数与
+// 驱动时区差异；全链路读写都用 time.Now().Format(time.RFC3339) 同一格式，比较口径一致。
 type Ticket struct {
 	ID             int64  `json:"id"`                         // 工单主键 ID
 	TenantID       int64  `json:"tenant_id"`                  // 所属租户 ID
@@ -75,6 +78,9 @@ const (
 // 参数：tid=租户 ID，userID=创建者 ID，title=标题，sourceText=源文本，
 // filePath=文件路径，targetLangs=目标语言列表（逗号分隔）。
 // 返回：新工单对象。
+// 工单号形态 T+14 位秒级时间戳+3 位随机后缀（randSuffix 走 crypto/rand）：同一秒内靠随机后缀区分。
+// 建表时 ticket_no 上没有唯一约束，所以它是给人看、对外引用的编号，不承担并发唯一性保证。
+// 初始状态一律 draft（是否入队由调用方决定），主键由 db.InsertID 双方言回填。
 func (s *Store) CreateTicket(tid, userID int64, title, sourceText, filePath, targetLangs string) (*Ticket, error) {
 	now := time.Now()
 	t := &Ticket{
@@ -101,6 +107,10 @@ func (s *Store) CreateTicket(tid, userID int64, title, sourceText, filePath, tar
 
 // GetTicket 按 id 查询工单（租户隔离校验）。
 // 参数：id=工单主键 ID，tid=租户 ID；返回工单对象。
+// SELECT 里逐个 COALESCE 是给「补列之前的老行」兜底：后加的列在旧数据上是 NULL，
+// 直接 Scan 进 string/int 会报类型错误。COALESCE 是 SQLite 与 PG 共同支持的写法，
+// 默认值与业务默认一致（delivery 缺省 restore、模式缺省即 pro、质检计数缺省 0）。
+// WHERE 带 tenant_id：跨租户取单在这里就等价于「不存在」，不给调用方区分二者的机会。
 func (s *Store) GetTicket(id, tid int64) (*Ticket, error) {
 	var t Ticket
 	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, created_at, updated_at FROM tickets WHERE id=? AND tenant_id=?", id, tid).
@@ -112,24 +122,31 @@ func (s *Store) GetTicket(id, tid int64) (*Ticket, error) {
 }
 
 // GetTicketGlobal 按 ID 查询工单（不带租户过滤，worker 异步上下文用）。
+// 只允许在「已凭 ID 定位、且要做跨租户运维动作」的后台路径使用（入队/认领/收尾）；
+// 任何面向用户的接口都必须走带 tenant_id 的 GetTicket，否则会跨租户读单。
 func (s *Store) GetTicketGlobal(id int64) (*Ticket, error) {
 	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, created_at, updated_at FROM tickets WHERE id=?", id)
 	return scanTicketFull(row)
 }
 
 // GetTicketByNo 按工单号查询工单（对应用户粘贴「工单号 T20260902...」而非数字 ID 的场景）。
+// 同样不带租户过滤（只按 ticket_no 定位，查询时无法预知归属），
+// 调用方拿到结果后必须自行比对 tenant_id 再对外返回。
 func (s *Store) GetTicketByNo(no string) (*Ticket, error) {
 	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, created_at, updated_at FROM tickets WHERE ticket_no=?", no)
 	return scanTicketFull(row)
 }
 
 // SetTicketResultPath 写入结果文件路径。
+// WHERE 只有 id、不带 tenant_id：本方法按主键定位（worker 侧已用 GetTicketGlobal 拿到归属），
+// 新增面向 HTTP 的调用点请改用带租户条件的写法，别靠调用方自觉。
 func (s *Store) SetTicketResultPath(id int64, path string) error {
 	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tickets SET result_path=?, updated_at=? WHERE id=?", path, time.Now().Format(time.RFC3339), id)
 	return err
 }
 
 // SetTicketTextResultPath 写入纯文案 .md 产物路径（还原模式兜底附加物 / 纯文案模式主产物）。
+// 与 SetTicketResultPath 的差别：本方法不刷 updated_at（updated_at 同时是卡死巡检的陈旧判据）。
 func (s *Store) SetTicketTextResultPath(id int64, path string) error {
 	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tickets SET text_result_path=? WHERE id=?", path, id)
 	return err
@@ -138,6 +155,9 @@ func (s *Store) SetTicketTextResultPath(id int64, path string) error {
 // ListTickets 工单列表（租户隔离；onlyMine=true 时只返回当前用户创建的）。
 // 参数：tid=租户 ID，userID=用户 ID，onlyMine=是否仅我的工单。
 // 返回：工单列表（最多 200 条，按 ID 倒序）。
+// 固定 200 条上限：工单列表页无分页，靠倒序保证「最近的可操作单」一定在结果里，
+// 同时给租户隔离查询一个天然的响应体上界。
+// 单行 Scan 失败只跳过该行（整表不因一行坏数据而查询失败），但错误也不上报。
 func (s *Store) ListTickets(tid, userID int64, onlyMine bool) ([]*Ticket, error) {
 	q := "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, created_at, updated_at FROM tickets WHERE tenant_id=?"
 	args := []interface{}{tid}
@@ -183,6 +203,10 @@ func (s *Store) ListPendingApproval(tid int64) ([]*Ticket, error) {
 
 // UpdateTicket 更新工单状态与字段。
 // 参数：t=待更新工单对象（以 ID+TenantID 定位）；返回错误。
+// ⚠️ 这是「整对象覆盖写」：SET 里列出的每个字段都会被 t 的值写回，
+// 调用方必须先 Get 到完整对象再改需要变的字段，否则 mode/delivery/final_result 等
+// 会被零值清空。源文本与文件路径不出现在 SET 列表中（本方法不写这两列）。
+// 状态推进另有原子口径（ClaimTicketForRun / FinishTicket），需要 CAS 语义时不要用本方法。
 func (s *Store) UpdateTicket(t *Ticket) error {
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tickets SET title=?, status=?, target_langs=?, approver_id=?, reviewer_id=?, reject_reason=?, final_result=?, mode=?, tokens_billed=?, max_length=?, delivery=?, updated_at=? WHERE id=? AND tenant_id=?",
@@ -208,11 +232,16 @@ func (s *Store) ClaimTicketForRun(id int64) (int64, error) {
 	return n, nil
 }
 
+// SetTicketState 写入/更新某工单某步骤的最新轨迹（每步骤只留一行，version 每次自增）。
 // ★ 整改：SetTicketState 改为同步骤 UPSERT（每步骤仅保留一行最新轨迹），
 // 避免细粒度进度（每批初翻/校对）反复 INSERT 撑爆 ticket_state。
 // 同时结算每步执行耗时：首次 running 记录 started_at；running→终态时计算 duration_ms。
+// 注意：本方法是「先 SELECT 再 INSERT/UPDATE」两步，未包事务——同一步骤被并发写时
+// 可能丢一次更新或重复自增 version。轨迹只用于前端流程展示，不做资金/状态判定依据，
+// 因此按可容忍丢失处理；需要强一致的收尾写入请用 FinishTicket。
 func (s *Store) SetTicketState(ticketID int64, step, status, payload string) error {
 	now := time.Now().Format(time.RFC3339)
+	// 终态集合含 warning：降级交付（版式还原失败改出 .md）同样要结算耗时、不再被当作进行中
 	isTerminal := status == "success" || status == "failed" || status == "warning" || status == "skipped"
 
 	var id int64
@@ -250,6 +279,8 @@ func (s *Store) SetTicketState(ticketID int64, step, status, payload string) err
 }
 
 // TicketStateTimingMigrate 为 ticket_state 增加 started_at / duration_ms 列（幂等，列已存在则忽略）。
+// 历史写法：靠「列已存在时 ALTER 直接报错、错误被丢弃」达成幂等。新增列请不要再照此写，
+// 一律走 db.EnsureColumns 的双方言幂等补列（见 TicketQualityMigrate）。
 func (s *Store) TicketStateTimingMigrate() {
 	db.Exec(s.db, db.CurrentDialect(), "ALTER TABLE ticket_state ADD COLUMN started_at TEXT")
 	db.Exec(s.db, db.CurrentDialect(), "ALTER TABLE ticket_state ADD COLUMN duration_ms INTEGER")
@@ -290,6 +321,8 @@ func (s *Store) SetTicketQASummary(id int64, errors, warnings int) error {
 
 // TicketStates 查询工单状态轨迹（按版本升序）。
 // 参数：ticketID=工单 ID；返回该工单全部步骤轨迹。
+// 按 version 升序返回，前端据此画流程时间线；本查询刻意不取 started_at/duration_ms，
+// 返回结构的这两个字段保持零值（耗时只在需要时另取，列表路径不消费）。
 func (s *Store) TicketStates(ticketID int64) ([]*TicketState, error) {
 	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT id, ticket_id, step, status, payload, version, updated_at FROM ticket_state WHERE ticket_id=? ORDER BY version", ticketID)
 	if err != nil {
@@ -320,6 +353,13 @@ func scanTicketFull(row *sql.Row) (*Ticket, error) {
 // DeleteTicketWithFiles 删除工单及其关联数据（文件记录/状态轨迹/产物文件）。
 // 物理删除磁盘上的产物文件和上传文件（如果存在）。
 // 参数：id=工单 ID，tid=租户 ID。返回错误。
+// 实现要点：
+//   - 先按 (id, tid) 取单：跨租户删除在这里直接返回错误，磁盘上一个字节都不动；
+//   - 磁盘路径必须在删 DB 行**之前**收集完（行删掉就再也查不到 result_path 等了）；
+//   - DB 按 ticket_files → ticket_state → tickets 逐条删且不包事务：任一步失败即返回，
+//     再调一次本方法可继续收敛（已删的部分重删无副作用）；
+//   - 文件删除放到 goroutine：一次工单可能挂多个大产物，同步删会拖住 HTTP 响应；
+//     os.Remove 的失败在此不回报（目录树已被 DB 侧解引用，最多留些孤儿文件在盘上）。
 func (s *Store) DeleteTicketWithFiles(id, tid int64) error {
 	t, err := s.GetTicket(id, tid)
 	if err != nil {
@@ -362,6 +402,7 @@ func (s *Store) DeleteTicketWithFiles(id, tid int64) error {
 	go func() {
 		for _, p := range diskPaths {
 			os.Remove(p)
+			RemoveEmptyArtifactDir(p) // ★ #65：产物子目录已空则回收（非空目录 os.Remove 必失败，无副作用）
 		}
 	}()
 	return nil
@@ -374,6 +415,11 @@ func (s *Store) StampTicketAPIUser(id, userID int64) error {
 }
 
 // CancelTicket 用户取消：仅排队中/翻译中可置为 cancelled（幂等安全）。
+// 状态条件直接写进 UPDATE，靠数据库完成「检查 + 修改」的原子化：
+// 并发双取消时只有一个能拿到受影响行 1，另一个得 0 并收到「不在可取消状态」的业务错误，
+// 不会出现后到者把已取消单再改一遍（进而重复投通知）。
+// completed/approved 等终态不在允许集合内：结果已交付的单不允许靠取消抹掉计费记录。
+// ⚠️ 只按 id 定位、不带 tenant_id：调用方必须先用自己的租户查询确认这张单属于当前租户。
 func (s *Store) CancelTicket(id int64) error {
 	res, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tickets SET status='cancelled', updated_at=? WHERE id=? AND status IN ('queued','in_progress')",
@@ -403,6 +449,10 @@ func (s *Store) TouchTicket(id int64) error {
 // 「running（租约未过期）」状态时才允许重排——running 即代表本进程仍有活跃 goroutine
 // 在处理它；否则会双副本并发跑同一工单（双扣费/双通知）。租约过期的 running 由
 // direct 队列 Reserve 自行回收，无需此处越权释放。
+//
+// stale=0 的语义是「cut 取当前时刻」，即把所有仍是 in_progress 的工单一律重排——
+// 这是 service.BootResume 的用法（上一进程必然已死，不存在误判活任务的风险），
+// 周期巡检必须传真实陈旧阈值（20 分钟），否则会把正在跑的任务全打断成双跑。
 func (s *Store) RequeueStalledTickets(stale time.Duration) (int64, error) {
 	cut := time.Now().Add(-stale).Format(time.RFC3339)
 	// ★ 2026-09-12 PG 方言修复：payload 取 ticket_id 的 JSON 表达式按方言生成

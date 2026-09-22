@@ -11,6 +11,7 @@ import { useT } from '@/i18n'
 import { useBranding } from '@/branding'
 import { useAuth } from '@/stores/auth'
 import { usePlans } from './usePlans'
+import { fmtQuoteMoney } from './quoteFmt'
 import type { PlanLite } from './usePlans'
 
 // FAQ：固定三条（设计图 05）
@@ -86,8 +87,17 @@ export default function PricingPage() {
               <div className="lc-prc-name">{p.name}</div>
               {/* 对外口径统一积分（points 是积分面值，token 裸值不外露），千分位只为可读 */}
               <div className="lc-prc-meta">{p.points.toLocaleString()} {t('land.pointsUnit')} · {typeLabel(p.ptype)}</div>
-              {/* 金额原样渲染后端 price_money（单位=元）：折扣、涨价一律在后台改包，前端不做二次换算 */}
-              <div className="lc-prc-price">¥{p.price_money}</div>
+              {/* 金额渲染后端返回值、前端不做二次换算（¥price_money 是人民币事实源）；
+                  ★ #75 多币种报价：quote_currency 非 CNY 时大字改走后端换算好的 price_display（本币展示价），
+                  人民币原价降级为「≈ ¥」辅助行——实扣仍是人民币，这里只换"看"的口径 */}
+              {p.quote_currency && p.quote_currency !== 'CNY' ? (
+                <>
+                  <div className="lc-prc-price">{fmtQuoteMoney(Number(p.price_display ?? p.price_money), p.quote_currency)}</div>
+                  <div className="lc-prc-cny">≈ ¥{p.price_money}</div>
+                </>
+              ) : (
+                <div className="lc-prc-price">¥{p.price_money}</div>
+              )}
               <div className="lc-prc-period">{periodText(p)}</div>
               {/* 卡底徽标保持设计稿视觉口径（§3.1-05：10 Medium 白底黑字），但实装为动作入口：
                   未登录→注册领体验额度；已登录→管理后台（订阅/购买都在那里结算）。不再是只能看的死徽标 */}
@@ -136,6 +146,8 @@ const PRICING_CSS = `
 .lc-prc-name{font-size:14px;font-weight:600}
 .lc-prc-meta{font-size:11px;color:var(--lc-text-2)}
 .lc-prc-price{font-size:22px;font-weight:700;line-height:1.15;font-family:var(--lc-font-latin)}
+/* ★ #75 外币报价时的人民币原价辅助行：明显弱于主价，客户视线在本币价上 */
+.lc-prc-cny{font-size:12px;color:var(--lc-text-5);line-height:1.4}
 .lc-prc-period{font-size:11px;color:var(--lc-text-5)}
 .lc-prc-badge{align-self:flex-start;margin-top:6px;padding:3px 8px;font-size:10px;font-weight:500;line-height:1.4;color:#000;background:var(--lc-text-1);border-radius:var(--lc-r-bar);transition:filter var(--lc-mo-release) var(--lc-mo-out)}
 /* 徽标即入口：hover 提亮一档给"可按"反馈，视觉重量不变 */

@@ -11,6 +11,8 @@
 #   ADMIN_USER  超管用户名（默认 admin）
 #   ADMIN_PASS  超管密码（默认 Admin@1234）
 # ============================================================================
+# 只 set -u、刻意不 set -e：本套件是「跑完全部断言再汇总」，任何一步中断都会吞掉后面的覆盖面，
+# 失败以 FAIL 计数体现在 PASS=/FAIL= 汇总行里，交给 run_uat.sh 判总闸。
 set -u
 B="${BASE_URL:-http://127.0.0.1:8899}"
 U="${UAT_DB:-/tmp/uat/dev.db}"
@@ -18,15 +20,30 @@ ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-Admin@1234}"
 J='Content-Type: application/json'
 source "$(dirname "$0")/dblib.sh"   # 双方言断言层（sqlite/PG）
+# 落库类断言一律走 dbq/dbjson，禁止在本文件直写 sqlite3 / psql：
+# 直写等于把 PG 方言永久排除在 UAT 之外（is_personal bool、JSON1 缺失这类专属缺陷会全部漏检）。
+# 计数只累加不中断（见上）；报告每行一个 PASS|名称 / FAIL|名称|期望，供 run_uat.sh 抓取汇总。
+# 惯例：纯准备类调用（建包、存策略、造受邀号）一律 >/dev/null 且不开断言名额——
+# 它们是否正确由后面的行为断言反证，准备步骤失败时行为断言必红，不必为其重复计一条。
 PASS=0; FAIL=0; START=$(date +%s)
 
+# ck <名称> <期望正则> <实际文本> — 套件唯一的断言入口，命中即 PASS。
+# ★ 必须 grep -qE（ERE），禁止写成 BRE 的 'a\|b'：`\|` 是 GNU 扩展，BSD grep 与精简容器里
+#   自带的 grep 会把它当字面量、静默返回 0 命中——于是「或」类期望值永远判失败（或反过来
+#   恒判通过），闸门失效却不报错，是全仓最难发现的一类 bug（见 AGENTS.md 第七节）。
+# 第三参截断到 220 字符再打印：整页 HTML / zip 字节进报告会刷屏，够定位即可。
 ck(){ if echo "$3" | grep -qE "$2"; then PASS=$((PASS+1)); echo "PASS|$1"; else FAIL=$((FAIL+1)); echo "FAIL|$1|want[$2]|got[${3:0:220}]"; fi; }
+# reg — 走公开注册接口建号（带 agreed:true，协议是硬闸；extra 供追加 ref/job_role 等字段）
+# tok — 登录取 token；整条套件只认这一个取 token 的口径
+# pv  — 从 stdin 的 JSON 里按 python 表达式取值（后端返回形态多包一层，比 grep 提字段可靠）
 reg(){ local extra="${6:-}"; curl -s $B/api/auth/register -H "$J" -d "{\"username\":\"$1\",\"password\":\"$2\",\"code\":\"$3\",\"name\":\"$4\",\"email\":\"$5\",\"agreed\":true${extra:+,$extra}}"; }
 tok(){ curl -s $B/api/auth/login -H "$J" -d "{\"username\":\"$1\",\"password\":\"$2\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))'; }
 pv(){ python3 -c "import sys,json;d=json.load(sys.stdin);print(d$1)"; }
 
 echo "=== A 阶段：公开接口 / 认证 / 计费 / 翻译 / 交易 ==="
 # ---------- A1 健康与公开接口 ----------
+# 这一组全部匿名可访：它们是注册页/落地页的数据源，一旦需要登录就把首屏整条链路打死，
+# 所以放在套件最前面当「服务起没起、公开面漏没漏鉴权」的地基断言。
 ck A1-status '"ok":true' "$(curl -s $B/status)"
 ck A1-plans '"success":true' "$(curl -s $B/api/plans)"
 # ---------- A1q ★ #42 探针拆分（P2 技术债：存活/就绪语义必须分开）----------
@@ -35,6 +52,8 @@ ck A1-plans '"success":true' "$(curl -s $B/api/plans)"
 ck A1q-livez '"status":"ok"' "$(curl -s $B/livez)"
 ck A1q-readyz '"status":"ready"' "$(curl -s $B/readyz)"
 # 就绪判定只回粗粒度状态词：探针匿名可达，DB 报错原文（主机/端口/文件路径）不得外泄
+# 下面几处「反向断言」都写成 if grep … 而不用 ck：ck 的语义是「命中即绿」，
+# 反锁要的正是「命中即红」，只能手工累加 PASS/FAIL（交替一律 grep -E，理由见文件头 ck 注释）。
 READYZ_BODY=$(curl -s $B/readyz)
 if echo "$READYZ_BODY" | grep -qE 'postgres://|127\.0\.0\.1:5432|no such file|dial tcp'; then
   FAIL=$((FAIL+1)); echo "FAIL|A1q-readyz-no-topology-leak|readyz 出参含内网拓扑原文"
@@ -67,9 +86,13 @@ ck A1b-lead-honeypot-nodb '^0$' "$(dbq "SELECT COUNT(*) FROM feedbacks WHERE tar
 ck A1b-lead-ratelimit '提交过于频繁' "$(curl -s $B/api/lead -H "$J" -d '{"company":"UATLead公司2","email":"x2@y.co"}')"
 
 # ---------- A2 管理员登录 ----------
+# 长度 >30 而不是解析 JWT：套件后面所有超管接口都要这个头，只要拿到「像样的 token」即可，
+# 去 jwt 库验签会把断言绑死在签名算法上，收益不抵维护成本。
 AT=$(tok $ADMIN_USER $ADMIN_PASS)
 [ ${#AT} -gt 30 ] && { PASS=$((PASS+1)); echo "PASS|A2-admin-login(${#AT}b)"; } || { FAIL=$((FAIL+1)); echo "FAIL|A2-admin-login|AT=[$AT]"; }
 AH="Authorization: Bearer $AT"
+# /me 要能看出管理员身份：前端后台入口（roleLevelSafe(user.role)）与 e2e 的超管用例都按这个
+# 字段判权，登录返回里掉了 role 就等于整条后台链路对前端不可达。
 ck A2-admin-me 'admin|super' "$(curl -s $B/api/auth/me -H "$AH")"
 
 # ---------- A3 注册 / 重名 / 错误密码 / 协议 ----------
@@ -77,6 +100,10 @@ ck A3-register-A '"success":true' "$(reg uatuser_a uatpass123 uatcorpA UAT公司
 T1=$(tok uatuser_a uatpass123); H1="Authorization: Bearer $T1"
 ck A3-register-B '"success":true' "$(reg uatuser_b uatpass123 uatcorpB UAT公司B uat_b@test.com)"
 T2=$(tok uatuser_b uatpass123); H2="Authorization: Bearer $T2"
+# 唯一性分两条测：注册接口这条带重复的「用户名 + 租户码」，期望词把两种拦截形态都兜住
+# （租户创建失败 / UNIQUE / 已存在）；只想单看「用户名占用」这一条约束，必须绕开注册流程
+# 从管理端直插同一个租户（A3-dup-username），否则结果由先到那道校验决定、指不到具体列。
+# AID 现查自库：租户 id 取决于建号顺序，写死会在种子数据变化后打到错的租户上（那就成了插新号）。
 ck A3-dup-tenantcode '租户创建失败|UNIQUE|已存在' "$(reg uatuser_a uatpass123 uatcorpA 重复 uat_dup@test.com)"
 AID=$(dbq "SELECT id FROM users WHERE username='uatuser_a' LIMIT 1" | tr -d '[:space:]')
 DUP_PAYLOAD="{\"username\":\"uatuser_a\",\"password\":\"uatpass123\",\"display_name\":\"重复\",\"role\":\"user\",\"tenant_id\":$AID}"
@@ -109,10 +136,15 @@ ck A4-balance-shape 'points_available' "$BAL1"
 echo "INFO|balance-userA|$BAL1"
 
 # ---------- A5 模型路由指向 mock LLM ----------
+# 本条是整套件的前置：不指向 mock_llm，后面所有翻译/扣费断言都会打到真实供应商。
+# embed_* 一并指过去：知识库检索类接口在没有嵌入端点时是另一条失败路径，容易误判成产品缺陷。
 MS=$(curl -s $B/api/admin/models/save -H "$AH" -H "$J" -d "{\"api_base\":\"${MOCK_LLM_URL:-http://127.0.0.1:8901}/v1\",\"api_key\":\"sk-mock-uat\",\"model\":\"mock-mt\",\"embed_api_base\":\"${MOCK_LLM_URL:-http://127.0.0.1:8901}/v1\",\"embed_api_key\":\"sk-mock-embed\"}")
 ck A5-models-save '"success":true' "$MS"
 ck A5-models-set '"set":true' "$(curl -s $B/api/admin/models -H "$AH")"
 MG=$(curl -s $B/api/admin/models -H "$AH")
+# ★ 密钥掩码回显（工程约定第三节）：管理台读模型配置时 api_key 必须以 **** 形式回显，
+#   真密钥出现在这里就是「GET 接口泄明文」级缺陷，比翻译挂掉更严重，所以单独开一条锁。
+#   期望值写成 {4} 而不是完整掩码串：掩码长度随实现变（前 4 后 4 等），只有「含 ****」不变。
 echo "$MG" | grep -qE '\*\*\*\*' && { PASS=$((PASS+1)); echo "PASS|A5-mask"; } || { FAIL=$((FAIL+1)); echo "FAIL|A5-mask|$MG"; }
 
 # ---------- A6 估价 ----------
@@ -156,6 +188,9 @@ USED2=$(curl -s $B/api/me/package -H "$H1" | pv '.get("points_used_today", -1)')
   || { FAIL=$((FAIL+1)); echo "FAIL|A7s-stream-metering-sync(今日已耗 $USED1->$USED2，done 帧后计量未即时可见)"; }
 
 # ---------- A8 余额不足硬闸（清零 userB 双台账，billing_enforced=1） ----------
+# 两张台账都要清零：容量判定走的是「quota_grants 未过期余额 + balance_accounts 合计」，
+# 只清一张仍会被另一张放过，硬闸就测不到了（这条正是历史上最常见的假绿成因）。
+# 用 userB 而不是 userA：A 还要留给后面的扣费/支付断言，这里必须找个「陪葬」租户。
 BID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_b'")
 dbq "UPDATE balance_accounts SET balance=0 WHERE tenant_id=$BID; UPDATE quota_grants SET \"left\"=0 WHERE tenant_id=$BID;"
 CH2=$(curl -s $B/api/chat -H "$H2" -H "$J" --max-time 30 -d '{"message":"这是一条余额不足应当被拦截的翻译请求文本内容","options":{"target_langs":["en"]}}')
@@ -163,6 +198,8 @@ ck A8-insufficient-block '耗尽|不足|insufficient' "$CH2"
 echo "INFO|A8-reply|${CH2:0:200}"
 
 # ---------- A9 支付链路：下单→模拟支付→幂等→发票 ----------
+# 顺序即业务不变量：下单拿 id → 模拟回调 → 查单 → 再拿这个 id 开票，四步共用同一个 OID。
+# 金额取 3333 这种非整档值：整千数额在按档/取整实现里容易「巧合对得上」，掩盖换算偏差。
 ORD=$(curl -s $B/api/pay/create -H "$H1" -H "$J" -d '{"points":3333,"channel":"mock"}')
 ck A9-pay-create '"success":true' "$ORD"
 OID=$(echo "$ORD" | pv '.get("order_id") or d.get("order",{}).get("id") or 0')
@@ -170,6 +207,8 @@ echo "INFO|order-id|$OID"
 SIM_PAYLOAD="{\"order_id\":$OID}"
 ck A9-pay-simulate '"success":true' "$(curl -s $B/api/pay/simulate -H "$H1" -H "$J" -d "$SIM_PAYLOAD")"
 ck A9-pay-status-paid 'paid|success' "$(curl -s "$B/api/pay/status?order_id=$OID" -H "$H1")"
+# 幂等锁：同一订单第二次 simulate 后，余额必须与第一次**完全相等**（不是「不再增加」）。
+# 回调重复投递是支付侧最常见事故，只看增量会把「二次全额到账」漏成绿。
 G1=$(dbq "SELECT balance FROM balance_accounts WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a')")
 curl -s $B/api/pay/simulate -H "$H1" -H "$J" -d "{\"order_id\":$OID}" >/dev/null
 G2=$(dbq "SELECT balance FROM balance_accounts WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a')")
@@ -183,6 +222,9 @@ REF=$(curl -s "$B/api/referral/my" -H "$H1")
 ck A10-referral-my '"success":true' "$REF"
 CODE=$(echo "$REF" | pv '.get("ref_code","")')
 echo "INFO|ref-code|$CODE"
+# 重试 3 次、每次退避 2s：注册接口按 IP 有最小间隔限流（A1b 段同一套 guard），
+# 套件跑到这里往往还在窗口内。成功即 break，最终判定交给下面那条 ck——
+# 循环只吸收节流抖动，真失败（ref 码校验不过）会跑满 3 次然后照旧 FAIL，不会被掩盖。
 for i in 1 2 3; do
   R3=$(curl -s $B/api/auth/register -H "$J" -d "{\"username\":\"uatuser_c\",\"password\":\"uatpass123\",\"type\":\"personal\",\"name\":\"C受邀\",\"email\":\"uat_c2@test.com\",\"agreed\":true,\"ref\":\"$CODE\"}")
   echo "$R3" | grep -q '"success":true' && break
@@ -194,6 +236,8 @@ ck A10-referral-ok '"success":true' "$RE2"
 echo "INFO|ref-after|$RE2"
 
 # ---------- A11 知识库：企业包 + 条目 + 检索 ----------
+# 建包 → 加条目 → 查统计是链式的：PKGID 取自上一步响应并留 `or 0` 兜底，
+# 取不到就带着 id=0 去加条目、A11-kb-add 当场红，报告把失败停在真正断掉的那一步。
 KBP=$(curl -s $B/api/admin/kb-packages/create -H "$H1" -H "$J" -d '{"code":"uat_kb_pkg","name":"UAT企业知识包","pack_type":"tenant"}')
 ck A11-kb-package-create '"success":true' "$KBP"
 PKGID=$(echo "$KBP" | pv '.get("package",{}).get("id") or d.get("data",{}).get("id") or 0')
@@ -205,20 +249,34 @@ C=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/translation/kb-stats")
 ck A11-kb-stats-anon-401 '^401$' "$C"
 
 # ---------- A12 OpenAPI：密钥 + 同步翻译 + 错误密钥 ----------
+# 这一段走的是对外开放面（Bearer <api_key>，不是会话 token），前端接第三方客户时就靠它，
+# 鉴权口径与会话体系完全独立，所以必须单独成组断言。
 AK=$(curl -s $B/api/apikeys/create -H "$H1" -H "$J" -d '{"name":"uat-key"}')
 ck A12-apikey-create '"success":true' "$AK"
+# KEY 明文只在创建响应里返回这一次（后端 note 亦声明「仅显示一次」），后续任何读接口都拿不到，
+# 所以必须当场抓进变量、供本段三条开放接口断言复用。
 KEY=$(echo "$AK" | pv '.get("api_key","")')
 OT=$(curl -s $B/openapi/v1/translate -H "$J" -H "Authorization: Bearer $KEY" --max-time 90 -d '{"text":"开放接口同步翻译测试","target_lang":"en"}')
 ck A12-openapi-translate '"success":true' "$OT"
 echo "INFO|openapi-translate|$OT"
 ck A12-openapi-balance '"success":true' "$(curl -s "$B/openapi/v1/balance" -H "Authorization: Bearer $KEY")"
+# 错误密钥这条是安全锁：伪造 key 必须被拒且给出可辨识的失败原因（invalid/无效），
+# 不能退化成 200 + 空结果——那会把鉴权失效伪装成「翻译没内容」。
 ck A12-openapi-badkey 'invalid|无效' "$(curl -s $B/openapi/v1/translate -H "$J" -H "Authorization: Bearer sk-bogus-key" -d '{"text":"x","target_lang":"en"}')"
+# 规格文档只取前 400 字节：整份 openapi.json 体积大且会随接口增删而变，
+# 这里要锁的是「对外文档端点活着且是 OpenAPI 格式」，不是文档内容。
 ck A12-openapi-spec '"openapi"' "$(curl -s $B/openapi/v1.json | head -c 400)"
 
 # ---------- A13 权限与租户隔离 ----------
+# 本组两条 python 判定用的是「集合级不变量」：返回的每一行 tenant_id 都必须与首行一致。
+# 用 grep 做不到（只能证明某处出现过本租户），也就漏掉了「混进别租户那一行」这种真实事故形态。
 UADM=$(curl -s "$B/api/admin/users" -H "$H1")
 echo "$UADM" | python3 -c 'import sys,json;d=json.load(sys.stdin);us=d.get("users",[]);print("OK" if us and all(u.get("tenant_id")==us[0].get("tenant_id") for u in us) else "BAD")' | grep -q '^OK' && { PASS=$((PASS+1)); echo "PASS|A13-users-scoped"; } || { FAIL=$((FAIL+1)); echo "FAIL|A13-users-scoped|$UADM"; }
+# 无 token 必须被挡（401/未登录）：与 A1 那组「匿名必须可读」配成一对，
+# 两边同时绿才说明鉴权边界落在正确的位置上，而不是整体放开或整体锁死。
 ck A13-no-token-401 'success.*false|401|未登录' "$(curl -s $B/api/billing/balance)"
+# 跨租户读单：用 B 的会话去查 A 的订单。期望词同时允许 403/404/「不存在」/「无权」——
+# 具体回哪种不是契约，只要不是「200 且拿到别人的单」；钉死单一状态码会把方言级实现差异当回归。
 ck A13-cross-tenant-order 'success":false|404|不存在|无权' "$(curl -s "$B/api/pay/status?order_id=$OID" -H "$H2")"
 AUD=$(curl -s "$B/api/system/audit" -H "$H1")
 echo "$AUD" | python3 -c 'import sys,json;d=json.load(sys.stdin);ls=d.get("logs",[]);print("OK" if ls and all(l.get("tenant_id")==ls[0].get("tenant_id") for l in ls) else "BAD")' | grep -q '^OK' && { PASS=$((PASS+1)); echo "PASS|A13-audit-scoped"; } || { FAIL=$((FAIL+1)); echo "FAIL|A13-audit-scoped|$AUD"; }
@@ -237,6 +295,8 @@ ck A15-feedback '"success":true' "$(curl -s $B/api/feedback -H "$H1" -H "$J" -d 
 ck A15-feedback-list-admin '"success":true' "$(curl -s "$B/api/feedback/list" -H "$AH")"
 
 # ---------- A16 文件翻译（docx 对照表交付） ----------
+# docx 用 python 现场拼最小包（三份必需部件：Content_Types / _rels / word/document.xml）：
+# 不在仓库里塞二进制夹具，套件自解释、跨机器可复跑，也不会被 git-lfs/换行符改动破坏。
 TMPD=$(mktemp -d)
 python3 - "$TMPD/hello.docx" <<'EOF'
 import sys, zipfile
@@ -261,6 +321,30 @@ EOF
 FT=$(curl -s $B/api/translate -H "$H1" -F "file=@$TMPD/hello.docx" -F "target_langs=en" --max-time 120)
 ck A16-file-translate '文件翻译完成|points_used' "$FT"
 echo "INFO|file-result|${FT:0:260}"
+# ---------- A16b/A16c ★ #65（2026-09-22 两步同做）：交付名清理 + 产物按上传件分目录 ----------
+# A16b 交付文件名（对外可见的那一段）不得含内部落盘标记：15 位以上时间戳曾被当成文件名主干
+#      一路带进 zip 条目与下载名（`1790..._e2e_m1_en.txt`）。断言只看 basename，不看目录成分
+#      ——目录那一层**故意**保留落盘名（它才是「每上传件独享子目录」的唯一性来源）。
+# A16c 产物必须落在 translated/<落盘名>/ 之下（父目录名不得就是 translated），否则同名原件
+#      会跨工单/跨租户互相覆盖产物，output_artifacts 按 path 反查归属也会命中错行。
+# 下面写成 if/elif/else 手工累加而不用 ck：本条有三态（没产物 / 名字脏 / 名字干净），
+# 而 ck 只有「命中即绿」一态——最要紧的「A16 压根没产出 files」必须单独报出来，
+# 否则空输入会被反向 grep 判成「干净」而假绿（这是反向断言最容易踩的坑）。
+# 匹配内部时间戳用 grep -qE '[0-9]{15}'（ERE 量词），理由见文件头 ck 注释。
+FILE_NAMES=$(printf '%s' "$FT" | python3 -c 'import sys,json,os;print("\n".join(os.path.basename(f) for f in (json.load(sys.stdin).get("files") or [])))' 2>/dev/null)
+if [ -z "$FILE_NAMES" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL|A16b-deliverable-name-clean|结果里没有 files 列表（A16 未产出产物？）"
+elif printf '%s' "$FILE_NAMES" | grep -qE '[0-9]{15}'; then
+  FAIL=$((FAIL+1)); echo "FAIL|A16b-deliverable-name-clean|交付名含内部时间戳标记: $(printf '%s' "$FILE_NAMES" | tr '\n' ' ')"
+else
+  PASS=$((PASS+1)); echo "PASS|A16b-deliverable-name-clean($(printf '%s' "$FILE_NAMES" | tr '\n' ' '))"
+fi
+# 判据由 python 侧折算成一个词（subdir=ok / subdir=bad），ck 只认 ok；
+# 顺带的好处是：JSON 形态再变、解析抛错，输出为空同样判红，不会退化成假绿。
+ck A16c-artifact-per-upload-dir 'subdir=ok' "$(printf '%s' "$FT" | python3 -c '
+import sys,json,os
+ps=[p for p in (json.load(sys.stdin).get("files") or []) if p]
+print("subdir=ok" if ps and all(os.path.basename(os.path.dirname(p))!="translated" for p in ps) else "subdir=bad")' 2>/dev/null)"
 rm -rf "$TMPD"
 
 echo "==A-PASS=$PASS FAIL=$FAIL=="
@@ -271,10 +355,18 @@ echo "==A-PASS=$PASS FAIL=$FAIL=="
 #       套餐月度重置、邀请奖励因子、企业成员邀请加入(P1)、推广时间窗覆盖
 # ============================================================================
 echo "=== B 阶段：运营策略引擎 / P1 / P2 回归 ==="
+# 显式重查一次 TAID（A14 也查过同名变量）：B 段每条都按租户维度落库断言，
+# 取值口径集中在段首，不靠上一段残留的变量往下传——中途增删 A 段用例不会悄悄改变 B 段的租户。
 TAID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a' LIMIT 1")
 
 # ---------- B1 运营策略读取/保存（平台级，超管） ----------
 ck B1-ops-policy-get '"success":true' "$(curl -s $B/api/admin/ops/policy -H "$AH")"
+# 这里的三档设置是为后面 B2/B3/B5/B6 预埋的夹具，不是产品默认值：
+#   fast.charge=false → B2 的「免费仍计量不扣费」；fast.limit_chars=10 → B3 用短文本就能撞闸；
+#   monthly_reset_limit=1 → B5 的「第二次重置必须被上限拦」；invite.reward_tokens=900000 → B6 的入账因子。
+# 改动本段等于改后面四条锁的判据，务必一起复核。
+# heredoc 用带引号的 <<'JSON'：策略串里一旦出现 $ 或反引号，非引号版会被 shell 展开，
+# 送出去的就是残缺 JSON——红的是本段的「保存失败」，看不出策略本身有没有问题。
 OPS_PAYLOAD=$(cat <<'JSON'
 {"scope":"platform","policy":{"billing":{"mode_rules":{"fast":{"enabled":true,"charge":false,"limit_chars":10},"pro":{"enabled":true,"charge":true,"limit_chars":0}}},"package":{"monthly_reset_enabled":true,"monthly_reset_limit":1},"invite":{"enabled":true,"reward_tokens":900000}}}
 JSON
@@ -282,6 +374,8 @@ JSON
 ck B1-ops-policy-save '"success":true' "$(curl -s $B/api/admin/ops/policy/save -H "$AH" -H "$J" -d "$OPS_PAYLOAD")"
 
 # ---------- B2 fast 免费（charge=false）：翻译成功、台账 biz_mode=fast、双桶余额不变 ----------
+# 三条缺一不可：只查余额不变会把「压根没翻译成功」当成免费通过；
+# 所以必须同时钉「结果回来了（TranslatedEN 是 mock 的固定出参）」+「台账按 fast 记了一行」。
 B2B1=$(curl -s "$B/api/billing/balance" -H "$H1" | pv '.get("points_available") or 0')
 CHF=$(curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"测试文本。","options":{"target_langs":["en"],"mode":"fast"}}')
 ck B2-fast-chat-free 'TranslatedEN' "$CHF"
@@ -289,10 +383,13 @@ B2B2=$(curl -s "$B/api/billing/balance" -H "$H1" | pv '.get("points_available") 
 [ -n "$B2B1" ] && [ "$B2B1" = "$B2B2" ] && { PASS=$((PASS+1)); echo "PASS|B2-free-no-deduct($B2B1==$B2B2)"; } || { FAIL=$((FAIL+1)); echo "FAIL|B2-free-no-deduct($B2B1->$B2B2)"; }
 B2LED=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=$TAID AND biz_mode='fast'")
 [ "$B2LED" -ge 1 ] && { PASS=$((PASS+1)); echo "PASS|B2-fast-ledger(biz_mode=fast rows=$B2LED)"; } || { FAIL=$((FAIL+1)); echo "FAIL|B2-fast-ledger|rows=$B2LED"; }
+# 对照腿：同一时刻 pro 仍要正常翻译成功。缺这条就分不清「fast 免费生效」与「整套计费都掉了」。
 CHP=$(curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"专业模式扣费测试。","options":{"target_langs":["en"],"mode":"pro"}}')
 ck B2-pro-still-charge 'TranslatedEN' "$CHP"
 
 # ---------- B3 fast.limit_chars 闸门：超长被拒（MODE_LIMIT_CHARS），pro 不受限 ----------
+# 10 个字符这个门槛来自 B1 刚存进去的策略，不是产品默认值 ⇒ B1/B3 顺序强耦合，
+# 文本长度也刻意压在 10 以上、几十以内：再长会先去撞别的输入上限，测不到这条闸门。
 LONG="这是一段远远超过十个字符的快速模式超长测试文本内容"
 CHF2=$(curl -s $B/api/chat -H "$H1" -H "$J" --max-time 30 -d "{\"message\":\"$LONG\",\"options\":{\"target_langs\":[\"en\"],\"mode\":\"fast\"}}")
 ck B3-fast-limit-block '输入上限' "$CHF2"
@@ -300,20 +397,30 @@ CHP2=$(curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d "{\"message\":\"$LO
 ck B3-pro-unlimited 'TranslatedEN' "$CHP2"
 
 # ---------- B4 P2 回归：平台包（tenant_id=0）可被任意租户订阅 ----------
+# tenant_id=0 是「平台自营包」的哨兵值；回归点是别的租户（这里用 B）也能订。
+# 旧缺陷是把租户过滤一律套上，导致平台包谁都订不到。
+# 刻意复用 B（A8 刚被清零的那个小租户）：这里要的是「与 A 无关的另一个租户」，
+# 顺带排掉「靠 A 段那笔充值才订得上」的巧合解释。
 curl -s $B/api/admin/packages/create -H "$AH" -H "$J" -d '{"tenant_id":0,"code":"uat_plat_pkg","name":"UAT平台套餐","ptype":"paid","sentences":50000,"price_money":50,"duration_days":30}' >/dev/null
 SUB2=$(curl -s $B/api/package/subscribe -H "$H2" -H "$J" -d '{"code":"uat_plat_pkg"}')
 ck B4-platform-subscribe '"success"' "$SUB2"
 echo "INFO|B4-platform-subscribe|$SUB2"
 
 # ---------- B5 套餐月度重置：扣减→重置恢复→二次重置被上限拦截 ----------
+# 重置没有可观测的「自动触发」时点，所以先把 grant 手工扣薄（-50000 且只动 >50000 的行，
+# 保证仍有余额可减、也不会把别的 kind 带进来），再调管理端重置接口模拟「跨月」。
 dbq "UPDATE quota_grants SET \"left\"=\"left\"-50000 WHERE tenant_id=$TAID AND kind='plan' AND \"left\">50000"
 RST=$(curl -s $B/api/admin/billing/package/reset -H "$H1" -H "$J" -d '{}')
 ck B5-reset-ok '"success":true' "$RST"
 echo "INFO|B5-reset|$RST"
+# 第二次必须被拒：上限就来自 B1 的 monthly_reset_limit=1。少这条反向锁，
+# 「随时可重置」这种能把套餐刷爆的实现照样全绿。
 RST2=$(curl -s $B/api/admin/billing/package/reset -H "$H1" -H "$J" -d '{}')
 ck B5-reset-limit '上限|已达' "$RST2"
 
 # ---------- B6 邀请奖励因子：invite.reward_tokens=900000 按新值入账 ----------
+# 先造邀请人 E（个人号，企业号没有裂变入口）→ 取其 ref 码 → 造受邀人 D → 比对 E 的 trial 台账合计。
+# 判据是「增量 ≥900000」而不是「恰好等于」：注册本身还会发新手体验额度，增量里必然叠加。
 curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_e","password":"uatpass123","type":"personal","name":"E邀请人","email":"uat_e@test.com","agreed":true}' >/dev/null
 TE=$(tok uatuser_e uatpass123); HE="Authorization: Bearer $TE"
 ECODE=$(curl -s "$B/api/referral/my" -H "$HE" | pv '.get("ref_code","")')
@@ -324,9 +431,13 @@ E2=$(dbq "SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$ET
 [ -n "$E1" ] && [ -n "$E2" ] && [ $((E2 - E1)) -ge 900000 ] && { PASS=$((PASS+1)); echo "PASS|B6-invite-factor(+$((E2-E1)))"; } || { FAIL=$((FAIL+1)); echo "FAIL|B6-invite-factor($E1->$E2)"; }
 
 # ---------- B7 P1 回归：企业成员凭有效邀请码加入既有租户（role=user） ----------
+# 三条落库断言（进了哪个租户 / 落成什么角色 / 码有没有被消费）都在库侧核，不看接口脸色：
+# 「返回 success 但其实建了个新租户」或「成员落成 admin」这类缺陷只有查库才看得见。
 curl -s $B/api/admin/invite-codes/create -H "$H1" -H "$J" -d '{"code":"JOINUAT001"}' >/dev/null
 RF=$(curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_f","password":"uatpass123","type":"enterprise","role_choice":"member","invite":"JOINUAT001","name":"F加入","email":"uat_f@test.com","agreed":true}')
 ck B7-invite-join '"success":true' "$RF"
+# 三个取值都过一遍 tr -d '[:space:]'：dbq 的输出末尾带换行（PG 侧还可能有回车），
+# 不剥干净的话下面的字符串比较恒不等，红得完全看不出原因。
 FTID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_f'" | tr -d '[:space:]')
 FROLE=$(dbq "SELECT role FROM users WHERE username='uatuser_f'" | tr -d '[:space:]')
 FUSED=$(dbq "SELECT used FROM invite_codes WHERE code='JOINUAT001'" | tr -d '[:space:]')
@@ -335,15 +446,24 @@ FUSED=$(dbq "SELECT used FROM invite_codes WHERE code='JOINUAT001'" | tr -d '[:s
 [ "$FUSED" = "1" ] && { PASS=$((PASS+1)); echo "PASS|B7-invite-marked-used"; } || { FAIL=$((FAIL+1)); echo "FAIL|B7-invite-marked-used($FUSED)"; }
 
 # ---------- B8 运营时间窗：base fast 收费 + 窗口覆盖 fast 免费 → 窗口生效 ----------
+# 先把 base 策略翻回「fast 收费」（覆盖 B1 设的免费），再压一个覆盖窗口把 fast 改回免费：
+# 只有「base 收费 + 窗口免费」这个反向组合，才能证明余额不变是窗口带来的，而不是策略还没生效。
 WPAYLOAD=$(cat <<'JSON'
 {"scope":"platform","policy":{"billing":{"mode_rules":{"fast":{"enabled":true,"charge":true,"limit_chars":0},"pro":{"enabled":true,"charge":true,"limit_chars":0}}}}}
 JSON
 )
 curl -s $B/api/admin/ops/policy/save -H "$AH" -H "$J" -d "$WPAYLOAD" >/dev/null
+# 窗口取「Asia/Shanghai 的昨天 00:00 ~ 明天 23:59」，而不是写死日期：
+# ① 跑套件的时刻必然落在窗内，任何时候都不会因跨零点/跨月而假绿；
+# ② 窗口时刻按 ops/policy 的默认时区（Asia/Shanghai）判定，测试取同区日期才能对上；
+#    在 UTC 机器上取本地日期会在午夜前后差一天，表现为「窗口没命中」的假红。
 TODAY=$(python3 -c 'from datetime import datetime,timedelta;from zoneinfo import ZoneInfo;n=datetime.now(ZoneInfo("Asia/Shanghai"));print((n-timedelta(days=1)).strftime("%Y-%m-%d"),(n+timedelta(days=1)).strftime("%Y-%m-%d"))')
 WS=$(echo "$TODAY" | cut -d' ' -f1); WE=$(echo "$TODAY" | cut -d' ' -f2)
 WINDOW_PAYLOAD=$(printf '{"window":{"id":"uat_promo","name":"UAT推广期","start":"%s 00:00","end":"%s 23:59","priority":10,"overrides":{"billing":{"mode_rules":{"fast":{"charge":false}}}}}}' "$WS" "$WE")
 curl -s $B/api/admin/ops/policy/window/save -H "$AH" -H "$J" -d "$WINDOW_PAYLOAD" >/dev/null
+# 窗口的 overrides 只写 {"charge":false} 一项（不带 enabled / limit_chars）：
+# 万一实现把缺省字段当成「关掉/清零」，紧接着那条 fast 翻译就拿不到 TranslatedEN，本段先红——
+# 「窗口只做局部覆盖、其余沿用 base」正是这里要钉住的语义。
 B8B1=$(curl -s "$B/api/billing/balance" -H "$H1" | pv '.get("points_available") or 0')
 CHF3=$(curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"窗口覆盖测试。","options":{"target_langs":["en"],"mode":"fast"}}')
 ck B8-window-fast-free 'TranslatedEN' "$CHF3"

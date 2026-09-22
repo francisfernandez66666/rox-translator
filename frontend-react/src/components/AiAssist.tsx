@@ -22,7 +22,9 @@ import {
 import { Icon, ArrowRightIcon } from '@/ui/langcross/src'
 import { useT } from '@/i18n'
 
-/** 站内路由集合：route 类型按钮据此 SPA 跳转（其余按外链新开窗口） */
+/** 站内路由集合：route 类型按钮据此 SPA 跳转（其余按外链新开窗口）
+ *  必须是白名单而不是「看起来像路径就 navigate」：后端配置的 url 由运营在管理台录入，
+ *  写错的路径走 SPA 跳转会直接落到 404/空白页，而按外链新开至少还能看见真实地址。 */
 const ROUTE_PATHS = new Set(['/', '/tickets', '/editor', '/billing', '/packages', '/invites', '/pricing', '/register', '/my', '/admin'])
 
 // Bubble 挂件气泡：单条对话消息（role 区分用户/AI，actions 为推荐功能入口按钮）
@@ -60,6 +62,8 @@ export default function AiAssist() {
   const outTimerRef = useRef<number | null>(null)
 
   // 滚动到底部
+  // 必须包一层 requestAnimationFrame：setBubbles 之后同一帧内 DOM 尚未提交，
+  // 此刻读 scrollHeight 得到的是「上一条消息」的高度，滚动会慢一拍（最新一条被顶出可视区）。
   const scrollBottom = useCallback(() => {
     requestAnimationFrame(() => {
       if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
@@ -67,6 +71,8 @@ export default function AiAssist() {
   }, [])
 
   // 收起：先播退场动画，时长到点再卸载（不等动画结束就卸载会看不到收起）
+  // 首句的「已有定时器即 return」是重入保护：连点关闭会再调本函数，
+  // 不设闸就再起一个定时器，收起动画被重新计时、面板多滞留一整个 OUT_MS。
   const collapse = useCallback(() => {
     if (outTimerRef.current !== null) return
     setClosing(true)
@@ -81,6 +87,9 @@ export default function AiAssist() {
   useEffect(() => () => { if (outTimerRef.current !== null) window.clearTimeout(outTimerRef.current) }, [])
 
   // 初始化：展开时拉引导/恢复历史（一次）
+  // ★ initedRef 而非 effect 依赖做「一次性」：本 effect 依赖 location.pathname/search，
+  //   用户在站内跳转时它会重跑；没有这个 ref 每次跳页都会把历史冲掉、重新 greet 一个新会话。
+  //   注意它只「拉一次」，不锁面板状态——收起再展开仍复用已加载的会话。
   useEffect(() => {
     if (!expanded || initedRef.current) return
     initedRef.current = true
@@ -88,6 +97,8 @@ export default function AiAssist() {
       try {
         const sid = getAssistSid()
         if (sid) {
+          // 历史恢复：只取 user/assistant 两种角色（接口返回的行不保证都是对话气泡，
+          // 其余角色直接丢弃而不是渲染成空框）；actions 可能以 JSON 文本列回传，故走 safeParse
           const msgs = await assistHistory(sid)
           if (msgs.length > 0) {
             setBubbles(msgs.filter((m: AssistMsg) => m.role === 'user' || m.role === 'assistant').map((m) => ({
@@ -118,6 +129,8 @@ export default function AiAssist() {
   }, [expanded, location.pathname, location.search, scrollBottom, t])
 
   // 发送消息
+  // busy 同时充当「并发锁」与输入框 disabled 的来源：挂件全站常驻，点推荐入口跳页后
+  // 立刻再发一句的情况真实存在，不锁就会有两个请求打在同一会话上、回复顺序错乱。
   const send = useCallback(async (text: string) => {
     const msg = text.trim()
     if (!msg || busy) return
@@ -176,42 +189,49 @@ export default function AiAssist() {
     <>
       {/* 样式：作用域类名 na-*，避免与全站样式冲突 */}
       <style>{`
+        /* 配色口径（★ #68 2026-09-22）：挂件全站常驻且不在 readability.test.ts 的 EXEMPT 白名单里，
+           所以描边一律走 --lc-border-* 令牌、次级文字走 --lc-text-*，
+           不再写死 #2A2F3A~#575F6C 那批暗值——「#68 描边禁再写死暗值」锁会连本文件一起扫并红灯
+           （它只放行 var(...) 里的兜底值，字面暗值一律算写死）。
+           仍在用的字面值只剩三类：深色层级面（面板/输入底 #0E1014、#0A0B0D、#16181C，属底色不属描边）、
+           反白件（#E7E9EA 底 + #000 字的 FAB/发送/用户气泡，气泡正文 #C8CCD1 也高于闸门下限）、
+           以及警示底 #D29922 及其 rgba（交付包保留的琥珀语义色，离线态专用，不并入单色令牌）。 */
         .na-fab{position:fixed;right:22px;bottom:22px;z-index:99990;width:56px;height:56px;border-radius:50%;
           border:none;cursor:pointer;background:#E7E9EA;color:#000;display:flex;align-items:center;justify-content:center;
           box-shadow:0 6px 20px rgba(231,233,234,.16)}
         .na-fab:hover{transform:scale(1.06)}
         .na-panel{position:fixed;right:22px;bottom:88px;z-index:99991;width:380px;max-width:calc(100vw - 24px);
           height:min(620px,78vh);background:#0E1014;border-radius:16px;box-shadow:0 12px 48px rgba(0,0,0,.5);
-          display:flex;flex-direction:column;overflow:hidden;border:1.2px solid #464C58;
+          display:flex;flex-direction:column;overflow:hidden;border:1.2px solid var(--lc-border-card);
           --lc-mo-origin:100% 100%;
           animation:lc-mo-pop 200ms cubic-bezier(.16,1,.3,1) both}
         .na-panel--out{animation:lc-mo-pop-out ${OUT_MS}ms cubic-bezier(.4,0,.2,1) both}
         /* 头部改为深色 + 1px 分隔线：纯黑体系里的浮层不出现整块白条 */
         .na-head{background:#16181C;color:#E7E9EA;padding:12px 14px;display:flex;align-items:center;gap:10px;
-          border-bottom:1.2px solid #2A2F3A}
-        .na-head-ic{width:28px;height:28px;border-radius:9px;background:#0A0B0D;border:1.2px solid #464C58;
+          border-bottom:1.2px solid var(--lc-border-faint)}
+        .na-head-ic{width:28px;height:28px;border-radius:9px;background:#0A0B0D;border:1.2px solid var(--lc-border-faint);
           display:flex;align-items:center;justify-content:center;color:#E7E9EA;flex:none}
         .na-head .na-sub{font-size:12px;color:var(--lc-text-3);line-height:1.3}
-        .na-close{margin-left:auto;background:none;border:1.2px solid #464C58;color:var(--lc-text-2);
+        .na-close{margin-left:auto;background:none;border:1.2px solid var(--lc-border-input);color:var(--lc-text-2);
           width:26px;height:26px;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:none}
         .na-list{flex:1;overflow-y:auto;padding:14px 12px;background:#0E1014;display:flex;flex-direction:column;gap:12px}
         .na-row{display:flex}
         .na-row.me{justify-content:flex-end}
         .na-bubble{max-width:82%;padding:9px 12px;border-radius:12px;font-size:14.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word}
-        .na-row.ai .na-bubble{background:#0A0B0D;border:1.2px solid #31363D;color:#C8CCD1;border-top-left-radius:4px}
+        .na-row.ai .na-bubble{background:#0A0B0D;border:1.2px solid var(--lc-border-faint);color:#C8CCD1;border-top-left-radius:4px}
         .na-row.me .na-bubble{background:#E7E9EA;color:#000;border-top-right-radius:4px}
         .na-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
         /* 推荐入口：深底面板上必须是浅字浅描边（原来 #0A0B0D 文字在 #0E1014 底上等于不可见） */
-        .na-act{display:inline-flex;align-items:center;gap:5px;border:1.2px solid #464C58;background:#16181C;
+        .na-act{display:inline-flex;align-items:center;gap:5px;border:1.2px solid var(--lc-border-input);background:#16181C;
           color:#C8CCD1;border-radius:999px;padding:4px 11px;font-size:13px;cursor:pointer;white-space:nowrap;
           font-family:inherit}
         .na-act:hover{background:#E7E9EA;border-color:#E7E9EA;color:#000}
-        .na-chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px;border-top:1.2px solid #2A2F3A;background:#0E1014}
-        .na-chip{border:1.2px dashed #464C58;background:transparent;color:var(--lc-text-2);border-radius:999px;padding:4px 11px;
+        .na-chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px;border-top:1.2px solid var(--lc-border-faint);background:#0E1014}
+        .na-chip{border:1.2px dashed var(--lc-border-input);background:transparent;color:var(--lc-text-2);border-radius:999px;padding:4px 11px;
           font-size:13px;cursor:pointer;font-family:inherit}
-        .na-chip:hover{border-color:#5A6270;color:#E7E9EA}
-        .na-input{display:flex;gap:8px;padding:10px 12px;border-top:1.2px solid #2A2F3A;background:#0E1014}
-        .na-input input{flex:1;background:#0A0B0D;border:1.2px solid #5A6270;border-radius:10px;padding:8px 12px;
+        .na-chip:hover{border-color:var(--lc-border-strong);color:#E7E9EA}
+        .na-input{display:flex;gap:8px;padding:10px 12px;border-top:1.2px solid var(--lc-border-faint);background:#0E1014}
+        .na-input input{flex:1;background:#0A0B0D;border:1.2px solid var(--lc-border-input);border-radius:10px;padding:8px 12px;
           font-size:14px;outline:none;color:#E7E9EA;font-family:inherit}
         .na-input input::placeholder{color:var(--lc-text-3)}
         .na-send{border:none;background:#E7E9EA;color:#000;border-radius:10px;padding:8px 18px;cursor:pointer;font-size:14px;font-family:inherit}
@@ -219,10 +239,13 @@ export default function AiAssist() {
         .na-offline{font-size:12px;color:#D29922;background:rgba(210,153,34,0.10);border:1.2px solid rgba(210,153,34,0.32);border-radius:8px;padding:2px 8px;margin-right:6px}
         .na-offline + .na-close{margin-left:8px}
         @media (max-width:640px){
+          /* 窄屏改为左右贴边（right+left 同时给值即等效满宽，max-width 自动失效），
+             高度也从 78vh 收到 70vh 并再设 560px 上限：小屏上满高面板会把 FAB 与输入条挤没 */
           .na-panel{right:8px;left:8px;bottom:78px;width:auto;height:min(70vh,560px)}
           .na-fab{right:14px;bottom:14px}
         }
         @media (prefers-reduced-motion: reduce){
+          /* 尊重系统「减弱动态效果」：登场缩放与气泡错落全部关掉（动效属可选项，不可有最低路径） */
           .na-panel{animation:none!important}
           .na-row.lc-mo-up{animation:none!important}
         }

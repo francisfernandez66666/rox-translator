@@ -48,10 +48,15 @@ const VIRTUALIZE_THRESHOLD = 50
  *  大表上重新变贵；按长度降序保留前 60 条（长术语优先命中，短词被长词覆盖损失最小）。 */
 const HIGHLIGHT_TERM_CAP = 60
 
+/** TermMatcher 高亮匹配器的编译产物：re 供正则整体扫描，set 供逐词精确判定；
+ *  re 为 null 表示当前无可用术语（术语表为空或全被裁掉），调用方须短路。 */
 interface TermMatcher { re: RegExp | null; set: Set<string> }
 
 /** buildTermMatcher 编译一次高亮匹配器：去重、丢 ≤1 字词（噪声大于收益）、转义正则元字符
- *  （术语来自知识库，可能含 . + ( )，不转义会把「C++」当量词）、长词优先排序后封顶。 */
+ *  （术语来自知识库，可能含 . + ( )，不转义会把「C++」当量词）、长词优先排序后封顶。
+ *  re 与 set 必须同源构造（同一份 usable）：命中判定用 Set 精确比对 split 的捕获组，
+ *  若两侧口径不一致，就会出现「正则匹配到了但 Set 不认」而静默漏高亮。
+ *  无可用术语时 re 置 null，highlightWith 直接短路返回原文，省掉整表 split。 */
 function buildTermMatcher(terms: string[]): TermMatcher {
   const usable = Array.from(new Set(terms.filter((x) => !!x && x.length > 1)))
     .sort((a, b) => b.length - a.length)
@@ -61,11 +66,13 @@ function buildTermMatcher(terms: string[]): TermMatcher {
   return { re: new RegExp(`(${escaped.join('|')})`, 'g'), set: new Set(usable) }
 }
 
-/** highlightWith 把源文中命中的术语串包裹为 <mark>（split 捕获组法与旧版一致，仅换查找结构） */
+/** highlightWith 把源文中命中的术语串包裹为 <mark>（split 捕获组法与旧版一致，仅换查找结构）
+ *  不用 dangerouslySetInnerHTML/字符串拼接：源文可能含 < > 等字符，走 JSX 才由 React 转义。 */
 function highlightWith(text: string, m: TermMatcher): React.ReactNode {
   if (!m.re) return text
   const parts = text.split(m.re)
   return parts.map((p, i) =>
+    // split 带捕获组时会把命中的术语本身也放进数组，故奇偶位无需判断，直接问 Set
     m.set.has(p) ? (
       <mark key={i} style={{ background: 'rgba(210,153,34,0.30)', color: '#E7E9EA', padding: '0 2px', borderRadius: 2 }}>{p}</mark>
     ) : (
@@ -75,6 +82,9 @@ function highlightWith(text: string, m: TermMatcher): React.ReactNode {
 }
 
 // ============ ★ B2 行组件：memo 化，仅自身值/术语/状态选项变化时重渲染 ============
+// memo 用的是默认浅比较，因此能生效的前提在父组件那侧：
+// matcher / opts 走 useMemo、update 走空依赖 useCallback，s 直接取 segments 数组元素（重载前引用稳定），
+// 真正逐段会变的只剩 editedText/status/note——任何一项退化成新对象/新函数，整表 memo 立即失效。
 interface SegRowProps {
   s: EditorSegment
   editedText: string
@@ -85,9 +95,14 @@ interface SegRowProps {
   update: (idx: number, patch: Partial<RowState>) => void
 }
 
+/** SegRow 单段行组件：用 memo 包住，让「改一段」只重渲染那一行——
+ *  整表重渲染在千段工单上会明显卡顿（父组件每次输入都会新建 props，故必须逐行 memo）。 */
 const SegRow = memo(function SegRow({ s, editedText, status, note, matcher, opts, update }: SegRowProps) {
   // 状态底色只用 6%~10% 低透明层（纯黑体系禁止大色块铺底）：通过=提亮、驳回=语义红薄底，
   // pending 保持面板底色
+  // id=seg-N 是 #/editor#seg-N 锚点的落点（非虚拟化形态下由 scrollIntoView 直接命中）；
+  // 虚拟化时该行可能根本没挂载，父级改用 scrollToIndex 对齐窗口，见下方锚点 effect。
+  // 描边走 --lc-border-card：本页在登录态扫描范围内，写死 #464C58 会红 readability.test.ts 的 #68 描边锁。
   return (
     <div
       id={`seg-${s.index}`}
@@ -97,18 +112,18 @@ const SegRow = memo(function SegRow({ s, editedText, status, note, matcher, opts
         gridTemplateColumns: '1fr 1fr',
         gap: 12,
         padding: 12,
-        border: '1.2px solid #464C58',
+        border: '1.2px solid var(--lc-border-card)',
         borderRadius: 8,
         marginBottom: 12,
         background: status === 'approved' ? 'rgba(231,233,234,0.06)' : status === 'rejected' ? 'rgba(229,72,77,0.10)' : '#0E1014',
       }}
     >
       <div>
-        <div style={{ fontSize: 13, color: '#999', marginBottom: 4 }}>{tpl('tk.srcIdxFmt', { i: s.index + 1 })}</div>
+        <div style={{ fontSize: 13, color: 'var(--lc-text-3)', marginBottom: 4 }}>{tpl('tk.srcIdxFmt', { i: s.index + 1 })}</div>
         <div style={{ whiteSpace: 'pre-wrap', minHeight: 40 }}>{highlightWith(s.source, matcher)}</div>
       </div>
       <div>
-        <div style={{ fontSize: 13, color: '#999', marginBottom: 4 }}>
+        <div style={{ fontSize: 13, color: 'var(--lc-text-3)', marginBottom: 4 }}>
           {tpl('tk.edTargetTpl', { state: s.target ? t('tk.edHas') : t('tk.edEmpty') })}
         </div>
         {/* ★ B2 非受控：defaultValue 只做初值，键入不进 state——blur 时值有变化才提交一行。
@@ -198,6 +213,7 @@ export default function EditorPage() {
       return
     }
     const id = Number(raw)
+    // !id 一并挡掉 NaN（粘贴 T 号）与 0（空/非法数字）两种假值，故此处不再区分是哪种
     if (!id) {
       // 粘贴了工单号（T 开头非数字）→ 由后端按 ticket_no 回查，直接传字符串
       setLoading(true)
@@ -273,6 +289,8 @@ export default function EditorPage() {
   }, [])
 
   // dirtyEdits 对比系统原值，筛出有改动的分段列表（供保存时提交给后端）
+  // 只依赖 [segments, rows]：键入期间两者都不变（非受控），所以大表不会每敲一键重算一遍；
+  // 「原值」必须现取 s.edited_text || s.target（服务端可能已回写过），不能拿挂载时的快照比。
   const dirtyEdits = useMemo<SegmentEdit[]>(() => {
     const out: SegmentEdit[] = []
     for (const s of segments) {
@@ -343,7 +361,7 @@ export default function EditorPage() {
           ★ B2 高亮另按「长词优先 + 前 60 条」封顶（buildTermMatcher），防大词表拖慢每段 split */}
       {terms.length > 0 && (
         <div style={{ marginBottom: 12 }}>
-          <span style={{ color: '#888', marginRight: 6 }}>{t('tk.edTermsHit')}</span>
+          <span style={{ color: 'var(--lc-text-3)', marginRight: 6 }}>{t('tk.edTermsHit')}</span>
           {terms.slice(0, 30).map((t, i) => (
             <StatusPill key={i} tone="idle" className="ed-term">{t}</StatusPill>
           ))}
@@ -353,7 +371,13 @@ export default function EditorPage() {
       {/* ★ B2 行渲染：memo 化 SegRow + loadSeq 前缀 key（重载即整表重挂载复位非受控框）。
           键入不再触发父级 state，578 段大表敲一键只更新一个 textarea 的 DOM。
           ★ B5：大表（>阈值）套 virtuoso 窗口列表——DOM 行数收敛到视口±缓冲；
-          computeItemKey 仍带 loadSeq 前缀，重载后行组件必然重挂载。 */}
+          computeItemKey 仍带 loadSeq 前缀，重载后行组件必然重挂载。
+          useWindowScroll：滚动交给页面本身（不是内层滚动容器），与本页其余形态以及
+          #seg-N 锚点的 scrollIntoView 保持同一条滚动条；
+          defaultItemHeight=150 只是起点值，真实行高由组件侧 ResizeObserver 逐行校正
+          （源文长短、textarea 手动拉伸都会改变它，写死高度必错）；
+          initialItemCount=8 让首帧先渲染 8 行，避免未滚动时出现空白区；
+          increaseViewportBy 上 400 / 下 800 是刻意不对称：阅读方向向下，向下多留缓冲。 */}
       {virtualized ? (
         <Virtuoso
           ref={virtuosoRef}
@@ -382,7 +406,7 @@ export default function EditorPage() {
       )}
 
       {!loading && segments.length === 0 && (
-        <div style={{ color: '#999', padding: 24, textAlign: 'center' }}>{t('tk.edEmptyHint')}</div>
+        <div style={{ color: 'var(--lc-text-3)', padding: 24, textAlign: 'center' }}>{t('tk.edEmptyHint')}</div>
       )}
     </div>
   )

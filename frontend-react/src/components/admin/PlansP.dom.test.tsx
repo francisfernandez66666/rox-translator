@@ -57,6 +57,31 @@ vi.mock('@/api', () => {
     })),
     adminPackageSettingsSave: vi.fn(async () => ok()),
     adminQRUpload: vi.fn(async () => ok()),
+    // ★ 2026-09-22 支付渠道凭据（微信/支付宝商户参数）：微信 APIv3 密钥以掩码回显、
+    // 商户号由环境变量 PAY_WECHAT_MCH_ID 接管（该栏应置灰）
+    adminPayChannels: vi.fn(async () => ok({
+      fields: {
+        paych_wechat_app_id: 'wx1234567890', paych_wechat_mch_id: 'db-mch',
+        paych_wechat_apiv3_key: '********', paych_wechat_private_key: '********',
+        paych_alipay_app_id: '2021000123456789', paych_alipay_enabled: '',
+      },
+      env_overridden: { paych_wechat_mch_id: 'PAY_WECHAT_MCH_ID' },
+    })),
+    adminPayChannelsSave: vi.fn(async () => ok()),
+    PAY_CH_FIELDS: [
+      'paych_notify_base',
+      'paych_wechat_enabled', 'paych_wechat_app_id', 'paych_wechat_mch_id', 'paych_wechat_serial_no',
+      'paych_wechat_apiv3_key', 'paych_wechat_private_key', 'paych_wechat_platform_cert', 'paych_wechat_notify_url',
+      'paych_alipay_enabled', 'paych_alipay_app_id', 'paych_alipay_private_key', 'paych_alipay_public_key',
+      'paych_alipay_seller_id', 'paych_alipay_gateway', 'paych_alipay_notify_url',
+    ],
+    // ★ #75：超管视角 loadPkgs 会拉报价配置（多币种），缺这两个导出会让整页测试踩未 mock 的 getter
+    adminQuoteCurrency: vi.fn(async () => ok({
+      currency: 'CNY', rates: { CNY: 1 },
+      supported_currencies: ['CNY', 'USD', 'EUR', 'JPY', 'GBP', 'HKD', 'KRW', 'SGD', 'AUD', 'CAD', 'CHF', 'THB'],
+      env_overridden: {},
+    })),
+    adminQuoteCurrencySave: vi.fn(async () => ok()),
     request: vi.fn(async () => ok({ funnel: {} })),
     authHeaders: vi.fn(() => ({})),
     API_BASE: '',
@@ -98,5 +123,22 @@ describe('admin 计费 Hub（PlansP）', () => {
       expect(screen.getByText(/商业包A/)).toBeTruthy()
       expect(screen.getByText(/uat_pkg_a/)).toBeTruthy()
     })
+  })
+
+  // ★ 2026-09-22 支付渠道凭据区块（管理台可配）：锁定两条「看不到就会出事故」的呈现口径——
+  //   ① 敏感项只以掩码出现在表单里（真密钥永不下发到浏览器）；
+  //   ② 环境变量接管的字段置灰并标出变量名（否则管理员改完以为生效了）。
+  it('支付渠道凭据：敏感项掩码回显，环境变量接管字段置灰并标注变量名', async () => {
+    render(<PlansP />)
+    const fieldList = () => Array.from(document.querySelectorAll('input, textarea')) as Array<HTMLInputElement | HTMLTextAreaElement>
+    // 整个区块首屏就在（数据未落定前字段为空），故断言一律等异步回显落定
+    await vi.waitFor(() => {
+      expect(fieldList().some((f) => f.value === '********')).toBe(true)
+      expect(document.body.textContent).toContain('PAY_WECHAT_MCH_ID')
+    })
+    const envField = fieldList().find((f) => f.value === 'db-mch')
+    expect(envField?.disabled).toBe(true)
+    const editable = fieldList().find((f) => f.value === 'wx1234567890')
+    expect(editable?.disabled).toBe(false)
   })
 })

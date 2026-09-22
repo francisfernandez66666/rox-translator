@@ -442,6 +442,9 @@ export const baseZh: Record<string,string> = {
   'plans.autoRenewOn': '自动续费已开启',
   'plans.autoRenewOff': '自动续费已关闭',
   'plans.autoRenewFailed': '自动续费设置失败',
+  // ★ 宽限期提示（#74，2026-09-23）：到期后自动续费保留身份的订阅页提示条
+  'plans.graceTitle': '已到期 · 宽限期至 {date}',
+  'plans.graceBody': '期间订阅身份与剩余额度正常使用，续费到账即无缝续期；逾期仍未到账将自动移除订阅身份',
   'plans.expiresAt': '到期时间',
   'plans.groupPaid': '包月订阅（t+30 滚动额度）',
   'plans.groupIncrement': '充值包（永久有效）',

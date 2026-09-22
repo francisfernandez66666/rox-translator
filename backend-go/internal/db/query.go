@@ -1,6 +1,9 @@
 // ============ query.go · 职责说明 ============
 // 数据库查询工具层：提供跨方言的 SQL 执行与查询接口，包括占位符改写、
 // DDL 翻译、通用 Exec/Query/Prepare 方法，以及 INSERT 返回主键的 InsertID 方法。
+// 每个入口都有带 context 的 *Context 版本（#59 store ctx 穿透的地基）：
+// 无 ctx 版本供「必须落库、不能被请求断开打断」的写路径使用，
+// 带 ctx 版本供请求态读写使用，两者的方言处理必须保持同步。
 // =============================================
 package db
 
@@ -25,6 +28,13 @@ type ContextExecer interface {
 type Querier interface {
 	Query(query string, args ...interface{}) (*sql.Rows, error)
 	QueryRow(query string, args ...interface{}) *sql.Row
+}
+
+// ContextQuerier 可执行带上下文查询的连接或事务（*sql.DB / *sql.Tx 均满足）。
+// ★ #59 ctx 穿透：与 ContextExecer 成对，供 store 层把请求 ctx 传到读路径。
+type ContextQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
 }
 
 // Preparer 可预备语句的连接（*sql.DB / *sql.Tx 均满足）。
@@ -107,6 +117,24 @@ func QueryRow(qr Querier, d Dialect, query string, args ...interface{}) *sql.Row
 	return qr.QueryRow(query, args...)
 }
 
+// QueryContext 按方言执行带上下文的查询，连接或事务通用。
+// 参数：ctx=取消/超时上下文；qr=查询器；d=方言；query=SQL 语句；args=参数；返回结果集及错误。
+func QueryContext(ctx context.Context, qr ContextQuerier, d Dialect, query string, args ...interface{}) (*sql.Rows, error) {
+	if d == DialectPostgres {
+		query = pgTranslate(query)
+	}
+	return qr.QueryContext(ctx, query, args...)
+}
+
+// QueryRowContext 按方言执行带上下文的单行查询，连接或事务通用。
+// 参数：ctx=取消/超时上下文；qr=查询器；d=方言；query=SQL 语句；args=参数；返回单行结果。
+func QueryRowContext(ctx context.Context, qr ContextQuerier, d Dialect, query string, args ...interface{}) *sql.Row {
+	if d == DialectPostgres {
+		query = pgTranslate(query)
+	}
+	return qr.QueryRowContext(ctx, query, args...)
+}
+
 // Prepare 按方言预备语句。PostgreSQL 下自动翻译 DDL 并改写占位符（保证后续 stmt.Exec 可用 $n）。
 // 参数：p=预备语句执行器；d=方言；query=SQL 语句；返回预备语句及错误。
 func Prepare(p Preparer, d Dialect, query string) (*sql.Stmt, error) {
@@ -144,6 +172,37 @@ func InsertID(e insertExecer, d Dialect, pkCol string, query string, args ...int
 	err := e.QueryRow(q, args...).Scan(&id)
 	if err == sql.ErrNoRows {
 		return 0, nil // 等价于 SQLite 的 INSERT OR IGNORE 命中冲突：无新行，id 视为 0
+	}
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// insertExecerContext 兼具带上下文 Exec 与 QueryRowContext 的连接或事务，供 InsertIDContext 使用。
+type insertExecerContext interface {
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
+}
+
+// InsertIDContext 是 InsertID 的带上下文版本：语义（含「冲突返回 0」）与 InsertID 完全一致，
+// 只是把 ctx 交给驱动，使请求取消/超时时插入会被中断。
+// ★ #59 约定：只有「随请求生死」的写入用它；扣费、审计、工单终态这类**必须落库**的写入
+// 仍走无 ctx 的 InsertID，或显式传 context.WithoutCancel(ctx)，否则客户端断线就会丢账。
+// 参数：ctx=上下文；e=执行器；d=方言；pkCol=主键列名；query=INSERT 语句；args=参数。
+func InsertIDContext(ctx context.Context, e insertExecerContext, d Dialect, pkCol string, query string, args ...interface{}) (int64, error) {
+	if d != DialectPostgres {
+		res, err := e.ExecContext(ctx, query, args...)
+		if err != nil {
+			return 0, err
+		}
+		return res.LastInsertId()
+	}
+	q := pgTranslate(strings.TrimRight(query, " ;")) + " RETURNING " + pkCol
+	var id int64
+	err := e.QueryRowContext(ctx, q, args...).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
 	}
 	if err != nil {
 		return 0, err

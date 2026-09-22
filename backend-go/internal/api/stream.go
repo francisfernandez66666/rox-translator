@@ -43,6 +43,8 @@ import (
 // sseEvent 构造一个 SSE 事件帧（data: {type, ...payload}）。
 // 参数 eventType: 事件类型（如 progress/done/error）；payload: 事件负载字段。
 // 返回: 符合 SSE 协议的事件文本（以 "data: " 开头、空行结尾）。
+// 说明：type 与负载并成同一个 JSON 对象（一帧只有一个对象，前端按 type 分发）；
+// 负载全部是本进程当场构造的普通值，故序列化错误没有可用的上报通道（协议也无错误帧），直接丢弃。
 func sseEvent(eventType string, payload map[string]interface{}) string {
 	full := map[string]interface{}{"type": eventType}
 	for k, v := range payload {
@@ -111,7 +113,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "请求格式错误"})
 		return
 	}
+	// SSE 响应头写出后 HTTP 状态码即固定为 200，此后只能靠 error 事件帧表达失败，
+	// 所以 401/400 一类拒绝必须全部发生在这一行之前（见上面的鉴权与解码分支）。
 	sseHeaders(w)
+	// Flusher 用于每帧立即下发；类型断言可能不成立（如测试用的 ResponseRecorder），
+	// 因此本文件所有 Flush 调用前都判空，绝不因缺少流式能力而 panic。
 	flusher, _ := w.(http.Flusher)
 
 	// 空消息：返回系统问候语（不消耗配额）
@@ -126,6 +132,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	// 配额闸门：QPS/并发/每日上限/余额校验（不通过则拒绝本次翻译）
 	tid, release, gateErr := s.gateUsage(r)
+	// 无条件 defer：并发名额只在真正过闸时才被占用，未过闸时 release 是 no-op，
+	// 因此即使随后立即 return 也不会误归还别人的名额。
 	defer release()
 	if gateErr != nil {
 		// 限流/余额不足：推送 error 事件并结束
@@ -205,6 +213,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 // dispatchTranslateWebhook 投递翻译完成 webhook 事件（text/file 通用）。
 // 参数：tid=租户 ID，kind=任务类型（text/file），source=源文本或文件名，res=引擎结果。
+// 说明：本函数在翻译已经完成之后调用，属于「附加通知」，任何情况下都不允许把主流程带崩，
+// 故 Store 未初始化时静默返回（不报错、不 panic）；实际投递由 Store 侧异步队列负责。
 func (s *Server) dispatchTranslateWebhook(tid int64, kind, source string, res interface{}) {
 	if s.Store == nil {
 		return
@@ -260,6 +270,8 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	}
 	// 不在此默认 en：由 HandleFile 内部解析 message 语言，再兜底 en
 	options := map[string]interface{}{"target_langs": clean}
+	// ★ #65：把原件展示名交给引擎做产物取名（落盘名带内部纳秒标记，不得进交付物文件名）
+	options["source_name"] = header.Filename
 	if message != "" {
 		options["message"] = message
 		options["_prompt"] = message
@@ -285,6 +297,9 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	// ★ 整改 A2：闸门通过后再落盘——被限流/超额拒绝的请求不再产生孤儿文件；
 	//   创建成功即 defer 清理，任何提前返回路径都不会残留磁盘文件。
 	os.MkdirAll(s.Cfg.UploadDir, 0o755)
+	// 目录创建错误故意不单独判断：真缺目录时紧随其后的 os.Create 必然失败，
+	// 由那一条统一回 error 事件即可，避免同一故障出两套话术。
+	// savePath = UploadDir + uniqueName（原始名先被 filepath.Base 清洗，见 uniqueName 注释）
 	savePath := filepath.Join(s.Cfg.UploadDir, uniqueName(header.Filename))
 	f, err := os.Create(savePath)
 	if err != nil {
@@ -295,6 +310,7 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if _, err := io.Copy(f, file); err != nil {
+		// 此处 defer os.Remove 尚未注册，必须手工清理半截文件，否则磁盘留下不可用的残件
 		f.Close()
 		os.Remove(savePath)
 		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": "写入失败"}))
@@ -376,6 +392,7 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 		s.metrics.countTranslate("file", true)
 		s.grantTranslateTask(r, tid) // ★ #33 任务系统：发起翻译奖励（日 ≤1、周 ≤5）
 		// ★ 归属登记（评审整改 C1）：产物可被 /api/download 按 tenant/user 校验
+		//   ticketID 传 0 —— 本路径是即时翻译、没有工单行，登记只服务于下载鉴权。
 		if u := s.authUser(r); u != nil && s.Store != nil {
 			for _, fp := range res.Files {
 				s.Store.RegisterArtifact(fp, tid, u.ID, 0)
@@ -412,6 +429,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	tid, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
+		// 业务失败（限流/余额）不走 HTTP 错误码：与非流式契约一致，200 + body 的 error/error_code，
+		// 由客户端按 error_code 分流提示文案。
 		writeJSON(w, 200, map[string]interface{}{"success": false, "error": gateErr.Error(), "error_code": billing.QuotaErrCode(gateErr)})
 		return
 	}
@@ -423,6 +442,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "error": "该翻译模式已停用"})
 		return
 	}
+	// 长度闸门按 rune（字符）计，不按 len() 字节：一个汉字 3 字节，用字节会把上限压成 1/3
 	if hasRule && rule.LimitChars > 0 && int64(len([]rune(req.Message))) > rule.LimitChars {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "error": fmt.Sprintf("该模式单次输入上限 %d 字符", rule.LimitChars)})
 		return
@@ -482,6 +502,8 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	}
 	// 不在此默认 en：由 HandleFile 内部解析 message 语言，再兜底 en
 	options := map[string]interface{}{"target_langs": clean}
+	// ★ #65：原件展示名传进引擎做产物取名（与 SSE 文件通道同口径）
+	options["source_name"] = header.Filename
 	if message != "" {
 		options["message"] = message
 		options["_prompt"] = message
@@ -510,6 +532,7 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// ★ 整改 A2：闸门通过后再落盘 + defer 兜底清理（拒绝路径零残留）
+	//   目录创建错误不单独判：缺目录时下面 os.Create 必然失败，统一由那一条回 500。
 	os.MkdirAll(s.Cfg.UploadDir, 0o755)
 	savePath := filepath.Join(s.Cfg.UploadDir, uniqueName(header.Filename))
 	f, err := os.Create(savePath)
@@ -518,6 +541,7 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := io.Copy(f, file); err != nil {
+		// defer os.Remove 尚未注册，须手工删除半截文件
 		f.Close()
 		os.Remove(savePath)
 		writeJSON(w, 500, map[string]string{"error": "写入失败"})
@@ -601,6 +625,8 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	//    未登记的历史产物灰度放行并留告警日志——一个产物保留周期（默认14天）后收紧为 404。
 	if s.Store != nil {
 		if art, aerr := s.Store.GetArtifactByPath(filePath); aerr == nil && art != nil {
+			// 超管不受归属限制：平台视角需要能取任意租户产物做排障与质检。
+			// 判定口径 = 同租户 AND（本人产物 OR 租管以上）；跨租户一律 404（不返回 403，免泄露存在性）。
 			if !auth.IsSuperAdmin(u) {
 				allowed := art.TenantID == u.TenantID &&
 					(art.UserID == u.ID || auth.IsTenantAdmin(u))
@@ -627,6 +653,8 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 按扩展名推断 Content-Type（Office/图片/PDF 等）
+	// 用显式映射表而不是 mime.TypeByExtension：后者依赖宿主机的 mime.types，精简镜像里
+	// 常缺 Office 类型，会把 docx 报成 octet-stream 让浏览器放弃预览。
 	ext := strings.ToLower(filepath.Ext(filePath))
 	contentTypes := map[string]string{
 		".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -643,7 +671,10 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", ct)
 	// 附件下载（保留原始文件名）
+	// 只取 filepath.Base 一个成分写进响应头：路径分隔符/换行不可能进 Content-Disposition，
+	// 既防头注入，也不把内部目录结构（tickets/、translated/<落盘名>/）泄露给客户端。
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(filePath)+"\"")
+	// 用 ServeContent 而非 io.Copy：自带 Range（大文件断点续传）与 ModTime/304 处理
 	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
 }
 
@@ -655,9 +686,13 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 //	multipart filename 可被恶意构造为 "../../evil.csv"，旧实现会把 ../ 带进
 //	filepath.Join 造成上传目录外的路径穿越写。Base 清洗后仅保留纯文件名。
 func uniqueName(name string) string {
+	// 反斜杠先统一成正斜杠再取 Base：Windows 客户端上传的 filename 形如 C:\a\b.docx，
+	// 只 ReplaceAll 不 Base（或反之）都会留下能把 ../ 带进 filepath.Join 的成分。
 	name = filepath.Base(strings.ReplaceAll(name, "\\", "/")) // 统一斜杠后取纯文件名（兼容 Windows 风格路径）
 	ext := filepath.Ext(name)
 	base := strings.TrimSuffix(name, ext)
+	// 纳秒时间戳同时是跨请求/跨租户的唯一性守卫：产物分目录（engine 的 artifactOutputDir）
+	// 用落盘名做子目录名正是依赖它，交付名（artifactDisplayBase）才敢把这串数字剥掉。
 	return fmt.Sprintf("%s_%d%s", base, timeNow(), ext)
 }
 
@@ -681,10 +716,12 @@ func resolveSafePath(baseDirs []string, p string) (string, bool) {
 		for _, bd := range baseDirs {
 			absBase, err1 := filepath.Abs(bd)
 			absCand, err2 := filepath.Abs(cand)
+			// 绝对化失败（如 CWD 已不存在）按「不放行」处理：跳过该组合，宁可 404 也不放行未知路径
 			if err1 != nil || err2 != nil {
 				continue
 			}
 			// 带分隔符前缀匹配：既允许恰好等于目录内文件，也排除同前缀名目录的混淆
+			// （absCand == absBase 这一支允许「目录本身」通过，由调用方的 IsDir 校验兜住）
 			if absCand == absBase || strings.HasPrefix(absCand, absBase+string(filepath.Separator)) {
 				return absCand, true
 			}

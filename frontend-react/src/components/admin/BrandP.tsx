@@ -47,6 +47,12 @@ export default function BrandP() {
   const editable = isSuper || brandPaid || brandGranted || brandRoot
 
   // 加载品牌定制数据：租户品牌名称、Logo、子域名、首页背景等
+  // alive 守卫针对的是「超管连点切换器」：前一个租户的请求可能后回来，
+  // 不判 alive 就会把 A 的品牌回填进 B 的表单，保存时写错租户（比读错更贵）。
+  // 每次进 effect 先 setLoaded(false)：loaded=false 时整块表单不渲染（只剩「…」），
+  // 否则切租户的瞬间会继续显示上一个租户的名字/Logo，看着像「改了没生效」。
+  // catch 分支同样 setLoaded(true)：拉取失败也让表单照常渲染（字段为空、可手填），
+  // 否则整块面板永远停在「…」，用户连重试的入口都看不到。
   useEffect(() => {
     let alive = true
     setLoaded(false)
@@ -71,14 +77,20 @@ export default function BrandP() {
   }, [targetTenantId])
 
   // ★ E15：与后端 validateBrandPayloads 同口径的本地预检（Logo ~300KB、背景 ~800KB），
-  //   避免超大图整段 base64 进请求体才被拒
+  //   避免超大图整段 base64 进请求体才被拒。
+  //   两边量纲并不完全相同：后端限的是 base64 字符串长度（brandLogoMaxLen / brandHomeBgMax），
+  //   前端判的是原图字节数，而 base64 会膨胀约 33%，故这里是「拦掉明显超量的大图」的粗筛，
+  //   贴着上限的原图仍会放行到后端、由后端给出那句压缩提示（不是前端漏判就能自己收尾的）。
   const checkBrandFile = (file: File, maxKB: number): boolean => {
     if (!file.type.startsWith('image/')) { toastError('请选择图片文件'); return false }
     if (file.size > maxKB * 1024) { toastError(`图片过大（上限约 ${maxKB}KB），请先压缩`); return false }
     return true
   }
 
-  /** Logo 文件选择处理：读取本地文件并转为 Data URL */
+  /** Logo 文件选择处理：读取本地文件并转为 Data URL
+   *  FileReader 异步回写，故成功后 setLogo 前不做任何乐观更新。
+   *  两处 e.currentTarget.value='' 都是必需的：input 的 value 仍是旧路径时，
+   *  连续选同一张图（换了尺寸重选、或预检失败后重选）不会触发 onChange，看起来「点了没反应」。 */
   const onLogoFile = (e: any) => {
     const file: File | undefined = e?.target?.files?.[0]
     if (!file) return
@@ -89,7 +101,8 @@ export default function BrandP() {
     e.currentTarget.value = ''
   }
 
-  /** 首页背景图文件选择处理：读取本地文件并转为 Data URL */
+  /** 首页背景图文件选择处理：读取本地文件并转为 Data URL
+   *  与 onLogoFile 同形，只差在体积上限（背景 800KB > Logo 300KB，见 E15 预检） */
   const onHomeBgFile = (e: any) => {
     const file: File | undefined = e?.target?.files?.[0]
     if (!file) return
@@ -106,7 +119,10 @@ export default function BrandP() {
   // 记录按下时的光标位置与背景中心，拖动时按相对位移移动（不吸附光标，手感更顺滑）
   const bgDragRef = useRef<{ startX: number; startY: number; x0: number; y0: number } | null>(null)
 
-  /** 更新背景图位置（根据鼠标拖动偏移计算百分比坐标） */
+  /** 更新背景图位置（根据鼠标拖动偏移计算百分比坐标）
+   *  偏移先除以 getBoundingClientRect() 的实时宽高再换算成百分比：
+   *  预览框是 max-width:100% 的流式尺寸，按下时缓存一次会在窗口缩放/换 tab 后失真；
+   *  存 x0/y0 而不是绝对坐标，也让「从卡片任意处按下」都能按原手感拖动（不吸附到光标）。 */
   const updateBgPos = (e: { clientX: number; clientY: number }) => {
     const d = bgDragRef.current
     const el = bgPreviewRef.current
@@ -120,6 +136,8 @@ export default function BrandP() {
   }
 
   // 登录卡片拖拽调整位置（全屏/分栏均生效）：拖动卡片更新 x/y（相对其所在容器）
+  // el 之所以随布局形态换（全屏=bgPreviewRef、分栏=splitFormRef 那一侧）：
+  // x/y 是百分比，必须相对「线上真正承载卡片的那个容器」测量，两种布局下同一个数值才对应同一个视觉位置。
   const cardDragRef = useRef<{ startX: number; startY: number; x0: number; y0: number; el: HTMLElement | null } | null>(null)
 
   /** 更新登录卡片位置（根据鼠标拖动偏移计算百分比坐标） */
@@ -136,6 +154,9 @@ export default function BrandP() {
   }
 
   // 全局鼠标事件：处理背景图和登录卡片的拖拽
+  // 监听挂 window 而不是预览框：拖出 420px 预览框是很自然的动作，绑在框上会「拖到边缘就停住」；
+  // 挂 window 后由 ref 判定这次移动属于哪条拖拽（同一时刻只有一个 ref 非空，不会串）。
+  // 空依赖 + 只读写 ref/state setter：整套拖拽不需要重新注册监听，也不会闭包到旧 homeBgStyle。
   useEffect(() => {
     const move = (e: MouseEvent) => {
       if (bgDragRef.current) updateBgPos(e)
@@ -147,7 +168,11 @@ export default function BrandP() {
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
   }, [])
 
-  /** 保存品牌定制配置：调用后端接口持久化所有品牌设置 */
+  /** 保存品牌定制配置：调用后端接口持久化所有品牌设置
+   *  提交的是「当前表单的完整快照」而非增量：加载时已把九个字段全部回填（见上面的 useEffect），
+   *  整串覆写才不会把用户没碰过的字段丢成空值。bg_style / card_pos / login_layout 三支
+   *  在库里各是一个 JSON 文本列，前端只负责序列化，字段级合并由后端按整列覆写处理。
+   *  入口先判 editable：非可编辑租户即使绕过按钮直接调用，也不该发一次注定被后端拒的写请求。 */
   const save = async () => {
     if (!editable) return
     setSaving(true)
@@ -172,7 +197,9 @@ export default function BrandP() {
     }
   }
 
-  /** 超管为当前「切换器所选租户」开通/撤销品牌定制（免套餐） */
+  /** 超管为当前「切换器所选租户」开通/撤销品牌定制（免套餐）
+   *  成功后只就地翻转 brandGranted、不重跑加载 effect：整表 reload 会把用户
+   *  已经填进去但没保存的字段全部冲掉，而这次写操作唯一影响的标志就是这一个布尔值。 */
   const toggleGrant = async (val: boolean) => {
     setGranting(true)
     try {
@@ -231,6 +258,10 @@ export default function BrandP() {
         <div style={{ color: 'var(--adm-faint)' }}>…</div>
       ) : (
         <div style={{ maxWidth: 560, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* 下面每个控件都各自 disabled={!editable} 而不是整块不渲染：
+              未开通时字段仍回显后端当前值（只读），配合上方锁定横幅说明「为什么看得到但改不了」；
+              整块隐藏会让面板在授权前后长得完全不一样。
+              maxWidth 560 给表单收口，避免超宽屏上输入框拉成一条长线。 */}
           {/* 品牌名称输入 */}
           <div>
             <div style={{ fontSize: 14, marginBottom: 4 }}>{t('brand.name')}</div>
@@ -244,12 +275,15 @@ export default function BrandP() {
           </div>
 
            {/* Logo 上传与预览
-               预览框用深色虚线（#464C58）：暗色面板下浅色/透明 PNG Logo 也能看清边界 */}
+               预览框用深色虚线（#464C58）：暗色面板下浅色/透明 PNG Logo 也能看清边界
+               ★ #68：上面那句里的字面 #464C58 已收口为 --lc-border-input——
+               该档在纯黑底上 ≥4:1（readability.test.ts 的描边锁会拦更暗的字面值），
+               视觉上仍是「看得见的虚线框」，语义不变。 */}
            <div>
              <div style={{ fontSize: 14, marginBottom: 4 }}>{t('brand.logo')}</div>
              <input type="file" accept="image/*" disabled={!editable} onChange={onLogoFile} />
              {logo && (
-               <div style={{ marginTop: 8, padding: 12, border:'1px dashed #464C58', borderRadius: 8, display:'inline-block'}}>
+               <div style={{ marginTop: 8, padding: 12, border:'1px dashed var(--lc-border-input)', borderRadius: 8, display:'inline-block'}}>
                   <img src={logo} alt="logo" style={{ height: 108, maxWidth: 420, objectFit: 'contain', display: 'block' }} />
                </div>
              )}
@@ -257,7 +291,11 @@ export default function BrandP() {
              <input className="lc-input" value={logo} disabled={!editable} onChange={(e) => setLogo(e.target.value)} placeholder="https://…/logo.png" />
            </div>
 
-           {/* 子域名前缀输入 */}
+           {/* 子域名前缀输入
+               targetTenantId===1（平台根 / 默认站，code=rox）时禁用：后端解析专属租户时明确把
+               ID 1 与 rox 排除在「租户子域」之外，放开编辑等于让主站前缀去占一个租户子域。
+               下面那行提示里的 lexicorn.cn 是写死的展示值，真实后缀取后端
+               system_config(base_domain) / env BRAND_DOMAIN_SUFFIX——换根域时两处要一起改。 */}
            <div>
              <div style={{ fontSize: 14, marginBottom: 4 }}>{t('brand.domain')}</div>
                 <input className="lc-input" value={domain} disabled={!editable || targetTenantId === 1} onChange={(e) => setDomain(String(e.target.value ?? ''))} placeholder="请输入你想要的域名名称" />
@@ -296,9 +334,12 @@ export default function BrandP() {
                   {loginLayout.mode === 'split' ? (
                     /* 分栏预览：一侧背景图，另一侧登录容器（容器在左/右随 side 切换）
                        2026-09-18 配色随暗色主题对齐：容器底 rgba(231,233,234,.06)（浅色按 6% 透明度＝微弱提亮）、
-                       登录卡片底 #0E1014（与线上卡片同档）、外框虚线 #464C58（暗底上可辨识的分隔线）。
-                       目的是「预览所见 ≈ 登录页实际观感」，避免白底预览、暗色上线的落差。 */
-                    <div ref={bgPreviewRef} style={{ position:'relative', width:'100%', maxWidth: 420, height: 180, overflow:'hidden', borderRadius: 8, border:'1px dashed #464C58', display:'flex'}}>
+                       登录卡片底 #0E1014（与线上卡片同档）、外框虚线走 --lc-border-input（★ #68：
+                       原字面 #464C58 在纯黑上不足 3:1，预览框几乎看不见）。
+                       目的是「预览所见 ≈ 登录页实际观感」，避免白底预览、暗色上线的落差。
+                       卡内示意文字 #889 / 提示文字 #cdd 是预览图形成分之一（线上卡片文字由登录页
+                       组件按 --lc-text-* 渲染），故不纳入令牌口径；两个全屏/分栏分支共用同一档。 */
+                    <div ref={bgPreviewRef} style={{ position:'relative', width:'100%', maxWidth: 420, height: 180, overflow:'hidden', borderRadius: 8, border:'1px dashed var(--lc-border-input)', display:'flex'}}>
                       {loginLayout.side === 'left' ? (
                         <>
                           {/* 左侧：登录表单容器（可拖拽调整卡片位置） */}
@@ -335,7 +376,7 @@ export default function BrandP() {
                         e.preventDefault()
                         bgDragRef.current = { startX: e.clientX, startY: e.clientY, x0: homeBgStyle.x, y0: homeBgStyle.y }
                       }}
-                      style={{ position:'relative', width:'100%', maxWidth: 420, height: 180, overflow:'hidden', borderRadius: 8, border:'1px dashed #464C58', cursor:'move', background:'#050607'}}
+                      style={{ position:'relative', width:'100%', maxWidth: 420, height: 180, overflow:'hidden', borderRadius: 8, border:'1px dashed var(--lc-border-input)', cursor:'move', background:'#050607'}}
                     >
                       <BrandBgLayer src={homeBg} styleJson={JSON.stringify(homeBgStyle)} />
                       {/* 半透明遮罩层 */}
@@ -364,6 +405,8 @@ export default function BrandP() {
                       <option value="contain">{t('brand.bgContain')}</option>
                     </select>
                     <div style={{ fontSize: 14, minWidth: 96 }}>{t('brand.homeBgZoom')}</div>
+                    {/* 缩放滑块强调色走 --lc-text-1（白）：交付包硬规则「全站无蓝无绿」，
+                        UA 默认的蓝 accent-color 会在这套纯黑面板里直接露出来 */}
                     <input type="range" min={0.5} max={3} step={0.1} value={homeBgStyle.scale}
                             onChange={(e) => setHomeBgStyle((s) => ({ ...s, scale: Number(e.target.value) }))}
                             style={{ width: 160, accentColor: 'var(--lc-text-1)' }} />
@@ -392,7 +435,9 @@ export default function BrandP() {
       )}
         </>
       )}
-        {/* 页脚链接并入品牌定制 tab（仅超管，平台级链接） */}
+        {/* 页脚链接并入品牌定制 tab（仅超管，平台级链接）
+            再判一次 isSuper 与上面 items 的过滤条件同口径（两处都写，改一处不会漏另一处）；
+            FooterP 只在切到该 tab 时才挂载，页脚链接的读取因此不是本面板的常驻开销。 */}
       {tab === 'footer' && isSuper && (
             <FooterP />
       )}

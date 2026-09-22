@@ -16,6 +16,12 @@
 
 /* ---- 全局复位：去掉默认 body 外边距，避免登录页背景四周露出白边 ---- */
 html, body, #root { margin: 0; padding: 0; height: 100%; }
+/* ★ #66（2026-09-22）：文档底也铺纯黑。路由懒加载的占位（App.tsx 外层 Suspense 的
+   PageLoading）挂在外壳 div 之外，此前文档底是浏览器默认白，切页瞬间「灰字换词动效」
+   糊在白纸上（e2e 截图 p4_editor 复现），对比度直接反转；overscroll 回弹同理。 */
+html, body { background: #000000; }
+/* 统一盒模型：1.2px 描边卡片（交付包规格）在 content-box 下会比设计稿宽 2.4px，
+   纯黑体系里边框是主要的分层手段、几乎每块面板都带，所以必须全局 border-box。 */
 * { box-sizing: border-box; }
 
 /* ---- 弹性列主内容区：允许子层收缩到视口宽（防宽表格把页面撑出横向滚动）---- */
@@ -27,6 +33,8 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
         组件均已下线，本文件对 --td-* 的真实 var() 引用为 0，留着即死变量层。）
    ============================================================================ */
 :root {
+  /* color-scheme 是给浏览器自己看的：表单控件默认底色/滚动条/日期选择器面板
+     都按它取暗色档，不写就会在纯黑页面上露出白色原生滚动条与白底 select 弹层。 */
   color-scheme: dark;
 }
 
@@ -40,8 +48,8 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
   --npz-surface: #0E1014;   /* 卡片 / 面板 */
   --npz-surface-2: #16181C; /* 浮面 / hover */
   --npz-text-1: #E7E9EA;    /* 主文字 */
-  --npz-text-2: #9AA0AA;    /* 次文字 */
-  --npz-line: #464C58;      /* 分隔 / 边 */
+  --npz-text-2: #B0B6C2;    /* 次文字（★ #68 2026-09-22 再提一档，与 §十 :root:root 覆写同值） */
+  --npz-line: #666E7C;      /* 分隔 / 边（★ #68：原 #464C58 在纯黑上几乎看不见边；与 §十 覆写同值） */
 }
 
 /* ============================================================================
@@ -49,10 +57,13 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
        提示盒三件套（黄/蓝/紫）→ 琥珀 / 中性白 / 中性白，绿色成功态 → 白
    ============================================================================ */
 :root {
-  --adm-hint: #9AA0AA;
-  --adm-faint: #878D95;
+  --adm-hint: #B0B6C2;
+  --adm-faint: #A6ADBA;
   --adm-body: #E7E9EA;
   --adm-soft: #0A0B0D;       /* 软面板 / 输入框底 */
+  /* --adm-line / --adm-hint / --adm-faint 在这里是「基线值」，§十 的 :root:root 会把它们
+     再覆写提亮一档（#464C58 → #666E7C 等）。两处不同值不是笔误：本段是换肤时的一次性重定义，
+     §十 是后续按对比度实测上调的档位，改对比度只动 §十。 */
   --adm-line: #464C58;       /* 分隔线 */
   --adm-card: #0E1014;       /* 卡片面 */
   --adm-warn-bg: rgba(210, 153, 34, 0.10);
@@ -61,6 +72,8 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
   --adm-info-bg: rgba(231, 233, 234, 0.06);
   --adm-info-bd: rgba(231, 233, 234, 0.14);
   --adm-info-tx: #E7E9EA;
+  /* 原「紫色提示盒」保留 --adm-purp-* 变量名但取值改中性白：
+     后台约 130 处 tsx 内联样式按这个名字引用，改名要铺几十个文件，换值只需本行。 */
   --adm-purp-bg: rgba(231, 233, 234, 0.05);
   --adm-purp-bd: rgba(231, 233, 234, 0.14);
   --adm-err-bg: rgba(229, 72, 77, 0.10);
@@ -125,7 +138,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 /* 头像底色：AI=白、用户=次级灰（原品牌蓝 #1f33d6 / 绿 #43a047，绿色按交付规则废止）；
    文字固定黑色，保证在白/灰底上仍有对比度 */
 .avatar-ai { background: #E7E9EA; }
-.avatar-user { background: #9AA0AA; }
+.avatar-user { background: #B0B6C2; }
 .bubble {
   max-width: 78%; padding: 10px 14px; border-radius: 14px; font-size: 15px; line-height: 1.65;
   background: var(--npz-surface); color: var(--npz-text-1); word-break: break-word;
@@ -187,9 +200,13 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; flex-wrap: wrap; }
 .progress-step { font-size: 14px; color: var(--npz-text-2); }
 .progress-lang { font-size: 13px; font-weight: 600; color: #000; background: #E7E9EA; padding: 1px 6px; border-radius: 4px; }
-.progress-detail { font-size: 13px; color: #878D95; }
+.progress-detail { font-size: 13px; color: var(--lc-text-3); }
 .progress-percent { font-size: 14px; font-weight: 600; color: #E7E9EA; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
-.progress-bar-bg { width: 100%; height: 6px; background: #2A2F3A; border-radius: 3px; overflow: hidden; }
+/* 进度槽底 #575F6C：它是「轨道」这类图形元素而非文字/描边，取值刻意比填充色 #E7E9EA 暗两档，
+   保证槽与填充之间看得出边界；#68 的两条锁只扫文字与 border 字面值，故此处保留实色。
+   §九 的暗色分支会把同一条改走 --adm-line（现值 #666E7C，比这里更亮一档）——
+   即基线用实色、主题分支跟令牌，读进度条颜色时以 html[data-theme='dark'] 那条为准。 */
+.progress-bar-bg { width: 100%; height: 6px; background: #575F6C; border-radius: 3px; overflow: hidden; }
 .progress-bar-fill { height: 100%; background: #E7E9EA; border-radius: 3px; transition: width .3s ease; }
 
 /* ---- ★ B1 流式双态：初译草稿区（量尺的降级替代；定稿前刻意弱呈现）----
@@ -198,16 +215,16 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .draft-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; }
 .draft-stage {
   font-size: 12px; font-weight: 600; letter-spacing: .06em; color: #E7E9EA;
-  border: 1px solid #3F444B; border-radius: 999px; padding: 1px 8px;
+  border: 1px solid var(--lc-border-faint); border-radius: 999px; padding: 1px 8px;
 }
 .draft-stage--review { color: #000; background: #E7E9EA; border-color: #E7E9EA; }
 .draft-pct { font-size: 13px; font-weight: 600; color: var(--npz-text-2); font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
 .draft-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
-.draft-lang { flex: none; min-width: 44px; font-size: 12px; color: #878D95; line-height: 20px; letter-spacing: .04em; }
+.draft-lang { flex: none; min-width: 44px; font-size: 12px; color: var(--lc-text-3); line-height: 20px; letter-spacing: .04em; }
 .draft-text { font-size: 14px; line-height: 1.7; color: var(--npz-text-2); white-space: pre-wrap; word-break: break-word; }
 /* 行尾光标：闪烁关键帧复用 langcross motion.css 的 lc-mo-caret（全站已引入） */
 .draft-caret { display: inline-block; width: 2px; height: 1em; margin-inline-start: 2px; vertical-align: -2px; background: #E7E9EA; animation: lc-mo-caret 1s step-end infinite; }
-.draft-bar { position: relative; height: 2px; margin-top: 8px; background: #2A2F3A; border-radius: 2px; overflow: hidden; }
+.draft-bar { position: relative; height: 2px; margin-top: 8px; background: #575F6C; border-radius: 2px; overflow: hidden; }
 .draft-bar-fill { height: 100%; background: linear-gradient(90deg, rgba(231, 233, 234, .35), #E7E9EA); border-radius: 2px; transition: width .4s ease; }
 @media (prefers-reduced-motion: reduce) {
   .draft-caret { animation: none; opacity: .7; }
@@ -219,7 +236,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
    初译行（未定稿）弱样式灰字，final/gated 行提亮——与草稿区/译文表的层级逻辑一致。 */
 .file-segs {
   margin-bottom: 10px; padding: 8px 10px;
-  border: 1px solid #2A2F3A; border-radius: 8px;
+  border: 1px solid var(--lc-border-faint); border-radius: 8px;
   max-height: 320px; overflow-y: auto; overscroll-behavior: contain;
 }
 /* 中断横幅：语义红 10% 低浓度描边条（禁大色块），只提示「非最终交付物」 */
@@ -230,19 +247,19 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 }
 .file-segs-lang + .file-segs-lang { margin-top: 8px; }
 .file-segs-langhead { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.file-segs-langname { font-size: 12px; color: #878D95; letter-spacing: .04em; }
-.file-segs-live { font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--npz-text-2); border: 1px solid #3F444B; border-radius: 999px; padding: 0 6px; }
+.file-segs-langname { font-size: 12px; color: var(--lc-text-3); letter-spacing: .04em; }
+.file-segs-live { font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--npz-text-2); border: 1px solid var(--lc-border-faint); border-radius: 999px; padding: 0 6px; }
 .file-segs-sealed { font-size: 11px; font-weight: 600; letter-spacing: .06em; color: #000; background: #E7E9EA; border-radius: 999px; padding: 0 6px; }
-.file-segs-count { font-size: 12px; color: #878D95; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; margin-inline-start: auto; }
+.file-segs-count { font-size: 12px; color: var(--lc-text-3); font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; margin-inline-start: auto; }
 .file-seg-row { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; }
-.file-seg-idx { flex: none; font-size: 11px; color: #565B63; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
+.file-seg-idx { flex: none; font-size: 11px; color: var(--lc-text-4); font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
 /* 初译行：次级灰小字（还可能被审校/闸门改写）；final 行提亮为主文本色 */
 .file-seg-text { font-size: 13.5px; line-height: 1.65; color: var(--npz-text-2); white-space: pre-wrap; word-break: break-word; }
 .file-seg-row--final .file-seg-text { color: #E7E9EA; }
-.file-seg-row--final .file-seg-idx { color: #878D95; }
+.file-seg-row--final .file-seg-idx { color: var(--lc-text-3); }
 /* 敏感拦截占位行：不展示内容文本，只给拦截标注 */
-.file-seg-blocked { font-size: 12px; font-style: normal; color: #878D95; }
-.file-segs-trunc { font-size: 12px; color: #565B63; text-align: center; padding-top: 4px; }
+.file-seg-blocked { font-size: 12px; font-style: normal; color: var(--lc-text-3); }
+.file-segs-trunc { font-size: 12px; color: var(--lc-text-4); text-align: center; padding-top: 4px; }
 
 /* ---- ★ D1 WordSwap 共享换词动效（#24：落地页「划掉错词→亮起正词」移植为加载态通用动效）----
    视觉语言与 HeroDemo hd-* 同源但独立成组：错词位 .ws-w 灰字，struck 时转语义红并
@@ -250,8 +267,8 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
    lock 定版缩放。只动 opacity/transform/text-shadow，不触发重排；纯黑口径无新色相。 */
 .ws { display: inline-flex; align-items: baseline; gap: 12px; font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; min-width: 0; }
 /* ★ 多语言循环：语种标签前置（EN/RU/…），灰一档小字，不参与打字动画 */
-.ws-tag { flex: none; font-size: 12.5px; letter-spacing: .08em; color: #878D95; border: 1px solid #2A2F3A; border-radius: 4px; padding: 1px 5px; transform: translateY(-1px); }
-.ws-w { position: relative; display: inline-block; color: #9AA0AA; font-size: 14px; transition: color .28s ease; }
+.ws-tag { flex: none; font-size: 12.5px; letter-spacing: .08em; color: var(--lc-text-3); border: 1px solid var(--lc-border-faint); border-radius: 4px; padding: 1px 5px; transform: translateY(-1px); }
+.ws-w { position: relative; display: inline-block; color: var(--lc-text-2); font-size: 14px; transition: color .28s ease; }
 .ws-w.struck { color: var(--lc-danger, #E5484D); animation: wsStrikeFlash .72s ease-out both; }
 /* 红线是文字节点 ::before：与错词分开两层，划掉动画（scaleX）不牵连文字重排 */
 .ws-w .ws-wt::before { content: ''; position: absolute; left: -2px; right: -2px; top: 55%; height: 1.6px; background: var(--lc-danger, #E5484D); transform: scaleX(0); transform-origin: left center; }
@@ -281,6 +298,13 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .file-segs-ws .ws-w { font-size: 13px; }
 .file-segs-ws .ws-r { font-size: 14px; }
 .file-segs-ws .ws-tag { font-size: 11px; }
+/* ★ 2026-09-22 用户追加需求：工单「执行进度」弹窗也上这份换词动效——进度条下方一行，
+   字号按弹窗 13~15px 文本基线取中档（比草稿/逐段行略大，弹窗里要一眼读到） */
+.tk-prog-ws { gap: 10px; }
+.tk-prog-ws .ws-w { font-size: 16px; }
+.tk-prog-ws .ws-r { font-size: 17px; }
+.tk-prog-ws .ws-tag { font-size: 12px; }
+.tk-prog-ws-row { display: flex; align-items: center; gap: 10px; margin: 10px 0 2px; min-width: 0; overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .ws-w.struck, .ws-r.lock { animation: none; }
   .ws-w .ws-wt::before { animation: none; }
@@ -288,13 +312,14 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 }
 
 /* ---- ★ #23 LangSelect 界面语言下拉（12 语种，取代 zh/en 二元 toggle）----
-   顶栏/登录卡/后台三处共用；纯黑口径：描边 #2A2F3A、悬停次级灰、当前项白字打勾。
+   顶栏/登录卡/后台三处共用；纯黑口径：描边走 --lc-border-faint（★ #68 提档后 ≥4:1）、
+   悬停描边走 --lc-border-strong（必须比静置更亮，否则 hover 反而「消失」）、当前项白字打勾。
    菜单绝对值定位不挤布局，--right 贴触发钮右缘向左展开防窄屏溢出。 */
 .lang-sel { position: relative; display: inline-flex; }
-.lang-sel-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid #2A2F3A; border-radius: 8px; background: none; color: #C8CCD1; font: 500 12px/1 var(--lc-font, 'Inter', sans-serif); cursor: pointer; transition: border-color .18s ease, color .18s ease; }
-.lang-sel-btn:hover, .lang-sel-btn.is-open { border-color: #4A505C; color: #E7E9EA; }
+.lang-sel-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--lc-border-faint); border-radius: 8px; background: none; color: #C8CCD1; font: 500 12px/1 var(--lc-font, 'Inter', sans-serif); cursor: pointer; transition: border-color .18s ease, color .18s ease; }
+.lang-sel-btn:hover, .lang-sel-btn.is-open { border-color: var(--lc-border-strong); color: #E7E9EA; }
 .lang-sel-cur { white-space: nowrap; }
-.lang-sel-menu { position: absolute; top: calc(100% + 6px); inset-inline-start: 0; z-index: 60; min-width: 148px; max-height: 320px; overflow-y: auto; padding: 4px; background: #16181C; border: 1px solid #2A2F3A; border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .5); }
+.lang-sel-menu { position: absolute; top: calc(100% + 6px); inset-inline-start: 0; z-index: 60; min-width: 148px; max-height: 320px; overflow-y: auto; padding: 4px; background: #16181C; border: 1px solid var(--lc-border-faint); border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .5); }
 .lang-sel-menu--right { inset-inline-start: auto; inset-inline-end: 0; }
 .lang-sel-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 6px 9px; border: none; border-radius: 7px; background: none; color: #B6BBC3; font: 400 12.5px/1.4 var(--lc-font, 'Inter', sans-serif); cursor: pointer; text-align: start; }
 .lang-sel-item:hover { background: #1F2228; color: #E7E9EA; }
@@ -333,7 +358,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .mode-fuzzy { background: rgba(210, 153, 34, 0.14); color: #D29922; }
 .mode-semantic { background: rgba(231, 233, 234, 0.06); color: var(--npz-text-2); }
 .mode-model { background: rgba(231, 233, 234, 0.12); color: #E7E9EA; }
-.mode-match-text { font-size: 13px; color: #878D95; }
+.mode-match-text { font-size: 13px; color: var(--lc-text-3); }
 
 /* ---- 匹配度报告 ---- */
 .match-report { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--npz-line); }
@@ -348,7 +373,9 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .feedback-btn { border: none; background: transparent; color: var(--npz-text-2); font-size: 13px; cursor: pointer; padding: 2px 8px; border-radius: 10px; }
 .feedback-btn:hover { background: rgba(231, 233, 234, 0.10); color: #E7E9EA; }
 
-/* ---- 下载卡图标：原蓝/红/绿 → 白 / 红 / 琥珀（无绿） ---- */
+/* ---- 下载卡图标：原蓝/红/绿 → 白 / 红 / 琥珀（无绿） ----
+   三个文件类型档必须彼此可辨（交付包只保留白/红/琥珀三种非单色语义），
+   故这里是实色底 + 反白/反黑文字，属图形标识，不走描边与文字令牌。 */
 .card-icon { flex-shrink: 0; width: 42px; height: 42px; border-radius: 10px; display: flex; align-items: center; justify-content: center; }
 .icon-docx, .icon-pptx, .icon-xlsx {
   width: 42px; height: 42px; border-radius: 10px; color: #000; font-size: 20px; font-weight: 800;
@@ -376,7 +403,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .preview-img {
   max-width: 320px; max-height: 220px; border-radius: 10px; cursor: zoom-in;
   border: 1.2px solid var(--npz-line); object-fit: cover; background: var(--npz-surface);
-  display: flex; align-items: center; justify-content: center; color: #878D95;
+  display: flex; align-items: center; justify-content: center; color: var(--lc-text-3);
 }
 .preview-loading { min-width: 120px; min-height: 80px; }
 .download-card {
@@ -458,7 +485,7 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 .login-error, .eb-err { color: #E5484D; font-size: 13.5px; margin-top: 6px; }
 .fb-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .fb-check { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 14px; color: var(--npz-text-1); cursor: pointer; }
-.fb-ctx-preview { color: #878D95; font-size: 13px; }
+.fb-ctx-preview { color: var(--lc-text-3); font-size: 13px; }
 .fb-confirm-row { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; color: var(--npz-text-1); margin: 6px 0 4px; }
 
 /* ============================================================================
@@ -475,6 +502,9 @@ html, body, #root { margin: 0; padding: 0; height: 100%; }
 
 /* ============================================================================
    九、暗色分支下的类级覆写（与 :root 同值，防止主题开关回退亮色）
+       形态说明：整段统一带 html[data-theme='dark'] 前缀，特异度 (0,2,1) 高于
+       同名基线规则的 (0,1,0)，所以能在「不改基线」的前提下按主题开关覆写；
+       这些行的取值都取自令牌而不是字面色，正是为了让 §十 换档时它们自动跟随。
    ============================================================================ */
 html[data-theme='dark'] body { background: var(--npz-page-bg); color: var(--npz-text-1); }
 html[data-theme='dark'] .app-header { background: var(--npz-page-bg); border-bottom-color: var(--npz-line); }
@@ -518,17 +548,47 @@ html[data-theme='dark'] .ss-row span { color: var(--npz-text-2); }
      2) 类级覆写用 html 前缀（如 html .lc-table），(0,1,1) > (0,1,0)。
    字号口径：基础 14→15、正文与表格 13→14、标签与说明 12→13、极小徽标 10/11→11/12。
    只抬字号与文字色，不动间距/控件高度/圆角，避免破坏交付包版式比例。
-   对比度实测（对 #000 页面底 / 对 #0E1014 卡面，两档都要过 AA 4.5:1）：
-     text-2 8.78 / 7.96 · text-3 7.79 / 7.06 · text-4 6.80 / 6.16。
+   对比度实测（对 #000 页面底 / 对 #0E1014 卡面，两档都要过 AA 4.5:1）——
+   下列数值为 #68 提档后的现值（#35 首档曾是 8.78 / 7.96、7.79 / 7.06、6.80 / 6.16）：
+     text-2 10.32 / 9.35 · text-3 9.31 / 8.44 · text-4 8.16 / 7.40。
    ============================================================================ */
 :root:root {
-  --lc-text-2: #A2A8B2;   /* 原 #9AA0AA（7.98 / 7.24） */
-  --lc-text-3: #979EAA;   /* 原 #878D95（6.27 / 5.69） */
-  --lc-text-4: #8C93A0;   /* 原 #7A828E（5.41 / 4.91） */
-  --lc-text-5: #979EAA;   /* 价格单位 / 辅助数字，与 text-3 同档（原 #8A9099） */
-  --npz-text-2: #A2A8B2;  /* 前台次文字（约 60 处内联样式走此令牌，一处改全站生效） */
-  --adm-hint: #A2A8B2;    /* 后台提示文案 */
-  --adm-faint: #979EAA;   /* 后台弱说明 */
+  /* ★ #68（2026-09-22 用户「对比度整体再提升一下」）：在 #35 那档基础上再提一档。
+     实测对 #000 页面底 / #0E1014 卡面：text-2 10.32 / 9.35 · text-3 9.31 / 8.44 ·
+     text-4 8.16 / 7.40，全部高于 AA 正文 4.5:1；主文字 #E7E9EA（15.9）不动，
+     再白只会增加眩光，观感提升靠次级文字与描边。 */
+  --lc-text-2: #B0B6C2;   /* 原 #9AA0AA → #35 档 #A2A8B2 */
+  --lc-text-3: #A6ADBA;   /* 原 #878D95 → #35 档 #979EAA */
+  --lc-text-4: #9AA2AF;   /* 原 #7A828E：占位 / 弱说明 */
+  --lc-text-5: #A6ADBA;   /* 价格单位 / 辅助数字，与 text-3 同档 */
+  --npz-text-2: #B0B6C2;  /* 前台次文字（约 60 处内联样式走此令牌，一处改全站生效） */
+  --adm-hint: #B0B6C2;    /* 后台提示文案 */
+  --adm-faint: #A6ADBA;   /* 后台弱说明 */
+  /* 描边/分隔线：原先 2.4~3.2:1 一档在纯黑上「看不见边」，整体提到 4.1~8.0:1
+     （faint 4.09 / card 4.33 / input 4.45 / done 5.87 / strong 8.04，对页面底）；
+     组件库 tokens.css 属交付包冻结区，只在页面级覆写，不改源文件。
+     --lc-border-card-dim 与 --lc-disabled 保留暗值：前者是刻意弱化的双层边，后者是非交互态。 */
+  --lc-border-strong: #98A1AE;
+  --lc-border-done: #808894;
+  --lc-border-input: #6B7482;
+  --lc-border-faint: #666E7C;   /* 4.1:1 —— 最弱一档也要看得出「有条线」 */
+  --lc-border-pill: #656E7C;
+  --lc-border-card: #6A7280;
+  --lc-border-card-dim: #454C58;
+  /* --lc-border-1..7 是组件库 tokens.css 里的「编号别名」（库内按编号消费，冻结区不可改名）。
+     同一元素上的 var() 引用会自动取本段覆写后的语义档，所以逐支重列并非必需，
+     留着是为了让覆写层自解释：读 §十 就能看到全部七档描边的最终落点，
+     也能防住「tokens.css 某支别名被改成字面值」时这里静默失配。 */
+  --lc-border-1: var(--lc-border-strong);
+  --lc-border-2: var(--lc-border-done);
+  --lc-border-3: var(--lc-border-input);
+  --lc-border-4: var(--lc-border-faint);
+  --lc-border-5: var(--lc-border-pill);
+  --lc-border-6: var(--lc-border-card);
+  --lc-border-7: var(--lc-border-card-dim);
+  --lc-disabled: #5C626B;
+  --npz-line: #666E7C;    /* 前台分隔 / 边 */
+  --adm-line: #666E7C;    /* 后台分隔线 */
 }
 
 /* —— 组件库字号上调（只覆写，不改 langcross 源文件）—— */
@@ -556,3 +616,31 @@ html .progress-detail, html .draft-lang, html .file-segs-langname, html .file-se
 html .file-seg-blocked, html .file-segs-trunc, html .mode-match-text, html .ws-tag,
 html .fb-ctx-preview { color: var(--lc-text-3); }
 html .file-seg-idx { color: var(--lc-text-4); }
+
+/* ============================================================================
+   十一、★ #67（2026-09-22 用户反馈「页眉、tab 都太小，看起来一点不清楚；X / Grok 的
+        黑色 UI 字号很大」）：顶栏与工作台控件整档放大
+   ---------------------------------------------------------------------------
+   组件库 tokens.css / components.css 属交付包冻结区（见 §十说明），一律走页面级
+   `html` 前缀覆写。字阶口径：品牌 17→23、工作台 Tab 14→17（并加粗 600）、
+   顶栏控件 14→16、语言下拉 12→15、余额徽标 11→13；控件高度随字阶从 30/32 提到
+   38，避免「字变大了钮还是小的」比例失调。App.tsx 里的内联字阶（品牌 / 租户徽标 /
+   汉堡钮 / Tab）优先级高于本文件，已同步改内联值，勿只改这里。
+   ============================================================================ */
+html .app-header { gap: 16px; padding: 12px 22px; }
+/* ★ #67 补（2026-09-22 截图复核）：字阶放大后 1280 宽的顶栏放不下，flex 项被压到
+   min-content，中文按字折行（品牌「能/言」、Tab「即时/翻译」、上传钮「上传知/识库」全断行）。
+   口径：单项文字一律不折行，宁可整组控件换到顶栏第二行（row-gap 撑开），也不把词切断。 */
+html .app-header { flex-wrap: wrap; row-gap: 8px; }
+html .app-header .brand, html .app-header .app-tab, html .app-header .ss-ghost-btn,
+html .app-header .tenant-tag, html .app-header .pkg-line-tag, html .app-header .lc-btn,
+html .app-header .lang-sel-btn, html .app-header .am-trigger { white-space: nowrap; }
+html .brand { font-size: 23px; }
+html .am-trigger { font-size: 16px; padding: 8px 10px; }
+html .lang-sel-btn { font-size: 15px; height: 38px; padding: 0 12px; }
+html .lang-sel-menu { min-width: 168px; }
+html .lang-sel-item { font-size: 15px; }
+html .lc-badge { font-size: 13px; }
+/* 铃铛钮内边距 6→9px：Bell.tsx 的组件内 <style> 写的是 6px，这里靠 html 前缀拿到
+   (0,1,1) > 库内的 (0,1,0)，与注入顺序无关地稳定提权（§十 讲过的同一套覆写手法）。 */
+html .bell-trigger { padding: 9px; }

@@ -66,6 +66,8 @@ func NewTicketService(st *store.Store, eng *engine.Engine, ts *tenant.Store, db 
 }
 
 // EnqueueTicketRun 将工单翻译任务入队（立即返回，不阻塞 HTTP）。
+// 入队成功后敲一次 Notifier：唤醒正阻塞在 Wait 上的 worker，省掉最长 1s 的轮询空等；
+// Notifier 为 nil（未启用 Redis 的标准单实例形态）时不敲信号也会被轮询捞起，功能不降级。
 func (s *TicketService) EnqueueTicketRun(ctx context.Context, ticketID int64) (int64, error) {
 	id, err := s.Queue.Enqueue(ctx, "ticket_run", queue.NewTicketPayload(ticketID), queue.DefaultMaxAttempts)
 	if err == nil && s.Notifier != nil {
@@ -75,6 +77,8 @@ func (s *TicketService) EnqueueTicketRun(ctx context.Context, ticketID int64) (i
 }
 
 // StartWorkers 启动 n 个 worker goroutine（幂等；重复调用忽略）。
+// started 标志由 mu 保护：多实例/多处重复调用只会起一份协程，避免同进程内自己抢自己的租约。
+// workerID 带进程启动纳秒戳，保证多实例部署下互相不重名（租约按 leased_by 判定归属）。
 func (s *TicketService) StartWorkers(n int) {
 	s.mu.Lock()
 	if s.started {
@@ -93,6 +97,7 @@ func (s *TicketService) StartWorkers(n int) {
 }
 
 // Stop 停止工作池（优雅停机时调用；在途任务由租约超时机制回收）。
+// select+default 的写法让重复调用安全：已关闭再 close 会 panic。
 func (s *TicketService) Stop() {
 	select {
 	case <-s.stopCh:
@@ -109,6 +114,8 @@ func (s *TicketService) workerLoop(workerID string) {
 			return
 		default:
 		}
+		// 领取动作本身给 5 分钟上限（含 Notifier 等待）：这是个短操作，超时只代表「本轮没活」，
+		// 与任务执行时长无关，所以绝不能把这条 ctx 传给执行逻辑。
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		// 多实例唤醒：有信号器时阻塞等待（最长 1s），否则直接领取（等价于原轮询节奏）
 		if s.Notifier != nil {
@@ -127,6 +134,9 @@ func (s *TicketService) workerLoop(workerID string) {
 			}
 			continue
 		}
+		// 执行 ctx 与领取 ctx 完全分离：25 分钟是「单个任务最长执行时间」的硬上限，
+		// 刻意小于默认租约窗口（30min），保证任务正常超时收尾时租约还在，
+		// 不会被 RecoverStale/其他实例判成死任务而双跑。
 		jctx, jcancel := context.WithTimeout(context.Background(), 25*time.Minute)
 		// ★ 2026-09-04 加固：租约续期心跳——长任务处理期间定期刷新 jobs.leased_at，
 		//   防止处理时长逼近/超过租约窗口（默认 30m）时被 RecoverStale 或其他实例
@@ -289,6 +299,8 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 		log.Printf("[ticket-run] 工单 %d 已被其他 worker 认领或处于不可执行态，本 job 跳过", t.ID)
 		return nil
 	}
+	// 库里的状态已被 ClaimTicketForRun 原子推进，这里只同步内存对象，
+	// 免得后续按 t 落库（失败收尾等）时把 in_progress 又覆盖回 queued。
 	t.Status = store.TicketInProgress
 
 	// ★ 心跳保活（评审整改 R3）：长翻译阶段内业务状态不变化，60s 触碰一次 updated_at，
@@ -301,6 +313,8 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	defer close(hbStop)
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
+	// 两个 ticker 故意不合并：心跳只要比 20min 卡死阈值密若干倍即可（60s），
+	// 取消监视则越早掐断越少烧 LLM 钱（3s），共用一个周期必然迁就其中一方。
 	go func() {
 		tk := time.NewTicker(60 * time.Second)
 		wt := time.NewTicker(3 * time.Second)
@@ -504,6 +518,8 @@ func (s *TicketService) StartStallSweep() {
 		t := time.NewTicker(5 * time.Minute)
 		for range t.C {
 			// 非阻塞获取：拿不到说明其他实例正在巡检，本实例直接跳过本轮（尽力而为）。
+			// TTL 取 6 分钟（略大于 5 分钟轮询周期）：正常路径靠 release 主动释放，
+			// TTL 只兜「持锁实例崩溃」的残留，最多让集群多等一轮，不会长期锁死巡检。
 			got, release, err := lock.TryLock(context.Background(), 6*time.Minute)
 			// ★ P1-4（2026-09-18）：Redis 异常与「他实例持锁」语义不同——异常时原写法
 			//   `err != nil || !got → continue` 会让全集群巡检静默停摆；改为保守降级
@@ -514,6 +530,8 @@ func (s *TicketService) StartStallSweep() {
 			} else if !got {
 				continue
 			}
+			// 用一层匿名函数包住本轮巡检：defer release() 的作用域因此是「本轮」而不是
+			// 整个 goroutine ——写在 for 里会等 goroutine 退出才释放（即永远持锁）。
 			func() {
 				defer release()
 				s.Store.CloseStalePendingOrders() // ★ 订单15min超时自动关闭
@@ -560,6 +578,8 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	// ★ 进度阶梯回调：把引擎内部阶段映射为步骤状态（前端锚点：提取20/初翻40/校对60/回写80）。
 	// 同时归集细粒度「初翻/校对」逐段进度：引擎以 "file_translate|初翻|en" / "file_translate|校对|en"
 	// 上报（done/total 为该语言段数），此处按语言累加，落库为单条 file_translate 轨迹的 JSON。
+	// 按语言各记一份 done/total：多语言并发时每个协程只覆盖自己那一格（不是累加器，
+	// 引擎按语言各自上报 0..N 的游标），汇总时才求和，写竞争面最小。
 	type segProg struct {
 		mu      sync.Mutex
 		init    map[string]int64
@@ -574,6 +594,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	progWriteCount := 0
 	finalizeFileTranslate := func() {
 		sp.mu.Lock()
+		// 四个 map 求和成一条全局进度（锁内算完即解锁，落库在锁外）
 		var id, it, rd, rt int64
 		for _, v := range sp.init {
 			id += v
@@ -587,6 +608,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 		for _, v := range sp.reviewT {
 			rt += v
 		}
+		// 手工拼 JSON：字段全是整数、无用户文本，不存在需要转义的内容（含文本的 payload 不可照此写）
 		payload := fmt.Sprintf(`{"init_done":%d,"init_total":%d,"review_done":%d,"review_total":%d}`, id, it, rd, rt)
 		sp.mu.Unlock()
 		s.Store.SetTicketState(t.ID, "file_translate", "success", payload)
@@ -654,7 +676,9 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				res := s.Engine.HandleFile(ctx, tf.FilePath,
 					// ★B3：工单队列通道不接逐段事件（emit=nil，方案 A2 前端改动点 4：段落中间态
 					//   需落库+轮询暴露，放二期）；体验口径见 API 文档「SSE 通道有实时段落、任务通道完成后可得」。
-					map[string]interface{}{"target_langs": langs, "mode": mode, "delivery": delivery}, progFn, nil)
+					// ★ #65：source_name 传 DB 里的原件展示名（tf.FileName），引擎据此取产物名——
+					//   落盘名 tf.FilePath 带内部纳秒前缀，只能当唯一性标识，绝不能进交付物文件名。
+					map[string]interface{}{"target_langs": langs, "mode": mode, "delivery": delivery, "source_name": tf.FileName}, progFn, nil)
 				mu.Lock()
 				defer mu.Unlock()
 				if res.Error != "" || len(res.Files) == 0 {
@@ -693,7 +717,11 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 						"ticket", t.ID)
 				}
 				okCount++
+				// doneN = 本轮成功数 + 库里已标 error 的文件数（重跑同一工单时进度才不会倒退）
 				doneN := okCount + failedCount(s.Store, t.ID)
+				// 进度落库前主动放锁、写完再抢回来：持锁做写事务会把同批其他文件的协程
+				// 全部串到最慢的一次 DB 写后面。重新加锁是为了与本函数入口的 defer mu.Unlock()
+				// 配对——这一区间内绝不能 return，否则 deferred Unlock 解的是未加的锁（panic）。
 				mu.Unlock()
 				s.Store.SetTicketState(t.ID, "file_translate", "running",
 					fmt.Sprintf("progress=%d/%d", doneN, len(files)))
@@ -735,6 +763,8 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 		return nil
 	}
 	// 旧单文件路径（★B3：emit=nil 同队列通道口径，不接逐段事件）
+	// ★ #65：不传 source_name——tickets 表这一路径没有「原件展示名」列（Title 用户可改，
+	//   不能当文件名用），由引擎回落「落盘名剥内部时间戳标记」，同样不会把纳秒前缀交付出去。
 	s.Store.SetTicketState(t.ID, "file_translate", "running", "single")
 	res := s.Engine.HandleFile(ctx, t.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode, "delivery": delivery}, progFn, nil)
 	if res.Error != "" {
@@ -802,6 +832,8 @@ func untranslatedTotal(m map[string]int) int {
 }
 
 // failedCount 统计工单内处理失败的文件数。
+// 口径以库里的 ticket_files.error 为准（由 SetTicketFileError 写入），不看内存累加器：
+// 因此本次运行之外（断点续跑/巡检重排前）已标错的文件也会计入，进度与统计不会因重跑而偏小。
 func failedCount(s *store.Store, ticketID int64) int64 {
 	files, _ := s.TicketFiles(ticketID)
 	var n int64
@@ -840,6 +872,8 @@ func zipDeliveryName(files []string, langs []string, srcPath string) string {
 }
 
 // zipOutputs 将多个产物文件打包为一个 zip（供下载一次获取全部语言版本）。
+// zip 与产物同目录（即 translated/<落盘名>/），下载侧的目录白名单因此天然覆盖。
+// 单个文件读不到时跳过而非整体失败——已生成的语言不该被一个坏文件连累。
 func zipOutputs(paths []string, zipName string) (string, error) {
 	outDir := filepath.Dir(paths[0])
 	zipPath := filepath.Join(outDir, zipName)
@@ -855,9 +889,11 @@ func zipOutputs(paths []string, zipName string) (string, error) {
 		if rerr != nil {
 			continue
 		}
+		// 只存 basename：包内不带任何目录成分，解压方不会因绝对/相对路径写到目录外
 		fe, _ := w.Create(filepath.Base(p))
 		_, _ = fe.Write(data)
 	}
+	// Close 才真正落中央目录，其错误才是打包是否可用的结论；deferred Close 仅兜底（重复调用返回值被丢）
 	return zipPath, w.Close()
 }
 
@@ -905,6 +941,8 @@ func (s *TicketService) persistTicketSegments(t *store.Ticket, filePath string, 
 }
 
 // persistTextOutputs 登记纯文案旁路产物（还原模式）。
+// 逐个 Stat 过滤，只登记磁盘上确实存在的文件；多份打成一个 zip 返回（zip 自身也要登记归属），
+// 打包失败则退回第一份路径——至少保证有一个可下载产物，而不是整体留空。
 func (s *TicketService) persistTextOutputs(t *store.Ticket, ownerUID int64, paths []string) string {
 	var exist []string
 	for _, p := range paths {
@@ -971,6 +1009,7 @@ func firstLangOf(langs []string) string {
 }
 
 // parseLangs 解析逗号分隔的语言列表，忽略空项。
+// 全空时兜底单一 en（工单执行必须有一个目标语言，缺省不能把空列表传给引擎）。
 func parseLangs(s string) []string {
 	var out []string
 	for _, p := range splitComma(s) {

@@ -78,7 +78,8 @@ func (s *Server) startWatchdog() {
 	go func() {
 		ticker := time.NewTicker(time.Duration(interval) * time.Second)
 		defer ticker.Stop()
-		// 定时触发一轮检查（★ P1 多实例：单跑者化，防各实例重复生成告警/重复推群）
+		// 定时触发一轮检查（★ P1 多实例：单跑者化，防各实例重复生成告警/重复推群）。
+		// 锁 TTL 取 1 分钟：本任务正常耗时远小于它，TTL 只当「持锁实例崩溃后的残留清理」用。
 		for range ticker.C {
 			s.runExclusive("watchdog-check", time.Minute, s.runWatchdogCheck)
 		}
@@ -108,6 +109,8 @@ func (s *Server) startWatchdog() {
 			s.sloSampleTick(err == nil)
 			if err == nil {
 				resp.Body.Close()
+				// 只在「曾经连续失败过」时补一条恢复通知：正常轮次什么都不写，
+				// 否则每 60s 一条 info 会把告警表刷成噪音。
 				if failStreak >= failThreshold && s.Store != nil {
 					_ = s.Store.CreateAlert(0, "info", "selfcheck", "服务探活已恢复正常")
 				}
@@ -251,6 +254,8 @@ func (s *Server) runTicketRetentionScan() {
 		if perr != nil {
 			continue
 		}
+		// Ceil 而非整除：不足一天按一天计，这样「今晚到期」落在 1 天提醒档，
+		// 而 daysLeft<=0（清理分支）只在真正越过到期时刻后才成立。
 		daysLeft := int(math.Ceil(time.Until(exp).Hours() / 24))
 		// 已过期：清理产物
 		if daysLeft <= 0 {
@@ -258,6 +263,7 @@ func (s *Server) runTicketRetentionScan() {
 			if cerr == nil {
 				for _, p := range paths {
 					_ = os.Remove(p)
+					store.RemoveEmptyArtifactDir(p) // ★ #65：产物子目录清空后一并回收，不留空目录
 				}
 				_ = s.Store.CreateNotification(r.CreatedBy, "工单产物已过保留期",
 					fmt.Sprintf("工单号 %s 的结果文件超过 %s 保留期已被清理；译文仍保留在翻译记忆中，可重新发起工单复用。", r.TicketNo, exp.Format("2006-01-02")),
@@ -270,6 +276,8 @@ func (s *Server) runTicketRetentionScan() {
 		for _, tier := range []int{7, 3, 1} {
 			tierStr := strconv.Itoa(tier)
 			if daysLeft <= tier && !s.Store.TicketExpireMarked(r.ID, tierStr) {
+				// 先置档标记、再发通知：两步之间崩溃只会少一条提醒，反序则会在每轮扫描重复轰炸。
+				// 标记失败（DB 异常）时不发，留待下一轮重试。
 				if err := s.Store.MarkTicketExpireNotify(r.ID, tierStr); err == nil {
 					_ = s.Store.CreateNotification(r.CreatedBy, "工单结果即将过期",
 						fmt.Sprintf("工单号 %s 的结果文件将在 %d 天后（%s）清理，请尽快下载；译文长期有效。",
@@ -284,8 +292,14 @@ func (s *Server) runTicketRetentionScan() {
 // runSubscriptionScan 订阅到期扫描（每日执行）：
 //   - 已到期（now ≥ package_expires_at）：摘除订阅身份（ExpirePackage），句数余额保留，
 //     写审计（actor=system）并通知租户管理员
+//   - ★ #74 宽限期：开启 auto_renew 的租户到期后先进入 N 天宽限期（默认 3，见 subscription_grace.go），
+//     期间身份与额度保留、每日补建续费单，宽限期结束仍未到账才摘除身份
 //   - 剩余 ≤7 天 / ≤1 天：分别发送一次通知中心提醒（NotifiedExp7/NotifiedExp1 标记去重）
-//   - ★ #41 自动续费：开启 auto_renew 的租户在 T-3 窗口内自动生成同包续费单（见 pay_renew.go）
+//   - ★ #41 自动续费：续费窗口（默认 T-3）内自动生成同包续费单（见 pay_renew.go）
+//
+// 多实例：本函数整体由 s.runExclusive("subscription-scan", …) 单跑者化包裹（见 startWatchdog），
+// 因此宽限期落库、续费单创建与三类站内信在全集群每轮只执行一次；
+// 「必须落库」的写路径都在这里发生的后台协程里，上下文用 context.Background（同其它周期任务）。
 func (s *Server) runSubscriptionScan() {
 	if s.Store == nil || s.Ten == nil {
 		return
@@ -309,27 +323,63 @@ func (s *Server) runSubscriptionScan() {
 			continue
 		}
 		// 已到期：摘除订阅身份并通知
+		// !Before 而非 After：到期时刻当刻（相等）即视为已到期，避免差一秒拖到下一轮。
 		if !now.Before(exp) {
+			// ★ #74（2026-09-23）宽限期裁决：开启自动续费的租户到期后先进入 N 天宽限期，
+			//   订阅身份与额度原样保留（本分支一行都不碰 package_code），期间每日继续补建
+			//   续费单；宽限期结束仍未到账才落到下面的摘除分支。配置为 0 或未开自动续费时
+			//   handleExpiredSubscription 返回 false，行为与改造前完全一致。
+			_, hadGrace := graceDeadline(perms, exp)
+			if s.handleExpiredSubscription(t.ID, perms, exp, now) {
+				// 宽限期内的补建尝试：daysLeft 为负（已到期），阶梯口径与到期前同一套
+				//   （每日至多一张，同日去重由 renewal_attempts 唯一键兜底）。
+				graceDaysLeft := int(time.Until(exp).Hours() / 24)
+				s.maybeCreateRenewalOrder(t.ID, perms, graceDaysLeft)
+				continue
+			}
+			// ExpirePackage 一次原子更新 permissions：清 package_code/package_expires_at，
+			// 并复位 notified_exp7/notified_exp1 与宽限期两键（续订后新一期才还能再提醒/再给宽限期）；
+			// 句数余额与已发放台账不碰，故摘除后剩余额度仍可正常消费。
 			if code, err := s.Store.ExpirePackage(t.ID); err == nil {
 				s.Store.LogAuditDiff(t.ID, 0, "package_expire", "tenant", strconv.FormatInt(t.ID, 10),
 					`{"package_code":"`+code+`"}`, `{"package_code":""}`)
-				s.notifyTenantAdmins(t.ID, "订阅已到期",
-					"商业包「"+code+"」已到期，订阅身份已移除；剩余句数仍可正常使用，续订后即时生效。")
-				s.notifyBots("订阅到期摘除",
-					"租户 #"+strconv.FormatInt(t.ID, 10)+"（"+t.Name+"）商业包「"+code+"」已到期，订阅身份已摘除。")
+				if hadGrace {
+					// 三个触达节点的最后一个：宽限期结束、确实摘除身份时才说「已失效」
+					s.notifyTenantAdmins(t.ID, "宽限期结束，订阅已失效",
+						"商业包「"+code+"」的宽限期已于 "+now.Format("2006-01-02")+" 结束，续费单仍未到账，"+
+							"订阅身份已移除；剩余句数与已发放额度仍可正常使用，重新订阅后即时恢复。")
+					s.notifyBots("宽限期结束摘除",
+						"租户 #"+strconv.FormatInt(t.ID, 10)+"（"+t.Name+"）宽限期结束仍未到账，商业包「"+code+"」订阅身份已摘除。")
+				} else {
+					s.notifyTenantAdmins(t.ID, "订阅已到期",
+						"商业包「"+code+"」已到期，订阅身份已移除；剩余句数仍可正常使用，续订后即时生效。")
+					s.notifyBots("订阅到期摘除",
+						"租户 #"+strconv.FormatInt(t.ID, 10)+"（"+t.Name+"）商业包「"+code+"」已到期，订阅身份已摘除。")
+				}
 				s.Store.S7MarkLapsed(t.ID, exp) // ★ S7：登记到期时刻，驱动 T+3 老客回访
 			}
 			continue
 		}
 		// 未到期：按剩余天数分档提醒（每档只发一次）
+		// daysLeft 是整除截断后的地板值（剩 7.5 天算 7），故下面所有文案统一 +1，
+		// 避免出现「剩 0 天」而实际次日才到期的观感。
 		daysLeft := int(time.Until(exp).Hours() / 24)
 		expDate := exp.Format("2006-01-02")
-		// ★ 自动续费（#41）：T-3 窗口内自动生成同包续费单（同包已有 pending 单则跳过），
+		// ★ 自动续费（#41）：续费窗口（默认 T-3）内自动生成同包续费单（同包已有 pending 单则跳过），
 		//   并站内信 + 告警引导管理员付款；每日扫描一轮，未付的旧单被超时任务关闭后可再建。
 		if perms.AutoRenew {
 			s.maybeCreateRenewalOrder(t.ID, perms, daysLeft)
 		}
+		// ★ #74：订阅已续期（到期时刻被推到未来）时把上一期遗留的宽限期键清掉——
+		//   到账链路走 billing.MarkOrderPaid（store 冻结文件，不加方法），它只改订阅两键，
+		//   故清理落在扫描侧：否则 /api/me/package 会把「已续上的订阅」继续标成宽限中。
+		if perms.GraceExpiresAt != "" {
+			_ = s.Store.ClearSubscriptionGrace(t.ID)
+		}
 		if daysLeft <= 7 && !perms.NotifiedExp7 {
+			// perms 是本轮开头读到的快照，只用于「这一档发过没有」的判定；
+			// 置位一律走 SetNotifiedExpFlag 的单字段原子更新——整体回写 permissions
+			// 会把快照生成之后发生的并发改动（续订、额度调整）连带覆盖掉。
 			_ = s.Store.SetNotifiedExpFlag(t.ID, "notified_exp7") // ★ B1：单字段原子置位，不再整体覆盖
 			s.notifyTenantAdmins(t.ID, "订阅即将到期",
 				"商业包「"+perms.PackageCode+"」将于 "+expDate+" 到期（剩 "+strconv.Itoa(daysLeft+1)+" 天），请及时续订。")
@@ -362,6 +412,9 @@ func (s *Server) runGrowthScan() {
 	if err != nil {
 		return
 	}
+	// 先独立跑一遍把全部租户的「余额清零起点」刷新到位，再取候选集合：
+	// 候选判据是「清零起点距今已满 48h」，所以本轮刚清零的租户一定不会被当成候选，
+	// 分成两遍只是为了让起点数据先与当前余额对齐。
 	for _, t := range tenants {
 		if t.ID <= 1 {
 			continue
@@ -471,6 +524,8 @@ func (s *Server) runBackup(backupDir string, keep int) {
 		return
 	}
 	// 清理旧备份，仅保留最近 keep 份
+	// prefix 用「DBPath 去掉扩展名」：只匹配本库自己命名的那批备份文件，
+	// 同目录下别的备份（其他库/手工产物）不会被误删。
 	store.PruneBackups(backupDir, strings.TrimSuffix(filepath.Base(s.Cfg.DBPath), filepath.Ext(s.Cfg.DBPath)), keep)
 	log.Printf("数据库已备份: %s（保留最近 %d 份）", dest, keep)
 	// 异地推送钩子：backup_remote_cmd 配置 shell 命令，{path} 替换为本份备份路径
@@ -500,6 +555,7 @@ func (s *Server) runBackup(backupDir string, keep int) {
 // 该方法在后台 goroutine 中周期调用，无参数无返回；检查结果直接写入告警表。
 func (s *Server) runWatchdogCheck() {
 	// 1. 余额阈值告警：遍历所有启用租户，余额为 0 或低于阈值则创建告警
+	// 允许配 0（n>=0 而非 n>0）：那表示「只在真正耗尽时告警」，不做提前预警。
 	threshold := int64(1000)
 	if v, _ := s.Store.GetConfig("alert_balance_threshold"); v != "" {
 		if n, err := parseInt64(v); err == nil && n >= 0 {
@@ -554,6 +610,8 @@ func (s *Server) runWatchdogCheck() {
 		}
 	} else {
 		// 熔断已恢复 → 自动关闭历史 model 告警（避免重复堆积）
+		// 模型/错误率是全局事实，不归属某个租户，故登记与查询都用平台租户 0；
+		// 只取最近 100 条 open 告警做回收，够用且不会被历史积压拖慢。
 		alerts, _ := s.Store.ListAlerts(0, "open", 100)
 		for _, a := range alerts {
 			if a.Kind == "model" {
@@ -638,11 +696,14 @@ func selfRestartFile() string {
 func selfRestartBudget(window time.Duration, cap int) (int, bool) {
 	b, err := os.ReadFile(selfRestartFile())
 	if err != nil {
+		// 读不到标记文件（首次运行/被清理）⇒ 视为窗口内 0 次：记账侧故障不能反过来
+		// 把「自愈重启」这项保命能力关掉。
 		return 0, true
 	}
 	cutoff := time.Now().Add(-window).Unix()
 	n := 0
 	for _, ln := range strings.Split(string(b), "\n") {
+		// 逐行解析 unix 秒：坏行（并发写导致的半行）直接忽略，不参与计数
 		if ts, err := strconv.ParseInt(strings.TrimSpace(ln), 10, 64); err == nil && ts >= cutoff {
 			n++
 		}
@@ -651,12 +712,15 @@ func selfRestartBudget(window time.Duration, cap int) (int, bool) {
 }
 
 // markSelfRestart 追加一条本次重启记录，并裁剪窗口外旧行。
+// 读写全走 /tmp 下的普通文件：进程马上就要退出，任何内存态计数都会随重启归零，
+// 文件是「同一台机器上多个进程实例」之间唯一能传递重启历史的载体。
 func markSelfRestart() {
 	path := selfRestartFile()
 	b, _ := os.ReadFile(path)
 	cutoff := time.Now().Add(-time.Hour).Unix()
 	var keep []string
 	for _, ln := range strings.Split(string(b), "\n") {
+		// 只保留 1 小时窗口内的记录：越写越长的历史文件既无意义也会拖慢读取
 		if ts, err := strconv.ParseInt(strings.TrimSpace(ln), 10, 64); err == nil && ts >= cutoff {
 			keep = append(keep, ln)
 		}

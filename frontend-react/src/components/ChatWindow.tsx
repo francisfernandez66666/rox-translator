@@ -25,13 +25,18 @@ import LangMultiSelect, { LangChips } from '@/components/LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
 
 // 数字千分位格式化，并处理 undefined/负数，用于余额与用量展示
+// floor + Math.max(0,…) 是必要的：本函数喂的是「≈句数」这类折算值（balance_sentences_approx、
+// estimate 的 s），后端回传小数或早期脏数据为负时，直接格式化会显示成「-1,234」这种吓人数字。
 function fmtNum(n: number): string {
   return new Intl.NumberFormat().format(Math.max(0, Math.floor(n || 0)))
 }
 
 // 卡片样式（纯黑体系：面板 #0E1014 + 1.2px 描边 + 圆角 14）
+// ★ #68：描边走 --lc-border-card 令牌（旧字面 #464C58 在纯黑上不足 3:1，看不见边）。
+// 卡片规格集中成常量而不是散进 JSX 内联：内联字面值正是 #68 闸门要收口的形态，
+// 走令牌后描边档位由 theme.css §十 统一调，页面不需要跟着改。
 const CARD: React.CSSProperties = {
-  background: '#0E1014', border: '1.2px solid #464C58', borderRadius: 14,
+  background: '#0E1014', border: '1.2px solid var(--lc-border-card)', borderRadius: 14,
 }
 
 // 停止生成图标（langcross 无等价，按组件库线性风格内联方块）
@@ -84,6 +89,8 @@ export default function ChatWindow() {
 
   // ---- 余额 / 用量加载 ----
   // 从 myPackage 接口读取个人余额、今日用量及企业预算额度（均为积分）
+  // org_budget 只在 points_limit>0 时才有意义：未开预算的企业回传 0，
+  // 若照样 set 就会在余额条里渲染「已用 X / 共 0」这种误导文案，故显式清成 null。
   const loadBalance = useCallback(async () => {
     try {
       const r: any = await myPackage()
@@ -115,11 +122,15 @@ export default function ChatWindow() {
   }, [chat.messages.length, loadBalance])
 
   // ---- 进度/消息变化自动滚底（滚动发生在合并框内部，不再滚动整页）----
+  // 依赖只挂 chat.messages：流式回写每来一段都会换数组引用，天然把「跟随最新」滚动驱动起来；
+  // 代价是用户手动上滚看历史时也会被拉回底部——本组件没有「已离线阅读即暂停跟随」的判定。
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [chat.messages])
 
   // ---- 输入区初始自适应高度 ----
+  // 空依赖：仅挂载时归一一次高度，之后由 onChange、窗口 resize、发送后清空三条路径驱动
+  // （autoResize 是唯一算高度的地方，几处共用才不会各自实现出不同的封顶值）。
   useEffect(() => { autoResize() }, [])
 
   // ---- 切换模式并持久化 ----
@@ -130,6 +141,9 @@ export default function ChatWindow() {
   }
 
   // F7：输入内容变化防抖预估积分消耗（后端直接给积分区间与 ≈句数，零换算）
+  // 600ms 是「打字停顿」量级：预估只用于展示，每敲一键就打一次 /estimate 会堆出一串注定被丢弃的请求。
+  // alive 标志用于丢弃过期响应：切语种/清空输入会让 effect 重跑，
+  // 旧请求可能后到，不判 alive 就会把上一次的区间回写成「最新」值。
   useEffect(() => {
     const text = input.trim()
     if (!text || chat.selectedLangs.length === 0) { setEstimate(null); return }
@@ -222,10 +236,15 @@ export default function ChatWindow() {
   return (
     /* 外层高度 = 视口减去页眉（即时翻译页无页脚，SiteFooter 只在抽屉内渲染）；
        minHeight:0 必须显式给：flex 列里的滚动子项默认 min-height:auto，
-       不置 0 则内部 overflow 永不生效（整页滚而非框内滚）。 */
+       不置 0 则内部 overflow 永不生效（整页滚而非框内滚）。
+       background:#000 与 theme.css 的 html,body 底色同值：懒加载占位/回弹露出的底色
+       必须与本页一致，否则切页瞬间会闪一块异色（#66 换词动效糊白底那次的成因）。 */
     <div className="cw-root" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 57px)', minHeight: 0, background: '#000' }}>
       <style>{CW_CSS}</style>
-      {/* 离线横幅 */}
+      {/* 离线横幅：琥珀薄底 + 语义色文字（交付包里唯一的非单色告警档），
+          不用红色——后端不可达多是网络抖动/发版窗口，属「待恢复」而非「用户出错」。
+          重试钮只在 !isBackendLoading 时出现：离线后 useChat 会自行按秒重探（最长 30 次），
+          那段窗口里再给一个手动重试，等于和后台轮询抢同一个 health 接口。 */}
       {!chat.isBackendOnline && (
         <div style={{ background: 'rgba(210,153,34,0.10)', borderBottom: '1px solid rgba(210,153,34,0.32)', padding: '8px 6%', display: 'flex', gap: 10, alignItems: 'center' }}>
           <span style={{ fontSize: 14, color: '#D29922' }}>
@@ -241,7 +260,7 @@ export default function ChatWindow() {
 
       {/* 余额 / 用量条 */}
       {(balance || usage || orgBudget) && (
-        <div style={{ background: 'rgba(231,233,234,0.06)', color: 'var(--lc-text-2)', fontSize: 13, padding: '6px 6%', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid #1a1d22' }}>
+        <div style={{ background: 'rgba(231,233,234,0.06)', color: 'var(--lc-text-2)', fontSize: 13, padding: '6px 6%', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid var(--lc-border-faint)' }}>
           {/* data-testid 只给 e2e 用（★ 任务 #43 翻译主流程端到端）：余额/今日已耗是扣费可见性的
               唯一界面口径，锚点必须与 i18n 文案解耦——文案随 12 语种变，锚点不能跟着变。 */}
           {balance && <span data-testid="chat-balance">{tpl('chat.balanceTokens', { n: fmtPoints(balance.points), s: fmtNum(balance.approx) })}</span>}
@@ -293,7 +312,9 @@ export default function ChatWindow() {
         <div className="cw-dialog-body" ref={scrollRef}>
           {/* F3：dir="auto" 让阿/法等 RTL 文本按内容方向渲染。
               用原生 textarea + 组件库 .lc-textarea 类：autoResize 需要 ref 到真实节点量 scrollHeight；
-              Enter 发送 / Shift+Enter 换行（与工单页一致的肌肉记忆） */}
+              Enter 发送 / Shift+Enter 换行（与工单页一致的肌肉记忆）
+              内联只覆写底色与描边：底色取最深一档 #0A0B0D 让输入区从卡面 #0E1014 里「凹」下去，
+              描边走 --lc-border-input 令牌（★ #68：写死暗值会被 readability.test.ts 的描边锁判红） */}
           <textarea
             className="lc-textarea cw-input"
             ref={inputRef}
@@ -304,7 +325,7 @@ export default function ChatWindow() {
             onChange={(e) => { setInput(e.target.value); autoResize() }}
             placeholder={t('chat.placeholder')}
             rows={3}
-            style={{ width: '100%', background: '#0A0B0D', borderColor: '#5A6270' }}
+            style={{ width: '100%', background: '#0A0B0D', borderColor: 'var(--lc-border-input)' }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
@@ -323,7 +344,10 @@ export default function ChatWindow() {
             </div>
           )}
 
-          {/* 消息流：assistant 气泡的 source=其上一条 user 消息（上下文展示） */}
+          {/* 消息流：assistant 气泡的 source=其上一条 user 消息（上下文展示）
+              取法是 slice 到真实下标后 reverse().find()：先在原始 messages 里定位（shownMessages
+              是过滤后的子集，不能用它的下标），再往前找「最近一条 user」——
+              比直接取 i-1 稳，两条消息之间可能夹非 user 行。 */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {shownMessages.map((m) => {
               const src = m.role !== 'user'
@@ -355,7 +379,7 @@ export default function ChatWindow() {
               {condenseOn && (
                 <input type="number" min={1} max={10000} value={condenseMax}
                   onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
-                  style={{ width: '100%', boxSizing: 'border-box', height: 28, fontSize: 13, background: '#0A0B0D', border: '1.2px solid #5A6270', borderRadius: 6, padding: '0 6px', color: '#E7E9EA' }}
+                  style={{ width: '100%', boxSizing: 'border-box', height: 28, fontSize: 13, background: '#0A0B0D', border: '1.2px solid var(--lc-border-input)', borderRadius: 6, padding: '0 6px', color: '#E7E9EA' }}
                   title={t('chat.s41')} />
               )}
             </div>
@@ -379,13 +403,16 @@ export default function ChatWindow() {
 // —— 页面级样式（cw- 前缀，避免与组件库类名重名）——
 // .cw-dialog 用 flex:1 + min-height:0 吃满外层剩余高度；内部滚动只发生在 .cw-dialog-body。
 // .cw-dialog-acts 的右内边距是给固定定位的 AI 助手浮球让位，避免遮住主按钮。
+// 描边/文字一律取 --lc-border-* 与 --lc-text-* 令牌（本文件进 #68 闸门扫描范围，
+// 写死暗值会红）；圆角走 --lc-r-ctl，与组件库控件同档，避免「同为按钮却两种圆角」。
+// 焦点环单独写 :focus-visible：纯黑底上默认 UA 焦点样式几乎看不见，必须自绘 outline。
 const CW_CSS = `
 .cw-root{box-sizing:border-box}
 .cw-dialog{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;margin:12px 6% 14px}
-.cw-dialog-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1.2px solid #22262E;flex-wrap:wrap}
+.cw-dialog-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1.2px solid var(--lc-border-faint);flex-wrap:wrap}
 .cw-dialog-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
 .cw-dialog-body .bubble-row{max-width:100%}
-.cw-dialog-foot{border-top:1.2px solid #22262E;padding:10px 14px 12px;display:flex;flex-direction:column;gap:8px}
+.cw-dialog-foot{border-top:1.2px solid var(--lc-border-faint);padding:10px 14px 12px;display:flex;flex-direction:column;gap:8px}
 .cw-dialog-acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding-right:68px}
 .cw-welcome{text-align:center;padding:32px 12px;color:var(--lc-text-3)}
 .cw-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;

@@ -440,6 +440,9 @@ export const baseEn: Record<string,string> = {
   'plans.autoRenewOn': 'Auto-renewal enabled',
   'plans.autoRenewOff': 'Auto-renewal disabled',
   'plans.autoRenewFailed': 'Failed to update auto-renewal',
+  // ★ Grace-period banner (#74, 2026-09-23): expired-but-kept banner on the plans page
+  'plans.graceTitle': 'Expired · grace period until {date}',
+  'plans.graceBody': 'During the grace period your subscription status and remaining quota keep working normally, and the renewal payment extends them seamlessly once received; if no payment arrives by the deadline, the subscription status is removed automatically',
   'plans.expiresAt': 'Expires',
   'plans.groupPaid': 'Monthly subscription (t+30 rolling)',
   'plans.groupIncrement': 'Top-up packs (never expire)',

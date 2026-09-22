@@ -8,6 +8,13 @@ import { footerLinksGet, BrandLink } from '@/api/branding'
 // ============ 本文件职责中文说明 ============
 // 全站页脚组件：按访问域名解析品牌并展示平台级页脚链接。
 // ========================================
+//
+// ★ 为什么本文件仍留着 #575F6C / #8a9099 / #5f6b7a 这些写死灰值而没有换成 var(--lc-*)：
+//   src/styles/readability.test.ts 的两条锁（次级灰禁写死 / 描边禁写死暗值）共用一份 EXEMPT
+//   白名单，SiteFooter.tsx 在列——那两条锁的口径是「只管登录后的界面」，与 Landing/Pricing/Login
+//   同批放行（本组件的两个渲染点是 App 抽屉页脚与 AdminDashboard 页脚，都属页脚条这类装饰性弱文字）。
+//   代价是这里不会随令牌换档自动跟随：日后调 --lc-border-faint / --lc-text-* 时，
+//   若要让页脚同变，得手工把这三处字面值一起对一遍。
 
 // 默认导出组件：全站页脚，按访问域名解析品牌并展示平台级页脚链接（无链接时回退默认协议入口）
 export default function SiteFooter() {
@@ -37,7 +44,7 @@ export default function SiteFooter() {
         padding: '14px 20px',
         // 配色对齐深色外壳（#0E1014 与 App.tsx 的 --npz-page-bg 兜底色同一支），
         // 分隔线只留最浅一档描边，避免页脚比正文还抢眼
-        borderTop: '1px solid #2A2F3A',
+        borderTop: '1px solid #575F6C',
         background: '#0E1014',
         color: '#8a9099',
         fontSize: 13,
@@ -55,6 +62,8 @@ export default function SiteFooter() {
           // key 用数组下标：后端整串替换 links，不存在单条重排，索引键不会引起错位
           <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             {/* target=_blank 的外链一律补 rel=noreferrer，避免 Referer 把租户域名带给第三方站点 */}
+            {/* 中英双标签：非中文语种下 label_en 可能没填（后台只强制中文名），
+                故 `l.label_en || l.label` 宁可用中文名也不渲染一个空链接 */}
             <a href={l.url} target="_blank" rel="noreferrer" style={{ color: '#5f6b7a' }}>
               {lang === 'zh' ? l.label : (l.label_en || l.label)}
             </a>

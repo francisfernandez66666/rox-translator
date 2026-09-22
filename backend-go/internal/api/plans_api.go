@@ -30,6 +30,11 @@ import (
 // handlePlans 公开定价页接口（无需登录）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。
 // 返回: success=true 时携带 plans 数组（仅上架包）与 free_trial_tokens/free_trial_days（体验额度，任务2.2 唯一口径）。
+// ★ #75（2026-09-23）多币种报价：出参增 quote_currency / fx_rates_snapshot，
+//
+//	每个套餐增 price_cny（人民币原价）与 price_display（本币报价，2 位）。
+//	老字段（price_money 等）一个不删、语义不变——前端与 e2e 依赖它们；
+//	price_money 仍是人民币元（结算事实源），本币金额只是展示马甲。
 func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 	// 查询所有上架的商业包
 	pkgs, err := s.Store.ListEnabledCommercialPackages()
@@ -37,14 +42,48 @@ func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
+	// ★ #75：报价币种按「环境变量 > 库配置 > 默认 CNY」解析；缺汇率自动回落 CNY（fail-closed）
+	quoteCode, quoteRate, fxRates := s.quoteSnapshot()
+	views := make([]planQuoteView, 0, len(pkgs))
+	for _, p := range pkgs {
+		display := p.PriceMoney
+		if quoteRate > 0 && quoteRate != 1 {
+			display = roundQuote2(p.PriceMoney / quoteRate) // 倍率含义：1 外币 = quoteRate 人民币
+		}
+		views = append(views, planQuoteView{
+			Package: p, PriceCny: p.PriceMoney, PriceDisplay: display,
+			QuoteCurrency: quoteCode,
+		})
+	}
 	// ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days（旧键 trial_sentences 已下线）
 	// ★ C6（2026-09-12）：默认值单一来源，读取点收敛到 trialConfig
 	freeTokens, freeDays := s.trialConfig()
 	writeJSON(w, 200, map[string]interface{}{
-		"success": true, "plans": pkgs,
+		"success": true, "plans": views,
 		// ★ S1 积分制（2026-09-14）：公开出参只露积分面值，token 裸值不再对外
 		"free_trial_points": s.Store.PointsFromTokens(freeTokens), "free_trial_days": freeDays,
+		// ★ #75：报价币种与本币倍率快照（仅币种码→倍率，不含任何密钥/内部成本）
+		"quote_currency":    quoteCode,
+		"fx_rates_snapshot": fxRates,
 	})
+}
+
+// planQuoteView /api/plans 单套餐出参：内嵌 store.Package（老字段逐字保留）
+// + 报价展示三字段。用结构体内嵌而不是 map，是为了让 Package 加字段时这里自动跟随，
+// 不会出现「新字段漏出 / 老字段错位」的清单漂移。
+type planQuoteView struct {
+	*store.Package
+	PriceCny      float64 `json:"price_cny"`      // 人民币原价（元）= price_money，显式化便于前端双币展示
+	PriceDisplay  float64 `json:"price_display"`  // 报价币种金额（保留 2 位；CNY 时等于原价）
+	QuoteCurrency string  `json:"quote_currency"` // 本行 price_display 使用的币种（顶层 quote_currency 的同值冗余，逐行渲染免查表）
+}
+
+// roundQuote2 报价金额保留 2 位（分位四舍五入，与订单金额口径一致）。
+func roundQuote2(v float64) float64 {
+	if v < 0 {
+		v = 0
+	}
+	return float64(int64(v*100+0.5)) / 100
 }
 
 // handleMyPackage 当前租户包信息接口（登录用户）。
@@ -61,6 +100,10 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 	tid := s.effTenant(r, u)
 	var pkgCode, subAt, pkgExpires string
 	autoRenew := false
+	// ★ #74 宽限期出参：in_grace=当前处于「已到期但宽限期保留身份」状态，
+	//   grace_expires=宽限期截止时刻（RFC3339）。订阅页据此显示「已到期，宽限期至 X 日」。
+	inGrace := false
+	var graceExpires string
 	grants, permanent, tokens, approx := int64(0), int64(0), int64(0), int64(0)
 	// 平台上下文（tid<=0）无计费概念：余额返回 0
 	if tid > 0 {
@@ -71,6 +114,7 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 			subAt = perms.SubscribedAt
 			pkgExpires = perms.PackageExpires
 			autoRenew = perms.AutoRenew // ★ #41 自动续费开关（订阅页开关初值）
+			inGrace, graceExpires = subscriptionGraceState(perms)
 		}
 	}
 	payMode := "mock"
@@ -90,6 +134,8 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at>=?",
 			tid, u.ID, ms).Scan(&usedToday)
 	}
+	// ★ #75：本币报价口径（收银台展示换算用；倍率本身这里不用，前端按 snapshot 自算）
+	quoteCode, _, fxRates := s.quoteSnapshot()
 	resp := map[string]interface{}{
 		"success":                  true,
 		"points_used_today":        s.Store.PointsFromTokens(usedToday),
@@ -102,10 +148,18 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		"subscribed_at":            subAt,
 		"package_expires":          pkgExpires,
 		"auto_renew":               autoRenew, // ★ #41：订阅页自动续费开关初值
-		"pay_mode":                 payMode,
+		// ★ #74：宽限期状态（订阅页「已到期，宽限期至 X 日」提示的数据源）
+		"in_grace":      inGrace,
+		"grace_expires": graceExpires,
+		"pay_mode":      payMode,
 		// ★ USDT（2026-09-15）：收银台渠道显隐依据（仅开关态，地址/汇率等敏感配置不下发公共口）
 		"usdt_enabled": s.Store.GetUSDTCfg().Enabled,
 		"usdt_chains":  s.Store.GetUSDTCfg().Chains,
+		// ★ #75（2026-09-23）多币种报价：收银台按此把人民币价换算为本币展示价。
+		//   quote_currency 已是"可换算"的生效币种（缺倍率自动回落 CNY）；
+		//   fx_rates_snapshot 仅币种码→倍率，不含任何密钥或内部成本口径。
+		"quote_currency":    quoteCode,
+		"fx_rates_snapshot": fxRates,
 	}
 	// ★ 部门预算进度（四期增强；前台「🏢 部门预算 used/limit」徽标数据源）：
 	// 仅当用户归属的部门启用了预算（token_limit>0）时返回 org_budget 与租户总预算（积分口径）
@@ -195,6 +249,9 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 		s.Store.LogAudit(tid, u.ID, "coupon_redeem", "orders",
 			o.OrderNo+" code="+code+" discount="+strconv.FormatFloat(disc, 'f', 2, 64))
 	}
+	// ★ #75（2026-09-23）多币种报价：金额已最终确定（含券折让），落报价币种与汇率快照。
+	//   结算仍按人民币（amount_money），外币只是客户看到的价格与留痕。
+	s.stampOrderQuote(r.Context(), o)
 	// mock 模式：模拟支付自动到账并发放句数（测试/演示）
 	// ★ C18（2026-09-12）：确认失败错误传播 + 响应带真实状态（订单留 pending 可重试）
 	if channel == "mock" {
@@ -305,6 +362,8 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
+	// ★ #75：升级单同样是"客户会看外币价"的单据，落报价快照（应付已是最终金额）
+	s.stampOrderQuote(r.Context(), o)
 	// mock 模式：模拟支付自动到账并发放入账
 	// ★ C18（2026-09-12）：升级单同口径错误传播
 	// 下单后置分支：mock 直接 MarkOrderPaid 结算入账（失败保留待支付单）；manual 挂静态收款码，未配置则引导联系管理员

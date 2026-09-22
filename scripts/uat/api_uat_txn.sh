@@ -73,6 +73,16 @@
 #       状态条回显可达性与 Token 来源（不含明文）/ 知识库 CRUD 往返 / 浏览器带的 admin_token
 #       查询串被剥掉（凭据只走服务端注入头）/ 配置白名单与掩码不回写 / 审计只记方法+区域不记请求体 /
 #       会话统计与 LLM 连通测试经代理可用 / 白名单外路径 404（不做通用中继）
+#   T53 订阅续费宽限期（★ #74，2026-09-23）：开自动续费租户到期后进宽限期（身份与额度保留、
+#       落 grace_expires_at、发「宽限期」站内信、/api/me/package 透出 in_grace）/ 宽限期内每日
+#       补建续费单且同日去重（pending 单与 renewal_attempts 格子都只 1）/ 宽限期结束摘除并改发
+#       「宽限期结束」文案 / 未开自动续费的到期租户立即摘除不进宽限期（对照组）
+#   T54 多币种报价（★ #75，2026-09-22 起关闭封存）：超管报价配置口鉴权（匿名/普通用户 403）/
+#       关闭态回显恒 CNY + feature_open=false + 白名单只露 CNY / 外币币种与倍率保存一律拒收
+#       （CNY 表态仍放行）/ 直插 system_config 残留外币配置也不生效（读口短路压住）/
+#       /api/plans 与 /api/me/package 恒 quote_currency=CNY、price_display=人民币原价 /
+#       下单快照恒落 CNY|1 且 money_cny=amount_money=实付（新租户首月半价后 10.8，快照落在
+#       最终应收之后）双写（结算事实源红线）/ 配置键复原
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 #   —— 2026-09-21 实测：`ck X 'want' "$(post "$H" "{\"a\":1,\"b\":2}" /p)"` 里的 body 会被 bash
 #   在双引号内的命令替换中做**大括号展开**，按逗号切成两个参数，curl 发出残缺 body 换来「参数格式
@@ -1675,6 +1685,190 @@ ck T52-llm-test-model '"model":' "$R"
 #    断言状态码而不是文案，避免与 SPA 兜底处理器的文案实现耦合）
 C52OFF=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/admin/assist/unknown-route" -H "$AH")
 [ "$C52OFF" = "404" ] && { PASS=$((PASS+1)); echo "PASS|T52-off-whitelist-404"; } || { FAIL=$((FAIL+1)); echo "FAIL|T52-off-whitelist-404(got $C52OFF)"; }
+
+# ---------- T53（★ #74）订阅续费宽限期 + 自动续费重试：身份保留 / 宽限截止 / 去重三连 / 结束摘除 / 对照组 ----------
+# 本段测什么：#41 自动续费旧行为是「到期即刻摘掉付费身份」，#74 给开了自动续费的租户补一段
+#   N 天宽限期（默认 3，subscription_grace.go；env SUBSCRIPTION_GRACE_DAYS>0 时优先）。三段行为：
+#   ① 进入宽限期：package_code/package_expires_at 原样保留（鉴权计费无需放行分支），只落
+#      grace_expires_at 并发一条「订阅已到期，宽限期至 X」站内信；/api/me/package 出 in_grace/grace_expires；
+#   ② 宽限期内每日扫描继续补建续费单，同日去重由 renewal_attempts(tenant_id,package_id,attempt_date) 唯一键兜底；
+#   ③ 宽限期结束仍未到账 → ExpirePackage 摘除，文案换成「宽限期结束，订阅已失效」；
+#   ④ 对照组：auto_renew=false 的到期租户立刻摘除（宽限期只服务有续费意愿的客户，不给别人延长收费窗口）。
+# 为什么这么测：行为全挂在「每日扫描」上，无法等真实天数流逝，沿用 T50 的注入惯用法——
+#   dbjsonset 把 package_expires_at/grace_expires_at 推到过去 + 手动 POST subscription-scan 触发扫描；
+#   站内信断言用 LIKE '%宽限期%' 模糊标题（防文案微调把闸门拖红）并按 ref_id=租户 收窄，不吃别的用例的噪声。
+# 清理：本段自建的双租户/用户/包/订单/站内信/台账/审计全部结尾 DELETE，不碰出厂数据。
+SFX53=$(date +%s)
+U53A="uatuser_t53a$SFX53"; U53B="uatuser_t53b$SFX53"
+curl -s $B/api/auth/register -H "$J" -d "{\"username\":\"$U53A\",\"password\":\"uatpass123\",\"type\":\"personal\",\"name\":\"T53宽限期\",\"email\":\"$U53A@test.com\",\"agreed\":true}" >/dev/null
+curl -s $B/api/auth/register -H "$J" -d "{\"username\":\"$U53B\",\"password\":\"uatpass123\",\"type\":\"personal\",\"name\":\"T53对照组\",\"email\":\"$U53B@test.com\",\"agreed\":true}" >/dev/null
+TK53A=$(tok $U53A uatpass123); H53A="Authorization: Bearer $TK53A"
+TK53B=$(tok $U53B uatpass123); H53B="Authorization: Bearer $TK53B"
+TD53A=$(sq "SELECT tenant_id FROM users WHERE username='$U53A' LIMIT 1" | tr -d '[:space:]')
+TD53B=$(sq "SELECT tenant_id FROM users WHERE username='$U53B' LIMIT 1" | tr -d '[:space:]')
+curl -s $B/api/admin/packages/create -H "$AH" -H "$J" -d "{\"tenant_id\":$TD53A,\"code\":\"uat_t53_paid\",\"name\":\"T53宽限包\",\"ptype\":\"paid\",\"sentences\":20000,\"price_money\":20,\"duration_days\":30}" >/dev/null
+curl -s $B/api/admin/packages/create -H "$AH" -H "$J" -d "{\"tenant_id\":$TD53B,\"code\":\"uat_t53_b\",\"name\":\"T53对照包\",\"ptype\":\"paid\",\"sentences\":20000,\"price_money\":20,\"duration_days\":30}" >/dev/null
+# renewal_attempts 的 attempt_date 用服务器本地日期（renewalAttemptClock 同口径）；断言层与被测层同机同时区
+TODAY53=$(date +%F)
+# 「昨天」注入值必须与落库口径同为 RFC3339 UTC（Z 后缀），后面做字典序比较才等价于时间序
+EXP53=$(python3 -c "import datetime;print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=24)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+
+# ① A 租户：订阅到账 + 开自动续费（宽限期只对这类租户开放）
+#   注：mock 支付模式下 subscribe 内部已 MarkOrderPaid，admin/orders/pay 只是 manual 渠道下的
+#   兜底（同 T50 惯用法：不消费其响应），到账与否一律以 permissions 落库为准。
+R=$(post "$H53A" '{"code":"uat_t53_paid"}' /api/package/subscribe)
+OID53=$(echo "$R" | pv '.get("order",{}).get("id") or d.get("id") or 0')
+post "$AH" "{\"id\":$OID53,\"tenant_id\":$TD53A}" /api/admin/orders/pay >/dev/null
+PC053=$(dbjsonstr tenants $TD53A permissions package_code | tr -d '[:space:]')
+[ "$PC053" = "uat_t53_paid" ] && { PASS=$((PASS+1)); echo "PASS|T53-subscribed"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-subscribed(package_code=$PC053)"; }
+ck T53-renew-enable '"success":true' "$(post "$H53A" '{"enabled":true}' /api/package/auto-renew)"
+
+# ② 注入「昨天已到期」→ 扫描应进宽限期：身份保留 + 落 grace_expires_at + 出参 in_grace
+dbjsonset tenants $TD53A permissions package_expires_at "$EXP53"
+ck T53-scan-grace-in '"success":true' "$(post "$AH" '{}' /api/admin/ops/watchdog/subscription-scan)"
+PC53=$(dbjsonstr tenants $TD53A permissions package_code | tr -d '[:space:]')
+# WHY 核心断言：宽限期的全部价值=「晚付一天不用重新选包」，身份键被扫描碰到即回归
+[ "$PC53" = "uat_t53_paid" ] && { PASS=$((PASS+1)); echo "PASS|T53-grace-keeps-identity"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-grace-keeps-identity(got $PC53)"; }
+GR53=$(dbjsonstr tenants $TD53A permissions grace_expires_at | tr -d '[:space:]')
+# RFC3339 UTC 同格式同时区 → 字典序=时间序；宽限截止必须晚于本期到期才是有效宽限期（graceDeadline 口径）
+if [ -n "$GR53" ] && [[ "$GR53" > "$EXP53" ]]; then PASS=$((PASS+1)); echo "PASS|T53-grace-deadline-set($GR53)"; else FAIL=$((FAIL+1)); echo "FAIL|T53-grace-deadline-set(got '$GR53' want >$EXP53)"; fi
+M53=$(get "$H53A" /api/me/package)
+# ★ 布尔出参方言容错（同 T50 case 口径）：Go 编码器恒出 true，仍容 1 防实现漂移；grep -E 交替（§7 禁 BRE）
+ck T53-me-in-grace '"in_grace":(true|1)' "$M53"
+ck T53-me-grace-expires '"grace_expires":"20' "$M53"
+GNT53=$(sq "SELECT COUNT(*) FROM notifications WHERE ref_id=$TD53A AND title LIKE '%宽限期%'" | tr -d '[:space:]')
+[ "$GNT53" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T53-grace-notify-once"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-grace-notify-once(宽限期站内信=$GNT53)"; }
+# 宽限期首轮即补建续费单：created_by=0 系统单挂 pending，台账占掉今日一格
+PEND53=$(sq "SELECT COUNT(*) FROM orders WHERE tenant_id=$TD53A AND status='pending' AND created_by=0" | tr -d '[:space:]')
+[ "$PEND53" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T53-grace-renewal-order"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-grace-renewal-order(pending 系统单=$PEND53)"; }
+ATT53=$(sq "SELECT COUNT(*) FROM renewal_attempts WHERE tenant_id=$TD53A AND attempt_date='$TODAY53'" | tr -d '[:space:]')
+[ "$ATT53" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T53-attempt-slot-1"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-attempt-slot-1(renewal_attempts 今日格=$ATT53)"; }
+CK53=$(sq "SELECT COUNT(*) FROM renewal_attempts WHERE tenant_id=$TD53A AND status='created' AND order_no<>''" | tr -d '[:space:]')
+[ "$CK53" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T53-attempt-linked-order"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-attempt-linked-order(created 且回写单号=$CK53)"; }
+
+# ③ 同日二次扫描 → 去重三连：站内信不重发、续费单不堆叠、台账格子不重复占（多触发/多实例红线）
+ck T53-scan-dedup '"success":true' "$(post "$AH" '{}' /api/admin/ops/watchdog/subscription-scan)"
+GNT53B=$(sq "SELECT COUNT(*) FROM notifications WHERE ref_id=$TD53A AND title LIKE '%宽限期%'" | tr -d '[:space:]')
+[ "$GNT53B" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T53-dedup-notify"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-dedup-notify(宽限期站内信=$GNT53B)"; }
+PEND53B=$(sq "SELECT COUNT(*) FROM orders WHERE tenant_id=$TD53A AND status='pending' AND created_by=0" | tr -d '[:space:]')
+[ "$PEND53B" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T53-dedup-order"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-dedup-order(pending 系统单=$PEND53B)"; }
+ATT53B=$(sq "SELECT COUNT(*) FROM renewal_attempts WHERE tenant_id=$TD53A AND attempt_date='$TODAY53'" | tr -d '[:space:]')
+[ "$ATT53B" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T53-dedup-attempt"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-dedup-attempt(renewal_attempts 今日格=$ATT53B)"; }
+
+# ④ 宽限期结束（grace_expires_at 注入成「一小时前」，仍晚于本期到期值→宽限期有效但已过）→ 摘除
+GEND53=$(python3 -c "import datetime;print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+dbjsonset tenants $TD53A permissions grace_expires_at "$GEND53"
+ck T53-scan-grace-out '"success":true' "$(post "$AH" '{}' /api/admin/ops/watchdog/subscription-scan)"
+PC53C=$(dbjsonstr tenants $TD53A permissions package_code | tr -d '[:space:]')
+[ -z "$PC53C" ] && { PASS=$((PASS+1)); echo "PASS|T53-grace-end-expired"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-grace-end-expired(身份未摘除 got $PC53C)"; }
+GR53C=$(dbjsonstr tenants $TD53A permissions grace_expires_at | tr -d '[:space:]')
+[ -z "$GR53C" ] && { PASS=$((PASS+1)); echo "PASS|T53-grace-key-cleared"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-grace-key-cleared(grace_expires_at=$GR53C)"; }
+NT53E=$(sq "SELECT COUNT(*) FROM notifications WHERE ref_id=$TD53A AND title LIKE '%宽限期结束%'" | tr -d '[:space:]')
+[ "$NT53E" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T53-grace-end-notify"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-grace-end-notify(「宽限期结束」站内信=$NT53E)"; }
+# 摘除后出参必须回落 in_grace=false（前端徽标与后台裁决口径一致，防「界面说在宽限期、身份已没了」）
+ck T53-me-out-of-grace '"in_grace":(false|0)' "$(get "$H53A" /api/me/package)"
+
+# ⑤ 对照组 B：不开自动续费 → 到期即刻摘除，且不落宽限期键、不发宽限期文案
+#   （宽限期只服务自动续费客户：无续费意愿还延长收费窗口没有业务依据）
+R=$(post "$H53B" '{"code":"uat_t53_b"}' /api/package/subscribe)
+OID53B=$(echo "$R" | pv '.get("order",{}).get("id") or d.get("id") or 0')
+post "$AH" "{\"id\":$OID53B,\"tenant_id\":$TD53B}" /api/admin/orders/pay >/dev/null
+PC053B=$(dbjsonstr tenants $TD53B permissions package_code | tr -d '[:space:]')
+[ "$PC053B" = "uat_t53_b" ] && { PASS=$((PASS+1)); echo "PASS|T53-ctl-subscribed"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-ctl-subscribed(package_code=$PC053B)"; }
+ck T53-ctl-autorenew-off '"auto_renew":(false|0)' "$(get "$H53B" /api/package/auto-renew)"
+dbjsonset tenants $TD53B permissions package_expires_at "$EXP53"
+ck T53-scan-ctl '"success":true' "$(post "$AH" '{}' /api/admin/ops/watchdog/subscription-scan)"
+PC53D=$(dbjsonstr tenants $TD53B permissions package_code | tr -d '[:space:]')
+[ -z "$PC53D" ] && { PASS=$((PASS+1)); echo "PASS|T53-ctl-immediate-expire"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-ctl-immediate-expire(未即刻摘除 got $PC53D)"; }
+GR53D=$(dbjsonstr tenants $TD53B permissions grace_expires_at | tr -d '[:space:]')
+[ -z "$GR53D" ] && { PASS=$((PASS+1)); echo "PASS|T53-ctl-no-grace-key"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-ctl-no-grace-key(不该落宽限期 got $GR53D)"; }
+GNT53D=$(sq "SELECT COUNT(*) FROM notifications WHERE ref_id=$TD53B AND title LIKE '%宽限期%'" | tr -d '[:space:]')
+[ "$GNT53D" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T53-ctl-no-grace-notify"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-ctl-no-grace-notify(宽限期文案=$GNT53D)"; }
+NT53D=$(sq "SELECT COUNT(*) FROM notifications WHERE ref_id=$TD53B AND title='订阅已到期'" | tr -d '[:space:]')
+[ "${NT53D:-0}" -ge 1 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|T53-ctl-expire-notify($NT53D)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T53-ctl-expire-notify($NT53D)"; }
+
+# ⑥ 清理本用例数据（口径同 T50 且更严：新租户整链删净，包/订单/站内信/台账/审计/用户/租户行）
+dbq "DELETE FROM packages WHERE code IN ('uat_t53_paid','uat_t53_b')" >/dev/null
+dbq "DELETE FROM renewal_attempts WHERE tenant_id IN ($TD53A,$TD53B)" >/dev/null
+dbq "DELETE FROM orders WHERE tenant_id IN ($TD53A,$TD53B)" >/dev/null
+dbq "DELETE FROM notifications WHERE ref_id IN ($TD53A,$TD53B)" >/dev/null
+dbq "DELETE FROM audit_logs WHERE tenant_id IN ($TD53A,$TD53B)" >/dev/null
+dbq "DELETE FROM quota_grants WHERE tenant_id IN ($TD53A,$TD53B)" >/dev/null
+dbq "DELETE FROM balance_accounts WHERE tenant_id IN ($TD53A,$TD53B)" >/dev/null
+dbq "DELETE FROM users WHERE username IN ('$U53A','$U53B')" >/dev/null
+dbq "DELETE FROM tenants WHERE id IN ($TD53A,$TD53B)" >/dev/null
+
+# ---------- T54（★ #75，2026-09-22 起关闭封存）多币种报价：配置口鉴权 / 外币写入拒收 / 残留配置不生效 / 全站恒 CNY ----------
+# 本段测什么：#75 报价功能按用户决策关闭封存（收单只有微信/支付宝 CNY 与币安 USDT，外币报价
+#   暂无业务落点；store/currency.go quoteFeatureOpen=false）。四组红线：
+#   ① 配置口仅平台超管（GET/POST 都要拦匿名与普通用户）——开关关掉不放水鉴权；
+#   ② 关闭态收敛：GET 恒回 currency=CNY + feature_open=false + 白名单只露 CNY；
+#      任何外币币种/倍率保存一律 success:false 拒收；
+#   ③ 残留配置压不住：直接往 system_config 塞 quote_currency=USD + fx_rates 也不生效
+#      （/api/plans 与下单快照仍恒 CNY/1，price_display=原价）——重开只翻开关，不必先清历史脏配置；
+#   ④ 语义红线反锁：orders 快照列照常双写 money_cny=amount_money（结算事实源恒人民币），
+#      订阅建单链路不因报价封装修复而改变金额口径。
+# ★ body 一律先 printf 存变量再传 post/ck：内嵌 {"a":1,"b":2} 会被大括号展开切碎（见文件头警告）。
+U54="uatuser_t54$SFX53"   # 复用 T53 时间戳后缀保证用户名不撞
+curl -s $B/api/auth/register -H "$J" -d "{\"username\":\"$U54\",\"password\":\"uatpass123\",\"type\":\"personal\",\"name\":\"T54报价\",\"email\":\"$U54@test.com\",\"agreed\":true}" >/dev/null
+TK54=$(tok $U54 uatpass123); H54="Authorization: Bearer $TK54"
+TD54=$(sq "SELECT tenant_id FROM users WHERE username='$U54' LIMIT 1" | tr -d '[:space:]')
+curl -s $B/api/admin/packages/create -H "$AH" -H "$J" -d "{\"tenant_id\":$TD54,\"code\":\"uat_t54_pkg\",\"name\":\"T54报价包\",\"ptype\":\"paid\",\"sentences\":20000,\"price_money\":21.6,\"duration_days\":30}" >/dev/null
+QCFG=/api/admin/config/quote-currency
+# ① 关闭态回显 + 鉴权（鉴权口与开关无关，匿名/普通用户照样 403）
+RQ54=$(get "$AH" $QCFG)
+ck T54-get-default '"currency":"CNY"' "$RQ54"
+ck T54-get-feature-closed '"feature_open":(false|0)' "$RQ54"
+ck T54-get-whitelist-cny-only '"supported_currencies":\["CNY"\]' "$RQ54"
+ANON54=$(curl -s $B$QCFG)
+case "$ANON54" in *'"success":true'*) FAIL=$((FAIL+1)); echo "FAIL|T54-anon-forbidden";; *) PASS=$((PASS+1)); echo "PASS|T54-anon-forbidden";; esac
+RQ54=$(get "$H54" $QCFG)
+case "$RQ54" in *'"success":true'*) FAIL=$((FAIL+1)); echo "FAIL|T54-user-forbidden";; *) PASS=$((PASS+1)); echo "PASS|T54-user-forbidden";; esac
+# ② 外币写入拒收（USD 合法币种也一样拒——关闭态没有"合法外币"）；CNY 表态仍放行（关闭≠打死接口）
+B54=$(printf '%s' '{"currency":"USD","rates":{"USD":7.2}}')
+RQ54=$(post "$AH" "$B54" $QCFG)
+ck T54-reject-usd-sealed '"success":false' "$RQ54"
+B54=$(printf '%s' '{"currency":"XXX","rates":{"USD":7.2}}')
+RQ54=$(post "$AH" "$B54" $QCFG)
+ck T54-reject-bad-currency '"success":false' "$RQ54"
+B54=$(printf '%s' '{"currency":"CNY","rates":{}}')
+RQ54=$(post "$AH" "$B54" $QCFG)
+ck T54-save-cny-allowed '"success":true' "$RQ54"
+# 拒写不留半套：fx_rates 键根本不该被写进去
+N54=$(sq "SELECT COUNT(*) FROM system_config WHERE key='fx_rates'" | tr -d '[:space:]')
+[ "$N54" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T54-no-half-config"; } || { FAIL=$((FAIL+1)); echo "FAIL|T54-no-half-config(fx_rates 行数=$N54)"; }
+# ③ 残留配置压不住：绕过校验直插 system_config 外币键 → 生效读取与出参仍恒 CNY
+dbq "INSERT INTO system_config(key,value) VALUES('quote_currency','USD')" >/dev/null
+dbq "INSERT INTO system_config(key,value) VALUES('fx_rates','{\"USD\":7.2}')" >/dev/null
+RQ54=$(get "$AH" $QCFG)
+ck T54-resign-currency-cny '"currency":"CNY"' "$RQ54"
+PLANS54=$(curl -s $B/api/plans)
+ck T54-plans-quote-cny '"quote_currency":"CNY"' "$PLANS54"
+# float() 强制转浮点再打印：Go 会把 21.0 序列化成 21（int 形态），期望值口径统一为 Python 浮点 repr
+PD54=$(echo "$PLANS54" | python3 -c "import sys,json;d=json.load(sys.stdin);print([float(p.get('price_display') or 0) for p in d.get('plans',[]) if p.get('code')=='uat_t54_pkg'][:1])")
+# 关闭态 price_display 恒等于人民币原价 21.6（残留 USD:7.2 不许参与换算——fail-closed 的界面级证据）
+[ "${PD54:-}" = "[21.6]" ] && { PASS=$((PASS+1)); echo "PASS|T54-price-display-cny"; } || { FAIL=$((FAIL+1)); echo "FAIL|T54-price-display-cny(want 21.6 got $PD54)"; }
+CKEY54=$(echo "$PLANS54" | python3 -c "import sys,json;d=json.load(sys.stdin);print(1 if any('price_cny' not in p for p in d.get('plans',[])) else 0)")
+[ "$CKEY54" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T54-plans-carry-price-cny"; } || { FAIL=$((FAIL+1)); echo "FAIL|T54-plans-carry-price-cny(有行缺 price_cny)"; }
+MP54=$(get "$H54" /api/me/package)
+ck T54-me-quote '"quote_currency":"CNY"' "$MP54"
+# ④ 下单快照：残留外币配置下建单仍恒落 CNY|1，money_cny=amount_money 双写（结算事实源不漂）。
+#   注意实付=10.8 而非挂牌 21.6：新租户未满 30 天吃「试运营首月半价」（PackageOrderPrice，
+#   2026-09-14 拍板）——报价快照落在折让之后，恰好锁住「快照跟随最终应收」口径。
+R=$(post "$H54" '{"code":"uat_t54_pkg"}' /api/package/subscribe)
+OID54=$(echo "$R" | pv '.get("order",{}).get("id") or d.get("id") or 0')
+SNAP54=$(sq "SELECT currency||'|'||fx_rate||'|'||money_cny FROM orders WHERE id=$OID54" | tr -d '[:space:]')
+[ "$SNAP54" = "CNY|1|10.8" ] && { PASS=$((PASS+1)); echo "PASS|T54-order-quote-snapshot"; } || { FAIL=$((FAIL+1)); echo "FAIL|T54-order-quote-snapshot(want CNY|1|10.8(首月半价后实付) got $SNAP54)"; }
+AMT54=$(sq "SELECT amount_money FROM orders WHERE id=$OID54" | tr -d '[:space:]')
+[ "${AMT54%.*}" = "10" ] && { PASS=$((PASS+1)); echo "PASS|T54-settlement-still-cny($AMT54)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T54-settlement-still-cny(amount_money=$AMT54 want 10.8(半价实付))"; }
+# ⑤ 清理：本用例直插的报价配置行删回出厂默认，租户/包/订单/余额/台账链删净
+dbq "DELETE FROM system_config WHERE key IN ('quote_currency','fx_rates')" >/dev/null
+dbq "DELETE FROM packages WHERE code='uat_t54_pkg'" >/dev/null
+dbq "DELETE FROM orders WHERE tenant_id=$TD54" >/dev/null
+dbq "DELETE FROM quota_grants WHERE tenant_id=$TD54" >/dev/null
+dbq "DELETE FROM balance_accounts WHERE tenant_id=$TD54" >/dev/null
+dbq "DELETE FROM users WHERE username='$U54'" >/dev/null
+dbq "DELETE FROM tenants WHERE id=$TD54" >/dev/null
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

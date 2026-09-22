@@ -3,7 +3,7 @@
 // 支持 KB 语言（先 KB 直配、未命中批量模型补漏）与"其他语言"（纯批量模型），
 // 从用户 prompt 中解析"其他语言"（正则 + LLM 语言识别兜底），
 // 含 pro 模式批量审校、硬闸补漏（墙钟预算+零进展熔断）与漏翻可见性（Untranslated），
-// 翻译完成后按语言分别写回 translated/ 目录下独立文件并统计 KB/模型命中数。
+// 翻译完成后按语言分别写回产物文件（translated/<落盘名主干>/ 每上传件一个子目录）并统计 KB/模型命中数。
 // ★B3（方案 A2）：主流程挂载逐段事件回调 emit（segment_done/segment_final/segments_sealed），
 // 让 SSE 通道边翻边上屏；发射器与协议见 file_events.go，工单/非流式路径 emit=nil 零开销。
 // ★ 2026-09-22 三处主链整改（本文件是落点）：
@@ -284,10 +284,14 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				Error: "不支持的格式（支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml）"}
 		}
 	}
+	// 显式判一次可读性：落盘件可能已被保留期清理删掉，提前拦下才能给出「文件不存在」
+	// 这种用户可行动的文案，而不是把底层 open 错误原样抛进工单轨迹。
 	if _, err := os.Stat(filePath); err != nil {
 		return &FileTranslateResult{Skill: "translation", Error: "文件不存在或无法读取"}
 	}
 
+	// 目标语言解析：显式参数拆成「KB 覆盖语言」与「其他语言」两拨——两拨的翻译路径不同
+	// （前者先 KB 直配、未命中才走批量补漏；后者直接批量模型），后面各起协程并发处理。
 	langsRaw := TargetLangsFromOptions(options)
 	kbLangs, directOther, hasOther := SplitOptions(langsRaw)
 
@@ -373,11 +377,12 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		}
 	}
 
-	// 语言名映射
+	// 语言名映射（供前端与话术展示；未收录的语言码取不到中文名，下游按原码显示）
 	langNames := map[string]string{}
 	for _, lc := range finalLangs {
 		langNames[lc] = config.LangNames[lc]
 	}
+	// 进度话术用的主语：单目标语言时直接报语言名，多语言时统称「文档」
 	label := "文档"
 	if len(finalLangs) == 1 {
 		label = config.LangNames[finalLangs[0]]
@@ -387,6 +392,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	}
 
 	// 第2步：翻译
+	// 下面三个聚合量会被「每语言一个 goroutine、语言内再每段一个 goroutine」并发写入，
+	// 因此一律配锁访问（Go 并发写 map 是直接 fatal，不是可恢复 error）。
 	kbHits := 0
 	modelHits := 0
 
@@ -410,6 +417,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		}
 	}
 
+	// 三把锁按写入域拆分（译文表 / KB 命中数 / 模型命中数）：计数是高频短临界区，
+	// 与 map 写入共用一把锁会让锁竞争随段数线性放大。
 	translationMu := sync.Mutex{}
 	kbHitsMu := sync.Mutex{}
 	modelHitsMu := sync.Mutex{}
@@ -454,6 +463,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	}
 
 	// KB 语言：先 KB 直配，未命中的批量模型
+	// wg 是本步骤唯一的收敛屏障：硬闸补漏、闸门与写回都依赖「所有语言的译文已齐」，
+	// 所以任何跨语言读取都必须排在 wg.Wait() 之后。
 	var wg sync.WaitGroup
 	if len(kbLangs) > 0 {
 		prog(fmt.Sprintf("第2步/3：翻译%s（0/%d）...", label, len(texts)), 2, 3)
@@ -461,6 +472,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			idx  int
 			text string
 		}
+		// 进度计数被该语言的 8 路段级协程并发自增，必须用 atomic（普通 int 会丢计数）
 		var kbDoneC int64
 		for _, lc := range kbLangs {
 			wg.Add(1)
@@ -468,8 +480,11 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				defer wg.Done()
 				defer recoverPipeline("file_kb:" + lc) // 整改 D4
 				// 第一遍：KB 匹配（★ 并行 8 路：长文档逐段串行是耗时大头）
+				// 两个等长切片按「段下标」回填而非写共享 map：段与段互不相关，
+				// 既免掉每段一次加锁，也天然保住提取顺序（写回阶段依赖该顺序）。
 				kbHitIdx := make([]bool, len(texts))
 				kbVal := make([]string, len(texts))
+				// 缓冲通道当信号量：同时最多 8 段在打 KB 检索/embedding，防大文档把上游打爆
 				semKB := make(chan struct{}, 8)
 				var wgKB sync.WaitGroup
 				for i, t := range texts {
@@ -496,6 +511,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 							}
 						}
 						done := atomic.AddInt64(&kbDoneC, 1)
+						// 日志节流：每 20 段一条 + 首段（余数 1，用来确认协程真的起来了）+ 末段必打；
+						// 千段文档逐段打日志会让日志本身成为主要成本。
 						if done%20 == 1 || int(done) == len(texts) {
 							log.Printf("[kb-match] lang=%s progress=%d/%d", lc, done, len(texts))
 						}
@@ -725,14 +742,22 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	// 对「最后已发文本」做 diff 补推 segment_final(stage=gated)，随后逐语言 segments_sealed。
 	se.sweep(langTranslations, finalLangs)
 
+	// xlsx 单独一条写回分支：它是唯一能「一份文件承载多语言」的格式（原地替换或多 Sheet），
+	// 产物无法按语言归属，故 langArtifact 留空、保真闸门自动回落段级文本视图口径。
 	isXlsxInput := ext == ".xlsx"
 
 	// 第3步：写回文件
 	prog("第3步/3：写回文件+修正排版...", 3, 3)
-	srcDir := filepath.Dir(filePath)
-	baseName := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
-	outputDir := filepath.Join(srcDir, "translated")
-	os.MkdirAll(outputDir, 0o755)
+	// ★ #65（2026-09-22 用户裁定两步同做）：产物目录与取名口径同时改造——
+	//   ① outputDir 由「全工单共用的 translated/」改为 translated/<落盘名主干>/，每上传件独享；
+	//   ② baseName 用**原件展示名**（调用方经 options["source_name"] 传入）而非内部落盘名，
+	//      交付物文件名不再带 19 位纳秒时间戳。①是②的前置：唯一性此前全靠这串时间戳撑着，
+	//      不分目录就剥前缀会让同名原件跨工单/跨租户互相覆盖产物。
+	baseName := artifactDisplayBase(filePath, options)
+	outputDir := artifactOutputDir(filePath)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return &FileTranslateResult{Skill: "translation", Error: "产物目录创建失败: " + err.Error()}
+	}
 
 	filesOut := []string{}
 	var degraded []string // ★ 双模式（2026-09-13）：原格式还原失败已降级纯文案的语言（工单仍成功）
@@ -752,7 +777,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		nameBaseMu.Lock()
 		raw, ok := nameBaseCache[lc]
 		if !ok {
-			raw = e.translateFileNameBase(ctx, filePath, lc)
+			raw = e.translateFileNameBase(ctx, baseName, lc)
 			nameBaseCache[lc] = raw
 		}
 		nameBaseMu.Unlock()
@@ -1006,6 +1031,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		reply += fmt.Sprintf("；⚠️ %s 版式还原失败，已降级为纯文案交付（.md），如需还原版式可重新发起工单", strings.Join(names, "、"))
 	}
 	// ★ 2026-09-03 需求：文件翻译结果附带实际 token 消耗
+	// 用量来自 ctx 的请求级收集器（本次全链路：初翻/校对/embedding 都记在同一处），
+	// 故必须在 ctx 还活着时读取；对外只出 points_used，token 裸值走 json:"-" 不外发。
 	tp, tc := e.UsageTokens(ctx)
 	tokensUsed := tp + tc
 	return &FileTranslateResult{
@@ -1155,6 +1182,7 @@ func writeMultiSheetXlsx(srcPath, outputDir, baseName string, langs []string, la
 		}
 		sheetName := lc // Sheet 名 = 语言代码
 		srcSheets := f.GetSheetList()
+		// 建 Sheet 失败只跳过该语言，不能让已成功的语言颗粒无收
 		if _, err := f.NewSheet(sheetName); err != nil {
 			continue
 		}
@@ -1164,6 +1192,8 @@ func writeMultiSheetXlsx(srcPath, outputDir, baseName string, langs []string, la
 				continue
 			}
 			// 在新 Sheet 中按顺序写入源文和译文
+			// 遍历源 Sheet 只是为了「定位原文所在的单元格坐标」，写入目标是新语言 Sheet；
+			// found 后即 break ⇒ 同一段原文在源文件里出现多次时，只有第一次出现的位置被回填。
 			for _, sheet := range srcSheets {
 				rows, rerr := f.GetRows(sheet)
 				if rerr != nil {
@@ -1172,6 +1202,8 @@ func writeMultiSheetXlsx(srcPath, outputDir, baseName string, langs []string, la
 				found := false
 				for ri, row := range rows {
 					for ci, cellVal := range row {
+						// 比对两侧都 trim：译文键由 ExtractTexts 产出（已去首尾空白），单元格原值常带空格。
+						// CoordinatesToCellName 是 1 基，而 GetRows 的下标是 0 基，故各 +1。
 						if strings.TrimSpace(cellVal) == orig && !found {
 							cell, _ := excelize.CoordinatesToCellName(ci+1, ri+1)
 							_ = f.SetCellValue(sheetName, cell, translated)
@@ -1187,5 +1219,6 @@ func writeMultiSheetXlsx(srcPath, outputDir, baseName string, langs []string, la
 		}
 	}
 	// 删除原始 Sheet 副本（保留第一个作为参考）
+	// SaveAs 写的是 outputDir 下的新文件（与 srcPath 不同目录），原件永不被改动。
 	return f.SaveAs(outPath)
 }

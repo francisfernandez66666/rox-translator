@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { PlansP } from './PlansP'
 
+// 三个被 mock 的接口函数（券预览/下单/订阅），hoisted 供 vi.mock 工厂闭包引用
 const mocks = vi.hoisted(() => ({
   couponPreview: vi.fn(),
   payCreate: vi.fn(),
@@ -47,6 +48,10 @@ vi.mock('@/api', () => ({
   adminPackageSettings: vi.fn(async () => ({ success: true, free_trial_points: 1000, usdt_enabled: '0' })),
   adminPackageSettingsSave: vi.fn(async () => ({ success: true })),
   adminQRUpload: vi.fn(async () => ({ success: true })),
+  // ★ 2026-09-22：PlansP 顶部具名导入需存在（本用例是租户视角，不会真的调用）
+  adminPayChannels: vi.fn(async () => ({ success: true, fields: {}, env_overridden: {} })),
+  adminPayChannelsSave: vi.fn(async () => ({ success: true })),
+  PAY_CH_FIELDS: ['paych_notify_base', 'paych_wechat_enabled', 'paych_wechat_app_id', 'paych_alipay_enabled'],
   request: vi.fn(async () => ({ success: true })),
   authHeaders: vi.fn(() => ({})),
   API_BASE: '',

@@ -46,6 +46,8 @@ import (
 	"time"
 )
 
+// 微信 Native v3 调用的固定端点常量：域名可被 WechatConfig.BaseURL 覆盖（测试注入 httptest），
+// 路径参与 V3 签名的 URL 部分，改错即验签失败，故与官方文档逐字对齐、不留运行时配置口。
 const (
 	// wechatDefaultBase 微信 v3 接口域名（可用 WechatConfig.BaseURL 覆盖，测试注入 httptest）
 	wechatDefaultBase = "https://api.mch.weixin.qq.com"
@@ -173,6 +175,9 @@ func wechatNativeCreate(cfg *Config, req *PayRequest) (*PayResult, error) {
 		body.TimeExpire = time.Now().Add(time.Duration(req.ExpireMinutes) * time.Minute).Format(time.RFC3339)
 	}
 	body.Amount.Total = req.Amount
+	// 这里的 Currency 是微信 SDK 请求体字段（结算币种），本系统只能收人民币故恒为 CNY；
+	// ★ #75 多币种报价只改客户「看到的报价币种」（orders.currency/fx_rate 快照，见 store/currency.go），
+	// 未签约外币收单前禁止把它改成用户传入的币种——外币实际扣款路径一条都不许存在（fail-closed）。
 	body.Amount.Currency = "CNY"
 	payload, err := json.Marshal(&body)
 	if err != nil {

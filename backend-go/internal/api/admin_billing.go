@@ -271,6 +271,8 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 		_ = s.Store.UpdateOrderMoney(o.OrderNo, money)
 		o.AmountMoney = money
 	}
+	// ★ #75（2026-09-23）多币种报价：金额最终确定后落报价币种/汇率快照（money_cny=amount_money 双写）
+	s.stampOrderQuote(r.Context(), o)
 	// 自助充值即时到账模式：system_config auto_charge=1 时创建订单即确认到账（内网/测试模式）
 	// ★ C18（2026-09-12）：auto_charge 确认失败不再吞错返回"成功"——
 	//   旧实现用户/面板见到 success 但订单实际 pending（假到账）。

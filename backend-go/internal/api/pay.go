@@ -30,7 +30,6 @@ import (
 	"log"
 	"math"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
@@ -52,8 +51,11 @@ func constantTimeTokenEqual(a, b string) bool {
 // 旧实现只按全局 pay_mode 构建单一 provider——/api/pay/notify/alipay 回调也交给
 // wechat 适配器验签，alipay 渠道事实上不可用；sdk 历史别名映射 wechat。
 // channel 为空时回退全局模式（兼容旧调用）。
+// 参数来源（★ 2026-09-22）：不再是散落在本函数里的 os.Getenv，而是 payGatewayConfig()
+// 合成的「当前有效配置」（环境变量 > 管理台库配置，理由见 pay_channels.go 文件头）——
+// 下单与回调验签两条链路因此共用同一份凭据。
 func (s *Server) payProviderFor(channel string) payment.Provider {
-	cfg := &payment.Config{}
+	cfg := s.payGatewayConfig()
 	mode := channel
 	if mode == "" {
 		mode = s.effPayMode(0)
@@ -65,20 +67,6 @@ func (s *Server) payProviderFor(channel string) payment.Provider {
 		mode = "wechat"
 	}
 	cfg.Mode = mode
-	// 环境变量覆盖（商户号到位后配置，全部为 fail-closed 必备资质，缺项见 payment/gateway_sdk.go 文件头）
-	cfg.NotifyBase = os.Getenv("PAY_NOTIFY_BASE")
-	cfg.Wechat.AppID = os.Getenv("PAY_WECHAT_APP_ID")
-	cfg.Wechat.MchID = os.Getenv("PAY_WECHAT_MCH_ID")
-	cfg.Wechat.APIv3Key = os.Getenv("PAY_WECHAT_APIv3_KEY")
-	cfg.Wechat.SerialNo = os.Getenv("PAY_WECHAT_SERIAL_NO")
-	cfg.Wechat.PrivateKey = os.Getenv("PAY_WECHAT_PRIVATE_KEY")
-	cfg.Wechat.NotifyURL = os.Getenv("PAY_WECHAT_NOTIFY_URL")
-	cfg.Alipay.AppID = os.Getenv("PAY_ALIPAY_APP_ID")
-	cfg.Alipay.PrivateKey = os.Getenv("PAY_ALIPAY_PRIVATE_KEY")
-	cfg.Alipay.PublicKey = os.Getenv("PAY_ALIPAY_PUBLIC_KEY")
-	cfg.Alipay.SellerID = os.Getenv("PAY_ALIPAY_SELLER_ID")
-	cfg.Alipay.Gateway = os.Getenv("PAY_ALIPAY_GATEWAY")
-	cfg.Alipay.NotifyURL = os.Getenv("PAY_ALIPAY_NOTIFY_URL")
 	return payment.NewProvider(cfg)
 }
 
@@ -173,6 +161,10 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		s.Store.LogAudit(tid, u.ID, "coupon_redeem", "orders",
 			o.OrderNo+" code="+code+" discount="+strconv.FormatFloat(disc, 'f', 2, 64))
 	}
+	// ★ #75（2026-09-23）多币种报价：应收已最终落库（B1 回填 + 券折让之后），
+	//   落报价币种与汇率快照（currency/fx_rate/money_cny）；结算仍恒为人民币，
+	//   渠道下单报文（PayRequest.Amount，分）不受此处影响。
+	s.stampOrderQuote(r.Context(), o)
 	// ★ USDT 收款（2026-09-15）：独立分支——链上无回调，出收款要素快照（地址+含尾数精确金额+
 	//   汇率快照+24h 窗口），到账走「人工核销（M1）」或「reconciler 自动对账（M2，默认关）」。
 	if req.Channel == "usdt" {
@@ -248,11 +240,12 @@ func payChannelQRErrorMessage(channel string, err error) string {
 }
 
 // payPublicHint 渠道下单错误的对外文案收敛（★ #41 + #37 脱敏口径）：
-// 「资质未配置」是可执行的运维提示，原样给出；其余（网络、TLS、渠道原始报文）统一为通用提示，
-// 原始错误由调用方写日志。返回值自带前缀冒号，可直接拼在「支付渠道暂不可用（wechat）」后。
+// 「资质未配置」与「渠道被管理台停用」是可执行的运维提示，原样给出（管理员照着就能开启收款）；
+// 其余（网络、TLS、渠道原始报文）统一为通用提示，原始错误由调用方写日志。
+// 返回值自带前缀冒号，可直接拼在「支付渠道暂不可用（wechat）」后。
 func payPublicHint(err error) string {
 	msg := err.Error()
-	if strings.Contains(msg, "资质未配置") {
+	if strings.Contains(msg, "资质未配置") || payChannelDisabledErr(err) {
 		return "：" + msg
 	}
 	return "：下单失败，请稍后重试或改用其他付款方式"

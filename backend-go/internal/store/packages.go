@@ -591,8 +591,12 @@ func (s *Store) ExpirePackage(tid int64) (code string, err error) {
 	}
 	// ★ A2/S3（2026-09-12 PG 方言修复）：多键原子摘除改经 db.JSONPatchSet 合并补丁——
 	//   旧写法内联 SQLite JSON1 json_set，PG 下整条 UPDATE 报错，导致每日到期摘除静默失败。
+	// ★ #74（2026-09-23）：宽限期两键（grace_expires_at / notified_grace）随身份一并清零——
+	//   否则下一期订阅真到期时，扫描会把上一期遗留的宽限期截止时刻当成「宽限期已过」，
+	//   导致新一期到期即刻摘除（宽限期形同虚设）。api 侧另以「晚于本期到期时刻才有效」二次兜底。
 	patch, _ := json.Marshal(map[string]any{
 		"package_code": "", "package_expires_at": "", "notified_exp7": false, "notified_exp1": false,
+		"grace_expires_at": "", "notified_grace": false,
 	})
 	d := db.CurrentDialect()
 	_, err = db.Exec(s.db, d,

@@ -1,1 +1,4 @@
-server
+# 只忽略在模块根目录直接 `go build` 落下的可执行文件产物。
+# 原先写成裸 `server`，会连 cmd/server/ 目录一起匹配掉，
+# 导致 backend-go/cmd/server/main_p0_test.go 长期被静默忽略、从未进过版本库。
+/server

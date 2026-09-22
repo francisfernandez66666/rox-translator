@@ -12,12 +12,21 @@
 //  4. **提示词残留零透传**——模型返回多行或原样包含整段原名时判为回显，直接回落原名，
 //     绝不让清洗链把「指令行 + 原名」粘成一个交付文件名（见 isFilenameEchoResidue）。
 //
+// 追加职责（#65，2026-09-22）：交付名清理与产物分目录。
+// 内部落盘名带的纳秒时间戳（防重名用）不得出现在交付物文件名里：
+//   - artifactDisplayBase 定义取名口径（原件展示名优先，回落落盘名并剥内部时间戳标记）；
+//   - artifactOutputDir 定义产物目录口径（translated/<落盘名主干>/，每上传件独享子目录）。
+//
+// 两者配套才成立：先分目录去掉「时间戳当唯一性守卫」的依赖，再剥前缀，否则同名原件会跨工单/
+// 跨租户互相覆盖产物。
+//
 // ========================================
 package engine
 
 import (
 	"context"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -39,6 +48,7 @@ const illegalFileNameRunes = `/\/:*?"<>|`
 // 去危险字符与控制字符 → 折叠连续空白 → trim 首尾空白与点 → 为后缀预留字节后按 UTF-8 截断。
 // 参数 name: 待清洗名；suffix: 最终文件名里紧跟 base 的部分（如 "_en_text.md"），
 // 预留其长度以保证**整体**不超 artifactBaseMaxBytes。返回空串表示不可用，调用方须回落原名。
+// 边界：suffix 过长时剩余预算可为 0/负数，此时一律返回空串（宁可用原名，也不写出超限名）。
 func sanitizeArtifactBaseName(name, suffix string) string {
 	var b strings.Builder
 	for _, r := range name {
@@ -79,6 +89,7 @@ func truncateUTF8Bytes(s string, maxBytes int) string {
 	for i, r := range s { // range 给出的是 rune 起始下标，天然不会切在多字节中间
 		w := utf8.RuneLen(r)
 		if n+w > maxBytes {
+			// 按字节截断后可能恰好停在空格/点上（Windows 不允许结尾点），再 trim 收口一次
 			return strings.Trim(s[:i], " .")
 		}
 		n += w
@@ -132,11 +143,14 @@ func resolveTranslatedBaseName(origBase, modelOut string, callErr error, lc stri
 	return origBase
 }
 
-// translateFileNameBase 把 filePath 的 base 名翻成目标语言 lc（不含扩展名，失败回落原名）。
+// translateFileNameBase 把「原件展示名主干」base（不含扩展名，已由 artifactDisplayBase 剥过
+// 内部时间戳标记）翻成目标语言 lc，失败回落传入名。
 // 单次 TranslateOne（非 KB 直配）：文件名是无上下文短串，走 KB 极易命中脏行，
 // 且整份文件只需一次调用，成本可忽略。调用方负责按语言做缓存，勿逐产物点各调一次。
-func (e *Engine) translateFileNameBase(ctx context.Context, filePath, lc string) string {
-	base := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
+//
+// ★ 形参从 filePath 改成 base（#65 第二步）：从磁盘路径自行推导 base 会把内部落盘名
+// 连同纳秒时间戳一起当作翻译输入，模型回显时那串数字就原样进了交付物文件名。
+func (e *Engine) translateFileNameBase(ctx context.Context, base, lc string) string {
 	if strings.TrimSpace(base) == "" {
 		return base
 	}
@@ -151,6 +165,56 @@ func (e *Engine) translateFileNameBase(ctx context.Context, filePath, lc string)
 		return base
 	}
 	return resolveTranslatedBaseName(base, r.Translations[lc], nil, lc)
+}
+
+// 交付名清理（#65，2026-09-22 用户裁定「分目录 + 剥前缀」两步同做）
+// ==============================================================
+
+// internalNameMarkRe 匹配落盘时系统加的**内部**防重名时间戳标记（两种历史拼法都要认）：
+//   - `1790026522069352000_报价单.docx` —— 工单/OpenAPI 建单落盘（api/tickets.go、api_openapi_tasks.go）；
+//   - `报价单_1790026522069352000.docx` —— /api/translate 落盘（api/stream.go 的 uniqueName）。
+//
+// 位数下限取 15：纳秒戳 19 位、微秒 16 位，而用户文件名里的年份/序号最多 8 位
+// （"2024_报告"、"v3_1" 都远不够），下限够高才不会把用户自己的名字当内部标记剥掉。
+var internalNameMarkRe = regexp.MustCompile(`^\d{15,}_|_\d{15,}$`)
+
+// artifactDisplayBase 给出「产物文件名主干」的取名口径（不含扩展名，且已剥掉内部时间戳标记）。
+// 优先用调用方传进来的原件展示名（ticket_files.file_name / multipart 的原始 filename），
+// 拿不到（历史单文件工单、未升级的调用点）才回落落盘名并剥标记。
+//
+// 为什么以展示名为准、而不是「在落盘名上做正则」：落盘名是内部标识，把它当翻译输入
+// 等于把一串纳秒时间戳喂给模型（RC-4 文件名翻译），既浪费又在模型回显时漏进交付物文件名。
+func artifactDisplayBase(diskPath string, options map[string]interface{}) string {
+	name := strings.TrimSpace(optionString(options["source_name"]))
+	if name == "" {
+		name = filepath.Base(diskPath)
+	}
+	// 展示名源自请求体/DB，可能是 Windows 全路径：只取最后一段，绝不用它参与路径拼接
+	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	// 扩展名在这里就剥掉：后续翻译与清洗只处理 base，交付名各产物的后缀由命名模板自行决定
+	// ——「扩展名永不参与翻译、永不丢失」的口径正是由这一行落地的。
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	if b := strings.TrimSpace(internalNameMarkRe.ReplaceAllString(base, "")); b != "" {
+		return b
+	}
+	// 剥完为空（原件名字整个就是内部标记）⇒ 回落落盘名主干，保证交付名不留空串
+	if disk := strings.TrimSpace(strings.TrimSuffix(filepath.Base(diskPath), filepath.Ext(diskPath))); disk != "" {
+		return disk
+	}
+	return "translated_file"
+}
+
+// artifactOutputDir 产物输出目录：translated/<落盘名主干>/，即**每个上传件独享一个子目录**（#65 第一步）。
+// 旧口径下 translated/ 是全工单共用的平铺目录，同名原件（两个租户都传「报价单.docx」）会互相
+// 覆盖产物，且 output_artifacts 的唯一键是 (tenant_id, path)——path 全局重复会让下载侧的归属
+// 解析命中不确定的行。分目录把这两件事一次性堵死，#65 第二步才敢把交付名里的内部前缀剥掉。
+//
+// 子目录名刻意用**落盘名**（本身含唯一时间戳）而不是展示名：同一工单/同一请求内允许出现
+// 两个同名原件，展示名会撞车，落盘名不会。经 sanitizeArtifactBaseName 清洗（路径分隔符与
+// 控制字符一律剔除），调用方传什么都不可能拼出 ../ 逃逸出 translated/ 目录。
+func artifactOutputDir(diskPath string) string {
+	raw := strings.TrimSuffix(filepath.Base(diskPath), filepath.Ext(diskPath))
+	return filepath.Join(filepath.Dir(diskPath), "translated", sanitizeArtifactBaseName(raw, ""))
 }
 
 // fileNameNeedsTranslation 判断 base 名是否需要送模型：
