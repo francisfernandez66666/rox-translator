@@ -38,6 +38,9 @@
 | `my_billing.go` | F8 自服务账单（客户侧积分口径） |
 | `reconcile.go` | F9 三表勾稽（orders ↔ payments ↔ 余额/退款流水） |
 | `packages.go` | 商业包（`packages`）与租户套餐归属、过期处理 |
+| `renewal_grace.go` | 订阅续费宽限期 + 自动续费重试台账（★ #74）：`renewal_attempts` 唯一键 `(tenant_id, package_id, attempt_date)` 保证「同日不重复建单」，宽限期键 `grace_expires_at` / `notified_grace` 走 `tenants.permissions` 单字段原子覆写 |
+| `billing_payconfig.go` | 支付渠道凭据（`paych_wechat_*` / `paych_alipay_*` 存 `system_config`）：敏感项 `EncryptSecret` 落库、回显统一掩码（掩码值不落库）、渠道开关三态（未设/开/关） |
+| `currency.go` | 多币种报价（★ #75）：`quote_currency` / `fx_rates` 配置（env > 库 > 默认，白名单 + 倍率防呆），`ConvertFromCNY` fail-closed 换算（缺汇率回落 CNY），`orders` 报价快照列 `currency` / `fx_rate` / `money_cny` 幂等迁移与 `StampOrderCurrency*` 落库（结算事实源仍恒为人民币，无外币实扣路径）。**★ 2026-09-22 决策关闭封存：总开关 `quoteFeatureOpen=false` 钉死本包内——读口短路恒 CNY、写口拒收外币、白名单仅露 CNY；重开=翻转常量+还原 T54 开放态断言，快照列与接口契约原样保留** |
 | `quota_grants.go` | 额度发放台账（幂等发放、并发防重） |
 | `quota_org.go` | 部门预算（四期增强）与双预算墙判定 |
 | `usdt.go` | USDT 收款（TRC20/ERC20/BEP20，M1 人工核销 + M2 链上轮询） |

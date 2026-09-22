@@ -1,6 +1,33 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-22（〇-XLVIII：任务系统 #33 + 评估报告缺陷批 #34–#43 + 文件管线保真 RC-1~RC-6）
+> 最后更新：2026-09-22（〇-XLIX：支付渠道管理台可配 + 订阅续费宽限期 #74 + 多币种报价 #75（已按决策关闭封存），代码已推送 66452cd，主站部署见该条尾注）
+
+### 〇-XLIX、国际收款就绪批：支付渠道可配 + 续费宽限期 + 多币种报价（已封存）（2026-09-23，★ 代码已推送 66452cd·文档本地·主站部署见尾注）
+
+> 来源：国际版路线（12 语种已上线后的商业化缺口）。#74 解决「凭据改一次要登服务器」与
+> 「自动续费扣款失败当天就摘身份」；#75 解决「海外客户只看得到人民币价」。
+> 编号口径：#74=支付渠道凭据管理台可配 + 订阅续费宽限期；#75=多币种报价。
+> ★ 2026-09-22 用户裁决（本批收尾时确认）：收单能力只有微信/支付宝（人民币）与币安钱包
+> USDT 两条，**#75 多币种报价关闭封存**（"保留国内 CNY 口径、海外 USDT 口径，其他做关闭，
+> 后续有能力了再打开"）——机制代码全保留、总开关 `store/currency.go` `quoteFeatureOpen=false`
+> 钉死关闭态，USDT 走既有独立 `usdt_*` 口径与本批无冲突；#74 两块默认缴收不受影响。
+
+| 块 | 交付 |
+|----|------|
+| **#74a 支付渠道凭据管理台可配** | `store/billing_payconfig.go`（`paych_*` 白名单键，敏感项 `internal/secret` 加密落库、掩码回显、`IsSecretMasked` 防掩码写回）+ `api/pay_channels.go`（GET/POST `/api/admin/pay/channels[/save]`，超管专属，env 接管项回显标注）+ 前端 PlansP「运营配置」新增商户参数区块（被 env 接管的栏位置灰标变量名）。`payment/gateway_sdk.go`/`payment.go` 改读该配置链（env > 库 > 默认） |
+| **#74b 订阅续费宽限期** | `store/renewal_grace.go`（`renewal_attempts` 唯一键 `(tenant_id,package_id,attempt_date)` 同日去重；`grace_expires_at`/`notified_grace` 走 tenants.permissions 原子覆写）+ `api/subscription_grace.go`（到期扫描：进宽限保留身份+站内信、宽限期每日补建续费单、逾期摘除换文案）+ `/api/me/package` 出 `in_grace/grace_expires`，前端宽限提示条（`PlansP.grace.dom.test.tsx` 钉本地时区日期口径）。配置键 `subscription_grace_days`/`renewal_lead_days`（见部署指南） |
+| **#75 多币种报价（仅展示口径）→ ★ 已按用户决策关闭封存** | 后端：`store/currency.go`（`quote_currency`/`fx_rates` 配置 env>库>默认、12 币种白名单、倍率防呆 >0 且 <1000、`ConvertFromCNY` fail-closed 缺汇率回落 CNY；`orders` 幂等补列 `currency/fx_rate/money_cny` + 存量回填 `money_cny=amount_money`）+ `api/quote_currency.go`（超管口 GET/POST `/api/admin/config/quote-currency`，校验先行整批拒写，审计留痕）+ 出参加强（`/api/plans` 顶层 `quote_currency/fx_rates_snapshot`、每行 `price_cny/price_display`；`/api/me/package` 同口径；老字段一删不存）+ 五类建单点（subscribe/upgrade/pay-create/自动续费/后台代建）金额最终确定后统一 `stampOrderQuote` 落快照。**★ 关闭态实现（2026-09-22）：`store/currency.go` 总开关 `quoteFeatureOpen=false`——`QuoteCurrencyCfg` 读口短路恒回 CNY（残留库配置/env 都压不住）、`ValidateQuoteCurrency/ValidateFxRates` 拒收一切外币键、`SupportedQuoteCurrencies` 只露 CNY ⇒ 管理台报价区块与 C 端外币渲染自动整体消失；快照列/迁移/审计/接口契约原样保留（历史单不漂）。重开=翻转常量+还原 T54 开放态断言，其余零改动。** 语义红线不变：收单与实扣恒为人民币；海外收款唯一口径是既有 USDT 链（`usdt_*` 配置，与本开关无关）。前端：`quoteFmt.ts` + `/pricing` 与商店卡外币渲染分支 + 收银台「约合 X」行（关闭态下这些分支因出参恒 CNY 不触发）+ 管理台报价区块（以「白名单含外币币种」为渲染条件）；`billing.quote*` 8 键 × 12 语种词典保留（locales.core 全量闸门仍绿） |
+| **测试** | 后端：`store/currency_test.go`（A–D 开放态用例显式翻开关 + **F 组关闭态红线：读口短路/写口拒收/env 压不动/换算 fail-closed/白名单仅 CNY**）、`api/quote_currency_test.go`（开放态往返 + **关闭态 400「暂未开放」/feature_open=false/plans 恒 CNY**）、`store/billing_payconfig_test.go`、`api/pay_channels_test.go`、`api/renewal_grace_test.go`、`store/renewal_grace_test.go` 等；前端：`PlansP.quote.dom.test.tsx`（回显/env 置灰/载荷拦截/商店卡双币/**关闭态区块隐藏** 6 用例）+ `quoteFmt.test.ts`（CNY 老口径逐字不变等 3 条）+ `PlansP.grace.dom.test.tsx`；UAT：`api_uat_txn.sh` 新增 **T53（#74 宽限期全链，含对照组）**、**T54（★ 关闭态口径重写：配置口鉴权不放水/外币保存拒收/CNY 表态放行/直插残留外币配置不生效/plans·快照恒 CNY 且 money_cny=amount_money 双写——快照金额=首月半价折让后实付 10.8，锁「快照跟随最终应收」，16 断言）** |
+
+> 闸门（2026-09-22 六步链实跑，全绿）：后端 `go build/vet` + `go test -race ./...` **39 包全过**；
+> 前端 tsc + **vitest 47 files·308 tests**（含 i18n 全量闸门 2746 键、quote 6 用例含关闭态区块隐藏）
+> + vite build 全绿；run_uat PG：**API A/B 96/0**（本批 +2）、**交易专项 T 479/0**（T53 宽限期全链、
+> T54 关闭态 16 断言；首轮 T54 两条 FAIL 定位为断言期望未算「试运营首月半价」——新租户订 paid 包
+> 实付=挂牌五折 10.8，报价快照落在折让之后恰证「快照跟随最终应收」，断言已按 10.8 修正并重跑全绿）、
+> **Playwright 53 passed + 1 skip**；assist_uat **38/0**；多实例 **8/0**。
+> 发布链：代码提交 **66452cd** 已推送 origin/autosales（本批零文档零流程图；远端原停在 decd6b9，
+> push 连带上了此前 5 个「仅本地」文档提交，属历史不可拆的既成事实）；文档更新留本地提交；
+> 主站部署见本条尾注发版记录。
 
 ### 〇-XLVIII、任务系统与评估报告缺陷批（2026-09-22，代码提交 106ce50·decd6b9 已推送 origin/autosales·文档仅本地·主站已部署，演示站未部署）
 
