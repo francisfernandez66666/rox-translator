@@ -894,7 +894,7 @@ export const dict: Record<string, string> = {
   "chat.usedTip": "오늘 실제 소모(과금 제외 상황 포함, 원장 전면 기록); 다중 언어 번역은 언어 수만큼 소모가 늘어납니다",
   "chat.usedTokens": "오늘 소모 {n} 포인트",
   "chat.welcome": "텍스트를 입력하고 목표 언어를 선택해 번역하세요",
-  "chat.welcomeSub": "번역 결과가 입력창 아래에 표시됩니다. 40개 이상 언어를 지원합니다.",
+  "chat.welcomeSub": "번역 결과가 이 대화상자에 바로 표시됩니다. 40개 이상 언어를 지원합니다.",
   "common.active": "활성",
   "common.cancel": "취소",
   "common.close": "닫기",

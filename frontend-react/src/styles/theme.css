@@ -131,9 +131,9 @@ html, body { background: #000000; }
 .brand { font-weight: 700; color: #E7E9EA; font-size: 14px; }
 
 /* ---- 聊天区 ---- */
-/* ★ 2026-09-22 形态回退：即时翻译恢复「吸顶输入卡 + 下方译文气泡」两段式，滚动容器是
-   组件内的 .cw-stage（flex/overflow/padding/scroll-behavior 随 ChatWindow 的 CW_CSS 下发）。
-   页面级 .chat-scroll 与 #36 合并期的 .cw-dialog* 均无消费者，规则已删（此处留说明即可，勿再复活）。 */
+/* ★ #36（2026-09-21）：即时翻译改为「输入与译文同卡」的合并对话框后，滚动区收进卡内的
+   .cw-dialog-body（flex/overflow/padding/scroll-behavior 随组件 CW_CSS 下发），页面级
+   .chat-scroll 已无消费者，规则随之删除（旧规则在此处留一条说明即可，勿再复活）。 */
 .bubble-row { display: flex; margin-bottom: 16px; gap: 10px; }
 .bubble-row.user { flex-direction: row-reverse; }
 .avatar {
