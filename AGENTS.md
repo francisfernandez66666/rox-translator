@@ -73,6 +73,22 @@
   单向锁一路推离交付稿，返工成本 = 全站 50 文件。新增界面规格断言必须写成**等值锁**
   （`readability.test.ts` 令牌等值 + 提亮产物负向清零；`pixel_uat.spec.ts` P2b 运行时实测等于交付值）。
   唯一例外是多语言能力（12 语种/RTL/全量词典/动效），按用户口径「除多语言特性导致的除外」保留。
+- **白色两档不许混用**（★ 2026-09-22 〇-LI）：实心白填充件（主按钮 / 主 CTA / 反相白卡 / 白底徽标 /
+  用户气泡 / FAB / 发送键）= **#FFFFFF**（别名令牌 `--lc-fill-white`）；**#E7E9EA** 只用于主文字与
+  正向/活跃态小控件（checkbox、switch、Tab 活跃胶囊、进度条、光标、状态点）。
+  拿 `var(--lc-text-1)` 做整块填充就是用户判「白色显脏、偏蓝」的根因，锁见 `readability.test.ts` G 段。
+- **五类「前端闸门扫不到」的渲染面**（改 UI 必须逐面点名，别默认 dist 绿 = 全站绿）：
+  ① React 组件内联 `<style>` 模板串；② 后端直出 `/docs/*`（`internal/api/public.go`）；
+  ③ 后端直出 `/openapi/docs`（`admin_openapi.go`，CSS 已收敛为共享常量 `openAPIDocsCSS`）与
+  `/office/taskpane.html`（`office.go`）；④ assist-server `go:embed` 的 `internal/assist/web/admin.html`；
+  ⑤ 浏览器扩展 `extension/`（popup + content.css）。
+  ②③④⑤ 的锁分别在各侧自有闸门里：Go 侧 `public_ui_test.go`（含 `TestAllServedHtmlPagesMonochrome`
+  全量扫描——源码含 `<!DOCTYPE html` 即进射程）、`assist/web/admin_ui_test.go`、
+  `readability.test.ts` H 段；运行时侧由 `pixel_uat.spec.ts` P6/P6b/P6c 补。
+  **部署口径**：改动落在 ②③ 必须换 `translator-server`，落在 ④ 必须换 `translator-assist`，
+  落在 ⑤ 需重打扩展包——只换 `/opt/translator/web` 一律不生效。
+  ⚠️ ④ 额外一层：生产 `secrets.env` 留着 `ASSIST_WEB=/opt/ai-assist/web`，**外置文件优先于 `go:embed`**，
+  所以换二进制仍可能是旧页——改 `internal/assist/web/*` 必须同步外置 `admin.html`（2026-09-22 〇-LI 踩过）。
 
 ### 6. e2e 断言红线
 

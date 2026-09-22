@@ -1,6 +1,36 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-22（〇-L：全站按 UI 交付真值还原 + 测试锁改等值口径 + T55 支付渠道配置闸门，代码已推送 48c8c22·主站已部署 2026-09-22（仅换源 web）·演示站未部署）
+> 最后更新：2026-09-22（〇-LI：白色两档定档 + 后端直出页/扩展面单色还原 + 四类真值锁，代码已推送 5f04be5·主站已部署 2026-09-22（前后端两件 + web 换源 + assist 外置页同步）·演示站未部署）
+
+### 〇-LI、白色两档定档与后端/扩展渲染面还原批（2026-09-22，★ 代码已推送 5f04be5·文档仅本地不推送·主站已部署（translator-server + translator-assist 两二进制 + web 换源）·演示站未部署）
+
+> 来源：〇-L 之后用户仍判「白色不纯、偏蓝显脏」。逐像素取证把根因定位到两类，而不是第三轮提亮：
+> ① **白色两档被混用**——主按钮 / 主 CTA / 反相白卡 / 徽标 / 用户气泡 / FAB 这些"实心白件"取了
+> 文字档 **#E7E9EA** 做整块填充（纯黑底上读出来就是冷灰）；
+> ② **四类「前端闸门扫不到」的渲染面**从未进过还原范围——后端直出的 /openapi/docs 与
+> /office/taskpane.html 仍是 Google 蓝 #1a73e8 / indigo #1a237e 浅底，assist 内嵌管理台仍是蓝靛
+> #2f47f5 浅底，浏览器扩展 popup + 划词气泡仍是靛蓝主色 + 绿色成功态。
+> **文档矛盾裁决**：《UI-ANNOTATIONS》§1.1 把「主按钮底」写在 `--lc-text-1` 行内，与同文档
+> §3.1-05「主按钮 面 #FFFFFF」自相矛盾——以交付包 `react/css/components.css`
+> `.lc-btn--primary{background:#FFFFFF}` + 零偏移截图（05-pricing / 06-marketing-home）逐像素
+> 直方图为准：白底件全部实测 #FFFFFF，#E7E9EA 在图里只出现在文字行。**文档 prose 让位于实证**。
+> （取证注意：07/08/09 是整体 +20 亮度抬升的导出产物，拿它取色会把灰值当白值。）
+
+| 块 | 交付 |
+|----|------|
+| **令牌定档** | `tokens.css` 新增实心白档 `--lc-fill-white:#FFFFFF`（文档口径别名块内），并把 `--lc-text-1` 注释里误写的「主按钮底」改为「正向活跃态（小控件与指示条）」 |
+| **前端实心白件归位** | Landing 主投按钮 / 反相专业卡 / 收尾 CTA / logo 方块、PricingPage 首月徽标、AiAssist FAB + 发送键 + 用户气泡 + `.na-act:hover`、theme.css AI 头像 / 语种徽标 / DOCX 图标、ErrorBoundary 重试按钮，一律 `#FFFFFF`/`var(--lc-fill-white)` + 黑字。**合法留在 #E7E9EA 的**：进度条填充、光标、审阅态小胶囊、封段徽标、WordSwap 光标、复选框/开关/Tab 活跃胶囊（正向活跃档，非整块填充） |
+| **后端直出页还原（§1.1 单色纯黑）** | `public.go` /docs 外壳重画（header 56 高、品牌 15/700 #FFFFFF、导航项 12/500 #9AA0AA + 活跃 `a.on` #FFFFFF、管理后台=白底黑字主按钮、面板 #0E1014 + 1.2px #3A404C + r14 + 顶缘受光、页脚 #050607/#536471，新增 `docNavLink` 点亮当前页）；`admin_openapi.go` /openapi/docs 原先**两处重复 CSS** 收敛为共享常量 `openAPIDocsCSS`（goldmark 壳与中英双容器页同源），代码块 #0A0B0D/#0E1014、语言切换活跃档白底黑字、链接取主文字不再取蓝；`office.go` Word 任务窗格改深底 + 纯白主按钮 + 描边次按钮，绿色成功态废止 |
+| **assist 内嵌管理台还原** | `internal/assist/web/admin.html`（`go:embed`，路由 `/assist/admin`）`:root` 换 §1.1 令牌：面 #000/#0E1014/#16181C/#0A0B0D、文字三档、描边 1.2px、卡片顶缘高光；主按钮 `button.pri` 白底黑字；Tab 活跃改「次级卡面 + 主文字」；LLM 接入态三档改 主文字/次级/警示琥珀（绿蓝底全废）；Token 验证态与对话框遮罩（72% 黑）同口径 |
+| **浏览器扩展还原** | `extension/popup.html` 靛蓝主色→纯黑单色（主按钮白底黑字、输入走 #0A0B0D + 1.2px 描边、成功态不标绿、select 内联样式并入统一规则）；`extension/content.css` 划词圆钮→纯白实心件（与主站 FAB 同档）、结果气泡→#0E1014 面板 + 1.2px #3A404C、术语高亮自造 #FFD54F 归位 §1.1 警示琥珀 #D29922 |
+| **真值锁（四类闸门各补一处）** | ① `readability.test.ts` 新增 **G 段**：白底件逐点等值（11 点 + ErrorBoundary 内联特例）+ 按钮/CTA/徽标/气泡类选择器禁取 #E7E9EA/`var(--lc-text|-text-1|-success)` 做背景的负向锁（CSS-in-JS 选择器需规范化反引号，末级裸元素 i/span/svg 豁免）；新增 **H 段**：扩展 popup/content.css 旧靛蓝·浅底·绿族清零 + 取 §1.1 令牌。② 新建 `backend-go/internal/api/public_ui_test.go`：/docs 三页 + /openapi/docs + office 窗格逐页断言，外加 **`TestAllServedHtmlPagesMonochrome` 全量扫描**——凡源码含 `<!DOCTYPE html` 即进射程（这个盲区已被发现四次，逐页点名必然再漏）。③ 新建 `internal/assist/web/admin_ui_test.go`：assist 管理台令牌等值 + 主按钮白底 + 遮罩 72% 黑，扫描前先剥 `/* */`、`<!-- -->`、`//` 注释（本仓「旧值 → 真值」说明注释里全是历史色值，不剥就是命中注释自己的老坑）。④ `pixel_uat.spec.ts` 新增 **P6b**（营销页主投/收尾白块运行时 `getComputedStyle` = rgb(255,255,255)）、**P6c**（/openapi/docs 纯黑底 + 语言钮白底；/office/taskpane 走 fetch 校样式壳，避开 Office.js 外网依赖） |
+| **闸门实跑** | `go build`/`vet`/`go test -race ./...` **GO_TEST_EXIT=0**（40 包含测试全过、零 FAIL 零 DATA RACE）；`tsc` 干净；vitest **47 文件 / 344 用例**（本批 +20：G 段 15 + H 段 5）；`vite build` 成功（`index-yT1ZziZi.js` / `index-DtdiKHPp.css`）；`run_uat.sh` PG 主矩阵 **RUN_UAT_EXIT=0**：A/B **96/0** + T 套件 **510/0** + Playwright **55 passed / 1 skipped**；`assist_uat.sh` **38/0**；`multi_instance_e2e.sh` **8/0**。本地预览实测 `.lc-mkt-btn--pri`/`.lc-cta`/`.lc-plan--pro` = rgb(255,255,255)、body = rgb(0,0,0) |
+| **发布链** | 代码提交 **5f04be5**（16 文件，零 .md / 零流程图）已推送 `origin/autosales`：本地曾排在两份「仅本地」文档提交之后，为守住「文档不外推」，在 48c8c22 上 cherry-pick 出纯代码提交后推送，再 merge 并轨（rebase 改写历史被自动化安全闸门拦下，故用 merge，不改写已推送内容）。文档更新只本地提交 |
+| **主站部署与线上验收** | 2026-09-22 21:19 两件二进制 mv rename 替换（`translator-server` `fa2f8ca0…` / `translator-assist` `798d420c…`，旧件留 `.bak.20260922_211905`）+ `/opt/translator/web` 两步换源（`index-yT1ZziZi.js`/`index-DtdiKHPp.css` 首页已引用，旧目录留 `web_old.20260922_211951`），`deploy_check.sh` 内网 **11/11** · 公网 **8/8**。线上四渲染面令牌实测：/docs 三页与 /openapi/docs 旧色 **0 命中** + `--lc-bg:#000000`、/office/taskpane.html 走 `var(--lc-bg)`/`var(--lc-white)`（唯一"命中"落在我自己写的历史色注释里，非样式值）、CSS 已含 `--lc-fill-white: #FFFFFF`。⚠️ **验收时抓到一处真缺陷**：assist 管理台页面换二进制后线上仍旧配色——生产 `ASSIST_WEB=/opt/ai-assist/web` 让**外置 09-17 旧页覆盖 `go:embed` 内嵌新页**（外置优先，`internal/assist/api/server.go` adminPage）。当日两步 `mv` 同步外置 `admin.html`（留 `admin.html.bak.20260922_212841`）+ `systemctl restart ai-assist`，公网 `/assist-api/assist/admin` 复测 200 / 19139 字节、`--bg:#000000`·`--white:#FFFFFF`·`background:var(--white);color:#000000` 齐、旧配色 0 命中。口径已入 AGENTS §5 与《部署指南》§十三：**今后碰 `internal/assist/web/*`，只换二进制不够，必须同步外置页或撤销 `ASSIST_WEB`** |
+
+> 遗留：生产 `ai-assist` 库 `kb_entries` 关键词人工同步（承接 〇-XLVI/XLVIII）；`/opt/translator/` 下 `web_old.*` 归档实测已 **39 份 / 67M**（磁盘 66% 用、余 13G）待清理决策；assist 外置 `ASSIST_WEB` 覆盖是否彻底撤销（撤销后内嵌页单一事实源）待人工决定；演示站按前令未部署（版本差再扩一批）。
+
+---
 
 ### 〇-L、全站 UI 交付真值还原批（2026-09-22，★ 代码已推送 48c8c22·主站已部署（纯前端批，仅换源 `/opt/translator/web`，两二进制不替换、服务不重启）·文档仅本地不推送）
 
