@@ -8,7 +8,7 @@
 // UI-ANNOTATIONS + langcross-handoff 交付包真值。闸门随之从「只准更亮/更大」
 // 改成「必须等于真值」——旧的单向锁会阻止还原，留着它反而会持续把配色往偏蓝方向推。
 //
-// 六条断言：
+// 八条断言：
 //  A) 令牌真值等值锁：tokens.css 的灰阶/描边/语义色与 theme.css 的 --npz-* 必须逐字等于
 //     交付值（改一个字符即红，防止「顺手提亮一档」再次发生）；
 //  B) 覆写层禁复活：theme.css / mobile.css 里不得再出现带 font-size 的 `html xxx` 覆写规则
@@ -16,7 +16,11 @@
 //  C) 关键几何与字阶等值：顶栏 38 高、品牌 14/700、工作台 Tab 13 胶囊（§2.2 真值）；
 //  D) 提亮/蓝调遗留字面值清零：历次提亮与浅色主题遗留的 38 个十六进制值全站禁再出现；
 //  E) 登录后界面不得写死次级灰（走 var(--lc-text-*)），营销门面页按自身画布口径豁免；
-//  F) 描边字面值不得暗于 --lc-border-faint（令牌是 3.2:1 的最弱档，写死更暗即架空）。
+//  F) 描边字面值不得暗于 --lc-border-faint（令牌是 3.2:1 的最弱档，写死更暗即架空）；
+//  G) 白色填充档：主按钮/主 CTA/反白件（徽标、用户气泡、FAB）必须纯白 #FFFFFF（--lc-fill-white），
+//     不得用文字档 #E7E9EA 做整块填充——那正是「白色显脏/偏蓝」的根因（截图逐像素取证）；
+//  H) 扩展插件面（../extension/popup.html + content.css）按同一套 §1.1 真值——它既不进 vite 产物
+//     也不是后端直出 HTML，是第四类「两套闸门都扫不到」的渲染盲区。
 //
 // 读源文件而非渲染 DOM：jsdom 不加载外链 CSS，源码级断言才是稳定闸门；
 // 运行时内联样式/换肤造成的回退由 e2e/pixel_uat.spec.ts 的 P2b（getComputedStyle 实测）互补。
@@ -31,6 +35,7 @@ const read = (p: string) => readFileSync(ROOT + p, 'utf-8')
 // 源文件在模块顶层就读进来：路径一旦改名/删除，import 阶段就直接抛错，
 // 让「闸门本身失效」也是红灯，而不是静默地什么都不断（本文件最怕假绿）。
 const KIT_TOKENS = read('src/ui/langcross/css/tokens.css')
+const KIT_COMPONENTS = read('src/ui/langcross/css/components.css')
 const THEME_CSS = read('src/styles/theme.css')
 const MOBILE_CSS = read('src/styles/mobile.css')
 const APP_TSX = read('src/App.tsx')
@@ -129,7 +134,7 @@ describe('A 令牌真值等值锁（UI-ANNOTATIONS §1.1 / 交付包 tokens.css�
 function entriesCss(): [string, string][] {
   return [
     ['src/ui/langcross/css/tokens.css', KIT_TOKENS],
-    ['src/ui/langcross/css/components.css', read('src/ui/langcross/css/components.css')],
+    ['src/ui/langcross/css/components.css', KIT_COMPONENTS],
     ['src/styles/theme.css', THEME_CSS],
     ['src/styles/mobile.css', MOBILE_CSS],
   ]
@@ -252,5 +257,130 @@ describe('F 描边字面值不得架空令牌', () => {
   }
   it('描边字面值不得暗于 --lc-border-faint', () => {
     expect(offenders, '请改为描边令牌：\n' + offenders.join('\n')).toEqual([])
+  })
+})
+
+// ---- G) 白色填充档：实心白件必须纯白（2026-09-22 像素取证批新增）----
+// 取证链：① 交付包 react/css/components.css `.lc-btn--primary{background:#FFFFFF}`；
+// ② 零偏移截图 05-pricing / 06-marketing-home 逐像素直方图 —— 卡内「免费注册」按钮、
+//    「注册即送 / 即购即刻到账」徽标、底部 CTA 按钮的填充全部实测 #FFFFFF，
+//    而 #E7E9EA 在这两张图里只出现在文字行；③ UI-ANNOTATIONS §1.1 把 #E7E9EA 定义为
+//    「主文字 / 正向活跃态」，从未授权它做整块填充。
+// 本锁防的正是用户判定「白色显脏、偏蓝」的根因：把主按钮写成 var(--lc-text-1)。
+// 反过来说，进度条 / 光标 / Tab 活跃胶囊这类「正向活跃态」仍属 --lc-success 档，不在本锁射程。
+
+// 选择器文本规范化：压平空白，并剥掉 CSS-in-JS 模板串残留的反引号/引号
+// （AiAssist 的样式写在 `css\`…\` 里，首个规则的选择器会带上开头的反引号）。
+const normSel = (s: string) => s.replace(/[`"{}]/g, ' ').replace(/\s+/g, ' ').trim()
+
+// 取某选择器（全等匹配，规范化空白后）所有声明块里的 background 值。
+// 同名选择器会在媒体查询里再次出现，因此收集全部、任一命中纯白即通过。
+function bgsOf(src: string, selector: string): string[] {
+  const body = stripComments(src)
+  const out: string[] = []
+  const re = /([^{}]+)\{([^{}]*)\}/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(body))) {
+    if (normSel(m[1]) !== selector) continue
+    const v = m[2].match(/background(?:-color)?\s*:\s*([^;]+)/)
+    if (v) out.push(v[1].trim())
+  }
+  return out
+}
+// 纯白判据：#FFFFFF 字面量，或 var(--lc-fill-white)（含带兜底值的写法）。
+const isPureWhite = (v: string) => /^(#FFFFFF|var\(--lc-fill-white(,[^)]*)?\))$/i.test(v.replace(/\s+/g, ''))
+
+// 逐点等值表：每一点都由截图取证支撑，新增白底实心件时同步往这里加一行。
+const WHITE_FILL_SITES: [string, string][] = [
+  ['src/ui/langcross/css/components.css', '.lc-btn--primary'],
+  ['src/components/Landing.tsx', '.lc-mkt .lc-mkt-btn--pri'],
+  ['src/components/Landing.tsx', '.lc-plan--pro'],
+  ['src/components/Landing.tsx', '.lc-cta'],
+  ['src/components/PricingPage.tsx', '.lc-prc-badge'],
+  ['src/components/AiAssist.tsx', '.na-fab'],
+  ['src/components/AiAssist.tsx', '.na-send'],
+  ['src/components/AiAssist.tsx', '.na-row.me .na-bubble'],
+  ['src/styles/theme.css', '.avatar-ai'],
+  ['src/styles/theme.css', '.progress-lang'],
+  ['src/styles/theme.css', '.icon-docx'],
+]
+// 负向锁的选择器网：只圈「按钮 / 主投 / CTA / 发送 / FAB / 徽标 / 气泡」这一类实心白件，
+// 不碰进度条与活跃胶囊（它们合法地留在 #E7E9EA 档）。
+const WHITE_FILL_SEL = /(^|[.\s,:])[a-z0-9_-]*(btn|cta|send|fab|badge|bubble|--pri|--primary)/i
+
+describe('G 白色填充档（主按钮/主 CTA/反白件 = 纯白 #FFFFFF）', () => {
+  it('--lc-fill-white 令牌存在且等于 #FFFFFF', () => {
+    expect(token(KIT_TOKENS, '--lc-fill-white'), 'tokens.css 缺纯白填充档令牌').toBe('#FFFFFF')
+  })
+  for (const [file, sel] of WHITE_FILL_SITES) {
+    it(`${file} → ${sel} 底为纯白`, () => {
+      const got = bgsOf(read(file), sel)
+      // 匹配不到 background 同样红灯：选择器改名/规则挪走都属"形态变了"，不许静默放行
+      expect(got.length, `${sel} 未匹配到含 background 的声明块，请同步本锁`).toBeGreaterThan(0)
+      expect(got.some(isPureWhite), `${sel} 实际底值 ${JSON.stringify(got)} 不是纯白`).toBe(true)
+    })
+  }
+  it('ErrorBoundary 重试按钮（React 内联样式，不走 CSS 块解析）底为纯白', () => {
+    const src = read('src/components/ErrorBoundary.tsx')
+    const got = [...src.matchAll(/background:\s*'([^']+)'/g)].map((m) => m[1])
+    expect(got.length, '内联 background 形态变了，请同步本锁').toBeGreaterThan(0)
+    expect(got.some(isPureWhite), `重试按钮底值 ${JSON.stringify(got)} 不是纯白`).toBe(true)
+  })
+  it('按钮/CTA/徽标/气泡类选择器不得再用文字档灰做整块填充', () => {
+    const offenders: string[] = []
+    for (const f of walkSrc('src')) {
+      const body = stripComments(read(f))
+      const re = /([^{}]+)\{([^{}]*)\}/g
+      let m: RegExpExecArray | null
+      while ((m = re.exec(body))) {
+        const sel = normSel(m[1])
+        if (!WHITE_FILL_SEL.test(sel)) continue
+        // 只锁「这一件自己的面」：末级是裸元素（badge 里的 i 圆点、按钮里的 span）时跳过，
+        // 那些子元素取的是 --lc-success 活跃档，属合法灰，不是整块填充。
+        if (/(\s|^)(i|em|b|strong|span|svg|path|circle|rect)\s*$/.test(sel)) continue
+        for (const v of m[2].matchAll(/background(?:-color)?\s*:\s*([^;]+)/g)) {
+          if (/(#E7E9EA|var\(\s*--lc-(text|text-1|success)\s*\))/i.test(v[1])) {
+            offenders.push(`${f}  ${sel} { ${v[0].trim()} }`)
+          }
+        }
+      }
+    }
+    expect(offenders, '实心白件一律取 #FFFFFF / var(--lc-fill-white)：\n' + offenders.join('\n')).toEqual([])
+  })
+})
+
+// ---- H) 扩展插件面（浏览器扩展 popup + 划词注入样式）按同一套真值 ----
+// 为什么放这里：`extension/` 是独立打包物，既不进 vite 构建产物（D/G 的 walkSrc('src') 扫不到），
+// 也不是后端直出 HTML（backend-go public_ui_test.go 扫不到）——它是第 4 类渲染盲区。
+// 2026-09-22 全量排查时发现它整套还是 indigo #1a237e 主色 + 白底气泡 + 绿色成功态，
+// 与交付的 X/Grok 单色纯黑（§1.1 全站无蓝无绿）完全相反，故在此补锁。
+const EXT_POPUP_HTML = read('../extension/popup.html')
+const EXT_CONTENT_CSS = read('../extension/content.css')
+// 旧扩展主题的自造色：靛蓝主色族 + Google 灰族 + 语义绿 + 自造琥珀高亮
+const EXT_BANNED_HEX = ['1A237E', '3949AB', '2E7D32', 'DADCE0', '202124', 'FFD54F', '555', '999', 'DDD', 'FFF']
+
+describe('H 扩展插件面（popup + 划词注入样式）单色真值', () => {
+  for (const [name, src] of [['extension/popup.html', EXT_POPUP_HTML], ['extension/content.css', EXT_CONTENT_CSS]] as const) {
+    const code = stripComments(src)
+    it(`${name} 旧靛蓝/浅底/绿色清零`, () => {
+      const hits = [...code.matchAll(/#([0-9a-fA-F]{3,8})\b/g)].map((m) => m[1].toUpperCase())
+        .filter((h) => EXT_BANNED_HEX.includes(h))
+      expect(hits, `${name} 出现旧扩展主题色：\n${hits.join(', ')}`).toEqual([])
+    })
+    it(`${name} 取 §1.1 令牌真值`, () => {
+      expect(code).toContain('#0E1014')
+      expect(code).toContain('#FFFFFF')
+      expect(code).toContain('1.2px')
+    })
+  }
+  it('popup 主按钮＝纯白底黑字，成功态不标绿', () => {
+    const code = stripComments(EXT_POPUP_HTML)
+    expect(code, 'popup 主按钮未按交付真值走白底黑字').toContain('background: var(--lc-white); color: #000000')
+    expect(code, '页面底必须纯黑（§1.1 --lc-bg）').toContain('background: var(--lc-bg)')
+  })
+  it('划词浮动按钮＝实心白件、结果气泡＝深色面板', () => {
+    const code = stripComments(EXT_CONTENT_CSS)
+    expect(code, 'FAB 底不是纯白档').toContain('background: var(--lc-white)')
+    expect(code, '气泡底不是 §1.1 面板档').toContain('background: var(--lc-panel)')
   })
 })

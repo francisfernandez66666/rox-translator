@@ -194,11 +194,12 @@ export default function AiAssist() {
            不再写死 #2A2F3A~#575F6C 那批暗值——「#68 描边禁再写死暗值」锁会连本文件一起扫并红灯
            （它只放行 var(...) 里的兜底值，字面暗值一律算写死）。
            仍在用的字面值只剩三类：深色层级面（面板/输入底 #0E1014、#0A0B0D、#16181C，属底色不属描边）、
-           反白件（#E7E9EA 底 + #000 字的 FAB/发送/用户气泡，气泡正文 #C8CCD1 也高于闸门下限）、
+           反白件（纯白 #FFFFFF 底 + #000 字的 FAB/发送/用户气泡，交付真值 .lc-btn--primary{background:#FFFFFF}，
+           与 --lc-fill-white 同档；气泡正文 #C8CCD1 也高于闸门下限）、
            以及警示底 #D29922 及其 rgba（交付包保留的琥珀语义色，离线态专用，不并入单色令牌）。 */
         .na-fab{position:fixed;right:22px;bottom:22px;z-index:99990;width:56px;height:56px;border-radius:50%;
-          border:none;cursor:pointer;background:#E7E9EA;color:#000;display:flex;align-items:center;justify-content:center;
-          box-shadow:0 6px 20px rgba(231,233,234,.16)}
+          border:none;cursor:pointer;background:#FFFFFF;color:#000;display:flex;align-items:center;justify-content:center;
+          box-shadow:0 6px 20px rgba(255,255,255,.16)}
         .na-fab:hover{transform:scale(1.06)}
         .na-panel{position:fixed;right:22px;bottom:88px;z-index:99991;width:380px;max-width:calc(100vw - 24px);
           height:min(620px,78vh);background:#0E1014;border-radius:16px;box-shadow:0 12px 48px rgba(0,0,0,.5);
@@ -219,13 +220,13 @@ export default function AiAssist() {
         .na-row.me{justify-content:flex-end}
         .na-bubble{max-width:82%;padding:9px 12px;border-radius:12px;font-size:13.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word}
         .na-row.ai .na-bubble{background:#0A0B0D;border:1.2px solid var(--lc-border-card);color:#C8CCD1;border-top-left-radius:4px}
-        .na-row.me .na-bubble{background:#E7E9EA;color:#000;border-top-right-radius:4px}
+        .na-row.me .na-bubble{background:#FFFFFF;color:#000;border-top-right-radius:4px}
         .na-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
         /* 推荐入口：深底面板上必须是浅字浅描边（原来 #0A0B0D 文字在 #0E1014 底上等于不可见） */
         .na-act{display:inline-flex;align-items:center;gap:5px;border:1.2px solid var(--lc-border-faint);background:#16181C;
           color:#C8CCD1;border-radius:999px;padding:4px 11px;font-size:12px;cursor:pointer;white-space:nowrap;
           font-family:inherit}
-        .na-act:hover{background:#E7E9EA;border-color:#E7E9EA;color:#000}
+        .na-act:hover{background:#FFFFFF;border-color:#FFFFFF;color:#000}
         .na-chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px;border-top:1.2px solid var(--lc-border-faint);background:#0E1014}
         .na-chip{border:1.2px dashed var(--lc-border-faint);background:transparent;color:var(--lc-text-2);border-radius:999px;padding:4px 11px;
           font-size:12px;cursor:pointer;font-family:inherit}
@@ -234,7 +235,7 @@ export default function AiAssist() {
         .na-input input{flex:1;background:#0A0B0D;border:1.2px solid var(--lc-border-input);border-radius:10px;padding:8px 12px;
           font-size:13px;outline:none;color:#E7E9EA;font-family:inherit}
         .na-input input::placeholder{color:var(--lc-text-3)}
-        .na-send{border:none;background:#E7E9EA;color:#000;border-radius:10px;padding:8px 18px;cursor:pointer;font-size:13px;font-family:inherit}
+        .na-send{border:none;background:#FFFFFF;color:#000;border-radius:10px;padding:8px 18px;cursor:pointer;font-size:13px;font-family:inherit}
         .na-send:disabled{opacity:.42;cursor:not-allowed}
         .na-offline{font-size:11px;color:#D29922;background:rgba(210,153,34,0.10);border:1.2px solid rgba(210,153,34,0.32);border-radius:8px;padding:2px 8px;margin-right:6px}
         .na-offline + .na-close{margin-left:8px}

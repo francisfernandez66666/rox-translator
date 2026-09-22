@@ -50,33 +50,63 @@ var docsRenderer = goldmark.New(
 	goldmark.WithRendererOptions(html.WithXHTML()),
 )
 
+// openAPIDocsCSS 文档页样式壳（renderDocsHTML 与中英双容器页共用一份，避免两处各自漂移）。
+//
+// 口径来源：UI-ANNOTATIONS §1.1（面/文字/描边三族令牌）、§1.3（描边 1.2px、圆角档）。
+// ★ 2026-09-22 全站 UI 还原批：本页原先是「Google 蓝 #1a73e8 + indigo 标题 + 浅底代码块」的
+// 独立浅底主题——它由后端直出、不在前端构建产物里，前端令牌闸门扫不到，属还原盲区
+// （与 /docs/*、assist 管理台同一类问题）。现按 §1.1 令牌改纯黑底，链接取主文字档而非蓝。
+const openAPIDocsCSS = `
+:root{
+  --lc-bg:#000000;--lc-panel:#0E1014;--lc-surface:#16181C;--lc-inset:#0A0B0D;
+  --lc-text:#E7E9EA;--lc-text-2:#9AA0AA;--lc-text-3:#71767B;
+  --lc-line:#464C58;--lc-pill:#424956;--lc-card-line:#3A404C;
+  --lc-white:#FFFFFF;--lc-danger:#E5484D;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Noto Sans SC',-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;max-width:900px;margin:30px auto;padding:0 20px;color:var(--lc-text);background:var(--lc-bg);line-height:1.7;font-size:14px}
+h1{border-bottom:1.2px solid var(--lc-card-line);padding-bottom:8px;font-size:24px;font-weight:700;margin-bottom:14px}
+h2{font-size:19px;font-weight:600;margin-top:26px;border-bottom:1.2px solid var(--lc-card-line);padding-bottom:4px}
+h3{font-size:16px;font-weight:600;margin:18px 0 8px}
+p{margin:9px 0;color:var(--lc-text-2)}
+b,strong{color:var(--lc-text);font-weight:600}
+code{background:var(--lc-inset);color:var(--lc-text);border:1.2px solid var(--lc-card-line);padding:2px 6px;border-radius:6px;font-size:13px}
+pre{background:var(--lc-panel);border:1.2px solid var(--lc-card-line);padding:12px;border-radius:12px;overflow:auto;font-size:13px;margin:12px 0;box-shadow:inset 0 1px 0 rgba(255,255,255,.055)}
+pre code{background:transparent;border:none;padding:0}
+ul,ol{margin:9px 0;padding-left:24px;color:var(--lc-text-2)}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:14px}
+th,td{border:1.2px solid var(--lc-card-line);padding:8px 10px;text-align:left}
+th{background:var(--lc-surface);color:var(--lc-text);font-weight:600}
+td{color:var(--lc-text-2)}
+.badge{display:inline-block;background:var(--lc-surface);color:var(--lc-text);border:1.2px solid var(--lc-pill);border-radius:999px;padding:2px 8px;font-size:12px;font-weight:500}
+.err{color:var(--lc-danger)}
+blockquote{border-left:2px solid var(--lc-text);margin:10px 0;padding:4px 14px;background:var(--lc-panel);border-radius:0 10px 10px 0;color:var(--lc-text-2)}
+a{color:var(--lc-text);text-decoration:none}
+a:hover{text-decoration:underline}
+hr{border:none;border-top:1.2px solid var(--lc-card-line);margin:24px 0}
+.lang-switch{position:fixed;top:14px;right:18px;display:flex;gap:6px;z-index:20}
+.lang-btn{border:1.2px solid var(--lc-pill);background:var(--lc-panel);color:var(--lc-text-2);border-radius:999px;padding:3px 12px;font-size:12.5px;cursor:pointer}
+/* 语言切换的活跃档＝白底黑字实心件（交付真值 .lc-btn--primary），与次档同族不同档 */
+.lang-btn:hover{border-color:var(--lc-line);color:var(--lc-text)}
+.lang-btn.on{background:var(--lc-white);color:#000000;border-color:var(--lc-white);font-weight:500}
+.doc-lang{display:none}.doc-lang.show{display:block}
+@media (max-width:720px){body{margin:16px auto;padding:0 14px;font-size:13px}h1{font-size:21px}h2{font-size:17px}table{display:block;overflow-x:auto}}
+`
+
 // renderDocsHTML 把 Markdown 渲染为完整文档页 HTML（内嵌样式壳，与品牌配色一致）。
 // 参数 md: Markdown 源码。返回: 完整 HTML 字符串（渲染失败时回退纯文本转义展示）。
 func renderDocsHTML(md string) string {
 	var buf bytes.Buffer
 	if err := docsRenderer.Convert([]byte(md), &buf); err != nil {
 		// 渲染异常兜底：按纯文本输出，绝不因文档问题打断服务
-		return `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>能言开放 API 文档</title></head><body><pre>` +
-			htmlEscapeText(md) + `</pre></body></html>`
+		// （兜底页同样要过样式壳，否则白底 <pre> 会把纯黑口径打断）
+		return `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>能言开放 API 文档</title><style>` +
+			openAPIDocsCSS + `</style></head><body><pre>` + htmlEscapeText(md) + `</pre></body></html>`
 	}
 	return `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>能言开放 API 文档</title>
-<style>
-body{font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;max-width:900px;margin:30px auto;padding:0 20px;color:#222;line-height:1.7}
-h1{border-bottom:2px solid #1a237e;padding-bottom:8px;font-size:24px}
-h2{font-size:19px;margin-top:26px;border-bottom:1px solid #e0e0e0;padding-bottom:4px}
-code{background:#f0f0f0;padding:2px 6px;border-radius:4px;font-size:13px}
-pre{background:#f6f8fa;padding:12px;border-radius:8px;overflow:auto;font-size:13px}
-pre code{background:transparent;padding:0}
-table{border-collapse:collapse;width:100%;margin:10px 0}
-th,td{border:1px solid #ddd;padding:8px 10px;text-align:left;font-size:14px}
-th{background:#fafbfd}
-.badge{display:inline-block;background:#e8eaf6;color:#1a237e;border-radius:4px;padding:2px 8px;font-size:12px}
-.err{color:#c62828}
-blockquote{border-left:4px solid #1a73e8;margin:10px 0;padding:4px 14px;background:#f5f9ff;color:#455}
-a{color:#1a73e8}
-</style></head><body>` + buf.String() + `</body></html>`
+<style>` + openAPIDocsCSS + `</style></head><body>` + buf.String() + `</body></html>`
 }
 
 // htmlEscapeText 纯文本 HTML 转义（渲染兜底路径用）。
@@ -126,29 +156,12 @@ func (s *Server) handleOpenAPIDocs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	zhBody := extractBodyInner(renderDocsHTML(s.expandDocsHost(s.getDocsMD("zh"))))
 	enBody := extractBodyInner(renderDocsHTML(s.expandDocsHost(s.getDocsMD("en"))))
-	// 双容器静态页模板（CSS/JS 内联零外链）：zh/en 各一份 body 同时下发，脚本端切换显隐
+	// 双容器静态页模板（CSS/JS 内联零外链）：zh/en 各一份 body 同时下发，脚本端切换显隐。
+	// 样式壳与 renderDocsHTML 同源（openAPIDocsCSS），两条路径不会再各画一套配色。
 	page := `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>能言开放 API 文档</title>
-<style>
-body{font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;max-width:900px;margin:30px auto;padding:0 20px;color:#222;line-height:1.7}
-h1{border-bottom:2px solid #1a237e;padding-bottom:8px;font-size:24px}
-h2{font-size:19px;margin-top:26px;border-bottom:1px solid #e0e0e0;padding-bottom:4px}
-code{background:#f0f0f0;padding:2px 6px;border-radius:4px;font-size:13px}
-pre{background:#f6f8fa;padding:12px;border-radius:8px;overflow:auto;font-size:13px}
-pre code{background:transparent;padding:0}
-table{border-collapse:collapse;width:100%;margin:10px 0}
-th,td{border:1px solid #ddd;padding:8px 10px;text-align:left;font-size:14px}
-th{background:#fafbfd}
-.badge{display:inline-block;background:#e8eaf6;color:#1a237e;border-radius:4px;padding:2px 8px;font-size:12px}
-.err{color:#c62828}
-blockquote{border-left:4px solid #1a73e8;margin:10px 0;padding:4px 14px;background:#f5f9ff;color:#455}
-a{color:#1a73e8}
-.lang-switch{position:fixed;top:14px;right:18px;display:flex;gap:6px}
-.lang-btn{border:1px solid #1a73e8;background:#fff;color:#1a73e8;border-radius:14px;padding:3px 12px;font-size:12.5px;cursor:pointer}
-.lang-btn.on{background:#1a73e8;color:#fff}
-.doc-lang{display:none}.doc-lang.show{display:block}
-</style></head><body>
+<style>` + openAPIDocsCSS + `</style></head><body>
 <div class="lang-switch">
   <button class="lang-btn on" data-l="zh" onclick="setLang('zh')">中文</button>
   <button class="lang-btn" data-l="en" onclick="setLang('en')">English</button>

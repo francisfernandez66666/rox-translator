@@ -149,7 +149,7 @@ const PRICING_CSS = `
 /* ★ #75 外币报价时的人民币原价辅助行：明显弱于主价，客户视线在本币价上 */
 .lc-prc-cny{font-size:12px;color:var(--lc-text-5);line-height:1.4}
 .lc-prc-period{font-size:11px;color:var(--lc-text-5)}
-.lc-prc-badge{align-self:flex-start;margin-top:6px;padding:3px 8px;font-size:10px;font-weight:500;line-height:1.4;color:#000;background:var(--lc-text-1);border-radius:var(--lc-r-bar);transition:filter var(--lc-mo-release) var(--lc-mo-out)}
+.lc-prc-badge{align-self:flex-start;margin-top:6px;padding:3px 8px;font-size:10px;font-weight:500;line-height:1.4;color:#000;background:var(--lc-fill-white);border-radius:var(--lc-r-bar);transition:filter var(--lc-mo-release) var(--lc-mo-out)}
 /* 徽标即入口：hover 提亮一档给"可按"反馈，视觉重量不变 */
 .lc-prc-badge:hover{filter:brightness(1.15)}
 .lc-prc-note{display:flex;gap:10px;margin:24px 0 0;padding:16px 18px;font-size:12.5px;line-height:1.85;color:var(--lc-text-2);background:var(--lc-inset);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-card)}
