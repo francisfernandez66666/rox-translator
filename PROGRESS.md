@@ -1,8 +1,8 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-23（〇-N：**「黑色的 UI 不该配黑色的字」根因修 + 全站字阶/描边抬档**——删掉 light/auto 三态主题（`data-theme` 恒 dark、文字色落到无条件 `html, body` 基础层），≤16px 的每一级 **+2px**、所有 `border*` 一律 **2px**、**颜色一族逐字未改**；改动覆盖五类渲染面（React 内联样式 / `/docs` / `/openapi/docs` + office 侧栏 / assist 内嵌页 / 浏览器扩展），扩展重打包 **1.2.0**。闸门全绿（含 PG 方言主矩阵 96+510、Playwright 61 passed）。代码**未提交未推送未部署**，等用户令）
+> 最后更新：2026-09-23（〇-N：**「黑色的 UI 不该配黑色的字」根因修 + 全站字阶/描边抬档**——删掉 light/auto 三态主题（`data-theme` 恒 dark、文字色落到无条件 `html, body` 基础层），≤16px 的每一级 **+2px**、所有 `border*` 一律 **2px**、**颜色一族逐字未改**；改动覆盖五类渲染面（React 内联样式 / `/docs` / `/openapi/docs` + office 侧栏 / assist 内嵌页 / 浏览器扩展），扩展重打包 **1.2.0**。闸门全绿（含 PG 方言主矩阵 96+510、Playwright 61 passed）。代码已推送 **`a5dbd27`**（纯代码提交，本地对应 `143cc8f`，并轨 merge `f6a80e7`）·文档仅本地·**主站与演示站已同日 14:17/14:19 发版**（两站 `translator-server` 同 sha `73fee513…`、主站另换 `translator-assist` `474586b0…`、两站 `web` 换源至 `index-DM3l5EoZ.js`；两站内网 11/11 + 公网 8/8、浅色宿主浏览器实测逐项相等，见 ⑧）
 
-### 〇-N、恒暗根因修与全站字阶/描边抬档批（2026-09-23，★ 代码未提交·文档仅本地·**未部署**）
+### 〇-N、恒暗根因修与全站字阶/描边抬档批（2026-09-23，★ 代码已推送 **`a5dbd27`**（纯代码提交，本地对应 `143cc8f`，并轨 merge `f6a80e7`）·文档仅本地·**主站与演示站已同日发版**（主站三件齐上、演示站两二进制欠账补齐 + 换源，见 ⑧））
 
 > 来源＝用户两张截图（即时翻译语种面板 + 一张后台概览）+ 四条指令：
 > 「1.聊天框选项，黑色的 UI 不该配黑色的字。2.后台 tab 字号变大。3.线框变粗。4.整体提升对比度，靠字体变大和加大线框粗细实现，不要变颜色。」
@@ -18,6 +18,7 @@
 | **⑤ 浅色宿主的回归闸门** | `e2e/dark_admin_upload.spec.ts` 整文件 `test.use({ colorScheme:'light' })`（不钉住的话，跑它的机器外观决定结果，闸门随机绿），D1 内预置 `localStorage.app_theme='light'` 后断言 `data-theme` 仍为 `dark`、`body` 文字色实测 `rgb(231,233,234)`、遗留键被清 |
 | **⑥ 闸门（2026-09-23 全绿）** | `go build ./...` ✓、`go vet ./...` VET_EXIT=0、`go test -race -count=1 ./internal/...` **RACE_EXIT=0**（含 `TestGofmtGateZeroViolations`——本批一度因 `public.go` 注释未 gofmt 红灯，`gofmt -w` 后复绿）；`npx tsc --noEmit` 干净、vitest **48 文件 / 369 用例**、`vite build` → `index-DM3l5EoZ.js`；Playwright 全矩阵 **61 passed / 1 skipped** 跑了两遍（SQLite 与 PG 各一次）；`assist_uat.sh` **48/0**；`multi_instance_e2e.sh` **8/0**；`build_extension.sh --check` 绿（1.2.0，指纹 `38d7827c0012…`）；**发布闸门 `run_uat.sh`（PG 方言）＝API 主链路 96/0 + 交易专项 510/0 + 前端 E2E exit=0，PG_UAT_EXIT=0**。改动面：80 个已跟踪文件（+1068/−1003）+ 扩展新包 2 个未跟踪文件 |
 | **⑦ 实测取证与清理** | 本地 `KEEP=1` 实例上跑量尺脚本取运行时真值（`/tmp/measure_00n.mjs`、`/tmp/measure_panel_00n.mjs`，脚本在 /tmp 不入库）；截图证据 `artifacts/p2b_workbench_merged.png`（工作台：单排工具条、2px 卡框、字阶明显变大）与 `artifacts/_00n_panel_light_host.png`（**浅色宿主**下展开语种面板，选项亮灰可读），一次性脚手架 `e2e-manual/_measure_panel_contrast.mjs` 跑完即删；四个 UAT 临时目录（`tmp.9fmZmCJpaX`／`tmp.HbyyWZRdfh`／`tmp.V13iu27TXT`／`tmp.gXLr1m0Ell`，合计约 162 M）按显式路径删净，8899/8898/8901/8902 四端口已无监听 |
+| **⑧ 发版（用户令「全部做了」＋「演示站也要部署」，14:17 主站 / 14:19 演示站）** | **三件齐上**：HEAD 交叉编译 `translator-server` `73fee513…` 与 `translator-assist` `474586b0…`（`GOOS=linux CGO_ENABLED=0 -ldflags="-s -w"`），各 `cp` 备份 → `mv` rename 替换（ETXTBSY 口径）→ `systemctl restart translator ai-assist`；`vite build` 新资产 `index-DM3l5EoZ.js`／`index-CaGyRNei.css`，两站均走 `web.new` 校验引用 → 两步 `mv`，演示站换源后补 `chown root:caddy` + `chmod -R o+rX`。**演示站无 assist 实例**（`bootstrap-demo.sh` 只装 `translator-demo`），故它只换 `translator-server` + `web`，且与主站二进制 **sha 完全相同**。**验收（全部在换件换源之后）**：两站内网 `deploy_check.sh` 各 **11/11**、公网两域各 **8/8**；`journalctl --since "14:17" -p err` 三服务**零条**、全级别 `panic`／`fatal` 关键字零命中；五类渲染面逐项线上核——`/docs/{terms,sla,privacy}` 2px 命中 3/4/3 且细档 **0**、`/openapi/docs` 2px **5**、`/office/taskpane.html` 2px **3**／**5151 B**（两站同值）、assist 内嵌管理台 **19125 B / sha `24d72756e99811f5…`＝仓库 `internal/assist/web/admin.html` 逐字节相同**（并复核 `ASSIST_WEB` 外置覆盖仍为 0，内嵌页仍是单一事实源）、扩展包两站 `latest.zip` 与 `1.2.0.zip` 均 **200／11633 B／`PK`**。**浏览器实测（`colorScheme:'light'` + 1280×720＝原故障场景）**：主站公开页底 `#000000`／文字 `#E7E9EA`（**17.24:1**）、`data-theme=dark`、`color-scheme=dark`、遗留 `app_theme` 键被清、描边最小 **2px**；演示站即时翻译 **114/94/50/40** 逐项相等、工具条单排、输入框 **15px**、顶栏 38／Tab **15**／语种钮 **14**、描边取样 46 处细档 **0**；语种面板 `lms-panel--up` 向上弹（`bottom 645 ≤ 触发上沿 651`）、选项 **15px** 且 `#E7E9EA` 于 `#0A0B0D` **16.17:1**（已选/未选同值）。⚠️ 取证坑：**内嵌浏览器 MCP `innerWidth=0`** 会让媒体查询落到移动档，量出 `.app-header .brand` **17px**（`mobile.css` 移动档）而非桌面 16px——UI 数值取证必须用显式视口的 Playwright。治理：两站 `web_old.*` 各裁至 4 份、`/tmp` 本批上传件删净，磁盘 **38%、余 24 G** |
 
 > **第 2 张截图的口径澄清（重要，别当成「已修」**）：截图标题「极石智能翻译平台 · 管理后台」里的品牌名**可以**是本产品——
 > 后台侧栏标题走 `AdminDashboard.tsx:185` 的 `branding.brandName || t('admin.title')`，白标租户配了 `brand_name` 就显示它。
@@ -26,8 +27,9 @@
 > 所以那张图不是本仓任一版本的页面。恒暗修复与抬档对**任何**该形态的页面都成立（同一套 `theme.css` + 组件库），
 > 但本批不声称「该页已修」。
 >
-> **未做（等用户令）**：本批 commit / push（走 `scripts/push_code_only.sh` 干跑→`--apply`，文档留在 `docs-local`）与部署。
-> 部署口径＝**前端 dist 换源 + `translator-server` + `translator-assist` 两二进制替换**（本批动了渲染面 ②③④），扩展 1.2.0 包随 dist 上线。
+> **提交与推送（已按用户令执行）**：代码提交 `143cc8f`（80 个代码文件，提交内 `.md` 与 `前端及UI相关/` 计数 **0**）→ `scripts/push_code_only.sh` 干跑（基点 `origin/autosales=76d38ec`、判出「本地领先含 5 个文档文件、待推 80 个代码文件」）→ `--apply` 推出纯代码提交 **`a5dbd27`** 并并轨 merge `f6a80e7`。
+> ⚠️ 首跑 `--apply` 被 git 拒：脚本要 `checkout -b` 建纯代码临时分支，而工作区还挂着未提交的文档编辑 ⇒ 口径入账：**跑推送脚本前工作区必须只剩未跟踪件**，文档要么先提交、要么带标签 `git stash push -- <显式文档路径>` 挪开（本次同时留 `/tmp` 补丁备份），推完 `git stash apply` 原样恢复再提交文档。
+> 部署口径＝**前端 dist 换源 + `translator-server` + `translator-assist` 两二进制替换**（本批动了渲染面 ②③），扩展 1.2.0 包随 dist 上线；**实际已两站齐上**，见上表 ⑧。
 
 ### 〇-M、即时翻译输入区元宝式单卡批（2026-09-23，★ 代码已推送 **`c0e5e99`**（纯代码提交，本地对应 `cdae8dc`，并轨 merge `4d3bb1f`）+ **`cba5e61`**（本批 dom 测试补中文注释，本地 `a772afe`，merge `f5c0079`）+ **`76d38ec`**（全量中文注释批，36 个代码文件、机器证明零删除，本地 `b612e9c`，merge `693d9da`）·文档仅本地·**主站与演示站已同日发版**（主站只换 `web`，演示站补齐二进制 + `web` 到同版；11:24 两站再各补换一次 `translator-server` 至同 sha `0e0343d2…`，见 ⑧））
 

@@ -165,6 +165,12 @@
   ① 文档提交放到**永不推送**的 `docs-local` 分支；正常批次 `autosales` 上只有代码提交，push 天然干净。
   ② 推送一律走 `scripts/push_code_only.sh`（先不带参数干跑看清单与判定，确认后再 `--apply`）：
   推出去的那个提交**永远直接从 `origin/<分支>` 长出来**，内容 = 本地代码文件的目标状态。
+- **跑 `push_code_only.sh` 前工作区必须只剩未跟踪件**（★ 2026-09-23 〇-N 首跑真踩）：脚本要在 `origin/<分支>` 之上
+  `git checkout -b` 建临时纯代码分支，未提交的文档编辑会让 checkout 直接失败
+  （`Your local changes to the following files would be overwritten by checkout`），`--apply` 白跑一次。
+  文档要么先提交，要么**带标签**挪开：`git stash push -m "<批次>-docs-aside" -- <显式文档路径…>`
+  （别用裸 `git stash`，也别加 `-u`——`-u` 会把未跟踪的 `前端及UI相关/` 交付目录一并卷走）；
+  推完 `git stash apply stash@{0}` 原样恢复，提交文档后再 `drop`。
 - 改这个脚本前必读的两条（都是首跑真踩出来的）：
   - 判定「某路径该取还是该删」必须问 git 对象库（`git cat-file -e "$BR:$f"`），**不能问工作区**（`[ -e "$ROOT/$f" ]`）——
     `git checkout -b $TMP $BASE` 会把 BASE 里不存在的新增文件从磁盘删掉，于是 `[ -e ]` 恒假、新文件被当成「已删除」，
