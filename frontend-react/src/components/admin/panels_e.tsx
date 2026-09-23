@@ -222,7 +222,7 @@ export function OpsP() {
       <p style={{ fontSize: 15, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('ops.hint')}</p>
       {isSuper && routes && (routes.routes || []).length > 0 && (
         <div style={{ margin: '0 0 12px', fontSize: 14, color: 'var(--adm-hint)' }}>
-          <span style={{ marginRight: 8 }}>{`路由实时统计（动态权重 ${routes.dynamic_routing ? '开' : '关'} / 竞速 ${routes.hedge_enabled ? '开' : '关'}）`}</span>
+          <span style={{ marginInlineEnd: 8 }}>{`路由实时统计（动态权重 ${routes.dynamic_routing ? '开' : '关'} / 竞速 ${routes.hedge_enabled ? '开' : '关'}）`}</span>
           {(routes.routes || []).map((x: any) => (
             <StatusPill key={x.route} tone={x.err_rate > 0.2 ? 'danger' : x.err_rate > 0.05 ? 'warn' : 'success'}>
               {String(x.route).split('|').pop()} P50 {Math.round(x.p50_ms)}ms · P95 {Math.round(x.p95_ms)}ms · 错误 {(x.err_rate * 100).toFixed(1)}% · tok/次 {Math.round(x.tokens_per_call)}
@@ -255,7 +255,7 @@ export function OpsP() {
         <Button variant="primary" disabled={!isSuper} onClick={() => void save()}>{t('ops.save')}</Button>
       </div>
       {!isSuper && (
-        <p style={{ fontSize: 14, color: 'var(--adm-warn-tx)', margin: '0 0 12px', background: 'var(--adm-warn-bg)', border: '2px solid var(--adm-warn-bd)', borderRadius: 6, padding: '6px 10px' }}>{t('ops.superOnlyHint')}</p>
+        <p style={{ fontSize: 14, color: 'var(--adm-warn-tx)', margin: '0 0 12px', background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', borderRadius: 6, padding: '6px 10px' }}>{t('ops.superOnlyHint')}</p>
       )}
 
       {/* 模式定价因子 */}
@@ -378,7 +378,7 @@ export function OpsP() {
             </Field>
             <Field label={t('ops.promoPriority')}><NumInput value={winDlg.priority} onChange={(n) => setWinDlg({ ...winDlg, priority: n })} /></Field>
             <Field label={t('ops.foTitle')}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, border: '2px solid var(--adm-line)', borderRadius: 8, padding: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 8 }}>
                 {OV_FIELDS.map((f) => (
                   <label key={f.path} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14 }}>
                     <span style={{ minWidth: 118, color: 'var(--adm-hint)' }}>{f.label}</span>
@@ -406,11 +406,11 @@ export function OpsP() {
             </details>
             <p style={{ fontSize: 14, color: 'var(--adm-faint)', margin: 0 }}>{t('ops.promoOverridesHint')}</p>
             <code style={{ fontSize: 13, color: 'var(--adm-hint)', background: 'var(--adm-soft)', borderRadius: 6, padding: '6px 8px', wordBreak: 'break-all' }}>{t('ops.promoOverridesExample')}</code>
-            <div style={{ borderTop: '2px dashed var(--adm-line)', paddingTop: 10 }}>
+            <div style={{ borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
               <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--adm-hint)', marginBottom: 6 }}>{t('ops.promoFactorsTitle')}</div>
-              <div style={{ maxHeight: 220, overflow: 'auto', border: '2px solid var(--adm-line)', borderRadius: 8 }}>
+              <div style={{ maxHeight: 220, overflow: 'auto', border: '1.2px solid var(--adm-line)', borderRadius: 8 }}>
                 {OVERRIDE_FACTORS.map((f) => (
-                  <div key={f.factor} style={{ display: 'flex', gap: 8, padding: '5px 10px', fontSize: 14, borderBottom: '2px solid var(--adm-line)' }}>
+                  <div key={f.factor} style={{ display: 'flex', gap: 8, padding: '5px 10px', fontSize: 14, borderBottom: '1px solid var(--adm-line)' }}>
                     <code style={{ color: 'var(--lc-text-1)', minWidth: 240, flexShrink: 0 }}>{f.factor}</code>
                     <span style={{ color: 'var(--adm-hint)' }}>{f.formula}</span>
                   </div>

@@ -84,7 +84,7 @@ export function FeedbackModal(props: { target: FeedbackTarget; onClose: () => vo
       {hasContext && (
         <label className="fb-check">
           <Checkbox checked={withContext} onChange={(e) => setWithContext(e.target.checked)} />
-          <span style={{ marginLeft: 6 }}>{t('fb.withContext')}</span>
+          <span style={{ marginInlineStart: 6 }}>{t('fb.withContext')}</span>
           {withContext && ctxPreview && <span className="fb-ctx-preview">（{ctxPreview}）</span>}
         </label>
       )}

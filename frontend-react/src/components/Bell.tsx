@@ -158,17 +158,17 @@ const BELL_CSS = `
 .bell-trigger:focus-visible{outline: 2px solid var(--lc-border-input);outline-offset:2px}
 /* 未读数徽标挂在铃铛右上角（★ 2026-09-22 还原：#67 放大顶栏时曾外移到 -7/-9
    避免压住 18px 铃铛，现随字阶回档回到贴角 -1/-1）。 */
-.bell-count{position:absolute;top:-1px;right:-1px}
+.bell-count{position:absolute;top:-1px;inset-inline-end:-1px}
 /* 浮层 z-index:60 只在顶栏这个层叠上下文（.app-header 为 sticky + z-index:20，见 theme.css）
    内部比大小——够盖住下方页面内容，但对外盖不过页面级模态遮罩（如工单页 .tk-overlay 的 1200）。
    宽 340 + max-height 420 的固定盒：条目在 refresh 里已截到 20 条，靠自身 overflow-y 滚动，不做虚拟列表。 */
-.bell-panel{position:absolute;top:calc(100% + 8px);right:0;z-index:60;width:340px;max-height:420px;overflow-y:auto;
-  padding:8px;background:var(--lc-panel);border:2px solid var(--lc-border-card);border-radius:var(--lc-r-modal);
+.bell-panel{position:absolute;top:calc(100% + 8px);inset-inline-end:0;z-index:60;width:340px;max-height:420px;overflow-y:auto;
+  padding:8px;background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-modal);
   box-shadow:var(--lc-panel-highlight)}
 .bell-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .bell-readall{background:none;border:0;color:var(--lc-text-3);font-size:14px;cursor:pointer;font-family:var(--lc-font);padding:0}
 .bell-readall:hover{color:var(--lc-text);text-decoration:underline}
-.bell-item{padding:8px 6px;border-bottom:2px solid var(--lc-border-faint);cursor:pointer}
+.bell-item{padding:8px 6px;border-bottom:1px solid var(--lc-border-faint);cursor:pointer}
 .bell-item:last-child{border-bottom:0}
 .bell-item:hover{background:var(--lc-raised)}
 `

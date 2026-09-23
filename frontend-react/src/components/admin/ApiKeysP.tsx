@@ -17,9 +17,9 @@ import { Icon } from '@/ui/langcross/src'
 import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
 
 // 行内图标基线对齐（16×16 SVG，跟随文案）
-// verticalAlign:-3px 让 SVG 与中文按钮文字基线视觉居中；marginRight:4 补回原先
+// verticalAlign:-3px 让 SVG 与中文按钮文字基线视觉居中；marginInlineEnd:4 补回原先
 // emoji 自带的气隙。集中成一个常量，避免十几处按钮各写一遍 style 造成漂移。
-const MI: React.CSSProperties = { verticalAlign: '-3px', marginRight: 4 }
+const MI: React.CSSProperties = { verticalAlign: '-3px', marginInlineEnd: 4 }
 
 /** API Key + OpenAPI 文档面板 */
 export function ApiKeysP() {
@@ -162,9 +162,9 @@ export function ApiKeysP() {
           </div>
       }>
         {!!newKey && (
-          <div style={{ background: 'var(--adm-warn-bg)', border: '2px solid var(--adm-warn-bd)', borderRadius: 8, padding: 10, marginBottom: 10 }}>
+          <div style={{ background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', borderRadius: 8, padding: 10, marginBottom: 10 }}>
             <Icon n="alert" style={MI} />{t('apikeys.newKeyOnce')}：<b style={{ userSelect: 'all' }}>{newKey}</b>
-            <Button size="sm" variant="secondary" style={{ marginLeft: 8 }} onClick={copyNewKey}><Icon n="clipboard" style={MI} />{t('apikeys.copy')}</Button>
+            <Button size="sm" variant="secondary" style={{ marginInlineStart: 8 }} onClick={copyNewKey}><Icon n="clipboard" style={MI} />{t('apikeys.copy')}</Button>
             {copied && <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}> {t('apikeys.copied')}</span>}
           </div>
         )}

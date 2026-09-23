@@ -84,30 +84,30 @@ function fontSizeOf(css: string, selector: string) {
 }
 
 // ---- A) 令牌真值表：值取自 UI-ANNOTATIONS §1.1（面/文字/描边三族）与交付包 tokens.css ----
-// ★ 2026-09-23 〇-N：字阶 +2px、描边 2px，颜色按交付档。
-// ★ 2026-09-23 〇-O（用户后令「框线全部纯白 + 背景主色黑 + 深灰分层」）：
-//   · 描边七档全部收敛为 #FFFFFF —— 档位不再靠边框明度分层；
-//   · 分层改由面色台阶承担：#000000 页面底 / #0A0B0D 内嵌(L1) / #121417 面板(L2) / #1A1D21 浮面(L3)；
-//   · 文字族与语义色（danger/warn/success、红底 danger-edge）逐字未动。
-//   两边都是**等值锁**：旧灰档复活会红灯（见本段末尾的负向清零）。
+// ★ 2026-09-23 〇-N：字阶 +2px（本批保留，见 I 段）；描边 2px 已随 〇-P 作废。
+// ★ 2026-09-23 〇-P（用户后令「严格按 UI 交付稿来」）：撤销 〇-O 的「全部框线纯白 + 面色 +8」——
+//   · 描边七档回到交付灰阶（按对 #000 的对比度定档，见下方真值表）；
+//   · 面色回到交付值：#000000 页面底 / #0A0B0D 内嵌 / #0E1014 面板 / #16181C 浮面；
+//   · 描边宽度回到交付档：全边框 1.2px、单边分隔线 1px（见 I 段）。
+//   两边都是**等值锁**：〇-O 的纯白框与 #121417/#1A1D21 复活会红灯。
 const TRUTH_TOKENS: [string, string][] = [
   ['--lc-bg', '#000000'],
   ['--lc-deep', '#050607'],
   ['--lc-inset', '#0A0B0D'],
-  ['--lc-panel', '#121417'],
-  ['--lc-raised', '#1A1D21'],
+  ['--lc-panel', '#0E1014'],
+  ['--lc-raised', '#16181C'],
   ['--lc-text', '#E7E9EA'],
   ['--lc-text-2', '#9AA0AA'],
   ['--lc-text-3', '#71767B'],
   ['--lc-text-4', '#536471'],
   ['--lc-text-5', '#8A9099'],
-  ['--lc-border-strong', '#FFFFFF'],
-  ['--lc-border-done', '#FFFFFF'],
-  ['--lc-border-input', '#FFFFFF'],
-  ['--lc-border-faint', '#FFFFFF'],
-  ['--lc-border-pill', '#FFFFFF'],
-  ['--lc-border-card', '#FFFFFF'],
-  ['--lc-border-card-dim', '#FFFFFF'],
+  ['--lc-border-strong', '#8B939F'],   // 6.0:1 对话外框 / 强调物件边界
+  ['--lc-border-done', '#6E7683'],     // 4.7:1 完成态 / 次按钮 hover 边
+  ['--lc-border-input', '#5A6270'],    // 3.9:1 输入边 / 起点块
+  ['--lc-border-faint', '#464C58'],    // 3.2:1 常规分隔 / 量尺轨道
+  ['--lc-border-pill', '#424956'],     // 3.0:1 语种胶囊 / 次按钮描边
+  ['--lc-border-card', '#3A404C'],     // 2.5:1 卡片常规边
+  ['--lc-border-card-dim', '#2A2F3A'], // 骨架屏 / 空状态卡边
   ['--lc-danger', '#E5484D'],
   ['--lc-warn', '#D29922'],
   ['--lc-success', '#E7E9EA'], // 正向=白（第 11 轮废止绿），交付包口径
@@ -124,8 +124,8 @@ describe('A 令牌真值等值锁（UI-ANNOTATIONS §1.1 / 交付包 tokens.css�
   // 否则「前台组件走 --npz-line、后台组件走 --lc-border-*」会出现半白半灰的割裂描边。
   it('theme.css --npz-text-2 / --npz-line / --adm-line 回到真值档', () => {
     expect(token(THEME_CSS, '--npz-text-2')).toBe('#9AA0AA')
-    expect(token(THEME_CSS, '--npz-line')).toBe('#FFFFFF')      // 〇-O：全部框线纯白
-    expect(token(THEME_CSS, '--adm-line')).toBe('#FFFFFF')
+    expect(token(THEME_CSS, '--npz-line')).toBe('#464C58')      // 〇-P：回到交付灰阶档
+    expect(token(THEME_CSS, '--adm-line')).toBe('#464C58')
     expect(token(THEME_CSS, '--npz-surface')).toBe(token(KIT_TOKENS, '--lc-panel'))
     expect(token(THEME_CSS, '--npz-surface-2')).toBe(token(KIT_TOKENS, '--lc-raised'))
     expect(token(THEME_CSS, '--adm-card')).toBe(token(KIT_TOKENS, '--lc-panel'))
@@ -248,61 +248,69 @@ describe('E 登录后界面禁写死次级灰', () => {
   })
 })
 
-// ---- F) 描边字面值必须等于纯白（★ 2026-09-23 〇-O 由「不得暗于 --lc-border-faint」的
-//         单向下限锁改成等值锁）。
-// 为什么必须换：〇-O 之前这条锁写的是「对比度 ≥ faint 档」，那是**单向锁**——
-// 令牌自己被一路提亮时锁跟着涨，锁不出方向也锁不住终点，正是 AGENTS §5 点名的历史踩坑
-// （09-18/#35/#67-#68 三批提亮把设计推离交付稿）。现在框线终点已定死 #FFFFFF，
-// 锁的形态也必须是「等于」。
-// 三类合法例外（都不是「框线档」）：
-//   · 语义状态边：危险框 #402323、判错红 #E5484D、警示琥珀 #D29922；
+// ---- F) 描边字面值必须落在交付灰阶七档（等值锁）----
+// ★ 2026-09-23 〇-P：判据反转。〇-O 时期这条锁写的是「描边一律 #FFFFFF」，
+// 现在框线终点回到交付的灰阶七档，锁的形态仍是「等于」而不是单向下限——
+// 单向锁在令牌被一路提亮时会跟着涨，锁不出方向也锁不住终点，正是 AGENTS §5 点名的历史踩坑
+// （09-18/#35/#67-#68 三批提亮把设计推离交付稿）。
+// 合法例外（都不是「框线档」）：
+//   · 语义状态边：危险框 #402323、判错红 #E5484D、警示琥珀 #D29922、强调红 #F85149；
 //   · 反相区（白底卡上的输入/胶囊）与对勾 glyph：黑/半透黑边，见 Landing 的 .lc-lead-* 与
 //     components.css 的 .lc-checkbox:checked::after；
+//   · 实心白填充件的同色描边（主按钮边跟着白底走，用 --lc-fill-white）——不算框线档；
 //   · var(--token, #兜底) 的兜底值不算写死（沿用旧口径）。
-const BORDER_HEX_ALLOW = /^(FFFFFF|F85149|E5484D|D29922|402323|000000)$/i
-// 〇-O 作废的旧灰档：出现在**任何**描边位（含组件库 CSS 与令牌定义处）都算复活。
-const RETIRED_BORDER_RAMP = ['8B939F', '6E7683', '5A6270', '464C58', '424956', '3A404C', '2A2F3A', '31363D']
-describe('F 描边字面值必须等于纯白（〇-O 等值锁）', () => {
+const BORDER_HEX_ALLOW = /^(8B939F|6E7683|5A6270|464C58|424956|3A404C|2A2F3A|F85149|E5484D|D29922|402323|000000)$/i
+// ★ 〇-P 起 #FFFFFF 不再作框线（〇-O 的遗留），出现在描边位即算复活。
+// 例外：--lc-fill-white 是实心白填充档，主按钮描边跟着填充走白属正常，按行内容放行。
+const RETIRED_BORDER_WHITE = ['FFFFFF']
+describe('F 描边字面值必须落在交付灰阶七档（〇-P 等值锁）', () => {
   const offenders: string[] = []
   for (const f of walkSrc('src')) {
     if (EXEMPT.test(f) || f.endsWith('.css')) continue
     stripComments(read(f)).split('\n').forEach((l, i) => {
       // [:=] 两种写法都扫：前者是 CSS 字符串里的 border:，后者是 React 内联对象
-      // style={{ borderBottom: '2px solid …' }}，只扫一类会漏掉另一大口。
+      // style={{ borderBottom: '1px solid …' }}，只扫一类会漏掉另一大口。
       for (const m of l.matchAll(/border[a-z-]*\s*[:=]\s*['"]?([^'"{};]*)#([0-9a-fA-F]{6})/gi)) {
-        if (m[1].includes('var(')) continue   // var(--token, #兜底) 的兜底值不算写死
-        if (BORDER_HEX_ALLOW.test(m[2])) continue
+        if (m[1].includes('var(')) return   // var(--token, #兜底) 的兜底值不算写死
+        // 实心白件的同色描边不算框线档：① 走 --lc-fill-white 令牌；② 同行就是白底反相
+        // （如 .na-act:hover{background:#FFFFFF;border-color:#FFFFFF;color:#000}）。
+        if (/fill-white|background:\s*#FFFFFF/i.test(l)) return
+        if (BORDER_HEX_ALLOW.test(m[2])) return
         offenders.push(`${f}:${i + 1}  ${m[0].trim().slice(0, 70)}`)
       }
     })
   }
-  it('非例外描边字面值一律 #FFFFFF', () => {
-    expect(offenders, '请改为描边令牌 var(--lc-border-*)（当前全站纯白）：\n' + offenders.join('\n')).toEqual([])
+  it('非例外描边字面值一律取交付灰阶档', () => {
+    expect(offenders, '请改为描边令牌 var(--lc-border-*)（当前框线为交付灰阶档）：\n' + offenders.join('\n')).toEqual([])
   })
-  it('旧灰阶描边档全站零复活（含组件库 CSS 与令牌定义处）', () => {
+  it('纯白不再作框线（〇-O 遗留零复活，实心白填充件除外）', () => {
     const hits: string[] = []
     for (const f of walkSrc('src')) {
       stripComments(read(f)).split('\n').forEach((l, i) => {
-        for (const m of l.matchAll(/border[a-z-]*[^;\n]*#([0-9a-fA-F]{6})/gi)) {
-          if (RETIRED_BORDER_RAMP.includes(m[1].toUpperCase())) hits.push(`${f}:${i + 1} ${m[0].trim().slice(0, 70)}`)
+        if (/fill-white|background:\s*#FFFFFF/i.test(l)) return
+        // 与上方 offenders 扫描同形：值必须紧跟在 border* 的冒号后，
+        // 否则 `borderRadius: 2, background: '#FFFFFF'` 这类跨属性行会被误判成白色描边。
+        for (const m of l.matchAll(/border[a-z-]*\s*[:=]\s*['"]?([^'"{};]*)#([0-9a-fA-F]{6})/gi)) {
+          if (m[1].includes('var(')) return
+          if (RETIRED_BORDER_WHITE.includes(m[2].toUpperCase())) hits.push(`${f}:${i + 1} ${m[0].trim().slice(0, 70)}`)
         }
       })
     }
     // 令牌别名（--lc-border-1…7）与历史「旧档作废」说明注释都不在扫描形态里：
     // 前者是 `--x: var(--y)` 不含 hex，后者已被 stripComments 剥掉。
-    expect(hits, '〇-O 已作废的灰描边档复活：\n' + hits.join('\n')).toEqual([])
+    expect(hits, '〇-O 的纯白框线复活：\n' + hits.join('\n')).toEqual([])
   })
-  it('面色三级台阶等值（#121417 面板 / #1A1D21 浮面，旧 #0E1014/#16181C 不复活）', () => {
-    expect(token(KIT_TOKENS, '--lc-panel')).toBe('#121417')
-    expect(token(KIT_TOKENS, '--lc-raised')).toBe('#1A1D21')
+  it('面色台阶等值（#0E1014 面板 / #16181C 浮面，〇-O 的 +8 档不复活）', () => {
+    expect(token(KIT_TOKENS, '--lc-panel')).toBe('#0E1014')
+    expect(token(KIT_TOKENS, '--lc-raised')).toBe('#16181C')
     expect(token(KIT_TOKENS, '--lc-inset')).toBe('#0A0B0D')
-    expect(token(THEME_CSS, '--npz-surface')).toBe('#121417')
-    expect(token(THEME_CSS, '--npz-surface-2')).toBe('#1A1D21')
-    expect(token(THEME_CSS, '--adm-card')).toBe('#121417')
+    expect(token(THEME_CSS, '--npz-surface')).toBe('#0E1014')
+    expect(token(THEME_CSS, '--npz-surface-2')).toBe('#16181C')
+    expect(token(THEME_CSS, '--adm-card')).toBe('#0E1014')
     expect(token(THEME_CSS, '--adm-soft')).toBe('#0A0B0D')
     const body = stripComments(KIT_TOKENS) + stripComments(THEME_CSS)
-    for (const old of ['0E1014', '16181C']) {
-      expect(body.toUpperCase().includes('#' + old), `旧面档 #${old} 复活`).toBe(false)
+    for (const old of ['121417', '1A1D21']) {
+      expect(body.toUpperCase().includes('#' + old), `〇-O 的 +8 面档 #${old} 复活`).toBe(false)
     }
   })
 })
@@ -415,15 +423,14 @@ describe('H 扩展插件面（popup + 划词注入样式）单色真值', () => 
       expect(hits, `${name} 出现旧扩展主题色：\n${hits.join(', ')}`).toEqual([])
     })
     it(`${name} 取 §1.1 令牌真值`, () => {
-      // ★ 〇-O：扩展面同步行纯白 + 面抬到 #121417（这两页是独立打包物，前端令牌翻白对它无效）
-      expect(code).toContain('#121417')
-      expect(code).toContain('#FFFFFF')
-      expect(code, `${name} 描边档未翻白（旧灰档复活）`).toMatch(/--lc-(line|card-line):\s*#FFFFFF/i)
-      expect(code.toUpperCase()).not.toMatch(/--lc-(line|card-line):\s*#(464C58|3A404C)/)
-      expect(code.toUpperCase(), `旧面档 #0E1014 复活`).not.toContain('#0E1014')
-      // 描边档：〇-N 起细描边一律 2px（旧 1.2px 属交付原档，已随字号批整体加粗）
-      expect(code, `${name} 未见 2px 描边档`).toContain('2px solid')
-      expect(code, `${name} 旧 1.2px 细描边复活`).not.toMatch(/border[^;{]*1\.2px/)
+      // ★ 〇-P：扩展面同步回交付灰阶框 + 面回 #0E1014（这两页是独立打包物，前端令牌改了对它无效）
+      expect(code).toContain('#0E1014')
+      expect(code, `${name} 描边档未回灰阶（〇-O 纯白复活）`).toMatch(/--lc-(line|card-line):\s*#(464C58|3A404C)/i)
+      expect(code.toUpperCase()).not.toMatch(/--lc-(line|card-line):\s*#FFFFFF/)
+      expect(code.toUpperCase(), `〇-O 的 +8 面档 #121417 复活`).not.toContain('#121417')
+      // 描边粗细：〇-P 回交付档（全边框 1.2px / 单边 1px），〇-N 的 2px 已作废
+      expect(code, `${name} 未见交付档 1.2px 描边`).toMatch(/border[^;{]*1\.2px/)
+      expect(code, `${name} 〇-N 的 2px 粗描边复活`).not.toMatch(/border[^;{]*\s2px\s+(?:solid|dashed|dotted)/)
     })
   }
   it('popup 主按钮＝纯白底黑字，成功态不标绿', () => {
@@ -438,11 +445,11 @@ describe('H 扩展插件面（popup + 划词注入样式）单色真值', () => 
   })
 })
 
-// ---- I) ★ 〇-N 排版档等值锁：全站字号下限 11px、描边最细 2px（含四类后端/扩展渲染盲区）----
-// 口径：字号 = 交付值 +2px（9→11、12→14、13→15、15→17、16→18，>16 的展示型大字不动）；
-//       描边 = 细档 1px / 1.2px / 1.5px 一律 2px（3px 的强调条另有用途，不在此档）。
+// ---- I) ★ 排版档等值锁：全站字号下限 11px、描边最粗 1.2px（含四类后端/扩展渲染盲区）----
+// 口径：字号 = 交付值 +2px（〇-N 批，本批保留：9→11、12→14、13→15、15→17、16→18，>16 的展示型大字不动）；
+//       描边 = 全边框 1.2px / 单边分隔线 1px（★ 〇-P 回退：〇-N 的「一律 2px」已作废）。
 // 为什么要扫到后端 .go 与扩展面：这四处（/docs、/openapi/docs、office 侧栏、assist 内嵌页、extension）
-// 都不进 vite 产物，「dist 绿 ≠ 全站绿」，同一档必须一起抬，否则线上会出现两套字阶。
+// 都不进 vite 产物，「dist 绿 ≠ 全站绿」，同一档必须一起改，否则线上会出现两套框线。
 const TYPE_SURFACES: Array<[string, string]> = [
   ...walkSrc('src').map((f) => [f, read(f)] as [string, string]),
   ['../extension/popup.html', EXT_POPUP_HTML],
@@ -452,9 +459,9 @@ const TYPE_SURFACES: Array<[string, string]> = [
   ['../backend-go/internal/api/office.go', read('../backend-go/internal/api/office.go')],
   ['../backend-go/internal/assist/web/admin.html', read('../backend-go/internal/assist/web/admin.html')],
 ]
-describe('I 〇-N 排版档：字号下限 11px / 描边最细 2px', () => {
+describe('I 排版档：字号下限 11px / 描边最粗 1.2px', () => {
   const smallFont: string[] = []
-  const thinBorder: string[] = []
+  const thickBorder: string[] = []
   for (const [name, src] of TYPE_SURFACES) {
     const code = stripComments(src)
     for (const m of code.matchAll(/font-size\s*:\s*([0-9.]+)px|(?<![A-Za-z-])font\s*:\s*[^;{}()\n]*?([0-9.]+)px|fontSize\s*[:=]\s*['"]?([0-9.]+)/g)) {
@@ -464,23 +471,27 @@ describe('I 〇-N 排版档：字号下限 11px / 描边最细 2px', () => {
     }
     // 描边正则是本批踩出来的两形态：① JSX 驼峰 borderBottom（只写 [a-z-] 会整类漏）；
     // ② 值前带引号或三元（border: `1.2px solid ${…}`、borderTop: i ? '1px solid …' : 'none'），
-    // 所以冒号后允许跑到 px。要求 px 后紧跟 solid/dashed/dotted，border-radius:1px 才不会被误判。
+    // 所以冒号后允许跑到 px。要求 px 后紧跟 solid/dashed/dotted，border-radius:2px 才不会被误判。
     // ③ 冒号后紧跟数值（CSS 紧凑写法 border:1px solid）也必须扫到，故用后视 (?<![.\d]) 而不是「吃一个字符」。
-    for (const m of code.matchAll(/\bborder[A-Za-z-]*(?:-width)?\s*:[^\n;{}]*?(?<![.\d])(1|1\.2|1\.5)px\s+(?:solid|dashed|dotted)|\bborder[A-Za-z-]*-width\s*:\s*([0-9.]+)px/g)) {
-      const v = parseFloat(m[1] ?? m[2] ?? '')
-      if (v === 1 || v === 1.2 || v === 1.5) thinBorder.push(`${name}: ${v}px`)
+    // ★ 〇-P：这里从「细描边清零」反转为「2px 粗描边清零」——交付档最粗就是 1.2px。
+    // 唯一例外：checkbox 对勾 glyph（交付包 components.css 里就是 2px solid #000000 的黑边，
+    // 它是图形笔画不是框），按颜色放行；除此之外 2px 一律是 〇-N 的遗留。
+    for (const m of code.matchAll(/\bborder[A-Za-z-]*(?:-width)?\s*:[^\n;{}]*?(?<![.\d])2px\s+(?:solid|dashed|dotted)([^\n;{}]*)|\bborder[A-Za-z-]*-width\s*:\s*2px([^\n;{}]*)/g)) {
+      const tail = (m[1] ?? m[2] ?? '')
+      if (/#[0-9a-fA-F]{0,6}?0{6}\b|var\(\s*--lc-(fill-black|bg)\s*\)/i.test(tail)) continue
+      thickBorder.push(`${name}: ${m[0].trim().slice(0, 60)}`)
     }
   }
   it('五类渲染面零命中 <11px 字号（旧小字档不得复活）', () => {
     expect(smallFont, '仍有未抬档的小字：\n' + smallFont.join('\n')).toEqual([])
   })
-  it('五类渲染面零命中 1px/1.2px/1.5px 细描边', () => {
-    expect(thinBorder, '仍有未加粗的细描边：\n' + thinBorder.join('\n')).toEqual([])
+  it('五类渲染面零命中 2px 粗描边（〇-N 抬档已作废）', () => {
+    expect(thickBorder, '仍有 〇-N 的 2px 粗描边：\n' + thickBorder.join('\n')).toEqual([])
   })
   it('扫描确实覆盖到量级（防闸门空转）', () => {
     expect(TYPE_SURFACES.length, '扫描文件数异常，说明 walkSrc 失效').toBeGreaterThan(150)
-    // 命中数兜的是正则真的在工作：全站 2px 描边总数应在百级（本批把 161 处细描边抬到 2px）
-    const hits = TYPE_SURFACES.reduce((n, [, s]) => n + [...stripComments(s).matchAll(/\bborder[A-Za-z-]*\s*:\s*['"`]?[^\n;{}]*?2px/g)].length, 0)
-    expect(hits, '连 2px 描边都扫不到，说明扫描面或正则失效').toBeGreaterThan(100)
+    // 命中数兜的是正则真的在工作：全站交付档描边（1.2px + 单边 1px）总数应在百级
+    const hits = TYPE_SURFACES.reduce((n, [, s]) => n + [...stripComments(s).matchAll(/\bborder[A-Za-z-]*\s*:\s*['"`]?[^\n;{}]*?(?<![.\d])(?:1\.2|1)px\s+(?:solid|dashed|dotted)/g)].length, 0)
+    expect(hits, '连交付档描边都扫不到，说明扫描面或正则失效').toBeGreaterThan(100)
   })
 })

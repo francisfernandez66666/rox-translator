@@ -112,12 +112,12 @@ const SegRow = memo(function SegRow({ s, editedText, status, note, matcher, opts
         gridTemplateColumns: '1fr 1fr',
         gap: 12,
         padding: 12,
-        border: '2px solid var(--lc-border-card)',
+        border: '1.2px solid var(--lc-border-card)',
         borderRadius: 8,
         marginBottom: 12,
-        // ★ 〇-O：未通过态取面色台阶 L2 字面值 #121417（与 tokens.css --lc-panel 同值）；
+        // 未通过态取面板面字面值 #0E1014（与 tokens.css --lc-panel 同值，★ 〇-P 交付值）；
         // 通过/判错两态仍走半透明白/红叠加，不占台阶档。
-        background: status === 'approved' ? 'rgba(231,233,234,0.06)' : status === 'rejected' ? 'rgba(229,72,77,0.10)' : '#121417',
+        background: status === 'approved' ? 'rgba(231,233,234,0.06)' : status === 'rejected' ? 'rgba(229,72,77,0.10)' : '#0E1014',
       }}
     >
       <div>
@@ -354,7 +354,7 @@ export default function EditorPage() {
       {/* type=unsupported：后端判定「文件工单但格式无法逐段对照」（非 xlsx/csv 对照表），
           此时只给提示横幅、不渲染空表格，避免用户对着空编辑器以为数据丢了 */}
       {type === 'unsupported' && (
-        <div style={{ padding: 12, background: 'rgba(210,153,34,0.10)', border: '2px solid rgba(210,153,34,0.32)', borderRadius: 6, marginBottom: 12 }}>
+        <div style={{ padding: 12, background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', borderRadius: 6, marginBottom: 12 }}>
           {t('tk.fileOnlyEditTip')}
         </div>
       )}
@@ -363,7 +363,7 @@ export default function EditorPage() {
           ★ B2 高亮另按「长词优先 + 前 60 条」封顶（buildTermMatcher），防大词表拖慢每段 split */}
       {terms.length > 0 && (
         <div style={{ marginBottom: 12 }}>
-          <span style={{ color: 'var(--lc-text-3)', marginRight: 6 }}>{t('tk.edTermsHit')}</span>
+          <span style={{ color: 'var(--lc-text-3)', marginInlineEnd: 6 }}>{t('tk.edTermsHit')}</span>
           {terms.slice(0, 30).map((t, i) => (
             <StatusPill key={i} tone="idle" className="ed-term">{t}</StatusPill>
           ))}

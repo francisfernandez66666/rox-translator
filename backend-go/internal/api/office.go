@@ -85,26 +85,27 @@ const officeTaskPaneHTML = `<!DOCTYPE html>
    独立浅底主题。本页由后端直出、不在前端构建产物里，前端令牌闸门扫不到（与 /docs/*、/openapi/docs、
    assist 管理台同一类盲区）。现按 UI-ANNOTATIONS §1.1 令牌走纯黑底，主按钮＝白底黑字实心件
    （交付真值 .lc-btn--primary{background:#FFFFFF}），次按钮走描边档；绿色成功态废止（全站无蓝无绿）。
-   ★ 2026-09-23 〇-O 用户后令「框线全部纯白 + 背景黑 + 深灰分层」：描边族一律 #FFFFFF，
-   面档取台阶 L2 #121417 / L3 #1A1D21，与 tokens.css 逐字同源（闸门见 public_ui_test.go）。 */
+   ★ 2026-09-23 〇-P 用户后令「严格按 UI 交付稿来」：撤销 〇-O。描边族回交付灰阶档
+   （line #464C58 / pill #424956 / card-line #3A404C），面档回交付值 #0E1014 / #16181C，
+   描边宽度回交付档 1.2px（单边 1px），与 tokens.css 逐字同源（闸门见 public_ui_test.go）。 */
 :root{
-  --lc-bg:#000000;--lc-panel:#121417;--lc-surface:#1A1D21;--lc-inset:#0A0B0D;
+  --lc-bg:#000000;--lc-panel:#0E1014;--lc-surface:#16181C;--lc-inset:#0A0B0D;
   --lc-text:#E7E9EA;--lc-text-2:#9AA0AA;--lc-text-3:#71767B;
-  --lc-line:#FFFFFF;--lc-pill:#FFFFFF;--lc-card-line:#FFFFFF;--lc-white:#FFFFFF;
+  --lc-line:#464C58;--lc-pill:#424956;--lc-card-line:#3A404C;--lc-white:#FFFFFF;
   --lc-danger:#E5484D;
 }
 *{box-sizing:border-box}
 body{font-family:'Noto Sans SC',system-ui,'PingFang SC','Microsoft YaHei',sans-serif;margin:0;padding:12px;color:var(--lc-text);background:var(--lc-bg);font-size:14px;line-height:1.6}
 h3{margin:0 0 10px;font-size:16px;font-weight:700;color:var(--lc-white)}
-input{width:100%;padding:7px 9px;background:var(--lc-inset);border:2px solid var(--lc-line);border-radius:8px;font-size:14px;color:var(--lc-text);margin-bottom:8px}
+input{width:100%;padding:7px 9px;background:var(--lc-inset);border:1.2px solid var(--lc-line);border-radius:8px;font-size:14px;color:var(--lc-text);margin-bottom:8px}
 input::placeholder{color:var(--lc-text-3)}
 input:focus{outline:none;border-color:var(--lc-pill)}
 /* 主操作＝纯白底黑字（唯一实心白件，视觉强度最高）；次操作＝深底描边档 */
 button{width:100%;padding:8px;border:none;border-radius:8px;background:var(--lc-white);color:#000000;font-size:15px;font-weight:500;cursor:pointer;margin-bottom:8px}
-button.sec{background:var(--lc-panel);color:var(--lc-text);border:2px solid var(--lc-pill)}
+button.sec{background:var(--lc-panel);color:var(--lc-text);border:1.2px solid var(--lc-pill)}
 button.sec:hover{border-color:var(--lc-line);background:var(--lc-surface)}
 button:disabled{opacity:.42;cursor:not-allowed}
-#result{white-space:pre-wrap;word-break:break-word;border:2px dashed var(--lc-card-line);border-radius:10px;padding:8px;min-height:48px;font-size:14px;line-height:1.6;color:var(--lc-text-2);background:var(--lc-panel)}
+#result{white-space:pre-wrap;word-break:break-word;border:1.2px dashed var(--lc-card-line);border-radius:10px;padding:8px;min-height:48px;font-size:14px;line-height:1.6;color:var(--lc-text-2);background:var(--lc-panel)}
 #result.ok{color:var(--lc-text);border-style:solid;border-color:var(--lc-line)}
 .hint{color:var(--lc-text-3);font-size:13px;line-height:1.5;margin-top:8px}
 </style>

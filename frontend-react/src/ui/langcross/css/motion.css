@@ -217,3 +217,13 @@
   .lc-mo-typing i { animation: none !important; opacity: .7 !important; }
   .lc-mo-press, .lc-mo-lift, .lc-mo-tap { transition: none !important; transform: none !important; }
 }
+
+/* ============================================================================
+   八、RTL：方向性滑入镜像（dir 由 i18n/index.ts 的 applyDir 写在 <html> 上）
+   ----------------------------------------------------------------------------
+   lc-mo-right / lc-mo-left 是「从某侧滑入」的物理动画，没有逻辑属性等价写法，
+   必须按 dir 显式交换：LTR 的「从左滑入」在 RTL 下应读作「从右滑入」，否则阿语界面里
+   侧栏/抽屉会从错误的方向入场，与内容镜像方向打架。
+   ============================================================================ */
+[dir="rtl"] .lc-mo-right { animation-name: lc-mo-left; }
+[dir="rtl"] .lc-mo-left { animation-name: lc-mo-right; }

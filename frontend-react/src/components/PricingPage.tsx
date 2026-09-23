@@ -3,7 +3,7 @@
 // 区块：顶栏 → 「定价 Pricing」标题 + 说明 → 商业套餐 Plans（三列价格卡）→
 // 计费口径提示条 → 常见问题 FAQ → 页脚。
 // 价格 / 积分 / 有效期一律渲染 /api/plans 返回值（含免费体验包与增量包）。
-// 视觉规则：纯黑底、面板台阶 #121417、框线纯白 2px、主按钮白底黑字、无蓝无绿。
+// 视觉规则：纯黑底、面板台阶 #0E1014、框线纯白 2px、主按钮白底黑字、无蓝无绿。
 // ============================================================================
 import { Button, IdeaIcon } from '@/ui/langcross/src'
 import { useNavigate } from 'react-router-dom'
@@ -13,6 +13,7 @@ import { useAuth } from '@/stores/auth'
 import { usePlans } from './usePlans'
 import { fmtQuoteMoney } from './quoteFmt'
 import type { PlanLite } from './usePlans'
+import { fmtInt } from '../lib/format'
 
 // FAQ：固定三条（设计图 05）
 const FAQ_INDEXES = [1, 2, 3] as const
@@ -86,7 +87,7 @@ export default function PricingPage() {
             <article key={p.code} className="lc-prc-card">
               <div className="lc-prc-name">{p.name}</div>
               {/* 对外口径统一积分（points 是积分面值，token 裸值不外露），千分位只为可读 */}
-              <div className="lc-prc-meta">{p.points.toLocaleString()} {t('land.pointsUnit')} · {typeLabel(p.ptype)}</div>
+              <div className="lc-prc-meta">{fmtInt(p.points)} {t('land.pointsUnit')} · {typeLabel(p.ptype)}</div>
               {/* 金额渲染后端返回值、前端不做二次换算（¥price_money 是人民币事实源）；
                   ★ #75 多币种报价：quote_currency 非 CNY 时大字改走后端换算好的 price_display（本币展示价），
                   人民币原价降级为「≈ ¥」辅助行——实扣仍是人民币，这里只换"看"的口径 */}
@@ -128,21 +129,21 @@ export default function PricingPage() {
   )
 }
 
-// —— 样式：纯黑底 / 面板 #121417 / 框线纯白，全部走 --lc-* 令牌 ——
+// —— 样式：纯黑底 / 面板 #0E1014 / 框线纯白，全部走 --lc-* 令牌 ——
 const PRICING_CSS = `
 .lc-prc{background:var(--lc-bg);color:var(--lc-text);font-family:var(--lc-font);min-height:100vh;padding-bottom:8px}
 .lc-prc a{color:inherit;text-decoration:none}
 .lc-prc-nav{display:flex;align-items:center;gap:24px;height:56px;padding:0 40px}
 .lc-prc-brand{display:flex;align-items:center;gap:9px;font-size:17px;font-weight:600;white-space:nowrap}
-.lc-prc-links{margin-left:auto;display:flex;align-items:center;gap:22px;font-size:15px;color:var(--lc-text-2)}
+.lc-prc-links{margin-inline-start:auto;display:flex;align-items:center;gap:22px;font-size:15px;color:var(--lc-text-2)}
 .lc-prc-links a:hover{color:var(--lc-text)}
-.lc-prc-panel{max-width:1018px;margin:12px auto 0;padding:30px 34px 34px;background:var(--lc-panel);border:2px solid var(--lc-border-card);border-radius:var(--lc-r-modal)}
+.lc-prc-panel{max-width:1018px;margin:12px auto 0;padding:30px 34px 34px;background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-modal)}
 .lc-prc-title{margin:0 0 10px;font-size:30px;font-weight:700}
 .lc-prc-intro{margin:0 0 6px;font-size:15px;line-height:1.85;color:var(--lc-text-2)}
 .lc-prc-sec{display:flex;align-items:center;gap:9px;margin:28px 0 16px;font-size:18px;font-weight:600}
 .lc-prc-sec::before{content:"";width:2px;height:15px;background:var(--lc-text-1)}
 .lc-prc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:26px}
-.lc-prc-card{display:flex;flex-direction:column;gap:6px;padding:18px;background:var(--lc-surface-2);border:2px solid var(--lc-border-6);border-radius:var(--lc-r-card)}
+.lc-prc-card{display:flex;flex-direction:column;gap:6px;padding:18px;background:var(--lc-surface-2);border:1.2px solid var(--lc-border-6);border-radius:var(--lc-r-card)}
 .lc-prc-name{font-size:16px;font-weight:600}
 .lc-prc-meta{font-size:13px;color:var(--lc-text-2)}
 .lc-prc-price{font-size:22px;font-weight:700;line-height:1.15;font-family:var(--lc-font-latin)}
@@ -152,11 +153,11 @@ const PRICING_CSS = `
 .lc-prc-badge{align-self:flex-start;margin-top:6px;padding:3px 8px;font-size:12px;font-weight:500;line-height:1.4;color:#000;background:var(--lc-fill-white);border-radius:var(--lc-r-bar);transition:filter var(--lc-mo-release) var(--lc-mo-out)}
 /* 徽标即入口：hover 提亮一档给"可按"反馈，视觉重量不变 */
 .lc-prc-badge:hover{filter:brightness(1.15)}
-.lc-prc-note{display:flex;gap:10px;margin:24px 0 0;padding:16px 18px;font-size:14.5px;line-height:1.85;color:var(--lc-text-2);background:var(--lc-inset);border:2px solid var(--lc-border-card);border-radius:var(--lc-r-card)}
+.lc-prc-note{display:flex;gap:10px;margin:24px 0 0;padding:16px 18px;font-size:14.5px;line-height:1.85;color:var(--lc-text-2);background:var(--lc-inset);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-card)}
 .lc-prc-noteicon{flex:none;color:var(--lc-text-3)}
 .lc-prc-faq{margin-bottom:4px}
 .lc-prc-faqitem{margin:0 0 16px;font-size:15px;line-height:1.85;color:var(--lc-text-2)}
-.lc-prc-faqitem b{color:var(--lc-text);font-weight:600;margin-right:6px}
+.lc-prc-faqitem b{color:var(--lc-text);font-weight:600;margin-inline-end:6px}
 .lc-prc-foot{padding:20px 24px 26px;text-align:center;font-size:14px;color:var(--lc-text-3)}
 .lc-prc-foot a:hover{color:var(--lc-text-2)}
 @media (max-width:900px){

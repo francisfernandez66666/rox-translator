@@ -21,11 +21,12 @@ import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
 // toastBus 是同步总线（不返回 Promise），替代 MessagePlugin 后调用点不再需要 void 吞返回值
 import { toastError, toastWarn } from '@/lib/toastBus'
+import { fmtDateTime } from '../../lib/format'
 
 // 行/卡片布局样式（横向排布 + 顶距/描边变体）
 const rowMt: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }
 // 卡片容器样式（描边圆角 + 内边距）
-const cardStyle: any = { border: '2px solid var(--adm-line)', borderRadius: 8, padding: 14, marginBottom: 12 }
+const cardStyle: any = { border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 14, marginBottom: 12 }
 
 // firstTranslation 从工单 final_result JSON 中取第一个目标语种的译文（预览用；解析失败返回空串）。
 function firstTranslation(finalResult: unknown): string {
@@ -107,7 +108,7 @@ export function TicketsP() {
   function fmtAt(iso: string): string {
     if (!iso) return ''
     const d = new Date(iso)
-    return isNaN(+d) ? iso : d.toLocaleString()
+    return isNaN(+d) ? iso : fmtDateTime(d)
   }
   // submitFeedback 用户侧提交口（target_type 固定 text）：文件类反馈走工单流程，不从这里进
   async function submitFeedback() {
@@ -224,7 +225,7 @@ export function TicketsP() {
           <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0 }}>{selected.content}</pre>
           {/* 带上下文提交的反馈才有这一块：逐语种列出当时实际送给模型的译文，是判断「模型看错上下文」还是「翻错」的依据 */}
           {selected.with_context && (
-            <div style={{ background: 'var(--adm-soft)', border: '2px dashed var(--adm-line)', borderRadius: 8, padding: '8px 10px', marginTop: 8, fontSize: 14.5 }}>
+            <div style={{ background: 'var(--adm-soft)', border: '1.2px dashed var(--adm-line)', borderRadius: 8, padding: '8px 10px', marginTop: 8, fontSize: 14.5 }}>
               <b>{t('fb.ctxAttached')}</b>
               {selected.source_text && <pre style={{ whiteSpace: 'pre-wrap', margin: '4px 0' }}>{selected.source_text}</pre>}
               {Object.entries(ctxTranslations(selected)).map(([k, v]) => (

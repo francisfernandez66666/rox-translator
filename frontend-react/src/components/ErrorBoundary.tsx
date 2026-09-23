@@ -73,7 +73,7 @@ export default class ErrorBoundary extends Component<Props, State> {
             <button
               onClick={this.handleRetry}
               style={{
-                padding: '8px 24px', borderRadius: 6, border: '2px solid var(--lc-fill-white, #FFFFFF)',
+                padding: '8px 24px', borderRadius: 6, border: '1.2px solid var(--lc-fill-white, #FFFFFF)',
                 background: 'var(--lc-fill-white, #FFFFFF)', color: '#000', fontSize: 16, cursor: 'pointer',
               }}
             >
@@ -83,7 +83,7 @@ export default class ErrorBoundary extends Component<Props, State> {
               // 硬跳转（不是 navigate）：整页重载才能顺带丢掉可能已经脏掉的 store / 模块级单例状态
               onClick={() => { window.location.href = '/' }}
               style={{
-                padding: '8px 24px', borderRadius: 6, border: '2px solid var(--lc-border-card, #FFFFFF)',
+                padding: '8px 24px', borderRadius: 6, border: '1.2px solid var(--lc-border-pill, #424956)',
                 background: 'transparent', color: 'var(--lc-text-1, #E7E9EA)', fontSize: 16, cursor: 'pointer',
               }}
             >

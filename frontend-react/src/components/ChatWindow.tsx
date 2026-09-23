@@ -36,20 +36,21 @@ import type { ChatMessage } from '@/types'
 import { useT, t, tpl } from '@/i18n'
 import LangMultiSelect, { LangChips } from '@/components/LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
+import { intlLocale, fmtDateTime } from '../lib/format'
 
 // 数字千分位格式化，并处理 undefined/负数，用于余额与用量展示
 // floor + Math.max(0,…) 是必要的：本函数喂的是「≈句数」这类折算值（balance_sentences_approx、
 // estimate 的 s），后端回传小数或早期脏数据为负时，直接格式化会显示成「-1,234」这种吓人数字。
 function fmtNum(n: number): string {
-  return new Intl.NumberFormat().format(Math.max(0, Math.floor(n || 0)))
+  return new Intl.NumberFormat(intlLocale()).format(Math.max(0, Math.floor(n || 0)))
 }
 
-// 卡片样式（纯黑体系：面板 #121417 + 2px 纯白描边 + 圆角 14）
+// 卡片样式（纯黑体系：面板 #0E1014 + 2px 纯白描边 + 圆角 14）
 // ★ #68：描边走 --lc-border-card 令牌（旧字面 #464C58 在纯黑上不足 3:1，看不见边）。
 // 卡片规格集中成常量而不是散进 JSX 内联：内联字面值正是 #68 闸门要收口的形态，
 // 走令牌后描边档位由 theme.css §十 统一调，页面不需要跟着改。
 const CARD: React.CSSProperties = {
-  background: '#121417', border: '2px solid var(--lc-border-card)', borderRadius: 14,
+  background: '#0E1014', border: '1.2px solid var(--lc-border-card)', borderRadius: 14,
 }
 
 // 停止生成图标（langcross 无等价，按组件库线性风格内联方块）
@@ -194,7 +195,7 @@ export default function ChatWindow() {
   function exportChat() {
     const lines: string[] = ['# ' + t('chat.exportTitle'), '']
     for (const m of chat.messages) {
-      lines.push(`### ${m.role === 'user' ? t('chat.roleQ') : t('chat.roleA')} ${new Date(m.timestamp).toLocaleString()}`)
+      lines.push(`### ${m.role === 'user' ? t('chat.roleQ') : t('chat.roleA')} ${fmtDateTime(m.timestamp)}`)
       lines.push('', m.content || '', '')
     }
     const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
@@ -263,7 +264,7 @@ export default function ChatWindow() {
           重试钮只在 !isBackendLoading 时出现：离线后 useChat 会自行按秒重探（最长 30 次），
           那段窗口里再给一个手动重试，等于和后台轮询抢同一个 health 接口。 */}
       {!chat.isBackendOnline && (
-        <div style={{ background: 'rgba(210,153,34,0.10)', borderBottom: '2px solid rgba(210,153,34,0.32)', padding: '8px 6%', display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ background: 'rgba(210,153,34,0.10)', borderBottom: '1px solid rgba(210,153,34,0.32)', padding: '8px 6%', display: 'flex', gap: 10, alignItems: 'center' }}>
           <span style={{ fontSize: 15, color: '#D29922' }}>
             {t2('chat.offline')}
           </span>
@@ -278,7 +279,7 @@ export default function ChatWindow() {
       {/* 余额 / 用量条：§2.2「余额条 高20 · 11px #9AA0AA · 左缩进 60」——11 号字按 1.45 行高约 16，
           上下各 2 内边距即凑足 20 高；多段并排放不下时仍靠 flexWrap 换行，故用 minHeight 不钉死。 */}
       {(balance || usage || orgBudget) && (
-        <div style={{ background: 'rgba(231,233,234,0.06)', color: 'var(--lc-text-2)', fontSize: 13, minHeight: 20, padding: '2px 6%', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', borderBottom: '2px solid var(--lc-border-faint)' }}>
+        <div style={{ background: 'rgba(231,233,234,0.06)', color: 'var(--lc-text-2)', fontSize: 13, minHeight: 20, padding: '2px 6%', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid var(--lc-border-faint)' }}>
           {/* data-testid 只给 e2e 用（★ 任务 #43 翻译主流程端到端）：余额/今日已耗是扣费可见性的
               唯一界面口径，锚点必须与 i18n 文案解耦——文案随 12 语种变，锚点不能跟着变。 */}
           {balance && <span data-testid="chat-balance">{tpl('chat.balanceTokens', { n: fmtPoints(balance.points), s: fmtNum(balance.approx) })}</span>}
@@ -434,30 +435,30 @@ export default function ChatWindow() {
 const CW_CSS = `
 .cw-root{box-sizing:border-box}
 .cw-dialog{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;margin:12px 6% 14px}
-.cw-dialog-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:2px solid var(--lc-border-faint);flex-wrap:wrap}
+.cw-dialog-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--lc-border-faint);flex-wrap:wrap}
 .cw-dialog-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
 .cw-dialog-body .bubble-row{max-width:100%}
-.cw-dialog-foot{border-top:2px solid var(--lc-border-faint);padding:8px 12px 10px;display:flex;flex-direction:column;gap:6px}
+.cw-dialog-foot{border-top:1px solid var(--lc-border-faint);padding:8px 12px 10px;display:flex;flex-direction:column;gap:6px}
 /* 底部 composer（★ 〇-M 元宝式单卡）：输入行 + 一行工具条同处一张「凹」进卡面的输入卡里，
    整块贴底、不随消息流滚动。底色走 --lc-inset（输入框底真值档），描边走 --lc-border-input。 */
-.cw-composer{display:flex;flex-direction:column;background:var(--lc-inset);border:2px solid var(--lc-border-input);border-radius:var(--lc-r-ctl)}
+.cw-composer{display:flex;flex-direction:column;background:var(--lc-inset);border:1.2px solid var(--lc-border-input);border-radius:var(--lc-r-ctl)}
 .cw-composer .cw-input{min-height:40px;max-height:240px;padding:10px 12px 2px;border:0;border-radius:0;background:transparent;resize:none}
 /* 一行工具条：源语言口径 · 目标语言 · 已选 chips · 模式 · 缩翻 · 主按钮。
    右内边距 68px 给固定定位的 AI 助手浮球（.na-fab）让位，窄屏换行时各行同样受益。 */
 .cw-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 68px 8px 8px}
-.cw-src-pill{display:inline-flex;align-items:center;height:28px;padding:0 10px;border:2px solid var(--lc-border-pill);
+.cw-src-pill{display:inline-flex;align-items:center;height:28px;padding:0 10px;border:1.2px solid var(--lc-border-pill);
   border-radius:999px;font-size:14px;color:var(--lc-text-3);white-space:nowrap}
 .cw-condense{display:inline-flex;align-items:center;gap:4px;font-size:14px;color:var(--lc-text-2);white-space:nowrap}
 .cw-condense-num{width:64px;box-sizing:border-box;height:28px;font-size:14px;background:transparent;
-  border:2px solid var(--lc-border-pill);border-radius:var(--lc-r-ctl);padding:0 8px;color:var(--lc-text)}
+  border:1.2px solid var(--lc-border-pill);border-radius:var(--lc-r-ctl);padding:0 8px;color:var(--lc-text)}
 .cw-welcome{text-align:center;padding:32px 12px;color:var(--lc-text-3)}
 .cw-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;
-  border:2px solid var(--lc-border-pill);background:transparent;color:var(--lc-text-2);border-radius:var(--lc-r-ctl);cursor:pointer;padding:0;line-height:0}
+  border:1.2px solid var(--lc-border-pill);background:transparent;color:var(--lc-text-2);border-radius:var(--lc-r-ctl);cursor:pointer;padding:0;line-height:0}
 .cw-icon-btn:hover{color:var(--lc-text);border-color:var(--lc-border-done)}
 .cw-icon-btn:focus-visible{outline:2px solid var(--lc-border-strong);outline-offset:2px}
 .cw-search-clear{display:inline-flex;align-items:center;justify-content:center;border:0;background:none;color:var(--lc-text-3);cursor:pointer;padding:4px;line-height:0}
 .cw-search-clear:hover{color:var(--lc-text)}
-.cw-spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.25);border-top-color:#FFFFFF;border-radius:50%;animation:cw-spin .7s linear infinite}
+.cw-spin{display:inline-block;width:14px;height:14px;border:1.2px solid rgba(255,255,255,.25);border-top-color:var(--lc-text);border-radius:50%;animation:cw-spin .7s linear infinite}
 @keyframes cw-spin{to{transform:rotate(360deg)}}
 @media (max-width:900px){
   /* 平板：卡片左右外边距 6%→4%（旧 mobile.css 的 .chat-scroll 内边距口径，
@@ -467,7 +468,7 @@ const CW_CSS = `
 @media (max-width:640px){
   /* 窄屏：整框贴边留白收窄；工具条靠 flex-wrap 自行换行，浮球让位量减半 */
   .cw-dialog{margin:8px 3% 10px}
-  .cw-toolbar{padding-right:40px}
+  .cw-toolbar{padding-inline-end:40px}
   .cw-composer .cw-input{min-height:40px}
 }
 @media (prefers-reduced-motion: reduce){

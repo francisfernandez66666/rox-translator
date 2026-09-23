@@ -35,7 +35,7 @@ const rowStyle: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap:
 // 行布局变体（顶距 8px）
 const rowMt: any = { ...rowStyle, marginTop: 8 }
 // 行布局变体（顶距 + 虚线顶边框，分组分隔用）
-const rowTop: any = { ...rowStyle, marginTop: 8, borderTop: '2px dashed var(--adm-line)', paddingTop: 10 }
+const rowTop: any = { ...rowStyle, marginTop: 8, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }
 // resStyle 校验结果文字样式：通过=中性浅色（2026-09-18 起不再用绿色，暗色主题下与正文同档），
 //   不通过=红色（只有失败才需要抢眼）。
 const resStyle = (ok: boolean): any => ({ color: ok ? 'var(--lc-success)' : 'var(--lc-danger)', fontSize: 15, marginTop: 6 })
@@ -494,10 +494,10 @@ export function KbP() {
         <div style={rowTop}>
           <input type="file" accept=".csv,.xlsx,.xls" onChange={(e: any) => { setBitextFile(e.target.files?.[0] || null); setBitextMsg(''); e.currentTarget.value = '' }} />
           <Button onClick={() => void startBitextImport()} disabled={!bitextFile || bitextImporting}>{bitextImporting ? t('kb.bitextImporting') : t('kb.bitextImport')}</Button>
-          <input type="file" accept=".tmx,.xml" onChange={(e: any) => { setTmxFile(e.target.files?.[0] || null); setTmxMsg(''); e.currentTarget.value = '' }} style={{ marginLeft: 8 }} />
+          <input type="file" accept=".tmx,.xml" onChange={(e: any) => { setTmxFile(e.target.files?.[0] || null); setTmxMsg(''); e.currentTarget.value = '' }} style={{ marginInlineStart: 8 }} />
           <Button onClick={() => void startTmxImport()} disabled={!tmxFile || tmxImporting}>{tmxImporting ? t('kb.tmxImporting') : t('kb.tmxImport')}</Button>
           {/* ★ #38：导出端点早已存在但前端无入口，Trados/memoQ 单向导入无法回填 —— 补导出 + 仅已审核过滤 */}
-          <Button onClick={() => void startTmxExport()} disabled={tmxExporting} style={{ marginLeft: 8 }}>{tmxExporting ? t('kb.tmxExporting') : t('kb.tmxExport')}</Button>
+          <Button onClick={() => void startTmxExport()} disabled={tmxExporting} style={{ marginInlineStart: 8 }}>{tmxExporting ? t('kb.tmxExporting') : t('kb.tmxExport')}</Button>
           <label style={{ fontSize: 16, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <input type="checkbox" checked={exportApprovedOnly} onChange={(e: any) => setExportApprovedOnly(e.target.checked)} />
             {t('kb.tmxExportApprovedOnly')}
@@ -600,7 +600,7 @@ export function KbP() {
           <summary>{t('kb.bulkImportSummary')}</summary>
           <Textarea value={bulkText} onChange={(e) => setBulkText(e.target.value)} placeholder={t('kb.bulkPlaceholder')} style={{ minHeight: 90 }} />
           <Button style={{ marginTop: 6 }} onClick={() => selectedPkg != null && void bulkImport(selectedPkg)}>{t('kb.bulkImport')}</Button>
-          {bulkTextMsg && <span style={{ marginLeft: 10, fontSize: 14, color: 'var(--adm-ok-tx)' }}>{bulkTextMsg}</span>}
+          {bulkTextMsg && <span style={{ marginInlineStart: 10, fontSize: 14, color: 'var(--adm-ok-tx)' }}>{bulkTextMsg}</span>}
         </details>
         <div style={{ ...rowMt, marginBottom: 8 }}>
           <select className="lc-select" value={String(entryFilter.layer ?? 0)} onChange={(e) => {

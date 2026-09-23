@@ -48,7 +48,7 @@ function shortDiffJSON(s: string): string {
 /** 指标卡片组件：仅做展示，value 可直接为 React 节点 */
 function HealthCard({ value, label }: { value: React.ReactNode; label: string }) {
   return (
-    <div style={{ minWidth: 120, border: '2px solid var(--adm-line)', borderRadius: 8, padding: '10px 14px' }}>
+    <div style={{ minWidth: 120, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: '10px 14px' }}>
       <b style={{ fontSize: 18, display: 'block' }}>{value}</b>
       <span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{label}</span>
     </div>
@@ -585,9 +585,9 @@ export function AuditP() {
           <option value="">{t('audit.allActions')}</option>
           {actions.map((a) => <option key={a} value={a}>{auditActionLabel(a)}</option>)}
         </select>
-        <input type="date" value={fFrom} onChange={(e) => setFFrom(e.target.value)} style={{ height: 30, border: '2px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
+        <input type="date" value={fFrom} onChange={(e) => setFFrom(e.target.value)} style={{ height: 30, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
         <span style={{ color: 'var(--adm-faint)' }}>→</span>
-        <input type="date" value={fTo} onChange={(e) => setFTo(e.target.value)} style={{ height: 30, border: '2px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
+        <input type="date" value={fTo} onChange={(e) => setFTo(e.target.value)} style={{ height: 30, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
         <Button variant="secondary" onClick={load}>{t('common.refresh')}</Button>
       </div>
 
