@@ -40,9 +40,11 @@ import { PERSONA_FALLBACK } from '@/lib/personas' // 覆盖范围区块：八个
 
 /* —— Hero 演示卡固定内容（画布 6:55 / hero-stream.html 现役三处，改文案必须回查行业叫法；★ #22 更正后演示卡归位，术语大卡对照与 curl 示例继续共用这份数据） —— */
 const DEMO_SRC = '新车发布启动会定在下周，需进行竞品对标，赋能经销商的销售线索转化。' // 汽车甲方口吻整句，故意埋 3 处机翻易错说法
+// 落地页打字机演示的最终成句（外语→中文的示例译文）
 const DEMO_FINAL =
   // 定稿译文：与 DEMO_TERMS 的 r 字段逐一对应（kickoff/benchmark/lead），演示卡与功能卡共用同一份事实
   'The new model launch kickoff is next week — we need to run a competitor benchmark, and empower dealers on lead conversion.'
+// 落地页术语高亮演示要用的词条与译文对
 const DEMO_TERMS = [
   // 三检查点唯一数据源：w=机翻初译（判错项），r=行业正译（纠正项），cn=中文术语（量尺标签 + 行内主语）
   { w: 'start', r: 'kickoff', cn: '发布启动会' },

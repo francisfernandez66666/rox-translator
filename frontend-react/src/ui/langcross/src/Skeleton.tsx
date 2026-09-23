@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 
+// 骨架条入参：宽高/圆角（呼吸动画 1.4s）
 export interface SkeletonProps {
   width?: number | string;
   height?: number;
@@ -19,6 +20,7 @@ export function Skeleton({ width ="100%", height = 12, radius, style, className 
   );
 }
 
+// 骨架卡入参：行数与是否带头像位
 export interface SkeletonCardProps {
   /** 行数，默认 3（标题 + 两行正文），末尾自动补一条按钮位 */
   rows?: number;
@@ -49,6 +51,7 @@ export function SkeletonCard({ rows = 3, width = 320 }: SkeletonCardProps) {
   );
 }
 
+// 空态入参：图标/标题/说明/动作按钮（面 #0A0B0D）
 export interface EmptyStateProps {
   icon?: ReactNode;
   title: ReactNode;

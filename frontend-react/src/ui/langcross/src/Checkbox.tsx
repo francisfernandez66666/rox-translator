@@ -1,5 +1,6 @@
 import type { InputHTMLAttributes, ReactNode } from "react";
 
+// 复选框入参：选中态走白底黑勾（交付真值，禁用彩色）
 export interface CheckboxProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: ReactNode;
 }
@@ -25,6 +26,7 @@ export function Checkbox({ label, children, className = "", style, ...rest }: Ch
   );
 }
 
+// 开关入参：活跃态小控件，配色走文字档 #E7E9EA
 export interface SwitchProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: ReactNode;
   /** label 放在开关右侧（规范布局） */

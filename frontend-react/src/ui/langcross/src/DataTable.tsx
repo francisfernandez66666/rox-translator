@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+// 数据表列定义：表头、取值/渲染函数与对齐
 export interface TableColumn<T> {
   key: string;
   title: ReactNode;
@@ -14,6 +15,7 @@ export interface TableColumn<T> {
   render?: (row: T, index: number) => ReactNode;
 }
 
+// 数据表入参：列 + 行数据 + 空态/加载态与行点击
 export interface DataTableProps<T> {
   columns: TableColumn<T>[];
   rows: T[];
@@ -72,6 +74,7 @@ export function DataTable<T>({ columns, rows, rowKey, emptyText ="暂无数据",
   );
 }
 
+// 表格内文本链接入参：跳转目标与样式档位
 export interface LinkProps {
   /** danger 红（删除）/ success 白（查看详情）；默认灰可点 */
   tone?:"default"|"danger"|"success";

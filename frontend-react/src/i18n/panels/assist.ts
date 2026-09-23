@@ -97,6 +97,7 @@ export const zh: Record<string, string> = {
   'assist.ftLink': '外部链接',
 }
 
+// AI 顾问面板英文词典（与同文件 zh 键一一对应，缺键即 locales.core.test 红灯）
 export const en: Record<string, string> = {
   'assist.title': 'AI Assistant',
   'assist.subtitle': 'Knowledge base · scripts · guided flows · feature links · runtime config (stored in the standalone assistant service, isolated from the business database)',

@@ -56,6 +56,7 @@ var errCount atomic.Uint64
 // ErrCount 返回 Redis 分布式锁获取异常的累计次数（供 metrics 渲染与测试断言）。
 func ErrCount() uint64 { return errCount.Load() }
 
+// redisLock 一次锁的持有句柄：key 为本实例要抢的锁名，ttl 由调用方给（续期与释放都按同一 key）。
 type redisLock struct {
 	rdb *redis.Client
 	key string

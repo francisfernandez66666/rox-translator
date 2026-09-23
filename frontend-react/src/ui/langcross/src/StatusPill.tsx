@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
 
+// 状态胶囊档位（success 用白档、idle 灰档，全站无绿）
 export type StatusTone ="success"|"danger"|"warn"|"idle";
 
+// 状态档位 → 交付真值色映射
 const TONE_COLOR: Record<StatusTone, string> = {
   success: "var(--lc-success)",
   danger: "var(--lc-red)",
@@ -9,6 +11,7 @@ const TONE_COLOR: Record<StatusTone, string> = {
   idle: "var(--lc-text-3)",
 };
 
+// 状态胶囊入参：语气档 + 文案（11–12 字号）
 export interface StatusPillProps {
   tone: StatusTone;
   children: ReactNode;
@@ -25,6 +28,7 @@ export function StatusPill({ tone, children, className =""}: StatusPillProps) {
   );
 }
 
+// 徽标入参：文案 + 语气档（比胶囊更轻的展示件）
 export interface BadgeProps {
   children: ReactNode;
   /** mono = JetBrains Mono（版本号 / 数值） */

@@ -1,8 +1,10 @@
+// 标签页单项：键、文案、可选角标
 export interface TabItem {
   key: string;
   label: string;
 }
 
+// 标签页入参：项列表 + 当前值 + 切换回调
 export interface TabsProps {
   items: TabItem[];
   activeKey: string;

@@ -18,6 +18,7 @@
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from "react";
 
+// 倒计时句柄：剩余秒数与格式化文案（验证码/订单共用）
 export interface Countdown {
   /** 剩余秒数：0 表示冷却结束（按钮可再次点击） */
   left: number;

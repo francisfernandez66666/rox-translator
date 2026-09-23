@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+// 键值行入参：标签定宽 72、值左对齐（不做 space-between）
 export interface KeyValueProps {
   label: ReactNode;
   value: ReactNode;

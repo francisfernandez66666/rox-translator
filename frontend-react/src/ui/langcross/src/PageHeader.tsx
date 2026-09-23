@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+// 页面头入参：标题/副标题/右侧动作区
 export interface PageHeaderProps {
   title: ReactNode;
   /** 副描述（13px 灰）；不传不渲染 */
@@ -22,6 +23,7 @@ export function PageHeader({ title, desc, actions, className =""}: PageHeaderPro
   );
 }
 
+// 工具条入参：筛选控件容器 + 右侧动作
 export interface ToolbarProps {
   /** 筛选输入 / 下拉 / 按钮混排；计数文案自动靠右 */
   count?: ReactNode;
@@ -39,6 +41,7 @@ export function Toolbar({ count, className = "", children }: ToolbarProps) {
   );
 }
 
+// 工具条内搜索框入参（与整页 Input 同字号、窄一档高度）
 export interface ToolbarInputProps {
   value?: string;
   placeholder?: string;

@@ -11,6 +11,7 @@ import { createPortal } from "react-dom";
 import { Button } from "./Button";
 import { useFocusTrap } from "./focusTrap";
 
+// 弹窗入参：标题/内容/动作按钮（默认宽 440，见交付真值 §4）
 export interface DialogProps {
   open: boolean;
   title: ReactNode;

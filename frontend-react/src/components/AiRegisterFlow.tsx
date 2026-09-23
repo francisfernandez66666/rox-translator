@@ -37,6 +37,7 @@ const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms))
 // 一条消息 = 一个气泡，靠可选字段决定它渲染成什么（文本 / 选项组 / 表单 / chips / 检查点 / 摘要卡）。
 // 刻意不用 union type 分派：同一条气泡可能先只有文本、打完字后再挂上选项，union 反而要拆消息 id。
 interface Opt { t: string; d: string } // 选项：标题 + 一句说明
+// 留资流程气泡：角色 + 文本（顾问话术与用户回答共用一种结构）
 interface Msg {
   id: number
   side:'ai'|'user'

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+// 胶囊组入参：可选项列表 + 当前值 + 单选/多选回调
 export interface ChipGroupProps {
   items: { key: string; label: ReactNode }[];
   activeKey: string;

@@ -120,8 +120,10 @@ const REGISTRY = {
   wrench: WrenchIcon,
 } as const;
 
+// 图标名联合类型：取值由 REGISTRY 决定，禁止手写未注册的名字
 export type IconName = keyof typeof REGISTRY;
 
+// 图标组件入参：尺寸/颜色/描边宽（统一 16×16、stroke 1.6–1.9、currentColor）
 export interface IconComponentProps {
   /** 图标名，见 REGISTRY */
   n: IconName;
