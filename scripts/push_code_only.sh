@@ -46,18 +46,18 @@ EXCL=(
   -- ':(exclude)前端及UI相关/'
 )
 
-git fetch --quiet "$REMOTE" "$TARGET" 2>/dev/null || echo "⚠️ fetch 失败，用本地已有的 $BASE_REF 继续（请自查网络）"
-git rev-parse --verify -q "$BASE_REF" >/dev/null || { echo "❌ 找不到 $BASE_REF（首次推送请人工确认目标分支）" >&2; exit 1; }
+git fetch --quiet "$REMOTE" "$TARGET" 2>/dev/null || printf '⚠️ fetch 失败，用本地已有的 %s 继续（请自查网络）\n' "$BASE_REF"
+git rev-parse --verify -q "$BASE_REF" >/dev/null || { printf '❌ 找不到 %s（首次推送请人工确认目标分支）\n' "$BASE_REF" >&2; exit 1; }
 BASE=$(git rev-parse "$BASE_REF")
 
 # 本地待推的代码文件改动清单（BASE..HEAD 的差异，剔除文档）
 CHANGED=$(git diff --name-only "$BASE" HEAD -- ':(exclude)*.md' ':(exclude)前端及UI相关/')
 DOC_IN_HISTORY=$(git diff --name-only "$BASE" HEAD -- '*.md' ':(exclude)前端及UI相关/*' | wc -l | tr -d ' ')
 
-echo "==> 当前分支 $BR；基点 $BASE_REF=${BASE:0:9}"
-echo "==> 本地领先提交里含文档文件 $DOC_IN_HISTORY 个（这些**不会**被推出去）"
+printf '==> 当前分支 %s；基点 %s=%s\n' "$BR" "$BASE_REF" "${BASE:0:9}"
+printf '==> 本地领先提交里含文档文件 %s 个（这些**不会**被推出去）\n' "$DOC_IN_HISTORY"
 if [ -z "$CHANGED" ]; then
-  echo "✅ 没有代码改动需要推送（$BASE_REF 已包含全部代码）。"
+  printf '✅ 没有代码改动需要推送（%s 已包含全部代码）。\n' "$BASE_REF"
   exit 0
 fi
 echo "==> 将推送的代码文件（$(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') 个）："
@@ -73,7 +73,7 @@ fi
 
 TS=$(date +%Y%m%d_%H%M%S)
 TMP="push-code-only-$TS"
-echo "==> 在 $BASE_REF 之上另建纯代码分支 $TMP"
+printf '==> 在 %s 之上另建纯代码分支 %s\n' "$BASE_REF" "$TMP"
 git checkout -q -b "$TMP" "$BASE" || { echo "❌ 建分支失败" >&2; git checkout -q "$BR"; exit 1; }
 # 用「目标状态」而非逐个 cherry-pick：把 BASE..HEAD 的代码改动整体落到临时分支，
 # 这样本地历史里夹没夹文档提交都无所谓（这正是①失效时的兜底）。
@@ -87,11 +87,11 @@ printf '%s\n' "$CHANGED" | while IFS= read -r f; do
   elif git cat-file -e "$BASE:$f" 2>/dev/null; then
     git rm -q -f -- "$f" 2>/dev/null || true   # 本地确实删了：远端也要删
   else
-    echo "⚠️ 跳过既不在 $BR 也不在 $BASE 的路径：$f" >&2
+    printf '⚠️ 跳过既不在 %s 也不在 %s 的路径：%s\n' "$BR" "$BASE" "$f" >&2
   fi
 done
 git diff --cached --quiet && { echo "✅ 暂存为空，无内容可推"; git checkout -q "$BR"; git branch -q -D "$TMP"; exit 0; }
-git commit -q -m "chore: 纯代码推送 $(git rev-parse --short "$BR")（由 scripts/push_code_only.sh 生成：零 .md、零 UI 交付包；本地文档提交留在 $BR 与 docs-local 侧）" || {
+git commit -q -m "$(printf 'chore: 纯代码推送 %s（由 scripts/push_code_only.sh 生成：零 .md、零 UI 交付包；本地文档提交留在 %s 与 docs-local 侧）' "$(git rev-parse --short "$BR")" "$BR")" || {
   echo "❌ 临时分支提交失败" >&2; git checkout -q "$BR"; exit 1; }
 
 # ★ 三次校验（比「零 .md」更硬）：推出去的树必须与本地代码状态逐文件相等。
@@ -114,10 +114,10 @@ echo "==> 二次校验通过：提交含 $(printf '%s\n' "$PUSHED_FILES" | wc -l
 echo "==> push $TMP:$TARGET"
 git push -q "$REMOTE" "HEAD:refs/heads/$TARGET" || { echo "❌ push 失败，未并轨" >&2; git checkout -q "$BR"; exit 1; }
 
-echo "==> 并轨：把远端 $TARGET 合回本地 $BR"
+printf '==> 并轨：把远端 %s 合回本地 %s\n' "$TARGET" "$BR"
 git checkout -q "$BR"
 git merge -q --no-edit "$BASE_REF" 2>/dev/null || git merge -q --no-edit "$TMP" || {
-  echo "⚠️ 并轨冲突：请手工解决（远端已更新，本地 $BR 未动）" >&2; git branch -q -D "$TMP" 2>/dev/null; exit 1; }
+  printf '⚠️ 并轨冲突：请手工解决（远端已更新，本地 %s 未动）\n' "$BR" >&2; git branch -q -D "$TMP" 2>/dev/null; exit 1; }
 git branch -q -D "$TMP"
-echo "✅ 已推送 $(git rev-parse --short "$BASE_REF" 2>/dev/null || echo '?')；本地 $BR 与远端并轨完成"
+printf '✅ 已推送 %s；本地 %s 与远端并轨完成\n' "$(git rev-parse --short "$BASE_REF" 2>/dev/null || echo '?')" "$BR"
 git log --oneline -2 | cat
