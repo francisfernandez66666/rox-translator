@@ -22,6 +22,8 @@
 # 排除口径（宁多勿漏）：
 #   - 任意层级的 `*.md`（README/PROGRESS/部署指南/各类方案与报告都算文档）
 #   - `前端及UI相关/`（UI 交付包与流程图目录，含 svg/png 之类大文件）
+#   - `产品手册/`（多语种用户指南 PDF，属文档，不推送）
+#   - `*.pdf`（PDF 一律当文档，不推送）
 #   - 根目录 `*.png` / `*.svg` / `*.drawio` / `*.zip` 之外的流程图产物一律按目录排；
 #     注：`frontend-react/public/extensions/*.zip` 是**代码交付物**（插件安装包），不排除。
 #
@@ -30,6 +32,10 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
+# macOS 默认 core.quotePath=true 会把含非 ASCII 的路径加引号输出（如 "产品手册/..."），
+# 致下方 `:(exclude)产品手册/` 这类 pathspec 与 git cat-file -e 全部匹配失效。
+# 关掉引号，让原始 UTF-8 路径参与匹配（不影响推送内容，只影响路径解析）。
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.quotePath GIT_CONFIG_VALUE_0=false
 
 BR="$(git rev-parse --abbrev-ref HEAD)"
 REMOTE="${PUSH_REMOTE:-origin}"
@@ -44,6 +50,8 @@ APPLY=0
 EXCL=(
   -- ':(exclude)*.md'
   -- ':(exclude)前端及UI相关/'
+  -- ':(exclude)产品手册/'
+  -- ':(exclude)*.pdf'
 )
 
 git fetch --quiet "$REMOTE" "$TARGET" 2>/dev/null || printf '⚠️ fetch 失败，用本地已有的 %s 继续（请自查网络）\n' "$BASE_REF"
@@ -51,8 +59,8 @@ git rev-parse --verify -q "$BASE_REF" >/dev/null || { printf '❌ 找不到 %s�
 BASE=$(git rev-parse "$BASE_REF")
 
 # 本地待推的代码文件改动清单（BASE..HEAD 的差异，剔除文档）
-CHANGED=$(git diff --name-only "$BASE" HEAD -- ':(exclude)*.md' ':(exclude)前端及UI相关/')
-DOC_IN_HISTORY=$(git diff --name-only "$BASE" HEAD -- '*.md' ':(exclude)前端及UI相关/*' | wc -l | tr -d ' ')
+CHANGED=$(git diff --name-only "$BASE" HEAD -- ':(exclude)*.md' ':(exclude)前端及UI相关/' ':(exclude)产品手册/' ':(exclude)*.pdf')
+DOC_IN_HISTORY=$(git diff --name-only "$BASE" HEAD -- '*.md' '产品手册/' '*.pdf' ':(exclude)前端及UI相关/*' | wc -l | tr -d ' ')
 
 printf '==> 当前分支 %s；基点 %s=%s\n' "$BR" "$BASE_REF" "${BASE:0:9}"
 printf '==> 本地领先提交里含文档文件 %s 个（这些**不会**被推出去）\n' "$DOC_IN_HISTORY"
@@ -62,7 +70,7 @@ if [ -z "$CHANGED" ]; then
 fi
 echo "==> 将推送的代码文件（$(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') 个）："
 printf '%s\n' "$CHANGED" | sed 's/^/   /' | head -60
-if printf '%s\n' "$CHANGED" | grep -qE '\.md$|^前端及UI相关/'; then
+if printf '%s\n' "$CHANGED" | grep -qE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$'; then
   echo "❌ 清单里混进了文档路径，排除口径失效，停手。" >&2; exit 1
 fi
 if [ "$APPLY" = "0" ]; then
@@ -96,7 +104,7 @@ git commit -q -m "$(printf 'chore: 纯代码推送 %s（由 scripts/push_code_on
 
 # ★ 三次校验（比「零 .md」更硬）：推出去的树必须与本地代码状态逐文件相等。
 #   只查 .md 会漏掉「新文件被静默丢弃」，只查文件名会漏掉「内容没取全」——两类都要堵。
-MISSING=$(git diff --name-only "$BR" HEAD -- ':(exclude)*.md' ':(exclude)前端及UI相关/')
+MISSING=$(git diff --name-only "$BR" HEAD -- ':(exclude)*.md' ':(exclude)前端及UI相关/' ':(exclude)产品手册/' ':(exclude)*.pdf')
 if [ -n "$MISSING" ]; then
   echo "❌ 三次校验：纯代码提交与本地代码状态仍有差异，已停在本地未推：" >&2
   printf '%s\n' "$MISSING" | sed 's/^/   /' | head -20 >&2
@@ -104,7 +112,7 @@ if [ -n "$MISSING" ]; then
 fi
 
 PUSHED_FILES=$(git show --name-only --pretty=format: HEAD | sed '/^$/d')
-if printf '%s\n' "$PUSHED_FILES" | grep -qiE '\.md$|^前端及UI相关/'; then
+if printf '%s\n' "$PUSHED_FILES" | grep -qiE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$'; then
   echo "❌ 二次校验：纯代码提交里仍有文档路径，已停在本地未推。" >&2
   printf '%s\n' "$PUSHED_FILES" | grep -iE '\.md$|^前端及UI相关/' | head
   git checkout -q "$BR"; exit 1
