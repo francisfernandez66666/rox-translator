@@ -216,7 +216,7 @@ export default function AiAssist() {
            所以描边一律走 --lc-border-* 令牌、次级文字走 --lc-text-*，
            不再写死 #2A2F3A~#575F6C 那批暗值——「#68 描边禁再写死暗值」锁会连本文件一起扫并红灯
            （它只放行 var(...) 里的兜底值，字面暗值一律算写死）。
-           仍在用的字面值只剩三类：深色层级面（面板/输入底 #0E1014、#0A0B0D、#16181C，属底色不属描边）、
+           仍在用的字面值只剩三类：深色层级面（台阶面 #121417、#0A0B0D、#1A1D21，属底色不属描边）、
            反白件（纯白 #FFFFFF 底 + #000 字的 FAB/发送/用户气泡，交付真值 .lc-btn--primary{background:#FFFFFF}，
            与 --lc-fill-white 同档；气泡正文 #C8CCD1 也高于闸门下限）、
            以及警示底 #D29922 及其 rgba（交付包保留的琥珀语义色，离线态专用，不并入单色令牌）。 */
@@ -225,20 +225,20 @@ export default function AiAssist() {
           box-shadow:0 6px 20px rgba(255,255,255,.16)}
         .na-fab:hover{transform:scale(1.06)}
         .na-panel{position:fixed;right:22px;bottom:88px;z-index:99991;width:380px;max-width:calc(100vw - 24px);
-          height:min(620px,78vh);background:#0E1014;border-radius:16px;box-shadow:0 12px 48px rgba(0,0,0,.5);
+          height:min(620px,78vh);background:#121417;border-radius:16px;box-shadow:0 12px 48px rgba(0,0,0,.5);
           display:flex;flex-direction:column;overflow:hidden;border:2px solid var(--lc-border-card);
           --lc-mo-origin:100% 100%;
           animation:lc-mo-pop 200ms cubic-bezier(.16,1,.3,1) both}
         .na-panel--out{animation:lc-mo-pop-out ${OUT_MS}ms cubic-bezier(.4,0,.2,1) both}
         /* 头部改为深色 + 1px 分隔线：纯黑体系里的浮层不出现整块白条 */
-        .na-head{background:#16181C;color:#E7E9EA;padding:12px 14px;display:flex;align-items:center;gap:10px;
+        .na-head{background:#1A1D21;color:#E7E9EA;padding:12px 14px;display:flex;align-items:center;gap:10px;
           border-bottom:2px solid var(--lc-border-faint)}
         .na-head-ic{width:28px;height:28px;border-radius:9px;background:#0A0B0D;border:2px solid var(--lc-border-faint);
           display:flex;align-items:center;justify-content:center;color:#E7E9EA;flex:none}
         .na-head .na-sub{font-size:13px;color:var(--lc-text-3);line-height:1.3}
         .na-close{margin-left:auto;background:none;border:2px solid var(--lc-border-input);color:var(--lc-text-2);
           width:26px;height:26px;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:none}
-        .na-list{flex:1;overflow-y:auto;padding:14px 12px;background:#0E1014;display:flex;flex-direction:column;gap:12px}
+        .na-list{flex:1;overflow-y:auto;padding:14px 12px;background:#121417;display:flex;flex-direction:column;gap:12px}
         .na-row{display:flex}
         .na-row.me{justify-content:flex-end}
         .na-bubble{max-width:82%;padding:9px 12px;border-radius:12px;font-size:15.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word}
@@ -246,15 +246,15 @@ export default function AiAssist() {
         .na-row.me .na-bubble{background:#FFFFFF;color:#000;border-top-right-radius:4px}
         .na-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
         /* 推荐入口：深底面板上必须是浅字浅描边（原来 #0A0B0D 文字在 #0E1014 底上等于不可见） */
-        .na-act{display:inline-flex;align-items:center;gap:5px;border:2px solid var(--lc-border-faint);background:#16181C;
+        .na-act{display:inline-flex;align-items:center;gap:5px;border:2px solid var(--lc-border-faint);background:#1A1D21;
           color:#C8CCD1;border-radius:999px;padding:4px 11px;font-size:14px;cursor:pointer;white-space:nowrap;
           font-family:inherit}
         .na-act:hover{background:#FFFFFF;border-color:#FFFFFF;color:#000}
-        .na-chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px;border-top:2px solid var(--lc-border-faint);background:#0E1014}
+        .na-chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px;border-top:2px solid var(--lc-border-faint);background:#121417}
         .na-chip{border:2px dashed var(--lc-border-faint);background:transparent;color:var(--lc-text-2);border-radius:999px;padding:4px 11px;
           font-size:14px;cursor:pointer;font-family:inherit}
         .na-chip:hover{border-color:var(--lc-border-input);color:#E7E9EA}
-        .na-input{display:flex;gap:8px;padding:10px 12px;border-top:2px solid var(--lc-border-faint);background:#0E1014}
+        .na-input{display:flex;gap:8px;padding:10px 12px;border-top:2px solid var(--lc-border-faint);background:#121417}
         .na-input input{flex:1;background:#0A0B0D;border:2px solid var(--lc-border-input);border-radius:10px;padding:8px 12px;
           font-size:15px;outline:none;color:#E7E9EA;font-family:inherit}
         .na-input input::placeholder{color:var(--lc-text-3)}

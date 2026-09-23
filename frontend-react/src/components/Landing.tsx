@@ -6,7 +6,7 @@
 // 连同两颗「预约演示」按钮一起退役，转化入口统一为「留言获取方案」（锚到 #cta 留资表单）；
 // 其「划掉错词→亮起正词」动效已抽到 components/WordSwap + theme.css，供产品内加载态复用（#24）。
 // 其余区块 useReveal 滚动现身，组内 60ms 等速 stagger（动效原则 8）。
-// 视觉：纯黑底、卡片描边 var(--lc-border-card) 1.2px、主按钮白底黑字、无蓝无绿。
+// 视觉：纯黑底、卡片描边 var(--lc-border-card) 2px 纯白（★ 〇-O）、主按钮白底黑字、无蓝无绿。
 // ============================================================================
 /* 依赖口径（三条硬约束，改本文件前先确认）：
    1. useReveal 与 motion.css 的 .lc-reveal 配对使用——只挂类名不调 hook，元素会永远停在 opacity:0；
@@ -1133,8 +1133,8 @@ const LANDING_CSS = `
    整页唯一一处实心白，强度最高，同屏通常只让它出现一次 */
 .lc-mkt .lc-mkt-btn--pri{background:var(--lc-fill-white);color:#000}
 .lc-mkt .lc-mkt-btn--pri:hover{opacity:.88}
-/* 描边次投走令牌 --lc-border-pill（#424956）：2026-09-22 还原批把自造的 #546470 归位到令牌，
-   比卡片描边亮一档，边框才读得出"可点"而不是"分隔线" */
+/* 描边次投走令牌 --lc-border-pill（〇-O 起为纯白 #FFFFFF；旧档 #424956 作废）：2026-09-22 还原批把自造的 #546470 归位到令牌，
+   〇-N 起该令牌为 2px；〇-O 起描边全部纯白，"可点"与"分隔"不再靠明暗分档，靠实心/透明底与 hover 区分 */
 .lc-mkt .lc-mkt-btn--ghost{border:2px solid var(--lc-border-pill);color:var(--lc-text-1);background:transparent}
 .lc-mkt .lc-mkt-btn--ghost:hover{border-color:var(--lc-border-done)}
 /* 卡内浮面底：给非高亮价格档用，强度低于主投但仍是实心，不会和卡片背景糊在一起 */
@@ -1155,9 +1155,9 @@ const LANDING_CSS = `
 .lc-hero-in{display:flex;align-items:center;gap:60px;width:100%}
 /* 左栏 flex:none + 定宽 500：文案行长要锁死，宽屏也不许把句子拉散（超宽靠右栏吸收） */
 .lc-hero-copy{flex:none;width:500px;display:flex;flex-direction:column;gap:24px}
-/* 徽章底色走 --lc-raised（#16181C 徽章面令牌值）、描边 #31363D 是演示画布原值：
-   比卡片底略抬，又不到 input 描边的强度 */
-.lc-hero-badge{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;padding:8px 14px;border-radius:20px;background:var(--lc-raised);border:2px solid #31363D;font-size:16px;font-weight:500;color:var(--lc-text-3)}
+/* 徽章底色走 --lc-raised（#1A1D21 徽章面令牌值）；描边原为演示画布字面 #31363D，
+   〇-O 起收口到 --lc-border-pill（全站框线纯白），比卡片底抬一档靠面色台阶而非边框明度 */
+.lc-hero-badge{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;padding:8px 14px;border-radius:20px;background:var(--lc-raised);border:2px solid var(--lc-border-pill);font-size:16px;font-weight:500;color:var(--lc-text-3)}
 .lc-hero-badge i{width:8px;height:8px;border-radius:4px;background:var(--lc-text-1);flex:none}
 /* 3.89vw = 56px / 1440px 设计宽：clamp 的上界与画布字号一致，下界保证手机两行不断句 */
 .lc-hero-h1{margin:0;font-size:clamp(34px,3.89vw,56px);line-height:1.21;font-weight:700;letter-spacing:.2px;color:var(--lc-text-1)}
@@ -1212,7 +1212,8 @@ const LANDING_CSS = `
 .lc-bento-top{display:grid;grid-template-columns:776fr 480fr;gap:24px}
 /* 四张小卡与顶栏分属两条 grid：结构上等价于"两行"，但折行只需各改一行 columns */
 .lc-bento-row{display:grid;grid-template-columns:repeat(4,1fr);gap:24px;margin-top:24px}
-/* 卡底用 --lc-bg 而不是抬升色：整页的分层只靠 1.2px 描边表达，不用灰底堆叠 */
+/* 卡底仍用 --lc-bg 而不是抬升色：营销页的高低由「2px 纯白框（〇-O）」表达，
+   三级面色台阶只用于产品界面（工作台/后台）的区块分层，营销页不跟着堆灰底 */
 .lc-fcard{display:flex;flex-direction:column;gap:14px;padding:28px;background:var(--lc-bg);border:2px solid var(--lc-border-card);border-radius:16px;min-width:0}
 /* 大卡多 4px 内边距：它要装三条演示行，密排会读成表格而不是产品截图 */
 .lc-fcard--big{padding:32px;gap:16px}
@@ -1474,16 +1475,17 @@ const LANDING_CSS = `
   border:2px solid var(--lc-border-strong);
   border-radius:16px;overflow:hidden;position:relative;
   box-shadow:var(--lc-panel-highlight);
-  transition:border-color .62s ease,filter .16s linear;
+  transition:box-shadow .62s ease,filter .16s linear;
   animation:hdBoot .62s cubic-bezier(.16,1,.3,1) both;
 }
 /* 挂载时的起手动画：只做一次（both 锁终值），10px 上浮 + 微缩放，让卡片"落位"而不是淡入 */
 @keyframes hdBoot{from{opacity:0;transform:translateY(10px) scale(.994)}to{opacity:1;transform:none}}
 /* dim：术语判完最后一条时整卡压暗，为 ceremony 的爆发蓄落差（动效原则 3） */
 .hd-panel.dim{filter:brightness(.84);transition:filter .5s cubic-bezier(.4,0,.2,1)}
-/* bright / blaze 是峰值的"亮两级"，只动描边颜色：整卡不动几何，避免和 drop/punch 的 transform 抢 */
-.hd-panel.bright{border-color:#7B818C}
-.hd-panel.blaze{border-color:#B0B6BF}
+/* bright / blaze 是峰值的"亮两级"。★ 〇-O 后基础框线已是纯白，border-color 再往上没有档，
+   所以两级改用外扩白色光环表达（整卡仍不动几何，避免和 drop/punch 的 transform 抢） */
+.hd-panel.bright{box-shadow:0 0 0 2px rgba(255,255,255,.30), var(--lc-panel-highlight)}
+.hd-panel.blaze{box-shadow:0 0 0 3px rgba(255,255,255,.55), var(--lc-panel-highlight)}
 /* drop：每判完一条术语让整卡下沉不到 1px——几乎看不见，但"落定了"的感觉靠它 */
 .hd-panel.drop{animation:hdPanelDrop .24s cubic-bezier(.3,1.3,.5,1)}
 @keyframes hdPanelDrop{0%{transform:translateY(0)}35%{transform:translateY(.9px)}100%{transform:translateY(0)}}

@@ -275,10 +275,9 @@ export default function BrandP() {
           </div>
 
            {/* Logo 上传与预览
-               预览框用深色虚线（#464C58）：暗色面板下浅色/透明 PNG Logo 也能看清边界
-               ★ #68：上面那句里的字面 #464C58 已收口为 --lc-border-input——
-               该档在纯黑底上 ≥4:1（readability.test.ts 的描边锁会拦更暗的字面值），
-               视觉上仍是「看得见的虚线框」，语义不变。 */}
+               预览框走 --lc-border-input 的虚线：暗色面板下浅色/透明 PNG Logo 也能看清边界
+               ★ 〇-O（2026-09-23）：该档已随「全部框线纯白」翻为 #FFFFFF（旧字面 #464C58 与
+               它的前身 --lc-border-input 灰档都作废），虚线形态不变，仍读得出「可放置区」。 */}
            <div>
              <div style={{ fontSize: 15, marginBottom: 4 }}>{t('brand.logo')}</div>
              <input type="file" accept="image/*" disabled={!editable} onChange={onLogoFile} />
@@ -334,7 +333,7 @@ export default function BrandP() {
                   {loginLayout.mode === 'split' ? (
                     /* 分栏预览：一侧背景图，另一侧登录容器（容器在左/右随 side 切换）
                        2026-09-18 配色随暗色主题对齐：容器底 rgba(231,233,234,.06)（浅色按 6% 透明度＝微弱提亮）、
-                       登录卡片底 #0E1014（与线上卡片同档）、外框虚线走 --lc-border-input（★ #68：
+                       登录卡片底 #121417（与线上卡片同档）、外框虚线走 --lc-border-input（★ #68：
                        原字面 #464C58 在纯黑上不足 3:1，预览框几乎看不见）。
                        目的是「预览所见 ≈ 登录页实际观感」，避免白底预览、暗色上线的落差。
                        ★ 2026-09-22 还原：卡内示意文字与提示文字原为蓝调灰 #889/#cdd，改走中性灰阶令牌（全站无蓝）。
@@ -345,7 +344,7 @@ export default function BrandP() {
                           {/* 左侧：登录表单容器（可拖拽调整卡片位置） */}
                           <div ref={splitFormRef} style={{ flex: 1, position:'relative', background:'rgba(231,233,234,0.06)', overflow:'hidden'}}>
                             <div onMouseDown={(e) => { e.preventDefault(); cardDragRef.current = { startX: e.clientX, startY: e.clientY, x0: loginCardPos.x, y0: loginCardPos.y, el: splitFormRef.current } }}
-                              style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 120, height: 80, background:'#0E1014', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 13, color:'var(--lc-text-3)', cursor:'move'}}>
+                              style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 120, height: 80, background:'#121417', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 13, color:'var(--lc-text-3)', cursor:'move'}}>
                               {t('brand.cardPreview')}
                             </div>
                           </div>
@@ -359,7 +358,7 @@ export default function BrandP() {
                           {/* 右侧：登录表单容器（可拖拽调整卡片位置） */}
                           <div ref={splitFormRef} style={{ flex: 1, position:'relative', background:'rgba(231,233,234,0.06)', overflow:'hidden'}}>
                             <div onMouseDown={(e) => { e.preventDefault(); cardDragRef.current = { startX: e.clientX, startY: e.clientY, x0: loginCardPos.x, y0: loginCardPos.y, el: splitFormRef.current } }}
-                              style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 120, height: 80, background:'#0E1014', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 13, color:'var(--lc-text-3)', cursor:'move'}}>
+                              style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 120, height: 80, background:'#121417', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 13, color:'var(--lc-text-3)', cursor:'move'}}>
                               {t('brand.cardPreview')}
                             </div>
                           </div>
@@ -369,7 +368,7 @@ export default function BrandP() {
                   ) : (
                     /* 全屏预览：背景 + 遮罩 + 可拖拽登录卡片
                        底色 #050607 为暗色主题最深档，未上传背景图时也不会露出白色；
-                       卡片沿用 #0E1014，与分栏预览同一色档，保证两种布局观感一致。 */
+                       卡片沿用 #121417，与分栏预览同一色档，保证两种布局观感一致。 */
                     <div
                       ref={bgPreviewRef}
                       onMouseDown={(e) => {
@@ -384,7 +383,7 @@ export default function BrandP() {
                       {/* 可拖拽的登录卡片预览 */}
                       <div
                         onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); cardDragRef.current = { startX: e.clientX, startY: e.clientY, x0: loginCardPos.x, y0: loginCardPos.y, el: bgPreviewRef.current } }}
-                        style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 140, height: 90, background:'#0E1014', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.25)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 13, color:'var(--lc-text-3)', cursor:'move'}}
+                        style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 140, height: 90, background:'#121417', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.25)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 13, color:'var(--lc-text-3)', cursor:'move'}}
                       >
                         {t('brand.cardPreview')}
                       </div>

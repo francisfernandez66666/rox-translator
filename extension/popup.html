@@ -6,19 +6,21 @@
   <style>
     /* ★ 2026-09-22 全站 UI 还原批：本弹窗原先是「indigo #1a237e 主色 + 白底 + 绿色成功态」的旧主题。
        插件页既不在前端构建产物、也不在后端直出 HTML 里，两套闸门都扫不到它，属还原盲区。
-       现按《UI-ANNOTATIONS》§1.1 令牌出纯黑单色（全站无蓝无绿）：面 #000/#0E1014/#0A0B0D、
-       文字 #E7E9EA/#9AA0AA/#71767B、描边 1.2px #464C58（§1.3）、主按钮纯白底黑字（交付真值）。 */
+       现按《UI-ANNOTATIONS》§1.1 令牌出纯黑单色（全站无蓝无绿）：面 #000/#0A0B0D/#121417、
+       文字 #E7E9EA/#9AA0AA/#71767B、主按钮纯白底黑字（交付真值）。
+       ★ 2026-09-23 〇-O 用户后令「全部框线纯白 + 背景黑 + 深灰分层」：描边档 --lc-line 翻白
+       （旧 #464C58 作废），聚焦态改用外扩白色光环表达（白框之上再没有更亮的边框档）。 */
     :root{
-      --lc-bg:#000000;--lc-panel:#0E1014;--lc-inset:#0A0B0D;
+      --lc-bg:#000000;--lc-panel:#121417;--lc-inset:#0A0B0D;
       --lc-text:#E7E9EA;--lc-text-2:#9AA0AA;--lc-text-3:#71767B;
-      --lc-line:#464C58;--lc-white:#FFFFFF;
+      --lc-line:#FFFFFF;--lc-white:#FFFFFF;
     }
     body { width: 300px; margin: 0; padding: 16px; font: 15px/1.6 system-ui, sans-serif; background: var(--lc-bg); color: var(--lc-text); }
     h1 { font-size: 17px; font-weight: 700; margin: 0 0 10px; color: var(--lc-white); }
     label { display: block; margin: 10px 0 4px; color: var(--lc-text-2); }
-    /* 输入类统一取「凹陷底 #0A0B0D + 1.2px 描边」，select 原先的内联样式并入此条，避免两处各写一套 */
+    /* 输入类统一取「凹陷底 #0A0B0D + 2px 纯白描边」，select 原先的内联样式并入此条，避免两处各写一套 */
     input, select { width: 100%; box-sizing: border-box; padding: 8px 10px; background: var(--lc-inset); border: 2px solid var(--lc-line); border-radius: 8px; font-size: 15px; font-family: inherit; color: var(--lc-text); }
-    input:focus, select:focus { outline: none; border-color: var(--lc-text-3); }
+    input:focus, select:focus { outline: none; border-color: var(--lc-white); box-shadow: 0 0 0 2px rgba(255, 255, 255, .28); }
     /* 主按钮＝纯白底黑字（交付真值 .lc-btn--primary{background:#FFFFFF}），hover 用降透明而不是变蓝 */
     button { margin-top: 14px; width: 100%; padding: 9px; border: none; border-radius: 8px; background: var(--lc-white); color: #000000; font-weight: 500; cursor: pointer; }
     button:hover { opacity: .88; }

@@ -52,15 +52,18 @@ var docsRenderer = goldmark.New(
 
 // openAPIDocsCSS 文档页样式壳（renderDocsHTML 与中英双容器页共用一份，避免两处各自漂移）。
 //
-// 口径来源：UI-ANNOTATIONS §1.1（面/文字/描边三族令牌）、§1.3（描边 1.2px、圆角档）。
+// 口径来源：UI-ANNOTATIONS §1.1（面/文字/描边三族令牌）、§1.3（圆角档；描边宽度已按 〇-N 用户后令抬到 2px）。
 // ★ 2026-09-22 全站 UI 还原批：本页原先是「Google 蓝 #1a73e8 + indigo 标题 + 浅底代码块」的
 // 独立浅底主题——它由后端直出、不在前端构建产物里，前端令牌闸门扫不到，属还原盲区
 // （与 /docs/*、assist 管理台同一类问题）。现按 §1.1 令牌改纯黑底，链接取主文字档而非蓝。
+// ★ 2026-09-23 〇-O 用户后令「框线全部纯白 + 背景黑 + 深灰分层」：本面令牌块随 tokens.css 同步——
+// 描边族（line/pill/card-line）一律 #FFFFFF，面档抬到台阶 L2 #121417 / L3 #1A1D21；
+// 逐字一致性由 public_ui_test.go 的等值锁 + 旧灰档负向锁兜住，改这里必须同时改 tokens.css。
 const openAPIDocsCSS = `
 :root{
-  --lc-bg:#000000;--lc-panel:#0E1014;--lc-surface:#16181C;--lc-inset:#0A0B0D;
+  --lc-bg:#000000;--lc-panel:#121417;--lc-surface:#1A1D21;--lc-inset:#0A0B0D;
   --lc-text:#E7E9EA;--lc-text-2:#9AA0AA;--lc-text-3:#71767B;
-  --lc-line:#464C58;--lc-pill:#424956;--lc-card-line:#3A404C;
+  --lc-line:#FFFFFF;--lc-pill:#FFFFFF;--lc-card-line:#FFFFFF;
   --lc-white:#FFFFFF;--lc-danger:#E5484D;
 }
 *{margin:0;padding:0;box-sizing:border-box}

@@ -196,7 +196,7 @@ function FrontShell() {
     // 那条 html,body{background:#000}（★ #66）铺黑，否则切页瞬间会看到
     // 「灰字换词动效糊在白纸」的对比度反转。
     <Suspense fallback={<PageLoading />}>
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--npz-page-bg, #0E1014)' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--npz-page-bg, #000000)' }}>
       {/* ★ D2 #24：appspin 旋转 keyframes 已随两处 spinner 退役（全站唯一消费点消失） */}
       {/* 前台自助区 + 顶栏的局部类：纯黑换肤后卡片/表格/抽屉一律走白字 + 描边令牌
           （#E7E9EA / var(--lc-border-faint)），.ss-ghost-btn（顶栏幽灵按钮）与 .app-tab
@@ -226,7 +226,7 @@ function FrontShell() {
         .ss-drawer-item:hover{background:rgba(231,233,234,0.10)}
         .ss-loading{display:flex;justify-content:center;padding:40px}
         /* 顶栏控件字阶（★ 2026-09-22 还原 UI-ANNOTATIONS §2.2 真值）：幽灵按钮 14px/32 高、
-           工作台 Tab 13px 胶囊（活跃=面 #16181C + 文字 #E7E9EA，即 --lc-raised/--lc-text）；
+           工作台 Tab 13px 胶囊（活跃=面 #1A1D21 + 文字 #E7E9EA，即 --lc-raised/--lc-text）；
            历史上 #67/#68 曾整档放大到 16/17px 与 38/40 高，已随页面级覆写层一并撤销。
            描边/分隔统一走 --lc-* 令牌，hover 只改色不投影。 */
         .ss-ghost-btn{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:var(--lc-text-2);font-size:16px;font-family:var(--lc-font);cursor:pointer;transition:color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}

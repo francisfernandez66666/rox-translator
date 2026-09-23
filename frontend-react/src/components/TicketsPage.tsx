@@ -592,15 +592,16 @@ export default function TicketsPage() {
           <textarea className="lc-textarea" data-testid="tk-source" rows={4} value={text} onChange={(e) => setText(e.target.value)} aria-label={t('tk.textPlaceholder')} placeholder={t('tk.textPlaceholder')} style={{ width: '100%', minHeight: 110, maxHeight: 360, resize: 'vertical' }} />
         ) : (
           <>
+              {/* ★ 〇-O：拖放区/文件片的面取台阶 L2 #121417（= --lc-panel），框线一律走令牌（已翻纯白） */}
               <div onClick={() => document.getElementById('tk-file-input')?.click()}
-                style={{ border: '2px dashed var(--lc-border-input)', borderRadius: 8, padding: 34, textAlign: 'center', cursor: 'pointer', color: 'var(--lc-text-3)', background: '#0E1014' }}>
+                style={{ border: '2px dashed var(--lc-border-input)', borderRadius: 8, padding: 34, textAlign: 'center', cursor: 'pointer', color: 'var(--lc-text-3)', background: '#121417' }}>
                 <input id="tk-file-input" type="file" multiple hidden accept={delivery === 'text' ? TEXT_DELIVERY_ACCEPT : TRANSLATE_FILE_ACCEPT} onChange={onFileSelect} />
               <div>{delivery === 'text' ? t('tk.fileHintText') : t('tk.fileHint')}<br /><span style={{ fontSize: 14 }}>{t('tk.multiHint')}</span></div>
             </div>
               {files.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, alignItems: 'center' }}>
                   {files.map((f, idx) => (
-                  <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#0E1014', border: '2px solid var(--lc-border-card)', borderRadius: 8, padding: '3px 10px', fontSize: 14, maxWidth: 320 }}>
+                  <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#121417', border: '2px solid var(--lc-border-card)', borderRadius: 8, padding: '3px 10px', fontSize: 14, maxWidth: 320 }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
                       <span style={{ color: 'var(--lc-text-3)', fontSize: 13.5 }}>{fmtKB(f.size)}</span>
                     <Link tone="danger" onClick={() => removeFileAt(idx)} aria-label={`${t('common.delete')}: ${f.name}`}><Icon n="close" /></Link>
@@ -748,7 +749,7 @@ export default function TicketsPage() {
               <div key={st.id} className={`st-${st.status}`} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 14, padding: '3px 0' }}>
                 <span style={{ flex: 1, color: 'var(--lc-text-2)' }}>{stepName(st.step)}</span>
                 <span style={{ fontSize: 13, padding: '1px 6px', borderRadius: 4,
-                  background: st.status === 'success' ? 'rgba(231,233,234,0.10)' : st.status === 'running' ? 'rgba(231,233,234,0.16)' : st.status === 'error' ? 'rgba(229,72,77,0.10)' : '#16181C',
+                  background: st.status === 'success' ? 'rgba(231,233,234,0.10)' : st.status === 'running' ? 'rgba(231,233,234,0.16)' : st.status === 'error' ? 'rgba(229,72,77,0.10)' : '#1A1D21',
                   color: st.status === 'success' ? 'var(--lc-text-1)' : st.status === 'running' ? 'var(--lc-text-2)' : st.status === 'error' ? 'var(--lc-danger)' : 'var(--lc-text-3)' }}>{st.status}</span>
                 {st.error && <span style={{ color: 'var(--lc-danger)', fontSize: 13 }}><Icon n="alert" /> {st.error}</span>}
               </div>

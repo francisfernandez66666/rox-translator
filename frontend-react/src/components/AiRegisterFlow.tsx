@@ -719,7 +719,7 @@ const CSS_AR = `
 .ar-opt:hover:not(:disabled){border-color:var(--lc-border-pill);}
 .ar-opt:disabled{opacity:.6;cursor:not-allowed;}
 /* 选项确认：被点中的提亮并留在原位、其余压暗退场 —— 一次看得见的交代（原则 7） */
-.ar-opt--picked{border-color:var(--lc-text);background:var(--lc-raised);}
+.ar-opt--picked{border-color:var(--lc-fill-white);background:var(--lc-raised);}
 .ar-opts--locked{pointer-events:none;}
 .ar-opts--locked .ar-opt:not(.ar-opt--picked){opacity:.34;}
 .ar-opt-t{font-size:15px;font-weight:500;color:var(--lc-text);}

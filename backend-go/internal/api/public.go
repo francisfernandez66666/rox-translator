@@ -12,7 +12,7 @@
 // 实现：直接由后端渲染内嵌 HTML（与 SPA 无关，public 无需登录），
 //
 //	文案中英双语内联；页面外壳按 UI-ANNOTATIONS §3.1-05 公开页骨架走
-//	X/Grok 单色纯黑体系（#000 底 / #0E1014 面板 / #E7E9EA 主文字 / 白底黑字主按钮），
+//	X/Grok 单色纯黑体系（#000 底 / #121417 面板 / #E7E9EA 主文字 / 白底黑字主按钮），
 //	与前端 tokens.css 同一批真值，历史蓝靛浅底主题已于 2026-09-22 全站还原批废止。
 //
 // ========================================
@@ -78,7 +78,7 @@ func (s *Server) handlePublicPrivacy(w http.ResponseWriter, r *http.Request) {
 // X/Grok 单色纯黑体系、全站无蓝无绿（UI-ANNOTATIONS §1.1 与 §3.1-05 公开页骨架）。
 // 现按 §3.1-05 逐档对齐：页面底 #000000、导航品牌 15/Bold/#FFFFFF、
 // 导航项 12/Medium/#9AA0AA（当前页 #FFFFFF）、管理后台=白底黑字按钮、
-// 内容面板 #0E1014 + 2px #3A404C + r14 + 顶缘受光、页脚面 #050607 文字 #536471。
+// 内容面板 #121417 + 2px 纯白 #FFFFFF + r14 + 顶缘受光、页脚面 #050607 文字 #536471。
 // ★ 〇-N（2026-09-23）用户后令「字号 +2px、线框加粗、不改颜色」：本面的字阶与描边已整体抬档，
 // 颜色仍取 §1.1 字面值。旧档细描边不得复活——public_ui_test.go ④ 段按 served HTML 负向清零。
 // active 传当前页 key（pricing/terms/sla/privacy），用于点亮导航活跃档。
@@ -93,11 +93,14 @@ func publicLayout(title, body, active string) string {
 <title>` + title + ` - 能言</title>
 <style>
 /* 令牌取自 UI-ANNOTATIONS §1.1（面/文字/描边三族），与前端 tokens.css 同名同值；
-   本页是后端直出的静态 HTML，拿不到前端样式表，只能把同一批真值再声明一遍。 */
+   本页是后端直出的静态 HTML，拿不到前端样式表，只能把同一批真值再声明一遍。
+   ★ 2026-09-23 〇-O：面改三级台阶（#000 底 / #0A0B0D 内嵌 / #121417 面板 / #1A1D21 浮面），
+   描边三档（line/pill/card-line）全部翻白 #FFFFFF——与 tokens.css 必须逐字一致，否则
+   「直出页灰框、SPA 白框」各说各话。 */
 :root{
-  --lc-bg:#000000;--lc-panel:#0E1014;--lc-surface:#16181C;--lc-inset:#0A0B0D;--lc-foot:#050607;
+  --lc-bg:#000000;--lc-panel:#121417;--lc-surface:#1A1D21;--lc-inset:#0A0B0D;--lc-foot:#050607;
   --lc-text:#E7E9EA;--lc-text-2:#9AA0AA;--lc-text-3:#71767B;--lc-text-4:#536471;
-  --lc-line:#464C58;--lc-pill:#424956;--lc-card-line:#3A404C;
+  --lc-line:#FFFFFF;--lc-pill:#FFFFFF;--lc-card-line:#FFFFFF;
   --lc-white:#FFFFFF;--lc-warn:#D29922;--lc-danger:#E5484D;
 }
 *{margin:0;padding:0;box-sizing:border-box}

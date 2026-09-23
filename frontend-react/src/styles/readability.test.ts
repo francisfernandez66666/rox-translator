@@ -62,15 +62,8 @@ function stripComments(src: string) {
 
 // WCAG 相对亮度与对比度：口径与 e2e/pixel_uat.spec.ts 的 contrastOnCard 完全一致
 // （同一 sRGB 线性化公式），两处一致才不会出现「单测绿、e2e 红」的调色盲区。
-function contrast(fg: string, bg: string) {
-  const lum = (hex: string) => {
-    const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
-      .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
-    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
-  }
-  const a = lum(fg), b = lum(bg)
-  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
-}
+// ★ 〇-O 前 F 段用它算「不得暗于 faint 档」的单向下限；该锁已换成等值锁，比对逻辑移到
+//   e2e/pixel_uat.spec.ts（运行时真值），此处不留未消费的辅助函数。
 // 取 `--令牌: #rrggbb` 的字面值（只认 6 位十六进制；写成 var() 或 #abc 视作未定义）。
 const token = (css: string, name: string) => {
   const m = css.match(new RegExp(`${name}:\\s*(#[0-9a-fA-F]{6})`))
@@ -90,25 +83,31 @@ function fontSizeOf(css: string, selector: string) {
   return undefined
 }
 
-// ---- A) 令牌真值表：值取自 UI-ANNOTATIONS §1.1（面/文字/描边七档）与交付包 tokens.css ----
+// ---- A) 令牌真值表：值取自 UI-ANNOTATIONS §1.1（面/文字/描边三族）与交付包 tokens.css ----
+// ★ 2026-09-23 〇-N：字阶 +2px、描边 2px，颜色按交付档。
+// ★ 2026-09-23 〇-O（用户后令「框线全部纯白 + 背景主色黑 + 深灰分层」）：
+//   · 描边七档全部收敛为 #FFFFFF —— 档位不再靠边框明度分层；
+//   · 分层改由面色台阶承担：#000000 页面底 / #0A0B0D 内嵌(L1) / #121417 面板(L2) / #1A1D21 浮面(L3)；
+//   · 文字族与语义色（danger/warn/success、红底 danger-edge）逐字未动。
+//   两边都是**等值锁**：旧灰档复活会红灯（见本段末尾的负向清零）。
 const TRUTH_TOKENS: [string, string][] = [
   ['--lc-bg', '#000000'],
   ['--lc-deep', '#050607'],
   ['--lc-inset', '#0A0B0D'],
-  ['--lc-panel', '#0E1014'],
-  ['--lc-raised', '#16181C'],
+  ['--lc-panel', '#121417'],
+  ['--lc-raised', '#1A1D21'],
   ['--lc-text', '#E7E9EA'],
   ['--lc-text-2', '#9AA0AA'],
   ['--lc-text-3', '#71767B'],
   ['--lc-text-4', '#536471'],
   ['--lc-text-5', '#8A9099'],
-  ['--lc-border-strong', '#8B939F'],
-  ['--lc-border-done', '#6E7683'],
-  ['--lc-border-input', '#5A6270'],
-  ['--lc-border-faint', '#464C58'],
-  ['--lc-border-pill', '#424956'],
-  ['--lc-border-card', '#3A404C'],
-  ['--lc-border-card-dim', '#2A2F3A'],
+  ['--lc-border-strong', '#FFFFFF'],
+  ['--lc-border-done', '#FFFFFF'],
+  ['--lc-border-input', '#FFFFFF'],
+  ['--lc-border-faint', '#FFFFFF'],
+  ['--lc-border-pill', '#FFFFFF'],
+  ['--lc-border-card', '#FFFFFF'],
+  ['--lc-border-card-dim', '#FFFFFF'],
   ['--lc-danger', '#E5484D'],
   ['--lc-warn', '#D29922'],
   ['--lc-success', '#E7E9EA'], // 正向=白（第 11 轮废止绿），交付包口径
@@ -121,10 +120,15 @@ describe('A 令牌真值等值锁（UI-ANNOTATIONS §1.1 / 交付包 tokens.css�
     })
   }
   // 页面级令牌（theme.css 自有一层，供未走组件库的历史页面引用）同样钉真值：
-  // 这里的 --npz-text-2 / --npz-line 曾是 #35/#68 提亮的落点。
-  it('theme.css --npz-text-2 / --npz-line 回到真值档', () => {
+  // --npz-* / --adm-* 是**字面量层**而不是 var 别名，所以必须与 tokens.css 逐字同步，
+  // 否则「前台组件走 --npz-line、后台组件走 --lc-border-*」会出现半白半灰的割裂描边。
+  it('theme.css --npz-text-2 / --npz-line / --adm-line 回到真值档', () => {
     expect(token(THEME_CSS, '--npz-text-2')).toBe('#9AA0AA')
-    expect(token(THEME_CSS, '--npz-line')).toBe('#464C58')
+    expect(token(THEME_CSS, '--npz-line')).toBe('#FFFFFF')      // 〇-O：全部框线纯白
+    expect(token(THEME_CSS, '--adm-line')).toBe('#FFFFFF')
+    expect(token(THEME_CSS, '--npz-surface')).toBe(token(KIT_TOKENS, '--lc-panel'))
+    expect(token(THEME_CSS, '--npz-surface-2')).toBe(token(KIT_TOKENS, '--lc-raised'))
+    expect(token(THEME_CSS, '--adm-card')).toBe(token(KIT_TOKENS, '--lc-panel'))
   })
   // 语义绿/蓝永久废止：交付包把「正向」收敛为白，任何 #3FB950/#2f47f5 复活都会立刻红灯。
   it('组件库与页面层不复活语义绿/语义蓝', () => {
@@ -244,27 +248,62 @@ describe('E 登录后界面禁写死次级灰', () => {
   })
 })
 
-// ---- F) 描边字面值不得暗于最弱令牌 ----
-describe('F 描边字面值不得架空令牌', () => {
-  // 底线动态取：以 --lc-border-faint 当前对比度为准（还原后 464C58 对 #000 约 3.2:1），
-  // 而不是再写死一个数。将来令牌调档，这条锁跟着走，不会出现「令牌违规没人管、
-  // tsx 里合法值反倒全红」的连锁假红。-0.001 抵浮点误差。
-  const floor = contrast(token(KIT_TOKENS, '--lc-border-faint'), '#000000')
+// ---- F) 描边字面值必须等于纯白（★ 2026-09-23 〇-O 由「不得暗于 --lc-border-faint」的
+//         单向下限锁改成等值锁）。
+// 为什么必须换：〇-O 之前这条锁写的是「对比度 ≥ faint 档」，那是**单向锁**——
+// 令牌自己被一路提亮时锁跟着涨，锁不出方向也锁不住终点，正是 AGENTS §5 点名的历史踩坑
+// （09-18/#35/#67-#68 三批提亮把设计推离交付稿）。现在框线终点已定死 #FFFFFF，
+// 锁的形态也必须是「等于」。
+// 三类合法例外（都不是「框线档」）：
+//   · 语义状态边：危险框 #402323、判错红 #E5484D、警示琥珀 #D29922；
+//   · 反相区（白底卡上的输入/胶囊）与对勾 glyph：黑/半透黑边，见 Landing 的 .lc-lead-* 与
+//     components.css 的 .lc-checkbox:checked::after；
+//   · var(--token, #兜底) 的兜底值不算写死（沿用旧口径）。
+const BORDER_HEX_ALLOW = /^(FFFFFF|F85149|E5484D|D29922|402323|000000)$/i
+// 〇-O 作废的旧灰档：出现在**任何**描边位（含组件库 CSS 与令牌定义处）都算复活。
+const RETIRED_BORDER_RAMP = ['8B939F', '6E7683', '5A6270', '464C58', '424956', '3A404C', '2A2F3A', '31363D']
+describe('F 描边字面值必须等于纯白（〇-O 等值锁）', () => {
   const offenders: string[] = []
   for (const f of walkSrc('src')) {
     if (EXEMPT.test(f) || f.endsWith('.css')) continue
     stripComments(read(f)).split('\n').forEach((l, i) => {
       // [:=] 两种写法都扫：前者是 CSS 字符串里的 border:，后者是 React 内联对象
-      // style={{ borderBottom: '1px solid …' }}，只扫一类会漏掉另一大口。
+      // style={{ borderBottom: '2px solid …' }}，只扫一类会漏掉另一大口。
       for (const m of l.matchAll(/border[a-z-]*\s*[:=]\s*['"]?([^'"{};]*)#([0-9a-fA-F]{6})/gi)) {
         if (m[1].includes('var(')) continue   // var(--token, #兜底) 的兜底值不算写死
-        if (contrast('#' + m[2], '#000000') >= Math.min(3.2, floor) - 0.001) continue
+        if (BORDER_HEX_ALLOW.test(m[2])) continue
         offenders.push(`${f}:${i + 1}  ${m[0].trim().slice(0, 70)}`)
       }
     })
   }
-  it('描边字面值不得暗于 --lc-border-faint', () => {
-    expect(offenders, '请改为描边令牌：\n' + offenders.join('\n')).toEqual([])
+  it('非例外描边字面值一律 #FFFFFF', () => {
+    expect(offenders, '请改为描边令牌 var(--lc-border-*)（当前全站纯白）：\n' + offenders.join('\n')).toEqual([])
+  })
+  it('旧灰阶描边档全站零复活（含组件库 CSS 与令牌定义处）', () => {
+    const hits: string[] = []
+    for (const f of walkSrc('src')) {
+      stripComments(read(f)).split('\n').forEach((l, i) => {
+        for (const m of l.matchAll(/border[a-z-]*[^;\n]*#([0-9a-fA-F]{6})/gi)) {
+          if (RETIRED_BORDER_RAMP.includes(m[1].toUpperCase())) hits.push(`${f}:${i + 1} ${m[0].trim().slice(0, 70)}`)
+        }
+      })
+    }
+    // 令牌别名（--lc-border-1…7）与历史「旧档作废」说明注释都不在扫描形态里：
+    // 前者是 `--x: var(--y)` 不含 hex，后者已被 stripComments 剥掉。
+    expect(hits, '〇-O 已作废的灰描边档复活：\n' + hits.join('\n')).toEqual([])
+  })
+  it('面色三级台阶等值（#121417 面板 / #1A1D21 浮面，旧 #0E1014/#16181C 不复活）', () => {
+    expect(token(KIT_TOKENS, '--lc-panel')).toBe('#121417')
+    expect(token(KIT_TOKENS, '--lc-raised')).toBe('#1A1D21')
+    expect(token(KIT_TOKENS, '--lc-inset')).toBe('#0A0B0D')
+    expect(token(THEME_CSS, '--npz-surface')).toBe('#121417')
+    expect(token(THEME_CSS, '--npz-surface-2')).toBe('#1A1D21')
+    expect(token(THEME_CSS, '--adm-card')).toBe('#121417')
+    expect(token(THEME_CSS, '--adm-soft')).toBe('#0A0B0D')
+    const body = stripComments(KIT_TOKENS) + stripComments(THEME_CSS)
+    for (const old of ['0E1014', '16181C']) {
+      expect(body.toUpperCase().includes('#' + old), `旧面档 #${old} 复活`).toBe(false)
+    }
   })
 })
 
@@ -376,8 +415,12 @@ describe('H 扩展插件面（popup + 划词注入样式）单色真值', () => 
       expect(hits, `${name} 出现旧扩展主题色：\n${hits.join(', ')}`).toEqual([])
     })
     it(`${name} 取 §1.1 令牌真值`, () => {
-      expect(code).toContain('#0E1014')
+      // ★ 〇-O：扩展面同步行纯白 + 面抬到 #121417（这两页是独立打包物，前端令牌翻白对它无效）
+      expect(code).toContain('#121417')
       expect(code).toContain('#FFFFFF')
+      expect(code, `${name} 描边档未翻白（旧灰档复活）`).toMatch(/--lc-(line|card-line):\s*#FFFFFF/i)
+      expect(code.toUpperCase()).not.toMatch(/--lc-(line|card-line):\s*#(464C58|3A404C)/)
+      expect(code.toUpperCase(), `旧面档 #0E1014 复活`).not.toContain('#0E1014')
       // 描边档：〇-N 起细描边一律 2px（旧 1.2px 属交付原档，已随字号批整体加粗）
       expect(code, `${name} 未见 2px 描边档`).toContain('2px solid')
       expect(code, `${name} 旧 1.2px 细描边复活`).not.toMatch(/border[^;{]*1\.2px/)
