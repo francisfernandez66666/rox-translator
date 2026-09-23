@@ -1,12 +1,14 @@
 // ============================================================================
-// ChatWindow.dom.test.tsx — 即时翻译工作台组件测试（★ 形态定档：整屏合并 AI 对话框，2026-09-22 〇-LJ/〇-LK）
-// 锁住四条口径：
+// ChatWindow.dom.test.tsx — 即时翻译工作台组件测试（★ 形态定档：整屏合并 AI 对话框 + 输入区单卡单工具条，2026-09-22 〇-LK / 09-23 〇-M）
+// 锁住五条口径：
 //   ① 对话框合并 + 对话页布局：气泡与输入框同在一张 .cw-dialog 内，且**消息流在上、
 //      输入区（textarea）常驻底部 .cw-dialog-foot**（输入摆最上面是用户判错的形态）；
 //      合并框吃满剩余高度由 CSS flex 承担，此处断言 DOM 归属与先后顺序；
 //   ② 即时翻译不再支持文件翻译：不得再渲染任何 file input / 上传按钮，文案不得提「上传」；
 //   ③ 缩翻控件在文件入口下线后仍有意义：勾选后把 max_length 透传给 sendMessage（文本路径）；
-//   ④ 提示词去文件化：输入框占位与欢迎语按新文案渲染（防止改回「或点＋上传文件」）。
+//   ④ 提示词去文件化：输入框占位与欢迎语按新文案渲染（防止改回「或点＋上传文件」）；
+//   ⑤ ★ 〇-M 输入区压缩：textarea 与「语种/模式/缩翻/主按钮」同处一张 .cw-composer 内的
+//      唯一一排 .cw-toolbar，框脚不再排第二、第三行（旧的 .cw-composer-label / .cw-dialog-acts 不得复活）。
 // 运行：npx vitest run src/components/ChatWindow.dom.test.tsx
 // ============================================================================
 // @vitest-environment jsdom
@@ -133,5 +135,29 @@ describe('即时翻译工作台（#36 合并对话框）', () => {
     expect(ta.getAttribute('aria-label')).toBe('输入要翻译的文本')
     expect(screen.getByText('输入文本，选择目标语言后开始翻译')).toBeTruthy()
     expect(screen.getByText(/译文会直接显示在这个对话框里/)).toBeTruthy()
+  })
+
+  // ★ 〇-M（2026-09-23）形态锁：输入区压成「一张内凹输入卡 = 输入行 + 一行工具条」。
+  //   用户判旧形态「太长太占空间」，四排折成一排；这里钉的是**归属与排数**，
+  //   真实像素高度由 pixel_uat P2b 的运行时等值锁承担（jsdom 无布局，量不到高度）。
+  it('⑤ 输入区单卡单工具条：语种/模式/缩翻/主按钮全在 .cw-toolbar 同一排，无独立语种行', () => {
+    const { container } = renderWindow()
+    const composer = container.querySelector('.cw-composer')!
+    const toolbar = container.querySelector('.cw-toolbar')!
+    // 输入卡里只有两层：textarea 与工具条（工具条必须是 composer 的子节点，不能再浮在卡外）
+    expect(composer.contains(toolbar)).toBe(true)
+    expect(composer.querySelector('textarea')).toBeTruthy()
+    expect(container.querySelectorAll('.cw-toolbar').length, '工具条只允许一排').toBe(1)
+    // 四件套全部收进这一排：目标语言、已选 chips、模式、主按钮（缩翻紧随其后一并校验）
+    for (const sel of ['[data-stub="lang-select"]', '[data-stub="lang-chips"]', '[data-stub="mode-toggle"]']) {
+      expect(toolbar.querySelector(sel), `${sel} 必须落在 .cw-toolbar 内`).toBeTruthy()
+    }
+    expect(toolbar.contains(screen.getByRole('checkbox'))).toBe(true)
+    expect(toolbar.contains(screen.getByText('翻译'))).toBe(true)
+    // 负向锁（运行时 DOM，不受「旧写法说明注释」干扰）：旧的四排结构不得复活
+    expect(container.querySelector('.cw-composer-label'), '「原文/自动检测」独立标签行已折进工具条胶囊').toBeNull()
+    expect(container.querySelector('.cw-dialog-acts'), '操作行已并入 .cw-toolbar，不得再单独成排').toBeNull()
+    // 框脚只剩输入卡本身（错误提示行仅在有 errorMessage 时追加）
+    expect(container.querySelectorAll('.cw-dialog-foot > *').length, '框脚内除输入卡外不得再排其他控件').toBe(1)
   })
 })

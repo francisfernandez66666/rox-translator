@@ -9,8 +9,12 @@
 //   「你们家对话框是放顶部的啊」：AI 对话页的输入永远在**底部**，历史在它上方长。
 //   〇-LK 因此定稿：**输入区（原文标签 + textarea + 目标语言 + 模式 + 主按钮）整体贴底**，
 //   框头只留会话级工具（搜索/导出/清空），标题用 app.tabWorkbench。
-//   形态锁三处（本文件 .cw-dialog* + ChatWindow.dom.test.tsx ① + pixel_uat.spec.ts P2b）
-//   已按「单框 + 输入在底」钉死；再改形态必须先复述目标形态向用户确认，不要凭措辞反推。
+//   ★ 〇-M（2026-09-23）按用户令再压一档：「输入框和选择器这一块太长了、太占空间，要类似元宝这种」
+//   ⇒ 框脚四排（原文标签+输入框 / 整宽语种下拉 / chips 独立行 / 操作行）改为
+//   **一张内凹输入卡 = 一行自适应输入 + 一行工具条**（源语言胶囊 · 目标语言胶囊 · 已选 chips
+//   （超 3 折成「+n」，点开全展开）· 模式 · 缩翻 · 主按钮），1280×720 实测框脚 109px、输入卡 90px。
+//   形态锁三处（本文件 .cw-dialog* + ChatWindow.dom.test.tsx ①⑤ + pixel_uat.spec.ts P2b）
+//   已按「单框 + 输入在底 + 输入区单卡单工具条」钉死；再改形态必须先复述目标形态向用户确认，不要凭措辞反推。
 // ★ #36 同时移除即时翻译的文件翻译入口（上传按钮/隐藏 file input/校验/发送）：
 //       文件翻译统一走「文档翻译」工单页（TicketsPage → /api/tickets/create-file），
 //       即时翻译只做文本，避免同一份文件两条口径不一致的链路。
@@ -204,14 +208,15 @@ export default function ChatWindow() {
 
   // ---- textarea 自动高度 ----
   // 先置 auto 再读 scrollHeight：否则高度会被上一次赋值撑住、量不到真实内容高度。
-  // ★ 〇-LK（2026-09-22）：输入框移到底部 composer 后上限收紧（视口 28%，封顶 240px）——
-  //   贴在底部的输入区若还能长到半屏，会把上面的消息流挤没，就不是对话页而是表单了。
-  //   超过上限后 textarea 自身滚动，长文照样能看全。
+  // ★ 〇-LK（2026-09-22）：输入框移到底部 composer 后上限收紧（贴在底部的输入区若还能长到半屏，
+  //   会把上面的消息流挤没，就不是对话页而是表单了）；超过上限后 textarea 自身滚动，长文照样能看全。
+  // ★ 〇-M（2026-09-23）：下限由 96 收到 40——元宝式单卡的空态就是**一行高**，
+  //   留着 96 等于逼用户盯着一块空白；打字/换行才逐行长高。
   function autoResize() {
     const el = inputRef.current
     if (!el) return
     el.style.height = 'auto'
-    const cap = Math.max(96, Math.min(240, Math.round(window.innerHeight * 0.28)))
+    const cap = Math.max(40, Math.min(240, Math.round(window.innerHeight * 0.28)))
     el.style.height = Math.min(el.scrollHeight, cap) + 'px'
   }
 
@@ -349,19 +354,19 @@ export default function ChatWindow() {
           </div>
         </div>
 
-        {/* 框脚 = 对话输入区（composer）：原文输入 + 目标语言 + 模式/缩翻 + 主按钮，
-            整块常驻底部，不随消息流滚动——与主流 AI 对话页一致。 */}
+        {/* 框脚 = 对话输入区（composer）：★ 〇-M（2026-09-23）按用户令改成元宝式单卡——
+            一张「凹」进卡面的输入卡，内部自上而下只有两层：输入行 + **一行工具条**
+            （源语言口径 · 目标语言胶囊 · 已选语种 chips · 模式 · 缩翻 · 主按钮）。
+            旧形态是四排（原文标签+输入框 / 整宽语种下拉 / chips 独立一行 / 模式+缩翻+按钮行），
+            用户判「太长太占空间」。压后 1280×720 实测框脚 109px（输入卡 90 = 单行输入 40 + 工具条 48），
+            等值锁见 pixel_uat.spec.ts P2b。功能一项未减，只是收进同一排。 */}
         <div className="cw-dialog-foot">
           <div className="cw-composer">
-            <div className="cw-composer-label">
-              <span style={{ fontSize: 13, fontWeight: 600, color: '#E7E9EA', letterSpacing: '.04em' }}>{t('chat.srcLabel')}</span>
-              <span style={{ fontSize: 12, color: 'var(--lc-text-3)' }}>{t('chat.sourceAuto')}</span>
-            </div>
             {/* F3：dir="auto" 让阿/法等 RTL 文本按内容方向渲染。
                 用原生 textarea + 组件库 .lc-textarea 类：autoResize 需要 ref 到真实节点量 scrollHeight；
                 Enter 发送 / Shift+Enter 换行（与工单页一致的肌肉记忆）
-                内联只覆写底色与描边：底色取最深一档 #0A0B0D 让输入区从卡面 #0E1014 里「凹」下去，
-                描边走 --lc-border-input 令牌（★ #68：写死暗值会被 readability.test.ts 的描边锁判红） */}
+                底色与描边现在由外层 .cw-composer 那张卡统一承担（textarea 自身透明无边），
+                字号仍走 .lc-textarea 的 13px 冻结档——pixel_uat P2b 量的就是这个值。 */}
             <textarea
               className="lc-textarea cw-input"
               ref={inputRef}
@@ -371,8 +376,8 @@ export default function ChatWindow() {
               value={input}
               onChange={(e) => { setInput(e.target.value); autoResize() }}
               placeholder={t('chat.placeholder')}
-              rows={3}
-              style={{ width: '100%', background: '#0A0B0D', borderColor: 'var(--lc-border-input)' }}
+              rows={1}
+              style={{ width: '100%', background: 'transparent', border: '0' }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
@@ -380,38 +385,37 @@ export default function ChatWindow() {
                 }
               }}
             />
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            <span style={{ fontSize: 12, color: 'var(--lc-text-3)', whiteSpace: 'nowrap' }}>{t('chat.targetLangLabel')}</span>
-            <div style={{ minWidth: 260, flex: 1 }}>
-              <LangMultiSelect value={chat.selectedLangs} onChange={chat.setSelectedLangs} />
+            {/* 一行工具条：右内边距 68px 给固定定位的 AI 助手浮球让位（.na-fab），免得遮住主按钮 */}
+            <div className="cw-toolbar">
+              {/* 源语言仍是自动检测（原「原文 / 自动检测」标签行折进这颗胶囊，信息不减） */}
+              <span className="cw-src-pill" title={t('chat.srcLabel') + ' · ' + t('chat.sourceAuto')}>
+                {t('chat.srcLabel')} · {t('chat.sourceAuto')}
+              </span>
+              <LangMultiSelect compact value={chat.selectedLangs} onChange={chat.setSelectedLangs} />
+              {/* 已选语种内联在同一行；超过 3 颗折成「+n」，点开就地展开全部（折走的仍可 ×） */}
+              <LangChips langs={chat.selectedLangs} onRemove={chat.setSelectedLangs} max={3} dense />
+              <ModeToggle value={mode} onChange={setMode2} />
+              <label className="cw-condense">
+                <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> {t('app.condense')}
+                {/* 数值框只在勾选后出现：未勾选时它不可用，摆着等于多一个空框占宽 */}
+                {!!condenseOn && (
+                  <input type="number" min={1} max={10000} value={condenseMax}
+                    onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
+                    className="cw-condense-num" title={t('chat.s41')} />
+                )}
+              </label>
+              {/* 弹性占位：把主按钮推到行尾；窄屏 flex-wrap 换行时它自然收拢，不会把按钮挤没 */}
+              <div style={{ flex: 1 }} />
+              {chat.isLoading ? (
+                <Button variant="primary" size="sm" icon={<StopGlyph />} onClick={handleStop}>{t2('chat.stop')}</Button>
+              ) : (
+                <Button variant="primary" size="sm" disabled={!canSend} onClick={() => void handleSend()}>{t('chat.translate')}</Button>
+              )}
             </div>
           </div>
-          <LangChips langs={chat.selectedLangs} onRemove={chat.setSelectedLangs} />
           {!!chat.errorMessage && (
             <div style={{ color: '#F85149', fontSize: 13 }}>{chat.errorMessage}</div>
           )}
-          <div className="cw-dialog-acts">
-            <ModeToggle value={mode} onChange={setMode2} />
-            <label style={{ fontSize: 12, color: 'var(--lc-text-2)', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
-              <input type="checkbox" checked={condenseOn} onChange={(e) => setCondenseOn(e.target.checked)} /> {t('app.condense')}
-            </label>
-            <div style={{ width: 72, flexShrink: 0 }}>
-              {condenseOn && (
-                <input type="number" min={1} max={10000} value={condenseMax}
-                  onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
-                  style={{ width: '100%', boxSizing: 'border-box', height: 28, fontSize: 12, background: '#0A0B0D', border: '1.2px solid var(--lc-border-input)', borderRadius: 6, padding: '0 6px', color: '#E7E9EA' }}
-                  title={t('chat.s41')} />
-              )}
-            </div>
-            {/* 弹性占位：把主按钮推到行尾；行尾再留 68px 让位给右下角 AI 助手浮球（.na-fab 固定定位） */}
-            <div style={{ flex: 1 }} />
-            {chat.isLoading ? (
-              <Button variant="primary" icon={<StopGlyph />} onClick={handleStop}>{t2('chat.stop')}</Button>
-            ) : (
-              <Button variant="primary" disabled={!canSend} onClick={() => void handleSend()}>{t('chat.translate')}</Button>
-            )}
-          </div>
         </div>
       </div>
 
@@ -433,12 +437,19 @@ const CW_CSS = `
 .cw-dialog-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1.2px solid var(--lc-border-faint);flex-wrap:wrap}
 .cw-dialog-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
 .cw-dialog-body .bubble-row{max-width:100%}
-.cw-dialog-foot{border-top:1.2px solid var(--lc-border-faint);padding:10px 14px 12px;display:flex;flex-direction:column;gap:8px}
-/* 底部 composer：原文标签 + 输入框（★ 〇-LK 起输入区固定贴在对话框底部，消息流在其上方滚动） */
-.cw-composer{display:flex;flex-direction:column;gap:6px}
-.cw-composer-label{display:flex;align-items:baseline;gap:8px}
-.cw-composer .cw-input{min-height:76px;max-height:240px;resize:none}
-.cw-dialog-acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding-right:68px}
+.cw-dialog-foot{border-top:1.2px solid var(--lc-border-faint);padding:8px 12px 10px;display:flex;flex-direction:column;gap:6px}
+/* 底部 composer（★ 〇-M 元宝式单卡）：输入行 + 一行工具条同处一张「凹」进卡面的输入卡里，
+   整块贴底、不随消息流滚动。底色走 --lc-inset（输入框底真值档），描边走 --lc-border-input。 */
+.cw-composer{display:flex;flex-direction:column;background:var(--lc-inset);border:1.2px solid var(--lc-border-input);border-radius:var(--lc-r-ctl)}
+.cw-composer .cw-input{min-height:40px;max-height:240px;padding:10px 12px 2px;border:0;border-radius:0;background:transparent;resize:none}
+/* 一行工具条：源语言口径 · 目标语言 · 已选 chips · 模式 · 缩翻 · 主按钮。
+   右内边距 68px 给固定定位的 AI 助手浮球（.na-fab）让位，窄屏换行时各行同样受益。 */
+.cw-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 68px 8px 8px}
+.cw-src-pill{display:inline-flex;align-items:center;height:28px;padding:0 10px;border:1.2px solid var(--lc-border-pill);
+  border-radius:999px;font-size:12px;color:var(--lc-text-3);white-space:nowrap}
+.cw-condense{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--lc-text-2);white-space:nowrap}
+.cw-condense-num{width:64px;box-sizing:border-box;height:28px;font-size:12px;background:transparent;
+  border:1.2px solid var(--lc-border-pill);border-radius:var(--lc-r-ctl);padding:0 8px;color:var(--lc-text)}
 .cw-welcome{text-align:center;padding:32px 12px;color:var(--lc-text-3)}
 .cw-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;
   border:1.2px solid var(--lc-border-pill);background:transparent;color:var(--lc-text-2);border-radius:var(--lc-r-ctl);cursor:pointer;padding:0;line-height:0}
@@ -454,10 +465,10 @@ const CW_CSS = `
   .cw-dialog{margin:10px 4% 12px}
 }
 @media (max-width:640px){
-  /* 窄屏：整框贴边留白收窄，浮球右下仍占位，故主按钮行右内边距减半 */
+  /* 窄屏：整框贴边留白收窄；工具条靠 flex-wrap 自行换行，浮球让位量减半 */
   .cw-dialog{margin:8px 3% 10px}
-  .cw-dialog-acts{padding-right:40px}
-  .cw-input{min-height:96px}
+  .cw-toolbar{padding-right:40px}
+  .cw-composer .cw-input{min-height:40px}
 }
 @media (prefers-reduced-motion: reduce){
   .cw-spin{animation:none}

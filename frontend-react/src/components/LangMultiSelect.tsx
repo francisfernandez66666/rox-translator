@@ -46,12 +46,16 @@ const OTHER_LANGS: Array<{ code: string; label: string; flag?: string }> = [
   { code:'tr', label:'土耳其语', flag:''},
 ]
 
-// LangMultiSelect 入参：value 当前选中语言代码数组；onChange 变更回调；kbLangs 覆盖 KB 分组
+// LangMultiSelect 入参：value 当前选中语言代码数组；onChange 变更回调；kbLangs 覆盖 KB 分组；
+// compact 触发器改「胶囊」档（★ 〇-M：宽度随内容、高 28、透明底描边胶囊，供输入区内的一行工具条用；
+//   默认 false 保持工单页那种整宽单行触发框）
 interface Props {
   value: string[]
   onChange: (v: string[]) => void
   /** 覆盖 KB 分组选项（默认本地九语） */
   kbLangs?: string[]
+  /** 触发器走胶囊档（一行工具条内用） */
+  compact?: boolean
 }
 
 // langDisplay 语言代码 → 展示元信息（国旗 + 本地化名）；未知代码给  兜底
@@ -61,13 +65,24 @@ export function langDisplay(code: string): { flag: string; label: string } {
 }
 
 /** 已选语言 chip 行（选中结果的唯一展示位）：每项可移除
- *  ★ #23：chip 名称走 langLabel，随界面语言取中/英 */
-export function LangChips({ langs, onRemove }: { langs: string[]; onRemove: (next: string[]) => void }) {
+ *  ★ #23：chip 名称走 langLabel，随界面语言取中/英
+ *  ★ 〇-M（2026-09-23，即时翻译输入区压成一行工具条）新增两个可选入参，默认值保持工单页老形态：
+ *    - `max`：内联最多展示几颗，其余折成「+n」；点「+n」就地展开全部（不是只读计数——
+ *      折起来的语种仍要能一键 × 掉，否则就得开面板滚动找勾，功能尺寸不能因为压缩而缩水）。
+ *    - `dense`：行内模式（工具条里用），去掉独立成行时的 8px 下外边距。 */
+export function LangChips({ langs, onRemove, max, dense }: {
+  langs: string[]; onRemove: (next: string[]) => void; max?: number; dense?: boolean
+}) {
   const lang = useLang()
+  const [expanded, setExpanded] = useState(false)
   if (!langs.length) return null
+  const limit = !expanded && max && max > 0 ? max : langs.length
+  const shown = langs.slice(0, limit)
+  const rest = langs.slice(limit)
+  const nameOf = (l: string) => (langLabel(l, lang) === l ? langDisplay(l).label : langLabel(l, lang))
   return (
-    <div data-testid="lang-chips" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingBottom: 8 }}>
-      {langs.map((l) => {
+    <div data-testid="lang-chips" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', paddingBottom: dense ? 0 : 8 }}>
+      {shown.map((l) => {
         const d = langDisplay(l)
         const label = langLabel(l, lang) === l ? d.label : langLabel(l, lang)
         return (
@@ -80,6 +95,12 @@ export function LangChips({ langs, onRemove }: { langs: string[]; onRemove: (nex
           </span>
         )
       })}
+      {/* 折叠位：语言名列表进 title/aria-label，读屏与悬浮都能看到被折走的是哪几个 */}
+      {!!rest.length && (
+        <button type="button" className="lms-chips-more" data-testid="lang-chips-more"
+                title={rest.map(nameOf).join('、')} aria-label={rest.map(nameOf).join('、')}
+                onClick={() => setExpanded(true)}>+{rest.length}</button>
+      )}
     </div>
   )
 }
@@ -88,7 +109,7 @@ export function LangChips({ langs, onRemove }: { langs: string[]; onRemove: (nex
 interface Opt { group: string; code: string; flag: string; label: string }
 
 // 默认导出组件：目标语言多选（分组勾选列表 + 搜索过滤 + 自定义语言输入）
-export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
+export default function LangMultiSelect({ value, onChange, kbLangs, compact }: Props) {
   const [open, setOpen] = useState(false)
   const [custom, setCustom] = useState('')
   const [query, setQuery] = useState('')
@@ -194,8 +215,10 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
   }
 
   // 下拉面板内容：搜索过滤 + 分组勾选列表 + 自定义语言添加
+  // ★ 〇-M：`compact`（输入区内的一行工具条）时面板改为**向上弹**——触发器已贴在屏幕底部，
+  //   向下弹会顶出视口，而宿主 `.cw-dialog` 是 `overflow:hidden`，越界部分直接被裁掉打不开。
   const panel = (
-    <div className="lms-panel" style={{ width: 320 }} data-testid="lang-multi-panel">
+    <div className={'lms-panel' + (compact ? ' lms-panel--up' : '')} style={{ width: 320 }} data-testid="lang-multi-panel">
       <div style={{ padding: 8, borderBottom: '1px solid var(--lc-border-faint)' }}>
         <input
           className="lc-input lms-search" autoFocus value={query}
@@ -244,10 +267,15 @@ export default function LangMultiSelect({ value, onChange, kbLangs }: Props) {
   return (
     <div ref={rootRef} style={{ position: 'relative' }}>
       {/* 触发器：单行占位按钮，永不渲染已选标签（选中结果只在外部 LangChips 展示） */}
-      <button type="button" data-testid="lang-multi-trigger" className="lms-trigger"
+      <button type="button" data-testid="lang-multi-trigger"
+              className={'lms-trigger' + (compact ? ' lms-trigger--pill' : '')}
               onClick={() => setOpen((v) => !v)}
               style={{ color: value.length ? 'var(--lc-text)' : 'var(--lc-text-3)' }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t('chat.langPlaceholder')}</span>
+        {/* 胶囊档只占一行工具条里的一小格，文案取短档「目标语言」（长档「选择目标语言」是整宽
+            触发框用的，塞进 28px 高的胶囊会把 ▾ 挤掉） */}
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {compact ? t('chat.targetLangLabel') : t('chat.langPlaceholder')}
+        </span>
         <span aria-hidden style={{ fontSize: 10 }}>▾</span>
       </button>
       {open && panel}
@@ -264,4 +292,14 @@ const CSS_LMS = `
 .lms-search{height:30px;font-size:13px}
 .lms-chip-close{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--lc-text-3);cursor:pointer}
 .lms-chip-close:hover{color:var(--lc-text)}
+/* ★ 〇-M 胶囊档触发器：一行工具条内用（高 28 与相邻分段控件/主按钮同档，宽度随内容不撑满） */
+.lms-trigger--pill{width:auto;max-width:220px;height:28px;padding:0 10px;border-radius:999px;background:transparent;border:1.2px solid var(--lc-border-pill);font-size:12px}
+.lms-trigger--pill:hover{border-color:var(--lc-border-strong)}
+/* 贴底触发时面板向上长（宿主卡片 overflow:hidden，向下弹会被裁掉） */
+.lms-panel--up{top:auto;bottom:calc(100% + 6px)}
+/* 「+n」折叠位：外观与 chip 同档但可点，点下去就地展开全部已选语种 */
+.lms-chips-more{height:24px;padding:0 8px;border:1.2px solid var(--lc-border-pill);border-radius:999px;background:transparent;
+  color:var(--lc-text-2);font-size:12px;font-family:var(--lc-font);cursor:pointer;line-height:1}
+.lms-chips-more:hover{color:var(--lc-text);border-color:var(--lc-border-strong)}
+.lms-chips-more:focus-visible{outline:2px solid var(--lc-border-strong);outline-offset:2px}
 `
