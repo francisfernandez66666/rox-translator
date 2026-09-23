@@ -7,8 +7,16 @@
 ## 0. 硬规则（违反=返工）
 1. **零 tdesign**：完成后文件内不得残留 `tdesign` 字样（import、类名 `t-*`、CSS 覆盖都算）。
 2. **无蓝无绿**：全站禁用蓝色与绿色。正向/成功=白 `var(--lc-success)`(#E7E9EA)；错误=`var(--lc-danger)` #E5484D；警告=`var(--lc-warn)` #D29922。
-3. **纯黑底 + 面色三级台阶**（★ 2026-09-23 〇-O）：页面底 `var(--lc-bg)` #000（**不许抬亮**）；卡片/Dialog/抽屉/后台面板取 L2 `var(--lc-panel)` **#121417**，Toast/菜单/骨架条/Tab 活跃底取 L3 `var(--lc-raised)` **#1A1D21**，输入框底与凹陷块取 L1 `var(--lc-inset)` #0A0B0D。旧面档 `#0E1014`/`#16181C` 已作废，不得写回。
-4. **描边一律 2px 纯白**（★ 2026-09-23 〇-O）：所有 `border*`＝`2px solid var(--lc-border-card)`，七档描边令牌（strong/done/input/faint/pill/card/card-dim）值全 = `#FFFFFF`，**只取令牌不写字面色**；单向分隔线同样 2px（`height:1px` 的独立分隔条不算框）。旧灰阶 `#464C58`/`#3A404C`/`#424956`/`#5A6270` 等与 1.2px 细档均已作废，闸门会负向清零。**唯一例外**是语义状态边（danger `#402323`、后台 warn/info/err/purp 边）不随白框翻白。
+3. **纯黑底 + 面色三级台阶**（★ 2026-09-23 〇-P 现行口径，**〇-O 的 +8 抬档已撤销**）：页面底 `var(--lc-bg)` #000（**不许抬亮**）；卡片/Dialog/抽屉/后台面板取 L2 `var(--lc-panel)` **#0E1014**，Toast/菜单/骨架条/Tab 活跃底取 L3 `var(--lc-raised)` **#16181C**，输入框底与凹陷块取 L1 `var(--lc-inset)` #0A0B0D。
+   ⚠️ 〇-O 曾把 L2/L3 抬到 `#121417`/`#1A1D21`，**该抬档已由 〇-P 撤销**；这两个值现在属「〇-O 遗留档」，
+   写回来会被 `public_ui_test.go` 与 `readability.test.ts` 的负向锁判红，不得再写。
+4. **描边走令牌，粗细按交付档**（★ 2026-09-23 〇-P 现行口径，**〇-O 的「纯白 2px」已撤销**）：
+   `border: 1.2px solid var(--lc-border-card)`（单向分隔线 `1px`，`height:1px` 的独立分隔条不算框）。
+   七档描边令牌（strong/done/input/faint/pill/card/card-dim）取**交付灰阶**值
+   #8B939F / #6E7683 / #5A6270 / #464C58 / #424956 / #3A404C / #2A2F3A，**只取令牌不写字面色**；
+   `#FFFFFF` 不再作框线色（`--lc-fill-white` 只服务主按钮等实心白填充件，不作描边）。
+   〇-N 的「一律 2px」与 〇-O 的「一律纯白」均已作废，闸门会双向负向清零。
+   **唯一例外**是语义状态边（danger `#402323`、后台 warn/info/err/purp 边）不随框线档变化。
 5. **主按钮白底黑字**：一屏只一个 primary；次按钮 secondary 描边无底；危险动作 danger 红底白字。
 6. **类名不许重名**：页面级 CSS 类必须带本页前缀（如 `.kb-`、`.models-`），禁止定义 `.tick/.mark/.head/.row` 这类裸名——历史上双名导致后代选择器污染、图标整条消失且零报错。
 7. **不动的东西**：`src/ui/langcross/**`、`src/i18n/**` 的键、`@/api` 调用签名、业务分支逻辑。样式缺件时用页面级 CSS 自建，不改组件库。
@@ -70,7 +78,7 @@ PageHeader.tsx / Tabs.tsx / StatCard.tsx / AdminShell.tsx / Skeleton.tsx / icons
 ```tsx
 const CSS_XXX = `
 .xxx-page{background:var(--lc-bg);color:var(--lc-text);font-family:var(--lc-font)}
-.xxx-card{background:var(--lc-panel);border:2px solid var(--lc-border-card);border-radius:14px;padding:20px}
+.xxx-card{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:14px;padding:20px}
 `
 // 组件根部：<style>{CSS_XXX}</style>
 ```
