@@ -1,6 +1,33 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-23（〇-M：**即时翻译输入区按用户令再压一档**——框脚四排收成「一张内凹输入卡 = 单行输入 + 一行工具条」（元宝式），实测框脚 109px／输入卡 90px；顺带修掉改版暴露的隐性缺陷（贴底触发时语种面板向下弹被 `overflow:hidden` 裁掉＝点了没反应）。功能零删减。代码已推送 **`c0e5e99`／`cba5e61`／`76d38ec`**·文档仅本地·**主站与演示站已同日发版**（10:21 前端换源，11:24 两站补换一次 `translator-server` 带走内嵌 taskpane 的注释行）·线上实测与锁值逐项相等）
+> 最后更新：2026-09-23（〇-N：**「黑色的 UI 不该配黑色的字」根因修 + 全站字阶/描边抬档**——删掉 light/auto 三态主题（`data-theme` 恒 dark、文字色落到无条件 `html, body` 基础层），≤16px 的每一级 **+2px**、所有 `border*` 一律 **2px**、**颜色一族逐字未改**；改动覆盖五类渲染面（React 内联样式 / `/docs` / `/openapi/docs` + office 侧栏 / assist 内嵌页 / 浏览器扩展），扩展重打包 **1.2.0**。闸门全绿（含 PG 方言主矩阵 96+510、Playwright 61 passed）。代码**未提交未推送未部署**，等用户令）
+
+### 〇-N、恒暗根因修与全站字阶/描边抬档批（2026-09-23，★ 代码未提交·文档仅本地·**未部署**）
+
+> 来源＝用户两张截图（即时翻译语种面板 + 一张后台概览）+ 四条指令：
+> 「1.聊天框选项，黑色的 UI 不该配黑色的字。2.后台 tab 字号变大。3.线框变粗。4.整体提升对比度，靠字体变大和加大线框粗细实现，不要变颜色。」
+> AskUserQuestion 定档四条（全部按用户选择施工）：范围＝**全站（组件库令牌级）**；幅度＝**明显一档（字号 +2px / 描边 1.2px→2px）**；
+> 真值＝**是，按新实测值重定档**（`UI-ANNOTATIONS` 与等值锁同步）；黑底黑字根因＝**干掉 light/auto 档**（三态与设置页切换钮一并删除，属用户明令的功能删除）。
+
+| 块 | 交付 |
+|----|------|
+| **① 黑底黑字的根因（不是配色问题，是主题层问题）** | 文字色只写在 `html[data-theme='dark'] body` 覆写层，而主题默认 `auto` 跟随系统 ⇒ **系统外观为浅色的用户拿不到覆写**，纯黑底上落回浏览器默认黑字。修法两层：(a) `theme.css` 基础层无条件写死 `html, body{background:#000000;color:var(--lc-text)}`；(b) §九 的 30 条暗色覆写**全部去掉 `html[data-theme='dark']` 前缀**改为无条件生效。`lib/theme.ts` 由三态（light/auto/dark + `cycleTheme` + `watchSystemTheme`）收敛成 `applyTheme()` 一个函数：恒写 `data-theme=dark` + `color-scheme=dark`，并清掉遗留 `app_theme` 键；顶栏的主题切换钮删除（`App.tsx`），随之无消费方的 `app.theme.*` 三键从 zh/en 词典 + 10 份 locale 各删 3 行（12 文件 × −3，`locales.core.test.ts` 以 ALL_KEYS 动态长度为基准故不翻红） |
+| **② 字阶 +2px（613 处）与描边 2px（161+61+4 处）** | 一次性脚本 `/tmp/retype_00n.js`（规则集带 `groups`，`FS_MAX=16`、细档 `{1,1.2,1.5}→2`）跑 55 文件 613 处字号 + 161 处描边；**第二遍** `/tmp/retype_camel.js` 补 JSX 驼峰与带引号值 61 处（第一遍的 CSS 语法正则扫不到 `borderTop:` 与 `border:'1.2px solid …'`）；收尾手改 4 处脚本仍扫不到的形态：模板串 `border: \`1.2px solid ${…}\``（`OrgP.tsx`）、三元 `borderTop: i ? '1px solid …'`（`TicketsPage.tsx`）、徽标描边 `border: \`1px solid ${fg}33\``、以及 `Login.tsx` 的 `box-shadow:inset 0 0 0 1.2px` hover 环。**四道独立证据**防批量静默损坏：干跑打印改动对 → 结构不变式（改动行与原始行的所有数字打码成 `#` 后必须逐字相等 + 行数不变）→ 落地 → `HEAD↔工作区`字号/描边直方图映射核对（`/tmp/retype_mapcheck.js`，输出「映射一致 true」）。>16px 的展示型大字（D1–D6）与 3px 强调条**未动**；`border-radius:1px` 保留（不是框） |
+| **③ 五类渲染面一起抬（dist 绿 ≠ 全站绿）** | ①React 组件内联 `<style>` 与 `theme.css`/`mobile.css`/组件库 `src/ui/langcross/css/*`；②后端直出 `/docs/*`（`public.go`：body 14→16、品牌 15→17、导航/按钮 12→14、卡片描边 1.2→2px）；③`/openapi/docs`（`admin_openapi.go` 的共享 CSS 常量）+ `/office/taskpane.html`（`office.go`）；④assist `go:embed` 的 `web/admin.html`；⑤`extension/popup.html` + `content.css` ⇒ `build_extension.sh 1.2.0` 重打包（`langcross-extension-1.2.0.zip` 11633 B + latest，1.1.0 保留）。⚠️ 部署侧：**②③ 必须换 `translator-server`、④ 必须换 `translator-assist`**，只换 `/opt/translator/web` 对这四类一律不生效；⑤ 随 dist 即上线 |
+| **④ 等值锁按新档重定（两侧、两层）** | 源码级：`readability.test.ts` C 段品牌 16 / Tab 15，新增 **I 段**（`TYPE_SURFACES` = `walkSrc('src')` + 扩展两面 + 后端三个 `.go` + assist 内嵌页，三条用例＝最小 11px 零命中 / 1px·1.2px·1.5px 细描边零命中 / 扫描量级守卫 >150 文件 & >100 个 `border…2px`）。I 段的描边正则是本批踩出来的：只写 `[a-z-]` 会整类漏掉驼峰，冒号后必须允许跑到 `px`（引号/三元），同时用 `(?<![.\d])` 后视兜住 `border:1px solid` 这种紧凑写法——**上一版闸门正是这三处形态漏的**（假绿）。运行时：`pixel_uat.spec.ts` P2b 几何档 40/**50**/**94**/**114**（工具条仍必须一排）、字阶 textarea 13→**15**、气泡 14→**16**、品牌 14→**16**、Tab 13→**15**、语种钮 12→**14**（顶栏行高仍锁 38，Tab 实高 28、语种钮 30 均 ≤38 防折行）。后端：`public_ui_test.go` ④ 段改判 `border:2px solid var(--lc-card-line)` 并负向清掉 `1.2px`/`border:1px `；`public.go` 里那句 served CSS 注释同步改写，否则**负向锁会命中自己的说明注释**（已踩到一次）。新增正向锁：语种面板展开后逐档量对比度——选项 15px、文字 `#E7E9EA` 对面板底 **17.2:1**（≥4.5 才放行），这条直接钉住用户投诉第 1 条的可见结果 |
+| **⑤ 浅色宿主的回归闸门** | `e2e/dark_admin_upload.spec.ts` 整文件 `test.use({ colorScheme:'light' })`（不钉住的话，跑它的机器外观决定结果，闸门随机绿），D1 内预置 `localStorage.app_theme='light'` 后断言 `data-theme` 仍为 `dark`、`body` 文字色实测 `rgb(231,233,234)`、遗留键被清 |
+| **⑥ 闸门（2026-09-23 全绿）** | `go build ./...` ✓、`go vet ./...` VET_EXIT=0、`go test -race -count=1 ./internal/...` **RACE_EXIT=0**（含 `TestGofmtGateZeroViolations`——本批一度因 `public.go` 注释未 gofmt 红灯，`gofmt -w` 后复绿）；`npx tsc --noEmit` 干净、vitest **48 文件 / 369 用例**、`vite build` → `index-DM3l5EoZ.js`；Playwright 全矩阵 **61 passed / 1 skipped** 跑了两遍（SQLite 与 PG 各一次）；`assist_uat.sh` **48/0**；`multi_instance_e2e.sh` **8/0**；`build_extension.sh --check` 绿（1.2.0，指纹 `38d7827c0012…`）；**发布闸门 `run_uat.sh`（PG 方言）＝API 主链路 96/0 + 交易专项 510/0 + 前端 E2E exit=0，PG_UAT_EXIT=0**。改动面：80 个已跟踪文件（+1068/−1003）+ 扩展新包 2 个未跟踪文件 |
+| **⑦ 实测取证与清理** | 本地 `KEEP=1` 实例上跑量尺脚本取运行时真值（`/tmp/measure_00n.mjs`、`/tmp/measure_panel_00n.mjs`，脚本在 /tmp 不入库）；截图证据 `artifacts/p2b_workbench_merged.png`（工作台：单排工具条、2px 卡框、字阶明显变大）与 `artifacts/_00n_panel_light_host.png`（**浅色宿主**下展开语种面板，选项亮灰可读），一次性脚手架 `e2e-manual/_measure_panel_contrast.mjs` 跑完即删；四个 UAT 临时目录（`tmp.9fmZmCJpaX`／`tmp.HbyyWZRdfh`／`tmp.V13iu27TXT`／`tmp.gXLr1m0Ell`，合计约 162 M）按显式路径删净，8899/8898/8901/8902 四端口已无监听 |
+
+> **第 2 张截图的口径澄清（重要，别当成「已修」**）：截图标题「极石智能翻译平台 · 管理后台」里的品牌名**可以**是本产品——
+> 后台侧栏标题走 `AdminDashboard.tsx:185` 的 `branding.brandName || t('admin.title')`，白标租户配了 `brand_name` 就显示它。
+> 但截图正文那几条字面文案（**余额可用天数**、**计费明细**）在本仓源码、`git log --all -S` 全历史与交付 UI 包里**都不存在**
+> （本仓概览页的对应卡是「知识库条目 / 组织余额（积分）/ 流程步骤启用 / 用量类型 / 主模型状态 / LLM 错误率」），
+> 所以那张图不是本仓任一版本的页面。恒暗修复与抬档对**任何**该形态的页面都成立（同一套 `theme.css` + 组件库），
+> 但本批不声称「该页已修」。
+>
+> **未做（等用户令）**：本批 commit / push（走 `scripts/push_code_only.sh` 干跑→`--apply`，文档留在 `docs-local`）与部署。
+> 部署口径＝**前端 dist 换源 + `translator-server` + `translator-assist` 两二进制替换**（本批动了渲染面 ②③④），扩展 1.2.0 包随 dist 上线。
 
 ### 〇-M、即时翻译输入区元宝式单卡批（2026-09-23，★ 代码已推送 **`c0e5e99`**（纯代码提交，本地对应 `cdae8dc`，并轨 merge `4d3bb1f`）+ **`cba5e61`**（本批 dom 测试补中文注释，本地 `a772afe`，merge `f5c0079`）+ **`76d38ec`**（全量中文注释批，36 个代码文件、机器证明零删除，本地 `b612e9c`，merge `693d9da`）·文档仅本地·**主站与演示站已同日发版**（主站只换 `web`，演示站补齐二进制 + `web` 到同版；11:24 两站再各补换一次 `translator-server` 至同 sha `0e0343d2…`，见 ⑧））
 
