@@ -92,6 +92,10 @@
   **内容指纹**而非 zip 字节哈希（zip 内含 mtime，同源码两次打包字节不同），比对排障按这个口径，
   漂移由 `build_extension.sh --check` 与 `src/extensionPackage.test.ts` 拦。
   落在 ②③④ 而**只换 `/opt/translator/web`** 一律不生效（① 的组件内联样式在 dist 里，换前端即生效）。
+  ⚠️ **「纯注释提交＝不用发版」只对 React 侧成立**：往 `public.go`/`office.go`/`admin_openapi.go` 的**内嵌 HTML/JS
+  字符串里**加一行注释，dist hash 不变、`go build` 无任何行为差异，但**直出页的字节确实变了**，线上就是旧页
+  （2026-09-23 〇-M 实测：注释批晚于发版批，两站 `taskpane.html` 与仓库差 2 行，只能 11:24 补换一次二进制）。
+  判据：`git diff <线上二进制对应提交>..HEAD -- backend-go/` 里若命中上述文件的内嵌字符串区域，就必须换对应二进制。
   ⚠️ ④ 曾有一层坑：生产 `secrets.env` 一度留着 `ASSIST_WEB=/opt/ai-assist/web`，**外置文件优先于 `go:embed`**，
   换二进制仍是旧页——2026-09-22 〇-LI 收尾已**撤销该 env 并挪走外置页**，内嵌 `admin.html` 为单一事实源。
   若运维再显式配 `ASSIST_WEB`，同步外置文件的口径立即恢复生效（`internal/assist/api/server.go` adminPage）。
