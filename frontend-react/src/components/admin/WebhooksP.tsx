@@ -69,7 +69,7 @@ export function WebhooksP() {
 
   return (
     <Panel title={t('webhooks.title')} extra={<Button variant="primary" onClick={() => setDlg({ url: '', secret: '', events: 'translation.completed', max_retries: 3, retry_interval: 60 })}>＋ {t('webhooks.saveConfig')}</Button>}>
-      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 10px' }}>{t('webhooks.hint')}</p>
+      <p style={{ fontSize: 15, color: 'var(--adm-hint)', margin: '0 0 10px' }}>{t('webhooks.hint')}</p>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
         <input className="lc-input" value={String(dlg?.url || '')} onChange={(e) => setDlg((d) => (d ? { ...d, url: e.target.value } : d))} placeholder={t('webhooks.urlPlaceholder')} style={{ flex: 1, minWidth: 240 }} />
         <input className="lc-input" value={String(dlg?.secret || '')} onChange={(e) => setDlg((d) => (d ? { ...d, secret: e.target.value } : d))} placeholder={t('webhooks.secretPlaceholder')} style={{ width: 200 }} />

@@ -51,7 +51,7 @@ func publicDocPageLang(title, zh, en, active string) string {
 <div id="secEn" style="display:none">` + en + `</div>
 <style>
 /* 语种切换按交付包的次按钮/主按钮两档：未选=描边透明底，选中=白底黑字（同 .lc-btn--primary） */
-.lang-switch .ls{border:1.2px solid var(--lc-pill);background:transparent;color:var(--lc-text-2);font-size:12px;font-weight:500;padding:6px 16px;border-radius:8px;cursor:pointer;transition:.2s}
+.lang-switch .ls{border:2px solid var(--lc-pill);background:transparent;color:var(--lc-text-2);font-size:14px;font-weight:500;padding:6px 16px;border-radius:8px;cursor:pointer;transition:.2s}
 .lang-switch .ls:hover{color:var(--lc-text);border-color:var(--lc-line)}
 .lang-switch .ls-on{background:var(--lc-white);border-color:var(--lc-white);color:#000000;font-weight:600}
 </style>
@@ -78,7 +78,9 @@ func (s *Server) handlePublicPrivacy(w http.ResponseWriter, r *http.Request) {
 // X/Grok 单色纯黑体系、全站无蓝无绿（UI-ANNOTATIONS §1.1 与 §3.1-05 公开页骨架）。
 // 现按 §3.1-05 逐档对齐：页面底 #000000、导航品牌 15/Bold/#FFFFFF、
 // 导航项 12/Medium/#9AA0AA（当前页 #FFFFFF）、管理后台=白底黑字按钮、
-// 内容面板 #0E1014 + 1.2px #3A404C + r14 + 顶缘受光、页脚面 #050607 文字 #536471。
+// 内容面板 #0E1014 + 2px #3A404C + r14 + 顶缘受光、页脚面 #050607 文字 #536471。
+// ★ 〇-N（2026-09-23）用户后令「字号 +2px、线框加粗、不改颜色」：本面的字阶与描边已整体抬档，
+// 颜色仍取 §1.1 字面值。旧档细描边不得复活——public_ui_test.go ④ 段按 served HTML 负向清零。
 // active 传当前页 key（pricing/terms/sla/privacy），用于点亮导航活跃档。
 func publicLayout(title, body, active string) string {
 	// 导航四项按 §3.1-05 的顺序与文案；当前页挂 .on 走 #FFFFFF 活跃档，其余 #9AA0AA。
@@ -99,44 +101,44 @@ func publicLayout(title, body, active string) string {
   --lc-white:#FFFFFF;--lc-warn:#D29922;--lc-danger:#E5484D;
 }
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Noto Sans SC',-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;color:var(--lc-text);background:var(--lc-bg);line-height:1.75;font-size:14px}
+body{font-family:'Noto Sans SC',-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;color:var(--lc-text);background:var(--lc-bg);line-height:1.75;font-size:16px}
 .header{background:var(--lc-bg);padding:0 40px;display:flex;justify-content:space-between;align-items:center;height:56px;position:sticky;top:0;z-index:20}
-.header .brand{font-size:15px;font-weight:700;letter-spacing:.3px;color:var(--lc-white);display:flex;align-items:center;gap:8px}
+.header .brand{font-size:17px;font-weight:700;letter-spacing:.3px;color:var(--lc-white);display:flex;align-items:center;gap:8px}
 .header nav{display:flex;align-items:center;gap:6px}
-.header nav a{color:var(--lc-text-2);text-decoration:none;font-size:12px;font-weight:500;padding:6px 12px;border-radius:8px;transition:color .2s}
+.header nav a{color:var(--lc-text-2);text-decoration:none;font-size:14px;font-weight:500;padding:6px 12px;border-radius:8px;transition:color .2s}
 .header nav a:hover{color:var(--lc-text)}
 .header nav a.on{color:var(--lc-white)}
 /* 白底主按钮：交付真值 .lc-btn--primary{background:#FFFFFF;color:#000000}，不是 #E7E9EA */
-.header .btn{background:var(--lc-white);color:#000000;text-decoration:none;font-size:12px;font-weight:500;padding:7px 16px;border-radius:8px;margin-left:8px;transition:opacity .2s}
+.header .btn{background:var(--lc-white);color:#000000;text-decoration:none;font-size:14px;font-weight:500;padding:7px 16px;border-radius:8px;margin-left:8px;transition:opacity .2s}
 .header .btn:hover{opacity:.88}
 .wrap{max-width:920px;margin:32px auto;padding:0 20px}
-/* 内容面板：§1.3 卡片描边 1.2px + 面板顶缘受光高光 */
-.card{background:var(--lc-panel);border-radius:14px;padding:32px 36px;box-shadow:inset 0 1px 0 rgba(255,255,255,.055);border:1.2px solid var(--lc-card-line)}
+/* 内容面板：〇-N 后档卡片描边 2px（交付原档 §1.3 更细一档，已随字号批整体加粗）+ 面板顶缘受光高光 */
+.card{background:var(--lc-panel);border-radius:14px;padding:32px 36px;box-shadow:inset 0 1px 0 rgba(255,255,255,.055);border:2px solid var(--lc-card-line)}
 h1{font-size:22px;font-weight:700;margin-bottom:6px;color:var(--lc-text)}
-.doc-meta{color:var(--lc-text-3);font-size:12px;margin-bottom:8px}
-h2{font-size:16px;font-weight:600;margin:26px 0 10px;padding-left:11px;border-left:2px solid var(--lc-text);color:var(--lc-text);line-height:1.4}
-h3{font-size:15px;font-weight:600;margin:18px 0 8px;color:var(--lc-text)}
+.doc-meta{color:var(--lc-text-3);font-size:14px;margin-bottom:8px}
+h2{font-size:18px;font-weight:600;margin:26px 0 10px;padding-left:11px;border-left:2px solid var(--lc-text);color:var(--lc-text);line-height:1.4}
+h3{font-size:17px;font-weight:600;margin:18px 0 8px;color:var(--lc-text)}
 p{margin:9px 0;color:var(--lc-text-2)}
 b,strong{color:var(--lc-text);font-weight:600}
 a{color:var(--lc-text);text-decoration:none}
 a:hover{text-decoration:underline}
-.footer{background:var(--lc-foot);text-align:center;color:var(--lc-text-4);font-size:12px;padding:28px;line-height:2}
+.footer{background:var(--lc-foot);text-align:center;color:var(--lc-text-4);font-size:14px;padding:28px;line-height:2}
 .footer a{color:var(--lc-text-4);margin:0 6px}
 .footer a:hover{color:var(--lc-text-2)}
-hr{border:none;border-top:1px solid var(--lc-card-line);margin:24px 0}
-table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
-th,td{border:1px solid var(--lc-line);padding:10px 12px;text-align:left}
+hr{border:none;border-top:2px solid var(--lc-card-line);margin:24px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:16px}
+th,td{border:2px solid var(--lc-line);padding:10px 12px;text-align:left}
 th{background:var(--lc-surface);color:var(--lc-text);font-weight:600}
 td{color:var(--lc-text-2)}
-.tag{display:inline-block;background:var(--lc-surface);color:var(--lc-text);border:1.2px solid var(--lc-pill);border-radius:999px;padding:2px 12px;font-size:12px;font-weight:500}
+.tag{display:inline-block;background:var(--lc-surface);color:var(--lc-text);border:2px solid var(--lc-pill);border-radius:999px;padding:2px 12px;font-size:14px;font-weight:500}
 @media (max-width:720px){
 .header{flex-wrap:wrap;height:auto;padding:12px 14px;gap:8px;row-gap:8px}
 .header nav{flex-wrap:wrap;gap:4px}
-.header nav a{font-size:12px;padding:5px 8px}
+.header nav a{font-size:14px;padding:5px 8px}
 .wrap{padding:0 12px;margin:16px auto}
 .card{padding:20px 16px}
-h1{font-size:20px}h2{font-size:16px}
-table{display:block;overflow-x:auto;font-size:13px}
+h1{font-size:20px}h2{font-size:18px}
+table{display:block;overflow-x:auto;font-size:15px}
 }
 </style></head><body>
 <div class="header"><div class="brand">🌐 能言 LangCross</div><nav>` + nav + `<a class="btn" href="/admin">管理后台</a></nav></div>

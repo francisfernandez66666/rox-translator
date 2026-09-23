@@ -8,30 +8,38 @@
 // UI-ANNOTATIONS + langcross-handoff 交付包真值。闸门随之从「只准更亮/更大」
 // 改成「必须等于真值」——旧的单向锁会阻止还原，留着它反而会持续把配色往偏蓝方向推。
 //
-// 八条断言：
+// 九条断言：
 //  A) 令牌真值等值锁：tokens.css 的灰阶/描边/语义色与 theme.css 的 --npz-* 必须逐字等于
 //     交付值（改一个字符即红，防止「顺手提亮一档」再次发生）；
 //  B) 覆写层禁复活：theme.css / mobile.css 里不得再出现带 font-size 的 `html xxx` 覆写规则
 //     （§十/§十一 的形态特征），负向锁只认代码形态并先剥注释，避免命中「不得复活」说明注释；
-//  C) 关键几何与字阶等值：顶栏 38 高、品牌 14/700、工作台 Tab 13 胶囊（§2.2 真值）；
+//  C) 关键几何与字阶等值：顶栏 38 高、品牌 16/700、工作台 Tab 15 胶囊（★ 〇-N 后档，见下）；
 //  D) 提亮/蓝调遗留字面值清零：历次提亮与浅色主题遗留的 38 个十六进制值全站禁再出现；
 //  E) 登录后界面不得写死次级灰（走 var(--lc-text-*)），营销门面页按自身画布口径豁免；
 //  F) 描边字面值不得暗于 --lc-border-faint（令牌是 3.2:1 的最弱档，写死更暗即架空）；
 //  G) 白色填充档：主按钮/主 CTA/反白件（徽标、用户气泡、FAB）必须纯白 #FFFFFF（--lc-fill-white），
 //     不得用文字档 #E7E9EA 做整块填充——那正是「白色显脏/偏蓝」的根因（截图逐像素取证）；
 //  H) 扩展插件面（../extension/popup.html + content.css）按同一套 §1.1 真值——它既不进 vite 产物
-//     也不是后端直出 HTML，是第四类「两套闸门都扫不到」的渲染盲区。
+//     也不是后端直出 HTML，是第四类「两套闸门都扫不到」的渲染盲区；
+//  I) ★ 〇-N（2026-09-23）排版档等值锁：全站字号（含后端直出 /docs、/openapi/docs、office 侧栏、
+//     assist 内嵌页、扩展面）最小 11px、细描边一律 2px（1px / 1.2px / 1.5px 三类负向清零）。
+//     这一档来自用户后令「字号 +2px、线框加粗、不改颜色」，已**覆盖** UI-ANNOTATIONS 的原始字面值
+//     （品牌位 14→16、导航胶囊 13→15 等），颜色/字重/间距仍按交付真值。
+//     写成等值 + 负向清零两半，是为了不再重演 09-18/#35/#67 那种「单向锁一路把设计推离交付稿」的事故。
 //
 // 读源文件而非渲染 DOM：jsdom 不加载外链 CSS，源码级断言才是稳定闸门；
 // 运行时内联样式/换肤造成的回退由 e2e/pixel_uat.spec.ts 的 P2b（getComputedStyle 实测）互补。
 // ============================================================================
 import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 // ROOT 指向 frontend-react 包根：本文件用相对包根的硬路径读源文件，不做运行时拼接。
+// resolve() 而不是字符串相加：I 段要跨出包根去读后端直出页与扩展面（../backend-go/…），
+// 裸拼接不会折叠 `..`，会直接 ENOENT（闸门自己失效比红更难发现）。
 const ROOT = fileURLToPath(new URL('../../', import.meta.url))
-const read = (p: string) => readFileSync(ROOT + p, 'utf-8')
+const read = (p: string) => readFileSync(resolve(ROOT, p), 'utf-8')
 // 源文件在模块顶层就读进来：路径一旦改名/删除，import 阶段就直接抛错，
 // 让「闸门本身失效」也是红灯，而不是静默地什么都不断（本文件最怕假绿）。
 const KIT_TOKENS = read('src/ui/langcross/css/tokens.css')
@@ -158,7 +166,7 @@ describe('B 页面级字号覆写层（旧 §十/§十一）不得复活', () =>
   }
 })
 
-// ---- C) 关键几何与字阶（§2.2 用户工作台骨架：顶栏 38、品牌 14、导航 13px 胶囊）----
+// ---- C) 关键几何与字阶（★ 〇-N 后档：顶栏 38、品牌 16、导航 15px 胶囊；交付原值 14/13 +2px）----
 describe('C 工作台顶栏按 §2.2 真值', () => {
   it('.app-header 高 38px 且 --lc-workbench-topbar-h 同档', () => {
     const m = stripComments(THEME_CSS).match(/\.app-header\s*\{[^}]*height:\s*(\d+)px/)
@@ -168,17 +176,17 @@ describe('C 工作台顶栏按 §2.2 真值', () => {
     expect(t, 'tokens.css 缺 --lc-workbench-topbar-h 的 px 字面值').toBeTruthy()
     expect(Number(t![1]), '顶栏高度令牌须与 §2.2 同档').toBe(38)
   })
-  it('.brand = 14px / Bold 700（§2.2「能言」14）', () => {
-    expect(fontSizeOf(THEME_CSS, '.brand')).toBe(14)
+  it('.brand = 16px / Bold 700（交付 14 + 〇-N 字号 +2）', () => {
+    expect(fontSizeOf(THEME_CSS, '.brand')).toBe(16)
     const w = stripComments(THEME_CSS).match(/\.brand\s*\{[^}]*font-weight:\s*(\d+)/)
     expect(Number(w![1]), '字重 Vocabulary 只有 400/500/600/700 四档，品牌位为 Bold 700').toBe(700)
   })
-  it('App.tsx 内联 .app-tab = 13px 胶囊（§2.2 主导航 13px 胶囊）', () => {
+  it('App.tsx 内联 .app-tab = 15px 胶囊（交付 13 + 〇-N 字号 +2）', () => {
     // .app-tab 的规则在 App.tsx 的 <style> 字符串里，不在 theme.css，只能按源码正则钉。
     // 「形态变了就先红」是刻意的：宁可红着等人同步锁，也不要正则静默失配变假绿。
     const m = APP_TSX.match(/\.app-tab\{[^}]*?border-radius:\s*(\d+)px[^}]*?font-size:\s*([0-9.]+)px/)
     expect(m, 'App.tsx 内联 .app-tab 规则形态变了，请同步本锁').toBeTruthy()
-    expect(Number(m![2]), `Tab 字号 ${m![2]}px ≠ §2.2 真值 13px`).toBe(13)
+    expect(Number(m![2]), `Tab 字号 ${m![2]}px ≠ 〇-N 后档 15px`).toBe(15)
     expect(Number(m![1]), '胶囊档必须是全圆角 999，8px 方角属旧覆写层残留').toBe(999)
   })
 })
@@ -370,7 +378,9 @@ describe('H 扩展插件面（popup + 划词注入样式）单色真值', () => 
     it(`${name} 取 §1.1 令牌真值`, () => {
       expect(code).toContain('#0E1014')
       expect(code).toContain('#FFFFFF')
-      expect(code).toContain('1.2px')
+      // 描边档：〇-N 起细描边一律 2px（旧 1.2px 属交付原档，已随字号批整体加粗）
+      expect(code, `${name} 未见 2px 描边档`).toContain('2px solid')
+      expect(code, `${name} 旧 1.2px 细描边复活`).not.toMatch(/border[^;{]*1\.2px/)
     })
   }
   it('popup 主按钮＝纯白底黑字，成功态不标绿', () => {
@@ -382,5 +392,52 @@ describe('H 扩展插件面（popup + 划词注入样式）单色真值', () => 
     const code = stripComments(EXT_CONTENT_CSS)
     expect(code, 'FAB 底不是纯白档').toContain('background: var(--lc-white)')
     expect(code, '气泡底不是 §1.1 面板档').toContain('background: var(--lc-panel)')
+  })
+})
+
+// ---- I) ★ 〇-N 排版档等值锁：全站字号下限 11px、描边最细 2px（含四类后端/扩展渲染盲区）----
+// 口径：字号 = 交付值 +2px（9→11、12→14、13→15、15→17、16→18，>16 的展示型大字不动）；
+//       描边 = 细档 1px / 1.2px / 1.5px 一律 2px（3px 的强调条另有用途，不在此档）。
+// 为什么要扫到后端 .go 与扩展面：这四处（/docs、/openapi/docs、office 侧栏、assist 内嵌页、extension）
+// 都不进 vite 产物，「dist 绿 ≠ 全站绿」，同一档必须一起抬，否则线上会出现两套字阶。
+const TYPE_SURFACES: Array<[string, string]> = [
+  ...walkSrc('src').map((f) => [f, read(f)] as [string, string]),
+  ['../extension/popup.html', EXT_POPUP_HTML],
+  ['../extension/content.css', EXT_CONTENT_CSS],
+  ['../backend-go/internal/api/public.go', read('../backend-go/internal/api/public.go')],
+  ['../backend-go/internal/api/admin_openapi.go', read('../backend-go/internal/api/admin_openapi.go')],
+  ['../backend-go/internal/api/office.go', read('../backend-go/internal/api/office.go')],
+  ['../backend-go/internal/assist/web/admin.html', read('../backend-go/internal/assist/web/admin.html')],
+]
+describe('I 〇-N 排版档：字号下限 11px / 描边最细 2px', () => {
+  const smallFont: string[] = []
+  const thinBorder: string[] = []
+  for (const [name, src] of TYPE_SURFACES) {
+    const code = stripComments(src)
+    for (const m of code.matchAll(/font-size\s*:\s*([0-9.]+)px|(?<![A-Za-z-])font\s*:\s*[^;{}()\n]*?([0-9.]+)px|fontSize\s*[:=]\s*['"]?([0-9.]+)/g)) {
+      const v = parseFloat(m[1] ?? m[2] ?? m[3] ?? '')
+      // 只认「排版档」区间：<11 一律是旧档残留；>=11 的按映射走，具体值由 C 段与 e2e P2b 钉
+      if (Number.isFinite(v) && v < 11) smallFont.push(`${name}: ${v}px`)
+    }
+    // 描边正则是本批踩出来的两形态：① JSX 驼峰 borderBottom（只写 [a-z-] 会整类漏）；
+    // ② 值前带引号或三元（border: `1.2px solid ${…}`、borderTop: i ? '1px solid …' : 'none'），
+    // 所以冒号后允许跑到 px。要求 px 后紧跟 solid/dashed/dotted，border-radius:1px 才不会被误判。
+    // ③ 冒号后紧跟数值（CSS 紧凑写法 border:1px solid）也必须扫到，故用后视 (?<![.\d]) 而不是「吃一个字符」。
+    for (const m of code.matchAll(/\bborder[A-Za-z-]*(?:-width)?\s*:[^\n;{}]*?(?<![.\d])(1|1\.2|1\.5)px\s+(?:solid|dashed|dotted)|\bborder[A-Za-z-]*-width\s*:\s*([0-9.]+)px/g)) {
+      const v = parseFloat(m[1] ?? m[2] ?? '')
+      if (v === 1 || v === 1.2 || v === 1.5) thinBorder.push(`${name}: ${v}px`)
+    }
+  }
+  it('五类渲染面零命中 <11px 字号（旧小字档不得复活）', () => {
+    expect(smallFont, '仍有未抬档的小字：\n' + smallFont.join('\n')).toEqual([])
+  })
+  it('五类渲染面零命中 1px/1.2px/1.5px 细描边', () => {
+    expect(thinBorder, '仍有未加粗的细描边：\n' + thinBorder.join('\n')).toEqual([])
+  })
+  it('扫描确实覆盖到量级（防闸门空转）', () => {
+    expect(TYPE_SURFACES.length, '扫描文件数异常，说明 walkSrc 失效').toBeGreaterThan(150)
+    // 命中数兜的是正则真的在工作：全站 2px 描边总数应在百级（本批把 161 处细描边抬到 2px）
+    const hits = TYPE_SURFACES.reduce((n, [, s]) => n + [...stripComments(s).matchAll(/\bborder[A-Za-z-]*\s*:\s*['"`]?[^\n;{}]*?2px/g)].length, 0)
+    expect(hits, '连 2px 描边都扫不到，说明扫描面或正则失效').toBeGreaterThan(100)
   })
 })

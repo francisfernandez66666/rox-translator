@@ -594,7 +594,7 @@ function ForcePwdDialog(props: {
   return (
     <Dialog open={props.open} title={t('pwd.forceTitle')} confirmText={t('pwd.forceSubmit')}
             onConfirm={props.onSubmit} onCancel={props.onCancel} dismissOnOverlay={!props.busy}>
-      <p style={{ fontSize: 13, color: 'var(--lc-text-3)', lineHeight: 1.7, margin: '0 0 14px' }}>{t('pwd.forceHint')}</p>
+      <p style={{ fontSize: 15, color: 'var(--lc-text-3)', lineHeight: 1.7, margin: '0 0 14px' }}>{t('pwd.forceHint')}</p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <Field label={t('pwd.oldPassword')}><Input type="password" value={props.old} onChange={(e) => props.onOld(e.target.value)} /></Field>
         {/* 新密码/确认框标 new-password：否则浏览器密码管理器会把这次改密当成登录，
@@ -611,25 +611,25 @@ function ForcePwdDialog(props: {
 const CSS_AUTH = `
 .lc-auth-bg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000;font-family:var(--lc-font);padding:24px;box-sizing:border-box;}
 .lc-auth-card--compact{max-width:360px;}
-.auth-link{background:none;border:0;color:var(--lc-text-3);font-size:12px;cursor:pointer;font-family:var(--lc-font);padding:0;}
+.auth-link{background:none;border:0;color:var(--lc-text-3);font-size:14px;cursor:pointer;font-family:var(--lc-font);padding:0;}
 .auth-link:hover{color:var(--lc-text);text-decoration:underline;}
 /* 卡右上角语言胶囊（31×19、面 #16181C、纯白、无描边、圆角全圆） */
-.auth-lang{height:19px;padding:0 8px;border:0;border-radius:999px;background:var(--lc-raised);color:#FFFFFF;font-family:var(--lc-font-latin);font-size:11px;font-weight:500;line-height:1;cursor:pointer;}
-.auth-lang:hover{box-shadow:inset 0 0 0 1.2px var(--lc-border-pill);}
-.auth-lang:focus-visible{outline:1.2px solid var(--lc-border-input);outline-offset:2px;}
+.auth-lang{height:19px;padding:0 8px;border:0;border-radius:999px;background:var(--lc-raised);color:#FFFFFF;font-family:var(--lc-font-latin);font-size:13px;font-weight:500;line-height:1;cursor:pointer;}
+.auth-lang:hover{box-shadow:inset 0 0 0 2px var(--lc-border-pill);}
+.auth-lang:focus-visible{outline: 2px solid var(--lc-border-input);outline-offset:2px;}
 /* 错误 / 中性提示各占一行：找回发码成功用 .auth-ok（次级文字色），
    纯黑体系里不引入成功绿，避免一处绿把整屏配色基调带偏 */
-.auth-err{color:var(--lc-danger);font-size:13px;line-height:1.6;}
-.auth-ok{color:var(--lc-text-2);font-size:13px;line-height:1.6;}
+.auth-err{color:var(--lc-danger);font-size:15px;line-height:1.6;}
+.auth-ok{color:var(--lc-text-2);font-size:15px;line-height:1.6;}
 /* ★ #38 第三方登录区：分隔线用一条 1.2px 细线 + 居中文字（纯黑体系不引入品牌色块），
    按钮等宽纵排，避免两个 IdP 时长短不齐看着像残排 */
 .auth-sso{display:flex;flex-direction:column;gap:8px;margin-top:4px;}
-.auth-sso-sep{display:flex;align-items:center;gap:8px;color:var(--lc-text-3);font-size:12px;}
+.auth-sso-sep{display:flex;align-items:center;gap:8px;color:var(--lc-text-3);font-size:14px;}
 .auth-sso-sep::before,.auth-sso-sep::after{content:"";flex:1;height:1px;background:var(--lc-border-card,#3A404C);}
 .auth-sso .lc-btn{width:100%;justify-content:center;text-decoration:none;}
 /* 分段选择器（个人/企业、管理员/成员）：画布是两枚等宽胶囊，故用按钮组而不是 Radio */
 .auth-seg-row{display:flex;gap:8px;}
-.auth-seg{flex:1;height:36px;border-radius:var(--lc-r-ctl);border:1.2px solid var(--lc-border-pill);background:transparent;color:var(--lc-text-2);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--lc-font);}
+.auth-seg{flex:1;height:36px;border-radius:var(--lc-r-ctl);border:2px solid var(--lc-border-pill);background:transparent;color:var(--lc-text-2);font-size:15px;font-weight:500;cursor:pointer;font-family:var(--lc-font);}
 .auth-seg--on{background:var(--lc-raised);color:var(--lc-text);border-color:var(--lc-border-done);font-weight:600;}
 .auth-pwd-eye{display:flex;align-items:center;justify-content:center;background:none;border:0;color:var(--lc-text-3);cursor:pointer;padding:4px;line-height:0;}
 .auth-pwd-eye:hover{color:var(--lc-text);}

@@ -98,7 +98,7 @@ export default function PersonasP(_props: Props) {
 
   return (
     <>
-      <div style={{ marginBottom: 10, fontSize: 13, color: 'var(--adm-hint)' }}>
+      <div style={{ marginBottom: 10, fontSize: 15, color: 'var(--adm-hint)' }}>
         {t('persona.hint')}
       </div>
       <Button variant="primary" onClick={() => { setCode(''); setName(''); setDlg({ mode: 'create' }) }}>{t('persona.new')}</Button>
@@ -125,11 +125,11 @@ export default function PersonasP(_props: Props) {
       {/* 新建角色弹窗 */}
       <Dialog open={!!dlg && dlg.mode === 'create'} onCancel={() => setDlg(null)} title={t('persona.newTitle')} onConfirm={doCreate}>
         <div style={{ marginBottom: 12 }}>
-          <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>{t('persona.codeLabel')}</div>
+          <div style={{ marginBottom: 4, fontSize: 15, color: 'var(--adm-hint)' }}>{t('persona.codeLabel')}</div>
           <input className="lc-input" value={code} onChange={(e) => setCode(String(e.target.value))} placeholder={t('persona.namePlaceholder')} />
         </div>
         <div>
-          <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>{t('persona.nameLabel')}</div>
+          <div style={{ marginBottom: 4, fontSize: 15, color: 'var(--adm-hint)' }}>{t('persona.nameLabel')}</div>
           <input className="lc-input" value={name} onChange={(e) => setName(String(e.target.value))} placeholder={t('persona.namePlaceholder')} />
         </div>
       </Dialog>
@@ -137,7 +137,7 @@ export default function PersonasP(_props: Props) {
       {/* 编辑角色名弹窗 */}
       <Dialog open={!!dlg && dlg.mode === 'edit'} onCancel={() => setDlg(null)} title={t('persona.editTitle')} onConfirm={doUpdate}>
         <div>
-          <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>{t('persona.nameLabel')}</div>
+          <div style={{ marginBottom: 4, fontSize: 15, color: 'var(--adm-hint)' }}>{t('persona.nameLabel')}</div>
           <input className="lc-input" value={name} onChange={(e) => setName(String(e.target.value))} />
         </div>
       </Dialog>

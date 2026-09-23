@@ -17,41 +17,41 @@
     --white:#FFFFFF;--warn:#D29922;--danger:#E5484D;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font:14px/1.6 "Noto Sans SC",-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--txt)}
-  header{background:var(--panel);border-bottom:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:16px}
-  header h1{font-size:15px;font-weight:700;color:var(--white)}
+  body{font:16px/1.6 "Noto Sans SC",-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--txt)}
+  header{background:var(--panel);border-bottom:2px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:16px}
+  header h1{font-size:17px;font-weight:700;color:var(--white)}
   header .sp{flex:1}
-  header input{width:220px;padding:6px 10px;background:var(--inset);border:1.2px solid var(--input-line);border-radius:8px;color:var(--txt)}
+  header input{width:220px;padding:6px 10px;background:var(--inset);border:2px solid var(--input-line);border-radius:8px;color:var(--txt)}
   nav{display:flex;gap:4px;padding:12px 24px 0;flex-wrap:wrap}
-  nav button{border:none;background:transparent;padding:8px 16px;cursor:pointer;border-radius:8px 8px 0 0;color:var(--sub);font-size:14px}
+  nav button{border:none;background:transparent;padding:8px 16px;cursor:pointer;border-radius:8px 8px 0 0;color:var(--sub);font-size:16px}
   /* 活跃 Tab 走「次级卡面 + 主文字」，不再用品牌蓝填充（交付 .lc-tab--active 口径） */
   nav button.on{background:var(--surface);color:var(--txt)}
   main{padding:16px 24px 48px;max-width:1200px;margin:0 auto}
-  .card{background:var(--panel);border:1.2px solid var(--card-line);border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.055)}
+  .card{background:var(--panel);border:2px solid var(--card-line);border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.055)}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{border-bottom:1px solid var(--card-line);padding:8px 6px;text-align:left;vertical-align:top}
+  table{width:100%;border-collapse:collapse;font-size:15px}
+  th,td{border-bottom:2px solid var(--card-line);padding:8px 6px;text-align:left;vertical-align:top}
   th{color:var(--sub);font-weight:600;background:var(--surface)}
   td{color:var(--txt)}
-  td .mini{color:var(--sub);font-size:12px;display:block;max-width:420px;white-space:pre-wrap;max-height:88px;overflow:auto}
-  button.act{border:1.2px solid var(--pill);background:transparent;border-radius:8px;padding:3px 10px;cursor:pointer;font-size:12px;color:var(--sub)}
+  td .mini{color:var(--sub);font-size:14px;display:block;max-width:420px;white-space:pre-wrap;max-height:88px;overflow:auto}
+  button.act{border:2px solid var(--pill);background:transparent;border-radius:8px;padding:3px 10px;cursor:pointer;font-size:14px;color:var(--sub)}
   button.act:hover{border-color:var(--done);color:var(--txt)}
   /* 主按钮 = 纯白底黑字（交付真值 .lc-btn--primary{background:#FFFFFF}）；#E7E9EA 只留给文字与活跃档 */
   button.pri{background:var(--white);color:#000000;border:none;border-radius:8px;padding:7px 16px;cursor:pointer;font-weight:500}
-  input,textarea,select{background:var(--inset);border:1.2px solid var(--input-line);border-radius:8px;padding:6px 10px;font:inherit;width:100%;color:var(--txt)}
+  input,textarea,select{background:var(--inset);border:2px solid var(--input-line);border-radius:8px;padding:6px 10px;font:inherit;width:100%;color:var(--txt)}
   textarea{min-height:80px;resize:vertical}
   .form{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .form .full{grid-column:1/-1}
-  .form label{font-size:12px;color:var(--sub);display:block;margin-bottom:4px}
+  .form label{font-size:14px;color:var(--sub);display:block;margin-bottom:4px}
   .stat{display:flex;gap:24px}
   .stat b{font-size:24px;color:var(--txt);font-family:"Inter",-apple-system,Arial,sans-serif}
-  .badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;background:var(--surface);color:var(--txt);border:1.2px solid var(--pill)}
+  .badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:14px;background:var(--surface);color:var(--txt);border:2px solid var(--pill)}
   .badge.off{background:var(--inset);color:var(--weak);border-color:var(--card-line)}
-  .toast{position:fixed;top:16px;right:16px;background:var(--surface);color:var(--txt);border:1.2px solid var(--card-line);padding:8px 16px;border-radius:10px;opacity:0;transition:.3s;pointer-events:none}
+  .toast{position:fixed;top:16px;right:16px;background:var(--surface);color:var(--txt);border:2px solid var(--card-line);padding:8px 16px;border-radius:10px;opacity:0;transition:.3s;pointer-events:none}
   .toast.show{opacity:.95}
-  dialog{background:var(--panel);border:1.2px solid var(--line);border-radius:14px;padding:20px;width:min(720px,92vw);color:var(--txt)}
+  dialog{background:var(--panel);border:2px solid var(--line);border-radius:14px;padding:20px;width:min(720px,92vw);color:var(--txt)}
   dialog::backdrop{background:rgba(0,0,0,.72)}
-  .hint{color:var(--weak);font-size:12px}
+  .hint{color:var(--weak);font-size:14px}
 </style>
 </head>
 <body>

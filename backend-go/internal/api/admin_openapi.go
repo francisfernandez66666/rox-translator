@@ -64,33 +64,33 @@ const openAPIDocsCSS = `
   --lc-white:#FFFFFF;--lc-danger:#E5484D;
 }
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Noto Sans SC',-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;max-width:900px;margin:30px auto;padding:0 20px;color:var(--lc-text);background:var(--lc-bg);line-height:1.7;font-size:14px}
-h1{border-bottom:1.2px solid var(--lc-card-line);padding-bottom:8px;font-size:24px;font-weight:700;margin-bottom:14px}
-h2{font-size:19px;font-weight:600;margin-top:26px;border-bottom:1.2px solid var(--lc-card-line);padding-bottom:4px}
-h3{font-size:16px;font-weight:600;margin:18px 0 8px}
+body{font-family:'Noto Sans SC',-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;max-width:900px;margin:30px auto;padding:0 20px;color:var(--lc-text);background:var(--lc-bg);line-height:1.7;font-size:16px}
+h1{border-bottom:2px solid var(--lc-card-line);padding-bottom:8px;font-size:24px;font-weight:700;margin-bottom:14px}
+h2{font-size:19px;font-weight:600;margin-top:26px;border-bottom:2px solid var(--lc-card-line);padding-bottom:4px}
+h3{font-size:18px;font-weight:600;margin:18px 0 8px}
 p{margin:9px 0;color:var(--lc-text-2)}
 b,strong{color:var(--lc-text);font-weight:600}
-code{background:var(--lc-inset);color:var(--lc-text);border:1.2px solid var(--lc-card-line);padding:2px 6px;border-radius:6px;font-size:13px}
-pre{background:var(--lc-panel);border:1.2px solid var(--lc-card-line);padding:12px;border-radius:12px;overflow:auto;font-size:13px;margin:12px 0;box-shadow:inset 0 1px 0 rgba(255,255,255,.055)}
+code{background:var(--lc-inset);color:var(--lc-text);border:2px solid var(--lc-card-line);padding:2px 6px;border-radius:6px;font-size:15px}
+pre{background:var(--lc-panel);border:2px solid var(--lc-card-line);padding:12px;border-radius:12px;overflow:auto;font-size:15px;margin:12px 0;box-shadow:inset 0 1px 0 rgba(255,255,255,.055)}
 pre code{background:transparent;border:none;padding:0}
 ul,ol{margin:9px 0;padding-left:24px;color:var(--lc-text-2)}
-table{border-collapse:collapse;width:100%;margin:10px 0;font-size:14px}
-th,td{border:1.2px solid var(--lc-card-line);padding:8px 10px;text-align:left}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:16px}
+th,td{border:2px solid var(--lc-card-line);padding:8px 10px;text-align:left}
 th{background:var(--lc-surface);color:var(--lc-text);font-weight:600}
 td{color:var(--lc-text-2)}
-.badge{display:inline-block;background:var(--lc-surface);color:var(--lc-text);border:1.2px solid var(--lc-pill);border-radius:999px;padding:2px 8px;font-size:12px;font-weight:500}
+.badge{display:inline-block;background:var(--lc-surface);color:var(--lc-text);border:2px solid var(--lc-pill);border-radius:999px;padding:2px 8px;font-size:14px;font-weight:500}
 .err{color:var(--lc-danger)}
 blockquote{border-left:2px solid var(--lc-text);margin:10px 0;padding:4px 14px;background:var(--lc-panel);border-radius:0 10px 10px 0;color:var(--lc-text-2)}
 a{color:var(--lc-text);text-decoration:none}
 a:hover{text-decoration:underline}
-hr{border:none;border-top:1.2px solid var(--lc-card-line);margin:24px 0}
+hr{border:none;border-top:2px solid var(--lc-card-line);margin:24px 0}
 .lang-switch{position:fixed;top:14px;right:18px;display:flex;gap:6px;z-index:20}
-.lang-btn{border:1.2px solid var(--lc-pill);background:var(--lc-panel);color:var(--lc-text-2);border-radius:999px;padding:3px 12px;font-size:12.5px;cursor:pointer}
+.lang-btn{border:2px solid var(--lc-pill);background:var(--lc-panel);color:var(--lc-text-2);border-radius:999px;padding:3px 12px;font-size:14.5px;cursor:pointer}
 /* 语言切换的活跃档＝白底黑字实心件（交付真值 .lc-btn--primary），与次档同族不同档 */
 .lang-btn:hover{border-color:var(--lc-line);color:var(--lc-text)}
 .lang-btn.on{background:var(--lc-white);color:#000000;border-color:var(--lc-white);font-weight:500}
 .doc-lang{display:none}.doc-lang.show{display:block}
-@media (max-width:720px){body{margin:16px auto;padding:0 14px;font-size:13px}h1{font-size:21px}h2{font-size:17px}table{display:block;overflow-x:auto}}
+@media (max-width:720px){body{margin:16px auto;padding:0 14px;font-size:15px}h1{font-size:21px}h2{font-size:17px}table{display:block;overflow-x:auto}}
 `
 
 // renderDocsHTML 把 Markdown 渲染为完整文档页 HTML（内嵌样式壳，与品牌配色一致）。

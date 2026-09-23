@@ -25,7 +25,7 @@ import { toastError, toastWarn } from '@/lib/toastBus'
 // 行/卡片布局样式（横向排布 + 顶距/描边变体）
 const rowMt: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }
 // 卡片容器样式（描边圆角 + 内边距）
-const cardStyle: any = { border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 14, marginBottom: 12 }
+const cardStyle: any = { border: '2px solid var(--adm-line)', borderRadius: 8, padding: 14, marginBottom: 12 }
 
 // firstTranslation 从工单 final_result JSON 中取第一个目标语种的译文（预览用；解析失败返回空串）。
 function firstTranslation(finalResult: unknown): string {
@@ -161,7 +161,7 @@ export function TicketsP() {
   return (
     <>
       <h2 style={{ margin: '4px 0 4px' }}>{t('fb.workbench')}</h2>
-      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{isSuper ? t('fb.superHint') : t('fb.userHint')}</p>
+      <p style={{ fontSize: 15, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{isSuper ? t('fb.superHint') : t('fb.userHint')}</p>
 
       {/* 两个页签只在超管视角出现：普通用户进来就是反馈列表，没有复核队列可看 */}
       {isSuper && (
@@ -224,7 +224,7 @@ export function TicketsP() {
           <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0 }}>{selected.content}</pre>
           {/* 带上下文提交的反馈才有这一块：逐语种列出当时实际送给模型的译文，是判断「模型看错上下文」还是「翻错」的依据 */}
           {selected.with_context && (
-            <div style={{ background: 'var(--adm-soft)', border: '1px dashed var(--adm-line)', borderRadius: 8, padding: '8px 10px', marginTop: 8, fontSize: 12.5 }}>
+            <div style={{ background: 'var(--adm-soft)', border: '2px dashed var(--adm-line)', borderRadius: 8, padding: '8px 10px', marginTop: 8, fontSize: 14.5 }}>
               <b>{t('fb.ctxAttached')}</b>
               {selected.source_text && <pre style={{ whiteSpace: 'pre-wrap', margin: '4px 0' }}>{selected.source_text}</pre>}
               {Object.entries(ctxTranslations(selected)).map(([k, v]) => (
@@ -237,13 +237,13 @@ export function TicketsP() {
           {selected.replies && selected.replies.length ? (
             <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
               {selected.replies.map((r: Any, i: number) => (
-                <div key={i} style={{ background: r.role === 'admin' ? 'var(--adm-info-bg)' : 'var(--adm-soft)', borderRadius: 8, padding: '6px 10px', fontSize: 13 }}>
-                  <div style={{ fontSize: 11, color: 'var(--adm-faint)', marginBottom: 2 }}>{r.name} · {r.role === 'admin' ? t('tickets.roleAdmin') : t('tickets.roleUser')} · {fmtAt(r.at)}</div>
+                <div key={i} style={{ background: r.role === 'admin' ? 'var(--adm-info-bg)' : 'var(--adm-soft)', borderRadius: 8, padding: '6px 10px', fontSize: 15 }}>
+                  <div style={{ fontSize: 13, color: 'var(--adm-faint)', marginBottom: 2 }}>{r.name} · {r.role === 'admin' ? t('tickets.roleAdmin') : t('tickets.roleUser')} · {fmtAt(r.at)}</div>
                   <div style={{ whiteSpace: 'pre-wrap' }}>{r.content}</div>
                 </div>
               ))}
             </div>
-          ) : <div style={{ fontSize: 12, color: 'var(--adm-faint)', marginTop: 8 }}>{t('fb.noReplies')}</div>}
+          ) : <div style={{ fontSize: 14, color: 'var(--adm-faint)', marginTop: 8 }}>{t('fb.noReplies')}</div>}
           {/* 只有 open 态给「回复 / 完成」两个动作；归档后整块换成静态提示，
               免得在已结案的反馈上继续追加，让处理时限统计失真 */}
           {selected.status === 'open' ? (
@@ -252,7 +252,7 @@ export function TicketsP() {
               <Button disabled={!replyDraft.trim()} onClick={() => void doReply()}>↩ {t('fb.reply')}</Button>
  {isSuper && <Button variant="primary"onClick={() => void doResolve()}> {t('fb.complete')}</Button>}
             </div>
-) : <div style={{ fontSize: 12, color: 'var(--adm-ok-tx)', marginTop: 8 }}> {t('fb.archivedHint')}</div>}
+) : <div style={{ fontSize: 14, color: 'var(--adm-ok-tx)', marginTop: 8 }}> {t('fb.archivedHint')}</div>}
         </div>
       )}
 
@@ -264,7 +264,7 @@ export function TicketsP() {
               {/* maxLength 与下方 1000 计数同源：输入侧硬截断 + 展示侧提示，后端还有一道长度校验 */}
               <textarea className="lc-textarea" rows={3} maxLength={1000} value={newContent} onChange={(e) => setNewContent(e.target.value)} placeholder={t('fb.contentPlaceholder')} style={{ width: '100%', resize: 'vertical' }} />
               <div style={{ ...rowMt, marginTop: 8 }}>
-                <span style={{ flex: 1, fontSize: 12, color: 'var(--adm-faint)' }}>{newContent.length}/1000</span>
+                <span style={{ flex: 1, fontSize: 14, color: 'var(--adm-faint)' }}>{newContent.length}/1000</span>
                 <Button variant="primary" disabled={!newContent.trim() || submitting} onClick={() => void submitFeedback()}>
                   {submitting ? t('fb.submitting') : t('fb.submit')}
                 </Button>
@@ -280,7 +280,7 @@ export function TicketsP() {
               <option value="resolved">{t('fb.statusResolved')}</option>
             </select>
             <Button size="sm" variant="secondary" onClick={() => void loadFeedbacks()}>{t('tickets.refresh')}</Button>
-            <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{tpl('fb.count', { n: feedbacks.length })}</span>
+            <span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{tpl('fb.count', { n: feedbacks.length })}</span>
           </div>
           {/* 数据表格 */}
           {/* 外层 div 只为补回原来 Table 上的 marginTop（DataTable 不接受 style 透传，改成包一层） */}
@@ -314,9 +314,9 @@ export function TicketsP() {
         <div key={tk.id} style={{ ...cardStyle, marginTop: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
             <b>{tk.ticket_no} — {tk.title}</b>
-            <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{tk.status}</span>
+            <span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{tk.status}</span>
           </div>
-          <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 8px' }}>{tk.source_text}</p>
+          <p style={{ fontSize: 15, color: 'var(--adm-hint)', margin: '0 0 8px' }}>{tk.source_text}</p>
           {/* 终稿框 readOnly：内联审批只出「批/驳」决定，真要改稿得走下面的弹窗版（approveDlg.text） */}
           <textarea className="lc-textarea" rows={3} readOnly value={tk.final_result || ''} style={{ width: '100%', resize: 'vertical' }} />
           <div style={rowMt}>
@@ -330,7 +330,7 @@ export function TicketsP() {
           </div>
         </div>
       ))}
-      {!approvalTickets.length && <div style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('tickets.noApproval')}</div>}
+      {!approvalTickets.length && <div style={{ fontSize: 15, color: 'var(--adm-faint)' }}>{t('tickets.noApproval')}</div>}
 
       {/* 审批弹窗（dlg 形态 approveDlg）：批与驳共用一个框，靠 action 切标题/按钮与正文分区；
           danger 让整框描边变红、确认按钮自动红底，替代旧 theme="danger" 的手工配色。
@@ -356,7 +356,7 @@ export function TicketsP() {
         }}>
         {approveDlg && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{String(approveDlg.row.source_text)}</div>
+            <div style={{ fontSize: 15, color: 'var(--adm-hint)' }}>{String(approveDlg.row.source_text)}</div>
             {/* 批准分支才给终稿编辑区：改稿与批准是一次提交完成的，避免「先改后批」中间态被别人插队 */}
             {approveDlg.action === 'approve' && (
               <Field label={t('fb.complete')}>

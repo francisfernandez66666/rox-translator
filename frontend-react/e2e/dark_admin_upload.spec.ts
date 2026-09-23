@@ -1,7 +1,12 @@
 // ============================================================================
 // e2e/dark_admin_upload.spec.ts — 2026-09-14 两项缺陷回归防护
-//   D1 管理后台暗色模式适配：app_theme=dark 下后台骨架/卡片/统计块必须整体换暗，
-//      页面主体不得残留近白色块（历史缺陷：admin 内联硬编码浅色 → 黑白混杂）。
+//   D1 管理后台暗色适配：后台骨架/卡片/统计块必须整体为暗，页面主体不得残留
+//      近白色块（历史缺陷：admin 内联硬编码浅色 → 黑白混杂）。
+//      ★ 〇-N（2026-09-23）追加根因断言：整站只有暗色一档，因此即便浏览器
+//        prefers-color-scheme 为浅色、且本地残留三态时代的 app_theme=light，
+//        <html data-theme> 仍须为 dark、body computed color 仍须等于文字真值
+//        #E7E9EA。旧实现下这一条会翻成 rgb(0,0,0)（文字色只挂在 dark 覆写层，
+//        light 档回退浏览器默认黑字）——用户截图报的「纯黑 UI + 黑字」即此。
 //   U1 文件工单上传（multipart）：FormData 上传必须成功建单（历史缺陷：core.ts
 //      request() 强制 Content-Type: application/json 抹掉 boundary → 400「文件解析
 //      失败或超过大小上限（40MB）」）。
@@ -28,12 +33,25 @@ function rgb(s: string): [number, number, number] | null {
 const isDark = (c: [number, number, number]) => c[0] < 60 && c[1] < 60 && c[2] < 70;
 const isNearWhite = (c: [number, number, number]) => c[0] > 240 && c[1] > 240 && c[2] > 240;
 
+// ★ 〇-N：本文件整体钉在**浅色** prefers-color-scheme 下跑。
+// 全站取消 light/auto 档之后，「宿主偏好是浅色」必须不再影响任何渲染结果；
+// 反过来（默认跟随宿主）会让这条锁在 CI 机上随机绿随机红，等于没有锁。
+test.use({ colorScheme: 'light' });
+
 test.describe('后台暗色适配 + 文件工单上传回归', () => {
   test('D1 后台各面板暗色骨架（无近白残留）', async ({ page }) => {
     await login(page, 'admin', 'Admin@1234');
-    await page.addInitScript(() => localStorage.setItem('app_theme', 'dark'));
+    // ★ 〇-N：故意种入三态时代的**浅色调**偏好，并用 emulate-media 把系统偏好也拨到浅色，
+    //   复现历史缺陷环境（那时 body 文字色只挂在 html[data-theme='dark'] 覆写层，
+    //   落到 light 档就回退成浏览器默认黑字 → 纯黑 UI 上什么都看不见）。
+    await page.addInitScript(() => localStorage.setItem('app_theme', 'light'));
     await page.goto('/admin');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    // 恒暗契约①：文字色与底色同层写死，浅色调环境下仍等于交付真值 #E7E9EA
+    const bodyColor = await page.evaluate(() => getComputedStyle(document.body).color);
+    expect(bodyColor, '浅色 prefers-color-scheme 下 body 文字色不得回退成黑字').toBe('rgb(231, 233, 234)');
+    // 恒暗契约②：废弃偏好键只做清理，不再左右渲染
+    await expect(page.evaluate(() => localStorage.getItem('app_theme'))).resolves.toBeNull();
     await expect(page.locator('body')).toBeVisible();
     await page.waitForTimeout(1200); // 等面板异步渲染
     // ★ 2026-09-18 UI 迁移：后台外壳换 LangCross 皮肤，锚点 .admin-shell→.lc-shell、

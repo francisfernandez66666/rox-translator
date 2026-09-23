@@ -133,31 +133,31 @@ const PRICING_CSS = `
 .lc-prc{background:var(--lc-bg);color:var(--lc-text);font-family:var(--lc-font);min-height:100vh;padding-bottom:8px}
 .lc-prc a{color:inherit;text-decoration:none}
 .lc-prc-nav{display:flex;align-items:center;gap:24px;height:56px;padding:0 40px}
-.lc-prc-brand{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:600;white-space:nowrap}
-.lc-prc-links{margin-left:auto;display:flex;align-items:center;gap:22px;font-size:13px;color:var(--lc-text-2)}
+.lc-prc-brand{display:flex;align-items:center;gap:9px;font-size:17px;font-weight:600;white-space:nowrap}
+.lc-prc-links{margin-left:auto;display:flex;align-items:center;gap:22px;font-size:15px;color:var(--lc-text-2)}
 .lc-prc-links a:hover{color:var(--lc-text)}
-.lc-prc-panel{max-width:1018px;margin:12px auto 0;padding:30px 34px 34px;background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-modal)}
+.lc-prc-panel{max-width:1018px;margin:12px auto 0;padding:30px 34px 34px;background:var(--lc-panel);border:2px solid var(--lc-border-card);border-radius:var(--lc-r-modal)}
 .lc-prc-title{margin:0 0 10px;font-size:30px;font-weight:700}
-.lc-prc-intro{margin:0 0 6px;font-size:13px;line-height:1.85;color:var(--lc-text-2)}
-.lc-prc-sec{display:flex;align-items:center;gap:9px;margin:28px 0 16px;font-size:16px;font-weight:600}
+.lc-prc-intro{margin:0 0 6px;font-size:15px;line-height:1.85;color:var(--lc-text-2)}
+.lc-prc-sec{display:flex;align-items:center;gap:9px;margin:28px 0 16px;font-size:18px;font-weight:600}
 .lc-prc-sec::before{content:"";width:2px;height:15px;background:var(--lc-text-1)}
 .lc-prc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:26px}
-.lc-prc-card{display:flex;flex-direction:column;gap:6px;padding:18px;background:var(--lc-surface-2);border:1.2px solid var(--lc-border-6);border-radius:var(--lc-r-card)}
-.lc-prc-name{font-size:14px;font-weight:600}
-.lc-prc-meta{font-size:11px;color:var(--lc-text-2)}
+.lc-prc-card{display:flex;flex-direction:column;gap:6px;padding:18px;background:var(--lc-surface-2);border:2px solid var(--lc-border-6);border-radius:var(--lc-r-card)}
+.lc-prc-name{font-size:16px;font-weight:600}
+.lc-prc-meta{font-size:13px;color:var(--lc-text-2)}
 .lc-prc-price{font-size:22px;font-weight:700;line-height:1.15;font-family:var(--lc-font-latin)}
 /* ★ #75 外币报价时的人民币原价辅助行：明显弱于主价，客户视线在本币价上 */
-.lc-prc-cny{font-size:12px;color:var(--lc-text-5);line-height:1.4}
-.lc-prc-period{font-size:11px;color:var(--lc-text-5)}
-.lc-prc-badge{align-self:flex-start;margin-top:6px;padding:3px 8px;font-size:10px;font-weight:500;line-height:1.4;color:#000;background:var(--lc-fill-white);border-radius:var(--lc-r-bar);transition:filter var(--lc-mo-release) var(--lc-mo-out)}
+.lc-prc-cny{font-size:14px;color:var(--lc-text-5);line-height:1.4}
+.lc-prc-period{font-size:13px;color:var(--lc-text-5)}
+.lc-prc-badge{align-self:flex-start;margin-top:6px;padding:3px 8px;font-size:12px;font-weight:500;line-height:1.4;color:#000;background:var(--lc-fill-white);border-radius:var(--lc-r-bar);transition:filter var(--lc-mo-release) var(--lc-mo-out)}
 /* 徽标即入口：hover 提亮一档给"可按"反馈，视觉重量不变 */
 .lc-prc-badge:hover{filter:brightness(1.15)}
-.lc-prc-note{display:flex;gap:10px;margin:24px 0 0;padding:16px 18px;font-size:12.5px;line-height:1.85;color:var(--lc-text-2);background:var(--lc-inset);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-card)}
+.lc-prc-note{display:flex;gap:10px;margin:24px 0 0;padding:16px 18px;font-size:14.5px;line-height:1.85;color:var(--lc-text-2);background:var(--lc-inset);border:2px solid var(--lc-border-card);border-radius:var(--lc-r-card)}
 .lc-prc-noteicon{flex:none;color:var(--lc-text-3)}
 .lc-prc-faq{margin-bottom:4px}
-.lc-prc-faqitem{margin:0 0 16px;font-size:13px;line-height:1.85;color:var(--lc-text-2)}
+.lc-prc-faqitem{margin:0 0 16px;font-size:15px;line-height:1.85;color:var(--lc-text-2)}
 .lc-prc-faqitem b{color:var(--lc-text);font-weight:600;margin-right:6px}
-.lc-prc-foot{padding:20px 24px 26px;text-align:center;font-size:12px;color:var(--lc-text-3)}
+.lc-prc-foot{padding:20px 24px 26px;text-align:center;font-size:14px;color:var(--lc-text-3)}
 .lc-prc-foot a:hover{color:var(--lc-text-2)}
 @media (max-width:900px){
   .lc-prc-nav{padding:0 20px;gap:16px}

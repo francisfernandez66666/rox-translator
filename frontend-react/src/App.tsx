@@ -23,11 +23,10 @@ import { AdminProvider, useAdminStore } from '@/stores/admin'
 import { ChatProvider, useChat } from '@/hooks/useChat'
 import { useT, t as gt, tpl as gtpl } from '@/i18n'
 import { setAuthToken, setActiveTenantId, API_BASE } from '@/api'
-import { applyTheme, cycleTheme, getTheme, watchSystemTheme } from '@/lib/theme'
+import { applyTheme } from '@/lib/theme'
 // 主题在「模块求值期」就落到 <html> 上，而不是等 FrontShell 挂载后再 effect 里做：
 // 首帧之前 data-theme/color-scheme 未定的话，浏览器会按浅色画一屏再翻黑（换肤期最刺眼的一次白闪）。
-// watchSystemTheme 内部有 wired 闩（系统偏好监听全局只接一次），applyTheme 只是覆写两个属性，重复调无害。
-watchSystemTheme()
+// ★ 〇-N：light/auto 档已删（整站只有暗色一套真值），这里恒写 dark 并清掉历史偏好。
 applyTheme()
 import { BrandingProvider, useBranding } from './branding'
 import ErrorBoundary from './components/ErrorBoundary'
@@ -122,7 +121,7 @@ function PageLoading({ label = gt('app.loading'), onBeat }: { label?: string; on
     // dvh（非 vh）是为了移动端地址栏收起/展开时不把动效顶偏。gap 20 让动效与文字不粘连。
     <div style={{ flex: 1, minHeight: '100dvh', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
       <WordSwap className="ws--lg" ariaLabel={label} onBeat={onBeat} />
-      <p style={{ fontSize: 16, color: 'var(--lc-text-2)' }}>{label}</p>
+      <p style={{ fontSize: 18, color: 'var(--lc-text-2)' }}>{label}</p>
     </div>
   )
 }
@@ -143,16 +142,6 @@ function FrontShell() {
   const [ctxNoEmail, setCtxNoEmail] = useState(false)
   const [isPersonal, setIsPersonal] = useState(true)
   const [kbUploadOpen, setKbUploadOpen] = useState(false)
-  // ★ F5：主题偏好（按钮显示当前态并循环切换）
-  // themeTick 本身不参与渲染（下一行 void 掉就是告诉 lint「我知情」）：
-  // getTheme() 读的是 localStorage，不是 React state，不改点东西组件不会重渲染，title 会停在旧值上。
-  const [themeTick, setThemeTick] = useState(0)
-  void themeTick
-  // themeNow 只用于按钮 title（说明当前处于 auto/light/dark 哪一态）；
-  // themeIcon 固定一枚单色图标——旧版用 🌗/☀️/🌙 三个 emoji 表意，纯黑主题下
-  // 彩色 emoji 会破坏单色体系，故三态区分改由 title 文案承担。
-  const themeNow = getTheme()
-  const themeIcon = <Icon n="theme" style={{ verticalAlign: '-3px' }} />
   const [menuOpen, setMenuOpen] = useState(false)
   // ★ 2026-09-22 载入闸门：后端探活撤销后，占位仍留到 WordSwap 演满 3 个语种拍次
   // 闸门放在 FrontShell 这一层：它只替换 .app-main 里的路由出口，顶栏照常渲染
@@ -222,27 +211,27 @@ function FrontShell() {
       <style>{`
         .ss-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
         .ss-grid .ssc-card{width:100%}
-        .ss-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--lc-border-faint)}
+        .ss-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:2px solid var(--lc-border-faint)}
         .ss-row span{color:var(--lc-text-2)}.ss-row b{font-size:18px;color:#E7E9EA}
         .ss-copy{display:flex;align-items:center;gap:8px}
         .ss-stats{display:flex;gap:24px;padding:12px 0}
         .ss-stat{text-align:center}
         .ss-stat b{display:block;font-size:20px;color:#E7E9EA}
         .ss-table{width:100%;border-collapse:collapse}
-        .ss-table th,.ss-table td{border:1.2px solid var(--lc-border-faint);padding:6px 8px;text-align:left}
+        .ss-table th,.ss-table td{border:2px solid var(--lc-border-faint);padding:6px 8px;text-align:left}
         .ss-table th{background:var(--npz-surface-2);color:#E7E9EA}
         .ss-quick{display:flex;flex-wrap:wrap;gap:8px}
-        .ss-drawer-nav{display:flex;flex-direction:column;padding:8px 0;border-bottom:1px solid var(--lc-border-faint)}
-        .ss-drawer-item{padding:12px 16px;cursor:pointer;border-bottom:1px solid var(--lc-border-faint);font-size:15px;color:#E7E9EA}
+        .ss-drawer-nav{display:flex;flex-direction:column;padding:8px 0;border-bottom:2px solid var(--lc-border-faint)}
+        .ss-drawer-item{padding:12px 16px;cursor:pointer;border-bottom:2px solid var(--lc-border-faint);font-size:17px;color:#E7E9EA}
         .ss-drawer-item:hover{background:rgba(231,233,234,0.10)}
         .ss-loading{display:flex;justify-content:center;padding:40px}
         /* 顶栏控件字阶（★ 2026-09-22 还原 UI-ANNOTATIONS §2.2 真值）：幽灵按钮 14px/32 高、
            工作台 Tab 13px 胶囊（活跃=面 #16181C + 文字 #E7E9EA，即 --lc-raised/--lc-text）；
            历史上 #67/#68 曾整档放大到 16/17px 与 38/40 高，已随页面级覆写层一并撤销。
            描边/分隔统一走 --lc-* 令牌，hover 只改色不投影。 */
-        .ss-ghost-btn{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:var(--lc-text-2);font-size:14px;font-family:var(--lc-font);cursor:pointer;transition:color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}
+        .ss-ghost-btn{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:var(--lc-text-2);font-size:16px;font-family:var(--lc-font);cursor:pointer;transition:color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}
         .ss-ghost-btn:hover{color:var(--lc-text);background:var(--lc-raised)}
-        .app-tab{display:inline-flex;align-items:center;height:28px;padding:0 14px;border:0;border-radius:999px;background:transparent;color:var(--lc-text-2);font-size:13px;font-family:var(--lc-font);cursor:pointer;transition:color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}
+        .app-tab{display:inline-flex;align-items:center;height:28px;padding:0 14px;border:0;border-radius:999px;background:transparent;color:var(--lc-text-2);font-size:15px;font-family:var(--lc-font);cursor:pointer;transition:color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}
         .app-tab:hover{color:var(--lc-text)}
         .app-tab--on{background:var(--lc-raised);color:var(--lc-text)}
       `}</style>
@@ -274,7 +263,7 @@ function FrontShell() {
         {/* ★ F1：租户身份徽标——个人用户「个人版」，企业用户显示所属租户名（title 全文）
             超过 12 字就地截断加省略号：顶栏一行放不下长租户名（§2.2 顶栏不折行），
             完整值交给 title 悬浮提示；字号 12 = §2.2「套餐标识」真值档 */}
-        <span className="tenant-tag" title={tenantTag || t('app.personalPlan')} style={{ fontSize: 12, color: 'var(--lc-text-2)', whiteSpace: 'nowrap' }}>
+        <span className="tenant-tag" title={tenantTag || t('app.personalPlan')} style={{ fontSize: 14, color: 'var(--lc-text-2)', whiteSpace: 'nowrap' }}>
           {tenantTag
             ? <><Icon n="building" style={{ verticalAlign: '-3px', marginRight: 4 }} />{tenantTag.length > 12 ? tenantTag.slice(0, 12) + '…' : tenantTag}</>
             : <><Icon n="user" style={{ verticalAlign: '-3px', marginRight: 4 }} />{t('app.personalPlan')}</>}
@@ -292,10 +281,8 @@ function FrontShell() {
         {/* 站内通知铃铛：懒加载件，与 AccountMenu 一起被最外层 Suspense 兜住
             （首次解析期外壳整体回退成 PageLoading，之后常驻不再重建） */}
         <Bell />
-        {/* ★ F5：明暗主题三态切换（auto/light/dark，localStorage 记忆，auto 跟随系统）
-            三态共用一枚单色图标，当前态只写在 title 里（彩色 emoji 会破坏纯黑单色体系）；
-            切完要 setThemeTick 逼一次重渲染，否则 title 停在旧态（真正的换肤由 html[data-theme] 完成） */}
-        <button className="ss-ghost-btn" title={t(`app.theme.${themeNow}`)} onClick={() => { cycleTheme(); setThemeTick((n) => n + 1) }}>{themeIcon}</button>
+        {/* ★ 〇-N：明暗切换钮随 light/auto 档一并退役——整站只交付一套暗色真值，
+            可切到「没有配色的亮色档」正是黑底黑字缺陷的来源（见 lib/theme.ts）。 */}
         {/* ★ #23：二元 EN 切换钮退役，换 12 语种 LangSelect 下拉（词表源 @/i18n LANG_OPTIONS） */}
         <LangSelect align="right" />
         <AccountMenu showAdminConsole={roleLevelSafe(user?.role) >= 2} onGotoAdmin={() => navigate('/admin')} />
@@ -307,7 +294,7 @@ function FrontShell() {
       {depleted && (
         // 配色随纯黑主题调整：半透明红底 + #E5484D 文字（旧的 #fff1f0 浅底浅字在暗色下不可读）；
         // 字号 12 = §2.2 InlineBanner 文案真值档
-        <div style={{ background: 'rgba(229,72,77,0.10)', color: '#E5484D', padding: '4px 16px', fontSize: 12, display: 'flex', gap: 12, alignItems: 'center', borderBottom: '1px solid rgba(229,72,77,0.30)' }}>
+        <div style={{ background: 'rgba(229,72,77,0.10)', color: '#E5484D', padding: '4px 16px', fontSize: 14, display: 'flex', gap: 12, alignItems: 'center', borderBottom: '2px solid rgba(229,72,77,0.30)' }}>
           <span>{t('ss.exhaustedHint')}</span>
           <Button size="sm" variant="danger" onClick={() => {
             // 用 useAdminStore.getState() 而不是 useAdmin()：顶栏只为点一下钮取个 action，
@@ -329,7 +316,7 @@ function FrontShell() {
           // WordSwap 从第一拍数起，只有各自真的见过 loading 才会补拍（不会互相借用对方的拍数）
           <div className="loading-screen" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
             <WordSwap className="ws--lg" ariaLabel={t('app.starting')} onBeat={bootGate.onBeat} />
-            <p style={{ fontSize: 16, color: 'var(--lc-text-2)' }}>{t('app.starting')}</p>
+            <p style={{ fontSize: 18, color: 'var(--lc-text-2)' }}>{t('app.starting')}</p>
           </div>
         ) : (
           <Suspense fallback={<PageLoading />}>

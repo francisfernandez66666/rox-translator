@@ -36,15 +36,15 @@ export function WorkflowP() {
   return (
     <>
       <h2 style={{ margin: '4px 0 8px' }}>{t('workflow.title')}</h2>
-      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('workflow.hint')}</p>
+      <p style={{ fontSize: 15, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('workflow.hint')}</p>
       {steps.map((s, i) => (
         // 步骤开关：langcross Switch 是原生 <input type=checkbox role=switch>，
         // onChange 收的是 DOM 事件，需 e.target.checked 取布尔（TDesign 版直接给 bool）。
         // 这里只改本地 steps 草稿，点「保存流程」才整体提交，避免每次拨动都打一次接口。
         <div key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0' }}>
           <Switch checked={!!s.enable} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, enable: e.target.checked } : x)))} />
-          <span style={{ fontSize: 14 }}>{s.name}</span>
-          <code style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{s.key}</code>
+          <span style={{ fontSize: 16 }}>{s.name}</span>
+          <code style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{s.key}</code>
         </div>
       ))}
       {/* 一次性提交整份 steps（含未改动项），后端按数组覆盖式保存 */}

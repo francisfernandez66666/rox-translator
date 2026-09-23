@@ -341,20 +341,20 @@ export default function DataSourcesP() {
         </div>
       }>
         {/* 功能⑥ KB 上传奖励开关（超管） */}
-        <div style={{ border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 12, marginBottom: 12, display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontWeight: 600, fontSize: 13 }}>{t('ds.kb52')}</span>
+        <div style={{ border: '2px solid var(--adm-line)', borderRadius: 8, padding: 12, marginBottom: 12, display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 600, fontSize: 15 }}>{t('ds.kb52')}</span>
           {rewardCfg && (
             <>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 15 }}>
                 <Switch checked={rewardCfg.enabled} onChange={(e) => setRewardCfg((c) => (c ? { ...c, enabled: e.target.checked } : c))} />
                 {t('ds.rewardEnabled')}
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 15 }}>
                 {t('ds.perCharLabel')}
                 <input className="lc-input" type="number" style={{ width: 110 }} value={String(rewardCfg.per_char)} onChange={(e) => setRewardCfg((c) => (c ? { ...c, per_char: Number(e.target.value) || 0 } : c))} />
                 token
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 15 }}>
                 {t('ds.dailyCap')}
                 <input className="lc-input" type="number" style={{ width: 130 }} value={String(rewardCfg.daily_cap)} onChange={(e) => setRewardCfg((c) => (c ? { ...c, daily_cap: Number(e.target.value) || 0 } : c))} />
                 token
@@ -373,7 +373,7 @@ export default function DataSourcesP() {
               <Button size="sm" variant="primary" onClick={() => setShowForm((v) => !v)}>{showForm ? t('ds.s55') : t('ds.s56')}</Button>
             </div>
             {showForm && (
-              <div style={{ border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 16, marginBottom: 12, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(200px,1fr))' }}>
+              <div style={{ border: '2px solid var(--adm-line)', borderRadius: 8, padding: 16, marginBottom: 12, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(200px,1fr))' }}>
                 <div><div style={{ marginBottom: 4 }}>{t('ds.s58')}</div><input className="lc-input" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder={t("ds.s57")} /></div>
                 <div><div style={{ marginBottom: 4 }}>{t('ds.s59')}</div>
                   <select className="lc-select" value={form.kind} onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value }))}>
@@ -454,18 +454,18 @@ export default function DataSourcesP() {
         {editRow && (
           <div style={{ display: 'grid', gap: 12 }}>
             <div>
-              <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>
+              <div style={{ marginBottom: 4, fontSize: 15, color: 'var(--adm-hint)' }}>
                 {editRow.kind === 'entries' ? t('ds.s90') : t('ds.s91')}
               </div>
               <input className="lc-input" value={editSrc} onChange={(e) => setEditSrc(e.target.value)} />
             </div>
             <div>
-              <div style={{ marginBottom: 4, fontSize: 13, color: 'var(--adm-hint)' }}>
+              <div style={{ marginBottom: 4, fontSize: 15, color: 'var(--adm-hint)' }}>
                 {editRow.kind === 'entries' ? t('ds.s92') : t('ds.s93')}
               </div>
               <input className="lc-input" value={editTgt} onChange={(e) => setEditTgt(e.target.value)} />
             </div>
-            <div style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('ds.s94')}</div>
+            <div style={{ fontSize: 15, color: 'var(--adm-faint)' }}>{t('ds.s94')}</div>
           </div>
         )}
       </Dialog>
@@ -487,7 +487,7 @@ function StagedPager({ page, pageSize, total, onGo }: {
   return (
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', marginTop: 10 }}>
       <Button size="sm" variant="secondary" disabled={page <= 1} onClick={() => onGo(page - 1)}>{'‹'}</Button>
-      <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{page} / {pages}</span>
+      <span style={{ fontSize: 15, color: 'var(--lc-text-3)' }}>{page} / {pages}</span>
       <Button size="sm" variant="secondary" disabled={page >= pages} onClick={() => onGo(page + 1)}>{'›'}</Button>
     </div>
   )

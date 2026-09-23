@@ -1106,11 +1106,11 @@ const LANDING_CSS = `
 
 /* —— 1. 导航 —— */
 /* sticky + 半透黑底 + blur：滚动时导航始终在位，但内容从它底下"透出"而不是被硬切断 */
-.lc-mkt-nav{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:36px;height:76px;padding:0 80px;background:rgba(0,0,0,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--lc-border-card)}
+.lc-mkt-nav{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:36px;height:76px;padding:0 80px;background:rgba(0,0,0,.86);backdrop-filter:blur(10px);border-bottom:2px solid var(--lc-border-card)}
 /* 品牌名不许折行：窄屏先牺牲锚点链接，也不把 Logo 压成两行 */
 .lc-nav-brand{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:700;white-space:nowrap}
 /* 锚点用三级文字色：它是"路径提示"不是"内容"，不该和正文争对比度 */
-.lc-nav-links{display:flex;align-items:center;gap:36px;font-size:15px;color:var(--lc-text-3)}
+.lc-nav-links{display:flex;align-items:center;gap:36px;font-size:17px;color:var(--lc-text-3)}
 /* 只过渡 color：导航是定位工具，hover 时不许位移，否则整条栏像在被推动 */
 .lc-nav-links a{transition:color var(--lc-mo-release) var(--lc-mo-out)}
 .lc-nav-links a:hover{color:var(--lc-text)}
@@ -1118,7 +1118,7 @@ const LANDING_CSS = `
 .lc-nav-links a.on{color:var(--lc-text)}
 /* 右侧两块用 margin-left:auto 顶到最右：中间锚点靠自身 gap 排，不参与挤压 */
 .lc-nav-cta{margin-left:auto;display:flex;align-items:center;gap:20px}
-.lc-nav-login{font-size:15px;font-weight:500;transition:color var(--lc-mo-release) var(--lc-mo-out)}
+.lc-nav-login{font-size:17px;font-weight:500;transition:color var(--lc-mo-release) var(--lc-mo-out)}
 .lc-nav-login:hover{color:var(--lc-text-2)}
 
 /* —— 胶囊按钮 —— */
@@ -1135,7 +1135,7 @@ const LANDING_CSS = `
 .lc-mkt .lc-mkt-btn--pri:hover{opacity:.88}
 /* 描边次投走令牌 --lc-border-pill（#424956）：2026-09-22 还原批把自造的 #546470 归位到令牌，
    比卡片描边亮一档，边框才读得出"可点"而不是"分隔线" */
-.lc-mkt .lc-mkt-btn--ghost{border:1.2px solid var(--lc-border-pill);color:var(--lc-text-1);background:transparent}
+.lc-mkt .lc-mkt-btn--ghost{border:2px solid var(--lc-border-pill);color:var(--lc-text-1);background:transparent}
 .lc-mkt .lc-mkt-btn--ghost:hover{border-color:var(--lc-border-done)}
 /* 卡内浮面底：给非高亮价格档用，强度低于主投但仍是实心，不会和卡片背景糊在一起 */
 .lc-mkt .lc-mkt-btn--soft{background:var(--lc-raised);color:var(--lc-text-1)}
@@ -1144,8 +1144,8 @@ const LANDING_CSS = `
 .lc-mkt .lc-mkt-btn--dark{background:#000;color:#fff}
 .lc-mkt .lc-mkt-btn--dark:hover{opacity:.86}
 /* 三档定高 42/50/56：只允许这三档，按钮高度一致才能与相邻文本块基线对齐 */
-.lc-mkt-btn--sm{height:42px;padding:0 22px;font-size:15px}
-.lc-mkt-btn--md{height:50px;padding:0 30px;font-size:16px}
+.lc-mkt-btn--sm{height:42px;padding:0 22px;font-size:17px}
+.lc-mkt-btn--md{height:50px;padding:0 30px;font-size:18px}
 .lc-mkt-btn--lg{height:56px;padding:0 36px;font-size:18px;font-weight:600}
 
 /* —— 2. Hero —— */
@@ -1157,16 +1157,16 @@ const LANDING_CSS = `
 .lc-hero-copy{flex:none;width:500px;display:flex;flex-direction:column;gap:24px}
 /* 徽章底色走 --lc-raised（#16181C 徽章面令牌值）、描边 #31363D 是演示画布原值：
    比卡片底略抬，又不到 input 描边的强度 */
-.lc-hero-badge{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;padding:8px 14px;border-radius:20px;background:var(--lc-raised);border:1.2px solid #31363D;font-size:14px;font-weight:500;color:var(--lc-text-3)}
+.lc-hero-badge{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;padding:8px 14px;border-radius:20px;background:var(--lc-raised);border:2px solid #31363D;font-size:16px;font-weight:500;color:var(--lc-text-3)}
 .lc-hero-badge i{width:8px;height:8px;border-radius:4px;background:var(--lc-text-1);flex:none}
 /* 3.89vw = 56px / 1440px 设计宽：clamp 的上界与画布字号一致，下界保证手机两行不断句 */
 .lc-hero-h1{margin:0;font-size:clamp(34px,3.89vw,56px);line-height:1.21;font-weight:700;letter-spacing:.2px;color:var(--lc-text-1)}
 /* 两行断句靠 block 而不是 <br>：DOM 里不留可被复制带走的换行符，也让两行各自能挂节拍类 */
 .lc-hero-h1 span{display:block}
-.lc-hero-sub{margin:0;font-size:16px;line-height:28px;color:var(--lc-text-3)}
+.lc-hero-sub{margin:0;font-size:18px;line-height:28px;color:var(--lc-text-3)}
 .lc-hero-ctas{display:flex;align-items:center;gap:16px}
 /* 信任指标 26px 间距：三条要读成"并列事实"，间距小于卡内 gap 就会粘成一段 */
-.lc-hero-trust{display:flex;align-items:center;gap:26px;font-size:14px;color:var(--lc-text-3)}
+.lc-hero-trust{display:flex;align-items:center;gap:26px;font-size:16px;color:var(--lc-text-3)}
 .lc-hero-trust span{display:inline-flex;align-items:center;gap:8px}
 .lc-hero-trust svg{color:var(--lc-text-2)}
 /* min-width:0 是 flex 老坑：不写它，演示卡里的长英文会把右栏顶到溢出、整页出现横向滚动 */
@@ -1188,7 +1188,7 @@ const LANDING_CSS = `
 /* 标题组与内容固定 48px：所有区块同一条呼吸线，读者能预判"下面就是正文" */
 .lc-sec-head{display:flex;flex-direction:column;gap:14px;margin-bottom:48px}
 /* 小标签与标题只差一个字号档：靠字重与色阶分层级，不引入新颜色 */
-.lc-sec-label{margin:0;font-size:14px;font-weight:600;color:var(--lc-text-3)}
+.lc-sec-label{margin:0;font-size:16px;font-weight:600;color:var(--lc-text-3)}
 /* 二级标题 36px 封顶，与 Hero 的 56px 差出一档，滚动时层级不会乱 */
 .lc-sec-title{margin:0;font-size:clamp(26px,2.5vw,36px);font-weight:700;color:var(--lc-text-1)}
 .lc-sec-sub{margin:0;font-size:18px;color:var(--lc-text-3)}
@@ -1198,11 +1198,11 @@ const LANDING_CSS = `
 .lc-steps{display:flex;align-items:stretch;gap:24px}
 /* slot 与卡各自 flex:1、箭头 flex:none：窄屏折成竖列时箭头跟着卡走，不会掉在上一行末尾 */
 .lc-steps-slot{flex:1;display:flex;align-items:center;gap:24px;min-width:0}
-.lc-step{flex:1;display:flex;flex-direction:column;gap:16px;padding:28px;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:16px;min-width:0}
+.lc-step{flex:1;display:flex;flex-direction:column;gap:16px;padding:28px;background:var(--lc-bg);border:2px solid var(--lc-border-card);border-radius:16px;min-width:0}
 /* 序号走等宽字体：与演示卡左侧的红色序号同一套语汇，"01/02/03" 才像流程编号而非列表符号 */
-.lc-step-num{font-family:var(--lc-font-mono);font-size:14px;font-weight:500;color:var(--lc-text-4)}
+.lc-step-num{font-family:var(--lc-font-mono);font-size:16px;font-weight:500;color:var(--lc-text-4)}
 .lc-step-t{margin:0;font-size:20px;font-weight:600;color:var(--lc-text-1)}
-.lc-step-d{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
+.lc-step-d{margin:0;font-size:17px;line-height:24px;color:var(--lc-text-3)}
 /* 箭头单独走 --lc-text-3（★ 2026-09-22 还原：自造的 #6A717A 归位令牌）：
    它是流程记号，够看见但不与正文抢对比 */
 .lc-step-arrow{flex:none;display:flex;align-items:center;color:var(--lc-text-3)}
@@ -1213,39 +1213,39 @@ const LANDING_CSS = `
 /* 四张小卡与顶栏分属两条 grid：结构上等价于"两行"，但折行只需各改一行 columns */
 .lc-bento-row{display:grid;grid-template-columns:repeat(4,1fr);gap:24px;margin-top:24px}
 /* 卡底用 --lc-bg 而不是抬升色：整页的分层只靠 1.2px 描边表达，不用灰底堆叠 */
-.lc-fcard{display:flex;flex-direction:column;gap:14px;padding:28px;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:16px;min-width:0}
+.lc-fcard{display:flex;flex-direction:column;gap:14px;padding:28px;background:var(--lc-bg);border:2px solid var(--lc-border-card);border-radius:16px;min-width:0}
 /* 大卡多 4px 内边距：它要装三条演示行，密排会读成表格而不是产品截图 */
 .lc-fcard--big{padding:32px;gap:16px}
 /* hover 只提描边亮度，不位移不投影：功能卡不是按钮，不该给"可点"的暗示 */
 .lc-fcard:hover{border-color:var(--lc-border-pill)}
 .lc-ficon{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:10px;background:var(--lc-raised);color:var(--lc-text-1);flex:none}
 .lc-fcard-t{margin:0;font-size:18px;font-weight:600;color:var(--lc-text-1)}
-.lc-fcard-d{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
+.lc-fcard-d{margin:0;font-size:17px;line-height:24px;color:var(--lc-text-3)}
 /* margin-top:auto 把演示区压到大卡底部：卡高由 grid 拉齐，演示贴底才对得上画布构图 */
 .lc-termdemo{display:flex;flex-direction:column;gap:8px;margin-top:auto;padding-top:8px}
-.lc-td-note{margin:0;font-size:12px;color:var(--lc-text-4)}
+.lc-td-note{margin:0;font-size:14px;color:var(--lc-text-4)}
 /* 演示行用最深底色 --lc-deep：整卡里唯一一处"嵌进去"的容器，读起来才像界面截图 */
-.lc-td-row{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--lc-deep);border:1.2px solid var(--lc-border-faint);border-radius:10px}
-.lc-td-cn{flex:1;font-size:14px;font-weight:500;color:var(--lc-text-1);min-width:0}
+.lc-td-row{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--lc-deep);border:2px solid var(--lc-border-faint);border-radius:10px}
+.lc-td-cn{flex:1;font-size:16px;font-weight:500;color:var(--lc-text-1);min-width:0}
 /* bad/good 同用等宽字体、只差色阶：让"错"与"对"是同一个位置的两种状态，而不是两种东西 */
-.lc-td-bad{font-family:var(--lc-font-mono);font-size:13px;color:var(--lc-text-4)}
+.lc-td-bad{font-family:var(--lc-font-mono);font-size:15px;color:var(--lc-text-4)}
 .lc-td-arrow{color:var(--lc-text-3);flex:none}
-.lc-td-good{font-family:var(--lc-font-mono);font-size:13px;font-weight:500;color:var(--lc-text-1)}
+.lc-td-good{font-family:var(--lc-font-mono);font-size:15px;font-weight:500;color:var(--lc-text-1)}
 
 /* —— 4b. 覆盖范围 —— */
 /* 统计带四等分：数字是这一区块的主角，等宽排一排才读成"面板读数"而不是四段散文 */
 .lc-cov-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:24px;margin-bottom:44px}
-.lc-cov-stat{display:flex;flex-direction:column;gap:8px;padding:26px 28px;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:16px;min-width:0}
+.lc-cov-stat{display:flex;flex-direction:column;gap:8px;padding:26px 28px;background:var(--lc-bg);border:2px solid var(--lc-border-card);border-radius:16px;min-width:0}
 .lc-cov-stat b{font-family:var(--lc-font-mono);font-size:clamp(28px,2.4vw,34px);font-weight:700;line-height:1.1;color:var(--lc-text-1)}
-.lc-cov-stat span{font-size:13px;line-height:20px;color:var(--lc-text-3)}
+.lc-cov-stat span{font-size:15px;line-height:20px;color:var(--lc-text-3)}
 .lc-cov-groups{display:flex;flex-direction:column;gap:30px}
 .lc-cov-group{display:flex;flex-direction:column;gap:10px}
 .lc-cov-t{margin:0;font-size:18px;font-weight:600;color:var(--lc-text-1)}
-.lc-cov-d{margin:0;font-size:14px;line-height:22px;color:var(--lc-text-3);max-width:760px}
+.lc-cov-d{margin:0;font-size:16px;line-height:22px;color:var(--lc-text-3);max-width:760px}
 /* chips 用描边胶囊不用色块：本页的"标签"语法只有一种（同 Hero 语种标签），不为一排格式名新造视觉元素 */
 .lc-chips{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px}
-.lc-chip{padding:7px 14px;border:1.2px solid var(--lc-border-card);border-radius:999px;font-size:13px;color:var(--lc-text-2);background:var(--lc-bg);white-space:nowrap}
-.lc-chip--mono{font-family:var(--lc-font-mono);letter-spacing:.02em;font-size:12px}
+.lc-chip{padding:7px 14px;border:2px solid var(--lc-border-card);border-radius:999px;font-size:15px;color:var(--lc-text-2);background:var(--lc-bg);white-space:nowrap}
+.lc-chip--mono{font-family:var(--lc-font-mono);letter-spacing:.02em;font-size:14px}
 
 /* —— 4c. 质量验证（核心卖点） —— */
 /* 统计带复用上区块 .lc-cov-stat；只把下边距收紧一档（32px），因为方法卡紧跟其后不需要大间隔 */
@@ -1254,56 +1254,56 @@ const LANDING_CSS = `
 .lc-qa-methods{display:grid;grid-template-columns:1fr 1fr;gap:24px}
 .lc-qa-points{display:flex;flex-direction:column;max-width:920px;margin-top:44px}
 /* 结论行用 border-top 清单而非卡片：这里是"要读的文字"，卡片边框会把四条读成一个一个的孤立卖点 */
-.lc-qa-pt{display:flex;flex-direction:column;gap:8px;padding:20px 0;border-top:1px solid var(--lc-border-faint)}
+.lc-qa-pt{display:flex;flex-direction:column;gap:8px;padding:20px 0;border-top:2px solid var(--lc-border-faint)}
 .lc-qa-t{display:flex;align-items:center;gap:10px;margin:0;font-size:18px;font-weight:600;color:var(--lc-text-1)}
 .lc-qa-t svg{color:var(--lc-text-3);flex:none}
-.lc-qa-d{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
+.lc-qa-d{margin:0;font-size:17px;line-height:24px;color:var(--lc-text-3)}
 /* 收口句用强描边框：全区块唯一的"结论容器"，靠边框强度而非底色区分（本页无彩底） */
-.lc-qa-final{margin:44px 0 0;padding:26px 30px;border:1.2px solid var(--lc-border-strong);border-radius:16px;font-size:17px;line-height:28px;font-weight:600;color:var(--lc-text-1)}
+.lc-qa-final{margin:44px 0 0;padding:26px 30px;border:2px solid var(--lc-border-strong);border-radius:16px;font-size:17px;line-height:28px;font-weight:600;color:var(--lc-text-1)}
 
 /* —— 4d. 开发者集成 —— */
 /* 网格参数照抄 FAQ（360px + 1fr / gap 80）：又一个"左目录右正文"区块，不另造版式 */
 .lc-dev{display:grid;grid-template-columns:360px 1fr;gap:80px;align-items:start}
 .lc-dev-head{display:flex;flex-direction:column;gap:14px;align-items:flex-start}
-.lc-dev-sub{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
+.lc-dev-sub{margin:0;font-size:17px;line-height:24px;color:var(--lc-text-3)}
 /* 文档出口是文字链+图标不是大按钮：这一区块的动作密度本来就低，别和收尾 CTA 抢主投 */
-.lc-dev-doc{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:var(--lc-text-1);transition:opacity var(--lc-mo-release) var(--lc-mo-out)}
+.lc-dev-doc{display:inline-flex;align-items:center;gap:8px;font-size:16px;font-weight:600;color:var(--lc-text-1);transition:opacity var(--lc-mo-release) var(--lc-mo-out)}
 .lc-dev-doc:hover{opacity:.75}
 .lc-dev-doc svg{flex:none}
 .lc-dev-body{display:flex;flex-direction:column;gap:24px;min-width:0}
 .lc-dev-feats{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
-.lc-dev-feat{display:flex;flex-direction:column;gap:8px;padding:24px;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:16px;min-width:0}
-.lc-dev-t{margin:0;font-size:16px;font-weight:600;color:var(--lc-text-1)}
-.lc-dev-d{margin:0;font-size:13.5px;line-height:22px;color:var(--lc-text-3)}
+.lc-dev-feat{display:flex;flex-direction:column;gap:8px;padding:24px;background:var(--lc-bg);border:2px solid var(--lc-border-card);border-radius:16px;min-width:0}
+.lc-dev-t{margin:0;font-size:18px;font-weight:600;color:var(--lc-text-1)}
+.lc-dev-d{margin:0;font-size:15.5px;line-height:22px;color:var(--lc-text-3)}
 /* 代码块底色用 --lc-deep（与大卡演示行同语法）：页内"嵌进去的界面片段"共用一种深度 */
-.lc-code{border:1.2px solid var(--lc-border-card);border-radius:16px;overflow:hidden;background:var(--lc-deep)}
-.lc-code-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 18px;border-bottom:1px solid var(--lc-border-faint);font-family:var(--lc-font-mono);font-size:12px;letter-spacing:.02em;color:var(--lc-text-3)}
+.lc-code{border:2px solid var(--lc-border-card);border-radius:16px;overflow:hidden;background:var(--lc-deep)}
+.lc-code-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 18px;border-bottom:2px solid var(--lc-border-faint);font-family:var(--lc-font-mono);font-size:14px;letter-spacing:.02em;color:var(--lc-text-3)}
 /* 复制按钮与小号胶囊按钮同形（28 高/8 圆角）：按钮语汇总只有一档尺寸，不新开 */
-.lc-code-copy{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:#C8CCD1;font:500 12px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)}
+.lc-code-copy{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:2px solid var(--lc-border-pill);border-radius:8px;background:none;color:#C8CCD1;font:500 14px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)}
 .lc-code-copy:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
 .lc-code-copy svg{display:block}
 /* white-space:pre：curl 的反斜杠续行是内容的一部分，折行会把它变成一条读不懂的长句；窄屏靠横向滚动 */
-.lc-code-body{margin:0;padding:18px 20px;overflow-x:auto;font-family:var(--lc-font-mono);font-size:13px;line-height:22px;color:var(--lc-text-2);white-space:pre}
+.lc-code-body{margin:0;padding:18px 20px;overflow-x:auto;font-family:var(--lc-font-mono);font-size:15px;line-height:22px;color:var(--lc-text-2);white-space:pre}
 
 /* —— 5. 价格方案 —— */
 /* 三档等宽：价格要能横向对读，一旦不等宽就变成"各说各话"，比较关系直接消失 */
 .lc-plans{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
 /* align-items:flex-start：卡内元素顶对齐，价格数字长短不同也不会把下面的按钮错开 */
-.lc-plan{display:flex;flex-direction:column;align-items:flex-start;gap:20px;padding:32px;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:16px}
+.lc-plan{display:flex;flex-direction:column;align-items:flex-start;gap:20px;padding:32px;background:var(--lc-bg);border:2px solid var(--lc-border-card);border-radius:16px}
 .lc-plan:hover{border-color:var(--lc-border-pill)}
 /* 反相档底色与描边同为纯白：白卡上再画一圈浅边只会显脏，高亮靠"整块变白"完成 */
 .lc-plan--pro{background:var(--lc-fill-white);border-color:var(--lc-fill-white);color:#000}
 /* 徽标在白色卡上用实心黑：与它所在的反相卡共用同一套黑白语言，不引入第三种强调色 */
-.lc-plan-badge{padding:6px 14px;border-radius:999px;background:#000;color:#fff;font-size:13px;font-weight:600}
+.lc-plan-badge{padding:6px 14px;border-radius:999px;background:#000;color:#fff;font-size:15px;font-weight:600}
 .lc-plan-name{margin:0;font-size:20px;font-weight:600}
 /* 价位是卡内唯一的大字号（36px）：读价格的人只看这一行，其余都要给它让位 */
 .lc-plan-price{font-size:36px;font-weight:700;line-height:1.15}
-.lc-plan-desc{margin:0;font-size:15px;color:var(--lc-text-3)}
+.lc-plan-desc{margin:0;font-size:17px;color:var(--lc-text-3)}
 /* 反相卡的次级文字必须走 on-light 档：黑底体系里的浅灰放到白底上直接不可读（2026-09-19 对比度整改） */
 .lc-plan--pro .lc-plan-desc{color:var(--lc-text-on-light)}
 /* 列表上边距只留 8px：按钮与功能点是一组，间距拉到 gap 会被读成两段内容 */
 .lc-plan-feats{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:12px}
-.lc-plan-feats li{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--lc-text-3)}
+.lc-plan-feats li{display:flex;align-items:center;gap:10px;font-size:16px;color:var(--lc-text-3)}
 .lc-plan-feats svg{color:var(--lc-text-3);flex:none}
 .lc-plan--pro .lc-plan-feats li{color:var(--lc-text-on-light)}
 .lc-plan--pro .lc-plan-feats svg{color:var(--lc-text-on-light)}
@@ -1312,49 +1312,49 @@ const LANDING_CSS = `
 /* 两卡等宽（1fr 1fr）：拉新与内容贡献是两条独立增长路径，做成大小卡会被读成主次 */
 .lc-rewards{display:grid;grid-template-columns:1fr 1fr;gap:24px}
 /* 奖励卡内边距 36px（比功能卡 28 大一档）：这两张是"给好处"的段落，容器的分量要更足 */
-.lc-rw-card{display:flex;flex-direction:column;align-items:flex-start;gap:20px;padding:36px;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:16px}
+.lc-rw-card{display:flex;flex-direction:column;align-items:flex-start;gap:20px;padding:36px;background:var(--lc-bg);border:2px solid var(--lc-border-card);border-radius:16px}
 .lc-rw-card:hover{border-color:var(--lc-border-pill)}
 /* 只有奖励卡的图标底板升到 48：标题字号到了 22px，40 的底板会显得小气 */
 .lc-rw-card .lc-ficon{width:48px;height:48px;border-radius:12px}
 .lc-rw-t{margin:0;font-size:22px;font-weight:700;color:var(--lc-text-1)}
-.lc-rw-d{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
+.lc-rw-d{margin:0;font-size:17px;line-height:24px;color:var(--lc-text-3)}
 /* baseline 对齐：数字与单位字号差一倍，用 center 会让单位像挂在数字腰上 */
 .lc-rw-num{margin:0;display:flex;align-items:baseline;gap:8px}
 /* 数字是全卡最大字号且用等宽：先看到量、再看到口径，中英切换时宽度还不抖 */
 .lc-rw-num b{font-family:var(--lc-font-mono);font-size:32px;font-weight:700;color:var(--lc-text-1)}
-.lc-rw-num span{font-size:14px;color:var(--lc-text-3)}
+.lc-rw-num span{font-size:16px;color:var(--lc-text-3)}
 
 /* —— 7. FAQ —— */
 /* 左栏定宽 360 而非 1fr：标题栏要像"目录"，右侧问答才是被读的主体；80px 间距与区块共用同口径 */
 .lc-faq{display:grid;grid-template-columns:360px 1fr;gap:80px}
 .lc-faq-head{display:flex;flex-direction:column;gap:14px}
-.lc-faq-sub{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
+.lc-faq-sub{margin:0;font-size:17px;line-height:24px;color:var(--lc-text-3)}
 /* 分隔线由每条自己的 border-top 承担：不另放 <hr>，条距天然等宽且末条不会多出尾线 */
-.lc-faq-item{border-top:1px solid var(--lc-border-faint);padding:20px 0;display:flex;flex-direction:column;gap:10px}
+.lc-faq-item{border-top:2px solid var(--lc-border-faint);padding:20px 0;display:flex;flex-direction:column;gap:10px}
 /* 问题用 h3 但字号只到 18：它比区块标题小，语义上又要在同一条朗读层级里 */
 .lc-faq-q{margin:0;font-size:18px;font-weight:600;color:var(--lc-text-1)}
-.lc-faq-a{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
+.lc-faq-a{margin:0;font-size:17px;line-height:24px;color:var(--lc-text-3)}
 
 /* —— 6b. 更新日志 —— */
 /* 单列限宽 820：这是"台账"不是正文流，行长失控会让日期列与内容读成两栏报纸 */
 .lc-cl-list{display:flex;flex-direction:column;max-width:820px}
 /* 分隔线口径与 FAQ 条目完全一致：同一页里"逐条可读"的内容用同一种线 */
-.lc-cl-item{display:grid;grid-template-columns:112px 1fr;gap:24px;padding:20px 0;border-top:1px solid var(--lc-border-faint)}
+.lc-cl-item{display:grid;grid-template-columns:112px 1fr;gap:24px;padding:20px 0;border-top:2px solid var(--lc-border-faint)}
 /* 日期等宽字体：五条日期数位天然对齐，左侧收成一根竖线 */
-.lc-cl-date{font-family:var(--lc-font-mono);font-size:13px;color:var(--lc-text-3);padding-top:4px}
-.lc-cl-t{margin:0;font-size:16px;font-weight:600;color:var(--lc-text-1)}
-.lc-cl-d{margin:6px 0 0;font-size:14px;line-height:22px;color:var(--lc-text-3)}
+.lc-cl-date{font-family:var(--lc-font-mono);font-size:15px;color:var(--lc-text-3);padding-top:4px}
+.lc-cl-t{margin:0;font-size:18px;font-weight:600;color:var(--lc-text-1)}
+.lc-cl-d{margin:6px 0 0;font-size:16px;line-height:22px;color:var(--lc-text-3)}
 
 /* —— 7b. 关于我们 —— */
 /* 网格参数照抄 FAQ（360px + 1fr / gap 80）：两个"左目录右正文"区块不该各造一套版式 */
 .lc-about{display:grid;grid-template-columns:360px 1fr;gap:80px}
 .lc-about-head{display:flex;flex-direction:column;gap:14px;align-items:flex-start}
-.lc-about-p{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
-.lc-about-pt{border-top:1px solid var(--lc-border-faint);padding:20px 0;display:flex;flex-direction:column;gap:8px}
+.lc-about-p{margin:0;font-size:17px;line-height:24px;color:var(--lc-text-3)}
+.lc-about-pt{border-top:2px solid var(--lc-border-faint);padding:20px 0;display:flex;flex-direction:column;gap:8px}
 /* 标题 18px 与 FAQ 问题同档：三条是"陈述"不是"问答"，但阅读层级要一致 */
 .lc-about-t{margin:0;font-size:18px;font-weight:600;color:var(--lc-text-1);display:flex;align-items:center;gap:10px}
 .lc-about-t svg{color:var(--lc-text-3);flex:none}
-.lc-about-d{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-3)}
+.lc-about-d{margin:0;font-size:17px;line-height:24px;color:var(--lc-text-3)}
 
 /* —— 8. 收尾 CTA —— */
 /* 上边距给 0：它紧贴上一区块（关于我们），靠白块本身的反相与上文切开，不需要再留一段黑 */
@@ -1363,37 +1363,37 @@ const LANDING_CSS = `
 .lc-cta{display:flex;flex-direction:column;align-items:center;gap:20px;padding:60px 80px;background:var(--lc-fill-white);border-radius:20px;text-align:center}
 .lc-cta-t{margin:0;font-size:clamp(24px,2.22vw,32px);font-weight:700;color:#000}
 /* 白块里的次级文字同样只能取最深那档灰：比 #000 弱一级，既读得清又不抢标题 */
-.lc-cta-sub{margin:0;font-size:16px;color:var(--lc-text-4)}
+.lc-cta-sub{margin:0;font-size:18px;color:var(--lc-text-4)}
 
 /* —— 8b. 收尾留资表单（★ P1-3；结构见 components/LeadForm.tsx，本页带状态组件之一，另两处是 HeroDemo/DevSample） —— */
 /* 分隔线两侧各一段 1px 短线：把"免费自助注册"与"留资等回电"两条路在视觉上并置成二选一 */
-.lc-lead-sep{display:flex;align-items:center;gap:14px;width:100%;max-width:560px;font-size:13px;color:var(--lc-text-4)}
+.lc-lead-sep{display:flex;align-items:center;gap:14px;width:100%;max-width:560px;font-size:15px;color:var(--lc-text-4)}
 .lc-lead-sep::before,.lc-lead-sep::after{content:'';flex:1;height:1px;background:rgba(0,0,0,.12)}
 /* 表单与分隔线同宽：白块居中排版下两条"路"共享同一根行长轴；relative 给蜜罐的 absolute 定位兜底 */
 .lc-lead{position:relative;width:100%;max-width:560px;display:flex;flex-direction:column;gap:14px;text-align:left}
 .lc-lead-row{display:flex;gap:14px}
 .lc-lead-field{flex:1;display:flex;flex-direction:column;gap:6px;min-width:0}
-.lc-lead-label{font-size:13px;font-weight:600;color:rgba(0,0,0,.68)}
+.lc-lead-label{font-size:15px;font-weight:600;color:rgba(0,0,0,.68)}
 /* 白块上的输入框必须显式给白底：.lc-input 基类是深色主题底，直接复用会黑成一团 */
-.lc-lead-input{width:100%;background:#fff;border:1px solid rgba(0,0,0,.16);border-radius:10px;padding:10px 12px;font-size:14px;color:#000}
+.lc-lead-input{width:100%;background:#fff;border:2px solid rgba(0,0,0,.16);border-radius:10px;padding:10px 12px;font-size:16px;color:#000}
 .lc-lead-input:focus{outline:none;border-color:#000}
 .lc-lead-msg{resize:vertical;min-height:52px;font-family:inherit}
 .lc-lead-langs{display:flex;flex-direction:column;gap:8px}
 .lc-lead-chips{display:flex;flex-wrap:wrap;gap:8px}
 /* 语言胶囊沿用全站 radius 999 口径；选中态=白块上的反相（黑底白字），与主按钮同语法 */
-.lc-lead-chip{height:30px;padding:0 14px;border:1px solid rgba(0,0,0,.16);border-radius:999px;background:#fff;color:rgba(0,0,0,.72);font-size:13px;cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}
+.lc-lead-chip{height:30px;padding:0 14px;border:2px solid rgba(0,0,0,.16);border-radius:999px;background:#fff;color:rgba(0,0,0,.72);font-size:15px;cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}
 .lc-lead-chip:hover{border-color:#000}
 .lc-lead-chip.on{background:#000;border-color:#000;color:#fff}
 /* 蜜罐：不用 display:none（部分 bot 会跳过隐藏域），用 1px 裁剪——人眼不可见、仍在 DOM */
 .lc-lead-hp{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .lc-lead-captcha{align-self:flex-start}
 /* 报错只用判错红（与演示卡划线同色系），不引入第二套告警色 */
-.lc-lead-err{margin:0;font-size:13px;color:var(--lc-danger)}
+.lc-lead-err{margin:0;font-size:15px;color:var(--lc-danger)}
 /* 提交按钮 = 白块上的主投反相（与收尾 Pill 同形）：同屏两颗黑胶囊只有一颗是"最终动作" */
-.lc-lead-btn{align-self:flex-start;height:46px;padding:0 26px;border:0;border-radius:999px;background:#000;color:#fff;font-size:15px;font-weight:600;cursor:pointer}
+.lc-lead-btn{align-self:flex-start;height:46px;padding:0 26px;border:0;border-radius:999px;background:#000;color:#fff;font-size:17px;font-weight:600;cursor:pointer}
 .lc-lead-btn:disabled{opacity:.55;cursor:default}
 /* 成功回执：中性描边框住一句 status 文案，不动用绿色（本页无绿口径） */
-.lc-lead-ok{display:flex;align-items:center;gap:10px;width:100%;max-width:560px;padding:16px 18px;border:1px solid rgba(0,0,0,.14);border-radius:12px;background:rgba(0,0,0,.03);font-size:14px;color:#000;text-align:left}
+.lc-lead-ok{display:flex;align-items:center;gap:10px;width:100%;max-width:560px;padding:16px 18px;border:2px solid rgba(0,0,0,.14);border-radius:12px;background:rgba(0,0,0,.03);font-size:16px;color:#000;text-align:left}
 
 /* —— 9. 页脚 —— */
 .lc-foot{padding:60px 80px 40px}
@@ -1402,15 +1402,15 @@ const LANDING_CSS = `
 .lc-foot-brand{width:320px;display:flex;flex-direction:column;gap:14px}
 /* 页脚复用导航的品牌类名，只把字号调小：标识在整站只允许一套画法 */
 .lc-foot-brand .lc-nav-brand{font-size:20px}
-.lc-foot-tag{margin:0;font-size:14px;line-height:22px;color:var(--lc-text-3)}
+.lc-foot-tag{margin:0;font-size:16px;line-height:22px;color:var(--lc-text-3)}
 .lc-foot-cols{display:flex;gap:80px;flex-wrap:wrap}
-.lc-foot-col{display:flex;flex-direction:column;gap:12px;font-size:14px}
+.lc-foot-col{display:flex;flex-direction:column;gap:12px;font-size:16px}
 .lc-foot-col b{font-weight:600;color:var(--lc-text-1)}
 .lc-foot-col a{color:var(--lc-text-3);transition:color var(--lc-mo-release) var(--lc-mo-out)}
 .lc-foot-col a:hover{color:var(--lc-text)}
 /* 分隔线用 1px 空 div：要的是"上 40 下 20"的不对称呼吸，线更贴近版权那一行 */
 .lc-foot-div{height:1px;background:var(--lc-border-card);margin-top:40px}
-.lc-foot-bot{padding-top:20px;font-size:13px;color:var(--lc-text-4)}
+.lc-foot-bot{padding-top:20px;font-size:15px;color:var(--lc-text-4)}
 
 /* —— 响应式：断点只改布局与留白，不改视觉语言（颜色、描边、字号档一律复用上面的规则） —— */
 /* 1200px：首屏从左右两栏折成上下两段，同时把 80px 外边距收到 40px，bento 顶栏并为单列 */
@@ -1459,7 +1459,7 @@ const LANDING_CSS = `
 }
 /* 400px 以下：导航那颗 sm 按钮再降一档，避免与"登录"挤成两行 */
 @media (max-width:400px){
-  .lc-nav-cta .lc-mkt-btn--sm{height:36px;padding:0 14px;font-size:13px}
+  .lc-nav-cta .lc-mkt-btn--sm{height:36px;padding:0 14px;font-size:15px}
 }
 
 /* ================= Hero 演示卡（hero-stream.html 移植，类名 hd-*） ================= */
@@ -1471,7 +1471,7 @@ const LANDING_CSS = `
 /* 底色与页面同黑，所以"卡片感"只能靠最高一档描边（--lc-border-strong 6.0:1）+ 顶缘那 1px 内受光做出来 */
 .hd-panel{
   background:var(--lc-bg);
-  border:1.2px solid var(--lc-border-strong);
+  border:2px solid var(--lc-border-strong);
   border-radius:16px;overflow:hidden;position:relative;
   box-shadow:var(--lc-panel-highlight);
   transition:border-color .62s ease,filter .16s linear;
@@ -1499,7 +1499,7 @@ const LANDING_CSS = `
 @keyframes hdSweep{from{width:0}to{width:100%}}
 
 /* 标题栏定高 46px：它只是"窗口感"，不参与内容高度计算 */
-.hd-bar{height:46px;display:flex;align-items:center;justify-content:space-between;padding:0 32px;border-bottom:1px solid var(--lc-border-faint)}
+.hd-bar{height:46px;display:flex;align-items:center;justify-content:space-between;padding:0 32px;border-bottom:2px solid var(--lc-border-faint)}
 /* 三点用第一/第三点拉开明暗：三颗同色会像"禁用态"，有一颗最亮才像窗口 */
 .hd-dots{display:inline-flex;align-items:center;gap:6px;flex:none}
 .hd-dots i{width:10px;height:10px;border-radius:999px;background:var(--lc-text-4)}
@@ -1507,18 +1507,18 @@ const LANDING_CSS = `
 .hd-dots i:nth-child(2){background:var(--lc-text-3)}
 /* 品牌名与副标基线对齐：字号相同但字重与色阶不同，用 center 会让 em 看起来偏低 */
 .hd-name{display:inline-flex;align-items:baseline;white-space:nowrap}
-.hd-name b{font-size:13px;font-weight:600;color:var(--lc-text-1);letter-spacing:.02em}
-.hd-name em{margin-left:5px;font-style:normal;font-size:13px;font-weight:600;color:var(--lc-text-2);letter-spacing:.02em}
+.hd-name b{font-size:15px;font-weight:600;color:var(--lc-text-1);letter-spacing:.02em}
+.hd-name em{margin-left:5px;font-style:normal;font-size:15px;font-weight:600;color:var(--lc-text-2);letter-spacing:.02em}
 /* 语种标签用拉丁字体族：里面是 "ZH → EN" 这类拉丁字形，用中文字体拿不到正确的箭头与字距 */
-.hd-tag{font-size:12px;color:var(--lc-text-4);font-family:var(--lc-font-latin);letter-spacing:.03em;border:1.2px solid var(--lc-border-pill);border-radius:999px;padding:5px 12px;white-space:nowrap}
+.hd-tag{font-size:14px;color:var(--lc-text-4);font-family:var(--lc-font-latin);letter-spacing:.03em;border:2px solid var(--lc-border-pill);border-radius:999px;padding:5px 12px;white-space:nowrap}
 
 /* —— 原文区 —— */
 .hd-stream{padding:30px 32px 20px}
-.hd-src{border:1.2px solid var(--lc-border-input);border-radius:14px;padding:16px 18px}
-.hd-srctag{display:block;font-size:12px;letter-spacing:.06em;color:var(--lc-text-4);margin-bottom:8px}
+.hd-src{border:2px solid var(--lc-border-input);border-radius:14px;padding:16px 18px}
+.hd-srctag{display:block;font-size:14px;letter-spacing:.06em;color:var(--lc-text-4);margin-bottom:8px}
 .hd-srcwrap{position:relative}
 /* min-height 一格：ghost 与真身都在，这里再兜一层，避免首帧空白时输入框塌陷 */
-.hd-srctext{font-size:15px;line-height:26px;color:#B4B9C0;min-height:26px}
+.hd-srctext{font-size:17px;line-height:26px;color:#B4B9C0;min-height:26px}
 /* ghost 用 visibility 不用 display：要它继续占位撑高，真身才能绝对定位盖上去（打字时不跳行高） */
 .hd-srctext.ghost{visibility:hidden}
 .hd-srcwrap .hd-srctext:not(.ghost){position:absolute;left:0;top:0;right:0}
@@ -1526,7 +1526,7 @@ const LANDING_CSS = `
 .hd-srctext.typing::after{content:'';display:inline-block;width:2px;height:14px;margin-left:3px;vertical-align:-3px;background:currentColor;animation:hdBlink .9s steps(1) infinite}
 
 /* 状态行：min-height 先占好一格，文案打出来前后都不许顶动下面的量尺 */
-.hd-status{margin-top:14px;min-height:22px;display:flex;align-items:center;gap:10px;font-size:13px;line-height:22px;color:var(--lc-text-3);opacity:0;transition:opacity .45s ease}
+.hd-status{margin-top:14px;min-height:22px;display:flex;align-items:center;gap:10px;font-size:15px;line-height:22px;color:var(--lc-text-3);opacity:0;transition:opacity .45s ease}
 .hd-status.in{opacity:1}
 /* 脉冲点常驻无限循环：它表达"系统还活着"，一旦停了观众会以为演示结束 */
 .hd-pulse{width:6px;height:6px;border-radius:999px;background:var(--lc-text-4);flex:none;animation:hdPulse 1.4s ease-in-out infinite}
@@ -1538,9 +1538,9 @@ const LANDING_CSS = `
 .hd-steps{margin-top:16px;margin-bottom:16px}
 .hd-slabels{display:flex;margin-bottom:8px}
 /* flex:1 把整条尺按术语条数等分：标签落点与 JS 写进 style 的百分比共用同一套比例，天然对齐 */
-.hd-sl{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-size:12px;line-height:16px;letter-spacing:.02em;color:#3F444B;white-space:nowrap;opacity:0;transition:color .5s ease}
+.hd-sl{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-size:14px;line-height:16px;letter-spacing:.02em;color:#3F444B;white-space:nowrap;opacity:0;transition:color .5s ease}
 /* 序号单独 10px + 等宽数字：01/02/03 的字宽必须一致，否则后面的中文标签会左右跳动 */
-.hd-sl i{font-style:normal;font-family:var(--lc-font-latin);font-size:10px;font-weight:600;letter-spacing:0;font-variant-numeric:tabular-nums;color:#33383F;transition:color .5s ease}
+.hd-sl i{font-style:normal;font-family:var(--lc-font-latin);font-size:12px;font-weight:600;letter-spacing:0;font-variant-numeric:tabular-nums;color:#33383F;transition:color .5s ease}
 /* done→cur 只换颜色、不换字重：字重一变行宽就抖，量尺只是背景信息，抖动比对比度低更难受 */
 .hd-sl.done{color:#8A9099}.hd-sl.done i{color:#C8CCD1}
 .hd-sl.cur{color:var(--lc-text-1)}.hd-sl.cur i{color:#fff}
@@ -1559,7 +1559,7 @@ const LANDING_CSS = `
 /* 外扩 36px 径向光用伪元素而不是 box-shadow：box-shadow 出不了珠子自身轮廓，做不出这团"热度" */
 .hd-gbead::before{content:'';position:absolute;left:50%;top:50%;width:36px;height:36px;margin:-18px 0 0 -18px;border-radius:50%;background:radial-gradient(closest-side,rgba(255,255,255,.26) 0%,rgba(255,255,255,0) 100%)}
 /* 内层 16px 圆环：平时 scale(.35)+透明，只有 .snap 才炸一次，用作"这一条判完了"的打点 */
-.hd-gbead::after{content:'';position:absolute;left:50%;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;border:1.2px solid rgba(255,255,255,.9);opacity:0;transform:scale(.35)}
+.hd-gbead::after{content:'';position:absolute;left:50%;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;border:2px solid rgba(255,255,255,.9);opacity:0;transform:scale(.35)}
 /* forwards 停在透明终态：摘掉 .snap 时不会看到圆环"倒放"回去 */
 .hd-gbead.snap::after{animation:hdBeadPulse .62s cubic-bezier(.2,.8,.2,1) forwards}
 @keyframes hdBeadPulse{0%{opacity:0;transform:scale(.35)}12%{opacity:.95;transform:scale(.6)}100%{opacity:0;transform:scale(2.6)}}
@@ -1598,7 +1598,7 @@ const LANDING_CSS = `
 /* 命中确认只动 filter:brightness，不碰 color/宽度：这两样已被 struck 与 glow 占用，同属性会互相覆写 */
 
 /* 序号：默认就是危险色——它标的是"被判错的那条初译"；24px 定宽 + 等宽数字，三条轮播左缘才齐 */
-.hd-idx{align-self:center;flex:none;width:24px;font-family:var(--lc-font-latin);font-size:14px;font-weight:600;color:var(--lc-danger);font-variant-numeric:tabular-nums}
+.hd-idx{align-self:center;flex:none;width:24px;font-family:var(--lc-font-latin);font-size:16px;font-weight:600;color:var(--lc-danger);font-variant-numeric:tabular-nums}
 .hd-idx.pop{animation:hdIdxPop .46s cubic-bezier(.2,.9,.3,1) both}
 @keyframes hdIdxPop{0%{transform:scale(1.38);color:#fff}100%{transform:scale(1);color:var(--lc-danger)}}
 /* 白起纯基线收：pop 与 .hd-row.in 同帧挂，读作"这一项开始了"，所以起帧要最亮 */
@@ -1634,7 +1634,7 @@ const LANDING_CSS = `
 
 /* —— 回写结果框：峰值一次给"框出现→斜扫光→描边转完成色→落章"四段，段段独立挂类（in/sweep/settled/stamp）—— */
 /* 起手 transform:scale(.992) 而不是 scale(.9)：结果框里全是正文，位移过大会读不清；overflow:hidden 给 ::before/::after 的两道扫光裁边 */
-.hd-result{position:relative;overflow:hidden;width:100%;padding:16px 18px;border:1.2px solid var(--lc-border-input);border-radius:14px;opacity:0;transform:scale(.992);transform-origin:50% 50%;transition:opacity .3s ease-out,transform .42s cubic-bezier(.16,1,.3,1),border-color .7s ease}
+.hd-result{position:relative;overflow:hidden;width:100%;padding:16px 18px;border:2px solid var(--lc-border-input);border-radius:14px;opacity:0;transform:scale(.992);transform-origin:50% 50%;transition:opacity .3s ease-out,transform .42s cubic-bezier(.16,1,.3,1),border-color .7s ease}
 .hd-result.in{opacity:1;transform:none}
 /* settled 只换描边、.7s 慢过渡：爆发收势后要把"这是最终结果"这件事安静地说完，不该再有动静 */
 .hd-result.settled{border-color:var(--lc-border-done)}
@@ -1676,27 +1676,27 @@ const LANDING_CSS = `
 .hd-mark.glow{animation:hdMarkGlow .72s ease-out forwards}
 /* drop-shadow 而非 box-shadow：SVG 里只有那两笔折线，box-shadow 会照矩形边框发光 */
 @keyframes hdMarkGlow{0%{filter:drop-shadow(0 0 0 rgba(255,255,255,0))}8%{filter:drop-shadow(0 0 8px rgba(255,255,255,.95))}100%{filter:drop-shadow(0 0 0 rgba(255,255,255,0))}}
-.hd-ring{position:absolute;left:50%;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:999px;border:1.2px solid rgba(255,255,255,.85);opacity:0;transform:scale(.5);pointer-events:none}
+.hd-ring{position:absolute;left:50%;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:999px;border:2px solid rgba(255,255,255,.85);opacity:0;transform:scale(.5);pointer-events:none}
 .hd-ring.go{animation:hdRing .92s cubic-bezier(.2,.8,.2,1) forwards}
 @keyframes hdRing{0%{opacity:0;transform:scale(.5)}6%{opacity:.9}100%{opacity:0;transform:scale(3.2)}}
 /* 扩散到 3.2 倍才收：这是"落章"的余波，收得比对勾快会让人只看到一圈闪光 */
-.hd-rlabel{font-size:14px;font-weight:500;color:var(--lc-text-1);white-space:nowrap}
+.hd-rlabel{font-size:16px;font-weight:500;color:var(--lc-text-1);white-space:nowrap}
 /* 结论标签的 .stamp 与对勾 .glow 在 JS 里同帧挂：两处亮点同时出现才像"盖章"，错开会被读成两个事件 */
 .hd-rlabel.stamp{animation:hdLabelGlow .8s ease-out forwards}
 /* 100% 帧显式写回 var(--lc-text-1)：forwards 锁的就是终帧，不写回来文案会永久停在纯白 */
 @keyframes hdLabelGlow{0%{color:var(--lc-text-1);text-shadow:none}7%{color:#fff;text-shadow:0 0 12px rgba(255,255,255,.85)}100%{color:var(--lc-text-1);text-shadow:none}}
 /* 统计副标平时压到最暗一档：先给结论再给数字；.lit 由 JS 在盖章之后再挂，顺序反了会抢峰值 */
-.hd-rsub{font-size:12px;color:var(--lc-text-4);transition:color .55s ease;white-space:nowrap}
+.hd-rsub{font-size:14px;color:var(--lc-text-4);transition:color .55s ease;white-space:nowrap}
 .hd-rsub.lit{color:var(--lc-text-2)}
 /* 右侧"复制"是真实按钮：点击把定稿译文写入剪贴板并短暂显示"已复制"（font 继承自 .hd-rhead 语境） */
-.hd-dlbtn{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:#C8CCD1;font:500 12px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)}
+.hd-dlbtn{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:2px solid var(--lc-border-pill);border-radius:8px;background:none;color:#C8CCD1;font:500 14px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)}
 .hd-dlbtn:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
 .hd-dlbtn svg{display:block}
 /* display:block 消掉行内 SVG 的基线下沉：图标与 12px 文案要在 28px 高的胶囊里精确居中 */
 
 /* —— 定稿译文区：与原文区同一套"ghost 撑高 + 真身覆盖"，外层再叠一条审校窄光 —— */
 .hd-fwrap{position:relative}
-.hd-final{font-family:var(--lc-font-latin);font-size:16px;line-height:28px;color:var(--lc-text-1)}
+.hd-final{font-family:var(--lc-font-latin);font-size:18px;line-height:28px;color:var(--lc-text-1)}
 /* 拉丁字体族：DEMO_FINAL 是整句英文，用中文栈会让字距与连字都变形（中英混排时才需要中文兜底） */
 .hd-final.ghost{visibility:hidden}
 .hd-fwrap .hd-final:not(.ghost){position:absolute;left:0;top:0;right:0}

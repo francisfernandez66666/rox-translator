@@ -78,7 +78,7 @@ export function Dialog({
             ref={cancelRef}
             type="button"
             className="lc-btn lc-btn--secondary"
-            style={{ padding: "8px 16px", fontSize: 13 }}
+            style={{ padding: "8px 16px", fontSize: 15 }}
             onClick={onCancel}
           >
             {cancelText}

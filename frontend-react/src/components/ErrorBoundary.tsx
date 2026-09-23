@@ -64,7 +64,7 @@ export default class ErrorBoundary extends Component<Props, State> {
           <div style={{ fontSize: 48 }}><Icon n="alert" /></div>
           <h2 style={{ margin: 0, fontSize: 20, color: 'var(--lc-text-1, #E7E9EA)' }}>页面出现异常</h2>
           {/* 直接把 error.message 摊出来：这页已经不会有人二次操作，信息多一点比美观重要 */}
-          <p style={{ margin: 0, fontSize: 14, color: 'var(--lc-text-3, #9AA0AA)', maxWidth: 480 }}>
+          <p style={{ margin: 0, fontSize: 16, color: 'var(--lc-text-3, #9AA0AA)', maxWidth: 480 }}>
             {this.state.error?.message || '未知错误，请尝试刷新页面'}
           </p>
           <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
@@ -73,8 +73,8 @@ export default class ErrorBoundary extends Component<Props, State> {
             <button
               onClick={this.handleRetry}
               style={{
-                padding: '8px 24px', borderRadius: 6, border: '1.2px solid var(--lc-fill-white, #FFFFFF)',
-                background: 'var(--lc-fill-white, #FFFFFF)', color: '#000', fontSize: 14, cursor: 'pointer',
+                padding: '8px 24px', borderRadius: 6, border: '2px solid var(--lc-fill-white, #FFFFFF)',
+                background: 'var(--lc-fill-white, #FFFFFF)', color: '#000', fontSize: 16, cursor: 'pointer',
               }}
             >
               重试
@@ -83,8 +83,8 @@ export default class ErrorBoundary extends Component<Props, State> {
               // 硬跳转（不是 navigate）：整页重载才能顺带丢掉可能已经脏掉的 store / 模块级单例状态
               onClick={() => { window.location.href = '/' }}
               style={{
-                padding: '8px 24px', borderRadius: 6, border: '1.2px solid var(--lc-border-card, #3A404C)',
-                background: 'transparent', color: 'var(--lc-text-1, #E7E9EA)', fontSize: 14, cursor: 'pointer',
+                padding: '8px 24px', borderRadius: 6, border: '2px solid var(--lc-border-card, #3A404C)',
+                background: 'transparent', color: 'var(--lc-text-1, #E7E9EA)', fontSize: 16, cursor: 'pointer',
               }}
             >
               返回首页

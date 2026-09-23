@@ -13,18 +13,18 @@
       --lc-text:#E7E9EA;--lc-text-2:#9AA0AA;--lc-text-3:#71767B;
       --lc-line:#464C58;--lc-white:#FFFFFF;
     }
-    body { width: 300px; margin: 0; padding: 16px; font: 13px/1.6 system-ui, sans-serif; background: var(--lc-bg); color: var(--lc-text); }
-    h1 { font-size: 15px; font-weight: 700; margin: 0 0 10px; color: var(--lc-white); }
+    body { width: 300px; margin: 0; padding: 16px; font: 15px/1.6 system-ui, sans-serif; background: var(--lc-bg); color: var(--lc-text); }
+    h1 { font-size: 17px; font-weight: 700; margin: 0 0 10px; color: var(--lc-white); }
     label { display: block; margin: 10px 0 4px; color: var(--lc-text-2); }
     /* 输入类统一取「凹陷底 #0A0B0D + 1.2px 描边」，select 原先的内联样式并入此条，避免两处各写一套 */
-    input, select { width: 100%; box-sizing: border-box; padding: 8px 10px; background: var(--lc-inset); border: 1.2px solid var(--lc-line); border-radius: 8px; font-size: 13px; font-family: inherit; color: var(--lc-text); }
+    input, select { width: 100%; box-sizing: border-box; padding: 8px 10px; background: var(--lc-inset); border: 2px solid var(--lc-line); border-radius: 8px; font-size: 15px; font-family: inherit; color: var(--lc-text); }
     input:focus, select:focus { outline: none; border-color: var(--lc-text-3); }
     /* 主按钮＝纯白底黑字（交付真值 .lc-btn--primary{background:#FFFFFF}），hover 用降透明而不是变蓝 */
     button { margin-top: 14px; width: 100%; padding: 9px; border: none; border-radius: 8px; background: var(--lc-white); color: #000000; font-weight: 500; cursor: pointer; }
     button:hover { opacity: .88; }
-    .hint { color: var(--lc-text-3); font-size: 12px; margin-top: 10px; }
+    .hint { color: var(--lc-text-3); font-size: 14px; margin-top: 10px; }
     /* 成功态不再标绿（§1.1 全站无绿）：走主文字档 + 面板底，靠文案与勾号表意 */
-    .ok { color: var(--lc-text); background: var(--lc-panel); border: 1.2px solid var(--lc-line); border-radius: 8px; padding: 6px 8px; display: none; margin-top: 6px; }
+    .ok { color: var(--lc-text); background: var(--lc-panel); border: 2px solid var(--lc-line); border-radius: 8px; padding: 6px 8px; display: none; margin-top: 6px; }
   </style>
 </head>
 <body>
