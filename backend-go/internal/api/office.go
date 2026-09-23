@@ -84,11 +84,13 @@ const officeTaskPaneHTML = `<!DOCTYPE html>
 /* ★ 2026-09-22 全站 UI 还原批：Word 任务窗格原先是「Google 蓝 #1a73e8 + indigo 标题 + 白底」的
    独立浅底主题。本页由后端直出、不在前端构建产物里，前端令牌闸门扫不到（与 /docs/*、/openapi/docs、
    assist 管理台同一类盲区）。现按 UI-ANNOTATIONS §1.1 令牌走纯黑底，主按钮＝白底黑字实心件
-   （交付真值 .lc-btn--primary{background:#FFFFFF}），次按钮走描边档；绿色成功态废止（全站无蓝无绿）。 */
+   （交付真值 .lc-btn--primary{background:#FFFFFF}），次按钮走描边档；绿色成功态废止（全站无蓝无绿）。
+   ★ 2026-09-23 〇-O 用户后令「框线全部纯白 + 背景黑 + 深灰分层」：描边族一律 #FFFFFF，
+   面档取台阶 L2 #121417 / L3 #1A1D21，与 tokens.css 逐字同源（闸门见 public_ui_test.go）。 */
 :root{
-  --lc-bg:#000000;--lc-panel:#0E1014;--lc-surface:#16181C;--lc-inset:#0A0B0D;
+  --lc-bg:#000000;--lc-panel:#121417;--lc-surface:#1A1D21;--lc-inset:#0A0B0D;
   --lc-text:#E7E9EA;--lc-text-2:#9AA0AA;--lc-text-3:#71767B;
-  --lc-line:#464C58;--lc-pill:#424956;--lc-card-line:#3A404C;--lc-white:#FFFFFF;
+  --lc-line:#FFFFFF;--lc-pill:#FFFFFF;--lc-card-line:#FFFFFF;--lc-white:#FFFFFF;
   --lc-danger:#E5484D;
 }
 *{box-sizing:border-box}

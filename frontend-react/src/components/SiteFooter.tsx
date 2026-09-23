@@ -39,7 +39,7 @@ export default function SiteFooter() {
         marginTop: 'auto',
         padding: '14px 20px',
         // 配色对齐 UI 真值页脚条：面 #050607（--lc-surface-4）、文字 12px #536471、
-        // 顶缘一条常规分隔线档（--npz-line = border-4 #464C58）
+        // 顶缘一条常规分隔线档（--npz-line 〇-O 起 = 纯白 #FFFFFF）
         borderTop: '2px solid var(--npz-line)',
         background: '#050607',
         color: '#536471',

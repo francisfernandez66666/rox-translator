@@ -28,9 +28,10 @@ const BASE = process.env.BASE_URL || 'http://127.0.0.1:8899';
 // 截图小件：把页面截图落 artifacts/<name>.png，供人工复核像素渲染
 const shot = (p: Page, name: string) => p.screenshot({ path: `artifacts/${name}.png`, fullPage: false });
 
-// WCAG 对比度实计算：把 getComputedStyle 返回的 rgb()/rgba() 前景色对工作台卡面 #0E1014
-// 求比值（口径与 src/styles/readability.test.ts 一致），供「弱文字不得偏暗」类断言使用。
-function contrastOnCard(fg: string, bg = '#0E1014'): number {
+// WCAG 对比度实计算：把 getComputedStyle 返回的 rgb()/rgba() 前景色对工作台卡面求比值
+// （口径与 src/styles/readability.test.ts 一致），供「弱文字不得偏暗」类断言使用。
+// ★ 〇-O（2026-09-23）默认卡面由 #0E1014 抬到台阶 L2 #121417；调用点一律显式传实际底色的，不受默认值影响。
+function contrastOnCard(fg: string, bg = '#121417'): number {
   const parse = (s: string): [number, number, number] => {
     const m = s.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
     if (!m) throw new Error(`无法解析颜色：${s}`);
@@ -190,7 +191,7 @@ test.describe('像素级 UAT', () => {
     const bubbleFs = await page.locator('.bubble').first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize)).catch(() => -1);
     if (bubbleFs >= 0) expect(bubbleFs, `气泡字号 ${bubbleFs}px ≠ 〇-N 后档 16px`).toBe(16);
     // 弱说明文字：颜色必须落在真值灰阶集合内（提亮批自造的 #878D95/#7A828E/#9AA2AF 一律红灯），
-    // 并顺手核对该灰阶对卡面 #0E1014 的实际比值是否等于真值口径（≥4:1，图形/弱文字档）。
+    // 并顺手核对该灰阶对页面底 #000000 的实际比值是否等于真值口径（≥4:1，图形/弱文字档）。
     const welcomeColor = await dialog.locator('.cw-welcome').evaluate((el) => getComputedStyle(el).color);
     const TRUTH_RGB = ['#E7E9EA', '#9AA0AA', '#71767B', '#8A9099', '#536471']
       .map((h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(','));
@@ -223,6 +224,98 @@ test.describe('像素级 UAT', () => {
     expect(langH, `语种钮实高 ${langH}px ⇒ 文案已折行`).toBeLessThanOrEqual(38);
     expect(await langBtn.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), '语种钮字号 ≠ 〇-N 后档 14px').toBe(14);
     await shot(page, 'p2b_workbench_merged');
+  });
+
+  // ★ 〇-O（2026-09-23 用户后令「框线全部纯白 + 背景主色黑 + 深灰分层」）运行时等值锁。
+  // 为什么必须有一侧运行时锁：〇-O 的改动 90% 落在令牌层（tokens.css / theme.css 的 --*-line、
+  // --*-card），src/styles/readability.test.ts 的 A/F 段量的是**源码里的声明**，而「令牌声明翻白、
+  // 组件被更具体的页面规则盖住」这类失效只有浏览器算完层叠才看得见——历史上〇-L 的灰描边
+  // 就是这么在源码锁全绿的情况下留在页面上的。
+  test('P2d 〇-O 白框 + 三级面色台阶运行时等值（工作台 + 后台）', async ({ page }) => {
+    const rgb = (h: string) => {
+      const v = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+      return `rgb(${v[0]}, ${v[1]}, ${v[2]})`;
+    };
+    const WHITE = rgb('#FFFFFF');
+    // 〇-O 面色台阶档（probe 里把 computed backgroundColor 转回 hex 再比，避免 rgb/hex 两套写法混着比）
+    const FACE_STEPS = ['#121417', '#1A1D21', '#0A0B0D', '#000000', '#050607'];
+    // 量一个元素：边框色/宽 + 背景（背景写成 hex 便于与台阶档直接等值比对）。
+    // ⚠️ probe/hex 必须定义在 evaluate 回调**内部**：回调是在浏览器进程里执行的，
+    // 引用 Node 侧闭包会直接 ReferenceError（首版就是这么写，P2d 恒红而非假绿）。
+    // —— 工作台：对话框框、输入卡、语种胶囊 ——
+    await login(page);
+    await page.goto('/');
+    await expect(page.locator('.cw-dialog'), '工作台对话框未渲染（载入闸门或选择器改名）').toBeVisible({ timeout: 30000 });
+    const wb = await page.evaluate(() => {
+      const hex = (c: string) => '#' + (c.match(/\d+(\.\d+)?/g) || []).slice(0, 3)
+        .map((n) => (+n).toString(16).padStart(2, '0')).join('').toUpperCase();
+      const probe = (el: Element) => {
+        const s = getComputedStyle(el);
+        return {
+          bw: [s.borderTopWidth, s.borderRightWidth, s.borderBottomWidth, s.borderLeftWidth],
+          bc: [s.borderTopColor, s.borderRightColor, s.borderBottomColor, s.borderLeftColor],
+          bg: hex(s.backgroundColor),
+        };
+      };
+      const dialog = document.querySelector('.cw-dialog')!;
+      const composer = dialog.querySelector('.cw-composer')!;
+      const chip = document.querySelector('.app-header .lang-sel-btn')!;
+      return {
+        dialog: probe(dialog), composer: probe(composer), chip: probe(chip),
+        pageBg: getComputedStyle(document.body).backgroundColor,
+        // 框线不得有「灰阶第三档」：顶边既非纯白也非语义色即红（透明边算未画框）。
+        // 白族判定与源码锁 readability.test.ts 的 BORDER_HEX_ALLOW 同口径：〇-O 禁的是
+        // **不透明灰阶档**（#464C58/#3A404C/#424956…），半透明白（.tag-lang 这类弱标签、
+        // 加载转圈的 fade）是白族的降透明写法，不是灰档，一律放行。
+        hairline: [...dialog.querySelectorAll<HTMLElement>('*')].filter((n) => {
+          const s = getComputedStyle(n);
+          const w = parseFloat(s.borderTopWidth);
+          if (w === 0 || s.borderTopColor === 'rgba(0, 0, 0, 0)' || s.borderTopColor === 'rgb(255, 255, 255)') return false;
+          if (/^rgba\((255, 255, 255|231, 233, 234), /.test(s.borderTopColor)) return false;
+          // 语义状态边（判错红 / 危险红底 / 琥珀）放行，它们不是框线档
+          return !/rgb\((229|248|210),/.test(s.borderTopColor) && s.borderTopColor !== 'rgb(64, 35, 35)';
+        }).map((n) => `${n.className || n.tagName}:${getComputedStyle(n).borderTopColor}`),
+      };
+    });
+    expect(wb.dialog.bc[0], `对话框顶边 ${wb.dialog.bc[0]} ≠ 〇-O 纯白`).toBe(WHITE);
+    expect(wb.dialog.bw[0], `对话框边宽 ${wb.dialog.bw[0]} ≠ 〇-N 后档 2px`).toBe('2px');
+    expect(wb.dialog.bg, `对话框面 ${wb.dialog.bg} ≠ 台阶 L2 #121417`).toBe('#121417');
+    // 语种钮是「有框才必须白」：它当前确实带 2px 胶囊边，但真不画框也不算跑偏（画了框才谈档）
+    if (parseFloat(wb.chip.bw[0]) > 0) expect(wb.chip.bc[0], `语种钮边 ${wb.chip.bc[0]} ≠ 纯白`).toBe(WHITE);
+    expect(wb.composer.bc.some((c) => c === WHITE) || wb.composer.bw.every((w) => parseFloat(w) === 0),
+      `输入卡边 ${JSON.stringify(wb.composer.bc)} 既非纯白也非「无框（嵌在框脚里）」`).toBeTruthy();
+    expect(wb.pageBg, '页面底必须仍是纯黑（〇-O 分层靠面色台阶，不是把底抬亮）').toBe('rgb(0, 0, 0)');
+    expect(wb.hairline, `工作台内仍有非纯白、非语义色的描边档：\n${wb.hairline.join('\n')}`).toEqual([]);
+    // —— 后台：侧栏外壳与统计卡 ——
+    await login(page, 'admin', 'Admin@1234');
+    await page.goto('/admin');
+    await expect(page.locator('body'), '/admin 应含后台面板').toContainText(/模型|知识库|工单|系统/, { timeout: 30000 });
+    const ad = await page.evaluate(() => {
+      const hex = (c: string) => '#' + (c.match(/\d+(\.\d+)?/g) || []).slice(0, 3)
+        .map((n) => (+n).toString(16).padStart(2, '0')).join('').toUpperCase();
+      // 取后台里「画了框」的代表件：卡片/面板类元素（class 含 card|panel|box|table|input）
+      const els = [...document.querySelectorAll<HTMLElement>('div,section,table,input,button,select')]
+        .filter((n) => parseFloat(getComputedStyle(n).borderTopWidth) > 0
+          && getComputedStyle(n).borderTopColor !== 'rgba(0, 0, 0, 0)'
+          && /card|panel|box|table|input|btn|button|chip|pill/i.test(n.className || ''));
+      const nonWhite = els.filter((n) => {
+        const c = getComputedStyle(n).borderTopColor;
+        // 语义状态边（琥珀提示盒 / 判错红 / 危险红底）不算框线档，白名单同工作台侧；
+        // 半透明白（白族降透明）同样放行，判据与源码锁 BORDER_HEX_ALLOW 一致
+        if (/^rgba\((255, 255, 255|231, 233, 234), /.test(c)) return false;
+        return c !== 'rgb(255, 255, 255)' && !/rgb\((229|248|210),/.test(c) && c !== 'rgb(64, 35, 35)';
+      });
+      const card = els[0];
+      return {
+        sampled: els.length,
+        nonWhite: nonWhite.slice(0, 12).map((n) => `${n.className}:${getComputedStyle(n).borderTopColor}`),
+        cardBg: card ? hex(getComputedStyle(card).backgroundColor) : '',
+      };
+    });
+    expect(ad.sampled, '后台一个带框的卡片/输入件都没扫到 ⇒ 本锁已空转（选择器或类名口径变了）').toBeGreaterThan(3);
+    expect(ad.nonWhite, `后台仍有非纯白、非语义色的框线：\n${ad.nonWhite.join('\n')}`).toEqual([]);
+    expect(FACE_STEPS, `后台首个带框件的面 ${ad.cardBg} 不在 〇-O 台阶档上`).toContain(ad.cardBg);
+    await shot(page, 'p2d_white_frames');
   });
 
   test('P3 自服务页渲染（余额/套餐/账号·企业 + 邀请·个人）', async ({ page }) => {
@@ -344,8 +437,13 @@ test.describe('像素级 UAT', () => {
     expect(docBodyBg, '/docs/terms 页面底 ≠ §1.1 --lc-bg #000000').toBe('rgb(0, 0, 0)');
     const docBtnBg = await page.locator('.header .btn').first().evaluate((el) => getComputedStyle(el).backgroundColor);
     expect(docBtnBg, '/docs/terms 管理后台按钮 ≠ 交付真值白底 #FFFFFF').toBe('rgb(255, 255, 255)');
-    const docCardBg = await page.locator('.card').first().evaluate((el) => getComputedStyle(el).backgroundColor);
-    expect(docCardBg, '/docs/terms 内容面板 ≠ §1.1 surface-1 #0E1014').toBe('rgb(14, 16, 20)');
+    const docCard = page.locator('.card').first();
+    const docCardBg = await docCard.evaluate((el) => getComputedStyle(el).backgroundColor);
+    // ★ 〇-O（2026-09-23）：直出页面板抬到台阶 L2 #121417、框线翻白——两处都得实测，
+    //   因为 public.go 的令牌块是手抄的第二套真值，源码里改对了、抄漏了都可能。
+    expect(docCardBg, '/docs/terms 内容面板 ≠ 〇-O 台阶 L2 #121417').toBe('rgb(18, 20, 23)');
+    const docCardLine = await docCard.evaluate((el) => getComputedStyle(el).borderTopColor);
+    expect(docCardLine, '/docs/terms 内容面板描边 ≠ 〇-O 纯白').toBe('rgb(255, 255, 255)');
   });
 
   // P6b 主投白底件运行时必须是纯白（2026-09-22 白色填充还原批新增）

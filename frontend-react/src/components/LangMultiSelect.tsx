@@ -4,7 +4,7 @@
 //   换行挤占输入区）。触发器只显示占位文案（永远单行），
 //   选中结果唯一展示位 = 外部 <LangChips/> 行；面板内保留勾选态供增删操作。
 //  2026-09-18 迁移：TDesign Popup/Input/Button → 页面级 CSS 浮层 + 原生控件
-//   （langcross 令牌着色，浮层 inset 底 + 1.2px card 边 + r10）。
+//   （langcross 令牌着色，浮层 inset 底 + 2px 纯白 card 框（★ 〇-O）+ r10）。
 // 功能保留：KB 九语分组 / 其他常用语分组 / 后端语言动态覆盖 / 搜索过滤 / 手输自定义语言。
 // ============================================================================
 import { useEffect, useMemo, useRef, useState } from 'react'

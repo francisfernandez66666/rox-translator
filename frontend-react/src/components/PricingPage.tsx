@@ -3,7 +3,7 @@
 // 区块：顶栏 → 「定价 Pricing」标题 + 说明 → 商业套餐 Plans（三列价格卡）→
 // 计费口径提示条 → 常见问题 FAQ → 页脚。
 // 价格 / 积分 / 有效期一律渲染 /api/plans 返回值（含免费体验包与增量包）。
-// 视觉规则：纯黑底、面板 #0E1014、描边 1.2px #464C58、主按钮白底黑字、无蓝无绿。
+// 视觉规则：纯黑底、面板台阶 #121417、框线纯白 2px、主按钮白底黑字、无蓝无绿。
 // ============================================================================
 import { Button, IdeaIcon } from '@/ui/langcross/src'
 import { useNavigate } from 'react-router-dom'
@@ -128,7 +128,7 @@ export default function PricingPage() {
   )
 }
 
-// —— 样式：纯黑底 / 面板 #0E1014 / 描边 1.2px #464C58，全部走 --lc-* 令牌 ——
+// —— 样式：纯黑底 / 面板 #121417 / 框线纯白，全部走 --lc-* 令牌 ——
 const PRICING_CSS = `
 .lc-prc{background:var(--lc-bg);color:var(--lc-text);font-family:var(--lc-font);min-height:100vh;padding-bottom:8px}
 .lc-prc a{color:inherit;text-decoration:none}

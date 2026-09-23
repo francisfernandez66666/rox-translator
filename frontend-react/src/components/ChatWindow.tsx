@@ -44,12 +44,12 @@ function fmtNum(n: number): string {
   return new Intl.NumberFormat().format(Math.max(0, Math.floor(n || 0)))
 }
 
-// 卡片样式（纯黑体系：面板 #0E1014 + 1.2px 描边 + 圆角 14）
+// 卡片样式（纯黑体系：面板 #121417 + 2px 纯白描边 + 圆角 14）
 // ★ #68：描边走 --lc-border-card 令牌（旧字面 #464C58 在纯黑上不足 3:1，看不见边）。
 // 卡片规格集中成常量而不是散进 JSX 内联：内联字面值正是 #68 闸门要收口的形态，
 // 走令牌后描边档位由 theme.css §十 统一调，页面不需要跟着改。
 const CARD: React.CSSProperties = {
-  background: '#0E1014', border: '2px solid var(--lc-border-card)', borderRadius: 14,
+  background: '#121417', border: '2px solid var(--lc-border-card)', borderRadius: 14,
 }
 
 // 停止生成图标（langcross 无等价，按组件库线性风格内联方块）
@@ -457,7 +457,7 @@ const CW_CSS = `
 .cw-icon-btn:focus-visible{outline:2px solid var(--lc-border-strong);outline-offset:2px}
 .cw-search-clear{display:inline-flex;align-items:center;justify-content:center;border:0;background:none;color:var(--lc-text-3);cursor:pointer;padding:4px;line-height:0}
 .cw-search-clear:hover{color:var(--lc-text)}
-.cw-spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(231,233,234,.35);border-top-color:#E7E9EA;border-radius:50%;animation:cw-spin .7s linear infinite}
+.cw-spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.25);border-top-color:#FFFFFF;border-radius:50%;animation:cw-spin .7s linear infinite}
 @keyframes cw-spin{to{transform:rotate(360deg)}}
 @media (max-width:900px){
   /* 平板：卡片左右外边距 6%→4%（旧 mobile.css 的 .chat-scroll 内边距口径，

@@ -8,12 +8,14 @@
   /* ★ 2026-09-22 全站 UI 还原批：本页原先是「蓝靛主色 #2f47f5 + 浅底卡片」的独立配色，
      与交付 UI（X/Grok 单色纯黑、全站无蓝无绿）完全脱节，且因为它是 assist-server 直出的
      单文件 HTML、不在前端构建产物里，前端的令牌闸门扫不到，属还原盲区。
-     现按《UI-ANNOTATIONS》§1.1 令牌 + §1.3（描边 1.2px、圆角档）重画：
-     面 #000/#0E1014/#16181C/#0A0B0D · 文字 #E7E9EA/#9AA0AA/#71767B · 主按钮纯白底黑字。 */
+     现按《UI-ANNOTATIONS》§1.1 令牌 + §1.3（圆角档；描边宽度已按 〇-N 用户后令抬到 2px）重画：
+     面 #000/#0A0B0D/#121417/#1A1D21 四级台阶 · 文字 #E7E9EA/#9AA0AA/#71767B · 主按钮纯白底黑字。
+     ★ 2026-09-23 〇-O 用户后令「框线全部纯白 + 背景黑 + 深灰分层」：描边族（line/card-line/pill/
+     input-line/done）整体翻白，层级改由上面四级面色台阶承担（旧灰档不得复活）。 */
   :root{
-    --bg:#000000;--panel:#0E1014;--surface:#16181C;--inset:#0A0B0D;
+    --bg:#000000;--panel:#121417;--surface:#1A1D21;--inset:#0A0B0D;
     --txt:#E7E9EA;--sub:#9AA0AA;--weak:#71767B;
-    --line:#464C58;--card-line:#3A404C;--pill:#424956;--input-line:#5A6270;--done:#6E7683;
+    --line:#FFFFFF;--card-line:#FFFFFF;--pill:#FFFFFF;--input-line:#FFFFFF;--done:#FFFFFF;
     --white:#FFFFFF;--warn:#D29922;--danger:#E5484D;
   }
   *{box-sizing:border-box;margin:0;padding:0}
@@ -86,7 +88,7 @@ function setTokState(ok, msg){
   el.className = 'badge' + (ok ? '' : ' off')
   // 单色口径下「已验证/未验证」不再靠绿红底区分：已验证走次级卡面 + 主文字，
   // 未验证走危险红（#E5484D 是交付 §1.1 唯一允许的红，绿色已永久废止）。
-  el.style.background = ok ? '#16181C' : 'rgba(229,72,77,.12)'
+  el.style.background = ok ? '#1A1D21' : 'rgba(229,72,77,.12)'
   el.style.color = ok ? '#E7E9EA' : '#E5484D'
   el.textContent = ok ? '✅ Token 已验证' : '❌ ' + (msg || '未验证')
 }
@@ -248,8 +250,8 @@ async function renderConfig(m){
   const mode = st.llm_mode || 'rule'
   // LLM 接入态徽标：单色口径下三种状态只靠「主文字 / 弱文字 / 警示琥珀」分档，
   // 不再引入绿蓝底（交付 §1.1 全站无蓝无绿，警示唯一档 = #D29922）。
-  const modeTag = mode==='env' ? '<span class="badge" style="background:#16181C;color:#E7E9EA;border-color:#6E7683">✅ 已接入（环境变量）</span>'
-    : mode==='db' ? '<span class="badge" style="background:#0A0B0D;color:#9AA0AA;border-color:#424956">✅ 已接入（后台配置）</span>'
+  const modeTag = mode==='env' ? '<span class="badge" style="background:#1A1D21;color:#E7E9EA;border-color:#FFFFFF">✅ 已接入（环境变量）</span>'
+    : mode==='db' ? '<span class="badge" style="background:#0A0B0D;color:#9AA0AA;border-color:#FFFFFF">✅ 已接入（后台配置）</span>'
     : '<span class="badge" style="background:rgba(210,153,34,0.10);color:#D29922;border-color:rgba(210,153,34,0.32)">⚠️ 规则模式（未接 LLM，仅话术/知识库直出）</span>'
   const llmVal = (k)=>esc(cur[k]||'')
   m.innerHTML = `

@@ -210,6 +210,9 @@ export function BrandingProvider({ tenantId, children }: { tenantId?: number; ch
   // ★ 2026-09-22 还原批：--text/--muted 两条漏网的历史浅底暗字值（#141b2d/#525c70，
   //   蓝调、只可能在白底上读）随本 palette 的暗色口径一并对齐纯黑真值
   //   （主文字 #E7E9EA / 三级灰 #71767B）。
+  // ★ 2026-09-23 〇-O：上面 09-17 行写的是**当批**取值，现值已随本批改动——面档抬到台阶 L2
+  //   #121417 / L3 #1A1D21，描边一律纯白 #FFFFFF（全部框线翻白）。读注释时按「历史记录」理解，
+  //   不要拿它当现行真值（现行真值以 tokens.css 与 UI-ANNOTATIONS §1.1/§1.3 为准）。
   // 注意：这批 --bubble-*/--bg/--panel/--text/--border/--muted/--msg-out-* 是历史
   // Vue 版配色的挂点，当前 React 代码已无 var() 消费方（气泡样式改由 theme.css 与
   // .lc-* 类决定），此处仅作为品牌可覆色的注入钩子保留。
@@ -217,13 +220,13 @@ export function BrandingProvider({ tenantId, children }: { tenantId?: number; ch
     const root = document.documentElement
     const palette: Record<string, string> = {
       '--bubble-user-bg': 'rgba(231,233,234,0.06)',
-      '--bubble-user-border': '#E7E9EA',
-      '--bubble-ai-bg': '#0E1014',
-      '--bubble-ai-border': '#3A404C',
-      '--bg': '#0E1014',
-      '--panel': '#0E1014',
+      '--bubble-user-border': '#FFFFFF',
+      '--bubble-ai-bg': '#121417',
+      '--bubble-ai-border': '#FFFFFF',
+      '--bg': '#121417',
+      '--panel': '#121417',
       '--text': '#E7E9EA',
-      '--border': '#3A404C',
+      '--border': '#FFFFFF',
       '--muted': '#71767B',
       '--msg-out-bg': '#E7E9EA',
       '--msg-out-color': '#000000',

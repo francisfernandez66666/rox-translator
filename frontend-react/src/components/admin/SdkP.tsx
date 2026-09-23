@@ -79,14 +79,15 @@ export default function SdkP() {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
             <span style={{ fontSize: 18 }}>{c.icon}</span>
             <b>{t('sdk.name.' + c.key)}</b>
-            <code style={{ fontSize: 14, background: '#0E1014', padding: '1px 6px', borderRadius: 4 }}>{c.pkg}</code>
+            <code style={{ fontSize: 14, background: '#121417', padding: '1px 6px', borderRadius: 4 }}>{c.pkg}</code>
             <Badge>v{c.version}</Badge>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
             <code style={{ flex: 1, fontSize: 14, background:'var(--lc-inset)', color:'var(--lc-text-1)', padding:'6px 10px', borderRadius: 6, overflowX:'auto', whiteSpace:'nowrap'}}>$ {c.install}</code>
             <Button size="sm" variant="secondary" onClick={() => void copy(c.key + 'i', c.install)}>{copied === c.key + 'i' ? t('sdk.copied') : t('sdk.copy')}</Button>
           </div>
-          <pre style={{ fontSize: 14, background:'#0E1014', padding:'8px 10px', borderRadius: 6, overflowX:'auto', margin: 0, whiteSpace:'pre'}}>{c.code}</pre>
+          {/* ★ 〇-O：SDK 卡里的 code/pre 底取面色台阶 L2 #121417（= --lc-panel），随全站面档一起抬 */}
+          <pre style={{ fontSize: 14, background:'#121417', padding:'8px 10px', borderRadius: 6, overflowX:'auto', margin: 0, whiteSpace:'pre'}}>{c.code}</pre>
         </div>
       ))}
 
