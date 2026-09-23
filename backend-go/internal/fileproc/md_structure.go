@@ -62,6 +62,7 @@ type mdCell struct {
 // ⇒ 正则再也匹配不到中文源文 ⇒ 安全句硬闸**静默失效**。只能按类别分派。
 type mdFenceClass int
 
+// 三类围栏处置档（顺序即 iota 值，新增类别只准加在末尾，别改动既有编号）。
 const (
 	mdFenceProse   mdFenceClass = iota // 文本/示意图：整块按正文逐行翻
 	mdFenceCode                        // 真源码：只翻注释，代码语句逐字节保留

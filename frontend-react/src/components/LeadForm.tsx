@@ -15,6 +15,7 @@ import { useT } from '@/i18n'
 /** 提交状态机：idle=可编辑，busy=请求中，ok=成功（表单整体换成回执），err=失败（保留输入可重试） */
 type Phase = 'idle' | 'busy' | 'ok' | 'err'
 
+// 留资表单入参：来源标记（落地页/定价页等，进埋点与站内信文案）
 export interface LeadFormProps {
   source?: string // 来源页标记（landing/pricing/footer），进后端白名单校验
 }
@@ -22,6 +23,7 @@ export interface LeadFormProps {
 /** 意向语言候选：与产品语种盘对齐的常用项，纯文本逗号拼接即可，不做多选控件 */
 const LANG_OPTIONS = ['English', '日本語', '한국어', 'Deutsch', 'Français', 'Español']
 
+// 留资表单：提交后由后端建线索并回 toast，前端不落任何 token 裸值
 export function LeadForm({ source = 'landing' }: LeadFormProps) {
   const [, t] = useT() // 语种位留空：t 内部已订阅语种变化触发重渲染
   const [company, setCompany] = useState('')

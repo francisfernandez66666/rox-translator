@@ -282,6 +282,7 @@ export const zh: Record<string, string> = {
   'land.pFootPlatform': '翻译平台',
 }
 
+// 落地页面板英文词典（键集与 zh 对齐；12 语种各自 locales 文件同键跟进）
 export const en: Record<string, string> = {
   'land.brand': 'LangCross',
   // —— Top nav ——

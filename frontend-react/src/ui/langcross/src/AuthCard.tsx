@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+// 认证卡外壳入参：标题/副标题/正文与底部链接（登录·注册·找回密码共用）
 export interface AuthCardProps {
   title: ReactNode;
   /** 标题下的说明行；不传不渲染 */

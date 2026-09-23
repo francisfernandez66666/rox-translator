@@ -117,11 +117,13 @@ button:disabled{opacity:.42;cursor:not-allowed}
 <div class="hint">首次使用请填入 API Key 并保存。术语包 / 翻译记忆 / 质检与企业版控制台同源生效。</div>
 <script>
 var cfgKey='trz_office_cfg';
+// 面板本地配置：API Key 与目标语言存在 localStorage（trz_office_cfg），刷新后不丢
 var cfg=JSON.parse(localStorage.getItem(cfgKey)||'{"apiKey":"","langs":"en"}');
 document.getElementById('apiKey').value=cfg.apiKey;
 document.getElementById('langs').value=cfg.langs;
 function saveCfg(){cfg={apiKey:document.getElementById('apiKey').value.trim(),langs:document.getElementById('langs').value.trim()||'en'};localStorage.setItem(cfgKey,JSON.stringify(cfg));return cfg}
 function setR(t,ok){var el=document.getElementById('result');el.textContent=t;el.className=ok?'ok':''}
+// 暂存最近一次译文，供「将结果插入文档」按钮取用（Office.js 的 insertText 需在用户手势里调用）
 var lastResult='';
 document.getElementById('btnGo').onclick=function(){
   var b=this;b.disabled=true;setR('翻译中…',false);

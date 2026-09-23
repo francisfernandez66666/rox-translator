@@ -1,8 +1,11 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
+// 按钮三档：主按钮实心白、次按钮描边无底、危险按钮
 export type ButtonVariant ="primary"|"secondary"|"danger";
+// 按钮尺寸两档：md 常规、sm 紧凑（工具条与卡片内用）
 export type ButtonSize ="md"|"sm";
 
+// 按钮入参：变体/尺寸/图标 + 原生 button 属性透传
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** primary = 白底黑字（一屏一个）；secondary = 描边无底；danger = 红底白字 */
   variant?: ButtonVariant;

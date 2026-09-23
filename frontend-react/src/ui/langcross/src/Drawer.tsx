@@ -12,6 +12,7 @@ import { createPortal } from "react-dom";
 import { CloseIcon } from "./icons";
 import { useFocusTrap } from "./focusTrap";
 
+// 抽屉入参：标题、宽度（默认 480）与开合回调
 export interface DrawerProps {
   open: boolean;
   title: ReactNode;

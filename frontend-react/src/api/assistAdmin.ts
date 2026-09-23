@@ -19,6 +19,7 @@ import { request, authHeaders } from './core'
 /** 管理面区域 → 主后台代理路径（与后端 assistProxyRoutes 白名单一一对应） */
 export type AssistArea = 'kb' | 'scripts' | 'flows' | 'features'
 
+// AI 顾问三个域（kb/config/sessions）共用同一条管理台路径前缀
 const areaPath = (area: AssistArea) => `/api/admin/assist/${area}`
 
 /** 代理侧业务失败（Token 未配置 / 服务不可达 / 上游 4xx5xx 的业务提示） */

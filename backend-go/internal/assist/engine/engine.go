@@ -246,6 +246,9 @@ func fuzzyTierScore(prio int) int {
 	return s
 }
 
+// vectorTierScore 按条目 priority 折算第 3 级向量召回的分数档：基数 vecScoreBase=4
+// （低于精确命中 10 与第 2 级 8），priority 越小越高分；下限兜 1 与 fuzzyTierScore 同口径，
+// 即管理台把 priority 配到 ≥10 也不会让该条目在第 3 级拿 0 分。
 func vectorTierScore(prio int) int {
 	s := vecScoreBase - prio*vecScoreBase/10
 	if s < 1 {

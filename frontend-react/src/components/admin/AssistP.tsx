@@ -39,6 +39,7 @@ import {
 } from '@/api/assistAdmin'
 import type { AssistArea, AssistRow, AssistSessionsResp } from '@/api/assistAdmin'
 
+// 顾问管理台各面板共用的宽松记录别名（后端字段渐进增加，避免每加一列改一处类型）
 type Any = Record<string, any>
 
 /** 表单字段描述：kind 决定控件；options 仅 select 用（值 + 文案 i18n 键） */
@@ -139,6 +140,7 @@ const AREAS: AreaDef[] = [
 
 /** 对话配置六项 + LLM 四项：键名直接用 assist 侧真实配置键（运维排查时要能对上），文案只给说明 */
 const CHAT_CFG = ['welcome', 'persona', 'temperature', 'max_tokens', 'quick_chips']
+// LLM 配置四键的固定顺序：掩码回显与「留空不改」按这个序遍历
 const LLM_CFG = ['llm_base_url', 'llm_api_key', 'llm_model', 'llm_model_backup']
 
 /** 面板页签 */

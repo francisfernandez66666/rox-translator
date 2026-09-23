@@ -8,6 +8,7 @@ import type {
 } from "react";
 import { CaretDownIcon } from "./icons";
 
+// 表单字段壳入参：标签 + 提示/错误文案（标签 12 #9AA0AA）
 export interface FieldProps {
   label?: ReactNode;
   error?: ReactNode;
@@ -48,6 +49,7 @@ export function Field({ label, error, className = "", children }: FieldProps) {
   );
 }
 
+// 输入框入参：错误态标记与尾部插槽（控件高 37/移动 44）
 export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   /** 传入即进入错误态（描边 #E5484D） */
   error?: boolean;
@@ -59,6 +61,7 @@ export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   trailing?: ReactNode;
 }
 
+// 单行输入框
 export function Input({ error = false, className = "", trailing, children, ...rest }: InputProps) {
   // children 必须显式摘掉：input 是 void 元素，若随 {...rest} 摊进去，
   // 运行期会抛「input is a void element tag and must neither have children」
@@ -75,10 +78,12 @@ export function Input({ error = false, className = "", trailing, children, ...re
   );
 }
 
+// 多行文本域
 export function Textarea({ className = "", ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea className={`lc-textarea ${className}`.trim()} {...rest} />;
 }
 
+// 下拉框入参：选项列表 + 错误态（高度与 Input 同档）
 export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   /** 展示值（胶囊文案）；原生 select 负责交互，样式走 .lc-select */
   display?: ReactNode;

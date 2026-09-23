@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 
+// 右键菜单单项：文案、图标、危险标记与点击回调
 export interface MenuItem {
   key: string;
   label: ReactNode;
@@ -10,6 +11,7 @@ export interface MenuItem {
   onSelect?: () => void;
 }
 
+// 右键菜单入参：触发坐标 + 菜单项（宽 220，见交付真值 §4）
 export interface ContextMenuProps {
   open: boolean;
   /** 锚点坐标（一般是右键 / 点击位置） */

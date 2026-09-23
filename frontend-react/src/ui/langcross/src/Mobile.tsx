@@ -39,6 +39,7 @@ export function StatusBar({ time ="9:41", className =""}: { time?: string; class
   );
 }
 
+// 移动端顶栏入参：标题与左右动作（高 52）
 export interface MobTopBarProps {
   title: string;
   /** 左侧动作（默认 ☰ 汉堡）；传 null 不渲染 */
@@ -74,6 +75,7 @@ export function MobTopBar({ title, leading, onLeading, trailing, className =""}:
   );
 }
 
+// 底部标签项：图标 + 文案 + 路由
 export interface MobTabItem {
   key: string;
   label: string;
@@ -81,6 +83,7 @@ export interface MobTabItem {
   icon?: ReactNode;
 }
 
+// 移动端底部 TabBar 入参：标签项 + 当前路径（高 62，后台页不用）
 export interface TabBarProps {
   items: MobTabItem[];
   activeKey: string;
@@ -111,8 +114,10 @@ export function TabBar({ items, activeKey, onChange, className =""}: TabBarProps
   );
 }
 
+// 列表卡左侧状态点档位（none 即不显点）
 export type DotTone ="success"|"warn"|"danger"|"none";
 
+// 移动端列表卡入参：标题/副文案/右侧值与状态点
 export interface ListCardProps {
   /** 左侧状态点颜色；不传无点 */
   dot?: DotTone;
@@ -132,6 +137,7 @@ export interface ListCardProps {
   children?: ReactNode;
 }
 
+// 状态点档位 → 交付真值色映射（单一事实源，避免各页写死）
 const DOT_COLOR: Record<Exclude<DotTone, "none">, string> = {
   success: "var(--lc-success)",
   warn: "var(--lc-warn)",
@@ -179,6 +185,7 @@ export function ListCard({
   );
 }
 
+// 移动端统计块入参：数值 + 标签 + 语气档
 export interface MStatProps {
   label: string;
   value: ReactNode;

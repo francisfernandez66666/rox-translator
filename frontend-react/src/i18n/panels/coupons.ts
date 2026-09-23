@@ -57,6 +57,7 @@ export const zh: Record<string, string> = {
   'plans.couponFail': '优惠券不可用',
 }
 
+// 优惠码面板英文词典（键集与 zh 对齐）
 export const en: Record<string, string> = {
   'hub.tabCoupons': 'Coupons',
   'coupons.title': 'Coupons',

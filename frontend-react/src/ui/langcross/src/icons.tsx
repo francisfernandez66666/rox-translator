@@ -1,7 +1,9 @@
 import type { SVGProps } from "react";
 
+// 图标通用入参：原生 SVG 属性 + size（默认 16）
 export type IconProps = SVGProps<SVGSVGElement> & { size?: number };
 
+// 图标公共属性装配：viewBox/描边宽/currentColor 统一在此，避免每个图标重复
 function base({ size = 16, ...rest }: IconProps): SVGProps<SVGSVGElement> {
   return {
     width: size,

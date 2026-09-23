@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
 
+// 提示条三档语义色（success 白档、warn #D29922、error #E5484D，全站无绿）
 export type BannerTone ="success"|"error"|"warn";
 
+// 页面提示条入参：语气档 + 文案（高 40、左侧 8px 状态点）
 export interface InlineBannerProps {
   tone: BannerTone;
   children: ReactNode;

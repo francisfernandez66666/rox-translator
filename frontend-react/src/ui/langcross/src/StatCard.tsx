@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
 
+// 统计卡语气档：决定数值描边与状态点色
 export type StatTone ="default"|"success"|"danger"|"warn";
 
+// 统计卡入参：标题/数值/单位/趋势与语气档
 export interface StatCardProps {
   /** 主数值，如「7046」「10/10」「0.0%」 */
   value: ReactNode;

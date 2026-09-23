@@ -7,6 +7,7 @@
 // ============================================================================
 import type { ReactNode } from 'react'
 
+// 跨组件提示事件载荷：语气/标题/描述
 export interface ToastPayload {
   title: ReactNode
   desc?: ReactNode
@@ -15,6 +16,7 @@ export interface ToastPayload {
   duration?: number
 }
 
+// 提示总线订阅者签名
 type Handler = (p: ToastPayload) => void
 // 模块级单变量而不是 Context：调用点常在 React 之外（lib 层函数、await 之后的回调），
 // 那里没有 hook 可用，只能靠一个进程内全局引用把消息递回组件树
@@ -36,10 +38,12 @@ export function toastSuccess(title: ReactNode, desc?: ReactNode) {
   toast({ title, desc, tone: 'success' })
 }
 
+// 错误提示快捷入口（组件外也能调，不用 hook）
 export function toastError(title: ReactNode, desc?: ReactNode) {
   toast({ title, desc, tone: 'error' })
 }
 
+// 警示提示快捷入口（语气档 warn，色取 #D29922）
 export function toastWarn(title: ReactNode, desc?: ReactNode) {
   toast({ title, desc, tone: 'warn' })
 }

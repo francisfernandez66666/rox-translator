@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Dialog, Input } from '@/ui/langcross/src'
 
+// 命令式弹窗请求体：标题/正文/确认取消文案与 resolve 回调
 interface DialogRequest {
   kind: 'confirm' | 'prompt'
   header: string

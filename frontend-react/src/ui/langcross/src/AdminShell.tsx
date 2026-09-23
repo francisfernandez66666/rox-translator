@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
 
+// 侧栏导航项：图标名 + 文案 + 路由（active 由当前路径前缀判定）
 export interface NavItem {
   key: string;
   label: string;
@@ -8,6 +9,7 @@ export interface NavItem {
   icon?: ReactNode;
 }
 
+// 后台外壳布局入参：侧栏导航项、标题、当前路径与子内容
 export interface AdminShellProps {
   /** 侧栏菜单（管理后台 11 屏提炼：9 项 + EN 语言钮） */
   nav: NavItem[];
@@ -29,6 +31,7 @@ export interface AdminShellProps {
   children?: ReactNode;
 }
 
+// 后台顶栏入参：品牌名、标题、右侧动作槽（≤900px 时转抽屉汉堡）
 export interface AdminTopBarProps {
   onBell?: () => void;
   /** 角色名，如「平台管理员」；不传不渲染 */
