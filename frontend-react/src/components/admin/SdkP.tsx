@@ -75,26 +75,26 @@ export default function SdkP() {
       <p style={{ fontSize: 15, color: 'var(--adm-hint)', margin: 0 }}>{t('sdk.hint')}</p>
 
       {CARDS.map((c) => (
-        <div key={c.key} style={{ border: '2px solid var(--lc-border-card)', borderRadius: 10, padding: 14, background: 'var(--lc-panel)', boxShadow: 'var(--lc-panel-highlight)' }}>
+        <div key={c.key} style={{ border: '1.2px solid var(--lc-border-card)', borderRadius: 10, padding: 14, background: 'var(--lc-panel)', boxShadow: 'var(--lc-panel-highlight)' }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
             <span style={{ fontSize: 18 }}>{c.icon}</span>
             <b>{t('sdk.name.' + c.key)}</b>
-            <code style={{ fontSize: 14, background: '#121417', padding: '1px 6px', borderRadius: 4 }}>{c.pkg}</code>
+            <code style={{ fontSize: 14, background: '#0E1014', padding: '1px 6px', borderRadius: 4 }}>{c.pkg}</code>
             <Badge>v{c.version}</Badge>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
             <code style={{ flex: 1, fontSize: 14, background:'var(--lc-inset)', color:'var(--lc-text-1)', padding:'6px 10px', borderRadius: 6, overflowX:'auto', whiteSpace:'nowrap'}}>$ {c.install}</code>
             <Button size="sm" variant="secondary" onClick={() => void copy(c.key + 'i', c.install)}>{copied === c.key + 'i' ? t('sdk.copied') : t('sdk.copy')}</Button>
           </div>
-          {/* ★ 〇-O：SDK 卡里的 code/pre 底取面色台阶 L2 #121417（= --lc-panel），随全站面档一起抬 */}
-          <pre style={{ fontSize: 14, background:'#121417', padding:'8px 10px', borderRadius: 6, overflowX:'auto', margin: 0, whiteSpace:'pre'}}>{c.code}</pre>
+          {/* SDK 卡里的 code/pre 底取面板面 #0E1014（= --lc-panel，★ 〇-P 交付值），随全站面档走 */}
+          <pre style={{ fontSize: 14, background:'#0E1014', padding:'8px 10px', borderRadius: 6, overflowX:'auto', margin: 0, whiteSpace:'pre'}}>{c.code}</pre>
         </div>
       ))}
 
       {/* ★ 2026-09-23 补扩展交付渠道：zip 由 scripts/build_extension.sh 产出并随 public/ 进 dist，
           这里只挂 latest 固定名——版本号唯一事实源是 extension/manifest.json，界面不复刻第二份，
           否则每发一版都要改前端（历史上「改了没处发」就是因为整条链都不存在）。 */}
-      <div style={{ border: '2px solid var(--lc-border-card)', borderRadius: 10, padding: 14, background: 'var(--lc-panel)', boxShadow: 'var(--lc-panel-highlight)' }}>
+      <div style={{ border: '1.2px solid var(--lc-border-card)', borderRadius: 10, padding: 14, background: 'var(--lc-panel)', boxShadow: 'var(--lc-panel-highlight)' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
           <b>{t('sdk.extTitle')}</b>
           <a href={EXT_ZIP} style={{ fontSize: 15 }}>{t('sdk.extDownload')}</a>

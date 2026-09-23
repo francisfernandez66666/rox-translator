@@ -24,6 +24,7 @@ import { langLabel } from '@/lib/langNames'
 import { Icon } from '@/ui/langcross/src'
 // ★ 2026-09-22：进度气泡接入全站共享换词动效（唯一实现见 components/WordSwap.tsx）
 import WordSwap from './WordSwap'
+import { fmtDateTime } from '../lib/format'
 
 // ============ 本文件职责中文说明 ============
 // 翻译工单页面：建单、列表、进度、取消/删除/下载与反馈。
@@ -80,7 +81,7 @@ const qaRuleLabel = (rule: string): string => { const k = QA_RULE_KEYS[rule]; re
 // 它取的是 --lc-text/#E7E9EA 一档，与「通过」这种中性结论对齐。
 const badgeStyle = (bg: string, fg: string): React.CSSProperties => ({
   display: 'inline-flex', alignItems: 'center', gap: 3, background: bg, color: fg,
-  border: `2px solid ${fg}33`, borderRadius: 10, padding: '1px 7px', fontSize: 13.5, whiteSpace: 'nowrap',
+  border: `1.2px solid ${fg}33`, borderRadius: 10, padding: '1px 7px', fontSize: 13.5, whiteSpace: 'nowrap',
 })
 
 // QualityBadges 列表行质检徽标（★ 改造 5）：
@@ -133,7 +134,7 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: string; f
   }
 
   return (
-    <div style={{ marginTop: 12, borderTop: '2px solid var(--npz-line)', paddingTop: 10 }}>
+    <div style={{ marginTop: 12, borderTop: '1px solid var(--npz-line)', paddingTop: 10 }}>
       <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>{t('tk.qaTitle')}</div>
 
       {rep && (
@@ -148,10 +149,10 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: string; f
             <div style={{ fontSize: 13.5, color: 'var(--lc-danger)', marginTop: 6, lineHeight: 1.5 }}><Icon n="alert" /> {t('tk.qaErrorNote')}</div>
           )}
           {rep.issues && rep.issues.length > 0 ? (
-            <div style={{ marginTop: 8, maxHeight: 180, overflowY: 'auto', border: '2px solid var(--npz-line)', borderRadius: 6 }}>
+            <div style={{ marginTop: 8, maxHeight: 180, overflowY: 'auto', border: '1.2px solid var(--npz-line)', borderRadius: 6 }}>
               {rep.issues.map((it: QAReportIssue, i: number) => (
                 <div key={`${it.lang}-${it.rule}-${i}`}
-                     style={{ display: 'flex', gap: 6, alignItems: 'flex-start', padding: '5px 8px', fontSize: 13.5, borderTop: i ? '2px solid var(--npz-line)' : 'none' }}>
+                     style={{ display: 'flex', gap: 6, alignItems: 'flex-start', padding: '5px 8px', fontSize: 13.5, borderTop: i ? '1px solid var(--npz-line)' : 'none' }}>
                   <span style={badgeStyle('rgba(231,233,234,0.16)', 'var(--lc-text-2)')}>{langLabel(it.lang, lang)}</span>
                   <span style={badgeStyle('rgba(231,233,234,0.16)', 'var(--lc-text-2)')}>{qaRuleLabel(it.rule)}</span>
                   <span style={badgeStyle(it.level === 'error' ? 'rgba(229,72,77,0.10)' : 'rgba(210,153,34,0.10)', it.level === 'error' ? '#E5484D' : '#D29922')}>
@@ -550,9 +551,9 @@ export default function TicketsPage() {
       <p style={{ fontSize: 14, color: 'var(--lc-text-3)', margin: '0 0 12px' }}>{t('tk.createHint')}</p>
 
       {/* ===== 创建工单 ===== */}
-      <div style={{ border: '2px solid var(--lc-border-card)', borderRadius: 8, padding: 16, marginBottom: 18 }}>
+      <div style={{ border: '1.2px solid var(--lc-border-card)', borderRadius: 8, padding: 16, marginBottom: 18 }}>
         {imageHeavyHint && (
-          <div style={{ background: 'rgba(210,153,34,0.10)', border: '2px solid rgba(210,153,34,0.32)', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 14 }}>
+          <div style={{ background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 14 }}>
             <Icon n="alert" /> {t('tk.imageHeavyHint')}
             <Link onClick={() => setImageHeavyHint(false)} aria-label={t('common.close')}><Icon n="close" /></Link>
           </div>
@@ -592,16 +593,16 @@ export default function TicketsPage() {
           <textarea className="lc-textarea" data-testid="tk-source" rows={4} value={text} onChange={(e) => setText(e.target.value)} aria-label={t('tk.textPlaceholder')} placeholder={t('tk.textPlaceholder')} style={{ width: '100%', minHeight: 110, maxHeight: 360, resize: 'vertical' }} />
         ) : (
           <>
-              {/* ★ 〇-O：拖放区/文件片的面取台阶 L2 #121417（= --lc-panel），框线一律走令牌（已翻纯白） */}
+              {/* 拖放区/文件片的面取面板面 #0E1014（= --lc-panel，★ 〇-P 交付值），框线一律走令牌 */}
               <div onClick={() => document.getElementById('tk-file-input')?.click()}
-                style={{ border: '2px dashed var(--lc-border-input)', borderRadius: 8, padding: 34, textAlign: 'center', cursor: 'pointer', color: 'var(--lc-text-3)', background: '#121417' }}>
+                style={{ border: '1.2px dashed var(--lc-border-input)', borderRadius: 8, padding: 34, textAlign: 'center', cursor: 'pointer', color: 'var(--lc-text-3)', background: '#0E1014' }}>
                 <input id="tk-file-input" type="file" multiple hidden accept={delivery === 'text' ? TEXT_DELIVERY_ACCEPT : TRANSLATE_FILE_ACCEPT} onChange={onFileSelect} />
               <div>{delivery === 'text' ? t('tk.fileHintText') : t('tk.fileHint')}<br /><span style={{ fontSize: 14 }}>{t('tk.multiHint')}</span></div>
             </div>
               {files.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, alignItems: 'center' }}>
                   {files.map((f, idx) => (
-                  <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#121417', border: '2px solid var(--lc-border-card)', borderRadius: 8, padding: '3px 10px', fontSize: 14, maxWidth: 320 }}>
+                  <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#0E1014', border: '1.2px solid var(--lc-border-card)', borderRadius: 8, padding: '3px 10px', fontSize: 14, maxWidth: 320 }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
                       <span style={{ color: 'var(--lc-text-3)', fontSize: 13.5 }}>{fmtKB(f.size)}</span>
                     <Link tone="danger" onClick={() => removeFileAt(idx)} aria-label={`${t('common.delete')}: ${f.name}`}><Icon n="close" /></Link>
@@ -635,18 +636,18 @@ export default function TicketsPage() {
             {condenseOn && (
               <input type="number" min={1} max={10000} value={condenseMax}
                 onChange={(e) => setCondenseMax(parseInt(e.target.value) || 0)}
-                style={{ width: '100%', boxSizing: 'border-box', height: 30, fontSize: 14, border: '2px solid var(--lc-border-card)', borderRadius: 6, padding: '0 6px' }}
+                style={{ width: '100%', boxSizing: 'border-box', height: 30, fontSize: 14, border: '1.2px solid var(--lc-border-card)', borderRadius: 6, padding: '0 6px' }}
                 title={t('tk.condenseMaxTitle')} />
             )}
           </div>
-          <Button variant="primary" disabled={creating} onClick={create} style={{ marginLeft: 'auto' }}>
+          <Button variant="primary" disabled={creating} onClick={create} style={{ marginInlineStart: 'auto' }}>
             {creating ? t('tk.submitting') : t('tk.create')}
           </Button>
         </div>
       </div>
 
       {/* ===== 我的工单 ===== */}
-      <div style={{ border: '2px solid var(--lc-border-card)', borderRadius: 8, padding: 16 }}>
+      <div style={{ border: '1.2px solid var(--lc-border-card)', borderRadius: 8, padding: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <h3 style={{ margin: 0 }}>{t('tk.myTickets')}</h3>
           <Button size="sm" variant="secondary" onClick={load} aria-label={t('common.refresh')}><Icon n="refresh" /></Button>
@@ -749,7 +750,7 @@ export default function TicketsPage() {
               <div key={st.id} className={`st-${st.status}`} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 14, padding: '3px 0' }}>
                 <span style={{ flex: 1, color: 'var(--lc-text-2)' }}>{stepName(st.step)}</span>
                 <span style={{ fontSize: 13, padding: '1px 6px', borderRadius: 4,
-                  background: st.status === 'success' ? 'rgba(231,233,234,0.10)' : st.status === 'running' ? 'rgba(231,233,234,0.16)' : st.status === 'error' ? 'rgba(229,72,77,0.10)' : '#1A1D21',
+                  background: st.status === 'success' ? 'rgba(231,233,234,0.10)' : st.status === 'running' ? 'rgba(231,233,234,0.16)' : st.status === 'error' ? 'rgba(229,72,77,0.10)' : '#16181C',
                   color: st.status === 'success' ? 'var(--lc-text-1)' : st.status === 'running' ? 'var(--lc-text-2)' : st.status === 'error' ? 'var(--lc-danger)' : 'var(--lc-text-3)' }}>{st.status}</span>
                 {st.error && <span style={{ color: 'var(--lc-danger)', fontSize: 13 }}><Icon n="alert" /> {st.error}</span>}
               </div>
@@ -841,7 +842,7 @@ function TicketFeedbackModal({ target, onClose, onSubmitted }: {
 //   lib/ui 那份是 s.replace('T',' ').slice(0,19)（原样截断、缺值给「—」）。
 //   所以本页表格/气泡里的时间是本地化的，铃铛与后台列表里的不是——改一处不会带动另一处。
 function fmtTime(s: string): string {
-  try { return new Date(s).toLocaleString() } catch { return s }
+  try { return fmtDateTime(s) } catch { return s }
 }
 
 // 页面级样式：tk- 前缀（防与组件库/其他页面类名重名）
@@ -854,7 +855,7 @@ const CSS_TK = `
 .tk-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:1200}
 /* 面板自身滚动（max-height 86vh）+ 内部步骤区二次滚动是刻意的两层：
    标题与进度条留在原位不动，只有长内容区滚，质检明细展开时也不会把标题顶出视口 */
-.tk-dialog{background:var(--lc-panel);border:2px solid var(--lc-border-card);border-radius:14px;box-shadow:var(--lc-panel-highlight);max-width:calc(100vw - 32px);max-height:86vh;overflow:auto}
+.tk-dialog{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:14px;box-shadow:var(--lc-panel-highlight);max-width:calc(100vw - 32px);max-height:86vh;overflow:auto}
 /* 面板自身是 tabIndex=-1 的程序化焦点位（读屏在此朗读 aria-labelledby 标题），
    不是可交互控件：给它画焦点环只会糊一整圈边框，视觉噪声且与卡片描边混淆 */
 .tk-dialog:focus{outline:none}

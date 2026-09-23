@@ -14,7 +14,7 @@ import { meContext } from '@/api'
 import { PasswordModal, EmailBindModal, DeactivateModal, JobRoleModal } from './modals'
 
 // 菜单图标内联样式：基线对齐 + 与文案留 8px（图标 16×16，文案左对齐）
-const MI: React.CSSProperties = { verticalAlign: '-3px', marginRight: 8, flex: 'none' }
+const MI: React.CSSProperties = { verticalAlign: '-3px', marginInlineEnd: 8, flex: 'none' }
 
 // Props 账号菜单组件的入参（区分前台/后台的入口配置）
 interface Props {
@@ -114,7 +114,7 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
         aria-expanded={menuOpen}
       >
         <Icon n="user" style={MI} />{user?.username || user?.display_name || ''}
-        <CaretDownIcon size={12} style={{ verticalAlign: '-2px', marginLeft: 4 }} />
+        <CaretDownIcon size={12} style={{ verticalAlign: '-2px', marginInlineStart: 4 }} />
       </button>
       <ContextMenu open={menuOpen} x={menuPos.x} y={menuPos.y} items={menuItems} onClose={() => setMenuOpen(false)} />
       {/* 密码修改弹窗 */}

@@ -64,6 +64,8 @@ import { dict as locJa } from './locales/ja'
 import { dict as locKo } from './locales/ko'
 import { dict as locTh } from './locales/th'
 import { dict as locZhHant } from './locales/zh-hant'
+// ★ 〇-Q（2026-09-23）：语种 → 文字系统 / BCP47 / 动效档位的单点真值（applyDir 与样式档位共用）
+import { isRTL, BCP47_BY_LANG } from './script'
 
 // 语言类型：★ #23 扩为 12 语种（界面语言代码与翻译目标语代码刻意分开——
 // zh_hant 只是 UI 代码，翻译目标语走 lib/langNames 的 40+ 语代码表）
@@ -159,15 +161,19 @@ function detectBrowserLang(): Lang {
 const stored = localStorage.getItem('app_lang') as Lang | null
 let currentLang: Lang = stored && LANG_OPTIONS.some((o) => o.code === stored) ? stored : detectBrowserLang()
 
-// ★ F3：RTL 方向接线——document.dir 随语言切换（ar/fa/he/ur/ps/ku/dv 为从右到左）。
+// ★ F3：RTL 方向接线——document.dir 随语言切换。
 //   ★ #23：阿拉伯语已进 UI 语种表，本钩子正式生效；
 //   工作台/账单核心样式已改逻辑属性（margin-inline-* 等），dir=rtl 即镜像生效。
-const RTL_LANGS = new Set(['ar', 'fa', 'he', 'ur', 'ps', 'ku', 'dv'])
-// 按语言切换页面文字方向（RTL 语言设 dir=rtl）
-function applyDir(l: string) {
+//   ★ 〇-Q（2026-09-23）：RTL 集合与 BCP47 标签搬到 i18n/script.ts 单点维护
+//   （此前这里另有一份 RTL_LANGS，与样式档位表各写一套，加语种必然漏改）。
+//   尤其注意 `documentElement.lang` **必须**写 BCP47：内部语种码 `zh_hant` 含下划线，
+//   不是合法语言标签 → CSS `:lang(zh-Hant)` 永远匹配不到，字体档/排版档全部静默失效。
+//   这是「改了 tokens 但繁体界面没变化」这类问题的根因。
+// 按语言切换页面文字方向与语言标签
+function applyDir(l: Lang) {
   try {
-    document.documentElement.dir = RTL_LANGS.has(l) ? 'rtl' : 'ltr'
-    document.documentElement.lang = l
+    document.documentElement.dir = isRTL(l) ? 'rtl' : 'ltr'
+    document.documentElement.lang = BCP47_BY_LANG[l]
   } catch { /* 非浏览器环境忽略 */ }
 }
 applyDir(currentLang)
@@ -212,6 +218,24 @@ export function useLang(): Lang {
 /** 文案取词：key → 当前语言文本；★ #23 回退链 lang→en→zh，未翻键不露裸 key */
 export function t(key: string): string {
   return dicts[currentLang][key] || en[key] || zh[key] || key
+}
+
+/** 在指定语种取词（不走当前 UI 语种）；回退链 lang→en→zh。
+ *  ★ 〇-Q：落地页演示卡在英语 UI 下退化成「英→英」无意义，故固定以中文为源展示真实 ZH→EN 翻译，
+ *  演示源句/术语需按 srcLang（英语时为 'zh'）取词，必须绕过当前 UI 语种。 */
+export function translateIn(lang: Lang, key: string): string {
+  return dicts[lang][key] || en[key] || zh[key] || key
+}
+
+/**
+ * 落地页演示卡的**源语种**决策（★ 〇-Q：英语界面下的「英→英」演示退化问题）。
+ * - 英语 UI：源=英、定稿=英，演示毫无意义，故强制以中文为源，展示真实 ZH→ EN 翻译；
+ * - 其余语种：源语种 = 界面语种自身（俄语界面展示 RU→EN，阿拉伯界面展示 AR→EN…）。
+ * 抽到 i18n 核心层，一是让 Landing.tsx 与测试共用同一份真值，二是避免测试被迫 import
+ * 拉动 React 组件树（branding/api 在模块加载即触浏览器 API，node 环境会炸）。
+ */
+export function demoSrcLang(lang: Lang): Lang {
+  return lang === 'en' ? 'zh' : lang
 }
 
 /** tpl 带参数取词：{name} 占位符替换 */

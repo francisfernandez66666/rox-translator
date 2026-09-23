@@ -12,6 +12,8 @@
 // QUOTE_ZERO_DECIMAL 无辅币单位币种：JPY/KRW 日常价签不写小数，按 0 位取整展示。
 const QUOTE_ZERO_DECIMAL = new Set(['JPY', 'KRW'])
 
+import { fmtInt } from '../lib/format'
+
 // QUOTE_SYMBOLS 币种符号（CHF 无常用单符，按国际惯例前缀 "CHF "）。
 const QUOTE_SYMBOLS: Record<string, string> = {
   CNY: '¥', USD: '$', EUR: '€', JPY: '¥', GBP: '£', HKD: 'HK$',
@@ -27,8 +29,9 @@ export function quoteSymbol(code: string): string {
 // 防止改动历史渲染结果）；JPY/KRW 零位小数并加千分位；其余保留 2 位（与后端 price_display 同口径）。
 export function fmtQuoteMoney(value: number, code: string): string {
   if (!code || code === 'CNY') return `¥${value}`
+  // ★ 〇-Q：千分位按界面语种（原写死 'en-US'）
   const shown = QUOTE_ZERO_DECIMAL.has(code)
-    ? Math.round(value).toLocaleString('en-US')
+    ? fmtInt(Math.round(value))
     : value.toFixed(2)
   return `${quoteSymbol(code)}${shown}`
 }

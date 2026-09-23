@@ -38,7 +38,7 @@ export function DataTable<T>({ columns, rows, rowKey, emptyText ="暂无数据",
             {columns.map((col) => (
               <th
                 key={col.key}
-                style={{ width: col.width, textAlign: col.align ??"left"}}
+                style={{ width: col.width, textAlign: col.align ?? "start"}}
               >
                 {col.title}
               </th>
@@ -60,7 +60,7 @@ export function DataTable<T>({ columns, rows, rowKey, emptyText ="暂无数据",
                     .filter(Boolean)
                     .join(" ");
                   return (
-                    <td key={col.key} className={cls || undefined} style={{ textAlign: col.align ??"left"}}>
+                    <td key={col.key} className={cls || undefined} style={{ textAlign: col.align ?? "start"}}>
                       {col.render ? col.render(row, i) : ((row as Record<string, ReactNode>)[col.key] ?? "—")}
                     </td>
                   );

@@ -768,7 +768,7 @@ async function confirmManual(o: Any) {
             //   提示条沿用本页 exhaustedHint 的 warn 令牌口径（--adm-warn-*，不写字面色值）。
             if (!pkg.in_grace) return null
             return (
-              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--adm-warn-bg)', border: '2px solid var(--adm-warn-bd)', fontSize: 15, color: 'var(--adm-warn-tx)', lineHeight: 1.7 }}>
+              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', fontSize: 15, color: 'var(--adm-warn-tx)', lineHeight: 1.7 }}>
                 <b>{tpl('plans.graceTitle', { date: toLocalDate(pkg.grace_expires as string) || '—' })}</b>
                 <div style={{ marginTop: 2 }}>{t('plans.graceBody')}</div>
               </div>
@@ -779,7 +779,7 @@ async function confirmManual(o: Any) {
             const hasPlan = !!(pkg.package_code && pkg.package_code !== 'trial')
             if (total > 0 || hasPlan) return null
             return (
-              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--adm-warn-bg)', border: '2px solid var(--adm-warn-bd)', fontSize: 15, color: 'var(--adm-warn-tx)', lineHeight: 1.7 }}>
+              <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', fontSize: 15, color: 'var(--adm-warn-tx)', lineHeight: 1.7 }}>
                 {t('plans.exhaustedHint')}
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
                   <Button size="sm" variant="secondary" onClick={() => { document.getElementById('plans-shop')?.scrollIntoView({ behavior: 'smooth' }) }}>{t('plans.goSubscribe')}</Button>
@@ -798,7 +798,7 @@ async function confirmManual(o: Any) {
               <div style={{ fontWeight: 600, fontSize: 16, color: 'var(--adm-hint)', margin: '10px 0 6px' }}>{g.title}</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 12 }}>
                 {g.items.map((pl) => (
-                  <div key={pl.id} style={{ border: '2px solid var(--adm-line)', borderRadius: 8, padding: 14, display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--adm-card)' }}>
+                  <div key={pl.id} style={{ border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 14, display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--adm-card)' }}>
                     <div style={{ fontWeight: 600, fontSize: 16 }}>{pl.name}</div>
                     {/* ★ #75 多币种报价：非 CNY 报价时大字走后端换算好的 price_display（本币价），
                         人民币原价降级为辅助行——下单实扣仍是 ¥ 金额（amount_money），这里只改"看"的口径 */}
@@ -932,7 +932,7 @@ async function confirmManual(o: Any) {
             <Switch checked={billingEnforced} onChange={(e) => setBillingEnforced(e.target.checked)} />
             <span style={{ color: billingEnforced ?'var(--lc-text-1)':'var(--lc-text-3)', fontWeight: 600 }}>{billingEnforced ? t('billing.enforcedOn') : t('billing.enforcedOff')}</span>
             <Button onClick={saveEnforce}>{t('common.save')}</Button>
-            <span style={{ fontSize: 15, color: 'var(--adm-hint)', marginLeft: 16 }}>{t('packages.sensitiveGateLabel')}</span>
+            <span style={{ fontSize: 15, color: 'var(--adm-hint)', marginInlineStart: 16 }}>{t('packages.sensitiveGateLabel')}</span>
             <Switch checked={sensitiveGate} onChange={(e) => setSensitiveGate(e.target.checked)} />
             <Button onClick={saveSensitiveGate}>{t('common.save')}</Button>
           </div>
@@ -942,7 +942,7 @@ async function confirmManual(o: Any) {
               <input className="lc-input" type="number" value={num(freeTrialPoints)} onChange={(e) => setFreeTrialPoints(Number(e.target.value) || 0)} style={{ width: 120 }} />
               <span style={{ fontSize: 15, color: 'var(--adm-hint)' }}>{t('packages.trialDaysLabel')}</span>
               <input className="lc-input" type="number" value={num(freeTrialDays)} onChange={(e) => setFreeTrialDays(Number(e.target.value) || 0)} style={{ width: 80 }} />
-              <span style={{ fontSize: 15, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('packages.markupLabel')}</span>
+              <span style={{ fontSize: 15, color: 'var(--adm-hint)', marginInlineStart: 12 }}>{t('packages.markupLabel')}</span>
               <input className="lc-input" type="number" value={num(markupMultiplier)} onChange={(e) => setMarkupMultiplier(Math.max(0, Number(e.target.value) || 0))} style={{ width: 120 }} />
               <Button onClick={saveBillingParams}>{t('common.save')}</Button>
             </div>
@@ -969,21 +969,21 @@ async function confirmManual(o: Any) {
                 <Button onClick={saveStaticQR}>{t('common.save')}</Button>
               </div>
               {isImage(staticQRImage) && (
-                <div style={{ marginTop: 8, display: 'inline-block', border: '2px dashed var(--lc-border-card)', borderRadius: 8, padding: 8 }}>
+                <div style={{ marginTop: 8, display: 'inline-block', border: '1.2px dashed var(--lc-border-card)', borderRadius: 8, padding: 8 }}>
                   <img src={staticQRImage} alt="qr" style={{ maxWidth: 160, maxHeight: 160, borderRadius: 6, display: 'block' }} />
                 </div>
               )}
             </div>
           )}
           {/* ★ USDT（2026-09-15）：超管后台配置 USDT 收款（开关/链/钱包地址链接/汇率/确认数） */}
-          <div style={{ marginTop: 12, borderTop: '2px dashed var(--adm-line)', paddingTop: 10 }}>
+          <div style={{ marginTop: 12, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 600, fontSize: 15 }}>{t('billing.usdtSection')}</span>
               <Switch checked={usdtCfg.usdt_enabled === '1'} onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_enabled: e.target.checked ? '1' : '0' })} />
               <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{usdtOn ? t('billing.usdtOn') : t('billing.usdtOff')}</span>
-              <span style={{ fontSize: 14, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('billing.usdtTail')}</span>
+              <span style={{ fontSize: 14, color: 'var(--adm-hint)', marginInlineStart: 12 }}>{t('billing.usdtTail')}</span>
               <Switch checked={usdtCfg.usdt_tail_enabled === '1'} onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_tail_enabled: e.target.checked ? '1' : '0' })} />
-              <span style={{ fontSize: 14, color: 'var(--adm-hint)', marginLeft: 12 }}>{t('billing.usdtAuto')}</span>
+              <span style={{ fontSize: 14, color: 'var(--adm-hint)', marginInlineStart: 12 }}>{t('billing.usdtAuto')}</span>
               <Switch checked={usdtCfg.usdt_auto_settle === '1'} onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_auto_settle: e.target.checked ? '1' : '0' })} />
               <Button onClick={saveUSDT}>{t('common.save')}</Button>
             </div>
@@ -995,7 +995,7 @@ async function confirmManual(o: Any) {
                       >
                 {['trc20', 'erc20', 'bep20'].map((c) => <option key={c} value={c}>{usdtChainLabel(c)}</option>)}
               </select>
-              <span style={{ fontSize: 15, color: 'var(--adm-hint)', marginLeft: 10 }}>{t('billing.usdtRate')}</span>
+              <span style={{ fontSize: 15, color: 'var(--adm-hint)', marginInlineStart: 10 }}>{t('billing.usdtRate')}</span>
               <input className="lc-input" type="number" value={num(usdtCfg.usdt_rate_fen_per_usdt)} onChange={(e) => setUsdtCfg({ ...usdtCfg, usdt_rate_fen_per_usdt: Number(e.target.value) || 0 })} style={{ width: 120 }} />
             </div>
             {['trc20', 'erc20', 'bep20'].map((c) => (
@@ -1016,7 +1016,7 @@ async function confirmManual(o: Any) {
               pay_mode / 静态码 / USDT 同属「怎么收款」这一件事，拆开放反而找不到。
               环境变量接管的栏位置灰并标出变量名：优先级是 env > 库配置（应急/灰度闸门），
               不写清楚就会出现「保存成功但仍在用旧密钥」这种极难自查的坑。 */}
-          <div style={{ marginTop: 12, borderTop: '2px dashed var(--adm-line)', paddingTop: 10 }}>
+          <div style={{ marginTop: 12, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 600, fontSize: 16 }}>{t('billing.paychSection')}</span>
               <Button onClick={savePayChannels} disabled={!payCfgReady}>{t('common.save')}</Button>
@@ -1056,7 +1056,7 @@ async function confirmManual(o: Any) {
               store 层 quoteFeatureOpen=false 时 GET 只回 ['CNY']，本区块自动隐藏；
               重开（后端翻开关）后界面零改动复原。 */}
           {quoteSupported.some((c) => c !== 'CNY') && (
-          <div style={{ marginTop: 12, borderTop: '2px dashed var(--adm-line)', paddingTop: 10 }}>
+          <div style={{ marginTop: 12, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 600, fontSize: 16 }}>{t('billing.quoteSection')}</span>
               <Button onClick={saveQuoteCfg} disabled={!quoteReady}>{t('common.save')}</Button>
@@ -1076,7 +1076,7 @@ async function confirmManual(o: Any) {
               <span style={{ fontSize: 15, color: 'var(--adm-hint)', width: 170 }}>{t('billing.quoteRatesLabel')}</span>
               <span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{t('billing.quoteCnyNote')}</span>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 4, marginLeft: 170 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 4, marginInlineStart: 170 }}>
               {quoteSupported.filter((c) => c !== 'CNY').map((c) => (
                 <label key={c} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 15 }}>
                   <b>{c}</b>
@@ -1181,13 +1181,13 @@ async function confirmManual(o: Any) {
               <div style={{ textAlign: 'center' }}>
                 {curOrder.channel === 'usdt' && usdtPay ? (
                   /* ★ USDT 收款台：精确金额（含尾数）+ 地址 + pay_uri 二维码 + txid 声明 */
-                  <div style={{ textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ textAlign: 'start', display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <div style={{ padding: '8px 12px', borderRadius: 8, background: 'var(--adm-soft)', textAlign: 'center' }}>
                       <div style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('billing.usdtAmountLabel')}（{usdtChainLabel(String(usdtPay.chain))}）</div>
                       <div style={{ fontSize: 24, fontWeight: 700 }}>{String(usdtPay.amount)} USDT</div>
                       {String(usdtPay.tail) !== '0' && <div style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{tpl('billing.usdtTailNote', { tail: String(usdtPay.tail) })}</div>}
                     </div>
-                    {usdtQr && <img src={usdtQr} alt="usdt-qr" style={{ width: 168, height: 168, alignSelf: 'center', borderRadius: 8, border: '2px solid var(--adm-line)', background: '#fff' }} />}
+                    {usdtQr && <img src={usdtQr} alt="usdt-qr" style={{ width: 168, height: 168, alignSelf: 'center', borderRadius: 8, border: '1.2px solid var(--adm-line)', background: '#fff' }} />}
                     <div>
                       <div style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('billing.usdtAddress')}</div>
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -1206,14 +1206,14 @@ async function confirmManual(o: Any) {
                   <div>
                     <div style={{ fontSize: 15, color: 'var(--adm-hint)', marginBottom: 6 }}>{t('billing.staticQR')}</div>
                     {isImage(curOrder.qr_content as string)
-                      ? <img src={curOrder.qr_content} style={{ maxWidth: 200, borderRadius: 8, border: '2px solid var(--adm-line)', margin: '8px 0' }} alt="qr" />
+                      ? <img src={curOrder.qr_content} style={{ maxWidth: 200, borderRadius: 8, border: '1.2px solid var(--adm-line)', margin: '8px 0' }} alt="qr" />
                       : qrImg
-                        ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '2px solid var(--lc-border-card)', margin: '8px 0', background: '#fff' }} alt="qr" />
+                        ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '1.2px solid var(--lc-border-card)', margin: '8px 0', background: '#fff' }} alt="qr" />
                         : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 8, padding: 12, fontSize: 14, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>}
                   </div>
                 ) : (
                   qrImg
-                    ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '2px solid var(--lc-border-card)', margin: '8px 0', background: '#fff' }} alt="qr" />
+                    ? <img src={qrImg} style={{ maxWidth: 200, borderRadius: 8, border: '1.2px solid var(--lc-border-card)', margin: '8px 0', background: '#fff' }} alt="qr" />
                     : <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--adm-soft)', borderRadius: 8, padding: 12, fontSize: 14, maxHeight: 140, overflow: 'auto' }}>{String(curOrder.qr_content)}</pre>
                 )}
                 <p style={{ fontSize: 15, color: 'var(--adm-hint)' }}>{tpl('billing.orderNo', { orderNo: curOrder.order_no })}</p>

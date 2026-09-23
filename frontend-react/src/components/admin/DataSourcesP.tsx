@@ -341,7 +341,7 @@ export default function DataSourcesP() {
         </div>
       }>
         {/* 功能⑥ KB 上传奖励开关（超管） */}
-        <div style={{ border: '2px solid var(--adm-line)', borderRadius: 8, padding: 12, marginBottom: 12, display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 12, marginBottom: 12, display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 600, fontSize: 15 }}>{t('ds.kb52')}</span>
           {rewardCfg && (
             <>
@@ -373,7 +373,7 @@ export default function DataSourcesP() {
               <Button size="sm" variant="primary" onClick={() => setShowForm((v) => !v)}>{showForm ? t('ds.s55') : t('ds.s56')}</Button>
             </div>
             {showForm && (
-              <div style={{ border: '2px solid var(--adm-line)', borderRadius: 8, padding: 16, marginBottom: 12, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(200px,1fr))' }}>
+              <div style={{ border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 16, marginBottom: 12, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(200px,1fr))' }}>
                 <div><div style={{ marginBottom: 4 }}>{t('ds.s58')}</div><input className="lc-input" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder={t("ds.s57")} /></div>
                 <div><div style={{ marginBottom: 4 }}>{t('ds.s59')}</div>
                   <select className="lc-select" value={form.kind} onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value }))}>

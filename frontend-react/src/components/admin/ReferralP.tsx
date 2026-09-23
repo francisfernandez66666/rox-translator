@@ -103,7 +103,7 @@ export function ReferralP() {
     <>
  <Panel title={t('referral.title')} extra={<Button variant="secondary" onClick={downloadQr}> {t('referral.downloadQr')}</Button>}>
         <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, minWidth: 320, background: 'rgba(255,255,255,.04)', border: '2px solid var(--lc-border-card)', borderRadius: 8, padding: '14px 16px' }}>
+          <div style={{ flex: 1, minWidth: 320, background: 'rgba(255,255,255,.04)', border: '1.2px solid var(--lc-border-card)', borderRadius: 8, padding: '14px 16px' }}>
             <div style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('referral.myCode')}</div>
             <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 2, color: 'var(--lc-text-1)', marginTop: 2 }}>{refCode || '—'}</div>
             <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginTop: 8 }}>{t('referral.linkLabel')}</div>
@@ -119,7 +119,7 @@ export function ReferralP() {
               <span> {t('referral.paidRewards')}：<b>{fmtPoints(paidPoints)}</b> {t('referral.unitPoints')}</span>
             </div>
           </div>
-          {qrUrl && <img src={qrUrl} alt="QR" width={150} height={150} style={{ borderRadius: 8, border: '2px solid var(--lc-border-card)', background: '#fff' }} />}
+          {qrUrl && <img src={qrUrl} alt="QR" width={150} height={150} style={{ borderRadius: 8, border: '1.2px solid var(--lc-border-card)', background: '#fff' }} />}
         </div>
       </Panel>
 

@@ -385,13 +385,13 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
                   {/* 量尺本体：一根细丝 + 一枚会走的针头（针头停在哪儿、哪一格正在被校准）*/}
                   <div style={{ position: 'relative', height: 12, display: 'flex', alignItems: 'center' }}>
                     <div style={{
-                      position: 'absolute', left: 0, top: '50%', height: 2, marginTop: -1, width: `${pct}%`,
+                      position: 'absolute', insetInlineStart: 0, top: '50%', height: 2, marginTop: -1, width: `${pct}%`,
                       borderRadius: 2, background: 'linear-gradient(90deg, rgba(255,255,255,.30), #FFFFFF)',
                       boxShadow: '0 0 10px rgba(255,255,255,.40)',
                       transition: 'width 1.05s cubic-bezier(.22,1,.28,1)',
                     }} />
                     <div style={{
-                      position: 'absolute', top: '50%', width: 3, height: 12, marginTop: -6, marginLeft: -1.5, left: `${pct}%`,
+                      position: 'absolute', top: '50%', width: 3, height: 12, marginTop: -6, marginInlineStart: -1.5, insetInlineStart: `${pct}%`,
                       borderRadius: 2, background: '#FFFFFF',
                       transition: 'left 1.05s cubic-bezier(.22,1,.28,1)',
                     }} />

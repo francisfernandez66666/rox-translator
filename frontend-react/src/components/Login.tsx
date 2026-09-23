@@ -613,7 +613,7 @@ const CSS_AUTH = `
 .lc-auth-card--compact{max-width:360px;}
 .auth-link{background:none;border:0;color:var(--lc-text-3);font-size:14px;cursor:pointer;font-family:var(--lc-font);padding:0;}
 .auth-link:hover{color:var(--lc-text);text-decoration:underline;}
-/* 卡右上角语言胶囊（31×19、面 #1A1D21、纯白、无描边、圆角全圆） */
+/* 卡右上角语言胶囊（31×19、面 #16181C、纯白、无描边、圆角全圆） */
 .auth-lang{height:19px;padding:0 8px;border:0;border-radius:999px;background:var(--lc-raised);color:#FFFFFF;font-family:var(--lc-font-latin);font-size:13px;font-weight:500;line-height:1;cursor:pointer;}
 .auth-lang:hover{box-shadow:inset 0 0 0 2px var(--lc-border-pill);}
 .auth-lang:focus-visible{outline: 2px solid var(--lc-border-input);outline-offset:2px;}
@@ -622,7 +622,7 @@ const CSS_AUTH = `
 .auth-err{color:var(--lc-danger);font-size:15px;line-height:1.6;}
 .auth-ok{color:var(--lc-text-2);font-size:15px;line-height:1.6;}
 /* ★ #38 第三方登录区：分隔线用一条独立细条 + 居中文字（纯黑体系不引入品牌色块）。
-   ★ 〇-N 口径：height 1px 的独立分隔条不算「框」，不随全站框线抬到 2px；颜色取 〇-O 纯白描边档。
+   height 1px 的独立分隔条不算「框」，不随全站框线档变化；颜色取常规分隔线档 --lc-border-faint。
    按钮等宽纵排，避免两个 IdP 时长短不齐看着像残排 */
 .auth-sso{display:flex;flex-direction:column;gap:8px;margin-top:4px;}
 .auth-sso-sep{display:flex;align-items:center;gap:8px;color:var(--lc-text-3);font-size:14px;}
@@ -630,7 +630,7 @@ const CSS_AUTH = `
 .auth-sso .lc-btn{width:100%;justify-content:center;text-decoration:none;}
 /* 分段选择器（个人/企业、管理员/成员）：画布是两枚等宽胶囊，故用按钮组而不是 Radio */
 .auth-seg-row{display:flex;gap:8px;}
-.auth-seg{flex:1;height:36px;border-radius:var(--lc-r-ctl);border:2px solid var(--lc-border-pill);background:transparent;color:var(--lc-text-2);font-size:15px;font-weight:500;cursor:pointer;font-family:var(--lc-font);}
+.auth-seg{flex:1;height:36px;border-radius:var(--lc-r-ctl);border:1.2px solid var(--lc-border-pill);background:transparent;color:var(--lc-text-2);font-size:15px;font-weight:500;cursor:pointer;font-family:var(--lc-font);}
 .auth-seg--on{background:var(--lc-raised);color:var(--lc-text);border-color:var(--lc-border-done);font-weight:600;}
 .auth-pwd-eye{display:flex;align-items:center;justify-content:center;background:none;border:0;color:var(--lc-text-3);cursor:pointer;padding:4px;line-height:0;}
 .auth-pwd-eye:hover{color:var(--lc-text);}

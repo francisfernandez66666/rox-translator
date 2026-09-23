@@ -1390,6 +1390,12 @@ export const dict: Record<string, string> = {
   "land.ctaSub": "無需信用卡 · 註冊即送 14 天體驗額度",
   "land.ctaTitle": "準備好讓業務無障礙出海了嗎？",
   "land.demoCopied": "已複製",
+  "land.demoSrc": "新車發布啟動會定在下週，需進行競品對標，賦能經銷商的銷售線索轉化。",
+  "land.demoFinal": "The new model launch kickoff is next week — we need to run a competitor benchmark, and empower dealers on lead conversion.",
+  "land.demoTerm1": "發布啟動會",
+  "land.demoTerm2": "競品對標",
+  "land.demoTerm3": "銷售線索",
+
   "land.demoCopy": "複製",
   "land.demoDone": "翻譯完成",
   "land.demoMeta": "3 / 3 處術語已注入譯文",

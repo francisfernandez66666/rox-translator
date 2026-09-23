@@ -4,7 +4,10 @@
 // （token 仅为服务端内部记账单位，汇率与裸值均不下发。）
 // ============================================================================
 
-/** 积分数值 → 千分位字符串（非法值显示 0） */
+import { fmtInt } from '../lib/format'
+
+/** 积分数值 → 千分位字符串（非法值显示 0）
+ *  ★ 〇-Q：千分位按界面语种（原写死 'en-US'，德语界面下应是 1.234 而非 1,234） */
 export function fmtPoints(points: number): string {
-  return Math.round(Number(points) || 0).toLocaleString('en-US')
+  return fmtInt(points)
 }

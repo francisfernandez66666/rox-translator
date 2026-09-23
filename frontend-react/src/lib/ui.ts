@@ -32,13 +32,15 @@ export function shortJSON(v: unknown, max = 120): string {
   return s.length > max ? s.slice(0, max) + '…' : s
 }
 
-/** fmtNum 千分位
+import { fmtNum as fmtNumByLang } from './format'
+
+/** fmtNum 千分位（★ 〇-Q：千分位与小数位按**界面语种**出，原写死 'en-US'）
  * @param n - 数字或字符串形式的数字
  * @returns 千分位格式化文本；无效值返回 "0"
  */
 export function fmtNum(n?: number | string): string {
   const x = Number(n || 0)
-  return x ? x.toLocaleString('en-US') : '0'
+  return x ? fmtNumByLang(x, { max: 2 }) : '0'
 }
 
 /** maskKey 密钥打码展示

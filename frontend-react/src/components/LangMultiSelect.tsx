@@ -4,7 +4,7 @@
 //   换行挤占输入区）。触发器只显示占位文案（永远单行），
 //   选中结果唯一展示位 = 外部 <LangChips/> 行；面板内保留勾选态供增删操作。
 //  2026-09-18 迁移：TDesign Popup/Input/Button → 页面级 CSS 浮层 + 原生控件
-//   （langcross 令牌着色，浮层 inset 底 + 2px 纯白 card 框（★ 〇-O）+ r10）。
+//   （langcross 令牌着色，浮层 inset 底 + 1.2px 灰阶 card 框（★ 〇-P 交付档）+ r10）。
 // 功能保留：KB 九语分组 / 其他常用语分组 / 后端语言动态覆盖 / 搜索过滤 / 手输自定义语言。
 // ============================================================================
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -219,7 +219,7 @@ export default function LangMultiSelect({ value, onChange, kbLangs, compact }: P
   //   向下弹会顶出视口，而宿主 `.cw-dialog` 是 `overflow:hidden`，越界部分直接被裁掉打不开。
   const panel = (
     <div className={'lms-panel' + (compact ? ' lms-panel--up' : '')} style={{ width: 320 }} data-testid="lang-multi-panel">
-      <div style={{ padding: 8, borderBottom: '2px solid var(--lc-border-faint)' }}>
+      <div style={{ padding: 8, borderBottom: '1px solid var(--lc-border-faint)' }}>
         <input
           className="lc-input lms-search" autoFocus value={query}
                placeholder={t('chat.langPlaceholder')}
@@ -251,7 +251,7 @@ export default function LangMultiSelect({ value, onChange, kbLangs, compact }: P
         ))}
         {!shown.length && <div style={{ padding: '10px 12px', fontSize: 14, color: 'var(--lc-text-3)' }}>{t('chat.noLangHit')}</div>}
       </div>
-      <div style={{ padding: '8px 12px', borderTop: '2px solid var(--lc-border-faint)', display: 'flex', gap: 6, alignItems: 'center' }}
+      <div style={{ padding: '8px 12px', borderTop: '1px solid var(--lc-border-faint)', display: 'flex', gap: 6, alignItems: 'center' }}
            onClick={(e) => e.stopPropagation()}>
         <input
           className="lc-input lms-search" style={{ flex: 1 }} value={custom}
@@ -286,19 +286,19 @@ export default function LangMultiSelect({ value, onChange, kbLangs, compact }: P
 
 // 页面级样式：lms- 前缀（防与组件库/其他页面类名重名）
 const CSS_LMS = `
-.lms-trigger{width:100%;height:var(--lc-ctl-h);padding:0 12px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:6px;background:var(--lc-inset);border:2px solid var(--lc-border-input);border-radius:var(--lc-r-ctl);font-size:15px;font-family:var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out)}
+.lms-trigger{width:100%;height:var(--lc-ctl-h);padding:0 12px;text-align:start;display:flex;align-items:center;justify-content:space-between;gap:6px;background:var(--lc-inset);border:1.2px solid var(--lc-border-input);border-radius:var(--lc-r-ctl);font-size:15px;font-family:var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out)}
 .lms-trigger:hover{border-color:var(--lc-border-pill)}
-.lms-panel{position:absolute;top:calc(100% + 6px);left:0;z-index:40;background:var(--lc-inset);border:2px solid var(--lc-border-card);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.5),var(--lc-panel-highlight)}
+.lms-panel{position:absolute;top:calc(100% + 6px);inset-inline-start:0;z-index:40;background:var(--lc-inset);border:1.2px solid var(--lc-border-card);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.5),var(--lc-panel-highlight)}
 .lms-search{height:30px;font-size:15px}
 .lms-chip-close{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--lc-text-3);cursor:pointer}
 .lms-chip-close:hover{color:var(--lc-text)}
 /* ★ 〇-M 胶囊档触发器：一行工具条内用（高 28 与相邻分段控件/主按钮同档，宽度随内容不撑满） */
-.lms-trigger--pill{width:auto;max-width:220px;height:28px;padding:0 10px;border-radius:999px;background:transparent;border:2px solid var(--lc-border-pill);font-size:14px}
+.lms-trigger--pill{width:auto;max-width:220px;height:28px;padding:0 10px;border-radius:999px;background:transparent;border:1.2px solid var(--lc-border-pill);font-size:14px}
 .lms-trigger--pill:hover{border-color:var(--lc-border-strong)}
 /* 贴底触发时面板向上长（宿主卡片 overflow:hidden，向下弹会被裁掉） */
 .lms-panel--up{top:auto;bottom:calc(100% + 6px)}
 /* 「+n」折叠位：外观与 chip 同档但可点，点下去就地展开全部已选语种 */
-.lms-chips-more{height:24px;padding:0 8px;border:2px solid var(--lc-border-pill);border-radius:999px;background:transparent;
+.lms-chips-more{height:24px;padding:0 8px;border:1.2px solid var(--lc-border-pill);border-radius:999px;background:transparent;
   color:var(--lc-text-2);font-size:14px;font-family:var(--lc-font);cursor:pointer;line-height:1}
 .lms-chips-more:hover{color:var(--lc-text);border-color:var(--lc-border-strong)}
 .lms-chips-more:focus-visible{outline:2px solid var(--lc-border-strong);outline-offset:2px}

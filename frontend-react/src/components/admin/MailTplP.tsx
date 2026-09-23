@@ -99,7 +99,7 @@ export default function MailTplP() {
           {list.map((it) => {
             const d = draft[it.code] || it
             return (
-              <div key={it.code} style={{ border: '2px solid var(--adm-line)', borderRadius: 8, padding: 14 }}>
+              <div key={it.code} style={{ border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 14 }}>
                 {/* 模板标题与代码标识 */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                   <strong style={{ fontSize: 16 }}>{it.name}</strong>

@@ -48,24 +48,24 @@ func TestAssistAdminMonochromeTruth(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		// ★ 〇-O（2026-09-23 用户后令「框线纯白 + 背景黑 + 深灰分层」）：面走四级台阶、
-		// 描边族（line/card-line/pill/input-line/done）全部 #FFFFFF；文字色逐字未动。
-		"--bg:#000000", "--panel:#121417", "--surface:#1A1D21", "--inset:#0A0B0D",
+		// ★ 〇-P（2026-09-23 用户后令「严格按 UI 交付稿来」）：撤销 〇-O，面回交付值、
+		// 描边族（line/card-line/pill/input-line/done）回交付灰阶；文字色逐字未动。
+		"--bg:#000000", "--panel:#0E1014", "--surface:#16181C", "--inset:#0A0B0D",
 		"--txt:#E7E9EA", "--sub:#9AA0AA", "--weak:#71767B",
-		"--line:#FFFFFF", "--card-line:#FFFFFF", "--pill:#FFFFFF",
+		"--line:#464C58", "--card-line:#3A404C", "--pill:#424956",
 		"--white:#FFFFFF", "--warn:#D29922", "--danger:#E5484D",
 	} {
 		if !strings.Contains(code, want) {
 			t.Errorf("缺少 §1.1 令牌声明 %s", want)
 		}
 	}
-	// 〇-O 作废的旧档不得复活（按成对声明比对，理由同 public_ui_test.go 的 retiredRamp00O）
+	// 〇-O 的遗留档不得复活（按成对声明比对，理由同 public_ui_test.go 的 retiredLegacy00O）
 	for _, banned := range []string{
-		"--line:#464C58", "--card-line:#3A404C", "--pill:#424956",
-		"--input-line:#5A6270", "--done:#6E7683", "--panel:#0E1014", "--surface:#16181C",
+		"--line:#FFFFFF", "--card-line:#FFFFFF", "--pill:#FFFFFF",
+		"--input-line:#FFFFFF", "--done:#FFFFFF", "--panel:#121417", "--surface:#1A1D21",
 	} {
 		if strings.Contains(code, banned) {
-			t.Errorf("〇-O 已作废的旧档 %s 复活（框线应纯白、面应走台阶档）", banned)
+			t.Errorf("〇-O 的遗留档 %s 复活（框线应走交付灰阶、面应回交付值）", banned)
 		}
 	}
 	// 主按钮纯白底黑字（交付真值 .lc-btn--primary），且不得用文字档灰 #E7E9EA 当底

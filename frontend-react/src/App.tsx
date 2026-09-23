@@ -31,6 +31,7 @@ applyTheme()
 import { BrandingProvider, useBranding } from './branding'
 import ErrorBoundary from './components/ErrorBoundary'
 import { roleLevelSafe } from '@/lib/ui'
+import { intlLocale } from './lib/format'
 
 // 跨域登录跳转：品牌子域登录后通过 /?sso_code= 跳转回来（★ E3：一次性 code 换取 token，
 // 不再让 JWT 出现在地址栏/Referer/浏览历史；60s TTL、单次消费，见后端 /api/auth/sso/exchange）
@@ -171,7 +172,7 @@ function FrontShell() {
       try {
         const p = await myPackage() as unknown as { success?: boolean; points_balance?: number; balance_sentences_approx?: number }
         if (p.success && typeof p.points_balance === 'number') {
-          const nf = new Intl.NumberFormat() // 千分位按浏览器语言本地化，不自己拼逗号
+          const nf = new Intl.NumberFormat(intlLocale()) // ★ 〇-Q：按**界面语种**（原为浏览器默认，切语种后数字不跟）
           setPkgLine(gtpl('app.pkgLineFmt', { points: nf.format(p.points_balance), approx: nf.format(p.balance_sentences_approx ?? 0) }))
           setDepleted(p.points_balance <= 0) // ★ E11：billing_stopped 顶部横幅信号
         }
@@ -211,22 +212,22 @@ function FrontShell() {
       <style>{`
         .ss-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
         .ss-grid .ssc-card{width:100%}
-        .ss-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:2px solid var(--lc-border-faint)}
+        .ss-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--lc-border-faint)}
         .ss-row span{color:var(--lc-text-2)}.ss-row b{font-size:18px;color:#E7E9EA}
         .ss-copy{display:flex;align-items:center;gap:8px}
         .ss-stats{display:flex;gap:24px;padding:12px 0}
         .ss-stat{text-align:center}
         .ss-stat b{display:block;font-size:20px;color:#E7E9EA}
         .ss-table{width:100%;border-collapse:collapse}
-        .ss-table th,.ss-table td{border:2px solid var(--lc-border-faint);padding:6px 8px;text-align:left}
+        .ss-table th,.ss-table td{border:1.2px solid var(--lc-border-faint);padding:6px 8px;text-align:start}
         .ss-table th{background:var(--npz-surface-2);color:#E7E9EA}
         .ss-quick{display:flex;flex-wrap:wrap;gap:8px}
-        .ss-drawer-nav{display:flex;flex-direction:column;padding:8px 0;border-bottom:2px solid var(--lc-border-faint)}
-        .ss-drawer-item{padding:12px 16px;cursor:pointer;border-bottom:2px solid var(--lc-border-faint);font-size:17px;color:#E7E9EA}
+        .ss-drawer-nav{display:flex;flex-direction:column;padding:8px 0;border-bottom:1px solid var(--lc-border-faint)}
+        .ss-drawer-item{padding:12px 16px;cursor:pointer;border-bottom:1px solid var(--lc-border-faint);font-size:17px;color:#E7E9EA}
         .ss-drawer-item:hover{background:rgba(231,233,234,0.10)}
         .ss-loading{display:flex;justify-content:center;padding:40px}
         /* 顶栏控件字阶（★ 2026-09-22 还原 UI-ANNOTATIONS §2.2 真值）：幽灵按钮 14px/32 高、
-           工作台 Tab 13px 胶囊（活跃=面 #1A1D21 + 文字 #E7E9EA，即 --lc-raised/--lc-text）；
+           工作台 Tab 13px 胶囊（活跃=面 #16181C + 文字 #E7E9EA，即 --lc-raised/--lc-text）；
            历史上 #67/#68 曾整档放大到 16/17px 与 38/40 高，已随页面级覆写层一并撤销。
            描边/分隔统一走 --lc-* 令牌，hover 只改色不投影。 */
         .ss-ghost-btn{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:var(--lc-text-2);font-size:16px;font-family:var(--lc-font);cursor:pointer;transition:color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out)}
@@ -249,24 +250,24 @@ function FrontShell() {
               字阶/字重由 theme.css .brand（§2.2 真值 14）统一给，图片高度收进 38 高顶栏。 */}
           {branding.brandLogo
             ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 24 }} />
-            : <span><Icon n="brand" style={{ fontSize: 18, verticalAlign: '-3px', marginRight: 8 }} />{branding.brandName || t('app.title')}</span>}
+            : <span><Icon n="brand" style={{ fontSize: 18, verticalAlign: '-3px', marginInlineEnd: 8 }} />{branding.brandName || t('app.title')}</span>}
         </span>
         {/* 三个工作台 Tab：选中态从 URL 反推（见上面的 tab 推导），本组件不再持有 Tab state——
             浏览器前进/后退、深链进来都能让高亮自动跟上，单一事实源是地址栏 */}
         <button className={'app-tab' + (tab === 'workbench' ? ' app-tab--on' : '')}
-                onClick={() => switchTab('workbench')}><Icon n="chat" style={{ verticalAlign: '-3px', marginRight: 6 }} />{t('app.tabWorkbench')}</button>
+                onClick={() => switchTab('workbench')}><Icon n="chat" style={{ verticalAlign: '-3px', marginInlineEnd: 6 }} />{t('app.tabWorkbench')}</button>
         <button className={'app-tab' + (tab === 'tickets' ? ' app-tab--on' : '')}
-                onClick={() => switchTab('tickets')}><Icon n="clipboard" style={{ verticalAlign: '-3px', marginRight: 6 }} />{t('app.tabTickets')}</button>
+                onClick={() => switchTab('tickets')}><Icon n="clipboard" style={{ verticalAlign: '-3px', marginInlineEnd: 6 }} />{t('app.tabTickets')}</button>
         <button className={'app-tab' + (tab === 'editor' ? ' app-tab--on' : '')}
-                onClick={() => switchTab('editor')}><Icon n="pencil" style={{ verticalAlign: '-3px', marginRight: 6 }} />{t('app.tabEditor')}</button>
+                onClick={() => switchTab('editor')}><Icon n="pencil" style={{ verticalAlign: '-3px', marginInlineEnd: 6 }} />{t('app.tabEditor')}</button>
         <div style={{ flex: 1 }} /> {/* 空占位把后面的控件推到行尾（顶栏无 justify-content:space-between，靠它撑） */}
         {/* ★ F1：租户身份徽标——个人用户「个人版」，企业用户显示所属租户名（title 全文）
             超过 12 字就地截断加省略号：顶栏一行放不下长租户名（§2.2 顶栏不折行），
             完整值交给 title 悬浮提示；字号 12 = §2.2「套餐标识」真值档 */}
         <span className="tenant-tag" title={tenantTag || t('app.personalPlan')} style={{ fontSize: 14, color: 'var(--lc-text-2)', whiteSpace: 'nowrap' }}>
           {tenantTag
-            ? <><Icon n="building" style={{ verticalAlign: '-3px', marginRight: 4 }} />{tenantTag.length > 12 ? tenantTag.slice(0, 12) + '…' : tenantTag}</>
-            : <><Icon n="user" style={{ verticalAlign: '-3px', marginRight: 4 }} />{t('app.personalPlan')}</>}
+            ? <><Icon n="building" style={{ verticalAlign: '-3px', marginInlineEnd: 4 }} />{tenantTag.length > 12 ? tenantTag.slice(0, 12) + '…' : tenantTag}</>
+            : <><Icon n="user" style={{ verticalAlign: '-3px', marginInlineEnd: 4 }} />{t('app.personalPlan')}</>}
         </span>
         {/* 余额/套餐徽标：LangCross Badge 取代原 TDesign Tag（窄屏由 mobile.css 隐藏），
             文案仍是 gtpl 组装的积分口径。
@@ -294,7 +295,7 @@ function FrontShell() {
       {depleted && (
         // 配色随纯黑主题调整：半透明红底 + #E5484D 文字（旧的 #fff1f0 浅底浅字在暗色下不可读）；
         // 字号 12 = §2.2 InlineBanner 文案真值档
-        <div style={{ background: 'rgba(229,72,77,0.10)', color: '#E5484D', padding: '4px 16px', fontSize: 14, display: 'flex', gap: 12, alignItems: 'center', borderBottom: '2px solid rgba(229,72,77,0.30)' }}>
+        <div style={{ background: 'rgba(229,72,77,0.10)', color: '#E5484D', padding: '4px 16px', fontSize: 14, display: 'flex', gap: 12, alignItems: 'center', borderBottom: '1px solid rgba(229,72,77,0.30)' }}>
           <span>{t('ss.exhaustedHint')}</span>
           <Button size="sm" variant="danger" onClick={() => {
             // 用 useAdminStore.getState() 而不是 useAdmin()：顶栏只为点一下钮取个 action，

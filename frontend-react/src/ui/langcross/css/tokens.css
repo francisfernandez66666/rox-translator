@@ -1,20 +1,21 @@
 /* ============================================================
  * LangCross UI · 设计令牌（与画布「00 · 设计令牌」区一一对应）
- * 分层口径（★ 2026-09-23 〇-O）：区块边界＝纯白 2px 描边，区块高低＝三级深灰面色台阶。
- * 全站无蓝无绿（X/Grok 单色）。
+ * 描边按「对 #000 的对比度」定档，不按视觉印象；全站无蓝无绿（X/Grok 单色）。
+ * 分层口径（★ 2026-09-23 〇-P 回退）：恢复交付档——区块边界＝灰阶描边七档（按对黑对比度定档），
+ *   区块高低＝面色台阶（#0E1014 / #16181C）。〇-O 的「全部框线纯白 + 面色 +8」已作废。
  * ============================================================ */
 :root {
   /* —— 面 —— */
-  --lc-bg: #000000;            /* 页面底（★ 〇-O：主色仍是纯黑，分层靠下面三级台阶） */
+  --lc-bg: #000000;            /* 页面底 */
   --lc-deep: #050607;          /* 最深内嵌 */
-  --lc-inset: #0A0B0D;         /* 内嵌块 / 输入框底 / 空状态卡 —— 台阶 L1 */
-  --lc-panel: #121417;         /* 面板 / 对话框 / 抽屉 / 卡片 —— 台阶 L2（★ 〇-O 由 #0E1014 抬到 +8，白框下要一眼分得出层） */
-  --lc-raised: #1A1D21;        /* 浮面 / Toast / 徽章 / 骨架条 / 菜单 —— 台阶 L3（★ 〇-O 由 #16181C 抬到 +8） */
+  --lc-inset: #0A0B0D;         /* 内嵌块 / 输入框底 / 空状态卡 */
+  --lc-panel: #0E1014;         /* 面板 / 对话框 / 抽屉 / 卡片（★ 〇-P 回退交付值，〇-O 的 #121417 作废） */
+  --lc-raised: #16181C;        /* 浮面 / Toast / 徽章 / 骨架条 / 菜单（★ 〇-P 回退交付值，〇-O 的 #1A1D21 作废） */
 
   /* —— 文档口径别名（UI-ANNOTATIONS §1.1 的 surface-N / border-N / text-N 命名）——
      同一批色值两套名字：组件库内部沿用上方面名，新页面按文档口径书写，互不冲突。 */
-  --lc-surface-1: var(--lc-panel);   /* #121417 台阶 L2：卡片 / 认证卡 / Dialog 面 */
-  --lc-surface-2: var(--lc-raised);  /* #1A1D21 台阶 L3：次级卡 / Tab 活跃底 / Toast / 菜单面 */
+  --lc-surface-1: var(--lc-panel);   /* #0E1014：卡片 / 认证卡 / Dialog 面 */
+  --lc-surface-2: var(--lc-raised);  /* #16181C：次级卡 / Tab 活跃底 / Toast / 菜单面 */
   --lc-surface-3: var(--lc-inset);   /* #0A0B0D 台阶 L1：输入框底 / 空状态底 */
   --lc-surface-4: var(--lc-deep);    /* #050607 页脚条 */
   --lc-text-1: var(--lc-text);       /* #E7E9EA 主文字 / 正向活跃态（小控件与指示条） */
@@ -24,7 +25,7 @@
      #E7E9EA 只留给「文字」与 --lc-success 语义的小控件（复选框/开关/Tab 活跃/进度条/光标点）。 */
   --lc-fill-white: #FFFFFF;
   --lc-text-5: #8A9099;              /* 价格单位 / 辅助数字（文档 §1.1 独有档） */
-  --lc-border-1: var(--lc-border-strong);   /* 全部档位在 〇-O 收敛为 #FFFFFF，编号仅作历史调用点别名 */
+  --lc-border-1: var(--lc-border-strong);   /* 文档口径别名，与下方七档同值 */
   --lc-border-2: var(--lc-border-done);
   --lc-border-3: var(--lc-border-input);
   --lc-border-4: var(--lc-border-faint);
@@ -32,20 +33,20 @@
   --lc-border-6: var(--lc-border-card);
   --lc-border-7: var(--lc-border-card-dim);
 
-  /* —— 描边（★ 2026-09-23 〇-O：全部框线纯白 #FFFFFF，用户令「框线纯白 + 背景黑 + 深灰分层」）——
-     历史七档灰阶（#8B939F/#6E7683/#5A6270/#464C58/#424956/#3A404C/#2A2F3A）在此**全部作废**：
-     区块边界改由「白框」承担，区块内部的高低关系改由上面三级面色承担，不再靠描边明度分档。
-     七档名字与 --lc-border-1…7 别名全部保留（调用点零改动即整体翻白），旧灰阶不得复活——
-     闸门见 readability.test.ts 的令牌等值 + 旧灰阶作框线负向清零。
-     ⚠️ 唯一例外：--lc-border-danger-edge 是**语义状态边**（危险对话框整框），不是框线档，仍取交付红底 #402323。 */
-  --lc-border-strong: #FFFFFF; /* 对话外框 / 强调物件边界 */
-  --lc-border-done: #FFFFFF;   /* 完成态 / 次按钮 hover 边 */
-  --lc-border-input: #FFFFFF;  /* 输入边 / 起点块 / 选项框 */
-  --lc-border-faint: #FFFFFF;  /* 常规分隔线 */
-  --lc-border-pill: #FFFFFF;   /* 语种胶囊 / 按钮描边 */
-  --lc-border-card: #FFFFFF;   /* 卡片常规边（Toast / 菜单 / 抽屉） */
-  --lc-border-card-dim: #FFFFFF; /* 骨架屏 / 空状态卡边 */
-  --lc-border-danger-edge: #402323; /* 危险对话框整框描边（语义状态，不随白框档翻白） */
+  /* —— 描边（对 #000 的对比度定档；第 11 轮整体上提 1-2 档修「偏浅偏细」）——
+     ★ 2026-09-23 〇-P：回退交付档。〇-O 曾把七档全部翻成 #FFFFFF（用户令「框线纯白」），
+     实测观感「太丑」，用户 2026-09-23 重新下令「严格按 UI 来」，故灰阶七档整体复活，
+     #FFFFFF 作框线色**作废**（--lc-fill-white 仍保留，只服务实心白填充件，不作描边）。
+     ⚠️ 用户反馈「偏浅偏细」时先提档，不要凭印象调——本表已是提档后的口径。
+     ⚠️ 唯一例外：--lc-border-danger-edge 是**语义状态边**（危险对话框整框），不属框线档。 */
+  --lc-border-strong: #8B939F; /* 6.0:1  对话外框 / 强调物件边界 */
+  --lc-border-done: #6E7683;   /* 4.7:1  完成态 / 次按钮 hover 边 */
+  --lc-border-input: #5A6270;  /* 3.9:1  输入边 / 起点块 */
+  --lc-border-faint: #464C58;  /* 3.2:1  常规分隔 / 量尺轨道 */
+  --lc-border-pill: #424956;   /* 3.0:1  语种胶囊 / 次按钮描边 */
+  --lc-border-card: #3A404C;   /* 2.5:1  卡片常规边（Toast / 菜单 / 抽屉） */
+  --lc-border-card-dim: #2A2F3A; /* 骨架屏 / 空状态卡边 */
+  --lc-border-danger-edge: #402323; /* 危险对话框整框描边（语义状态，不是框线档） */
 
   /* —— 文字 ——（2026-09-22 还原交付包真值，撤销 09-19 提档）——
      按 UI-ANNOTATIONS §1.1：text-2 #9AA0AA · text-3 #71767B · text-4 #536471 */
@@ -62,10 +63,27 @@
   --lc-red: #F85149;           /* 危险红：删除按钮 / 红底动作 */
   --lc-warn: #D29922;
 
-  /* —— 字体 —— */
+  /* —— 字体 ——
+     ★ 〇-Q（2026-09-23）：按**文字系统**分档，`--lc-font` 由 theme.css 的 `:lang()` 规则
+     切到对应档位。原先单一中文优先栈（"Noto Sans SC" 打头）有两类实害：
+       ① 日文假名在中文优先栈里会掉进**中文字形**（直、直等字的中日字形差异明显）；
+       ② 泰文叠音符 / 阿文连写在没有对应字体的系统上会回退到缺省无衬线体，
+          出现豆腐块或叠音符错位（泰语用户最常报的「字被切了一半」就是它）。
+     各档都以该系统的主流正文字体打头，后面跟系统自带兜底，末位统一 sans-serif。
+     切换只需改 theme.css 一处，组件侧仍只读 `var(--lc-font)`。 */
   --lc-font: "Noto Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   --lc-font-latin: "Inter", "SF Pro Text", -apple-system, Arial, sans-serif;
   --lc-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  /* 分档字体栈（由 :lang() 装配到 --lc-font，组件不要直接引用这些档位名） */
+  --lc-font-hans: "Noto Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --lc-font-hant: "Noto Sans TC", -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --lc-font-latin: "Inter", "SF Pro Text", -apple-system, Arial, sans-serif;
+  /* 西里尔：Inter 自带西里尔字形，末位补 Noto Sans 兜缺字 */
+  --lc-font-cyrillic: "Inter", -apple-system, "Noto Sans", Arial, sans-serif;
+  --lc-font-arabic: "Noto Sans Arabic", "Geeza Pro", "Segoe UI", -apple-system, sans-serif;
+  --lc-font-thai: "Noto Sans Thai", "Leelawadee UI", "Thonburi", -apple-system, sans-serif;
+  --lc-font-kana: "Noto Sans JP", -apple-system, "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif;
+  --lc-font-hangul: "Noto Sans KR", -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
 
   /* —— 圆角 —— */
   --lc-r-bar: 6px;             /* 骨架条 / 小按钮 */
@@ -101,3 +119,70 @@
   /* —— 响应式断点（供 @media 引用，CSS 变量不能用于媒体查询） —— */
   /* ≤900px：后台侧栏转抽屉 / 指标卡重排；≤620px：页头纵排 / 双栏转单列 */
 }
+
+/* ============================================================================
+   ★ 〇-Q（2026-09-23）：12 语种的语言档位（字体栈 / 行高 / 字距 / 断行）
+   ----------------------------------------------------------------------------
+   挂载点：<html lang> —— 由 i18n/index.ts 的 applyDir() 写 **BCP47** 标签
+   （内部语种码 zh_hant 含下划线、非法，必须经 i18n/script.ts 的 BCP47_BY_LANG 映射）。
+   ⚠️ 曾经直接把 Lang 码写进 lang 属性，`:lang()` **全部静默不命中**——
+      这类失效没有任何报错，只表现为「改了令牌但繁体/泰语界面没变化」。
+
+   ⚠️ 选择器写成 `html:lang(x)` 而不是 `:lang(x)`，是为了**与加载顺序解耦**：
+      main.tsx 里 theme.css 先于 tokens.css 加载，同特异度的 `:root{}` 会盖掉
+      `:lang()`；`html:lang()` 多一个类型选择器（0,1,1 > 0,1,0），无论顺序都生效。
+
+   ⚠️ `:lang()` 的匹配规则是「等于，或以该值开头后接连字符」，所以 `:lang(zh)`
+      会同时命中 zh-Hans 与 zh-Hant。这里显式写全称，避免简繁互相污染。
+   档位表与 Script 分类的单点真值在 src/i18n/script.ts，加语种两边一起加。
+   ============================================================================ */
+
+/* —— 字体栈装配：按文字系统切 --lc-font —— */
+html:lang(zh-Hans) { --lc-font: var(--lc-font-hans); }
+html:lang(zh-Hant) { --lc-font: var(--lc-font-hant); }
+html:lang(en), html:lang(fr), html:lang(es), html:lang(pt), html:lang(de) {
+  --lc-font: var(--lc-font-latin);
+}
+html:lang(ru) { --lc-font: var(--lc-font-cyrillic); }
+html:lang(ar) { --lc-font: var(--lc-font-arabic); }
+html:lang(th) { --lc-font: var(--lc-font-thai); }
+html:lang(ja) { --lc-font: var(--lc-font-kana); }
+html:lang(ko) { --lc-font: var(--lc-font-hangul); }
+
+/* —— 行高档位（--lc-leading）——
+   只作用于**未显式写 line-height** 的元素（写死行高的组件保持设计稿不动），
+   所以这是「微调」而不是「全站重排」。取值依据：
+     泰文 1.9：上下元音 + 声调符最多三层堆叠，1.6 行高必被相邻行裁掉（泰语用户报的「字被切一半」）；
+     日韩 1.8：假名/谚文方块字面高度占比高，行高不足会挤成一团；
+     阿文 1.75：上行部与下行部比拉丁更舒展，且无大写字母，视觉上更「满」；
+     中文 1.7：全角字需要比拉丁更大的行间；
+     拉丁/西里尔 1.6：交付稿基线。 */
+html:lang(th) { --lc-leading: 1.9; }
+html:lang(ja), html:lang(ko) { --lc-leading: 1.8; }
+html:lang(ar) { --lc-leading: 1.75; }
+html:lang(zh-Hans), html:lang(zh-Hant) { --lc-leading: 1.7; }
+html:lang(en), html:lang(fr), html:lang(es), html:lang(pt), html:lang(de), html:lang(ru) {
+  --lc-leading: 1.6;
+}
+/* 行高档落地：写在 body 上让继承生效（组件自己写了 line-height 的以组件为准） */
+body { line-height: var(--lc-leading, 1.6); }
+
+/* —— 字距：阿拉伯语与泰语**必须**归零 ——
+   阿拉伯文是连写文字（字母在词内连成一体），任何正/负 letter-spacing 都会把
+   本该连写的字母拆开、破坏词形；泰文的上下叠音符同理会被字距推离基字。
+   这两条用 `html:lang(x) *`（0,1,1）压过页面级类选择器（0,1,0）——
+   Landing 的 .wordmark 有 letter-spacing:-1px，若只写 `:lang(ar)` 同特异度且位置在前，会被它盖掉。 */
+html:lang(ar) *, html:lang(th) * { letter-spacing: normal; }
+
+/* —— 断行 / 断词策略 ——
+   泰文**没有空格分词**，只能在任意字符间断行，故必须 break-word；
+   德文长复合词（如 Grundstücksverkehrsgenehmigungszuständigkeit）需要连字符断词，
+   否则在窄容器里直接溢出；中文/日文用 line-break:strict 禁避头尾标点规则、
+   overflow-wrap:anywhere 防长串（URL / base64）撑破容器。 */
+html:lang(th) body { word-break: break-word; overflow-wrap: break-word; }
+html:lang(de) body { hyphens: auto; overflow-wrap: break-word; }
+html:lang(zh-Hans) body, html:lang(zh-Hant) body, html:lang(ja) body, html:lang(ko) body {
+  line-break: strict;
+  overflow-wrap: anywhere;
+}
+html:lang(ar) body, html:lang(ru) body { overflow-wrap: break-word; }

@@ -15,10 +15,12 @@
 //
 // 口径来源：《前端及UI相关/UI-ANNOTATIONS.md》§1.1（色令牌）、§1.3（描边）、
 // §3.1-05（公开页骨架：导航品牌 Bold/#FFFFFF、面板 #121417、页脚面 #050607 文字 #536471）。
-// ★ 〇-N（2026-09-23 用户后令「字号变大、线框变粗、不改颜色」）：描边档由交付原值 1.2px 抬到 2px，
-// 字阶整体 +2px（品牌 15→17、导航项 12→14），颜色与字重仍按 §1.1/§3.1 字面值。
-// ★ 〇-O（2026-09-23 用户再后令「框线纯白 + 背景主色黑 + 深灰分层」）：描边档整体翻白 #FFFFFF，
-// 面改三级台阶（#000 底 / #0A0B0D 内嵌 / #121417 面板 / #1A1D21 浮面）；文字色逐字未动。
+// ★ 〇-N（2026-09-23 用户后令「字号变大、不改颜色」）：字阶整体 +2px（品牌 15→17、导航项 12→14），
+// 颜色与字重仍按 §1.1/§3.1 字面值。该批的「描边 2px」已由 〇-P 作废。
+// ★ 〇-O（2026-09-23 用户再后令「框线纯白 + 背景主色黑 + 深灰分层」）：描边整体翻白、面抬 +8。
+// ★ 〇-P（2026-09-23 用户后令「严格按 UI 交付稿来」）：**撤销 〇-O**，描边回 §1.1 灰阶七档、
+// 面回交付值（#000 底 / #0A0B0D 内嵌 / #0E1014 面板 / #16181C 浮面）；描边宽度回交付档
+// （全边框 1.2px / 单边 1px）。文字色逐字未动。
 // ========================================
 package api
 
@@ -50,25 +52,25 @@ func TestPublicDocPageMonochromeTruth(t *testing.T) {
 				}
 			}
 			// ② 面/文字/描边三族令牌逐字相等（缺一个就说明有人改写了令牌声明）
-			//    ★ 〇-O（2026-09-23 用户后令「框线全部纯白 + 背景黑 + 深灰分层」）：面走三级台阶、
-			//    描边三档全部 #FFFFFF。前端等价锁见 readability.test.ts 的 〇-O 段。
+			//    ★ 〇-P（2026-09-23 用户后令「严格按 UI 交付稿来」）：撤销 〇-O，面回交付值、
+			//    描边三档回 §1.1 灰阶。前端等价锁见 readability.test.ts 的 〇-P 段。
 			for _, want := range []string{
-				"--lc-bg:#000000", "--lc-panel:#121417", "--lc-surface:#1A1D21", "--lc-foot:#050607",
+				"--lc-bg:#000000", "--lc-panel:#0E1014", "--lc-surface:#16181C", "--lc-foot:#050607",
 				"--lc-text:#E7E9EA", "--lc-text-2:#9AA0AA", "--lc-text-4:#536471",
-				"--lc-line:#FFFFFF", "--lc-card-line:#FFFFFF", "--lc-white:#FFFFFF",
+				"--lc-line:#464C58", "--lc-card-line:#3A404C", "--lc-white:#FFFFFF",
 			} {
 				if !strings.Contains(html, want) {
 					t.Errorf("缺少 §1.1 真值令牌声明 %s", want)
 				}
 			}
-			// ②b 旧灰描边档与旧面档**按声明整体**负向清零（只比对 `--x:#hex` 这种成对写法，
+			// ②b 〇-O 的遗留档**按声明整体**负向清零（只比对 `--x:#hex` 这种成对写法，
 			//     不去 substring 扫十六进制——源码里的「旧档作废」说明注释同样会被扫到，那是假红）。
 			for _, banned := range []string{
-				"--lc-line:#464C58", "--lc-pill:#424956", "--lc-card-line:#3A404C",
-				"--lc-panel:#0E1014", "--lc-surface:#16181C",
+				"--lc-line:#FFFFFF", "--lc-pill:#FFFFFF", "--lc-card-line:#FFFFFF",
+				"--lc-panel:#121417", "--lc-surface:#1A1D21",
 			} {
 				if strings.Contains(html, banned) {
-					t.Errorf("〇-O 已作废的旧档 %s 复活（框线应纯白、面应走三级台阶）", banned)
+					t.Errorf("〇-O 的遗留档 %s 复活（框线应走交付灰阶、面应回交付值）", banned)
 				}
 			}
 			// ③ 主按钮=纯白底黑字（交付真值 .lc-btn--primary），不许回落到文字档灰 #E7E9EA
@@ -78,15 +80,15 @@ func TestPublicDocPageMonochromeTruth(t *testing.T) {
 			if strings.Contains(html, "background:var(--lc-text)") || strings.Contains(html, "background:#E7E9EA") {
 				t.Error("实心白件用了文字档灰 #E7E9EA 做底（会显脏偏蓝），应取 --lc-white")
 			}
-			// ④ 描边框统一 2px（★ 〇-N 2026-09-23 用户后令「线框加粗」，交付原档 §1.3 是 1.2px），
-			//    并负向清掉旧的 1.2px / 1px 细档——同一批字号 +2px 也覆盖 §3.1-05 的 15/12 字阶，
-			//    真值表以 UI-ANNOTATIONS 的「〇-N 后档」为准（前端侧等价锁见 readability.test.ts I 段）。
+			// ④ 描边回交付档：全边框 1.2px、单边分隔线 1px（★ 〇-P 2026-09-23 撤销 〇-N 的「一律 2px」，
+			//    UI-ANNOTATIONS §1.3 交付原档即 1.2px），并负向清掉 〇-N 的 2px 粗档——
+			//    真值表以 UI-ANNOTATIONS 的交付档为准（前端侧等价锁见 readability.test.ts I 段）。
 			if !strings.Contains(html, ".card{background:var(--lc-panel)") ||
-				!strings.Contains(html, "border:2px solid var(--lc-card-line)") {
-				t.Error("内容面板未按 〇-O 后档走 #121417 + 2px 纯白")
+				!strings.Contains(html, "border:1.2px solid var(--lc-card-line)") {
+				t.Error("内容面板未按交付档走 #0E1014 + 1.2px 灰阶框")
 			}
-			if strings.Contains(html, "1.2px") || strings.Contains(html, "border:1px ") {
-				t.Error("直出页仍有 〇-N 前的细描边（1.2px / 1px），抬档未覆盖本渲染面")
+			if strings.Contains(html, "border:2px solid") || strings.Contains(html, "border-top:2px ") {
+				t.Error("直出页仍有 〇-N 的 2px 粗描边，回退未覆盖本渲染面")
 			}
 			// ⑤ 导航四项齐全且当前页点亮 .on（活跃 #FFFFFF，其余 #9AA0AA）
 			for _, label := range []string{"定价 Pricing", "用户协议 Terms", "SLA", "隐私协议 Privacy"} {
@@ -208,25 +210,28 @@ func TestAllServedHtmlPagesMonochrome(t *testing.T) {
 				t.Errorf("%s 出现旧主题色 %s：后端直出页必须取 §1.1 令牌（全站无蓝无绿、浅底已废止）", s.path, hex)
 			}
 		}
-		// ★ 〇-O（2026-09-23）：旧灰描边档与旧面档一律不得复活。这里比的是**成对声明**
-		// （`--x:#hex`）而不是裸十六进制——源码注释里大量「旧档 #464C58 作废」的说明文字
-		// 会命中裸值，那是假红；剥注释 + 锁声明形态才是有效负向。
-		for _, banned := range retiredRamp00O {
+		// ★ 〇-P（2026-09-23）：撤销 〇-O，其遗留的「纯白框 + +8 面色」一律不得复活。
+		// 这里比的是**成对声明**（`--x:#hex`）而不是裸十六进制——源码注释里大量
+		// 「〇-O 的 #FFFFFF 作废」的说明文字会命中裸值，那是假红；锁声明形态才是有效负向。
+		for _, banned := range retiredLegacy00O {
 			if strings.Contains(code, banned) {
-				t.Errorf("%s 复活 〇-O 已作废的旧档 %s（框线应纯白、面应走 #000/#0A0B0D/#121417/#1A1D21 台阶）", s.path, banned)
+				t.Errorf("%s 复活 〇-O 的遗留档 %s（框线应走交付灰阶、面应回 #000/#0A0B0D/#0E1014/#16181C）", s.path, banned)
 			}
 		}
 	}
 }
 
-// retiredRamp00O 〇-O（2026-09-23「框线纯白 + 背景黑 + 深灰分层」）作废的旧令牌声明。
+// retiredLegacy00O 〇-O（2026-09-23「框线纯白 + 背景黑 + 深灰分层」）留下的、已被
+// ★ 〇-P（2026-09-23 用户后令「严格按 UI 交付稿来」）作废的令牌声明。
 // 覆盖两套命名：后端直出页的 --lc-* 与 assist 内嵌页的简名 --line/--panel/…。
-var retiredRamp00O = []string{
-	"--lc-line:#464C58", "--lc-pill:#424956", "--lc-card-line:#3A404C",
-	"--lc-panel:#0E1014", "--lc-surface:#16181C",
-	"--line:#464C58", "--pill:#424956", "--card-line:#3A404C",
-	"--input-line:#5A6270", "--done:#6E7683",
-	"--panel:#0E1014", "--surface:#16181C",
+// ⚠️ 只列**成对声明**形态：`--white:#FFFFFF` / `--lc-white:#FFFFFF` 是实心白填充档（主按钮），
+// 不是框线档，不得列进来，否则一改主按钮就假红。
+var retiredLegacy00O = []string{
+	"--lc-line:#FFFFFF", "--lc-pill:#FFFFFF", "--lc-card-line:#FFFFFF",
+	"--lc-panel:#121417", "--lc-surface:#1A1D21",
+	"--line:#FFFFFF", "--pill:#FFFFFF", "--card-line:#FFFFFF",
+	"--input-line:#FFFFFF", "--done:#FFFFFF",
+	"--panel:#121417", "--surface:#1A1D21",
 }
 
 // readSrcForUITest 读本包源文件原文（全量扫描用；文件缺失即红灯，防闸门静默失效）。

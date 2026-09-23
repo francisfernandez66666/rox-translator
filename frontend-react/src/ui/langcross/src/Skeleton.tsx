@@ -10,7 +10,7 @@ export interface SkeletonProps {
   className?: string;
 }
 
-/** 骨架条：台阶 L3 面 #1A1D21 圆角 6，呼吸 1.4s（prefers-reduced-motion 时静止为 .6 透明度） */
+/** 骨架条：台阶 L3 面 #16181C 圆角 6，呼吸 1.4s（prefers-reduced-motion 时静止为 .6 透明度） */
 export function Skeleton({ width ="100%", height = 12, radius, style, className =""}: SkeletonProps) {
   return (
     <div
@@ -39,7 +39,7 @@ export function SkeletonCard({ rows = 3, width = 320 }: SkeletonCardProps) {
         flexDirection: "column",
         gap: 12,
         background: "var(--lc-inset)",
-        border: "2px solid var(--lc-border-card-dim)",
+        border: "1.2px solid var(--lc-border-card-dim)",
         borderRadius: "var(--lc-r-card)",
       }}
     >

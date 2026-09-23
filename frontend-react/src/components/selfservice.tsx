@@ -60,7 +60,7 @@ export function BalancePanel() {
       <style>{CSS_SSC}</style>
       {totalAvailable <= 0 && (
         <div className="ssc-card">
-          <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(210,153,34,0.10)', border: '2px solid rgba(210,153,34,0.32)', fontSize: 15, color: 'var(--lc-warn)', lineHeight: 1.7 }}>
+          <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', fontSize: 15, color: 'var(--lc-warn)', lineHeight: 1.7 }}>
             {t('ss.exhaustedHint')}
             <div style={{ marginTop: 6 }}>
               <Button size="sm" variant="primary" onClick={() => { navigate('/packages') }}>{t('ss.gotoRecharge')}</Button>
@@ -150,7 +150,7 @@ export function MyPackagePanel() {
       <style>{CSS_SSC}</style>
       {total <= 0 && !hasPlan && (
         <div className="ssc-card">
-          <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(210,153,34,0.10)', border: '2px solid rgba(210,153,34,0.32)', fontSize: 15, color: 'var(--lc-warn)', lineHeight: 1.7 }}>
+          <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', fontSize: 15, color: 'var(--lc-warn)', lineHeight: 1.7 }}>
             {t('ss.exhaustedHint')}
             <div style={{ marginTop: 6 }}>
               <Button size="sm" variant="primary" onClick={() => { navigate('/billing') }}>{t('ss.gotoTopUp')}</Button>
@@ -267,7 +267,7 @@ function ScimCard() {
 
 // 页面级样式：ssc- 前缀（防与组件库/其他页面类名重名）
 const CSS_SSC = `
-.ssc-card{background:var(--lc-panel);border:2px solid var(--lc-border-card);border-radius:14px;padding:18px;box-shadow:var(--lc-panel-highlight)}
+.ssc-card{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:14px;padding:18px;box-shadow:var(--lc-panel-highlight)}
 .ssc-card h3{margin:0 0 6px;font-size:17px}
 .ssc-err{color:var(--lc-danger);font-size:15px}
 .ssc-card + style{display:none}

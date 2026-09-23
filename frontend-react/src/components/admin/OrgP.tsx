@@ -412,7 +412,7 @@ export function OrgP() {
         <div style={{ minWidth: 280, flex: '1 1 320px' }}>
           <div
             onClick={() => selectOrg(0)}
-            style={{ padding: '8px 10px', borderRadius: 8, cursor: 'pointer', background: selectedOrg === 0 ? 'var(--lc-raised, #1A1D21)' : 'var(--lc-inset, #0A0B0D)', border: '2px solid var(--lc-border-card)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+            style={{ padding: '8px 10px', borderRadius: 8, cursor: 'pointer', background: selectedOrg === 0 ? 'var(--lc-raised, #16181C)' : 'var(--lc-inset, #0A0B0D)', border: '1.2px solid var(--lc-border-card)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
           >
             <span> {rootOrgName}（{isPlatformView || isSuper ? t('org.typePlatform') : t('org.typeRoot')}）</span>
             {myLevel >= 3 && (
@@ -423,10 +423,10 @@ export function OrgP() {
             <div
               key={o.id}
               onClick={() => selectOrg(o.id)}
-              style={{ padding: `8px 10px 8px ${8 + o._depth * 18}px`, borderRadius: 8, cursor: 'pointer', margin: '4px 0', background: selectedOrg === o.id ? 'var(--adm-info-bg)' : 'var(--adm-card)', border: '2px solid var(--adm-line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
+              style={{ padding: `8px 10px 8px ${8 + o._depth * 18}px`, borderRadius: 8, cursor: 'pointer', margin: '4px 0', background: selectedOrg === o.id ? 'var(--adm-info-bg)' : 'var(--adm-card)', border: '1.2px solid var(--adm-line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
             >
               <span>
-                <span style={{ opacity: 0.6, marginRight: 4 }}>⠿</span>
+                <span style={{ opacity: 0.6, marginInlineEnd: 4 }}>⠿</span>
                 {orgIcon(o)} {o.name}
               </span>
               {/* 行内操作区（权限逐级收敛）：
@@ -441,7 +441,7 @@ export function OrgP() {
                   <span className={isOverBudget(o) ? 'budget-over' : ''}
                         title={t('org.budgetSet')}
                         onClick={(e) => { e.stopPropagation(); openBudget(o) }}
-                        style={{ cursor: 'pointer', fontSize: 14, color: isOverBudget(o) ? 'var(--lc-danger)' : 'var(--lc-text-3)', border: `2px solid ${isOverBudget(o) ? 'var(--lc-danger)' : 'var(--lc-border-card)'}`, borderRadius: 8, padding: '0 6px' }}>
+                        style={{ cursor: 'pointer', fontSize: 14, color: isOverBudget(o) ? 'var(--lc-danger)' : 'var(--lc-text-3)', border: `1.2px solid ${isOverBudget(o) ? 'var(--lc-danger)' : 'var(--lc-border-card)'}`, borderRadius: 8, padding: '0 6px' }}>
                      {budgetText(o)}
                   </span>
                 )}
@@ -510,7 +510,7 @@ export function OrgP() {
                   ]} />
           {!orgUserList.length && <div style={{ fontSize: 14, color: 'var(--adm-faint)', padding: 8 }}>{t('org.noUsers')}</div>}
 
-          <div style={{ marginTop: 16, border: '2px solid var(--adm-line)', borderRadius: 8, padding: 14 }}>
+          <div style={{ marginTop: 16, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 14 }}>
             <h3 style={{ margin: '0 0 10px' }}>{tpl('org.addUser', { org: addUserHeading })}</h3>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
               <input className="lc-input" value={String(nu.username || '')} placeholder={t('org.usernamePlaceholder')} onChange={(e) => setNu((n: Any) => ({ ...n, username: e.target.value }))} style={{ flex: 1, minWidth: 140 }} />

@@ -282,5 +282,5 @@ export default function BillingCenter() {
 // ⚠ 本页表格用的 .ss-table 不在这里——它由 App.tsx 的全局 <style> 提供（theme.css 另有深色覆盖），
 //    想调表格边框/内边距去改那两处，写在本文件里会被全局规则的优先级比掉
 const CSS_MB = `
-.mb-card{background:var(--lc-panel);border:2px solid var(--lc-border-card);border-radius:14px;padding:20px;margin-bottom:12px;box-shadow:var(--lc-panel-highlight)}
+.mb-card{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:14px;padding:20px;margin-bottom:12px;box-shadow:var(--lc-panel-highlight)}
 `

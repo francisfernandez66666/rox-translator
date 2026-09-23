@@ -34,6 +34,12 @@ export const zh: Record<string, string> = {
   'land.demoMeta': '3 / 3 处术语已注入译文',
   'land.demoCopy': '复制',
   'land.demoCopied': '已复制',
+  'land.demoSrc': '新车发布启动会定在下周，需进行竞品对标，赋能经销商的销售线索转化。',
+  'land.demoFinal': 'The new model launch kickoff is next week — we need to run a competitor benchmark, and empower dealers on lead conversion.',
+  'land.demoTerm1': '发布启动会',
+  'land.demoTerm2': '竞品对标',
+  'land.demoTerm3': '销售线索',
+
   // —— 解决方案 · 三步流程 ——
   'land.secSolution': '解决方案',
   'land.solutionTitle': '懂行业，才懂翻译',
@@ -312,6 +318,12 @@ export const en: Record<string, string> = {
   'land.demoMeta': '3 / 3 terms injected',
   'land.demoCopy': 'Copy',
   'land.demoCopied': 'Copied',
+  'land.demoSrc': 'The new model launch kickoff is next week — we need to run a competitor benchmark, and empower dealers on lead conversion.',
+  'land.demoFinal': 'The new model launch kickoff is next week — we need to run a competitor benchmark, and empower dealers on lead conversion.',
+  'land.demoTerm1': 'launch kickoff',
+  'land.demoTerm2': 'competitor benchmark',
+  'land.demoTerm3': 'lead conversion',
+
   // —— Solutions · 3 steps ——
   'land.secSolution': 'Solutions',
   'land.solutionTitle': 'Know the industry, then translate',
