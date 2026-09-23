@@ -174,7 +174,7 @@ export function ModelsP() {
       <h2 style={{ margin: '4px 0 12px' }}>{t('models.title')}</h2>
 
       <Panel title={t('models.routingTitle')}>
-        <div style={{ fontSize: 12, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('models.onlineHint')}</div>
+        <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('models.onlineHint')}</div>
         {/* 预设下拉改原生 select：不再有 clearable 属性，placeholder 由 value="" 的空 option 兼任，选它即取消预设 */}
         <div style={rowMt}>
           <select className="lc-select" value={routePreset} onChange={(e) => setRoutePreset(e.target.value)} style={{ width: 220 }}>
@@ -214,17 +214,17 @@ export function ModelsP() {
           <Button variant="secondary" onClick={() => { if (routePreset) applyRoutePreset(); else setRouteForm([...routeForm, { provider: '', api_base: '', api_key: '', model: '', weight: 0 }]) }}>{t('models.addRoute')}</Button>
           <Button variant="secondary" onClick={() => void saveRoutes()}>{t('models.saveRoutes')}</Button>
         </div>
-        <p style={{ fontSize: 12, color: 'var(--adm-hint)', margin: '8px 0 0' }}>
+        <p style={{ fontSize: 14, color: 'var(--adm-hint)', margin: '8px 0 0' }}>
           {routeForm.length ? tpl('models.routesActive', { count: routeForm.length, main: mainModel }) : t('models.routesNone')}
         </p>
       </Panel>
 
       <Panel title={t('models.llmKeyTitle')}>
-        <div style={{ fontSize: 12, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('models.llmKeyHint')}</div>
+        <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('models.llmKeyHint')}</div>
         <div style={rowMt}>
           {/* 翻译主密钥状态回显：后端只下发 configured 布尔（✓/✗ 图形字符已于 2026-09-18 移除，
               状态改由「已配置/未配置」文案表意），明文密钥任何情况下都不回传前端。 */}
-          <span style={{ fontSize: 13 }}>{t('models.translationKeyLabel')}：{keyState.translation ? ` ${t('models.configured')}` : ` ${t('models.notConfigured')}`}</span>
+          <span style={{ fontSize: 15 }}>{t('models.translationKeyLabel')}：{keyState.translation ? ` ${t('models.configured')}` : ` ${t('models.notConfigured')}`}</span>
           {keyState.translation && <Button size="sm" variant="danger" onClick={() => void clearTrans()}>{t('models.clearTranslation')}</Button>}
         </div>
         {/* embedding 密钥框同为 new-password；输入框刻意不回填任何值（后端只给 set/masked），
@@ -235,14 +235,14 @@ export function ModelsP() {
           <Button variant="primary" onClick={() => void saveEmbed()}>{t('models.saveEmbed')}</Button>
           {keyState.embedding && <Button size="sm" variant="danger" onClick={() => void clearEmbed()}>{t('models.clearEmbed')}</Button>}
  {/* 掩码回显只为让管理员确认「要清的到底是哪把 key」，串里全是 ****，不含明文片段 */}
- {keyState.embedding && <span style={{ fontSize: 12, color:'var(--adm-ok-tx)'}}> {keyState.embeddingMasked}</span>}
+ {keyState.embedding && <span style={{ fontSize: 14, color:'var(--adm-ok-tx)'}}> {keyState.embeddingMasked}</span>}
         </div>
       </Panel>
 
       {/* 分阶段卡片：逐阶段独立 preset，套用只覆盖本卡端点/模型，阶段之间互不联动 */}
       {stageCards.map((st) => (
         <Panel key={st.key} title={st.title}>
-          <div style={{ fontSize: 12, color: 'var(--adm-hint)', marginBottom: 8 }}>{st.hint}</div>
+          <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 8 }}>{st.hint}</div>
           <div style={rowMt}>
             <select className="lc-select" value={stForm[st.key]?.preset || ''} onChange={(e) => { setStForm({ ...stForm, [st.key]: { ...stForm[st.key], preset: e.target.value } }); applyStagePreset(st.key) }} style={{ width: 220 }}>
               <option value="">{t('models.presetPlaceholder')}</option>
@@ -254,7 +254,7 @@ export function ModelsP() {
             </select>
             {/* preset 选中即套用（onChange 里直接 applyStagePreset），不再需要额外「应用」按钮 */}
  {/* 阶段就绪提示：与主密钥区同一处理，原 ✓ 前缀 2026-09-18 起移除，状态全靠文案 */}
- {stActive(st.key) && <span style={{ fontSize: 12, color:'var(--adm-ok-tx)'}}> {t('models.stageConfigured'as never)}</span>}
+ {stActive(st.key) && <span style={{ fontSize: 14, color:'var(--adm-ok-tx)'}}> {t('models.stageConfigured'as never)}</span>}
           </div>
           <Field label={t('models.apiBase')}><input className="lc-input" value={String(stForm[st.key]?.api_base ?? '')} onChange={(e) => setStForm({ ...stForm, [st.key]: { ...stForm[st.key], api_base: e.target.value } })} placeholder={t('models.stageApiBasePlaceholder' as never)} /></Field>
           <form onSubmit={(e) => e.preventDefault()}><Field label={t('models.apiKey')}><input className="lc-input" type="password" autoComplete="new-password" value={String(stForm[st.key]?.api_key ?? '')} onChange={(e) => setStForm({ ...stForm, [st.key]: { ...stForm[st.key], api_key: e.target.value } })} placeholder={t('models.stageApiKeyPlaceholder' as never)} /></Field></form>
@@ -263,7 +263,7 @@ export function ModelsP() {
       ))}
       <div style={rowMt}>
         <Button variant="primary" onClick={() => void saveStages()}>{t('models.saveStages')}</Button>
-        <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{stageHint ? tpl('models.stageActive', { count: stageHint }) : t('models.stageNone')}</span>
+        <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{stageHint ? tpl('models.stageActive', { count: stageHint }) : t('models.stageNone')}</span>
       </div>
 
       <Panel title={t('models.policyTitle')}>

@@ -68,7 +68,7 @@ export function Drawer({ open, title, onClose, children, footer }: DrawerProps) 
             <CloseIcon size={12} />
           </button>
         </div>
-        <div style={{ borderTop:"1px solid var(--lc-border-faint)"}} />
+        <div style={{ borderTop:"2px solid var(--lc-border-faint)"}} />
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{children}</div>
         {footer}
       </aside>

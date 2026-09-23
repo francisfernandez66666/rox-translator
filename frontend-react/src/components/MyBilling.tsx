@@ -50,7 +50,7 @@ function TrendCard() {
   const W = 600; const H = 120; const bw = W / days
   return (
     <div className="mb-card">
-      <h3 style={{ margin: '4px 0 10px', fontSize: 15 }}>{t('ss2.trendTitle')}</h3>
+      <h3 style={{ margin: '4px 0 10px', fontSize: 17 }}>{t('ss2.trendTitle')}</h3>
       {ov ? (
         // viewBox 高度额外留 18px 给底部的首/末日标签，宽度交给 CSS 100% 自适应
         <svg viewBox={`0 0 ${W} ${H + 18}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img" aria-label={t('ss2.trendTitle')}>
@@ -67,13 +67,13 @@ function TrendCard() {
               </rect>
             )
           })}
-          <text x={0} y={H + 14} fontSize={10} fill="var(--lc-text-3)">{bars[0].date}</text>
-          <text x={W} y={H + 14} fontSize={10} fill="var(--lc-text-3)" textAnchor="end">{bars[days - 1].date}</text>
+          <text x={0} y={H + 14} fontSize={12} fill="var(--lc-text-3)">{bars[0].date}</text>
+          <text x={W} y={H + 14} fontSize={12} fill="var(--lc-text-3)" textAnchor="end">{bars[days - 1].date}</text>
         </svg>
-      ) : <div style={{ fontSize: 12, color: 'var(--lc-text-3)' }}>{t('ss2.loading')}</div>}
+      ) : <div style={{ fontSize: 14, color: 'var(--lc-text-3)' }}>{t('ss2.loading')}</div>}
       {/* 纵轴没有刻度，改为在底部标出「最高单日」当作唯一参照值。
           ⚠ 整月无消耗时 max 是除零兜底的 1，fmtPoints(1) 因「非零最小显示 1 积分」规则会显示 1 而不是 0 */}
-      <div style={{ fontSize: 12, color: 'var(--lc-text-4)', marginTop: 4 }}>{t('ss2.trendMax')}：{fmtPoints(max)} {t('ss2.unitPoints')}</div>
+      <div style={{ fontSize: 14, color: 'var(--lc-text-4)', marginTop: 4 }}>{t('ss2.trendMax')}：{fmtPoints(max)} {t('ss2.unitPoints')}</div>
     </div>
   )
 }
@@ -85,7 +85,7 @@ function Pager(props: { page: number; total: number; size: number; onPage: (p: n
   // ⚠ 调用处写死的 size=10 必须与 api/mybilling 里 page() 的默认 size 一致，否则页数与后端真实切片对不上
   const pages = Math.max(1, Math.ceil(props.total / props.size))
   return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 12 }}>
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 14 }}>
       <Button size="sm" variant="secondary" disabled={props.page <= 1} onClick={() => props.onPage(props.page - 1)}>{t('ss2.prev')}</Button>
       <span>{t('ss2.pageOf').replace('{p}', String(props.page)).replace('{n}', String(pages))}</span>
       <Button size="sm" variant="secondary" disabled={props.page >= pages} onClick={() => props.onPage(props.page + 1)}>{t('ss2.next')}</Button>
@@ -282,5 +282,5 @@ export default function BillingCenter() {
 // ⚠ 本页表格用的 .ss-table 不在这里——它由 App.tsx 的全局 <style> 提供（theme.css 另有深色覆盖），
 //    想调表格边框/内边距去改那两处，写在本文件里会被全局规则的优先级比掉
 const CSS_MB = `
-.mb-card{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:14px;padding:20px;margin-bottom:12px;box-shadow:var(--lc-panel-highlight)}
+.mb-card{background:var(--lc-panel);border:2px solid var(--lc-border-card);border-radius:14px;padding:20px;margin-bottom:12px;box-shadow:var(--lc-panel-highlight)}
 `

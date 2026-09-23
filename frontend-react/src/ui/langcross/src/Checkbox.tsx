@@ -21,7 +21,7 @@ export function Checkbox({ label, children, className = "", style, ...rest }: Ch
   return (
     <label className={`lc-check-row ${className}`.trim()} style={{ display: "inline-flex", alignItems: "center", gap: 10, ...style }}>
       <input type="checkbox"className="lc-checkbox"{...rest} />
-      {content ? <span style={{ fontSize: 13, color: rest.disabled ?"var(--lc-disabled)":"var(--lc-text)"}}>{content}</span> : null}
+      {content ? <span style={{ fontSize: 15, color: rest.disabled ?"var(--lc-disabled)":"var(--lc-text)"}}>{content}</span> : null}
     </label>
   );
 }
@@ -39,7 +39,7 @@ export function Switch({ label, children, className = "", style, ...rest }: Swit
   return (
     <label className={`lc-switch-row ${className}`.trim()} style={{ display: "inline-flex", alignItems: "center", gap: 10, ...style }}>
       <input type="checkbox"role="switch"className="lc-switch"{...rest} />
-      {content ? <span style={{ fontSize: 13, color: rest.disabled ?"var(--lc-disabled)": rest.checked ?"var(--lc-text)":"var(--lc-text-2)"}}>{content}</span> : null}
+      {content ? <span style={{ fontSize: 15, color: rest.disabled ?"var(--lc-disabled)": rest.checked ?"var(--lc-text)":"var(--lc-text-2)"}}>{content}</span> : null}
     </label>
   );
 }

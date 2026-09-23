@@ -13,9 +13,10 @@
 // 因为这个盲区已被发现三次（/docs/*、/openapi/docs 的 Google 蓝、office 任务窗格的浅底蓝）。
 // 本文件把「不得复活旧主题」与「必须等于 §3.1 真值」两侧都钉住。
 //
-// 口径来源：《前端及UI相关/UI-ANNOTATIONS.md》§1.1（色令牌）、§1.3（描边 1.2px）、
-// §3.1-05（公开页骨架：导航品牌 15/Bold/#FFFFFF、导航项 12/Medium/#9AA0AA、
-// 管理后台=白底黑字按钮、面板 #0E1014、页脚面 #050607 文字 #536471）。
+// 口径来源：《前端及UI相关/UI-ANNOTATIONS.md》§1.1（色令牌）、§1.3（描边）、
+// §3.1-05（公开页骨架：导航品牌 Bold/#FFFFFF、面板 #0E1014、页脚面 #050607 文字 #536471）。
+// ★ 〇-N（2026-09-23 用户后令「字号变大、线框变粗、不改颜色」）：描边档由交付原值 1.2px 抬到 2px，
+// 字阶整体 +2px（品牌 15→17、导航项 12→14），颜色与字重仍按 §1.1/§3.1 字面值。
 // ========================================
 package api
 
@@ -63,10 +64,15 @@ func TestPublicDocPageMonochromeTruth(t *testing.T) {
 			if strings.Contains(html, "background:var(--lc-text)") || strings.Contains(html, "background:#E7E9EA") {
 				t.Error("实心白件用了文字档灰 #E7E9EA 做底（会显脏偏蓝），应取 --lc-white")
 			}
-			// ④ 描边框统一 1.2px（§1.3），卡片不得再写 1px 边框
+			// ④ 描边框统一 2px（★ 〇-N 2026-09-23 用户后令「线框加粗」，交付原档 §1.3 是 1.2px），
+			//    并负向清掉旧的 1.2px / 1px 细档——同一批字号 +2px 也覆盖 §3.1-05 的 15/12 字阶，
+			//    真值表以 UI-ANNOTATIONS 的「〇-N 后档」为准（前端侧等价锁见 readability.test.ts I 段）。
 			if !strings.Contains(html, ".card{background:var(--lc-panel)") ||
-				!strings.Contains(html, "border:1.2px solid var(--lc-card-line)") {
-				t.Error("内容面板未按 §3.1-05 走 #0E1014 + 1.2px #3A404C")
+				!strings.Contains(html, "border:2px solid var(--lc-card-line)") {
+				t.Error("内容面板未按 〇-N 后档走 #0E1014 + 2px #3A404C")
+			}
+			if strings.Contains(html, "1.2px") || strings.Contains(html, "border:1px ") {
+				t.Error("直出页仍有 〇-N 前的细描边（1.2px / 1px），抬档未覆盖本渲染面")
 			}
 			// ⑤ 导航四项齐全且当前页点亮 .on（活跃 #FFFFFF，其余 #9AA0AA）
 			for _, label := range []string{"定价 Pricing", "用户协议 Terms", "SLA", "隐私协议 Privacy"} {

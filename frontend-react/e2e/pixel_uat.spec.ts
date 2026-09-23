@@ -108,8 +108,9 @@ test.describe('像素级 UAT', () => {
     expect(await dialog.locator('.cw-dialog-body textarea').count(), '输入框不得回到消息流里').toBe(0);
     await expect(dialog.locator('.cw-dialog-body')).toBeVisible();
     // 几何锁（运行时实测，防「DOM 顺序对但 CSS 把它顶回上面」）。
-    // ★ 〇-M（2026-09-23）输入区压成元宝式单卡后，这里由「只判贴底」升级为**等值锁**：
-    //   框脚 109 / 输入卡 90 / 工具条 48 / 单行输入 40（1280×720、默认一个目标语种、空输入实测值）。
+    // ★ 〇-M 等值锁 → 〇-N 重定档（2026-09-23）：字号 +2px、描边 2px 之后，输入区的四档实测值整体抬高，
+    //   这里是 1280×720、默认一个目标语种、空输入下重新实测的值：
+    //   框脚 114 / 输入卡 94 / 工具条 50 / 单行输入 40（输入框靠固定行高档故不变）。
     //   为什么必须等值而不是「≤ 某上限」：上一版就是只锁方向，结果四排一路长到 250+px 也没人拦，
     //   直到用户判「太长太占空间」才返工（返工面 = 全站唯一的输入区）。
     //   工具条「只有一排」用行号集合判：把换行（视觉上变两排）直接判红，而不是靠高度猜。
@@ -140,10 +141,10 @@ test.describe('像素级 UAT', () => {
     // ★ 〇-M 等值锁：单卡 + 单排工具条的尺寸档
     expect(geo.liveControls, '工具条控件数与实现不符（源语言胶囊/语种/模式/缩翻/主按钮…）').toBeGreaterThanOrEqual(6);
     expect(geo.toolbarRows, `工具条必须是**一排**，实测 ${geo.toolbarRows} 排（chips 或控件换行即回退成多排）`).toBe(1);
-    expect(geo.taH, `空态输入框实高 ${geo.taH}px ≠ 〇-M 真值 40px（一行自适应档）`).toBe(40);
-    expect(geo.toolbarH, `工具条实高 ${geo.toolbarH}px ≠ 〇-M 真值 48px`).toBe(48);
-    expect(geo.composerH, `输入卡实高 ${geo.composerH}px ≠ 〇-M 真值 90px（输入 40 + 工具条 48 + 边框）`).toBe(90);
-    expect(geo.footH, `框脚实高 ${geo.footH}px ≠ 〇-M 真值 109px（四排压成一排是本批的交付口径）`).toBe(109);
+    expect(geo.taH, `空态输入框实高 ${geo.taH}px ≠ 〇-N 真值 40px（一行自适应档）`).toBe(40);
+    expect(geo.toolbarH, `工具条实高 ${geo.toolbarH}px ≠ 〇-N 真值 50px`).toBe(50);
+    expect(geo.composerH, `输入卡实高 ${geo.composerH}px ≠ 〇-N 真值 94px（输入 40 + 工具条 50 + 边框）`).toBe(94);
+    expect(geo.footH, `框脚实高 ${geo.footH}px ≠ 〇-N 真值 114px（四排压成一排是本批的交付口径）`).toBe(114);
     // ★ 〇-M 负向锁：语种面板在贴底的工具条里必须**向上弹**——宿主 .cw-dialog 是 overflow:hidden，
     //   向下弹会被裁掉（表现为「点了没反应」），而 DOM 顺序与结构锁全都扫不到这种失效。
     await page.locator('[data-testid="lang-multi-trigger"]').click();
@@ -155,18 +156,39 @@ test.describe('像素级 UAT', () => {
     expect(panel.cls, '贴底触发时面板必须走 .lms-panel--up 向上弹').toContain('lms-panel--up');
     expect(panel.bottom, `面板底沿 ${panel.bottom} 必须收在触发框上沿 ${panel.trigTop} 之上（否则被 overflow 裁掉）`).toBeLessThanOrEqual(panel.trigTop);
     expect(panel.top, `面板顶沿 ${panel.top} 越出视口上方`).toBeGreaterThanOrEqual(0);
+    // ★ 〇-N（2026-09-23 用户投诉第 1 条「黑色的 UI 不该配黑色的字」）：选项这一层必须实测看得见。
+    //   根因（文字色只挂在 html[data-theme='dark'] 覆写层 + 主题默认 auto 跟随系统）由
+    //   dark_admin_upload.spec.ts 的浅色宿主 D1 钉住；本锁补的是「面板展开后逐档量对比度」，
+    //   因为根因修好后仍可能有页面层把选项文字写成弱灰——那类回退 DOM 锁扫不出来。
+    const optInfo = await page.locator('[data-testid="lang-multi-panel"]').evaluate((el) => {
+      const hex = (c: string) => '#' + (c.match(/\d+(\.\d+)?/g) || []).slice(0, 3).map((n) => (+n).toString(16).padStart(2, '0')).join('');
+      const opts = [...el.querySelectorAll('[role="option"]')];
+      const pick = (n?: Element) => (n ? { color: getComputedStyle(n).color, fs: parseFloat(getComputedStyle(n).fontSize) } : null);
+      return {
+        panelBg: hex(getComputedStyle(el).backgroundColor), count: opts.length,
+        on: pick(opts.find((o) => o.getAttribute('aria-selected') === 'true')),
+        off: pick(opts.find((o) => o.getAttribute('aria-selected') !== 'true')),
+      };
+    });
+    expect(optInfo.count, '语种面板没有渲染出可选项').toBeGreaterThanOrEqual(10);
+    expect(optInfo.off?.fs, `语种选项字号 ${optInfo.off?.fs}px ≠ 〇-N 后档 15px`).toBe(15);
+    for (const [k, o] of [['未选', optInfo.off], ['已选', optInfo.on]] as const) {
+      if (!o) continue;
+      expect(contrastOnCard(o.color, optInfo.panelBg), `${k}项文字色 ${o.color} 对面板底 ${optInfo.panelBg} 不应低于 4.5:1（正文档）`).toBeGreaterThanOrEqual(4.5);
+    }
     await page.locator('[data-testid="lang-multi-trigger"]').click(); // 收起，别把浮层留给后续断言
     // 文件入口下线：全站工作台不应再挂隐藏的原生 file input
     expect(await page.locator('input[type="file"]').count(), '即时翻译已移除文件上传入口').toBe(0);
-    // 字号真值等值锁（★ 2026-09-22 全站还原批）：本批把 #35/#67/#68 的「整档 +1px / 顶栏提档」
-    // 全部撤除，字阶回到交付 UI 口径，所以这里由「≥ 下限」改成「恰等于真值档」——
-    // 单向下限锁正是把配色与字阶一路推离交付稿的元凶（它只拦变小，不拦变大）。
-    // 输入框 13 = 组件库 .lc-textarea 冻结档（第 1 轮交付值），不是页面层自选值。
+    // 字号真值等值锁（★ 2026-09-22 全站还原批立锁，★ 〇-N 2026-09-23 按新档重定）：
+    // 单向下限锁正是把配色与字阶一路推离交付稿的元凶（它只拦变小，不拦变大），所以一律写「恰等于」。
+    // 〇-N 的用户后令是「字号 +2px、线框加粗、不改颜色」，故这里全部由交付档整体 +2：
+    // 13→15 / 14→16 / 12→14 / 15→17。色值一档未动（见下面的真值灰阶锁）。
+    // 输入框 15 = 组件库 .lc-textarea 冻结档（交付 13 + 〇-N 后令 2），不是页面层自选值。
     const taFs = await dialog.locator('.cw-dialog-foot textarea').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
-    expect(taFs, `输入框字号 ${taFs}px ≠ 组件库真值 13px`).toBe(13);
-    // 正文气泡 14 = theme.css .bubble（交付包正文档）
+    expect(taFs, `输入框字号 ${taFs}px ≠ 〇-N 后组件库档 15px`).toBe(15);
+    // 正文气泡 16 = theme.css .bubble（交付 14 + 〇-N 后令 2）
     const bubbleFs = await page.locator('.bubble').first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize)).catch(() => -1);
-    if (bubbleFs >= 0) expect(bubbleFs, `气泡字号 ${bubbleFs}px ≠ 真值 14px`).toBe(14);
+    if (bubbleFs >= 0) expect(bubbleFs, `气泡字号 ${bubbleFs}px ≠ 〇-N 后档 16px`).toBe(16);
     // 弱说明文字：颜色必须落在真值灰阶集合内（提亮批自造的 #878D95/#7A828E/#9AA2AF 一律红灯），
     // 并顺手核对该灰阶对卡面 #0E1014 的实际比值是否等于真值口径（≥4:1，图形/弱文字档）。
     const welcomeColor = await dialog.locator('.cw-welcome').evaluate((el) => getComputedStyle(el).color);
@@ -175,21 +197,22 @@ test.describe('像素级 UAT', () => {
     const welcomeRgb = (welcomeColor.match(/\d+(\s*,\s*\d+){2}/) || [''])[0].replace(/\s/g, '');
     expect(TRUTH_RGB, `弱文字色不在真值灰阶内：${welcomeColor}`).toContain(welcomeRgb);
     expect(contrastOnCard(welcomeColor, '#000000'), `真值灰阶在页面底上不应低于 3.4:1（${welcomeColor}）`).toBeGreaterThanOrEqual(3.4);
-    // 顶栏按 §2.2 骨架真值：行高 38、品牌 14 Bold、导航 13px 胶囊、语种钮 12px。
-    // 三条锁配对使用：字号等值防「调档」，实高 ≤38 防「折行/撑破行」，行高本身防顶栏被改厚。
+    // 顶栏按 §2.2 骨架的 〇-N 后档：行高仍是 38（骨架未加厚），字阶整体 +2 ⇒ 品牌 16 Bold、
+    // 导航 15px 胶囊、语种钮 14px。三条锁配对使用：字号等值防「调档」，实高 ≤38 防「折行/撑破行」，
+    // 行高本身防顶栏被改厚——字变大后最容易先崩的就是「一行放得下吗」这一条。
     const headerH = await page.locator('.app-header').evaluate((el) => el.getBoundingClientRect().height);
     expect(headerH, `顶栏实高 ${headerH}px ≠ §2.2 的 38px`).toBe(38);
     const brand = page.locator('.app-header .brand').first();
     // 品牌可能是图片 logo（此时 .brand 内只有 <img>），字号锁改为落在 img 的宿主上量，
     // 不能因为白标形态不同就假红。
-    expect(await brand.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), '品牌字号 ≠ §2.2 真值 14px').toBe(14);
+    expect(await brand.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), '品牌字号 ≠ 〇-N 后档 16px').toBe(16);
     const tab = page.locator('.app-header .app-tab').first();
     // 三个工作台 Tab 共用同一条 .app-tab 规则，取首个即可代表该字阶档（不必逐个数）。
     // 高度锁之前必须先断可见：隐藏元素 getBoundingClientRect() 恒为 0，
     // `<=38` 会静默通过——那正是「断言永远绿」一类的假绿，比翻红更危险。
     await expect(tab, '工作台 Tab 未渲染').toBeVisible();
     const tabFs = await tab.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
-    expect(tabFs, `工作台 Tab 字号 ${tabFs}px ≠ §2.2 真值 13px`).toBe(13);
+    expect(tabFs, `工作台 Tab 字号 ${tabFs}px ≠ 〇-N 后档 15px`).toBe(15);
     const tabH = await tab.evaluate((el) => el.getBoundingClientRect().height);
     expect(tabH, `工作台 Tab 实高 ${tabH}px ⇒ 文案已折行或控件被撑高`).toBeLessThanOrEqual(38);
     const langBtn = page.locator('.app-header .lang-sel-btn').first();
@@ -198,7 +221,7 @@ test.describe('像素级 UAT', () => {
     // 一度把钮撑成两行，故字号真值与「单行实高」两条都要钉，缺一漏一半回归。
     const langH = await langBtn.evaluate((el) => el.getBoundingClientRect().height);
     expect(langH, `语种钮实高 ${langH}px ⇒ 文案已折行`).toBeLessThanOrEqual(38);
-    expect(await langBtn.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), '语种钮字号 ≠ 真值 12px').toBe(12);
+    expect(await langBtn.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), '语种钮字号 ≠ 〇-N 后档 14px').toBe(14);
     await shot(page, 'p2b_workbench_merged');
   });
 

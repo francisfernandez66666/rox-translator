@@ -21,7 +21,7 @@
   border-radius: 50%;
   background: var(--lc-white);
   color: #000000;
-  font: 600 14px/28px system-ui, sans-serif;
+  font: 600 16px/28px system-ui, sans-serif;
   text-align: center;
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
@@ -39,10 +39,10 @@
   overflow-y: auto;
   background: var(--lc-panel);
   color: var(--lc-body);
-  border: 1.2px solid var(--lc-card-line);
+  border: 2px solid var(--lc-card-line);
   border-radius: 12px;
   padding: 10px 12px;
-  font: 13px/1.6 system-ui, sans-serif;
+  font: 15px/1.6 system-ui, sans-serif;
   white-space: pre-wrap;
   word-break: break-word;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);

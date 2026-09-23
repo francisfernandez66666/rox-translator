@@ -364,7 +364,7 @@ export default function AssistP() {
       <Panel title={t('assist.title')} extra={
         <Button size="sm" variant="secondary" onClick={() => { void refreshStatus(); void refreshTok() }}>{t('assist.recheck')}</Button>
       }>
-        <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 10 }}>{t('assist.subtitle')}</div>
+        <div style={{ fontSize: 16, color: 'var(--adm-hint)', marginBottom: 10 }}>{t('assist.subtitle')}</div>
         <InlineBanner tone={bannerTone}>{bannerText}</InlineBanner>
 
         {/* ===== 管理 Token 区（★ 〇-LK：与 ModelsP 密钥区同一套范式） =====
@@ -374,9 +374,9 @@ export default function AssistP() {
           <StatusPill tone={tokState?.set ? 'success' : 'warn'}>
             {tokState?.set ? t('assist.tokenSet') : t('assist.tokenUnset')}
           </StatusPill>
-          <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('assist.tokenSrcLabel')}：{srcLabel}</span>
-          {tokState?.set && <code style={{ fontSize: 12.5 }}>{tokState.masked}</code>}
-          <span style={{ fontSize: 12, color: 'var(--adm-hint)' }}>{t('assist.tokenMaskNote')}</span>
+          <span style={{ fontSize: 15, color: 'var(--adm-hint)' }}>{t('assist.tokenSrcLabel')}：{srcLabel}</span>
+          {tokState?.set && <code style={{ fontSize: 14.5 }}>{tokState.masked}</code>}
+          <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('assist.tokenMaskNote')}</span>
         </div>
         {tokState?.env_overridden && (
           <div style={{ marginTop: 8 }}><InlineBanner tone="warn">{t('assist.tokenEnvLocked')}</InlineBanner></div>
@@ -393,7 +393,7 @@ export default function AssistP() {
           {tokState?.set && tokState?.source === 'db' && (
             <Button size="sm" variant="danger" disabled={rotating} onClick={() => void clearToken()}>{t('assist.tokenClear')}</Button>
           )}
-          <a className="lc-link" href={`${ASSIST_API}/assist/admin`} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>
+          <a className="lc-link" href={`${ASSIST_API}/assist/admin`} target="_blank" rel="noreferrer" style={{ fontSize: 15 }}>
             {t('assist.legacyAdmin')}
           </a>
         </form>
@@ -408,7 +408,7 @@ export default function AssistP() {
 
       {tab === 'overview' && (
         <Panel title={t('assist.tabOverview')}>
-          <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap', fontSize: 14 }}>
+          <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap', fontSize: 16 }}>
             <span>{t('assist.statSessions')}：<b>{sess?.total ?? '—'}</b></span>
             <span>{t('assist.statMessages')}：<b>{sess?.messages ?? '—'}</b></span>
             <span>{t('assist.statUnanswered')}：<b>{sess?.unanswered.length ?? '—'}</b></span>
@@ -421,8 +421,8 @@ export default function AssistP() {
           </div>
           {(sess?.unanswered.length ?? 0) > 0 && (
             <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 14, marginBottom: 6 }}>{t('assist.unansweredTitle')}</div>
-              <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, lineHeight: 1.9 }}>
+              <div style={{ fontSize: 16, marginBottom: 6 }}>{t('assist.unansweredTitle')}</div>
+              <ul style={{ margin: 0, paddingLeft: 20, fontSize: 15, lineHeight: 1.9 }}>
                 {sess!.unanswered.map((q, i) => <li key={i}>{q}</li>)}
               </ul>
             </div>
@@ -444,7 +444,7 @@ export default function AssistP() {
 
       {tab === 'config' && (
         <Panel title={t('assist.tabConfig')}>
-          <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('assist.llmHint')}</div>
+          <div style={{ fontSize: 15, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('assist.llmHint')}</div>
           {LLM_CFG.map((k) => (
             <Field key={k} label={k}>
               <input
@@ -457,9 +457,9 @@ export default function AssistP() {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '6px 0 16px' }}>
             <Button variant="primary" size="sm" onClick={() => void saveCfgKeys(LLM_CFG)}>{t('assist.llmSave')}</Button>
             <Button variant="secondary" size="sm" disabled={testing} onClick={() => void testLLM()}>{t('assist.llmTest')}</Button>
-            {testOut && <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{testOut}</span>}
+            {testOut && <span style={{ fontSize: 15, color: 'var(--adm-hint)' }}>{testOut}</span>}
           </div>
-          <div style={{ fontSize: 13, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('assist.cfgHint')}</div>
+          <div style={{ fontSize: 15, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('assist.cfgHint')}</div>
           {CHAT_CFG.map((k) => (
             <Field key={k} label={k}>
               <textarea
@@ -475,7 +475,7 @@ export default function AssistP() {
               onChange={(e) => setCfg({ ...cfg, synonyms: e.target.value })}
             />
           </Field>
-          <div style={{ fontSize: 12.5, color: 'var(--adm-hint)', margin: '4px 0 10px' }}>{t('assist.synHint')}</div>
+          <div style={{ fontSize: 14.5, color: 'var(--adm-hint)', margin: '4px 0 10px' }}>{t('assist.synHint')}</div>
           <Button variant="primary" size="sm" onClick={() => void saveCfgKeys([...CHAT_CFG, 'synonyms'])}>{t('assist.cfgSave')}</Button>
         </Panel>
       )}

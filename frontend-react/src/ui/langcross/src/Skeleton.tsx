@@ -39,7 +39,7 @@ export function SkeletonCard({ rows = 3, width = 320 }: SkeletonCardProps) {
         flexDirection: "column",
         gap: 12,
         background: "var(--lc-inset)",
-        border: "1px solid var(--lc-border-card-dim)",
+        border: "2px solid var(--lc-border-card-dim)",
         borderRadius: "var(--lc-r-card)",
       }}
     >

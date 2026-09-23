@@ -166,7 +166,7 @@ export default function TaskCenterP() {
     ) },
     { key: 'status', title: t('tasks.colStatus'), width: 180, render: (row) => (
       row.grant_mode === 'auto'
-        ? <span style={{ fontSize: 13 }}>{progressText(row) || t('tasks.autoGrant')}</span>
+        ? <span style={{ fontSize: 15 }}>{progressText(row) || t('tasks.autoGrant')}</span>
         : row.claimed
           ? <Badge>{t('tasks.claimed')}</Badge>
           : <StatusPill tone="warn">{t('tasks.claim')}</StatusPill>
@@ -174,7 +174,7 @@ export default function TaskCenterP() {
     { key: 'op', title: t('tasks.colOp'), width: 96, render: (row) => (
       // 自动发放任务由后端事件钩子入账，前端不给领取入口（避免点了必失败的死按钮）
       row.grant_mode === 'auto'
-        ? <span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{row.claimed ? t('tasks.grantedAuto') : '—'}</span>
+        ? <span style={{ fontSize: 15, color: 'var(--adm-faint)' }}>{row.claimed ? t('tasks.grantedAuto') : '—'}</span>
         : <Button size="sm" variant={row.claimed ? 'secondary' : 'primary'} disabled={!!row.claimed} onClick={() => void doClaim(row)}>
             {row.claimed ? t('tasks.claimed') : t('tasks.claim')}
           </Button>
@@ -190,7 +190,7 @@ export default function TaskCenterP() {
       <StatusPill tone={row.grant_mode === 'auto' ? 'success' : 'idle'}>{row.grant_mode === 'auto' ? t('tasks.autoGrant') : t('tasks.manualGrant')}</StatusPill>
     ) },
     { key: 'reward_points', title: t('tasks.colReward'), width: 220, render: (row) => <Badge>{rewardText(row)}</Badge> },
-    { key: 'rule', title: t('tasks.colRule'), render: (row) => <span style={{ fontSize: 13 }}>{ruleText(row)}</span> },
+    { key: 'rule', title: t('tasks.colRule'), render: (row) => <span style={{ fontSize: 15 }}>{ruleText(row)}</span> },
     { key: 'sort_order', title: t('tasks.colSort'), width: 70 },
     { key: 'enabled', title: t('tasks.colEnabled'), width: 80, render: (row) => <StatusPill tone={row.enabled === 1 ? 'success' : 'idle'}>{row.enabled === 1 ? t('tasks.enabledLabel') : '—'}</StatusPill> },
     { key: 'op', title: t('tasks.colOp'), width: 160, render: (row) => (
@@ -204,7 +204,7 @@ export default function TaskCenterP() {
   return (
     <div>
       <Panel title={t('tasks.title')}>
-        <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('tasks.hint')}</p>
+        <p style={{ fontSize: 15, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('tasks.hint')}</p>
         <DataTable<any> rowKey={(row) => String(row.id)} rows={myRows as Any[]} columns={myCols}  />
         {!myRows.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 16 }}>{t('tasks.empty')}</div>}
       </Panel>
@@ -219,7 +219,7 @@ export default function TaskCenterP() {
             grant_mode: 'manual', task_key: '', period: 'daily', valid_days: 0, stack_expiry: 0, cap_per_day: 0, cap_per_week: 0,
           })}>＋ {t('tasks.add')}</Button>
         </div>}>
-          <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('tasks.adminHint')}</p>
+          <p style={{ fontSize: 15, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('tasks.adminHint')}</p>
           <DataTable<any> rowKey={(row) => String(row.id)} rows={adminRows as Any[]} columns={adminCols}  />
         </Panel>
       )}

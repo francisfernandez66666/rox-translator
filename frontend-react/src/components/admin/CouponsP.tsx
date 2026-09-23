@@ -167,7 +167,7 @@ export function CouponsP() {
     <>
       <Panel title={t('coupons.title')} extra={<Button variant="primary" onClick={() => openEdit()}>{t('coupons.create')}</Button>}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
-          <span style={{ fontSize: 14, color: 'var(--adm-hint)', flex: 1, minWidth: 280 }}>{t('coupons.hint')}</span>
+          <span style={{ fontSize: 16, color: 'var(--adm-hint)', flex: 1, minWidth: 280 }}>{t('coupons.hint')}</span>
           <Link onClick={() => void openRedemptions(0)}>{t('coupons.redemptions')} · {t('coupons.all')}</Link>
         </div>
         <DataTable rowKey={(row) => String((row as Any).id)} rows={rows} emptyText={t('coupons.noRedemptions')}

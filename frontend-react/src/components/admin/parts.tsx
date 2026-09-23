@@ -36,7 +36,7 @@ export function toastResp(r: { success?: boolean; message?: string }, okMsg?: st
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="field-row" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-      <span className="field-label" style={{ minWidth: 130, fontSize: 13, color: 'var(--adm-hint)' }}>{label}</span>
+      <span className="field-label" style={{ minWidth: 130, fontSize: 15, color: 'var(--adm-hint)' }}>{label}</span>
       <div style={{ flex: 1 }}>{children}</div>
     </div>
   )

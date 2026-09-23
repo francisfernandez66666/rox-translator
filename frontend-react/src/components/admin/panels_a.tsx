@@ -48,9 +48,9 @@ function shortDiffJSON(s: string): string {
 /** 指标卡片组件：仅做展示，value 可直接为 React 节点 */
 function HealthCard({ value, label }: { value: React.ReactNode; label: string }) {
   return (
-    <div style={{ minWidth: 120, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: '10px 14px' }}>
+    <div style={{ minWidth: 120, border: '2px solid var(--adm-line)', borderRadius: 8, padding: '10px 14px' }}>
       <b style={{ fontSize: 18, display: 'block' }}>{value}</b>
-      <span style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{label}</span>
+      <span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{label}</span>
     </div>
   )
 }
@@ -145,7 +145,7 @@ export default function Overview() {
       {/* 审计日志表格：超管看全平台，企业租户管理员看本租户（后端按 X-Tenant-ID 自动隔离） */}
       {audit.length > 0 && (
         <div style={{ marginTop: 16 }}>
-          <h3 style={{ fontSize: 14 }}>{t('overview.recentAudit')}</h3>
+          <h3 style={{ fontSize: 16 }}>{t('overview.recentAudit')}</h3>
           <DataTable<any> rowKey={(row) => String(row.id)} rows={audit as never}
             columns={[
               { key: 'created_at', title: t('overview.colTime'), width: 165, render: (row) => fmtTime(row.created_at) },
@@ -483,7 +483,7 @@ export function AlertsP() {
       <Dialog title={`${t('alerts.silenceTitle')}（${silDlg?.kind ?? ''}@#${silDlg?.tenant_id ?? ''}）`} open={!!silDlg} onCancel={() => setSilDlg(null)}
         onConfirm={() => void doSilence()} confirmText={t('alerts.silence')} cancelText={t('common.cancel')}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 13 }}>{t('alerts.silDur')}</span>
+          <span style={{ fontSize: 15 }}>{t('alerts.silDur')}</span>
           <select className="lc-select" value={silMin} onChange={(e) => setSilMin(e.target.value)} style={{ width: 150 }}>
             <option value="60">{t('alerts.dur1h')}</option>
             <option value="720">{t('alerts.dur12h')}</option>
@@ -495,17 +495,17 @@ export function AlertsP() {
 
       {/* 注册与触达配置区域 */}
       <Panel title={t('packages.regNotifyTitle')}>
-        <div style={{ fontSize: 13, color: 'var(--adm-faint)', marginBottom: 8 }}>{t('packages.regNotifyHint')}</div>
+        <div style={{ fontSize: 15, color: 'var(--adm-faint)', marginBottom: 8 }}>{t('packages.regNotifyHint')}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <Switch checked={regCfg.email_verify_enabled === '1' || regCfg.email_verify_enabled === true} onChange={(e) => setSwitch('email_verify_enabled', e.target.checked)} />
-          <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.emailVerify')}</span>
+          <span style={{ fontSize: 15, color: 'var(--adm-hint)' }}>{t('packages.emailVerify')}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <Switch checked={regCfg.email_notify_enabled === '1' || regCfg.email_notify_enabled === true} onChange={(e) => setSwitch('email_notify_enabled', e.target.checked)} />
-          <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('packages.emailNotify')}</span>
+          <span style={{ fontSize: 15, color: 'var(--adm-hint)' }}>{t('packages.emailNotify')}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <span style={{ fontSize: 13, color: 'var(--adm-hint)', minWidth: 130 }}>{t('packages.captchaProvider')}</span>
+          <span style={{ fontSize: 15, color: 'var(--adm-hint)', minWidth: 130 }}>{t('packages.captchaProvider')}</span>
           <select className="lc-select" value={String(regCfg.captcha_provider || '')} onChange={(e) => setRegCfg((p) => ({ ...p, captcha_provider: e.target.value }))} style={{ width: 160 }}>
             <option value="">{t('packages.captchaOff')}</option>
             <option value="turnstile">Turnstile</option>
@@ -578,16 +578,16 @@ export function AuditP() {
   return (
     <Panel title={t('audit.title')}
       extra={<Button onClick={exportCsv}>{t('audit.export')}</Button>}>
-      <p className="ad-hint" style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('audit.hint')}</p>
+      <p className="ad-hint" style={{ fontSize: 15, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('audit.hint')}</p>
       {/* 筛选条件：操作类型、日期范围 */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <select className="lc-select" value={fAction} onChange={(e) => setFAction(e.target.value)} style={{ width: 180 }}>
           <option value="">{t('audit.allActions')}</option>
           {actions.map((a) => <option key={a} value={a}>{auditActionLabel(a)}</option>)}
         </select>
-        <input type="date" value={fFrom} onChange={(e) => setFFrom(e.target.value)} style={{ height: 30, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
+        <input type="date" value={fFrom} onChange={(e) => setFFrom(e.target.value)} style={{ height: 30, border: '2px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
         <span style={{ color: 'var(--adm-faint)' }}>→</span>
-        <input type="date" value={fTo} onChange={(e) => setFTo(e.target.value)} style={{ height: 30, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
+        <input type="date" value={fTo} onChange={(e) => setFTo(e.target.value)} style={{ height: 30, border: '2px solid var(--adm-line)', borderRadius: 8, padding: '0 8px', width: 150 }} />
         <Button variant="secondary" onClick={load}>{t('common.refresh')}</Button>
       </div>
 
@@ -653,9 +653,9 @@ export function UsageP() {
     <div className="stat-grid">
       {Object.entries(d).filter(([, v]) => typeof v === 'number').map(([k, v]) => (
         <div key={k} className="stat-card">
-          <div style={{ fontSize: 12, color: 'var(--adm-faint)' }}>{t('usage.field.' + k) !== 'usage.field.' + k ? t('usage.field.' + k) : k}</div>
+          <div style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{t('usage.field.' + k) !== 'usage.field.' + k ? t('usage.field.' + k) : k}</div>
           {ME_POINTS_FIELDS.includes(k)
-            ? <b>{fmtPoints(Number(v))} <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--adm-faint)' }}>{t('ss2.unitPoints')}</span></b>
+            ? <b>{fmtPoints(Number(v))} <span style={{ fontSize: 14, fontWeight: 400, color: 'var(--adm-faint)' }}>{t('ss2.unitPoints')}</span></b>
             : <b>{fmtNum(Number(v))}</b>}
         </div>
       ))}
@@ -665,7 +665,7 @@ export function UsageP() {
   /** 系统用量：组织下用户成本明细表 + 合计 */
   const orgTable = (d: Any) => !d ? <EmptyState title="—" /> : (
     <div>
-      <p style={{ fontSize: 13, color: 'var(--adm-hint)', margin: '0 0 8px' }}>{tpl('usage.orgTotal', { n: fmtPoints(Number(d.total) || 0) })}</p>
+      <p style={{ fontSize: 15, color: 'var(--adm-hint)', margin: '0 0 8px' }}>{tpl('usage.orgTotal', { n: fmtPoints(Number(d.total) || 0) })}</p>
       <DataTable<any> rowKey={(row) => String(row.id)} rows={d.users || []}
         columns={[
           { key: 'username', title: t('usage.colUser'), width: 160 },
@@ -680,12 +680,12 @@ export function UsageP() {
   const costTables = (d: Any) => !d ? <EmptyState title="—" /> : (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
       <div style={{ flex: 1, minWidth: 320 }}>
-        <h4 style={{ fontSize: 14, margin: '4px 0' }}>{t('usage.costBy')}</h4>
+        <h4 style={{ fontSize: 16, margin: '4px 0' }}>{t('usage.costBy')}</h4>
         <DataTable<any> rowKey={(row) => String(row.k)} rows={Object.entries(d.costs || {}).map(([k, v]) => ({ k, v }))}
           columns={[{ key: 'k', title: t('usage.colModel') }, { key: 'v', title: t('usage.colCost'), render: (row) => fmtPoints(Number(row.v)) }]}  />
       </div>
       <div style={{ flex: 1, minWidth: 320 }}>
-        <h4 style={{ fontSize: 14, margin: '4px 0' }}>{t('usage.quantBy')}</h4>
+        <h4 style={{ fontSize: 16, margin: '4px 0' }}>{t('usage.quantBy')}</h4>
         <DataTable<any> rowKey={(row) => String(row.k)} rows={Object.entries(d.quants || {}).map(([k, v]) => ({ k, v }))}
           columns={[{ key: 'k', title: t('usage.colModel') }, { key: 'v', title: t('usage.colCount'), render: (row) => fmtNum(row.v) }]}  />
       </div>
@@ -724,7 +724,7 @@ export function UsageP() {
   return (
     <Panel title={t('usage.dashboardTitle')}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, color: 'var(--adm-hint)' }}>{t('usage.dateQuery')}</span>
+        <span style={{ fontSize: 15, color: 'var(--adm-hint)' }}>{t('usage.dateQuery')}</span>
         {/* 腾讯 TDesign 日期范围选择器（2026-09-05）：任选起止日期 → 分别写入 usageFrom/usageTo，
             空=累计+当日口径（后端 from/to 均缺省）；单日区间可视同按日查询 */}
         <input className="lc-input" type="date" value={usageFrom} placeholder={t('usage.dateFrom')}
@@ -778,7 +778,7 @@ export function InvitesP() {
   return (
     <Panel title={t('invites.title')}
       extra={<Button variant="primary" onClick={() => { setCode(''); setTenantId(0); setDlg(true) }}>{t('invites.create')}</Button>}>
-      <p className="ad-hint" style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('invites.hint')}</p>
+      <p className="ad-hint" style={{ fontSize: 15, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('invites.hint')}</p>
       {/* 邀请码列表表格 */}
       <DataTable<any> rowKey={(row) => String(row.id)} rows={rows}
         columns={[

@@ -1,53 +1,23 @@
 // ============================================================================
-// lib/theme.ts — 明暗主题（★ F5）
-// 三态：light / dark / auto（auto 跟随系统 prefers-color-scheme）。
-// 偏好持久化 localStorage('app_theme')；双轨生效：
-//   1) html[data-theme] + color-scheme —— 驱动自绘 CSS（styles/theme.css 的 dark 覆写块）
-//   2) TDesign 组件走 --td-* CSS 变量覆写（同样在 dark 块中收敛）
+// lib/theme.ts — 主题（★ 〇-N：全站只有暗色一档）
+// 历史形态：light / dark / auto 三态 + localStorage('app_theme') 持久化 +
+//   matchMedia 跟随系统偏好 + 设置页循环切换按钮。
+// 为什么删：整站只交付了一套暗色真值（#000 面 / #E7E9EA 字，见 tokens.css 与
+//   UI-ANNOTATIONS §1.1），**亮色档从来没有对应配色**，而默认 auto 跟随系统 ⇒
+//   OS/浏览器偏浅色的用户整站落到 light 档，文字色又只写在
+//   `html[data-theme='dark']` 覆写层里，于是浏览器回退成默认**黑字** ——
+//   纯黑 UI + 黑字，语种面板未选项与后台统计卡标签全部看不见（用户 2026-09-23 截图）。
+// 结论（用户明令「干掉 light/auto 档」）：删三态与切换入口，data-theme 恒为 dark，
+//   并清掉老用户本地遗留的 app_theme，避免历史偏好继续左右渲染。
 // ============================================================================
 
-export type Theme = 'light' | 'dark' | 'auto'
+/** 已废弃的历史偏好键：只做清理，不再读写 */
+const LEGACY_KEY = 'app_theme'
 
-const KEY = 'app_theme'
-
-/** 读取已持久化的主题偏好（默认 auto 跟随系统） */
-export function getTheme(): Theme {
-  const v = localStorage.getItem(KEY)
-  return v === 'light' || v === 'dark' || v === 'auto' ? v : 'auto'
-}
-
-/** 计算偏好对应的实际明暗（auto 时查询系统） */
-export function isDark(pref: Theme = getTheme()): boolean {
-  if (pref === 'dark') return true
-  if (pref === 'light') return false
-  return !!window.matchMedia?.('(prefers-color-scheme: dark)')?.matches
-}
-
-/** 应用主题到 documentElement（data-theme + color-scheme） */
-export function applyTheme(pref: Theme = getTheme()): void {
-  const dark = isDark(pref)
-  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
-  document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
-}
-
-/** 循环切换：auto → light → dark → auto，并持久化+应用 */
-export function cycleTheme(): Theme {
-  const order: Theme[] = ['auto', 'light', 'dark']
-  const next = order[(order.indexOf(getTheme()) + 1) % order.length]
-  try { localStorage.setItem(KEY, next) } catch { /* ignore */ }
-  applyTheme(next)
-  return next
-}
-
-// auto 模式下跟随系统实时切换（matchMedia 监听，注册一次即可）
-let wired = false
-// 监听系统深浅色主题变化（全局仅接线一次）
-export function watchSystemTheme(): void {
-  if (wired) return
-  wired = true
-  try {
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-      if (getTheme() === 'auto') applyTheme('auto')
-    })
-  } catch { /* 老浏览器忽略 */ }
+/** 把恒暗主题落到 <html>：data-theme + color-scheme（后者管原生控件/滚动条） */
+export function applyTheme(): void {
+  document.documentElement.setAttribute('data-theme', 'dark')
+  document.documentElement.style.colorScheme = 'dark'
+  // 清掉三态时代写入的偏好；隐私模式下 removeItem 也可能抛，忽略即可
+  try { localStorage.removeItem(LEGACY_KEY) } catch { /* ignore */ }
 }

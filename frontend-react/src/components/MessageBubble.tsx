@@ -366,14 +366,14 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
                       const cur = !done && i === idx
                       return (
                         <span key={nm} style={{
-                          fontSize: 12, lineHeight: '16px', letterSpacing: '.02em',
+                          fontSize: 14, lineHeight: '16px', letterSpacing: '.02em',
                           color: cur ? '#E7E9EA' : lit ? '#C8CCD1' : '#3F444B',
                           display: 'inline-flex', alignItems: 'baseline', gap: 6,
                           transition: 'color .5s ease',
                         }}>
                           <i style={{
                             fontStyle: 'normal', fontFamily: '"Inter","SF Pro Text",Arial,sans-serif',
-                            fontSize: 10, fontWeight: 600,
+                            fontSize: 12, fontWeight: 600,
                             color: cur ? '#FFFFFF' : lit ? '#C8CCD1' : '#33383F',
                             transition: 'color .5s ease',
                           }}>{String(i + 1).padStart(2, '0')}</i>
@@ -397,7 +397,7 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
                     }} />
                   </div>
                   {/* 当前步骤文案 + 百分比 */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 14 }}>
                     <span style={{ color: 'var(--lc-text-2)' }}>{done ? t('chat.cpDone') : (progress!.step || t('chat.cpTranslate'))}</span>
                     <span style={{ color: '#E7E9EA', fontFamily: '"JetBrains Mono",monospace', fontWeight: 600 }}>{pct}%</span>
                   </div>
@@ -428,7 +428,7 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
             {/* 反馈入口：仅对翻译结果 */}
             <div className="msg-feedback-row">
               <button type="button" className="msg-fb-btn" title={t('fb.entryTip')} onClick={() => onFeedback?.(message)}
-                      style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 12, color: '#E7E9EA', cursor: 'pointer' }}>
+                      style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 14, color: '#E7E9EA', cursor: 'pointer' }}>
                  {t('fb.entry')}
               </button>
             </div>
@@ -443,12 +443,12 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
           <div className="msg-srcbar" style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 6 }}>
             {!!source && (
               <details>
-                <summary style={{ fontSize: 12, color: 'var(--lc-text-3)', cursor: 'pointer' }}>{t('msg.showSrc')}</summary>
-                <div dir="auto" style={{ fontSize: 12, color: 'var(--lc-text-4)', whiteSpace: 'pre-wrap', marginTop: 4, padding: '4px 8px', background: 'rgba(128,128,128,.08)', borderRadius: 4 }}>{source}</div>
+                <summary style={{ fontSize: 14, color: 'var(--lc-text-3)', cursor: 'pointer' }}>{t('msg.showSrc')}</summary>
+                <div dir="auto" style={{ fontSize: 14, color: 'var(--lc-text-4)', whiteSpace: 'pre-wrap', marginTop: 4, padding: '4px 8px', background: 'rgba(128,128,128,.08)', borderRadius: 4 }}>{source}</div>
               </details>
             )}
             {!!message.content && (
-              <button type="button" aria-label={t('msg.copy')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 12, color: '#E7E9EA', cursor: 'pointer' }}
+              <button type="button" aria-label={t('msg.copy')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 14, color: '#E7E9EA', cursor: 'pointer' }}
                       onClick={() => { void navigator.clipboard?.writeText(message.content || ''); setCopied(true); window.setTimeout(() => setCopied(false), 1500) }}>
                 {copied ? t('msg.copied') : t('msg.copy')}
               </button>

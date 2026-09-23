@@ -129,17 +129,17 @@ export default function Bell() {
       {open && (
         <div className="bell-panel" role="menu">
           <div className="bell-head">
-            <b style={{ fontSize: 13 }}>{t('bell.title')}</b>
+            <b style={{ fontSize: 15 }}>{t('bell.title')}</b>
             <button type="button" className="bell-readall" onClick={markAll}>{t('bell.readAll')}</button>
           </div>
           {/* 空态与列表并存：无通知时只出 EmptyState（items 为空，map 自然产不出节点） */}
           {items.length === 0 && <EmptyState title={t('bell.empty')} />}
           {items.map((n) => (
             <div key={n.id} className="bell-item" onClick={() => onItemClick(n)}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{n.title}</div>
+              <div style={{ fontWeight: 600, fontSize: 15 }}>{n.title}</div>
               {/* pre-wrap 保住后端正文里的换行（工单/反馈摘要常带 \n），否则整段塌成一行 */}
-              <div style={{ fontSize: 12, color: 'var(--lc-text-3)', marginTop: 2, whiteSpace: 'pre-wrap' }}>{n.body}</div>
-              <div style={{ fontSize: 11, color: 'var(--lc-text-4)', marginTop: 2 }}>{fmtTime(n.created_at)}</div>
+              <div style={{ fontSize: 14, color: 'var(--lc-text-3)', marginTop: 2, whiteSpace: 'pre-wrap' }}>{n.body}</div>
+              <div style={{ fontSize: 13, color: 'var(--lc-text-4)', marginTop: 2 }}>{fmtTime(n.created_at)}</div>
             </div>
           ))}
         </div>
@@ -155,7 +155,7 @@ const BELL_CSS = `
   background:transparent;border:0;color:var(--lc-text-2);cursor:pointer;font-family:var(--lc-font);border-radius:var(--lc-r-bar)}
 .bell-trigger:hover{color:var(--lc-text)}
 /* 焦点环用 :focus-visible 而非 :focus：鼠标点击铃铛不画环，键盘 Tab 过来才出（顶栏不需要每次都糊一圈） */
-.bell-trigger:focus-visible{outline:1.2px solid var(--lc-border-input);outline-offset:2px}
+.bell-trigger:focus-visible{outline: 2px solid var(--lc-border-input);outline-offset:2px}
 /* 未读数徽标挂在铃铛右上角（★ 2026-09-22 还原：#67 放大顶栏时曾外移到 -7/-9
    避免压住 18px 铃铛，现随字阶回档回到贴角 -1/-1）。 */
 .bell-count{position:absolute;top:-1px;right:-1px}
@@ -163,12 +163,12 @@ const BELL_CSS = `
    内部比大小——够盖住下方页面内容，但对外盖不过页面级模态遮罩（如工单页 .tk-overlay 的 1200）。
    宽 340 + max-height 420 的固定盒：条目在 refresh 里已截到 20 条，靠自身 overflow-y 滚动，不做虚拟列表。 */
 .bell-panel{position:absolute;top:calc(100% + 8px);right:0;z-index:60;width:340px;max-height:420px;overflow-y:auto;
-  padding:8px;background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-modal);
+  padding:8px;background:var(--lc-panel);border:2px solid var(--lc-border-card);border-radius:var(--lc-r-modal);
   box-shadow:var(--lc-panel-highlight)}
 .bell-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-.bell-readall{background:none;border:0;color:var(--lc-text-3);font-size:12px;cursor:pointer;font-family:var(--lc-font);padding:0}
+.bell-readall{background:none;border:0;color:var(--lc-text-3);font-size:14px;cursor:pointer;font-family:var(--lc-font);padding:0}
 .bell-readall:hover{color:var(--lc-text);text-decoration:underline}
-.bell-item{padding:8px 6px;border-bottom:1px solid var(--lc-border-faint);cursor:pointer}
+.bell-item{padding:8px 6px;border-bottom:2px solid var(--lc-border-faint);cursor:pointer}
 .bell-item:last-child{border-bottom:0}
 .bell-item:hover{background:var(--lc-raised)}
 `
