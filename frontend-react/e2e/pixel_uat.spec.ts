@@ -94,7 +94,7 @@ test.describe('像素级 UAT', () => {
   //      等值锁（真值来自 前端及UI相关/UI-ANNOTATIONS.md 与交付包）——这里用 getComputedStyle
   //      实测的是「渲染出来的值等于交付值」，与 readability.test.ts 的源码级锁互补：
   //      单测拦「CSS 里被改回去」，本处拦「运行时内联样式/换肤把值盖掉」。
-  test('P2b 工作台合并对话框结构（消息在上、输入贴底）+ 字阶/灰阶按交付真值', async ({ page }) => {
+  test('P2b 工作台合并对话框结构（消息在上、输入贴底单卡单排）+ 字阶/灰阶按交付真值', async ({ page }) => {
     await login(page);
     await page.goto('/');
     // 结构锁走 class（.cw-dialog*）而非文案：文案受 i18n 与措辞调整影响，
@@ -108,15 +108,27 @@ test.describe('像素级 UAT', () => {
     expect(await dialog.locator('.cw-dialog-body textarea').count(), '输入框不得回到消息流里').toBe(0);
     await expect(dialog.locator('.cw-dialog-body')).toBeVisible();
     // 几何锁（运行时实测，防「DOM 顺序对但 CSS 把它顶回上面」）。
-    // 口径修正（2026-09-22）：这里量的是「框脚整体贴住对话框底沿」+「输入框落在对话框下半部」，
-    // 不是「textarea 底沿 == 对话框底沿」——交付形态里 .cw-dialog-foot 内 composer 之下还排着
-    // 语种行与操作行（实测 142px），拿 textarea 底沿量贴底会把这套正常排版判成缺陷。
+    // ★ 〇-M（2026-09-23）输入区压成元宝式单卡后，这里由「只判贴底」升级为**等值锁**：
+    //   框脚 109 / 输入卡 90 / 工具条 48 / 单行输入 40（1280×720、默认一个目标语种、空输入实测值）。
+    //   为什么必须等值而不是「≤ 某上限」：上一版就是只锁方向，结果四排一路长到 250+px 也没人拦，
+    //   直到用户判「太长太占空间」才返工（返工面 = 全站唯一的输入区）。
+    //   工具条「只有一排」用行号集合判：把换行（视觉上变两排）直接判红，而不是靠高度猜。
     const geo = await dialog.evaluate((el) => {
       const d = el.getBoundingClientRect();
       const ta = el.querySelector('.cw-dialog-foot textarea')!.getBoundingClientRect();
       const foot = el.querySelector('.cw-dialog-foot')!.getBoundingClientRect();
       const body = el.querySelector('.cw-dialog-body')!.getBoundingClientRect();
-      return { dialogTop: d.top, dialogBottom: d.bottom, height: d.height, taTop: ta.top, footBottom: foot.bottom, footTop: foot.top, bodyTop: body.top };
+      const composer = el.querySelector('.cw-composer')!.getBoundingClientRect();
+      const toolbar = el.querySelector('.cw-toolbar')!;
+      const tb = toolbar.getBoundingClientRect();
+      // 零高占位（把主按钮推到行尾的 flex spacer）不参与排数统计
+      const live = [...toolbar.children].filter((c) => c.getBoundingClientRect().height > 0);
+      const rows = new Set(live.map((c) => Math.round(c.getBoundingClientRect().top / 24)));
+      return {
+        dialogTop: d.top, dialogBottom: d.bottom, height: d.height, taTop: ta.top, footBottom: foot.bottom, footTop: foot.top, bodyTop: body.top,
+        footH: Math.round(foot.height), composerH: Math.round(composer.height), toolbarH: Math.round(tb.height), taH: Math.round(ta.height),
+        toolbarRows: rows.size, liveControls: live.length,
+      };
     });
     expect(geo.taTop, `输入框顶边 ${geo.taTop} 不应高于消息流顶边 ${geo.bodyTop}`).toBeGreaterThan(geo.bodyTop);
     // 框脚必须承在对话框最底部（亚像素容差 4px）：它一旦被顶回消息流中间，就是「输入框放顶部」的原缺陷形态
@@ -125,6 +137,25 @@ test.describe('像素级 UAT', () => {
     // 输入区占住下半部：45% 分位给消息流留了多数高度，输入框若跑到上半部即为形态回退
     expect(geo.taTop, `输入框未落在对话框下半部（top ${geo.taTop}，对话框 ${geo.dialogTop}~${geo.dialogBottom}）`)
       .toBeGreaterThan(geo.dialogTop + geo.height * 0.45);
+    // ★ 〇-M 等值锁：单卡 + 单排工具条的尺寸档
+    expect(geo.liveControls, '工具条控件数与实现不符（源语言胶囊/语种/模式/缩翻/主按钮…）').toBeGreaterThanOrEqual(6);
+    expect(geo.toolbarRows, `工具条必须是**一排**，实测 ${geo.toolbarRows} 排（chips 或控件换行即回退成多排）`).toBe(1);
+    expect(geo.taH, `空态输入框实高 ${geo.taH}px ≠ 〇-M 真值 40px（一行自适应档）`).toBe(40);
+    expect(geo.toolbarH, `工具条实高 ${geo.toolbarH}px ≠ 〇-M 真值 48px`).toBe(48);
+    expect(geo.composerH, `输入卡实高 ${geo.composerH}px ≠ 〇-M 真值 90px（输入 40 + 工具条 48 + 边框）`).toBe(90);
+    expect(geo.footH, `框脚实高 ${geo.footH}px ≠ 〇-M 真值 109px（四排压成一排是本批的交付口径）`).toBe(109);
+    // ★ 〇-M 负向锁：语种面板在贴底的工具条里必须**向上弹**——宿主 .cw-dialog 是 overflow:hidden，
+    //   向下弹会被裁掉（表现为「点了没反应」），而 DOM 顺序与结构锁全都扫不到这种失效。
+    await page.locator('[data-testid="lang-multi-trigger"]').click();
+    const panel = await page.locator('[data-testid="lang-multi-panel"]').evaluate((el) => {
+      const p = el.getBoundingClientRect();
+      const trig = document.querySelector('[data-testid="lang-multi-trigger"]')!.getBoundingClientRect();
+      return { cls: el.className, top: Math.round(p.top), bottom: Math.round(p.bottom), trigTop: Math.round(trig.top), vh: innerHeight };
+    });
+    expect(panel.cls, '贴底触发时面板必须走 .lms-panel--up 向上弹').toContain('lms-panel--up');
+    expect(panel.bottom, `面板底沿 ${panel.bottom} 必须收在触发框上沿 ${panel.trigTop} 之上（否则被 overflow 裁掉）`).toBeLessThanOrEqual(panel.trigTop);
+    expect(panel.top, `面板顶沿 ${panel.top} 越出视口上方`).toBeGreaterThanOrEqual(0);
+    await page.locator('[data-testid="lang-multi-trigger"]').click(); // 收起，别把浮层留给后续断言
     // 文件入口下线：全站工作台不应再挂隐藏的原生 file input
     expect(await page.locator('input[type="file"]').count(), '即时翻译已移除文件上传入口').toBe(0);
     // 字号真值等值锁（★ 2026-09-22 全站还原批）：本批把 #35/#67/#68 的「整档 +1px / 顶栏提档」
