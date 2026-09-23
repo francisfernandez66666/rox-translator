@@ -120,7 +120,7 @@ bash scripts/uat/assist_uat.sh                 # AI 顾问 UAT（48 断言：C�
 bash scripts/uat/multi_instance_e2e.sh         # 双实例 e2e（8 断言：JWT 互通/USDT 对账锁/双桶并发勾稽/优雅停机，验证多实例红线）
 PW_TARGET=e2e/xxx.spec.ts bash scripts/uat/run_uat.sh  # 迭代调试：只跑指定 e2e（缺省全量）
 DB_DRIVER=sqlite UAT_SKIP_RACE=1 bash scripts/uat/run_uat.sh  # SQLite 方言本地快跑（兼容参考）
-cd frontend-react && npx vitest run            # 前端单测（48 文件 / 363 用例，含多语言 locales 全量覆盖闸门与浏览器语言检测/逐段流式上屏/编辑器虚拟化与计算收敛/留资表单/登录链路 jsdom 测试、★ #74 宽限期提示与 #75 多币种报价配置/商店卡双币渲染的 PlansP dom 测试、★ 〇-LK AiAssist 缓存三层恢复单测 + AssistP「管理 Token」7 例（掩码显示/password 不回填/留空禁用/掩码提交本地拦下/pushed:false 提示/清除二次确认/env 占位无清除钮）、★ src/styles/readability.test.ts「UI 交付真值闸门」八组锁 A-H——令牌值等值锁 + 历次提亮产物负向清零 + G 白色填充档等值（实心白件必须 #FFFFFF，禁拿文字档 #E7E9EA 做整块填充）+ H 扩展面同口径、★ 〇-LL src/extensionPackage.test.ts（托管 zip 与 extension/ 源码**内容指纹等值** + manifest 版本与包名/后台下载链接一致，防「改了源码忘了重打包」））
+cd frontend-react && npx vitest run            # 前端单测（48 文件 / 368 用例，含多语言 locales 全量覆盖闸门与浏览器语言检测/逐段流式上屏/编辑器虚拟化与计算收敛/留资表单/登录链路 jsdom 测试、★ #74 宽限期提示与 #75 多币种报价配置/商店卡双币渲染的 PlansP dom 测试、★ 〇-LK AiAssist 缓存三层恢复单测 + AssistP「管理 Token」7 例（掩码显示/password 不回填/留空禁用/掩码提交本地拦下/pushed:false 提示/清除二次确认/env 占位无清除钮）、★ src/styles/readability.test.ts「UI 交付真值闸门」八组锁 A-H——令牌值等值锁 + 历次提亮产物负向清零 + G 白色填充档等值（实心白件必须 #FFFFFF，禁拿文字档 #E7E9EA 做整块填充）+ H 扩展面同口径、★ 〇-LL src/extensionPackage.test.ts（托管 zip 与 extension/ 源码**内容指纹等值** + manifest 版本与包名/后台下载链接一致，防「改了源码忘了重打包」））
 bash scripts/build_extension.sh --check         # 扩展漂移闸门（同上，独立可单跑；不带 --check 即按 manifest.version 重打包并刷新 latest）
 cd sdk/typescript && npm test                  # TS SDK 行为级测试（8 用例）
 cd sdk/python && python3 -m unittest test_translator_sdk  # Python SDK 测试（13 用例）
