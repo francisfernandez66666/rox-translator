@@ -18,6 +18,7 @@ import ChatWindow from './ChatWindow'
 import { ToastProvider } from '@/ui/langcross/src'
 import { setLang } from '@/i18n'
 
+// 依赖桩集合（hoisted 供 vi.mock 工厂引用）：useChat 会话状态、各子组件与取数接口
 const mocks = vi.hoisted(() => ({
   chat: {
     messages: [] as any[],
@@ -53,7 +54,7 @@ vi.mock('@/components/LangMultiSelect', () => ({
 }))
 vi.mock('@/components/ModeToggle', () => ({ default: () => <div data-stub="mode-toggle" /> }))
 
-/** ChatWindow 内部用 useToast 提示，必须在 ToastProvider 下渲染 */
+// ChatWindow 内部用 useToast 提示，必须在 ToastProvider 下渲染
 function renderWindow() {
   return render(<ToastProvider><ChatWindow /></ToastProvider>)
 }

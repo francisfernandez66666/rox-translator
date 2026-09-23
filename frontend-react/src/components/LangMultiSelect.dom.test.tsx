@@ -20,6 +20,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+// 打桩 /api/translation/langs：固定返回一份 KB 名单（微任务即回，测完由 afterEach 撤桩）
 function mockLangsFetch() {
   const kb_langs = KB_CODES.map((code) => ({ code, name: code, name_en: code, flag: '', kb: code === 'zh' ? 'false' : 'true' }))
   vi.stubGlobal('fetch', vi.fn(async () => ({
