@@ -311,8 +311,8 @@ export const en: Record<string, string> = {
   'land.trust3': 'AI QA + human review',
   // —— Hero word-swap demo card (★ 2026-09-20 fix: homepage demo card restored, the loading animation is a copy of it) ——
   'land.demoSub': '· Industry term matching',
-  'land.demoTag': 'Automotive · ZH → EN',
-  'land.demoSrcTag': 'Source · Chinese',
+  'land.demoTag': 'Automotive · EN → ZH',
+  'land.demoSrcTag': 'Source · English',
   'land.demoStatus': 'Matching automotive term base · 3 terms hit',
   'land.demoDone': 'Translation complete',
   'land.demoMeta': '3 / 3 terms injected',
