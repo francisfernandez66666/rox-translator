@@ -109,9 +109,11 @@ test.describe('像素级 UAT', () => {
     expect(await dialog.locator('.cw-dialog-body textarea').count(), '输入框不得回到消息流里').toBe(0);
     await expect(dialog.locator('.cw-dialog-body')).toBeVisible();
     // 几何锁（运行时实测，防「DOM 顺序对但 CSS 把它顶回上面」）。
-    // ★ 〇-M 等值锁 → 〇-N 重定档（2026-09-23）：字号 +2px、描边 2px 之后，输入区的四档实测值整体抬高，
-    //   这里是 1280×720、默认一个目标语种、空输入下重新实测的值：
-    //   框脚 114 / 输入卡 94 / 工具条 50 / 单行输入 40（输入框靠固定行高档故不变）。
+    // ★ 〇-M 等值锁 → 〇-N 重定档 → 〇-P 回落（2026-09-24 复跑实测校准）：
+    //   〇-N 的「框脚 114 / 输入卡 94 / 工具条 50」是在描边 2px 档下测的；〇-P 把描边
+    //   回落到交付档 1.2px 后，mt-seg 实测 34px（28 项 + 4 内垫 + 2×1 描边取整），
+    //   工具条=34+6+8=48、输入卡=48+40+2=90、框脚=109——即回到 〇-M 的原实测值。
+    //   这里是 1280×720、默认一个目标语种、空输入下的等值锁。
     //   为什么必须等值而不是「≤ 某上限」：上一版就是只锁方向，结果四排一路长到 250+px 也没人拦，
     //   直到用户判「太长太占空间」才返工（返工面 = 全站唯一的输入区）。
     //   工具条「只有一排」用行号集合判：把换行（视觉上变两排）直接判红，而不是靠高度猜。
@@ -143,9 +145,9 @@ test.describe('像素级 UAT', () => {
     expect(geo.liveControls, '工具条控件数与实现不符（源语言胶囊/语种/模式/缩翻/主按钮…）').toBeGreaterThanOrEqual(6);
     expect(geo.toolbarRows, `工具条必须是**一排**，实测 ${geo.toolbarRows} 排（chips 或控件换行即回退成多排）`).toBe(1);
     expect(geo.taH, `空态输入框实高 ${geo.taH}px ≠ 〇-N 真值 40px（一行自适应档）`).toBe(40);
-    expect(geo.toolbarH, `工具条实高 ${geo.toolbarH}px ≠ 〇-N 真值 50px`).toBe(50);
-    expect(geo.composerH, `输入卡实高 ${geo.composerH}px ≠ 〇-N 真值 94px（输入 40 + 工具条 50 + 边框）`).toBe(94);
-    expect(geo.footH, `框脚实高 ${geo.footH}px ≠ 〇-N 真值 114px（四排压成一排是本批的交付口径）`).toBe(114);
+    expect(geo.toolbarH, `工具条实高 ${geo.toolbarH}px ≠ 〇-P 真值 48px（描边回落 1.2px 后的实测档）`).toBe(48);
+    expect(geo.composerH, `输入卡实高 ${geo.composerH}px ≠ 〇-P 真值 90px（输入 40 + 工具条 48 + 上下边框 2）`).toBe(90);
+    expect(geo.footH, `框脚实高 ${geo.footH}px ≠ 〇-P 真值 109px（四排压成一排是本批的交付口径）`).toBe(109);
     // ★ 〇-M 负向锁：语种面板在贴底的工具条里必须**向上弹**——宿主 .cw-dialog 是 overflow:hidden，
     //   向下弹会被裁掉（表现为「点了没反应」），而 DOM 顺序与结构锁全都扫不到这种失效。
     await page.locator('[data-testid="lang-multi-trigger"]').click();
@@ -280,7 +282,12 @@ test.describe('像素级 UAT', () => {
       };
     });
     expect(BORDER_GRAY, `对话框顶边 ${wb.dialog.bc[0]} 不在交付灰阶档上（〇-O 纯白已作废）`).toContain(wb.dialog.bc[0]);
-    expect(wb.dialog.bw[0], `对话框边宽 ${wb.dialog.bw[0]} ≠ 交付档 1.2px（〇-N 的 2px 已作废）`).toBe('1.2px');
+    // 边宽锁的是「取整后的等值档」：交付源码 1.2px 在 Chrome 151 的 CSSOM 里按设备像素
+    // 取整上报（实测 dpr=1 与 dpr=2.5 均回 '1px'，一次性脚本量过），所以运行时**不可能**
+    // 读到字面 '1.2px'——那是本锁 09-24 复跑翻红的根因，不是产品回退。
+    // 1.2px 源码等值由 `readability.test.ts` A 段（令牌等值）与 G/H/I 段负向清零承担；
+    // 本锁的射程 = 运行时内联覆写：抬回 2px（〇-N 旧档）或框被抹成 0px 都在此判红。
+    expect(wb.dialog.bw[0], `对话框边宽 ${wb.dialog.bw[0]} ≠ 〇-P 交付档 1.2px 的取整等值 1px（2px/0px 一律视为回退）`).toBe('1px');
     expect(wb.dialog.bg, `对话框面 ${wb.dialog.bg} ≠ 交付面板档 #0E1014`).toBe('#0E1014');
     // 语种钮是「有框才谈档」：它当前确实带胶囊边，但真不画框也不算跑偏
     if (parseFloat(wb.chip.bw[0]) > 0) {

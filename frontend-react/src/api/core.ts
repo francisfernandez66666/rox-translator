@@ -80,6 +80,7 @@ export function setForbiddenCopyResolver(fn: ((backendMessage: string) => string
 //   core 及兄弟 api 模块（kb/translate/billing/admin）不静态 import i18n（会崩 api 层 node 单测），
 //   由 ToastBridge 运行时注入 tpl()；未注册（单测/SSR）回落传入的中文原句，行为与旧版一致。
 let msgCopy: ((key: string, fallback: string, vars?: Record<string, string | number>) => string) | null = null
+/** 注册/清空 api 层文案注入器（传 null 恢复未注入态，用于卸载或测试复位） */
 export function setApiMsgCopier(fn: typeof msgCopy) { msgCopy = fn }
 /** api 层取词：已注入翻译器按键取当前界面语言文案，取不到（缺键/未注入）用 fallback 原句 */
 export function apiMsg(key: string, fallback: string, vars?: Record<string, string | number>): string {

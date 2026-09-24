@@ -162,14 +162,15 @@ func TestLangWiredIntoHandlerChain(t *testing.T) {
 	}
 }
 
-// TestAPICnMessageLiteralsCovered 词条覆盖棘轮（★ 〇-S #12 补漏批）：
-// internal/api 非测试源码里两类写死中文提示——
+// TestAPICnMessageLiteralsCovered 词条覆盖棘轮（★ 〇-S #12 补漏批 ×2）：
+// internal/api 非测试源码里三类写死中文提示——
 //
 //	① writeJSON 的 `"message": "中文"` 字面量；
-//	② apierrors.New(code, "中文") 的第一段消息字面量——
+//	② apierrors.New(code, "中文") 的第一段消息字面量；
+//	③ writeJSON 的 `"error": "中文"` 字面量（metrics/spa/stream 早期内联写法）——
 //
 // 必须逐条命中 i18n 词条表（Msg 能翻出不同译文）。新增写死中文不进 catalog_en.go 即红灯，
-// 堵住「首轮只盘点 ① 漏掉 ② 整类 36 条」的同款事故。
+// 堵住「首轮只盘点 ① 漏掉 ②③ 整类」的同款事故。
 func TestAPICnMessageLiteralsCovered(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -177,6 +178,7 @@ func TestAPICnMessageLiteralsCovered(t *testing.T) {
 	}
 	ctxEn := i18n.WithLang(context.Background(), "en")
 	msgLit := regexp.MustCompile(`"message":\s*("(?:[^"\\]|\\.)*")`)
+	errLit := regexp.MustCompile(`"error":\s*("(?:[^"\\]|\\.)*")`)
 	errNew := regexp.MustCompile(`apierrors\.New\([^,]+,\s*("(?:[^"\\]|\\.)*")\s*[,)]`)
 	checked := 0
 	for _, f := range files {
@@ -188,7 +190,7 @@ func TestAPICnMessageLiteralsCovered(t *testing.T) {
 			t.Fatal(err)
 		}
 		var lits []string
-		for _, re := range []*regexp.Regexp{msgLit, errNew} {
+		for _, re := range []*regexp.Regexp{msgLit, errLit, errNew} {
 			for _, m := range re.FindAllStringSubmatch(string(src), -1) {
 				s, err := strconv.Unquote(m[1])
 				if err != nil {
@@ -220,4 +222,35 @@ func containsHan(s string) bool {
 		}
 	}
 	return false
+}
+
+// TestWithLangErrorFieldTranslates ③ 类收口：内联 {"error":"中文"} 也随语种翻；
+// 英文错误码值（非词条）必须原样不动——防止把机器可读 code 翻坏。
+func TestWithLangErrorFieldTranslates(t *testing.T) {
+	s := &Server{}
+	h := s.withLang(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "接口不存在"})
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/nothing", nil)
+	req.Header.Set(i18n.HeaderLang, "en")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != "API endpoint not found" {
+		t.Fatalf("error 字段应翻为词条表译文，实际 %q", body["error"])
+	}
+	// 反证：英文码值不在词条表，原样透传
+	h2 := s.withLang(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_api_key"})
+	}))
+	req2 := httptest.NewRequest(http.MethodGet, "/openapi/x", nil)
+	req2.Header.Set(i18n.HeaderLang, "en")
+	rec2 := httptest.NewRecorder()
+	h2.ServeHTTP(rec2, req2)
+	if !strings.Contains(rec2.Body.String(), `"invalid_api_key"`) {
+		t.Fatalf("英文错误码被误伤: %s", rec2.Body.String())
+	}
 }
