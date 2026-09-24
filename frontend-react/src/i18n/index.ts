@@ -221,21 +221,22 @@ export function t(key: string): string {
 }
 
 /** 在指定语种取词（不走当前 UI 语种）；回退链 lang→en→zh。
- *  ★ 〇-Q：落地页演示卡在英语 UI 下退化成「英→英」无意义，故固定以中文为源展示真实 ZH→EN 翻译，
- *  演示源句/术语需按 srcLang（英语时为 'zh'）取词，必须绕过当前 UI 语种。 */
+ *  ★ 〇-Q 修正：落地页演示卡英语 UI 下源=英、定稿=中（EN→ZH），与其余语种「母语→EN」镜像；
+ *  演示源句/术语按 srcLang 取词，必须绕过当前 UI 语种。此前 22:45 误折回 'zh'（变成 ZH→EN）已翻正。 */
 export function translateIn(lang: Lang, key: string): string {
   return dicts[lang][key] || en[key] || zh[key] || key
 }
 
 /**
- * 落地页演示卡的**源语种**决策（★ 〇-Q：英语界面下的「英→英」演示退化问题）。
- * - 英语 UI：源=英、定稿=英，演示毫无意义，故强制以中文为源，展示真实 ZH→ EN 翻译；
+ * 落地页演示卡的**源语种**决策（★ 〇-Q 修正）：
+ * - 英语 UI：源=英、定稿=中，展示真实 EN→ZH 翻译（与其余语种「母语→EN」镜像）；
  * - 其余语种：源语种 = 界面语种自身（俄语界面展示 RU→EN，阿拉伯界面展示 AR→EN…）。
+ * 此前 22:45 误将英语 UI 折回 'zh'（变成 ZH→EN），与用户口径相反，已翻正。
  * 抽到 i18n 核心层，一是让 Landing.tsx 与测试共用同一份真值，二是避免测试被迫 import
  * 拉动 React 组件树（branding/api 在模块加载即触浏览器 API，node 环境会炸）。
  */
 export function demoSrcLang(lang: Lang): Lang {
-  return lang === 'en' ? 'zh' : lang
+  return lang
 }
 
 /** tpl 带参数取词：{name} 占位符替换 */

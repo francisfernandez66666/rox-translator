@@ -87,7 +87,7 @@ describe('落地页 · 演示卡常驻与转化入口（#22 更正，2026-09-20�
     const text = document.body.textContent ?? ''
     expect(text.toLowerCase()).not.toContain('book a demo')
     expect(text.toLowerCase()).not.toContain('book a product demo')
-    expect(text).toContain('Automotive · ZH → EN') // 演示卡英文词条（land.demoTag）
+    expect(text).toContain('Automotive · EN → ZH') // 演示卡英文词条（land.demoTag，英语 UI 演示 EN→ZH）
     const links = [...document.querySelectorAll('a[href="#cta"]')].filter((a) =>
       a.textContent?.includes(t('land.ctaLead')),
     )

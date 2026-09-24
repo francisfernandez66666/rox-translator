@@ -42,14 +42,15 @@ import { PERSONA_FALLBACK } from '@/lib/personas' // 覆盖范围区块：八个
 
 /* —— Hero 演示卡固定内容（★ 〇-Q：文案抽成 land.demo* 键，按演示源语种取，已补 10 语种译文；
    画布 6:55 / hero-stream.html 现役三处；★ #22 更正后演示卡归位，术语大卡对照与 curl 示例继续共用这份数据） —— */
-// 演示源语种决策（en→zh）见 i18n/index.ts 的 demoSrcLang：英语 UI 下源=英会让演示退化成「英→英」，故固定以中文为源展示真实 ZH→EN 翻译
+// 演示源语种决策（英语 UI 取 en，演示 EN→ZH）见 i18n/index.ts 的 demoSrcLang；此前误折回 zh（ZH→EN）已翻正
 // 演示文案工厂：按 srcLang（英语时为 'zh'）取源句/术语，定稿目标恒为英文；避免模块级写死中文
 function demoSrc(srcLang: Lang): string {
   return translateIn(srcLang, 'land.demoSrc')
 }
-function demoFinal(): string {
-  // 定稿译文：与 demoTerms 的 r 字段逐一对应（kickoff/benchmark/lead），演示卡与功能卡共用同一份事实
-  return translateIn('en', 'land.demoFinal')
+function demoFinal(lang: Lang): string {
+  // 定稿译文：英语 UI 演示 EN→ZH，定稿取中文源句（land.demoSrc 的 zh 版）；
+  //   其余语种定稿为英文（land.demoFinal 键）。与 demoTerms 的 r 字段逐一对应（kickoff/benchmark/lead）。
+  return lang === 'en' ? translateIn('zh', 'land.demoSrc') : translateIn('en', 'land.demoFinal')
 }
 // 落地页术语高亮演示要用的词条与译文对
 function demoTerms(srcLang: Lang) {
@@ -112,9 +113,9 @@ const LEAD = 200 // 每轮 reset 之后先静一拍再下笔：避免循环接�
 /** 三检查点翻译流演示卡（hero-stream.html 的 React 移植） */
 function HeroDemo() {
   const [lang, t] = useT() // 语种用于驱动打字单元/速度分档（CJK 逐字 / 拉丁逐词，速度随文字系统变）
-  const SRC_LANG = demoSrcLang(lang) // ★ 〇-Q：英语 UI 固定以中文为源（展示真实 ZH→EN）
+  const SRC_LANG = demoSrcLang(lang) // ★ 〇-Q 修正：英语 UI 固定以英文为源（展示真实 EN→ZH）
   const DEMO_SRC = demoSrc(SRC_LANG) // 源句按演示源语种取（land.demoSrc）
-  const DEMO_FINAL = demoFinal() // 定稿译文恒为英文（TR_LANG='en'）
+  const DEMO_FINAL = demoFinal(lang) // 定稿译文：英语 UI 取中文（EN→ZH），其余语种恒为英文
   const DEMO_TERMS = demoTerms(SRC_LANG) // 三术语的 cn 字段按演示源语种取
   const branding = useBranding()
   const demoRef = useRef<HTMLDivElement>(null) // 挂在最外层 .hd 上：所有 data-hd 查询都以它为根，不污染 document
@@ -471,7 +472,7 @@ function HeroDemo() {
             <b>{brand}</b>
             <em>{t('land.demoSub')}</em> {/* 「· 术语择优引擎」：定位短语，≤620px 隐藏让位给语种标签 */}
           </span>
-          <span className="hd-tag">{t('land.demoTag')}</span> {/* 方向随演示源语种：英语 UI 固定以中文为源故标「ZH → EN」，其余按 UI 语种带码；行业词与 DEMO_SRC 对齐 */}
+          <span className="hd-tag">{t('land.demoTag')}</span> {/* 方向随演示源语种：英语 UI 以英文为源故标「EN → ZH」，其余按 UI 语种带码；行业词与 DEMO_SRC 对齐 */}
         </div>
         <div className="hd-stream">
           <div className="hd-src">
