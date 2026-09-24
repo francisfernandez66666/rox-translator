@@ -48,8 +48,8 @@ export const zh: Record<string, string> = {
   'land.step1.d': '上传文档、文本或 API 接入，按企业注册行业自动匹配术语库范围',
   'land.step2.t': '匹配术语库',
   'land.step2.d': '匹配行业专属术语库与翻译记忆，确保术语统一、表达专业',
-  'land.step3.t': '人工审校交付',
-  'land.step3.d': 'AI 质检与人工审批工作台双重把关，输出精准、地道、合规的专业译文',
+  'land.step3.t': '多重审核交付',
+  'land.step3.d': 'AI翻译与AI质检审批工作台双重把关，输出精准、地道、合规的专业译文',
   // —— 核心功能（bento） ——
   'land.secFeatures': '核心功能',
   'land.featuresTitle': '为出海业务量身打造的翻译能力',
@@ -332,8 +332,8 @@ export const en: Record<string, string> = {
   'land.step1.d': 'Upload documents, text or connect via API — term-base scope follows your registered industry',
   'land.step2.t': 'Match term bases',
   'land.step2.d': 'Match industry-specific term bases and translation memories for consistent, professional wording',
-  'land.step3.t': 'Human review & delivery',
-  'land.step3.d': 'AI quality checks plus a human approval console double-check every output — precise, native, compliant',
+  'land.step3.t': 'Multi-review delivery',
+  'land.step3.d': 'AI translation and AI quality-check approval console double-check every output — precise, native, compliant',
   // —— Core features (bento) ——
   'land.secFeatures': 'Core features',
   'land.featuresTitle': 'Translation capabilities built for going global',
