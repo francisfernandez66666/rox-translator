@@ -6,6 +6,7 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
  *      + 底部浮动 Tab Bar 胶囊(62 高 / r36 / 活跃项实心白底黑字)
  * ============================================================ */
 
+/** MobScreen 骨架插槽：topbar/tabBar 任一可缺省（登录屏无导航、后台屏无 TabBar），children 即内容栈 */
 export interface MobScreenProps {
   /** 顶部导航（MobTopBar）；登录等无导航屏可不传 */
   topbar?: ReactNode;
