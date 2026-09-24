@@ -6,6 +6,9 @@
 // ============================================================================
 import { Component, type ReactNode } from 'react'
 import { Icon } from '@/ui/langcross/src'
+import { t } from '@/i18n' // ★ 2026-09-24 后台去写死中文：崩溃页文案同样按语言取词。
+// 原注释「i18n 初始化前可能渲染故保留硬编码中文」不再成立——词典是静态模块 import，
+// ErrorBoundary 代码能跑时 i18n 必然已加载；真崩到模块解析期，整页都白屏，硬编码也救不了。
 
 /** 错误边界入参：children=被保护子树；fallback=出错时自定义兜底（缺省内置卡片） */
 interface Props {
@@ -52,7 +55,7 @@ export default class ErrorBoundary extends Component<Props, State> {
       if (this.props.fallback) return this.props.fallback
       return (
         // 兜底卡片占满整个视口：崩溃时页面布局已不可信，全屏居中比「嵌在原位的一块红框」更容易被看到
-        // 配色走 --lc-* 纯黑单色令牌；崩溃页在 i18n 初始化前也可能渲染，故保留硬编码中文兜底文案
+        // 配色走 --lc-* 纯黑单色令牌；文案走 i18n（★ 2026-09-24 起不再硬编码中文，见文件头注释）
         // ★ 每个 var() 都带字面兜底值（如 var(--lc-text-1, #E7E9EA)）：本页可能就是令牌层
         //   （theme.css / 组件库 CSS）随模块一起崩掉的那一次，变量取不到时也不能退成浏览器默认的黑字。
         //   兜底值同时不受 readability.test.ts 的「#68 描边禁写死暗值」闸门影响——
@@ -62,10 +65,10 @@ export default class ErrorBoundary extends Component<Props, State> {
           minHeight: '100vh', gap: 16, fontFamily: 'system-ui, sans-serif', padding: 24, textAlign: 'center',
         }}>
           <div style={{ fontSize: 48 }}><Icon n="alert" /></div>
-          <h2 style={{ margin: 0, fontSize: 20, color: 'var(--lc-text-1, #E7E9EA)' }}>页面出现异常</h2>
+          <h2 style={{ margin: 0, fontSize: 20, color: 'var(--lc-text-1, #E7E9EA)' }}>{t('common.pageError')}</h2>
           {/* 直接把 error.message 摊出来：这页已经不会有人二次操作，信息多一点比美观重要 */}
           <p style={{ margin: 0, fontSize: 16, color: 'var(--lc-text-3, #9AA0AA)', maxWidth: 480 }}>
-            {this.state.error?.message || '未知错误，请尝试刷新页面'}
+            {this.state.error?.message || t('common.unknownError')}
           </p>
           <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
             {/* 一主一次：主按钮反白填充（描边跟着填充走白，故取 --lc-text-1 而不是描边令牌，
@@ -77,7 +80,7 @@ export default class ErrorBoundary extends Component<Props, State> {
                 background: 'var(--lc-fill-white, #FFFFFF)', color: '#000', fontSize: 16, cursor: 'pointer',
               }}
             >
-              重试
+              {t('common.retry')}
             </button>
             <button
               // 硬跳转（不是 navigate）：整页重载才能顺带丢掉可能已经脏掉的 store / 模块级单例状态
@@ -87,7 +90,7 @@ export default class ErrorBoundary extends Component<Props, State> {
                 background: 'transparent', color: 'var(--lc-text-1, #E7E9EA)', fontSize: 16, cursor: 'pointer',
               }}
             >
-              返回首页
+              {t('app.backHome')}
             </button>
           </div>
         </div>

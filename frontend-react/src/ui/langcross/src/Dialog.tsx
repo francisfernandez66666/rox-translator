@@ -10,6 +10,10 @@ import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "./Button";
 import { useFocusTrap } from "./focusTrap";
+// ★ 2026-09-24 后台去写死中文：默认按钮文案改按界面语言取词（原硬编码「确定/取消」）。
+//   组件库首次反向依赖应用层 i18n——词典是静态模块、无浏览器副作用之外的耦合，
+//   且默认值只在调用方未传时生效，视觉真值不变。
+import { t } from "@/i18n";
 
 // 弹窗入参：标题/内容/动作按钮（默认宽 440，见交付真值 §4）
 export interface DialogProps {
@@ -36,8 +40,8 @@ export function Dialog({
   title,
   children,
   danger = false,
-  confirmText = "确定",
-  cancelText = "取消",
+  confirmText = t("common.ok"),
+  cancelText = t("common.cancel"),
   onConfirm,
   onCancel,
   dismissOnOverlay = true,

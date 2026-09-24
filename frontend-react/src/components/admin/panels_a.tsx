@@ -18,7 +18,7 @@ import { useAdmin, roleName } from '@/stores/admin'
 import { Panel, Field, toastResp } from './parts'
 import { fmtTime, fmtNum } from '@/lib/ui'
 import { fmtPoints } from '@/utils/points' // ★ S1 积分口径展示
-import { useT, t as tFn } from '@/i18n'
+import { useT, t as tFn, tpl as tplFn } from '@/i18n'
 import { toastError, toastWarn } from '@/lib/toastBus'
 import { runGuarded } from '@/lib/runGuarded' // ★ #42：取数失败必须有可见出口（见 loadDash / 用量看板注释）
 
@@ -565,7 +565,7 @@ export function AuditP() {
     // ★ #42：裸 fetch 的 401 必须走统一收口。旧写法只弹「导出失败 (401)」——会话已过期还停在
     //   后台空面板上，用户反复点导出也回不到登录页（走 request() 的通道不会这样，故此处补齐口径）。
     if (resp.status === 401) { handleUnauthorized(csvUrl); return }
-    if (!resp.ok) { void MessagePluginError(`导出失败 (${resp.status})`); return }
+    if (!resp.ok) { void MessagePluginError(tplFn('common.exportFailCode', { code: resp.status })); return }
     const blob = await resp.blob()
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')

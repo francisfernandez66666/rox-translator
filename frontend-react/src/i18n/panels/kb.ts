@@ -3,6 +3,22 @@
 // 导出本面板中英双语词典：zh 为对应 i18n key 的中文显示文本，en 为英文显示文本（键一一对应），最终由 i18n/index.ts 合并到全局词典。
 // =============================================
 export const zh: Record<string, string> = {
+  // ★ 2026-09-24 后台去写死中文批：知识库面板内联 tab 名 / 包授权弹窗 / 导入失败兜底
+  'kb.tabIndustries': '行业管理',
+  'kb.tabBrand': '品牌名',
+  'kb.grantUpdated': '授权已更新',
+  'kb.grantRevoked': '已撤销授权',
+  'kb.grantLink': '授权',
+  'kb.grantDialogTitle': '包级授权 · {name}',
+  'kb.selectUser': '选择用户',
+  'kb.roleRead': '只读',
+  'kb.roleWrite': '编辑',
+  'kb.roleManage': '管理',
+  'kb.grantHint': '读 < 写 < 管理（高级别含低级别）；部门管理员及以上天然拥有全部权限',
+  'kb.grantColUser': '用户',
+  'kb.grantColLevel': '级别',
+  'kb.grantColTime': '时间',
+  'kb.grantRevoke': '撤销',
   'kb.title': '行业管理（KB 包）',
   'kb.codePlaceholder': '编码 (如 auto)',
   'kb.namePlaceholder': '名称 (如 汽车行业包)',
@@ -135,6 +151,22 @@ export const zh: Record<string, string> = {
 
 // 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
+  // ★ 2026-09-24 de-hardcode batch: inline tab names / package-grant dialog / import fallback
+  'kb.tabIndustries': 'Industry Management',
+  'kb.tabBrand': 'Brand Names',
+  'kb.grantUpdated': 'Grant updated',
+  'kb.grantRevoked': 'Grant revoked',
+  'kb.grantLink': 'Grant',
+  'kb.grantDialogTitle': 'Package grant · {name}',
+  'kb.selectUser': 'Select user',
+  'kb.roleRead': 'Read',
+  'kb.roleWrite': 'Write',
+  'kb.roleManage': 'Manage',
+  'kb.grantHint': 'Read < Write < Manage (higher includes lower); dept admins and above already have all permissions',
+  'kb.grantColUser': 'User',
+  'kb.grantColLevel': 'Level',
+  'kb.grantColTime': 'Time',
+  'kb.grantRevoke': 'Revoke',
   // ---- 租户/行业/语言文化/部门包类型 ----
   'kb.enablePack': 'Enable',
   'kb.disablePack': 'Disable',

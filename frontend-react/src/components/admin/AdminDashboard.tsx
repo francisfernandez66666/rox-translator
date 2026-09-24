@@ -183,8 +183,9 @@ export default function AdminDashboard() {
         onNavigate={(k) => ad.gotoPanel(k as PanelKey)}
         // 有自定义 Logo 时不再重复渲染品牌名文字（Logo 图内已含品牌字），置空由 appIcon 表达
         appName={branding.brandLogo ? '' : (branding.brandName || t('admin.title'))}
-        // Logo 按侧栏 24px 高度等比缩放，objectFit 交给浏览器按原始比例拉伸
-        appIcon={branding.brandLogo ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 24 }} /> : undefined}
+        // Logo 按侧栏 24px 高度等比缩放，objectFit 交给浏览器按原始比例拉伸；
+        // ★ 2026-09-24 全站 logo 统一（#8）：无自定义 Logo 时不再空着，落到与首页同源的 Icon n="brand"
+        appIcon={branding.brandLogo ? <img src={branding.brandLogo} alt={branding.brandName || 'logo'} style={{ height: 24 }} /> : <Icon n="brand" size={24} />}
         topbar={topbar}
       >
         {/* 按当前面板 key 渲染子面板：这里不再做等级校验（菜单可见性已由 visible 过滤），

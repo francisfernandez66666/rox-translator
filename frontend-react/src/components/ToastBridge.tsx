@@ -9,8 +9,8 @@
 import { useEffect } from 'react'
 import { useToast } from '@/ui/langcross/src'
 import { registerToastHandler } from '@/lib/toastBus'
-import { setForbiddenCopyResolver } from '@/api'
-import { t } from '@/i18n'
+import { setForbiddenCopyResolver, setApiMsgCopier } from '@/api'
+import { t, tpl } from '@/i18n'
 
 /** 总线接线桥：把 ToastProvider 的 toast 交给 lib/toastBus，自身不渲染任何 DOM */
 export default function ToastBridge() {
@@ -24,7 +24,13 @@ export default function ToastBridge() {
     // 403 文案注入：命中越权一律回落到本地化「无管理权限」既有键（12 语种全覆盖）；
     // 卸载时复位为 null，避免残留解析器指向已销毁的渲染上下文。
     setForbiddenCopyResolver(() => t('admin.forbid'))
-    return () => { registerToastHandler(null); setForbiddenCopyResolver(null) }
+    // ★ 2026-09-24：api 层通用文案注入——请求超时/网络错误/上传失败等按界面语言取词；
+    //   取不到键（词典缺键）时返回 fallback 中文原句，宁显示中文也不显示键名。
+    setApiMsgCopier((key, fallback, vars) => {
+      const v = vars ? tpl(key, vars) : tpl(key)
+      return v === key ? fallback : v
+    })
+    return () => { registerToastHandler(null); setForbiddenCopyResolver(null); setApiMsgCopier(null) }
   }, [toast])
   return null
 }

@@ -13,14 +13,14 @@
  * - 安全句管理：语言文化规范的增删改查与审核
  */
 
-import { request, authHeaders, API_BASE, handleUnauthorized, type AdminResp } from './core'
+import { request, authHeaders, API_BASE, handleUnauthorized, apiMsg, type AdminResp } from './core'
 
 // ★ P1-16 修复（2026-09-14）：raw fetch 统一守卫——旧实现 `.json()` 裸调用不判 resp.ok、
 // 不触发 401 拦截，登录过期表现为 JSON 解析异常或静默失败而非跳登录。
 async function fetchJSON(url: string, init?: RequestInit): Promise<any> {
   const resp = await fetch(url, init)
   if (resp.status === 401) handleUnauthorized(url)
-  if (!resp.ok) throw new Error(`请求失败 (${resp.status})`)
+  if (!resp.ok) throw new Error(apiMsg('common.reqFail', `请求失败 (${resp.status})`, { status: resp.status }))
   return resp.json()
 }
 
@@ -89,7 +89,7 @@ export async function kbRecognizeFile(file: File, mergedName?: string, onProgres
   }
   if (file.size > CHUNK_UPLOAD_MIN) {
     const merged = await uploadFileChunked(file, onProgress)
-    if (!merged) return { success: false, message: '分片上传失败' }
+    if (!merged) return { success: false, message: apiMsg('common.chunkFail', '分片上传失败') }
     return fetchJSON(`${API_BASE}/api/translation/recognize-kb?merged=${encodeURIComponent(merged)}`, {
       method: 'POST', headers: authHeaders(),
     })
@@ -209,7 +209,7 @@ export async function tmxExport(opts?: { lang?: string; module?: string }): Prom
   if (opts?.module) q.set('module', opts.module)
   const url = `${API_BASE}/api/translation/export-tmx${q.toString() ? '?' + q.toString() : ''}`
   const r = await fetch(url, { headers: authHeaders() })
-  if (r.status === 401) { handleUnauthorized(url); throw new Error('未登录') }
+  if (r.status === 401) { handleUnauthorized(url); throw new Error(apiMsg('common.notLogged', '未登录')) }
   if (!r.ok) {
     // 失败时后端回的是 JSON 而非文件：解析出 message 抛给调用方，避免「点了没反应」
     let msg = `HTTP ${r.status}`

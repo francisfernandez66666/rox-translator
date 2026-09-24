@@ -14,7 +14,7 @@
  * - 商业包管理：套餐列表、订阅、创建、更新、删除
  */
 
-import { request, authHeaders, API_BASE, handleUnauthorized, type AdminResp } from './core'
+import { request, authHeaders, API_BASE, handleUnauthorized, apiMsg, type AdminResp } from './core'
 
 /** 查询当前租户余额 */
 
@@ -211,7 +211,7 @@ export async function adminQRUpload(file: File): Promise<AdminResp & { qr_url?: 
     body: formData,
   })
   if (resp.status === 401) handleUnauthorized('/api/admin/packages/qr-upload')
-  if (!resp.ok) return { success: false, message: `上传失败 (${resp.status})` }
+  if (!resp.ok) return { success: false, message: apiMsg('common.uploadFail', `上传失败 (${resp.status})`, { status: resp.status }) }
   return resp.json()
 }
 

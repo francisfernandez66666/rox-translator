@@ -11,6 +11,8 @@ import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CloseIcon } from "./icons";
 import { useFocusTrap } from "./focusTrap";
+// ★ 2026-09-24 后台去写死中文：关闭钮 aria-label 按界面语言取词
+import { t } from "@/i18n";
 
 // 抽屉入参：标题、宽度（默认 480）与开合回调
 export interface DrawerProps {
@@ -51,7 +53,7 @@ export function Drawer({ open, title, onClose, children, footer }: DrawerProps) 
           <span className="lc-drawer__title">{title}</span>
           <button
             type="button"
-            aria-label="关闭"
+            aria-label={t("common.close")}
             onClick={onClose}
             style={{
               display: "grid",

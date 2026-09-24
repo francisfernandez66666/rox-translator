@@ -82,8 +82,8 @@ export default function BrandP() {
   //   前端判的是原图字节数，而 base64 会膨胀约 33%，故这里是「拦掉明显超量的大图」的粗筛，
   //   贴着上限的原图仍会放行到后端、由后端给出那句压缩提示（不是前端漏判就能自己收尾的）。
   const checkBrandFile = (file: File, maxKB: number): boolean => {
-    if (!file.type.startsWith('image/')) { toastError('请选择图片文件'); return false }
-    if (file.size > maxKB * 1024) { toastError(`图片过大（上限约 ${maxKB}KB），请先压缩`); return false }
+    if (!file.type.startsWith('image/')) { toastError(t('brand.pickImage')); return false }
+    if (file.size > maxKB * 1024) { toastError(tpl('brand.imageTooBig', { maxKB })); return false }
     return true
   }
 
@@ -265,7 +265,7 @@ export default function BrandP() {
           {/* 品牌名称输入 */}
           <div>
             <div style={{ fontSize: 15, marginBottom: 4 }}>{t('brand.name')}</div>
-            <input className="lc-input" value={name} disabled={!editable} onChange={(e) => setName(e.target.value)} placeholder="能言 LangCross" />
+            <input className="lc-input" value={name} disabled={!editable} onChange={(e) => setName(e.target.value)} placeholder={t('brand.namePlaceholder')} />
           </div>
 
           {/* 品牌英文名输入（固定用法种入企业知识库，防止翻译漂移） */}
@@ -297,9 +297,9 @@ export default function BrandP() {
                system_config(base_domain) / env BRAND_DOMAIN_SUFFIX——换根域时两处要一起改。 */}
            <div>
              <div style={{ fontSize: 15, marginBottom: 4 }}>{t('brand.domain')}</div>
-                <input className="lc-input" value={domain} disabled={!editable || targetTenantId === 1} onChange={(e) => setDomain(String(e.target.value ?? ''))} placeholder="请输入你想要的域名名称" />
+                <input className="lc-input" value={domain} disabled={!editable || targetTenantId === 1} onChange={(e) => setDomain(String(e.target.value ?? ''))} placeholder={t('brand.domainPlaceholder')} />
               <div style={{ fontSize: 14, color: 'var(--adm-faint)', marginTop: 4 }}>
-                你将改的是 {domain || '前缀'}.lexicorn.cn
+                {tpl('brand.domainPreview', { host: `${domain || t('brand.domainPrefixSample')}.lexicorn.cn` })}
               </div>
             </div>
 

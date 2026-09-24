@@ -5,7 +5,7 @@
 // 价格 / 积分 / 有效期一律渲染 /api/plans 返回值（含免费体验包与增量包）。
 // 视觉规则：纯黑底、面板台阶 #0E1014、框线纯白 2px、主按钮白底黑字、无蓝无绿。
 // ============================================================================
-import { Button, IdeaIcon } from '@/ui/langcross/src'
+import { Button, IdeaIcon, Icon } from '@/ui/langcross/src'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '@/i18n'
 import { useBranding } from '@/branding'
@@ -18,14 +18,10 @@ import { fmtInt } from '../lib/format'
 // FAQ：固定三条（设计图 05）
 const FAQ_INDEXES = [1, 2, 3] as const
 
-/** BrandMark 品牌圆点图标（租户未配置 brand_logo 时的默认标记） */
+/** BrandMark 默认品牌标记（租户未配置 brand_logo 时用）：★ 2026-09-24 全站 logo 统一，
+ *  旧「圆环+圆点」图形废止，改用与首页顶栏同源的 Icon n="brand"（白色圆角块+两笔一实一虚） */
 function BrandMark() {
-  return (
-    <svg width="18"height="18"viewBox="0 0 18 18"aria-hidden="true"focusable="false">
-      <circle cx="9"cy="9"r="7.3"fill="none"stroke="#E7E9EA"strokeWidth="1.4"/>
-      <circle cx="9"cy="9"r="2.4"fill="#E7E9EA"/>
-    </svg>
-  )
+  return <Icon n="brand" size={18} />
 }
 
 /** PricingPage 公开定价页：全量价目表（体验包 / 增量包 / 付费包）+ 计费说明 + FAQ */

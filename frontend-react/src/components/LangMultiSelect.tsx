@@ -13,7 +13,7 @@ import { CloseIcon } from '@/ui/langcross/src'
 import { t, useLang } from '@/i18n'
 // ★ #23（2026-09-19）：语言名展示改走 langLabel（zh* 取中文名，其余界面语言取英文名），
 //   目标语言列表不再对国外用户恒显中文
-import { langLabel } from '@/lib/langNames'
+import { langLabel, LANG_META } from '@/lib/langNames'
 
 // ============ 本文件职责中文说明 ============
 // 目标语言多选组件（CSS 自绘下拉）+ 共用已选语言 chip 行 LangChips。
@@ -21,30 +21,12 @@ import { langLabel } from '@/lib/langNames'
 
 // KB 九语（与后端 /api/translation/langs 对齐的本地兜底；挂载后由父组件动态覆盖可选）
 // 知识库支持的高质量目标语言（本地兜底，后端返回后覆盖名称与国旗）
-const KB_LANGS: Array<{ code: string; label: string; flag?: string }> = [
-  { code:'en', label:'英语', flag:''},
-  { code:'ru', label:'俄语', flag:''},
-  { code:'ar', label:'阿拉伯语', flag:''},
-  { code:'es', label:'西班牙语', flag:''},
-  { code:'pt', label:'葡萄牙语', flag:''},
-  { code:'fr', label:'法语', flag:''},
-  { code:'kk', label:'哈萨克语（哈萨克斯坦）', flag:''},
-  { code:'de', label:'德语', flag:''},
-  { code:'zh_hant', label:'繁体中文', flag:''},
-]
+const KB_LANGS: Array<{ code: string; label: string; flag?: string }> =
+  ['en', 'ru', 'ar', 'es', 'pt', 'fr', 'kk', 'de', 'zh_hant'].map((c) => ({ code: c, label: LANG_META[c]?.zh || c, flag: '' }))
 
 // 其他常用语言（非 KB，走 AI 翻译）分组选项
-const OTHER_LANGS: Array<{ code: string; label: string; flag?: string }> = [
-  { code:'ja', label:'日语', flag:''},
-  { code:'ko', label:'韩语', flag:''},
-  { code:'th', label:'泰语', flag:''},
-  { code:'vi', label:'越南语', flag:''},
-  { code:'ms', label:'马来语', flag:''},
-  { code:'id_lang', label:'印尼语', flag:''},
-  { code:'it', label:'意大利语', flag:''},
-  { code:'pl', label:'波兰语', flag:''},
-  { code:'tr', label:'土耳其语', flag:''},
-]
+const OTHER_LANGS: Array<{ code: string; label: string; flag?: string }> =
+  ['ja', 'ko', 'th', 'vi', 'ms', 'id_lang', 'it', 'pl', 'tr'].map((c) => ({ code: c, label: LANG_META[c]?.zh || c, flag: '' }))
 
 // LangMultiSelect 入参：value 当前选中语言代码数组；onChange 变更回调；kbLangs 覆盖 KB 分组；
 // compact 触发器改「胶囊」档（★ 〇-M：宽度随内容、高 28、透明底描边胶囊，供输入区内的一行工具条用；

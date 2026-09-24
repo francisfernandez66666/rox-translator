@@ -13,3 +13,26 @@ export const PERSONA_FALLBACK: Array<{ code: string; name: string }> = [
   { code: 'ops', name: '运营' },
   { code: 'sales', name: '销售' },
 ]
+
+// ★ 2026-09-24 后台去写死中文批：内置角色 code → 双语显示名。
+// 后端 persona 包下发的是中文名（管理员可改），英文界面下 built-in code 走这张表取英文名，
+// 代价是「超管改了内置角色名」时非中文界面仍显示标准英文名（自定义 code 一律原样显示）。
+const BUILTIN_PERSONA_EN: Record<string, string> = {
+  fullstack: 'Full-stack Engineer',
+  frontend: 'Frontend Developer',
+  backend: 'Backend Developer',
+  pm: 'Product Manager',
+  pj: 'Project Manager',
+  uiux: 'UI/UX Designer',
+  ops: 'Operations',
+  sales: 'Sales',
+}
+
+/** personaName 角色显示名本地化：非中文界面 + 内置 code → 英文名；其余原样返回后端/兜底名 */
+export function personaName(code: string, name: string, lang: string): string {
+  if (!lang.startsWith('zh')) {
+    const en = BUILTIN_PERSONA_EN[code]
+    if (en) return en
+  }
+  return name
+}

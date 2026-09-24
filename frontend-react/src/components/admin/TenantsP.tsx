@@ -244,7 +244,7 @@ export function TenantsP() {
             {/* 行业下拉数据来自 loadInd（后端可增删启停），空值项=未设置；提交前由 save 折回 code */}
             <Field label={t('tenants.industry')}>
               <select className="lc-select" value={String(form.industry ?? '')} onChange={(e) => setForm({ ...form, industry: e.target.value })}>
-                <option value="">{lang === 'zh' ? '（未设置）' : 'Unset'}</option>
+                <option value="">{t('common.unset')}</option>
                 {indList.map((o) => <option key={o.code} value={o.code}>{o.name}</option>)}
               </select>
             </Field>

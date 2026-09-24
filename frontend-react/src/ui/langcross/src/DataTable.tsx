@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+// ★ 2026-09-24 后台去写死中文：空表默认文案按界面语言取词（同 Dialog.tsx 口径）
+import { t } from "@/i18n";
 
 // 数据表列定义：表头、取值/渲染函数与对齐
 export interface TableColumn<T> {
@@ -29,7 +31,7 @@ export interface DataTableProps<T> {
  * 容器 1px card 边 + 表头 raised 底 + 行 1px 分隔，行高 46，hover 微亮。
  * 操作列的「停用/轮换/限额」用 <Link>、「删除」用 <Link tone="danger">。
  */
-export function DataTable<T>({ columns, rows, rowKey, emptyText ="暂无数据", className =""}: DataTableProps<T>) {
+export function DataTable<T>({ columns, rows, rowKey, emptyText =t("common.noData"), className =""}: DataTableProps<T>) {
   return (
     <div className={`lc-table-wrap ${className}`.trim()}>
       <table className="lc-table">

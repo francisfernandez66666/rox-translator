@@ -22,8 +22,9 @@ import { LangSelect } from '@/components/LangSelect' // ★ #23：12 语种语�
 import { useBranding, DEFAULT_BRAND_NAME } from '@/branding'
 import { roleLevel } from '@/stores/auth'
 import { industryCodeOf, industryOptions } from '@/lib/industries'
-import { PERSONA_FALLBACK } from '@/lib/personas'
+import { PERSONA_FALLBACK, personaName } from '@/lib/personas'
 import { useCountdown } from '@/lib/useCountdown' // ★ #42：验证码冷却收口（自带卸载清理 + 幂等重启）
+import { loadTurnstile, renderTurnstile as mountTurnstileWidget, reexecTurnstile } from '@/lib/turnstile'
 import AiRegisterFlow from './AiRegisterFlow'
 
 /** Login 入参：mode 区分前台(home)/后台(admin)登录；onLogin 登录成功后回调上层挂载工作台 */
@@ -90,6 +91,10 @@ export default function Login({ mode, onLogin }: Props) {
   const codeCd = useCountdown(60)
   const captchaBoxRef = useRef<HTMLDivElement>(null) // Turnstile 挂载容器（脚本会往里塞 iframe）
   const captchaTokenRef = useRef('') // token 用 ref 而非 state：回调写入时不需要触发重渲染
+  const captchaIdRef = useRef<string | number | null>(null) // widget id：token 消费后 reexec 领新码要用
+  // ★ 2026-09-24：siteKey 存 state——AI 注册面板（接管注册的传统表单替代者）要拿同一份配置
+  //   挂自己的验证组件，旧写法只活在注册期局部变量里，面板无从获得
+  const [captchaSiteKey, setCaptchaSiteKey] = useState('')
   // 忘记密码
   const [forgotMsg, setForgotMsg] = useState('')
   const [forgotSent, setForgotSent] = useState(false) // 已发码 → 同一张卡切换成「填码 + 新密码」形态
@@ -124,7 +129,8 @@ export default function Login({ mode, onLogin }: Props) {
           setEmailVerifyOn(!!c.email_verify_enabled)
           setCaptchaOn(!!(c as unknown as { captcha_enabled?: boolean }).captcha_enabled)
           const key = (c as unknown as { captcha_site_key?: string }).captcha_site_key || ''
-          if ((c as unknown as { captcha_enabled?: boolean }).captcha_enabled && key) renderTurnstile(key)
+          if ((c as unknown as { captcha_enabled?: boolean }).captcha_enabled) setCaptchaSiteKey(key)
+          if ((c as unknown as { captcha_enabled?: boolean }).captcha_enabled && key) mountCaptcha(key)
           const inds = (c as unknown as { industries?: Array<{ code: string; name: string }> }).industries
           if (Array.isArray(inds) && inds.length > 0) setIndustries(inds)
           const ps = (c as unknown as { personas?: Array<{ code: string; name: string }> }).personas
@@ -151,28 +157,19 @@ export default function Login({ mode, onLogin }: Props) {
     return () => { window.clearTimeout(id1); window.clearTimeout(id2); window.clearTimeout(id3) }
   }, [view, mode])
 
-  // ---- Cloudflare Turnstile 人机验证（显式渲染，含 script 注入守卫 w.turnstile / w.__tsLoading）----
-  function renderTurnstile(siteKey: string) {
-    const mount = () => {
+  // ---- Cloudflare Turnstile 人机验证（装载收敛到 lib/turnstile：多消费方只注入一次脚本）----
+  function mountCaptcha(siteKey: string) {
+    loadTurnstile(() => {
       const el = captchaBoxRef.current
-      const ts = (window as unknown as { turnstile?: { render: (el: HTMLElement, o: unknown) => void } }).turnstile
-      // 容器已有子节点 = widget 已渲染过，二次 render 会重建并清掉用户刚完成的验证，必须直接返回
-      if (!el || !ts || el.childElementCount > 0) return
-      ts.render(el, {
-        sitekey: siteKey,
-        callback: (tk: string) => { captchaTokenRef.current = tk },
-        'expired-callback': () => { captchaTokenRef.current = '' }, // 过期即清空，避免拿旧 token 提交被判失败
-      })
-    }
-    const w = window as unknown as { turnstile?: unknown; __tsLoading?: boolean }
-    if (w.turnstile) { mount(); return } // 脚本已在（其他页面先加载过 / 同页重进）：跳过注入
-    if (w.__tsLoading) return // 注入中：全局只允许一份 script，重复 append 会重复拉包并竞态渲染
-    w.__tsLoading = true
-    const s = document.createElement('script')
-    s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit' // explicit：不让脚本自动扫描 DOM，只由上面 mount() 手动挂到我们的容器
-    s.async = true
-    s.onload = mount
-    document.head.appendChild(s)
+      if (!el) return
+      const id = mountTurnstileWidget(el, siteKey, (tk) => { captchaTokenRef.current = tk })
+      if (id !== null) captchaIdRef.current = id
+    })
+  }
+  // token 一次一用：任一请求（发码/注册提交）把它送出去后即作废，清空并强制重新挑战领新码
+  function refreshCaptcha() {
+    captchaTokenRef.current = ''
+    reexecTurnstile(captchaIdRef.current)
   }
 
   // ---- 登录：校验 → 调登录接口 → 后台角色校验 → brand_host SSO 跳转 → 写 token/租户 → 首登改密 / 回调 ----
@@ -230,6 +227,11 @@ export default function Login({ mode, onLogin }: Props) {
     try {
       r = await sendEmailCode(form.email.trim(), captchaTokenRef.current || undefined)
     } catch (e) { toast({ title: (e as Error).message || t('auth.sendCodeFail'), tone: 'error' }); return } // E10：网络/超时必须显式提示，早先是 unhandled rejection（用户只见无响应）
+    finally {
+      // ★ 2026-09-24：本次请求已把 token 消费掉（成败都 consumed），旧码留着只会在
+      //   下一步「提交注册」时被复用并吃一个人机验证 403——发码后立即清空并重新领码
+      if (captchaOn) refreshCaptcha()
+    }
     if (r.success) {
       toast({ title: r.noop ? t('pwd.codeNoop') : t('pwd.codeSent'), tone: 'success' })
       codeCd.start() // 冷却 60s（到 0 自动停；组件卸载即停，见 lib/useCountdown.ts）
@@ -277,10 +279,12 @@ export default function Login({ mode, onLogin }: Props) {
         agreed,
         landing_path: window.location.pathname, ...readUtm(), // S4 归因：落地页捕获的 UTM 随注册一次性上报
       })
-      if (!r.success) { setRegMsg(r.message || t('register.fail')); return }
+      // 失败重试要用新 token：本次提交已把旧码消费掉（服务端 siteverify 一次一用），
+      // 不重领的话，用户改完必填项再点提交必吃「人机验证失败」
+      if (!r.success) { setRegMsg(r.message || t('register.fail')); if (captchaOn) refreshCaptcha(); return }
       clearUtm() // 归因只在首次注册消费，用完立即清掉，避免二次注册串号
       await doLogin() // 注册成功自动登录（行为同 Vue 版）
-    } catch (e) { setRegMsg(e instanceof Error ? e.message : String(t('register.fail'))) } // E10：异常同样要落到卡内红字
+    } catch (e) { setRegMsg(e instanceof Error ? e.message : String(t('register.fail'))); if (captchaOn) refreshCaptcha() } // E10：异常同样要落到卡内红字
     finally { setLoading(false) }
   }
 
@@ -443,6 +447,7 @@ export default function Login({ mode, onLogin }: Props) {
         <AiRegisterFlow
           prefillUsername={username}
           dedicatedRegister={branding.dedicatedRegister}
+          captcha={{ enabled: captchaOn, siteKey: captchaSiteKey }}
           onDone={onLogin}
           onClose={() => setRegPhase('form')}
         />
@@ -525,7 +530,7 @@ export default function Login({ mode, onLogin }: Props) {
           <select className="lc-input" value={form.jobRole} onChange={(e) => setForm({ ...form, jobRole: e.target.value })}>
             <option value="">{t('auth.selectJobRole')}</option>
             {personas.map((x) => (
-              <option key={x.code} value={x.code}>{x.name}</option>
+              <option key={x.code} value={x.code}>{personaName(x.code, x.name, lang)}</option>
             ))}
           </select>
         </Field>

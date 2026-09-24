@@ -22,13 +22,14 @@ import { useAdmin } from '@/stores/admin'
 import { ReferralP } from './panels_c'
 import TaskCenterP from './TaskCenterP'
 
-/** 个人中心面板组件：邀请好友（个人用户）/ 任务中心 子 tab（默认不选中，由用户点选） */
+/** 个人中心面板组件：邀请好友（个人用户）/ 任务中心 子 tab（默认打开第一个子页） */
 export default function PersonalCenterP() {
   const [, t] = useT()
   const { isPersonal } = useAdmin()
-  // ★ 默认不选中任何子 tab（2026-09-09 反馈）：点开「个人中心」先展示空内容区，
-  //   由用户自行点选「邀请好友/任务中心」，避免默认打开一个子页。
-  const [tab, setTab] = useState<'referral' | 'tasks' | ''>('')
+  // ★ 2026-09-24 用户后令「所有 tab 点击后都要默认打开一个页面」，覆盖 2026-09-09 的
+  //   「默认不选中、先展示空内容区」口径——进入个人中心直接落在第一个子页：
+  //   个人用户=邀请好友，企业用户/超管=任务中心（与下面 items 的权限过滤同一口径）。
+  const [tab, setTab] = useState<'referral' | 'tasks'>(isPersonal ? 'referral' : 'tasks')
 
   // 邀请好友 · 多邀多得：仅个人用户展示；企业用户/平台超管彻底隐藏
   const items = [
@@ -37,7 +38,7 @@ export default function PersonalCenterP() {
   ]
   return (
     <>
-      <Tabs activeKey={tab} onChange={(k) => setTab(k as 'referral' | 'tasks' | '')} items={items} />
+      <Tabs activeKey={tab} onChange={(k) => setTab(k as 'referral' | 'tasks')} items={items} />
       {/* 渲染侧再做一次 isPersonal 兜底：即使 tab 状态被旧值/深链置为 referral，
           企业用户也不会拿到邀请裂变面板（权限收口，与上面 items 的过滤保持同一口径） */}
       {tab === 'referral' && isPersonal && <ReferralP />}

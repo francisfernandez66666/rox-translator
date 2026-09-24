@@ -131,6 +131,26 @@ export default function TaskCenterP() {
     return `${pts} · ${t('tasks.rewardPermanent')}`
   }
 
+  // ★ 2026-09-24 后台语言环境去中文写死：内置 5 个任务的标题/说明在 DB 里存的是
+  //   种子中文（存量行不随词典更新），展示层按 task_key 映射 tasks.builtin.* 键，
+  //   金额/天数/上限用行内配置值填占位（超管改了配置文案不撒谎）；
+  //   自定义任务（task_key 为空或非内置）按原文显示——那是管理员自己写的内容。
+  const BUILTIN_TASK_KEYS = ['login_daily', 'translate_week', 'invite_register', 'invite_paid', 'kb_upload']
+  function taskTitle(row: Partial<UserTask>): string {
+    if (row.task_key && BUILTIN_TASK_KEYS.includes(row.task_key)) return t(`tasks.builtin.${row.task_key}.title`)
+    return row.title || ''
+  }
+  function taskDesc(row: Partial<UserTask>): string {
+    if (row.task_key && BUILTIN_TASK_KEYS.includes(row.task_key)) {
+      return tpl(`tasks.builtin.${row.task_key}.desc`, {
+        points: fmtPoints(Number(row.reward_points) || 0),
+        days: Number(row.valid_days) || 0,
+        cap: Number(row.cap_per_week) || 0,
+      })
+    }
+    return row.description || ''
+  }
+
   /** 发放规则文案：周期 + 上限 + 叠加口径（超管列表与弹窗共用同一口径描述） */
   function ruleText(row: Partial<UserTask>): string {
     const parts: string[] = []
@@ -158,8 +178,8 @@ export default function TaskCenterP() {
     { key: 'task_type', title: t('tasks.colType'), width: 100, render: (row) => (
       <StatusPill tone={row.task_type === 'daily' ? 'idle' : 'warn'}>{row.task_type === 'daily' ? t('tasks.daily') : t('tasks.once')}</StatusPill>
     ) },
-    { key: 'title', title: t('tasks.colTitle') },
-    { key: 'description', title: t('tasks.colDesc'), render: (row) => row.description || '—' },
+    { key: 'title', title: t('tasks.colTitle'), render: (row) => taskTitle(row) },
+    { key: 'description', title: t('tasks.colDesc'), render: (row) => taskDesc(row) || '—' },
     { key: 'reward_points', title: t('tasks.colReward'), width: 220, render: (row) => <Badge>{rewardText(row)}</Badge> },
     { key: 'grant_mode', title: t('tasks.colGrant'), width: 110, render: (row) => (
       <StatusPill tone={row.grant_mode === 'auto' ? 'success' : 'idle'}>{row.grant_mode === 'auto' ? t('tasks.autoGrant') : t('tasks.manualGrant')}</StatusPill>
@@ -185,7 +205,7 @@ export default function TaskCenterP() {
   const adminCols: TableColumn<any>[] = [
     { key: 'id', title: 'ID', width: 70 },
     { key: 'task_type', title: t('tasks.colType'), width: 100, render: (row) => row.task_type === 'daily' ? t('tasks.daily') : t('tasks.once') },
-    { key: 'title', title: t('tasks.colTitle') },
+    { key: 'title', title: t('tasks.colTitle'), render: (row) => taskTitle(row) },
     { key: 'grant_mode', title: t('tasks.colGrant'), width: 110, render: (row) => (
       <StatusPill tone={row.grant_mode === 'auto' ? 'success' : 'idle'}>{row.grant_mode === 'auto' ? t('tasks.autoGrant') : t('tasks.manualGrant')}</StatusPill>
     ) },
@@ -236,10 +256,10 @@ export default function TaskCenterP() {
               </div>
             </Field>
             <Field label={t('tasks.titleLabel')}>
-              <input className="lc-input" value={String(dlg.title || '')} onChange={(e) => setDlg((d) => (d ? { ...d, title: e.target.value } : d))} placeholder="如 每日登录/完成一次翻译" />
+              <input className="lc-input" value={String(dlg.title || '')} onChange={(e) => setDlg((d) => (d ? { ...d, title: e.target.value } : d))} placeholder={t('tasks.titlePlaceholder')} />
             </Field>
             <Field label={t('tasks.descLabel')}>
-              <textarea className="lc-textarea" rows={2} value={String(dlg.description || '')} onChange={(e) => setDlg((d) => (d ? { ...d, description: e.target.value } : d))} placeholder="任务说明（可空）" style={{ width: '100%', resize: 'vertical' }} />
+              <textarea className="lc-textarea" rows={2} value={String(dlg.description || '')} onChange={(e) => setDlg((d) => (d ? { ...d, description: e.target.value } : d))} placeholder={t('tasks.descPlaceholder')} style={{ width: '100%', resize: 'vertical' }} />
             </Field>
             <Field label={t('tasks.rewardLabel')}>
               {/* 积分口径录入：界面填积分，接口出入参同为积分（内部汇率折算在后端完成） */}
@@ -255,7 +275,7 @@ export default function TaskCenterP() {
             </Field>
             {dlg.grant_mode === 'auto' && (
               <Field label="task_key">
-                <input className="lc-input" value={String(dlg.task_key || '')} onChange={(e) => setDlg((d) => (d ? { ...d, task_key: e.target.value } : d))} placeholder="如 login_daily / translate_week / 自定义事件标识" style={{ width: 320 }} />
+                <input className="lc-input" value={String(dlg.task_key || '')} onChange={(e) => setDlg((d) => (d ? { ...d, task_key: e.target.value } : d))} placeholder={t('tasks.taskKeyPlaceholder')} style={{ width: 320 }} />
               </Field>
             )}
             <Field label={t('tasks.periodLabel')}>

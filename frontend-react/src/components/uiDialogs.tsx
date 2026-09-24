@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Dialog, Input } from '@/ui/langcross/src'
+import { t } from '@/i18n' // ★ 2026-09-24 后台去写死中文：默认标题/按钮按界面语言取词（调用时刻求值）
 
 // 命令式弹窗请求体：标题/正文/确认取消文案与 resolve 回调
 interface DialogRequest {
@@ -40,11 +41,11 @@ export function confirmDialog(opts: {
     if (!push) { resolve(false); return }
     push({
       kind: 'confirm',
-      header: opts.header ?? '确认操作',
+      header: opts.header ?? t('common.confirmTitle'),
       body: opts.body,
       danger: !!opts.danger,
-      confirmText: opts.confirmText ?? '确定',
-      cancelText: opts.cancelText ?? '取消',
+      confirmText: opts.confirmText ?? t('common.ok'),
+      cancelText: opts.cancelText ?? t('common.cancel'),
       resolve: (v) => resolve(Boolean(v)),
     })
   })
@@ -63,13 +64,13 @@ export function promptText(opts: {
     if (!push) { resolve(null); return }
     push({
       kind: 'prompt',
-      header: opts.header ?? '请输入',
+      header: opts.header ?? t('common.inputTitle'),
       body: opts.body,
       danger: false,
       defaultValue: opts.defaultValue,
       placeholder: opts.placeholder,
-      confirmText: opts.confirmText ?? '确定',
-      cancelText: opts.cancelText ?? '取消',
+      confirmText: opts.confirmText ?? t('common.ok'),
+      cancelText: opts.cancelText ?? t('common.cancel'),
       resolve: (v) => resolve(typeof v === 'string' ? v : null),
     })
   })
