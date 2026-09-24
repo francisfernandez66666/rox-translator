@@ -557,63 +557,69 @@ function HeroDemo() {
   )
 }
 
-/* 翻译文件直出循环动效（★ 2026-09-23）：上传 → 翻译 → 回写 → 下载，四阶段自循环。
-   复用 HeroDemo 范式：fdRef 根 + data-fd 选择器取节点、gen 代际计数防竞态、顶部进度条 --dur、
-   reduced-motion 静态终态、自循环 play() 不挂 setInterval。纯黑单色：文件名示例走
-   fdSampleSrc/fdSampleOut，标签走 fdSrcLabel/fdOutLabel/fdStep1-4，全程无裸中文。 */
+/* 翻译文件直出循环动效（★ 2026-09-24 重排）：通栏固定舞台 + 中央引擎环。
+   构图：源文件 chip — 链路 — 「能言 / LangCross」引擎环 — 链路 — 译文 chip，五元素全部定宽定心，
+   链路弹性伸缩吸收余量——演出只动元素自身（opacity/transform），任何阶段都不产生布局位移：
+   ① 上传：源 chip 原地浮现，数据包沿左链路流入引擎；
+   ② 翻译：引擎点火（虚线环旋转 + 脉冲 + 品牌脉动），数据包流向译文位，译文 chip 物质化，译名打字机逐字写出；
+   ③ 回写【峰值】：整台蓄力压暗 → 释放爆亮，引擎激发，12 道光线放射，译文 chip 燃亮 + 光泽扫过 + 角标对勾；
+   ④ 下载：下载 icon 在译文 chip 右缘（绝对定位）随分隔线展开。
+   复用 HeroDemo 范式：fdRef 根 + data-fd 选择器、gen 代际计数防竞态、
+   reduced-motion 静态终态、自循环 play() 不挂 setInterval。纯黑单色，全程无裸中文；
+   英文界面演示「英→中」（Quotation.pdf → 报价单.pdf），其余语种 本地源名 → canonical 译名。 */
 function FileDirectDemo() {
   const [lang, t] = useT()
-  const SRC_NAME = t('land.fdSampleSrc') // 源文件名（用户语种）：报价单
-  const OUT_NAME = t('land.fdSampleOut') // 译文文件名（canonical）：quotation
+  const SRC_NAME = t('land.fdSampleSrc') // 源文件名（用户语种）：报价单 / Quotation
+  // 译文文件名：英文界面演示「英→中」；其余语种维持 本地源名 → canonical 译名
+  const OUT_NAME = lang === 'en' ? '报价单' : t('land.fdSampleOut')
+  const OUT_TYPE_MS = OUT_NAME.length * 70 // 译名打字机总时长
+  // 引擎品牌字：中文界面显「能言」，其余显「LangCross」（品牌常量，非翻译键）
+  const BRAND = lang === 'zh' || lang === 'zh_hant' ? '能言' : 'LangCross'
   const fdRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const root = fdRef.current
     if (!root) return
     const el = (n: string) => root.querySelector<HTMLElement>(`[data-fd="${n}"]`)
-    const barfill = el('barfill')!
-    const srcCard = el('src')!
-    const outCard = el('out')!
-    const arrow = el('arrow')!
-    const stemEl = el('stem')! // 译文卡文件名词干：翻译阶段改写
-    const progEl = el('prog')! // 译文卡内进度条
-    const check = el('check')! // 译文卡对勾（回写落章）
-    const dl = el('dl')! // 译文卡下载按钮（下载脉冲）
-    const steps = Array.from(root.querySelectorAll<HTMLElement>('.fd-step'))
+    const src = el('src')! // 源文件 chip
+    const eng = el('eng')! // 中央引擎环
+    const out = el('out')! // 译文 chip
+    const oname = el('outname')! // 译名词干（打字机）
+    const oext = el('outext')! // 译名扩展名（打完才亮）
+    const caret = el('caret')! // 打字机光标
+    const ocheck = el('outok')! // 译文 chip 角标对勾（峰值落章）
+    const dl = el('dl')! // 下载按钮（第④步弹出）
+    const rays = el('rays')! // 峰值 12 道光线（以引擎为圆心）
+    const packet = el('pr')! // 右链路数据包（引擎 → 译文）
+    const packetL = el('pl')! // 左链路数据包（源 → 引擎）
+    const stage = root.querySelector<HTMLElement>('.lc-fd-stage')! // 舞台：峰值前蓄力压暗/释放
 
     let gen = 0
     const sleep = (ms: number) => new Promise<void>((res) => window.setTimeout(res, ms))
-    const setStep = (i: number, g: number) => {
-      if (g !== gen) return
-      steps.forEach((s, k) => {
-        s.classList.toggle('on', k === i)
-        s.classList.toggle('done', k < i)
-      })
-    }
     const reset = () => {
-      srcCard.classList.remove('upload')
-      outCard.classList.remove('live')
-      arrow.classList.remove('live')
-      stemEl.textContent = ''
-      stemEl.classList.remove('show')
-      progEl.classList.remove('run')
-      progEl.style.width = '0%'
-      check.classList.remove('show')
+      src.classList.remove('show')
+      eng.classList.remove('active', 'fire')
+      out.classList.remove('show', 'lit', 'flash', 'dl-open')
+      oname.textContent = ''
+      oext.classList.remove('show')
+      caret.classList.remove('show')
+      ocheck.classList.remove('show')
       dl.classList.remove('show')
-      barfill.classList.remove('run')
-      steps.forEach((s) => s.classList.remove('on', 'done'))
-      void srcCard.offsetWidth // 落定摘类这一帧，新一轮动画才有起跳点
+      rays.classList.remove('go')
+      packet.classList.remove('go')
+      packetL.classList.remove('go')
+      stage.classList.remove('sink')
+      void src.offsetWidth // 落定摘类这一帧，新一轮动画才有起跳点
     }
-    // 终态快照：供「偏好减少动效」使用，与演出结果一致（源卡常驻、译文卡已译好可下载）
+    // 终态快照：供「偏好减少动效」使用（源/引擎/译文就位、译文已好可下载）
     const staticState = () => {
-      outCard.classList.add('live')
-      arrow.classList.add('live')
-      stemEl.textContent = OUT_NAME
-      stemEl.classList.add('show')
-      progEl.style.width = '100%'
-      check.classList.add('show')
+      src.classList.add('show')
+      eng.classList.add('active')
+      out.classList.add('show', 'lit', 'dl-open')
+      oname.textContent = OUT_NAME
+      oext.classList.add('show')
+      ocheck.classList.add('show')
       dl.classList.add('show')
-      steps.forEach((s) => s.classList.add('done'))
     }
     // 减少动效：整条计时链不启动，直接呈现终态（trunc 类动画由文末 reduced-motion 规则统一掐掉）
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
@@ -623,54 +629,78 @@ function FileDirectDemo() {
 
     // 四阶段时长（ms）：与下方 play() 的 await 顺序逐拍对齐，改动画顺序须同步改
     const T = {
-      lead: 240,
-      upload: 980, // 源卡落入 + 上传扫描线
-      gap1: 280,
-      translate: 1500, // 箭头亮 + 进度条跑 + 文件名改写
-      gap2: 260,
-      writeback: 900, // 对勾落章
-      gap3: 240,
-      download: 1500, // 下载按钮脉冲
-      tail: 1200, // 结果停留后重来
+      lead: 350,
+      upload: 1450, // 源 chip 浮现 520 → 数据包流入引擎 930
+      gap1: 250,
+      translate: 1550, // 引擎点火 + 数据流 + 译文 chip 物质化 + 译名打字机
+      gap2: 420, // 蓄力：整台压暗（峰值前的落差）
+      writeback: 1150, // 峰值：引擎激发 + 光线放射 + 译文 chip 燃亮
+      gap3: 200,
+      download: 1400, // 下载 icon 在译文 chip 内展开
+      tail: 1400, // 结果停留后重来
     }
-    const totalMs =
-      T.lead + T.upload + T.gap1 + T.translate + T.gap2 + T.writeback + T.gap3 + T.download + T.tail
-    root.style.setProperty('--dur', `${totalMs}ms`) // 只交给 .lc-fd-barfill.run 用
+
+    // 译名打字机：逐字写出，让人看见「正在翻译生成」；写完扩展名亮起
+    const typeName = async (g: number) => {
+      caret.classList.add('show')
+      for (let i = 0; i < OUT_NAME.length; i++) {
+        if (g !== gen) return
+        oname.textContent = OUT_NAME.slice(0, i + 1)
+        await sleep(70)
+      }
+      caret.classList.remove('show')
+      oext.classList.add('show')
+    }
 
     async function play() {
       const g = ++gen
       reset()
       await sleep(T.lead)
       if (g !== gen) return
-      barfill.classList.add('run')
 
-      // 阶段 1：上传
-      setStep(0, g)
-      srcCard.classList.add('upload')
-      await sleep(T.upload)
+      // 阶段 1：上传 —— 源 chip 原地浮现 → 数据包沿链路流入引擎（chip 本身不动）
+      src.classList.add('show')
+      await sleep(520)
+      if (g !== gen) return
+      packetL.classList.add('go') // 数据从源 chip 流向引擎（吸收开始）
+      await sleep(700)
+      if (g !== gen) return
+      eng.classList.add('active') // 引擎点亮（旋转 + 脉冲 + 品牌脉动）
+
+      // 阶段 2：翻译 —— 数据包流向译文位，译文 chip 物质化，译名逐字写出
+      await sleep(T.gap1)
+      if (g !== gen) return
+      packet.classList.add('go')
+      await sleep(500)
+      if (g !== gen) return
+      out.classList.add('show') // 译文 chip 物质化
+      await sleep(260)
+      if (g !== gen) return
+      await typeName(g) // 译名打字机
+      if (g !== gen) return
+      await sleep(Math.max(0, T.translate - 500 - 260 - OUT_TYPE_MS)) // 阶段余量
       if (g !== gen) return
 
-      // 阶段 2：翻译（箭头亮 + 进度条 + 文件名改写）
-      setStep(1, g)
-      arrow.classList.add('live')
-      outCard.classList.add('live')
-      progEl.classList.add('run')
-      stemEl.classList.remove('show')
-      void stemEl.offsetWidth // 摘加同类同帧无效，强制重排让旧名先淡出
-      stemEl.textContent = OUT_NAME
-      stemEl.classList.add('show')
-      await sleep(T.translate)
+      // 阶段 3：回写【峰值】—— 蓄力压暗 → 释放爆亮：引擎激发 + 光线放射 + 译文 chip 燃亮
+      stage.classList.add('sink') // 蓄力：整台压暗（峰值前的落差，动效十原则④）
+      await sleep(T.gap2)
       if (g !== gen) return
-
-      // 阶段 3：回写（对勾落章）
-      setStep(2, g)
-      check.classList.add('show')
+      stage.classList.remove('sink') // 释放：亮要快、弹要慢
+      eng.classList.add('fire') // 引擎激发前挺一亮
+      out.classList.add('lit', 'flash') // 译文 chip 燃亮 + 光泽扫过 + 上浮回弹
+      ocheck.classList.add('show') // 角标对勾落章
+      rays.classList.add('go') // 12 道光线自引擎向外放射
       await sleep(T.writeback)
       if (g !== gen) return
+      out.classList.remove('flash') // 爆发回落到常亮
+      packet.classList.remove('go') // 数据流结束
+      packetL.classList.remove('go')
 
-      // 阶段 4：下载（按钮脉冲）
-      setStep(3, g)
-      dl.classList.add('show')
+      // 阶段 4：下载 —— 下载按钮在译文 chip 内展开
+      await sleep(T.gap3)
+      if (g !== gen) return
+      out.classList.add('dl-open') // 分隔线滑出
+      dl.classList.add('show') // 按钮展开
       await sleep(T.download)
       if (g !== gen) return
 
@@ -682,47 +712,63 @@ function FileDirectDemo() {
     return () => { gen++ } // 卸载只 ++ 代际：悬空 await 自行熄火
   }, [lang])
 
-  const steps = [t('land.fdStep1'), t('land.fdStep2'), t('land.fdStep3'), t('land.fdStep4')]
   return (
     <div className="lc-fd-visual" ref={fdRef} aria-hidden="true">
-      <i className="lc-fd-barfill" data-fd="barfill" />
-      <div className="lc-fd-row">
-        <div className="lc-fd-card lc-fd-src" data-fd="src">
-          <span className="lc-fd-tag">{t('land.fdSrcLabel')}</span>
-          <svg className="lc-fd-ico" width="38" height="38" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <div className="lc-fd-stage">
+        {/* 源文件 chip：原地浮现保留（不位移、不吸附），数据沿链路流入引擎 */}
+        <span className="lc-fd-chip lc-fd-src" data-fd="src">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M6 2.5h8L19 7v14.5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-18a1 1 0 0 1 1-1Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
             <path d="M14 2.5V7h5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
           </svg>
-          <span className="lc-fd-name">{SRC_NAME}<span className="lc-fd-ext">.pdf</span></span>
-          <span className="lc-fd-fmt">PDF</span>
-          <i className="lc-fd-up" />
-        </div>
-        <span className="lc-fd-arrow" data-fd="arrow"><ArrowRightIcon size={22} /></span>
-        <div className="lc-fd-card lc-fd-out" data-fd="out">
-          <span className="lc-fd-tag">{t('land.fdOutLabel')}</span>
-          <svg className="lc-fd-ico" width="38" height="38" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M6 2.5h8L19 7v14.5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-18a1 1 0 0 1 1-1Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-            <path d="M14 2.5V7h5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-          </svg>
-          <span className="lc-fd-name"><span className="lc-fd-stem" data-fd="stem" /><span className="lc-fd-ext">.pdf</span></span>
-          <span className="lc-fd-prog"><i data-fd="prog" /></span>
-          <span className="lc-fd-fmt">PDF</span>
-          <span className="lc-fd-check" data-fd="check"><CheckCircleIcon size={18} /></span>
-          <button type="button" className="lc-fd-dl" data-fd="dl">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M12 3.5v11M7.5 10.5L12 15l4.5-4.5M5 20h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <span className="lc-fd-chip-name">{SRC_NAME}<span className="lc-fd-ext">.pdf</span></span>
+        </span>
+        <span className="lc-fd-link">
+          <i className="lc-fd-packet" data-fd="pl" />
+        </span>
+        {/* 中央翻译引擎环：品牌主角 */}
+        <span className="lc-fd-eng" data-fd="eng">
+          <i className="lc-fd-pulse" />
+          <i className="lc-fd-pulse" />
+          <i className="lc-fd-dash" />
+          <span className="lc-fd-brand">{BRAND}</span>
+        </span>
+        <span className="lc-fd-link">
+          <i className="lc-fd-packet" data-fd="pr" />
+        </span>
+        {/* 译文 chip：译毕诞生 */}
+        <span className="lc-fd-chip lc-fd-out" data-fd="out">
+          <i className="lc-fd-shine"><i /></i>
+          <span className="lc-fd-ok" data-fd="outok">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M5 12.5l4.5 4.5L19 7" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            <span>{t('land.fdStep4')}</span>
-          </button>
-        </div>
-      </div>
-      <div className="lc-fd-steps">
-        {steps.map((s, i) => (
-          <span className="fd-step" key={i}>
-            <i className="fd-dot" />
-            <em>{s}</em>
           </span>
-        ))}
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 2.5h8L19 7v14.5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-18a1 1 0 0 1 1-1Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+            <path d="M14 2.5V7h5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+          </svg>
+          <span className="lc-fd-chip-name">
+            <span className="lc-fd-oname" data-fd="outname" />
+            <i className="lc-fd-caret" data-fd="caret" />
+            <span className="lc-fd-ext" data-fd="outext">.pdf</span>
+          </span>
+          {/* 下载：绝对定位在译文 chip 右缘（分隔线+icon），展开不占布局流——chip 宽度恒定零位移 */}
+          <span className="lc-fd-dlzone">
+            <i className="lc-fd-dlsep" />
+            <button type="button" className="lc-fd-dl" data-fd="dl" title={t('land.fdStep4')}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M12 3.5v11M7.5 10.5L12 15l4.5-4.5M5 20h14" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </span>
+        </span>
+        {/* 峰值光线：12 道白线以引擎为圆心向外放射 */}
+        <i className="lc-fd-rays" data-fd="rays">
+          {Array.from({ length: 12 }, (_, i) => (
+            <b key={i} style={{ transform: `rotate(${i * 30}deg)` }}><i /></b>
+          ))}
+        </i>
       </div>
     </div>
   )
@@ -909,13 +955,6 @@ export default function Landing() {
               <span className="lc-mo-up lc-mo-d1">{t('land.heroTitle1')}</span>
               <span className="lc-mo-up lc-mo-d2">{t('land.heroTitle2')}</span>
             </h1>
-            {/* ★ 2026-09-23：第二核心卖点带（与「跨行业精确翻译」并列）。主句强调「原文件直出+官方文件分钟级」，
-                小字提醒「订单/报价/确认等」作为官方文件的举例，不进主标题 */}
-            <div className="lc-hero-point2 lc-mo-up lc-mo-d3">
-              <i className="lc-hp-dot" />
-              <span className="lc-hp-main">{t('land.heroPoint2')}</span>
-              <span className="lc-hp-note">{t('land.heroPoint2Note')}</span>
-            </div>
             <p className="lc-hero-sub lc-mo-up lc-mo-d3">{t('land.heroSub')}</p>
             {/* d1~d5 每档差 60ms（motion.css）：徽章→标题→副题→按钮→信任指标逐拍落位，读作"页面在呼吸"而非整体闪现 */}
             <div className="lc-hero-ctas lc-mo-up lc-mo-d4">
@@ -1019,17 +1058,15 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* 翻译文件直出（★ 2026-09-23）：核心功能之后、覆盖范围之前。左四阶段循环动效文件卡（上传→翻译→回写→下载）· 右文字卖点。
-          纯黑单色；文件名示例走 fdSampleSrc/fdSampleOut，标签走 fdSrcLabel/fdOutLabel/fdStep1-4，全程无裸中文 */}
+      {/* 翻译文件直出（★ 2026-09-24 重排）：居中标题容器 + 通栏固定舞台（上传→翻译→回写→下载自循环）。
+          侧栏文字列删除（演出曾把文字/容器挤动）；标题容器整合自第一屏卖点带（hero 卖点带同步移除）。
+          纯黑单色；文件名示例走 fdSampleSrc/fdSampleOut，下载 icon 可读名走 fdStep4，全程无裸中文 */}
       <section id="filedirect" className="lc-sec lc-fd lc-reveal">
-        <div className="lc-fd-in">
-          <FileDirectDemo />
-          <div className="lc-fd-copy">
-            <h2 className="lc-fd-title">{t('land.heroPoint2')}</h2>
-            <p className="lc-fd-body">{t('land.fdBody')}</p>
-            <p className="lc-fd-note">{t('land.heroPoint2Note')}</p>
-          </div>
+        <div className="lc-fd-head">
+          <h2 className="lc-fd-title">{t('land.heroPoint2')}</h2>
+          <p className="lc-fd-sub">{t('land.heroPoint2Note')}</p>
         </div>
+        <FileDirectDemo />
       </section>
 
       {/* 4b. 覆盖范围：统计带 + 行业/角色/文件格式三组 chips。
@@ -1411,72 +1448,88 @@ const LANDING_CSS = `
 /* 两行断句靠 block 而不是 <br>：DOM 里不留可被复制带走的换行符，也让两行各自能挂节拍类 */
 .lc-hero-h1 span{display:block}
 .lc-hero-sub{margin:0;font-size:18px;line-height:28px;color:var(--lc-text-3)}
-/* ★ 2026-09-23：第二核心卖点带（与「跨行业精确翻译」标题并列）。外形复用徽章的浮面圆角+描边，
-   但文字用 --lc-text-1（更亮）以显「卖点」分量；小字提醒走 --lc-text-3，靠左边框与主语分隔 */
-.lc-hero-point2{display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;margin:18px 0 0;padding:10px 18px;border-radius:999px;background:var(--lc-raised);border:1.2px solid var(--lc-border-pill);font-size:15px;line-height:1.45;color:var(--lc-text-1)}
-.lc-hero-point2 .lc-hp-dot{width:8px;height:8px;border-radius:50%;background:var(--lc-text-1);flex:none}
-.lc-hero-point2 .lc-hp-main{font-weight:600;color:var(--lc-text-1)}
-.lc-hero-point2 .lc-hp-note{font-size:12.5px;font-weight:400;color:var(--lc-text-3);padding-left:10px;margin-left:2px;border-left:1px solid var(--lc-border-pill)}
-/* —— 翻译文件直出（四阶段循环动效：上传→翻译→回写→下载）：左文件卡动效 · 右文字，两栏图左文右 —— */
-.lc-fd-in{display:grid;grid-template-columns:1.05fr .95fr;gap:48px;align-items:center;max-width:1080px;margin:0 auto}
-.lc-fd-visual{position:relative;display:flex;flex-direction:column;align-items:center;gap:22px;padding-top:10px}
-/* 顶部循环进度条：时长取 JS 写入的 --dur，与四阶段演出同帧起跑 */
-.lc-fd-barfill{position:absolute;top:0;left:0;height:2px;width:100%;border-radius:2px;background:linear-gradient(90deg,transparent,var(--lc-text-1));transform-origin:left;transform:scaleX(0)}
-.lc-fd-barfill.run{animation:fd-bar var(--dur) linear forwards}
-@keyframes fd-bar{to{transform:scaleX(1)}}
-.lc-fd-row{display:flex;align-items:center;justify-content:center;gap:14px}
-.lc-fd-card{position:relative;display:flex;flex-direction:column;align-items:center;gap:10px;width:200px;padding:30px 16px 24px;border-radius:16px;background:var(--lc-raised);border:1.2px solid var(--lc-border-pill);transition:border-color .4s,box-shadow .4s,transform .4s,opacity .4s}
-.lc-fd-tag{position:absolute;top:-11px;left:50%;transform:translateX(-50%);font-size:12px;line-height:1;color:var(--lc-text-3);background:var(--lc-bg);padding:4px 12px;border-radius:999px;border:1px solid var(--lc-border-pill);white-space:nowrap}
-.lc-fd-ico{color:var(--lc-text-1)}
-.lc-fd-name{font-size:18px;font-weight:600;color:var(--lc-text-1);text-align:center;word-break:break-word;min-height:22px;display:flex;align-items:baseline;justify-content:center;gap:1px}
-.lc-fd-stem{display:inline-block;opacity:0;transform:translateY(5px);transition:opacity .28s ease,transform .28s ease}
-.lc-fd-stem.show{opacity:1;transform:none}
-.lc-fd-ext{color:var(--lc-text-3);font-weight:400}
-/* 译文卡扩展名在翻译前隐藏：输出尚未生成，只露出空白待填 */
-.lc-fd-out .lc-fd-ext{opacity:0;transition:opacity .3s}
-.lc-fd-out.live .lc-fd-ext{opacity:1}
-.lc-fd-fmt{font-size:11px;letter-spacing:.5px;color:var(--lc-text-3);border:1px solid var(--lc-border-pill);border-radius:6px;padding:2px 8px}
-.lc-fd-arrow{color:var(--lc-text-3);flex:none;transition:color .34s,transform .34s}
-.lc-fd-arrow.live{color:var(--lc-text-1);transform:translateX(3px)}
-/* 源卡：上传阶段落入 + 顶部扫描线 */
-.lc-fd-src.upload{animation:fd-drop .5s ease}
-@keyframes fd-drop{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:none}}
-.lc-fd-up{position:absolute;left:8px;right:8px;top:6px;height:2px;border-radius:2px;background:var(--lc-text-1);opacity:0}
-.lc-fd-src.upload .lc-fd-up{animation:fd-scan .9s ease}
-@keyframes fd-scan{0%{opacity:0;transform:translateY(0)}22%{opacity:.85}100%{opacity:0;transform:translateY(112px)}}
-/* 译文卡：翻译阶段亮边 + 进度条 */
-.lc-fd-out{padding-bottom:46px}
-.lc-fd-out.live{border-color:var(--lc-text-1);box-shadow:0 0 0 1px var(--lc-text-1)}
-.lc-fd-prog{width:120px;height:4px;border-radius:999px;background:var(--lc-inset);overflow:hidden;opacity:0;transition:opacity .3s}
-.lc-fd-out.live .lc-fd-prog{opacity:1}
-.lc-fd-prog>i{display:block;height:100%;width:0;background:var(--lc-text-1);border-radius:999px}
-.lc-fd-prog>i.run{animation:fd-prog 1.5s ease forwards}
-@keyframes fd-prog{to{width:100%}}
-/* 回写：对勾落章 */
-.lc-fd-check{position:absolute;top:12px;right:12px;color:var(--lc-text-1);opacity:0;transform:scale(.6);transition:opacity .3s,transform .3s}
-.lc-fd-check.show{opacity:1;transform:scale(1);animation:fd-stamp .4s ease}
-@keyframes fd-stamp{0%{transform:scale(.5)}60%{transform:scale(1.18)}100%{transform:scale(1)}}
-/* 下载：按钮脉冲 */
-.lc-fd-dl{position:absolute;bottom:10px;left:50%;transform:translate(-50%,8px);display:inline-flex;align-items:center;gap:6px;padding:7px 16px;border-radius:999px;background:var(--lc-text-1);color:var(--lc-bg);border:none;font-size:13px;font-weight:600;cursor:default;opacity:0;pointer-events:none;transition:opacity .3s,transform .3s}
-.lc-fd-dl.show{opacity:1;transform:translate(-50%,0);animation:fd-pulse 1.4s ease-in-out infinite}
-@keyframes fd-pulse{0%,100%{box-shadow:0 0 0 0 rgba(231,233,234,0)}50%{box-shadow:0 0 0 6px rgba(231,233,234,.12)}}
-/* 阶段指示条：on=进行中（亮）/ done=已完成（实心点） */
-.lc-fd-steps{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center}
-.fd-step{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--lc-text-3);transition:color .3s}
-.fd-step .fd-dot{width:8px;height:8px;border-radius:50%;border:1px solid var(--lc-border-pill);background:transparent;transition:background .3s,border-color .3s}
-.fd-step.on{color:var(--lc-text-1)}
-.fd-step.on .fd-dot{background:var(--lc-text-1);border-color:var(--lc-text-1)}
-.fd-step.done{color:var(--lc-text-2)}
-.fd-step.done .fd-dot{background:var(--lc-text-1);border-color:var(--lc-text-1)}
-.lc-fd-copy{max-width:460px}
-.lc-fd-title{margin:0 0 16px;font-size:clamp(26px,3vw,38px);line-height:1.25;font-weight:700;color:var(--lc-text-1)}
-.lc-fd-body{margin:0;font-size:17px;line-height:28px;color:var(--lc-text-3)}
-.lc-fd-note{margin:14px 0 0;font-size:13px;color:var(--lc-text-3);opacity:.85}
-@media (max-width:980px){.lc-fd-in{grid-template-columns:1fr;gap:32px}.lc-fd-visual{order:-1}}
+/* —— 翻译文件直出：居中标题容器（整合自第一屏卖点带）+ 通栏固定舞台 —— */
+.lc-fd-head{text-align:center;max-width:820px;margin:0 auto 48px}
+.lc-fd-title{margin:0 0 14px;font-size:clamp(26px,3.4vw,40px);line-height:1.25;font-weight:700;letter-spacing:.2px;color:var(--lc-text-1)}
+.lc-fd-sub{margin:0;font-size:14px;letter-spacing:1px;color:var(--lc-text-3)}
+.lc-fd-visual{position:relative;display:flex;flex-direction:column;align-items:center;width:100%}
+/* 舞台限宽居中（链路距离要克制，不能把 chip 推到屏幕两角）：源 chip — 链路(弹性伸缩) — 引擎环 — 链路 — 译文 chip。
+   五元素定宽、引擎恒居中，演出只动元素自身（opacity/transform）——sink 只压亮度不缩放，任何阶段零布局位移 */
+.lc-fd-stage{position:relative;display:flex;align-items:center;justify-content:space-between;gap:24px;width:100%;max-width:880px;margin:0 auto;transition:filter .18s ease-out}
+.lc-fd-stage.sink{filter:brightness(.78);transition:filter .35s ease-in}
+/* 文件 chip：轻胶囊、定宽（译文打字机/下载展开都不改宽度），基态隐藏——show 才浮现 */
+.lc-fd-chip{position:relative;flex:none;width:clamp(196px,20vw,232px);display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 16px;border-radius:999px;background:var(--lc-raised);border:1.2px solid var(--lc-border-pill);color:var(--lc-text-1);opacity:0;transform:translateY(14px);transition:opacity .4s ease,transform .4s ease,border-color .4s,box-shadow .4s}
+.lc-fd-chip.show{opacity:1;transform:none}
+.lc-fd-chip-name{font-size:14.5px;font-weight:600;white-space:nowrap;display:inline-flex;align-items:baseline;gap:1px}
+.lc-fd-ext{color:var(--lc-text-3);font-weight:400;transition:opacity .3s}
+/* 译文 chip：译毕物质化；峰值 lit 燃亮 */
+.lc-fd-out.lit{border-color:var(--lc-text-1);box-shadow:0 0 0 1px var(--lc-text-1),0 0 26px rgba(231,233,234,.22)}
+.lc-fd-out .lc-fd-ext{opacity:0}
+.lc-fd-out.lit .lc-fd-ext{opacity:1}
+.lc-fd-out.flash{animation:fd-chipflash .55s ease,fd-pop .55s ease}
+@keyframes fd-chipflash{0%{filter:brightness(1)}25%{filter:brightness(1.9)}100%{filter:brightness(1)}}
+@keyframes fd-pop{0%{transform:scale(1)}35%{transform:scale(1.06)}70%{transform:scale(.98)}100%{transform:scale(1)}}
+/* chip 光泽扫过（MOT 主镜头之一） */
+.lc-fd-shine{position:absolute;inset:0;border-radius:999px;overflow:hidden;pointer-events:none}
+.lc-fd-shine i{position:absolute;top:-40%;bottom:-40%;left:-30%;width:34%;background:linear-gradient(105deg,transparent 0%,rgba(231,233,234,.3) 45%,rgba(231,233,234,.6) 50%,rgba(231,233,234,.3) 55%,transparent 100%);transform:skewX(-18deg) translateX(-140%);opacity:0}
+.lc-fd-out.lit .lc-fd-shine i{animation:fd-shine .8s .05s ease forwards}
+@keyframes fd-shine{0%{opacity:1;transform:skewX(-18deg) translateX(-140%)}100%{opacity:0;transform:skewX(-18deg) translateX(460%)}}
+/* 角标对勾：chip 右上小圆章（峰值落定） */
+.lc-fd-ok{position:absolute;top:-8px;right:-8px;width:22px;height:22px;border-radius:50%;border:1.5px solid var(--lc-text-1);background:var(--lc-bg);display:flex;align-items:center;justify-content:center;color:var(--lc-text-1);opacity:0;transform:scale(.4);transition:opacity .25s;z-index:3}
+.lc-fd-ok.show{opacity:1;transform:scale(1);animation:fd-stamp .45s cubic-bezier(.2,1.4,.4,1)}
+@keyframes fd-stamp{0%{transform:scale(.3)}55%{transform:scale(1.3)}100%{transform:scale(1)}}
+/* 打字机光标 */
+.lc-fd-caret{display:inline-block;width:2px;height:15px;background:var(--lc-text-1);opacity:0;margin-left:1px;vertical-align:-2px}
+.lc-fd-caret.show{opacity:1;animation:fd-caret .7s steps(1) infinite}
+@keyframes fd-caret{50%{opacity:0}}
+/* 链路 + 数据包：链路 flex 弹性伸缩吃掉舞台余量（两侧等宽 → 引擎恒居中），chip/引擎定宽不动 */
+.lc-fd-link{position:relative;flex:1 1 0;min-width:48px;height:1.5px;background:linear-gradient(90deg,transparent,var(--lc-border-pill) 30%,var(--lc-border-pill) 70%,transparent)}
+.lc-fd-packet{position:absolute;top:50%;left:0;width:7px;height:7px;margin:-3.5px 0 0 -3.5px;border-radius:50%;background:var(--lc-text-1);box-shadow:0 0 8px 2px rgba(231,233,234,.55);opacity:0}
+.lc-fd-packet.go{animation:fd-travel .8s ease-in-out infinite}
+@keyframes fd-travel{0%{left:0;opacity:0}15%{opacity:1}85%{opacity:1}100%{left:100%;opacity:0}}
+/* 中央引擎环：品牌主角。径向渐变底盘 + 虚线外环 + 双脉冲 + 品牌脉动 */
+.lc-fd-eng{position:relative;flex:none;width:96px;height:96px;display:flex;align-items:center;justify-content:center;border-radius:50%;border:1.5px solid var(--lc-border-pill);background:radial-gradient(closest-side,#16181c,var(--lc-bg) 78%);color:var(--lc-text-2);transition:border-color .4s,color .4s,box-shadow .4s}
+.lc-fd-brand{position:relative;z-index:2;font-size:14.5px;font-weight:800;letter-spacing:.3px;color:var(--lc-text-1);opacity:.62;transition:opacity .4s,text-shadow .4s,transform .4s}
+.lc-fd-dash{position:absolute;inset:-9px;border-radius:50%;border:1.5px dashed var(--lc-border-pill);opacity:.55;transition:opacity .4s,border-color .4s}
+.lc-fd-pulse{position:absolute;left:50%;top:50%;width:96px;height:96px;margin:-48px 0 0 -48px;border-radius:50%;border:1.5px solid var(--lc-text-1);opacity:0;pointer-events:none}
+.lc-fd-eng.active{border-color:var(--lc-text-1);color:var(--lc-text-1);box-shadow:0 0 26px rgba(231,233,234,.3),inset 0 0 20px rgba(231,233,234,.14)}
+.lc-fd-eng.active .lc-fd-brand{opacity:1;animation:fd-brand 1.2s ease-in-out infinite}
+.lc-fd-eng.active .lc-fd-dash{border-color:var(--lc-text-1);opacity:.9;animation:fd-spin 7s linear infinite}
+.lc-fd-eng.active .lc-fd-pulse{animation:fd-ring 1.6s ease-out infinite}
+.lc-fd-eng.active .lc-fd-pulse:nth-of-type(2){animation-delay:.8s}
+@keyframes fd-spin{to{transform:rotate(360deg)}}
+@keyframes fd-ring{0%{opacity:.6;transform:scale(.72)}100%{opacity:0;transform:scale(1.45)}}
+@keyframes fd-brand{0%,100%{text-shadow:0 0 0 rgba(231,233,234,0);transform:scale(1)}50%{text-shadow:0 0 14px rgba(231,233,234,.75);transform:scale(1.05)}}
+/* 引擎激发（峰值）：前挺一亮，像引擎把「完成」打出去 */
+.lc-fd-eng.fire{animation:fd-fire .55s ease}
+@keyframes fd-fire{0%{transform:scale(1)}35%{transform:scale(1.14);box-shadow:0 0 0 1.5px var(--lc-text-1),0 0 44px rgba(231,233,234,.7)}100%{transform:scale(1)}}
+/* 12 道光线：以引擎为圆心向外放射（起点 62px > 引擎半径 48+虚线环 9，不穿模） */
+.lc-fd-rays{position:absolute;left:50%;top:50%;width:0;height:0;pointer-events:none;z-index:1}
+.lc-fd-rays b{position:absolute;left:-1px;top:-7px;width:2px;height:14px;border-radius:2px}
+.lc-fd-rays b i{display:block;width:100%;height:100%;background:var(--lc-text-1);border-radius:2px;opacity:0}
+.lc-fd-rays.go b i{animation:fd-ray .7s ease-out forwards}
+@keyframes fd-ray{0%{opacity:.9;transform:translateY(-62px)}100%{opacity:0;transform:translateY(-118px)}}
+/* 下载：绝对定位在译文 chip 右缘（分隔线+圆形 icon），展开不占布局流——chip 宽度恒定零位移 */
+.lc-fd-dlzone{position:absolute;right:12px;top:0;bottom:0;display:flex;align-items:center;gap:8px;opacity:0;transform:translateX(-8px);transition:opacity .35s,transform .35s}
+.lc-fd-out.dl-open .lc-fd-dlzone{opacity:1;transform:none}
+.lc-fd-dlsep{width:1px;height:18px;background:var(--lc-border-pill);border-radius:1px}
+.lc-fd-dl{display:inline-flex;align-items:center;justify-content:center;padding:6px;border-radius:50%;background:var(--lc-text-1);color:var(--lc-bg);border:none;cursor:default;pointer-events:none;opacity:0;transition:opacity .3s}
+.lc-fd-dl.show{opacity:1;animation:fd-pulse 1.5s ease-in-out infinite}
+@keyframes fd-pulse{0%,100%{box-shadow:0 0 0 0 rgba(231,233,234,0)}50%{box-shadow:0 0 0 7px rgba(231,233,234,.14)}}
+/* 窄屏（≤640px）质变：横排管线重排为竖排——源上/引擎中/译文下，chip 仍定宽、数据包纵向流动 */
+@media (max-width:640px){
+  .lc-fd-stage{flex-direction:column;gap:14px}
+  .lc-fd-chip{width:min(230px,76vw)}
+  .lc-fd-link{flex:none;min-width:0;width:1.5px;height:56px;background:linear-gradient(180deg,transparent,var(--lc-border-pill) 30%,var(--lc-border-pill) 70%,transparent)}
+  .lc-fd-packet{top:0;left:50%}
+  .lc-fd-packet.go{animation-name:fd-travel-v}
+}
+@keyframes fd-travel-v{0%{top:0;opacity:0}15%{opacity:1}85%{opacity:1}100%{top:100%;opacity:0}}
 /* reduced-motion：掐掉所有一次性动画，静态终态由 JS staticState() 给出 */
 @media (prefers-reduced-motion:reduce){
-  .lc-fd-barfill.run,.lc-fd-src.upload,.lc-fd-prog>i.run,.lc-fd-check.show,.lc-fd-dl.show{animation:none!important}
-  .lc-fd-stem{transition:none}
+  .lc-fd-packet.go,.lc-fd-eng.active .lc-fd-brand,.lc-fd-eng.active .lc-fd-dash,.lc-fd-eng.active .lc-fd-pulse,.lc-fd-eng.fire,.lc-fd-out.lit .lc-fd-shine i,.lc-fd-out.flash,.lc-fd-rays.go b i,.lc-fd-ok.show,.lc-fd-dl.show{animation:none!important}
+  .lc-fd-chip,.lc-fd-stage{transition:none}
+  .lc-fd-caret.show{animation:none!important}
 }
 .lc-hero-ctas{display:flex;align-items:center;gap:16px}
 /* 信任指标 26px 间距：三条要读成"并列事实"，间距小于卡内 gap 就会粘成一段 */

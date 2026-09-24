@@ -4,6 +4,7 @@
 // 一次性消费：注册成功后清除，避免同浏览器反复注册串行归因。
 // ============================================================================
 
+/** URL 归因五参数快照（utm_source/medium/campaign/term/content）：落地页捕获→注册时随表单上报→成功即清除 */
 export interface UtmSnapshot { utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_term?: string; utm_content?: string }
 
 /** 读取并清洗 localStorage 中的 utm_* 快照（仅保留 5 个约定键、字符串且 ≤120 字符）。 */

@@ -144,3 +144,57 @@ describe('落地页 · 质量数字口径与多语言入口（2026-09-20）', ()
     }
   })
 })
+
+// ★ 2026-09-24 用户反馈批次回归锁：文件直出区重排——①第一屏 hero 卖点带迁入动效上方做居中标题容器；
+// ②侧栏文字列退役（演出曾把文字/容器挤动）；③舞台限宽固定、演出零布局位移（源 chip 不再飞入吸附引擎）；
+// ④顶部独立进度条与底部「上传/翻译/回写/下载」步进行删除；⑤下载按钮改纯 icon 长在译文 chip 内。
+describe('落地页 · 文件直出区通栏固定舞台重排（2026-09-24）', () => {
+  it('⑩ 标题容器在位：heroPoint2 主标题 + heroPoint2Note 副题居中挂在动效上方', () => {
+    render(<Landing />)
+    const head = document.querySelector('.lc-fd-head')
+    expect(head).toBeTruthy()
+    expect(head?.querySelector('.lc-fd-title')?.textContent).toContain(t('land.heroPoint2'))
+    expect(head?.querySelector('.lc-fd-sub')?.textContent).toContain(t('land.heroPoint2Note'))
+  })
+
+  it('⑪ 第一屏卖点带已迁移：hero 不再渲染 .lc-hero-point2（避免同一卖点两处出现）', () => {
+    render(<Landing />)
+    expect(document.querySelector('.lc-hero-point2')).toBeNull()
+  })
+
+  it('⑫ 侧栏文字列与旧双栏布局退役：.lc-fd-in / .lc-fd-copy 零残留', () => {
+    render(<Landing />)
+    expect(document.querySelector('.lc-fd-in')).toBeNull()
+    expect(document.querySelector('.lc-fd-copy')).toBeNull()
+  })
+
+  it('⑬ 固定舞台五元素在位：源/译文 chip + 引擎 + 左右两条链路（含双向数据包锚点）', () => {
+    render(<Landing />)
+    const stage = document.querySelector('.lc-fd-stage')
+    expect(stage).toBeTruthy()
+    expect(stage?.querySelector('.lc-fd-chip.lc-fd-src')).toBeTruthy()
+    expect(stage?.querySelector('.lc-fd-chip.lc-fd-out')).toBeTruthy()
+    expect(stage?.querySelector('.lc-fd-eng')).toBeTruthy()
+    // 左右链路各挂一个数据包（pl=源→引擎，pr=引擎→译文）：吸附动效退役后改由数据包表达「流入」
+    expect(document.querySelectorAll('[data-fd="pl"]').length).toBe(1)
+    expect(document.querySelectorAll('[data-fd="pr"]').length).toBe(1)
+  })
+
+  it('⑭ 旧演出附件零残留：顶部进度条 / 步进行 / 飞入吸附类全部退役', () => {
+    render(<Landing />)
+    expect(document.querySelector('[data-fd="barfill"]')).toBeNull() // 顶部独立进度条
+    expect(document.querySelector('.lc-fd-steps')).toBeNull() // 底部步骤文字行
+    expect(document.querySelector('.fd-seg')).toBeNull() // 步进轨道线段
+    expect(document.querySelector('.lc-fd-src.fly')).toBeNull() // 源 chip 吸附引擎的飞行终态
+  })
+
+  it('⑮ 下载改纯 icon：无文字内容、可读名走 title，且长在译文 chip 内部（绝对定位不占布局流）', () => {
+    render(<Landing />)
+    const out = document.querySelector('.lc-fd-chip.lc-fd-out')
+    const dl = out?.querySelector('.lc-fd-dl') as HTMLButtonElement | null
+    expect(dl).toBeTruthy() // 下载 icon 必须长在译文 chip 里
+    expect(dl?.textContent?.trim()).toBe('') // 只留 icon，不带「下载」文字
+    expect(dl?.getAttribute('title')).toBe(t('land.fdStep4'))
+    expect(out?.querySelector('.lc-fd-dlzone')).toBeTruthy()
+  })
+})

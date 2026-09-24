@@ -105,6 +105,7 @@ export async function kbRecognizeFile(file: File, mergedName?: string, onProgres
 
 // ==================== ★ H5 大文件断点续传（分片上传） ====================
 
+// 分片大小常量：4MB/片，须小于服务端 8MB 上限；改这里要同步检查后端分片校验，否则整批上传被拒
 export const CHUNK_SIZE = 4 * 1024 * 1024 // 4MB/片（服务端上限 8MB）
 /** CHUNK_UPLOAD_MIN 分片上传阈值：文件 ≥4MB 自动走分片通道 */
 export const CHUNK_UPLOAD_MIN = 4 * 1024 * 1024

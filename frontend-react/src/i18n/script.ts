@@ -63,10 +63,12 @@ export const BCP47_BY_LANG: Record<Lang, string> = {
 /** RTL 语种（UI 语种里目前只有 ar；保留完整表以便以后加 he/fa 等直接生效） */
 export const RTL_LANGS: ReadonlySet<Lang> = new Set<Lang>(['ar'])
 
+/** 该语种是否从右向左排版（ar 等）：为真时文档根挂 dir=rtl，整套布局随之镜像翻转 */
 export function isRTL(lang: Lang): boolean {
   return RTL_LANGS.has(lang)
 }
 
+/** 语种 → 文字系统映射：排版与打字机动效按文字系统分档（词/字步进、速度档），不按语种逐个配置 */
 export function scriptOf(lang: Lang): Script {
   return LANG_SCRIPT[lang]
 }
@@ -128,10 +130,12 @@ export const TYPING_SPEED_MS: Record<Script, number> = {
   hangul: 60,
 }
 
+/** 打字机动效步进单位：拉丁系按「词」、汉字/泰文等按「字」——步进错了会让动效看起来忽快忽慢 */
 export function typingUnitOf(lang: Lang): 'word' | 'char' {
   return TYPING_UNIT[LANG_SCRIPT[lang]]
 }
 
+/** 打字机动效每步毫秒数：按文字系统给可读速度（如泰文有组合元音符号，过快会闪断） */
 export function typingSpeedOf(lang: Lang): number {
   return TYPING_SPEED_MS[LANG_SCRIPT[lang]]
 }

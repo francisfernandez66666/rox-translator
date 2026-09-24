@@ -110,19 +110,19 @@ import { LangSelect } from './components/LangSelect'
 // 替代原 tdesign-react 的 Button/Tag/Drawer —— 换肤期不再引 TDesign 组件。
 import { Badge, Button, Drawer, Icon } from '@/ui/langcross/src'
 
-// 页面加载中占位组件（★ D2 #24：旋转圈已换成落地页同源的「划掉错词→亮起正词」换词动效 + 提示文字；
-// ★ 2026-09-20 反馈③：minHeight 100dvh 撑满首屏，动效真正垂直居中而非挤在半高容器里），
+// 页面加载中占位组件（★ D2 #24：旋转圈已换成落地页同源的「划掉错词→亮起正词」换词动效；
+// ★ 2026-09-20 反馈③：minHeight 100dvh 撑满首屏，动效真正垂直居中而非挤在半高容器里；
+// ★ 2026-09-24 用户反馈：去掉「加载中」提示文字——换词动效本身就是加载语义，纯动效更干净，
+//   文字仅保留为 WordSwap 的 ariaLabel 供读屏），
 // 路由懒加载时展示；onBeat 只在冷启动闸门（会话恢复）传入，用于「演满 3 个语种再放行」
 // 用普通函数而非 React.memo：它只在 Suspense 解析期短暂挂载，没有可优化的重复渲染路径。
-// 标题走模块级 gt（而非 useT）：占位通常只活几百毫秒，不值得为它订阅语言变更；
-// 本组件是文件内私有（未 export），当前所有调用点都不传 label，即一律显示 app.loading。
+// 标题走模块级 gt（而非 useT）：占位通常只活几百毫秒，不值得为它订阅语言变更。
 function PageLoading({ label = gt('app.loading'), onBeat }: { label?: string; onBeat?: (done: number) => void } = {}) {
   return (
     // flex:1 + minHeight:100dvh 同时给：外层是 flex 列时用 100dvh 撑住；
-    // dvh（非 vh）是为了移动端地址栏收起/展开时不把动效顶偏。gap 20 让动效与文字不粘连。
-    <div style={{ flex: 1, minHeight: '100dvh', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
+    // dvh（非 vh）是为了移动端地址栏收起/展开时不把动效顶偏。
+    <div style={{ flex: 1, minHeight: '100dvh', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
       <WordSwap className="ws--lg" ariaLabel={label} onBeat={onBeat} />
-      <p style={{ fontSize: 18, color: 'var(--lc-text-2)' }}>{label}</p>
     </div>
   )
 }
