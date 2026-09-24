@@ -106,9 +106,10 @@ import { EmailBindModal } from './components/modals'
 import WordSwap, { useWordSwapGate } from './components/WordSwap'
 // ★ #23：12 语种界面语言下拉（顶栏/登录卡/后台共用）
 import { LangSelect } from './components/LangSelect'
-// LangCross 纯黑组件库：前台骨架只依赖这四个件（Button/Badge/Drawer/Icon），
+// LangCross 纯黑组件库：前台骨架只依赖这三个件（Button/Badge/Icon），
 // 替代原 tdesign-react 的 Button/Tag/Drawer —— 换肤期不再引 TDesign 组件。
-import { Badge, Button, Drawer, Icon } from '@/ui/langcross/src'
+// ★ 2026-09-24 〇-S（#7）：Drawer 随汉堡抽屉退役，本文件不再 import。
+import { Badge, Button, Icon } from '@/ui/langcross/src'
 
 // 页面加载中占位组件（★ D2 #24：旋转圈已换成落地页同源的「划掉错词→亮起正词」换词动效；
 // ★ 2026-09-20 反馈③：minHeight 100dvh 撑满首屏，动效真正垂直居中而非挤在半高容器里；
@@ -143,7 +144,7 @@ function FrontShell() {
   const [ctxNoEmail, setCtxNoEmail] = useState(false)
   const [isPersonal, setIsPersonal] = useState(true)
   const [kbUploadOpen, setKbUploadOpen] = useState(false)
-  const [menuOpen, setMenuOpen] = useState(false)
+  // ★ 2026-09-24 〇-S（#7）：menuOpen（汉堡抽屉开关）随抽屉一并退役，自助入口改走 AccountMenu 下拉
   // ★ 2026-09-22 载入闸门：后端探活撤销后，占位仍留到 WordSwap 演满 3 个语种拍次
   // 闸门放在 FrontShell 这一层：它只替换 .app-main 里的路由出口，顶栏照常渲染
   //   （用户看得见自己在哪个产品/能切语言），而路由内容在占位期间根本不挂载，两者不会同屏打架。
@@ -197,7 +198,10 @@ function FrontShell() {
     // 那条 html,body{background:#000}（★ #66）铺黑，否则切页瞬间会看到
     // 「灰字换词动效糊在白纸」的对比度反转。
     <Suspense fallback={<PageLoading />}>
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--npz-page-bg, #000000)' }}>
+    {/* ★ 2026-09-24 〇-S（#7）：minHeight:100vh → height:100dvh——页脚常驻外壳列尾后，
+        聊天区不能再按「视口-顶栏」自算高度（否则页脚被顶出首屏、永远滚不到），
+        改由本层把视口高度锁死、.app-main 内部消化滚动，页脚始终占住列底（元宝同款常驻底部口径）。 */}
+    <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', background: 'var(--npz-page-bg, #000000)' }}>
       {/* ★ D2 #24：appspin 旋转 keyframes 已随两处 spinner 退役（全站唯一消费点消失） */}
       {/* 前台自助区 + 顶栏的局部类：纯黑换肤后卡片/表格/抽屉一律走白字 + 描边令牌
           （#E7E9EA / var(--lc-border-faint)），.ss-ghost-btn（顶栏幽灵按钮）与 .app-tab
@@ -221,10 +225,8 @@ function FrontShell() {
         .ss-table{width:100%;border-collapse:collapse}
         .ss-table th,.ss-table td{border:1.2px solid var(--lc-border-faint);padding:6px 8px;text-align:start}
         .ss-table th{background:var(--npz-surface-2);color:#E7E9EA}
+        /* ★ 2026-09-24 〇-S（#7）：.ss-drawer-nav/.ss-drawer-item 随汉堡抽屉退役 */
         .ss-quick{display:flex;flex-wrap:wrap;gap:8px}
-        .ss-drawer-nav{display:flex;flex-direction:column;padding:8px 0;border-bottom:1px solid var(--lc-border-faint)}
-        .ss-drawer-item{padding:12px 16px;cursor:pointer;border-bottom:1px solid var(--lc-border-faint);font-size:17px;color:#E7E9EA}
-        .ss-drawer-item:hover{background:rgba(231,233,234,0.10)}
         .ss-loading{display:flex;justify-content:center;padding:40px}
         /* 顶栏控件字阶（★ 2026-09-22 还原 UI-ANNOTATIONS §2.2 真值）：幽灵按钮 14px/32 高、
            工作台 Tab 13px 胶囊（活跃=面 #16181C + 文字 #E7E9EA，即 --lc-raised/--lc-text）；
@@ -240,10 +242,10 @@ function FrontShell() {
           Bell / 主题 / 语言 / 账号菜单。原生 button + .ss-ghost-btn / .app-tab 成钮，
           图标一律 <Icon/>（文字按钮仍保留 i18n 取词，零 emoji）。 */}
       <header className="app-header">
-        {/* 「更多」抽屉入口：常驻按钮（theme.css/mobile.css 里没有隐藏它的规则，宽窄屏都在），
-            抽屉里装自助区入口与页脚。图标 18 与 §2.2 品牌 Logo 18×18 同档；
-            无文字故只有 aria-label，读屏按 t('app.openNav') 播报 */}
-        <button className="ss-ghost-btn" onClick={() => setMenuOpen(true)} aria-label={t('app.openNav')} style={{ fontSize: 18, padding: '0 8px' }}><Icon n="menu" style={{ verticalAlign: '-3px' }} /></button>
+        {/* ★ 2026-09-24 〇-S（#7）：左侧「更多」汉堡钮退役——用户拍板「右侧不是汉堡是下拉，
+            套餐/余额/账号并入右上角下拉、页脚回页脚位置」。抽屉四项自助入口迁 AccountMenu
+            （selfNav 传入即露出），SiteFooter 移到外壳列尾部常驻，本行不再有任何钮。
+            顶栏左缘直接是品牌位，与交付稿单汉堡口径分岔由用户后令覆盖。 */}
         <span className="brand">
           {/* 白标：租户配了 logo 就出图（alt 用品牌名），否则出「品牌名」前缀一枚 18 图标，
               品牌名缺省回落到 app.title（内置「能言」），不留空品牌位。
@@ -286,7 +288,10 @@ function FrontShell() {
             可切到「没有配色的亮色档」正是黑底黑字缺陷的来源（见 lib/theme.ts）。 */}
         {/* ★ #23：二元 EN 切换钮退役，换 12 语种 LangSelect 下拉（词表源 @/i18n LANG_OPTIONS） */}
         <LangSelect align="right" />
-        <AccountMenu showAdminConsole={roleLevelSafe(user?.role) >= 2} onGotoAdmin={() => navigate('/admin')} />
+        {/* ★ 〇-S（#7）：selfNav 让下拉露出「套餐/账单/账号」自助入口（原汉堡抽屉四项迁到这里），
+            邀请有礼仅个人用户可见（与 /invites 路由守卫同口径） */}
+        <AccountMenu showAdminConsole={roleLevelSafe(user?.role) >= 2} onGotoAdmin={() => navigate('/admin')}
+                     selfNav={(p) => navigate(p)} showInvites={isPersonal} />
       </header>
 
       {/* ★ E11：余额耗尽（billing_stopped 口径）常驻横幅——旧版仅深藏于自助面板
@@ -305,9 +310,12 @@ function FrontShell() {
           }}>{t('ss.gotoRecharge')}</Button>
         </div>
       )}
-      <div className="app-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        {/* minHeight:0 是 flex 列里的必需项：不给 0，子页面（聊天窗/工单表格）的固有高度会把
-            外壳顶出视口，页面内滚动变成整页滚动，顶栏 sticky 也跟着晃 */}
+      <div className="app-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflowY: 'auto' }}>
+        {/* ★ 2026-09-24 〇-S（#7）：补 overflowY:auto——外壳改 height:100dvh 后，
+            长页（工单/定价/自助面板）的整页滚动从这里接（此前靠文档滚动）；
+            短页/聊天页不受影响（聊天区自带内滚，见 ChatWindow cw-root）。
+            minHeight:0 是 flex 列里的必需项：不给 0，子页面的固有高度会把
+            外壳顶出视口，顶栏 sticky 也跟着晃 */}
         {bootGate.busy ? (
           // 后端冷启动占位（★ D2 #24）：spinner 换成与路由懒加载同一份 WordSwap 换词动效，
           // 纯黑页面上不再闪白，两处加载态共用唯一实现；
@@ -341,19 +349,11 @@ function FrontShell() {
         )}
       </div>
 
-      {/* 窄屏导航抽屉：LangCross Drawer 受控属性为 open / title（旧 TDesign 是
-          visible / header / size / footer），宽度与遮罩走组件库自身令牌。
-          顶栏汉堡钮只负责开，关交给 Drawer 自己（onClose 回落 false） */}
-      <Drawer open={menuOpen} onClose={() => setMenuOpen(false)} title={t('app.more')}>
-        <nav className="ss-drawer-nav">
-          {/* 抽屉项与前台路由一一对应；企业用户在此就过滤掉「邀请有礼」，与 /invites 守卫同口径，省得点了被弹回 */}
-          {[['/billing',t('app.navBilling')],['/invites',t('app.navInvites')],['/packages',t('app.navPackages')],['/my',t('app.navMy')]].filter(([p]) => p !== '/invites' || isPersonal).map(([p,l]) => (
-            // 用 div+onClick 而非 <a>：走 SPA navigate 不刷页；点完必须同时收抽屉，否则遮罩挡住新页面
-            <div key={p} className="ss-drawer-item" onClick={() => { navigate(p); setMenuOpen(false) }}>{l}</div>
-          ))}
-        </nav>
-        <SiteFooter />
-      </Drawer>
+      {/* ★ 2026-09-24 〇-S（#7）：页脚回页脚位置（参考元宝的底部常驻口径）——
+          原先只藏在汉堡抽屉里，抽屉退役后挂在外壳 flex 列尾部；
+          SiteFooter 自带 marginTop:auto，内容不足一屏时也贴列底不半途悬着。
+          懒加载件由最外层 Suspense（PageLoading 兜底）接管，首帧不会闪挂。 */}
+      <SiteFooter />
 
       {/* KbUploadDialog 是本项目自有弹窗，受控属性仍是历史的 visible（LangCross Drawer 才改叫 open） */}
       {canUploadKb && <KbUploadDialog visible={kbUploadOpen} onClose={() => setKbUploadOpen(false)} />}

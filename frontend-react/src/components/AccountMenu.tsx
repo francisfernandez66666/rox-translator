@@ -26,10 +26,15 @@ interface Props {
   showWorkbench?: boolean
   /** 后台点击「返回工作台」的回调 */
   onGotoWorkbench?: () => void
+  /** ★ 2026-09-24 〇-S（#7）前台专用：传入即在下拉露出「套餐/账单/账号」自助入口。
+   *  原左侧汉堡抽屉退役，抽屉里的四个路由入口迁到这里（回调只给 path，跳转由外壳 navigate 做） */
+  selfNav?: (path: string) => void
+  /** 邀请有礼入口仅个人用户可见（与 /invites 路由守卫同口径，企业用户点了会被弹回） */
+  showInvites?: boolean
 }
 
-/** 右上角账号菜单组件：进入后台、改密、换绑邮箱、注销与退出登录（前台与后台共用） */
-export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkbench, onGotoWorkbench }: Props) {
+/** 右上角账号菜单组件：进入后台、自助入口（套餐/账单/账号）、改密、换绑邮箱、注销与退出登录（前台与后台共用） */
+export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkbench, onGotoWorkbench, selfNav, showInvites }: Props) {
   const { user, logout } = useAuth()
   const { toast } = useToast()
   const [, t] = useT() // ★ E14：lang 未使用
@@ -68,6 +73,14 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
     ...(showWorkbench ? [{ content: <><Icon n="chat" style={MI} />{t('menu.backWorkbench')}</>, value: 'workbench', onClick: () => onGotoWorkbench?.() }] : []),
     // 前台专用：跳转后台管理控制台
     ...(showAdminConsole ? [{ content: <><Icon n="wrench" style={MI} />{t('menu.adminConsole')}</>, value: 'admin', onClick: () => onGotoAdmin?.() }] : []),
+    // ★ 2026-09-24 〇-S（#7）：原汉堡抽屉四入口并入本下拉（selfNav 传入才露出，后台侧不露）；
+    //   取词复用 app.nav* 键（12 语种已全量），图标走组件库现成档：套餐=package 账单=card 账号=gear 邀请=chain
+    ...(selfNav ? [
+      { content: <><Icon n="package" style={MI} />{t('app.navPackages')}</>, value: 'nav-packages', onClick: () => selfNav('/packages') },
+      { content: <><Icon n="card" style={MI} />{t('app.navBilling')}</>, value: 'nav-billing', onClick: () => selfNav('/billing') },
+      ...(showInvites ? [{ content: <><Icon n="chain" style={MI} />{t('app.navInvites')}</>, value: 'nav-invites', onClick: () => selfNav('/invites') }] : []),
+      { content: <><Icon n="gear" style={MI} />{t('app.navMy')}</>, value: 'nav-my', onClick: () => selfNav('/my') },
+    ] : []),
     // 修改密码：打开邮箱验证码 + 新密码弹窗
     { content: <><Icon n="lock" style={MI} />{t('pwd.title')}</>, value: 'pwd', onClick: () => setOpenPwd(true) },
     // 换绑邮箱：打开绑定/换绑邮箱弹窗
