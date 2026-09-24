@@ -127,7 +127,10 @@ function WordSwap({ pairs = DEFAULT_PAIRS, className = '', ariaLabel, onBeat }: 
     let gen = 0 // 代际计数器：effect 重跑/卸载即 ++gen，各 await 后比对失败立刻弃演
     //   （sleep 无法被 clearTimeout，只能靠「醒来后发现自己已过气」退出，这是本组件唯一的终止手段）
     let played = 0 // 本次挂载已完整演完（含定版停留）的拍数，供载入闸门判定
-    const sleep = (ms: number) => new Promise<void>((res) => window.setTimeout(res, ms))
+    // ★ 2026-09-24（#7 批）：window.setTimeout → 裸 setTimeout——vitest 拆 jsdom 环境后
+    //   `window` 标识符直接 ReferenceError，演出链若恰好在销毁后才醒来排下一拍，
+    //   会炸出一个「Unhandled Rejection」把整轮 npm test 顶红（浏览器里两者本就是同一函数，行为无差）。
+    const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms))
     // 逐字打字：每字在 speed 之上再加 0~50% 随机延时（等速间隔一眼机械感），
     // 每写一个字先验一次 g===gen，卸载后不会有半个字符落到 DOM 上
     const type = async (node: HTMLElement, text: string, speed: number, g: number) => {
@@ -178,7 +181,7 @@ function WordSwap({ pairs = DEFAULT_PAIRS, className = '', ariaLabel, onBeat }: 
         }
       }
     }
-    play()
+    play().catch(() => { /* 环境销毁/节点失联等残余异步噪声静默吞掉：演出是纯装饰，不值得冒未处理拒绝红灯 */ })
     return () => { gen++ } // 不做 DOM 清理：节点随组件卸载一起消失，演出链靠 gen 自灭
   }, [pairs])
 

@@ -250,14 +250,15 @@ export default function ChatWindow() {
     : chat.messages
 
   return (
-    /* 外层高度 = 视口减去页眉（即时翻译页无页脚，SiteFooter 只在抽屉内渲染）；
-       39 = 顶栏 38 + 1px 下边框（★ 2026-09-22 还原 UI-ANNOTATIONS §2.2 顶栏真值高 38；
-       旧值 57 是 10px 上下内边距时代的实测耦合值，勿凭手感回调——顶栏改尺寸时此处必须同步）。
-       minHeight:0 必须显式给：flex 列里的滚动子项默认 min-height:auto，
-       不置 0 则内部 overflow 永不生效（整页滚而非框内滚）。
+    /* ★ 2026-09-24 〇-S（#7）：高度口径从「视口-顶栏 39px 自算」改为 flex:1 吃满 .app-main——
+       汉堡抽屉退役后 SiteFooter 常驻外壳列尾，视口里除了顶栏还有一行页脚，
+       任何写死的 calc(100vh - 39px) 都会把页脚顶出首屏（永远滚不到）。
+       外壳（App.tsx FrontShell）已改 height:100dvh + .app-main overflowY:auto，
+       本页 flex:1 + minHeight:0 即精确占满剩余空间，消息列表内滚、输入区与页脚常驻可见。
+       （旧注释留档：39 = 顶栏 38 + 1px 下边框，UI-ANNOTATIONS §2.2 顶栏真值高 38。）
        background:#000 与 theme.css 的 html,body 底色同值：懒加载占位/回弹露出的底色
        必须与本页一致，否则切页瞬间会闪一块异色（#66 换词动效糊白底那次的成因）。 */
-    <div className="cw-root" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 39px)', minHeight: 0, background: '#000' }}>
+    <div className="cw-root" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: '#000' }}>
       <style>{CW_CSS}</style>
       {/* 离线横幅：琥珀薄底 + 语义色文字（交付包里唯一的非单色告警档），
           不用红色——后端不可达多是网络抖动/发版窗口，属「待恢复」而非「用户出错」。

@@ -114,11 +114,23 @@ export function getActiveTenantId(): number {
   return activeTenantId
 }
 
-/** 组装认证请求头（Authorization Bearer + X-Tenant-ID 租户头） */
+/** 读取界面语言（★ 〇-S #12 后端语言识别）：直接读 localStorage 的 app_lang，
+ *  不 import i18n 模块——api 层的 node 环境单测没有 window，且语种键是稳定契约。
+ *  读不到/异常返回空串（请求头不带，后端按 Accept-Language→默认中文降级）。 */
+export function currentUiLang(): string {
+  try {
+    return typeof localStorage === 'undefined' ? '' : (localStorage.getItem('app_lang') || '')
+  } catch { return '' }
+}
+
+/** 组装认证请求头（Authorization Bearer + X-Tenant-ID 租户头 + X-App-Lang 界面语种） */
 export function authHeaders(): Record<string, string> {
   const h: Record<string, string> = {}
   if (authToken) h['Authorization'] = `Bearer ${authToken}`
   if (activeTenantId > 0) h['X-Tenant-ID'] = String(activeTenantId)
+  // ★ 2026-09-24 〇-S #12：让后端提示语按用户界面语言返回（zh 系/英文/其余翻英，后端归一）
+  const lang = currentUiLang()
+  if (lang) h['X-App-Lang'] = lang
   return h
 }
 

@@ -44,6 +44,22 @@ describe('api/core', () => {
     expect(h['X-Tenant-ID']).toBe('42')
   })
 
+  // ★ 2026-09-24 〇-S #12 后端语言识别：X-App-Lang 直读 localStorage.app_lang（不 import i18n），
+  // 无语种时不带头——后端按 Accept-Language→默认中文降级，存量请求零变化。
+  it('authHeaders：X-App-Lang 随 app_lang 附带，无值不带头', () => {
+    const lmem = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => lmem.get(k) ?? null,
+      setItem: (k: string, v: string) => { lmem.set(k, v) },
+      removeItem: (k: string) => { lmem.delete(k) },
+    })
+    expect(core.authHeaders()['X-App-Lang']).toBeUndefined()
+    lmem.set('app_lang', 'en')
+    expect(core.authHeaders()['X-App-Lang']).toBe('en')
+    lmem.set('app_lang', 'ja')
+    expect(core.currentUiLang()).toBe('ja')
+  })
+
   it('E4：调用方自带 headers 不再吞掉 Content-Type/认证头（合并在展开之后）', async () => {
     let seen: Record<string, string> | undefined
     vi.stubGlobal('fetch', async (_u: string, init: RequestInit) => {

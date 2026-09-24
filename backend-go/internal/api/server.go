@@ -544,10 +544,13 @@ func (s *Server) routesOpenAPI() {
 	s.mux.HandleFunc("/openapi/docs", s.handleOpenAPIDocs)
 }
 
-// Handler 返回完整的 http.Handler（依次包裹版本/指标/租户/CORS 中间件）。
+// Handler 返回完整的 http.Handler（依次包裹语言/版本/指标/租户/CORS 中间件）。
 // 返回: 可交给 http.ListenAndServe 使用的 http.Handler。
+// ★ withLang 放最外层：它缓存的是最终写出的响应体，必须包住内层所有中间件与业务
+//
+//	handler 的写入才能统一改写 message 字段（非英文请求直接透传，零开销）。
 func (s *Server) Handler() http.Handler {
-	return s.withAPIVersion(s.withTraceID(s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.withAccessLog(s.mux)))))))
+	return s.withLang(s.withAPIVersion(s.withTraceID(s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.withAccessLog(s.mux))))))))
 }
 
 // apiVersionKey ctx 存取键：当前请求命中的 API 版本（默认 v1）。
@@ -693,7 +696,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 请求方法/头（含租户切换与后台 Token 头）
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-ID, X-Admin-Token")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-ID, X-Admin-Token, X-App-Lang")
 		// 来源校验：无 Origin 头（同源导航/非浏览器）直接放行。
 		// ★ /openapi/* 前缀无条件反射（评审整改 A2）：开放 API 全部为 Key 鉴权、
 		//   无 Cookie 会话面，CSRF 不成立——放行跨域以支持浏览器划词插件等第三方前端
