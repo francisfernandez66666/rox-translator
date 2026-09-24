@@ -283,7 +283,7 @@ export function KbP() {
     if (!grantPkg || !uid) return
     const r = await kbPackGrantSet({ pack_id: Number(grantPkg.id), user_id: uid, role })
     if (!r.success) { toastError(r.message); return }
-    toastSuccess(role ? '授权已更新' : '已撤销授权')
+    toastSuccess(role ? t('kb.grantUpdated') : t('kb.grantRevoked'))
     const rr = await kbPackGrants(Number(grantPkg.id))
     setGrantList(rr.success ? ((rr as Any).grants || []) : [])
   }
@@ -397,7 +397,7 @@ export function KbP() {
       setBitextOk(!!r.success)
       setBitextMsg(r.success
         ? `${t('kb.bitextDone')} +${((r as unknown as { added?: number }).added) ?? 0} / ${t('kb.bitextSkipped')} ${((r as unknown as { skipped?: number }).skipped) ?? 0}`
-        : (r.message || '导入失败'))
+        : (r.message || t('common.importFail')))
       if (r.success) { setBitextFile(null) }
     } finally { setBitextImporting(false) }
   }
@@ -410,7 +410,7 @@ export function KbP() {
       setTmxOk(!!r.success)
       setTmxMsg(r.success
         ? `${tpl('kb.tmxTus', { n: ((r as unknown as { tus?: number }).tus) ?? 0 })} · ${t('kb.bitextDone')} +${((r as unknown as { added?: number }).added) ?? 0} / ${t('kb.bitextSkipped')} ${((r as unknown as { skipped?: number }).skipped) ?? 0}`
-        : (r.message || '导入失败'))
+        : (r.message || t('common.importFail')))
       if (r.success) { setTmxFile(null) }
     } finally { setTmxImporting(false) }
   }
@@ -477,9 +477,9 @@ export function KbP() {
           注：tab 文案原带 emoji 前缀，2026-09-18 emoji 清理后残留一个前导空格（未影响功能）。 */}
       <Tabs activeKey={kbTab} onChange={(k) => setKbTab(k)} items={[
         { key: 'kb', label: t('kb.title') },
-        ...(isSuper ? [{ key: 'industries', label: '行业管理' }] : []),
+        ...(isSuper ? [{ key: 'industries', label: t('kb.tabIndustries') }] : []),
         ...(isSuper ? [{ key: 'personas', label: t('persona.tab') }] : []),
-        { key: 'brand', label: '品牌名' },
+        { key: 'brand', label: t('kb.tabBrand') },
         ...(isSuper ? [{ key: 'scrape', label: t('admin.menuDataSources') }] : []),
       ]} />
       {/* ===== kb 主 tab：知识包 / 条目 / 安全句 ===== */}
@@ -565,7 +565,7 @@ export function KbP() {
         { key: 'name', title: t('kb.namePlaceholder'), width: 160, render: (row) => packDisplayName(row, orgMap) },
         { key: 'pack_type', title: t('kb.colType'), width: 130, render: (row) => packTypeLabel(row, t) },
         { key: 'scope', title: t('kb.colScope'), width: 180, render: (row) => packScopeLabel(row, t, tpl) },
-        { key: 'enabled', title: '启用', width: 80, render: (row) =>
+        { key: 'enabled', title: t('common.active'), width: 80, render: (row) =>
           <Switch checked={row.enabled !== 0} onChange={() => { void togglePackage(row) }} /> },
         { key: 'share_cross_dept', title: t('kb.colCross'), width: 110, render: (row) =>
           row.pack_type === 'department'
@@ -574,7 +574,7 @@ export function KbP() {
         { key: 'op', title: t('org.colActions'), width: 200, render: (row) => (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <Link onClick={() => openEntries(row)}>{tpl('kb.viewEntries', { count: entriesMap[Number(row.id)] || 0 })}</Link>
-            <Link onClick={() => void openGrants(row)}>授权</Link>
+            <Link onClick={() => void openGrants(row)}>{t('kb.grantLink')}</Link>
             <Link tone="danger" onClick={() => void removePackage(row)}>{t('kb.deletePackage')}</Link>
           </div>
         ) },
@@ -728,31 +728,31 @@ export function KbP() {
 
       {/* 包授权弹窗：读/写/管理三级成员列表 + 添加授权（仅包管理者可见入口） */}
       <Dialog open={grantPkg !== null} onCancel={() => setGrantPkg(null)}
-        title={`包级授权 · ${grantPkg ? String(grantPkg.name) : ''}`}
+        title={tpl('kb.grantDialogTitle', { name: grantPkg ? String(grantPkg.name) : '' })}
         confirmText={t('common.close')} onConfirm={() => setGrantPkg(null)}>
         <div style={rowStyle}>
           <select className="lc-select" value={gForm.user_id == null ? '' : String(gForm.user_id)} onChange={(e) => setGForm({ ...gForm, user_id: e.target.value ? Number(e.target.value) : null })}
             style={{ width: 260 }}>
-            <option value="">选择用户</option>
+            <option value="">{t('kb.selectUser')}</option>
             {grantUsers.map((u: Any) => <option key={Number(u.id)} value={String(Number(u.id))}>{`${u.display_name || u.username}（${u.username}）`}</option>)}
           </select>
           <select className="lc-select" value={String(gForm.role)} onChange={(e) => setGForm({ ...gForm, role: String(e.target.value) })} style={{ width: 130 }}>
-            <option value="read">只读 read</option>
-            <option value="write">编辑 write</option>
-            <option value="manage">管理 manage</option>
+            <option value="read">{t('kb.roleRead')} read</option>
+            <option value="write">{t('kb.roleWrite')} write</option>
+            <option value="manage">{t('kb.roleManage')} manage</option>
           </select>
-          <Button variant="primary" size="sm" onClick={() => void setGrant(String(gForm.role))}>授权</Button>
-          <span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>读 &lt; 写 &lt; 管理（高级别含低级别）；部门管理员及以上天然拥有全部权限</span>
+          <Button variant="primary" size="sm" onClick={() => void setGrant(String(gForm.role))}>{t('kb.grantLink')}</Button>
+          <span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{t('kb.grantHint')}</span>
         </div>
         {/* 数据表格 */}
         <div style={{ marginTop: 10 }}>
         <DataTable<any> rowKey={(row) => String(row.id)} rows={grantList} columns={[
-          { key: 'username', title: '用户', render: (row) => `${row.display_name || row.username || '#' + row.user_id}` },
-          { key: 'role', title: '级别', width: 110, render: (row) =>
+          { key: 'username', title: t('kb.grantColUser'), render: (row) => `${row.display_name || row.username || '#' + row.user_id}` },
+          { key: 'role', title: t('kb.grantColLevel'), width: 110, render: (row) =>
             <StatusPill tone={row.role === 'manage' ? 'warn' : 'idle'}>{row.role}</StatusPill> },
-          { key: 'created_at', title: '时间', width: 160, render: (row) => String(row.created_at || '').slice(0, 16) },
-          { key: 'op', title: '操作', width: 80, render: (row) => (
-            <Link tone="danger" onClick={() => void setGrant('', Number(row.user_id))}>撤销</Link>) },
+          { key: 'created_at', title: t('kb.grantColTime'), width: 160, render: (row) => String(row.created_at || '').slice(0, 16) },
+          { key: 'op', title: t('common.operations'), width: 80, render: (row) => (
+            <Link tone="danger" onClick={() => void setGrant('', Number(row.user_id))}>{t('kb.grantRevoke')}</Link>) },
         ]} />
         </div>
       </Dialog>

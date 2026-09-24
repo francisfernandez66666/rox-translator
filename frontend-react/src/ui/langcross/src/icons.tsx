@@ -93,12 +93,16 @@ export function CaretDownIcon(props: IconProps) {
  * 用途：替换 UI-ANNOTATIONS.md 切图里的 emoji 图标占位（§0.1）
  * ------------------------------------------------------------------ */
 
-/** 品牌圆点（实心，logo mark） */
+/** 品牌标识（★ 2026-09-24 全站 logo 统一）：图形逐字取自首页落地页顶栏的
+ *  「白色 30×30 圆角块 + 两笔一实一虚笔画」（Landing.tsx 同源），按交付真值原样保留
+ *  #FFFFFF/#000 固定色（笔画黑是白块内的图形，不随 currentColor —— 与旧圆点语义不同）。
+ *  viewBox 覆盖 base 的 16 格画布，尺寸仍由 size 等比控制。 */
 export function BrandDotIcon(props: IconProps) {
   return (
-    <svg {...base(props)}>
-      <circle cx="8"cy="8"r="4.4"fill="currentColor"/>
-      <circle cx="8"cy="8"r="7.2"stroke="currentColor"strokeWidth={1.6} />
+    <svg {...base(props)}viewBox="0 0 30 30">
+      <rect width="30"height="30"rx="8"fill="#FFFFFF"/>
+      <path d="M9.5 10.5v5.2a4.3 4.3 0 0 0 8.6 0V12"stroke="#000"strokeWidth="2.4"fill="none"strokeLinecap="round"/>
+      <path d="M20.5 19.5v-5.2a4.3 4.3 0 0 0-8.6 0V18"stroke="#000"strokeWidth="2.4"fill="none"strokeLinecap="round"opacity=".45"/>
     </svg>
   );
 }

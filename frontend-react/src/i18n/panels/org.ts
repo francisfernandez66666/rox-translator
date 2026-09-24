@@ -82,6 +82,9 @@ export const zh: Record<string, string> = {
   'org.nameRequired': '请输入组织名称',
   'org.renamePrompt': '重命名「{name}」为：',
   'org.deleteConfirm': '确认删除组织「{name}」？其子孙组织将上移，组织下用户将回收至上级组织。',
+  'org.moveSuccess': '已移动',
+  'org.moveTitle': '移动组织',
+  'org.moveTo': '移动到',
 }
 
 // 英文字典（与上方 zh 同键一一对应）
@@ -164,4 +167,7 @@ export const en: Record<string, string> = {
   'org.nameRequired': 'Enter an org name',
   'org.renamePrompt': 'Rename "{name}" to:',
   'org.deleteConfirm': 'Delete org "{name}"? Its sub-orgs will move up and its users will be moved back to the root org.',
+  'org.moveSuccess': 'Moved',
+  'org.moveTitle': 'Move organization',
+  'org.moveTo': 'Move to',
 }

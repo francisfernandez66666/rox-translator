@@ -23,6 +23,7 @@ import { useEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { create } from 'zustand'
 import { API_BASE } from '@/api'
+import { tpl, useLang } from '@/i18n' // ★ 2026-09-24：标题后缀按界面语言取词
 
 // BrandLink 品牌页脚/导航链接条目：含中英文标签与跳转地址
 export interface BrandLink {
@@ -163,6 +164,7 @@ export function BrandingProvider({ tenantId, children }: { tenantId?: number; ch
   // 首屏品牌初值：优先使用服务端注入（无闪烁），否则回退 DEFAULT；写入 zustand 单一状态源
   const initial = useMemo(() => brandingFromGlobal(), [])
   const b = useBrandingStore()
+  const lang = useLang() // 界面语言（标题取词用；切语言即时重算 document.title）
   const setB = (v: Branding) => useBrandingStore.setState(v)
   void b
   // 解析优先级：显式 tenantId（超管预览）> 按访问域名（后端按 Host 解析，根域名=平台品牌）
@@ -196,10 +198,25 @@ export function BrandingProvider({ tenantId, children }: { tenantId?: number; ch
     return () => { alive = false }
   }, [effectiveTenantId])
   // 网页标题随「租户品牌 / 租户名称」定制；全局根域名（未解析到具体租户）回退为平台名「能言 LangCross」
+  // ★ 2026-09-24 后台去写死中文：「智能翻译平台」后缀不再硬编码，走 app.brandTitle 键按界面语言取词；
+  //   lang 进依赖，切语言即时刷新标题（此前只随品牌数据变化）
   useEffect(() => {
     const name = b.brandName || b.tenantName
-    document.title = name ? `${name} 智能翻译平台` : DEFAULT_BRAND_NAME
-  }, [b])
+    document.title = name ? tpl('app.brandTitle', { name }) : DEFAULT_BRAND_NAME
+  }, [b, lang])
+  // ★ 2026-09-24 全站 logo 统一（#8）：favicon 跟随品牌解析结果——
+  //   有独立品牌 Logo 的租户（brandLogo 非空，base64 或 URL）用自家 Logo；
+  //   平台根域名与未配置 Logo 的租户用 /logo.svg（首页顶栏标识同源）。
+  //   index.html 已默认挂 /logo.svg，这里只在 brandLogo 变化时改写 link 节点。
+  useEffect(() => {
+    let link = document.querySelector<HTMLLinkElement>("link[rel~='icon']")
+    if (!link) {
+      link = document.createElement('link')
+      link.rel = 'icon'
+      document.head.appendChild(link)
+    }
+    link.href = b.brandLogo || '/logo.svg'
+  }, [b.brandLogo])
   // 注入工作台/聊天气泡配色（ChatWindow、MessageBubble 等引用的 CSS 变量）。
   // 品牌数据暂无独立主色字段，统一以平台主色派生，避免与 TDesign 令牌冲突；
   // 组件卸载时清除，避免多租户间变量泄漏。

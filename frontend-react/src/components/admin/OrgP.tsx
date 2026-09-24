@@ -209,7 +209,7 @@ export function OrgP() {
       setNu({ username: '', password: '', display_name: '', role: 'user' })
       await loadAll()
     } catch (e) { // ★ E10：创建用户网络错误可见（旧实现 try/finally 静默）
-      toastError(e instanceof Error ? e.message : '创建失败')
+      toastError(e instanceof Error ? e.message : t('common.createFail'))
     } finally { setCreating(false) }
   }
 
@@ -225,7 +225,7 @@ export function OrgP() {
       setImportFile(null)
       await loadAll()
     } catch (e) { // ★ E10
-      toastError(e instanceof Error ? e.message : '导入失败')
+      toastError(e instanceof Error ? e.message : t('common.importFail'))
     } finally { setImporting(false) }
   }
 
@@ -367,7 +367,7 @@ export function OrgP() {
   async function doMove() {
     if (!moveDlg) return
     const r: any = await orgMove(moveDlg.node.id, moveParent)
-    if (toastResp(r, '已移动')) { setMoveDlg(null); await loadAll() }
+    if (toastResp(r, t('org.moveSuccess'))) { setMoveDlg(null); await loadAll() }
   }
 
   // 建号区标题：当前归属组织名（0=根/平台）
@@ -588,9 +588,9 @@ export function OrgP() {
         )}
       </Dialog>
 
-      <Dialog open={!!moveDlg} onCancel={() => setMoveDlg(null)} title="移动组织" onConfirm={doMove}>
+      <Dialog open={!!moveDlg} onCancel={() => setMoveDlg(null)} title={t('org.moveTitle')} onConfirm={doMove}>
         {moveDlg && (
-          <Field label="移动到">
+          <Field label={t('org.moveTo')}>
             <select className="lc-select" value={String(moveParent)} onChange={(e) => setMoveParent(Number(e.target.value))}>
               <option value="0">{t('org.rootOption')}</option>
               {flatTree.filter((o) => o.id !== moveDlg.node.id).map((o) => <option key={o.id} value={String(o.id)}>{`#${o.id} ${o.name}`}</option>)}

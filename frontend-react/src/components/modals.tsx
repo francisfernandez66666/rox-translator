@@ -13,10 +13,10 @@ import {
   meEmailCode, updateEmail, deactivateAccount,
 } from '@/api'
 import { registerPersonas, setMyJobRole } from '@/api/persona'
-import { PERSONA_FALLBACK } from '@/lib/personas'
+import { PERSONA_FALLBACK, personaName } from '@/lib/personas'
 import { useCountdown } from '@/lib/useCountdown'
 import type { ChatMessage } from '@/types'
-import { t, tpl } from '@/i18n'
+import { t, tpl, useLang } from '@/i18n'
 import { useAuth } from '@/stores/auth'
 
 // ============ 本文件职责中文说明 ============
@@ -66,7 +66,7 @@ export function FeedbackModal(props: { target: FeedbackTarget; onClose: () => vo
       if (r.success) { toast({ title: t('fb.done'), tone: 'success' }); props.onClose() }
       else toast({ title: r.message || t('fb.fail'), tone: 'error' })
     } catch (e) { // ★ E10：异常必须可见（旧实现 try/finally，网络错误静默）
-      toast({ title: e instanceof Error ? e.message : '提交失败', tone: 'error' })
+      toast({ title: e instanceof Error ? e.message : t('common.submitFail'), tone: 'error' })
     } finally { setSubmitting(false) }
   }
 
@@ -340,6 +340,7 @@ export function FeedbackModalFromMessage(props: { message: ChatMessage; onClose:
 // 清空即回落通用翻译。选项动态取后端角色字典（租户0 persona 包），接口失败落本地兜底词库。
 export function JobRoleModal(props: { current: string; onClose: () => void; onSaved?: (code: string) => void }) {
   const { toast } = useToast()
+  const lang = useLang() // ★ 2026-09-24：内置角色名按界面语言本地化
   const [list, setList] = useState<Array<{ code: string; name: string }>>(PERSONA_FALLBACK)
   const [sel, setSel] = useState(props.current)
   const [saving, setSaving] = useState(false)
@@ -380,7 +381,7 @@ export function JobRoleModal(props: { current: string; onClose: () => void; onSa
         <select className="lc-input" value={sel} disabled={saving}
                 aria-label={t('role.title')} onChange={(e) => setSel(e.target.value)}>
           <option value="">{t('role.none')}</option>
-          {list.map((x) => <option key={x.code} value={x.code}>{x.name}</option>)}
+          {list.map((x) => <option key={x.code} value={x.code}>{personaName(x.code, x.name, lang)}</option>)}
         </select>
       </div>
     </Dialog>

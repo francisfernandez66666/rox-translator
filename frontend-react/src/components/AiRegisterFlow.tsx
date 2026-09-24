@@ -7,12 +7,17 @@
 //   ⑤ 管理员提交后追加品牌固定译名预配 chips ⑥ 检查点三连 + 完成摘要卡
 // 支持「← 上一步」（首步隐藏、完成后禁用）；尊重 prefers-reduced-motion；generation 计数器防竞态。
 // 业务逻辑复用 @/api 的 authRegister / login / sendEmailCode，仅重写呈现与交互。
+// ★ 2026-09-24 发码 403 生产事故修复：本面板此前完全不接人机验证（Turnstile），
+//   后台开启后「发送验证码/提交注册」必吃 403 且异常未捕获，表现为「点了没反应」——
+//   现由 captcha 入参接管：表单块内挂验证组件、token 一请求一消费、失败显式 toast。
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { authRegister, login, sendEmailCode, setAuthToken, setActiveTenantId, type AuthUser } from '@/api'
 import { registerPersonas } from '@/api/persona'
-import { PERSONA_FALLBACK } from '@/lib/personas'
-import { useT, getLang } from '@/i18n'
+import { PERSONA_FALLBACK, personaName } from '@/lib/personas'
+import { toastError } from '@/lib/toastBus'
+import { loadTurnstile, renderTurnstile, reexecTurnstile } from '@/lib/turnstile'
+import { useT, getLang, tpl } from '@/i18n'
 import { typingUnitOf, chatTypingMs } from '@/i18n/script' // ★ 〇-Q：聊天打字单元/速度按文字系统分档
 import { useBranding } from '@/branding'
 
@@ -74,11 +79,14 @@ const INDUSTRIES = [
 /**
  * AiRegisterFlow 入参：
  * prefillUsername 登录页已输入的用户名（带入但不锁）；dedicatedRegister 品牌专属域名入口
- * （跳过问答直落企业员工分支）；onDone 注册并自动登录成功后进工作台；onClose 退回传统表单。
+ * （跳过问答直落企业员工分支）；captcha 人机验证配置（登录页 register-config 下发，
+ * ★ 2026-09-24 起必传口径——缺省视为关闭，与后端 captcha_provider=none 同义）；
+ * onDone 注册并自动登录成功后进工作台；onClose 退回传统表单。
  */
 interface Props {
   prefillUsername: string
   dedicatedRegister: boolean
+  captcha?: { enabled: boolean; siteKey: string }
   onDone: (u: AuthUser) => void
   onClose: () => void
 }
@@ -88,8 +96,8 @@ interface Props {
  * 用问答 + 一个必要表单替用户跑完注册，最后调 authRegister/login 两个真实接口。
  * 步骤是命令式「渲染函数」组成的栈（stepStack），上一步靠截断消息重放，而不是路由或状态机库。
  */
-export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onDone, onClose }: Props) {
-  const [, t] = useT()
+export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, captcha, onDone, onClose }: Props) {
+  const [lang, t] = useT()
   const branding = useBranding()
   const reduced = usePrefersReducedMotion()
   const chatRef = useRef<HTMLDivElement>(null) // 聊天滚动容器：每次追加消息都要手动贴底
@@ -116,6 +124,29 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
   const usernameBrought = prefillUsername.trim().length > 0
   const codeSentRef = useRef(false) // 已发码标记：用 ref 是因为它只影响按钮文案，不该触发整条聊天流重渲染
   const loggedUserRef = useRef<AuthUser | null>(null) // 注册后自动登录拿到的 user，留到「进入工作台」按钮再用
+
+  // ---- 人机验证接线（★ 2026-09-24 发码 403 修复）----
+  // 旧实现本面板根本不挂 Turnstile：后台开启人机验证后，发码与提交注册的请求都以裸 token 出网，
+  // 服务端 siteverify 必判失败回 403，再被 api/core 的 403 统一文案误写成「无管理权限」——即用户看到的「没反应」。
+  const captchaOn = !!captcha?.enabled && !!captcha.siteKey
+  const tsIdRef = useRef<string | number | null>(null) // 本面板自己的 widget id
+  const tsTokenRef = useRef('') // 组件回调写入的最新一次性 token
+  // token 一次一用：任一请求（发码/提交）把它带出后立刻作废 → 清空并强制重新挑战领新码，
+  // 绝不允许「发码用掉的码又被提交注册复用」
+  const takeCaptchaToken = useCallback(() => {
+    const tk = tsTokenRef.current
+    tsTokenRef.current = ''
+    reexecTurnstile(tsIdRef.current)
+    return tk
+  }, [])
+  // 表单块渲染出容器后回调挂载组件（装载脚本收敛在 lib/turnstile：与传统表单共用、只注入一次）
+  const attachTs = useCallback((el: HTMLDivElement | null) => {
+    if (!el || tsIdRef.current !== null || !captchaOn) return
+    loadTurnstile(() => {
+      const id = renderTurnstile(el, captcha?.siteKey || '', (tk) => { tsTokenRef.current = tk })
+      if (id !== null) tsIdRef.current = id
+    })
+  }, [captchaOn, captcha?.siteKey])
 
   // 步骤栈：每步记录其起始消息 id，返回时截断并重放（对齐 demo 的 stepRender）
   const stepStack = useRef<{ idx: number; total: number | null; name: string; startId: number; render: (my: number) => void }[]>([])
@@ -182,7 +213,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
     const startId = idRef.current + 1 // 本步第一条消息的 id：goBack 时按它截断
     stepStack.current.push({ idx, total, name, startId, render })
     setMsgs((s) => s.filter((m) => m.id < startId))
-    setStepLabel(total ? `第 ${idx} / ${total} 步 · ${name}` : `第 ${idx} 步 · ${name}`)
+    setStepLabel(total ? tpl('auth.aiStepOf', { idx, total, name }) : tpl('auth.aiStepOnly', { idx, name }))
     // 总步数要等分支问完才确定（个人 3 步 / 员工 4 步 / 管理员 5 步）：
     // total 为 null 时按「已答步数 + 预估 2 步」给进度，别让它停在 0 看着像没动
     setTrackPct(total ? (idx / total) * 100 : (idx / (idx + 2)) * 100)
@@ -251,12 +282,12 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
       if (!ok || !alive(my)) return
       addMsg({
         side: 'ai', opts: [
-          ...personaList.map((x) => ({ t: x.name, d: '' })),
+          ...personaList.map((x) => ({ t: personaName(x.code, x.name, lang), d: '' })),
           { t: t('auth.aiSkipPersona'), d: t('auth.aiSkipPersonaDesc') },
         ],
       })
     })
-  }, [addMsg, typeText, alive, reduced, t, personaList])
+  }, [addMsg, typeText, alive, reduced, t, personaList, lang])
 
   const askAccount = useCallback((my: number, kind:'personal'|'staff'|'admin') => {
     // 带没带用户名用不同话术：带了说「已带入（可修改）」，没带就请用户在本步填写
@@ -283,7 +314,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
     setFinished(true); setBackDisabled(true); setBackHidden(true)
     // 三条分支各自的总步数（2026-09-19 起含角色问答一步）：管理员 6、员工 5、个人 4
     const total = kind ==='admin'? 6 : kind ==='staff'? 5 : 4
-    setStepLabel(`第 ${total} / ${total} 步 · ${t('auth.aiRegisterDone')}`)
+    setStepLabel(tpl('auth.aiStepOf', { idx: total, total, name: t('auth.aiRegisterDone') }))
     setTrackPct(100)
     const finishKey = kind ==='personal'?'auth.aiFinishingPersonal': kind ==='admin'?'auth.aiFinishingAdmin':'auth.aiFinishingStaff'
     // 管理员话术里嵌了行业名：t() 不做参数插值，这里手动替换 {industry} 占位
@@ -392,13 +423,13 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
       advanceAfterPersona(my)
       return
     }
-    const per = personaList.find((x) => x.name === label)
+    const per = personaList.find((x) => personaName(x.code, x.name, lang) === label)
     if (per) {
       sel.personaCode = per.code // 真实角色 code：后端按 kb_packages.code（persona 包）校验
       sel.personaName = per.name
       advanceAfterPersona(my)
     }
-  }, [alive, addMsg, t, stepRender, askAccount, askRole, askIndustry, askPersona, advanceAfterPersona, personaList, reduced])
+  }, [alive, addMsg, t, stepRender, askAccount, askRole, askIndustry, askPersona, advanceAfterPersona, personaList, reduced, lang])
 
   // 账号信息表单提交：调用真实注册接口
   // 前置校验命中只 return、不弹提示：字段前有 * 必填标记，AI 气泡不该把用户已填内容冲掉。
@@ -409,9 +440,12 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
     if (aiForm.password.length < 6) { setBusy(false); return }
     if (!aiForm.email.trim()) { setBusy(false); return }
     if (aiForm.emailCode.trim().length < 6) { setBusy(false); return }
+    // 人机验证前置：没 token 就别出网（出网必 403），提示一句并强制重新挑战领码
+    if (captchaOn && !tsTokenRef.current) { toastError(t('auth.captchaRequired')); reexecTurnstile(tsIdRef.current); return }
     const sel = selRef.current
     const kind = sel.type ==='personal'?'personal': sel.role ==='admin'?'admin':'staff'
     setBusy(true)
+    const tk = takeCaptchaToken()
     try {
       const r = await authRegister({
         username: aiForm.username,
@@ -420,6 +454,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
         role_choice: sel.role ==='admin'?'admin': sel.role ==='staff'?'member': undefined,
         email: aiForm.email.trim(),
         email_code: aiForm.emailCode.trim(),
+        captcha_token: tk || undefined, // ★ 2026-09-24：与发码各用一枚 token（旧实现这里压根不下发，开验后 AI 注册整条断）
         // 组织英文名后端暂无独立字段，按交付约束不改动 @/api；此处仅取组织名/品牌用于提交
         name: kind ==='admin'? aiForm.orgCn.trim() : undefined,
         brand_name: kind ==='admin'? aiForm.orgCn.trim() : undefined,
@@ -429,7 +464,9 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
         invite: kind ==='staff'? aiForm.orgCode.trim() : undefined,
         agreed: true, // 问答流程里没有单独的协议勾选步骤（只有传统表单有），提交即视为已同意
       })
-      if (!r.success) { setBusy(false); return } // 注册失败：表单留在原地、不追加失败气泡，用户改完可直接重提
+      // 注册失败：表单留在原地可直接重提，但原因必须 toast——静默返回就是用户报的「点了没反应」
+      // （人机验证类文案经 /api/auth/* 豁免链路透传后端原文，不再是误导性的「无管理权限」）
+      if (!r.success) { setBusy(false); toastError(r.message || t('auth.sendFail')); return }
       // 注册成功自动登录
       const lr = await login(aiForm.username, aiForm.password)
       if (lr.success && lr.token && lr.user) {
@@ -453,10 +490,13 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
       } else {
         setBusy(false) // 注册成功但自动登录失败：只解锁表单，让用户自己回登录屏登（不重复建号）
       }
-    } catch {
-      setBusy(false) // 接口异常一律转回可重试态：AI 面板不抛红字，避免把半成品流程演成报错页
+    } catch (e) {
+      setBusy(false) // 接口异常一律转回可重试态
+      // ★ 2026-09-24：旧写法静默吞异常，人机验证 403 时用户只看到「点了提交没反应」；
+      //   现把失败原因显式 toast（后端文案经 publicErrMessage 脱敏，可直接面向用户）
+      toastError((e as Error).message || t('auth.sendFail'))
     }
-  }, [alive, aiForm, t, addMsg, typeText, reduced, finish, scrollBottom])
+  }, [alive, aiForm, t, addMsg, typeText, reduced, finish, scrollBottom, captchaOn, takeCaptchaToken])
 
   // 首个问题：账号类型（dedicatedRegister 直接走企业员工分支）
   // deps 只留挂载：面板每次挂上都是从第一步重来（不跨挂载续答），
@@ -545,12 +585,24 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
                   codeSent={codeSentRef.current}
                   onSendCode={async () => {
                     if (!aiForm.email.trim()) return
+                    // 开验但还没领到 token：明确告知要过人机验证（旧写法直接裸发 → 403 无提示）
+                    if (captchaOn && !tsTokenRef.current) { toastError(t('auth.captchaRequired')); reexecTurnstile(tsIdRef.current); return }
                     codeSentRef.current = true
-                    const r = await sendEmailCode(aiForm.email.trim())
-                    if (!r.success) codeSentRef.current = false // 发码失败回滚标记：按钮回到「发送验证码」，允许重试
+                    const tk = takeCaptchaToken()
+                    try {
+                      const r = await sendEmailCode(aiForm.email.trim(), tk || undefined)
+                      if (!r.success) {
+                        codeSentRef.current = false // 发码失败回滚标记：按钮回到「发送验证码」，允许重试
+                        toastError(r.message || t('auth.sendCodeFail'))
+                      }
+                    } catch (e) {
+                      codeSentRef.current = false
+                      toastError((e as Error).message || t('auth.sendCodeFail')) // E10：异常必须显式提示，未捕获拒绝就是「点了没反应」
+                    }
                   }}
                   busy={busy}
                   onSubmit={() => submitAccount(genRef.current)}
+                  tsOn={captchaOn} tsAttach={attachTs}
                   t={t}
                 />
               )}
@@ -599,7 +651,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, onD
 
 // ---------- 账号信息表单块（真实可控输入，字段按分支裁剪） ----------
 function AccountFormBlock({
-  kind, form, setForm, brought, codeSent, onSendCode, busy, onSubmit, t,
+  kind, form, setForm, brought, codeSent, onSendCode, busy, onSubmit, tsOn, tsAttach, t,
 }: {
   kind:'personal'|'staff'|'admin'
   form: { username: string; password: string; email: string; emailCode: string; orgCode: string; orgCn: string; orgEn: string }
@@ -610,6 +662,9 @@ function AccountFormBlock({
   onSendCode: () => void
   busy: boolean
   onSubmit: () => void
+  /** ★ 2026-09-24：人机验证开启时给 Turnstile 预留挂载容器（tsAttach 为回调 ref，widget 由上层持有与消费） */
+  tsOn?: boolean
+  tsAttach?: (el: HTMLDivElement | null) => void
   t: (k: string) => string
 }) {
   // 单字段改写：form 由上层持有（提交时还要读），这里只回写不本地复制一份，免得两份状态打架
@@ -648,6 +703,9 @@ function AccountFormBlock({
         <span className="ar-flabel">{t('auth.fieldEmail')} <i>*</i></span>
         <input className="lc-input"value={form.email} placeholder="name@company.com"onChange={(e) => set('email', e.target.value)} />
       </div>
+      {/* ★ 2026-09-24：人机验证容器。Turnstile widget 挂在邮箱与验证码之间——
+          发码/提交都要吃这个 token，放在邮箱旁边语义最贴；未开启时整块不渲染，不留空档 */}
+      {tsOn && <div className="ar-ts" ref={tsAttach} />}
       <div className="ar-fgroup">
         <span className="ar-flabel">{t('auth.fieldEmailCode')} <i>*</i></span>
         <div className="ar-otp-row">
@@ -748,6 +806,9 @@ const CSS_AR = `
 .ar-chip-v{font-size:14px;color:var(--lc-text);font-weight:500;}
 .ar-form{display:flex;flex-direction:column;gap:14px;padding:20px 16px;border-radius:14px;background:var(--lc-panel);border:1.2px solid var(--lc-border-card);box-shadow:var(--lc-panel-highlight);align-self:stretch;}
 .ar-fgroup{display:flex;flex-direction:column;gap:8px;}
+/* Turnstile 挂载容器：widget 固定 300px 宽，居中摆放；预留 65px 高度，
+   避免脚本晚到时表单内容突然下移（AI 面板是逐条追加的，跳动很显眼） */
+.ar-ts{display:flex;justify-content:center;min-height:65px;}
 .ar-flabel{font-size:14px;color:var(--lc-text-3);}
 .ar-flabel i{font-style:normal;color:var(--lc-text-4);font-size:13px;}
 .ar-otp-row{display:flex;gap:8px;align-items:center;min-width:0;}

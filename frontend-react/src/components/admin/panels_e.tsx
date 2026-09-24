@@ -25,37 +25,37 @@ function NumInput({ value, onChange, style, disabled }: { value: number; onChang
 
 // 推广窗口内可覆盖因子速查：因子名（JSON 路径）/ 公式 / 示例值
 const OVERRIDE_FACTORS: { factor: string; formula: string }[] = [
-  { factor: 'billing.enforced', formula: 'true | false（强制计费总开关）' },
-  { factor: 'billing.markup_multiplier', formula: '≥1 的成本系数，0=沿用全局' },
-  { factor: 'billing.mode_rules.{fast|pro}.enabled', formula: 'true | false（模式启用）' },
-  { factor: 'billing.mode_rules.{fast|pro}.charge', formula: 'true | false（false=推广期免费）' },
-  { factor: 'billing.mode_rules.{fast|pro}.markup', formula: '模式成本系数，0=沿用全局' },
-  { factor: 'billing.mode_rules.{fast|pro}.limit_chars', formula: '单次输入上限(字符)，0=不限' },
-  { factor: 'package.trial_tokens', formula: '体验 token（注册发放）' },
-  { factor: 'package.trial_days', formula: '体验时长(天)' },
-  { factor: 'package.monthly_reset_enabled', formula: 'true | false（月度用量重置）' },
-  { factor: 'package.monthly_reset_limit', formula: '每月重置次数上限' },
-  { factor: 'invite.enabled', formula: 'true | false（邀请奖励总开关）' },
-  { factor: 'invite.reward_tokens', formula: '注册邀请奖励 token' },
-  { factor: 'invite.reward_days', formula: '奖励有效期(天)' },
-  { factor: 'invite.paid_reward_tokens', formula: '付费邀请奖励 token（多邀多得）' },
-  { factor: 'invite.paid_reward_days', formula: '付费奖励有效期(天)，0=永久' },
-  { factor: 'invite.max_daily_rewards', formula: '单日发奖上限' },
-  { factor: 'registration.enabled', formula: 'true | false（注册开关）' },
-  { factor: 'registration.ip_min_interval_sec', formula: '同 IP 间隔(秒)' },
-  { factor: 'registration.ip_daily_limit', formula: '同 IP 日上限' },
-  { factor: 'limits.max_qps / max_concurrent', formula: '全局 QPS / 并发上限' },
-  { factor: 'limits.default_max_daily_chars', formula: '新租户日字符上限' },
-  { factor: 'limits.default_max_daily_tokens', formula: '新租户日 token 上限' },
+  { factor: 'billing.enforced', formula: 'ops.of.billing.enforced' },
+  { factor: 'billing.markup_multiplier', formula: 'ops.of.billing.markup.multiplier' },
+  { factor: 'billing.mode_rules.{fast|pro}.enabled', formula: 'ops.of.billing.mode.rules.fast.pro.enabled' },
+  { factor: 'billing.mode_rules.{fast|pro}.charge', formula: 'ops.of.billing.mode.rules.fast.pro.charge' },
+  { factor: 'billing.mode_rules.{fast|pro}.markup', formula: 'ops.of.billing.mode.rules.fast.pro.markup' },
+  { factor: 'billing.mode_rules.{fast|pro}.limit_chars', formula: 'ops.of.billing.mode.rules.fast.pro.limit.chars' },
+  { factor: 'package.trial_tokens', formula: 'ops.of.package.trial.tokens' },
+  { factor: 'package.trial_days', formula: 'ops.of.package.trial.days' },
+  { factor: 'package.monthly_reset_enabled', formula: 'ops.of.package.monthly.reset.enabled' },
+  { factor: 'package.monthly_reset_limit', formula: 'ops.of.package.monthly.reset.limit' },
+  { factor: 'invite.enabled', formula: 'ops.of.invite.enabled' },
+  { factor: 'invite.reward_tokens', formula: 'ops.of.invite.reward.tokens' },
+  { factor: 'invite.reward_days', formula: 'ops.of.invite.reward.days' },
+  { factor: 'invite.paid_reward_tokens', formula: 'ops.of.invite.paid.reward.tokens' },
+  { factor: 'invite.paid_reward_days', formula: 'ops.of.invite.paid.reward.days' },
+  { factor: 'invite.max_daily_rewards', formula: 'ops.of.invite.max.daily.rewards' },
+  { factor: 'registration.enabled', formula: 'ops.of.registration.enabled' },
+  { factor: 'registration.ip_min_interval_sec', formula: 'ops.of.registration.ip.min.interval.sec' },
+  { factor: 'registration.ip_daily_limit', formula: 'ops.of.registration.ip.daily.limit' },
+  { factor: 'limits.max_qps / max_concurrent', formula: 'ops.of.limits.max.qps.max.concurrent' },
+  { factor: 'limits.default_max_daily_chars', formula: 'ops.of.limits.default.max.daily.chars' },
+  { factor: 'limits.default_max_daily_tokens', formula: 'ops.of.limits.default.max.daily.tokens' },
   { factor: 'payment.mode', formula: 'mock | wechat | alipay | static_qr' },
-  { factor: 'payment.auto_charge', formula: 'true | false（下单即到账）' },
-  { factor: 'content.file_max_mb', formula: '文件翻译上限(MB)' },
-  { factor: 'task.enabled', formula: 'true | false（任务中心奖励总开关）' },
+  { factor: 'payment.auto_charge', formula: 'ops.of.payment.auto.charge' },
+  { factor: 'content.file_max_mb', formula: 'ops.of.content.file.max.mb' },
+  { factor: 'task.enabled', formula: 'ops.of.task.enabled' },
 ]
 
 /** 运营策略引擎面板 */
 export function OpsP() {
-  const [, t] = useT()
+  const [, t, tpl] = useT()
   const { isSuper, activeTenantId } = useAdmin()
   // 策略草稿（本地编辑；2026-09 起仅超管平台级可写）
   const [pol, setPol] = useState<Record<string, any>>({ billing: { mode_rules: {} }, package: {}, invite: {}, registration: {}, limits: {}, payment: {}, content: {}, task: {} })
@@ -136,7 +136,7 @@ export function OpsP() {
   const saveWindow = async () => {
     if (!winDlg) return
     let overrides: any = {}
-    try { overrides = winDlg.overrides ? JSON.parse(winDlg.overrides) : {} } catch { toastError('overrides JSON 非法'); return }
+    try { overrides = winDlg.overrides ? JSON.parse(winDlg.overrides) : {} } catch { toastError(t('ops.overridesBadJson')); return }
     const ok = toastResp(await opsWindowSave({
       id: winDlg.id || `win_${Date.now()}`, name: winDlg.name, start: winDlg.start, end: winDlg.end,
       priority: Number(winDlg.priority) || 0, tz: winDlg.tz || '', overrides,
@@ -222,10 +222,10 @@ export function OpsP() {
       <p style={{ fontSize: 15, color: 'var(--adm-hint)', margin: '0 0 12px' }}>{t('ops.hint')}</p>
       {isSuper && routes && (routes.routes || []).length > 0 && (
         <div style={{ margin: '0 0 12px', fontSize: 14, color: 'var(--adm-hint)' }}>
-          <span style={{ marginInlineEnd: 8 }}>{`路由实时统计（动态权重 ${routes.dynamic_routing ? '开' : '关'} / 竞速 ${routes.hedge_enabled ? '开' : '关'}）`}</span>
+          <span style={{ marginInlineEnd: 8 }}>{tpl('ops.routeStats', { dyn: routes.dynamic_routing ? t('ops.on') : t('ops.off'), hedge: routes.hedge_enabled ? t('ops.on') : t('ops.off') })}</span>
           {(routes.routes || []).map((x: any) => (
             <StatusPill key={x.route} tone={x.err_rate > 0.2 ? 'danger' : x.err_rate > 0.05 ? 'warn' : 'success'}>
-              {String(x.route).split('|').pop()} P50 {Math.round(x.p50_ms)}ms · P95 {Math.round(x.p95_ms)}ms · 错误 {(x.err_rate * 100).toFixed(1)}% · tok/次 {Math.round(x.tokens_per_call)}
+              {tpl('ops.routePill', { r: String(x.route).split('|').pop() ?? '', p50: Math.round(x.p50_ms), p95: Math.round(x.p95_ms), err: (x.err_rate * 100).toFixed(1), tok: Math.round(x.tokens_per_call) })}
             </StatusPill>
           ))}
         </div>
@@ -236,9 +236,9 @@ export function OpsP() {
             const burn = Number(x.burn_1h || 0)
             const lv = burn >= 2 ? 'danger' : burn >= 1 ? 'warning' : 'success'
             return (
-              <span key={x.key} title={`1h burn=${x.burn_1h} 6h burn=${x.burn_6h}${x.budget_left_pct != null ? ` 预算剩余 ${x.budget_left_pct}%` : ''}`}>
+              <span key={x.key} title={`1h burn=${x.burn_1h} 6h burn=${x.burn_6h}${x.budget_left_pct != null ? tpl('ops.sloBudgetLeft', { pct: x.budget_left_pct }) : ''}`}>
                 <StatusPill tone={lv as 'success' | 'danger' | 'warn'}>
-                  SLO {x.name} {x.target}{x.key === 'latency_p99' ? 'ms' : '%'} · 燃烧率 {burn}
+                  {tpl('ops.sloPill', { name: x.name, target: x.target, unit: x.key === 'latency_p99' ? 'ms' : '%', burn })}
                 </StatusPill>
               </span>
             )
@@ -412,7 +412,7 @@ export function OpsP() {
                 {OVERRIDE_FACTORS.map((f) => (
                   <div key={f.factor} style={{ display: 'flex', gap: 8, padding: '5px 10px', fontSize: 14, borderBottom: '1px solid var(--adm-line)' }}>
                     <code style={{ color: 'var(--lc-text-1)', minWidth: 240, flexShrink: 0 }}>{f.factor}</code>
-                    <span style={{ color: 'var(--adm-hint)' }}>{f.formula}</span>
+                    <span style={{ color: 'var(--adm-hint)' }}>{t(f.formula)}</span>
                   </div>
                 ))}
               </div>

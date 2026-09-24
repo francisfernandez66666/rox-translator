@@ -1,5 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
+// ★ 2026-09-24 后台去写死中文：顶栏铃铛/汉堡 aria-label 与侧栏品牌名默认值按界面语言取词
+import { t } from "@/i18n";
 
 // 侧栏导航项：图标名 + 文案 + 路由（active 由当前路径前缀判定）
 export interface NavItem {
@@ -50,7 +52,7 @@ export interface AdminTopBarProps {
 export function AdminTopBar({ onBell, role, tenant, account, className =""}: AdminTopBarProps) {
   return (
     <div className={`lc-shell-bar ${className}`.trim()}>
-      <button type="button" className="lc-shell-bell" aria-label="通知" onClick={onBell}>
+      <button type="button" className="lc-shell-bell" aria-label={t("app.notify")} onClick={onBell}>
         <Icon n="bell" />
       </button>
       {role ? (
@@ -80,7 +82,7 @@ export function AdminShell({
   nav,
   activeKey,
   onNavigate,
-  appName = "能言管理后台",
+  appName = t("admin.title"),
  appIcon = "",
   topbar,
   sideFoot,
@@ -124,7 +126,7 @@ export function AdminShell({
           <button
             type="button"
             className="lc-shell-burger"
-            aria-label="打开菜单"
+            aria-label={t("app.openMenu")}
             onClick={() => setDrawerOpen(true)}
           >
             <Icon n="menu" />

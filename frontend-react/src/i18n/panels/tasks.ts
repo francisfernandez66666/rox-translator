@@ -63,6 +63,20 @@ export const zh: Record<string, string> = {
   'tasks.titleRequired': '任务标题不能为空',
   'tasks.capDayRule': '每日上限 {cap} 次',
   'tasks.capWeekRule': '每周上限 {cap} 次',
+  // ★ 2026-09-24 后台去写死中文：内置任务展示本地化（占位取行内配置值）+ 弹窗输入提示
+  'tasks.titlePlaceholder': '如 每日登录/完成一次翻译',
+  'tasks.descPlaceholder': '任务说明（可空）',
+  'tasks.taskKeyPlaceholder': '如 login_daily / translate_week / 自定义事件标识',
+  'tasks.builtin.login_daily.title': '每日登录',
+  'tasks.builtin.login_daily.desc': '每天登录一次即得 {points} 积分（有效期 {days} 天，可叠加）',
+  'tasks.builtin.translate_week.title': '每周发起翻译',
+  'tasks.builtin.translate_week.desc': '每周发起翻译奖励 {points} 积分（每天 1 次、每周最多 {cap} 次，有效期 {days} 天，可叠加）',
+  'tasks.builtin.invite_register.title': '邀请好友注册',
+  'tasks.builtin.invite_register.desc': '好友通过你的邀请码注册成功 +{points} 积分（有效期 {days} 天，可叠加）',
+  'tasks.builtin.invite_paid.title': '邀请好友充值',
+  'tasks.builtin.invite_paid.desc': '受邀好友任意充值成功 +{points} 永久积分（可叠加）',
+  'tasks.builtin.kb_upload.title': '上传专属知识库',
+  'tasks.builtin.kb_upload.desc': '上传自己的知识库并解析成功 +{points} 永久积分（一次性）',
 }
 
 // 英文文案词典：键与上方 zh 一一对应。
@@ -127,4 +141,18 @@ export const en: Record<string, string> = {
   'tasks.titleRequired': 'Task title is required',
   'tasks.capDayRule': 'Up to {cap} per day',
   'tasks.capWeekRule': 'Up to {cap} per week',
+  // ★ 2026-09-24 de-hardcode Chinese in admin: built-in task display localization (placeholders fed from row config) + dialog hints
+  'tasks.titlePlaceholder': 'e.g. Daily sign-in / Finish one translation',
+  'tasks.descPlaceholder': 'Task description (optional)',
+  'tasks.taskKeyPlaceholder': 'e.g. login_daily / translate_week / custom event id',
+  'tasks.builtin.login_daily.title': 'Daily sign-in',
+  'tasks.builtin.login_daily.desc': 'Sign in once a day to earn {points} credits (valid {days} days, stackable)',
+  'tasks.builtin.translate_week.title': 'Weekly translation',
+  'tasks.builtin.translate_week.desc': 'Run translations each week for {points} credits (1 per day, up to {cap} per week, valid {days} days, stackable)',
+  'tasks.builtin.invite_register.title': 'Invite a friend to sign up',
+  'tasks.builtin.invite_register.desc': 'Earn +{points} credits when a friend registers with your invite code (valid {days} days, stackable)',
+  'tasks.builtin.invite_paid.title': 'Invite a friend to top up',
+  'tasks.builtin.invite_paid.desc': 'Earn +{points} permanent credits when an invited friend completes any top-up (stackable)',
+  'tasks.builtin.kb_upload.title': 'Upload your knowledge base',
+  'tasks.builtin.kb_upload.desc': 'Upload your own knowledge base and parse it successfully for +{points} permanent credits (one-time)',
 }

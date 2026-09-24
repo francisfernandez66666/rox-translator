@@ -132,6 +132,23 @@ describe('api/core', () => {
     core.setUnauthorizedHandler(null)
   })
 
+  // 回归锁（★ 2026-09-24 AI 注册发码 403 事故）：/api/auth/* 是匿名链路，其 403 的
+  //   真实原因是人机验证/注册关闭，若也被解析器改写成「当前账号无管理权限」，
+  //   未登录用户会被指引去登一个不存在的管理员账号——发码点了没反应还查不到方向。
+  //   故该前缀必须直传后端 message；豁免只对 auth 前缀生效，admin 路由解析器优先不变。
+  it('★ 2026-09-24：/api/auth/* 的 403 直传后端 message（即便已注册解析器），非 auth 路由仍解析器优先', async () => {
+    core.setForbiddenCopyResolver(() => '当前账号无管理权限，请使用管理员账号登录。')
+    vi.stubGlobal('fetch', async () => jsonResponse({ success: false, message: '请完成人机验证' }, 403))
+    await expect(core.request('/api/auth/email-code', { method: 'POST' })).rejects.toMatchObject({
+      name: 'ApiError', message: '请完成人机验证', code: 'FORBIDDEN', status: 403,
+    })
+    // 反向对照：同一次 stub 下 admin 路由依旧收口到解析器，豁免不得扩散
+    await expect(core.request('/api/admin/users')).rejects.toMatchObject({
+      message: '当前账号无管理权限，请使用管理员账号登录。', code: 'FORBIDDEN', status: 403,
+    })
+    core.setForbiddenCopyResolver(null)
+  })
+
   it('超时：timeoutMs 内未决 → 明确中文错误（区别于外部 abort）', async () => {
     vi.stubGlobal('fetch', (_u: string, init: RequestInit) => new Promise((_res, rej) => {
       init.signal!.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))
@@ -176,6 +193,21 @@ describe('api/core', () => {
     core.setForbiddenCopyResolver((msg) => `本地化[${msg}]`)
     expect(core.handleForbidden('后端越权原文'), '注册后一律走解析器（本地化既有键口径）').toBe('本地化[后端越权原文]')
     core.setForbiddenCopyResolver(null)
+  })
+
+  // ★ 2026-09-24 〇-R：apiMsg 是 api 层「本地化错误文案」的唯一注入口（用户诉求：
+  //   英文后台不得出现中文提示）。未注册回落中文原句（node 单测/SSR 口径），
+  //   注册后按键取词（ToastBridge 注入 i18n.tpl 同款链路）。
+  it('apiMsg：未注册回落中文兜底句、注册后按当前语言取词', () => {
+    expect(core.apiMsg('common.timeout', '请求超时，请检查后端服务是否正常')).toBe('请求超时，请检查后端服务是否正常')
+    core.setApiMsgCopier((key, fallback, vars) => {
+      void fallback
+      return vars ? `EN[${key}:${JSON.stringify(vars)}]` : `EN[${key}]`
+    })
+    expect(core.apiMsg('common.netFail', '无法连接后端服务')).toBe('EN[common.netFail]')
+    expect(core.apiMsg('common.reqFail', '请求失败 (500)', { status: 500 })).toBe('EN[common.reqFail:{"status":500}]')
+    core.setApiMsgCopier(null)
+    expect(core.apiMsg('common.netFail', '无法连接后端服务'), '复位后回到兜底句').toBe('无法连接后端服务')
   })
 
   // bizErrorCode：业务错误常以 HTTP 200 + success:false 下发，不抛异常，靠此从响应体取稳定码。

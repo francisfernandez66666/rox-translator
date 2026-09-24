@@ -4,6 +4,7 @@
 // ============================================================================
 import type { ReactNode } from 'react'
 import { toastSuccess, toastError } from '@/lib/toastBus'
+import { t } from '@/i18n' // ★ 2026-09-24 后台去写死中文：兜底文案按界面语言取词
 
 // ============ 本文件职责中文说明 ============
 // 后台面板公共小部件：Panel 容器、Field 字段行、toastResp 提示、num 数字格式化助手。
@@ -28,7 +29,7 @@ export function toastResp(r: { success?: boolean; message?: string }, okMsg?: st
     if (okMsg) void toastSuccess(okMsg)
     return true
   }
-  void toastError(r.message || '操作失败')
+  void toastError(r.message || t('common.fail'))
   return false
 }
 

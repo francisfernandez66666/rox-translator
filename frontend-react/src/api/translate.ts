@@ -15,7 +15,7 @@
  */
 
 import type { ChatResponse, FileSegmentEvent, HealthResponse, ProgressEvent } from '@/types'
-import { API_BASE, authHeaders, request, handleUnauthorized, ApiError } from './core'
+import { API_BASE, authHeaders, request, handleUnauthorized, ApiError, apiMsg } from './core'
 
 /** SSE 空闲超时：后端每 20s 发一帧 `: ping` 注释（不匹配 data: 但计入字节、重置计时）。
  *  连续 SSE_IDLE_MS 无任何字节 = 判定代理静默断连，主动中断避免 UI 永卡 loading。 */
@@ -28,7 +28,7 @@ function readWithIdle<T extends { done: boolean; value?: Uint8Array }>(
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const idle = new Promise<never>((_, rej) => {
-    timer = setTimeout(() => { onIdle(); rej(new ApiError('连接空闲超时，请重试', undefined, 'stream_idle')) }, SSE_IDLE_MS)
+    timer = setTimeout(() => { onIdle(); rej(new ApiError(apiMsg('tr.streamIdle', '连接空闲超时，请重试'), undefined, 'stream_idle')) }, SSE_IDLE_MS)
   })
   return Promise.race([reader.read() as Promise<T>, idle]).finally(() => { if (timer) clearTimeout(timer) }) as Promise<T>
 }
@@ -41,7 +41,7 @@ function readWithIdle<T extends { done: boolean; value?: Uint8Array }>(
 export async function consumeSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   onProgress?: (event: ProgressEvent) => void,
-  errorMessage = '翻译出错',
+  errorMessage = apiMsg('tr.translateErr', '翻译出错'),
   onDelta?: (lang: string, text: string) => void, // ★ D20：token 级流式增量
   onSegment?: (event: FileSegmentEvent) => void,  // ★ B3：文件翻译逐段事件
 ): Promise<ChatResponse> {
@@ -99,7 +99,7 @@ export async function consumeSSEStream(
     if (e instanceof Error && e.name === 'AbortError') throw e
     throw new ApiError(e instanceof Error ? e.message : String(e), undefined, 'stream_error')
   }
-  if (!finalResult) throw new Error('未收到翻译结果')
+  if (!finalResult) throw new Error(apiMsg('tr.noResult', '未收到翻译结果'))
   return finalResult
 }
 
@@ -130,15 +130,15 @@ export async function chatStream(
     // ★ E5：SSE 通道 401 与其他请求同源处理——清登录态并跳登录，而不是只渲染"请求失败(401)"
     if (response.status === 401) {
       handleUnauthorized('/api/chat/stream')
-      throw new ApiError('登录已过期，请重新登录', 401)
+      throw new ApiError(apiMsg('tr.sessionExpired', '登录已过期，请重新登录'), 401)
     }
-    throw new Error(`请求失败 (${response.status}): ${errorText}`)
+    throw new Error(apiMsg('common.reqFailDetail', `请求失败 (${response.status}): ${errorText}`, { status: response.status, text: errorText }))
   }
 
   const reader = response.body?.getReader()
-  if (!reader) throw new Error('无法读取流式响应')
+  if (!reader) throw new Error(apiMsg('tr.streamReadFail', '无法读取流式响应'))
 
-  return consumeSSEStream(reader, onProgress, '翻译出错', onDelta)
+  return consumeSSEStream(reader, onProgress, apiMsg('tr.translateErr', '翻译出错'), onDelta)
 }
 
 /** 健康检查（10 秒超时：后端挂起时快速判定离线，不无限等待） */
@@ -207,16 +207,16 @@ export function validateTranslateFile(file: File, deliveryText = false): string 
   const allowed: readonly string[] = deliveryText ? [...TRANSLATE_FILE_EXTS, ...TEXT_DELIVERY_ONLY_EXTS] : TRANSLATE_FILE_EXTS
   if (!allowed.includes(ext)) {
     if (deliveryText) {
-      return `不支持的文件格式：${file.name}（纯文案模式支持 ${[...TRANSLATE_FILE_EXTS, ...TEXT_DELIVERY_ONLY_EXTS].join(' / ')}）`
+      return apiMsg('tr.fileFmtText', `不支持的文件格式：${file.name}（纯文案模式支持 ${[...TRANSLATE_FILE_EXTS, ...TEXT_DELIVERY_ONLY_EXTS].join(' / ')}）`, { name: file.name, fmts: [...TRANSLATE_FILE_EXTS, ...TEXT_DELIVERY_ONLY_EXTS].join(' / ') })
     }
     if (TEXT_DELIVERY_ONLY_EXTS.includes(ext as (typeof TEXT_DELIVERY_ONLY_EXTS)[number])) {
-      return `不支持的文件格式：${file.name}（${ext} 老格式仅在工单「纯文案模式」下支持；或请先转换为对应新版格式）`
+      return apiMsg('tr.fileFmtLegacy', `不支持的文件格式：${file.name}（${ext} 老格式仅在工单「纯文案模式」下支持；或请先转换为对应新版格式）`, { name: file.name, ext })
     }
-    return `不支持的文件格式：${file.name}（仅支持 ${TRANSLATE_FILE_EXTS.join(' / ')}）`
+    return apiMsg('tr.fileFmtOnly', `不支持的文件格式：${file.name}（仅支持 ${TRANSLATE_FILE_EXTS.join(' / ')}）`, { name: file.name, fmts: TRANSLATE_FILE_EXTS.join(' / ') })
   }
   if (file.size > TRANSLATE_FILE_MAX_BYTES) {
     const mb = (file.size / 1024 / 1024).toFixed(1)
-    return `文件过大（${mb}MB），超出翻译上限 ${TRANSLATE_FILE_MAX_BYTES / 1024 / 1024}MB，请拆分或压缩后重试`
+    return apiMsg('tr.fileTooBig', `文件过大（${mb}MB），超出翻译上限 ${TRANSLATE_FILE_MAX_BYTES / 1024 / 1024}MB，请拆分或压缩后重试`, { mb, maxMB: TRANSLATE_FILE_MAX_BYTES / 1024 / 1024 })
   }
   return null
 }

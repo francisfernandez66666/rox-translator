@@ -1,7 +1,7 @@
 // components/SiteFooter.tsx — 全站页脚（前台 + 后台共用）
 // 品牌与页脚链接：品牌按访问域名解析（租户级）；页脚链接为平台级（超管设置，对所有租户生效）。
 import { useEffect, useState } from 'react'
-import { useT } from '@/i18n'
+import { useT, t, tpl } from '@/i18n'
 import { useBranding, DEFAULT_BRAND_NAME } from '@/branding'
 import { footerLinksGet, BrandLink } from '@/api/branding'
 
@@ -18,10 +18,10 @@ export default function SiteFooter() {
   const branding = useBranding()
   // 品牌名三级兜底：域名解析出的租户品牌 → 按语言的内置默认名（中文站用中文名、英文站用 LangCross）
   const brand = branding.brandName || (lang === 'zh' ? DEFAULT_BRAND_NAME : 'LangCross')
-  // ⚠ 这两个词是就地硬编码的短标签，没走 auth.userAgreement / auth.privacyPolicy 词典键
-  //   （那两条带书名号、页脚不带），改文案时记得两处一起看
-  const terms = lang === 'zh' ? '用户协议' : 'User Agreement'
-  const privacy = lang === 'zh' ? '隐私协议' : 'Privacy Policy'
+  // ★ 2026-09-24 后台去写死中文：原「lang==='zh' ? 中文 : 英文」二元三元改为全量走词典，
+  //   12 语种各取各词（auth.userAgreement/privacyPolicy 带书名号不适用，另立 footer.* 短标签键）
+  const terms = t('footer.terms')
+  const privacy = t('footer.privacy')
   const [links, setLinks] = useState<BrandLink[]>([])
 
   // 页脚链接是平台级配置（超管设置、所有租户共用），挂载时拉一次即可，无需轮询；拉不到就留空走默认协议入口
@@ -50,7 +50,7 @@ export default function SiteFooter() {
         gap: 8,
       }}
     >
-      <span>© 2026 {brand} · 翻译平台</span>
+      <span>{tpl('footer.copyright', { brand })}</span>
       <span style={{ opacity: 0.5 }}>·</span>
       {/* 平台级页脚链接优先；否则回退到《用户协议》《隐私协议》 */}
       {links.length > 0 ? (

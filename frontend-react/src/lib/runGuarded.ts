@@ -11,6 +11,7 @@
 // toastBus 而非 useToast：本文件被 lib/组件外的工具链路引用，拿不到 ToastProvider 的
 // hook 上下文，只能走「模块级总线 + Provider 内桥接组件」这一层间接调用。
 import { toastError } from '@/lib/toastBus'
+import { t } from '@/i18n' // ★ 2026-09-24 后台去写死中文：兜底文案按界面语言取词（toastBus 同为非 hook 通道，无上下文问题）
 
 /**
  * runGuarded 执行一个异步动作；抛错时提示并返回 undefined（成功返回原结果）。
@@ -25,8 +26,8 @@ export async function runGuarded<T>(
     return await fn()
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    if (opts?.onError) opts.onError(msg || opts?.fallback || '操作失败', e)
-    else void toastError(msg || opts?.fallback || '操作失败')
+    if (opts?.onError) opts.onError(msg || opts?.fallback || t('common.fail'), e)
+    else void toastError(msg || opts?.fallback || t('common.fail'))
     return undefined
   }
 }

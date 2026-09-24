@@ -108,6 +108,9 @@ export const zh: Record<string, string> = {
   'auth.aiFinishingStaff': '信息齐了。正在创建账号、加入组织并继承企业词库，同时通知管理员你的加入申请。',
   'auth.aiDoneChat': '搞定。原本 9 项的表单，你只回答了几个问题。摘要如下：',
   'auth.aiRegisterDone': '注册完成',
+  // ★ 2026-09-24 后台去写死中文：AI 面板进度标签（原「第 x / y 步 · 名称」硬编码在组件里）
+  'auth.aiStepOf': '第 {idx} / {total} 步 · {name}',
+  'auth.aiStepOnly': '第 {idx} 步 · {name}',
   'auth.aiSummaryType': '账号类型',
   'auth.aiSummaryIdentity': '身份',
   'auth.aiSummaryIndustry': '行业词库',
@@ -271,6 +274,9 @@ export const en: Record<string, string> = {
   'auth.aiFinishingStaff': 'All set. Creating your account, joining the org and inheriting its term base, and notifying the admin of your request.',
   'auth.aiDoneChat': 'Done. The 9-field form became just a few questions. Summary:',
   'auth.aiRegisterDone': 'Registration complete',
+  // ★ 2026-09-24 de-hardcode: AI panel progress label (was `第 x / y 步 · name` in the component)
+  'auth.aiStepOf': 'Step {idx} of {total} · {name}',
+  'auth.aiStepOnly': 'Step {idx} · {name}',
   'auth.aiSummaryType': 'Account type',
   'auth.aiSummaryIdentity': 'Role',
   'auth.aiSummaryIndustry': 'Term base',

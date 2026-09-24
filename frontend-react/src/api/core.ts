@@ -75,13 +75,32 @@ let forbiddenCopy: ((backendMessage: string) => string) | null = null
 export function setForbiddenCopyResolver(fn: ((backendMessage: string) => string) | null) {
   forbiddenCopy = fn
 }
+
+// ★ 2026-09-24 后台去写死中文批：api 层通用「本地化文案注入器」——与 403 解析器同口径，
+//   core 及兄弟 api 模块（kb/translate/billing/admin）不静态 import i18n（会崩 api 层 node 单测），
+//   由 ToastBridge 运行时注入 tpl()；未注册（单测/SSR）回落传入的中文原句，行为与旧版一致。
+let msgCopy: ((key: string, fallback: string, vars?: Record<string, string | number>) => string) | null = null
+export function setApiMsgCopier(fn: typeof msgCopy) { msgCopy = fn }
+/** api 层取词：已注入翻译器按键取当前界面语言文案，取不到（缺键/未注入）用 fallback 原句 */
+export function apiMsg(key: string, fallback: string, vars?: Record<string, string | number>): string {
+  if (!msgCopy) return fallback
+  const v = msgCopy(key, fallback, vars)
+  return v || fallback
+}
 /**
- * 统一处理 403：返回对外可读文案（优先已注册的本地化解析器，回落原后端 message）。
- * 与 handleUnauthorized 不同，403 不清登录态（用户仍在线，只是无该资源权限），
- * 仅把文案收口到一处，保证任一请求通道（client / 裸 fetch）的越权提示一致。
+ * 统一处理 403：返回对外可读文案，与 handleUnauthorized 不同，403 不清登录态
+ * （用户仍在线，只是无该资源权限），仅把文案收口到一处，保证任一请求通道
+ * （client / 裸 fetch）的越权提示一致。
+ * ★ 2026-09-24 匿名认证链路豁免：/api/auth/* 的请求本就没有登录态，其 403 是
+ *   人机验证/注册关闭一类拒绝（后端文案），再套「当前账号无管理权限，请使用管理员
+ *   账号登录」就是把排查往歧路上带（AI 注册发码 403 事故的真实表现）。故该前缀
+ *   一律透出后端 message，仅在其缺失时回落通用兜底。
  */
-export function handleForbidden(backendMessage = ''): string {
-  return forbiddenCopy ? forbiddenCopy(backendMessage) : (backendMessage || '无权限访问该资源')
+export function handleForbidden(backendMessage = '', url = ''): string {
+  if (url.startsWith('/api/auth/')) {
+    return backendMessage || apiMsg('common.forbidden', '无权限访问该资源')
+  }
+  return forbiddenCopy ? forbiddenCopy(backendMessage) : (backendMessage || apiMsg('common.forbidden', '无权限访问该资源'))
 }
 
 /** 设置并持久化超管生效租户 ID（用于租户切换器） */
@@ -155,12 +174,13 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       } catch { /* 非 JSON 错误体 */ }
       if (!message) {
         const text = await response.text().catch(() => '')
-        message = `请求失败 (${response.status}): ${text}`
+        message = apiMsg('common.reqFailDetail', `请求失败 (${response.status}): ${text}`, { status: response.status, text })
       }
       // ★ §4.2-3：403 越权集中识别——对外文案走统一解析器（本地化既有键），并钉稳定错误码
       //   FORBIDDEN（后端未回 code 时补），调用方据此分支；不清登录态（用户仍在线）。
+      //   ★ 2026-09-24：url 一并传入——/api/auth/* 匿名链路豁免（详见 handleForbidden 注释）。
       if (response.status === 403) {
-        throw new ApiError(handleForbidden(message), 403, errCode || 'FORBIDDEN')
+        throw new ApiError(handleForbidden(message, url), 403, errCode || 'FORBIDDEN')
       }
       const err = new ApiError(message, response.status, errCode)
       throw err
@@ -169,10 +189,10 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       if (externalSignal?.aborted) throw error
-      throw new Error('请求超时，请检查后端服务是否正常')
+      throw new Error(apiMsg('common.timeout', '请求超时，请检查后端服务是否正常'))
     }
     if (error instanceof TypeError && error.message.includes('fetch')) {
-      throw new Error('无法连接后端服务')
+      throw new Error(apiMsg('common.netFail', '无法连接后端服务'))
     }
     throw error
   } finally {

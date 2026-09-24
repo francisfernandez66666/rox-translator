@@ -12,7 +12,7 @@
  * - 身份上下文：获取当前用户的账号/租户/组织部门信息
  */
 
-import { request, authHeaders, API_BASE, handleUnauthorized, handleForbidden, type AdminResp } from './core'
+import { request, authHeaders, API_BASE, handleUnauthorized, handleForbidden, apiMsg, type AdminResp } from './core'
 
 /** 下载批量导入用户 Excel 模板（带表头/填写说明/示例行，保存为用户导入模板.xlsx） */
 export async function downloadUserImportTemplate(): Promise<boolean> {
@@ -39,7 +39,7 @@ export async function downloadUserImportTemplate(): Promise<boolean> {
   const url2 = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url2
-  a.download = '用户导入模板.xlsx'
+  a.download = apiMsg('common.importTplFile', '用户导入模板.xlsx')
   a.click()
   // 延迟释放：立即 revoke 在部分浏览器会取消尚未开始的下载（口径同 ChatWindow/tickets 导出）
   setTimeout(() => URL.revokeObjectURL(url2), 5000)
