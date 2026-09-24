@@ -1,7 +1,6 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-23（**〇-O 全部框线纯白 ＋ 面色三级台阶**——描边七档（含后台/门户别名）一律 `#FFFFFF`，七个体名与 `--lc-border-1…7` 别名保留故调用点零改动；面色改由台阶承担：L1 `#0A0B0D` / L2 `#121417` / L3 `#1A1D21`（页面底仍 `#000`，用户明令不变亮），台阶差取 +8；唯一例外是语义状态边（danger `#402323` 与后台 warn/info/err/purp 边）不随白框翻白。五类渲染面逐面同步、扩展重打包 **1.2.1**，粗细仍为 〇-N 的 2px（用户看过截图后判「太粗」但明令「别改了」，2px 即现行口径）。等值锁两侧五处重定（`readability.test.ts` A/F/H/I ＋ `public_ui_test.go` ＋ `admin_ui_test.go` ＋ `pixel_uat.spec.ts` 新增 P2d ＋ P6c）。本地代码提交 **`50db33e`** → 纯代码推送 **`d5387ea`**（34 文件）·文档仅本地·**主站与演示站已 17:37 同批发版**（两站二进制同 sha、扩展包 `1.2.1` 随 dist 上线，见 ⑦）
-
+> 最后更新：2026-09-24（**〇-Q 文件直出区通栏固定舞台重排 ＋ 文档注释棘轮门禁**——文件直出演示弃双栏改「居中标题容器 + 限宽 880 固定舞台」，hero 第二卖点带迁入动效上方（首屏删除），演出只动元素自身零布局位移（chip 定宽、链路弹性伸缩、sink 只压亮度），源 chip 去飞入吸附改左链路数据包流入，下载改纯 icon 绝对定位长在译文 chip 内，顶部独立进度条与底部步骤文字行删除，窄屏链路补 `min-width:0` 修「粗带」（根因＝基础 `min-width:48px` 未被媒体查询覆盖）；App PageLoading 去「加载中」文字。新增 `tools/check_doc_comments.py` 导出面中文文档注释棘轮门禁（Go 249 文件实测 0 缺口、FE 补 7 处后双 0 基线入库 `.doc_comments_baseline`，selftest 含剥离探针负向自证）。Landing.dom.test 新增 ⑩-⑮ 六条回归锁。门禁：tsc 0、vitest **49 文件 384 用例全绿**、`go vet`/`go build`/gofmt 0。本地代码提交 **`c52c0f7`+`3e5ebec`** → 纯代码推送 **`dc419b8`**（9 文件，零 .md、零 UI 交付包）·文档仅本地。**部署见 〇-Q 表 ⑦**）
 > ★★ **〇-P、回退到 UI 交付稿批（2026-09-23，现行口径）**：用户看过 〇-O 实测后判「太丑」，后令「严格按 UI 交付稿来」。
 > 〇-O 整体撤销：**描边七档回到交付灰阶**（#8B939F → #2A2F3A，`#FFFFFF` 不再作框线色）、**面色台阶回交付值**
 > （L2 `--lc-panel` **#0E1014** / L3 `--lc-raised` **#16181C**，〇-O 的 +8 档 #121417/#1A1D21 作废）、
@@ -9,6 +8,20 @@
 > **字号保留 〇-N 的 +2px 不动**。五类渲染面逐面同步、闸门两侧全部翻转（`readability.test.ts` A/F/H/I、
 > `public_ui_test.go` `retiredLegacy00O`、`admin_ui_test.go`、`pixel_uat.spec.ts` P2d/P6c）；扩展重打包 **1.2.2**。
 > ⚠️ **下面的 〇-O 条目是历史记录，不再是现行口径**——读它请按「已撤销」理解。
+
+### 〇-Q、文件直出区通栏固定舞台重排 + 文档注释棘轮门禁批（2026-09-24，★ 本地代码提交 `c52c0f7`+`3e5ebec` → 纯代码推送 `dc419b8`（9 文件，零 `.md`、零 UI 交付包）·文档仅本地）
+
+> 来源＝用户 2026-09-23~24 连续六轮反馈（「容器丑重新做」→「吃进去保留」→「四步与动效联动+下载进容器」→「只要 icon+进度条要么联动要么删」→「离太远/粗线是什么鬼/文字不要了」→「整合第一屏容器做高级放动效上方」）。本轮全部改动集中在 `frontend-react/src`（`Landing.tsx`/`App.tsx`），后端零改动。
+
+| 块 | 交付 | 锁/边界 |
+|----|------|---------|
+| **① 文件直出演示终态构图（FileDirectDemo）** | 居中标题容器 `.lc-fd-head`（`heroPoint2` 主标题 + `heroPoint2Note` 副题，clamp 26-40px）在上；舞台 `.lc-fd-stage` 在下：源 chip — 链路(pl) — 「能言/LangCross」引擎环 — 链路(pr) — 译文 chip，自循环四阶段：源 chip 原地浮现→数据包流入引擎→引擎点火（虚线环旋转+双脉冲+品牌脉动）→译文 chip 物质化+译名打字机→sink 蓄力→释放（引擎激发+12 道光线以引擎为圆心放射+译文 chip 燃亮+光泽+角标对勾）→下载 icon 在译文 chip 右缘展开 | 演出**只动元素自身**（opacity/transform）：chip 定宽 `clamp(196px,20vw,232px)`、链路 `flex:1 1 0` 弹性伸缩（两侧等宽⇒引擎恒居中）、sink 只压亮度**不缩放舞台**——任何阶段零布局位移（历史教训：双栏 grid 曾被演出内容挤动文字/容器）；下载区 `.lc-fd-dlzone` 绝对定位不占布局流 |
+| **② 本轮退役清单（负向锁进测试 ⑭）** | `.lc-fd-barfill` 顶部独立进度条（用户令「不要孤零零的动效」）、底部 `.lc-fd-steps` 步进文字行+`.fd-seg` 轨道（用户令「下面的文字不要了」）、`.lc-fd-src.fly` 飞入吸附引擎、`.lc-hero-point2` 首屏卖点带（迁入 fd 区避免两处重复）、`.lc-fd-in`/`.lc-fd-copy` 双栏布局、下载按钮「下载」文字（只留 icon，`title` 供可读名） | `Landing.dom.test.tsx` 新增 **⑩-⑮ 六条回归锁**（标题容器在位/卖点带迁移/双栏零残留/五元素在位/旧附件零残留/icon 无文字）——这些元素按用户明令退役，**不得复活** |
+| **③ 窄屏粗带根因（★ 通用教训）** | 现象：≤640px 链路渲染成 48px 宽深色带。根因＝基础规则 `flex:1 1 0;min-width:48px`，媒体查询只覆盖了 `width:1.5px`——**`min-width` 未被覆盖仍生效**，纵向 flex 再把高度拉满 | 修法：媒体查询补 `min-width:0`。教训：**覆盖 flex 项尺寸时 `min-*` 与 `max-*` 必须逐一核对**，只写 `width` 不算覆盖完 |
+| **④ 文档注释棘轮门禁（tools/check_doc_comments.py）** | 口径：Go 导出（func/type 首字母大写）紧邻上一行必须 `//`；FE `export function/const/interface/type/class` 紧邻上一行必须 `//`、`/*`、`*`。跳过 `_test.go`/`*.d.ts`/`vendor`/`dist` 等。棘轮基线 `.doc_comments_baseline`（`go=0`/`fe=0`）入库，只降不升；`--selftest` 常开（探针注入必须命中＋有注释必须放行） | 首跑实测：Go 249 文件 **0 缺口**（本仓惯例本就全注释，反向剥离探针自证扫描器有效）；FE 补 7 处（kb.ts CHUNK_SIZE、i18n/script.ts ×4、Mobile.tsx MobScreenProps、utm.ts UtmSnapshot）后 **双 0**。新增导出不写中文注释会直接红灯 |
+| **⑤ App PageLoading 去文字** | 加载占位只剩换词动效（WordSwap），「加载中」文字删除——动效本身就是加载语义，文字仅保留为 ariaLabel 供读屏 | 无障碍语义不丢 |
+| **⑥ 闸门（2026-09-24 全绿）** | `tsc --noEmit` 0；vitest **49 文件 384 用例全绿**（含新 ⑩-⑮）；`gofmt -l` 空、`go vet ./...` 0、`go build ./...` OK（后端本轮零改动，例行跑）；`check_doc_comments.py` go=0/fe=0；仅增注释行自证（4 文件 diff 全为 `+//` 行） | 提交走 `push_code_only.sh`（干跑 9 文件清单核对 → --apply），零 .md、零 UI 交付包 |
+| **⑦ 部署（2026-09-24 16:02 两站同批，已回填《部署指南》顶部）** | 用户令「阅读部署文档，前后端都部署到云服务器」⇒ `translator-server` sha256 `60ecfd88…` **两站同 sha**（`mv` rename 替换，`translator-assist` 不换——零 `internal/assist` 改动）；两站 web 两步换源，新资产 `index-AUDApay_.js`（含 `Landing-DRQF3mZH.js`）。验收：内网两站 **11/11**、公网主站/演示站（**rox-test.lexicorn.cn**，非 demo.*）**各 8/8**；journal `-p err` 零条、panic 0；扩展包 200/11890B/PK；管理路由 403×2；`PDF_LIB_OK`/`ANYDOC_OK`；演示站公网首页引用 `index-AUDApay_.js`。web_old 各裁 4 份、磁盘 38% 余 24G | 后端零代码改动仍按用户令重发两站（先例＝09-23 17:37「三件齐上」批） |
 
 ### 〇-O、全部框线纯白 + 面色三级台阶批（2026-09-23，★ 本地代码提交 `50db33e` → 纯代码推送 `d5387ea`（34 文件 +386/−169，零 `.md`、零 UI 交付包）·文档仅本地·**两站已 17:37 同批发版（见 ⑦）**
 
