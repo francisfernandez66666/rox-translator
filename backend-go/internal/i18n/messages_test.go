@@ -97,9 +97,9 @@ func TestCatalogCoverage(t *testing.T) {
 			t.Errorf("patternsEN 词条异常: %q→%q", p.zhFmt, p.enFmt)
 		}
 	}
-	// 词条规模闸门：343 静态 + 1 条无占位模式并入 + 35 条 apierrors.New 补漏，
+	// 词条规模闸门：343 静态 + 1 无占位模式 + 35 条 apierrors.New 补漏 + 7 条 error 字段新增，
 	// 低于此数说明 catalog 生成回退
-	if len(exactEN) < 375 {
-		t.Fatalf("exactEN 词条数 %d < 375，catalog_en.go 可能被截断或未重新生成", len(exactEN))
+	if len(exactEN) < 385 {
+		t.Fatalf("exactEN 词条数 %d < 385，catalog_en.go 可能被截断或未重新生成", len(exactEN))
 	}
 }

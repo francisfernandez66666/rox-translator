@@ -111,6 +111,21 @@ ck A3-dup-username '已存在|占用|exists' "$(curl -s $B/api/admin/users/creat
 ck A3-bad-login '密码|失败|incorrect|invalid|UNAUTHORIZED' "$(curl -s $B/api/auth/login -H "$J" -d '{"username":"uatuser_a","password":"wrongpass"}')"
 ck A3-no-agree '同意|协议' "$(curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_x","password":"uatpass123","code":"uatcorpD","name":"X","email":"uat_x@test.com"}')"
 
+# ---------- A3lang 后端语言识别（★ 2026-09-24 〇-S #12） ----------
+# 语种判定与 JSON 提示改写的实现口径在 internal/i18n + lang_middleware.go，
+# 本段是「真实接口面」级闸门：withLang 接线被挪位、词条键被改坏，这里都会红。
+# 刻意避开登录端点——失败计数限流（5 次/5 分钟）会把后面整条套件的 tok() 连带锁死；
+# lead 校验失败不计提交限流、404 兜底无状态，是两条零副作用的探针。
+# 无头请求必须保持中文：这是本套件全部存量断言的兼容红线（翻成英文则全线连坐）。
+LEAD_BAD='{"company":"   ","email":"a@b.co"}'
+ck A3lang-zh-default '"请填写公司/团队名称"' "$(curl -s $B/api/lead -H "$J" -d "$LEAD_BAD")"
+ck A3lang-en '"Company/team name is required"' "$(curl -s $B/api/lead -H "$J" -H 'X-App-Lang: en' -d "$LEAD_BAD")"
+ck A3lang-ja-to-en 'Company/team name is required' "$(curl -s $B/api/lead -H "$J" -H 'X-App-Lang: ja' -d "$LEAD_BAD")"
+ck A3lang-zhhant-stays-zh '"请填写公司/团队名称"' "$(curl -s $B/api/lead -H "$J" -H 'X-App-Lang: zh_hant' -d "$LEAD_BAD")"
+# ③ 类内联 error 键（spa 404 兜底写法）同样随语种改写；英文码值不在词条表必须原样
+ck A3lang-error-field-en '"error":"API endpoint not found"' "$(curl -s -H 'X-App-Lang: en' $B/api/uat-lang-probe-missing)"
+ck A3lang-error-field-zh '"error":"接口不存在"' "$(curl -s $B/api/uat-lang-probe-missing)"
+
 # ---------- A3p 职业角色（2026-09-19：job_role 绑用户不绑企业 + persona 角色包） ----------
 # ① 出厂字典：PersonaMigrate 种入 8 角色，公开接口与注册配置必须能读到（注册下拉数据源）
 ck A3p-personas-public '"success":true' "$(curl -s $B/api/register/personas)"

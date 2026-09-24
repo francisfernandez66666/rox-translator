@@ -416,6 +416,22 @@ T.update({
 "非法文件路径": "Illegal file path",
 })
 
+# —— 第三批盘点（收尾自查）：writeJSON 的 `"error": "中文"` 字面量（metrics/spa/stream 等）。
+# 前端 core.ts 与开放 API 消费方同样会把这些字段直投给用户，必须同表覆盖。
+T.update({
+"METRICS_TOKEN 未配置，/metrics 已关闭；本地开发请设 METRICS_PUBLIC=1": "METRICS_TOKEN not configured; /metrics is disabled (for local dev set METRICS_PUBLIC=1)",
+"接口不存在": "API endpoint not found",
+"文件不存在": "File not found",
+"无法保存文件": "Cannot save file",
+"未找到前端资源": "Frontend asset not found",
+"未授权": "Unauthorized",
+"未登录或登录已过期": "Not signed in or session expired",
+"该翻译模式已停用": "This translation mode is disabled",
+"请求格式错误": "Malformed request",
+"读取前端入口失败": "Failed to read frontend entry",
+"非法路径": "Illegal path",
+})
+
 import re, sys
 sys.path.insert(0, '/tmp')
 

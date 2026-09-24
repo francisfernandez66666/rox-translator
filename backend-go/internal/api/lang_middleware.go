@@ -151,9 +151,10 @@ func (lw *langWriter) finish() {
 	}
 }
 
-// messageRE 匹配 JSON 响应里的 "message":"..." 字段值（含转义字符序列）。
-// 只处理该键：后端面向用户的提示统一走 message 字段（writeJSON 与 apierrors 同口径）。
-var messageRE = regexp.MustCompile(`("message"\s*:\s*)"((?:\\.|[^"\\])*)"`)
+// messageRE 匹配 JSON 响应里的 "message"/"error" 字段值（含转义字符序列）。
+// 两类都要翻：面向用户的提示统一走 message 字段（writeJSON 与 apierrors 同口径），
+// 但 metrics/spa/stream 等早期代码用内联 error 键直投中文（前端消费方同样原样展示）。
+var messageRE = regexp.MustCompile(`("(?:message|error)"\s*:\s*)"((?:\\.|[^"\\])*)"`)
 
 // translateJSONMessages 在字节层面替换 message 字段值为按语种翻译后的文本，
 // 其余字节原样保留（字段顺序、缩进、其它键不动）。未命中词条 Msg 原样返回，不产生替换。
