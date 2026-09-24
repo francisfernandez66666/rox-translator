@@ -557,6 +557,177 @@ function HeroDemo() {
   )
 }
 
+/* 翻译文件直出循环动效（★ 2026-09-23）：上传 → 翻译 → 回写 → 下载，四阶段自循环。
+   复用 HeroDemo 范式：fdRef 根 + data-fd 选择器取节点、gen 代际计数防竞态、顶部进度条 --dur、
+   reduced-motion 静态终态、自循环 play() 不挂 setInterval。纯黑单色：文件名示例走
+   fdSampleSrc/fdSampleOut，标签走 fdSrcLabel/fdOutLabel/fdStep1-4，全程无裸中文。 */
+function FileDirectDemo() {
+  const [lang, t] = useT()
+  const SRC_NAME = t('land.fdSampleSrc') // 源文件名（用户语种）：报价单
+  const OUT_NAME = t('land.fdSampleOut') // 译文文件名（canonical）：quotation
+  const fdRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const root = fdRef.current
+    if (!root) return
+    const el = (n: string) => root.querySelector<HTMLElement>(`[data-fd="${n}"]`)
+    const barfill = el('barfill')!
+    const srcCard = el('src')!
+    const outCard = el('out')!
+    const arrow = el('arrow')!
+    const stemEl = el('stem')! // 译文卡文件名词干：翻译阶段改写
+    const progEl = el('prog')! // 译文卡内进度条
+    const check = el('check')! // 译文卡对勾（回写落章）
+    const dl = el('dl')! // 译文卡下载按钮（下载脉冲）
+    const steps = Array.from(root.querySelectorAll<HTMLElement>('.fd-step'))
+
+    let gen = 0
+    const sleep = (ms: number) => new Promise<void>((res) => window.setTimeout(res, ms))
+    const setStep = (i: number, g: number) => {
+      if (g !== gen) return
+      steps.forEach((s, k) => {
+        s.classList.toggle('on', k === i)
+        s.classList.toggle('done', k < i)
+      })
+    }
+    const reset = () => {
+      srcCard.classList.remove('upload')
+      outCard.classList.remove('live')
+      arrow.classList.remove('live')
+      stemEl.textContent = ''
+      stemEl.classList.remove('show')
+      progEl.classList.remove('run')
+      progEl.style.width = '0%'
+      check.classList.remove('show')
+      dl.classList.remove('show')
+      barfill.classList.remove('run')
+      steps.forEach((s) => s.classList.remove('on', 'done'))
+      void srcCard.offsetWidth // 落定摘类这一帧，新一轮动画才有起跳点
+    }
+    // 终态快照：供「偏好减少动效」使用，与演出结果一致（源卡常驻、译文卡已译好可下载）
+    const staticState = () => {
+      outCard.classList.add('live')
+      arrow.classList.add('live')
+      stemEl.textContent = OUT_NAME
+      stemEl.classList.add('show')
+      progEl.style.width = '100%'
+      check.classList.add('show')
+      dl.classList.add('show')
+      steps.forEach((s) => s.classList.add('done'))
+    }
+    // 减少动效：整条计时链不启动，直接呈现终态（trunc 类动画由文末 reduced-motion 规则统一掐掉）
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      staticState()
+      return () => { gen++ }
+    }
+
+    // 四阶段时长（ms）：与下方 play() 的 await 顺序逐拍对齐，改动画顺序须同步改
+    const T = {
+      lead: 240,
+      upload: 980, // 源卡落入 + 上传扫描线
+      gap1: 280,
+      translate: 1500, // 箭头亮 + 进度条跑 + 文件名改写
+      gap2: 260,
+      writeback: 900, // 对勾落章
+      gap3: 240,
+      download: 1500, // 下载按钮脉冲
+      tail: 1200, // 结果停留后重来
+    }
+    const totalMs =
+      T.lead + T.upload + T.gap1 + T.translate + T.gap2 + T.writeback + T.gap3 + T.download + T.tail
+    root.style.setProperty('--dur', `${totalMs}ms`) // 只交给 .lc-fd-barfill.run 用
+
+    async function play() {
+      const g = ++gen
+      reset()
+      await sleep(T.lead)
+      if (g !== gen) return
+      barfill.classList.add('run')
+
+      // 阶段 1：上传
+      setStep(0, g)
+      srcCard.classList.add('upload')
+      await sleep(T.upload)
+      if (g !== gen) return
+
+      // 阶段 2：翻译（箭头亮 + 进度条 + 文件名改写）
+      setStep(1, g)
+      arrow.classList.add('live')
+      outCard.classList.add('live')
+      progEl.classList.add('run')
+      stemEl.classList.remove('show')
+      void stemEl.offsetWidth // 摘加同类同帧无效，强制重排让旧名先淡出
+      stemEl.textContent = OUT_NAME
+      stemEl.classList.add('show')
+      await sleep(T.translate)
+      if (g !== gen) return
+
+      // 阶段 3：回写（对勾落章）
+      setStep(2, g)
+      check.classList.add('show')
+      await sleep(T.writeback)
+      if (g !== gen) return
+
+      // 阶段 4：下载（按钮脉冲）
+      setStep(3, g)
+      dl.classList.add('show')
+      await sleep(T.download)
+      if (g !== gen) return
+
+      await sleep(T.tail)
+      if (g !== gen) return
+      play() // 自循环：结果停留够久后回到空白重放，不挂 setInterval
+    }
+    play()
+    return () => { gen++ } // 卸载只 ++ 代际：悬空 await 自行熄火
+  }, [lang])
+
+  const steps = [t('land.fdStep1'), t('land.fdStep2'), t('land.fdStep3'), t('land.fdStep4')]
+  return (
+    <div className="lc-fd-visual" ref={fdRef} aria-hidden="true">
+      <i className="lc-fd-barfill" data-fd="barfill" />
+      <div className="lc-fd-row">
+        <div className="lc-fd-card lc-fd-src" data-fd="src">
+          <span className="lc-fd-tag">{t('land.fdSrcLabel')}</span>
+          <svg className="lc-fd-ico" width="38" height="38" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 2.5h8L19 7v14.5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-18a1 1 0 0 1 1-1Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+            <path d="M14 2.5V7h5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+          </svg>
+          <span className="lc-fd-name">{SRC_NAME}<span className="lc-fd-ext">.pdf</span></span>
+          <span className="lc-fd-fmt">PDF</span>
+          <i className="lc-fd-up" />
+        </div>
+        <span className="lc-fd-arrow" data-fd="arrow"><ArrowRightIcon size={22} /></span>
+        <div className="lc-fd-card lc-fd-out" data-fd="out">
+          <span className="lc-fd-tag">{t('land.fdOutLabel')}</span>
+          <svg className="lc-fd-ico" width="38" height="38" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 2.5h8L19 7v14.5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-18a1 1 0 0 1 1-1Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+            <path d="M14 2.5V7h5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+          </svg>
+          <span className="lc-fd-name"><span className="lc-fd-stem" data-fd="stem" /><span className="lc-fd-ext">.pdf</span></span>
+          <span className="lc-fd-prog"><i data-fd="prog" /></span>
+          <span className="lc-fd-fmt">PDF</span>
+          <span className="lc-fd-check" data-fd="check"><CheckCircleIcon size={18} /></span>
+          <button type="button" className="lc-fd-dl" data-fd="dl">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 3.5v11M7.5 10.5L12 15l4.5-4.5M5 20h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span>{t('land.fdStep4')}</span>
+          </button>
+        </div>
+      </div>
+      <div className="lc-fd-steps">
+        {steps.map((s, i) => (
+          <span className="fd-step" key={i}>
+            <i className="fd-dot" />
+            <em>{s}</em>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /** 开发者示例代码块：复制按钮写真实 curl（与演示卡同一套剪贴板降级口径，1.6s 回弹） */
 function DevSample() {
   const [lang, t] = useT()
@@ -738,6 +909,13 @@ export default function Landing() {
               <span className="lc-mo-up lc-mo-d1">{t('land.heroTitle1')}</span>
               <span className="lc-mo-up lc-mo-d2">{t('land.heroTitle2')}</span>
             </h1>
+            {/* ★ 2026-09-23：第二核心卖点带（与「跨行业精确翻译」并列）。主句强调「原文件直出+官方文件分钟级」，
+                小字提醒「订单/报价/确认等」作为官方文件的举例，不进主标题 */}
+            <div className="lc-hero-point2 lc-mo-up lc-mo-d3">
+              <i className="lc-hp-dot" />
+              <span className="lc-hp-main">{t('land.heroPoint2')}</span>
+              <span className="lc-hp-note">{t('land.heroPoint2Note')}</span>
+            </div>
             <p className="lc-hero-sub lc-mo-up lc-mo-d3">{t('land.heroSub')}</p>
             {/* d1~d5 每档差 60ms（motion.css）：徽章→标题→副题→按钮→信任指标逐拍落位，读作"页面在呼吸"而非整体闪现 */}
             <div className="lc-hero-ctas lc-mo-up lc-mo-d4">
@@ -838,6 +1016,19 @@ export default function Landing() {
               <p className="lc-fcard-d">{t(`land.fc.${k}.d`)}</p>
             </article>
           ))}
+        </div>
+      </section>
+
+      {/* 翻译文件直出（★ 2026-09-23）：核心功能之后、覆盖范围之前。左四阶段循环动效文件卡（上传→翻译→回写→下载）· 右文字卖点。
+          纯黑单色；文件名示例走 fdSampleSrc/fdSampleOut，标签走 fdSrcLabel/fdOutLabel/fdStep1-4，全程无裸中文 */}
+      <section id="filedirect" className="lc-sec lc-fd lc-reveal">
+        <div className="lc-fd-in">
+          <FileDirectDemo />
+          <div className="lc-fd-copy">
+            <h2 className="lc-fd-title">{t('land.heroPoint2')}</h2>
+            <p className="lc-fd-body">{t('land.fdBody')}</p>
+            <p className="lc-fd-note">{t('land.heroPoint2Note')}</p>
+          </div>
         </div>
       </section>
 
@@ -1220,6 +1411,73 @@ const LANDING_CSS = `
 /* 两行断句靠 block 而不是 <br>：DOM 里不留可被复制带走的换行符，也让两行各自能挂节拍类 */
 .lc-hero-h1 span{display:block}
 .lc-hero-sub{margin:0;font-size:18px;line-height:28px;color:var(--lc-text-3)}
+/* ★ 2026-09-23：第二核心卖点带（与「跨行业精确翻译」标题并列）。外形复用徽章的浮面圆角+描边，
+   但文字用 --lc-text-1（更亮）以显「卖点」分量；小字提醒走 --lc-text-3，靠左边框与主语分隔 */
+.lc-hero-point2{display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;margin:18px 0 0;padding:10px 18px;border-radius:999px;background:var(--lc-raised);border:1.2px solid var(--lc-border-pill);font-size:15px;line-height:1.45;color:var(--lc-text-1)}
+.lc-hero-point2 .lc-hp-dot{width:8px;height:8px;border-radius:50%;background:var(--lc-text-1);flex:none}
+.lc-hero-point2 .lc-hp-main{font-weight:600;color:var(--lc-text-1)}
+.lc-hero-point2 .lc-hp-note{font-size:12.5px;font-weight:400;color:var(--lc-text-3);padding-left:10px;margin-left:2px;border-left:1px solid var(--lc-border-pill)}
+/* —— 翻译文件直出（四阶段循环动效：上传→翻译→回写→下载）：左文件卡动效 · 右文字，两栏图左文右 —— */
+.lc-fd-in{display:grid;grid-template-columns:1.05fr .95fr;gap:48px;align-items:center;max-width:1080px;margin:0 auto}
+.lc-fd-visual{position:relative;display:flex;flex-direction:column;align-items:center;gap:22px;padding-top:10px}
+/* 顶部循环进度条：时长取 JS 写入的 --dur，与四阶段演出同帧起跑 */
+.lc-fd-barfill{position:absolute;top:0;left:0;height:2px;width:100%;border-radius:2px;background:linear-gradient(90deg,transparent,var(--lc-text-1));transform-origin:left;transform:scaleX(0)}
+.lc-fd-barfill.run{animation:fd-bar var(--dur) linear forwards}
+@keyframes fd-bar{to{transform:scaleX(1)}}
+.lc-fd-row{display:flex;align-items:center;justify-content:center;gap:14px}
+.lc-fd-card{position:relative;display:flex;flex-direction:column;align-items:center;gap:10px;width:200px;padding:30px 16px 24px;border-radius:16px;background:var(--lc-raised);border:1.2px solid var(--lc-border-pill);transition:border-color .4s,box-shadow .4s,transform .4s,opacity .4s}
+.lc-fd-tag{position:absolute;top:-11px;left:50%;transform:translateX(-50%);font-size:12px;line-height:1;color:var(--lc-text-3);background:var(--lc-bg);padding:4px 12px;border-radius:999px;border:1px solid var(--lc-border-pill);white-space:nowrap}
+.lc-fd-ico{color:var(--lc-text-1)}
+.lc-fd-name{font-size:18px;font-weight:600;color:var(--lc-text-1);text-align:center;word-break:break-word;min-height:22px;display:flex;align-items:baseline;justify-content:center;gap:1px}
+.lc-fd-stem{display:inline-block;opacity:0;transform:translateY(5px);transition:opacity .28s ease,transform .28s ease}
+.lc-fd-stem.show{opacity:1;transform:none}
+.lc-fd-ext{color:var(--lc-text-3);font-weight:400}
+/* 译文卡扩展名在翻译前隐藏：输出尚未生成，只露出空白待填 */
+.lc-fd-out .lc-fd-ext{opacity:0;transition:opacity .3s}
+.lc-fd-out.live .lc-fd-ext{opacity:1}
+.lc-fd-fmt{font-size:11px;letter-spacing:.5px;color:var(--lc-text-3);border:1px solid var(--lc-border-pill);border-radius:6px;padding:2px 8px}
+.lc-fd-arrow{color:var(--lc-text-3);flex:none;transition:color .34s,transform .34s}
+.lc-fd-arrow.live{color:var(--lc-text-1);transform:translateX(3px)}
+/* 源卡：上传阶段落入 + 顶部扫描线 */
+.lc-fd-src.upload{animation:fd-drop .5s ease}
+@keyframes fd-drop{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:none}}
+.lc-fd-up{position:absolute;left:8px;right:8px;top:6px;height:2px;border-radius:2px;background:var(--lc-text-1);opacity:0}
+.lc-fd-src.upload .lc-fd-up{animation:fd-scan .9s ease}
+@keyframes fd-scan{0%{opacity:0;transform:translateY(0)}22%{opacity:.85}100%{opacity:0;transform:translateY(112px)}}
+/* 译文卡：翻译阶段亮边 + 进度条 */
+.lc-fd-out{padding-bottom:46px}
+.lc-fd-out.live{border-color:var(--lc-text-1);box-shadow:0 0 0 1px var(--lc-text-1)}
+.lc-fd-prog{width:120px;height:4px;border-radius:999px;background:var(--lc-inset);overflow:hidden;opacity:0;transition:opacity .3s}
+.lc-fd-out.live .lc-fd-prog{opacity:1}
+.lc-fd-prog>i{display:block;height:100%;width:0;background:var(--lc-text-1);border-radius:999px}
+.lc-fd-prog>i.run{animation:fd-prog 1.5s ease forwards}
+@keyframes fd-prog{to{width:100%}}
+/* 回写：对勾落章 */
+.lc-fd-check{position:absolute;top:12px;right:12px;color:var(--lc-text-1);opacity:0;transform:scale(.6);transition:opacity .3s,transform .3s}
+.lc-fd-check.show{opacity:1;transform:scale(1);animation:fd-stamp .4s ease}
+@keyframes fd-stamp{0%{transform:scale(.5)}60%{transform:scale(1.18)}100%{transform:scale(1)}}
+/* 下载：按钮脉冲 */
+.lc-fd-dl{position:absolute;bottom:10px;left:50%;transform:translate(-50%,8px);display:inline-flex;align-items:center;gap:6px;padding:7px 16px;border-radius:999px;background:var(--lc-text-1);color:var(--lc-bg);border:none;font-size:13px;font-weight:600;cursor:default;opacity:0;pointer-events:none;transition:opacity .3s,transform .3s}
+.lc-fd-dl.show{opacity:1;transform:translate(-50%,0);animation:fd-pulse 1.4s ease-in-out infinite}
+@keyframes fd-pulse{0%,100%{box-shadow:0 0 0 0 rgba(231,233,234,0)}50%{box-shadow:0 0 0 6px rgba(231,233,234,.12)}}
+/* 阶段指示条：on=进行中（亮）/ done=已完成（实心点） */
+.lc-fd-steps{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center}
+.fd-step{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--lc-text-3);transition:color .3s}
+.fd-step .fd-dot{width:8px;height:8px;border-radius:50%;border:1px solid var(--lc-border-pill);background:transparent;transition:background .3s,border-color .3s}
+.fd-step.on{color:var(--lc-text-1)}
+.fd-step.on .fd-dot{background:var(--lc-text-1);border-color:var(--lc-text-1)}
+.fd-step.done{color:var(--lc-text-2)}
+.fd-step.done .fd-dot{background:var(--lc-text-1);border-color:var(--lc-text-1)}
+.lc-fd-copy{max-width:460px}
+.lc-fd-title{margin:0 0 16px;font-size:clamp(26px,3vw,38px);line-height:1.25;font-weight:700;color:var(--lc-text-1)}
+.lc-fd-body{margin:0;font-size:17px;line-height:28px;color:var(--lc-text-3)}
+.lc-fd-note{margin:14px 0 0;font-size:13px;color:var(--lc-text-3);opacity:.85}
+@media (max-width:980px){.lc-fd-in{grid-template-columns:1fr;gap:32px}.lc-fd-visual{order:-1}}
+/* reduced-motion：掐掉所有一次性动画，静态终态由 JS staticState() 给出 */
+@media (prefers-reduced-motion:reduce){
+  .lc-fd-barfill.run,.lc-fd-src.upload,.lc-fd-prog>i.run,.lc-fd-check.show,.lc-fd-dl.show{animation:none!important}
+  .lc-fd-stem{transition:none}
+}
 .lc-hero-ctas{display:flex;align-items:center;gap:16px}
 /* 信任指标 26px 间距：三条要读成"并列事实"，间距小于卡内 gap 就会粘成一段 */
 .lc-hero-trust{display:flex;align-items:center;gap:26px;font-size:16px;color:var(--lc-text-3)}
