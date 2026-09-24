@@ -1,6 +1,7 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-24（**〇-Q 文件直出区通栏固定舞台重排 ＋ 文档注释棘轮门禁**——文件直出演示弃双栏改「居中标题容器 + 限宽 880 固定舞台」，hero 第二卖点带迁入动效上方（首屏删除），演出只动元素自身零布局位移（chip 定宽、链路弹性伸缩、sink 只压亮度），源 chip 去飞入吸附改左链路数据包流入，下载改纯 icon 绝对定位长在译文 chip 内，顶部独立进度条与底部步骤文字行删除，窄屏链路补 `min-width:0` 修「粗带」（根因＝基础 `min-width:48px` 未被媒体查询覆盖）；App PageLoading 去「加载中」文字。新增 `tools/check_doc_comments.py` 导出面中文文档注释棘轮门禁（Go 249 文件实测 0 缺口、FE 补 7 处后双 0 基线入库 `.doc_comments_baseline`，selftest 含剥离探针负向自证）。Landing.dom.test 新增 ⑩-⑮ 六条回归锁。门禁：tsc 0、vitest **49 文件 384 用例全绿**、`go vet`/`go build`/gofmt 0。本地代码提交 **`c52c0f7`+`3e5ebec`** → 纯代码推送 **`dc419b8`**（9 文件，零 .md、零 UI 交付包）·文档仅本地。**部署见 〇-Q 表 ⑦**）
+> 最后更新：2026-09-24（**〇-R 后台去写死中文全量收口 + 全站 logo 统一/favicon + 个人中心默认落页 + 发码 403 三连修复**——本地代码提交 `670a842` → 纯代码推送 `a882977`（57 文件，零 .md、零 UI 交付包）·文档仅本地；门禁 tsc 0、vitest 52 文件全绿、vite build 成功；**部署未做**，待下令换 web 源。上一批 〇-Q 记录见下文）
+> （历史记录：2026-09-24 〇-Q 文件直出区通栏固定舞台重排 ＋ 文档注释棘轮门禁**——文件直出演示弃双栏改「居中标题容器 + 限宽 880 固定舞台」，hero 第二卖点带迁入动效上方（首屏删除），演出只动元素自身零布局位移（chip 定宽、链路弹性伸缩、sink 只压亮度），源 chip 去飞入吸附改左链路数据包流入，下载改纯 icon 绝对定位长在译文 chip 内，顶部独立进度条与底部步骤文字行删除，窄屏链路补 `min-width:0` 修「粗带」（根因＝基础 `min-width:48px` 未被媒体查询覆盖）；App PageLoading 去「加载中」文字。新增 `tools/check_doc_comments.py` 导出面中文文档注释棘轮门禁（Go 249 文件实测 0 缺口、FE 补 7 处后双 0 基线入库 `.doc_comments_baseline`，selftest 含剥离探针负向自证）。Landing.dom.test 新增 ⑩-⑮ 六条回归锁。门禁：tsc 0、vitest **49 文件 384 用例全绿**、`go vet`/`go build`/gofmt 0。本地代码提交 **`c52c0f7`+`3e5ebec`** → 纯代码推送 **`dc419b8`**（9 文件，零 .md、零 UI 交付包）·文档仅本地。**部署见 〇-Q 表 ⑦**）
 > ★★ **〇-P、回退到 UI 交付稿批（2026-09-23，现行口径）**：用户看过 〇-O 实测后判「太丑」，后令「严格按 UI 交付稿来」。
 > 〇-O 整体撤销：**描边七档回到交付灰阶**（#8B939F → #2A2F3A，`#FFFFFF` 不再作框线色）、**面色台阶回交付值**
 > （L2 `--lc-panel` **#0E1014** / L3 `--lc-raised` **#16181C**，〇-O 的 +8 档 #121417/#1A1D21 作废）、
@@ -8,6 +9,19 @@
 > **字号保留 〇-N 的 +2px 不动**。五类渲染面逐面同步、闸门两侧全部翻转（`readability.test.ts` A/F/H/I、
 > `public_ui_test.go` `retiredLegacy00O`、`admin_ui_test.go`、`pixel_uat.spec.ts` P2d/P6c）；扩展重打包 **1.2.2**。
 > ⚠️ **下面的 〇-O 条目是历史记录，不再是现行口径**——读它请按「已撤销」理解。
+
+### 〇-R、后台去写死中文全量收口 + 全站 logo 统一/favicon + 个人中心默认落页 + 发码 403 三连修复（2026-09-24，★ 本地代码提交 `670a842` → 纯代码推送 `a882977`（57 文件，零 `.md`、零 UI 交付包）·文档仅本地）
+
+用户连报四事，本批全部收口（纯前端，无 Go 改动）：
+
+1. **发码 403 三连（#6，前段完成本批入库）**：新增 `src/lib/turnstile.ts` 人机验证挂件桥；AiRegisterFlow 补挂载与失败提示；403 误改文案回退。dom 断言锁随批入库。
+2. **后台去写死中文（#9）**：KbP 授权弹窗/OrgP 移动/BrandP 占位与超限提示/OpsP 覆写因子与路由统计与 SLO/LangMultiSelect 语种名/内置人格（`personaName` code→英名映射）全部走 12 语种词典；**api 层中文报错**经新增 `apiMsg` 钩子总线本地化（core.ts 禁静态 import i18n 的口径不破，ToastBridge 注册取词器，未注册回落中文兜底句）；新闸门 `src/i18n/hardcodedCjkGate.test.ts` 扫 components/admin + api 两目录的字符串字面量 CJK，零写死中文（SdkP 代码示例豁免、apiMsg 兜底行豁免）。dicts +25 键、panels ops+33/org+3/kb/brand/tasks/auth，10 份 locale 全量补译（占位符逐字一致）。
+   ⚠️ **遗留决策项（后端）**：后端无 Accept-Language 机制，`r.message` 类中文提示（如越权/参数错误的后端原文）仍会直出到前端 toast——要不要后端按请求语言回文案，待用户定。
+3. **个人中心默认落页（#10）**：进入即打开第一个子页（个人=邀请好友、企业/超管=任务中心），`PersonalCenterP.dom.test.tsx` 锁默认落页与权限收口；本仓 vitest 未开 globals，RTL 不自动 cleanup，跨用例 DOM 残留曾致假红，已在测试内 `afterEach(cleanup)`。
+4. **全站 logo 统一 + favicon（#8）**：`BrandDotIcon`（Icon n="brand"）重写为首页顶栏「白 30×30 圆角块 + 一实一虚两笔黑画」同源图形；App 顶栏、后台侧栏默认标记、PricingPage BrandMark（旧圆环圆点退役）三处统一；新增 `public/logo.svg` + index.html `<link rel="icon">`；`branding.tsx` 解析品牌后 favicon 随 `brandLogo` 切换（**有独立品牌 Logo 的租户除外**，其仍用自家 Logo 与顶栏 img）。`src/logoConsistency.test.ts` 以两条笔画 path 逐字锁五处同源。
+5. ⚠️ 〇-P 口径插曲：Dialog/uiDialogs 默认按钮曾误切 `common.confirm`（确认），实为交付原文「确定」用词回归——新增 `common.ok`（确定/OK）12 语种全量落键并回落，TaskCenterP.dom 红灯即此因。
+
+门禁：tsc 0、vitest **52 文件全绿**、vite build 成功。**部署未做**（纯前端批次，待用户下令换 web 源；logo/favicon 属前端 dist 即换即生效，不动二进制）。
 
 ### 〇-Q、文件直出区通栏固定舞台重排 + 文档注释棘轮门禁批（2026-09-24，★ 本地代码提交 `c52c0f7`+`3e5ebec` → 纯代码推送 `dc419b8`（9 文件，零 `.md`、零 UI 交付包）·文档仅本地）
 
