@@ -127,7 +127,9 @@ def scan_dir_fe(p: Path):
 
 def main():
     args = sys.argv[1:]
-    selftest(Path(ROOT / "tools"))  # selftest 常开：脚本写歪直接炸，不给静默放行机会
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:  # 探针写临时目录，不在仓库留残骸
+        selftest(Path(td))  # selftest 常开：脚本写歪直接炸，不给静默放行机会
     go, fe = scan_go(), scan_fe()
     if "--list" in args:
         for kind, found in (("go", go), ("fe", fe)):
