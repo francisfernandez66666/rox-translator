@@ -1,6 +1,6 @@
 # 能言 SaaS · 项目进度总览
 
-> 最后更新：2026-09-24（**〇-R 后台去写死中文全量收口 + 全站 logo 统一/favicon + 个人中心默认落页 + 发码 403 三连修复**——本地代码提交 `670a842` → 纯代码推送 `a882977`（57 文件，零 .md、零 UI 交付包）·文档仅本地；门禁 tsc 0、vitest 52 文件全绿、vite build 成功；**部署未做**，待下令换 web 源。上一批 〇-Q 记录见下文）
+> 最后更新：2026-09-24（**〇-S 前台整合＋后端语言识别**——本地代码提交 `e4b263a` → 纯代码推送 `a19e2ec`（17 文件）·文档仅本地；门禁后端 trio 全绿（含 -race 全量）、前端 tsc 0/vitest 54 文件 405 用例全绿/vite build 成功；真机双语闭环已验。**部署未做**：需换 `translator-server` 二进制 + web 源。上一批 〇-R 记录：〇-R 后台去写死中文全量收口 + 全站 logo 统一/favicon + 个人中心默认落页 + 发码 403 三连修复**——本地代码提交 `670a842` → 纯代码推送 `a882977`（57 文件，零 .md、零 UI 交付包）·文档仅本地；门禁 tsc 0、vitest 52 文件全绿、vite build 成功；**部署未做**，待下令换 web 源。上一批 〇-Q 记录见下文）
 > （历史记录：2026-09-24 〇-Q 文件直出区通栏固定舞台重排 ＋ 文档注释棘轮门禁**——文件直出演示弃双栏改「居中标题容器 + 限宽 880 固定舞台」，hero 第二卖点带迁入动效上方（首屏删除），演出只动元素自身零布局位移（chip 定宽、链路弹性伸缩、sink 只压亮度），源 chip 去飞入吸附改左链路数据包流入，下载改纯 icon 绝对定位长在译文 chip 内，顶部独立进度条与底部步骤文字行删除，窄屏链路补 `min-width:0` 修「粗带」（根因＝基础 `min-width:48px` 未被媒体查询覆盖）；App PageLoading 去「加载中」文字。新增 `tools/check_doc_comments.py` 导出面中文文档注释棘轮门禁（Go 249 文件实测 0 缺口、FE 补 7 处后双 0 基线入库 `.doc_comments_baseline`，selftest 含剥离探针负向自证）。Landing.dom.test 新增 ⑩-⑮ 六条回归锁。门禁：tsc 0、vitest **49 文件 384 用例全绿**、`go vet`/`go build`/gofmt 0。本地代码提交 **`c52c0f7`+`3e5ebec`** → 纯代码推送 **`dc419b8`**（9 文件，零 .md、零 UI 交付包）·文档仅本地。**部署见 〇-Q 表 ⑦**）
 > ★★ **〇-P、回退到 UI 交付稿批（2026-09-23，现行口径）**：用户看过 〇-O 实测后判「太丑」，后令「严格按 UI 交付稿来」。
 > 〇-O 整体撤销：**描边七档回到交付灰阶**（#8B939F → #2A2F3A，`#FFFFFF` 不再作框线色）、**面色台阶回交付值**
@@ -9,6 +9,15 @@
 > **字号保留 〇-N 的 +2px 不动**。五类渲染面逐面同步、闸门两侧全部翻转（`readability.test.ts` A/F/H/I、
 > `public_ui_test.go` `retiredLegacy00O`、`admin_ui_test.go`、`pixel_uat.spec.ts` P2d/P6c）；扩展重打包 **1.2.2**。
 > ⚠️ **下面的 〇-O 条目是历史记录，不再是现行口径**——读它请按「已撤销」理解。
+
+### 〇-S、前台整合（套餐/余额/账号并入右上下拉+页脚回底+去汉堡）＋ 后端语言识别（提示语按界面语言返回）（2026-09-24，★ 本地代码提交 `e4b263a` → 纯代码推送 `a19e2ec`（17 文件，零 `.md`、零 UI 交付包）·文档仅本地）
+
+用户在 〇-R 待决策清单上下令两事（#7/#11 前台整合、#12 后端语言识别）：
+① **#11 前台整合**：左侧汉堡抽屉删除（用户判「右侧的不是汉堡，是下拉」），套餐/余额/邀请/账号四项并入右上角 AccountMenu 下拉（新增 `selfNav`/`showInvites` 入参，个人用户才见「我的邀请」，与 /invites 守卫同口径）；`SiteFooter` 回归页脚位置（参考元宝：页面底固定），壳层改 `100dvh` flex 列 + `app-main` 自滚动，ChatWindow 高度弃 `calc(100vh-39px)` 改 `flex:1`。浏览器实测（zh+en 双语种）：无汉堡、下拉九项齐全、footerTop=视口底、无双滚动条、/billing 跳转正常。断言：`AccountMenu.selfnav.dom.test.tsx`（3 用例）+ `FrontShell.layout.lock.test.ts`（4 条源码锁：无 `Icon n="menu"`/无 Drawer/menuOpen 残留、SiteFooter 位置、布局尺寸口径）。顺带修 `WordSwap` jsdom 卸载后 `window.setTimeout` 抛未处理拒绝（改 plain setTimeout + play().catch）。
+② **#12 后端语言识别**：新增 `internal/i18n` 包——`FromRequest` 判语种（X-App-Lang > Accept-Language > 无头默认 zh；zh 系含繁体一律归 zh〔本批明示取舍〕、其余语种→en 与前端回退链同口径）；`Msg()` 三级匹配（精确 379 词条 → ≥5 rune 最长前缀〔覆盖「保存失败: 」+err 拼接〕→ 10 条 %d/%s/%v 模式句式 → 原样透传）。挂点收口在 HTTP 边界：`lang_middleware.go` 仅对英文请求包 `langWriter`，缓冲 JSON 响应后**字节级**改写 `"message":"..."` 值——992 处调用点零改动、字段顺序不破坏；SSE/静态/下载等非 JSON Content-Type 直通、超 1MB 冲刷切直通、handler 主动 Flush 即切直通；**中文请求（含全部 curl/UAT）零包装、字节级与改造前一致**。CORS 放行 X-App-Lang；前端 `authHeaders()` 统一附带（core.ts 直读 localStorage.app_lang 不 import i18n，SSE 通道 translate.ts 复用 authHeaders 同源生效）。
+⚠️ **盘点补漏**（真机联调抓出）：首轮只扫 `"message": "..."` 字面量，漏掉 `apierrors.New(code, "中文")` 整类——43 唯一串缺 36 条（用户名或密码错误/未登录或登录已失效/SSO 系列/支付渠道系列等），已全部补录；防复发棘轮 `TestAPICnMessageLiteralsCovered`：internal/api 非测试源码两类写死中文不进词条表即红灯（命中数 <300 判正则口径退化）。词条表由 `scripts/gen_i18n_catalog.py --apply` 生成（改完自动过 gofmt），`TestCatalogCoverage` 钉规模 ≥375。
+**门禁**：后端 `go build`/`go vet` 0、`go test -race ./...` 全量绿（首跑仅 gofmt 闸门红〔新文件未格式化，gofmt -w 后复跑绿〕+ 触及三包 `-race` 复验：internal 5.3s / api 213.6s / i18n 1.3s 全 ok）；前端 tsc 0、vitest **54 文件 405 用例全绿**、vite build 2.63s 成功。真机双语闭环：`/api/auth/login` 错误凭证在 X-App-Lang:en 下返回 “Incorrect username or password”、ja→en、zh_hant→zh、Accept-Language:fr→en、无头→zh（页面实测英文/中文提示各随其语种）。
+**部署待办**：本批含后端——上线需换 `translator-server` 二进制（internal/api 直出页与全部 JSON 接口经新中间件）；前端换 `frontend-react/dist` web 源（连同 〇-R 未部署部分一起生效）。assist-server 与扩展本批未接入 X-App-Lang（扩展/划译插件走 openapi 无头默认 zh，留待后续批次）。
 
 ### 〇-R、后台去写死中文全量收口 + 全站 logo 统一/favicon + 个人中心默认落页 + 发码 403 三连修复（2026-09-24，★ 本地代码提交 `670a842` → 纯代码推送 `a882977`（57 文件，零 `.md`、零 UI 交付包）·文档仅本地）
 
