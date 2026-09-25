@@ -358,8 +358,8 @@ Die Seite „Offizielle SDKs“ liefert Installationsanleitungen und Download-Ei
 
 | Ende | Bezugsweg | Zweck |
 |----|----------|------|
-| Python | `pip install langcross-translator` | Programmatische Übersetzung, Stapelaufgaben |
-| TypeScript | `npm i @langcross/translator-sdk` | Node/Frontend-Integration |
+| Python | `.whl` (oder Quellcode-`.tar.gz`) auf der Seite „Offizielles SDK" dieser Website herunterladen und lokal installieren: `pip install <heruntergeladene Datei>` (gehostet unter `/sdk/` auf dieser Website, nicht in externen Registries veröffentlicht) | Programmatische Übersetzung, Stapelaufgaben  |
+| TypeScript | `.tgz` auf der Seite „Offizielles SDK" dieser Website herunterladen und lokal installieren: `npm install <heruntergeladene Datei>` (wie oben, gehostet unter `/sdk/` auf dieser Website) | Node/Frontend-Integration  |
 | Java | Maven-Quellcode-Distribution | Anbindung interner Unternehmenssysteme |
 | Browser-Erweiterung für Textauswahl | ZIP-Download auf dieser Seite (kein App-Store-Kanal) | Auf beliebigen Webseiten Text markieren → aufpoppende Schaltfläche „译“ anklicken → Übersetzung als Blase ansehen und kopieren; Tastenkürzel Alt+Shift+T (macOS: Alt+T) |
 | Word-Add-in | Die Site stellt das Add-in-Manifest bereit; in Word „Einfügen → Add-ins abrufen → Mein Add-in hochladen“ seitlich laden | Markierten Text in Word übersetzen und ins Dokument zurückschreiben |

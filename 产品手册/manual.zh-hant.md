@@ -358,8 +358,8 @@
 
 | 端 | 取得方式 | 用途 |
 |----|----------|------|
-| Python | `pip install langcross-translator` | 程式化翻譯、批次任務 |
-| TypeScript | `npm i @langcross/translator-sdk` | Node/前端整合 |
+| Python | 本站「官方 SDK」頁下載 `.whl`（或源碼包 `.tar.gz`）後本地安裝：`pip install <下載的檔案>`（套件由本站 `/sdk/` 託管，未發布外部註冊表） | 程式化翻譯、批次任務  |
+| TypeScript | 本站「官方 SDK」頁下載 `.tgz` 後本地安裝：`npm install <下載的檔案>`（同上，本站 `/sdk/` 託管） | Node/前端整合  |
 | Java | Maven 原始碼分發 | 企業內系統對接 |
 | 瀏覽器劃詞擴充功能 | 該頁下載 zip（無應用商店通路） | 任意網頁選取文字→點浮出「譯」按鈕→氣泡看譯文並複製；快捷鍵 Alt+Shift+T（macOS 為 Alt+T） |
 | Word 增益集 | 站點提供增益集清單，Word「插入 → 取得增益集 → 側載我的增益集」側載 | 在 Word 內翻譯選取文字並插回文件 |

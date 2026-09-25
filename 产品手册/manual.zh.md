@@ -358,8 +358,8 @@
 
 | 端 | 获取方式 | 用途 |
 |----|----------|------|
-| Python | `pip install langcross-translator` | 程序化翻译、批量任务 |
-| TypeScript | `npm i @langcross/translator-sdk` | Node/前端集成 |
+| Python | 本站「官方 SDK」页下载 `.whl`（或源码包 `.tar.gz`）后本地安装：`pip install <下载的文件>`（包由本站 `/sdk/` 托管，未发布外部注册表） | 程序化翻译、批量任务  |
+| TypeScript | 本站「官方 SDK」页下载 `.tgz` 后本地安装：`npm install <下载的文件>`（同上，本站 `/sdk/` 托管） | Node/前端集成  |
 | Java | Maven 源码分发 | 企业内系统对接 |
 | 浏览器划词扩展 | 该页下载 zip（无应用商店渠道） | 任意网页选中文本→点浮出「译」按钮→气泡看译文并复制；快捷键 Alt+Shift+T（macOS 为 Alt+T） |
 | Word 加载项 | 站点提供加载项清单，Word「插入 → 获取加载项 → 上传我的加载项」侧载 | 在 Word 内翻译选中文本并插回文档 |

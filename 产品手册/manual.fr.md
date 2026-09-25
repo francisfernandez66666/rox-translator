@@ -358,8 +358,8 @@ La page « SDK officiels » fournit les guides d'installation et les accès de t
 
 | Plateforme | Obtention | Usage |
 |----|----------|------|
-| Python | `pip install langcross-translator` | Traduction programmatique, tâches par lots |
-| TypeScript | `npm i @langcross/translator-sdk` | Intégration Node/frontend |
+| Python | téléchargez le fichier `.whl` (ou le source `.tar.gz`) depuis la page « SDK officiel » de ce site, puis installez-le : `pip install <fichier téléchargé>` (hébergé sous `/sdk/` sur ce site ; non publié sur les registres externes) | Traduction programmatique, tâches par lots  |
+| TypeScript | téléchargez le fichier `.tgz` depuis la page « SDK officiel » de ce site, puis installez-le : `npm install <fichier téléchargé>` (comme ci-dessus, hébergé sous `/sdk/` sur ce site) | Intégration Node/frontend  |
 | Java | Distribution par sources Maven | Intégration aux systèmes d'entreprise |
 | Extension de traduction à la sélection pour navigateur | Téléchargement zip sur cette page (aucun canal de boutique d'applications) | Sélectionner un texte sur n'importe quelle page web → cliquer le bouton flottant « 译 » → consulter la traduction dans une bulle et la copier ; raccourci Alt+Shift+T (Alt+T sur macOS) |
 | Complément Word | Manifeste de complément fourni par le site ; dans Word, « Insertion → Get Add-ins → Upload My Add-in » pour un chargement latéral | Traduire le texte sélectionné dans Word et réinsérer le résultat dans le document |

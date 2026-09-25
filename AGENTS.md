@@ -132,6 +132,12 @@
   **只改 `extension/` 源码而不重打包 = 线上仍是旧包**；`.sha256` 记的是「固定顺序 name+NUL+bytes+NUL 归一」的
   **内容指纹**而非 zip 字节哈希（zip 内含 mtime，同源码两次打包字节不同），比对排障按这个口径，
   漂移由 `build_extension.sh --check` 与 `src/extensionPackage.test.ts` 拦。
+  **SDK 交付物与扩展同为「随源发布」通道**（★ 2026-09-25 〇-T）：改动落在 `sdk/python` / `sdk/typescript`
+  **必须 `bash scripts/build_sdk.sh` 重打托管产物**（whl/sdist/tgz + latest 别名 + `.sha256` + `manifest.json`
+  落 `frontend-react/public/sdk/`，随前端 dist 换源即上线，`/sdk/*` 静态直出、不动后端二进制）；
+  **只改 SDK 源码而不重打包 = 线上仍是旧包**。漂移由 `build_sdk.sh --check` 与
+  `e2e/sdk_download.spec.ts` 拦（可达性判据同 §6 托管物口径：200 + 非 HTML 兜底 + 魔数 whl=`PK`/tgz·sdist=gzip
+  + 体积下限；manifest 与 `pyproject.toml`/`package.json` 版本交叉锁，禁写死版本号）。
   落在 ②③④ 而**只换 `/opt/translator/web`** 一律不生效（① 的组件内联样式在 dist 里，换前端即生效）。
   ⚠️ **「纯注释提交＝不用发版」只对 React 侧成立**：往 `public.go`/`office.go`/`admin_openapi.go` 的**内嵌 HTML/JS
   字符串里**加一行注释，dist hash 不变、`go build` 无任何行为差异，但**直出页的字节确实变了**，线上就是旧页
@@ -220,6 +226,7 @@ bash scripts/uat/assist_uat.sh                    # AI 顾问（自起临时实�
 bash scripts/uat/run_uat.sh                       # 全链路主矩阵（PG 方言，发布闸门）
 bash scripts/uat/multi_instance_e2e.sh            # 多实例红线
 bash scripts/build_extension.sh --check           # 扩展漂移闸门（动过 extension/ 却没重打 zip 时红灯；vitest 同口径）
+bash scripts/build_sdk.sh --check                 # SDK 托管产物漂移闸门（★ 2026-09-25 〇-T：动过 sdk/ 却没重打 public/sdk/ 时红灯；e2e/sdk_download.spec.ts 同口径）
 ```
 
 改动全绿后**按 §一·9 的口径推送**（`scripts/push_code_only.sh` 干跑 → `--apply`），不要裸 `git push`。

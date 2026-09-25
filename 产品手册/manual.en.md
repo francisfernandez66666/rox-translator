@@ -358,8 +358,8 @@ The "Official SDKs" page carries install guides and downloads:
 
 | Surface | How to get it | What it does |
 |---------|---------------|--------------|
-| Python | `pip install langcross-translator` | Programmatic translation, batch jobs |
-| TypeScript | `npm i @langcross/translator-sdk` | Node/front-end integration |
+| Python | Download the `.whl` (or source `.tar.gz`) from the site's "Official SDK" page, then `pip install <downloaded file>` (hosted under `/sdk/` on this site; not published to external registries) | Programmatic translation, batch jobs  |
+| TypeScript | Download the `.tgz` from the site's "Official SDK" page, then `npm install <downloaded file>` (hosted under `/sdk/` on this site) | Node/front-end integration  |
 | Java | Maven source distribution | Enterprise system integration |
 | Browser extension | zip download on that page (no app-store channel) | Select text on any web page → floating "译" button → translation bubble with one-click copy; shortcut Alt+Shift+T (Alt+T on macOS) |
 | Word add-in | manifest served by the site; in Word use "Insert → Get Add-ins → Upload My Add-in" to side-load | Translate the selection inside Word and insert the result back |
