@@ -16,6 +16,8 @@
 // ★ 2026-09-21 #36：即时翻译不再支持文件翻译——本 store 的 sendFile（SSE 文件流）与
 //   ChatWindow 的上传入口一并移除；逐段上屏的展示层（MessageBubble 读 message.segments）
 //   保留，历史会话里已落盘的逐段数据仍可正常回看。文件翻译走「文档翻译」工单页。
+// ★ 2026-09-25 批G：F-11 done 帧后 debounce 2s 经 PkgRefreshCtx 回调顶栏积分刷新；
+//   F-29 错误收尾识别网关 HTML 错误页（非 SSE 整页回吐），气泡替换为 chat.timeoutTicket 文案。
 // ============================================================================
 
 /**
@@ -79,6 +81,10 @@ interface ChatState extends ChatCtx {
   healthStop: boolean
   bind: (nav: NavigateFunction) => void
   switchAccount: (key: string) => void
+  // ★ F-11：挂载/摘除顶栏积分刷新句柄（ChatProvider 随 PkgRefreshCtx 的提供变化调用）
+  setPkgHandle: (h: PkgRefreshHandle | null) => void
+  // ★ F-11：取消尚未到点的顶栏刷新定时器（Provider 卸载时清理，防止卸载后 setState 与幽灵请求）
+  cancelPkgRefresh: () => void
   patchMsg: (id: string, patch: Partial<ChatMessage>) => void
   schedulePersist: (msgs: ChatMessage[], langs: string[]) => void
   setMessagesNow: (m: ChatMessage[]) => void
@@ -92,8 +98,48 @@ function loadMsgsStored(msgsKey: string): ChatMessage[] {
   return loadMsgs(raw)
 }
 
+// ★ F-11（批G 2026-09-25）：顶栏积分刷新句柄——可变对象，App 根持有并经 PkgRefreshCtx 下发；
+// FrontShell 挂载时把真正的 refreshPkgLine 注册进 .refresh，聊天层 done 帧后延迟 2s 回调它。
+// 用「旁挂可变句柄」而非把函数塞进 store：ChatProvider 在 FrontShell 之上，
+// 直接传回调会形成「下层注册、上层读取」的时序倒挂，句柄对象则两侧都只拿引用。
+export interface PkgRefreshHandle {
+  /** 顶栏「当前套餐/积分行」刷新函数；FrontShell 未挂载（如后台路由）时为 null */
+  refresh: (() => void) | null
+}
+
+// ★ F-11：积分刷新句柄的 Context——Provider 挂在 ChatProvider 之外（App.tsx），
+// FrontShell（消费注册方）与 ChatProvider（聊天触发方）都在其子树内。
+export const PkgRefreshCtx = createContext<PkgRefreshHandle | null>(null)
+
+// ★ F-11：done 帧后刷新顶栏积分的 debounce 间隔（毫秒）。
+// 取 2s：连续多条即时翻译快速完成时合并成一次 myPackage 查询，避免每帧都打顶栏接口。
+const PKG_REFRESH_DEBOUNCE_MS = 2000
+
+// ★ F-29（批G 2026-09-25）：判定错误文案是否为「网关/代理回吐的 HTML 错误页」。
+// 场景：网关 ~90s 超时返回整页 HTML（Cloudflare 524 之类），api/chatStream 的 !response.ok
+// 分支会把响应体原文拼进 Error message（`请求失败 (524): <!DOCTYPE html>...`）。
+// 口径：不区分大小写地在消息前 200 字节内找 `<!doctype`——HTML 错误页的 DOCTYPE 声明必然在
+// 体首，正常业务错误文案（几十个字）不可能命中；误伤面为零。
+function isHtmlErrorBody(msg: string): boolean {
+  return msg.slice(0, 200).toLowerCase().includes('<!doctype')
+}
+
 // createChatStore 路由级实例工厂：每个 ChatProvider 一份，互不串扰
 function createChatStore(msgsKey: string) {
+  // ★ F-11：顶栏积分刷新的 debounce 状态——刻意放闭包而非 ChatState：
+  // 两者都是纯副作用句柄，进 store 会让每次 schedule/触发都白刷一轮订阅者。
+  let pkgHandle: PkgRefreshHandle | null = null
+  let pkgRefreshTimer: number | null = null
+  // ★ F-11：done 帧后延迟 2s 调顶栏刷新（debounce：窗口内多次 done 只合并成一次刷新，
+  // 计时器重置式；句柄未注册（未进工作台）时静默跳过，不打无谓的 myPackage）
+  const schedulePkgRefresh = () => {
+    if (!pkgHandle?.refresh) return
+    if (pkgRefreshTimer !== null) window.clearTimeout(pkgRefreshTimer)
+    pkgRefreshTimer = window.setTimeout(() => {
+      pkgRefreshTimer = null
+      try { pkgHandle?.refresh?.() } catch { /* 顶栏刷新失败不影响聊天收尾 */ }
+    }, PKG_REFRESH_DEBOUNCE_MS)
+  }
   return createStore<ChatState>()((set, get) => ({
     messages: loadMsgsStored(msgsKey),
     isLoading: false,
@@ -111,6 +157,12 @@ function createChatStore(msgsKey: string) {
     bind: (nav) => set({ navigate: nav }),
     switchAccount: (key) => {
       set({ msgsKey: key, messages: loadMsgsStored(key) })
+    },
+    // ★ F-11：注册/摘除顶栏刷新句柄（闭包变量，不进 store state，见工厂顶部注释）
+    setPkgHandle: (h) => { pkgHandle = h },
+    // ★ F-11：卸载清理——未到点的 debounce 刷新直接作废（Provider 都没了，刷新也没有归属）
+    cancelPkgRefresh: () => {
+      if (pkgRefreshTimer !== null) { window.clearTimeout(pkgRefreshTimer); pkgRefreshTimer = null }
     },
     setMessagesNow: (m) => set({ messages: m }),
     setFlags: (f) => set(f),
@@ -218,6 +270,9 @@ function createChatStore(msgsKey: string) {
           progress: undefined,
           draft: undefined,
         })
+        // ★ F-11：done 即本条已完成扣点（points_used 落进气泡的同时顶栏余额已过期），
+        // debounce 2s 后回调 FrontShell 注册的 refreshPkgLine 重拉 myPackage，积分行不再停在旧值。
+        schedulePkgRefresh()
       } catch (e) {
         streamClosed = true
         h6HandleErr(get(), assistantId, e)
@@ -274,6 +329,16 @@ function h6HandleErr(st: ChatState, assistantId: string, e: unknown) {
   const msg = e instanceof Error ? e.message : String(e)
   if (msg === 'AbortError' || String(e).includes('abort')) return // 用户主动 stop（AbortController）不算错误：直接返回，保留气泡已生成内容与停止文案
   const code = normErrCode(e instanceof ApiError ? e.code : undefined)
+  // ★ F-29（批G 2026-09-25）：网关 ~90s 超时回吐的 HTML 错误页会经 chatStream 的 !response.ok
+  // 分支把整页正文拼进 Error message（典型 Cloudflare 524：含 `<!DOCTYPE html>` 与「Ray ID」）。
+  // 这种响应根本不是 SSE（content-type 非 text/event-stream 的整页 HTML），原文塞进气泡就是一屏
+  // 网关错误码小作文——这里在进气泡之前整条替换为超时文案，与后端 90s 超时帧文案对齐；
+  // errorMessage 同步换成友好文案，禁止原始 HTML 从顶部提示条二次泄漏。
+  if (isHtmlErrorBody(msg)) {
+    st.setFlags({ errorMessage: gt('chat.timeoutTicket') })
+    st.patchMsg(assistantId, { content: gt('chat.timeoutTicket'), progress: undefined, draft: undefined })
+    return
+  }
   if (code === 'insufficient_balance') {
     st.patchMsg(assistantId, { content: gt('chat.quotaExhausted'), progress: undefined, draft: undefined })
     void confirmDialog({ header: gt('chat.insufficientTitle'), body: gt('chat.insufficientBody'), confirmText: gt('chat.gotoTopUp') })
@@ -312,11 +377,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const msgsKey = msgsKeyFor(user?.id)
   const navigate = useNavigate()
+  // ★ F-11：顶栏积分刷新句柄（App 根提供；缺省时聊天层不调刷新，行为同旧版）
+  const pkgHandle = useContext(PkgRefreshCtx)
   const storeRef = useRef<ChatStore | null>(null)
   if (storeRef.current === null) storeRef.current = createChatStore(msgsKey)
   const store = storeRef.current
 
   useEffect(() => { store.getState().bind(navigate) }, [store, navigate])
+  // ★ F-11：把句柄交给 store（done 帧后经它回调顶栏刷新）；卸载时先作废在途 debounce
+  // 定时器再摘句柄——顺序反过的话，定时器可能抢在句柄置空前对已卸载的 FrontShell 发请求。
+  useEffect(() => {
+    store.getState().setPkgHandle(pkgHandle ?? null)
+    return () => {
+      store.getState().cancelPkgRefresh()
+      store.getState().setPkgHandle(null)
+    }
+  }, [store, pkgHandle])
   // 切换账号（含登录/登出）时重新加载对应键的记录——不读取上一账号的残留
   useEffect(() => { store.getState().switchAccount(msgsKey) }, [store, msgsKey])
 

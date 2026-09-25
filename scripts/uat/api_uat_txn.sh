@@ -242,7 +242,12 @@ ck T6-restore-login '"success":true' "$(curl -s $B/api/auth/login -H "$J" -d '{"
 T1=$(tok uatuser_a uatpass123); H1="Authorization: Bearer $T1"
 [ ${#T1} -lt 10 ] && { echo "FATAL|T6 后刷新 uatuser_a token 失败"; exit 1; }
 ck T6-forgot-guard '"success":true' "$(curl -s $B/api/auth/forgot-password -H "$J" -d '{"email":"nonexist@test.com"}')"
-ck T6-reset-badcode '验证码|无效|expired|不正确' "$(curl -s $B/api/auth/reset-password -H "$J" -d '{"username":"uatuser_a","code":"000000","new_password":"hacked999"}')"
+# ★ F-20 后端半（2026-09-25 批G）：重置密码四类失败（码错/过期/用户缺/已占用之外的校验族）
+#   已收敛为 writeError + 稳定码 VALIDATION_ERROR + 文案「验证码错误或已过期」——
+#   旧断言只吃中文文案，文案一 i18n 就失明；这里补 code 字段等值锁，前端按码分支才有依据。
+R6B=$(curl -s $B/api/auth/reset-password -H "$J" -d '{"username":"uatuser_a","code":"000000","new_password":"hacked999"}')
+ck T6-reset-badcode '验证码|无效|expired|不正确' "$R6B"
+ck T6-reset-badcode-code '"code":"VALIDATION_ERROR"' "$R6B"
 
 # ---------- T7 OpenAPI 余额硬闸（清零租户 uatuser_b） ----------
 AKB=$(curl -s $B/api/apikeys/create -H "$H2" -H "$J" -d '{"name":"b-key"}' | pv '.get("api_key","")')
@@ -988,13 +993,20 @@ rm -f "$ZIP39H" "$ZIP39"; rm -rf "$TMPD39"
 
 
 # ============================================================================
-# T40（2026-09-15 任务1）：文件工单余额预检「积分口径 + PDF 估算校准」
+# T40（2026-09-15 任务1；★ 2026-09-25 批 D｜F-41 后重钉）：文件工单余额预检「积分口径 + K 系数等值」
 #   新个人租户默认体验额度=free_trial_tokens（300000 内部 token=1000 积分）。
-#   a) 700KB 二进制文档（.pdf）：新口径 /12 预估 ≈69k token << 余额 → 放行建单
-#      （旧口径 size/3 预估 ≈269k×1.5=403k > 300k → 误拦，即用户反馈的
-#      「700KB PDF 提示需 402553 token」缺陷的直接回归）。
-#   b) 按余额自适应放大文件（13×余额 字节，封顶 35MB）→ 新口径预估仍超余额 →
-#      拒绝，且文案必须含「积分」且零 token 裸值（对外口径承诺）。
+#   ⚠️ 口径已被 F-41 的「宁高勿低」决策**翻转**：旧公式 chars/1.3×langs×markup 比 pro 实测计费低约 62 倍
+#      （88 号估 17.3k、实烧 1,075,400 后在中途烧穿全损），新公式 est = chars × langs × K(mode)，
+#      K(pro)=160 / K(fast)=60 且走 system_config 可调。于是「700KB PDF 在体验余额下直接放行」
+#      这条 09-15 的旧断言**前提失效**（716800/12≈59733 字符 ×60 ≈ 358 万 token ≈ 11947 积分 ≫ 1100 积分）：
+#      拦单正是本次修复要的效果（用户拍板「宁可建单被拒，好过中途烧穿全损」），不是回归。
+#   a-1 体验余额下 700KB .pdf 必须被拦，且出结构化码（F-21③：4xx + code，不再 200+success:false）
+#   a-2 等值锁：拒绝文案里的「预估需约 N 积分」必须等于按**当前 K 配置现算**的值
+#       —— 批 H 回调 K（管理台改 est_tokens_per_char_fast）后本条自动跟随；
+#       只有「代码里偷偷改默认值 / 分档折算规则被改回 /3」才会翻红，这正是需要的敏感度。
+#   a-3 补足额度后同一文件必须放行 —— 证明拦单只由「余额 < 预估」这一条决定，
+#       不是尺寸硬闸或扩展名误判（09-15 用户反馈的「700KB PDF 提示需 402553 token」误拦形态）复活。
+#   b) 35MB 级大文件：仍拒，且文案含「积分」、零 token 裸值（对外口径承诺）。
 # ============================================================================
 T40U="t40u_$(date +%s)$RANDOM"
 T40RG=$(reg "$T40U" uatpass123 "T40C$RANDOM" 演练T40 "$T40U@t.test")
@@ -1007,7 +1019,34 @@ echo "  [T40] 新租户余额 points=$T40BAL"
 TMPD40=$(mktemp -d)
 head -c 716800 /dev/urandom > "$TMPD40/t40_small.pdf"
 R40S=$(curl -s $B/api/tickets/create-file -H "$H40" -F "files=@$TMPD40/t40_small.pdf" -F "target_langs=en" -F "mode=fast")
-echo "$R40S" | grep -q '"success":true' && { PASS=$((PASS+1)); echo "PASS|T40-pdf-700k-allowed"; } || { FAIL=$((FAIL+1)); echo "FAIL|T40-pdf-700k-allowed($(echo "$R40S" | head -c 200))"; }
+ck T40-pdf-700k-blocked-at-trial '"success":false' "$R40S"
+ck T40-pdf-code-quota '"code":"QUOTA_EXCEEDED"' "$R40S"
+if echo "$R40S" | grep -qi "token"; then FAIL=$((FAIL+1)); echo "FAIL|T40-pdf-msg-no-raw-token($(echo "$R40S" | head -c 120))"; else PASS=$((PASS+1)); echo "PASS|T40-pdf-msg-no-raw-token"; fi
+# a-2 等值锁：N == round( (716800/12 整除) × K(fast) / 300 )，四舍五入与 store.PointsFromTokens 同口径
+KFAST40=$(dbq "SELECT value FROM system_config WHERE key='est_tokens_per_char_fast'" | tr -d '[:space:]')
+EXP40=$(K40="$KFAST40" python3 -c 'import os
+raw = os.environ.get("K40", "").strip()
+try:
+    k = float(raw)
+except Exception:
+    k = 60.0          # 键缺失/非法 → 与后端 estTokensPerChar 同样的保守默认
+if k <= 0:
+    k = 60.0
+est = int(716800 // 12 * k)
+print((est + 150) // 300)')
+ck T40-pdf-estimate-eq-K "预估需约 ${EXP40} 积分" "$R40S"
+N40=$(printf '%s' "$R40S" | grep -oE '预估需约 [0-9]+ 积分' | grep -oE '[0-9]+' | head -1)
+# a-3 按**文案里实际给出的**预估积分补足额度（多留 1000 积分余量）后重试 → 必须放行
+if [ -z "$N40" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL|T40-pdf-allowed-after-topup(文案里没解析出预估积分，resp=$(echo "$R40S" | head -c 160))"
+else
+  T40TID=$(dbq "SELECT tenant_id FROM users WHERE username='$T40U'" | tr -dc '0-9')
+  G40=$(( (N40 + 1000) * 300 ))
+  NOW40=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  dbq "INSERT INTO quota_grants (tenant_id,kind,total,\"left\",expires_at,source,ref_id,created_at) VALUES ($T40TID,'uat',$G40,$G40,'2099-12-31T23:59:59Z','uat_t40_topup',0,'$NOW40')" >/dev/null
+  R40T=$(curl -s $B/api/tickets/create-file -H "$H40" -F "files=@$TMPD40/t40_small.pdf" -F "target_langs=en" -F "mode=fast")
+  ck T40-pdf-allowed-after-topup '"success":true' "$R40T"
+fi
 # 大文件：积分余额×汇率300×13 字节（预检按内部 token 估算，/12/1.3×1.5 后仍超余额）；封顶 35MB（<40MB 上传上限）
 T40BIG=$(( T40BAL * 300 * 13 )); [ "$T40BIG" -gt 36700160 ] && T40BIG=36700160
 head -c "$T40BIG" /dev/urandom > "$TMPD40/t40_big.pdf"

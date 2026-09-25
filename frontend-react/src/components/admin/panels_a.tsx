@@ -110,11 +110,11 @@ export default function Overview() {
     xhr.send()
   }
 
-  /** 打开 Prometheus metrics 页面 */
-  function openMetrics() {
-    window.open(`${API_BASE}/metrics`, '_blank')
-  }
-
+  // ★ F-20/F-39（2026-09-25 UAT 修复批G）：原 openMetrics()（window.open(`${API_BASE}/metrics`)）
+  //   连同工具条上的 Prometheus 按钮一并删除——/metrics 暴露的是运行时指标（请求量/错误率/熔断），
+  //   属平台运维面信息，管理台总览把它挂给租户管理员是信息面越权。
+  //   i18n 键 overview.prometheus 保留不删（删键是 12 语种文件手术、零收益），仅注释标注入口已移除。
+  //   ⚠️ API_BASE import 不删：导出审计 CSV / 用量 CSV 导出仍在用。
   return (
     <>
       <Tabs activeKey={ovTab} onChange={(k) => setOvTab(k as 'system' | 'usage')} items={[
@@ -127,14 +127,22 @@ export default function Overview() {
           extra={<div style={{ display: 'flex', gap: 8 }}>
             <Button variant="secondary" onClick={loadDash}>{t('overview.refresh')}</Button>
             {isSuper && <Button variant="primary" onClick={exportAuditCSV}>{t('overview.exportAuditCsv')}</Button>}
-            <Button variant="secondary" onClick={openMetrics}>{t('overview.prometheus')}</Button>
           </div>}>
       {/* 健康指标卡片网格 */}
       {!health && <EmptyState title={t('overview.refresh')} />}
       {health && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
           <HealthCard value={String(health.kb_entries ?? '')} label={t('overview.kbEntries')} />
-          <HealthCard value={(health.balance as Any)?.balance_points != null ? `${fmtPoints(Number((health.balance as Any).balance_points))}` : ''} label={t('overview.balance')} />
+          {/* ★ F-16（2026-09-25 UAT 修复批G·前端半）：积分余额改读 balance.total_points——
+              批B 为该出参补的「双桶合计」（免费/体验桶 quota_grants + 付费永久桶 balance_accounts.balance 折积分），
+              balance_points 只是永久桶明细，只持有 grants 的租户曾显 0（总览读错桶的根因）。
+              total_points 缺失（旧后端未带该字段）时回落 balance_points，原明细行展示语义保留；
+              标签 overview.balance 随之订正为「合计」口径（zh/en 见 panels/overview.ts，十语种由序列组同步）。 */}
+          <HealthCard value={(() => {
+            const b = health.balance as Any
+            const v = b?.total_points ?? b?.balance_points
+            return v != null ? `${fmtPoints(Number(v))}` : ''
+          })()} label={t('overview.balance')} />
           <HealthCard value={`${health.flow_steps_enabled ?? ''}/${health.flow_steps_total ?? ''}`} label={t('overview.flowSteps')} />
           <HealthCard value={String(health.usage ? Object.keys(health.usage as object).length : 0)} label={t('overview.usageTypes')} />
           <HealthCard value={health.breaker_open ? t('overview.breakerOpen') : t('overview.breakerNormal')} label={t('overview.mainModel')} />

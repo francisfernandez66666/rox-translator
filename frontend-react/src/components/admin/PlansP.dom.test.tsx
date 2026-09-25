@@ -13,6 +13,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { PlansP } from './PlansP'
 
+// ★ F-09（批G）断言开关：isSuper 控制充值面板可见性（!isSuper 才渲染收银台渠道下拉），
+//   payMode 控制 myPackage 透出的支付模式（决定 chOptions 里 mock 项的显隐）。
+//   默认值维持本文件原口径（超管视角 + mock 模式），既有用例行为不变。
+const mocks = vi.hoisted(() => ({ isSuper: true, payMode: 'mock' }))
+
 // ---- '@/api' 全量 mock：只提供 PlansP 具名导入的最小实现 ----
 vi.mock('@/api', () => {
   const ok = (extra: Record<string, unknown> = {}) => ({ success: true, ...extra })
@@ -35,7 +40,7 @@ vi.mock('@/api', () => {
     payManualConfirm: vi.fn(async () => ok()),
     manualConfirmOrders: vi.fn(async () => ok({ orders: [] })),
     plans: vi.fn(async () => ok({ plans: [] })),
-    myPackage: vi.fn(async () => ok({ points_balance: 1000, points_grants_left: 2, points_permanent_balance: 300, points_used_month: 45, package_code: '', balance_sentences_approx: 600 })),
+    myPackage: vi.fn(async () => ok({ points_balance: 1000, points_grants_left: 2, points_permanent_balance: 300, points_used_month: 45, package_code: '', balance_sentences_approx: 600, pay_mode: mocks.payMode })),
     packageSubscribe: vi.fn(async () => ok()),
     packageUpgrade: vi.fn(async () => ok()),
     adminPackages: vi.fn(async () => ok({
@@ -88,15 +93,18 @@ vi.mock('@/api', () => {
   }
 })
 
-// ---- '@/stores/admin'：仅 PlansP 消费 isSuper（超管视角渲染全部管理区块） ----
+// ---- '@/stores/admin'：仅 PlansP 消费 isSuper（默认超管视角渲染全部管理区块；★ F-09 用例内改 false 看收银台） ----
 vi.mock('@/stores/admin', () => ({
-  useAdmin: () => ({ isSuper: true }),
+  useAdmin: () => ({ isSuper: mocks.isSuper }),
   useAdminStore: { getState: () => ({ gotoPanel: () => {} }), setState: () => {} },
 }))
 
 beforeEach(() => {
   cleanup()
   vi.clearAllMocks()
+  // 每个用例起跑前恢复本文件默认口径，避免 F-09 用例的开关泄漏给既有用例
+  mocks.isSuper = true
+  mocks.payMode = 'mock'
 })
 
 describe('admin 计费 Hub（PlansP）', () => {
@@ -140,5 +148,33 @@ describe('admin 计费 Hub（PlansP）', () => {
     expect(envField?.disabled).toBe(true)
     const editable = fieldList().find((f) => f.value === 'wx1234567890')
     expect(editable?.disabled).toBe(false)
+  })
+
+  // ★ F-09（批G）：收银台「支付方式」下拉里的 mock 项（billing.chMock「模拟支付（测试）」）
+  //   改为仅 payMode==='mock' 时条件展开。两条等值锁互为正反向：
+  //   static_qr 模式下 value==='mock' 的 option 计数精确为 0（且下拉本身有选项，防空跑假绿）；
+  //   mock 模式下该 option 计数精确为 1、文本精确等于 zh 词典值。
+  const mockOptionCount = (): number =>
+    Array.from(document.querySelectorAll('option')).filter((o) => o.value === 'mock').length
+  it('F-09：static_qr 模式下支付方式下拉不再出现「模拟支付（测试）」选项', async () => {
+    mocks.isSuper = false // 充值/收银台面板仅非超管（租户视角）渲染
+    mocks.payMode = 'static_qr' // myPackage.pay_mode 驱动 payMode state
+    render(<PlansP />)
+    await vi.waitFor(() => {
+      // 正向控制：下拉确实渲染出来了（静态码模式自带 manual 选项），排除「整页没渲染」的假绿
+      expect(Array.from(document.querySelectorAll('option')).some((o) => o.value === 'manual')).toBe(true)
+    })
+    expect(mockOptionCount()).toBe(0)
+    // 文本维度同锁：DOM 中不存在文本恰为「模拟支付（测试）」的 option
+    // （auto 项「按系统模式（静态码支付（人工确认））」等含子串的不在射程）
+    expect(Array.from(document.querySelectorAll('option')).filter((o) => o.textContent === '模拟支付（测试）').length).toBe(0)
+  })
+  it('F-09：mock 模式下「模拟支付（测试）」选项仍精确出现一次', async () => {
+    mocks.isSuper = false
+    mocks.payMode = 'mock'
+    render(<PlansP />)
+    await vi.waitFor(() => { expect(mockOptionCount()).toBe(1) })
+    const opt = Array.from(document.querySelectorAll('option')).find((o) => o.value === 'mock')
+    expect(opt?.textContent).toBe('模拟支付（测试）')
   })
 })

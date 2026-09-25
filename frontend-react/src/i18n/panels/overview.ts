@@ -6,9 +6,13 @@ export const zh: Record<string, string> = {
   'overview.title': '系统看板',
   'overview.refresh': '刷新',
   'overview.exportAuditCsv': '导出审计 CSV',
+// ★ F-20/F-39（2026-09-25 UAT 修复批G）：本键的界面入口（管理台总览 Prometheus 按钮）已按 F-20 移除——
+//   /metrics 属平台运维面信息，不再暴露给租户管理员；键保留不删（删键需 12 语种文件同步手术、零收益）。
 'overview.prometheus':'Prometheus 指标',
   'overview.kbEntries': '知识库条目',
-  'overview.balance': '组织余额 (积分)',
+  // ★ F-16（批G 前端半）标签语义订正：总览余额卡改读双桶合计 total_points（免费/体验+付费永久），
+  // 值同步「组织余额合计 (积分)」；十语种 locales 同键由后续序列组落地同口径译文。
+  'overview.balance': '组织余额合计 (积分)',
   'overview.flowSteps': '流程步骤启用',
   'overview.usageTypes': '用量类型',
 'overview.breakerOpen':'熔断',
@@ -32,9 +36,12 @@ export const en: Record<string, string> = {
   'overview.title': 'Dashboard',
   'overview.refresh': 'Refresh',
   'overview.exportAuditCsv': 'Export Audit CSV',
+// ★ F-20/F-39（2026-09-25 UAT 修复批G）：本键的界面入口（管理台总览 Prometheus 按钮）已按 F-20 移除
+//   （/metrics 不再暴露给租户管理员）；键保留不删，理由同上 zh 侧注释。
 'overview.prometheus':'Prometheus Metrics',
   'overview.kbEntries': 'KB entries',
-  'overview.balance': 'Org balance (credits)',
+  // ★ F-16（批G 前端半）标签语义订正（与上方 zh 同口径）：余额卡读数改为双桶合计 total_points。
+  'overview.balance': 'Total org balance (credits)',
   'overview.flowSteps': 'Workflow steps enabled',
   'overview.usageTypes': 'Usage types',
 'overview.breakerOpen':'Open',

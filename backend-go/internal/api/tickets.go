@@ -30,7 +30,9 @@ import (
 	"time"
 
 	"translator/internal/auth"
+	"translator/internal/billing"
 	"translator/internal/config"
+	apierrors "translator/internal/errors"
 	"translator/internal/fileproc"
 	"translator/internal/orchestrator"
 	"translator/internal/qa"
@@ -39,21 +41,48 @@ import (
 
 // ============ 工单 ============
 
-// estimateTicketTokens 估算文件/文本工单翻译的 token 消耗（纯函数，便于单测）。
-// 规则：源文本字符数 ×（1/每 token 字符数）× 目标语言数 × 计费系数。
-// 说明：中文约 1 词 1.5 字符、每 token 覆盖 0.7 词 → 每 token 约 2.1 字符；
-// 取保守值每 token 1.3 字符、系数与配置计费 markup 相乘，得到偏高的上限估算，
-// 用于建单前余额预检（宁可多估，避免工单跑到中途因余额耗尽被实时计费中止）。
-func estimateTicketTokens(sourceChars int64, langCount int, markup float64) int64 {
+// estimateTicketTokens 估算文件/文本工单翻译的 token 消耗（纯函数，便于单测与字节级锁）。
+// ★ F-41（2026-09-25 批 D）公式重写：旧口径 `chars/1.3 × langs × markup` 与 pro 实测计费
+// 差约 62 倍（工单 88：估 17.3k、实烧 1,075,400 token 后在 100% 进度处烧穿 rejected、零交付），
+// 根因是旧公式只折算「源字符→单次译文 token」，跟不上 pro 的「初译+评审双趟 × 段分块 ×
+// 逐次上下文开销」——注释里的「宁可多估」名不副实。新口径按**实测单位成本外推**：
+//
+//	est = chars × langs × K(mode)，K(pro)=160（96 号单位成本→2 万字外推 155 的 P99 上包络）、
+//	K(fast)=60（单趟无评审约 2.5 折）；K 值走 system_config（est_tokens_per_char_pro/fast）
+//	管理台可调，上线首周按 usage_ledger 实测 P99 回调。决策口径「宁高勿低」：
+//	K=160 会拦掉「小余额大文档」的碰运气建单——这是用户拍板接受的默认（拒绝建单好于中途烧穿全损）。
+//
+// kPro/kFast 由调用方传入（配置读取见 estTokensPerChar），保持纯函数便于以 88/89 两案做基准锁。
+func estimateTicketTokens(sourceChars int64, langCount int, mode string, kPro, kFast float64) int64 {
 	if sourceChars <= 0 || langCount <= 0 {
 		return 0
 	}
-	charsPerToken := 1.3 // 保守下限（中文场景）
-	base := float64(sourceChars) / charsPerToken
-	if markup <= 0 {
-		return int64(base * float64(langCount))
+	k := kPro
+	if mode == "fast" {
+		k = kFast
 	}
-	return int64(base * float64(langCount) * markup)
+	if k <= 0 {
+		k = 160 // 配置异常（0/负数）回退保守默认，绝不放大放行
+	}
+	return int64(float64(sourceChars) * float64(langCount) * k)
+}
+
+// estTokensPerChar 读取指定模式的每字符预估 token 系数 K（system_config 可调，缺省保守默认）。
+// 键缺失/非法（非数字或 ≤0）一律回退默认（pro=160 / fast=60），查询失败同样回退——
+// 预检是粗闸，配置坏了不能反过来把估算清零（清零＝全放行，正是 F-41 的事故形态）。
+func (s *Server) estTokensPerChar(mode string) float64 {
+	key, def := "est_tokens_per_char_pro", 160.0
+	if mode == "fast" {
+		key, def = "est_tokens_per_char_fast", 60.0
+	}
+	if s.Store != nil {
+		if v, err := s.Store.GetConfig(key); err == nil && strings.TrimSpace(v) != "" {
+			if f, cerr := strconv.ParseFloat(strings.TrimSpace(v), 64); cerr == nil && f > 0 {
+				return f
+			}
+		}
+	}
+	return def
 }
 
 // estimateFileSourceChars 由文件字节数估算可译源字符数（按扩展名分档）。
@@ -82,7 +111,9 @@ func estimateFileSourceChars(name string, size int64) int64 {
 // 强制计费开启时，估算本次翻译的 token 消耗，若超出剩余余额则直接拒绝建单，
 // 避免「工单创建→队列→跑到中途余额耗尽→整单失败」（此前只查余额>0，不查是否够本次用量）。
 // release 为 gateUsage 返回的并发名额释放闭包：预检失败时同样需归还。
-func (s *Server) precheckTicketBalance(tid int64, srcChars int64, langCount int, release func()) error {
+// ★ F-41（2026-09-25 批 D）：估算改按模式系数 K（pro=160/fast=60，system_config 可配），
+// mode 由调用点传入；拒绝文案继续走「预估积分」范式（S1 零 token 裸值口径不变）。
+func (s *Server) precheckTicketBalance(tid int64, srcChars int64, langCount int, mode string, release func()) error {
 	if release != nil {
 		defer release()
 	}
@@ -92,7 +123,7 @@ func (s *Server) precheckTicketBalance(tid int64, srcChars int64, langCount int,
 	if s.Bill == nil || !s.Bill.Enabled() {
 		return nil // 未强制计费：不预检
 	}
-	estimated := estimateTicketTokens(srcChars, langCount, s.markupMultiplier())
+	estimated := estimateTicketTokens(srcChars, langCount, mode, s.estTokensPerChar("pro"), s.estTokensPerChar("fast"))
 	grants, permanent, err := s.Store.TenantRemainTotal(tid)
 	if err != nil {
 		return nil // 余额查询失败不阻断建单，交由实时计费兜底
@@ -108,6 +139,20 @@ func (s *Server) precheckTicketBalance(tid int64, srcChars int64, langCount int,
 			s.Store.PointsFromTokens(estimated), s.Store.PointsFromTokens(total))}
 	}
 	return nil
+}
+
+// writeGateError ★ F-21③（2026-09-25 UAT 修复批）：把 gateUsage / precheckTicketBalance
+// 的拒绝统一出成 4xx + 结构化错误体（writeError），替换旧「HTTP 200 + success:false」口径——
+// 客户端（含 SDK 与 run_uat 断言）终于可按状态码分支，而不是解析中文文案。
+// 映射：billing quotaErr 稳定码 insufficient_balance → 402（ErrInsufficientBalance）；
+// 其余闸门拒绝（日限额/QPS/并发/预算墙/余额预检）→ 400（ErrQuotaExceeded）。
+// 文案原样保留（组织墙/充值引导话术前端已在展示），仅状态码与错误码收口。
+func (s *Server) writeGateError(w http.ResponseWriter, r *http.Request, gerr error) {
+	code := apierrors.ErrQuotaExceeded
+	if billing.QuotaErrCode(gerr) == "insufficient_balance" {
+		code = apierrors.ErrInsufficientBalance
+	}
+	s.writeError(w, r, apierrors.New(code, gerr.Error()))
 }
 
 // handleTickets 工单列表接口（tenant_admin 及以上）。
@@ -185,14 +230,14 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 	var tid int64
 	var gerr error
 	if tid, release, gerr = s.gateUsage(r); gerr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
+		s.writeGateError(w, r, gerr) // ★ F-21③：400/402 + 稳定错误码（旧 200+success:false 语义保留在文案里）
 		return
 	}
 	// ★ 改进2（2026-09-10）：余额预检——估算本次文本翻译消耗，超出剩余余额直接拒绝，
 	//   避免工单入队后中途因余额耗尽失败（precheck 内部会归还并发名额）。
 	langCount := len(strings.Split(req.TargetLangs, ","))
-	if perr := s.precheckTicketBalance(tid, int64(len([]rune(req.SourceText))), langCount, release); perr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": perr.Error()})
+	if perr := s.precheckTicketBalance(tid, int64(len([]rune(req.SourceText))), langCount, normalizeTaskMode(req.Mode), release); perr != nil {
+		s.writeGateError(w, r, perr) // ★ F-21③
 		return
 	}
 	// 创建工单（归属生效租户）
@@ -336,7 +381,7 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 	var release func()
 	var gerr error
 	if tid, release, gerr = s.gateUsage(r); gerr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
+		s.writeGateError(w, r, gerr) // ★ F-21③：文件工单与文本工单同一出参口径
 		return
 	}
 	// ★ 改进2（2026-09-10）：文件工单建单前余额预检——用上传文件大小估算源字符数。
@@ -351,12 +396,15 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 				srcChars += estimateFileSourceChars(f.name, fi.Size())
 			}
 		}
-		if perr := s.precheckTicketBalance(tid, srcChars, len(strings.Split(targetLangs, ",")), release); perr != nil {
+		// ★ F-41：预检需要模式系数（pro K=160 / fast K=60），提前归一化本次建单模式
+		//（与下方 t.Mode 落库同一 normalizeTaskMode 口径，两处不会分叉）。
+		mode := normalizeTaskMode(r.FormValue("mode"))
+		if perr := s.precheckTicketBalance(tid, srcChars, len(strings.Split(targetLangs, ",")), mode, release); perr != nil {
 			// 预检失败：清理已上传文件，避免孤儿文件滞留磁盘
 			for _, cleanup := range saved {
 				os.Remove(cleanup.path)
 			}
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": perr.Error()})
+			s.writeGateError(w, r, perr) // ★ F-21③：与文本工单同一 400/402 出参口径
 			return
 		}
 	}
@@ -434,7 +482,7 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 	_, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": gateErr.Error()})
+		s.writeGateError(w, r, gateErr) // ★ F-21③：手动 run 与建单同一 400/402 出参口径
 		return
 	}
 	// ★ 异步入队：立即返回 ticket_no，worker 后台执行五步编排（大文件不阻塞 HTTP）
@@ -584,6 +632,57 @@ func parseTicketQuality(finalResult string) ticketQualityView {
 	return out
 }
 
+// ticketDeliverable ★ F-42-d（2026-09-25 UAT 修复批）：工单是否真有可交付产物。
+// 纯函数（files 由调用方备好，单测可直接注入），判据按工单形态分两支：
+//   - 文件工单：任一子文件有原格式回写产物（result_path）或纯文案 .md（text_result_path），
+//     或工单级产物列（tickets.result_path / text_result_path）非空；
+//   - 文本工单：final_result 载荷的 translations 至少一种语言非空。
+//
+// 用途＝假 completed 的最后一道闸：状态机被判 completed 但产物为空时（F-42 链条的
+// 空转重翻/欠费中止），对外不得宣称 completed、UI 不得露下载钮。两处调用点
+// （api_openapi_tasks.go 任务详情状态映射、handleTicketDownload 下载校验）共用本函数，
+// 避免「对外契约已修、租户界面还在发空文件」的第二轮事故。
+// 参数：t=工单对象（nil 视为无产物），files=该单文件行（文本工单可传 nil）。
+func ticketDeliverable(t *store.Ticket, files []*store.TicketFile) bool {
+	if t == nil {
+		return false
+	}
+	if t.FilePath != "" {
+		for _, f := range files {
+			if f != nil && (f.ResultPath != "" || f.TextResultPath != "") {
+				return true
+			}
+		}
+		return t.ResultPath != "" || t.TextResultPath != ""
+	}
+	var p struct {
+		Translations map[string]string `json:"translations"`
+	}
+	if err := json.Unmarshal([]byte(t.FinalResult), &p); err != nil {
+		return false
+	}
+	for _, tr := range p.Translations {
+		if strings.TrimSpace(tr) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// ticketHasDeliverable 取数版包装：文件工单现读 ticket_files 行后交 ticketDeliverable 判定。
+// 读库失败按「无产物」处理（保守侧）——宁可少给一次下载，不可把空产物报成成功交付。
+// 参数：t=工单对象。返回：是否存在可交付产物。
+func (s *Server) ticketHasDeliverable(t *store.Ticket) bool {
+	if t == nil {
+		return false
+	}
+	var files []*store.TicketFile
+	if t.FilePath != "" && s.Store != nil {
+		files, _ = s.Store.TicketFiles(t.ID)
+	}
+	return ticketDeliverable(t, files)
+}
+
 // handleTicketDownload 下载工单翻译结果（创建者或超管）。
 // 文件工单：流式返回原格式回写产物（docx/xlsx/pptx）；
 // 纯文本工单：动态生成 xlsx 对照表（源文+各语言列）。
@@ -611,6 +710,13 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	if t.Status != store.TicketCompleted {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单尚未完成"})
+		return
+	}
+	// ★ F-42-d（2026-09-25 UAT 修复批）：状态 completed 但无产物 ⇒ 不给下载。
+	//   旧校验只看 status，假 completed（翻译中欠费中止后被空转重翻刷成完成）在租户界面
+	//   照样露下载钮，点下去拿到空文件/空对照表，用户以为「翻译质量差」而非「本单没译成」。
+	if !s.ticketHasDeliverable(t) {
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "该工单没有可用译文产物（可能因余额不足或流程中断），请重新发起翻译"})
 		return
 	}
 	baseName := t.TicketNo
@@ -856,6 +962,11 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 		if req.Suggestion != "" {
 			t.RejectReason = strings.TrimSpace(req.Reason + "；建议: " + req.Suggestion)
 		}
+		// ★ F-42-b（2026-09-25 UAT 修复批）：本处是「人工驳回意见」的唯一入口，
+		//   来源必须落 'human'——重翻分支（workflow.runAIInitial）与自动认领
+		//   （store.ClaimTicketForRun）都以该值作判据，区分「审批台写的意见」与
+		//   「系统失败原因」，后者不得被当意见喂给模型。
+		t.RejectSource = store.RejectSourceHuman
 	default:
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "action 仅支持 approve/reject"})
 		return

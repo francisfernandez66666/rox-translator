@@ -31,29 +31,40 @@ export default function Bell() {
   const [unread, setUnread] = useState(0)
   const [items, setItems] = useState<NoticeItem[]>([])
   const [open, setOpen] = useState(false)
+  // ★ F-11 顺手项（批G 2026-09-25）：open 的同步镜像——refresh 经它现读展开态，
+  // 于是 refresh 引用不再随 open 翻转而更换（旧版靠 open 进 deps 重建 refresh，
+  // 才连带产生「toggle 里调的是旧闭包」的 stale-refresh，见 toggle 注释）
+  const openRef = useRef(false)
   const { gotoPanel, isSuper, openFeedback } = useAdmin() // 后台跳转与超管判定都取自 admin store，铃铛自己不管路由
   const timerRef = useRef<number | null>(null) // 30s 轮询句柄：用 ref 而非 state，改它不该触发重渲染
   const wrapRef = useRef<HTMLDivElement>(null) // 「点击外部」判定基准：铃铛钮 + 浮层都在这层里
 
-  // 刷新未读数；下拉展开时同步拉取最近 20 条通知列表
-  // 列表只在 open 时才请求：收起状态下 30s 轮询只多打一个轻量的 unread 接口，省掉一次列表查询。
-  // ⚠ 代价是 open 进了依赖数组 → 每次展开/收起都会重建 refresh → 下面那个 30s 定时器随之重启
+  // ★ F-11 顺手项（批G 2026-09-25）：拉取最近 20 条通知列表——从 refresh 里抽出来的独立动作。
+  // 抽出来的意义：toggle 展开时可以「直接」await 它，不必再绕 refresh 那层对 open 的闭包依赖
+  //（见下方 toggle 的 stale-refresh 说明）。deps 为空 ⇒ 引用终生稳定，不连带重启 30s 轮询。
+  const loadList = useCallback(async () => {
+    try {
+      const r = await notifications()
+      // 后端一次最多回 100 条且无分页参数，这里再截到 20：浮层高 420px 也放不下更多，纯粹是自我上限
+      if (r.success) setItems(((r as unknown as { notifications?: NoticeItem[] }).notifications || []).slice(0, 20))
+    } catch { /* 忽略 */ } // 同 refresh：拉不到就保持上一次的列表，不打断操作
+  }, [])
+
+  // 刷新未读数；下拉展开时（openRef 现读）同步拉取最近 20 条通知列表
+  // 列表只在展开时才请求：收起状态下 30s 轮询只多打一个轻量的 unread 接口，省掉一次列表查询。
+  // ★ 展开态经 openRef 读取而非闭包 open ⇒ deps 稳定 ⇒ 定时器不再随收起/展开重启（旧版副作用一并消除）。
   const refresh = useCallback(async () => {
     try {
       const u = await notificationsUnread()
       // `|| 0` 把缺省字段与 0 统一成数字 0，避免把 undefined 塞进 state 后徽标处比不出大小
       if (u.success) setUnread(Number((u as unknown as { unread?: number }).unread || 0))
-      if (open) {
-        const r = await notifications()
-        // 后端一次最多回 100 条且无分页参数，这里再截到 20：浮层高 420px 也放不下更多，纯粹是自我上限
-        if (r.success) setItems(((r as unknown as { notifications?: NoticeItem[] }).notifications || []).slice(0, 20))
-      }
+      if (openRef.current) await loadList()
     } catch { /* 忽略 */ } // 顶栏铃铛是旁路信息：拉不到就保持上一次的读数，不 toast 不打断操作
-  }, [open])
+  }, [loadList])
 
   // 挂载即刷新并启动 30s 未读轮询；卸载时清除定时器
-  // deps 挂 refresh：open 一翻转就要换绑成「会顺带拉列表」的那版定时器回调，
-  // 所以收起/展开会把 30s 计时重新开始计（顶栏可接受的小偏差，换来少一个 ref 转发）。
+  // deps 挂 refresh（引用稳定，仅随 loadList）：展开/收起不再重绑定时器，30s 节拍跨开合连续；
+  // 展开瞬间的列表拉取由 toggle 直接调 loadList 负责（见下），不靠这里兜底。
   // 定时器本身不 await 上一轮：慢响应按到达先后互相覆盖（后写赢），未读数这种幂等值无所谓。
   useEffect(() => {
     void refresh() // void 显式丢弃 promise：这里不关心结果，只触发
@@ -103,11 +114,16 @@ export default function Bell() {
   }
 
   // 切换浮层；展开时刷新列表
-  // 展开额外打一次 refresh 而非等 30s 轮询：用户点开就是要看最新内容，等轮询会看到旧列表
+  // ★ F-11 顺手项（批G 2026-09-25）：消掉旧版 stale-refresh——旧实现这里也调 refresh()，
+  // 但闭包里的 open 还是翻转前的 false，那一次 refresh 只刷未读数**不拉列表**；
+  // 列表实际全靠 open 翻转 → refresh 换身份 → useEffect 重跑那次兜底才到手（异步双跳，
+  // 慢网下浮层先闪 EmptyState）。现在展开同步置 openRef 并直接 loadList()，
+  // 点开的同时在途的就是列表；随后 30s 轮询因 openRef 已翻，也会带着刷列表。
   function toggle() {
     const next = !open
+    openRef.current = next // 同步翻转镜像：本轮事件循环内 refresh/轮询读到的就是新态
     setOpen(next)
-    if (next) void refresh()
+    if (next) void loadList()
   }
 
   return (

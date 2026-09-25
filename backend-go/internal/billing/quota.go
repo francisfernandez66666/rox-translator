@@ -247,6 +247,12 @@ func (s *Service) CheckBalance(tid int64) error {
 // code: ★ E11 稳定错误码（insufficient_balance / daily_quota_exceeded），供前端差异化处理。
 type quotaErr struct{ s, code string }
 
+// NewQuotaErr ★ F-40（2026-09-25 UAT 修复批）：导出构造器，供 api 层在
+// 「替换文案但保留稳定错误码」的场景使用（如余额耗尽要出组织墙文案，
+// 又必须让 SSE error 帧带上 insufficient_balance 码，前端 E11 充值引导才不失效）。
+// 此前 quotaErr 未导出，api/billing_api.go 只能退化成裸 apiErr（无码）。
+func NewQuotaErr(msg, code string) error { return &quotaErr{s: msg, code: code} }
+
 // QuotaErrCode 提取配额错误的稳定错误码；非配额错误或无码错误返回空串。
 func QuotaErrCode(err error) string {
 	var qe *quotaErr

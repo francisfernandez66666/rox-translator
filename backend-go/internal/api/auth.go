@@ -385,7 +385,12 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		vcodeSet(vcodeResetKey(u.ID), b, 10*time.Minute)
 	}
 	// 发送邮件（改为异步入队：SMTP 失败由队列重试/死信吸收，不阻塞用户）
-	if serr := s.sendTemplatedMail(u.Email, "reset_code", map[string]string{"code": code}); serr != nil {
+	// ★ F-17（批E）语种跟随：取该账号注册时落库的 preferred_lang（查无/缺列回空=中文链路）
+	resetLang, lerr := s.Store.GetPreferredLang(u.ID)
+	if lerr != nil {
+		resetLang = ""
+	}
+	if serr := s.sendTemplatedMail(u.Email, "reset_code", normalizeMailLang(resetLang), map[string]string{"code": code}); serr != nil {
 		log.Printf("[mail] 密码重置验证码入队失败 to=%s err=%v", config.MaskEmail(u.Email), serr)
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "邮件发送失败，请稍后重试或联系管理员"))
 		return
@@ -397,7 +402,13 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 
 // handleResetPassword 重置密码接口：校验验证码后更新密码。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {username, code, new_password}）。
-// 返回: success=true 表示重置成功；验证码错误/过期返回 success=false。
+// 返回: success=true 表示重置成功；
+// ★ 观察2②（2026-09-25 UAT 修复批G）：验证码错误/用户不存在/已过期/错次超限/一次性码失配
+//
+//	四类失败族由「HTTP 200 + success:false」统一收口为 HTTP 400 + 统一错误码
+//	VALIDATION_ERROR（s.writeError，与 F-21③ 同向）；中文文案逐字保留原文
+//	（i18n catalog 按中文字面量匹配，换文案会翻红），前端 request() 对 4xx 会归一
+//	解析 body.message，登录页失败提示链路不变。
 func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	// ★ IP 限流（2026-08-26 P0-3 止血）：验证码校验接口的爆破主战场，
 	//   与 forgot 限流独立计数；日 20 次 + 最小间隔 10s（正常用户重试绰绰有余）。
@@ -421,8 +432,10 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	if matches, err := s.Store.GetUserByUsernameGlobal(req.Username); err == nil && len(matches) == 1 {
 		u = matches[0]
 	}
+	// ★ 观察2②（批G）失败族①「用户不存在」：与「验证码错误」回同一文案（防枚举语义不变），
+	//   仅把出口从内联 writeJSON(200, success:false) 收口为 writeError → HTTP 400 + VALIDATION_ERROR。
 	if u == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误或已过期"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "验证码错误或已过期"))
 		return
 	}
 	// 校验验证码（一次性 + 防爆破，2026-08-26 P0-3 止血）：
@@ -448,8 +461,9 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		resetCodes.Unlock()
 		found = ok
 	}
+	// ★ 观察2②（批G）失败族②「验证码缺失或已过期」：改走 writeError → 400 + VALIDATION_ERROR（文案逐字不变）。
 	if !found || time.Now().After(rc.ExpiresAt) {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误或已过期"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "验证码错误或已过期"))
 		return
 	}
 	if rc.Attempts >= resetCodeMaxTries {
@@ -458,7 +472,8 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		delete(resetCodes.m, u.ID)
 		resetCodes.Unlock()
 		vcodeDel(rkey)
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误次数过多，请重新获取"})
+		// ★ 观察2②（批G）失败族③「错误尝试超限」：改走 writeError → 400 + VALIDATION_ERROR（文案逐字不变）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "验证码错误次数过多，请重新获取"))
 		return
 	}
 	if rc.Code != req.Code {
@@ -469,7 +484,8 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		if b, e := json.Marshal(rc); e == nil {
 			vcodeSet(rkey, b, 10*time.Minute)
 		}
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "验证码错误或已过期"})
+		// ★ 观察2②（批G）失败族④「一次性码失配」：改走 writeError → 400 + VALIDATION_ERROR（文案逐字不变）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "验证码错误或已过期"))
 		return
 	}
 	// 验证通过：作废该验证码并更新密码（本地 + Redis 双删）
@@ -660,6 +676,13 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅租户管理员及以上可分配该角色"})
 		return
 	}
+	// ★ F-31（闸 1/2，2026-09-25 批F）：dept_admin 必须绑定部门——
+	//   org_id=0 的部门管理员会在建号/成员操作等入口被「部门管理员未绑定部门」守卫反锁（死角色），
+	//   必须在创建源头卡死，而不是造出一个无法履职的账号再让当事人报障。
+	if req.Role == store.RoleDeptAdmin && req.OrgID <= 0 {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "部门管理员必须绑定部门：请先在组织列表中选择所属部门"))
+		return
+	}
 	// 归属租户判定：超管创建超管时平台级(0)；否则租户管理员限本租户、超管用所选/指定租户
 	tid := s.effTenant(r, u)
 	if req.Role == store.RoleSuperAdmin || req.Role == store.RoleAdmin {
@@ -728,9 +751,13 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "user": nu})
 }
 
-// handleAdminUserUpdate 更新用户接口（名称/角色/状态），带变更前后值审计。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 id/display_name/role/status）。
+// handleAdminUserUpdate 更新用户接口（名称/角色/状态/组织归属），带变更前后值审计。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 id/display_name/role/status/org_id）。
 // 返回: success=true 表示更新成功。
+// ★ F-35（2026-09-25 批F）：display_name/role/status 改指针入参——「字段缺席」与「显式置空」
+//
+//	分离，缺席一律取目标现值合并后落库（旧实现把缺席当空串直写，只改角色会静默洗掉姓名、
+//	状态被默认值翻回 active）；★ F-31（闸 2/2）：合并后的终态若为 dept_admin 且无部门，拒绝。
 func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
@@ -738,18 +765,15 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID          int64  `json:"id"`           // 目标用户 ID
-		DisplayName string `json:"display_name"` // 显示名称（可为空=不修改）
-		Role        string `json:"role"`         // 目标角色（可为空=不修改）
-		Status      string `json:"status"`       // 状态：active/disabled
-		OrgID       *int64 `json:"org_id"`       // 所属组织 ID（nil=不修改，0=根组织）
+		ID          int64   `json:"id"`           // 目标用户 ID
+		DisplayName *string `json:"display_name"` // 显示名称（nil=不修改）
+		Role        *string `json:"role"`         // 目标角色（nil/空串=不修改）
+		Status      *string `json:"status"`       // 状态：active/disabled（nil/空串=不修改）
+		OrgID       *int64  `json:"org_id"`       // 所属组织 ID（nil=不修改，0=根组织）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
-	}
-	if req.Status == "" {
-		req.Status = store.UserActive
 	}
 	// ★ 目标用户真实租户解析（问题2修复）：超管平台上下文（tid<=0）按 ID 定位用户实际归属租户，
 	//   否则 UpdateUser 以 tenant_id=0 执行 UPDATE 匹配不到目标行，角色/组织修改静默失效。
@@ -764,31 +788,41 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// ★ F-35：目标现值前置加载——合并语义与全部越权判据都以真实行为准，
+	//   目标不存在时旧实现会带着空字段继续 UPDATE（0 行受影响仍回 success），现明确 404。
+	target, terr := s.Store.GetUser(req.ID, tid)
+	if terr != nil || target == nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "目标用户不存在"))
+		return
+	}
+	// 请求侧角色字符串（nil 与空串都按「不修改」处理——空角色本就不是合法值）
+	reqRole := ""
+	if req.Role != nil {
+		reqRole = *req.Role
+	}
 	// 权限校验：目标用户角色检查（防越权操作超管）
-	if target, err := s.Store.GetUser(req.ID, tid); err == nil {
-		// 租户管理员不能操作超管账号
-		if auth.IsSuperAdmin(target) && !auth.IsSuperAdmin(u) {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：不能操作超级管理员"})
-			return
-		}
-		// 非超管不能把用户提升为超管级角色
-		if req.Role != "" && auth.RoleLevel(req.Role) >= 4 && !auth.IsSuperAdmin(u) {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅超级管理员可分配该角色"})
-			return
-		}
-		// ★ 收口（2026-09-16 安全整改）：等级≥4 角色只允许平台级账号（tenant_id=0）持有——
-		//   users/create 侧本有「super/admin 强制落 tid=0」的不变量，但 update 侧此前缺失，
-		//   实测可造出 role='admin' AND tenant_id>0 的违规行，穿透旧 IsSuperAdmin 完成
-		//   跨租户退款/下载。与 create 口径对齐：非平台归属目标直接拒绝高角色分配。
-		if req.Role != "" && auth.RoleLevel(req.Role) >= 4 && tid > 0 {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "超管级角色仅可分配给平台级账号（tenant_id=0），请先调整归属"})
-			return
-		}
-		// 非租户管理员不能分配租户管理员级角色
-		if req.Role != "" && auth.RoleLevel(req.Role) >= 3 && !auth.IsTenantAdmin(u) {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅租户管理员及以上可分配该角色"})
-			return
-		}
+	// 租户管理员不能操作超管账号
+	if auth.IsSuperAdmin(target) && !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：不能操作超级管理员"})
+		return
+	}
+	// 非超管不能把用户提升为超管级角色
+	if reqRole != "" && auth.RoleLevel(reqRole) >= 4 && !auth.IsSuperAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅超级管理员可分配该角色"})
+		return
+	}
+	// ★ 收口（2026-09-16 安全整改）：等级≥4 角色只允许平台级账号（tenant_id=0）持有——
+	//   users/create 侧本有「super/admin 强制落 tid=0」的不变量，但 update 侧此前缺失，
+	//   实测可造出 role='admin' AND tenant_id>0 的违规行，穿透旧 IsSuperAdmin 完成
+	//   跨租户退款/下载。与 create 口径对齐：非平台归属目标直接拒绝高角色分配。
+	if reqRole != "" && auth.RoleLevel(reqRole) >= 4 && tid > 0 {
+		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "超管级角色仅可分配给平台级账号（tenant_id=0），请先调整归属"})
+		return
+	}
+	// 非租户管理员不能分配租户管理员级角色
+	if reqRole != "" && auth.RoleLevel(reqRole) >= 3 && !auth.IsTenantAdmin(u) {
+		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅租户管理员及以上可分配该角色"})
+		return
 	}
 	// 部门管理员范围：目标用户必须在本部门及子部门树内
 	if auth.RoleLevel(u.Role) == 2 {
@@ -799,11 +833,6 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 		// ★ P0-2 修复（2026-09-14）：目标 org_id=0（未分配，注册/SCIM/建号默认值）也必须拒绝——
 		//   旧实现 `target.OrgID > 0` 才做子树校验，org_id=0 时整段校验被跳过，
 		//   部门管理员可重置/接管同租户租户管理员账号（未分配部门）。与 Delete 口径对齐。
-		target, e := s.Store.GetUser(req.ID, tid)
-		if e != nil {
-			writeJSON(w, 404, map[string]interface{}{"success": false, "message": "目标用户不存在"})
-			return
-		}
 		if target.OrgID <= 0 {
 			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作未分配部门的账号"})
 			return
@@ -829,24 +858,38 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// 结构化变更轨迹：先取更新前值，再执行更新，记录 before/after diff
-	before := map[string]string{}
-	if target, err := s.Store.GetUser(req.ID, tid); err == nil {
-		before = map[string]string{"role": target.Role, "status": target.Status, "display_name": target.DisplayName}
+	// ★ F-35 合并：缺席字段取目标现值，store 委托签名不变（整行覆盖语义由 handler 补齐「不传=不动」）。
+	finalDisplay := target.DisplayName
+	if req.DisplayName != nil {
+		finalDisplay = *req.DisplayName
 	}
-	beforeJSON, _ := json.Marshal(before)
-	// 获取当前组织值用于保留未指定字段
-	orgID := int64(0)
+	finalRole := target.Role
+	if reqRole != "" {
+		finalRole = reqRole
+	}
+	finalStatus := target.Status
+	if req.Status != nil && *req.Status != "" {
+		finalStatus = *req.Status
+	}
+	orgID := target.OrgID
 	if req.OrgID != nil {
 		orgID = *req.OrgID
-	} else if target, err := s.Store.GetUser(req.ID, tid); err == nil {
-		orgID = target.OrgID
 	}
-	if err := s.Store.UpdateUser(req.ID, tid, req.DisplayName, req.Role, req.Status, orgID); err != nil {
+	// ★ F-31（闸 2/2）：终态判据——本次变更合并后的最终形态若是「dept_admin 且无部门」一律拒绝。
+	//   只查请求字段会漏两条降级路径：①把 dept_admin 改成 user 之外的角色时顺手摘部门；
+	//   ②给存量无部门账号直接把角色升成 dept_admin（org_id 缺席=沿用 0）。
+	if auth.RoleLevel(finalRole) == 2 && orgID <= 0 {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "部门管理员必须绑定部门：请同时指定所属部门，或将角色改为普通用户"))
+		return
+	}
+	// 结构化变更轨迹：记录 before/after diff（★ F-35：after 记合并后真实写库值，不记请求原样）
+	before := map[string]string{"role": target.Role, "status": target.Status, "display_name": target.DisplayName}
+	beforeJSON, _ := json.Marshal(before)
+	if err := s.Store.UpdateUser(req.ID, tid, finalDisplay, finalRole, finalStatus, orgID); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
-	afterJSON, _ := json.Marshal(map[string]string{"role": req.Role, "status": req.Status, "display_name": req.DisplayName})
+	afterJSON, _ := json.Marshal(map[string]string{"role": finalRole, "status": finalStatus, "display_name": finalDisplay})
 	// 写入审计 diff（审计留痕：记录角色/状态变更前后值）
 	s.Store.LogAuditDiff(tid, u.ID, "user_update", "users", before["display_name"], string(beforeJSON), string(afterJSON))
 	writeJSON(w, 200, map[string]interface{}{"success": true})

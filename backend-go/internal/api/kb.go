@@ -35,7 +35,7 @@ import (
 	"translator/internal/store"
 )
 
-// tempIDRe 识别临时 ID 合法格式（randHex(12) 生成的 24 位小写 hex）。
+// tempIDRe 识别临时 ID 合法格式（randHex(24) 生成的 24 位小写 hex）。
 // 导入阶段据此校验请求载荷，杜绝把元信息文件路径指向上传目录之外（评审 A3）。
 var tempIDRe = regexp.MustCompile(`^[0-9a-f]{24}$`)
 
@@ -540,7 +540,7 @@ func (s *Server) handleRecognizeKB(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 生成 temp_id 并缓存文件路径（识别后保留文件，供 import-kb 读取）
-	meta := kbRecognizeMeta{FilePath: savePath, TempID: randHex(12), Created: time.Now().Unix()}
+	meta := kbRecognizeMeta{FilePath: savePath, TempID: randHex(24), Created: time.Now().Unix()}
 	metaBytes, _ := json.Marshal(meta)
 	metaPath := filepath.Join(s.kbTempDir(), "kb_"+meta.TempID+".json")
 	if err := os.WriteFile(metaPath, metaBytes, 0o644); err != nil {
@@ -598,7 +598,7 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少 temp_id"})
 		return
 	}
-	// ★ 格式白名单（2026-08-26 全仓评审 A3）：temp_id 由识别阶段 randHex(12) 生成
+	// ★ 格式白名单（2026-08-26 全仓评审 A3）：temp_id 由识别阶段 randHex(24) 生成
 	//  （24 位 hex）。不校验格式时，"../../x" 类载荷可把元信息文件路径指到任意位置
 	//  （读 oracle + 借 FilePath 字段间接打开/删除任意文件），必须在此卡死。
 	if !tempIDRe.MatchString(req.TempID) {

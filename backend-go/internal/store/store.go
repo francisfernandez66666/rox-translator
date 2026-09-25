@@ -42,26 +42,27 @@ func New(db *sql.DB) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		return nil, err // 迁移失败则返回错误
 	}
-	s.feedbackMigrate()          // 老库补 replies 列（幂等，BBS 回复线程）
-	s.backfillAPIOwnership()     // ★ 历史 Key/任务强绑定回填（幂等）
-	s.backfillPaymentsFenC2()    // ★ C2 历史 payments.amount_money(分) → amount_fen 回填（幂等）
-	s.TmReviewMigrate()          // TM 待审池建表（幂等）
-	s.KBPackGrantsMigrate()      // ★ H3 KB 包级读/写/管理授权表（幂等）
-	s.SCIMMigrate()              // ★ H10 SCIM 2.0 配置表 + users.scim_external_id（幂等）
-	s.QuotaGrantMigrate()        // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
-	s.TicketStateTimingMigrate() // ★ ticket_state 增加 started_at/duration_ms（幂等；进度耗时展示）
-	s.TicketQualityMigrate()     // ★ 改造 4/5（2026-09-17）：tickets 增加 quality_flagged/qa_errors/qa_warnings（幂等；质检透出）
-	s.BalanceAccountMigrate()    // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
-	s.OrgSiblingUniqueMigrate()  // ★ P0-2（2026-09-15）：orgs 同级同名唯一约束（存量去重+建索引，幂等）
-	s.BillingIndexMigrate()      // ★ 整改 B5：订单号唯一索引 + Key 哈希检索索引（幂等，撞重复降级告警）
-	s.PackagesTenantMigrate()    // ★ 商业包租户化：packages 加 tenant_id 并改 (tenant_id, code) 复合唯一（幂等）
-	s.ReferralMigrate()          // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
-	s.KBSearchIndexMigrate()     // ★ D11：kb_entries 子串检索 trgm GIN（仅 PG，幂等）
-	s.OneidMigrate()             // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
-	s.KBRewardMigrate()          // ★ KB 上传奖励流水表（幂等；任务2.3）
-	s.USDTMigrate()              // ★ USDT 收款（2026-09-15）：usdt_orders/usdt_deposits + 尾数唯一索引（幂等）
-	s.TasksMigrate()             // ★ 任务中心：任务定义 + 领取记录建表（幂等；2026-09-03）
-	s.EnsureBillingDefaults()    // 商业化参数默认值落库（幂等，面板可改）
+	s.feedbackMigrate()           // 老库补 replies 列（幂等，BBS 回复线程）
+	s.backfillAPIOwnership()      // ★ 历史 Key/任务强绑定回填（幂等）
+	s.backfillPaymentsFenC2()     // ★ C2 历史 payments.amount_money(分) → amount_fen 回填（幂等）
+	s.TmReviewMigrate()           // TM 待审池建表（幂等）
+	s.KBPackGrantsMigrate()       // ★ H3 KB 包级读/写/管理授权表（幂等）
+	s.SCIMMigrate()               // ★ H10 SCIM 2.0 配置表 + users.scim_external_id（幂等）
+	s.QuotaGrantMigrate()         // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
+	s.TicketStateTimingMigrate()  // ★ ticket_state 增加 started_at/duration_ms（幂等；进度耗时展示）
+	s.TicketQualityMigrate()      // ★ 改造 4/5（2026-09-17）：tickets 增加 quality_flagged/qa_errors/qa_warnings（幂等；质检透出）
+	s.TicketRejectSourceMigrate() // ★ F-42-b（2026-09-25 UAT 修复批）：tickets 补 reject_source 列，区分人工驳回与系统失败（幂等）
+	s.BalanceAccountMigrate()     // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
+	s.OrgSiblingUniqueMigrate()   // ★ P0-2（2026-09-15）：orgs 同级同名唯一约束（存量去重+建索引，幂等）
+	s.BillingIndexMigrate()       // ★ 整改 B5：订单号唯一索引 + Key 哈希检索索引（幂等，撞重复降级告警）
+	s.PackagesTenantMigrate()     // ★ 商业包租户化：packages 加 tenant_id 并改 (tenant_id, code) 复合唯一（幂等）
+	s.ReferralMigrate()           // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
+	s.KBSearchIndexMigrate()      // ★ D11：kb_entries 子串检索 trgm GIN（仅 PG，幂等）
+	s.OneidMigrate()              // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
+	s.KBRewardMigrate()           // ★ KB 上传奖励流水表（幂等；任务2.3）
+	s.USDTMigrate()               // ★ USDT 收款（2026-09-15）：usdt_orders/usdt_deposits + 尾数唯一索引（幂等）
+	s.TasksMigrate()              // ★ 任务中心：任务定义 + 领取记录建表（幂等；2026-09-03）
+	s.EnsureBillingDefaults()     // 商业化参数默认值落库（幂等，面板可改）
 	// ★ #33（2026-09-21）：任务系统事件发放列/流水表/周期计数表 + 出厂任务种入（幂等）。
 	// 排在 EnsureBillingDefaults 之后：出厂任务的积分额度要按 points_tokens_rate 折成内部 token 落库。
 	s.TaskRewardMigrate()
@@ -72,8 +73,10 @@ func New(db *sql.DB) (*Store, error) {
 	s.SeedDefaultScrapeSources()  // ★ 功能③：通用行业兜底包默认采集源（幂等；无任何 general 源时补建）
 	s.MigrateSharedHostToZero()   // ★ 2026-09-04 共享包宿主迁移：租户1的行业/语言文化包迁至租户0（幂等）
 	s.PersonaMigrate()            // ★ 角色功能（2026-09-19）：users.job_role 补列 + 出厂角色包种入租户0（幂等）
+	s.UserLangMigrate()           // ★ F-17（2026-09-25 批E）：users.preferred_lang 补列（邮件语种跟随，幂等）
 	s.CouponMigrate()             // ★ #41 商业洞三（2026-09-21）：优惠券模板/核销流水表 + orders 券列（幂等）
 	s.RenewalGraceMigrate()       // ★ #74（2026-09-23）：自动续费建单重试台账 renewal_attempts（同日唯一键，幂等）
+	s.BillingRefundMigrate()      // ★ F-34（2026-09-25 UAT 修复批）：orders 补 reopen_from_order 列（补审单防重，幂等）
 	s.EnsureCurrencyMigration()   // ★ #75（2026-09-23）：orders 报价快照列 currency/fx_rate/money_cny + 存量回填（幂等）
 	s.RepairAutoincrementSeqs()   // ★ 2026-09-03 通知串号根因：sqlite_sequence 与 max(id) 失步修复（幂等）
 	return s, nil
@@ -156,6 +159,7 @@ func (s *Store) migrate() error {
 			approver_id INTEGER NOT NULL DEFAULT 0,
 			reviewer_id INTEGER NOT NULL DEFAULT 0,
 			reject_reason TEXT NOT NULL DEFAULT '',
+			reject_source TEXT NOT NULL DEFAULT '',          -- ★ F-42-b：驳回来源 human 人工 / system 系统 / 空=历史行
 			final_result TEXT NOT NULL DEFAULT '',  -- JSON
 			created_at TEXT,
 			updated_at TEXT

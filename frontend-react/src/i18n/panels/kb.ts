@@ -25,6 +25,9 @@ export const zh: Record<string, string> = {
   // ---- 语言文化规范（安全句 / 禁用词 / 替换对） ----
   'kb.safetyTitle': '语言文化规范（安全句 · Gate 闸门）',
   'kb.safetyHint': '规则注入 AI 翻译上下文；禁用词在译文出现时标记违规（可在系统设置开启拦截）',
+  // ★ F-26（批G）：安全句按平台统一维护收口——非超管（企业/部门管理员）不再渲染表单，
+  //   只回显下面这行提示（等值锁见 components/admin/KbP.dom.test.tsx）
+  'kb.safetyPlatformManaged': '安全句（语言文化规范）由平台统一维护，无需企业配置。',
   'kb.allStatus': '全部状态',
   'kb.pending': '待审核',
   'kb.approved': '已生效',
@@ -130,9 +133,13 @@ export const zh: Record<string, string> = {
   'kb.kbNewLangs': '新增语言:',
   'kb.selectPkg': '选择目标包…',
   'kb.import': '导入',
-  'kb.bitextImport': '导入双语语料（写TM）',
+  // ★ F-24（批G 文案）：去掉「写TM」硬承诺（导入≠直接写库，实际走平台审核），
+  //   回执另追加 kb.bitextPendingNote 说明后续动作；zh 值不得再含「已写入」（负向锁）
+  'kb.bitextImport': '导入双语语料',
   'kb.bitextImporting': '导入中…',
-  'kb.bitextDone': '语料已写入',
+  'kb.bitextDone': '已提交，待平台审核',
+  // ★ F-24（批G 文案）：新键——审核通过后自动进入翻译记忆的补充说明（双语导入成功回执用）
+  'kb.bitextPendingNote': '审核通过后会自动进入翻译记忆，无需再次导入。',
   'kb.bitextSkipped': '跳过',
   'kb.tmxImport': '导入 TMX',
   'kb.tmxImporting': '导入中…',
@@ -183,6 +190,8 @@ export const en: Record<string, string> = {
   // ---- 语言文化规范（安全句 / 禁用词 / 替换对） ----
     'kb.safetyTitle': 'Language Culture Rules (Safety Phrases · Gate)',
   'kb.safetyHint': 'Rules are injected into AI translation context; forbidden terms found in output are flagged (blocking optional via system switch)',
+  // ★ F-26（批G）：非超管不再渲染安全句表单，只回显该行提示（与 zh 同键）
+  'kb.safetyPlatformManaged': 'Safety phrases (language culture rules) are maintained centrally by the platform; no enterprise configuration needed.',
   'kb.allStatus': 'All statuses',
   'kb.pending': 'Pending',
   'kb.approved': 'Active',
@@ -279,9 +288,12 @@ export const en: Record<string, string> = {
   'kb.kbNewLangs': 'New languages:',
   'kb.selectPkg': 'Select target pack…',
   'kb.import': 'Import',
-  'kb.bitextImport': 'Import bitext (to TM)',
+  // ★ F-24（批G 文案）：与 zh 同口径——去掉「to TM」硬承诺，done 改为「已提交，待平台审核」等义
+  'kb.bitextImport': 'Import bitext',
   'kb.bitextImporting': 'Importing…',
-  'kb.bitextDone': 'Corpus written',
+  'kb.bitextDone': 'Submitted, pending platform review',
+  // ★ F-24（批G 文案）：新键——审核通过后自动进入翻译记忆（导入成功回执追加）
+  'kb.bitextPendingNote': 'Once approved, entries automatically enter translation memory; no need to import again.',
   'kb.bitextSkipped': 'skipped',
   'kb.tmxImport': 'Import TMX',
   'kb.tmxImporting': 'Importing…',

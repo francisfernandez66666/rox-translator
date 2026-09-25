@@ -145,6 +145,22 @@ ck A3p-bad-reg-role-ignored '"success":true' "$(curl -s $B/api/auth/register -H 
 RJ=$(dbq "SELECT COALESCE(job_role,'') FROM users WHERE username='uatuser_rq' LIMIT 1" | tr -d '[:space:]')
 [ "$RJ" != "no_such_role" ] && { PASS=$((PASS+1)); echo "PASS|A3p-bad-reg-role-empty"; } || { FAIL=$((FAIL+1)); echo "FAIL|A3p-bad-reg-role-empty|got[$RJ]"; }
 
+# ---------- A3L ★ F-17（2026-09-25 批E）注册界面语种落库 users.preferred_lang ----------
+# 邮件语种跟随的前置地基：注册载荷 app_lang 优先、X-App-Lang 头兜底，12 码白名单外
+# 一律落空串（=中文链路，与 job_role「非法值静默忽略不阻断注册」同口径）。
+# 三条都过 dbq 直读库判等值：接口回 success 不代表语种真的存下来了。
+ck A3L-register-lang-en '"success":true' "$(curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_len","password":"uatpass123","type":"personal","name":"语种EN","email":"uat_len@test.com","agreed":true,"app_lang":"en"}')"
+PL_EN=$(dbq "SELECT COALESCE(preferred_lang,'') FROM users WHERE username='uatuser_len' LIMIT 1" | tr -d '[:space:]')
+[ "$PL_EN" = "en" ] && { PASS=$((PASS+1)); echo "PASS|A3L-lang-payload(en)"; } || { FAIL=$((FAIL+1)); echo "FAIL|A3L-lang-payload(want=en|got=$PL_EN)"; }
+# 头兜底：载荷不带 app_lang，只有 X-App-Lang: ja 头 → 同样落 ja（前端 authHeaders 恒带此头）
+ck A3L-register-lang-hdr '"success":true' "$(curl -s $B/api/auth/register -H "$J" -H 'X-App-Lang: ja' -d '{"username":"uatuser_lja","password":"uatpass123","type":"personal","name":"语种JA","email":"uat_lja@test.com","agreed":true}')"
+PL_JA=$(dbq "SELECT COALESCE(preferred_lang,'') FROM users WHERE username='uatuser_lja' LIMIT 1" | tr -d '[:space:]')
+[ "$PL_JA" = "ja" ] && { PASS=$((PASS+1)); echo "PASS|A3L-lang-header(ja)"; } || { FAIL=$((FAIL+1)); echo "FAIL|A3L-lang-header(want=ja|got=$PL_JA)"; }
+# 白名单外语种（zz）：建号必须照常成功，且语种落空串——脏值不得入库变成永久错语种
+ck A3L-register-lang-bad '"success":true' "$(curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_lzz","password":"uatpass123","type":"personal","name":"语种ZZ","email":"uat_lzz@test.com","agreed":true,"app_lang":"zz"}')"
+PL_ZZ=$(dbq "SELECT COALESCE(preferred_lang,'') FROM users WHERE username='uatuser_lzz' LIMIT 1" | tr -d '[:space:]')
+[ -z "$PL_ZZ" ] && { PASS=$((PASS+1)); echo "PASS|A3L-lang-invalid-empty"; } || { FAIL=$((FAIL+1)); echo "FAIL|A3L-lang-invalid-empty|got=$PL_ZZ"; }
+
 # ---------- A4 注册赠送余额 ----------
 BAL1=$(curl -s "$B/api/billing/balance" -H "$H1")
 ck A4-balance-shape 'points_available' "$BAL1"
@@ -201,6 +217,30 @@ USED2=$(curl -s $B/api/me/package -H "$H1" | pv '.get("points_used_today", -1)')
 [ -n "$USED1" ] && [ -n "$USED2" ] && [ "$USED2" -gt "$USED1" ] \
   && { PASS=$((PASS+1)); echo "PASS|A7s-stream-metering-sync(今日已耗 $USED1->$USED2)"; } \
   || { FAIL=$((FAIL+1)); echo "FAIL|A7s-stream-metering-sync(今日已耗 $USED1->$USED2，done 帧后计量未即时可见)"; }
+
+# ---------- A7t ★ F-29 后端半（2026-09-25 批D）超长对话文本必须在 SSE 头前拒 ----------
+# 缺陷形态：上万字符的文本直接喂对话管线，LLM 上下游 90s+ 不返回，前端挂着流干等、
+#   积分照扣。修复口径：handleChatStream 在写 sseHeaders **之前**按 []rune 判
+#   chat_max_chars（运营策略键，默认 5000），超限走 writeError → 400 JSON
+#   code=chat_text_too_long、文案引导改用翻译工单。
+# 「头前拒」必须用 Content-Type 判：一旦先发过 SSE 头，错误体就只可能混在 text/event-stream
+#   帧里——那种形态下浏览器根本不会按 JSON 处理，前端拿不到稳定错误码。
+LT_MSG=$(python3 -c 'print("测"*6000)')
+LT_CODE=$(curl -s -o /tmp/uat_lt_body.json -w '%{http_code}' $B/api/chat/stream -H "$H1" -H "$J" --max-time 30 \
+  -d "{\"message\":\"$LT_MSG\",\"skill\":\"translation\",\"options\":{\"target_langs\":[\"en\"]}}")
+[ "$LT_CODE" = "400" ] && { PASS=$((PASS+1)); echo "PASS|A7t-too-long-400"; } || { FAIL=$((FAIL+1)); echo "FAIL|A7t-too-long-400(want=400|got=$LT_CODE)"; }
+ck A7t-too-long-code '"code":"chat_text_too_long"' "$(cat /tmp/uat_lt_body.json)"
+ck A7t-too-long-msg '工单' "$(cat /tmp/uat_lt_body.json)"
+LT_CT=$(curl -s -o /dev/null -D - $B/api/chat/stream -H "$H1" -H "$J" --max-time 30 \
+  -d "{\"message\":\"$LT_MSG\",\"skill\":\"translation\",\"options\":{\"target_langs\":[\"en\"]}}" | grep -i '^content-type:' || true)
+echo "$LT_CT" | grep -qiE 'application/json' \
+  && { PASS=$((PASS+1)); echo "PASS|A7t-too-long-not-sse"; } \
+  || { FAIL=$((FAIL+1)); echo "FAIL|A7t-too-long-not-sse|got[$LT_CT]（拒绝必须先于 SSE 头，见批D纪律）"; }
+rm -f /tmp/uat_lt_body.json
+# 反向对照：限内文本（<5000 字符）必须照常走 SSE 出 done 帧——否则上面三条是「全拒」假绿
+CH_OK=$(curl -s -N $B/api/chat/stream -H "$H1" -H "$J" --max-time 90 \
+  -d '{"message":"限内文本对照断言，设备需在傍晚前送达。","skill":"translation","options":{"target_langs":["en"]}}')
+ck A7t-within-limit-done '"type":"done"' "$CH_OK"
 
 # ---------- A8 余额不足硬闸（清零 userB 双台账，billing_enforced=1） ----------
 # 两张台账都要清零：容量判定走的是「quota_grants 未过期余额 + balance_accounts 合计」，

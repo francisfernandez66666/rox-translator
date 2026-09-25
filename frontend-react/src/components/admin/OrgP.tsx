@@ -130,7 +130,10 @@ export function OrgP() {
 
   // 切换归属组织：若当前角色不在新可选集内则自动落到首个合法角色
   function onNuOrgChange(v: any) {
-    setNuOrgId(v)
+    // ★ F-22（批G）：<select> 的 e.target.value 是字符串，此前直接存进 nuOrgId state，
+    //   建号提交的 JSON 里 org_id 变成 "3" 字符串形态，被后端严格类型校验直接拒绝。
+    //   在事件入口源头归一为 Number（:522 入口与 :120-133 级联判据、编辑路径 :262 同口径）。
+    setNuOrgId(Number(v))
     setNu((n: Any) => {
       if (!nuRoleOptions.includes(n.role)) return { ...n, role: nuRoleOptions[0] || 'user' }
       return n

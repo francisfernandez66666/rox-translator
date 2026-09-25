@@ -495,3 +495,99 @@ describe('I 排版档：字号下限 11px / 描边最粗 1.2px', () => {
     expect(hits, '连交付档描边都扫不到，说明扫描面或正则失效').toBeGreaterThan(100)
   })
 })
+
+// ---- J) ★ 〇-Q（2026-09-25 批G F-18）WordSwap 尺寸档两元组等值锁 ----
+// 规格真值 = UI-ANNOTATIONS.md §1.5「WordSwap 尺寸档（〇-Q 批）」：先钉档、后改码，
+// 本段逐档断 theme.css 字面值**恰等于**钉档两元组（宽屏现档 + ≤640px 窄屏档）。
+// 方向是双向的：
+//   · 宽屏五档（含 .ws--lg 大档与三档「不缩」小档）等值，防未来「顺带缩一档 / 抬一档」；
+//   · 窄屏 @media (max-width: 640px) 块内除钉死的 8 条覆写外**不得再多任何规则**
+//     （选择器白名单＝「.draft-ws / .file-segs-ws / 基础档不缩」这条规格的负向实现——
+//      把不缩档偷溜进媒体查询，白名单立刻红灯，而不是等肉眼去 diff）。
+// 为什么运行时锁（pixel_uat.spec.ts P2e）之外还要这条源码锁：P2e 只实测 360/1440 两个视口点，
+// 断点字面值（max-width: 640px）、641px 一侧的行为与窄屏档的**声明本身**只能由源码形态钉；
+// 反过来源码锁扫不到「别的文件在后面再覆写 .ws-*」，两侧互补才算钉死。
+const WS_MEDIA_RE = /@media\s*\(max-width:\s*640px\)\s*\{([\s\S]*?)\n\}/
+// [选择器, 属性, 钉档字面值]——全部取自 §1.5 表，改动必须先改文档再改这里。
+const WS_WIDE: [string, string, string][] = [
+  // 基础档（宽屏/窄屏同值，窄屏侧不进 @media，见下方白名单）
+  ['.ws', 'gap', '12px'],
+  ['.ws-tag', 'font-size', '13.5px'],
+  ['.ws-w', 'font-size', '16px'],
+  ['.ws-r', 'font-size', '17px'],
+  // 大档 .ws--lg：五维（w/r/gap/tag/红线粗）
+  ['.ws--lg', 'gap', '32px'],
+  ['.ws--lg .ws-tag', 'font-size', '23px'],
+  ['.ws--lg .ws-w', 'font-size', '44px'],
+  ['.ws--lg .ws-r', 'font-size', '52px'],
+  ['.ws--lg .ws-w .ws-wt::before', 'height', '3px'],
+  // 草稿档 / 逐段档：§1.5 钉「不缩」，这里锁的是它们唯一的声明值本身
+  ['.draft-ws', 'gap', '9px'],
+  ['.draft-ws .ws-w', 'font-size', '15px'],
+  ['.draft-ws .ws-r', 'font-size', '16px'],
+  ['.draft-ws .ws-tag', 'font-size', '12px'],
+  ['.file-segs-ws', 'gap', '8px'],
+  ['.file-segs-ws .ws-w', 'font-size', '14px'],
+  ['.file-segs-ws .ws-r', 'font-size', '15px'],
+  ['.file-segs-ws .ws-tag', 'font-size', '12px'],
+  // 进度档 .tk-prog-ws：宽屏 18/17/10/14（红线走基础 1.6px，不单独覆写）
+  ['.tk-prog-ws', 'gap', '10px'],
+  ['.tk-prog-ws .ws-w', 'font-size', '18px'],
+  ['.tk-prog-ws .ws-r', 'font-size', '17px'],
+  ['.tk-prog-ws .ws-tag', 'font-size', '14px'],
+]
+const WS_NARROW: [string, string, string][] = [
+  ['.ws--lg', 'gap', '16px'],
+  ['.ws--lg .ws-tag', 'font-size', '14px'],
+  ['.ws--lg .ws-w', 'font-size', '26px'],
+  ['.ws--lg .ws-r', 'font-size', '30px'],
+  ['.ws--lg .ws-w .ws-wt::before', 'height', '2px'],
+  ['.tk-prog-ws .ws-w', 'font-size', '15px'],
+  ['.tk-prog-ws .ws-r', 'font-size', '16px'],
+  ['.tk-prog-ws .ws-tag', 'font-size', '12px'],
+]
+// 取（已剥注释的）css 里选择器全等匹配的所有声明块中 prop 的字面值。
+// 返回数组而非单值：等值锁要求「恰好一处命中」，出现第二处（哪怕值相同）也是形态漂移。
+function declValues(css: string, selector: string, prop: string): string[] {
+  const out: string[] = []
+  const re = /([^{}]+)\{([^{}]*)\}/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(css))) {
+    if (normSel(m[1]) !== selector) continue
+    const v = m[2].match(new RegExp(`(?:^|[;\\s])${prop}:\\s*([^;]+)`))
+    if (v) out.push(v[1].trim())
+  }
+  return out
+}
+describe('J WordSwap 尺寸档两元组等值锁（〇-Q · UI-ANNOTATIONS §1.5）', () => {
+  const body = stripComments(THEME_CSS)
+  const media = body.match(WS_MEDIA_RE)
+  it('theme.css 恰有一处 @media (max-width: 640px) 的 WordSwap 窄屏块', () => {
+    // 形态判据写死在正则里（max-width、640px、冒号后空格可省不可换别的值）；
+    // 命中数必须恰为 1：0 = 窄屏覆写没了（历史缺陷原样复活），≥2 = 有人又开了一口子块，档会互相盖。
+    expect([...body.matchAll(new RegExp(WS_MEDIA_RE.source, 'g'))].length,
+      'WordSwap 窄屏媒体块数量 ≠ 1，请同步 §1.5 与本锁').toBe(1)
+    expect(media, '找不到 @media (max-width: 640px) 窄屏覆写块').toBeTruthy()
+  })
+  // 宽屏侧解析前先摘掉媒体块：否则 '.ws--lg' 这类同名选择器会命中两处（宽 + 窄），
+  // 「恰好一处等于档」就永远红灯——摘块不是宽容，是把两元组各自锁在各自的射程里。
+  const wideBody = body.replace(WS_MEDIA_RE, '')
+  for (const [sel, prop, want] of WS_WIDE) {
+    it(`宽屏档 ${sel} { ${prop}: ${want} }（§1.5 现档，一字不动）`, () => {
+      expect(declValues(wideBody, sel, prop), `宽屏档 ${sel} 的 ${prop} 命中数/字面值与 §1.5 钉档不符`).toEqual([want])
+    })
+  }
+  for (const [sel, prop, want] of WS_NARROW) {
+    it(`窄屏档(≤640px) ${sel} { ${prop}: ${want} }（§1.5 〇-Q 新钉）`, () => {
+      expect(declValues(media ? media[1] : '', sel, prop), `窄屏档 ${sel} 的 ${prop} 与 §1.5 钉档不符`).toEqual([want])
+    })
+  }
+  it('窄屏块选择器白名单：钉死 8 条，不缩档混进来即红（§1.5「不缩」的负向实现）', () => {
+    const sels: string[] = []
+    const re = /([^{}]+)\{[^{}]*\}/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(media ? media[1] : ''))) sels.push(normSel(m[1]))
+    expect(sels.sort(), '窄屏覆写规则集合与 §1.5 钉档不一致（多一条 = 不缩档被偷偷收窄）')
+      .toEqual([...WS_NARROW.map(([s]) => s)].sort())
+  })
+})

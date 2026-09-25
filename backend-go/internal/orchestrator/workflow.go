@@ -234,6 +234,23 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 	return nil
 }
 
+// payloadHasTranslation ★ F-42-b（2026-09-25 UAT 修复批）：载荷里是否存在任一非空译文。
+// 用途：runAIInitial 的「人工驳回重翻」分支前置判据（双保险之一）。载荷全空时重翻循环
+// 逐语言 continue、零 LLM 调用后 return nil，等于向流水线谎报「本步成功」，末尾被刷成
+// completed 而产物为空（OpenAPI 侧照发空 translations）。空载荷必须落回正常翻译分支。
+// 参数：p=工单中间载荷（nil 视为无译文）。返回：true=至少有一种语言的译文非空。
+func payloadHasTranslation(p *ticketPayload) bool {
+	if p == nil {
+		return false
+	}
+	for _, tr := range p.Translations {
+		if strings.TrimSpace(tr) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // runAIInitial AI 初翻（对缺失语言模型翻译；被驳回工单则按驳回意见重翻全部）。
 // 参数：ctx=上下文，t=工单对象。
 func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
@@ -258,7 +275,13 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 	srcLang := engine.DetectSourceLang(t.SourceText) // 源语言（用于初翻指令方向）
 
 	// 驳回重翻循环：按驳回意见重新翻译全部语言
-	if strings.TrimSpace(t.RejectReason) != "" {
+	// ★ F-42-b（2026-09-25 UAT 修复批）判据由「reject_reason 非空」收紧为三条件：
+	//   ① 原因非空 ② 来源确为人工驳回（reject_source='human'）③ 载荷里确有可重翻译文。
+	//   旧判据只看非空：系统失败原因（'context canceled'/'步骤 X 失败'）会被当成审批意见
+	//   喂给模型；而载荷全空时循环逐语言 continue、一次 LLM 都不调，随后 savePayload +
+	//   return nil，流水线后半段照常把工单刷成 completed —— 生产任务 90 的假 completed 即此环。
+	//   非 human 来源或空载荷一律落回下方正常流程（对缺失语言全量翻译），绝不空转返回成功。
+	if strings.TrimSpace(t.RejectReason) != "" && t.RejectSource == store.RejectSourceHuman && payloadHasTranslation(p) {
 		for _, lc := range p.TargetLangs {
 			if strings.TrimSpace(p.Translations[lc]) == "" {
 				continue

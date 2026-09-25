@@ -266,6 +266,24 @@ func (s *Store) SetJobRole(id, tid int64, code string) error {
 	return err
 }
 
+// SetPreferredLang 更新用户界面语言偏好（★ F-17 批E 2026-09-25；lang=12 语种白名单码，空串=清除/未选）。
+// 唯一写入点是注册链路（app_lang 随注册落库）；登录/切语种不回写——邮件语种只要求「注册时的界面语言」口径。
+func (s *Store) SetPreferredLang(id, tid int64, lang string) error {
+	_, err := s.execW("UPDATE users SET preferred_lang=?, updated_at=? WHERE id=? AND tenant_id=?", lang, time.Now().Format(time.RFC3339), id, tid)
+	return err
+}
+
+// GetPreferredLang 读取用户界面语言偏好（★ F-17 批E）。
+// 缺列老库/查无用户一律回空串（中文链路），错误透传给调用方自行降级。
+func (s *Store) GetPreferredLang(id int64) (string, error) {
+	var lang string
+	if err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT COALESCE(preferred_lang,'') FROM users WHERE id=?", id).Scan(&lang); err != nil {
+		return "", err
+	}
+	return lang, nil
+}
+
 // EnsureAdmin 确保平台超管初始账号存在（幂等；已存在同名普通账号则提升为超管）。
 // 若 email 非空，则确保该账号绑定了对应邮箱（新建时写入；已存在时更新）。
 func (s *Store) EnsureAdmin(tid int64, username, passHash, displayName, email string) error {

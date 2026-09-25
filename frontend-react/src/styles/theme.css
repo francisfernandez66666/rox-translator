@@ -323,6 +323,24 @@ html, body { background: #000000; color: var(--lc-text); }
 .tk-prog-ws .ws-r { font-size: 17px; }
 .tk-prog-ws .ws-tag { font-size: 14px; }
 .tk-prog-ws-row { display: flex; align-items: center; gap: 10px; margin: 10px 0 2px; min-width: 0; overflow: hidden; }
+/* ★ 〇-Q（2026-09-25 批G F-18）窄屏尺寸档——规格已先钉进 UI-ANNOTATIONS.md §1.5「WordSwap 尺寸档」，
+   本块只是钉死值的实现（先钉后改，改任一档必须先改文档表）。形态选 @media 覆写而不是 clamp：
+   两元组是台阶值而非连续缩放，媒体查询让 360/1440 两个视口「恰等于」钉档，等值锁才钉得住。
+   只覆写窄屏会越界的两档：.ws--lg（全屏加载占位，44/52 在 360px 下顶破视口）与 .tk-prog-ws
+   （进度弹窗窄屏近全宽，18/17 长词折行）；基础档 16/17 与贴文本基线的 .draft-ws 15/16、
+   .file-segs-ws 14/15 **不缩**（缩了与正文错位，且无溢出风险，理由见 §1.5）。
+   闸门：readability.test.ts J 段（源码级两元组等值 + 本块选择器白名单负向）+ pixel_uat.spec.ts P2e（运行时双视口实测）。 */
+@media (max-width: 640px) {
+  .ws--lg { gap: 16px; }
+  .ws--lg .ws-tag { font-size: 14px; }
+  .ws--lg .ws-w { font-size: 26px; }
+  .ws--lg .ws-r { font-size: 30px; }
+  /* 划掉红线随字阶收窄：26px 错词配 3px 粗线会显「划太实」（§1.5 五维之一） */
+  .ws--lg .ws-w .ws-wt::before { height: 2px; }
+  .tk-prog-ws .ws-w { font-size: 15px; }
+  .tk-prog-ws .ws-r { font-size: 16px; }
+  .tk-prog-ws .ws-tag { font-size: 12px; }
+}
 @media (prefers-reduced-motion: reduce) {
   .ws-w.struck, .ws-r.lock { animation: none; }
   .ws-w .ws-wt::before { animation: none; }

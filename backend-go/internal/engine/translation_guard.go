@@ -15,7 +15,12 @@
 // ========================================
 package engine
 
-import "strings"
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+)
 
 // translationFailureMark BatchTranslate 在失败槽位写入的占位字面量（见 engine.go 批量链）。
 // 集中成常量是为了让「失败占位」与「真译文」的区分只有一处定义，不再各调用点抄字符串。
@@ -23,12 +28,14 @@ const translationFailureMark = "[翻译失败]"
 
 // IsTranslationUsable 判定一份候选译文能否作为交付（文件主链 5 个写入点的唯一口径）。
 // 参数 src: 送翻的源文段；out: 候选译文（KB 命中值或模型返回，未经判定前的原始候选）。
-// 判不可用的四类，任一命中即 false：
+// 判不可用的五类，任一命中即 false：
 //  1. 空串 / 纯空白 —— 没有内容可言交付；
 //  2. 批量失败占位 [翻译失败] —— 上游明确报错的槽位；
 //  3. 与源文同文（去空白后逐字相等）—— 模型或 KB 原样回显 = 根本没翻（含 "#"/"1"/"•"
 //     这类无上下文短串的回显，与既有模型路径口径一致，宁可走补漏也不静默交付）；
-//  4. 指令回显残留 —— 见 hasInstructionEcho 的结构指纹。
+//  4. 指令回显残留 —— 见 hasInstructionEcho 的结构指纹；
+//  5. 短格长度爆炸 —— 见 hasLengthExplosion（★ F-38，2026-09-25 批 D：6 字表格单元格被
+//     翻成 2100 字符的整封英文邮件，前四判据全放行、直接进交付物）。
 //
 // ★ 不能只判非空：这是本文件存在的理由，任何新增写入点都必须先过本函数。
 func IsTranslationUsable(src, out string) bool {
@@ -40,6 +47,9 @@ func IsTranslationUsable(src, out string) bool {
 		return false
 	}
 	if hasInstructionEcho(src, out) {
+		return false
+	}
+	if hasLengthExplosion(src, out) {
 		return false
 	}
 	return true
@@ -70,6 +80,67 @@ func normalizeForCompare(s string) string {
 //     这是可接受的偏保守方向（宁可重试也不交付可疑串）。
 func hasInstructionEcho(src, out string) bool {
 	return !strings.Contains(src, "<") && strings.Contains(out, "<")
+}
+
+// hasLengthExplosion ★ F-38 第 5 判据「短格长度爆炸」的结构指纹（2026-09-25 批 D）。
+//
+// 实测形态：xlsx 表格 6 字单元格「产品方案书」被上游吐回 2100 字符的整封英文邮件
+// （疑似供应商侧缓存/解码串扰，账本已留字节级复现样本）。前四判据对此全放行：
+// 非空、非失败占位、与源文不同文、不含凭空尖括号——脏串直接写进交付物。
+//
+// 判据：只对**短源文格**生效（src ≤ shortGuardMaxSrcRunes，默认 12 rune），
+// 译文 rune 数超过 max(ratio×src, floor) 且封顶 absCap 即判爆炸（默认 8× / 下限 80 / 上限 300）。
+// 为什么限定短格：长段落翻译（尤其中→德/俄等长语系）长度比天然偏高，全文生效会误杀；
+// 而「缩写展开」这类合法短译（AWS→亚马逊云科技）在 80 rune 下限内几乎不可能被拦。
+// 阈值全部 env 可配（保守默认，宁可多走一次补漏重试，不静默交付可疑串）。
+func hasLengthExplosion(src, out string) bool {
+	sr := []rune(strings.TrimSpace(src))
+	if len(sr) == 0 || len(sr) > shortGuardMaxSrcRunes() {
+		return false // 长段落/空源文不适用本判据（交既有链处理）
+	}
+	return len([]rune(strings.TrimSpace(out))) > shortGuardLimit(len(sr))
+}
+
+// shortGuardLimit 短格译文长度上限：min(max(ratio×srcRunes, floor), absCap)。
+// 三段式的用意：ratio 管「随源文缩放」、floor 给极短格留足展开空间（1 字段落译成一句长句合法）、
+// absCap 兜底——即使阈值被调大，短格也绝不允许出现「数三百倍」的邮件级长串。
+func shortGuardLimit(srcRunes int) int {
+	n := shortGuardRatio() * srcRunes
+	if f := shortGuardFloor(); n < f {
+		n = f
+	}
+	if c := shortGuardAbsCap(); n > c {
+		n = c
+	}
+	return n
+}
+
+// guardEnvInt 读取守卫阈值的 env 整数项：空/非法/非正一律回退默认，防止误配置把闸门关死。
+func guardEnvInt(key string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// 以下四个阈值函数单独抽出是为了让单测可用 t.Setenv 精确验证「env 可配」这条约定。
+func shortGuardMaxSrcRunes() int { return guardEnvInt("LC_GUARD_SHORT_MAX_SRC_RUNES", 12) }
+func shortGuardRatio() int       { return guardEnvInt("LC_GUARD_SHORT_RATIO", 8) }
+func shortGuardFloor() int       { return guardEnvInt("LC_GUARD_SHORT_FLOOR_RUNES", 80) }
+func shortGuardAbsCap() int      { return guardEnvInt("LC_GUARD_SHORT_ABS_CAP_RUNES", 300) }
+
+// LengthExplosionInfo 供日志/告警用的长度比描述（provider/model 由调用侧补齐）。
+// 命中 hasLengthExplosion 的槽位调用它，把「源 r 字 → 译 r 字（倍数 x，上限 y）」写成一行可聚合的哨兵字段。
+func LengthExplosionInfo(src, out string) string {
+	sr := len([]rune(strings.TrimSpace(src)))
+	or := len([]rune(strings.TrimSpace(out)))
+	ratio := 0.0
+	if sr > 0 {
+		ratio = float64(or) / float64(sr)
+	}
+	return fmt.Sprintf("src_runes=%d out_runes=%d ratio=%.1f limit=%d", sr, or, ratio, shortGuardLimit(sr))
 }
 
 // collectKBPass 汇总 KB 第一遍逐段直配的并行结果，决定「算命中并写入」还是「进模型补漏队列」。

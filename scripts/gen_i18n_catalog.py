@@ -344,6 +344,8 @@ T = {
 "邮箱为必填项": "Email is required",
 "邮箱格式不正确": "Invalid email format",
 "邮箱验证码错误或已过期": "Email verification code invalid or expired",
+"部门管理员必须绑定部门：请先在组织列表中选择所属部门": "Department admins must be bound to a department: choose the department in the org list first",
+"部门管理员必须绑定部门：请同时指定所属部门，或将角色改为普通用户": "Department admins must be bound to a department: assign a department, or change the role to a regular user",
 "部门管理员未绑定部门，无法创建部门包": "Department admin has no bound department; cannot create a department pack",
 "部门管理员未绑定部门，无法开通账号": "Department admin has no bound department; cannot create accounts",
 "部门管理员未绑定部门，无法操作": "Department admin has no bound department; operation not allowed",
@@ -414,6 +416,14 @@ T.update({
 "账号已注销，如需恢复请联系管理员": "Account deactivated; contact an admin to restore it",
 "邮件发送失败，请稍后重试或联系管理员": "Email delivery failed; retry later or contact the administrator",
 "非法文件路径": "Illegal file path",
+# ★ F-09（2026-09-25 批B）pay.go 渠道互锁新增
+"当前支付模式下不可选择模拟支付渠道": "Mock payment channel is not selectable under the current payment mode",
+# ★ F-42-d（2026-09-25 批C）假 completed 无产物闸新增（UI 下载 + OpenAPI 详情/下载）
+"该工单没有可用译文产物（可能因余额不足或流程中断），请重新发起翻译": "This ticket has no usable translation output (it may have stopped due to insufficient balance or an interrupted pipeline); please start a new translation",
+"任务无可用译文产物，请重新提交": "The task has no usable translation output; please resubmit",
+"任务无可用译文产物（可能因余额不足或流程中断），请重新提交": "The task has no usable translation output (it may have stopped due to insufficient balance or an interrupted pipeline); please resubmit",
+# ★ F-29（2026-09-25 批D）chat 90s 超时 error 帧（SSE 终帧文案，与前端批G兜底口径对齐）
+"处理超时，长文本请改用翻译工单": "Processing timed out; for long texts, please create a translation ticket instead",
 })
 
 # —— 第三批盘点（收尾自查）：writeJSON 的 `"error": "中文"` 字面量（metrics/spa/stream 等）。

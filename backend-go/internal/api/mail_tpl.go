@@ -2,6 +2,9 @@
 // 邮件模板（按用途区分的多个模板，支持前端后台配置，仅超管可改）：
 //   - 注册验证码 / 找回密码验证码 / 企业注册成功提醒 / 租户管理员通知 / 系统告警
 //   - 模板存于 system_config.mail_templates（JSON：{code:{subject,body,cc}}），未配置字段回退内置默认
+//   - ★ F-17（2026-09-25 批E）语种跟随：同一 JSON 里以点分键存语种稿（如 "register_code.en"），
+//     解析序 {code}.{lang} → {code}.en（非中文系）→ {code}（无后缀=中文，老配置零迁移）→ 内置默认
+//     （验证码类内置中英双稿，其余语种回落英文稿）；管理台 UI 本批不加语种维度，超管直配 system_config
 //   - 支持 {var} 占位符替换（如 {code}/{name}/{username}/{email}/{brand}/{title}/{content}/{level}）
 //   - GET  /api/admin/mail-templates 仅超管：返回全部模板当前生效内容 + 用途/变量说明
 //   - PUT  /api/admin/mail-templates 仅超管：保存（覆盖）指定模板的 subject/body/cc
@@ -16,6 +19,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"translator/internal/mail"
@@ -23,6 +27,38 @@ import (
 
 // defaultBrand 平台默认品牌名（占位符 {brand} 的回退值）。
 const defaultBrand = "能言 LangCross"
+
+// ============ F-17（批E）邮件语种：12 语种白名单与归一化 ============
+
+// mailUILangNames 界面语言 12 码白名单（★ 与前端 i18n Lang 联合类型同口径：
+// zh/zh_hant/en/ru/fr/ar/es/pt/de/ja/ko/th）。非法值落空串=中文链路（与 job_role 静默忽略同口径）。
+var mailUILangNames = map[string]bool{
+	"zh": true, "zh_hant": true, "en": true, "ru": true, "fr": true, "ar": true,
+	"es": true, "pt": true, "de": true, "ja": true, "ko": true, "th": true,
+}
+
+// normalizeMailLang 归一化原始语种输入：去空白/转小写/连字符转下划线后过 12 码白名单；
+// 白名单外（含空串）一律返回 ""（= 未选语种，走中文链路，不做 Accept-Language 双判据）。
+func normalizeMailLang(raw string) string {
+	l := strings.ToLower(strings.TrimSpace(raw))
+	l = strings.ReplaceAll(l, "-", "_")
+	if mailUILangNames[l] {
+		return l
+	}
+	return ""
+}
+
+// isChineseMailLang 中文系（简/繁）与空串均按中文链路处理（app_lang 空留 zh 口径）。
+func isChineseMailLang(l string) bool { return l == "" || l == "zh" || l == "zh_hant" }
+
+// requestMailLang 从请求提取界面语种：优先载荷 app_lang（注册/发码表单随 getLang() 上报），
+// 其次 X-App-Lang 头（〇-S #12 起 authHeaders 对全部带认证头请求自动附带）。
+func requestMailLang(r *http.Request, bodyLang string) string {
+	if l := normalizeMailLang(bodyLang); l != "" {
+		return l
+	}
+	return normalizeMailLang(r.Header.Get("X-App-Lang"))
+}
 
 // MailTpl 单一邮件模板的可配置内容。
 type MailTpl struct {
@@ -37,12 +73,17 @@ type MailTplMeta struct {
 	Name    string   `json:"name"`    // 中文用途名
 	Desc    string   `json:"desc"`    // 用途说明
 	Vars    []string `json:"vars"`    // 可用占位符（如 code/name）
-	Default MailTpl  `json:"default"` // 内置默认内容（未配置时生效）
+	Default MailTpl  `json:"default"` // 内置默认内容（未配置时生效，中文）
+	// DefaultEn 内置英文稿（★ F-17 批E：仅验证码类提供——非中文语种且超管未配置时回落英文，
+	// 判定依据「误翻风险大于收益」：验证码文案短、机核无歧义，可放心内置；正文类通知仍回中文母稿）。
+	// Subject 为空视为「未提供英文稿」。
+	DefaultEn MailTpl `json:"default_en"`
 }
 
 // mailTplMetas 系统内置的邮件模板清单（不同用处，支持多个）。
 var mailTplMetas = []MailTplMeta{
 	// —— 验证码类：注册/找回密码（占位符 code/brand，10 分钟有效口径写在正文）——
+	// ★ F-17 批E：内置中英双稿——非中文语种且超管未配置语种稿时回落英文（其余十语共用英文稿）。
 	{
 		Code: "register_code", Name: "注册验证码",
 		Desc: "用户自助注册时发送的邮箱验证码",
@@ -50,6 +91,10 @@ var mailTplMetas = []MailTplMeta{
 		Default: MailTpl{
 			Subject: "【{brand}】注册验证码",
 			Body:    "您好，\n\n您的注册验证码是：{code}\n\n该验证码 10 分钟内有效，请勿泄露给他人。\n\n—— {brand}",
+		},
+		DefaultEn: MailTpl{
+			Subject: "[{brand}] Your verification code",
+			Body:    "Hello,\n\nYour verification code is: {code}\n\nThis code expires in 10 minutes. Please keep it confidential.\n\n—— {brand}",
 		},
 	},
 	{
@@ -59,6 +104,10 @@ var mailTplMetas = []MailTplMeta{
 		Default: MailTpl{
 			Subject: "【{brand}】密码重置验证码",
 			Body:    "您好，\n\n您的密码重置验证码是：{code}\n\n该验证码 10 分钟内有效，请勿泄露给他人。\n\n—— {brand}",
+		},
+		DefaultEn: MailTpl{
+			Subject: "[{brand}] Your password reset code",
+			Body:    "Hello,\n\nYour password reset code is: {code}\n\nThis code expires in 10 minutes. Please keep it confidential.\n\n—— {brand}",
 		},
 	},
 	// —— 通知类模板：以下按 企业注册提醒/租户通知/导入账号开通/系统告警/欢迎手册 顺序 ——
@@ -172,11 +221,16 @@ func (s *Server) loadCustomMailTpls() map[string]MailTpl {
 	return out
 }
 
-// getMailTpl 返回某模板当前生效内容（用户覆盖优先，未配置字段回退默认）。
-func (s *Server) getMailTpl(code string) MailTpl {
+// getMailTpl 返回某模板对某语种当前生效内容（★ F-17 批E 语种跟随）。
+// 解析优先级（低→高逐字段覆盖，空字段=该级未配置继续回落）：
+// 内置中文母稿 → 自定义 {code}（无后缀=中文母稿，老配置零迁移）
+// → 内置英文稿（仅验证码类有；非中文语种时压过中文自定义=「其余回落 en」条款）
+// → 自定义 {code}.en（非中文语种）→ 自定义 {code}.{lang} 精确语种键（zh_hant 可单独配）。
+// 中文系（zh/zh_hant/空）不套任何英文级，保证「app_lang 空留 zh」口径。
+func (s *Server) getMailTpl(code, lang string) MailTpl {
 	def := defaultBrandTpl(code)
 	custom := s.loadCustomMailTpls()
-	if t, ok := custom[code]; ok {
+	overlay := func(t MailTpl) {
 		if t.Subject != "" {
 			def.Subject = t.Subject
 		}
@@ -185,6 +239,31 @@ func (s *Server) getMailTpl(code string) MailTpl {
 		}
 		if t.CC != "" {
 			def.CC = t.CC
+		}
+	}
+	// 第 2 级：无后缀键=超管中文母稿（历史唯一形态；现仅中文链路与「无英文稿」模板沿用）
+	if t, ok := custom[code]; ok {
+		overlay(t)
+	}
+	if !isChineseMailLang(lang) {
+		// 第 3 级：验证码类内置英文稿（超管只配了中文稿时，非中文语种回落英文而非误发中文）
+		if m, ok := mailTplMeta(code); ok && m.DefaultEn.Subject != "" {
+			overlay(m.DefaultEn)
+		}
+		// 第 4 级：自定义英文稿（lang=en 时并入第 5 级精确键，一次覆盖）
+		if lang != "en" {
+			if t, ok := custom[code+".en"]; ok {
+				overlay(t)
+			}
+		}
+		// 第 5 级：精确语种键（en / 其余十语）
+		if t, ok := custom[code+"."+lang]; ok {
+			overlay(t)
+		}
+	} else if lang == "zh_hant" {
+		// 中文系唯一可有独立键的语种（繁体专配）
+		if t, ok := custom[code+".zh_hant"]; ok {
+			overlay(t)
 		}
 	}
 	return def
@@ -220,33 +299,72 @@ func renderMailTpl(tpl MailTpl, data map[string]string) *mail.Message {
 
 // sendTemplatedMail 按模板发送邮件（自动套用当前生效模板并渲染占位符）。
 // 改为异步：投递到任务队列由 worker 发送（失败自动重试/死信），避免 SMTP 阻塞注册/重置流程。
+// 参数 lang：收件人界面语种（12 码白名单，空串=中文链路；★ F-17 批E 语种跟随）。
 // 返回错误仅在「入队与同步降级均失败」时出现（极少见）。
-func (s *Server) sendTemplatedMail(to, code string, data map[string]string) error {
+func (s *Server) sendTemplatedMail(to, code, lang string, data map[string]string) error {
 	// 渲染邮件模板：替换占位符
-	msg := renderMailTpl(s.getMailTpl(code), data)
+	msg := renderMailTpl(s.getMailTpl(code, lang), data)
 	msg.To = to
 	// 异步投递邮件（优先入队，队列不可用时降级同步发送）
 	return s.enqueueMail(msg, false)
 }
 
+// manualPDFNames 手册附件名按语种（★ F-17 批E：附件名跟随收件人界面语言）。
+// 空串/中文系=简体中文名；白名单外由调用方先归一化为空串。
+var manualPDFNames = map[string]string{
+	"": "产品手册.pdf", "zh": "产品手册.pdf", "zh_hant": "產品手冊.pdf",
+	"en": "User Guide.pdf", "ja": "ユーザーガイド.pdf", "ko": "사용자 가이드.pdf",
+	"de": "Benutzerhandbuch.pdf", "fr": "Guide d'utilisation.pdf", "es": "Guía de usuario.pdf",
+	"pt": "Guia do usuário.pdf", "ru": "Руководство пользователя.pdf", "ar": "دليل المستخدم.pdf",
+	"th": "คู่มือผู้ใช้.pdf",
+}
+
+// manualPDFName 取某语种的附件文件名（未知语种回中文名的兜底由 normalizeMailLang 前置保证）。
+func manualPDFName(lang string) string {
+	if n, ok := manualPDFNames[lang]; ok {
+		return n
+	}
+	return manualPDFNames[""]
+}
+
+// manualGreeting 手册邮件正文问候语（中英两稿：中文系=原中文稿，其余回落英文——
+// 与决策项 ③「其余回落 en」同口径，避免机翻误翻风险；超管可经 manual 模板语种键覆盖主题/正文级配置）。
+// 参数 lang=归一化后的语种（可空）；username=收件人用户名。
+func manualGreeting(lang, username string) string {
+	if isChineseMailLang(lang) {
+		return fmt.Sprintf("亲爱的 %s：\n\n欢迎使用能言 LangCross！附件为《产品手册》PDF，包含个人与企业用户的上手步骤，建议先花 5 分钟阅读。\n\n—— 能言 LangCross 团队", username)
+	}
+	return fmt.Sprintf("Dear %s,\n\nWelcome to LangCross! Please find our User Guide (PDF) attached, which walks you through the first steps for both individual and enterprise users. We suggest a 5-minute read to get started.\n\n—— The LangCross Team", username)
+}
+
+// buildManualMailMsg 组装手册邮件（纯函数，供单测断言主题渲染/正文语种/附件名——
+// sendManualEmail 的组消息部分抽出让「附件名与模版语种」可离线锁定）。
+// 参数 to/username/lang：收件人；tpl：已按语种解析的 manual 模板；pdf/pdfName：附件内容与文件名（pdf 空=无附件）。
+func buildManualMailMsg(to, username, lang string, tpl MailTpl, pdf []byte, pdfName string) *mail.Message {
+	// 主题走模板渲染（修复历史直挂 tpl.Subject 未替换 {brand} 的存量口径）
+	msg := renderMailTpl(tpl, map[string]string{"username": username, "brand": defaultBrand})
+	msg.Body = manualGreeting(lang, username)
+	msg.To = to
+	if len(pdf) > 0 {
+		msg.Attachments = []mail.Attachment{{Name: pdfName, Data: pdf}}
+	}
+	return msg
+}
+
 // sendManualEmail 注册成功后给新用户发送《产品手册》PDF 邮件（附件为你提供的产品手册 PDF 文件）。
 // 使用 INFO_SMTP_* 配置的专用邮箱发送；邮件正文模板内容可在后台「邮件模板」中配置（manual 模板）。
-// PDF 附件来源（按优先级）：system_config.manual_pdf_path > 环境变量 MANUAL_PDF_PATH >
-// 默认路径 /opt/translator/data/manual.pdf。找不到时仍发送正文邮件（仅不含附件），并在日志提示。
-func (s *Server) sendManualEmail(to, username string) error {
-	tpl := s.getMailTpl("manual")
-	body := fmt.Sprintf("亲爱的 %s：\n\n欢迎使用能言 LangCross！附件为《产品手册》PDF，包含个人与企业用户的上手步骤，建议先花 5 分钟阅读。\n\n—— 能言 LangCross 团队", username)
-	msg := &mail.Message{
-		Subject: tpl.Subject,
-		Body:    body,
-	}
-	pdf, path, err := s.loadManualPDF()
+// ★ F-17（2026-09-25 批E）语种跟随：参数 lang=注册界面语种（可空=中文链路），
+// 主题/附件名/PDF 文件均按语种取稿。
+// PDF 附件来源（按优先级）：system_config.manual_pdf_dir 下 {lang}.pdf → en → zh →
+// 旧单文件链（manual_pdf_path > 环境变量 MANUAL_PDF_PATH > /opt/translator/data/manual.pdf > manual.pdf）。
+// 找不到时仍发送正文邮件（仅不含附件），并在日志提示。
+func (s *Server) sendManualEmail(to, username, lang string) error {
+	tpl := s.getMailTpl("manual", lang)
+	pdf, path, err := s.loadManualPDF(lang)
 	if err != nil {
-		log.Printf("[mail] 手册PDF未找到 to=%s err=%v（将仅发送正文邮件）", to, err)
-	} else {
-		msg.Attachments = []mail.Attachment{{Name: "产品手册.pdf", Data: pdf}}
+		log.Printf("[mail] 手册PDF未找到 to=%s lang=%s err=%v（将仅发送正文邮件）", to, lang, err)
 	}
-	msg.To = to
+	msg := buildManualMailMsg(to, username, lang, tpl, pdf, manualPDFName(lang))
 	if err := s.enqueueMail(msg, true); err != nil {
 		return err
 	}
@@ -284,7 +402,44 @@ func (s *Server) syncSendMail(msg *mail.Message, useInfo bool) error {
 }
 
 // loadManualPDF 按优先级读取产品手册 PDF 文件，返回内容、命中路径。
-func (s *Server) loadManualPDF() (data []byte, path string, err error) {
+// ★ F-17（2026-09-25 批E）语种序：配置键 manual_pdf_dir 目录下 {lang}.pdf → en.pdf → zh.pdf
+// （下划线码另试连字符变体文件名，兼容交付包 LangCross-User-Guide-zh-hant.pdf 一类命名）；
+// 目录未配置或未命中时回落旧单文件链（manual_pdf_path > env MANUAL_PDF_PATH >
+// /opt/translator/data/manual.pdf > manual.pdf）——老部署零改动仍可发中文手册。
+func (s *Server) loadManualPDF(lang string) (data []byte, path string, err error) {
+	// 1) 多语种目录：按「精确语种 → en → zh」次序找 {code}.pdf（去重）
+	if dir, _ := s.Store.GetConfig("manual_pdf_dir"); strings.TrimSpace(dir) != "" {
+		dir = strings.TrimSpace(dir)
+		if lang == "" {
+			lang = "zh" // 空语种=中文链路（app_lang 空留 zh 口径），优先命中 zh.pdf 而非 en.pdf
+		}
+		order := []string{}
+		for _, c := range []string{lang, "en", "zh"} {
+			if c == "" {
+				continue
+			}
+			dup := false
+			for _, seen := range order {
+				if seen == c {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				order = append(order, c)
+			}
+		}
+		for _, code := range order {
+			// 文件名两种写法：下划线码（zh_hant.pdf）与连字符码（zh-hant.pdf）
+			for _, c := range []string{code, strings.ReplaceAll(code, "_", "-")} {
+				p := filepath.Join(dir, c+".pdf")
+				if d, e := os.ReadFile(p); e == nil && len(d) > 0 {
+					return d, p, nil
+				}
+			}
+		}
+	}
+	// 2) 旧单文件链兜底（兼容既有部署：配置键/环境变量/默认路径/相对路径）
 	candidates := []string{}
 	if p, e := s.Store.GetConfig("manual_pdf_path"); e == nil && p != "" {
 		candidates = append(candidates, p)
@@ -298,7 +453,7 @@ func (s *Server) loadManualPDF() (data []byte, path string, err error) {
 			return d, c, nil
 		}
 	}
-	return nil, "", fmt.Errorf("未找到产品手册PDF（请配置 system_config.manual_pdf_path 或环境变量 MANUAL_PDF_PATH，或将文件放到 /opt/translator/data/manual.pdf）")
+	return nil, "", fmt.Errorf("未找到产品手册PDF（请配置 system_config.manual_pdf_dir（多语种目录，内含 {lang}.pdf）或 manual_pdf_path，或将文件放到 /opt/translator/data/manual.pdf）")
 }
 
 // handleAdminMailTemplates 邮件模板管理入口（GET=读取 / PUT=保存），均仅超管。

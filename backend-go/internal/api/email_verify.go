@@ -56,8 +56,9 @@ const (
 )
 
 // sendEmailCode 为指定邮箱生成并发送验证码；返回 (是否受理, 提示信息, 是否 Noop 模式)。
-// 参数：s=服务（用于 mailer 与 IP 日上限）；ip=请求方 IP；email=目标邮箱。
-func (s *Server) sendEmailCode(ip, email string) (bool, string, bool) {
+// 参数：s=服务（用于 mailer 与 IP 日上限）；ip=请求方 IP；email=目标邮箱；
+// lang=收件界面语种（★ F-17 批E：12 码白名单，空=中文链路；验证码模版非中文回落英文稿）。
+func (s *Server) sendEmailCode(ip, email, lang string) (bool, string, bool) {
 	// 邮箱地址归一化为小写
 	key := strings.ToLower(strings.TrimSpace(email))
 	now := time.Now()
@@ -96,7 +97,7 @@ func (s *Server) sendEmailCode(ip, email string) (bool, string, bool) {
 	// 判断是否为 Noop 模式（测试环境）
 	_, isNoop := s.mailer().(*mail.NoopSender)
 	// 发送邮件：使用注册验证码模板
-	err = s.sendTemplatedMail(key, "register_code", map[string]string{"code": code})
+	err = s.sendTemplatedMail(key, "register_code", lang, map[string]string{"code": code})
 	if err != nil {
 		return false, "邮件发送失败，请稍后重试", isNoop
 	}
@@ -156,6 +157,7 @@ func (s *Server) handleEmailCode(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email        string `json:"email"`
 		CaptchaToken string `json:"captcha_token"` // 人机验证 token（启用 turnstile 时必填）
+		AppLang      string `json:"app_lang"`      // ★ F-17（批E）：发送界面语种（可空；回落 X-App-Lang 头）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
@@ -184,7 +186,7 @@ func (s *Server) handleEmailCode(w http.ResponseWriter, r *http.Request) {
 			"message": fmt.Sprintf("发送过于频繁，请稍后再试")})
 		return
 	}
-	ok, msg, noop := s.sendEmailCode(ip, email)
+	ok, msg, noop := s.sendEmailCode(ip, email, requestMailLang(r, req.AppLang))
 	if ok {
 		s.regGuard.record("email-code:" + ip)
 	}
@@ -269,7 +271,14 @@ func (s *Server) handleMeEmailCode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "该邮箱已被其他账号绑定"})
 		return
 	}
-	ok, msg, noop := s.sendEmailCode(clientIP(r), email)
+	// ★ F-17（批E）换绑验证码语种：X-App-Lang 头优先（authHeaders 自动附带），头缺失回落账号存量 preferred_lang
+	lang := requestMailLang(r, "")
+	if lang == "" {
+		if pl, perr := s.Store.GetPreferredLang(u.ID); perr == nil {
+			lang = normalizeMailLang(pl)
+		}
+	}
+	ok, msg, noop := s.sendEmailCode(clientIP(r), email, lang)
 	status := 200
 	if !ok && strings.Contains(msg, "频繁") {
 		status = 429

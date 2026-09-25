@@ -329,6 +329,73 @@ test.describe('像素级 UAT', () => {
     await shot(page, 'p2d_gray_frames');
   });
 
+  // ★ 〇-Q（2026-09-25 批G F-18）WordSwap 尺寸档运行时等值锁：规格先钉在 UI-ANNOTATIONS.md §1.5
+  // （两元组：宽屏现档 + ≤640px 窄屏档），源码级锁是 readability.test.ts J 段；本条量的是
+  // 「浏览器在该视口真正算出来的 computed 值」，防别的样式表在后面把 .ws-* 再覆写一层。
+  // 为什么挂合成节点而不是等冷启动占位：.ws--lg 只在载入闸门那段（≈9s）窗口里存在，
+  // 跟闸门抢时序读它会做成交替假红/假绿的 flaky 锁；而本锁要证的只是 theme.css 的档在
+  // 真实文档里按视口生效——挂一个与 WordSwap 同构（span.ws[档名] > ws-tag/ws-w>ws-wt/ws-r）
+  // 的节点，getComputedStyle 走的就是同一份层叠与媒体查询命中，量完即摘，不留渲染残渣。
+  // ⚠️ 亚像素教训（P2d 血案）：Chrome 的 CSSOM 把 border/几何 used-value 按设备像素取整上报，
+  //   所以红线只量整数档（3px/2px），基础红线 1.6px 归 J 段源码锁管，不在此实测；
+  //   font-size 走的是 computed 值而非布局 used-value（本批 360/1440 实跑验证过 13.5px 原样回读），
+  //   故五档全部 w/r/tag/gap 等值进本锁。
+  test('P2e WordSwap 尺寸档 360/1440 双视口运行时等值（〇-Q §1.5）', async ({ page }) => {
+    // 无需登录态：theme.css 由 main.tsx 全局引入，任何路由下文档都带着这套规则；
+    // '/' 未登录直出营销页，body 可见即证明 SPA 真的挂载了（about:blank 量不到样式层，不作数）。
+    await page.goto('/');
+    await expect(page.locator('body')).toBeVisible();
+    const probe = () => page.evaluate(() => {
+      const mk = (extra: string) => {
+        const host = document.createElement('div');
+        // DOM 与 WordSwap.tsx 的渲染结构一致（tag → w>wt → r），档名挂在根节点上，
+        // 若组件类名口径变了，J 段源码锁与本锁会一起红灯，不存在静默失配。
+        host.innerHTML =
+          `<span class="ws${extra ? ' ' + extra : ''}">` +
+          `<span class="ws-tag">EN</span>` +
+          `<span class="ws-w"><span class="ws-wt">compare</span></span>` +
+          `<span class="ws-r">benchmark</span></span>`;
+        document.body.appendChild(host);
+        const root = host.firstElementChild as HTMLElement;
+        const fs = (sel: string) => parseFloat(getComputedStyle(root.querySelector(sel)!).fontSize);
+        const out: { gap: number; tag: number; w: number; r: number; strike?: number } = {
+          gap: parseFloat(getComputedStyle(root).columnGap),
+          tag: fs('.ws-tag'), w: fs('.ws-w'), r: fs('.ws-r'),
+        };
+        // 红线粗只量大档（3px/2px 整数档）；基础档 1.6px 不读（见上方亚像素口径）。
+        if (extra === 'ws--lg') {
+          out.strike = parseFloat(getComputedStyle(root.querySelector('.ws-wt')!, '::before').height);
+        }
+        host.remove();
+        return out;
+      };
+      // 五档全量回传：宽窄两轮各测一次，「不缩」档由两轮 toEqual 相等来钉，而不是只测宽屏。
+      return {
+        lg: mk('ws--lg'), base: mk(''), draft: mk('draft-ws'), segs: mk('file-segs-ws'), tk: mk('tk-prog-ws'),
+      };
+    });
+    // 先钉 1440（>640px，媒体查询不命中 ⇒ 宽屏现档），再压到 360（≤640px ⇒ 窄屏档）。
+    // setViewportSize 会即时重算媒体查询，无需重新 goto。
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const wide = await probe();
+    await page.setViewportSize({ width: 360, height: 800 });
+    const narrow = await probe();
+    // —— 宽屏现档（§1.5 第一列；.ws--lg 五维 44/52/32/23/3px）——
+    expect(wide.lg, `宽屏大档实测 ${JSON.stringify(wide.lg)} ≠ §1.5 现档 44/52/32/23/3px`).toEqual({ gap: 32, tag: 23, w: 44, r: 52, strike: 3 });
+    expect(wide.base, `宽屏基础档实测 ${JSON.stringify(wide.base)} ≠ §1.5 现档 16/17/12`).toEqual({ gap: 12, tag: 13.5, w: 16, r: 17 });
+    expect(wide.draft, `宽屏草稿档 ≠ §1.5 现档 15/16/9/12`).toEqual({ gap: 9, tag: 12, w: 15, r: 16 });
+    expect(wide.segs, `宽屏逐段档 ≠ §1.5 现档 14/15/8/12`).toEqual({ gap: 8, tag: 12, w: 14, r: 15 });
+    expect(wide.tk, `宽屏进度档 ≠ §1.5 现档 18/17/10/14`).toEqual({ gap: 10, tag: 14, w: 18, r: 17 });
+    // —— 窄屏 ≤640px 档（〇-Q 新钉：大档 26/30/16/14/2px、进度档 15/16/12，gap 10 不缩）——
+    expect(narrow.lg, `窄屏大档实测 ${JSON.stringify(narrow.lg)} ≠ §1.5 窄档 26/30/16/14/2px`).toEqual({ gap: 16, tag: 14, w: 26, r: 30, strike: 2 });
+    expect(narrow.tk, `窄屏进度档实测 ${JSON.stringify(narrow.tk)} ≠ §1.5 窄档 15/16/12（gap 10 不缩）`).toEqual({ gap: 10, tag: 12, w: 15, r: 16 });
+    // —— 「不缩」三档：窄屏实测必须与宽屏**完全相等**（等值传递，不是「差不多小」）——
+    expect(narrow.base, '基础档被窄屏偷缩（§1.5 钉不缩）').toEqual(wide.base);
+    expect(narrow.draft, '草稿档被窄屏偷缩（§1.5 钉不缩，缩了与文本基线错位）').toEqual(wide.draft);
+    expect(narrow.segs, '逐段档被窄屏偷缩（§1.5 钉不缩）').toEqual(wide.segs);
+    await shot(page, 'p2e_wordswap_sizes');
+  });
+
   test('P3 自服务页渲染（余额/套餐/账号·企业 + 邀请·个人）', async ({ page }) => {
     await login(page);
     // 每页期望文案写成宽松正则（/余额|积分|充值/）：自服务页的措辞与积分口径常调，

@@ -268,10 +268,13 @@ func TestCouponPreviewServerSideAmount(t *testing.T) {
 	if origin <= 0 {
 		t.Fatalf("折前金额应>0，实际 %v", origin)
 	}
-	if want := origin * 0.25; abs(m["discount_money"].(float64)-want) > 0.005 {
+	// ★ F-12（2026-09-25）尺子重锚 33222 后折前金额为奇数分（99.67），整数分四舍五入
+	// 与理论比例天然存在 ≤1 分漂移；容差从 0.005 放宽到 0.011（1 分 + 浮点余量），
+	// 只吸收分位取整，不放宽比例语义。
+	if want := origin * 0.25; abs(m["discount_money"].(float64)-want) > 0.011 {
 		t.Errorf("25%% 折让期望 %.2f 实际 %v", want, m["discount_money"])
 	}
-	if want := origin * 0.75; abs(m["pay_money"].(float64)-want) > 0.005 {
+	if want := origin * 0.75; abs(m["pay_money"].(float64)-want) > 0.011 {
 		t.Errorf("实付期望 %.2f 实际 %v", want, m["pay_money"])
 	}
 	// 响应不得带 token 裸值（对外积分口径）
@@ -348,8 +351,10 @@ func TestCouponPayCreateRedeem(t *testing.T) {
 	}
 	orderNo := m["order"].(map[string]any)["order_no"].(string)
 	money, coupon, status := f.orderRow(t, orderNo)
-	if money != baseMoney/2 {
-		t.Errorf("折后应收应为 %.2f，实际 %.2f", baseMoney/2, money)
+	// ★ F-12 尺子重锚后原价为奇数分（199.33），半价落在半分上——服务端按整数分取整，
+	// 与 baseMoney/2 的浮点值天然差 ≤1 分；旧断言用严格相等只在偶数分原价下成立（假精确）。
+	if diff := money - baseMoney/2; diff > 0.011 || diff < -0.011 {
+		t.Errorf("折后应收应为 %.2f（±1 分取整），实际 %.2f", baseMoney/2, money)
 	}
 	if coupon != "HALF" {
 		t.Errorf("订单应记录券码 HALF，实际 %q", coupon)

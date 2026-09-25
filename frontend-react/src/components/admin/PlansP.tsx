@@ -719,7 +719,10 @@ async function confirmManual(o: Any) {
     ...(payMode === 'static_qr' ? [{ label: t('billing.chStaticQR'), value: 'manual' }] : []),
     ...(payMode === 'sdk' ? [{ label: t('billing.chWechat'), value: 'wechat' }, { label: t('billing.chAlipay'), value: 'alipay' }] : []),
     ...(usdtOn ? String(usdtCfg.usdt_chains || '').split(',').filter(Boolean).map((c) => ({ label: `${t('billing.chUsdt')} · ${usdtChainLabel(c.trim())}`, value: `usdt:${c.trim()}` })) : []),
-    { label: t('billing.chMock'), value: 'mock' },
+    // ★ F-09（批G）：mock 项只在支付模式为 mock 时展示——此前无条件渲染，
+    //   static_qr/sdk 模式下租户也能选「模拟支付（测试）」，等于收银台露出测试后门；
+    //   条件展开与上方 :719-720 的 static_qr/sdk 范式保持一致。
+    ...(payMode === 'mock' ? [{ label: t('billing.chMock'), value: 'mock' }] : []),
   ]
 
   return (

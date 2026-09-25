@@ -19,7 +19,7 @@ package api
 //   - mock：模拟支付（测试）
 // 金额：入参为 token 数量，按 system_config price_fen_per_million_tokens（★ S1 口径修复：
 //
-//	分/百万 token，缺省 29900＝¥299/百万，与充值包尺子价一致）换算人民币分。
+//	分/百万 token，★ F-12 重锚后缺省 33222，使 3,000 积分裸充值恰=¥299 面值）换算人民币分。
 //	旧键 price_fen_per_token（分/token、实值 10）为按次时代遗留，已废弃不再读取。
 // ========================================
 
@@ -35,6 +35,7 @@ import (
 
 	"crypto/subtle"
 
+	apierrors "translator/internal/errors"
 	"translator/internal/payment"
 	"translator/internal/store"
 )
@@ -133,6 +134,13 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Channel != "mock" && req.Channel != "wechat" && req.Channel != "alipay" && req.Channel != "manual" && req.Channel != "usdt" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "不支持的支付渠道"})
+		return
+	}
+	// ★ F-09（2026-09-25 UAT 修复批）：渠道白名单只判字符串合法，不与支付模式交叉校验——
+	//   生产 static_qr 模式下可选 mock 建单，「按钮能按、钱到不了」（模拟支付确认被 403 拦）。
+	//   mock 渠道仅在 payMode=mock 下放行；新增错误分支按 AGENTS §一·8 走 writeError。
+	if req.Channel == "mock" && payMode != "mock" {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "当前支付模式下不可选择模拟支付渠道"))
 		return
 	}
 	// 创建订单（先落 pending，再取二维码回填）
@@ -377,11 +385,18 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 	if o != nil && o.Channel == "usdt" {
 		msg = "USDT 收款待核销：租户 #" + strconv.FormatInt(tid, 10) + " 订单 " + o.OrderNo + rebateNote + txNote + " 用户已声明链上转账，请核对交易哈希后确认到账"
 	}
-	_ = s.Store.CreateAlert(0, "critical", "pay_manual", msg)
-	// ★ 站内信通知平台超管（tenant_id=0, role=admin）：超管铃铛即时可见待确认订单
+	// ★ F-32（2026-09-25 UAT 修复批）：原走 CreateAlert 吃「同 tenant+kind open 去重」，
+	// 平台级一条滞留 open 告警会吞掉之后所有付款声明的订单号（生产实测）；
+	// 改 PerOrder 逐条必发——每条声明在告警中心留一条独立线索。
+	_ = s.Store.CreateAlertPerOrder(0, "critical", "pay_manual", msg)
+	// ★ 站内信通知平台超管：超管铃铛即时可见待确认订单
 	//   注意：CreateNotification 依赖自增序列取主键；若序列失步（如 pg 迁移/回放后
 	//   seq 落后于实际行数）会撞主键失败——务必打日志而非静默吞错，便于及时发现。
-	for _, sa := range s.Store.ListUsersByRole(0, "admin") {
+	// ★ F-33（2026-09-25 UAT 修复批）：原只按字面 role='admin' 圈人，而权限判定侧
+	//   RoleLevel>=4 认 admin/super_admin 双值、建号/提权实际写 super_admin——
+	//   投递与判定两套口径导致真超管收不到站内信；改为双角色合并遍历。
+	recipients := append(s.Store.ListUsersByRole(0, "admin"), s.Store.ListUsersByRole(0, "super_admin")...)
+	for _, sa := range recipients {
 		if err := s.Store.CreateNotification(sa.ID, "静态码支付待人工确认",
 			fmt.Sprintf("租户 #%d 订单 %s%s 用户已付款，请尽快查看并开通", tid, o.OrderNo, rebateNote), "pay_manual", req.OrderID); err != nil {
 			log.Printf("[pay-manual-confirm] 站内信通知超管(id=%d)失败: %v", sa.ID, err)

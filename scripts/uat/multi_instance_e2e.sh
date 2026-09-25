@@ -47,7 +47,13 @@ for i in $(seq 1 10); do sleep 1; curl -s -m 2 "http://127.0.0.1:${MOCK_PORT}/v1
 
 # ---------- 2. 双实例启动（同库同 JWT_SECRET；探活自指向各自 /status） ----------
 log "启动双实例 :${A_PORT} / :${B_PORT}（共享 ${MDB}）..."
-COMMON_ENV=(ADMIN_INIT_PASSWORD=Admin@1234 JWT_SECRET="$JWT_SECRET_VAL" DB_DRIVER=postgres DB_DSN="$DB_DSN")
+COMMON_ENV=(ADMIN_INIT_PASSWORD=Admin@1234 JWT_SECRET="$JWT_SECRET_VAL" DB_DRIVER=postgres DB_DSN="$DB_DSN" USER_DATA_DIR="$WORK/udata")
+# ★ 2026-09-26（步骤 6 清理测试数据时踩出）：USER_DATA_DIR 必须钉进 $WORK，与 run_uat.sh 的
+#   2026-09-22 修复同口径。此前本脚本没钉，双实例把「上传目录 / 启动备份 / memleak 堆快照」
+#   全写进了本机真实应用数据目录（~/Library/Application Support/能言/{backups,memleak} 里
+#   实测躺着今天 00:03–00:04 的 .dump/.pb）——闸门跑一次就在客户数据目录里留一层测试垃圾，
+#   既污染排查现场，又让「备份目录」这类断言读到的不再是真实状态。
+mkdir -p "$WORK/udata"
 nohup env "${COMMON_ENV[@]}" SELFCHECK_URL="${A_URL}/status" \
   "$WORK/server" -addr "127.0.0.1:${A_PORT}" -kbdb "$WORK/kbA.db" > "$WORK/instA.log" 2>&1 < /dev/null &
 A_PID=$!
@@ -56,8 +62,14 @@ nohup env "${COMMON_ENV[@]}" SELFCHECK_URL="${B_URL}/status" \
 B_PID=$!
 for u in "$A_URL" "$B_URL"; do
   OK=0
-  for i in $(seq 1 20); do sleep 1; curl -s -m 2 "$u/status" | grep -q '"ok":true' && { OK=1; break; }; done
-  [ "$OK" = "1" ] || { echo "实例 $u 启动失败"; tail -5 "$WORK/instA.log" "$WORK/instB.log"; exit 1; }
+  # ★ 2026-09-26 真踩后扩容：就绪等待 20s→45s。
+  #   为什么不是 20s：双实例共享同一个 PG 库，迁移走「单飞锁」——后起的实例必须等
+  #   前一个把建表跑完才能进入监听；冷启全新库 + 同机有别的负载时，A 实测 00:02:59 起、
+  #   00:03:24 才 listen（25s），20s 预算直接把「慢启动」判成「启动失败」并 exit 1，
+  #   于是 M1–M8 八条红线**一条都没跑**就整段红（这类红不是回归，却最容易被误读成回归）。
+  #   只放宽等待、不放宽任何断言：就绪后 M1 仍各自实测 /status 必须 "ok":true。
+  for i in $(seq 1 45); do sleep 1; curl -s -m 2 "$u/status" | grep -q '"ok":true' && { OK=1; break; }; done
+  [ "$OK" = "1" ] || { echo "实例 $u 启动失败（等待 ${i}s 未就绪）"; tail -5 "$WORK/instA.log" "$WORK/instB.log"; exit 1; }
 done
 ck M1-both-healthy '"ok":true' "$(curl -s $A_URL/status) | $(curl -s $B_URL/status)"
 

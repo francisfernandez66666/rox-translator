@@ -52,6 +52,20 @@ func (s *Store) CreateAlertEx(tid int64, level, kind, message string, userID int
 	return err
 }
 
+// CreateAlertPerOrder ★ F-32（2026-09-25 UAT 修复批）：按事件逐条必发的告警写入。
+// 背景：CreateAlertEx 的「同 tenant+kind 已有 open 即跳过」幂等去重，对平台级
+// tid=0 的 pay_manual（客户点「我已付费」声明）是致命的——一条滞留旧告警会吞掉
+// 之后**所有**新订单号，运营盯告警却永远看不见新单（生产实测 id55 吞两笔）。
+// 本方法跳过静音门禁与 open 去重、直接 INSERT：静态码收款无回调对账，
+// 告警是唯一兜底线索，每条声明必须留下一行；声明为极低频人工动作，无刷屏风险。
+// 参数：tid=租户 ID（pay_manual 固定 0=平台级），level=告警级别，kind=告警类型，message=含订单号的摘要。
+func (s *Store) CreateAlertPerOrder(tid int64, level, kind, message string) error {
+	_, err := db.Exec(s.db, db.CurrentDialect(),
+		"INSERT INTO alerts (tenant_id, user_id, level, kind, message, log, status, created_at) VALUES (?,0,?,?,?,'','open',?)",
+		tid, level, kind, message, time.Now().Format(time.RFC3339))
+	return err
+}
+
 // ListAlerts 查询告警列表；tenant_id<=0 表示全平台，status 为空时默认返回全部状态。
 // 参数：tid=租户 ID（<=0 查询全平台），status=状态过滤（open/resolved/空），limit=条数上限（默认 100，最大 500）。
 // 返回：告警列表，按 ID 倒序排列。

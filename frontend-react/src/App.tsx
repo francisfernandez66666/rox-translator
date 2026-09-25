@@ -15,12 +15,12 @@
 //   品牌 14、Tab 13 胶囊；#67 放大的内联字阶（汉堡 24/品牌 23/租户徽标 15 等）全部还原。
 // ============================================================================
 
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { myPackage, meContext } from '@/api'
 import { AuthProvider, useAuth } from '@/stores/auth'
 import { AdminProvider, useAdminStore } from '@/stores/admin'
-import { ChatProvider, useChat } from '@/hooks/useChat'
+import { ChatProvider, useChat, PkgRefreshCtx, type PkgRefreshHandle } from '@/hooks/useChat'
 import { useT, t as gt, tpl as gtpl } from '@/i18n'
 import { setAuthToken, setActiveTenantId, API_BASE } from '@/api'
 import { applyTheme } from '@/lib/theme'
@@ -155,10 +155,36 @@ function FrontShell() {
   // 顶栏「上传知识库」入口守卫：主管及以上（roleLevelSafe>=2）才露出该按钮，普通成员不可见
   const canUploadKb = roleLevelSafe(user?.role) >= 2
 
+  // ★ F-11（批G 2026-09-25）：顶栏「当前套餐/积分行」拉取提取成 useCallback——
+  // 挂载时仍照旧拉一次，同时经 pkgHandle 注册给聊天层：即时翻译 done 帧（扣点）后
+  // debounce 2s 回调这里，顶栏余额不再停在旧值（套餐到期/变更也在下一次刷新时被感知）。
+  const refreshPkgLine = useCallback(async () => {
+    if (!user) return // 未登录不打余额接口，避免 401 噪声（与挂载 effect 同口径）
+    try {
+      const p = await myPackage() as unknown as { success?: boolean; points_balance?: number; balance_sentences_approx?: number }
+      if (p.success && typeof p.points_balance === 'number') {
+        const nf = new Intl.NumberFormat(intlLocale()) // ★ 〇-Q：按**界面语种**（原为浏览器默认，切语种后数字不跟）
+        setPkgLine(gtpl('app.pkgLineFmt', { points: nf.format(p.points_balance), approx: nf.format(p.balance_sentences_approx ?? 0) }))
+        setDepleted(p.points_balance <= 0) // ★ E11：billing_stopped 顶部横幅信号
+      }
+    } catch { /* ignore */ } // 拉不到就保持上一次的积分行，不打断工作台
+  }, [user])
+
+  // ★ F-11：把刷新函数登记进 App 根持有的可变句柄（PkgRefreshCtx）。注册的是包一层的
+  // 稳定闭包，聊天层 done 帧后读句柄现取现调；本组件卸载（如切去 /admin）时摘除，
+  // 避免聊天在后台路由下也去刷一个已经不在顶栏的积分行。
+  const pkgHandle = useContext(PkgRefreshCtx)
+  useEffect(() => {
+    if (!pkgHandle) return
+    pkgHandle.refresh = () => { void refreshPkgLine() }
+    return () => { pkgHandle.refresh = null }
+  }, [pkgHandle, refreshPkgLine])
+
   useEffect(() => {
     if (!user) return // 未登录（含 SSO 兑换前的那一帧）不打这两个接口，避免 401 噪声
     ;(async () => {
       // 两段各自 try/catch 而不是合并：meContext（身份/租户）失败不该连带把余额也吞掉，反之同理
+      // （余额段已在 refreshPkgLine 内部自带 try/catch，这里直接 await）
       try {
         const c = await meContext()
         if (c.success) {
@@ -170,18 +196,12 @@ function FrontShell() {
           setTenantTag(personal ? '' : String((c as unknown as { tenant_name?: string }).tenant_name || ''))
         }
       } catch { /* ignore */ }
-      try {
-        const p = await myPackage() as unknown as { success?: boolean; points_balance?: number; balance_sentences_approx?: number }
-        if (p.success && typeof p.points_balance === 'number') {
-          const nf = new Intl.NumberFormat(intlLocale()) // ★ 〇-Q：按**界面语种**（原为浏览器默认，切语种后数字不跟）
-          setPkgLine(gtpl('app.pkgLineFmt', { points: nf.format(p.points_balance), approx: nf.format(p.balance_sentences_approx ?? 0) }))
-          setDepleted(p.points_balance <= 0) // ★ E11：billing_stopped 顶部横幅信号
-        }
-      } catch { /* ignore */ }
+      await refreshPkgLine()
     })()
-    // deps 只挂 user（登录态对象）：这两个值是「进工作台读一次」的身份/余额快照，
-    // 刻意不跟 location/path 走——切 Tab、换路由不该把顶栏的两条查询重新打一遍。
-  }, [user])
+    // deps 挂 user（登录态对象）+ refreshPkgLine（随 user 换身份，见上）：这两个值是
+    // 「进工作台读一次」的身份/余额快照，刻意不跟 location/path 走——切 Tab、换路由不该
+    // 把顶栏的两条查询重新打一遍。
+  }, [user, refreshPkgLine])
 
   // 从 pathname 推导当前 Tab
   const tab = path.startsWith('/tickets') ? 'tickets' : path.startsWith('/editor') ? 'editor' : 'workbench'
@@ -456,22 +476,32 @@ function Root() {
 //   BrowserRouter 在所有业务 Provider 之外——ChatProvider 与 AdminProvider 都要 useNavigate
 //     （前者决定消息记录归属键，后者把 navigate 注入 zustand 供 store 动作跳转）；
 //   ChatProvider 在 AuthProvider 之内：它直接 useAuth() 取 user；
+//   PkgRefreshCtx（★ F-11 批G）包在 ChatProvider 外、AuthProvider 内：它只是把 App 根持有的
+//     可变句柄递给子树（ChatProvider 读、FrontShell 写），不参与任何数据依赖，位置跟着消费点最外层放；
 //   AdminProvider 读登录态走 useAuthStore 全局单例（对层级不敏感），放这里只为把
 //     后台上下文排在聊天之后、品牌之前；
 //   BrandingProvider 最内：白标只按访问域名解析（可被 index.html 注入 window.__BRANDING__ 抢先），
 //     不依赖其它上下文，贴近 useBranding() 的消费点即可。
 export default function App() {
+  // ★ F-11（批G）：顶栏积分刷新句柄——App 根持有一份可变对象，经 PkgRefreshCtx 同时下发给
+  // ChatProvider（done 帧后延迟回调）与 FrontShell（注册真正的 refreshPkgLine）。
+  // 用惰性初始化（同 ChatProvider 的 storeRef 手法）：Provider 的 value 引用必须终生稳定，
+  // 否则每次重渲染都会让 ChatProvider 的注册 effect 重跑一遍。
+  const pkgHandleRef = useRef<PkgRefreshHandle | null>(null)
+  if (pkgHandleRef.current === null) pkgHandleRef.current = { refresh: null }
   return (
     <ErrorBoundary>
       <BrowserRouter>
         <AuthProvider>
-          <ChatProvider>
-            <AdminProvider>
-              <BrandingProvider>
-                <Root />
-              </BrandingProvider>
-            </AdminProvider>
-          </ChatProvider>
+          <PkgRefreshCtx.Provider value={pkgHandleRef.current}>
+            <ChatProvider>
+              <AdminProvider>
+                <BrandingProvider>
+                  <Root />
+                </BrandingProvider>
+              </AdminProvider>
+            </ChatProvider>
+          </PkgRefreshCtx.Provider>
         </AuthProvider>
       </BrowserRouter>
     </ErrorBoundary>

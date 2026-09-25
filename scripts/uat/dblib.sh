@@ -56,12 +56,20 @@ dbjsonset(){
 }
 
 # dbcfg <key> <value> — 幂等写 system_config（等价超管控制台配置）
+# 失败即中止（exit 1）：配置写不进去整套件就在错误前提下跑——本次实测「防刷没放宽、
+# 注册整片被限流」级联 22 条假红。静默继续比立刻红更有害，禁止改回「只打印不退出」。
 dbcfg(){
   if [ "${DB_DRIVER:-sqlite}" = "postgres" ]; then
     psql "${DB_DSN:?dbcfg: 需 DB_DSN}" -q -c \
-      "INSERT INTO system_config (key,value,updated_at) VALUES ('$1','$2',now()::text) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()::text" >/dev/null
+      "INSERT INTO system_config (key,value,updated_at) VALUES ('$1','$2',now()::text) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()::text" >/dev/null \
+      || { echo "FATAL|dbcfg $1=$2 写入失败（postgres）"; exit 1; }
   else
-    sqlite3 "${UAT_DB:?dbcfg: 需 UAT_DB}" \
-      "INSERT OR REPLACE INTO system_config (key,value,updated_at) VALUES ('$1','$2',datetime('now'));"
+    # ★ 2026-09-25（批G 步骤6 并入时踩出）：与 dbq 同口径带 .timeout 5000——
+    #   dbcfg 在服务实例运行期写 system_config，撞 reconciler/巡检的 WAL 写锁时
+    #   sqlite3 CLI 默认 busy timeout=0 直接「database is locked」静默失败，
+    #   防刷放宽没落库 → 后续注册断言整片「注册过于频繁」级联假红（本次实测）。
+    sqlite3 -cmd '.timeout 5000' "${UAT_DB:?dbcfg: 需 UAT_DB}" \
+      "INSERT OR REPLACE INTO system_config (key,value,updated_at) VALUES ('$1','$2',datetime('now'));" \
+      || { echo "FATAL|dbcfg $1=$2 写入失败（sqlite）"; exit 1; }
   fi
 }

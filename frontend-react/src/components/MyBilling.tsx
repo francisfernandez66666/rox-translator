@@ -10,6 +10,11 @@ import { useEffect, useState } from 'react'
 import { fmtPoints } from '@/utils/points' // ★ S1 积分展示
 import { Button, Tabs } from '@/ui/langcross/src'
 import { t } from '@/i18n'
+// ★ F-14（批G）：本页所有时间列改本地时区口径——后端 created_at 是 UTC ISO 串，
+// 裸切片（slice(0,10)/replace('T',' ').slice）在东八区会把跨日订单显示错一天。
+// fmtTime(…, true) 与 fmtDate 均走 lib/format 的 Intl 本地格式化（〇-Q 按界面语种出格式）。
+import { fmtTime } from '@/lib/ui'
+import { fmtDate } from '@/lib/format'
 import { runGuarded } from '@/lib/runGuarded' // ★ #42：明细加载失败必须有可见出口（见各 Tab 的取数注释）
 import {
   myOverview, myOrders, myLedger, myRewards, myInvoices,
@@ -130,7 +135,8 @@ function OrdersTab() {
                 manual_confirm=1 的线下/静态码单在超管确认前一直是 pending，追加「待管理员确认」免得用户以为卡死 */}
             <td>{t(`ss2.st${o.status.charAt(0).toUpperCase()}${o.status.slice(1)}`)}{o.manual_confirm === 1 && o.status === 'pending' ? ` · ${t('ss2.awaitConfirm')}` : ''}</td>
             {/* 线上渠道用 channel，线下/静态码收款只有 pay_method，二者取先有值的那个 */}
-            <td>{o.channel || o.pay_method || '-'}</td><td>{o.created_at.slice(0, 10)}</td>
+            {/* ★ F-14：下单日期按本地时区出（原 UTC 串裸切片 slice(0,10) 在东八区跨日订单会错一天） */}
+            <td>{o.channel || o.pay_method || '-'}</td><td>{fmtDate(o.created_at)}</td>
           </tr>
         ))}
         {!rows.length && <tr><td colSpan={6} style={{ color: 'var(--lc-text-3)' }}>{t('ss2.empty')}</td></tr>}
@@ -166,7 +172,8 @@ function LedgerTab() {
       </tr></thead><tbody>
         {rows.map((l) => (
           <tr key={l.id}>
-            <td>{l.created_at.replace('T', ' ').slice(0, 16)}</td>
+            {/* ★ F-14：台账时间改本地时区显示（抄 TicketsPage 私有 fmtTime 口径：fmtDateTime + fail-closed 回原串） */}
+            <td>{fmtTime(l.created_at, true)}</td>
             {/* biz_kind 同订单状态一样按枚举拼键（bizText/bizFile）：
                 ⚠ 台账还会出现 biz_kind='settle'（额度结算清零行），没有 ss2.bizSettle 词条时会露出键名 */}
             <td>{l.biz_kind ? t(`ss2.biz${l.biz_kind.charAt(0).toUpperCase()}${l.biz_kind.slice(1)}`) : '-'}</td>
@@ -207,7 +214,7 @@ function RewardsTab() {
             {/* 未知 type 原样显示而不报错：奖励类型可能先在后端扩展，字典还没补 */}
             <td>{rw.type === 'trial_stack' ? t('ss2.rwTrial') : rw.type === 'paid_perm' ? t('ss2.rwPaidPerm') : rw.type}</td>
             <td>{fmtPoints(rw.reward_points)}</td><td>{rw.days > 0 ? rw.days : '-'}</td>
-            <td>{rw.paid ? t('ss2.yes') : t('ss2.no')}</td><td>{rw.created_at.slice(0, 10)}</td>
+            <td>{rw.paid ? t('ss2.yes') : t('ss2.no')}</td><td>{fmtDate(rw.created_at)}</td>
           </tr>
         ))}
         {!rows.length && <tr><td colSpan={6} style={{ color: 'var(--lc-text-3)' }}>{t('ss2.empty')}</td></tr>}
@@ -241,7 +248,8 @@ function InvoicesTab() {
                 所以这里不取字面键 ss2.stCancelled（那是订单的「已取消」），而是显式映射到 ss2.invVoided。
                 金额固定两位小数（元），不走 fmtPoints：这是现金不是积分 */}
             <td>{iv.status === 'pending' ? t('ss2.invPending') : iv.status === 'issued' ? t('ss2.invIssued') : iv.status === 'cancelled' ? t('ss2.invVoided') : iv.status}</td>
-            <td>{iv.created_at.slice(0, 10)}</td>
+            {/* ★ F-14：开票时间按本地时区出（同上，原 UTC 裸切片跨日会错一天） */}
+            <td>{fmtDate(iv.created_at)}</td>
           </tr>
         ))}
         {!rows.length && <tr><td colSpan={6} style={{ color: 'var(--lc-text-3)' }}>{t('ss2.empty')}</td></tr>}

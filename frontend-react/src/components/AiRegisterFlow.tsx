@@ -10,12 +10,16 @@
 // ★ 2026-09-24 发码 403 生产事故修复：本面板此前完全不接人机验证（Turnstile），
 //   后台开启后「发送验证码/提交注册」必吃 403 且异常未捕获，表现为「点了没反应」——
 //   现由 captcha 入参接管：表单块内挂验证组件、token 一请求一消费、失败显式 toast。
+// ★ 2026-09-25 批G（发布前 UAT）：F-28 OTP filled 态类名拼接补空格；F-02 已发码标记
+//   ref→useState（发码成功按钮文案才会真的重渲染）；F-03 发码失败 60s 冷却禁用重发
+//   （复用 lib/useCountdown，与传统表单 Login.tsx 对齐）。
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { authRegister, login, sendEmailCode, setAuthToken, setActiveTenantId, type AuthUser } from '@/api'
 import { registerPersonas } from '@/api/persona'
 import { PERSONA_FALLBACK, personaName } from '@/lib/personas'
 import { toastError } from '@/lib/toastBus'
+import { useCountdown } from '@/lib/useCountdown' // ★ F-03（2026-09-25 批G）：发码失败 60s 冷却，复用 #42 收口的倒计时钩子
 import { loadTurnstile, renderTurnstile, reexecTurnstile } from '@/lib/turnstile'
 import { useT, getLang, tpl } from '@/i18n'
 import { typingUnitOf, chatTypingMs } from '@/i18n/script' // ★ 〇-Q：聊天打字单元/速度按文字系统分档
@@ -122,7 +126,13 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
   })
   // 登录页带没带用户名：只决定提示文案（「已带入，可修改」），不锁字段
   const usernameBrought = prefillUsername.trim().length > 0
-  const codeSentRef = useRef(false) // 已发码标记：用 ref 是因为它只影响按钮文案，不该触发整条聊天流重渲染
+  // F-02（2026-09-25 批G）：已发码标记由 ref 改 useState。旧实现用 ref 是想避开整条聊天流
+  // 重渲染，但按钮文案恰好读这个值——ref 改值不触发渲染，发码成功后按钮一直停在「发送验证码」
+  // 不变（即本缺陷本身）。按钮实际渲染在 AccountFormBlock 子组件里，重渲染代价可控，取舍改向状态。
+  const [codeSent, setCodeSent] = useState(false)
+  // F-03（2026-09-25 批G）：发码失败后 60s 冷却禁用重发，与传统表单 Login.tsx 的
+  // useCountdown(60) 同口径（定时器互斥/卸载清理由 lib/useCountdown 自带，不在此重造）
+  const codeCd = useCountdown(60)
   const loggedUserRef = useRef<AuthUser | null>(null) // 注册后自动登录拿到的 user，留到「进入工作台」按钮再用
 
   // ---- 人机验证接线（★ 2026-09-24 发码 403 修复）----
@@ -587,21 +597,27 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
                   kind={selRef.current.type ==='personal'?'personal': selRef.current.role ==='admin'?'admin':'staff'}
                   form={aiForm} setForm={setAiForm}
                   brought={usernameBrought}
-                  codeSent={codeSentRef.current}
+                  codeSent={codeSent}
+                  cooldown={codeCd.left > 0}
                   onSendCode={async () => {
                     if (!aiForm.email.trim()) return
+                    // F-03：冷却期内双保险拦重发（按钮此时已 disabled，这里防住任何旁路触发）
+                    if (codeCd.left > 0) return
                     // 开验但还没领到 token：明确告知要过人机验证（旧写法直接裸发 → 403 无提示）
                     if (captchaOn && !tsTokenRef.current) { toastError(t('auth.captchaRequired')); reexecTurnstile(tsIdRef.current); return }
-                    codeSentRef.current = true
+                    // F-02：乐观置位（与旧 ref 行为一致，请求在途即显示「在线」），失败分支回滚
+                    setCodeSent(true)
                     const tk = takeCaptchaToken()
                     try {
                       const r = await sendEmailCode(aiForm.email.trim(), tk || undefined)
                       if (!r.success) {
-                        codeSentRef.current = false // 发码失败回滚标记：按钮回到「发送验证码」，允许重试
+                        setCodeSent(false) // 发码失败回滚标记：按钮回到「发送验证码」
+                        codeCd.start()     // F-03：失败进 60s 冷却，禁止立刻连点刷验证码接口
                         toastError(r.message || t('auth.sendCodeFail'))
                       }
                     } catch (e) {
-                      codeSentRef.current = false
+                      setCodeSent(false)
+                      codeCd.start() // F-03：异常同样落 60s 冷却（与业务失败同口径）
                       toastError((e as Error).message || t('auth.sendCodeFail')) // E10：异常必须显式提示，未捕获拒绝就是「点了没反应」
                     }
                   }}
@@ -656,7 +672,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
 
 // ---------- 账号信息表单块（真实可控输入，字段按分支裁剪） ----------
 function AccountFormBlock({
-  kind, form, setForm, brought, codeSent, onSendCode, busy, onSubmit, tsOn, tsAttach, t,
+  kind, form, setForm, brought, codeSent, cooldown, onSendCode, busy, onSubmit, tsOn, tsAttach, t,
 }: {
   kind:'personal'|'staff'|'admin'
   form: { username: string; password: string; email: string; emailCode: string; orgCode: string; orgCn: string; orgEn: string }
@@ -664,6 +680,8 @@ function AccountFormBlock({
   /** 用户名是否由登录页带入（仅影响提示文案，字段本身始终可编辑） */
   brought: boolean
   codeSent: boolean
+  /** ★ F-03（2026-09-25 批G）：发码失败后的 60s 冷却期（true=冷却中，按钮禁用不可重发） */
+  cooldown: boolean
   onSendCode: () => void
   busy: boolean
   onSubmit: () => void
@@ -716,14 +734,18 @@ function AccountFormBlock({
         <div className="ar-otp-row">
           <div className="ar-otp-cells"onPaste={onOtpPaste}>
             {codeChars.map((c, i) => (
-              <input key={i} ref={(el) => { otpRefs.current[i] = el }} className={'ar-otp'+ (c ?'ar-otp--filled':'')}
+              // ★ F-28（2026-09-25 批G）：旧拼接 `'ar-otp'+ (c ?'ar-otp--filled':'')` 缺空格，
+              // filled 态实际类名是 "ar-otpar-otp--filled"（两个类都不命中、样式全丢）。
+              // 改为三元直出两个完整类名字面量，filled 态 = 'ar-otp ar-otp--filled' 精确两词
+              <input key={i} ref={(el) => { otpRefs.current[i] = el }} className={c ? 'ar-otp ar-otp--filled' : 'ar-otp'}
                      inputMode="numeric"maxLength={1}
                      value={c} onChange={(e) => onOtp(i, e.target.value)} />
             ))}
           </div>
           {/* 邮箱未填时禁用发送（没有邮箱无处投验证码）；已发码后借用状态词 aiOnline 显示，
-              词典里暂无独立的「已发送」键，不在此硬编码中文 */}
-          <button className="lc-btn lc-btn--secondary"type="button"disabled={!form.email.trim() || busy}
+              词典里暂无独立的「已发送」键，不在此硬编码中文。
+              ★ F-03（2026-09-25 批G）：cooldown=发码失败后的 60s 冷却禁用，与传统表单同口径 */}
+          <button className="lc-btn lc-btn--secondary"type="button"disabled={!form.email.trim() || busy || cooldown}
                   onClick={onSendCode}>{codeSent ? t('auth.aiOnline') : t('auth.sendCode')}</button>
         </div>
       </div>

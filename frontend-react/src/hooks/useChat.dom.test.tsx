@@ -225,4 +225,28 @@ describe('useChat · done / 停止 / 错误三条收尾', () => {
     expect(res.current.errorMessage).toBe('网络中断')
     expect(res.current.isLoading).toBe(false)
   })
+
+  // ★ F-29 前端半（批G 2026-09-25）：网关 ~90s 超时回吐的 HTML 错误页（非 SSE 整页）
+  // 经 chatStream 的 !response.ok 分支拼进 Error message——旧实现原样进气泡，
+  // 用户看到一屏 `<!DOCTYPE html>…Ray ID…` 小作文。现在整条替换为 chat.timeoutTicket。
+  // 等值锁（气泡 === 超时文案）+ 负向锁（不含响应体原文标记）。
+  it('F-29：网关 HTML 错误页整页进气泡被拦截，替换为超时文案（等值锁 + 负向锁）', async () => {
+    const ctl = armStream()
+    const res = mountChat()
+    await act(async () => { void res.current.sendMessage('x') })
+    const gatewayHtml = '<!DOCTYPE html><html><head><title>Error 524</title></head>'
+      + '<body><span>Ray ID: 8a1b2c3d4e5f6789</span><span>Cloudflare</span></body></html>'
+    await act(async () => { ctl.reject(new Error(`请求失败 (524): ${gatewayHtml}`)) })
+    const a = assistant(res.current.messages)
+    // 等值锁：气泡精确等于超时文案（vitest 已 setLang('zh')，t() 取 zh 词典值）
+    expect(a.content).toBe(t('chat.timeoutTicket'))
+    // 负向锁：响应体原文的任何标记都不得出现在气泡里
+    expect(a.content).not.toContain('Ray ID')
+    expect(a.content).not.toContain('<!DOCTYPE')
+    expect(a.content).not.toContain('Cloudflare')
+    // errorMessage 同步换友好文案，禁止原始 HTML 从顶部提示条二次泄漏
+    expect(res.current.errorMessage).toBe(t('chat.timeoutTicket'))
+    expect(a.progress).toBeUndefined()
+    expect(a.draft).toBeUndefined()
+  })
 })

@@ -93,3 +93,30 @@ test('SMOKE-4 超长保护：闸门先于模型生效（不白烧积分）', asy
   const j = await res.json();
   expect(j.error_code ?? j.message ?? '').toMatch(/text_too_long|上限/);
 });
+
+// SMOKE-5（★ F-15 活体半，2026-09-26 步骤 6 补入）：原文金额未指明币种时，译文必须保持人民币口径。
+//
+// 为什么只能活体测：本仓的守卫链（数字一致性 gates.go、清洗链、提示词契约）全部在
+// 「模型返回之后」起作用，而这条缺陷发生在「模型返回之中」——真实模型（Hunyuan-MT 系）
+// 在英文电商文体先验下会把「300 元」写成「R300」，甚至换成其他币种符号。
+// mock LLM 永远只会照抄我们的期望，测不出这种违约，所以它是 UAT 矩阵的天然盲区。
+// 提示词侧的修法见批 D｜F-15（translateInstruction zh/en 两分支尾部各加一句人民币口径指令），
+// 其静态等值锁已在 engine/f15_currency_test.go 逐 (target×uiLang) 组合钉死；本条是那把锁的**出网验证**。
+//
+// 断言全部是结构性的（符号集合 + 数值守恒），不判措辞——措辞质量属翻译质量，人工抽检。
+test('SMOKE-5 货币口径：无币种金额的译文不得凭空改币（F-15 活体验证）', async () => {
+  const src = '这款设备售价 300 元，含两年质保。';
+  const j = await translate(src, ['en']);
+  const out = (j.translations?.en ?? '').trim();
+  expect(out.length, '英文译文为空 ⇒ 交付残缺').toBeGreaterThan(0);
+  // ① 缺陷形态本身：R300 / R 300（「R」被当成货币前缀）绝不允许出现在交付物里
+  expect(out, `出现缺陷形态 R300/R 300：${out}`).not.toMatch(/\bR\s?300\b/i);
+  // ② 数值守恒：300 不得被换算、四舍五入或吞掉
+  expect(out, `数值 300 丢失或被改写：${out}`).toMatch(/300/);
+  // ③ 币种口径：必须留下人民币的某种写法（¥/CNY/RMB/yuan/renminbi/元 任一）
+  expect(out, `译文没有任何人民币口径标记：${out}`).toMatch(/¥|CNY|RMB|renminbi|yuan|元/i);
+  // ④ 负向：不得凭空引入其他币种符号或名称（这正是「先验注入」的对外表现）
+  expect(out, `译文凭空引入美元口径：${out}`).not.toMatch(/\$|USD|dollar/i);
+  expect(out, `译文凭空引入欧元口径：${out}`).not.toMatch(/€|EUR|euro/i);
+  expect(out, `译文凭空引入兰特口径（缺陷原型）：${out}`).not.toMatch(/\bRand\b|ZAR/i);
+});

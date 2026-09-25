@@ -179,7 +179,7 @@ export const baseEn: Record<string,string> = {
   'login.errorNoPerm': 'No admin permission',
   'login.errorLogin': 'Login failed',
   'login.successReset': 'Password reset. Sign in with the new password.',
-  'login.forgotSent': 'Code sent to bound email (check server log if mail is not configured)',
+  'login.forgotSent': 'Code sent to bound email',
   'login.regSuccess': 'Registered. Signing in…',
   'login.selectIndustry': 'Industry (required when creating a new org)',
 
