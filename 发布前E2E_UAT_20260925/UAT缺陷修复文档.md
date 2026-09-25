@@ -239,6 +239,8 @@
 
 ### 批 H｜部署与运营动作（随步骤 9 发版执行，非代码）
 
+> **09-26 00:51 发版执行账**：条目 1/2/5 已完成（手册 12 份铺 `/opt/translator/data/manual/`＋两库 `manual_pdf_dir`＋旧单文件挪档；SDK 产物随 dist 首发 `/sdk/`，五探魔数全过；两站前后端换件换源、deploy_check 11/11×2＋8/8×2、只验接线）。尺子键已按 F-12 决议两库上柜 33222（改前建 `system_config_bak_20260926` 备份表）。条目 3 各存量处置（id55、90 号、租户 3 carry、TM 候选、订单 5/7）与条目 4（F-30 取证）、条目 6（F-19 开放）**仍挂账待用户确认，未擅动**。
+
 1. 手册 PDF 铺服务器：`产品手册/pdf/LangCross-User-Guide-{12 语种}.pdf` → `/opt/translator/data/manual/{lang}.pdf`（配 `manual_pdf_dir` 或 system_config），旧 6,522B 单文件挪走留档。
 2. `build_sdk.sh` 产物随前端 dist 换源上线（/sdk/ 静态直出零后端改动）。
 3. 存量数据处置（跑前 DB 备份，全部幂等）：**id55 人工核销**（先查 9-08 那笔租户 #1 声明是否漏处理）；F-42 鬼 completed 90 号订正；租户 3 carry 幽灵额度清算（F-36 活体）；TM 待审候选 1005-1007 人工审或驳；订单 5/7 与测试账号处置按步骤 6 与用户确认范围。
