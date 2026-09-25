@@ -675,7 +675,8 @@ func (s *Server) notifyAlert(subject, body string) {
 			continue
 		}
 		// 渲染 alert 模板后补 To/Cc，入队异步发送（Message.CC 由 SMTPSender 写入 Cc 头）
-		msg := renderMailTpl(s.getMailTpl("alert"), map[string]string{
+		// ★ F-17（批E）：告警收件人为运营/超管（中文侧），语种传空=中文链路
+		msg := renderMailTpl(s.getMailTpl("alert", ""), map[string]string{
 			"title":   subject,
 			"content": body,
 			"level":   "warning",

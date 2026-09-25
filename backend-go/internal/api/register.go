@@ -82,6 +82,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Captcha     string `json:"captcha_token"` // 人机验证 token（captcha_provider=turnstile 时必填）
 		Industry    string `json:"industry"`      // 所属行业（新租户注册时必填，来自行业包 code）
 		JobRole     string `json:"job_role"`      // ★ 角色功能（2026-09-19）：职业角色（角色包 persona code，可空；无效值静默忽略不阻断注册）
+		AppLang     string `json:"app_lang"`      // ★ F-17（2026-09-25 批E）：注册界面语种（12 码白名单，前端随 getLang() 上报；无效/缺省回落 X-App-Lang 头，再落空=中文链路）
 		RoleChoice  string `json:"role_choice"`   // 角色选择（兼容旧客户端）：admin=我是管理员(建企业) / user=我是普通用户(邀请码加入)
 		Type        string `json:"type"`          // 注册类型：personal=个人用户 / enterprise=企业用户（默认）
 		Ref         string `json:"ref"`           // 个人邀请码（可选，邀请裂变：?ref=<个人码> 链接携带）
@@ -297,9 +298,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			s.Store.LogAudit(0, 0, "register_industry_missing", "kb_packages",
 				"通用行业包缺失，注册未载入行业(租户编码:"+req.Code+")")
 		}
-		// 权限：试用每日上限 2 万字符 + 2 万 token（D4 token 口径优先）；
+		// 权限：试用每日上限（D4 token 口径优先）；
 		// ★ 任务2.2：注册一律自动发放体验额度（不再有审核模式不发分支）
-		perms := &tenant.Perms{MaxDailyChars: 20000, MaxDailyTokens: 20000}
+		// ★ F-21①（2026-09-25 UAT 修复批）：默认墙不再硬编码 20000——改读运营策略
+		//   Limits.DefaultMaxDailyChars/Tokens（ops 已有旋钮、平台级可配），注册链路与
+		//   管理台同一把尺子；策略未配时 ops.DefaultEffective 兜底 20000 行为不变。
+		lim := s.opsBaseEffective(0).Limits
+		perms := &tenant.Perms{MaxDailyChars: lim.DefaultMaxDailyChars, MaxDailyTokens: lim.DefaultMaxDailyTokens}
 		perms.SentenceBalance = trialSentences
 		perms.PackageCode = "trial"
 		pb, _ := json.Marshal(perms)
@@ -390,6 +395,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// ★ F-17（2026-09-25 批E）邮件语种跟随：注册界面语种落库（users.preferred_lang）。
+	//   载荷 app_lang 优先、X-App-Lang 头兜底；12 码白名单外一律落空串（=中文链路，
+	//   与 job_role「无效值静默忽略不阻断注册」同口径）。后续手册/验证码/企业欢迎邮件按该语种取稿。
+	mailLang := requestMailLang(r, req.AppLang)
+	if mailLang != "" {
+		_ = s.Store.SetPreferredLang(nu.ID, inviteTenantID, mailLang)
+	}
 	// 绑定联系邮箱（用于找回密码）
 	if req.Email != "" {
 		_ = s.Store.SetUserEmail(nu.ID, inviteTenantID, strings.TrimSpace(req.Email))
@@ -405,23 +417,23 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 注册成功自动发送《产品手册》PDF 邮件（个人/企业用户均发送；用 info 专用邮箱，附件为手册 PDF）
 	if req.Email != "" {
-		// 后台异步发送《产品手册》PDF 邮件，避免阻塞注册响应
-		go func(to, uname string) {
-			_ = s.sendManualEmail(to, uname)
-		}(strings.TrimSpace(req.Email), req.Username)
+		// 后台异步发送《产品手册》PDF 邮件，避免阻塞注册响应（★ F-17：语种随注册界面语言）
+		go func(to, uname, lang string) {
+			_ = s.sendManualEmail(to, uname, lang)
+		}(strings.TrimSpace(req.Email), req.Username, mailLang)
 	}
 	// ★ 企业注册提醒（需求 2026-08-27）：企业用户注册成功后，向注册人发送欢迎邮件
 	//   并抄送运营邮箱（抄送地址由 OPS_NOTIFY_EMAIL 环境变量控制，空=不抄送）建联。
 	//   仅「新建企业（非个人、非受邀加入、非专属域名）」触发；个人用户不抄送。
 	if !creatingPersonal && dedicatedTid == 0 && req.Invite == "" && req.Email != "" {
-		// 后台异步发送企业注册欢迎邮件并抄送运营，不阻塞注册响应
-		go func(to, name, username string) {
-			_ = s.sendTemplatedMail(to, "enterprise_reg", map[string]string{
+		// 后台异步发送企业注册欢迎邮件并抄送运营，不阻塞注册响应（★ F-17：语种随注册界面语言）
+		go func(to, name, username, lang string) {
+			_ = s.sendTemplatedMail(to, "enterprise_reg", lang, map[string]string{
 				"name":     name,
 				"username": username,
 				"email":    to,
 			})
-		}(strings.TrimSpace(req.Email), req.Name, req.Username)
+		}(strings.TrimSpace(req.Email), req.Name, req.Username, mailLang)
 	}
 	// ★ 新租户默认 API Key（2026-08-26 冒烟修复）：移到建号之后签发并强绑定创建人——
 	//   原「先发 Key 后建号」产生 user_id=0 的孤儿 Key，被 authenticateAPIKey
@@ -608,8 +620,9 @@ func (s *Server) notifyTenantAdmins(tid int64, title, body string) {
 		_ = s.Store.CreateNotification(usr.ID, title, body, "tenant", tid)
 		if emailOn == "1" && usr.Email != "" {
 			// 后台异步向成员发送租户通知邮件，避免阻塞循环
+			// ★ F-17（批E）口径：通知标题/正文由触发方中文字面量传入，语种维度本批不启用（传空=中文链路）
 			go func(to string) {
-				_ = s.sendTemplatedMail(to, "tenant_notify", map[string]string{
+				_ = s.sendTemplatedMail(to, "tenant_notify", "", map[string]string{
 					"title": title,
 					"body":  body,
 				})

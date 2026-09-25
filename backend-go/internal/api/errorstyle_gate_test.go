@@ -48,7 +48,7 @@ import (
 // errorStyleBaselineTotal 非豁免文件的内联错误响应存量基线（只减不增）。
 // 建立方式：2026-09-22 用本文件的扫描器实测全包后一次性钉住（口径见文件头），
 // 不取整、不四舍五入——基线必须是**同一把尺子量出来的真实数字**，否则第一版就在骗人。
-const errorStyleBaselineTotal = 741
+const errorStyleBaselineTotal = 740
 
 // errorStylePerFileBaselines 分文件基线快照（同 logratchet 的「分根设基线」思路）：
 // 只看总数会让「A 文件迁走 20 处、B 文件新加 20 处」互相掩盖，逐文件钉才守得住增量。
@@ -56,7 +56,7 @@ const errorStyleBaselineTotal = 741
 var errorStylePerFileBaselines = map[string]int{
 	"admin_kb.go":           78,
 	"tenant.go":             58,
-	"auth.go":               54,
+	"auth.go":               53,
 	"admin_packages.go":     45,
 	"tickets.go":            42,
 	"register.go":           29,

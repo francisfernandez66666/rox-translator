@@ -1151,15 +1151,19 @@ func scanOrders(rows *sql.Rows, err error) ([]*Order, error) {
 // ★ S1 账目修复（2026-09-14）：旧键 price_fen_per_token 名义「分/token」、实值 10，
 //
 //	等价 100 元/千 token、百万 token=10 万元——「按次计费」时代遗留，token 迁移后未换算。
-//	新口径按试运营价目表尺子价锚定：¥299/百万 token → 29900 分。旧键不再读取（保留仅供历史对账）。
+//	新口径按试运营价目表尺子价锚定：¥299/百万 token。旧键不再读取（保留仅供历史对账）。
+//	★ F-12（2026-09-25 UAT 修复批）：尺子 29900→33222——积分口径 1 积分=300 token，
+//	3,000 积分充值包面值 ¥299，旧尺子 29900 算出 ¥269.10（恰差 10%），定价页/收银台/
+//	管理台代充三口径打架。33222 分/百万 token 使 3,000 积分（90 万 token）恰=¥299.99≈面值。
 //	注意：本价仅用于「无套餐裸充值单」的金额兜底；正式售卖一律走套餐 amount_money（packages.price_money）。
+//	⚠ 生产 system_config 已种 29900，GetConfig 优先于本默认值——线上改值随批 H 部署动作执行。
 func (s *Store) PriceFenPerMillionTokens() int64 {
 	if v, _ := s.GetConfig("price_fen_per_million_tokens"); v != "" {
 		if n, e := strconv.ParseInt(v, 10, 64); e == nil && n > 0 {
 			return n
 		}
 	}
-	return 29900
+	return 33222
 }
 
 // TokensToFen token 数→应收金额（分），四舍五入。
@@ -1565,10 +1569,20 @@ func (s *Store) ReopenManualOrder(orderID, tid int64) (*Order, error) {
 	if o.Channel != "manual" || o.Status != "cancelled" {
 		return nil, &errTxt{"仅超时取消的静态码订单支持补单重建"}
 	}
+	// ★ F-34（2026-09-25 UAT 修复批）防重闸：同一 cancelled 原单若已有「在途补审单」
+	// （本表 reopen_from_order 指回原单且仍 pending），直接复用返回——旧实现每点一次
+	// 「我已付费」就多建一张合法 pending 单，连点即可灌满待审面板、双确认即双入账
+	// （生产实测 1→2 张）。补列迁移见 billing_refund.go BillingRefundMigrate。
+	var existID int64
+	if err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT id FROM orders WHERE tenant_id=? AND reopen_from_order=? AND status='pending' ORDER BY id DESC LIMIT 1",
+		tid, orderID).Scan(&existID); err == nil && existID > 0 {
+		return s.GetOrder(existID, tid)
+	}
 	no := fmt.Sprintf("T%d-RO%s%sR", tid, time.Now().UTC().Format("20060102150405"), randSuffix(4))
 	_, err = db.Exec(s.db, db.CurrentDialect(),
-		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, qr_content, package_id, manual_confirm, created_by, created_at) VALUES (?,?,?,?, 'pending', 'offline', 'manual', '', ?, 1, ?, ?)",
-		tid, no, o.AmountTokens, o.AmountMoney, o.PackageID, o.CreatedBy, time.Now().UTC().Format(time.RFC3339))
+		"INSERT INTO orders (tenant_id, order_no, amount_tokens, amount_money, status, pay_method, channel, qr_content, package_id, manual_confirm, created_by, created_at, reopen_from_order) VALUES (?,?,?,?, 'pending', 'offline', 'manual', '', ?, 1, ?, ?, ?)",
+		tid, no, o.AmountTokens, o.AmountMoney, o.PackageID, o.CreatedBy, time.Now().UTC().Format(time.RFC3339), orderID)
 	if err != nil {
 		return nil, err
 	}
@@ -1772,6 +1786,14 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 			return err
 		}
 	}
+	// ★ F-36（2026-09-25 UAT 修复批）升级结转闭环：本单退款时，凡「由本单升级而来
+	// 且已退款」的子单，其 order_carry 结转份额一并作废——封死「先退新后退旧」
+	// 白嫖通道（生产实测幽灵 3,000 积分）。子单仍 paid 时 carry 保留（合法折抵）。
+	// 实现落 billing_refund.go（store 冻结规则：billing.go 只改既有函数体，新逻辑出新建域文件）。
+	carryClaw, cerr := s.reclaimCarryOfRefundedUpgradesTx(tx, d, tid, orderID)
+	if cerr != nil {
+		return cerr
+	}
 	// 条件置 refunded + 记录实退金额（并发双退款只有一个能成功 → 整体回滚，不会双扣）
 	res2, err := db.Exec(tx, d,
 		"UPDATE orders SET status='refunded', refund_money=? WHERE id=? AND tenant_id=? AND status='paid'",
@@ -1802,6 +1824,10 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 		}
 	} else if consumedApprox {
 		summary += "，消耗按支付后计量流水近似折算"
+	}
+	// ★ F-36：结转回收留痕（审计/对账可读）
+	if carryClaw > 0 {
+		summary += fmt.Sprintf("；已回收升级子单结转份额 %d token（F-36 闭环）", carryClaw)
 	}
 	// ★ A3 裂变付费奖励回收：被邀人首笔付费是奖励唯一触发源——其 paid 订单已全部退还时，
 	//   删除 paid_perm 流水并扣回邀请人奖励（余额不足部分转人工核对告警）。
@@ -1915,8 +1941,15 @@ type Invoice struct {
 func (s *Store) CreateInvoice(tid, orderID int64, title, taxNo string) (*Invoice, error) {
 	var money float64
 	// ★ C16/A3.4：refunded 订单禁止开票（需先走冲红重开流程的由线下税务处理）
+	// ★ F-43（2026-09-25 UAT 修复批）：订单不存在/跨租户时 QueryRow 回 sql.ErrNoRows，
+	// 原样上抛会被 handler 拼进外网文案泄漏驱动细节（生产实测 "sql: no rows in result set"）；
+	// 统一转 errTxt 且「不存在」与「状态不可开」同文案，不泄露他租户订单存在性。
+	const invoiceNotEligible = "订单不存在或不可开票（仅已支付订单可开具发票）"
 	var ostatus string
 	if err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT status FROM orders WHERE id=? AND tenant_id=?", orderID, tid).Scan(&ostatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, &errTxt{invoiceNotEligible}
+		}
 		return nil, err
 	}
 	if ostatus == "refunded" {
@@ -1925,6 +1958,9 @@ func (s *Store) CreateInvoice(tid, orderID int64, title, taxNo string) (*Invoice
 	// 仅允许对已支付订单开票，金额取订单金额
 	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT amount_money FROM orders WHERE id=? AND tenant_id=? AND status='paid'", orderID, tid).Scan(&money)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, &errTxt{invoiceNotEligible}
+		}
 		return nil, err
 	}
 	// ★ C16（2026-09-12）：同单重复开票前置检查（并发下由 partial unique 索引兜底）。
@@ -2119,7 +2155,7 @@ func (s *Store) EnsureBillingDefaults() {
 		{"invite_reward_tokens", "300000"},        // 每邀 1 人·邀请者体验增量
 		{"invite_extend_days", "14"},              // 每邀 1 人·邀请者时长叠加天数
 		{"inviter_paid_reward_tokens", "500000"},  // 受邀者首笔付费套餐→邀请者永久 token
-		{"price_fen_per_million_tokens", "29900"}, // ★ 充值尺子价（分/百万 token＝¥299/百万，S1 口径修复；旧键 price_fen_per_token 已废弃）
+		{"price_fen_per_million_tokens", "33222"}, // ★ 充值尺子价（分/百万 token；F-12 重锚 29900→33222 使 3,000 积分恰=¥299 面值；旧键 price_fen_per_token 已废弃）
 		{"points_tokens_rate", "300"},             // ★ S1 积分制：1 积分 = 300 内部计量 token（对外只露积分，防成本反推）
 		// ★ KB 上传奖励（任务2.3）：每条约额 + 单租户日封顶（防刷）
 		{"kb_upload_reward_tokens_per_entry", "200"},

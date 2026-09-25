@@ -1036,8 +1036,26 @@ func srcName(code string) string {
 
 // translateInstruction 按源语言+目标语言+界面语言定制翻译指令（支持任意方向互译与中英文提示词）。
 // 参数 source: 源语言代码；target: 目标语言代码；uiLang: 界面语言（"zh"=中文提示词，其他/空=英文提示词）。
-// 返回: 模型翻译指令（不臆断源语言名称，未知源回退 "文本"）。
+// 返回: 模型翻译指令（不臆断源语言名称，未知源回退 "文本"）+ ★ F-15 货币保真尾注。
+// F-15（2026-09-25 批 D）：实测「¥3,800」被 Hunyuan-MT 英译成 "R3,800"（兰特），
+// 数字一致性闸门天然放行凭空注入的货币符号。收口＝指令尾部固定加一句货币口径；
+// 这会让 B4 缓存前缀整体换一次内容（按语言组合分桶，等效一次冷启动，一次性成本可接受）。
+// 「双十一→11.11」这类词条级译法不走本函数（写死通用指令表达不了），交行业包术语层数据驱动。
 func translateInstruction(source, target, uiLang string) string {
+	return translateInstructionCore(source, target, uiLang) + currencyInstructionNote(uiLang)
+}
+
+// currencyInstructionNote 货币保真指令尾注（按界面语言中英双语，与 translateInstruction 同口径）。
+// 只约束「币种符号不被替换、人民币口径保持」，不规定具体格式——避免与目标语言排版习惯打架。
+func currencyInstructionNote(uiLang string) string {
+	if uiLang != "" && uiLang != "zh" && uiLang != "zh_hant" {
+		return " Currency rule: monetary amounts must keep their original currency. Chinese prices stay in RMB (¥/CNY/RMB/yuan) and must NOT be converted to or replaced with any other currency symbol (such as R, $, €, £)."
+	}
+	return "。金额币种保真：原文金额未指明币种时默认人民币，译文须保持人民币口径（¥/CNY/RMB/yuan），不得把币种符号替换或折算为 R、$、€、£ 等任何其他货币符号，金额数值不变。"
+}
+
+// translateInstructionCore 原逐目标语言的指令骨架（F-15 起由 translateInstruction 包裹使用，本体不直接调用）。
+func translateInstructionCore(source, target, uiLang string) string {
 	src := srcName(source)
 	// 英文界面 → 英文提示词（模型自动识别源语言，不显式引用源语言名避免中英混排）
 	if uiLang != "" && uiLang != "zh" && uiLang != "zh_hant" {
@@ -1576,6 +1594,31 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 				break
 			}
 			content = rev
+		}
+	}
+
+	// ★ F-38（2026-09-25 批 D）短格长度爆炸复核：IsTranslationUsable 第 5 判据在文件链靠
+	// 写回点拦截，但本函数产物是直接交付（文本通道不经 file.go 写回点），必须同口径自查。
+	// 策略＝回退重译优先（≤2 次，与上方缩翻硬闸同范式），重译仍爆炸才按失败处理：
+	// 返回错误 ⇒ translateLangsConcurrent 把它放回既有 3 轮重试队列，最终失败置空由
+	// 漏译率硬闸/漏翻可见性告警兜底（即修复文档所说的 qa_error 落点）——绝不静默交付
+	// 「6 字单元格翻出 2100 字符邮件」这类上游污染串。
+	if hasLengthExplosion(zhText, content) {
+		for retry := 0; retry < 2 && hasLengthExplosion(zhText, content); retry++ {
+			// 命中即打点聚合「生成侧可疑率」哨兵（provider/model/长度比，修复文档判据③）
+			observability.Warn(ctx, "短格译文长度爆炸（生成侧污染可疑，触发回退重译）",
+				"provider", usageProvider(base), "model", model, "lang", targetLang,
+				"detail", LengthExplosionInfo(zhText, content))
+			fb := fmt.Sprintf("上一次译文长度异常（%s），疑似混入与原文无关的内容。请只翻译【原文】本身，只输出对应译文，不得输出邮件、解释或任何原文中不存在的内容。",
+				LengthExplosionInfo(zhText, content))
+			rev := e.translateWithFeedbackEx(ctx, zhText, targetLang, fb, stage, examples)
+			if strings.TrimSpace(rev) == "" {
+				break
+			}
+			content = rev
+		}
+		if hasLengthExplosion(zhText, content) {
+			return "", fmt.Errorf("短格译文长度爆炸（生成侧污染可疑，重译后仍超限）: %s", LengthExplosionInfo(zhText, content))
 		}
 	}
 	return content, nil

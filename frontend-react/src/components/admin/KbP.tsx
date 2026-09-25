@@ -21,6 +21,9 @@ import {
   safetyPhrases, safetyPhraseAdd, safetyPhraseDelete, safetyPhraseStatus, safetyBulkImport, type Any,
 } from '@/api'
 import { Panel } from './parts'
+// ★ F-14（批G 移交项）：包授权弹窗「时间」列的 UTC 裸切片改走 fmtTime(local=true)，
+//   与 MyBilling/TicketsPage 同一本地时区口径（跨日错显示修复家族）。
+import { fmtTime } from '@/lib/ui'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
 import { orgList, type OrgInfo } from '@/api/org'
@@ -395,8 +398,10 @@ export function KbP() {
     try {
       const r = await bitextImport(bitextFile)
       setBitextOk(!!r.success)
+      // ★ F-24（批G 文案）：成功回执 = kb.bitextDone（「已提交，待平台审核」，不再硬承诺
+      //   「已写入」）+ 追加 kb.bitextPendingNote（审核通过后自动进入翻译记忆，无需再次导入）。
       setBitextMsg(r.success
-        ? `${t('kb.bitextDone')} +${((r as unknown as { added?: number }).added) ?? 0} / ${t('kb.bitextSkipped')} ${((r as unknown as { skipped?: number }).skipped) ?? 0}`
+        ? `${t('kb.bitextDone')} +${((r as unknown as { added?: number }).added) ?? 0} / ${t('kb.bitextSkipped')} ${((r as unknown as { skipped?: number }).skipped) ?? 0} · ${t('kb.bitextPendingNote')}`
         : (r.message || t('common.importFail')))
       if (r.success) { setBitextFile(null) }
     } finally { setBitextImporting(false) }
@@ -408,8 +413,10 @@ export function KbP() {
     try {
       const r = await tmxImport(tmxFile)
       setTmxOk(!!r.success)
+      // ★ F-24（批G 文案）：TMX 导入回执与双语导入同口径——kb.bitextDone 改「已提交，待平台审核」
+      //   后此处自然去承诺，再追加 kb.bitextPendingNote 说明审核通过后的自动入 TM 动作。
       setTmxMsg(r.success
-        ? `${tpl('kb.tmxTus', { n: ((r as unknown as { tus?: number }).tus) ?? 0 })} · ${t('kb.bitextDone')} +${((r as unknown as { added?: number }).added) ?? 0} / ${t('kb.bitextSkipped')} ${((r as unknown as { skipped?: number }).skipped) ?? 0}`
+        ? `${tpl('kb.tmxTus', { n: ((r as unknown as { tus?: number }).tus) ?? 0 })} · ${t('kb.bitextDone')} +${((r as unknown as { added?: number }).added) ?? 0} / ${t('kb.bitextSkipped')} ${((r as unknown as { skipped?: number }).skipped) ?? 0} · ${t('kb.bitextPendingNote')}`
         : (r.message || t('common.importFail')))
       if (r.success) { setTmxFile(null) }
     } finally { setTmxImporting(false) }
@@ -641,7 +648,19 @@ export function KbP() {
           onGo={(p) => { if (p === entryPage) return; setEntryPage(p); void queryEntries(Number(selectedPkg), entryFilter, p) }} />
       </Dialog>
 
-      {/* ===== 语言文化规范（安全句）区：过滤条 + 新增表单 + 审核列表 ===== */}
+      {/* ===== 语言文化规范（安全句）区 =====
+          ★ F-26（批G）：安全句语料由平台统一维护——原表单（过滤条/新增/批量导入/审核列表）
+          只对超管（isSuper/L4）渲染；企业与部门管理员只留 Panel 包一行新键提示
+          kb.safetyPlatformManaged，消除一堆「看得到改不了」的控件（信息噪音 + 误操作面）。
+          断言锁见 components/admin/KbP.dom.test.tsx（非 super：提示在、表单控件零枚；
+          super：反向锁——表单在、提示不在）。 */}
+      {!isSuper && (
+        <Panel title={t('kb.safetyTitle')}>
+          {/* 非超管唯一一行提示；本 Panel 内不得再出现任何 select/input/button（负向锁口径） */}
+          <div style={{ fontSize: 15, color: 'var(--adm-hint)' }}>{t('kb.safetyPlatformManaged')}</div>
+        </Panel>
+      )}
+      {isSuper && (<>
       <Panel title={t('kb.safetyTitle')}>
         <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('kb.safetyHint')}</div>
         <div style={rowMt}>
@@ -719,6 +738,7 @@ export function KbP() {
           onGo={(p) => { if (p === safetyPage) return; setSafetyPage(p); void querySafety({ pkg_id: safetyPkgId, status: safetyStatusFilter, ...safetyFilter, q: safetyQ, page: p }) }} />
         </Panel>
       </>)}
+      </>)}
 
       {/* Tab 面板条件渲染：行业管理 / 品牌名 / 数据源采集 */}
       {kbTab === 'industries' && isSuper && <IndustriesP />}
@@ -750,7 +770,9 @@ export function KbP() {
           { key: 'username', title: t('kb.grantColUser'), render: (row) => `${row.display_name || row.username || '#' + row.user_id}` },
           { key: 'role', title: t('kb.grantColLevel'), width: 110, render: (row) =>
             <StatusPill tone={row.role === 'manage' ? 'warn' : 'idle'}>{row.role}</StatusPill> },
-          { key: 'created_at', title: t('kb.grantColTime'), width: 160, render: (row) => String(row.created_at || '').slice(0, 16) },
+          // ★ F-14（批G 移交项）：原来 `String(row.created_at || '').slice(0, 16)` 是 UTC 裸切片，
+          //   跨日时刻会显示成前一天（授权时间误读）；改 fmtTime(local=true) 走本地时区。
+          { key: 'created_at', title: t('kb.grantColTime'), width: 160, render: (row) => fmtTime(String(row.created_at || ''), true) },
           { key: 'op', title: t('common.operations'), width: 80, render: (row) => (
             <Link tone="danger" onClick={() => void setGrant('', Number(row.user_id))}>{t('kb.grantRevoke')}</Link>) },
         ]} />

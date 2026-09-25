@@ -128,6 +128,24 @@ func (s *Store) SetJobRole(id, tid int64, code string) error {
 	return s.iam.SetJobRole(id, tid, code)
 }
 
+// UserLangMigrate ★ F-17（2026-09-25 批E）邮件语种跟随：users 幂等补 preferred_lang 列。
+// 补列失败不阻断启动（与 PersonaMigrate 同口径；查询侧 COALESCE/错误降级兜底缺列老库）。
+func (s *Store) UserLangMigrate() {
+	_ = db.EnsureColumns(s.db, db.CurrentDialect(), "users", map[string]string{
+		"preferred_lang": "TEXT NOT NULL DEFAULT ''",
+	})
+}
+
+// SetPreferredLang 委托 iam.Store：更新用户界面语言偏好（12 语种白名单码；空串=清除）。
+func (s *Store) SetPreferredLang(id, tid int64, lang string) error {
+	return s.iam.SetPreferredLang(id, tid, lang)
+}
+
+// GetPreferredLang 委托 iam.Store：读取用户界面语言偏好（查无/缺列回空串=中文链路）。
+func (s *Store) GetPreferredLang(id int64) (string, error) {
+	return s.iam.GetPreferredLang(id)
+}
+
 // EnsureAdmin 委托 iam.Store
 func (s *Store) EnsureAdmin(tid int64, username, passHash, displayName, email string) error {
 	return s.iam.EnsureAdmin(tid, username, passHash, displayName, email)

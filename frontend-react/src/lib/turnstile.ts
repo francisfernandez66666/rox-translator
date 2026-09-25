@@ -13,6 +13,9 @@
 interface TurnstileApi {
   render: (el: HTMLElement, opts: Record<string, unknown>) => string | number
   execute: (id: string | number) => void
+  /** ★ F-03（2026-09-25 批G）：把组件复位回未验证态、作废当前 token；
+      execute 前必须先 reset，否则组件停留在「已验证」态时 execute 可能直接重放旧 token */
+  reset: (id: string | number) => void
 }
 
 declare global {
@@ -67,9 +70,14 @@ export function renderTurnstile(el: HTMLElement, siteKey: string, onToken: (toke
   })
 }
 
-/** 消费掉当前 token 后强制重新挑战、领新 token（发码与注册提交要各用一枚） */
+/**
+ * 消费掉当前 token 后强制重新挑战、领新 token（发码与注册提交要各用一枚）。
+ * ★ F-03（2026-09-25 批G）：顺序改为 reset → execute——旧实现只调 execute，
+ * 组件停留在「已验证」态时 execute 不保证重新出挑战，存在旧 token 被二次消费的窗口；
+ * 先 reset 显式作废当前 token 并复位组件，再 execute 强制领一枚全新的。
+ */
 export function reexecTurnstile(id: string | number | null): void {
   const ts = typeof window !== 'undefined' ? window.turnstile : undefined
   if (!ts || id === null) return
-  try { ts.execute(id) } catch { /* 组件已随面板卸载：重执行失败不阻断业务流程 */ }
+  try { ts.reset(id); ts.execute(id) } catch { /* 组件已随面板卸载：重执行失败不阻断业务流程 */ }
 }

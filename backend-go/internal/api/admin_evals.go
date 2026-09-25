@@ -61,6 +61,15 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 		balanceView["balance_points"] = s.Store.PointsFromTokens(balance.Balance)
 		balanceView["updated_at"] = balance.UpdatedAt
 	}
+	// ★ F-16（2026-09-25 UAT 修复批）：总览「组织余额」读错桶——balance_accounts.balance
+	//   只是永久桶，体验/订阅额度在 quota_grants 台账里，只持有 grants 的租户显 0。
+	//   补双桶合计出参 total_points（TenantRemainTotal 与 balancePayload 同口径），
+	//   前端总览改读该字段（批 G 前端半）；balance_points 明细行保留不动。
+	totalPoints := int64(0)
+	if grantsRemain, permanent, terr := s.Store.TenantRemainTotal(s.effTenant(r, u)); terr == nil {
+		totalPoints = s.Store.PointsFromTokens(grantsRemain + permanent)
+	}
+	balanceView["total_points"] = totalPoints
 	writeJSON(w, 200, map[string]interface{}{"success": true, "health": map[string]interface{}{
 		"version":            "2.0.0-go",
 		"kb_entries":         total,

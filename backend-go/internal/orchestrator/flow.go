@@ -120,7 +120,15 @@ func (e *Executor) Execute(ctx context.Context, ticket *store.Ticket, onStep fun
 
 	for _, step := range flow.Steps {
 		if ctx.Err() != nil {
-			return ctx.Err() // 上下文取消则中止
+			// ★ F-42-a（2026-09-25 UAT 修复批）：cause 不能被压扁。
+			//   实时计费的余额耗尽中止走 engine.WithUsageRecorder 的 WithCancelCause
+			//   （engine.go:232/236 注入 store.ErrInsufficientBalance），而旧写法返回裸
+			//   ctx.Err()＝context.Canceled——真因留在 cause 里没人读，工单只落一条
+			//   'context canceled' 的驳回理由：租户看不到「欠费」、OpenAPI 侧取不到错误码、
+			//   且该理由随后被 runAIInitial 当成「人工驳回意见」用（F-42 假 completed 第一环）。
+			//   context.Cause 有 cause 时返 cause、无 cause 时等价 ctx.Err()，
+			//   用户主动取消语义不变（取消态由 service/ticket.go 的 cancelled 守卫先行拦截）。
+			return context.Cause(ctx)
 		}
 		if !step.Enabled {
 			// 步骤被关闭：标记 skipped 并继续
@@ -194,8 +202,14 @@ func (e *Executor) Execute(ctx context.Context, ticket *store.Ticket, onStep fun
 		// 更新工单状态
 		ticket.Status = store.TicketRejected
 		ticket.RejectReason = fmt.Sprintf("步骤 %s 失败: %s", step.Name, err.Error())
+		// ★ F-42-b（2026-09-25 UAT 修复批）：本处写的是系统失败原因，来源必须标 'system'，
+		//   否则 runAIInitial 的重翻判据（旧＝reject_reason 非空即人工意见）会在载荷全空时
+		//   整轮 continue、零 LLM 调用 return nil，把失败单刷成假 completed。
+		ticket.RejectSource = store.RejectSourceSystem
 		_ = e.Store.UpdateTicket(ticket)
-		return fmt.Errorf("流程步骤 %s 失败: %s", step.Name, err.Error())
+		// ★ F-42-a：%s → %w 保住错误链，service/ticket.go 侧才能 errors.Is(runErr,
+		//   store.ErrInsufficientBalance)（文案逐字不变，通知体与日志无差异）。
+		return fmt.Errorf("流程步骤 %s 失败: %w", step.Name, err)
 	}
 	_ = tid
 	return nil // 全部步骤成功

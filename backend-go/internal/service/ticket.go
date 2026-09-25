@@ -19,6 +19,7 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/json"
+	"errors" // ★ F-42-a：errors.Is 识别余额耗尽哨兵（store.ErrInsufficientBalance）
 	"fmt"
 	"log"
 	"os"
@@ -161,6 +162,19 @@ func (s *TicketService) workerLoop(workerID string) {
 		jcancel()
 		if perr != nil {
 			_ = s.Queue.MarkFailed(context.Background(), job.ID, perr.Error())
+			// ★ F-04（2026-09-25 UAT 修复批）死信告警：此前「重试耗尽置 dead」只写
+			// jobs.error 字段，零告警零指标——SMTP 故障期验证码/欢迎邮件成片死在队列里
+			// 无人知晓（入队即回 success:true 的三层「假话」最后一环）。
+			// 判据：Reserve 已把 attempts 自增为「本次是第 N 次尝试」，与 MarkFailed 的
+			// dead 条件（attempts>=max_attempts）同式。告警走普通 CreateAlert（同 kind open
+			// 去重）：故障期只刷一条「有邮件死信」，细节留在 jobs 表，避免 SMTP 全挂时刷屏。
+			if job.Type == "mail_send" && job.Attempts >= job.MaxAttempts {
+				var p queue.MailPayload
+				_ = json.Unmarshal(job.Payload, &p)
+				_ = s.Store.CreateAlert(0, "critical", "mail_dead",
+					fmt.Sprintf("邮件任务 %d 重试 %d 次耗尽转死信 to=%s subject=%q err=%s",
+						job.ID, job.Attempts, p.To, p.Subject, perr.Error()))
+			}
 		} else {
 			_ = s.Queue.MarkDone(context.Background(), job.ID)
 		}
@@ -278,6 +292,8 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 		if grants, perm, berr := s.Store.TenantRemainTotal(t.TenantID); berr == nil && grants+perm <= 0 {
 			t.Status = store.TicketRejected
 			t.RejectReason = errInsufficientCode + ": 余额不足，请充值或升级套餐"
+			// ★ F-42-b：建单/入队预检属系统写入，来源标 'system'（不得进人工重翻分支）
+			t.RejectSource = store.RejectSourceSystem
 			_ = s.Store.UpdateTicket(t)
 			return fmt.Errorf("%s: 余额不足，请充值或升级套餐", errInsufficientCode)
 		}
@@ -361,13 +377,26 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 			}
 		}
 		t.Status = store.TicketRejected
-		t.RejectReason = runErr.Error()
+		// ★ F-42-a（2026-09-25 UAT 修复批）：翻译途中余额烧穿的中止原因要从 cause 链
+		//   里认出来。此前只写 runErr.Error()（旧值 'context canceled'，见 orchestrator/flow.go
+		//   :121 的 context.Cause 修复），既无错误码可取，又会被重翻分支当成人工驳回意见。
+		//   命中 ErrInsufficientBalance 时改写为与 :293 预检逐字一致的文案，88/90 两型合流：
+		//   预检拦下的与烧穿中止的在库内是同一条可读理由，OpenAPI 侧按前缀取 insufficient_balance 码。
+		if errors.Is(runErr, store.ErrInsufficientBalance) {
+			t.RejectReason = errInsufficientCode + ": 余额不足，请充值或升级套餐"
+		} else {
+			t.RejectReason = runErr.Error()
+		}
+		// ★ F-42-b：本处是系统失败收尾，来源标 'system'
+		t.RejectSource = store.RejectSourceSystem
 		// ★ #40②（2026-09-21）：状态 + 失败通知同事务落库（旧实现两条独立写且忽略错误，
 		//   会出现「工单已判失败但无人收到通知」）；写失败必须大声记录，不再 `_ =` 吞掉。
 		notify := &store.Notification{
-			UserID:  t.CreatedBy,
-			Title:   fmt.Sprintf("翻译工单失败：%s", t.Title),
-			Body:    fmt.Sprintf("工单号 %s 失败原因：%s", t.TicketNo, runErr.Error()),
+			UserID: t.CreatedBy,
+			Title:  fmt.Sprintf("翻译工单失败：%s", t.Title),
+			// ★ F-42-a：正文改取 t.RejectReason（欠费型已由上面归一为用户可读文案，
+			//   旧写法直贴 runErr.Error() 会在欠费单上显示裸「余额不足」/「context canceled」）
+			Body:    fmt.Sprintf("工单号 %s 失败原因：%s", t.TicketNo, t.RejectReason),
 			RefType: "ticket",
 			RefID:   t.ID,
 		}
@@ -479,6 +508,15 @@ func (s *TicketService) dispatchCompletedWebhook(ctx context.Context, t *store.T
 
 // runTextTicket 纯文本工单：编排流水线（pro=全步骤；fast=初翻+校对，见 orchestrator 模式覆盖）。
 func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) error {
+	// ★ F-14 后端半（2026-09-25 UAT 修复批）：实时计量钩子（billing_api.meterUsage）取
+	// usage_ledger.biz_mode 的来源是 ctx 注入的 mode——文件路径（runFileTicket :585）有注入，
+	// 文本工单 worker 路径从不注入 ⇒ biz_mode='' ⇒ 台账「模式」列显「-」。
+	// 空 mode 按库口径归一为 pro（fast|pro，空=专业校对），与计费文案侧一致。
+	textMode := t.Mode
+	if textMode == "" {
+		textMode = "pro"
+	}
+	ctx = tenant.WithMode(ctx, textMode)
 	wf := orchestrator.NewWorkflow(s.Store, s.Engine, s.Ten, s.DB)
 	if wf == nil {
 		return fmt.Errorf("编排器未初始化")

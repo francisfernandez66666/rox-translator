@@ -151,12 +151,26 @@ export default function TaskCenterP() {
     return row.description || ''
   }
 
+  /** ★ 观察5（批G）：任务「计数周期」展示口径的单一来源。
+   *  periodKeyOf 取行展示周期：有 period 用 period，缺 period 的历史行按 task_type 兜底
+   *  （once → 终身一次，其余 → 每日）；periodLabel 把周期映射到现成四键
+   *  tasks.periodDaily/periodWeekly/periodOnce/periodEvent（与编辑弹窗 :285 原三元式同款）。
+   *  此前用户视图/超管视图的类型标签只按 task_type 二值映射，忽略 row.period，
+   *  导致 period='weekly' 但 task_type='daily' 的行被错标成「每日任务」，本批统一收敛到这里。 */
+  function periodKeyOf(row: Partial<UserTask>): string {
+    return row.period || (row.task_type === 'once' ? 'once' : 'daily')
+  }
+  /** 周期键 → 展示标签（四档现成键，零新增 i18n） */
+  function periodLabel(period: string): string {
+    return period === 'daily' ? t('tasks.periodDaily') : period === 'weekly' ? t('tasks.periodWeekly')
+      : period === 'once' ? t('tasks.periodOnce') : t('tasks.periodEvent')
+  }
+
   /** 发放规则文案：周期 + 上限 + 叠加口径（超管列表与弹窗共用同一口径描述） */
   function ruleText(row: Partial<UserTask>): string {
     const parts: string[] = []
-    const period = row.period || (row.task_type === 'once' ? 'once' : 'daily')
-    parts.push(period === 'daily' ? t('tasks.periodDaily') : period === 'weekly' ? t('tasks.periodWeekly')
-      : period === 'once' ? t('tasks.periodOnce') : t('tasks.periodEvent'))
+    const period = periodKeyOf(row) // ★ 观察5：兜底口径抽入共用 helper，语义与原实现一致
+    parts.push(periodLabel(period))
     if (Number(row.cap_per_day) > 0) parts.push(tpl('tasks.capDayRule', { cap: Number(row.cap_per_day) }))
     if (Number(row.cap_per_week) > 0) parts.push(tpl('tasks.capWeekRule', { cap: Number(row.cap_per_week) }))
     if (Number(row.valid_days) > 0 && Number(row.stack_expiry) === 1) parts.push(t('tasks.stackLabel'))
@@ -175,8 +189,9 @@ export default function TaskCenterP() {
 
   // 用户视图表格列
   const myCols: TableColumn<any>[] = [
+    // ★ 观察5（批G）：类型标签改走 period 优先的共用口径（此前只看 task_type，weekly 行被错标「每日」）
     { key: 'task_type', title: t('tasks.colType'), width: 100, render: (row) => (
-      <StatusPill tone={row.task_type === 'daily' ? 'idle' : 'warn'}>{row.task_type === 'daily' ? t('tasks.daily') : t('tasks.once')}</StatusPill>
+      <StatusPill tone={row.task_type === 'daily' ? 'idle' : 'warn'}>{periodLabel(periodKeyOf(row))}</StatusPill>
     ) },
     { key: 'title', title: t('tasks.colTitle'), render: (row) => taskTitle(row) },
     { key: 'description', title: t('tasks.colDesc'), render: (row) => taskDesc(row) || '—' },
@@ -204,7 +219,8 @@ export default function TaskCenterP() {
   // 超管管理表格列
   const adminCols: TableColumn<any>[] = [
     { key: 'id', title: 'ID', width: 70 },
-    { key: 'task_type', title: t('tasks.colType'), width: 100, render: (row) => row.task_type === 'daily' ? t('tasks.daily') : t('tasks.once') },
+    // ★ 观察5（批G）：超管列表同款收敛到 period 优先口径
+    { key: 'task_type', title: t('tasks.colType'), width: 100, render: (row) => periodLabel(periodKeyOf(row)) },
     { key: 'title', title: t('tasks.colTitle'), render: (row) => taskTitle(row) },
     { key: 'grant_mode', title: t('tasks.colGrant'), width: 110, render: (row) => (
       <StatusPill tone={row.grant_mode === 'auto' ? 'success' : 'idle'}>{row.grant_mode === 'auto' ? t('tasks.autoGrant') : t('tasks.manualGrant')}</StatusPill>
@@ -282,7 +298,8 @@ export default function TaskCenterP() {
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {(['daily', 'weekly', 'once', 'event'] as const).map((p) => (
                   <Button key={p} size="sm" variant={dlg.period === p ? 'primary' : 'secondary'} onClick={() => setDlg((d) => (d ? { ...d, period: p } : d))}>
-                    {p === 'daily' ? t('tasks.periodDaily') : p === 'weekly' ? t('tasks.periodWeekly') : p === 'once' ? t('tasks.periodOnce') : t('tasks.periodEvent')}
+                    {/* ★ 观察5：原四档三元式抽入共用 helper periodLabel，标签口径与列表一致 */}
+                    {periodLabel(p)}
                   </Button>
                 ))}
               </div>

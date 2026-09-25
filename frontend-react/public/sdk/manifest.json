@@ -1,0 +1,15 @@
+{
+  "_comment": "由 scripts/build_sdk.sh 生成，是后台 SDK 页取交付物文件名的唯一事实源；改版本请重跑脚本，勿手改。",
+  "python": {
+    "version": "1.0.0",
+    "wheel": "langcross_translator-1.0.0-py3-none-any.whl",
+    "sdist": "langcross_translator-1.0.0.tar.gz",
+    "wheelLatest": "langcross_translator-latest-py3-none-any.whl",
+    "sdistLatest": "langcross_translator-latest.tar.gz"
+  },
+  "typescript": {
+    "version": "1.0.1",
+    "tarball": "langcross-translator-sdk-1.0.1.tgz",
+    "tarballLatest": "langcross-translator-sdk-latest.tgz"
+  }
+}

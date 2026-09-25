@@ -166,7 +166,7 @@ export const zh: Record<string, string> = {
   'auth.boundEmail': '绑定邮箱',
   'auth.newPassword': '新密码（至少 6 位）',
   'auth.resetPassword': '重置密码',
-  'auth.forgotSent': '验证码已发送到绑定邮箱（未配置邮件时请在服务端日志查看）',
+  'auth.forgotSent': '验证码已发送到绑定邮箱',
   'auth.successReset': '密码已重置，请使用新密码登录',
 }
 
@@ -332,6 +332,6 @@ export const en: Record<string, string> = {
   'auth.boundEmail': 'Bound email',
   'auth.newPassword': 'New password (at least 6 chars)',
   'auth.resetPassword': 'Reset password',
-  'auth.forgotSent': 'The code was sent to your bound email (if email is unconfigured, check the server log)',
+  'auth.forgotSent': 'The code was sent to your bound email',
   'auth.successReset': 'Password reset — please sign in with the new password',
 }

@@ -180,7 +180,7 @@ export const baseZh: Record<string,string> = {
   'login.errorNoPerm': '该账号无管理权限',
   'login.errorLogin': '登录失败',
   'login.successReset': '密码已重置，请使用新密码登录',
-  'login.forgotSent': '验证码已发送到绑定邮箱（未配置邮件时请在服务端日志查看）',
+  'login.forgotSent': '验证码已发送到绑定邮箱',
   'login.regSuccess': '注册成功，正在登录…',
   'login.selectIndustry': '所属行业（新组织注册时必选）',
 

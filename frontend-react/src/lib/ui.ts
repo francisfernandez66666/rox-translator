@@ -4,13 +4,23 @@
 // =============================================
 // 依赖引入：i18n 翻译函数 t
 import { t } from '@/i18n'
+// ★ F-14（批G）：fmtTime 的 local 口径复用 format.ts 的 fmtDateTime（〇-Q：按界面语种 + 运行时本地时区出 Intl 格式）
+import { fmtDateTime } from './format'
 
 /** fmtTime ISO → "YYYY-MM-DD HH:MM:SS"（与 Vue 版一致，UTC-ish 原样切片）
+ * ★ F-14（批G）：新增 local 参数——后端时间串多为 UTC ISO，东八区用户直接裸切片会在跨日
+ * 边界「订单显示错一天」；local=true 改按本地时区显示（同 TicketsPage 私有 fmtTime 的口径，
+ * 委托 lib/format 的 fmtDateTime，非法值 fail-closed 回原串）。
+ * 默认 false 保持旧的「原样切片」行为不变，既有调用点（后台列表/铃铛等）零影响。
  * @param s - ISO 时间字符串
+ * @param local - 是否按本地时区显示（缺省 false = 旧口径 UTC 串裸切片，勿改默认值）
  * @returns 格式化后的时间字符串；空值返回 "—"
  */
-export function fmtTime(s?: string): string {
-  return s ? s.replace('T', ' ').slice(0, 19) : '—'
+export function fmtTime(s?: string, local = false): string {
+  if (!s) return '—'
+  // 本地口径：fmtDateTime 自身已 fail-closed（空值回 "—"、非法日期回原串），不再另包 try/catch
+  if (local) return fmtDateTime(s)
+  return s.replace('T', ' ').slice(0, 19)
 }
 
 /** 租户/订单状态标签（i18n）

@@ -368,15 +368,28 @@ func (s *Server) handleOrderRefund(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
-	// ★ 订阅身份清理（评审整改 B3）：paid 套餐退款后撤销 PackageCode 镜像，
-	//   否则「钱退了、订阅身份还在」被到期摘除前的窗口期滥用。
+	// ★ 订阅身份清理（评审整改 B3 → ★ F-37 2026-09-25 UAT 修复批重做）：
+	//   旧实现「退任意 paid 包单一律清空 PackageCode」不比对身份来源，
+	//   双订阅退掉非现役那一笔也会把现役身份抹掉；且只清 code 不清
+	//   package_expires/subscribed_at（残留即账本观察项 10，靠 watchdog 空码豁免兜底）。
+	//   新判据三段：① 被退单包 code == 当前身份 code 才动身份；② 动时三字段一并处置（收观察项 10）；
+	//   ③ 若租户还有其他在期 paid 订阅，身份改挂最晚支付的那笔而非清空。
 	if o, gerr := s.Store.GetOrder(req.ID, req.TenantID); gerr == nil && o.PackageID > 0 {
 		if pkg, perr := s.Store.GetPackage(o.PackageID); perr == nil && pkg.PType == "paid" {
 			if t, terr := s.Ten.GetByID(req.TenantID); terr == nil {
 				perms := tenant.ParsePerms(t.Permissions)
-				perms.PackageCode = ""
-				pb, _ := json.Marshal(perms)
-				_ = s.Ten.Update(t.ID, t.Name, t.ExpiresAt, string(pb))
+				if perms.PackageCode == pkg.Code {
+					if code, exp, ok, lerr := s.Store.LatestActivePaidSubscription(req.TenantID, req.ID); lerr == nil && ok {
+						perms.PackageCode = code // 身份改挂剩余在期订阅（最晚支付一笔）
+						perms.PackageExpires = exp
+					} else {
+						perms.PackageCode = ""
+						perms.PackageExpires = ""
+						perms.SubscribedAt = ""
+					}
+					pb, _ := json.Marshal(perms)
+					_ = s.Ten.Update(t.ID, t.Name, t.ExpiresAt, string(pb))
+				}
 			}
 		}
 	}
@@ -419,7 +432,10 @@ func (s *Server) handleInvoiceCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	inv, err := s.Store.CreateInvoice(s.effTenant(r, u), req.OrderID, req.Title, req.TaxNo)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "开票失败（需订单已支付）: " + err.Error()})
+		// ★ F-43（2026-09-25 UAT 修复批）：原先拼 err.Error() 把驱动原文（sql: no rows…）
+		// 直出外网；store 侧已转 errTxt 可读文案，这里走 publicErrMessage 统一兜底，
+		// 任何内部错误细节不再上屏（200-错误体改 4xx 归 F-21 同族统一批）。
+		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "invoice_create", "billing", inv.InvoiceNo)

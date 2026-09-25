@@ -46,6 +46,10 @@ const (
 	ErrModelUnreachable    ErrorCode = "MODEL_UNREACHABLE"
 	ErrCircuitBreakerOpen  ErrorCode = "CIRCUIT_BREAKER_OPEN"
 	ErrQuotaReserved       ErrorCode = "QUOTA_RESERVED"
+	// ErrChatTextTooLong ★ F-29（2026-09-25 批 D）：/api/chat/stream 文本超运营上限
+	// （chat_max_chars，默认 5,000 字符）在 SSE 头写出前被拒（400）。前端据该 code
+	// 引导用户改走翻译工单，而非让 Cloudflare 把长跑掐成 524 HTML。
+	ErrChatTextTooLong ErrorCode = "chat_text_too_long"
 )
 
 // 开放 API 对外错误码（snake_case，Python/TS/Java SDK 依赖，勿改值）。
@@ -106,7 +110,7 @@ func (e *APIError) HTTPStatus() int {
 		return http.StatusUnauthorized
 	case ErrForbidden:
 		return http.StatusForbidden
-	case ErrValidation, ErrRateLimited, ErrQuotaExceeded, ErrFileTooLarge:
+	case ErrValidation, ErrRateLimited, ErrQuotaExceeded, ErrFileTooLarge, ErrChatTextTooLong:
 		return http.StatusBadRequest
 	case ErrNotFound, ErrTicketNotFound, ErrKBNotFound:
 		return http.StatusNotFound

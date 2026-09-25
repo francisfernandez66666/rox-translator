@@ -449,6 +449,22 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	resp["status"] = status
+	// ★ F-42-d（2026-09-25 UAT 修复批）：假 completed 的对外契约收口。
+	//   状态机被判 completed 而载荷/产物全空的单（翻译中欠费中止 → 空转重翻 → 刷完成，
+	//   生产任务 90 即此型），旧映射照发 "status":"completed" + 空 translations，
+	//   SDK 按成功消费到空结果、事后无从发现。现在无产物一律降级 failed 并给错误码，
+	//   判据与租户 UI 下载闸共用 ticketHasDeliverable（一处实现，两侧同源）。
+	if status == "completed" && !s.ticketHasDeliverable(t) {
+		status = "failed"
+		if strings.HasPrefix(t.RejectReason, errInsufficientCode+":") {
+			errCode = errInsufficientCode
+			errMsg = "余额不足，请充值或升级套餐"
+		} else {
+			errCode = string(errors.OpenAPITaskFailed)
+			errMsg = "任务无可用译文产物，请重新提交"
+		}
+		resp["status"] = status
+	}
 	switch status {
 	case "completed":
 		// ★ 用量出参：本单实费计费 token 数（真实用量×均摊系数，完成时落库 tickets.tokens_billed）
@@ -524,6 +540,13 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 	}
 	if t.Status != store.TicketCompleted {
 		writeTaskError(w, "not_ready", "任务尚未完成，请先轮询至 completed 再下载")
+		return
+	}
+	// ★ F-42-d（2026-09-25 UAT 修复批）：与详情接口同一「无产物即不算交付」口径——
+	//   鬼 completed 单在详情侧已被降级 failed，这里若仍放行就会打出空 zip/空 .md，
+	//   SDK 拿到「成功响应 + 零字节产物」比报 not_ready 更难排查。判据复用 ticketHasDeliverable。
+	if !s.ticketHasDeliverable(t) {
+		writeTaskError(w, "not_ready", "任务无可用译文产物（可能因余额不足或流程中断），请重新提交")
 		return
 	}
 	baseName := t.TicketNo

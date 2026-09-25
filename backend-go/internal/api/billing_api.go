@@ -90,7 +90,10 @@ func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 	// 组织墙文案（四期增强）：余额即组织总预算的可用部分
 	if s.Bill.Enabled() {
 		if err := s.Bill.CheckBalance(tid); err != nil {
-			return tid, release, &apiErr{"组织积分已耗尽，请联系管理员及时充值"}
+			// ★ F-40：原样顶成裸 apiErr 会丢 insufficient_balance 码（出帧端
+			// stream.go 按 billing.QuotaErrCode 取码恒空，前端充值引导分支永久失效），
+			// 改走 NewQuotaErr 保组织墙文案 + 补稳定码。
+			return tid, release, billing.NewQuotaErr("组织积分已耗尽，请联系管理员及时充值", "insufficient_balance")
 		}
 	}
 	// ★ 双预算墙之部门墙/组织月度总预算墙（四期增强；独立于强制计费开关——
@@ -416,6 +419,21 @@ func (s *Server) handleTenantQuotaSave(w http.ResponseWriter, r *http.Request) {
 	if int64(req.Concurrent) > maxConc {
 		req.Concurrent = int(maxConc)
 	}
+	// ★ F-21②（2026-09-25 UAT 修复）：每日字符墙同样纳入 B6 收敛口径——
+	//   此前字符上限可被租户管理员自调成任意值（自我提权），与 QPS/并发的钳制不对称。
+	//   平台钳制键 quota_max_daily_chars（仅超管可改 system_config），默认 1000000（远超现网 100000 档）。
+	maxDailyChars := int64(1000000)
+	if v, _ := s.Store.GetConfig("quota_max_daily_chars"); v != "" {
+		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
+			maxDailyChars = x
+		}
+	}
+	if req.MaxDailyChars < 0 {
+		req.MaxDailyChars = 0
+	}
+	if req.MaxDailyChars > maxDailyChars {
+		req.MaxDailyChars = maxDailyChars
+	}
 	// QPS/并发写入内存计费服务（限流器热生效）
 	if s.Bill != nil {
 		billing.SetQPS(tid, req.QPS)
@@ -431,6 +449,16 @@ func (s *Server) handleTenantQuotaSave(w http.ResponseWriter, r *http.Request) {
 			perms.MaxDailyChars = req.MaxDailyChars
 			if req.MaxDailyPoints != nil {
 				perms.MaxDailyTokens = s.Store.TokensFromPoints(*req.MaxDailyPoints) // D4：token 口径优先于字符口径（积分入参折算落库）
+			} else if req.MaxDailyChars > 0 {
+				// ★ F-21②（2026-09-25 UAT 修复）：双墙打架根因收口——运行时判据是
+				//   「MaxDailyTokens>0 优先走积分墙，否则才看字符墙」，而保存链路只在
+				//   显式传 max_daily_points 时才动积分墙：管理员「改字符墙」后运行时
+				//   仍被旧积分墙压住，界面显示与实际生效两套值（现网 tenant 1 字符 100000/
+				//   积分 1000 即此态）。未传积分入参时按注册口径 1:1（历史建仓 chars==tokens）
+				//   联动重算积分墙，保证两墙同源；0=不限时积分墙同样清 0（下面 else 分支）。
+				perms.MaxDailyTokens = req.MaxDailyChars
+			} else {
+				perms.MaxDailyTokens = 0 // 字符墙置 0（不限）且未传积分：同步撤销积分墙，防幽灵墙残留
 			}
 			b, _ := json.Marshal(perms)
 			_ = s.Ten.Update(t.ID, t.Name, t.ExpiresAt, string(b))

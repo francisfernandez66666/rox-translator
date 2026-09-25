@@ -54,12 +54,22 @@ const manualOnce = {
   claimed: false, claimed_at: '',
 }
 
+// ★ 观察5（批G）：task_type='daily' 但 period='weekly' 的混配行——
+//   类型标签必须按 period 优先展示「每周」（tasks.periodWeekly 的 zh 值），
+//   而不是此前只按 task_type 错标的「每日任务」。设成 auto 发放避免多一枚领取按钮。
+const weeklyAuto = {
+  id: 3, task_type: 'daily', task_key: '', grant_mode: 'auto', period: 'weekly',
+  title: '每周打卡', description: '', reward_points: 150, valid_days: 0, stack_expiry: 0,
+  cap_per_day: 0, cap_per_week: 2, reward_kind: 'permanent', enabled: 1, sort_order: 3,
+  claimed: true, claimed_at: '2026-09-25 09:00:00', reward: { today_count: 0, week_count: 1, total_count: 1, last_expiry: '', last_granted: '' },
+}
+
 beforeEach(() => {
   cleanup()
   vi.clearAllMocks()
   mocks.isSuper = false
-  mocks.myTasks.mockResolvedValue({ success: true, tasks: [loginDaily, manualOnce] })
-  mocks.adminTasks.mockResolvedValue({ success: true, tasks: [loginDaily, manualOnce] })
+  mocks.myTasks.mockResolvedValue({ success: true, tasks: [loginDaily, manualOnce, weeklyAuto] })
+  mocks.adminTasks.mockResolvedValue({ success: true, tasks: [loginDaily, manualOnce, weeklyAuto] })
   mocks.claimTask.mockResolvedValue({ success: true, points: 200 })
   mocks.adminTaskResetConsumption.mockResolvedValue({ success: true, tenants: 3, reset_rows: 7 })
 })
@@ -86,6 +96,20 @@ describe('任务中心 · 自动发放任务（#33）', () => {
     expect(container.textContent).not.toMatch(/token/i)
     // 300 倍汇率的内部记账值绝不得出现在界面上
     expect(container.textContent).not.toMatch(/30000|60000/)
+  })
+})
+
+describe('任务中心 · 类型标签 period 优先（★ 观察5 批G）', () => {
+  it('task_type=daily 但 period=weekly 的行标签精确等于「每周」（periodWeekly 词条 zh 值），旧错标「每日任务」清零', async () => {
+    render(<TaskCenterP />)
+    // 等值锁①：混配行标签 = tasks.periodWeekly 的 zh 值「每周」，全页精确计数恰为 1
+    await vi.waitFor(() => { expect(screen.getAllByText('每周')).toHaveLength(1) })
+    // 等值锁②：纯 daily 行标签 = tasks.periodDaily 的 zh 值「每日」（精确 1，不被子串误伤）
+    expect(screen.getAllByText('每日')).toHaveLength(1)
+    // 等值锁③：once 行标签 = tasks.periodOnce 的 zh 值「终身一次」
+    expect(screen.getAllByText('终身一次')).toHaveLength(1)
+    // 反向锁：修复前按 task_type 二值映射的旧标签「每日任务」在列表页不得再出现
+    expect(screen.queryByText('每日任务')).toBeNull()
   })
 })
 

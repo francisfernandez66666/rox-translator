@@ -42,10 +42,14 @@ func (s *Store) FinishTicket(in *TicketFinishInput) (bool, error) {
 	d := db.CurrentDialect()
 	args := []interface{}{
 		t.Title, t.Status, t.TargetLangs, t.ApproverID, t.ReviewerID, t.RejectReason,
+		// ★ F-42-b（2026-09-25 UAT 修复批）：驳回来源随原因同事务落库。本条 UPDATE 是
+		//   「整对象覆盖写」，不带 reject_source 的话调用方（失败收尾）刚在内存对象上
+		//   标的 'system' 会被静默丢掉，workflow 的双保险判据就永远读不到真值。
+		t.RejectSource,
 		t.FinalResult, t.Mode, t.TokensBilled, t.MaxLength, t.Delivery,
 		time.Now().Format(time.RFC3339),
 	}
-	set := "SET title=?, status=?, target_langs=?, approver_id=?, reviewer_id=?, reject_reason=?, final_result=?, mode=?, tokens_billed=?, max_length=?, delivery=?, updated_at=?"
+	set := "SET title=?, status=?, target_langs=?, approver_id=?, reviewer_id=?, reject_reason=?, reject_source=?, final_result=?, mode=?, tokens_billed=?, max_length=?, delivery=?, updated_at=?"
 	// 到期打点并入同一条 UPDATE（旧实现是第二条写，失败即留下无到期时间的已完成工单）
 	if in.ExpiresAt != "" {
 		set += ", result_expires_at=?"

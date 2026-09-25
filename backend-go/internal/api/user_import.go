@@ -1,19 +1,25 @@
 // ============ user_import.go · 职责说明 ============
-// 租户 Excel 批量导入用户（2026-09-02 功能）：
+// 租户 Excel/CSV 批量导入用户（2026-09-02 功能；★ 2026-09-25 F-23 批F 收口）：
 //   - 模板下载：GET /api/admin/users/import-template 返回带表头与示例行的 xlsx
-//   - 解析 xlsx，表头：用户名称、姓名、部门、角色、邮箱（角色列可省略，默认普通用户）
+//     （填写说明挂示例行 F2，不再污染表头行）
+//   - 解析 xlsx/xls/csv（★ F-23③：CSV 走 encoding/csv，与 Excel 共用
+//     buildImportRows 纯函数，表头列索引首中即停防长句劫持），
+//     表头：用户名称、姓名、部门、角色、邮箱（角色列可省略，默认普通用户）
 //   - 逐行创建账号：随机初始密码 + 首登强制改密标记（must_change_pwd=1）
-//   - 绑定邮箱并向导入用户发送《账号开通通知》（含登录地址、账号、初始密码）
+//   - 绑定邮箱并向导入用户发送《账号开通通知》（含登录地址、账号、初始密码）；
+//     回执按「邮件是否真的寄出」分两版中文文案（★ F-23④，不向管理员虚假承诺）
 //
 // =============================================
 package api
 
 import (
 	"crypto/rand"
+	"encoding/csv"
 	"fmt"
 	"math/big"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
@@ -54,15 +60,27 @@ func randomImportPassword() string {
 	return string(buf)
 }
 
-// handleUserImportTemplate 下载批量导入 Excel 模板（带表头与示例行，含填写说明注释行）。
+// handleUserImportTemplate 下载批量导入 Excel 模板（带表头与示例行，含填写说明）。
 // 权限：租户管理员及以上。返回 application/octet-stream 的 xlsx 附件。
+// 模板本体在纯函数 buildUserImportTemplate 中构建（★ F-23：模板即回归资产，
+// 单测直接喂给 readImportRows 断示例行能被本解析器读回）。
 func (s *Server) handleUserImportTemplate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
-	// 生成带表头、说明行与示例行的模板工作簿
+	f := buildUserImportTemplate()
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	w.Header().Set("Content-Disposition", `attachment; filename="user_import_template.xlsx"`)
+	_ = f.Write(w)
+	_ = u.ID // tid 鉴权已由 requireTenantAdmin 完成，此处仅保持权限一致性
+}
+
+// buildUserImportTemplate 构建导入模板工作簿（表头 + 示例行 + 填写说明）。
+// ★ F-23②：填写说明从表头行 F1 挪到示例行 F2——说明长句里含「用户名称/管理员」等
+// 关键词，挂在表头行会参与列名匹配（配合 buildImportRows 的首中即停构成双保险）。
+func buildUserImportTemplate() *excelize.File {
 	f := excelize.NewFile()
 	sheet := f.GetSheetName(0)
 	_ = f.SetCellStr(sheet, "A1", "用户名称")
@@ -70,22 +88,19 @@ func (s *Server) handleUserImportTemplate(w http.ResponseWriter, r *http.Request
 	_ = f.SetCellStr(sheet, "C1", "部门")
 	_ = f.SetCellStr(sheet, "D1", "角色")
 	_ = f.SetCellStr(sheet, "E1", "邮箱")
-	// 说明行（首行补注释单元格，导入时将被忽略——readImportRows 从第 2 行开始读）
-	_ = f.SetCellStr(sheet, "F1", "填写说明：用户名称必填且租户内唯一；角色可留空=普通用户（可填 普通用户/管理员/部门管理员/租户管理员）；部门须与现有组织名称一致，留空挂根组织；邮箱用于发送账号开通通知")
 	// 示例行（如用户直接提交亦会被正常导入）
 	_ = f.SetCellStr(sheet, "A2", "zhangsan")
 	_ = f.SetCellStr(sheet, "B2", "张三")
 	_ = f.SetCellStr(sheet, "C2", "销售部")
 	_ = f.SetCellStr(sheet, "D2", "普通用户")
 	_ = f.SetCellStr(sheet, "E2", "zhangsan@example.com")
+	// 填写说明（★ F-23② 挪出表头行，挂示例行 F2；解析器只认 A-E 五列，不会读到它）
+	_ = f.SetCellStr(sheet, "F2", "填写说明：用户名称必填且租户内唯一；角色可留空=普通用户（可填 普通用户/管理员/部门管理员/租户管理员）；部门须与现有组织名称一致，留空挂根组织；邮箱用于发送账号开通通知")
 	// 表头浅灰填充 + 加粗，示例行便于识别
 	if style, e := f.NewStyle(&excelize.Style{Fill: excelize.Fill{Type: "pattern", Color: []string{"F2F2F2"}, Pattern: 1}, Font: &excelize.Font{Bold: true}}); e == nil {
 		_ = f.SetCellStyle(sheet, "A1", "E1", style)
 	}
-	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	w.Header().Set("Content-Disposition", `attachment; filename="user_import_template.xlsx"`)
-	_ = f.Write(w)
-	_ = u.ID // tid 鉴权已由 requireTenantAdmin 完成，此处仅保持权限一致性
+	return f
 }
 
 // handleUserBulkImport 租户 Excel 批量导入用户接口。
@@ -192,16 +207,21 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 		_ = s.Store.SetMustChangePwd(nu.ID, tid, 1)
 		s.Store.LogAudit(tid, u.ID, "user_bulk_import", "users", row.Username)
 		// 发送《账号开通通知》：登录地址 + 账号 + 初始密码
-		if nu.Email != "" {
-			_ = s.sendTemplatedMail(nu.Email, "user_import", map[string]string{
+		// ★ F-23④+：先经 mailLive() 判通道真实可用再承诺「已通知」——Noop 兜底
+		//   （MAIL_ENABLED≠1 且队列不可用）下 Send 返回 nil 但邮件永远不会出门，
+		//   以「Send 无错」为成功口径同样是虚假承诺。
+		mailSent := false
+		if nu.Email != "" && s.mailLive() {
+			// ★ F-17（批E）：导入账号未经历过注册界面选语种（preferred_lang 恒空），语种传空=中文链路
+			mailSent = s.sendTemplatedMail(nu.Email, "user_import", "", map[string]string{
 				"username":  nu.Username,
 				"password":  initPwd,
 				"login_url": importLoginURL(r),
-			})
+			}) == nil
 		}
 		created++
 		rr.OK = true
-		rr.Message = "导入成功（初始密码已通过邮件通知）"
+		rr.Message = importSuccessMessage(mailSent)
 		results = append(results, rr)
 	}
 	writeJSON(w, 200, map[string]interface{}{
@@ -211,6 +231,25 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 		"total":   len(rows),
 		"results": results,
 	})
+}
+
+// mailLive 判断邮件通道是否真实可用（★ F-23④，与 enqueueMail/mail.NewSender 的兜底口径对齐）：
+// 工单队列可用（异步入队投递）或 SMTP 配置齐全（同步投递）才算活；
+// NoopSender（MAIL_ENABLED≠1 且无队列）的 Send 恒返回 nil 却永不外发，不得计入可用。
+func (s *Server) mailLive() bool {
+	if s.TicketSvc != nil && s.TicketSvc.Queue != nil {
+		return true
+	}
+	return os.Getenv("MAIL_ENABLED") == "1" && os.Getenv("SMTP_HOST") != "" && os.Getenv("SMTP_USER") != ""
+}
+
+// importSuccessMessage 导入行成功回执（★ F-23④：两版中文文案按「通知邮件是否真的寄出」分支，
+// 无邮箱/通道未配置/发送失败一律走线下转告版，杜绝「已通过邮件通知」的无条件虚假承诺）。
+func importSuccessMessage(mailSent bool) string {
+	if mailSent {
+		return "导入成功（初始密码已通过邮件通知）"
+	}
+	return "导入成功（未绑定邮箱或邮件发送失败，请把初始密码线下转告本人并提醒首登改密）"
 }
 
 // importLoginURL 构造登录地址（优先当前请求 Host 对应的主站，兜底品牌基础域）。
@@ -230,8 +269,14 @@ func importLoginURL(r *http.Request) string {
 	return "https://" + host + "/login"
 }
 
-// readImportRows 解析 xlsx 首工作表为待导入用户行（首行为表头）。
+// readImportRows 按扩展名分发解析导入表（★ F-23③：白名单里有 .csv，解析就必须真支持 csv，
+// 否则上传 CSV 一律被 excelize 打回「Excel 解析失败」假象）。
+// .csv 走标准库 encoding/csv（RFC 4180），其余（xlsx/xls）走 excelize 首工作表；
+// 两路统一产出 [][]string 交给纯函数 buildImportRows 建模，口径不再分叉。
 func readImportRows(path string) ([]importUserRow, error) {
+	if strings.EqualFold(filepath.Ext(path), ".csv") {
+		return readCSVImportRows(path)
+	}
 	f, err := excelize.OpenFile(path)
 	if err != nil {
 		return nil, err
@@ -242,25 +287,57 @@ func readImportRows(path string) ([]importUserRow, error) {
 		return nil, fmt.Errorf("空工作簿")
 	}
 	all, err := f.GetRows(sheet)
-	if err != nil || len(all) < 2 {
+	if err != nil {
+		return nil, err
+	}
+	return buildImportRows(all)
+}
+
+// readCSVImportRows 解析 CSV 导入表（列数不限、行间允许不齐，交由 buildImportRows 统一判空）。
+func readCSVImportRows(path string) ([]importUserRow, error) {
+	fd, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer fd.Close()
+	cr := csv.NewReader(fd)
+	cr.FieldsPerRecord = -1 // 允许稀疏行（模板说明列只在一行出现等场景不炸整单）
+	all, err := cr.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	return buildImportRows(all)
+}
+
+// buildImportRows 把 [][]string（首行表头）转成待导入用户行。
+// 表头列索引宽松匹配中文/英文列名；★ F-23①：每个键**首中即停**——
+// 旧实现后中覆写，表头行里任何含关键词的长句（如旧版 F1 填写说明）会把五列索引
+// 一路劫持到说明所在列（username 被指到说明列），整单导入静默错位。
+// 无「用户名称」表头时按模板固定列序兜底：用户名称、姓名、部门、角色、邮箱。
+func buildImportRows(all [][]string) ([]importUserRow, error) {
+	if len(all) < 2 {
 		return nil, fmt.Errorf("无数据行")
 	}
-	// 表头列索引（宽松匹配中文/英文）
 	header := all[0]
 	idx := map[string]int{}
+	setIfFirst := func(key string, i int) {
+		if _, ok := idx[key]; !ok {
+			idx[key] = i
+		}
+	}
 	for i, h := range header {
 		h = strings.ToLower(strings.TrimSpace(h))
 		switch {
 		case strings.Contains(h, "用户名称"), strings.Contains(h, "用户名"), h == "username":
-			idx["username"] = i
+			setIfFirst("username", i)
 		case strings.Contains(h, "姓名"), strings.Contains(h, "显示名"), h == "displayname", h == "name":
-			idx["display"] = i
+			setIfFirst("display", i)
 		case strings.Contains(h, "部门"), strings.Contains(h, "组织"), h == "org":
-			idx["org"] = i
+			setIfFirst("org", i)
 		case strings.Contains(h, "角色"), strings.Contains(h, "管理员"), strings.Contains(h, "普通用户"), h == "role":
-			idx["role"] = i
+			setIfFirst("role", i)
 		case strings.Contains(h, "邮箱"), h == "email", h == "mail":
-			idx["email"] = i
+			setIfFirst("email", i)
 		}
 	}
 	if _, ok := idx["username"]; !ok {

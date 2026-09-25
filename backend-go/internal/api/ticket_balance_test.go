@@ -1,46 +1,54 @@
 // 改进2回归测试：文件/文本工单建单前余额预检
-//   - estimateTicketTokens：按源字符数估算 token 消耗（纯函数）
-//   - 边界：空字符、无语言、markup<=0、超大文本
+//   - estimateTicketTokens：★ F-41（2026-09-25 批 D）改为按模式系数 K 估算（纯函数）
+//   - 边界：空字符、无语言、非法 K 回退、超大文本
+//   - 基准锁：工单 88/89 生产实测数据（est 必须覆盖实烧/外推需求，宁高勿低）
 package api
 
 import "testing"
 
-// TestEstimateTicketTokens 估算 token 消耗
+// TestEstimateTicketTokens F-41 新口径：est = chars × langs × K(mode)。
+// K 由参数注入（配置读取另有 estTokensPerChar 专项测试），本测试锁公式本身。
 func TestEstimateTicketTokens(t *testing.T) {
 	cases := []struct {
 		name      string
 		chars     int64
 		langCount int
-		markup    float64
-		wantMin   int64
-		wantMax   int64
+		mode      string
+		kPro      float64
+		kFast     float64
+		want      int64 // 等值锁（F-41 起公式无方言/浮点歧义，直接钉死）
 	}{
-		{"中文10w字2语言markup1.5", 100000, 2, 1.5, 230000, 231500}, // 100000/1.3*2*1.5 ≈ 230769
-		{"单字段落", 1, 1, 1.0, 0, 2},
-		{"无语言不估算", 5000, 0, 1.5, 0, 0},
-		{"无字符不估算", 0, 2, 1.5, 0, 0},
-		{"markup为0按基础", 3000, 1, 0, 2000, 2500},
+		{"pro3语5k字", 5000, 3, "pro", 160, 60, 2400000},
+		{"fast单语1k字", 1000, 1, "fast", 160, 60, 60000},
+		{"mode空按pro默认", 100, 1, "", 160, 60, 16000},
+		{"无语言不估算", 5000, 0, "pro", 160, 60, 0},
+		{"无字符不估算", 0, 2, "pro", 160, 60, 0},
+		{"K非法回退保守默认160", 100, 1, "pro", 0, -5, 16000},
+		{"fast非法K也回退160", 100, 1, "fast", 160, 0, 16000},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := estimateTicketTokens(c.chars, c.langCount, c.markup)
-			if got < c.wantMin || got > c.wantMax {
-				t.Fatalf("estimateTicketTokens(%d, %d, %v) = %d，期望介于 [%d, %d]",
-					c.chars, c.langCount, c.markup, got, c.wantMin, c.wantMax)
+			got := estimateTicketTokens(c.chars, c.langCount, c.mode, c.kPro, c.kFast)
+			if got != c.want {
+				t.Fatalf("estimateTicketTokens(%d, %d, %q, %v, %v) = %d，期望 %d",
+					c.chars, c.langCount, c.mode, c.kPro, c.kFast, got, c.want)
 			}
 		})
 	}
 }
 
-// TestEstimateTicketTokensMonotonic 值越大消耗越大（单调性 sanity）
+// TestEstimateTicketTokensMonotonic 更大文本/更多语言估算更大（单调性 sanity）。
 func TestEstimateTicketTokensMonotonic(t *testing.T) {
-	small := estimateTicketTokens(1000, 1, 1.5)
-	larger := estimateTicketTokens(10000, 1, 1.5)
+	small := estimateTicketTokens(1000, 1, "pro", 160, 60)
+	larger := estimateTicketTokens(10000, 1, "pro", 160, 60)
 	if larger <= small {
 		t.Fatalf("更大文本估算应更大，small=%d larger=%d", small, larger)
 	}
-	if many := estimateTicketTokens(1000, 3, 1.5); many <= small {
+	if many := estimateTicketTokens(1000, 3, "pro", 160, 60); many <= small {
 		t.Fatalf("更多语言估算应更大，single=%d multi=%d", small, many)
+	}
+	if fast := estimateTicketTokens(1000, 1, "fast", 160, 60); fast >= small {
+		t.Fatalf("fast 估算应低于 pro，fast=%d pro=%d", fast, small)
 	}
 }
 

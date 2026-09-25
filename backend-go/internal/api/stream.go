@@ -21,6 +21,7 @@ import (
 
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"log"
@@ -34,6 +35,7 @@ import (
 	"translator/internal/auth"
 	"translator/internal/billing"
 	"translator/internal/engine"
+	apierrors "translator/internal/errors"
 	"translator/internal/llm"
 	"translator/internal/tenant"
 )
@@ -97,6 +99,26 @@ func sseHeartbeat(w http.ResponseWriter, flusher http.Flusher, mu *sync.Mutex, e
 
 // ============ 流式文本翻译 ============
 
+// chatMaxChars ★ F-29 后端半（2026-09-25 批 D）：单次对话字符上限（运营策略键 chat_max_chars，
+// 默认 5,000 字符，按 rune 计——中文一字一符，与缺陷实测口径一致）。
+// 键缺失/非法（非数字或 ≤0）回退默认：宁可保守拒绝，也不让误配置把护栏拆成放行（524 复发）。
+func (s *Server) chatMaxChars() int {
+	if s.Store != nil {
+		if v, err := s.Store.GetConfig("chat_max_chars"); err == nil {
+			if n, cerr := strconv.Atoi(strings.TrimSpace(v)); cerr == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 5000
+}
+
+// chatTextOverLimit 体积护栏的纯判据（拆出来是为了边界等值锁不必拉起引擎全链）：
+// 按 rune 计数、先 TrimSpace（尾部空白不算体积）；恰好等于上限放行、超 1 字符即拒。
+func chatTextOverLimit(msg string, maxChars int) bool {
+	return len([]rune(strings.TrimSpace(msg))) > maxChars
+}
+
 // handleChatStream 流式文本翻译接口（/api/chat/stream，SSE）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 ChatRequest）。
 // 事件流：progress 进度事件 → done（携带 result）或 error 事件。
@@ -111,6 +133,17 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	var req ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "请求格式错误"})
+		return
+	}
+	// ★ F-29 后端半（2026-09-25 批 D）：chat 通道体积护栏。此前唯一体积闸是全局
+	//   withBodyLimit 5MB JSON，28k 字（≈84KB）畅通无阻打到引擎，最后被 Cloudflare
+	//   ~100s 掐成 524、前端把 HTML 错误页塞进气泡。上限走运营策略键 chat_max_chars
+	//   （默认 5,000 字符，按 rune 计，中文一字一符），超限在 SSE 头写出**前**以
+	//   writeError 400 拒绝（code=chat_text_too_long，前端据 code 引导改走翻译工单）。
+	if chatTextOverLimit(req.Message, s.chatMaxChars()) {
+		n := len([]rune(strings.TrimSpace(req.Message)))
+		s.writeError(w, r, apierrors.New(apierrors.ErrChatTextTooLong,
+			fmt.Sprintf("文本过长（%d 字符，单次对话上限 %d 字符），长文本请创建翻译工单处理", n, s.chatMaxChars())))
 		return
 	}
 	// SSE 响应头写出后 HTTP 状态码即固定为 200，此后只能靠 error 事件帧表达失败，
@@ -179,7 +212,13 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	})
-	res := s.Engine.HandleText(ctx, req.Message, req.Options, prog)
+	// ★ F-29 后端半（2026-09-25 批 D）：请求级 deadline 90s——SSE 通道此前无服务端超时，
+	//   长跑请求由 Cloudflare ~100s 先掐（用户看到 524 HTML 错误页）。本侧在 90s 到点
+	//   主动终止管线并出结构化 error 帧（留 10s 余量给帧写出与代理透传）；
+	//   只包 runCtx，客户端断开（r.Context cancel）的既有取消语义不变。
+	runCtx, runCancel := context.WithTimeout(ctx, 90*time.Second)
+	defer runCancel()
+	res := s.Engine.HandleText(runCtx, req.Message, req.Options, prog)
 	// ★ P3 补齐（2026-09-22，E2E TF2 抓到）：即时翻译 SSE 收尾前同步冲刷计量缓冲。
 	//   此前本路径全程不 Flush（非流式 /api/chat、文件流、账单接口都有），用量只进内存
 	//   缓冲、等 2s ticker 才落库；而前端是在收到 done 帧后才刷新余额/今日已耗，
@@ -187,6 +226,17 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	//   必须放在 done/error 终帧**之前**（而非 handler 返回前）：客户端的刷新与 handler
 	//   尾部并发，只有先落库再告知完成，才能保证那一次刷新看到的是新值。
 	billing.Flush()
+	// ★ F-29（批 D）：90s 到点——引擎被 runCtx 掐停，终帧改出 error（文案与前端批 G 兜底口径对齐）。
+	//   不能照常发 done：前端会把半截译文当完整结果渲染，正是 524 之外第二种坏体验。
+	if stderrors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		sseMu.Lock()
+		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": "处理超时，长文本请改用翻译工单", "error_code": "chat_timeout"}))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		sseMu.Unlock()
+		return
+	}
 	// 推送完成进度（心跳在途：收尾帧同样走写锁序列化）
 	sseMu.Lock()
 	fmt.Fprint(w, sseEvent("progress", map[string]interface{}{"step": "完成", "done": 1, "total": 1, "percent": 100}))

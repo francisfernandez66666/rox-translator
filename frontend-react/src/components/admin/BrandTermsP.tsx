@@ -6,13 +6,20 @@
 //  - 单个条目编辑 / 删除
 // 复用了既有 /api/admin/brand-terms 查询与 kb-entries add/update/delete 写接口，
 // 保证「云端知识库单独可配」。
+// ★ F-25（2026-09-25 发布前 UAT 批G）交互收口：
+//  ① 删除钮补齐现成 <CloseIcon size={14}/> 可视图形，删除动作前置 confirmDialog 二次确认；
+//  ② 原三处 window.prompt（补语言取语种 / 取译法 / 改译法）全部换成站内 Dialog
+//     （editDlg 状态：语言/原文/译文 三字段，语种走 BRAND_LANGS select + langLabel()），
+//     提交仍走既有 kbEntryAdd / kbEntryUpdate 接口函数，零新接口。
 // ============================================================================
 import { useEffect, useMemo, useState } from 'react'
-import { Badge, Button, DataTable, Dialog } from '@/ui/langcross/src'
+import { Badge, Button, CloseIcon, DataTable, Dialog } from '@/ui/langcross/src'
 import { brandTerms, kbPackages, kbEntryAdd, kbEntryUpdate, kbEntryDelete } from '@/api/kb'
 import { langLabel } from '@/lib/langNames'
 import { useT, tpl as gtpl } from '@/i18n'
 import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
+// ★ F-25：站内确认弹窗（替代原生确认交互，删除前必过这道闸）
+import { confirmDialog } from '@/components/uiDialogs'
 
 /** BrandEntry 品牌固定译法条目（层级/源语/目标语/生效模块） */
 type BrandEntry = {
@@ -35,6 +42,10 @@ const BRAND_LANGS = ['en', 'ar', 'de', 'es', 'fa', 'fr', 'hi', 'id_lang', 'it', 
 // 知识库包精简结构（前端包选择器用）
 type PkgItem = { id: number; name: string; code: string }
 
+/** ★ F-25：单语言补充 / 条目编辑弹窗状态（替代原三处 window.prompt）。
+ *  entryId>0 = 修改既有条目（提交走 kbEntryUpdate）；entryId=0 = 为既有品牌补单语言条目（走 kbEntryAdd）。 */
+type EditDlg = { open: boolean; entryId: number; brand: string; lang: string; text: string }
+
 /** 按品牌名分组：source_text → 各语言译法 {target_lang: target_text} */
 function groupByBrand(entries: BrandEntry[]): { brand: string; langs: Record<string, string>; ids: Record<string, number> }[] {
   const map = new Map<string, { brand: string; langs: Record<string, string>; ids: Record<string, number> }>()
@@ -54,7 +65,8 @@ function groupByBrand(entries: BrandEntry[]): { brand: string; langs: Record<str
  * 译文中品牌名统一剥离自创后缀（ROX vehicles/motor 等）并等于此处译法。修改后仅对后续翻译生效。
  */
 export default function BrandTermsP(_props: Props) {
-  const [, t] = useT()
+  // ★ F-25：uiLang 供 langLabel() 按界面语言展示语种名（zh 界面取中文名，其余取英文名）
+  const [uiLang, t] = useT()
   const [packages, setPackages] = useState<PkgItem[]>([])
   const [pkgId, setPkgId] = useState(0)           // 当前选中的知识库包 ID
   const [terms, setTerms] = useState<BrandEntry[]>([])
@@ -62,6 +74,8 @@ export default function BrandTermsP(_props: Props) {
   const [brandInput, setBrandInput] = useState('')   // 新增品牌名（中文，如「极石」）
   const [brandEn, setBrandEn] = useState('')          // 该品牌名统一外语译法（如 ROX）
   const [dlg, setDlg] = useState(false)               // 新增弹窗
+  // ★ F-25：单语言补充 / 编辑条目弹窗状态（原 window.prompt 流程的站内替代）
+  const [editDlg, setEditDlg] = useState<EditDlg>({ open: false, entryId: 0, brand: '', lang: 'en', text: '' })
 
   // 首次加载包列表，默认选第一个（品牌主站默认包通常即首个）
   useEffect(() => {
@@ -106,32 +120,48 @@ export default function BrandTermsP(_props: Props) {
     }
   }
 
-  /** 新增单个语言的品牌条译法（品牌已存在但缺某语言时） */
-  const addSingleLang = async (brand: string) => {
-    const lang = window.prompt(gtpl('bt.promptLang', { brand }))
-    if (!lang) return
-    const text = window.prompt(t('bt.promptText'))
-    if (!text) return
+  /** ★ F-25：打开「为既有品牌补单语言条目」弹窗（原 window.prompt 双连问的入口替代） */
+  const openAddLang = (brand: string) => setEditDlg({ open: true, entryId: 0, brand, lang: 'en', text: '' })
+
+  /** ★ F-25：打开「修改单语言译法」弹窗，三字段以条目现值预填（原 window.prompt 的入口替代） */
+  const openEditLang = (brand: string, e: BrandEntry) =>
+    setEditDlg({ open: true, entryId: e.id, brand, lang: e.target_lang, text: e.target_text })
+
+  /** ★ F-25：编辑弹窗提交——entryId=0 走 kbEntryAdd 补条目，否则走 kbEntryUpdate 改条目；
+   *  失败留在框内可重试（与「新增品牌名」弹窗同口径），成功才关窗回刷列表。 */
+  const submitEdit = async () => {
+    const brand = editDlg.brand.trim()
+    const text = editDlg.text.trim()
+    if (!brand) { toastWarn(t('bt.needBrand')); return }
+    // 空译文复用现成 bt.needEn 文案提示（语义即「请输入品牌译法」），F-25 不为此再造新键
+    if (!text) { toastWarn(t('bt.needEn')); return }
     try {
-      await kbEntryAdd({ package_id: pkgId, layer: 1, source_text: brand, target_lang: lang.trim(), target_text: text.trim(), module: 'brand' })
-      toastSuccess(gtpl('bt.langAdded', { lang: lang.trim() }))
+      if (editDlg.entryId > 0) {
+        await kbEntryUpdate({ id: editDlg.entryId, layer: 1, source_text: brand, target_lang: editDlg.lang, target_text: text, module: 'brand' })
+        toastSuccess(t('bt.updated'))
+        setEditDlg((d) => ({ ...d, open: false }))
+      } else {
+        await kbEntryAdd({ package_id: pkgId, layer: 1, source_text: brand, target_lang: editDlg.lang, target_text: text, module: 'brand' })
+        toastSuccess(gtpl('bt.langAdded', { lang: editDlg.lang }))
+        setEditDlg((d) => ({ ...d, open: false }))
+      }
       await load()
-    } catch (e) { toastError(gtpl('bt.langFail', { err: String((e as any)?.message || e) })) }
+    } catch (e) {
+      // 两分支各用现成失败文案键（写字面量而非三元拼接，保 missingKeyGate 静态可见）
+      if (editDlg.entryId > 0) toastError(gtpl('bt.updateFail', { err: String((e as any)?.message || e) }))
+      else toastError(gtpl('bt.langFail', { err: String((e as any)?.message || e) }))
+    }
   }
 
-  /** 修改单语言译法 */
-  const editLang = async (g: { brand: string }, e: BrandEntry | null, lang: string) => {
-    if (!e) return
-    const text = window.prompt(gtpl('bt.editPrompt', { brand: g.brand, lang }), e.target_text)
-    if (!text || text.trim() === e.target_text) return
-    try {
-      await kbEntryUpdate({ id: e.id, layer: 1, source_text: g.brand, target_lang: lang, target_text: text.trim(), module: 'brand' })
-      toastSuccess(t('bt.updated'))
-      await load()
-    } catch (err) { toastError(gtpl('bt.updateFail', { err: String((err as any)?.message || err) })) }
-  }
-
-  const removeEntry = async (id: number) => {
+  /** ★ F-25：删除前置站内 confirmDialog（danger 红框）二次确认——用户点「确认」才调 kbEntryDelete，
+   *  取消/关闭一律不发删除请求。 */
+  const removeEntry = async (brand: string, lang: string, id: number) => {
+    const ok = await confirmDialog({
+      header: t('bt.delConfirmTitle'),
+      body: gtpl('bt.delConfirmBody', { brand, lang: langLabel(lang, uiLang) || lang }),
+      danger: true,
+    })
+    if (!ok) return
     try {
       await kbEntryDelete(id)
       toastSuccess(t('bt.entryDeleted'))
@@ -170,6 +200,26 @@ export default function BrandTermsP(_props: Props) {
         </div>
       </Dialog>
 
+      {/* ===== ★ F-25：单语言补充 / 编辑条目弹窗（站内 Dialog，替代原三处 window.prompt）。
+             语言字段用现成 BRAND_LANGS 常量渲染 <select> + langLabel() 按界面语言显示语种名，
+             禁止手输裸语种代码；原文/译文为普通输入框，提交走既有 kbEntryAdd / kbEntryUpdate。 ===== */}
+      <Dialog title={t('bt.editLangTitle')} open={editDlg.open} onCancel={() => setEditDlg((d) => ({ ...d, open: false }))} confirmText={t('bt.save')} cancelText={t('bt.cancel')} onConfirm={() => void submitEdit()}>
+        <div style={rowTop}>
+          <span style={{ width: 110, fontSize: 15 }}>{t('bt.formLangLabel')}</span>
+          <select className="lc-select" value={editDlg.lang} onChange={(e) => setEditDlg((d) => ({ ...d, lang: e.target.value }))} style={inputStyle}>
+            {BRAND_LANGS.map(lc => <option key={lc} value={lc}>{langLabel(lc, uiLang) || lc}</option>)}
+          </select>
+        </div>
+        <div style={rowTop}>
+          <span style={{ width: 110, fontSize: 15 }}>{t('bt.brandLabel')}</span>
+          <input className="lc-input" value={editDlg.brand} onChange={(e) => setEditDlg((d) => ({ ...d, brand: String(e.target.value ?? '') }))} placeholder={t('bt.brandPlaceholder')} style={inputStyle} />
+        </div>
+        <div style={rowTop}>
+          <span style={{ width: 110, fontSize: 15 }}>{t('bt.formTextLabel')}</span>
+          <input className="lc-input" value={editDlg.text} onChange={(e) => setEditDlg((d) => ({ ...d, text: String(e.target.value ?? '') }))} placeholder="ROX" style={inputStyle} />
+        </div>
+      </Dialog>
+
       {/* ===== 品牌名列表（按品牌分组，各语言译法一目了然） ===== */}
       {groups.length === 0 ? (
         <div style={{ color: 'var(--adm-faint)', fontSize: 15, padding: '16px 0' }}>{pkgId <= 0 ? t('bt.needPkg') : t('bt.empty')}</div>
@@ -182,18 +232,18 @@ export default function BrandTermsP(_props: Props) {
                   const entry = terms.find(t => t.source_text === row.brand && t.target_lang === lc)
                   return (
                     /* 单语言条目芯片：语言缩写 + 规定译法 + 行内「编辑 / 删除」动作。
-                       编辑按钮文字色由品牌蓝改为中性浅色（#E7E9EA），与暗色主题正文一致；
-                       删除按钮原为 ✕ 图形字符，emoji 清理后只剩 aria-label（无可视字符），
-                       后续需补 <Icon n="close" /> 才能看见入口。 */
+                       ★ F-25 收口：编辑/删除按钮文字与图形均走站内控件——删除钮内放现成
+                       <CloseIcon size={14}/> 作可视入口（此前 emoji 清理后只剩 aria-label 不可见），
+                       两个按钮的 type="button" 与 aria-label 粘连写法顺手补空格。 */
                     <span key={lc} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--adm-soft)', borderRadius: 5, padding: '2px 8px', fontSize: 14 }}>
                       <span style={{ color: 'var(--adm-faint)', width: 26 }}>{langLabel(lc, 'zh') || lc}</span>
                       <b style={{ color: 'var(--npz-text-1)' }}>{row.langs[lc]}</b>
-                      {entry && <button type="button"aria-label={t('bt.editShort')} style={{ border:'none', background:'none', padding: 0, font:'inherit', cursor:'pointer', color:'#E7E9EA', marginInlineStart: 2 }} onClick={() => void editLang(row, entry, lc)}>{t('bt.editShort')}</button>}
- {entry && <button type="button"aria-label={t('bt.delEntry')} style={{ border:'none', background:'none', padding: 0, font:'inherit', cursor:'pointer', color:'var(--lc-danger)', marginInlineStart: 2 }} onClick={() => void removeEntry(entry.id)}></button>}
+                      {entry && <button type="button" aria-label={t('bt.editShort')} style={{ border:'none', background:'none', padding: 0, font:'inherit', cursor:'pointer', color:'#E7E9EA', marginInlineStart: 2 }} onClick={() => openEditLang(row.brand, entry)}>{t('bt.editShort')}</button>}
+                      {entry && <button type="button" aria-label={t('bt.delEntry')} style={{ border:'none', background:'none', padding: 0, font:'inherit', cursor:'pointer', color:'var(--lc-danger)', marginInlineStart: 2, display: 'inline-flex', alignItems: 'center' }} onClick={() => void removeEntry(row.brand, lc, entry.id)}><CloseIcon size={14} /></button>}
                     </span>
                   )
                 })}
-                <button type="button" aria-label={t('bt.addLang')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', cursor: 'pointer', color: 'var(--adm-faint)', fontSize: 14 }} onClick={() => void addSingleLang(row.brand)}>{t('bt.addLang')}</button>
+                <button type="button" aria-label={t('bt.addLang')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', cursor: 'pointer', color: 'var(--adm-faint)', fontSize: 14 }} onClick={() => openAddLang(row.brand)}>{t('bt.addLang')}</button>
               </div>
             ) },
           ]}  />

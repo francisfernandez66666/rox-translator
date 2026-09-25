@@ -13,7 +13,7 @@
  * - 账号注销：自助注销账号
  */
 
-import { request, authHeaders, API_BASE, type AdminResp } from './core'
+import { request, authHeaders, API_BASE, currentUiLang, type AdminResp } from './core'
 
 /** 登录用户信息结构：含 id/用户名/显示名/角色/所属租户 */
 export interface AuthUser {
@@ -79,15 +79,18 @@ export async function authMe(): Promise<LoginResp> {
  * 自助注册：可带邀请码/租户信息/行业/邮箱验证码/人机验证 token。
  * @param data 注册字段（username/password 必填，其余可选；ref 为邀请裂变个人码）
  */
-/** 自助注册：组织名/邮箱验证码/Turnstile/邀请码/UTM 归因一并上报 */
-export async function authRegister(data: { username: string; password: string; type?: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string; job_role?: string; role_choice?: string; ref?: string; agreed?: boolean; brand_name?: string; brand_name_en?: string; brand_names?: string; landing_path?: string; utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_term?: string; utm_content?: string }): Promise<AdminResp> {
-  return request('/api/auth/register', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+/** 自助注册：组织名/邮箱验证码/Turnstile/邀请码/UTM 归因一并上报。
+ *  ★ F-17（2026-09-25 批E）：app_lang=注册界面语种（12 码），调用方未显式传入时自动随 currentUiLang() 带上；
+ *  后端按「载荷 app_lang → X-App-Lang 头 → 中文」解析，落库 users.preferred_lang 供邮件语种跟随。 */
+export async function authRegister(data: { username: string; password: string; type?: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string; job_role?: string; app_lang?: string; role_choice?: string; ref?: string; agreed?: boolean; brand_name?: string; brand_name_en?: string; brand_names?: string; landing_path?: string; utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_term?: string; utm_content?: string }): Promise<AdminResp> {
+  const payload = { app_lang: currentUiLang() || undefined, ...data }
+  return request('/api/auth/register', { method: 'POST', headers: authHeaders(), body: JSON.stringify(payload) })
 }
 
 /** 发送注册邮箱验证码（noop=true 表示服务端邮件未配置，验证码打印在服务端日志） */
-/** 注册邮箱验证码（开启 Turnstile 时须带人机 token） */
+/** 注册邮箱验证码（开启 Turnstile 时须带人机 token）；★ F-17：app_lang 随界面语种上报，验证码邮件按语种取稿 */
 export async function sendEmailCode(email: string, captchaToken?: string): Promise<AdminResp & { noop?: boolean }> {
-  return request('/api/auth/email-code', { method: 'POST', body: JSON.stringify({ email, captcha_token: captchaToken }) })
+  return request('/api/auth/email-code', { method: 'POST', body: JSON.stringify({ email, captcha_token: captchaToken, app_lang: currentUiLang() || undefined }) })
 }
 
 /** 获取公开注册配置（email_verify_enabled，前端据以显隐验证码输入） */
