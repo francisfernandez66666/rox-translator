@@ -444,6 +444,10 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
     if (captchaOn && !tsTokenRef.current) { toastError(t('auth.captchaRequired')); reexecTurnstile(tsIdRef.current); return }
     const sel = selRef.current
     const kind = sel.type ==='personal'?'personal': sel.role ==='admin'?'admin':'staff'
+    // F-06 前置校验（对齐传统表单 Login.tsx 的 orgCodeRequired/inviteRequired）：
+    // 管理员缺组织编码、员工缺企业邀请码都必吃后端 400，卡内字段前有 * 标记，故只拦不弹
+    if (kind === 'admin' && !aiForm.orgCode.trim()) { setBusy(false); return }
+    if (kind === 'staff' && !aiForm.orgCode.trim()) { setBusy(false); return }
     setBusy(true)
     const tk = takeCaptchaToken()
     try {
@@ -462,6 +466,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
         industry: kind ==='admin'? sel.industryCode : undefined,
         job_role: sel.personaCode || undefined, // 角色绑用户不绑企业：三条分支共用（跳过=不下发）
         invite: kind ==='staff'? aiForm.orgCode.trim() : undefined,
+        code: kind ==='admin'? (aiForm.orgCode.trim() || undefined) : undefined, // F-06：管理员=新建租户，租户编码经组织编码字段下发（后端 register.go 无邀请绑定时必填）
         agreed: true, // 问答流程里没有单独的协议勾选步骤（只有传统表单有），提交即视为已同意
       })
       // 注册失败：表单留在原地可直接重提，但原因必须 toast——静默返回就是用户报的「点了没反应」
@@ -730,6 +735,13 @@ function AccountFormBlock({
       )}
       {kind ==='admin'&& (
         <>
+          {/* F-06（2026-09-25 发布前 UAT）：管理员=新建租户，后端 register.go 无邀请绑定时 code 缺失即 400
+              「请提供租户编码」——传统表单一直有该字段与前置校验（Login.tsx），AI 流此前漏搬，企业注册主路径必死。
+              复用既有键 auth.orgCode（12 语种全量词典已有），零新增键 */}
+          <div className="ar-fgroup">
+            <span className="ar-flabel">{t('auth.orgCode')} <i>*</i></span>
+            <input className="lc-input"value={form.orgCode} placeholder={t('auth.orgCode')} onChange={(e) => set('orgCode', e.target.value)} />
+          </div>
           <div className="ar-fgroup">
             <span className="ar-flabel">{t('auth.aiOrgCn')} <i>*</i></span>
             <input className="lc-input"value={form.orgCn} placeholder={t('auth.orgCnPlaceholder')} onChange={(e) => set('orgCn', e.target.value)} />

@@ -157,11 +157,26 @@ export default function Login({ mode, onLogin }: Props) {
     return () => { window.clearTimeout(id1); window.clearTimeout(id2); window.clearTimeout(id3) }
   }, [view, mode])
 
+  // F-07（2026-09-25 发布前 UAT）：AI 接管会把传统表单整支卸载，Turnstile 挂件随 DOM 一起销毁；
+  // 点 × 退回后容器重挂成空壳，但 mountCaptcha 只在启动配置回调里调过一次（133 行）——
+  // 结果 captchaTokenRef 永远为空，「发送验证码」连请求都不发、注册静默拒绝，且页面没有任何可操作的验证框。
+  // 兜底：注册屏回到表单阶段时，若人机验证开启且容器里还没有挂件 iframe，就重新挂载一次；
+  // iframe 存在性判据同时防住首帧双挂（配置回调可能先/后于本 effect 到）。
+  useEffect(() => {
+    if (mode !== 'home' || view !== 'register' || regPhase !== 'form') return
+    if (!captchaOn || !captchaSiteKey) return
+    const el = captchaBoxRef.current
+    if (!el || el.querySelector('iframe')) return
+    mountCaptcha(captchaSiteKey)
+  }, [regPhase, view, mode, captchaOn, captchaSiteKey])
+
   // ---- Cloudflare Turnstile 人机验证（装载收敛到 lib/turnstile：多消费方只注入一次脚本）----
   function mountCaptcha(siteKey: string) {
     loadTurnstile(() => {
       const el = captchaBoxRef.current
       if (!el) return
+      // 容器里已有挂件 iframe 就不再二挂（配置回调与 F-07 退回重挂两条路可能先后到达同一容器）
+      if (el.querySelector('iframe')) return
       const id = mountTurnstileWidget(el, siteKey, (tk) => { captchaTokenRef.current = tk })
       if (id !== null) captchaIdRef.current = id
     })

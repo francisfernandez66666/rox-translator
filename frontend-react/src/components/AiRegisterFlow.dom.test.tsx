@@ -11,7 +11,7 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AiRegisterFlow from './AiRegisterFlow'
-import { sendEmailCode } from '@/api'
+import { authRegister, sendEmailCode } from '@/api'
 import { toastError } from '@/lib/toastBus'
 
 // api 桩：只桩本组件用到的五个出口，注册/登录一律 success:false（本测试不走到提交成功）
@@ -167,5 +167,87 @@ describe('AiRegisterFlow 发码链路（人机验证容器 + 异常提示）', (
     }
     vi.mocked(sendEmailCode).mockReset()
     vi.mocked(sendEmailCode).mockImplementation(async () => ({ success: true }))
+  })
+})
+
+// ============================================================================
+// ★ 2026-09-25 发布前 UAT · F-06 回归（企业注册·管理员分支的组织编码）
+//   线上事故形态：AI 流选「企业注册→管理员」后，账号表单压根没有组织编码字段、
+//   提交体也没有 code，后端 register.go 无邀请绑定时 req.Code 为空必吃 400
+//   「请提供租户编码」——企业自助注册主路径 100% 死。
+//   本用例固化修复：① admin 分支表单渲染组织编码输入（复用既有键 auth.orgCode）；
+//   ② 缺编码点提交必须被前端拦下、请求不出网；③ 填齐后提交体携带 code。
+// ============================================================================
+describe('AiRegisterFlow F-06 · 企业·管理员组织编码', () => {
+  /** 在最后一个选项组里按文本点选项 */
+  async function pickOpt(container: HTMLElement, text: string) {
+    await waitFor(() => {
+      const groups = container.querySelectorAll('.ar-opts')
+      if (groups.length === 0) throw new Error('options not ready')
+      const btn = Array.from(groups[groups.length - 1].querySelectorAll<HTMLButtonElement>('button'))
+        .find((b) => (b.textContent || '').includes(text))
+      if (!btn) throw new Error(`option "${text}" not ready`)
+      fireEvent.click(btn)
+    }, { timeout: 3000 })
+  }
+
+  /** 走到「企业注册·管理员」分支的账号信息表单 */
+  async function reachAdminForm(container: HTMLElement) {
+    await pickOpt(container, '企业注册')     // 第一步：账号类型
+    await pickOpt(container, '管理员')        // 第二步：企业身份
+    await pickOpt(container, '电商')          // 第三步：行业（电商出海）
+    await pickOpt(container, '暂不选择')      // 第四步：职业角色跳过
+    await waitFor(() => {
+      expect(container.querySelector('.ar-form'), '管理员分支应渲染账号表单').not.toBeNull()
+    }, { timeout: 3000 })
+  }
+
+  /** 按标签文本找表单字段输入框（label 与 input 同在一个 .ar-fgroup 内） */
+  function fieldByLabel(container: HTMLElement, label: string) {
+    const groups = [...container.querySelectorAll('.ar-fgroup')]
+    const g = groups.find((x) => (x.textContent || '').includes(label))
+    return g ? g.querySelector('input') as HTMLInputElement : null
+  }
+
+  /** 填齐非组织编码的必填项（用户名/密码/邮箱/6 位邮箱验证码） */
+  function fillBasics(container: HTMLElement) {
+    const inputs = container.querySelectorAll<HTMLInputElement>('.ar-form input.lc-input')
+    fireEvent.change(inputs[0], { target: { value: 'uat_admin' } }) // 用户名
+    const pwd = container.querySelector<HTMLInputElement>('.ar-form input[type=password]')!
+    fireEvent.change(pwd, { target: { value: 'Uat2026Pass!' } })
+    fireEvent.change(inputs[2], { target: { value: 'uat_admin@example.com' } }) // 邮箱
+    const cells = container.querySelectorAll<HTMLInputElement>('.ar-otp')
+    expect(cells.length).toBe(6)
+    '123456'.split('').forEach((d, i) => fireEvent.change(cells[i], { target: { value: d } }))
+  }
+
+  it('管理员分支表单渲染「组织编码」必填输入（F-06 死洞的直接复现点）', async () => {
+    const { container } = mount('')
+    await reachAdminForm(container)
+    const code = fieldByLabel(container, '组织编码')
+    expect(code, 'admin 分支必须给出组织编码输入框').not.toBeNull()
+    expect(code!.required ?? false, '输入框常驻可编辑（* 号做必填语义）').toBe(false) // 不做原生 required，校验走提交守卫
+  })
+
+  it('缺组织编码点提交：前端拦截、authRegister 不出网；补填后提交体携带 code', async () => {
+    vi.mocked(authRegister).mockClear()
+    const { container } = mount('')
+    await reachAdminForm(container)
+    fillBasics(container)
+    const submit = Array.from(container.querySelectorAll<HTMLButtonElement>('.ar-form button'))
+      .find((b) => (b.textContent || '').includes('注册并登录'))!
+    // 第一轮：组织编码留空 → 必被拦下（旧实现此时会把无 code 的报文发出去吃 400）
+    fireEvent.click(submit)
+    await new Promise((r) => setTimeout(r, 100))
+    expect(authRegister, '缺组织编码不得发出注册请求').not.toHaveBeenCalled()
+    // 第二轮：补填组织编码 → 放行且提交体带 code
+    const code = fieldByLabel(container, '组织编码')!
+    fireEvent.change(code, { target: { value: 'uatorg01' } })
+    fireEvent.click(submit)
+    await waitFor(() => {
+      expect(authRegister).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'enterprise', role_choice: 'admin', code: 'uatorg01',
+      }))
+    }, { timeout: 3000 })
   })
 })
