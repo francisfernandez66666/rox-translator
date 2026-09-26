@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 助手管理台 · 能言</title>
+<style>
+  /* ★ 2026-09-22 全站 UI 还原批：本页原先是「蓝靛主色 #2f47f5 + 浅底卡片」的独立配色，
+     与交付 UI（X/Grok 单色纯黑、全站无蓝无绿）完全脱节，且因为它是 assist-server 直出的
+     单文件 HTML、不在前端构建产物里，前端的令牌闸门扫不到，属还原盲区。
+     现按《UI-ANNOTATIONS》§1.1 令牌 + §1.3（圆角档；描边宽度交付档 1.2px，单边分隔线 1px）重画：
+     面 #000/#0A0B0D/#0E1014/#16181C 四级 · 文字 #E7E9EA/#9AA0AA/#71767B · 主按钮纯白底黑字。
+     ★ 2026-09-23 〇-P 用户后令「严格按 UI 交付稿来」：撤销 〇-O，描边族（line/card-line/pill/
+     input-line/done）回交付灰阶档，面色台阶回交付值（〇-O 的 +8 抬档作废）。 */
+  :root{
+    --bg:#000000;--panel:#0E1014;--surface:#16181C;--inset:#0A0B0D;
+    --txt:#E7E9EA;--sub:#9AA0AA;--weak:#71767B;
+    --line:#464C58;--card-line:#3A404C;--pill:#424956;--input-line:#5A6270;--done:#6E7683;
+    --white:#FFFFFF;--warn:#D29922;--danger:#E5484D;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font:16px/1.6 "Noto Sans SC",-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--txt)}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:16px}
+  header h1{font-size:17px;font-weight:700;color:var(--white)}
+  header .sp{flex:1}
+  header input{width:220px;padding:6px 10px;background:var(--inset);border:1.2px solid var(--input-line);border-radius:8px;color:var(--txt)}
+  nav{display:flex;gap:4px;padding:12px 24px 0;flex-wrap:wrap}
+  nav button{border:none;background:transparent;padding:8px 16px;cursor:pointer;border-radius:8px 8px 0 0;color:var(--sub);font-size:16px}
+  /* 活跃 Tab 走「次级卡面 + 主文字」，不再用品牌蓝填充（交付 .lc-tab--active 口径） */
+  nav button.on{background:var(--surface);color:var(--txt)}
+  main{padding:16px 24px 48px;max-width:1200px;margin:0 auto}
+  .card{background:var(--panel);border:1.2px solid var(--card-line);border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.055)}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  table{width:100%;border-collapse:collapse;font-size:15px}
+  th,td{border-bottom:1px solid var(--card-line);padding:8px 6px;text-align:left;vertical-align:top}
+  th{color:var(--sub);font-weight:600;background:var(--surface)}
+  td{color:var(--txt)}
+  td .mini{color:var(--sub);font-size:14px;display:block;max-width:420px;white-space:pre-wrap;max-height:88px;overflow:auto}
+  button.act{border:1.2px solid var(--pill);background:transparent;border-radius:8px;padding:3px 10px;cursor:pointer;font-size:14px;color:var(--sub)}
+  button.act:hover{border-color:var(--done);color:var(--txt)}
+  /* 主按钮 = 纯白底黑字（交付真值 .lc-btn--primary{background:#FFFFFF}）；#E7E9EA 只留给文字与活跃档 */
+  button.pri{background:var(--white);color:#000000;border:none;border-radius:8px;padding:7px 16px;cursor:pointer;font-weight:500}
+  input,textarea,select{background:var(--inset);border:1.2px solid var(--input-line);border-radius:8px;padding:6px 10px;font:inherit;width:100%;color:var(--txt)}
+  textarea{min-height:80px;resize:vertical}
+  .form{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .form .full{grid-column:1/-1}
+  .form label{font-size:14px;color:var(--sub);display:block;margin-bottom:4px}
+  .stat{display:flex;gap:24px}
+  .stat b{font-size:24px;color:var(--txt);font-family:"Inter",-apple-system,Arial,sans-serif}
+  .badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:14px;background:var(--surface);color:var(--txt);border:1.2px solid var(--pill)}
+  .badge.off{background:var(--inset);color:var(--weak);border-color:var(--card-line)}
+  .toast{position:fixed;top:16px;right:16px;background:var(--surface);color:var(--txt);border:1.2px solid var(--card-line);padding:8px 16px;border-radius:10px;opacity:0;transition:.3s;pointer-events:none}
+  .toast.show{opacity:.95}
+  dialog{background:var(--panel);border:1.2px solid var(--line);border-radius:14px;padding:20px;width:min(720px,92vw);color:var(--txt)}
+  dialog::backdrop{background:rgba(0,0,0,.72)}
+  .hint{color:var(--weak);font-size:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🤖 AI 助手管理台</h1>
+  <span id="tokstate" class="badge off">Token 未验证</span>
+  <span class="hint">知识库 · 话术 · 流程 · 功能入口 · 配置</span>
+  <div class="sp"></div>
+  <input id="tok" type="password" placeholder="管理 Token（ASSIST_ADMIN_TOKEN）" style="width:280px" onchange="saveTok()">
+  <button class="act" onclick="verifyTok(true)">验证</button>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<div class="toast" id="toast"></div>
+
+<script>
+const TABS = [
+  ['kb','📚 知识库'], ['scripts','💬 话术'], ['flows','🔀 流程'],
+  ['features','🚪 功能入口'], ['config','⚙️ 配置'], ['sessions','👥 会话记录'],
+]
+// 反代前缀：通过主站 /assist-api 代理访问时，API 请求需带同前缀
+const PRE = location.pathname.includes('/assist-api') ? '/assist-api' : ''
+let tab = 'kb'
+let cache = {}
+
+function saveTok(){ localStorage.setItem('assist_tok', document.getElementById('tok').value) }
+function tok(){ return document.getElementById('tok').value || localStorage.getItem('assist_tok') || '' }
+
+// Token 状态徽标：页面加载即静默校验一次；401 时给出可自助排障的明确文案
+function setTokState(ok, msg){
+  const el = document.getElementById('tokstate')
+  el.className = 'badge' + (ok ? '' : ' off')
+  // 单色口径下「已验证/未验证」不再靠绿红底区分：已验证走次级卡面 + 主文字，
+  // 未验证走危险红（#E5484D 是交付 §1.1 唯一允许的红，绿色已永久废止）。
+  el.style.background = ok ? '#16181C' : 'rgba(229,72,77,.12)'
+  el.style.color = ok ? '#E7E9EA' : '#E5484D'
+  el.textContent = ok ? '✅ Token 已验证' : '❌ ' + (msg || '未验证')
+}
+async function verifyTok(rerender){
+  try{
+    const res = await fetch(PRE + '/api/assist/admin/config', { headers: {'X-Assist-Admin': tok()} })
+    if (res.status === 401){
+      setTokState(false, 'Token 不匹配')
+      toast('Token 与服务端不一致。取值：ssh 服务器执行 grep ASSIST_ADMIN_TOKEN /etc/ai-assist/secrets.env，复制 = 后的完整值粘贴右上角（无引号无空格）')
+      return false
+    }
+    if (!res.ok){ setTokState(false, '服务异常 ' + res.status); return false }
+    setTokState(true)
+    if (rerender) render()
+    return true
+  }catch(e){ setTokState(false, '网络/服务不可达'); return false }
+}
+
+function toast(msg){
+  const t = document.getElementById('toast')
+  t.textContent = msg; t.classList.add('show')
+  setTimeout(()=>t.classList.remove('show'), 4200)
+}
+
+async function api(path, opt={}){
+  const res = await fetch(PRE + '/api/assist/admin/'+path, {
+    ...opt,
+    headers: {'Content-Type':'application/json','X-Assist-Admin': tok()},
+  })
+  if (res.status === 401){ setTokState(false, 'Token 不匹配'); toast('Token 无效：与服务器 /etc/ai-assist/secrets.env 的 ASSIST_ADMIN_TOKEN 不一致，改正后点「验证」'); throw new Error('unauthorized') }
+  return res.json()
+}
+
+function esc(s){ const d=document.createElement('div'); d.textContent=s??''; return d.innerHTML }
+
+// ---------- 渲染 ----------
+function renderNav(){
+  document.getElementById('nav').innerHTML = TABS.map(([k,l]) =>
+    `<button class="${k===tab?'on':''}" onclick="switchTab('${k}')">${l}</button>`).join('')
+}
+function switchTab(k){ tab=k; renderNav(); render() }
+
+async function render(){
+  const m = document.getElementById('main')
+  m.innerHTML = '<p class="hint">加载中…</p>'
+  try{
+    if (tab==='kb') await renderCRUD(m,'kb','知识库条目',['category|分类(sales/usage/billing/faq…)','title|标题','content|内容(用户视角)','keywords|触发词(逗号分隔)','link_keys|关联入口key(逗号分隔)','priority|优先级(1-10)'],['key'])
+    else if (tab==='scripts') await renderCRUD(m,'scripts','话术',['stype|类型(greeting/keyword/fallback)','title|名称','content|话术内容','keywords|触发词(keyword类用)','priority|优先级'],['key'])
+    else if (tab==='flows') await renderCRUD(m,'flows','流程',['name|名称','description|说明','trigger_keywords|触发词(逗号分隔)','steps_json|步骤JSON(steps数组: ask/wait/actions/keys)','priority|'],['key'])
+    else if (tab==='features') await renderCRUD(m,'features','功能入口',['name|名称','description|说明','url|跳转地址','ftype|类型(route=站内路由/link=外链)','icon|图标','sort|排序'],['key'])
+    else if (tab==='config') await renderConfig(m)
+    else if (tab==='sessions') await renderSessions(m)
+  }catch(e){ m.innerHTML = '<p class="hint">加载失败: '+esc(e.message)+'</p>' }
+}
+
+// ---------- 通用 CRUD ----------
+const FIELD_LABELS = {} // id->label 映射由调用方传入
+
+async function renderCRUD(m, table, title, fields, idFields){
+  const data = await api(table)
+  cache[table] = data.rows
+  const cols = fields.map(f=>f.split('|')[0])
+  const html = `
+  <div class="card">
+    <div class="row">
+      <b>${title}</b><span class="hint">共 ${data.rows.length} 条</span>
+      <div class="sp" style="flex:1"></div>
+      <button class="pri" onclick="openForm('${table}', null)">＋ 新增</button>
+    </div>
+    <table><thead><tr>
+      <th>#</th><th>key</th>${cols.map(c=>`<th>${esc(fields.find(f=>f.startsWith(c+'|')).split('|')[1]||c)}</th>`).join('')}<th>启用</th><th>操作</th>
+    </tr></thead><tbody>
+    ${data.rows.map(r=>`<tr>
+      <td>${r.id}</td>
+      <td><span class="badge">${esc(r.key)}</span></td>
+      ${cols.map(c=>{
+        let v = r[c]??''
+        if (c==='steps_json') return `<td><span class="mini">${esc(v)}</span></td>`
+        if (c==='content') return `<td><span class="mini">${esc(String(v).slice(0,160))}</span></td>`
+        return `<td>${esc(String(v).slice(0,60))}</td>`
+      }).join('')}
+      <td>${r.enabled?'<span class="badge">启用</span>':'<span class="badge off">停用</span>'}</td>
+      <td>
+        <button class="act" onclick="openForm('${table}', ${r.id})">编辑</button>
+        <button class="act" onclick="toggleRow('${table}', ${r.id}, ${r.enabled?0:1})">${r.enabled?'停用':'启用'}</button>
+        <button class="act" onclick="delRow('${table}', ${r.id})">删除</button>
+      </td>
+    </tr>`).join('')}
+    </tbody></table>
+  </div>
+  <dialog id="dlg">
+    <h3 id="dlg-title" style="margin-bottom:12px"></h3>
+    <div class="form" id="dlg-form"></div>
+    <div class="row" style="margin-top:16px;justify-content:flex-end">
+      <button class="act" onclick="document.getElementById('dlg').close()">取消</button>
+      <button class="pri" onclick="submitForm('${table}')">保存</button>
+    </div>
+  </dialog>`
+  m.innerHTML = html
+  m._fields = fields; m._idFields = idFields
+}
+
+function openForm(table, id){
+  const m = document.getElementById('main')
+  const fields = m._fields
+  const row = id ? cache[table].find(r=>r.id===id) : {}
+  document.getElementById('dlg-title').textContent = (id?'编辑':'新增')+'（'+table+'）'
+  document.getElementById('dlg-form').innerHTML = fields.map(f=>{
+    const [c,label] = f.split('|')
+    const v = row[c] ?? (c==='priority'||c==='sort' ? 5 : '')
+    if (c==='content' || c==='steps_json')
+      return `<div class="full"><label>${esc(label||c)}</label><textarea id="f-${c}" data-f="${c}">${esc(v)}</textarea></div>`
+    return `<div><label>${esc(label||c)}</label><input id="f-${c}" data-f="${c}" value="${esc(v)}"></div>`
+  }).join('') + `<div class="full"><label>key（唯一标识）</label><input id="f-key" value="${esc(row.key??'')}"></div>
+  <div class="full"><label><input type="checkbox" id="f-enabled" style="width:auto" ${(!id||row.enabled)?'checked':''}> 启用</label></div>`
+  document.getElementById('dlg').showModal()
+}
+
+async function submitForm(table){
+  const m = document.getElementById('main')
+  const body = { key: document.getElementById('f-key').value.trim(), enabled: document.getElementById('f-enabled').checked?1:0 }
+  m._fields.forEach(f=>{
+    const c = f.split('|')[0]
+    const el = document.getElementById('f-'+c)
+    if (!el) return
+    if (c==='priority'||c==='sort') body[c] = parseInt(el.value)||0
+    else body[c] = el.value
+  })
+  const dlg = document.getElementById('dlg')
+  try{
+    await api(table, {method:'POST', body: JSON.stringify(body)})
+    toast('已保存'); dlg.close(); render()
+  }catch(e){ toast('保存失败: '+e.message) }
+}
+
+async function toggleRow(table, id, enabled){
+  await api(table+'?id='+id, {method:'PUT', body: JSON.stringify({enabled})})
+  toast('已更新'); render()
+}
+async function delRow(table, id){
+  if (!confirm('确认删除 #'+id+'？')) return
+  await api(table+'?id='+id, {method:'DELETE'})
+  toast('已删除'); render()
+}
+
+// ---------- 配置 ----------
+const CFG_DEFS = {
+  welcome:'欢迎词（会话首次打开时下发）',
+  persona:'人设（系统提示词第一段）',
+  temperature:'温度（0-1）',
+  max_tokens:'回复最大 token',
+  quick_chips:'快捷提问 chips（逗号分隔，前端展示）',
+}
+async function renderConfig(m){
+  const data = await api('config')
+  const st = await api('sessions')
+  const cur = {}
+  for (const c of (data.configs||[])) cur[c.key] = c.value
+  const mode = st.llm_mode || 'rule'
+  // LLM 接入态徽标：单色口径下三种状态只靠「主文字 / 弱文字 / 警示琥珀」分档，
+  // 不再引入绿蓝底（交付 §1.1 全站无蓝无绿，警示唯一档 = #D29922）。
+  const modeTag = mode==='env' ? '<span class="badge" style="background:#16181C;color:#E7E9EA;border-color:#424956">✅ 已接入（环境变量）</span>'
+    : mode==='db' ? '<span class="badge" style="background:#0A0B0D;color:#9AA0AA;border-color:#424956">✅ 已接入（后台配置）</span>'
+    : '<span class="badge" style="background:rgba(210,153,34,0.10);color:#D29922;border-color:rgba(210,153,34,0.32)">⚠️ 规则模式（未接 LLM，仅话术/知识库直出）</span>'
+  const llmVal = (k)=>esc(cur[k]||'')
+  m.innerHTML = `
+  <div class="card"><b>🤖 LLM 接入</b> ${modeTag}
+    <p class="hint">OpenAI 兼容接口（硅基流动/智谱/OpenAI 均可）。保存后下一条对话即生效，无需重启。环境变量（ASSIST_LLM_*）显式接入时优先生效。</p>
+    <table><tbody>
+      <tr><td style="width:220px"><b>llm_base_url</b><br><span class="hint">如 https://api.siliconflow.cn/v1</span></td>
+          <td><input id="cfg-llm_base_url" style="width:100%" value="${llmVal('llm_base_url')}" placeholder="https://api.siliconflow.cn/v1"></td></tr>
+      <tr><td><b>llm_api_key</b><br><span class="hint">保存后仅显示掩码；留空=清除</span></td>
+          <td><input id="cfg-llm_api_key" type="password" style="width:100%" value="${llmVal('llm_api_key')}" placeholder="sk-..."></td></tr>
+      <tr><td><b>llm_model</b></td>
+          <td><input id="cfg-llm_model" style="width:100%" value="${llmVal('llm_model')}" placeholder="deepseek-ai/DeepSeek-V4-Flash"></td></tr>
+      <tr><td><b>llm_model_backup</b><br><span class="hint">备用模型，主模型失败自动降级</span></td>
+          <td><input id="cfg-llm_model_backup" style="width:100%" value="${llmVal('llm_model_backup')}" placeholder="THUDM/glm-4-9b-chat"></td></tr>
+    </tbody></table>
+    <div class="row" style="margin-top:10px">
+      <button class="pri" onclick="saveLLM()">保存 LLM 配置</button>
+      <button onclick="testLLM()">🔌 测试连通</button>
+      <span id="llm-test-out" class="hint"></span>
+    </div>
+  </div>
+  <div class="card"><b>⚙️ 对话配置</b>
+    <table><tbody>
+    ${Object.keys(CFG_DEFS).map(k=>`<tr><td style="width:220px"><b>${esc(k)}</b><br><span class="hint">${esc(CFG_DEFS[k])}</span></td>
+      <td><textarea data-k="${esc(k)}" style="min-height:52px">${esc(cur[k]||'')}</textarea></td></tr>`).join('')}
+    </tbody></table>
+    <div class="row" style="margin-top:12px"><button class="pri" onclick="saveConfigs()">保存全部</button></div>
+  </div>
+  <div class="card"><b>📚 同义词归一（R0.1：口语问法对齐知识库关键词）</b>
+    <p class="hint">每行一组：「标准词=同义词1|同义词2」。用户输入命中同义词时按标准词计分（如「充钱」命中「充值」类知识）。</p>
+    <textarea data-k="synonyms" style="min-height:90px" placeholder="充值=充钱|交钱|付钱&#10;翻译=翻|转换">${esc(cur.synonyms||'')}</textarea>
+    <div class="row" style="margin-top:10px"><button class="pri" onclick="saveConfigs()">保存全部</button></div>
+  </div>`
+}
+async function saveLLM(){
+  try{
+    for (const k of ['llm_base_url','llm_api_key','llm_model','llm_model_backup']){
+      const el = document.getElementById('cfg-'+k)
+      if (!el) continue
+      await api('config', {method:'PUT', body: JSON.stringify({key:k, value: el.value.trim()})})
+    }
+    toast('LLM 配置已保存，下一条对话生效'); render()
+  }catch(e){ toast('保存失败: '+e.message) }
+}
+async function testLLM(){
+  const out = document.getElementById('llm-test-out')
+  out.textContent = '测试中…'
+  try{
+    const r = await api('llm/test', {method:'POST'})
+    out.textContent = r.ok ? `✅ 连通：${r.model}（${r.ms}ms）` : `❌ ${r.error}`
+  }catch(e){ out.textContent = '❌ '+e.message }
+}
+async function saveConfigs(){
+  for (const ta of document.querySelectorAll('textarea[data-k]')){
+    await api('config', {method:'PUT', body: JSON.stringify({key: ta.dataset.k, value: ta.value})})
+  }
+  toast('配置已保存')
+}
+
+// ---------- 会话 ----------
+async function renderSessions(m){
+  const data = await api('sessions')
+  const un = data.unanswered||[]
+  m.innerHTML = `
+  <div class="card"><div class="stat">
+    <div><b>${data.total}</b><br><span class="hint">总会话</span></div>
+    <div><b>${data.messages}</b><br><span class="hint">总消息</span></div>
+    <div><b>${un.length}</b><br><span class="hint">待补料问题</span></div>
+  </div></div>
+  ${un.length? `<div class="card"><b>❓ 客人问了但我答不上（去知识库补条目，下次就能答了）</b>
+    <table><tbody>${un.map(q=>`<tr><td>${esc(q)}</td></tr>`).join('')}</tbody></table></div>`:''}
+  <div class="card"><b>👥 最近会话（最新 100）</b>
+  <table><thead><tr><th>会话</th><th>来源页</th><th>消息数</th><th>流程中</th><th>最后活跃</th></tr></thead><tbody>
+  ${data.sessions.map(s=>`<tr>
+    <td><span class="badge">${esc(s.id)}</span></td>
+    <td>${esc(s.page_url||'-')}</td><td>${s.msg_count}</td>
+    <td>${s.in_flow?esc(s.in_flow):'-'}</td>
+    <td>${esc(String(s.last_at||'').slice(0,19))}</td>
+  </tr>`).join('')}
+  </tbody></table></div>`
+}
+
+// ---------- 启动 ----------
+document.getElementById('tok').value = localStorage.getItem('assist_tok')||''
+renderNav(); render()
+// 启动即校验 token：绿=可用，红=给出取值指引（避免逐 tab 报「加载失败」的排障体验）
+verifyTok(false)
+</script>
+</body>
+</html>

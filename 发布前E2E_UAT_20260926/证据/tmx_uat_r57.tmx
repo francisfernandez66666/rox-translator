@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tmx version="1.4">
+<header creationtool="UAT" creationtoolversion="1.0" segtype="sentence" srclang="zh"/>
+<body>
+<tu><tuv lang="zh"><seg>待审池文案验证</seg></tuv><tuv lang="en"><seg>Pending pool wording check</seg></tuv></tu>
+<tu><tuv lang="zh"><seg>语料导入不直写</seg></tuv><tuv lang="en"><seg>Corpus import does not write directly</seg></tuv></tu>
+</body>
+</tmx>
