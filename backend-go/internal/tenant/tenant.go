@@ -31,8 +31,8 @@ type Tenant struct {
 	BrandNameEn       string `json:"brand_name_en"`        // 品牌英文名（覆盖所有非 zh/zh_hant 目标语的固定用法，兼容旧存量）
 	BrandLogo         string `json:"brand_logo"`           // 自定义品牌 Logo URL（空=用默认）
 	Domain            string `json:"domain"`               // 自定义访问域名（用于按域名解析租户品牌）
-	BrandHomeBg       string `json:"brand_home_bg"`        // 未登录首页背景图（base64 dataURL 或外链 URL，空=用默认）
-	BrandHomeBgStyle  string `json:"brand_home_bg_style"`  // 首页背景图样式 JSON：{scale,x,y,mode}（mode: tile/cover/contain）
+	BrandHomeBg       string `json:"brand_home_bg"`        // 登录/注册页背景图（★ 字段名沿用历史 home_bg；F-46 起出栈只会是外链 URL 或 /brand/<名>，dataURI 读侧收敛；空=不渲染背景，见前端 BrandLoginShell／F-71）
+	BrandHomeBgStyle  string `json:"brand_home_bg_style"`  // 背景图样式 JSON：{scale,x,y,mode}（mode: tile/cover/contain）
 	BrandLoginCardPos string `json:"brand_login_card_pos"` // 登录/注册卡片位置 JSON：{x,y} 百分比（卡片中心相对于视口）
 	BrandLoginLayout  string `json:"brand_login_layout"`   // 登录页布局 JSON：{mode:'full'|'split', side:'left'|'right'}
 	BrandLinks        string `json:"brand_links"`          // 自定义页脚链接 JSON 数组（[{label,label_en,url}]）

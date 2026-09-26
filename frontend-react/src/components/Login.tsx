@@ -5,6 +5,10 @@
 // 注册交互：点「免费注册」→ 传统表单卡闪烁三次 → 整页 120ms 退出 → AI 助理面板接管
 //          （AiRegisterFlow.tsx，交付包 §5 / demo-register-ai-motion.html）。
 // 业务逻辑与 API 调用（登录/注册/验证码/找回密码/首登改密/Turnstile/UTM）原样保留。
+// ★ 2026-09-27 F-71 实装：四屏的外层壳由裸 `<div className="lc-auth-bg">` 换成 `BrandLoginShell`
+//   （见 branding.tsx），租户配了背景图/布局时按「全屏＝背景+遮罩+卡片定位」「分栏＝一侧图一侧容器」
+//   实际渲染；没配（平台根域名恒为此态）时壳只输出原来那个 div，公开页与交付稿零变化。
+//   锁：src/components/Login.brand_login.dom.test.tsx（默认形态零变化 + 两形态等值断言）。
 // ============================================================================
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -19,7 +23,7 @@ import {
 } from '@/api'
 import { t, useT } from '@/i18n'
 import { LangSelect } from '@/components/LangSelect' // ★ #23：12 语种语言下拉
-import { useBranding, DEFAULT_BRAND_NAME } from '@/branding'
+import { useBranding, BrandLoginShell, DEFAULT_BRAND_NAME } from '@/branding'
 import { roleLevel } from '@/stores/auth'
 import { industryCodeOf, industryOptions } from '@/lib/industries'
 import { PERSONA_FALLBACK, personaName } from '@/lib/personas'
@@ -350,7 +354,7 @@ export default function Login({ mode, onLogin }: Props) {
   // 登录屏（卡宽 380、标题=品牌名、底部两行居中链接、密码框右端眼睛、卡右上角 EN 胶囊）
   if (view === 'signin') {
     return (
-      <div className="lc-auth-bg">
+      <BrandLoginShell>
         <AuthCard
           title={brandName}
           desc={t('auth.loginDesc')}
@@ -408,14 +412,14 @@ export default function Login({ mode, onLogin }: Props) {
           onOld={setForceOld} onNew={setForceNew} onConfirmPwd={setForceConfirm} onSubmit={submitForcePwd}
           onCancel={() => { if (!forceBusy) setForceOpen(false) }} />
         <style>{CSS_AUTH}</style>
-      </div>
+      </BrandLoginShell>
     )
   }
 
   // 忘记密码屏（标题 20/Bold、两个输入框只带 placeholder、底部仅一行居中链接）
   if (view === 'forgot') {
     return (
-      <div className="lc-auth-bg">
+      <BrandLoginShell>
         {/* 同一张卡承载两步：未发码=提交找回申请，已发码=提交重置（submitText 与 onSubmit 一起切），
             不做两个页面是为了让用户停在同一个视觉位置上读验证码邮件 */}
         <AuthCard
@@ -448,14 +452,14 @@ export default function Login({ mode, onLogin }: Props) {
           onOld={setForceOld} onNew={setForceNew} onConfirmPwd={setForceConfirm} onSubmit={submitForcePwd}
           onCancel={() => { if (!forceBusy) setForceOpen(false) }} />
         <style>{CSS_AUTH}</style>
-      </div>
+      </BrandLoginShell>
     )
   }
 
   // 注册屏：regPhase==='ai' 由 AI 助理面板接管；否则显示传统表单卡（可手动提交）
   if (regPhase === 'ai') {
     return (
-      <div className="lc-auth-bg">
+      <BrandLoginShell>
         {/* prefillUsername：已输入的用户名带进 AI 流程（对应话术「用户名我帮你带过来了」），
             是否可编辑由面板自己决定。onClose 一律退回传统表单 —— AI 接管不是单行道，
             用户随时有权自己把 9 项填完 */}
@@ -467,14 +471,14 @@ export default function Login({ mode, onLogin }: Props) {
           onClose={() => setRegPhase('form')}
         />
         <style>{CSS_AUTH}</style>
-      </div>
+      </BrandLoginShell>
     )
   }
 
   // 说明行随「个人 / 企业」切换整句文案（两张卡的必填项不同，不拼句只做二选一）
   const desc = typeChoice === 'personal' ? t('auth.personalDesc') : t('auth.enterpriseDesc')
   return (
-    <div className="lc-auth-bg">
+    <BrandLoginShell>
       <AuthCard
         className={regPhase === 'flashing' ? 'auth-flash' : regPhase === 'exiting' ? 'auth-pg-out' : ''}
         title={t('auth.registerTitle')}
@@ -597,7 +601,7 @@ export default function Login({ mode, onLogin }: Props) {
         onOld={setForceOld} onNew={setForceNew} onConfirmPwd={setForceConfirm} onSubmit={submitForcePwd}
         onCancel={() => { if (!forceBusy) setForceOpen(false) }} />
       <style>{CSS_AUTH}</style>
-    </div>
+    </BrandLoginShell>
   )
 }
 

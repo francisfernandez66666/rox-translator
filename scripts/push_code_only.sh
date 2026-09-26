@@ -24,6 +24,12 @@
 #   - `前端及UI相关/`（UI 交付包与流程图目录，含 svg/png 之类大文件）
 #   - `产品手册/`（多语种用户指南 PDF，属文档，不推送）
 #   - `*.pdf`（PDF 一律当文档，不推送）
+#   - `发布前E2E_UAT_*` / 任意层级的 `*/证据/*`（★ 2026-09-27 〇-V 新增：发版前 E2E/UAT 归档目录。
+#     里面除 .md 报告外还有**截图、账号登录后的工作台画面、上传夹具、导出的 zip/tmx**——
+#     这些是「取证材料」不是代码，推上公开远端等于把内部界面与测试数据送出去。
+#     〇-U 收口时把 `发布前E2E_UAT_20260926/` 整目录（含 证据/）提交到了本地 autosales，
+#     本批干跑实测：旧口径只排 .md/.pdf，17 个证据二进制被当成「代码文件」列进待推清单，
+#     故把它们并入排除口径。口令留档 .txt 本就靠「未跟踪」留在本地，不依赖这条。）
 #   - 根目录 `*.png` / `*.svg` / `*.drawio` / `*.zip` 之外的流程图产物一律按目录排；
 #     注：`frontend-react/public/extensions/*.zip` 是**代码交付物**（插件安装包），不排除。
 #
@@ -47,11 +53,16 @@ APPLY=0
 
 # 文档/流程图的排除 pathspec。git 的 `*.md` 通配默认可跨 `/`（fnmatch 未开 PATHNAME），
 # 所以一条 ':(exclude)*.md' 就能把嵌套目录里的 .md 一并排掉——不写错就是省事，写错会漏推。
+# ★ 数组里只放 pathspec，**不要**把分隔符 `--` 塞进来：`--` 一旦出现在 `--` 之后的参数区，
+#   git 会把它当成一个名叫 `--` 的路径匹配任何东西都匹配不到，整条 diff 直接变空，
+#   于是「✅ 没有代码改动需要推送」假绿（2026-09-27 〇-V 首次接线 EXCL 时真踩，清单被清空）。
 EXCL=(
-  -- ':(exclude)*.md'
-  -- ':(exclude)前端及UI相关/'
-  -- ':(exclude)产品手册/'
-  -- ':(exclude)*.pdf'
+  ':(exclude)*.md'
+  ':(exclude)前端及UI相关/'
+  ':(exclude)产品手册/'
+  ':(exclude)*.pdf'
+  ':(exclude)发布前E2E_UAT_*'
+  ':(exclude)*/证据/*'
 )
 
 git fetch --quiet "$REMOTE" "$TARGET" 2>/dev/null || printf '⚠️ fetch 失败，用本地已有的 %s 继续（请自查网络）\n' "$BASE_REF"
@@ -59,18 +70,28 @@ git rev-parse --verify -q "$BASE_REF" >/dev/null || { printf '❌ 找不到 %s�
 BASE=$(git rev-parse "$BASE_REF")
 
 # 本地待推的代码文件改动清单（BASE..HEAD 的差异，剔除文档）
-CHANGED=$(git diff --name-only "$BASE" HEAD -- ':(exclude)*.md' ':(exclude)前端及UI相关/' ':(exclude)产品手册/' ':(exclude)*.pdf')
+# ★ 口径单一来源：清单与三次校验必须用同一个 EXCL 数组。历史上两处各写一遍字面 pathspec，
+#   改一处漏一处就会出现「清单排掉了、三次校验又把它算成差异」的恒红（或反向的漏推）。
+CHANGED=$(git diff --name-only "$BASE" HEAD -- "${EXCL[@]}")
 DOC_IN_HISTORY=$(git diff --name-only "$BASE" HEAD -- '*.md' '产品手册/' '*.pdf' ':(exclude)前端及UI相关/*' | wc -l | tr -d ' ')
+# ★ 自证读数：把「未剔除文档的全量差异数」也打出来。排除口径一旦被写坏（如把 `--` 混进 pathspec 数组、
+#   或通配符吞掉整个仓库），CHANGED 会静默变空并回一句「没有代码改动需要推送」——那是假绿。
+#   全量数与代码数并排打印，空清单是否合理一眼可判。
+TOTAL_DIFF=$(git diff --name-only "$BASE" HEAD | wc -l | tr -d ' ')
 
 printf '==> 当前分支 %s；基点 %s=%s\n' "$BR" "$BASE_REF" "${BASE:0:9}"
 printf '==> 本地领先提交里含文档文件 %s 个（这些**不会**被推出去）\n' "$DOC_IN_HISTORY"
+printf '==> 自证读数：BASE..HEAD 全量差异 %s 个文件，其中按代码口径应推 %s 个\n' "$TOTAL_DIFF" "$(printf '%s\n' "$CHANGED" | grep -c . || true)"
 if [ -z "$CHANGED" ]; then
   printf '✅ 没有代码改动需要推送（%s 已包含全部代码）。\n' "$BASE_REF"
+  # 但「全量差异非空、剔文档后为空」只有一种合法解释：本批全是文档/取证。
+  # 打印一行判据，防止排除口径写坏时把「代码被误排干净」念成「没代码可推」。
+  [ "$TOTAL_DIFF" != "0" ] && printf '   （全量差异 %s 个文件，全部落在文档/取证口径内）\n' "$TOTAL_DIFF"
   exit 0
 fi
 echo "==> 将推送的代码文件（$(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') 个）："
 printf '%s\n' "$CHANGED" | sed 's/^/   /' | head -60
-if printf '%s\n' "$CHANGED" | grep -qE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$'; then
+if printf '%s\n' "$CHANGED" | grep -qE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$|^发布前E2E_UAT_|/证据/'; then
   echo "❌ 清单里混进了文档路径，排除口径失效，停手。" >&2; exit 1
 fi
 if [ "$APPLY" = "0" ]; then
@@ -104,7 +125,7 @@ git commit -q -m "$(printf 'chore: 纯代码推送 %s（由 scripts/push_code_on
 
 # ★ 三次校验（比「零 .md」更硬）：推出去的树必须与本地代码状态逐文件相等。
 #   只查 .md 会漏掉「新文件被静默丢弃」，只查文件名会漏掉「内容没取全」——两类都要堵。
-MISSING=$(git diff --name-only "$BR" HEAD -- ':(exclude)*.md' ':(exclude)前端及UI相关/' ':(exclude)产品手册/' ':(exclude)*.pdf')
+MISSING=$(git diff --name-only "$BR" HEAD -- "${EXCL[@]}")
 if [ -n "$MISSING" ]; then
   echo "❌ 三次校验：纯代码提交与本地代码状态仍有差异，已停在本地未推：" >&2
   printf '%s\n' "$MISSING" | sed 's/^/   /' | head -20 >&2
@@ -112,7 +133,7 @@ if [ -n "$MISSING" ]; then
 fi
 
 PUSHED_FILES=$(git show --name-only --pretty=format: HEAD | sed '/^$/d')
-if printf '%s\n' "$PUSHED_FILES" | grep -qiE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$'; then
+if printf '%s\n' "$PUSHED_FILES" | grep -qiE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$|^发布前E2E_UAT_|/证据/'; then
   echo "❌ 二次校验：纯代码提交里仍有文档路径，已停在本地未推。" >&2
   printf '%s\n' "$PUSHED_FILES" | grep -iE '\.md$|^前端及UI相关/' | head
   git checkout -q "$BR"; exit 1
