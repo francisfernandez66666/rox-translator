@@ -65,6 +65,20 @@ EXCL=(
   ':(exclude)*/证据/*'
 )
 
+# ★ 负向自锁（把上面那次事故钉进代码，任何 git 调用之前先过这道闸）：
+#   EXCL 里混进 `--`、空串或带空格的复合项，都会让后面的 `git diff -- "${EXCL[@]}"` 静默返回空清单，
+#   脚本于是念「✅ 没有代码改动需要推送」——本地领先再多也安静地不推，这是最坏的一种绿。
+#   这里直接停手报错，宁可整批推不出去，也不能假绿。
+for _excl_item in "${EXCL[@]}"; do
+  case "$_excl_item" in
+    ''|--|*' '*)
+      printf '❌ EXCL 含非法 pathspec（%s）：`--`/空串/带空格项会让差异查询静默清空 ⇒ 假绿，已停手\n' "$_excl_item" >&2
+      exit 1 ;;
+  esac
+  case "$_excl_item" in ':(exclude)'*) ;; *) printf '❌ EXCL 项必须以 :(exclude) 开头（实得 %s）\n' "$_excl_item" >&2; exit 1 ;; esac
+done
+[ "${#EXCL[@]}" -ge 1 ] || { printf '❌ EXCL 数组为空，排除口径丢了\n' >&2; exit 1; }
+
 git fetch --quiet "$REMOTE" "$TARGET" 2>/dev/null || printf '⚠️ fetch 失败，用本地已有的 %s 继续（请自查网络）\n' "$BASE_REF"
 git rev-parse --verify -q "$BASE_REF" >/dev/null || { printf '❌ 找不到 %s（首次推送请人工确认目标分支）\n' "$BASE_REF" >&2; exit 1; }
 BASE=$(git rev-parse "$BASE_REF")
