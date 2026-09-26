@@ -11,8 +11,9 @@ import { test, expect } from '@playwright/test';
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:8899';
 test.use({ viewport: { width: 390, height: 844 } });
 
-// 登录小件：admin 模式进后台（/admin），home 模式进前台（/）——沿用固定超管账号
-async function login(page: import('@playwright/test').Page, mode: 'admin' | 'home') {
+// 登录小件：admin 模式进后台（/admin），home 模式进前台（/）——默认沿用固定超管账号，
+// 可显式传租户口径账号（见下方工作台用例的 O-9 说明）。
+async function login(page: import('@playwright/test').Page, mode: 'admin' | 'home', user = 'admin', pass = 'Admin@1234') {
   // ★ 修复（2026-09-14）：home 模式改走 /login——`/` 已是营销 Landing 页（无登录卡），
   //   旧路径等待登录卡必超时（UAT 实测 mobile_uat 两条确定性失败即源于此）
   // ★ 修复（2026-09-18 UI 迁移）：登录卡皮肤 TDesign → LangCross，锚点 `.login-card` →
@@ -22,8 +23,8 @@ async function login(page: import('@playwright/test').Page, mode: 'admin' | 'hom
   await page.waitForSelector('.lc-auth-card', { timeout: 30000 });
   // 账号 + 密码输入框（注册表单亦有同类输入框，登录卡先渲染）
   const inputs = page.locator('.lc-auth-card input').first();
-  await inputs.fill('admin');
-  await page.locator('.lc-auth-card input[type="password"]').first().fill('Admin@1234');
+  await inputs.fill(user);
+  await page.locator('.lc-auth-card input[type="password"]').first().fill(pass);
   await page.locator('.lc-auth-card__submit').click();
   await page.waitForLoadState('networkidle');
 }
@@ -85,7 +86,11 @@ test('移动端后台：侧边栏转抽屉（汉堡唤起/遮罩关闭/无溢出
 //   在手机上整块抹掉（用户得翻进「套餐/账单」二级页），与「余额条不刷新」叠成同一件事。
 //   现行口径：显示 + 单行省略号，且长文案不得撑破 390px 视口。
 test('移动端工作台：输入栏可换行、无横向溢出、余额徽标窄屏仍可见', async ({ page }) => {
-  await login(page, 'home');
+  // ★ 09-27 复跑红账（O-9 × F-48 交界）：本用例原以超管 admin 登录测余额徽标，但 O-9（批 I-10）
+  //   已把「平台计费上下文」（超管未切入任何租户，isPlatformBillingContext）的余额胶囊置空——
+  //   后端该上下文固定回 0，照渲染就是假「余额 0 积分」+ 误亮「余额不足」横幅。
+  //   徽标可见性的真载体是**租户计费用户**，故本用例登录 uatuser_a（与 pixel/translate_flow 同口径）。
+  await login(page, 'home', process.env.UAT_USER || 'uatuser_a', process.env.UAT_PASS || 'uatpass123');
   await page.waitForSelector('.cw-dialog, .app-header', { timeout: 30000 });
   await page.waitForTimeout(1500);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
@@ -97,7 +102,10 @@ test('移动端工作台：输入栏可换行、无横向溢出、余额徽标�
   // ---- F-48② 余额徽标可见性锁（真机视口，非源码 grep）----
   const pkgTag = page.locator('.app-header .pkg-line-tag');
   // 徽标只在 myPackage 拉到数值后才渲染，故用 poll 等它出现（不盲等固定毫秒）
-  await expect.poll(() => pkgTag.count(), { message: '顶栏余额徽标未渲染：余额接口没回数值？', timeout: 15000 }).toBe(1);
+  // ★ 09-27 复跑红账：首轮冷实例要叠「冷启动载入闸门 ≈9s + 首次资源全冷读」的税，15s 窗会被
+  //   吃掉（本轮首跑红、retry 秒过＝同一形态）；窗口与上方页面等待同尺取 30s。
+  //   锁语义不变：仍然必须真渲染、真可见，只是把「载入完毕」的判定推迟到闸门预算之外。
+  await expect.poll(() => pkgTag.count(), { message: '顶栏余额徽标未渲染：余额接口没回数值？', timeout: 30000 }).toBe(1);
   await expect(pkgTag, '★ F-48：窄屏不得再 display:none 掉余额徽标').toBeVisible();
   const tagStyle = await pkgTag.evaluate((el) => {
     const cs = getComputedStyle(el);

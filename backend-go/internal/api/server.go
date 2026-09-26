@@ -908,14 +908,19 @@ func (s *Server) handleKBStats(w http.ResponseWriter, r *http.Request) {
 	}
 	// 知识库未加载时返回提示
 	if s.DB == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "翻译技能未加载"})
+		// F-64②：KB 库没加载 = 依赖未就绪（503），既不是本进程出错（500）也不是用户请求写错了（400）；
+		//   旧写法回 200 + success:false，管理台会把它当「成功但没数据」渲染成空白统计。
+		//   不用 401：登录态已在上面把过关，这里失败的是服务自身的依赖装配。
+		s.writeError(w, r, apierrors.New(apierrors.ErrServiceUnavailable, "翻译技能未加载"))
 		return
 	}
 	// 按当前租户维度统计（租户隔离：只统计本租户 KB 数据）
 	tid := s.currentTenant(r)
 	total, perLang, seg, err := s.DB.Stats(tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：Stats 是真实的 KB 库查询，失败即服务端故障 → 500；
+		//   旧写法回 200 会让后台把「查询挂了」显示成「本租户 0 条」，运维据此误判数据丢失。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{

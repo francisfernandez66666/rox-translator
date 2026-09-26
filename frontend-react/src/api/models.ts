@@ -13,7 +13,7 @@
  * - 匹配策略参数：知识库检索策略、跨部门降级、数据回流等配置
  */
 
-import { request, authHeaders, type AdminResp } from './core'
+import { bizResp, request, authHeaders, type AdminResp } from './core'
 
 /** 读取平台网关模型配置（全局单模型 + 多供应商路由，密钥掩码回显） */
 export async function adminModels(): Promise<AdminResp> {
@@ -60,5 +60,6 @@ export async function adminPolicy(): Promise<AdminResp> {
 
 /** 保存匹配策略参数（crossDeptFallback=跨部门降级检索；dataFeedbackOptOut=数据回流关闭） */
 export async function adminPolicySave(policy: Record<string, number>, crossDeptFallback?: boolean, dataFeedbackOptOut?: boolean): Promise<AdminResp> {
-  return request('/api/admin/policy/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ policy, cross_dept_fallback: crossDeptFallback, data_feedback_opt_out: dataFeedbackOptOut }) })
+  // ★ F-64②（批 I-10）：走 bizResp——策略保存失败（如参数被拒）如实抛错，不再静默显示成功
+  return bizResp(() => request('/api/admin/policy/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ policy, cross_dept_fallback: crossDeptFallback, data_feedback_opt_out: dataFeedbackOptOut }) }))
 }

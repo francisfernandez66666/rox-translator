@@ -13,31 +13,48 @@
  * - 安全句管理：语言文化规范的增删改查与审核
  */
 
-import { request, authHeaders, API_BASE, handleUnauthorized, apiMsg, type AdminResp } from './core'
+import { ApiError, bizResp, request, authHeaders, API_BASE, handleUnauthorized, apiMsg, type AdminResp } from './core'
 
 // ★ P1-16 修复（2026-09-14）：raw fetch 统一守卫——旧实现 `.json()` 裸调用不判 resp.ok、
 // 不触发 401 拦截，登录过期表现为 JSON 解析异常或静默失败而非跳登录。
+// ★ F-64②（批 I-10）：非 2xx 时改抛带**结构化错误体**的 ApiError，与 core.request() 同形。
+//   后端这些端点已从「HTTP 200 承载失败」迁成诚实状态码（400/404/409…），旧写法只抛一句
+//   「请求失败 (400)」——调用点拿不到后端原文（如「文件无有效数据」），界面从精确报错退化成
+//   通用兜底。这里把响应体原样挂到 error.body，外层 bizResp() 即可还原 {success:false,message}。
 async function fetchJSON(url: string, init?: RequestInit): Promise<any> {
   const resp = await fetch(url, init)
   if (resp.status === 401) handleUnauthorized(url)
-  if (!resp.ok) throw new Error(apiMsg('common.reqFail', `请求失败 (${resp.status})`, { status: resp.status }))
+  if (!resp.ok) {
+    // 尝试解析后端错误信封；解析不出来（HTML 错误页 / 空体）时 body 留空，bizResp 会原样上抛
+    let body: Record<string, unknown> | undefined
+    try {
+      const raw = await resp.clone().text()
+      const parsed = raw ? JSON.parse(raw) : null
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) body = parsed as Record<string, unknown>
+    } catch { /* 非 JSON 错误体：保持原通用文案上抛 */ }
+    const msgField = body?.message
+    const codeField = body?.code
+    const fromBody: string = typeof msgField === 'string' ? msgField : ''
+    const code: string | undefined = typeof codeField === 'string' ? codeField : undefined
+    throw new ApiError(fromBody || apiMsg('common.reqFail', `请求失败 (${resp.status})`, { status: resp.status }), resp.status, code, body)
+  }
   return resp.json()
 }
 
 /** 获取行业知识库包列表（不带头条目数 entry_count，后端一次 GROUP BY 附带） */
 export async function kbPackages(): Promise<AdminResp> {
-  return request('/api/admin/kb-packages', { headers: authHeaders() })
+  return bizResp(() => request('/api/admin/kb-packages', { headers: authHeaders() }))
 }
 
 /** 创建行业知识库包 */
 export async function kbPackageCreate(data: { code: string; name: string; pack_type: string; role: string; cross_all?: boolean; cross_orgs?: number[] }): Promise<AdminResp> {
-  return request('/api/admin/kb-packages/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/kb-packages/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 
 /** 删除行业知识库包 */
 export async function kbPackageDelete(id: number): Promise<AdminResp> {
-  return request('/api/admin/kb-packages/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/admin/kb-packages/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /** 获取指定行业包内的条目列表（支持层/语言/关键词过滤与分页；count=true 仅返回 total） */
@@ -49,27 +66,27 @@ export async function kbEntries(packageId: number, params?: { layer?: number; ta
   if (params?.page) qs.set('page', String(params.page))
   if (params?.page_size) qs.set('page_size', String(params.page_size))
   if (params?.count) qs.set('count', '1')
-  return request(`/api/admin/kb-entries?${qs.toString()}`, { headers: authHeaders() })
+  return bizResp(() => request(`/api/admin/kb-entries?${qs.toString()}`, { headers: authHeaders() }))
 }
 
 /** 获取品牌术语（module=brand AND layer=1，如 极石→ROX；package_id 必填）——品牌名设置面板用 */
 export async function brandTerms(packageId: number): Promise<AdminResp> {
-  return request(`/api/admin/brand-terms?package_id=${packageId}`, { headers: authHeaders() })
+  return bizResp(() => request(`/api/admin/brand-terms?package_id=${packageId}`, { headers: authHeaders() }))
 }
 
 /** 新增 KB 条目（层级/原文/目标语言/译文/模块） */
 export async function kbEntryAdd(data: { package_id: number; layer: number; source_text: string; target_lang: string; target_text: string; module: string }): Promise<AdminResp> {
-  return request('/api/admin/kb-entries/add', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/kb-entries/add', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 更新 KB 条目（层级/原文/目标语言/译文/模块；不可改包归属） */
 export async function kbEntryUpdate(data: { id: number; layer: number; source_text: string; target_lang: string; target_text: string; module: string }): Promise<AdminResp> {
-  return request('/api/admin/kb-entries/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/kb-entries/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 删除 KB 条目 */
 export async function kbEntryDelete(id: number): Promise<AdminResp> {
-  return request('/api/admin/kb-entries/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/admin/kb-entries/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /** 批量导入 KB 条目（租户管理员） */
@@ -83,24 +100,25 @@ export async function kbEntriesImport(data: { package_id: number; entries: { sou
 export async function kbRecognizeFile(file: File, mergedName?: string, onProgress?: (pct: number) => void): Promise<AdminResp> {
   if (mergedName) {
     // ★ H5：分片已合并，recognize 直读服务端合并产物
-    return fetchJSON(`${API_BASE}/api/translation/recognize-kb?merged=${encodeURIComponent(mergedName)}`, {
+    // F-64②：后端该端点失败已改诚实状态码（400 文件无有效数据），包 bizResp 还原 success/message
+    return bizResp(() => fetchJSON(`${API_BASE}/api/translation/recognize-kb?merged=${encodeURIComponent(mergedName)}`, {
       method: 'POST', headers: authHeaders(),
-    })
+    }))
   }
   if (file.size > CHUNK_UPLOAD_MIN) {
     const merged = await uploadFileChunked(file, onProgress)
     if (!merged) return { success: false, message: apiMsg('common.chunkFail', '分片上传失败') }
-    return fetchJSON(`${API_BASE}/api/translation/recognize-kb?merged=${encodeURIComponent(merged)}`, {
+    return bizResp(() => fetchJSON(`${API_BASE}/api/translation/recognize-kb?merged=${encodeURIComponent(merged)}`, {
       method: 'POST', headers: authHeaders(),
-    })
+    }))
   }
   const formData = new FormData()
   formData.append('file', file)
-  return fetchJSON(`${API_BASE}/api/translation/recognize-kb`, {
+  return bizResp(() => fetchJSON(`${API_BASE}/api/translation/recognize-kb`, {
     method: 'POST',
     headers: authHeaders(),
     body: formData,
-  })
+  }))
 }
 
 // ==================== ★ H5 大文件断点续传（分片上传） ====================
@@ -179,22 +197,24 @@ export async function uploadFileChunked(file: File, onProgress?: (pct: number) =
 export async function bitextImport(file: File): Promise<AdminResp & { added?: number; skipped?: number }> {
   const formData = new FormData()
   formData.append('file', file)
-  return fetchJSON(`${API_BASE}/api/translation/import-bitext`, {
+  // F-64②：400「文件无有效数据」经 bizResp 回到 success/message，调用点（KbP.tsx 无 catch）不再吞成未捕获拒绝
+  return bizResp(() => fetchJSON(`${API_BASE}/api/translation/import-bitext`, {
     method: 'POST',
     headers: authHeaders(),
     body: formData,
-  })
+  }))
 }
 
 /** TMX 翻译记忆标准格式导入（xml），写入翻译记忆库 */
 export async function tmxImport(file: File): Promise<AdminResp & { tus?: number; added?: number; skipped?: number }> {
   const formData = new FormData()
   formData.append('file', file)
-  return fetchJSON(`${API_BASE}/api/translation/import-tmx`, {
+  // F-64②：同上，保住后端原文（「TMX 无有效双语单元…」）
+  return bizResp(() => fetchJSON(`${API_BASE}/api/translation/import-tmx`, {
     method: 'POST',
     headers: authHeaders(),
     body: formData,
-  })
+  }))
 }
 
 /**
@@ -230,36 +250,37 @@ export async function tmxExport(opts?: { lang?: string; module?: string }): Prom
 
 /** 导入已识别的 KB 文件到指定包（按包隔离写入） */
 export async function kbImportFile(data: { temp_id: string; package_id: number }): Promise<AdminResp> {
-  return request('/api/translation/import-kb', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  // F-64②：导入阶段二次解析 0 行 → 400，包 bizResp 保住「文件无有效数据」原文
+  return bizResp(() => request('/api/translation/import-kb', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 /** 启用/停用知识库包（停用后不参与翻译命中） */
 export async function kbPackageStatus(id: number, enabled: number): Promise<AdminResp> {
-  return request('/api/admin/kb-packages/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, enabled }) })
+  return bizResp(() => request('/api/admin/kb-packages/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, enabled }) }))
 }
 
 /** ★ H3 知识库包级授权：列某包 read/write/manage 授权清单 */
 export async function kbPackGrants(packId: number): Promise<AdminResp> {
-  return request(`/api/admin/kb-packages/grants?pack_id=${packId}`, { headers: authHeaders() })
+  return bizResp(() => request(`/api/admin/kb-packages/grants?pack_id=${packId}`, { headers: authHeaders() }))
 }
 
 /** ★ H3 设置包级授权（role: read|write|manage；空串=撤销） */
 export async function kbPackGrantSet(data: { pack_id: number; user_id: number; role: string }): Promise<AdminResp> {
-  return request('/api/admin/kb-packages/grants', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/kb-packages/grants', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** ★ H3 当前用户的包级授权清单（KB 管理导航门控用） */
 export async function kbPackMine(): Promise<AdminResp> {
-  return request('/api/admin/kb-packages/mine', { headers: authHeaders() })
+  return bizResp(() => request('/api/admin/kb-packages/mine', { headers: authHeaders() }))
 }
 
 /** 部门包跨部门共享开关：share=1 共享 / 0 仅限归属链内 */
 export async function kbPackageShare(id: number, share: number): Promise<AdminResp> {
-  return request('/api/admin/kb-packages/share', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, share }) })
+  return bizResp(() => request('/api/admin/kb-packages/share', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, share }) }))
 }
 
 /** 手动触发向量索引全量重建（超管） */
 export async function kbIndexRebuild(): Promise<AdminResp> {
-  return request('/api/admin/kb-index/rebuild', { method: 'POST', headers: authHeaders() })
+  return bizResp(() => request('/api/admin/kb-index/rebuild', { method: 'POST', headers: authHeaders() }))
 }
 
 // ==================== 语言文化规范（安全句 / Gate 闸门） ====================
@@ -290,25 +311,25 @@ export async function safetyPhrases(params?: { package_id?: number; lang?: strin
   if (params?.page) qs.set('page', String(params.page))
   if (params?.page_size) qs.set('page_size', String(params.page_size))
   const qstr = qs.toString()
-  return request(`/api/admin/safety-phrases${qstr ? `?${qstr}` : ''}`, { headers: authHeaders() })
+  return bizResp(() => request(`/api/admin/safety-phrases${qstr ? `?${qstr}` : ''}`, { headers: authHeaders() }))
 }
 
 /** 新增安全句（结构化：类型+替换词） */
 export async function safetyPhraseAdd(data: { package_id: number; lang: string; phrase: string; kind?: string; replacement?: string }): Promise<AdminResp> {
-  return request('/api/admin/safety-phrases/add', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/safety-phrases/add', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 删除安全句 */
 export async function safetyPhraseDelete(id: number): Promise<AdminResp> {
-  return request('/api/admin/safety-phrases/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/admin/safety-phrases/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /** 审核安全句（approved/rejected/pending） */
 export async function safetyPhraseStatus(id: number, status: string): Promise<AdminResp> {
-  return request('/api/admin/safety-phrases/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, status }) })
+  return bizResp(() => request('/api/admin/safety-phrases/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, status }) }))
 }
 
 /** LLM 投喂批量导入（统一落 pending 待人工审核） */
 export async function safetyBulkImport(packageId: number, items: { lang: string; phrase: string; kind: string; replacement?: string }[]): Promise<AdminResp> {
-  return request('/api/admin/safety-phrases/bulk-import', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ package_id: packageId, items }) })
+  return bizResp(() => request('/api/admin/safety-phrases/bulk-import', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ package_id: packageId, items }) }))
 }

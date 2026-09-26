@@ -1,5 +1,6 @@
 // ============================================================================
-// payhonesty_gate_test.go — 收款/账务路径「HTTP 200 承载失败」零容忍等值锁（★ F-64① 批 I-7，2026-09-26）
+// payhonesty_gate_test.go — 「HTTP 200 承载失败」零容忍等值锁
+// （★ F-64① 批 I-7 建立，2026-09-26；★ F-64②③ 批 I-10 收口成等值锁，同日深夜）
 //
 // 缺陷本体（UAT 报告 F-47 / 修复文档 F-64）：本包大量业务失败分支写成
 //
@@ -7,8 +8,11 @@
 //
 // ——HTTP 层永远是 200，失败只藏在 body 里。对浏览器前端也许够用，但**客户与 SDK 是按状态码
 // 分支的**：wx.request/fetch/重试策略/网关告警/CDN 缓存/监控 5xx 率全都看不到这类失败。
-// 实测规模（本文件的扫描器逐调用点量出，不是估的）：internal/api 全包 **240 处**，
-// 其中收款/账务路径（本文件锁定的 7 个文件）**61 处**——钱的事最先修。
+// 实测规模与本批处置（本文件的扫描器逐调用点量出，不是估的）：
+//   - 建立闸门时 internal/api 全包 **240 处**，其中收款/账务 7 个文件 **61 处**（①档，批 I-7 清零）；
+//   - 余量 **182 处** 于批 I-10（②档管理台与业务动作类）全部迁到 s.writeError + apierrors，
+//     外加 ③档最后 1 处 writeAssistBizErr（assist 代理本层失败）⇒ **全包现为 0**；
+//   - 前端配套：104 个接口调用点包上 bizResp()，调用点的 `if (!r.success)` 判据一字未改。
 //
 // 与 errorstyle_gate_test.go 的分工（两把尺子量两件不同的事，都要跑）：
 //   - errorstyle 计的是「内联 writeJSON(w, 4xx/5xx, map{...})」——状态码已经诚实、只是没走统一出口；
@@ -26,11 +30,11 @@
 // 已知边界（诚实记录，不当成完备）：
 //   - 只认 writeJSON 出口；`w.Write(...)` 手拼 JSON 的分支扫不到（本包内联流式响应另有约定，
 //     收款路径实测无此写法）；
-//   - 跨函数传参（A 函数造好 success:false 的 map 交给 B 函数写 200）扫不到——这类写法
-//     在本包只出现在 writeAssistBizErr（assist 白名单转发，非收款路径）；
-//   - 「MUST-STAY-200」只登记了渠道回调这一族真正不能被状态码语义约束的应答，
-//     见 TestPayNotifyStatusesFrozen；②/③档（管理台动作类、纯展示读接口）尚未纳入零容忍，
-//     由全包总数棘轮（TestPayShellRatchetWholePackage）兜住「不许变多」。
+//   - 跨函数传参（A 函数造好 success:false 的 map 交给 B 函数写 200）扫不到——历史上唯一的这种写法
+//     是 writeAssistBizErr，批 I-10 已把它改成直接走 s.writeError，本包现无此类间接出口；
+//     ⚠️ 若日后有人再造一个「统一回 200 的私有 helper」，本闸门看不见，得先让判据覆盖跨函数形态。
+//   - 「对端只认 2xx」的应答豁免分两处：本文件的 payShellMustStay200（200 壳白名单，现为空集）
+//     与 payFrozenStatuses（handlePayNotify 的状态码冻结集，渠道回调）。
 //
 // 运行：cd backend-go && go test -count=1 ./internal/api/ -run 'TestPayHonest|TestPayShell|TestPayNotify'
 // 纯静态解析源码，不连库、不读 config，无需 AGENTS.md 一.4 的方言自钉。
@@ -64,20 +68,22 @@ var payHonestZeroFiles = []string{
 	"my_billing.go",    // 客户自助账单中心五表
 }
 
-// payShellTotalBaseline 全包「200 承载失败」存量基线（只减不增）。
-// ★ 建立口径：2026-09-26 批 I-7 用本文件扫描器实测（①档 7 个文件清零后的**当前真实值**），
+// payShellMustStay200 ③档收口后的**显式白名单**（★ 批 I-10，2026-09-26 深夜）：
+// 键＝`文件名#函数名`，值＝「为什么这里必须回 200」的一句话理由。
 //
-//	不取整、不估算。②/③档每迁一处就把它下调；上调必须在评审里说明理由。
-const payShellTotalBaseline = 186
-
-// payShellTier2Files 第②/③档在账清单（本批不动，逐批清零）→ 未处理处数快照。
-// 登记意义：让「还剩哪些、各多少」是机器可核对的数字，而不是文档里的一句「后续再说」；
-// 僵尸守卫会在这条清零后红灯提醒删行。
-var payShellTier2Files = map[string]string{
-	"admin_packages.go": "②档：超管套餐 CRUD 动作类（6 处）——管理台内部接口，客户与 SDK 不消费",
-	"admin_kb.go":       "②档：知识库管理动作类（存量最大）",
-	"tickets.go":        "③档：工单读接口按分期口径可暂留 200，但须显式登记",
-}
+// 口径变化（本闸门从「棘轮」升级成「等值锁」的那一步）：
+//   - 批 I-7 建立本闸门时全包实测 240 处，只能记总数做「只减不增」棘轮；
+//   - 批 I-10（②/③档）把 240→0 全部迁完（①档收款/账务 7 文件 61 处 + 余量 182 处 +
+//     最后 1 处 writeAssistBizErr），于是「还剩多少」不再是进度问题，而是**违例**；
+//   - 因此删掉 payShellTotalBaseline 与 payShellTier2Files 两张表，换成下面的白名单：
+//     白名单之外出现任何一处 200 壳即红灯，白名单里的条目若已归零同样红灯（僵尸守卫）。
+//
+// 什么情况才允许往这里加一行：**对端只认 2xx 应答语义**、给它 4xx/5xx 反而制造重复提交或
+// 重试风暴的出口（参考 handlePayNotify 的渠道回调）。以下理由**不成立**，别写进来：
+//   - 「前端调用点太多，改不过来」→ 用 bizResp 收敛（本批 104 个调用点就是这么包的）；
+//   - 「SSE/CSV 已经 flush 了」→ 那种分支根本不经过 writeJSON，本扫描器不统计，无需登记；
+//   - 「管理台内部接口，客户不消费」→ 监控、SDK、重试器与自动化都按状态码分支，内部不等于可以骗。
+var payShellMustStay200 = map[string]string{}
 
 // TestPayHonestMoneyPathsZero 主断言：收款/账务 7 个文件的 200 壳必须逐文件恰为 0。
 func TestPayHonestMoneyPathsZero(t *testing.T) {
@@ -111,32 +117,101 @@ func TestPayHonestMoneyPathsZero(t *testing.T) {
 	}
 }
 
-// TestPayShellRatchetWholePackage 全包总数棘轮：②/③档没迁完是事实，但**一处都不许多**。
-// 同时输出「还剩多少、集中在哪」的进度账（t.Logf），让分期推进看得见。
-func TestPayShellRatchetWholePackage(t *testing.T) {
+// TestPayShellWhitelistZero 全包等值锁（★ 批 I-10 ③档收口，取代原「总数棘轮」）：
+// 白名单之外「200 承载失败」必须**恰为 0**，且白名单自身不许留僵尸条目。
+//
+// 为什么不再是棘轮：只减不增的写法在存量已为 0 时会把「新增一处 200 壳」和「维持 0」
+// 用同一句放过（`0 > 0` 假、`0 ≤ 0` 真），等于没有闸门——历史上 UI 侧就被这种单向锁一路推离交付稿。
+func TestPayShellWhitelistZero(t *testing.T) {
 	sites := payShellScan(t, ".")
-	if len(sites) > payShellTotalBaseline {
-		byFile := map[string]int{}
+	violations, zombies := payShellWhitelistCheck(sites, payShellMustStay200)
+	if len(violations) > 0 {
+		sort.Strings(violations)
+		t.Errorf("★ 白名单之外出现「HTTP 200 承载失败」%d 处（等值锁：必须为 0）：\n  %s\n"+
+			"HTTP 层永远是 200，按状态码分支的一方（客户 SDK、重试器、网关告警、监控 5xx 率）会把失败读成成功。\n"+
+			"改法：s.writeError(w, r, apierrors.New(<语义码>, \"中文文案\"))，附加字段走 WithDetails；\n"+
+			"前端接口层用 bizResp() 收敛，调用点的 if (!r.success) 判据即可原样保留。\n"+
+			"确属「对端只认 2xx」的出口，才允许登记进 payShellMustStay200（登记门槛见其注释）。",
+			len(violations), strings.Join(violations, "\n  "))
+	}
+	for _, z := range zombies {
+		t.Errorf("★ payShellMustStay200 僵尸条目：%s 已无 200 壳，请删掉该行并复核理由是否还成立\n  （原登记理由：%s）", z.key, z.why)
+	}
+	// 进度账（t.Logf）：白名单成员与处数每次跑都打出来，便于评审时看见「谁在被豁免」。
+	if len(payShellMustStay200) > 0 {
+		byKey := map[string]int{}
 		for _, s := range sites {
-			byFile[s.file]++
+			byKey[s.file+"#"+s.fn]++
 		}
-		t.Errorf("★ 全包「200 承载失败」存量上升：%d > 基线 %d。新增错误分支一律走 s.writeError + apierrors；\n"+
-			"如确需上调基线必须在评审说明理由（本闸门的存在就是让这个数字单调下降到 0）。\n  当前大头：%s",
-			len(sites), payShellTotalBaseline, payShellTopOffenders(byFile, 8))
+		keys := make([]string, 0, len(byKey))
+		for k := range byKey {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		t.Logf("200 壳白名单在账 %d 处：%s", len(sites), strings.Join(keys, ", "))
+	} else {
+		t.Logf("全包「200 承载失败」= %d 处，白名单为空（F-64①②③ 已收口，任何新增即红灯）", len(sites))
 	}
-	if len(sites) < payShellTotalBaseline {
-		t.Logf("「200 承载失败」已降至 %d（基线 %d）：请同步下调 payShellTotalBaseline，"+
-			"并清掉已归零的 payShellTier2Files 条目", len(sites), payShellTotalBaseline)
-	}
-	// ②/③档在账清单：登记的必须真的有存量（僵尸守卫），数字变了要提醒改文档
-	byFile := map[string]int{}
+}
+
+// payShellWhitelistCheck 等值锁的纯判定核（抽出来是为了能被内存用例正反两向喂，见其自检用例）。
+// 返回：白名单外的违例明细、白名单里已无存量的僵尸条目。
+func payShellWhitelistCheck(sites []payShellSite, whitelist map[string]string) ([]string, []zombieEntry) {
+	byKey := map[string]int{}
+	var violations []string
 	for _, s := range sites {
-		byFile[s.file]++
-	}
-	for f, why := range payShellTier2Files {
-		if byFile[f] == 0 {
-			t.Errorf("payShellTier2Files 僵尸条目：%s 已无「200 承载失败」（或文件已不存在），请删掉该行\n  （原登记理由：%s）", f, why)
+		k := s.file + "#" + s.fn
+		byKey[k]++
+		if _, ok := whitelist[k]; !ok {
+			violations = append(violations, s.file+":"+strconv.Itoa(s.line)+" func "+s.fn+" ["+s.kind+"]")
 		}
+	}
+	var zombies []zombieEntry
+	for k, why := range whitelist {
+		if byKey[k] == 0 {
+			zombies = append(zombies, zombieEntry{key: k, why: why})
+		}
+	}
+	return violations, zombies
+}
+
+// zombieEntry 僵尸白名单条目（键 + 当初登记的豁免理由）。
+type zombieEntry struct {
+	key string
+	why string
+}
+
+// TestPayShellWhitelistCheckSelfCheck 等值锁的反证：判据核必须既能抓违例、也能抓僵尸，
+// 且「白名单命中」与「无违例」两种绿态都不会把红态吞掉（守卫没有反证＝迟早变成假绿）。
+func TestPayShellWhitelistCheckSelfCheck(t *testing.T) {
+	sites := []payShellSite{
+		{file: "a.go", line: 10, fn: "handleA", kind: "A"},
+		{file: "b.go", line: 20, fn: "handleB", kind: "C"},
+	}
+	// ① 空白名单 → 两处都算违例，无僵尸
+	v, z := payShellWhitelistCheck(sites, map[string]string{})
+	if len(v) != 2 || len(z) != 0 {
+		t.Errorf("反证①失败：空白名单应报 2 违例 0 僵尸，实得 %v / %v", v, z)
+	}
+	// ② 登记 a.go#handleA → 该处豁免，b.go#handleB 仍违例
+	v, z = payShellWhitelistCheck(sites, map[string]string{"a.go#handleA": "对端只认 2xx"})
+	if len(v) != 1 || !strings.Contains(v[0], "b.go") || len(z) != 0 {
+		t.Errorf("反证②失败：应只剩 b.go 一处违例，实得 %v / %v", v, z)
+	}
+	// ③ 登记一个已不存在的键 → 僵尸守卫必须响
+	v, z = payShellWhitelistCheck(sites, map[string]string{"c.go#handleC": "已失效的历史豁免"})
+	if len(v) != 2 || len(z) != 1 || z[0].key != "c.go#handleC" {
+		t.Errorf("反证③失败：应报 2 违例 + 1 僵尸，实得 %v / %v", v, z)
+	}
+	// ④ 全登记 → 双向皆绿（证明「绿」是可达状态，不是一句永远红的手工锁）
+	v, z = payShellWhitelistCheck(sites, map[string]string{"a.go#handleA": "x", "b.go#handleB": "y"})
+	if len(v) != 0 || len(z) != 0 {
+		t.Errorf("反证④失败：全量登记后应 0 违例 0 僵尸，实得 %v / %v", v, z)
+	}
+	// ⑤ 空站点集 + 空白名单 → 什么都不报（锁在「已收口」状态下静默通过，而非恒红）
+	v, z = payShellWhitelistCheck(nil, map[string]string{})
+	if len(v) != 0 || len(z) != 0 {
+		t.Errorf("反证⑤失败：零存量零豁免应全绿，实得 %v / %v", v, z)
 	}
 }
 
@@ -247,26 +322,87 @@ func f() {}`, 0, "注释里的示例代码不应被算成存量"},
 			t.Errorf("判据自检失败（%s）：got %d want %d，源码：\n%s", c.why, got, c.want, c.src)
 		}
 	}
-	// 仓库现实锚点：扫到空集即遍历失效（①档清零后全包仍有百余处，锚点取保守下限）
+	// 仓库现实锚点（★ 批 I-10 改口径）：②/③档收口后全包真实存量是 **0**，
+	// 所以「扫到空集」不再能证明遍历失效——旧的 `len(sites) < 100` 锚点当场作废（它会恒红）。
+	// 换成**阳性对照**：拿本包一个真实文件在内存里追加一处 200 壳，
+	// 计数必须恰好 +1；再加一处成功应答，计数必须不变。
+	// 这样「判据失效」与「存量真的为 0」两种情况就能分开，锁不会把前者伪装成后者。
 	sites := payShellScan(t, ".")
-	if len(sites) < 100 {
-		t.Fatalf("全包「200 承载失败」实测 %d 处，明显低于实际规模（基线 %d）：扫描根或判据已失效，本闸门当前不可信",
-			len(sites), payShellTotalBaseline)
+	if got := len(sites); got != 0 {
+		t.Errorf("★ 扫描到 %d 处「200 承载失败」，但白名单等值锁要求 0：请核对是哪一批改动新增（本用例只做覆盖自检）", got)
 	}
-	// ①档文件必须**扫得到别的写法**却扫不到 200 壳——用 admin_billing.go 的 CSV 分支做正证：
-	// 它仍在射程内（未列入零容忍），命中数 >0 或该文件确已清零都说明遍历没漏文件。
-	perFile := map[string]int{}
-	for _, s := range sites {
-		perFile[s.file]++
+	probeFile, probeSrc := payShellPickProbeSource(t, ".")
+	base := payShellCountSource(t, probeFile, probeSrc)
+	withShell := payShellCountSource(t, probeFile, probeSrc+`
+func payShellProbeTmp(w http.ResponseWriter) {
+	writeJSON(w, 200, map[string]interface{}{"success": false, "message": "probe"})
+}
+`)
+	withOK := payShellCountSource(t, probeFile, probeSrc+`
+func payShellProbeTmp2(w http.ResponseWriter) {
+	writeJSON(w, 200, map[string]interface{}{"success": true, "n": 1})
+}
+`)
+	if withShell != base+1 {
+		t.Fatalf("阳性对照失败（%s）：追加一处 200 壳后应 %d→%d，实得 %d——扫描器已不可信，本闸门的所有绿灯一律作废",
+			probeFile, base, base+1, withShell)
 	}
-	if len(perFile) < 20 {
-		t.Errorf("命中的文件数仅 %d，疑似只扫到子集（本包存量分布在数十个文件上）", len(perFile))
+	if withOK != base {
+		t.Fatalf("阴性对照失败（%s）：追加成功应答不应计数，期望 %d 实得 %d", probeFile, base, withOK)
+	}
+	// 遍历覆盖面锚点（★ 批 I-10 改口径）：存量已合法归零，所以「命中文件数」不再是有效锚点，
+	// 换成「被解析的非测试文件数」——遍历漏目录/漏文件是本闸门唯一还能悄悄失效的方式。
+	// 本包当前有 60+ 个非测试源文件，取下限 40（留出按域拆分的余量，又能在只扫到子集时报警）。
+	if n := payShellScannedFileCount(t, "."); n < 40 {
+		t.Errorf("扫描根只遍历到 %d 个非测试 .go 文件（本包实际 60+）：遍历或过滤条件已失效，判据对所有文件不成立", n)
 	}
 	for _, f := range payHonestZeroFiles {
 		if !payShellFileExists(f) {
 			t.Errorf("零容忍文件 %s 未被遍历（不存在或解析失败？）", f)
 		}
 	}
+}
+
+// payShellPickProbeSource 从扫描根里挑一个「当前无 200 壳」的真实文件源码做对照实验的基底。
+// 选它而不是凭空造一段：基底来自生产代码，能同时证明解析器吃得下本包的真实写法
+// （长函数、嵌套 map、SSE 分支），对照结果才有意义。
+func payShellPickProbeSource(t *testing.T, dir string) (string, string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("读取扫描根 %s 失败: %v", dir, err)
+	}
+	for _, en := range entries {
+		if en.IsDir() || !strings.HasSuffix(en.Name(), ".go") || strings.HasSuffix(en.Name(), "_test.go") {
+			continue
+		}
+		src, rerr := os.ReadFile(filepath.Join(dir, en.Name()))
+		if rerr != nil {
+			continue
+		}
+		// 基底要求自身无命中（否则 +1 的算术仍成立但读起来含混），实测本包收口后所有文件都满足
+		if payShellCountSource(t, en.Name(), string(src)) == 0 {
+			return en.Name(), string(src)
+		}
+	}
+	t.Fatal("找不到一个「当前无 200 壳」的真实文件做对照基底：包内状态与本闸门前提不符")
+	return "", ""
+}
+
+// payShellScannedFileCount 统计扫描根里被遍历到的非测试 .go 文件数（覆盖面锚点，与 payShellScan 同判据）。
+func payShellScannedFileCount(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("读取扫描根 %s 失败: %v", dir, err)
+	}
+	n := 0
+	for _, en := range entries {
+		if !en.IsDir() && strings.HasSuffix(en.Name(), ".go") && !strings.HasSuffix(en.Name(), "_test.go") {
+			n++
+		}
+	}
+	return n
 }
 
 // TestPayHonestFrontendContractLocks 前端配套契约锁（★ F-64① 的另一半）。
@@ -517,35 +653,6 @@ func payShellDetail(sites []payShellSite, files []string) string {
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "; ")
-}
-
-// payShellTopOffenders 按处数降序取前 n 个文件（进度账与红灯提示共用）。
-func payShellTopOffenders(counts map[string]int, n int) string {
-	type kv struct {
-		f string
-		c int
-	}
-	all := make([]kv, 0, len(counts))
-	for f, c := range counts {
-		if c == 0 {
-			continue
-		}
-		all = append(all, kv{f, c})
-	}
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].c != all[j].c {
-			return all[i].c > all[j].c
-		}
-		return all[i].f < all[j].f
-	})
-	if len(all) > n {
-		all = all[:n]
-	}
-	parts := make([]string, 0, len(all))
-	for _, e := range all {
-		parts = append(parts, e.f+"="+strconv.Itoa(e.c))
-	}
-	return strings.Join(parts, ", ")
 }
 
 // payShellFuncStatuses 取指定函数体内出现过的 HTTP 状态码：

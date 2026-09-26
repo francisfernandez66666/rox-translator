@@ -11,7 +11,10 @@
  * - 部门预算：设置部门月度 token 预算、查看预算总览
  */
 
-import { request, authHeaders, type AdminResp } from './core'
+// ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
+//   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
+//   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
+import { bizResp, request, authHeaders, type AdminResp } from './core'
 
 /** 组织实体：含父子关系/名称/类型（root/org/dept） */
 export interface OrgInfo {
@@ -36,49 +39,49 @@ export interface OrgResp {
 
 /** 获取组织列表（扁平结构，前端组装树；含根组织行） */
 export async function orgList(): Promise<OrgResp> {
-  return request('/api/admin/orgs', { headers: authHeaders() })
+  return bizResp(() => request('/api/admin/orgs', { headers: authHeaders() }))
 }
 
 /** 创建组织/部门（parent_id=0 为组织；>0 为部门） */
 export async function orgCreate(data: { name: string; parent_id: number; type?: string }): Promise<OrgResp> {
-  return request('/api/admin/orgs/create', {
+  return bizResp(() => request('/api/admin/orgs/create', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(data),
-  })
+  }))
 }
 
 /** 重命名组织 */
 export async function orgRename(id: number, name: string): Promise<OrgResp> {
-  return request('/api/admin/orgs/rename', {
+  return bizResp(() => request('/api/admin/orgs/rename', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({ id, name }),
-  })
+  }))
 }
 
 /** 移动组织/部门到新父节点（拖拽调整层级；parent_id=0 为根组织下） */
 export async function orgMove(id: number, parentId: number): Promise<OrgResp> {
-  return request('/api/admin/orgs/move', {
+  return bizResp(() => request('/api/admin/orgs/move', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({ id, parent_id: parentId }),
-  })
+  }))
 }
 
 /** 删除组织（子孙上移、用户回收至根组织） */
 export async function orgDelete(id: number): Promise<OrgResp> {
-  return request('/api/admin/orgs/delete', {
+  return bizResp(() => request('/api/admin/orgs/delete', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({ id }),
-  })
+  }))
 }
 
 /** 组织下用户视图（含子孙组织归集）；org_id 缺省/0 = 租户全部用户 */
 export async function orgUsers(orgId?: number): Promise<any> {
   const q = orgId ? `?org_id=${orgId}` : ''
-  return request(`/api/admin/orgs/users${q}`, { headers: authHeaders() })
+  return bizResp(() => request(`/api/admin/orgs/users${q}`, { headers: authHeaders() }))
 }
 
 // ============================================================================

@@ -127,7 +127,8 @@ func (s *Server) handleAdminQuoteCurrencySave(w http.ResponseWriter, r *http.Req
 func (s *Server) requireQuoteCfgAdmin(w http.ResponseWriter, r *http.Request) (*store.User, error) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, publicErrMessage(r.Context(), err)))
+		// 未登录与等级不足分流（★ F-64③ 批 I-10 收尾）：见 server.go writeAuthzError 的 401/403 口径
+		s.writeAuthzError(w, r, err)
 		return nil, err
 	}
 	if !auth.IsSuperAdmin(u) {

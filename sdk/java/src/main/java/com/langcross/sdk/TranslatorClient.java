@@ -124,8 +124,8 @@ public class TranslatorClient {
             String txt = resp.body();
             JsonNode data = txt.isEmpty() ? mapper.createObjectNode() : mapper.readTree(txt);
             if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
-                // ★ F-64①：失败按真实状态码发出；错误码正主是 code，error_code 是 <1.0.4 别名
-                //（老服务端只发别名 ⇒ "code 优先、error_code 兜底"，两种版本都能取到码）。
+                // ★ F-64①：失败按真实状态码发出；错误码正主是 code，error_code 是状态码诚实改造**之前**
+                // 的老服务端别名（改造后的服务端只发 code ⇒ "code 优先、error_code 兜底"，混跑窗口两边都取得到码）。
                 throw new TranslatorError(
                         data.has("message") ? data.get("message").asText() : ("HTTP " + resp.statusCode()),
                         resp.statusCode(),

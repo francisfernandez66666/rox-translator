@@ -12,9 +12,9 @@ import {
   orgList, orgCreate, orgRename, orgMove, orgDelete, orgUsers,
   orgBudgetSummary, orgTokenLimit,
   adminUserCreate, adminUserDelete, adminUserResetPassword, userBulkImport, downloadUserImportTemplate,
+  adminUserUpdate, // ★ F-64②（批 I-10）：本面板原先裸调 request('/api/admin/users/update')，后端已改诚实状态码 ⇒ 改走接口层已包 bizResp 的同一个函数
   inviteCodes, inviteCodeCreate,
   tenantSetStatus,
-  request, authHeaders,
   type OrgInfo,
 } from '@/api'
 import { Panel, Field, toastResp, num } from './parts'
@@ -147,9 +147,9 @@ export function OrgP() {
       org_id: Number(u.org_id || 0),
     }
     Object.assign(data, patch)
-    const r: any = await request('/api/admin/users/update', {
-      method: 'POST', headers: authHeaders(), body: JSON.stringify({ id: u.id, ...data }),
-    })
+    // F-64②：走 api 层 adminUserUpdate（内部已包 bizResp）⇒ 4xx 仍回到 {success:false,message}，
+    // 这里原有的 `if (!r.success)` 分支继续有效，不会变成未捕获 Promise rejection。
+    const r: any = await adminUserUpdate(Number(u.id), data)
     if (!r.success) { toastError(r.message); return false }
     return true
   }

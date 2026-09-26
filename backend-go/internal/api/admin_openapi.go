@@ -192,7 +192,8 @@ function setLang(l){
 func (s *Server) handleAdminOpenAPIDocsGet(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	mdZh := s.getDocsMD("zh")
@@ -211,7 +212,8 @@ func (s *Server) handleAdminOpenAPIDocsGet(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleAdminOpenAPIDocsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -252,7 +254,8 @@ func (s *Server) handleAdminOpenAPIDocsSave(w http.ResponseWriter, r *http.Reque
 // handleAdminOpenAPIDocsPreview 超管预览渲染结果（不落库；lang 缺省 zh）。
 func (s *Server) handleAdminOpenAPIDocsPreview(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -317,7 +320,7 @@ const defaultDocsMDZh = `# 能言开放 API
 | GET | /openapi/v1/balance | * | 查询积分余额与 ≈句数 |
 | GET | /openapi/v1/kb/stats | kb | 知识库条目统计 |
 | GET | /openapi/v1/billing/usage | billing | 用量明细 |
-| POST | /openapi/v1/apikey/rotate | all | 轮换 API Key（旧 Key 立即失效） |
+| POST | /openapi/v1/apikey/rotate | all | 轮换 API Key（旧 Key 立即失效；当日调用计数随之归零） |
 
 ## ① 创建文本任务（heredoc 传 JSON：复制即用，免疫引号/换行问题）
 
@@ -409,7 +412,8 @@ mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
 ## 错误与 HTTP 状态码（★ 2026-09-26 起：失败按真实状态码发出）
 
 请求失败一律以**真实 HTTP 状态码**返回（不再出现「HTTP 200 但 success:false」），
-响应体同时给 “code”（正主，下表第一列）与 “error_code”（同值别名，老 SDK 在读），
+响应体一定给 “code”（正主，下表第一列）；部分历史通道仍同值下发 “error_code”（老 SDK 在读的别名，
+**不保证每个失败响应都有**，取码请以 “code” 为准），
 以及 “message”（可读文案，随 Accept-Language 语种翻译）与 “trace_id”（报障时给出即可定位日志）。
 通用重试器/网关告警/APM 因此能直接按状态码统计与退避；429 另给 “Retry-After” 头与同值的
 “retry_after” 字段（还需等待的秒数），按它退避即可，不必自己猜冷却窗口。
@@ -458,7 +462,7 @@ All endpoints authenticate with **Authorization: Bearer YOUR_API_KEY**. Issue ke
 | GET | /openapi/v1/balance | * | Points balance & sentence estimate |
 | GET | /openapi/v1/kb/stats | kb | Knowledge base statistics |
 | GET | /openapi/v1/billing/usage | billing | Usage details |
-| POST | /openapi/v1/apikey/rotate | all | Rotate API Key (old key invalidates immediately) |
+| POST | /openapi/v1/apikey/rotate | all | Rotate API Key (old key invalidates immediately; the daily call count resets to zero) |
 
 ## Create a text task
 
@@ -540,8 +544,9 @@ target_langs takes an array of language codes; defaults to ["en"]. Supported: 34
 ## Errors & HTTP status codes (★ since 2026-09-26: failures carry real status codes)
 
 Every failed request returns a **real HTTP status code** — the old "HTTP 200 with success:false"
-shape is gone. The body carries "code" (canonical, first column below) plus "error_code"
-(same value, kept as an alias for <1.0.4 SDKs), a "message" (translated per Accept-Language)
+shape is gone. The body always carries "code" (canonical, first column below). The historical alias
+"error_code" (same value, read by older SDKs) is still emitted on some legacy channels but is **not
+guaranteed on every failure** — branch on "code". Also present: a "message" (translated per Accept-Language)
 and a "trace_id" (quote it when reporting an issue). Retriers, gateways and APM error rates can
 now branch on status alone; 429 responses additionally send a "Retry-After" header and the same
 value as a "retry_after" field (seconds to wait) — honour it instead of guessing a backoff.

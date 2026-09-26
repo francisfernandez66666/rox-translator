@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（410 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（411 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -382,6 +382,7 @@ var exactEN = map[string]string{
 	"请提供租户编码":                                          "Tenant code is required",
 	"请提供订单 id":                                         "Order id is required",
 	"请求体格式错误":                                          "Malformed request body",
+	"请求无法转发到 AI 助手服务":                                  "Request could not be forwarded to the AI assistant service",
 	"请求格式错误":                                           "Malformed request",
 	"请求格式错误或 fields 为空":                                "Malformed request or empty fields",
 	"请求格式错误（kind 必填）":                                  "Malformed request (kind required)",

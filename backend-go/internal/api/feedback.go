@@ -13,7 +13,9 @@ package api
 // ========================================
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -21,6 +23,7 @@ import (
 	"time"
 
 	"translator/internal/auth"
+	apierrors "translator/internal/errors"
 	"translator/internal/observability"
 
 	"translator/internal/store"
@@ -178,7 +181,8 @@ func truncateRunes(s string, n int) string {
 func (s *Server) handleAdminFeedbackResolve(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -190,7 +194,16 @@ func (s *Server) handleAdminFeedbackResolve(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := s.Store.ResolveFeedback(req.ID, strings.TrimSpace(req.Note)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "反馈不存在"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 按真实语义分流（store.ResolveFeedback 自己区分了这两类事实：
+		//   找不到这条反馈时它显式回 sql.ErrNoRows，写坏时才回 DB 错误）：
+		//   ① sql.ErrNoRows → 404「反馈不存在」（文案原样保留），结案对象确实不在；
+		//   ② 其余 err → 500 存储写入故障——旧写法把它也说成「反馈不存在」，超管会反复点结案，
+		//      而真实原因是数据库没写进去。
+		if errors.Is(err, sql.ErrNoRows) {
+			s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "反馈不存在"))
+			return
+		}
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(0, u.ID, "feedback_resolve", "feedbacks", fmt.Sprintf("%d", req.ID))
@@ -240,7 +253,10 @@ func (s *Server) handleFeedbackList(w http.ResponseWriter, r *http.Request) {
 		list, err = s.Store.ListFeedbacksByUser(u.ID, status)
 	}
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：反馈列表（超管全量 / 本人分页）读的是本进程存储层。
+		//   只读列表没有「记录不存在」一说，故不涉及 404；旧写法把 DB 故障画成「暂无反馈」，
+		//   超管侧尤其危险——看不到待处理反馈会以为用户这周都没提问题。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	if list == nil {
@@ -306,7 +322,10 @@ func (s *Server) handleFeedbackReply(w http.ResponseWriter, r *http.Request) {
 	// 载入反馈并做回复闸口：仅超管或提交者本人可复；resolved 后线程封存
 	f, err := s.Store.GetFeedback(req.ID)
 	if err != nil || f == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "反馈不存在"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 404「反馈不存在」（文案原样）。
+		//   回复要有对象，对象读不到就是不存在——这与「反馈已完成不可回复」(409)、「非提交者非超管」(403)
+		//   是三种不同事实，旧写法三者全是 200＋一句文案，前端只能靠字符串区分。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "反馈不存在"))
 		return
 	}
 	if !auth.IsSuperAdmin(u) && f.UserID != u.ID {
@@ -314,12 +333,17 @@ func (s *Server) handleFeedbackReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if f.Status == "resolved" {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "反馈已完成，不可再回复"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 409：记录在、权限也对，只是**当前状态不允许**再追加回复
+		//   （结案即线程封存）。这正是 409 的标准语义，不是参数错（400）也不是本层出错（500）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "反馈已完成，不可再回复"))
 		return
 	}
 	thread, aerr := s.appendReply(f, u, content)
 	if aerr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": aerr.Error()})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：appendReply 的 err 只可能是
+		//   store.AppendFeedbackReply 的写失败（读改写里的读侧已在上游 404 拦下），属服务端故障；
+		//   文案仍逐字透出 aerr.Error()（口径不变，仅状态码变诚实）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, aerr.Error()))
 		return
 	}
 	// ★ 回复提醒对方：超管回复→通知提交者；提交者补充→再通知超管
@@ -336,20 +360,32 @@ func (s *Server) handleFeedbackReply(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleFeedbackGet 单条反馈详情（超管或提交者）。
+//
+// ★ F-64② 收尾定夺（2026-09-26 批 I-10）：这条详情接口同时是**存在性探针**——
+//
+//	旧口径「别人的反馈回 403『无权查看』、不存在的回 404『反馈不存在』」让任何登录用户
+//	都能拿 id 逐一试：403 说明「这条存在」、404 说明「不存在」，把只该超管知道的
+//	反馈总量与提交节奏（连号 id 的密度）泄漏成了免费计数接口。
+//	现按业界口径把两种情况并成同一个 404 同一句文案：归属不符也不承认存在。
+//	代价是本人拿错链接时看到「反馈不存在」而不是「无权查看」——这句本来也不告诉他任何
+//	可自助的信息，而列表接口（超管视图）本就带完整归属字段，运营侧不受影响。
 func (s *Server) handleFeedbackGet(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
 	f, err := s.Store.GetFeedback(id)
 	if err != nil || f == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "反馈不存在"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 404「反馈不存在」（文案原样）。
+		//   id 缺失/非数字时 ParseInt 回 0，落到这里同样按「这条反馈不存在」处理。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "反馈不存在"))
 		return
 	}
 	if !auth.IsSuperAdmin(u) && f.UserID != u.ID {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权查看"})
+		// 与上面那支**同码同文案**（见文件头：分开写就等于把「存在但不可看」送出去）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "反馈不存在"))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "feedback": f})

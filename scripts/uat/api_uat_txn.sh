@@ -123,6 +123,20 @@
 #       仍须 200 + success:true，防「整面改报错」反向翻车）→ 失败响应体零内部细节外泄总闸。
 #       进程内同链路行为锁见 backend-go/internal/api/pay_status_honesty_test.go（两层互为反证）。
 #       断言助手 req3/ck3 见文件头 mny_norm 下方注释（为什么只锁响应体会把本批改造判成假绿）。
+#   T61 AI 助手管理代理状态码诚实（★ 〇-U 批 I-10 · F-64③）：本层四类失败各归其码——
+#       未登录 401 与越权 403 必须分流（旧写法两支都 403，超管 token 过期后前端不触发重登录）、
+#       白名单外 assist 路径 404 且必须是 JSON 兜底不是 HTML（代理不是通用中继；其内部带
+#       code=NOT_FOUND 的拒绝支在真实路由上是死支，行为锁见那份 Go 测试）、上游 assist 自己拒的
+#       4xx 原样透传（反向锁：本层不得包成统一错误体，透传体里不许出现 code）、
+#       超管读代理仍须 200 + 上游 rows；
+#       502（上游不可达）/503（未配管理 Token）两支只在进程内造，见 admin_assist_proxy_test.go。
+#   T62 状态码诚实收尾三处定夺（★ 〇-U 批 I-10 · F-64② 收尾）：注册邮箱与既有账号撞车 →
+#       409 CONFLICT（与换绑邮箱两处同码，旧写法 400/409 两个码一句文案）；反馈详情「别人的这条」
+#       与「根本不存在的 id」必须三元组（状态码/错误码/文案）逐字相等且响应体零业务字段
+#       （旧写法 403 vs 404 ＝把反馈总量白送给任何登录用户），本人读取仍 200 作正向反证；
+#       知识库管理口匿名 → 401（本批从内联 403 纠正的那一族，admin_kb.go 与 kb.go 各锁一支）。
+#   T63 鉴权分流尾量代表口（★ 〇-U 批 I-10 ③ 尾量 122 处）：超管口三态（401/403/200）、
+#       租管口 401+200 正向对照、部门口 401（writeAuthzError 换回内联 403 即先红）。
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 #   —— 2026-09-21 实测：`ck X 'want' "$(post "$H" "{\"a\":1,\"b\":2}" /p)"` 里的 body 会被 bash
 #   在双引号内的命令替换中做**大括号展开**，按逗号切成两个参数，curl 发出残缺 body 换来「参数格式
@@ -1216,6 +1230,16 @@ ck T42-admin-list-declared "\"declared\":\"$TXA\"" "$(get "$AH" /api/admin/order
 ST=$(sq "SELECT manual_confirm FROM orders WHERE id=$OIDA")
 [ "$ST" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-manual-flag"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-manual-flag($ST)"; }
 
+# ★ F-67（〇-U 批 I-8 补断言，2026-09-27）三段锁①：声明后**租户侧出参**必须给得出
+#   「待平台确认」的原料——列行 status=pending 且 manual_confirm=1。
+#   前端 PlansP 三态显示零后端改动 ⇒ 锁必须钉在接口契约上（读侧），否则字段哪天从
+#   出参里掉出去，三态会静默退化回「已声明也显示未付款」。
+R=$(get "$H1" /api/billing/orders)
+F67A=$(echo "$R" | python3 -c "import sys,json
+o=[x for x in json.load(sys.stdin).get('orders',[]) if x.get('id')==$OIDA]
+print(o[0]['status']+'/'+str(o[0].get('manual_confirm')) if o else 'missing')")
+[ "$F67A" = "pending/1" ] && { PASS=$((PASS+1)); echo "PASS|T42-f67-declared-view"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-f67-declared-view($F67A)"; }
+
 # 后台确认：无哈希拒 / 合法哈希入账落 payments / 同一笔交易复用到第二单拒（一 tx 一单）
 R=$(post "$AH" "{\"id\":$OIDA,\"tenant_id\":$TAID}" /api/admin/orders/pay)
 ck T42-confirm-need-tx '交易哈希' "$R"
@@ -1225,6 +1249,15 @@ ST=$(sq "SELECT status FROM orders WHERE id=$OIDA")
 [ "$ST" = "paid" ] && { PASS=$((PASS+1)); echo "PASS|T42-confirmed-paid"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-confirmed-paid($ST)"; }
 N=$(sq "SELECT COUNT(*) FROM payments WHERE order_id=$OIDA AND tx_hash='$TXA'")
 [ "$N" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-payments-tx-hash"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-payments-tx-hash($N)"; }
+
+# ★ F-67 三段锁②：后台确认后租户侧出参翻成「平台已确认」——status=paid 且渠道如实 usdt。
+#   （三态第③段=未声明的 pending 单 manual_confirm=0 显示普通「待支付」，由①的反向构成：
+#    OIDB 从未声明，若②①同型断言对 OIDA 成立则口径闭环。）
+R=$(get "$H1" /api/billing/orders)
+F67B=$(echo "$R" | python3 -c "import sys,json
+o=[x for x in json.load(sys.stdin).get('orders',[]) if x.get('id')==$OIDA]
+print(o[0]['status']+'/'+str(o[0].get('channel')) if o else 'missing')")
+[ "$F67B" = "paid/usdt" ] && { PASS=$((PASS+1)); echo "PASS|T42-f67-confirmed-view"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-f67-confirmed-view($F67B)"; }
 R=$(post "$AH" "{\"id\":$OIDB,\"tenant_id\":$TAID,\"tx_hash\":\"$TXA\"}" /api/admin/orders/pay)
 ck T42-tx-reuse-rejected '已关联' "$R"
 ST=$(sq "SELECT status FROM orders WHERE id=$OIDB")
@@ -1742,6 +1775,14 @@ dbq "DELETE FROM coupons WHERE code IN ('$C51','$C51SUB','$C51BIG','$C51ANY')" >
 dbq "DELETE FROM coupon_redemptions WHERE code LIKE 'UATT51%'" >/dev/null
 dbq "DELETE FROM packages WHERE code IN ('uat_t51_low','uat_t51_high')" >/dev/null
 
+# ★ 09-27 复跑红账（批 I-10 收尾补）：T45 改密与 T47 令牌轮换已把脚本顶部抓的 $H1 打失效
+#   ——旧「一刀切 403」时代把「过期令牌」伪装成「权限不足」，测试与实现同时错所以一直绿；
+#   F-64③ 分流（未登录 401／越权 403）落地后，后段所有用 $H1 的腿（T52 普通用户被拒、
+#   T61 代理分流、T62 反馈本人 200、T63 租管三态）诚实翻 401 判红。
+#   口径同 345 行与 T46 的注释：这里全局刷新一次；H46/H55/H57 等段各自就地重登，互不影响。
+T1=$(tok uatuser_a uatpass123); H1="Authorization: Bearer $T1"
+[ ${#T1} -gt 10 ] 2>/dev/null || { FAIL=$((FAIL+1)); echo "FAIL|H1-refresh-before-T52|uatuser_a 重新登录失败（后段用 H1 的各腿会连锁红）"; }
+
 # ---------- T52 AI 助手管理代理（★ #34 后台前端重做，2026-09-21） ----------
 # 断言的是「主后台同源代理 + 原生面板」这条新链路，替掉旧 iframe+localStorage 方案后必须有的保障：
 #   鉴权（仅超管）、凭据注入（浏览器带的 admin_token 查询串被剥掉）、白名单转发、
@@ -1756,8 +1797,11 @@ else
 fi
 
 # ① 鉴权面：普通用户与匿名一律拒（代理不放行，凭据也不外泄）
-ck T52-forbid-normal-user '"success":false' "$(get "$H1" /api/admin/assist/config)"
-ck T52-forbid-anon '"success":false' "$(get "" /api/admin/assist/config)"
+# ★ 断言升级（〇-U 批 I-10 · F-64③）：这里原先只锁 `"success":false`——200 壳与 4xx 都会绿，
+#   是文件头 req3/ck3 那段注说的典型假绿形态。现按「状态码+错误码+文案」三件套收紧
+#   （未登录 401 与越权 403 必须分流，细则与理由见下方 T61 段）。
+req3 GET "$H1" /api/admin/assist/config; ck3 T52-forbid-normal-user 403 FORBIDDEN '权限不足'
+req3 GET "" /api/admin/assist/config; ck3 T52-forbid-anon 401 UNAUTHORIZED '未登录'
 
 # ② 状态条：上游可达 + Token 来源为 env（面板据此显示绿条，且不返回 Token 明文）
 R=$(get "$AH" /api/admin/assist/status)
@@ -2516,6 +2560,140 @@ req3 POST "$H60A" /api/billing/invoices/create "$B60INV"
 ck T60-invoice-reopen-after-void '"success":true' "$R3BODY"
 # ⑦ 诚实化改造不许把服务端内部细节一起带出去（F-43 同族：驱动原文、SQL、约束名一律禁止上屏）
 printf '%s' "$T60ALL" | grep -qiE 'sql:|no rows|SQLSTATE|constraint|panic:|goroutine|dsn' && { FAIL=$((FAIL+1)); echo "FAIL|T60-no-internal-leak(失败响应体里出现了内部细节，见本节各条 body)"; } || { PASS=$((PASS+1)); echo "PASS|T60-no-internal-leak"; }
+# ---------- T61 AI 助手管理代理：鉴权分流 + 白名单 + 上游透传（★ 〇-U 批 I-10 · F-64③） ----------
+# 本节锁本层（主后台同源代理）自己的四类失败各自落在哪个码上，与
+# backend-go/internal/api/admin_assist_proxy_test.go 的进程内锁互补：
+#   ① 未登录 401 / 已登录非超管 403 必须**分流**（旧写法两支都回 403：超管 token 过期后
+#      前端 core.ts 只在 401 触发重登录，于是他在后台看着「权限不足」原地撞墙）；
+#   ② 白名单外的 assist 路径不得被放行（真实路由上由 spa.go 的 /api 兜底回 404 JSON，
+#      绝不能回成 HTML 整页——回成 HTML 就说明接口路径被当成前端路由兜底了）；
+#   ③ 上游 assist 自己拒的 4xx **原样透传**（反向锁：不许被本层换成统一错误体，
+#      否则运维只看到我们的中文套话，丢掉上游那句真实拒绝原因）；
+#   ④ 正向对照：超管读代理仍须 200 + 上游 rows（把鉴权面整体改报错也能过 ①②，必须有这条反证）。
+# 502（assist 不可达）与 503（未配管理 Token）两支只能在进程内造：停上游或清凭据会打断
+# 后面所有 T52/T61 用例，编排环境里做代价远大于收益，由那份单测承担，此处不重复。
+T61ALL=""
+req3 GET "" /api/admin/assist/status; ck3 T61-status-anon-401 401 UNAUTHORIZED '未登录'
+T61ALL="$T61ALL$R3BODY"
+req3 GET "$H1" /api/admin/assist/status; ck3 T61-status-normal-403 403 FORBIDDEN '权限不足'
+req3 GET "" /api/admin/assist/sessions; ck3 T61-proxy-anon-401 401 UNAUTHORIZED '未登录'
+req3 GET "$H1" /api/admin/assist/sessions; ck3 T61-proxy-normal-403 403 FORBIDDEN '权限不足'
+# ② 白名单外路径不放行：mux 只登记 assistProxyRoutes 里的那些路径（server.go:225），
+#    未登记的 assist 路径根本进不到代理，由 spa.go 的 /api 兜底统一回 404 JSON。
+#    这里锁「404 + 不是 HTML + 接口不存在」而不是错误码：代理内部那支带 code=NOT_FOUND 的
+#    拒绝分支在真实路由上是**防御性死支**，它的行为锁在 admin_assist_proxy_test.go 的
+#    TestAssistProxyWhitelist（直接调 handler）——写在这里会变成永远红或永远假的错位断言。
+req3 GET "$AH" /api/admin/assist/zzz-not-a-route
+if [ "${R3ST:-}" = "404" ] && printf '%s' "$R3BODY" | grep -qE '接口不存在' && ! printf '%s' "$R3BODY" | grep -qiE '<html|<!DOCTYPE'; then
+  PASS=$((PASS+1)); echo "PASS|T61-off-whitelist-404-json"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T61-off-whitelist-404-json(got ${R3ST:-?} body=${R3BODY:0:160}；HTML 兜底＝SPA 回退把接口当成前端路由了)"
+fi
+T61ALL="$T61ALL$R3BODY"
+# ④ 正向对照（状态码与上游原文一起验，只看 200 会放过「本层自己编一个空 rows」）
+req3 GET "$AH" /api/admin/assist/kb
+if [ "${R3ST:-}" = "200" ] && printf '%s' "$R3BODY" | grep -qE '"rows":\['; then
+  PASS=$((PASS+1)); echo "PASS|T61-super-read-passthrough-200"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T61-super-read-passthrough-200(got ${R3ST:-?} body=${R3BODY:0:160})"
+fi
+# ③ 上游 4xx 原样透传：assist 白名单外的配置键由**上游**拒绝（400 + "key not allowed"）。
+#    本层若把它包成统一错误体，这一支就会同时丢掉真实原因与可区分的状态码。
+req3 PUT "$AH" /api/admin/assist/config '{"key":"not_a_real_key","value":"x"}'
+[ "${R3ST:-}" = "400" ] && { PASS=$((PASS+1)); echo "PASS|T61-upstream-400-status-passthrough"; } || { FAIL=$((FAIL+1)); echo "FAIL|T61-upstream-400-status-passthrough(got ${R3ST:-?}，代理不得改写上游状态码)"; }
+printf '%s' "$R3BODY" | grep -qE 'key not allowed' && { PASS=$((PASS+1)); echo "PASS|T61-upstream-message-passthrough"; } || { FAIL=$((FAIL+1)); echo "FAIL|T61-upstream-message-passthrough(body=${R3BODY:0:160})"; }
+[ -z "${R3CODE:-}" ] && { PASS=$((PASS+1)); echo "PASS|T61-passthrough-carries-no-unified-code"; } || { FAIL=$((FAIL+1)); echo "FAIL|T61-passthrough-carries-no-unified-code(透传体里出现了 code=${R3CODE}，说明改写路径还活着)"; }
+# 诚实化改造不许把底层错误串一起带出来（同 T60 ⑦ 口径：dial/connection refused 一律禁止上屏）
+printf '%s' "$T61ALL" | grep -qiE 'sql:|no rows|SQLSTATE|constraint|panic:|goroutine|dial |connection refused' && { FAIL=$((FAIL+1)); echo "FAIL|T61-no-internal-leak(失败响应体里出现内部细节)"; } || { PASS=$((PASS+1)); echo "PASS|T61-no-internal-leak"; }
+
+# ---------- T62 状态码诚实收尾三处定夺（★ 〇-U 批 I-10 · F-64② 收尾） ----------
+# 本批收尾时有三处「同一件事两个码 / 一个码泄漏存在性」的定夺，逐条落到断言上：
+#   ① 注册邮箱与既有账号撞车 → 409 CONFLICT（旧写法回 400，而换绑邮箱那两处回 409：
+#      同一句文案两个码，前端/SDK 按 code 分支要为同一种失败写两条判断）；
+#   ② 反馈详情：别人的反馈 与 根本不存在的 id → **同码同文案**（旧写法一个 403 一个 404，
+#      等于把「这一条存在」白送给任何登录用户，反馈总量与提交节奏变成免费计数接口）；
+#   ③ 知识库管理口匿名 → 401（旧写法内联 403，同 T61① 一类：token 过期的租户管理员
+#      在知识库页看着「无权限」而看不见「请重登」）。
+SFX62=$(date +%s | tail -c 6)
+U62="uatm62$SFX62"
+E62="uat62_$SFX62@test.com"
+T62ALL=""
+# ① 先用一个全新邮箱注册成功（正向前提），再拿同一邮箱换用户名注册 → 必须 409
+B62R1="{\"username\":\"$U62\",\"password\":\"uatpass123\",\"type\":\"personal\",\"name\":\"T62邮箱撞车\",\"email\":\"$E62\",\"agreed\":true}"
+req3 POST "" /api/auth/register "$B62R1"
+if [ "${R3ST:-}" = "200" ] && printf '%s' "$R3BODY" | grep -qE '"success":true'; then
+  PASS=$((PASS+1)); echo "PASS|T62-register-first-ok"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T62-register-first-ok(got ${R3ST:-?} body=${R3BODY:0:160}，前提不成立则下一条 409 无意义)"
+fi
+B62R2="{\"username\":\"${U62}b\",\"password\":\"uatpass123\",\"type\":\"personal\",\"name\":\"T62邮箱撞车二\",\"email\":\"$E62\",\"agreed\":true}"
+req3 POST "" /api/auth/register "$B62R2"
+ck3 T62-register-dup-email-409 409 CONFLICT '该邮箱已被其他账号绑定'
+T62ALL="$T62ALL$R3BODY"
+# ② 反馈详情存在性探针：先由 uatuser_a 提一条，再让 uatuser_b（另一租户）拿 id 试探
+FCONTENT="T62 存在性探针锁用反馈 $SFX62"
+B62F="{\"target_type\":\"text\",\"content\":\"$FCONTENT\"}"
+req3 POST "$H1" /api/feedback "$B62F"
+[ "${R3ST:-}" = "200" ] && { PASS=$((PASS+1)); echo "PASS|T62-feedback-created"; } || { FAIL=$((FAIL+1)); echo "FAIL|T62-feedback-created(got ${R3ST:-?} body=${R3BODY:0:160})"; }
+FID62=$(dbq "SELECT id FROM feedbacks WHERE content='$FCONTENT' ORDER BY id DESC LIMIT 1" | tr -d '[:space:]')
+ck T62-feedback-id-read '^[0-9]+$' "$FID62"
+GHOST62=987654321   # 明确不存在的 id（自增主键不可能到这个量级）
+req3 GET "$H2" "/api/feedback/get?id=$FID62"; ck3 T62-feedback-peer-404 404 NOT_FOUND '反馈不存在'
+P62="${R3ST}/${R3CODE}/${R3MSG}"; PB62="$R3BODY"
+T62ALL="$T62ALL$R3BODY"
+req3 GET "$H2" "/api/feedback/get?id=$GHOST62"; ck3 T62-feedback-ghost-404 404 NOT_FOUND '反馈不存在'
+G62="${R3ST}/${R3CODE}/${R3MSG}"; GB62="$R3BODY"
+# ★ 核心等值锁：两条通道的「状态码/错误码/文案」三元组必须逐字相同——
+#   只要有任何一维不同，调用方就能数出「这一条存在」，探针就还开着。
+if [ "$P62" = "$G62" ]; then PASS=$((PASS+1)); echo "PASS|T62-feedback-probe-closed($P62)"
+else FAIL=$((FAIL+1)); echo "FAIL|T62-feedback-probe-closed(越权=$P62 / 查无=$G62，三元组必须逐字相等)"; fi
+# 越权详情不得回带反馈字段（只承认「不存在」，不承认「有这么一条」）。
+# ⚠️ 两条响应体**分别**判：只判 ghost 会让「peer 漏字段但 ghost 干净」这种半截改法静默通过。
+LEAK62=0
+for BD62 in "$PB62" "$GB62"; do
+  if printf '%s' "$BD62" | grep -qE '"feedback"|"content"|"user_id"|"source_text"'; then LEAK62=1; fi
+done
+if [ "$LEAK62" = "0" ]; then PASS=$((PASS+1)); echo "PASS|T62-detail-no-fields"
+else FAIL=$((FAIL+1)); echo "FAIL|T62-detail-no-fields(越权/查无响应体带了业务字段: ${PB62:0:160})"; fi
+# 正向对照：本人仍须 200 且取到自己那条（把详情口整面改报错也能过上面四条）
+req3 GET "$H1" "/api/feedback/get?id=$FID62"
+if [ "${R3ST:-}" = "200" ] && printf '%s' "$R3BODY" | grep -qE '"feedback"'; then
+  PASS=$((PASS+1)); echo "PASS|T62-owner-detail-200"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T62-owner-detail-200(got ${R3ST:-?} body=${R3BODY:0:160})"
+fi
+# ③ 知识库管理口匿名 401（本批从内联 403 纠正过来的那一族，两个文件各锁一支）
+req3 GET "" /api/admin/kb-entries; ck3 T62-kb-entries-anon-401 401 UNAUTHORIZED '未登录'
+B62IMP='{"package_id":1,"entries":[]}'
+req3 POST "" /api/admin/kb-entries/import "$B62IMP"; ck3 T62-kb-import-anon-401 401 UNAUTHORIZED '未登录'
+req3 GET "" /api/admin/brand-terms; ck3 T62-brand-terms-anon-401 401 UNAUTHORIZED '未登录'
+T62ALL="$T62ALL$R3BODY"
+printf '%s' "$T62ALL" | grep -qiE 'sql:|no rows|SQLSTATE|constraint|panic:|goroutine|dsn' && { FAIL=$((FAIL+1)); echo "FAIL|T62-no-internal-leak(失败响应体里出现内部细节)"; } || { PASS=$((PASS+1)); echo "PASS|T62-no-internal-leak"; }
+
+# ---------- T63 鉴权分流尾量代表口（★ 〇-U 批 I-10 ③ 尾量 122 处的 HTTP 级常设锁） ----------
+# 批 I-10 把 27 个文件里 122 处「未登录也回 403」的内联错误体迁到 s.writeAuthzError
+# （server.go：errNotLogin→401 UNAUTHORIZED、等级不足→403 FORBIDDEN，**文案逐字不变**）。
+# 进程内锁是 errorstyle 棘轮 + 各 handler 单测；这里补 HTTP 级抽查，按**三类守卫各取一代表**
+# 钉分流形态——将来谁把 writeAuthzError 换回内联 403，本段先红：
+#   ① 超管口（admin_models.go，requireAdminUser）：匿名 401 / 租管 403 / 超管 200 三态齐；
+#   ② 租管口（admin_webhooks.go，requireTenantAdmin）：匿名 401，且租管（$H1）必须 200
+#      ——正向对照防「鉴权面整体改报错也能过 ①」；
+#   ③ 部门口（orgs.go）：匿名 401 一支即可，等级链行为由单测承担。
+req3 GET "" /api/admin/models; ck3 T63-models-anon-401 401 UNAUTHORIZED '未登录'
+req3 GET "$H1" /api/admin/models; ck3 T63-models-tenantadmin-403 403 FORBIDDEN '权限不足'
+req3 GET "$AH" /api/admin/models
+[ "${R3ST:-}" = "200" ] && { PASS=$((PASS+1)); echo "PASS|T63-models-super-200"; } || { FAIL=$((FAIL+1)); echo "FAIL|T63-models-super-200(got ${R3ST:-?} body=${R3BODY:0:120})"; }
+req3 GET "" /api/webhooks; ck3 T63-webhooks-anon-401 401 UNAUTHORIZED '未登录'
+req3 GET "$H1" /api/webhooks
+[ "${R3ST:-}" = "200" ] && { PASS=$((PASS+1)); echo "PASS|T63-webhooks-tenantadmin-200"; } || { FAIL=$((FAIL+1)); echo "FAIL|T63-webhooks-tenantadmin-200(got ${R3ST:-?} body=${R3BODY:0:120}；401＝H1 失效假绿，勿放宽)"; }
+req3 GET "" /api/admin/orgs; ck3 T63-orgs-anon-401 401 UNAUTHORIZED '未登录'
+
+# 收尾清理：本节造的反馈属断言耗材，跑完即删。留着的代价不是本轮（本段已在脚本末尾），
+#   而是**下一轮复用同一个 UAT 库**时把历史行算进统计类用例（反馈列表/留资计数）。
+#   注册用户按本脚本既有惯例留下（各段自建用户都是这么留的）：users 行挂着会话/台账/邀请
+#   等外键，硬删要连带清一片表，而删除对这些用例零收益。
+if [ -n "${FID62:-}" ]; then dbq "DELETE FROM feedbacks WHERE id=$FID62" >/dev/null; fi
+
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="
 exit 0

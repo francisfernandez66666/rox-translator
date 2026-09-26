@@ -12,7 +12,10 @@
  * - 反馈回复：支持 BBS 回复线程，超管或提交者本人可追加回复
  */
 
-import { request, authHeaders, type AdminResp } from './core'
+// ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
+//   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
+//   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
+import { bizResp, request, authHeaders, type AdminResp } from './core'
 
 // createFeedback 提交翻译反馈（文本气泡/工单详情入口）。
 export async function createFeedback(payload: {
@@ -34,11 +37,11 @@ export async function createFeedback(payload: {
 
 // resolveFeedback 超管标记已处理并附备注。
 export async function resolveFeedback(id: number, note = ''): Promise<AdminResp> {
-  return request('/api/admin/feedbacks/resolve', {
+  return bizResp(() => request('/api/admin/feedbacks/resolve', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({ id, note }),
-  })
+  }))
 }
 
 /** 反馈 BBS 回复线程元素：含用户/角色/内容/时间 */
@@ -70,14 +73,14 @@ export interface FeedbackRecord {
 
 // feedbackList 反馈列表（角色化）：超管=全部，其他用户=本人提交。
 export async function feedbackList(status = ''): Promise<AdminResp & { feedbacks?: FeedbackRecord[] }> {
-  return request(`/api/feedback/list${status ? '?status=' + encodeURIComponent(status) : ''}`, { headers: authHeaders() })
+  return bizResp(() => request(`/api/feedback/list${status ? '?status=' + encodeURIComponent(status) : ''}`, { headers: authHeaders() }))
 }
 
 // feedbackReply 追加回复（超管或提交者本人；已完成禁止）。
 export async function feedbackReply(id: number, content: string): Promise<AdminResp & { replies?: FeedbackReply[] }> {
-  return request('/api/feedback/reply', {
+  return bizResp(() => request('/api/feedback/reply', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({ id, content }),
-  })
+  }))
 }

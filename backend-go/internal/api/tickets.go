@@ -12,6 +12,12 @@ package api
 //   - 驳回重翻循环：重翻成功后清空驳回意见，避免下次运行重复重翻
 //   - 批准审批后触发自迭代（feedback 步骤）；驳回时记录原因与建议
 //   - 工单操作均写入审计；工单查询全部限定生效租户（租户隔离）
+// ★ F-64②（批 I-10 2026-09-26）口径：本文件「HTTP 200 承载业务失败」的 21 处已全部改走
+//   统一出口 s.writeError + apierrors，状态码按语义诚实——
+//   404（本租户下取不到单：跨租户不泄露存在性）、409（状态或产物不满足该操作）、
+//   500（存储读写故障）、503（工单服务未装配 / 并发锁冲突，稍后重试有意义）。
+//   其余内联 writeJSON(w, 401/403/400/404/500, …) 的状态码本来就是诚实的，属
+//   「错误写法棘轮」（TestErrorStyleRatchet）的另一档，本批按分期口径未动。
 
 import (
 	"archive/zip"
@@ -170,7 +176,11 @@ func (s *Server) handleTickets(w http.ResponseWriter, r *http.Request) {
 	// 租户隔离：仅查询生效租户下的工单
 	tickets, err := s.Store.ListTickets(s.effTenant(r, u), u.ID, onlyMine)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：工单列表读的是本进程存储层，查询失败属服务端故障。
+		//   旧写法在 HTTP 层永远是 200：按状态码分支的客户端（SDK、监控、重试器）把它读成成功，
+		//   而前端 TicketsPage 的 load() 只在 r.success 时 setTickets，失败被 catch 吞掉——
+		//   首屏就是一张没有提示的空列表。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ 运行中工单附实时进度百分比（后端唯一真源；仅运行中才查状态，避免全量 N+1）
@@ -243,7 +253,10 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 	// 创建工单（归属生效租户）
 	t, err := s.Store.CreateTicket(s.effTenant(r, u), u.ID, req.Title, req.SourceText, "", req.TargetLangs)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：配额闸门与余额预检都已通过，此处失败是工单行
+		//   写入故障（本进程存储层），不是用户改载荷就能改正的问题，故不是 400。
+		//   200 壳下按状态码分支的客户端（SDK/监控/重试器）会读成「建单成功」并去取不存在的 ticket 对象。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ 翻译模式随创建请求落库（fast=快速 / pro=专业校对；空值归一化为 pro）
@@ -411,7 +424,10 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 	// 创建工单（file_path 记首个文件，兼容旧列表展示；全部文件入 ticket_files 表）
 	t, err := s.Store.CreateTicket(s.effTenant(r, u), u.ID, title, "", saved[0].path, targetLangs)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：文件已落盘、闸门与余额预检都已通过，
+		//   这步失败是工单行写入故障（本进程存储层），客户端改载荷也救不回来；
+		//   写成 200 时，按状态码分支的调用方读到的是「建单成功」，而响应体里根本没有 ticket 对象。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ 文件任务模式落库（multipart mode 字段；空=pro）
@@ -460,7 +476,10 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 	// 租户隔离：仅可取生效租户下的工单
 	t, err := s.Store.GetTicket(req.ID, s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不存在"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 404：GetTicket 带生效租户条件，取不到就是
+		//   「本租户下没有这张单」。跨租户一律按不存在处理（404 而非 403），是本仓既有的
+		//   安全口径——403 会泄露「这个 id 在别家租户下确实存在」。
+		s.writeError(w, r, apierrors.New(apierrors.ErrTicketNotFound, "工单不存在"))
 		return
 	}
 	// 隐私校验：非创建者且非超管禁止运行他人工单
@@ -474,8 +493,10 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 	case store.TicketDraft, store.TicketQueued, store.TicketRejected:
 		// 可执行状态
 	default:
-		writeJSON(w, 200, map[string]interface{}{"success": false,
-			"message": "当前状态不可执行：仅待处理/排队中/被驳回的工单可以运行"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 409：工单存在、载荷也没错，挡路的是资源**当前状态**
+		//   （completed/cancelled/approved 重跑语义非法，见上方整改 C5 的状态机门槛）。
+		//   不用 400 是因为改请求体救不了——要等状态回到可跑档；不用 403 是因为发起人有权跑自己的单。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "当前状态不可执行：仅待处理/排队中/被驳回的工单可以运行"))
 		return
 	}
 	// 配额闸门：QPS/并发/每日上限/余额校验（不通过则拒绝运行）
@@ -487,14 +508,21 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 异步入队：立即返回 ticket_no，worker 后台执行五步编排（大文件不阻塞 HTTP）
 	if s.TicketSvc == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单服务未初始化"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 503：工单服务与 store/engine 同批装配
+		//   （见 server.go「if st != nil && eng != nil」），为 nil 就是执行依赖未就绪，
+		//   语义上「等一会儿或运维补齐后再试有意义」，与 500「我们这边出错了」不同档——
+		//   与 ①档 billing_api.go「平台存储未初始化」→ 503 同一口径。
+		s.writeError(w, r, apierrors.New(apierrors.ErrServiceUnavailable, "工单服务未初始化"))
 		return
 	}
 	t.Status = store.TicketQueued
 	_ = s.Store.UpdateTicket(t)
 	// ★ 整改 C6：手动 run 的入队同样用 Background（与建单/审批路径口径统一）
 	if _, err := s.TicketSvc.EnqueueTicketRun(context.Background(), t.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "入队失败: " + err.Error()})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：入队即往 jobs 表写一行（queue.Direct），
+		//   失败是存储写入故障、本进程侧的问题；文案里的 err.Error() 原样透出便于排查。
+		//   注意工单已被上面置成 queued 落库，这次运行确实没排上，故必须是失败状态码而不是 200。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "入队失败: "+err.Error()))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_enqueue", "tickets", t.TicketNo)
@@ -583,7 +611,9 @@ func (s *Server) handleTicketDetail(w http.ResponseWriter, r *http.Request) {
 	// 租户隔离：仅可取生效租户下的工单
 	t, err := s.Store.GetTicket(id, s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不存在"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 404：详情是读接口，「本租户下查不到这张单」
+		//   就是资源不存在；跨租户同样回 404 不泄露存在性（与上面 handleTicketRun 的 404 同一条安全口径）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrTicketNotFound, "工单不存在"))
 		return
 	}
 	// 隐私校验：非创建者且非超管不可见他人工单详情
@@ -700,7 +730,9 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.Store.GetTicket(id, s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不存在"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 404：要下载的单在本租户下取不到就是资源不存在
+		//   （跨租户不泄露存在性，同 handleTicketDetail 的 404 口径）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrTicketNotFound, "工单不存在"))
 		return
 	}
 	// 校验链：仅创建者/超管可下载，且须已完成工单
@@ -709,14 +741,20 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if t.Status != store.TicketCompleted {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单尚未完成"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 409：请求合法、单也在，错在调用时机——
+		//   工单还在排队/翻译（或已取消、被驳回），产物尚未生成。与开放接口
+		//   /openapi/v1/tasks/download 的 not_ready→409 同一判据（F-64① 批 I-7 已订正那一侧）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "工单尚未完成"))
 		return
 	}
 	// ★ F-42-d（2026-09-25 UAT 修复批）：状态 completed 但无产物 ⇒ 不给下载。
 	//   旧校验只看 status，假 completed（翻译中欠费中止后被空转重翻刷成完成）在租户界面
 	//   照样露下载钮，点下去拿到空文件/空对照表，用户以为「翻译质量差」而非「本单没译成」。
 	if !s.ticketHasDeliverable(t) {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "该工单没有可用译文产物（可能因余额不足或流程中断），请重新发起翻译"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 409：状态位写着 completed 但产物为空
+		//   （鬼 completed），仍是「资源当前状态与请求冲突」，不是服务端这次出错；
+		//   载荷里带不出文件，客户端需要的是「重新发起翻译」而不是重试本请求。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该工单没有可用译文产物（可能因余额不足或流程中断），请重新发起翻译"))
 		return
 	}
 	baseName := t.TicketNo
@@ -783,7 +821,10 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 			_ = zw.Close()
 			return
 		}
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "暂无已生成的产物（部分文件可能处理失败）"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 409：多文件工单里**没有一个**子文件产出可取的
+		//   结果文件（上面已确认整单有产物，走到这里说明产物路径都指向已丢失/失败的行），
+		//   仍是资源状态不满足下载条件；此时尚未写出任何响应头，状态码可达。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "暂无已生成的产物（部分文件可能处理失败）"))
 		return
 	}
 	// ① 原格式回写产物直接流式返回（旧单文件工单）
@@ -804,7 +845,10 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.Unmarshal([]byte(t.FinalResult), &payload)
 	if len(payload.Translations) == 0 {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "暂无可下载的翻译结果"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 409：文本工单的对照表要靠载荷里的译文列生成，
+		//   载荷解析不出任何译文＝单子没有可交付内容（与上面「无产物」「未完成」同一族状态冲突），
+		//   客户端要做的是重跑翻译，而不是重试同一个下载请求。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "暂无可下载的翻译结果"))
 		return
 	}
 	f := excelize.NewFile()
@@ -892,13 +936,17 @@ func (s *Server) handleApproveList(w http.ResponseWriter, r *http.Request) {
 	}
 	// 权限校验：需角色等级 >= 2（approver/admin/tenant_admin/super_admin）
 	if err := auth.RequireRole(u, 2); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 租户隔离：仅列出生效租户下待审批工单
 	tickets, err := s.Store.ListPendingApproval(s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：待审批队列读的是本进程存储层，查询失败是服务端故障。
+		//   审批台（admin/TicketsP loadApproval）只在 r.success 时 setApprovalTickets，200 壳下
+		//   审批员看到的是「没有单要审」，而真实情况是数据库没答上来——漏审就这么发生。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "tickets": s.ticketsViewJSON(tickets)})
@@ -915,7 +963,8 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 	}
 	// 权限校验：需角色等级 >= 2
 	if err := auth.RequireRole(u, 2); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -932,12 +981,17 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 	// 租户隔离：仅可取生效租户下的工单
 	t, err := s.Store.GetTicket(req.ID, s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不存在"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 404：待审批的单在本租户下取不到就是资源不存在
+		//   （跨租户不泄露存在性，与 handleTicketDetail/handleTicketRun 同一口径）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrTicketNotFound, "工单不存在"))
 		return
 	}
 	// 状态机约束：仅待审批状态的工单可审批
 	if t.Status != store.TicketPendingAppr {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不在待审批状态"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 409：单子在、审批员权限也有，冲突的是工单状态
+		//   （已被别处批准/驳回，或还没提交审批）。审批操作幂等性差（重复批准会重复触发自迭代），
+		//   状态码必须让调用方能一眼分支到「这单已经不在审批台上」，而不是重试同一个动作。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "工单不在待审批状态"))
 		return
 	}
 	// 根据action 更新工单状态与审批字段
@@ -972,7 +1026,10 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.UpdateTicket(t); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：状态与审批字段落库失败是存储写入故障，
+		//   工单实际还停在 pending_approval（下方的审批审计与批准后的自迭代都没跑），这次审批没生效；
+		//   按状态码分支的调用方在 200 壳下会读成「这次审批落定了」，转而把单子当已处理。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 审批审计
@@ -1110,8 +1167,11 @@ func (s *Server) serveTicketTextDeliverable(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	if len(paths) == 0 {
-		writeJSON(w, 200, map[string]interface{}{"success": false,
-			"message": "该工单暂无纯文案产物（历史工单建单时未生成），可重新发起工单获取"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 409：fmt=text 这条支路要的是纯文案旁路产物，
+		//   单子存在、下载权限也有，缺的是那份 .md 还没被生成出来（历史工单建单时没有双模式）——
+		//   典型「资源当前状态与请求冲突」。此处仍在写响应头之前，状态码可达；
+		//   与还原模式那三处 409（未完成/无产物/无对照数据）保持同族口径。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该工单暂无纯文案产物（历史工单建单时未生成），可重新发起工单获取"))
 		return
 	}
 	if len(paths) == 1 {
@@ -1217,7 +1277,9 @@ func (s *Server) handleTicketCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.Store.GetTicket(req.ID, s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不存在"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 404：要取消的单在本租户下不存在
+		//   （跨租户不泄露存在性，与详情/运行/审批四处同一族 404）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrTicketNotFound, "工单不存在"))
 		return
 	}
 	if t.CreatedBy != u.ID && !auth.IsSuperAdmin(u) {
@@ -1226,7 +1288,9 @@ func (s *Server) handleTicketCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	// 取消闸口：仅创建者/超管，且状态必须是排队中/翻译中
 	if t.Status != store.TicketQueued && t.Status != store.TicketInProgress {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "当前状态不可取消（仅排队中/翻译中）"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 409：取消是对「工单」这个资源的状态迁移，
+		//   单子已完成/已取消/已批准时这个迁移不被允许——冲突在资源状态，不在载荷（400）或权限（403）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "当前状态不可取消（仅排队中/翻译中）"))
 		return
 	}
 	if err := s.Store.CancelTicket(req.ID); err != nil {
@@ -1234,8 +1298,15 @@ func (s *Server) handleTicketCancel(w http.ResponseWriter, r *http.Request) {
 		// ★ 用户友好映射：底层并发锁冲突对用户表现为「系统繁忙」
 		if strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked") {
 			msg = "系统繁忙，工单取消未成功，请稍候重试"
+			// ★ F-64②（批 I-10）：原 200 承载失败 → 503：并发锁冲突是**瞬时**的存储忙，
+			//   文案本身就承诺「稍候重试」，503 才让客户端的重试器按退避处理；
+			//   写成 200 时前端把「繁忙」当业务失败弹个红条，用户只能手动反复点。
+			s.writeError(w, r, apierrors.New(apierrors.ErrServiceUnavailable, msg))
+			return
 		}
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": msg})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：非锁冲突的取消失败就是存储写入故障
+		//   （工单状态没落住），底层原文照旧逐字透出，便于按 trace_id 排查。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, msg))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_cancel", "tickets", t.TicketNo)

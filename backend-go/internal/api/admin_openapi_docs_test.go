@@ -62,3 +62,16 @@ func TestGetDocsMDFallback(t *testing.T) {
 		t.Fatalf("清空后应再次回退内置默认")
 	}
 }
+
+// TestDefaultDocsRotateCountResetNote F-70 撤案尾账（批 I-8 补断言，2026-09-27）：
+// 轮换＝删旧建新，「当日调用计数随之归零」是设计行为，但必须写进对外文档与前端确认文案，
+// 否则客户会把计数清零当成被盗用/异常。本锁钉内置默认文档（中英两份）的接口一览行，
+// 谁把这句抹掉即红灯——文档可被管理台在线覆写，锁只保证**出厂默认**在场。
+func TestDefaultDocsRotateCountResetNote(t *testing.T) {
+	if !strings.Contains(defaultDocsMDZh, "当日调用计数随之归零") {
+		t.Fatal(`中文默认文档缺「当日调用计数随之归零」（F-70 对外文案账）`)
+	}
+	if !strings.Contains(defaultDocsMDEn, "daily call count resets to zero") {
+		t.Fatal(`英文默认文档缺 "daily call count resets to zero"（F-70 对外文案账）`)
+	}
+}

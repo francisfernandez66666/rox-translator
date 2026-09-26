@@ -23,7 +23,8 @@
 #
 # 错误处理（★ 2026-09-26 F-64① 状态码诚实改造后的口径）：
 #   对外契约面的失败一律以**真实 HTTP 状态码**发出（400/401/402/403/404/409/429/500），
-#   响应体同时带 code（正主，与文档 Error.code 枚举一致）与 error_code（<1.0.4 别名，同值）。
+#   响应体带 code（正主，与文档 Error.code 枚举一致）。error_code 只是**状态码诚实改造之前的老服务端**
+#   在发的别名；改造后的服务端统一只发 code（不再同值下发别名，免得两套码名长期并存、取法分叉）。
 #   SDK 把两者都收敛到 TranslatorError.code（error_code 属性保留兼容，勿删）；
 #   限流类（429）额外给出 retry_after 秒数，调用方按它退避即可，不必自己猜窗口。
 #   唯一仍在 200 里表达「失败」的是**任务状态**轮询：status:"failed" 是业务对象的状态，
@@ -110,8 +111,8 @@ class TranslatorClient:
             try:
                 parsed = json.loads(body)
                 # ★ F-64①：错误码正主键是 code（与文档 Error.code 枚举一致），error_code 是
-                #   <1.0.4 SDK 在读的别名。老服务端只发 error_code、新服务端两个都发且同值，
-                #   所以取「code 优先、error_code 兜底」两种版本都能拿到码。
+                #   状态码诚实改造**之前**的老服务端在发的别名；改造后的服务端只发 code。
+                #   所以取「code 优先、error_code 兜底」——混跑窗口里两边都能拿到码。
                 raise TranslatorError(parsed.get("message", f"HTTP {e.code}"),
                                       status=e.code,
                                       error_code=parsed.get("code") or parsed.get("error_code"),

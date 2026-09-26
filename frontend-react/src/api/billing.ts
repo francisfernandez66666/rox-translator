@@ -14,6 +14,9 @@
  * - 商业包管理：套餐列表、订阅、创建、更新、删除
  */
 
+// ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
+//   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
+//   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
 import { request, bizResp, authHeaders, API_BASE, handleUnauthorized, apiMsg, type AdminResp } from './core'
 
 /** 查询当前租户余额 */
@@ -184,7 +187,7 @@ export async function autoRenewSet(enabled: boolean): Promise<AdminResp> {
 
 /** 列出全部商业包（含下架） */
 export async function adminPackages(): Promise<AdminResp> {
-  return request('/api/admin/packages', { headers: authHeaders() })
+  return bizResp(() => request('/api/admin/packages', { headers: authHeaders() }))
 }
 
 /** 创建商业包（包码/名称/类型/句数/价格/有效期等） */
@@ -192,7 +195,7 @@ export async function adminPackages(): Promise<AdminResp> {
 export async function adminPackageCreate(data: {
   code: string; name: string; ptype: string; sentences: number; price_money?: number; duration_days?: number; sort_order?: number
 }): Promise<AdminResp> {
-  return request('/api/admin/packages/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/packages/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 更新商业包（改名/调价/改句数/启停） */
@@ -200,13 +203,13 @@ export async function adminPackageCreate(data: {
 export async function adminPackageUpdate(data: {
   id: number; name?: string; ptype?: string; sentences?: number; price_money?: number; duration_days?: number; enabled?: number; sort_order?: number
 }): Promise<AdminResp> {
-  return request('/api/admin/packages/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/packages/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 删除商业包 */
 /** 管理员：删除套餐 */
 export async function adminPackageDelete(id: number): Promise<AdminResp> {
-  return request('/api/admin/packages/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/admin/packages/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /** 读取商业包全局设置（句数强制开关/试用句数/支付模式/静态码等） */

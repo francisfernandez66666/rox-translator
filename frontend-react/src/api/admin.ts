@@ -48,27 +48,27 @@ export async function downloadUserImportTemplate(): Promise<boolean> {
 
 /** 获取后台用户列表 */
 export async function adminUsers(): Promise<AdminResp> {
-  return request('/api/admin/users', { headers: authHeaders() })
+  return bizResp(() => request('/api/admin/users', { headers: authHeaders() }))
 }
 
 /** 创建后台用户（可指定组织与角色） */
 export async function adminUserCreate(data: { username: string; password: string; display_name: string; role: string; org_id?: number; email?: string }): Promise<AdminResp> {
-  return request('/api/admin/users/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/users/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 更新用户（显示名称/角色/状态/组织/邮箱） */
 export async function adminUserUpdate(id: number, data: { display_name?: string; role?: string; status?: string; org_id?: number; email?: string }): Promise<AdminResp> {
-  return request('/api/admin/users/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, ...data }) })
+  return bizResp(() => request('/api/admin/users/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, ...data }) }))
 }
 
 /** 删除用户账号（按角色范围限定可删对象） */
 export async function adminUserDelete(id: number): Promise<AdminResp> {
-  return request('/api/admin/users/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/admin/users/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /** 重置指定用户的登录密码 */
 export async function adminUserResetPassword(id: number, password: string): Promise<AdminResp> {
-  return request('/api/admin/users/reset-password', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, password }) })
+  return bizResp(() => request('/api/admin/users/reset-password', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, password }) }))
 }
 
 /**
@@ -152,7 +152,7 @@ export interface AssistTokenResp extends AdminResp {
 
 /** 读取 AI 助手管理 Token 状态（仅超管；只回掩码与来源，不回明文） */
 export async function adminAssistToken(): Promise<AssistTokenResp> {
-  return request('/api/admin/assist/token', { headers: authHeaders() })
+  return bizResp(() => request('/api/admin/assist/token', { headers: authHeaders() }))
 }
 
 /**
@@ -161,5 +161,16 @@ export async function adminAssistToken(): Promise<AssistTokenResp> {
  * 否则「清空输入框再保存」会把凭据误删。返回体带 changed/pushed 供吐司分级提示。
  */
 export async function adminAssistTokenRotate(token: string, clear = false): Promise<AssistTokenResp> {
-  return request('/api/admin/assist/token', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ token, clear }) })
+  return bizResp(() => request('/api/admin/assist/token', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ token, clear }) }))
+}
+
+/**
+ * S4 注册 cohort 增长漏斗（仅超管；PlansP「增长漏斗」看板用）。
+ * ★ F-64②（批 I-10）：后端 `/api/admin/funnel` 的失败分支已从「HTTP 200 + success:false」
+ * 迁成诚实状态码（503 数据源未就绪 / 500 查询失败），而原先唯一调用点 PlansP.tsx 直接裸用
+ * request() 并写 `if (r?.success)` —— 迁移后非 2xx 会变成抛异常、看板静默空转。
+ * 故把该端点收进接口层并用 bizResp 还原历史形态：调用点判据不变，状态码也对（前端不再骗自己）。
+ */
+export async function adminGrowthFunnel(days: number): Promise<AdminResp & { rows?: unknown[] }> {
+  return bizResp(() => request(`/api/admin/funnel?days=${encodeURIComponent(days)}`, { headers: authHeaders() }))
 }

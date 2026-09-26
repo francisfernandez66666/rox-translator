@@ -301,7 +301,7 @@ test.describe('像素级 UAT', () => {
     await login(page, 'admin', 'Admin@1234');
     await page.goto('/admin');
     await expect(page.locator('body'), '/admin 应含后台面板').toContainText(/模型|知识库|工单|系统/, { timeout: 30000 });
-    const ad = await page.evaluate(() => {
+    const probeAdminFrames = () => page.evaluate(() => {
       const hex = (c: string) => '#' + (c.match(/\d+(\.\d+)?/g) || []).slice(0, 3)
         .map((n) => (+n).toString(16).padStart(2, '0')).join('').toUpperCase();
       // 取后台里「画了框」的代表件：卡片/面板类元素（class 含 card|panel|box|table|input）
@@ -319,11 +319,23 @@ test.describe('像素级 UAT', () => {
       const card = els[0];
       return {
         sampled: els.length,
+        // ★ 09-27 自诊断：计数临界翻红时（3 vs >3）光看数字定位不了「少的是哪一件」，
+        //   把扫到的类名随失败信息带出来，一次复跑就能对账是哪块框掉了。
+        sample: els.slice(0, 8).map((n) => `${n.tagName}.${String(n.className).slice(0, 40)}`),
         stillWhite: stillWhite.slice(0, 12).map((n) => `${n.className}:${getComputedStyle(n).borderTopColor}`),
         cardBg: card ? hex(getComputedStyle(card).backgroundColor) : '',
       };
     });
-    expect(ad.sampled, '后台一个带框的卡片/输入件都没扫到 ⇒ 本锁已空转（选择器或类名口径变了）').toBeGreaterThan(3);
+    // ★ 09-27 复跑红账（批 I-10 收尾）：外壳文案到位 ≠ 面板件已挂载——冷启动载入闸门撤下后
+    //   统计卡/表单件仍是异步数据回来才渲染，一次性快照会撞进「只剩壳的 3 件」窗口
+    //   （本轮首跑实扫 3、retry 即过＝典型时序红）。改成轮询到件数稳定再量，
+    //   「>3 防空转」的锁语义一字不动，只把取值时机钉稳；超时后失败信息仍带类名清单。
+    let ad = await probeAdminFrames();
+    await expect
+      .poll(async () => { ad = await probeAdminFrames(); return ad.sampled; },
+        { message: `后台带框件迟迟没载入齐（等 20s 仍 ≤3 即产品问题）：\n${ad.sample.join('\n')}`, timeout: 20000 })
+      .toBeGreaterThan(3);
+    expect(ad.sampled, `后台一个带框的卡片/输入件都没扫到 ⇒ 本锁已空转（选择器或类名口径变了）。实扫 ${ad.sampled} 件：\n${ad.sample.join('\n')}`).toBeGreaterThan(3);
     expect(ad.stillWhite, `后台仍有 〇-O 遗留的纯白框线：\n${ad.stillWhite.join('\n')}`).toEqual([]);
     expect(FACE_STEPS, `后台首个带框件的面 ${ad.cardBg} 不在交付面色台阶档上`).toContain(ad.cardBg);
     await shot(page, 'p2d_gray_frames');

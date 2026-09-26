@@ -34,7 +34,7 @@ import {
   adminPayChannels, adminPayChannelsSave, PAY_CH_FIELDS,
   type PayChField,
   adminQuoteCurrency, adminQuoteCurrencySave,
-  request,
+  adminGrowthFunnel, // ★ F-64②（批 I-10）：漏斗看板原先裸调 request()，后端已改诚实状态码 ⇒ 收进接口层（内部包 bizResp）
   authHeaders,
   API_BASE,
   handleUnauthorized, // ★ §4.2-2：二维码 blob 通道自管 401（裸 fetch 不经 request()）
@@ -671,7 +671,7 @@ async function deletePkg(p: Any) {
     // loadFunnel 拉取 S4 注册 cohort 增长漏斗
 async function loadFunnel() {
     try {
-      const r: Any = await request(`/api/admin/funnel?days=${funnelDays}`, { headers: authHeaders() })
+      const r: Any = await adminGrowthFunnel(funnelDays)
       if (r?.success) setFunnelRows((r.rows || []) as Any[])
     } catch { /* 静默：看板辅助数据 */ }
   }
@@ -694,6 +694,12 @@ async function saveBillingParams() {
   }
     // savePayMode 支付模式切换（mock/静态收款码）
 async function savePayMode() {
+    // ★ O-1（〇-U 收尾，2026-09-27）：mock＝不真收款直接开套餐，生产误点即全站零成本开通。
+    //   后端已在审计里留 ⚠ 硬账（admin_packages.go package_settings_save，锁见 o1_mock_audit_test.go），
+    //   发布红线在两站 pay_mode 必须非 mock（部署指南 §十）；前端这层加**显式二次确认**防误切。
+    if (payModeCfg === 'mock') {
+      if (!(await confirmDialog({ body: t('packages.confirmMockPayMode'), danger: true }))) return
+    }
     const r: Any = await adminPackageSettingsSave({ pay_mode: payModeCfg } as never)
     if (toastResp(r, t('common.save'))) setPayMode(payModeCfg)
   }

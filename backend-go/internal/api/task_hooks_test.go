@@ -262,16 +262,20 @@ func TestTaskAdminResetConsumption(t *testing.T) {
 		t.Fatalf("预置后应只剩订阅台账 500000，实际 %d", got)
 	}
 
-	// ① 权限：未登录 403、租管 403、超管放行
-	for name, hdr := range map[string]string{"未登录": "", "租管": bearerFor(t, tadmin)} {
+	// ① 权限：未登录 401、租管 403、超管放行
+	// ★ F-64③ 批 I-10：旧口径未登录也回 403（测试与实现同时错一直绿）；实现分流后未登录走 401 重登录链。
+	for name, tc := range map[string]struct {
+		hdr  string
+		want int
+	}{"未登录": {"", 401}, "租管": {bearerFor(t, tadmin), 403}} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/api/admin/tasks/reset-consumption", strings.NewReader(`{}`))
-		if hdr != "" {
-			req.Header.Set("Authorization", hdr)
+		if tc.hdr != "" {
+			req.Header.Set("Authorization", tc.hdr)
 		}
 		s.handleAdminTaskResetConsumption(rec, req)
-		if rec.Code != 403 {
-			t.Fatalf("%s 调用重置应 403，实得 %d: %s", name, rec.Code, rec.Body.String())
+		if rec.Code != tc.want {
+			t.Fatalf("%s 调用重置应 %d，实得 %d: %s", name, tc.want, rec.Code, rec.Body.String())
 		}
 	}
 	rec := httptest.NewRecorder()

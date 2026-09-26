@@ -6,6 +6,8 @@ package api
 // ============ 本文件职责中文说明 ============
 // 开放 API Key：签发 / 启停 / 轮换 / 删除（handleAPIKeys 系列）
 // 安全要点：所有写操作均记录审计日志（LogAudit）；API Key 密钥仅明文返回一次，前端立即保存。
+// ★ F-64②（批 I-10）口径：本文件失败响应已统一走 s.writeError + apierrors 出口，
+//   不再用「HTTP 200 + success:false」壳承载失败（DB 写失败 500 / Key 不存在 404）。
 // ========================================
 
 import (
@@ -13,6 +15,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+
+	apierrors "translator/internal/errors"
 )
 
 // ============ 开放 API Key ============
@@ -21,12 +25,15 @@ import (
 func (s *Server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	keys, err := s.Store.ListAPIKeys(s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：列 Key 读的是本进程存储层，失败＝服务端出错（500）；
+		// 旧写法回 200 会让面板把「查询失败」当「该租户一个 Key 都没有」渲染成空列表。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "keys": keys})
@@ -36,7 +43,8 @@ func (s *Server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -55,7 +63,9 @@ func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	plain, err := s.Store.CreateAPIKey(tidForKey, u.ID, req.Name, req.Perms, req.DailyLimit)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：签发失败只有两类——随机源不可用（拒绝落弱密钥）与 api_keys 插入失败（数据库写故障），
+		// 两者都是本层服务端出错（500）；api_keys.name 无唯一约束，故不存在「名称重复」这条 409 分支。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "apikey_create", "api_keys", req.Name)
@@ -66,7 +76,8 @@ func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIKeyStatus(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -78,7 +89,9 @@ func (s *Server) handleAPIKeyStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.SetAPIKeyStatus(req.ID, s.effTenant(r, u), req.Status); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：启停走 UPDATE ... WHERE id=? AND tenant_id=?，id 不存在只是 0 行影响、不报错，
+		// 所以能进到这条分支的只有数据库执行失败＝服务端出错（500）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
@@ -88,7 +101,8 @@ func (s *Server) handleAPIKeyStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -101,7 +115,9 @@ func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 	tid := s.effTenant(r, u)
 	old, err := s.Store.GetAPIKey(req.ID, tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "Key 不存在"})
+		// F-64②：GetAPIKey 按 id+tenant_id 精确查一行，查不到（含跨租户越权轮换别人的 Key）
+		// 就是「本租户下没有这条 Key」→ 404；租户隔离下不回 403，避免泄露他租户 Key 的存在性。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "Key 不存在"))
 		return
 	}
 	if err := s.Store.DeleteAPIKey(req.ID, tid); err != nil {
@@ -121,7 +137,8 @@ func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -132,7 +149,9 @@ func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeleteAPIKey(req.ID, s.effTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：删除走 DELETE ... WHERE id=? AND tenant_id=?，删不到也是 0 行影响、不报错，
+		// 走到这里＝数据库执行失败＝服务端出错（500）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
@@ -143,7 +162,8 @@ func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIKeyLimit(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -156,7 +176,12 @@ func (s *Server) handleAPIKeyLimit(w http.ResponseWriter, r *http.Request) {
 	}
 	tid := s.effTenant(r, u)
 	if err := s.Store.SetAPIKeyDailyLimit(req.ID, tid, req.Limit); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "Key 不存在"})
+		// F-64②：文案「Key 不存在」按原样保留，状态码随文案取 404（本租户下查不到这条 Key 的语义，
+		// 且租户隔离下跨租户改限额也只回「不存在」不泄露存在性）。
+		// ⚠️ 已知偏差（已上报主代理）：store 侧是 UPDATE，id 不存在只算 0 行影响、并不报错，
+		// 故这条分支实际只会被数据库执行失败触发——真要按成因判应为 500 并改文案，
+		// 但本批边界要求文案一字不改，这里先与既有契约对齐。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "Key 不存在"))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "apikey_set_limit", "api_keys",
@@ -190,7 +215,8 @@ func (s *Server) issueDefaultAPIKeyFor(tid, userID int64, name string) string {
 func (s *Server) handleAPIKeyReveal(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {

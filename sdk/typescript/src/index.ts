@@ -26,7 +26,8 @@
 //
 // 错误处理（★ 2026-09-26 F-64① 状态码诚实改造后的口径）：
 //   对外契约面的失败一律以**真实 HTTP 状态码**发出（400/401/402/403/404/409/429/500），
-//   响应体同时带 code（正主，与文档 Error.code 枚举一致）与 error_code（<1.0.4 别名，同值）。
+//   响应体带 code（正主，与文档 Error.code 枚举一致）。error_code 只是**状态码诚实改造之前的老服务端**
+//   在发的别名；改造后的服务端统一只发 code（不再同值下发，避免两套码名并存）。
 //   TranslatorError 把两者都收敛到 .code（.error_code 保留兼容，勿删）；
 //   限流类（429）另给 .retryAfter 秒数，调用方按它退避即可。
 //   唯一仍在 200 里表达"没做成"的是**任务状态**：status:"failed" 是业务对象的状态，
@@ -61,7 +62,7 @@ export interface Balance {
 export class TranslatorError extends Error {
   status?: number;        // HTTP 状态码（★ F-64①：失败时即真实状态码，不再恒 200）
   code?: string;          // 业务错误码正主（与文档 Error.code 枚举同名同值）
-  error_code?: string;    // <1.0.4 别名，与 code 同值；保留只为不打断在生产的接入方
+  error_code?: string;    // 老服务端（状态码诚实改造之前）在发的别名；保留只为不打断在生产的接入方
   retryAfter?: number;    // 429 时还需等待的秒数（JSON retry_after 优先，Retry-After 头兜底）
   body?: unknown;         // 原始响应体
   constructor(message: string, status?: number, error_code?: string, body?: unknown, retryAfter?: number) {
@@ -132,8 +133,8 @@ export class TranslatorClient {
       const text = await resp.text();
       const data = text ? JSON.parse(text) : {};
       if (!resp.ok) {
-        // ★ F-64①：错误码正主是 code（文档 Error.code），error_code 是 <1.0.4 SDK 在读的别名；
-        // 老服务端只发 error_code、新服务端两个都发且同值 ⇒ "code 优先、error_code 兜底"两边都拿得到。
+        // ★ F-64①：错误码正主是 code（文档 Error.code），error_code 是状态码诚实改造**之前**的老服务端别名；
+        // 改造后的服务端只发 code ⇒ "code 优先、error_code 兜底"，混跑窗口两边都拿得到。
         throw new TranslatorError(
           (data && (data.message || data.error)) || `HTTP ${resp.status}`,
           resp.status,

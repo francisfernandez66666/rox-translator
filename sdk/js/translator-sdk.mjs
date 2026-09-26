@@ -25,8 +25,8 @@ export class TranslatorError extends Error {
     this.name = "TranslatorError";
     this.status = status;
     // ★ F-64①（2026-09-26）：错误码正主键是 code（与文档 Error.code 枚举一致），
-    // error_code 是 <1.0.4 客户端在读的别名。服务端两个都发且同值，
-    // 这里"code 优先、error_code 兜底"⇒ 老服务端只发别名时也能取到码。
+    // error_code 是状态码诚实改造**之前**的老服务端在发的别名；改造后的服务端只发 code。
+    // 这里"code 优先、error_code 兜底"⇒ 混跑窗口里打老服务端也照样取得到码。
     // errorCode 属性名保留（历史公开面，改名＝打断在用浏览器 SDK 的接入方）。
     this.code = (body && typeof body === "object" && (body.code || body.error_code)) || null;
     this.errorCode = this.code;

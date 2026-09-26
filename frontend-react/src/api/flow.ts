@@ -10,7 +10,7 @@
  * - 流程配置保存：保存各步骤的启用/禁用状态
  */
 
-import { request, authHeaders, type AdminResp } from './core'
+import { bizResp, request, authHeaders, type AdminResp } from './core'
 
 /** 流程步骤配置项：key 标识/name 展示名/enable 启停 */
 export interface FlowStepItem {
@@ -26,5 +26,6 @@ export async function flowConfig(): Promise<AdminResp> {
 
 /** 保存流程引擎配置（各步骤启停） */
 export async function flowSave(steps: FlowStepItem[]): Promise<AdminResp> {
-  return request('/api/admin/flow/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ steps }) })
+  // ★ F-64②（批 I-10）：走 bizResp——HTTP 200 但业务 success:false 如实转异常，保存流程配置不再假成功
+  return bizResp(() => request('/api/admin/flow/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ steps }) }))
 }

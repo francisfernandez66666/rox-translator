@@ -7,7 +7,9 @@ package api
 // 本文件实现 SSE（Server-Sent Events）流式翻译与文件翻译、非流式兼容接口、文件下载：
 //   - SSE 工具：sseEvent（构造 data: 事件帧）/ sseHeaders（设置流式响应头）
 //   - 流式文本翻译（handleChatStream /api/chat/stream）与流式文件翻译（handleTranslateFileStream /api/translate/stream）
-//   - 非流式兼容接口（handleChat / handleTranslateFile）
+//   - 非流式兼容接口（handleChat / handleTranslateFile）：失败一律诚实状态码
+//     （闸门拒绝 400/402、模式停用 409、输入超限 400、PDF 超限 400、落盘失败 500），
+//     不再用「HTTP 200 + success:false」壳承载业务失败
 //   - 文件下载（handleDownload /api/download/），按扩展名推断 Content-Type
 // 业务要点：
 //   - 所有翻译入口先过配额闸门（gateUsage），成功后按用量计量（meterUsage + countTranslate 指标）
@@ -492,6 +494,9 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 // handleChat 非流式文本翻译接口（/api/chat，JSON 返回）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 ChatRequest）。
 // 返回: 引擎处理结果对象（JSON）；成功时已计量。
+// 失败口径（★ F-64② 批 I-10）：本接口非 SSE、响应头未提前写出，故闸门拒绝出 402/400、
+// 模式停用出 409、输入超长出 400（统一错误体），只有引擎译出的业务失败仍随 200 的
+// res.Error 返回（那是一条正常的「结果」响应，客户端按 res.error 判，不按状态码判）。
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// ★ 安全止血（整改 A1）：强制登录
 	if s.authUser(r) == nil {
@@ -507,9 +512,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	tid, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
-		// 业务失败（限流/余额）不走 HTTP 错误码：与非流式契约一致，200 + body 的 error/error_code，
-		// 由客户端按 error_code 分流提示文案。
-		writeJSON(w, 200, map[string]interface{}{"success": false, "error": gateErr.Error(), "error_code": billing.QuotaErrCode(gateErr)})
+		// ★ F-64②（批 I-10）：闸门拒绝（余额/日限额/QPS/并发）是**请求本身当前不可执行**，旧写法回 200 让
+		//   SDK 与 OpenAPI 消费方只能去解析中文文案分支；改走 writeGateError（tickets.go 的 F-21③
+		//   专用映射）：insufficient_balance → 402，其余闸门拒绝 → 400 QUOTA_EXCEEDED。
+		//   原 body 的 error_code 稳定码由统一错误体的 code 承接（前端 core.ts 已按 code/error_code 双别名取码）。
+		s.writeGateError(w, r, gateErr)
 		return
 	}
 	// ★ 运营策略引擎（2026-09-05）：模式因子闸门——enabled=false 拒绝；limit_chars 超限拒绝（不计费）
@@ -517,12 +524,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	eff := s.effectivePolicyCached(tid) // ★ C31
 	rule, hasRule := eff.Mode(mode)
 	if hasRule && !rule.Enabled {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "error": "该翻译模式已停用"})
+		// ★ F-64②（批 I-10）：模式被运营停用属「资源当前状态与请求冲突」→ 409（旧 200 壳会让客户端以为可以重试同模式）；
+		//   不用 403：403 在本仓是**身份/角色不足**的口径，会误导前端跳无权限页。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该翻译模式已停用"))
 		return
 	}
 	// 长度闸门按 rune（字符）计，不按 len() 字节：一个汉字 3 字节，用字节会把上限压成 1/3
 	if hasRule && rule.LimitChars > 0 && int64(len([]rune(req.Message))) > rule.LimitChars {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "error": fmt.Sprintf("该模式单次输入上限 %d 字符", rule.LimitChars)})
+		// ★ F-64②（批 I-10）：输入超长是载荷不合法 → 400（与 handleChatStream 的 chat_text_too_long 同族口径，
+		//   两条通道同一判据，客户端才不会一边拿到 400、一边拿到 200 壳）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, fmt.Sprintf("该模式单次输入上限 %d 字符", rule.LimitChars)))
 		return
 	}
 	// 调用引擎处理文本翻译（非流式，无进度回调）
@@ -547,6 +558,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 // handleTranslateFile 非流式文件翻译接口（/api/translate，JSON 返回）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（multipart：file + target_langs + message）。
 // 返回: 引擎处理结果对象（JSON）；成功时已计量。
+// 失败口径（★ F-64② 批 I-10）：闸门拒绝 402/400、模式停用 409、提示语超限 400、
+// PDF 体积/页数超限 400（客户端换个文件即可），落盘/写入失败 500；
+// 与 /api/translate/stream 的分工是「头未写出才谈状态码」——SSE 通道里同款失败一律走 error 事件帧。
 func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	// ★ 安全止血（整改 A1）：强制登录（在解析 multipart 前拒绝，匿名零成本）
 	if s.authUser(r) == nil {
@@ -596,17 +610,22 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	tid, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "error": gateErr.Error(), "error_code": billing.QuotaErrCode(gateErr)})
+		// ★ F-64②（批 I-10）：闸门拒绝（余额/日限额/QPS/并发）此前回 200 壳，客户端要按中文文案猜「是没额度还是欠费」；
+		//   统一走 writeGateError（F-21③ 既有映射）：insufficient_balance → 402，其余 → 400 QUOTA_EXCEEDED。
+		s.writeGateError(w, r, gateErr)
 		return
 	}
 	eff := s.effectivePolicyCached(tid) // ★ C31
 	rule, hasRule := eff.Mode(mode)
 	if hasRule && !rule.Enabled {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "error": "该翻译模式已停用"})
+		// ★ F-64②（批 I-10）：模式被运营停用＝资源状态与请求冲突 → 409（与 handleChat 同判据）；
+		//   不用 403，403 在本仓专指身份/角色不足，会让前端误跳无权限页。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该翻译模式已停用"))
 		return
 	}
 	if hasRule && rule.LimitChars > 0 && int64(len([]rune(message))) > rule.LimitChars {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "error": fmt.Sprintf("该模式单次输入上限 %d 字符", rule.LimitChars)})
+		// ★ F-64②（批 I-10）：提示语超出该模式单次上限属载荷不合法 → 400（本接口无 SSE 头，状态码可达）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, fmt.Sprintf("该模式单次输入上限 %d 字符", rule.LimitChars)))
 		return
 	}
 	// ★ 整改 A2：闸门通过后再落盘 + defer 兜底清理（拒绝路径零残留）
@@ -629,7 +648,10 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	defer os.Remove(savePath)
 	// ★ 性能优化 Phase A1：PDF 前置拦截（大小/页数），超限直接友好拒绝
 	if perr := checkPdfLimits(savePath, header.Filename); perr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "error": perr.Error()})
+		// ★ F-64②（批 I-10）：文件体积/页数超限是**客户端上传件本身不合格**（换个小文件即可成功）→ 400；
+		//   旧 200 壳让 OpenAPI/SDK 把它当提交成功。用 ErrFileTooLarge（映射 400，与
+		//   parseUpload 的体积拒绝同族），不改写 perr 的原话术（含「先转存 docx」的可行动指引）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrFileTooLarge, perr.Error()))
 		return
 	}
 	// 调用引擎处理文件翻译（非流式）

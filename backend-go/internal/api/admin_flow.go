@@ -12,6 +12,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -22,7 +23,8 @@ import (
 func (s *Server) handleFlowConfig(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	steps := flowStepsForTenant(s.Ten, s.effTenant(r, u))
@@ -50,7 +52,8 @@ func flowStepsForTenant(ts *tenant.Store, tid int64) []store.FlowStep {
 func (s *Server) handleFlowSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -69,7 +72,8 @@ func (s *Server) handleFlowSave(w http.ResponseWriter, r *http.Request) {
 		cfg.Steps[st.Key] = st.Enable
 	}
 	if err := s.Ten.SetFlowConfig(s.effTenant(r, u), cfg); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：流程配置落库失败是服务端出错（500），旧 200 壳让管理台提示「已保存」但库里没动
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "flow_save", "tenants", "流程步骤配置更新")
@@ -80,7 +84,8 @@ func (s *Server) handleFlowSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleFlowRunTicket(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -92,16 +97,25 @@ func (s *Server) handleFlowRunTicket(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.Store.GetTicket(req.ID, s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工单不存在"})
+		// F-64②：GetTicket 带租户过滤，查不到＝本租户视角下工单不存在 → 404（ErrTicketNotFound）；
+		// 跨租户单也落到这里，天然不泄露存在性。本接口是已登录管理台入口，严禁用 401——
+		// 401 会触发前端 handleUnauthorized 清登录态，而这里用户明明在线。
+		s.writeError(w, r, apierrors.New(apierrors.ErrTicketNotFound, "工单不存在"))
 		return
 	}
 	wf := s.workflow()
 	if wf == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "工作流未初始化"})
+		// F-64②：工作流引擎未初始化＝依赖未就绪（503），稍后重试有意义；
+		// 旧 200 壳让管理台把「服务没起来」当业务失败弹普通 toast。
+		s.writeError(w, r, apierrors.New(apierrors.ErrServiceUnavailable, "工作流未初始化"))
 		return
 	}
 	if err := wf.Executor.Execute(r.Context(), t, nil); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err), "ticket": s.ticketJSON(t)})
+		// F-64②：流程执行中途失败（模型不可达/落库出错等真因已被 publicErrMessage 收敛成对外文案）
+		// 是本层处理失败 → 500 兜底；handler 前置无「状态不允许运行」闸门（步骤禁用会在引擎内 skipped），
+		// 故此处不存在 409 分支。原响应体带 ticket 快照字段，用 WithDetails 承接，别丢。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)).
+			WithDetails(map[string]interface{}{"ticket": s.ticketJSON(t)}))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "flow_run", "tickets", t.TicketNo)

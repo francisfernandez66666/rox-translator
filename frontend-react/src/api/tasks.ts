@@ -11,7 +11,10 @@
  * - 用户：我的任务列表（含领取状态）/ 一键领取奖励（奖励入永久余额）
  */
 
-import { request, authHeaders, type AdminResp } from './core'
+// ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
+//   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
+//   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
+import { bizResp, request, authHeaders, type AdminResp } from './core'
 
 /** 计数周期四档（后端 period 列的合法值，也是 task_type 的取值域 —— 见下方 F-60 注释） */
 export type TaskCycle = 'daily' | 'weekly' | 'once' | 'event'
@@ -66,12 +69,12 @@ export async function adminTasks(): Promise<AdminResp & { tasks?: UserTask[] }> 
 
 /** 超管新增/更新任务（id=0 新增；>0 更新） */
 export async function adminTaskSave(data: Partial<UserTask>): Promise<AdminResp & { id?: number }> {
-  return request('/api/admin/tasks/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/tasks/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 超管删除任务（连带清理领取记录） */
 export async function adminTaskDelete(id: number): Promise<AdminResp> {
-  return request('/api/admin/tasks/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/admin/tasks/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /** 我的任务列表（启用任务 + 本人领取状态） */
@@ -81,7 +84,7 @@ export async function myTasks(): Promise<AdminResp & { tasks?: UserTaskView[] }>
 
 /** 一键领取任务奖励（奖励入永久余额） */
 export async function claimTask(id: number): Promise<AdminResp & { points?: number }> {
-  return request('/api/me/tasks/claim', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/me/tasks/claim', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /**
@@ -90,7 +93,7 @@ export async function claimTask(id: number): Promise<AdminResp & { points?: numb
  * 参数 subscribedOnly=true（默认）只影响有未过期订阅台账的租户；false 覆盖全部租户。
  */
 export async function adminTaskResetConsumption(subscribedOnly = true): Promise<AdminResp & { tenants?: number; reset_rows?: number }> {
-  return request('/api/admin/tasks/reset-consumption', {
+  return bizResp(() => request('/api/admin/tasks/reset-consumption', {
     method: 'POST', headers: authHeaders(), body: JSON.stringify({ subscribed_only: subscribedOnly }),
-  })
+  }))
 }

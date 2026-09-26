@@ -27,6 +27,8 @@ import (
 
 	qrcode "github.com/skip2/go-qrcode"
 
+	apierrors "translator/internal/errors"
+	"translator/internal/observability"
 	"translator/internal/store"
 )
 
@@ -76,12 +78,15 @@ const qrImageUploadMax = 5 << 20
 // 返回: success=true 时携带 packages 数组（含下架包）。
 func (s *Server) handleAdminPackages(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	pkgs, err := s.Store.ListCommercialPackages()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：包清单读的是本进程存储层，失败＝服务端出错（500）；
+		// 旧写法回 200 会让超管面板把「查库失败」当成「一个商业包都没配」，据此误建/误删包。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "packages": pkgs})
@@ -93,7 +98,8 @@ func (s *Server) handleAdminPackages(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 解析 body 并做入参校验：code/name 必填、ptype 白名单（缺省 paid）、sentences/points 至少一项为正
@@ -143,11 +149,14 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		// ★ 脱敏（2026-09-12）：驱动错误不透吐
 		if store.IsUniqueViolation(err) {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败：套餐编码已存在"})
+			// F-64②：(tenant_id, code) 复合唯一命中＝包编码重复，改名/改租户后重发即可 ⇒ 409 状态冲突
+			//（旧写法回 200，接入方与重试器一律当成功）。
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "创建失败：套餐编码已存在"))
 			return
 		}
 		log.Printf("[packages] 创建套餐失败 code=%s: %v", req.Code, err)
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + store.DebriefDBError(err)})
+		// F-64②：非唯一冲突的插入失败＝数据库写入故障（500）；DebriefDBError 的脱敏文案原样透出。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "创建失败: "+store.DebriefDBError(err)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_create", "packages", req.Code)
@@ -160,7 +169,8 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -182,7 +192,8 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 	// 读当前包全量字段做基底，逐字段增量覆盖（指针字段 nil=不修改），最后整行写回
 	cur, err := s.Store.GetPackage(req.ID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "包不存在"})
+		// F-64②：先按 id 回读整行做增量基底，读不到＝该包不存在（文案「包不存在」原样保留）⇒ 404。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "包不存在"))
 		return
 	}
 	// 增量覆盖：仅修改显式传入的字段；ptype 重新白名单校验、points 拒绝负值（nil=不动）
@@ -233,7 +244,11 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 	}
 	// 合并完成后整行落库并记 package_update 审计（cur 为原记录+增量字段的合成值）
 	if err := s.Store.UpdatePackage(cur); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：整行 UPDATE 落库失败按服务端写入故障回（500）。
+		// ⚠️ 本支还混着一条可达的 409 语义——改 tenant_id 时撞 packages 的 UNIQUE(tenant_id, code)
+		//（把包迁到一个已有同 code 的租户）；store 未给结构化错误，本层按 IsUniqueViolation 分流
+		// 需要新增判定分支，超出「只换壳」边界，已作为不确定项上报主代理定夺。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_update", "packages", cur.Code)
@@ -246,7 +261,8 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 // ★ 2026-09-19 积分口径：体验额度以积分回显；句↔token 换算率与积分汇率不再经本接口透出。
 func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// ★ 任务2.2：体验额度唯一口径 free_trial_tokens / free_trial_days（旧键 trial_sentences 已下线）
@@ -327,7 +343,8 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -558,17 +575,39 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	}
 	for _, kv := range pending {
 		if err := s.Store.SetConfig(kv.key, kv.val); err != nil {
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": "保存失败（" + kv.key + "）: " + err.Error()})
+			// ★ F-64② 收尾（2026-09-26 批 I-10）：原回 500 + err.Error() 裸拼——写 system_config
+			//   失败是本进程存储层故障（500 语义不变），但驱动原文会把表名/约束名/连接信息
+			//   送给任意登录用户（口径见 errmsg.go 文件头）。现按统一出口：对外只留「保存失败（键名）」，
+			//   原文进 slog（带 trace_id），排障走日志不走响应体。
+			observability.Error(r.Context(), "套餐中心配置保存失败", "key", kv.key, "err", err)
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "保存失败（"+kv.key+"）"))
 			return
 		}
 	}
 	if len(pending) > 0 {
 		s.invalidatePolicyCache() // ★ C31：pay_mode/billing_enforced 等经 applyLegacyConfig 影响有效策略
 		var keys []string
+		payModeMock := false
 		for _, kv := range pending {
 			keys = append(keys, kv.key)
+			if kv.key == "pay_mode" && kv.val == "mock" {
+				payModeMock = true
+			}
 		}
-		s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_settings_save", "system", strings.Join(keys, ","))
+		// ★ O-1（2026-09-26 批 I-10 定夺）：支付模式切到 mock 时在审计里显式写下**新值**。
+		//   背景：超管侧「支付模式」单选一直含「模拟支付（测试）」项（F-09 把租户侧射程管住了，
+		//   超管侧保留是研发自助验收的必需入口，不能删）；真正的风险是**发布后误切**——
+		//   一旦切到 mock，全站租户收银台立刻出现「模拟支付」，任何人都能零成本开通套餐。
+		//   这里不拦（拦了 UAT 就跑不了支付链路），改为把「谁在何时把它切成了 mock」
+		//   留成一条可回查的硬账：出事故时按审计一眼定位切换时刻与操作人。
+		//   其余配置项**只记键名不记值**：static_qr_image 可能是整张 base64 图片、
+		//   模型密钥类同族配置也走这条保存链，把值写进审计等于把大对象/敏感料送进日志。
+		//   配套的发布红线见《部署指南》§十 验收清单（两站 pay_mode 必须非 mock）。
+		detail := strings.Join(keys, ",")
+		if payModeMock {
+			detail += "｜pay_mode=mock ⚠模拟支付已开启：租户收银台会出现「模拟支付」，生产误切即全站零成本开通"
+		}
+		s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_settings_save", "system", detail)
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
@@ -581,7 +620,8 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 func (s *Server) handleAdminQRUpload(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 大小/扩展名校验（复用 parseUpload，仅允许图片白名单）
@@ -670,7 +710,8 @@ func (s *Server) handleQRRender(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminPackageDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -681,7 +722,11 @@ func (s *Server) handleAdminPackageDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := s.Store.DeletePackage(req.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：删除失败按设计只有一条业务拒绝——C15 引用闸门（pending 订单 / 仍有余量的活跃台账），
+		// store 回 errPkgRef「套餐被引用无法删除：…，请改用停用」⇒ 409 状态冲突
+		//（载荷没错、错在资源当前状态，改下架才是正解；重试同一份删除请求永远不会成功）。
+		// 两支 COUNT(*) 查询本身的数据库错误同走此文案（本层无结构化错误可分，属既有偏差）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "package_delete", "packages", strconv.FormatInt(req.ID, 10))

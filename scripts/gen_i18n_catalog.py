@@ -332,6 +332,10 @@ T = {
 "请提供租户编码": "Tenant code is required",
 "请提供订单 id": "Order id is required",
 "请求体格式错误": "Malformed request body",
+# ★ F-64③（批 I-10 2026-09-26 深夜）：assist 代理本层失败从 writeAssistBizErr 的 200 壳迁到
+#   apierrors.New(...) 后进入词条闸射程（该闸同时扫 `"message":` 与 apierrors.New 的第二实参），
+#   文案一字未改，只补 zh→en 词条。
+"请求无法转发到 AI 助手服务": "Request could not be forwarded to the AI assistant service",
 "请求格式错误": "Malformed request",
 "请求格式错误（kind 必填）": "Malformed request (kind required)",
 "请求过于频繁，请稍后再试": "Too many requests; please retry later",

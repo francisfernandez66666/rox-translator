@@ -17,7 +17,7 @@
 import { useEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { create } from 'zustand'
-import { authMe, setAuthToken, getAuthToken, setUnauthorizedHandler } from '@/api'
+import { authMe, setAuthToken, getAuthToken, setUnauthorizedHandler, getActiveTenantId } from '@/api'
 import type { AuthUser } from '@/api'
 
 /** roleLevel 角色等级：super_admin/admin=4 · tenant_admin/approver=3 · dept_admin=2 · 其他=1
@@ -28,6 +28,24 @@ export function roleLevel(r?: string): number {
   if (r === 'tenant_admin' || r === 'approver') return 3
   if (r === 'dept_admin') return 2
   return 1
+}
+
+/**
+ * ★ O-9（2026-09-26 批 I-10）：「平台计费上下文」判定——**平台身份且当前没有切入任何租户**。
+ *
+ * 为什么需要它：`/api/me/package` 对 `tid<=0` 的语义是「平台账号不参与计费，余额返回 0」，
+ * 这个出参本身是对的（改后端只会把语义搞浑）。但界面两处余额位（App 顶栏积分行、
+ * ChatWindow 余额条）都照 `points_balance` 直渲染，于是超管登录后永久看到「余额 0 积分」，
+ * 并且 `points_balance<=0` 会点亮 E11 的「余额不足」顶部横幅——一个根本不会扣点的身份
+ * 天天被告知没钱，属纯噪声加误导。
+ *
+ * 判据为什么与后端同源：后端 `effTenant(r,u)` 对超管读 `X-Tenant-ID` 头，
+ * 而 `authHeaders()`（api/core.ts）**只在 activeTenantId>0 时才下发该头**，
+ * 故「等级≥4 且本地无生效租户」严格等价于「服务端这次看到 tid<=0」。
+ * 两处余额位统一调本函数，判据只写一份；不要在任何一处另拼条件。
+ */
+export function isPlatformBillingContext(role?: string): boolean {
+  return roleLevel(role) >= 4 && getActiveTenantId() <= 0
 }
 
 // AuthCtx 认证上下文对外暴露的状态与方法类型定义（公开契约保持不变）

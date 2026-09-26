@@ -23,6 +23,7 @@ import (
 	"time"
 	"translator/internal/store"
 
+	apierrors "translator/internal/errors"
 	"translator/internal/fileproc"
 	"translator/internal/kb"
 )
@@ -34,7 +35,8 @@ func (s *Server) handleImportBitext(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需部门管理员及以上权限
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 检查知识库是否已加载
@@ -57,7 +59,9 @@ func (s *Server) handleImportBitext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(records) == 0 {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "文件无有效数据"})
+		// ★ F-64②（批 I-10）：对照表解析出 0 行＝上传件本身没有内容可导（换文件即可）→ 400；
+		//   旧 200 + success:false 与「导入成功但新增 0 条」在客户端里不可区分。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "文件无有效数据"))
 		return
 	}
 
@@ -137,7 +141,8 @@ func trimSpace(s string) string {
 func (s *Server) handleImportTMX(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	if s.DB == nil {
@@ -159,7 +164,9 @@ func (s *Server) handleImportTMX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(tus) == 0 {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "TMX 无有效双语单元（需 ≥2 种语言的 tu）"})
+		// ★ F-64②（批 I-10）：TMX 里没有 ≥2 语言的翻译单元＝文件不符合 TMX 导入口径（客户端改文件即可）→ 400；
+		//   旧 200 壳让前端把「一个都没导」当成导入成功。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "TMX 无有效双语单元（需 ≥2 种语言的 tu）"))
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -290,7 +297,8 @@ func xmlEscape(str string) string {
 func (s *Server) handleExportTMX(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	if s.DB == nil {

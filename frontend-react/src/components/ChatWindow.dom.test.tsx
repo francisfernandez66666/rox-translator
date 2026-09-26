@@ -53,7 +53,16 @@ const apiMocks = vi.hoisted(() => ({
   myPackage: vi.fn(async () => ({ success: false })),
   meContext: vi.fn(async () => ({ success: false })),
 }))
-vi.mock('@/api', () => ({ myPackage: apiMocks.myPackage, meContext: apiMocks.meContext }))
+// ★ O-9（批 I-10）：ChatWindow 现在要读登录态（平台上下文判定 isPlatformBillingContext →
+//   @/stores/auth），而该 store 模块初始化就会调 getAuthToken()、判定里再调 getActiveTenantId()。
+//   本文件的 @/api 桩是「整模块替换」形态，缺这两个导出会直接让套件起不来
+//   （vitest 报 No "getAuthToken" export is defined on the "@/api" mock）。
+//   给空值即可：空 token=未登录、tid=0，配合下面 user.role 的默认口径，
+//   余额条仍按「租户上下文」渲染，不改变本文件既有断言的语义。
+vi.mock('@/api', () => ({
+  myPackage: apiMocks.myPackage, meContext: apiMocks.meContext,
+  getAuthToken: () => '', getActiveTenantId: () => 0,
+}))
 vi.mock('@/api/translate', () => ({ estimateTranslation: vi.fn(async () => null) }))
 // 子组件与本用例无关，桩化后可稳定断言气泡的 DOM 归属
 vi.mock('./MessageBubble', () => ({

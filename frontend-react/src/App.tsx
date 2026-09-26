@@ -18,7 +18,7 @@
 import { lazy, Suspense, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { myPackage, meContext } from '@/api'
-import { AuthProvider, useAuth } from '@/stores/auth'
+import { AuthProvider, useAuth, isPlatformBillingContext } from '@/stores/auth'
 import { AdminProvider, useAdminStore } from '@/stores/admin'
 import { ChatProvider, useChat, PkgRefreshCtx, createPkgRefreshHub, type PkgRefreshHub } from '@/hooks/useChat'
 import { useT, t as gt, tpl as gtpl } from '@/i18n'
@@ -163,6 +163,10 @@ function FrontShell() {
     try {
       const p = await myPackage() as unknown as { success?: boolean; points_balance?: number; balance_sentences_approx?: number }
       if (p.success && typeof p.points_balance === 'number') {
+        // ★ O-9（批 I-10）：平台上下文（超管未切入任何租户）不参与计费，后端固定回 0；
+        //   照此渲染会得到「余额 0 积分」胶囊并被 points_balance<=0 点亮「余额不足」横幅。
+        //   守卫放前端、不动后端出参（tid<=0 回 0 的语义是对的），判据见 isPlatformBillingContext。
+        if (isPlatformBillingContext(user.role)) { setPkgLine(''); setDepleted(false); return }
         const nf = new Intl.NumberFormat(intlLocale()) // ★ 〇-Q：按**界面语种**（原为浏览器默认，切语种后数字不跟）
         setPkgLine(gtpl('app.pkgLineFmt', { points: nf.format(p.points_balance), approx: nf.format(p.balance_sentences_approx ?? 0) }))
         setDepleted(p.points_balance <= 0) // ★ E11：billing_stopped 顶部横幅信号

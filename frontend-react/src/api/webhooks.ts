@@ -14,7 +14,10 @@
  * - 手动重试：重试失败或死信投递
  */
 
-import { request, authHeaders } from './core'
+// ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
+//   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
+//   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
+import { bizResp, request, authHeaders } from './core'
 import type { AdminResp } from './core'
 
 /** Webhook 配置（含重试策略字段） */
@@ -61,7 +64,7 @@ export interface DeliveryStats {
 
 /** 查询当前租户 webhook 配置列表 */
 export async function webhooks(): Promise<AdminResp> {
-  return request('/api/webhooks', { headers: authHeaders() })
+  return bizResp(() => request('/api/webhooks', { headers: authHeaders() }))
 }
 
 /** 新增或更新 webhook（id<=0 新增，否则更新） */
@@ -74,25 +77,25 @@ export async function webhookSave(data: {
   max_retries?: number
   retry_interval?: number
 }): Promise<AdminResp> {
-  return request('/api/webhooks/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/webhooks/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 删除指定 webhook */
 export async function webhookDelete(id: number): Promise<AdminResp> {
-  return request('/api/webhooks/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/webhooks/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /** 向指定 webhook 发送测试 ping */
 export async function webhookTest(id: number): Promise<AdminResp> {
-  return request('/api/webhooks/test', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/webhooks/test', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /** 查询指定 webhook 的投递历史 */
 export async function webhookDeliveries(webhookId: number, limit = 50): Promise<AdminResp & { deliveries?: WebhookDelivery[]; stats?: DeliveryStats }> {
-  return request(`/api/webhooks/deliveries?webhook_id=${webhookId}&limit=${limit}`, { headers: authHeaders() })
+  return bizResp(() => request(`/api/webhooks/deliveries?webhook_id=${webhookId}&limit=${limit}`, { headers: authHeaders() }))
 }
 
 /** 重试一条失败/死信投递 */
 export async function webhookRetry(deliveryId: number): Promise<AdminResp> {
-  return request('/api/webhooks/retry', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ delivery_id: deliveryId }) })
+  return bizResp(() => request('/api/webhooks/retry', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ delivery_id: deliveryId }) }))
 }

@@ -13,7 +13,10 @@
  *   租户永远查不到去向 ⇒ 补本租户裁剪的三态进度（后端按 token 内租户过滤，前端不传租户号）。
  */
 
-import { request, authHeaders, type AdminResp } from './core'
+// ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
+//   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
+//   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
+import { bizResp, request, authHeaders, type AdminResp } from './core'
 
 /** TM 待审池候选条目（对应后端 store.TmReview） */
 export interface TmReviewItem {
@@ -34,15 +37,15 @@ export interface TmReviewItem {
 
 /** 拉取 TM 待审候选列表（status=pending/approved/rejected，空=全部） */
 export async function listTmReview(status = ''): Promise<AdminResp & { candidates?: TmReviewItem[] }> {
-  return request(`/api/admin/tm-review/list${status ? '?status=' + encodeURIComponent(status) : ''}`, { headers: authHeaders() })
+  return bizResp(() => request(`/api/admin/tm-review/list${status ? '?status=' + encodeURIComponent(status) : ''}`, { headers: authHeaders() }))
 }
 /** 审核通过：候选条目落库为正式翻译记忆（tm_segments, module=manual） */
 export async function approveTmReview(id: number): Promise<AdminResp> {
-  return request('/api/admin/tm-review/approve', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/admin/tm-review/approve', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 /** 驳回候选条目（废弃不落库） */
 export async function rejectTmReview(id: number): Promise<AdminResp> {
-  return request('/api/admin/tm-review/reject', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/admin/tm-review/reject', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 /** 反馈修正采纳：从用户反馈提取修正译文生成待审候选 */
 export async function adoptFeedbackTranslation(feedbackId: number, zh: string, lang: string, trans: string): Promise<AdminResp> {

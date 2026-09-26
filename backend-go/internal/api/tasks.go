@@ -9,6 +9,9 @@
 //
 // 安全要点：管理接口仅超管（requireAdminUser）；用户接口需登录（authUser 非空）。
 // 出参一律积分口径（reward_points），零 token 裸值外发。
+// 失败口径（★ F-64② 批 I-10）：业务失败走 s.writeError 统一错误出口并给诚实状态码
+// （参数不合法 400、落库失败 500、任务不可领取 409、任务中心关闸 503），
+// 未登录/越权仍由既有 401/403 内联体承担（状态码本就诚实，不在本批射程）。
 package api
 
 import (
@@ -18,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 )
 
@@ -26,7 +30,8 @@ import (
 func (s *Server) handleAdminTasks(w http.ResponseWriter, r *http.Request) {
 	_, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "tasks": s.taskViews(s.Store.ListUserTasks())})
@@ -96,7 +101,8 @@ func (s *Server) taskViewOf(t *store.UserTask) taskJSON {
 func (s *Server) handleAdminTaskSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -121,7 +127,8 @@ func (s *Server) handleAdminTaskSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Title == "" {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "任务标题不能为空"})
+		// ★ F-64②（批 I-10）：标题为空是入参不合法（超管改表单即可通过）→ 400；旧 200 壳让后台面板按成功渲染。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "任务标题不能为空"))
 		return
 	}
 	task := store.UserTask{ID: req.ID, TaskType: req.TaskType, Title: req.Title, Description: req.Description,
@@ -192,7 +199,9 @@ func (s *Server) handleAdminTaskSave(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.Store.SaveUserTask(&task)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：落库失败是真·服务端出错（DB 写失败，超管改参数也救不回来）→ 500；
+		//   旧 200 壳会让后台面板显示「保存成功」而库里根本没写进去。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "task_save", "user_tasks", req.Title)
@@ -203,7 +212,8 @@ func (s *Server) handleAdminTaskSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminTaskDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -214,7 +224,9 @@ func (s *Server) handleAdminTaskDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeleteUserTask(req.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：删除失败是 DB 写失败（500）。注意 store.DeleteUserTask 对「id 不存在」不报错
+		//   （DELETE 影响 0 行也返回 nil），所以这里永远不会是 404，不要误判成资源不存在。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "task_delete", "user_tasks", strconv.FormatInt(req.ID, 10))
@@ -269,7 +281,8 @@ func (s *Server) taskViewList(list []*store.UserTaskView) []taskViewJSON {
 func (s *Server) handleAdminTaskResetConsumption(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -287,7 +300,9 @@ func (s *Server) handleAdminTaskResetConsumption(w http.ResponseWriter, r *http.
 	}
 	tenants, rows, e := s.Store.ResetTaskGrantConsumption(subscribedOnly)
 	if e != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), e)})
+		// ★ F-64②（批 I-10）：批量重置中途 DB 失败＝服务端出错（500）；旧 200 壳让超管面板弹「重置失败」后
+		//   仍按成功链路刷新列表，重置到底做没做完全看不出来。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), e)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "task_reset_consumption", "quota_grants",
@@ -308,7 +323,10 @@ func (s *Server) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.effectivePolicyCached(s.effTenant(r, u)).Task.Enabled { // ★ C31
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "任务奖励暂未开放"})
+		// ★ F-64②（批 I-10）：运营策略把任务中心整体关闸＝能力当前未就绪，客户端改参数也没用 → 503
+		//   （与 ① 档「收款渠道未就绪」同族；开闸后重试即可成功，这正是 503 的语义）。
+		//   不用 403：403 在本仓专指身份/角色不足，会让前端误判成越权并清页。
+		s.writeError(w, r, apierrors.New(apierrors.ErrServiceUnavailable, "任务奖励暂未开放"))
 		return
 	}
 	var req struct {
@@ -320,7 +338,10 @@ func (s *Server) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 	}
 	ok, tokens := s.Store.ClaimUserTask(u.ID, u.TenantID, req.ID)
 	if !ok {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "任务不可领取（已领取/已停用/奖励为 0）"})
+		// ★ F-64②（批 I-10）：不可领取（已领取／任务已停用／奖励为 0）＝请求与任务当前状态冲突 → 409；
+		//   用 409 而非 400 是因为客户端参数没错，「同一份领取请求」本身就是问题所在
+		//   （重复提交是 ErrConflict 的教科书场景），前端据此把按钮置灰而不是弹「参数错误」。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "任务不可领取（已领取/已停用/奖励为 0）"))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "points": s.Store.PointsFromTokens(tokens)})

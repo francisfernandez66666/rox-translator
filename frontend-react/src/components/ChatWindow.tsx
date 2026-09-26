@@ -29,6 +29,7 @@ import {
 import MessageBubble from './MessageBubble'
 import { FeedbackModalFromMessage } from './modals'
 import { useChat, PkgRefreshCtx } from '@/hooks/useChat'
+import { isPlatformBillingContext, useAuthStore } from '@/stores/auth' // ★ O-9（批 I-10）：平台上下文不渲染余额条
 import { myPackage, meContext } from '@/api'
 import { estimateTranslation } from '@/api/translate'
 import { fmtPoints } from '@/utils/points'
@@ -111,13 +112,20 @@ export default function ChatWindow() {
     try {
       const r: any = await myPackage()
       if (r && r.success) {
-        if (typeof r.points_balance === 'number') {
+        // ★ O-9（批 I-10）：平台上下文（超管未切入任何租户）不参与计费，后端对 tid<=0 固定回 0。
+        //   余额条与部门预算徽标照此渲染会长期显示「余额 0 积分」——一个不会扣点的身份
+        //   天天被告知没钱。守卫只压这两处**展示**，不做提前 return：
+        //   chat_max_chars（F-52② 本地闸的唯一数据源）与今日用量在平台上下文同样要刷。
+        //   判据与 App 顶栏同源（isPlatformBillingContext），用 getState() 取角色是为了
+        //   不把 user 塞进本回调依赖、引起余额广播链路重建。
+        const platformCtx = isPlatformBillingContext(useAuthStore.getState().user?.role)
+        if (!platformCtx && typeof r.points_balance === 'number') {
           setBalance({ points: r.points_balance, approx: r.balance_sentences_approx ?? 0 })
         }
         if (typeof r.points_used_today === 'number') {
           setUsage({ today: r.points_used_today })
         }
-        if (r.org_budget && r.org_budget.points_limit > 0) {
+        if (!platformCtx && r.org_budget && r.org_budget.points_limit > 0) {
           setOrgBudget({ limit: r.org_budget.points_limit, used: r.org_budget.points_used_this_month, name: r.org_budget.name })
         } else {
           setOrgBudget(null)

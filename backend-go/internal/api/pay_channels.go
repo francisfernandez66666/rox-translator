@@ -123,8 +123,8 @@ func payConfigEnvOverridden() map[string]string {
 // env_overridden=配置键→接管该字段的环境变量名。
 func (s *Server) handleAdminPayChannels(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		// 新写的 handler 一律走统一错误出口（#42 错误写法棘轮：内联错误响应只减不增）
-		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, publicErrMessage(r.Context(), err)))
+		// 鉴权分流（★ F-64③ 批 I-10 收尾）：未登录 401、等级不足 403，同一句错误不再两种码
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{
@@ -146,7 +146,8 @@ func (s *Server) handleAdminPayChannels(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleAdminPayChannelsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, publicErrMessage(r.Context(), err)))
+		// 与 GET 同口径分流（★ F-64③ 批 I-10 收尾）：未登录 401、等级不足 403
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {

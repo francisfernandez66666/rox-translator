@@ -160,15 +160,16 @@ func TestQuoteCurrencyConfigRoundTrip(t *testing.T) {
 	if cur := srv.Store.QuoteCurrencyCfg(); cur.Currency != "CNY" {
 		t.Fatalf("应已切回 CNY，got=%+v", cur)
 	}
-	// 鉴权闸门：匿名一律 403
-	if code, _ = doJSON(t, mux, http.MethodGet, "/api/admin/config/quote-currency", "", nil); code != 403 {
-		t.Fatalf("匿名读取报价配置应 403，got %d", code)
+	// 鉴权闸门分流：匿名＝401、越权＝403（★ 批 I-10 收尾订正：旧实现两支都回 403，
+	// 与本批「未登录/无权限必须分流」的口径冲突——前端只在 401 走重登录）
+	if code, _ = doJSON(t, mux, http.MethodGet, "/api/admin/config/quote-currency", "", nil); code != 401 {
+		t.Fatalf("匿名读取报价配置应 401，got %d", code)
 	}
 }
 
 // ④ 关闭态（出厂封存，2026-09-22 决策）：外币保存必须 400 且话术讲明"暂未开放"；
 // GET 回显 feature_open=false、币种恒 CNY、白名单只露 CNY（管理台据此隐藏报价区块）。
-// 鉴权口不受开关影响：匿名一律 403。
+// 鉴权口不受开关影响：无论开放/封存，匿名都是 401、非超管都是 403（分流见上面那条锁）。
 func TestQuoteConfigClosedRejectsForeign(t *testing.T) {
 	t.Cleanup(store.SetQuoteFeatureOpen(false))
 	srv, tok := newQuoteServer(t)
