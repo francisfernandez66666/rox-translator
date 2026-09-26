@@ -239,6 +239,14 @@ bash scripts/build_extension.sh --check           # 扩展漂移闸门（动过 
 bash scripts/build_sdk.sh --check                 # SDK 托管产物漂移闸门（★ 2026-09-25 〇-T：动过 sdk/ 却没重打 public/sdk/ 时红灯；e2e/sdk_download.spec.ts 同口径）
 ```
 
+★ **中文注释自查必须按「实文件」跑，禁止把目录当参数喂**（09-27 实测踩坑）：
+`scripts/missing_comments.py` / `missing_comments_ts.py` 只接受**文件列表**，喂目录得到的是
+「TOTAL 0 declarations in 0 files」——0 文件＝0 缺失＝**恒空假绿**，历史上被当成「注释闸双 0」记进过批次账。
+正确口径：`find backend-go -name '*.go' -not -name '*_test.go' -print0 | xargs -0 python3 scripts/missing_comments.py`
+（前端同理，`src` 下排除 `*.test.*`）。另注意两件事：① 内嵌 HTML/JS 字符串里的 JS 声明**不是** Go 声明，
+给它们补注释＝改直出面字节、必须换二进制（§一·5），这类点位判为射程外；
+② 改这两个检查器判据时必须配「剥掉一条注释立刻报缺」的反证，防止把真缺口一起抹掉。
+
 改动全绿后**按 §一·9 的口径推送**（`scripts/push_code_only.sh` 干跑 → `--apply`），不要裸 `git push`。
 
 改动触及计费/对账时，`run_uat.sh` **必须**跑 PG 方言（SQLite 快跑不能替代）。
