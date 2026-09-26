@@ -181,7 +181,8 @@
 ### 8. Handler 错误返回口径（★ 2026-09-23 〇-LK 立为硬约定）
 
 - **新增/改动的 HTTP handler，错误响应一律走 `s.writeError(w, r, apierrors.New(code, msg))`，禁止新写内联
-  `writeJSON(w, 4xx/5xx, map{...})`。** 全包棘轮 `TestErrorStyleRatchet`（基线 741）按**整包**计数，
+  `writeJSON(w, 4xx/5xx, map{...})`。** 全包棘轮 `TestErrorStyleRatchet`（基线 628，
+  2026-09-26 批 I-7 由 699 降到 628：收款/账务七文件 71 处已迁 `writeError`）按**整包**计数，
   新文件里第 1 处内联错误响应就会顶红闸门——这不是形式问题，内联体缺统一错误码，
   前端与 SDK 无法按 code 分支处理。
 - 白名单转发（如 `assist_open_proxy.go`）里「上游原样透传」的 4xx **不算**内联错误响应：那是上游状态码，
