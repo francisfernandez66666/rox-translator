@@ -85,6 +85,8 @@ T = {
 "临时缓存写入失败": "Temp cache write failed",
 "二维码生成失败: ": "QR code generation failed: ",
 "产物文件不存在": "Deliverable file not found",
+"人工修订记录读取失败，请稍后重试": "Failed to read manual revision records; please retry later",
+"人工修订记录读取失败，本次回写已中止，请重试": "Failed to read manual revision records; this write-back was aborted, please retry",
 "仅付费包支持升级": "Only paid plans support upgrade",
 "仅平台超管可操作数据采集": "Only platform super-admins can operate data collection",
 "仅支持 POST": "POST only",
@@ -262,6 +264,9 @@ T = {
 "租户创建失败：该企业编码已存在": "Tenant creation failed: this company code already exists",
 "租户存储未初始化": "Tenant storage not initialized",
 "租户已创建，但管理员账号创建失败: ": "Tenant created, but admin account creation failed: ",
+# ★ 2026-09-26 批 I-3（F-55/F-56）：配额读侧/写侧「值不可用」不再是静默 0，改为如实报错
+"租户配额读取失败，请刷新重试": "Failed to read tenant quota; please refresh and retry",
+"租户配额当前值读取失败，本次保存已中止": "Failed to read the tenant quota's current value; this save was aborted",
 "窗口起止时间必填": "Window start/end time required",
 "策略校验失败: ": "Policy validation failed: ",
 "策略格式错误": "Invalid policy format",
@@ -290,6 +295,7 @@ T = {
 "角色无效": "Invalid role",
 "解析失败: ": "Parse failed: ",
 "订单不存在": "Order not found",
+"订单渠道非 mock，不可模拟支付": "The order channel is not mock, so simulated payment is not allowed",
 "订单不存在或非 mock 渠道": "Order not found or not a mock channel",
 "订单已创建但自动入账失败（保留待支付，可人工确认）: ": "Order created but auto-settlement failed (kept pending; manual confirmation available): ",
 "订单确认失败: ": "Order confirmation failed: ",
@@ -326,6 +332,10 @@ T = {
 "请提供租户编码": "Tenant code is required",
 "请提供订单 id": "Order id is required",
 "请求体格式错误": "Malformed request body",
+# ★ F-64③（批 I-10 2026-09-26 深夜）：assist 代理本层失败从 writeAssistBizErr 的 200 壳迁到
+#   apierrors.New(...) 后进入词条闸射程（该闸同时扫 `"message":` 与 apierrors.New 的第二实参），
+#   文案一字未改，只补 zh→en 词条。
+"请求无法转发到 AI 助手服务": "Request could not be forwarded to the AI assistant service",
 "请求格式错误": "Malformed request",
 "请求格式错误（kind 必填）": "Malformed request (kind required)",
 "请求过于频繁，请稍后再试": "Too many requests; please retry later",
@@ -442,6 +452,27 @@ T.update({
 "非法路径": "Illegal path",
 })
 
+# —— 第四批盘点（2026-09-26 批 I-7/I-8/I-9 收尾闸门补漏）：本批新增的公开直出面错误提示。
+# 这一批全是「不经前端、浏览器地址栏直达」的入口（/brand/*、/docs/manual/*、/api/tm/review），
+# 英文用户点开就是看这句话，漏词条＝中文原样透传，正是 〇-S #12 要堵的形态。
+T.update({
+# ★ F-47（批 I-7）租户自助 TM 视图
+"该接口仅支持 GET": "This endpoint supports GET only",
+"此接口为租户自助视图，平台账号请使用超管 TM 审核台": "This is the tenant self-service view; platform accounts should use the super-admin TM review console",
+"status 取值仅支持 pending / approved / rejected（留空为全部）": "status supports only pending / approved / rejected (leave empty for all)",
+# ★ F-69（批 I-8）12 语种手册 PDF 直出
+"手册下载仅支持 GET": "Manual download supports GET only",
+"手册地址形如 /docs/manual/<语种码>.pdf（例：/docs/manual/zh.pdf）": "Manual URLs look like /docs/manual/<lang>.pdf (e.g. /docs/manual/zh.pdf)",
+"不支持的手册语种（可选：zh/zh-hant/en/ru/fr/ar/es/pt/de/ja/ko/th）": "Unsupported manual language (allowed: zh/zh-hant/en/ru/fr/ar/es/pt/de/ja/ko/th)",
+"该产品手册尚未上传，请联系平台管理员": "This product manual has not been uploaded yet; please contact the platform administrator",
+"手册文件格式异常（非 PDF），已停止下载": "The manual file is not a valid PDF; the download was stopped",
+# ★ F-46（批 I-9）品牌静态件直出
+"品牌静态件仅支持 GET": "Brand assets support GET only",
+"品牌静态件不存在": "Brand asset not found",
+"品牌静态件不存在或已被清理": "Brand asset not found or has been cleaned up",
+"品牌静态件内容异常": "Brand asset content is invalid",
+})
+
 import re, sys
 sys.path.insert(0, '/tmp')
 
@@ -463,7 +494,7 @@ def q(s: str) -> str:
 lines = []
 lines.append('// ============ 本文件职责中文说明 ============')
 lines.append('// 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。')
-lines.append('// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（343 条，')
+lines.append('// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（%d 条，' % len(exact))
 lines.append('//   由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。')
 lines.append('// PATTERNS：含 %d/%s/%v 占位的 fmt 拼接句式，运行时用正则捕获后按序回填英文模板。')
 lines.append('// 维护口径：后端新增写死中文提示时先跑盘点脚本补词条，再跑生成本文件的脚本；')

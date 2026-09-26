@@ -21,6 +21,9 @@ package api
 //
 //	分/百万 token，★ F-12 重锚后缺省 33222，使 3,000 积分裸充值恰=¥299 面值）换算人民币分。
 //	旧键 price_fen_per_token（分/token、实值 10）为按次时代遗留，已废弃不再读取。
+// ★ F-64①（批 I-7）口径：本文件错误响应已统一走 s.writeError，状态码按语义诚实
+//   （403/404/409/500/503），不再用 200 承载失败；handlePayNotify 例外——它的消费方是
+//   渠道网关，状态码一律不变（MUST-STAY-200 应答白名单），只统一响应体。
 // ========================================
 
 import (
@@ -36,6 +39,7 @@ import (
 	"crypto/subtle"
 
 	apierrors "translator/internal/errors"
+	"translator/internal/observability"
 	"translator/internal/payment"
 	"translator/internal/store"
 )
@@ -94,7 +98,7 @@ func (s *Server) payQRExpireMinutes() int {
 func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	var req struct {
@@ -104,7 +108,8 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		Coupon    string `json:"coupon"`     // ★ 优惠券（#41）：券码，空=不用券
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Points <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "points 必须大于 0"})
+		// ★ F-64①（批 I-7）：入参非法 → 400 校验错误，统一出口带错误码。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "points 必须大于 0"))
 		return
 	}
 	{
@@ -112,7 +117,8 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		//   超大值可溢出为负 tokens 落库成负金额订单（脏数据污染对账链）。
 		const maxPoints = int64(1) << 40 // ≈1.1 万亿积分，远超任何真实充值
 		if req.Points > maxPoints || req.Points > (math.MaxInt64-1)/int64(s.Store.PointsTokensRate()) {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "points 超出允许范围"})
+			// ★ F-64①（批 I-7）：溢出防护命中也是入参非法 → 400 校验错误。
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "points 超出允许范围"))
 			return
 		}
 	}
@@ -133,7 +139,8 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.Channel != "mock" && req.Channel != "wechat" && req.Channel != "alipay" && req.Channel != "manual" && req.Channel != "usdt" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "不支持的支付渠道"})
+		// ★ F-64①（批 I-7）：渠道不在白名单 → 400 校验错误。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "不支持的支付渠道"))
 		return
 	}
 	// ★ F-09（2026-09-25 UAT 修复批）：渠道白名单只判字符串合法，不与支付模式交叉校验——
@@ -146,7 +153,8 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 	// 创建订单（先落 pending，再取二维码回填）
 	o, err := s.Store.CreateOrderChannel(tid, tokens, 0, u.ID, req.Channel, "")
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：建单失败是服务端故障 → 500，不再用 200 壳承载失败。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ 应收金额落库（评审整改 B1）：amount_money=token 数×定价（元）——
@@ -186,7 +194,8 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 			qrContent = v
 		}
 		if qrContent == "" {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "静态收款码未配置，请联系管理员"})
+			// ★ F-64①（批 I-7）：收款码未配置是渠道未就绪 → 503，不再用 200 壳承载失败。
+			s.writeError(w, r, apierrors.New(apierrors.ErrPayChannelUnavailable, "静态收款码未配置，请联系管理员"))
 			return
 		}
 		_ = s.Store.UpdateOrderPrepay(o.OrderNo, "", qrContent)
@@ -207,9 +216,9 @@ func (s *Server) handlePayCreate(w http.ResponseWriter, r *http.Request) {
 		// ★ #41 + #37：资质缺失提示原样透传（运维照做即可开启收款）；网络/协议类只回通用文案，
 		//   细节（url.Error、DNS、证书、渠道原文）只进日志，不吐给客户端。
 		log.Printf("[pay] 渠道 %s 下单失败（订单 %s 保持 pending 待人工处理）: %v", o.Channel, o.OrderNo, err)
-		writeJSON(w, 200, map[string]interface{}{"success": false,
-			"message":  payChannelQRErrorMessage(channel, err),
-			"order_no": o.OrderNo})
+		// ★ F-64①（批 I-7）：渠道取码失败 → 503（渠道未就绪），order_no 走 details 保留附加字段。
+		s.writeError(w, r, apierrors.New(apierrors.ErrPayChannelUnavailable, payChannelQRErrorMessage(channel, err)).
+			WithDetails(map[string]interface{}{"order_no": o.OrderNo}))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "pay_create", "orders", o.OrderNo)
@@ -265,18 +274,20 @@ func payPublicHint(err error) string {
 func (s *Server) handlePayStatus(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	tid := s.effTenant(r, u)
 	oid := atol(r.URL.Query().Get("order_id"))
 	if oid <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少 order_id"})
+		// ★ F-64①（批 I-7）：缺参 → 400 校验错误。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少 order_id"))
 		return
 	}
 	o, err := s.Store.GetOrder(oid, tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "订单不存在"})
+		// ★ F-64①（批 I-7）：订单查不到 → 404，不再用 200 壳承载失败。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "订单不存在"))
 		return
 	}
 	resp := map[string]interface{}{"success": true, "order": s.orderViewJSON(o)}
@@ -294,30 +305,38 @@ func (s *Server) handlePayStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePaySimulate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	// 仅 mock 模式开放（★ 整改 A6 + 2026-09 运营策略：payment.mode 未显式为 mock 时一律拒绝——
 	// 此前「非空且≠mock 才拦」的写法让全新部署（空配置）处于可模拟充值状态）
 	if s.effPayMode(s.effTenant(r, u)) != "mock" {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "非 mock 模式禁止模拟支付"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "非 mock 模式禁止模拟支付"))
 		return
 	}
 	var req struct {
 		OrderID int64 `json:"order_id"` // 待模拟支付的订单 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OrderID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请提供 order_id"})
+		// ★ F-64①（批 I-7）：缺参 → 400 校验错误。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请提供 order_id"))
 		return
 	}
 	// 仅限本租户且为 mock 渠道订单
+	// ★ F-64①（批 I-7）：旧写法把「单找不到」与「渠道非 mock」挤成一句 200 壳——
+	//   拆开各自诚实：404＝本租户下查无此单；409＝单在但状态不允许模拟。
 	o, err := s.Store.GetOrder(req.OrderID, s.effTenant(r, u))
-	if err != nil || o.Channel != "mock" {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "订单不存在或非 mock 渠道"})
+	if err != nil || o == nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "订单不存在"))
+		return
+	}
+	if o.Channel != "mock" {
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "订单渠道非 mock，不可模拟支付"))
 		return
 	}
 	if err := s.Store.MarkOrderPaid(req.OrderID, s.effTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：确认到账失败是服务端故障 → 500，不再用 200 壳承载失败。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "pay_simulate", "orders", o.OrderNo)
@@ -334,7 +353,7 @@ func (s *Server) handlePaySimulate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	var req struct {
@@ -342,19 +361,25 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 		TxHash  string `json:"tx_hash"`  // ★ USDT（2026-09-15）：链上交易哈希（usdt 渠道必填，仅线索展示，以链上查证为准）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OrderID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请提供 order_id"})
+		// ★ F-64①（批 I-7）：缺参 → 400 校验错误。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请提供 order_id"))
 		return
 	}
 	tid := s.effTenant(r, u)
+	// ★ F-64①（批 I-7）：existing 提到 if 之前（只查一次 GetOrder，行为不变），
+	//   下面「声明失败分流」也要用它判断单子是否找得到。
+	existing, _ := s.Store.GetOrder(req.OrderID, tid)
 	// ★ USDT（2026-09-15）：tx_hash 入口校验（格式校验，链上真实性以后台/对账器查证为准）
-	if existing, _ := s.Store.GetOrder(req.OrderID, tid); existing != nil && existing.Channel == "usdt" {
+	if existing != nil && existing.Channel == "usdt" {
 		meta, mErr := s.Store.GetUSDTOrderMeta(req.OrderID)
 		if mErr != nil || req.TxHash == "" {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "USDT 订单需提交交易哈希（到账以平台链上查证为准）"})
+			// ★ F-64①（批 I-7）：缺交易哈希是入参校验 → 400。
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "USDT 订单需提交交易哈希（到账以平台链上查证为准）"))
 			return
 		}
 		if !payment.ValidUSDTTxHash(meta.Chain, req.TxHash) {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "USDT 交易哈希格式非法（链 " + meta.Chain + "，需对应链的合法哈希）"})
+			// ★ F-64①（批 I-7）：哈希格式非法是入参校验 → 400。
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "USDT 交易哈希格式非法（链 "+meta.Chain+"，需对应链的合法哈希）"))
 			return
 		}
 	}
@@ -365,12 +390,25 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 		if no, e2 := s.Store.ReopenManualOrder(origID, tid); e2 == nil {
 			req.OrderID = no.ID
 			rebateNote = fmt.Sprintf("（原订单 #%d 超时取消，已自动重建补审单）", origID)
+		} else if existing == nil {
+			// 订单在本租户下根本查不到 → 404（不是 200 壳）
+			s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "订单不存在"))
+			return
 		} else {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// 单子在、但状态不允许声明（已支付/已确认/渠道不符）→ 409 状态冲突
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, publicErrMessage(r.Context(), err)))
 			return
 		}
 	}
-	o, _ := s.Store.GetOrder(req.OrderID, tid)
+	o, oerr := s.Store.GetOrder(req.OrderID, tid)
+	if oerr != nil || o == nil {
+		// ★ F-64①（批 I-7）：声明已落库（manual_confirm=1），这里只是回读失败。
+		//   旧写法把 nil 直接带下去解引用 o.OrderNo → panic；把它报成失败又会诱导用户
+		//   再点一次「我已付费」（补审单重复进队列）。故只记日志并用占位文案继续投递告警。
+		observability.Error(r.Context(), "人工确认声明回读订单失败", "order_id", strconv.FormatInt(req.OrderID, 10),
+			"tid", strconv.FormatInt(tid, 10), "err", fmt.Sprint(oerr))
+		o = &store.Order{ID: req.OrderID, OrderNo: fmt.Sprintf("#%d（订单信息回读失败，请人工核对）", req.OrderID)}
+	}
 	// ★ USDT（2026-09-15）：落客户声明的交易哈希（线索+后台展示；C19 补审单不携带）
 	txNote := ""
 	if o != nil && o.Channel == "usdt" && req.TxHash != "" && rebateNote == "" {
@@ -420,12 +458,16 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 //
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（path 含 :channel，body 为渠道报文）。
 // 返回: 渠道约定格式（成功返回 success 字符串，微信返回 204）。
+// ★ F-64①（批 I-7）：本函数是「MUST-STAY-200 应答白名单」成员（对外契约见 errorstyle
+//
+//	闸门新登记的 pay_ack 说明）——消费方是支付渠道网关而非客户，非 2xx 对网关语义即
+//	「重试/不确认」，故各失败分支状态码一律不变，仅响应体改走统一出口补 code 与 trace_id。
 func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 	channel := strings.TrimPrefix(r.URL.Path, "/api/pay/notify/")
 	// ★ USDT（2026-09-15）：链上资产无原生回调，本口对 usdt 显式关闭（不扩攻击面）——
 	//   到账只走 reconciler 链上查证或后台人工核销（防「mock 报文注入发币」路径）。
 	if channel == "usdt" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "USDT 无渠道回调，请通过链上对账或人工核销确认"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "USDT 无渠道回调，请通过链上对账或人工核销确认"))
 		return
 	}
 	// ① 凭证（★ 2026-08-30 修复：所有渠道统一先验 X-Admin-Token，再走渠道签名）：
@@ -435,7 +477,7 @@ func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 	//    故所有渠道均可统一校验，不依赖第三方支付服务器携带该头。
 	tok := r.Header.Get("X-Admin-Token")
 	if tok == "" || !constantTimeTokenEqual(tok, s.Cfg.AdminToken) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "拒绝访问"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "拒绝访问"))
 		return
 	}
 	// ③ mock 封禁（★ 整改 A6：与 handlePaySimulate 同口径收紧——支付模式未显式
@@ -443,7 +485,7 @@ func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 	//    2026-09：支付模式读最终运营策略（payment.mode，平台级），存量配置经兜底并入。
 	payMode := s.effPayMode(0)
 	if channel == "mock" && payMode != "mock" {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "当前支付模式下禁止 mock 回调"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "当前支付模式下禁止 mock 回调"))
 		return
 	}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
@@ -457,17 +499,19 @@ func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 	prov := s.payProviderFor(channel)
 	nt, err := prov.VerifyNotify(body, headers)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "回调验签失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "回调验签失败: "+err.Error()))
 		return
 	}
 	if !nt.Verified {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "回调签名校验未通过"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "回调签名校验未通过"))
 		return
 	}
 	// ② 渠道一致性 + 金额一致性预检：先查单核对，再确认到账
 	o, oerr := s.Store.FindOrderByOrderNo(nt.OrderNo)
 	if oerr != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "订单不存在"})
+		// ★ F-64①（批 I-7）：网关侧语义——非 2xx 一律重试，故保持既有 400 不动（不许改 404），
+		//   本处只统一响应体（补 code 与 trace_id）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "订单不存在"))
 		return
 	}
 	// 渠道匹配：mock 单只接受 mock 回调；wechat/alipay 单只接受同渠道回调；
@@ -477,7 +521,8 @@ func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 		expectChannel = "wechat"
 	}
 	if o.Channel != expectChannel {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "回调渠道与订单渠道不符"})
+		// ★ F-64①（批 I-7）：保持既有 400（网关侧非 2xx 即重试），只统一响应体。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "回调渠道与订单渠道不符"))
 		return
 	}
 	// 金额一致：应收分 = 订单落库金额×100（B1 单一事实源）；历史未回填单兜底 tokens×定价。
@@ -487,14 +532,15 @@ func (s *Server) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 		expectFen = s.Store.TokensToFen(o.AmountTokens)
 	}
 	if nt.Amount <= 0 || nt.Amount != expectFen {
-		writeJSON(w, 400, map[string]interface{}{"success": false,
-			"message": fmt.Sprintf("回调金额不符：期望 %d 分，实收 %d 分", expectFen, nt.Amount)})
+		// ★ F-64①（批 I-7）：保持既有 400（网关侧非 2xx 即重试），只统一响应体。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, fmt.Sprintf("回调金额不符：期望 %d 分，实收 %d 分", expectFen, nt.Amount)))
 		return
 	}
 	if err := s.Store.MarkOrderPaidByOrderNo(nt.OrderNo); err != nil {
 		// ★ 结算失败必须留日志（原始错误）+ 用户侧脱敏文案（2026-09-12：此前 pq 裸错直吐客户端）
 		log.Printf("[pay] 订单结算失败 order_no=%s: %v", nt.OrderNo, err)
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "订单确认失败: " + store.DebriefDBError(err)})
+		// ★ F-64①（批 I-7）：保持既有 400（网关侧非 2xx 即重试），只统一响应体。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "订单确认失败: "+store.DebriefDBError(err)))
 		return
 	}
 	// 审计：记录渠道回调到账

@@ -22,7 +22,19 @@
   /* ---- 前台头部：允许换行，收窄内边距 ---- */
   .app-header { flex-wrap: wrap; row-gap: 6px; padding: 8px 12px; }
   .app-header .brand { font-size: 17px; }
-  .app-header .pkg-line-tag { display: none; }   /* 余额徽标窄屏隐藏，改由抽屉内「套餐 / 账单」入口查看 */
+  /* ★ F-48（批 I-5 2026-09-26）：余额徽标**不再窄屏隐藏**。旧写法 `display:none` 把「我还剩多少
+     积分」这个唯一常驻口径在手机上整块抹掉（用户得翻进「套餐/账单」二级页才看得到），
+     与工作台余额条不刷新叠成同一件事——「手机上看不见自己的余额」。
+     改为正常显示 + 单行省略号：flex-basis 让徽标可换行（.app-header 已 flex-wrap:wrap），
+     min-width:0 是 flex 项能收缩的前提（缺它则 nowrap 长文本反向撑破 390px 视口，
+     被 e2e/mobile_uat.spec.ts 的「无横向溢出」锁红）；12 语种里德/俄文案明显更长，靠截断兜住。 */
+  .app-header .pkg-line-tag {
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   /* ---- 聊天区（★ #36）：合并对话框的窄屏外边距由组件自带 media query 下发
      （frontend-react/src/components/ChatWindow.tsx CW_CSS），此处不再覆写——

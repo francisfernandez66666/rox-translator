@@ -88,21 +88,83 @@ class CreateTask(unittest.TestCase):
                                 "target_langs": ["en", "ja"], "title": "标题"})
         self.assertEqual(rec.calls[0]["method"], "POST")
 
-    def test_create_task_business_error(self):
-        # 200 + success:false（无 task_id）→ 按 error_code 抛 TranslatorError
+    def test_create_task_2xx_shell_still_rejected(self):
+        # 「2xx 空壳」兜底判据：正常路径下权限失败已是 403（见下方 test_http_error_*），
+        # 这条钉的是**中间层把失败改写成 200** 时 SDK 不得默默返回一个没有 task_id 的字典
+        # （那会让调用方在下一句 r["task_id"] 上踩 KeyError，把契约问题伪装成用法问题）。
         with sdk_client([((lambda u, h, b: True), 200,
                           {"success": False, "error_code": "forbidden", "message": "无权限"})]) as (cli, _):
             with self.assertRaises(TranslatorError) as cm:
                 cli.create_task("x")
         self.assertEqual(cm.exception.error_code, "forbidden")
 
+    def test_create_task_forbidden_is_403(self):
+        # ★ F-64①：同一场景的诚实形态——403 + code
+        payload = json.dumps({"success": False, "code": "forbidden",
+                              "error_code": "forbidden", "message": "无权限"}).encode()
+        with sdk_client([((lambda u, h, b: True), 403, payload)]) as (cli, _):
+            with self.assertRaises(TranslatorError) as cm:
+                cli.create_task("x")
+        self.assertEqual(cm.exception.status, 403)
+        self.assertEqual(cm.exception.code, "forbidden")
+
     def test_http_error_maps_status_and_code(self):
-        payload = json.dumps({"error_code": "insufficient_balance", "message": "余额不足"}).encode()
+        # ★ F-64①（2026-09-26）：余额不足以 **402** 发出（旧口径是 200 + success:false），
+        # 错误体同时带 code（正主）与 error_code（<1.0.4 别名）。
+        payload = json.dumps({"success": False, "code": "insufficient_balance",
+                              "error_code": "insufficient_balance", "message": "余额不足"}).encode()
         with sdk_client([((lambda u, h, b: True), 402, payload)]) as (cli, _):
             with self.assertRaises(TranslatorError) as cm:
                 cli.create_task("x")
         self.assertEqual(cm.exception.status, 402)
         self.assertEqual(cm.exception.error_code, "insufficient_balance")
+        # code 与 error_code 两个属性同值：新代码读 code，老代码读 error_code，都不许拿到 None
+        self.assertEqual(cm.exception.code, "insufficient_balance")
+
+    def test_legacy_body_with_only_error_code_still_maps(self):
+        # 混跑窗口（老服务端 + 新 SDK）：只发 error_code 时也必须取到码，
+        # 否则升级 SDK 的人会在自己身上看到「所有错误都没码」。
+        payload = json.dumps({"success": False, "error_code": "invalid_api_key",
+                              "message": "Key 无效"}).encode()
+        with sdk_client([((lambda u, h, b: True), 401, payload)]) as (cli, _):
+            with self.assertRaises(TranslatorError) as cm:
+                cli.balance()
+        self.assertEqual(cm.exception.code, "invalid_api_key")
+
+    def test_rate_limited_429_carries_retry_after(self):
+        # ★ F-47/F-64①：限流给 429 + retry_after 字段 + Retry-After 头，SDK 必须把秒数交出来，
+        # 否则调用方只能瞎猜退避窗口（猜短了继续撞闸，猜长了用户白等）。
+        payload = json.dumps({"success": False, "code": "rate_limited",
+                              "error_code": "rate_limited", "message": "请求过于频繁",
+                              "retry_after": 30}).encode()
+        with sdk_client([((lambda u, h, b: True), 429, payload)]) as (cli, _):
+            with self.assertRaises(TranslatorError) as cm:
+                cli.balance()
+        self.assertEqual(cm.exception.status, 429)
+        self.assertEqual(cm.exception.code, "rate_limited")
+        self.assertEqual(cm.exception.retry_after, 30)
+
+    def test_retry_after_falls_back_to_header(self):
+        # 中间层只透传 HTTP 头、JSON 字段被吃掉时，头里的秒数仍要拿到
+        def raiser(req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 429, "err",
+                                        {"Retry-After": "45"}, _FakeResp(
+                                            json.dumps({"message": "too many"}).encode()))
+
+        with mock.patch("urllib.request.urlopen", raiser):
+            cli = TranslatorClient("https://api.example.com", "rk")
+            with self.assertRaises(TranslatorError) as cm:
+                cli.balance()
+        self.assertEqual(cm.exception.retry_after, 45)
+
+    def test_non_429_has_no_retry_after(self):
+        # 负向：非限流错误不得凭空造一个 retry_after（否则客户端会对着 400 干等 0 秒/或误以为可重试）
+        payload = json.dumps({"success": False, "code": "bad_request",
+                              "error_code": "bad_request", "message": "参数错"}).encode()
+        with sdk_client([((lambda u, h, b: True), 400, payload)]) as (cli, _):
+            with self.assertRaises(TranslatorError) as cm:
+                cli.create_task("x")
+        self.assertIsNone(cm.exception.retry_after)
 
     def test_url_error_wrapped(self):
         with mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError("dns fail")):
@@ -140,6 +202,8 @@ class Multipart(unittest.TestCase):
         self.assertIn(raw, body)
 
     def test_create_file_task_business_error(self):
+        # ★ F-64①：402 是正解；这里保留 200 空壳形态，是为了让「老服务端 + 新 SDK」
+        # 的混跑路径也有一条实断言（真线上会有接入方停在旧版后端上）。
         with sdk_client([((lambda u, h, b: True), 200,
                           {"success": False, "error_code": "insufficient_balance",
                            "message": "余额不足"})]) as (cli, _):
@@ -182,8 +246,21 @@ class Polling(unittest.TestCase):
 
 
 class DownloadGuard(unittest.TestCase):
-    def test_download_json_error_body_rejected(self):
-        # R-L2：JSON 错误体（no_result）不得被当二进制产物写入磁盘
+    def test_download_not_ready_is_409_and_no_file_written(self):
+        # ★ F-64①：产物未就绪以 **409 + not_ready** 发出（旧口径 200 + success:false）；
+        # R-L2 的老红线仍然有效：JSON 错误体绝不得被当二进制产物写盘。
+        payload = json.dumps({"success": False, "code": "not_ready",
+                              "error_code": "not_ready", "message": "产物未就绪"}).encode()
+        with sdk_client([((lambda u, h, b: "/download" in u), 409, payload)]) as (cli, _):
+            out = os.path.join(tempfile.mkdtemp(), "out.zip")
+            with self.assertRaises(TranslatorError) as cm:
+                cli.download_file(1, out)
+        self.assertEqual(cm.exception.status, 409)
+        self.assertEqual(cm.exception.code, "not_ready")
+        self.assertFalse(os.path.exists(out))
+
+    def test_download_legacy_json_error_body_rejected(self):
+        # R-L2（老服务端形态）：200 + JSON 错误体同样不得落盘
         with sdk_client([((lambda u, h, b: "/download" in u), 200,
                           json.dumps({"success": False, "error_code": "no_result",
                                       "message": "无可下载"}).encode())]) as (cli, _):

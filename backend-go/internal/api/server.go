@@ -23,6 +23,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors" // ★ F-64①（批 I-7）：writeAuthzError 用 errors.Is 区分 errNotLogin 与等级不足
 	"log"
 	"net/http"
 	"os"
@@ -188,6 +189,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/docs/terms", s.handlePublicTerms)
 	s.mux.HandleFunc("/docs/sla", s.handlePublicSLA)
 	s.mux.HandleFunc("/docs/privacy", s.handlePublicPrivacy)
+	// ★ F-69（2026-09-26 批 I-8）：12 语种《产品手册》PDF 公网下载面。
+	//   前缀路由（"/docs/manual/"）比 spa.go 的 "/" 兜底更具体，ServeMux 先命中它 ⇒
+	//   未铺库/语种码不合法时回 404/400 的 JSON 错误体，而**不是** 200 整页 index.html 空壳。
+	s.mux.HandleFunc("/docs/manual/", s.handleManualPDFDownload)
+	// ★ F-46（2026-09-26 批 I-9）：品牌图静态件直出面。品牌 Logo / 首页背景不再以 base64 dataURI
+	//   注进首屏 HTML（那等于「HTML 体积 = 图片体积」，演示站实测 2 MB 首屏），改为落盘后只注入
+	//   /brand/<内容哈希名> 这条 URL。前缀路由比 spa.go 的 "/" 兜底更具体 ⇒ 缺件回 404 JSON，
+	//   不会退化成 200 整页 HTML（托管物判据陷阱，见 AGENTS §一·6）。
+	s.mux.HandleFunc("/brand/", s.handleBrandAsset)
 	s.mux.HandleFunc("/api/plans", s.handlePlans)
 	s.mux.HandleFunc("/api/register/industries", s.handleRegisterIndustries)
 	s.mux.HandleFunc("/api/register/personas", s.handleRegisterPersonas) // ★ 角色功能（2026-09-19）：公开角色字典
@@ -517,6 +527,8 @@ func (s *Server) routesTasks() {
 	s.mux.HandleFunc("/api/admin/tasks/reset-consumption", s.handleAdminTaskResetConsumption)
 	s.mux.HandleFunc("/api/me/tasks", s.handleMyTasks)
 	s.mux.HandleFunc("/api/me/tasks/claim", s.handleClaimTask)
+	// ★ F-62（2026-09-26 批 I-8）：TM 待审池的租户侧**只读**进度视图（tid 只取 token 用户，见 tmreview_tenant.go）
+	s.mux.HandleFunc("/api/me/tm-review/list", s.handleMyTmReviewList)
 }
 
 // routesWebhooks 注册租户 webhook 回调配置管理路由。
@@ -663,6 +675,15 @@ func (s *Server) withTenant(next http.Handler) http.Handler {
 		//    计数由 openapi handler 内 authenticateAPIKey 唯一执行，消除日配额双扣。
 		if ak, authErr := s.authenticateAPIKeyNoTouch(r); authErr == "" && ak != nil && ak.TenantID > 0 {
 			ctx = tenant.WithTenant(ctx, ak.TenantID)
+			// ★ F-51（〇-U 批 I-4，2026-09-26 UAT）：API Key 请求必须同时注入**归属用户**。
+			// 旧写法只注租户 ⇒ 下游 tenant.UserFromContext 恒 0 ⇒ 实时计量落 usage_ledger 时
+			// user_id=0，而「我的用量」查询条件是 tenant_id=? AND user_id=?（store/my_billing.go），
+			// 前端传的是本人 u.ID ⇒ 客户自己 API 花掉的量**永远查不出来**，
+			// 超管全租户视图不加 user 过滤却看得见 —— 客户问账、运营对不上的形态。
+			// validateAPIKey 已强制 ak.UserID>0（无归属用户的 Key 一律无效），此处直接取用。
+			// 顺带让 OpenAPI 与站内同权：engine 侧三处按 uid 反查 orgID 的口径
+			//（gates.go / file.go / text.go）此前对 API 流量恒退化到租户级。
+			ctx = tenant.WithUser(ctx, ak.UserID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -774,6 +795,32 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// writeAuthzError 鉴权失败出口的「未登录 / 已登录但无权限」分流（★ F-64① 批 I-7 收尾）。
+//
+// 为什么单独一层：require* 系列把两件事压成同一个 error 返回——
+//
+//	① errNotLogin（压根没登录 / token 已过期）；② auth.RequireRole 的等级不足。
+//
+// 旧写法在调用点一律 `writeError(ErrForbidden, publicErrMessage(err))`，于是客户看到
+// 「HTTP 403 + FORBIDDEN + 文案却写着未登录」这种自相矛盾的应答。
+//
+// 这不是吹毛求疵，是一条客户可感知的故障：前端 core.ts 的会话过期处理**只挂在 401**
+// （handleUnauthorized 清 token 并把用户落回登录页，见该文件 P0-6 注释），403 视为
+// 「你已登录但没这个权限」。结果是客户把收银台页面开着去喝了杯咖啡、token 过期，
+// 回来点「确认支付」得到一句「无权限」+ 停留原页反复撞闸——他以为自己的账号缺权限，
+// 实际只差重新登录。同批 /api/me/package 已按 401 出（批 I-7 主改点），这里补齐其余出口。
+//
+// 状态码语义：401＝「你是谁」（配合 WWW-Authenticate 口径，可触发客户端重认证）；
+// 403＝「你登录了，但这事不该你做」。分级权限不足一律仍走 403，不为了"看起来更宽"而翻成 401。
+// 参数 w: 响应写入器；r: 请求；err: require* 返回的错误。
+func (s *Server) writeAuthzError(w http.ResponseWriter, r *http.Request, err error) {
+	code := apierrors.ErrForbidden
+	if errors.Is(err, errNotLogin) {
+		code = apierrors.ErrUnauthorized
+	}
+	s.writeError(w, r, apierrors.New(code, publicErrMessage(r.Context(), err)))
+}
+
 // writeError 写出统一结构化错误（含正确 HTTP 状态码与 trace_id）。
 // 参数 w: 响应写入器；r: 请求（提供上下文与 trace_id）；e: 结构化错误。
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, e *apierrors.APIError) {
@@ -861,14 +908,19 @@ func (s *Server) handleKBStats(w http.ResponseWriter, r *http.Request) {
 	}
 	// 知识库未加载时返回提示
 	if s.DB == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "翻译技能未加载"})
+		// F-64②：KB 库没加载 = 依赖未就绪（503），既不是本进程出错（500）也不是用户请求写错了（400）；
+		//   旧写法回 200 + success:false，管理台会把它当「成功但没数据」渲染成空白统计。
+		//   不用 401：登录态已在上面把过关，这里失败的是服务自身的依赖装配。
+		s.writeError(w, r, apierrors.New(apierrors.ErrServiceUnavailable, "翻译技能未加载"))
 		return
 	}
 	// 按当前租户维度统计（租户隔离：只统计本租户 KB 数据）
 	tid := s.currentTenant(r)
 	total, perLang, seg, err := s.DB.Stats(tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：Stats 是真实的 KB 库查询，失败即服务端故障 → 500；
+		//   旧写法回 200 会让后台把「查询挂了」显示成「本租户 0 条」，运维据此误判数据丢失。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{

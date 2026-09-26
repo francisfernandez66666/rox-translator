@@ -22,6 +22,7 @@ import (
 
 	"translator/internal/auth"
 	"translator/internal/crawler"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 )
 
@@ -30,7 +31,8 @@ import (
 func (s *Server) requireSuperAdmin(w http.ResponseWriter, r *http.Request) (*store.User, error) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return nil, err
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -47,7 +49,8 @@ func (s *Server) handleKBScrapeSources(w http.ResponseWriter, r *http.Request) {
 	}
 	sources, err := s.Store.ListScrapeSources()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：查询失败是服务端出错（500），旧写法回 200 让管理台把它当成功渲染空列表
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "sources": sources})
@@ -83,7 +86,9 @@ func (s *Server) handleKBScrapeSourceCreate(w http.ResponseWriter, r *http.Reque
 	}
 	src, cerr := s.Store.CreateScrapeSource(&req)
 	if cerr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": cerr.Error()})
+		// F-64②：kb_pack_sources 无 name 唯一约束，插入失败只可能是数据库出错（500），
+		// 不是「名称重复」的 409 冲突；旧写法回 200 会让管理台 toast 判成功。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, cerr.Error()))
 		return
 	}
 	s.Store.LogAudit(1, u.ID, "kb_scrape_source_create", "kb_pack_sources", req.Name)
@@ -106,7 +111,8 @@ func (s *Server) handleKBScrapeSourceUpdate(w http.ResponseWriter, r *http.Reque
 		req.Tier = 3
 	}
 	if uerr := s.Store.UpdateScrapeSource(req.ID, &req); uerr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": uerr.Error()})
+		// F-64②：UPDATE 对不存在的 id 不报错（0 行影响），走到这里只能是数据库执行失败（500）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, uerr.Error()))
 		return
 	}
 	s.Store.LogAudit(1, u.ID, "kb_scrape_source_update", "kb_pack_sources", strconv.FormatInt(req.ID, 10))
@@ -128,7 +134,9 @@ func (s *Server) handleKBScrapeSourceStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if serr := s.Store.SetScrapeSourceEnabled(req.ID, req.Enabled); serr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": serr.Error()})
+		// F-64②：启停走 UPDATE ... WHERE id=?，id 不存在不报错（0 行影响），
+		// 此处失败只能是数据库执行出错（500），旧 200 壳让管理台开关组件误判已生效。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, serr.Error()))
 		return
 	}
 	s.Store.LogAudit(1, u.ID, "kb_scrape_source_status", "kb_pack_sources", strconv.FormatInt(req.ID, 10))
@@ -148,7 +156,10 @@ func (s *Server) handleKBScrapeSourceRun(w http.ResponseWriter, r *http.Request)
 	c.Probe = func() bool { return s.lowOccupancyForScrape() }
 	done, err := c.RunDaily(r.Context())
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：RunDaily 返回的 err 只有三类——store 未初始化、启用源列表查询失败、
+		// 上下文取消；单个数据源的上游抓取失败被引擎吞成日志并记入 last_status，
+		// 不会走到这里，故本层无从区分 404/409/502，诚实语义＝服务端出错（500）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 自动审批模式：采集即落正式库，采集后失效 KB 缓存 + 异步重建向量索引
@@ -181,7 +192,8 @@ func (s *Server) handleKBScrapeStaged(w http.ResponseWriter, r *http.Request) {
 	// 合并行集查询（条目+安全句同口径），total 为精确总数供前端翻页
 	rows, total, err := s.Store.ListStagedMerged(packType, status, lang, industry, limit, offset)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：待审池合并查询失败是服务端出错（500），旧 200 壳让管理台当成功渲染空表
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{
@@ -219,7 +231,9 @@ func (s *Server) handleKBScrapeApprove(w http.ResponseWriter, r *http.Request) {
 		if req.Kind == "entries" {
 			items, gerr := s.Store.GetStagedEntriesByIDs(req.IDs)
 			if gerr != nil {
-				writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
+				// F-64②：批量读取待审条目失败是服务端出错（500），不是「条目不存在」的 404——
+				// 读的是本次审批动作的输入集，读不通整批审批无从谈起。
+				s.writeError(w, r, apierrors.New(apierrors.ErrInternal, gerr.Error()))
 				return
 			}
 			for _, e := range items {
@@ -244,7 +258,8 @@ func (s *Server) handleKBScrapeApprove(w http.ResponseWriter, r *http.Request) {
 		} else {
 			items, gerr := s.Store.GetStagedPhrasesByIDs(req.IDs)
 			if gerr != nil {
-				writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
+				// F-64②：读取待审安全句失败同上——服务端出错（500），旧 200 壳会让 toast 误报审批完成
+				s.writeError(w, r, apierrors.New(apierrors.ErrInternal, gerr.Error()))
 				return
 			}
 			for _, p := range items {
@@ -266,7 +281,9 @@ func (s *Server) handleKBScrapeApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	n, serr := s.Store.SetStagedStatus(req.Kind, req.IDs, status)
 	if serr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": serr.Error()})
+		// F-64②：SetStagedStatus 只在 SQL 执行失败时报错（「非 pending 不可流转」表现为
+		// RowsAffected=0 而非 error），走到这里＝数据库出错（500），旧写法回 200 会被当成审批成功。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, serr.Error()))
 		return
 	}
 	// 功能⑥ 审批触发奖励：用户投稿（tenant_id>0）通过后按源文字符数发放永久余额
@@ -325,7 +342,8 @@ func (s *Server) handleKBScrapeRestore(w http.ResponseWriter, r *http.Request) {
 	if req.Kind == "entries" {
 		items, gerr := s.Store.GetStagedEntriesAllByIDs(req.IDs)
 		if gerr != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
+			// F-64②：还原前读取待审条目失败是服务端出错（500），旧 200 壳让管理台误报还原成功
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, gerr.Error()))
 			return
 		}
 		for _, e := range items {
@@ -350,7 +368,9 @@ func (s *Server) handleKBScrapeRestore(w http.ResponseWriter, r *http.Request) {
 		// 安全句撤销：edits 覆盖 phrase/replacement 回写待审行；已落库的先删正式库安全句
 		items, gerr := s.Store.GetStagedPhrasesAllByIDs(req.IDs)
 		if gerr != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": gerr.Error()})
+			// F-64②：读取待审安全句（含已通过态）失败是服务端出错（500），
+			// 旧 200 壳会让「还原」按钮弹成功、正式库残留已落库短语。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, gerr.Error()))
 			return
 		}
 		for _, p := range items {
@@ -373,7 +393,9 @@ func (s *Server) handleKBScrapeRestore(w http.ResponseWriter, r *http.Request) {
 	// 统一把目标行退回 pending 并计数；成功数 n>0 时失效缓存+重建索引（见下）
 	n, serr := s.Store.SetStagedStatus(req.Kind, req.IDs, "pending")
 	if serr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": serr.Error()})
+		// F-64②：退回 pending 的 UPDATE 失败＝数据库出错（500）；「已处于 pending」不算错，
+		// 由 RowsAffected=0 静默回 n=0，不会走到这里，故无需 409 分支。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, serr.Error()))
 		return
 	}
 	if n > 0 {
@@ -428,7 +450,9 @@ func (s *Server) handleKBRewardConfig(w http.ResponseWriter, r *http.Request) {
 			v = "1"
 		}
 		if err := s.Store.SetConfig("kb_upload_reward_enabled", v); err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "保存开关失败: " + err.Error()})
+			// F-64②：开关写入失败是数据库 upsert 出错（500）；SetConfig 无校验分支，
+			// 不存在 400 语义，旧 200 壳会让管理台开关回显「已保存」但库里没动。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "保存开关失败: "+err.Error()))
 			return
 		}
 		changed = append(changed, "enabled="+v)
@@ -436,14 +460,18 @@ func (s *Server) handleKBRewardConfig(w http.ResponseWriter, r *http.Request) {
 	// 单价/日封顶仅在 >0 时写入（0=不覆盖既有配置，防误清）
 	if req.PerChar > 0 {
 		if err := s.Store.SetConfig("kb_upload_reward_tokens_per_char", strconv.FormatInt(req.PerChar, 10)); err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "保存单价失败: " + err.Error()})
+			// F-64②：单价写入失败同样是数据库出错（500），与开关项独立判断、独立报错，
+			// 便于运维定位是哪一项配置没落库（文案原样保留 "保存单价失败: " 前缀）。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "保存单价失败: "+err.Error()))
 			return
 		}
 		changed = append(changed, "per_char="+strconv.FormatInt(req.PerChar, 10))
 	}
 	if req.DailyCap > 0 {
 		if err := s.Store.SetConfig("kb_upload_reward_daily_cap", strconv.FormatInt(req.DailyCap, 10)); err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "保存日封顶失败: " + err.Error()})
+			// F-64②：日封顶写入失败＝数据库出错（500）；本函数三处失败分支同为写库语义，
+			// 逐项保留各自文案前缀，不做一刀切合并（GET 读取分支与 400 校验分支不在本批射程）。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "保存日封顶失败: "+err.Error()))
 			return
 		}
 		changed = append(changed, "daily_cap="+strconv.FormatInt(req.DailyCap, 10))

@@ -220,6 +220,27 @@ export function t(key: string): string {
   return dicts[currentLang][key] || en[key] || zh[key] || key
 }
 
+/**
+ * 取词但**绝不露裸键名**：三档词典（当前语种→en→zh）都查不到时回落到调用方给的 fallback。
+ * ★ F-53（2026-09-26 〇-U 批 I-8）：错误分支的文案必须走这一版——t() 的「未翻键回退到 key」
+ * 是常规兜底（正常批次键数闸会拦住缺键），但错误气泡恰好是最容易被用户截图投诉的地方，
+ * 把 `chat.sensitiveBlocked` 这样的键名显示出来，与本轮缺陷「界面露 sensitive_blocked 裸码」同形态。
+ */
+export function textOr(key: string, fallback = ''): string {
+  return dicts[currentLang][key] || en[key] || zh[key] || fallback
+}
+
+/**
+ * textOr 的插值版：先按「三档词典→fallback」取到句子，再替换 {name} 占位符。
+ * fallback 里同样可以带占位符（调用方给一句中文原句，与 api/core.ts 的 apiMsg 口径一致：
+ * 词典缺键时界面仍是人话，而不是 `chat.textTooLong` 这种键名）。
+ */
+export function tplOr(key: string, vars: Record<string, string | number> = {}, fallback = ''): string {
+  let s = textOr(key, fallback)
+  for (const k in vars) s = s.split(`{${k}}`).join(String(vars[k]))
+  return s
+}
+
 /** 在指定语种取词（不走当前 UI 语种）；回退链 lang→en→zh。
  *  ★ 〇-Q 修正：落地页演示卡英语 UI 下源=英、定稿=中（EN→ZH），与其余语种「母语→EN」镜像；
  *  演示源句/术语按 srcLang 取词，必须绕过当前 UI 语种。此前 22:45 误折回 'zh'（变成 ZH→EN）已翻正。 */

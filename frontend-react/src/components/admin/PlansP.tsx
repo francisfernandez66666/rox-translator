@@ -34,13 +34,17 @@ import {
   adminPayChannels, adminPayChannelsSave, PAY_CH_FIELDS,
   type PayChField,
   adminQuoteCurrency, adminQuoteCurrencySave,
-  request,
+  adminGrowthFunnel, // ★ F-64②（批 I-10）：漏斗看板原先裸调 request()，后端已改诚实状态码 ⇒ 收进接口层（内部包 bizResp）
   authHeaders,
   API_BASE,
   handleUnauthorized, // ★ §4.2-2：二维码 blob 通道自管 401（裸 fetch 不经 request()）
+  ApiError, // ★ F-64①（批 I-7）：guardRead 需按状态码区分「401 已被全局接管」与其余失败
   type Any,
 } from '@/api'
 import { Panel, Field, toastResp, num } from './parts'
+// （★ F-64① 批 I-7：本面板的读取兜底已从 lib/runGuarded 换成本文件内的 guardRead——
+//   列表/回显类调用点全都写的是 `if (r.success)`，runGuarded 返回 undefined 会把这条分支
+//   变成 `undefined.success` 崩点，guardRead 统一回一个 success:false 的壳才接得上。）
 import { fmtQuoteMoney, cnyToQuote } from '@/components/quoteFmt' // ★ #75 报价展示口径集中在 quoteFmt
 import { fmtTime } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
@@ -149,6 +153,15 @@ export function PlansP() {
   const [payModeCfg, setPayModeCfg] = useState('mock')
   const payModeLabel = ({ mock: t('billing.chMock'), sdk: t('billing.chSdk'), static_qr: t('billing.chStaticQR') } as Record<string, string>)[payMode] || payMode
   const [quotaForm, setQuotaForm] = useState<Any>({ qps: 10, concurrent: 3, max_daily_chars: 0, max_daily_points: 0 })
+  // ★ F-55（2026-09-26 批 I-3）：配额表单的「可信度元数据」，三态各自拦一类误操作——
+  //   ready=false：GET 没成功过。旧行为是空表单也能保存，等于拿默认值覆盖线上配额；
+  //   tenantSelected=false：超管停在平台上下文（切换器没选具体租户）。此时读写的是「租户 0」
+  //     这条不存在的路，屏上任何数字都不代表任何真实租户（F-55 的读侧根因）；
+  //   unlimited：后端逐字段回带的「0＝不限」语义位。运行时判据是 maxDaily<=0 即放行
+  //     （billing/quota.go），所以 0 不是「空值」而是「拆墙」，必须显式标出来而不是留在输入框里。
+  const [quotaMeta, setQuotaMeta] = useState<{ ready: boolean; tenantSelected: boolean; unlimited: { chars: boolean; points: boolean } }>({
+    ready: false, tenantSelected: true, unlimited: { chars: false, points: false },
+  })
   const [pkgs, setPkgs] = useState<Any[]>([])
   const [billingEnforced, setBillingEnforced] = useState(false)
   const [sensitiveGate, setSensitiveGate] = useState(true) // ★ S8 敏感词兑底闸开关
@@ -209,9 +222,27 @@ function startPolling() { stopPolling(); payPollBusy.current = false; payTimer.c
 function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current); payTimer.current = null } }
   useEffect(() => () => stopPolling(), [])
 
+  // guardRead 面板内读取兜底（★ F-64① 批 I-7）：把 runGuarded 式的「toast 后端文案」
+  // 和本面板普遍存在的 `if (r.success)` 分支接起来——返回一个 success:false 的壳，
+  // 让原有分支（含 setQuotaMeta.ready=false、setPayCfgReady=false 这类 fail-closed 判定）照常生效。
+  // 两条刻意的偏差：
+  //   ① 401 不弹红字：request() 命中 401 已清登录态并把用户送回登录页（core 的 handleUnauthorized），
+  //      这里再弹一条只是重复打扰，且登录页上会挂一条与操作无关的报错；
+  //   ② 只兜「读取」，不兜动作——动作类仍由调用点的 toastResp(r) / 接口层的 bizResp 处理。
+  // 定义位置必须在各 load* 之前（它们在 useCallback 里引用本函数，后声明会踩 TDZ）。
+  const guardRead = useCallback(async (fn: () => Promise<Any>): Promise<Any> => {
+    try {
+      return await fn()
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) return { success: false }
+      void toastError(e instanceof Error ? e.message : t('common.fail'))
+      return { success: false }
+    }
+  }, [t])
+
   // loadPackage 拉取本租户套餐与支付方式，并同步可购商业包列表
   const loadPackage = useCallback(async () => {
-    const r: Any = await myPackage()
+    const r: Any = await guardRead(myPackage)
     if (r.success) {
       setPkg(r)
       const pm = r.pay_mode as string
@@ -223,33 +254,47 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
       // ★ #75：收银台报价口径（后端 Resolve 已做「缺倍率回落 CNY」的 fail-closed，前端拿来即用）
       setMyQuote({ code: String(r.quote_currency || 'CNY'), rates: (r.fx_rates_snapshot as Record<string, number>) || {} })
     }
-    const p: Any = await apiPlans()
+    const p: Any = await guardRead(apiPlans)
     if (p.success) setPlanList((p.plans as Any[]) || [])
-  }, [])
+  }, [guardRead])
   // loadOrders 拉取充值订单列表（待付/已付/退款全状态）
+  // ★ F-64①（批 I-7）：后端 /api/billing/orders 读故障已从「200 承载失败」改成 500，request()
+  //   对非 2xx 抛异常；本面板三个列表读取一律走 guardRead——既不再产生未捕获 rejection，
+  //   又能把失败弹成红字（旧写法失败时只剩空表 +「暂无数据」，是 #42 批消灭过的那类误导）。
   const loadOrders = useCallback(async () => {
-    const r: Any = await billingOrders()
+    const r: Any = await guardRead(billingOrders)
     if (r.success) setOrders((r.orders as Any[]) || [])
-  }, [])
+  }, [guardRead])
   // loadInvoices 拉取发票申请列表
   const loadInvoices = useCallback(async () => {
-    const r: Any = await billingInvoices()
+    const r: Any = await guardRead(billingInvoices)
     if (r.success) setInvoices((r.invoices as Any[]) || [])
-  }, [])
+  }, [guardRead])
   // loadQuota 拉取租户限流配额（QPS/并发/日字符/日积分）并回填表单
+  // ★ F-55（批 I-3）：①读失败必须翻掉 ready 标记（拿旧表单值去保存＝拿上一次的租户值覆盖当前租户）；
+  //   ②max_daily_points 保留「后端到底有没有回带这个数」的三态：回带缺失时存 undefined，
+  //     保存分支就不提交该键，交给后端按字符墙联动折算（旧写法 ?? 0 会把「缺失」伪装成「填了 0」）。
   const loadQuota = useCallback(async () => {
-    const r: Any = await billingQuota()
-    if (r.success) setQuotaForm({
+    const r: Any = await guardRead(billingQuota)
+    if (!r.success) { setQuotaMeta((m) => ({ ...m, ready: false })); return }
+    setQuotaForm({
       qps: (r.qps as number) || 10, concurrent: (r.concurrent as number) || 3,
-      max_daily_chars: (r.max_daily_chars as number) || 0, max_daily_points: (r.max_daily_points as number) ?? 0,
+      max_daily_chars: (r.max_daily_chars as number) || 0,
+      max_daily_points: typeof r.max_daily_points === 'number' ? r.max_daily_points : undefined,
     })
-  }, [])
+    const unl = (r.unlimited as Any) || {}
+    setQuotaMeta({
+      ready: true,
+      tenantSelected: r.tenant_selected !== false, // 老后端没这个键 → 视为已选中，行为不回退
+      unlimited: { chars: unl.max_daily_chars === true, points: unl.max_daily_points === true },
+    })
+  }, [guardRead])
   // loadPkgs 超管专属：拉取全部商业包配置（普通租户直接跳过）
   const loadPkgs = useCallback(async () => {
     if (!isSuper) return
-    const r: Any = await adminPackages()
+    const r: Any = await guardRead(adminPackages)
     if (r.success) setPkgs((r.packages as Any[]) || [])
-    const cfg: Any = await adminPackageSettings()
+    const cfg: Any = await guardRead(adminPackageSettings)
     if (cfg.success) {
       setBillingEnforced(cfg.billing_enforced === '1' || cfg.billing_enforced === true)
       if (cfg.sensitive_gate_enabled !== undefined) setSensitiveGate(cfg.sensitive_gate_enabled !== '0') // ★ S8
@@ -275,13 +320,13 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
         })
       }
     }
-    const m: Any = await manualConfirmOrders()
+    const m: Any = await guardRead(manualConfirmOrders)
     if (m.success) {
       setManualOrders((m.orders as Any[]) || [])
       manualOrdersUsdt.current = (m.usdt_info as Record<string, Any>) || {} // ★ USDT 线索映射
     }
     // ★ 2026-09-22：支付渠道凭据回显（独立接口，敏感项为掩码）
-    const pc: Any = await adminPayChannels()
+    const pc: Any = await guardRead(adminPayChannels)
     if (pc.success) {
       setPayCfg((pc.fields as Record<string, string>) || {})
       setPayCfgEnv((pc.env_overridden as Record<string, string>) || {})
@@ -291,7 +336,7 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
     }
     // ★ 2026-09-23（#75）：报价配置回显（独立接口）。rates 含 CNY:1 基准项，表单不渲染它
     // （恒为 1 不可配，提交时也整表不带 CNY——后端 SetFxRates 会拒收非 1 的 CNY）。
-    const qc: Any = await adminQuoteCurrency()
+    const qc: Any = await guardRead(adminQuoteCurrency)
     if (qc.success) {
       setQuoteSupported((qc.supported_currencies as string[]) || [])
       setQuoteEnv((qc.env_overridden as Record<string, string>) || {})
@@ -304,18 +349,29 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
     } else {
       setQuoteReady(false) // 同 payCfgReady：没回显成功就禁提交，防整表清空
     }
-  }, [isSuper])
+  }, [isSuper, guardRead])
 
   // loadAll 计费面板整体刷新：租户先取套餐，再并行拉订单/发票/配额/商业包
+  // ★ F-55（批 I-3）时序半：切换器一改就整盘重取。旧实现只在挂载时拉一次，
+  //   超管从租户 A 切到 B 后屏上仍是 A 的配额，此时点保存＝把 A 的数写进 B（读写同源的另一半）。
   const loadAll = useCallback(async () => {
     if (!isSuper) await loadPackage()
     await Promise.all([loadOrders(), loadInvoices(), loadQuota(), loadPkgs()])
-  }, [isSuper, loadPackage, loadOrders, loadInvoices, loadQuota, loadPkgs])
+  }, [isSuper, ad.activeTenantId, loadPackage, loadOrders, loadInvoices, loadQuota, loadPkgs])
   useEffect(() => { void loadAll() }, [loadAll])
 
     // subscribe 订阅套餐：建单→弹收款台（券码非空时一并提交，服务端按折后金额出码）
+    // ★ F-64①（批 I-7）：后端订阅口失败已从「200 承载失败」改为诚实状态码，接口层用 bizResp
+    //   还原了 success:false 形态，故下面的 !r.success 分支照旧成立；这里再补 try/catch 兜住
+    //   401/403 与网络层失败（bizResp 刻意不收敛那几类），否则点「订阅」失败会变成界面无反应的未捕获 rejection。
 async function subscribe(pl: Any) {
-    const r: Any = await packageSubscribe(String(pl.code), couponCode.trim().toUpperCase())
+    let r: Any
+    try {
+      r = await packageSubscribe(String(pl.code), couponCode.trim().toUpperCase())
+    } catch (e: any) {
+      void toastError(String(e?.message || t('billing.subscribeFailed')))
+      return
+    }
     // ★ 2026-09-16：业务失败（渠道未开放/余额校验等）不再静默吞掉，给用户可见反馈
     if (!r.success) { void toastError(String(r.message || t('billing.subscribeFailed'))); return }
     const o = r.order as Any
@@ -324,6 +380,8 @@ async function subscribe(pl: Any) {
     await loadPackage()
   }
     // upgrade 升级套餐（补差价折算）
+    // ★ F-64①（批 I-7）：同 subscribe——升级口 409（无生效订阅/目标不高于当前包）等失败已是
+    //   诚实状态码，bizResp 还原后 toastResp 仍能红字回显；catch 兜 401/403/网络失败。
 async function upgrade(pl: Any) {
     const cur = pkg.package_code as string
     const ok = await confirmDialog({
@@ -332,7 +390,13 @@ async function upgrade(pl: Any) {
       confirmText: t('billing.subscribeNow'),
     })
     if (!ok) return
-    const r: Any = await packageUpgrade(String(pl.code))
+    let r: Any
+    try {
+      r = await packageUpgrade(String(pl.code))
+    } catch (e: any) {
+      void toastError(String(e?.message || t('billing.subscribeFailed')))
+      return
+    }
     if (!toastResp(r)) return
     if (r.credit_money > 0) void toastSuccess(tpl('billing.upgradeCredit', { money: r.credit_money }))
     const o = r.order as Any
@@ -401,7 +465,15 @@ async function openCheckout() {
     } finally { setCouponBusy(false) }
   }
   async function resumePay(_o: Any) {
-    const r: Any = await payStatus(Number(_o.id))
+    // ★ F-64①（批 I-7）：/api/pay/status 查不到单已从「200 承载失败」改为 404。接口层 bizResp
+    //   把失败还原成 success:false，所以「拿不到就用手上的单展示」这条旧语义原样保留；
+    //   这里补 try/catch 兜 401/403/网络失败——否则「继续支付」点了没反应（未捕获 rejection）。
+    let r: Any
+    try {
+      r = await payStatus(Number(_o.id))
+    } catch {
+      r = { success: false }
+    }
     const o = (r.success ? (r.order as Any) : _o)
     setOrder(o); setShowCheckout(true)
     setUsdtPay((r.usdt_pay as Any) || null); setUsdtTxInput('')
@@ -430,15 +502,32 @@ async function checkStatus() {
           setShowCheckout(false); setUsdtPay(null); setUsdtTxInput('')
           void loadOrders()
         }
+      } else if (r.status === 404 || r.code === 'NOT_FOUND') {
+        // ★ F-64①（批 I-7）补的终态收口：单在本租户下已不存在（被清理/跨租户误查）时，
+        //   过去只是「这一轮什么都不做」，于是每 3 秒撞一次 404 无限轮询。现在按 cancelled 同口径停轮。
+        stopPolling()
+        void toastWarn(t('billing.payOrderGone'))
+        setShowCheckout(false); setUsdtPay(null); setUsdtTxInput('')
+        void loadOrders()
       }
-    } finally { payPollBusy.current = false }
+      // 其余失败（401/403 抛出、网络抖动、5xx）：本轮什么都不做，留给下一次轮询——
+      // 与改造前一致（旧实现非 success 即静默跳过），收款弹窗不会因一次抖动就自己关掉。
+    } catch { /* 同上：轮询型请求的单次失败不打扰用户 */ } finally { payPollBusy.current = false }
   }
     // simulatePay mock 模式下模拟支付成功（联调）
 async function simulatePay() {
     const o = orderRef.current
     if (!o) return
     setChLoading(true)
-    try { const r: Any = await paySimulate(Number(o.id)); if (r.success) await checkStatus() } finally { setChLoading(false) }
+    try {
+      // ★ F-64①（批 I-7）：模拟支付失败（单不存在 404／渠道非 mock 409／入账 500）现在各有诚实码，
+      //   bizResp 还原后按红字回显原因（旧写法失败时静默，用户以为「点了没反应」）。
+      const r: Any = await paySimulate(Number(o.id))
+      if (!toastResp(r)) return
+      await checkStatus()
+    } catch (e: any) {
+      void toastError(String(e?.message || t('common.fail')))
+    } finally { setChLoading(false) }
   }
     // manualConfirm 用户声明已付款→进人工核对单
 async function manualConfirm() {
@@ -541,14 +630,27 @@ async function voidInvoice(row: Any) {
     }
   }, [curOrder?.qr_content])
 
-    // saveQuota 保存租户配额（qps/并发）
+    // saveQuota 保存租户配额（qps/并发/日字符/日积分）
+    // ★ F-55（2026-09-26 批 I-3）：三道前置闸 + 写后回读，全部围绕「屏上的数必须就是库里的数」：
+    //   ① 没读回过真值（ready=false）不许保存——否则默认值/上一租户值会被当成"当前配置"写下去；
+    //   ② 超管未选具体租户（tenantSelected=false）不许保存——那一支改的是不存在的租户 0；
+    //   ③ max_daily_points 三态提交：后端没回带过这个数就不提交这个键，
+    //      旧写法 Math.max(0, Number(undefined) || 0) 把「缺失」静默变成「0」，
+    //      而后端见显式 0 会清掉积分墙（0＝不限），一次没动过的点击实际拆了墙。
+    //   ④ 失败不再静默（原实现连 r.success 都没看），成功后 await loadQuota() 回读。
 async function saveQuota() {
-    await billingQuotaSave({
+    if (!quotaMeta.ready) { void toastWarn(t('billing.quotaReloadFirst')); return }
+    if (!quotaMeta.tenantSelected) { void toastWarn(t('billing.quotaPickTenant')); return }
+    const body: { qps: number; concurrent: number; max_daily_chars: number; max_daily_points?: number } = {
       qps: Math.max(1, Number(quotaForm.qps) || 0),
       concurrent: Math.max(1, Number(quotaForm.concurrent) || 0),
       max_daily_chars: Math.max(0, Number(quotaForm.max_daily_chars) || 0),
-      max_daily_points: Math.max(0, Number(quotaForm.max_daily_points) || 0),
-    })
+    }
+    const pts = quotaForm.max_daily_points
+    if (typeof pts === 'number' && Number.isFinite(pts)) body.max_daily_points = Math.max(0, pts)
+    const r: Any = await billingQuotaSave(body)
+    if (!r.success) { void toastError(String(r.message || t('common.saveFail'))); return }
+    void toastSuccess(t('common.saved'))
     await loadQuota()
   }
 
@@ -569,7 +671,7 @@ async function deletePkg(p: Any) {
     // loadFunnel 拉取 S4 注册 cohort 增长漏斗
 async function loadFunnel() {
     try {
-      const r: Any = await request(`/api/admin/funnel?days=${funnelDays}`, { headers: authHeaders() })
+      const r: Any = await adminGrowthFunnel(funnelDays)
       if (r?.success) setFunnelRows((r.rows || []) as Any[])
     } catch { /* 静默：看板辅助数据 */ }
   }
@@ -592,6 +694,12 @@ async function saveBillingParams() {
   }
     // savePayMode 支付模式切换（mock/静态收款码）
 async function savePayMode() {
+    // ★ O-1（〇-U 收尾，2026-09-27）：mock＝不真收款直接开套餐，生产误点即全站零成本开通。
+    //   后端已在审计里留 ⚠ 硬账（admin_packages.go package_settings_save，锁见 o1_mock_audit_test.go），
+    //   发布红线在两站 pay_mode 必须非 mock（部署指南 §十）；前端这层加**显式二次确认**防误切。
+    if (payModeCfg === 'mock') {
+      if (!(await confirmDialog({ body: t('packages.confirmMockPayMode'), danger: true }))) return
+    }
     const r: Any = await adminPackageSettingsSave({ pay_mode: payModeCfg } as never)
     if (toastResp(r, t('common.save'))) setPayMode(payModeCfg)
   }
@@ -868,7 +976,29 @@ async function confirmManual(o: Any) {
                    { key: 'order_no', title: t('billing.colOrderNo'), width: 150 },
                    { key: 'amount_points', title: t('billing.colPoints'), width: 110, render: (row) => fmtPoints(Number((row as Any).amount_points)) },
                    { key: 'amount_money', title: t('billing.colAmount'), width: 100, render: (row) => tpl('billing.yuan', { amount: Number((row as Any).amount_money ?? 0).toFixed(2) }) },
-                   { key: 'status', title: t('billing.colStatus'), width: 110, render: (row) => <StatusPill tone={statusTheme((row as Any).status)}>{orderStatusLabel((row as Any).status, t)}</StatusPill> },
+                   { key: 'status', title: t('billing.colStatus'), width: 110, render: (row) => {
+                       const r = row as Any
+                       // ★ F-67（2026-09-26 〇-U 批 I-8）：人工声明单在状态列补「待平台确认 / 平台已确认」第二行。
+                       //   缺陷根因在后端唯一入账漏斗：MarkOrderPaid 把 status='paid' 与 manual_confirm=0 一起写
+                       //   （store/billing.go:1365），所以**确认成功后这一位就归零**，事后无法从 manual_confirm
+                       //   反推「这单是人工声明来的还是渠道自动到账的」。因此两态分别取判据：
+                       //     · pending 且 manual_confirm=1 → 客户已点「我已付费」，正在等我方核账；
+                       //     · paid 且 channel 属人工/链上核账渠道（manual、usdt）→ 由平台核对后入账
+                       //       （这两个渠道没有第三方回调能把单置 paid，只有人工确认与 USDT 自动核账两条路）。
+                       //   数据源全部是 orders 出参既有字段（store.Order 的 channel / manual_confirm 在
+                       //   orderCols 查询清单里，points_view.go 整行透出），本条零后端改动。
+                       //   措辞刻意不写「人工」二字作排他断言——usdt 走 auto_settle 也算平台确认。
+                       const declared = Number(r.manual_confirm) === 1 && r.status === 'pending'
+                       const platformChecked = r.status === 'paid' && (r.channel === 'manual' || r.channel === 'usdt')
+                       return (
+                         <StatusPill tone={statusTheme(r.status)}>
+                           {orderStatusLabel(r.status, t)}
+                           {declared ? <span style={{ marginLeft: 6, fontWeight: 400 }}>{t('billing.awaitPlatformConfirm')}</span> : null}
+                           {platformChecked ? <span style={{ marginLeft: 6, fontWeight: 400 }}>{t('billing.platformConfirmed')}</span> : null}
+                         </StatusPill>
+                       )
+                     } },
+
                    { key: 'op', title: '', width: 170, render: (row) => {
                        const r = row as Any
                        return r.status === 'paid'
@@ -896,13 +1026,33 @@ async function confirmManual(o: Any) {
 
       <Panel title={t('plans.nav.quota')}>
         <div style={{ fontSize: 15, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('billing.quotaHint')}</div>
+        {/* ★ F-55（2026-09-26 批 I-3）：把三种「屏上的数不可信」显式写在表单上方——
+            没读回真值 / 超管没选租户 / 日墙取 0（0 的运行时语义是「不限」不是「空」）。
+            提示条沿用本页 warn 令牌口径（--adm-warn-*，不写字面色值）。 */}
+        {(!quotaMeta.ready || !quotaMeta.tenantSelected) && (
+          <div style={{ marginBottom: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--adm-warn-bg)', border: '1.2px solid var(--adm-warn-bd)', fontSize: 15, color: 'var(--adm-warn-tx)', lineHeight: 1.7 }}>
+            {quotaMeta.ready ? t('billing.quotaPickTenant') : t('billing.quotaReloadFirst')}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <input className="lc-input" type="number" value={num(quotaForm.qps)} onChange={(e) => setQuotaForm({ ...quotaForm, qps: Number(e.target.value) || 0 })} placeholder={t('billing.quotaQps')} style={{ width: 140 }} />
           <input className="lc-input" type="number" value={num(quotaForm.concurrent)} onChange={(e) => setQuotaForm({ ...quotaForm, concurrent: Number(e.target.value) || 0 })} placeholder={t('billing.quotaConcurrent')} style={{ width: 140 }} />
-          <input className="lc-input" type="number" value={num(quotaForm.max_daily_chars)} onChange={(e) => setQuotaForm({ ...quotaForm, max_daily_chars: Number(e.target.value) || 0 })} placeholder={t('billing.quotaDailyChars')} style={{ width: 160 }} />
-          <input className="lc-input" type="number" value={num(quotaForm.max_daily_points)} onChange={(e) => setQuotaForm({ ...quotaForm, max_daily_points: Number(e.target.value) || 0 })} placeholder={t('billing.quotaDailyPoints')} style={{ width: 160 }} />
-          <Button onClick={saveQuota}>{t('billing.saveQuota')}</Button>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <input className="lc-input" type="number" value={num(quotaForm.max_daily_chars)} onChange={(e) => setQuotaForm({ ...quotaForm, max_daily_chars: Number(e.target.value) || 0 })} placeholder={t('billing.quotaDailyChars')} style={{ width: 160 }} />
+            {/* 「不限」跟着当前输入值实时判定，不只看回读值：改成 0 的那一刻就该看见后果 */}
+            {Number(quotaForm.max_daily_chars) <= 0 && <span style={{ fontSize: 14, color: 'var(--adm-warn-tx)' }}>{t('billing.quotaUnlimitedTag')}</span>}
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <input className="lc-input" type="number" value={num(quotaForm.max_daily_points)} onChange={(e) => setQuotaForm({ ...quotaForm, max_daily_points: Number(e.target.value) || 0 })} placeholder={t('billing.quotaDailyPoints')} style={{ width: 160 }} />
+            {Number(quotaForm.max_daily_points) <= 0 && <span style={{ fontSize: 14, color: 'var(--adm-warn-tx)' }}>{t('billing.quotaUnlimitedTag')}</span>}
+          </span>
+          <Button onClick={saveQuota} disabled={!quotaMeta.ready || !quotaMeta.tenantSelected}>{t('billing.saveQuota')}</Button>
+          <Button variant="secondary" onClick={() => void loadQuota()}>{t('common.refresh')}</Button>
         </div>
+        {/* ★ 后端回带的 unlimited 语义位（读到 0 时）另起一行说明保存后果，与上面的实时标注互为印证 */}
+        {(quotaMeta.unlimited.chars || quotaMeta.unlimited.points) && (
+          <div style={{ marginTop: 8, fontSize: 14, color: 'var(--adm-warn-tx)' }}>{t('billing.quotaUnlimitedWarn')}</div>
+        )}
       </Panel>
 
       {isSuper && (
@@ -1238,7 +1388,15 @@ async function confirmManual(o: Any) {
                onConfirm={async () => {
                 if (!invDlg) return
                 const r = await billingInvoiceCreate({ order_id: Number(invDlg.order.id), title: invDlg.title, tax_no: invDlg.taxNo })
-                if (toastResp(r, t('billing.invoiceApplied'))) setInvDlg(null)
+                // ★ F-57（2026-09-26 〇-U 批 I-8）：写成功必须同屏重取——旧写法只关弹窗，
+                //   下方「发票申请」列表停在申请前的行集，客户以为没提交成功又点一次（重复申请）。
+                //   同文件的作废分支一直是 `if (toastResp(r, …)) void loadInvoices()`，这里补齐对称口径。
+                //   重取只在成功分支做（失败时列表本来就没变，无需重取），且用 void——
+                //   失败已由 toastResp 透出，这里不能再吞一层。
+                if (toastResp(r, t('billing.invoiceApplied'))) {
+                  setInvDlg(null)
+                  void loadInvoices()
+                }
               }}>
         <Field label={t('billing.invoiceTitleField')}><input className="lc-input" value={invDlg?.title || ''} onChange={(e) => setInvDlg((d) => (d ? { ...d, title: e.target.value } : d))} /></Field>
         <Field label={t('billing.invoiceTaxField')}><input className="lc-input" value={invDlg?.taxNo || ''} onChange={(e) => setInvDlg((d) => (d ? { ...d, taxNo: e.target.value } : d))} /></Field>

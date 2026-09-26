@@ -25,6 +25,12 @@
 #     「改了 SDK 源码忘了同步托管产物」这一类漂移才能被 --check 拦住。
 #   - 额外一层字节对照：若 sdk/python/dist 的源产物在盘（dist/ 不进 git，服务器上多半没有），
 #     --check 还会比对源与托管副本的字节 sha256，抓住「本地重打包了 whl 但没跑本脚本」。
+#   - ★★ 第三层（2026-09-27 补）：把托管产物**解开**逐字比对内嵌的真实源码（whl/sdist 内的
+#     translator_sdk.py、tgz 内的 README.md/package.json/index.js），外加 latest 别名与带版本
+#     产物的字节配对。前两层各自有一个够不着的盲区：源码指纹每次 build 都按当前源码重写、
+#     字节对照只比 dist 与托管副本同源，因此「改了 SDK 源码却没重跑构建」能同时骗过它们
+#     （09-26 F-64① 注释批现场实测到这一格假绿）。build 模式里这层判据前置到拷贝之前，
+#     旧构建直接不给搬。
 #   - public/sdk/manifest.json 由本脚本生成，前端 SdkP.tsx 运行时 fetch 它取真实文件名，
 #     组件源码里不落任何版本号（改版本只需重跑脚本，不用改前端）。
 # ============================================================================
@@ -33,6 +39,62 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PY_SRC="$ROOT/sdk/python"
 TS_SRC="$ROOT/sdk/typescript"
 OUT_DIR="$ROOT/frontend-react/public/sdk"
+
+# 内嵌源码对照（★★ 2026-09-27 补，堵本脚本自身的假绿）：
+#   原来两层各有一格盲区——.sha256 记的是**源码指纹**（每次 build 都按当前源码重写，永远"对得上"），
+#   字节对照比的是 sdk/python/dist 与 public/sdk 副本（两边同源即等，源本身是不是旧构建它不管）。
+#   于是「改了 sdk/python/translator_sdk.py 却没重跑 python -m build」这一类漂移能一路绿灯穿过
+#   --check：09-26 F-64① 注释批现场踩到——托管 whl/tgz 内嵌的仍是改造前那段「新服务端两个都发且同值」
+#   的说明，而脚本报「✅ 与 SDK 源码一致」。假绿比缺测更有害，故把判据下移到产物**内部**：
+#   解开 whl/tgz/sdist，取其中真实源码文件与工作区源码逐字节比对。
+#   用法：verify_embedded <托管文件> <包内成员名（按后缀匹配，sdist 带版本目录前缀）> <工作区源码路径>
+#   注：TS 侧npm 包只发编译产物（files=["dist"]），故对照物是 src/index.ts 编译后的
+#   sdk/typescript/dist/index.js，外加 README.md / package.json 两份逐字随包的源文件。
+verify_embedded() {
+  local art="$1" member="$2" srcrel="$3"
+  [ -f "$art" ] || return 0   # 托管副本缺席由上面的成对检查负责报错，这里不重复
+  [ -f "$srcrel" ] || { echo "ℹ️  跳过对照：工作区无 $srcrel（编译产物不进 git，本机没构建时无从比对）"; return 0; }
+  python3 - "$art" "$member" "$srcrel" <<'PY' || return 1
+import sys, tarfile, zipfile
+art, member, src = sys.argv[1:4]
+want = open(src, 'rb').read()
+name = art.rsplit('/', 1)[-1]
+try:
+    if art.endswith('.whl'):
+        with zipfile.ZipFile(art) as z:
+            hits = [n for n in z.namelist() if n == member or n.endswith('/' + member)]
+            if not hits:
+                sys.exit(f'❌ 交付漂移：{name} 内找不到成员 {member} —— 打包结构变了，请同步本闸门的成员路径')
+            if len(hits) > 1:
+                sys.exit(f'❌ {name} 内成员 {member} 命中多个（{hits}），判据歧义，请钉死路径')
+            got = z.read(hits[0])
+    else:
+        with tarfile.open(art, 'r:gz') as t:
+            hits = [m for m in t.getmembers() if m.name == member or m.name.endswith('/' + member)]
+            if not hits:
+                sys.exit(f'❌ 交付漂移：{name} 内找不到成员 {member} —— 打包结构变了，请同步本闸门的成员路径')
+            if len(hits) > 1:
+                sys.exit(f'❌ {name} 内成员 {member} 命中多个（{[h.name for h in hits]}），判据歧义，请钉死路径')
+            got = t.extractfile(hits[0]).read()
+except SystemExit:
+    raise
+except Exception as e:
+    sys.exit(f'❌ 无法读取 {name} 内的 {member}：{e}')
+if got != want:
+    sys.exit(
+        f'❌ 交付漂移：{name} 内嵌的 {member} 与工作区 {src.rsplit("/", 1)[-1]} 逐字节不一致 —— '
+        '源码已改而托管产物是旧构建。请先重跑构建（sdk/python: python3 -m build --no-isolation；'
+        'sdk/typescript: ./node_modules/.bin/tsc），再跑 scripts/build_sdk.sh 并一并提交产物'
+    )
+PY
+}
+
+# latest 别名与带版本号产物必须同字节（别名是外部留存链路的稳定下载名，落后就等于一半客户拿旧码）
+verify_alias_pair() {
+  local versioned="$1" alias="$2"
+  [ -f "$versioned" ] && [ -f "$alias" ] || return 0
+  cmp -s "$versioned" "$alias" || die "交付漂移：$(basename "$alias") 与 $(basename "$versioned") 字节不一致 —— latest 别名没跟着刷新，请重跑 scripts/build_sdk.sh"
+}
 
 # 参与源码指纹的文件白名单（新增源文件必须在这里登记，否则不会进指纹——与
 # build_extension.sh 的 FILES 同一显式口径，避免把 .DS_Store / 调试残留算进来）
@@ -124,6 +186,35 @@ WHL_LATEST="langcross_translator-latest-py3-none-any.whl"
 SDIST_LATEST="langcross_translator-latest.tar.gz"
 TGZ_LATEST="langcross-translator-sdk-latest.tgz"
 MANIFEST="manifest.json"
+# 托管产物里「真实源码文件」的对照表：格式 `托管文件|包内成员名|工作区源码路径`。
+# 必须在这里展开：上面那些命名变量刚定义完，早于此刻取值会拿到空串（结构性必红的坑）。
+# 口径：
+#   - python 的 whl/sdist 把 translator_sdk.py **逐字**打进包、且该文件进 git ⇒ 任何环境都能实比对；
+#   - typescript 的 npm 包只发编译产物（package.json 的 files=["dist"]），src/index.ts **不在包内**，
+#     所以实比对的是逐字随包且同在指纹白名单里的 README.md / package.json 两份源文件，
+#     再加编译产物 index.js（只有本机跑过 tsc 才比得上，缺席时如实打一行跳过）。
+EMBEDDED_SPECS=(
+  "$OUT_DIR/$WHL|translator_sdk.py|$PY_SRC/translator_sdk.py"
+  "$OUT_DIR/$SDIST|translator_sdk.py|$PY_SRC/translator_sdk.py"
+  "$OUT_DIR/$TGZ|README.md|$TS_SRC/README.md"
+  "$OUT_DIR/$TGZ|package.json|$TS_SRC/package.json"
+  "$OUT_DIR/$TGZ|index.js|$TS_SRC/dist/index.js"
+)
+
+# run_embedded_checks —— 逐条跑内嵌源码对照，外加 latest 别名与带版本产物的字节配对
+run_embedded_checks() {
+  local spec art member src
+  for spec in "${EMBEDDED_SPECS[@]}"; do
+    art="${spec%%|*}"
+    member="$(printf '%s' "$spec" | awk -F'|' '{print $2}')"
+    src="${spec##*|}"
+    verify_embedded "$art" "$member" "$src" || exit 1
+  done
+  verify_alias_pair "$OUT_DIR/$WHL" "$OUT_DIR/$WHL_LATEST"
+  verify_alias_pair "$OUT_DIR/$SDIST" "$OUT_DIR/$SDIST_LATEST"
+  verify_alias_pair "$OUT_DIR/$TGZ" "$OUT_DIR/$TGZ_LATEST"
+}
+
 # 每个托管文件对应的源码指纹（latest 别名与带版本号副本同 lane 同指纹）
 lane_digest() {
   case "$1" in
@@ -166,7 +257,9 @@ PY
       [ "$A" = "$B" ] || die "字节漂移：$dst 与源产物 $src 不一致 —— 源已重打包但托管副本未刷新，请重跑 scripts/build_sdk.sh"
     fi
   done
-  echo "✅ public/sdk/ 托管产物与 SDK 源码一致（python $PY_VER / typescript $TS_VER）"
+  # ★★ 第三层：内嵌源码对照 + latest 别名配对（堵「源码改了、产物是旧构建」这一格假绿，见函数头注释）
+  run_embedded_checks
+  echo "✅ public/sdk/ 托管产物与 SDK 源码一致（python $PY_VER / typescript $TS_VER，含产物内实比对）"
   exit 0
 fi
 
@@ -174,9 +267,19 @@ fi
 [ -f "$PY_SRC/dist/$WHL" ] || die "Python 产物缺失：sdk/python/dist/$WHL —— 请先在 sdk/python 跑 python -m build（或确认 pyproject 版本）"
 [ -f "$PY_SRC/dist/$SDIST" ] || die "Python 产物缺失：sdk/python/dist/$SDIST —— 请先在 sdk/python 跑 python -m build"
 
+# ★★ 搬运前先验「源产物本身是不是当前源码的构建」（2026-09-27 补）：
+#   本脚本只负责把现成产物拷进 public/sdk/，若 dist 是改源码之前的旧构建，
+#   拷完再验只会出现「托管与源码不一致」但责任在 dist——所以在这里就把它拦下，
+#   并直接点名该重跑哪条构建命令（09-26 F-64① 注释批就是踩了这条：源码改了、dist 没重建）。
+#   这两条排在 npm pack 之前：旧构建没必要先动网络/磁盘产物，半途 die 还会留个中间 tgz。
+verify_embedded "$PY_SRC/dist/$WHL"   "translator_sdk.py" "$PY_SRC/translator_sdk.py" || die "sdk/python/dist 是旧构建，请先在 sdk/python 跑 python3 -m build --no-isolation"
+verify_embedded "$PY_SRC/dist/$SDIST" "translator_sdk.py" "$PY_SRC/translator_sdk.py" || die "sdk/python/dist 的 sdist 是旧构建，请先在 sdk/python 跑 python3 -m build --no-isolation"
+
 # TS 产物：优先消费 sdk/typescript 下已存在的同名 tgz；没有才 npm pack
 # （纯本地目录打包，无网络依赖；npm 不可用时如实报错，--check 形态不依赖 npm 仍可用）
 TGZ_PACKED_HERE=0   # 记录 tgz 是否本次 npm pack 生成——只清理自己造的中间产物，不动别人预置的
+cleanup_packed_tgz() { [ "$TGZ_PACKED_HERE" = "1" ] && rm -f "$TS_SRC/$TGZ"; return 0; }
+trap cleanup_packed_tgz EXIT   # ★ 中途 die（例如上面的旧构建拦截）也不把本次造的中间产物留在源码树
 if [ ! -f "$TS_SRC/$TGZ" ]; then
   command -v npm >/dev/null || die "npm 不可用且缺少现成产物 sdk/typescript/$TGZ —— 请在有 npm 的环境生成后重试"
   echo "==> npm pack 生成 $TGZ"
@@ -185,6 +288,9 @@ if [ ! -f "$TS_SRC/$TGZ" ]; then
   [ "$PACKED" = "$TGZ" ] || die "npm pack 产物名 $PACKED 与期望 $TGZ 不符（package.json name/version 变了？同步更新本脚本命名）"
   TGZ_PACKED_HERE=1
 fi
+
+# TS 侧同口径前置：npm 包只发编译产物，故比对包内 index.js 与本机 dist（本机没构建时如实跳过）
+verify_embedded "$TS_SRC/$TGZ" "index.js" "$TS_SRC/dist/index.js" || die "sdk/typescript 的 tgz 与本地编译产物不一致，请先跑 ./node_modules/.bin/tsc 再重跑本脚本"
 
 echo "==> 刷新 public/sdk/（python $PY_VER / typescript $TS_VER）"
 rm -f "$OUT_DIR/$WHL" "$OUT_DIR/$SDIST" "$OUT_DIR/$TGZ"

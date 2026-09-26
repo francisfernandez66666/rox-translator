@@ -5,7 +5,7 @@
 //	B) 权限面：租户管理员不得进超管券管理口（403）；租户管理员可用预览；
 //	C) 预览：折前金额一律服务端按下单口径重算（前端塞 money 字段无效），折让与实付同算法；
 //	D) 下单核销：/api/pay/create 与 /api/package/subscribe 带券 → orders.amount_money 折后、
-//	   券码与流水落库；券不可用 → success=false + order_no（不留「券失效却仍可扫码」的单）；
+//	   券码与流水落库；券不可用 → 4xx + details.order_no（不留「券失效却仍可扫码」的单）；
 //	E) #41 收款空洞回归：pay_mode=sdk 但商户资质缺失时，订阅单必须显式报错且订单保持 pending
 //	   （旧实现静默返回 success=true 却没有二维码，收银台永远空转）。
 //
@@ -378,7 +378,7 @@ func TestCouponPayCreateRedeem(t *testing.T) {
 	if badM["success"] == true {
 		t.Fatalf("单类不符的券应拒绝下单: %s", bad.Body.String())
 	}
-	if no, _ := badM["order_no"].(string); no == "" {
+	if no := errDetailsOrderNo(t, badM); no == "" {
 		t.Error("失败响应应带 order_no（订单留 pending 可查）")
 	} else if mm, cc, _ := f.orderRow(t, no); mm != baseMoney || cc != "" {
 		t.Errorf("券失败后订单应保留原价未用券：money=%.2f coupon=%q", mm, cc)
@@ -430,7 +430,7 @@ func TestSubscribeSDKModeQRFailClosed(t *testing.T) {
 	if msg, _ := m["message"].(string); !strings.Contains(msg, "支付渠道暂不可用") {
 		t.Errorf("应回渠道不可用提示，实际 %q", msg)
 	}
-	no, _ := m["order_no"].(string)
+	no := errDetailsOrderNo(t, m)
 	if no == "" {
 		t.Fatal("失败响应应带 order_no（订单留 pending 可人工处理）")
 	}
@@ -464,4 +464,20 @@ func abs(v float64) float64 {
 		return -v
 	}
 	return v
+}
+
+// errDetailsOrderNo 从统一错误出口的结构化响应里取随错误附带的 order_no。
+// ★ F-64①（批 I-7）：券失败/渠道取码失败这两条以前是「HTTP 200 + 顶层 order_no」的自定义壳；
+// 迁到 s.writeError 后，附加字段一律挂在 details 里（信封只剩 success/code/message/trace_id），
+// 前端由 api/core.ts 的 bizResp 把 details 摊平回顶层，所以界面侧零改动。
+// 本文件是 Go 侧测试、不经 bizResp，故按真实出参形状读 details.order_no——
+// 这也正好把「附加字段必须留在 details、不许偷偷塞回顶层信封」钉成断言。
+func errDetailsOrderNo(t *testing.T, m map[string]any) string {
+	t.Helper()
+	d, ok := m["details"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	no, _ := d["order_no"].(string)
+	return no
 }

@@ -14,9 +14,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 
 	"translator/internal/config"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -82,7 +84,8 @@ func (s *Server) llmKeyState(key string) (bool, string) {
 // 返回 model 单模型 + routes 多供应商路由。
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 读全局配置
@@ -120,7 +123,8 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -236,7 +240,8 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 // handleModelRoutes 读取模型路由策略（super_admin）。★ 输出掩码（评审整改 D3）
 func (s *Server) handleModelRoutes(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	routes := s.loadRoutesDecrypted()
@@ -253,7 +258,8 @@ func (s *Server) handleModelRoutes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -304,7 +310,8 @@ func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 // 返回 4 个阶段（kb_match/ai_initial/evals/review）的模型配置；未配置的返回空项以便前端渲染。
 func (s *Server) handleStageModels(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	stages := config.StageModels{}
@@ -338,7 +345,8 @@ func (s *Server) handleStageModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -408,7 +416,8 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	pc := tenant.PolicyConfig{}
@@ -447,7 +456,8 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -491,9 +501,30 @@ func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
 		pc.DataFeedbackOptOut = &v
 	}
 	if err := s.Ten.SetPolicyConfig(s.effTenant(r, u), pc); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：策略是「读现值→增量合并→整份写回」，写回失败＝租户配置存储故障（500）；
+		// 旧写法回 200 会让管理台提示「已保存」而实际没落库（下次进面板看到旧值，用户反复重试）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "policy_save", "tenants", "")
+	// ★ F-63（2026-09-26 批 I-3）：detail 原为空串。策略是「增量合并」语义（未提交的键保持原值），
+	//   所以轨迹只记本次实际提交的键值对；map 迭代无序，先排序保证同一提交两次渲染文本可比对。
+	changed := make([]string, 0, len(req.Policy)+2)
+	for k, v := range req.Policy {
+		if v > 0 {
+			changed = append(changed, fmt.Sprintf("%s=%g", k, v))
+		}
+	}
+	if req.CrossDeptFallback != nil {
+		changed = append(changed, fmt.Sprintf("cross_dept_fallback=%v", *req.CrossDeptFallback))
+	}
+	if req.DataFeedbackOptOut != nil {
+		changed = append(changed, fmt.Sprintf("data_feedback_opt_out=%v", *req.DataFeedbackOptOut))
+	}
+	sort.Strings(changed)
+	policyDetail := "本次提交 0 项（仅触达保存，无键变更）"
+	if len(changed) > 0 {
+		policyDetail = fmt.Sprintf("策略变更 %d 项｜%s", len(changed), strings.Join(changed, "｜"))
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "policy_save", "tenants", policyDetail)
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }

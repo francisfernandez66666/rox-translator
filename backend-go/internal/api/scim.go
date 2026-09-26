@@ -525,7 +525,8 @@ func (s *Server) handleSCIMMeta(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTenantSCIM(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	tid := s.effTenant(r, u)

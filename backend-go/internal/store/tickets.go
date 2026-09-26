@@ -28,7 +28,7 @@ type Ticket struct {
 	TargetLangs    string `json:"target_langs"`               // 目标语言列表（逗号分隔）
 	CreatedBy      int64  `json:"created_by"`                 // 创建者用户 ID
 	Mode           string `json:"mode"`                       // 翻译模式：fast 快速 / pro 专业校对（空=pro）
-	TokensBilled   int64  `json:"tokens_billed"`              // 本单实费计费 token 数（真实用量×均摊系数）
+	TokensBilled   int64  `json:"tokens_billed"`              // 本单实收计费 token（扣费现场累计，逐笔等于 usage_ledger.quantity；★ F-49 起该口径才与实际扣费一致，历史行为裸用量）
 	APIUserID      int64  `json:"api_user_id"`                // ★ OpenAPI 归属用户 ID（0=非 API 创建/历史数据，回读校验用）
 	MaxLength      int64  `json:"max_length"`                 // ★ 缩翻最长字符限制（0=未启用缩翻；>0=译文总长不得超过该值）
 	Delivery       string `json:"delivery"`                   // ★ 文件工单交付方式：restore 还原文件模式（默认）/ text 纯文案模式

@@ -17,7 +17,8 @@
 // 口径边界：
 //   - 上游地址单一事实源：env ASSIST_BASE_URL > system_config.assist_base_url > 默认 127.0.0.1:8790；
 //     仅允许 http/https，避免把 file:// 之类的怪值注入。
-//   - fail-closed：Token 未配置或 assist 服务不可达 → 回业务可读提示（success:false），
+//   - fail-closed：Token 未配置或 assist 服务不可达 → 直接回**诚实状态码**的结构化错误体
+//     （503 未配置 / 502 上游不可达或读中断 / 500 构造失败，★ F-64③ 批 I-10 起），
 //     绝不静默回退假数据；细节进 slog 不进响应体（#37 脱敏口径）。
 //   - 审计：写操作（POST/PUT/DELETE）记 assist_admin_write，**只记区域/方法/目标行 ID**，
 //     请求体一律不落审计（配置项可能是 llm_api_key 明文）。
@@ -47,6 +48,8 @@ import (
 	"time"
 
 	"translator/internal/observability"
+
+	apierrors "translator/internal/errors"
 )
 
 // assistBaseURLKey system_config 中存放 assist 服务基址的键（环境变量优先，便于部署侧保底）。
@@ -96,12 +99,6 @@ func (s *Server) assistBaseURL() string {
 	return strings.TrimRight(cand, "/")
 }
 
-// writeAssistBizErr 统一回「业务可读失败」：HTTP 200 + success:false（与主站其它接口同口径，
-// 前端只需读 message，不必区分传输层/业务层）。细节由调用方另行 slog 记录，不外泄。
-func writeAssistBizErr(w http.ResponseWriter, msg string) {
-	writeJSON(w, 200, map[string]interface{}{"success": false, "message": msg})
-}
-
 // assistClient 共享 HTTP 客户端：30s 超时覆盖「测试连通」这类要打真实 LLM 的慢调用，
 // 同时给连接池设上限，避免面板刷新时打爆上游。
 var assistClient = &http.Client{
@@ -110,21 +107,35 @@ var assistClient = &http.Client{
 }
 
 // handleAdminAssistProxy 白名单转发（除 status 外的全部 assist 管理面读写都走这里）。
+//
+// ★ F-64③（批 I-10）状态码口径：本函数有两类失败，只有一类「透传」豁免。
+//   - 上游（assist 服务）的业务/系统失败：文件末尾 `w.WriteHeader(resp.StatusCode)` 原样透传，
+//     那是上游的状态码，本层不重新造错误体，符合 AGENTS §一·8 的白名单口径；
+//   - 本层自己的失败（越权 403、路由未登记 404、Token 未配置 503、请求构造失败 500、
+//     上游不可达/读中断 502）：一律走 s.writeError 带 code/trace_id。以前这几支回
+//     「HTTP 200 + success:false」，面板靠读 body 才看得出来，监控与 SDK 按状态码分支一律判成成功
+//     ——assist 全挂时全站 5xx 率仍是 0%，比界面更难发现。文案一字未改
+//     （AssistP 的 bizFail 取 e.message，仍显示同一句处置指引）。
 func (s *Server) handleAdminAssistProxy(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 鉴权失败按「未登录 401 / 等级不足 403」分流（★ F-64③ 批 I-10：同 writeAuthzError 口径，
+		// 旧写法两种情况都压成 403，token 过期的超管会被留在页面上反复撞「无权限」而看不见「请重登」）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	upstream, ok := assistProxyRoutes[r.URL.Path]
 	if !ok {
-		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "接口不存在"})
+		// 路由不在白名单＝该路径本层没有对应上游（404），不是「查无数据」
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "接口不存在"))
 		return
 	}
 	tok, src := s.effectiveAssistToken()
 	if tok == "" {
-		// fail-closed：没有管理凭据时不转发，也不给「空 Token 试试看」的机会
-		writeAssistBizErr(w, "AI 助手管理 Token 未配置（当前来源："+src+"）：请在主后台「AI 助手 · 设置」中保存 Token，或为 assist-server 配置环境变量 ASSIST_ADMIN_TOKEN 后重启")
+		// fail-closed：没有管理凭据时不转发，也不给「空 Token 试试看」的机会。
+		// 取 503：这是**依赖未就绪**（保存 Token 或配 env 后即恢复），不是客户端请求有误，
+		// 给 400 会让调用点误以为改请求就能通。
+		s.writeError(w, r, apierrors.New(apierrors.ErrServiceUnavailable, "AI 助手管理 Token 未配置（当前来源："+src+"）：请在主后台「AI 助手 · 设置」中保存 Token，或为 assist-server 配置环境变量 ASSIST_ADMIN_TOKEN 后重启"))
 		return
 	}
 	// 转发查询串：剥掉 admin_token（assist 侧支持 query 传凭据，但我们只走请求头，
@@ -142,8 +153,9 @@ func (s *Server) handleAdminAssistProxy(w http.ResponseWriter, r *http.Request) 
 	}
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, target, body)
 	if err != nil {
+		// 构造请求失败＝本进程编程/配置错误（URL 非法等），与客户端无关 ⇒ 500；细节只进 slog（#37 脱敏口径）
 		observability.Error(r.Context(), "assist 代理构造请求失败", "path", r.URL.Path, "err", err)
-		writeAssistBizErr(w, "请求无法转发到 AI 助手服务")
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "请求无法转发到 AI 助手服务"))
 		return
 	}
 	req.Header.Set("X-Assist-Admin", tok)
@@ -152,16 +164,20 @@ func (s *Server) handleAdminAssistProxy(w http.ResponseWriter, r *http.Request) 
 	}
 	resp, err := assistClient.Do(req)
 	if err != nil {
-		// 上游不可达最常见的原因是 assist-server 没起 / 基址配错——把可自助的处置写进提示
+		// 上游不可达最常见的原因是 assist-server 没起 / 基址配错——把可自助的处置写进提示。
+		// 取 502（ErrUpstreamUnavailable）：本层是网关方，故障在上游连接环节，
+		// 给 503 会把告警口径指错方向（503 在本仓表示「本服务依赖未就绪」）。
 		observability.Error(r.Context(), "assist 代理转发失败", "path", r.URL.Path, "target", target, "err", err)
-		writeAssistBizErr(w, "AI 助手服务不可达（基址 "+s.assistBaseURL()+"）：请确认 assist-server 已启动，或在部署侧调整 ASSIST_BASE_URL")
+		s.writeError(w, r, apierrors.New(apierrors.ErrUpstreamUnavailable,
+			"AI 助手服务不可达（基址 "+s.assistBaseURL()+"）：请确认 assist-server 已启动，或在部署侧调整 ASSIST_BASE_URL"))
 		return
 	}
 	defer resp.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20)) // 4MB 上限：管理面不可能更大，防上游异常撑爆内存
 	if err != nil {
+		// 连接已建立但读响应中断＝上游侧故障，同样 502；「请重试」是原话，不改文案
 		observability.Error(r.Context(), "assist 代理读取响应失败", "path", r.URL.Path, "err", err)
-		writeAssistBizErr(w, "AI 助手服务响应中断，请重试")
+		s.writeError(w, r, apierrors.New(apierrors.ErrUpstreamUnavailable, "AI 助手服务响应中断，请重试"))
 		return
 	}
 	if resp.StatusCode >= 400 {
@@ -184,11 +200,13 @@ func (s *Server) handleAdminAssistProxy(w http.ResponseWriter, r *http.Request) 
 // 只回「来源」不回 Token 明文（连掩码都不需要，面板无展示价值）。
 func (s *Server) handleAdminAssistStatus(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 与代理入口同一分流（★ F-64③ 批 I-10）：未登录 401、等级不足 403，面板据此决定是弹重登还是报无权限
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	if r.Method != http.MethodGet {
-		writeJSON(w, 405, map[string]interface{}{"success": false, "message": "方法不支持"})
+		// 方法不支持＝405（ErrMethodNotAllowed），本口径见 AGENTS §一·8
+		s.writeError(w, r, apierrors.New(apierrors.ErrMethodNotAllowed, "方法不支持"))
 		return
 	}
 	base := s.assistBaseURL()

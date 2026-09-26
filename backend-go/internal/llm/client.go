@@ -403,10 +403,40 @@ func recordChatUsageObs(prompt, cached int64) {
 
 // UsageCollector 并发安全的 token 用量累计器：随 ctx 注入并自动传播到全部下游
 // LLM 调用（初翻/校对/Judge/文化闸门/embedding），任务结束时一次性读取汇总值计费。
+// 两类计数各管一件事，禁止混用：
+//   - prompt/completion：**真实**消耗（供应商回吐的裸 token 数），用于内部成本核算与观测；
+//   - billed：**对外计费口径**的 token 数（每次调用经 markup 均摊后的实收量，与 usage_ledger.quantity 逐笔同值）。
+//
+// ★ F-49（〇-U 批 I-4，2026-09-26 UAT）：对外出参 points_used 此前由展示侧**再乘一次 markup**
+// 折算，而 markup 的真实取值在租户策略/翻译模式里逐次解析（billing_api.ChargeUsageRealtime），
+// 展示侧那份公式一旦漂移（默认值不同、忘了读模式因子），客户拿报文就对不上账。
+// 现在把「实收多少」在扣费现场记进同一个收集器，出参只做透传——一条折算链，杜绝长期漂移。
 type UsageCollector struct {
 	mu         sync.Mutex // 保护并发累加（多语言并发翻译同时写）
 	prompt     int64      // 累计输入 token
 	completion int64      // 累计输出 token
+	billed     int64      // 累计对外计费 token（真实用量×均摊系数，逐笔等于台账 quantity）
+}
+
+// AddBilled 累加一次调用的**对外计费** token 量（由实时计量钩子调用，参数=即将落台账的 quantity）。
+func (c *UsageCollector) AddBilled(n int64) {
+	if c == nil || n <= 0 {
+		return
+	}
+	c.mu.Lock()
+	c.billed += n
+	c.mu.Unlock()
+}
+
+// BilledTotal 返回累计的对外计费 token 量；收集器缺失（未注入）时返回 -1，
+// 调用方据此区分「确实一分没收」与「没有计量口径可用」，不得与 0 混同。
+func (c *UsageCollector) BilledTotal() int64 {
+	if c == nil {
+		return -1
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.billed
 }
 
 // Add 累加一次调用的 token 用量。

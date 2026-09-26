@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 
+	apierrors "translator/internal/errors"
 	"translator/internal/observability"
 	"translator/internal/store"
 )
@@ -38,14 +39,25 @@ type ReconIssue struct {
 // handleAdminReconcile 对账报告（仅超管）。参数 days=回看窗口（默认 30，上限 365）。
 func (s *Server) handleAdminReconcile(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
-	if err != nil || u.Role != "super_admin" {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超级管理员可对账"})
+	if err != nil {
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条混在一起一律 403，
+		//   超管 token 过期时看到的是「仅超级管理员可对账」，方向完全指错）
+		s.writeAuthzError(w, r, err)
+		return
+	}
+	if u.Role != "super_admin" {
+		// 角色专属文案原样保留（仍 403，只是补上统一错误码与 trace_id）
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超级管理员可对账"))
 		return
 	}
 	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
 	orders, pays, err := s.Store.ReconcileLoad(days)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：对账装载要拉全平台订单 + 窗口内流水（payments 单次上限 2 万行），
+		// 失败通常是数据源侧不可用/超时/尚未就绪，而不是本次请求的载荷有错——
+		// 等库缓过来再点一次「对账」就可能成功，故取 503（依赖不可用档）而非 500。
+		// ⚠️ 本层拿不到结构化错误，无法把「真·SQL 写错」这类 500 分出去，已列为不确定项。
+		s.writeError(w, r, apierrors.New(apierrors.ErrServiceUnavailable, publicErrMessage(r.Context(), err)))
 		return
 	}
 	issues := s.reconcileRules(orders, pays)

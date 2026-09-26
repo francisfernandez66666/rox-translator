@@ -5,7 +5,10 @@
 //      超管在「行业管理」面板维护；注册页/租户表单/数据采集下拉均动态拉取。
 // ============================================================================
 
-import { request, authHeaders, type AdminResp } from './core'
+// ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
+//   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
+//   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
+import { bizResp, request, authHeaders, type AdminResp } from './core'
 
 /** 行业字典条目（后端 KBPackage 精简） */
 export interface IndustryItem {
@@ -23,26 +26,26 @@ export interface IndustryItem {
 
 /** 获取行业字典（超管/租户管理员以上可见；供「行业管理」面板与各下拉动态拉取） */
 export async function industries(): Promise<AdminResp & { industries?: IndustryItem[] }> {
-  return request('/api/admin/industries', { headers: authHeaders() })
+  return bizResp(() => request('/api/admin/industries', { headers: authHeaders() }))
 }
 
 /** 新建行业（仅超管；code=小写字母/数字/下划线，全局唯一） */
 export async function industryCreate(data: { code: string; name: string }): Promise<AdminResp> {
-  return request('/api/admin/industries/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/industries/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 编辑行业显示名（仅超管） */
 export async function industryUpdate(id: number, name: string): Promise<AdminResp> {
-  return request('/api/admin/industries/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, name }) })
+  return bizResp(() => request('/api/admin/industries/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, name }) }))
 }
 
 /** 启用/停用行业（仅超管；enabled=1 启用 / 0 停用） */
 export async function industryStatus(id: number, enabled: number): Promise<AdminResp> {
-  return request('/api/admin/industries/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, enabled }) })
+  return bizResp(() => request('/api/admin/industries/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, enabled }) }))
 }
 
 /** 删除行业（仅超管；被租户引用时后端拒绝） */
 export async function industryDelete(id: number): Promise<AdminResp> {
-  return request('/api/admin/industries/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/admin/industries/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 

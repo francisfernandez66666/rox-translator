@@ -161,7 +161,8 @@ func pruneMemSnapshots(dir string, keep int) {
 // 返回: success=true 表示已采样。
 func (s *Server) handleMemLeakCapture(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	s.runMemLeakCapture()
@@ -175,7 +176,8 @@ func (s *Server) handleMemLeakCapture(w http.ResponseWriter, r *http.Request) {
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（query: lines=尾部行数，默认 30）。
 func (s *Server) handleMemLeakLog(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	dir := filepath.Join(s.Cfg.UserDataDir, memLeakDirName)

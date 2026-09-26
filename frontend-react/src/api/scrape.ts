@@ -12,7 +12,10 @@
  * - 概览：待审数/源数/最近完成日
  */
 
-import { request, authHeaders, type AdminResp } from './core'
+// ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
+//   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
+//   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
+import { bizResp, request, authHeaders, type AdminResp } from './core'
 
 /** 数据源实体 */
 export interface ScrapeSource {
@@ -89,27 +92,27 @@ export interface ScrapeSummary {
 
 /** 数据源列表 */
 export async function scrapeSources(): Promise<AdminResp & { sources?: ScrapeSource[] }> {
-  return request('/api/admin/kb-scrape/sources', { headers: authHeaders() })
+  return bizResp(() => request('/api/admin/kb-scrape/sources', { headers: authHeaders() }))
 }
 
 /** 新增数据源 */
 export async function scrapeSourceCreate(data: Partial<ScrapeSource>): Promise<AdminResp & { id?: number }> {
-  return request('/api/admin/kb-scrape/sources/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/kb-scrape/sources/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 更新数据源 */
 export async function scrapeSourceUpdate(data: Partial<ScrapeSource>): Promise<AdminResp> {
-  return request('/api/admin/kb-scrape/sources/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/kb-scrape/sources/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 启停数据源 */
 export async function scrapeSourceStatus(id: number, enabled: number): Promise<AdminResp> {
-  return request('/api/admin/kb-scrape/sources/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, enabled }) })
+  return bizResp(() => request('/api/admin/kb-scrape/sources/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, enabled }) }))
 }
 
 /** 手动立即采集一轮 */
 export async function scrapeSourceRun(): Promise<AdminResp & { sources_done?: number }> {
-  return request('/api/admin/kb-scrape/sources/run', { method: 'POST', headers: authHeaders() })
+  return bizResp(() => request('/api/admin/kb-scrape/sources/run', { method: 'POST', headers: authHeaders() }))
 }
 
 /** 待审池列表（服务端分页：limit/offset + 合并行集 rows + 精确总数 total；可选行业筛选） */
@@ -121,12 +124,12 @@ export async function scrapeStaged(params: { pack_type?: string; status?: string
   if (params.industry) q.set('industry', params.industry)
   if (params.limit) q.set('limit', String(params.limit))
   if (params.offset) q.set('offset', String(params.offset))
-  return request(`/api/admin/kb-scrape/staged?${q.toString()}`, { headers: authHeaders() })
+  return bizResp(() => request(`/api/admin/kb-scrape/staged?${q.toString()}`, { headers: authHeaders() }))
 }
 
 /** 批量审批：通过（落正式库+热加载）/ 驳回 */
 export async function scrapeApprove(kind: 'entries' | 'phrases', ids: number[], action: 'approve' | 'reject'): Promise<AdminResp & { updated?: number; applied?: number; rewards?: { tenant_id?: number; reward_points?: number; chars?: number; daily_used_points?: number }[] }> {
-  return request('/api/admin/kb-scrape/approve', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ kind, ids, action }) })
+  return bizResp(() => request('/api/admin/kb-scrape/approve', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ kind, ids, action }) }))
 }
 
 /** 还原为待审：把已通过/已驳回条目拉回待审池，支持还原前编辑内容 */
@@ -135,7 +138,7 @@ export async function scrapeRestore(
   ids: number[],
   edits?: Record<string, { src_text?: string; tgt_text?: string; phrase?: string; replacement?: string }>,
 ): Promise<AdminResp & { restored?: number; reverted?: number }> {
-  return request('/api/admin/kb-scrape/restore', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ kind, ids, edits: edits ?? {} }) })
+  return bizResp(() => request('/api/admin/kb-scrape/restore', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ kind, ids, edits: edits ?? {} }) }))
 }
 
 /** 采集概览 */
@@ -145,10 +148,10 @@ export async function scrapeSummary(): Promise<AdminResp & { summary?: ScrapeSum
 
 /** KB 上传奖励配置：读取开关/单价/日封顶 */
 export async function kbRewardConfigGet(): Promise<AdminResp & { enabled?: boolean; per_char?: number; daily_cap?: number }> {
-  return request('/api/admin/kb-reward', { headers: authHeaders() })
+  return bizResp(() => request('/api/admin/kb-reward', { headers: authHeaders() }))
 }
 
 /** KB 上传奖励配置：更新（enabled 传 null=不改） */
 export async function kbRewardConfigSet(body: { enabled?: boolean | null; per_char?: number; daily_cap?: number }): Promise<AdminResp & { enabled?: boolean; per_char?: number; daily_cap?: number }> {
-  return request('/api/admin/kb-reward', { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) })
+  return bizResp(() => request('/api/admin/kb-reward', { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) }))
 }

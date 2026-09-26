@@ -51,12 +51,14 @@ func doAssistToken(t *testing.T, s *Server, method, token, body string) (int, ma
 	return w.Code, out
 }
 
-// TestAssistTokenAuthScope 鉴权范围：未登录与非超管一律 403（Token 状态不外泄）。
+// TestAssistTokenAuthScope 鉴权范围：未登录 401、非超管 403（Token 状态不外泄）。
+// ★ F-64③ 批 I-10：旧口径两条都 403，测试与实现同时错所以一直绿；
+// 实现分流（未登录→UNAUTHORIZED 走前端重登录链）后本断言同步改 401。
 func TestAssistTokenAuthScope(t *testing.T) {
 	s, tokens := newAdminScopeTestServer(t)
-	// 未登录
-	if code, _ := doAssistToken(t, s, "GET", "", ""); code != 403 {
-		t.Fatalf("未登录应 403，实际 %d", code)
+	// 未登录 → 401
+	if code, _ := doAssistToken(t, s, "GET", "", ""); code != 401 {
+		t.Fatalf("未登录应 401，实际 %d", code)
 	}
 	// 普通用户（非超管）
 	if code, _ := doAssistToken(t, s, "GET", tokens["u_co_a"], ""); code != 403 {

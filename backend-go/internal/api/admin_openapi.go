@@ -192,7 +192,8 @@ function setLang(l){
 func (s *Server) handleAdminOpenAPIDocsGet(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	mdZh := s.getDocsMD("zh")
@@ -211,7 +212,8 @@ func (s *Server) handleAdminOpenAPIDocsGet(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleAdminOpenAPIDocsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -252,7 +254,8 @@ func (s *Server) handleAdminOpenAPIDocsSave(w http.ResponseWriter, r *http.Reque
 // handleAdminOpenAPIDocsPreview 超管预览渲染结果（不落库；lang 缺省 zh）。
 func (s *Server) handleAdminOpenAPIDocsPreview(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -317,7 +320,7 @@ const defaultDocsMDZh = `# 能言开放 API
 | GET | /openapi/v1/balance | * | 查询积分余额与 ≈句数 |
 | GET | /openapi/v1/kb/stats | kb | 知识库条目统计 |
 | GET | /openapi/v1/billing/usage | billing | 用量明细 |
-| POST | /openapi/v1/apikey/rotate | all | 轮换 API Key（旧 Key 立即失效） |
+| POST | /openapi/v1/apikey/rotate | all | 轮换 API Key（旧 Key 立即失效；当日调用计数随之归零） |
 
 ## ① 创建文本任务（heredoc 传 JSON：复制即用，免疫引号/换行问题）
 
@@ -406,15 +409,35 @@ mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
 - 支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml
 - 完成后经 download 接口下载；产物保留 14 天，请及时下载
 
-## 错误码（独立出参 error_code）
+## 错误与 HTTP 状态码（★ 2026-09-26 起：失败按真实状态码发出）
 
-| error_code | 含义 |
-|------------|------|
-| insufficient_balance | **积分余额不足——请充值积分或升级套餐** |
-| rate_limited | 请求过于频繁，稍后重试 |
-| daily_quota_exceeded | 达到当日用量上限 |
-| bad_request / not_found / forbidden / invalid_api_key / task_failed / not_ready / no_result | 参数/权限/状态类错误 |
+请求失败一律以**真实 HTTP 状态码**返回（不再出现「HTTP 200 但 success:false」），
+响应体一定给 “code”（正主，下表第一列）；部分历史通道仍同值下发 “error_code”（老 SDK 在读的别名，
+**不保证每个失败响应都有**，取码请以 “code” 为准），
+以及 “message”（可读文案，随 Accept-Language 语种翻译）与 “trace_id”（报障时给出即可定位日志）。
+通用重试器/网关告警/APM 因此能直接按状态码统计与退避；429 另给 “Retry-After” 头与同值的
+“retry_after” 字段（还需等待的秒数），按它退避即可，不必自己猜冷却窗口。
 
+| code | HTTP | 含义 |
+|------|------|------|
+| bad_request | 400 | 参数错（缺 text / 缺任务 id / 语种不支持等） |
+| text_too_long | 400 | 文本超过单次上限 |
+| invalid_api_key | 401 | API Key 无效或已轮换 |
+| insufficient_balance | 402 | **积分余额不足——请充值积分或升级套餐** |
+| forbidden | 403 | Key 无该接口权限 / 越权访问 |
+| rejected | 403 | 请求被内容或风控规则拒绝 |
+| not_found | 404 | 任务或资源不存在（含跨租户访问，不泄露存在性） |
+| no_result | 404 | 无可用结果（如工单被判定无需翻译） |
+| task_failed | 409 | 任务终态为失败（与请求时机冲突，重试同一请求无意义） |
+| not_ready | 409 | 产物尚未就绪（请继续按 15s/60s 轮询后重试） |
+| key_quota_exceeded | 429 | 该 Key 今日调用次数已达上限 |
+| rate_limited | 429 | 请求过于频繁，按 Retry-After 秒数稍后重试 |
+| daily_quota_exceeded | 429 | 达到当日用量上限 |
+| internal | 500 | 服务端故障（带 trace_id，请报障） |
+
+★ 唯一仍在 200 里表达"没做成"的是**任务状态**：“GET /tasks/status” 正常返回 200，
+“status” 取值 “queued / processing / completed / failed”；“status:failed” 是任务的业务状态
+（翻译过程本身失败），请求是成功的，其错误码走同一张表的 “code”/“error_code” 字段。
 ## 余额与计费
 
 翻译按实际用量从账户余额扣减；每次响应携带 balance_points（当前积分余额）与
@@ -439,7 +462,7 @@ All endpoints authenticate with **Authorization: Bearer YOUR_API_KEY**. Issue ke
 | GET | /openapi/v1/balance | * | Points balance & sentence estimate |
 | GET | /openapi/v1/kb/stats | kb | Knowledge base statistics |
 | GET | /openapi/v1/billing/usage | billing | Usage details |
-| POST | /openapi/v1/apikey/rotate | all | Rotate API Key (old key invalidates immediately) |
+| POST | /openapi/v1/apikey/rotate | all | Rotate API Key (old key invalidates immediately; the daily call count resets to zero) |
 
 ## Create a text task
 
@@ -518,14 +541,37 @@ target_langs takes an array of language codes; defaults to ["en"]. Supported: 34
 - Accepted: docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml
 - Download via the download endpoint when completed; artifacts are kept for 14 days
 
-## Error codes (dedicated error_code field)
+## Errors & HTTP status codes (★ since 2026-09-26: failures carry real status codes)
 
-| error_code | Meaning |
-|------------|---------|
-| insufficient_balance | Balance exhausted — top up or upgrade your plan |
-| rate_limited | Too many requests, retry later |
-| daily_quota_exceeded | Daily usage cap reached |
-| bad_request / not_found / forbidden / invalid_api_key / task_failed / not_ready / no_result | Parameter / permission / state errors |
+Every failed request returns a **real HTTP status code** — the old "HTTP 200 with success:false"
+shape is gone. The body always carries "code" (canonical, first column below). The historical alias
+"error_code" (same value, read by older SDKs) is still emitted on some legacy channels but is **not
+guaranteed on every failure** — branch on "code". Also present: a "message" (translated per Accept-Language)
+and a "trace_id" (quote it when reporting an issue). Retriers, gateways and APM error rates can
+now branch on status alone; 429 responses additionally send a "Retry-After" header and the same
+value as a "retry_after" field (seconds to wait) — honour it instead of guessing a backoff.
+
+| code | HTTP | Meaning |
+|------|------|---------|
+| bad_request | 400 | Bad parameter (missing text / task id, unsupported language) |
+| text_too_long | 400 | Text exceeds the per-request limit |
+| invalid_api_key | 401 | API key invalid or rotated away |
+| insufficient_balance | 402 | **Balance exhausted — top up or upgrade your plan** |
+| forbidden | 403 | Key lacks this scope / cross-tenant access |
+| rejected | 403 | Refused by content or risk controls |
+| not_found | 404 | Task or resource not found (also used for cross-tenant, to avoid leaking existence) |
+| no_result | 404 | No result available (e.g. ticket judged nothing to translate) |
+| task_failed | 409 | Task reached the failed terminal state (retrying the same request won't help) |
+| not_ready | 409 | Artifact not ready yet — keep polling (15s text / 60s files) and retry |
+| key_quota_exceeded | 429 | This key hit its daily call-count cap |
+| rate_limited | 429 | Too many requests — back off by Retry-After seconds |
+| daily_quota_exceeded | 429 | Daily usage cap reached |
+| internal | 500 | Server-side failure (trace_id included, please report it) |
+
+★ The one thing still expressed inside a 200 is the **task state**: "GET /tasks/status" returns 200
+with "status" ∈ "queued / processing / completed / failed". "status:failed" is the task's business
+outcome (the translation itself failed) while the request succeeded; its reason uses the same
+"code"/"error_code" values as the table above.
 
 ## Balance & Billing
 
@@ -539,15 +585,14 @@ func (s *Server) handleOpenAPIKBStats(w http.ResponseWriter, r *http.Request) {
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {
 		if authErr == string(errors.OpenAPIKeyQuotaExceeded) {
-			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
-				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			writeOpenAPIError(w, r.Context(), authErr, "该 API Key 今日调用次数已达上限，请调整限额或明日再试")
 			return
 		}
-		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInvalidAPIKey), "message": "API Key 无效"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInvalidAPIKey), "API Key 无效")
 		return
 	}
 	if ak.Perms != "all" && ak.Perms != "kb" {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIForbidden), "message": "API Key 无知识库权限"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIForbidden), "API Key 无知识库权限")
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{
@@ -564,25 +609,24 @@ func (s *Server) handleOpenAPITerms(w http.ResponseWriter, r *http.Request) {
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {
 		if authErr == string(errors.OpenAPIKeyQuotaExceeded) {
-			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
-				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			writeOpenAPIError(w, r.Context(), authErr, "该 API Key 今日调用次数已达上限，请调整限额或明日再试")
 			return
 		}
-		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInvalidAPIKey), "message": "API Key 无效"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInvalidAPIKey), "API Key 无效")
 		return
 	}
 	if ak.Perms != "all" && ak.Perms != "kb" && ak.Perms != "translate" {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIForbidden), "message": "API Key 无术语检索权限（需 translate/kb）"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIForbidden), "API Key 无术语检索权限（需 translate/kb）")
 		return
 	}
 	// 参数校验：q 必填且 ≤100 字符
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIBadRequest), "message": "q 不能为空"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), "q 不能为空")
 		return
 	}
 	if n := len([]rune(q)); n > 100 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIBadRequest), "message": "q 超长（≤100 字符）"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), "q 超长（≤100 字符）")
 		return
 	}
 	// 过滤参数：lang 非空须命中 config.AllLangs 白名单；limit 缺省 20
@@ -596,7 +640,7 @@ func (s *Server) handleOpenAPITerms(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !ok {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIBadRequest), "message": "不支持的语言代码: " + lang})
+			writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), "不支持的语言代码: "+lang)
 			return
 		}
 	}
@@ -609,7 +653,11 @@ func (s *Server) handleOpenAPITerms(w http.ResponseWriter, r *http.Request) {
 	}
 	hits, err := s.Store.SearchTerms(ak.TenantID, 0, q, lang, limit)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：这一处原本是 `writeJSON(w, 400, {success:false, message:…})`——
+		// 既没有 error_code（本文件其余 openapi 站点都有），把服务端检索失败说成客户的参数错，
+		// 客户会去改 q/lang 反复重试，而真正的原因在库里。补登记为 internal⇒500，
+		// 文案仍走 publicErrMessage 脱敏（内部错误串不外泄的既有口径不变）。
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInternal), publicErrMessage(r.Context(), err))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "count": len(hits), "terms": hits})
@@ -629,15 +677,14 @@ func (s *Server) handleOpenAPIUsage(w http.ResponseWriter, r *http.Request) {
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {
 		if authErr == string(errors.OpenAPIKeyQuotaExceeded) {
-			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
-				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			writeOpenAPIError(w, r.Context(), authErr, "该 API Key 今日调用次数已达上限，请调整限额或明日再试")
 			return
 		}
-		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInvalidAPIKey), "message": "API Key 无效"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInvalidAPIKey), "API Key 无效")
 		return
 	}
 	if ak.Perms != "all" && ak.Perms != "billing" {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIForbidden), "message": "API Key 无计费权限"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIForbidden), "API Key 无计费权限")
 		return
 	}
 	// 用量与余额聚合（★ 2026-09-19 积分口径）：费用/余额一律折积分出参，token 裸值不再外发
@@ -661,21 +708,20 @@ func (s *Server) handleOpenAPIKeyRotate(w http.ResponseWriter, r *http.Request) 
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {
 		if authErr == string(errors.OpenAPIKeyQuotaExceeded) {
-			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
-				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			writeOpenAPIError(w, r.Context(), authErr, "该 API Key 今日调用次数已达上限，请调整限额或明日再试")
 			return
 		}
-		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInvalidAPIKey), "message": "API Key 无效"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInvalidAPIKey), "API Key 无效")
 		return
 	}
 	// 轮换：删除旧 key 并签发同权限新 key（密钥仅明文返回一次）
 	if err := s.Store.DeleteAPIKey(ak.ID, ak.TenantID); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInternal), "message": publicErrMessage(r.Context(), err)})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInternal), publicErrMessage(r.Context(), err))
 		return
 	}
 	newKey, err := s.Store.CreateAPIKey(ak.TenantID, ak.UserID, ak.Name, ak.Perms, ak.DailyCallLimit) // 轮换保留原归属用户
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInternal), "message": publicErrMessage(r.Context(), err)})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInternal), publicErrMessage(r.Context(), err))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{

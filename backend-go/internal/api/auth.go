@@ -56,11 +56,19 @@ type resetCode struct {
 
 // handleLogin 登录接口：校验用户名密码并签发 JWT，返回 token + 用户信息。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {username, password}）。
-// 返回: success=true 时携带 token 与用户信息；失败返回 200 + success=false（统一不区分错误细节，防用户名枚举）。
+// 返回: success=true 时携带 token 与用户信息；失败一律走统一错误出口 s.writeError
+//
+//	（★ F-47 批 I-7 订正本注释：旧注释写「失败返回 200 + success=false」，实际自 #37 起
+//	 已是 401/403/429＋{code,message,trace_id}——注释比代码落后一个整改批次）。
+//	「不区分错误细节」这条安全口径不变：用户名不存在与密码错误回同一个「用户名或密码错误」，
+//	防用户名枚举；但**传输层状态码必须诚实**（401＝凭证错、403＝账号停用、429＝撞冷却），
+//	否则前端与 SDK 只能靠猜，且通用重试器无法对「稍后再试」做退避。
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// 暴力破解防护：同一 IP 连续失败超过阈值后进入冷却期
-	if s.loginLocked(r) {
-		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "登录尝试过于频繁，请稍后再试"))
+	// ★ F-47（批 I-7）：冷却剩余秒数随错误一起出（429 + Retry-After + retry_after），
+	// 旧实现只说「过于频繁」，客户端既不知道要等多久，也无法与「参数错」区分（同为 400）。
+	if wait := s.loginCooldownSec(r); wait > 0 {
+		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "登录尝试过于频繁，请稍后再试").WithRetryAfter(wait))
 		return
 	}
 	// 平台存储未初始化时拒绝登录
@@ -196,10 +204,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// loginLocked 判断当前请求 IP 是否处于登录冷却期。
-// 参数 r: HTTP 请求；返回 true 表示应拒绝登录（429）。
-func (s *Server) loginLocked(r *http.Request) bool {
-	return s.loginLimit.blocked(clientIP(r))
+// loginCooldownSec 返回当前请求 IP 的登录冷却剩余秒数（0＝不受限）。
+// ★ F-47（批 I-7）：旧版叫 loginLocked 并返回 bool，注释写着「拒绝登录（429）」而实际经
+//
+//	统一出口发出的是 400，且不带任何时长——注释与代码分家、状态码与语义分家。
+//	现按秒数返回，调用方据此同时得到三件一致的东西：HTTP 429、`Retry-After` 头、
+//	出参 `retry_after` 字段（判据唯一来源＝loginLimiter.retryAfterSec，见 ratelimit.go）。
+func (s *Server) loginCooldownSec(r *http.Request) int {
+	if s.loginLimit == nil {
+		return 0
+	}
+	return s.loginLimit.retryAfterSec(clientIP(r))
 }
 
 // recordLoginFail 记录当前请求 IP 一次登录失败。
@@ -287,7 +302,11 @@ var legacyCounter atomic.Int64
 
 // handleChangePassword 修改密码接口：校验原密码后更新为 bcrypt 哈希。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {old_password, new_password}）。
-// 返回: success=true 表示修改成功；原密码错误或存储失败返回 success=false。
+// 返回: success=true 表示修改成功；失败走统一错误出口给诚实状态码
+//
+//	（★ F-64② 批 I-10：旧写法是「HTTP 200 + success:false」，客户端只看状态码就判成改密成功）。
+//	取码口径：原密码错=400（载荷不对）、写库失败=500 —— 两者都**不许** 401，
+//	因为前端 request() 见 401 会清登录态，「旧密码记错」不该把人踢回登录页。
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
@@ -304,16 +323,23 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	// 校验原密码是否正确
 	if !auth.CheckPassword(u.PasswordHash, req.OldPassword) {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "原密码错误"})
+		// F-64②：原密码错误＝提交的载荷不对 → 400 VALIDATION_ERROR。
+		// ★ 这里严禁取 ErrUnauthorized(401)：本接口是**已登录态**动作，而前端 core.ts 的 request()
+		//   一见 401 就清 token 并踢回登录页（只对 /api/auth/login、/api/auth/register 豁免），
+		//   一次「旧密码记错了」会把人现成的会话一起抹掉，改密改到一半反而要重新登录。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "原密码错误"))
 		return
 	}
 	// 仅允许修改自己租户下的账号（u.ID 绑定 u.TenantID，防跨租户篡改）
 	if err := s.Store.ResetPassword(u.ID, u.TenantID, auth.PasswordHash(req.NewPassword)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：写库失败是本进程之外的服务端故障 → 500（同上：绝不 401，免得清掉正当会话）
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 记录修改密码审计
-	s.Store.LogAudit(u.TenantID, u.ID, "change_password", "auth", "")
+	// ★ F-63（2026-09-26 批 I-3）：detail 原为空串；只记「谁改了口令」这一事实与账号名，
+	//   口令本身（新旧）一律不入审计——审计表明文可读面比业务表更宽，写进去就是泄露。
+	s.Store.LogAudit(u.TenantID, u.ID, "change_password", "auth", "用户 "+u.Username+" 修改登录口令")
 	// ★ 首登强制改密（2026-09-02 功能）：改密成功后自动清零标记
 	if u.MustChangePwd > 0 {
 		_ = s.Store.SetMustChangePwd(u.ID, u.TenantID, 0)
@@ -333,8 +359,9 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	//   日上限 10 次 + 最小间隔 30s——防止「无限发码骚扰 + 配合爆破」的组合滥用。
 	ip := clientIP(r)
 	if ok, wait := s.regGuard.allow("pwd-forgot:"+ip, 10, 30); !ok {
-		w.Header().Set("Retry-After", itoaInt(wait))
-		writeJSON(w, 429, map[string]interface{}{"success": false, "message": "请求过于频繁，请稍后再试"})
+		// ★ F-47（批 I-7）：内联 writeJSON(429) 改走统一出口——状态码不变（仍 429），
+		// 但补齐 {code:"RATE_LIMITED", retry_after} 与 trace_id：同仓两类限流响应口径就此合流。
+		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "请求过于频繁，请稍后再试").WithRetryAfter(wait))
 		return
 	}
 	var req struct {
@@ -414,8 +441,8 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	//   与 forgot 限流独立计数；日 20 次 + 最小间隔 10s（正常用户重试绰绰有余）。
 	ip := clientIP(r)
 	if ok, wait := s.regGuard.allow("pwd-reset:"+ip, 20, 10); !ok {
-		w.Header().Set("Retry-After", itoaInt(wait))
-		writeJSON(w, 429, map[string]interface{}{"success": false, "message": "请求过于频繁，请稍后再试"})
+		// ★ F-47（批 I-7）：与 forgot 同口径走统一出口（429 + RATE_LIMITED + retry_after）
+		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "请求过于频繁，请稍后再试").WithRetryAfter(wait))
 		return
 	}
 	var req struct {
@@ -495,7 +522,11 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	vcodeDel(rkey)
 	// 更新密码
 	if err := s.Store.ResetPassword(u.ID, u.TenantID, auth.PasswordHash(req.NewPassword)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：验证码已核对通过、写库却失败，这是服务端故障 → 500 INTERNAL_ERROR。
+		// ★ 匿名链路（忘记密码）同样严禁 401：request() 的 401 拦截器只豁免
+		//   /api/auth/login 与 /api/auth/register，重置密码页吃一个 401 会把用户刚填的
+		//   验证码/新密码连同会话一起抹掉，回到「什么都没做」的登录页。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.regGuard.record("pwd-reset:" + ip) // 重置成功才计数（限流窗口按成功动作推进）
@@ -587,11 +618,15 @@ func (s *Server) infoMailer() mail.Sender {
 // handleAdminUsers 用户列表接口：列出当前生效租户下的用户。
 // 权限：部门管理员及以上；部门管理员仅可见本部门及其子部门下用户，租户管理员及以上可见全部。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（需 dept_admin 及以上权限）。
-// 返回: success=true 时携带 users 数组。
+// 返回: success=true 时携带 users 数组；查询失败按 500 走统一错误出口
+//
+//	（★ F-64② 批 I-10：旧写法回「HTTP 200 + success:false」，管理台把它当成功、
+//	 渲染成「该部门/该租户下没有成员」的空表，故障被完全藏住）。
 func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -599,12 +634,16 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	if auth.RoleLevel(u.Role) == 2 && u.OrgID > 0 {
 		orgIDs, err := s.Store.OrgDescendantIDs(tid, u.OrgID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②：部门子树查询失败是存储层故障 → 500。旧写法回 200，成员页会把它当
+			// 「查询成功但列表为空」渲染成空表格，管理员误以为部门下没人。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 		users, err := s.Store.ListUsersByOrg(tid, orgIDs)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②：同上，部门成员列表读失败＝服务端出错 → 500（不是权限问题，
+			// 权限判定已在上方 requireDeptAdmin 完成，这里给 403/401 都会指错方向）
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 		writeJSON(w, 200, map[string]interface{}{"success": true, "users": users})
@@ -614,7 +653,9 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	if auth.IsSuperAdmin(u) && tid <= 0 {
 		users, err := s.Store.ListAllUsers()
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②：平台级全量账号列举失败＝存储层出错 → 500（读接口没有「业务失败」这一说，
+			// 除了权限已经在上游拦掉；把 DB 故障伪装成 200 会让超管看到一张空表而以为平台没人）
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 		writeJSON(w, 200, map[string]interface{}{"success": true, "users": users})
@@ -623,7 +664,9 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	// 租户隔离：仅列出生效租户（超管可切换）下的用户
 	users, err := s.Store.ListUsers(tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：本租户用户列举失败 → 500，同上；租户维度不是「未授权」，
+		// 取 401 会触发前端清登录态（core.ts 的 401 豁免名单里没有本路径）
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "users": users})
@@ -635,7 +678,8 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -721,9 +765,13 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 邮箱唯一预检（oneid 账户体系）：管理员建号此前绕过全局判重——补齐。
 	//   目标邮箱正被其他账号持有则拒绝创建（避免建出无邮箱残号）。
+	// ★ F-64② 收尾定夺（2026-09-26 批 I-10）：原回 400，与下面「用户名已存在」的 409 是同一次
+	//   提交里的两条撞库守卫，却取了两个码；也与自助注册/换绑邮箱的口径不一致（统一 409）。
+	//   邮箱被他人持有＝与库里既有记录冲突，管理员可修的动作是「换一个邮箱」而非「改请求格式」，
+	//   故取 409 CONFLICT。严禁 401：管理员此刻是登录态，401 会被 core.ts 清 token 踢回登录页。
 	if req.Email != "" {
 		if other, oerr := s.Store.GetUserByEmail(strings.ToLower(strings.TrimSpace(req.Email))); oerr == nil && other != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该邮箱已被其他账号绑定"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该邮箱已被其他账号绑定"))
 			return
 		}
 	}
@@ -731,11 +779,17 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// ★ 脱敏（2026-09-12）：驱动错误不透吐（PG 泄漏约束名/SQLSTATE，双方言文案漂移）
 		if store.IsUniqueViolation(err) {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败：用户名已存在"})
+			// F-64②：用户名撞了租户内唯一约束＝状态冲突 → 409 CONFLICT。
+			// 不取 400：这不是「请求写错了」，而是「与库里既有记录撞车」，前端据此才能
+			// 把提示停在「换个用户名」这条分支上；也不取 401——管理员此刻是登录态，
+			// request() 的 401 拦截（豁免名单只有 login/register）会把他踢出管理台。
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "创建失败：用户名已存在"))
 			return
 		}
 		log.Printf("[admin] 建号失败 username=%s: %v", req.Username, err)
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + store.DebriefDBError(err)})
+		// F-64②：非撞库的建号失败是真·存储故障 → 500（旧 200 壳让弹窗显示「创建成功」
+		// 后刷新列表却找不到新账号，管理员只能反复重试建号）
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "创建失败: "+store.DebriefDBError(err)))
 		return
 	}
 	// 绑定联系邮箱（用于找回密码；SetUserEmail 内含占用即拒绝的最终守卫）
@@ -761,7 +815,8 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -886,7 +941,12 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 	before := map[string]string{"role": target.Role, "status": target.Status, "display_name": target.DisplayName}
 	beforeJSON, _ := json.Marshal(before)
 	if err := s.Store.UpdateUser(req.ID, tid, finalDisplay, finalRole, finalStatus, orgID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：越权（403）、目标不存在（404）、终态不合法（400）都在上方逐条拦掉了，
+		// 走到这里仍是失败＝写库故障 → 500。
+		// 旧 200 壳最坑的一点：改完角色刷新列表还是老值，界面却提示「已提交」，
+		// 管理员以为权限已经调整完毕（本函数唯一的兜底失败分支；
+		// 也不许取 401——同前端 core.ts 的清登录态拦截，见 handleChangePassword 的注释）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	afterJSON, _ := json.Marshal(map[string]string{"role": finalRole, "status": finalStatus, "display_name": finalDisplay})
@@ -918,7 +978,8 @@ func (s *Server) validateOrg(tid, orgID int64) error {
 func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -971,10 +1032,25 @@ func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Req
 	}
 	// 租户隔离：仅重置生效租户下的用户
 	if err := s.Store.ResetPassword(req.ID, tid, auth.PasswordHash(req.Password)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：管理员重置他人与否的判据都过了，写库仍失败＝存储故障 → 500。
+		// 严禁 401：管理员此刻在后台会话里，前端 request() 吃 401 会直接把他踢回登录页
+		// （/api/admin/users/reset-password 不在 core.ts 的 401 豁免名单中）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
-	s.Store.LogAudit(u.TenantID, u.ID, "user_reset_pwd", "users", "")
+	// ★ F-63（批 I-3）：detail 补「被重置的账号」，并留「首登强制改密」标记（旧实现空串：
+	//   管理员重置了谁的口令无从回查）。口令内容仍一律不入审计。
+	//   审计归属租户同时改为实际生效的 tid（旧写 u.TenantID：超管跨租户重置时轨迹记在平台租户 0，
+	//   与 F-55 同族——「谁的数据被改了」记错对象）。
+	targetName := ""
+	if t, e := s.Store.GetUser(req.ID, tid); e == nil && t != nil {
+		targetName = t.Username
+	}
+	auditLabel := targetName
+	if auditLabel == "" {
+		auditLabel = fmt.Sprintf("uid=%d", req.ID)
+	}
+	s.Store.LogAudit(tid, u.ID, "user_reset_pwd", "users", "管理员重置账号 "+auditLabel+" 的登录口令")
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -983,7 +1059,8 @@ func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Req
 func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -1018,7 +1095,11 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if target == nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "用户不存在"})
+			// F-64②：按 ID 定位不到目标账号（含跨租户不可见）＝记录不存在 → 404 NOT_FOUND。
+			// 取 404 而不是 403：本接口是「对这个用户动手」，目标不在生效租户下时
+			// 与「根本不存在」回同一口径，既诚实又不泄露其它租户是否存在该 ID；
+			// 更不能用 401（管理员是登录态，前端会清会话踢回登录页）。
+			s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "用户不存在"))
 			return
 		}
 	}
@@ -1039,7 +1120,12 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.Store.DeleteUser(req.ID, tid); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：目标已在上方按 ID 定位过（查不到就是 404），走到这里仍失败＝写库故障
+		// 或并发删除（0 行受影响时 iam 回业务错误「用户不存在」）→ 500 兜底。
+		// 不判 404 也不判 409：本层没有可靠的错误类型可分辨（只有裸中文 error 串，
+		// 靠字符串猜会把真故障误判成业务态）；更不许 401——管理员在后台会话里，
+		// 前端 request() 吃 401 会直接清 token 把他踢回登录页。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(u.TenantID, u.ID, "user_delete", "users", target.Username)
@@ -1048,6 +1134,10 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateEmail 登录用户自助绑定/修改邮箱（强提醒维护策略的数据入口）。
 // 校验：格式合法 + 全局唯一（他人已绑定则拒绝）；成功后立即可接收验证码。
+// ★ F-64②（批 I-10）：验证码核验失败=400、邮箱被占用=409、写库失败=500 走统一出口；
+//
+//	这一组里**没有一个**该用 401——用户本来就在登录态里改设置，401 会被前端
+//	core.ts 的 handleUnauthorized 当成「会话失效」清 token 踢回登录页。
 func (s *Server) handleUpdateEmail(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
@@ -1090,19 +1180,29 @@ func (s *Server) handleUpdateEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if oldEmail != "" && !verifyEmailCode(oldEmail, req.OldCode) {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "原邮箱验证码错误或已过期"})
+		// F-64②：原邮箱验证码不匹配＝这次提交的凭证不对 → 400 VALIDATION_ERROR。
+		// ★ 严禁 401：这是**已登录用户**在换绑邮箱，前端 request() 一见 401 就清 token
+		//   并踢回登录页（豁免名单只有 /api/auth/login 与 /api/auth/register），
+		//   一次「验证码看错」会把整条设置流程连同刚填的表单一起抹掉。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "原邮箱验证码错误或已过期"))
 		return
 	}
 	if !verifyEmailCode(email, req.NewCode) {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "新邮箱验证码错误或已过期"})
+		// F-64②：同上——新邮箱验证码错是载荷层面的核验失败 → 400，绝不 401（清会话）
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "新邮箱验证码错误或已过期"))
 		return
 	}
 	if other, err := s.Store.GetUserByEmail(email); err == nil && other != nil && other.ID != u.ID {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "该邮箱已被其他账号绑定"})
+		// F-64②：邮箱已被他人占用＝与既有记录的状态冲突 → 409 CONFLICT，
+		// 前端据此才能走「换一个邮箱」而不是「重新登录」；401 同样禁止（理由见上两处）
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该邮箱已被其他账号绑定"))
 		return
 	}
 	if err := s.Store.SetUserEmail(u.ID, u.TenantID, email); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：三重核验都过了仍写不进去＝存储层故障 → 500
+		//（SetUserEmail 内部的占用守卫也会回错，但那条已由上方 409 分支拦掉，
+		//  这里再判一次字符串没意义，且会把真故障误报成业务冲突）
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(u.TenantID, u.ID, "update_email", "users", email)

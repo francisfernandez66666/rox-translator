@@ -199,10 +199,18 @@ func TestUATBatchC_OpenAPIDownloadBlocksGhostCompleted(t *testing.T) {
 	ghost := f42APITicket(t, st, uid, `{"translations":{"en":""}}`, true, "")
 	w := f42Get(t, s, s.handleOpenAPITaskDownload, key, "id="+strconv.FormatInt(ghost.ID, 10))
 	body := w.Body.String()
-	// writeTaskError 的既有出参形态是 200 + success:false（SDK 按 error_code 分支），
-	// 故判据落在「不得出现交付头/产物字段」+「必须是 not_ready 错误」两向上。
+	// ★ F-64①（批 I-7 2026-09-26）订正本行旧说法：writeTaskError 的「200 + success:false」
+	// 形态已被 writeOpenAPIError 取代——鬼 completed 去要产物是请求时机与资源状态冲突，
+	// 现回 **409 + error_code/code=not_ready**（旧形态让客户在 200 里解析文案才知道拿不到东西）。
+	// 判据仍是两条：必须是 not_ready 错误码；不得带附件交付形态。
+	if w.Code != http.StatusConflict {
+		t.Errorf("鬼 completed 下载应回 409（状态冲突），实得 %d body=%s", w.Code, body)
+	}
 	if !f42ContainsAny(body, `"error_code":"not_ready"`) {
 		t.Errorf("鬼 completed 下载应回 not_ready 错误码，实得 code=%d body=%s", w.Code, body)
+	}
+	if !f42ContainsAny(body, `"code":"not_ready"`) {
+		t.Errorf("not_ready 必须同时以正主键 code 下发（对外文档定的 code，error_code 只是别名）：%s", body)
 	}
 	if f42ContainsAny(body, `"Content-Type": "application/`, `attachment;`) {
 		t.Errorf("鬼 completed 不得带附件交付头，实得 %s", body)

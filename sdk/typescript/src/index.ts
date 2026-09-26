@@ -24,7 +24,14 @@
 //   await cli.waitTask(t.task_id);
 //   await cli.downloadFile(t.task_id, "./out.zip");
 //
-// 错误处理：余额不足时抛出 TranslatorError，error_code == "insufficient_balance"
+// 错误处理（★ 2026-09-26 F-64① 状态码诚实改造后的口径）：
+//   对外契约面的失败一律以**真实 HTTP 状态码**发出（400/401/402/403/404/409/429/500），
+//   响应体带 code（正主，与文档 Error.code 枚举一致）。error_code 只是**状态码诚实改造之前的老服务端**
+//   在发的别名；改造后的服务端统一只发 code（不再同值下发，避免两套码名并存）。
+//   TranslatorError 把两者都收敛到 .code（.error_code 保留兼容，勿删）；
+//   限流类（429）另给 .retryAfter 秒数，调用方按它退避即可。
+//   唯一仍在 200 里表达"没做成"的是**任务状态**：status:"failed" 是业务对象的状态，
+//   不是本次请求失败，所以 getTask/waitTask 正常返回、由 status 字段分支。
 // ============================================================================
 
 /** 任务创建成功响应 */
@@ -53,16 +60,36 @@ export interface Balance {
 
 /** 翻译 API 调用异常 */
 export class TranslatorError extends Error {
-  status?: number;       // HTTP 状态码
-  error_code?: string;   // 业务错误码
-  body?: unknown;        // 原始响应体
-  constructor(message: string, status?: number, error_code?: string, body?: unknown) {
+  status?: number;        // HTTP 状态码（★ F-64①：失败时即真实状态码，不再恒 200）
+  code?: string;          // 业务错误码正主（与文档 Error.code 枚举同名同值）
+  error_code?: string;    // 老服务端（状态码诚实改造之前）在发的别名；保留只为不打断在生产的接入方
+  retryAfter?: number;    // 429 时还需等待的秒数（JSON retry_after 优先，Retry-After 头兜底）
+  body?: unknown;         // 原始响应体
+  constructor(message: string, status?: number, error_code?: string, body?: unknown, retryAfter?: number) {
     super(message);
     this.name = "TranslatorError";
     this.status = status;
     this.error_code = error_code;
+    this.code = error_code;
+    this.retryAfter = retryAfter;
     this.body = body;
   }
+}
+
+/**
+ * 从错误响应体/头里取「还需等待秒数」。
+ * 两处给法（字段给应用、头给通用 HTTP 客户端）本应同值，但中间层可能只透传其中之一，故都读；
+ * 只认纯数字秒（本服务不发 HTTP-date 形态），取不到就 undefined——宁可少给一个退避提示，
+ * 也不把日期串丢给调用方去 Number()。
+ */
+function pickRetryAfter(data: any, headers?: { get?: (k: string) => string | null }): number | undefined {
+  let raw: unknown = undefined;
+  if (data && typeof data === "object" && "retry_after" in data) raw = (data as any).retry_after;
+  if (raw === undefined && headers && typeof headers.get === "function") {
+    try { raw = headers.get("Retry-After") ?? headers.get("retry-after"); } catch { raw = undefined; }
+  }
+  const n = typeof raw === "number" ? raw : Number(typeof raw === "string" ? raw.trim() : NaN);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
 /**
@@ -106,11 +133,14 @@ export class TranslatorClient {
       const text = await resp.text();
       const data = text ? JSON.parse(text) : {};
       if (!resp.ok) {
+        // ★ F-64①：错误码正主是 code（文档 Error.code），error_code 是状态码诚实改造**之前**的老服务端别名；
+        // 改造后的服务端只发 code ⇒ "code 优先、error_code 兜底"，混跑窗口两边都拿得到。
         throw new TranslatorError(
           (data && (data.message || data.error)) || `HTTP ${resp.status}`,
           resp.status,
-          data && data.error_code,
-          data
+          (data && (data.code || data.error_code)) || undefined,
+          data,
+          pickRetryAfter(data, resp.headers)
         );
       }
       return data;
@@ -230,8 +260,41 @@ export class TranslatorClient {
   async downloadFile(taskId: number, savePath: string, fileId?: number): Promise<void> {
     const url = `/openapi/v1/tasks/download?id=${taskId}${fileId ? `&file_id=${fileId}` : ""}`;
     const resp = await fetch(this.baseUrl + url, { headers: { "Authorization": `Bearer ${this.apiKey}` } });
-    if (!resp.ok) throw new TranslatorError(`下载失败 HTTP ${resp.status}`, resp.status);
+    if (!resp.ok) {
+      // ★ F-64①：旧写法只把状态码塞进异常，**响应体整个丢掉**，
+      // 于是产物未就绪（409 not_ready）、Key 无权限（403 forbidden）、任务不存在（404）
+      // 在调用方眼里全是"下载失败 HTTP 409"一行字——既不知道该等多久，也分不清
+      // "我传错 id" 和"服务端还没翻完"。这里按错误体补 message/code/retryAfter。
+      const raw = await resp.text().catch(() => "");
+      let data: any = undefined;
+      try { data = raw ? JSON.parse(raw) : undefined; } catch { data = undefined; }
+      throw new TranslatorError(
+        (data && (data.message || data.error)) || `下载失败 HTTP ${resp.status}`,
+        resp.status,
+        (data && (data.code || data.error_code)) || undefined,
+        data ?? raw,
+        pickRetryAfter(data, resp.headers)
+      );
+    }
     const buf = Buffer.from(await resp.arrayBuffer());
+    // ★ R-L2 负向守卫（2026-09-16）：2xx 但内容是 JSON 错误体＝服务端把失败伪装成成功
+    // （老后端口径），按二进制写盘会产出"内容为 JSON 的假产物"。判据保留，
+    // 覆盖"新 SDK 打老后端"的混跑窗口。
+    if (buf.length > 0 && buf.length < 64 * 1024) {
+      const head = buf.toString("utf8").trim();
+      if (head.startsWith("{")) {
+        try {
+          const parsed = JSON.parse(head);
+          if (parsed && parsed.success === false) {
+            throw new TranslatorError(
+              parsed.message || "产物未就绪或下载失败", resp.status,
+              parsed.code || parsed.error_code, parsed, pickRetryAfter(parsed, resp.headers));
+          }
+        } catch (e) {
+          if (e instanceof TranslatorError) throw e; // JSON.parse 失败＝真二进制，继续写盘
+        }
+      }
+    }
     require("fs").writeFileSync(savePath, buf);
   }
 

@@ -224,7 +224,21 @@ func abortReasonFrom(ctx context.Context) string {
 // WithUsageRecorder 向 ctx 注入用量记录器（API 层在进入翻译前调用）。
 // 同时注入 llm.UsageCollector：全链路（初翻/校对/Judge/文化闸门/embedding）
 // 的真实 token 用量自动归集，供按实际费用计费。
+// ★ F-49②（〇-U 批 I-4，2026-09-26 UAT）：**外层已注入时原样返回，绝不再造一个空壳**。
+// 旧写法无条件 context.WithValue 一个新收集器，而 LLM 侧写的是「ctx 里最后注入的那个」
+// （llm/client.go CollectorFrom）——于是引擎内层（handleTextCore）把外层（API/service）
+// 注入的那只遮蔽掉：外层读回来恒为 0。实测两处后果：
+//   - /openapi/v1/translate 同步出参 points_used 恒 0（客户按报文对账对出 0 消耗）；
+//   - 09-25 轮的 R-L1 修复（在 API 层补注入）因此**从未生效**——修了注入点，没修遮蔽。
+//
+// 收集器/中止函数/usageRecord 三者在本函数里成对创建，故「有收集器」即「三件齐全」，可安全复用。
 func (e *Engine) WithUsageRecorder(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if llm.CollectorFrom(ctx) != nil && llm.AbortFromCtx(ctx) != nil {
+		return ctx // 全链同源：沿用外层那一只，用量与实收都在同一累加器上
+	}
 	// ★ 余额不足中止：创建可取消 ctx 并注入中止函数，实时计费钩子在余额耗尽时调用，
 	// 立即中止整次翻译任务（含全部并发段），杜绝其余段被供应商免费翻译的白嫖漏洞。
 	// ★ 2026-09-10 改进1：中止时记录面向用户的原因（context.CancelCause），
@@ -240,11 +254,38 @@ func (e *Engine) WithUsageRecorder(ctx context.Context) context.Context {
 
 // UsageTokens 返回本次请求累计的真实 token 用量（输入, 输出）；
 // 未注入收集器时返回 (0,0)。
+// ⚠️ 这是**真实消耗**口径，只可用于内部成本核算；对外出参必须用 UsageBilledTokens（F-49①）。
 func (e *Engine) UsageTokens(ctx context.Context) (int64, int64) {
 	if uc := llm.CollectorFrom(ctx); uc != nil {
 		return uc.Totals()
 	}
 	return 0, 0
+}
+
+// UsageBilledTokens 返回本次请求**对外计费口径**的 token 合计（= usage_ledger 逐笔 quantity 之和）。
+// 返回 (billed, ok)：ok=false 表示本次链路没有计量口径（收集器未注入，或全程零 LLM 调用
+// 因而扣费侧没写过实收），调用方必须显式处理，禁止把「取不到」当 0 报给客户（F-49①）。
+func (e *Engine) UsageBilledTokens(ctx context.Context) (int64, bool) {
+	if uc := llm.CollectorFrom(ctx); uc != nil {
+		if n := uc.BilledTotal(); n >= 0 {
+			return n, n > 0
+		}
+	}
+	return 0, false
+}
+
+// UsageDisplayTokens 展示侧统一取数：优先实收口径，取不到时保守回退真实用量。
+// 参数 ctx: 请求级上下文（须已注入用量收集器）。返回: 用于折算对外积分的 token 数。
+// 回退的理据与 ChargeUsageRealtime 里「billed<total 就按 total 计」同一条：
+// 引擎在单测/降级路径下可能没有实时计量钩子（OnUsage 未接线、平台根租户 tid<=0 直接放行），
+// 此时按真实用量展示至少不会虚高，而**回退成 0** 就是 F-49 报给客户的那个恒零报文。
+// ★ 对外出参（points_used、结果页脚）一律走本函数，禁止在调用点再乘一次 markup（那是 F-49 的根因）。
+func (e *Engine) UsageDisplayTokens(ctx context.Context) int64 {
+	if n, ok := e.UsageBilledTokens(ctx); ok {
+		return n
+	}
+	tp, tc := e.UsageTokens(ctx)
+	return tp + tc
 }
 
 // PointsOfTokens 内部计量 token → 对外积分口径（2026-09-19 全面积分口径：

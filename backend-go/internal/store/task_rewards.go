@@ -120,6 +120,13 @@ func (s *Store) TaskRewardMigrate() {
 	db.Exec(s.db, d, `CREATE UNIQUE INDEX IF NOT EXISTS uniq_task_key ON user_tasks(task_key) WHERE task_key<>''`)
 	// ⑤ 出厂任务种入（存在即跳过，超管后台可改额/停用）
 	s.seedBuiltinTasks()
+	// ⑦ 存量行的周期两列订正（★ F-60：task_type ≡ period，实际窗口一列不动）
+	if n, e := s.RepairTaskCycleColumns(); e != nil {
+		observability.Warn(context.Background(), "task_cycle_repair_failed", slog.String("err", e.Error()))
+	} else if n > 0 {
+		// 订正必须出声：静默改库会让「周任务被算成日任务」这类账务口径问题无从取证
+		observability.Info(context.Background(), "task_cycle_columns_repaired", slog.Int64("rows", n))
+	}
 }
 
 // seedBuiltinTasks 种入 #33 出厂任务定义（按 task_key 幂等）。
@@ -129,12 +136,11 @@ func (s *Store) seedBuiltinTasks() {
 	d := db.CurrentDialect()
 	type seed struct {
 		key     string
-		typ     string // 兼容旧 task_type 列（daily/once）
 		title   string
 		desc    string
 		points  int64
 		mode    string
-		period  string
+		period  string // ★ F-60：周期唯一真值（task_type 列由它派生，不再各写一份）
 		days    int
 		stack   int
 		capDay  int
@@ -142,11 +148,11 @@ func (s *Store) seedBuiltinTasks() {
 		sort    int
 	}
 	seeds := []seed{
-		{TaskKeyLoginDaily, "daily", "每日登录", "每天登录一次即得 100 积分（有效期 3 天，可叠加）", 100, "auto", "daily", 3, 1, 1, 0, 10},
-		{TaskKeyTranslateWeek, "daily", "每周发起翻译", "每周发起翻译奖励 100 积分（每天 1 次、每周最多 5 次，有效期 7 天，可叠加）", 100, "auto", "weekly", 7, 1, 1, 5, 20},
-		{TaskKeyInviteReg, "once", "邀请好友注册", "好友通过你的邀请码注册成功 +500 积分（有效期 14 天，可叠加）", 500, "auto", "event", 14, 0, 0, 0, 30},
-		{TaskKeyInvitePaid, "once", "邀请好友充值", "受邀好友任意充值成功 +1000 永久积分（可叠加）", 1000, "auto", "event", 0, 0, 0, 0, 40},
-		{TaskKeyKBUpload, "once", "上传专属知识库", "上传自己的知识库并解析成功 +600 永久积分（一次性）", 600, "auto", "once", 0, 0, 0, 0, 50},
+		{TaskKeyLoginDaily, "每日登录", "每天登录一次即得 100 积分（有效期 3 天，可叠加）", 100, "auto", "daily", 3, 1, 1, 0, 10},
+		{TaskKeyTranslateWeek, "每周发起翻译", "每周发起翻译奖励 100 积分（每天 1 次、每周最多 5 次，有效期 7 天，可叠加）", 100, "auto", "weekly", 7, 1, 1, 5, 20},
+		{TaskKeyInviteReg, "邀请好友注册", "好友通过你的邀请码注册成功 +500 积分（有效期 14 天，可叠加）", 500, "auto", "event", 14, 0, 0, 0, 30},
+		{TaskKeyInvitePaid, "邀请好友充值", "受邀好友任意充值成功 +1000 永久积分（可叠加）", 1000, "auto", "event", 0, 0, 0, 0, 40},
+		{TaskKeyKBUpload, "上传专属知识库", "上传自己的知识库并解析成功 +600 永久积分（一次性）", 600, "auto", "once", 0, 0, 0, 0, 50},
 	}
 	now := time.Now().Format(time.RFC3339)
 	for _, sd := range seeds {
@@ -155,11 +161,13 @@ func (s *Store) seedBuiltinTasks() {
 		if n > 0 {
 			continue
 		}
+		// ★ F-60：task_type 列直接取 period（两列恒等），不再各写一份——
+		//   旧写法把周任务写成 task_type='daily'，出参双口径互相矛盾（本轮 UAT 的 F-60）。
 		_, err := db.Exec(s.db, d, `INSERT INTO user_tasks
 			(task_type, title, description, reward_tokens, enabled, sort_order, created_at, updated_at,
 			 task_key, grant_mode, period, valid_days, stack_expiry, cap_per_day, cap_per_week)
 			VALUES (?,?,?,?,1,?,?,?,?,?,?,?,?,?,?)`,
-			sd.typ, sd.title, sd.desc, s.TokensFromPoints(sd.points), sd.sort, now, now,
+			sd.period, sd.title, sd.desc, s.TokensFromPoints(sd.points), sd.sort, now, now,
 			sd.key, sd.mode, sd.period, sd.days, sd.stack, sd.capDay, sd.capWeek)
 		if err != nil {
 			// 并发首启或历史脏数据撞唯一索引：下个启动周期再补，不阻断服务。

@@ -21,6 +21,17 @@ import { useAdmin } from '@/stores/admin'
 interface Props {
   visible: boolean
   onClose: () => void
+  /**
+   * ★ F-57（2026-09-26 〇-U 批 I-8）：导入**成功**后的父级重取回调。
+   * 缺陷形态：本弹窗导入成功后只清自己的临时态，宿主（后台 KB 面板）的包列表与
+   * 「条目计数」停在导入前的值——实测导入 34 条后计数仍显示 34 不变，
+   * 客户以为没成功又导一遍（重复句对）。
+   * 设计口径：① 可选回调，前台顶部栏等无列表可刷的调用点零改动；
+   * ② **只在 r.success 分支触发**（失败时什么都没写进库，重取是白跑）；
+   * ③ 本文件自己不调 loadPackages 兜底——弹窗内的包下拉只是选择器，
+   *   真正要重取的是宿主的列表，谁拥有数据谁负责刷新。
+   */
+  onSuccess?: () => void
 }
 
 // 通用弱类型别名（与后台面板一致）：用于松类型的接口响应/行数据
@@ -136,7 +147,7 @@ function pkgScopeText(p: Pkg, t: (k: string) => string, tpl: (k: string, vars?: 
 }
 
 /** KbUploadDialog · 职责说明：前台顶部栏「上传知识库」弹窗，识别文件 → 选择知识包 → 导入（自动 embed） */
-export default function KbUploadDialog({ visible, onClose }: Props) {
+export default function KbUploadDialog({ visible, onClose, onSuccess }: Props) {
   const ad = useAdmin()
   const { toast } = useToast()
   const [file, setFile] = useState<File | null>(null)
@@ -202,7 +213,11 @@ export default function KbUploadDialog({ visible, onClose }: Props) {
     try {
       const r = await kbImportFile({ temp_id: String(recognized.temp_id), package_id: pkgId })
       setResult(r as Any)
-      if (r.success) { setFile(null); setRecognized(null); setPkgId(0); setCatValue('') }
+      if (r.success) {
+        setFile(null); setRecognized(null); setPkgId(0); setCatValue('')
+        // ★ F-57：写成功后通知宿主重取（后台 KB 面板的包列表/条目计数就靠这一步对上账）
+        void onSuccess?.()
+      }
     } catch (err: any) {
       setResult({ success: false, message: t('kb.importErr').replace('{msg}', err?.message || t('kb.networkErr')) })
     } finally { setImporting(false) }

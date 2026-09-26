@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"translator/internal/engine"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 )
 
@@ -25,12 +26,15 @@ import (
 func (s *Server) handleEvalsList(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	records, err := s.Store.ListEvalRecords(s.effTenant(r, u), 100)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：评估记录读的是本进程存储层，DB 失败属服务端故障；
+		//   旧写法让 evals 看板把失败当成功渲染成空列表（看起来就是「还没有评估数据」）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "records": records})
@@ -42,7 +46,8 @@ func (s *Server) handleEvalsList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	total, perLang, _, _ := s.DB.Stats(s.effTenant(r, u))
@@ -95,7 +100,8 @@ func llmErrorRateStr(eng *engine.Engine) string {
 func (s *Server) handleSystemAudit(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	q := r.URL.Query()
@@ -109,7 +115,11 @@ func (s *Server) handleSystemAudit(w http.ResponseWriter, r *http.Request) {
 		atoiDef(q.Get("limit"), 100),
 	)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：审计清单读的是本进程存储层。
+		//   这一支在 CSV 导出（exportAuditCSV 写响应头）之前返回，状态码仍写得出去，
+		//   不属于「头已写出、状态码物理不可达」的 ③ 档；审计面板原先把失败画成空表，
+		//   等于「没有留痕」与「查不到留痕」同形，对合规视图是最坏的一种。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// CSV 导出（ISO 17100 审计留痕）
@@ -124,7 +134,8 @@ func (s *Server) handleSystemAudit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -135,7 +146,10 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	status := q.Get("status")
 	alerts, err := s.Store.ListAlerts(tid, status, atoiDef(q.Get("limit"), 100))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：告警清单读的是本进程存储层。
+		//   这是只读列表、没有「记录不存在」一说，故不涉及 404/409；
+		//   旧写法下运维看板把 DB 故障显示成「当前无告警」，等于在最该报警的时候沉默。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "alerts": alerts, "silences": s.Store.ActiveSilences(tid)})
@@ -146,7 +160,8 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAlertSilence(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -163,7 +178,11 @@ func (s *Server) handleAlertSilence(w http.ResponseWriter, r *http.Request) {
 		tid = req.TenantID // 超管：0=平台级，>0=指定租户
 	}
 	if err := s.Store.SilenceAlert(tid, req.Kind, req.Minutes, u.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500（存储写入故障）。
+		//   为什么不是 409/404：静音是「租户+类型」的 upsert（ON CONFLICT 覆盖旧值，并顺带关闭现存
+		//   open 告警），本身没有非法前置状态；kind 缺失已在上面的 400 拦下；store 侧只有 DB 失败才回 err，
+		//   所以走到这里的只剩「没写进去」这一种事实，客户重试同一份载荷是有意义的。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "alert_silence", "alerts", req.Kind)
@@ -174,7 +193,8 @@ func (s *Server) handleAlertSilence(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAlertUnsilence(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -190,7 +210,11 @@ func (s *Server) handleAlertUnsilence(w http.ResponseWriter, r *http.Request) {
 		tid = req.TenantID
 	}
 	if err := s.Store.UnsilenceAlert(tid, req.Kind); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500（存储写入故障）。
+		//   为什么不是 404：解除静音是一条 DELETE，「本来就没有静音记录」表现为影响 0 行且**不报错**
+		//   （store.UnsilenceAlert 只在 DB 出错时回 err），所以这里的 err 只可能是数据库故障；
+		//   「没有可解除的静音」按幂等成功处理（结果状态已达成），不该伪装成失败，也不该报 404。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "alert_unsilence", "alerts", req.Kind)
@@ -201,7 +225,8 @@ func (s *Server) handleAlertUnsilence(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAlertResolve(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -212,7 +237,12 @@ func (s *Server) handleAlertResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.ResolveAlert(req.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500（存储写入故障）。
+		//   结案确实是状态机操作（open→resolved，重复结案属 409、告警不存在属 404），
+		//   但 store.ResolveAlert 是「按 id 无条件 UPDATE」：影响 0 行（id 不存在/已 resolved）时**不回 err**，
+		//   所以走到这里的 err 只剩数据库故障一种事实。要在这一支落 404/409，需要 store 侧补
+		//   RowsAffected→sql.ErrNoRows 或提供按 id 读取告警的方法（本批不得动 store，已列为挂账项）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "alert_resolve", "alerts", strconv.FormatInt(req.ID, 10))

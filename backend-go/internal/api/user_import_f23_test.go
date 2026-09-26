@@ -18,8 +18,12 @@
 //	   （旧 last-wins 实现在此必红：username 被劫持到 F 列 → 无有效数据行）；
 //	C) CSV 行数等值 + 角色归一 + 邮箱小写：CSV 与 xlsx 两路对同一份数据建模结果全等；
 //	D) 回执两版文案 + mailLive 三态（无队列无 SMTP=假 / MAIL_ENABLED+HOST+USER 齐=真）；
+//	   ★ 批 I-6（F-54②）改档：寄出版文案由「已通过邮件通知」收紧为「已提交发送，稍后送达」，
+//	     并加负向锁——入队≠送达，不得替系统许诺投递结果；
 //	E) handler 全链：multipart 上传 xlsx 两行（一行带邮箱一行不带），离线态（Noop 通道）
 //	   两行回执都必须落「线下转告」版，created=2（旧实现在此会虚假承诺「已邮件通知」）。
+//	   ★ 批 I-6：带邮箱那行改用可投递形态的示例域 acme-corp.com——imp1@example.com 现在会被
+//	     F-54① 的保留域闸拒收（那是另一条锁 F54-B 的射程，别混在本锁里）。
 //
 // 方言：自钉 SQLite 内存库并显式钉死 config.C（AGENTS.md §一·4）。
 // 运行：env DB_DRIVER=sqlite go test -count=1 ./internal/api/ -run TestUATBatchF
@@ -88,12 +92,16 @@ func TestUATBatchF_ImportTemplateRoundTrip(t *testing.T) {
 		t.Fatalf("模板示例行应恰好 1 行，实得 %d（%+v）", len(rows), rows)
 	}
 	got := rows[0]
+	// ★ F-54（批 I-6）同步改档：模板示例行不再是「照抄也能建号」的真投递形态——
+	//   用户名/姓名写成明显占位，邮箱落 RFC 2606 保留域 example.invalid（永不投递），
+	//   部门留空（不再预设「销售部」这种本租户多半不存在的组织名）。
+	//   解析器仍必须能把这一行读回来（读侧不变），拒收发生在 handler 的邮箱闸（见锁 F54-B）。
 	want := importUserRow{
-		Username:    "zhangsan",
-		DisplayName: "张三",
-		OrgName:     "销售部",
+		Username:    "示例行请替换",
+		DisplayName: "示例姓名请替换",
+		OrgName:     "",
 		Role:        store.RoleUser,
-		Email:       "zhangsan@example.com",
+		Email:       "sample@example.invalid",
 	}
 	if got != want {
 		t.Fatalf("模板示例行逐字段等值锁失败：\n实际 %+v\n期望 %+v", got, want)
@@ -190,11 +198,19 @@ func TestUATBatchF_CSVImportPath(t *testing.T) {
 
 // TestUATBatchF_ImportReceiptHonesty 锁 D（回执两版 + mailLive 三态）。
 func TestUATBatchF_ImportReceiptHonesty(t *testing.T) {
-	if m := importSuccessMessage(true); m != "导入成功（初始密码已通过邮件通知）" {
-		t.Fatalf("已寄出版文案等值锁失败: %q", m)
+	// ★ F-54（批 I-6）：寄出版的口径从「已通过邮件通知」（完成时）收到「已提交发送，稍后送达」
+	// （受理时）——enqueueMail 入队即 return nil，真正投递要等 worker 且可能永久滞留，
+	// 说「已通知」就是替系统许下系统自己不知道的果（同「发码 success ≠ 投递」那条纪律）。
+	// 负向半边：文案里不得再出现完成时的「已通过邮件通知」。
+	sent := importSuccessMessage(true)
+	if sent != "导入成功（开通邮件已提交发送，稍后送达；若长时间未收到，请把初始密码线下转告本人并提醒首登改密）" {
+		t.Fatalf("已受理版文案等值锁失败: %q", sent)
+	}
+	if strings.Contains(sent, "已通过邮件通知") {
+		t.Fatalf("回执不得把「已入队」说成「已送达」（F-54② 复发）: %q", sent)
 	}
 	m := importSuccessMessage(false)
-	if m == importSuccessMessage(true) || !strings.Contains(m, "线下转告") {
+	if m == sent || !strings.Contains(m, "线下转告") {
 		t.Fatalf("未寄出版必须走线下转告文案（杜绝虚假承诺）: %q", m)
 	}
 	// mailLive：离线态（无队列 + MAIL_ENABLED 未开）判假——Noop 的 nil 不算送达
@@ -291,7 +307,7 @@ func TestUATBatchF_BulkImportHandlerOfflineReceipt(t *testing.T) {
 	xlsxPath := filepath.Join(t.TempDir(), "bulk.xlsx")
 	writeImportXlsxFromRows(t, xlsxPath, [][]string{
 		{"用户名称", "姓名", "部门", "角色", "邮箱"},
-		{"imp1", "导入一", "", "普通用户", "imp1@example.com"},
+		{"imp1", "导入一", "", "普通用户", "imp1@acme-corp.com"},
 		{"imp2", "导入二", "", "", ""},
 	})
 	rec := callUserBulkImportXlsx(t, s, tok, xlsxPath)

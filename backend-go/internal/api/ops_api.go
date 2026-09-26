@@ -189,7 +189,8 @@ func (s *Server) effPayMode(tid int64) string {
 func (s *Server) handleOpsPolicy(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 一次返回四层视图：平台/租户策略原文、基础有效、最终有效 + 各促销窗口激活标记（面板回显用）
@@ -228,7 +229,8 @@ func (s *Server) handleOpsPolicy(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOpsPolicySave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -264,7 +266,8 @@ func (s *Server) handleOpsPolicySave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOpsWindowSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -316,7 +319,8 @@ func (s *Server) handleOpsWindowSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePackageReset(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	tid := s.effTenant(r, u)

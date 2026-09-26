@@ -24,6 +24,7 @@ import (
 
 	"translator/internal/auth"
 	"translator/internal/billing"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -63,9 +64,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if ok, wait := s.regGuard.allow(ip, dailyLimit, minInterval); !ok {
-		w.Header().Set("Retry-After", strconv.Itoa(wait))
-		writeJSON(w, 429, map[string]interface{}{"success": false,
-			"message": fmt.Sprintf("注册过于频繁，请 %d 秒后再试", wait)})
+		// ★ F-47（批 I-7）：改走统一错误出口＝429 + code RATE_LIMITED + Retry-After 头 + retry_after 字段。
+		// 文案保留「请 N 秒后再试」原样（i18n patternsEN 已有该变体，仍可翻）；秒数同时进字段，
+		// 这样前端不必从中文里抠数字就能做倒计时（旧写法只有中文文案里夹一个数，非中文语种无法复用）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, fmt.Sprintf("注册过于频繁，请 %d 秒后再试", wait)).WithRetryAfter(wait))
 		return
 	}
 	// 专属域名自助注册：从访问 Host 解析目标租户（仅品牌子域、非主站、非默认平台租户）。
@@ -151,8 +153,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 邮箱全局唯一（他人已绑定则拒绝）
+	// ★ F-64② 收尾定夺（2026-09-26 批 I-10）：原回 400，与换绑邮箱那两处
+	//   （handleSendEmailCode / handleUpdateEmail 回 409 CONFLICT）**同一句文案两个码**——
+	//   前端/SDK 按 code 分支时，同一种失败要写两条判断，且日志聚合会把它们当成两类问题。
+	//   语义上这是「与库里既有记录撞车」而不是「请求写错了」（载荷完全合法，换个邮箱就好），
+	//   故统一成 409。状态码从 400 换 409 不改变前端行为：两个码都是非 2xx，
+	//   request() 一律抛 ApiError 并把 body.message 落到红字（Login.tsx 的 catch 分支）。
 	if other, oerr := s.Store.GetUserByEmail(strings.TrimSpace(req.Email)); oerr == nil && other != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该邮箱已被其他账号绑定"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该邮箱已被其他账号绑定"))
 		return
 	}
 	// 邮箱验证开关（email_verify_enabled=1）：自助注册必须先验证邮箱归属（受邀加入不受影响）
@@ -172,7 +180,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	// 人机验证（captcha_provider=turnstile 时校验；自助注册与受邀加入均拦截）
 	if err := s.verifyCaptcha(r, req.Captcha); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// ★ 注册类型（个人用户 / 企业用户）：
@@ -547,7 +556,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -561,7 +571,11 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 	//   发放无意义且留雷（历史实现给租户 0 建 trial 台账，永不被消费也永不告警）。
 	//   注册流程的租户都已在建租户环节拿到真实 ID，此处仅防御异常入参。
 	if req.TenantID <= 0 {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "无效的发放对象（平台上下文不参与体验额度）"})
+		// F-64②：tid<=0 是「发放对象选错了」——上面 559 行已经按 JSON 解析失败/负数回过 400，
+		// 这一条是业务规则层的同因拒绝（平台上下文桶在 gateUsage 全量豁免计费，发进去也永不消费），
+		// 载荷本身不合法 → 400 VALIDATION_ERROR。不取 403：调用方已是超管（requireAdminUser 过了），
+		// 权限没问题，是他传的对象不对；也不取 409：这里没有「与既有记录状态冲突」的语义。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "无效的发放对象（平台上下文不参与体验额度）"))
 		return
 	}
 	t, err := s.Ten.GetByID(req.TenantID)
@@ -707,12 +721,17 @@ func (s *Server) wasInviteBind(invite string) bool {
 func (s *Server) handleInviteCodes(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	codes, err := s.Store.ListInviteCodes()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：邀请码列表读失败＝存储层故障 → 500。旧 200 壳会让「邀请码」面板
+		// 渲染成空列表（`if (r.success)` 不成立时连错误提示都不弹），像「一个码都没有」。
+		// 这里也不取 401：权限判定在上一行 requireTenantAdmin 已经做完（不过就是 403），
+		// 走到这一步的管理员是实打实的登录态，401 会让前端 core.ts 清 token 把他踢回登录页。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 企业用户（非超管）仅可管理本企业邀请码：按当前生效租户过滤
@@ -734,7 +753,8 @@ func (s *Server) handleInviteCodes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleInviteCodeCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -752,7 +772,20 @@ func (s *Server) handleInviteCodeCreate(w http.ResponseWriter, r *http.Request) 
 	}
 	c, err := s.Store.CreateInviteCode(strings.TrimSpace(req.Code), tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + err.Error()})
+		// F-64②：取码分两种，别一刀切——
+		//   ① invite_codes.code 列带 UNIQUE 约束（store.go 建表语句），管理员重复录入同一个码
+		//      才是这里的常态失败 → 409 CONFLICT（与既有记录状态冲突，前端可据此直接
+		//      把光标弹回码输入框，而不是当成「系统坏了」放弃）；
+		//   ② 非撞约束的失败（连接断、权限表写不进）＝真故障 → 500，不能伪装成业务冲突。
+		// ★ 两种都不取 401：requireTenantAdmin 已在函数入口判过权限，此刻人是登录态，
+		//   前端 core.ts 的 401 拦截（豁免名单只有 /api/auth/login 与 /api/auth/register）
+		//   会清掉 token 把管理员从后台踢回登录页。
+		// 文案照旧搬 err.Error()（本批不改文案，见配方边界 5；脱敏另案处理）。
+		errCode := apierrors.ErrInternal
+		if store.IsUniqueViolation(err) {
+			errCode = apierrors.ErrConflict
+		}
+		s.writeError(w, r, apierrors.New(errCode, "创建失败: "+err.Error()))
 		return
 	}
 	// 创建审计

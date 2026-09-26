@@ -14,7 +14,10 @@
  * - 商业包管理：套餐列表、订阅、创建、更新、删除
  */
 
-import { request, authHeaders, API_BASE, handleUnauthorized, apiMsg, type AdminResp } from './core'
+// ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
+//   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
+//   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
+import { request, bizResp, authHeaders, API_BASE, handleUnauthorized, apiMsg, type AdminResp } from './core'
 
 /** 查询当前租户余额 */
 
@@ -86,43 +89,58 @@ export async function billingInvoices(): Promise<AdminResp> {
 /** 创建发票（关联已支付订单） */
 /** 提交开票申请（订单维度） */
 export async function billingInvoiceCreate(data: { order_id: number; title: string; tax_no: string }): Promise<AdminResp> {
-  return request('/api/billing/invoices/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/billing/invoices/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 发票冲红/作废（C16：租户管理员及以上，作废后同单可重开） */
 export async function billingInvoiceVoid(id: number): Promise<AdminResp> {
-  return request('/api/billing/invoices/void', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/billing/invoices/void', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /** 订单退款（★ 2026-09-16 补口：后端 /api/admin/orders/refund 一直健在，前端此前零封装）
  *  仅超管可调；tenant_id 省略时后端按当前生效租户（X-Tenant-ID）核销。 */
 export async function adminOrderRefund(data: { id: number; tenant_id?: number; reason?: string }): Promise<AdminResp> {
-  return request('/api/admin/orders/refund', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/orders/refund', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 // ==================== 在线支付 ====================
+//
+// ★ F-64①（批 I-7，2026-09-26）状态码诚实改造的前端配套：
+//   后端充值/订阅/券域过去用「HTTP 200 承载失败」，客户与 SDK 按状态码分支时全部判成成功，
+//   现已改为 400/404/409/500/503（缺陷 F-47/F-64 的第①档）。这些接口在本层一律用 bizResp 包一层，
+//   把后端结构化失败体还原成历史响应形态（含 details 里随错误附带的 order_no / order 等字段），
+//   于是全站 `if (!r.success)` / `toastResp(r)` 的既有调用点零改动即恢复原语义。
+//   为什么不在 request() 里全局收敛：401 要走全局清登录态、403 本批未翻状态码、
+//   网络层失败更不能伪装成业务失败——三条都保持抛出，详见 core.ts 的 bizResp 注释。
+//
+// ★ 收敛范围口径（别一刀切全包）：**动作类（POST：下单/订阅/升级/核销/退款/开票/作废/券 CRUD）
+//   走 bizResp**，因为它们的调用点要按 success 分支改界面态（弹收款台、清券码、刷列表）；
+//   **列表与统计读取（GET：订单列表、发票列表、待核对单、用量三口径、自助账单五表）保持抛出**，
+//   由调用点的 runGuarded / try-catch 把后端原文弹出来——那些消费点只有「成功就填表，失败就提示」
+//   一条路，收敛成 success:false 反而会让只剩 if (r.success) 的调用点把失败咽成静默
+//   （#42 批专门消灭过的形态）。例外：payStatus 虽属 GET，但轮询要按 404 判终态停轮，一并收敛。
 
 /** 发起在线支付下单：为当前租户创建充值订单并返回收款二维码（points=充值积分数；usdt 渠道可带 usdt_chain；coupon=券码，选填） */
 export async function payCreate(data: { points: number; channel: string; usdt_chain?: string; coupon?: string }): Promise<AdminResp> {
-  return request('/api/pay/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/pay/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 查询订单支付状态（收银台轮询） */
 /** 轮询订单支付状态 */
 export async function payStatus(orderId: number): Promise<AdminResp> {
-  return request(`/api/pay/status?order_id=${orderId}`, { headers: authHeaders() })
+  return bizResp(() => request(`/api/pay/status?order_id=${orderId}`, { headers: authHeaders() }))
 }
 
 /** 模拟支付到账（仅 mock 模式测试用） */
 /** 模拟支付（pay_mode=mock 联调用） */
 export async function paySimulate(orderId: number): Promise<AdminResp> {
-  return request('/api/pay/simulate', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ order_id: orderId }) })
+  return bizResp(() => request('/api/pay/simulate', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ order_id: orderId }) }))
 }
 
 /** 静态码支付「我已付费」（人工确认，通知超管审核开通） */
 /** 用户声明「我已付款」→ 生成人工核对单（usdt 渠道携带链上交易哈希线索） */
 export async function payManualConfirm(orderId: number, txHash = ''): Promise<AdminResp> {
-  return request('/api/pay/manual-confirm', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ order_id: orderId, tx_hash: txHash }) })
+  return bizResp(() => request('/api/pay/manual-confirm', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ order_id: orderId, tx_hash: txHash }) }))
 }
 
 /** 待人工确认订单列表（超管审核开通） */
@@ -146,13 +164,13 @@ export async function myPackage(): Promise<AdminResp> {
 
 /** 订阅/兑换商业包（创建待支付订单或直接发放免费包）；coupon=券码（选填，#41 与充值单同口径：折钱不折量） */
 export async function packageSubscribe(code: string, coupon = ''): Promise<AdminResp> {
-  return request('/api/package/subscribe', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ code, coupon }) })
+  return bizResp(() => request('/api/package/subscribe', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ code, coupon }) }))
 }
 
 /** 套餐升级（付费包→更高价付费包）：旧包剩余价值按比例抵扣新包应付，新包即时生效 */
 /** 升级套餐（按剩余天数折算补差） */
 export async function packageUpgrade(code: string): Promise<AdminResp> {
-  return request('/api/package/upgrade', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ code }) })
+  return bizResp(() => request('/api/package/upgrade', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ code }) }))
 }
 
 /** 读取自动续费开关（#41）：返回 auto_renew + 当前包编码 */
@@ -162,14 +180,14 @@ export async function autoRenewGet(): Promise<AdminResp> {
 
 /** 设置自动续费（#41）：开启后到期前 3 天自动生成同包续费订单并站内信提醒付款（不代扣） */
 export async function autoRenewSet(enabled: boolean): Promise<AdminResp> {
-  return request('/api/package/auto-renew', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ enabled }) })
+  return bizResp(() => request('/api/package/auto-renew', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ enabled }) }))
 }
 
 // ==================== 商业包管理（super_admin） ====================
 
 /** 列出全部商业包（含下架） */
 export async function adminPackages(): Promise<AdminResp> {
-  return request('/api/admin/packages', { headers: authHeaders() })
+  return bizResp(() => request('/api/admin/packages', { headers: authHeaders() }))
 }
 
 /** 创建商业包（包码/名称/类型/句数/价格/有效期等） */
@@ -177,7 +195,7 @@ export async function adminPackages(): Promise<AdminResp> {
 export async function adminPackageCreate(data: {
   code: string; name: string; ptype: string; sentences: number; price_money?: number; duration_days?: number; sort_order?: number
 }): Promise<AdminResp> {
-  return request('/api/admin/packages/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/packages/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 更新商业包（改名/调价/改句数/启停） */
@@ -185,13 +203,13 @@ export async function adminPackageCreate(data: {
 export async function adminPackageUpdate(data: {
   id: number; name?: string; ptype?: string; sentences?: number; price_money?: number; duration_days?: number; enabled?: number; sort_order?: number
 }): Promise<AdminResp> {
-  return request('/api/admin/packages/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/packages/update', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 删除商业包 */
 /** 管理员：删除套餐 */
 export async function adminPackageDelete(id: number): Promise<AdminResp> {
-  return request('/api/admin/packages/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/admin/packages/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /** 读取商业包全局设置（句数强制开关/试用句数/支付模式/静态码等） */

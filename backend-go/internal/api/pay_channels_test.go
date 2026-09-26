@@ -214,11 +214,13 @@ func TestAdminPayChannelsSaveKeepsMaskedSecret(t *testing.T) {
 	}}); rec.Code != 400 {
 		t.Fatalf("非法开关值未被拒绝: %d %s", rec.Code, rec.Body.String())
 	}
-	// 未登录/非超管一律 403
+	// 鉴权两支必须分流：匿名＝401（前端/管理台只在 401 触发重登录），越权＝403。
+	// ★ 〇-U 批 I-10 收尾订正：这里原先钉 403，跟着旧实现一起把「你是谁」误判成「你没权限」——
+	//   测试与实现同时错，所以它一直绿；实现改对后它才红，正是这条红在替我们守口径。
 	recAnon := httptest.NewRecorder()
 	srv.payCfgMux().ServeHTTP(recAnon, httptest.NewRequest(http.MethodGet, "/api/admin/pay/channels", nil))
-	if recAnon.Code != 403 {
-		t.Fatalf("匿名读取未被拒绝: %d", recAnon.Code)
+	if recAnon.Code != 401 {
+		t.Fatalf("匿名读取应 401（不是 403：403 会让管理台跳过重登录链路）: %d", recAnon.Code)
 	}
 }
 

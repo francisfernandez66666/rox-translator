@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	apierrors "translator/internal/errors"
 	"translator/internal/mail"
 )
 
@@ -175,15 +176,15 @@ func (s *Server) handleEmailCode(w http.ResponseWriter, r *http.Request) {
 	}
 	// 人机验证：防脚本刷短信/邮件接口
 	if err := s.verifyCaptcha(r, req.CaptchaToken); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 单 IP 每日发码上限（复用注册护栏的窗口逻辑，独立计数键）
 	ip := clientIP(r)
 	if ok, wait := s.regGuard.allow("email-code:"+ip, emailSendIPDailyNm, 0); !ok {
-		w.Header().Set("Retry-After", itoaInt(wait))
-		writeJSON(w, 429, map[string]interface{}{"success": false,
-			"message": fmt.Sprintf("发送过于频繁，请稍后再试")})
+		// ★ F-47（批 I-7）：统一出口口径（429 + RATE_LIMITED + Retry-After + retry_after）
+		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "发送过于频繁，请稍后再试").WithRetryAfter(wait))
 		return
 	}
 	ok, msg, noop := s.sendEmailCode(ip, email, requestMailLang(r, req.AppLang))
@@ -239,9 +240,6 @@ func (s *Server) handleRegisterConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// itoaInt int 转字符串（本文件内使用的简短别名）。
-func itoaInt(n int) string { return fmt.Sprintf("%d", n) }
-
 // handleMeEmailCode 登录用户向「新邮箱」发送变更验证码（修改邮箱专用，需登录）。
 // 与注册发码共用存储/冷却/有效期；不做人机验证（已登录态），但受 60s 冷却与日上限约束。
 func (s *Server) handleMeEmailCode(w http.ResponseWriter, r *http.Request) {
@@ -268,7 +266,12 @@ func (s *Server) handleMeEmailCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if other, err := s.Store.GetUserByEmail(email); err == nil && other != nil && other.ID != u.ID {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "该邮箱已被其他账号绑定"})
+		// F-64②：目标邮箱已被别的账号持有＝与既有记录的状态冲突 → 409 CONFLICT
+		//（与 handleUpdateEmail 同一条判据同码，两步链路「先查占用再发码」口径必须一致）。
+		// ★ 严禁 401：本接口需登录，用户此刻会话是好的，取 401 会让前端 core.ts 的
+		//   handleUnauthorized 清 token 并踢回登录页——他刚点的「发送验证码」按钮连带作废，
+		//   而且 /api/me/email-code 不在 401 豁免名单里（只有 login/register 豁免）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该邮箱已被其他账号绑定"))
 		return
 	}
 	// ★ F-17（批E）换绑验证码语种：X-App-Lang 头优先（authHeaders 自动附带），头缺失回落账号存量 preferred_lang

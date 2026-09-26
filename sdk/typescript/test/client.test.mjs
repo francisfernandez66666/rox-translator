@@ -24,8 +24,12 @@ function installFetch() {
         return {
           ok: (r.status || 200) >= 200 && (r.status || 200) < 300,
           status: r.status || 200,
+          // headers 替身：真 fetch 的 Headers 只有 get()，mock 保持同一形状，
+          // 这样 SDK 里「JSON 字段优先、Retry-After 头兜底」那条腿才测得到（不给 headers
+          // 就等于把这条分支永久短路）。
+          headers: { get: (k) => (r.headers ? (r.headers[k] ?? r.headers[k.toLowerCase()]) : null) },
           text: async () => (typeof r.body === 'string' ? r.body : JSON.stringify(r.body ?? {})),
-          arrayBuffer: async () => new TextEncoder().encode(r.body ?? '').buffer,
+          arrayBuffer: async () => new TextEncoder().encode(typeof r.body === 'string' ? r.body : JSON.stringify(r.body ?? '')).buffer,
         };
       }
     }
@@ -79,6 +83,8 @@ test('createTask HTTP 错误：TranslatorError 携带 status 与 error_code', as
 });
 
 test('createTask 业务错误（200+无 task_id）：以 error_code 抛出', async () => {
+  // ★ F-64① 后这条是「2xx 空壳」兜底通道（中间层把失败改写成 200、或打老服务端）：
+  // 正常失败已是 403，见下一条。判据不变——不许默默返回一个没有 task_id 的对象。
   resetFetch();
   responders = [{ match: () => true, status: 200, body: { success: false, error_code: 'forbidden', message: '无权限' } }];
   const cli = new TranslatorClient('https://api.example.com', 'rk_k');
@@ -86,6 +92,96 @@ test('createTask 业务错误（200+无 task_id）：以 error_code 抛出', asy
     () => cli.createTask('x'),
     (e) => e instanceof TranslatorError && e.error_code === 'forbidden',
   );
+});
+
+test('F-64①：403 带 code+error_code 双键且同值', async () => {
+  resetFetch();
+  responders = [{
+    match: () => true, status: 403,
+    body: { success: false, code: 'forbidden', error_code: 'forbidden', message: 'API Key 无翻译权限' },
+  }];
+  const cli = new TranslatorClient('https://api.example.com', 'rk_k');
+  await assert.rejects(
+    () => cli.createTask('x'),
+    (e) => e instanceof TranslatorError && e.status === 403
+      && e.code === 'forbidden' && e.error_code === 'forbidden'
+      && e.message === 'API Key 无翻译权限',
+  );
+});
+
+test('F-64①：老服务端只发 error_code 时 code 仍取到（混跑窗口不许没码）', async () => {
+  resetFetch();
+  responders = [{
+    match: () => true, status: 402,
+    body: { success: false, error_code: 'insufficient_balance', message: '余额不足' },
+  }];
+  const cli = new TranslatorClient('https://api.example.com', 'rk_k');
+  await assert.rejects(
+    () => cli.createTask('x'),
+    (e) => e instanceof TranslatorError && e.code === 'insufficient_balance'
+      && e.error_code === 'insufficient_balance',
+  );
+});
+
+test('F-47/F-64①：429 的 retry_after 字段与 Retry-After 头都能取到', async () => {
+  resetFetch();
+  responders = [{
+    match: (u) => u.includes('/tasks/status'), status: 429,
+    body: { success: false, code: 'rate_limited', error_code: 'rate_limited', message: '请求过于频繁', retry_after: 30 },
+  }];
+  const cli = new TranslatorClient('https://api.example.com', 'rk_k');
+  await assert.rejects(() => cli.getTask(1),
+    (e) => e instanceof TranslatorError && e.retryAfter === 30);
+
+  resetFetch();
+  responders = [{
+    match: (u) => u.includes('/tasks/status'), status: 429,
+    body: { message: 'too many requests' },           // JSON 字段被中间层吃掉
+    headers: { 'Retry-After': '45' },                 // 头还在
+  }];
+  const cli2 = new TranslatorClient('https://api.example.com', 'rk_k');
+  await assert.rejects(() => cli2.getTask(1),
+    (e) => e instanceof TranslatorError && e.retryAfter === 45);
+
+  resetFetch();
+  responders = [{
+    match: (u) => u.includes('/tasks/status'), status: 400,
+    body: { success: false, code: 'bad_request', message: '缺少任务 id' },
+  }];
+  const cli3 = new TranslatorClient('https://api.example.com', 'rk_k');
+  await assert.rejects(() => cli3.getTask(1),
+    (e) => e instanceof TranslatorError && e.retryAfter === undefined); // 非限流不许造时长
+});
+
+test('F-64①：downloadFile 失败必须带出 message/code（旧写法只剩一行 HTTP 状态）', async () => {
+  resetFetch();
+  responders = [{
+    match: (u) => u.includes('/tasks/download'), status: 409,
+    body: { success: false, code: 'not_ready', error_code: 'not_ready', message: '译文尚未就绪' },
+  }];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkdl-'));
+  const out = path.join(dir, 'out.zip');
+  const cli = new TranslatorClient('https://api.example.com', 'rk_k');
+  await assert.rejects(() => cli.downloadFile(1, out),
+    (e) => e instanceof TranslatorError && e.status === 409
+      && e.code === 'not_ready' && e.message === '译文尚未就绪');
+  assert.ok(!fs.existsSync(out), '失败时不许落盘（否则得到内容为 JSON 的假产物）');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('F-64①：downloadFile 在 2xx 上拿到 JSON 错误体也不落盘（老后端混跑）', async () => {
+  resetFetch();
+  responders = [{
+    match: (u) => u.includes('/tasks/download'), status: 200,
+    body: { success: false, error_code: 'no_result', message: '无可下载产物' },
+  }];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkdl2-'));
+  const out = path.join(dir, 'out.zip');
+  const cli = new TranslatorClient('https://api.example.com', 'rk_k');
+  await assert.rejects(() => cli.downloadFile(1, out),
+    (e) => e instanceof TranslatorError && e.error_code === 'no_result');
+  assert.ok(!fs.existsSync(out));
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('网络异常：包装为「连接失败」TranslatorError', async () => {

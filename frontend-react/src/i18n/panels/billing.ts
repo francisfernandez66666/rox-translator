@@ -154,6 +154,12 @@ export const zh: Record<string, string> = {
   'billing.colTenant': '租户',
   'billing.noManualOrders': '暂无待人工确认订单',
   'billing.manualConfirmed': '已确认到账，句数/积分已发放',
+  // ★ F-67（2026-09-26 〇-U 批 I-8）：人工声明单的「中间态 / 事后态」回显。
+  //   MarkOrderPaid 把 manual_confirm 与 status 一起改写（确认即归零），所以 pending 期看
+  //   manual_confirm、paid 之后只能看渠道——manual/usdt 两条渠道没有第三方回调能自己置 paid，
+  //   落到 paid 必然是平台侧核过账，故用「平台已确认」而不是「人工已确认」（usdt 有自动核账）。
+  'billing.awaitPlatformConfirm': '待平台确认',
+  'billing.platformConfirmed': '平台已确认',
   'billing.iPaidFailed': '确认失败，请稍后重试',
   'billing.payOrderGone': '订单已关闭或已退款，已停止查询',
   'billing.subscribeFailed': '订阅失败',
@@ -320,6 +326,9 @@ export const en: Record<string, string> = {
   'billing.colTenant': 'Tenant',
   'billing.noManualOrders': 'No orders awaiting confirmation',
   'billing.manualConfirmed': 'Payment confirmed, sentences/credits granted',
+  // ★ F-67：与 zh 段同批补键（12 语种全量词典口径，locales 十份随批补译）
+  'billing.awaitPlatformConfirm': 'Awaiting platform confirmation',
+  'billing.platformConfirmed': 'Confirmed by platform',
   'billing.iPaidFailed': 'Confirmation failed, please retry later',
   'billing.payOrderGone': 'Order closed or refunded; polling stopped',
   'billing.subscribeFailed': 'Subscription failed',

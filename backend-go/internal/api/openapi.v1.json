@@ -6,9 +6,21 @@
     "description": "翻译助手（langcross）开放 API v1 规范（与 Python SDK 契约一致）。鉴权：X-API-Key 头（开放 API 专用 Key）。所有计量按积分计费，受租户余额与每日配额约束。"
   },
   "servers": [
-    { "url": "https://{host}/openapi/v1", "variables": { "host": { "default": "translator.example.com", "description": "部署域名（Caddy 已配置 TLS）" } } }
+    {
+      "url": "https://{host}/openapi/v1",
+      "variables": {
+        "host": {
+          "default": "translator.example.com",
+          "description": "部署域名（Caddy 已配置 TLS）"
+        }
+      }
+    }
   ],
-  "security": [ { "ApiKeyAuth": [] } ],
+  "security": [
+    {
+      "ApiKeyAuth": []
+    }
+  ],
   "paths": {
     "/tasks": {
       "post": {
@@ -17,14 +29,89 @@
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/CreateTextTask" } },
-            "multipart/form-data": { "schema": { "$ref": "#/components/schemas/CreateFileTask" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTextTask"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFileTask"
+              }
+            }
           }
         },
         "responses": {
-          "200": { "description": "已创建（成功响应不含 success 字段，以 task_id 为准）", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskCreated" } } } },
-          "402": { "description": "余额不足（error_code: insufficient_balance）" },
-          "429": { "description": "超过并发/每日配额（error_code: rate_limited / daily_quota_exceeded）" }
+          "200": {
+            "description": "已创建（成功响应不含 success 字段，以 task_id 为准）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskCreated"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "余额不足（error_code: insufficient_balance）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "超过并发/每日配额（error_code: rate_limited / daily_quota_exceeded / key_quota_exceeded）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数不合法（error_code: bad_request，如 text 为空、文件格式不支持、超出单次文件数上限）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API Key 无效或缺失（error_code: invalid_api_key）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API Key 无该权限，或被业务闸门泛化拒绝（error_code: forbidden / rejected）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务端处理失败（error_code: internal；携 trace_id，报障时给出该串即可定位日志）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -32,8 +119,68 @@
       "get": {
         "summary": "查询任务状态与进度",
         "operationId": "getTaskStatus",
-        "parameters": [ { "name": "id", "in": "query", "required": true, "schema": { "type": "integer" } } ],
-        "responses": { "200": { "description": "status ∈ queued/processing/completed/failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskStatus" } } } } }
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "status ∈ queued/processing/completed/failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "缺少任务 id（error_code: bad_request）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API Key 无效或缺失（error_code: invalid_api_key）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "任务不存在，或不属于本 Key 的租户/用户（error_code: not_found；租户隔离口径，不区分「无权限」以防探测）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "该 API Key 今日调用次数已达上限（error_code: key_quota_exceeded）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/tasks/download": {
@@ -41,97 +188,662 @@
         "summary": "下载产物（file_id 可选，缺省 zip 全部）",
         "operationId": "downloadTask",
         "parameters": [
-          { "name": "id", "in": "query", "required": true, "schema": { "type": "integer" } },
-          { "name": "file_id", "in": "query", "schema": { "type": "integer" } }
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
-        "responses": { "200": { "description": "文件流（attachment）", "content": { "application/octet-stream": {} } } }
+        "responses": {
+          "200": {
+            "description": "文件流（attachment）",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "400": {
+            "description": "缺少任务 id 或 file_id 非法（error_code: bad_request）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API Key 无效或缺失（error_code: invalid_api_key）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API Key 无翻译权限（error_code: forbidden）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "任务或产物不存在（error_code: not_found / no_result）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "任务尚未到 completed，或状态已完成但产物为空——请求时机与资源状态冲突（error_code: not_ready；等一会再试不一定成功，必须先轮询到 completed）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "该 API Key 今日调用次数已达上限（error_code: key_quota_exceeded）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/translate": {
-      "post": { "summary": "同步短文翻译（≤2000 字符，划译插件/编辑器侧边栏；异步长文用 /tasks）", "operationId": "translateSync",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": {
-          "type": "object", "required": ["text"],
-          "properties": { "text": { "type": "string" }, "target_langs": { "type": "array", "items": { "type": "string" } }, "mode": { "type": "string", "enum": ["fast", "pro"] } }
-        } } } },
-        "responses": { "200": { "content": { "application/json": { "schema": { "type": "object" } } } } } }
+      "post": {
+        "summary": "同步短文翻译（≤2000 字符，划译插件/编辑器侧边栏；异步长文用 /tasks）",
+        "operationId": "translateSync",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "text"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "target_langs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "fast",
+                      "pro"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "text 为空或超长（error_code: bad_request / text_too_long；超长请改走 /tasks 异步任务）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API Key 无效或缺失（error_code: invalid_api_key）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API Key 无翻译权限，或被业务闸门拒绝（error_code: forbidden / rejected）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "翻译执行失败（error_code: task_failed；载荷没错，是这一次处理失败了）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "超过并发/每日配额（error_code: rate_limited / daily_quota_exceeded / key_quota_exceeded）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "/balance": {
-      "get": { "summary": "租户积分余额", "operationId": "getBalance", "responses": { "200": { "content": { "application/json": { "schema": { "type": "object", "properties": { "balance_points": { "type": "integer" }, "balance_sentences_approx": { "type": "integer" } } } } } } } }
+      "get": {
+        "summary": "租户积分余额",
+        "operationId": "getBalance",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "balance_points": {
+                      "type": "integer"
+                    },
+                    "balance_sentences_approx": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API Key 无效或缺失（error_code: invalid_api_key）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "该 API Key 今日调用次数已达上限（error_code: key_quota_exceeded）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "/billing/usage": {
-      "get": { "summary": "用量明细", "operationId": "getUsage", "parameters": [ { "name": "days", "in": "query", "schema": { "type": "integer", "default": 7 } } ], "responses": { "200": { "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "type": "object" } } } } } } } } }
+      "get": {
+        "summary": "用量明细",
+        "operationId": "getUsage",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 7
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API Key 无效或缺失（error_code: invalid_api_key）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API Key 无计费权限（error_code: forbidden）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "该 API Key 今日调用次数已达上限（error_code: key_quota_exceeded）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "/kb/stats": {
-      "get": { "summary": "知识库统计", "operationId": "kbStats", "responses": { "200": { "content": { "application/json": { "schema": { "type": "object" } } } } } }
+      "get": {
+        "summary": "知识库统计",
+        "operationId": "kbStats",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API Key 无效或缺失（error_code: invalid_api_key）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API Key 无知识库权限（error_code: forbidden）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "该 API Key 今日调用次数已达上限（error_code: key_quota_exceeded）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "/terms": {
-      "get": { "summary": "术语检索（源/目标双向模糊，精确命中优先；划译插件/编辑器侧边栏）", "operationId": "searchTerms",
+      "get": {
+        "summary": "术语检索（源/目标双向模糊，精确命中优先；划译插件/编辑器侧边栏）",
+        "operationId": "searchTerms",
         "parameters": [
-          { "name": "q", "in": "query", "required": true, "description": "检索词（≤100 字符）", "schema": { "type": "string" } },
-          { "name": "lang", "in": "query", "required": false, "description": "目标语言代码过滤（可选）", "schema": { "type": "string" } },
-          { "name": "limit", "in": "query", "required": false, "description": "返回条数（默认 20，≤50）", "schema": { "type": "integer" } }
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "检索词（≤100 字符）",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lang",
+            "in": "query",
+            "required": false,
+            "description": "目标语言代码过滤（可选）",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "返回条数（默认 20，≤50）",
+            "schema": {
+              "type": "integer"
+            }
+          }
         ],
-        "responses": { "200": { "content": { "application/json": { "schema": { "type": "object" } } } } } }
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "q 为空/超长，或 lang 不在支持列表（error_code: bad_request）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API Key 无效或缺失（error_code: invalid_api_key）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API Key 无术语检索权限（error_code: forbidden）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "该 API Key 今日调用次数已达上限（error_code: key_quota_exceeded）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "术语检索失败（error_code: internal；★ F-64① 起不再冒充 400 参数错——旧形态把服务端读库失败写成 400，客户会反复改 q 重试而真因在库里）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "/apikey/rotate": {
-      "post": { "summary": "轮换 API Key", "operationId": "rotateKey", "responses": { "200": { "content": { "application/json": { "schema": { "type": "object" } } } } } }
+      "post": {
+        "summary": "轮换 API Key",
+        "operationId": "rotateKey",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API Key 无效或缺失（error_code: invalid_api_key）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "该 API Key 今日调用次数已达上限（error_code: key_quota_exceeded）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "轮换写库失败（error_code: internal）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "securitySchemes": {
-      "ApiKeyAuth": { "type": "apiKey", "in": "header", "name": "X-API-Key" }
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      }
     },
     "schemas": {
       "CreateTextTask": {
         "type": "object",
-        "required": ["text"],
+        "required": [
+          "text"
+        ],
         "properties": {
-          "text": { "type": "string" },
-          "target_langs": { "type": "array", "items": { "type": "string" } },
-          "mode": { "type": "string", "enum": ["fast", "pro"] },
-          "title": { "type": "string" }
+          "text": {
+            "type": "string"
+          },
+          "target_langs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "fast",
+              "pro"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
         }
       },
       "CreateFileTask": {
         "type": "object",
         "properties": {
-          "files": { "type": "array", "items": { "type": "string", "format": "binary" } },
-          "target_langs": { "type": "array", "items": { "type": "string" } },
-          "mode": { "type": "string", "enum": ["fast", "pro"] },
-          "title": { "type": "string" }
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            }
+          },
+          "target_langs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "fast",
+              "pro"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
         }
       },
       "TaskCreated": {
         "type": "object",
         "properties": {
-          "task_id": { "type": "integer" },
-          "mode": { "type": "string" },
-          "type": { "type": "string" },
-          "status": { "type": "string" },
-          "file_count": { "type": "integer" }
+          "task_id": {
+            "type": "integer"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "file_count": {
+            "type": "integer"
+          }
         }
       },
       "TaskStatus": {
         "type": "object",
         "properties": {
-          "task_id": { "type": "integer" },
-          "status": { "type": "string", "enum": ["queued", "processing", "completed", "failed"] },
-          "progress": { "type": "number" },
-          "error_code": { "type": "string", "description": "任务失败原因；与统一错误码表一致（insufficient_balance / rate_limited / daily_quota_exceeded / internal / bad_request / task_failed 等）" },
-          "message": { "type": "string" },
-          "files": { "type": "array", "items": { "type": "object", "properties": { "file_id": { "type": "integer" }, "name": { "type": "string" }, "url": { "type": "string" } } } }
+          "task_id": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "processing",
+              "completed",
+              "failed"
+            ]
+          },
+          "progress": {
+            "type": "number"
+          },
+          "error_code": {
+            "type": "string",
+            "description": "任务失败原因；与统一错误码表一致（insufficient_balance / rate_limited / daily_quota_exceeded / internal / bad_request / task_failed 等）"
+          },
+          "message": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_id": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              }
+            }
+          }
         }
       },
       "Error": {
         "type": "object",
-        "description": "统一错误响应体：success 恒为 false，code 为稳定错误码（前端 i18n 与分支依据），message 为用户可读提示",
+        "description": "统一错误响应体：success 恒为 false，code 为稳定错误码（前端 i18n 与分支依据），message 为用户可读提示。★ F-64①（批 I-7 2026-09-26）：状态码与 code 同源（internal/errors 的 openAPIStatusByCode 单点决定），不存在「200 + success:false」这一形态",
         "properties": {
-          "success": { "type": "boolean", "enum": [false] },
-          "code": { "type": "string", "enum": ["invalid_api_key", "key_quota_exceeded", "forbidden", "not_found", "bad_request", "text_too_long", "internal", "no_result", "task_failed", "insufficient_balance", "rate_limited", "daily_quota_exceeded", "rejected"] },
-          "error_code": { "type": "string", "description": "兼容 < 1.0.4 SDK 的别名字段（与 code 同值）" },
-          "message": { "type": "string" },
-          "details": { "type": "object" },
-          "trace_id": { "type": "string", "description": "链路追踪 ID，工单排查用" }
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "invalid_api_key",
+              "key_quota_exceeded",
+              "forbidden",
+              "not_found",
+              "bad_request",
+              "text_too_long",
+              "internal",
+              "no_result",
+              "task_failed",
+              "insufficient_balance",
+              "rate_limited",
+              "daily_quota_exceeded",
+              "rejected",
+              "not_ready"
+            ]
+          },
+          "error_code": {
+            "type": "string",
+            "description": "兼容 < 1.0.4 SDK 的别名字段（与 code 同值）；★ F-64①（批 I-7）明确：code 为正主、error_code 为历史别名，两者由同一处下发，删任一个都会打断在生产的接入方"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object"
+          },
+          "trace_id": {
+            "type": "string",
+            "description": "链路追踪 ID，工单排查用"
+          }
         }
       }
     }

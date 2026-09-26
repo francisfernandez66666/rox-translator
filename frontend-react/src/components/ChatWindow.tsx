@@ -21,14 +21,15 @@
 // 业务逻辑/API 全部保留，仅重写呈现层，文案走词典（无硬编码中文）。
 // 呈现层已迁至 @/ui/langcross/src 纯黑组件库（TDesign 全部移除）。
 // ============================================================================
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import {
   Button, Input, useToast,
   SearchIcon, DownloadIcon, TrashIcon, CloseIcon,
 } from '@/ui/langcross/src'
 import MessageBubble from './MessageBubble'
 import { FeedbackModalFromMessage } from './modals'
-import { useChat } from '@/hooks/useChat'
+import { useChat, PkgRefreshCtx } from '@/hooks/useChat'
+import { isPlatformBillingContext, useAuthStore } from '@/stores/auth' // ★ O-9（批 I-10）：平台上下文不渲染余额条
 import { myPackage, meContext } from '@/api'
 import { estimateTranslation } from '@/api/translate'
 import { fmtPoints } from '@/utils/points'
@@ -37,6 +38,8 @@ import { useT, t, tpl } from '@/i18n'
 import LangMultiSelect, { LangChips } from '@/components/LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
 import { intlLocale, fmtDateTime } from '../lib/format'
+// ★ F-52②（批 I-8）：「文本过长」本地闸（上限由本页 loadBalance 从 /api/me/package 喂养）
+import { setChatMaxChars } from '../lib/chatLimit'
 
 // 数字千分位格式化，并处理 undefined/负数，用于余额与用量展示
 // floor + Math.max(0,…) 是必要的：本函数喂的是「≈句数」这类折算值（balance_sentences_approx、
@@ -109,17 +112,28 @@ export default function ChatWindow() {
     try {
       const r: any = await myPackage()
       if (r && r.success) {
-        if (typeof r.points_balance === 'number') {
+        // ★ O-9（批 I-10）：平台上下文（超管未切入任何租户）不参与计费，后端对 tid<=0 固定回 0。
+        //   余额条与部门预算徽标照此渲染会长期显示「余额 0 积分」——一个不会扣点的身份
+        //   天天被告知没钱。守卫只压这两处**展示**，不做提前 return：
+        //   chat_max_chars（F-52② 本地闸的唯一数据源）与今日用量在平台上下文同样要刷。
+        //   判据与 App 顶栏同源（isPlatformBillingContext），用 getState() 取角色是为了
+        //   不把 user 塞进本回调依赖、引起余额广播链路重建。
+        const platformCtx = isPlatformBillingContext(useAuthStore.getState().user?.role)
+        if (!platformCtx && typeof r.points_balance === 'number') {
           setBalance({ points: r.points_balance, approx: r.balance_sentences_approx ?? 0 })
         }
         if (typeof r.points_used_today === 'number') {
           setUsage({ today: r.points_used_today })
         }
-        if (r.org_budget && r.org_budget.points_limit > 0) {
+        if (!platformCtx && r.org_budget && r.org_budget.points_limit > 0) {
           setOrgBudget({ limit: r.org_budget.points_limit, used: r.org_budget.points_used_this_month, name: r.org_budget.name })
         } else {
           setOrgBudget(null)
         }
+        // ★ F-52②（批 I-8）：顺手喂养「文本过长」本地闸的上限（chat_max_chars 与后端
+        //   stream.go 同一运营策略键、同一函数出参）。字段缺失（老后端/接口降级）时
+        //   setChatMaxChars 收到 undefined ⇒ 清空为「不设闸」，不会误拦。
+        setChatMaxChars(r.chat_max_chars)
       }
     } catch { setBalance(null) }
   }, [])
@@ -130,10 +144,16 @@ export default function ChatWindow() {
     void meContext().catch(() => { /* 会话有效性由请求层兜底 */ })
   }, [loadBalance])
 
-  // 每轮翻译结束（消息数变化）后刷新剩余量
+  // ★ F-48（批 I-5）：余额条刷新触发点从「消息数变化」改成「流终态广播之后」。
+  // 旧判据有两个方向都错的坑：① 关页/清空记录/切换账号会让 messages.length 变小或归零再变大，
+  // 白打一枪 myPackage；② 更要紧的是**同一条气泡的流式回写不改数组长度**，一轮翻译真正扣点的
+  // done 帧反而可能一枪都不打——余额条停在翻译前的值，界面「用完不知道还剩多少」。
+  // 现在由聊天 store 在 done/error 后 debounce 2s 经枢纽广播，顶栏与本条各订阅一份（互不挤掉）。
+  const pkgHub = useContext(PkgRefreshCtx)
   useEffect(() => {
-    if (chat.messages.length) void loadBalance()
-  }, [chat.messages.length, loadBalance])
+    if (!pkgHub) return
+    return pkgHub.subscribe(() => { void loadBalance() })
+  }, [pkgHub, loadBalance])
 
   // ---- 进度/消息变化自动滚底（滚动发生在合并框内部，不再滚动整页）----
   // 依赖只挂 chat.messages：流式回写每来一段都会换数组引用，天然把「跟随最新」滚动驱动起来；

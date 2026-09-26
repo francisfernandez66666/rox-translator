@@ -84,7 +84,9 @@ export default function TaskCenterP() {
     try {
       const r = await adminTaskSave({
         id: dlg.id || 0,
-        task_type: (dlg.task_type as 'daily' | 'once') || 'daily',
+        // ★ F-60：照原样下发即可——后端按发放方式归一（auto 以 period 为准、manual 以 task_type 为准），
+        //   两列落库后恒等；前端不再需要把 task_type 窄化成 daily|once。
+        task_type: dlg.task_type || 'daily',
         title: String(dlg.title || '').trim(),
         description: String(dlg.description || '').trim(),
         reward_points: Number(dlg.reward_points) || 0,
@@ -160,6 +162,11 @@ export default function TaskCenterP() {
   function periodKeyOf(row: Partial<UserTask>): string {
     return row.period || (row.task_type === 'once' ? 'once' : 'daily')
   }
+  /** ★ F-60：计数类胶囊配色（daily/weekly 同档，once/event 同档）。
+   *  判据只吃周期键，绝不吃 task_type——订正后别名取值变宽，配色必须逐行保持订正前的观感。 */
+  function cyclePillTone(period: string): 'idle' | 'warn' {
+    return period === 'once' || period === 'event' ? 'warn' : 'idle'
+  }
   /** 周期键 → 展示标签（四档现成键，零新增 i18n） */
   function periodLabel(period: string): string {
     return period === 'daily' ? t('tasks.periodDaily') : period === 'weekly' ? t('tasks.periodWeekly')
@@ -190,8 +197,12 @@ export default function TaskCenterP() {
   // 用户视图表格列
   const myCols: TableColumn<any>[] = [
     // ★ 观察5（批G）：类型标签改走 period 优先的共用口径（此前只看 task_type，weekly 行被错标「每日」）
+    // ★ F-60：胶囊配色判据改读「展示周期」而非 task_type。
+    //   订正后周任务的 task_type 由 'daily' 变 'weekly'，若沿用旧判据（task_type==='daily'）
+    //   这一枚胶囊会从 idle 灰翻成 warn 黄——那是纯数据订正带出的**无色差变更**（交付稿未授权改色）。
+    //   按周期分档后：daily/weekly 计数类=idle，once/event 终身或事件类=warn，与订正前逐行观感逐枚相同。
     { key: 'task_type', title: t('tasks.colType'), width: 100, render: (row) => (
-      <StatusPill tone={row.task_type === 'daily' ? 'idle' : 'warn'}>{periodLabel(periodKeyOf(row))}</StatusPill>
+      <StatusPill tone={cyclePillTone(periodKeyOf(row))}>{periodLabel(periodKeyOf(row))}</StatusPill>
     ) },
     { key: 'title', title: t('tasks.colTitle'), render: (row) => taskTitle(row) },
     { key: 'description', title: t('tasks.colDesc'), render: (row) => taskDesc(row) || '—' },
@@ -267,8 +278,11 @@ export default function TaskCenterP() {
           <div style={{ display: 'grid', gap: 4 }}>
             <Field label={t('tasks.typeLabel')}>
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button size="sm" variant={dlg.task_type === 'daily' ? 'primary' : 'secondary'} onClick={() => setDlg((d) => (d ? { ...d, task_type: 'daily' } : d))}>{t('tasks.daily')}</Button>
-                <Button size="sm" variant={dlg.task_type === 'once' ? 'primary' : 'secondary'} onClick={() => setDlg((d) => (d ? { ...d, task_type: 'once' } : d))}>{t('tasks.once')}</Button>
+                {/* ★ F-60：事件自动发放任务由 period 四档选择器（下方）决定周期，本枚旧「每日/一次性」
+                    开关对 auto 行没有任何后端语义（后端忽略它并写回恒等别名），
+                    故 auto 行整排置灰禁用，避免超管改了个「按了没反应」的钮。manual 行照旧。 */}
+                <Button size="sm" disabled={dlg.grant_mode === 'auto'} variant={dlg.task_type === 'daily' ? 'primary' : 'secondary'} onClick={() => setDlg((d) => (d ? { ...d, task_type: 'daily' } : d))}>{t('tasks.daily')}</Button>
+                <Button size="sm" disabled={dlg.grant_mode === 'auto'} variant={dlg.task_type === 'once' ? 'primary' : 'secondary'} onClick={() => setDlg((d) => (d ? { ...d, task_type: 'once' } : d))}>{t('tasks.once')}</Button>
               </div>
             </Field>
             <Field label={t('tasks.titleLabel')}>

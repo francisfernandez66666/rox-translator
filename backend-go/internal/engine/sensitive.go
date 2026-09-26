@@ -140,3 +140,12 @@ func (e *Engine) sensitiveTextGuardOutput(ctx context.Context, translations map[
 // sensitiveReplyBlocked 对客户统一话术（不暴露命中词与规则细节）。
 const sensitiveReplyBlocked = "⚠️ 内容合规审核：本次请求包含平台不予受理的内容，已拒绝翻译并转人工复核通道。" +
 	"如属误判，请通过工单/客服提交原文复核（Reference: sensitive_review）。"
+
+// CodeSensitiveBlocked 敏感词拒译的**稳定错误码**（★ 2026-09-26 〇-U 批 I-8 · F-53）。
+// 值沿用历史字面量 "sensitive_blocked" 一个字符都没改——OpenAPI 同步通道的 T36/T37 断言、
+// 以及 SDK 侧按 error 串分支的消费方都吃这个值，改值即契约破坏。
+// ★ 为什么要从「text.go 里两处裸字面量」升格成具名导出：消费方（api/stream.go 的 SSE error 帧）
+// 需要**按码分支**，而不是把码当文案发给用户。旧形态下文本通道命中敏感词时，
+// res.Error="sensitive_blocked"（机器码）被直接写进 error 字段，而真正给人看的
+// sensitiveReplyBlocked 在 res.Reply 里被丢掉 ⇒ 客户气泡里是一串裸键名（本轮 UAT 实测所见）。
+const CodeSensitiveBlocked = "sensitive_blocked"

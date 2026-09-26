@@ -30,6 +30,32 @@ DB_DRIVER="${DB_DRIVER:-postgres}"   # ★ 批次7：发布闸门主矩阵=PG；
 log(){ echo "[run_uat] $*"; }
 T0=$(date +%s)
 
+# ---------- 0-. 端口占位前置闸门（★ 2026-09-26 批 I 收尾踩坑后新增） ----------
+# 现象：本机 14:26 上一轮遗留下的 mock_chain 仍占着 :8902，本轮自己的 mock 起不来
+#       （mockchain.log 里 OSError: Address already in use），但就绪探针 curl /v1/blocks
+#       拨到的是**外来实例**⇒ 照样绿；于是断言跑在被陈旧状态污染的 mock 上
+#       （T42 的固定 tx_id 'c3'*32 与上一轮同名交易相撞，正确金额那笔被唯一键拒收，
+#        订单恒 pending、payments 无凭证 ⇒ 两条 T42 红）。这类红**不是回归**，
+#       但比回归更难查；而"探针绿了却对着别人的服务测"本身就是闸门失效。
+# 处置：四个端口任一被占即**开局即红**并点名占位方（不静默换端口、不复用外来实例）。
+ensure_port_free(){
+  local p="$1" name="$2" own=""
+  own="$(lsof -nP -iTCP:"$p" -sTCP:LISTEN -t 2>/dev/null | tr '\n' ' ' || true)"
+  if [ -n "$own" ]; then
+    printf '[run_uat] ❌ %s 端口 %s 已被进程占用（pid=%s）\n' "$name" "$p" "$own"
+    lsof -nP -iTCP:"$p" -sTCP:LISTEN 2>/dev/null | sed 's/^/[run_uat]      | /'
+    printf '[run_uat]    ⇒ 请先按 pid 清掉遗留实例再跑（禁止换端口绕过：断言与探针都会指错服务方）\n'
+    exit 1
+  fi
+}
+ensure_port_free "$UAT_PORT"        "后端"
+ensure_port_free "$MOCK_LLM_PORT"   "mock LLM"
+ensure_port_free "$MOCK_CHAIN_PORT" "mock chain"
+ensure_port_free "${ASSIST_PORT:-8898}" "assist-server"
+# mock chain 状态新鲜度自证：初始 tip 必须仍是 1_000_000 且无历史转入。
+# （ensure_port_free 已挡住"外来实例"，这一条兜住同一实现被以其他端口提前喂过数据的场景；
+#   在下面的 2b 就绪后执行，见该处 MOCK_CHAIN_FRESH 断言。）
+
 # ---------- 0. 方言矩阵：PG 时重建专用测试库 ----------
 # ★ 引号闸门前置（2026-09-21）：断言脚本里「双引号内嵌命令替换 + {\"a\":1,\"b\":2}」会被 bash 做
 #   大括号展开，把 curl 的 body 截断 → 断言对着「参数格式错误」恒判，闸门静默失真。
@@ -102,7 +128,22 @@ for i in $(seq 1 10); do
   if curl -s -m 2 "http://127.0.0.1:${MOCK_CHAIN_PORT}/v1/blocks" >/dev/null 2>&1; then OK=1; break; fi
 done
 [ "${OK:-0}" = "1" ] || { echo "mock chain 启动失败"; exit 1; }
-log "mock chain 就绪（${i}s）"
+# ★ 新鲜度复核（与上面 ensure_port_free 同族，双保险）：就绪探针只证明"有人应答"，
+#   不证明"应答的是本轮刚起的实例"。这里直接读 /state：初始尖 1_000_000 且转入表为空
+#   才算真身（外来实例要么已被上一轮 advance/inject 过，要么带着一堆同名 tx）。
+FRESH="$(curl -s -m 3 "http://127.0.0.1:${MOCK_CHAIN_PORT}/state" 2>/dev/null || true)"
+if ! printf '%s' "$FRESH" | python3 -c '
+import json,sys
+try: s=json.loads(sys.stdin.read() or "{}")
+except Exception: sys.exit(1)
+sys.exit(0 if s.get("tip")==1_000_000 and len(s.get("transfers",[]))==0 else 1)
+' 2>/dev/null; then
+  printf '[run_uat] ❌ mock chain 状态不是"全新实例"（tip 应为 1000000、transfers 应为空），实际：%s\n' "$FRESH"
+  printf '[run_uat]    ⇒ 端口 %s 上极可能是上一轮遗留的 mock（脏状态会让 T42 的固定 tx_id 相撞而假红）\n' "$MOCK_CHAIN_PORT"
+  kill $CHAIN_PID $MOCK_PID 2>/dev/null
+  exit 1
+fi
+log "mock chain 就绪（${i}s，已确认为全新实例）"
 
 # ---------- 2c. assist-server（AI 助手独立服务，T52 代理链路依赖） ----------
 # ★ #34（2026-09-21）：主后台 /api/admin/assist/* 是「同源反代到 assist 管理面」，

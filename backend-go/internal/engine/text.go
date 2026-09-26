@@ -93,6 +93,20 @@ func ModeFromOptions(options map[string]interface{}) string {
 	return strings.ToLower(strings.TrimSpace(m))
 }
 
+// ModeBadgeLabel 模式徽标后缀（拼在结果「📊 模式：…」与 OpenAPI mode 出参尾部，一处定死）。
+// 参数 fast: true=快速模式，false=专业校对模式。返回: 以 " | " 开头的后缀串。
+// ★ F-50②（〇-U 批 I-4，2026-09-26 UAT）：旧写法在同一行里就地拼字面量，且描述自相矛盾——
+// 快速模式写着「AI初翻+校对」（＝和 pro 一样含校对，区别无从解释），而 text.go:343 的注释
+// 与 orchestrator/flow.go:282 的开关逻辑说的是第三套（fast＝初翻+校对+质检，关掉知识库直配、
+// 质量评估、文化闸、自迭代）。现在文案按**流水线真实差异**写，并收敛成唯一常量：
+// 要改口径只有一个地方可改，也不会再出现「三处说法」。
+func ModeBadgeLabel(fast bool) string {
+	if fast {
+		return " | ⚡快速模式（初翻+校对+质检，不走知识库直配与质量评估）"
+	}
+	return " | 🎓专业校对模式（全流水线：知识库直配+初翻+校对+质量评估+文化闸）"
+}
+
 // SplitOptions 分离 KB / other / directOther
 func SplitOptions(langs []string) (kbTarget, directOther []string, hasOther bool) {
 	for _, lc := range langs {
@@ -164,8 +178,10 @@ func (e *Engine) normalizeBrandTerms(ctx context.Context, srcText string, langTr
 // HandleText 文本/对话翻译统一入口（★ S8：敏感词双向兑底闸包一层，核心流程在 handleTextCore）。
 func (e *Engine) HandleText(ctx context.Context, text string, options map[string]interface{}, prog Progress) *TextTranslateResult {
 	// 输入侧：整段命中直接拒译（不进模型、不扣费）
+	// ★ F-53（批 I-8）：Error 用导出常量 CodeSensitiveBlocked（值不变，仍是 "sensitive_blocked"），
+	//   消费方要按码分支，不能再拿裸字面量比对。人类文案在 Reply 里，由调用方按码取用。
 	if msg := e.sensitiveTextGuardInput(ctx, text); msg != "" {
-		return &TextTranslateResult{Skill: "translation", Reply: msg, Error: "sensitive_blocked"}
+		return &TextTranslateResult{Skill: "translation", Reply: msg, Error: CodeSensitiveBlocked}
 	}
 	res := e.handleTextCore(ctx, text, options, prog)
 	// 输出侧兑底：模型自产敏感内容整单拒付（文本通道为单块交付，不做段级替换）
@@ -173,7 +189,7 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 		if msg := e.sensitiveTextGuardOutput(ctx, res.Data.Translations); msg != "" {
 			res.Data.Translations = nil
 			res.Reply = msg
-			res.Error = "sensitive_blocked"
+			res.Error = CodeSensitiveBlocked
 		}
 	}
 	return res
@@ -424,19 +440,21 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 	if kbHitName != "" {
 		mode = mode + " | " + kbHitName + " 命中知识库"
 	}
-	// ★ 模式标注（前台徽标与 OpenAPI 出参用）
-	if fast {
-		mode += " | ⚡快速模式（AI初翻+校对）"
-	} else {
-		mode += " | 🎓专业校对模式"
-	}
+	// ★ 模式标注（前台徽标与 OpenAPI 出参用）——文案收敛到 ModeBadgeLabel 一处常量（F-50②）
+	mode += ModeBadgeLabel(fast)
 	sb.WriteString("\n📊 模式：" + mode)
 
-	// ★ 2026-09-03 需求：结果附带本次翻译实际消耗的 token 数（全链路真实用量）
+	// ★ 2026-09-19 积分口径 / ★ F-50①（〇-U 批 I-4）：这里曾是
+	//   `fmt.Sprintf("\n⚡ 本次翻译消耗 token：%d", tokensUsed)`，而本函数返回的字符串会被
+	//   当作 res.Reply 逐字渲染进客户的气泡（前端 useChat 原样展示）——
+	//   AGENTS §一·5 钉的是「计费口径统一积分、**公开接口零 token 裸值**」，
+	//   既有闸门只扫结构化字段，扫不到拼在文案里的数字，于是口径被自家穿透。
+	//   现在页脚按积分出，且取的是**实收**口径（扣费现场累计，F-49①），与报文 points_used 同值。
 	tp, tc := e.UsageTokens(ctx)
-	tokensUsed := tp + tc
-	if tokensUsed > 0 {
-		sb.WriteString(fmt.Sprintf("\n⚡ 本次翻译消耗 token：%d", tokensUsed))
+	rawTokens := tp + tc // 仅供内部计量字段（json:"-"），不进任何对外文案
+	billed := e.UsageDisplayTokens(ctx)
+	if billed > 0 {
+		sb.WriteString(fmt.Sprintf("\n⚡ 本次翻译消耗 %d 积分", e.PointsOfTokens(billed)))
 	}
 
 	if len(gateWarnings) > 0 {
@@ -475,7 +493,9 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 			TargetLangs:        append(append([]string{}, kbTarget...), directOther...),
 			GateWarnings:       gateWarnings,
 		},
-		TokensUsed: tokensUsed,
-		PointsUsed: e.PointsOfTokens(tokensUsed),
+		TokensUsed: rawTokens,
+		// ★ F-49①：对外积分一律按**实收**口径（与 points_used 出参、台账扣费同源），
+		// 不再用裸真实用量折算——后者比实收少一个 markup，客户按报文折算必然对不上。
+		PointsUsed: e.PointsOfTokens(billed),
 	}
 }

@@ -27,6 +27,14 @@
 //   - 只认 writeJSON 这一个出口函数；本包另有 SSE/流式/直写 csv 的错误分支不在本口径内；
 //   - 第二实参走变量或 map 变量的调用不计（要绕过于容易，但这类写法本就该在评审里被问）；
 //   - 豁免只按「整个文件」粒度，不给到单个调用点——理由见 errorStyleAllowlist 注释。
+//   - ★ F-64①（批 I-7 2026-09-26）点名一条**合法**的「变量实参」形态，免得后人以为发现了绕闸漏洞：
+//     api 包的 writeOpenAPIError（/openapi/v1/* 唯一错误出口）内部是
+//     `writeJSON(w, errors.StatusForCode(code), body)`——状态码来自 internal/errors 的
+//     openAPIStatusByCode 单点表，不在调用处写数字。它不计入本棘轮是**应当**的：
+//     它已经是对外契约的统一出口（与 health_probes.go 进白名单同类），
+//     真正的防漂移锁在 openapi_status_contract_test.go（规范 Error.enum ↔ 状态表双向穷举）。
+//     同批 api_openapi_tasks.go 由 20 处、admin_openapi.go 的 openapi 面由 26 处内联写法
+//     全部收敛到该出口，基线随之 736→699。
 //
 // 运行：cd backend-go && go test -count=1 ./internal/api/ -run TestErrorStyle
 // 本包用例不连库、不读 config（纯静态解析源码），无需 AGENTS.md 一.4 的方言自钉。
@@ -48,63 +56,74 @@ import (
 // errorStyleBaselineTotal 非豁免文件的内联错误响应存量基线（只减不增）。
 // 建立方式：2026-09-22 用本文件的扫描器实测全包后一次性钉住（口径见文件头），
 // 不取整、不四舍五入——基线必须是**同一把尺子量出来的真实数字**，否则第一版就在骗人。
-const errorStyleBaselineTotal = 740
+// ★ F-64①（批 I-7 2026-09-26）：收款/账务七个文件（pay.go 22、admin_billing.go 18、billing_api.go 12、
+// coupons_api.go 6、my_billing.go 5、plans_api.go 5、pay_renew.go 3）的错误分支全部迁到 s.writeError，
+// 七个条目已按僵尸守卫删行，基线同额 699→628（差额 71 与七文件存量之和精确相等，非估算）。
+// 这七个文件另有更严的**零容忍等值锁**（payhonesty_gate_test.go 的 payHonestZeroFiles），
+// 所以它们在本棘轮里的位置是「已清零、留待闸门守卫不许回涨」，不是「还没迁」。
+// ★ F-64③（批 I-10 2026-09-26 深夜）：admin_assist_proxy.go 的 4 处内联 4xx（两处 403 越权、
+// 一处 404 路由未登记、一处 405 方法不支持）迁到 s.writeError，该文件已清零并删行，
+// 基线同额 628→624（差额 4 = 该文件存量，非估算）。
+// ★ F-64③ 收尾（同批）：admin_kb.go 的 9 处 + kb.go 的 1 处「未登录内联 403」一并迁到
+// s.writeError(ErrUnauthorized)，顺带把这一族状态码从 403 纠正成 401（前端只在 401 走重登录），
+// 基线同额 624→614（差额 10 = 两文件本次迁出数，逐文件行同步 78→69 / 26→25）。
+// ★ F-64③ 收尾（批 I-10 2026-09-27 凌晨）：本批把「require* 系列把未登录与等级不足压成同一个 error，
+// 调用点一律 writeJSON(w, 403, publicErrMessage(err))」这一族**剩余 124 处**全部迁到
+// s.writeAuthzError（27 个文件；口径与批 I-10 前半段的 assist 代理/收款/报价一致 —— 前端只在 401
+// 走重登录链路，403 会把「重新登录」这类客户按在原地反复撞闸）。
+// 文案逐字未动（writeAuthzError 内部用的就是 publicErrMessage），变的只有状态码与错误码。
+// 基线 614→485（降 129）。⚠️ 这 129 里只有 124 处是本次凌晨这一刀迁走的（脚本清单：27 文件 122 处
+// + funnel.go / admin_reconcile.go 各 1 处「未登录与非超管挤在同一条件」的拆分），
+// 余下 5 处是批 I-10 前半段（②③档）已经迁掉、但当时只下调了总数没同步逐文件行的滞后量。
+// 因此本次**不做「按迁出数逐条加减」，而是拿 errStyleScan 的实测值整表重钉**——
+// 逐文件行与总数同源，sum==total 的自洽断言才有意义；旧表里已清零的 memleak.go / funnel.go /
+// admin_reconcile.go 三行按僵尸守卫一并删除。
+const errorStyleBaselineTotal = 485
 
 // errorStylePerFileBaselines 分文件基线快照（同 logratchet 的「分根设基线」思路）：
 // 只看总数会让「A 文件迁走 20 处、B 文件新加 20 处」互相掩盖，逐文件钉才守得住增量。
 // 迁移某文件后把它的数字改成新实测值（或清零后删掉该行，僵尸项自检会提醒）。
+// ★ 本表 2026-09-27 整表按 errStyleScan 实测重钉（不是逐条手改，避免「改了总数忘了逐行」的自洽红）。
 var errorStylePerFileBaselines = map[string]int{
-	"admin_kb.go":           78,
-	"tenant.go":             58,
-	"auth.go":               53,
-	"admin_packages.go":     45,
-	"tickets.go":            42,
-	"register.go":           29,
-	"admin_openapi.go":      26,
-	"kb.go":                 26,
-	"orgs.go":               24,
-	"pay.go":                22,
-	"admin_models.go":       20,
-	"api_openapi_tasks.go":  20,
-	"persona_api.go":        20,
-	"admin_billing.go":      18,
-	"stream.go":             18,
-	"upload_chunk.go":       18,
-	"ops_api.go":            17,
-	"admin_apikeys.go":      16,
-	"feedback.go":           16,
-	"admin_webhooks.go":     13,
-	"admin_scrape.go":       12,
-	"billing_api.go":        12,
-	"bitext.go":             11,
-	"admin_evals.go":        10,
-	"tasks.go":              10,
-	"email_verify.go":       9,
-	"referral.go":           8,
-	"lead.go":               7,
-	"user_import.go":        7,
-	"admin_flow.go":         6,
-	"coupons_api.go":        6,
-	"kb_grants.go":          6,
-	"tmreview.go":           6,
-	"my_billing.go":         5,
-	"notifications.go":      5,
-	"plans_api.go":          5,
-	"admin_assist_proxy.go": 4,
-	"mail_tpl.go":           4,
-	"spa.go":                4,
-	"admin_assist.go":       3,
-	"pay_renew.go":          3,
-	"scim.go":               3,
-	"estimate.go":           2,
-	"memleak.go":            2,
-	"metrics.go":            2,
-	"s9_alerts.go":          2,
-	"slo.go":                2,
-	"watchdog.go":           2,
-	"admin_reconcile.go":    1,
-	"funnel.go":             1,
-	"server.go":             1,
+	"admin_kb.go":       50,
+	"tenant.go":         47,
+	"auth.go":           45,
+	"tickets.go":        40,
+	"admin_packages.go": 37,
+	"register.go":       23,
+	"kb.go":             21,
+	"stream.go":         18,
+	"upload_chunk.go":   18,
+	"orgs.go":           16,
+	"persona_api.go":    15,
+	"feedback.go":       13,
+	"ops_api.go":        13,
+	"admin_models.go":   12,
+	"admin_scrape.go":   11,
+	"admin_apikeys.go":  9,
+	"bitext.go":         8,
+	"referral.go":       8,
+	"admin_webhooks.go": 7,
+	"email_verify.go":   7,
+	"admin_openapi.go":  6,
+	"lead.go":           6,
+	"tasks.go":          6,
+	"tmreview.go":       6,
+	"notifications.go":  5,
+	"user_import.go":    5,
+	"kb_grants.go":      4,
+	"mail_tpl.go":       4,
+	"spa.go":            4,
+	"admin_evals.go":    3,
+	"admin_flow.go":     3,
+	"admin_assist.go":   2,
+	"estimate.go":       2,
+	"metrics.go":        2,
+	"s9_alerts.go":      2,
+	"scim.go":           2, // ★ 09-27 整表重钉时本行被漏抄一次，闸门自洽断言当场点红（sum 483≠485）
+	"slo.go":            2,
+	"watchdog.go":       2,
+	"server.go":         1,
 }
 
 // errorStyleAllowlist 刻意保留内联错误响应的文件 → 豁免理由（对应 archguard 的 legacyAllow）。
@@ -207,19 +226,25 @@ func TestErrorStyleScanActuallyCovers(t *testing.T) {
 			total += n
 		}
 	}
-	if total < 500 {
+	// 规模下限：本闸门最怕「扫了个空集还绿」，所以存量总数低于此值即判定扫描失效。
+	// ★ 2026-09-27 由 500 下调到 400：批 I-10 把「未登录一律 403」那一族 124 处迁到统一出口后，
+	//   实测存量已到 486（含豁免文件），原 500 这条线会在**迁移成功**的那一刻把闸门点红——
+	//   一把奖励假红、惩罚真降的尺子就是坏尺子。400 仍是「远低于现实、远高于空集」的位置，
+	//   再降 86 处就会红，届时按同一口径下调并写明理由。
+	if total < 400 {
 		t.Fatalf("本包内联错误响应实测仅 %d 处，明显低于实际规模（基线 %d）——扫描根或判据已失效，本闸门当前不可信",
 			total, errorStyleBaselineTotal)
 	}
 	if files < 30 {
 		t.Fatalf("命中的文件数仅 %d，疑似只扫到子集（本包存量分布在数十个文件上）", files)
 	}
-	// 抽样锚点：这些是仓库现实，扫不到即遍历/判据逻辑错了
+	// 抽样锚点：这些是仓库现实，扫不到即遍历/判据逻辑错了（下限取「远低于该文件实测」的位，
+	// 只用来证明扫描器还认得这些文件，不当迁移进度条用）
 	for _, anchor := range []struct {
 		file string
 		min  int
 	}{
-		{"admin_kb.go", 50},
+		{"admin_kb.go", 40},
 		{"auth.go", 30},
 		{"server.go", 1}, // 连 server.go 这种薄文件都有存量，进一步证明不是只扫了大头
 	} {

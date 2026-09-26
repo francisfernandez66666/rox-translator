@@ -13,8 +13,10 @@
 // ============================================================================
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import ChatWindow from './ChatWindow'
+import { PkgRefreshCtx } from '@/hooks/useChat'
+import { myPackage } from '@/api'
 import { ToastProvider } from '@/ui/langcross/src'
 import { setLang } from '@/i18n'
 
@@ -36,11 +38,30 @@ const mocks = vi.hoisted(() => ({
   },
 }))
 
-vi.mock('@/hooks/useChat', () => ({ useChat: () => mocks.chat }))
+// ★ F-48（批 I-5）：ChatWindow 除 useChat 外还要从本模块取 PkgRefreshCtx（余额条订阅广播），
+// 因此桩工厂必须一并导出这颗 Context——否则 useContext(undefined) 直接抛
+// 「Please pass a Context object as the first argument」，整文件红。
+// 真实 context 的语义（单槽 vs 广播）在 hooks 侧测（useChat.pkgRefresh.dom.test.tsx 锁④），
+// 这里用 React 现造一颗同名 Context 只为把 Provider 喂进组件。
+vi.mock('@/hooks/useChat', async () => {
+  const { createContext } = await import('react')
+  return { useChat: () => mocks.chat, PkgRefreshCtx: createContext<unknown>(null) }
+})
 // 余额/健康等非本次断言重点，一律给「无数据」假实现，避免测试期打网络
-vi.mock('@/api', () => ({
+// （★ F-48 锁⑥ 自行 vi.mocked 改返回值以走「有真实余额」分支，默认形态仍是无数据）
+const apiMocks = vi.hoisted(() => ({
   myPackage: vi.fn(async () => ({ success: false })),
   meContext: vi.fn(async () => ({ success: false })),
+}))
+// ★ O-9（批 I-10）：ChatWindow 现在要读登录态（平台上下文判定 isPlatformBillingContext →
+//   @/stores/auth），而该 store 模块初始化就会调 getAuthToken()、判定里再调 getActiveTenantId()。
+//   本文件的 @/api 桩是「整模块替换」形态，缺这两个导出会直接让套件起不来
+//   （vitest 报 No "getAuthToken" export is defined on the "@/api" mock）。
+//   给空值即可：空 token=未登录、tid=0，配合下面 user.role 的默认口径，
+//   余额条仍按「租户上下文」渲染，不改变本文件既有断言的语义。
+vi.mock('@/api', () => ({
+  myPackage: apiMocks.myPackage, meContext: apiMocks.meContext,
+  getAuthToken: () => '', getActiveTenantId: () => 0,
 }))
 vi.mock('@/api/translate', () => ({ estimateTranslation: vi.fn(async () => null) }))
 // 子组件与本用例无关，桩化后可稳定断言气泡的 DOM 归属
@@ -55,13 +76,22 @@ vi.mock('@/components/LangMultiSelect', () => ({
 vi.mock('@/components/ModeToggle', () => ({ default: () => <div data-stub="mode-toggle" /> }))
 
 // ChatWindow 内部用 useToast 提示，必须在 ToastProvider 下渲染
-function renderWindow() {
-  return render(<ToastProvider><ChatWindow /></ToastProvider>)
+// ★ F-48：hub 传入时外层套 PkgRefreshCtx.Provider（余额条订阅广播）；缺省（null）即
+// 后台路由那种「没有枢纽」的形态，组件必须照常渲染不炸。
+function renderWindow(hub: unknown = null) {
+  return render(
+    <ToastProvider>
+      <PkgRefreshCtx.Provider value={hub as never}>
+        <ChatWindow />
+      </PkgRefreshCtx.Provider>
+    </ToastProvider>,
+  )
 }
 
 beforeEach(() => {
   cleanup()
   vi.clearAllMocks()
+  apiMocks.myPackage.mockImplementation(async () => ({ success: false }))
   setLang('zh')
   mocks.chat.messages = []
   mocks.chat.isLoading = false
@@ -160,5 +190,60 @@ describe('即时翻译工作台（#36 合并对话框）', () => {
     expect(container.querySelector('.cw-dialog-acts'), '操作行已并入 .cw-toolbar，不得再单独成排').toBeNull()
     // 框脚只剩输入卡本身（错误提示行仅在有 errorMessage 时追加）
     expect(container.querySelectorAll('.cw-dialog-foot > *').length, '框脚内除输入卡外不得再排其他控件').toBe(1)
+  })
+
+  // ★ F-48（〇-U 批 I-5 2026-09-26）：余额条的刷新触发点从「chat.messages.length 变化」
+  // 改成「订阅 PkgRefreshCtx 枢纽、由聊天层在流终态后广播」。旧判据两头都错：
+  //   ① 关页 / 清空记录 / 切账号会让长度变小或归零再变大 → 白打一枪 myPackage；
+  //   ② 同一条气泡的流式回写不改数组长度，一轮翻译真正扣点的 done 帧可能一枪都不打
+  //     → 界面停在扣费前的余额（客户视角就是「翻译完不知道还剩多少」）。
+  // 本用例用**真实数值回执**（success + points_balance）驱动，断三件事：
+  //   a) 余额条确实订阅了枢纽（count===1）；b) 一次广播恰打一次 myPackage 且文案变成新值；
+  //   c) 消息数组变长本身不再触发刷新（旧触发点的负向锁）。
+  it('⑥ 余额条由枢纽广播驱动刷新：一次广播恰一次 myPackage、文案变成新值；消息数变化不再触发（★ F-48）', async () => {
+    const subs = new Set<() => void>()
+    // 本地最小枢纽：本文件把 @/hooks/useChat 整模块桩掉（取不到真的 createPkgRefreshHub），
+    // 真枢纽自身的广播/退订/抛错语义在 useChat.pkgRefresh.dom.test.tsx 锁④⑤⑥⑦ 承担，
+    // 这里只验「ChatWindow 是否按同一契约订阅与消费广播」。
+    const hub = {
+      subscribe: (fn: () => void) => { subs.add(fn); return () => { subs.delete(fn) } },
+      emit: () => { for (const fn of [...subs]) fn() },
+      count: () => subs.size,
+    }
+    // 第 1 次（挂载首拉）回 500，第 2 次起回 480：只有「广播后重新拉到新值」才会让文案变化
+    let calls = 0
+    vi.mocked(myPackage).mockImplementation(async () => {
+      calls += 1
+      return calls === 1
+        ? { success: true, points_balance: 500, balance_sentences_approx: 100, points_used_today: 10 }
+        : { success: true, points_balance: 480, balance_sentences_approx: 96, points_used_today: 30 }
+    })
+    const { rerender } = renderWindow(hub)
+    await waitFor(() => expect(screen.getByTestId('chat-balance').textContent).toContain('500'))
+    expect(hub.count(), '余额条必须挂在广播名单里（订阅丢失＝旧触发点被删空、余额永远不刷）').toBe(1)
+    expect(myPackage).toHaveBeenCalledTimes(1)
+
+    // a) 广播 → 恰一次刷新 → 文案换新值
+    act(() => { hub.emit() })
+    await waitFor(() => expect(screen.getByTestId('chat-balance').textContent).toContain('480'))
+    expect(myPackage, '一次广播只准打一次 myPackage（不得重复订阅）').toHaveBeenCalledTimes(2)
+
+    // b) 消息数组变长不再触发刷新（旧 messages.length 触发点的负向锁）
+    mocks.chat.messages = [{ id: 'a1', role: 'assistant', content: '新增气泡', timestamp: Date.now() }]
+    rerender(
+      <ToastProvider>
+        <PkgRefreshCtx.Provider value={hub}>
+          <ChatWindow />
+        </PkgRefreshCtx.Provider>
+      </ToastProvider>,
+    )
+    await act(async () => { await Promise.resolve() })
+    expect(myPackage, '消息数变化不得再触发刷新（F-48 旧判据白打请求）').toHaveBeenCalledTimes(2)
+
+    // c) 卸载即退订：广播给已卸载的余额位不得再打接口
+    cleanup()
+    hub.emit()
+    await act(async () => { await Promise.resolve() })
+    expect(myPackage, '组件卸载后不得继续被广播叫醒（退订丢失＝后台路由下白打请求）').toHaveBeenCalledTimes(2)
   })
 })

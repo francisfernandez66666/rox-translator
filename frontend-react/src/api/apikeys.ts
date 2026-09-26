@@ -12,36 +12,39 @@
  * - OpenAPI 文档的在线维护（中英双语）
  */
 
-import { request, authHeaders, type AdminResp } from './core'
+// ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
+//   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
+//   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
+import { bizResp, request, authHeaders, type AdminResp } from './core'
 
 /** 获取开放平台 API Key 列表 */
 export async function apiKeys(): Promise<AdminResp> {
-  return request('/api/apikeys', { headers: authHeaders() })
+  return bizResp(() => request('/api/apikeys', { headers: authHeaders() }))
 }
 
 /** 签发新 API Key（daily_call_limit 可选，0=不限） */
 export async function apiKeyCreate(data: { name: string; perms: string; daily_call_limit?: number }): Promise<AdminResp> {
-  return request('/api/apikeys/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/apikeys/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 启用/停用指定 API Key */
 export async function apiKeyStatus(id: number, status: string): Promise<AdminResp> {
-  return request('/api/apikeys/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, status }) })
+  return bizResp(() => request('/api/apikeys/status', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, status }) }))
 }
 
 /** 轮换 API Key（旧 Key 立即失效） */
 export async function apiKeyRotate(id: number): Promise<AdminResp> {
-  return request('/api/apikeys/rotate', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/apikeys/rotate', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /** 删除指定 API Key */
 export async function apiKeyDelete(id: number): Promise<AdminResp> {
-  return request('/api/apikeys/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/apikeys/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /** 设置 Key 每日调用上限（0=不限） */
 export async function apiKeyLimit(id: number, dailyCallLimit: number): Promise<AdminResp> {
-  return request('/api/apikeys/limit', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, daily_call_limit: dailyCallLimit }) })
+  return bizResp(() => request('/api/apikeys/limit', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, daily_call_limit: dailyCallLimit }) }))
 }
 
 

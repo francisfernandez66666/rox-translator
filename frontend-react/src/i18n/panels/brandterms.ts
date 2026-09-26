@@ -6,6 +6,14 @@ export const zh: Record<string, string> = {
   'bt.needEn': '请输入品牌外语统一译法（如 ROX）',
   'bt.added': '品牌名已新增（全语言译为 {en}）',
   'bt.addFail': '新增失败：{err}',
+  // ★ F-58（2026-09-26 〇-U 批 I-8）：21 语种串行写入的中止与诚实回执四键。
+  //   bt.adding 替掉提交期间的「保存」按钮文案（进度可见），bt.stop 是同一期间的取消钮语义
+  //   （点它=中止后续语种，不是关掉窗口继续跑）；后两键按实际结果分支，
+  //   绝不再在无脑 toastSuccess 里把「没写完/写挂了」说成成功。
+  'bt.adding': '写入中 {ok}/{total}…',
+  'bt.stop': '中止',
+  'bt.addedPartial': '已写入 {ok}/{total} 个语言，未成功：{why}',
+  'bt.addCancelled': '已中止：写入 {ok}/{total} 个语言，其余语言未提交，可改正后重新保存补齐',
   // ★ F-25（2026-09-25）：原三枚 window.prompt 旧文案键（bt 前缀下的 promptLang、promptText、
   //   editPrompt 三键）已随站内 Dialog 改造删除（键集闸容不下死键），
   //   语言/译法输入改走 bt.formLangLabel / bt.formTextLabel 表单标签。
@@ -45,6 +53,11 @@ export const en: Record<string, string> = {
   'bt.needEn': 'Enter the unified foreign translation (e.g. ROX)',
   'bt.added': 'Brand added (translated as {en} in all languages)',
   'bt.addFail': 'Add failed: {err}',
+  // ★ F-58：与 zh 同步的四键（占位符 {ok}/{total}/{why} 逐键一致，locales 闸门按英文基准校验）
+  'bt.adding': 'Writing {ok}/{total}…',
+  'bt.stop': 'Stop',
+  'bt.addedPartial': 'Written {ok}/{total} languages; failed: {why}',
+  'bt.addCancelled': 'Stopped: wrote {ok}/{total} languages, the rest were not submitted. Fix and save again to complete them.',
   // ★ F-25（2026-09-25）：与 zh 同步——三枚 window.prompt 旧文案键（bt 前缀下的 promptLang、
   //   promptText、editPrompt）已删，
   //   新增编辑弹窗标题/字段标签与删除确认框文案（英文值决定各语种的占位符基准）。

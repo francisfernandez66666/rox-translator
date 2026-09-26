@@ -12,6 +12,8 @@ package api
 // 句数计量口径：每源句 × 每个目标语言 = 消耗句数（与 usage_ledger 逐语言计量一致）。
 // 订阅流程：用户选择付费包/增量包 → 创建订单（含 package_id）→ 走支付（SDK/静态码/线下）
 //   → 超管确认到账 → GrantPackageSentences 发放句数。
+// ★ 错误响应口径（F-64① 批 I-7）：失败一律走 s.writeError + apierrors 统一出口，
+//   不再用 200 承载失败，也不再内联 writeJSON(4xx, ...)。
 // =============================================
 
 import (
@@ -23,6 +25,7 @@ import (
 	"time"
 	"translator/internal/db"
 
+	apierrors "translator/internal/errors"
 	"translator/internal/observability"
 	"translator/internal/store"
 )
@@ -39,7 +42,8 @@ func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 	// 查询所有上架的商业包
 	pkgs, err := s.Store.ListEnabledCommercialPackages()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：套餐清单读取失败是本进程/存储侧故障，客户无法自改正
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ #75：报价币种按「环境变量 > 库配置 > 默认 CNY」解析；缺汇率自动回落 CNY（fail-closed）
@@ -94,7 +98,7 @@ func roundQuote2(v float64) float64 {
 func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -152,6 +156,12 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		"in_grace":      inGrace,
 		"grace_expires": graceExpires,
 		"pay_mode":      payMode,
+		// ★ F-52（2026-09-26 〇-U 批 I-8）：单次对话字符上限透出。前端聊天页要有**本地长度闸**
+		//   （超了直接提示改走工单，不必打一次注定 400 的流式请求），但上限值只能有一个来源——
+		//   就是这里调的 s.chatMaxChars()（运营策略键 chat_max_chars，默认 5,000，读非法回退默认），
+		//   与 stream.go 的拒绝分支同一函数同一键。前端**禁止**再写死 5000：写了就等于
+		//   运营调键后本地闸与后端闸不一致（用户被自己的浏览器拦住，而服务端其实已经放行）。
+		"chat_max_chars": s.chatMaxChars(),
 		// ★ USDT（2026-09-15）：收银台渠道显隐依据（仅开关态，地址/汇率等敏感配置不下发公共口）
 		"usdt_enabled": s.Store.GetUSDTCfg().Enabled,
 		"usdt_chains":  s.Store.GetUSDTCfg().Chains,
@@ -186,7 +196,8 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：内联 403 → 统一出口（403 ErrForbidden），状态码不变、错误体补齐 code/trace_id
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	var req struct {
@@ -196,20 +207,23 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 		Coupon    string `json:"coupon"`     // ★ 优惠券（#41）：券码，空=不用券
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code 不能为空"})
+		// ★ F-64①（批 I-7）：内联 400 → 统一出口（400 ErrValidation）
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "code 不能为空"))
 		return
 	}
 	tid := s.effTenant(r, u)
 	pkg, err := s.Store.GetPackageByCode(tid, req.Code)
 	if err != nil || pkg.Enabled != 1 {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "套餐不存在或已下架"})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 404：套餐找不到是可自证的缺失，客户与前端按状态码即可分支
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "套餐不存在或已下架"))
 		return
 	}
 	// 免费体验包不走支付：直接发放
 	if pkg.PType == store.PackageFree {
 		if _, err := s.Store.GrantPackageSentences(tid, pkg); err != nil {
 			observability.Error(r.Context(), "免费包发放失败", "code", pkg.Code, "err", err)
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": store.DebriefDBError(err)})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 500：发放失败是本进程存储故障
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, store.DebriefDBError(err)))
 			return
 		}
 		s.Store.LogAudit(tid, u.ID, "package_free_claim", "packages", pkg.Code)
@@ -233,7 +247,8 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 	o, err := s.Store.CreatePackageOrder(tid, pkg, u.ID, channel)
 	if err != nil {
 		observability.Error(r.Context(), "订阅下单失败", "code", pkg.Code, "tid", strconv.FormatInt(tid, 10), "err", err)
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": store.DebriefDBError(err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：下单失败是存储写入故障
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, store.DebriefDBError(err)))
 		return
 	}
 	// ★ 优惠券（#41 商业洞三，2026-09-21）：建单后、渠道出码前核销，orders.amount_money 直接
@@ -256,16 +271,19 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 	// ★ C18（2026-09-12）：确认失败错误传播 + 响应带真实状态（订单留 pending 可重试）
 	if channel == "mock" {
 		if merr := s.Store.MarkOrderPaid(o.ID, tid); merr != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false,
-				"message": "下单成功但模拟入账失败（订单保留待支付）: " + store.DebriefDBError(merr),
-				"order":   s.orderViewJSON(o)})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 500：入账失败是存储故障；order 字段进 details 保留
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal,
+				"下单成功但模拟入账失败（订单保留待支付）: "+store.DebriefDBError(merr)).
+				WithDetails(map[string]interface{}{"order": s.orderViewJSON(o)}))
 			return
 		}
 		o.Status = "paid"
 	} else if usdtSel {
 		payload, errMsg := s.attachUSDTMeta(u, tid, o, o.AmountMoney, req.USDTChain)
 		if errMsg != "" {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": errMsg, "order_no": o.OrderNo})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 500：USDT 收款要素挂载失败是本进程侧故障；order_no 进 details
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, errMsg).
+				WithDetails(map[string]interface{}{"order_no": o.OrderNo}))
 			return
 		}
 		s.Store.LogAudit(tid, u.ID, "package_subscribe", "packages", pkg.Code+" channel=usdt")
@@ -279,9 +297,10 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 		} else {
 			// 订单已创建但无码可展示，通知管理员补配，前端给出引导
 			s.Store.LogAudit(tid, u.ID, "package_subscribe", "packages", pkg.Code+"（静态码未配置收款图片）")
-			writeJSON(w, 200, map[string]interface{}{
-				"success": false, "message": "静态收款码未配置，请联系管理员在套餐中心上传收款图片", "order_no": o.OrderNo,
-			})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 503：收款能力未就绪（等管理员补配），不是本进程出错；order_no 进 details
+			s.writeError(w, r, apierrors.New(apierrors.ErrPayChannelUnavailable,
+				"静态收款码未配置，请联系管理员在套餐中心上传收款图片").
+				WithDetails(map[string]interface{}{"order_no": o.OrderNo}))
 			return
 		}
 	} else {
@@ -291,9 +310,10 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 		if _, _, cerr := s.payChannelQR(o, o.AmountMoney, "能言订阅套餐 "+pkg.Code); cerr != nil {
 			observability.Error(r.Context(), "订阅单渠道取码失败", "tid", strconv.FormatInt(tid, 10),
 				"order", o.OrderNo, "channel", o.Channel, "err", cerr.Error())
-			writeJSON(w, 200, map[string]interface{}{
-				"success": false, "message": payChannelQRErrorMessage(o.Channel, cerr), "order_no": o.OrderNo,
-			})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 503：渠道未就绪属依赖不可用，稍后可重试；order_no 进 details
+			s.writeError(w, r, apierrors.New(apierrors.ErrPayChannelUnavailable,
+				payChannelQRErrorMessage(o.Channel, cerr)).
+				WithDetails(map[string]interface{}{"order_no": o.OrderNo}))
 			return
 		}
 	}
@@ -312,7 +332,8 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：内联 403 → 统一出口（403 ErrForbidden）
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	var req struct {
@@ -320,33 +341,39 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 		Coupon string `json:"coupon"` // ★ #41：升级单不叠券——收到券码明确拒绝而非静默忽略
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code 不能为空"})
+		// ★ F-64①（批 I-7）：内联 400 → 统一出口（400 ErrValidation）
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "code 不能为空"))
 		return
 	}
 	// ★ 升级单不叠券（#41 口径边界，2026-09-21）：升级应付已是「新包售价 − 旧包剩余价值抵扣」，
 	//   再叠一层券会让收银台预览（按整包价试算）与实付（按差额核销）两张皮，且促销与余额抵扣
 	//   双重让利无上限可守。故此处显式拒绝，而不是让前端以为券生效了。
 	if code := store.NormalizeCouponCode(req.Coupon); code != "" {
-		writeJSON(w, 200, map[string]interface{}{
-			"success": false, "message": "升级单已含旧包余额抵扣，不再叠加优惠券（券适用于新购与充值）",
-		})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 400：这是请求里带了不该带的券码，客户去掉券即可自改，
+		//   不是资源状态冲突，故用 ErrValidation 而非 ErrConflict
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation,
+			"升级单已含旧包余额抵扣，不再叠加优惠券（券适用于新购与充值）"))
 		return
 	}
 	tid := s.effTenant(r, u)
 	newPkg, err := s.Store.GetPackageByCode(tid, req.Code)
 	if err != nil || newPkg.Enabled != 1 {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "套餐不存在或已下架"})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 404：套餐找不到是可自证的缺失
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "套餐不存在或已下架"))
 		return
 	}
 	// 仅付费包支持升级（增量包为永久买断叠加，无「升级」概念）
 	if newPkg.PType != store.PackagePaid {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "仅付费包支持升级"})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 409：目标包类型与升级这一动作冲突，需换包而非改参数
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "仅付费包支持升级"))
 		return
 	}
 	// 计算旧包剩余价值抵扣（含校验：有生效订阅、目标高于当前付费包售价）
 	credit, err := s.Store.ComputeUpgradeCredit(tid, newPkg)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 409：ComputeUpgradeCredit 返回的都是「没有生效订阅/
+		//   目标不高于当前」这类与租户当前订阅状态冲突的拒绝，故按状态冲突给码；文案仍走脱敏出口
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 支付渠道（与订阅一致）：sdk / static_qr / mock（默认 mock）
@@ -359,7 +386,8 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	o, err := s.Store.CreateUpgradeOrder(tid, newPkg, credit, u.ID, channel)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：升级单写入失败是存储故障
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ #75：升级单同样是"客户会看外币价"的单据，落报价快照（应付已是最终金额）
@@ -369,9 +397,10 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 	// 下单后置分支：mock 直接 MarkOrderPaid 结算入账（失败保留待支付单）；manual 挂静态收款码，未配置则引导联系管理员
 	if channel == "mock" {
 		if merr := s.Store.MarkOrderPaid(o.ID, tid); merr != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false,
-				"message": "升级单已创建但模拟入账失败（订单保留待支付）: " + store.DebriefDBError(merr),
-				"order":   s.orderViewJSON(o)})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 500：入账失败是存储故障；order 字段进 details 保留
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal,
+				"升级单已创建但模拟入账失败（订单保留待支付）: "+store.DebriefDBError(merr)).
+				WithDetails(map[string]interface{}{"order": s.orderViewJSON(o)}))
 			return
 		}
 		o.Status = "paid"
@@ -382,9 +411,10 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 			o.QRContent = v
 		} else {
 			s.Store.LogAudit(tid, u.ID, "package_upgrade", "packages", newPkg.Code+"（静态码未配置收款图片）")
-			writeJSON(w, 200, map[string]interface{}{
-				"success": false, "message": "静态收款码未配置，请联系管理员在套餐中心上传收款图片", "order_no": o.OrderNo,
-			})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 503：收款能力未就绪（等管理员补配）；order_no 进 details
+			s.writeError(w, r, apierrors.New(apierrors.ErrPayChannelUnavailable,
+				"静态收款码未配置，请联系管理员在套餐中心上传收款图片").
+				WithDetails(map[string]interface{}{"order_no": o.OrderNo}))
 			return
 		}
 	} else {
@@ -392,9 +422,10 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 		if _, _, cerr := s.payChannelQR(o, o.AmountMoney, "能言套餐升级 "+newPkg.Code); cerr != nil {
 			observability.Error(r.Context(), "升级单渠道取码失败", "tid", strconv.FormatInt(tid, 10),
 				"order", o.OrderNo, "channel", o.Channel, "err", cerr.Error())
-			writeJSON(w, 200, map[string]interface{}{
-				"success": false, "message": payChannelQRErrorMessage(o.Channel, cerr), "order_no": o.OrderNo,
-			})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 503：渠道未就绪属依赖不可用；order_no 进 details
+			s.writeError(w, r, apierrors.New(apierrors.ErrPayChannelUnavailable,
+				payChannelQRErrorMessage(o.Channel, cerr)).
+				WithDetails(map[string]interface{}{"order_no": o.OrderNo}))
 			return
 		}
 	}
@@ -419,7 +450,8 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRegisterIndustries(w http.ResponseWriter, r *http.Request) {
 	pkgs, err := s.Store.ListIndustries()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：行业字典读取失败是存储侧故障
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	seen := map[string]bool{}

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 	"translator/internal/auth"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 )
 
@@ -111,7 +112,8 @@ func (s *Server) invKB() {
 func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	tid := s.kbTenant(r, u)
@@ -123,12 +125,17 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 		}
 		orgIDs, err := s.Store.OrgDescendantIDs(tid, u.OrgID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②（批 I-10）：原 200 承载失败 → 500。部门子树 ID 取的是本进程存储层，
+			// 失败既不是入参问题也不是权限问题（权限在 requireDeptAdmin 已判过），
+			// 旧写法回 200 会让知识库面板把「查不动」渲染成「本部门没有包」。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 		pkgs, err := s.Store.ListDeptPackages(tid, orgIDs)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②（批 I-10）：原 200 承载失败 → 500：部门包列表查询失败是存储层故障，
+			// 与上面的子树取数同类（成功链路才回 200 + packages）。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 		s.attachEntryCounts(tid, pkgs)
@@ -139,7 +146,9 @@ func (s *Server) handleKBPackages(w http.ResponseWriter, r *http.Request) {
 	// 租管/超管路径：直接列本租户全部包（部门包/企业包等），附条目数后统一装饰返回
 	pkgs, err := s.Store.ListKBPackages(tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：租管/超管路径的包列表同样是存储层读取故障，
+		// 空列表与查不动必须分得开（旧写法下管理台两处都渲染成「暂无知识包」）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.attachEntryCounts(tid, pkgs)
@@ -184,7 +193,8 @@ func (s *Server) attachEntryCounts(tid int64, pkgs []*store.KBPackage) {
 func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -224,7 +234,10 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 		p, err = s.Store.CreateKBPackage(tid, 0, req.Code, req.Name, req.PackType, req.Role)
 	}
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500。kb_packages 建包是一条裸 INSERT
+		// （表上无唯一索引，重复 code 不会在这里报错），失败只可能是存储写入故障，
+		// 入参与权限问题都在上面若干分支拦掉了 ⇒ 不能给 400/403。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ 部门包创建时携带跨部门共享初始态（可选；仅 department 类型有意义）
@@ -266,7 +279,8 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
+		// 匿名＝401（★ F-64③ 批 I-10：旧写法回 403，前端只在 401 走重登录链路）
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
@@ -299,18 +313,30 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+			s.writeAuthzError(w, r, err)
 			return
 		}
 	}
 	if err := s.Store.UpdateKBPackage(req.ID, tid, req.Name); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：包已在上方按租户隔离读到、权限也已校验，
+		// 改名这条 UPDATE 失败只能是存储写入故障（不存在/无权都不会走到这里）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ 可选：同请求内调整跨部门共享开关（复用独立 setter，权限已在上方校验）
 	if req.ShareCrossDept != nil {
 		if serr := s.Store.SetKBPackageCrossDeptShare(req.ID, tid, *req.ShareCrossDept); serr != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": serr.Error()})
+			// F-64②（批 I-10）：原 200 承载失败 → 按 store 侧两条真实话术分流（文案仍逐字用 serr.Error()）：
+			//   目标包不是 department ⇒ 这个开关对该包本就不适用（store 原话「仅部门包支持跨部门共享设置」）
+			//     → 409 状态冲突（请求与资源状态对不上，换包/换类型才行，不是入参格式错）；
+			//   包已在本租户下读到（上方 GetKBPackage），故 setter 里的「包不存在」只剩并发删除一种可能
+			//     → 与 UPDATE 失败同档，500 存储故障。判据用已取到的 pkg.PackType，不再多查一次、也不猜文案。
+			if pkg.PackType != store.PackDepartment {
+				s.writeError(w, r, apierrors.New(apierrors.ErrConflict, serr.Error()))
+				return
+			}
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, serr.Error()))
 			return
 		}
 		s.invKB() // 共享集合变化：一致性起见同刷缓存
@@ -326,12 +352,16 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 			orgs = req.CrossOrgs
 		}
 		if serr := s.Store.SetKBPackageCrossScope(req.ID, tid, all, orgs); serr != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": serr.Error()})
+			// F-64②（批 I-10）：原 200 承载失败 → 500：跨部门范围是一条纯 UPDATE（setter 内无业务校验分支），
+			// 失败即存储写入故障；此处 message 沿用原样 serr.Error()，不做文案改写。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, serr.Error()))
 			return
 		}
 		s.invKB() // 范围变化：同刷缓存
 	}
-	s.Store.LogAudit(tid, u.ID, "kb_package_update", "kb_packages", "")
+	// ★ F-63（2026-09-26 批 I-3）：detail 原为空串——改名动作无从回查「改了哪个包、改成什么名」
+	s.Store.LogAudit(tid, u.ID, "kb_package_update", "kb_packages",
+		fmt.Sprintf("术语包 #%d｜名称 %s", req.ID, truncateRunes(req.Name, 40)))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -339,7 +369,8 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
+		// 匿名＝401（★ F-64③ 批 I-10：旧写法回 403，前端只在 401 走重登录链路）
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
@@ -361,14 +392,21 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// 维护权限：跨部门包须涵盖本部门（含子树/全公司仅超管租管）；部门包须归属本部门
 	if err := s.deptKBScope(u, s.kbTenant(r, u), pkg); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	if err := s.Store.DeleteKBPackage(req.ID, s.kbTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：包已在上方读到、类型与部门范围也都校验过，
+		// 三条 DELETE（条目/安全句/包）失败只能是存储故障。旧写法 HTTP 层恒 200，
+		// 按状态码分支的调用方（SDK/网关/监控）会把「没删掉」读成「删除成功」，
+		// 只有逐字检查 success 字段的 React 面板才碰巧拦得住。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
-	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_package_delete", "kb_packages", "")
+	// ★ F-63（批 I-3）：删除类统一口径「被删对象标识＋数量」（pkg 在上方的权限校验里已经读到，零额外查询）
+	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_package_delete", "kb_packages",
+		auditDelete("术语包", truncateRunes(pkg.Name, 40), req.ID, 1))
 	s.invKB() // ★ 删除包及条目：失效 CJK 缓存
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
@@ -377,7 +415,8 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
+		// 匿名＝401（★ F-64③ 批 I-10：旧写法回 403，前端只在 401 走重登录链路）
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	qp := r.URL.Query()
@@ -398,7 +437,10 @@ func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 	if countOnly {
 		total, err := s.Store.CountEntries(tid, pkgID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②（批 I-10）：原 200 承载失败 → 500：count=1 只要一个总数，
+			// COUNT 查询失败是本进程存储故障（包 ID 非法也 COUNT 得 0，不会报错），
+			// 旧写法让角标统计把「查不动」显示成 0 条。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 		writeJSON(w, 200, map[string]interface{}{"success": true, "total": total})
@@ -406,7 +448,9 @@ func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, total, err := s.Store.ListEntriesPage(tid, pkgID, layer, targetLang, keyword, page, pageSize)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：条目分页查询失败属存储层故障；
+		// 空结果与查询失败必须分档（前者 200 + entries 为空，调用方无从区分旧写法下的两种情况）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "entries": entries, "total": total})
@@ -418,7 +462,8 @@ func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBrandTerms(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
+		// 匿名＝401（★ F-64③ 批 I-10：旧写法回 403，前端只在 401 走重登录链路）
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	pkgID, _ := strconv.ParseInt(r.URL.Query().Get("package_id"), 10, 64)
@@ -429,7 +474,9 @@ func (s *Server) handleBrandTerms(w http.ResponseWriter, r *http.Request) {
 	tid := s.kbTenant(r, u)
 	terms, err := s.Store.ListBrandTerms(tid, pkgID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：品牌术语查询失败是存储层故障，
+		// 「品牌名面板空白」和「查不动」在旧写法下界面完全同形（前端按 success 兜底渲染空列表）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "terms": terms, "total": len(terms)})
@@ -439,7 +486,8 @@ func (s *Server) handleBrandTerms(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
+		// 匿名＝401（★ F-64③ 批 I-10：旧写法回 403，前端只在 401 走重登录链路）
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
@@ -474,7 +522,8 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+			s.writeAuthzError(w, r, err)
 			return
 		}
 	}
@@ -486,7 +535,18 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.Store.SaveEntry(tid, req.PackageID, req.Layer, "zh", req.SourceText, req.TargetLang, req.TargetText, req.Module)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 按失败性质分流，判据直接用本包 errmsg.go 的
+		//   hasInternalLeak（与 publicErrMessage 同一把尺子，避免两套口径漂移）：
+		//   ① store 的两条入参校验——「不支持的目标语言: x」（tgtLang 会拼进 tm_segments 列名，
+		//     受固定语言列白名单约束）与「非法的条目层: n（合法范围 1-4）」（四层契约）——
+		//     是人话文案、无内部特征 ⇒ 客户改请求就能过 → 400 ErrValidation；
+		//   ② 其余（SQL 报错等）已被 publicErrMessage 脱敏成统一「服务异常」句，客户无从纠正
+		//     ⇒ 本进程存储写入故障 → 500。回 200 时这两类在 HTTP 层无从区分，正是 F-64 的病根。
+		if hasInternalLeak(err.Error()) {
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
+			return
+		}
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_entry_add", "kb_entries", req.SourceText)
@@ -499,7 +559,8 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
+		// 匿名＝401（★ F-64③ 批 I-10：旧写法回 403，前端只在 401 走重登录链路）
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
@@ -521,11 +582,20 @@ func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// ★ F-63（批 I-3）：删除前尽力读一次条目原文供审计（读不到不阻断删除，detail 回落 id 标识）。
+	//   旧实现 detail 为空串：术语条目删除后既看不到删的是哪句话，也无法与提交/更新轨迹对齐。
+	entryLabel := ""
+	if rows, e := s.Store.GetEntryForUpdate(s.kbTenant(r, u), req.ID); e == nil && len(rows) > 0 {
+		entryLabel = truncateRunes(rows[0].SourceText, 40)
+	}
 	if err := s.Store.DeleteEntry(req.ID, s.kbTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：DeleteEntry 是一条参数化 DELETE
+		// （命中 0 行也回 nil，所以「条目不存在」不会走到这里），失败只能是存储故障。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
-	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_entry_delete", "kb_entries", "")
+	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_entry_delete", "kb_entries",
+		auditDelete("术语条目", entryLabel, req.ID, 1))
 	s.invKB() // ★ 摘除条目：失效 CJK 缓存
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
@@ -535,7 +605,8 @@ func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
+		// 匿名＝401（★ F-64③ 批 I-10：旧写法回 403，前端只在 401 走重登录链路）
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 解析请求体：id/source_text 必填，target_lang 缺省补 en（layer=0 时保留原层，见下）
@@ -585,7 +656,8 @@ func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+			s.writeAuthzError(w, r, err)
 			return
 		}
 	}
@@ -593,7 +665,10 @@ func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
 		req.Layer = cur.Layer
 	}
 	if err := s.Store.UpdateEntry(req.ID, tid, req.Layer, req.SourceText, req.TargetLang, req.TargetText, req.Module); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：UpdateEntry 是带租户隔离的纯 UPDATE
+		// （setter 内无入参校验分支，命中 0 行也回 nil），条目与包的归属/权限已在上方校验，
+		// 失败只剩存储写入故障这一种可能。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "kb_entry_update", "kb_entries", req.SourceText)
@@ -605,7 +680,8 @@ func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSafetyPhrases(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	qp := r.URL.Query()
@@ -615,7 +691,9 @@ func (s *Server) handleSafetyPhrases(w http.ResponseWriter, r *http.Request) {
 	phrases, total, err := s.Store.ListSafetyPhrasesPage(s.kbTenant(r, u), pkgID,
 		qp.Get("lang"), qp.Get("kind"), qp.Get("status"), qp.Get("q"), page, pageSize)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：安全句分页（过滤 + COUNT）失败是存储层故障，
+		// 与「过滤后没有命中」必须分开（后者 200 + phrases 空）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "phrases": phrases, "total": total})
@@ -625,7 +703,8 @@ func (s *Server) handleSafetyPhrases(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 解析请求体：phrase 必填；lang/kind 缺省补 en/style；replacement 仅 replace 类型有义
@@ -648,7 +727,10 @@ func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.Store.SaveSafetyPhraseEx(s.kbTenant(r, u), req.PackageID, req.Lang, req.Phrase, req.Kind, req.Replacement)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：安全句落库是一条 INSERT…RETURNING
+		// （kind 空值由 store 兜成 style，无入参校验分支），失败只能是存储写入故障；
+		// phrase 重复也不报错（表无唯一约束），故这里不存在 409 语义。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_add", "kb_safety_phrases", req.Phrase)
@@ -659,7 +741,8 @@ func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSafetyPhraseDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -669,11 +752,25 @@ func (s *Server) handleSafetyPhraseDelete(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
+	// ★ F-63（批 I-3）：安全句没有单条 getter，删除前扫一次本租户清单取原文（量级小：安全句按租户几十条）
+	phraseLabel := ""
+	if ps, e := s.Store.ListSafetyPhrases(s.kbTenant(r, u)); e == nil {
+		for _, p := range ps {
+			if p != nil && p.ID == req.ID {
+				phraseLabel = truncateRunes(p.Phrase, 40)
+				break
+			}
+		}
+	}
 	if err := s.Store.DeleteSafetyPhrase(req.ID, s.kbTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：带租户隔离的 DELETE，命中 0 行也回 nil，
+		// 所以失败只可能是存储故障（不存在/他租记录都表现为删除成功，本批不改这个既有行为）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
-	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_delete", "kb_safety_phrases", "")
+	// ★ F-63（批 I-3）：detail 原为空串，删除动作只剩「有人删过一条」——补「被删对象标识＋数量」
+	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_delete", "kb_safety_phrases",
+		auditDelete("安全话术", phraseLabel, req.ID, 1))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -682,7 +779,8 @@ func (s *Server) handleSafetyPhraseDelete(w http.ResponseWriter, r *http.Request
 func (s *Server) handleKBPackageStatus(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
+		// 匿名＝401（★ F-64③ 批 I-10：旧写法回 403，前端只在 401 走重登录链路）
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
@@ -712,12 +810,17 @@ func (s *Server) handleKBPackageStatus(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+			s.writeAuthzError(w, r, err)
 			return
 		}
 	}
 	if err := s.Store.SetKBPackageEnabled(req.ID, req.Enabled); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：启停要联动改写检索层 tm_segments
+		// （摘除/回写），包已在上方按租户隔离读到、权限也过，失败只能是这批改写的存储故障。
+		// 旧写法 HTTP 层恒 200：停用没生效，按状态码分支的调用方（SDK/监控）却读成成功，
+		// 该包的条目会继续被当成在用检索层参与翻译——状态与事实相反。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "kb_package_status", "kb_packages", fmt.Sprintf("pkg=%d enabled=%d", req.ID, req.Enabled))
@@ -732,7 +835,8 @@ func (s *Server) handleKBPackageStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKBPackageShare(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
+		// 匿名＝401（★ F-64③ 批 I-10：旧写法回 403，前端只在 401 走重登录链路）
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
@@ -762,12 +866,23 @@ func (s *Server) handleKBPackageShare(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+			s.writeAuthzError(w, r, err)
 			return
 		}
 	}
 	if err := s.Store.SetKBPackageCrossDeptShare(req.ID, tid, req.Share); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 按真实语义分流（文案仍逐字走 publicErrMessage）：
+		//   非 department 包（企业包/行业包/跨部门包）本就没有这个开关，store 原话
+		//   「仅部门包支持跨部门共享设置」⇒ 请求与该资源的状态对不上 → 409 ErrConflict
+		//   （不是入参格式错，也不是权限问题：权限在上方已放行）；
+		//   包已在上方按同一 tid 读到，setter 里的「包不存在或无权操作」只剩并发删除 → 500。
+		//   判据用已取到的 pkg.PackType，不额外回查、也不靠猜文案。
+		if pkg.PackType != store.PackDepartment {
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, publicErrMessage(r.Context(), err)))
+			return
+		}
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "kb_package_share", "kb_packages", fmt.Sprintf("pkg=%d share=%d", req.ID, req.Share))
@@ -780,7 +895,8 @@ func (s *Server) handleKBPackageShare(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKBIndexRebuild(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	_ = u
@@ -789,14 +905,21 @@ func (s *Server) handleKBIndexRebuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.Engine.Rebuilding() {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "重建正在进行中，请稍候"})
+		// F-64②（批 I-10）：原 200 承载失败 → 409：同一个索引同时只允许一次全量重建，
+		// 这是「资源正被上一次操作占用」的状态冲突（与「重复提交」同档），
+		// 客户等上一次跑完再发即可；旧写法回 200 会让脚本以为已经排上队并继续狂点。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "重建正在进行中，请稍候"))
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	n, err := s.Engine.RebuildKBIndex(ctx)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": fmt.Sprintf("重建失败（已嵌入 %d 行）: %v", n, err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：重建失败的可达原因有三类
+		//   （读全表向量源数据失败、逐批 Embed 模型调用失败、无有效向量生成/落盘失败），
+		//   没有哪一档上游错误码能同时诚实覆盖，故取兜底 500；
+		//   进度（已嵌入行数）与原始错误按原文案逐字保留，排查靠它而不是靠状态码细分。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, fmt.Sprintf("重建失败（已嵌入 %d 行）: %v", n, err)))
 		return
 	}
 	s.Store.LogAudit(1, u.ID, "kb_index_rebuild", "kb", fmt.Sprintf("%d 行向量已重建", n))
@@ -821,7 +944,8 @@ func (s *Server) rebuildIndexAsync() {
 func (s *Server) handleSafetyPhraseBulkImport(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -835,7 +959,9 @@ func (s *Server) handleSafetyPhraseBulkImport(w http.ResponseWriter, r *http.Req
 	tid := s.kbTenant(r, u)
 	added, err := s.Store.BulkImportSafetyPhrases(tid, req.PackageID, req.Items)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：批量投喂逐条 INSERT，重复项由 store 内部跳过
+		// （不是错误），失败只能是中途的存储写入故障。已写入条数不回填是本批保留的历史行为。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "safety_bulk_import", "kb_safety_phrases", fmt.Sprintf("imported=%d pending_review", added))
@@ -846,7 +972,8 @@ func (s *Server) handleSafetyPhraseBulkImport(w http.ResponseWriter, r *http.Req
 func (s *Server) handleSafetyPhraseStatus(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -858,7 +985,32 @@ func (s *Server) handleSafetyPhraseStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := s.Store.SetSafetyPhraseStatus(req.ID, s.kbTenant(r, u), req.Status); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 按真实语义分流（文案仍逐字走 publicErrMessage，
+		//   成功链路不多查一次，只在失败路径回读判定；同 ①档 handleOrderRefund 手法）：
+		//   status 不在 pending/approved/rejected ⇒ 客户改请求就能过 → 400 ErrValidation（store 原话「非法状态: x」）；
+		//   本租户清单里查不到这条 ⇒ 404 ErrNotFound——store 刻意把「不存在」与「他租记录」合并成
+		//     同一句「记录不存在」以免泄露跨租户存在性，404 正是这个口径（既不是 500，也不是 403 泄权限图）；
+		//   记录在、status 也合法仍失败 ⇒ 500 存储写入故障。
+		msg := publicErrMessage(r.Context(), err)
+		if req.Status != "pending" && req.Status != "approved" && req.Status != "rejected" {
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, msg))
+			return
+		}
+		phrases, lerr := s.Store.ListSafetyPhrases(s.kbTenant(r, u))
+		if lerr == nil {
+			found := false
+			for _, p := range phrases {
+				if p != nil && p.ID == req.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, msg))
+				return
+			}
+		}
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, msg))
 		return
 	}
 	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_status", "kb_safety_phrases", req.Status)
@@ -874,12 +1026,15 @@ func (s *Server) handleSafetyPhraseStatus(w http.ResponseWriter, r *http.Request
 // 响应：{ success, industries: [{id,code,name,enabled,entry_count}] }
 func (s *Server) handleIndustries(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireDeptAdmin(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	inds, err := s.Store.ListIndustries()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：行业字典是注册页/租户表单/数据采集下拉的唯一数据源，
+		// 查不动与「平台没有行业」在旧写法下界面同形（下拉只剩空列表，用户以为字典没配）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 附带条目计数（面板角标展示语料量）
@@ -895,7 +1050,8 @@ func (s *Server) handleIndustries(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleIndustryCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -931,7 +1087,9 @@ func (s *Server) handleIndustryCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := s.Store.CreateKBPackage(store.SharedHostTenant, 0, code, strings.TrimSpace(req.Name), store.PackIndustry, store.PackRoleSource)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：code 重复已在上方 IndustryCodeExists 拦掉（内联 400），
+		// 建包这条 INSERT 失败只剩存储写入故障（表上无唯一索引，不会在这里抛冲突）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(store.SharedHostTenant, u.ID, "industry_create", "kb_packages", code)
@@ -944,7 +1102,8 @@ func (s *Server) handleIndustryCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleIndustryUpdate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -961,7 +1120,10 @@ func (s *Server) handleIndustryUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.UpdateIndustry(req.ID, strings.TrimSpace(req.Name)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：改名是限定租户 0 + pack_type=industry 的纯 UPDATE
+		// （命中 0 行也回 nil，即「行业不存在」走不到这条分支，那里表现为更新成功），
+		// 失败只剩存储写入故障；入参与权限已在上面的 400/403 分支拦掉。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(store.SharedHostTenant, u.ID, "industry_update", "kb_packages", fmt.Sprintf("id=%d name=%s", req.ID, req.Name))
@@ -974,7 +1136,8 @@ func (s *Server) handleIndustryUpdate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleIndustryStatus(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -991,7 +1154,9 @@ func (s *Server) handleIndustryStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.ToggleIndustry(req.ID, req.Enabled); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：启停行业直接决定注册页/翻译命中链路用不用该行业，
+		// 失败必须是服务端出错（UPDATE 命中 0 行也回 nil，所以这里不存在「行业不存在」的 404 语义）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(store.SharedHostTenant, u.ID, "industry_status", "kb_packages", fmt.Sprintf("id=%d enabled=%d", req.ID, req.Enabled))
@@ -1005,7 +1170,8 @@ func (s *Server) handleIndustryStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleIndustryDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
@@ -1030,7 +1196,10 @@ func (s *Server) handleIndustryDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeleteIndustry(req.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②（批 I-10）：原 200 承载失败 → 500：行业是否存在、类型是否 industry、是否被租户引用
+		// 都已在上三道分支拦掉（403「行业不存在」/400「已被企业租户使用」），
+		// 走到这里只剩「条目/安全句/包」三条 DELETE 的存储故障——删一半失败的脏状态必须报服务端错误。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(store.SharedHostTenant, u.ID, "industry_delete", "kb_packages", pkg.Code)

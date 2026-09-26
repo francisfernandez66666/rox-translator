@@ -135,6 +135,86 @@ export function authHeaders(): Record<string, string> {
   return h
 }
 
+// ============================================================================
+// 错误体统一解析（★ 2026-09-26 〇-U 批 I-8 · F-52）
+// ----------------------------------------------------------------------------
+// 缺陷本体：SSE 通道（api/translate.ts 的 !response.ok 分支）自己写了
+//   `throw new Error(\`请求失败 (${status}): ${await response.text()}\`)`，
+//   后端 400 现在是**结构化 JSON**（{success,code,message,details,trace_id}，见
+//   internal/errors/codes.go 与批 I-7 的状态码诚实改造），于是整段 JSON 被当正文塞进
+//   聊天气泡——用户看到一屏 `{"success":false,"code":"chat_text_too_long",...,"trace_id":"..."}`。
+//   useChat 只对 `<!doctype` 开头的 HTML 网关页做了过滤（F-29 批G），对 JSON 无判，
+//   所以「错误体格式升级」这一侧的收益被前端静默吞掉。
+//
+// 手法：把「怎么读一个失败响应」收成一个函数，两条通道（统一 client / 裸 fetch 的 SSE）
+//   共用同一判据，而不是在 SSE 里再抄一份 if/else（抄一份就意味着以后只改一处）。
+//   规则按「能不能给人看」分两档：
+//   ① JSON 对象 → message/error 作正文、code/error_code 作稳定码、整个对象留作 body，
+//      **display 一律空串**：整段 JSON 永不进兜底文案（trace_id 因此也进不去，只在 body 里供排查）；
+//   ② 其余（HTML 网关页 / 坏 JSON / 纯文本）→ 截前 200 字作 display 兜底。
+//      ★ HTML 这一档**必须保留原文**，不是遗漏：useChat 的 isHtmlErrorBody() 就是靠气泡文案里
+//      的 `<!doctype` 认出「网关把长请求掐成 524 错误页」并换成超时文案（F-29 批G，
+//      useChat.dom.test.tsx 有锁）。在这里把它抹白，那条识别链就断了——反而把超时提示退化成
+//      「请求失败 (524)」空壳。200 字截断不影响判据（doctype 在开头）。
+//
+// ★ 顺带修一个「读侧自伤」：旧 request() 先 `await response.json()`，失败后在 catch 里
+//   再 `await response.text()`——Response 体只能消费一次，第二次直接抛
+//   `body already consumed`，被 `.catch(()=> '')` 吞成空串，于是非 JSON 错误体的兜底文案
+//   一直是 `请求失败 (400): `（后面空的）。这里改成**先读一次 text()、再对文本做 parse**，
+//   兜底文案才真能带上后端原文。
+// ============================================================================
+export interface ErrEnvelope {
+  /** 后端 message / error 字段（给人看的那句），取不到为空串 */
+  message: string
+  /** 稳定错误码（code 优先，error_code 为 OpenAPI/SDK 兼容别名） */
+  code?: string
+  /** parse 成功且是 JSON 对象时的原样对象（bizResp 据此还原历史响应体） */
+  body?: Record<string, unknown>
+  /** 允许拼进兜底文案的原文（HTML/JSON 一律空串，见上面三档规则） */
+  display: string
+}
+
+/** 解析失败响应体文本（纯函数，喂字符串即可单测） */
+export function parseErrEnvelope(raw: string): ErrEnvelope {
+  const text = (raw ?? '').trim()
+  if (!text) return { message: '', display: '' }
+  if (text.startsWith('{') || text.startsWith('[')) {
+    try {
+      const parsed: unknown = JSON.parse(text)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const b = parsed as Record<string, unknown>
+        const m = b.message ?? b.error
+        return {
+          message: typeof m === 'string' ? m : '',
+          code: (typeof b.code === 'string' && b.code) || (typeof b.error_code === 'string' && b.error_code) || undefined,
+          body: b,
+          display: '', // ★ 整段 JSON 不进正文（本缺陷的落点：这里给原文就是回归）
+        }
+      }
+      // JSON 数组/标量：不是错误契约，按原文兜底（截断后）
+      return { message: '', display: text.slice(0, 200) }
+    } catch { /* 以 { 开头的坏 JSON：落到下面的原文兜底 */ }
+  }
+  return { message: '', display: text.slice(0, 200) }
+}
+
+/** 读一次响应体并解析（★ 只能调用一次——同一 Response 的 body 不可重复消费） */
+export async function readErrEnvelope(response: { text(): Promise<string> }): Promise<ErrEnvelope> {
+  const raw = await response.text().catch(() => '')
+  return parseErrEnvelope(raw)
+}
+
+/**
+ * 从任意 catch 到的错误里取 trace_id（★ F-52③：trace_id 只做「复制排查信息」，不进气泡正文）。
+ * 后端统一错误体带 trace_id（observability 的 slog trace），前端此前零消费方——
+ * 既没展示也没地方复制。这里收一个取值器：展示层要复制排查信息时调它，
+ * **禁止**把它拼进 message/content（那正是本缺陷的形态）。
+ */
+export function errTraceId(e: unknown): string {
+  if (e instanceof ApiError && e.body && typeof e.body.trace_id === 'string') return e.body.trace_id
+  return ''
+}
+
 /**
  * 通用 JSON 请求封装：自动附带认证头，非 2xx 抛出错误，返回解析后的 JSON。
  * 支持 options.timeoutMs 设置请求超时（默认 30 秒），超时自动 Abort 并抛出明确错误。
@@ -173,21 +253,20 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     })
     if (response.status === 401) handleUnauthorized(url)
     if (!response.ok) {
-      // 优先解析后端结构化错误体（{message}）作为用户可读信息；解析失败回退状态码 + 原文
-      let message = ''
-      let errCode: string | undefined
-      try {
-        const body = await response.json()
-        if (body && typeof body === 'object') {
-          const m = (body as { message?: string; error?: string }).message || (body as { error?: string }).error
-          if (typeof m === 'string' && m) message = m
-          // 统一错误码透传：code 为稳定码（errors 包），error_code 为 OpenAPI/SDK 兼容别名
-          errCode = (body as { code?: string }).code || (body as { error_code?: string }).error_code || undefined
-        }
-      } catch { /* 非 JSON 错误体 */ }
+      // ★ F-52（批 I-8）：失败体的读法/判据收进 readErrEnvelope()，与 SSE 通道同一函数
+      //   （旧写法在这里 json() 失败后再 text()，第二次消费必抛 → 兜底原文恒为空串）。
+      //   message＝后端那句；structBody＝结构化对象（bizResp 靠它区分业务失败/网关坏体）；
+      //   display＝可拼进兜底文案的原文（JSON/HTML 为空，不会把整段体送进界面）。
+      const env = await readErrEnvelope(response)
+      let message = env.message
+      const errCode = env.code
+      // ★ F-64①（批 I-7）：把解析成功的错误对象体留住，供 bizResp() 判定「这是后端主动下发的
+      //   结构化业务失败」还是「网关/HTML/坏体」——前者可以还原成 success:false 响应体，
+      //   后者必须照旧抛出。只有带结构化体的错误才可能被 bizResp 收敛。
+      const structBody = env.body
       if (!message) {
-        const text = await response.text().catch(() => '')
-        message = apiMsg('common.reqFailDetail', `请求失败 (${response.status}): ${text}`, { status: response.status, text })
+        message = apiMsg('common.reqFailDetail', `请求失败 (${response.status})${env.display ? `: ${env.display}` : ''}`,
+          { status: response.status, text: env.display })
       }
       // ★ §4.2-3：403 越权集中识别——对外文案走统一解析器（本地化既有键），并钉稳定错误码
       //   FORBIDDEN（后端未回 code 时补），调用方据此分支；不清登录态（用户仍在线）。
@@ -195,7 +274,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       if (response.status === 403) {
         throw new ApiError(handleForbidden(message, url), 403, errCode || 'FORBIDDEN')
       }
-      const err = new ApiError(message, response.status, errCode)
+      const err = new ApiError(message, response.status, errCode, structBody)
       throw err
     }
     return await response.json()
@@ -231,12 +310,56 @@ export class ApiError extends Error {
   readonly code?: string
   /** HTTP 状态码 */
   readonly status?: number
+  /**
+   * ★ F-64①（批 I-7）：后端下发的**结构化错误体**原样（{success:false, code, message, details…}）。
+   * 只在「非 2xx 且响应体是合法 JSON 对象」时有值；网络层失败、超时、HTML 错误页一律为 undefined。
+   * 用途：bizResp() 据此把「业务失败」还原成历史响应体形态，见该函数注释。
+   */
+  readonly body?: Record<string, unknown>
 
-  constructor(message: string, status?: number, code?: string) {
+  constructor(message: string, status?: number, code?: string, body?: Record<string, unknown>) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
+    this.body = body
+  }
+}
+
+/**
+ * bizResp —— 把「HTTP 诚实状态码」还原成历史 `{success, message, ...}` 响应体的收敛器。
+ *
+ * ★ 背景（F-64① 批 I-7，2026-09-26）：后端充值/订阅/券/账单等接口过去用 **HTTP 200 承载失败**
+ *   （`{success:false,...}`），客户与 SDK 只看状态码时全部判成成功——这是缺陷，已改为按语义
+ *   给 400/404/409/500/503。但前端全站约定是 `if (!r.success)` / `toastResp(r)`（数百处），
+ *   而 request() 对非 2xx 一律抛异常：只改后端就会让「点订阅失败」变成
+ *   **未捕获的 promise rejection + 界面毫无提示**，等于把一个契约缺陷换成一个线上故障。
+ *
+ * ★ 手法（AGENTS §三「优先薄委托 + 零改动调用点」）：在**收款/账务域接口函数**这一层用
+ *   bizResp 包一层，把后端结构化失败体还原成原响应形态（含 details 里的 order/order_no/
+ *   coupon_error 附加字段），调用点零改动即恢复既有语义；HTTP 线上仍是诚实状态码，
+ *   对外契约（SDK / 第三方）不受影响。
+ *
+ * ★ 不收敛的两类，照旧抛出（与改前行为完全一致，刻意保留）：
+ *   ① 401：request() 已触发全局清登录态 + 回登录页，调用方必须感知「这次没做成」；
+ *   ② 403：本批未翻状态码（历史上就是 403），收敛它等于顺手改掉另一批的口径；
+ *   ③ 无结构化体（网络断开、超时、CF/网关 HTML 页）：不是业务失败，不能伪装成 success:false。
+ *
+ * 用法：`return bizResp(() => request('/api/pay/create', {...}))`
+ */
+export async function bizResp<T = AdminResp>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn()
+  } catch (e) {
+    if (e instanceof ApiError && e.body && e.status !== 401 && e.status !== 403) {
+      const b = e.body
+      // details 里是后端随错误附带的数据（order_no 等），摊平到顶层保持与旧响应体同形；
+      // 摊平顺序：先 details 再信封字段，确保 success/message/code 以错误信封为准不被覆盖。
+      const { details, ...rest } = b
+      const flat = (details && typeof details === 'object' ? (details as Record<string, unknown>) : {})
+      return { ...flat, ...rest, success: false, status: e.status, code: e.code } as unknown as T
+    }
+    throw e
   }
 }
 

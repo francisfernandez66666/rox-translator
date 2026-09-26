@@ -23,6 +23,9 @@ import { zh as kbZh } from '@/i18n/panels/kb'
 import { fmtDateTime } from '@/lib/format'
 
 // 后台上下文可控桩：isSuper/myLevel 逐用例改写（F-26 两角色态）
+/** 上传向导空壳收到的 props（F-57 锁读这里）；mock 工厂在模块初始化期就会写它 */
+let kbUploadProps: Record<string, unknown> = {}
+
 const m = vi.hoisted(() => ({
   admin: { myLevel: 4, isSuper: true, activeTenantId: 0, orgs: [] as unknown[] },
   api: {
@@ -44,7 +47,10 @@ vi.mock('./DataSourcesP', () => ({ default: () => null }))
 vi.mock('./BrandTermsP', () => ({ default: () => null }))
 vi.mock('./IndustriesP', () => ({ default: () => null }))
 vi.mock('./PersonasP', () => ({ default: () => null }))
-vi.mock('@/components/KbUploadDialog', () => ({ default: () => null }))
+// ★ F-57 锁需要拿到弹窗收到的 props（onSuccess 有没有接上），上传向导改成「记录 props 的空壳」
+vi.mock('@/components/KbUploadDialog', () => ({
+  default: (props: Record<string, unknown>) => { kbUploadProps = props; return null },
+}))
 
 // zh 字面值（与 panels/kb.ts 等值，改动词典即改这里——这是刻意的联动锁）
 const SAFETY_TITLE = '语言文化规范（安全句 · Gate 闸门）'
@@ -182,4 +188,33 @@ describe('包授权列表时间列（★ F-14 移交项 · 本地时区接线）
       else process.env.TZ = tzOld
     }
   })
+})
+
+// ============================================================================
+// ★ 2026-09-26 〇-U 批 I-8 · F-57「写成功后同屏不重取」回归锁
+// 缺陷形状：上传向导导入成功 → 只清了弹窗自己的临时态，KbP 的包列表与「查看条目（N）」
+// 计数仍是导入前的值（本轮实测导入后计数纹丝不动），运营判断不出写没写进去。
+// 锁的形状：**接线锁 + 效果锁**两层——① 弹窗确实收到了 onSuccess（属性没漏传），
+// ② 触发 onSuccess 后包列表接口真的被重新调用（不是传了个空函数应付）。
+// 反证：把 KbP 的 onSuccess 属性删掉 ⇒ ① 判红；换成空函数 ⇒ ② 判红。两层各管一段退化，
+// 所以不做「自证式负向用例」（渲染 KbP 必然把 props 写回来，那种用例恒绿、属假绿）。
+// ============================================================================
+describe('上传向导写成功后重取包列表（★ F-57）', () => {
+  it('KbP 给 KbUploadDialog 接了 onSuccess，且调用它确实重拉 kbPackages', async () => {
+    m.api.kbPackages.mockResolvedValue({
+      success: true,
+      packages: [{ id: 7, name: '包A', code: 'a', pack_type: 'tenant', enabled: 1, entry_count: 34 }],
+    })
+    render(<KbP />)
+    await vi.waitFor(() => { expect(m.api.kbPackages).toHaveBeenCalled() })
+    const before = m.api.kbPackages.mock.calls.length
+
+    // ① 接线锁：向导组件收到了 onSuccess 回调（没接 ⇒ 本缺陷原样存在）
+    expect(typeof kbUploadProps.onSuccess, 'KbUploadDialog 必须接到 onSuccess 回调').toBe('function')
+
+    // ② 效果锁：模拟「导入成功」时机（真实实现里由 r.success 分支触发）
+    ;(kbUploadProps.onSuccess as () => void)()
+    await vi.waitFor(() => { expect(m.api.kbPackages.mock.calls.length).toBeGreaterThan(before) })
+  })
+
 })

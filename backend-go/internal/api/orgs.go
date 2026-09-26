@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"translator/internal/auth"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 )
 
@@ -47,7 +48,8 @@ func (s *Server) routesOrgs() {
 func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 部门管理员：仅本部门及子部门组织树（只读视图）
@@ -59,17 +61,22 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 		}
 		root, err := s.Store.GetRootOrg(tid)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②：本租户根组织行读取失败是存储侧故障（500）。旧写法回 200＋success:false，
+			// 部门管理员的组织面板会把它当「加载成功但没数据」渲染成空树，运维也查不到 trace_id。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 		orgIDs, err := s.Store.OrgDescendantIDs(tid, u.OrgID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②：子孙组织集合要遍历 orgs 表，读失败同样是存储侧故障（500）；
+			// 这里不能退化成「返回空集合继续渲染」，那会让部门管理员看到一棵假的空树。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 		all, err := s.Store.ListOrgs(tid)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②：祖先链补全依赖的全量组织列表读取失败（500）——同上，失败必须是失败。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 		orgSet := map[int64]bool{}
@@ -122,7 +129,9 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 			}
 			orgs, err := s.Store.ListOrgs(tid)
 			if err != nil {
-				writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+				// F-64②：超管切到指定租户看组织树，列表读取失败是存储侧故障（500）；
+				// 回 200 会让管理台把「读挂了」显示成「该租户没有部门」，误导跨租户排障。
+				s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 				return
 			}
 			writeJSON(w, 200, map[string]interface{}{"success": true, "orgs": orgs, "root": root, "tenant_id": tid, "platform": false})
@@ -131,7 +140,9 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 		// 平台上下文（tid=0）→ 展示平台组织树（所有租户）
 		root, err := s.Store.EnsurePlatformRootOrg("能言")
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②：Ensure 是「查不到就建」，失败只可能是读写平台根组织行出错（500），
+			// 不是权限问题——能走到这里说明已过 requireDeptAdmin 与超管判定。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 		// 确保所有租户都有根组织行（首次或迁移后）
@@ -146,7 +157,8 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 		}
 		orgs, err := s.Store.ListPlatformOrgs(root.ID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②：平台全量组织视图（INNER JOIN tenants）读取失败＝存储侧故障（500）。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 		writeJSON(w, 200, map[string]interface{}{"success": true, "orgs": orgs, "root": root, "tenant_id": 0, "platform": true})
@@ -171,7 +183,8 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 	}
 	orgs, err := s.Store.ListOrgs(tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：租户管理员兜底视图（非超管、非部门管理员）的组织列表读取失败＝存储侧故障（500）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "orgs": orgs, "root": root, "tenant_id": tid, "platform": false})
@@ -214,7 +227,8 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	// 层级设置权限：仅超管（任意租户）与租户管理员（本租户）；部门管理员不动结构
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -263,11 +277,16 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// ★ 脱敏（2026-09-12）：驱动错误不透吐
 		if store.IsUniqueViolation(err) {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败：同级下已存在同名组织"})
+			// F-64②：同级重名是「资源状态冲突」（orgs 上有 idx_orgs_sibling_unique
+			// 唯一索引）——载荷本身没错，改个名字重发即可，故 409 而非 200 也不是 400：
+			// 前端据此把焦点留在名称输入框，而不是当成服务端故障去重试同一个名字。
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "创建失败：同级下已存在同名组织"))
 			return
 		}
 		log.Printf("[orgs] 创建组织失败 tid=%d name=%s: %v", tid, req.Name, err)
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "创建失败: " + store.DebriefDBError(err)})
+		// F-64②：非重名的建组织失败（驱动/连接级）才是真·服务端出错（500），
+		// 原文已按下面的 log.Printf 落日志，响应体只回 DebriefDBError 的安全文案。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "创建失败: "+store.DebriefDBError(err)))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "org_create", "orgs", req.Name)
@@ -280,7 +299,8 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrgRename(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 解析 id/name 并做组织归属（orgTenant）+ 层级合法性（validateOrg）双闸口后改名；根组织同步租户名见下
@@ -302,7 +322,13 @@ func (s *Server) handleOrgRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.RenameOrg(req.ID, strings.TrimSpace(req.Name)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：改名同样受 idx_orgs_sibling_unique 约束——撞到「同级重名」是状态冲突（409），
+		// 用户换个名字就好；其余（驱动/连接级）才是服务端出错（500），两者旧写法都是 200。
+		if store.IsUniqueViolation(err) {
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, publicErrMessage(r.Context(), err)))
+			return
+		}
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 根组织改名同步租户名（保持组织树与租户列表一致）
@@ -321,7 +347,8 @@ func (s *Server) handleOrgRename(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrgMove(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 解析 id/parent_id 并确认组织归属当前租户；防成环等层级校验由 store 侧 MoveOrg 完成
@@ -339,10 +366,15 @@ func (s *Server) handleOrgMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.MoveOrg(tid, req.ID, req.ParentID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：移动失败的语义很杂（跨租户／目标父节点不存在／成环／根组织不可动），
+		// 一律回 200 会让前端无法区分「拖错了地方」与「服务挂了」，这里按语义分档。
+		s.writeError(w, r, orgMutationError(r, err))
 		return
 	}
-	s.Store.LogAudit(tid, u.ID, "org_move", "orgs", "")
+	// ★ F-63（2026-09-26 批 I-3）：detail 原为空串——组织树结构调整（谁挂到谁下面）正是
+	//   「部门额度/权限范围为何变了」的回查依据，必须落两个 id。
+	s.Store.LogAudit(tid, u.ID, "org_move", "orgs",
+		fmt.Sprintf("组织 #%d 移至父节点 #%d", req.ID, req.ParentID))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -352,7 +384,8 @@ func (s *Server) handleOrgMove(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 解析 id 并过组织归属 + validateOrg 双闸口后删除；子组织上移/成员回收由 store 侧 DeleteOrg 处理
@@ -372,11 +405,28 @@ func (s *Server) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
+	// ★ F-63（2026-09-26 批 I-3）：删除前先取节点名与直属子节点数——删除后这些信息就没了，
+	//   旧实现 detail 为空串，事后既不知道删的是哪个部门，也不知道多少子节点被上移。
+	delName, childCount := "", 0
+	if o, e := s.Store.GetOrgByID(req.ID); e == nil && o != nil {
+		delName = o.Name
+	}
+	if all, e := s.Store.ListOrgs(tid); e == nil {
+		for _, o := range all {
+			if o != nil && o.ParentID == req.ID {
+				childCount++
+			}
+		}
+	}
 	if err := s.Store.DeleteOrg(req.ID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：删除失败沿用与移动同一套语义分档（跨租户 403／成环守卫 400／
+		// 根组织不可删 409／存储写入故障 500），旧写法全部混成 200。
+		s.writeError(w, r, orgMutationError(r, err))
 		return
 	}
-	s.Store.LogAudit(tid, u.ID, "org_delete", "orgs", "")
+	s.Store.LogAudit(tid, u.ID, "org_delete", "orgs",
+		auditDelete("组织节点", truncateRunes(delName, 40), req.ID, 1)+
+			fmt.Sprintf("｜直属子节点上移 %d 个", childCount))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -386,7 +436,8 @@ func (s *Server) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrgUsers(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -416,7 +467,10 @@ func (s *Server) handleOrgUsers(w http.ResponseWriter, r *http.Request) {
 	if auth.IsSuperAdmin(u) && tid <= 0 && orgID <= 0 {
 		users, err := s.Store.ListAllUsers()
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②：超管平台视图跨租户列账号，读失败是存储侧故障（500）。
+			// 这里不是「没登录」——上面 requireDeptAdmin 已经放行，绝不能回 401
+			// （前端 core.ts 的 handleUnauthorized 只挂 401，会把在线用户踢回登录页）。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 		nameMap, _ := s.Store.OrgNameMap()
@@ -444,13 +498,16 @@ func (s *Server) handleOrgUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		orgIDs, err = s.Store.OrgDescendantIDs(tid, orgID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②：子孙集合靠 orgs 全量查询算，读失败＝存储侧故障（500）。
+			// 注意此处不能借 401/403 表达——权限与归属在上面的 validateOrg 已判过，走到这里只可能是库坏了。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 	}
 	users, err := s.Store.ListUsersByOrg(tid, orgIDs)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：按组织子树列成员失败＝存储侧故障（500），旧写法回 200 会被面板渲染成「该部门没有成员」。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 补充组织名（前端展示树形归属）
@@ -470,6 +527,37 @@ func (s *Server) handleOrgUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "users": out, "org_id": orgID})
 }
 
+// orgMutationError 组织结构性写操作（移动/删除）失败时的错误语义分档。
+// 为什么必须分档而不是一律 500：MoveOrg/DeleteOrg 的失败绝大多数不是「服务端出错」，
+// 而是本层挡得住的业务事实——跨租户访问（403）、目标节点不存在（404）、
+// 新父节点在被移节点子树内＝父节点不合法（400）、根组织不可移/不可删＝资源状态冲突（409）；
+// 全塞进 500 会让前端与运维照着 trace_id 去查一个根本没坏的进程。
+// 为什么判据取 publicErrMessage 的对外文案而不是 err.Error()：
+// iam 侧这些业务错误是中文话术、经脱敏后原样透出，两者同源；
+// 驱动级错误（含 sql: no rows）脱敏成「服务处理出现异常」，落到兜底 500，
+// 于是「状态码」与「用户看到的那句话」永远一致，不会出现「404 + 系统繁忙」的自相矛盾应答。
+// 本文件这些接口都是已登录的管理台入口，绝不用 401（401 会触发前端清登录态）。
+func orgMutationError(r *http.Request, err error) *apierrors.APIError {
+	msg := publicErrMessage(r.Context(), err)
+	switch {
+	case strings.Contains(msg, "不属于当前租户"):
+		// 组织或目标父节点归属别的租户：越权语义（403），改请求参数无法绕过
+		return apierrors.New(apierrors.ErrForbidden, msg)
+	case strings.Contains(msg, "不存在"):
+		// 明确写了「不存在」的业务文案：目标节点查不到（404）
+		return apierrors.New(apierrors.ErrNotFound, msg)
+	case strings.Contains(msg, "自身或其子组织"):
+		// 成环：新父节点落在被移动节点自己的子树里，属父节点不合法（400）
+		return apierrors.New(apierrors.ErrValidation, msg)
+	case strings.Contains(msg, "根组织不可"):
+		// 根组织（=租户本身）不可移动/不可删除：载荷没错，错在对象当前状态（409）
+		return apierrors.New(apierrors.ErrConflict, msg)
+	default:
+		// 剩下才是真·服务端出错（500）：驱动/事务/连接级失败
+		return apierrors.New(apierrors.ErrInternal, msg)
+	}
+}
+
 // findOrgByID 在组织切片中按 ID 查找（用于 dept_admin 祖先链构建）。
 func findOrgByID(orgs []*store.Org, id int64) *store.Org {
 	for _, o := range orgs {
@@ -486,7 +574,8 @@ func findOrgByID(orgs []*store.Org, id int64) *store.Org {
 func (s *Server) handleOrgTokenLimit(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -538,7 +627,8 @@ func (s *Server) orgBudgetViewJSON(sum *store.OrgBudgetSummary) map[string]inter
 func (s *Server) handleOrgBudgetSummary(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	sum, err := s.Store.GetOrgBudgetSummary(s.effTenant(r, u))

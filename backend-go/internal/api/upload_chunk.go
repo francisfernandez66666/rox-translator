@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	apierrors "translator/internal/errors"
 )
 
 // 分片上传常量：单分片 8MB 上限、24h 过期、分片总数与单文件实际字节硬顶（防滥用）。
@@ -198,14 +200,20 @@ func (s *Server) handleKBUploadMerge(w http.ResponseWriter, r *http.Request) {
 	}
 	rec := receivedChunks(dir)
 	if total <= 0 || len(rec) != total {
-		writeJSON(w, 200, map[string]interface{}{"success": false,
-			"message": "分片不完整（已收 " + strconv.Itoa(len(rec)) + "/" + strconv.Itoa(total) + "）"})
+		// F-64②：分片没收齐 = 客户端还没传完就来合并，属请求与服务器状态不合 → 400；
+		//   旧写法回 200 + success:false，调用方（api/kb.ts 的分片上传）按状态码分支时看不出这是失败。
+		//   不用 500：落盘与读目录都成功了，失败原因是「上传方自己还没传完」；
+		//   不用 409：本仓 409 留给「重复提交/名称冲突」这类资源态，续传场景语义太轻，且映射表不许动。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation,
+			"分片不完整（已收 "+strconv.Itoa(len(rec))+"/"+strconv.Itoa(total)+"）"))
 		return
 	}
 	// 连续性校验（received 升序应为 0..total-1）
 	for i, n := range rec {
 		if n != i {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "分片序号有缺口，请续传后重试"})
+			// F-64②：序号有缺口同样是「客户端该续传」的入参/状态问题 → 400（与上一处同口径，
+			//   两处必须同码，否则前端对同一失败要写两条分支）。
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "分片序号有缺口，请续传后重试"))
 			return
 		}
 	}

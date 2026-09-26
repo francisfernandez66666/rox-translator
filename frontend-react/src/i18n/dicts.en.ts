@@ -578,7 +578,6 @@ export const baseEn: Record<string,string> = {
   'app.backHome': 'Back',
   'app.bye': 'Bye',
   'app.langBtn': 'Language',
-  'chat.balanceFmt': 'Balance {points} credits (≈{sents} sentences)',
   'chat.todayFmt': 'Today {points} credits (≈{sents} sentences)',
   'tk.pendingSaveFmt': '{n} pending save',
   'tk.srcIdxFmt': 'Source #{i}',
@@ -672,6 +671,10 @@ export const baseEn: Record<string,string> = {
 
   'billing.ordersTitle': 'My Orders',
   'billing.quotaDailyPoints': 'Daily credit limit',
+  'billing.quotaReloadFirst': 'Quota not loaded yet - click Refresh to fetch current values before saving',
+  'billing.quotaPickTenant': 'Select a specific tenant in the top-right switcher before editing quota',
+  'billing.quotaUnlimitedTag': 'Unlimited',
+  'billing.quotaUnlimitedWarn': '0 = unlimited: saving clears this daily usage wall for the tenant',
   'billing.invoiceDialogTitle': 'Issue Invoice',
   'billing.invoiceApplied': 'Invoice requested',
   'billing.invoiceTitleField': 'Title',

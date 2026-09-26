@@ -5,8 +5,9 @@
 // ============ 本文件职责中文说明 ============
 // 登录暴力破解防护：基于内存的滑动窗口失败计数。
 // 规则：同一 IP 在固定窗口内连续失败达到阈值后进入冷却期；冷却期内直接拒绝登录。
-// 用途：登录接口在进入业务逻辑前调用 loginLocked 拦截，失败时 recordLoginFail 计数，
-// 成功时 clearLoginFails 清零。
+// 用途：登录接口在进入业务逻辑前调用 loginCooldownSec 取剩余冷却秒数（>0 即以 429 +
+// Retry-After 拒绝，★ F-47 批 I-7：旧版只返回 bool 且实际发 400，注释与行为不符已一并纠正），
+// 失败时 recordLoginFail 计数，成功时 clearLoginFails 清零。
 // =============================================
 package api
 
@@ -49,26 +50,46 @@ func newLoginLimiter(st *store.Store) *loginLimiter {
 
 // blocked 判断指定 IP 是否处于冷却期（不可登录）。
 // 参数 ip: 客户端 IP；返回 true 表示需要拒绝登录。
+// ★ F-47（批 I-7）：判据收敛到 retryAfterSec——旧写法与冷却时长各算一遍，
+// 两处一旦口径分家就会出现「说被锁了但 retry_after=0」这种自相矛盾的响应。
 func (l *loginLimiter) blocked(ip string) bool {
+	return l.retryAfterSec(ip) > 0
+}
+
+// retryAfterSec 返回该 IP 登录冷却的剩余秒数（0＝当前不受限）。
+// ★ F-47（批 I-7）：429 不带时长＝让客户端瞎猜退避窗口——猜短了继续撞闸
+// （并把 5 分钟失败窗口一路往后推，用户越试越久），猜长了真人白等。
+// 持久化后端与内存回退两条路都要给同一个口径，故与 blocked 共用本函数。
+func (l *loginLimiter) retryAfterSec(ip string) int {
 	if l.st != nil {
 		st, _ := l.st.RateLoad("login_fail", ip)
-		return time.Now().Unix() < st.LockUntil
+		return secsUntilUnix(st.LockUntil)
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	a, ok := l.data[ip]
-	if !ok {
-		return false
+	if !ok || a.lockedUntil.IsZero() {
+		return 0
 	}
-	now := time.Now()
-	if !a.lockedUntil.IsZero() && now.After(a.lockedUntil) {
-		delete(l.data, ip)
-		return false
+	remain := secsUntilUnix(a.lockedUntil.Unix())
+	if remain == 0 {
+		delete(l.data, ip) // 冷却已届满顺手清内存项（沿用旧 blocked 的清理时机，防无界增长）
 	}
-	if !a.lockedUntil.IsZero() {
-		return true
+	return remain
+}
+
+// secsUntilUnix Unix 秒级截止时刻距今的剩余秒数：已过期/零值回 0，未来时刻至少回 1。
+// 「至少 1」是必需的——同一秒内截断成 0 会让 HTTP 头变成 `Retry-After: 0`，
+// 语义上等于「现在就能再试」，与判据本身（仍在锁内）冲突。
+func secsUntilUnix(until int64) int {
+	if until <= 0 {
+		return 0
 	}
-	return false
+	remain := until - time.Now().Unix()
+	if remain <= 0 {
+		return 0
+	}
+	return int(remain)
 }
 
 // fail 记录一次登录失败；达到阈值则进入冷却期。

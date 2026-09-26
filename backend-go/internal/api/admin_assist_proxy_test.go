@@ -91,35 +91,52 @@ func newAssistProxyFixture(t *testing.T, adminTok string) (*Server, *assistUpstr
 	return s, up, tokens
 }
 
-// TestAssistProxyAuthScope A) 未登录与非超管一律 403，且不产生任何上游调用。
+// TestAssistProxyAuthScope A) 鉴权分流：未登录 401 / 已登录非超管 403，且两条都不产生上游调用。
+// ★ F-64③（批 I-10）：这两支原先是内联 403（无错误码）→ 先补 code=FORBIDDEN；
+// 深夜收尾又发现「未登录也回 403」是同族的第二类失真——前端只在 401 走重登录，
+// 超管 token 过期后会在后台看着「权限不足」原地打转。现走 s.writeAuthzError 分流。
 func TestAssistProxyAuthScope(t *testing.T) {
 	s, up, tokens := newAssistProxyFixture(t, "proxy-token")
-	if code, _, _ := doAssistProxy(s, "GET", "/api/admin/assist/kb", "", "", ""); code != 403 {
-		t.Fatalf("未登录应 403，实际 %d", code)
+	code, _, resp := doAssistProxy(s, "GET", "/api/admin/assist/kb", "", "", "")
+	if code != 401 {
+		t.Fatalf("未登录应 401（不是 403：403 会让前端跳过重登录链路），实际 %d", code)
 	}
-	if code, _, _ := doAssistProxy(s, "GET", "/api/admin/assist/kb", "", tokens["u_co_a"], ""); code != 403 {
-		t.Fatalf("非超管应 403，实际 %d", code)
+	if resp["code"] != "UNAUTHORIZED" {
+		t.Fatalf("未登录应带稳定错误码 UNAUTHORIZED，实际 %s", resp["code"])
+	}
+	if code, _, resp := doAssistProxy(s, "GET", "/api/admin/assist/kb", "", tokens["u_co_a"], ""); code != 403 || resp["code"] != "FORBIDDEN" {
+		t.Fatalf("非超管应 403/FORBIDDEN（登录了但不该做这事），实际 %d/%s", code, resp["code"])
 	}
 	if up.hits != 0 {
 		t.Fatalf("鉴权失败不得转发上游，实际 hits=%d", up.hits)
 	}
-	// status 接口同样仅超管
+	// status 接口同样分流（同一个出口函数，漏改一支就是两套口径）
 	w := httptest.NewRecorder()
 	s.handleAdminAssistStatus(w, httptest.NewRequest("GET", "/api/admin/assist/status", nil))
-	if w.Code != 403 {
-		t.Fatalf("status 未登录应 403，实际 %d", w.Code)
+	if w.Code != 401 {
+		t.Fatalf("status 未登录应 401，实际 %d", w.Code)
 	}
 }
 
-// TestAssistProxyFailClosedWithoutToken B) 无管理 Token → 业务提示 + 零上游调用（不回退假数据）。
+// TestAssistProxyFailClosedWithoutToken B) 无管理 Token → 503 结构化错误 + 零上游调用（不回退假数据）。
+// ★ F-64③（批 I-10 2026-09-26 深夜）改判据：这一支原先回「HTTP 200 + success:false」，
+// 界面读 body 尚可，但监控/SDK 按状态码分支会把「assist 根本没配凭据」读成一次成功调用。
+// 现在钉成 503（ErrServiceUnavailable＝依赖未就绪，保存 Token 后即恢复，不是客户端请求有误），
+// 并保留 success:false + 原文案，让老前端与 bizResp 收敛层都不断。
 func TestAssistProxyFailClosedWithoutToken(t *testing.T) {
 	s, up, tokens := newAssistProxyFixture(t, "")
 	if err := s.Store.SetConfig(assistAdminTokenKey, store.EncryptSecret("")); err != nil {
 		t.Fatalf("清空库内 Token 失败: %v", err)
 	}
 	code, body, resp := doAssistProxy(s, "GET", "/api/admin/assist/kb", "", tokens["admin"], "")
-	if code != 200 || resp["success"] != false {
-		t.Fatalf("应 200+success:false，实际 %d %s", code, body)
+	if code != 503 {
+		t.Fatalf("Token 未配置应回 503（诚实状态码，F-64③），实际 %d %s", code, body)
+	}
+	if resp["success"] != false {
+		t.Fatalf("错误体应带 success:false（与前端 bizResp/老调用点兼容），实际 %s", body)
+	}
+	if resp["code"] != "SERVICE_UNAVAILABLE" {
+		t.Fatalf("错误体应带稳定错误码 SERVICE_UNAVAILABLE，实际 %s", body)
 	}
 	if !strings.Contains(body, "管理 Token 未配置") {
 		t.Fatalf("提示应写明 Token 未配置的处置路径，实际 %s", body)
@@ -185,10 +202,18 @@ func TestAssistProxyAuditNoRequestBody(t *testing.T) {
 }
 
 // TestAssistProxyUpstreamUnreachable F) 上游不可达时回可自助的处置提示，不外泄 Go 错误串。
+// ★ F-64③（批 I-10）加两条硬锁：状态码必须是 502（原 200 壳会让「assist 全挂」在监控里判成成功），
+// 且错误码必须是 UPSTREAM_UNAVAILABLE——文案对得上不代表契约对得上，SDK 按 code 分支。
 func TestAssistProxyUpstreamUnreachable(t *testing.T) {
 	s, up, tokens := newAssistProxyFixture(t, "tok")
 	t.Setenv("ASSIST_BASE_URL", "http://127.0.0.1:1") // 保留端口，必然连接失败
-	_, body, resp := doAssistProxy(s, "GET", "/api/admin/assist/sessions", "", tokens["admin"], "")
+	code, body, resp := doAssistProxy(s, "GET", "/api/admin/assist/sessions", "", tokens["admin"], "")
+	if code != 502 {
+		t.Fatalf("上游不可达应回 502（F-64③ 诚实状态码），实际 %d %s", code, body)
+	}
+	if resp["code"] != "UPSTREAM_UNAVAILABLE" {
+		t.Fatalf("错误码应为 UPSTREAM_UNAVAILABLE，实际 %s", body)
+	}
 	if resp["success"] != false {
 		t.Fatalf("应回 success:false，实际 %s", body)
 	}
@@ -203,12 +228,41 @@ func TestAssistProxyUpstreamUnreachable(t *testing.T) {
 	}
 }
 
+// TestAssistProxyUpstreamStatusPassthrough F-64③ 的**反向锁**（防过度修复）：
+// 上游（assist 服务）自己回的 4xx/5xx 必须**原样透传**状态码与响应体，
+// 本层不许把它改写成 502/500，也不许重造错误体——AGENTS §一·8 的白名单豁免就是这一支。
+// 没有这条，「把代理里所有非 2xx 都换成 writeError」这种改法也能让上面几条全绿。
+func TestAssistProxyUpstreamStatusPassthrough(t *testing.T) {
+	s, up, tokens := newAssistProxyFixture(t, "tok")
+	up.respCode = 400
+	up.respBody = `{"error":"key not allowed"}`
+	code, body, resp := doAssistProxy(s, "PUT", "/api/admin/assist/config", "", tokens["admin"], `{"key":"nope","value":"x"}`)
+	if code != 400 {
+		t.Fatalf("上游 400 必须原样透传，实际 %d %s", code, body)
+	}
+	if body != `{"error":"key not allowed"}` {
+		t.Fatalf("上游响应体必须原样回传（不重造错误体），实际 %s", body)
+	}
+	// 透传支不带本层的 code 字段：出现即说明被改写成了统一错误体
+	if _, ok := resp["code"]; ok {
+		t.Fatalf("上游透传不得被本层重造成统一错误体，实际 %s", body)
+	}
+	if up.hits != 1 {
+		t.Fatalf("应恰好转发一次，实际 hits=%d", up.hits)
+	}
+}
+
 // TestAssistProxyWhitelist G) 未登记路径 404，代理不放行任意上游地址。
+// ★ F-64③（批 I-10）补 code 与文案锁：这一支原先是内联 404（有状态码、没有错误码），
+// 现在进统一出口，前端/SDK 才能按 code 认出「这条路径主后台没接」而不是去猜文案。
 func TestAssistProxyWhitelist(t *testing.T) {
 	s, up, tokens := newAssistProxyFixture(t, "tok")
-	code, _, _ := doAssistProxy(s, "GET", "/api/admin/assist/evil", "", tokens["admin"], "")
+	code, body, resp := doAssistProxy(s, "GET", "/api/admin/assist/evil", "", tokens["admin"], "")
 	if code != 404 {
 		t.Fatalf("白名单外应 404，实际 %d", code)
+	}
+	if resp["code"] != "NOT_FOUND" || !strings.Contains(body, "接口不存在") {
+		t.Fatalf("白名单外应回 NOT_FOUND＋「接口不存在」，实际 %s", body)
 	}
 	if up.hits != 0 {
 		t.Fatalf("白名单外不得触达上游，实际 %d", up.hits)

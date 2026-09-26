@@ -46,7 +46,7 @@ export const zh: Record<string, string> = {
   'apikeys.delete': '删除',
   'apikeys.nameRequired': '名称必填',
   'apikeys.confirmDelete': '删除该 API Key？',
-  'apikeys.confirmRotate': '确认轮换「{name}」？旧 Key 将立即失效。',
+  'apikeys.confirmRotate': '确认轮换「{name}」？旧 Key 将立即失效，当日调用计数将归零。',
 }
 
 // 英文文案词典：键与上方 zh 一一对应。
@@ -91,7 +91,7 @@ export const en: Record<string, string> = {
   'apikeys.delete': 'Delete',
   'apikeys.nameRequired': 'Name is required',
   'apikeys.confirmDelete': 'Delete this API key?',
-  'apikeys.confirmRotate': 'Rotate key "{name}"? The old key will be revoked immediately.',
+  'apikeys.confirmRotate': 'Rotate key "{name}"? The old key will be revoked immediately and the call count for today resets to zero.',
 
   'apikeys.copy': 'Copy',
   'apikeys.copied': 'Copied',

@@ -53,11 +53,41 @@ func pollIntervalSec(isFile bool) int {
 	return 15
 }
 
-// writeTaskError 统一任务错误响应：独立 error_code 出参 + 提示语。
-func writeTaskError(w http.ResponseWriter, code, message string) {
-	writeJSON(w, 200, map[string]interface{}{
-		"success": false, "error_code": code, "message": message,
-	})
+// writeOpenAPIError 开放 API（/openapi/v1/*）唯一的错误出口。
+//
+// ★ F-64①（批 I-7 2026-09-26）状态码诚实：本函数**建立之前**这里是两套并存的样子——
+//
+//	任务类错误走 writeTaskError，HTTP 恒 200、失败信息只在响应体里（`success:false`
+//	＋`error_code`）；鉴权/归属类错误走内联 writeJSON(w, 401/403/404/429, …)。
+//	同一条对外契约上，「你没传 text」是 200，「你的 Key 无效」是 401，
+//	而客户与 SDK 面对 200 时根本不会去看状态码——通用 HTTP 客户端、重试器、
+//	网关告警、APM 错误率统计全部把它判成成功。开放 API 的调用方是**别人的程序**，
+//	状态码就是它唯一的分支语言，这里说谎比界面文案说谎更贵。
+//
+// 因此本函数把两件事合流：
+//   - 状态码：由 internal/errors 的 openAPIStatusByCode 单点决定（StatusForCode），
+//     不在这里写数字，避免又长出一套本地口径；
+//   - 响应体：`code` 与 `error_code` **同值双键**——`code` 是对外文档（openapi.v1.json
+//     的 Error 模型）定的正主，`error_code` 是 <1.0.4 SDK 在用的别名，
+//     删任一个都会打断已在生产的接入方，所以两个都给、并明确写清谁是正主；
+//   - `trace_id`：从请求上下文取（与统一出口 apierrors.WriteError 同一来源），
+//     客户报障时给这一串就能定位日志，不需要再把整段报文贴进工单。
+//
+// 参数 w: 响应写入器；ctx: 请求上下文（取 trace_id）；code: 对外 snake_case 错误码；
+// message: 人类可读提示（走 lang 中间件的 message 翻译链路，12 语种口径不变）。
+//
+// ★ 与错误写法棘轮的关系：本函数内部的 writeJSON 第二实参是**变量**（状态码来自查表），
+// 按 errorstyle_gate_test.go 文件头登记的口径「变量实参不计入内联错误响应」，
+// 它天然不进棘轮计数——这不是绕闸，而是这里本就是对外契约形状（与 health_probes.go
+// 进白名单同一类），已随批在棘轮文件头的「已知边界」里点名。
+func writeOpenAPIError(w http.ResponseWriter, ctx context.Context, code, message string) {
+	body := map[string]interface{}{
+		"success": false, "code": code, "error_code": code, "message": message,
+	}
+	if tid := errors.TraceIDFromContext(ctx); tid != "" {
+		body["trace_id"] = tid
+	}
+	writeJSON(w, errors.StatusForCode(code), body)
 }
 
 // balanceOut 组装余额出参字段（★ 双桶口径，评审整改 A1 + 2026-09-19 积分口径）：
@@ -113,22 +143,21 @@ func (s *Server) handleOpenAPITaskCreate(w http.ResponseWriter, r *http.Request)
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {
 		if authErr == string(errors.OpenAPIKeyQuotaExceeded) {
-			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
-				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			writeOpenAPIError(w, r.Context(), authErr, "该 API Key 今日调用次数已达上限，请调整限额或明日再试")
 			return
 		}
-		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInvalidAPIKey), "message": "API Key 无效"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInvalidAPIKey), "API Key 无效")
 		return
 	}
 	if ak.Perms != "all" && ak.Perms != "translate" {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIForbidden), "message": "API Key 无翻译权限"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIForbidden), "API Key 无翻译权限")
 		return
 	}
 	// 配额闸门：QPS/并发/每日上限/token 余额校验（错误码单独出参）
 	tid, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
-		writeTaskError(w, gateErrorCode(gateErr), gateUserMessage(gateErr))
+		writeOpenAPIError(w, r.Context(), gateErrorCode(gateErr), gateUserMessage(gateErr))
 		return
 	}
 	// 按 Content-Type 分流：JSON=文本任务；其余（multipart）=文件批量任务
@@ -203,7 +232,7 @@ func (s *Server) openAPITaskCreateText(w http.ResponseWriter, r *http.Request, t
 	rawBody, _ := io.ReadAll(r.Body)
 	r.Body = io.NopCloser(bytes.NewReader(singleQuotedJSON(rawBody)))
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Text) == "" {
-		writeTaskError(w, string(errors.OpenAPIBadRequest), "text 不能为空")
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), "text 不能为空")
 		return
 	}
 	if len(req.TargetLangs) == 0 {
@@ -215,7 +244,7 @@ func (s *Server) openAPITaskCreateText(w http.ResponseWriter, r *http.Request, t
 	// worker 内还有二次快速失败兜底
 	if s.Bill.Enabled() {
 		if grants, permanent, err := s.Store.TenantRemainTotal(tid); err == nil && grants+permanent <= 0 {
-			writeTaskError(w, string(errors.OpenAPIInsufficient), "余额不足，请充值或升级套餐")
+			writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInsufficient), "余额不足，请充值或升级套餐")
 			return
 		}
 	}
@@ -226,7 +255,7 @@ func (s *Server) openAPITaskCreateText(w http.ResponseWriter, r *http.Request, t
 	}
 	t, err := s.Store.CreateTicket(tid, 0, title, req.Text, "", strings.Join(req.TargetLangs, ","))
 	if err != nil {
-		writeTaskError(w, string(errors.OpenAPIInternal), err.Error())
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInternal), err.Error())
 		return
 	}
 	s.enqueueAPITask(t, mode, ak)
@@ -254,7 +283,7 @@ func (s *Server) enqueueAPITask(t *store.Ticket, mode string, ak *store.APIKey) 
 func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, tid int64, ak *store.APIKey) {
 	r.Body = http.MaxBytesReader(w, r.Body, openAPITaskMaxBytes)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		writeTaskError(w, string(errors.OpenAPIBadRequest), "文件解析失败或超过 30MB 总量上限")
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), "文件解析失败或超过 30MB 总量上限")
 		return
 	}
 	var headers []*multipart.FileHeader
@@ -266,11 +295,11 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	if len(headers) == 0 {
-		writeTaskError(w, string(errors.OpenAPIBadRequest), "缺少文件：multipart 字段名 files，curl 请使用 -F \"files=@本地路径\"（注意 @ 前缀）")
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), "缺少文件：multipart 字段名 files，curl 请使用 -F \"files=@本地路径\"（注意 @ 前缀）")
 		return
 	}
 	if len(headers) > openAPITaskMaxFiles {
-		writeTaskError(w, string(errors.OpenAPIBadRequest), fmt.Sprintf("单次最多 %d 个文件", openAPITaskMaxFiles))
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), fmt.Sprintf("单次最多 %d 个文件", openAPITaskMaxFiles))
 		return
 	}
 	// ★ 工单双模式（2026-09-13）：delivery=text 纯文案模式（anydoc 提取交付 .md，额外准入老格式/ODF/RTF/EPUB）
@@ -287,12 +316,12 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		if !openAPITaskExtWhitelist[ext] {
 			if delivery == "text" && textExt[ext] {
 				if !fileproc.AnydocAvailable() {
-					writeTaskError(w, string(errors.OpenAPIBadRequest), hdr.Filename+" 需服务器安装 firecrawl-anydoc 依赖后方可纯文案翻译")
+					writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), hdr.Filename+" 需服务器安装 firecrawl-anydoc 依赖后方可纯文案翻译")
 					return
 				}
 				continue
 			}
-			writeTaskError(w, string(errors.OpenAPIBadRequest), "不支持的格式: "+hdr.Filename+"（仅支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml）")
+			writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), "不支持的格式: "+hdr.Filename+"（仅支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml）")
 			return
 		}
 	}
@@ -306,7 +335,7 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 	// 余额预检（★ 双桶口径，同文本任务；2026-08-26 全仓评审 B1）
 	if s.Bill.Enabled() {
 		if grants, permanent, err := s.Store.TenantRemainTotal(tid); err == nil && grants+permanent <= 0 {
-			writeTaskError(w, string(errors.OpenAPIInsufficient), "余额不足，请充值或升级套餐")
+			writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInsufficient), "余额不足，请充值或升级套餐")
 			return
 		}
 	}
@@ -321,19 +350,19 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		savePath := filepath.Join(dir, saveName)
 		src, ferr := hdr.Open()
 		if ferr != nil {
-			writeTaskError(w, string(errors.OpenAPIInternal), "读取文件失败: "+hdr.Filename)
+			writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInternal), "读取文件失败: "+hdr.Filename)
 			return
 		}
 		out, cerr := os.Create(savePath)
 		if cerr != nil {
 			src.Close()
-			writeTaskError(w, string(errors.OpenAPIInternal), "保存文件失败")
+			writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInternal), "保存文件失败")
 			return
 		}
 		if _, cerr = io.Copy(out, src); cerr != nil {
 			out.Close()
 			src.Close()
-			writeTaskError(w, string(errors.OpenAPIInternal), "写入文件失败")
+			writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInternal), "写入文件失败")
 			return
 		}
 		out.Close()
@@ -347,7 +376,7 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 				for _, cleanup := range saved {
 					os.Remove(cleanup.path)
 				}
-				writeTaskError(w, string(errors.OpenAPIBadRequest), perr.Error())
+				writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), perr.Error())
 				return
 			}
 		}
@@ -361,7 +390,7 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 	}
 	t, err := s.Store.CreateTicket(tid, 0, title, "", saved[0].path, targetLangs)
 	if err != nil {
-		writeTaskError(w, string(errors.OpenAPIInternal), err.Error())
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInternal), err.Error())
 		return
 	}
 	tid2 := t.TenantID
@@ -394,27 +423,26 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {
 		if authErr == string(errors.OpenAPIKeyQuotaExceeded) {
-			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
-				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			writeOpenAPIError(w, r.Context(), authErr, "该 API Key 今日调用次数已达上限，请调整限额或明日再试")
 			return
 		}
-		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInvalidAPIKey), "message": "API Key 无效"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInvalidAPIKey), "API Key 无效")
 		return
 	}
 	id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
 	if id <= 0 {
-		writeTaskError(w, string(errors.OpenAPIBadRequest), "缺少任务 id")
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), "缺少任务 id")
 		return
 	}
 	// 租户隔离 + 仅限 API 任务（CreatedBy=0），跨租户/内部工单一律 404
 	t, err := s.Store.GetTicket(id, ak.TenantID)
 	if err != nil || t.CreatedBy != 0 {
-		writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPINotFound), "message": "任务不存在"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPINotFound), "任务不存在")
 		return
 	}
 	// ★ 用户级归属校验（强绑定无旁路）：租户匹配 + Key用户==任务盖印用户，否则 404 不泄露存在性
 	if t.APIUserID != ak.UserID {
-		writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPINotFound), "message": "任务不存在"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPINotFound), "任务不存在")
 		return
 	}
 	isFile := t.FilePath != ""
@@ -504,6 +532,11 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 	for k, v := range s.balanceOut(ak.TenantID) {
 		resp[k] = v
 	}
+	// ★ F-64① 的「保留 200」判定（写清楚，别让人以为是漏改）：
+	// 轮询本身成功了（Key 有效、任务存在、状态读到了），`status:"failed"` 是**任务的状态**
+	// 不是本次 HTTP 请求的失败——把它翻译成 4xx/5xx 会让客户端的异常处理接管正常业务流程，
+	// 也会让「查状态」这一步在监控里计入错误率。真正的失败在 `status`/`error_code` 出参里读。
+	// （对比：/tasks/download 拿同一份 failed 态去要产物，那是请求时机错，走 409。）
 	writeJSON(w, 200, resp)
 }
 
@@ -512,41 +545,40 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {
 		if authErr == string(errors.OpenAPIKeyQuotaExceeded) {
-			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
-				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			writeOpenAPIError(w, r.Context(), authErr, "该 API Key 今日调用次数已达上限，请调整限额或明日再试")
 			return
 		}
-		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInvalidAPIKey), "message": "API Key 无效"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInvalidAPIKey), "API Key 无效")
 		return
 	}
 	if ak.Perms != "all" && ak.Perms != "translate" {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIForbidden), "message": "API Key 无翻译权限"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIForbidden), "API Key 无翻译权限")
 		return
 	}
 	id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
 	if id <= 0 {
-		writeTaskError(w, string(errors.OpenAPIBadRequest), "缺少任务 id")
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), "缺少任务 id")
 		return
 	}
 	t, err := s.Store.GetTicket(id, ak.TenantID)
 	if err != nil || t.CreatedBy != 0 {
-		writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPINotFound), "message": "任务不存在"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPINotFound), "任务不存在")
 		return
 	}
 	// ★ 用户级归属校验（强绑定无旁路）：租户匹配 + Key用户==任务盖印用户，否则 404 不泄露存在性
 	if t.APIUserID != ak.UserID {
-		writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPINotFound), "message": "任务不存在"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPINotFound), "任务不存在")
 		return
 	}
 	if t.Status != store.TicketCompleted {
-		writeTaskError(w, "not_ready", "任务尚未完成，请先轮询至 completed 再下载")
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPINotReady), "任务尚未完成，请先轮询至 completed 再下载")
 		return
 	}
 	// ★ F-42-d（2026-09-25 UAT 修复批）：与详情接口同一「无产物即不算交付」口径——
 	//   鬼 completed 单在详情侧已被降级 failed，这里若仍放行就会打出空 zip/空 .md，
 	//   SDK 拿到「成功响应 + 零字节产物」比报 not_ready 更难排查。判据复用 ticketHasDeliverable。
 	if !s.ticketHasDeliverable(t) {
-		writeTaskError(w, "not_ready", "任务无可用译文产物（可能因余额不足或流程中断），请重新提交")
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPINotReady), "任务无可用译文产物（可能因余额不足或流程中断），请重新提交")
 		return
 	}
 	baseName := t.TicketNo
@@ -570,7 +602,7 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 					}
 				}
 			}
-			writeJSON(w, 404, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPINotFound), "message": "该文件的产物不存在"})
+			writeOpenAPIError(w, r.Context(), string(errors.OpenAPINotFound), "该文件的产物不存在")
 			return
 		}
 		// 无 file_id：收集存在产物文件的（路径,下载名），单文件直发、多文件打 zip
@@ -609,7 +641,7 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 			_ = zw.Close()
 			return
 		}
-		writeTaskError(w, string(errors.OpenAPINoResult), "暂无已生成的产物（部分或全部文件处理失败）")
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPINoResult), "暂无已生成的产物（部分或全部文件处理失败）")
 		return
 	}
 	// 旧单文件工单：原格式产物直返
@@ -621,7 +653,7 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	writeTaskError(w, string(errors.OpenAPINoResult), "该任务无可下载的文件产物")
+	writeOpenAPIError(w, r.Context(), string(errors.OpenAPINoResult), "该任务无可下载的文件产物")
 }
 
 // ticketExpiry 读取工单产物到期时间（result_expires_at 列；无值返回 ok=false）。
@@ -640,11 +672,10 @@ func (s *Server) handleOpenAPIBalance(w http.ResponseWriter, r *http.Request) {
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {
 		if authErr == string(errors.OpenAPIKeyQuotaExceeded) {
-			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
-				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			writeOpenAPIError(w, r.Context(), authErr, "该 API Key 今日调用次数已达上限，请调整限额或明日再试")
 			return
 		}
-		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInvalidAPIKey), "message": "API Key 无效"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInvalidAPIKey), "API Key 无效")
 		return
 	}
 	// ★ P3 修复：余额查询前冲刷计量缓冲，返回即时余额
@@ -682,23 +713,22 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 	ak, authErr := s.authenticateAPIKey(r)
 	if authErr != "" {
 		if authErr == string(errors.OpenAPIKeyQuotaExceeded) {
-			writeJSON(w, 429, map[string]interface{}{"success": false, "error_code": authErr,
-				"message": "该 API Key 今日调用次数已达上限，请调整限额或明日再试"})
+			writeOpenAPIError(w, r.Context(), authErr, "该 API Key 今日调用次数已达上限，请调整限额或明日再试")
 			return
 		}
-		writeJSON(w, 401, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIInvalidAPIKey), "message": "API Key 无效"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIInvalidAPIKey), "API Key 无效")
 		return
 	}
 	// ② 权限校验：需 translate 或 all 权限
 	if ak.Perms != "all" && ak.Perms != "translate" {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIForbidden), "message": "API Key 无翻译权限"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIForbidden), "API Key 无翻译权限")
 		return
 	}
 	// ③ 配额闸门：QPS/并发/每日上限/token 余额校验（余额不足 → insufficient_balance）
 	_, release, gateErr := s.gateUsage(r)
 	defer release()
 	if gateErr != nil {
-		writeTaskError(w, gateErrorCode(gateErr), gateUserMessage(gateErr))
+		writeOpenAPIError(w, r.Context(), gateErrorCode(gateErr), gateUserMessage(gateErr))
 		return
 	}
 	// ④ 解析请求体
@@ -709,12 +739,11 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 	}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err := json.Unmarshal(singleQuotedJSON(body), &req); err != nil || strings.TrimSpace(req.Text) == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPIBadRequest), "message": "text 不能为空"})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), "text 不能为空")
 		return
 	}
 	if n := len([]rune(req.Text)); n > syncTranslateMaxChars {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "error_code": string(errors.OpenAPITextTooLong),
-			"message": fmt.Sprintf("同步翻译单次上限 %d 字符（当前 %d），长文本请使用 POST /openapi/v1/tasks 异步任务", syncTranslateMaxChars, n)})
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPITextTooLong), fmt.Sprintf("同步翻译单次上限 %d 字符（当前 %d），长文本请使用 POST /openapi/v1/tasks 异步任务", syncTranslateMaxChars, n))
 		return
 	}
 	langCount := len(req.TargetLangs)
@@ -754,16 +783,17 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 	res := s.Engine.HandleText(syncCtx, req.Text, options, nil)
 	if res.Error != "" {
 		s.metrics.countTranslate("text", false)
-		writeTaskError(w, string(errors.OpenAPITaskFailed), res.Error)
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPITaskFailed), res.Error)
 		return
 	}
 	// ⑥ 实时计费已在每次 LLM 调用时由 eng.LLM.OnUsage 完成（边工作边计费，防白嫖），
 	// 此处仅据用量收集器汇总本次消耗用于响应出参（不再后置扣费）。
-	prompt, completion := s.Engine.UsageTokens(syncCtx)
-	charged := int64(float64(prompt+completion) * s.markupMultiplier())
-	if charged < prompt+completion {
-		charged = prompt + completion
-	}
+	// ★ F-49①（〇-U 批 I-4）：出参改读**实收口径**（收集器里的 billed 合计，逐笔等于台账 quantity）。
+	//   旧写法在这里自己乘一遍 markupMultiplier()：默认值与策略侧不同源（1.5 vs 租户策略/模式因子），
+	//   客户按报文算的账与实扣差一截且无从发现。
+	// ★ F-49②：此处能读到非零值的前提是 WithUsageRecorder 不再被引擎内层遮蔽（engine.go 已修）——
+	//   旧形态下 09-25 的 R-L1「补注入」实际恒读 0（本轮 UAT 实测 points_used=0）。
+	billed, _ := s.Engine.UsageBilledTokens(syncCtx)
 	s.metrics.countTranslate("text", true)
 	// ★ P3 修复：同步翻译结束冲刷计量缓冲，随后即时余额查询即可见
 	billing.Flush()
@@ -773,6 +803,6 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 		"translations": res.Data.Translations,
 		"source_text":  res.Data.SourceText,
 		"mode":         res.Data.Mode,
-		"points_used":  s.Store.PointsFromTokens(charged),
+		"points_used":  s.Store.PointsFromTokens(billed),
 	})
 }

@@ -60,12 +60,20 @@ var authGateHelpers = map[string]bool{
 // 新增时必须写清「为什么可以匿名」以及「有无限流/凭证兜底」，由人评审。
 var publicRouteAllowlist = map[string]string{
 	// —— 静态资源与站点外壳 ——
-	"/":                         "SPA 前端外壳（纯静态 index.html，无数据访问）",
-	"/office/manifest.xml":      "Office 加载项清单：静态 XML，Office 客户端匿名拉取",
-	"/office/taskpane.html":     "Office 任务窗格页面：静态 HTML 外壳，数据由已鉴权 API 提供",
-	"/docs/terms":               "服务条款公开页",
-	"/docs/sla":                 "SLA 公开页",
-	"/docs/privacy":             "隐私政策公开页",
+	"/":                     "SPA 前端外壳（纯静态 index.html，无数据访问）",
+	"/office/manifest.xml":  "Office 加载项清单：静态 XML，Office 客户端匿名拉取",
+	"/office/taskpane.html": "Office 任务窗格页面：静态 HTML 外壳，数据由已鉴权 API 提供",
+	"/docs/terms":           "服务条款公开页",
+	"/docs/sla":             "SLA 公开页",
+	"/docs/privacy":         "隐私政策公开页",
+	// ★ F-69（2026-09-26 批 I-8）：手册 PDF 公网下载面。语种码先过 normalizeMailLang 的
+	//   12 码白名单（白名单外一律 400，同时也是路径穿越闸门），内容只有对外产品说明、
+	//   零租户数据；与 /docs/terms|sla|privacy 同级公开，故不加登录门槛。
+	"/docs/manual/": "12 语种《产品手册》PDF 公开下载：只读 manual_pdf_dir 下的 {lang}.pdf，无租户数据、语种码过白名单",
+	// ★ F-46（2026-09-26 批 I-9）：品牌图改「落静态件 + 只注入 URL」后新增的直出面。
+	//   只读 <UserDataDir>/brand/ 下单层文件、扩展名过白名单、字节还要过魔数核验，
+	//   零租户数据零鉴权语义（品牌本来就是给该域名访客看的）；缺件回 404 JSON 而非 SPA 壳。
+	"/brand/":                   "品牌 Logo/首页背景静态件直出：内容寻址文件名、只读 brand 目录单层件、格式白名单+魔数核验",
 	"/openapi/docs":             "开放 API 文档页（对外公开，内容本身即产品说明）",
 	"/openapi/v1.json":          "开放 API OpenAPI 规范 JSON（供 SDK 生成，公开）",
 	"/api/skills":               "已启用技能列表：仅能力清单，不含租户数据",

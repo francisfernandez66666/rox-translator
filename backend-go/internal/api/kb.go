@@ -31,6 +31,7 @@ import (
 
 	"translator/internal/crawler"
 	"translator/internal/engine"
+	apierrors "translator/internal/errors"
 	"translator/internal/kb"
 	"translator/internal/store"
 )
@@ -50,7 +51,8 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需租户管理员及以上权限
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未登录"})
+		// 匿名＝401（★ F-64③ 批 I-10：旧写法回 403，前端只在 401 走重登录链路）
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 解析请求参数：目标知识库包 ID 和待导入条目数组
@@ -92,7 +94,8 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 		}
 		// 部门管理员：目标包须在本部门及子部门内（部门包），或跨部门包须涵盖本部门（含子树/全公司仅超管租管）。
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+			s.writeAuthzError(w, r, err)
 			return
 		}
 	}
@@ -428,7 +431,8 @@ type kbRecognizeMeta struct {
 func (s *Server) handleRecognizeKB(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需租户管理员及以上（前台普通用户不再允许上传 KB）
 	if _, err := s.requireDeptAdmin(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 知识库未加载（未传入 -kb）时拒绝识别
@@ -468,7 +472,9 @@ func (s *Server) handleRecognizeKB(w http.ResponseWriter, r *http.Request) {
 	// 无有效数据：清理临时文件并提示
 	if len(records) == 0 {
 		os.Remove(savePath)
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "文件无有效数据"})
+		// ★ F-64②（批 I-10）：文件能解析但一行有效数据都没有 = 上传件本身不合格（换个文件即可成功）→ 400；
+		//   旧 200 壳让 KbUploadDialog 走到「识别成功」分支、在下一步 import 时才炸。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "文件无有效数据"))
 		return
 	}
 
@@ -580,7 +586,8 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需租户管理员及以上
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 知识库未加载时拒绝导入
@@ -623,7 +630,8 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	// 部门管理员：目标包须在本部门及子部门内（部门包），或跨部门包须涵盖本部门（含子树/全公司仅超管租管）。
 	// 复用后台维护权限口径（deptKBScope），保证导入与维护权限一致。
 	if err := s.deptKBScope(u, tid, pkg); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 
@@ -660,7 +668,9 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(records) == 0 {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "文件无有效数据"})
+		// ★ F-64②（批 I-10）：导入阶段二次解析出 0 行有效数据＝缓存的那份文件本身不合格 → 400；
+		//   旧 200 壳让前台提示「导入失败」但按成功链路走（added=0 与真失败混在一起）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "文件无有效数据"))
 		return
 	}
 

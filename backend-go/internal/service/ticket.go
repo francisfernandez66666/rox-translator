@@ -470,22 +470,29 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	return nil
 }
 
-// chargeTokens 工单级 Token 实费展示回填：读取 ctx 收集器累计的真实 token。
+// chargeTokens 工单级「实收计费 token」回填：读取 ctx 收集器里**扣费现场**记下的实收合计。
 // ★ 性能优化 B1（修双重计费资损）：实时计量钩子（eng.LLM.OnUsage → ChargeUsageRealtime）
 //
 //	已是唯一扣费来源，每次 LLM 调用即扣减并支持余额不足中止；本函数**不再二次扣费**，
-//	仅回填展示用的真实 token 数（TokensBilled）。强制计费开关仅影响实时路径是否落账，
-//	与这里无关。
+//	只回填展示值。强制计费开关仅影响实时路径是否落账，与这里无关。
+//
+// ★ F-49①（〇-U 批 I-4，2026-09-26 UAT）：返回值口径由「真实 token」改为「实收计费 token」。
+//
+//	旧写法返回 UsageTokens 的裸合计，而 tickets.tokens_billed 的字段注释、以及对外的
+//	points_used/points_billed 出参都按「真实用量×均摊系数」解释（store/tickets.go:31），
+//	实际扣费也是按系数后的量落台账 —— 于是客户拿报文折算，**恰差 markup 那一半**（现值 2）。
+//	现在直接读扣费现场累计的实收值（与 usage_ledger.quantity 逐笔等值），不再在展示侧复算公式。
+//	注意：历史行的 tokens_billed 仍是裸用量（markup 曾随策略/模式变化，无法事后回填），
+//	本轮只保证新单自洽，不改写历史账。
 func (s *TicketService) chargeTokens(ctx context.Context, t *store.Ticket) int64 {
 	if s.Engine == nil {
 		return 0
 	}
-	prompt, completion := s.Engine.UsageTokens(ctx)
-	total := prompt + completion
-	if total <= 0 {
-		return 0 // 无 LLM 调用（纯 KB 命中等）
+	billed, _ := s.Engine.UsageBilledTokens(ctx)
+	if billed <= 0 {
+		return 0 // 无 LLM 调用（纯 KB 命中/缓存直返）：实收为 0，出参照实报 0
 	}
-	return total
+	return billed
 }
 
 // dispatchCompletedWebhook 投递工单完成 webhook 事件（OpenAPI 任务完成推送）。
@@ -493,7 +500,9 @@ func (s *TicketService) dispatchCompletedWebhook(ctx context.Context, t *store.T
 	if s.Store == nil {
 		return
 	}
-	prompt, completion := s.Engine.UsageTokens(ctx)
+	// ★ F-49①（〇-U 批 I-4）：推送里的 points_used 直接取工单行的实收值（t.TokensBilled 折积分），
+	// 不再在推送侧用 UsageTokens 复算一遍——SDK/客户拿轮询接口与 webhook 两条通道对同一单，
+	// 必须**同一口径、同一数值**（旧写法读的是裸用量，比实收少一个 markup）。
 	s.Store.DispatchWebhook(t.TenantID, "translation.completed", map[string]interface{}{
 		"event":       "translation.completed",
 		"tenant_id":   t.TenantID,
@@ -501,7 +510,7 @@ func (s *TicketService) dispatchCompletedWebhook(ctx context.Context, t *store.T
 		"ticket_no":   t.TicketNo,
 		"type":        map[bool]string{true: "files", false: "text"}[t.FilePath != ""],
 		"title":       t.Title,
-		"points_used": s.Store.PointsFromTokens(prompt + completion), // 积分口径（token 裸值不外发，2026-09-19）
+		"points_used": s.Store.PointsFromTokens(t.TokensBilled), // 积分口径（token 裸值不外发，2026-09-19）
 		"time":        time.Now().Format(time.RFC3339),
 	})
 }

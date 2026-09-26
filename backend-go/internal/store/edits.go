@@ -55,8 +55,13 @@ func (s *Store) UpsertTranslationEdit(tenantID, ticketID int64, lang string, seg
 }
 
 // GetTranslationEdits 读取某工单某语言的全部段编辑（含系统译文与用户修订）。
+// ★ F-44（〇-U 批）：读侧必须走 db.Query 包装器——`?`→`$n` 的改写只在该包装器内做
+// （见 db/query.go RewritePlaceholders），而本仓 PG 驱动 lib/pq 不认 `?`。旧写法
+// 直调 s.db.Query 使本查询在生产（PostgreSQL）恒报语法错，调用方又把错误吞成
+// 「无修订」，构成「保存成功、读回永远空」的假成功。SQL 串内保持 SQLite 方言为
+// 唯一真源，方言差异全交给包装器处理。
 func (s *Store) GetTranslationEdits(ticketID int64, lang string) ([]TranslationEdit, error) {
-	rows, err := s.db.Query(
+	rows, err := db.Query(s.db, db.CurrentDialect(),
 		`SELECT id, tenant_id, ticket_id, lang, seg_index, source_text, target_text, edited_text, status, note, reviewer_id, created_at, updated_at
 		 FROM translation_edits WHERE ticket_id=? AND lang=? ORDER BY seg_index ASC`, ticketID, lang)
 	if err != nil {
@@ -77,20 +82,26 @@ func (s *Store) GetTranslationEdits(ticketID int64, lang string) ([]TranslationE
 
 // ListKBTerms 返回租户可见的术语表（source_text），供前端高亮。
 // 参数 tenantID=租户；lang=目标语言（置空则不限）；limit=上限。返回去重后的术语串。
+// ★ F-44（〇-U 批）两处方言修正：
+//  1. 读侧改走 db.Query 包装器（同上条注释，PG 下 `?` 必须由包装器翻成 `$n`）；
+//  2. 去重写法从 `SELECT DISTINCT ... ORDER BY id` 改为 `GROUP BY source_text
+//     ORDER BY MAX(id)`——SQLite 容忍前者，PostgreSQL 直接报「ORDER BY 表达式必须
+//     出现在 SELECT 列表里」，属同一类「SQLite 绿、生产红」的写法。语义不变：
+//     仍按最新一笔（id 最大）倒序去重取术语。
 func (s *Store) ListKBTerms(tenantID int64, lang string, limit int) ([]string, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	q := `SELECT DISTINCT source_text FROM kb_entries WHERE tenant_id=? AND source_text <> ''`
+	q := `SELECT source_text FROM kb_entries WHERE tenant_id=? AND source_text <> ''`
 	var args []interface{}
 	args = append(args, tenantID)
 	if lang != "" {
 		q += ` AND target_lang=?`
 		args = append(args, lang)
 	}
-	q += ` ORDER BY id DESC LIMIT ?`
+	q += ` GROUP BY source_text ORDER BY MAX(id) DESC LIMIT ?`
 	args = append(args, limit)
-	rows, err := s.db.Query(q, args...)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil, err
 	}

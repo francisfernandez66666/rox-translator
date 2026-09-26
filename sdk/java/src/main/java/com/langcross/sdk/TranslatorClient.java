@@ -43,7 +43,9 @@ import java.util.Map;
  *   System.out.println("剩余积分: " + balance.get("balance_points"));
  * }</pre>
  *
- * <p>错误处理：余额不足时抛出 TranslatorError，error_code == "insufficient_balance"
+ * <p>错误处理（★ 2026-09-26 F-64① 状态码诚实改造后的口径）：失败按**真实 HTTP 状态码**抛出，
+ * TranslatorError.status 即该状态码、code/errorCode 为业务错误码（如 insufficient_balance，
+ * 两者同值：code 是文档正主，errorCode 是 &lt;1.0.4 别名）；限流 429 另给 retryAfterSeconds。
  * <p>依赖：Java 11+ 与 jackson-databind（见 pom.xml）
  */
 public class TranslatorClient {
@@ -65,6 +67,35 @@ public class TranslatorClient {
     public TranslatorClient(String baseUrl, String apiKey) {
         this.baseUrl = baseUrl.replaceAll("/+$", "");
         this.apiKey = apiKey;
+    }
+
+    /** 取错误码：文档正主 code 优先，&lt;1.0.4 别名 error_code 兜底；两者都没有给 null。 */
+    private static String pickErrCode(JsonNode data) {
+        if (data == null) return null;
+        if (data.hasNonNull("code")) return data.get("code").asText();
+        if (data.hasNonNull("error_code")) return data.get("error_code").asText();
+        return null;
+    }
+
+    /**
+     * 取「还需等待秒数」：JSON 字段 retry_after 优先，HTTP Retry-After 头兜底
+     *（中间层可能只透传其中之一）。只认纯数字秒（本服务不发 HTTP-date 形态），
+     * 取不到给 null——宁可少给一个退避提示，也不把日期串丢给调用方去 parseInt。
+     */
+    private static Integer pickRetryAfter(JsonNode data, HttpResponse<String> resp) {
+        String raw = null;
+        if (data != null && data.hasNonNull("retry_after")) raw = data.get("retry_after").asText();
+        if (raw == null && resp != null) {
+            raw = resp.headers().firstValue("Retry-After")
+                    .orElseGet(() -> resp.headers().firstValue("retry-after").orElse(null));
+        }
+        if (raw == null) return null;
+        try {
+            int n = Integer.parseInt(raw.trim());
+            return n > 0 ? n : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**
@@ -93,10 +124,13 @@ public class TranslatorClient {
             String txt = resp.body();
             JsonNode data = txt.isEmpty() ? mapper.createObjectNode() : mapper.readTree(txt);
             if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+                // ★ F-64①：失败按真实状态码发出；错误码正主是 code，error_code 是状态码诚实改造**之前**
+                // 的老服务端别名（改造后的服务端只发 code ⇒ "code 优先、error_code 兜底"，混跑窗口两边都取得到码）。
                 throw new TranslatorError(
                         data.has("message") ? data.get("message").asText() : ("HTTP " + resp.statusCode()),
                         resp.statusCode(),
-                        data.has("error_code") ? data.get("error_code").asText() : null);
+                        pickErrCode(data),
+                        pickRetryAfter(data, resp));
             }
             return data;
         } catch (IOException | InterruptedException e) {
@@ -120,7 +154,9 @@ public class TranslatorClient {
         payload.put("mode", mode == null ? "pro" : mode);
         if (title != null && !title.isEmpty()) payload.put("title", title);
         JsonNode r = request("POST", "/openapi/v1/tasks", json(payload), "application/json");
-        if (!r.has("task_id")) throw new TranslatorError(r.path("message").asText("创建任务失败"), null, r.path("error_code").asText());
+        // ★ F-64①：正常失败已在 request() 按状态码抛出，这里只兜「2xx 空壳」
+        //（中间层把失败改写成 2xx／打老服务端），不许默默返回没有 task_id 的对象。
+        if (!r.has("task_id")) throw new TranslatorError(r.path("message").asText("创建任务失败"), null, pickErrCode(r));
         return r;
     }
 
@@ -143,7 +179,8 @@ public class TranslatorClient {
      */
     public JsonNode getTask(long taskId) {
         JsonNode r = request("GET", "/openapi/v1/tasks/status?id=" + taskId, null, null);
-        if (!r.has("status")) throw new TranslatorError(r.path("message").asText("查询失败"), null, r.path("error_code").asText());
+        // ★ F-64①：同上；注意 status:"failed" 仍走 200 正常返回（那是任务状态不是请求失败）
+        if (!r.has("status")) throw new TranslatorError(r.path("message").asText("查询失败"), null, pickErrCode(r));
         return r;
     }
 

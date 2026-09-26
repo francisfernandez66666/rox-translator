@@ -6,6 +6,11 @@
 //   - POST /api/admin/tm-review/adopt   {feedback_id, zh, lang, trans}
 //     反馈修正采纳：建候选即通过（超管点击通过即人工审核），关联反馈可溯源
 //
+// ★ F-62（2026-09-26 批 I-8）：租户侧看不到自己候选的进度，已由**同域新文件**
+//
+//	`tmreview_tenant.go` 补只读接口 GET /api/me/tm-review/list（按 token 内 tid 裁剪、
+//	不外发 reviewer/内部主键）。本文件的四个写/审接口仍然只服务超管。
+//
 // =============================================
 package api
 
@@ -15,6 +20,7 @@ import (
 	"strings"
 
 	"translator/internal/auth"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 )
 
@@ -40,7 +46,10 @@ func (s *Server) handleTmReviewList(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := s.Store.ListTmReviews(r.URL.Query().Get("status"))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：待审池列表读的是本进程存储层。
+		//   只读列表无「记录不存在」一说，故不涉及 404；旧写法把 DB 故障显示成「池子是空的」，
+		//   超管会以为没有候选要审，自闭环的这条腿就静默断了。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	if list == nil {
@@ -64,12 +73,18 @@ func (s *Server) handleTmReviewApprove(w http.ResponseWriter, r *http.Request) {
 	// 查询候选记录
 	cr, err := s.Store.GetTmReview(req.ID)
 	if err != nil || cr == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "候选不存在"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 404「候选不存在」（文案原样）。
+		//   id 为 0（body 没带 id 或不是合法 JSON，上面刻意不拦）与 id 查不到都归这一支：
+		//   审批要有对象，对象读不到就是不存在的 404，不是参数格式错（400 会让「已删掉的候选」看起来像填错了）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "候选不存在"))
 		return
 	}
 	// 校验候选状态：仅 pending 状态可处理
 	if cr.Status != "pending" {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "该候选已处理"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 409「该候选已处理」（文案原样）：
+		//   记录在、也读得到，只是**当前状态**（approved/rejected）不允许再次审批——
+		//   典型是两人同时开审核台点了同一个候选。这是状态冲突，既非参数错也非本层故障。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该候选已处理"))
 		return
 	}
 	// 写入正式翻译记忆库（module='manual'）
@@ -97,7 +112,9 @@ func (s *Server) handleTmReviewReject(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	cr, err := s.Store.GetTmReview(req.ID)
 	if err != nil || cr == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "候选不存在"})
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 404「候选不存在」（文案原样，与 approve 同一判据）：
+		//   驳回同样要有对象；对象读不到就是不存在，重试同一 id 无意义（不像 503 那样承诺「等一下就好」）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "候选不存在"))
 		return
 	}
 	_ = s.Store.SetTmReviewStatus(cr.ID, "rejected", u.DisplayName)

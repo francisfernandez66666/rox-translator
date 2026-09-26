@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"translator/internal/auth"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 )
 
@@ -81,12 +82,15 @@ func (s *Server) handleKBPackGrants(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.requireKBPackPerm(r, u, "manage", pkgID); err != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+			s.writeAuthzError(w, r, err)
 			return
 		}
 		list, err := s.Store.ListKBPackGrants(s.kbTenant(r, u), pkgID)
 		if err != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			// F-64②：授权清单读取失败是本进程/存储侧故障（500）。旧写法回 200＋success:false，
+			// 包管理弹窗会把它当成「这个包还没人授权」渲染成空列表，管理员以为配置丢了。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
 		writeJSON(w, 200, map[string]interface{}{"success": true, "grants": list})
@@ -104,28 +108,40 @@ func (s *Server) handleKBPackGrants(w http.ResponseWriter, r *http.Request) {
 		Role   string `json:"role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PackID <= 0 || req.UserID <= 0 {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "参数错误：pack_id/user_id 必填"})
+		// F-64②：载荷不合法（body 解不开或 pack_id/user_id 缺）＝参数错（400）。
+		// 不用 401：本 handler 的未登录在上面的 authUser 分支已单独处理，
+		// 401 会触发前端 handleUnauthorized 清登录态，把已登录的管理员踢回登录页。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "参数错误：pack_id/user_id 必填"))
 		return
 	}
 	if err := s.requireKBPackPerm(r, u, "manage", req.PackID); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	tid := s.kbTenant(r, u)
 	pkg, gErr := s.Store.GetKBPackage(req.PackID, tid)
 	if gErr != nil || pkg == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "知识库包不存在"})
+		// F-64②：包在本租户下取不到＝记录不存在（404，知识库包专用码 ErrKBNotFound）。
+		// 为什么不是 403：租户隔离口径下「别人的包」与「没有这个包」必须给同一个 404，
+		// 回 403 等于承认该包 ID 存在，会泄露跨租户资源清单。
+		s.writeError(w, r, apierrors.New(apierrors.ErrKBNotFound, "知识库包不存在"))
 		return
 	}
 	role := strings.TrimSpace(strings.ToLower(req.Role))
 	if role != "" && store.KBRoleRank(role) == 0 {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "role 仅支持 read/write/manage（空串=撤销）"})
+		// F-64②：role 不在 read/write/manage 白名单里（空串是合法的「撤销」，已在上面短路）
+		// 是纯载荷取值错误（400）——改对 role 重发即可，与权限、记录存在性都无关。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "role 仅支持 read/write/manage（空串=撤销）"))
 		return
 	}
 	// 目标用户须属本租户（超管宿主租户 tid<=0 时按用户自身租户兜底）
 	tu, uErr := s.Store.GetUser(req.UserID, tid)
 	if uErr != nil || tu == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "目标用户不存在或不属于当前租户"})
+		// F-64②：被授权人查不到（含「存在但属别的租户」）＝记录不存在（404），
+		// 与上一条同口径：租户隔离下不许用 403 泄露「这个用户属于别的租户」。
+		// 真正的授权写入失败在下面的 500 分支，两者语义不能混。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "目标用户不存在或不属于当前租户"))
 		return
 	}
 	var err error
@@ -153,7 +169,10 @@ func (s *Server) handleKBPackMine(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := s.Store.ListKBPackGrantsByUser(s.effTenant(r, u), u.ID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// F-64②：读取当前用户包级授权失败＝存储侧故障（500）。旧写法回 200 会让前端导航
+		// 门控把「读挂了」当成「一条授权都没有」，普通成员的入口被整片藏掉且无任何提示。
+		// 不用 401：未登录已在上面的 authUser 分支单独处理，这里回 401 会清掉在线用户的登录态。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	if list == nil {

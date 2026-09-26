@@ -13,7 +13,10 @@
  * - 账号注销：自助注销账号
  */
 
-import { request, authHeaders, API_BASE, currentUiLang, type AdminResp } from './core'
+// ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
+//   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
+//   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
+import { bizResp, request, authHeaders, API_BASE, currentUiLang, type AdminResp } from './core'
 
 /** 登录用户信息结构：含 id/用户名/显示名/角色/所属租户 */
 export interface AuthUser {
@@ -67,7 +70,7 @@ export function ssoLoginUrl(provider: string): string {
 /** 登录后自助修改密码（校验原密码）。首登强制改密（must_change_pwd=1）时用于设置新密码 */
 /** 修改密码（校验旧密码） */
 export async function changePassword(old_password: string, new_password: string): Promise<AdminResp> {
-  return request('/api/auth/change-password', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ old_password, new_password }) })
+  return bizResp(() => request('/api/auth/change-password', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ old_password, new_password }) }))
 }
 
 /** 校验当前 token 对应的用户信息（用于会话恢复；出参积分口径，前端零换算） */
@@ -108,7 +111,7 @@ export async function forgotPassword(data: { username?: string; email?: string }
 /** 重置密码：校验验证码并设置新密码 */
 /** 忘记密码：验证码核验 */
 export async function resetPassword(data: { username: string; code: string; new_password: string }): Promise<AdminResp> {
-  return request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify(data) })
+  return bizResp(() => request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify(data) }))
 }
 
 /** 获取注册行业列表（无需登录，来自超管维护的行业包） */
@@ -135,13 +138,13 @@ export async function submitNewPassword(data: { username: string; code: string; 
 /** meEmailCode 向新邮箱发送变更验证码（需登录） */
 /** 换绑邮箱：向新邮箱发验证码 */
 export async function meEmailCode(email: string): Promise<AdminResp & { noop?: boolean }> {
-  return request('/api/me/email-code', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ email }) })
+  return bizResp(() => request('/api/me/email-code', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ email }) }))
 }
 
 /** updateEmail 登录用户自助绑定/修改邮箱（需携带发往新邮箱的验证码） */
 /** 换绑邮箱（新旧双向验证码） */
 export async function updateEmail(email: string, code: string, oldCode = ''): Promise<AdminResp> {
-  return request('/api/me/update-email', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ email, new_code: code, old_code: oldCode }) })
+  return bizResp(() => request('/api/me/update-email', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ email, new_code: code, old_code: oldCode }) }))
 }
 
 /** deactivateAccount 自助注销：当日宽限、次日失效；名下 API Key 立即停用；数据保留 */

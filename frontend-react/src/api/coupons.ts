@@ -4,11 +4,16 @@
 // 口径：试算只回金额，不建单不落库；真正的核销发生在下单请求里（payCreate/packageSubscribe
 //       带 coupon 字段），金额一律服务端按同一算法重算，前端数字只用于展示。
 // ============================================================================
-import { request, authHeaders, type AdminResp } from './core'
+import { request, bizResp, authHeaders, type AdminResp } from './core'
+
+// ★ F-64①（批 I-7，2026-09-26）：券域三个失败口径接口（试算 / 保存 / 删除）后端已从
+//   「HTTP 200 承载失败」改为诚实状态码（400/404/409/500/503），本层用 core 的 bizResp
+//   把结构化失败体还原成历史 `{success:false, message, ...}` 形态，调用点（PlansP 券区、
+//   CouponsP 表单）零改动即保持既有分支与提示。见 core.ts bizResp 注释与 billing.ts 同段说明。
 
 /** 券试算入参：code=券码，points=充值积分数 或 packageCode=订阅包编码（二选一，后端据此定券适用类型） */
 export async function couponPreview(data: { code: string; points?: number; package_code?: string }): Promise<AdminResp> {
-  return request('/api/coupon/preview', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/coupon/preview', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 超管：券列表（含 remaining / total_discount 等实时核销汇总） */
@@ -23,12 +28,12 @@ export async function adminCouponSave(data: {
   max_uses?: number; per_tenant_limit?: number; valid_from?: string; valid_until?: string;
   enabled?: number; note?: string;
 }): Promise<AdminResp> {
-  return request('/api/admin/coupons/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/coupons/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 超管：删除券模板（已产生的核销流水保留，历史对账不受影响） */
 export async function adminCouponDelete(id: number): Promise<AdminResp> {
-  return request('/api/admin/coupons/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) })
+  return bizResp(() => request('/api/admin/coupons/delete', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id }) }))
 }
 
 /** 超管：核销流水（couponId 省略=全平台，limit 后端默认 200、上限 500） */

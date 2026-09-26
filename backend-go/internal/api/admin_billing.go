@@ -6,6 +6,8 @@ package api
 // ============ 本文件职责中文说明 ============
 // 计费/充值/用量：余额查询、用量统计、订单（充值/支付/退款）、发票开具（handleBalance / handleUsage / handleOrders / handleInvoices 系列）
 // 安全要点：所有写操作均记录审计日志（LogAudit）；API Key 密钥仅明文返回一次，前端立即保存。
+// ★ F-64①（批 I-7）口径：本文件错误响应已统一走 s.writeError + apierrors 出口，
+//   状态码按语义诚实（403/400/404/409/500），不再用 200 承载失败。
 // ========================================
 
 import (
@@ -17,6 +19,7 @@ import (
 
 	"translator/internal/auth"
 	"translator/internal/billing"
+	apierrors "translator/internal/errors"
 	"translator/internal/payment"
 	"translator/internal/store"
 	"translator/internal/tenant"
@@ -58,7 +61,7 @@ func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Link", `</api/billing/my/overview>; rel="successor-version"`)
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -66,7 +69,9 @@ func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 	billing.Flush()
 	_, err = s.Store.GetBalance(tid)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：余额读的是本进程存储层，
+		//   DB 失败属服务端故障，客户按状态码即可分支重试
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	grants, permanent, total, approx := s.balancePayload(tid)
@@ -89,12 +94,14 @@ func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	usage, total, err := s.Store.UsageStats(s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：用量统计读的是本进程存储层，
+		//   DB 失败属服务端故障，不再伪装成功响应
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 多供应商成本核算：按 provider 拆分用量（★ 仅超管可见；非超管不暴露供应商维度）
@@ -126,7 +133,10 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		}
 		recs, uerr := s.Store.UsageLedgerForExport(tid, from, to, limit)
 		if uerr != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": uerr.Error()})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 500：CSV 取数失败是存储层故障。
+			//   此处仍在写任何响应头之前（Content-Type/BOM 都在下面），可安全回错误状态码；
+			//   若将来把取数挪到 Header().Set 之后，就必须退回「流已开始、只能记日志」的口径。
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, uerr.Error()))
 			return
 		}
 		name := fmt.Sprintf("usage_%d_%s_%s.csv", tid, strings.ReplaceAll(from, "-", ""), strings.ReplaceAll(to, "-", ""))
@@ -188,12 +198,14 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 // 返回: success=true 时携带 orders 数组（仅 manual 渠道 + manual_confirm=1 + pending）。
 func (s *Server) handleManualConfirmOrders(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	orders, err := s.Store.ListManualConfirmOrders()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：待确认订单清单读的是本进程存储层，
+		//   DB 失败属服务端故障，不再伪装成功响应
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ USDT：附交易哈希线索（客户声明 + 已结算凭证）与浏览器外链，供财务「四项核对」
@@ -224,12 +236,14 @@ func (s *Server) handleManualConfirmOrders(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	orders, err := s.Store.ListOrders(s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：订单列表读的是本进程存储层，
+		//   DB 失败属服务端故障，客户按状态码即可分支重试
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "orders": s.ordersViewJSON(orders)})
@@ -239,7 +253,7 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	var req struct {
@@ -248,7 +262,7 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 		Money    float64 `json:"money"`     // 充值金额（元，可选记录）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Points <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "points 必须大于 0"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "points 必须大于 0"))
 		return
 	}
 	tokens := s.Store.TokensFromPoints(req.Points)
@@ -257,12 +271,14 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// 租户管理员只能为自己租户提交充值申请（super_admin 可代任意租户）
 	if !auth.IsSuperAdmin(u) && req.TenantID != s.effTenant(r, u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：只能为本租户充值"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：只能为本租户充值"))
 		return
 	}
 	o, err := s.Store.CreateOrder(req.TenantID, tokens, req.Money, u.ID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：建单失败是存储写入故障，
+		//   客户按状态码即可分支「下单没成功」，不再伪装成功响应
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ 未显式给金额时按定价回填（评审整改 B1）：发票/对账取数来源
@@ -281,9 +297,11 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 	//   租户管理员的自助订单一律保持 pending 走人工/支付渠道确认。
 	if v, _ := s.Store.GetConfig("auto_charge"); v == "1" && auth.IsSuperAdmin(u) {
 		if perr := s.Store.MarkOrderPaid(o.ID, req.TenantID); perr != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false,
-				"message": "订单已创建但自动入账失败（保留待支付，可人工确认）: " + store.DebriefDBError(perr),
-				"order":   s.orderViewJSON(o)})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 500：订单已建但自动入账是存储写入故障；
+			//   order 字段进 details 原样保留，前端仍可渲染这笔 pending 单
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal,
+				"订单已创建但自动入账失败（保留待支付，可人工确认）: "+store.DebriefDBError(perr)).
+				WithDetails(map[string]interface{}{"order": s.orderViewJSON(o)}))
 			return
 		}
 		o.Status = "paid"
@@ -296,7 +314,7 @@ func (s *Server) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrderPay(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	var req struct {
@@ -305,7 +323,7 @@ func (s *Server) handleOrderPay(w http.ResponseWriter, r *http.Request) {
 		TxHash   string `json:"tx_hash"`   // ★ USDT（2026-09-15）：链上交易哈希（usdt 单确认必填，唯一防一笔 tx 复用到两单）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if req.TenantID <= 0 {
@@ -316,20 +334,33 @@ func (s *Server) handleOrderPay(w http.ResponseWriter, r *http.Request) {
 	if oerr == nil && o.Channel == "usdt" {
 		meta, merr := s.Store.GetUSDTOrderMeta(req.ID)
 		if merr != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "USDT 收款要素缺失，请先人工核对订单"})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 409：订单在（GetOrder 已成功）但收款要素
+			//   缺失，属状态不允许确认，需人工先补核，不是本进程故障
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "USDT 收款要素缺失，请先人工核对订单"))
 			return
 		}
 		if req.TxHash == "" || !payment.ValidUSDTTxHash(meta.Chain, req.TxHash) {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "USDT 订单确认必须提交该链合法格式的交易哈希"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "USDT 订单确认必须提交该链合法格式的交易哈希"))
 			return
 		}
 		if used, uerr := s.Store.PaymentTxHashUsed(req.TxHash); uerr == nil && used {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该交易哈希已关联其他订单（一笔链上交易只能核销一单）"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "该交易哈希已关联其他订单（一笔链上交易只能核销一单）"))
 			return
 		}
 	}
 	if err := s.Store.MarkOrderPaid(req.ID, req.TenantID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 按真实语义分流（文案仍走 publicErrMessage 逐字透出）：
+		//   订单在本租户下找不到 → 404；单子在但非 pending（已支付/已取消/已退款）→ 409 状态冲突；
+		//   可读且 pending 仍失败 → 500 存储写入故障。判据复用上面已取的 o（不多查一次）。
+		if oerr != nil || o == nil {
+			s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, publicErrMessage(r.Context(), err)))
+			return
+		}
+		if o.Status != "pending" {
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, publicErrMessage(r.Context(), err)))
+			return
+		}
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// USDT：链上凭证落 payments.tx_hash + 结算快照（失败不回滚资金入账——critical 告警转人工补记）
@@ -339,9 +370,13 @@ func (s *Server) handleOrderPay(w http.ResponseWriter, r *http.Request) {
 				"USDT 订单 "+o.OrderNo+" 已入账但交易哈希关联失败（可能复用/流水缺失），请人工核对: "+perr.Error())
 		}
 		_ = s.Store.SettleUSDTOrder(req.ID, req.TxHash)
-		s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_pay", "orders", o.OrderNo+" channel=usdt tx="+req.TxHash)
+		// ★ F-63（批 I-3）：与下面小票分支同口径（订单号＋金额分＋渠道），链上凭证作尾注
+		s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_pay", "orders", auditOrder(o, "tx="+req.TxHash))
 	} else {
-		s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_pay", "orders", "")
+		// ★ F-63（2026-09-26 批 I-3）：此前 detail 为空串——现网实测 8 行 order_pay 里
+		//   支付宝/微信小票确认那几支「付了哪一单、多少钱、什么渠道」全无从审计。
+		//   o 可能为 nil（GetOrder 失败时不阻断确认，历史行为保留），auditOrder 内部已兜「单号未知」。
+		s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_pay", "orders", auditOrder(o, ""))
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
@@ -350,7 +385,7 @@ func (s *Server) handleOrderPay(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrderRefund(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	var req struct {
@@ -358,14 +393,26 @@ func (s *Server) handleOrderRefund(w http.ResponseWriter, r *http.Request) {
 		TenantID int64 `json:"tenant_id"` // 订单归属租户（0=当前生效租户）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if req.TenantID <= 0 {
 		req.TenantID = s.effTenant(r, u)
 	}
 	if err := s.Store.RefundOrder(req.ID, req.TenantID); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 按真实语义分流（store 侧「不存在」与「状态不允许」
+		//   合并为同一文案，这里失败路径回读一次订单判定，成功链路不多查）：
+		//   订单找不到（含跨租户）→ 404；单子在但非已支付（未支付/已退过款）→ 409；
+		//   状态明明可退仍失败 → 500 存储写入故障。文案仍走 publicErrMessage 逐字透出。
+		msg := publicErrMessage(r.Context(), err)
+		if o, gerr := s.Store.GetOrder(req.ID, req.TenantID); gerr != nil || o == nil {
+			s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, msg))
+			return
+		} else if o.Status != "paid" {
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, msg))
+			return
+		}
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, msg))
 		return
 	}
 	// ★ 订阅身份清理（评审整改 B3 → ★ F-37 2026-09-25 UAT 修复批重做）：
@@ -374,26 +421,38 @@ func (s *Server) handleOrderRefund(w http.ResponseWriter, r *http.Request) {
 	//   package_expires/subscribed_at（残留即账本观察项 10，靠 watchdog 空码豁免兜底）。
 	//   新判据三段：① 被退单包 code == 当前身份 code 才动身份；② 动时三字段一并处置（收观察项 10）；
 	//   ③ 若租户还有其他在期 paid 订阅，身份改挂最晚支付的那笔而非清空。
-	if o, gerr := s.Store.GetOrder(req.ID, req.TenantID); gerr == nil && o.PackageID > 0 {
-		if pkg, perr := s.Store.GetPackage(o.PackageID); perr == nil && pkg.PType == "paid" {
-			if t, terr := s.Ten.GetByID(req.TenantID); terr == nil {
-				perms := tenant.ParsePerms(t.Permissions)
-				if perms.PackageCode == pkg.Code {
-					if code, exp, ok, lerr := s.Store.LatestActivePaidSubscription(req.TenantID, req.ID); lerr == nil && ok {
-						perms.PackageCode = code // 身份改挂剩余在期订阅（最晚支付一笔）
-						perms.PackageExpires = exp
-					} else {
-						perms.PackageCode = ""
-						perms.PackageExpires = ""
-						perms.SubscribedAt = ""
+	// ★ F-63（批 I-3）：这里读到的订单同时供审计 detail 使用（旧代码把它锁在 if 作用域里，
+	//   下面的 LogAudit 因此只能写固定串「权益已回收」，追不到「退了哪一单、退多少钱」）。
+	var refunded *store.Order
+	if o, gerr := s.Store.GetOrder(req.ID, req.TenantID); gerr == nil {
+		refunded = o
+		if o.PackageID > 0 {
+			if pkg, perr := s.Store.GetPackage(o.PackageID); perr == nil && pkg.PType == "paid" {
+				if t, terr := s.Ten.GetByID(req.TenantID); terr == nil {
+					perms := tenant.ParsePerms(t.Permissions)
+					if perms.PackageCode == pkg.Code {
+						if code, exp, ok, lerr := s.Store.LatestActivePaidSubscription(req.TenantID, req.ID); lerr == nil && ok {
+							perms.PackageCode = code // 身份改挂剩余在期订阅（最晚支付一笔）
+							perms.PackageExpires = exp
+						} else {
+							perms.PackageCode = ""
+							perms.PackageExpires = ""
+							perms.SubscribedAt = ""
+						}
+						pb, _ := json.Marshal(perms)
+						_ = s.Ten.Update(t.ID, t.Name, t.ExpiresAt, string(pb))
 					}
-					pb, _ := json.Marshal(perms)
-					_ = s.Ten.Update(t.ID, t.Name, t.ExpiresAt, string(pb))
 				}
 			}
 		}
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_refund", "orders", "权益已回收")
+	// ★ F-63（批 I-3）：退款轨迹口径「订单号＋金额分＋渠道＋实退分」——「权益已回收」这种
+	//   固定串在 7 行实测里无一能回答「退了哪一单、退了多少钱」（订单没读到时也留「单号未知」）。
+	tail := "权益已回收"
+	if refunded != nil {
+		tail = fmt.Sprintf("%s｜实退 %d分", tail, moneyToFen(refunded.RefundMoney))
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_refund", "orders", auditOrder(refunded, tail))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -403,12 +462,14 @@ func (s *Server) handleOrderRefund(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleInvoices(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	inv, err := s.Store.ListInvoices(s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：发票列表读的是本进程存储层，
+		//   DB 失败属服务端故障，不再伪装成功响应
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "invoices": inv})
@@ -418,7 +479,7 @@ func (s *Server) handleInvoices(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleInvoiceCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	var req struct {
@@ -427,7 +488,7 @@ func (s *Server) handleInvoiceCreate(w http.ResponseWriter, r *http.Request) {
 		TaxNo   string `json:"tax_no"`   // 税号
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OrderID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请提供订单 id"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请提供订单 id"))
 		return
 	}
 	inv, err := s.Store.CreateInvoice(s.effTenant(r, u), req.OrderID, req.Title, req.TaxNo)
@@ -435,7 +496,23 @@ func (s *Server) handleInvoiceCreate(w http.ResponseWriter, r *http.Request) {
 		// ★ F-43（2026-09-25 UAT 修复批）：原先拼 err.Error() 把驱动原文（sql: no rows…）
 		// 直出外网；store 侧已转 errTxt 可读文案，这里走 publicErrMessage 统一兜底，
 		// 任何内部错误细节不再上屏（200-错误体改 4xx 归 F-21 同族统一批）。
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：本批即 F-21 挂账的「200 壳改真实状态码」收尾——失败路径回读一次
+		//   订单分流（store 把「不存在」与「不可开票」合并为同一文案，不泄露他租户订单存在性）：
+		//   订单找不到（含跨租户）→ 404；单子在但未支付/已退款 → 409 状态不允许开票；
+		//   已支付单仍失败且文案为「已有有效发票」（重复开票/并发唯一约束拦截）→ 409；
+		//   其余（DB 故障，publicErrMessage 已脱敏）→ 500。
+		msg := publicErrMessage(r.Context(), err)
+		if o, gerr := s.Store.GetOrder(req.OrderID, s.effTenant(r, u)); gerr != nil || o == nil {
+			s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, msg))
+			return
+		} else if o.Status != "paid" {
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, msg))
+			return
+		} else if strings.Contains(msg, "已有有效发票") {
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, msg))
+			return
+		}
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, msg))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "invoice_create", "billing", inv.InvoiceNo)
@@ -447,18 +524,34 @@ func (s *Server) handleInvoiceCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleInvoiceVoid(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	var req struct {
 		ID int64 `json:"id"` // 发票 ID
 	}
 	if e := json.NewDecoder(r.Body).Decode(&req); e != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请提供发票 id"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请提供发票 id"))
 		return
 	}
 	if err := s.Store.VoidInvoice(req.ID, s.effTenant(r, u)); err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 按真实语义分流（store 把「不存在」与「已作废」
+		//   合并为同一文案，失败路径回读一次发票判定，成功链路不多查）：
+		//   发票在且已是 void → 409 重复作废；发票在却没写成 → 500（异常兜底）；
+		//   回读不到且文案含「不存在」 → 404；其余（DB 故障已脱敏）→ 500。
+		msg := publicErrMessage(r.Context(), err)
+		if inv, gerr := s.Store.GetInvoice(req.ID, s.effTenant(r, u)); gerr == nil && inv != nil {
+			if inv.Status == "void" {
+				s.writeError(w, r, apierrors.New(apierrors.ErrConflict, msg))
+				return
+			}
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, msg))
+			return
+		} else if strings.Contains(msg, "不存在") {
+			s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, msg))
+			return
+		}
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, msg))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "invoice_void", "billing", strconv.FormatInt(req.ID, 10))

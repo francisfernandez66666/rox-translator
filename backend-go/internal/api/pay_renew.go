@@ -15,6 +15,10 @@
 //	签约后在此处补 `Provider.ChargeAgreedOrder`（协议号来自 #41 后续批次），
 //	建单逻辑保持不变即可平滑升级为自动扣款。
 //
+// ★ F-64①（批 I-7）口径：本文件错误响应已统一走 s.writeError，状态码按语义诚实
+//
+//	（403/400/409/500），不再用 200 承载失败。
+//
 // ==========================================
 package api
 
@@ -26,6 +30,7 @@ import (
 	"strconv"
 	"time"
 
+	apierrors "translator/internal/errors"
 	"translator/internal/observability"
 	"translator/internal/store"
 	"translator/internal/tenant"
@@ -40,17 +45,19 @@ const autoRenewLeadDays = 3
 func (s *Server) handleAutoRenew(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	tid := s.effTenant(r, u)
 	if tid <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "平台上下文无订阅概念"})
+		// ★ F-64①（批 I-7）：上下文不匹配属请求侧问题 → 400 校验错误。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "平台上下文无订阅概念"))
 		return
 	}
 	perms, perr := s.Store.GetTenantPerms(tid)
 	if perr != nil || perms == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "订阅信息读取失败"})
+		// ★ F-64①（批 I-7）：读取失败是服务端故障 → 500，不再用 200 壳承载失败。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "订阅信息读取失败"))
 		return
 	}
 	if r.Method == http.MethodGet {
@@ -61,24 +68,28 @@ func (s *Server) handleAutoRenew(w http.ResponseWriter, r *http.Request) {
 		Enabled bool `json:"enabled"`
 	}
 	if decErr := json.NewDecoder(r.Body).Decode(&req); decErr != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "参数格式错误"})
+		// ★ F-64①（批 I-7）：body 解析失败 → 400 校验错误。
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "参数格式错误"))
 		return
 	}
 	// 开启前置校验：必须已有付费订阅（试用/无包租户自动续费无意义，且会对不存在的包建单）
 	if req.Enabled && (perms.PackageCode == "" || perms.PackageCode == "trial" || perms.PackageExpires == "") {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "当前无到期订阅，暂不需要自动续费"})
+		// ★ F-64①（批 I-7）：请求合法但与订阅当前状态冲突 → 409，不再用 200 壳承载失败。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "当前无到期订阅，暂不需要自动续费"))
 		return
 	}
 	// 开启时确认该包仍上架：包下架后扫描任务无法建单，不如当场提示管理员换包
 	if req.Enabled {
 		if pkg, gerr := s.Store.GetPackageByCode(tid, perms.PackageCode); gerr != nil || pkg == nil || pkg.Enabled != 1 {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": "当前订阅套餐已下架，请先选择其他套餐"})
+			// ★ F-64①（批 I-7）：包下架是订阅状态不允许该操作 → 409，不再用 200 壳承载失败。
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "当前订阅套餐已下架，请先选择其他套餐"))
 			return
 		}
 	}
 	if serr := s.Store.SetTenantAutoRenew(tid, req.Enabled); serr != nil {
 		observability.Error(context.Background(), "自动续费开关置位失败", "tid", strconv.FormatInt(tid, 10), "err", serr.Error())
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "设置保存失败"})
+		// ★ F-64①（批 I-7）：保存失败是服务端故障 → 500，不再用 200 壳承载失败。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "设置保存失败"))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "auto_renew_set", "tenant", strconv.FormatBool(req.Enabled))

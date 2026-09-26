@@ -7,7 +7,10 @@
 //     表头：用户名称、姓名、部门、角色、邮箱（角色列可省略，默认普通用户）
 //   - 逐行创建账号：随机初始密码 + 首登强制改密标记（must_change_pwd=1）
 //   - 绑定邮箱并向导入用户发送《账号开通通知》（含登录地址、账号、初始密码）；
-//     回执按「邮件是否真的寄出」分两版中文文案（★ F-23④，不向管理员虚假承诺）
+//     回执按「邮件是否真的寄出」分两版中文文案（★ F-23④，不向管理员虚假承诺），
+//     寄出版只说「已提交发送，稍后送达」（入队≠送达，★ F-54）
+//   - ★ F-54：邮箱列过 importEmailRejection 两道闸（格式＋RFC 2606 示例保留域），
+//     模板示例行落在 example.invalid ⇒「下载模板不改一字上传」不再会建号发信
 //
 // =============================================
 package api
@@ -67,7 +70,8 @@ func randomImportPassword() string {
 func (s *Server) handleUserImportTemplate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	f := buildUserImportTemplate()
@@ -88,14 +92,19 @@ func buildUserImportTemplate() *excelize.File {
 	_ = f.SetCellStr(sheet, "C1", "部门")
 	_ = f.SetCellStr(sheet, "D1", "角色")
 	_ = f.SetCellStr(sheet, "E1", "邮箱")
-	// 示例行（如用户直接提交亦会被正常导入）
-	_ = f.SetCellStr(sheet, "A2", "zhangsan")
-	_ = f.SetCellStr(sheet, "B2", "张三")
-	_ = f.SetCellStr(sheet, "C2", "销售部")
+	// 示例行（★ F-54 批 I-6 2026-09-26：不再是「照抄也能建号」的真投递形态）
+	//   旧形态 A2=zhangsan / E2=zhangsan@example.com ＋ 注释「如用户直接提交亦会被正常导入」，
+	//   于是「下载模板 → 不改一字上传」＝ 真建一个 active 账号 ＋ 真发一封含初始密码的邮件
+	//   （现网 email_notify_enabled=1）——本轮 E2E 实跑就在生产多建出一个 zhangsan（见 UAT 第八节处置清单）。
+	//   现改为：用户名/姓名写成明显占位，邮箱落 RFC 2606 保留域 example.invalid（永不投递），
+	//   并由 importEmailRejection 在导入时显式拒绝保留域 ⇒ 原样上传只会得到一行失败回执。
+	_ = f.SetCellStr(sheet, "A2", "示例行请替换")
+	_ = f.SetCellStr(sheet, "B2", "示例姓名请替换")
+	_ = f.SetCellStr(sheet, "C2", "")
 	_ = f.SetCellStr(sheet, "D2", "普通用户")
-	_ = f.SetCellStr(sheet, "E2", "zhangsan@example.com")
+	_ = f.SetCellStr(sheet, "E2", "sample@example.invalid")
 	// 填写说明（★ F-23② 挪出表头行，挂示例行 F2；解析器只认 A-E 五列，不会读到它）
-	_ = f.SetCellStr(sheet, "F2", "填写说明：用户名称必填且租户内唯一；角色可留空=普通用户（可填 普通用户/管理员/部门管理员/租户管理员）；部门须与现有组织名称一致，留空挂根组织；邮箱用于发送账号开通通知")
+	_ = f.SetCellStr(sheet, "F2", "填写说明：第 2 行是示例行，提交前请删除或整行替换为真实信息；用户名称必填且租户内唯一；角色可留空=普通用户（可填 普通用户/管理员/部门管理员/租户管理员）；部门须与现有组织名称一致，留空挂根组织；邮箱用于发送账号开通通知，必须是可以收信的真实邮箱（example.com／*.invalid 等示例保留域会被拒收）")
 	// 表头浅灰填充 + 加粗，示例行便于识别
 	if style, e := f.NewStyle(&excelize.Style{Fill: excelize.Fill{Type: "pattern", Color: []string{"F2F2F2"}, Pattern: 1}, Font: &excelize.Font{Bold: true}}); e == nil {
 		_ = f.SetCellStyle(sheet, "A1", "E1", style)
@@ -109,7 +118,8 @@ func buildUserImportTemplate() *excelize.File {
 func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -175,6 +185,13 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 				orgID = id
 			}
 		}
+		// ★ F-54（批 I-6）：邮箱格式与示例保留域闸——放在建号**之前**，
+		// 旧实现任何字符串都照收，模板示例行（example.com）因此能被原样上传并真发一封含初始密码的邮件。
+		if reason := importEmailRejection(row.Email); reason != "" {
+			rr.Message = reason
+			results = append(results, rr)
+			continue
+		}
 		// 邮箱唯一预检
 		if row.Email != "" {
 			if other, e := s.Store.GetUserByEmail(strings.ToLower(strings.TrimSpace(row.Email))); e == nil && other != nil {
@@ -233,6 +250,41 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// importEmailRejection 校验导入行的邮箱是否可用（★ F-54 批 I-6）。
+// 返回非空字符串＝该行应被拒绝并把这个原因回给管理员；返回 ""＝放行（含「邮箱留空」——
+// 留空是合法形态：不绑邮箱、不发通知，走「线下转告初始密码」回执）。
+//
+// 两道闸的由来：
+//  1. 格式闸：复用注册/换绑同一份 emailRe（口径不分叉）。旧实现把任何字符串都当邮箱收下，
+//     「zhangsan@examplecom」「abc@@x.com」这类会一路 SetUserEmail 成功，然后发信静默失败——
+//     账号建了、通知没到，管理员却看不到任何异常。
+//  2. 保留域闸：RFC 2606 的 example.com／example.net／example.org／example.edu、任意 .invalid、
+//     以及 .test 与 localhost 都是**永不投递**的示例域。模板示例行就落在 example.invalid 上，
+//     于是「下载模板不改一字直接上传」不再会建出真账号（本轮实跑在生产多建出一个 zhangsan），
+//     而是拿到一行明确的「示例保留域」失败回执。
+//
+// 域名比较用整段匹配而非前缀，避免把 myexample.com 这种真实域误杀。
+func importEmailRejection(email string) string {
+	e := strings.ToLower(strings.TrimSpace(email))
+	if e == "" {
+		return "" // 留空＝不绑邮箱，合法
+	}
+	if !emailRe.MatchString(e) {
+		return "邮箱格式不合法（应形如 name@domain.com），请修正后重试；留空表示不发送开通邮件"
+	}
+	at := strings.LastIndex(e, "@")
+	domain := e[at+1:]
+	switch domain {
+	case "example.com", "example.net", "example.org", "example.edu", "example":
+		return "邮箱是示例保留域（" + domain + "），邮件永远不会送达，请替换为真实邮箱或删除示例行"
+	}
+	if strings.HasSuffix(domain, ".invalid") || strings.HasSuffix(domain, ".test") ||
+		domain == "localhost" || strings.HasSuffix(domain, ".localhost") {
+		return "邮箱是示例/保留域（" + domain + "），邮件永远不会送达，请替换为真实邮箱或删除示例行"
+	}
+	return ""
+}
+
 // mailLive 判断邮件通道是否真实可用（★ F-23④，与 enqueueMail/mail.NewSender 的兜底口径对齐）：
 // 工单队列可用（异步入队投递）或 SMTP 配置齐全（同步投递）才算活；
 // NoopSender（MAIL_ENABLED≠1 且无队列）的 Send 恒返回 nil 却永不外发，不得计入可用。
@@ -245,9 +297,13 @@ func (s *Server) mailLive() bool {
 
 // importSuccessMessage 导入行成功回执（★ F-23④：两版中文文案按「通知邮件是否真的寄出」分支，
 // 无邮箱/通道未配置/发送失败一律走线下转告版，杜绝「已通过邮件通知」的无条件虚假承诺）。
+// ★ F-54（批 I-6）已寄出版再收一档口径：mailLive() 为真且 sendTemplatedMail 返回 nil，
+// 只证明「已受理/已入队」（enqueueMail 入队即 return nil），真正投递要等 worker、还可能永久滞留，
+// 所以文案不许写成完成的「已通过邮件通知」，改为「已提交发送，稍后送达」＋未收到的兜底指引。
+// （与记忆里那条纪律一致：发码 success ≠ 投递。）
 func importSuccessMessage(mailSent bool) string {
 	if mailSent {
-		return "导入成功（初始密码已通过邮件通知）"
+		return "导入成功（开通邮件已提交发送，稍后送达；若长时间未收到，请把初始密码线下转告本人并提醒首登改密）"
 	}
 	return "导入成功（未绑定邮箱或邮件发送失败，请把初始密码线下转告本人并提醒首登改密）"
 }

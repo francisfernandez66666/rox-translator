@@ -34,6 +34,7 @@ import (
 	"os"
 	"strings"
 
+	apierrors "translator/internal/errors"
 	"translator/internal/observability"
 	"translator/internal/store"
 )
@@ -81,7 +82,8 @@ func (s *Server) assistTokenStateOf(effective, source string) assistTokenState {
 func (s *Server) handleAdminAssistToken(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	switch r.Method {
@@ -107,7 +109,10 @@ func (s *Server) handleAdminAssistToken(w http.ResponseWriter, r *http.Request) 
 		oldTok, _ := s.effectiveAssistToken()
 		if req.Clear {
 			if err := s.Store.SetConfig(assistAdminTokenKey, ""); err != nil {
-				writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+				// F-64②：清除是「写库」动作，SetConfig 失败即本进程存储层故障（500），
+				//   旧写法回 200 + success:false 会让面板以为「已清除」而继续显示旧的掩码态。
+				//   不用 403/400：超管身份与请求参数都已在前面的校验链通过，失败原因在服务器侧。
+				s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 				return
 			}
 			// 清除只作用于主后台库内那份配置：assist 侧若已收到过推送值（configs.admin_token），
@@ -124,7 +129,10 @@ func (s *Server) handleAdminAssistToken(w http.ResponseWriter, r *http.Request) 
 		changed := tok != "" && !store.IsSecretMasked(tok)
 		if changed {
 			if err := s.Store.SetConfig(assistAdminTokenKey, store.EncryptSecret(tok)); err != nil {
-				writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+				// F-64②：轮换（加密后写库）失败同样是本进程存储层故障 → 500，
+				//   旧写法回 200 会让「保存失败」被前端当成保存成功后刷新掩码，用户以为已换 Token。
+				//   不用 400：Token 格式没有服务端校验规则（长度/字符由 assist 侧决定），失败不来自入参。
+				s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 				return
 			}
 			s.Store.LogAudit(0, u.ID, "assist_token_rotate", "system_config", assistAdminTokenKey)

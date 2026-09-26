@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"translator/internal/auth"
+	apierrors "translator/internal/errors" // ★ F-46（批 I-9）：品牌图新增错误走统一出口（AGENTS §一·8）
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -36,7 +37,8 @@ func (s *Server) handleTenantList(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	_ = u
@@ -60,7 +62,8 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	_ = u
@@ -129,7 +132,8 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	_ = u
@@ -174,7 +178,15 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
 			return
 		}
-		if err := s.Ten.SetBranding(req.ID, req.BrandName, req.BrandLogo, req.Domain, req.BrandLinks); err != nil {
+		// ★ F-46（批 I-9）第二个写入口同样要收敛：这条是超管「编辑租户」表单里的品牌字段，
+		//   只改这里不改 /api/tenant/branding 的话，dataURI 仍会从后门进库、首屏继续膨胀。
+		//   （该分支只在显式携带品牌字段时触发，未携带时按既有"部分更新不清空"语义走。）
+		logoURL, _, logoErr := s.brandImagesForWrite(r.Context(), req.ID, req.BrandLogo, "")
+		if logoErr != "" {
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, logoErr))
+			return
+		}
+		if err := s.Ten.SetBranding(req.ID, req.BrandName, logoURL, req.Domain, req.BrandLinks); err != nil {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "品牌保存失败: " + err.Error()})
 			return
 		}
@@ -197,7 +209,8 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTenantInviteEnabledGet(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	// 解析当前生效租户：请求上下文注入了 X-Tenant-ID 则用其值，否则用当前用户自身租户
@@ -227,7 +240,8 @@ func (s *Server) handleTenantStatus(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	_ = u
@@ -263,7 +277,8 @@ func (s *Server) handleTenantDelete(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	_ = u
@@ -465,7 +480,8 @@ func (s *Server) setPlatformBranding(m map[string]string) error {
 // 仅超管(roleLevel>=4)可调用；开通后该租户（含其租户管理员）即可编辑品牌，无需付费套餐。
 func (s *Server) handleAdminBrandGrant(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -546,6 +562,10 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 	if tid <= 0 {
 		// 平台主站（租户根 tenant_id=0）：读取 system_config 中存储的平台品牌定制
 		m := s.getPlatformBranding()
+		// ★ F-46（2026-09-26 批 I-9）：两张图出栈前收敛成 URL——历史值是 base64 dataURI 的
+		//   在这里惰性落件（同内容同名 ⇒ 只写一次），从此注入 HTML 的只有 /brand/<名>。
+		//   判据放在这个咽喉点而非各调用方，是因为 brandingPayload 同时服务
+		//   /api/tenant/branding 与 spa.go 首屏注入两条面（读写同源，不许两副面孔）。
 		return map[string]interface{}{
 			"success":              true,
 			"tenant_id":            0,
@@ -554,9 +574,9 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 			"industry":             "",
 			"industry_name":        "",
 			"brand_name":           m["brand_name"],
-			"brand_logo":           m["brand_logo"],
+			"brand_logo":           s.brandImageURL(r.Context(), brandAssetOwner(0, "logo"), m["brand_logo"]),
 			"domain":               m["domain"],
-			"brand_home_bg":        m["brand_home_bg"],
+			"brand_home_bg":        s.brandImageURL(r.Context(), brandAssetOwner(0, "home-bg"), m["brand_home_bg"]),
 			"brand_home_bg_style":  m["brand_home_bg_style"],
 			"brand_login_card_pos": m["brand_login_card_pos"],
 			"brand_login_layout":   m["brand_login_layout"],
@@ -574,6 +594,10 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 	if t == nil {
 		return map[string]interface{}{"success": true, "tenant_id": 0}
 	}
+	// ★ F-46（批 I-9）同平台分支：租户两张图也在咽喉点收敛成 URL（owner 带租户号，
+	// 便于按域名排障时一眼看出静态件归谁；内容哈希后缀保证同名即同图、可 immutable 缓存）。
+	tLogo := s.brandImageURL(r.Context(), brandAssetOwner(t.ID, "logo"), t.BrandLogo)
+	tHomeBg := s.brandImageURL(r.Context(), brandAssetOwner(t.ID, "home-bg"), t.BrandHomeBg)
 	// 行业名称解析（注册页「专属域名自动带入企业信息」展示用）
 	industryName := ""
 	if t.Industry != "" {
@@ -592,9 +616,9 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 		"brand_name":           t.BrandName,
 		"brand_names":          t.BrandNames,
 		"brand_name_en":        t.BrandNameEn,
-		"brand_logo":           t.BrandLogo,
+		"brand_logo":           tLogo,
 		"domain":               t.Domain,
-		"brand_home_bg":        t.BrandHomeBg,
+		"brand_home_bg":        tHomeBg,
 		"brand_home_bg_style":  t.BrandHomeBgStyle,
 		"brand_login_card_pos": t.BrandLoginCardPos,
 		"brand_login_layout":   t.BrandLoginLayout,
@@ -699,7 +723,8 @@ func (s *Server) handleFooterLinksGet(w http.ResponseWriter, r *http.Request) {
 // handleFooterLinksSet 保存平台级页脚链接（仅超管）。links 为 JSON 数组字符串 [{label,label_en,url}]。
 func (s *Server) handleFooterLinksSet(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	if s.Store == nil {
@@ -752,7 +777,8 @@ func validateBrandPayloads(logo, homeBg string) string {
 func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	if s.Ten == nil {
@@ -799,13 +825,22 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "品牌定制为付费套餐功能，请先订阅有效套餐后解锁"})
 		return
 	}
+	// ★ F-46（2026-09-26 批 I-9）：入库前把 dataURI 落成静态件，**库里只存 URL**。
+	//   这一步不做，品牌字段就会继续躺 2 MB 文本（列膨胀 + 备份膨胀 + 首屏注入膨胀三处一起中），
+	//   而且 E15 的上限只防新写、永远降不下存量，该租户后台一改就 400「过大」＝功能不可用。
+	//   放在鉴权与 tid 解析之后：owner 需要真实租户号，且不能让未授权请求先占盘。
+	brandLogoURL, brandHomeBgURL, brandErrMsg := s.brandImagesForWrite(r.Context(), tid, req.BrandLogo, req.BrandHomeBg)
+	if brandErrMsg != "" {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, brandErrMsg))
+		return
+	}
 	// 平台主站（tenant_id=0）品牌定制：超管专属，存入 system_config
 	if tid == 0 {
 		m := s.getPlatformBranding()
 		m["brand_name"] = req.BrandName
-		m["brand_logo"] = req.BrandLogo
+		m["brand_logo"] = brandLogoURL
 		m["domain"] = req.Domain
-		m["brand_home_bg"] = req.BrandHomeBg
+		m["brand_home_bg"] = brandHomeBgURL
 		m["brand_home_bg_style"] = req.BrandHomeBgStyle
 		m["brand_login_card_pos"] = req.BrandLoginCardPos
 		m["brand_login_layout"] = req.BrandLoginLayout
@@ -818,11 +853,12 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// 租户分支四段独立保存：基础字段/首页背景/登录卡片位置/登录布局，任一失败即中止返回
-	if err := s.Ten.SetBranding(tid, req.BrandName, req.BrandLogo, req.Domain, req.BrandLinks); err != nil {
+	// （★ F-46：两张图传的是上面收敛好的 URL，dataURI 已在写侧被拒绝或已落成静态件）
+	if err := s.Ten.SetBranding(tid, req.BrandName, brandLogoURL, req.Domain, req.BrandLinks); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
 		return
 	}
-	if err := s.Ten.SetBrandHomeBg(tid, req.BrandHomeBg, req.BrandHomeBgStyle); err != nil {
+	if err := s.Ten.SetBrandHomeBg(tid, brandHomeBgURL, req.BrandHomeBgStyle); err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "首页背景保存失败: " + err.Error()})
 		return
 	}
@@ -846,7 +882,8 @@ func (s *Server) handleTenantExport(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	_, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {
@@ -880,7 +917,8 @@ func (s *Server) handleTenantErase(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	u, err := s.requireAdminUser(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+		s.writeAuthzError(w, r, err)
 		return
 	}
 	var req struct {

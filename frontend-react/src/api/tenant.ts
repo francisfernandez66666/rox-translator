@@ -14,7 +14,7 @@
  * - 邀请开关：读取/设置租户的邀请好友功能开关
  */
 
-import { request, authHeaders, type AdminResp } from './core'
+import { bizResp, request, authHeaders, type AdminResp } from './core'
 
 /** 租户信息数据结构：含编码/名称/状态/有效期/权限 */
 export interface TenantInfo {
@@ -103,5 +103,6 @@ export async function tenantErase(id: number): Promise<AdminResp> {
 
 /** 向待审核租户发放试用额度（super_admin，幂等） */
 export async function tenantGrantTrial(id: number): Promise<AdminResp> {
-  return request('/api/admin/tenants/grant-trial', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ tenant_id: id }) })
+  // ★ F-64②（批 I-10）：走 bizResp——发放试用失败（租户不存在/已发放）如实抛错
+  return bizResp(() => request('/api/admin/tenants/grant-trial', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ tenant_id: id }) }))
 }

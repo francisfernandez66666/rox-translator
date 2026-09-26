@@ -39,7 +39,9 @@ import { useNavigate, type NavigateFunction } from 'react-router-dom'
 import { confirmDialog } from '@/components/uiDialogs'
 import { useAuth, useAuthStore, roleLevel } from '@/stores/auth'
 import { useAdminStore } from '@/stores/admin'
-import { t as gt, tpl as gtpl } from '@/i18n'
+import { t as gt, tpl as gtpl, textOr, tplOr } from '@/i18n'
+// ★ F-52②（批 I-8）：本地长度闸（上限由聊天页从 /api/me/package 喂养，见 lib/chatLimit.ts）
+import { overChatLimit } from '@/lib/chatLimit'
 import type { ChatMessage } from '@/types'
 
 // ★ E2：聊天记录存储键按账号隔离（chat_msgs_v1:<uid>）。
@@ -82,7 +84,7 @@ interface ChatState extends ChatCtx {
   bind: (nav: NavigateFunction) => void
   switchAccount: (key: string) => void
   // ★ F-11：挂载/摘除顶栏积分刷新句柄（ChatProvider 随 PkgRefreshCtx 的提供变化调用）
-  setPkgHandle: (h: PkgRefreshHandle | null) => void
+  setPkgHandle: (h: PkgRefreshHub | null) => void
   // ★ F-11：取消尚未到点的顶栏刷新定时器（Provider 卸载时清理，防止卸载后 setState 与幽灵请求）
   cancelPkgRefresh: () => void
   patchMsg: (id: string, patch: Partial<ChatMessage>) => void
@@ -98,18 +100,47 @@ function loadMsgsStored(msgsKey: string): ChatMessage[] {
   return loadMsgs(raw)
 }
 
-// ★ F-11（批G 2026-09-25）：顶栏积分刷新句柄——可变对象，App 根持有并经 PkgRefreshCtx 下发；
-// FrontShell 挂载时把真正的 refreshPkgLine 注册进 .refresh，聊天层 done 帧后延迟 2s 回调它。
-// 用「旁挂可变句柄」而非把函数塞进 store：ChatProvider 在 FrontShell 之上，
-// 直接传回调会形成「下层注册、上层读取」的时序倒挂，句柄对象则两侧都只拿引用。
-export interface PkgRefreshHandle {
-  /** 顶栏「当前套餐/积分行」刷新函数；FrontShell 未挂载（如后台路由）时为 null */
-  refresh: (() => void) | null
+// ★ F-11（批G 2026-09-25）：顶栏积分刷新通知——由 App 根持有并经 PkgRefreshCtx 下发；
+// FrontShell 挂载时把真正的 refreshPkgLine 挂进来，聊天层 done 帧后延迟 2s 通知它。
+// 用「旁挂通知枢纽」而非把函数塞进 store：ChatProvider 在 FrontShell 之上，
+// 直接传回调会形成「下层注册、上层读取」的时序倒挂，枢纽对象则两侧都只拿引用。
+//
+// ★ F-48（〇-U 批 I-5 2026-09-26）：单槽位 ⇒ 广播集合。旧形态只有一个 `.refresh` 字段，
+// 语义是「最后一个挂载者赢」：工作台余额条（ChatWindow）一旦也来接这个通知，就会把顶栏
+// FrontShell 的注册**静默挤掉**（反之亦然）——两处余额有一处永远不刷，且没有任何报错。
+// 现在 subscribe() 返回退订函数、emit() 逐个通知，多面板共存是正常态而不是互相覆盖。
+export interface PkgRefreshHub {
+  /** 订阅「余额可能已变」通知（流终态 debounce 到点后广播）；返回取消订阅函数 */
+  subscribe: (fn: () => void) => () => void
+  /** 广播一次：逐个调用当前订阅者；单个订阅者抛错不得中断其余（否则又回到"挤掉"语义） */
+  emit: () => void
+  /** 当前订阅者数量——聊天层用它代替旧句柄的「是否已注册」判空：无人在看余额就不打无谓的 myPackage */
+  count: () => number
 }
 
-// ★ F-11：积分刷新句柄的 Context——Provider 挂在 ChatProvider 之外（App.tsx），
-// FrontShell（消费注册方）与 ChatProvider（聊天触发方）都在其子树内。
-export const PkgRefreshCtx = createContext<PkgRefreshHandle | null>(null)
+// createPkgRefreshHub 广播枢纽工厂（App 根惰性建一份，见 App.tsx）。
+// 独立导出是为了让单测能直接喂两个订阅者断「都在场」（ChatWindow 与顶栏同时收到刷新）。
+export function createPkgRefreshHub(): PkgRefreshHub {
+  const subs = new Set<() => void>()
+  return {
+    subscribe: (fn: () => void) => {
+      subs.add(fn)
+      return () => { subs.delete(fn) }
+    },
+    emit: () => {
+      // 复制一份再遍历：订阅者内部可能退订/订阅（Set 边遍历边删会跳过元素）
+      for (const fn of [...subs]) {
+        try { fn() } catch { /* 一个订阅者失败不影响其余余额位刷新 */ }
+      }
+    },
+    count: () => subs.size,
+  }
+}
+
+// ★ F-11：积分刷新通知的 Context——Provider 挂在 ChatProvider 之外（App.tsx），
+// 消费方（FrontShell 顶栏积分行、ChatWindow 余额条）与触发方（ChatProvider）都在其子树内。
+export const PkgRefreshCtx = createContext<PkgRefreshHub | null>(null)
+
 
 // ★ F-11：done 帧后刷新顶栏积分的 debounce 间隔（毫秒）。
 // 取 2s：连续多条即时翻译快速完成时合并成一次 myPackage 查询，避免每帧都打顶栏接口。
@@ -128,16 +159,16 @@ function isHtmlErrorBody(msg: string): boolean {
 function createChatStore(msgsKey: string) {
   // ★ F-11：顶栏积分刷新的 debounce 状态——刻意放闭包而非 ChatState：
   // 两者都是纯副作用句柄，进 store 会让每次 schedule/触发都白刷一轮订阅者。
-  let pkgHandle: PkgRefreshHandle | null = null
+  let pkgHub: PkgRefreshHub | null = null
   let pkgRefreshTimer: number | null = null
-  // ★ F-11：done 帧后延迟 2s 调顶栏刷新（debounce：窗口内多次 done 只合并成一次刷新，
-  // 计时器重置式；句柄未注册（未进工作台）时静默跳过，不打无谓的 myPackage）
+  // ★ F-11：done 帧后延迟 2s 调余额刷新（debounce：窗口内多次终态只合并成一次查询，
+  // 计时器重置式；无人订阅（未进工作台）时静默跳过，不打无谓的 myPackage）
   const schedulePkgRefresh = () => {
-    if (!pkgHandle?.refresh) return
+    if (!pkgHub || pkgHub.count() === 0) return
     if (pkgRefreshTimer !== null) window.clearTimeout(pkgRefreshTimer)
     pkgRefreshTimer = window.setTimeout(() => {
       pkgRefreshTimer = null
-      try { pkgHandle?.refresh?.() } catch { /* 顶栏刷新失败不影响聊天收尾 */ }
+      try { pkgHub?.emit() } catch { /* 余额刷新失败不影响聊天收尾 */ }
     }, PKG_REFRESH_DEBOUNCE_MS)
   }
   return createStore<ChatState>()((set, get) => ({
@@ -158,8 +189,8 @@ function createChatStore(msgsKey: string) {
     switchAccount: (key) => {
       set({ msgsKey: key, messages: loadMsgsStored(key) })
     },
-    // ★ F-11：注册/摘除顶栏刷新句柄（闭包变量，不进 store state，见工厂顶部注释）
-    setPkgHandle: (h) => { pkgHandle = h },
+    // ★ F-11：注册/摘除余额刷新枢纽（闭包变量，不进 store state，见工厂顶部注释）
+    setPkgHandle: (h) => { pkgHub = h },
     // ★ F-11：卸载清理——未到点的 debounce 刷新直接作废（Provider 都没了，刷新也没有归属）
     cancelPkgRefresh: () => {
       if (pkgRefreshTimer !== null) { window.clearTimeout(pkgRefreshTimer); pkgRefreshTimer = null }
@@ -207,6 +238,23 @@ function createChatStore(msgsKey: string) {
       if (!text.trim()) return
       const s0 = get()
       if (s0.isLoading) return
+      // ★ F-52②（批 I-8）：本地长度闸——超上限的文本**不发请求**。
+      //   后端这道闸一直在（stream.go 的 chat_max_chars，默认 5,000 字符，超限回
+      //   400 + code=chat_text_too_long），但前端没有判据：用户贴长文只能看着气泡转圈、
+      //   收一次失败、再从后端文案里知道「该走工单」。现在在这条漏斗上先拦下、
+      //   给同一口径的提示（复用后端那句的中文语义，文案走词典 chat.textTooLong）。
+      //   上限未知（/api/me/package 没回字段/接口降级）时 overChatLimit 恒 false，
+      //   也就是**宁可不拦**，交给后端那道闸兜底（见 lib/chatLimit.ts 文件头）。
+      const lim = overChatLimit(text)
+      if (lim.over) {
+        s0.setFlags({
+          // ★ 走 tplOr 而非 tpl：本文件在 i18n/parity.test.ts 的「零中文字面量」扫描面内，
+          //   回落句只能是英文（缺键时界面仍是人话，而不是 chat.textTooLong 这种键名）。
+          errorMessage: tplOr('chat.textTooLong', { count: lim.count, max: lim.max },
+            'Text is too long ({count} characters; {max} per message). Please create a translation ticket for long texts.'),
+        })
+        return
+      }
       const opts = { ...options }
       if (!('mode' in opts)) opts.mode = localStorage.getItem('translate_mode') || 'pro'
       s0.setFlags({ errorMessage: '' })
@@ -270,12 +318,15 @@ function createChatStore(msgsKey: string) {
           progress: undefined,
           draft: undefined,
         })
-        // ★ F-11：done 即本条已完成扣点（points_used 落进气泡的同时顶栏余额已过期），
-        // debounce 2s 后回调 FrontShell 注册的 refreshPkgLine 重拉 myPackage，积分行不再停在旧值。
+        // ★ F-11：done 即本条已完成扣点（points_used 落进气泡的同时各处余额行已过期），
+        // debounce 2s 后经枢纽广播，顶栏积分行与工作台余额条一起重拉 myPackage。
         schedulePkgRefresh()
       } catch (e) {
         streamClosed = true
         h6HandleErr(get(), assistantId, e)
+        // ★ F-48（批 I-5）：错误/中断同样是流终态——后端按实际用量实时计费（ChargeUsageRealtime），
+        // 流在中途被掐断时那部分积分已经扣掉；旧实现只在 done 分支刷新，余额条会停在扣费前的值。
+        schedulePkgRefresh()
       } finally {
         streamClosed = true
         set({ isLoading: false, abort: null })
@@ -339,6 +390,18 @@ function h6HandleErr(st: ChatState, assistantId: string, e: unknown) {
     st.patchMsg(assistantId, { content: gt('chat.timeoutTicket'), progress: undefined, draft: undefined })
     return
   }
+  // ★ F-53（批 I-8 2026-09-26）：敏感词拒译按**稳定码**取本语种文案。
+  //   旧形态下后端把 engine.CodeSensitiveBlocked 直接当 error 文案发（人类话术在 Reply 里被丢掉），
+  //   而 12 份 locale 没有 sensitive_blocked 键 ⇒ 客户气泡里是一串裸键名 `sensitive_blocked`。
+  //   现在后端已分流成 error=话术 / error_code=码（api/stream.go engineErrorPayload），
+  //   前端这一支按码取 chat.sensitiveBlocked（12 语种全量词典），取不到时回落 error 原文——
+  //   回落目标必须是 msg 而不是裸码，否则老后端 + 新前端又回到同一个坏形态。
+  if (code === 'sensitive_blocked') {
+    const copy = textOr('chat.sensitiveBlocked', msg)
+    st.setFlags({ errorMessage: copy })
+    st.patchMsg(assistantId, { content: copy, progress: undefined, draft: undefined })
+    return
+  }
   if (code === 'insufficient_balance') {
     st.patchMsg(assistantId, { content: gt('chat.quotaExhausted'), progress: undefined, draft: undefined })
     void confirmDialog({ header: gt('chat.insufficientTitle'), body: gt('chat.insufficientBody'), confirmText: gt('chat.gotoTopUp') })
@@ -377,22 +440,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const msgsKey = msgsKeyFor(user?.id)
   const navigate = useNavigate()
-  // ★ F-11：顶栏积分刷新句柄（App 根提供；缺省时聊天层不调刷新，行为同旧版）
-  const pkgHandle = useContext(PkgRefreshCtx)
+  // ★ F-11：余额刷新枢纽（App 根提供；缺省时聊天层不调刷新，行为同旧版）
+  const pkgHub = useContext(PkgRefreshCtx)
   const storeRef = useRef<ChatStore | null>(null)
   if (storeRef.current === null) storeRef.current = createChatStore(msgsKey)
   const store = storeRef.current
 
   useEffect(() => { store.getState().bind(navigate) }, [store, navigate])
-  // ★ F-11：把句柄交给 store（done 帧后经它回调顶栏刷新）；卸载时先作废在途 debounce
-  // 定时器再摘句柄——顺序反过的话，定时器可能抢在句柄置空前对已卸载的 FrontShell 发请求。
+  // ★ F-11：把枢纽交给 store（done 帧后经它广播各余额位刷新）；卸载时先作废在途 debounce
+  // 定时器再摘枢纽——顺序反过的话，定时器可能抢在枢纽置空前对已卸载的组件发请求。
   useEffect(() => {
-    store.getState().setPkgHandle(pkgHandle ?? null)
+    store.getState().setPkgHandle(pkgHub ?? null)
     return () => {
       store.getState().cancelPkgRefresh()
       store.getState().setPkgHandle(null)
     }
-  }, [store, pkgHandle])
+  }, [store, pkgHub])
   // 切换账号（含登录/登出）时重新加载对应键的记录——不读取上一账号的残留
   useEffect(() => { store.getState().switchAccount(msgsKey) }, [store, msgsKey])
 

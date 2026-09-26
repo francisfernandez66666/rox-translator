@@ -20,13 +20,32 @@
 // ============================================================================
 
 export class TranslatorError extends Error {
-  constructor(message, status, body) {
+  constructor(message, status, body, retryAfter) {
     super(message);
     this.name = "TranslatorError";
     this.status = status;
-    this.errorCode = body?.error_code || null; // 如 insufficient_balance
+    // ★ F-64①（2026-09-26）：错误码正主键是 code（与文档 Error.code 枚举一致），
+    // error_code 是状态码诚实改造**之前**的老服务端在发的别名；改造后的服务端只发 code。
+    // 这里"code 优先、error_code 兜底"⇒ 混跑窗口里打老服务端也照样取得到码。
+    // errorCode 属性名保留（历史公开面，改名＝打断在用浏览器 SDK 的接入方）。
+    this.code = (body && typeof body === "object" && (body.code || body.error_code)) || null;
+    this.errorCode = this.code;
+    this.retryAfter = retryAfter ?? null; // 429 时还需等待的秒数，非限流为 null
     this.body = body;
   }
+}
+
+/**
+ * 从错误响应取「还需等待秒数」：JSON 字段 retry_after 优先，HTTP Retry-After 头兜底
+ * （中间层可能只透传其中之一）。只认纯数字秒，取不到给 null。
+ */
+function pickRetryAfter(body, resp) {
+  let raw = body && typeof body === "object" ? body.retry_after : undefined;
+  if (raw === undefined && resp?.headers?.get) {
+    try { raw = resp.headers.get("Retry-After") ?? resp.headers.get("retry-after"); } catch { raw = undefined; }
+  }
+  const n = typeof raw === "number" ? raw : Number(typeof raw === "string" ? raw.trim() : NaN);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -67,8 +86,13 @@ export class TranslatorClient {
       if (!resp.ok) throw new TranslatorError(`HTTP ${resp.status}: ${text}`, resp.status, text);
       return text; // 二进制/文本响应由调用方处理（download 单独走 raw 分支）
     }
-    if (data && data.success === false) {
-      throw new TranslatorError(data.message || `HTTP ${resp.status}`, resp.status, data);
+    // ★ F-64①：失败现在带真实状态码，下面的 !resp.ok 分支是主通道；
+    // 仍保留"2xx + success:false"这条判据，是因为新前端 SDK 会打到尚未升级的老服务端
+    // （混跑窗口），那时失败确实伪装成 200。
+    if (!resp.ok || (data && data.success === false)) {
+      throw new TranslatorError(
+        (data && (data.message || data.error)) || `HTTP ${resp.status}`,
+        resp.status, data, pickRetryAfter(data, resp));
     }
     return data;
   }
@@ -99,7 +123,8 @@ export class TranslatorClient {
     if (title) fd.append("title", title);
     const r = await this.#fetch("/openapi/v1/tasks", { method: "POST", body: fd });
     // ★ 契约对齐（2026-08-26 全仓评审 D1）：成功响应无 success 字段，以 task_id 为准
-    //  （业务错误已由 #fetch 的 success===false 分支抛出）
+    //  （★ F-64①：超限/缺文件等业务失败已由 #fetch 按真实状态码抛出，
+    //    这里只剩「2xx 空壳」兜底——中间层把失败改写成 200 时不许默默返回）
     if (!r || r.task_id == null) throw new TranslatorError(r?.message || "创建任务失败", 200, r);
     return r;
   }
@@ -118,6 +143,8 @@ export class TranslatorClient {
       if (r.status === "completed") return r;
       if (r.status === "failed") {
         // ★ 契约对齐（D1）：失败出参字段为 message/error_code（无 error 字段）
+        //   ★ F-64①：这里的 200 是**对的**——失败发生在任务执行期，请求本身成功，
+        //   status:"failed" 是任务状态而非 HTTP 失败（对外文档已按此口径写明）。
         throw new TranslatorError(r.message || "任务失败", 200, r);
       }
       if (Date.now() > deadline) throw new TranslatorError("轮询超时，任务仍在处理");
@@ -142,7 +169,17 @@ export class TranslatorClient {
         headers: { Authorization: `Bearer ${this.apiKey}` },
         signal: ctrl.signal,
       });
-      if (!resp.ok) throw new TranslatorError(`下载失败 HTTP ${resp.status}`, resp.status);
+      if (!resp.ok) {
+        // ★ F-64①：旧写法只给一行"下载失败 HTTP 409"，错误体整个丢掉 ⇒ 调用方分不清
+        // "产物还没翻完（该等）"、"Key 没权限（该找管理员）"与"任务 id 写错（该改代码）"，
+        // 也拿不到 429 的退避秒数。这里把 message/code/retryAfter 补回来。
+        const raw = await resp.text().catch(() => "");
+        let data;
+        try { data = raw ? JSON.parse(raw) : undefined; } catch { data = undefined; }
+        throw new TranslatorError(
+          (data && (data.message || data.error)) || `下载失败 HTTP ${resp.status}`,
+          resp.status, data ?? raw, pickRetryAfter(data, resp));
+      }
       return await resp.blob();
     } finally {
       clearTimeout(timer);

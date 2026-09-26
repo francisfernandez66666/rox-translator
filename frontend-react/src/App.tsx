@@ -18,9 +18,9 @@
 import { lazy, Suspense, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { myPackage, meContext } from '@/api'
-import { AuthProvider, useAuth } from '@/stores/auth'
+import { AuthProvider, useAuth, isPlatformBillingContext } from '@/stores/auth'
 import { AdminProvider, useAdminStore } from '@/stores/admin'
-import { ChatProvider, useChat, PkgRefreshCtx, type PkgRefreshHandle } from '@/hooks/useChat'
+import { ChatProvider, useChat, PkgRefreshCtx, createPkgRefreshHub, type PkgRefreshHub } from '@/hooks/useChat'
 import { useT, t as gt, tpl as gtpl } from '@/i18n'
 import { setAuthToken, setActiveTenantId, API_BASE } from '@/api'
 import { applyTheme } from '@/lib/theme'
@@ -156,13 +156,17 @@ function FrontShell() {
   const canUploadKb = roleLevelSafe(user?.role) >= 2
 
   // ★ F-11（批G 2026-09-25）：顶栏「当前套餐/积分行」拉取提取成 useCallback——
-  // 挂载时仍照旧拉一次，同时经 pkgHandle 注册给聊天层：即时翻译 done 帧（扣点）后
-  // debounce 2s 回调这里，顶栏余额不再停在旧值（套餐到期/变更也在下一次刷新时被感知）。
+  // 挂载时仍照旧拉一次，同时经 PkgRefreshCtx 枢纽订阅进广播名单：即时翻译流终态（扣点）后
+  // debounce 2s 广播这里，顶栏余额不再停在旧值（套餐到期/变更也在下一次刷新时被感知）。
   const refreshPkgLine = useCallback(async () => {
     if (!user) return // 未登录不打余额接口，避免 401 噪声（与挂载 effect 同口径）
     try {
       const p = await myPackage() as unknown as { success?: boolean; points_balance?: number; balance_sentences_approx?: number }
       if (p.success && typeof p.points_balance === 'number') {
+        // ★ O-9（批 I-10）：平台上下文（超管未切入任何租户）不参与计费，后端固定回 0；
+        //   照此渲染会得到「余额 0 积分」胶囊并被 points_balance<=0 点亮「余额不足」横幅。
+        //   守卫放前端、不动后端出参（tid<=0 回 0 的语义是对的），判据见 isPlatformBillingContext。
+        if (isPlatformBillingContext(user.role)) { setPkgLine(''); setDepleted(false); return }
         const nf = new Intl.NumberFormat(intlLocale()) // ★ 〇-Q：按**界面语种**（原为浏览器默认，切语种后数字不跟）
         setPkgLine(gtpl('app.pkgLineFmt', { points: nf.format(p.points_balance), approx: nf.format(p.balance_sentences_approx ?? 0) }))
         setDepleted(p.points_balance <= 0) // ★ E11：billing_stopped 顶部横幅信号
@@ -170,15 +174,17 @@ function FrontShell() {
     } catch { /* ignore */ } // 拉不到就保持上一次的积分行，不打断工作台
   }, [user])
 
-  // ★ F-11：把刷新函数登记进 App 根持有的可变句柄（PkgRefreshCtx）。注册的是包一层的
-  // 稳定闭包，聊天层 done 帧后读句柄现取现调；本组件卸载（如切去 /admin）时摘除，
-  // 避免聊天在后台路由下也去刷一个已经不在顶栏的积分行。
-  const pkgHandle = useContext(PkgRefreshCtx)
+  // ★ F-11：把刷新函数登记进 App 根持有的广播枢纽（PkgRefreshCtx）。注册的稳定闭包由聊天层
+  // 流终态后广播触发；本组件卸载（如切去 /admin）时退订，避免聊天在后台路由下也去刷一个
+  // 已经不在顶栏的积分行。
+  // ★ F-48（批 I-5）：旧形态是单槽位 `handle.refresh = fn`——第二个余额位（工作台余额条）一注册
+  // 就把顶栏那份**静默挤掉**（反之亦然），两处必有一处永远不刷且无报错。改成 subscribe/emit 广播，
+  // 各余额位各自订阅、互不覆写。
+  const pkgHub = useContext(PkgRefreshCtx)
   useEffect(() => {
-    if (!pkgHandle) return
-    pkgHandle.refresh = () => { void refreshPkgLine() }
-    return () => { pkgHandle.refresh = null }
-  }, [pkgHandle, refreshPkgLine])
+    if (!pkgHub) return
+    return pkgHub.subscribe(() => { void refreshPkgLine() })
+  }, [pkgHub, refreshPkgLine])
 
   useEffect(() => {
     if (!user) return // 未登录（含 SSO 兑换前的那一帧）不打这两个接口，避免 401 噪声
@@ -483,17 +489,19 @@ function Root() {
 //   BrandingProvider 最内：白标只按访问域名解析（可被 index.html 注入 window.__BRANDING__ 抢先），
 //     不依赖其它上下文，贴近 useBranding() 的消费点即可。
 export default function App() {
-  // ★ F-11（批G）：顶栏积分刷新句柄——App 根持有一份可变对象，经 PkgRefreshCtx 同时下发给
-  // ChatProvider（done 帧后延迟回调）与 FrontShell（注册真正的 refreshPkgLine）。
+  // ★ F-11（批G）：余额刷新广播枢纽——App 根持有唯一一份，经 PkgRefreshCtx 同时下发给
+  // ChatProvider（流终态后延迟广播）与各余额位（顶栏积分行、工作台余额条各自订阅）。
+  // ★ F-48（批 I-5）：旧版是「单槽位可写句柄」，两处余额位互相注册会静默挤掉对方，
+  // 现改为 Set 广播——多面板共存是正常态。
   // 用惰性初始化（同 ChatProvider 的 storeRef 手法）：Provider 的 value 引用必须终生稳定，
-  // 否则每次重渲染都会让 ChatProvider 的注册 effect 重跑一遍。
-  const pkgHandleRef = useRef<PkgRefreshHandle | null>(null)
-  if (pkgHandleRef.current === null) pkgHandleRef.current = { refresh: null }
+  // 否则每次重渲染都会让订阅 effect 重跑一遍，把集合抖成「退订再订阅」。
+  const pkgHubRef = useRef<PkgRefreshHub | null>(null)
+  if (pkgHubRef.current === null) pkgHubRef.current = createPkgRefreshHub()
   return (
     <ErrorBoundary>
       <BrowserRouter>
         <AuthProvider>
-          <PkgRefreshCtx.Provider value={pkgHandleRef.current}>
+          <PkgRefreshCtx.Provider value={pkgHubRef.current}>
             <ChatProvider>
               <AdminProvider>
                 <BrandingProvider>

@@ -12,7 +12,7 @@
 //     （editDlg 状态：语言/原文/译文 三字段，语种走 BRAND_LANGS select + langLabel()），
 //     提交仍走既有 kbEntryAdd / kbEntryUpdate 接口函数，零新接口。
 // ============================================================================
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Badge, Button, CloseIcon, DataTable, Dialog } from '@/ui/langcross/src'
 import { brandTerms, kbPackages, kbEntryAdd, kbEntryUpdate, kbEntryDelete } from '@/api/kb'
 import { langLabel } from '@/lib/langNames'
@@ -74,6 +74,14 @@ export default function BrandTermsP(_props: Props) {
   const [brandInput, setBrandInput] = useState('')   // 新增品牌名（中文，如「极石」）
   const [brandEn, setBrandEn] = useState('')          // 该品牌名统一外语译法（如 ROX）
   const [dlg, setDlg] = useState(false)               // 新增弹窗
+  // ★ F-58（2026-09-26 〇-U 批 I-8）：21 语种串行写入的可中止/可观测态
+  //   adding=是否在提交（按钮禁用 + 重入保护）、done=已完成条数（按钮上显进度）、
+  //   cancelRef=取消标志（**用 ref 不用 state**：循环读的是当轮闭包，state 要等重渲染才更新，
+  //   用 state 判取消会晚一轮——和 F-44 那类「读侧拿不到最新值」是同一个坑）。
+  const [adding, setAdding] = useState(false)
+  const [done, setDone] = useState(0)
+  const cancelRef = useRef(false)
+
   // ★ F-25：单语言补充 / 编辑条目弹窗状态（原 window.prompt 流程的站内替代）
   const [editDlg, setEditDlg] = useState<EditDlg>({ open: false, entryId: 0, brand: '', lang: 'en', text: '' })
 
@@ -102,23 +110,58 @@ export default function BrandTermsP(_props: Props) {
   useEffect(() => { void load() }, [pkgId]) // eslint-disable-line react-hooks/exhaustive-deps
   const groups = useMemo(() => groupByBrand(terms), [terms])
 
-  /** 新增品牌名：为该品牌在全部目标语言写入规定译法（源文无译法的语言自动补充） */
+  /** 新增品牌名：为该品牌在全部目标语言写入规定译法（源文无译法的语言自动补充）
+   *
+   * ★ F-58（2026-09-26 〇-U 批 I-8）：21 语种串行写入的**中止与诚实回执**。
+   *   旧形态三处失真：① 循环里不看 `r.success`（业务失败回 200+success:false 时静默继续，
+   *   最后照样 toastSuccess「品牌名已新增（全语言译为 X）」）；② 弹窗「取消」只 setDlg(false)，
+   *   循环照跑完 21 次（本轮 UAT 实测：关掉窗口后请求仍在逐条发出）；③ 提交中按钮不禁用，
+   *   可以再点一次保存 ⇒ 同一品牌并发写两轮。
+   *   现在：cancelRef 每次 await 后判一次（**已经在途的那一条不打断**——没有 AbortSignal 通道
+   *   可用，硬造中断只会把已写入的条目状态搞得更不清楚），按钮在 adding 期间改为进度文案，
+   *   回执按实际结果分三档（全成 / 部分失败 / 被中止），部分失败时逐语种列出失败原因。
+   *   ★ 不要改成「一次请求带多语种」：后端 kb 条目走单语种白名单
+   *   （admin_kb.go isValidLangColumn 不认 `en|ar|de` 这类拼接串，直接 400——报告里那句已被证伪）。 */
   const addBrand = async () => {
+    if (adding) return // 提交中重入保护（按钮已禁用，这里再兜一层，防键盘回车二次触发）
     const brand = brandInput.trim()
     const en = brandEn.trim()
     if (!brand) { toastWarn(t('bt.needBrand')); return }
     if (!en) { toastWarn(t('bt.needEn')); return }
+    cancelRef.current = false
+    setAdding(true)
+    setDone(0)
+    const fails: string[] = []
+    let ok = 0
     try {
       for (const lc of BRAND_LANGS) {
-        await kbEntryAdd({ package_id: pkgId, layer: 1, source_text: brand, target_lang: lc, target_text: en, module: 'brand' })
+        if (cancelRef.current) break // ★ 取消：已写完的保留（逐条即时生效，不做回滚），只停止后续语种
+        let why = ''
+        try {
+          const r = await kbEntryAdd({ package_id: pkgId, layer: 1, source_text: brand, target_lang: lc, target_text: en, module: 'brand' })
+          if (!r.success) why = String(r.message || t('common.fail'))
+        } catch (e) { why = String((e as any)?.message || e) }
+        if (why) fails.push(`${lc}：${why}`)
+        else ok++
+        setDone((n) => n + 1)
       }
-      toastSuccess(gtpl('bt.added', { en }))
-      setBrandInput(''); setBrandEn(''); setDlg(false)
-      await load()
+      if (fails.length) {
+        // 部分失败如实报「写成 k/总数 + 逐语种原因」，绝不发成功 toast（与 F-23/F-24 文案诚实同口径）
+        toastError(gtpl('bt.addedPartial', { ok, total: BRAND_LANGS.length, why: fails.join('；') }))
+      } else if (cancelRef.current) {
+        toastWarn(gtpl('bt.addCancelled', { ok, total: BRAND_LANGS.length }))
+      } else {
+        toastSuccess(gtpl('bt.added', { en }))
+      }
+      // 中止/部分失败同样**不清空输入框**：客户可以直接改两个字段重跑一次，
+      // 已写进去的语种走 kb-entries 幂等覆盖（同 package+source+target_lang 更新而非重复插行），重跑安全。
+      if (!fails.length && !cancelRef.current) { setBrandInput(''); setBrandEn(''); setDlg(false) }
+      await load() // 无论成/败/中止都重取列表：部分写入的行也要马上可见，别停在旧快照上
     } catch (e) {
       toastError(gtpl('bt.addFail', { err: String((e as any)?.message || e) }))
-    }
+    } finally { setAdding(false) }
   }
+
 
   /** ★ F-25：打开「为既有品牌补单语言条目」弹窗（原 window.prompt 双连问的入口替代） */
   const openAddLang = (brand: string) => setEditDlg({ open: true, entryId: 0, brand, lang: 'en', text: '' })
@@ -189,7 +232,13 @@ export default function BrandTermsP(_props: Props) {
         <Button variant="primary" onClick={() => setDlg(true)}>{t('bt.new')}</Button>
       </div>
 
-      <Dialog title={t('bt.newTitle')} open={dlg} onCancel={() => setDlg(false)} confirmText={t('bt.save')} cancelText={t('bt.cancel')} onConfirm={() => void addBrand()}>
+      {/* ★ F-58：提交中确认钮变进度文案并挡住重入，取消钮改为「中止」（置 cancelRef，循环下一条即停）。
+          窗口在提交期间不给关（关窗≠中止，旧形态就是关窗后 21 条继续发完）——中止后由循环自己收尾关窗。 */}
+      <Dialog title={t('bt.newTitle')} open={dlg}
+              onCancel={() => { if (adding) { cancelRef.current = true } else { setDlg(false) } }}
+              confirmText={adding ? gtpl('bt.adding', { ok: done, total: BRAND_LANGS.length }) : t('bt.save')}
+              cancelText={adding ? t('bt.stop') : t('bt.cancel')}
+              onConfirm={() => void addBrand()}>
         <div style={rowTop}>
           <span style={{ width: 110, fontSize: 15 }}>{t('bt.brandLabel')}</span>
           <input className="lc-input" value={brandInput} onChange={(e) => setBrandInput(String(e.target.value ?? ''))} placeholder={t('bt.brandPlaceholder')} style={inputStyle} />
