@@ -24,6 +24,12 @@
 #   - `前端及UI相关/`（UI 交付包与流程图目录，含 svg/png 之类大文件）
 #   - `产品手册/`（多语种用户指南 PDF，属文档，不推送）
 #   - `*.pdf`（PDF 一律当文档，不推送）
+#   - `发布前E2E_UAT_*` / 任意层级的 `*/证据/*`（★ 2026-09-27 〇-V 新增：发版前 E2E/UAT 归档目录。
+#     里面除 .md 报告外还有**截图、账号登录后的工作台画面、上传夹具、导出的 zip/tmx**——
+#     这些是「取证材料」不是代码，推上公开远端等于把内部界面与测试数据送出去。
+#     〇-U 收口时把 `发布前E2E_UAT_20260926/` 整目录（含 证据/）提交到了本地 autosales，
+#     本批干跑实测：旧口径只排 .md/.pdf，17 个证据二进制被当成「代码文件」列进待推清单，
+#     故把它们并入排除口径。口令留档 .txt 本就靠「未跟踪」留在本地，不依赖这条。）
 #   - 根目录 `*.png` / `*.svg` / `*.drawio` / `*.zip` 之外的流程图产物一律按目录排；
 #     注：`frontend-react/public/extensions/*.zip` 是**代码交付物**（插件安装包），不排除。
 #
@@ -52,6 +58,8 @@ EXCL=(
   -- ':(exclude)前端及UI相关/'
   -- ':(exclude)产品手册/'
   -- ':(exclude)*.pdf'
+  -- ':(exclude)发布前E2E_UAT_*'
+  -- ':(exclude)*/证据/*'
 )
 
 git fetch --quiet "$REMOTE" "$TARGET" 2>/dev/null || printf '⚠️ fetch 失败，用本地已有的 %s 继续（请自查网络）\n' "$BASE_REF"
@@ -59,7 +67,9 @@ git rev-parse --verify -q "$BASE_REF" >/dev/null || { printf '❌ 找不到 %s�
 BASE=$(git rev-parse "$BASE_REF")
 
 # 本地待推的代码文件改动清单（BASE..HEAD 的差异，剔除文档）
-CHANGED=$(git diff --name-only "$BASE" HEAD -- ':(exclude)*.md' ':(exclude)前端及UI相关/' ':(exclude)产品手册/' ':(exclude)*.pdf')
+# ★ 口径单一来源：清单与三次校验必须用同一个 EXCL 数组。历史上两处各写一遍字面 pathspec，
+#   改一处漏一处就会出现「清单排掉了、三次校验又把它算成差异」的恒红（或反向的漏推）。
+CHANGED=$(git diff --name-only "$BASE" HEAD -- "${EXCL[@]:1}")
 DOC_IN_HISTORY=$(git diff --name-only "$BASE" HEAD -- '*.md' '产品手册/' '*.pdf' ':(exclude)前端及UI相关/*' | wc -l | tr -d ' ')
 
 printf '==> 当前分支 %s；基点 %s=%s\n' "$BR" "$BASE_REF" "${BASE:0:9}"
@@ -70,7 +80,7 @@ if [ -z "$CHANGED" ]; then
 fi
 echo "==> 将推送的代码文件（$(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') 个）："
 printf '%s\n' "$CHANGED" | sed 's/^/   /' | head -60
-if printf '%s\n' "$CHANGED" | grep -qE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$'; then
+if printf '%s\n' "$CHANGED" | grep -qE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$|^发布前E2E_UAT_|/证据/'; then
   echo "❌ 清单里混进了文档路径，排除口径失效，停手。" >&2; exit 1
 fi
 if [ "$APPLY" = "0" ]; then
@@ -104,7 +114,7 @@ git commit -q -m "$(printf 'chore: 纯代码推送 %s（由 scripts/push_code_on
 
 # ★ 三次校验（比「零 .md」更硬）：推出去的树必须与本地代码状态逐文件相等。
 #   只查 .md 会漏掉「新文件被静默丢弃」，只查文件名会漏掉「内容没取全」——两类都要堵。
-MISSING=$(git diff --name-only "$BR" HEAD -- ':(exclude)*.md' ':(exclude)前端及UI相关/' ':(exclude)产品手册/' ':(exclude)*.pdf')
+MISSING=$(git diff --name-only "$BR" HEAD -- "${EXCL[@]:1}")
 if [ -n "$MISSING" ]; then
   echo "❌ 三次校验：纯代码提交与本地代码状态仍有差异，已停在本地未推：" >&2
   printf '%s\n' "$MISSING" | sed 's/^/   /' | head -20 >&2
@@ -112,7 +122,7 @@ if [ -n "$MISSING" ]; then
 fi
 
 PUSHED_FILES=$(git show --name-only --pretty=format: HEAD | sed '/^$/d')
-if printf '%s\n' "$PUSHED_FILES" | grep -qiE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$'; then
+if printf '%s\n' "$PUSHED_FILES" | grep -qiE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$|^发布前E2E_UAT_|/证据/'; then
   echo "❌ 二次校验：纯代码提交里仍有文档路径，已停在本地未推。" >&2
   printf '%s\n' "$PUSHED_FILES" | grep -iE '\.md$|^前端及UI相关/' | head
   git checkout -q "$BR"; exit 1
