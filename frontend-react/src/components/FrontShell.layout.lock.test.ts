@@ -47,3 +47,31 @@ describe('前台外壳布局锁（#7 汉堡退役）', () => {
     expect(cw).toContain('flex: 1')
   })
 })
+
+// ★ F-48（〇-U 批 I-5 2026-09-26）：窄屏余额徽标的**静态机制锁**。
+// 旧 mobile.css 写 `.app-header .pkg-line-tag { display: none }`——手机上把「还剩多少积分」
+// 整块抹掉（要查余额得翻进「套餐/账单」二级页）。运行时真值由 e2e/mobile_uat.spec.ts
+// 「余额徽标窄屏仍可见」承担（那条要起全站服务）；本锁的价值是**不依赖服务也能红**：
+// 谁把 display:none 加回来（或加在别的选择器上），npm test 立刻拦，不用等发版闸门跑 e2e。
+// 等值锁口径（AGENTS §一·5 〇-L）：既要求新四项在位，也负向清掉旧写法，二者缺一即红。
+describe('窄屏余额徽标锁（★ F-48：余额不得在手机上隐身）', () => {
+  const mobile = stripComments(read('src/styles/mobile.css'))
+  // 只看 .pkg-line-tag 自己的声明块（注释已剥掉，故文件里那句「旧写法 display:none 已退役」
+  // 的说明注释不会自伤命中——〇-M 注释批同款坑）。
+  const blocks = [...mobile.matchAll(/\.pkg-line-tag[^{]*\{([^}]*)\}/g)].map((m) => m[1].replace(/\s+/g, ''))
+
+  it('规则仍在且块内不得出现 display:none（旧「窄屏隐藏」负向清零）', () => {
+    expect(blocks.length, 'mobile.css 里必须仍有 .pkg-line-tag 规则（被整段删掉＝徽标失去截断保护）').toBeGreaterThan(0)
+    for (const b of blocks) {
+      expect(b, '★ F-48 复发：余额徽标又被 display:none 藏了').not.toContain('display:none')
+    }
+  })
+
+  it('徽标单行省略号五件套在位（就在 .pkg-line-tag 块内，不是别的规则蹭到）', () => {
+    // 五项缺一都有实际后果：min-width:0 少了 flex 项不收缩（撑破 390px，被 e2e 溢出锁红）、
+    // overflow+ellipsis 少了不截断、nowrap 少了换行撑高页眉
+    for (const decl of ['max-width:100%', 'min-width:0', 'overflow:hidden', 'text-overflow:ellipsis', 'white-space:nowrap']) {
+      expect(blocks.some((b) => b.includes(decl)), `徽标窄屏规则缺少 ${decl}`).toBe(true)
+    }
+  })
+})

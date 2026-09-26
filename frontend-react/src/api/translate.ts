@@ -15,7 +15,7 @@
  */
 
 import type { ChatResponse, FileSegmentEvent, HealthResponse, ProgressEvent } from '@/types'
-import { API_BASE, authHeaders, request, handleUnauthorized, ApiError, apiMsg } from './core'
+import { API_BASE, authHeaders, request, handleUnauthorized, readErrEnvelope, ApiError, apiMsg } from './core'
 
 /** SSE 空闲超时：后端每 20s 发一帧 `: ping` 注释（不匹配 data: 但计入字节、重置计时）。
  *  连续 SSE_IDLE_MS 无任何字节 = 判定代理静默断连，主动中断避免 UI 永卡 loading。 */
@@ -126,13 +126,25 @@ export async function chatStream(
   })
 
   if (!response.ok) {
-    const errorText = await response.text()
+    // ★ F-52（批 I-8 2026-09-26）：失败体改走 core 的统一解析器并抛 **ApiError（带稳定码）**。
+    //   旧写法 `throw new Error(请求失败 (状态): ${整段响应体})` 有两个落点：
+    //   ① 后端 4xx 现在回结构化 JSON（{success,code,message,details,trace_id}），整段 JSON
+    //      被当正文送进聊天气泡，用户看到一屏大括号（useChat 只挡 HTML 网关页，对 JSON 无判）；
+    //   ② 裸 Error 不带 code，chat_text_too_long / 限额一类「按码分支」的前端逻辑全部失效，
+    //      等于 SSE 通道自成一套错误契约。
+    //   现在：message 取后端那句、code 透传、body 原样留对象（trace_id 只在 body 里供复制排查，
+    //   不进正文），display 对 JSON/HTML 恒为空——不会再有整段体进气泡这条路。
+    const env = await readErrEnvelope(response)
     // ★ E5：SSE 通道 401 与其他请求同源处理——清登录态并跳登录，而不是只渲染"请求失败(401)"
     if (response.status === 401) {
       handleUnauthorized('/api/chat/stream')
-      throw new ApiError(apiMsg('tr.sessionExpired', '登录已过期，请重新登录'), 401)
+      throw new ApiError(env.message || apiMsg('tr.sessionExpired', '登录已过期，请重新登录'), 401, env.code, env.body)
     }
-    throw new Error(apiMsg('common.reqFailDetail', `请求失败 (${response.status}): ${errorText}`, { status: response.status, text: errorText }))
+    throw new ApiError(
+      env.message || apiMsg('common.reqFailDetail', `请求失败 (${response.status})${env.display ? `: ${env.display}` : ''}`,
+        { status: response.status, text: env.display }),
+      response.status, env.code, env.body,
+    )
   }
 
   const reader = response.body?.getReader()

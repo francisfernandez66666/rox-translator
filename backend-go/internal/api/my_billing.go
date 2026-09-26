@@ -2,6 +2,10 @@
 // api/my_billing.go — 自服务账单端点（★ F8）
 // 与 admin_billing（租户管理员门槛）相对：本组端点仅要求登录用户，
 // 数据口径一律收敛到「本租户 + 本人」，用于个人「账单中心」页。
+// ★ 错误响应口径（F-64① 批 I-7，2026-09-26）：失败一律走 s.writeError + apierrors 统一出口，
+//
+//	不再用 200 承载失败（未登录 401、读取故障 500）。由本批的 payHonestZeroFiles 等值锁钉住。
+//
 // ============================================================================
 package api
 
@@ -10,6 +14,8 @@ import (
 	"strconv"
 
 	"translator/internal/billing"
+
+	apierrors "translator/internal/errors"
 )
 
 // myPage 解析 page/size 查询参数（1 起始，size 上限 100）。
@@ -30,13 +36,15 @@ func myPage(r *http.Request) (page, size int) {
 func (s *Server) handleMyBillingOverview(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	billing.Flush() // 冲刷计量缓冲，保证余额即时（与 handleBalance 口径一致）
 	_, err := s.Store.GetBalance(u.TenantID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：账单数据读取失败是存储/本进程故障，
+		//   客户无从自改，状态码必须诚实（个人账单中心与超管账本同一口径，见 admin_billing.go 同批说明）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	grants, _, total, approx := s.balancePayload(u.TenantID)
@@ -60,12 +68,14 @@ func (s *Server) handleMyBillingOverview(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleMyOrders(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	all, err := s.Store.ListOrders(u.TenantID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：账单数据读取失败是存储/本进程故障，
+		//   客户无从自改，状态码必须诚实（个人账单中心与超管账本同一口径，见 admin_billing.go 同批说明）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	status := r.URL.Query().Get("status")
@@ -115,13 +125,15 @@ func pagedSlice[T any](v []*T, page, size int) []*T {
 func (s *Server) handleMyLedger(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	page, size := myPage(r)
 	rows, total, err := s.Store.MyLedgerPage(u.TenantID, u.ID, r.URL.Query().Get("biz_kind"), size, (page-1)*size)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：账单数据读取失败是存储/本进程故障，
+		//   客户无从自改，状态码必须诚实（个人账单中心与超管账本同一口径，见 admin_billing.go 同批说明）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "total": total, "page": page, "size": size, "rows": s.ledgerRowsJSON(rows)})
@@ -131,7 +143,7 @@ func (s *Server) handleMyLedger(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMyRewards(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	all := s.Store.ListReferrals(u.ID)
@@ -143,12 +155,14 @@ func (s *Server) handleMyRewards(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMyInvoices(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	all, err := s.Store.ListInvoices(u.TenantID)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：账单数据读取失败是存储/本进程故障，
+		//   客户无从自改，状态码必须诚实（个人账单中心与超管账本同一口径，见 admin_billing.go 同批说明）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	page, size := myPage(r)

@@ -1,7 +1,9 @@
 // ============ tasks.go · 职责说明 ============
 // store 包「任务中心」数据层实现（功能③：个人中心 → 任务中心）。
 // 规则（2026-09-03 新增）：
-//   - user_tasks 任务定义表：task_type=daily(每日)/once(一次性)，reward_tokens=永久 token 奖励
+//   - user_tasks 任务定义表：reward_tokens=永久 token 奖励；周期两列 period(真值)/task_type(遗留别名)
+//     ★ F-60（2026-09-26）：两列由 normalizeTaskCycle 保证恒等（task_type ≡ period），
+//     老行由 RepairTaskCycleColumns 幂等订正；出参两字段同值，消费方任取其一都不会算错周期
 //   - user_task_claims 领取记录表：daily 按「用户+任务+日期」去重，once 按「用户+任务」去重
 //   - 奖励入永久余额（balance_accounts，与充值包同桶，永不过期），领取时事务内原子累加
 //   - 超管后台可增删改任务与奖励，用户在个人中心查看并一键领取
@@ -20,7 +22,7 @@ import (
 // 老行默认 manual/daily，历史任务行为不变。
 type UserTask struct {
 	ID           int64  `json:"id"`            // 任务 ID
-	TaskType     string `json:"task_type"`     // daily=每日任务 / once=一次性任务
+	TaskType     string `json:"task_type"`     // 遗留周期列（★ F-60：与 Period 恒等，真值见 Period）
 	Title        string `json:"title"`         // 任务标题
 	Description  string `json:"description"`   // 任务说明（可空）
 	RewardTokens int64  `json:"reward_tokens"` // 奖励 token 数（内部记账口径；对外一律折成积分）
@@ -31,7 +33,7 @@ type UserTask struct {
 
 	TaskKey     string `json:"task_key"`     // 事件任务标识（空=超管自定义手工任务）
 	GrantMode   string `json:"grant_mode"`   // manual=用户点击领取 / auto=事件自动发放
-	Period      string `json:"period"`       // daily|weekly|once|event（决定去重键粒度）
+	Period      string `json:"period"`       // ★ 周期真值：daily|weekly|once|event（决定去重键粒度；task_type 是其恒等别名）
 	ValidDays   int    `json:"valid_days"`   // >0=临时积分有效天数；0=永久积分
 	StackExpiry int    `json:"stack_expiry"` // 1=到期叠加（日/周叠加），0=固定 now+valid_days
 	CapPerDay   int    `json:"cap_per_day"`  // 每日发放上限（0=不限）
@@ -121,11 +123,9 @@ func (s *Store) ListUserTasks() []*UserTask {
 
 // SaveUserTask 新增或更新任务定义（id=0 新增，>0 更新）。
 // 事件发放列（grant_mode/period/valid_days/cap_*）为空时落默认值，保证手工任务行为不变。
+// ★ F-60（2026-09-26 批 I-8）：周期两列不再各写各的，统一由 normalizeTaskCycle 收敛（task_type ≡ period）。
 func (s *Store) SaveUserTask(t *UserTask) (int64, error) {
 	now := time.Now().Format(time.RFC3339)
-	if t.TaskType != "once" {
-		t.TaskType = "daily"
-	}
 	if t.RewardTokens < 0 {
 		t.RewardTokens = 0
 	}
@@ -135,11 +135,7 @@ func (s *Store) SaveUserTask(t *UserTask) (int64, error) {
 	if t.GrantMode != "auto" {
 		t.GrantMode = "manual"
 	}
-	switch t.Period {
-	case "weekly", "once", "event":
-	default:
-		t.Period = "daily"
-	}
+	normalizeTaskCycle(t) // ★ F-60：必须在 grant_mode 定稿之后（分流依据就是它）
 	if t.ValidDays < 0 {
 		t.ValidDays = 0
 	}
@@ -237,11 +233,88 @@ func (s *Store) ListUserTaskViews(uid int64) []*UserTaskView {
 }
 
 // claimDateKey 领取去重键：daily=日期，once=固定 once 标记。
+// ★ F-60：'weekly'/'event' 这类只服务事件发放的周期值走 default（按日键），
+//
+//	但这两类任务必然是 grant_mode=auto，ClaimUserTask 在入口就拒绝手工领取，
+//	所以本函数实际只会拿到 'daily' 或 'once'——下方 normalizeTaskCycle 保证这一点。
 func (t *UserTask) claimDateKey(today string) string {
 	if t.TaskType == "once" {
 		return "once"
 	}
 	return today
+}
+
+// isTaskPeriod 周期合法值判定（period 列的四档真值）。
+func isTaskPeriod(p string) bool {
+	switch p {
+	case "daily", "weekly", "once", "event":
+		return true
+	}
+	return false
+}
+
+// legacyCycleOf 旧 task_type 列 → 周期值（只认 once，其余按 daily，与历史语义一致）。
+func legacyCycleOf(taskType string) string {
+	if taskType == "once" {
+		return "once"
+	}
+	return "daily"
+}
+
+// normalizeTaskCycle 把「周期」两列收敛成单一真值，落库前保证 task_type ≡ period（★ F-60）。
+//
+// 真值按发放方式分流，两个方向都**不允许放大领取/发放窗口**：
+//   - grant_mode=auto：事件发放只读 period（taskDedupKey + user_task_period_cnt 计数器），
+//     task_type 只是 #33 之前遗留的别名 ⇒ period 为真值，task_type := period。
+//     「每周发起翻译」的 cap_per_day=1 / cap_per_week=5 因此完全不受影响，
+//     不可能被这次订正变成「每天 5 次」（周任务领取回归＝task_rewards_cycle_test.go）。
+//     period 非法（老库/老表单没下发）时先由 task_type 反推一次，避免把 auto 任务误降成 daily。
+//   - grant_mode=manual：人工领取的幂等键 claimDateKey 只认 task_type ⇒ task_type 为真值，
+//     period := task_type。**顺序绝不能反过来**：若用 period 覆写 task_type，
+//     历史「task_type=once + period=daily」（#33 之前建的一次性任务）会被静默放大成
+//     「每天可领一次」，那是账务级事故。
+//
+// 副作用（如实记录）：手工任务即便在超管表单里选了 weekly/event，也会被归一成 daily/once——
+// 因为手工领取机制本身只有「按日」与「终身一次」两种窗口，展示口径与真实窗口对齐比保留幻觉重要。
+func normalizeTaskCycle(t *UserTask) {
+	if t.GrantMode == "auto" {
+		if !isTaskPeriod(t.Period) {
+			t.Period = legacyCycleOf(t.TaskType)
+		}
+		t.TaskType = t.Period
+		return
+	}
+	t.TaskType = legacyCycleOf(t.TaskType)
+	t.Period = t.TaskType
+}
+
+// RepairTaskCycleColumns 存量任务行的周期两列订正（幂等迁移，随 TaskRewardMigrate 调用）。
+// 方向与 normalizeTaskCycle 逐条对应，且**两条都不触碰实际窗口**：
+//
+//	① auto 行：只把遗留别名 task_type 拉齐到 period（period/cap_* 一列不动 ⇒ 发放上限不变）；
+//	② 其余行（manual）：只把展示用的 period 拉齐到 task_type（领取键仍由 task_type 决定 ⇒
+//	   「终身一次」不会被放大成「每日一次」）。
+//
+// 返回被改动的行数（已收敛时为 0，重复执行必为 0）。SQL 只用 COALESCE/CASE，双方言一致。
+func (s *Store) RepairTaskCycleColumns() (int64, error) {
+	d := db.CurrentDialect()
+	var changed int64
+	// ① auto：task_type := period
+	if res, e := db.Exec(s.db, d, `UPDATE user_tasks SET task_type=period
+		WHERE grant_mode='auto' AND COALESCE(period,'')<>'' AND COALESCE(task_type,'')<>period`); e != nil {
+		return changed, e
+	} else if n, e2 := res.RowsAffected(); e2 == nil {
+		changed += n
+	}
+	// ② 非 auto：period := (task_type=='once' ? 'once' : 'daily')
+	if res, e := db.Exec(s.db, d, `UPDATE user_tasks SET period=CASE WHEN task_type='once' THEN 'once' ELSE 'daily' END
+		WHERE COALESCE(grant_mode,'manual')<>'auto'
+		  AND period <> CASE WHEN task_type='once' THEN 'once' ELSE 'daily' END`); e != nil {
+		return changed, e
+	} else if n, e2 := res.RowsAffected(); e2 == nil {
+		changed += n
+	}
+	return changed, nil
 }
 
 // ClaimUserTask 用户领取任务奖励（事务原子：去重校验 + 永久余额累加 + 领取流水）。

@@ -3,7 +3,8 @@
 // 系统不再自动写入 tm_segments；所有候选先进 tm_review，
 // 仅超管「通过」后才落正式库（SaveBack module='manual'）。
 // 触发来源：① 用户反馈修正（ref_type=feedback）② 相同原文+译文对累计达阈值
-// ③ bitext/tmx 人工导入（import，不豁免审核）。权限：全部接口仅超管。
+// ③ bitext/tmx 人工导入（import，不豁免审核）。权限：审批接口仅超管；
+// 租户侧的**只读**进度视图（按本租户裁剪 + 三态过滤 + 字段白名单投影）在 tmreview_tenant.go（★ F-62）。
 // =============================================
 package store
 
@@ -118,7 +119,10 @@ func (s *Store) CreateTmReview(r *TmReview) error {
 	return nil
 }
 
-// ListTmReviews 列表。
+// ListTmReviews 列表（**超管视角：跨租户全池**，无 tenant 过滤）。
+// ★ F-62：租户侧要看本租户进度请走 ListTmReviewsForTenant（tmreview_tenant.go），
+//
+//	不要给本方法加 tid 参数后复用——两个口径的可见字段集也不同（不外发 reviewer 等）。
 func (s *Store) ListTmReviews(status string) ([]*TmReview, error) {
 	q := "SELECT " + tmReviewCols + " FROM tm_review"
 	args := []interface{}{}

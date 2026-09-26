@@ -14,16 +14,29 @@ import (
 	"testing"
 )
 
-// rawSQLPatterns 裸 *sql.DB 调用形态（允许出现的白名单见 isExempt）：
+// rawSQLPatterns 裸 *sql.DB 调用形态（允许出现的白名单见 rawSQLAllowlist）：
 //   - `.DB().Query(` / `.DB().QueryRow(` / `.DB().QueryRowContext(` / `.DB().Exec(`
 //   - `RawDB().` 同上任意方法
-var rawSQLPatterns = regexp.MustCompile(`(\.DB\(\)|RawDB\(\))\s*\.\s*(Query|QueryRow|QueryRowContext|QueryContext|Exec|ExecContext|Prepare)\(`)
+//   - ★ 〇-U F-44 补：`xxx.db.Query(` 一类**同包内直调私有句柄**（不经 `DB()`/`RawDB()`
+//     取访问器，故旧正则扫不到）。F-44 就是这一形态：写侧走方言包装、读侧裸 `?`，
+//     生产 PG 恒报语法错又被调用方吞成「无数据」，界面全绿而人工修订全部丢失。
+var rawSQLPatterns = regexp.MustCompile(`((\.DB\(\)|RawDB\(\))|\.\w*db)\s*\.\s*(Query|QueryRow|QueryRowContext|QueryContext|Exec|ExecContext|Prepare)\(`)
+
+// rawSQLAllowlist 已点名的合法豁免（文件 → 允许出现的裸调用数）。
+// 豁免只承认「同一条 SQL 里没有 `?` 占位符」的形态：PG-only 的 DDL/索引分支
+// （packages.go 唯一索引重建、kb 包 pgvector 扩展与向量索引），以及 kb 包
+// 自己按 `$n` 写好的向量更新语句。**新增豁免必须逐条写理由，禁止整目录放行。**
+var rawSQLAllowlist = map[string]int{
+	"internal/store/packages.go": 2, // PG 分支 DDL：DROP CONSTRAINT + CREATE UNIQUE INDEX（无占位符）
+	"internal/kb/db.go":          9, // pgvector/pg_trgm 扩展与索引 DDL、$n 形态的 embedding 更新
+}
 
 // TestNoRawSQLOutsideDialectWrapper 扫描仓库 Go 源码，除 db 包自身与明确豁免外，
 // 禁止绕过方言包装的裸连接调用。
 func TestNoRawSQLOutsideDialectWrapper(t *testing.T) {
 	root := findRepoGoRoot(t)
 	var hits []string
+	perFile := map[string]int{}
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // 个别目录无权限直接跳过，不影响其余扫描
@@ -47,8 +60,16 @@ func TestNoRawSQLOutsideDialectWrapper(t *testing.T) {
 			return nil
 		}
 		for i, line := range strings.Split(string(b), "\n") {
+			trimmed := strings.TrimSpace(line)
+			// 行注释不算命中（历史说明注释里会写「旧写法直调 s.db.Query」）
+			if strings.HasPrefix(trimmed, "//") {
+				continue
+			}
 			if rawSQLPatterns.MatchString(line) {
-				hits = append(hits, fmt.Sprintf("%s:%d: %s", rel, i+1, strings.TrimSpace(line)))
+				perFile[rel]++
+				if _, ok := rawSQLAllowlist[rel]; !ok {
+					hits = append(hits, fmt.Sprintf("%s:%d: %s", rel, i+1, trimmed))
+				}
 			}
 		}
 		return nil
@@ -59,6 +80,12 @@ func TestNoRawSQLOutsideDialectWrapper(t *testing.T) {
 	if len(hits) > 0 {
 		t.Errorf("发现 %d 处绕过方言包装的裸 SQL 调用（PG 下会静默失效，改走 db.Exec/db.Query/db.QueryRow）:\n%s",
 			len(hits), strings.Join(hits, "\n"))
+	}
+	// 豁免侧另做等值锁：存量减少也要显式改基线，防止「文件被改名/整目录跳过」造成静默放行
+	for rel, want := range rawSQLAllowlist {
+		if got := perFile[rel]; got != want {
+			t.Errorf("豁免文件 %s 的裸 SQL 调用数 got=%d want=%d —— 增得多是违规、少则要下调基线（并把该处改成方言包装）", rel, got, want)
+		}
 	}
 }
 

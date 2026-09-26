@@ -136,3 +136,102 @@ describe('任务中心 · 超管特殊任务（#33）', () => {
     expect(screen.queryByText(/任务管理/)).toBeNull()
   })
 })
+
+// ============================================================================
+// ★ F-60（2026-09-26 〇-U 批 I-8）：周期两列收敛为单口径后，界面必须逐枚不变。
+//   后端把 task_type 订正成与 period 恒等（周任务由 'daily' 变 'weekly'）之后，
+//   展示层若还按 task_type 判色，这一枚胶囊会凭空从 idle 灰翻成 warn 黄——
+//   纯数据订正带出的无色差变更是交付稿没授权的（AGENTS §一·5 等值锁口径）。
+//   三条锁：
+//   ① 对照锁（等值）：脏配行（daily+weekly）与订正行（weekly+weekly）渲染出的
+//      类型标签与状态点颜色**逐字相同**，且订正行仍精确回「每周」、「每日任务」旧错标清零；
+//   ② 反向自检：once 行的状态点颜色与 weekly 行**必须不同**——
+//      否则 ① 就是「所有点同色」造成的假绿；
+//   ③ 表单读写同源：编辑订正后的 auto 周任务时，旧的「每日任务/一次性任务」开关必须禁用
+//      （该列对 auto 行已无后端语义），计数周期选择器接管；保存回写的 payload 两列同值。
+// ============================================================================
+
+/** 订正后的周任务（后端保证 task_type ≡ period） */
+const weeklyAutoFixed = { ...weeklyAuto, task_type: 'weekly' }
+
+/** 取某枚类型胶囊的状态点颜色（inline style 上的 var(--lc-*) 档位，不写死十六进制） */
+function pillDotColor(label: string): string {
+  const pill = screen.getByText(label)
+  const dot = pill.querySelector('.lc-pill__dot') as HTMLElement | null
+  expect(dot, `标签为「${label}」的胶囊应带状态点`).toBeTruthy()
+  return String(dot?.style.background)
+}
+
+describe('任务中心 · 周期两列订正不带色差（★ F-60）', () => {
+  it('脏配行与订正行的标签/状态点逐字相同；once 行点位颜色不同（反向自检）', async () => {
+    // 第一遍：历史脏配（task_type='daily' + period='weekly'）
+    mocks.myTasks.mockResolvedValue({ success: true, tasks: [loginDaily, manualOnce, weeklyAuto] })
+    render(<TaskCenterP />)
+    await vi.waitFor(() => { expect(screen.getAllByText('每周')).toHaveLength(1) })
+    const legacyWeekly = pillDotColor('每周')
+    const legacyDaily = pillDotColor('每日')
+    cleanup()
+    // 第二遍：订正后（task_type='weekly' ≡ period）
+    mocks.myTasks.mockResolvedValue({ success: true, tasks: [loginDaily, manualOnce, weeklyAutoFixed] })
+    render(<TaskCenterP />)
+    await vi.waitFor(() => { expect(screen.getAllByText('每周')).toHaveLength(1) })
+    // 等值锁：标签计数与配色逐枚相同（订正只收口口径，不带来任何视觉变更）
+    expect(screen.getAllByText('每日')).toHaveLength(1)
+    expect(screen.getAllByText('终身一次')).toHaveLength(1)
+    expect(screen.queryByText('每日任务')).toBeNull()
+    expect(pillDotColor('每周')).toBe(legacyWeekly)
+    expect(pillDotColor('每日')).toBe(legacyDaily)
+    // 反向自检：weekly 档与 once 档必须不同色，否则上面两条等值锁是「全同色」假绿
+    expect(pillDotColor('每周')).not.toBe(pillDotColor('终身一次'))
+  })
+
+  it('编辑订正后的 auto 周任务：旧类型开关禁用、周期选择器接管，保存 payload 两列同值', async () => {
+    mocks.isSuper = true
+    mocks.myTasks.mockResolvedValue({ success: true, tasks: [weeklyAutoFixed] })
+    mocks.adminTasks.mockResolvedValue({ success: true, tasks: [weeklyAutoFixed] })
+    mocks.adminTaskSave.mockResolvedValue({ success: true, id: 3 })
+    render(<TaskCenterP />)
+    // 等超管表格真正渲染出来（adminTasks 被调用 ≠ 行已上屏）
+    const editBtn = await vi.waitFor(() => {
+      const el = screen.getByText('编辑任务')
+      expect(el).toBeTruthy()
+      return el
+    })
+    fireEvent.click(editBtn)
+    await vi.waitFor(() => { expect(screen.getByText('任务类型')).toBeTruthy() })
+    const dailyBtn = screen.getByText('每日任务').closest('button') as HTMLButtonElement
+    const onceBtn = screen.getByText('一次性任务').closest('button') as HTMLButtonElement
+    // 等值锁：auto 行两枚旧开关一律 disabled（点了没后端语义的钮不得留给超管按）
+    expect(dailyBtn.disabled).toBe(true)
+    expect(onceBtn.disabled).toBe(true)
+    // 保存：task_type 原样回传，后端归一后与 period 恒等（这里锁前端不把别名窄化回 daily）
+    fireEvent.click(screen.getByText('保存任务'))
+    await vi.waitFor(() => { expect(mocks.adminTaskSave).toHaveBeenCalledTimes(1) })
+    const payload = mocks.adminTaskSave.mock.calls[0][0] as Record<string, unknown>
+    expect(payload.task_type).toBe('weekly')
+    expect(payload.period).toBe('weekly')
+    expect(payload.grant_mode).toBe('auto')
+  })
+
+  it('手工行仍保留可用的类型开关（防「auto 禁用」被整排套用，把手工任务的唯一判据钮做没）', async () => {
+    mocks.isSuper = true
+    mocks.myTasks.mockResolvedValue({ success: true, tasks: [manualOnce] })
+    mocks.adminTasks.mockResolvedValue({ success: true, tasks: [manualOnce] })
+    render(<TaskCenterP />)
+    // 等超管表格真正渲染出来（adminTasks 被调用 ≠ 行已上屏）
+    const editBtn = await vi.waitFor(() => {
+      const el = screen.getByText('编辑任务')
+      expect(el).toBeTruthy()
+      return el
+    })
+    fireEvent.click(editBtn)
+    await vi.waitFor(() => { expect(screen.getByText('任务类型')).toBeTruthy() })
+    const dailyBtn = screen.getByText('每日任务').closest('button') as HTMLButtonElement
+    const onceBtn = screen.getByText('一次性任务').closest('button') as HTMLButtonElement
+    expect(dailyBtn.disabled).toBe(false)
+    expect(onceBtn.disabled).toBe(false)
+    // 点「每日任务」即改判据（手工行的真值就是这一列），点完仍是可用态
+    fireEvent.click(dailyBtn)
+    expect((screen.getByText('每日任务').closest('button') as HTMLButtonElement).disabled).toBe(false)
+  })
+})

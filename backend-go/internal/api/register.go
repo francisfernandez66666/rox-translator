@@ -24,6 +24,7 @@ import (
 
 	"translator/internal/auth"
 	"translator/internal/billing"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -63,9 +64,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if ok, wait := s.regGuard.allow(ip, dailyLimit, minInterval); !ok {
-		w.Header().Set("Retry-After", strconv.Itoa(wait))
-		writeJSON(w, 429, map[string]interface{}{"success": false,
-			"message": fmt.Sprintf("注册过于频繁，请 %d 秒后再试", wait)})
+		// ★ F-47（批 I-7）：改走统一错误出口＝429 + code RATE_LIMITED + Retry-After 头 + retry_after 字段。
+		// 文案保留「请 N 秒后再试」原样（i18n patternsEN 已有该变体，仍可翻）；秒数同时进字段，
+		// 这样前端不必从中文里抠数字就能做倒计时（旧写法只有中文文案里夹一个数，非中文语种无法复用）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, fmt.Sprintf("注册过于频繁，请 %d 秒后再试", wait)).WithRetryAfter(wait))
 		return
 	}
 	// 专属域名自助注册：从访问 Host 解析目标租户（仅品牌子域、非主站、非默认平台租户）。

@@ -9,6 +9,7 @@
 package api
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/xuri/excelize/v2"
 	"translator/internal/doc"
 	apierrors "translator/internal/errors"
+	"translator/internal/observability"
 	"translator/internal/store"
 )
 
@@ -92,7 +94,15 @@ func (s *Server) handleTicketSegments(w http.ResponseWriter, r *http.Request) {
 	// 提取工单的源文/译文逐段对照
 	base, supported := s.extractSegments(t, lang)
 	// 叠加已保存的编辑（edited_text/status/note）
-	edits, _ := s.Store.GetTranslationEdits(id, lang)
+	// ★ F-44（〇-U）：读侧错误**不得再吞**。旧写法 `edits, _ :=` 在 PG 报语法错时
+	// 静默当「无修订」，界面照常 200 ⇒ 客户看到「保存成功但读回永远空」的假成功，
+	// 审批回写也拿不到修订稿。现在如实回带码错误（错误码走 s.writeError，AGENTS §一·8）。
+	edits, err := s.Store.GetTranslationEdits(id, lang)
+	if err != nil {
+		observability.Error(r.Context(), "对照编辑器读取人工修订失败", "ticket_id", id, "lang", lang, "err", err.Error())
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "人工修订记录读取失败，请稍后重试"))
+		return
+	}
 	editMap := map[int]*store.TranslationEdit{}
 	for i := range edits {
 		editMap[edits[i].SegIndex] = &edits[i]
@@ -120,7 +130,13 @@ func (s *Server) handleTicketSegments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 获取术语表（供前端编辑器展示）
-	terms, _ := s.Store.ListKBTerms(t.TenantID, lang, 200)
+	// ★ F-44（〇-U）：术语高亮是装饰性附加数据，读取失败不该让编辑器整页红，
+	// 但**必须留痕**（旧写法 `_ ,` 连痕迹都没有，PG 报错时无人知晓）。
+	terms, terr := s.Store.ListKBTerms(t.TenantID, lang, 200)
+	if terr != nil {
+		observability.Warn(r.Context(), "对照编辑器术语表读取失败（高亮降级，不阻断）", "ticket_id", id, "lang", lang, "err", terr.Error())
+		terms = nil
+	}
 
 	// 解析目标语言列表
 	langs := []string{}
@@ -297,9 +313,15 @@ func (s *Server) extractOfficeSegments(t *store.Ticket, lang string) ([]baseSeg,
 // 两种口径无法同时对齐，选择以「当前真值口径」为准；旧数据段数更少/错位本就不可信。
 func (s *Server) segmentsFromStore(t *store.Ticket, lang string) ([]baseSeg, bool) {
 	rows, err := s.Store.GetTicketSegments(t.ID, t.FilePath, lang)
-	if err != nil || len(rows) == 0 {
-		// 查询失败也一律当「未命中」走回退：真值表是附加数据，不能因为它抖动就让
-		// 对照编辑器整页 500（回退用的旧口径本就可用）。
+	if err != nil {
+		// ★ F-44（〇-U）：回退旧口径本身是已知取舍（真值表是附加数据，不该让它把整页
+		// 打成 500），但**不能再无声**——旧写法把 err 与「无记录」压成同一条 return，
+		// PG 语法错时无人可见。现在失败留痕，空表才走静默回退。
+		observability.Warn(context.Background(), "逐段真值表读取失败，对照编辑器回退旧口径",
+			"ticket_id", t.ID, "lang", lang, "err", err.Error())
+		return nil, false
+	}
+	if len(rows) == 0 {
 		return nil, false
 	}
 	segs := make([]baseSeg, 0, len(rows))
@@ -504,7 +526,14 @@ func (s *Server) handleExportSegments(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "该工单不支持在线回写（需 docx 结果文件）"))
 		return
 	}
-	edits, _ := s.Store.GetTranslationEdits(id, lang)
+	edits, err := s.Store.GetTranslationEdits(id, lang)
+	if err != nil {
+		// ★ F-44（〇-U）：回写导出读不到修订时**必须中止**，不能静默按机翻稿导出——
+		// 那正是「客户审批过的修订在交付件里凭空消失」的失真路径。
+		observability.Error(r.Context(), "回写导出读取人工修订失败（已中止导出）", "ticket_id", id, "lang", lang, "err", err.Error())
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "人工修订记录读取失败，本次回写已中止，请重试"))
+		return
+	}
 	editMap := map[int]*store.TranslationEdit{}
 	for i := range edits {
 		editMap[edits[i].SegIndex] = &edits[i]

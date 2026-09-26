@@ -322,14 +322,18 @@ func TestAutoRenewPackageUnavailable(t *testing.T) {
 	}
 }
 
-// 凭证边界：无效 Token 一律 403，且不动开关。
+// 凭证边界：无效 Token 一律 401（未登录），且不动开关。
+// ★ F-64①（批 I-7）改判：这里过去断言 403，而 403 的语义是「知道你是谁、但你不该做这件事」。
+// 无效/过期 Token 属于「认证失败」＝401，前端 core.ts 的会话过期处理**只挂在 401**
+// （handleUnauthorized 清 token 落回登录页）；回 403 会让浏览器停在原页反复撞闸，
+// 用户看到「无权限」以为账号缺权限，实际只差重新登录——同 bug 同修法见 server.go writeAuthzError。
 func TestAutoRenewRejectsBadToken(t *testing.T) {
 	f := newRenewFixture(t)
 	f.subscribe(t)
 	f.setAutoRenew(t, true)
 	rec := f.do(t, http.MethodPost, "/api/package/auto-renew", map[string]bool{"enabled": false}, "invalid-token")
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("无效凭证应 403，实际 %d", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("无效凭证应 401（未登录），实际 %d", rec.Code)
 	}
 	if p := f.perms(t); !p.AutoRenew {
 		t.Fatal("被拒绝的请求不应改动开关状态")

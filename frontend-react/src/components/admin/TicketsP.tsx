@@ -19,8 +19,12 @@ import {
 import { Panel, Field, toastResp } from './parts'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
+// ★ F-59（批 I-8）：回复署名的「管理侧」判据取仓内既有角色分级（roleLevel>=2 = 主管及以上）
+import { roleLevel } from '@/stores/auth'
 // toastBus 是同步总线（不返回 Promise），替代 MessagePlugin 后调用点不再需要 void 吞返回值
 import { toastError, toastWarn } from '@/lib/toastBus'
+// ★ F-45（〇-U 批）：反馈上下文脏值（库里存过字面量 "null"）的「必须是对象」解析口径
+import { parseStringMap } from '@/lib/safeJson'
 import { fmtDateTime } from '../../lib/format'
 
 // 行/卡片布局样式（横向排布 + 顶距/描边变体）
@@ -36,6 +40,14 @@ function firstTranslation(finalResult: unknown): string {
     const k = Object.keys(tr)[0]
     return k ? tr[k] : ''
   } catch { return '' }
+}
+
+// ★ O-12（2026-09-26 〇-U 批 I-8）：匿名留资行判定。/api/lead 以 TenantID:0 / UserID:0 /
+// TargetType:"lead" 复用 feedbacks 通道（本来就没有账号可指），旧写法在用户列渲染出 `#0`、
+// 在对象列渲染成「文本」，运营读起来像一条脏数据。判据只认后端已有的 target_type，
+// 不新造字段、不改落库口径；有名字的行一律先取名字（留资若将来带账号也不会被抹成访客）。
+function isLeadRow(row: Any): boolean {
+  return String(row?.target_type ?? '') === 'lead'
 }
 
 /** 反馈 / 审批台 / TM 审核面板 */
@@ -101,8 +113,11 @@ export function TicketsP() {
     return src === 'bitext' ? t('tmr.srcBitext') : src === 'tmx' ? t('tmr.srcTmx') : src === 'feedback' ? t('tmr.srcFeedback') : t('tmr.srcCount')
   }
   // ctxTranslations 反馈附带的多语上下文 JSON：脏数据一律降级为空对象，不让整个详情块崩掉
+  // ★ F-45（〇-U 批）：口径收进 lib/safeJson.parseStringMap——原来这里只有 try/catch，
+  // 而库里的脏值 "null" 是合法 JSON（parse 返回 null 不抛错），下一行 Object.entries(null)
+  // 才炸，表现为「超管点进这条反馈，详情整块白屏」。
   function ctxTranslations(f: Any): Record<string, string> {
-    try { return JSON.parse(f.translations_json || '{}') } catch { return {} }
+    return parseStringMap(f.translations_json)
   }
   // fmtAt ISO → 本地时间串；解析失败时原样回显，宁可难看也不给列表留 Invalid Date
   function fmtAt(iso: string): string {
@@ -216,9 +231,14 @@ export function TicketsP() {
       {/* 详情用行内卡片整体替换列表：原文/多语上下文/往来回复都是长文本，塞进弹层滚动体验很差 */}
       {selected && (
         <div style={cardStyle}>
-          <Button size="sm" variant="secondary" style={{ float: 'right' }} onClick={() => setSelected(null)}>← {t('fb.backToList')}</Button>
+          {/* ★ F-57（2026-09-26 〇-U 批 I-8）：返回列表时重取列表。
+              详情态是**整体替换**列表渲染的（不是弹层），期间可能已回复/结案/复核，
+              旧写法只 setSelected(null) ⇒ 回到的是进详情前那一份快照，
+              刚处理完那条仍显示「待处理」，运营以为没生效又点一次。
+              沿用本面板既有 loadFeedbacks()（同一读侧接口，不新造路径）。 */}
+          <Button size="sm" variant="secondary" style={{ float: 'right' }} onClick={() => { setSelected(null); void loadFeedbacks() }}>← {t('fb.backToList')}</Button>
           <h3 style={{ marginTop: 0 }}>
-            #{selected.id} · {selected.user_name || ('#' + selected.user_id)}{' '}
+            #{selected.id} · {selected.user_name || (isLeadRow(selected) ? t('fb.userLead' as never) : '#' + selected.user_id)}{' '}
             <StatusPill tone={selected.status === 'resolved' ? 'success' : 'warn'}>{selected.status === 'resolved' ? t('fb.statusResolved') : t('fb.statusOpen')}</StatusPill>
           </h3>
           {/* 反馈正文用 pre + pre-wrap：用户贴的报错/表格文本要保留换行，但又不能横向溢出卡片 */}
@@ -237,12 +257,21 @@ export function TicketsP() {
               （★ 2026-09-22 还原：原浅色主题遗留的 #e8f0fe/#f5f6f8 蓝灰底已收敛为 --adm-* 暗色语义档） */}
           {selected.replies && selected.replies.length ? (
             <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {selected.replies.map((r: Any, i: number) => (
-                <div key={i} style={{ background: r.role === 'admin' ? 'var(--adm-info-bg)' : 'var(--adm-soft)', borderRadius: 8, padding: '6px 10px', fontSize: 15 }}>
-                  <div style={{ fontSize: 13, color: 'var(--adm-faint)', marginBottom: 2 }}>{r.name} · {r.role === 'admin' ? t('tickets.roleAdmin') : t('tickets.roleUser')} · {fmtAt(r.at)}</div>
+              {selected.replies.map((r: Any, i: number) => {
+                // ★ F-59（2026-09-26 〇-U 批 I-8）：管理侧判据从 `role === 'admin'` 换成 roleLevel>=2。
+                //   角色域的真实取值是 user / dept_admin / tenant_admin / super_admin（+历史 admin/approver，
+                //   见 internal/iam/models.go 与 stores/auth.tsx 的 roleLevel 分级），**没有 'admin' 这个值**——
+                //   于是租户管理员/部门管理员的平台方回复全被署成「用户」（本轮 UAT 实测：平台回复显示成
+                //   「张三 · 用户」），底色也跟着错档。roleLevel 是仓内既有分级口径（>=2 = 主管及以上），
+                //   不新造判据、不新增词条（tickets.roleAdmin/roleUser 两键 12 语种都在）。
+                const staff = roleLevel(r.role as string) >= 2
+                return (
+                <div key={i} style={{ background: staff ? 'var(--adm-info-bg)' : 'var(--adm-soft)', borderRadius: 8, padding: '6px 10px', fontSize: 15 }}>
+                  <div style={{ fontSize: 13, color: 'var(--adm-faint)', marginBottom: 2 }}>{r.name} · {staff ? t('tickets.roleAdmin') : t('tickets.roleUser')} · {fmtAt(r.at)}</div>
                   <div style={{ whiteSpace: 'pre-wrap' }}>{r.content}</div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           ) : <div style={{ fontSize: 14, color: 'var(--adm-faint)', marginTop: 8 }}>{t('fb.noReplies')}</div>}
           {/* 只有 open 态给「回复 / 完成」两个动作；归档后整块换成静态提示，
@@ -289,9 +318,12 @@ export function TicketsP() {
           <DataTable<any> rowKey={(row) => String(row.id)} rows={feedbacks}
             columns={[
               { key: 'id', title: 'ID', width: 60 },
-              { key: 'user', title: t('users.colUser' as never), width: 130, render: (row) => row.user_name || ('#' + row.user_id) },
+              // 提交人列（★ O-12）：匿名留资行没有账号，如实标「留资访客」而不是 `#0`；
+              // 真有 user_id 但没回名字的仍留 `#<id>`（那是另一种情况，别一并抹掉）。
+              { key: 'user', title: t('users.colUser' as never), width: 130, render: (row) => row.user_name || (isLeadRow(row) ? t('fb.userLead' as never) : '#' + row.user_id) },
               // 目标列：挂在工单上的反馈给 #工单号，纯文本反馈没有可跳转对象（图标位待补，现留前导空格）
-              { key:'target', title: t('fb.colTarget'), width: 130, render: (row) => row.target_type ==='ticket'? ` #${row.ticket_id}` : ` ${t('fb.targetText')}` },
+              // ★ O-12：lead 行从前也落进「文本」分支（对象列说谎），现按 target_type 单列一档。
+              { key:'target', title: t('fb.colTarget'), width: 130, render: (row) => row.target_type ==='ticket'? ` #${row.ticket_id}` : row.target_type ==='lead'? ` ${t('fb.targetLead')}` : ` ${t('fb.targetText')}` },
               { key: 'content', title: t('fb.colContent'), dim: true, render: (row) => String(row.content ?? '—') },
               // mode 列 2026-09-18 补回：去 emoji 后两分支曾都渲染空串、整列空白，现用 <Icon> 区分
               // fast（快速）与 pro（精翻）两种模式（列宽 70 只够一个图标，要加文案得先扩宽）

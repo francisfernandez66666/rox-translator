@@ -11,6 +11,8 @@ package api
 //   - 强制计费开关（super_admin）：handleBillingConfig / handleBillingConfigSave
 //   - 租户配额（tenant_admin+）：handleTenantQuota / handleTenantQuotaSave，含 QPS/并发/每日字符上限
 // 所有保存操作写入审计 diff。
+// ★ F-64①（批 I-7）口径：本文件错误响应已统一走 s.writeError + apierrors 出口，
+//   状态码按语义诚实（401/403/400/500/503），不再用 200 承载失败。
 
 import (
 	"context"
@@ -25,7 +27,9 @@ import (
 
 	"translator/internal/auth"
 	"translator/internal/billing"
+	apierrors "translator/internal/errors"
 	"translator/internal/llm"
+	"translator/internal/observability"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -162,6 +166,15 @@ func (s *Server) ChargeUsageRealtime(ctx context.Context, model string, prompt, 
 	if billed < total {
 		billed = total // 系数异常兜底：至少按真实消耗计
 	}
+	// ★ F-49①（〇-U 批 I-4）：把「本次实收多少」记进同一条链上的用量收集器——
+	// 这里是全系统**唯一**决定扣费量的地方（markup 来自租户策略 + 模式因子，逐次解析），
+	// 展示侧（同步出参 points_used、工单 tokens_billed、完成 webhook）只要读这一只收集器，
+	// 就与台账逐笔等值。旧形态是展示侧自己再乘一次 markup：默认值不同源（1.5 vs 策略值）、
+	// 不读模式因子，客户按报文算出来的账与实扣差一截且无从发现。
+	// 免费模式（charge=false）同样记录：台账按 billed 留痕（quantity 一致），出参口径才能对得上。
+	if uc := llm.CollectorFrom(ctx); uc != nil {
+		uc.AddBilled(billed)
+	}
 	uid := tenant.UserFromContext(ctx)
 	if hasRule && !rule.Charge {
 		// 免费模式：仅留痕计量（用量看板可见、cost=0），不扣双桶台账
@@ -286,13 +299,15 @@ func (s *Server) handleBillingConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Deprecation", "true")
 	w.Header().Set("Link", `</api/admin/packages/settings>; rel="successor-version"`)
 	if s.Store == nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 503：平台存储未初始化是依赖未就绪，
+		//   客户按状态码即可分支「稍后重试」，不再伪装成功响应体
+		s.writeError(w, r, apierrors.New(apierrors.ErrServiceUnavailable, "平台存储未初始化"))
 		return
 	}
 	// ★ B5（2026-09-12）：计费开关暴露平台运营策略，仅 tenant_admin 及以上可读
 	// （前端唯一调用方为管理后台套餐页，收紧无兼容影响）
 	if _, err := s.requireTenantAdmin(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	// 强制计费状态：由计费服务 Enabled() 判定
@@ -313,14 +328,14 @@ func (s *Server) handleBillingConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBillingConfigSave(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 super_admin 权限
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	var req struct {
 		BillingEnforced bool `json:"billing_enforced"` // 是否开启强制计费
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// ★ 审计 before 值必须在写入之前读取（2026-08-26 全仓评审 C3）——
@@ -335,7 +350,7 @@ func (s *Server) handleBillingConfigSave(w http.ResponseWriter, r *http.Request)
 		val = "1"
 	}
 	if err := s.Store.SetConfig("billing_enforced", val); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 审计：记录开关变更前后值（on/off）
@@ -345,26 +360,78 @@ func (s *Server) handleBillingConfigSave(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "billing_enforced": req.BillingEnforced})
 }
 
-// handleTenantQuota 读取租户配额接口（QPS/并发/每日字符上限）。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（当前租户）。返回 tenant_id/qps/concurrent/max_daily_chars。
+// handleTenantQuota 读取租户配额接口（QPS/并发/每日字符上限/每日积分上限）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（当前租户）。返回 tenant_id/qps/concurrent/max_daily_*。
+//
+// ★ F-55（〇-U 批 I-3）读侧与写侧必须同源。旧写法取 qu.TenantID——超管该值恒 0，
+// 而写侧 handleTenantQuotaSave 用的是 s.effTenant(r, au)（认租户切换器 X-Tenant-ID）。
+// 于是超管切到租户 3 后：表单显示的是「租户 0 的默认值」（实测 0/0/100000/1000），
+// 库里真值是 10/3/100000/20000；管理员照屏点一次保存，就把 0 写进了日墙——
+// 而 billing/quota.go 的 CheckDailyQuota 里 `maxDaily <= 0` 的语义是**不限**，
+// 等于一次点击当场拆掉该租户的日字符墙与日积分墙。
+// 现在：① tid 与写侧同取 effTenant；②超管未选租户时明确回 tenant_selected=false
+// （表单据此禁用保存，而不是把平台默认值当成目标租户的真值）；③读取失败如实报错，
+// 不再伪造 0 填进表单；④补 unlimited 语义位，让「0」在界面上显示成「不限」。
 func (s *Server) handleTenantQuota(w http.ResponseWriter, r *http.Request) {
 	// ★ B5（2026-09-12）：要求登录。旧实现 currentTenant(r) 对匿名请求兜底到租户 1，
 	//   未登录即可读到平台侧默认租户的 QPS/并发/日配额画像。
 	qu := s.authUser(r)
 	if qu == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "请先登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "请先登录"))
 		return
 	}
-	tid := qu.TenantID
+	tid := s.effTenant(r, qu) // ★ F-55：与保存分支同一个租户定位口径
+	if tid <= 0 {
+		// 超管停在「平台」视图：没有目标租户，回默认画像 + selected=false，
+		// 前端据此禁掉保存按钮（否则就是把默认值往真实租户身上写）。
+		writeJSON(w, 200, map[string]interface{}{
+			"success":          true,
+			"tenant_id":        0,
+			"tenant_selected":  false,
+			"qps":              s.quotaQPS(0),
+			"concurrent":       s.quotaConcurrent(0),
+			"max_daily_chars":  int64(0),
+			"max_daily_points": int64(0),
+			"unlimited":        map[string]bool{"max_daily_chars": true, "max_daily_points": true},
+		})
+		return
+	}
+	chars, tokens, ok := s.quotaDailyPair(tid)
+	if !ok {
+		// ★ F-55：读取失败不再兜 0——0 是「不限」，把失败伪装成 0 就是给拆墙递刀。
+		observability.Error(r.Context(), "租户配额读取失败（日墙取值不可用）", "tenant_id", tid)
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "租户配额读取失败，请刷新重试"))
+		return
+	}
+	dailyPoints := s.Store.PointsFromTokens(tokens)
 	writeJSON(w, 200, map[string]interface{}{
 		"success":         true,
 		"tenant_id":       tid,
+		"tenant_selected": true,
 		"qps":             s.quotaQPS(tid),
 		"concurrent":      s.quotaConcurrent(tid),
-		"max_daily_chars": s.quotaDaily(tid),
+		"max_daily_chars": chars,
 		// ★ 2026-09-19 积分口径：每日 token 上限折积分出参（0=未配置）
-		"max_daily_points": s.Store.PointsFromTokens(s.quotaDailyTokens(tid)),
+		"max_daily_points": dailyPoints,
+		// ★ F-55：把「0=不限」显式化，前端输入框旁要显示「不限」而不是一个可以被原样存回去的 0
+		"unlimited": map[string]bool{"max_daily_chars": chars <= 0, "max_daily_points": dailyPoints <= 0},
 	})
+}
+
+// quotaDailyPair 一次租户读取同时取回两道日墙（字符口径与积分/token 口径）。
+// 参数 tid: 租户 ID。返回 chars=每日字符上限、tokens=每日 token 上限、ok=是否取到真值。
+// ok=false 表示「存储层没配」或「查不到这个租户」——调用方必须把它与「值确实是 0」分开处理，
+// 因为 0 在本系统是「不限」的语义（billing/quota.go CheckDailyQuota），伪装成 0 等于拆墙（★ F-55）。
+func (s *Server) quotaDailyPair(tid int64) (chars, tokens int64, ok bool) {
+	if s.Ten == nil {
+		return 0, 0, false
+	}
+	t, err := s.Ten.GetByID(tid)
+	if err != nil || t == nil {
+		return 0, 0, false
+	}
+	p := tenant.ParsePerms(t.Permissions)
+	return p.MaxDailyChars, p.MaxDailyTokens, true
 }
 
 // handleTenantQuotaSave 保存租户配额接口（tenant_admin 及以上；QPS/并发写入内存 Quota，每日上限写入租户 permissions）。
@@ -374,7 +441,7 @@ func (s *Server) handleTenantQuotaSave(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：需 tenant_admin 及以上权限
 	au, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	var req struct {
@@ -384,16 +451,29 @@ func (s *Server) handleTenantQuotaSave(w http.ResponseWriter, r *http.Request) {
 		MaxDailyPoints *int64 `json:"max_daily_points"` // ★ 每日积分上限（D4 token 口径的积分入参；nil=不修改）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// ★ 整改 B6：tid 语义修正——超管未带 X-Tenant-ID 时 effTenant=0，此前用 currentTenant
 	//   兜底成 1 会把「平台视角的保存」误写到租户 1 头上；现显式要求切换目标租户。
 	tid := s.effTenant(r, au)
 	if tid <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请先通过租户切换器选择目标租户再保存配额"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请先通过租户切换器选择目标租户再保存配额"))
 		return
 	}
+	// ★ F-56（〇-U 批 I-3）改前快照必须在**任何写入之前**取。旧写法在 SetQPS/落库之后才取
+	//   before，取到的已经是新值 ⇒ before==after、diff 恒空，审计「有字段、永远没内容」。
+	//   同时补上 max_daily_points：旧清单只列 qps/concurrent/max_daily_chars 三键，
+	//   而 store/audit.go 的 LogAuditDiff 不吃自动 diff，少列一个键就少一个键的轨迹。
+	// ★ F-55：取不到旧值（租户不存在/存储层异常）时直接中止——继续写就等于在
+	//   「看不见改什么」的前提下改生产配额，审计也无法自证。
+	beforeChars, beforeTokens, beforeOK := s.quotaDailyPair(tid)
+	if !beforeOK {
+		observability.Error(r.Context(), "租户配额保存前取值失败，已中止写入", "tenant_id", tid)
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "租户配额当前值读取失败，本次保存已中止"))
+		return
+	}
+	beforeQPS, beforeConc := s.quotaQPS(tid), s.quotaConcurrent(tid)
 	// ★ 整改 B6：入参收敛——租户管理员此前可把本租户 QPS/并发自调成任意值（自我提权），
 	//   绕过平台公平性。上限仅超管可经 system_config 调整（quota_max_qps / quota_max_concurrent）。
 	maxQPS, maxConc := int64(100), int64(50)
@@ -464,15 +544,33 @@ func (s *Server) handleTenantQuotaSave(w http.ResponseWriter, r *http.Request) {
 			_ = s.Ten.Update(t.ID, t.Name, t.ExpiresAt, string(b))
 		}
 	}
-	// 审计：记录配额变更前后值
+	// 审计：记录配额变更前后值（★ F-56 改前值取自写入前的快照；★ F-63 detail 写成可读摘要）
 	u := s.authUser(r)
+	afterPoints := s.Store.PointsFromTokens(
+		func() int64 {
+			if req.MaxDailyPoints != nil {
+				return s.Store.TokensFromPoints(*req.MaxDailyPoints)
+			}
+			if req.MaxDailyChars > 0 {
+				return req.MaxDailyChars // 与上面 F-21② 的双墙同源口径一致
+			}
+			return 0
+		}())
+	beforePoints := s.Store.PointsFromTokens(beforeTokens)
 	beforeJSON, _ := json.Marshal(map[string]interface{}{
-		"qps": s.quotaQPS(tid), "concurrent": s.quotaConcurrent(tid), "max_daily_chars": s.quotaDaily(tid),
+		"qps": beforeQPS, "concurrent": beforeConc,
+		"max_daily_chars": beforeChars, "max_daily_points": beforePoints,
 	})
 	afterJSON, _ := json.Marshal(map[string]interface{}{
-		"qps": req.QPS, "concurrent": req.Concurrent, "max_daily_chars": req.MaxDailyChars,
+		"qps": req.QPS, "concurrent": req.Concurrent,
+		"max_daily_chars": req.MaxDailyChars, "max_daily_points": afterPoints,
 	})
-	s.Store.LogAuditDiff(s.effTenant(r, u), u.ID, "tenant_quota_save", "tenant", strconv.FormatInt(tid, 10), string(beforeJSON), string(afterJSON))
+	// ★ F-63（〇-U 批 I-3）detail 口径定死为「租户 + 逐字段 旧→新」：
+	// 旧写法只落一个租户 id，审计列表里既看不出改了哪个字段、也看不出改成什么，
+	// 事后追责只能翻 before_val/after_val 两坨 JSON（超管后台列表列宽也不够）。
+	detail55 := fmt.Sprintf("租户 %d｜qps %d→%d｜并发 %d→%d｜日字符 %d→%d｜日积分 %d→%d",
+		tid, beforeQPS, req.QPS, beforeConc, req.Concurrent, beforeChars, req.MaxDailyChars, beforePoints, afterPoints)
+	s.Store.LogAuditDiff(s.effTenant(r, u), u.ID, "tenant_quota_save", "tenant", detail55, string(beforeJSON), string(afterJSON))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -494,16 +592,12 @@ func (s *Server) quotaConcurrent(tid int64) int {
 	return s.Bill.Concurrent(tid)
 }
 
-// quotaDaily 读取租户每日字符上限。
+// quotaDaily 读取租户每日字符上限（薄委托，与 quotaDailyTokens 共用一次租户读取的口径源）。
 // 参数 tid: 租户 ID。返回: 每日字符上限（0=不限）。
+// ⚠️ 需要区分「读取失败」与「确实是 0」的调用方（配额表单读写，★ F-55）请用 quotaDailyPair。
 func (s *Server) quotaDaily(tid int64) int64 {
-	if s.Ten == nil {
-		return 0
-	}
-	if t, err := s.Ten.GetByID(tid); err == nil {
-		return tenant.ParsePerms(t.Permissions).MaxDailyChars
-	}
-	return 0
+	chars, _, _ := s.quotaDailyPair(tid)
+	return chars
 }
 
 // ============ 分级用量看板（Req 4） ============
@@ -514,14 +608,16 @@ func (s *Server) quotaDaily(tid int64) int64 {
 func (s *Server) handleUsageMe(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 指定日/区间查询：from=YYYY-MM-DD, to=YYYY-MM-DD（均空=累计+当日口径；兼容旧 date 单日参数）
 	from, to := usageDateRange(r)
 	total, today, cnt, err := s.Store.UsageByUser(u.TenantID, u.ID, from, to)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：个人用量读的是本进程存储层，
+		//   DB 失败属服务端故障，客户按状态码即可分支重试
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ C26（2026-09-12）：token 为唯一真账，剩余句数=可用 token÷折算率反推。
@@ -551,7 +647,7 @@ func (s *Server) handleUsageMe(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -561,12 +657,15 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 	if auth.IsSuperAdmin(u) && tid <= 0 {
 		users, uerr := s.Store.ListAllUsers()
 		if uerr != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": uerr.Error()})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 500：跨租户用户清单读的是本进程存储层，
+			//   DB 失败属服务端故障，不再伪装成功响应
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, uerr.Error()))
 			return
 		}
 		costByUser, cerr := s.Store.UsageAllByUser(from, to)
 		if cerr != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": cerr.Error()})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 500：全站用量聚合查询失败是存储层故障
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, cerr.Error()))
 			return
 		}
 		nameMap, _ := s.Store.OrgNameMap() // 部门名缺失仅影响展示列，查询失败忽略
@@ -608,7 +707,7 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 	orgIDs := []int64{}
 	if orgID > 0 {
 		if err := s.validateOrg(tid, orgID); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 			return
 		}
 		if ids, derr := s.Store.OrgDescendantIDs(tid, orgID); derr == nil {
@@ -617,7 +716,9 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	costByUser, err := s.Store.UsageByOrg(tid, orgIDs, from, to)
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：组织用量聚合读的是本进程存储层，
+		//   DB 失败属服务端故障，不再伪装成功响应
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 组装用户明细（含组织名与用量）
@@ -673,12 +774,14 @@ func usageDateRange(r *http.Request) (from, to string) {
 // 返回: success=true 时携带 costs（map[provider/model]=cost）与 quants（map[provider/model]=quantity）。
 func (s *Server) handleUsageCost(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	costs, quants, err := s.Store.CostByModel()
 	if err != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：模型成本核算读的是本进程存储层，
+		//   DB 失败属服务端故障，客户按状态码即可分支重试
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ 2026-09-19 积分口径：模型费用合计折积分出参（quants 仍为用量单位数）
@@ -688,15 +791,10 @@ func (s *Server) handleUsageCost(w http.ResponseWriter, r *http.Request) {
 // 编译期引用占位：保留 strings 导入（模板片段按构建标签条件编译时使用）。
 
 // quotaDailyTokens 租户每日 token 上限（permissions.max_daily_tokens，0=未配置）。
+// 薄委托到 quotaDailyPair，保证「字符墙/积分墙」两条读法同源（★ F-55：两套读法就是两套值）。
 func (s *Server) quotaDailyTokens(tid int64) int64 {
-	if s.Ten == nil {
-		return 0
-	}
-	t, err := s.Ten.GetByID(tid)
-	if err != nil {
-		return 0
-	}
-	return tenant.ParsePerms(t.Permissions).MaxDailyTokens
+	_, tokens, _ := s.quotaDailyPair(tid)
+	return tokens
 }
 
 // auditBillingExemptOnce ★ B13：超管计费豁免审计（限频：每用户每小时至多一条，防刷表）。

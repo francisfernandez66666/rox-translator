@@ -13,10 +13,18 @@
 
 import { request, authHeaders, type AdminResp } from './core'
 
+/** 计数周期四档（后端 period 列的合法值，也是 task_type 的取值域 —— 见下方 F-60 注释） */
+export type TaskCycle = 'daily' | 'weekly' | 'once' | 'event'
+
 /** 任务定义（对应后端 store.UserTask） */
 export interface UserTask {
   id: number // 任务 ID
-  task_type: 'daily' | 'once' // daily=每日任务 / once=一次性任务
+  // ★ F-60（2026-09-26 〇-U 批 I-8）：task_type 自 #33 起只是 period 的**恒等别名**——
+  //   后端 store.normalizeTaskCycle（写侧）＋ RepairTaskCycleColumns（存量订正，随迁移自愈）
+  //   保证两列恒等，故 auto 任务会出现 'weekly'/'event' 这类取值，取值域与 TaskCycle 一致。
+  //   判周期请读 period；本字段仅为兼容既有调用方保留（历史形态 task_type='daily' + period='weekly'
+  //   会把周任务算成日任务，正是本轮 UAT 的 F-60）。
+  task_type: TaskCycle | string
   title: string // 任务标题
   description: string // 任务说明（可空）
   reward_points: number // 奖励积分数（临时/永久由 valid_days 决定，见 reward_kind）
@@ -27,7 +35,7 @@ export interface UserTask {
   // ★ #33（2026-09-21）任务系统：事件自动发放口径（手工任务 grant_mode=manual，其余字段为默认值）
   task_key?: string // 事件任务标识（空=超管自定义手工任务）
   grant_mode?: 'manual' | 'auto' // manual=用户点击领取 / auto=事件自动发放
-  period?: 'daily' | 'weekly' | 'once' | 'event' // 计数周期（决定去重粒度）
+  period?: TaskCycle // ★ 计数周期真值（决定去重键粒度与日/周上限口径）
   valid_days?: number // >0=临时积分有效天数；0=永久积分
   stack_expiry?: number // 1=到期叠加（日/周叠加）；0=固定 now+valid_days
   cap_per_day?: number // 每日发放上限（0=不限）

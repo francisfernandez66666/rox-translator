@@ -15,6 +15,8 @@
 //
 // ★ 错误口径（#37 脱敏）：store.CouponError 是设计给用户看的提示，原样透出；
 // 其余（DB 故障、SQL 细节）一律走 publicErrMessage 脱敏 + 日志留原文。
+// ★ 错误响应口径（F-64① 批 I-7）：失败一律走 s.writeError + apierrors 统一出口，
+// 不再用 200 承载失败，也不再内联 writeJSON(4xx, ...)。
 // ==========================================
 package api
 
@@ -25,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 
+	apierrors "translator/internal/errors"
 	"translator/internal/observability"
 	"translator/internal/store"
 )
@@ -137,18 +140,21 @@ func (s *Server) handleAdminCouponSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodPost {
-		writeJSON(w, 405, map[string]interface{}{"success": false, "message": "仅支持 POST"})
+		// ★ F-64①（批 I-7）：内联 405 → 统一出口（405 ErrMethodNotAllowed），状态码不变、错误体补齐 code/trace_id
+		s.writeError(w, r, apierrors.New(apierrors.ErrMethodNotAllowed, "仅支持 POST"))
 		return
 	}
 	c, perr := couponFromReq(r)
 	if perr != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": perr.Error()})
+		// ★ F-64①（批 I-7）：内联 400 → 统一出口（400 ErrValidation）
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, perr.Error()))
 		return
 	}
 	if c.ID <= 0 {
 		created, cerr := s.Store.CreateCoupon(c)
 		if cerr != nil {
-			writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), cerr)})
+			// ★ F-64①（批 I-7）：原 200 承载失败 → 500：建券失败是存储写入故障
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), cerr)))
 			return
 		}
 		s.Store.LogAudit(s.effTenant(r, u), u.ID, "coupon_create", "coupons", created.Code)
@@ -156,7 +162,8 @@ func (s *Server) handleAdminCouponSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if uerr := s.Store.UpdateCoupon(c); uerr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), uerr)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：改券失败是存储写入故障
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), uerr)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "coupon_update", "coupons", strconv.FormatInt(c.ID, 10))
@@ -178,16 +185,19 @@ func (s *Server) handleAdminCouponDelete(w http.ResponseWriter, r *http.Request)
 		ID int64 `json:"id"`
 	}
 	if derr := json.NewDecoder(r.Body).Decode(&req); derr != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少券 ID"})
+		// ★ F-64①（批 I-7）：内联 400 → 统一出口（400 ErrValidation）
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少券 ID"))
 		return
 	}
 	c, gerr := s.Store.GetCouponByID(req.ID)
 	if gerr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": "券不存在"})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 404：券找不到是可自证的缺失
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "券不存在"))
 		return
 	}
 	if derr := s.Store.DeleteCoupon(req.ID); derr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), derr)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 500：删券失败是存储写入故障
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), derr)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "coupon_delete", "coupons", c.Code)
@@ -213,12 +223,14 @@ func (s *Server) handleAdminCouponRedemptions(w http.ResponseWriter, r *http.Req
 func (s *Server) handleCouponPreview(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		// ★ F-64①（批 I-7）：内联 403 → 统一出口（403 ErrForbidden），状态码不变、错误体补齐 code/trace_id
+		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
 		return
 	}
 	tid := s.effTenant(r, u)
 	if tid <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "平台上下文无订单概念"})
+		// ★ F-64①（批 I-7）：内联 400 → 统一出口（400 ErrValidation）：平台上下文本来就不能试算券，属请求发错了上下文
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "平台上下文无订单概念"))
 		return
 	}
 	var req struct {
@@ -227,17 +239,28 @@ func (s *Server) handleCouponPreview(w http.ResponseWriter, r *http.Request) {
 		PackageCode string `json:"package_code"`
 	}
 	if derr := json.NewDecoder(r.Body).Decode(&req); derr != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "参数格式错误"})
+		// ★ F-64①（批 I-7）：内联 400 → 统一出口（400 ErrValidation）
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "参数格式错误"))
 		return
 	}
 	kind, origin, oerr := s.couponOrderAmount(tid, req.Points, strings.TrimSpace(req.PackageCode))
 	if oerr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "message": oerr.Error()})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 400：couponOrderAmount 的返回文案按其注释自证
+		//   「均为可直接回给用户的经营提示」（套餐不存在/免费包不适用券/未指定积分…），
+		//   客户改一下入参即可纠正，故给 ErrValidation 而不是 500
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, oerr.Error()))
 		return
 	}
 	c, discount, perr := s.Store.PreviewCouponDiscount(req.Code, kind, origin, tid)
 	if perr != nil {
-		writeJSON(w, 200, map[string]interface{}{"success": false, "coupon_error": couponIsUserHint(perr), "message": couponHint(perr)})
+		// ★ F-64①（批 I-7）：原 200 承载失败 → 400：试算失败绝大多数是券本身的问题（码错/过期/已抢完），
+		//   客户换券即可自改；coupon_error 布尔进 details 保留，前端仍按它决定「券区红字」还是「整单错误」
+		msg := couponHint(perr)
+		if msg == "" {
+			msg = publicErrMessage(r.Context(), perr) // 非业务券错误：走统一脱敏文案
+		}
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, msg).
+			WithDetails(map[string]interface{}{"coupon_error": couponIsUserHint(perr)}))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{
@@ -304,7 +327,18 @@ func (s *Server) replyCouponFailure(w http.ResponseWriter, r *http.Request, tid,
 	if msg == "" {
 		msg = publicErrMessage(r.Context(), err)
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": false, "message": msg, "order_no": orderNo})
+	// ★ F-64①（批 I-7）：原 200 承载失败 → 按「是不是客户能自己改对的券错误」分流给码：
+	//   业务券错误（券码不存在/已停用/不适用本单/已抢完…）→ 400 ErrValidation（换券码即可自改）；
+	//   其余（DB 故障、SQL 细节等）→ 500 ErrInternal（本进程侧故障，客户无从纠正）。
+	//   判据沿用本文件已有的非导出 couponIsUserHint（store 包只暴露 ErrCouponInvalid 哨兵与
+	//   CouponError 类型，没有导出的 IsUserHint 判定；同包直接复用，避免两套判据漂移）。
+	//   变量名用 errCode 而不是 code：code 已是本函数的券码入参，同作用域重声明会编译不过。
+	errCode := apierrors.ErrInternal
+	if couponIsUserHint(err) {
+		errCode = apierrors.ErrValidation
+	}
+	s.writeError(w, r, apierrors.New(errCode, msg).
+		WithDetails(map[string]interface{}{"order_no": orderNo}))
 }
 
 // couponHint 券错误的对外文案：业务错误原样给（用户照着改就能用），其余交调用方兜底。

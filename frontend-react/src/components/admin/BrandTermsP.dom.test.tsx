@@ -25,6 +25,11 @@ const mocks = vi.hoisted(() => ({
 }))
 vi.mock('@/api/kb', () => mocks)
 
+// ★ F-58：toast 全量 mock 成哨兵——本批的正向锁是「中止/部分失败时**不得**出现成功 toast」，
+//   真 toast 只往总线发事件、jsdom 里无可断言的落点，改成 spies 后调用次数与文案都能等值核对。
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warn: vi.fn() }))
+vi.mock('@/lib/toastBus', () => ({ toastSuccess: toasts.success, toastError: toasts.error, toastWarn: toasts.warn }))
+
 // 一条品牌「极石」的阿拉伯语条目（id=11，删除/编辑两条路径都打在它身上）
 const entryAr = { id: 11, package_id: 7, layer: 1, source_lang: 'zh', source_text: '极石', target_lang: 'ar', target_text: 'ROX', module: 'brand' }
 // 同品牌俄语条目（id=12）：让芯片多一枚，验证删除钮逐枚带图形而非只第一枚
@@ -117,5 +122,126 @@ describe('品牌术语 · 编辑/补语言走站内 Dialog（★ F-25 锁③：p
     await vi.waitFor(() => { expect(mocks.kbEntryAdd.mock.calls.length).toBe(1) })
     expect(mocks.kbEntryAdd).toHaveBeenCalledWith({ package_id: 7, layer: 1, source_text: '极石', target_lang: 'en', target_text: '록스', module: 'brand' })
     expect(promptSpy.mock.calls.length).toBe(0)
+  })
+})
+
+// ============================================================================
+// ★ F-58（2026-09-26 〇-U 批 I-8）：21 语种串行写入的「中止」与「诚实回执」
+//   原缺陷：新增品牌名对 21 个语种串行发 21 次请求，但只在末尾无脑 toastSuccess，
+//   中途某语种 5xx／网络异常既不回滚也不报错（界面说「已新增」，实际写了一半），
+//   且弹窗一关就没法停，客户只能干等整串跑完。
+//   两条等值锁（全部对齐改法：逐语种判 r.success + 中止只停后续语种 + 三态 toast）：
+//   ① 中止路径：请求次数**等于**已确认的 2 次（不是 21 次跑满）、成功 toast 次数**等于 0**、
+//      取消钮语义在此期间是「中止」（点它不关窗），中止回执文案逐字等值含「2/21」，
+//      输入框两值**保留**（可直接改正重跑，幂等覆盖不重复插行）；
+//   ② 部分失败路径：第 3 个语种（de）返回 success:false 时，toastError 恰好 1 次且带
+//      「20/21」与失败语种名，成功 toast 次数仍**等于 0**，弹窗不关、输入保留。
+//   反向说明（为何这两条不是假绿）：把 addBrand 改回「循环后无条件 toastSuccess」⇒①②同红；
+//   去掉 cancelRef 判定 ⇒①红（请求数=21 且出现成功 toast）；判错 r.success ⇒②红。
+// 运行：npx vitest run src/components/admin/BrandTermsP.dom.test.tsx
+// ============================================================================
+
+/** 手工挂起的请求队列：每次 kbEntryAdd 返回一个由测试决定何时落地的 promise。
+ *  total=累计发出数（中止判据看这个），pending=当前还挂着没落地的数量。 */
+function deferredQueue(result?: (n: number) => unknown) {
+  const rs: Array<(v: unknown) => void> = []
+  let total = 0
+  return {
+    impl: () => new Promise((res) => { total += 1; rs.push(res) }),
+    /** 累计发出的请求数（= 组件真正打到接口上的次数） */
+    total: () => total,
+    /** 仍在挂起（未落地）的请求数 */
+    pending: () => rs.length,
+    /** 放行最前面 n 个挂起请求；result(i) 可按序号定制回执 */
+    settle: (n = 1) => {
+      for (let k = 0; k < n; k++) {
+        const r = rs.shift()
+        if (r) r(result ? result(total - rs.length + k) : { success: true })
+      }
+    },
+  }
+}
+
+/** 打开「新增品牌名」弹窗并填好两个字段（品牌名 + 统一外语译法） */
+async function openNewBrandDialog(brand = '极石', en = 'ROX') {
+  fireEvent.click(screen.getByRole('button', { name: '＋ 新增品牌名' }))
+  await vi.waitFor(() => { expect(screen.getByText('新增品牌名')).toBeTruthy() })
+  const inputs = document.querySelectorAll('.lc-dialog input.lc-input')
+  fireEvent.change(inputs[0], { target: { value: brand } })
+  fireEvent.change(inputs[1], { target: { value: en } })
+  return inputs
+}
+
+describe('品牌术语 · 串行写入的中止与诚实回执（★ F-58 锁①②）', () => {
+  it('中止：请求数停在已放行的 2 次（等于锁），成功 toast 等于 0，回执说「2/21」且输入保留', async () => {
+    await mountLoaded()
+    const q = deferredQueue()
+    mocks.kbEntryAdd.mockImplementation(q.impl)
+    await openNewBrandDialog()
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    // 第 1 个语种请求已发出且挂起：此时按钮语义已翻成「进度 + 中止」
+    await vi.waitFor(() => { expect(q.total()).toBe(1) })
+    expect(screen.getByRole('button', { name: /写入中/ })).toBeTruthy()
+    q.settle() // 放行 en ⇒ done=1，循环随即发出 ar 的请求
+    await vi.waitFor(() => { expect(q.total()).toBe(2) })
+    // 点「中止」：只停后续语种，不发请求、不关窗
+    fireEvent.click(screen.getByRole('button', { name: '中止' }))
+    q.settle() // 在途的 ar 落地后循环在语种顶部看到中止标志即 break
+    await vi.waitFor(() => { expect(toasts.warn.mock.calls.length).toBe(1) })
+    // 等值锁：接口只被打 2 次（不是 21 次跑满），其余语种一次都没发
+    expect(mocks.kbEntryAdd.mock.calls.length).toBe(2)
+    expect(q.pending()).toBe(0)
+    // 诚实回执：warn 恰好 1 次（内容 = bt.addCancelled 填充 2/21），成功 toast **等于 0**
+    expect(String(toasts.warn.mock.calls[0][0])).toContain('2/21')
+    expect(toasts.success.mock.calls.length).toBe(0)
+    // 弹窗不关 + 两输入保留：客户可改正后直接重跑补齐其余语种
+    expect(screen.getByText('新增品牌名')).toBeTruthy()
+    const inputs = document.querySelectorAll('.lc-dialog input.lc-input')
+    expect((inputs[0] as HTMLInputElement).value).toBe('极石')
+    expect((inputs[1] as HTMLInputElement).value).toBe('ROX')
+    // 中止后仍回刷列表（已写进去的 2 行必须马上可见，不能停在旧快照）
+    expect(mocks.brandTerms.mock.calls.length).toBeGreaterThan(1)
+    // 收尾复位：按钮语义回到「保存」，adding 态不会永久卡住
+    await vi.waitFor(() => { expect(screen.getByRole('button', { name: '保存' })).toBeTruthy() })
+  })
+
+  it('部分失败：de 语种 success:false ⇒ toastError 恰好 1 次（带 20/21 与语种名），成功 toast 等于 0', async () => {
+    await mountLoaded()
+    // 逐语种回执：命中 de 时如实返回失败（BRAND_LANGS 第 3 项），其余成功
+    mocks.kbEntryAdd.mockImplementation((p: { target_lang: string }) =>
+      Promise.resolve(p.target_lang === 'de' ? { success: false, message: '服务不可用' } : { success: true }))
+    await openNewBrandDialog()
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await vi.waitFor(() => { expect(toasts.error.mock.calls.length).toBe(1) })
+    expect(mocks.kbEntryAdd.mock.calls.length).toBe(21) // 未中止 ⇒ 全语种跑满
+    const copy = String(toasts.error.mock.calls[0][0])
+    expect(copy).toContain('20/21')
+    expect(copy).toContain('de')
+    expect(toasts.success.mock.calls.length).toBe(0)
+    expect(toasts.warn.mock.calls.length).toBe(0)
+    // 失败不清输入、不关窗（与中止路径同口径：改正后可原地重跑）
+    expect(screen.getByText('新增品牌名')).toBeTruthy()
+    expect((document.querySelectorAll('.lc-dialog input.lc-input')[0] as HTMLInputElement).value).toBe('极石')
+  })
+
+  it('全绿路径仍发成功 toast 且关窗清输入（正向对照，防「三态分支把成功也说成失败」）', async () => {
+    await mountLoaded()
+    mocks.kbEntryAdd.mockResolvedValue({ success: true })
+    await openNewBrandDialog('极石汽车', 'ROX Motors')
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await vi.waitFor(() => { expect(toasts.success.mock.calls.length).toBe(1) })
+    expect(String(toasts.success.mock.calls[0][0])).toContain('ROX Motors')
+    expect(toasts.error.mock.calls.length).toBe(0)
+    expect(toasts.warn.mock.calls.length).toBe(0)
+    await vi.waitFor(() => { expect(screen.queryByText('新增品牌名')).toBeNull() })
+  })
+
+  it('空输入前置拦截：品牌名/译法任一为空 ⇒ 一次请求都不发（kbEntryAdd 次数等于 0）', async () => {
+    await mountLoaded()
+    await openNewBrandDialog('', '')
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await vi.waitFor(() => { expect(toasts.warn.mock.calls.length).toBe(1) })
+    expect(mocks.kbEntryAdd.mock.calls.length).toBe(0)
+    expect(screen.getByText('新增品牌名')).toBeTruthy()
   })
 })

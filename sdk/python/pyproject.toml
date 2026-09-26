@@ -12,7 +12,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langcross-translator"
-version = "1.0.0"                      # ★ 与 sdk/typescript/package.json version 同步（release 脚本校验）
+version = "1.0.2"                      # ★ 与 sdk/typescript/package.json version 同步（release 脚本校验）
 description = "翻译助手 langcross 开放 API Python SDK（零第三方依赖，异步任务模型）"
 readme = "README.md"
 requires-python = ">=3.8"

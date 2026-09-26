@@ -12,7 +12,7 @@
  * - 身份上下文：获取当前用户的账号/租户/组织部门信息
  */
 
-import { request, authHeaders, API_BASE, handleUnauthorized, handleForbidden, apiMsg, type AdminResp } from './core'
+import { request, bizResp, authHeaders, API_BASE, handleUnauthorized, handleForbidden, apiMsg, type AdminResp } from './core'
 
 /** 下载批量导入用户 Excel 模板（带表头/填写说明/示例行，保存为用户导入模板.xlsx） */
 export async function downloadUserImportTemplate(): Promise<boolean> {
@@ -83,16 +83,19 @@ export async function userBulkImport(file: File): Promise<AdminResp & { created?
 }
 
 // ==================== 充值订单 ====================
+// ★ F-64①（批 I-7）：建单/确认收款两个 POST 已过 core 的 bizResp——后端 /api/admin/orders/*
+//   的失败已从「HTTP 200 承载失败」改成诚实状态码（404 单不存在 / 409 状态不允许 / 500 存储故障），
+//   收敛后调用点的 if (!r.success) / toastResp(r) 语义原样保留。范围口径见 billing.ts 同段说明。
 
 /** 创建充值订单（租户/代币数/金额） */
 export async function adminOrderCreate(data: { tenant_id: number; tokens?: number; points?: number; money: number }): Promise<AdminResp> {
-  return request('/api/admin/orders/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/orders/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 /** 确认收款（将订单状态置为已支付）。tenant_id 必须显式传入：超管平台上下文 effTenant=0，靠订单号匹配不到。
  *  txHash：USDT 渠道链上交易哈希（usdt 单必填，唯一防一笔交易复用到两单） */
 export async function adminOrderPay(id: number, tenantId?: number, txHash = ''): Promise<AdminResp> {
-  return request('/api/admin/orders/pay', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, tenant_id: tenantId ?? 0, tx_hash: txHash }) })
+  return bizResp(() => request('/api/admin/orders/pay', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ id, tenant_id: tenantId ?? 0, tx_hash: txHash }) }))
 }
 
 // ==================== 邮件模板（仅超管） ====================

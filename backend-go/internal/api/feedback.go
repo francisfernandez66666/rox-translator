@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"translator/internal/auth"
+	"translator/internal/observability"
 
 	"translator/internal/store"
 )
@@ -30,6 +31,28 @@ const feedbackDailyLimit = 64
 
 // feedbackMaxLen 单条反馈意见最大长度
 const feedbackMaxLen = 1000
+
+// emptyTranslationsJSON 「没有译文上下文」的唯一落库形态（★ F-45）。
+const emptyTranslationsJSON = "{}"
+
+// translationsJSONForFeedback 把反馈附带的译文映射归一为可安全回读的 JSON 串。
+// 参数：m=语种→译文（可为 nil / 空）。返回：JSON 串，空映射恒为 "{}"。
+// ★ F-45（〇-U 批，2026-09-26 UAT）：旧写法直接 json.Marshal(nil map) 得到字面量 "null" 落库，
+// 而 "null" 是**合法 JSON**——前端 JSON.parse 不抛错却拿到 null，
+// 下一步 Object.entries(null) 抛 TypeError，超管点进这条反馈整块详情白屏（读侧无 try/catch 也救不了）。
+// 因此「没有上下文」必须写成 "{}"，由本函数统一口径，禁止再在各分支里手写 marshal。
+func translationsJSONForFeedback(m map[string]string) string {
+	if len(m) == 0 {
+		return emptyTranslationsJSON
+	}
+	b, err := json.Marshal(m)
+	if err != nil || string(b) == "null" {
+		// marshal 对 map[string]string 实际不会失败；这里连同 "null" 一起兜底，
+		// 是为了让「任何路径都不得把 null 送进这列」成为函数自身的性质，而不是调用点的自觉。
+		return emptyTranslationsJSON
+	}
+	return string(b)
+}
 
 // handleFeedbackCreate 用户提交翻译反馈。
 func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
@@ -100,26 +123,31 @@ func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
 			var payload struct {
 				Translations map[string]string `json:"translations"`
 			}
-			_ = json.Unmarshal([]byte(t.FinalResult), &payload)
-			if b, jerr := json.Marshal(payload.Translations); jerr == nil {
-				f.Translations = string(b)
+			// ★ F-45（〇-U 批）：这里旧写法 `_ = json.Unmarshal(...)` 把错误整个丢掉，
+			// 空/脏 FinalResult 与「确实没有译文」被压成同一条路径，且落库成字面量 "null"。
+			// 现在：空串不去解析（避免每条工单反馈都记一条无意义的告警），
+			// 真有内容却解析失败才留痕，译文上下文统一按「无」降级。
+			if strings.TrimSpace(t.FinalResult) != "" {
+				if jerr := json.Unmarshal([]byte(t.FinalResult), &payload); jerr != nil {
+					observability.Warn(r.Context(), "反馈上下文解析失败，译文上下文按空处理",
+						"ticket_id", t.ID, "err", jerr.Error())
+				}
 			}
+			f.Translations = translationsJSONForFeedback(payload.Translations)
 			f.TargetLangs = t.TargetLangs
 			f.Mode = normalizeTaskMode(t.Mode)
 		} else {
 			f.TicketID = t.ID // 仅关联工单号，不带内容上下文
 			f.SourceText = ""
-			f.Translations = ""
+			f.Translations = emptyTranslationsJSON
 		}
 	} else if req.WithContext {
 		// 文本类型：上下文由前端随附（气泡内的源文/译文）
 		f.SourceText = req.SourceText
-		if b, jerr := json.Marshal(req.Translations); jerr == nil {
-			f.Translations = string(b)
-		}
+		f.Translations = translationsJSONForFeedback(req.Translations)
 	} else {
 		f.SourceText = ""
-		f.Translations = ""
+		f.Translations = emptyTranslationsJSON
 	}
 	// 创建反馈记录
 	if err := s.Store.CreateFeedback(f); err != nil {

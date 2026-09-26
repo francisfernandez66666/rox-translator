@@ -85,6 +85,94 @@ ck A1b-lead-honeypot-nodb '^0$' "$(dbq "SELECT COUNT(*) FROM feedbacks WHERE tar
 # 同 IP 二次有效提交：5s 最小间隔限流（校验失败的请求不计数，故此处必是上一条触发）
 ck A1b-lead-ratelimit '提交过于频繁' "$(curl -s $B/api/lead -H "$J" -d '{"company":"UATLead公司2","email":"x2@y.co"}')"
 
+# ---------- A1m ★ F-69（2026-09-26 批 I-8）12 语种《产品手册》PDF 公开下载面 ----------
+# 缺陷因果链：批H 把 12 份语种手册铺到了服务端 manual_pdf_dir，但 server.go 只注册了
+# /docs/terms|sla|privacy，**全仓没有 /docs/manual 路由**；spa.go 的 "/" 兜底对未知路径回
+# **200 + 整页 index.html**（线上实测 2,591 B 壳）。于是客户点手册链接拿到一个状态码很绿的
+# HTML 空壳——正是 AGENTS §一·6「托管物只判 200 是无效断言」在服务端一侧的形态。
+# 改法与闸门分工（三条各管一段，别互相替代）：
+#   · internal/api/docs_manual.go       —— 处理方本身（语种码过白名单＝兼路径穿越闸门、
+#     复用 loadManualPDF 的 语种→en→zh 回落链、出门前验 %PDF 魔数）；
+#   · docs_manual_test.go               —— CI 级：12 语种逐码 + 回落披露 + 负向形态 +
+#     **真 routes() 接线**（抓「注册点被删」，那是 F-69 的成因）；
+#   · 本段 A1m                          —— 真服务真 mux：判据四件套（200 + application/pdf
+#     + %PDF 魔数 + 非 HTML 壳）+ 回落链如实披露 + 三条负向 + 穿越不泄漏；
+#   · deploy/smoke_manual_pdf.sh        —— 线上铺库后的**真文件**探针，含体积下限与 %%EOF 尾。
+# ⚠️ 本段用 200B 出头的合成 PDF，故**不锁体积下限**（在 UAT 里锁 20KB 等于锁夹具文件大小，
+#    与线上铺库正确性无关，只会造出长期红灯）；体积判据留在上面那份冒烟脚本里。
+MDIR=$(mktemp -d)
+# 夹具命名按**URL 码**（zh-hant.pdf 而非 zh_hant.pdf），对齐交付包 LangCross-User-Guide-zh-hant.pdf
+# 那一套连字符口径；下划线码由 loadManualPDF 的连字符变体那一腿命中，两种写法都被覆盖。
+# 正文里埋 LC-MANUAL-<码> 标记：唯一作用是让「请求 ja 实际拿到 zh」这类静默回落**看得见**
+# （F-64 同族教训：状态码诚实、内容说谎）。
+for L in zh zh-hant en ru fr ar es pt de ja ko th; do
+  printf '%%PDF-1.4\n%% LC-MANUAL-%s\n1 0 obj<<>>endobj\ntrailer<</Root 1 0 R>>\n%%%%EOF\n' "$L" >"$MDIR/$L.pdf"
+done
+dbcfg manual_pdf_dir "$MDIR"
+# 每语种一行判据，五态各自累加到 $why，最后交给 ck（ck 只认「ok」）。
+# 用 printf 到变量而不是直写文件判绿：任何一态取不到值都要落进 got 里，
+# 否则「curl 没连上服务」会被反向 grep 判成「不是 HTML」而假绿。
+for L in zh zh-hant en ru fr ar es pt de ja ko th; do
+  MB="$MDIR/out-$L.bin"
+  META=$(curl -s -o "$MB" -w '%{http_code}|%{content_type}|%{size_download}' "$B/docs/manual/$L.pdf")
+  MST=${META%%|*}
+  MCT=$(printf '%s' "$META" | cut -d'|' -f2)
+  MSZ=$(printf '%s' "$META" | cut -d'|' -f3)
+  why=""
+  [ "$MST" = "200" ] || why="$why status=$MST"
+  case "$MCT" in application/pdf*) ;; *) why="$why ct=$MCT";; esac
+  head -c 5 "$MB" 2>/dev/null | grep -q '%PDF-' || why="$why no-%PDF-magic"
+  if head -c 4096 "$MB" 2>/dev/null | grep -qiE '<!doctype[[:space:]]+html|<html'; then why="$why html-shell"; fi
+  grep -qa "LC-MANUAL-$L" "$MB" 2>/dev/null || why="$why wrong-lang-file"
+  [ -s "$MB" ] || why="$why empty-body"
+  ck A1m-manual-pdf-$L '^ok$' "ok$why"
+  rm -f "$MB"
+done
+# 回落链披露：抽掉 th.pdf 后请求 th，必须拿到 en.pdf 的**字节**，且响应头文件名不得假装是 th.pdf。
+# 这一条锁的是「回落可以，但必须说实话」——客户拿到英文手册不稀奇，稀罕的是下载名写着 th.pdf。
+mv "$MDIR/th.pdf" "$MDIR/th.pdf.bak"
+THH=$(curl -s -D - -o "$MDIR/th.bin" "$B/docs/manual/th.pdf" | tr -d '\r')
+THV=$(python3 - "$MDIR/th.bin" <<'PY'
+import sys
+try:
+    d = open(sys.argv[1], 'rb').read()
+except OSError:
+    print("no-body")       # 体都没落地（服务没答/连接失败）：判红并留可读原因，别让 traceback 刷屏
+    sys.exit(0)
+print("en-bytes" if b"LC-MANUAL-en" in d and b"LC-MANUAL-th" not in d else "not-en")
+PY
+)
+THF=$(printf '%s' "$THH" | grep -iE '^content-disposition:' | tr -d '\r')
+if [ "$THV" = "en-bytes" ] && printf '%s' "$THF" | grep -q 'en.pdf' && ! printf '%s' "$THF" | grep -q 'th\.pdf'; then
+  PASS=$((PASS+1)); echo "PASS|A1m-manual-fallback-discloses-en"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|A1m-manual-fallback-discloses-en|want[回落 en 且下载名=en.pdf]|got[$THV | ${THF:0:160}]"
+fi
+mv "$MDIR/th.pdf.bak" "$MDIR/th.pdf"; rm -f "$MDIR/th.bin"
+# 负向①：白名单外语种码 → 400 校验错（**绝不**静默回落到中文，那是 F-64 的复发形态）
+ck A1m-manual-badlang '"success":false' "$(curl -s $B/docs/manual/xx.pdf)"
+ck A1m-manual-badlang-code '不支持的手册语种|手册语种' "$(curl -s $B/docs/manual/xx.pdf)"
+# 负向②：目录索引 → 404 且必须是 JSON 错误体，不是 200 的 SPA 整页壳（壳里有 window.__BRANDING__）
+IDX=$(curl -s -o "$MDIR/idx.bin" -w '%{http_code}|%{content_type}' "$B/docs/manual/")
+if [ "${IDX%%|*}" = "404" ] && ! printf '%s' "$IDX" | grep -q 'text/html' && ! grep -qa '__BRANDING__' "$MDIR/idx.bin" 2>/dev/null; then
+  PASS=$((PASS+1)); echo "PASS|A1m-manual-index-404-not-spa"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|A1m-manual-index-404-not-spa|want[404 且非 HTML 壳]|got[$IDX | $(head -c 120 "$MDIR/idx.bin" 2>/dev/null)]"
+fi
+# 负向③：未铺库 → 如实 404「尚未上传」，而不是漏给兜底变 200 HTML。
+# 判据要读 %PDF 魔数：只判 404 会漏掉「配置清空但旧单文件链顶上」这种半绿——
+# 本地工作目录若恰好有 manual.pdf 就会命中该链，这里因此同时拒绝 PDF 魔数。
+dbcfg manual_pdf_dir ""
+NOMAN=$(curl -s -o "$MDIR/no.bin" -w '%{http_code}' "$B/docs/manual/de.pdf")
+if { [ "$NOMAN" = "404" ] || [ "$NOMAN" = "500" ]; } && ! head -c 5 "$MDIR/no.bin" 2>/dev/null | grep -q '%PDF-'; then
+  PASS=$((PASS+1)); echo "PASS|A1m-manual-not-configured-no-pdf($NOMAN)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|A1m-manual-not-configured-no-pdf|want[404/500 且非 PDF 字节]|got[$NOMAN | $(head -c 120 "$MDIR/no.bin" 2>/dev/null)]"
+fi
+# 收尾：目录键复位 + 清场，不给后面的断言留「手册已铺库」的假前提
+dbcfg manual_pdf_dir "" >/dev/null 2>&1
+rm -rf "$MDIR"
+
 # ---------- A2 管理员登录 ----------
 # 长度 >30 而不是解析 JWT：套件后面所有超管接口都要这个头，只要拿到「像样的 token」即可，
 # 去 jwt 库验签会把断言绑死在签名算法上，收益不抵维护成本。

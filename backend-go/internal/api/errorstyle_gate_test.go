@@ -27,6 +27,14 @@
 //   - 只认 writeJSON 这一个出口函数；本包另有 SSE/流式/直写 csv 的错误分支不在本口径内；
 //   - 第二实参走变量或 map 变量的调用不计（要绕过于容易，但这类写法本就该在评审里被问）；
 //   - 豁免只按「整个文件」粒度，不给到单个调用点——理由见 errorStyleAllowlist 注释。
+//   - ★ F-64①（批 I-7 2026-09-26）点名一条**合法**的「变量实参」形态，免得后人以为发现了绕闸漏洞：
+//     api 包的 writeOpenAPIError（/openapi/v1/* 唯一错误出口）内部是
+//     `writeJSON(w, errors.StatusForCode(code), body)`——状态码来自 internal/errors 的
+//     openAPIStatusByCode 单点表，不在调用处写数字。它不计入本棘轮是**应当**的：
+//     它已经是对外契约的统一出口（与 health_probes.go 进白名单同类），
+//     真正的防漂移锁在 openapi_status_contract_test.go（规范 Error.enum ↔ 状态表双向穷举）。
+//     同批 api_openapi_tasks.go 由 20 处、admin_openapi.go 的 openapi 面由 26 处内联写法
+//     全部收敛到该出口，基线随之 736→699。
 //
 // 运行：cd backend-go && go test -count=1 ./internal/api/ -run TestErrorStyle
 // 本包用例不连库、不读 config（纯静态解析源码），无需 AGENTS.md 一.4 的方言自钉。
@@ -48,7 +56,12 @@ import (
 // errorStyleBaselineTotal 非豁免文件的内联错误响应存量基线（只减不增）。
 // 建立方式：2026-09-22 用本文件的扫描器实测全包后一次性钉住（口径见文件头），
 // 不取整、不四舍五入——基线必须是**同一把尺子量出来的真实数字**，否则第一版就在骗人。
-const errorStyleBaselineTotal = 740
+// ★ F-64①（批 I-7 2026-09-26）：收款/账务七个文件（pay.go 22、admin_billing.go 18、billing_api.go 12、
+// coupons_api.go 6、my_billing.go 5、plans_api.go 5、pay_renew.go 3）的错误分支全部迁到 s.writeError，
+// 七个条目已按僵尸守卫删行，基线同额 699→628（差额 71 与七文件存量之和精确相等，非估算）。
+// 这七个文件另有更严的**零容忍等值锁**（payhonesty_gate_test.go 的 payHonestZeroFiles），
+// 所以它们在本棘轮里的位置是「已清零、留待闸门守卫不许回涨」，不是「还没迁」。
+const errorStyleBaselineTotal = 628
 
 // errorStylePerFileBaselines 分文件基线快照（同 logratchet 的「分根设基线」思路）：
 // 只看总数会让「A 文件迁走 20 处、B 文件新加 20 处」互相掩盖，逐文件钉才守得住增量。
@@ -56,18 +69,15 @@ const errorStyleBaselineTotal = 740
 var errorStylePerFileBaselines = map[string]int{
 	"admin_kb.go":           78,
 	"tenant.go":             58,
-	"auth.go":               53,
+	"auth.go":               51,
 	"admin_packages.go":     45,
 	"tickets.go":            42,
-	"register.go":           29,
-	"admin_openapi.go":      26,
+	"register.go":           28,
+	"admin_openapi.go":      9,
 	"kb.go":                 26,
 	"orgs.go":               24,
-	"pay.go":                22,
 	"admin_models.go":       20,
-	"api_openapi_tasks.go":  20,
 	"persona_api.go":        20,
-	"admin_billing.go":      18,
 	"stream.go":             18,
 	"upload_chunk.go":       18,
 	"ops_api.go":            17,
@@ -75,26 +85,21 @@ var errorStylePerFileBaselines = map[string]int{
 	"feedback.go":           16,
 	"admin_webhooks.go":     13,
 	"admin_scrape.go":       12,
-	"billing_api.go":        12,
 	"bitext.go":             11,
 	"admin_evals.go":        10,
 	"tasks.go":              10,
-	"email_verify.go":       9,
+	"email_verify.go":       8,
 	"referral.go":           8,
 	"lead.go":               7,
 	"user_import.go":        7,
 	"admin_flow.go":         6,
-	"coupons_api.go":        6,
 	"kb_grants.go":          6,
 	"tmreview.go":           6,
-	"my_billing.go":         5,
 	"notifications.go":      5,
-	"plans_api.go":          5,
 	"admin_assist_proxy.go": 4,
 	"mail_tpl.go":           4,
 	"spa.go":                4,
 	"admin_assist.go":       3,
-	"pay_renew.go":          3,
 	"scim.go":               3,
 	"estimate.go":           2,
 	"memleak.go":            2,

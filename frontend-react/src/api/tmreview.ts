@@ -1,13 +1,16 @@
 // ============================================================================
-// api/tmreview.ts — TM 自闭环审核台接口（仅超管）
+// api/tmreview.ts — TM 自闭环审核接口（超管审核台 + 租户侧只读进度）
 // ============================================================================
 
 /**
  * api/tmreview.ts · 职责说明
- * 封装翻译记忆（TM）自闭环审核台的所有接口（仅超管可用），包括：
+ * 封装翻译记忆（TM）自闭环审核相关接口，包括：
  * - 待审列表：获取待审核的翻译记忆候选条目
  * - 审核操作：通过（落库为正式翻译记忆）或驳回（废弃不落库）
  * - 反馈采纳：从用户反馈提取修正译文生成待审候选
+ * ★ F-62（2026-09-26 批 I-8）新增租户侧**只读**进度视图 listMyTmReview()：
+ *   前台导入双语/TMX 后回执说的是「已提交，待平台审核」，但此前只有超管看得到审核台，
+ *   租户永远查不到去向 ⇒ 补本租户裁剪的三态进度（后端按 token 内租户过滤，前端不传租户号）。
  */
 
 import { request, authHeaders, type AdminResp } from './core'
@@ -44,4 +47,42 @@ export async function rejectTmReview(id: number): Promise<AdminResp> {
 /** 反馈修正采纳：从用户反馈提取修正译文生成待审候选 */
 export async function adoptFeedbackTranslation(feedbackId: number, zh: string, lang: string, trans: string): Promise<AdminResp> {
   return request('/api/admin/tm-review/adopt', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ feedback_id: feedbackId, zh, lang, trans }) })
+}
+
+// ============ ★ F-62（2026-09-26 批 I-8）租户侧只读进度视图 ============
+
+/** 租户侧候选条目：后端按 token 内租户裁剪，**不含** reviewer / tenant_id / 工单主键等平台侧字段 */
+export interface MyTmReviewItem {
+  id: number
+  zh: string
+  lang: string
+  trans: string
+  source: string // bitext | tmx | hit_threshold | feedback
+  status: string // pending | approved | rejected
+  hit_count: number
+  created_at: string
+  reviewed_at: string
+}
+
+/** 本租户三态真计数（列表受 200 条上限截断时，摘要仍是全量口径） */
+export interface MyTmReviewSummary {
+  pending: number
+  approved: number
+  rejected: number
+  total: number
+}
+
+/** 租户侧列表出参（truncated=true 表示候选多于一次回看的 200 条） */
+export type MyTmReviewResp = AdminResp & {
+  candidates?: MyTmReviewItem[]
+  summary?: MyTmReviewSummary
+  truncated?: boolean
+}
+
+/**
+ * 拉取本租户的 TM 候选审核进度（只读；status='' 表示全部）。
+ * 说明：接口不带任何租户参数——租户由后端从登录态取（F-55 的教训：读写同源、头不能换租户）。
+ */
+export async function listMyTmReview(status = ''): Promise<MyTmReviewResp> {
+  return request(`/api/me/tm-review/list${status ? '?status=' + encodeURIComponent(status) : ''}`, { headers: authHeaders() })
 }

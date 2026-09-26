@@ -188,15 +188,81 @@ describe('api/core', () => {
     })
   })
 
-  // 非 2xx 但错误体是合法 JSON 且 message/error 皆缺：仍走 text 回退，不产生空 message。
-  it('错误体 JSON 无 message/error：回落到「请求失败 (码): 原文」不出现空文案', async () => {
+  // 非 2xx 但错误体是合法 JSON 且 message/error 皆缺：走状态码兜底，
+  // ★ F-52（〇-U 批 I-8）改了这里的期望值——旧契约是「把整段 JSON 原文拼进 message」，
+  //   于是聊天/提示条里会出现 `请求失败 (400): {"success":false,...,"trace_id":"..."}`。
+  //   新契约：JSON 对象体**一律不进正文**（display 置空），只留状态码那句人话；
+  //   原对象仍在 ApiError.body 里供程序化消费（bizResp 收敛、trace_id 复制排查）。
+  //   ⚠ 这条不是「断言写错了」，是契约翻新：改回带原文就是 F-52 回归。
+  it('★ F-52：错误体 JSON 无 message/error → 兜底文案只留状态码，整段 JSON 不进正文', async () => {
     vi.stubGlobal('fetch', async () => ({
       ok: false, status: 400,
       json: async () => ({ success: false }), // 无 message/error/code
       text: async () => '{"success":false}',
     } as unknown as Response))
-    await expect(core.request('/api/bad')).rejects.toMatchObject({
-      name: 'ApiError', status: 400, message: '请求失败 (400): {"success":false}',
+    const e = await core.request('/api/bad').catch((x: unknown) => x) as import('./core').ApiError
+    expect(e.name).toBe('ApiError')
+    expect(e.status).toBe(400)
+    expect(e.message).toBe('请求失败 (400)')
+    expect(e.message).not.toContain('{') // 大括号一进正文就是本缺陷复活
+  })
+
+  // ★ F-52 本体锁：后端结构化错误体（{success,code,message,details,trace_id}）必须
+  //   只把 message 交出去，code 透传成稳定码、整个对象挂到 body；**trace_id 不得进正文**
+  //   （它只在 ApiError.body 里，供「复制排查信息」用，见 core.ts errTraceId）。
+  it('★ F-52：结构化 4xx 错误体 → message 取后端那句、code 取稳定码、整包不进气泡', async () => {
+    const envBody = {
+      success: false, code: 'chat_text_too_long',
+      message: '文本过长（5,001 字符，单次对话上限 5,000 字符），长文本请创建翻译工单处理',
+      details: { count: 5001 }, trace_id: 'tr-abc123',
+    }
+    vi.stubGlobal('fetch', async () => jsonResponse(envBody, 400))
+    const e = await core.request('/api/chat/stream').catch((x: unknown) => x) as import('./core').ApiError
+    expect(e).toBeInstanceOf(core.ApiError)
+    expect(e.status).toBe(400)
+    expect(e.code).toBe('chat_text_too_long')
+    expect(e.message).toBe(envBody.message)
+    expect(e.message).not.toContain('{')
+    expect(e.message).not.toContain('trace_id')
+    expect(e.message).not.toContain('tr-abc123')
+    expect(e.body).toMatchObject({ trace_id: 'tr-abc123', details: { count: 5001 } })
+    expect(core.errTraceId(e)).toBe('tr-abc123') // 排查信息走这里，不进正文
+  })
+
+  // ★ 顺带修掉的「读侧自伤」：旧 request() 先 response.json() 失败、再 response.text()——
+  //   真实 Response 的 body 只能消费一次，第二次直接抛，被 .catch(()=>'') 吞成空串，
+  //   于是非 JSON 错误体的兜底文案恒为「请求失败 (502): 」（后面是空的）。
+  //   本用例用**真 Response**（不是手搓的 json()/text() 双桩，那桩永远不会暴露这个 bug）
+  //   断言原文确实拼进了兜底文案。
+  it('★ F-52 附带：真 Response 只能读一次——非 JSON 体的兜底文案必须带上原文（旧实现恒为空）', async () => {
+    vi.stubGlobal('fetch', async () => new Response('Gateway Bleed-through 原文', { status: 502 }))
+    const e = await core.request('/api/x').catch((x: unknown) => x) as import('./core').ApiError
+    expect(e.status).toBe(502)
+    expect(e.message).toBe('请求失败 (502): Gateway Bleed-through 原文')
+  })
+
+  // parseErrEnvelope 纯函数锁（三档规则见 core.ts 注释）：坏 JSON / 数组 / 空体都不能崩，
+  //   且 JSON 对象档的 display 恒为空——这条是「把整段体送进界面」的机制闸。
+  describe('parseErrEnvelope（★ F-52 错误体统一解析）', () => {
+    it('JSON 对象：取 message/error、code/error_code 双别名、display 必为空', () => {
+      expect(core.parseErrEnvelope('{"message":"甲","code":"A"}')).toMatchObject({ message: '甲', code: 'A', display: '' })
+      expect(core.parseErrEnvelope('{"error":"乙","error_code":"B"}')).toMatchObject({ message: '乙', code: 'B', display: '' })
+      // message 不是字符串（脏数据）时不得把对象/数字 stringify 成文案
+      expect(core.parseErrEnvelope('{"message":{"nested":1}}')).toMatchObject({ message: '', display: '' })
+    })
+    it('HTML 网关页：原文保留（F-29 的 isHtmlErrorBody 判据依赖它），并截断到 200 字', () => {
+      const html = '<!DOCTYPE html><html>' + 'x'.repeat(400) + '</html>'
+      const r = core.parseErrEnvelope(html)
+      expect(r.message).toBe('')
+      expect(r.display).toContain('<!DOCTYPE html>')
+      expect((r.display as string).length).toBe(200)
+    })
+    it('坏 JSON / 数组 / 纯文本 / 空体：都不抛，按原文截断兜底', () => {
+      expect(core.parseErrEnvelope('{"success":fal').display).toContain('{"success":fal')
+      expect(core.parseErrEnvelope('[1,2]').display).toBe('[1,2]')
+      expect(core.parseErrEnvelope('plain text').display).toBe('plain text')
+      expect(core.parseErrEnvelope('')).toEqual({ message: '', display: '' })
+      expect(core.parseErrEnvelope(undefined as unknown as string)).toEqual({ message: '', display: '' })
     })
   })
 

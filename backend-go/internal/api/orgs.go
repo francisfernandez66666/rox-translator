@@ -342,7 +342,10 @@ func (s *Server) handleOrgMove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
-	s.Store.LogAudit(tid, u.ID, "org_move", "orgs", "")
+	// ★ F-63（2026-09-26 批 I-3）：detail 原为空串——组织树结构调整（谁挂到谁下面）正是
+	//   「部门额度/权限范围为何变了」的回查依据，必须落两个 id。
+	s.Store.LogAudit(tid, u.ID, "org_move", "orgs",
+		fmt.Sprintf("组织 #%d 移至父节点 #%d", req.ID, req.ParentID))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -372,11 +375,26 @@ func (s *Server) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
+	// ★ F-63（2026-09-26 批 I-3）：删除前先取节点名与直属子节点数——删除后这些信息就没了，
+	//   旧实现 detail 为空串，事后既不知道删的是哪个部门，也不知道多少子节点被上移。
+	delName, childCount := "", 0
+	if o, e := s.Store.GetOrgByID(req.ID); e == nil && o != nil {
+		delName = o.Name
+	}
+	if all, e := s.Store.ListOrgs(tid); e == nil {
+		for _, o := range all {
+			if o != nil && o.ParentID == req.ID {
+				childCount++
+			}
+		}
+	}
 	if err := s.Store.DeleteOrg(req.ID); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
-	s.Store.LogAudit(tid, u.ID, "org_delete", "orgs", "")
+	s.Store.LogAudit(tid, u.ID, "org_delete", "orgs",
+		auditDelete("组织节点", truncateRunes(delName, 40), req.ID, 1)+
+			fmt.Sprintf("｜直属子节点上移 %d 个", childCount))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 

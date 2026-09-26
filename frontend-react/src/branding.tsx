@@ -39,7 +39,8 @@ export interface Branding {
   brandName: string  // 自定义品牌展示名（空=用默认）
   brandLogo: string  // 自定义品牌 Logo URL（空=用默认文字）
   domain: string     // 子域名前缀
-  brandHomeBg: string   // 未登录首页背景图（base64 dataURL 或外链 URL，空=用默认）
+  brandHomeBg: string   // 未登录首页背景图（★ F-46 批 I-9 起**只会是图片地址**：http(s) 或 /brand/<名>，
+                        //   历史 dataURI 已在服务端读侧收敛成 URL；空=用默认背景）
   brandHomeBgStyle: string // 首页背景图样式 JSON（{scale,x,y,mode}：mode=tile/cover/contain）
   brandLoginCardPos: string // 登录/注册卡片位置 JSON（{x,y} 百分比，卡片中心相对视口，缺省居中）
   brandLoginLayout: string  // 登录页布局 JSON（{mode:'full'|'split', side:'left'|'right'}，缺省全屏背景）

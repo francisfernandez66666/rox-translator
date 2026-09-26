@@ -56,11 +56,19 @@ type resetCode struct {
 
 // handleLogin 登录接口：校验用户名密码并签发 JWT，返回 token + 用户信息。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {username, password}）。
-// 返回: success=true 时携带 token 与用户信息；失败返回 200 + success=false（统一不区分错误细节，防用户名枚举）。
+// 返回: success=true 时携带 token 与用户信息；失败一律走统一错误出口 s.writeError
+//
+//	（★ F-47 批 I-7 订正本注释：旧注释写「失败返回 200 + success=false」，实际自 #37 起
+//	 已是 401/403/429＋{code,message,trace_id}——注释比代码落后一个整改批次）。
+//	「不区分错误细节」这条安全口径不变：用户名不存在与密码错误回同一个「用户名或密码错误」，
+//	防用户名枚举；但**传输层状态码必须诚实**（401＝凭证错、403＝账号停用、429＝撞冷却），
+//	否则前端与 SDK 只能靠猜，且通用重试器无法对「稍后再试」做退避。
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// 暴力破解防护：同一 IP 连续失败超过阈值后进入冷却期
-	if s.loginLocked(r) {
-		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "登录尝试过于频繁，请稍后再试"))
+	// ★ F-47（批 I-7）：冷却剩余秒数随错误一起出（429 + Retry-After + retry_after），
+	// 旧实现只说「过于频繁」，客户端既不知道要等多久，也无法与「参数错」区分（同为 400）。
+	if wait := s.loginCooldownSec(r); wait > 0 {
+		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "登录尝试过于频繁，请稍后再试").WithRetryAfter(wait))
 		return
 	}
 	// 平台存储未初始化时拒绝登录
@@ -196,10 +204,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// loginLocked 判断当前请求 IP 是否处于登录冷却期。
-// 参数 r: HTTP 请求；返回 true 表示应拒绝登录（429）。
-func (s *Server) loginLocked(r *http.Request) bool {
-	return s.loginLimit.blocked(clientIP(r))
+// loginCooldownSec 返回当前请求 IP 的登录冷却剩余秒数（0＝不受限）。
+// ★ F-47（批 I-7）：旧版叫 loginLocked 并返回 bool，注释写着「拒绝登录（429）」而实际经
+//
+//	统一出口发出的是 400，且不带任何时长——注释与代码分家、状态码与语义分家。
+//	现按秒数返回，调用方据此同时得到三件一致的东西：HTTP 429、`Retry-After` 头、
+//	出参 `retry_after` 字段（判据唯一来源＝loginLimiter.retryAfterSec，见 ratelimit.go）。
+func (s *Server) loginCooldownSec(r *http.Request) int {
+	if s.loginLimit == nil {
+		return 0
+	}
+	return s.loginLimit.retryAfterSec(clientIP(r))
 }
 
 // recordLoginFail 记录当前请求 IP 一次登录失败。
@@ -313,7 +328,9 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 记录修改密码审计
-	s.Store.LogAudit(u.TenantID, u.ID, "change_password", "auth", "")
+	// ★ F-63（2026-09-26 批 I-3）：detail 原为空串；只记「谁改了口令」这一事实与账号名，
+	//   口令本身（新旧）一律不入审计——审计表明文可读面比业务表更宽，写进去就是泄露。
+	s.Store.LogAudit(u.TenantID, u.ID, "change_password", "auth", "用户 "+u.Username+" 修改登录口令")
 	// ★ 首登强制改密（2026-09-02 功能）：改密成功后自动清零标记
 	if u.MustChangePwd > 0 {
 		_ = s.Store.SetMustChangePwd(u.ID, u.TenantID, 0)
@@ -333,8 +350,9 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	//   日上限 10 次 + 最小间隔 30s——防止「无限发码骚扰 + 配合爆破」的组合滥用。
 	ip := clientIP(r)
 	if ok, wait := s.regGuard.allow("pwd-forgot:"+ip, 10, 30); !ok {
-		w.Header().Set("Retry-After", itoaInt(wait))
-		writeJSON(w, 429, map[string]interface{}{"success": false, "message": "请求过于频繁，请稍后再试"})
+		// ★ F-47（批 I-7）：内联 writeJSON(429) 改走统一出口——状态码不变（仍 429），
+		// 但补齐 {code:"RATE_LIMITED", retry_after} 与 trace_id：同仓两类限流响应口径就此合流。
+		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "请求过于频繁，请稍后再试").WithRetryAfter(wait))
 		return
 	}
 	var req struct {
@@ -414,8 +432,8 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	//   与 forgot 限流独立计数；日 20 次 + 最小间隔 10s（正常用户重试绰绰有余）。
 	ip := clientIP(r)
 	if ok, wait := s.regGuard.allow("pwd-reset:"+ip, 20, 10); !ok {
-		w.Header().Set("Retry-After", itoaInt(wait))
-		writeJSON(w, 429, map[string]interface{}{"success": false, "message": "请求过于频繁，请稍后再试"})
+		// ★ F-47（批 I-7）：与 forgot 同口径走统一出口（429 + RATE_LIMITED + retry_after）
+		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "请求过于频繁，请稍后再试").WithRetryAfter(wait))
 		return
 	}
 	var req struct {
@@ -974,7 +992,19 @@ func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Req
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
-	s.Store.LogAudit(u.TenantID, u.ID, "user_reset_pwd", "users", "")
+	// ★ F-63（批 I-3）：detail 补「被重置的账号」，并留「首登强制改密」标记（旧实现空串：
+	//   管理员重置了谁的口令无从回查）。口令内容仍一律不入审计。
+	//   审计归属租户同时改为实际生效的 tid（旧写 u.TenantID：超管跨租户重置时轨迹记在平台租户 0，
+	//   与 F-55 同族——「谁的数据被改了」记错对象）。
+	targetName := ""
+	if t, e := s.Store.GetUser(req.ID, tid); e == nil && t != nil {
+		targetName = t.Username
+	}
+	auditLabel := targetName
+	if auditLabel == "" {
+		auditLabel = fmt.Sprintf("uid=%d", req.ID)
+	}
+	s.Store.LogAudit(tid, u.ID, "user_reset_pwd", "users", "管理员重置账号 "+auditLabel+" 的登录口令")
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 

@@ -6,6 +6,11 @@
 //   - POST /api/admin/tm-review/adopt   {feedback_id, zh, lang, trans}
 //     反馈修正采纳：建候选即通过（超管点击通过即人工审核），关联反馈可溯源
 //
+// ★ F-62（2026-09-26 批 I-8）：租户侧看不到自己候选的进度，已由**同域新文件**
+//
+//	`tmreview_tenant.go` 补只读接口 GET /api/me/tm-review/list（按 token 内 tid 裁剪、
+//	不外发 reviewer/内部主键）。本文件的四个写/审接口仍然只服务超管。
+//
 // =============================================
 package api
 

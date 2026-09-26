@@ -32,6 +32,7 @@ import DataSourcesP from './DataSourcesP'
 import BrandTermsP from './BrandTermsP'
 import IndustriesP from './IndustriesP'
 import PersonasP from './PersonasP'
+import TmFlowP from './TmFlowP'
 
 // 行布局样式组（横向排布 + 间距/顶边框变体）
 const rowStyle: any = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }
@@ -487,6 +488,8 @@ export function KbP() {
         ...(isSuper ? [{ key: 'industries', label: t('kb.tabIndustries') }] : []),
         ...(isSuper ? [{ key: 'personas', label: t('persona.tab') }] : []),
         { key: 'brand', label: t('kb.tabBrand') },
+        // ★ F-62（批 I-8）：本租户「提审进度」只读视图（双语语料/TMX 提交后的去向腿）
+        { key: 'tmflow', label: t('kb.tmFlowTab') },
         ...(isSuper ? [{ key: 'scrape', label: t('admin.menuDataSources') }] : []),
       ]} />
       {/* ===== kb 主 tab：知识包 / 条目 / 安全句 ===== */}
@@ -513,8 +516,12 @@ export function KbP() {
         {bitextMsg && <div style={resStyle(bitextOk)}>{bitextMsg}</div>}
         {tmxMsg && <div style={resStyle(tmxOk)}>{tmxMsg}</div>}
       </Panel>
-      {/* KB 文件上传向导（识别→确认→导入三步，复用全局 KbUploadDialog） */}
-      <KbUploadDialog visible={kbDlg} onClose={() => setKbDlg(false)} />
+      {/* KB 文件上传向导（识别→确认→导入三步，复用全局 KbUploadDialog）
+          ★ F-57（2026-09-26 〇-U 批 I-8）：补 onSuccess——导入写库成功后由本面板重取包列表，
+              否则下方「查看条目（count）」计数停在导入前的值（实测导入后仍显示旧条数），
+              客户判断不出到底进没进去。走本面板既有的 loadPackages()（同一读侧接口，不新造路径）。 */}
+      <KbUploadDialog visible={kbDlg} onClose={() => setKbDlg(false)} onSuccess={() => void loadPackages()} />
+
 
       <div style={rowMt}>
         <Input value={String(pForm.code || '')} onChange={(e) => setPForm({ ...pForm, code: e.target.value })} placeholder={t('kb.codePlaceholder')} style={{ minWidth: 160 }} />
@@ -744,6 +751,7 @@ export function KbP() {
       {kbTab === 'industries' && isSuper && <IndustriesP />}
       {kbTab === 'personas' && isSuper && <PersonasP />}
       {kbTab === 'brand' && <BrandTermsP />}
+      {kbTab === 'tmflow' && <TmFlowP />}
       {kbTab === 'scrape' && isSuper && <DataSourcesP />}
 
       {/* 包授权弹窗：读/写/管理三级成员列表 + 添加授权（仅包管理者可见入口） */}

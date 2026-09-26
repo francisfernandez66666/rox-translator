@@ -87,6 +87,19 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 
 // serveIndexHTML 读取并回退前端入口 HTML，并在 </head> 前注入当前访问域名的品牌定制
 // （window.__BRANDING__），使前端首屏直接采用品牌设计，避免「先通用后品牌」的闪烁。
+//
+// ★ F-46（2026-09-26 批 I-9）缓存口径——**修到一半推翻了自己原来的改法，这里记成决策**：
+//
+//	修复文档原本要「对无品牌定制的域名走可缓存路径（public, max-age=60），只给品牌站留 no-cache」。
+//	实现完按线上实测头一核对，这条**收益不存在、风险却真实**：
+//	  · 主站响应头实测 `cf-cache-status: DYNAMIC` + `Cache-Control: no-cache, must-revalidate`
+//	    （源站自己写的是 no-cache，`must-revalidate` 是 Cloudflare 那层加的）
+//	    ⇒ HTML 在 CDN 侧**从来没被缓存过**，改这个头换不来"少回源"；
+//	  · 反而一旦写 `public, max-age=60`，若哪天给 HTML 开了边缘缓存，而缓存键没带上 Host/Vary，
+//	    就会出现「品牌站的 HTML 被主站访客命中」这种跨域名串品牌（真实且难查的事故形态）。
+//	首屏 2 MB 的病根是**注入体积**（dataURI 整串进 HTML），已由 brand_assets.go 落静态件根治，
+//	与 HTML 缓不缓存无关。故此处**保持无条件 no-cache**（产品语义：后台改品牌立刻见效），
+//	并把"给无品牌站长缓存"这个念头连同它的判据一起钉在这里，免得下一轮又有人"照文档施工"。
 func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request, path string) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

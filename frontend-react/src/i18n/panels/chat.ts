@@ -154,6 +154,14 @@ export const zh: Record<string, string> = {
   'chat.assistSub': '接待 · 指导 · 快速直达功能',
   'chat.assistOffline': '助手暂时联系不上（服务未启动），请稍后再试。你可以先直接使用各个功能页面。',
   'chat.timeoutTicket': '服务处理超时，长文本请改用翻译工单。',
+  // ★ F-52②（2026-09-26 〇-U 批 I-8）：本地长度闸文案。上限值由 /api/me/package 的
+  //   chat_max_chars 喂养（与后端 stream.go 同一数值源），故 {count}/{max} 必须是占位符，
+  //   禁止把「5000」写死进词条（运营改键后界面会说谎）。
+  'chat.textTooLong': '文本过长（{count} 字符，单次对话上限 {max} 字符），长文本请创建翻译工单处理',
+  // ★ F-53（2026-09-26 〇-U 批 I-8）：敏感词拒译的前端文案。后端 error_code=sensitive_blocked
+  //   时按本键取词（12 语种全量），取不到回落后端那句人话——旧形态是把裸键名 direct 进气泡。
+  'chat.sensitiveBlocked': '该内容包含敏感信息，已停止翻译。请调整后重试，或提交翻译工单由人工处理。',
+
   'chat.assistSendFail': '这条没发出去（网络/服务异常），再试一次？',
   'chat.assistClose': '收起',
   'chat.assistPlaceholder': '想了解什么？比如：怎么让译文更贴合行业术语',
@@ -309,6 +317,11 @@ export const en: Record<string, string> = {
   'chat.assistSub': 'Reception · Guidance · Quick access',
   'chat.assistOffline': 'The assistant is temporarily unreachable (service not started). Please try again later, or use the feature pages directly.',
   'chat.timeoutTicket': 'The service timed out while processing. Please send long texts as a translation ticket instead.',
+  // ★ F-52② / F-53（2026-09-26 〇-U 批 I-8）：与 zh 段同批补键，占位符 {count}/{max} 逐键一致
+  //   （locales.core.test.ts 会按占位符集合逐键比对，缺一即红灯）。
+  'chat.textTooLong': 'Text is too long ({count} characters; the per-message limit is {max}). Please create a translation ticket for long texts.',
+  'chat.sensitiveBlocked': 'This content contains sensitive terms, so translation was stopped. Please revise it, or submit a translation ticket.',
+
   'chat.assistSendFail': 'This message failed to send (network/service error). Try again?',
   'chat.assistClose': 'Collapse',
   'chat.assistPlaceholder': 'What would you like to know? e.g. how to match industry terminology',

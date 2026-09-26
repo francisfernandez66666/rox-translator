@@ -1056,7 +1056,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		Files:      filesOut,
 		TextFiles:  textOut, // ★ 还原模式纯文案旁路产物（工单执行器登记为附加交付物）
 		TokensUsed: tokensUsed,
-		PointsUsed: e.PointsOfTokens(tokensUsed),
+		// ★ F-49①（〇-U 批 I-4）：对外积分按**实收**口径折（与台账扣费同源），不再用裸真实用量；
+		// 旧写法比实际扣费少一个 markup，客户拿 points_used 折算必然对不上账。
+		PointsUsed: e.PointsOfTokens(e.UsageDisplayTokens(ctx)),
 	}
 }
 

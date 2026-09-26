@@ -56,6 +56,30 @@ func sseEvent(eventType string, payload map[string]interface{}) string {
 	return "data: " + string(data) + "\n\n"
 }
 
+// engineErrorPayload 把引擎的业务失败翻成 SSE error 帧载荷（★ 2026-09-26 〇-U 批 I-8 · F-53）。
+// 参数 errStr=引擎的 Error 字段，reply=引擎的 Reply 字段（引擎在拒译类失败时会把人类话术放这里）。
+//
+// ★ 为什么不能照旧只发 {"error": res.Error}：res.Error 有两种性质完全不同的取值——
+//
+//	① 本来就是给人看的中文句子（「文件不存在或无法读取」「不支持的格式…」）：直接发没问题；
+//	② **稳定错误码**（敏感词拒译的 engine.CodeSensitiveBlocked）：人类话术其实在 Reply 里。
+//	  旧写法把码当文案发出去、把文案丢掉，客户气泡里就是一串裸键名 `sensitive_blocked`
+//	  （12 份 locale 里没有这个键，前端也无从模板化）——本轮 UAT 实测到的正是这一形态。
+//
+// 现在 ② 走「error_code 下发稳定码 + error 下发那句人话」，与日限额分支
+// （上面 gateErr 走 billing.QuotaErrCode 的同一族写法）对齐；前端有码就按码取本语种词条，
+// 没命中词条时至少是一句人话，不会再露键名。① 保持只发 error，**不硬造假码**。
+func engineErrorPayload(errStr, reply string) map[string]interface{} {
+	if strings.TrimSpace(errStr) == engine.CodeSensitiveBlocked {
+		msg := strings.TrimSpace(reply)
+		if msg == "" {
+			msg = errStr // Reply 意外为空时至少与旧行为一致，绝不发空串（空 error 会让前端显示空白气泡）
+		}
+		return map[string]interface{}{"error": msg, "error_code": engine.CodeSensitiveBlocked}
+	}
+	return map[string]interface{}{"error": errStr}
+}
+
 // sseHeaders 设置 SSE 响应头（text/event-stream 及禁用缓冲/代理缓冲）。
 // 参数 w: HTTP 响应写入器。无返回。
 func sseHeaders(w http.ResponseWriter) {
@@ -246,8 +270,10 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	}
 	if res.Error != "" {
 		// 翻译失败：推送 error 事件并计入失败指标
+		// ★ F-53（批 I-8）：载荷走 engineErrorPayload——敏感词一类「码在 Error、话术在 Reply」的
+		//   失败不再把裸键名当文案发给客户。
 		sseMu.Lock()
-		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": res.Error}))
+		fmt.Fprint(w, sseEvent("error", engineErrorPayload(res.Error, res.Reply)))
 		sseMu.Unlock()
 		s.metrics.countTranslate("text", false)
 	} else {
@@ -434,8 +460,10 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	}
 	if res.Error != "" {
 		// 失败：推送 error 事件并计入失败指标
+		// ★ F-53（批 I-8）：同文本通道——码/文案分流，不把 engine.CodeSensitiveBlocked 一类
+		//   稳定码当用户可见文案发出去。
 		sseMu.Lock()
-		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": res.Error}))
+		fmt.Fprint(w, sseEvent("error", engineErrorPayload(res.Error, res.Reply)))
 		sseMu.Unlock()
 		s.metrics.countTranslate("file", false)
 	} else {

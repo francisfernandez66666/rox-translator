@@ -581,7 +581,6 @@ export const baseZh: Record<string,string> = {
   'app.backHome': '返回首页',
   'app.bye': '下次见',
   'app.langBtn': '语言',
-  'chat.balanceFmt': '余额 {points} 积分（≈{sents} 句）',
   'chat.todayFmt': '今日消耗 {points} 积分（≈{sents} 句）',
   'tk.pendingSaveFmt': '待保存 {n} 段',
   'tk.srcIdxFmt': '源文 #{i}',
@@ -675,6 +674,10 @@ export const baseZh: Record<string,string> = {
 
   'billing.ordersTitle': '我的订单',
   'billing.quotaDailyPoints': '每日积分上限',
+  'billing.quotaReloadFirst': '配额尚未读取成功，请先点「刷新」取回当前值再保存',
+  'billing.quotaPickTenant': '请先在右上角租户切换器选择具体租户，再编辑配额',
+  'billing.quotaUnlimitedTag': '不限',
+  'billing.quotaUnlimitedWarn': '0＝不限：保存后该租户此项日用量墙将被移除',
   'billing.invoiceDialogTitle': '开具发票',
   'billing.invoiceApplied': '发票已申请',
   'billing.invoiceTitleField': '抬头',

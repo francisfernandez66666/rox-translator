@@ -90,12 +90,12 @@ func (s *Store) GetTicketSegments(ticketID int64, filePath, lang string) ([]Tick
 		args = append(args, filePath)
 	}
 	q += ` ORDER BY seg_index ASC`
-	// ⚠️ 方言待办：这里沿用 edits.go 的裸 s.db.Query + `?` 写法，而 `?` → `$n` 的改写只在
-	// db.Query 封装里做（见 db/query.go RewritePlaceholders）。PG 生产库上本查询会报语法错，
-	// 且调用方把报错当「未命中」静默回退旧口径——等于「块不匹配」修复在 PG 上不显效、
-	// 只在 SQLite/CI 上生效。修法是把这一行换成 db.Query(s.db, db.CurrentDialect(), q, args...)
-	// （顺带同修 GetTranslationEdits 同类写法）。本次仅补注释，未动代码。
-	rows, err := s.db.Query(q, args...)
+	// ★ F-44（〇-U 批）已修：原注释记录的方言待办在此收口——`?`→`$n` 的改写只在
+	// db.Query 包装器内做（见 db/query.go RewritePlaceholders），旧写法直调
+	// s.db.Query 使本查询在生产（PostgreSQL）恒报语法错，而调用方把报错当「未命中」
+	// 静默回退旧口径 ⇒「块不匹配」修复在 PG 上不显效、只在 SQLite/CI 上绿。
+	// 现在 SQL 串仍以 SQLite 方言为唯一真源，方言差异交给包装器。
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -22,6 +22,11 @@ export const zh = {
   'fb.colStatus': '状态',
   'fb.targetTicket': '工单',
   'fb.targetText': '文本',
+  // ★ O-12（2026-09-26 〇-U 批 I-8）：匿名留资（/api/lead）复用 feedbacks 通道，
+  //   行上 TenantID/UserID 都是 0 ⇒ 旧写法把「对象」渲染成「文本」、将用户列显示成 #0，
+  //   读起来像脏数据。两键把 lead 如实标出来（不新造假用户、不改落库口径）。
+  'fb.targetLead': '留资',
+  'fb.userLead': '留资访客（未注册）',
   'fb.ctxBtn': '上下文',
   'fb.resolve': '处理',
   'fb.resolvePrompt': '处理反馈 #{id}（可输入备注）：',
@@ -49,6 +54,8 @@ export const en = {
   'fb.colStatus': 'Status',
   'fb.targetTicket': 'Ticket',
   'fb.targetText': 'Text',
+  'fb.targetLead': 'Lead',
+  'fb.userLead': 'Lead visitor (unregistered)',
   'fb.ctxBtn': 'Context',
   'fb.resolve': 'Resolve',
   'fb.resolvePrompt': 'Resolve feedback #{id} (optional note):',

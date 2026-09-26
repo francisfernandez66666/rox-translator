@@ -33,9 +33,16 @@ func (s *Server) handleAdminTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 // taskJSON 任务定义出参视图（token 奖励折成积分，其余字段同名透传）。
+//
+// ★ F-60（2026-09-26 批 I-8）周期两列的对外契约：
+//   - `period` 是**唯一真值**（daily|weekly|once|event），事件发放的去重键与日/周上限都按它算；
+//   - `task_type` 是 #33 之前的遗留别名，为兼容既有消费方**保留不删**，但由 store 层
+//     normalizeTaskCycle + RepairTaskCycleColumns 保证与 period **恒等**，
+//     故 id2「每周发起翻译」不再出现「task_type=daily + period=weekly」的矛盾对。
+//   - 消费方（SDK/报表）按任一字段分支都得到同一周期；等值锁见 tasks_cycle_test.go。
 type taskJSON struct {
 	ID           int64  `json:"id"`
-	TaskType     string `json:"task_type"`
+	TaskType     string `json:"task_type"` // ★ period 的恒等别名（勿当独立口径消费）
 	Title        string `json:"title"`
 	Description  string `json:"description"`
 	RewardPoints int64  `json:"reward_points"` // ★ 积分口径（内部按汇率折回 token 记账）
@@ -82,6 +89,10 @@ func (s *Server) taskViewOf(t *store.UserTask) taskJSON {
 // handleAdminTaskSave 新增/更新任务（超管）。
 // body: id（>0 更新）/ task_type(daily|once) / title / description / reward_points / enabled / sort_order。
 // ★ 积分口径：reward_points 入参，服务端按汇率折算成永久 token 落库。
+// ★ F-60：入参两列按发放方式归一（store.normalizeTaskCycle）——auto 行以 period 为准、
+//
+//	manual 行以 task_type 为准，两条方向都不会放大领取/发放窗口；超管表单里 period 与
+//	task_type 不一致时，落库后出参两列恒等，不再有「界面每周、接口 daily」的双口径。
 func (s *Server) handleAdminTaskSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {

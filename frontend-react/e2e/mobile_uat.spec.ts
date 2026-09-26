@@ -2,7 +2,7 @@
 // e2e/mobile_uat.spec.ts — 移动端自适应核对脚本
 // 职责：以手机视口（390×844）验证主站与演示站的移动端体验：
 //   - 后台侧边栏在窄屏转抽屉（汉堡唤起 / 遮罩关闭 / 点菜单关闭）
-//   - 聊天工作台输入栏可换行、无横向溢出
+//   - 聊天工作台输入栏可换行、无横向溢出，且 ★ F-48 起顶栏余额徽标在窄屏仍可见（省略号截断）
 //   - 全站关键页面（自服务/工单/对照编辑/公开定价）无横向溢出
 // 前提：本地后端 + 构建后的前端 dist 已在 BASE_URL 服务（参考 run_uat.sh 启动方式）。
 // ============================================================================
@@ -80,7 +80,11 @@ test('移动端后台：侧边栏转抽屉（汉堡唤起/遮罩关闭/无溢出
 });
 
 // 移动端工作台核对：输入栏可见、页面无水平溢出（验证 .chat-input-row 换行生效）
-test('移动端工作台：输入栏可换行、无横向溢出', async ({ page }) => {
+// ＋ ★ F-48（批 I-5 2026-09-26）：窄屏顶栏余额徽标必须**可见**——旧 mobile.css 写
+//   `.app-header .pkg-line-tag { display:none }`，把「我还剩多少积分」这个唯一常驻余额口径
+//   在手机上整块抹掉（用户得翻进「套餐/账单」二级页），与「余额条不刷新」叠成同一件事。
+//   现行口径：显示 + 单行省略号，且长文案不得撑破 390px 视口。
+test('移动端工作台：输入栏可换行、无横向溢出、余额徽标窄屏仍可见', async ({ page }) => {
   await login(page, 'home');
   await page.waitForSelector('.cw-dialog, .app-header', { timeout: 30000 });
   await page.waitForTimeout(1500);
@@ -89,6 +93,34 @@ test('移动端工作台：输入栏可换行、无横向溢出', async ({ page 
   expect(overflow).toBe(false);
   // 输入栏存在（★ 2026-09-18 UI 迁移：原生 textarea 挂 LangCross 皮肤类 .lc-textarea，旧 .chat-inputbar 已废弃）
   await expect(page.locator('.lc-textarea')).toBeVisible();
+
+  // ---- F-48② 余额徽标可见性锁（真机视口，非源码 grep）----
+  const pkgTag = page.locator('.app-header .pkg-line-tag');
+  // 徽标只在 myPackage 拉到数值后才渲染，故用 poll 等它出现（不盲等固定毫秒）
+  await expect.poll(() => pkgTag.count(), { message: '顶栏余额徽标未渲染：余额接口没回数值？', timeout: 15000 }).toBe(1);
+  await expect(pkgTag, '★ F-48：窄屏不得再 display:none 掉余额徽标').toBeVisible();
+  const tagStyle = await pkgTag.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { display: cs.display, overflow: cs.overflowX, textOverflow: cs.textOverflow, nowrap: cs.whiteSpace === 'nowrap' };
+  });
+  console.log('余额徽标计算样式:', tagStyle);
+  expect(tagStyle.display, 'display:none/contents 即旧缺陷复活').not.toBe('none');
+  // 省略号三件套：overflow:hidden + text-overflow:ellipsis + nowrap（缺一项长文案就撑破视口）
+  expect(tagStyle.overflow, 'overflow 必须 hidden，否则 ellipsis 不生效').toBe('hidden');
+  expect(tagStyle.textOverflow, 'text-overflow 必须是 ellipsis').toBe('ellipsis');
+  expect(tagStyle.nowrap, 'white-space 必须 nowrap（换行会把页眉撑高）').toBe(true);
+  const box = await pkgTag.boundingBox();
+  expect(box, '徽标未渲染').not.toBeNull();
+  const vp = page.viewportSize();
+  expect(box!.width, `徽标宽度不得超过视口（${vp?.width}px）`)
+    .toBeLessThanOrEqual((vp?.width ?? 390) + 0.5);
+  // 徽标必须在视口内（右边界不越界＝真的被截断而不是溢出到屏外）
+  expect(box!.x + box!.width, '徽标右边界越出视口').toBeLessThanOrEqual((vp?.width ?? 390) + 0.5);
+  // 溢出复查一次：徽标显示后不应引入横向滚动
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2),
+      { message: '余额徽标显示后不得引入横向溢出', timeout: 8000 })
+      .toBe(false);
   await page.screenshot({ path: 'artifacts/mobile-workbench.png' });
 });
 

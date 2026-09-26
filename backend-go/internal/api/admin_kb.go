@@ -331,7 +331,9 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		s.invKB() // 范围变化：同刷缓存
 	}
-	s.Store.LogAudit(tid, u.ID, "kb_package_update", "kb_packages", "")
+	// ★ F-63（2026-09-26 批 I-3）：detail 原为空串——改名动作无从回查「改了哪个包、改成什么名」
+	s.Store.LogAudit(tid, u.ID, "kb_package_update", "kb_packages",
+		fmt.Sprintf("术语包 #%d｜名称 %s", req.ID, truncateRunes(req.Name, 40)))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -368,7 +370,9 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
-	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_package_delete", "kb_packages", "")
+	// ★ F-63（批 I-3）：删除类统一口径「被删对象标识＋数量」（pkg 在上方的权限校验里已经读到，零额外查询）
+	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_package_delete", "kb_packages",
+		auditDelete("术语包", truncateRunes(pkg.Name, 40), req.ID, 1))
 	s.invKB() // ★ 删除包及条目：失效 CJK 缓存
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
@@ -521,11 +525,18 @@ func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// ★ F-63（批 I-3）：删除前尽力读一次条目原文供审计（读不到不阻断删除，detail 回落 id 标识）。
+	//   旧实现 detail 为空串：术语条目删除后既看不到删的是哪句话，也无法与提交/更新轨迹对齐。
+	entryLabel := ""
+	if rows, e := s.Store.GetEntryForUpdate(s.kbTenant(r, u), req.ID); e == nil && len(rows) > 0 {
+		entryLabel = truncateRunes(rows[0].SourceText, 40)
+	}
 	if err := s.Store.DeleteEntry(req.ID, s.kbTenant(r, u)); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
-	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_entry_delete", "kb_entries", "")
+	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "kb_entry_delete", "kb_entries",
+		auditDelete("术语条目", entryLabel, req.ID, 1))
 	s.invKB() // ★ 摘除条目：失效 CJK 缓存
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
@@ -669,11 +680,23 @@ func (s *Server) handleSafetyPhraseDelete(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
+	// ★ F-63（批 I-3）：安全句没有单条 getter，删除前扫一次本租户清单取原文（量级小：安全句按租户几十条）
+	phraseLabel := ""
+	if ps, e := s.Store.ListSafetyPhrases(s.kbTenant(r, u)); e == nil {
+		for _, p := range ps {
+			if p != nil && p.ID == req.ID {
+				phraseLabel = truncateRunes(p.Phrase, 40)
+				break
+			}
+		}
+	}
 	if err := s.Store.DeleteSafetyPhrase(req.ID, s.kbTenant(r, u)); err != nil {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
-	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_delete", "kb_safety_phrases", "")
+	// ★ F-63（批 I-3）：detail 原为空串，删除动作只剩「有人删过一条」——补「被删对象标识＋数量」
+	s.Store.LogAudit(s.kbTenant(r, u), u.ID, "safety_delete", "kb_safety_phrases",
+		auditDelete("安全话术", phraseLabel, req.ID, 1))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 
 	"translator/internal/config"
@@ -494,6 +495,25 @@ func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "policy_save", "tenants", "")
+	// ★ F-63（2026-09-26 批 I-3）：detail 原为空串。策略是「增量合并」语义（未提交的键保持原值），
+	//   所以轨迹只记本次实际提交的键值对；map 迭代无序，先排序保证同一提交两次渲染文本可比对。
+	changed := make([]string, 0, len(req.Policy)+2)
+	for k, v := range req.Policy {
+		if v > 0 {
+			changed = append(changed, fmt.Sprintf("%s=%g", k, v))
+		}
+	}
+	if req.CrossDeptFallback != nil {
+		changed = append(changed, fmt.Sprintf("cross_dept_fallback=%v", *req.CrossDeptFallback))
+	}
+	if req.DataFeedbackOptOut != nil {
+		changed = append(changed, fmt.Sprintf("data_feedback_opt_out=%v", *req.DataFeedbackOptOut))
+	}
+	sort.Strings(changed)
+	policyDetail := "本次提交 0 项（仅触达保存，无键变更）"
+	if len(changed) > 0 {
+		policyDetail = fmt.Sprintf("策略变更 %d 项｜%s", len(changed), strings.Join(changed, "｜"))
+	}
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "policy_save", "tenants", policyDetail)
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }

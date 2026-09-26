@@ -3,7 +3,9 @@
 //   - GET /openapi/v1.json  返回 JSON 规范（供 openapi-generator / 前端 SDK 生成消费）
 //
 // 规范源文件经 go:embed 内联，无需运行时外挂文件（单二进制部署友好）。
-// 人类可读 YAML 版本见 deploy/openapi/openapi.v1.yaml（与 JSON 规范同源结构）。
+// ★ F-64①（批 I-7 2026-09-26）订正本行旧说法：曾经写的「人类可读 YAML 版本见
+// deploy/openapi/openapi.v1.yaml」在该路径**从未存在过**（find 全仓零命中），
+// 属于文档指向空气。openapi.v1.json 就是唯一规范源，改动错误契约只改这一份。
 package api
 
 import (

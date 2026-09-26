@@ -23,11 +23,45 @@ import (
 	"strings"
 	"translator/internal/ops"
 	"translator/internal/payment"
+	"translator/internal/secret"
 
 	qrcode "github.com/skip2/go-qrcode"
 
 	"translator/internal/store"
 )
+
+// ============ 群机器人 Webhook 掩码（★ 批 I-6 2026-09-26，本轮核实新发现）============
+// webhookMaskKeys 必须掩码回显的键清单（GET /api/admin/packages/settings）。
+// 这四条存的是群机器人 Incoming Webhook 完整地址，URL 里就带着机器人凭证
+// （企微/钉钉的 ?key=、Slack 的 /services/T…/B…/token、Teams 的 ? webhook 路径），
+// 拿到即可向企业群任意发消息——等价于密钥，不是「配置项可见」的范畴。
+// 对照面（同仓别处都已掩码，说明这是本 handler 漏做而非全站口径）：
+//
+//	SMTP 密码（auth.go）、LLM key（admin.go maskKey）、支付渠道密钥（billing_payconfig.go
+//	IsSecretMasked 回填）、assist token（admin_assist.go）。
+var webhookMaskKeys = map[string]bool{
+	"wecom_webhook_url":    true,
+	"dingtalk_webhook_url": true,
+	"slack_webhook_url":    true,
+	"teams_webhook_url":    true,
+}
+
+// maskWebhookValue 读侧掩码：空值原样回空（前端据此判断「未配置」，若把空串也打码成 ****
+// 就会让未配置的通道看起来已配置，且下一次保存被当成「用户没改」而永远写不进去）。
+// 非空一律 maskKey（首4＋****＋尾4）。
+func maskWebhookValue(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return ""
+	}
+	return maskKey(v)
+}
+
+// webhookSaveSkipped 写侧守卫：收到含 **** 的回显值＝前端把掩码串原样 POST 回来（用户只是打开面板
+// 点了保存，并没改这一项），此时**绝不能**把 "abcd****wxyz" 写回库覆盖真地址——否则机器人当场失效。
+// 范式照抄 billing_payconfig.go 的「收到掩码就跳过」。空串不在射程内（空串=显式清除配置，照常落库）。
+func webhookSaveSkipped(key, val string) bool {
+	return webhookMaskKeys[key] && val != "" && secret.IsSecretMasked(val)
+}
 
 // qrImageWhitelist 套餐中心静态收款码图片支持的扩展名白名单。
 var qrImageWhitelist = map[string]bool{
@@ -239,7 +273,10 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	// 三期注册与触达配置：邮箱验证 / 人机验证 / 群机器人（secret_key 只写不回显）
+	// ★ 批 I-6：四个群机器人 webhook 掩码回显（URL 即凭证，见文件头 webhookMaskKeys 说明）——
+	//   写侧配套 webhookSaveSkipped，前端把掩码串原样存回来时不覆盖真值。
 	getCfg := func(k string) string { v, _ := s.Store.GetConfig(k); return v }
+	maskedCfg := func(k string) string { return maskWebhookValue(getCfg(k)) }
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "billing_enforced": enforced,
 		// ★ 2026-09-19 积分口径：体验额度以积分回显（内部仍按 token 记账）
@@ -249,11 +286,12 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 		"email_notify_enabled": getCfg("email_notify_enabled"),
 		"captcha_provider":     getCfg("captcha_provider"),
 		"captcha_site_key":     getCfg("captcha_site_key"),
-		"wecom_webhook_url":    getCfg("wecom_webhook_url"),
-		"dingtalk_webhook_url": getCfg("dingtalk_webhook_url"),
+		"wecom_webhook_url":    maskedCfg("wecom_webhook_url"),
+		"dingtalk_webhook_url": maskedCfg("dingtalk_webhook_url"),
 		// ★ P2 国际化渠道（2026-09-15）：Slack / Teams 群机器人（bot.go 统一消费）
-		"slack_webhook_url": getCfg("slack_webhook_url"),
-		"teams_webhook_url": getCfg("teams_webhook_url"),
+		// ★ 批 I-6：同企微/钉钉一并掩码——这四个键旧实现整串明文回显（含机器人凭证）
+		"slack_webhook_url": maskedCfg("slack_webhook_url"),
+		"teams_webhook_url": maskedCfg("teams_webhook_url"),
 		// ★ Token 实费参数（四期）：成本均摊系数（无量纲，保留）
 		"billing_markup_multiplier": markup,
 		// ★ S3 防薅：一次性邮箱域黑名单（运营增补部分；内置表不随出参重复）
@@ -490,9 +528,16 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		{"teams_webhook_url", req.TeamsWebhookURL},
 	}
 	for _, kv := range cfgKeys {
-		if kv.val != nil {
-			add(kv.key, *kv.val)
+		if kv.val == nil {
+			continue
 		}
+		// ★ 批 I-6 配套守卫：webhook 四键若收到掩码回显（含 ****），视为「用户没改这一项」直接跳过，
+		//   绝不把 abcd****wxyz 写回库（否则超管「打开面板直接点保存」就让机器人集体失效）。
+		//   读侧已改掩码回显，本守卫必须同批在位——只做一半是事故，不是修复。
+		if webhookSaveSkipped(kv.key, *kv.val) {
+			continue
+		}
+		add(kv.key, *kv.val)
 	}
 	// ★ 计费参数（Token 实费体系）：均摊系数与换算率，超管可调
 	// 四个参数各自范围校验后以字符串值进 pending 暂存区，循环外统一落库（见下）
