@@ -20,7 +20,12 @@ for path in files:
             j = i - 1
             while j >= 0 and lines[j].strip() == "":
                 j -= 1
-            if j < 0 or not lines[j].lstrip().startswith("//"):
+            # 认三种「上面就是注释」的形态：// 行注释、/* 起头的块注释、
+            # 以及块注释的收尾行（缩进正文型 /* ... */ 的最后一行既不以 /* 也不以 * 开头，
+            # 旧判据会把它当代码，把已经写了块注释的声明误报成缺注释）
+            prev = lines[j].lstrip() if j >= 0 else ""
+            documented = prev.startswith("//") or prev.startswith("/*") or prev.startswith("*") or prev.rstrip().endswith("*/")
+            if j < 0 or not documented:
                 missing.append(i + 1)
     if missing:
         out.append((len(missing), path))

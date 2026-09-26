@@ -126,10 +126,17 @@ func guardEnvInt(key string, def int) int {
 }
 
 // 以下四个阈值函数单独抽出是为了让单测可用 t.Setenv 精确验证「env 可配」这条约定。
+// shortGuardMaxSrcRunes 短文本判定的「源文够短」阈值（ runes ）：源文不超过该长度即按短单口径走比率护栏。
 func shortGuardMaxSrcRunes() int { return guardEnvInt("LC_GUARD_SHORT_MAX_SRC_RUNES", 12) }
-func shortGuardRatio() int       { return guardEnvInt("LC_GUARD_SHORT_RATIO", 8) }
-func shortGuardFloor() int       { return guardEnvInt("LC_GUARD_SHORT_FLOOR_RUNES", 80) }
-func shortGuardAbsCap() int      { return guardEnvInt("LC_GUARD_SHORT_ABS_CAP_RUNES", 300) }
+
+// shortGuardRatio 短文本长度膨胀比率上限：译文长度超过源文该倍数即判为可疑（长文本另有绝对上限）。
+func shortGuardRatio() int { return guardEnvInt("LC_GUARD_SHORT_RATIO", 8) }
+
+// shortGuardFloor 比率护栏的豁免下限（runes）：源文本就短于此值时比率天然虚高，不看比率、只看绝对上限。
+func shortGuardFloor() int { return guardEnvInt("LC_GUARD_SHORT_FLOOR_RUNES", 80) }
+
+// shortGuardAbsCap 短文本绝对长度上限（runes）：译文超过该绝对长度直接判爆，兜住比率法漏掉的中等长度源文。
+func shortGuardAbsCap() int { return guardEnvInt("LC_GUARD_SHORT_ABS_CAP_RUNES", 300) }
 
 // LengthExplosionInfo 供日志/告警用的长度比描述（provider/model 由调用侧补齐）。
 // 命中 hasLengthExplosion 的槽位调用它，把「源 r 字 → 译 r 字（倍数 x，上限 y）」写成一行可聚合的哨兵字段。
