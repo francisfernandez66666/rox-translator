@@ -23,7 +23,9 @@ for path in files:
             j = i - 1
             while j >= 0 and lines[j].strip() == "":
                 j -= 1
-            if j < 0 or not (lines[j].lstrip().startswith("//") or lines[j].lstrip().startswith("/*") or lines[j].lstrip().startswith("*")):
+            # 认 // 行注释、/* 起头的块注释、* 对齐的块注释行，以及缩进正文型块注释的收尾行（以 */ 结束）
+            prev = lines[j].lstrip() if j >= 0 else ""
+            if j < 0 or not (prev.startswith("//") or prev.startswith("/*") or prev.startswith("*") or prev.rstrip().endswith("*/")):
                 # 忽略一眼即懂的字面常量
                 m = re.match(r"^const\s+([A-Z_0-9]+)\s*=\s*[\d'\"]", ln)
                 if m:

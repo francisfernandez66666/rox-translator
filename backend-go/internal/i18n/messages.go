@@ -34,6 +34,8 @@ type compiledPattern struct {
 // patterns 模式词条编译结果（init 构建，顺序即声明顺序，词条间无交叠）。
 var patterns []compiledPattern
 
+// init 包加载时一次性编译句式词条：先按前缀长度排序（长前缀优先命中，避免短前缀抢词），
+// 再把中文模板转正则并把英文模板按捕获序回填。放在 init 是为了让运行期只做查表、零编译开销。
 func init() {
 	keys := make([]string, 0, len(exactEN))
 	for k := range exactEN {

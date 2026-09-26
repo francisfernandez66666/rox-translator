@@ -434,6 +434,8 @@ type patternEN struct {
 	enFmt string // 英文模板（%d/%s/%v 按序回填捕获）
 }
 
+// patternsEN 英文侧句式词条表：顺序即声明顺序，与 patterns 编译结果一一对应。
+// 新增词条在此追加，禁止散落到调用侧——编译与词条覆盖检查都以本表为唯一事实源。
 var patternsEN = []patternEN{
 	{"反馈意见最多 %d 字", "Feedback is limited to %d characters"},
 	{"同步翻译单次上限 %d 字符（当前 %d），长文本请使用 POST /openapi/v1/tasks 异步任务", "Sync translation limit is %d characters (current %d); for long text use POST /openapi/v1/tasks async jobs"},

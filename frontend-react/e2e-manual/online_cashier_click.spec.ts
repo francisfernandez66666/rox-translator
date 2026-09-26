@@ -27,10 +27,15 @@ import { test, expect, Page } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
 
+// 被测站点根地址：由环境变量决定，禁止在文件里写死生产/演示域名（AGENTS §一·6 e2e 红线）
 const BASE = (process.env.CASHIER_BASE || '').replace(/\/+$/, '');
+// 收银探针账号名：只从环境变量注入，绝不落进本文件、日志或任何提交物
 const USER = process.env.CASHIER_USER || '';
+// 探针账号口令：同上；BASE/USER/PASS 任一缺失即整档 skip（见下方 test.skip），永不拖发布闸门
 const PASS = process.env.CASHIER_PASS || '';
+// 下单积分额度：默认 100，够走通两种收款形态又不动大额（只点单不付款）
 const POINTS = process.env.CASHIER_POINTS || '100';
+// 实拍截图落盘目录：跑完把这两张 png 挪进《发布前E2E_UAT_20260926/证据/》归档（该目录永久排除在推送之外）
 const SHOT_DIR = process.env.CASHIER_ARTIFACTS_DIR || path.resolve('artifacts/cashier_0v');
 
 test.skip(!BASE || !USER || !PASS, '手工留档：需 CASHIER_BASE + CASHIER_USER + CASHIER_PASS（真库落单＋真实收款配置），不进发布闸门');

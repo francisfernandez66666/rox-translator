@@ -47,6 +47,7 @@ import { PERSONA_FALLBACK } from '@/lib/personas' // 覆盖范围区块：八个
 function demoSrc(srcLang: Lang): string {
   return translateIn(srcLang, 'land.demoSrc')
 }
+// demoFinal 定稿译文取词：按 UI 语种回 land.demoFinal（英文定稿）或 land.demoSrc 的中文版，与 demoTerms 的 r 字段一一对应。
 function demoFinal(lang: Lang): string {
   // 定稿译文：英语 UI 演示 EN→ZH，定稿取中文源句（land.demoSrc 的 zh 版）；
   //   其余语种定稿为英文（land.demoFinal 键）。与 demoTerms 的 r 字段逐一对应（kickoff/benchmark/lead）。
@@ -85,7 +86,7 @@ function devSampleCmd(src: string): string {
    ★ 〇-Q：原 cnSpeed/wordSpeed/rightSpeed/srcSpeed/statusSpeed/finalSpeed 六档绝对速度已删除，
    改由打字机按「文字系统基准速度（script.ts 的 typingSpeedOf）× 下方 MUL 倍率」实时算出——
    换语种后整段节奏同比例平移而不走形，且 CJK 逐字 / 拉丁逐词的单位差异也一并生效。 */
-const T = {
+const T = { // 落地页演示时序参数字典（单位 ms）：字段含义逐项注在行尾，节奏只此一处可调
   enter: 240, cnHold: 220, arrowIn: 180, arrowHold: 40, // 单行入场 / 中文停留 / 箭头进 / 箭头停
   wordHold: 200, strike: 340, // 初译停留 / 划掉动画
   lock: 460, glowHold: 300, hold: 840, exit: 320, gap: 200, // 正解定版 / 辉光余韵 / 读题停留 / 退场 / 行间空隙
@@ -97,7 +98,7 @@ const T = {
 /* 每段相对「脚本基准速度」的倍率：保留原 demo 的内部节奏（术语比原文慢一档、定稿比术语快一截），
    倍率无量纲，随语种基准一起缩放，所以换语种后整段节奏同比例平移而不走形。
    取值还原自原绝对速度：cn 62/42、status 34/42、w 42/38、r 46/38、final 16/38。 */
-const MUL = {
+const MUL = { // 打字机速度倍率表（无量纲）：与 script.ts 的文字系统基准速度相乘，换语种节奏同比例平移
   src: 1,
   cn: 62 / 42,
   status: 34 / 42,
@@ -567,6 +568,8 @@ function HeroDemo() {
    复用 HeroDemo 范式：fdRef 根 + data-fd 选择器、gen 代际计数防竞态、
    reduced-motion 静态终态、自循环 play() 不挂 setInterval。纯黑单色，全程无裸中文；
    英文界面演示「英→中」（Quotation.pdf → 报价单.pdf），其余语种 本地源名 → canonical 译名。 */
+// FileDirectDemo 落地页「文件直翻」演示段：PDF 源名→目标语译名四段动效（打字、分隔线展开、译文、下载），
+// 只吃 t() 取词、无任何裸中文硬编码；尺寸与时序取交付档，改这里前先看 UI-ANNOTATIONS.md。
 function FileDirectDemo() {
   const [lang, t] = useT()
   const SRC_NAME = t('land.fdSampleSrc') // 源文件名（用户语种）：报价单 / Quotation
