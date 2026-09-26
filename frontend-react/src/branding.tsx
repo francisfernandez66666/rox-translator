@@ -1,10 +1,10 @@
 // ============================================================================
 // branding.tsx — 租户级品牌定制上下文
 // 职责：按访问域名/显式租户 ID 解析品牌展示信息（品牌名、Logo、登录页背景与布局、
-// 首页背景图层、网页标题、聊天气泡配色等），通过 React Context 向全站下发。
+// 登录卡片位置、网页标题、聊天气泡配色等），通过 zustand 单一状态源向全站下发。
 // 品牌只由「访问域名」决定：根域名=平台品牌，租户专属子域=该租户品牌；
 // 支持服务端在 index.html 注入 window.__BRANDING__ 以首屏即生效、避免闪烁。
-// 2026-09-17 纯黑换肤：本文件只涉及「配色常量」（首页背景兜底色、气泡/面板 CSS 变量），
+// 2026-09-17 纯黑换肤：本文件当时只涉及「配色常量」（品牌背景兜底色、气泡/面板 CSS 变量），
 // 品牌解析与下发链路不变。
 // ============================================================================
 
@@ -13,13 +13,13 @@
  * 租户级品牌定制 Context，提供以下功能：
  * - 品牌解析：按访问域名自动解析租户品牌信息
  * - 品牌应用：网页标题、聊天气泡配色、登录页背景等
- * - 背景图层：未登录首页背景图的渲染（支持 cover/contain/tile 模式）
+ * - 背景图层：登录/注册页品牌背景的渲染（cover/contain 模式，见 BrandLoginShell／F-71）
  * - 布局配置：登录卡片位置、登录页布局（全屏/分栏）
  * - 首屏优化：支持服务端注入 window.__BRANDING__ 避免闪烁
  */
 
 // 依赖引入：React 基础 Hooks（createContext/useContext/useEffect/useMemo/useState）与类型 ReactNode
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { create } from 'zustand'
 import { API_BASE } from '@/api'
@@ -39,9 +39,10 @@ export interface Branding {
   brandName: string  // 自定义品牌展示名（空=用默认）
   brandLogo: string  // 自定义品牌 Logo URL（空=用默认文字）
   domain: string     // 子域名前缀
-  brandHomeBg: string   // 未登录首页背景图（★ F-46 批 I-9 起**只会是图片地址**：http(s) 或 /brand/<名>，
-                        //   历史 dataURI 已在服务端读侧收敛成 URL；空=用默认背景）
-  brandHomeBgStyle: string // 首页背景图样式 JSON（{scale,x,y,mode}：mode=tile/cover/contain）
+  brandHomeBg: string   // 登录/注册页背景图（★ 字段名沿用历史 `brand_home_bg`，实际消费面是登录壳，
+                        //   见下方 BrandLoginShell 的 F-71 注释；★ F-46 批 I-9 起**只会是图片地址**：
+                        //   http(s) 或 /brand/<名>，历史 dataURI 已在服务端读侧收敛成 URL；空=不渲染背景）
+  brandHomeBgStyle: string // 背景图样式 JSON（{scale,x,y,mode}：mode=tile/cover/contain；消费方＝BrandLoginShell）
   brandLoginCardPos: string // 登录/注册卡片位置 JSON（{x,y} 百分比，卡片中心相对视口，缺省居中）
   brandLoginLayout: string  // 登录页布局 JSON（{mode:'full'|'split', side:'left'|'right'}，缺省全屏背景）
   code: string          // 企业编码（专属域名注册自动带入展示）
@@ -111,7 +112,8 @@ export const useBrandingStore = create<Branding>()(() => ({ ...(brandingFromGlob
 // 在组件树中读取当前品牌信息的 Hook（zustand 全量订阅，字段变化即重渲染）
 export const useBranding = () => useBrandingStore()
 
-// BrandBgLayer 按样式渲染未登录首页背景图层（单张图，铺满父容器）：
+// BrandBgLayer 按样式渲染品牌背景图层（单张图，铺满父容器；★ F-71 起真实消费方是登录壳
+// BrandLoginShell 与后台 BrandP 预览，父容器需自带 position 与 overflow:hidden）：
 // - cover 充满（默认）：objectFit cover，scale 为缩放倍数
 // - contain 适应：objectFit contain，scale 为缩放倍数
 // 外层容器向四周外扩 5%（inset:-5%）并裁切，保证图片始终溢出屏幕边缘，
@@ -130,6 +132,104 @@ export function BrandBgLayer({ src, styleJson }: { src: string; styleJson?: stri
         objectFit: s.mode === 'contain' ? 'contain' : 'cover',
         userSelect: 'none', pointerEvents: 'none',
       }} />
+    </div>
+  )
+}
+
+// ============================================================================
+// ★ F-71 实装（2026-09-27 用户令「品牌背景图前端零消费要实装」）
+// ----------------------------------------------------------------------------
+// 背景：`brand_home_bg` / `brand_home_bg_style` / `brand_login_card_pos` /
+// `brand_login_layout` 四个品牌字段自 Vue 版迁移过来后，前端**零消费方**——只有管理后台
+// BrandP 的本地预览在用（预览里写的是「预览所见 ≈ 登录页实际观感」），租户在后台传了图、
+// 调了布局，登录页实际渲染却仍是纯黑居中，属于「后台功能可配、线上不生效」。
+// 消费面判定：后台词典把该字段定义为**登录页背景图**（`brand.homeBg`＝「登录页背景图」、
+// `brand.homeBgHint`＝「登录页（含注册页）背景图」），且另两个字段就叫「登录页布局 / 登录卡片位置」，
+// ⇒ 真实消费方是**登录/注册/找回密码屏（Login.tsx 四屏）**，不是营销首页 Landing。
+// 故本组件只挂在 Login 上：不改公开落地页外观（〇-P 交付档与 pixel/e2e 锁全部不受影响）。
+// 形态严格对齐 BrandP 预览：
+//   · 无背景图（平台根域名恒为此态）→ 完全不介入，DOM 与改造前逐字节一致；
+//   · full（默认）→ 背景图层 + `rgba(0,0,0,0.42)` 遮罩 + 卡片按 cardPos 定位；
+//   · split → 一侧背景图、一侧登录容器（容器底 rgba(231,233,234,0.06)，左右随 side 切换），
+//     卡片位置百分比相对**登录容器**（与预览的 splitFormRef 量纲一致）；
+//   · 窄屏（≤860px）分栏回落成「纯黑居中」，避免两栏各 430px 把 400 宽认证卡挤破。
+// 定位实现用「负外边距」而不是 `transform: translate(-50%,-50%)`：祖先带 transform 会成为
+// fixed 后代的包含块，历史上这类改法会把弹窗/下拉的定位基准搬走，这里从源头避开。
+// ============================================================================
+
+// CSS_BRAND_LOGIN 品牌登录壳样式（仅在有背景图时随壳一起注入，默认形态一个字节都不加）
+const CSS_BRAND_LOGIN = `
+html .lc-auth-bg.lc-brand-login{display:flex;overflow:hidden;padding:0;}
+.lc-brand-login__veil{position:absolute;inset:0;z-index:1;background:rgba(0,0,0,0.42);}
+.lc-brand-login__pane{position:relative;z-index:1;flex:1 1 0;min-width:0;align-self:stretch;overflow:hidden;}
+.lc-brand-login__pane--form{display:flex;align-items:center;justify-content:center;background:rgba(231,233,234,0.06);}
+.lc-brand-login__card{position:absolute;z-index:2;left:clamp(min(var(--lc-brand-half-w,200px),50%),var(--lc-brand-x,50%),max(50%,calc(100% - var(--lc-brand-half-w,200px))));top:clamp(min(var(--lc-brand-half-h,220px),50%),var(--lc-brand-y,50%),max(50%,calc(100% - var(--lc-brand-half-h,220px))));margin-left:calc(0px - var(--lc-brand-half-w,200px));margin-top:calc(0px - var(--lc-brand-half-h,220px));max-width:calc(100% - 32px);}
+@media (max-width:860px){
+  .lc-brand-login--split .lc-brand-login__pane--bg{display:none;}
+  .lc-brand-login--split .lc-brand-login__pane--form{background:#000000;}
+}
+`
+
+// brandCardPosVars 把卡片中心百分比写成 CSS 自定义属性（供 clamp 定位用）
+function brandCardPosVars(pos: CardPos): Record<string, string> {
+  return { '--lc-brand-x': `${pos.x}%`, '--lc-brand-y': `${pos.y}%` }
+}
+
+// BrandLoginShell 登录/注册壳：按品牌配置渲染背景图层与卡片位置。
+// children = 该屏的卡片（AuthCard / AI 注册面板）+ 屏内样式，与改造前的 .lc-auth-bg 内容一致。
+export function BrandLoginShell({ children }: { children: ReactNode }) {
+  const b = useBranding()
+  const bg = b.brandHomeBg || ''
+  const layout = parseLoginLayout(b.brandLoginLayout)
+  const pos = parseCardPos(b.brandLoginCardPos)
+  const cardRef = useRef<HTMLDivElement>(null)
+  // 半宽/半高实测写回 CSS 变量：clamp() 需要「卡片自身的一半」才能把中心点夹在可视区内
+  // （租户把 x 拖到 5% 时，400 宽的卡片不该有半张甩到屏幕外）。用 DOM 直写而非 state，
+  // 避免 ResizeObserver 回调 setState 再触发一轮布局的抖动。
+  useEffect(() => {
+    const el = cardRef.current
+    if (!bg || !el || typeof ResizeObserver === 'undefined') return
+    const sync = () => {
+      el.style.setProperty('--lc-brand-half-w', `${Math.round(el.offsetWidth / 2)}px`)
+      el.style.setProperty('--lc-brand-half-h', `${Math.round(el.offsetHeight / 2)}px`)
+    }
+    sync()
+    const ro = new ResizeObserver(sync)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [bg, layout.mode])
+  // 无背景图＝平台默认形态：不加类、不加样式节点，保证公开/平台登录页与交付稿逐字节一致
+  if (!bg) return <div className="lc-auth-bg">{children}</div>
+  const card = (
+    <div ref={cardRef} className="lc-brand-login__card" style={brandCardPosVars(pos)}>
+      {children}
+    </div>
+  )
+  if (layout.mode === 'split') {
+    const bgPane = (
+      <div className="lc-brand-login__pane lc-brand-login__pane--bg">
+        <BrandBgLayer src={bg} styleJson={b.brandHomeBgStyle} />
+      </div>
+    )
+    const formPane = (
+      <div className="lc-brand-login__pane lc-brand-login__pane--form">
+        {card}
+      </div>
+    )
+    return (
+      <div className="lc-auth-bg lc-brand-login lc-brand-login--split" data-brand-login="split" data-brand-side={layout.side} style={layout.side === 'left' ? { flexDirection: 'row-reverse' } : undefined}>
+        <style>{CSS_BRAND_LOGIN}</style>
+        {bgPane}
+        {formPane}
+      </div>
+    )
+  }
+  return (
+    <div className="lc-auth-bg lc-brand-login lc-brand-login--full" data-brand-login="full">
+      <style>{CSS_BRAND_LOGIN}</style>
+      <BrandBgLayer src={bg} styleJson={b.brandHomeBgStyle} />
+      <div className="lc-brand-login__veil" />
+      {card}
     </div>
   )
 }
