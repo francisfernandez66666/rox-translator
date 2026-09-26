@@ -144,6 +144,10 @@
   `e2e/sdk_download.spec.ts` 拦（可达性判据同 §6 托管物口径：200 + 非 HTML 兜底 + 魔数 whl=`PK`/tgz·sdist=gzip
   + 体积下限；manifest 与 `pyproject.toml`/`package.json` 版本交叉锁，禁写死版本号）。
   落在 ②③④ 而**只换 `/opt/translator/web`** 一律不生效（① 的组件内联样式在 dist 里，换前端即生效）。
+  ⚠️ **品牌注入还要看「首页由谁直出」**（★ 09-27 F-74 实测）：`window.__BRANDING__` 由 `spa.go` 的 `serveIndexHTML`
+  **无条件**注入，所以只有**首页走后端**的域名拿得到它；首页若由 Caddy `file_server` 静态直出（现网主站即此形态），
+  品牌只剩前端异步兜底。判据一条：`curl -s <站点>/ | grep -c __BRANDING__`，同时看首页 sha 是否**等于**仓库
+  `frontend-react/dist/index.html`——相等就说明是静态直出，别去前端找「品牌不生效」。
   ⚠️ **「纯注释提交＝不用发版」只对 React 侧成立**：往 `public.go`/`office.go`/`admin_openapi.go` 的**内嵌 HTML/JS
   字符串里**加一行注释，dist hash 不变、`go build` 无任何行为差异，但**直出页的字节确实变了**，线上就是旧页
   （2026-09-23 〇-M 实测：注释批晚于发版批，两站 `taskpane.html` 与仓库差 2 行，只能 11:24 补换一次二进制）。
