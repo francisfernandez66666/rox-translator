@@ -114,12 +114,13 @@ func TestUATBatchB_F21_QuotaSaveDualWallLinkage(t *testing.T) {
 	if want := float64(s.Store.PointsFromTokens(12345)); got["max_daily_points"] != want {
 		t.Fatalf("max_daily_points 应联动为 %v，got %v", want, got["max_daily_points"])
 	}
-	// 场景 2：显式传积分（2000 分 ×300=600000 token）→ 字符墙保持、积分墙按折算落库
+	// 场景 2：显式传积分（2,000 分 × 出厂汇率 = token；★ F-78 起 1:400 → 800,000）→ 字符墙保持、积分墙按折算落库
 	if rec := callQuotaSave(t, s, tok, `{"qps":5,"concurrent":2,"max_daily_chars":12345,"max_daily_points":2000}`); rec.Code != 200 {
 		t.Fatalf("带积分保存应成功，got %d %s", rec.Code, rec.Body.String())
 	}
-	if p := readProbePerms(t, s, tid); p.MaxDailyTokens != 600000 {
-		t.Fatalf("显式积分应折 600000 token，got %d", p.MaxDailyTokens)
+	wantTokens := 2000 * store.DefaultPointsTokensRate
+	if p := readProbePerms(t, s, tid); p.MaxDailyTokens != wantTokens {
+		t.Fatalf("显式积分应折 %d token，got %d", wantTokens, p.MaxDailyTokens)
 	}
 	// 场景 3：字符墙置 0（不限）且未传积分 → 积分墙同步撤销（幽灵墙不留库）
 	if rec := callQuotaSave(t, s, tok, `{"qps":5,"concurrent":2,"max_daily_chars":0}`); rec.Code != 200 {

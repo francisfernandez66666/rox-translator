@@ -17,6 +17,7 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 
 	"translator/internal/auth"
+	"translator/internal/store"
 )
 
 // inviteBaseURL 推导邀请链接前缀：优先反代头 X-Forwarded-Proto，其次请求 TLS；路径固定 /register?ref=<个人码>。
@@ -133,9 +134,11 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, 200, map[string]interface{}{
 			"success": true,
 			"enabled": s.Store.ReferralEnabled(),
-			// ★ 积分口径：奖励额度回显折积分（默认值仍按内置 token 口径折算）
-			"reward_points":      s.Store.PointsFromTokens(sysReferralCfgInt64(get, kReward, 300000)),
-			"paid_reward_points": s.Store.PointsFromTokens(sysReferralCfgInt64(get, kPaid, 500000)),
+			// ★ 积分口径：奖励额度回显折积分。
+			// ★ F-78（2026-09-28 〇-X）：兜底值改用 store 常量（积分面值 × 当前汇率出厂档），
+			// 旧写法把 300000/500000 钉死在代码里，汇率改档后「配置缺键」的回显会静默按旧价出数。
+			"reward_points":      s.Store.PointsFromTokens(sysReferralCfgInt64(get, kReward, store.DefaultInviteRewardPoints*store.DefaultPointsTokensRate)),
+			"paid_reward_points": s.Store.PointsFromTokens(sysReferralCfgInt64(get, kPaid, store.DefaultInviterPaidRewardPoints*store.DefaultPointsTokensRate)),
 			"reward_days":        sysReferralCfgInt64(get, kRewardDays, 14),
 			"paid_reward_days":   sysReferralCfgInt64(get, kPaidDays, 0),
 		})

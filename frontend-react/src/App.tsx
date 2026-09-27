@@ -77,6 +77,8 @@ const Login = lazy(() => import('./components/Login'))
 const Landing = lazy(() => import('./components/Landing'))
 // 公开定价页（/pricing，设计图 05；营销门面，未登录可直达）
 const PricingPage = lazy(() => import('./components/PricingPage'))
+// ★ 〇-X #55（2026-09-28）公开「比价与算价」页（/compare）：公示算价公式 + 自算器 + 人工价出处
+const PriceComparePage = lazy(() => import('./components/PriceComparePage'))
 // ChatWindow 对话翻译主窗口（懒加载分包）
 const ChatWindow = lazy(() => import('./components/ChatWindow'))
 // TicketsPage 文件工单页（懒加载分包）
@@ -368,6 +370,8 @@ function FrontShell() {
               {/* 公开定价页：营销门面（无需登录，Root 内另有未登录分支），挂在 FrontShell
                   下是为了让已登录用户也能从工作台直达 */}
               <Route path="/pricing" element={<PricingPage />} />
+              {/* ★ 〇-X #55：公开比价与算价页（访客在 Root 的未登录分支直出，这里覆盖已登录入口） */}
+              <Route path="/compare" element={<PriceComparePage />} />
               {/* 前台兜底：壳内未匹配的路径一律 replace 回工作台，既不留空白页也不污染后退栈 */}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
@@ -429,6 +433,16 @@ function Root() {
         <Suspense fallback={<PageLoading />}>
           <PricingPage />
           {/* ★ autosales：定价页常驻 AI 接待挂件 */}
+          <AiAssist />
+        </Suspense>
+      )
+    }
+    // ★ 〇-X #55：比价与算价页与 /pricing 同级营销门面，访客可直达（否则会被兜底送去登录页，
+    //   而"注册前能不能看到价"正是这个页存在的全部意义）
+    if (path === '/compare') {
+      return (
+        <Suspense fallback={<PageLoading />}>
+          <PriceComparePage />
           <AiAssist />
         </Suspense>
       )

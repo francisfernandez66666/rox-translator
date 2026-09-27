@@ -342,10 +342,24 @@ func tenantPrefixFromHost(s *Server, host string) string {
 	return ""
 }
 
-// resolveDedicatedTenant 从访问 Host 解析「专属域名自助注册」目标租户：
-// 仅当子域前缀命中某租户的品牌子域（domain 列），且该子域不是主站前缀、且非默认平台租户（code≠rox、id≠1）时，
-// 返回该租户 ID；否则返回 0。命中后注册将自动归入该租户，并强制为普通成员（禁止建企业/升管理员）。
-// 说明：主站（如 www.example.com）始终保留「创建企业」能力，不受专属域名逻辑影响。
+// resolveDedicatedTenant 从访问 Host 解析「专属域名自助注册」目标租户。
+//
+// 命中路径（按代码实际取值链，★ F-77 2026-09-27 注释订正）：
+//  1. 剥端口后 Host 必须等于 `<某前缀>.<品牌基础域>`，且既不是基础域本身、也不是主站完整主机名；
+//  2. 前缀不等于主站前缀（如 langcross）——主站永远保留「创建企业」的通用注册能力；
+//  3. 前缀先按**品牌域**（tenants.domain）匹配，匹配不到再按**企业编码**（tenants.code）兜底；
+//  4. 命中的租户须 status=active，否则返回 0。
+//
+// ⚠️ 三条与旧注释不符、且排障时必须记住的事实：
+//   - **没有**「排除 code≠rox、id≠1」这类默认租户保护：只要某个前缀能解析出租户就返回它。
+//     企业编码因此每一个都是**隐式可访问的注册子域**（编码.基础域）；〇-W 的通配块上线后
+//     这条从"内网理论可达"变成"公网真能打开"，这是 F-77 挂待决策的核心（要不要收紧到只看 domain）。
+//   - 命中后**不是免邀请码**：注册必须填该企业的邀请码，且邀请码须绑定该企业（见 register.go
+//     的 dedicatedTid 分支，缺失或不匹配直接 400）；企业侧另一条进人路径是后台 Excel 批量导入。
+//   - 品牌展示走的是 brandingPayload 的 domain 匹配，**不**吃 code 兜底——所以"编码子域能注册人
+//     但页面是平台默认"是当前真实形态，不是缓存问题。
+//
+// 命中后注册将自动归入该租户，并强制为普通成员（禁止建企业/升管理员）。
 func resolveDedicatedTenant(s *Server, r *http.Request) int64 {
 	if s.Ten == nil {
 		return 0
@@ -606,7 +620,7 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 		}
 	}
 	// 租户分支输出全量品牌字段 + 四个能力标记（付费解锁/超管授权/根域名/专属注册入口）
-	return map[string]interface{}{
+	out := map[string]interface{}{
 		"success":              true,
 		"tenant_id":            t.ID,
 		"name":                 t.Name,
@@ -627,6 +641,13 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 		"brand_root":           !t.IsPersonal,
 		"dedicated_register":   isDedicatedRegisterHost(s, r),
 	}
+	// ★ F-75（2026-09-27 〇-X 用户批准）：展示侧付费闸——套餐到期且过了 30 天品牌宽限，
+	//   对**匿名访客**不再输出品牌视觉（库里配置保留，续费当天自动恢复）。超管与该租户管理员
+	//   永远看真值，否则后台设置页会把被隐藏的空字段当现值载回、一次保存就覆盖掉真配置。
+	if !brandingViewerExempt(s, r, t.ID) && !tenantBrandingDisplayUnlocked(s, t.ID) {
+		hideTenantBrandVisuals(out)
+	}
+	return out
 }
 
 // handleCaddyOnDemandAsk 供 Caddy 的 on_demand_tls「ask 权限模块」调用：
@@ -824,6 +845,16 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 	if auth.RoleLevel(u.Role) < 4 && !tenantBrandingUnlocked(s, tid) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "品牌定制为付费套餐功能，请先订阅有效套餐后解锁"})
 		return
+	}
+	// ★ F-76（2026-09-27 〇-X）：品牌域前缀在入库前归一并校验。
+	//   读侧是 `WHERE domain=?` 的裸等值匹配，这里不清洗就会留下「保存成功但永不生效」的静默坑；
+	//   占用校验同在这一层，因为企业编码本身就是一个能打开的子域（resolveDedicatedTenant 的编码兜底），
+	//   撞码等于把别人的注册入口挂到自己品牌下。
+	if prefix, aerr := s.normalizeDomainOnSave(req.Domain, tid); aerr != nil {
+		s.writeError(w, r, aerr)
+		return
+	} else {
+		req.Domain = prefix
 	}
 	// ★ F-46（2026-09-26 批 I-9）：入库前把 dataURI 落成静态件，**库里只存 URL**。
 	//   这一步不做，品牌字段就会继续躺 2 MB 文本（列膨胀 + 备份膨胀 + 首屏注入膨胀三处一起中），

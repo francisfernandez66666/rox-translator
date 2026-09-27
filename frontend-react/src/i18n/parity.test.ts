@@ -8,7 +8,7 @@
 // 键序不参与断言（只比集合），但「文本非空」断言会拦住把键留着、文案清空成占位的回退。
 // =============================================
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { baseZh } from './dicts.zh'
 import { baseEn } from './dicts.en'
@@ -50,6 +50,8 @@ import * as pAssist from './panels/assist'
 import * as pSdk from './panels/sdk'
 import * as pHub from './panels/hub'
 import * as pReconcile from './panels/reconcile'
+// ★ 〇-X #55（2026-09-28）：官网公开比价/算价页 /compare 词典
+import * as pCost from './panels/cost'
 
 // 与 i18n/index.ts 保持同序的面板模块表（保证合并口径一致）
 const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<string, string> } }[] = [
@@ -73,6 +75,8 @@ const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<stri
   // ★ 2026-09-21 #34：AI 助手管理面板
   { name: 'assist', mod: pAssist },
   { name: 'sdk', mod: pSdk }, { name: 'hub', mod: pHub }, { name: 'reconcile', mod: pReconcile },
+  // ★ 〇-X #55：比价/算价页词典（/compare）
+  { name: 'cost', mod: pCost },
 ]
 
 describe('i18n 中英词典键值对等性', () => {
@@ -97,6 +101,21 @@ describe('i18n 中英词典键值对等性', () => {
           .filter((k) => !String(mod.zh[k]).trim() || !String(mod.en[k]).trim())
           .map((k) => `${name}.${k}`))
     expect(empty).toEqual([])
+  })
+
+  // ★ 〇-X #55（2026-09-28）补的机制闸：2026-09-18 那次「index.ts 已合并 sdk/hub/reconcile
+  //   但 PANELS 漏收」的缺口，靠的是有人偶然发现。本条把「每个 panels/*.ts 都必须在表里」
+  //   变成断言——新建面板忘了登记（中英对等、非空两条守护同时失效）即红灯，
+  //   不必再靠人记「新面板要改三个地方」。
+  it('panels/ 目录下每个词典都必须在 PANELS 表内（防漏登记导致对等性守护静默失效）', () => {
+    const dir = fileURLToPath(new URL('./panels', import.meta.url))
+    const onDisk = readdirSync(dir)
+      .filter((f) => f.endsWith('.ts') && !f.includes('.test.'))
+      .map((f) => f.replace(/\.ts$/, ''))
+      .sort()
+    const registered = PANELS.map((p) => p.name).sort()
+    expect(onDisk.filter((n) => !registered.includes(n)), '未登记进 PANELS 的面板：').toEqual([])
+    expect(registered.filter((n) => !onDisk.includes(n)), 'PANELS 里指向不存在的面板文件：').toEqual([])
   })
 })
 

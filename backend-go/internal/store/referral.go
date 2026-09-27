@@ -390,7 +390,7 @@ func (s *Store) platformInvitePolicy() (ops.InvitePatch, bool) {
 
 // ReferralPaidReward 付费奖励入口（MarkOrderPaid 成功确认 paid 套餐后调用）：
 // 奖励金额取值优先级：运营策略 invite.paid_reward_tokens/days → system_config
-// inviter_paid_reward_tokens/days（后台可调）→ env INVITER_PAID_REWARD_TOKENS → 默认 50 万。
+// inviter_paid_reward_tokens/days（后台可调）→ env INVITER_PAID_REWARD_TOKENS → 内置档 1,667 积分（★ F-78 折 666800 token）。
 // 内部按对去重，重复调用幂等；非邀请来源静默跳过。参数 inviteeUID=下单用户 ID。
 func (s *Store) ReferralPaidReward(inviteeUID int64) error {
 	if inviteeUID <= 0 {
@@ -404,9 +404,11 @@ func (s *Store) ReferralPaidReward(inviteeUID int64) error {
 	if !s.ReferralEnabled() {
 		return nil
 	}
-	tokens := int64(500000)
+	// ★ F-78（2026-09-28 〇-X）：内置档不再是裸 50 万，而是「1,667 积分面值 × 出厂汇率」——
+	// 旧写法把 500000 钉死，汇率改档后配置缺键时会静默按旧价发放（此处等值搬到新档为 666800）。
+	tokens := DefaultInviterPaidRewardPoints * DefaultPointsTokensRate
 	days := int64(0)
-	// 奖励金额取值优先级：默认 50 万 → env → 存量散键 → 运营策略（平台级，最高优先）。
+	// 奖励金额取值优先级：内置档 → env → 存量散键 → 运营策略（平台级，最高优先）。
 	// ★ 2026-09 邀请奖励合并进策略引擎：运营策略为权威来源，必须最后应用才不会被旧散键覆盖。
 	if v := os.Getenv("INVITER_PAID_REWARD_TOKENS"); v != "" {
 		if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {

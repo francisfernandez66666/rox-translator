@@ -22,17 +22,27 @@
 #      （落件后必须真取得到字节，否则前台只是「碎图 + 看不出错」）
 #   E. 不存在的品牌件路径 ⇒ 如实 4xx JSON，**不得**回 200 整页 HTML
 #      （spa.go 的 "/" 兜底会把缺件吃成 200 壳，正是本轮 UAT 抓出的托管物陷阱）
+#   F.（可选，EXPECT_BRANDING=1 才跑）首页 HTML 里必须出现 `<script id="__branding__">` 注入体
+#      —— 这是「首页由后端出栈」的唯一线上可观测指纹（★ 2026-09-27 〇-X F-74）。
+#      为什么用它：`window.__BRANDING__` 由 spa.go 的 serveIndexHTML **无条件**注入，
+#      Caddy `file_server` 静态直出的 index.html 永远不带它；主站此前正是这种形态
+#      （F-74 根因：品牌只剩前端异步兜底 ⇒ 首屏先通用品牌、接口回来才换）。
+#      判「注入体在不在」而不是判「品牌值配没配」——主站可以完全不配自定义品牌，
+#      但只要首页走了后端，注入体（平台默认品牌那一份）就一定在。
+#      配套人工核法（本脚本不重复做）：`curl -s <站点>/ | sha256sum` 若**等于**仓库
+#      frontend-react/dist/index.html 的 sha ⇒ 就是静态直出没走后端（AGENTS §一·5 口径）。
 #
 # 用法：
 #   bash deploy/smoke_brand_homepage.sh                       # 默认打主站（无品牌 ⇒ B/C 走空值分支）
 #   BASE=https://rox-test.lexicorn.cn bash deploy/smoke_brand_homepage.sh   # 打演示站（含品牌图 ⇒ D 也跑）
 #   EXPECT_BRAND_IMAGES=2 bash deploy/smoke_brand_homepage.sh # 钉住「品牌图正好 2 张」
+#   EXPECT_BRANDING=1 bash deploy/smoke_brand_homepage.sh     # ★ 钉住「首页由后端直出」（F-74 验收用）
 #   MAX_KB=8 bash deploy/smoke_brand_homepage.sh              # 收紧体积上限
 #   RUN_NEG=0 bash ...                                        # 目标不是本后端时跳过负向探针
 #   bash deploy/smoke_brand_homepage.sh --selftest            # ★ 自检：绿态必须 0、红态必须非 0
-#     （自检只在**本机**造绿/红各态（静态夹具 + 临时库实例），唯一的外部只读请求是
-#      打一次演示站取"部署前现状基线"——那一条是有意保留的：它同时验判据抓得住真缺陷。
-#      首轮要编译后端，约 1~2 分钟；离线也能跑，把 SELFTEST_SKIP_DEMO=1 挂上即跳过外部请求）
+#     （自检**全程只打本机**：静态夹具 + 临时库实例，可离线重复；首轮要编译后端，约 1~2 分钟。
+#      ★ 2026-09-27 〇-X 起，打线上的那一条降级为可选观测：`SELFTEST_DEMO=1 …--selftest`
+#        才会顺带只读看一眼演示站，且**只播报不计分**——理由见用例 3b 原位注释。）
 #
 # 退出码：0=全绿；1=有红项（红项逐条点名，不静默）。
 # 只读脚本：对目标站点全程纯 GET，不写库、不改任何线上配置
@@ -43,6 +53,7 @@ set -euo pipefail
 BASE="${BASE:-https://langcross.lexicorn.cn}"
 MAX_KB="${MAX_KB:-30}"                                 # 首页 HTML 上限（KB）
 EXPECT_BRAND_IMAGES="${EXPECT_BRAND_IMAGES:-}"         # 可选：钉住品牌图张数
+EXPECT_BRANDING="${EXPECT_BRANDING:-0}"                 # ★ F-74：=1 时要求首页必须带后端注入体
 RUN_NEG="${RUN_NEG:-1}"                                # 负向探针开关
 SKIP_HOMEPAGE_PROBE="${SKIP_HOMEPAGE_PROBE:-0}"        # ★ 仅自检用：不请求首页，只按 FORCE_URLS 验判据 D
 FORCE_URLS="${FORCE_URLS:-}"                           # ★ 仅自检用：每行一个品牌件地址（模拟已注入的地址）
@@ -145,15 +156,38 @@ PY
     "BASE=http://127.0.0.1:8788" "EXPECT_BRAND_IMAGES=" "RUN_NEG=0"
   kill "$ST_PID" 2>/dev/null || true; wait "$ST_PID" 2>/dev/null || true
 
-  if [ "${SELFTEST_SKIP_DEMO:-0}" = "1" ]; then
-    note "  （SELFTEST_SKIP_DEMO=1：跳过打演示站的外部只读基线例）"
+  # —— 用例 3.5（红）：同一个「无注入」夹具，钉上 EXPECT_BRANDING=1 必须判红。
+  #    这一例是判据 F 的**反证**（AGENTS §三 + 本轮闸门通则：守卫必须配反证）：
+  #    F-74 的症状正是「首页由 Caddy 静态直出 ⇒ 拿不到注入体」，判据抓不到就等于没修。
+  #    与用例 3 用同一份夹具，只有判据开关不同 ⇒ 红绿差异只能来自 F 本身。
+  ( cd "$TMP/nobrand" && exec python3 -m http.server 8788 --bind 127.0.0.1 >/dev/null 2>&1 ) &
+  ST_PID=$!
+  sleep 1
+  st_case "静态直出的首页（F-74 未生效形态，F 必须红）" red \
+    "BASE=http://127.0.0.1:8788" "EXPECT_BRANDING=1" "EXPECT_BRAND_IMAGES=" "RUN_NEG=0"
+  kill "$ST_PID" 2>/dev/null || true; wait "$ST_PID" 2>/dev/null || true
+
+  # —— 线上现状观测（★ 2026-09-27 〇-X 改造：这一例此前**恒红**，红的是闸门自己）。
+  #   旧判据钉的是"部署前演示站品牌图仍是库里的 dataURI ⇒ 必须红"，而 F-46 已于 09-26 发版、
+  #   读侧惰性落件把存量收敛成 /brand/ 地址，线上转绿 ⇒ 那条反向基线永远对不上，
+  #   自检从那天起就恒红。这是把**一次性历史瞬间**当成永久期望的形态（stale baseline）。
+  #   "判据抓得住真缺陷"本来由用例 2（手造修复前直出页 dataURI）离线覆盖且更稳；
+  #   这一例只剩"顺带看一眼公网链路与线上真值"的价值，故：
+  #     ① 降级为**只播报、不计分**（线上好坏都不代表判据失效）；
+  #     ② 默认**不跑**（自检要能离线重复——Cloudflare/Caddy 偶发 curl 28/16 抖动
+  #        会把"判据是否有效"混成"网络是否抖"，与用例 3 当初不用真站点的理由同一条）；
+  #     ③ 要看线上：SELFTEST_DEMO=1 bash deploy/smoke_brand_homepage.sh --selftest
+  #        （顺手钉 EXPECT_BRANDING=1：演示站首页自 F-73 通配块起就应带后端注入体——
+  #         本次改造顺带把它变成 F-74 的**线上正对照**。）
+  #   旧变量 SELFTEST_SKIP_DEMO 随本次改造作废（默认已不跑，反向开关没有意义）。
+  if [ "${SELFTEST_DEMO:-0}" = "1" ]; then
+    demo_rc=0
+    demo_out="$(BASE=https://rox-test.lexicorn.cn EXPECT_BRAND_IMAGES= EXPECT_BRANDING=1 RUN_NEG=0 \
+      bash "$REPO/deploy/smoke_brand_homepage.sh" 2>&1)" || demo_rc=$?
+    note "  （线上只读观测，不计入自检分）演示站 exit=$demo_rc"
+    printf '%s\n' "$demo_out" | sed 's/^/      | /'
   else
-  # —— 用例 3b（现状基线）：演示站品牌图仍是库里的 dataURI ⇒ 必须红（判据抓得住真缺陷）。
-  #    这一例是"部署前红、部署后绿"的对照：换 translator-server 后重跑
-  #    `BASE=https://rox-test.lexicorn.cn EXPECT_BRAND_IMAGES=1 bash deploy/smoke_brand_homepage.sh`
-  #    应当转绿（brand_home_bg 已按用户指令清空、brand_logo 收敛成 /brand/ 地址）。
-  st_case "演示站存量 dataURI（部署前应红）" red \
-    "BASE=https://rox-test.lexicorn.cn" "EXPECT_BRAND_IMAGES=" "RUN_NEG=0"
+    note "  （默认跳过打线上的观测例；要看线上现状跑 SELFTEST_DEMO=1 …--selftest）"
   fi
 
   # —— 用例 4（绿 + 红）：真服务端（临时库实例）——存量 dataURI 经读侧收敛应全绿；
@@ -212,8 +246,10 @@ c.execute('INSERT OR REPLACE INTO system_config(key, value, updated_at) VALUES(?
           ('platform_branding', val, 'selftest'))
 c.commit(); c.close()
 PY
-        st_case "存量 dataURI 经读侧收敛后仍全绿（真服务端；若这里红＝收敛没生效）" green \
-          "BASE=http://127.0.0.1:$PORT" "EXPECT_BRAND_IMAGES=2" "RUN_NEG=1"
+        # ★ 同一条用例带上 EXPECT_BRANDING=1：真服务端必须注入 __branding__，
+        #    这是判据 F 的正向对照（与用例 3.5 的红向对照配对，一正一反才说明 F 有效）。
+        st_case "存量 dataURI 经读侧收敛后仍全绿（真服务端；若这里红＝收敛没生效）＋F 首页确有注入体" green \
+          "BASE=http://127.0.0.1:$PORT" "EXPECT_BRAND_IMAGES=2" "EXPECT_BRANDING=1" "RUN_NEG=1"
         # 红态造法分两步（都走 SKIP_HOMEPAGE_PROBE 短路：**不请求首页**）：
         #   (a) 把件**改写成同字节数的非图片内容** ⇒ 直取地址：200、Content-Type 也对，但魔数不符 ⇒ D 必须红。
         #       （先踩过一条弯路：走"完整首页 + 拉件"这条路造这个态是造不出来的——
@@ -288,8 +324,8 @@ PY
     note "★ 自检失败 $st_fail 项 ⇒ 判据本身不可信，先修脚本再谈线上冒烟"
     exit 1
   fi
-  note "自检全绿：9 例（绿 4：品牌件齐备 / 未注入常态 / 存量 dataURI 经读侧收敛 / 缺件后自愈转绿；
-#       红 5：dataURI 漏进首屏 A+B+C、演示站现状基线、件被同尺寸写坏 D、件缺失 D、件是 HTML 壳或过小 D）都判对了。"
+  note "自检全绿：9 例（绿 4：品牌件齐备 / 未注入常态 / 存量 dataURI 经读侧收敛＋F 首页确有注入体 / 缺件后自愈转绿；
+#       红 5：dataURI 漏进首屏 A+B+C、静态直出首页 F（F-74 未生效形态）、件被同尺寸写坏 D、件缺失 D、件是 HTML 壳或过小 D）都判对了。"
   exit 0
 fi
 
@@ -349,7 +385,11 @@ for _try in 1 2 3; do
 done
 bytes=$(wc -c < "$body" 2>/dev/null | tr -d ' ' || true); bytes="${bytes:-0}"
 note "品牌首屏冒烟：BASE=$BASE"
-note "判据：A 首屏体积<${MAX_KB}KB / B 品牌字段是地址不是 dataURI / C 全文无 data:image / D 品牌件真取得到字节 / E 缺件如实 4xx"
+# ★ 用 =1 精确判定，不用 ${VAR:+…}：EXPECT_BRANDING 的**缺省值就是字符串 "0"**，
+#   而 :+ 只看"非空"，会把默认态也显示成"这条在跑"——判据清单撒谎比不列更糟。
+LEG_F=""
+if [ "$EXPECT_BRANDING" = "1" ]; then LEG_F=" / F 首页由后端直出（带 __branding__ 注入体）"; fi  # ★ 不用 `A && B` 末句形态：本脚本 set -e，条件为假时该行返回非 0 会直接中止整支冒烟
+note "判据：A 首屏体积<${MAX_KB}KB / B 品牌字段是地址不是 dataURI / C 全文无 data:image / D 品牌件真取得到字节 / E 缺件如实 4xx${LEG_F}"
 note "首页 HTTP $http_code，body ${bytes} B（上限 $((MAX_KB * 1024)) B）"
 
 if [ "$http_code" != "200" ]; then
@@ -426,6 +466,21 @@ else
     else
       ok "B 品牌图地址张数 = ${n_url}（符合期望）"
     fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 2b) 判据 F（可选）：首页是否真由后端出栈（★ F-74，2026-09-27 〇-X 第 3 项）
+#     读法只用「注入体在不在」这一个指纹，且**不依赖**品牌配没配：
+#     spa.go 的 injectBrandingScript 是无条件注入，平台默认品牌也带一份注入体。
+#     默认关（EXPECT_BRANDING=0）：静态夹具、以及"只想验品牌字节"的历史用法不该被这条顶红。
+# ---------------------------------------------------------------------------
+if [ "$EXPECT_BRANDING" = "1" ]; then
+  injflag="$(cat "$TMP/inj" 2>/dev/null || echo 0)"
+  if [ "$injflag" = "1" ]; then
+    ok "F 首页带后端注入体 __branding__ ⇒ 该域名的首页确实由 translator-server 出栈（F-74 生效）"
+  else
+    red "F 首页**没有** __branding__ 注入 ⇒ 首页仍由 Caddy file_server 静态直出（F-74 未生效：改兜底段为 reverse_proxy 后需 reload Caddy，并确认换过 translator-server 二进制）"
   fi
 fi
 

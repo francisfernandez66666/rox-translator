@@ -289,7 +289,9 @@ func (e *Engine) UsageDisplayTokens(ctx context.Context) int64 {
 }
 
 // PointsOfTokens 内部计量 token → 对外积分口径（2026-09-19 全面积分口径：
-// token 裸值不再随结果外发，出参统一折积分）。St 缺失（单测/降级）时按默认汇率 300 折算。
+// token 裸值不再随结果外发，出参统一折积分）。
+// ★ F-78（2026-09-28 〇-X）：St 缺失（单测/降级）时的兜底汇率必须取 store 常量，
+// 不能再写字面量——历史上这里钉死 300，汇率改档后本函数会静默按旧价出参（少算 25% 积分）。
 func (e *Engine) PointsOfTokens(tokens int64) int64 {
 	if e != nil && e.St != nil {
 		return e.St.PointsFromTokens(tokens)
@@ -297,7 +299,8 @@ func (e *Engine) PointsOfTokens(tokens int64) int64 {
 	if tokens <= 0 {
 		return 0
 	}
-	return (tokens + 150) / 300
+	r := store.DefaultPointsTokensRate
+	return (tokens + r/2) / r
 }
 
 // NoteUsageModel 记录本次实际使用的供应商与模型（单语翻译成功路径调用）

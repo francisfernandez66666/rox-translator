@@ -6,7 +6,7 @@ package api
 // ============ 本文件职责中文说明 ============
 // 本文件实现自助注册与体验额度发放、邀请码管理：
 //   - handleRegister：自助注册（无邀请码→新建独立试用租户 + tenant_admin 账号；有绑定租户的邀请码→加入已有租户 + user 账号）
-//   - 体验额度：新租户自动发放 free_trial_tokens（system_config 可配置，默认 300000 token/14 天）并写入每日字符上限权限
+//   - 体验额度：新租户自动发放 free_trial_tokens（system_config 可配置，出厂档 1,000 积分折 400000 token/14 天，★ F-78 汇率 1:400）并写入每日字符上限权限
 //   - 注册开关：system_config registration_enabled=0 时关闭注册
 //   - 邀请码管理（super_admin）：列表 / 创建（handleInviteCodes / handleInviteCodeCreate）
 // 安全要点：邀请码一次性使用（used=1 即失效）；受邀加入前校验该租户用户名唯一。
@@ -34,7 +34,7 @@ import (
 // handleRegister 自助注册接口：
 //   - 不携带邀请码：创建独立租户（试用额度）→ 创建该租户 tenant_admin 账号
 //   - 携带邀请码且邀请码绑定租户：加入已有租户（创建 user 账号）
-//   - 体验额度默认发放（system_config free_trial_tokens，默认 300000 token），并在 permissions 记录 max_daily_chars
+//   - 体验额度默认发放（system_config free_trial_tokens，出厂档 1,000 积分折 400000 token，★ F-78 汇率 1:400），并在 permissions 记录 max_daily_chars
 //
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 username/password/code/name/invite）。
 // 返回: success=true 时携带新用户、tenant_id 与提示信息。
@@ -70,8 +70,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, fmt.Sprintf("注册过于频繁，请 %d 秒后再试", wait)).WithRetryAfter(wait))
 		return
 	}
-	// 专属域名自助注册：从访问 Host 解析目标租户（仅品牌子域、非主站、非默认平台租户）。
-	// 命中后注册强制归入该企业且仅为普通成员（禁止建企业/升管理员、免邀请码）。
+	// 专属域名自助注册：从访问 Host 解析目标租户（命中路径见 resolveDedicatedTenant 注释）。
+	// 命中后注册强制归入该企业且仅为普通成员（禁止建企业/升管理员）。
+	// ★ F-77（2026-09-27 注释订正，旧注释写的是"免邀请码"，与下方代码相反）：
+	//   本分支**必须有该企业的邀请码**才放行——由企业超管/租管在邀请码页发放（见本文件
+	//   handleInviteCodeCreate）；企业不想走自助注册时，另一条路是在后台用 Excel 批量导入成员
+	//   （见 server.go 的用户批量导入路由，导入后首登强制改密）。两者都没有的企业成员只能走普通注册。
 	dedicatedTid := resolveDedicatedTenant(s, r)
 	var req struct {
 		Username    string `json:"username"`      // 注册用户名
@@ -469,7 +473,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				// ★ 运营策略引擎（2026-09-05）：邀请奖励因子优先读最终策略 invite.*
 				//   （策略显式值 > 存量 system_config 散键 > 代码内置默认）。
 				inv := s.effectivePolicy(inviterTID).Invite
-				refTokens := int64(300000)
+				// ★ F-78（2026-09-28 〇-X）：兜底档改取 store 常量（积分面值 × 出厂汇率），
+				// 旧写法把 300000 钉死在代码里，汇率 1:300→1:400 后若配置缺键会静默少发 1/4 额度。
+				refTokens := store.DefaultInviteRewardPoints * store.DefaultPointsTokensRate
 				if v, _ := s.Store.GetConfig("invite_reward_tokens"); v != "" {
 					if x, e := strconv.ParseInt(v, 10, 64); e == nil && x > 0 {
 						refTokens = x

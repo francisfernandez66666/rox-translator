@@ -3,7 +3,8 @@
 // 锁定三条铁律，任何一条被改回去即红灯：
 //
 //	① token 裸值键（amount_tokens/tokens_billed/cost/unit_price/tokens）绝不出现在出参视图；
-//	② 折算后的积分键（amount_points/points_billed/cost_points/reward_points）值正确（默认汇率 300）；
+//	② 折算后的积分键（amount_points/points_billed/cost_points/reward_points）值正确
+//	   （本文件按**当前出厂汇率 1:400** 钉死面值，★ F-78 2026-09-28 重锚：90,000→225 积分等）；
 //	③ 其余业务字段原样透传，视图不做额外增删。
 //
 // =============================================
@@ -17,22 +18,29 @@ import (
 	"translator/internal/store"
 )
 
-// newPointsViewTestServer 构造最小可用 Server（内存 SQLite，积分汇率走默认 300 口径）。
+// newPointsViewTestServer 构造最小可用 Server（内存 SQLite，积分汇率走**出厂档**）。
+// ★ 本文件的积分面值是「等值锁」而不是「相对锁」：改汇率必须先来这里把对外出参数显式过一遍，
+//
+//	所以下面用 PointsTokensRate()==DefaultPointsTokensRate 作前提 trips，一旦常量与本文件脱节即红灯。
 func newPointsViewTestServer(t *testing.T) *Server {
 	t.Helper()
 	st := newCaptchaTestServer(t) // 复用 captcha_test 的内存 Store 引导（sql.Open + store.New）
+	if got := st.Store.PointsTokensRate(); got != store.DefaultPointsTokensRate {
+		t.Fatalf("本文件的积分面值按出厂汇率 %d 钉死，实测 %d：改汇率必须先重锚下面这些对外出参数（这正是本前提判据的用途）",
+			store.DefaultPointsTokensRate, got)
+	}
 	return st
 }
 
-// TestOrderViewJSONPointsContract 订单出参：amount_tokens → amount_points（÷300），裸值删除。
+// TestOrderViewJSONPointsContract 订单出参：amount_tokens → amount_points（÷出厂汇率 400），裸值删除。
 func TestOrderViewJSONPointsContract(t *testing.T) {
 	s := newPointsViewTestServer(t)
 	m := s.orderViewJSON(&store.Order{ID: 7, OrderNo: "RO7", AmountTokens: 90000, AmountMoney: 99, Status: "paid"})
 	if _, ok := m["amount_tokens"]; ok {
 		t.Fatalf("出参仍含 token 裸值键 amount_tokens: %v", m)
 	}
-	if m["amount_points"] != int64(300) { // 折算值由服务端直接写入 map，保持 int64 原生类型
-		t.Fatalf("amount_points 应为 300（90000/300），实际 %v", m["amount_points"])
+	if m["amount_points"] != int64(225) { // 折算值由服务端直接写入 map，保持 int64 原生类型
+		t.Fatalf("amount_points 应为 225（90000÷400），实际 %v", m["amount_points"])
 	}
 	if m["order_no"] != "RO7" || m["status"] != "paid" {
 		t.Fatalf("其余字段应原样透传，实际 %v", m)
@@ -49,8 +57,8 @@ func TestTicketJSONPointsContract(t *testing.T) {
 	if _, ok := m["tokens_billed"]; ok {
 		t.Fatalf("出参仍含 token 裸值键 tokens_billed: %v", m)
 	}
-	if m["points_billed"] != int64(5) {
-		t.Fatalf("points_billed 应为 5（1500/300），实际 %v", m["points_billed"])
+	if m["points_billed"] != int64(4) { // (1500+200)/400 = 4：零 token 口径下取整朝正方向
+		t.Fatalf("points_billed 应为 4（1500÷400 四舍五入），实际 %v", m["points_billed"])
 	}
 	if m["ticket_no"] != "T3" {
 		t.Fatalf("工单号应透传，实际 %v", m["ticket_no"])
@@ -72,7 +80,7 @@ func TestLedgerRowsJSONPointsContract(t *testing.T) {
 		t.Fatalf("内部单价 unit_price 不应外发: %v", r)
 	}
 	if r["cost_points"] != int64(2) {
-		t.Fatalf("cost_points 应为 2（600/300），实际 %v", r["cost_points"])
+		t.Fatalf("cost_points 应为 2（600÷400 四舍五入），实际 %v", r["cost_points"])
 	}
 	if r["quantity"] != int64(20) {
 		t.Fatalf("quantity 应透传，实际 %v", r["quantity"])
@@ -87,8 +95,8 @@ func TestReferralRecordsJSONPointsContract(t *testing.T) {
 	if _, ok := rec["tokens"]; ok {
 		t.Fatalf("出参仍含 token 裸值键 tokens: %v", rec)
 	}
-	if rec["reward_points"] != int64(3) {
-		t.Fatalf("reward_points 应为 3（900/300），实际 %v", rec["reward_points"])
+	if rec["reward_points"] != int64(2) {
+		t.Fatalf("reward_points 应为 2（900÷400 四舍五入），实际 %v", rec["reward_points"])
 	}
 	if rec["days"] != int64(14) {
 		t.Fatalf("days 应透传，实际 %v", rec["days"])
@@ -102,7 +110,7 @@ func TestPointsMapJSON(t *testing.T) {
 		t.Fatal("nil 输入应返回 nil")
 	}
 	got := s.pointsMapJSON(map[string]int64{"translate": 90000, "review": 45000})
-	if got["translate"] != 300 || got["review"] != 150 {
+	if got["translate"] != 225 || got["review"] != 113 { // 90,000÷400、45,000÷400（四舍五入）
 		t.Fatalf("分桶折算错误: %v", got)
 	}
 }

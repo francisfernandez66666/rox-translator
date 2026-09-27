@@ -77,6 +77,16 @@ type Perms struct {
 	GraceExpiresAt string `json:"grace_expires_at,omitempty"`
 	// NotifiedGrace 「已进入宽限期」站内通知已发送（去重标记，避免每日扫描重复轰炸）。
 	NotifiedGrace bool `json:"notified_grace,omitempty"`
+	// ★ 品牌展示宽限期（F-75，2026-09-27 〇-X 用户批准「到期后宽限 30 天＋站内信」）：
+	//   靠付费套餐解锁品牌定制的租户，订阅到期后不立刻把客户登录页打回平台默认，
+	//   而是再给 N 天（默认 30，见 api/branding_paid_gate.go 配置优先序）展示宽限。
+	// BrandGraceExpiresAt 品牌展示宽限截止（RFC3339，空＝不在宽限期）；由订阅到期摘除时写入，
+	//   续费到账或宽限结束回收时清空。与上面的订阅续费宽限（grace_expires_at）**故意分开**：
+	//   后者默认 3 天且只给开了自动续费的租户，而品牌回收面向所有付费解锁的租户。
+	BrandGraceExpiresAt string `json:"brand_grace_expires_at,omitempty"`
+	// BrandGraceNoticeStart / BrandGraceNoticeEnd 两条品牌宽限站内信的已发标记（去重）。
+	BrandGraceNoticeStart bool `json:"brand_grace_notice_start,omitempty"`
+	BrandGraceNoticeEnd   bool `json:"brand_grace_notice_end,omitempty"`
 }
 
 // 租户状态常量

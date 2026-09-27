@@ -60,6 +60,9 @@ export default function PricingPage() {
           <span>{brand}</span>
         </a>
         <nav className="lc-prc-links">
+          {/* ★ 〇-X #55：比价/算价页入口（访客最常在这里问「到底比人工省多少」，
+              两个公开页互相引流：本页给套餐面值，/compare 给公式与当场试算） */}
+          <a href="/compare">{t('cmp.navEntry')}</a>
           {/* 「定价」是当前页，渲染成无链接文本：放 href="/pricing" 等于每次点击整页重载自己 */}
           <span>{t('land.pNavPricing')}</span>
           <a href="/docs/terms">{t('land.pNavTerms')}</a>

@@ -18,10 +18,10 @@ func TestDefaultEffective(t *testing.T) {
 	if !d.Enforced || d.MarkupMultiplier != 1.5 {
 		t.Fatalf("默认强制计费/系数错误: enforced=%v markup=%v", d.Enforced, d.MarkupMultiplier)
 	}
-	if d.Package.TrialTokens != 300000 || d.Package.TrialDays != 14 {
+	if d.Package.TrialTokens != 400000 || d.Package.TrialDays != 14 {
 		t.Fatalf("默认体验额度错误: %+v", d.Package)
 	}
-	if d.Invite.RewardTokens != 300000 || d.Invite.RewardDays != 14 || d.Invite.MaxDailyRewards != 50 {
+	if d.Invite.RewardTokens != 400000 || d.Invite.RewardDays != 14 || d.Invite.MaxDailyRewards != 50 {
 		t.Fatalf("默认邀请因子错误: %+v", d.Invite)
 	}
 	if r, ok := d.Mode("fast"); !ok || !r.Charge {

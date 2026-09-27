@@ -3,7 +3,8 @@
 // 付费包 / 增量包 / 免费体验包的 CRUD，
 // 以及租户句数余额（sentence_balance，存于 tenants.permissions JSON）的读写。
 // 商业包模型：
-//   - free（免费体验）：新租户注册自动开通，token 由 free_trial_tokens 配置（默认 300000）
+//   - free（免费体验）：新租户注册自动开通，token 由 free_trial_tokens 配置
+//     （出厂档 1,000 积分 × DefaultPointsTokensRate，★ F-78 起为 400000）
 //   - paid（付费包）：超管自定义（包月 X 句），订阅后向租户句数余额发放 X 句
 //   - increment（增量包）：超管自定义（X 句），购买后追加到租户句数余额
 //
@@ -525,17 +526,48 @@ func (s *Store) TokenSentenceRate() int64 {
 	return ops.DefaultTokensPerSentence // ★ C6：默认值单一来源（ops.DefaultEffective 收口）
 }
 
-// PointsTokensRate 积分↔内部计量 token 的基础汇率（points_tokens_rate，默认 300，超管可调）。
+// ============ 计费口径出厂默认（★ F-78 2026-09-28 〇-X：积分汇率 1:300 → 1:400）============
+// 这里的常量是「积分↔token 汇率」与「充值尺子」两条口径的**唯一代码事实源**：
+// PointsTokensRate / PriceFenPerMillionTokens 的兜底值、EnsureBillingDefaults 的种子行、
+// 以及存量等值补发 PointsRateRebase 的目标值全部取此处，杜绝历史那类
+// 「改了默认值忘了改种子行 ⇒ 定价页/收银台/管理台三口径打架」的 F-12 式事故复发。
+// ⚠ 生产读数以 system_config 为准（GetConfig 优先于本兜底），改档必须随批走 PointsRateRebase。
+const (
+	// DefaultPointsTokensRate 基础汇率：1 积分 = 400 内部计量 token（对外只露积分，防成本反推）。
+	DefaultPointsTokensRate int64 = 400
+	// DefaultPriceFenPerMillionTokens 裸充值尺子价（分/百万 token）＝按「3,000 积分 = ¥299 面值」反推：
+	// 29,900 分 ÷（3,000×400 token ÷ 1e6）= 24,916.67 → 取 24,917，
+	// 使 3,000 积分（120 万 token）恰折 ¥299.00（TokensToFen 内 +500000 即分位四舍五入）。
+	DefaultPriceFenPerMillionTokens int64 = 24917
+	// legacyPointsTokensRate 上一次改档前的历史汇率（1:300）。
+	// 只供 PointsRateRebase 识别「存量仍按旧汇率计量的库」用，任何新代码不得再引用它做折算。
+	legacyPointsTokensRate int64 = 300
+	// 下列三枚是「积分面值」出厂档：落库/兜底一律 ×DefaultPointsTokensRate 折成内部 token，
+	// 与 PointsRateRebase 的补发结果同值（保证老库补发后与新库种子完全一致）。
+	// DefaultFreeTrialPoints 新租户体验额度 1,000 积分（14 天）。
+	DefaultFreeTrialPoints int64 = 1000
+	// DefaultInviteRewardPoints 每邀 1 人·邀请者体验增量 1,000 积分。
+	DefaultInviteRewardPoints int64 = 1000
+	// DefaultInviterPaidRewardPoints 受邀者首笔付费→邀请者永久额度 1,667 积分
+	//（＝历史内置 500,000 token 按旧汇率 1:300 回读的积分档，等值搬到新汇率）。
+	DefaultInviterPaidRewardPoints int64 = 1667
+)
+
+// PointsTokensRate 积分↔内部计量 token 的基础汇率（points_tokens_rate，默认 400，超管可调）。
 // ★ S1 积分制（2026-09-14）：对外售卖/余额/账单一律展示积分；token 仅在内部账本
 //
 //	（usage_ledger/rate_card/成本核算）流转，防止外部从积分单价反推平台真实成本。
+//
+// ★ F-78（2026-09-28 〇-X）：1:300 → 1:400——同一积分覆盖的 token 量抬 1/3，
+// 即「每积分单价降 25%」（用户拍板「收费还能再降一点」）；¥↔积分面值不动，靠尺子反向换算保持
+// 3,000 积分=¥299 不变。老库存量按 PointsRateRebase 等值补发，老客户积分不缩水。
 func (s *Store) PointsTokensRate() int64 {
 	if v, err := s.GetConfig("points_tokens_rate"); err == nil && v != "" {
 		if n, perr := strconv.ParseInt(v, 10, 64); perr == nil && n > 0 {
 			return n
 		}
 	}
-	return 300
+	return DefaultPointsTokensRate
 }
 
 // PointsFromTokens 内部计量 token → 积分（展示换算，四舍五入；0 保持 0）。
@@ -548,14 +580,14 @@ func (s *Store) PointsFromTokens(tokens int64) int64 {
 }
 
 // TokensFromPoints 积分 → 内部计量 token（写入口折算：对外接口只收积分，落库仍按 token）。
-// 负值归零；rate<=0 时按默认 300 口径（与 PointsTokensRate 兜底一致，防配置异常丢额度）。
+// 负值归零；rate<=0 时按 DefaultPointsTokensRate 口径（与 PointsTokensRate 兜底一致，防配置异常丢额度）。
 func (s *Store) TokensFromPoints(points int64) int64 {
 	if points <= 0 {
 		return 0
 	}
 	r := s.PointsTokensRate()
 	if r <= 0 {
-		r = 300
+		r = DefaultPointsTokensRate
 	}
 	return points * r
 }

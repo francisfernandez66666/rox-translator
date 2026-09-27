@@ -13,8 +13,9 @@
 //	   底裤（"sql: no rows in result set"）漏给用户；
 //	⑤ F-32：CreateAlertPerOrder 绕开 (tenant,kind) open 幂等闸——per-order 每单必告
 //	   （旧实现同型第二单被静默吞掉，生产 id55 即此态）；
-//	⑥ F-12：充值尺子重锚 33222 分/百万 token，使 3,000 积分（90 万 token）恰折算 ¥299，
-//	   且 system_config 显式值仍优先于代码默认。
+//	⑥ F-12＋F-78：充值尺子「按面值反锚」——F-12 在 1:300 档锚到 33222（90 万 token=¥299），
+//	   F-78 改 1:400 后随汇率反向缩到 24917（120 万 token=¥299），两轨都必须回到同一个 ¥299，
+//	   以此钉死「尺子与汇率是一对联动量」；同时 system_config 显式值仍优先于代码默认。
 //
 // 方言：固定 SQLite 内存库并显式钉死 config.C（AGENTS.md §4，防 run_uat 的 PG 模式泄漏）。
 // 运行：env DB_DRIVER=sqlite go test -count=1 ./internal/store/ -run TestUATBatchB
@@ -309,16 +310,28 @@ func TestUATBatchB_F32_AlertPerOrderBypassesDedupe(t *testing.T) {
 	}
 }
 
-// TestUATBatchB_F12_PriceRulerRealigned ⑥：尺子重锚 33222（3,000 积分=¥299），
-// system_config 显式值优先；旧值 29900 可复现历史 ¥269.10 差。
+// TestUATBatchB_F12_PriceRulerRealigned ⑥：尺子按面值反锚（★ F-78 现行档 24917），
+// 3,000 积分裸充值必须恰折 ¥299；system_config 显式值优先；
+// 旧档算术（33222×90 万＝29900、29900×90 万＝26910）留作历史差源复现，两轨一起钉住「面值不动」。
 func TestUATBatchB_F12_PriceRulerRealigned(t *testing.T) {
 	s := batchBEnv(t)
-	if got := s.PriceFenPerMillionTokens(); got != 33222 {
-		t.Fatalf("默认尺子应为 33222 分/百万 token，got %d", got)
+	if got := s.PriceFenPerMillionTokens(); got != 24917 {
+		t.Fatalf("默认尺子应为 24917 分/百万 token（★ F-78 随汇率 1:400 反向重锚），got %d", got)
 	}
-	// 90 万 token（=3,000 积分 × 300）折应收：恰 ¥299.00
-	if fen := s.TokensToFen(900000); fen != 29900 {
+	// 120 万 token（=3,000 积分 × 400）折应收：恰 ¥299.00
+	if fen := s.TokensToFen(s.TokensFromPoints(3000)); fen != 29900 {
 		t.Fatalf("3,000 积分应折 ¥299.00（29900 分），got %d", fen)
+	}
+	// ★ 联动性反证：只改汇率不改尺子（把尺子钉在旧档 33222）就会把面值推高 1/3 —— 这正是 F-78
+	// 必须成对改两个旋钮的理由，任何人想只动一头，这条红灯会先响。
+	if err := s.SetConfig("price_fen_per_million_tokens", "33222"); err != nil {
+		t.Fatalf("写配置失败: %v", err)
+	}
+	if fen := s.TokensToFen(s.TokensFromPoints(3000)); fen == 29900 {
+		t.Fatal("尺子留在旧档 33222 却仍折 ¥299 ⇒ 汇率与尺子的联动断言失效（本用例失去意义）")
+	}
+	if err := s.SetConfig("price_fen_per_million_tokens", "24917"); err != nil {
+		t.Fatalf("写配置失败: %v", err)
 	}
 	// 显式配置优先（模拟未改值的生产库复现旧差）
 	if err := s.SetConfig("price_fen_per_million_tokens", "29900"); err != nil {

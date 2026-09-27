@@ -406,7 +406,7 @@ func TestPackageOrderPointsPricing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePackage 失败: %v", err)
 	}
-	// 新租户（注册 1 天）：订阅五折 + token=积分×300
+	// 新租户（注册 1 天）：订阅五折 + token=积分×出厂汇率（★ F-78 起 1:400）
 	setReg(time.Now().Add(-24 * time.Hour))
 	o, err := s.CreatePackageOrder(1, paid, 1, "manual")
 	if err != nil {
@@ -415,8 +415,8 @@ func TestPackageOrderPointsPricing(t *testing.T) {
 	if o.AmountMoney != 49.5 {
 		t.Fatalf("首月半价应为 49.5，实际 %v", o.AmountMoney)
 	}
-	if o.AmountTokens != 3000*300 {
-		t.Fatalf("积分折算 token 应为 900000，实际 %d", o.AmountTokens)
+	if o.AmountTokens != 3000*DefaultPointsTokensRate {
+		t.Fatalf("积分折算 token 应为 %d（3,000×汇率），实际 %d", 3000*DefaultPointsTokensRate, o.AmountTokens)
 	}
 	// 充值包：尺子价不打折
 	o2, err := s.CreatePackageOrder(1, topup, 1, "manual")

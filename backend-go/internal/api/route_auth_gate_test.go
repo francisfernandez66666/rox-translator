@@ -55,12 +55,39 @@ var authGateHelpers = map[string]bool{
 	"constantTimeTokenEqual": true, // 仓库内**唯一**的凭证常量时间比较原语（支付回调、告警入口内联验凭证）
 }
 
+// authGateHardGuards 是 authGateHelpers 的子集：**调用即代表这条请求会被中断**（401/403 或返回错误）
+// 的强闸。用来给闸门自检的负对照做判据，理由见下面 TestRouteAuthGate 里的 ②。
+//
+// ★ 为什么 `authUser` 不在本表里（2026-09-27 〇-X F-75 撞出来后定的口径）：
+//
+//	它只是「取当前会话用户，取不到回 nil」，公开 handler 完全可以拿它做**展示决策**而不是准入
+//	——F-75 的品牌展示闸正是这种形态：`/`（SPA 首页）→ serveIndexHTML → brandingPayload →
+//	brandingViewerExempt → authUser，匿名请求照样 200 出页，只是看不到未付费租户的品牌视觉。
+//	把它算进强闸，会让负对照「handleSPA 必须判为不鉴权」被一条完全合法的需求（首屏注入认身份）
+//	永久顶红；真需要防的是「公开路由静默用兜底租户 1 读写数据」，那对应的是 require* / API Key /
+//	Token 这几类会中断请求的凭证校验。故：过路由闸仍认全集（authGateHelpers），
+//	自检负对照只认本表（authGateHardGuards）——判据变准，不是变松。
+var authGateHardGuards = map[string]bool{
+	"requireAdminUser":          true,
+	"requireTenantAdmin":        true,
+	"requireSuperAdmin":         true,
+	"authenticateAPIKey":        true,
+	"authenticateAPIKeyNoTouch": true,
+	"scimGuard":                 true,
+	"caddyAskAuthorized":        true,
+	"constantTimeTokenEqual":    true,
+}
+
 // publicRouteAllowlist 确实允许匿名访问的路径 → 公开理由（缺理由视为不合格）。
 // 这里的每一条都是**人工评审过的例外**（2026-09-22 逐条读 handler 确认），
 // 新增时必须写清「为什么可以匿名」以及「有无限流/凭证兜底」，由人评审。
 var publicRouteAllowlist = map[string]string{
 	// —— 静态资源与站点外壳 ——
-	"/":                     "SPA 前端外壳（纯静态 index.html，无数据访问）",
+	// ★ 理由口径已于 2026-09-27 〇-X 校正：自 F-46 起这条不再是「纯静态无数据访问」——
+	//   serveIndexHTML 会按访问域名读品牌（system_config 平台品牌 / 命中租户的品牌行）并注入
+	//   `window.__BRANDING__`。可匿名仍成立的根据是：出栈内容**只由访问域名决定**（不给匿名者
+	//   兜底租户 1 的数据）、且 F-75 起未付费租户的品牌视觉在出栈前就被抹掉。
+	"/":                     "SPA 前端外壳：静态资源直出 + index.html 按域名注入品牌（只读该域名归属的品牌，不碰兜底租户数据）",
 	"/office/manifest.xml":  "Office 加载项清单：静态 XML，Office 客户端匿名拉取",
 	"/office/taskpane.html": "Office 任务窗格页面：静态 HTML 外壳，数据由已鉴权 API 提供",
 	"/docs/terms":           "服务条款公开页",
@@ -73,13 +100,18 @@ var publicRouteAllowlist = map[string]string{
 	// ★ F-46（2026-09-26 批 I-9）：品牌图改「落静态件 + 只注入 URL」后新增的直出面。
 	//   只读 <UserDataDir>/brand/ 下单层文件、扩展名过白名单、字节还要过魔数核验，
 	//   零租户数据零鉴权语义（品牌本来就是给该域名访客看的）；缺件回 404 JSON 而非 SPA 壳。
-	"/brand/":                   "品牌 Logo/首页背景静态件直出：内容寻址文件名、只读 brand 目录单层件、格式白名单+魔数核验",
-	"/openapi/docs":             "开放 API 文档页（对外公开，内容本身即产品说明）",
-	"/openapi/v1.json":          "开放 API OpenAPI 规范 JSON（供 SDK 生成，公开）",
-	"/api/skills":               "已启用技能列表：仅能力清单，不含租户数据",
-	"/api/translation/langs":    "支持语种字典：落地页/翻译页下拉数据源，公开",
-	"/api/footer-links":         "落地页页脚链接配置：营销可编辑文案，公开读",
-	"/api/plans":                "套餐与定价（★ 落地页价格走此接口，匿名用户需看到价格）",
+	"/brand/":                "品牌 Logo/首页背景静态件直出：内容寻址文件名、只读 brand 目录单层件、格式白名单+魔数核验",
+	"/openapi/docs":          "开放 API 文档页（对外公开，内容本身即产品说明）",
+	"/openapi/v1.json":       "开放 API OpenAPI 规范 JSON（供 SDK 生成，公开）",
+	"/api/skills":            "已启用技能列表：仅能力清单，不含租户数据",
+	"/api/translation/langs": "支持语种字典：落地页/翻译页下拉数据源，公开",
+	"/api/footer-links":      "落地页页脚链接配置：营销可编辑文案，公开读",
+	"/api/plans":             "套餐与定价（★ 落地页价格走此接口，匿名用户需看到价格）",
+	// ★ 〇-X #55（2026-09-28）：官网「比价与算价」页的公示系数口。
+	//   匿名可达是前提（客户注册前就要能试算），且出参**只有积分口径**——
+	//   K/F 的 token 裸值、积分汇率、尺子分价四类内部量一个都不发（见 pricing_meta.go 文件头）；
+	//   纯只读、无租户数据、无限流之外的写副作用。
+	"/api/pricing/meta":         "算价页公示系数（每千字积分档/固定积分/每积分单价）：积分口径只读，零 token 裸值、零租户数据",
 	"/api/register/industries":  "注册页行业字典",
 	"/api/register/personas":    "注册页角色字典",
 	"/api/auth/register-config": "注册页运营配置（开关/文案），公开",
@@ -145,7 +177,8 @@ func TestRouteAuthGate(t *testing.T) {
 
 	// —— 闸门自检（防「永远绿灯」的结构性失效，与 db/guard_test.go 的反影子迁移同思路）——
 	// ① 正对照：已知受保护路由必须被解析到，且其调用闭包确实命中鉴权助手；
-	// ② 反对照：已知公开 handler 必须判为「不鉴权」，否则说明判据形同虚设；
+	// ② 反对照：已知公开 handler 必须判为「未执行会中断请求的强闸」，否则说明判据形同虚设
+	//    （口径细分见上方 authGateHardGuards 的注释——公开首屏允许 authUser 做展示决策）；
 	// ③ 白名单不允许残留已删除的路径——僵尸例外会把日后**同名**的新路由静默放行。
 	pat := map[string]string{}
 	for _, rt := range routes {
@@ -158,8 +191,32 @@ func TestRouteAuthGate(t *testing.T) {
 	} else if !authGateReachable(funcs, h) {
 		t.Errorf("自检失败：受保护路由 /api/admin/orgs → %s 未命中鉴权助手，判据失效", h)
 	}
-	if authGateReachable(funcs, "handleSPA") {
-		t.Error("自检失败：handleSPA 被判为「已鉴权」，说明鉴权判据过宽")
+	if authGateReachableNamed(funcs, "handleSPA", authGateHardGuards) {
+		t.Error("自检失败：handleSPA 被判为「执行了会中断请求的鉴权」，说明鉴权判据过宽")
+	}
+	// 负对照自身的反证（防空转）：强闸表必须非空且是全集的子集，
+	// 否则上面那句 "handleSPA 不命中" 会因为**判据集合为空**而恒真——那才是真的闸门失效。
+	if len(authGateHardGuards) == 0 {
+		t.Error("自检失效：authGateHardGuards 为空集，负对照将恒真")
+	}
+	for n := range authGateHardGuards {
+		if !authGateHelpers[n] {
+			t.Errorf("authGateHardGuards 里的 %q 不在 authGateHelpers 全集中：子集口径被破坏", n)
+		}
+	}
+	// 正对照补充：强闸判据必须有区分度——全集里至少要有一条**非白名单**路由真的命中强闸，
+	// 否则 handleSPA 那条「不命中」可能是因为换了判据后谁都命不中（判据退化成空集的同一种病）。
+	hardHit := 0
+	for _, rt := range routes {
+		if _, ok := publicRouteAllowlist[rt.pattern]; ok || rt.handler == "" {
+			continue
+		}
+		if authGateReachableNamed(funcs, rt.handler, authGateHardGuards) {
+			hardHit++
+		}
+	}
+	if hardHit == 0 {
+		t.Error("自检失效：没有任何受保护路由命中强闸表 authGateHardGuards，负对照失去区分度")
 	}
 	for p := range publicRouteAllowlist {
 		if _, ok := pat[p]; !ok {
@@ -172,12 +229,20 @@ func TestRouteAuthGate(t *testing.T) {
 // 深度上限是刻意的：再深的间接调用通常已离开「请求准入」语义（如落库、计费），
 // 搜得过远会把只读查询也当成鉴权，闸门就失去意义。
 func authGateReachable(funcs map[string]map[string]bool, entry string) bool {
+	return authGateReachableNamed(funcs, entry, authGateHelpers)
+}
+
+// authGateReachableNamed 同上，但把「命谁算过闸」的判据集合显式传入：
+// 路由本体用全集 authGateHelpers，自检负对照用子集 authGateHardGuards（会中断请求的强闸）。
+// 一张表两个口径会读起来别扭，但这是 F-75 之后能同时保住「新路由必须鉴权」与
+// 「公开首屏允许认身份做展示」两条语义的最小改法。
+func authGateReachableNamed(funcs map[string]map[string]bool, entry string, set map[string]bool) bool {
 	seen := map[string]bool{entry: true}
 	frontier := []string{entry}
 	for depth := 0; depth < 4 && len(frontier) > 0; depth++ {
 		var next []string
 		for _, name := range frontier {
-			if authGateHelpers[name] {
+			if set[name] {
 				return true
 			}
 			for callee := range funcs[name] {
@@ -190,7 +255,7 @@ func authGateReachable(funcs map[string]map[string]bool, entry string) bool {
 		frontier = next
 	}
 	for _, name := range frontier {
-		if authGateHelpers[name] {
+		if set[name] {
 			return true
 		}
 	}

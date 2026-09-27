@@ -305,3 +305,43 @@ export async function adminQuoteCurrency(): Promise<AdminResp & {
 export async function adminQuoteCurrencySave(data: { currency: string; rates: Record<string, number> }): Promise<AdminResp & { currency?: string; rates?: Record<string, number> }> {
   return request('/api/admin/config/quote-currency', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
 }
+
+// ============================================================================
+// ★ 2026-09-27（〇-X 第 5 项 / F-72 补口）计费预估系数的超管配置口
+// （/api/admin/config/est-tokens）。四键对应 system_config 的
+// est_tokens_per_char_pro|fast（线性系数 K）与 est_tokens_fixed_pro|fast（固定项 F），
+// 决定建单前的余额预检：调小＝放行更多单（真烧穿的风险），调大＝更多单被"余额不足"拦下。
+// 口径红线：K 必须 >0（清零＝全放行，正是历史烧穿事故形态），F 可以配 0（显式退回纯线性）。
+// 四项必须一次交齐，后端整批校验通过才落库；reset:true 表示四键清空、回落代码缺省。
+// ============================================================================
+
+/** 预估系数四项的键名（与后端白名单同源，防手写串键） */
+export const EST_TOKEN_FIELDS = ['k_pro', 'k_fast', 'fixed_pro', 'fixed_fast'] as const
+/** EstTokenField：预估系数键的联合类型，与 EST_TOKEN_FIELDS 逐键同源 */
+export type EstTokenField = (typeof EST_TOKEN_FIELDS)[number]
+
+/** 预估系数快照（生效值 / 库内原值 / 代码缺省，三态都要有：界面据此区分"配了"与"走缺省"） */
+export interface EstTokensCfg {
+  coefficients?: Partial<Record<EstTokenField, number>>
+  stored?: Partial<Record<EstTokenField, string>>
+  defaults?: Partial<Record<EstTokenField, number>>
+  allow_zero?: Partial<Record<EstTokenField, boolean>>
+  formula?: string
+  formula_note?: string
+  config_keys?: string[]
+  points_tokens_rate?: number
+}
+
+/** 管理台：回显四个预估系数的生效值（读侧清洗后的可信值）＋库内原值＋代码缺省 */
+export async function adminEstTokens(): Promise<AdminResp & EstTokensCfg> {
+  return bizResp(() => request('/api/admin/config/est-tokens', { headers: authHeaders() }))
+}
+
+/** 管理台：保存四个预估系数（必须一次交齐）；传 { reset: true } 则清空回代码缺省 */
+export async function adminEstTokensSave(
+  data: Partial<Record<EstTokenField, number>> & { reset?: boolean },
+): Promise<AdminResp & EstTokensCfg> {
+  return bizResp(() => request('/api/admin/config/est-tokens', {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(data),
+  }))
+}

@@ -40,7 +40,7 @@ export function captureUtm() {
 export function usePlans(): { plans: PlanLite[]; trial: TrialLite } {
   // plans 初值为空数组：接口返回前就不渲染卡片——宁可空一段，也不在前端写死一份「看起来像」的价目
   const [plans, setPlans] = useState<PlanLite[]>([])
-  // trial 兜底值与后端 EnsureBillingDefaults 的种子一致（300000 token ÷ 300 token/积分 = 1000 积分、14 天），
+  // trial 兜底值与后端 EnsureBillingDefaults 的种子一致（1000 积分面值；★ F-78 改档后内部记账＝1000×400＝400000 token、14 天），
   // 目的是接口挂了也仍能说清「送多少、多久」，而不是显示 0 或空白
   const [trial, setTrial] = useState<TrialLite>({ points: 1000, days: 14 })
 
