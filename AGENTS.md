@@ -148,6 +148,16 @@
   **无条件**注入，所以只有**首页走后端**的域名拿得到它；首页若由 Caddy `file_server` 静态直出（现网主站即此形态），
   品牌只剩前端异步兜底。判据一条：`curl -s <站点>/ | grep -c __BRANDING__`，同时看首页 sha 是否**等于**仓库
   `frontend-react/dist/index.html`——相等就说明是静态直出，别去前端找「品牌不生效」。
+  ★ **租户品牌域名（`*.lexicorn.cn` 通配块，〇-W/F-73）改动的三条硬口径**：① 通配块兜底段**必须 `reverse_proxy`，
+  不许写回 `file_server`**（就是上面那条 F-74 教训的落地位置，`/assets/*` 才由 Caddy 落盘直出）；
+  ② 动过 `/etc/caddy/*tenant*.conf` 或该 conf 的 import 行，**发版验收必须跑 `bash deploy/smoke_tenant_domain.sh`**
+  （15 判据，全只读；本地单测/vitest 看不见反代路由表这一层，这正是 F-73 能藏这么久的原因）。
+  该脚本自带反向对照：`TENANT_BASE=https://<主站域> bash deploy/smoke_tenant_domain.sh` **必须 FAIL≥2／exit 1**，
+  若反而全绿说明判据失效，别把绿灯当"主站也通了"；
+  ③ **证书口径＝`tls internal`，公网可用只因为 Cloudflare 该 zone 是 Full 而非 Full(strict)**——切 strict 前必须先换
+  Cloudflare Origin CA（`/etc/caddy/tls/tenant-origin.{crt,key}`，`chmod 600`，**Origin CA 私钥禁止进聊天/文档/git**），
+  否则新租户子域全体 526。另注意**读侧匹配是 `WHERE domain=?` 的裸小写前缀精确等值**（F-76 未修：填 `ROX`/整域名/带斜杠
+  会保存成功却永不生效），排查「品牌不生效」先核库里那一列的字面值，再核 ①②③。
   ⚠️ **「纯注释提交＝不用发版」只对 React 侧成立**：往 `public.go`/`office.go`/`admin_openapi.go` 的**内嵌 HTML/JS
   字符串里**加一行注释，dist hash 不变、`go build` 无任何行为差异，但**直出页的字节确实变了**，线上就是旧页
   （2026-09-23 〇-M 实测：注释批晚于发版批，两站 `taskpane.html` 与仓库差 2 行，只能 11:24 补换一次二进制）。
