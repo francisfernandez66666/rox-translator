@@ -12,6 +12,13 @@ package api
 //   - 驳回重翻循环：重翻成功后清空驳回意见，避免下次运行重复重翻
 //   - 批准审批后触发自迭代（feedback 步骤）；驳回时记录原因与建议
 //   - 工单操作均写入审计；工单查询全部限定生效租户（租户隔离）
+// ★ F-72（2026-09-27 〇-W，用户批准）：建单余额预检的预估改「固定项＋线性项」两段式
+//   est = F(mode) + chars × langs × K(mode)；两档各自走 system_config
+//   （est_tokens_fixed_pro/fast 缺省 3000/1200、est_tokens_per_char_pro/fast 缺省 160/60），
+//   四键逐次现读、写入即生效（无需重启/发版）。⚠️ 口径纠正：这四键**没有管理台表单**
+//   （全仓唯一的 admin 配置口是 /api/admin/config/quote-currency），调档只能 psql 往
+//   system_config 插/改行——两库当前都**没有**这四行，走代码缺省 160/60 + 3000/1200。
+//   判据与取数依据见 estimateTicketTokens 上方注释。
 // ★ F-64②（批 I-10 2026-09-26）口径：本文件「HTTP 200 承载业务失败」的 21 处已全部改走
 //   统一出口 s.writeError + apierrors，状态码按语义诚实——
 //   404（本租户下取不到单：跨租户不泄露存在性）、409（状态或产物不满足该操作）、
@@ -47,43 +54,112 @@ import (
 
 // ============ 工单 ============
 
+// est_tokens_per_char_pro / est_tokens_per_char_fast = 线性项「每字符×每语种」系数 K 的配置键。
+const (
+	cfgEstKPro  = "est_tokens_per_char_pro"
+	cfgEstKFast = "est_tokens_per_char_fast"
+	// cfgEstFixedPro / cfgEstFixedFast = 固定项「每次建单一次性开销」的配置键（★ F-72）。
+	// 与 K 分键的目的：调短单报价只动固定项，不必再把长单系数一起拽走（见 estimateTicketTokens 注释）。
+	cfgEstFixedPro  = "est_tokens_fixed_pro"
+	cfgEstFixedFast = "est_tokens_fixed_fast"
+)
+
+// 预估缺省参数（配置缺失/非法时的保守回落值，单一来源，禁止在调用点再写字面量）。
+//
+//	K 档沿用 2026-09-25 批 D（F-41）实测 P99 上包络：pro=160、fast=60；
+//	F 档为 2026-09-27 〇-W（F-72）新增：pro=3,000 取「6–67 字短单实烧 p90=3,289」的整档
+//	（p50=1,735，取 p90 而非中位数是用户拍板的「宁高勿低」），fast=1,200 按线性系数同比
+//	60/160=0.375 折算后取整档。
+const (
+	defEstKPro      = 160.0
+	defEstKFast     = 60.0
+	defEstFixedPro  = 3000.0
+	defEstFixedFast = 1200.0
+)
+
+// estParams 一次估算用到的两段式参数，全部由 system_config 现读后注入（纯函数便于字节级锁）。
+// 取数入口见 estTokensPerChar（线性项）与 estTokensFixed（固定项）。
+type estParams struct {
+	kPro      float64 // pro 线性系数 K：每「源字符 × 目标语种」的 token 数
+	kFast     float64 // fast 线性系数 K
+	fixedPro  float64 // pro 固定项 F：与字数无关的一次性开销（系统提示词、术语与上下文注入、输出结构）
+	fixedFast float64 // fast 固定项 F
+}
+
 // estimateTicketTokens 估算文件/文本工单翻译的 token 消耗（纯函数，便于单测与字节级锁）。
 // ★ F-41（2026-09-25 批 D）公式重写：旧口径 `chars/1.3 × langs × markup` 与 pro 实测计费
 // 差约 62 倍（工单 88：估 17.3k、实烧 1,075,400 token 后在 100% 进度处烧穿 rejected、零交付），
 // 根因是旧公式只折算「源字符→单次译文 token」，跟不上 pro 的「初译+评审双趟 × 段分块 ×
-// 逐次上下文开销」——注释里的「宁可多估」名不副实。新口径按**实测单位成本外推**：
+// 逐次上下文开销」——注释里的「宁可多估」名不副实。新口径按**实测单位成本外推**：K(pro)=160
+// （96 号单位成本→2 万字外推 155 的 P99 上包络）、K(fast)=60（单趟无评审约 2.5 折）。
 //
-//	est = chars × langs × K(mode)，K(pro)=160（96 号单位成本→2 万字外推 155 的 P99 上包络）、
-//	K(fast)=60（单趟无评审约 2.5 折）；K 值走 system_config（est_tokens_per_char_pro/fast）
-//	管理台可调，上线首周按 usage_ledger 实测 P99 回调。决策口径「宁高勿低」：
-//	K=160 会拦掉「小余额大文档」的碰运气建单——这是用户拍板接受的默认（拒绝建单好于中途烧穿全损）。
+// ★ F-72（2026-09-27 〇-W 用户批准）：在 K 之上再补**固定项**，最终形态
 //
-// kPro/kFast 由调用方传入（配置读取见 estTokensPerChar），保持纯函数便于以 88/89 两案做基准锁。
-func estimateTicketTokens(sourceChars int64, langCount int, mode string, kPro, kFast float64) int64 {
+//	est = F(mode) + chars × langs × K(mode)        （固定项＋线性项 两段式）
+//
+// 为什么必须分段、而不是把 K 调大：纯线性无截距对短单**结构性低估**——19 字 ×1 语的 pro 单
+// （工单 47）预估 3,040、实烧 18,304，差 6 倍；6～67 字短单实烧 p50=1,735、p90=3,289，
+// 几乎全是与字数无关的一次性开销。拿短单去拟合 K 会把它抬到 382～963，于是 1 万字 ×5 语的
+// 大单预估从 800 万变成 4,815 万 token——为修短单把长单吹上天，报价直接不可用。
+// 分成两项后各管各的：短单由 F 兜住下限，长单仍由 K 决定量级（F 在长单里占比 <0.1%）。
+//
+// 保留的既有语义（勿改）：字符数/语种数任一 ≤0 一律返回 0（无归属租户或无可估消耗时
+// 交 raw gateUsage 处理，预检不参与）；K 异常（0/负数）回退保守默认 160，绝不放大放行；
+// F 允许显式配 0（＝运维主动退回纯线性），只有负数/非数字才回退默认。
+//
+// 参数：sourceChars=折算后的可译源字符数（文件单按 estimateFileSourceChars 的 /3·/6·/12 分档）；
+// langCount=目标语种数；mode=fast 走 fast 档，其余（含空串）一律按 pro 保守档；p=现读的两段式参数。
+func estimateTicketTokens(sourceChars int64, langCount int, mode string, p estParams) int64 {
 	if sourceChars <= 0 || langCount <= 0 {
 		return 0
 	}
-	k := kPro
+	k, fixed := p.kPro, p.fixedPro
 	if mode == "fast" {
-		k = kFast
+		k, fixed = p.kFast, p.fixedFast
 	}
+	// 脏配置的回退方向必须是「更保守」：一律回退到 pro 档（160 / 3,000），
+	// 哪怕本单是 fast——回退到更低的 fast 档等于把闸门往放行方向挪，正是 F-41 的事故形态。
 	if k <= 0 {
-		k = 160 // 配置异常（0/负数）回退保守默认，绝不放大放行
+		k = defEstKPro
 	}
-	return int64(float64(sourceChars) * float64(langCount) * k)
+	if fixed < 0 {
+		fixed = defEstFixedPro // 负数属脏配置，回退 pro 档；0 是合法的「关闭固定项」
+	}
+	return int64(fixed) + int64(float64(sourceChars)*float64(langCount)*k)
 }
 
 // estTokensPerChar 读取指定模式的每字符预估 token 系数 K（system_config 可调，缺省保守默认）。
 // 键缺失/非法（非数字或 ≤0）一律回退默认（pro=160 / fast=60），查询失败同样回退——
 // 预检是粗闸，配置坏了不能反过来把估算清零（清零＝全放行，正是 F-41 的事故形态）。
+// 参数 mode：仅 "fast" 走 fast 档，其余（含空串/未知值）按 pro。
 func (s *Server) estTokensPerChar(mode string) float64 {
-	key, def := "est_tokens_per_char_pro", 160.0
+	key, def := cfgEstKPro, defEstKPro
 	if mode == "fast" {
-		key, def = "est_tokens_per_char_fast", 60.0
+		key, def = cfgEstKFast, defEstKFast
 	}
+	return s.estConfigFloat(key, def, false)
+}
+
+// estTokensFixed 读取指定模式的固定开销项 F（★ F-72，2026-09-27 〇-W）。
+// 键：est_tokens_fixed_pro（缺省 3,000）／ est_tokens_fixed_fast（缺省 1,200）。
+// 与 K 的判据差别：**0 是合法值**——那是「明知短单会低估、仍要退回纯线性」的显式选择，
+// 不拦；只有缺失/非数字/负数才回退默认（负数会把预估往回扣，比清零更危险）。
+// 参数 mode：仅 "fast" 走 fast 档，其余按 pro。
+func (s *Server) estTokensFixed(mode string) float64 {
+	key, def := cfgEstFixedPro, defEstFixedPro
+	if mode == "fast" {
+		key, def = cfgEstFixedFast, defEstFixedFast
+	}
+	return s.estConfigFloat(key, def, true)
+}
+
+// estConfigFloat 读取一个估算配置项并解析为浮点：查询失败/空值/非数字一律回退 def；
+// allowZero=false 时 ≤0 也回退（K 档：清零＝全放行），true 时仅负数回退（F 档：0＝主动关闭固定项）。
+// 参数 key=system_config 键名；def=保守缺省值；allowZero=是否允许显式 0。
+func (s *Server) estConfigFloat(key string, def float64, allowZero bool) float64 {
 	if s.Store != nil {
 		if v, err := s.Store.GetConfig(key); err == nil && strings.TrimSpace(v) != "" {
-			if f, cerr := strconv.ParseFloat(strings.TrimSpace(v), 64); cerr == nil && f > 0 {
+			if f, cerr := strconv.ParseFloat(strings.TrimSpace(v), 64); cerr == nil && (f > 0 || (allowZero && f == 0)) {
 				return f
 			}
 		}
@@ -119,6 +195,10 @@ func estimateFileSourceChars(name string, size int64) int64 {
 // release 为 gateUsage 返回的并发名额释放闭包：预检失败时同样需归还。
 // ★ F-41（2026-09-25 批 D）：估算改按模式系数 K（pro=160/fast=60，system_config 可配），
 // mode 由调用点传入；拒绝文案继续走「预估积分」范式（S1 零 token 裸值口径不变）。
+// ★ F-72（2026-09-27 〇-W）：估算补固定项，成 est = F(mode) + chars × langs × K(mode)。
+// 只动**被拦的单**：固定项 3,000 token ≈ 10 积分（按 points_tokens_rate=300），余额只要够得上
+// 一单，就不会因为这条常数被拦；真正被它改变结果的是「6～67 字短单 × 极小余额」的碰运气建单。
+// 文案里「预估需约 N 积分」的**措辞与形态**继续不动（UAT T40 等值锁按公式现算，见下）。
 func (s *Server) precheckTicketBalance(tid int64, srcChars int64, langCount int, mode string, release func()) error {
 	if release != nil {
 		defer release()
@@ -129,7 +209,13 @@ func (s *Server) precheckTicketBalance(tid int64, srcChars int64, langCount int,
 	if s.Bill == nil || !s.Bill.Enabled() {
 		return nil // 未强制计费：不预检
 	}
-	estimated := estimateTicketTokens(srcChars, langCount, mode, s.estTokensPerChar("pro"), s.estTokensPerChar("fast"))
+	// 两段式参数逐次现读（不缓存）：system_config 一改，下一单即生效（与批 H 回调 K 的口径一致）。
+	estimated := estimateTicketTokens(srcChars, langCount, mode, estParams{
+		kPro:      s.estTokensPerChar("pro"),
+		kFast:     s.estTokensPerChar("fast"),
+		fixedPro:  s.estTokensFixed("pro"),
+		fixedFast: s.estTokensFixed("fast"),
+	})
 	grants, permanent, err := s.Store.TenantRemainTotal(tid)
 	if err != nil {
 		return nil // 余额查询失败不阻断建单，交由实时计费兜底
