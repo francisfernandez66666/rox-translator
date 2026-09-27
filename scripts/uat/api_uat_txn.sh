@@ -1106,9 +1106,10 @@ rm -f "$ZIP39H" "$ZIP39"; rm -rf "$TMPD39"
 #      这条 09-15 的旧断言**前提失效**（716800/12≈59733 字符 ×60 ≈ 358 万 token ≈ 11947 积分 ≫ 1100 积分）：
 #      拦单正是本次修复要的效果（用户拍板「宁可建单被拒，好过中途烧穿全损」），不是回归。
 #   a-1 体验余额下 700KB .pdf 必须被拦，且出结构化码（F-21③：4xx + code，不再 200+success:false）
-#   a-2 等值锁：拒绝文案里的「预估需约 N 积分」必须等于按**当前 K 配置现算**的值
-#       —— 批 H 回调 K（管理台改 est_tokens_per_char_fast）后本条自动跟随；
-#       只有「代码里偷偷改默认值 / 分档折算规则被改回 /3」才会翻红，这正是需要的敏感度。
+#   a-2 等值锁：拒绝文案里的「预估需约 N 积分」必须等于按**当前 F/K 两档配置现算**的值
+#       —— 批 H 回调 K、〇-W 回调 F（往 system_config 插/改 est_tokens_fixed_fast /
+#       est_tokens_per_char_fast；★ 这四键管理台没有表单，只能 psql 写库，写库即生效无需发版）
+#       后本条都自动跟随；只有「代码里偷偷改默认值 / 分档折算规则被改回 /3 / 两段式接错档」才会翻红。
 #   a-3 补足额度后同一文件必须放行 —— 证明拦单只由「余额 < 预估」这一条决定，
 #       不是尺寸硬闸或扩展名误判（09-15 用户反馈的「700KB PDF 提示需 402553 token」误拦形态）复活。
 #   b) 35MB 级大文件：仍拒，且文案含「积分」、零 token 裸值（对外口径承诺）。
@@ -1127,17 +1128,23 @@ R40S=$(curl -s $B/api/tickets/create-file -H "$H40" -F "files=@$TMPD40/t40_small
 ck T40-pdf-700k-blocked-at-trial '"success":false' "$R40S"
 ck T40-pdf-code-quota '"code":"QUOTA_EXCEEDED"' "$R40S"
 if echo "$R40S" | grep -qi "token"; then FAIL=$((FAIL+1)); echo "FAIL|T40-pdf-msg-no-raw-token($(echo "$R40S" | head -c 120))"; else PASS=$((PASS+1)); echo "PASS|T40-pdf-msg-no-raw-token"; fi
-# a-2 等值锁：N == round( (716800/12 整除) × K(fast) / 300 )，四舍五入与 store.PointsFromTokens 同口径
+# a-2 等值锁（★ F-72 2026-09-27 〇-W 改两段式）：N == round( (F(fast) + (716800/12 整除) × K(fast)) / 300 )
+#   两档都从库里**现读**（键缺失/非法 → 与后端同口径的保守默认 F=1200 / K=60），
+#   所以管理台回调 F 或 K 本条都自动跟随；只有「代码偷偷改默认值 / 两段式接错档 / 分档折算被改回 /3」才翻红。
 KFAST40=$(dbq "SELECT value FROM system_config WHERE key='est_tokens_per_char_fast'" | tr -d '[:space:]')
-EXP40=$(K40="$KFAST40" python3 -c 'import os
-raw = os.environ.get("K40", "").strip()
-try:
-    k = float(raw)
-except Exception:
-    k = 60.0          # 键缺失/非法 → 与后端 estTokensPerChar 同样的保守默认
-if k <= 0:
-    k = 60.0
-est = int(716800 // 12 * k)
+FFAST40=$(dbq "SELECT value FROM system_config WHERE key='est_tokens_fixed_fast'" | tr -d '[:space:]')
+EXP40=$(K40="$KFAST40" F40="$FFAST40" python3 -c 'import os
+def num(raw, defv, allow_zero):
+    try:
+        v = float(os.environ.get(raw, "").strip())
+    except Exception:
+        return defv            # 键缺失/空/非数字 → 后端同样回退默认
+    if v > 0 or (allow_zero and v == 0):
+        return v
+    return defv                # K 的 ≤0 与 F 的负数都是脏配置
+k = num("K40", 60.0, False)
+fixed = num("F40", 1200.0, True)   # F 允许显式 0＝运维退回纯线性
+est = int(fixed) + int(716800 // 12 * k)   # 与 Go 侧同序：固定项先取整，再加线性项
 print((est + 150) // 300)')
 ck T40-pdf-estimate-eq-K "预估需约 ${EXP40} 积分" "$R40S"
 N40=$(printf '%s' "$R40S" | grep -oE '预估需约 [0-9]+ 积分' | grep -oE '[0-9]+' | head -1)

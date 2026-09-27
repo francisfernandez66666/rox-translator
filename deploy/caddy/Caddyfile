@@ -51,3 +51,14 @@ quant-trading.top {
 
 # ===== 翻译助手（独立 conf，见 deploy/caddy/translator.conf） =====
 import /etc/caddy/translator.conf
+
+# ===== 演示站（独立 conf，见《部署指南》演示站章；线上文件同名） =====
+import /etc/caddy/translator-demo.conf
+
+# ★ F-73（2026-09-27 〇-W）租户品牌域名通配块：没有这一行，客户打开
+#   `https://<租户子域>.lexicorn.cn` 只会拿到 525／200 空体（Caddy 无匹配站点块），
+#   后端按 Host 解析租户品牌的那半条链就永远到不了浏览器。部署：
+#     cp deploy/caddy/translator-tenant.conf /etc/caddy/translator-tenant.conf
+#     caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy
+#   证书口径见该文件头注（当前 `tls internal`，正式上 Origin CA）。
+import /etc/caddy/translator-tenant.conf

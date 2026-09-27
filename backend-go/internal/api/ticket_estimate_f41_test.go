@@ -36,22 +36,24 @@ func f41StoreServer(t *testing.T) *Server {
 // TestUATBatchD_EstimateByteBaseline8889 生产两案字节基准锁（修复文档断言①）。
 // 88/89 的字符数取自 estimateFileSourceChars（md 按 /3 折字符，与预检调用点同一口径），
 // 钉的是「新估算 ≥ 实烧/外推需求」这条方向性红线——K 再被调错也必须先把这两单拦住。
+// ★ F-72（2026-09-27 〇-W）：等值里多了一项固定开销 3,000（pro 档），两案数值随之上移；
+// 这两案是 3,748/32,444 字符的**长单**，固定项只占 0.17%/0.02%——正是「短单靠 F、长单靠 K」的取证。
 func TestUATBatchD_EstimateByteBaseline8889(t *testing.T) {
-	// 88 案：11,244B md → 3,748 字符 × 3 语 × K160 = 1,799,040 ≥ 实烧 1,075,400
+	// 88 案：11,244B md → 3,748 字符 × 3 语 × K160 = 1,799,040 ＋ 固定项 3,000 = 1,802,040 ≥ 实烧 1,075,400
 	chars88 := estimateFileSourceChars("doc.md", 11244)
 	if chars88 != 3748 {
 		t.Fatalf("88 案字符折算漂移（预检口径变了需同步本锁）: %d", chars88)
 	}
-	est88 := estimateTicketTokens(chars88, 3, "pro", 160, 60)
-	if est88 != 1799040 {
-		t.Fatalf("88 案等值锁: est=%d, want 1799040", est88)
+	est88 := estimateTicketTokens(chars88, 3, "pro", estDefaultParams())
+	if est88 != 1802040 {
+		t.Fatalf("88 案等值锁: est=%d, want 1802040", est88)
 	}
 	if est88 < 1075400 {
 		t.Fatalf("88 案估算低于实烧 1,075,400（F-41 复发）: %d", est88)
 	}
-	// 89 案：97,332B md → 32,444 字符 × 3 语 × K160 = 15,573,120 ≥ 外推实需 ≈9,300,000
+	// 89 案：97,332B md → 32,444 字符 × 3 语 × K160 = 15,573,120 ＋ 3,000 ≥ 外推实需 ≈9,300,000
 	chars89 := estimateFileSourceChars("big.md", 97332)
-	est89 := estimateTicketTokens(chars89, 3, "pro", 160, 60)
+	est89 := estimateTicketTokens(chars89, 3, "pro", estDefaultParams())
 	if est89 < 9300000 {
 		t.Fatalf("89 案估算低于外推实需 930 万 token: %d", est89)
 	}
