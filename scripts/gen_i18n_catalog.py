@@ -473,6 +473,24 @@ T.update({
 "品牌静态件内容异常": "Brand asset content is invalid",
 })
 
+# —— 〇-X 批盘点（2026-09-27 F-72/F-76）：管理台表单与品牌域校验新增的写死中文提示。
+# 这两条都不经前端词典（后端直接回 message），英文会话下漏词条就是中文原样透传，
+# 由 lang_middleware_test.go 的 TestAPICnMessageLiteralsCovered 逐字面量扫出来强制补录。
+T.update({
+# ★ F-76 品牌域前缀占用：撞别家企业编码（编码本身就是可访问子域）
+"该名称与某企业的编码相同（编码本身即为可访问子域），请换一个名称": "This name collides with an existing company code (the code is itself a reachable subdomain); please choose another name",
+# ★ F-72 计费预估系数表单：非平台超管尝试读写运营策略
+"仅平台超管可配置计费预估系数": "Only platform super-admins can configure the billing estimate coefficients",
+})
+
+# —— #55 批盘点（2026-09-28 F-78 比价与算价页）：新增的公开接口 /api/pricing/meta。
+# 这个入口访客可直达（不登录就能看价），所以它的错误提示同样要进词条表；
+# 且这里必须用「算价元数据接口」这种自带上下文的措辞，而不是复用「该接口仅支持 GET」——
+# 公开页面上「该接口」指代不明，英文用户看到只会一头雾水。
+T.update({
+"算价元数据接口只支持 GET": "The pricing metadata endpoint supports GET only",
+})
+
 import re, sys
 sys.path.insert(0, '/tmp')
 
@@ -515,6 +533,10 @@ lines.append('\tzhFmt string // 中文模板原文（编译期转正则）')
 lines.append('\tenFmt string // 英文模板（%d/%s/%v 按序回填捕获）')
 lines.append('}')
 lines.append('')
+# ★ 这两行说明必须随生成器输出：本文件标了「请勿手改」，任何只写在产物里的注释
+#   都会在下一次 --apply 时被静默抹掉（2026-09-27 〇-X 实测踩过一次）。
+lines.append('// patternsEN 英文侧句式词条表：顺序即声明顺序，与 patterns 编译结果一一对应。')
+lines.append('// 新增词条在此追加，禁止散落到调用侧——编译与词条覆盖检查都以本表为唯一事实源。')
 lines.append('var patternsEN = []patternEN{')
 for zh, en in sorted(pats):
     lines.append('\t{%s, %s},' % (q(zh), q(en)))

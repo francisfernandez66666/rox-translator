@@ -527,6 +527,8 @@ export const baseEn: Record<string,string> = {
   'brand.namePlaceholder': 'LangCross',
   'brand.domainPlaceholder': 'Enter your desired domain name',
   'brand.domainPreview': 'You are changing {host}',
+  'brand.domainRule': 'Format: start with a letter, then lowercase letters or digits only (e.g. rox). After saving it is reachable at prefix.main-domain.',
+  'brand.domainInvalid': 'The brand domain must start with a lowercase letter and contain only lowercase letters and digits (no uppercase, hyphens, dots or slashes), e.g. rox',
   'brand.domainPrefixSample': 'prefix',
   'brand.name': 'Brand name',
   'brand.nameEn': 'Brand name (English, optional; fixed for non-Chinese translations)',

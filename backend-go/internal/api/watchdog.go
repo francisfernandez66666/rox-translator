@@ -192,6 +192,7 @@ func (s *Server) startWatchdog() {
 		s.runSubscriptionScan()
 		s.runTrialScan()
 		s.runGrowthScan()
+		s.runBrandGraceScan() // ★ F-75：品牌展示宽限的续费清理与到期回收（必须在订阅扫描之后跑）
 	}
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)
@@ -357,6 +358,10 @@ func (s *Server) runSubscriptionScan() {
 						"租户 #"+strconv.FormatInt(t.ID, 10)+"（"+t.Name+"）商业包「"+code+"」已到期，订阅身份已摘除。")
 				}
 				s.Store.S7MarkLapsed(t.ID, exp) // ★ S7：登记到期时刻，驱动 T+3 老客回访
+				// ★ F-75（2026-09-27）：订阅身份已摘除，此时才起算品牌展示宽限——
+				//   必须在 ExpirePackage 之后，否则写入的宽限键会被那次整体复位连带清掉。
+				//   企业根租户与超管授权租户不在此列（品牌本就不依赖套餐），未配品牌的也不发通知。
+				s.startBrandGraceAtExpiry(t, code, now)
 			}
 			continue
 		}

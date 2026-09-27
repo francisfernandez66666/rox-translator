@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（411 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（414 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -101,6 +101,7 @@ var exactEN = map[string]string{
 	"仅付费包支持升级":               "Only paid plans support upgrade",
 	"仅平台超管可操作数据采集":           "Only platform super-admins can operate data collection",
 	"仅平台超管可配置报价币种与汇率":        "Only platform super admins can configure quote currency and FX rate",
+	"仅平台超管可配置计费预估系数":         "Only platform super-admins can configure the billing estimate coefficients",
 	"仅支持 POST": "POST only",
 	"仅普通用户支持自助注销；管理员账号请联系上级处理": "Self-deactivation is for regular users only; admins should contact a superior",
 	"仅超管可创建行业":              "Only super-admins can create industries",
@@ -311,6 +312,7 @@ var exactEN = map[string]string{
 	"策略校验失败: ":                 "Policy validation failed: ",
 	"策略格式错误":                   "Invalid policy format",
 	"签发失败":                     "Signing failed",
+	"算价元数据接口只支持 GET":           "The pricing metadata endpoint supports GET only",
 	"管理凭证无效":                   "Invalid admin credentials",
 	"组织不存在":                    "Organization not found",
 	"组织名称不能为空":                 "Organization name must not be empty",
@@ -354,6 +356,7 @@ var exactEN = map[string]string{
 	"该交易哈希已关联其他订单（一笔链上交易只能核销一单）":      "This transaction hash is linked to another order (one on-chain transaction settles one order)",
 	"该产品手册尚未上传，请联系平台管理员":              "This product manual has not been uploaded yet; please contact the platform administrator",
 	"该候选已处理": "Candidate already processed",
+	"该名称与某企业的编码相同（编码本身即为可访问子域），请换一个名称":  "This name collides with an existing company code (the code is itself a reachable subdomain); please choose another name",
 	"该工单不支持在线回写（需 docx 结果文件）":           "This ticket does not support online write-back (docx result required)",
 	"该工单暂无纯文案产物（历史工单建单时未生成），可重新发起工单获取":  "This ticket has no plain-text deliverable (legacy tickets did not generate one); create a new ticket to obtain it",
 	"该工单没有可用译文产物（可能因余额不足或流程中断），请重新发起翻译": "This ticket has no usable translation output (it may have stopped due to insufficient balance or an interrupted pipeline); please start a new translation",

@@ -46,6 +46,28 @@ echo "=== A 阶段：公开接口 / 认证 / 计费 / 翻译 / 交易 ==="
 # 所以放在套件最前面当「服务起没起、公开面漏没漏鉴权」的地基断言。
 ck A1-status '"ok":true' "$(curl -s $B/status)"
 ck A1-plans '"success":true' "$(curl -s $B/api/plans)"
+# ---------- A1p ★ 〇-X #55：公开算价元数据 /api/pricing/meta ----------
+# 官网「比价与算价」页（/compare）的唯一点数来源，匿名可达（访客不必登录也要能算账），
+# 三条判据各管一类事故：
+#   ① 出参必须是**积分口径**（unit=points + 两档系数键）——口径漂回 token 就是违反 AGENTS §一·5；
+#   ② 反向锁：响应体不得出现 token 裸值与内部配置键名（K/F 系数、汇率、尺子字面值）；
+#   ③ 等式锁：每积分单价 × 3,000 必须≈套餐面值 299 元——汇率与尺子是**一对联动量**（F-78），
+#      只动一头这条就先红，而它红意味着官网公示的价与套餐面值脱钩（F-12 的复发形态）。
+PM=$(curl -s $B/api/pricing/meta)
+ck A1p-success '"success":true' "$PM"
+ck A1p-unit '"unit":"points"' "$PM"
+ck A1p-coef '"points_per_1k_chars"' "$PM"
+ck A1p-modes '"code":"fast".*"code":"pro"|"code":"pro".*"code":"fast"' "$PM"
+# 反向锁（命中即红）：公开页出 token 裸值/内部键名 = 口径外露
+if echo "$PM" | grep -qiE 'token|est_tokens_per_char|est_tokens_fixed|points_tokens_rate|price_fen'; then
+  FAIL=$((FAIL+1)); echo "FAIL|A1p-no-token-raw|算价元数据出参含 token 裸值或内部配置键名"
+else PASS=$((PASS+1)); echo "PASS|A1p-no-token-raw"; fi
+# 面值等式：points_price_money × 3000 ≈ 299（±1 元容差＝六位小数归一后的浮点尾巴）
+if echo "$PM" | python3 -c 'import sys,json;d=json.load(sys.stdin);p=float(d["points_price_money"]);raise SystemExit(0 if abs(p*3000-299)<=1 else 1)' 2>/dev/null; then
+  PASS=$((PASS+1)); echo "PASS|A1p-face-value-299"
+else FAIL=$((FAIL+1)); echo "FAIL|A1p-face-value-299|每积分单价与 3,000 积分/¥299 面值脱钩（汇率与尺子必须成对调）|got[${PM:0:220}]"; fi
+# 只读口：写方法必须诚实报错（405），不许静默接受
+ck A1p-method-405 'METHOD_NOT_ALLOWED|"success":false' "$(curl -s -X POST $B/api/pricing/meta -H "$J" -d '{}')"
 # ---------- A1q ★ #42 探针拆分（P2 技术债：存活/就绪语义必须分开）----------
 # /livez 恒 200：依赖故障时重启进程救不回来，反而把可降级自愈的实例反复杀掉；
 # /readyz 真探依赖：库不可达必须 503 并点名失败方，否则上游摘不掉这个实例（扣费会各副本各算）。
@@ -299,12 +321,12 @@ ck A7-usage-me '"success":true' "$(curl -s "$B/api/billing/usage/me" -H "$H1")"
 sleep 2
 USED1=$(curl -s $B/api/me/package -H "$H1" | pv '.get("points_used_today", -1)')
 SS=$(curl -s -N $B/api/chat/stream -H "$H1" -H "$J" --max-time 90 \
-  -d "{\"message\":\"A7s 流式计量落库回归断言 $$-$RANDOM-$RANDOM，设备需在傍晚前送达。\",\"skill\":\"translation\",\"options\":{\"target_langs\":[\"en\"]}}")
+  -d "{\"message\":\"A7s 流式计量落库回归断言 $$-${RANDOM}-${RANDOM}，设备需在傍晚前送达。\",\"skill\":\"translation\",\"options\":{\"target_langs\":[\"en\"]}}")
 ck A7s-stream-done '"type":"done"' "$SS"
 USED2=$(curl -s $B/api/me/package -H "$H1" | pv '.get("points_used_today", -1)')
 [ -n "$USED1" ] && [ -n "$USED2" ] && [ "$USED2" -gt "$USED1" ] \
   && { PASS=$((PASS+1)); echo "PASS|A7s-stream-metering-sync(今日已耗 $USED1->$USED2)"; } \
-  || { FAIL=$((FAIL+1)); echo "FAIL|A7s-stream-metering-sync(今日已耗 $USED1->$USED2，done 帧后计量未即时可见)"; }
+  || { FAIL=$((FAIL+1)); echo "FAIL|A7s-stream-metering-sync(今日已耗 ${USED1}->${USED2}，done 帧后计量未即时可见)"; }
 
 # ---------- A7t ★ F-29 后端半（2026-09-25 批D）超长对话文本必须在 SSE 头前拒 ----------
 # 缺陷形态：上万字符的文本直接喂对话管线，LLM 上下游 90s+ 不返回，前端挂着流干等、

@@ -63,6 +63,10 @@ func New(db *sql.DB) (*Store, error) {
 	s.USDTMigrate()               // ★ USDT 收款（2026-09-15）：usdt_orders/usdt_deposits + 尾数唯一索引（幂等）
 	s.TasksMigrate()              // ★ 任务中心：任务定义 + 领取记录建表（幂等；2026-09-03）
 	s.EnsureBillingDefaults()     // 商业化参数默认值落库（幂等，面板可改）
+	// ★ F-78（2026-09-28 〇-X）：积分汇率 1:300→1:400 的存量等值补发（幂等，一次性，仅旧档库触发）。
+	// 必须排在 EnsureBillingDefaults 之后（要看到库里的真实汇率字面值才能判档）、
+	// 且排在下面三处「按当前汇率折算/回填」的迁移之前（否则会把旧口径再折一遍＝双重放大）。
+	s.PointsRateRebase()
 	// ★ #33（2026-09-21）：任务系统事件发放列/流水表/周期计数表 + 出厂任务种入（幂等）。
 	// 排在 EnsureBillingDefaults 之后：出厂任务的积分额度要按 points_tokens_rate 折成内部 token 落库。
 	s.TaskRewardMigrate()

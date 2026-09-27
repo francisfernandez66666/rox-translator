@@ -530,6 +530,8 @@ export const baseZh: Record<string,string> = {
   'brand.namePlaceholder': '能言 LangCross',
   'brand.domainPlaceholder': '请输入你想要的域名名称',
   'brand.domainPreview': '你将改的是 {host}',
+  'brand.domainRule': '格式：以字母开头，只用小写字母与数字（例如 rox）；保存后即可用「前缀.主域名」访问',
+  'brand.domainInvalid': '品牌域只能以小写字母开头、由小写字母与数字组成（不许大写、连字符、点或斜杠），例如 rox',
   'brand.domainPrefixSample': '前缀',
   'brand.name': '品牌名称',
   'brand.nameEn': '品牌英文名（选填，固定用于非中文翻译）',

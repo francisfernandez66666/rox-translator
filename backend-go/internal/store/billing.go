@@ -1152,18 +1152,21 @@ func scanOrders(rows *sql.Rows, err error) ([]*Order, error) {
 //
 //	等价 100 元/千 token、百万 token=10 万元——「按次计费」时代遗留，token 迁移后未换算。
 //	新口径按试运营价目表尺子价锚定：¥299/百万 token。旧键不再读取（保留仅供历史对账）。
-//	★ F-12（2026-09-25 UAT 修复批）：尺子 29900→33222——积分口径 1 积分=300 token，
+//	★ F-12（2026-09-25 UAT 修复批）：尺子 29900→33222——当时 1 积分=300 token，
 //	3,000 积分充值包面值 ¥299，旧尺子 29900 算出 ¥269.10（恰差 10%），定价页/收银台/
 //	管理台代充三口径打架。33222 分/百万 token 使 3,000 积分（90 万 token）恰=¥299.99≈面值。
+//	★ F-78（2026-09-28 〇-X）：尺子 33222→24917——积分汇率改 1:400 后同样 3,000 积分
+//	＝120 万 token，尺子按 3/4 反向缩，才让「¥299 卖 3,000 积分」这条面值不动。
+//	⚠ 尺子与汇率是**一对联动量**：只改一头就会把裸充值价推离面值（F-12 的 10% 差即此病复发）。
 //	注意：本价仅用于「无套餐裸充值单」的金额兜底；正式售卖一律走套餐 amount_money（packages.price_money）。
-//	⚠ 生产 system_config 已种 29900，GetConfig 优先于本默认值——线上改值随批 H 部署动作执行。
+//	⚠ 生产 system_config 已种 33222，GetConfig 优先于本默认值——线上改值随 PointsRateRebase 启动迁移执行。
 func (s *Store) PriceFenPerMillionTokens() int64 {
 	if v, _ := s.GetConfig("price_fen_per_million_tokens"); v != "" {
 		if n, e := strconv.ParseInt(v, 10, 64); e == nil && n > 0 {
 			return n
 		}
 	}
-	return 33222
+	return DefaultPriceFenPerMillionTokens
 }
 
 // TokensToFen token 数→应收金额（分），四舍五入。
@@ -2145,18 +2148,24 @@ func (s *Store) UsageAllByUser(from, to string) (map[int64]int64, error) {
 
 // EnsureBillingDefaults 商业化参数默认值落库（幂等；后台面板可改）。
 // 只补缺失键（WHERE NOT EXISTS），不覆盖已有人工改过的配置值。
+// ★ F-78（2026-09-28 〇-X）：汇率 1:300→1:400 后，三枚「按积分面值折算」的种子一律
+// 走 积分×DefaultPointsTokensRate 表达式（不再写死 token 数），尺子/汇率取 packages.go 常量——
+// 这样今后再改汇率只需改常量一处，种子自动跟上（老库由 PointsRateRebase 等值补发对齐）。
+// ⚠ 低额提醒阈值、KB 上传奖励率、句↔token 折算率这四枚是**直接按 token 定的量**（不经积分入口），
+// 不随汇率动：它们约束的是真实消耗量，改了等于变相调价，与本次「积分单价下调」是两件事。
 func (s *Store) EnsureBillingDefaults() {
+	str := func(v int64) string { return strconv.FormatInt(v, 10) }
 	defaults := [][2]string{
-		{"free_trial_tokens", "300000"},
+		{"free_trial_tokens", str(DefaultFreeTrialPoints * DefaultPointsTokensRate)},
 		{"free_trial_days", "14"},
 		{"order_pending_timeout_min", "15"},
 		{"low_balance_alert_tokens", "100000"},
 		// ★ 邀请裂变参数（白皮书 §5.2 计奖矩阵，面板可改）
-		{"invite_reward_tokens", "300000"},        // 每邀 1 人·邀请者体验增量
-		{"invite_extend_days", "14"},              // 每邀 1 人·邀请者时长叠加天数
-		{"inviter_paid_reward_tokens", "500000"},  // 受邀者首笔付费套餐→邀请者永久 token
-		{"price_fen_per_million_tokens", "33222"}, // ★ 充值尺子价（分/百万 token；F-12 重锚 29900→33222 使 3,000 积分恰=¥299 面值；旧键 price_fen_per_token 已废弃）
-		{"points_tokens_rate", "300"},             // ★ S1 积分制：1 积分 = 300 内部计量 token（对外只露积分，防成本反推）
+		{"invite_reward_tokens", str(DefaultInviteRewardPoints * DefaultPointsTokensRate)}, // 每邀 1 人·邀请者体验增量
+		{"invite_extend_days", "14"}, // 每邀 1 人·邀请者时长叠加天数
+		{"inviter_paid_reward_tokens", str(DefaultInviterPaidRewardPoints * DefaultPointsTokensRate)}, // 受邀者首笔付费套餐→邀请者永久 token
+		{"price_fen_per_million_tokens", str(DefaultPriceFenPerMillionTokens)},                        // ★ 充值尺子价（分/百万 token；F-12 重锚 29900→33222，F-78 随汇率 1:400 反向缩到 24917，两轨都保证「3,000 积分=¥299」面值；旧键 price_fen_per_token 已废弃）
+		{"points_tokens_rate", str(DefaultPointsTokensRate)},                                          // ★ S1 积分制：1 积分 = 400 内部计量 token（对外只露积分，防成本反推）
 		// ★ KB 上传奖励（任务2.3）：每条约额 + 单租户日封顶（防刷）
 		{"kb_upload_reward_tokens_per_entry", "200"},
 		{"kb_upload_reward_daily_cap", "50000"},

@@ -137,6 +137,11 @@
 #       知识库管理口匿名 → 401（本批从内联 403 纠正的那一族，admin_kb.go 与 kb.go 各锁一支）。
 #   T63 鉴权分流尾量代表口（★ 〇-U 批 I-10 ③ 尾量 122 处）：超管口三态（401/403/200）、
 #       租管口 401+200 正向对照、部门口 401（writeAuthzError 换回内联 403 即先红）。
+#   T64 计费预估系数管理台表单（★ 〇-X 第 5 项 / F-72 补口）：/api/admin/config/est-tokens
+#       鉴权三态 / 未配置回显代码缺省+公式+汇率 / 四类非法输入（K 清零·负数·超上限·缺项）整批拒收
+#       且**库里四键行数一根毛都不许多**（半套配置＝长短单口径不一致）/ 合法保存读回等值+审计含新数 /
+#       脏值下生效值回缺省而 stored 原样回吐（表单不许把"从来没生效的数"显示成当前配置）/
+#       reset 清空四键；跑完删净自己写的行与审计，把「库里没这四行走代码缺省」的线上形态交还下一轮（含 T40）。
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 #   —— 2026-09-21 实测：`ck X 'want' "$(post "$H" "{\"a\":1,\"b\":2}" /p)"` 里的 body 会被 bash
 #   在双引号内的命令替换中做**大括号展开**，按逗号切成两个参数，curl 发出残缺 body 换来「参数格式
@@ -232,6 +237,30 @@ TDID=$(sq "SELECT tenant_id FROM users WHERE username='uatuser_d' LIMIT 1" | tr 
 
 echo "=== T 阶段：功能与交易专项深度 UAT ==="
 
+# ----------------------------------------------------------------------------
+# ★ F-78（2026-09-28 〇-X）「积分↔token 汇率 1:300 → 1:400」断言口径收口
+# 本套件所有「积分面值 × 汇率 = 库内 token」的折算锁一律从库里**现读**汇率（RATE），
+# 不再写死 300/60000/300000 这类历史字面值——写死数字正是 F-12 那类「改一处口径、
+# 定价页/收银台/管理台三口径打架」事故的复读机；现读之后，改档只需数据库里两个键一起动，
+# 断言层零改动继续有效，而下面 T0 那条等式锁负责抓住「只动一枚旋钮」的错误改法。
+# 缺行兜底与 store 出厂默认同值（400 / 24917），与 T58/T59 的现读口径同源。
+# ----------------------------------------------------------------------------
+RATE=$(dbq "SELECT value FROM system_config WHERE key='points_tokens_rate'" | tr -d '[:space:]' | tr -dc '0-9')
+[ -n "$RATE" ] || RATE=400
+RULER_FEN=$(dbq "SELECT value FROM system_config WHERE key='price_fen_per_million_tokens'" | tr -d '[:space:]' | tr -dc '0-9')
+[ -n "$RULER_FEN" ] || RULER_FEN=24917
+echo "INFO|计费口径读数：积分汇率 1:$RATE，裸充值尺子 ${RULER_FEN} 分/百万 token"
+
+# T0 面值成对性锁：3,000 积分（＝3000×RATE token）按尺子折回来必须仍是 ¥299.00＝29,900 分。
+# 算法与 store 的 TokensToFen 同口径（乘满再除、分位四舍五入），两侧都取**库里的真实读数**，
+# 因此这一条同时锁住三件事：汇率与尺子成对移动、面值不漂移、出厂种子与补发结果一致。
+# 反向负向锁（尺子钉在旧档 33222 时必须折断这条等式）在 Go 单测
+# store/billing_uat_batchb_test.go F12，断言层这里只做正向日检。
+T0FEN=$(python3 -c 'import sys
+toks = int(sys.argv[1]) * int(sys.argv[2])
+print((toks * int(sys.argv[3]) + 500000) // 1000000)' "$RATE" 3000 "$RULER_FEN" 2>/dev/null || echo 0)
+ck T0-point-face-299 '^29900$' "$T0FEN"
+
 # ---------- T1 线下订单全生命周期 ----------
 B0=$(sq "SELECT balance FROM balance_accounts WHERE tenant_id=$TAID")
 R=$(post "$AH" "{\"tenant_id\":$TAID,\"points\":200,\"money\":0}" /api/admin/orders/create)
@@ -249,7 +278,7 @@ ck T1-order-pay '"success":true' "$R"
 ST2=$(sq "SELECT status FROM orders WHERE id=$OID1")
 [ "$ST2" = "paid" ] && { PASS=$((PASS+1)); echo "PASS|T1-order-marked-paid"; } || { FAIL=$((FAIL+1)); echo "FAIL|T1-order-marked-paid($ST2)"; }
 B1=$(( $(sq "SELECT balance FROM balance_accounts WHERE tenant_id=$TAID") - B0 ))
-[ "$B1" = "60000" ] && { PASS=$((PASS+1)); echo "PASS|T1-balance-credit(+$B1)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T1-balance-credit(+$B1, want +60000(200积分×300))"; }
+[ "$B1" = "$(( 200 * RATE ))" ] && { PASS=$((PASS+1)); echo "PASS|T1-balance-credit(+$B1)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T1-balance-credit(+$B1, want +$((200 * RATE))(200积分×汇率$RATE))"; }
 R=$(post "$AH" "{\"id\":$OID1,\"tenant_id\":$TAID}" /api/admin/orders/refund)
 ck T1-order-refund '"success":true' "$R"
 ST3=$(sq "SELECT status FROM orders WHERE id=$OID1")
@@ -499,8 +528,11 @@ TOT1=$(get "$H16" /api/billing/balance | pv '.get("points_available",0)')
 AL16=$(sq "SELECT COUNT(*) FROM alerts WHERE tenant_id=$T16D AND kind='balance' AND level='critical'" | tr -d '[:space:]')
 [ "${AL16:-0}" -le 1 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|T16-no-false-settle-alert(critical=$AL16)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T16-no-false-settle-alert(critical=$AL16)"; }
 L16=$(sq "SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=$T16D" | tr -d '[:space:]')
-EQ16=$(python3 -c "print(1 if abs($L16 - ($TOT0 - $TOT1)*300) <= 900 else 0)" 2>/dev/null || echo 0)   # 积分差折回 token（每次四舍五入≤±1 积分）
-[ "$EQ16" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T16-no-double-deduct(ledger=$L16 consumed=$(( (TOT0 - TOT1)*300 )))"; } || { FAIL=$((FAIL+1)); echo "FAIL|T16-no-double-deduct(ledger=$L16 consumed=$(( (TOT0 - TOT1)*300 )))"; }
+# 容差按「3 积分」的原意表达（★ F-78 改档时不跟着改数字就会把容差悄悄收紧）：
+# 每次结算的展示积分四舍五入≤±1 积分，留 3 积分余量＝3×RATE token。
+T16TOL=$(( 3 * RATE ))
+EQ16=$(python3 -c "print(1 if abs($L16 - ($TOT0 - $TOT1)*$RATE) <= $T16TOL else 0)" 2>/dev/null || echo 0)   # 积分差折回 token（每次四舍五入≤±1 积分）
+[ "$EQ16" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T16-no-double-deduct(ledger=$L16 consumed=$(( (TOT0 - TOT1)*RATE )))"; } || { FAIL=$((FAIL+1)); echo "FAIL|T16-no-double-deduct(ledger=$L16 consumed=$(( (TOT0 - TOT1)*RATE )))"; }
 rm -rf "$D16"
 
 # ---------- T17（G4）同租户工单隐私：非创建者不可见详情 ----------
@@ -1099,7 +1131,7 @@ rm -f "$ZIP39H" "$ZIP39"; rm -rf "$TMPD39"
 
 # ============================================================================
 # T40（2026-09-15 任务1；★ 2026-09-25 批 D｜F-41 后重钉）：文件工单余额预检「积分口径 + K 系数等值」
-#   新个人租户默认体验额度=free_trial_tokens（300000 内部 token=1000 积分）。
+#   新个人租户默认体验额度=free_trial_tokens（1000 积分面值，按现读汇率折成内部 token）。
 #   ⚠️ 口径已被 F-41 的「宁高勿低」决策**翻转**：旧公式 chars/1.3×langs×markup 比 pro 实测计费低约 62 倍
 #      （88 号估 17.3k、实烧 1,075,400 后在中途烧穿全损），新公式 est = chars × langs × K(mode)，
 #      K(pro)=160 / K(fast)=60 且走 system_config 可调。于是「700KB PDF 在体验余额下直接放行」
@@ -1108,7 +1140,9 @@ rm -f "$ZIP39H" "$ZIP39"; rm -rf "$TMPD39"
 #   a-1 体验余额下 700KB .pdf 必须被拦，且出结构化码（F-21③：4xx + code，不再 200+success:false）
 #   a-2 等值锁：拒绝文案里的「预估需约 N 积分」必须等于按**当前 F/K 两档配置现算**的值
 #       —— 批 H 回调 K、〇-W 回调 F（往 system_config 插/改 est_tokens_fixed_fast /
-#       est_tokens_per_char_fast；★ 这四键管理台没有表单，只能 psql 写库，写库即生效无需发版）
+#       est_tokens_per_char_fast；★ 2026-09-27 〇-X 第 5 项起这四键**有管理台表单**了
+#       （GET/POST /api/admin/config/est-tokens，见下方 T64 段），写库/写表单都即生效无需发版，
+#       本段仍按「库里现读」算期望值，两条改配置的路径都跟随）
 #       后本条都自动跟随；只有「代码里偷偷改默认值 / 分档折算规则被改回 /3 / 两段式接错档」才会翻红。
 #   a-3 补足额度后同一文件必须放行 —— 证明拦单只由「余额 < 预估」这一条决定，
 #       不是尺寸硬闸或扩展名误判（09-15 用户反馈的「700KB PDF 提示需 402553 token」误拦形态）复活。
@@ -1128,12 +1162,13 @@ R40S=$(curl -s $B/api/tickets/create-file -H "$H40" -F "files=@$TMPD40/t40_small
 ck T40-pdf-700k-blocked-at-trial '"success":false' "$R40S"
 ck T40-pdf-code-quota '"code":"QUOTA_EXCEEDED"' "$R40S"
 if echo "$R40S" | grep -qi "token"; then FAIL=$((FAIL+1)); echo "FAIL|T40-pdf-msg-no-raw-token($(echo "$R40S" | head -c 120))"; else PASS=$((PASS+1)); echo "PASS|T40-pdf-msg-no-raw-token"; fi
-# a-2 等值锁（★ F-72 2026-09-27 〇-W 改两段式）：N == round( (F(fast) + (716800/12 整除) × K(fast)) / 300 )
-#   两档都从库里**现读**（键缺失/非法 → 与后端同口径的保守默认 F=1200 / K=60），
-#   所以管理台回调 F 或 K 本条都自动跟随；只有「代码偷偷改默认值 / 两段式接错档 / 分档折算被改回 /3」才翻红。
+# a-2 等值锁（★ F-72 2026-09-27 〇-W 改两段式；★ F-78 折算尺改现读）：
+#   N == round( (F(fast) + (716800/12 整除) × K(fast)) / RATE )
+#   三档都从库里**现读**（K/F 键缺失/非法 → 与后端同口径的保守默认 F=1200 / K=60；RATE 见文件头 T0），
+#   所以管理台回调 F 或 K、或积分改档，本条都自动跟随；只有「代码偷偷改默认值 / 两段式接错档 / 分档折算被改回 /3」才翻红。
 KFAST40=$(dbq "SELECT value FROM system_config WHERE key='est_tokens_per_char_fast'" | tr -d '[:space:]')
 FFAST40=$(dbq "SELECT value FROM system_config WHERE key='est_tokens_fixed_fast'" | tr -d '[:space:]')
-EXP40=$(K40="$KFAST40" F40="$FFAST40" python3 -c 'import os
+EXP40=$(K40="$KFAST40" F40="$FFAST40" RATE40="$RATE" python3 -c 'import os
 def num(raw, defv, allow_zero):
     try:
         v = float(os.environ.get(raw, "").strip())
@@ -1144,8 +1179,9 @@ def num(raw, defv, allow_zero):
     return defv                # K 的 ≤0 与 F 的负数都是脏配置
 k = num("K40", 60.0, False)
 fixed = num("F40", 1200.0, True)   # F 允许显式 0＝运维退回纯线性
+rate = int(num("RATE40", 400.0, False))
 est = int(fixed) + int(716800 // 12 * k)   # 与 Go 侧同序：固定项先取整，再加线性项
-print((est + 150) // 300)')
+print((est + rate // 2) // rate)')
 ck T40-pdf-estimate-eq-K "预估需约 ${EXP40} 积分" "$R40S"
 N40=$(printf '%s' "$R40S" | grep -oE '预估需约 [0-9]+ 积分' | grep -oE '[0-9]+' | head -1)
 # a-3 按**文案里实际给出的**预估积分补足额度（多留 1000 积分余量）后重试 → 必须放行
@@ -1153,14 +1189,14 @@ if [ -z "$N40" ]; then
   FAIL=$((FAIL+1)); echo "FAIL|T40-pdf-allowed-after-topup(文案里没解析出预估积分，resp=$(echo "$R40S" | head -c 160))"
 else
   T40TID=$(dbq "SELECT tenant_id FROM users WHERE username='$T40U'" | tr -dc '0-9')
-  G40=$(( (N40 + 1000) * 300 ))
+  G40=$(( (N40 + 1000) * RATE ))
   NOW40=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   dbq "INSERT INTO quota_grants (tenant_id,kind,total,\"left\",expires_at,source,ref_id,created_at) VALUES ($T40TID,'uat',$G40,$G40,'2099-12-31T23:59:59Z','uat_t40_topup',0,'$NOW40')" >/dev/null
   R40T=$(curl -s $B/api/tickets/create-file -H "$H40" -F "files=@$TMPD40/t40_small.pdf" -F "target_langs=en" -F "mode=fast")
   ck T40-pdf-allowed-after-topup '"success":true' "$R40T"
 fi
-# 大文件：积分余额×汇率300×13 字节（预检按内部 token 估算，/12/1.3×1.5 后仍超余额）；封顶 35MB（<40MB 上传上限）
-T40BIG=$(( T40BAL * 300 * 13 )); [ "$T40BIG" -gt 36700160 ] && T40BIG=36700160
+# 大文件：积分余额×现读汇率×13 字节（预检按内部 token 估算，/12/1.3×1.5 后仍超余额）；封顶 35MB（<40MB 上传上限）
+T40BIG=$(( T40BAL * RATE * 13 )); [ "$T40BIG" -gt 36700160 ] && T40BIG=36700160
 head -c "$T40BIG" /dev/urandom > "$TMPD40/t40_big.pdf"
 R40B=$(curl -s $B/api/tickets/create-file -H "$H40" -F "files=@$TMPD40/t40_big.pdf" -F "target_langs=en" -F "mode=fast")
 echo "$R40B" | grep -q '"success":false' && echo "$R40B" | grep -q "积分" \
@@ -1524,19 +1560,20 @@ ck T48-no-pseudo-residue '^NO$' "$RESID48"
 # 需求原文数值（改一个数就该翻红）：
 #   每日登录 +100 临时积分/3 天/一日一次/日叠加；每周发起翻译 +100 临时积分/7 天/日 ≤1、周 ≤5；
 #   邀请好友注册 +500 临时积分/14 天；邀请好友充值 +1000 永久积分；知识库解析成功 +600 永久积分（终身一次）。
-# 对外零 token：断言里 30000=100 积分 ×300（库内记账口径），接口出参只允许出现积分。
+# 对外零 token：断言里的 token 一律写成「积分面值 × 库里现读汇率」（★ F-78 后不再钉死 300），
+# 接口出参只允许出现积分。面值（100/100/500/1000/600 积分）才是需求原文的锁，汇率只是折算尺。
 SEED49=$(dbq "SELECT COUNT(*) FROM user_tasks WHERE task_key<>''" | tr -dc '0-9')
 ck T49-builtin-seeded '^[5-9]' "$SEED49"
-ck T49-seed-login '^30000\|3\|1\|1\|0$' "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||stack_expiry||'|'||cap_per_day||'|'||cap_per_week FROM user_tasks WHERE task_key='login_daily'")"
-ck T49-seed-translate '^30000\|7\|1\|1\|5$' "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||stack_expiry||'|'||cap_per_day||'|'||cap_per_week FROM user_tasks WHERE task_key='translate_week'")"
-ck T49-seed-invite-reg '^150000\|14\|0\|0$' "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||cap_per_day||'|'||cap_per_week FROM user_tasks WHERE task_key='invite_register'")"
-ck T49-seed-invite-paid '^300000\|0\|event$' "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||period FROM user_tasks WHERE task_key='invite_paid'")"
-ck T49-seed-kb '^180000\|0\|once$' "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||period FROM user_tasks WHERE task_key='kb_upload'")"
+ck T49-seed-login "^$(( 100 * RATE ))\|3\|1\|1\|0$" "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||stack_expiry||'|'||cap_per_day||'|'||cap_per_week FROM user_tasks WHERE task_key='login_daily'")"
+ck T49-seed-translate "^$(( 100 * RATE ))\|7\|1\|1\|5$" "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||stack_expiry||'|'||cap_per_day||'|'||cap_per_week FROM user_tasks WHERE task_key='translate_week'")"
+ck T49-seed-invite-reg "^$(( 500 * RATE ))\|14\|0\|0$" "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||cap_per_day||'|'||cap_per_week FROM user_tasks WHERE task_key='invite_register'")"
+ck T49-seed-invite-paid "^$(( 1000 * RATE ))\|0\|event$" "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||period FROM user_tasks WHERE task_key='invite_paid'")"
+ck T49-seed-kb "^$(( 600 * RATE ))\|0\|once$" "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||period FROM user_tasks WHERE task_key='kb_upload'")"
 
-# ① 登录事件钩子：再登录一次 uatuser_a → 应落一笔 task/30000 临时台账，且同日不重复发放
+# ① 登录事件钩子：再登录一次 uatuser_a → 应落一笔 task/100 积分 临时台账，且同日不重复发放
 UAID=$(sq "SELECT id FROM users WHERE username='uatuser_a' LIMIT 1" | tr -dc '0-9')
 : $(tok uatuser_a uatpass123)
-ck T49-login-grant '^30000\|task:login_daily$' "$(dbq "SELECT total||'|'||source FROM quota_grants WHERE tenant_id=$TAID AND kind='task' AND source='task:login_daily' ORDER BY id DESC LIMIT 1")"
+ck T49-login-grant "^$(( 100 * RATE ))\|task:login_daily$" "$(dbq "SELECT total||'|'||source FROM quota_grants WHERE tenant_id=$TAID AND kind='task' AND source='task:login_daily' ORDER BY id DESC LIMIT 1")"
 : $(tok uatuser_a uatpass123)
 ck T49-login-dedup-once-per-day '^1$' "$(dbq "SELECT COUNT(*) FROM user_task_rewards WHERE user_id=$UAID AND task_key='login_daily'")"
 ck T49-login-counter-one '^1$' "$(dbq "SELECT cnt FROM user_task_period_cnt WHERE user_id=$UAID AND period_key LIKE 'D:%' ORDER BY id DESC LIMIT 1")"
@@ -1544,7 +1581,7 @@ ck T49-login-counter-one '^1$' "$(dbq "SELECT cnt FROM user_task_period_cnt WHER
 # ② 翻译事件钩子：发起一次即时翻译（成功计量后自动发放 translate_week），日 ≤1 次由去重键保证
 curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"任务系统翻译事件测试文本。","options":{"target_langs":["en"],"mode":"fast"}}' >/dev/null
 sleep 2
-ck T49-translate-grant '^30000\|task:translate_week$' "$(dbq "SELECT total||'|'||source FROM quota_grants WHERE tenant_id=$TAID AND kind='task' AND source='task:translate_week' ORDER BY id DESC LIMIT 1")"
+ck T49-translate-grant "^$(( 100 * RATE ))\|task:translate_week$" "$(dbq "SELECT total||'|'||source FROM quota_grants WHERE tenant_id=$TAID AND kind='task' AND source='task:translate_week' ORDER BY id DESC LIMIT 1")"
 curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"任务系统翻译事件重复测试文本。","options":{"target_langs":["en"],"mode":"fast"}}' >/dev/null
 sleep 2
 ck T49-translate-daily-cap '^1$' "$(dbq "SELECT COUNT(*) FROM user_task_rewards WHERE task_key='translate_week' AND user_id=$UAID")"
@@ -1570,7 +1607,7 @@ R49=$(post "$AH" '{"subscribed_only":false}' /api/admin/tasks/reset-consumption)
 ck T49-reset-ok '"success":true' "$R49"
 ck T49-reset-rows '"reset_rows":[1-9]' "$R49"
 ck T49-reset-message '有效期保持不变' "$R49"
-ck T49-reset-refilled '^30000$' "$(dbq "SELECT \"left\" FROM quota_grants WHERE id=$GRANT49")"
+ck T49-reset-refilled "^$(( 100 * RATE ))$" "$(dbq "SELECT \"left\" FROM quota_grants WHERE id=$GRANT49")"
 ck T49-reset-expiry-kept "^${EXP49}$" "$(dbq "SELECT expires_at FROM quota_grants WHERE id=$GRANT49")"
 # 幂等：已拉满（left=total）的记录第二次重置不再触碰。
 # （软断言：套件运行期其它租户的异步计量可能刚好消耗掉一笔任务台账，导致本次又重置 1 条——
@@ -1712,7 +1749,7 @@ else
   FAIL=$((FAIL+1)); echo "FAIL|T51-order-discounted(落库 $AM51 vs 试算 $PAY51)"
 fi
 TN51=$(sq "SELECT amount_tokens FROM orders WHERE id=$OID51" | tr -d '[:space:]')
-[ "$TN51" = "300000" ] && { PASS=$((PASS+1)); echo "PASS|T51-tokens-undiscounted($TN51)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T51-tokens-undiscounted(want 300000 got $TN51，券不得减积分额度)"; }
+[ "$TN51" = "$(( 1000 * RATE ))" ] && { PASS=$((PASS+1)); echo "PASS|T51-tokens-undiscounted($TN51)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T51-tokens-undiscounted(want $((1000 * RATE))(1000积分×汇率$RATE) got $TN51，券不得减积分额度)"; }
 AP51=$(echo "$R" | pv '.get("order",{}).get("amount_points",-1)')
 [ "$AP51" = "1000" ] && { PASS=$((PASS+1)); echo "PASS|T51-points-undiscounted"; } || { FAIL=$((FAIL+1)); echo "FAIL|T51-points-undiscounted(got $AP51)"; }
 ck T51-order-coupon-code "$C51" "$(sq "SELECT coupon_code FROM orders WHERE id=$OID51")"
@@ -1723,7 +1760,7 @@ ck T51-redeem-audit "$ON51" "$(sq "SELECT detail FROM audit_logs WHERE action='c
 B51_0=$(sq "SELECT balance FROM balance_accounts WHERE tenant_id=$T51D" | tr -d '[:space:]')
 post "$H51" "{\"order_id\":$OID51}" /api/pay/simulate >/dev/null
 B51_1=$(sq "SELECT balance FROM balance_accounts WHERE tenant_id=$T51D" | tr -d '[:space:]')
-[ $((B51_1 - B51_0)) -eq 300000 ] && { PASS=$((PASS+1)); echo "PASS|T51-credit-full-quota(+$((B51_1-B51_0)))"; } || { FAIL=$((FAIL+1)); echo "FAIL|T51-credit-full-quota(got +$((B51_1-B51_0)) want +300000)"; }
+[ $((B51_1 - B51_0)) -eq $(( 1000 * RATE )) ] && { PASS=$((PASS+1)); echo "PASS|T51-credit-full-quota(+$((B51_1-B51_0)))"; } || { FAIL=$((FAIL+1)); echo "FAIL|T51-credit-full-quota(got +$((B51_1-B51_0)) want +$((1000 * RATE))(1000积分×汇率$RATE))"; }
 
 # ④ 每家企业限用 1 次：二次用同券必须拒，且不能留下挂券的半截单
 R=$(post "$H51" "{\"points\":1000,\"channel\":\"mock\",\"coupon\":\"$C51\"}" /api/pay/create)
@@ -2305,8 +2342,7 @@ dbq "DELETE FROM feedbacks WHERE id IN ($FID57,$FID57B) OR content='UAT-F45-脏�
 # ⇒ before==after、diff 恒空，且旧字段清单压根没有 max_daily_points。
 # 本节锁「读→写→读」三方等值（GET 值＝库内真值、写入值＝再读值）＋审计 detail 逐字含改前/改后。
 T58TID=$TAID
-T58RATE=$(dbq "SELECT value FROM system_config WHERE key='points_tokens_rate'" | tr -d '\r' | tr -dc '0-9')
-[ -n "$T58RATE" ] || T58RATE=300  # 未配置时与 store.PointsTokensRate 的兜底口径一致
+T58RATE=$RATE                                    # ★ F-78：与文件头现读的同源汇率（不再各自兜底一份，防两处口径分叉）
 # t58perm — 从 tenants.permissions 取一个数值键（0 值因 omitempty 不在 JSON 里，缺键按 0 算）
 t58perm(){ printf '%s' "$1" | python3 -c 'import sys,json
 try:
@@ -2392,7 +2428,7 @@ AK59=$(curl -s $B/api/apikeys/create -H "$H59" -H "$J" -d "$AK59BODY" | pv '.get
 ck T59-key-created '^rk_[0-9a-f]{40}$' "$AK59"
 AK59UID=$(dbq "SELECT user_id FROM api_keys WHERE tenant_id=$TAID AND name='f49-key'" | tr -d '[:space:]')
 ck T59-key-bound-user '^[1-9][0-9]*$' "$AK59UID" # 强绑定：无归属用户的 Key 一律无效（validateAPIKey 硬闸）
-T59RATE=$T58RATE                                 # 折算率与 T58 同源（同一份 system_config，缺省 300）
+T59RATE=$T58RATE                                 # 折算率与 T58 同源（同一份 system_config，缺省 400）
 # t59pts — 台账侧独立折算，必须与 store.PointsFromTokens 同式（四舍五入整除），否则等值锁两边不同源
 t59pts(){ python3 -c 'import sys
 t, r = int(sys.argv[1]), int(sys.argv[2])
@@ -2694,6 +2730,129 @@ req3 GET "" /api/webhooks; ck3 T63-webhooks-anon-401 401 UNAUTHORIZED '未登录
 req3 GET "$H1" /api/webhooks
 [ "${R3ST:-}" = "200" ] && { PASS=$((PASS+1)); echo "PASS|T63-webhooks-tenantadmin-200"; } || { FAIL=$((FAIL+1)); echo "FAIL|T63-webhooks-tenantadmin-200(got ${R3ST:-?} body=${R3BODY:0:120}；401＝H1 失效假绿，勿放宽)"; }
 req3 GET "" /api/admin/orgs; ck3 T63-orgs-anon-401 401 UNAUTHORIZED '未登录'
+
+# ---------- T64 计费预估系数管理台表单（★ 〇-X 第 5 项 / F-72 补口，2026-09-27） ----------
+# 本节锁 GET/POST /api/admin/config/est-tokens（后端 est_tokens_config.go、前端 PlansP 超管段）。
+# 为什么值得一条 HTTP 级常设锁：这四个数直接决定「客户能不能建单」——K 清零＝余额预检全放行，
+# 正是 F-41 那笔「估 1.7 万、实烧 107 万、中途烧穿全损」的事故形态；而在管理台之前它们只能靠
+# psql 往 system_config 插行，手滑一次就是全量放行或全量误拦，且没有任何留痕。
+# 五组判据：① 鉴权三态；② 未配置时回显代码缺省 + 公式/汇率只读面；③ 四类非法输入整批拒收
+# 且**库里一行都不许多出来**（半套参数＝长短单口径不一致，比不调更糟）；④ 合法保存→读回等值
+# ＋审计留痕含新数；⑤ 脏值（库里躺着 'abc'）时界面必须显示「系统真正在用哪个数」而不是脏值本身，
+# 同时 stored 原样回吐把诊断线索留住；⑥ reset 回落缺省。
+# ★ 收尾必须删掉本段写过的四键：T40（脚本前段）是**现读** est_tokens_*_fast 来算等值锁的，
+#   而 run_uat 复用同一个库跑下一轮——留着 161/61 会让 T40 跟着漂移，且「未配置走缺省」这条
+#   线上真实形态就再也没被测到了。
+ESTCFG=/api/admin/config/est-tokens
+ESTKEYS="'est_tokens_per_char_pro','est_tokens_per_char_fast','est_tokens_fixed_pro','est_tokens_fixed_fast'"
+# estv <键> → 从 R3BODY 的 coefficients 里取一个生效值（取不到回空，交给等值判据报红）
+estv(){ printf '%s' "${R3BODY:-}" | python3 -c 'import sys,json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+c = d.get("coefficients") if isinstance(d, dict) else None
+v = c.get(sys.argv[1]) if isinstance(c, dict) else None
+print("" if v is None else v)' "$1" 2>/dev/null; }
+# estrow <键> → 从 R3BODY 的 stored 里取库内原值（空串＝该键未配置）
+estrow(){ printf '%s' "${R3BODY:-}" | python3 -c 'import sys,json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+s = d.get("stored") if isinstance(d, dict) else None
+v = s.get(sys.argv[1]) if isinstance(s, dict) else None
+print("" if v is None else v)' "$1" 2>/dev/null; }
+# ESTCNT → 「**真正表态了**的四键行数」：值空串＝与从未配置同形态（读侧一律回代码缺省），
+#   所以只数 value<>''。否则本段 reset 之后残留的 4 行空串会让行数判据在下一轮 4→0 假红
+#   （首跑真踩：跑完留下的空串行把「还原」判据变红，而生效值其实一模一样走缺省）。
+ESTCNT(){ sq "SELECT COUNT(*) FROM system_config WHERE key IN ($ESTKEYS) AND value<>''" | tr -d '[:space:]'; }
+# ESTGET <键> → 现读库内原值（本段既要直插脏值、又要 reset 清空，跑完必须**原样还回去**：
+#   正常情况下两库都没有这四行（走代码缺省），但万一运维已经用管理台配过，脚本不能替他改数。
+ESTGET(){ dbq "SELECT value FROM system_config WHERE key='$1'" | tr -d '\r' | head -1; }
+# ckq <名> <期望字面值> <实测> → **等值**锁，不用 ck 的正则形态：正则 '0' 会被 160/1200 命中，
+#   '60' 会被 160 命中——本段量的正是「读回来的到底是不是那个数」，宽松正则＝恒绿假断言。
+ckq(){ if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "PASS|$1($2)"; else FAIL=$((FAIL+1)); echo "FAIL|$1|want=$2|got=${3:-<空>}"; fi; }
+# 令牌就地重登：$AH 取在脚本顶部（第 159 行那次登录），中途 T6 改密/轮换会把它打成 401
+#   （同 T60 首跑踩过的坑），对着 401 断言 400 会让整节假红。
+AH64="Authorization: Bearer $(tok $ADMIN_USER $ADMIN_PASS)"
+ck T64-super-token '^.{20,}$' "${AH64#Bearer }"
+EST0=$(ESTCNT); EST0=${EST0:-0}
+PRE64KPRO=$(ESTGET est_tokens_per_char_pro); PRE64KFAST=$(ESTGET est_tokens_per_char_fast)
+PRE64FPRO=$(ESTGET est_tokens_fixed_pro);     PRE64FFAST=$(ESTGET est_tokens_fixed_fast)
+# ① 鉴权三态（匿名 401 / 租管 403 / 超管 200）
+req3 GET "" $ESTCFG; ck3 T64-get-anon-401 401 UNAUTHORIZED '未登录'
+req3 GET "$H1" $ESTCFG; ck3 T64-get-tenantadmin-403 403 FORBIDDEN '权限不足|仅平台超管'
+B64ANY='{"k_pro":160,"k_fast":60,"fixed_pro":3000,"fixed_fast":1200}'
+#   ★ 租管这一腿在 requireAdminUser 就被挡（"权限不足"），走不到 IsSuperAdmin 那支
+#   （"仅平台超管"）——两支文案都收下：真漏了超管判定时会由 Go 侧单测红在这里由 HTTP 级红，
+#   而把两支合并成一条正则才不会被「守卫链换人」这种等价改法假红。
+req3 POST "$H1" $ESTCFG "$B64ANY"; ck3 T64-post-tenantadmin-403 403 FORBIDDEN '权限不足|仅平台超管'
+# ② 未配置态回显：四系数＝代码缺省，且公式/汇率两条只读面必须在前端可达（表单要显示它们）
+req3 GET "$AH64" $ESTCFG
+[ "${R3ST:-}" = "200" ] && { PASS=$((PASS+1)); echo "PASS|T64-get-200"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-get-200(got ${R3ST:-?} body=${R3BODY:0:160}；401＝AH64 失效假绿，勿放宽)"; }
+ckq T64-default-kpro 160 "$(estv k_pro)"
+ckq T64-default-kfast 60 "$(estv k_fast)"
+ckq T64-default-fpro 3000 "$(estv fixed_pro)"
+ckq T64-default-ffast 1200 "$(estv fixed_fast)"
+printf '%s' "$R3BODY" | grep -qE '"formula":"[^"]' && { PASS=$((PASS+1)); echo "PASS|T64-formula-echoed"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-formula-echoed(公式没回显＝前端那段等式只能写死在组件里，与后端口径会漂)"; }
+printf '%s' "$R3BODY" | grep -qE '"points_tokens_rate":[1-9]' && { PASS=$((PASS+1)); echo "PASS|T64-rate-echoed"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-rate-echoed(汇率只读面缺失，管理台无法把 token 系数折成积分)"; }
+# ③ 四类非法输入整批拒收，且库里一行都不许多出来
+B64K0='{"k_pro":0,"k_fast":60,"fixed_pro":3000,"fixed_fast":1200}'
+req3 POST "$AH64" $ESTCFG "$B64K0"; ck3 T64-reject-k-zero 400 VALIDATION_ERROR '必须大于 0'
+B64NEG='{"k_pro":160,"k_fast":60,"fixed_pro":-1,"fixed_fast":1200}'
+req3 POST "$AH64" $ESTCFG "$B64NEG"; ck3 T64-reject-negative 400 VALIDATION_ERROR '不能为负数'
+B64BIG='{"k_pro":160,"k_fast":99999999,"fixed_pro":3000,"fixed_fast":1200}'
+req3 POST "$AH64" $ESTCFG "$B64BIG"; ck3 T64-reject-over-max 400 VALIDATION_ERROR '超出合理范围'
+B64MISS='{"k_pro":160,"k_fast":60,"fixed_pro":3000}'
+req3 POST "$AH64" $ESTCFG "$B64MISS"; ck3 T64-reject-missing-field 400 VALIDATION_ERROR '缺少 fixed_fast'
+EST1=$(ESTCNT); EST1=${EST1:-0}
+[ "$EST1" = "$EST0" ] && { PASS=$((PASS+1)); echo "PASS|T64-reject-leaves-nothing(四键行数 $EST0→$EST1)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-reject-leaves-nothing(拒收却把行数从 $EST0 写成 $EST1＝半套配置，长短单口径会不一致)"; }
+# ④ 合法保存 → 读回等值 + 审计留痕（F 档允许 0＝关闭固定项，这里顺带锁一次）
+#   ★ 成功体是 {success:true, coefficients:{…}}，没有 code/message 两字段，故不走 ck3（它会等值比
+#   错误码），只判状态码 200 + success:true + 生效值读回。
+B64OK='{"k_pro":161,"k_fast":61,"fixed_pro":3001,"fixed_fast":0}'
+req3 POST "$AH64" $ESTCFG "$B64OK"
+ck T64-save-ok '"success":true' "$R3BODY"
+req3 GET "$AH64" $ESTCFG
+ckq T64-readback-kpro 161 "$(estv k_pro)"
+ckq T64-readback-kfast 61 "$(estv k_fast)"
+ckq T64-readback-fpro 3001 "$(estv fixed_pro)"
+ckq T64-readback-ffast-zero 0 "$(estv fixed_fast)"
+EST64DET=$(dbq "SELECT detail FROM audit_logs WHERE action='est_tokens_save' ORDER BY id DESC LIMIT 1" | tr -d '\r' | head -1)
+ck T64-audit-has-new-values 'k_pro=161' "$EST64DET"
+# ⑤ 脏值不伪装成生效值：绕过校验直插 'abc' → 生效值回**代码缺省**（不是上一批的 161），
+#   同时 stored 原样回吐＋defaults/allow_zero 齐面，前端才可能标出「这一行是脏的、当前用的是缺省」。
+dbq "DELETE FROM system_config WHERE key='est_tokens_per_char_pro'" >/dev/null
+dbq "INSERT INTO system_config(key,value) VALUES('est_tokens_per_char_pro','abc')" >/dev/null
+req3 GET "$AH64" $ESTCFG
+ckq T64-dirty-uses-default 160 "$(estv k_pro)"
+ckq T64-stored-raw abc "$(estrow k_pro)"
+printf '%s' "$R3BODY" | grep -qE '"defaults":\{[^}]*k_pro' && { PASS=$((PASS+1)); echo "PASS|T64-defaults-echoed"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-defaults-echoed(代码缺省没回显＝前端只能自己抄一份 160/60，与后端常量必然漂移)"; }
+printf '%s' "$R3BODY" | grep -qE '"allow_zero":\{[^}]*fixed_pro' && { PASS=$((PASS+1)); echo "PASS|T64-allow-zero-echoed"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-allow-zero-echoed(哪些档可以填 0 没回显，表单只能猜，猜错就是把 K 清零放行)"; }
+# ⑥ reset：四项一律清空回落缺省（写成空串＝与「从未配置」同形态）
+B64R='{"reset":true}'
+req3 POST "$AH64" $ESTCFG "$B64R"
+ck T64-reset-ok '"success":true' "$R3BODY"
+req3 GET "$AH64" $ESTCFG
+ckq T64-reset-kpro 160 "$(estv k_pro)"
+ckq T64-reset-ffast 1200 "$(estv fixed_fast)"
+RST64=$(dbq "SELECT COUNT(*) FROM system_config WHERE key IN ($ESTKEYS) AND value<>''" | tr -d '[:space:]')
+[ "${RST64:-0}" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T64-reset-blanks-rows"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-reset-blanks-rows(还有 $RST64 行带值＝点「恢复缺省」只清了显示、库里仍生效)"; }
+# 收尾：把四键**恢复成进段之前的样子**，交还给下一轮（含现读这四键算等值锁的 T40）。
+#   正常形态是「库里没有这四行 → 走代码缺省」，所以删干净就是复原；
+#   但若进段前运维确实配过值（例如批 H 调过 K），本段必须把那一行原值写回去，不能替他改数。
+dbq "DELETE FROM system_config WHERE key IN ($ESTKEYS)" >/dev/null
+for KV64 in "est_tokens_per_char_pro|$PRE64KPRO" "est_tokens_per_char_fast|$PRE64KFAST" \
+            "est_tokens_fixed_pro|$PRE64FPRO" "est_tokens_fixed_fast|$PRE64FFAST"; do
+  K64="${KV64%%|*}"; V64="${KV64#*|}"
+  if [ -n "$V64" ]; then dbq "INSERT INTO system_config(key,value) VALUES('$K64','$V64')" >/dev/null; fi
+done
+EST2=$(ESTCNT); EST2=${EST2:-0}
+[ "$EST2" = "$EST0" ] && { PASS=$((PASS+1)); echo "PASS|T64-restore-rowcount($EST2 行，与进段前一致)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-restore-rowcount(进段前 $EST0 行 / 现在 $EST2 行＝本段改了库却没还原，下一轮 T40 的现算口径会跟着漂)"; }
+ckq T64-restore-kpro "$PRE64KPRO" "$(ESTGET est_tokens_per_char_pro)"
+ckq T64-restore-ffast "$PRE64FFAST" "$(ESTGET est_tokens_fixed_fast)"
+dbq "DELETE FROM audit_logs WHERE action IN ('est_tokens_save','est_tokens_reset')" >/dev/null
 
 # 收尾清理：本节造的反馈属断言耗材，跑完即删。留着的代价不是本轮（本段已在脚本末尾），
 #   而是**下一轮复用同一个 UAT 库**时把历史行算进统计类用例（反馈列表/留资计数）。

@@ -87,6 +87,16 @@ vi.mock('@/api', () => {
       env_overridden: {},
     })),
     adminQuoteCurrencySave: vi.fn(async () => ok()),
+    // ★ 2026-09-27（〇-X 第 5 项 / F-72 补口）预估系数三件套：PlansP 超管分支会读它，
+    //   缺导出即 Vitest 抛「No export is defined on the mock」，整文件红。
+    EST_TOKEN_FIELDS: ['k_pro', 'k_fast', 'fixed_pro', 'fixed_fast'],
+    adminEstTokens: vi.fn(async () => ({
+      success: true,
+      coefficients: { k_pro: 160, k_fast: 60, fixed_pro: 3000, fixed_fast: 1200 },
+      stored: {}, defaults: { k_pro: 160, k_fast: 60, fixed_pro: 3000, fixed_fast: 1200 },
+      formula: 'est_tokens = F(mode) + chars x langs x K(mode)', points_tokens_rate: 400,
+    })),
+    adminEstTokensSave: vi.fn(async () => ({ success: true })),
     request: vi.fn(async () => ok({ funnel: {} })),
     authHeaders: vi.fn(() => ({})),
     API_BASE: '',

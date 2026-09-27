@@ -15,9 +15,9 @@ package api
 // ★ F-72（2026-09-27 〇-W，用户批准）：建单余额预检的预估改「固定项＋线性项」两段式
 //   est = F(mode) + chars × langs × K(mode)；两档各自走 system_config
 //   （est_tokens_fixed_pro/fast 缺省 3000/1200、est_tokens_per_char_pro/fast 缺省 160/60），
-//   四键逐次现读、写入即生效（无需重启/发版）。⚠️ 口径纠正：这四键**没有管理台表单**
-//   （全仓唯一的 admin 配置口是 /api/admin/config/quote-currency），调档只能 psql 往
-//   system_config 插/改行——两库当前都**没有**这四行，走代码缺省 160/60 + 3000/1200。
+//   四键逐次现读、写入即生效（无需重启/发版）。★ 〇-X 第 5 项（2026-09-27）已补管理台表单：
+//   GET/POST /api/admin/config/est-tokens（见 est_tokens_config.go，仅平台超管，四项必须一次交齐），
+//   不再有「只能 psql 插行」的口径——两库当前仍**没有**这四行，未配置时走代码缺省 160/60 + 3000/1200。
 //   判据与取数依据见 estimateTicketTokens 上方注释。
 // ★ F-64②（批 I-10 2026-09-26）口径：本文件「HTTP 200 承载业务失败」的 21 处已全部改走
 //   统一出口 s.writeError + apierrors，状态码按语义诚实——
@@ -196,7 +196,9 @@ func estimateFileSourceChars(name string, size int64) int64 {
 // ★ F-41（2026-09-25 批 D）：估算改按模式系数 K（pro=160/fast=60，system_config 可配），
 // mode 由调用点传入；拒绝文案继续走「预估积分」范式（S1 零 token 裸值口径不变）。
 // ★ F-72（2026-09-27 〇-W）：估算补固定项，成 est = F(mode) + chars × langs × K(mode)。
-// 只动**被拦的单**：固定项 3,000 token ≈ 10 积分（按 points_tokens_rate=300），余额只要够得上
+// 只动**被拦的单**：固定项 3,000 token ≈ 8 积分（★ F-78 起按 points_tokens_rate=400 折算；
+// 旧汇率 1:300 时代约 10 积分——同一笔真实消耗，改档后对外报价降 25%，这正是本次降价的落点），
+// 余额只要够得上
 // 一单，就不会因为这条常数被拦；真正被它改变结果的是「6～67 字短单 × 极小余额」的碰运气建单。
 // 文案里「预估需约 N 积分」的**措辞与形态**继续不动（UAT T40 等值锁按公式现算，见下）。
 func (s *Server) precheckTicketBalance(tid int64, srcChars int64, langCount int, mode string, release func()) error {

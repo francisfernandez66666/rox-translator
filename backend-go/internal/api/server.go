@@ -199,6 +199,8 @@ func (s *Server) routes() {
 	//   不会退化成 200 整页 HTML（托管物判据陷阱，见 AGENTS §一·6）。
 	s.mux.HandleFunc("/brand/", s.handleBrandAsset)
 	s.mux.HandleFunc("/api/plans", s.handlePlans)
+	// ★ 〇-X #55（2026-09-28）：官网「比价与算价」页的公示系数口（匿名只读、积分口径、零 token 裸值）。
+	s.mux.HandleFunc("/api/pricing/meta", s.handlePricingMeta)
 	s.mux.HandleFunc("/api/register/industries", s.handleRegisterIndustries)
 	s.mux.HandleFunc("/api/register/personas", s.handleRegisterPersonas) // ★ 角色功能（2026-09-19）：公开角色字典
 	// ★ P1-3（2026-09-18）：营销留资（匿名 POST，IP 限流+蜜罐+可选 Turnstile，落 feedbacks 通道）
@@ -488,6 +490,9 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/admin/pay/channels/save", s.handleAdminPayChannelsSave)
 	// ★ #75（2026-09-23）多币种报价：报价币种 + 汇率倍率的超管配置口（GET 回显 / POST 保存，无密文项）
 	s.mux.HandleFunc("/api/admin/config/quote-currency", s.handleAdminQuoteCurrency)
+	// ★ F-72（2026-09-27 〇-X 第 5 项）计费预估系数（K/F × pro/fast 四键）的超管配置口：
+	// 没这个口子之前调档只能 psql 插 system_config 行，手滑一次就是全量放行或全量误拦
+	s.mux.HandleFunc("/api/admin/config/est-tokens", s.handleAdminEstTokens)
 	s.mux.HandleFunc("/api/qr-image/", s.handleQRImage)
 	// 通用二维码文本渲染（收银台把 mock/wechat/alipay 的 qr_content 渲染为可扫码图片；需登录）
 	s.mux.HandleFunc("/api/qr/render", s.handleQRRender)

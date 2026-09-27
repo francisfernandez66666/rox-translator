@@ -32,6 +32,9 @@ export default function BrandP() {
   const [nameEn, setNameEn] = useState('')
   const [logo, setLogo] = useState('')
   const [domain, setDomain] = useState('')
+  // ★ F-76：库里已保存的品牌域原值（本地预检只在"相对它改过"时才判，见下面 domainBad）
+  const [domainSaved, setDomainSaved] = useState('')
+
   const [homeBg, setHomeBg] = useState('')
   const [homeBgStyle, setHomeBgStyle] = useState<BgStyle>({ scale: 1, x: 50, y: 50, mode: 'cover' })
   const [loginLayout, setLoginLayout] = useState<LoginLayout>({ mode: 'full', side: 'right' })
@@ -45,6 +48,14 @@ export default function BrandP() {
   const [granting, setGranting] = useState(false)
   // 品牌定制开放给三类租户：租户根（企业租户）/ 付费套餐租户 / 超管指定租户；超管始终可编辑
   const editable = isSuper || brandPaid || brandGranted || brandRoot
+
+  // ★ F-76（2026-09-27 〇-X）：品牌域前缀的本地预检，字符集口径与后端 normalizeBrandDomainPrefix 一致——
+  //   字母开头、只允许小写字母与数字（大写、连字符、点、斜杠一律不再接受新写入）。
+  //   只在「相对库里现值改过」时才判：后端对未改动的存量值原样放行（整表回提，改一张 Logo 也要能存），
+  //   前端若照判就会把"换个 Logo"一起拦掉——两侧必须同一把尺子。
+  //   占用与保留名仍由后端裁决（只有它知道别家的 domain/code 与主站配置），这里只拦一眼看得出的写错。
+  const domainTouched = domain.trim() !== (domainSaved || '').trim()
+  const domainBad = domainTouched && domain.trim() !== '' && !/^[a-z][a-z0-9]*$/.test(domain.trim())
 
   // 加载品牌定制数据：租户品牌名称、Logo、子域名、首页背景等
   // alive 守卫针对的是「超管连点切换器」：前一个租户的请求可能后回来，
@@ -63,6 +74,8 @@ export default function BrandP() {
         setNameEn(j.brand_name_en || '')
         setLogo(j.brand_logo || '')
         setDomain(j.domain || '')
+        setDomainSaved(j.domain || '')
+
         setHomeBg(j.brand_home_bg || '')
         setHomeBgStyle(parseBgStyle(j.brand_home_bg_style))
         setLoginLayout(parseLoginLayout(j.brand_login_layout))
@@ -175,6 +188,9 @@ export default function BrandP() {
    *  入口先判 editable：非可编辑租户即使绕过按钮直接调用，也不该发一次注定被后端拒的写请求。 */
   const save = async () => {
     if (!editable) return
+    // ★ F-76：字符集不合格的品牌域在前端就拦下（后端同一判据兜底，绕不过去），
+    //   避免客户看到"保存成功"却在自己的品牌域上拿到白牌页。
+    if (domainBad) { toastError(t('brand.domainInvalid')); return }
     setSaving(true)
     try {
       const j = await tenantBrandingSave({
@@ -300,6 +316,11 @@ export default function BrandP() {
                 <input className="lc-input" value={domain} disabled={!editable || targetTenantId === 1} onChange={(e) => setDomain(String(e.target.value ?? ''))} placeholder={t('brand.domainPlaceholder')} />
               <div style={{ fontSize: 14, color: 'var(--adm-faint)', marginTop: 4 }}>
                 {tpl('brand.domainPreview', { host: `${domain || t('brand.domainPrefixSample')}.lexicorn.cn` })}
+              </div>
+              {/* ★ F-76：格式说明常驻一行（客户多半是照着"能不能长这样"来填的），
+                  写错时同一位置换成红色提示——不弹两次窗，也不额外占高度。 */}
+              <div style={{ fontSize: 14, color: domainBad ? 'var(--lc-danger)' : 'var(--adm-faint)', marginTop: 4 }}>
+                {domainBad ? t('brand.domainInvalid') : t('brand.domainRule')}
               </div>
             </div>
 

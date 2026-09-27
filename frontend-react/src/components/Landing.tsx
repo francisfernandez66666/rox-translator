@@ -936,6 +936,10 @@ export default function Landing() {
           {NAV_SECTIONS.map(({ id, key }) => (
             <a key={id} href={`#${id}`} className={activeSec === id ? 'on' : undefined}>{t(key)}</a>
           ))}
+          {/* ★ 〇-X #55：跨页入口「比价与算价」（/compare）。刻意不进 NAV_SECTIONS——
+              那张表同时驱动滚动高亮（scrollspy 靠页内元素 id），跨页链接没有 id 可绑，
+              混进去会让高亮逻辑对一个永不存在的区块做判定。 */}
+          <a href="/compare">{t('cmp.navEntry')}</a>
         </nav>
         <div className="lc-nav-cta">
           {/* ★ 反馈④：语言切换放在登录旁——外国访客第一眼能找到的位置；纯黑描边按钮与营销导航同色系 */}

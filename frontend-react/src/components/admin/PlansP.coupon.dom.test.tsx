@@ -20,6 +20,16 @@ const mocks = vi.hoisted(() => ({
 
 // '@/api' 全量 mock：只提供租户视角收银台会用到的接口
 vi.mock('@/api', () => ({
+    // ★ 2026-09-27（〇-X 第 5 项 / F-72 补口）预估系数三件套：PlansP 超管分支会读它，
+    //   缺导出即 Vitest 抛「No export is defined on the mock」，整文件红。
+    EST_TOKEN_FIELDS: ['k_pro', 'k_fast', 'fixed_pro', 'fixed_fast'],
+    adminEstTokens: vi.fn(async () => ({
+      success: true,
+      coefficients: { k_pro: 160, k_fast: 60, fixed_pro: 3000, fixed_fast: 1200 },
+      stored: {}, defaults: { k_pro: 160, k_fast: 60, fixed_pro: 3000, fixed_fast: 1200 },
+      formula: 'est_tokens = F(mode) + chars x langs x K(mode)', points_tokens_rate: 400,
+    })),
+    adminEstTokensSave: vi.fn(async () => ({ success: true })),
   billingQuota: vi.fn(async () => ({ success: true, qps: 10, concurrent: 3, max_daily_chars: 0 })),
   billingQuotaSave: vi.fn(async () => ({ success: true })),
   billingOrders: vi.fn(async () => ({ success: true, orders: [] })),

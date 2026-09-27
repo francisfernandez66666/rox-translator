@@ -256,8 +256,13 @@ func DefaultEffective() EffectivePolicy {
 			"fast": {Enabled: true, Charge: true, Markup: 0, LimitChars: 0},
 			"pro":  {Enabled: true, Charge: true, Markup: 0, LimitChars: 0},
 		},
-		Package:      PackageEffective{TrialTokens: 300000, TrialDays: 14, MonthlyResetEnabled: false, MonthlyResetLimit: 1},
-		Invite:       InviteEffective{Enabled: true, RewardTokens: 300000, RewardDays: 14, PaidRewardTokens: 0, PaidRewardDays: 0, MaxDailyRewards: 50},
+		// ★ F-78（2026-09-28 〇-X）积分汇率 1:300→1:400：体验额度与邀请奖励的「积分面值」没动
+		// （仍 1,000 积分），折成内部 token 的出厂档随之从 300000 抬到 400000。
+		// 本包不得 import internal/store（AGENTS §一·3 防环），故这两个数是**字面档**，
+		// 与 store.DefaultFreeTrialPoints / DefaultInviteRewardPoints × store.DefaultPointsTokensRate
+		// 的一致性由 store 包单测 TestOpsDefaultsLockPointsRate 钉死（改一处即红灯）。
+		Package:      PackageEffective{TrialTokens: 400000, TrialDays: 14, MonthlyResetEnabled: false, MonthlyResetLimit: 1},
+		Invite:       InviteEffective{Enabled: true, RewardTokens: 400000, RewardDays: 14, PaidRewardTokens: 0, PaidRewardDays: 0, MaxDailyRewards: 50},
 		Registration: RegistrationEffective{Enabled: true, IPMinIntervalSec: 60, IPDailyLimit: 3, EmailVerifyEnabled: false},
 		Limits:       LimitsEffective{MaxQPS: 100, MaxConcurrent: 50, DefaultMaxDailyChars: 20000, DefaultMaxDailyTokens: 20000},
 		Payment:      PaymentEffective{Mode: "mock", AutoCharge: false},

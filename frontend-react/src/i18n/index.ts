@@ -44,6 +44,8 @@ import * as pDs from './panels/datasources'
 import * as pMybill from './panels/mybilling'
 import * as pLanding from './panels/landing'
 import * as pReconcile from './panels/reconcile'
+// ★ 〇-X #55（2026-09-28）：官网公开「比价与算价」页 /compare 词条（公式公示 + 人工对照价出处）
+import * as pCost from './panels/cost'
 // 2026-09-17 新增：认证域（登录/注册/找回密码/AI 接管注册引导）文案，
 // 从 dicts 基础字典与组件硬编码里独立出来，供 Login / AiRegisterFlow 取词。
 import * as pAuth from './panels/auth'
@@ -105,7 +107,7 @@ const zh: Dict = {
   ...pModels.zh, ...pWorkflow.zh, ...pApiKeys.zh, ...pWebhooks.zh,
   ...pTickets.zh, ...pBilling.zh, ...pUsage.zh, ...pAlerts.zh,
   ...pInvites.zh, ...pChat.zh, ...pPackages.zh, ...pFeedback.zh,
-  ...pReferral.zh, ...pTasks.zh, ...pSdk.zh, ...pHub.zh, ...pOps.zh, ...pIndustries.zh, ...pPersonas.zh, ...pBrandterms.zh, ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh, ...pLanding.zh, ...pAuth.zh, ...pCoupons.zh, ...pAssist.zh,
+  ...pReferral.zh, ...pTasks.zh, ...pSdk.zh, ...pHub.zh, ...pOps.zh, ...pIndustries.zh, ...pPersonas.zh, ...pBrandterms.zh, ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh, ...pLanding.zh, ...pAuth.zh, ...pCoupons.zh, ...pAssist.zh, ...pCost.zh,
 }
 
 // en 英文词典：base 基础字典 + 各面板模块英文文案合并
@@ -116,7 +118,7 @@ const en: Dict = {
   ...pModels.en, ...pWorkflow.en, ...pApiKeys.en, ...pWebhooks.en,
   ...pTickets.en, ...pBilling.en, ...pUsage.en, ...pAlerts.en,
   ...pInvites.en, ...pChat.en, ...pPackages.en, ...pFeedback.en,
-  ...pReferral.en, ...pTasks.en, ...pSdk.en, ...pHub.en, ...pOps.en, ...pIndustries.en, ...pPersonas.en, ...pBrandterms.en, ...pChatwin.en, ...pDs.en, ...pMybill.en, ...pReconcile.en, ...pLanding.en, ...pAuth.en, ...pCoupons.en, ...pAssist.en,
+  ...pReferral.en, ...pTasks.en, ...pSdk.en, ...pHub.en, ...pOps.en, ...pIndustries.en, ...pPersonas.en, ...pBrandterms.en, ...pChatwin.en, ...pDs.en, ...pMybill.en, ...pReconcile.en, ...pLanding.en, ...pAuth.en, ...pCoupons.en, ...pAssist.en, ...pCost.en,
 }
 
 // 核心集键清单（按 CORE_PREFIXES 从英文全量词典筛出、排序冻结）：locales 覆盖测试与

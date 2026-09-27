@@ -34,6 +34,8 @@ import {
   adminPayChannels, adminPayChannelsSave, PAY_CH_FIELDS,
   type PayChField,
   adminQuoteCurrency, adminQuoteCurrencySave,
+  // ★ 〇-X 第 5 项（F-72 补口 2026-09-27）：计费预估系数（建单余额预检）的超管表单
+  adminEstTokens, adminEstTokensSave, EST_TOKEN_FIELDS, type EstTokenField,
   adminGrowthFunnel, // ★ F-64②（批 I-10）：漏斗看板原先裸调 request()，后端已改诚实状态码 ⇒ 收进接口层（内部包 bizResp）
   authHeaders,
   API_BASE,
@@ -191,6 +193,18 @@ export function PlansP() {
   const [quoteSupported, setQuoteSupported] = useState<string[]>([])
   const [quoteEnv, setQuoteEnv] = useState<Record<string, string>>({})
   const [quoteReady, setQuoteReady] = useState(false)
+  // ★ 2026-09-27（〇-X 第 5 项 / F-72 补口）计费预估系数表单（仅超管）。
+  //   四键决定建单前的余额预检，因此表单必须把三态分清：库里配了什么（stored）、
+  //   系统实际在用哪个数（生效值）、代码缺省是多少（defaults）——
+  //   库里躺着脏值时若只回显库值，管理员会以为改了参数其实系统压根没在用。
+  //   estReady 同 payCfgReady/quoteReady 口径：没回显成功就禁提交，防空值整批覆盖。
+  const [estForm, setEstForm] = useState<Record<EstTokenField, string>>({ k_pro: '', k_fast: '', fixed_pro: '', fixed_fast: '' })
+  const [estMeta, setEstMeta] = useState<{
+    ready: boolean
+    rows: Partial<Record<EstTokenField, { stored: string; dirty: boolean; def: number }>>
+    formula: string
+    pointsRate: number
+  }>({ ready: false, rows: {}, formula: '', pointsRate: 0 })
   // ★ #75 C 端报价口径：/api/me/package 透出的 quote_currency + fx_rates_snapshot，
   //   收银台据此把人民币实收金额折算成本币展示值（仅展示，实扣仍是 CNY）。
   const [myQuote, setMyQuote] = useState<{ code: string; rates: Record<string, number> }>({ code: 'CNY', rates: {} })
@@ -348,6 +362,27 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
       setQuoteReady(true)
     } else {
       setQuoteReady(false) // 同 payCfgReady：没回显成功就禁提交，防整表清空
+    }
+    // ★ 2026-09-27（〇-X 第 5 项）：预估系数回显。表单值一律填**生效值**（读侧清洗后的可信值），
+    //   库里原值与"是否脏"另存 estMeta.rows 做标注——绝不把库内脏值直接塞进输入框，
+    //   否则管理员原样点保存就把一个系统从没在用过的数写成了正式配置。
+    const et: Any = await guardRead(adminEstTokens)
+    if (et.success) {
+      const eff = (et.coefficients as Record<string, number>) || {}
+      const stored = (et.stored as Record<string, string>) || {}
+      const defs = (et.defaults as Record<string, number>) || {}
+      const form = {} as Record<EstTokenField, string>
+      const rows: Record<string, { stored: string; dirty: boolean; def: number }> = {}
+      for (const k of EST_TOKEN_FIELDS) {
+        const e = Number(eff[k] ?? 0)
+        form[k] = String(e)
+        const st = String(stored[k] ?? '').trim()
+        rows[k] = { stored: st, dirty: st !== '' && !(Number.isFinite(Number(st)) && Number(st) === e), def: Number(defs[k] ?? 0) }
+      }
+      setEstForm(form)
+      setEstMeta({ ready: true, rows, formula: String(et.formula || ''), pointsRate: Number(et.points_tokens_rate) || 0 })
+    } else {
+      setEstMeta((m) => ({ ...m, ready: false }))
     }
   }, [isSuper, guardRead])
 
@@ -803,8 +838,36 @@ async function savePayChannels() {
     } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
   }
 
+    // saveEstCfg ★ 2026-09-27（〇-X 第 5 项 / F-72 补口）：保存四个计费预估系数。
+    // 客户端先把与服务端同口径的三道门挡住（四项齐全、非负、K>0），脏输入不进请求：
+    // 这四个数是"客户能不能建单"的闸门参数，报一句后端天书不如当场提示该填什么。
+  async function saveEstCfg() {
+    const nums: Partial<Record<EstTokenField, number>> = {}
+    for (const k of EST_TOKEN_FIELDS) {
+      const raw = String(estForm[k] ?? '').trim()
+      const n = Number(raw)
+      if (raw === '' || !Number.isFinite(n) || n < 0 || (!k.startsWith('fixed_') && n <= 0)) {
+        void toastWarn(t('billing.estNeedAll'))
+        return
+      }
+      nums[k] = n
+    }
+    try {
+      const r: Any = await adminEstTokensSave(nums)
+      if (toastResp(r, t('common.save'))) await loadPkgs() // 回读生效值：与报价配置同一口径
+    } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
+  }
+    // resetEstCfg 清空四键回代码缺省（必须二次确认：这是"把闸门交回出厂档位"的批量动作）
+  async function resetEstCfg() {
+    if (!(await confirmDialog({ body: t('billing.estConfirmReset'), danger: true }))) return
+    try {
+      const r: Any = await adminEstTokensSave({ reset: true })
+      if (toastResp(r, t('common.save'))) await loadPkgs()
+    } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
+  }
+
     // confirmManual 管理员确认人工到账→积分入双桶
-async function confirmManual(o: Any) {
+  async function confirmManual(o: Any) {
     const tx = (manualTxInputs[String(o.id)] || '').trim()
     if (o.channel === 'usdt' && !tx) { void toastWarn(t('billing.usdtTxRequired')); return }
     try {
@@ -1245,6 +1308,47 @@ async function confirmManual(o: Any) {
             ) : null}
           </div>
           )}
+          {/* ★ 2026-09-27（〇-X 第 5 项 / F-72 补口）计费预估系数：建单前的余额预检按
+              「est = F + 源字符数 × 语种数 × K」算 token，四个数全在这张表里。
+              没这张表之前只能 psql 改 system_config，手滑一次就是全量放行或全量误拦。
+              口径：K 清零＝预检失效（历史上正是这形态烧穿过整单），所以前端就拦 0；
+              F 可为 0（＝明知短单会低估仍要退回纯线性，那是运维的显式选择）。
+              每行右侧三态标注：库里未配置 / 库里是脏值（系统其实按缺省在跑）/ 已配置生效值。 */}
+          <div style={{ marginTop: 12, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 600, fontSize: 16 }}>{t('billing.estSection')}</span>
+              <Button onClick={saveEstCfg} disabled={!estMeta.ready}>{t('common.save')}</Button>
+              <Button onClick={resetEstCfg} disabled={!estMeta.ready}>{t('billing.estReset')}</Button>
+            </div>
+            <div style={{ fontSize: 15, color: 'var(--adm-faint)', margin: '4px 0 8px' }}>{t('billing.estHint')}</div>
+            {estMeta.formula ? (
+              <div style={{ fontSize: 14, color: 'var(--adm-faint)', margin: '0 0 6px', fontFamily: 'monospace' }}>{estMeta.formula}</div>
+            ) : null}
+            {([
+              ['k_pro', t('billing.estKPro')],
+              ['k_fast', t('billing.estKFast')],
+              ['fixed_pro', t('billing.estFixedPro')],
+              ['fixed_fast', t('billing.estFixedFast')],
+            ] as Array<[EstTokenField, string]>).map(([f, label]) => {
+              const m = estMeta.rows[f]
+              return (
+                <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 15, color: 'var(--adm-hint)', width: 300 }}>{label}</span>
+                  <input className="lc-input" type="number" step="1" min="0" style={{ width: 140 }}
+                         value={estForm[f]} disabled={!estMeta.ready}
+                         onChange={(e) => setEstForm((c) => ({ ...c, [f]: e.target.value }))} />
+                  {!m || m.stored === '' ? (
+                    <span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{tpl('billing.estDefault', { v: String(m?.def ?? '') })}</span>
+                  ) : m.dirty ? (
+                    <span style={{ fontSize: 14, color: 'var(--adm-amber-tx)' }}>{tpl('billing.estDirty', { v: m.stored, d: String(m.def) })}</span>
+                  ) : null}
+                </div>
+              )
+            })}
+            {estMeta.pointsRate > 0 ? (
+              <div style={{ fontSize: 14, color: 'var(--adm-faint)', marginTop: 8 }}>{tpl('billing.estPoints', { n: String(estMeta.pointsRate) })}</div>
+            ) : null}
+          </div>
         </Panel>
       )}
 
