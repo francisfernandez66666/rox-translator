@@ -167,7 +167,6 @@ export default function TrialPanel(props: {
             <a className="lc-trial-btn lc-trial-btn--pri" href="/register">{t('land.trial.register')}</a>
             <a className="lc-trial-btn lc-trial-btn--sec" href="/login">{t('land.navLogin')}</a>
           </div>
-          <button type="button" className="lc-trial-link" onClick={props.onBack}>{t('land.trial.back')}</button>
         </div>
       ) : (
         <>
