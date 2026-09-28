@@ -1636,7 +1636,7 @@ const LANDING_CSS = `
 .lc-trial-select{height:34px;padding:0 10px;background:var(--lc-panel);border:1.2px solid var(--lc-border-input);border-radius:8px;color:var(--lc-text-1);font:500 14px/1 var(--lc-font);cursor:pointer}
 .lc-trial-btn{display:inline-flex;align-items:center;justify-content:center;height:36px;padding:0 18px;border-radius:999px;font:600 15px/1 var(--lc-font);cursor:pointer;text-decoration:none}
 /* 主投沿用全站「实心白＝#FFFFFF」档（G 段），不是文字灰 #E7E9EA */
-.lc-trial-btn--pri{border:0;background:var(--lc-fill-white);color:#000}
+.lc-trial-done-cta .lc-trial-btn--pri{border:0;background:var(--lc-fill-white);color:#000}
 .lc-trial-btn--pri:disabled{opacity:.6;cursor:default}
 /* 次操作：描边按钮，与主投同高同圆角，视觉上是一套但层级低一档 */
 .lc-trial-btn--sec{border:1.2px solid var(--lc-border-pill);background:none;color:var(--lc-text-1)}
