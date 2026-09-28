@@ -322,12 +322,16 @@ cat <<EOF
    不想留就执行：shred -u ${TOKEN_FILE}（之后要再动这份配置得重新生成并 --apply 一次）。
 
 == 接着配大模型（这才是供应商那把 sk-… Key，与上面的 Token 无关）：
-   同一面板 → 「配置」→ 🤖 LLM 接入 → 填 llm_base_url / llm_api_key / llm_model
-   （+ 备用模型、备用 Key 两条，不同供应商才填备用 Key）→ 🔌测试连通 → 保存（热加载，不必重启）
+   同一面板 → 「配置」→ 🤖 LLM 接入 → 填 llm_base_url / llm_api_key / llm_model，有备用模型再填 llm_model_backup
+   → 🔌测试连通 → 保存（热加载，不必重启）
+   ⚠️ 面板上**没有独立的备用 Key 输入框**，这是设计不是缺项：管理端可写白名单只有上面这四项
+      （见 backend-go/internal/assist/api/server.go 的 configKeyWhitelist——注释写明「api_key_backup 复用主 Key 故不单列」）。
+      备用 Key 想独立成一把，只能走环境变量 ASSIST_LLM_API_KEY_BACKUP（一旦进 env 就压过后台、后台改不动）。
    验收：bash deploy/smoke_assist_llm.sh                # 链路 + 回答形状
          EXPECT_LLM=1 bash deploy/smoke_assist_llm.sh   # 硬判至少一条 source=llm
    ⚠️ 别把 ASSIST_LLM_* 写进 env 又指望管理台改得动：env 优先且不被管理台覆盖，
-      六键里配了哪几条就锁死哪几条。LLM 这六键建议**只走面板**，别进 env。
+      env 侧六个变量名（BASE_URL／API_KEY／MODEL／MODEL_BACKUP／API_KEY_BACKUP／TIMEOUT）里
+      配了哪几条就锁死哪几条，面板能改的只有前面那四项。LLM 这几键建议**只走面板**，别进 env。
 
 == 轮换（将来想换一把）：重生成 Token 文件 → 再跑一次本脚本 --apply，幂等（旧值即刻作废）。
 EOF
