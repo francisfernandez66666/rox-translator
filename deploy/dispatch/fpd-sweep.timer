@@ -1,0 +1,16 @@
+[Unit]
+# fpd-sweep.timer · 每 15 分钟清一次闲置会话目录
+# ★ Persistent=true：机器若曾关机/停摆，开机后补跑一次——
+#   否则"体验机重启过 ⇒ 清理一直没跑过"会静默成立，客户文件就在远端过夜了。
+Description=Periodic sweep of idle dispatch sessions
+Requires=fpd-sweep.timer
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+AccuracySec=1min
+Unit=fpd-sweep.service
+
+[Install]
+WantedBy=timers.target

@@ -54,7 +54,7 @@ ok()   { echo "  ✔ $1"; PASS=$((PASS+1)); }
 bad()  { echo "  ✖ $1"; FAIL=$((FAIL+1)); }
 check(){ local desc="$1" want="$2" got="$3"; [ "$got" = "$want" ] && ok "$desc ($got)" || bad "$desc 期望$want 实际$got"; }
 
-echo "==> [1/7] 基础探活"
+echo "==> [1/8] 基础探活"
 check "/api/health"        200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/api/health")"
 check "/status"            200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/status")"
 # ★ #42（2026-09-22）探针拆分验收：/livez 只判进程存活（依赖抖动时也必须 200，否则编排器会去
@@ -81,7 +81,7 @@ else
   echo "  ↷ /livez /readyz 跳过（公网 base 不暴露探针，需服务器本机执行：curl 127.0.0.1:8787/readyz）"
 fi
 
-echo "==> [2/7] D1 metrics 收敛（公网响应体不得出现指标特征；SPA 兜底页/401 均视为安全）"
+echo "==> [2/8] D1 metrics 收敛（公网响应体不得出现指标特征；SPA 兜底页/401 均视为安全）"
 body=$(curl -s --max-time 8 "$BASE/metrics" | head -c 2000)
 if echo "$body" | grep -q "translator_"; then
   bad "公网 /metrics 泄露指标特征"
@@ -93,11 +93,11 @@ if [ -n "$MTRTOK" ]; then
   check "/metrics(内网+token)" 200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -H "Authorization: Bearer $MTRTOK" "$LOCAL_BASE/metrics")"
 fi
 
-echo "==> [3/7] A2 插件 CORS（Origin 反射）"
+echo "==> [3/8] A2 插件 CORS（Origin 反射）"
 hdr=$(curl -s -o /dev/null -D - --max-time 8 -H "Origin: https://example.com" "$BASE/openapi/v1/balance" | grep -i "^access-control-allow-origin:" | tr -d '\r' | awk '{print $2}')
 [ "$hdr" = "https://example.com" ] && ok "ACAO 反射生效" || bad "ACAO 未反射（got: ${hdr:-空}）"
 
-echo "==> [4/7] P0-2 支付回调三道闸"
+echo "==> [4/8] P0-2 支付回调三道闸"
 pncode=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST "$BASE/api/pay/notify/mock" -d '{"order_no":"x","amount":1}')
 case "$pncode" in
   403) ok "匿名回调 403（直连口径）" ;;
@@ -105,7 +105,7 @@ case "$pncode" in
   *)   bad "匿名回调 $pncode 异常" ;;
 esac
 
-echo "==> [5/7] 注册→双桶余额→OpenAPI（A1 核心口径）"
+echo "==> [5/8] 注册→双桶余额→OpenAPI（A1 核心口径）"
 EV=$(curl -s --max-time 8 "$BASE/api/auth/register-config" | python3 -c "import sys,json;print(json.load(sys.stdin).get('email_verify_enabled',False))" 2>/dev/null)
 if [ "$EV" = "True" ] || [ "$EV" = "true" ]; then
   echo "  ↳ 生产已启用注册邮箱验证（防薅生效），第5项改为仅验证双桶出参通道开放性"
@@ -132,11 +132,43 @@ else
 fi
 fi
 
-echo "==> [6/7] 自助注销端点存在性（匿名 401 即可）"
+echo "==> [6/8] 自助注销端点存在性（匿名 401 即可）"
 check "/api/me/deactivate 匿名" 401 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST "$BASE/api/me/deactivate")"
 
-echo "==> [7/7] 同步划译端点存在性（匿名 401 即可）"
+echo "==> [7/8] 同步划译端点存在性（匿名 401 即可）"
 check "/openapi/v1/translate 匿名" 401 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST "$BASE/openapi/v1/translate" -d '{}')"
+
+# == [8/8] G5（改造方案 §10-G5，2026-09-28）：派发状态词 + 最近一次回落计数 ==
+# 只读、走内网直连（与 /livez 同口径）：状态词本身是可用性情报，不对公网摊开。
+# 判据不钉死状态词取值——派发默认关闭（off）是正确态，开着时 online 才算生效；
+# 真正要抓的是两件事：① 字段缺失（新二进制没上/没接线）② 状态词是 degraded（远端白配）。
+# ⚠️ 与 /livez 同口径：从开发机远程跑记跳过不记失败，必须在服务器本机验收。
+echo "==> [8/8] G5 远程派发状态（内网只读）"
+if [ "$PROBE_ON_SERVER" = "1" ]; then
+  HBODY=$(curl -s --max-time 8 "$LOCAL_BASE/api/health")
+  DISP=$(echo "$HBODY" | python3 -c "import sys,json;print(json.load(sys.stdin).get('dispatch',''))" 2>/dev/null)
+  if [ -z "$DISP" ]; then
+    bad "/api/health 缺 dispatch 字段（派发未接线或二进制没换）"
+  else
+    case "$DISP" in
+      off)     ok "dispatch=$DISP（默认关闭＝正确态：派发是增益不是依赖）" ;;
+      online)  ok "dispatch=$DISP（派发生效中）" ;;
+      degraded) bad "dispatch=$DISP（远端不可用，主站内存一分没省 ⇒ 按 §5.1/§5.2 排障，不要继续观察）" ;;
+      *)       bad "dispatch=$DISP（非法状态词，只允许 off/online/degraded）" ;;
+    esac
+  fi
+  # 状态词只回三态词，不得夹带主机/路径等拓扑情报（同 /readyz 那条口径）
+  if echo "$HBODY" | grep -Eq 'FILEPROC_DISPATCH_HOST|fpdispatch|/opt/'; then
+    bad "/api/health 的 dispatch 段泄露远端拓扑（主机/路径）"
+  else
+    ok "dispatch 段无拓扑泄露"
+  fi
+  # 最近一次回落计数：只读 journal，不写不判阈值（阈值判读是运营口径，见 §5.4：24h 回落率 >30%）
+  FALLBACK=$(journalctl -u translator --since '24 hours ago' --no-pager 2>/dev/null | grep -c '\[fpdispatch\] 派发失败 ⇒ 回落本地排队')
+  echo "  ↳ 近 24h 派发回落计数 = ${FALLBACK}（>30% 或连续 5 单全回落 ⇒ 视为派发未生效，见 §5.4）"
+else
+  echo "  ↷ dispatch 项跳过（公网 base 不暴露，需服务器本机执行：curl 127.0.0.1:8787/api/health）"
+fi
 
 echo ""
 [ "$FAIL" = "0" ] && echo "✅ 验收全部通过（$PASS 项）" || { echo "❌ 通过 $PASS 项 / 失败 $FAIL 项"; exit 1; }

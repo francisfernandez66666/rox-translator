@@ -1,0 +1,42 @@
+#!/bin/sh
+# ============ fpd-bridge · 职责说明 ============
+# 体验机上**唯一**对外的执行入口：sshd 的 ForceCommand 固定指向本文件（见 sshd-fpd.conf）。
+# 主站 ssh 进来后不管原命令写了什么，都只会走到这里，再由这里交给 fpdexec.py。
+#
+# 三道拒绝（缺一不可，它们共同保证"这台机器不是别人的 shell"）：
+#   ① 拒绝交互式登录（-t 分配的 TTY）：只接受"带 stdin 的一次性命令"，
+#      否则密钥一旦泄露，对方拿到的就是一个可交互的账号。
+#   ② 拒绝 SSH_ORIGINAL_COMMAND 里的任何内容：主站的协议只走 stdin，
+#      原命令字段一律忽略——不给"绕过 fpdexec 直接跑别的程序"留缝。
+#   ③ 拒绝已到期：EXPIRED 标记存在或日期已过时一律不执行（fpdexec 内部还有一道，双保险）。
+#
+# 为什么不直接 ForceCommand=/opt/fpdispatch/bin/fpdexec.py：
+# 中间留一层 shell 是为了把"环境文件加载 + 拒绝规则"集中在一处，
+# 也让运维在排障时能一眼看出"入口只有这一个文件"。
+set -u
+
+FPD_ROOT="${FPD_ROOT:-/opt/fpdispatch}"
+FPD_ENV="$FPD_ROOT/etc/fpd.env"
+FPDEXEC="$FPD_ROOT/bin/fpdexec.py"
+
+# 加载远端侧配置（不含任何主站密钥）
+[ -f "$FPD_ENV" ] && . "$FPD_ENV"
+
+PYBIN="${FPD_PYBIN:-$FPD_ROOT/.venv/bin/python3}"
+
+# ① 交互式 TTY 一律拒
+if [ -t 0 ] || [ -t 1 ]; then
+  echo "[fpd-bridge] 拒绝交互式登录：本账号只接受派发协议（stdin 传 header）" >&2
+  exit 1
+fi
+# ② 忽略并记录任何被塞进来的原命令（正常派发不会有值；有值就是有人在试探绕过）
+if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+  echo "[fpd-bridge] 忽略 SSH_ORIGINAL_COMMAND（协议只走 stdin）" >&2
+fi
+# ③ 入口文件必须在
+if [ ! -f "$FPDEXEC" ]; then
+  echo "[fpd-bridge] fpdexec.py 缺失，先跑主站 scripts/dispatch_sync.sh" >&2
+  exit 2
+fi
+
+exec "$PYBIN" "$FPDEXEC"

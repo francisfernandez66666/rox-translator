@@ -2523,11 +2523,11 @@ func (e *Engine) rebuildKBIndexIncremental(ctx context.Context, since string, is
 
 	// ⑥ 合并索引：旧向量 + 新向量
 	mergedIdx := &kb.Index{
-		IDs:        append(oldIdx.IDs, newIDs...),
-		Vecs:       append(oldIdx.Vecs, newVecs...),
-		IDLangs:    oldIdx.IDLangs,
-		IDTenants:  make(map[int64]int64, len(oldIdx.IDTenants)+len(newIDs)),
-		IDPacks:    make(map[int64]int64, len(oldIdx.IDPacks)+len(newIDs)),
+		IDs:       append(oldIdx.IDs, newIDs...),
+		Vecs:      append(oldIdx.Vecs, newVecs...),
+		IDLangs:   oldIdx.IDLangs,
+		IDTenants: make(map[int64]int64, len(oldIdx.IDTenants)+len(newIDs)),
+		IDPacks:   make(map[int64]int64, len(oldIdx.IDPacks)+len(newIDs)),
 	}
 	for k, v := range oldIdx.IDTenants {
 		mergedIdx.IDTenants[k] = v

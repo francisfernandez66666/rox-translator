@@ -29,12 +29,40 @@ func overlayScriptPath() string {
 // 译文字段可达数百 KB 且含客户原文，一律走 stdin 而非 argv：避开 ARG_MAX 截断与
 // 进程列表（ps）泄露，同时让 JSON 直接取自 stdout，不再猜「最后一个 '{'」。
 func runOverlayScript(ctx context.Context, args []string, payload []byte) ([]byte, error) {
+	// ★ P3（改造方案 §11-P3）：派发开着且这一单够格时先试远端；不派/派失败都走本地，
+	//   客户看到的是"慢一点"，不是"失败"（D3 已决口径）。关着时这里是一个 0 成本的函数调用。
+	if out, ok := tryDispatchOverlay(ctx, args, payload); ok {
+		return out, nil
+	}
 	bin, argv := wrapNice(pyBin(), append([]string{overlayScriptPath()}, args...))
 	stdout, stderr, err := runSubprocess(ctx, fileprocTimeout(), bin, argv, payload)
 	if err != nil {
 		return stdout, fmt.Errorf("pdf_overlay %v 失败: %w\n%s", args, err, truncateTail(stderr))
 	}
 	return stdout, nil
+}
+
+// tryDispatchOverlay 按 overlay 的 argv 形态尝试远端派发：
+//
+//	extract <in.pdf>            → 只有输入，产物在 stdout
+//	apply   <in.pdf> <out> <lc> → 有输入有产物
+//
+// ★ 为什么只认 args[1]：子命令词在 args[0]，输入件恒在 args[1]；写死位置比"猜哪个像路径"可靠。
+// 返回 (远端 stdout, 是否派发成功)。失败一律 false —— 由调用方回落到本地路径。
+func tryDispatchOverlay(ctx context.Context, args []string, payload []byte) ([]byte, bool) {
+	if !DispatchEnabled() || len(args) < 2 {
+		return nil, false
+	}
+	inPath := args[1]
+	if fi, err := os.Stat(inPath); err != nil || fi.IsDir() {
+		return nil, false
+	}
+	outputs := map[string]string{}
+	if args[0] == "apply" && len(args) >= 3 && args[2] != "" {
+		outputs[filepath.Base(args[2])] = args[2]
+	}
+	return TryDispatch(ctx, SessionIDFor(inPath), "pdf_overlay.py",
+		append([]string{"pdf_overlay.py"}, args...), payload, []string{inPath}, outputs)
 }
 
 // ExtractTextsPdfOverlay 原地替换链的文本提取：块+矢量栅格切分为段（与写回目标键完全一致）。

@@ -1,0 +1,17 @@
+[Unit]
+# fpd-expiry.timer · 到期闹钟（OnCalendar 由 bootstrap-dispatch.sh 按 FPD_EXPIRE_DATE 改写）
+# ★ 口径：设在**厂商到期日之前**（这台到期 2026-10-28，默认填 2026-10-26），
+#   留出"主站回归 + 人工核对"的余量，而不是掐到最后一天。
+#   日期为空时 bootstrap 会**显式不启用**本 timer 并告警——宁可看得见地不生效，
+#   也不要"看着启了其实闹钟没定"。
+Description=Self-destruct the dispatch worker on its expiry date
+
+[Timer]
+# 占位值：bootstrap-dispatch.sh 会用 sed 把下面这行改写成具体日期（OnCalendar=2026-10-26 03:30:00）
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+AccuracySec=1min
+Unit=fpd-expiry.service
+
+[Install]
+WantedBy=timers.target

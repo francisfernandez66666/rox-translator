@@ -859,6 +859,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"kb_ready":     s.DB != nil,
 		// ★ 工单双模式（2026-09-13）：anydoc 纯文案提取层是否就绪（venv firecrawl-anydoc + 脚本，healthcheck 缓存）
 		"anydoc_ready": fileproc.AnydocAvailable(),
+		// ★ 文档转换远程派发（2026-09-28 §5.2）：off=未开闸；online=远端就绪；degraded=连续失败降级中。
+		//   同 #42 口径：本端点无鉴权，只出状态词，**绝不出远端主机、路径或文件名**。
+		"dispatch": fileproc.DispatchStatus(),
 		// ★ #40（2026-09-21）：分布式能力口径——redis=跨实例聚合可用；
 		//   in-process=未配 REDIS_ADDR（仅单副本安全）；unreachable=配了但探活失败（逐次降级）。
 		//   监控/巡检可直接对该字段做告警，不再依赖翻启动日志；

@@ -10,7 +10,6 @@ package api
 // ========================================
 
 import (
-	"bytes"
 	"fmt"
 	"net/http"
 	"os"
@@ -81,12 +80,24 @@ func checkPdfLimits(path, filename string) error {
 }
 
 // pdfPageCount 读取 PDF 页数（纯 Go，无需外部依赖）。解析失败返回 error 由调用方放行。
+//
+// ★ 2026-09-28 P0（改造方案 §11-P0）：`os.ReadFile` 整读改成**流式**（os.Open + ReaderAt）。
+//
+//	旧实现在**上传请求的同步路径**上把整个文件读进 Go 堆再来数页——40MB 的 PDF 就是白烧 40MB
+//	堆，而这道校验跑在资源闸之外（`internal/fileproc` 的闸限额不着它），等于主站自己送上门的
+//	一次额外尖峰；更别扭的是它只是为判阈值，**还没开始转换就先付了那份内存**。
+//	改为把 `*os.File` 交给解析器后，进程内只保留解析用的缓冲与 xref 表。
 func pdfPageCount(path string) (int, error) {
-	b, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return 0, err
 	}
-	r, err := ledong.NewReader(bytes.NewReader(b), int64(len(b)))
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	r, err := ledong.NewReader(f, fi.Size())
 	if err != nil {
 		return 0, err
 	}

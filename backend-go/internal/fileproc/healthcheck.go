@@ -20,9 +20,10 @@ var (
 // HealthResult 依赖健康检查结果
 type HealthResult struct {
 	PythonAvailable   bool     // Python 解释器是否可用
-	Fpdf2Available    bool     // fpdf2 库是否可导入
+	Fpdf2Available    bool     // fpdf2 库是否可导入（注意：pip 包名 fpdf2，**导入名是 fpdf**，见 doHealthCheck）
 	Pdf2docxAvaliable bool     // pdf2docx 库是否可导入
 	AnydocAvail       bool     // firecrawl-anydoc（导入名 anydoc）是否可导入——纯文案模式提取层
+	PymupdfAvailable  bool     // ★ 2026-09-28 新增：PyMuPDF（导入名 pymupdf）是否可导入——PDF「原版式写回」主链唯一依赖
 	LibreOfficeAvail  bool     // LibreOffice 是否可用
 	PythonPath        string   // Python 解释器路径
 	LibreOfficePath   string   // LibreOffice 路径
@@ -49,11 +50,24 @@ func doHealthCheck() *HealthResult {
 		result.PythonAvailable = true
 		result.PythonPath = pythonPath
 
-		// 检查 fpdf2
-		if checkPythonModule(pythonPath, "fpdf2") {
+		// 检查 fpdf2（pip 包名 fpdf2，**导入名是 fpdf**——旧代码写成检查 "fpdf2"，
+		// 于是该字段恒为 false，白白打了一年多假告警；2026-09-28 订正为 fpdf）
+		if checkPythonModule(pythonPath, "fpdf") {
 			result.Fpdf2Available = true
 		} else {
 			result.Warnings = append(result.Warnings, "Python fpdf2 库未安装，PDF 写回将使用 Go 兜底")
+		}
+
+		// ★ 检查 pymupdf（2026-09-28 D5）：它是 PDF「原版式·原字体·原地替换」主链
+		//   （pdf_overlay.py）的唯一依赖，此前**根本不探** ⇒ 出现过「装了 pdf2docx 却没
+		//   pymupdf」的机器：健康检查全绿、主链必崩，只能靠「PDF 转不出来」人肉发现。
+		//   实测主站这份 pymupdf 还是靠 pdf2docx 的 Requires 传递装上的（1.28.2），
+		//   哪天清理 pdf2docx 就会再次静默瘫链——所以这条探测必须长期留着。
+		if checkPythonModule(pythonPath, "pymupdf") {
+			result.PymupdfAvailable = true
+		} else {
+			result.Warnings = append(result.Warnings,
+				"Python pymupdf 库未安装，PDF 原版式写回（pdf_overlay apply）不可用，将降级为版式重建（pip install \"PyMuPDF==1.28.2\"）")
 		}
 
 		// 检查 pdf2docx

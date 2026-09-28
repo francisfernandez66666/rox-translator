@@ -1,0 +1,23 @@
+# ============================================================================
+# translator-dispatch-expiry.timer · 主站侧到期闹钟（每天一次）
+#
+# ★ 为什么是"每天检查"而不是"OnCalendar=<到期日>"：
+#   OnCalendar 写死日期，到期日一旦变更（厂商续期/换机）就要改两处（远端 fpd-expiry.timer 也写了一份），
+#   改漏一处就变成"看着启了其实闹钟没定"——这正是远端那份注释里点名的坑。
+#   每天读一次 /etc/translator/dispatch_expiry 现比现判，日期只有一个真值来源。
+#
+# 配套：translator-dispatch-expiry.service（oneshot，未到期即退 0）
+# 安装：由 scripts/dispatch_apply.sh 自动完成
+# ============================================================================
+[Unit]
+Description=Daily check whether the dispatch worker has expired
+
+[Timer]
+# 每天 04:10（早于业务高峰，且避开远端 sweep 的整点）
+OnCalendar=*-*-* 04:10:00
+Persistent=true
+AccuracySec=1min
+Unit=translator-dispatch-expiry.service
+
+[Install]
+WantedBy=timers.target

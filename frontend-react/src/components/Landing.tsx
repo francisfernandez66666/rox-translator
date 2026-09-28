@@ -1642,9 +1642,9 @@ const LANDING_CSS = `
 .lc-trial-btn--sec{border:1.2px solid var(--lc-border-pill);background:none;color:var(--lc-text-1)}
 .lc-trial-btn--sec:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
 .lc-trial-out{display:flex;flex-direction:column;gap:8px;min-height:74px;border:1.2px solid var(--lc-border-input);border-radius:12px;padding:12px 14px}
-.lc-trial-out-head{display:flex;align-items:center;gap:10px}
+.lc-trial-out-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .lc-trial-out-label{font-size:14px;letter-spacing:.06em;color:var(--lc-text-4)}
-.lc-trial-copy{margin-inline-start:auto;flex:none;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:var(--lc-text-2);font:500 14px/1 var(--lc-font);cursor:pointer}
+.lc-trial-copy{flex:none;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:var(--lc-text-2);font:500 14px/1 var(--lc-font);cursor:pointer}
 .lc-trial-copy:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
 /* pre-wrap：译文里的换行是引擎给的排版信号，不能吞；break-word 兜住德语/俄语的超长复合词顶破卡片 */
 .lc-trial-out-text{margin:0;font-size:17px;line-height:26px;color:var(--lc-text-1);white-space:pre-wrap;word-break:break-word}
@@ -2187,7 +2187,7 @@ const LANDING_CSS = `
 /* 100deg 斜向而不是 90deg：横向平移像"进度条"，带角度才像"审校笔扫过" */
 
 /* —— 结果框头部：完成图标 + 结论 + 统计 在左，示意按钮在右 —— */
-.hd-rhead{display:flex;align-items:center;margin-bottom:10px}
+.hd-rhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
 /* 左半单独包一层并给 min-width:0：三段文案是 nowrap 的，不收缩就会把右边的按钮挤出框 */
 .hd-rleft{display:flex;align-items:center;gap:8px;min-width:0}
 /* 必须自己当定位父：对勾圆环 .hd-ring 是它的绝对定位子节点，两者中心要重合 */
@@ -2213,7 +2213,7 @@ const LANDING_CSS = `
 .hd-rsub{font-size:14px;color:var(--lc-text-4);transition:color .55s ease;white-space:nowrap}
 .hd-rsub.lit{color:var(--lc-text-2)}
 /* 右侧"复制"是真实按钮：点击把定稿译文写入剪贴板并短暂显示"已复制"（font 继承自 .hd-rhead 语境） */
-.hd-dlbtn{margin-inline-end:auto;flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:#C8CCD1;font:500 14px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)}
+.hd-dlbtn{flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:#C8CCD1;font:500 14px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)}
 .hd-dlbtn:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
 .hd-dlbtn svg{display:block}
 /* display:block 消掉行内 SVG 的基线下沉：图标与 12px 文案要在 28px 高的胶囊里精确居中 */

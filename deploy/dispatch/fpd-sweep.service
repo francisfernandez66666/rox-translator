@@ -1,0 +1,18 @@
+[Unit]
+# fpd-sweep.service · 一次会话清理（fpd-sweep.timer 每 15 分钟拉起）
+# 职责：删掉 w/ 下闲置超过 FPD_TTL_SEC 的会话目录。
+# ★ 为什么必须有它：派发形态下"产物必须回主站"这条硬口径的远端半边就是"会话结束即清"——
+#   主站同步回拉后远端不该再持有客户文件；崩溃/超时留下的半截会话也靠这条兜住。
+# ★ 写法定成 `--mode sweep` 而不是手搓 base64 header：手搓一旦搓错，症状是
+#   "timer 天天静默失败，清理从来没跑过"——那是最难发现的一类失效。
+Description=LangCross dispatch worker session sweep
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=fpd
+Group=fpd
+Slice=fpd.slice
+EnvironmentFile=-/opt/fpdispatch/etc/fpd.env
+ExecStart=/opt/fpdispatch/.venv/bin/python3 /opt/fpdispatch/bin/fpdexec.py --mode sweep
+Nice=10

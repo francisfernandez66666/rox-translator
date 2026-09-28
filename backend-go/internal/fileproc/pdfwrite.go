@@ -202,11 +202,18 @@ func runDocxScriptStdin(ctx context.Context, args []string, payload []byte) erro
 
 // writePDFViaPython 走 Python(fpdf2) 管线写出 PDF：payload 含源句与译文映射，脚本路径与可执行文件同目录。
 // 资源闸 + nice 低优先级运行 + 受控执行。
+//
+// ★ P3（改造方案 §11-P3）：派发开着、`FILEPROC_DISPATCH_FONT` 已配、且 payload 够大时先试远端；
+//
+//	不派/派失败都走本地（D3 已决口径）。关着或未配远端字体时这里是一个 0 成本的判断。
 func writePDFViaPython(ctx context.Context, outPath string, fontPath string, srcTexts []string, translations map[string]string) error {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"srcTexts":     srcTexts,
 		"translations": translations,
 	})
+	if ok := tryDispatchPdfwrite(ctx, outPath, fontPath, payload); ok {
+		return nil
+	}
 	scriptPath := filepath.Join(filepath.Dir(os.Args[0]), "pdfwrite.py")
 	bin, argv := wrapNice(pyBin(), []string{scriptPath, outPath, fontPath})
 	_, stderr, err := runSubprocess(ctx, fileprocTimeout(), bin, argv, payload)
@@ -214,6 +221,30 @@ func writePDFViaPython(ctx context.Context, outPath string, fontPath string, src
 		return fmt.Errorf("python pdfwrite 失败: %w\n%s", err, truncateTail(stderr))
 	}
 	return nil
+}
+
+// tryDispatchPdfwrite pdfwrite 那条腿的派发尝试：**没有输入文件，原文与译文都在 payload 里**，
+// 所以它的分流判据只有 payload 体积一条腿（见 DispatchEligible 的 payload 腿）。
+//
+// ★ 为什么要 `FILEPROC_DISPATCH_FONT` 这个前置：pdfwrite.py 的 argv[2] 是主站字体文件
+//
+//	（NotoSansCJK 的 .ttc 约 20MB）。不配远端字体 ⇒ 每单都要先搬 20MB 字体过去，
+//	省下的那点内存还不够付搬运时间。故**未配即不派**，这是刻意的保守，不是漏接线。
+//
+// 返回 true 表示产物已由远端产出并已回拉落位（调用方直接返回成功）。
+func tryDispatchPdfwrite(ctx context.Context, outPath, fontPath string, payload []byte) bool {
+	if !DispatchEnabled() || outPath == "" {
+		return false
+	}
+	remoteFont := dispatchRemoteFont()
+	if remoteFont == "" {
+		return false // 未声明远端字体 ⇒ 不派（搬 20MB 字体不划算，见上方说明）
+	}
+	// 产物声明：远端写到会话目录，回拉后校验再 rename 到主站最终路径
+	outputs := map[string]string{filepath.Base(outPath): outPath}
+	_, ok := TryDispatch(ctx, SessionIDFor(outPath), "pdfwrite.py",
+		[]string{"pdfwrite.py", outPath, remoteFont}, payload, nil, outputs)
+	return ok
 }
 
 // writePDFViaGoFpdf 纯 Go(fpdf) 兜底写出 PDF（Python 管线不可用时）：注册 CJK UTF8 字体逐段排版。

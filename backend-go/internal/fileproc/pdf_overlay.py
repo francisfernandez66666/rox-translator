@@ -29,6 +29,7 @@
 #    （docstring 本体不改写：它是 main() 无参数时打到 stderr 的用法说明文本。）
 import io
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -37,6 +38,85 @@ from pathlib import Path
 # 它是最后防线而非常规路径——用上就意味着不再是原件字体，故 _pick_font 会先尽一切可能
 # 复用原 PDF 的内嵌子集，只有取不到字形或覆盖不住译文时才落到这个字体上。
 FALLBACK_FONT = str(Path(__file__).parent / "assets" / "fonts" / "DroidSansFallbackFull.ttf")
+
+# 兜底字体缺失时的退出码与可检索标记（Go 侧只看「非 0」，标记专门给日志检索与排障用）。
+FALLBACK_FONT_MISSING_RC = 2
+FALLBACK_FONT_MISSING_MARK = "[fpoverlay] fallback_font_missing"
+# 用备选字体顶上时打的标记（**不是错误**，只是告知：本次没用上自有资产）。
+FALLBACK_FONT_SUBSTITUTED_MARK = "[fpoverlay] fallback_font_substituted"
+# 字体存在魔数也对，但 PyMuPDF 实际打不开（损坏/格式不被支持）时打的标记。
+FALLBACK_FONT_UNUSABLE_MARK = "[fpoverlay] fallback_font_unusable"
+# 给用户/运维的处置提示：想拿到稳定的原字形覆盖，就自己下字体放进 assets/fonts/。
+_FONT_HINT = ("想恢复默认的字形覆盖，请自行下载 DroidSansFallbackFull.ttf（Apache 2.0）等免费商用字体，"
+              "放到本脚本同级的 assets/fonts/ 目录下即可，无需改代码")
+
+# 自有资产不在时的候选字体（★ 全部要求**免费可商用**，不许引入授权不明的字体）。
+# 顺序＝偏好：先主站已装的阿里普惠体，再系统里的 Noto / Droid 兜底。
+_FONT_CANDIDATES = (
+    "/opt/translator/fonts/AlibabaPuHuiTi-3-55-Regular.ttf",   # 阿里普惠体 3.0（免费可商用）
+    "/opt/translator/fonts/AlibabaPuHuiTi-3-75-Semibold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttf",  # Noto CJK（SIL OFL）
+    "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",  # 与自有资产同字体（Apache 2.0）
+    "/usr/share/fonts/droid/DroidSansFallbackFull.ttf",
+)
+# 测试/容器里想锁死搜索范围时用这个环境变量（冒号分隔绝对路径）。**生产不设**，
+# 留着是为了让「机器上一个字体都没有」这种极端形态能在单测里被确定性地造出来。
+_FONT_SEARCH_ENV = "FPD_FONT_CANDIDATES"
+# 环境变量：用户自选字体（优先级最高，与 Go 侧 ResolvePDFFont 的 PDF_FONT_PATH 同口径）
+_FONT_PATH_ENV = "PDF_FONT_PATH"
+
+# TrueType / OpenType / 集合字体的魔数，用来过滤掉「有这个文件但不是字体」的情形
+# （例如被截断的下载产物、误指到别的文件的环境变量）。
+_TTF_MAGIC = (b"\x00\x01\x00\x00", b"true", b"ttcf", b"OTTO")
+
+
+def _usable_font(path):
+    """字体文件是否真的可用（存在 + 非空 + 魔数像 TTF/OTF）。"""
+    try:
+        p = Path(path)
+        if not p.is_file() or p.stat().st_size <= 0:
+            return False
+        with open(str(p), "rb") as fh:
+            return fh.read(4) in _TTF_MAGIC
+    except OSError:
+        return False
+
+
+def _pick_apply_font():
+    """选出本次写回要用的兜底字体，返回 (字体路径, 是否用了替身)。
+
+    ★ 为什么是两级而不是「缺件就报错」（2026-09-28 D5 后的修订）：
+      写回字体缺了就把整单判死，等于拿一个部署瑕疵去卡客户的交付——不合理。
+      合理的行为是：**先尽可能找一支免费可商用的字体顶上**，把件照样交出来；
+      同时打一行带标记的日志，提示"想拿回稳定的字形覆盖就自己下载放回去"。
+
+      取用顺序（都能免费商用）：
+        ① 仓库随包资产 DroidSansFallbackFull.ttf（覆盖中/日/韩/拉丁，首选）
+        ② 环境变量 PDF_FONT_PATH（用户自选，最高优先，和 Go 侧 ResolvePDFFont 同口径）
+        ③ 主站已装的阿里普惠体 / 系统 Noto CJK / 系统 Droid 兜底
+      一个都不可用才返回 (None, False)，此时 cmd_apply 退 2 并打缺失标记。
+
+    ★ 另一个不变的点：这个解析必须发生在 `pymupdf.open` 与 `_blank_faint_images`
+      （把每页图片读进内存，全链最贵的一段）**之前**。原实现的崩溃点正好在那之后，
+      结果是「内存花完、产物照样降级」——我们在为一次注定失败的转换付满内存。
+
+    ⚠️ 注意这只影响**兜底**字体：正常路径 `_pick_font` 仍会优先复用 PDF 内嵌子集，
+      只有原字体覆盖不住译文字形时才落到这里。
+    """
+    if _usable_font(FALLBACK_FONT):
+        return FALLBACK_FONT, False
+
+    env = os.environ.get(_FONT_SEARCH_ENV, "")
+    if env:
+        candidates = [c for c in env.split(os.pathsep) if c]
+    else:
+        own = os.environ.get(_FONT_PATH_ENV, "")
+        candidates = ([own] if own else []) + list(_FONT_CANDIDATES)
+
+    for cand in candidates:
+        if _usable_font(cand):
+            return cand, True
+    return None, False
 
 # 键归一化要清的噪声字符 = 普通空白 + 零宽字符（U+200B/200C/200D/2060/FEFF）。
 # 零宽字符必须一并删：PDF 文本层常混入 BOM/软连字，extract 与 apply 只要有一侧没删，
@@ -579,6 +659,19 @@ def _blank_faint_images(doc):
 #   · 零命中不报错：没有 job 的页面直接跳过，进程仍退出 0、产物等于原件——Go 侧只拿得到
 #     err==nil，故不能把「成功退出」当成「译文已替换」（命中数看 stdout 的 replaced=）。
 def cmd_apply(in_pdf: str, out_pdf: str, lang: str, payload: bytes) -> int:
+    # ★ D5（2026-09-28）两级取字：放在 pymupdf 检查、open、水印扫描**之前**
+    #   （理由见 _pick_apply_font）。刻意排在最前还有个好处：即使 pymupdf 也没装，
+    #   「一个字体都找不到」与「缺依赖」两种死法在日志里依然可区分。
+    apply_font, degraded = _pick_apply_font()
+    if not apply_font:
+        sys.stderr.write(f"{FALLBACK_FONT_MISSING_MARK} path={FALLBACK_FONT}\n")
+        sys.stderr.write(f"  本机无任何可用 CJK 字体（已试 {len(_FONT_CANDIDATES)} 个系统候选）。{_FONT_HINT}\n")
+        return FALLBACK_FONT_MISSING_RC
+    if degraded:
+        # 不是错误：件照样交，只是提醒"这次用的是替身"。
+        sys.stderr.write(f"{FALLBACK_FONT_SUBSTITUTED_MARK} bundled_missing={FALLBACK_FONT} "
+                         f"using={apply_font} hint={_FONT_HINT}\n")
+        print(f"warn: 未用随包兜底字体，本次改用 {apply_font}（{_FONT_HINT}）")
     if pymupdf is None:
         sys.stderr.write(f"pymupdf 不可用: {_IMPORT_ERR}\n")
         return 1
@@ -595,9 +688,20 @@ def cmd_apply(in_pdf: str, out_pdf: str, lang: str, payload: bytes) -> int:
             v = re.sub(r"[\u2580-\u259F\u25A0-\u25A1\u2592\u2591\u2593]+", " ", v)
             tmap[kk] = re.sub(r"\s+", " ", v).strip()
 
+    # ★ 字体对象必须**先于任何昂贵动作**构造成功再谈别的（2026-09-28 D5）。
+    #   原顺序是 open → _blank_faint_images（把每页图片读进内存，全链最贵的一段）→ Font(...)，
+    #   于是「取不到/打不开字体」每次都在内存花完之后才爆，产物照样降级 —— 等于白付那份内存。
+    #   `_pick_apply_font` 只校验了「文件存在且魔数像字体」，PyMuPDF 真正认不认要到这一步才知道，
+    #   所以这里的 try/except 是最后一道：**打不开就立刻退，不许再往下烧内存**。
+    try:
+        default_font = pymupdf.Font(fontfile=apply_font)  # apply_font：见 cmd_apply 开头的两级取字
+    except Exception as _ferr:
+        sys.stderr.write(f"{FALLBACK_FONT_UNUSABLE_MARK} path={apply_font} err={_ferr}\n")
+        sys.stderr.write(f"  {_FONT_HINT}\n")
+        return FALLBACK_FONT_MISSING_RC
+
     doc = pymupdf.open(in_pdf)
     wm = _blank_faint_images(doc)  # ★ 抹除前先清水印切片（防 SMask 黑块）
-    default_font = pymupdf.Font(fontfile=FALLBACK_FONT)
     replaced = overflow = requested_total = 0
     for page in doc:
         fcache = _page_font_cache(doc, page)
@@ -699,6 +803,12 @@ def cmd_selftest() -> int:
         if not cond:
             fails.append(msg)
 
+    # ★ 与 cmd_apply 同口径：缺自有资产时改用替身字体，一个都没有才退 2
+    #   （取字规则见 _pick_apply_font；这里刻意不写死"仓库里有资产"这个前提）。
+    font_path, _degraded = _pick_apply_font()
+    if not font_path:
+        sys.stderr.write(f"{FALLBACK_FONT_MISSING_MARK} path={FALLBACK_FONT}\n")
+        return 2
     try:
         import tempfile
         tmp = tempfile.mkdtemp(prefix="pdfov_")
@@ -707,7 +817,7 @@ def cmd_selftest() -> int:
 
         doc = pymupdf.open()
         page = doc.new_page(width=595, height=842)
-        font = pymupdf.Font(fontfile=FALLBACK_FONT)
+        font = pymupdf.Font(fontfile=font_path)
         # 画一个 2 列 × 2 行表格（矢量矩形 = 单元格边界）。
         # ★ 格子间必须留空隙：相邻格会被 PyMuPDF 合并成一个块（生产 extract/apply
         #   同口径键自会对齐，但夹具需要「一格=一块」才能做逐格越界断言）。
@@ -728,13 +838,13 @@ def cmd_selftest() -> int:
               "r2c2": "门店随查随用不靠邮件发PDF文件"}
         for k in ("r1c1", "r1c2", "r2c2"):
             r = cells[k]
-            page.insert_text((r.x0 + 4, r.y0 + 30), zh[k], fontfile=FALLBACK_FONT,
+            page.insert_text((r.x0 + 4, r.y0 + 30), zh[k], fontfile=font_path,
                              fontname="F0", fontsize=11)
         rc1 = cells["r2c1"]
         page.insert_text((rc1.x0 + 4, rc1.y0 + 16), zh["r2c1a"],
-                         fontfile=FALLBACK_FONT, fontname="F0", fontsize=11)
+                         fontfile=font_path, fontname="F0", fontsize=11)
         page.insert_text((rc1.x0 + 4, rc1.y0 + 32), zh["r2c1b"],
-                         fontfile=FALLBACK_FONT, fontname="F0", fontsize=11)
+                         fontfile=font_path, fontname="F0", fontsize=11)
         # 浅色小图（模拟水印切片，最深像素 245 ≥190）：验证 apply 后整图挂
         # 全透明 SMask 隐身，而不是换成白色贴片盖住下层矢量
         wm_pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 24, 24))
@@ -744,8 +854,8 @@ def cmd_selftest() -> int:
         # 段落要足够宽（模拟真实多行段落），否则窄盒会逼出缩字号、测不到扩容。
         pg2 = doc.new_page(width=595, height=842)
         pg2.insert_text((60, 130), "产品简介与核心功能亮点一览涵盖工单贴中文包勾选语种定稿回写与门店随查随用",
-                        fontfile=FALLBACK_FONT, fontname="F0", fontsize=11)
-        pg2.insert_text((60, 330), "下方锚点段落占位内容", fontfile=FALLBACK_FONT,
+                        fontfile=font_path, fontname="F0", fontsize=11)
+        pg2.insert_text((60, 330), "下方锚点段落占位内容", fontfile=font_path,
                         fontname="F0", fontsize=11)
         doc.save(src)
         doc.close()

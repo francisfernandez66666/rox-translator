@@ -148,6 +148,9 @@ func (s *Store) GetTicketByNo(no string) (*Ticket, error) {
 // WHERE 只有 id、不带 tenant_id：本方法按主键定位（worker 侧已用 GetTicketGlobal 拿到归属），
 // 新增面向 HTTP 的调用点请改用带租户条件的写法，别靠调用方自觉。
 func (s *Store) SetTicketResultPath(id int64, path string) error {
+	if err := rejectRemoteArtifactPath(path); err != nil {
+		return err
+	}
 	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tickets SET result_path=?, updated_at=? WHERE id=?", path, time.Now().Format(time.RFC3339), id)
 	return err
 }
@@ -155,8 +158,38 @@ func (s *Store) SetTicketResultPath(id int64, path string) error {
 // SetTicketTextResultPath 写入纯文案 .md 产物路径（还原模式兜底附加物 / 纯文案模式主产物）。
 // 与 SetTicketResultPath 的差别：本方法不刷 updated_at（updated_at 同时是卡死巡检的陈旧判据）。
 func (s *Store) SetTicketTextResultPath(id int64, path string) error {
+	if err := rejectRemoteArtifactPath(path); err != nil {
+		return err
+	}
 	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tickets SET text_result_path=? WHERE id=?", path, id)
 	return err
+}
+
+// rejectRemoteArtifactPath ★ §9-A2 的产物落点守卫（store 侧落库前最后一道闸）：
+// 库里绝不允许出现指向**远端派发机**的产物路径——体验机一到期回收，
+// 这条记录就变成指向一台不存在机器的死链，客户下载必然 404，而工单状态仍然"成功"，最难发现。
+//
+// ★ 只做负向判据（远端根前缀），不强制"必须落在主站某根之下"：
+//   store 不持有 OutputDir/UploadDir 这些运行期常量，强行要求会牵出一堆初始化顺序问题，
+//   而"远端根"是改造方案里钉死的单一真值（FILEPROC_DISPATCH_ROOT，默认 /opt/fpdispatch）。
+//   正向对照（主站路径必须放行、远端路径必须判红）见 fileproc 包的 TestDispatchArtifactGuard，
+//   两处同口径，改坏一侧另一侧会红灯。
+func rejectRemoteArtifactPath(path string) error {
+	if path == "" {
+		return nil // 空路径是合法的（某些调用点先置空再异步补）
+	}
+	root := os.Getenv("FILEPROC_DISPATCH_ROOT")
+	if root == "" {
+		root = "/opt/fpdispatch" // ★ 与 fileproc.envDispatchRoot 默认值一致
+	}
+	clean := path
+	if len(clean) > 1 && clean[0] != '/' {
+		clean = "/" + clean // 防御性：非绝对路径不可能落在远端根之下，直接放行后续
+	}
+	if clean == root || (len(root) > 0 && len(clean) > len(root) && clean[:len(root)] == root && clean[len(root)] == '/') {
+		return fmt.Errorf("产物路径落在远端派发根 %s 之下（到期后必然取不到，拒绝写入库）: %s", root, path)
+	}
+	return nil
 }
 
 // ListTickets 工单列表（租户隔离；onlyMine=true 时只返回当前用户创建的）。

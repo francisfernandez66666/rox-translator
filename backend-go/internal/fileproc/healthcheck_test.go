@@ -2,6 +2,7 @@ package fileproc
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,57 @@ func TestCheckHealth(t *testing.T) {
 	}
 	if result.Warnings == nil {
 		t.Error("CheckHealth.Warnings is nil")
+	}
+}
+
+// TestCheckPythonModuleDiscriminates ★ 2026-09-28 D5 教训的守卫：
+// checkPythonModule 是**所有 Python 依赖探测的唯一通道**，它必须真的能区分"有/没有"，
+// 否则健康检查就是一张绿纸（历史上 `checkPythonModule(py,"fpdf2")` 因写错导入名恒为 false，
+// 打了很久的假告警；而主链依赖 pymupdf 干脆没进探测清单，机器「健康」但 PDF 主链必崩）。
+// 这里配一组「必然存在 / 必然不存在」的双向对照，任何一侧失真都立刻红。
+func TestCheckPythonModuleDiscriminates(t *testing.T) {
+	py := findPython()
+	if py == "" {
+		t.Fatal("findPython() 返回空：本机无 python3。本用例不许 skip——" +
+			"依赖探测若在无 Python 的机器上失去验证，就等于承认『健康检查可以是空转』")
+	}
+	if !checkPythonModule(py, "json") {
+		t.Fatal("标准库 json 竟然探测失败 ⇒ checkPythonModule 的退出码判读写反了，所有依赖字段都不可信")
+	}
+	if checkPythonModule(py, "definitely_not_a_module_zzz") {
+		t.Fatal("不存在的模块竟然探测成功 ⇒ checkPythonModule 恒真，健康检查会退化成全绿空转")
+	}
+	// fpdf2 的导入名是 fpdf（pip 包名 ≠ 导入名）；这个不等式一旦反转，说明又开始误用包名当导入名。
+	if checkPythonModule(py, "fpdf2") {
+		t.Fatal("存在名为 fpdf2 的可导入模块 ⇒ 与 fpdf2 的发布事实不符，healthcheck.go 的订正被回退或环境被污染")
+	}
+}
+
+// TestPymupdfInHealthResult ★ D5 直接补丁：主链依赖必须进 HealthResult，
+// 不许再出现「健康检查全绿但 pdf_overlay apply 一进去就崩」的形态。
+// 断言两条：① 字段值必须等于本机真实探测结果（不是写死的常量）；② 不可用时必须有对应告警。
+func TestPymupdfInHealthResult(t *testing.T) {
+	py := findPython()
+	if py == "" {
+		t.Fatal("findPython() 返回空：本机无 python3。本用例不许 skip——" +
+			"依赖探测若在无解释器的机器上失去验证，就等于承认『健康检查可以空转』")
+	}
+	real := checkPythonModule(py, "pymupdf")
+	res := CheckHealth()
+	if res.PymupdfAvailable != real {
+		t.Fatalf("HealthResult.PymupdfAvailable=%v 与本机实探测=%v 不一致 ⇒ 字段不是照实填的，健康检查失去意义",
+			res.PymupdfAvailable, real)
+	}
+	if !real {
+		hasWarn := false
+		for _, w := range res.Warnings {
+			if strings.Contains(w, "pymupdf") {
+				hasWarn = true
+			}
+		}
+		if !hasWarn {
+			t.Fatal("pymupdf 不可用却没有对应告警 ⇒ 这条会变成谁也看不见的沉默字段（D5 的形态）")
+		}
 	}
 }
 

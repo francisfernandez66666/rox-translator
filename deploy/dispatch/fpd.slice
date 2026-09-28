@@ -1,0 +1,21 @@
+[Unit]
+# fpd.slice · 体验机侧转换进程的资源帽
+# 说明（改动前必读）：
+#   · ssh 拉起的会话**不会自动落进这个 slice**（sshd 会话归属 ssh.service 自己的 scope），
+#     所以真正兜住转换子进程内存的是 fpdexec.py 里的 RLIMIT_AS（见 FPD_RLIMIT_AS_MB）。
+#     本 slice 服务两类**由 systemd 直接起**的进程：清理与到期自毁。
+#   · 数值由 bootstrap-dispatch.sh 按机器实测内存改写（2G 机 ⇒ MemoryMax≈1.2G），
+#     这里留的是占位默认值——不要拿它当"这台机器的真实档位"。
+Description=LangCross dispatch worker (fpd) resource slice
+Before=slices.target
+
+[Slice]
+MemoryAccounting=yes
+MemoryHigh=1200M
+MemoryMax=1500M
+CPUAccounting=yes
+TasksAccounting=yes
+TasksMax=64
+# 转换是批处理型负载：让它永远抢不过交互进程
+CPUWeight=30
+IOWeight=30

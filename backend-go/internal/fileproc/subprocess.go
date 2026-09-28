@@ -81,17 +81,40 @@ func acquireProcGateCtx(ctx context.Context) func() {
 	return func() { <-g }
 }
 
-// runSubprocess 受控执行子进程（Unix/Darwin/Linux）：
+// runSubprocess 受控执行子进程（Unix/Darwin/Linux）：薄委托，保持与历史完全等价的行为
+// （本地闸 acquireProcGateCtx；详细说明见下方 runSubprocessGated）。
+//
+// ★ 2026-09-28（改造方案 §3）：原先"取本地转换名额"这件事写死在函数体里，
+// 远端派发要想不被锁串行就必须复用不同的闸。这里把闸从函数内部提到入参：
+// runSubprocess 只保留历史语义，调用点零改动（这也是 AGENTS §三 的"薄委托"口径）。
+func runSubprocess(ctx context.Context, timeout time.Duration, bin string, args []string, stdin []byte) ([]byte, []byte, error) {
+	return runSubprocessGated(ctx, timeout, bin, args, stdin, acquireProcGateCtx)
+}
+
+// runSubprocessGated 受控执行子进程，**闸由调用方注入**
+// （本地＝FILEPROC_MAX_CONCURRENT 的 acquireProcGateCtx，远端＝acquireRemoteGateCtx）。
+// 为什么开这个口子：远端执行器若复用本地那道容量通常为 1 的闸，
+// 等于把「把大件送走」的收益又锁回串行——本地那一单还在排队，远端却被同一把锁挡着。
+//
+// gate 为 nil 时**不取闸**（★ 这不是偷懒，是必须的：就绪探测自己要 ssh，而闸的容量又是
+// 由探测结果决定的——若探测也去取闸，就会形成"取闸 → 初始化容量 → 探测 → 取闸"的重入，
+// sync.Once 在同 goroutine 重入是**永久死锁**（2026-09-28 单测实测：进程挂死 60s 被 timeout 杀）。
+// 探测是轻量的短命令且全局只成功一次，不占名额不会打满远端。
+//
+// 除取闸这一步外，本函数与改造前的 runSubprocess 逐字节等价：
 //   - CommandContext 到时取消；Setpgid 独立进程组 + Cancel 杀负 PID 整组
 //     （LibreOffice 由 python 派生，仅杀直属子进程会留孤儿继续吃 CPU）
 //   - WaitDelay=5s：ctx 触发后强杀并限时排空管道
-//   - stdout/stderr 分别限量 4MB（替代 CombinedOutput 的无界 CombinedOutput 缓存）
+//   - stdout/stderr 分别限量 4MB（替代 CombinedOutput 的无界缓存，防子进程输出爆炸 OOM）
 //   - 监控指标：启动/成功/失败/超时/SIGKILL 次数，供 /metrics 导出
 //
 // stdin 非 nil 时经标准输入传入 payload。返回分离后的 stdout/stderr 与错误。
-func runSubprocess(ctx context.Context, timeout time.Duration, bin string, args []string, stdin []byte) ([]byte, []byte, error) {
-	release := acquireProcGateCtx(ctx)
-	defer release()
+func runSubprocessGated(ctx context.Context, timeout time.Duration, bin string, args []string, stdin []byte,
+	gate func(context.Context) func()) ([]byte, []byte, error) {
+	if gate != nil {
+		release := gate(ctx)
+		defer release()
+	}
 
 	// 记录子进程启动
 	RecordStart()

@@ -1,0 +1,19 @@
+# requirements.lock.txt · 体验机（派发远端）Python 依赖钉版清单
+#
+# 版本来源：2026-09-28 实读主站 `/opt/translator/.venv`（pip 现读，不是猜的）。
+# ★ 为什么要有这份锁：主站自己的依赖清单（部署指南 §一）**没列 PyMuPDF**，
+#   而 overlay 主链（pdf_overlay.py）真实依赖它——它今天只是被 pdf2docx 顺带装上的
+#   （`pip show pdf2docx` 的 Requires 里能看到）。远端若照旧清单装，就会得到一台
+#   "能 ssh、能导入、转不出原版式件"的机器，而且健康检查看不见这个缺口。
+#
+# ★ 这份文件是**兜底默认值**，不是权威尺子。发版/开闸前应由主站侧
+#   `scripts/dispatch_sync.sh` 用主站 venv 的**实时**版本重新生成远端的
+#   /etc/fpdispatch/requirements.lock.txt，再由 fpdexec.py probe 两侧现读现比（改造方案 §10-G2）。
+#   把版本串当常量长期供判据使用，就是"一升级就双红"的假绿源。
+fpdf2==2.8.8
+pdf2docx==0.5.13
+python-docx==1.2.0
+Pillow==12.3.0
+fonttools==4.63.0
+firecrawl-anydoc==0.2.4
+PyMuPDF==1.28.2
