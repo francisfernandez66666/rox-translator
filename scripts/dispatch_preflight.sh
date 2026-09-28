@@ -8,7 +8,7 @@
 # 所以这四项必须**现读现比**，不写死任何版本号与族数（写死就是一装一卸即假红）。
 #
 # 四项判据：
-#   G1 脚本指纹等值：转换脚�� + 随包兜底字体，两侧 sha256 逐字相等（缺一即不派）；
+#   G1 脚本指纹等值：转换脚本 + 随包兜底字体，两侧 sha256 逐字相等（缺一即不派）；
 #   G2 库版本等值：PyMuPDF / fpdf2 / pdf2docx 两侧版本串相等（importlib 现读，不写死）；
 #   G3 字体族集合：远端 fc-list :lang=zh 的**族名集合** ⊇ 主站集合（多装不算漂移）；
 #   G4 产物一致性抽验：同一份样张两侧各转一次，比对段数与逐段内容（★ 不比字节 sha——
@@ -58,7 +58,11 @@ trap cleanup EXIT
 
 # ---------------------------------------------------------------- 取远端实测值（唯一入口 = fpdexec 协议）
 log "[0/4] 拨通体验机并取回 probe（远端唯一入口 fpdexec.py）"
-printf '{"mode":"probe"}\n' >"$TMP/probe.in"
+# ★ 协议修正（2026-09-29）：fpdexec.py 的 header 第一行是 base64(JSON)（见 fpdexec.py:563
+#   `base64.b64decode(head_line)`），此前本脚本发的是裸 JSON ⇒ 远端报
+#   "header 解析失败: Invalid base64-encoded string"、preflight 永远判不过、开不了闸。
+#   此处与 G4 的 put/run 保持一致：先 base64 再发。
+printf '%s\n' "$(printf '%s' '{"mode":"probe"}' | base64 | tr -d '\n')" >"$TMP/probe.in"
 if ! "${SSH[@]}" >"$TMP/probe.out" 2>"$TMP/probe.err" <"$TMP/probe.in"; then
   bad "probe 失败（BatchMode 下多为私钥/kown_hosts 问题）：$(tail -3 "$TMP/probe.err" | tr '\n' ' ')"
   exit 3
@@ -144,7 +148,7 @@ for lib in pymupdf fpdf2 pdf2docx; do
 done
 # ★ 深判据：版本相等不等于能跑（现网"装了 pdf2docx 却没 pymupdf"就是被浅判据放过的形态）。
 #   远端 selftest 真跑一次最小 PDF 的原版式 apply，退出码非 0 即判不就绪。
-printf '{"mode":"selftest"}\n' >"$TMP/st.in"
+printf '%s\n' "$(printf '%s' '{"mode":"selftest"}' | base64 | tr -d '\n')" >"$TMP/st.in"
 if "${SSH[@]}" >"$TMP/st.out" 2>"$TMP/st.err" <"$TMP/st.in"; then
   ok "G2 远端 selftest 退出码 0（真跑通了原版式链，含随包兜底字体）"
 else

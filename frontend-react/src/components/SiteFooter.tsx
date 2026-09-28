@@ -22,6 +22,13 @@ export default function SiteFooter() {
   //   12 语种各取各词（auth.userAgreement/privacyPolicy 带书名号不适用，另立 footer.* 短标签键）
   const terms = t('footer.terms')
   const privacy = t('footer.privacy')
+  // ★ D-4（2026-09-29）：12 语种《产品手册》此前只有后端面（/docs/manual/{语种码}.pdf，F-69 批 I-8）
+  //   与注册邮件附件在消费，界面零入口 ⇒ 客户找不到手册，运营只能靠邮件里那条链接被偶然点到。
+  //   语种码＝当前界面语种原样带上（内部码 zh_hant 的下划线换成公开码写法 zh-hant），
+  //   回落链（精确语种 → en → zh）**由后端判定**（mail_tpl.go 的 loadManualPDF），
+  //   前端不复制一份回落逻辑——F-69 的「白名单外直接 400，绝不静默给中文」口径才守得住。
+  const manualHref = `/docs/manual/${lang === 'zh_hant' ? 'zh-hant' : lang}.pdf`
+  const manual = t('footer.manual')
   const [links, setLinks] = useState<BrandLink[]>([])
 
   // 页脚链接是平台级配置（超管设置、所有租户共用），挂载时拉一次即可，无需轮询；拉不到就留空走默认协议入口
@@ -51,6 +58,11 @@ export default function SiteFooter() {
       }}
     >
       <span>{tpl('footer.copyright', { brand })}</span>
+      <span style={{ opacity: 0.5 }}>·</span>
+      {/* 手册入口**无条件渲染**（★ D-4）：页脚链接是「平台级配置」，超管一旦在 footer_links
+          里配了条目，下面那段就会整块替换默认协议入口——手册若挂在那条分支里就会随配置消失。
+          它是产品能力说明而不是可配链接，所以固定在这里，target=_blank 外链样式补 rel=noreferrer。 */}
+      <a href={manualHref} target="_blank" rel="noreferrer" style={{ color: 'var(--lc-text-4)' }}>{manual}</a>
       <span style={{ opacity: 0.5 }}>·</span>
       {/* 平台级页脚链接优先；否则回退到《用户协议》《隐私协议》 */}
       {links.length > 0 ? (

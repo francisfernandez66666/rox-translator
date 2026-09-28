@@ -16,7 +16,7 @@
 // ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
 //   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
 //   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
-import { bizResp, request, authHeaders, API_BASE, handleUnauthorized, handleForbidden, ApiError, type AdminResp } from './core'
+import { bizResp, request, authHeaders, API_BASE, handleUnauthorized, handleForbidden, ApiError, apiMsg, type AdminResp } from './core'
 
 /** 翻译工单信息结构：含编号/标题/状态/原文/目标语言/审批人等 */
 export interface Ticket {
@@ -134,6 +134,20 @@ export async function ticketDetail(id: number): Promise<TicketResp> {
   return bizResp(() => request(`/api/tickets/detail?id=${id}`, { headers: authHeaders() }))
 }
 
+// 分页/下载共用的小工具放在接口旁边（★ D-4 抽出，见函数注释）
+/**
+ * filenameFromDisposition 从 Content-Disposition 取落盘文件名，取不到用调用方给的兜底名。
+ * 为什么抽成单点而不是两侧各写一遍正则：本仓的「写死中文闸门」
+ *   （src/i18n/hardcodedCjkGate.test.ts）用引号配对粗扫源码，而这条正则
+ *   `/filename="?([^";]+)"?/` 内部含**奇数个**双引号（3 个），同一文件里出现两次就会让配对
+ *   错位一路延伸到后面的中文兜底句上，把带 apiMsg 豁免的行判成违规（2026-09-29 实测踩过）。
+ *   单点＝形态只有一份、两侧解析口径也不会漂开。
+ */
+function filenameFromDisposition(cd: string, fallback: string): string {
+  const m = cd.match(/filename="?([^";]+)"?/)
+  return m && m[1] ? m[1] : fallback
+}
+
 /** 下载工单结果文件（fetch→blob 触发保存，需鉴权头）；fmt='text' 仅下载译文纯文案(.md) */
 export async function ticketDownload(id: number, opts?: { fmt?: 'text'; fileId?: number }): Promise<void> {
   // ★ §4.2-2：结果文件走 fetch→blob（需二进制响应，无法经 request() 的 JSON 出口），属正当裸用；
@@ -151,14 +165,12 @@ export async function ticketDownload(id: number, opts?: { fmt?: 'text'; fileId?:
     if (r.status === 403) throw new ApiError(handleForbidden(msg), 403, 'FORBIDDEN')
     throw new Error(msg)
   }
-  // 从 Content-Disposition 提取文件名；无则用默认名
-  const cd = r.headers.get('Content-Disposition') || ''
-  const m = cd.match(/filename="?([^";]+)"?/)
+  // 从 Content-Disposition 提取文件名；无则用默认名（★ D-4：解析收进 filenameFromDisposition 单点）
   const blob = await r.blob()
   const url2 = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url2
-  a.download = m ? m[1] : `ticket_${id}.xlsx`
+  a.download = filenameFromDisposition(r.headers.get('Content-Disposition') || '', `ticket_${id}.xlsx`)
   a.click()
   // 延迟释放 blob：立即 revoke 会在部分浏览器取消尚未开始的下载（口径同 ChatWindow 导出）
   setTimeout(() => URL.revokeObjectURL(url2), 5000)
@@ -265,4 +277,61 @@ export async function saveSegments(ticketId: number, lang: string, edits: Segmen
     headers: authHeaders(),
     body: JSON.stringify({ edits }),
   })
+}
+
+/** SegmentsExportResp 回写导出出参：成功带 download 相对路径（★ D-4，2026-09-29 补界面入口） */
+export interface SegmentsExportResp extends AdminResp { download?: string }
+
+/**
+ * segmentsExport 让后端按逐段编辑稿（edited_text 优先于机翻稿）回写结果 docx，返回下载相对路径。
+ * ★ D-4（2026-09-29 全量审计）：后端两支路由（internal/api/editor.go:46-47）自 2026-08 起
+ *   只有 scripts/uat/api_uat_txn.sh T56 在消费，界面零入口 ⇒ 审批人在线改过的修订**带不回交付件**，
+ *   只能人工抄回原文重排——正是 F-44「修订在交付件里凭空消失」那条链的最后一公里。
+ * 返回形状＝{success,download} 信封，且调用点（EditorPage 导出钮）判 resp.success，
+ *   故按 AGENTS §一·5 走 bizResp（不是「读取保持抛出」那一档：失败要出后端文案，
+ *   面板不会把 {success:false} 当数据载进任何列表）。
+ */
+export async function segmentsExport(ticketId: number, lang: string): Promise<SegmentsExportResp> {
+  return bizResp(() => request(`/api/tickets/segments/export?id=${ticketId}&lang=${encodeURIComponent(lang)}`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: '{}',
+  }))
+}
+
+/**
+ * editorExportFetch 按 segmentsExport 给的相对路径取回落写稿并触发浏览器下载（★ D-4）。
+ * 为什么走 fetch→blob 而不是 <a href>/window.open：`/api/editor/export/download` 先 s.authUser(r)
+ *   再做 B8 产物归属校验，**要带 Authorization 头**，导航式下载带不上必然 401；
+ *   口径同上方 ticketDownload（§4.2-2 二进制响应属正当裸用，401/403 与统一 client 同源）。
+ * ★ 出门前真验字节（AGENTS §一·6 的兜底陷阱）：spa.go 对不存在的路径回 200 + 整页 index.html，
+ *   所以「状态码 200」不算拿到文件——docx 是 ZIP，魔数必须是 'PK' 且体积过下限，
+ *   否则如实抛错，绝不能把一个 HTML 壳存成 .docx 交给客户。
+ * 返回落盘文件名（供调用方提示「已开始下载」）。
+ */
+export async function editorExportFetch(download: string): Promise<string> {
+  const url = `${API_BASE}${download}`
+  const r = await fetch(url, { headers: authHeaders() })
+  if (r.status === 401) handleUnauthorized(url)
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`
+    try { msg = (await r.json()).message || msg } catch { /* 非 JSON 错误体（网关页等）保持 HTTP 状态码文案 */ }
+    if (r.status === 403) throw new ApiError(handleForbidden(msg, url), 403, 'FORBIDDEN')
+    throw new Error(msg)
+  }
+  const buf = await r.arrayBuffer()
+  const head = new Uint8Array(buf.slice(0, 2))
+  if (buf.byteLength < 800 || head[0] !== 0x50 || head[1] !== 0x4b) {
+    // 800B 下限与 UAT T56 同口径（真 docx 远大于此）；PK＝0x50 0x4b＝'PK'
+    throw new Error(apiMsg('common.exportBadFile', '导出产物校验失败（不是 docx 文件，下载链可能未通）'))
+  }
+  const name = filenameFromDisposition(r.headers.get('Content-Disposition') || '', 'edited.docx')
+  const objUrl = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }))
+  const a = document.createElement('a')
+  a.href = objUrl
+  a.download = name
+  a.click()
+  // 延迟释放：立即 revoke 会在部分浏览器取消尚未开始的下载（口径同 ticketDownload）
+  setTimeout(() => URL.revokeObjectURL(objUrl), 5000)
+  return name
 }

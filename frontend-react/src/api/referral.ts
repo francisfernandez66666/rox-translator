@@ -11,7 +11,11 @@
  * - 运营参数（超管）：总开关、奖励积分数、有效期等配置
  */
 
-import { request, API_BASE, authHeaders, handleUnauthorized, handleForbidden, ApiError, type AdminResp } from './core'
+// ★ F-64②（★ D-3 批 2026-09-29 收敛，2026-09-29 复核按读写分档修正）：本文件**写接口**
+//   （referralConfigGet/Save 里返回信封且调用点判 success 的那些）统一经 core.ts 的 bizResp 接线——后端结构化 4xx 失败被还原成历史 {success:false,...} 形态
+//   （details 摊平、401/403 照抛以触发重登录），调用方零改动；新增接口一律写
+//   bizResp(() => request(...))，禁止直返裸 request（AGENTS §一·5，静态锁见 api/bizRespGate.test.ts）。
+import { request, bizResp, API_BASE, authHeaders, handleUnauthorized, handleForbidden, ApiError, type AdminResp } from './core'
 
 /** 单条邀请奖励记录（对应后端 store.ReferralRecord） */
 /** ReferralRecord 单条邀请记录（被邀人/奖励/到账态） */
@@ -47,11 +51,14 @@ export interface ReferralFunnel {
 }
 
 /** ★ H9 我的 2 级邀请归因漏斗（登录即可，仅本人维度） */
+// ★ 读取保持抛出：调用点在 useAsync 里取数，失败要走异常通道出 err，不包 bizResp
 export async function referralFunnel(): Promise<AdminResp & { funnel?: ReferralFunnel; l2_pct?: number }> {
   return request('/api/referral/funnel', { headers: authHeaders() })
 }
 
 /** 拉取我的邀请码与邀请记录（懒生成个人码） */
+// ★ 读取保持抛出：调用点有 useAsync（自服务面板）与 try/catch（后台面板）两类，
+//   都靠异常通道出错误文案；包 bizResp 会把 4xx 伪装成空数据，故保持抛出
 export async function referralMy(): Promise<ReferralMyResp> {
   return request('/api/referral/my', { headers: authHeaders() })
 }
@@ -61,6 +68,7 @@ export async function referralMy(): Promise<ReferralMyResp> {
  * 此前裸 <img>/<a> 引用无法携带 Authorization 头导致 401，现改为 fetch + authHeaders 取 Blob。
  * ★ §4.2-2：出图走 fetch→blob（二进制响应，正当裸用），但 401/403 与统一 client 同源处理——
  *   旧实现把一切非 2xx 静默折叠成 null，登录失效/越权都不提示；现补齐状态语义。
+ * ★ D-3 批判定：返回形状＝PNG 二进制 Blob（Blob | null），不是 {success,...} 信封，不属 bizResp 射程。
  */
 export async function fetchReferralQrBlob(): Promise<Blob | null> {
   const url = `${API_BASE}/api/referral/qrcode`
@@ -92,14 +100,14 @@ export interface ReferralConfig {
   paid_reward_days: number // 付费邀请奖励有效期（天）；0=永久
 }
 
-/** 读取邀请运营参数（超管） */
+/** 读取邀请运营参数（超管）；返回形状＝ReferralConfig & AdminResp 信封，走 bizResp */
 export async function referralConfigGet(): Promise<ReferralConfig & AdminResp> {
-  return request('/api/admin/referral/config', { headers: authHeaders() })
+  return bizResp(() => request('/api/admin/referral/config', { headers: authHeaders() }))
 }
 
-/** 保存邀请运营参数（超管；可选字段增量更新） */
+/** 保存邀请运营参数（超管；可选字段增量更新）；返回形状＝AdminResp 信封，走 bizResp */
 export async function referralConfigSave(cfg: Partial<ReferralConfig>): Promise<AdminResp> {
-  return request('/api/admin/referral/config', {
+  return bizResp(() => request('/api/admin/referral/config', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({
@@ -109,5 +117,5 @@ export async function referralConfigSave(cfg: Partial<ReferralConfig>): Promise<
       reward_days: cfg.reward_days,
       paid_reward_days: cfg.paid_reward_days,
     }),
-  })
+  }))
 }

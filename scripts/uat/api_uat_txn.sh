@@ -1433,8 +1433,36 @@ ck T43-invoice-reissue-after-void '"success":true' "$R"
 # 行为语义已由 Go 单测覆盖（store.TestSettleExhaustedNoPermAccount /
 # service.TestLowBalanceThresholdWired）；此处锁定「修复点不被悄悄改回去」。
 ROOT44="$(cd "$(dirname "$0")/../.." && pwd)"
-ck T44-settle-err-branch '!errors\.Is\(err, sql\.ErrNoRows\)' "$(grep -A4 'consumed += take' "$ROOT44/backend-go/internal/store/billing.go" | grep -m1 'errors.Is' || echo NONE)"
-if grep -q 'Is(qerr, sql.ErrNoRows)' "$ROOT44/backend-go/internal/store/billing.go"; then
+SRC44="$ROOT44/backend-go/internal/store/billing.go"
+# ★ 2026-09-29 D-1 修复后重写这两条锁（旧锁假红复盘，两条都要记）：
+#   ① 旧锚 `grep -A4 'consumed += take'` 命中的是**两处**同名行，再 `grep -m1 errors.Is` 取第一条
+#      ——实际抓到的是**第二段**（永久余额兜底）的尾巴，等于「锚在错的来源上」：台账段自己怎么改都看不见，
+#      而兜底段一换行形就红灯（本轮真红：D-1 把 `if err == nil {…} else if !errors.Is(…)` 改成
+#      先 ErrNoRows→break、其余错误→return 的正形式，语义等价、锁却断了）。
+#   ② 旧 want 里把变量名 `err` 与「否定式」`!errors.Is(...)` 写死，属于**按字面形态锁语义**：
+#      正写/反写都算合规，改名也算合规，但锁只认那一种写法。
+#   新口径：锚点取兜底段唯一的取数语句（全文件实测 1 次命中），两条语义级判据共用 -A12 窗口
+#   （实测窗口内恰好只有「ErrNoRows→break」与「真实错误→return」这两行命中，
+#     再往外 -A20 会把守卫 UPDATE 的 `return 0, uerr` 也捞进来＝摘掉前者照样绿的假绿面），
+#   判据只认形状不认字面：
+#     · T44-settle-err-branch：真实 DB 错误必须向上抛（D1 教训「杜绝无痕归零」）
+#     · T44-settle-errnorows-branch：ErrNoRows 必须被单独识别（不能当错误抛，否则零余额租户结算直接失败）
+#   两条 want 都接受任意含 err 的变量名与正/反形式——真正要抓的是**分支消失**，那由反证实测确认。
+GAP44="$(grep -A12 'SELECT id, balance FROM balance_accounts WHERE tenant_id=? AND balance>0' "$SRC44" | grep -E 'errors\.Is\(|return 0, ' | tr '\n' ' ' || echo NONE)"
+ck T44-settle-err-branch 'return 0, [A-Za-z0-9_]*err[A-Za-z0-9_]*' "$GAP44"
+ck T44-settle-errnorows-branch 'errors\.Is\([A-Za-z0-9_]*err[A-Za-z0-9_]*, sql\.ErrNoRows\)' "$GAP44"
+# ★ 第三条（2026-09-29 D-1 新增，正向＋负向成对写）：兜底段每一笔 balance 扣减都必须带
+#   `AND balance>=?` 守卫。这正是 D-1 的修复本体——旧形态是「SELECT 旧值 → 无守卫 UPDATE」，
+#   并发扣费能把它打成负数。单测已覆盖行为（store 事务交错用例＋PG 并发断言），这条源码锁
+#   兜的是「哪天守卫被悄悄摘掉、单测也被顺手删了」这种双杀回退。
+#   为什么不能只写负向：`grep -vc` 在"整段不再出现 UPDATE 语句"时也回 0＝恒空绿，
+#   所以必须同时要求**至少数到一笔**扣减语句（AGENTS §一·5 那条「负向锁要配正向对照」同理）。
+UPD44="$(grep -A24 'SELECT id, balance FROM balance_accounts WHERE tenant_id=? AND balance>0' "$SRC44" | grep -c 'UPDATE balance_accounts SET balance=balance-?' || true)"
+NOGRD44="$(grep -A24 'SELECT id, balance FROM balance_accounts WHERE tenant_id=? AND balance>0' "$SRC44" | grep 'UPDATE balance_accounts SET balance=balance-?' | grep -vc 'AND balance>=' || true)"
+if [ "${UPD44:-0}" -ge 1 ] 2>/dev/null && [ "${NOGRD44:-1}" = "0" ]; then
+  PASS=$((PASS+1)); echo "PASS|T44-settle-balance-guard（兜底段 ${UPD44} 笔扣减全部带余额守卫）"
+else FAIL=$((FAIL+1)); echo "FAIL|T44-settle-balance-guard|扣减语句数=$UPD44（须≥1）其中无守卫数=$NOGRD44（须=0）⇒ D-1 并发透支修复被回退"; fi
+if grep -q 'Is(qerr, sql.ErrNoRows)' "$SRC44"; then
   FAIL=$((FAIL+1)); echo "FAIL|T44-settle-qerr-ban|D1 修复被回退：SettleExhausted 重新出现 qerr 误判"
 else PASS=$((PASS+1)); echo "PASS|T44-settle-qerr-ban"; fi
 ck T44-lowbalance-wired 'low_balance_alert_tokens' "$(grep -m1 'GetConfig("low_balance_alert_tokens")' "$ROOT44/backend-go/internal/service/ticket.go" || echo NONE)"

@@ -37,6 +37,7 @@ export const baseZh: Record<string,string> = {
   'common.notLogged': "未登录",
   'common.chunkFail': "分片上传失败",
   'common.uploadFail': "上传失败 ({status})",
+  'common.exportBadFile': '导出产物校验失败（不是 docx 文件，下载链可能未通）',
   'common.importTplFile': "用户导入模板.xlsx",
   'common.createFail': '创建失败',
   'common.exportFail': '导出失败',
@@ -50,6 +51,7 @@ export const baseZh: Record<string,string> = {
   'app.openMenu': '打开菜单',
   'footer.terms': '用户协议',
   'footer.privacy': '隐私协议',
+  'footer.manual': '产品手册',
   'footer.copyright': '© 2026 {brand} · 翻译平台',
 
   // ---- 应用工作台 ----
@@ -725,6 +727,12 @@ export const baseZh: Record<string,string> = {
   'tk.edColLang': '语种',
   'tk.edLoad': '加载',
   'tk.edSave': '保存',
+  'tk.edExport': '导出译文',
+  'tk.edExporting': '导出中…',
+  'tk.edExportStarted': '回写稿已开始下载：{name}',
+  'tk.edExportFail': '导出失败',
+  'tk.edExportFailErr': '导出失败：{err}',
+  'tk.edExportSaveFirst': '有未保存的修订，请先点「保存」再导出',
   'tk.edTermsHit': '命中术语',
   'tk.edEmptyHint': '输入工单 ID 或工单号后点「加载」，即可逐段编辑译文',
   'tk.stepKm': '知识库匹配',

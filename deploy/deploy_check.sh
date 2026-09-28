@@ -54,7 +54,7 @@ ok()   { echo "  ✔ $1"; PASS=$((PASS+1)); }
 bad()  { echo "  ✖ $1"; FAIL=$((FAIL+1)); }
 check(){ local desc="$1" want="$2" got="$3"; [ "$got" = "$want" ] && ok "$desc ($got)" || bad "$desc 期望$want 实际$got"; }
 
-echo "==> [1/8] 基础探活"
+echo "==> [1/9] 基础探活"
 check "/api/health"        200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/api/health")"
 check "/status"            200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/status")"
 # ★ #42（2026-09-22）探针拆分验收：/livez 只判进程存活（依赖抖动时也必须 200，否则编排器会去
@@ -81,7 +81,7 @@ else
   echo "  ↷ /livez /readyz 跳过（公网 base 不暴露探针，需服务器本机执行：curl 127.0.0.1:8787/readyz）"
 fi
 
-echo "==> [2/8] D1 metrics 收敛（公网响应体不得出现指标特征；SPA 兜底页/401 均视为安全）"
+echo "==> [2/9] D1 metrics 收敛（公网响应体不得出现指标特征；SPA 兜底页/401 均视为安全）"
 body=$(curl -s --max-time 8 "$BASE/metrics" | head -c 2000)
 if echo "$body" | grep -q "translator_"; then
   bad "公网 /metrics 泄露指标特征"
@@ -93,11 +93,11 @@ if [ -n "$MTRTOK" ]; then
   check "/metrics(内网+token)" 200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -H "Authorization: Bearer $MTRTOK" "$LOCAL_BASE/metrics")"
 fi
 
-echo "==> [3/8] A2 插件 CORS（Origin 反射）"
+echo "==> [3/9] A2 插件 CORS（Origin 反射）"
 hdr=$(curl -s -o /dev/null -D - --max-time 8 -H "Origin: https://example.com" "$BASE/openapi/v1/balance" | grep -i "^access-control-allow-origin:" | tr -d '\r' | awk '{print $2}')
 [ "$hdr" = "https://example.com" ] && ok "ACAO 反射生效" || bad "ACAO 未反射（got: ${hdr:-空}）"
 
-echo "==> [4/8] P0-2 支付回调三道闸"
+echo "==> [4/9] P0-2 支付回调三道闸"
 pncode=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST "$BASE/api/pay/notify/mock" -d '{"order_no":"x","amount":1}')
 case "$pncode" in
   403) ok "匿名回调 403（直连口径）" ;;
@@ -105,7 +105,7 @@ case "$pncode" in
   *)   bad "匿名回调 $pncode 异常" ;;
 esac
 
-echo "==> [5/8] 注册→双桶余额→OpenAPI（A1 核心口径）"
+echo "==> [5/9] 注册→双桶余额→OpenAPI（A1 核心口径）"
 EV=$(curl -s --max-time 8 "$BASE/api/auth/register-config" | python3 -c "import sys,json;print(json.load(sys.stdin).get('email_verify_enabled',False))" 2>/dev/null)
 if [ "$EV" = "True" ] || [ "$EV" = "true" ]; then
   echo "  ↳ 生产已启用注册邮箱验证（防薅生效），第5项改为仅验证双桶出参通道开放性"
@@ -132,18 +132,18 @@ else
 fi
 fi
 
-echo "==> [6/8] 自助注销端点存在性（匿名 401 即可）"
+echo "==> [6/9] 自助注销端点存在性（匿名 401 即可）"
 check "/api/me/deactivate 匿名" 401 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST "$BASE/api/me/deactivate")"
 
-echo "==> [7/8] 同步划译端点存在性（匿名 401 即可）"
+echo "==> [7/9] 同步划译端点存在性（匿名 401 即可）"
 check "/openapi/v1/translate 匿名" 401 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST "$BASE/openapi/v1/translate" -d '{}')"
 
-# == [8/8] G5（改造方案 §10-G5，2026-09-28）：派发状态词 + 最近一次回落计数 ==
+# == [8/9] G5（改造方案 §10-G5，2026-09-28）：派发状态词 + 最近一次回落计数 ==
 # 只读、走内网直连（与 /livez 同口径）：状态词本身是可用性情报，不对公网摊开。
 # 判据不钉死状态词取值——派发默认关闭（off）是正确态，开着时 online 才算生效；
 # 真正要抓的是两件事：① 字段缺失（新二进制没上/没接线）② 状态词是 degraded（远端白配）。
 # ⚠️ 与 /livez 同口径：从开发机远程跑记跳过不记失败，必须在服务器本机验收。
-echo "==> [8/8] G5 远程派发状态（内网只读）"
+echo "==> [8/9] G5 远程派发状态（内网只读）"
 if [ "$PROBE_ON_SERVER" = "1" ]; then
   HBODY=$(curl -s --max-time 8 "$LOCAL_BASE/api/health")
   DISP=$(echo "$HBODY" | python3 -c "import sys,json;print(json.load(sys.stdin).get('dispatch',''))" 2>/dev/null)
@@ -168,6 +168,63 @@ if [ "$PROBE_ON_SERVER" = "1" ]; then
   echo "  ↳ 近 24h 派发回落计数 = ${FALLBACK}（>30% 或连续 5 单全回落 ⇒ 视为派发未生效，见 §5.4）"
 else
   echo "  ↷ dispatch 项跳过（公网 base 不暴露，需服务器本机执行：curl 127.0.0.1:8787/api/health）"
+fi
+
+# == [9/9] PPROF 诊断面不得经反代可达（★ D-8，2026-09-29）==
+# 背景：/debug/pprof/* 那条 mux 挂在**独立端口**（PPROF_ADDR，默认 127.0.0.1:18787），
+# 二进制侧已有启动期闸门（非回环 + 无 PPROF_TOKEN 直接拒绝启动，见 cmd/server/pprof_guard.go）。
+# 但**运维把 Caddy 反代指到那个端口**这一步不经过 Go 判定——单测看不见反代路由表，
+# 这正是 F-73/F-74 藏了很久的同一层盲区，所以要在发版验收里补一条只读探针。
+# ⚠️ 判据按 §一·6 的「兜底陷阱」写：spa.go 对不存在的路径回 index.html **且状态码仍是 200**，
+#    所以只看 http_code 等于恒绿。真判据是响应体里不许出现 pprof 索引特征串。
+#    取不到索引特征 ≠ 通道不通（可能只是路径不同），故同时钉一条对照：
+#    本机 18787（若监听）必须**能**看到这些特征串，否则这条锁就是在对空气判负。
+echo "==> [9/9] PPROF 诊断面可达性（公网侧只读）"
+# 链路探针先行（§一·6）：base 整个打不通时 curl 回空串，"无特征"会**结构性假绿**——
+# 那种绿和"反代确实没摊开诊断面"是两件事，必须分开记账。
+PP_LINK=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/api/health")
+if [ "$PP_LINK" = "000" ] || [ -z "$PP_LINK" ]; then
+  bad "pprof 腿无效：$BASE/api/health 不可达（$PP_LINK）⇒ 响应体为空当然'没有特征'，这条绿灯不许采信"
+else
+  PP_PUB=$(curl -s --max-time 8 "$BASE/debug/pprof/")
+  if echo "$PP_PUB" | grep -Eq 'goroutine profile|Heap profile|/debug/pprof/profile'; then
+    bad "公网 $BASE/debug/pprof 回吐了 pprof 索引 ⇒ 反代把诊断端口摊到公网了（进程内存/协程栈可被任何人拉走，profile 还能被打满 CPU）"
+  else
+    ok "公网 /debug/pprof 无 pprof 特征（链路存活 http=$PP_LINK，回环独占）"
+  fi
+fi
+# 对照腿（仅服务器本机）：确认「没特征」是因为通道不通，而不是判据串写错
+if [ "$PROBE_ON_SERVER" = "1" ]; then
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "  ↷ systemctl 不存在（本机不是服务宿主）⇒ unit 读档跳过，**不代表 PPROF_ADDR 未设**"
+  else
+    # 读**展开后的** unit 现值（systemctl show -p Environment --value），不读 drop-in 原文：
+    # 配置可能分散在多个 .conf 或含 ${...} 引用，按文件 grep 会读假空。
+    PPROF_ENV=$(systemctl show translator -p Environment --value 2>/dev/null | tr ' ' '\n')
+    PP_ADDR=$(echo "$PPROF_ENV" | sed -n 's/^PPROF_ADDR=//p')
+    PP_TOKEN=$(echo "$PPROF_ENV" | sed -n 's/^PPROF_TOKEN=//p')
+    case "$PP_ADDR" in
+      ""|off) echo "  ↳ PPROF_ADDR=${PP_ADDR:-（unit 现值未设，走默认回环 127.0.0.1:18787）}" ;;
+      127.0.0.1:*|\[::1\]:*|localhost:*) echo "  ↳ PPROF_ADDR=$PP_ADDR（回环＝正确态，外网打不到）" ;;
+      *)
+        if [ -z "$PP_TOKEN" ]; then
+          bad "PPROF_ADDR=$PP_ADDR 非回环且无 PPROF_TOKEN ⇒ 诊断面对内网摊开（闸门本应拒绝启动，请核 unit 现值）"
+        else
+          echo "  ↳ PPROF_ADDR=$PP_ADDR（非回环，已配 PPROF_TOKEN＝受 pprofAuth 保护）"
+        fi
+        ;;
+    esac
+  fi
+  if curl -s --max-time 4 -o /dev/null "http://127.0.0.1:18787/debug/pprof/" 2>/dev/null; then
+    PP_LOCAL=$(curl -s --max-time 4 "http://127.0.0.1:18787/debug/pprof/")
+    echo "$PP_LOCAL" | grep -Eq 'goroutine profile|/debug/pprof/profile' \
+      && echo "  ↳ 对照腿：本机 18787 能取到 pprof 索引 ⇒ 上面那条「无特征」判据测的是反代链，不是空转" \
+      || echo "  ↷ 对照腿：18787 有应答但无 pprof 索引 ⇒ 该端口可能属于别的服务，公网那条判据请人工复核一次"
+  else
+    echo "  ↳ 本机 18787 未监听 ⇒ 诊断端口关闭，公网那条锁无需对照"
+  fi
+else
+  echo "  ↷ pprof 对照腿与 unit 读档跳过（需服务器本机执行）"
 fi
 
 echo ""

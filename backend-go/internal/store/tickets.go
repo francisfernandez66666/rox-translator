@@ -170,10 +170,11 @@ func (s *Store) SetTicketTextResultPath(id int64, path string) error {
 // 这条记录就变成指向一台不存在机器的死链，客户下载必然 404，而工单状态仍然"成功"，最难发现。
 //
 // ★ 只做负向判据（远端根前缀），不强制"必须落在主站某根之下"：
-//   store 不持有 OutputDir/UploadDir 这些运行期常量，强行要求会牵出一堆初始化顺序问题，
-//   而"远端根"是改造方案里钉死的单一真值（FILEPROC_DISPATCH_ROOT，默认 /opt/fpdispatch）。
-//   正向对照（主站路径必须放行、远端路径必须判红）见 fileproc 包的 TestDispatchArtifactGuard，
-//   两处同口径，改坏一侧另一侧会红灯。
+//
+//	store 不持有 OutputDir/UploadDir 这些运行期常量，强行要求会牵出一堆初始化顺序问题，
+//	而"远端根"是改造方案里钉死的单一真值（FILEPROC_DISPATCH_ROOT，默认 /opt/fpdispatch）。
+//	正向对照（主站路径必须放行、远端路径必须判红）见 fileproc 包的 TestDispatchArtifactGuard，
+//	两处同口径，改坏一侧另一侧会红灯。
 func rejectRemoteArtifactPath(path string) error {
 	if path == "" {
 		return nil // 空路径是合法的（某些调用点先置空再异步补）

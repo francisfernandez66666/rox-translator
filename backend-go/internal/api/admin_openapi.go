@@ -738,10 +738,20 @@ func (s *Server) handleOpenAPIKeyRotate(w http.ResponseWriter, r *http.Request) 
 //
 //	此前 withTenant 中间件与 openapi handler 各调一次导致每次调用 calls_today+2，
 //	DailyCallLimit=N 实际只放行 N/2。中间件侧一律改用 authenticateAPIKeyNoTouch。
+//
+// ★ D-8（2026-09-29）：这里的计数从 TouchAPIKey 换成 ReserveAPICall——
+//
+//	「判据与计数同一条语句」才是配额的真判据。下面 validateAPIKey 里那段读字段的预检
+//	**保留但降级为止损优化**（明显打满时省一次 UPDATE），最终放行判定以 ReserveAPICall 为准：
+//	旧形态下并发 M 个请求会在同一刻都读到 used<N-1 而全体通过、事后各 +1，
+//	当日实际放行 N-1+M（审计定性：限流精度问题，计数本身一直是原子的，不涉及资金）。
+//	配额打满时返回 key_quota_exceeded 并**不再计入展示计数**（被拒的调用不该进客户的用量概览）。
 func (s *Server) authenticateAPIKey(r *http.Request) (*store.APIKey, string) {
 	ak, ec := s.validateAPIKey(r)
 	if ec == "" && ak != nil {
-		s.Store.TouchAPIKey(ak.ID)
+		if !s.Store.ReserveAPICall(ak.ID, ak.DailyCallLimit) {
+			return ak, string(errors.OpenAPIKeyQuotaExceeded)
+		}
 	}
 	return ak, ec
 }
@@ -756,6 +766,10 @@ func (s *Server) authenticateAPIKeyNoTouch(r *http.Request) (*store.APIKey, stri
 // validateAPIKey API Key 校验核心（无副作用）：存在性/状态/归属用户/R4 日配额预检。
 // 参数 r: HTTP 请求（需含 Authorization: Bearer <api_key>）。
 // 返回: (Key 对象, 错误码)。”“=通过；否则为 invalid_api_key 或 key_quota_exceeded。
+// ⚠️ 本函数里那段日配额判定在 D-8 之后**只是预检/止损**（读的是那一刻的快照，并发下会同时通过），
+//
+//	权威判据是 authenticateAPIKey 调的 Store.ReserveAPICall（条件 UPDATE，判据与计数同一条语句）。
+//	因此 authenticateAPIKeyNoTouch（只解析不计数，供 withTenant 取租户上下文）**不得**被当成配额闸门。
 func (s *Server) validateAPIKey(r *http.Request) (*store.APIKey, string) {
 	if s.Store == nil {
 		return nil, string(errors.OpenAPIInvalidAPIKey)

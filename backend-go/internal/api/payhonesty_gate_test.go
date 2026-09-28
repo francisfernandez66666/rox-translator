@@ -428,8 +428,11 @@ func TestPayHonestFrontendContractLocks(t *testing.T) {
 		"admin.ts":   {"adminOrderCreate", "adminOrderPay"},
 	}
 	mustNotBizResp := map[string][]string{
-		"billing.ts":   {"plans", "myPackage", "autoRenewGet", "manualConfirmOrders", "billingOrders", "billingInvoices"},
-		"mybilling.ts": {"myOverview", "myOrders", "myLedger", "myInvoices"},
+		"billing.ts": {"plans", "myPackage", "autoRenewGet", "manualConfirmOrders", "billingOrders", "billingInvoices"},
+		// mybilling.ts 五个接口全是纯读取，调用点（MyBilling.tsx）一律走 runGuarded 的异常通道，
+		//   ★ D-3 批 2026-09-29 复核：曾被整文件包上 bizResp（读取失败伪装成「本月零消耗」空态），
+		//   现已全部回退为裸返抛出；本表逐函数点名，防止下一次「统一收敛」再把它包回去。
+		"mybilling.ts": {"myOverview", "myOrders", "myLedger", "myRewards", "myInvoices"},
 	}
 	for file, fns := range needBizResp {
 		p := filepath.Join(client, file)
