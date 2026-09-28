@@ -497,7 +497,15 @@ func main() {
 	if pprofAddr == "" {
 		pprofAddr = "127.0.0.1:18787"
 	}
-	if pprofAddr != "off" {
+	// ★ D-8（2026-09-29）：这条 mux 一直没有鉴权，安全属性全靠「没人把 PPROF_ADDR 改成 0.0.0.0」。
+	//   现在启动期就判：非回环且无 PPROF_TOKEN → FATAL 拒启（对齐 REQUIRE_PROD_SECRETS 范式，
+	//   不做「打印告警继续跑」——对外裸奔的 /debug/pprof 是能被直接拿来提 token 的面）。
+	//   判定与包装抽到 pprof_guard.go（纯函数，单测不真起端口就能覆盖四态）。
+	pprofToken := os.Getenv("PPROF_TOKEN")
+	if err := pprofGuard(pprofAddr, pprofToken); err != nil {
+		log.Fatalf("[init] pprof 配置不安全，拒绝启动: %v", err)
+	}
+	if !strings.EqualFold(pprofAddr, "off") {
 		go func() {
 			mux := http.NewServeMux()
 			mux.HandleFunc("/debug/pprof/", httppprof.Index)
@@ -505,8 +513,8 @@ func main() {
 			mux.HandleFunc("/debug/pprof/profile", httppprof.Profile)
 			mux.HandleFunc("/debug/pprof/symbol", httppprof.Symbol)
 			mux.HandleFunc("/debug/pprof/trace", httppprof.Trace)
-			srv := &http.Server{Addr: pprofAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-			log.Printf("pprof 诊断端点已启动（仅本机）: http://%s/debug/pprof/", pprofAddr)
+			srv := &http.Server{Addr: pprofAddr, Handler: pprofAuth(pprofToken, mux), ReadHeaderTimeout: 10 * time.Second}
+			log.Printf("pprof 诊断端点已启动: http://%s/debug/pprof/（回环直连免鉴权；非回环必须带 %s）", pprofAddr, "X-PPROF-Token")
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Printf("pprof 端点启动失败（不影响主服务）: %v", err)
 			}

@@ -40,7 +40,9 @@ afterEach(() => { cleanup(); setLang('zh') })
 
 const hot = () => document.querySelector<HTMLElement>('.lc-hero-hot')
 
-describe('落地页 · 点演示卡切试用（〇-Z #74/#75）', () => {
+// ★ D-5（2026-09-29）timeout 15_000：同上——试用切换用例每次 render 整棵落地页，
+//   并跑时 ①③ 踩默认 5000ms 超时（单跑绿）。抬预算、不松断言。
+describe('落地页 · 点演示卡切试用（〇-Z #74/#75）', { timeout: 15_000 }, () => {
   it('① 默认态：演示卡在位且被热区包着，试用卡不提前挂载', () => {
     render(<Landing />)
     expect(document.querySelector('.hd-panel')).toBeTruthy()

@@ -79,6 +79,25 @@ fi
 log "构建后端..."
 (cd backend-go && go build -o "$WORK/uat-server" ./cmd/server) || { echo "构建失败"; exit 1; }
 
+# ---------- 1.4 fileproc 依赖解释器自动发现（★ 2026-09-29 收尾批新增） ----------
+# 背景（本轮真踩）：fileproc 的 PDF 字形保护用例（pdf_overlay_fontguard_test.go）必须有**真
+# pymupdf** 才跑得动，且它刻意 `t.Fatal` 而不是静默跳过——"PyMuPDF 认不认这个字体"除了真去
+# 构造 Font 没有第二条路，静默跳过＝绿灯无效。CI 的 backend job 在 go test 之前 pip install，
+# 本机则装在独立 venv（~/.venvs/langcross-fileproc）。两者都没命中时，fileproc 的 findPython()
+# 会**静默回落**到 PATH 里的系统 python3（没有 pymupdf）⇒ 用例红 ⇒ 整条 PG 主矩阵在 1.5 预检段
+# 就中止，后面 API／交易专项／前端 E2E 三段一行都没跑。这种红**不是回归**，却把发布闸门变成
+# 「看运气」，故在此自动发现：指到就导出，指不到就原样交给用例自己报错——
+# ⚠️ 不放宽断言、不跳过用例、不把 env 写死成本机路径（换机器即假绿），真缺口照常红灯。
+if [ -z "${FILEPROC_PYTHON_BIN:-}" ]; then
+  for _fp_cand in "$HOME/.venvs/langcross-fileproc/bin/python3" "/opt/translator/.venv/bin/python3"; do
+    if [ -x "$_fp_cand" ] && "$_fp_cand" -c 'import pymupdf' >/dev/null 2>&1; then
+      export FILEPROC_PYTHON_BIN="$_fp_cand"
+      log "fileproc 依赖解释器已指到 $_fp_cand（实测含 pymupdf，供 PDF 原版式用例实跑）"
+      break
+    fi
+  done
+fi
+
 # ---------- 1.5 ★ G3：竞态检测全量单测（UAT_SKIP_RACE=1 可跳过，本地快速回归用） ----------
 if [ "${UAT_SKIP_RACE:-0}" = "1" ]; then
   log "跳过 go test -race（UAT_SKIP_RACE=1）"

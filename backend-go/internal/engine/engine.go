@@ -2434,15 +2434,15 @@ func (e *Engine) rebuildKBIndexIncremental(ctx context.Context, since string, is
 		return 0, fmt.Errorf("增量查询失败: %w", err)
 	}
 	if len(newRows) == 0 {
-		log.Printf("[engine] KB 增量重建：无新数据，跳过")
+		observability.Info(ctx, "KB 增量重建：无新数据，跳过")
 		return 0, nil
 	}
-	log.Printf("[engine] KB 增量重建：发现 %d 条新增/修改行", len(newRows))
+	observability.Info(ctx, "KB 增量重建：发现新增/修改行", "rows", len(newRows), "since", since)
 
 	// ② 加载旧索引
 	oldIdx, err := kb.LoadNPZ(e.NPZPath)
 	if err != nil {
-		log.Printf("[engine] KB 增量重建：加载旧索引失败（%v），降级为全量重建", err)
+		observability.Warn(ctx, "KB 增量重建：加载旧索引失败，降级为全量重建", "err", err, "npz", e.NPZPath)
 		return 0, fmt.Errorf("加载旧索引失败，请手动触发全量重建: %w", err)
 	}
 
@@ -2462,10 +2462,10 @@ func (e *Engine) rebuildKBIndexIncremental(ctx context.Context, since string, is
 		}
 	}
 	if len(incrementalRows) == 0 {
-		log.Printf("[engine] KB 增量重建：所有行已存在，跳过")
+		observability.Info(ctx, "KB 增量重建：所有行已存在于旧索引，跳过")
 		return 0, nil
 	}
-	log.Printf("[engine] KB 增量重建：真正新增 %d 条（去重后）", len(incrementalRows))
+	observability.Info(ctx, "KB 增量重建：去重后真正新增", "rows", len(incrementalRows))
 
 	// ⑤ 批量嵌入新行
 	const batch = 32
@@ -2585,7 +2585,7 @@ func (e *Engine) rebuildKBIndexIncremental(ctx context.Context, since string, is
 		e.St.SetConfig("last_kb_rebuild_at", now)
 	}
 
-	log.Printf("[engine] KB 增量重建完成：新增 %d 条向量，总索引 %d 条", len(newIDs), len(mergedIdx.IDs))
+	observability.Info(ctx, "KB 增量重建完成", "added", len(newIDs), "total_index", len(mergedIdx.IDs))
 	return len(newIDs), nil
 }
 

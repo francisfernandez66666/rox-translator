@@ -265,37 +265,92 @@ func (s *Store) SettleExhausted(tid int64, owed int64) (int64, error) {
 		if consumed >= owed {
 			break
 		}
-		take := g.left
-		if take > owed-consumed {
-			take = owed - consumed
+		// ★ D-1 同族修复（2026-09-29；审计只点名了下面的永久余额兜底段，这一段按同一并发范式一并收）：
+		//   旧写法是 `UPDATE quota_grants SET "left"=? WHERE id=?`，把**事务内快照算出的绝对值**直接写回。
+		//   并发消费若落在本函数 SELECT 与 UPDATE 之间，这次绝对赋值会**把对方已经扣掉的量又送回去**
+		//   （丢失更新）——比兜底段「扣成负数」更糟：那是凭空多出可用额度，账面上还记着「已消费」。
+		//   改法＝回到主链范式（同文件 deduct 与 :1795 的 CASE 相对扣减）：
+		//   相对扣减 `"left"="left"-take` ＋ `"left">=take` 守卫 ＋ RowsAffected 判定；
+		//   守卫没过就重读该行最新已提交余量、按新值重算 take 重试一次，仍不成即跳过该行
+		//   （consumed 只累计**实扣**，绝不为了凑满 owed 而放宽守卫）。
+		left := g.left
+		for attempt := 0; attempt < 2; attempt++ {
+			take := left
+			if take > owed-consumed {
+				take = owed - consumed
+			}
+			if take <= 0 {
+				break
+			}
+			res, err := db.Exec(tx, d, `UPDATE quota_grants SET "left"="left"-? WHERE id=? AND "left">=?`,
+				take, g.id, take)
+			if err != nil {
+				return 0, err
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				// 守卫没过＝并发已消费掉一部分；重读最新值后再试一次（第二轮仍不成即跳行）
+				var nowLeft int64
+				if e := db.QueryRow(tx, d, `SELECT "left" FROM quota_grants WHERE id=?`, g.id).Scan(&nowLeft); e != nil {
+					if errors.Is(e, sql.ErrNoRows) {
+						break // 台账行已被作废/删除，跳过
+					}
+					return 0, e
+				}
+				left = nowLeft
+				continue
+			}
+			consumed += take
+			break
 		}
-		if _, err := db.Exec(tx, d, `UPDATE quota_grants SET "left"=? WHERE id=?`,
-			g.left-take, g.id); err != nil {
-			return 0, err
-		}
-		consumed += take
 	}
 	// 永久余额兜底（仅当台账取完仍未覆盖 owed）
+	//
+	// ★ D-1 并发透支修复（2026-09-29，全量审计 D-1）：这一段原来是
+	//   「事务内 SELECT 旧余额 → 内存里算 take → 无守卫 UPDATE balance=balance-take WHERE id=?」，
+	//   与**同文件主链 deduct（见上方 :184-193）不是同一个并发范式**——主链早就改成
+	//   条件 UPDATE（`AND balance>=?`）＋ RowsAffected==0 即拒，注释里写明「并发抢占失败，拒绝扣减」，
+	//   而兜底段没跟上。PG READ COMMITTED 下，若并发 deduct 在本函数 SELECT 与 UPDATE 之间提交，
+	//   take 仍按**旧值**算 ⇒ balance 可被打成负数（透支窗口；台账行通常先覆盖，属低频小额，
+	//   但一旦命中就是平台替客户买单，且流水上看不出来）。
+	//   修法＝回到主链同范式：UPDATE 补 `AND balance>=?` 守卫；RowsAffected==0 说明余额已被别人
+	//   扣小，**重读一次实际余额、按新值重算 take 重试一次**（READ COMMITTED 下重读拿到的就是最新
+	//   已提交值），仍不成就不扣——本函数语义本来就允许 consumed<owed（剩余部分欠费由后续结算批次
+	//   继续处理），绝不为了「凑满 owed」而放宽守卫。
+	//   ⚠️ 为什么不用 `SELECT ... FOR UPDATE`：SQLite 不支持 FOR UPDATE，得走 db.CurrentDialect()
+	//   方言分支，改动面与双方言风险都比守卫式 UPDATE 大（AGENTS §一·4 双方言口径），
+	//   而收益与条件 UPDATE 等价。
+	//   ★ 保留 2026-09-16 D1 的教训：真实 DB 错误一律 return，不许静默吞（旧代码误判陈旧 qerr，
+	//     让「永久余额未清」的部分欠费无痕消失）。
 	if consumed < owed {
-		var bid, bleft int64
-		if err := db.QueryRow(tx, d,
-			"SELECT id, balance FROM balance_accounts WHERE tenant_id=? AND balance>0", tid).Scan(&bid, &bleft); err == nil {
+		for attempt := 0; attempt < 2 && consumed < owed; attempt++ {
+			var bid, bleft int64
+			qerr2 := db.QueryRow(tx, d,
+				"SELECT id, balance FROM balance_accounts WHERE tenant_id=? AND balance>0", tid).Scan(&bid, &bleft)
+			if errors.Is(qerr2, sql.ErrNoRows) {
+				break // 已无正余额（并发扣空或本就为零）：兜底结束，部分欠费留给后续结算
+			}
+			if qerr2 != nil {
+				// 连接中断/语句超时/锁等待失败等真实错误：向上抛，杜绝无痕归零
+				return 0, qerr2
+			}
 			take := bleft
 			if take > owed-consumed {
 				take = owed - consumed
 			}
-			if _, err := db.Exec(tx, d,
-				"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE id=?",
-				take, now, bid); err != nil {
-				return 0, err
+			if take <= 0 {
+				break
+			}
+			res, uerr := db.Exec(tx, d,
+				"UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE id=? AND balance>=?",
+				take, now, bid, take)
+			if uerr != nil {
+				return 0, uerr
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				// 守卫没过＝并发已把余额扣小；重读重算后再试一次（第二轮仍不成即停手）
+				continue
 			}
 			consumed += take
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			// ★ 缺陷核实修复（2026-09-16 D1）：旧代码误判陈旧变量 qerr（此处恒为 nil），
-			//   真实 DB 错误（连接中断/语句超时/锁等待失败等）被静默吞掉——永久余额未清、
-			//   consumed<owed 的部分欠费无痕消失，违背本函数「杜绝无痕归零」初衷。
-			//   多行余额账户理论上不存在（单行表）；保守处理首行即可。
-			return 0, err
 		}
 	}
 	// ③ 调整流水：清零量落 ledger（charge_kind='settle'），杜绝「无痕归零」无法追偿

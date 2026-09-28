@@ -37,6 +37,7 @@ export const baseEn: Record<string,string> = {
   'common.notLogged': "Not signed in",
   'common.chunkFail': "Chunked upload failed",
   'common.uploadFail': "Upload failed ({status})",
+  'common.exportBadFile': 'Export validation failed (not a docx file; the download path may not be wired up)',
   'common.importTplFile': "users-import-template.xlsx",
   'common.createFail': 'Creation failed',
   'common.exportFail': 'Export failed',
@@ -50,6 +51,7 @@ export const baseEn: Record<string,string> = {
   'app.openMenu': 'Open menu',
   'footer.terms': 'Terms of Service',
   'footer.privacy': 'Privacy Policy',
+  'footer.manual': 'User Manual',
   'footer.copyright': '© 2026 {brand} · Translation Platform',
 
   // ---- 工作台 ----
@@ -723,6 +725,12 @@ export const baseEn: Record<string,string> = {
   'tk.edColLang': 'Language',
   'tk.edLoad': 'Load',
   'tk.edSave': 'Save',
+  'tk.edExport': 'Export translation',
+  'tk.edExporting': 'Exporting…',
+  'tk.edExportStarted': 'Revised file download started: {name}',
+  'tk.edExportFail': 'Export failed',
+  'tk.edExportFailErr': 'Export failed: {err}',
+  'tk.edExportSaveFirst': 'You have unsaved edits — click Save before exporting',
   'tk.edTermsHit': 'Matched terms',
   'tk.edEmptyHint': 'Enter a ticket ID or ticket no., then click Load to edit segments',
   'tk.stepKm': 'KB match',

@@ -19,6 +19,10 @@ export interface LeadPayload {
   site?: string // ★ 蜜罐：真人恒为空，bot 全会填（后端静默吞掉）
 }
 
+// ★ bizResp 豁免登记（★ D-3 批 2026-09-29，设计而非疏漏，代码保持原样）：
+//   蜜罐「假成功」设计——bot/被拦请求也必须拿到与真人一致的静默成功语义，
+//   bizResp 会把结构化失败还原成 {success:false} 显式回执，等于向提交方「揭穿」拦截，
+//   与本接口反垃圾语义相悖，故本文件**刻意不接 bizResp**（白名单锁见 api/bizRespGate.test.ts）。
 // createLead 提交留资。后端 429（限流）/400（校验）/403（验证码）均抛 ApiError。
 export async function createLead(payload: LeadPayload): Promise<AdminResp> {
   return request('/api/lead', {

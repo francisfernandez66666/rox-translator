@@ -155,6 +155,14 @@ func (s *Store) DeleteAPIKey(id, tid int64) error {
 // 参数：id=Key 主键 ID；忽略错误（统计失败不影响业务主流程）。
 // 阶段二：启用 Redis 时，日配额计数改为 Redis 原子 INCR（跨实例聚合，单一事实源），
 // SQLite 仅保留 call_count/last_used_at 展示用；未启用 Redis 走原 SQLite 字段逻辑。
+//
+// ★ D-8（2026-09-29）之后本函数**不是配额闸门**，只是"无判据的自增"：
+//
+//	OpenAPI 鉴权链一律走 Store.ReserveAPICall（判据与计数同一条语句），
+//	把本函数接回鉴权链就会重现 D-8 的超发形态（单测 apikeys_quota_test.go 的③正是拿它当对照物）。
+//	另注意 Redis 模式下它会 INCR **同一个配额键**（ak:quota:<id>:<date>）——
+//	所以别把它挂在鉴权之外的统计路径上：那会让当日序号被非调用事件推高，
+//	表现是「客户明明没打满却被拒」（额度被侧路吃掉，比超发更难查，因为它安静地少放人）。
 func (s *Store) TouchAPIKey(id int64) {
 	today := time.Now().Format("2006-01-02")
 	if c := ratelimit.Daily(); c != nil {

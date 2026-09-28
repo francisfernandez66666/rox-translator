@@ -23,7 +23,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { Button, Input, StatusPill, useToast } from '@/ui/langcross/src'
 import { t, tpl, useLang } from '@/i18n'
-import { getSegments, getSegmentsByKey, saveSegments, type EditorSegment, type SegmentEdit } from '@/api/tickets'
+import { getSegments, getSegmentsByKey, saveSegments, segmentsExport, editorExportFetch, type EditorSegment, type SegmentEdit } from '@/api/tickets'
 
 /** 行本地编辑态 */
 interface RowState {
@@ -178,6 +178,10 @@ export default function EditorPage() {
   const [terms, setTerms] = useState<string[]>([])
   const [rows, setRows] = useState<Record<number, RowState>>({})
   const [loading, setLoading] = useState(false)
+  // ★ D-4：回写导出是「后端重排 docx + 落盘 + 回传」的三段动作，秒级到十几秒，
+  //   单独一个 busy 态（不复用 loading，否则导出会把「加载/保存」按钮一起打成禁用，
+  //   用户以为页面在重载）
+  const [exporting, setExporting] = useState(false)
   // ★ B2：每次成功加载 +1 并进 SegRow 的 key——非受控框只认初值，
   // 换 key 强制整表重挂载，重新加载后 DOM 值与 rows state 必然一致
   const [loadSeq, setLoadSeq] = useState(0)
@@ -333,6 +337,38 @@ export default function EditorPage() {
     }
   }, [dirtyEdits, ticketId, lang, load])
 
+  // ★ D-4（2026-09-29）exportEdited 回写导出：把逐段编辑稿写回结果 docx 并下载。
+  // 为什么放在保存之后、且要求先有 segments：后端 handleExportSegments 读的是**库里已落盘的
+  //   edited_text**（GetTranslationEdits），未保存的界面改动不会进产物——
+  //   所以钮上有脏段时提示「先保存再导出」，而不是默默导出一份丢掉最新修订的交付件（F-44 同族失真）。
+  // 失败口径：resp.success 分支出后端原文（非 docx 工单／越权／回写失败都是这句），
+  //   异常通道（网络/下载校验）走 tk.edExportFailErr；下载产物魔数校验在 api 层做（AGENTS §一·6）。
+  const exportEdited = useCallback(async () => {
+    const id = Number(ticketId)
+    if (!Number.isInteger(id) || id <= 0) {
+      toast({ title: t('tk.edResolveFirst'), tone: 'warn' })
+      return
+    }
+    if (dirtyEdits.length > 0) {
+      toast({ title: t('tk.edExportSaveFirst'), tone: 'warn' })
+      return
+    }
+    setExporting(true)
+    try {
+      const resp = await segmentsExport(id, lang)
+      if (!resp.success || !resp.download) {
+        toast({ title: resp.message || t('tk.edExportFail'), tone: 'error' })
+        return
+      }
+      const name = await editorExportFetch(resp.download)
+      toast({ title: tpl('tk.edExportStarted', { name }), tone: 'success' })
+    } catch (e) {
+      toast({ title: tpl('tk.edExportFailErr', { err: String(e) }), tone: 'error' })
+    } finally {
+      setExporting(false)
+    }
+  }, [ticketId, lang, dirtyEdits, toast])
+
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: 16, width: '100%', minWidth: 0 }}>
       <h2 style={{ margin: '8px 0' }}>{t('tk.edTitle')}</h2>
@@ -348,6 +384,13 @@ export default function EditorPage() {
         </select>
         <Button variant="secondary" onClick={load} disabled={loading}>{t('tk.edLoad')}</Button>
         <Button variant="primary" onClick={save} disabled={loading || !segments.length}>{t('tk.edSave')}</Button>
+        {/* ★ D-4（2026-09-29）「导出译文」钮：后端回写能力自 2026-08 就在（editor.go:46-47），
+            界面一直零入口 ⇒ 在线修订带不进交付件。disabled 条件即这条链的诚实口径：
+            没有段落可导（未加载）不亮；有脏段时不亮——先保存，否则导出的产物会丢最新修订。 */}
+        <Button variant="secondary" onClick={exportEdited}
+                disabled={loading || exporting || !segments.length || dirtyEdits.length > 0}>
+          {exporting ? t('tk.edExporting') : t('tk.edExport')}
+        </Button>
         {dirtyEdits.length > 0 && <StatusPill tone="warn">{tpl('tk.pendingSaveFmt', { n: dirtyEdits.length })}</StatusPill>}
       </div>
 
