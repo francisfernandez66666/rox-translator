@@ -165,7 +165,7 @@ export default function TrialPanel(props: {
               同时给登录入口：已有账号的访客不该被"再注册一次"挡住 */}
           <div className="lc-trial-done-cta">
             <a className="lc-trial-btn lc-trial-btn--pri" href="/register">{t('land.trial.register')}</a>
-            <a className="lc-trial-link" href="/login">{t('land.navLogin')}</a>
+            <a className="lc-trial-btn lc-trial-btn--sec" href="/login">{t('land.navLogin')}</a>
           </div>
           <button type="button" className="lc-trial-link" onClick={props.onBack}>{t('land.trial.back')}</button>
         </div>

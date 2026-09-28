@@ -1638,6 +1638,9 @@ const LANDING_CSS = `
 /* 主投沿用全站「实心白＝#FFFFFF」档（G 段），不是文字灰 #E7E9EA */
 .lc-trial-btn--pri{border:0;background:var(--lc-fill-white);color:#000}
 .lc-trial-btn--pri:disabled{opacity:.6;cursor:default}
+/* 次操作：描边按钮，与主投同高同圆角，视觉上是一套但层级低一档 */
+.lc-trial-btn--sec{border:1.2px solid var(--lc-border-pill);background:none;color:var(--lc-text-1)}
+.lc-trial-btn--sec:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
 .lc-trial-out{display:flex;flex-direction:column;gap:8px;min-height:74px;border:1.2px solid var(--lc-border-input);border-radius:12px;padding:12px 14px}
 .lc-trial-out-head{display:flex;align-items:center;gap:10px}
 .lc-trial-out-label{font-size:14px;letter-spacing:.06em;color:var(--lc-text-4)}
@@ -1654,8 +1657,6 @@ const LANDING_CSS = `
 .lc-trial-done-t{margin:0;font-size:19px;font-weight:600;color:var(--lc-text-1)}
 .lc-trial-done-d{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-2)}
 .lc-trial-done-cta{display:flex;align-items:center;gap:16px;margin-top:4px}
-.lc-trial-link{align-self:flex-start;background:none;border:0;padding:0;color:var(--lc-text-2);font:500 15px/1 var(--lc-font);cursor:pointer;text-decoration:underline}
-.lc-trial-link:hover{color:var(--lc-text-1)}
 
 /* Hero 入场：整块下沉压暗 → 回弹释放（峰值前先压暗做落差） */
 .lc-hero.is-sink{filter:brightness(.84);transform:translateY(6px)}
