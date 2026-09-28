@@ -3,6 +3,8 @@ package engine
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -241,6 +243,76 @@ func TestLLMHotReload(t *testing.T) {
 	// 测试连通应报错但 client 已构建
 	if _, _, _, err := e.LLMTest(context.Background()); err == nil {
 		t.Fatal("unreachable endpoint should error")
+	}
+}
+
+// TestLLMHotReloadSecondEditPickedUp ★ 2026-09-29 生产实锤的回归锁：第二次在线改配置也必须被读到。
+// 旧判据 `if e.llm != nil && e.llm.Enabled()` 把「管理台第一次保存建出来的 client」当成了 env 接管，
+// 短路掉整段回读 ⇒ 热加载一辈子只有一次（日志里只有一次「热加载生效」），
+// 运维照「保存即热加载」改完 base_url 去点测试，实际一直在打旧地址。
+// 两腿：① 无 env 构造（llmFromEnv=false）时改到第二个上游，请求真落在第二个上；
+//
+//	② env 接管时 configs 再怎么改都不许换掉 env 那条链（原优先级不许被这次修法带歪）。
+func TestLLMHotReloadSecondEditPickedUp(t *testing.T) {
+	var hitA, hitB int32
+	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitA++
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"A"}}],"usage":{"total_tokens":1}}`))
+	}))
+	defer srvA.Close()
+	srvB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitB++
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"B"}}],"usage":{"total_tokens":1}}`))
+	}))
+	defer srvB.Close()
+
+	db, err := store.Open(t.TempDir() + "/reload.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	e := New(db, llm.New(nil, 5)) // 无 env：等价于生产 assist 的启动形态
+
+	_ = db.SetConfig("llm_base_url", srvA.URL)
+	_ = db.SetConfig("llm_api_key", "sk-test")
+	_ = db.SetConfig("llm_model", "m-a")
+	if _, model, _, err := e.LLMTest(context.Background()); err != nil || model != "m-a" || hitA != 1 {
+		t.Fatalf("第一次保存应生效在 A：model=%s hitA=%d err=%v", model, hitA, err)
+	}
+
+	// 关键一步：管理员把地址改到 B（等价于把 …/v1/chat/completions 改回 …/v1）
+	_ = db.SetConfig("llm_base_url", srvB.URL)
+	_ = db.SetConfig("llm_model", "m-b")
+	text, model, _, err := e.LLMTest(context.Background())
+	if hitA != 1 {
+		t.Fatalf("旧上游 A 又被打了（hitA=%d）⇒ 热加载仍被短路", hitA)
+	}
+	if err != nil || model != "m-b" || hitB != 1 || text != "B" {
+		t.Fatalf("第二次保存未生效：model=%s hitB=%d text=%s err=%v", model, hitB, text, err)
+	}
+	if got := e.LLMMode(context.Background()); got != "db" {
+		t.Fatalf("来源徽标应为 db，got %s", got)
+	}
+
+	// ② env 接管：构造期 providers 非空 ⇒ configs 永远不换链（这次修法的反向对照）
+	db2, err := store.Open(t.TempDir() + "/env.db")
+	if err != nil {
+		t.Fatalf("open2: %v", err)
+	}
+	t.Cleanup(func() { db2.Close() })
+	e2 := New(db2, llm.New([]llm.Provider{{Name: "main", BaseURL: srvA.URL, APIKey: "k", Model: "env-m"}}, 5))
+	_ = db2.SetConfig("llm_base_url", srvB.URL)
+	_ = db2.SetConfig("llm_api_key", "k2")
+	_ = db2.SetConfig("llm_model", "db-m")
+	beforeB := hitB
+	if _, model, _, err := e2.LLMTest(context.Background()); err != nil || model != "env-m" {
+		t.Fatalf("env 必须压过 configs：model=%s err=%v", model, err)
+	}
+	if hitB != beforeB {
+		t.Fatal("env 接管时不该去碰 configs 里的上游 B（优先级被这次修法带歪了）")
+	}
+	if got := e2.LLMMode(context.Background()); got != "env" {
+		t.Fatalf("来源徽标应为 env，got %s", got)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -92,6 +93,62 @@ func TestCooldown(t *testing.T) {
 	_, _, _, _ = c.Chat(context.Background(), 0.5, 100, []Message{{Role: "user", Content: "hi"}})
 	if mains.Load() != before {
 		t.Fatal("cooling provider must not be called")
+	}
+}
+
+// TestChatForceIgnoresCooldown 钉住 2026-09-29 生产首配的「第四次点测试连通只回冷却中」形态：
+// 前三次失败把候选打进 5 分钟冷却后，Chat 照旧**不发请求**（熔断语义不许动），
+// 而 ChatForce（管理台「测试连通」走这条）必须真把当前配置打出去一次——
+// 否则运维刚把 base_url 改对，按钮却永远在替他复读上一次故障。
+// 三腿：① 冷却态下 Chat 仍零请求；② ChatForce 真发出请求并拿到成功；
+// ③ 成功后 markOK 把计数与冷却清零 ⇒ 之后的普通 Chat 立刻恢复（一次人工测试就把链路接回来）。
+func TestChatForceIgnoresCooldown(t *testing.T) {
+	var fails atomic.Bool
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if fails.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"boom"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"fake-reply"}}],"usage":{"total_tokens":1}}`))
+	}))
+	defer srv.Close()
+	c := New([]Provider{{Name: "main", BaseURL: srv.URL, APIKey: "k", Model: "m"}}, 5)
+
+	fails.Store(true)
+	for i := 0; i < 3; i++ {
+		if _, _, _, err := c.Chat(context.Background(), 0, 8, []Message{{Role: "user", Content: "hi"}}); err == nil {
+			t.Fatal("三次失败应逐次报错")
+		}
+	}
+	fails.Store(false) // 上游已恢复（等价于运维把配置改对了）
+
+	before := calls.Load()
+	_, _, _, err := c.Chat(context.Background(), 0, 8, []Message{{Role: "user", Content: "hi"}})
+	if calls.Load() != before {
+		t.Fatal("冷却中的候选不该被普通 Chat 发起请求（熔断语义被动了）")
+	}
+	if err == nil || !strings.Contains(err.Error(), "都在冷却中") {
+		t.Fatalf("冷却态应回那句带下一步动作的中文文案，got %v", err)
+	}
+
+	text, model, _, err := c.ChatForce(context.Background(), 0, 8, []Message{{Role: "user", Content: "hi"}})
+	if calls.Load() == before {
+		t.Fatal("ChatForce 必须真发一次请求，而不是复读冷却状态")
+	}
+	if err != nil || text != "fake-reply" || model != "m" {
+		t.Fatalf("ChatForce 应成功: %v %q", err, text)
+	}
+
+	// ③ 成功后冷却清零 ⇒ 普通 Chat 立刻可用（人工测一次等于把链路接回来）
+	before = calls.Load()
+	if _, _, _, err := c.Chat(context.Background(), 0, 8, []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("markOK 后普通 Chat 应恢复: %v", err)
+	}
+	if calls.Load() == before {
+		t.Fatal("markOK 后普通 Chat 应真发请求")
 	}
 }
 
