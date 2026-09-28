@@ -152,6 +152,45 @@ func TestChatForceIgnoresCooldown(t *testing.T) {
 	}
 }
 
+// TestTruncatedEmptyContentDoesNotTripBreaker ★ 074x（2026-09-29）：
+// 思维链模型在 max_tokens 太小时会把预算全花在思考上 —— HTTP 200、finish_reason=length、
+// content 为空。这是**配置问题**不是上游故障，旧写法把它算进连续失败，
+// 三次就把健康模型打进 5 分钟冷却，运维看到的红字与真宕机一模一样。
+// 判据两腿：① 截空期间每次都真发请求（没被冷却短路）且文案指向「最大生成长度」；
+// ② 预算恢复正常后普通 Chat 立刻可用（证明前面没有攒出冷却计数）。
+func TestTruncatedEmptyContentDoesNotTripBreaker(t *testing.T) {
+	var trunc atomic.Bool
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if trunc.Load() {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":""},"finish_reason":"length"}],"usage":{"completion_tokens":400,"completion_tokens_details":{"reasoning_tokens":400}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"正常正文"},"finish_reason":"stop"}],"usage":{"completion_tokens":30}}`))
+	}))
+	defer srv.Close()
+	c := New([]Provider{{Name: "main", BaseURL: srv.URL, APIKey: "k", Model: "m"}}, 5)
+
+	trunc.Store(true)
+	for i := 0; i < 3; i++ {
+		_, _, _, err := c.Chat(context.Background(), 0, 400, []Message{{Role: "user", Content: "hi"}})
+		if err == nil || !strings.Contains(err.Error(), "最大生成长度") {
+			t.Fatalf("截空应报「调大最大生成长度」，got %v", err)
+		}
+	}
+	if int(calls.Load()) != 3 {
+		t.Fatalf("截空不该攒冷却：应每次都真发请求，实际发了 %d 次", calls.Load())
+	}
+
+	trunc.Store(false)
+	if _, _, u, err := c.Chat(context.Background(), 0, 400, []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("预算够用了还报冷却 ⇒ 熔断被误伤触发: %v", err)
+	} else if u.Truncated {
+		t.Fatal("finish_reason=stop 不该判为截断")
+	}
+}
+
 // TestDisabled 无 provider 时报错
 func TestDisabled(t *testing.T) {
 	c := New(nil, 5)

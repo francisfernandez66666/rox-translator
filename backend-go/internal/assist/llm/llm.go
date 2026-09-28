@@ -32,6 +32,11 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	// Truncated 本次正文是否被 max_tokens 截断（上游 finish_reason == "length"）。
+	// ★ 074x（2026-09-29）：以前这个字段没人读，「答案能出来」被当成「答案答完了」，
+	//   线上表现是用户看到停在半句上的回复（「需要体验的话。」）而日志一片绿。
+	//   现在 engine 拿它记一行 WARN，运维至少有地方可查。
+	Truncated bool `json:"-"`
 }
 
 // Provider 单个模型候选
@@ -161,6 +166,18 @@ func (c *Client) chain(ctx context.Context, ignoreCooldown bool, temperature flo
 			c.markOK(i)
 			return text, p.Model, usage, nil
 		}
+		// ★ 074x：「调用成功但正文为空」不是一次上游故障，是一次**额度配置问题**。
+		//   思维链模型在 max_tokens 太小时会把整份预算花在思考上（reasoning_tokens 吃满），
+		//   HTTP 200、finish_reason=length、content=""。旧写法走 markFail，于是
+		//   「额度配小了」这件会自愈的事被攒成「连续失败 3 次 ⇒ 冷却 5 分钟」，
+		//   运维看到的是和真故障一模一样的红字。这里给出可执行的文案并跳过失败计数。
+		if err == nil && text == "" && usage.Truncated {
+			lastErr = fmt.Errorf("模型只输出了思考过程，正文被 max_tokens=%d 截空——请在管理台调大「最大生成长度」", maxTokens)
+			observability.Warn(ctx, "assist.llm 正文被 max_tokens 截空（不计失败），降级下一候选",
+				"provider_index", i, "model", p.Model, "max_tokens", maxTokens,
+				"completion_tokens", usage.CompletionTokens)
+			continue
+		}
 		lastErr = err
 		observability.Warn(ctx, "assist.llm provider 调用失败，降级",
 			"provider_index", i, "model", p.Model, "err", err)
@@ -282,6 +299,9 @@ func (c *Client) chatOne(ctx context.Context, p Provider, temperature float64, m
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			// FinishReason 上游收尾原因：stop=正常说完，length=被 max_tokens 截断
+			// （★ 074x 新增读取，理由见 Usage.Truncated）
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage Usage `json:"usage"`
 	}
@@ -291,7 +311,9 @@ func (c *Client) chatOne(ctx context.Context, p Provider, temperature float64, m
 	if len(out.Choices) == 0 {
 		return "", Usage{}, fmt.Errorf("empty choices")
 	}
-	return out.Choices[0].Message.Content, out.Usage, nil
+	u := out.Usage
+	u.Truncated = out.Choices[0].FinishReason == "length"
+	return out.Choices[0].Message.Content, u, nil
 }
 
 // markOK 调用成功：清零失败计数与冷却

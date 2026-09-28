@@ -765,14 +765,24 @@ func (e *Engine) llmReplyWith(ctx context.Context, input string, history []store
 		if role != "user" && role != "assistant" {
 			continue
 		}
-		msgs = append(msgs, llm.Message{Role: role, Content: asStr(h["content"])})
+		// ★ 074x：历史正文**出站同一把刷子**。挂件会回放最近几轮，而线上存量消息里
+		// 已经躺着修复前漏出来的「【go:enterprise-features】」这种控制序列
+		// （见 2026-09-29 用户截图那条）。原样喂回模型，模型就把自家漏出来的格式当范本来学，
+		// 于是老会话越聊越歪——不清洗历史数据（那是客户台账），在进 prompt 这一道摘干净。
+		content, _ := extractGoMarkers(asStr(h["content"]))
+		msgs = append(msgs, llm.Message{Role: role, Content: content})
 	}
 	msgs = append(msgs, llm.Message{Role: "user", Content: input})
 
-	// 全量知识 key 表（供 LLM 选择跳转动作）
-	allKeys := e.allKBKeys()
-	if allKeys != "" {
-		msgs[len(msgs)-1].Content += "\n\n（回答末尾如需推荐功能，另起一行输出【go:key1,key2】，key 从：" + allKeys + " 中选。不需要就不输出。）"
+	// ★ 074x（2026-09-29 生产现场修复）跳转菜单只给**前端认得的 key**。
+	// 原实现把 `kb_entries` 的全部 key（生产实测 30 个）当菜单送给模型，而挂件上真正能长出
+	// 按钮的是 `feature_links` 的 key（10 个），两个命名空间**只有 1 个重合**——
+	// 于是模型照菜单选「enterprise-features」这类纯知识条目的 key（选得没错，是菜单错），
+	// FeatureLinksByKey 查不到映射 ⇒ actions 恒空，界面上只剩那串英文 key 原样戳在正文里，
+	// 用户看到的正是「乱七八糟的英文，没映射成前端展示内容」。
+	actionKeys := e.actionKeyMenu()
+	if actionKeys != "" {
+		msgs[len(msgs)-1].Content += "\n\n（如果要推荐功能入口，只在**回答的最后一行**单独输出【go:key1,key2】，key 从：" + actionKeys + " 中选；正文里不许出现这个标记，不需要就不输出。）"
 	}
 
 	client := e.ensureLLM(ctx) // ★ R0.4 惰性重建（管理台 LLM 配置热加载）
@@ -781,12 +791,22 @@ func (e *Engine) llmReplyWith(ctx context.Context, input string, history []store
 		if v := e.db.GetConfig("temperature", ""); v != "" {
 			fmt.Sscanf(v, "%f", &temp)
 		}
-		maxTok := 400
+		// ★ 074x：默认额度 400 → 900。现网主模型 THUDM/GLM-Z1-9B-0414 是**思维链模型**，
+		// max_tokens 管的是「思维链 + 正文」的总和，不是正文单独额度
+		// （实测 400 额度下 reasoning_tokens 就吃掉 276，正文只剩零头）。
+		// 400 时代的线上表现就是用户截图那条：回答停在「需要体验的话。」这种半句上。
+		maxTok := 900
 		if v := e.db.GetConfig("max_tokens", ""); v != "" {
 			fmt.Sscanf(v, "%d", &maxTok)
 		}
-		text, model, _, err := client.Chat(ctx, temp, maxTok, msgs)
+		text, model, usage, err := client.Chat(ctx, temp, maxTok, msgs)
 		if err == nil && strings.TrimSpace(text) != "" {
+			// 被 max_tokens 截断（finish_reason=length）时留一行日志：
+			// 「答案能出来」不等于「答案答完了」，没有这一行就只能靠用户截图发现半句话。
+			if usage.Truncated {
+				observability.Warn(ctx, "assist.engine LLM 输出被 max_tokens 截断",
+					"model", model, "max_tokens", maxTok, "completion_tokens", usage.CompletionTokens)
+			}
 			return e.postProcess(text, model)
 		}
 		observability.Warn(ctx, "assist.engine LLM 调用失败，走规则兜底", "err", err)
@@ -816,18 +836,46 @@ func (e *Engine) buildSystemPrompt(hits []entry) string {
 }
 
 // postProcess 提取【go:...】动作标记，剥离正文
-// 注意【与】均为 3 字节 rune：标记头 "【go:" 共 6 字节，尾部 "】" 3 字节
+// ★ 074x（2026-09-29，配合上面那条菜单口径重写）三条硬要求：
+//  1. **剥完所有标记**，不是只剥第一个。旧实现一次 strings.Index 就收工，模型一旦
+//     在同一条回答里写两个【go:…】（思维链模型很常见），第二个就原样留在用户看得见的正文里。
+//  2. **未闭合的标记也要清掉**。旧实现要求后面必须找到「】」才动手，而 max_tokens 截断
+//     恰好会把「】」截没——截断 + 标记 = 屏幕上直接挂一串 「【go:ent」，
+//     这是「输出被截断」和「英文没映射」两条症状同源的地方。未闭合时从标记头删到结尾。
+//  3. 标记可以出现在句中（旧口径只当它在末尾），剥离后前后文照常拼接。
 func (e *Engine) postProcess(text, model string) *Reply {
-	content := text
-	var actions []Action
-	if i := strings.Index(text, "【go:"); i >= 0 {
-		if end := strings.Index(text[i:], "】"); end > 0 {
-			keys := splitKeys(text[i+6 : i+end])
-			actions = e.FeatureLinksByKey(keys)
-			content = strings.TrimSpace(text[:i] + text[i+end+3:])
+	content, keys := extractGoMarkers(text)
+	return &Reply{Content: content, Actions: e.FeatureLinksByKey(dedup(keys)), Model: model, Source: "llm"}
+}
+
+// goMarkerHead 动作标记头（正文里模型唯一被允许输出的控制序列）
+const goMarkerHead = "【go:"
+
+// goMarkerTail 标记尾（全角右方括号，UTF-8 占 3 字节）
+const goMarkerTail = "】"
+
+// extractGoMarkers 把正文里所有【go:...】摘干净，返回清洗后的正文与收集到的 key
+func extractGoMarkers(text string) (string, []string) {
+	var keys []string
+	var sb strings.Builder
+	rest := text
+	for {
+		i := strings.Index(rest, goMarkerHead)
+		if i < 0 {
+			sb.WriteString(rest)
+			break
 		}
+		sb.WriteString(rest[:i])
+		tail := rest[i+len(goMarkerHead):]
+		end := strings.Index(tail, goMarkerTail)
+		if end < 0 {
+			// 未闭合（多半就是被 max_tokens 截断）：丢弃到结尾，宁可不给按钮也不把控制序列留给用户
+			break
+		}
+		keys = append(keys, splitKeys(tail[:end])...)
+		rest = tail[end+len(goMarkerTail):]
 	}
-	return &Reply{Content: content, Actions: actions, Model: model, Source: "llm"}
+	return strings.TrimSpace(sb.String()), keys
 }
 
 // fallbackReply 规则兜底：检索命中直接拼。
@@ -916,16 +964,26 @@ func (e *Engine) LLMTest(ctx context.Context) (string, string, llm.Usage, error)
 	hosts := client.ProviderBaseURLs()
 	observability.Info(ctx, "assist.engine 测试连通发起", "providers", len(hosts), "hosts", strings.Join(hosts, ","))
 	msgs := []llm.Message{{Role: "user", Content: "回复「OK」两个字"}}
-	text, modelUsed, usage, err := client.ChatForce(ctx, 0, 8, msgs)
+	// ★ 074x：额度 8 → 64。思维链模型（现网主模型 GLM-Z1）的 max_tokens 管的是
+	//   「思考 + 正文」总和，实测正文只有 53 字时 reasoning_tokens 已吃掉 276；
+	//   8 个 token 会让一次**完全健康**的连通返回空正文，chain 把空正文判为失败并累计冷却，
+	//   运维连点三次就把自己打进 5 分钟冷却（和上面 ChatForce 那条是同一类误伤）。
+	text, modelUsed, usage, err := client.ChatForce(ctx, 0, 64, msgs)
 	if err != nil {
 		observability.Warn(ctx, "assist.engine 测试连通失败", "hosts", strings.Join(hosts, ","), "err", err)
 	}
 	return text, modelUsed, usage, err
 }
 
-// allKBKeys 全部知识 key（供 LLM 动作标记）
-func (e *Engine) allKBKeys() string {
-	rows, err := e.db.List("kb_entries", true)
+// actionKeyMenu 供 LLM 选择的跳转 key 菜单（逗号分隔）。
+// ★ 074x（2026-09-29）：数据源从 `kb_entries` 换成 `feature_links`，与 FeatureLinksByKey
+//
+//	的查表口径**同源**——菜单里出现的每个 key 都保证能渲染成挂件按钮。
+//	旧的「全量知识 key」菜单是命名空间错配的直接来源：30 个知识 key 里只有 1 个有按钮映射，
+//	模型按菜单选中的东西必然渲染不出来。
+//	（知识条目继续通过【相关知识】进 prompt 供模型组织语言，只是不再当跳转菜单用。）
+func (e *Engine) actionKeyMenu() string {
+	rows, err := e.db.List("feature_links", true)
 	if err != nil {
 		return ""
 	}
