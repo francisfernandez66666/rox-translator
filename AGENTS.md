@@ -9,11 +9,11 @@
 
 ### 1. store 冻结规则（★ 强制）
 
-`backend-go/internal/store/` 是单一数据访问包（52 个非测试文件 / 约 15.2k 行；含 44 个单测文件为 96 文件 / 约 22.6k 行），
-被 `internal/api/` 中 46 个非测试文件直接 import（2026-09-22 实测校准，#74/#75 批次新增 6 个域文件）。
+`backend-go/internal/store/` 是单一数据访问包（57 个非测试文件 / 约 16.5k 行；含 57 个单测文件为 114 文件 / 约 26.9k 行），
+被 `internal/api/` 中 51 个非测试文件直接 import（2026-09-29 实测校准；api 包自身现有 93 个非测试文件）。
 为控制复杂度增长，确立以下冻结规则：
 
-1. **`billing.go`（2206 行）与 `kbpackages.go`（1371 行）只减不增**（行数口径＝含注释的非测试行数，规则本身指「不追加新方法」；2026-09-22 实测校准）。**
+1. **`billing.go`（2317 行）与 `kbpackages.go`（1371 行）只减不增**（行数口径＝含注释的非测试行数，规则本身指**不追加新方法**；2026-09-29 实测校准。billing.go 的行数增长全部来自原地改既有方法体与写约束注释——2026-09-29 D-1 并发透支修复即属此类，diff 里零个新增 `func`；确要加新方法就按下面的规则新建文件）。**
    新方法按域新建文件（`billing_refund.go` / `kbpackages_acl.go`），或归入已有窄域文件。
    **禁止**往这两个文件追加新方法。
 2. **`store.go` 不承接业务方法**，只保留连接/迁移编排与真正的通用工具。
@@ -31,7 +31,10 @@
 - 后端统一用 `internal/observability` 的 slog（JSON + trace_id），**不要用标准库 `log.Printf`**。
 - 子服务（如 assist-server）也必须接同一口径，禁止自建日志格式。
 - 存量 `log.Printf` 受棘轮闸门约束**只减不增**：`internal/observability/logratchet_test.go`
-  （分根设基线 `internal` 176 / `cmd` 69，2026-09-18 P2-3 建立、2026-09-22 #42 纳入 `cmd/` 盲区并
+  （分根设基线 `internal` 176 / `cmd` 69；2026-09-29 实测 internal 真计数恰=176，即 D-2 批迁移 6 处后**回到基线而未下调**——
+   想再降就要再迁一批并同步改 `logPrintfBaselines`，别只改数字。计数口径注意：闸门按「行」数且**跳过 // 注释行**，
+   而 `grep -c log.Printf` 会把说明注释一起算进来（同文件实测 182 vs 176），拿 grep 读数去对基线必然误判。
+   2026-09-18 P2-3 建立、2026-09-22 #42 纳入 `cmd/` 盲区并
   随迁移下调 `internal` 基线；总数不设基线，防「cmd 新增被 internal 下降掩盖」）。
   迁移优先级 engine → fileproc → orchestrator，按包随改动顺带清，
   每降一批同步下调该文件里的 `logPrintfBaseline`。
@@ -68,11 +71,19 @@
   后端状态码诚实化（F-64①②③）之后，`src/api/*.ts` 里凡是返回 `{success,...}` 信封的调用一律写
   `bizResp(() => request(...))`，**禁止直返裸 `request`**——`bizResp` 把结构化 4xx 失败体还原成历史
   `{success:false,...}` 形态（details 摊平、401/403 照抛以触发重登录），调用方零改动；绕过它会让面板
-  对着抛出的 ApiError 白屏。新增 api 文件须带 F-64② 文件级中文注释（现存 17 个文件已全部接线）。
+  对着抛出的 ApiError 白屏。新增 api 文件须带 F-64② 文件级中文注释。
+  ★ 这条的射程由 `src/api/bizRespGate.test.ts` 静态锁机械保证（2026-09-29 D-3 批建立，现存 33 个非测试 api 文件），四档口径：
+  ① INFRA＝`core.ts`/`index.ts`/`types.ts` 不产生调用点；
+  ② EXEMPT＝`lead.ts`（蜜罐「假成功」，失败也不许向提交方揭穿）与 `translate.ts`（预估已自判信封＋SSE/健康检查非信封）
+     **刻意不接**，且源码里必须留有豁免理由标记（`bizResp 豁免`／`正当豁免`），只往白名单塞文件名不算；
+  ③ READ_THROW_EXEMPT＝纯读取且调用点靠异常通道出文案的函数（mybilling 五个读取／referral 两个）**必须保持裸返**，
+     包上 bizResp 会把「取数失败」伪装成「空数据」（批 #42 定性的静默失败形态）——判据含点位/理由/保鲜三腿；
+  ④ LEGACY_UNWRAPPED＝存量裸返台账（16 文件 / 64 个宿主函数，只减不增；还清条目必须删，否则判红）。
+  新增文件默认按主判据（凡返回 `{success,...}` 信封的调用一律包 `bizResp`）；想进 ②③④ 任一档都得在锁里写明理由。
 - 组件测试用 vitest + jsdom（`*.dom.test.tsx`）。
 - **i18n 为 12 语种口径**（★ 2026-09-20 全站十语种升级）：zh/en 全量词典（`panels/*.ts` 双语同步），
   其余十语种 `src/i18n/locales/*.ts` 为 **ALL_KEYS 全量词典**（2026-09-20 起建 2532 键，此后随批次增长，
-  2026-09-22 实测 2746 键逐键覆盖，`locales.core.test.ts` 以 ALL_KEYS 动态长度为基准红灯拦截，不钉死数字；
+  2026-09-29 实测 3013 键逐键覆盖（2026-09-22 曾为 2746），`locales.core.test.ts` 以 ALL_KEYS 动态长度为基准红灯拦截，不钉死数字；
   历史 CORE_KEYS 核心集口径已并入全量）——新增面板键必须十份 locale 同步补译，
   生产管线与术语基准见项目记忆「多语言批次」。lang→en→zh 回退链仅作全新键未同步时的临时兜底，
   不视为正常状态。
@@ -229,7 +240,7 @@
 ### 8. Handler 错误返回口径（★ 2026-09-23 〇-LK 立为硬约定）
 
 - **新增/改动的 HTTP handler，错误响应一律走 `s.writeError(w, r, apierrors.New(code, msg))`，禁止新写内联
-  `writeJSON(w, 4xx/5xx, map{...})`。** 全包棘轮 `TestErrorStyleRatchet`（基线 628，
+  `writeJSON(w, 4xx/5xx, map{...})`。** 全包棘轮 `TestErrorStyleRatchet`（基线 **485**，2026-09-29 实测校准；
   2026-09-26 批 I-7 由 699 降到 628：收款/账务七文件 71 处已迁 `writeError`）按**整包**计数，
   新文件里第 1 处内联错误响应就会顶红闸门——这不是形式问题，内联体缺统一错误码，
   前端与 SDK 无法按 code 分支处理。
@@ -297,6 +308,10 @@ bash scripts/uat/assist_uat.sh                    # AI 顾问（自起临时实�
 bash scripts/uat/run_uat.sh                       # 全链路主矩阵（PG 方言，发布闸门）
 bash scripts/uat/multi_instance_e2e.sh            # 多实例红线
 bash scripts/build_extension.sh --check           # 扩展漂移闸门（动过 extension/ 却没重打 zip 时红灯；vitest 同口径）
+# ★ fileproc 依赖说明（2026-09-29 真踩）：PDF 原版式（字形保护）用例必须有**真 pymupdf** 才跑得动，且它刻意 t.Fatal
+#   不静默跳过（「PyMuPDF 认不认这个字体」除真构造 Font 外没有第二条路，跳过＝绿灯无效）。
+#   CI 走 pip install，本机装在 ~/.venvs/langcross-fileproc —— run_uat.sh 已自动发现并导出 FILEPROC_PYTHON_BIN；
+#   两处都没有时**只许补依赖，不许放宽或跳过该用例**（旧表现是整条 PG 矩阵在竞态预检段中止，后三段一行没跑）。
 bash scripts/build_sdk.sh --check                 # SDK 托管产物漂移闸门（★ 2026-09-25 〇-T：动过 sdk/ 却没重打 public/sdk/ 时红灯；e2e/sdk_download.spec.ts 同口径）
 ```
 
