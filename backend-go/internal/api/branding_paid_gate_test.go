@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,12 @@ import (
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
+
+// brandGateBaseDomain 夹具用的品牌基础域（写进 system_config.base_domain）。
+// ★ F-79 之后匿名视角只能按访问 Host 解析品牌，两个品牌闸测试文件共用这一个常量，
+//
+//	避免一边改域名、另一边还在用旧域名而静默读不到租户。
+const brandGateBaseDomain = "brandtest.test"
 
 // brandGateMux 只挂品牌读接口（GET 公开、POST 保存），走真实 handler：
 // 展示闸长在 brandingPayload 这个咽喉点上，接口面与 SPA 首屏注入面同源，
@@ -50,9 +57,32 @@ func brandGateMux(s *Server) http.Handler {
 }
 
 // brandGateGet 以指定视角读品牌接口（token 为空＝匿名访客），返回解析后的出栈 map。
+// ★ F-79（2026-09-28 〇-Y）改过视角承载方式：原先这里是 `?tenant_id=<id>`，而 F-79 之后
+//
+//	**匿名指名会被后端忽略**（跨域拉品牌资产的洞，见 branding_scope.go），继续那么写会得到
+//	「回落平台品牌」的红灯——那不是回归而是判据本身变了。本夹具要测的是「匿名访客在该租户
+//	自己的品牌域上看得到什么」，所以视角改由访问 Host 承载：读的还是同一个咽喉点 brandingPayload，
+//	只是换成 F-79 之后唯一合法的匿名解析路径。真值/隐藏的语义一字未动。
 func brandGateGet(t *testing.T, f *renewFixture, tid int64, token string) map[string]any {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/tenant/branding?tenant_id=%d", tid), nil)
+	co, err := f.srv.Ten.GetByID(tid)
+	if err != nil || co == nil {
+		t.Fatalf("读取夹具租户 %d 失败: %v", tid, err)
+	}
+	if strings.TrimSpace(co.Domain) == "" {
+		t.Fatalf("夹具租户 %d 没有品牌域，匿名视角无从按域解析（F-75 夹具必须给 domain）", tid)
+	}
+	// 基础域取「夹具当前配置」：F-75 自己没配就用默认哨兵，F-76 那批已把 lexicorn.cn 写进库——
+	// 在这里强设会把别Suite的域名口径盖掉（首跑即撞「暂不支持自定义完整域名」那条 400）。
+	base, _ := f.srv.Store.GetConfig("base_domain")
+	if strings.TrimSpace(base) == "" {
+		base = brandGateBaseDomain
+		if err := f.srv.Store.SetConfig("base_domain", base); err != nil {
+			t.Fatalf("配置品牌基础域失败: %v", err)
+		}
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/tenant/branding", nil)
+	r.Host = co.Domain + "." + base
 	if token != "" {
 		r.Header.Set("Authorization", "Bearer "+token)
 	}

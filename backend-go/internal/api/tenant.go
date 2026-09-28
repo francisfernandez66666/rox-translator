@@ -538,7 +538,7 @@ func (s *Server) handleAdminBrandGrant(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTenantBrandingGet 公开接口：按域名/租户解析品牌展示信息（登录页与前台使用，无需鉴权）。
-// 解析优先级：?tenant_id=（超管预览指定租户）> Host 子域名前缀（前缀.基础域名）。
+// 解析优先级：?tenant_id=（超管预览指定租户；★ F-79 起匿名与跨租户指名一律忽略该参数）> Host 子域名前缀（前缀.基础域名）。
 // 关键：品牌只由「访问域名」决定——全局根域名（主站/apex）永远返回平台级品牌（能言 LangCross），
 // 不跟随登录用户所属租户，避免根域名误显示某租户（如 rox）的品牌；租户品牌仅在该租户专属子域下生效。
 func (s *Server) handleTenantBrandingGet(w http.ResponseWriter, r *http.Request) {
@@ -546,13 +546,17 @@ func (s *Server) handleTenantBrandingGet(w http.ResponseWriter, r *http.Request)
 }
 
 // brandingPayload 解析当前访问域名的租户品牌定制（供接口与 SPA 首屏注入复用）。
-// 解析优先级：显式 ?tenant_id= > 按访问子域前缀；主站前缀（如 langcross）按全局根处理，不套用任何租户品牌。
+// 解析优先级：显式 ?tenant_id=（★ F-79 起**只对超管与该租户自己的成员生效**，见 branding_scope.go）
+// > 按访问子域前缀；主站前缀（如 langcross）按全局根处理，不套用任何租户品牌。
 // 返回结构与历史 /api/tenant/branding 响应一致（前端 BrandingProvider 直接消费）。
 func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 	q := r.URL.Query()
 	var tid int64
+	// ★ F-79（2026-09-28 用户拍板补修）：显式参数过去是「谁带都算」，所以未登录访客在主站打
+	//   /?tenant_id=1 就能把 1 号租户的品牌注入首屏——白标承诺「品牌只在自己域生效」当时只靠前端自觉。
+	//   现在判不过就**忽略参数**（不是 403）：让下面的 Host 解析按正常口径接管，公开首屏不会因此变错误页。
 	if v := q.Get("tenant_id"); v != "" {
-		if n, e := strconv.ParseInt(v, 10, 64); e == nil {
+		if n, e := strconv.ParseInt(v, 10, 64); e == nil && s.brandingExplicitIDAllowed(r, n) {
 			tid = n
 		}
 	}

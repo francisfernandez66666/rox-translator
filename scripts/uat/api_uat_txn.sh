@@ -2854,6 +2854,30 @@ ckq T64-restore-kpro "$PRE64KPRO" "$(ESTGET est_tokens_per_char_pro)"
 ckq T64-restore-ffast "$PRE64FFAST" "$(ESTGET est_tokens_fixed_fast)"
 dbq "DELETE FROM audit_logs WHERE action IN ('est_tokens_save','est_tokens_reset')" >/dev/null
 
+# ---------- T65 品牌显式指名的跨域闸（★ 2026-09-28 〇-Y · F-79） ----------
+# 现象：/api/tenant/branding?tenant_id=<别家> 过去「谁带都算」——未登录访客在主站或 A 租户的品牌域上
+#   打这个参数，就能把 B 租户的品牌名/Logo/背景图整份拉走；SPA 首屏注入与接口共用同一咽喉点，
+#   所以线上当时实测「/?tenant_id=1 注入命中」。判据全文见《缺陷核实与修复文档》§21.11 与 §二十二。
+# 锁四条：① 匿名指名→参数被忽略、回落平台（tenant_id=0 且看不见别家的英文品牌名）；
+#   ② 反证：超管同一条请求必须命中（后台跨租户配置这条正路不许被误杀，否则等于白修）；
+#   ③ 脏参数（abc/0/-7）一律 200 且回落——忽略参数是降级，不是把它打成错误页；
+#   ④ 匿名视角的白标承诺从此由服务端兜底，不再依赖前端"不带参数"的自觉。
+# 匿名探测一律直连 curl 而不走 get ""：本脚本自己的注释记过 `curl -H ""` 在部分 curl 版本上
+#   会报「no header name」，那会让整段断言拿到空响应而假红（AGENTS §一·7 同族的写法雷）。
+B65A=$(curl -s --max-time 60 "$B/api/tenant/branding?tenant_id=$TAID")
+ck T65-anon-fallback '"tenant_id":0' "$B65A"
+if echo "$B65A" | grep -q 'UATCAR'; then
+  FAIL=$((FAIL+1)); echo "FAIL|T65-anon-no-foreign-brand|匿名拿到了别家品牌名"
+else
+  PASS=$((PASS+1)); echo "PASS|T65-anon-no-foreign-brand"
+fi
+B65S=$(get "$AH" "/api/tenant/branding?tenant_id=$TAID")
+ck T65-super-hits "\"tenant_id\":$TAID" "$B65S"
+ck T65-super-brand-seen 'UATCAR' "$B65S"
+for Q65 in abc 0 -7; do
+  ck "T65-dirty-$Q65" '"tenant_id":0' "$(curl -s --max-time 60 "$B/api/tenant/branding?tenant_id=$Q65")"
+done
+
 # 收尾清理：本节造的反馈属断言耗材，跑完即删。留着的代价不是本轮（本段已在脚本末尾），
 #   而是**下一轮复用同一个 UAT 库**时把历史行算进统计类用例（反馈列表/留资计数）。
 #   注册用户按本脚本既有惯例留下（各段自建用户都是这么留的）：users 行挂着会话/台账/邀请

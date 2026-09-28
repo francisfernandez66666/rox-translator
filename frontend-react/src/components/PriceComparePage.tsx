@@ -5,6 +5,9 @@
 //       免责与 CTA → 页脚。
 // 数值口径：系数一律取 /api/pricing/meta 返回值（积分口径，接口侧零 token 裸值），
 //           前端只做同一条式子的算术，**不写死任何价**（见 usePricingMeta 的文件头）。
+// ★ 〇-Y #64（2026-09-28）：算式与人工单价已抽到 @/lib/priceCalc，与首页快速算价卡
+//   （PriceQuickCalc）共用同一条式子；本页是「细节全在」的那一侧（公式公示、浮动说明、
+//   人工价出处、口径边界、免责），首页只给「填两个数看一个价」的快查入口并回链到这里。
 // 视觉规则：与 /pricing 同一套交付稿口径（纯黑底、面板 #0E1014、描边 1.2px 灰阶令牌、
 //           主按钮白底黑字），字号不低于 11px——全站排版档等值锁见 styles/readability.test.ts I 段。
 // ============================================================================
@@ -15,45 +18,30 @@ import { useT } from '@/i18n'
 import { useBranding } from '@/branding'
 import { useAuth } from '@/stores/auth'
 import { usePricingMeta } from './usePricingMeta'
-import type { PricingModeMeta } from './usePricingMeta'
 import { fmtInt, fmtNum } from '../lib/format'
 
-// HUMAN_MIN_PER_CHAR / HUMAN_MAX_PER_CHAR 人工笔译单价区间（元/源字，中译英主线）。
-// ★ 数值的可核查出处见《发布前E2E_UAT_20260926/证据/人工单价公开来源取证_20260927.md》：
-//   厦门市翻译协会《笔译服务指导价格》通用级 230–300 元/千字、百度人工翻译公开价目页
-//   快译 0.26 元/字 / 专业应用级 240–300 元/千字，采集日期 2026-09-27。
-//   口径边界（对外必须这么写）：这是「行业公开报价的通用级到专业级入门区间」，
-//   **不是**行业均价、也不是上限；不含法律公证/出版发行/母语润色/专业排版。
-// 为什么这两个数写在组件里而不是词典里：它们要参与算术，页面文案里的 {lo}/{hi}
+// 数值与算式口径：全部来自 @/lib/priceCalc（★ 〇-Y #64 抽出的一档事实源）。
+// 本页与首页快速算价卡（PriceQuickCalc）必须算出同一个数，所以式子、输入上限、
+// 人工对照单价与示例预置量都从那里 import，本页**不再留第二遍拷贝**。
+// 为什么这几个数放在 lib/priceCalc 而不是词典里：它们要参与算术，页面文案里的 {lo}/{hi}
 //   由这里注入，词条与算式不可能各说一套（dom 测试 cmpHumanPriceLock 逐字锁这条）。
-const HUMAN_MIN_PER_CHAR = 0.20
-const HUMAN_MAX_PER_CHAR = 0.30
-// HUMAN_QUOTE_DATE 人工报价的采集日期（对外标注"来源与时间"用，改数据必须同批改这里）
-const HUMAN_QUOTE_DATE = '2026-09-27'
+import {
+  calcEstimatePoints,
+  clampNum,
+  humanQuoteOf,
+  savePctOf,
+  HUMAN_MIN_PER_CHAR,
+  HUMAN_MAX_PER_CHAR,
+  HUMAN_QUOTE_DATE,
+  CHARS_MAX,
+  LANGS_MAX,
+  EXAMPLE_CHARS,
+  EXAMPLE_LANGS,
+} from '../lib/priceCalc'
 
-// CHARS_MAX 输入上限（防呆）：一千万源字符已经远超单笔业务量级，
-// 再大只会让页面把「理论上的一次消耗」显示成看不清的天文数字。
-const CHARS_MAX = 10_000_000
-// LANGS_MAX 语种数上限：界面语种是 12 个口径，一次建单的目标语种数不会超过它
-const LANGS_MAX = 12
-
-// EXAMPLE_CHARS / EXAMPLE_LANGS 「载入示例」的预置量：8 万字手册 × 单语种
-//（对应一线客户最常见的整册技术手册场景，也是人工报价最能拉开差距的一档）
-const EXAMPLE_CHARS = 80000
-const EXAMPLE_LANGS = 1
-
-/** 把一个档的系数算成预估积分（与后端建单预检同一条两段式：固定项 + 线性项） */
-export function calcEstimatePoints(m: PricingModeMeta, chars: number, langs: number): number {
-  if (!Number.isFinite(chars) || !Number.isFinite(langs) || chars <= 0 || langs <= 0) return 0
-  return Math.round(m.fixed + (chars / 1000) * m.per1k * langs)
-}
-
-/** clampNum 输入框取值归一：非法/空一律 0，上限钉死（负数与 NaN 都不许进算式） */
-function clampNum(raw: string, max: number): number {
-  const v = Math.floor(Number(raw))
-  if (!Number.isFinite(v) || v <= 0) return 0
-  return Math.min(v, max)
-}
+// 再导出：本页的历史 dom 测试（PriceComparePage.dom.test ②）是按「页面 import 的那条式子」
+// 来锁公示公式的，re-export 让它继续锁的是**同一条**函数而不是第二份实现。
+export { calcEstimatePoints }
 
 /** PriceComparePage 公开比价与算价页 */
 export default function PriceComparePage() {
@@ -73,10 +61,11 @@ export default function PriceComparePage() {
   // 试算三件套：积分、费用、人工同量报价区间（人工按 0.20–0.30 元/字 × 源字符 × 语种数）
   const estPoints = m ? calcEstimatePoints(m, chars, langs) : 0
   const estMoney = estPoints * meta.pointsPrice
-  const humanLo = chars * langs * HUMAN_MIN_PER_CHAR
-  const humanHi = chars * langs * HUMAN_MAX_PER_CHAR
+  const human = humanQuoteOf(chars, langs)
+  const humanLo = human.lo
+  const humanHi = human.hi
   // 省比一律对**人工低档**取，高档算出来的"省"更大、更接近吹牛，对外只说保守的那一头
-  const savePct = humanLo > 0 && estMoney > 0 ? Math.max(0, Math.round((1 - estMoney / humanLo) * 100)) : 0
+  const savePct = savePctOf(estMoney, humanLo)
 
   const brand = branding.brandName || t('land.brand')
 

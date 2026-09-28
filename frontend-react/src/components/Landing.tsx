@@ -36,6 +36,7 @@ import { typingUnitOf, typingSpeedOf } from '@/i18n/script' // ★ 〇-Q：打�
 import { useBranding } from '@/branding' // 租户品牌信息：brandName 为空即回落产品名
 import { openAPIDocsUrl } from '@/api/core' // 公开 API 文档地址（同源 /openapi/docs）
 import { LeadForm } from '@/components/LeadForm' // ★ P1-3 收尾留资表单（自带状态，唯一例外）
+import PriceQuickCalc from '@/components/PriceQuickCalc' // ★ 〇-Y #64：价格方案区下方的「快速算价」卡（系数来自 /api/pricing/meta，细节点进 /compare）
 import { LangSelect } from '@/components/LangSelect' // ★ 2026-09-20 反馈④：落地页对非中文访客给出手动切换入口（12 语种，与顶栏同一组件）
 import { INDUSTRY_META, industryName } from '@/lib/industries' // 覆盖范围区块：行业包与本页术语大卡同源的一份事实
 import { PERSONA_FALLBACK } from '@/lib/personas' // 覆盖范围区块：八个角色 code 与后端 persona 包对齐
@@ -1222,6 +1223,14 @@ export default function Landing() {
             </article>
           ))}
         </div>
+
+        {/* ★ 〇-Y #64（2026-09-28）：用户要求「比价和算价计算器也放首页一下，供用户快速计算，
+            但细节要点击进入现在的比价和算价链接」。卡片挂在三档套餐下方、仍在 #pricing 区内：
+            访客看完档位紧接着就能按自己的量试一个数；而公式公示、系数读数、浮动说明、
+            人工价出处与免责全部留在 /compare 那一页（卡片只给一个入口，不复制细节）。
+            ⚠️ 与上方 #39 口径不冲突：套餐卡面依旧零具体金额（价目事实源在 /api/plans），
+            这张卡是「按访客自己填入的量现算」的试算，系数来自 /api/pricing/meta。 */}
+        <PriceQuickCalc />
       </section>
 
       {/* 6. 活动奖励：邀请好友 + 上传知识库 */}
@@ -1682,6 +1691,32 @@ const LANDING_CSS = `
 .lc-plan-feats svg{color:var(--lc-text-3);flex:none}
 .lc-plan--pro .lc-plan-feats li{color:var(--lc-text-on-light)}
 .lc-plan--pro .lc-plan-feats svg{color:var(--lc-text-on-light)}
+/* —— 5b. 快速算价卡（★ 2026-09-28 〇-Y #64：用户令「计算器放首页快速算，细节点进 /compare」）—— */
+/* 交付档口径与卖点卡/套餐卡同族：面 #0E1014、描边 1.2px 灰阶令牌、圆角 16、最小字号 11px；
+   #FFFFFF 只在实心件上做填充，这里没有任何白描边（readability.test.ts I 段全站扫描兜住）。 */
+.lc-qc{margin-top:24px;display:flex;flex-direction:column;gap:18px;padding:28px 32px;background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:16px}
+.lc-qc-head{display:flex;flex-direction:column;gap:8px}
+.lc-qc-t{margin:0;font-size:20px;font-weight:600;color:var(--lc-text-1)}
+.lc-qc-sub{margin:0;font-size:15px;line-height:1.7;color:var(--lc-text-3)}
+/* 输入与结果同一行：这是一张"算一下就完"的快查卡，纵向摊开会被读成又一个套餐卡 */
+.lc-qc-inputs{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end}
+.lc-qc-field{display:flex;flex-direction:column;gap:7px;font-size:14px;color:var(--lc-text-2)}
+.lc-qc-field input{width:150px;padding:9px 12px;font-size:15px;color:var(--lc-text-1);background:var(--lc-inset);border:1.2px solid var(--lc-border-6);border-radius:var(--lc-r-bar)}
+.lc-qc-out{display:flex;flex-wrap:wrap;gap:28px;margin-inline-start:auto}
+.lc-qc-ours,.lc-qc-human{display:flex;flex-direction:column;gap:5px;min-width:160px}
+.lc-qc-tag{font-size:14px;font-weight:600;color:var(--lc-text-2)}
+/* 我们那一侧是本卡唯一的强调数字（26px），人工侧压到 20px 并降一档面色：
+   两个数并排时必须让视线先落在"我们的价"上，否则这张卡会变成比价广告 */
+.lc-qc-money{font-size:26px;font-weight:700;line-height:1.15;font-family:var(--lc-font-latin)}
+.lc-qc-human .lc-qc-money{font-size:20px;font-weight:600;color:var(--lc-text-3)}
+.lc-qc-points,.lc-qc-save{font-size:13px;line-height:1.7;color:var(--lc-text-3)}
+.lc-qc-save{color:var(--lc-text-2)}
+.lc-qc-warn,.lc-qc-hint{display:flex;align-items:center;gap:10px;margin:0;padding:14px 16px;font-size:14px;line-height:1.7;color:var(--lc-text-2);background:var(--lc-inset);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-card)}
+/* 详情入口是文字链 + 箭头，不做实心按钮：本页唯一主投仍是「免费注册」，
+   一屏并列两颗实心白钮会把转化焦点拆成两个（与首页各区块的"唯一视觉重心"口径一致） */
+.lc-qc-more{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;font-size:15px;font-weight:600;color:var(--lc-text-2);text-decoration:none}
+.lc-qc-more:hover{color:var(--lc-text-1)}
+.lc-qc-more svg{flex:none}
 
 /* —— 6. 活动奖励 —— */
 /* 两卡等宽（1fr 1fr）：拉新与内容贡献是两条独立增长路径，做成大小卡会被读成主次 */
@@ -1804,6 +1839,10 @@ const LANDING_CSS = `
    宁可少一个入口也不在这里造汉堡菜单） */
 @media (max-width:980px){
   .lc-plans{grid-template-columns:1fr} /* 价格竖排后靠 DOM 顺序读：免费→专业→企业，推荐档仍在中间 */
+  /* 快速算价卡：结果不再靠 margin-inline-start:auto 顶到行尾（单列宽度下会把结果挤成一条），
+     改成与输入同宽、结果自身两列并排 */
+  .lc-qc{padding:24px 22px}
+  .lc-qc-out{margin-inline-start:0;width:100%}
   .lc-rewards{grid-template-columns:1fr}
   .lc-qa-methods{grid-template-columns:1fr} /* 两张方法卡竖排：并排时盲评说明整段会被压成窄条 */
   .lc-faq{grid-template-columns:1fr;gap:32px} /* 标题栏与问答之间只需一小段距离，80px 会把答案推到首屏外 */
@@ -1831,6 +1870,11 @@ const LANDING_CSS = `
   .lc-lead-btn{align-self:stretch;text-align:center} /* 提交按钮拉满整行：拇指落点越大越好 */
   .lc-foot{padding:44px 16px 28px}
   .lc-foot-cols{gap:36px} /* 列间距 80→36：80px 会在内容换行之前先把第三列顶到下一行 */
+  /* 快速算价卡（★ 〇-Y #64）手机档：输入框拉满整行——150px 在 360 视口里只剩半个拇指宽，
+     而这张卡的全部价值就是「让人填得下去」；结果区随 flex-wrap 自然叠成一列 */
+  .lc-qc{padding:22px 18px}
+  .lc-qc-field{flex:1 1 100%}
+  .lc-qc-field input{width:100%}
 }
 /* 400px 以下：导航那颗 sm 按钮再降一档，避免与"登录"挤成两行 */
 @media (max-width:400px){
