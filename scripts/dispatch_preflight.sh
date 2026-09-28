@@ -48,7 +48,7 @@ warn() { printf '\033[1;33m⚠️\033[0m %s\n' "$*"; }
 [ -x "$FPD_LOCAL_PY" ] || FPD_LOCAL_PY="$(command -v python3 || true)"
 [ -n "$FPD_LOCAL_PY" ] || { bad "主站找不到 python3（G2/G4 需要它现读版本与跑样张）"; exit 2; }
 
-SSH=(ssh -i "$FPD_KEY" -o BatchMode=yes -o ConnectTimeout=15 -p "$FPD_PORT" "$FPD_SSH")
+SSH=(ssh -i "$FPD_KEY" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -p "$FPD_PORT" "$FPD_SSH")
 if command -v shasum >/dev/null 2>&1; then DIGEST() { shasum -a 256 "$1" | awk '{print $1}'; }
 else DIGEST() { sha256sum "$1" | awk '{print $1}'; }; fi
 
@@ -198,8 +198,9 @@ else
     bad "G4 主站 extract 失败：$(tail -3 "$TMP/local_extract.err" | tr '\n' ' ')"
   else
     # ② 远端侧 extract：走 fpdexec 的 put → run 两步（与主站 DispatchRun 同协议）
-    REMOTE_IN="$FPD_REMOTE_ROOT/w/preflight/in_${SAMPLE_BASENAME}"
-    H1="$(printf '{"mode":"put","path":"%s"}' "$REMOTE_IN" | base64 | tr -d '\n')"
+      REMOTE_REL="preflight/in_${SAMPLE_BASENAME}"
+      REMOTE_IN="$FPD_REMOTE_ROOT/w/$REMOTE_REL"
+      H1="$(printf '{"mode":"put","rel":"%s"}' "$REMOTE_REL" | base64 | tr -d '\n')"
     { printf '%s\n' "$H1"; cat "$FPD_SAMPLE"; } >"$TMP/put.in"
     if ! "${SSH[@]}" >"$TMP/put.out" 2>"$TMP/put.err" <"$TMP/put.in"; then
       bad "G4 样张上传远端失败：$(tail -3 "$TMP/put.err" | tr '\n' ' ')"
