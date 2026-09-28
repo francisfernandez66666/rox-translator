@@ -3,9 +3,11 @@ package engine
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"translator/internal/assist/llm"
@@ -163,6 +165,123 @@ func TestPostProcess(t *testing.T) {
 	}
 	if len(rep.Actions) != 2 {
 		t.Fatalf("actions: %+v", rep.Actions)
+	}
+}
+
+// TestPostProcessStripsAllMarkers ★ 074x（2026-09-29 生产现场）：
+// 一条回答里出现**两个**标记时，旧实现只剥第一个，第二个原样留在用户屏幕上；
+// 标记被 max_tokens 截断（没有闭合的「】」）时，旧实现整段不剥，同样漏。
+// 这两形态就是用户截图里那句「企业用的话【go:enterprise-features】能查权限管理和审计功能。」。
+func TestPostProcessStripsAllMarkers(t *testing.T) {
+	e := newTestEngine(t)
+
+	// ① 多标记：正文一个不剩，按钮取并集（tickets + pricing）
+	rep := e.postProcess("先说结论。\n【go:tickets】中间还有一句。\n【go:pricing】", "m")
+	if strings.Contains(rep.Content, "【") || strings.Contains(rep.Content, "go:") {
+		t.Fatalf("第二个标记漏进正文: %q", rep.Content)
+	}
+	if len(rep.Actions) != 2 {
+		t.Fatalf("两个标记的 key 应合并成两个按钮: %+v", rep.Actions)
+	}
+	if !strings.Contains(rep.Content, "中间还有一句") {
+		t.Fatalf("正文被误删: %q", rep.Content)
+	}
+
+	// ② 未闭合（被 max_tokens 截断）：从标记头删到结尾，宁可不给按钮也不漏控制序列
+	rep2 := e.postProcess("需要体验的话可以看看【go:bill", "m")
+	if strings.Contains(rep2.Content, "go:") || strings.Contains(rep2.Content, "【") {
+		t.Fatalf("未闭合标记漏进正文: %q", rep2.Content)
+	}
+	if !strings.HasSuffix(rep2.Content, "看看") {
+		t.Fatalf("未闭合分支把正文删多了: %q", rep2.Content)
+	}
+
+	// ③ 未知 key：照旧剥干净（按钮为空是可接受结果，漏英文不是）
+	rep3 := e.postProcess("企业用的话能查权限。【go:enterprise-features】", "m")
+	if strings.Contains(rep3.Content, "enterprise-features") {
+		t.Fatalf("未映射 key 漏进正文: %q", rep3.Content)
+	}
+	if len(rep3.Actions) != 0 {
+		t.Fatalf("未映射 key 不该凭空造按钮: %+v", rep3.Actions)
+	}
+}
+
+// TestGoMarkerMenuOffersButtonKeys ★ 074x：送给模型的跳转菜单必须是 feature_links 的 key。
+// 旧口径把 kb_entries 的 key 当菜单（生产实测 30 个知识 key 只有 1 个有按钮映射），
+// 模型「照菜单选」必然选中渲染不出来的东西 ⇒ 界面只剩一串英文。
+// 判据四腿：菜单里有全部按钮 key / 全链路（含 system 与 user）里不许出现纯知识 key /
+// 模型按菜单给的标记真能变出按钮 / 历史消息里的残留标记不再回放进 prompt。
+func TestGoMarkerMenuOffersButtonKeys(t *testing.T) {
+	var bodyMu sync.Mutex
+	var lastBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body) // 单次 Read 会拿到半截 body，负向断言就成了恒真
+		bodyMu.Lock()
+		lastBody = string(b)
+		bodyMu.Unlock()
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"epub 能翻。\n【go:tickets】"},"finish_reason":"stop"}],"usage":{"completion_tokens":20}}`))
+	}))
+	// bodyOf 取最近一次上游请求体（httptest handler 在别的 goroutine 里写，必须带锁读）
+	bodyOf := func() string {
+		bodyMu.Lock()
+		defer bodyMu.Unlock()
+		return lastBody
+	}
+	defer srv.Close()
+
+	e := newTestEngine(t)
+	// 直接挂上游 client（configs 留空 ⇒ ensureLLM 不会用管理台配置换链）；
+	// 本用例只验 prompt 组装与出站标记处理，热加载由 TestLLMHotReloadSecondEditPickedUp 负责
+	e.llm = llm.New([]llm.Provider{{Name: "main", BaseURL: srv.URL, APIKey: "k", Model: "m"}}, 5)
+
+	rep := e.llmReply(context.Background(), "epub 支持吗", nil)
+	if rep.Source != "llm" {
+		t.Fatalf("应走 LLM: %+v", rep)
+	}
+	// ① 菜单里有全部按钮 key
+	for _, k := range []string{"tickets", "pricing", "billing"} {
+		if !strings.Contains(bodyOf(), k) {
+			t.Fatalf("跳转菜单缺按钮 key %s", k)
+		}
+	}
+	// ② 纯知识条目的 key 不再进菜单（kb-epub 是本轮的负面对照：它是知识 key，不是按钮 key）
+	if strings.Contains(bodyOf(), "kb-epub") {
+		t.Fatalf("知识 key 仍在跳转菜单里（旧口径没换干净）")
+	}
+	// ③ 按菜单选出来的 key 真变出按钮，且正文里没有控制序列
+	if len(rep.Actions) != 1 || rep.Actions[0].Key != "tickets" {
+		t.Fatalf("标记未映射成按钮: %+v", rep.Actions)
+	}
+	if strings.Contains(rep.Content, "go:") {
+		t.Fatalf("标记漏进正文: %q", rep.Content)
+	}
+
+	// ④ 历史回放同样要洗：线上存量消息里已躺着修复前漏出的控制序列，
+	//    原样喂回模型＝把自家漏出来的格式当范本学（老会话越聊越歪的那条路径）。
+	//    ⚠️ 负向判据只能钉**那条历史消息里的具体标记**，不能钉 "go:" 字样——
+	//    prompt 自己的菜单说明里就带着「【go:key1,key2】」这个模板，恒红。
+	legacy := []store.Row{{"role": "assistant", "content": "企业用的话【go:enterprise-features】能查权限管理。"}}
+	e.llmReply(context.Background(), "那审计呢", legacy)
+	if strings.Contains(bodyOf(), "【go:enterprise-features】") {
+		t.Fatalf("历史里的漏标控制序列被原样回放进 prompt:\n%s", bodyOf())
+	}
+	if !strings.Contains(bodyOf(), "能查权限管理") {
+		t.Fatalf("洗标记不该把历史正文一起删掉:\n%s", bodyOf())
+	}
+}
+
+// TestLLMTruncatedSurfacesInUsage ★ 074x：finish_reason=length 必须被读到并记 WARN。
+// 「答案能出来」不等于「答案答完了」——旧代码把上游收尾原因直接丢掉，
+// 半句话回复在日志里一片绿，只能靠用户截图发现。
+func TestLLMTruncatedSurfacesInUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"需要体验的话"},"finish_reason":"length"}],"usage":{"completion_tokens":900}}`))
+	}))
+	defer srv.Close()
+	e := newTestEngine(t)
+	e.llm = llm.New([]llm.Provider{{Name: "main", BaseURL: srv.URL, APIKey: "k", Model: "m"}}, 5)
+	if _, _, u, err := e.LLMTest(context.Background()); err != nil || !u.Truncated {
+		t.Fatalf("截断未被识别: truncated=%v err=%v", u.Truncated, err)
 	}
 }
 
