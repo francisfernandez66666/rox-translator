@@ -95,9 +95,13 @@ func (s *Server) runPackScrapeOnce() error {
 	if err != nil {
 		return err
 	}
-	// 自动审批模式：采集即落正式库，采集后失效 KB 缓存 + 异步重建向量索引
+	// 自动审批模式：采集即落正式库。
+	// ★ 增量重建逻辑：只有当本轮真的产生了新条目时，才触发向量索引重建与缓存失效。
+	//   此举避免了在「高占用暂停」或「无新数据」的轮次中反复进行全量 Embedding，大幅降低平台成本。
 	s.invKB()
-	s.rebuildIndexAsync()
+	if done > 0 {
+		s.rebuildIndexAsync()
+	}
 	// 自动审批模式下新增数据直接落正式库（待审数基本不变），告知超管可去「已通过」复核/驳回/改正
 	if done > 0 {
 		if pending := s.Store.ScrapeStagedSummary().PendingEntries; pending > 0 {
