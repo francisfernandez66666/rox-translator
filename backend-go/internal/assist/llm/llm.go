@@ -69,8 +69,56 @@ func New(providers []Provider, timeoutSec int) *Client {
 // Enabled 是否有可用 provider
 func (c *Client) Enabled() bool { return c != nil && len(c.providers) > 0 }
 
+// ProviderBaseURLs 按降级链顺序回显各候选的 **base_url 主机部分**（★ 2026-09-29 排障需要）。
+// 纪律：只回 host，绝不回 scheme+path 之外的完整地址、更不回 API Key——
+// 这条的用途是「面板上那句报错到底对应哪个上游」，一条 host 就够了。
+// client 为空（未接入）时回 nil，调用方按「未接入」处理。
+func (c *Client) ProviderBaseURLs() []string {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]string, 0, len(c.providers))
+	for _, p := range c.providers {
+		out = append(out, hostOf(p.BaseURL))
+	}
+	return out
+}
+
+// hostOf 取 URL 的主机名（去 scheme、去 path、去端口），解析不出来时原样截断返回。
+func hostOf(raw string) string {
+	s := raw
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+	}
+	if i := strings.IndexAny(s, "/?#"); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.LastIndex(s, "@"); i >= 0 { // 防 userinfo 混进日志
+		s = s[i+1:]
+	}
+	if len(s) > 80 {
+		s = s[:80]
+	}
+	return s
+}
+
 // Chat 走降级链生成回复。返回正文、实际模型名、用量、错误。
 func (c *Client) Chat(ctx context.Context, temperature float64, maxTokens int, messages []Message) (string, string, Usage, error) {
+	return c.chain(ctx, false, temperature, maxTokens, messages)
+}
+
+// ChatForce 与 Chat 同一条降级链，唯一差别是**本次不等冷却**（★ 2026-09-29 生产首配踩坑后新增）。
+// 只给管理台「测试连通」这类**人工显式重试**用：连续失败 3 次会把候选打进 5 分钟冷却，
+// 于是运维刚把配置改对、按下按钮却只看到一句「全在冷却中」——既没验证新配置，又让人以为还是老问题。
+// 熔断本身不动：成功照常 markOK 清零计数（改对了就立刻恢复），失败照常 markFail（不因为"强制"就免罪）。
+func (c *Client) ChatForce(ctx context.Context, temperature float64, maxTokens int, messages []Message) (string, string, Usage, error) {
+	return c.chain(ctx, true, temperature, maxTokens, messages)
+}
+
+// chain 降级链本体；ignoreCooldown=true 时本次跳过冷却判定（见 ChatForce）
+func (c *Client) chain(ctx context.Context, ignoreCooldown bool, temperature float64, maxTokens int, messages []Message) (string, string, Usage, error) {
 	if !c.Enabled() {
 		return "", "", Usage{}, fmt.Errorf("no llm provider")
 	}
@@ -89,7 +137,7 @@ func (c *Client) Chat(ctx context.Context, temperature float64, maxTokens int, m
 		cool := c.coolUntil[i].After(now)
 		p := c.providers[i]
 		c.mu.RUnlock()
-		if cool {
+		if cool && !ignoreCooldown {
 			// ★ 改造 1A：接主仓 observability（slog JSON + trace_id），不再散落 log.Printf
 			observability.Warn(ctx, "assist.llm provider 冷却中，跳过",
 				"provider_index", i, "model", p.Model)
@@ -119,7 +167,11 @@ func (c *Client) Chat(ctx context.Context, temperature float64, maxTokens int, m
 		c.markFail(ctx, i)
 	}
 	if lastErr == nil {
-		lastErr = fmt.Errorf("all providers cooling down")
+		// 走到这里＝每个候选都在冷却窗口里、一个都没真发请求。文案要给运维下一步动作，
+		// 而且**不许把内部英文状态词送进管理台**（★ 2026-09-29 生产首配就撞在这句上：
+		// 前三次 404 把两个候选打进 5 分钟冷却，第四次点「测试连通」只回 all providers cooling down，
+		// 看着像"配置还是不通"，实际是新配置压根没被试过）。
+		lastErr = fmt.Errorf("候选模型都在冷却中（连续失败会冷却 5 分钟，本次未发起请求）——请等一分钟后再点「测试连通」")
 	}
 	return "", "", Usage{}, lastErr
 }

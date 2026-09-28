@@ -42,9 +42,16 @@ type Engine struct {
 
 	// ★ R0.4 LLM 热加载：记录构建 client 时的配置指纹，llmReply 前比对 configs
 	// 中 LLM 四项（base_url/api_key/model/model_backup），变更则重建。
-	llmFP    string
-	llmMu    sync.Mutex
-	llmBuilt bool
+	// ★ llmFromEnv 必须在 New 里一次性定死「初始 client 是不是 env 给的」——
+	//   这个判据**不能用 client.Enabled()**（2026-09-29 生产实锤的自伤形态）：
+	//   管理台第一次保存后，ensureLLM 会按 configs 建出 client 并赋给同一个 e.llm，
+	//   此后 Enabled() 永远为真，于是「env 接管、不回读 configs」那条短路把**管理台自己的产物**
+	//   当成了 env 产物 ⇒ 第二次及以后改配置全都不会重载，日志里只会出现一次「热加载生效」，
+	//   运维改了 base_url 并按「保存即热加载」的口径去点测试，实际打的一直是旧地址。
+	llmFP      string
+	llmMu      sync.Mutex
+	llmBuilt   bool
+	llmFromEnv bool
 	// ★ R0.1 同义词归一表缓存（configs.synonyms 指纹失效重载）
 	synFP     string
 	synGroups [][]string
@@ -60,8 +67,12 @@ type Engine struct {
 }
 
 // New 构建引擎
+// ★ 构造时就把「初始 client 是否来自 env」定死（main 在 env 三项齐备时才建 providers，
+//
+//	未配时传的是空 client）——此后 e.llm 会被管理台配置重建，Enabled() 不再能区分两者，
+//	所以这个判断只能做一次、存在字段里（详见 Engine.llmFromEnv 注释里的生产事故形态）。
 func New(db *store.DB, client *llm.Client) *Engine {
-	return &Engine{db: db, llm: client}
+	return &Engine{db: db, llm: client, llmFromEnv: client.Enabled()}
 }
 
 // ============================================================
@@ -81,13 +92,19 @@ func (e *Engine) llmFingerprint() string {
 }
 
 // ensureLLM 返回当前应使用的 LLM client；configs LLM 配置变更时重建。
-// env 显式接入（初始 providers 非空）时不被 configs 覆盖——生产 secrets.env 优先。
+// env 显式接入（**构造时** providers 非空）时不被 configs 覆盖——生产 secrets.env 优先。
+// ★ 2026-09-29 修：这条短路改问 e.llmFromEnv（构造期定死），不再问 e.llm.Enabled()——
+//
+//	后者在管理台第一次保存后恒为真，会把「管理台自己建出来的 client」误判成 env 接管，
+//	于是第二次及以后的在线改配置永远不会被读到（现象＝日志只有一次「热加载生效」，
+//	运维照着「保存即热加载」改完 base_url 去点测试，打的一直是旧地址）。
+//
 // ★ 改造 1A：签名加 ctx，热加载日志经主仓 observability 输出（slog JSON + trace_id）。
 func (e *Engine) ensureLLM(ctx context.Context) *llm.Client {
 	e.llmMu.Lock()
 	defer e.llmMu.Unlock()
 	// env 已显式接入：固定使用初始 client，不回读 configs（避免管理台误配导致生产断链）
-	if e.llm != nil && e.llm.Enabled() {
+	if e.llmFromEnv {
 		return e.llm
 	}
 	fp := e.llmFingerprint()
@@ -878,20 +895,32 @@ func (e *Engine) LLMMode(ctx context.Context) string {
 	if client == nil || !client.Enabled() {
 		return ""
 	}
-	if e.llmBuilt && e.llmFP != "" {
-		return "db"
+	if e.llmFromEnv {
+		return "env" // 构造期就是 env 接管，configs 里的 LLM 四项不参与运行
 	}
-	return "env"
+	return "db"
 }
 
 // LLMTest 测试连通（R0.4c）：用当前生效配置发 1-token 请求
+// ★ 走 ChatForce（不等冷却）：这是运维按下的人工重试，必须真把**刚改的配置**打出去一次；
+//
+//	沿用 Chat 会让前三次失败攒出的 5 分钟冷却把第四次变成「全在冷却中」，配置改没改对都测不出来（2026-09-29 生产首配实锤）。
 func (e *Engine) LLMTest(ctx context.Context) (string, string, llm.Usage, error) {
 	client := e.ensureLLM(ctx)
 	if client == nil || !client.Enabled() {
 		return "", "", llm.Usage{}, fmt.Errorf("LLM 未接入（规则模式）——请在下方填入 Base URL / API Key / 模型名")
 	}
+	// ★ 把「这次究竟往哪个上游打」记一行（只记 host，不记 Key、不记完整路径）：
+	//   2026-09-29 那次面板只回「http 404: Not Found」，排查要在「填错地址 / 配置没重载 / 上游真挂了」
+	//   三者之间分辨，全靠去日志里数「热加载生效」出现过几次。这行读数把那条路缩短成一次 grep。
+	hosts := client.ProviderBaseURLs()
+	observability.Info(ctx, "assist.engine 测试连通发起", "providers", len(hosts), "hosts", strings.Join(hosts, ","))
 	msgs := []llm.Message{{Role: "user", Content: "回复「OK」两个字"}}
-	return client.Chat(ctx, 0, 8, msgs)
+	text, modelUsed, usage, err := client.ChatForce(ctx, 0, 8, msgs)
+	if err != nil {
+		observability.Warn(ctx, "assist.engine 测试连通失败", "hosts", strings.Join(hosts, ","), "err", err)
+	}
+	return text, modelUsed, usage, err
 }
 
 // allKBKeys 全部知识 key（供 LLM 动作标记）
