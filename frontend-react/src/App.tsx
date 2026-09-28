@@ -31,6 +31,8 @@ applyTheme()
 import { BrandingProvider, useBranding } from './branding'
 import ErrorBoundary from './components/ErrorBoundary'
 import { roleLevelSafe } from '@/lib/ui'
+// ★ 〇-Z：站点门面标记（演示站访客打开 `/` 直接进登录注册页，判据由后端首页注入）
+import { landingEnabledForGuest } from '@/lib/siteFlags'
 import { intlLocale } from './lib/format'
 
 // 跨域登录跳转：品牌子域登录后通过 /?sso_code= 跳转回来（★ E3：一次性 code 换取 token，
@@ -449,6 +451,12 @@ function Root() {
     }
     // ★ S5 门面：未登录访问 `/` 出官网落地页；登录/注册走 /login、/register
     if (path === '/') {
+      // ★ 〇-Z（演示站不进主页）：后端在首页 HTML 里直出 window.__SITE_FLAGS__={"landing":false} 时，
+      //   访客打开 `/` 直接重定向到登录注册页。用 <Navigate> 而非原地渲染 <Login>——
+      //   地址栏跟着变成 /login（用户口径），replace 不压历史栈，否则后退会再次撞 `/` 形成来回跳。
+      //   射程只有 `/`：/pricing、/compare 仍对访客可达（体验机也要让人看到价），
+      //   已登录用户根本不进这个分支（上面 `!user` 已分流），所以这一档只影响未登录访客。
+      if (!landingEnabledForGuest()) return <Navigate to="/login" replace />
       return (
         <Suspense fallback={<PageLoading />}>
           <Landing />

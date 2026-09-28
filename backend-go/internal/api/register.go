@@ -50,19 +50,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 注册频率护栏：同 IP 24h 内注册次数上限 + 最小间隔（防脚本批量薅试用额度）
+	// ★ F-81（2026-09-28）：这两档改走 configIntTier，与设备档／平台日预算档同口径
+	//   （环境变量 > system_config 同名小写键 > 代码默认）。行为等价：env 未配时读的还是原来那两个
+	//   system_config 键、默认值也还是 3 次／60 秒；差别只在于**现在可以不发版临时调档**。
+	//   最小间隔那一档允许配 0（0＝不设间隔，run_uat 与本地快跑就是这么配的），故 allowZero 传 true。
 	ip := clientIP(r)
-	dailyLimit := 3
-	if v, _ := s.Store.GetConfig("register_ip_daily_limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			dailyLimit = n
-		}
-	}
-	minInterval := 60
-	if v, _ := s.Store.GetConfig("register_ip_min_interval_sec"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			minInterval = n
-		}
-	}
+	dailyLimit := configIntTier(s.Store, "REGISTER_IP_DAILY", "register_ip_daily_limit", regIPDailyDefault, false)
+	minInterval := configIntTier(s.Store, "REGISTER_IP_MIN_INTERVAL", "register_ip_min_interval_sec", regIPMinIntervalDef, true)
 	if ok, wait := s.regGuard.allow(ip, dailyLimit, minInterval); !ok {
 		// ★ F-47（批 I-7）：改走统一错误出口＝429 + code RATE_LIMITED + Retry-After 头 + retry_after 字段。
 		// 文案保留「请 N 秒后再试」原样（i18n patternsEN 已有该变体，仍可翻）；秒数同时进字段，
@@ -92,6 +86,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		RoleChoice  string `json:"role_choice"`   // 角色选择（兼容旧客户端）：admin=我是管理员(建企业) / user=我是普通用户(邀请码加入)
 		Type        string `json:"type"`          // 注册类型：personal=个人用户 / enterprise=企业用户（默认）
 		Ref         string `json:"ref"`           // 个人邀请码（可选，邀请裂变：?ref=<个人码> 链接携带）
+		DeviceID    string `json:"device_id"`     // ★ F-81（2026-09-28）：浏览器设备号（与免登录试用 lib/trialDevice.ts 同一份事实，供设备档防薅记账；可空，见下方 regDevice 的取值口径）
 		BrandName   string `json:"brand_name"`    // 品牌中文名（企业注册引导填写，种入企业知识库固定用法）
 		BrandNameEn string `json:"brand_name_en"` // 品牌英文名（覆盖所有非 zh/zh_hant 目标语固定用法）
 		BrandNames  string `json:"brand_names"`   // 品牌多语言名 JSON（{"zh":"极石","en":"ROX"}，可选；含其它语言名时优先）
@@ -248,6 +243,46 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// ★ F-81（2026-09-28 用户令「注册免费账号也是和免费体验试用一样有防薅限制」）：
+	//   本次要**新建免费账号（自带体验额度）**时，先过设备档与平台日预算档。
+	// 位置收在这里（邀请码尚未被标记消耗之前），三条理由：
+	//   ① 判据要落在「会不会新建租户」这个分支上——受邀加入已有企业（joinWithInvite）与专属域名
+	//      注册（dedicatedTid>0）都不发免费额度，用企业自己发的**一次性邀请码**做闸门，
+	//      把它们算进平台名额会把客户自己的员工入职打成「今日注册名额已满」（50 人同 NAT 出口更是要排三天队）；
+	//   ② 放在 MarkInviteCodeUsed 之前，拒绝时不会连带烧掉一个有效邀请码（烧码＝客户资产损失）；
+	//   ③ 设备号取不到就当没有，**不返 400**：这是公开注册接口的对外契约，老缓存包／脚本客户端／
+	//      管理台代客注册都可能不带这个字段（F-64、F-79 两批"契约改动引发现网故障"的同形教训）。
+	//      不带设备号照样吃 IP 档（默认 3 次/24h，比设备档更紧）＋邮箱验证＋人机验证＋一次性邮箱黑名单。
+	regDevice := ""
+	if id := strings.TrimSpace(req.DeviceID); trialDeviceIDRe.MatchString(id) {
+		regDevice = id // 字符集与免登录试用同一道白名单：这个串直接当限流表 key 片段，脏值进来只会污染账本
+	}
+	// regTicket 是本笔在设备档／平台档上占住的格子。声明放在 if 之外：
+	// 后面「额度真发出去了」那一刻要调它 markSpent()，而 defer release() 在这里就挂上。
+	var regTicket *freeAccountTicket
+	if dedicatedTid == 0 && !joinWithInvite {
+		devLimit := configIntTier(s.Store, "REGISTER_DEVICE_DAILY", "register_device_daily_limit", regDeviceDailyDefault, false)
+		globalLimit := configIntTier(s.Store, "REGISTER_GLOBAL_DAILY", "register_global_daily_limit", regGlobalDailyDefault, false)
+		// ★ 占格子而不是「看一眼够不够」：判据收在带条件的单条 UPDATE 里，
+		//   并发请求不能同时读到「还差一格」双双放行（C25 在邀请奖励上踩过的同一竞态形态）。
+		tk, wait, reason := s.regGuard.reserveFreeAccount(regDevice, devLimit, globalLimit)
+		if tk == nil {
+			if reason == "global" {
+				// 平台日名额被打满是市场费用异常信号（刷量或推广爆量），当天就该让运维看见，而不是月底对账（同 trial_budget 口径）
+				s.registerBudgetAlert(wait)
+				s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "今日免费注册名额已用完，请明天再试").WithRetryAfter(wait))
+				return
+			}
+			s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "该设备今天注册的账号已达上限，请明天再试或登录已有账号").WithRetryAfter(wait).
+				WithDetails(map[string]interface{}{"reason": reason}))
+			return
+		}
+		regTicket = tk
+		// 兜底退格：从这一行到 markSpent() 之间的任何一条 return（校验失败、企业编码撞码、建租户出错）
+		// 都不该把用户当日额度扣掉——「系统没做成」的那几次算在用户头上，是防薅机制最容易被投诉的一种坏法。
+		defer regTicket.release()
+	}
+
 	// 专属域名：自动归入对应租户、强制普通用户；但企业邀请码仍必填，且须绑定该专属租户
 	if dedicatedTid > 0 {
 		invCode := strings.TrimSpace(req.Invite)
@@ -353,6 +388,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				_ = s.Store.Charge(inviteTenantID, trialTokens) // 台账失败兜底旧通道
 			}
 		}
+		// ★ F-81 坐实点：额度已经真发出去了，这一格从此不再退（defer 的 release 变空转）。
+		// 为什么在这里而不是等 HTTP 200：被薅的是额度——账号写入那一步若失败而租户与额度已建好，
+		// 这一笔照样要算数，否则「每次失败就重新领一份」正是刷号脚本的形态。
+		regTicket.markSpent()
 	} else {
 		// 受邀加入已有租户：返回被加入租户信息
 		if t, err := s.Ten.GetByID(inviteTenantID); err == nil {
@@ -552,10 +591,28 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, regResp)
 }
 
-// handleGrantTrial 超管向租户发放/重新发放体验额度（任务2.4：放开幂等，改为叠加发放）：
-//   - ★ 重新发放语义：每次调用都叠加发放一份全新体验额度（独立到期日），
-//     已开通/已订阅租户也可再领（适用于体验用完/过期的老租户再给一次体验）
-//   - 发放内容：体验 token（free_trial_tokens）+ 句数镜像（token÷折算率），并置 package_code="trial"（仅当前为空时）
+// registerBudgetAlert 平台每日免费注册名额触顶告警（★ F-81，与 trial.go 的 trialBudgetAlert 同口径）。
+// 触发即说明今天的免费额度发放异常（刷量或推广爆量），值得让运维当天看到并去核 rate_limits 的 reg_day 账。
+// 去重靠 Store.CreateAlert 的「同租户+同类型已有 open 告警即跳过」语义（alerts 表内建），
+// 故这里不自建哨兵窗口——自己造会同时面对「告警已解决却仍压在哨兵里不发」和
+// 「哨兵过期但告警还开着」两种互相矛盾的状态，交给数据层那一份事实更省事。
+// 参数 wait: 被拒请求拿到的建议等待秒数（≈窗口剩余），写进告警正文方便判断还要不要人工提额。
+func (s *Server) registerBudgetAlert(wait int) {
+	if s.Store == nil {
+		return
+	}
+	cnt := int64(-1)
+	if st, err := s.Store.RateLoad(regScopeGlobal, regGlobalKey); err == nil {
+		cnt = st.Count
+	}
+	_ = s.Store.CreateAlert(0, "warning", "register_budget",
+		"今日免费注册名额已打满（已累计 "+strconv.FormatInt(cnt, 10)+" 个，约 "+strconv.Itoa(wait)+" 秒后窗口重置），如非推广爆量请排查刷号")
+}
+
+// handleGrantTrial 超管向租户发放/重新发放体验额度（任务2.4：放开幂等，改为叠加发放）：//   - ★ 重新发放语义：每次调用都叠加发放一份全新体验额度（独立到期日），
+//
+//	  已开通/已订阅租户也可再领（适用于体验用完/过期的老租户再给一次体验）
+//	- 发放内容：体验 token（free_trial_tokens）+ 句数镜像（token÷折算率），并置 package_code="trial"（仅当前为空时）
 //
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 tenant_id，需 super_admin）。
 // 返回: success=true 时携带发放后的句数余额。

@@ -292,6 +292,95 @@ func TestPackageUpgrade(t *testing.T) {
 	}
 }
 
+// TestPackageUpgradeExhausted ★ F-80（2026-09-28 〇-Z）：旧包 token 全部耗尽后仍必须能升级。
+//
+//	线上实测形态（演示站 langcross_demo 租户 1）：basic_m 那笔已支付订单发放 1,200,000 token，
+//	台账 quota_grants(kind='plan',source='order',ref_id=该订单) 的 SUM("left") = 0，而订阅有效期
+//	要到 10-17 才结束。旧实现在 ComputeUpgradeCredit 的 ratio<=0 这一支直接报
+//	「当前套餐已无剩余价值，无法抵扣升级」，handler 包成 409 → 客户点「升级到 专业·年」就是死路：
+//	**越是把套餐用满、越想加钱的客户，越被系统挡在门口**。
+//	本用例钉住修好的口径：剩余 0 ⇒ 抵扣 0、按全价出升级单、支付后新包即时生效，
+//	并且**不多发一分额度**（旧包没有剩余可转移，台账里不该出现 order_carry 转入行）。
+//
+//	反向对照（防「把校验整段放宽」这种过度修复）：
+//	  · 部分消耗仍按比例抵扣 → 见同文件 TestPackageUpgrade 第 ③④⑤ 步，本用例不重复；
+//	  · 无生效套餐／同包／非付费目标／目标价不高于当前包 仍须拒绝 → 见 TestPackageUpgradeRejections。
+func TestPackageUpgradeExhausted(t *testing.T) {
+	s := newTestStoreWithTenants(t)
+	if err := s.EnsureBalance(1); err != nil {
+		t.Fatalf("EnsureBalance 失败: %v", err)
+	}
+	oldPkg, _ := s.CreatePackage(&Package{Code: "ex_old", Name: "基础·月", PType: PackagePaid, Sentences: 500, PriceMoney: 99, DurationDays: 30})
+	newPkg, _ := s.CreatePackage(&Package{Code: "ex_new", Name: "专业·年", PType: PackagePaid, Sentences: 2000, PriceMoney: 2999, DurationDays: 365})
+
+	// ① 订阅旧包并**把 token 全部用光**（复现演示站读数：台账 left=0 但订阅未过期）
+	o1, err := s.CreatePackageOrder(1, oldPkg, 1, "mock")
+	if err != nil {
+		t.Fatalf("CreatePackageOrder 失败: %v", err)
+	}
+	if err := s.MarkOrderPaid(o1.ID, 1); err != nil {
+		t.Fatalf("MarkOrderPaid 旧包失败: %v", err)
+	}
+	oldTokens := s.PackageTokenAmount(oldPkg)
+	if err := s.DeductWithGrants(1, oldTokens); err != nil {
+		t.Fatalf("耗尽旧包额度失败: %v", err)
+	}
+	if g := s.SumActiveGrants(1); g != 0 {
+		t.Fatalf("前置读数：旧包额度应已耗尽（剩余 0），实际剩余 %d", g)
+	}
+	// 订阅期仍在有效期内（演示站就是这一形态：钱花完了、天还没到）
+	if perms, _ := s.GetTenantPerms(1); perms.PackageCode != "ex_old" {
+		t.Fatalf("前置读数：当前生效包应为 ex_old，实际 %q", perms.PackageCode)
+	}
+
+	// ② 核心判据：额度耗尽**不得**再成为拒绝升级的理由
+	credit, err := s.ComputeUpgradeCredit(1, newPkg)
+	if err != nil {
+		t.Fatalf("F-80 回归：旧包额度耗尽应可按全价升级，实际被拒：%v", err)
+	}
+	if credit.CreditMoney != 0 {
+		t.Fatalf("额度耗尽时抵扣金额应为 0，实际 %.2f", credit.CreditMoney)
+	}
+	if credit.RemainTokens != 0 {
+		t.Fatalf("额度耗尽时剩余 token 应为 0，实际 %d", credit.RemainTokens)
+	}
+	if credit.OldOrderID != o1.ID {
+		t.Fatalf("升级来源订单仍应关联旧订单 %d，实际 %d", o1.ID, credit.OldOrderID)
+	}
+
+	// ③ 抵扣 0 ⇒ 应付就是全价（本测试租户 created_at 为空 ⇒ 不触发首月半价，取挂牌价）
+	up, err := s.CreateUpgradeOrder(1, newPkg, credit, 1, "mock")
+	if err != nil {
+		t.Fatalf("CreateUpgradeOrder 失败: %v", err)
+	}
+	if up.AmountMoney != newPkg.PriceMoney {
+		t.Fatalf("全价升级应付应为 %.2f，实际 %.2f", newPkg.PriceMoney, up.AmountMoney)
+	}
+	if up.CreditMoney != 0 {
+		t.Fatalf("升级单记录的抵扣金额应为 0，实际 %.2f", up.CreditMoney)
+	}
+
+	// ④ 支付确认后：新包即时生效，且额度只进新包那份（无旧包转入）
+	if err := s.MarkOrderPaid(up.ID, 1); err != nil {
+		t.Fatalf("MarkOrderPaid 升级失败: %v", err)
+	}
+	perms2, _ := s.GetTenantPerms(1)
+	if perms2.PackageCode != "ex_new" {
+		t.Fatalf("升级后包编码应为 ex_new，实际 %q", perms2.PackageCode)
+	}
+	newTokens := s.PackageTokenAmount(newPkg)
+	if g := s.SumActiveGrants(1); g != newTokens {
+		t.Fatalf("升级后台账应恰为新包 %d（旧包已耗尽、无可转移），实际 %d", newTokens, g)
+	}
+	var carryRows int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM quota_grants WHERE tenant_id=1 AND source='order_carry'").Scan(&carryRows); err != nil {
+		t.Fatalf("统计转入台账失败: %v", err)
+	}
+	if carryRows != 0 {
+		t.Fatalf("旧包剩余为 0 时不该写出 order_carry 转入行（会凭空多发额度），实际 %d 行", carryRows)
+	}
+}
+
 // TestPackageUpgradeRejections 升级边界：无订阅/相同包/非付费目标应拒绝。
 func TestPackageUpgradeRejections(t *testing.T) {
 	s := newTestStoreWithTenants(t)

@@ -214,6 +214,93 @@ func TestAPICnMessageLiteralsCovered(t *testing.T) {
 	}
 }
 
+// hanMsgIdents 找出 src 里「被赋过中文**字面量**的变量名」。
+// 只认整行单行字面量赋值（`x := "中文"` / `x = "中文"`），与词条覆盖棘轮同一种粗粒度口径。
+func hanMsgIdents(src string) map[string]bool {
+	assign := regexp.MustCompile(`(?m)^\s*(\w+)\s*(?::=|=)\s*("(?:[^"\\]|\\.)*")\s*$`)
+	out := map[string]bool{}
+	for _, m := range assign.FindAllStringSubmatch(src, -1) {
+		s, err := strconv.Unquote(m[2])
+		if err == nil && containsHan(s) {
+			out[m[1]] = true
+		}
+	}
+	return out
+}
+
+// TestAPICnMessageEscapePattern 词条覆盖的**盲区锁**（★ 2026-09-28 〇-Z）：
+//
+//	上一条棘轮只认 `"message": "中文"` / `"error": "中文"` / `apierrors.New(code, "中文")`
+//	三种**字面量在位**的写法。一旦写成 `msg := "中文"; New(code, msg)`，字面量就落在正则射程外，
+//	闸门对着一个"消息来自变量"的调用无从判起，于是**静默放行**——英文访客看到整句中文，
+//	而所有 i18n 闸门全绿。本批实跑就撞上两次：trial.go 的三条「试用已用完」与
+//	tickets.go 批 I-10 加的「系统繁忙，工单取消未成功，请稍候重试」（后者漏词条至今没人发现）。
+//
+//	本锁与上一条**配对**才闭环：这条负责「凡中文经变量传给 New 一律点名」，上一条负责
+//	「在位字面量必须翻得出」。两句合起来才等于「面向人的中文提示没有第三条逃路」。
+//
+// 判据三条（缺一条就是空锁）：
+//
+//	① 反证：合成源里那种写法必须被点名（抓不到＝锁空转，改判据时必须先跑这一条）；
+//	② 反向对照：合成源里**合规**写法（字面量在位）不得被点名，防止把上一条棘轮的正确形态判红；
+//	③ 实扫 internal/api 全部非测试源码必须 0 处（现存两处已随批改成在位字面量并补词条）。
+func TestAPICnMessageEscapePattern(t *testing.T) {
+	// ① 反证——中文先赋变量、再当消息传给 New，必须抓到
+	bad := "func h() {\n\tmsg := \"操作太快了，请稍后再试\"\n\tapierrors.New(apierrors.ErrRateLimited, msg)\n}\n"
+	if got := len(apiEscapeHitsIn(bad)); got != 1 {
+		t.Fatalf("盲区锁反证失败：合成源应点名 1 处，实际 %d 处（判据退化＝恒空假绿）", got)
+	}
+	// ② 反向对照——字面量在位（上一条棘轮的射程）不该被本锁点名
+	good := "func h() {\n\tapierrors.New(apierrors.ErrRateLimited, \"操作太快了，请稍后再试\")\n}\n"
+	if got := apiEscapeHitsIn(good); len(got) != 0 {
+		t.Fatalf("盲区锁误伤合规写法：%v（在位字面量应交给上一条棘轮判词条）", got)
+	}
+	// ②b 反向对照——消息来自 error 文本（非中文字面量赋值）也不该点名
+	dyn := "func h() {\n\tmsg := err.Error()\n\tapierrors.New(apierrors.ErrInternal, msg)\n}\n"
+	if got := apiEscapeHitsIn(dyn); len(got) != 0 {
+		t.Fatalf("盲区锁误伤动态消息：%v（底层原文透出属预期形态）", got)
+	}
+	// ③ 实扫全包
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, hit := range apiEscapeHitsIn(string(src)) {
+			total++
+			t.Errorf("%s: 中文提示经变量 %s 传给 apierrors.New，绕开了词条覆盖棘轮 —— 请把字面量直接写在实参位并跑 scripts/gen_i18n_catalog.py 补录", f, hit)
+		}
+	}
+	if total > 0 {
+		t.Fatalf("共 %d 处「变量传参逃词条」待收口", total)
+	}
+}
+
+// apiEscapeHitsIn 返回单个源文件里「被赋过中文字面量的变量」又被用作 apierrors.New 消息的标识符。
+// 抽成纯函数是 ①② 反证能离线跑起来的前提（不必往仓库里塞一个故意写错的文件）。
+func apiEscapeHitsIn(src string) []string {
+	hids := hanMsgIdents(src)
+	if len(hids) == 0 {
+		return nil
+	}
+	newID := regexp.MustCompile(`apierrors\.New\([^,()]+,\s*(\w+)\s*\)`)
+	var hits []string
+	for _, m := range newID.FindAllStringSubmatch(src, -1) {
+		if hids[m[1]] {
+			hits = append(hits, m[1])
+		}
+	}
+	return hits
+}
+
 // containsHan 判断字符串是否含 CJK 基本区汉字。
 func containsHan(s string) bool {
 	for _, r := range s {

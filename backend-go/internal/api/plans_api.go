@@ -429,8 +429,14 @@ func (s *Server) handlePackageUpgrade(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.Store.LogAudit(tid, u.ID, "package_upgrade", "packages", newPkg.Code+
-		fmt.Sprintf("（抵扣 ¥%.2f）", credit.CreditMoney))
+	// ★ F-80（2026-09-28 〇-Z）：抵扣为 0 是「旧包已用尽、按全价升级」的正常成交形态，
+	//   审计文案不能写成「抵扣 ¥0.00」——运维扫这条流水会以为抵扣算错了。
+	//   对账与客服只需要一句话就能分清两种单，故在此分流。
+	upgradeNote := fmt.Sprintf("（抵扣 ¥%.2f）", credit.CreditMoney)
+	if credit.CreditMoney <= 0 {
+		upgradeNote = "（旧包额度已用尽，按全价升级）"
+	}
+	s.Store.LogAudit(tid, u.ID, "package_upgrade", "packages", newPkg.Code+upgradeNote)
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "order": s.orderViewJSON(o), "credit_money": credit.CreditMoney,
 	})

@@ -1385,11 +1385,14 @@ func (s *Server) handleTicketCancel(w http.ResponseWriter, r *http.Request) {
 		msg := err.Error()
 		// ★ 用户友好映射：底层并发锁冲突对用户表现为「系统繁忙」
 		if strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked") {
-			msg = "系统繁忙，工单取消未成功，请稍候重试"
 			// ★ F-64②（批 I-10）：原 200 承载失败 → 503：并发锁冲突是**瞬时**的存储忙，
 			//   文案本身就承诺「稍候重试」，503 才让客户端的重试器按退避处理；
 			//   写成 200 时前端把「繁忙」当业务失败弹个红条，用户只能手动反复点。
-			s.writeError(w, r, apierrors.New(apierrors.ErrServiceUnavailable, msg))
+			// ★ 〇-Z（2026-09-28）：这句必须写成**实参位字面量**，不能先 `msg = "…"` 再传 ——
+			//   词条覆盖棘轮 TestAPICnMessageLiteralsCovered 的正则只认 `New(code, "中文")`，
+			//   变量传参会让这句静默逃过扫描（本条就是批 I-10 当时漏进 catalog 的那句，
+			//   英文用户点「取消工单」撞到锁时会看到中文）。机制锁见 lang_middleware_test.go。
+			s.writeError(w, r, apierrors.New(apierrors.ErrServiceUnavailable, "系统繁忙，工单取消未成功，请稍候重试"))
 			return
 		}
 		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：非锁冲突的取消失败就是存储写入故障

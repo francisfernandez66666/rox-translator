@@ -97,9 +97,12 @@ func TestCatalogCoverage(t *testing.T) {
 			t.Errorf("patternsEN 词条异常: %q→%q", p.zhFmt, p.enFmt)
 		}
 	}
-	// 词条规模闸门：343 静态 + 1 无占位模式 + 35 条 apierrors.New 补漏 + 7 条 error 字段新增，
-	// 低于此数说明 catalog 生成回退
-	if len(exactEN) < 385 {
-		t.Fatalf("exactEN 词条数 %d < 385，catalog_en.go 可能被截断或未重新生成", len(exactEN))
+	// 词条规模闸门：低于此数说明 catalog 生成回退（被截断、或有人改了生成脚本没 --apply）。
+	// ⚠️ 这里刻意只写「现值 −2」的地板，不再按「静态 + 补漏 + 新增」逐项累加写组成：
+	// 上一版那样写的时候累加值（386）和实际条数（414）已经对不上了——每批补录都在涨条目，
+	// 但没人回头改那行加法，注释就成了假的精确。现值口径：本批前 414 ＋ 试用与错误面 13 条
+	// ＋ F-81 注册防薅两档 2 条 = 429。
+	if len(exactEN) < 425 {
+		t.Fatalf("exactEN 词条数 %d < 425，catalog_en.go 可能被截断或未重新生成", len(exactEN))
 	}
 }

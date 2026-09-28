@@ -491,6 +491,43 @@ T.update({
 "算价元数据接口只支持 GET": "The pricing metadata endpoint supports GET only",
 })
 
+# —— 〇-Z 批盘点（2026-09-28）：免登录试用（trial.go）十二条 ＋ 工单取消「系统繁忙」一条。
+# ★ 这一批是**全量闸门实跑抓出来的**，不是自查补录：`go test -race ./internal/...` 的
+#   TestAPICnMessageLiteralsCovered 把 internal/api 里 `"message"/"error"/apierrors.New(code, "中文")`
+#   三类写死中文逐条要求能在词条表里翻出不同译文，trial.go 新接口的 9 条当场报缺。
+#   试用面是**匿名可达**的公开入口（未登录访客是唯一用户），漏词条＝外语访客看到整屏中文，
+#   比登录态漏词条更严重：那个人连注册按钮都还没点过。
+# ★ 另有三条「试用已用完」文案原先写成 `msg := "中文"; New(code, msg)`，字面量正则扫不到（＝闸门盲区），
+#   已在 trial.go 改回实参位字面量；tickets.go 的「系统繁忙」同款漏网一并收口，
+#   机制锁见 lang_middleware_test.go 的 TestAPICnMessageEscapePattern。
+T.update({
+# —— 试用接口校验类
+"该接口仅支持 POST": "This endpoint supports POST only",
+"服务正在启动，请稍后再试": "The service is still starting up; please try again shortly",
+"试用标识不合法，请刷新页面后重试": "Invalid trial identifier; refresh the page and try again",
+"请输入要试译的内容": "Enter the text you would like to trial-translate",
+"试用内容过长，注册后可翻译整篇文档": "The trial text is too long; register to translate whole documents",
+"该语言暂不在试用范围内": "This language is not available in the trial",
+"操作太快了，请稍后再试": "You are doing that too fast; please try again in a moment",
+"内容不符合使用规范，请换一段文本再试": "The content violates the usage policy; please try a different text",
+"试用暂时不可用，请稍后再试或注册后使用完整功能": "The trial is temporarily unavailable; try again later, or register for the full feature",
+# —— 三档额度见底（reason 分流，措辞必须各自说明「是谁的额度用完了」）
+"免费试用已用完，注册后继续使用": "You have used all free trial sentences; register to keep going",
+"今日试用名额已用完，注册后可随时使用完整功能": "Today's trial quota is used up; register to keep translating at any time",
+"当前网络今天用得比较多，注册后额度按账号计算": "This network has used a lot of trials today; registering puts the quota on your account",
+# —— tickets.go（批 I-10 加句时漏了词条，本批由机制锁抓到）
+"系统繁忙，工单取消未成功，请稍候重试": "The system is busy; the ticket was not cancelled, please retry shortly",
+})
+
+# —— F-81 批盘点（2026-09-28 〇-Z）：注册免费账号防薅两档见底的对外文案。
+# 注册面与试用面同为**未登录可达**的公开入口，漏词条就是外语访客看到整屏中文；
+# 措辞按「是谁的额度用完了」分流：设备档说清是这台设备，平台档说清是今天的全平台名额，
+# 访客据此决定是换浏览器、等明天，还是直接登录已有账号——写成一句笼统的「操作过于频繁」等于让人瞎猜。
+T.update({
+"该设备今天注册的账号已达上限，请明天再试或登录已有账号": "This device has reached today's registration limit; try again tomorrow or sign in to an existing account",
+"今日免费注册名额已用完，请明天再试": "Today's free registration quota is used up; please try again tomorrow",
+})
+
 import re, sys
 sys.path.insert(0, '/tmp')
 

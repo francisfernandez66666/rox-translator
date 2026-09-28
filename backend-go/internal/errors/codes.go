@@ -78,6 +78,13 @@ const (
 	// （chat_max_chars，默认 5,000 字符）在 SSE 头写出前被拒（400）。前端据该 code
 	// 引导用户改走翻译工单，而非让 Cloudflare 把长跑掐成 524 HTML。
 	ErrChatTextTooLong ErrorCode = "chat_text_too_long"
+	// ErrTrialExhausted ★ 〇-Z（2026-09-28）：免登录即时翻译试用的额度（设备号／来源 IP／
+	// 平台日预算三档之一）已用完，映射 429。
+	// 为什么单独立码而不复用 ErrRateLimited：429 里有两种完全不同的客户动作——
+	// 「慢一点再来」（限流）与「再来也没用，去注册吧」（试用见底）。前端引导卡、
+	// 以及运营侧「该不该放宽额度」的判断都靠这个码分流；Details.reason 进一步点明
+	// 是 device／ip／global 哪一档拦的，避免把平台预算耗尽误报成个人用完。
+	ErrTrialExhausted ErrorCode = "TRIAL_EXHAUSTED"
 )
 
 // 开放 API 对外错误码（snake_case，Python/TS/Java SDK 依赖，勿改值）。
@@ -229,7 +236,7 @@ func (e *APIError) HTTPStatus() int {
 		return http.StatusForbidden
 	case ErrValidation, ErrQuotaExceeded, ErrFileTooLarge, ErrChatTextTooLong:
 		return http.StatusBadRequest
-	case ErrRateLimited:
+	case ErrRateLimited, ErrTrialExhausted:
 		// ★ F-47（批 I-7）：限流从 400 组里拆出来单映射 429。
 		// 旧口径把「你请求太快，等 T 秒再来」和「参数填错了」压成同一个 400，
 		// 而通用重试器/SDK 只会对 429 做退避重试——400 在它眼里是「重试无意义」，

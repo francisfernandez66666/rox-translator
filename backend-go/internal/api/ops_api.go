@@ -118,12 +118,19 @@ func (s *Server) applyLegacyConfig(eff *ops.EffectivePolicy) {
 	}
 }
 
-// opsBaseEffective 基础有效策略 = 代码默认 → 存量散键 → 平台 ops_policy → 租户覆盖（不含时间窗）。
+// opsBaseEffective 基础有效策略 = 代码默认 → 存量散键 → 平台 ops_policy → 租户覆盖（不含时间窗）
+// 最后一道是 ★ 〇-Z 的门面 env 章：LANDING_DISABLED 按 AGENTS §一·3 属最高优先序，
+// 必须在所有合并**之后**盖章，否则「库里没写、环境变量已把演示站首页关掉」时
+// 管理台的开关会显示"展示主页"而实际进不去——运维就会照着这个假现值去点保存，
+// 把与真实态相反的档位写进平台策略（读写同源红线，口径同 F-75 品牌页那条）。
 func (s *Server) opsBaseEffective(tid int64) ops.EffectivePolicy {
 	eff := ops.DefaultEffective()
 	s.applyLegacyConfig(&eff)
 	eff = ops.Merge(eff, s.opsPlatformPolicy())
 	eff = ops.Merge(eff, s.opsTenantPolicy(tid))
+	if declared, v := siteFlagsEnvLanding(); declared {
+		eff.Front.LandingEnabled = v
+	}
 	return eff
 }
 

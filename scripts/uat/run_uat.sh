@@ -199,6 +199,11 @@ source scripts/uat/dblib.sh
 export UAT_DB="$WORK/dev.db"
 dbcfg register_ip_min_interval_sec 0
 dbcfg register_ip_daily_limit 1000
+# ★ F-81（2026-09-28）：注册新增设备档／平台日预算档后，整轮矩阵要注册上百个免费账号，
+#   两档按默认值（3 次/24h、500/天）会在中途把后面的注册段全打成 429 假红。
+#   这里一次性开大，T69 段内自己压低并跑完钉回（同上面 IP 档的处理口径）。
+dbcfg register_device_daily_limit 100000
+dbcfg register_global_daily_limit 100000
 dbcfg billing_enforced 1
 dbcfg pay_mode mock
 # ★ T42 USDT：默认开启收款（trc20 单链，地址占位 base58 合规），对账器 2s 轮询；tx 唯一/尾数依赖后端逻辑本身

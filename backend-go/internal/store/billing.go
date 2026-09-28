@@ -1061,10 +1061,21 @@ func (s *Store) ComputeUpgradeCredit(tid int64, newPkg *Package) (*UpgradeCredit
 	if ratio > 1 {
 		ratio = 1
 	}
-	if ratio <= 0 {
-		return nil, &errTxt{"当前套餐已无剩余价值，无法抵扣升级"}
-	}
-	// 抵扣金额按分四舍五入（元×100×剩余率+0.5 截断）再转回元
+	// ★ F-80（2026-09-28 演示站实测）：剩余率 0（旧包 token 已全部用尽、但订阅期还没到）
+	//   **不再是拒绝升级的理由**。旧实现在此处报「当前套餐已无剩余价值，无法抵扣升级」，
+	//   handler 把它连同「无生效套餐／目标不高于当前」一并包成 409，客户点「升级」就是死路一条：
+	//   演示站租户 1 的 basic_m（订单 5，1,200,000 token）台账 left=0、有效期到 10-17，
+	//   升级到「专业·年」被 409 挡回——**越是把套餐用满、越想加钱的客户，越被系统挡在门口**，
+	//   而这恰好是升级动作最该成交的人群。正确形态是抵扣按 0、**按全价继续升级**：
+	//   旧包已无价值可退，也没有额度需要转移，新包即时生效即可。
+	//   下游天然吃得住 0，无需改动：CreateUpgradeOrder 的应付 = 新包价 − 0 = 全价；
+	//   MarkOrderPaid 的升级分流里「待作废台账」与「等价转入行」都带 "left">0 过滤，
+	//   remain=0 时两者都是空集，不会写出 total=0 的垃圾台账行。
+	//   注意**别连带放宽上面几条前置校验**：无生效套餐／同包／非付费包／目标价不高于当前包／
+	//   订单 token 口径异常，仍然是真冲突，该 409 就 409（本条只针对「抵扣额为 0」这一支）。
+	//   断言：单测 TestPackageUpgradeExhausted（store 层耗尽→全价升级＋新包生效）
+	//   ＋ UAT T68（HTTP 面：耗尽租户打 /api/package/upgrade 必须 200 且应付=全价，非 409）。
+	// 抵扣金额按分四舍五入（元×100×剩余率+0.5 截断）再转回元；ratio=0 时即为 0
 	credit := float64(int(oldOrder.AmountMoney*ratio*100+0.5)) / 100.0
 	return &UpgradeCredit{OldOrderID: oldID, CreditMoney: credit, RemainTokens: remain}, nil
 }
