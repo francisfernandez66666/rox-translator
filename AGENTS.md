@@ -144,20 +144,34 @@
   `e2e/sdk_download.spec.ts` 拦（可达性判据同 §6 托管物口径：200 + 非 HTML 兜底 + 魔数 whl=`PK`/tgz·sdist=gzip
   + 体积下限；manifest 与 `pyproject.toml`/`package.json` 版本交叉锁，禁写死版本号）。
   落在 ②③④ 而**只换 `/opt/translator/web`** 一律不生效（① 的组件内联样式在 dist 里，换前端即生效）。
-  ⚠️ **品牌注入还要看「首页由谁直出」**（★ 09-27 F-74 实测）：`window.__BRANDING__` 由 `spa.go` 的 `serveIndexHTML`
-  **无条件**注入，所以只有**首页走后端**的域名拿得到它；首页若由 Caddy `file_server` 静态直出（现网主站即此形态），
-  品牌只剩前端异步兜底。判据一条：`curl -s <站点>/ | grep -c __BRANDING__`，同时看首页 sha 是否**等于**仓库
-  `frontend-react/dist/index.html`——相等就说明是静态直出，别去前端找「品牌不生效」。
+  ⚠️ **「首页由谁直出」决定品牌注入在不在**（★ 09-27 F-74 实测、**09-28 已修并上线**）：`window.__BRANDING__` 由 `spa.go` 的
+  `serveIndexHTML` **无条件**注入，所以只有**首页走后端**的域名拿得到它；首页若由 Caddy `file_server` 静态直出，
+  品牌只剩前端异步兜底。现网**三域（主站／演示站／租户品牌域）现在都走后端**（主站兜底段 09-28 起为 `reverse_proxy`），
+  ⇒ 判据翻转：**三域 `curl -s <站点>/ | grep -c __BRANDING__` 都应为 1**，且主站首页 sha **不该**等于仓库
+  `frontend-react/dist/index.html`（实测 2,591 B 对 2,227 B）；**哪天测出命中 0 或 sha 相等，就是有人把兜底段写回了
+  `file_server`**，去 Caddy 找，别在前端找「品牌不生效」。
   ★ **租户品牌域名（`*.lexicorn.cn` 通配块，〇-W/F-73）改动的三条硬口径**：① 通配块兜底段**必须 `reverse_proxy`，
   不许写回 `file_server`**（就是上面那条 F-74 教训的落地位置，`/assets/*` 才由 Caddy 落盘直出）；
   ② 动过 `/etc/caddy/*tenant*.conf` 或该 conf 的 import 行，**发版验收必须跑 `bash deploy/smoke_tenant_domain.sh`**
   （15 判据，全只读；本地单测/vitest 看不见反代路由表这一层，这正是 F-73 能藏这么久的原因）。
   该脚本自带反向对照：`TENANT_BASE=https://<主站域> bash deploy/smoke_tenant_domain.sh` **必须 FAIL≥2／exit 1**，
-  若反而全绿说明判据失效，别把绿灯当"主站也通了"；
+  若反而全绿说明判据失效，别把绿灯当"主站也通了"；⚠️ **两条红的内容随 F-74 修好而变**：旧＝T1 `hits=0 __no_injection__`
+  （静态直出形态），新＝T1 `code=200 hits=1 tenant_id=0` ＋ T1b `brand_name` 空（首页走了后端、只是该域解析不到租户），
+  **看到 `hits=1` 不是判据坏，是 F-74 生效的证据**；
   ③ **证书口径＝`tls internal`，公网可用只因为 Cloudflare 该 zone 是 Full 而非 Full(strict)**——切 strict 前必须先换
   Cloudflare Origin CA（`/etc/caddy/tls/tenant-origin.{crt,key}`，`chmod 600`，**Origin CA 私钥禁止进聊天/文档/git**），
-  否则新租户子域全体 526。另注意**读侧匹配是 `WHERE domain=?` 的裸小写前缀精确等值**（F-76 未修：填 `ROX`/整域名/带斜杠
-  会保存成功却永不生效），排查「品牌不生效」先核库里那一列的字面值，再核 ①②③。
+  否则新租户子域全体 526。另注意**读侧匹配是 `WHERE domain=?` 的裸小写前缀精确等值**（★ F-76 已于 09-28 上线：
+  **写侧**现在做 trim＋小写＋剥基础域＋剥路径与端口＋字符集白名单＋占用校验（撞其他租户的 `domain` **或 `code`** 都不行）
+  ＋保留前缀名单（`langcross`／`rox-test`／`new` 等），非法即 400 带明确文案，管理台预览域与实际入库值同源显示；
+  **存量行不做迁移**（现网 `rox`／`rox-test` 本就是规范裸前缀，没有要清洗的行），
+  排查「品牌不生效」先核库里那一列的字面值，再核 ①②③。
+  ★ **F-75 品牌展示付费闸（09-28 上线）三条读法**：展示判定＝企业根租户／超管授权／套餐在效／到期后 30 天品牌宽限
+  （`BRAND_GRACE_DAYS` > `system_config.brand_grace_days` > 30，配 0 即关宽限），四条任一成立即展示；库里品牌字段
+  **只改出栈视图绝不清空**，续费当天自动恢复。**超管与该租户管理员永远看真值**——后台品牌设置页是读写同源，
+  把「被闸隐藏的空字段」当现值载回，客户点一次保存就覆盖掉真配置了（★ 改动这块前必须记住这条）。
+  ⚠️ **已知未修（F-79，待决策）**：`brandingPayload` 解析优先级「显式 `?tenant_id=` ＞ 按访问域名」，而这一层**没有身份判定**，
+  所以匿名访客在主站打 `/?tenant_id=1` 能拿到别租户品牌（09-28 线上实测注入命中）。**别把「品牌只在其品牌域生效」
+  当成服务端已保证的事实**，前端 `branding.tsx` 的 `tenantId` 入参只有超管预览会传；修法前置见《缺陷核实与修复文档_20260926》§21.3。
   ⚠️ **「纯注释提交＝不用发版」只对 React 侧成立**：往 `public.go`/`office.go`/`admin_openapi.go` 的**内嵌 HTML/JS
   字符串里**加一行注释，dist hash 不变、`go build` 无任何行为差异，但**直出页的字节确实变了**，线上就是旧页
   （2026-09-23 〇-M 实测：注释批晚于发版批，两站 `taskpane.html` 与仓库差 2 行，只能 11:24 补换一次二进制）。
