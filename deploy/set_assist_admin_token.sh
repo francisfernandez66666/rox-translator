@@ -323,6 +323,9 @@ cat <<EOF
 
 == 接着配大模型（这才是供应商那把 sk-… Key，与上面的 Token 无关）：
    同一面板 → 「配置」→ 🤖 LLM 接入 → 填 llm_base_url / llm_api_key / llm_model，有备用模型再填 llm_model_backup
+   ★ llm_base_url 只填**服务根地址**（例 https://api.siliconflow.cn/v1），不要填成 https://api.siliconflow.cn/v1/chat/completions。
+     助手侧会在它后面自己拼 /chat/completions（见 internal/assist/llm/llm.go 的 endpointURL）；填成整条接口地址时
+     面板会报「连通失败：http 404: Not Found」——2026-09-29 生产首配就踩在这里，改回根地址即通。
    → 🔌测试连通 → 保存（热加载，不必重启）
    ⚠️ 面板上**没有独立的备用 Key 输入框**，这是设计不是缺项：管理端可写白名单只有上面这四项
       （见 backend-go/internal/assist/api/server.go 的 configKeyWhitelist——注释写明「api_key_backup 复用主 Key 故不单列」）。
