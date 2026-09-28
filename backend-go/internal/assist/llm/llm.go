@@ -14,6 +14,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -148,7 +149,7 @@ func (c *Client) Embed(ctx context.Context, model string, texts []string) ([][]f
 	c.mu.RUnlock()
 
 	body, _ := json.Marshal(map[string]any{"model": model, "input": texts})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, trimSlash(p.BaseURL)+"/embeddings", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL(p.BaseURL, "/embeddings"), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +207,7 @@ func (c *Client) chatOne(ctx context.Context, p Provider, temperature float64, m
 		"max_tokens":  maxTokens,
 	}
 	b, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, trimSlash(p.BaseURL)+"/chat/completions", bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL(p.BaseURL, "/chat/completions"), bytes.NewReader(b))
 	if err != nil {
 		return "", Usage{}, err
 	}
@@ -270,4 +271,32 @@ func trimSlash(s string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// endpointSuffixes 调用方最容易把「完整接口地址」整段粘进 base_url 的两条尾巴。
+// 生产实测形态（2026-09-29）：管理台 llm_base_url 填了 https://api.siliconflow.cn/v1/chat/completions，
+// 而客户端又在后面拼 /chat/completions ⇒ 打到 …/chat/completions/chat/completions，
+// 上游网关回 **404 + 纯文本 "Not Found"**（与「路径不存在」同形，无凭据探针可复现：
+// 同一 host 打 …/v1/chat/completions 回 401 Token is invalid，说明端点本身是好的）。
+var endpointSuffixes = []string{"/chat/completions", "/embeddings"}
+
+// endpointURL 把 base_url 与接口路径拼成最终请求地址。
+// 归一口径：先剥结尾斜杠，再循环剥掉误粘的接口尾巴（含 /embeddings 与 /chat/completions 互换、
+// 以及重复粘多层的情形），最后统一接上本次调用真正需要的路径——
+// 让「填 /v1」与「填整条 URL」两种写法都打到同一个端点，而不是第二种永远 404。
+func endpointURL(base, path string) string {
+	b := trimSlash(base)
+	for {
+		cut := false
+		for _, s := range endpointSuffixes {
+			if strings.HasSuffix(b, s) {
+				b = trimSlash(strings.TrimSuffix(b, s))
+				cut = true
+				break
+			}
+		}
+		if !cut {
+			return b + path
+		}
+	}
 }

@@ -106,3 +106,54 @@ func TestDisabled(t *testing.T) {
 		t.Fatal("expect error")
 	}
 }
+
+// TestEndpointURLNormalizesPastedFullEndpoint 钉住 2026-09-29 生产「测试连通 http 404: Not Found」的修法。
+// 现场：管理台把**整条接口地址**填进了 llm_base_url，客户端又在其后拼 /chat/completions，
+// 于是打到 …/chat/completions/chat/completions ⇒ 上游网关回 404 纯文本 "Not Found"。
+// 判据分两腿：① 纯函数归一表（含重复粘层、斜杠、embed 端互换）；
+// ② 真发一次请求，钉「服务端收到的路径」——只测拼接会把「实际请求走别的路径」漏掉。
+func TestEndpointURLNormalizesPastedFullEndpoint(t *testing.T) {
+	cases := []struct{ in, path, want string }{
+		{"https://api.siliconflow.cn/v1", "/chat/completions", "https://api.siliconflow.cn/v1/chat/completions"},
+		{"https://api.siliconflow.cn/v1/", "/chat/completions", "https://api.siliconflow.cn/v1/chat/completions"},
+		{"https://api.siliconflow.cn/v1/chat/completions", "/chat/completions", "https://api.siliconflow.cn/v1/chat/completions"},
+		{"https://api.siliconflow.cn/v1/chat/completions/", "/chat/completions", "https://api.siliconflow.cn/v1/chat/completions"},
+		// 重复粘两层也要收敛到唯一端点，而不是留下一条永远 404 的路径
+		{"https://api.siliconflow.cn/v1/chat/completions/chat/completions", "/chat/completions", "https://api.siliconflow.cn/v1/chat/completions"},
+		// 填了 chat 尾巴、本次调用是 embeddings：尾巴照样得剥掉
+		{"https://api.siliconflow.cn/v1/chat/completions", "/embeddings", "https://api.siliconflow.cn/v1/embeddings"},
+		{"https://api.siliconflow.cn/v1/embeddings", "/embeddings", "https://api.siliconflow.cn/v1/embeddings"},
+	}
+	for _, c := range cases {
+		if got := endpointURL(c.in, c.path); got != c.want {
+			t.Errorf("endpointURL(%q, %q) = %q, want %q", c.in, c.path, got, c.want)
+		}
+	}
+	// 反证：归一函数不许把「路径里本来就含 chat/completions 字样」的正常前缀吃掉
+	if got := endpointURL("https://gw.example.com/api/v1chat", "/chat/completions"); got != "https://gw.example.com/api/v1chat/chat/completions" {
+		t.Errorf("正常前缀被误剥: %q", got)
+	}
+
+	// ② 真发一次请求，钉服务端收到的路径
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if r.URL.Path != "/v1/chat/completions" {
+			// 复刻真实上游网关的形态：错路径回 404 + 纯文本 Not Found
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("Not Found"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{"total_tokens":1}}`))
+	}))
+	defer srv.Close()
+	// 故意用「整条接口地址」这种填法（srv.URL + /v1/chat/completions）
+	c := New([]Provider{{Name: "main", BaseURL: srv.URL + "/v1/chat/completions", APIKey: "k", Model: "m"}}, 5)
+	text, _, _, err := c.Chat(context.Background(), 0, 8, []Message{{Role: "user", Content: "hi"}})
+	if err != nil || text != "ok" {
+		t.Fatalf("归一后仍打不通：path=%q err=%v text=%q", gotPath, err, text)
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Fatalf("服务端收到的路径不对：/v1/chat/completions != %q", gotPath)
+	}
+}
