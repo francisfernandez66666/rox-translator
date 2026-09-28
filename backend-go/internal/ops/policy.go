@@ -103,6 +103,20 @@ type TaskPatch struct {
 	Enabled *bool `json:"enabled,omitempty"`
 }
 
+// FrontPatch 站点门面因子（★ 〇-Z：官网首页对未登录访客是否开放）。
+//
+// LandingEnabled 语义：true／缺省＝访客打开 `/` 看官网落地页（**平台默认档，主站就是这一档**）；
+// false＝访客打开 `/` 直接进登录注册页。做成指针布尔是为了和其余因子一样支持「显式设为 false」
+// （非指针的 bool 零值＝false 会被 Merge 当成"没设置"，那样演示站永远关不掉）。
+//
+// 射程口径（★ 只此一档，别指望它按租户生效）：本因子**只读平台策略**（ops_policy 的写侧本就仅超管、
+// scope 恒为 platform），所以"哪个站不收主页"是**部署级/平台级**的决定，
+// 不是租户级白标配置。租户品牌域要不要收主页属另一个问题（那要连着付费权益与客户自己的意愿），
+// 需要时另开因子，禁止在这里顺手把 tid 传进来。
+type FrontPatch struct {
+	LandingEnabled *bool `json:"landing_enabled,omitempty"`
+}
+
 // OperationsPolicy 运营策略（可覆盖模型）
 type OperationsPolicy struct {
 	Version      int               `json:"version,omitempty"`
@@ -116,6 +130,7 @@ type OperationsPolicy struct {
 	Payment      PaymentPatch      `json:"payment,omitempty"`
 	Content      ContentPatch      `json:"content,omitempty"`
 	Task         TaskPatch         `json:"task,omitempty"`
+	Front        FrontPatch        `json:"front,omitempty"`
 }
 
 // ============================== 保存校验（★ B6，2026-09-12） ==============================
@@ -133,6 +148,12 @@ func ValidateWindowOverrides(w PromoWindow) error {
 	}
 	if w.Overrides.Payment.Mode != "" || w.Overrides.Payment.AutoCharge != nil {
 		return fmt.Errorf("时间窗覆盖禁止设置 payment.mode/auto_charge（请使用支付设置显式操作）")
+	}
+	// ★ 〇-Z：门面开关同样禁止经时间窗夹带。理由与支付那条同形——窗口是自动生效/自动失效的，
+	// 而「访客打开首页看到的是官网还是登录页」是对外的门面决定（官网 SEO、投放落地页、
+	// 客户发的链接都吃这一档），让它随一个日历窗口自动翻转，等于给运营留了一个没人复核的开关。
+	if w.Overrides.Front.LandingEnabled != nil {
+		return fmt.Errorf("时间窗覆盖禁止设置 front.landing_enabled（请使用运营策略的门面开关显式操作）")
 	}
 	if len(w.Overrides.PromoWindows) > 0 {
 		return fmt.Errorf("时间窗覆盖不允许嵌套子窗口")
@@ -180,6 +201,7 @@ type EffectivePolicy struct {
 	Payment      PaymentEffective      `json:"payment"`
 	Content      ContentEffective      `json:"content"`
 	Task         TaskEffective         `json:"task"`
+	Front        FrontEffective        `json:"front"`
 }
 
 // PackageEffective 解析后的套餐因子：体验 token/天数、月度用量重置开关与次数上限。
@@ -233,6 +255,12 @@ type TaskEffective struct {
 	Enabled bool `json:"enabled"`
 }
 
+// FrontEffective 解析后的站点门面因子：官网首页对未登录访客是否开放（★ 〇-Z）。
+// 缺省 true＝出落地页（主站现档）；false＝访客打开 `/` 直接进登录注册页（演示站档）。
+type FrontEffective struct {
+	LandingEnabled bool `json:"landing_enabled"`
+}
+
 // Mode 取指定翻译模式因子；未配置（或空模式）回落 pro 语义并返回 false。
 // 说明：空模式视为专业模式（历史口径 "" 与 pro 等同）。
 func (p EffectivePolicy) Mode(m string) (ModeRule, bool) {
@@ -268,6 +296,10 @@ func DefaultEffective() EffectivePolicy {
 		Payment:      PaymentEffective{Mode: "mock", AutoCharge: false},
 		Content:      ContentEffective{CondenseEnabled: true, FileMaxMB: 40},
 		Task:         TaskEffective{Enabled: true},
+		// ★ 〇-Z 站点门面：默认**展示**官网首页。这一档直接决定"没配过门面开关的站"（＝主站）
+		// 首屏字节一个字都不变，所以默认值必须是 true；把它改成 false 会让主站首页凭空少一块内容，
+		// 由 site_flags 那条「开＝不注入」的等值锁拦住（见 internal/api/site_flags_test.go）。
+		Front: FrontEffective{LandingEnabled: true},
 	}
 }
 
@@ -414,6 +446,10 @@ func Merge(base EffectivePolicy, patch OperationsPolicy) EffectivePolicy {
 	}
 	if patch.Task.Enabled != nil {
 		out.Task.Enabled = *patch.Task.Enabled
+	}
+	// ★ 〇-Z 门面开关：显式 false 才关，缺省继承上层（默认＝展示主页）。
+	if patch.Front.LandingEnabled != nil {
+		out.Front.LandingEnabled = *patch.Front.LandingEnabled
 	}
 	return out
 }

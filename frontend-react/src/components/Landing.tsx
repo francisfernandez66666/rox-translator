@@ -1,12 +1,14 @@
 // ============================================================================
 // components/Landing.tsx — 官网营销首页（2026-09-18 按画布 721173146990823 屏 6:1 重建）
-// 区块顺序：导航 → Hero(左文案+右留资引导卡) → 解决方案三步 → 核心功能 bento →
+// 区块顺序：导航 → Hero(左文案+右三检查点翻译流演示卡) → 解决方案三步 → 核心功能 bento →
 // 覆盖范围 → 质量验证 → 开发者集成 → 价格三档 → 活动奖励 → 更新日志 → FAQ → 关于我们 → 收尾 CTA → 页脚。
-// 动效：Hero 文案 lc-mo-up 节拍入场；★ 2026-09-19 #22：原「三检查点翻译流演示卡」（HeroDemo）
-// 连同两颗「预约演示」按钮一起退役，转化入口统一为「留言获取方案」（锚到 #cta 留资表单）；
-// 其「划掉错词→亮起正词」动效已抽到 components/WordSwap + theme.css，供产品内加载态复用（#24）。
+// 动效：Hero 文案 lc-mo-up 节拍入场；hero 右侧是三检查点翻译流演示卡 HeroDemo（★ 口径订正：
+// #22 一度把它连同「预约演示」按钮一起退役，后经用户要求原样恢复，现行代码在 .lc-hero-demo 内渲染它；
+// 其「划掉错词→亮起正词」动效同时抽到 components/WordSwap + theme.css，供产品内加载态复用（#24））。
+// ★ 2026-09-28 〇-Z：演示卡外加了一层"点卡即试用"热区（HeroDemo 本体一行未改）——点击后原位换成
+// TrialPanel（免登录试翻 5 句），「返回演示」换回；页首/页尾三颗「免费试用」同此一条动作。
 // 其余区块 useReveal 滚动现身，组内 60ms 等速 stagger（动效原则 8）。
-// 视觉：纯黑底、卡片描边 var(--lc-border-card) 2px 纯白（★ 〇-O）、主按钮白底黑字、无蓝无绿。
+// 视觉：纯黑底、卡片描边取交付灰阶 1.2px（★ 〇-P 现行口径）、主按钮白底黑字、无蓝无绿。
 // ============================================================================
 /* 依赖口径（三条硬约束，改本文件前先确认）：
    1. useReveal 与 motion.css 的 .lc-reveal 配对使用——只挂类名不调 hook，元素会永远停在 opacity:0；
@@ -35,7 +37,8 @@ import { useT, translateIn, demoSrcLang, type Lang } from '@/i18n' // useT() →
 import { typingUnitOf, typingSpeedOf } from '@/i18n/script' // ★ 〇-Q：打字单元/速度按文字系统分档
 import { useBranding } from '@/branding' // 租户品牌信息：brandName 为空即回落产品名
 import { openAPIDocsUrl } from '@/api/core' // 公开 API 文档地址（同源 /openapi/docs）
-import { LeadForm } from '@/components/LeadForm' // ★ P1-3 收尾留资表单（自带状态，唯一例外）
+import { LeadForm } from '@/components/LeadForm' // ★ P1-3 收尾留资表单（本页三处自带状态的组件之一：LeadForm / HeroDemo / TrialPanel，其余全是纯展示）
+import TrialPanel from '@/components/TrialPanel' // ★ 〇-Z #74：hero 右侧演示卡的「就地试用」形态（点演示卡或「免费试用」切进来）
 import PriceQuickCalc from '@/components/PriceQuickCalc' // ★ 〇-Y #64：价格方案区下方的「快速算价」卡（系数来自 /api/pricing/meta，细节点进 /compare）
 import { LangSelect } from '@/components/LangSelect' // ★ 2026-09-20 反馈④：落地页对非中文访客给出手动切换入口（12 语种，与顶栏同一组件）
 import { INDUSTRY_META, industryName } from '@/lib/industries' // 覆盖范围区块：行业包与本页术语大卡同源的一份事实
@@ -808,7 +811,9 @@ function DevSample() {
 function Pill(props: {
   variant?: 'pri' | 'ghost' | 'soft' | 'dark' // pri 主投（白底黑字）/ ghost 描边次投 / soft 卡内浮面 / dark 反相卡上的实心黑
   size?: 'sm' | 'md' | 'lg' // 三档定高 42 / 50 / 56：导航用 sm，收尾用 lg，其余一律 md
-  href: string // 只做链接跳转：导航与 CTA 链接用 <a> 而非 <button>（带状态的只有 LeadForm/DevSample 两处），右键新窗口打开也仍然可用
+  href: string // 只做链接跳转：导航与 CTA 链接用 <a> 而非 <button>（带状态的只有 LeadForm/DevSample/TrialPanel 三处），右键新窗口打开也仍然可用
+  onClick?: () => void // ★ 〇-Z：页内动作（就地开试用面板）也挂在胶囊上——仍渲染 <a>，先 preventDefault 再回调，
+                       //   href 保留作"JS 未起来／中键新窗口"的兜底落点，不会因为多了 onClick 就丢掉可右键的链接语义
   children: React.ReactNode
 }) {
   const v = props.variant ?? 'pri' // 默认主投：页面上出现次数最多的那颗就是它
@@ -816,7 +821,11 @@ function Pill(props: {
   return (
     // 挂 lc-mo-press 是为了沿用全站按压类名，真正的 scale(.97) 写在本文件 .lc-mkt-btn:active，
     // 这样即使 motion.css 的过渡类没生效，按钮仍有按下反馈
-    <a className={`lc-mkt-btn lc-mkt-btn--${v} lc-mkt-btn--${s} lc-mo-press`} href={props.href}>
+    <a
+      className={`lc-mkt-btn lc-mkt-btn--${v} lc-mkt-btn--${s} lc-mo-press`}
+      href={props.href}
+      onClick={props.onClick ? (e) => { e.preventDefault(); props.onClick?.() } : undefined}
+    >
       {props.children}
     </a>
   )
@@ -847,6 +856,18 @@ export default function Landing() {
   const brand = branding.brandName || t('land.brand') // 品牌租户化了就用租户名，否则回落产品名
   // deps 传 []：只在挂载时扫一次 .lc-reveal。首页 DOM 结构是静态的，没必要随文案变化重建观察器
   const revealRef = useReveal<HTMLDivElement>([])
+
+  // ★ 〇-Z（2026-09-28）免登录试用：hero 右侧演示卡就地切成试用面板的开关。
+  //   口径来自用户原话「hero页的动效不用动，点击动效以后再切换成翻译体验」——
+  //   HeroDemo 组件一行不改，只是被这张卡**临时顶替位置**；「返回演示」把位置交还，动效从头再演。
+  //   状态放这里（而不是 HeroDemo 内部）的原因：导航、hero、收尾三处「免费试用」都要能开它，
+  //   而这三处分散在页面首尾，靠事件总线或 DOM 查询串起来都比不上一个布尔值诚实。
+  const [trialOn, setTrialOn] = useState(false)
+  // 开试用：收尾区那颗按钮在页面底部，点开时把用户带到 hero（否则"点了没反应"——面板在视口之外）
+  const openTrial = () => {
+    setTrialOn(true)
+    if (window.scrollY > 200) window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
 
   // 导航滚动高亮（scrollspy）：给"滚动位置和导航高亮一致"那句注释补上真实逻辑——
   // 滚过哪个区块的顶线（140px），对应导航链接就点亮；区块之间保持上一块常亮，不做闪烁
@@ -889,24 +910,25 @@ export default function Landing() {
 
   // 首页价格三档：营销「意向卡」，文案与价位固定取 land.plan* 词典（画布 6:1 同口径）；
   // 完整、随后台变动的价目以 /pricing 为准（那张卡才渲染 /api/plans 的返回值）。
-  // 三档 CTA 一律指向 /register，转化路径不做中间页。
+  // ★ 〇-Z（2026-09-28）：三档 CTA 落 /login 而不是 /register——用户口径「已经有账号的人被要求
+  //   再注册一次很奇怪」，登录页同时给注册入口，选注册还是登录交回访客；本批全站 /register 直落同此一条。
   const plans = [
     {
       // 引流档：¥0 的作用只是抹平"试一下"的成本，说服交给中间那档，三档功能点数量保持一致
       key: 'free', name: t('land.planFree'), price: t('land.planFreePrice'),
-      desc: t('land.planFreeDesc'), btn: t('land.planFreeBtn'), href: '/register',
+      desc: t('land.planFreeDesc'), btn: t('land.planFreeBtn'), href: '/login',
       feats: [t('land.planFreeF1'), t('land.planFreeF2'), t('land.planFreeF3')],
     },
     {
       // pro: true 是全页唯一的视觉重心开关——反相白底、徽标、实心黑按钮三处都由它驱动
       key: 'pro', name: t('land.planPro'), price: t('land.planProPrice'),
-      desc: t('land.planProDesc'), btn: t('land.planProBtn'), href: '/register', pro: true,
+      desc: t('land.planProDesc'), btn: t('land.planProBtn'), href: '/login', pro: true,
       feats: [t('land.planProF1'), t('land.planProF2'), t('land.planProF3')],
     },
     {
-      // 企业档：价位给"定制"而非数字（口径与 /pricing 一致）；按钮写「联系销售」但 href 仍与其余两档同落 /register
+      // 企业档：价位给"定制"而非数字（口径与 /pricing 一致）；按钮写「联系销售」但 href 仍与其余两档同落 /login
       key: 'ent', name: t('land.planEnt'), price: t('land.planEntPrice'),
-      desc: t('land.planEntDesc'), btn: t('land.planEntBtn'), href: '/register',
+      desc: t('land.planEntDesc'), btn: t('land.planEntBtn'), href: '/login',
       feats: [t('land.planEntF1'), t('land.planEntF2'), t('land.planEntF3')],
     },
   ]
@@ -947,7 +969,8 @@ export default function Landing() {
           <LangSelect />
           {/* 登录用文字链（低权重），试用用实心按钮（本页唯一主投）：两种强度不并列，避免选择困难 */}
           <a className="lc-nav-login" href="/login">{t('land.navLogin')}</a>
-          <Pill size="sm" href="/register">{t('land.ctaFree')}</Pill>
+          {/* ★ 〇-Z：「免费试用」不再直落注册页，就地开 hero 试用面板；href 留 /login 作无 JS 兜底 */}
+          <Pill size="sm" href="/login" onClick={openTrial}>{t('land.ctaFree')}</Pill>
         </div>
       </header>
 
@@ -966,8 +989,10 @@ export default function Landing() {
             <p className="lc-hero-sub lc-mo-up lc-mo-d3">{t('land.heroSub')}</p>
             {/* d1~d5 每档差 60ms（motion.css）：徽章→标题→副题→按钮→信任指标逐拍落位，读作"页面在呼吸"而非整体闪现 */}
             <div className="lc-hero-ctas lc-mo-up lc-mo-d4">
-              {/* 主 CTA 去 /register；副 CTA「留言获取方案」锚到本页收尾留资表单（#cta）：页内已有真表单，不再空转去注册页 */}
-              <Pill href="/register">{t('land.ctaFree')}</Pill>
+              {/* ★ 〇-Z：主 CTA「免费试用」不再直落注册页，就地开右侧试用面板（href 兜底 /login：
+                  无 JS／中键新窗口时访客仍然到一个能自己选注册还是登录的页面）；
+                  副 CTA「留言获取方案」锚到本页收尾留资表单（#cta）：页内已有真表单，不再空转去注册页 */}
+              <Pill href="/login" onClick={openTrial}>{t('land.ctaFree')}</Pill>
               <Pill variant="ghost" href="#cta">{t('land.ctaLead')}</Pill>
             </div>
             <div className="lc-hero-trust lc-mo-up lc-mo-d5">
@@ -979,7 +1004,30 @@ export default function Landing() {
           </div>
           <div className="lc-hero-demo lc-mo-up lc-mo-d3">
             {/* 演示卡用 d3 与副题同拍：再晚就成"二次加载"，更早则抢标题的读序 */}
-            <HeroDemo />
+            {trialOn ? (
+              <TrialPanel onBack={() => setTrialOn(false)} />
+            ) : (
+              /* ★ 〇-Z：整张演示卡是一个"进入试用"的热区（HeroDemo 一行未改，只被包了一层）。
+                 · 卡内的复制按钮不能被"点哪都切卡"抢走，所以命中 a/button/input/select 时直接放过——
+                   那是演示卡自己的动作，不是"我想试试"的信号；
+                 · role=button + tabIndex 让键盘也能切（Enter/空格），aria-label 给读屏一句人话 */
+              <div
+                className="lc-hero-hot"
+                role="button"
+                tabIndex={0}
+                aria-label={t('land.trial.click')}
+                onClick={(e) => {
+                  if ((e.target as HTMLElement).closest('a,button,input,select,textarea')) return
+                  setTrialOn(true)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setTrialOn(true) }
+                }}
+              >
+                <HeroDemo />
+                <span className="lc-hero-hot-hint"><ArrowRightIcon size={14} />{t('land.trial.hint')}</span>
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -1252,14 +1300,15 @@ export default function Landing() {
               <b>{t('land.rewardInvite.num')}</b> {/* 等宽字体：中英切换时 "10,000" 的宽度不抖，单位不会跟着跳位 */}
               <span>{t('land.rewardInvite.unit')}</span>
             </p>
-            <Pill href="/register">{t('land.rewardInvite.btn')}</Pill>
+            {/* ★ 〇-Z：奖励类动作都要账号才能发放，落 /login 由访客自选登录或注册（原直落 /register） */}
+            <Pill href="/login">{t('land.rewardInvite.btn')}</Pill>
           </article>
           <article className="lc-rw-card lc-reveal lc-mo-lift" data-reveal-delay="60">
             {/* 第二张卡晚 60ms 现身，与前面各区块的 stagger 同一口径；它不带数字，因为知识库奖励随内容与量变动 */}
             <FIcon><UploadIcon size={24} /></FIcon>
             <h3 className="lc-rw-t">{t('land.rewardKb.t')}</h3>
             <p className="lc-rw-d">{t('land.rewardKb.d')}</p>
-            <Pill href="/register">{t('land.rewardKb.btn')}</Pill>
+            <Pill href="/login">{t('land.rewardKb.btn')}</Pill>
           </article>
         </div>
       </section>
@@ -1334,8 +1383,10 @@ export default function Landing() {
         <div className="lc-cta lc-reveal">
           <h2 className="lc-cta-t">{t('land.ctaTitle')}</h2>
           <p className="lc-cta-sub">{t('land.ctaSub')}</p> {/* 副标只写可兑现的降风险承诺（无需卡/注册送体验额度） */}
-          {/* 收尾只留一颗按钮且用最大档 lg：这里再放个次按钮，等于替用户留了"再想想"的门 */}
-          <Pill variant="dark" size="lg" href="/register">{t('land.ctaFree')}</Pill>
+          {/* 收尾只留一颗按钮且用最大档 lg：这里再放个次按钮，等于替用户留了"再想想"的门。
+              ★ 〇-Z：它写的是「免费试用」，所以行为和页首同名按钮一致——开试用面板并滚回 hero
+              （同名不同义比少一次滚动更伤信任）；href 兜底 /login */}
+          <Pill variant="dark" size="lg" href="/login" onClick={openTrial}>{t('land.ctaFree')}</Pill>
           {/* ★ P1-3 留资表单：不注册也能让销售跟上进来——匿名 POST /api/lead（限流+蜜罐+可选验证码） */}
           <div className="lc-lead-sep"><span>{t('land.leadOr')}</span></div>
           <LeadForm source="landing" />
@@ -1554,6 +1605,57 @@ const LANDING_CSS = `
 .lc-hero-trust svg{color:var(--lc-text-2)}
 /* min-width:0 是 flex 老坑：不写它，演示卡里的长英文会把右栏顶到溢出、整页出现横向滚动 */
 .lc-hero-demo{flex:1;display:flex;justify-content:center;min-width:0}
+
+/* —— 〇-Z #74：演示卡热区 + 免登录试用面板（结构见 components/TrialPanel.tsx） —— */
+/* 热区只包一层，HeroDemo 本体一行未改：加描边高亮会抢演示本身的读序，这里只给 pointer 光标
+   与提示行抬亮；键盘可达靠 focus-visible 的 box-shadow 一圈（outline 与 border 都会撞描边档口径） */
+.lc-hero-hot{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:12px;cursor:pointer;border-radius:16px}
+.lc-hero-hot:focus-visible{box-shadow:0 0 0 1.2px var(--lc-border-strong)}
+.lc-hero-hot-hint{display:inline-flex;align-items:center;gap:6px;font-size:14px;color:var(--lc-text-4);transition:color var(--lc-mo-release) var(--lc-mo-out)}
+.lc-hero-hot:hover .lc-hero-hot-hint,.lc-hero-hot:focus-visible .lc-hero-hot-hint{color:var(--lc-text-2)}
+.lc-hero-hot-hint svg{flex:none}
+/* 试用卡与演示卡同宽同描边档：两张卡占的是同一个位置，切过去不能跳宽/跳重量 */
+.lc-trial{width:720px;max-width:100%;display:flex;flex-direction:column;gap:14px;background:var(--lc-bg);border:1.2px solid var(--lc-border-strong);border-radius:16px;padding:20px 22px 18px;text-align:left}
+.lc-trial-head{display:flex;align-items:flex-start;gap:12px}
+.lc-trial-head-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+/* 模式徽标写死在卡里：试用强制 pro，把档位露出来是给访客的质保承诺，不是装饰 */
+.lc-trial-mode{align-self:flex-start;display:inline-flex;align-items:center;height:24px;padding:0 10px;border:1.2px solid var(--lc-border-pill);border-radius:999px;font-size:14px;letter-spacing:.04em;color:var(--lc-text-3)}
+.lc-trial-title{margin:0;font-size:19px;font-weight:600;color:var(--lc-text-1)}
+.lc-trial-sub{margin:0;font-size:14px;line-height:20px;color:var(--lc-text-3)}
+.lc-trial-back{flex:none;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:var(--lc-text-2);font:500 14px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)}
+.lc-trial-back:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
+/* resize:vertical：横向拖拽会把卡片顶出 720 档；min-height 兜住空态不塌成一格 */
+.lc-trial-input{width:100%;min-height:76px;resize:vertical;background:var(--lc-inset);border:1.2px solid var(--lc-border-input);border-radius:12px;padding:12px 14px;font:400 16px/24px var(--lc-font);color:var(--lc-text-1)}
+.lc-trial-input::placeholder{color:var(--lc-text-4)}
+.lc-trial-input:focus{outline:none;border-color:var(--lc-border-strong)}
+.lc-trial-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+/* tabular-nums：数字打到三位数时字宽不变，右侧按钮不会跟着横跳 */
+.lc-trial-count{font-size:14px;color:var(--lc-text-4);font-variant-numeric:tabular-nums}
+.lc-trial-to{display:inline-flex;align-items:center;gap:8px}
+.lc-trial-to-label{font-size:14px;color:var(--lc-text-3)}
+.lc-trial-select{height:34px;padding:0 10px;background:var(--lc-panel);border:1.2px solid var(--lc-border-input);border-radius:8px;color:var(--lc-text-1);font:500 14px/1 var(--lc-font);cursor:pointer}
+.lc-trial-btn{display:inline-flex;align-items:center;justify-content:center;height:36px;padding:0 18px;border-radius:999px;font:600 15px/1 var(--lc-font);cursor:pointer;text-decoration:none}
+/* 主投沿用全站「实心白＝#FFFFFF」档（G 段），不是文字灰 #E7E9EA */
+.lc-trial-btn--pri{border:0;background:var(--lc-fill-white);color:#000}
+.lc-trial-btn--pri:disabled{opacity:.6;cursor:default}
+.lc-trial-out{display:flex;flex-direction:column;gap:8px;min-height:74px;border:1.2px solid var(--lc-border-input);border-radius:12px;padding:12px 14px}
+.lc-trial-out-head{display:flex;align-items:center;gap:10px}
+.lc-trial-out-label{font-size:14px;letter-spacing:.06em;color:var(--lc-text-4)}
+.lc-trial-copy{margin-inline-start:auto;flex:none;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:var(--lc-text-2);font:500 14px/1 var(--lc-font);cursor:pointer}
+.lc-trial-copy:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
+/* pre-wrap：译文里的换行是引擎给的排版信号，不能吞；break-word 兜住德语/俄语的超长复合词顶破卡片 */
+.lc-trial-out-text{margin:0;font-size:17px;line-height:26px;color:var(--lc-text-1);white-space:pre-wrap;word-break:break-word}
+.lc-trial-out-empty{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-4)}
+.lc-trial-err{margin:0;font-size:14px;line-height:20px;color:var(--lc-danger)}
+/* 兜底说明（语种名单没拉到）：压在 text-4 一档，属"知道就好"的话，不与红色错误态抢注意力 */
+.lc-trial-note{margin:0;font-size:14px;line-height:20px;color:var(--lc-text-4)}
+.lc-trial-foot{margin:0;font-size:14px;color:var(--lc-text-3)}
+.lc-trial-done{display:flex;flex-direction:column;gap:10px;padding:10px 0 4px}
+.lc-trial-done-t{margin:0;font-size:19px;font-weight:600;color:var(--lc-text-1)}
+.lc-trial-done-d{margin:0;font-size:15px;line-height:24px;color:var(--lc-text-2)}
+.lc-trial-done-cta{display:flex;align-items:center;gap:16px;margin-top:4px}
+.lc-trial-link{align-self:flex-start;background:none;border:0;padding:0;color:var(--lc-text-2);font:500 15px/1 var(--lc-font);cursor:pointer;text-decoration:underline}
+.lc-trial-link:hover{color:var(--lc-text-1)}
 
 /* Hero 入场：整块下沉压暗 → 回弹释放（峰值前先压暗做落差） */
 .lc-hero.is-sink{filter:brightness(.84);transform:translateY(6px)}
@@ -1775,7 +1877,8 @@ const LANDING_CSS = `
 /* 白块里的次级文字同样只能取最深那档灰：比 #000 弱一级，既读得清又不抢标题 */
 .lc-cta-sub{margin:0;font-size:18px;color:var(--lc-text-4)}
 
-/* —— 8b. 收尾留资表单（★ P1-3；结构见 components/LeadForm.tsx，本页带状态组件之一，另两处是 HeroDemo/DevSample） —— */
+/* —— 8b. 收尾留资表单（★ P1-3；结构见 components/LeadForm.tsx，本页带状态组件之一，另两处是 HeroDemo/DevSample；
+   〇-Z 起 hero 右侧的 TrialPanel 也在本页带状态，它在自己的文件里，见 components/TrialPanel.tsx） —— */
 /* 分隔线两侧各一段 1px 短线：把"免费自助注册"与"留资等回电"两条路在视觉上并置成二选一 */
 .lc-lead-sep{display:flex;align-items:center;gap:14px;width:100%;max-width:560px;font-size:15px;color:var(--lc-text-4)}
 .lc-lead-sep::before,.lc-lead-sep::after{content:'';flex:1;height:1px;background:rgba(0,0,0,.12)}

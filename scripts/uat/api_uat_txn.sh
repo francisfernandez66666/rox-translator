@@ -142,6 +142,32 @@
 #       且**库里四键行数一根毛都不许多**（半套配置＝长短单口径不一致）/ 合法保存读回等值+审计含新数 /
 #       脏值下生效值回缺省而 stored 原样回吐（表单不许把"从来没生效的数"显示成当前配置）/
 #       reset 清空四键；跑完删净自己写的行与审计，把「库里没这四行走代码缺省」的线上形态交还下一轮（含 T40）。
+#   T65 品牌显式指名的跨域闸（★ 2026-09-28 〇-Y · F-79）：匿名带 ?tenant_id=<别家> 必须**忽略参数**
+#       回落平台（tenant_id=0 且看不见别家品牌名）、超管同一条请求必须命中（后台跨租户配置这条正路
+#       不许误杀）、脏参数（abc/0/-7）一律 200 且回落——忽略是降级，不是把它打成错误页。
+#   T66 免登录即时翻译试用（★ 2026-09-28 〇-Z #74/#75）：真服务进程 + 零 Authorization 打通
+#       /api/trial/translate → 逐句倒计时（默认 5 句档、出参钉 pro）→ 最小间隔与额度用完**分码**
+#       （RATE_LIMITED 带 retry_after / TRIAL_EXHAUSTED 带 reason=device|ip|global，前端据此决定
+#       是「等 3 秒」还是「去注册」）→ 校验族与 405 一句都不吃配额 → 伪造 "mode":"fast" 被忽略 →
+#       ★ 成本归属数到库里：成功句数 = 租户 0 的 charge_kind='log' 行数增量，客户余额 SUM 一字不动，
+#       且不得出现「租户>0 且 user_id=0」的实扣行；预算触顶留 open 告警；收尾把 rate_limits 的
+#       滚动 24h 窗、留痕行、三档配置键清干净（不清＝下一轮同 IP 直接假红）。
+#   T67 站点门面开关（★ 2026-09-28 〇-Z #69/#70）：演示站不进主页做成**部署级开关**（两站共用 dist
+#       与二进制）→ 开放态首页**逐字节等于未注入**（护住《部署指南》§十 的 2,591 B 判据）→
+#       关闭态多出的字节**恰好等于那段标记** → /pricing、/compare 对访客仍 200（只管 `/`）→
+#       策略读写同源（改完 GET 回来必须已是新值）→ 整包交还进段前的平台策略（语义比对，不逐字）。
+#   T68 旧包额度耗尽仍须能升级（★ 2026-09-28 〇-Z · 缺陷 F-80，演示站实测）：台账 left=0 的
+#       付费订阅客户点「升级」曾被 409「当前套餐已无剩余价值，无法抵扣升级」彻底挡死——
+#       越用满越想加钱的人越买不了。现钉：① 耗尽升级成单且**抵扣 0、应付＝全价**（全价按主角
+#       自己那笔订阅单反推折扣系数，不写死数字）；② 换新包生效且**不多发额度**（order_carry
+#       行数不得增长）；③ 反向对照·未耗尽仍按比例抵扣（应付＋抵扣＝全价）；
+#       ④ 反向对照·拿更便宜的包「升级」仍须 409（防止把修复做成整段放宽）。
+#   T69 免费注册账号防薅三档（★ 2026-09-28 〇-Z · 用户令 F-81）：设备档/平台日预算档在真 HTTP 出口上
+#       的四条腿＋一条默认档回落——设备触顶 429 且 reason=device、不建租户；平台触顶 429 且
+#       **先前占住的设备格必须退回**（否则系统自己的失败会吃掉用户当天额度）＋留 register_budget 告警；
+#       受邀加入在两档都触顶时照样放行且不推进计数（客户自己发的码不占平台名额）；
+#       脏设备号不返 400（公开接口契约，F-64/F-79 同形教训）但照记平台账；
+#       库里删档位键后回落代码默认 3 格。收尾清 rate_limits/alerts 并钉回开闸值。
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 #   —— 2026-09-21 实测：`ck X 'want' "$(post "$H" "{\"a\":1,\"b\":2}" /p)"` 里的 body 会被 bash
 #   在双引号内的命令替换中做**大括号展开**，按逗号切成两个参数，curl 发出残缺 body 换来「参数格式
@@ -2883,6 +2909,471 @@ done
 #   注册用户按本脚本既有惯例留下（各段自建用户都是这么留的）：users 行挂着会话/台账/邀请
 #   等外键，硬删要连带清一片表，而删除对这些用例零收益。
 if [ -n "${FID62:-}" ]; then dbq "DELETE FROM feedbacks WHERE id=$FID62" >/dev/null; fi
+
+# ---------- T66 免登录即时翻译试用（★ 2026-09-28 〇-Z #74/#75） ----------
+# 要锁的东西（进程内 trial_test.go 那 9 个用例看不见的三层，正是本段的射程）：
+#   ① **真路由 + 真匿名**：整段一条 Authorization 都不带，跑在 run_uat 起的真实服务进程上
+#      （库里 billing_enforced=1）。进程内测试把 handler 直接装配出来，「路由有没有注册进公网
+#      那张表」「访客会不会其实被鉴权middleware 拦在门口」它一概不知道。
+#   ② **PG 方言下的账目**：试用成本归属这件事（记在租户 0 的留痕行、客户余额一分不动）只有
+#      在真库里数得出来，而 AGENTS §一·4 要求生产方言必须进矩阵。
+#   ③ **配置热生效 + 断言耗材清理**：额度三档走 system_config 同名小写键，写进去当轮就该生效；
+#      rate_limits 的滚动 24h 窗**不清就把下一轮判红**（本脚本同一 IP 下一轮会再来一遍）。
+# 刻意**不**重复进程内已锁的细则（语种白名单全集、窗口过期恢复额度、env>库>默认 逐级回落），
+#   两层各锁自己那一层，改一处红一处才有定位价值。
+# body 一律先 printf 进变量再喂 req3：AGENTS §一·7 / 本文件头「大括号展开」雷的既定口径。
+DEV66A="uat66devAAAA01"; DEV66B="uat66devBBBB01"; DEV66C="uat66devCCCC01"; DEV66D="uat66devDDDD01"
+TXT66="今天的产品评审会改到下午三点。"
+t66body(){ printf '{"text":"%s","target_lang":"%s","device_id":"%s"%s}' "$1" "$2" "$3" "$4"; }
+# t66cnt <scope> <key> — 读 rate_limits 当前计数；**没有这一行时回 0**（不是空串）。
+#   为什么在助手层就归零：断言里「一行都没有」与「计数为 0」是同一件好事（没消耗配额），
+#   若把空串漏给 ckq，就得每条都自己写 ${x:-0}——漏一处就是一条假红。
+t66cnt(){ local v; v=$(dbq "SELECT count FROM rate_limits WHERE scope='$1' AND key='$2'" | tr -d '[:space:]'); printf '%s' "${v:-0}"; }
+# cks <用例名> <期望状态码> — 成功面专用：状态码等值 ＋ 不得带错误码（成功体没有 code 字段）。
+#   为什么不复用 ck3：ck3 的语义是「状态码+错误码+文案三件套都得有」，那是给失败面写的；
+#   拿它判成功支得把 code/msg 两个期望填空串再靠 `grep -qE ''` 恒真过关——那是一颗永远绿的判据。
+cks(){ local n="$1" want="$2" bad=""
+  [ "${R3ST:-}" = "$want" ] || { bad="$bad 状态码=${R3ST:-?}"; }
+  [ -z "${R3CODE:-}" ] || { bad="$bad 意外错误码=${R3CODE}"; }
+  if [ -z "$bad" ]; then PASS=$((PASS+1)); echo "PASS|$n"
+  else FAIL=$((FAIL+1)); echo "FAIL|$n|want HTTP $want 且无 code|got(${R3ST:-?},${R3CODE:-无})|$bad|body=${R3BODY:0:200}"; fi
+}
+
+# 进段前的账目基线（后面全按「增量」判，绝不对绝对值下手——本库已被前面 60 多段写过）
+MAXID66=$(dbq "SELECT COALESCE(MAX(id),0) FROM usage_ledger" | tr -d '[:space:]')
+LED0=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=0 AND charge_kind='log' AND user_id=0" | tr -d '[:space:]')
+BAL0=$(mny_norm "$(dbq "SELECT COALESCE(SUM(balance),0) FROM balance_accounts")")
+UD0=$(dbq "SELECT COUNT(*) FROM usage_daily WHERE tenant_id=0" | tr -d '[:space:]')
+
+# ① 逐句倒计时：默认 5 句档，left 一句一减；出参钉 mode=pro（试用面没有模式字段＝访客挑不了便宜档）
+B66=$(t66body "$TXT66" en "$DEV66A" "")
+req3 POST "" /api/trial/translate "$B66"; cks T66-a1-ok 200
+ck T66-a1-left4 '"left":4' "$R3BODY"
+ck T66-a1-mode-pro '"mode":"pro"' "$R3BODY"
+ck T66-a1-has-translation '"translation":"[^"]' "$R3BODY"
+ckn T66-a1-not-exhausted '"exhausted":true' "$R3BODY"
+# ② 最小间隔闸（同设备连点）：**必须与「额度用完」分码**——前端按 code 决定是「等 3 秒再来」还是
+#    「去注册」，混成一个码就等于把只是手快的访客送去注册页。
+req3 POST "" /api/trial/translate "$B66"; ck3 T66-a-interval-429 429 RATE_LIMITED '太快'
+ck T66-a-interval-retry-after '"retry_after":' "$R3BODY"
+ckn T66-a-interval-not-trial-code 'TRIAL_EXHAUSTED' "$R3BODY"
+# ★ 计数纪律：被闸拒掉的一句**不吃配额**（访客没拿到译文却少了一句额度，是最容易被投诉的一种账）
+ckq T66-a-interval-no-count 1 "$(t66cnt trial_dev "$DEV66A")"
+sleep 3   # 过 trialMinIntervalSec（常量 3s、不可配）；RateRecord 记的 window_start 按秒取整，睡满 3 必过
+req3 POST "" /api/trial/translate "$B66"; cks T66-a2-ok 200
+ck T66-a2-left3 '"left":3' "$R3BODY"
+sleep 3
+req3 POST "" /api/trial/translate "$B66"; cks T66-a3-ok 200
+ck T66-a3-left2 '"left":2' "$R3BODY"
+# ③ 设备额度用满：直接把这一行的计数钉到 5（等价「已成功翻过 5 句」，省下 4 次 3s 干等），
+#    间隔哨兵一起改到窗外——否则先撞上面那道 429，本道永远断不到。
+NOW66=$(date +%s); OLD66=$(( NOW66 - 120 ))
+dbq "UPDATE rate_limits SET count=5, window_start=$NOW66 WHERE scope='trial_dev' AND key='$DEV66A'" >/dev/null
+dbq "UPDATE rate_limits SET window_start=$OLD66 WHERE scope='guard_int' AND key='trial:$DEV66A'" >/dev/null
+req3 POST "" /api/trial/translate "$B66"; ck3 T66-a6-exhausted 429 TRIAL_EXHAUSTED '注册后继续使用'
+ck T66-a6-reason-device '"reason":"device"' "$R3BODY"
+ckn T66-a6-no-translation '"translation":' "$R3BODY"   # 拒绝体不许夹半份译文（前端按 left/exhausted 切引导卡）
+
+# ④ 校验族 ＋ 方法闸：全部 4xx，而且**一句都不该计数**（都拿设备 D 打，判据就看它的账目）
+B66NOD=$(printf '{"text":"%s","target_lang":"en"}' "$TXT66")
+req3 POST "" /api/trial/translate "$B66NOD"; ck3 T66-v-no-device 400 VALIDATION_ERROR '试用标识不合法'
+B66EMPTY=$(t66body "" en "$DEV66D" "")
+req3 POST "" /api/trial/translate "$B66EMPTY"; ck3 T66-v-empty-text 400 VALIDATION_ERROR '请输入'
+TXT66LONG=$(python3 -c 'print("超"*302)')   # 302 个字符：上限 300 按 rune 计，不能用字节凑（中文一字三字节）
+B66LONG=$(t66body "$TXT66LONG" en "$DEV66D" "")
+req3 POST "" /api/trial/translate "$B66LONG"; ck3 T66-v-too-long 400 VALIDATION_ERROR '过长'
+B66LANG=$(t66body "$TXT66" zz "$DEV66D" "")
+req3 POST "" /api/trial/translate "$B66LANG"; ck3 T66-v-bad-lang 400 VALIDATION_ERROR '暂不在试用范围'
+req3 GET "" /api/trial/translate; ck3 T66-v-method 405 METHOD_NOT_ALLOWED 'POST'
+ckq T66-v-validation-no-count 0 "$(t66cnt trial_dev "$DEV66D")"
+# ⑤ 请求体里伪造 "mode":"fast" 必须被忽略、且回显钉在 pro（字段表里没有 mode＝匿名改不了模式）
+B66FAST=$(t66body "$TXT66" en "$DEV66D" ',"mode":"fast"')
+req3 POST "" /api/trial/translate "$B66FAST"; cks T66-mode-forge-ok 200
+ck T66-mode-forge-echo-pro '"mode":"pro"' "$R3BODY"
+
+# ⑥ IP 档：换设备号也刷不动。把 IP 日上限钉成「此刻这一出口已用的句数」，新设备第一句就该被拒。
+#    key 现读不写死 127.0.0.1：clientIP 的取值随监听形态变（IPv6 环回 ::1 也是可能的），
+#    写死一次就把本道断言变成「永远读不到行」的假绿。
+IPKEY66=$(dbq "SELECT key FROM rate_limits WHERE scope='trial_ip' ORDER BY count DESC LIMIT 1" | tr -d '[:space:]')
+if [ -z "$IPKEY66" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL|T66-ip-key-found(trial_ip 一行都没有＝前面那 4 句没被记进 IP 账)"
+else
+  PASS=$((PASS+1)); echo "PASS|T66-ip-key-found($IPKEY66)"
+  IPUSED66=$(t66cnt trial_ip "$IPKEY66")
+  dbcfg trial_ip_daily "$IPUSED66"
+  B66B=$(t66body "$TXT66" en "$DEV66B" "")
+  req3 POST "" /api/trial/translate "$B66B"; ck3 T66-b-exhausted-ip 429 TRIAL_EXHAUSTED '注册后额度按账号计算'
+  ck T66-b-reason-ip '"reason":"ip"' "$R3BODY"
+fi
+# ⑦ 全局预算顶：三档同向时**先设备、再 IP、后全局**的判序也顺带钉住（先把 IP 放回去才轮到全局）。
+dbq "DELETE FROM system_config WHERE key='trial_ip_daily'" >/dev/null   # 删行＝回落代码默认 40
+G66=$(t66cnt trial_day 'global')
+dbcfg trial_global_daily "$G66"
+B66C=$(t66body "$TXT66" en "$DEV66C" "")
+req3 POST "" /api/trial/translate "$B66C"; ck3 T66-c-exhausted-global 429 TRIAL_EXHAUSTED '今日试用名额已用完'
+ck T66-c-reason-global '"reason":"global"' "$R3BODY"
+# 触顶文案只说「名额已满」，不把平台内部额度数字漏给匿名访客（判 R3MSG 而不是整页 body：
+#   trace_id 是十六进制串，含数字属正常，拿整体会把这条锁做成恒红）
+ckn T66-c-msg-no-quota-leak "$G66" "${R3MSG:-}"
+#   ⚠ 若 G66=0（前面一句都没成功），dbcfg 写 0 会被 trialLimit 当成非法值回落默认 3000，
+#     本道闸不触发 ⇒ 上面那条 ck3 直接红——是「没跑到前提」的响亮信号，不是静默通过。
+# 预算打满是市场费用异常信号（刷量或爆量），当天就得让运维看见 → 必须留一条租户 0 的 open 告警
+ALERT66=$(dbq "SELECT COUNT(*) FROM alerts WHERE tenant_id=0 AND kind='trial_budget' AND status='open'" | tr -d '[:space:]')
+[ "${ALERT66:-0}" -ge 1 ] && { PASS=$((PASS+1)); echo "PASS|T66-global-budget-alert($ALERT66 条)"; } \
+  || { FAIL=$((FAIL+1)); echo "FAIL|T66-global-budget-alert(预算打满却没告警＝运维只能月底对账才发现刷量)"; }
+
+# ⑧ ★ 成本归属（本段最值钱的一条）：成功的 4 句（设备 A 三句 ＋ 设备 D 一句）全部落在**租户 0 的
+#    留痕行**上；客户余额一分不动；也不许出现「租户>0 且 user_id=0」的实扣行——后者就是
+#    「把市场推广费用记到客户账上」的形态（客户来问账时无法解释，见 trial.go 文件头★段）。
+LED1=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=0 AND charge_kind='log' AND user_id=0" | tr -d '[:space:]')
+ckq T66-ledger-platform-rows-delta 4 "$(( ${LED1:-0} - ${LED0:-0} ))"
+BAL1=$(mny_norm "$(dbq "SELECT COALESCE(SUM(balance),0) FROM balance_accounts")")
+ckq T66-balance-untouched "$BAL0" "$BAL1"
+FK66=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id>0 AND user_id=0 AND id>$MAXID66" | tr -d '[:space:]')
+ckq T66-no-anon-charge-on-tenant 0 "${FK66:-0}"
+ND66=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=0 AND charge_kind<>'log' AND id>$MAXID66" | tr -d '[:space:]')
+ckq T66-tenant0-all-log-kind 0 "${ND66:-0}"
+# 留痕行的业务口径：task_type=translate / biz_kind=text / biz_mode=pro（管理台按这三档核试用成本，
+#   写成别的档位就对不上账；⚠ 这些行**不会**出现在「按租户用量」里——它们不属于任何客户）
+OK66=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=0 AND charge_kind='log' AND task_type='translate' AND biz_kind='text' AND biz_mode='pro' AND id>$MAXID66" | tr -d '[:space:]')
+ckq T66-ledger-biz-shape 4 "${OK66:-0}"
+# 数量取引擎回吐的 token 用量，纯知识库命中时按「一句一个单位」兜底，避免试用在成本视图里全 0
+POS66=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=0 AND charge_kind='log' AND quantity>0 AND id>$MAXID66" | tr -d '[:space:]')
+ckq T66-ledger-quantity-positive 4 "${POS66:-0}"
+
+# 收尾清账（★ 不清就是给下一轮下毒）：rate_limits 的滚动 24h 窗留在库里，下一轮同 IP/同设备
+#   会直接被判「额度用完」——那是一条查不出根因的假红。留痕行、告警、三档配置键一并归零。
+dbq "DELETE FROM rate_limits WHERE scope IN ('trial_dev','trial_ip','trial_day') OR (scope='guard_int' AND key LIKE 'trial:%')" >/dev/null
+dbq "DELETE FROM usage_ledger WHERE tenant_id=0 AND charge_kind='log' AND user_id=0 AND id>$MAXID66" >/dev/null
+dbq "DELETE FROM alerts WHERE tenant_id=0 AND kind='trial_budget'" >/dev/null
+dbq "DELETE FROM system_config WHERE key IN ('trial_device_quota','trial_ip_daily','trial_global_daily')" >/dev/null
+# usage_daily 的租户 0 日计数：只有试用的留痕路径会写 tid=0 这一行，进段前是空才顺手删空
+#   （若进段前就有行，那是别人的账，本段无权清理）。
+if [ "${UD0:-0}" = "0" ]; then dbq "DELETE FROM usage_daily WHERE tenant_id=0" >/dev/null; fi
+# 反证：账真清干净了。「写了一串 DELETE 却因方言/转义没执行」是本仓反复踩过的形态
+LEFT66=$(dbq "SELECT COUNT(*) FROM rate_limits WHERE scope LIKE 'trial_%' OR key LIKE 'trial:%'" | tr -d '[:space:]')
+ckq T66-cleanup-rate-limits-empty 0 "${LEFT66:-0}"
+CKEY66=$(dbq "SELECT COUNT(*) FROM system_config WHERE key LIKE 'trial_%'" | tr -d '[:space:]')
+ckq T66-cleanup-config-empty 0 "${CKEY66:-0}"
+LED2=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=0 AND charge_kind='log' AND user_id=0" | tr -d '[:space:]')
+ckq T66-cleanup-ledger-back-to-baseline "$LED0" "$LED2"
+
+# ---------- T67 站点门面开关：关主页时首页恰好只多一段标记（★ 2026-09-28 〇-Z #69/#70） ----------
+# 背景：演示站（体验机）不该对外营业——访客打开 `/` 直接进登录注册页；主站照旧出官网。
+#   做成**部署级开关**（后台运营策略 front.landing_enabled，环境变量 LANDING_DISABLED 可覆盖），
+#   两站共用同一份 dist 与同一个二进制：前端按 hostname 判定等于把「哪个站是体验机」编译进产物，
+#   换域名要重构建，而且本地任何闸门都看不见那条分支。
+# 本段锁 HTTP 出口那三件事（进程内的 site_flags_test.go 锁优先序与注入函数本身）：
+#   ① 开放态首页**逐字节等于未注入**：一个恒为 true 的标记会把《部署指南》§十 钉死的
+#      「主站首页 2,591 B」判据无声顶翻，排查的人会先去怀疑品牌注入那条链；
+#   ② 关闭态多出来的字节**恰好等于那段标记**（多一个字＝有别的东西混进了直出面）；
+#   ③ 开关只管 `/`：/pricing、/compare 对访客仍须 200 出 SPA（体验机也要让人看到价），
+#      且策略读写同源——改完再 GET，面板回显必须已是新值，否则运维照着假现值点保存会写反。
+# 跑完把 ops_policy 交还原样：api_uat.sh 的 B1 段在本段之前已经写过平台策略，
+#   所以这里必须「GET 取现值 → 只改一个字段 → 原值交还」，绝不写死成清空。
+IDX0=$(curl -s --max-time 60 "$B/")
+LEN0=${#IDX0}
+ck T67-open-index-served '<div id="root"' "$IDX0"
+ckn T67-open-no-marker '__site_flags__' "$IDX0"
+# 取平台策略现值，就地生成两份 body：off 档、以及「交还原值」档（同一份原文，防中途有人改过）
+req3 GET "$AH" /api/admin/ops/policy; cks T67-policy-get 200
+T67OFF="/tmp/uat67_off_$$.json"; T67ORG="/tmp/uat67_org_$$.json"
+printf '%s' "$R3BODY" | python3 -c '
+import json, sys
+d = json.loads(sys.stdin.read() or "{}")
+plat = d.get("platform")
+if not isinstance(plat, dict):
+    sys.stderr.write("platform 不是对象，拒绝生成 payload\n")
+    sys.exit(2)
+off = json.loads(json.dumps(plat))
+front = dict(off.get("front") or {})
+front["landing_enabled"] = False
+off["front"] = front
+open(sys.argv[1], "w", encoding="utf-8").write(json.dumps({"policy": off}))
+open(sys.argv[2], "w", encoding="utf-8").write(json.dumps({"policy": plat}))
+' "$T67OFF" "$T67ORG"
+if [ -s "$T67OFF" ] && [ -s "$T67ORG" ]; then PASS=$((PASS+1)); echo "PASS|T67-payload-files"
+else FAIL=$((FAIL+1)); echo "FAIL|T67-payload-files(两份 body 没生成＝后面整段会在错误的开关态上判)"; fi
+POL0=$(dbq "SELECT value FROM system_config WHERE key='ops_policy'" | tr -d '\n')
+# 用 --data @file 而不是把 JSON 拼进命令行：本段 body 是嵌套对象，正是文件头点名的展开雷区
+R67=$(curl -s --max-time 60 -X POST "$B/api/admin/ops/policy/save" -H "$AH" -H "$J" --data "@$T67OFF")
+ck T67-save-off '"success":true' "$R67"
+IDX1=$(curl -s --max-time 60 "$B/")
+ck T67-off-marker '"landing":false' "$IDX1"
+MARK67='<script id="__site_flags__">window.__SITE_FLAGS__={"landing":false};</script>'
+ckq T67-off-delta-equals-marker "$(( LEN0 + ${#MARK67} ))" "${#IDX1}"
+ck T67-off-branding-intact '__BRANDING__' "$IDX1"   # 门面标记排在品牌注入之后，两件事不许互相顶掉
+B67P=$(get "$AH" /api/admin/ops/policy)
+ck T67-policy-echo-off '"landing_enabled":false' "$B67P"   # 读写同源：面板回显必须已是新值
+# 访客可达面：关掉主页不许顺手把营销页一起收掉（收掉的形态＝/compare 也 302/404 或整页兜底）
+for P67 in /pricing /compare; do
+  R67P=$(curl -s --max-time 60 -w '\n%{http_code}' "$B$P67")
+  ckq "T67-guest-open-${P67//\//}" 200 "${R67P##*$'\n'}"
+  ck "T67-guest-spa-${P67//\//}" '<div id="root"' "${R67P%$'\n'*}"
+done
+# 还原：交还进段之前那份平台策略（原先没这一行就把行删掉，不给库里留一个「从来没生效的现值」）
+R67R=$(curl -s --max-time 60 -X POST "$B/api/admin/ops/policy/save" -H "$AH" -H "$J" --data "@$T67ORG")
+ck T67-restore-saved '"success":true' "$R67R"
+if [ -z "$POL0" ]; then dbq "DELETE FROM system_config WHERE key='ops_policy'" >/dev/null; fi
+IDX2=$(curl -s --max-time 60 "$B/")
+ckn T67-restored-no-marker '__site_flags__' "$IDX2"
+ckq T67-restored-byte-identical "$LEN0" "${#IDX2}"
+# 库里的策略原文按**语义**比对还原：交还走的是后端重 marshal，键序与缺省项可能和进段前不同，
+#   按字符串死比会假红（同 AGENTS §一·7 mny_norm 那一条族的「文本≠值」坑）。
+POL1=$(dbq "SELECT value FROM system_config WHERE key='ops_policy'" | tr -d '\n')
+if python3 -c '
+import json, sys
+a = (sys.argv[1] or "").strip() or "{}"
+b = (sys.argv[2] or "").strip() or "{}"
+try:
+    sys.exit(0 if json.loads(a) == json.loads(b) else 1)
+except Exception:
+    sys.exit(1)
+' "$POL0" "$POL1"; then
+  PASS=$((PASS+1)); echo "PASS|T67-policy-row-restored"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T67-policy-row-restored|before=${POL0:0:160}|after=${POL1:0:160}"
+fi
+rm -f "$T67OFF" "$T67ORG"
+# 本段两次 ops_policy_save 的审计行按既有口径**留着**：审计是只增的证据链，api_uat.sh 的 B1 段
+#   同样留了同类行，全仓没有任何用例按 ops_policy_save 的行数做等值锁（动这条锁前重新核一遍）。
+
+# ---------- T68 旧包额度耗尽仍须能升级（★ 2026-09-28 〇-Z · 缺陷 F-80） ----------
+# 现象（演示站 langcross_demo 实测）：租户 1 的 basic_m 那笔已支付订单发放 1,200,000 token，
+#   台账 quota_grants(kind='plan',source='order',ref_id=该订单) 的 SUM("left")=0，
+#   而订阅有效期到 10-17 还没过。客户点「升级到 专业·年」→ 409
+#   「当前套餐已无剩余价值，无法抵扣升级」，升级这条路彻底封死。
+# 为什么这是缺陷而不是正确校验：抵扣为 0 只是「旧包不再折让」，不是「不许升级」。
+#   **越是把套餐用满、越想加钱的客户，越被系统挡在门口**——而这恰是升级最该成交的人群。
+# 修法（store/billing.go 的 ComputeUpgradeCredit ④ 段）：剩余率 0 时抵扣按 0 继续出单，
+#   应付即全价；上面那五条前置校验（无生效套餐／同包／非付费包／目标价不高于当前／
+#   订单 token 口径异常）一条都没放宽。
+# 本段钉 HTTP 出口的四件事（store 层那条分支另有 packages_test.go 的 TestPackageUpgradeExhausted，
+#   那条已做过「旧代码必红」的反证）：
+#   ① 耗尽租户升级必须成单（200 而不是 409），且**抵扣 0、应付＝全价**；
+#      「全价」按**主角自己那笔订阅单**反推折扣系数（挂牌 20 → 实收 AM68LOW ⇒ 系数 = AM68LOW/20），
+#      再乘目标包挂牌价取期望值。为什么不写死 30/60/120：试运营首月半价挂在
+#      「租户注册未满 30 天」上，写死数字会在那条策略调整或换批次注册时假红（同 AGENTS §一·7
+#      「金额锁不写死汇率」那族口径）；系数取自同一租户的同一列，档位对它一视同仁。
+#   ② 支付确认后订阅身份换新包，且**不多发一分额度**：旧包没有剩余可结转，
+#      新单名下的 order_carry 转入行数必须与升级前持平（09-21 生产就查出过幽灵 3,000 积分）；
+#   ③ 反向对照·部分消耗仍按比例抵扣：抵扣额 > 0，且「应付＋抵扣＝该目标包全价」；
+#   ④ 反向对照·前置校验仍拒：拿更便宜的包「升级」仍须 409 并给可读文案
+#      （防止有人把这条修复做成「整段校验一律放行」的过度放宽）。
+SFX68=$(date +%s | tail -c 6)
+U68A="uatuser_t68a$SFX68"
+curl -s $B/api/auth/register -H "$J" -d "{\"username\":\"$U68A\",\"password\":\"uatpass123\",\"type\":\"personal\",\"name\":\"T68耗尽升级\",\"email\":\"$U68A@test.com\",\"agreed\":true}" >/dev/null
+T68A=$(tok $U68A uatpass123); H68A="Authorization: Bearer $T68A"
+TID68A=$(sq "SELECT tenant_id FROM users WHERE username='$U68A' LIMIT 1" | tr -d '[:space:]')
+[ -n "$TID68A" ] || { FAIL=$((FAIL+1)); echo "FAIL|T68-tenant-created(取不到租户 ID：本段全部判据无效)"; }
+# 建三档付费包（都挂主角租户名下；GetPackageByCode 的 tenant_id IN (0,?) 是租户作用域）：
+#   low 20 元/30 天 → high 60 元/365 天 → max 120 元/365 天，只为让「目标价必须更高」成立
+for P in "uat_t68_low:20000:20:30" "uat_t68_high:60000:60:365" "uat_t68_max:100000:120:365"; do
+  IFS=: read -r PC PS PP PD <<< "$P"
+  curl -s $B/api/admin/packages/create -H "$AH" -H "$J" \
+    -d "{\"tenant_id\":$TID68A,\"code\":\"$PC\",\"name\":\"T68$PC\",\"ptype\":\"paid\",\"sentences\":$PS,\"price_money\":$PP,\"duration_days\":$PD}" >/dev/null
+done
+
+# 订阅 low 并到账（攒出「有订阅且额度充足」的初始态，供 ③ 的部分消耗对照用）
+R=$(post "$H68A" '{"code":"uat_t68_low"}' /api/package/subscribe)
+OID68A=$(echo "$R" | pv '.get("order",{}).get("id") or 0')
+[ "$OID68A" != "0" ] && post "$AH" "{\"id\":$OID68A,\"tenant_id\":$TID68A}" /api/admin/orders/pay >/dev/null
+GR68=$(sq "SELECT COUNT(*) FROM quota_grants WHERE tenant_id=$TID68A AND kind='plan' AND \"left\">0" | tr -d '[:space:]')
+[ "${GR68:-0}" -ge 1 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|T68-subscribed-low($GR68 条有效台账)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T68-subscribed-low(台账 0 条：订阅未到账，后面全部判据失去前提)"; }
+# 折扣系数从这一笔真实订单反推（挂牌 20 元）；系数为 0 会让后面两条金额锁退化成「和 0 比 0」的假绿
+AM68LOW=$(mny_norm "$(sq "SELECT amount_money FROM orders WHERE id=$OID68A" | tr -d '[:space:]')")
+FAC68=$(python3 -c "
+try:
+    f = float('${AM68LOW:-0}') / 20.0
+except Exception:
+    f = 0.0
+print(f if f > 0 else 0)")
+if [ "$(python3 -c "print(1 if float('${FAC68:-0}') > 0 else 0)")" = "1" ]; then
+  PASS=$((PASS+1)); echo "PASS|T68-price-factor-derived(实收 $AM68LOW / 挂牌 20 ⇒ 系数 $FAC68)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T68-price-factor-derived(low 单实收=${AM68LOW:-空}，推不出折扣系数，①③ 的金额锁将失去意义)"
+fi
+EXP_HIGH=$(python3 -c "print(round(60.0*float('${FAC68:-0}'),2))")
+EXP_MAX=$(python3 -c "print(round(120.0*float('${FAC68:-0}'),2))")
+
+# ③ 反向对照·**未耗尽**时升级仍按比例抵扣（F-80 的修法不能把比例抵扣本身做坏）
+#    台账削掉四分之一（留四分之三）→ 升级 high：抵扣必须 > 0，且 应付＋抵扣 == high 的全价 $EXP_HIGH
+dbq "UPDATE quota_grants SET \"left\"=total-total/4 WHERE tenant_id=$TID68A AND kind='plan'" >/dev/null
+REM68=$(sq "SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$TID68A AND kind='plan' AND \"left\">0" | tr -d '[:space:]')
+req3 POST "$H68A" /api/package/upgrade '{"code":"uat_t68_high"}'
+ck T68-partial-upgrade-accepted '"success":true' "$R3BODY"
+OID68UP1=$(echo "$R3BODY" | pv '.get("order",{}).get("id") or 0')
+CR68UP1=$(mny_norm "$(sq "SELECT credit_money FROM orders WHERE id=$OID68UP1" | tr -d '[:space:]')")
+AM68UP1=$(mny_norm "$(sq "SELECT amount_money FROM orders WHERE id=$OID68UP1" | tr -d '[:space:]')")
+if [ -n "$CR68UP1" ] && ! feq "$CR68UP1" "0"; then
+  PASS=$((PASS+1)); echo "PASS|T68-partial-credit-positive(剩余 $REM68 ⇒ 抵扣 $CR68UP1)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T68-partial-credit-positive(剩余 $REM68 却抵扣 ${CR68UP1:-空}：比例抵扣被改坏或单没建成)"
+fi
+if [ -n "$AM68UP1" ] && [ -n "$CR68UP1" ] && feq "$(python3 -c "print(round(float('${AM68UP1}')+float('${CR68UP1}'),2))")" "$EXP_HIGH"; then
+  PASS=$((PASS+1)); echo "PASS|T68-partial-sum-equals-full($AM68UP1+$CR68UP1=$EXP_HIGH)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T68-partial-sum-equals-full(应付 ${AM68UP1:-空} ＋ 抵扣 ${CR68UP1:-空} ≠ high 全价 $EXP_HIGH)"
+fi
+# 部分结转本来就该留行：作为 ② 的对照基线（② 要求的是「不再多长」，不是「必须为 0」）
+CARRY0=$(sq "SELECT COUNT(*) FROM quota_grants WHERE tenant_id=$TID68A AND source='order_carry'" | tr -d '[:space:]')
+
+# ① 主角判据·**额度全耗尽**后升级必须成单（旧代码在这里回 409「当前套餐已无剩余价值」）
+dbq "UPDATE quota_grants SET \"left\"=0 WHERE tenant_id=$TID68A AND kind='plan'" >/dev/null
+REM68Z=$(sq "SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$TID68A AND kind='plan' AND \"left\">0" | tr -d '[:space:]')
+[ "$REM68Z" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T68-exhausted-precondition(剩余 0，与演示站同形态)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T68-exhausted-precondition(剩余=$REM68Z，本段判据失去意义)"; }
+req3 POST "$H68A" /api/package/upgrade '{"code":"uat_t68_max"}'
+if [ "$R3ST" = "200" ] && echo "$R3BODY" | grep -qE '"success":true'; then
+  PASS=$((PASS+1)); echo "PASS|T68-exhausted-upgrade-200(F-80：额度耗尽不再挡门)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T68-exhausted-upgrade-200|状态码=$R3ST 错误码=${R3CODE:-无} 文案=${R3MSG:-无}|body=${R3BODY:0:200}"
+fi
+OID68UP2=$(echo "$R3BODY" | pv '.get("order",{}).get("id") or 0')
+CR68UP2=$(mny_norm "$(sq "SELECT credit_money FROM orders WHERE id=$OID68UP2" | tr -d '[:space:]')")
+AM68UP2=$(mny_norm "$(sq "SELECT amount_money FROM orders WHERE id=$OID68UP2" | tr -d '[:space:]')")
+# 抵扣 0（旧包没价值可退）＋应付＝全价（**不是被减成 0 元单**：0 元单会让回调金额核对退化成恒真）
+[ -n "$CR68UP2" ] && feq "$CR68UP2" "0" \
+  && { PASS=$((PASS+1)); echo "PASS|T68-exhausted-credit-zero"; } \
+  || { FAIL=$((FAIL+1)); echo "FAIL|T68-exhausted-credit-zero(抵扣=${CR68UP2:-空})"; }
+if [ -n "$AM68UP2" ] && feq "$AM68UP2" "$EXP_MAX"; then
+  PASS=$((PASS+1)); echo "PASS|T68-exhausted-pay-full-price($AM68UP2 == max 全价 $EXP_MAX)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T68-exhausted-pay-full-price(应付=${AM68UP2:-空} 期望=$EXP_MAX)"
+fi
+
+# ② 支付确认后：订阅身份换新包，且**不多发额度**（旧包剩余 0 ⇒ 结转行数不得增长）
+[ "$OID68UP2" != "0" ] && post "$AH" "{\"id\":$OID68UP2,\"tenant_id\":$TID68A}" /api/admin/orders/pay >/dev/null
+PC68=$(dbjsonstr tenants $TID68A permissions package_code | tr -d '[:space:]')
+[ "$PC68" = "uat_t68_max" ] && { PASS=$((PASS+1)); echo "PASS|T68-exhausted-new-package-active($PC68)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T68-exhausted-new-package-active(got $PC68)"; }
+CARRY1=$(sq "SELECT COUNT(*) FROM quota_grants WHERE tenant_id=$TID68A AND source='order_carry'" | tr -d '[:space:]')
+if [ "${CARRY1:-0}" = "${CARRY0:-0}" ]; then
+  PASS=$((PASS+1)); echo "PASS|T68-exhausted-no-extra-carry(carry 行数 $CARRY1 == 升级前 $CARRY0)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T68-exhausted-no-extra-carry(旧包剩余 0 却多出结转行：$CARRY0 → $CARRY1，等于凭空多发额度)"
+fi
+
+# ④ 反向对照·前置校验一条都没被放宽：A 现在在 max（120 元），拿更便宜的 low（20 元）「升级」必须仍拒
+req3 POST "$H68A" /api/package/upgrade '{"code":"uat_t68_low"}'
+ck3 T68-downgrade-still-rejected 409 CONFLICT '价格应高于当前套餐'
+
+# 清理本批自建包（订单/台账留痕供人工对账，与 T50/T51 同口径），避免污染后续套餐列表断言
+dbq "DELETE FROM packages WHERE code IN ('uat_t68_low','uat_t68_high','uat_t68_max','uat_t68_base')" >/dev/null
+
+# ---------- T69 免费注册账号防薅三档（★ 2026-09-28 〇-Z · 用户令「注册免费账号也是和免费体验试用一样有防薅限制」＝F-81） ----------
+# 口径（与免登录试用 T66 同一族，但**射程只圈在「新建免费账号＝自带体验额度」这一支**）：
+#   设备档 reg_dev（默认 3 次/24h）＋平台日预算 reg_day（默认 500）＋既有的 IP 档 guard_int/guard_day。
+#   受邀加入已有企业（joinWithInvite）与专属域名注册（dedicatedTid>0）**一律不占格**——
+#   前者花的是客户自己发的一次性邀请码，50 人同 NAT 出口入职不该排三天队，更不该在拒绝时烧掉客户的码。
+# 本段锁 HTTP 出口那四件事（进程内 register_guard_f81_test.go 锁的是分支与并发语义，两层各管一段）：
+#   ① 设备档触顶：429 RATE_LIMITED ＋ details.reason=device ＋ retry_after，且**不建租户、不多记账**；
+#   ② 平台档触顶：429 文案指向日径全额（不是「该设备」），且**设备档那一格必须退回来**
+#      ——「先占平台格再被平台挡」时若不退设备格，用户会因为系统的失败丢掉自己当天的额度；
+#   ③ 受邀加入在**两档都触顶**的状态下照样 200，且两档计数纹丝不动；
+#   ④ 脏设备号（过不了 ^[A-Za-z0-9_-]{8,64}$）不当场 400：这是公开注册接口的对外契约，
+#      老缓存包／脚本客户端／管理台代客注册都可能不带这个字段（F-64、F-79 两批「契约改动引发现网故障」的同形教训），
+#      但**照样吃平台档**，且脏值不得进限流账本当 key。
+# 另加 ⑤：库里删掉档位键后回落到代码默认 3 格（第 3 次注册应放行）——锁「env>库>默认」的最后一档没接错。
+# 收尾必须把 rate_limits 的滚动 24h 窗、register_budget 告警、两个档位键清/钉干净（同 T66 口径）：
+#   留着＝下一轮同 IP/同设备一进门就被判「今日名额已满」，那是一条查不出根因的假红。
+SFX69=$(date +%s | tail -c 6)
+DEV69A="uat69devAAAA01"; DEV69B="uat69devBBBB01"
+t69body(){ printf '{"username":"%s","password":"uatpass123","type":"personal","name":"T69防薅","email":"%s@test.com","agreed":true,"device_id":"%s"}' "$1" "$1" "$2"; }
+t69invitebody(){ printf '{"username":"%s","password":"uatpass123","type":"enterprise","role_choice":"member","invite":"%s","name":"T69受邀","email":"%s@test.com","agreed":true,"device_id":"%s"}' "$1" "$2" "$1" "$3"; }
+# t69cnt <scope> <key> — 没有这一行时回 0（同 t66cnt：断言里「没账」与「计数 0」是同一件好事，
+#   漏空串给 ckq 就是一条假红，别指望每条都自己写 ${x:-0}）。
+t69cnt(){ local v; v=$(dbq "SELECT count FROM rate_limits WHERE scope='$1' AND key='$2'" | tr -d '[:space:]'); printf '%s' "${v:-0}"; }
+# 段内压低设备档、平台档先开到不可能触顶（让 ①③④ 只在「设备档」这一条上被判定，根因唯一）
+dbcfg register_device_daily_limit 2
+dbcfg register_global_daily_limit 100000
+# 旧告警先清：CreateAlert 的「同租户+同类型已有 open 即跳过」会让本段的「新增告警 ≥1」恒假（那是判据坏，不是机制坏）
+dbq "DELETE FROM alerts WHERE tenant_id=0 AND kind='register_budget'" >/dev/null
+ALERTMAX69=$(dbq "SELECT COALESCE(MAX(id),0) FROM alerts" | tr -d '[:space:]')
+
+# ① 设备档 2 格用完 ⇒ 第 3 次 429
+U69A1="uatuser_t69a1$SFX69"; B69A1=$(t69body "$U69A1" "$DEV69A")
+req3 POST "" /api/auth/register "$B69A1"; cks T69-d1-ok 200
+U69A2="uatuser_t69a2$SFX69"; B69A2=$(t69body "$U69A2" "$DEV69A")
+req3 POST "" /api/auth/register "$B69A2"; cks T69-d2-ok 200
+ckq T69-device-count-two 2 "$(t69cnt reg_dev "$DEV69A")"
+TEN69_0=$(dbq "SELECT COUNT(*) FROM tenants" | tr -d '[:space:]')
+U69A3="uatuser_t69a3$SFX69"; B69A3=$(t69body "$U69A3" "$DEV69A")
+req3 POST "" /api/auth/register "$B69A3"
+ck3 T69-d3-device-capped 429 RATE_LIMITED '该设备今天注册的账号已达上限'
+ck T69-d3-reason-device '"reason":"device"' "$R3BODY"
+ck T69-d3-retry-after '"retry_after":' "$R3BODY"
+TEN69_1=$(dbq "SELECT COUNT(*) FROM tenants" | tr -d '[:space:]')
+ckq T69-d3-no-tenant-created "$TEN69_0" "$TEN69_1"
+ckq T69-d3-count-not-overrun 2 "$(t69cnt reg_dev "$DEV69A")"
+
+# ② 平台日预算触顶（上限就配成当前计数＝「已满」，不写死数字：本轮前面几十段注册都在这本账上，
+#    写死 500 会在注册量变化时假红／假绿，同 AGENTS §一·7「金额锁不写死」那族口径）
+GUSED69=$(t69cnt reg_day global)
+if [ "${GUSED69:-0}" -ge 1 ] 2>/dev/null; then
+  PASS=$((PASS+1)); echo "PASS|T69-platform-premise(进本段前平台档已记 $GUSED69 格)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T69-platform-premise(reg_day/global 计数为 0＝前面那些注册一笔都没占平台格，reserveFreeAccount 没接线，本段判据失去前提)"
+fi
+dbcfg register_global_daily_limit "$GUSED69"
+U69B1="uatuser_t69b1$SFX69"; B69B1=$(t69body "$U69B1" "$DEV69B")
+DEVB69_0=$(t69cnt reg_dev "$DEV69B")
+req3 POST "" /api/auth/register "$B69B1"
+ck3 T69-g-budget-full 429 RATE_LIMITED '今日免费注册名额已用完'
+ck T69-g-retry-after '"retry_after":' "$R3BODY"
+TEN69_2=$(dbq "SELECT COUNT(*) FROM tenants" | tr -d '[:space:]')
+ckq T69-g-no-tenant-created "$TEN69_1" "$TEN69_2"
+# ★ 退格证据：本笔在平台格上被挡，之前占下的设备格必须原样退回（defer release 的 HTTP 出口面）
+ckq T69-g-device-seat-refunded "$DEVB69_0" "$(t69cnt reg_dev "$DEV69B")"
+ALERT69=$(dbq "SELECT COUNT(*) FROM alerts WHERE tenant_id=0 AND kind='register_budget' AND status='open' AND id>$ALERTMAX69" | tr -d '[:space:]')
+if [ "${ALERT69:-0}" -ge 1 ] 2>/dev/null; then
+  PASS=$((PASS+1)); echo "PASS|T69-platform-alert($ALERT69 条新开告警)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T69-platform-alert(平台名额被打满却没留告警＝刷号只表现为注册按钮失灵，运维当天查不到)"
+fi
+
+# ③ 受邀加入：两档都处在「已满」状态下（设备档 DEV69A 已触顶、平台档上限=现计数）仍须放行且不推进计数
+CODE69="UAT69J$SFX69"
+post "$AH" "{\"code\":\"$CODE69\",\"tenant_id\":$TAID}" /api/admin/invite-codes/create >/dev/null
+INV69=$(dbq "SELECT COUNT(*) FROM invite_codes WHERE code='$CODE69' AND tenant_id=$TAID AND used=0" | tr -d '[:space:]')
+if [ "${INV69:-0}" = "1" ]; then
+  PASS=$((PASS+1)); echo "PASS|T69-invite-code-ready(绑到租户 $TAID 的一次性码已就位)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T69-invite-code-ready(读不到可用邀请码：本段判据没有前提)"
+fi
+G0_69=$(t69cnt reg_day global); D0_69=$(t69cnt reg_dev "$DEV69A")
+U69M="uatuser_t69m$SFX69"; B69M=$(t69invitebody "$U69M" "$CODE69" "$DEV69A")
+req3 POST "" /api/auth/register "$B69M"; cks T69-invite-join-ok 200
+ckq T69-invite-no-platform-seat "$G0_69" "$(t69cnt reg_day global)"
+ckq T69-invite-no-device-progress "$D0_69" "$(t69cnt reg_dev "$DEV69A")"
+TID69M=$(dbq "SELECT tenant_id FROM users WHERE username='$U69M'" | tr -d '[:space:]')
+ckq T69-invite-into-coder-tenant "$TAID" "$TID69M"
+
+# ④ 脏设备号：不 400（对外契约），但照记平台账、且脏值不得进限流账本
+dbcfg register_global_daily_limit 100000
+G1_69=$(t69cnt reg_day global)
+BAD69="bad dev!"
+U69D="uatuser_t69d$SFX69"; B69D=$(t69body "$U69D" "$BAD69")
+req3 POST "" /api/auth/register "$B69D"; cks T69-dirty-device-200 200
+ckq T69-dirty-counts-platform "$(( ${G1_69:-0} + 1 ))" "$(t69cnt reg_day global)"
+ckq T69-dirty-no-ledger-row 0 "$(t69cnt reg_dev "$BAD69")"
+
+# ⑤ 库里删掉档位键 ⇒ 回落代码默认 3 格：DEV69A 已占 2 格，这次应放行（读到 2 就红，读到 0/关闭也红）
+dbq "DELETE FROM system_config WHERE key='register_device_daily_limit'" >/dev/null
+U69A4="uatuser_t69a4$SFX69"; B69A4=$(t69body "$U69A4" "$DEV69A")
+req3 POST "" /api/auth/register "$B69A4"; cks T69-default-tier-third-ok 200
+ckq T69-default-tier-count 3 "$(t69cnt reg_dev "$DEV69A")"
+
+# 收尾清账＋反证（「写了一串 DELETE 却因方言/转义没执行」是本仓反复踩过的形态）
+dbq "DELETE FROM rate_limits WHERE (scope='reg_dev' AND key LIKE 'uat69dev%') OR (scope='reg_day' AND key='global')" >/dev/null
+dbq "DELETE FROM alerts WHERE tenant_id=0 AND kind='register_budget'" >/dev/null
+# 两档钉回 harness 的开闸值：本段之后还有前端 Playwright 一轮注册，留 2 格会把它们打成 429 假红
+dbcfg register_device_daily_limit 100000
+dbcfg register_global_daily_limit 100000
+LEFT69=$(dbq "SELECT COUNT(*) FROM rate_limits WHERE scope IN ('reg_dev','reg_day')" | tr -d '[:space:]')
+ckq T69-cleanup-rate-limits-empty 0 "${LEFT69:-0}"
+ALEFT69=$(dbq "SELECT COUNT(*) FROM alerts WHERE kind='register_budget'" | tr -d '[:space:]')
+ckq T69-cleanup-alerts-empty 0 "${ALEFT69:-0}"
+ckq T69-cleanup-device-tier-restored 100000 "$(dbq "SELECT value FROM system_config WHERE key='register_device_daily_limit'" | tr -d '[:space:]')"
+ckq T69-cleanup-global-tier-restored 100000 "$(dbq "SELECT value FROM system_config WHERE key='register_global_daily_limit'" | tr -d '[:space:]')"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

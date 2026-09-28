@@ -77,6 +77,10 @@ ck M1-both-healthy '"ok":true' "$(curl -s $A_URL/status) | $(curl -s $B_URL/stat
 source scripts/uat/dblib.sh
 dbcfg register_ip_min_interval_sec 0
 dbcfg register_ip_daily_limit 1000
+# ★ F-81：设备档／平台日预算档开大，否则「A 开户 → B 立即可消费」这类多实例链路会被防薅挡住
+#   （两实例共享同一本 rate_limits 账，跨实例的注册也各占一格）。T69 段内自行压低并钉回。
+dbcfg register_device_daily_limit 100000
+dbcfg register_global_daily_limit 100000
 dbcfg billing_enforced 1
 dbcfg pay_mode mock
 # 模型路由指向 mock LLM（models 表在共享库，A 写 B 读）

@@ -58,7 +58,7 @@ export function OpsP() {
   const [, t, tpl] = useT()
   const { isSuper, activeTenantId } = useAdmin()
   // 策略草稿（本地编辑；2026-09 起仅超管平台级可写）
-  const [pol, setPol] = useState<Record<string, any>>({ billing: { mode_rules: {} }, package: {}, invite: {}, registration: {}, limits: {}, payment: {}, content: {}, task: {} })
+  const [pol, setPol] = useState<Record<string, any>>({ billing: { mode_rules: {} }, package: {}, invite: {}, registration: {}, limits: {}, payment: {}, content: {}, task: {}, front: {} })
   const [windows, setWindows] = useState<any[]>([])
   const [, setNow] = useState('') // ★ E14
   // 推广窗口编辑弹窗
@@ -88,6 +88,9 @@ export function OpsP() {
           payment: eff.payment || {},
           content: eff.content || {},
           task: eff.task || {},
+          // ★ 〇-Z 门面：eff.front 由后端把 env LANDING_DISABLED 一并算进去（读写同源），
+          // 这里直接取用即可，前端绝不再按域名猜"这是不是演示站"。
+          front: eff.front || {},
         })
         setWindows(r.windows || [])
         try {
@@ -116,6 +119,8 @@ export function OpsP() {
   const setPay = (patch: Record<string, any>) => setPol((p) => ({ ...p, payment: { ...p.payment, ...patch } }))
   const setContent = (patch: Record<string, any>) => setPol((p) => ({ ...p, content: { ...p.content, ...patch } }))
   const setTask = (patch: Record<string, any>) => setPol((p) => ({ ...p, task: { ...p.task, ...patch } }))
+  // ★ 〇-Z 站点门面（官网首页对访客是否开放）：与其余因子同款不可变补丁
+  const setFront = (patch: Record<string, any>) => setPol((p) => ({ ...p, front: { ...p.front, ...patch } }))
 
   // 保存当前草稿（平台级，仅超管）；成功即重新加载生效策略
   const save = async () => {
@@ -354,6 +359,19 @@ export function OpsP() {
       <Panel title={t('ops.contentTitle')}>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', opacity: isSuper ? 1 : 0.55 }}>
           <Field label={t('ops.fileMaxMb')}><NumInput disabled={!isSuper} value={pol.content.file_max_mb || 0} onChange={(n) => setContent({ file_max_mb: n })} /></Field>
+        </div>
+      </Panel>
+
+      {/* ★ 〇-Z 站点门面：官网首页对未登录访客是否开放（演示站关掉它，访客直落登录注册页）。
+          checked 写成 `!== false` 而不是 `!!x`：后端默认档是「展示主页」，
+          库里没这个键时（存量 ops_policy 全都没有 front 段）必须显示为开，
+          否则一开面板就看到"关着"，谁都可能顺手点一下保存 ⇒ 把主站首页关掉。
+          另注：这一档还有更高的环境变量优先序（部署级 LANDING_DISABLED），
+          后端 opsBaseEffective 已把 env 章盖进回显值，所以界面上看到的就等于线上真实态。 */}
+      <Panel title={t('ops.frontTitle')}>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', opacity: isSuper ? 1 : 0.55 }}>
+          <Field label={t('ops.frontLanding')}><Switch disabled={!isSuper} checked={pol.front?.landing_enabled !== false} onChange={(e) => setFront({ landing_enabled: e.target.checked })} /></Field>
+          <span style={{ fontSize: 14, color: 'var(--adm-faint)', maxWidth: 420, lineHeight: 1.7 }}>{t('ops.frontHint')}</span>
         </div>
       </Panel>
 

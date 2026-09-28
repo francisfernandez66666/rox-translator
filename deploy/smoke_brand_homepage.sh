@@ -38,12 +38,22 @@
 #      只有打真域名才证得了「线上已换上有守卫的二进制」。两条子探针（首页注入面 + 接口面）
 #      都要点名：只堵一半会留下「API 通了、注入还漏」的第二形态。
 #      取不到 `tenant_id` 字段时**只播报不计分**（未配品牌的站点本就没有注入体，那由 F 定性）。
+#   H.（★ 2026-09-28 〇-Z 门面开关，必跑）首页 HTML 里 **`__site_flags__` 标记在不在**：
+#      · 默认档（主站，EXPECT_LANDING_OFF=0）：不该有。主页开放的部署必须与「本特性不存在」
+#        逐字节相同——判据 A 那个 2,591 B 就是靠这条纪律守住的，标记漏进主站＝有人把
+#        LANDING_DISABLED 配到了主站单元，或平台策略 front.landing_enabled 被误改；
+#      · 关闭档（演示站，EXPECT_LANDING_OFF=1）：必须有且值是 `"landing":false`。
+#        缺标记说明演示单元的 systemd drop-in 没装/没 `daemon-reload`（或库里策略没落），
+#        体验机就会对外营业——这正是用户提「演示站不要展示主页」时要关掉的那扇门。
+#      为什么必须在**线上**钉这一条：本地 T67 与 Go 单测都在自起的临时实例上跑，看不见
+#      systemd 环境变量、也看不见 Caddy 有没有把首页改道回静态（静态直出永远不带这两个标记）。
 #
 # 用法：
 #   bash deploy/smoke_brand_homepage.sh                       # 默认打主站（无品牌 ⇒ B/C 走空值分支）
 #   BASE=https://rox-test.lexicorn.cn bash deploy/smoke_brand_homepage.sh   # 打演示站（含品牌图 ⇒ D 也跑）
 #   EXPECT_BRAND_IMAGES=2 bash deploy/smoke_brand_homepage.sh # 钉住「品牌图正好 2 张」
 #   EXPECT_BRANDING=1 bash deploy/smoke_brand_homepage.sh     # ★ 钉住「首页由后端直出」（F-74 验收用）
+#   EXPECT_LANDING_OFF=1 bash deploy/smoke_brand_homepage.sh  # ★ 钉住「该站主页对访客已关闭」（〇-Z 演示站验收用）
 #   MAX_KB=8 bash deploy/smoke_brand_homepage.sh              # 收紧体积上限
 #   RUN_NEG=0 bash ...                                        # 目标不是本后端时跳过负向探针
 #   bash deploy/smoke_brand_homepage.sh --selftest            # ★ 自检：绿态必须 0、红态必须非 0
@@ -61,6 +71,7 @@ BASE="${BASE:-https://langcross.lexicorn.cn}"
 MAX_KB="${MAX_KB:-30}"                                 # 首页 HTML 上限（KB）
 EXPECT_BRAND_IMAGES="${EXPECT_BRAND_IMAGES:-}"         # 可选：钉住品牌图张数
 EXPECT_BRANDING="${EXPECT_BRANDING:-0}"                 # ★ F-74：=1 时要求首页必须带后端注入体
+EXPECT_LANDING_OFF="${EXPECT_LANDING_OFF:-0}"            # ★ 〇-Z：=1 时要求首页带 landing:false 门面标记
 RUN_NEG="${RUN_NEG:-1}"                                # 负向探针开关
 SKIP_HOMEPAGE_PROBE="${SKIP_HOMEPAGE_PROBE:-0}"        # ★ 仅自检用：不请求首页，只按 FORCE_URLS 验判据 D
 FORCE_URLS="${FORCE_URLS:-}"                           # ★ 仅自检用：每行一个品牌件地址（模拟已注入的地址）
@@ -185,6 +196,59 @@ PY
     "BASE=http://127.0.0.1:8788" "EXPECT_BRANDING=1" "EXPECT_BRAND_IMAGES=" "RUN_NEG=0"
   kill "$ST_PID" 2>/dev/null || true; wait "$ST_PID" 2>/dev/null || true
 
+  # —— 用例 3.6（绿）＋3.7（红）：判据 H 的一正一反（〇-Z 门面开关）。
+  #    夹具与用例 3 **同一份**首页，只在 </head> 前多插那段 68 字符标记，于是
+  #    A/B/C/D/F/G 全部照旧，红绿差异只能来自 H 本身：
+  #      3.6 关闭档期望（EXPECT_LANDING_OFF=1）＋有标记 ⇒ 必须绿（演示站线上就是这个形态）；
+  #      3.7 开放档期望（默认 0）＋有标记 ⇒ 必须红（主站被误关门面＝对外营业的门被挡住）。
+  #    另配一条「红项恰 1 处且点名 H」的输出级核查（与用例 6b 同族）：只看 exit≠0 会把
+  #    别处带来的红算成 H 的功劳。
+  #    ★ 不预先 mkdir：shutil.copytree 见到已存在的目标目录会 FileExistsError 直接砸掉整支自检
+  #      （09-28 自检首跑实测：脚本 exit 1，红的是夹具自己而不是判据；用例 6 的 f79leak 就是不带 mkdir 的）。
+  python3 - "$TMP/nobrand" "$TMP/offgate" <<'PY'
+import os, shutil, sys
+src, dst = sys.argv[1], sys.argv[2]
+shutil.copytree(src, dst)
+p = os.path.join(dst, 'index.html')
+html = open(p, encoding='utf-8').read()
+mark = '<script id="__site_flags__">window.__SITE_FLAGS__={"landing":false};</script>'
+assert '</head>' in html and mark not in html
+open(p, 'w', encoding='utf-8').write(html.replace('</head>', mark + '</head>', 1))
+PY
+  ( cd "$TMP/offgate" && exec python3 -m http.server 8788 --bind 127.0.0.1 >/dev/null 2>&1 ) &
+  ST_PID=$!
+  sleep 1
+  st_case "关闭档夹具＋期望关闭（H 必须绿）" green \
+    "BASE=http://127.0.0.1:8788" "EXPECT_LANDING_OFF=1" "EXPECT_BRAND_IMAGES=" "RUN_NEG=0"
+  kill "$ST_PID" 2>/dev/null || true; wait "$ST_PID" 2>/dev/null || true
+  ( cd "$TMP/offgate" && exec python3 -m http.server 8788 --bind 127.0.0.1 >/dev/null 2>&1 ) &
+  ST_PID=$!
+  sleep 1
+  st_case "关闭档夹具＋期望开放（主站被误关门面，H 必须红）" red \
+    "BASE=http://127.0.0.1:8788" "EXPECT_BRAND_IMAGES=" "RUN_NEG=0"
+  kill "$ST_PID" 2>/dev/null || true; wait "$ST_PID" 2>/dev/null || true
+  offgate_reds="$(printf '%s\n' "$LAST_OUT" | grep -c '  ✗ ' || true)"
+  if [ "$offgate_reds" = "1" ] && printf '%s\n' "$LAST_OUT" | grep -q '✗ H '; then
+    printf '  ✅ 自检 用例 3.7b：红项恰 1 处且出自 H（不是别的判据顺带红）\n'
+  else
+    printf '  ❌ 自检 用例 3.7b：关闭档夹具在开放档期望下产出 %s 处红项 ⇒ H 的红不孤立，判据归属存疑\n' "$offgate_reds"
+    st_fail=$((st_fail + 1))
+  fi
+  # 反向那一半（关闭档期望但**没有**标记＝drop-in 没生效）用现成的 nobrand 夹具直接造：
+  ( cd "$TMP/nobrand" && exec python3 -m http.server 8788 --bind 127.0.0.1 >/dev/null 2>&1 ) &
+  ST_PID=$!
+  sleep 1
+  st_case "开放档夹具＋期望关闭（systemd drop-in 没生效，H 必须红）" red \
+    "BASE=http://127.0.0.1:8788" "EXPECT_LANDING_OFF=1" "EXPECT_BRAND_IMAGES=" "RUN_NEG=0"
+  kill "$ST_PID" 2>/dev/null || true; wait "$ST_PID" 2>/dev/null || true
+  drop_reds="$(printf '%s\n' "$LAST_OUT" | grep -c '  ✗ ' || true)"
+  if [ "$drop_reds" = "1" ] && printf '%s\n' "$LAST_OUT" | grep -q '✗ H '; then
+    printf '  ✅ 自检 用例 3.8b：红项恰 1 处且出自 H（缺标记这一支也抓得住）\n'
+  else
+    printf '  ❌ 自检 用例 3.8b：缺标记夹具产出 %s 处红项 ⇒ 判据归属存疑\n' "$drop_reds"
+    st_fail=$((st_fail + 1))
+  fi
+
   # —— 线上现状观测（★ 2026-09-27 〇-X 改造：这一例此前**恒红**，红的是闸门自己）。
   #   旧判据钉的是"部署前演示站品牌图仍是库里的 dataURI ⇒ 必须红"，而 F-46 已于 09-26 发版、
   #   读侧惰性落件把存量收敛成 /brand/ 地址，线上转绿 ⇒ 那条反向基线永远对不上，
@@ -196,11 +260,13 @@ PY
   #        会把"判据是否有效"混成"网络是否抖"，与用例 3 当初不用真站点的理由同一条）；
   #     ③ 要看线上：SELFTEST_DEMO=1 bash deploy/smoke_brand_homepage.sh --selftest
   #        （顺手钉 EXPECT_BRANDING=1：演示站首页自 F-73 通配块起就应带后端注入体——
-  #         本次改造顺带把它变成 F-74 的**线上正对照**。）
-  #   旧变量 SELFTEST_SKIP_DEMO 随本次改造作废（默认已不跑，反向开关没有意义）。
+  #         本次改造顺带把它变成 F-74 的**线上正对照**。
+  #         ★ 〇-Z 又钉上 EXPECT_LANDING_OFF=1：演示站的目标形态就是「访客主页关闭」，
+  #           drop-in（Environment=LANDING_DISABLED=1）没生效时这条观测会点出 H 红，
+  #           便于发版当场看见；它仍**不计分**，故上线前后跑都不会把自检本身判红。）
   if [ "${SELFTEST_DEMO:-0}" = "1" ]; then
     demo_rc=0
-    demo_out="$(BASE=https://rox-test.lexicorn.cn EXPECT_BRAND_IMAGES= EXPECT_BRANDING=1 RUN_NEG=0 \
+    demo_out="$(BASE=https://rox-test.lexicorn.cn EXPECT_BRAND_IMAGES= EXPECT_BRANDING=1 EXPECT_LANDING_OFF=1 RUN_NEG=0 \
       bash "$REPO/deploy/smoke_brand_homepage.sh" 2>&1)" || demo_rc=$?
     note "  （线上只读观测，不计入自检分）演示站 exit=$demo_rc"
     printf '%s\n' "$demo_out" | sed 's/^/      | /'
@@ -370,11 +436,12 @@ PY
     note "★ 自检失败 $st_fail 项 ⇒ 判据本身不可信，先修脚本再谈线上冒烟"
     exit 1
   fi
-  note "自检全绿：10 例（绿 4：品牌件齐备 / 未注入常态 / 存量 dataURI 经读侧收敛＋F 首页确有注入体 / 缺件后自愈转绿；
-#       红 6：dataURI 漏进首屏 A+B+C、静态直出首页 F（F-74 未生效形态）、件被同尺寸写坏 D、件缺失 D、件是 HTML 壳或过小 D、
-#             匿名点名别家租户被注入采纳 G（F-79 复发形态））都判对了。
-#       另有 2 条读数存在性核查（1b：G 绿态确实跑出读数；6b：用例 6 的红项恰 1 处且出自 G）——
-#       它们堵的是「判据没跑到也算绿」和「红来自别处也算 G 的功劳」两类假象。"
+  note "自检全绿：13 例（绿 5：品牌件齐备 / 未注入常态 / 关闭档夹具配关闭期望 H / 存量 dataURI 经读侧收敛＋F 首页确有注入体 / 缺件后自愈转绿；
+#       红 8：dataURI 漏进首屏 A+B+C、静态直出首页 F（F-74 未生效形态）、件被同尺寸写坏 D、件缺失 D、件是 HTML 壳或过小 D、
+#             匿名点名别家租户被注入采纳 G（F-79 复发形态）、
+#             开放档期望却带门面标记 H（主站被误关门面）、关闭档期望但无标记 H（演示站 drop-in 没生效））都判对了。
+#       另有 4 条读数存在性核查（1b：G 绿态确实跑出读数；3.7b/3.8b：H 两支红各恰 1 处且出自 H；6b：用例 6 的红项恰 1 处且出自 G）——
+#       它们堵的是「判据没跑到也算绿」和「红来自别处也算某条判据的功劳」两类假象。"
   exit 0
 fi
 
@@ -438,7 +505,9 @@ note "品牌首屏冒烟：BASE=$BASE"
 #   而 :+ 只看"非空"，会把默认态也显示成"这条在跑"——判据清单撒谎比不列更糟。
 LEG_F=""
 if [ "$EXPECT_BRANDING" = "1" ]; then LEG_F=" / F 首页由后端直出（带 __branding__ 注入体）"; fi  # ★ 不用 `A && B` 末句形态：本脚本 set -e，条件为假时该行返回非 0 会直接中止整支冒烟
-note "判据：A 首屏体积<${MAX_KB}KB / B 品牌字段是地址不是 dataURI / C 全文无 data:image / D 品牌件真取得到字节 / E 缺件如实 4xx${LEG_F} / G 匿名 ?tenant_id= 点名别家必须回落平台（F-79）"
+LEG_H=""
+if [ "$EXPECT_LANDING_OFF" = "1" ]; then LEG_H=" / H 该部署已对访客关闭主页（须带门面标记）"; else LEG_H=" / H 主页开放档（不得出现门面标记）"; fi
+note "判据：A 首屏体积<${MAX_KB}KB / B 品牌字段是地址不是 dataURI / C 全文无 data:image / D 品牌件真取得到字节 / E 缺件如实 4xx${LEG_F} / G 匿名 ?tenant_id= 点名别家必须回落平台（F-79）${LEG_H}"
 note "首页 HTTP $http_code，body ${bytes} B（上限 $((MAX_KB * 1024)) B）"
 
 if [ "$http_code" != "200" ]; then
@@ -530,6 +599,39 @@ if [ "$EXPECT_BRANDING" = "1" ]; then
     ok "F 首页带后端注入体 __branding__ ⇒ 该域名的首页确实由 translator-server 出栈（F-74 生效）"
   else
     red "F 首页**没有** __branding__ 注入 ⇒ 首页仍由 Caddy file_server 静态直出（F-74 未生效：改兜底段为 reverse_proxy 后需 reload Caddy，并确认换过 translator-server 二进制）"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 2c) 判据 H（★ 2026-09-28 〇-Z 门面开关，双向必跑）：`__site_flags__` 标记在不在。
+#     两个方向都要钉，是因为这条判据抓的是**部署形态**而不是代码对错：
+#       · 主站（开放档）多出一段标记 ⇒ 有人把 LANDING_DISABLED 落到主站单元了（对外营业的门面被关掉）；
+#       · 演示站（关闭档）缺这段标记 ⇒ systemd drop-in 没生效（或环境变量名写错 / 没换新二进制），
+#         首页照常开放，本地 T67 与 vitest/e2e 全都看不见这一层——那正是"测试绿、线上没关"。
+#     开放档判"逐字节等于未注入"而不是"值不等于 false"：siteFlags.ts 的缺省口径是
+#     「读不到标记一律按主页开放」，所以注入一段 `{"landing":true}` 在功能上无害，
+#     但它会把主站首页 2,591 B 的发版判据顶红（《部署指南》§十），仍是部署偏离。
+#     关闭档额外核 `"landing":false` 字面量：只有标记名没有那个值＝注入逻辑变了，
+#     前端照样会按默认档开放主页，那条红必须报出来。
+#     ⚠️ 消费端（访客打开 `/` 实测被重定向到 `/login`）由 e2e/landing_off_gate.spec.ts 锁，
+#        服务端注入那条腿（开＝不注、关＝注且字节增量恰等于标记长度）由 UAT T67 锁。
+# ---------------------------------------------------------------------------
+FLAG_MARK='<script id="__site_flags__">window.__SITE_FLAGS__={"landing":false};</script>'
+if grep -q -a -F '__site_flags__' "$body"; then
+  if [ "$EXPECT_LANDING_OFF" = "1" ]; then
+    if grep -q -a -F "$FLAG_MARK" "$body"; then
+      ok "H 首页带门面标记 landing:false ⇒ 该部署的主页确实对访客关闭（演示站口径）"
+    else
+      red "H 首页出现了 __site_flags__ 却没有 landing:false 那段字面量 ⇒ 注入形状变了，前端会按默认档开放主页"
+    fi
+  else
+    red "H 主页开放档（EXPECT_LANDING_OFF=0）却注入了门面标记 ⇒ LANDING_DISABLED 落错单元了，主站首页会把访客挡在登录页"
+  fi
+else
+  if [ "$EXPECT_LANDING_OFF" = "1" ]; then
+    red "H 该部署本该关闭访客主页（EXPECT_LANDING_OFF=1）却没有 __site_flags__ 注入 ⇒ drop-in 没生效（核对 systemd Environment=、是否换过 translator-server 二进制、Caddy 是否仍静态直出）"
+  else
+    ok "H 主页开放档：首页无门面标记（逐字节等于未注入，主站 2,591 B 口径不受影响）"
   fi
 fi
 
@@ -636,9 +738,10 @@ else
 fi
 
 if [ "$fails" -ne 0 ]; then
-  note "★ 品牌首屏冒烟失败 $fails 项（判据 A/B/C/D/E/F/G 见文件头）"
-  note "  排查顺序：① translator-server 是否已换新二进制（品牌面属后端直出）② UserDataDir/brand 目录是否可写"
+  note "★ 品牌首屏冒烟失败 $fails 项（判据 A/B/C/D/E/F/G/H 见文件头）"
+  note "  排查顺序：① translator-server 是否已换新二进制（品牌面与门面标记都属后端直出）② UserDataDir/brand 目录是否可写"
   note "  ③ 库里品牌字段是否仍是 dataURI（读侧会惰性落件，落件失败才回落空 ⇒ 看日志 brand_image_* 告警）"
+  note "  ④ H 红时先想部署级因子：门面开关落在该单元 systemd 的 LANDING_DISABLED 上，前端只认后端注入的那段标记，别在前端找"
   exit 1
 fi
 note "品牌首屏冒烟全绿：首屏体积受控、品牌字段是地址、件真取得到、缺件如实报错。"

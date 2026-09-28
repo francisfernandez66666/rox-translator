@@ -68,10 +68,16 @@ export default function PricingPage() {
           <a href="/docs/terms">{t('land.pNavTerms')}</a>
           <a href="/docs/sla">{t('land.pNavSla')}</a>
           <a href="/docs/privacy">{t('land.pNavPrivacy')}</a>
-          {/* 同一位置只放一枚按钮：已登录给「进入后台」，未登录给「免费注册」，不摆两个入口抢视线 */}
+          {/* 同一位置只放「进入后台」这一枚主按钮；未登录时它写「免费注册」。
+              ★ 〇-Z #75：旁边补一条「登录」文字链（低权重、不抢视线）——已经有账号的人
+              被要求再注册一次是用户点名的劝退形态；主按钮的文案与落点仍然一致（免费注册→/register），
+              不改标签就不用动 12 语种词典。 */}
           {user
             ? <Button size="sm" onClick={() => navigate('/admin')}>{t('land.pAdmin')}</Button>
-            : <Button size="sm" onClick={() => navigate('/register')}>{t('land.pRegBtn')}</Button>}
+            : <>
+              <a href="/login">{t('land.navLogin')}</a>
+              <Button size="sm" onClick={() => navigate('/register')}>{t('land.pRegBtn')}</Button>
+            </>}
         </nav>
       </header>
 

@@ -86,9 +86,15 @@ export default function PriceComparePage() {
           <a href="/pricing">{t('land.pNavPricing')}</a>
           <a href="/docs/terms">{t('land.pNavTerms')}</a>
           <a href="/docs/privacy">{t('land.pNavPrivacy')}</a>
+          {/* ★ 〇-Z #75：与 /pricing 同一口径——未登录时主按钮仍写「免费注册」（标签与落点保持一致，
+              不改标签就不动 12 语种词典），旁边补一条低权重的「登录」文字链，
+              让已经有账号的人不必被要求再注册一次 */}
           {user
             ? <Button size="sm" onClick={() => navigate('/admin')}>{t('land.pAdmin')}</Button>
-            : <Button size="sm" onClick={() => navigate('/register')}>{t('land.pRegBtn')}</Button>}
+            : <>
+              <a href="/login">{t('land.navLogin')}</a>
+              <Button size="sm" onClick={() => navigate('/register')}>{t('land.pRegBtn')}</Button>
+            </>}
         </nav>
       </header>
 

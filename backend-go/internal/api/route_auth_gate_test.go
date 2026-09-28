@@ -136,6 +136,12 @@ var publicRouteAllowlist = map[string]string{
 	"/metrics":       "Prometheus 抓取端点：默认关闭，需 METRICS_TOKEN Bearer 或显式 METRICS_PUBLIC=1",
 	"/api/qr-image/": "支付/邀请二维码图片读取：匿名购买者扫码页需要；路径已做 basename 归一，只读 _qr 目录",
 	"/api/lead":      "营销留资（留言获取方案）：匿名 POST，IP 限流 + 蜜罐 + 可选 Turnstile",
+	// ★ 〇-Z（2026-09-28）：官网首页的免登录即时翻译试用。公开理由与兜底见 trial.go 文件头：
+	//   射程只有一句文本（≤300 字符、单目标语种、语种白名单取 /api/translation/langs 同一份事实）、
+	//   模式服务端强制 pro（请求体无 mode/options 可读）、额度三档（设备号 5 句／IP 每日／平台日预算）
+	//   全部落 rate_limits（重启与多实例共享），失败与闸门拒绝不计配额；
+	//   成本以 charge_kind='log' 记在租户 0，不进任何客户余额，也不写知识库、不发 webhook、不发奖励。
+	"/api/trial/translate": "免登录即时翻译试用（5 句）：匿名 POST，设备号+IP+平台日预算三档限流，服务端强制 pro 与语种白名单",
 	// SCIM 协议发现端点：RFC 7644 规定的静态元数据（Schema / ServiceProviderConfig），
 	// 不含任何租户数据；IdP 在配置阶段就要能匿名读到它才能发现鉴权方式。
 	// 真正的用户/组同步端点走 s.scimGuard（Bearer Token → 租户），不在本白名单。

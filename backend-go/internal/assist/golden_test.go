@@ -1,7 +1,7 @@
 // ============ internal/assist/golden_test.go · 职责说明 ============
 // 分级召回黄金集回归闸门（报告 §6 P3#22「质量基准不可见」的召回侧整改，任务 #58）。
 //
-// 形态：内嵌 40 条真实口吻的中文销售问句 → 期望命中的知识库条目 key（或期望
+// 形态：内嵌 47 条真实口吻的中文销售问句 → 期望命中的知识库条目 key（或期望
 // 「零命中走兜底」）。断言口径：
 //   - 命中 = 期望 key 出现在分级召回 top3（exact/fuzzy/vector 任一通道均算，
 //     默认配置 vector 关闭，即测第 1+2 级）；
@@ -21,6 +21,7 @@ package assist_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"translator/internal/assist/engine"
@@ -35,8 +36,9 @@ type goldenCase struct {
 	want []string
 }
 
-// goldenCases 黄金集（40 条，真实口吻/换说法/繁体/纯语义/无资料五类覆盖）。
-// 期望 key 依据 seed.json 现有 27 条知识的语义归属人工核对（2026-09-22）。
+// goldenCases 黄金集（47 条，真实口吻/换说法/繁体/纯语义/无资料五类覆盖）。
+// 期望 key 依据 seed.json 现有知识条目（2026-09-22 建集时 27 条；★ 〇-Z #76 补价值/
+// 竞品/比人工三条后为 30 条）的语义归属人工核对。
 var goldenCases = []goldenCase{
 	// ---- 第 1 级就该稳定命中的（防退化基本盘，UAT 38 断言同源场景） ----
 	{"想问问价格", []string{"billing-points"}},
@@ -86,6 +88,18 @@ var goldenCases = []goldenCase{
 	{"翻译完的文件在哪里下载", []string{"first-file-translate"}},
 	{"合同保密的话能放心用吗", []string{"security"}},
 	{"适合外贸团队用吗", []string{"who-for"}},
+
+	// ---- ★ 〇-Z #76：产品价值 / 竞品比较类问句（2026-09-28 生产截图：访客问
+	// 「我为啥要买你的服务，不用deepl」得到「这个问题我还没学到」）----
+	// 这类问句在旧 seed 里零词条可命中，只能落兜底；现补 vs-competitors / vs-manual /
+	// value-why-us 三条销售知识，把「为什么买、比通用机翻强在哪、比人工省多少」接上。
+	{"我为啥要买你的服务，不用deepl", []string{"vs-competitors"}},
+	{"DeepL 免费还能翻，你们有什么优势", []string{"vs-competitors"}},
+	{"你们和google翻译比怎么样", []string{"vs-competitors"}},
+	{"凭什么选你们不选别人", []string{"vs-competitors"}},
+	{"跟人工翻译比能省多少", []string{"vs-manual"}},
+	{"你们这个产品到底靠谱吗", []string{"value-why-us", "what-is"}},
+	{"不用注册能先试试吗", []string{"trial"}},
 }
 
 // goldenRecallFloor 命中率下限（条数）——分级召回落地时（2026-09-22）实测锚点：
@@ -96,7 +110,11 @@ var goldenCases = []goldenCase{
 // WHY 钉 40（当前实测值）：棘轮口径「只减不增」——6 条相似度救援全部转正入库，
 // 后续任何打分/阈值/seed 改动导致这 40 条有任何一条脱靶即红灯，须带着理由同步修
 // 夹具期望（如运营给「付费」补同义词后，该条期望应升级为 recharge）。
-const goldenRecallFloor = 40
+//
+// ★ 〇-Z #76（2026-09-28）：夹具从 40 条扩到 47 条（新增产品价值／竞品比较／比人工／
+// 免登录试用七条，均为 seed 补词条后第 1 级真实命中），下限同批抬到实测值 47——
+// 注意这不是「放宽」：条目数与下限同增，任何一条脱靶仍然红灯。
+const goldenRecallFloor = 47
 
 // newSeededEngine 按内嵌 seed 装配引擎（与 cmd/assist-server 首启灌入路径同构，
 // 无 LLM（llm.New(nil)）→ 第 3 级 vector 天然关闭，测第 1+2 级默认口径）。
@@ -191,6 +209,10 @@ func TestGoldenExactChannelNoRegression(t *testing.T) {
 		{"企业术语库怎么建", []string{"kb-setup"}},
 		{"怎么联系人工", []string{"contact-human"}},
 		{"怎么充钱", []string{"recharge", "billing-points"}},
+		// ★ 〇-Z #76：生产截图里那句「不用 deepl 我为啥买你」必须靠第 1 级关键词命中，
+		// 不许是靠相似度碰运气——碰运气意味着换个说法（DeepL 大写／插标点）就又脱靶。
+		{"我为啥要买你的服务，不用deepl", []string{"vs-competitors"}},
+		{"跟人工翻译比能省多少", []string{"vs-manual"}},
 	}
 	for _, c := range exactCases {
 		viaExact := false
@@ -204,6 +226,62 @@ func TestGoldenExactChannelNoRegression(t *testing.T) {
 		if !viaExact {
 			t.Errorf("第 1 级退化：%q 未经 exact 通道命中 %v", c.q, c.want)
 		}
+	}
+}
+
+// TestValueQuestionsAnsweredWithoutLLM ★ 〇-Z #76 应答侧收口：
+// 生产截图上访客问「我为啥要买你的服务，不用deepl」，助手回的是零命中兜底文案
+// 「这个问题我还没学到」。召回棘轮只保证「词条进得了 top3」，不保证「这句话真的
+// 答到用户脸上」——本测试打的是完整 Respond 链路（无 LLM 的规则模式，正是生产
+// 当时的形态），判据三条：
+//
+//	① 不许再出兜底文案；② 答案里必须带上该条知识的实义内容（防"命中了但拼空串"）；
+//	③ 动作按钮必须把官网的比价页 /compare 递出去（用户口径：这些信息我系统里都有，
+//	   那就把人带到有信息的那一页）。
+//
+// 反向对照：无关乱码仍须走兜底，否则本测试就是恒绿的空壳。
+func TestValueQuestionsAnsweredWithoutLLM(t *testing.T) {
+	e := newSeededEngine(t)
+	ctx := context.Background()
+	cases := []struct {
+		q      string
+		mustIn string // 答案必须包含的字面（取自 seed 词条）
+	}{
+		{"我为啥要买你的服务，不用deepl", "原版式交付"},
+		{"跟人工翻译比能省多少", "0.20–0.30"},
+		{"为什么要用能言", "上传→拿成品"},
+	}
+	for _, c := range cases {
+		rep := e.Respond(ctx, "sess-"+c.q, c.q, "/", nil)
+		if rep == nil {
+			t.Fatalf("%q 无回复", c.q)
+		}
+		if want := "这个问题我还没学到"; strings.Contains(rep.Content, want) {
+			t.Errorf("%q 仍走零命中兜底（含 %q）：%s", c.q, want, rep.Content)
+		}
+		if !strings.Contains(rep.Content, c.mustIn) {
+			t.Errorf("%q 答案未带期望知识 %q：%s", c.q, c.mustIn, rep.Content)
+		}
+		if rep.Source != "fallback" {
+			t.Errorf("%q 规则模式下来源应为知识拼接 fallback，实际 %q", c.q, rep.Source)
+		}
+		hasCompare := false
+		for _, a := range rep.Actions {
+			if a.URL == "/compare" {
+				hasCompare = true
+			}
+		}
+		if !hasCompare {
+			t.Errorf("%q 未给出比价页入口（访客要的就是这个）：%+v", c.q, rep.Actions)
+		}
+	}
+	// 反向对照：真·无资料问题必须继续走兜底并登记未答清单
+	rep := e.Respond(ctx, "sess-xyz", "xyzzy量子波动速翻布拉布拉", "/", nil)
+	if !strings.Contains(rep.Content, "这个问题我还没学到") {
+		t.Errorf("反向对照失败：乱码问句未走兜底，答案 %q", rep.Content)
+	}
+	if len(e.UnansweredQuestions()) == 0 {
+		t.Error("反向对照失败：兜底未登记 unanswered_questions")
 	}
 }
 

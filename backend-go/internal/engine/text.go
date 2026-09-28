@@ -362,10 +362,26 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 		sem := make(chan struct{}, 3)
 		var mu sync.Mutex
 		var wg sync.WaitGroup
+		// ★ 〇-Z（2026-09-28）：先把待校对的语言**快照成切片**再并发，range 期间不得有
+		//   goroutine 往 allTr 里写。旧写法是 `for lc, tr := range allTr { go func(){ allTr[lc]=… } }`：
+		//   mu 只挡住了校对线程彼此，挡不住「主线程还在 range、已放出去的线程在写同一张 map」，
+		//   而 map 的「边遍历边写」在 Go 里是 **runtime fatal error（concurrent map iteration and
+		//   map write）**——不是 panic，recoverPipeline 兜不住，整个进程直接挂。
+		//   线上没炸是因为真模型调用要几百毫秒到几秒，range 早就跑完了；
+		//   单测/UAT 的本地假上游瞬间返回，每次都撞在窗口里（-race 稳定复现，见
+		//   internal/api/trial_test.go 与 internal/engine/review_snapshot_test.go）。
+		type reviewJob struct {
+			lang string
+			text string
+		}
+		jobs := make([]reviewJob, 0, len(allTr))
 		for lc, tr := range allTr {
 			if strings.TrimSpace(tr) == "" {
 				continue
 			}
+			jobs = append(jobs, reviewJob{lang: lc, text: tr})
+		}
+		for _, j := range jobs {
 			wg.Add(1)
 			go func(lc, tr string) {
 				defer wg.Done()
@@ -381,7 +397,7 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 					allTr[lc] = revised
 					mu.Unlock()
 				}
-			}(lc, tr)
+			}(j.lang, j.text)
 		}
 		wg.Wait()
 	}

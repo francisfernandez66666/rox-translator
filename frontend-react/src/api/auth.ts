@@ -17,6 +17,8 @@
 //   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
 //   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
 import { bizResp, request, authHeaders, API_BASE, currentUiLang, type AdminResp } from './core'
+// ★ F-81（2026-09-28）：注册请求随附浏览器设备号（与免登录试用同一份标识，见 lib/trialDevice.ts 文件头）
+import { trialDeviceID } from '@/lib/trialDevice'
 
 /** 登录用户信息结构：含 id/用户名/显示名/角色/所属租户 */
 export interface AuthUser {
@@ -85,8 +87,11 @@ export async function authMe(): Promise<LoginResp> {
 /** 自助注册：组织名/邮箱验证码/Turnstile/邀请码/UTM 归因一并上报。
  *  ★ F-17（2026-09-25 批E）：app_lang=注册界面语种（12 码），调用方未显式传入时自动随 currentUiLang() 带上；
  *  后端按「载荷 app_lang → X-App-Lang 头 → 中文」解析，落库 users.preferred_lang 供邮件语种跟随。 */
-export async function authRegister(data: { username: string; password: string; type?: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string; job_role?: string; app_lang?: string; role_choice?: string; ref?: string; agreed?: boolean; brand_name?: string; brand_name_en?: string; brand_names?: string; landing_path?: string; utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_term?: string; utm_content?: string }): Promise<AdminResp> {
-  const payload = { app_lang: currentUiLang() || undefined, ...data }
+export async function authRegister(data: { username: string; password: string; type?: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string; job_role?: string; app_lang?: string; role_choice?: string; ref?: string; agreed?: boolean; brand_name?: string; brand_name_en?: string; brand_names?: string; landing_path?: string; utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_term?: string; utm_content?: string; device_id?: string }): Promise<AdminResp> {
+  // ★ F-81（2026-09-28）：device_id 与 app_lang 同口径在出口处兜上，调用方不传也有——
+  //   后端拿它做「同一浏览器每日新建免费账号」那一档防薅账（与免登录试用同一份设备号、同一张限流表）。
+  //   在这里收口而不是在每个注册表单里各写一遍：漏一个入口就等于给刷号留一个免记账的口子。
+  const payload = { app_lang: currentUiLang() || undefined, device_id: trialDeviceID(), ...data }
   return request('/api/auth/register', { method: 'POST', headers: authHeaders(), body: JSON.stringify(payload) })
 }
 

@@ -205,6 +205,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/register/personas", s.handleRegisterPersonas) // ★ 角色功能（2026-09-19）：公开角色字典
 	// ★ P1-3（2026-09-18）：营销留资（匿名 POST，IP 限流+蜜罐+可选 Turnstile，落 feedbacks 通道）
 	s.mux.HandleFunc("/api/lead", s.handleLeadCreate)
+	// ★ 〇-Z（2026-09-28）：免登录即时翻译试用（匿名 POST，设备号+IP+平台日预算三档额度，
+	//   服务端强制 pro 模式与语种白名单；成本记租户 0 留痕、不动任何客户余额）。见 trial.go 文件头。
+	s.mux.HandleFunc("/api/trial/translate", s.handleTrialTranslate)
 	s.mux.HandleFunc("/office/manifest.xml", s.handleOfficeManifest)
 	s.mux.HandleFunc("/office/taskpane.html", s.handleOfficeTaskPane)
 	s.mux.HandleFunc("/api/admin/memleak/capture", s.handleMemLeakCapture)

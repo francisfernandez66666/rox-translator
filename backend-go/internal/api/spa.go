@@ -107,6 +107,9 @@ func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request, path str
 		return
 	}
 	html := injectBrandingScript(s.brandingPayload(r), string(raw))
+	// ★ 〇-Z 站点门面标记：只在「主页对访客关闭」时落这一字节段，开放时上面那行已是终点
+	//（保持主站首页字节数判据不动，理由见 site_flags.go 文件头）。
+	html = injectSiteFlagsScript(s.siteFlagsPayload(r), html)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Write([]byte(html))
