@@ -131,10 +131,18 @@ def _import_ok(mod):
 
 
 def _module_version(mod_display, mod_import):
-    """现读库版本（不写死常量——版本串一旦进 git 就成了"一升级就双红"的假绿源）。"""
+    """现读库版本（不写死常量——版本串一旦进 git 就成了"一升级就双红"的假绿源）。
+
+    ★ 实测 bug（2026-09-29）：importlib.metadata.version() 吃的是**发行包名**，
+    不是 import 名。旧代码把 mod_import（fpdf / docx / PIL / anydoc）喂进去，
+    version() 抛 PackageNotFoundError → 恒返回空串，于是 probe 的 libs 里
+    fpdf2/python_docx/pillow/firecrawl_anydoc 全是空，G2 浅判据永远判不就绪。
+    这里改用 mod_display（fpdf2 / python-docx / Pillow / firecrawl-anydoc 发行包名）。
+    _import_ok 仍用 mod_import（它做的是 `import <名>`，那一步才吃 import 名）。
+    """
     code = ("import sys;"
             "from importlib.metadata import version;"
-            "sys.stdout.write(version(%r))" % mod_import)
+            "sys.stdout.write(version(%r))" % mod_display)
     try:
         r = subprocess.run([PYBIN, "-c", code], capture_output=True, text=True, timeout=20)
         return r.stdout.strip() if r.returncode == 0 else ""
