@@ -1143,6 +1143,28 @@ func (k *KBDatabase) UpsertEmbedding(id int64, vec []float32) error {
 	return nil
 }
 
+// NewSegmentsSince 增量查询：返回自指定时间后新增或修改的行（用于增量重建向量索引）。
+// 参数：since=检查点时间（RFC3339 格式）；返回精简行列表（含 pack_id，供计费判断）。
+// SQL 口径：updated_at > since OR (updated_at IS NULL AND id > last_max_id) —— 兼容旧数据无 updated_at。
+func (k *KBDatabase) NewSegmentsSince(since string) ([]Row, error) {
+	rows, err := db.Query(k.db, db.CurrentDialect(),
+		"SELECT id, zh, COALESCE(module,''), COALESCE(tenant_id,1), COALESCE(pack_id,0) FROM tm_segments WHERE updated_at > ? OR (updated_at IS NULL AND id > (SELECT COALESCE(MAX(id),0) FROM tm_segments WHERE updated_at <= ?)) ORDER BY id",
+		since, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var r Row
+		if err := rows.Scan(&r.ID, &r.Zh, &r.Module, &r.TenantID, &r.PackID); err != nil {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
 // VectorSearch 基于 pgvector 余弦距离（1 - cosine_distance）检索与 query 最相似的段。
 // 仅 PostgreSQL + 已安装 pgvector 时有效；其余情况返回 (nil, nil)，调用方应回退到 npz 索引。
 // 取较大候选集后在 Go 侧复用 npz.ScopeVisibility 做可见性/链内判定（与 npz 检索口径一致，

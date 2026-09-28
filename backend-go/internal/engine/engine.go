@@ -2296,6 +2296,16 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 		ctx = llm.WithEmbedOverride(ctx, eb, ek, em)
 	}
 
+	// ★ 增量重建（2026-09-28）：读取上次重建检查点，有则走增量路径。
+	since := ""
+	if e.St != nil {
+		since, _ = e.St.GetConfig("last_kb_rebuild_at")
+	}
+	if since != "" {
+		return e.rebuildKBIndexIncremental(ctx, since, isGlobalPack)
+	}
+
+	// 无检查点 → 全量重建（保持原逻辑）
 	rows, err := e.DB.AllRowsWithTenant()
 	if err != nil {
 		return 0, err
@@ -2405,7 +2415,178 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 		}
 	}
 
+	// ★ 更新检查点（全量重建完成后）
+	if e.St != nil {
+		now := time.Now().UTC().Format(time.RFC3339)
+		e.St.SetConfig("last_kb_rebuild_at", now)
+	}
+
 	return done, nil
+}
+
+// rebuildKBIndexIncremental 增量重建：只嵌入自上次重建后新增/修改的行，并合并到现有索引。
+// 参数：since=上次重建时间戳；isGlobalPack=判断包类型的闭包。
+// 返回：本次新增的向量数 + 错误。
+func (e *Engine) rebuildKBIndexIncremental(ctx context.Context, since string, isGlobalPack func(int64) bool) (int, error) {
+	// ① 查询新增/修改的行
+	newRows, err := e.DB.NewSegmentsSince(since)
+	if err != nil {
+		return 0, fmt.Errorf("增量查询失败: %w", err)
+	}
+	if len(newRows) == 0 {
+		log.Printf("[engine] KB 增量重建：无新数据，跳过")
+		return 0, nil
+	}
+	log.Printf("[engine] KB 增量重建：发现 %d 条新增/修改行", len(newRows))
+
+	// ② 加载旧索引
+	oldIdx, err := kb.LoadNPZ(e.NPZPath)
+	if err != nil {
+		log.Printf("[engine] KB 增量重建：加载旧索引失败（%v），降级为全量重建", err)
+		return 0, fmt.Errorf("加载旧索引失败，请手动触发全量重建: %w", err)
+	}
+
+	// ③ 构建旧 ID 集合（用于去重）
+	oldIDSet := map[int64]bool{}
+	for _, id := range oldIdx.IDs {
+		oldIDSet[id] = true
+	}
+
+	// ④ 过滤出真正的新行（排除已存在于旧索引的 ID）
+	var incrementalRows []kb.Row
+	for _, r := range newRows {
+		if !oldIDSet[r.ID] {
+			incrementalRows = append(incrementalRows, kb.Row{
+				ID: r.ID, Zh: r.Zh, Module: r.Module, TenantID: r.TenantID, PackID: r.PackID,
+			})
+		}
+	}
+	if len(incrementalRows) == 0 {
+		log.Printf("[engine] KB 增量重建：所有行已存在，跳过")
+		return 0, nil
+	}
+	log.Printf("[engine] KB 增量重建：真正新增 %d 条（去重后）", len(incrementalRows))
+
+	// ⑤ 批量嵌入新行
+	const batch = 32
+	usageByTenant := map[int64]int64{}
+	var newVecs [][]float32
+	var newIDs []int64
+	for i := 0; i < len(incrementalRows); i += batch {
+		end := i + batch
+		if end > len(incrementalRows) {
+			end = len(incrementalRows)
+		}
+		texts := make([]string, 0, end-i)
+		for _, r := range incrementalRows[i:end] {
+			texts = append(texts, r.Zh)
+		}
+		beforePrompt, beforeComp := e.UsageTokens(ctx)
+		vecs, err := e.LLM.EmbedBatch(ctx, texts)
+		if err != nil {
+			return len(newIDs), fmt.Errorf("第 %d-%d 批嵌入失败: %w", i, end, err)
+		}
+		afterPrompt, afterComp := e.UsageTokens(ctx)
+		deltaTotal := (afterPrompt + afterComp) - (beforePrompt + beforeComp)
+
+		// 计费分摊（同全量逻辑）
+		charsByTenant := map[int64]int64{}
+		var totalChars int64
+		for _, r := range incrementalRows[i:end] {
+			if isGlobalPack(r.PackID) || r.TenantID <= 0 {
+				continue
+			}
+			chars := int64(len(strings.TrimSpace(r.Zh)))
+			if chars <= 0 {
+				continue
+			}
+			charsByTenant[r.TenantID] += chars
+			totalChars += chars
+		}
+		if deltaTotal > 0 && totalChars > 0 {
+			for tid, chars := range charsByTenant {
+				share := deltaTotal * chars / totalChars
+				if share > 0 {
+					usageByTenant[tid] += share
+				}
+			}
+		}
+
+		for j, r := range incrementalRows[i:end] {
+			if j >= len(vecs) || len(vecs[j]) == 0 {
+				continue
+			}
+			newIDs = append(newIDs, r.ID)
+			newVecs = append(newVecs, vecs[j])
+		}
+	}
+
+	// ⑥ 合并索引：旧向量 + 新向量
+	mergedIdx := &kb.Index{
+		IDs:        append(oldIdx.IDs, newIDs...),
+		Vecs:       append(oldIdx.Vecs, newVecs...),
+		IDLangs:    oldIdx.IDLangs,
+		IDTenants:  make(map[int64]int64, len(oldIdx.IDTenants)+len(newIDs)),
+		IDPacks:    make(map[int64]int64, len(oldIdx.IDPacks)+len(newIDs)),
+	}
+	for k, v := range oldIdx.IDTenants {
+		mergedIdx.IDTenants[k] = v
+	}
+	for k, v := range oldIdx.IDPacks {
+		mergedIdx.IDPacks[k] = v
+	}
+	for i, id := range newIDs {
+		mergedIdx.IDTenants[id] = incrementalRows[i].TenantID
+		mergedIdx.IDPacks[id] = incrementalRows[i].PackID
+	}
+
+	// ⑦ 写盘 + 热替换
+	if err := kb.SaveNPZ(e.NPZPath, mergedIdx.IDs, mergedIdx.Vecs); err != nil {
+		return len(newIDs), err
+	}
+	e.indexMu.Lock()
+	e.Index = mergedIdx
+	e.indexMu.Unlock()
+
+	// ⑧ pgvector 双写（仅新增行）
+	if db.CurrentDialect() == db.DialectPostgres {
+		for n := 0; n < len(newIDs); n++ {
+			_ = e.DB.UpsertEmbedding(newIDs[n], newVecs[n])
+		}
+	}
+
+	// ⑨ 留痕记账（同全量逻辑）
+	if e.St != nil && len(usageByTenant) > 0 {
+		provider, model := "bigmodel", "embedding-rebuild"
+		for tid, tokens := range usageByTenant {
+			if tokens <= 0 || tid <= 0 {
+				continue
+			}
+			rows := []store.UsageBatchRow{{
+				UserID:     0,
+				TaskType:   "kb_embed",
+				Provider:   provider,
+				Model:      model,
+				Lang:       "",
+				Quantity:   tokens,
+				BizKind:    "kb",
+				BizMode:    "index",
+				OccurredAt: time.Now().UTC().Format(time.RFC3339),
+			}}
+			if err := e.St.LogUsageBatch(tid, rows); err != nil {
+				observability.Error(context.Background(), "KB Embedding 增量留痕落库失败", "err", err, "tenant", tid, "tokens", tokens)
+			}
+		}
+	}
+
+	// ⑩ 更新检查点
+	if e.St != nil {
+		now := time.Now().UTC().Format(time.RFC3339)
+		e.St.SetConfig("last_kb_rebuild_at", now)
+	}
+
+	log.Printf("[engine] KB 增量重建完成：新增 %d 条向量，总索引 %d 条", len(newIDs), len(mergedIdx.IDs))
+	return len(newIDs), nil
 }
 
 // Rebuilding 是否正在重建向量索引。
