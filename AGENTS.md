@@ -264,6 +264,28 @@
 - 顺序口径仍然有效：一批工作 **代码提交 → push → 才提交文档**；顺序反了就是把文档送进了推送的祖先链。
 - 文档里写「仅本地提交」时必须与实际一致——历史上那类偏离正是事故的来源。
 
+### 10. 免费额度防薅与站点门面（★ 2026-09-28 〇-Z 立为硬约定）
+
+- **设备号只有一份事实**：`frontend-react/src/lib/trialDevice.ts` 生成并持久化 `^[A-Za-z0-9_-]{8,64}$` 的设备号，
+  免登录试用（`trial_dev`）与免费注册（`reg_dev`）**共用它**。新增任何"免费发放"类入口都必须带这个字段并按同一 scope 记账；
+  **禁止**再造一个设备号或让某条链路各数各的账——否则"先刷试用再刷注册"这类连打路径在两侧各只吃掉一半格子，防薅形同虚设。
+- **档位数字只有 env > `system_config` > 代码默认 三级**（实现＝`configIntTier`），**禁止在代码或前端写死档位**。
+  ⚠️ 运维读档有两个地方，别查错：`system_config` 存**上限**（键不存在＝走默认，不是"上限 0"），
+  `rate_limits` 存**已消耗**（该表只有 `count/window_start/lock_until`，**没有上限列**）。
+- **占格必须原子、且必须有退格**：计数走 `store.RateReserve`（一条带条件的 UPDATE，判据与计数同事务），
+  失败链路一律 `RateRelease`；**坐实点＝免费额度真发放出去那一刻**（`CreateQuotaGrant` 成功 → `markSpent()`），
+  此前任何一次失败都不许扣掉用户当天格子。防薅表自身读写故障 **fail-open**（放行＋`observability.Error`）。
+- **公开接口的新增防护一律软档**：`device_id` 缺失/格式不合**不返 400**（同 F-79 不许把公开首屏打成 403）——
+  老缓存包、脚本客户端、代客注册都可能不带这个字段，**新增防护不拿可用性交押金**。
+  受邀加入与专属域名注册**不占格**，且防薅判定必须发生在 `MarkInviteCodeUsed` **之前**（拒绝不许烧掉客户自己发的邀请码）。
+- **门面开关是部署级**：`internal/api/site_flags.go` 解析 env `LANDING_DISABLED` > `ops_policy` 的 `front.landing_enabled` > 默认展示，
+  **禁止**在前端按 hostname 判定"哪个站是体验机"（换域名要重构建、本地闸门看不见该分支）。
+  注入纪律：**只在关闭态注入**那段 `<script id="__site_flags__">`，开放态首页必须**逐字节等于未注入**
+  （§一·5 那条"主站首页 2,591 B / `__BRANDING__` 命中 1"判据靠这个成立）；只管 `/`，`/pricing`·`/compare` 访客仍须 200。
+- **UAT 矩阵必须把防薅档开大**：`run_uat.sh`/`multi_instance_e2e.sh` 整轮注册上百个免费账号，按默认 3/500 会中途级联假红
+  ⇒ 进矩阵前 `register_device_daily_limit`/`register_global_daily_limit` 开 100000，段内自压、跑完钉回；
+  `rate_limits` 的滚动 24h 窗**不清就把下一轮判红**。
+
 ---
 
 ## 二、提交前闸门（必须全绿）
@@ -296,6 +318,12 @@ bash scripts/build_sdk.sh --check                 # SDK 托管产物漂移闸门
 
 - 优先**薄委托 + 零改动调用点**的收敛手法（见 `store/crypto.go` 下沉 `internal/secret`），
   避免大爆炸式重构：改动面 >3000 行且无行为收益的重构不做。
+- **并发回写共享 map 必须先快照**（★ 2026-09-28 〇-Z）：`for k, v := range m { go func(){ m[k]=… }() }` 是
+  **runtime fatal error（concurrent map iteration and map write）**，不是 panic——`recover` 兜不住、进程直接挂，
+  线上表现是"偶发 502／连接被重置"而不是一次请求失败。互斥锁只挡住写者彼此，挡不住"主线程还在 range"。
+  正确形态：range 完把待处理项**收进切片**再并发（见 `engine/text.go` 的 `reviewJob`）。
+  ⚠️ 这类 bug **真上游打不出来**（模型调用几百毫秒到几秒，range 早跑完），只在本地假上游"瞬间返回"时命中，
+  所以配套断言必须带 `-race` 跑；不加 race 属于"运气好没被调度到"的假绿。
 - 修复缺陷时同步补一条能复现的自动化断言（单测或 UAT 断言），否则视为未完成。
 - 涉及 DB schema 的改动必须写成幂等迁移，保证老库启动自动升级。
 - **改了 assist 的 `seed/seed.json` 不等于线上改了。** seed 只在**首启空表**时灌库，存量库不跟进，
