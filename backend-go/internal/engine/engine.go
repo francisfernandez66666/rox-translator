@@ -27,7 +27,6 @@ import (
 	"time"
 	"translator/internal/sensitive"
 
-	"translator/internal/billing"
 	"translator/internal/config"
 	"translator/internal/culture"
 	"translator/internal/db"
@@ -2380,16 +2379,29 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 		}
 	}
 
-	// 统一计费（P1-3）：经全局 sink 落库，与翻译用量共用同一扣减入口与批量写事务，
-	// 消除「重建直写库」造成的第二计费源与 SQLITE_BUSY 回归；是否扣余额由 sink 按
-	// billing_enforced 自行决定（此处不再分支）。
-	if e.St != nil {
+	// ★ 免费 Embedding（2026-09-28）：行业包/职业包的采集与向量化成本由平台承担，
+	//   对用户免费。此处走 LogUsageBatch（charge_kind='log'，留痕不扣费），
+	//   仅记录台账供运维监控 LLM 用量，不从租户余额扣减。
+	if e.St != nil && len(usageByTenant) > 0 {
 		provider, model := "bigmodel", "embedding-rebuild"
 		for tid, tokens := range usageByTenant {
 			if tokens <= 0 || tid <= 0 {
 				continue
 			}
-			billing.RecordUsage(tid, 0, "kb_embed", provider, model, "", tokens, "kb", "index", nil) // C4：嵌入无语种维度
+			rows := []store.UsageBatchRow{{
+				UserID:     0,
+				TaskType:   "kb_embed",
+				Provider:   provider,
+				Model:      model,
+				Lang:       "", // C4：嵌入无语种维度
+				Quantity:   tokens,
+				BizKind:    "kb",
+				BizMode:    "index",
+				OccurredAt: time.Now().UTC().Format(time.RFC3339),
+			}}
+			if err := e.St.LogUsageBatch(tid, rows); err != nil {
+				observability.Error(context.Background(), "KB Embedding 留痕落库失败（不影响主流程）", "err", err, "tenant", tid, "tokens", tokens)
+			}
 		}
 	}
 
