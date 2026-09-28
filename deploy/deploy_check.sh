@@ -177,9 +177,25 @@ fi
 # 这正是 F-73/F-74 藏了很久的同一层盲区，所以要在发版验收里补一条只读探针。
 # ⚠️ 判据按 §一·6 的「兜底陷阱」写：spa.go 对不存在的路径回 index.html **且状态码仍是 200**，
 #    所以只看 http_code 等于恒绿。真判据是响应体里不许出现 pprof 索引特征串。
-#    取不到索引特征 ≠ 通道不通（可能只是路径不同），故同时钉一条对照：
-#    本机 18787（若监听）必须**能**看到这些特征串，否则这条锁就是在对空气判负。
+#    取不到索引特征 ≠ 通道不通（可能只是路径不同），故同时钉两条正向对照（见下 PP_FIXTURE / 本机腿）。
+# ★★ 特征串必须按**索引页实际字节**钉，不能凭直觉写（2026-09-29 发版当夜真踩，本机实测）：
+#    Go 的 net/http/pprof 索引页里**没有**「goroutine profile」「Heap profile」「/debug/pprof/profile」
+#    这些字样——它输出的是 `Types of profiles available:` 表格＋`full goroutine stack dump` 链接
+#    （链接是相对路径 `href='profile?debug=1'`，所以带 `/debug/pprof/` 前缀的写法也命中不了）。
+#    上一版三条串在真索引页上实测各命中 **0**，于是这条负向锁**永远抓不到东西**：
+#    哪怕运维真把 Caddy 反代指到 18787，公网腿照样报「无 pprof 特征」绿灯＝对空气判负。
+#    当时正是「对照腿：18787 有应答但无 pprof 索引」那句信息行把它喊出来的——
+#    信息行只能提示，所以这里补一条 **fixture 正向对照**：不依赖任何宿主，先把正则本身钉死。
 echo "==> [9/9] PPROF 诊断面可达性（公网侧只读）"
+# 唯一一条特征串，负向腿与两条正向对照共用同一变量——防止判据与对照各写一份、迟早漂移。
+PP_FEAT='Types of profiles available|full goroutine stack dump'
+# fixture＝线上索引页的截断实拍（只留两条特征所在的结构，不掺业务内容）
+PP_FIXTURE="<html><head><title>/debug/pprof/</title></head><body>/debug/pprof/<br>Types of profiles available:<table><thead><td>Count</td><td>Profile</td></thead><tr><td>27</td><td><a href='goroutine?debug=1'>goroutine</a></td></tr></table><a href=\"goroutine?debug=2\">full goroutine stack dump</a></body></html>"
+if echo "$PP_FIXTURE" | grep -Eq "$PP_FEAT"; then
+  echo "  ↳ 判据自证：特征串在 pprof 索引实拍样本上命中 ⇒ 下面那条负向不是空转"
+else
+  bad "pprof 特征串连索引页实拍样本都匹配不了（正则写错/被改坏）⇒ 公网那条负向锁作废，先去核对 Go pprof 索引页真实字节"
+fi
 # 链路探针先行（§一·6）：base 整个打不通时 curl 回空串，"无特征"会**结构性假绿**——
 # 那种绿和"反代确实没摊开诊断面"是两件事，必须分开记账。
 PP_LINK=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/api/health")
@@ -187,7 +203,7 @@ if [ "$PP_LINK" = "000" ] || [ -z "$PP_LINK" ]; then
   bad "pprof 腿无效：$BASE/api/health 不可达（$PP_LINK）⇒ 响应体为空当然'没有特征'，这条绿灯不许采信"
 else
   PP_PUB=$(curl -s --max-time 8 "$BASE/debug/pprof/")
-  if echo "$PP_PUB" | grep -Eq 'goroutine profile|Heap profile|/debug/pprof/profile'; then
+  if echo "$PP_PUB" | grep -Eq "$PP_FEAT"; then
     bad "公网 $BASE/debug/pprof 回吐了 pprof 索引 ⇒ 反代把诊断端口摊到公网了（进程内存/协程栈可被任何人拉走，profile 还能被打满 CPU）"
   else
     ok "公网 /debug/pprof 无 pprof 特征（链路存活 http=$PP_LINK，回环独占）"
@@ -215,14 +231,30 @@ if [ "$PROBE_ON_SERVER" = "1" ]; then
         ;;
     esac
   fi
-  if curl -s --max-time 4 -o /dev/null "http://127.0.0.1:18787/debug/pprof/" 2>/dev/null; then
-    PP_LOCAL=$(curl -s --max-time 4 "http://127.0.0.1:18787/debug/pprof/")
-    echo "$PP_LOCAL" | grep -Eq 'goroutine profile|/debug/pprof/profile' \
-      && echo "  ↳ 对照腿：本机 18787 能取到 pprof 索引 ⇒ 上面那条「无特征」判据测的是反代链，不是空转" \
-      || echo "  ↷ 对照腿：18787 有应答但无 pprof 索引 ⇒ 该端口可能属于别的服务，公网那条判据请人工复核一次"
-  else
-    echo "  ↳ 本机 18787 未监听 ⇒ 诊断端口关闭，公网那条锁无需对照"
-  fi
+  # 对照腿（仅服务器本机）：确认「没特征」是因为通道不通，而不是判据串写错。
+  # ⚠️ 端口集合从 **unit 现值**取（主站＋演示单元各自的 PPROF_ADDR），未配则用代码默认 18787；
+  #    历史教训＝只探写死的 18787，而演示单元配的是 127.0.0.1:18788，于是对照腿永远在
+  #    「有应答但无索引」上打转，把「判据串写错」误读成「该端口属于别的服务」。
+  PP_PROBE_LIST="127.0.0.1:18787"
+  for _u in translator translator-demo; do
+    _a=$(systemctl show "$_u" -p Environment --value 2>/dev/null | tr ' ' '\n' | sed -n 's/^PPROF_ADDR=//p')
+    case "$_a" in
+      ""|off|*0.0.0.0*|*\[::\]*) : ;;
+      127.0.0.1:*|localhost:*|\[::1\]:*) PP_PROBE_LIST="$PP_PROBE_LIST $_a" ;;
+    esac
+  done
+  PP_CONTROL_SEEN=0
+  for _pa in $PP_PROBE_LIST; do
+    PP_LOCAL=$(curl -s --max-time 4 "http://$_pa/debug/pprof/" 2>/dev/null)
+    [ -n "$PP_LOCAL" ] || continue
+    PP_CONTROL_SEEN=1
+    if echo "$PP_LOCAL" | grep -Eq "$PP_FEAT"; then
+      echo "  ↳ 对照腿：本机 $_pa 能取到 pprof 索引 ⇒ 上面那条「无特征」判据测的是反代链，不是空转"
+    else
+      bad "本机 $_pa（unit 现值认定的诊断端口）有应答却无 pprof 索引 ⇒ 公网那条绿灯不可采信：要么诊断面没起来（排障能力为零），要么端口被别的服务占了"
+    fi
+  done
+  [ "$PP_CONTROL_SEEN" = "1" ] || echo "  ↳ 诊断端口（18787 及 unit 里配的回环档）均未监听 ⇒ 诊断面关闭，公网那条锁无需对照"
 else
   echo "  ↷ pprof 对照腿与 unit 读档跳过（需服务器本机执行）"
 fi
