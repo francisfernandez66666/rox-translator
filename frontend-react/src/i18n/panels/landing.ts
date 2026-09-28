@@ -169,6 +169,17 @@ export const zh: Record<string, string> = {
   'land.planEntF1': '多部门术语库与权限',
   'land.planEntF2': '私有化部署支持',
   'land.planEntF3': '专属集成与部署支持',
+  // —— 快速算价卡（★ 2026-09-28 〇-Y #64：用户令「计算器放首页快速算，细节点进 /compare」）——
+  // 词条里**不写任何系数或金额**：积分、费用、人工对照价全部由组件按 /api/pricing/meta
+  // 现算后注入 {points}/{unit}/{p}/{pct} 占位（与 /compare 页同一条口径，
+  // 由 PriceQuickCalc.dom.test ① 等值锁钉住「页面显示的价＝后端扣费的价」）。
+  'land.qc.title': '快速算价',
+  'land.qc.sub': '填上源文字符数与目标语种数，当场按下单时同一条公式估出费用，并和同一批内容的人工笔译低档价放在一起看。公式、系数、人工价的公开出处与浮动说明在「比价与算价」页。',
+  'land.qc.ours': '预估费用',
+  'land.qc.points': '约 {points} {unit}',
+  'land.qc.human': '人工笔译 · 入门档（{p} 元/源字符）',
+  'land.qc.save': '比人工低档再省约 {pct}%',
+  'land.qc.detail': '查看公式、系数与人工价出处',
   // —— 活动奖励 ——
   'land.secRewards': '活动奖励',
   'land.rewardsTitle': '邀请好友、共建知识库，共享翻译额度',
@@ -464,6 +475,15 @@ export const en: Record<string, string> = {
   'land.planEntF1': 'Multi-department term bases & permissions',
   'land.planEntF2': 'Private deployment support',
   'land.planEntF3': 'Dedicated integration support',
+  // —— Quick estimate card（★ 2026-09-28 〇-Y #64）——
+  // 同 zh 口径：词条零系数零金额，{points}/{unit}/{p}/{pct} 全部由组件现算注入。
+  'land.qc.title': 'Quick estimate',
+  'land.qc.sub': 'Enter the source character count and the number of target languages — the card applies the same formula our pre-check uses at order time, side by side with the entry-tier human quote for the very same volume. The formula, the coefficients, the public source of the human rate and what makes costs vary all live on the Pricing & estimate page.',
+  'land.qc.ours': 'Estimated cost',
+  'land.qc.points': 'about {points} {unit}',
+  'land.qc.human': 'Human translation · entry ({p} CNY per source character)',
+  'land.qc.save': 'About {pct}% below the human entry tier',
+  'land.qc.detail': 'See the formula, coefficients and rate sources',
   // —— Rewards ——
   'land.secRewards': 'Rewards',
   'land.rewardsTitle': 'Invite friends, co-build knowledge bases, share credits',

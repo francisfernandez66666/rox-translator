@@ -198,3 +198,72 @@ describe('落地页 · 文件直出区通栏固定舞台重排（2026-09-24）',
     expect(out?.querySelector('.lc-fd-dlzone')).toBeTruthy()
   })
 })
+
+// ★ 〇-Y #64（2026-09-28）：价格方案区下方新增「快速算价」卡（用户原话「比价和算价计算器
+// 放首页一下，供用户快速计算，但细节要点击进入现在的比价和算价链接」）。
+// 本段只锁三件**接线**的事，数值等值归 PriceQuickCalc.dom.test 与 e2e/homepage_price_calc.spec：
+//   ① 卡确实挂在 #pricing 区内（用户要的是「价格方案旁边」，挂在别的区等于没做）；
+//   ② 它与 #39「套餐卡面零具体金额」口径互不侵犯——卡上的钱来自 /api/pricing/meta 的现算试算，
+//      不是套餐价目；套餐卡那三条 .lc-plan-price 仍然一个字都不许多出来；
+//   ③ 系数取不到时卡片自动降级为播报态，不许留一个空壳输入区骗访客填数。
+describe('落地页 · 快速算价卡挂载与 #39 口径共存（★ 〇-Y #64）', () => {
+  // META 桩：Landing 测试整体替换了 '@/api'，而 usePricingMeta 走 '@/api/core' 的 request()，
+  // 其出口就是全局 fetch —— 这里只喂 fetch，不额外 mock 模块，避免把 api 层的
+  // 401/403 收敛逻辑一起换掉（那会让「链路坏了」在测试里看起来是好的）。
+  const META_RESP = {
+    ok: true, status: 200,
+    json: async () => ({
+      success: true, unit: 'points', points_price_money: 0.099668,
+      modes: [
+        { code: 'fast', points_per_1k_chars: 150, points_fixed: 3 },
+        { code: 'pro', points_per_1k_chars: 400, points_fixed: 7.5 },
+      ],
+    }),
+  }
+
+  it('⑯ 卡在 #pricing 区内、含两个输入与一个 /compare 详情入口', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => META_RESP))
+    const { waitFor } = await import('@testing-library/react')
+    render(<Landing />)
+    await waitFor(() => expect(document.querySelector('.lc-qc [data-qc="out"]')).toBeTruthy())
+    const sec = document.querySelector('#pricing')
+    const card = document.querySelector('.lc-qc')
+    expect(card, '⇒ 首页没渲染快速算价卡').toBeTruthy()
+    expect(sec?.contains(card ?? null), '⇒ 快速算价卡没挂在价格方案区（#pricing）内').toBe(true)
+    // 快查侧只留「字数 + 语种数」两个框：档位切换/公式/系数属于细节，按用户口径归 /compare
+    expect(card?.querySelectorAll('input').length).toBe(2)
+    expect(card?.querySelector('a[data-qc="more"]')?.getAttribute('href')).toBe('/compare')
+    vi.unstubAllGlobals()
+  })
+
+  it('⑰ 与 #39 共存：算价卡显示现算金额，套餐三档卡面依旧零具体金额', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => META_RESP))
+    const { waitFor } = await import('@testing-library/react')
+    render(<Landing />)
+    await waitFor(() => expect(document.querySelector('.lc-qc [data-qc="out"]')).toBeTruthy())
+    // 卡内确实有钱（否则上一条绿灯可能只是「卡是空的」）
+    expect((document.querySelector('[data-qc="money"]')?.textContent ?? ''))
+      .toMatch(/^¥[\d,.]+$/)
+    // 套餐卡面一条都不许多出金额：#39 判据原样再跑一遍，
+    // 这条锁的意义是「以后有人把现算金额挪进套餐卡」——那才是价目事实源漂移
+    const cards = Array.from(document.querySelectorAll('.lc-plan-price'))
+    expect(cards.length).toBeGreaterThanOrEqual(3)
+    for (const el of cards) {
+      const txt = (el.textContent ?? '').trim()
+      const money = txt.match(/[¥$€]\s*\d+(?:[.,]\d+)*/g) ?? []
+      expect(money.filter((m) => !/^[¥$€]\s*0$/.test(m)), `套餐卡出现具体金额：「${txt}」`).toEqual([])
+    }
+    vi.unstubAllGlobals()
+  })
+
+  it('⑱ 系数取不到时降级为播报态：不渲染输入框（不许留空壳骗访客填数）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: false }) })))
+    const { waitFor } = await import('@testing-library/react')
+    render(<Landing />)
+    await waitFor(() => expect(document.querySelector('.lc-qc [data-qc="unavailable"]')).toBeTruthy())
+    const card = document.querySelector('.lc-qc') as HTMLElement
+    expect(card.querySelectorAll('input').length).toBe(0)
+    expect(card.textContent).not.toContain('¥') // 不可用态整张卡零金额
+    vi.unstubAllGlobals()
+  })
+})

@@ -31,6 +31,13 @@
 #      但只要首页走了后端，注入体（平台默认品牌那一份）就一定在。
 #      配套人工核法（本脚本不重复做）：`curl -s <站点>/ | sha256sum` 若**等于**仓库
 #      frontend-react/dist/index.html 的 sha ⇒ 就是静态直出没走后端（AGENTS §一·5 口径）。
+#   G.（★ 2026-09-28 〇-Y F-79，纯只读、必跑）匿名访客带 `?tenant_id=<别家 id>` 打首页与接口，
+#      注入体/响应里的 `tenant_id` **必须回落 0（平台）**，不得等于点名的那个 id。
+#      为什么线上还要单独钉：修法在服务端咽喉点（brandingPayload）上，本地单测绿不等于线上
+#      跑的就是那份二进制；而 F-79 的原始症状正是「线上匿名打 /?tenant_id=1 注入命中」，
+#      只有打真域名才证得了「线上已换上有守卫的二进制」。两条子探针（首页注入面 + 接口面）
+#      都要点名：只堵一半会留下「API 通了、注入还漏」的第二形态。
+#      取不到 `tenant_id` 字段时**只播报不计分**（未配品牌的站点本就没有注入体，那由 F 定性）。
 #
 # 用法：
 #   bash deploy/smoke_brand_homepage.sh                       # 默认打主站（无品牌 ⇒ B/C 走空值分支）
@@ -115,6 +122,17 @@ PY
   st_case "品牌件齐备（A/B/C/D 全绿；E 的 4xx 语义不属静态器，交由用例 4 的真服务端验）" green \
     "BASE=http://127.0.0.1:8788" "EXPECT_BRAND_IMAGES=2" "RUN_NEG=0"
   kill "$ST_PID" 2>/dev/null || true; wait "$ST_PID" 2>/dev/null || true
+
+  # —— 用例 1b（读数存在性核查，不新增红绿判定）：判据 G 的**绿态读数**必须真的出现在
+  #      用例 1 的输出里。为什么单列一条：G 在"解析不到注入体"时走 note（不计分）分支，
+  #      于是夹具一旦让 grep 失配，G 就退化成一条播报 ⇒ 用例 1 照样 exit 0。
+  #      这就是"绿灯可能只是那条压根没跑"，必须用正向读数把它钉实在。
+  if printf '%s\n' "$LAST_OUT" | grep -q 'G 首屏注入'; then
+    printf '  ✅ 自检 用例 1b：G 绿态读数确有出现（匿名 ?tenant_id=1 回落平台）\n'
+  else
+    printf '  ❌ 自检 用例 1b：G 没跑出读数 ⇒ 判据在静态夹具下退化成了播报，绿灯不算数\n'
+    st_fail=$((st_fail + 1))
+  fi
 
   # —— 用例 2（红）：修复前的直出页——品牌 dataURI 整串进 HTML，并带 SPA 兜底壳 ——
   mkdir -p "$TMP/legacy"
@@ -320,12 +338,43 @@ PY
     "BASE=http://127.0.0.1:8788" "EXPECT_BRAND_IMAGES=2" "RUN_NEG=0"
   kill "$ST_PID" 2>/dev/null || true; wait "$ST_PID" 2>/dev/null || true
 
+  # —— 用例 6（红）：F-79 复发形态——注入体采纳了匿名点名的 tenant_id。
+  #    夹具与用例 1 同一份（品牌件齐备、无 dataURI、体积达标），**只改注入 JSON 里的
+  #    tenant_id 0→1**，于是 A/B/C/D/F 全部照旧绿，出口非 0 只能来自判据 G；
+  #    再加一条「红项恰好 1 处且点名 F-79」的输出级核查，防止红是别处带来的（同
+  #    「等式在错误来源上成立」那类假红：只判 exit≠0 会把它算成 G 的功劳）。
+  python3 - "$TMP/static" "$TMP/f79leak" <<'PY'
+import os, shutil, sys
+src, dst = sys.argv[1], sys.argv[2]
+shutil.copytree(src, dst)              # 品牌件一并带上：本例只让 G 红
+p = os.path.join(dst, 'index.html')
+html = open(p, encoding='utf-8').read()
+assert '"tenant_id":0' in html, '用例 6 依赖用例 1 夹具的 tenant_id:0 锚点'
+open(p, 'w', encoding='utf-8').write(html.replace('"tenant_id":0', '"tenant_id":1'))
+PY
+  ( cd "$TMP/f79leak" && exec python3 -m http.server 8788 --bind 127.0.0.1 >/dev/null 2>&1 ) &
+  ST_PID=$!
+  sleep 1
+  st_case "匿名 ?tenant_id=1 被注入采纳（G 必须红，F-79 复发）" red \
+    "BASE=http://127.0.0.1:8788" "EXPECT_BRAND_IMAGES=2" "EXPECT_BRANDING=1" "RUN_NEG=0"
+  kill "$ST_PID" 2>/dev/null || true; wait "$ST_PID" 2>/dev/null || true
+  leak_reds="$(printf '%s\n' "$LAST_OUT" | grep -c '  ✗ ' || true)"
+  if [ "$leak_reds" = "1" ] && printf '%s\n' "$LAST_OUT" | grep -q 'F-79 复发'; then
+    printf '  ✅ 自检 用例 6b：红项恰 1 处且出自 G（不是别的判据顺带红）\n'
+  else
+    printf '  ❌ 自检 用例 6b：泄漏夹具产出 %s 处红项 ⇒ G 的红不孤立，判据归属存疑\n' "$leak_reds"
+    st_fail=$((st_fail + 1))
+  fi
+
   if [ "$st_fail" -ne 0 ]; then
     note "★ 自检失败 $st_fail 项 ⇒ 判据本身不可信，先修脚本再谈线上冒烟"
     exit 1
   fi
-  note "自检全绿：9 例（绿 4：品牌件齐备 / 未注入常态 / 存量 dataURI 经读侧收敛＋F 首页确有注入体 / 缺件后自愈转绿；
-#       红 5：dataURI 漏进首屏 A+B+C、静态直出首页 F（F-74 未生效形态）、件被同尺寸写坏 D、件缺失 D、件是 HTML 壳或过小 D）都判对了。"
+  note "自检全绿：10 例（绿 4：品牌件齐备 / 未注入常态 / 存量 dataURI 经读侧收敛＋F 首页确有注入体 / 缺件后自愈转绿；
+#       红 6：dataURI 漏进首屏 A+B+C、静态直出首页 F（F-74 未生效形态）、件被同尺寸写坏 D、件缺失 D、件是 HTML 壳或过小 D、
+#             匿名点名别家租户被注入采纳 G（F-79 复发形态））都判对了。
+#       另有 2 条读数存在性核查（1b：G 绿态确实跑出读数；6b：用例 6 的红项恰 1 处且出自 G）——
+#       它们堵的是「判据没跑到也算绿」和「红来自别处也算 G 的功劳」两类假象。"
   exit 0
 fi
 
@@ -389,7 +438,7 @@ note "品牌首屏冒烟：BASE=$BASE"
 #   而 :+ 只看"非空"，会把默认态也显示成"这条在跑"——判据清单撒谎比不列更糟。
 LEG_F=""
 if [ "$EXPECT_BRANDING" = "1" ]; then LEG_F=" / F 首页由后端直出（带 __branding__ 注入体）"; fi  # ★ 不用 `A && B` 末句形态：本脚本 set -e，条件为假时该行返回非 0 会直接中止整支冒烟
-note "判据：A 首屏体积<${MAX_KB}KB / B 品牌字段是地址不是 dataURI / C 全文无 data:image / D 品牌件真取得到字节 / E 缺件如实 4xx${LEG_F}"
+note "判据：A 首屏体积<${MAX_KB}KB / B 品牌字段是地址不是 dataURI / C 全文无 data:image / D 品牌件真取得到字节 / E 缺件如实 4xx${LEG_F} / G 匿名 ?tenant_id= 点名别家必须回落平台（F-79）"
 note "首页 HTTP $http_code，body ${bytes} B（上限 $((MAX_KB * 1024)) B）"
 
 if [ "$http_code" != "200" ]; then
@@ -547,8 +596,47 @@ else
   neg "/brand/"                              # 目录本身 ⇒ 4xx（无索引可给）
 fi
 
+# ---------------------------------------------------------------------------
+# 判据 G（★ 2026-09-28 〇-Y · F-79）：匿名「按 id 点名看别家品牌」必须被服务端忽略。
+#   缺陷形态：品牌解析优先序是「显式 ?tenant_id= ＞ 按访问域名」，而第一支不做身份判定——
+#   未登录访客在主站打 /?tenant_id=1 就能拿到 1 号租户的品牌注入（09-28 线上实测注入命中），
+#   白标承诺「品牌只在自己域生效」当时只由前端不带参数保证。修法＝忽略参数并回落按 Host 解析
+#   （不是 403：这是公开首屏，历史链接里挂着 tenant_id 不该被打成错误页）。
+#   两条子探针各管一个表面：接口面与 SPA 首屏注入面共用 brandingPayload 这个咽喉点，
+#   只堵一半就会留下「API 通了、注入还漏」的第二形态——本判据把两面都点名。
+#   ⚠️ 反向对照不在这里：超管带令牌必须仍能命中指定租户，那条由
+#      backend-go/internal/api/branding_scope_f79_test.go 的 B 段与 UAT T65-super-* 覆盖
+#      （冒烟脚本无凭据，也不该有）。
+tid_of() {  # 从响应里取 "tenant_id" 的数值；取不到回 NOKEY
+  printf '%s' "$1" | grep -oE '"tenant_id"[[:space:]]*:[[:space:]]*-?[0-9]+' | head -1 | grep -oE -- '-?[0-9]+$' || echo NOKEY
+}
+if [ "$SKIP_HOMEPAGE_PROBE" = "1" ]; then
+  note "G 已跳过（SKIP_HOMEPAGE_PROBE=1）"
+else
+  G6="/tmp/smoke_f79_$$.html"
+  if curl -sS -m 30 -o "$G6" "$BASE/?tenant_id=1"; then
+    GT=$(tid_of "$(grep -o '<script id="__branding__">[^<]*' "$G6" | head -1)")
+    [ -z "$GT" ] && GT=NOKEY
+    case "$GT" in
+      0) ok "G 首屏注入：匿名 ?tenant_id=1 已回落平台（tenant_id=0）" ;;
+      NOKEY) note "G 未解析到注入体（该站点形态由判据 F 定性），本条不计分" ;;
+      *) red "G 匿名 ?tenant_id=1 被采纳（tenant_id=$GT）⇒ F-79 复发，别家品牌会被注入首屏" ;;
+    esac
+  else
+    red "G 首屏探针拉取失败（$BASE/?tenant_id=1）"
+  fi
+  GA="$(curl -sS -m 30 "$BASE/api/tenant/branding?tenant_id=1" || echo '')"
+  case "$(tid_of "$GA")" in
+    0) ok "G 接口面：匿名 ?tenant_id=1 已回落平台（tenant_id=0）" ;;
+    "") note "G 接口面无响应（目标不是本后端？本条不计分）" ;;
+    NOKEY) note "G 接口面响应里没有 tenant_id 字段，判据无从落地" ;;
+    *) red "G 匿名打接口仍拿到指定租户（tenant_id=$(tid_of "$GA")）⇒ F-79 复发" ;;
+  esac
+  rm -f "$G6"
+fi
+
 if [ "$fails" -ne 0 ]; then
-  note "★ 品牌首屏冒烟失败 $fails 项（判据 A/B/C/D/E 见文件头）"
+  note "★ 品牌首屏冒烟失败 $fails 项（判据 A/B/C/D/E/F/G 见文件头）"
   note "  排查顺序：① translator-server 是否已换新二进制（品牌面属后端直出）② UserDataDir/brand 目录是否可写"
   note "  ③ 库里品牌字段是否仍是 dataURI（读侧会惰性落件，落件失败才回落空 ⇒ 看日志 brand_image_* 告警）"
   exit 1

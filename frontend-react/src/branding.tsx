@@ -22,7 +22,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { create } from 'zustand'
-import { API_BASE } from '@/api'
+import { API_BASE, authHeaders } from '@/api'
 import { tpl, useLang } from '@/i18n' // ★ 2026-09-24：标题后缀按界面语言取词
 
 // BrandLink 品牌页脚/导航链接条目：含中英文标签与跳转地址
@@ -268,14 +268,19 @@ export function BrandingProvider({ tenantId, children }: { tenantId?: number; ch
   const lang = useLang() // 界面语言（标题取词用；切语言即时重算 document.title）
   const setB = (v: Branding) => useBrandingStore.setState(v)
   void b
-  // 解析优先级：显式 tenantId（超管预览）> 按访问域名（后端按 Host 解析，根域名=平台品牌）
+  // 解析优先级：显式 tenantId（超管预览/本租户管理员）> 按访问域名（后端按 Host 解析，根域名=平台品牌）
+  // ★ F-79（2026-09-28 〇-Y）：这条优先级现在由**服务端**兜底——匿名或跨租户带 `?tenant_id=` 一律被忽略，
+  //   回落按访问域名解析。以前"白标只在自己域生效"只靠这里不传参数，属于前端自觉，不是后端保证。
   const effectiveTenantId = tenantId ?? 0
   useEffect(() => {
     // 已注入且为按域名解析（非超管预览指定租户）：直接采用注入值，无需再拉取
     if (effectiveTenantId <= 0 && initial) return
     let alive = true
     const url = API_BASE + '/api/tenant/branding' + (effectiveTenantId ? `?tenant_id=${effectiveTenantId}` : '')
-    fetch(url)
+    // ★ F-79（2026-09-28 〇-Y）：后端从这批起对显式 `?tenant_id=` 做身份判定——只有超管或该租户
+    //   自己的成员带的参数才算数，匿名带参数会被**忽略**并回落按访问域名解析。这里必须带认证头，
+    //   否则「超管切租户预览」这条正路会被误杀成平台默认外观（修好了洞、废了管理台，就是白修）。
+    fetch(url, { headers: authHeaders() })
       .then((r) => r.json())
       .then((j: any) => {
         if (!alive || !j || !j.success) return
