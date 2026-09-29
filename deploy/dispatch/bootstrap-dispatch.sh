@@ -82,10 +82,32 @@ fi
 # 用 FPD_PUBKEY=/path/to/id_ed25519.pub 传进来；不传则只建目录并告警，绝不静默"看起来装好了"。
 AK="$FPD_ROOT/home/.ssh/authorized_keys"
 if [ -n "${FPD_PUBKEY:-}" ] && [ -f "$FPD_PUBKEY" ]; then
-  install -m 600 -o "$FPD_USER" -g "$(id -gn "$FPD_USER")" "$FPD_PUBKEY" "$AK"
-  log "  已写入派发公钥（$(wc -c < "$AK") 字节）"
+  # ⚠️ install 是**整文件覆盖**：这台机器上若已存在别人那把派发公钥（比如主站正式 key），
+  #    传新 key 就会把它挤掉——现象是"重跑一次 bootstrap，主站忽然连不上"。
+  #    故覆盖前先把现有条数与指纹点名出来，多于一行时要求人工确认（FPD_AK_FORCE=1 才覆盖）。
+  EXIST_LINES=0
+  [ -f "$AK" ] && EXIST_LINES="$(grep -cE '^(ssh|ecdsa|sk-)' "$AK" 2>/dev/null || true)"
+  EXIST_FP="$(sha256sum "$AK" 2>/dev/null | awk '{print substr($1,1,12)}' || true)"
+  NEW_FP="$(sha256sum "$FPD_PUBKEY" 2>/dev/null | awk '{print substr($1,1,12)}' || true)"
+  if [ "${EXIST_LINES:-0}" -gt 1 ] && [ "${FPD_AK_FORCE:-0}" != "1" ]; then
+    bad "  $AK 现有 $EXIST_LINES 行公钥（指纹 ${EXIST_FP:-?}）≠ 单一 key ⇒ 拒绝整文件覆盖（会挤掉别的派发方）"
+    bad "  要合并请把新 key **追加**进该文件；确认就是要整体替换再带 FPD_AK_FORCE=1 重跑"
+    exit 10
+  fi
+  if [ "${EXIST_FP:-}" = "${NEW_FP:-}" ]; then
+    log "  派发公钥已在且与传入的同一把（$EXIST_LINES 行，指纹 ${EXIST_FP:-?}）⇒ 不动它"
+  else
+    install -m 600 -o "$FPD_USER" -g "$(id -gn "$FPD_USER")" "$FPD_PUBKEY" "$AK"
+    log "  已写入派发公钥（$(grep -cE '^(ssh|ecdsa|sk-)' "$AK" 2>/dev/null || true) 行 / $(wc -c < "$AK") 字节）"
+  fi
+elif [ -s "$AK" ]; then
+  # 没传 FPD_PUBKEY 但文件里已经有 key（本机首装就是这么装的）——**必须报"已在"**，
+  # 只按"没传参数"就 warn "为空"会把一台已经接通过的机器报成连不上（读文件比读参数可信）。
+  HAVE_LINES="$(grep -cE '^(ssh|ecdsa|sk-)' "$AK" 2>/dev/null || true)"
+  HAVE_FP="$(sha256sum "$AK" 2>/dev/null | awk '{print substr($1,1,12)}' || true)"
+  log "  未提供 FPD_PUBKEY，但 $AK 已有 ${HAVE_LINES:-0} 行公钥（指纹 ${HAVE_FP:-?}）⇒ 本次不动它"
 else
-  warn "未提供 FPD_PUBKEY ⇒ $AK 为空，主站现在连不上来。装完必须补：把主站公钥原样写进该文件并 chmod 600"
+  warn "未提供 FPD_PUBKEY 且 $AK 不存在/为空 ⇒ 主站现在连不上来。补法：把主站派发公钥原样写进该文件并 chmod 600"
 fi
 chmod 700 "$FPD_ROOT/home/.ssh"
 chown -R "$FPD_USER":"$(id -gn "$FPD_USER")" "$FPD_ROOT/home"
@@ -110,7 +132,11 @@ log "[3/8] 铺目录 $FPD_ROOT/{bin,w,home,etc}"
 mkdir -p "$FPD_ROOT/bin/assets/fonts" "$FPD_ROOT/w" "$FPD_ROOT/home/.ssh" "$FPD_ROOT/etc" \
          /usr/local/share/fonts/fpd-langcross
 # 转换脚本与字体资产的**内容**由主站 sync 脚本 rsync（保证与主站逐字同版本），本脚本只建骨架
-for f in fpdexec.py; do install -m 0755 -o "$FPD_USER" -g "$(id -gn "$FPD_USER")" "$SRC_DIR/$f" "$FPD_ROOT/bin/$f"; done
+# ⚠️ 属主一律 root（2026-09-29 改）：fpdexec.py 过去装成 fpd:fpd 0755，等于**派发账号能改自己执行的代码**。
+#   ForceCommand 只保证"只能跑这一个入口"，不保证"这个入口的内容不可写"——一旦 fpd 的密钥泄露，
+#   对方就能把 fpdexec 换成任意 Python（仍在 w/ 边界内，但拒绝规则与白名单全部归零）。
+#   因此这里与 fpd-bridge 同口径：root:root 0755，fpd 只读可执行。
+for f in fpdexec.py; do install -m 0755 -o root -g root "$SRC_DIR/$f" "$FPD_ROOT/bin/$f"; done
 install -m 0755 -o root -g root "$SRC_DIR/fpd-bridge" "$FPD_ROOT/bin/fpd-bridge"
 
 # ----------------------------- 4. Python venv（钉版） -----------------------------
@@ -219,6 +245,64 @@ if [ "$FC" = "$FPD_ROOT/bin/fpd-bridge" ]; then log "  ForceCommand 已收口到
 AK_BYTES=0; [ -f "$FPD_ROOT/home/.ssh/authorized_keys" ] && AK_BYTES="$(wc -c < "$FPD_ROOT/home/.ssh/authorized_keys" 2>/dev/null || echo 0)"
 if [ "${AK_BYTES:-0}" -ge 40 ]; then log "  派发公钥已在（$AK_BYTES 字节）"; else warn "  派发公钥缺失 ⇒ 主站现在拨不进来（补 FPD_PUBKEY 重跑本脚本即可）"; fi
 
+# ★ 经 fpd-bridge 的通路自检（2026-09-29 加）：只取一次 probe，按"配置真值"逐条断言。
+#   为什么非要有这一腿：本脚本其余自检都是 root 视角（包在不在、timer 在不在跑、sshd -T 展开值），
+#   它们全绿也不能证明"主站拨进来能干活"。09-29 抓到的缺陷正好落在这个盲区里——
+#   bridge 旧写法 `. fpd.env` 加载配置却不 export，直调 fpdexec 时一切正常，
+#   走 bridge 时 FPD_EXPIRE_DATE / FPD_RLIMIT_AS_MB 全为空 ⇒ **到期自拒与内存帽两条都不生效，
+#   且没有一行日志会喊**。下面五项断言就是把"没人喊"这一条补上。
+#   ⚠️ stdin/stdout 都必须脱离 TTY：bridge 第一道拒绝就是 `-t 0 || -t 1`（防交互登录），
+#      从交互终端裸跑会把它判成"bridge 拒服务"，那是自检写错，不是机器坏。
+BRIDGE_JSON="$(mktemp /tmp/fpd-bridge-probe.XXXXXX.json)"
+BRIDGE_ERR="$(mktemp /tmp/fpd-bridge-probe.XXXXXX.err)"
+BRIDGE_VERDICT="$(mktemp /tmp/fpd-bridge-verdict.XXXXXX.txt)"
+PROBE_HDR="$(printf '%s' '{"mode":"probe"}' | base64)"
+printf '%s\n' "$PROBE_HDR" | sudo -u "$FPD_USER" "$FPD_ROOT/bin/fpd-bridge" >"$BRIDGE_JSON" 2>"$BRIDGE_ERR"
+BRIDGE_RC=$?
+if [ "$BRIDGE_RC" -ne 0 ]; then
+  bad "经 fpd-bridge 的 probe 退出码 $BRIDGE_RC ⇒ 派发这条通路根本不通，禁止开闸。stderr: $(head -c 200 "$BRIDGE_ERR" 2>/dev/null || true)"
+  MISS=$((MISS+1))
+else
+  : > "$BRIDGE_VERDICT"
+  "$VENV/bin/python3" - "$BRIDGE_JSON" "$BRIDGE_VERDICT" <<'PYV' || bad "bridge probe 解析失败（见上面 stderr）"
+import json, sys
+bad = []
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception as e:
+    bad.append("probe 输出不是 JSON: %s" % e)
+    d = {}
+if d:
+    if not d.get("ok"):
+        bad.append("ok=false")
+    if d.get("expired"):
+        bad.append("expired=true（今天已到达/超过到期日，本机已自拒）")
+    if not (d.get("expire_date") or "").strip():
+        bad.append("expire_date 为空 ⇒ fpd-bridge 没把 FPD_EXPIRE_DATE 交下来（到期自拒不生效）")
+    caps = d.get("caps") or {}
+    if not caps.get("rlimit_as_set"):
+        bad.append("caps.rlimit_as_mb=%s ⇒ 转换子进程没有内存帽（env 未 export）" % caps.get("rlimit_as_mb"))
+    if caps.get("clamped"):
+        bad.append("caps.clamped=true ⇒ RLIMIT_AS 被系统硬上限压住，配置值实际吃不到")
+    if not caps.get("timeout_bin"):
+        bad.append("caps.timeout_bin=false ⇒ 缺 coreutils timeout，墙钟帽加不上")
+    if d.get("selftest") != 0:
+        bad.append("selftest=%s ⇒ 原版式主链在这台机器上跑不通（缺资产/缺库/脚本是旧版，见改造方案 §12-D5）" % d.get("selftest"))
+    if not (d.get("pymupdf") or "").strip():
+        bad.append("pymupdf 版本为空 ⇒ venv 里 PyMuPDF 不可导入")
+with open(sys.argv[2], "w") as f:
+    f.write("; ".join(bad))
+PYV
+  VERDICT="$(cat "$BRIDGE_VERDICT" 2>/dev/null || true)"
+  if [ -n "${VERDICT:-}" ]; then
+    bad "经 fpd-bridge 的通路自检不过: $VERDICT"
+    MISS=$((MISS+1))
+  else
+    log "  经 fpd-bridge 的 probe 全绿：到期日/内存帽/timeout/selftest/pymupdf 五项都真吃到"
+  fi
+fi
+rm -f "$BRIDGE_JSON" "$BRIDGE_ERR" "$BRIDGE_VERDICT"
+
 # ★ 搬运三态自检：put → stat → get 在本机走一遍，逐字节比 sha。
 #   这一段是"结果必回主站"那条硬口径的**最小可执行证明**：三态里任何一个坏掉，
 #   派发出去的单子就永远回不来（远端转成功、主站拿到空文件、工单却显示成功）。
@@ -231,26 +315,123 @@ env = dict(os.environ, FPD_ROOT=root, FPD_PYBIN=pybin)
 EX = os.path.join(root, "bin", "fpdexec.py")
 
 def call(hdr, payload=b""):
-    """以 fpd 身份跑一次 fpdexec（sudo -u 直接 exec，不经 nologin shell，和 ssh 那条路等价）。"""
+    """以 fpd 身份**经 fpd-bridge** 跑一次 fpdexec（★ 2026-09-29 改：此前是直调 EX）。
+
+    为什么必须走 bridge：ForceCommand 把生产上唯一的入口钉在 fpd-bridge 上，直调 fpdexec
+    等于自证一条主站永远走不到的路径——bridge 里"加载 env / 拒绝规则"那几道缺陷会被完全跳过
+    （09-29 那条 env 未 export 就是这么躲过自检的：直调时脚本自带 env，探测全绿）。
+    走 bridge 还顺带把 stdin/stdout 的字节归属过了一遍真实实现：run 模式 stdout 必须只有
+    被透传脚本的输出，而 bridge 是 exec 直传，不多不少。
+    """
     head = base64.b64encode(json.dumps(hdr).encode()).decode() + "\n"
-    return subprocess.run(["sudo", "-u", user, pybin, EX], input=head.encode() + payload,
+    return subprocess.run(["sudo", "-u", user, os.path.join(root, "bin", "fpd-bridge")],
+                          input=head.encode() + payload,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 
 blob = os.urandom(200000)
 sha = hashlib.sha256(blob).hexdigest()
-r = call({"mode": "put", "rel": "_smoke/x.bin"}, blob)
-assert r.returncode == 0, "put 失败: %s" % r.stderr.decode()[:200]
-assert json.loads(r.stdout)["sha256"] == sha, "put 回来的 sha 不等"
-r = call({"mode": "stat", "rel": "_smoke/x.bin"})
-assert r.returncode == 0, "stat 失败: %s" % r.stderr.decode()[:200]
-r = call({"mode": "get", "rel": "_smoke/x.bin"})
-assert r.returncode == 0 and hashlib.sha256(r.stdout).hexdigest() == sha, "get 回来的字节与源件不等"
-r = call({"mode": "get", "rel": "../../../../etc/passwd"})
-assert r.returncode == 78, "越界 rel 竟然没被拒（rc=%d）" % r.returncode
-print("✅ 搬运三态（put/stat/get）逐字节等值 + 越界拒绝生效")
+FAILS = []
+
+def one(mode, payload=b"", rel=None):
+    """走一次 bridge 并**如实**回 (rc, stdout, stderr)；不做任何"看起来像就行"的宽容判定。"""
+    hdr = {"mode": mode}
+    if rel is not None:
+        hdr["rel"] = rel
+    r = call(hdr, payload)
+    return r.returncode, r.stdout, r.stderr.decode(errors="replace")
+
+rc, so, se = one("put", blob, "_smoke/x.bin")
+if rc != 0:
+    FAILS.append("put rc=%d stderr=%s" % (rc, se[:200]))
+else:
+    try:
+        ack = json.loads(so.decode().strip().splitlines()[-1])
+    except Exception:
+        FAILS.append("put 成功但回执不是 JSON（bridge 往 stdout 多写了东西？）: %r" % so[:120])
+        ack = {}
+    if ack.get("sha256") != sha:
+        FAILS.append("put 回执 sha256=%s ≠ 本地 %s（写盘被截/被改）" % (ack.get("sha256"), sha[:12]))
+    # ★ 必须带 size：只比 sha 的话，"落盘 0 字节但 sha 也算得出来"这类形态会被放过
+    if int(ack.get("size") or -1) != len(blob):
+        FAILS.append("put 回执 size=%s ≠ %d" % (ack.get("size"), len(blob)))
+
+rc, so, se = one("stat", rel="_smoke/x.bin")
+st = {}
+if rc != 0:
+    FAILS.append("stat rc=%d stderr=%s" % (rc, se[:200]))
+else:
+    try:
+        st = json.loads(so.decode().strip().splitlines()[-1])
+    except Exception:
+        FAILS.append("stat 回执不是 JSON: %r" % so[:120])
+    if st.get("sha256") != sha or int(st.get("size") or -1) != len(blob):
+        FAILS.append("stat 读数与源件不等值: size=%s sha=%s" % (st.get("size"), str(st.get("sha256"))[:12]))
+
+rc, got, se = one("get", rel="_smoke/x.bin")
+if rc != 0:
+    FAILS.append("get rc=%d stderr=%s" % (rc, se[:200]))
+elif hashlib.sha256(got).hexdigest() != sha:
+    FAILS.append("get 回来的字节与源件不等（%d/%d 字节）⇒ 产物回传这一腿不可用" % (len(got), len(blob)))
+elif len(got) != len(blob):
+    FAILS.append("get 长度不等: %d ≠ %d" % (len(got), len(blob)))
+
+# 越界必须**拒且只拒得对**：78＝配置/边界拒绝。返回 0 就是守卫失效（能读 /etc/passwd）。
+rc, so, se = one("get", rel="../../../../etc/passwd")
+if rc != 78:
+    FAILS.append("越界 rel 未被正确拒绝（rc=%d，应为 78）⇒ 红线②失效，禁止开闸" % rc)
+
+if FAILS:
+    print("❌ 搬运三态 / 边界 / 到期 自检未通过：")
+    for f in FAILS:
+        print("   - " + f)
+    sys.exit(1)
+print("✅ 搬运三态（put/stat/get 各自 size+sha 等值）+ 越界拒绝(78) 全部经 fpd-bridge 生效")
 PY
 if [ "$SMOKE_OK" -ne 1 ]; then bad "搬运三态自检未通过 ⇒ 产物回传这一腿不可用，禁止开闸"; MISS=$((MISS+1)); fi
 rm -rf "$FPD_ROOT/w/_smoke"
+
+# ★ 到期自拒的离线自证（2026-09-29 加）：这一腿平时**永远不会被触发**，不主动测就等于没有；
+#   而它是"厂商忘了回收机器 / 主站回归 timer 没跑成功"两种失败的唯一双保险（红线③）。
+#   做法：把 etc/fpd.env 里的 FPD_EXPIRE_DATE 临时改成过去日子，从 bridge 拨一次 probe ⇒ 必须非 0
+#   （bridge 那道日期拒绝早于 fpdexec，所以连 EXPIRED 标记都不会落）；随后**无条件逐字节还原**，
+#   还原不等值就点红——一次自检绝不能把机器留在"已到期"态。
+#   ⚠️ 为什么在这里改文件而不是传环境变量：bridge 先 source fpd.env（且 set -a 会覆写继承值），
+#      传进去的 FPD_EXPIRE_DATE 一定会被文件里的值盖掉——按 env 测会得到"假通过"。
+if [ -f "$FPD_ROOT/EXPIRED" ]; then
+  warn "  已存在 EXPIRED 标记 ⇒ 跳过到期自证（跳过≠通过，先把标记清掉再重跑本脚本）"
+else
+  ENVF="$FPD_ROOT/etc/fpd.env"
+  ENV_BAK="$(mktemp /tmp/fpd-env.bak.XXXXXX)"
+  ENV_SHA_BEFORE="$(sha256sum "$ENVF" 2>/dev/null | awk '{print $1}' || true)"
+  if cp -p "$ENVF" "$ENV_BAK" 2>/dev/null && [ -s "$ENV_BAK" ]; then
+    sed -i -E 's/^FPD_EXPIRE_DATE=.*/FPD_EXPIRE_DATE=2020-01-01/' "$ENVF"
+    EXPIRY_ERR="$(mktemp /tmp/fpd-expiry-check.XXXXXX.err)"
+    printf '%s\n' "$(printf '%s' '{"mode":"probe"}' | base64)" \
+      | sudo -u "$FPD_USER" "$FPD_ROOT/bin/fpd-bridge" >/dev/null 2>"$EXPIRY_ERR"
+    EXPIRY_RC=$?
+    cp -p "$ENV_BAK" "$ENVF"           # 先还原，再判定：判红也不许把机器留在到期态
+    ENV_SHA_AFTER="$(sha256sum "$ENVF" 2>/dev/null | awk '{print $1}' || true)"
+    if [ "$EXPIRY_RC" -eq 0 ]; then
+      bad "到期自拒失效：fpd.env 写 2020-01-01 时 bridge 仍放行 ⇒ 机器到期后还会接客户文件"
+      MISS=$((MISS+1))
+    else
+      log "  到期自拒生效（临时把到期日设成 2020-01-01 ⇒ bridge exit=$EXPIRY_RC，文案：$(head -c 120 "$EXPIRY_ERR" | tr '\n' ' ')）"
+    fi
+    if [ -f "$FPD_ROOT/EXPIRED" ]; then
+      bad "到期自证过程中落出了 EXPIRED 标记 ⇒ 拒绝路径写到了标记文件（红线③的实现不该在探测时落盘），请人工确认后删除"
+      MISS=$((MISS+1))
+    fi
+    if [ -n "${ENV_SHA_BEFORE:-}" ] && [ "${ENV_SHA_BEFORE:-}" != "${ENV_SHA_AFTER:-}" ]; then
+      bad "fpd.env 未逐字节还原（before=${ENV_SHA_BEFORE:0:12} after=${ENV_SHA_AFTER:0:12}）⇒ 立即人工核对 $ENVF"
+      MISS=$((MISS+1))
+    fi
+    rm -f "$ENV_BAK" "$EXPIRY_ERR"
+  else
+    bad "备份 $ENVF 失败 ⇒ 到期自证没做（跳过≠通过）"
+    MISS=$((MISS+1))
+    rm -f "$ENV_BAK"
+  fi
+fi
 
 "$VENV/bin/python3" - <<'PY' || MISS=$((MISS+1))
 # 库导入自检：pymupdf 单独点名——它是 overlay 主链的真实依赖，也是主站清单里漏写的那一个

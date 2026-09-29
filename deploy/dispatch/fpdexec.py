@@ -69,6 +69,9 @@ def _env_int(name, fallback):
 
 DEFAULT_TIMEOUT = _env_int("FPD_TIMEOUT_SEC", 615)   # 主站预算 + 15s 富余
 DEFAULT_TTL = _env_int("FPD_TTL_SEC", 3600)
+# probe 里那次 selftest 的墙钟上限（实测 ≈1.4 秒；给 60 秒只为"机器被别的东西压住时不要拖死探测"，
+# 到点就判不就绪——绝不因为"还没跑完"而回 0）。
+PROBE_SELFTEST_SEC = _env_int("FPD_PROBE_SELFTEST_SEC", 60)
 
 
 def _now_date():
@@ -239,10 +242,76 @@ def cmd_probe():
         "script_sha": scripts,
         "work_writable": os.access(WORK, os.W_OK) if WORK.exists() else False,
         "disk_free_mb": _disk_free_mb(),
+        # ★ 2026-09-29 补三条字段。三条都是同一形态：**判据写在 Go 侧、Python 侧从没吐过**，
+        #   于是 json.Unmarshal 把缺失键留成零值，那道腿结构上恒通过（空转）。
+        #   selftest —— 主站 fileproc_remote.go 的 DispatchProbe 里 `Selftest int` 一直在解这个键，
+        #     就绪闸写的就是 `p.Selftest != 0` 判红；本函数此前从不吐该键 ⇒ "深判据"一次都没执行过。
+        #     现在真跑一次 pdf_overlay.py selftest（实测 ≈1.4s / ≈89MB RSS；主站进程内 probe 只成功一次，
+        #     成本落在启动期而非每一单），把**真实退出码**填进来。
+        #   pymupdf —— 同族：Go 侧读的是**顶层** `pymupdf` 键，此前只在 libs 里嵌套 ⇒ 顶层永远为空。
+        #   caps —— "内存帽到底吃没吃到"变成一条读数，见 _caps_report()。
+        "selftest": _probe_selftest(),
+        "pymupdf": _module_version("PyMuPDF", "pymupdf"),
+        "caps": _caps_report(),
     }
     json.dump(out, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")
     return 0
+
+
+def _probe_selftest():
+    """probe 内真跑一次 `pdf_overlay.py selftest`，回**真实退出码**（0＝原版式主链在这台机器上通）。
+
+    ★ 为什么值得为它付这一次：主站那道就绪闸只有三条腿 `ok / expired / selftest`，
+      前两条读的都是"配置里写了什么"，只有 selftest 是"这台机器真干得出这活"。
+      浅判据（import pymupdf 成功）在主站已经放过一台转不出 PDF 的机器（改造方案 §12-D5）。
+    ⚠️ 不许污染 stdout：主站把 probe 的 stdout 最后一行当 JSON 解，所以这里必须 capture_output；
+      selftest 失败时的 tail 由 mode=selftest 单独取（别塞进 probe，JSON 会变长且难读）。
+    返回码口径与 cmd_selftest 对齐：0 通过 / 2 脚本或资产缺失 / 3 断言失败或跑不动。
+    """
+    script = BIN / "pdf_overlay.py"
+    if not script.exists():
+        return 2
+    try:
+        r = subprocess.run([PYBIN, str(script), "selftest"],
+                           capture_output=True, text=True, timeout=PROBE_SELFTEST_SEC)
+        return int(r.returncode)
+    except Exception:
+        # 超时/起不来一律判不就绪——这里回 0 等于"探针瞎了就说病人健康"
+        return 3
+
+
+def _caps_report():
+    """把"内存帽／墙钟帽到底吃没吃到"变成一条读数（而不是写在 README 里的设计意图）。
+
+    ★ 为什么必须上报：ssh 拉起的会话**不落进 fpd.slice**（sshd 给每个连接开自己的 scope，
+      非 root 也没法自选 slice），所以远端真正约束 PyMuPDF 的只有 cmd_run 里 preexec_fn 那一次
+      setrlimit(RLIMIT_AS)——而它的值来自环境变量。09-29 实测 fpd-bridge 用 `. fpd.env` 加载却
+      **没有 export**，三个 FPD_* 变量在 fpdexec 里全是空 ⇒ RLIMIT_AS_MB 读成 0 ⇒ 帽根本没戴上，
+      且没有一条日志会喊。这个块就是"没人喊"那条的补位：报的是当前进程**真实读到**的值，
+      读不到就是 0，配置断在哪一层一眼可见（bridge 没 export / env 文件没写 / 被系统硬上限压住）。
+    """
+    mb = _env_int("FPD_RLIMIT_AS_MB", 0)
+    info = {
+        "rlimit_as_mb": mb,
+        "rlimit_as_set": mb > 0,
+        "timeout_bin": bool(shutil.which("timeout")),
+        "run_timeout_sec": DEFAULT_TIMEOUT,
+        "ttl_sec": DEFAULT_TTL,
+        "max_put_mb": MAX_PUT_MB,
+    }
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        inf = resource.RLIM_INFINITY
+        info["as_soft_mb"] = -1 if soft == inf else int(soft / 1024 / 1024)
+        info["as_hard_mb"] = -1 if hard == inf else int(hard / 1024 / 1024)
+        # 硬上限低于配置值 ⇒ setrlimit 会失败（cmd_run 里那次是吞掉的），帽实际吃不到配置的数
+        info["clamped"] = bool(mb > 0 and hard != inf and hard < mb * 1024 * 1024)
+    except Exception:
+        info["as_hard_mb"] = 0
+        info["clamped"] = False
+    return info
 
 
 def _py_version():
@@ -381,14 +450,21 @@ def cmd_run(hdr, payload):
             os.nice(10)           # 批处理负载，永远让位给交互
         except Exception:
             pass
-        mb = int(os.environ.get("FPD_RLIMIT_AS_MB", "0") or 0)
-        if mb > 0:
-            try:
-                import resource
+        mb = _env_int("FPD_RLIMIT_AS_MB", 0)
+        if mb <= 0:
+            # 帽读不到值＝配置在某一环断了（最典型是 fpd-bridge 没 export env，见该文件头）。
+            # 这里**不拒绝执行**（派发是增益，别把能干活的机器判死），但必须在 stderr 喊一声，
+            # 因为 probe 上报的 caps.rlimit_as_set=false 只有配合这条日志才定位得准。
+            sys.stderr.write("[fpdexec] 警告：FPD_RLIMIT_AS_MB 读到 0 ⇒ 转换子进程没有内存帽"
+                             "（核对 fpd-bridge 是否 export 了 etc/fpd.env）\n")
+        try:
+            import resource
+            if mb > 0:
                 lim = mb * 1024 * 1024
                 resource.setrlimit(resource.RLIMIT_AS, (lim, lim))
-            except Exception:
-                pass  # 设不上就照原样跑（probe/preflight 会报"资源帽缺失"）
+        except Exception:
+            # 设不上就照原样跑，但一定喊出来：probe 的 caps.rlimit_as_set / clamped 会把它点红
+            sys.stderr.write("[fpdexec] 警告：setrlimit(RLIMIT_AS) 未生效 ⇒ 帽实际吃不到配置值\n")
 
     # 用临时文件承接 payload：直接 pipe 也行，但 PDF/译文映射可达数十 MB，
     # 落盘（就在 w/ 里，随会话一起清）比在管道里堆缓冲更稳，也便于超时后不留半截输入。

@@ -3,12 +3,19 @@
 # 体验机上**唯一**对外的执行入口：sshd 的 ForceCommand 固定指向本文件（见 sshd-fpd.conf）。
 # 主站 ssh 进来后不管原命令写了什么，都只会走到这里，再由这里交给 fpdexec.py。
 #
-# 三道拒绝（缺一不可，它们共同保证"这台机器不是别人的 shell"）：
+# 四道拒绝/动作（缺一不可，它们共同保证"这台机器不是别人的 shell"）：
 #   ① 拒绝交互式登录（-t 分配的 TTY）：只接受"带 stdin 的一次性命令"，
 #      否则密钥一旦泄露，对方拿到的就是一个可交互的账号。
 #   ② 拒绝 SSH_ORIGINAL_COMMAND 里的任何内容：主站的协议只走 stdin，
 #      原命令字段一律忽略——不给"绕过 fpdexec 直接跑别的程序"留缝。
-#   ③ 拒绝已到期：EXPIRED 标记存在或日期已过时一律不执行（fpdexec 内部还有一道，双保险）。
+#   ③ 拒绝已到期：EXPIRED 标记存在、或日期已过、或日期配置本身非法，一律不执行。
+#   ④ 入口文件必须在。
+#   ★ ③ 在这里做**且**在 fpdexec 里做，是因为这两道过去只有一道是真的：
+#     旧版本用 `. "$FPD_ENV"` 加载配置却没有 `set -a`，赋值不会 export 给 exec 出去的解释器，
+#     于是 fpdexec 读到的 FPD_EXPIRE_DATE 恒为空串 ⇒「到期即拒」在这条真实通路上是**摆设**
+#     （2026-09-29 经 bridge 实测 probe 回 `expire_date:""`，而 fpd.env 里明明写着 2026-10-26）。
+#     同一条机制还悄悄抹掉了 FPD_RLIMIT_AS_MB ⇒ 远端转换进程根本没戴内存帽
+#     （ssh 会话不落进 fpd.slice，帽本来就只靠 setrlimit 那一招，见改造方案 §4.4/§6.4）。
 #
 # 为什么不直接 ForceCommand=/opt/fpdispatch/bin/fpdexec.py：
 # 中间留一层 shell 是为了把"环境文件加载 + 拒绝规则"集中在一处，
@@ -18,9 +25,17 @@ set -u
 FPD_ROOT="${FPD_ROOT:-/opt/fpdispatch}"
 FPD_ENV="$FPD_ROOT/etc/fpd.env"
 FPDEXEC="$FPD_ROOT/bin/fpdexec.py"
+MARKER="$FPD_ROOT/EXPIRED"
 
 # 加载远端侧配置（不含任何主站密钥）
-[ -f "$FPD_ENV" ] && . "$FPD_ENV"
+# ★ `set -a` 是让这些值**真的进子进程环境**的那一步；少了它，`.` 出来的只是本 shell 的局部变量，
+#   下面 exec 出去的 python 一个字都读不到——而现象是"配置齐全、行为却是默认值"，最难查的形态。
+if [ -f "$FPD_ENV" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$FPD_ENV"
+  set +a
+fi
 
 PYBIN="${FPD_PYBIN:-$FPD_ROOT/.venv/bin/python3}"
 
@@ -33,7 +48,28 @@ fi
 if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
   echo "[fpd-bridge] 忽略 SSH_ORIGINAL_COMMAND（协议只走 stdin）" >&2
 fi
-# ③ 入口文件必须在
+# ③ 到期即拒（三道：标记文件 / 日期已过 / 日期配置非法）
+if [ -f "$MARKER" ]; then
+  echo "[fpd-bridge] 已打 EXPIRED 标记 ⇒ 本机到期，拒绝一切派发" >&2
+  exit 78
+fi
+if [ -n "${FPD_EXPIRE_DATE:-}" ]; then
+  # 只吃 YYYY-MM-DD；剥掉连字符后必须是 8 位数字，否则按**已到期**处理（配置坏了就该停）
+  EXP_NUM="$(printf '%s' "$FPD_EXPIRE_DATE" | tr -d -- '-')"
+  case "$EXP_NUM" in
+    ''|*[!0-9]*)
+      echo "[fpd-bridge] FPD_EXPIRE_DATE 非法（$FPD_EXPIRE_DATE）⇒ 按已到期拒绝（宁可关闸）" >&2
+      exit 78 ;;
+  esac
+  TODAY_NUM="$(date -u +%Y%m%d)"
+  if [ "$TODAY_NUM" -ge "$EXP_NUM" ]; then
+    echo "[fpd-bridge] 今日 $TODAY_NUM 已到/过到期日 $EXP_NUM（UTC 口径）⇒ 拒绝派发" >&2
+    exit 78
+  fi
+else
+  echo "[fpd-bridge] 警告：FPD_EXPIRE_DATE 为空 ⇒ 本机没有到期自拒配置（生产不允许）" >&2
+fi
+# ④ 入口文件必须在
 if [ ! -f "$FPDEXEC" ]; then
   echo "[fpd-bridge] fpdexec.py 缺失，先跑主站 scripts/dispatch_sync.sh" >&2
   exit 2
