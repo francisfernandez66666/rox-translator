@@ -814,7 +814,7 @@ func (e *Engine) llmReplyWith(ctx context.Context, input string, history []store
 		// 于是老会话越聊越歪——不清洗历史数据（那是客户台账），在进 prompt 这一道摘干净。
 		// ★ 082x 同一把刷子还得刷"内部规则回声"：存量消息里已经躺着「（…系统现值…）」这种
 		// 备注（现网实测），喂回去等于给它一个"可以写括号备注"的范例，第二轮就复读。
-		content, _ := extractGoMarkers(asStr(h["content"]))
+		content, _ := extractGoMarkers(e.canonicalizeGoMarkers(asStr(h["content"])))
 		msgs = append(msgs, llm.Message{Role: role, Content: sanitizeVisitorText(content)})
 	}
 	msgs = append(msgs, llm.Message{Role: "user", Content: input})
@@ -972,9 +972,156 @@ func (e *Engine) buildSystemPrompt(ctx context.Context, hits []entry, uiLang str
 // （「（不报具体价格数字，但…系统现值里没写的…）」），日文轮还出现过 U+FFFD 残渣与串空行。
 // 语气规则里那句「正文不要加括号备注」和语言段一样只是请求，出站再剥一次才是保证；
 // 剥的判据只认内部段名，正常补充说明（「（具体以注册页公示为准）」）一律留下。
+//
+// ★ 082x 第五条（同一轮现网读数里的第三条残渣，形态和 074x 那族同源但更阴）：标记**写歪了**。
+//
+//	现网英文访客那轮的正文末尾挂着「[go editor,packages]」——按钮一个没出，控制序列却给用户看了。
+//	它不是新物种，是 074x 那族「模型不按规范写」的又一个变体：中文轮模型写的是
+//	【go:editor,packages】的畸形近亲（冒号被写成空格、全角括号被换成 ASCII），
+//	`extractGoMarkers` 只认「【go:」这一个字面头，于是既没收成按钮、也没剥干净。
+//	补翻那一道还会把括号形态再换一次（翻译模型见 ASCII 括号就照 ASCII 出），漏口更宽。
+//
+//	修法不是再往 extractGoMarkers 里堆一种括号：**先归一成唯一规范形态**，
+//	让「未闭合怎么办」「未知 key 怎么办」「句中怎么拼」这些既有语义只有一份实现
+//	（见 canonicalizeGoMarkers），extractGoMarkers 与历史回放清洗全都照常走它。
 func (e *Engine) postProcess(text, model string) *Reply {
-	content, keys := extractGoMarkers(text)
+	content, keys := extractGoMarkers(e.canonicalizeGoMarkers(text))
 	return &Reply{Content: sanitizeVisitorText(content), Actions: e.FeatureLinksByKey(dedup(keys)), Model: model, Source: "llm"}
+}
+
+// goMarkerOpeners / goMarkerClosers 动作标记可能被模型写成的括号形态（★ 082x 第五条）。
+// 全角方括号是规范形态；ASCII 方括号与两种圆括号来自「模型自己变通」和「补翻时顺手换字符」两条路。
+// ⚠️ 括号种类**不是**安全判据，安全判据在里面写的是什么：带冒号一律算标记，
+// 只带空白的歧义形态必须「至少有一段是真功能卡 key」才动（判据与误伤分析见 canonicalizeGoMarkers）——
+// 所以圆括号也照常收，「(go to the store)」这种一句人话不会因为它是括号就被吃掉。
+const (
+	goMarkerOpeners = "【[［(（"
+	goMarkerClosers = "】]］)）"
+)
+
+// canonicalizeGoMarkers 把写歪的动作标记归一成【go:key,key】，交给 extractGoMarkers 一处解析。
+//
+// 判定分两档，**目的是不误伤正常正文**（这是这条链最容易写坏的地方）：
+//   - 括号里是 `go` + **冒号**（半角/全角都算）：冒号是提示词里的规范写法，
+//     正文里没有任何一句人话会写「(go: …)」，所以带冒号一律按标记处理。
+//     即便里面的 key 不认识也照归一——extractGoMarkers 会剥掉、FeatureLinksByKey 出空菜单，
+//     与规范形态遇到未知 key 的现有行为**完全一致**（宁可不给按钮也不留控制序列）。
+//   - 括号里是 `go` + **空白**（现网那条就是这种）：这是有歧义的形态，英文正文里
+//     完全可能出现「[go to the pricing page]」。判据取「**至少有一段是库里的 feature_links key**」：
+//     「[go editor,packages]」两段都是真功能卡 ⇒ 归一、出按钮；
+//     「[go to the pricing page]」整段只有一个逗号分段、认不出任何 key ⇒ 一个字都不动
+//     （把用户能读的一句话吃掉，比漏一个控制序列严重）；
+//     「[go now]」这种 markdown 链接文字也不在功能卡表里，同样不碰。
+//
+// 括号内容超长（>64 字节）或找不到闭合括号一律不算标记：那更像被截断的正文或普通括注。
+func (e *Engine) canonicalizeGoMarkers(text string) string {
+	if text == "" || !strings.Contains(strings.ToLower(text), "go") {
+		return text // 绝大多数正文连 "go" 都没有，先廉价退场
+	}
+	var known map[string]bool
+	needKnown := func() map[string]bool {
+		if known == nil {
+			known = e.knownFeatureKeys()
+		}
+		return known
+	}
+	var sb strings.Builder
+	rest := text
+	for {
+		i := strings.IndexAny(rest, goMarkerOpeners)
+		if i < 0 {
+			sb.WriteString(rest)
+			break
+		}
+		openBytes := firstRuneBytes(rest[i:])
+		after := rest[i+openBytes:]
+		trimmed := strings.TrimLeft(after, " \t")
+		if len(trimmed) < 2 || strings.ToLower(trimmed[:2]) != "go" {
+			// 不是 go 开头：把开括号原样送出，从它**后面**继续找（防死循环）
+			sb.WriteString(rest[:i+openBytes])
+			rest = rest[i+openBytes:]
+			continue
+		}
+		inner := trimmed[2:]
+		sepHasColon := false
+		switch {
+		case strings.HasPrefix(inner, ":"), strings.HasPrefix(inner, "："):
+			sepHasColon = true
+			inner = strings.TrimLeft(inner[firstRuneBytes(inner):], " \t")
+		case strings.HasPrefix(inner, " "), strings.HasPrefix(inner, "\t"):
+			inner = strings.TrimLeft(inner, " \t")
+		default:
+			// 例如 "google"／"godmode"：不是标记，原样送出继续扫
+			sb.WriteString(rest[:i+openBytes])
+			rest = rest[i+openBytes:]
+			continue
+		}
+		c := strings.IndexAny(inner, goMarkerClosers)
+		if c < 0 || c > 64 {
+			// 找不到闭合括号：多半就是 max_tokens 把尾巴截没了（074x 第 2 条同一形态）。
+			// 与规范形态保持同一语义——**带冒号**、或**括号里至少有一段是已知功能卡 key** 时，
+			// 从开括号删到结尾（宁可不给按钮也不把控制序列留给用户）；两者都不成立就是正常人话，原样留着。
+			tailKeys := splitKeys(inner)
+			if (sepHasColon || anyKeyKnown(needKnown(), tailKeys)) && len(inner) <= 64 {
+				sb.WriteString(rest[:i]) // 开括号**之前**的正文要保住：漏这句就是把整段回答删空
+				rest = ""                // 丢弃到结尾
+				break
+			}
+			sb.WriteString(rest[:i+openBytes])
+			rest = rest[i+openBytes:]
+			continue
+		}
+		content := inner[:c]
+		end := i + openBytes + (len(after) - len(inner)) + c + firstRuneBytes(inner[c:])
+		keys := splitKeys(content)
+		if len(keys) == 0 {
+			sb.WriteString(rest[:end])
+			rest = rest[end:]
+			continue
+		}
+		if !sepHasColon && !anyKeyKnown(needKnown(), keys) {
+			// 无冒号且一段功能卡都认不出来＝多半是正常人话，一个字都不许动
+			sb.WriteString(rest[:end])
+			rest = rest[end:]
+			continue
+		}
+		sb.WriteString(rest[:i])
+		sb.WriteString(goMarkerHead + strings.Join(keys, ",") + goMarkerTail)
+		rest = rest[end:]
+	}
+	return sb.String()
+}
+
+// anyKeyKnown 括号里**至少有一段**是库里的 feature_links key（大小写按库口径归一）。
+// 刻意不要求「每一段都是」：模型写歪时常常夹一段自己的解释（「[go editor,就是那个在线编辑器]」），
+// 只要有一段能对上真功能卡，这就是个动作标记而不是人话——人话不会恰好把某个功能卡 key 单独写成一段。
+// 认不出的那一段不会变成按钮（FeatureLinksByKey 只认库里的 key），所以放宽这一档不会凭空多出入口。
+func anyKeyKnown(known map[string]bool, keys []string) bool {
+	if len(known) == 0 {
+		return false // 取不到 key 表（库里没配功能卡／DB 故障）时**不做**歧义归一：宁可漏剥不可误伤
+	}
+	for _, k := range keys {
+		if known[strings.ToLower(strings.TrimSpace(k))] {
+			return true
+		}
+	}
+	return false
+}
+
+// knownFeatureKeys 功能卡 key 集合（canonicalizeGoMarkers 判歧义形态用）。
+// 与 FeatureLinksByKey 同一个事实源（feature_links 表 enabled 行），不另写一份白名单。
+func (e *Engine) knownFeatureKeys() map[string]bool {
+	rows, err := e.db.List("feature_links", true)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		if k := strings.ToLower(asStr(r["key"])); k != "" {
+			out[k] = true
+		}
+	}
+	return out
 }
 
 // goMarkerHead 动作标记头（正文里模型唯一被允许输出的控制序列）
