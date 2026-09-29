@@ -221,13 +221,16 @@ func TestFallbackChineseKnowledgeAlsoGetsLocalized(t *testing.T) {
 	e := newTestEngine(t)
 	// 夹具自带的知识条目只有四个字（"积分计费"），够不到判据的汉字量下限——
 	// 补一条与现网同量级的中文素材，这条锁的才是"整段中文兜底被翻出去"而不是"够不够长"。
+	// ★ 082x 第九条：keywords 里带上 price，因为访客这句**必须用英文问**。
+	// 用「积分价格」＋en 界面已经测不到本意了——中文提问现在会被判成中文访客（中文直出才对），
+	// 这条锁的场景是「英语访客 + 兜底中文素材」，两件事都得真成立才行。
 	_, _ = e.db.Create("kb_entries", map[string]any{
 		"key": "kb-long-billing", "category": "billing", "title": "计费说明", "priority": 20, "enabled": 1,
-		"content": chineseReplySample, "keywords": "积分,价格,计费", "link_keys": "pricing",
+		"content": chineseReplySample, "keywords": "积分,价格,计费,price", "link_keys": "pricing",
 	})
 	e.llm = llm.New([]llm.Provider{{Name: "main", BaseURL: url, APIKey: "k", Model: "m"}}, 5)
 	newSession(t, e, "s-lang-fb")
-	rep := e.Respond(context.Background(), "s-lang-fb", "积分价格", "/", "en", nil)
+	rep := e.Respond(context.Background(), "s-lang-fb", "what is the price", "/", "en", nil)
 	if rep.Source == "llm" {
 		t.Fatal("上游第一路就失败了，不该拿到 source=llm")
 	}

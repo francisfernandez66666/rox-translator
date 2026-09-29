@@ -32,24 +32,39 @@ func TestReplyLangBlockSitsAfterChineseMaterial(t *testing.T) {
 		[]entry{{key: "kb-epub", title: "格式", content: "支持 epub"}}, "en")
 	for _, want := range []string{
 		"【回复语言】",
-		"访客界面语言：English（English）",
-		"跟访客输入走",          // 第 2 条：输入语言优先于界面语言
-		"本轮一律写 LangCross", // 第 3 条：品牌名分语言
-		"Nengyan",         // 负向也得点名：拼音写法要被明确禁掉（出现在禁词列举里）
-		"不许把中文原句直接贴出去",    // 素材是中文写的，要译过去再说
+		"本轮作答语言：English（English）", // ★ 082x 第九条：这一段吃的是接管后的作答语言
+		"跟访客输入走",                  // 第 2 条：输入语言优先于界面语言
+		"本轮一律写 LangCross",         // 第 3 条：品牌名分语言
+		"Nengyan",                 // 负向也得点名：拼音写法要被明确禁掉（出现在禁词列举里）
+		"不许把中文原句直接贴出去",            // 素材是中文写的，要译过去再说
 	} {
 		if !strings.Contains(sys, want) {
 			t.Fatalf("【回复语言】段缺 %q：\n%s", want, sys)
 		}
+	}
+	// ★ 082x 第九条的**反证对照**：品牌名与计费单位必须跟着「作答语言」走，而不是跟着界面语言走。
+	// 现网形态是中文界面里英文提问——那一轮界面是 zh（品牌该写「能言」），但作答语言是 en，
+	// 提示词若还按界面语言给，就会教模型在英文正文里自称「能言」、并把「积分」原样留在英文里。
+	// 这条不对称正是"两处各写一份迟早分叉"的形态：判据钉的是**同一个入参喂出三句口径**。
+	if strings.Contains(sys, "本轮用中文写法「能言」") {
+		t.Fatalf("英文作答档被喂了中文档的品牌口径：\n%s", sys)
+	}
+	if !strings.Contains(sys, "「credits」") {
+		t.Fatalf("英文作答档缺计费单位口径（术语没跟着作答语言走）：\n%s", sys)
+	}
+	// 反过来：中文界面＋中文提问（zh 档）不许出现 credits 那句，也不许写 LangCross
+	zhSelf := e.buildSystemPrompt(context.Background(), nil, "zh")
+	if strings.Contains(zhSelf, "credits") || strings.Contains(zhSelf, "本轮一律写 LangCross") {
+		t.Fatalf("中文档混进了外语档的品牌/术语口径：\n%s", zhSelf)
 	}
 	// 次序腿：语言段必须排在知识段之后、「直接回复用户」之前
 	iKnow, iLang, iGo := strings.Index(sys, "【相关知识】"), strings.Index(sys, "【回复语言】"), strings.Index(sys, "直接回复用户：")
 	if !(iKnow < iLang && iLang < iGo) {
 		t.Fatalf("【回复语言】没排在知识段之后、收尾语之前（知识=%d 语言=%d 收尾=%d）：\n%s", iKnow, iLang, iGo, sys)
 	}
-	// 中文界面：拿到的是中文档名，且不该出现「没拿到界面语言」那句兜底
+	// 中文界面：拿到的是中文档名，且不该出现「没定出作答语言」那句兜底
 	zh := e.buildSystemPrompt(context.Background(), nil, "zh")
-	if !strings.Contains(zh, "Simplified Chinese（简体中文）") || strings.Contains(zh, "没拿到访客的界面语言") {
+	if !strings.Contains(zh, "Simplified Chinese（简体中文）") || strings.Contains(zh, "没定出作答语言") {
 		t.Fatalf("中文界面的语言段不对：\n%s", zh)
 	}
 	// 繁体是另一个书写档，不许被当成简体中文
@@ -59,7 +74,7 @@ func TestReplyLangBlockSitsAfterChineseMaterial(t *testing.T) {
 	}
 	// 空语言（老缓存包/082x 之前的前端根本不带这个字段）：明说「按访客输入判断」，不猜
 	empty := e.buildSystemPrompt(context.Background(), nil, "")
-	if !strings.Contains(empty, "没拿到访客的界面语言") {
+	if !strings.Contains(empty, "没定出作答语言") {
 		t.Fatalf("空界面语言没走「按输入判断」分支：\n%s", empty)
 	}
 }
@@ -78,42 +93,65 @@ func TestLangLabelsCoverFrontendLocales(t *testing.T) {
 	}
 }
 
-// TestCannedChineseYieldsToNonChineseVisitor 中文话术/流程在非中文访客面前让位。
+// TestCannedChineseYieldsToNonChineseVisitor 中文话术/流程在**非中文本轮作答语言**面前让位。
 // 这条才是主根因：话术直配与流程**不经过模型**，只补提示词等于没补。
+//
+// ★ 082x 第九条把「本轮作答语言」的来源从"界面语言"换成"界面语言打底＋访客这句输入接管"，
+// 所以下面每一腿都成对写（同一句话换界面语言 / 同一个界面语言换那句话），
+// 只留一条的话，把 effectiveReplyLang 写死成任何一个常量都能让另一半绿着。
 func TestCannedChineseYieldsToNonChineseVisitor(t *testing.T) {
 	e := newTestEngine(t)
 	ctx := context.Background()
 
-	// ① 话术直配：夹具里 sc-price 的关键词是「多少钱,价格」
+	// ① 中文界面 + 中文提问：话术直配（毫秒级），这是本站访客的主路径，不许被接管误撤
 	newSession(t, e, "s-zh-sc")
 	if rep := e.Respond(ctx, "s-zh-sc", "多少钱", "/", "zh", nil); rep.Source != "rule" {
 		t.Fatalf("中文界面应走话术直配（毫秒级），实际 source=%q", rep.Source)
 	}
-	newSession(t, e, "s-en-sc")
-	rep := e.Respond(ctx, "s-en-sc", "多少钱", "/", "en", nil)
-	if rep.Source == "rule" {
-		t.Fatalf("英文界面仍把中文话术原样送出（content=%q）——让位没生效", rep.Content)
+	// ② ★ 用户实测那条缺陷：中文界面 + 英文提问 ⇒ 中文话术必须让位。
+	//    这句里刻意带上话术关键词「价格」：不接管时 MatchScript 一定命中（现网实测就是这条直出的中文），
+	//    整句换成纯英文的话，关键词本来就配不上，这条腿会退化成"恒真断言"（绿灯无效）。
+	newSession(t, e, "s-zh-sc-en")
+	if rep := e.Respond(ctx, "s-zh-sc-en", "what is the 价格 like", "/", "zh", nil); rep.Source == "rule" {
+		t.Fatalf("中文界面里的英文提问仍被中文话术直配（content=%q）——输入语言接管没生效", rep.Content)
 	}
-	// ② 流程：夹具里 fl-onboard 的触发词是「新手,上手」，两步 ask 都是中文
+	// ③ 英文界面 + 中文提问：★ 本条行为按用户口径**翻转**了，且翻转得写明理由。
+	//    旧口径「界面语言赢」的后果是英文界面里的中国访客收到一串英文（他没要求过）；
+	//    用户 09-29 定稿「后续用户用什么语言，就回复什么语言」⇒ 这里中文话术直出才对。
+	newSession(t, e, "s-en-sc")
+	if rep := e.Respond(ctx, "s-en-sc", "多少钱", "/", "en", nil); rep.Source != "rule" {
+		t.Fatalf("英文界面里的中文提问应中文直出（他问的就是中文），实际 source=%q", rep.Source)
+	}
+	// ④ 同一个界面、同一句带关键词的英文提问（与 ③ 只差输入语言）：让位照旧生效。
+	//    有 ③④ 这一对，"把 effectiveReplyLang 写死成界面语言"与"写死成输入语言"两种改法都会红一半。
+	newSession(t, e, "s-en-sc-en")
+	if rep := e.Respond(ctx, "s-en-sc-en", "what is the 价格 like", "/", "en", nil); rep.Source == "rule" {
+		t.Fatalf("英文界面里的英文提问被中文话术直配（content=%q）", rep.Content)
+	}
+	// ⑤ 流程：中文界面 + 中文提问进流程（夹具 fl-onboard 触发词「新手,上手」，两步 ask 都是中文）
 	newSession(t, e, "s-zh-fl")
 	if rep := e.Respond(ctx, "s-zh-fl", "我是新手", "/", "zh", nil); rep.Source != "flow" {
 		t.Fatalf("中文界面应进流程，实际 source=%q", rep.Source)
 	}
-	newSession(t, e, "s-en-fl")
-	if rep := e.Respond(ctx, "s-en-fl", "我是新手", "/", "en", nil); rep.Source == "flow" {
-		t.Fatal("英文界面进了中文流程（会连着甩三步中文 ask）")
+	// ⑥ 流程中的访客改用英文：中文 ask 必须停（连问三步中文比一句更缠人）。
+	//    这句不带任何中文关键词，抢它的只有「流程推进」那一道，判据干净。
+	if rep := e.Respond(ctx, "s-zh-fl", "yes, how do I start the trial", "/", "zh", nil); rep.Source == "flow" {
+		t.Fatal("进流程后访客改用英文，仍在推进中文流程")
 	}
-	// ③ 空语言按中文放行：082x 之前的挂件根本不带 lang，
+	// ⑥ 空语言 + 中文提问按中文放行：082x 之前的挂件根本不带 lang，
 	//    把它判成非中文会让全站话术在升级瞬间集体失效（那是行为回退，不是修复）
 	newSession(t, e, "s-no-lang")
 	if rep := e.Respond(ctx, "s-no-lang", "多少钱", "/", "", nil); rep.Source != "rule" {
 		t.Fatalf("空 lang 应仍走话术直配，实际 source=%q", rep.Source)
 	}
-	// ④ 让位之后不许把访客晾着：无 LLM 时兜底仍要给出知识素材（中文），
+	// ⑦ 让位之后不许把访客晾着：无 LLM 时兜底仍要给出知识素材，
 	//    并**不是**返回空回复（空回复比中文回复更接近事故）
-	later := e.Respond(ctx, "s-en-sc2", "积分价格", "/", "en", nil)
+	later := e.Respond(ctx, "s-no-lang-again", "what is the pricing plan", "/", "zh", nil)
 	if strings.TrimSpace(later.Content) == "" {
-		t.Fatal("英文界面让位后拿到空回复")
+		t.Fatal("让位后拿到空回复")
+	}
+	if later.Source == "rule" {
+		t.Fatalf("英文提问走了中文话术直配（content=%q）", later.Content)
 	}
 }
 
