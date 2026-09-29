@@ -33,6 +33,11 @@ type Reply struct {
 	Flow    string   `json:"flow,omitempty"` // 命中的流程 key
 	Model   string   `json:"model,omitempty"`
 	Source  string   `json:"source"` // llm / rule / flow / fallback
+	// LangLocalized ★ 082x：本条正文是被「补翻」成访客界面语言的（不是模型自己按语言写的）。
+	// 为什么要把这个布尔带上：现网「回复语种不对」只能靠访客截图报，服务端出几翻几全在暗处。
+	// 它随 /chat 响应回吐（assist/api/server.go），日志里也有一条 INFO（enforceReplyLang），
+	// 挂件不渲染这个字段——它服务的是排障与"补翻占比"统计，占比降不下来就说明语言段还得再修。
+	LangLocalized bool `json:"lang_localized,omitempty"`
 }
 
 // Engine 接待引擎
@@ -572,7 +577,19 @@ func parseSteps(js string) ([]FlowStep, error) {
 //	第 2 道就把一整段中文话术原样送回，第 4 道那个会跟着访客语言改口的分支根本轮不到。
 //	所以非中文访客一律让位给 LLM+知识库（第 4 道，配 replyLangBlock 用对方语言作答），
 //	判据与口径见 reply_lang.go 文件头。
+//
+// ★★ 本函数是回复的**唯一出站咽喉**，所以语言保证挂在这里而不是只挂在 LLM 那一路：
+// 换件后现网复问抓到「lang=en 却回一整段中文」——提示词里的【回复语言】只是概率性请求；
+// 而且 LLM 不可用时 fallbackReply 拼的是**中文知识原文**，那条路根本不经过模型。
+// 只在 llmReplyWith 里补翻，等于把兜底那一路继续漏着。故四道产物一律过 enforceReplyLang。
+// 为什么不会把合格答案拖去重翻，判据见 reply_lang_check.go 的 replyLangMismatch。
 func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL, uiLang string, history []store.Row) *Reply {
+	return e.enforceReplyLang(ctx, e.respond(ctx, sessionID, input, pageURL, uiLang, history), uiLang)
+}
+
+// respond Respond 的四道主体（进行中的流程 / 话术直配 / 流程触发 / LLM+知识库＋兜底），
+// 本身不做语言收口——收口只在上层那一个咽喉，新增第五道时也自动被覆盖。
+func (e *Engine) respond(ctx context.Context, sessionID, input, pageURL, uiLang string, history []store.Row) *Reply {
 	// 访客界面语言是否允许直接吃中文 canned 文案（判据只认中文系，空语言按中文放行，见 reply_lang.go）
 	cannedOK := visitorWantsChinese(uiLang)
 	// 1. 进行中的流程：输入命中其他意图（话术/其他流程）则退出流程让位，否则推进步骤
@@ -795,8 +812,10 @@ func (e *Engine) llmReplyWith(ctx context.Context, input string, history []store
 		// 已经躺着修复前漏出来的「【go:enterprise-features】」这种控制序列
 		// （见 2026-09-29 用户截图那条）。原样喂回模型，模型就把自家漏出来的格式当范本来学，
 		// 于是老会话越聊越歪——不清洗历史数据（那是客户台账），在进 prompt 这一道摘干净。
+		// ★ 082x 同一把刷子还得刷"内部规则回声"：存量消息里已经躺着「（…系统现值…）」这种
+		// 备注（现网实测），喂回去等于给它一个"可以写括号备注"的范例，第二轮就复读。
 		content, _ := extractGoMarkers(asStr(h["content"]))
-		msgs = append(msgs, llm.Message{Role: role, Content: content})
+		msgs = append(msgs, llm.Message{Role: role, Content: sanitizeVisitorText(content)})
 	}
 	msgs = append(msgs, llm.Message{Role: "user", Content: input})
 
@@ -947,9 +966,15 @@ func (e *Engine) buildSystemPrompt(ctx context.Context, hits []entry, uiLang str
 //     恰好会把「】」截没——截断 + 标记 = 屏幕上直接挂一串 「【go:ent」，
 //     这是「输出被截断」和「英文没映射」两条症状同源的地方。未闭合时从标记头删到结尾。
 //  3. 标记可以出现在句中（旧口径只当它在末尾），剥离后前后文照常拼接。
+//
+// ★ 082x 第四条（2026-09-29 现网复问抓到的第二类残渣）：摘完控制序列后还要过一遍
+// sanitizeVisitorText——模型会把提示词里的内部口径当"任务备注"吐进气泡
+// （「（不报具体价格数字，但…系统现值里没写的…）」），日文轮还出现过 U+FFFD 残渣与串空行。
+// 语气规则里那句「正文不要加括号备注」和语言段一样只是请求，出站再剥一次才是保证；
+// 剥的判据只认内部段名，正常补充说明（「（具体以注册页公示为准）」）一律留下。
 func (e *Engine) postProcess(text, model string) *Reply {
 	content, keys := extractGoMarkers(text)
-	return &Reply{Content: content, Actions: e.FeatureLinksByKey(dedup(keys)), Model: model, Source: "llm"}
+	return &Reply{Content: sanitizeVisitorText(content), Actions: e.FeatureLinksByKey(dedup(keys)), Model: model, Source: "llm"}
 }
 
 // goMarkerHead 动作标记头（正文里模型唯一被允许输出的控制序列）

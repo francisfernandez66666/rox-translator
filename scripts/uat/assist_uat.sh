@@ -101,6 +101,24 @@ ck CI1-price-info '积分|预充值' "$R"
 R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SID_CI\",\"tok\":\"$TOK_CI\",\"message\":\"多少钱\",\"page\":\"/\"}")
 ck CI2-pure-price-rule '"source":"rule"' "$R"
 
+# ---------- 2c. ★ 082x（2026-09-29）非中文访客接线：挂件随请求送 lang，出站必须带语言标记 ----------
+# 本段是**契约级**断言（矩阵跑在 mock 规则模式、没有真 LLM），锁的是三件事：
+#   ① 带 lang 的 greet/chat 不许打错（新增的按需翻译层在 LLM 缺失时必须软回落，不能 500）；
+#   ② /chat 响应里 lang_localized 字段必须在（漏了它，「模型按语言答对了」和「全靠补翻兜着」在界面上长一样）；
+#   ③ 取不到译文时**原样出中文**且回复非空——空回复比中文回复更接近事故（见 localize.go 文件头）。
+# 真·翻译行为（英文访客拿到英文）由 backend-go/internal/assist/engine 的假上游单测锁：
+# reply_lang_check_test.go（含「合格回答零额外调用」的反证腿），矩阵这里不重复起真模型。
+RG=$(curl -s "$B/api/assist/greeting?page=/&lang=en")
+ck LG1-greet-en-session '"session"' "$RG"
+ck LG1-greet-en-not-empty '"greeting":"[^"]' "$RG"
+RL=$(echo "$RG" | python3 -c 'import sys,json;print(json.load(sys.stdin)["session"])')
+TL=$(echo "$RG" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tok"])')
+R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$RL\",\"tok\":\"$TL\",\"message\":\"how much does one word cost\",\"lang\":\"en\",\"page\":\"/\"}")
+ck LG2-has-lang-field '"lang_localized":(true|false)' "$R"
+ck LG2-reply-not-empty '"reply":"[^"]' "$R"
+C=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$RL\",\"tok\":\"$TL\",\"message\":\"how much\",\"lang\":\"en\"}")
+ck LG3-en-chat-200 '^200$' "$C"
+
 # ---------- 3. R0.1 同义词归一：怎么充钱 ----------
 # ★ 修复（2026-09-18 闸门回归）：B1/B2 各用全新会话，不再复用 $SID——
 #   复用会让 B1「怎么充钱」进入的 recharge-guide 流程把 B2 的无意义输入当作流程答案吞掉，

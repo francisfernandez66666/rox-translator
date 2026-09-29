@@ -347,6 +347,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		"actions": rep.Actions,
 		"model":   rep.Model,
 		"source":  rep.Source,
+		// ★ 082x：这一条答案是模型按访客语言写的，还是我们出站补翻的。
+		// 挂件不渲染它，但排障时必须有（没有它，「语言问题修好了」和「全靠补翻兜着」在界面上长一样）。
+		"lang_localized": rep.LangLocalized,
 	})
 }
 
