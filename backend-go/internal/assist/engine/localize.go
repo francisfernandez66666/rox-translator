@@ -23,13 +23,20 @@
 //
 // 缓存落在 configs 表而不是进程内存，两个理由：
 //   - 重启不重付：greet 在访客打开挂件的关键路径上，每次冷启都现翻一遍等于给首响加一次 LLM 往返；
-//   - **可被运营看见并改**：键名 i18n:welcome:<lang>，值是「源文指纹 + 换行 + 译文」。
+//   - **可被运营看见并改**：键名 i18n:welcome:<lang>，值是「源文＋口径指纹 + 换行 + 译文」。
 //     机翻不满意，直接在管理台把这段改掉即可——改完后指纹不匹配会被重新翻译覆盖吗？
 //     不会：见 localize 的放行分支，人工改过的译文（指纹后面还跟着 "!manual" 标记）永久保留。
 //     这条是刻意的：运营修订比机翻质量高，自动覆盖等于把人家改的东西吃回去。
 //
+// ★ 082x 第七条：指纹里必须带**翻译口径**（cannedPromptRev + 品牌名/计费单位两张表），只算原文不够。
+//
+//	上一批术语口径上线后现网英文首屏仍念 "integral"，就是因为缓存只认原文、原文常年不改，
+//	换件对这条软路径**完全无效**（界面还一切正常）。详见 localizeContract 的注释与 localize_test.go 的断言。
+//
 // 失败口径照【系统现值】那条硬规矩来：**取不到就原样出中文，绝不编一份译文**。
 // 中文原文难看，但它是真话；机翻失败时返回半句假译文是事故。
+// ★ 同一条规矩现在也管「半句没翻」：译文里留着没翻的中文词时先补翻一次，补不动就整条判失败出原文
+// （判残与补翻见 han_residue.go——082x 现网抓到英文首屏 "credits充值"、日文首屏「翻訳什么？」）。
 // =============================================
 package engine
 
@@ -60,9 +67,43 @@ const localizeTemperature = 0.2
 // manualMark 人工改过的译文在指纹后追加这个标记，localize 见到就永久放行不再重翻。
 const manualMark = "!manual"
 
+// cannedPromptRev canned 译文所依据的「固定句式」版本号。
+// 改 translateOnce 里那段与语种无关的固定要求（行数/不加解释/温度/max_tokens 口径）时 +1，
+// 它进缓存指纹（见 localizeContract），一改就让全网 canned 译文在下一次 greet 时重翻。
+const cannedPromptRev = "082x-3"
+
+// translateContract 翻译路上那两条**对外口径**（品牌名 + 计费单位），拼提示词和算缓存指纹都用它。
+// 单一事实源仍是 brandNameFor／pointsTranslationLine 那两张表，这里只负责"把它们合成一段文本"。
+func translateContract(uiLang string) string {
+	return "品牌名口径（与对话回复同一张表，见 brandNameFor）：" +
+		"本轮界面语言为 " + langLabel(uiLang) + "，品牌名一律写作「" + brandNameFor(uiLang) + "」，" +
+		"任何情况下都不许写成 Nengyan、NengYan 之类拼音。\n" +
+		pointsTranslationLine(uiLang)
+}
+
+// localizeContract canned 译文缓存的口径指纹成分。
+//
+// ★ 082x 第七条（2026-09-29 换件后现网复问实证，这条不是假设）：
+//
+//	术语口径（积分→credits/ポイント）上一批已经写进翻译提示词，代码也真上线了，
+//	可英文首屏照样念 "integral"、日文首屏照样写「インテグレーション」——
+//	因为 canned 译文**落库缓存**，而旧指纹只算中文原文。
+//	原文一年不改一次，口径改了十几次，缓存一次都不会失效：
+//	**换件等于没修**，而且界面看不出任何异常（它确实"翻好了"，只是翻的是旧口径）。
+//
+//	所以指纹必须把「这版译文是按哪一版口径翻出来的」一起算进去：
+//	cannedPromptRev 管固定句式，translateContract 管品牌名与计费单位两张表——
+//	改这两处任一，旧译文自动作废、下一次 greet 现翻（运营手工改过的 !manual 档不受影响，
+//	那条放行在指纹比对之前）。
+func localizeContract(uiLang string) string {
+	return cannedPromptRev + "\x00" + translateContract(uiLang)
+}
+
 // srcFingerprint 源文本指纹（sha1 前 12 位）。
 // 为什么不用整串 sha1 也不用品内容本身：缓存键要短到能一眼读出来（管理台列 configs 时不糊屏），
 // 又要长到不会撞——12 个 hex 字符 = 48 bit，在「一个运营改十几次欢迎词」的量级上够用。
+//
+// ⚠️ 传进来的字符串必须已经带上口径（见 localizeContract）：只算原文就是上面那条事故。
 func srcFingerprint(s string) string {
 	sum := sha1.Sum([]byte(s))
 	return hex.EncodeToString(sum[:])[:12]
@@ -80,7 +121,7 @@ func (e *Engine) localize(ctx context.Context, kind, text, uiLang string) string
 		return text // 未知语言代码：不猜，原样出中文（同 reply_lang.go 的空档口径）
 	}
 	key := "i18n:" + kind + ":" + canonicalLang(uiLang)
-	fp := srcFingerprint(text)
+	fp := srcFingerprint(text + "\x00" + localizeContract(uiLang))
 	if cached := e.db.GetConfig(key, ""); cached != "" {
 		if head, body, ok := splitCachedTranslation(cached); ok {
 			if strings.HasSuffix(head, manualMark) {
@@ -139,13 +180,11 @@ func (e *Engine) translateOnce(ctx context.Context, client *llm.Client, text, ui
 	prompt := "把下面这段" + purpose + "翻译成 " + label +
 		"，用途：" + scene + "。要求：保持原意、行数与语气，一行输入对应一行输出，" +
 		"不要加解释、不要加引号、不要输出思考过程，也不许补原文没有的信息。\n" +
-		"品牌名口径（与对话回复同一张表，见 brandNameFor）：" +
-		"本轮界面语言为 " + label + "，品牌名一律写作「" + brandNameFor(uiLang) + "」，" +
-		"任何情况下都不许写成 Nengyan、NengYan 之类拼音。\n" +
 		// ★ 082x 增补：计费单位也要进翻译口径。现网实测补翻把「积分」写成 "integral"，
 		// 而官网各界面写的是 credits／ポイント／кредитов——客户拿这个词跟账单核对，
 		// 一个叫法对不上就是对外错报（判据表与交叉锁见 reply_lang.go 的 pointsTermByLang）。
-		pointsTranslationLine(uiLang) +
+		// 这段与品牌名口径一起收进 translateContract：提示词与 canned 缓存指纹共用同一份，不分叉。
+		translateContract(uiLang) +
 		"\n---\n" + text + "\n---"
 	out, _, usage, err := client.Chat(ctx, localizeTemperature, maxTokens,
 		[]llm.Message{{Role: "user", Content: prompt}})
@@ -158,6 +197,20 @@ func (e *Engine) translateOnce(ctx context.Context, client *llm.Client, text, ui
 	out = cleanTranslated(out)
 	if out == "" {
 		return "", errors.New("译文为空")
+	}
+	// ★ 082x 第七条：译文里留着**没翻的中文词**时补翻一次（现网实证：英文首屏 "credits充值"、
+	// 日文首屏「翻訳什么？」——术语翻对了，句子却只翻半句，同一类事故的另一面）。
+	// 补翻只许改善、不许换坏：判残数没减少、或行数变了，一律保留上一稿并记一行 Warn，
+	// 让它在日志里露面（greet 界面看不出"半句没翻"，没有这行就只能等客户截图来报）。
+	if leaks := hanResidueRuns(uiLang, text, out); len(leaks) > 0 {
+		if fixed, ok := e.repairHanResidue(ctx, client, uiLang, text, out, leaks, maxTokens); ok {
+			observability.Info(ctx, "assist.engine 译文汉字残留补翻生效",
+				"lang", uiLang, "before", len(leaks), "after", len(hanResidueRuns(uiLang, text, fixed)), "leaks", strings.Join(leaks, ","))
+			out = fixed
+		} else {
+			observability.Warn(ctx, "assist.engine 译文汉字残留补翻未改善，保留上一稿",
+				"lang", uiLang, "count", len(leaks), "leaks", strings.Join(leaks, ","))
+		}
 	}
 	return out, nil
 }

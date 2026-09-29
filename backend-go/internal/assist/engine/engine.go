@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"translator/internal/assist/llm"
 	"translator/internal/assist/store"
@@ -1014,10 +1015,22 @@ const (
 //     「[go now]」这种 markdown 链接文字也不在功能卡表里，同样不碰。
 //
 // 括号内容超长（>64 字节）或找不到闭合括号一律不算标记：那更像被截断的正文或普通括注。
+//
+// ★ 082x 第六条（2026-09-29 现网第二条取证，消息 167/158 两轮）：标记还有**整个不带括号**的形态
+//
+//	「…This requires precise calculation. gone:key editor,billing」。它比写歪括号更阴，因为
+//	漏口在补翻**之前**：中文那轮模型写的就是不带冒号括号的「go:editor,billing」，
+//	canonicalizeGoMarkers 只认带开括号的五种形态，于是这段控制序列原样进了正文，
+//	再被补翻把动词 "go" 顺手变成 "gone"——**换件也追不回来了**，因为形态在出站那一刻已经不存在。
+//	所以这一支必须在括号扫描**之前**归一成规范形态（见 normalizeBracketlessGoMarker），
+//	让剥离、出按钮、历史回放清洗三条语义继续只有 extractGoMarkers 一份实现。
+//	⚠️ 历史回放同样过它（llmReplyWith 里那一次）：现网历史行里已经存了这类残渣，
+//	不清的话模型会照着自己上一条的样子接着写——这是控制序列泄漏的自强化回路。
 func (e *Engine) canonicalizeGoMarkers(text string) string {
 	if text == "" || !strings.Contains(strings.ToLower(text), "go") {
 		return text // 绝大多数正文连 "go" 都没有，先廉价退场
 	}
+	text = e.normalizeBracketlessGoMarker(text)
 	var known map[string]bool
 	needKnown := func() map[string]bool {
 		if known == nil {
@@ -1092,8 +1105,165 @@ func (e *Engine) canonicalizeGoMarkers(text string) string {
 	return sb.String()
 }
 
-// anyKeyKnown 括号里**至少有一段**是库里的 feature_links key（大小写按库口径归一）。
-// 刻意不要求「每一段都是」：模型写歪时常常夹一段自己的解释（「[go editor,就是那个在线编辑器]」），
+// bracketlessGoMarkerMaxRun 无括号形态里「go:」之后允许吃掉的最长一段（字节）。
+// 48 是照着现网那两条量出来的：「key editor,billing」19 字节，功能卡 key 全表列出来也塞不满 48；
+// 再长就不是「一串键名」而是一句人话了，判不成标记。
+const bracketlessGoMarkerMaxRun = 48
+
+// normalizeBracketlessGoMarker 把**没有括号**的「go:key,key」归一成规范形态【go:key,key】。
+//
+// 没有括号就没有「这是一段被括起来的东西」这条天然边界，误伤风险全靠判定补回来。
+// 四条同时成立才动（少一条一律原样送出），外加一条位置要求：
+//  1. `go` 后面**紧跟冒号**（半角／全角都算）。「go editor」这种只带空白的在无括号形态下绝不处理——
+//     那等于把「go to the store」这类人话的删除权交给一段没有边界的文本匹配。
+//  2. `go` 前面不是字母／数字／下划线／连字符：否则 "cargo:"、"logo:" 里的 "go:" 会连半句一起被吃。
+//  3. 冒号后那一段（扫到换行、句末标点、任一种括号或引号为止）≤48 字节、≤4 段，
+//     每段只含字母数字下划线连字符与至多一个空格（**不超过两个词**，且不许出现汉字与其它标点）。
+//     这条是主要的防误伤闸：真功能卡 key 全是短 ASCII 词，「to the store」三个词、
+//     「就是那个在线编辑器」带汉字的一律在这里被挡掉。
+//  4. 至少有一段是库里的 feature_links key（anyKeyKnown；取不到 key 表时一律不动）。
+//  5. 位置：这一段必须落在正文末尾，后面只剩标点与空白。动作标记是「答完给客户点的按钮」，
+//     模型写歪时也都在末尾；句中「go: 」后面接东西的更像正文说明，吃掉它是伤人话。
+func (e *Engine) normalizeBracketlessGoMarker(text string) string {
+	lower := strings.ToLower(text)
+	if !strings.Contains(lower, "go:") && !strings.Contains(lower, "go：") {
+		return text // 廉价退场：绝大多数正文没有「go+冒号」这个形状
+	}
+	var known map[string]bool
+	needKnown := func() map[string]bool {
+		if known == nil {
+			known = e.knownFeatureKeys()
+		}
+		return known
+	}
+	var sb strings.Builder
+	i := 0
+	for i < len(text) {
+		runEnd, keys, ok := bracketlessGoMarkerAt(lower, text, i, needKnown)
+		if ok && strings.TrimLeft(text[runEnd:], goMarkerTrailingPunct) != "" {
+			ok = false // 判定 5：这一段后面还有人话，不是挂在末尾的控制序列
+		}
+		if !ok {
+			n := firstRuneBytes(text[i:])
+			sb.WriteString(text[i : i+n])
+			i += n
+			continue
+		}
+		sb.WriteString(goMarkerHead + strings.Join(keys, ",") + goMarkerTail)
+		i = runEnd
+	}
+	return sb.String()
+}
+
+// goMarkerTrailingPunct 无括号标记「落在正文末尾」这条判据里允许剩下的标点与空白（rune 集合）。
+// 引号与各种闭括号都在内：模型会把标记裹在引号里、或补翻时把括号换成 ASCII 形态。
+const goMarkerTrailingPunct = " \t\r\n.。,，;；!！?？、】]］)）\"'“”‘’*"
+
+// bracketlessGoMarkerAt 判断 text 的 i 处是不是一个无括号动作标记的开头，
+// 是则返回「标记吃掉的位置上界」与归一后的 key 列表。
+// lower 是 text 的小写形态（省掉同一处反复 ToLower），needKnown 是功能卡 key 表的惰性取。
+func bracketlessGoMarkerAt(lower, text string, i int, needKnown func() map[string]bool) (int, []string, bool) {
+	if i+2 > len(lower) || lower[i:i+2] != "go" {
+		return 0, nil, false
+	}
+	if i > 0 {
+		prev, _ := utf8.DecodeLastRuneInString(text[:i])
+		if isGoMarkerWordRune(prev) {
+			return 0, nil, false // cargo:／logo:／1go: 里的 go 不是标记头
+		}
+		// ★ 紧挨着括号的「go:」归**括号那一遍**管，这里必须让路。
+		// 不让路会怎样：规范形态「【go:tickets】」里的 "go:tickets" 也被这条扫到，
+		// 于是归一成「【【go:tickets】】」，extractGoMarkers 剥掉内层，正文剩下一个「【】」
+		// ——闸门 TestPostProcessStripsAllMarkers ① 当场抓到（两条未闭合腿同样会被带歪）。
+		if strings.ContainsRune(goMarkerOpeners+goMarkerClosers, prev) {
+			return 0, nil, false
+		}
+	}
+	rest := lower[i+2:]
+	var colonBytes int
+	switch {
+	case strings.HasPrefix(rest, ":"):
+		colonBytes = 1
+	case strings.HasPrefix(rest, "："):
+		colonBytes = len("：")
+	default:
+		return 0, nil, false // 无括号形态只收带冒号的（判据 1）
+	}
+	from := i + 2 + colonBytes
+	to := from + bracketlessRunEnd(text[from:])
+	if to < from || to-from > bracketlessGoMarkerMaxRun {
+		return 0, nil, false
+	}
+	keys := splitGoMarkerKeySegments(text[from:to])
+	if len(keys) == 0 || len(keys) > 4 || !allGoMarkerKeyish(keys) || !anyKeyKnown(needKnown(), keys) {
+		return 0, nil, false
+	}
+	return to, keys, true
+}
+
+// bracketlessRunEnd 无括号标记的右边界：从段首扫到第一个「不可能是键名」的字符，返回相对下标。
+// 换行、句末标点、任一种括号与引号都是终止符；逗号／顿号／空格是**分隔符**，留在段里继续扫
+// （键名串本来就写成 editor,billing），它们能不能收尾由 allGoMarkerKeyish 判整段长相。
+func bracketlessRunEnd(s string) int {
+	for i, r := range s {
+		switch r {
+		case ',', '，', '、', ' ', '\t':
+			continue
+		case '\n', '\r', '.', '。', '！', '!', '？', '?', '；', ';',
+			'"', '\'', '“', '”', '‘', '’', '*',
+			'【', '[', '［', '（', '(', '】', ']', '］', '）', ')':
+			return i
+		default:
+			if !isGoMarkerWordRune(r) {
+				return i
+			}
+		}
+	}
+	return len(s)
+}
+
+// splitGoMarkerKeySegments 无括号标记的分段：半角逗号、全角逗号、顿号都算分隔符。
+// （模型在这三种逗号之间没有偏好，而 splitKeys 只认半角逗号，拿它切全角串会把两段认成一段。）
+func splitGoMarkerKeySegments(s string) []string {
+	return splitKeys(strings.NewReplacer("，", ",", "、", ",").Replace(s))
+}
+
+// allGoMarkerKeyish 每一段都必须是「键名长相」：只含字母数字下划线连字符与空格，且 1~2 个词。
+// 允许一个空格是给现网那个畸形形态留的口子（「key editor」就是多带了一截），
+// 两词以上、含汉字或标点的一律当人话，不碰。
+func allGoMarkerKeyish(keys []string) bool {
+	for _, k := range keys {
+		words, prevSpace := 0, true
+		for _, r := range k {
+			switch {
+			case r == ' ':
+				if !prevSpace {
+					words++
+					prevSpace = true
+				}
+			case isGoMarkerWordRune(r):
+				prevSpace = false
+			default:
+				return false
+			}
+		}
+		if !prevSpace {
+			words++
+		}
+		if words < 1 || words > 2 {
+			return false
+		}
+	}
+	return true
+}
+
+// isGoMarkerWordRune 键名里允许的字符：ASCII 字母数字、下划线、连字符。
+func isGoMarkerWordRune(r rune) bool {
+	return r == '_' || r == '-' ||
+		(r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+}
+
+// anyKeyKnown 括号里**至少有一段**是库里的 feature_links key（大小写按库口径归一）。// 刻意不要求「每一段都是」：模型写歪时常常夹一段自己的解释（「[go editor,就是那个在线编辑器]」），
 // 只要有一段能对上真功能卡，这就是个动作标记而不是人话——人话不会恰好把某个功能卡 key 单独写成一段。
 // 认不出的那一段不会变成按钮（FeatureLinksByKey 只认库里的 key），所以放宽这一档不会凭空多出入口。
 func anyKeyKnown(known map[string]bool, keys []string) bool {
