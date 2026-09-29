@@ -124,3 +124,35 @@ func keysOf(m map[string]context.Context) []string {
 	}
 	return out
 }
+
+// TestSelfLedgeredUsageFlag 〇-AD 补丁二：抑制位的语义锁。
+// 它只管「钩子不要再补一行留痕」，绝不改动「平台承担＝不扣费」这个判定；
+// 反证腿（未设置时必须为 false）保证这不是一个恒真的空壳。
+func TestSelfLedgeredUsageFlag(t *testing.T) {
+	if IsSelfLedgeredUsage(nil) {
+		t.Fatalf("nil ctx 不该被判成自备台账")
+	}
+	base := context.Background()
+	if IsSelfLedgeredUsage(base) {
+		t.Fatalf("反向对照失效：裸 ctx 恒为 true，抑制位等于常开（所有留痕行都会消失）")
+	}
+	if got := WithSelfLedgeredUsage(nil); got != nil {
+		t.Fatalf("nil ctx 应原样返回 nil，实得非 nil")
+	}
+	marked := WithSelfLedgeredUsage(base)
+	if !IsSelfLedgeredUsage(marked) {
+		t.Fatalf("设置后应读到 true")
+	}
+	// 抑制位与平台标记互相独立：只打抑制不打标记 ⇒ 依旧按「未标注＝照常扣费」处理
+	if _, ok := PlatformCostFromCtx(marked); ok {
+		t.Fatalf("抑制位不该被当成平台承担标记（否则客户用量会被免扣费）")
+	}
+	// 两者同时打 ⇒ 标记仍在（不扣费成立），抑制位也在（钩子不补行）
+	both := WithSelfLedgeredUsage(WithPlatformCost(base, PlatformKBEmbed))
+	if r, ok := PlatformCostFromCtx(both); !ok || r != PlatformKBEmbed {
+		t.Fatalf("叠加抑制位后平台标记丢了：%q ok=%v", r, ok)
+	}
+	if !IsSelfLedgeredUsage(both) {
+		t.Fatalf("叠加后抑制位丢了")
+	}
+}

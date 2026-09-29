@@ -859,9 +859,13 @@ func (s *Store) backfillDailyUsage() {
 	if err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COUNT(1) FROM usage_daily WHERE day=?", today).Scan(&cnt); err != nil || cnt > 0 {
 		return // 已有当日行：跳过
 	}
+	// ★ 〇-AD 补丁二：兜底回填只认客户自发的量（平台承担的用途标签除外，名单见
+	//   PlatformTaskTypeExclPred）——usage_daily 是 CheckDailyQuota 的读数源，
+	//   把平台垫的 Embedding 回填进去就成了客户的「今日已用」。
 	_, _ = db.Exec(s.db, db.CurrentDialect(), `INSERT INTO usage_daily (tenant_id, day, total)
 		SELECT tenant_id, substr(created_at,1,10) AS day, COALESCE(SUM(cost),0)
-		FROM usage_ledger WHERE substr(created_at,1,10)=? GROUP BY tenant_id
+		FROM usage_ledger WHERE substr(created_at,1,10)=? AND `+PlatformTaskTypeExclPred+`
+		GROUP BY tenant_id
 		ON CONFLICT(tenant_id, day) DO UPDATE SET total=excluded.total`, today)
 }
 

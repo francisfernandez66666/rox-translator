@@ -64,3 +64,31 @@ func PlatformCostFromCtx(ctx context.Context) (string, bool) {
 	}
 	return r, true
 }
+
+// selfLedgeredKey ctx 存取键（同上，私有类型防碰撞）。
+type selfLedgeredKey struct{}
+
+// WithSelfLedgeredUsage 标注「本 ctx 的平台成本由调用方自己逐租户分摊落账，
+// 计费钩子**不要再补一行留痕**」。
+//
+// 为什么需要这一档（★ 〇-AD 补丁二）：知识库索引重建（engine.RebuildKBIndex）有自己的
+// 分摊逻辑——它按「本批 token × 各租户字符占比」算出每个租户该背多少，再走
+// LogUsageBatch 落 task_type='kb_embed' 的行。而 EmbedBatch 现在也打了平台标记，
+// 同一笔 token 就会被记两次（钩子一行 + 分摊一行），超管看板的「平台承担」直接翻倍。
+// 不删分摊那侧（它是租户归因的唯一来源，删了就看不出垫在谁身上），只让钩子在这条
+// ctx 上闭嘴——**抑制位只影响留痕，不影响「不扣费」这一判定本身**。
+func WithSelfLedgeredUsage(ctx context.Context) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	return context.WithValue(ctx, selfLedgeredKey{}, true)
+}
+
+// IsSelfLedgeredUsage 调用方是否自备台账（缺省 false＝钩子照常落留痕行）。
+func IsSelfLedgeredUsage(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(selfLedgeredKey{}).(bool)
+	return v
+}

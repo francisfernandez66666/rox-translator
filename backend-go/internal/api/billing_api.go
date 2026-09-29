@@ -185,7 +185,16 @@ func (s *Server) ChargeUsageRealtime(ctx context.Context, model string, prompt, 
 	//   rate_card 未为该标签配行时 unitPrice 回退 (1, 1.0)，与 'translate' 同价，
 	//   所以留痕行的 cost 仍等于「本该收客户多少」，平台承担账才是可比金额。
 	if reason, ok := llm.PlatformCostFromCtx(ctx); ok {
-		_ = s.Store.LogUsage(tid, uid, reason, model, model, tenant.LangFromContext(ctx), billed, "platform", mode)
+		// ★ 〇-AD 补丁二：reason 落进 task_type 后，额度侧那条腿就自动安全了——
+		//   usage_daily 的写点（LogUsage/LogUsageBatch）与读点（DailyUsage 兜底、当日回填）
+		//   都按 store.PlatformTaskTypeExclPred 同一个名单排掉平台承担的用量。
+		//   不排的话就是「积分没扣、额度照样被吃」：CheckDailyQuota 拿着我们的后台任务量
+		//   把客户拦在「已达到今日用量上限」，同一只 bug 的第二张脸。
+		// ★ 自备台账的 ctx（知识库索引重建按租户字符占比分摊后自己落 LogUsageBatch）不再补行，
+		//   否则同一笔 token 记两次、超管看板的「平台承担」翻倍。
+		if !llm.IsSelfLedgeredUsage(ctx) {
+			_ = s.Store.LogUsage(tid, uid, reason, model, model, tenant.LangFromContext(ctx), billed, "platform", mode)
+		}
 		s.metrics.addUsage(0)
 		return nil
 	}

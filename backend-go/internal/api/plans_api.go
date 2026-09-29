@@ -127,15 +127,22 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		payMode = v
 	}
 	// ★ 四期体验增强：无论是否强制计费，均透出实际消耗（今日/本月）与部门预算进度
+	// ★ 2026-09-29 〇-AD 补丁二：这两条内联 SQL 挂 store.PlatformTaskTypeExclPred——
+	//   额度侧尺子（排掉平台承担的用途标签），**不是**实扣谓词：未开强制计费的租户
+	//   全是 charge_kind='log' 的行，套实扣谓词会把他们的「今日/本月已用」判成 0。
+	//   它们出的数字是收银台/订阅页的「今日已用／本月已用」积分——平台承担的那部分
+	//   （知识库 Embedding、后台任务、Judge 抽样）留在里面，就等于告诉客户
+	//   「你花了这么多」，而客户一分没掉；更糟的是同一条腿的读数会被预算墙拿去拦请求。
+	//   谓词只许引用 store 里那一份常量，禁止在这儿再抄一遍字面量（双尺子就是 F-12 的成因）。
 	usedToday, usedMonth := int64(0), int64(0)
 	if tid > 0 {
 		ms := time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)
 		// 统计本月租户级用量
 		_ = db.QueryRow(s.Store.DB(), db.CurrentDialect(),
-			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=?", tid, ms).Scan(&usedMonth)
+			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=? AND "+store.PlatformTaskTypeExclPred, tid, ms).Scan(&usedMonth)
 		// 统计今日当前用户用量
 		_ = db.QueryRow(s.Store.DB(), db.CurrentDialect(),
-			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at>=?",
+			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at>=? AND "+store.PlatformTaskTypeExclPred,
 			tid, u.ID, ms).Scan(&usedToday)
 	}
 	// ★ #75：本币报价口径（收银台展示换算用；倍率本身这里不用，前端按 snapshot 自算）

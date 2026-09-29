@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -306,5 +307,58 @@ func TestPlatformCost08AD_OrgBoardHidesSystemRow(t *testing.T) {
 		if c, _ := row["cost"].(float64); c == float64(p.s.Store.PointsFromTokens(5000)) {
 			t.Fatalf("平台承担金额不许挂在任何客户行上: %+v", row)
 		}
+	}
+}
+
+// TestPlatformCost08AD2_SelfLedgeredSkipsSecondRow 〇-AD 补丁二·抑制位。
+// KB 索引重建自己按租户字符占比分摊后走 LogUsageBatch 落账；EmbedBatch 又给 ctx 打了
+// 平台承担标记 ⇒ 同一笔 token 会被记两次，超管看板的「平台承担」凭空翻倍。
+// 判据成对写：抑制态 0 行 + 无抑制态 1 行，缺反向对照的话「抑制位恒真」和「钩子根本没跑」
+// 都会表现成绿灯（AGENTS.md §一·5 的等值锁口径）。
+func TestPlatformCost08AD2_SelfLedgeredSkipsSecondRow(t *testing.T) {
+	p := newPlatformCostProbe(t)
+
+	ctxSup := llm.WithSelfLedgeredUsage(llm.WithPlatformCost(pcBaseCtx(p, p.memberID), llm.PlatformKBEmbed))
+	if err := p.s.ChargeUsageRealtime(ctxSup, "siliconflow/bge-m3", 60, 40); err != nil {
+		t.Fatalf("抑制腿不该报错: %v", err)
+	}
+	if got := len(p.logRows(t)); got != 0 {
+		t.Fatalf("自备台账的 ctx 不该再由钩子补留痕行（双写＝平台承担账翻倍），实得 %d 条", got)
+	}
+	if uc := llm.CollectorFrom(ctxSup); uc != nil && uc.BilledTotal() != 0 {
+		t.Fatalf("抑制腿仍不许把平台成本送进对外收集器，实得 %d", uc.BilledTotal())
+	}
+
+	// 反向对照：同一 ctx 去掉抑制位必须落 1 行，否则上面那条 0 是「链路没跑」的假绿
+	if err := p.s.ChargeUsageRealtime(
+		llm.WithPlatformCost(pcBaseCtx(p, p.memberID), llm.PlatformKBEmbed), "siliconflow/bge-m3", 60, 40); err != nil {
+		t.Fatalf("对照腿不该报错: %v", err)
+	}
+	rows := p.logRows(t)
+	if len(rows) != 1 || rows[0].taskType != llm.PlatformKBEmbed {
+		t.Fatalf("无抑制态必须且只落 1 条 kb_embed 留痕行（否则抑制位判据失去落点），实得 %+v", rows)
+	}
+}
+
+// TestPlatformCost08AD2_LabelListsAgree 跨包名单等值锁：
+// store 侧「额度腿排掉的标签名单」与 llm 侧「打标记时用的 reason 常量」必须是同一份，
+// 任一侧改名/增删而另一侧没跟上，平台成本就会重新落回客户的额度里（且没有任何报错）。
+// 这是典型的「改名式破坏」，只能靠这种同形锁拦，靠读代码发现不了。
+func TestPlatformCost08AD2_LabelListsAgree(t *testing.T) {
+	reasons := []string{llm.PlatformKBEmbed, llm.PlatformSystemTask, llm.PlatformPackScrape, llm.PlatformEvals}
+	for _, r := range reasons {
+		if !strings.Contains(store.PlatformTaskTypeExclPred, "'"+r+"'") {
+			t.Fatalf("额度侧谓词漏掉平台标签 %q ⇒ 该标签的用量会继续吃客户日额/部门预算：%s",
+				r, store.PlatformTaskTypeExclPred)
+		}
+	}
+	// 反向锁：名单里不许藏额外标签（多塞一个＝把客户的真实用量当平台成本免掉）
+	if n := strings.Count(store.PlatformTaskTypeExclPred, "'") / 2; n != len(reasons) {
+		t.Fatalf("额度侧标签名单应恰为 %d 项（与 llm.Platform* 同数量），实得 %d 项：%s",
+			len(reasons), n, store.PlatformTaskTypeExclPred)
+	}
+	// 尺子字面值等值锁（与 store 侧 realDebitPred 那条同族）
+	if store.PlatformTaskTypeExclPred != "task_type NOT IN ('kb_embed','system_task','pack_scrape','evals')" {
+		t.Fatalf("额度侧谓词字面值被改动：%q", store.PlatformTaskTypeExclPred)
 	}
 }

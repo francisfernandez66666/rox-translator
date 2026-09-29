@@ -231,3 +231,96 @@ func TestPlatformCostRealDebitPredIsSingleSource(t *testing.T) {
 		t.Fatalf("实扣谓词被改动：%q（空串代表 P1-2 之前的历史实扣行，去掉即抹掉老账）", realDebitPred)
 	}
 }
+
+// TestPlatformCost08AD2_QuotaLegsExcludePlatform 〇-AD 补丁二·额度侧那只口子。
+//
+// 现网形态（本批第一只口子修完仍然会发生的）：平台承担的用量不再扣积分，
+// 但它照旧进 usage_daily（CheckDailyQuota 的读数源）与部门/组织月度预算（CheckBudgetWalls
+// 的读数源）⇒ 客户一分没掉，却被「已达到今日用量上限 / 部门 token 已耗尽」拦在门外。
+// 所以额度腿必须排平台标签；而它**不能**用实扣谓词（未开强制计费的租户全是 'log' 行，
+// 套实扣会把他们的预算墙判成「一点没用」，防超支直接失效）——两条腿各用各的尺子，
+// 这里同时把「两者不等价」这件事钉成断言，防止后人顺手统一成一把。
+func TestPlatformCost08AD2_QuotaLegsExcludePlatform(t *testing.T) {
+	st := newPlatformCostEnv(t)
+	seedPlatformCostLedger(t, st, pcRows()) // 100+40+30 实扣 / 5000 kb_embed / 900 历史留痕 / 70 settle
+
+	t.Run("全租户本月额度：排 kb_embed，但历史留痕 translate 仍计（两把尺子的分界）", func(t *testing.T) {
+		got, err := st.TenantTokensUsedThisMonth(1)
+		if err != nil {
+			t.Fatalf("TenantTokensUsedThisMonth 失败: %v", err)
+		}
+		if got != 1140 { // 100+40+30（实扣）＋900（客户自发的免费留痕）＋70（settle 行按量计，生产该行 quantity=0）
+			t.Fatalf("本月额度应=1140（5000 的平台承担必须缺席），实得 %d", got)
+		}
+		// 反向对照：展示腿（实扣尺子）在同一盘数据上是 140，和额度腿的 1140 必然不等
+		// ——这个差值就是「900 的历史留痕算客户自发用量、但不算客户已扣积分」这件事本身
+		if same := got == 140; same {
+			t.Fatalf("额度腿与展示腿被统一成一把尺子了（未强制计费租户的预算墙会因此恒 0）")
+		}
+	})
+	t.Run("日额度读数：平台行不进计数器，客户行进", func(t *testing.T) {
+		before, err := st.DailyUsage(1) // usage_daily 无当日行 ⇒ 走 ledger 兜底
+		if err != nil {
+			t.Fatalf("DailyUsage 失败: %v", err)
+		}
+		if before != 1110 { // 今日 100+40+900+70，5000 的 kb_embed 缺席
+			t.Fatalf("兜底日用量应=1110（平台 Embedding 不计），实得 %d", before)
+		}
+		// 写一笔平台承担的留痕：日计数器不许被碰
+		if err := st.LogUsage(1, 11, "kb_embed", "siliconflow", "bge-m3", "", 9000, "platform", "pro"); err != nil {
+			t.Fatalf("LogUsage(kb_embed) 失败: %v", err)
+		}
+		if v, _ := st.DailyUsage(1); v != before {
+			t.Fatalf("平台承担的 LogUsage 绝不该累加 usage_daily（客户的今日额度被吃），实得 %d vs %d", v, before)
+		}
+		// 反向对照：同参但 task_type=translate 必须累加，否则上面那条「没变」是链路没跑的假绿
+		if err := st.LogUsage(1, 11, "translate", "bigmodel", "glm-4", "zh", 123, "text", "pro"); err != nil {
+			t.Fatalf("LogUsage(translate) 失败: %v", err)
+		}
+		after, _ := st.DailyUsage(1)
+		want := st.logRowCostForTest(t, "translate", 123)
+		// 计数器一旦有当日行，DailyUsage 就优先读它（B6 的 O(1) 口径）：
+		// 造数那 6 行是裸 SQL 插的、没走计数器，所以这里应恰好只等于刚累加进去的这一笔。
+		// 这一等式同时钉住两件事：客户的量进了计数器（≠0 且 ≠before），平台的 9000 没进。
+		if after != want || after == before {
+			t.Fatalf("客户自发用量应累加进日计数器且平台那笔不计：应=%d（且≠%d），实得 %d", want, before, after)
+		}
+	})
+	t.Run("明细列表与 CSV 导出：客户面只数实扣，全量面保留", func(t *testing.T) {
+		charged, err := st.UsageLedgerList(1, 50, 0, true)
+		if err != nil {
+			t.Fatalf("UsageLedgerList(chargedOnly) 失败: %v", err)
+		}
+		if len(charged) != 3 {
+			t.Fatalf("客户面明细应只有 3 条实扣，实得 %d", len(charged))
+		}
+		full, err := st.UsageLedgerList(1, 500, 0, false)
+		if err != nil {
+			t.Fatalf("UsageLedgerList(全量) 失败: %v", err)
+		}
+		if len(full) != 8 { // 6 条造数 + 上面两笔 LogUsage（kb_embed 9000 / translate 123）
+			t.Fatalf("全量明细应含留痕行（超管与 GDPR 面可审计），实得 %d", len(full))
+		}
+		expCharged, err := st.UsageLedgerForExport(1, "", "", 1000, true)
+		// 两笔 LogUsage 写的都是 charge_kind='log'（LogUsage 本就不扣费），客户面一条不留
+		if err != nil || len(expCharged) != 3 {
+			t.Fatalf("客户面 CSV 导出应=3 条实扣，实得 %d err=%v", len(expCharged), err)
+		}
+		expFull, err := st.UsageLedgerForExport(1, "", "", 1000, false)
+		if err != nil || len(expFull) != 8 {
+			t.Fatalf("全量 CSV 导出应=8 条，实得 %d err=%v", len(expFull), err)
+		}
+		for _, r := range expCharged {
+			if r.ChargeKind == "log" && isPlatformTaskType(r.TaskType) {
+				t.Fatalf("平台承担行混进了客户面对账 CSV：%+v", r)
+			}
+		}
+	})
+}
+
+// logRowCostForTest 用与写点同一条定价函数算出 quantity 对应的 cost（避免测试里硬编码倍率）。
+func (s *Store) logRowCostForTest(t *testing.T, taskType string, quantity int64) int64 {
+	t.Helper()
+	_, cost := s.pricingCost(taskType, "bigmodel", "zh", quantity)
+	return cost
+}

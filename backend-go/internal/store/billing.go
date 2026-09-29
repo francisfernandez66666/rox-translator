@@ -504,7 +504,11 @@ func (s *Store) LogUsageBatch(tid int64, rows []UsageBatchRow) error {
 			tid, r.UserID, r.TaskType, r.Provider, r.Model, r.Quantity, price, cost, r.BizKind, r.BizMode, ts); e != nil {
 			return e
 		}
-		sumCost += cost
+		// ★ 〇-AD 补丁二：日计数器只累**客户自发**的量（同 LogUsage 一个名单）。
+		//   KB 索引重建的分摊留痕就走这里，以前会把租户的 max_daily_chars 一路垫满。
+		if !isPlatformTaskType(r.TaskType) {
+			sumCost += cost
+		}
 	}
 	// ★ C5：同 RecordUsageBatch，累加入事务
 	if err := incrementDailyUsageTx(tx, tid, sumCost); err != nil {
@@ -525,8 +529,12 @@ func (s *Store) LogUsage(tid, userID int64, taskType, provider, model, lang stri
 		// charge_kind='log'：留痕行不参与退款消耗核算（P1-2）
 		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, charge_kind, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,'log',?)",
 		tid, userID, taskType, provider, model, quantity, price, cost, bizKind, bizMode, time.Now().UTC().Format(time.RFC3339))
-	if err == nil {
-		s.incrementDailyUsage(tid, cost) // ★ 性能优化 B6：同步累加日计数器
+	if err == nil && !isPlatformTaskType(taskType) {
+		// ★ 性能优化 B6：同步累加日计数器。〇-AD 补丁二：平台承担的那几类用途标签
+		//   （知识库 Embedding／后台任务／行业包采集／Judge 抽样）**不累加**——
+		//   billing.CheckDailyQuota 读的正是 usage_daily，累加了就等于客户的「今日额度」
+		//   被平台自己的后台任务吃掉，积分没扣但请求会被「已达到今日用量上限」拦死。
+		s.incrementDailyUsage(tid, cost)
 	}
 	return err
 }
@@ -747,14 +755,24 @@ func (s *Store) UsageTrend(tid int64, days int) (map[string]int64, error) {
 }
 
 // UsageLedgerList 用量明细列表（租户隔离，分页）。
-// 参数：tid=租户 ID，limit=每页条数（默认 50，最大 500），offset=偏移量。
+// 参数：tid=租户 ID，limit=每页条数（默认 50，最大 500），offset=偏移量，
+//
+//	chargedOnly=只回**实扣**行（★ 2026-09-29 〇-AD 补丁二）。客户面的明细页传 true：
+//	平台承担的留痕行（知识库 Embedding、后台任务、Judge 抽样）不是客户的账，
+//	列进明细就是「我没消耗过为什么有一行」；超管面与 GDPR 全量导出传 false。
+//	谓词引用包内唯一那份 realDebitPred，不在调用方另抄。
+//
 // 返回：用量明细列表，按 ID 倒序。
-func (s *Store) UsageLedgerList(tid int64, limit, offset int) ([]*UsageLedger, error) {
+func (s *Store) UsageLedgerList(tid int64, limit, offset int, chargedOnly bool) ([]*UsageLedger, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 50 // 非法 limit 收敛到 50
 	}
+	where := "WHERE tenant_id=?"
+	if chargedOnly {
+		where += " AND " + realDebitPred
+	}
 	rows, err := db.Query(s.db, db.CurrentDialect(),
-		"SELECT id, tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, COALESCE(biz_kind,''), COALESCE(biz_mode,''), created_at FROM usage_ledger WHERE tenant_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
+		"SELECT id, tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, COALESCE(biz_kind,''), COALESCE(biz_mode,''), created_at FROM usage_ledger "+where+" ORDER BY id DESC LIMIT ? OFFSET ?",
 		tid, limit, offset)
 	if err != nil {
 		return nil, err
@@ -776,13 +794,20 @@ func (s *Store) UsageLedgerList(tid int64, limit, offset int) ([]*UsageLedger, e
 // 超出部分按 id 倒序截断最新段——报表面向「近期用量导出」场景，历史全量走 GDPR 导出）。
 // 时间口径：usage_ledger.created_at 统一 UTC RFC3339（★ C22 写点约定），
 // 故 from/to 按前缀字典序比较即可（from=YYYY-MM-DD 补 00:00:00，to 补 23:59:59）。
-// 参数：tid=租户；from/to=日期字符串（可空）；limit=最大行数。
-func (s *Store) UsageLedgerForExport(tid int64, from, to string, limit int) ([]*UsageLedger, error) {
+// 参数：tid=租户；from/to=日期字符串（可空）；limit=最大行数；
+//
+//	chargedOnly=只导**实扣**行（★ 〇-AD 补丁二，与 UsageLedgerList 同判据）。
+//	这份 CSV 是「财务/对账取数」，混进平台承担的留痕行就是让客户对着
+//	自己没消耗过的行做账，且与面板数字对不上（面板已收进同一谓词）。
+func (s *Store) UsageLedgerForExport(tid int64, from, to string, limit int, chargedOnly bool) ([]*UsageLedger, error) {
 	if limit <= 0 || limit > 100000 {
 		limit = 100000 // 导出行数硬上限（防拖库式全量拉取放大内存/IO）
 	}
 	q := "SELECT id, tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, COALESCE(biz_kind,''), COALESCE(biz_mode,''), COALESCE(charge_kind,''), created_at FROM usage_ledger WHERE tenant_id=?"
 	args := []interface{}{tid}
+	if chargedOnly {
+		q += " AND " + realDebitPred
+	}
 	if from != "" {
 		q += " AND created_at>=?"
 		args = append(args, from+"T00:00:00")
@@ -823,7 +848,10 @@ func (s *Store) DailyUsage(tid int64) (int64, error) {
 		return cost, nil
 	}
 	// 兜底（表缺失/无当日行）：回退 ledger 当日 LIKE 扫描
-	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at LIKE ?", tid, day+"%").Scan(&cost)
+	// ★ 〇-AD 补丁二：兜底重算要排掉平台承担的用途标签（与写点同一个名单）——
+	//   否则 usage_daily 当日行缺失时，平台垫的 Embedding/后台任务会被读成客户的今日用量，
+	//   CheckDailyQuota 就拿这个数把客户的请求拦死。
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at LIKE ? AND "+PlatformTaskTypeExclPred, tid, day+"%").Scan(&cost)
 	return cost, err
 }
 

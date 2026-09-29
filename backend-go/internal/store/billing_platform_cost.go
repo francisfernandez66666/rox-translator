@@ -10,8 +10,8 @@
 //
 // 为什么空串也算实扣：charge_kind 列是 P1-2（2026-09-14）才补的，历史实扣行该列为空串；
 // 只认 'charge' 会把 09-14 之前的真实消费整段抹成 0（现网「本层累计」会凭空归零）。
-// 这一口径不是新造的——退款消耗核算（billing.go 里 consumed 那条）早就用
-// 退款消耗核算（billing.go 的 consumed 那条）早就用同一个谓词常量，本批只是把这把尺子接到用量看板上。
+// 这一口径不是新造的——退款消耗核算（billing.go 的 consumed 那条）早就在用同一个谓词常量，
+// 本批只是把这把尺子接到用量看板上。
 // 此前看板把留痕行和实扣行混在一个 SUM 里，于是现网「系统/后台任务」一行
 // 337,819 积分压过全部真实用户之和（≈725）——客户看到的是「消耗」，实际大部分一分没扣。
 // ============================================================================
@@ -21,10 +21,44 @@ import (
 	"translator/internal/db"
 )
 
-// realDebitPred 实扣谓词（★ 单一事实源：所有「客户消耗」读法都必须引用它）。
+// RealDebitPred 实扣谓词（★ 单一事实源：所有「客户消耗」读法都必须引用它）。
 // 判据本身由 billing_platform_cost_test.go 的等值锁钉住（含反向锁：不许出现
 // 只认 'charge' 的写法，那会把 09-14 之前的历史实扣整段抹成 0）。
-const realDebitPred = "charge_kind IN ('','charge')"
+//
+// ★ 2026-09-29 〇-AD 补丁二：导出给 api 层引用。原因是「本月已用／今日已用」这类
+// 客户面数字是 api 里的内联 SQL（plans_api.go），写第二份字面量迟早和 store 侧分叉
+// ——本批要收口的正是「同一个消耗量在五六个读腿上各数各的账」这个形态。
+const RealDebitPred = "charge_kind IN ('','charge')"
+
+// realDebitPred 包内引用名（〇-AD 首批的 8 条读腿已挂在它上面，保持不变）。
+const realDebitPred = RealDebitPred
+
+// PlatformTaskTypeExclPred 「不是平台自己垫的那类用量」的 SQL 谓词（★ 〇-AD 补丁二）。
+//
+// 为什么还要第二把尺子（这点必须看清，否则会把另一批人误伤）：
+//   - 展示侧（客户「我掉了多少积分」）认的是 **是否实扣**＝RealDebitPred；
+//   - 额度侧（日计数器 usage_daily、部门/组织月度预算墙、收银台「今日/本月已用」）
+//     认的是 **这是不是客户自己下单产生的量**。两者不等价：
+//     未开强制计费的租户（演示/历史形态）全部流水都是 charge_kind='log'，
+//     把 RealDebitPred 套到额度腿上，会把这类租户的日额/部门预算判成「一点没用」，
+//     预算墙从此形同虚设——那是拿「防超支」换「防误扣」，方向反了。
+//   - 平台承担的行有一个额度侧也认得的特征：task_type 是下面这几个用途标签之一
+//     （写点即 llm.WithPlatformCost 的 reason，见 internal/llm/platform_cost.go）。
+//
+// ⚠️ 这份名单与 llm.Platform* 常量必须逐字同步，跨包等值锁在
+//
+//	internal/api/platform_cost_charge_test.go 的 TestPlatformCost08AD2_LabelListsAgree
+//	（改名式破坏——把标签改了名而谓词没跟上——必须当场红，否则平台成本会悄悄回到客户额度里）。
+const PlatformTaskTypeExclPred = "task_type NOT IN ('kb_embed','system_task','pack_scrape','evals')"
+
+// isPlatformTaskType Go 侧同款判定（写点用它决定是否累加日计数器，与上面谓词一个名单）。
+func isPlatformTaskType(taskType string) bool {
+	switch taskType {
+	case "kb_embed", "system_task", "pack_scrape", "evals":
+		return true
+	}
+	return false
+}
 
 // PlatformCostBreakdown 平台承担成本出栈结构（★ 仅超管可见，见 api.handleUsageCost）。
 type PlatformCostBreakdown struct {

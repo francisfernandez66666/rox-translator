@@ -2261,6 +2261,11 @@ func (e *Engine) RebuildKBIndex(ctx context.Context) (int, error) {
 	// ★ Embed 成本计量（评审整改 E3）：全量重建的 embedding 用量进入 usage_ledger——
 	//   按知识库包类型分摊到各租户；行业/语言文化等全局包免费，租户/部门包按字符比例计费。
 	ctx = e.WithUsageRecorder(ctx)
+	// ★ 2026-09-29 〇-AD 补丁二：本函数的用量由下面「按租户字符占比分摊 → LogUsageBatch」
+	//   自备台账（增量重建 rebuildKBIndexIncremental 复用同一 ctx，因此一并覆盖）。
+	//   EmbedBatch 现在会给 ctx 打平台承担标记，实时钩子若不闭嘴就会和分摊行**记两次**，
+	//   超管看板的「平台承担」凭空翻倍——这里只抑制留痕，「不扣客户积分」的判定不受影响。
+	ctx = llm.WithSelfLedgeredUsage(ctx)
 
 	// 预加载所有知识库包类型，用于判断当前行是否属于全局包。
 	// ★ P1-5（2026-09-18）：改走 db.Query 方言包装——旧写法裸用 *sql.DB 的 `Query`，
