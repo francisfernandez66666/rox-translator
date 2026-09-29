@@ -186,7 +186,7 @@ func TestCompoundIntentIgnoresSoftChannels(t *testing.T) {
 	if !found {
 		t.Fatal("夹具失效：kb-fuzzy-cross 未经 fuzzy 通道命中，本守护测试失去意义")
 	}
-	rep := e.Respond(context.Background(), "s-ci-soft", "这个东西大概多少钱", "/", nil)
+	rep := e.Respond(context.Background(), "s-ci-soft", "这个东西大概多少钱", "/", "zh", nil)
 	if rep.Source != "rule" {
 		t.Fatalf("fuzzy 跨域条目不得触发让位: source=%s %+v", rep.Source, rep)
 	}

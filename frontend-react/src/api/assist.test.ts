@@ -15,7 +15,7 @@ vi.stubGlobal('localStorage', {
   removeItem: (k: string) => void store.delete(k),
 })
 
-import { getAssistSid, setAssistSid, loadAssistMsgs, saveAssistMsgs } from '@/api/assist'
+import { getAssistSid, setAssistSid, loadAssistMsgs, saveAssistMsgs, assistGreet, assistChat } from '@/api/assist'
 import { isHiddenPath, safeParse } from '@/components/AiAssist'
 
 beforeEach(() => {
@@ -109,5 +109,64 @@ describe('AiAssist safeParse', () => {
   })
   it('空串返回 undefined', () => {
     expect(safeParse('')).toBeUndefined()
+  })
+})
+
+// ---------- ★ 082x：访客界面语言必须随请求送出去 ----------
+// 后端拿这个字段决定两件事：回复用什么语言（【回复语言】段）、
+// 中文话术/流程能不能直出（visitorWantsChinese）、欢迎词与 chips 翻不翻。
+// 前端少送一次，这三条判据全部退回「一律中文」——就是用户报的那个现网现象。
+// 判据抓的是**真发出去的 URL 与请求体**，不是模块里有没有 import getLang：
+// 后者只证明代码存在，不证明值真的落到了链路上。
+describe('assist 请求随带访客界面语言', () => {
+  /** 起一个记录请求的假 fetch，返回 greet/chat 各自的最小可用响应体 */
+  function captureFetch() {
+    const seen: { greetUrl?: string; chatBody?: Record<string, unknown> } = {}
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      const u = String(url)
+      if (u.includes('/api/assist/greeting')) {
+        seen.greetUrl = u
+      } else {
+        seen.chatBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      }
+      return {
+        ok: true, status: 200,
+        json: async () => (u.includes('greeting')
+          ? { session: 's-1', tok: 't-1', greeting: 'hi', chips: [] }
+          : { reply: 'ok', actions: [] }),
+      }
+    }))
+    return seen
+  }
+
+  it('greet 送 query.lang、chat 送 body.lang', async () => {
+    const { setLang } = await import('@/i18n')
+    setLang('en')
+    const seen = captureFetch()
+    await assistGreet('/')
+    expect(seen.greetUrl ?? '').toMatch(/[?&]lang=en(?:&|$)/)
+    await assistChat('s-1', 'how much?', '/')
+    expect(seen.chatBody?.lang).toBe('en')
+  })
+
+  // 第二次必须**真的换掉**：只锁"送过一次"的话，把值写成常量 'zh' 也能过，
+  // 而那正是这次要修的形态（挂件永远按中文档走）。
+  it('切换界面语言后两次请求都跟着变（值是每次现读的，不是模块加载时定死的）', async () => {
+    const { setLang } = await import('@/i18n')
+    setLang('de')
+    const seen = captureFetch()
+    await assistGreet('/')
+    expect(seen.greetUrl ?? '').toMatch(/[?&]lang=de(?:&|$)/)
+    setLang('ja')
+    await assistChat('s-1', 'いくら？', '/')
+    expect(seen.chatBody?.lang).toBe('ja')
+  })
+
+  it('繁体用 zh_hant（后端按汉字语种分档，写成 zh 会让繁体访客收到简体话术）', async () => {
+    const { setLang } = await import('@/i18n')
+    setLang('zh_hant')
+    const seen = captureFetch()
+    await assistChat('s-1', '多少積分？', '/')
+    expect(seen.chatBody?.lang).toBe('zh_hant')
   })
 })

@@ -47,7 +47,9 @@ const OUT_MS = 180
 // AiAssist AI 销售/客服常驻挂件主组件：FAB 悬浮球 + 对话面板，展开时拉引导/恢复历史。
 export default function AiAssist() {
   // t 只用于取词（不关心当前语言值）：挂件文案此前硬编码中文，英文站整块漏翻，故统一走词典
-  const [, t] = useT()
+  // ★ 082x 起 lang 也要用：界面语言变了必须重取一次开场白（开场白/chips 由服务端按语种翻译直出，
+  //   不走对话模型，见 backend-go/internal/assist/engine/localize.go）
+  const [lang, t] = useT()
   const location = useLocation()
   const navigate = useNavigate()
   const open = !isHiddenPath(location.pathname)
@@ -61,6 +63,9 @@ export default function AiAssist() {
   const sidRef = useRef('')
   const listRef = useRef<HTMLDivElement>(null)
   const initedRef = useRef(false)
+  // 当前屏幕上那句欢迎词的原文（★ 082x：换界面语言时只替换"还是这句欢迎词"的首条气泡，
+  // 聊起来之后不动历史——覆盖成新一句欢迎词等于把用户正在看的内容冲掉）
+  const greetRef = useRef('')
   const outTimerRef = useRef<number | null>(null)
 
   // 滚动到底部
@@ -133,6 +138,7 @@ export default function AiAssist() {
         setAssistTok(g.tok || '')
         setChips(g.chips || [])
         setBubbles([{ role: 'assistant', content: g.greeting }])
+        greetRef.current = g.greeting // 记下原文，换语言时才知道首条气泡是不是那句欢迎词
         setOffline(false)
         scrollBottom()
       } catch {
@@ -142,6 +148,40 @@ export default function AiAssist() {
       }
     })()
   }, [expanded, location.pathname, location.search, scrollBottom, t])
+
+  // ★ 082x（2026-09-29，用户指令「不能根据用户的前台语言和使用语言来回复，一律用中文」）：
+  // 访客在站内把界面语言从中文切到英文（或反过来）时，开场白与快捷提问必须跟着换。
+  // 这两样东西不走对话模型——服务端 greet 直出，靠 lang 现翻（见 engine/localize.go），
+  // 所以前端只补一次 greet，不重建会话：assistGreet 会带上现有 sid+tok，
+  // 服务端复用同一会话回一份新语言的欢迎词，历史一行不丢。
+  // 刻意不做的事：把整个对话清成一句新欢迎词（用户已经聊起来了，冲掉比"第一句还是旧语言"更糟）。
+  const prevLangRef = useRef(lang)
+  useEffect(() => {
+    if (lang === prevLangRef.current) return
+    prevLangRef.current = lang
+    if (!initedRef.current) return // 还没初始化：首次 greet 自然按新语言出，不必补一次
+    ;(async () => {
+      try {
+        const g = await assistGreet(location.pathname + location.search)
+        setChips(g.chips || [])
+        if (g.session) {
+          sidRef.current = g.session
+          setAssistSid(g.session)
+          setAssistTok(g.tok || '')
+        }
+        const old = greetRef.current
+        if (old && g.greeting && old !== g.greeting) {
+          setBubbles((b) => (b.length && b[0].role === 'assistant' && b[0].content === old
+            ? [{ ...b[0], content: g.greeting }, ...b.slice(1)]
+            : b))
+          greetRef.current = g.greeting
+        }
+      } catch {
+        // 换语言时取不到新开场白：保持现状即可——回复链路下一句就按新语言走了，
+        // 不该因为一句欢迎词把面板打成离线态（离线态只由 send/init 两条路判）
+      }
+    })()
+  }, [lang, location.pathname, location.search])
 
   // 缓存回写：气泡列表一变就落盘（空数组不写——恢复完成前的瞬间不该把上次内容清掉）。
   // 走 effect 而不是在每个 setBubbles 调用点补写，是为了不让「发送/回复/恢复」三条路径各写一遍、

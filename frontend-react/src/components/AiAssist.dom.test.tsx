@@ -3,10 +3,16 @@
 // components/AiAssist.dom.test.tsx — AI 销售/客服常驻挂件组件级测试（jsdom）
 // 覆盖：登录/注册页不渲染、常规路径渲染悬浮球、展开后拉取开场引导并渲染消息、
 //       ★ 会话缓存（2026-09-22「刷新一次页面就没了」）：本地缓存即时回显、
-//         服务端历史权威对账、令牌失效/网络失败时不清缓存、发送后落盘
+//         服务端历史权威对账、令牌失效/网络失败时不清缓存、发送后落盘、
+//       ★ 082x（2026-09-29）：界面语言变化时重取开场白/chips（欢迎词不走对话模型，
+//         只靠 greet 的 lang 参数按语种翻译直出），且换语言不许把已聊的历史冲掉
+//
+// ★ 本文件必须显式 cleanup()：vitest.config 里 cleanupAfterEach:false，
+//   而 setLang 是**模块级全局广播**——上一条用例遗留的挂载实例会跟着一起重发 greet，
+//   表现为「一句欢迎词渲染出三遍 / greet 被打 8 次」这种跨用例污染（082x 首跑真踩）。
 // ============================================================================
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -79,7 +85,10 @@ beforeEach(() => {
   // 挂件用 localStorage 存会话 ID 与消息缓存，测试间清理
   window.localStorage.clear()
 })
-afterEach(() => {
+afterEach(async () => {
+  cleanup() // 卸载本用例挂载的实例（见文件头：setLang 全局广播会惊动遗留实例）
+  const { setLang } = await import('@/i18n')
+  setLang('zh') // 界面语言是模块级状态，用例改完必须钉回默认档
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -226,5 +235,83 @@ describe('AiAssist 常驻挂件', () => {
     await waitFor(() => expect(screen.getByText('新的回答')).toBeTruthy())
     await waitFor(() => expect(cachedMsgs().map((m) => m.content))
       .toEqual(['上一轮的回答', '再问一句', '新的回答']))
+  })
+
+  // ---------------------------------------------------------------------------
+  // ★ 082x（2026-09-29，用户指令「不能根据用户的前台语言和使用语言来回复，一律用中文」）
+  // 欢迎词与 chips 不走对话模型，是 greet 直出的文本——所以访客在站内切语言时必须重取一次 greet，
+  // 否则英文站访客打开挂件看到的第一口气还是中文（只修回复链路等于只换了屋里、没换门牌）。
+  // 桩刻意做成「按请求里的 lang 回不同文案」：这样断言成立的前提是**前端真的把 lang 送出去了**，
+  // 而不是组件里硬编了一句英文。
+  // ---------------------------------------------------------------------------
+
+  /** 按请求 lang 回相应语言文案的 fetch 桩（记录每次 greet 被送的 lang） */
+  function stubGreetByLang() {
+    const greetLangs: string[] = []
+    const fn = vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.includes('/api/assist/greeting')) {
+        const m = u.match(/[?&]lang=([^&]+)/)
+        const lang = m ? decodeURIComponent(m[1]) : ''
+        greetLangs.push(lang)
+        const en = lang !== 'zh' && lang !== ''
+        return {
+          ok: true,
+          json: async () => ({
+            session: 's-1', tok: 't-1',
+            greeting: en ? 'Hello from LangCross' : '你好，我是能言助手',
+            chips: [en ? 'How is billing counted?' : '积分怎么收费'],
+          }),
+        } as Response
+      }
+      if (u.includes('/api/assist/history')) {
+        return { ok: true, json: async () => ({ messages: [] }) } as Response
+      }
+      return { ok: true, json: async () => ({ reply: 'ok', source: 'model' }) } as Response
+    })
+    vi.stubGlobal('fetch', fn)
+    return { greetLangs }
+  }
+
+  it('★ 082x：切到英文界面后重取开场白，欢迎词与 chips 跟着换、请求真的带 lang', async () => {
+    const { setLang } = await import('@/i18n')
+    setLang('zh') // 显式钉住起点（vitest.setup 预置 app_lang=zh，但用例之间会互相污染）
+    const { greetLangs } = stubGreetByLang()
+    const { container } = renderAt('/')
+    fireEvent.click(container.querySelector('.na-fab')!)
+    await waitFor(() => expect(screen.getByText('你好，我是能言助手')).toBeTruthy())
+    expect(greetLangs).toEqual(['zh'])
+
+    act(() => setLang('en'))
+    await waitFor(() => expect(screen.getByText('Hello from LangCross')).toBeTruthy())
+    expect(greetLangs[greetLangs.length - 1]).toBe('en')
+    // chips 同步换语言（它和欢迎词是同一次 greet 下发的）
+    await waitFor(() => expect(screen.getByText('How is billing counted?')).toBeTruthy())
+    expect(screen.queryByText('积分怎么收费')).toBeNull()
+    // 会话不许因为换语言被重建：sid 仍是同一条（历史还在服务端那条会话上）
+    expect(window.localStorage.getItem('ny_assist_sid')).toBe('s-1')
+  })
+
+  it('★ 082x：已经聊起来之后换语言只换 chips，不把对话冲成一句新欢迎词', async () => {
+    const { setLang } = await import('@/i18n')
+    setLang('zh')
+    // 首条是用户消息（不是欢迎词）：greetRef 对不上，就不该动气泡
+    seedCache([
+      { role: 'user', content: '已经在聊的问题' },
+      { role: 'assistant', content: '已经在聊的回答' },
+    ])
+    const { greetLangs } = stubGreetByLang()
+    const { container } = renderAt('/')
+    fireEvent.click(container.querySelector('.na-fab')!)
+    await waitFor(() => expect(screen.getByText('已经在聊的回答')).toBeTruthy())
+    expect(greetLangs).toEqual([]) // 有缓存时不该 greet（那条老负向锁仍须成立）
+
+    act(() => setLang('de'))
+    await waitFor(() => expect(greetLangs[greetLangs.length - 1]).toBe('de'))
+    // 对话内容原样留着，没有被新欢迎词顶掉
+    expect(screen.getByText('已经在聊的回答')).toBeTruthy()
+    expect(screen.getByText('已经在聊的问题')).toBeTruthy()
+    expect(screen.queryByText('Hello from LangCross')).toBeNull()
+    expect(screen.queryByText('你好，我是能言助手')).toBeNull()
   })
 })

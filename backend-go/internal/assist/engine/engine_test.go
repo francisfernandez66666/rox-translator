@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"translator/internal/assist/llm"
 	"translator/internal/assist/store"
@@ -59,6 +60,11 @@ func newTestEngine(t *testing.T) *Engine {
 		"steps_json":       `[{"ask":"第一步","wait":true,"actions":["tickets"]},{"ask":"第二步","wait":true,"actions":["pricing"]}]`,
 	})
 	_ = db.SetConfig("welcome", "欢迎词W")
+	// ★ 081x（2026-09-29）：把现值注入拨向一个必然拒绝连接的端口。
+	// 默认值是 http://127.0.0.1:8787（生产主服务），本机开发时那个端口上可能真起着服务，
+	// 于是「所有引擎单测」会随开发者机器上有没有跑主服务而拿到不同的 system prompt——
+	// 需要断言现值的用例自己起桩覆盖这个键，其余用例一律走空现值分支（软路径按设计整段省略）。
+	_ = db.SetConfig("main_base_url", "http://127.0.0.1:1")
 	return New(db, llm.New(nil, 5)) // 无 LLM → 全部走规则/兜底
 }
 
@@ -103,7 +109,7 @@ func TestScriptMatch(t *testing.T) {
 	if !ok || asStr(sc["key"]) != "sc-price" {
 		t.Fatalf("script match: %v %v", ok, sc)
 	}
-	rep := e.Respond(context.Background(), "s", "多少钱啊", "/", nil)
+	rep := e.Respond(context.Background(), "s", "多少钱啊", "/", "zh", nil)
 	if rep.Source != "rule" || rep.Content != "按积分计费" {
 		t.Fatalf("respond: %+v", rep)
 	}
@@ -117,17 +123,17 @@ func TestFlowLifecycle(t *testing.T) {
 	e := newTestEngine(t)
 	newSession(t, e, "s1")
 	// 触发第一步
-	rep := e.Respond(context.Background(), "s1", "我是新手", "/", nil)
+	rep := e.Respond(context.Background(), "s1", "我是新手", "/", "zh", nil)
 	if rep.Source != "flow" || !strings.HasPrefix(rep.Content, "第一步") || len(rep.Actions) != 1 {
 		t.Fatalf("step0: %+v", rep)
 	}
 	// 推进第二步
-	rep = e.Respond(context.Background(), "s1", "好", "/", nil)
+	rep = e.Respond(context.Background(), "s1", "好", "/", "zh", nil)
 	if !strings.HasPrefix(rep.Content, "第二步") {
 		t.Fatalf("step1: %+v", rep)
 	}
 	// 走完 → 退出流程
-	rep = e.Respond(context.Background(), "s1", "好", "/", nil)
+	rep = e.Respond(context.Background(), "s1", "好", "/", "zh", nil)
 	if rep.Source != "flow" {
 		t.Fatalf("done msg: %+v", rep)
 	}
@@ -135,7 +141,7 @@ func TestFlowLifecycle(t *testing.T) {
 		t.Fatal("flow should be cleared")
 	}
 	// 退出后再问价格 → 话术直配（不再被流程吞掉）
-	rep = e.Respond(context.Background(), "s1", "多少钱", "/", nil)
+	rep = e.Respond(context.Background(), "s1", "多少钱", "/", "zh", nil)
 	if rep.Source != "rule" {
 		t.Fatalf("after flow: %+v", rep)
 	}
@@ -145,8 +151,8 @@ func TestFlowLifecycle(t *testing.T) {
 func TestFlowYield(t *testing.T) {
 	e := newTestEngine(t)
 	newSession(t, e, "s2")
-	_ = e.Respond(context.Background(), "s2", "我是新手", "/", nil) // 进入流程
-	rep := e.Respond(context.Background(), "s2", "多少钱", "/", nil)
+	_ = e.Respond(context.Background(), "s2", "我是新手", "/", "zh", nil) // 进入流程
+	rep := e.Respond(context.Background(), "s2", "多少钱", "/", "zh", nil)
 	if rep.Source != "rule" {
 		t.Fatalf("yield to script: %+v", rep)
 	}
@@ -236,7 +242,7 @@ func TestGoMarkerMenuOffersButtonKeys(t *testing.T) {
 	// 本用例只验 prompt 组装与出站标记处理，热加载由 TestLLMHotReloadSecondEditPickedUp 负责
 	e.llm = llm.New([]llm.Provider{{Name: "main", BaseURL: srv.URL, APIKey: "k", Model: "m"}}, 5)
 
-	rep := e.llmReply(context.Background(), "epub 支持吗", nil)
+	rep := e.llmReply(context.Background(), "epub 支持吗", nil, "zh")
 	if rep.Source != "llm" {
 		t.Fatalf("应走 LLM: %+v", rep)
 	}
@@ -263,7 +269,7 @@ func TestGoMarkerMenuOffersButtonKeys(t *testing.T) {
 	//    ⚠️ 负向判据只能钉**那条历史消息里的具体标记**，不能钉 "go:" 字样——
 	//    prompt 自己的菜单说明里就带着「【go:key1,key2】」这个模板，恒红。
 	legacy := []store.Row{{"role": "assistant", "content": "企业用的话【go:enterprise-features】能查权限管理。"}}
-	e.llmReply(context.Background(), "那审计呢", legacy)
+	e.llmReply(context.Background(), "那审计呢", legacy, "zh")
 	if strings.Contains(bodyOf(), "【go:enterprise-features】") {
 		t.Fatalf("历史里的漏标控制序列被原样回放进 prompt:\n%s", bodyOf())
 	}
@@ -290,11 +296,11 @@ func TestLLMTruncatedSurfacesInUsage(t *testing.T) {
 // TestFallbackReply 无 LLM 且无命中时的兜底文案；有命中时直出知识
 func TestFallbackReply(t *testing.T) {
 	e := newTestEngine(t)
-	rep := e.llmReply(context.Background(), "完全无关的问题xyz", nil)
+	rep := e.llmReply(context.Background(), "完全无关的问题xyz", nil, "zh")
 	if rep.Source != "fallback" || rep.Content == "" {
 		t.Fatalf("fallback empty: %+v", rep)
 	}
-	rep = e.llmReply(context.Background(), "epub 支持", nil)
+	rep = e.llmReply(context.Background(), "epub 支持", nil, "zh")
 	if !strings.Contains(rep.Content, "支持 epub") || len(rep.Actions) != 1 {
 		t.Fatalf("kb fallback: %+v", rep)
 	}
@@ -342,7 +348,7 @@ func TestSynonymEndToEnd(t *testing.T) {
 		"content": "去充值与账单页", "keywords": "充值,付款,支付", "link_keys": "billing",
 	})
 	_ = e.db.SetConfig("synonyms", "充值=充钱|交钱")
-	rep := e.Respond(context.Background(), "s-syn", "怎么充钱", "/", nil)
+	rep := e.Respond(context.Background(), "s-syn", "怎么充钱", "/", "zh", nil)
 	// R0.2 验收：不再输出空承诺兜底话术，正确命中充值知识并带入口按钮
 	if strings.Contains(rep.Content, "先记下来") || !strings.Contains(rep.Content, "充值与账单") || len(rep.Actions) == 0 {
 		t.Fatalf("synonym e2e: %+v", rep)
@@ -479,7 +485,7 @@ func TestCompoundIntentYield(t *testing.T) {
 		"key": "kb-billing-big", "category": "billing", "title": "积分怎么收费", "priority": 10, "enabled": 1,
 		"content": "积分永久有效，先预检后扣费", "keywords": "积分,价格,多少钱,收费,充值,一个字,字数", "link_keys": "billing",
 	})
-	rep := e.Respond(context.Background(), "s-ci", "印度语能翻译吗，一个字多少钱", "/", nil)
+	rep := e.Respond(context.Background(), "s-ci", "印度语能翻译吗，一个字多少钱", "/", "zh", nil)
 	if rep.Source == "rule" {
 		t.Fatalf("复合问句不应被价格话术单侧直配抢答，Source=%s content=%s", rep.Source, rep.Content)
 	}
@@ -487,7 +493,7 @@ func TestCompoundIntentYield(t *testing.T) {
 		t.Fatalf("应并排呈现语言+价格两侧信息: %s", rep.Content)
 	}
 	// 纯价格问句：无跨领域命中，维持话术直配快答
-	rep2 := e.Respond(context.Background(), "s-ci2", "多少钱", "/", nil)
+	rep2 := e.Respond(context.Background(), "s-ci2", "多少钱", "/", "zh", nil)
 	if rep2.Source != "rule" || rep2.Content != "按积分计费" {
 		t.Fatalf("纯价格问句应仍直配: source=%s content=%s", rep2.Source, rep2.Content)
 	}
@@ -501,9 +507,9 @@ func TestCompoundIntentYield(t *testing.T) {
 // 判据三腿：新结构要求在 / 库里 tone_rules 现值必须压过代码默认（改口气不必发版）/ 旧长度档不许复活。
 func TestSystemPromptCarriesToneSpec(t *testing.T) {
 	e := newTestEngine(t)
-	sys := e.buildSystemPrompt(nil)
-	// ① 新的说话方式四要素：接话 → 只挑最相关 → 收尾给下一步 → 正反对照片
-	for _, want := range []string{"先接住", "最相关", "反面示例", "正面示例", "200 字以内", "不许编价格"} {
+	sys := e.buildSystemPrompt(context.Background(), nil, "zh")
+	// ① 新的说话方式五要素：接话 → 只挑最相关（且不许编号列清单）→ 收尾给下一步 → 数字守口径 → 正反对照片
+	for _, want := range []string{"先接住", "最相关", "别用「①②③」列清单", "200 字以内", "数字一律照抄知识里的原文", "反面示例", "正面示例"} {
 		if !strings.Contains(sys, want) {
 			t.Fatalf("说话方式缺 %q：\n%s", want, sys)
 		}
@@ -521,7 +527,7 @@ func TestSystemPromptCarriesToneSpec(t *testing.T) {
 	// ③ 库里现值压过代码默认（与 max_tokens 同一条教训：代码默认会被库里现值盖住，
 	//    反过来说库里必须能盖住，运营后台改语气才是真能改）
 	_ = e.db.SetConfig("tone_rules", "只说一句话：好的。")
-	sys2 := e.buildSystemPrompt(nil)
+	sys2 := e.buildSystemPrompt(context.Background(), nil, "zh")
 	if !strings.Contains(sys2, "只说一句话：好的。") {
 		t.Fatalf("tone_rules 库里现值没生效：\n%s", sys2)
 	}
@@ -559,7 +565,7 @@ func TestTemperatureDoesNotChangeTone(t *testing.T) {
 		if err := e.db.SetConfig("temperature", temp); err != nil {
 			t.Fatalf("set temperature: %v", err)
 		}
-		e.llmReply(context.Background(), "epub 支持吗", nil)
+		e.llmReply(context.Background(), "epub 支持吗", nil, "zh")
 		bodyMu.Lock()
 		body := last
 		bodyMu.Unlock()
@@ -583,5 +589,239 @@ func TestTemperatureDoesNotChangeTone(t *testing.T) {
 	}
 	if m1 != m2 {
 		t.Fatalf("换温度连 messages 都换了——语气不该由温度承担：\n%s\n---\n%s", m1, m2)
+	}
+}
+
+// TestSystemPromptCarriesPromiseBoundary ★ 081x（2026-09-29 用户指令
+// 「涉及到价格、套餐、能力之类的东西，要严格按 RAG、使用系统配置口径」
+// →「不光这些，你看一下系统实际能力，严格按系统能力和承诺来，不造额外承诺」）：
+// 承诺边界必须真拼进 system prompt，且**必须与语气段各自独立**。
+// 现场取证两条编造：消息 132 报出「10 万+高频行业词」（30 条启用知识里 0 出处），
+// 又顺嘴答应「PPT 里的动画」（internal/fileproc 下 animation/transition 零命中，pptx 只替换文字节点）。
+// 前者是数字编造（语气段第 6 条已拦），后者是**功能清单外的事**——语气段拦不住，必须有事实闸。
+// 判据五腿：三档结构在 / 关键禁语在 / 正文零内部实现路径 / 库里 promise_rules 能整体替换默认 /
+// 改语气（tone_rules）绝不连带把事实闸擦掉（这条是「为什么单独一个键」的全部理由）。
+func TestSystemPromptCarriesPromiseBoundary(t *testing.T) {
+	e := newTestEngine(t)
+	sys := e.buildSystemPrompt(context.Background(), nil, "zh")
+	for _, want := range []string{
+		"【承诺边界】",
+		// 第一档（确实做到）与第二档（须带前提）的实锚
+		"字幕和数据文件 srt、vtt、json、yaml", "交付形态是「原文+译文」两列的 xlsx 对照表",
+		"超链接包住的那截文字目前不进翻译", "先扣快过期的",
+		// 第三档（明确不支持）——现网就是在这两条上翻过车
+		"PPT 里的动画、切换效果", "不做识别提取", "「40+」「上百种」「全球语言都能翻」这类说法一个都不许说",
+	} {
+		if !strings.Contains(sys, want) {
+			t.Fatalf("承诺边界缺 %q：\n%s", want, sys)
+		}
+	}
+	// ★ 正文不许带内部实现路径：这段是要拼进 prompt 的，9B 模型会照抄看见的字符串，
+	//   「（依据：internal/engine/file.go）」念到客户屏幕上＝实现细节对外泄漏。
+	//   取证位置只准留在 promise.go 的 Go 注释里。
+	for _, leak := range []string{"internal/", "file.go", ".go ", "writebackDelivery", "AnydocFormats"} {
+		if strings.Contains(defaultPromiseRules, leak) {
+			t.Fatalf("承诺边界正文漏出内部实现位置 %q，会被模型念给客户", leak)
+		}
+	}
+	// 段次：人设 → 语气 → 承诺（承诺排在语气前面会让「怎么说」盖住「能说什么」）。
+	// ⚠️ 定位承诺段必须用整串段首：语气段第 7 条自己也写着「按【承诺边界】的分档口径说」，
+	//    只搜那五个字会把语气段里的提及当成段首，次序判据直接失真（本断言首跑即此假绿形态）。
+	if !(strings.Index(sys, "销售顾问") < strings.Index(sys, "先接住") &&
+		strings.Index(sys, "先接住") < strings.Index(sys, promiseTestHead) &&
+		strings.Index(sys, "积分有效期按【承诺边界】的分档") < strings.Index(sys, promiseTestHead)) {
+		t.Fatalf("人设/语气/承诺拼装次序错：\n%s", sys)
+	}
+	// 库里现值整体替换默认（运营可收紧，不许和默认叠成两套）
+	_ = e.db.SetConfig("promise_rules", "只允许回答：不支持。")
+	sys2 := e.buildSystemPrompt(context.Background(), nil, "zh")
+	if !strings.Contains(sys2, "只允许回答：不支持。") || strings.Contains(sys2, promiseTestHead) {
+		t.Fatalf("promise_rules 库值没做到整体替换：\n%s", sys2)
+	}
+	// ★ 独立性：把语气段改成一句话，事实闸必须原样还在（塞进 tone_rules 的实现会在这一行红灯）
+	_ = e.db.SetConfig("tone_rules", "只说一句话：好的。")
+	sys3 := e.buildSystemPrompt(context.Background(), nil, "zh")
+	if !strings.Contains(sys3, "只说一句话：好的。") {
+		t.Fatalf("tone_rules 库值未生效：\n%s", sys3)
+	}
+	if !strings.Contains(sys3, "只允许回答：不支持。") {
+		t.Fatalf("改语气连带擦掉了承诺边界——两段必须分键存放：\n%s", sys3)
+	}
+}
+
+// promiseTestHead 承诺段段首（测试里定位「这一段真的在」用整串，别只搜「【承诺边界】」：
+// 语气段与现值段的正文都会提到这个名字，短串命中位置不唯一）。
+const promiseTestHead = "【承诺边界】（这一段管「能说什么」"
+
+// mainServiceStub 起一个「主服务」替身：只答复价口与语种口，并按被调次数记账。
+// 参数 pricingJSON/langsJSON 传 "" 表示该口 500（模拟主服务挂或字段脏）。
+func mainServiceStub(t *testing.T, pricingJSON, langsJSON string) (string, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/api/pricing/meta":
+			if pricingJSON == "" {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write([]byte(pricingJSON))
+		case "/api/translation/langs":
+			if langsJSON == "" {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write([]byte(langsJSON))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	count := func() int { mu.Lock(); defer mu.Unlock(); return hits }
+	return srv.URL, count
+}
+
+// 测试用现值样本：35 种语言 + 两档系数 + 六位小数单价（单价刻意写成 0.09966800000000001 的形态，
+// 用来验 trimNum 真把浮点尾巴削掉了——模型照着念的必须是能报出去的价格）
+const stubPricingOK = `{"success":true,"modes":[{"code":"fast","points_per_1k_chars":3.2,"points_fixed":3},{"code":"pro","points_per_1k_chars":8.1,"points_fixed":7.5}],"points_price_money":0.099668,"unit":"points"}`
+
+func stubLangsOK(n int) string {
+	var sb strings.Builder
+	sb.WriteString(`{"kb_langs":[`)
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, `{"code":"l%d","name":"语%d","kb":"true"}`, i, i)
+	}
+	sb.WriteString("]}")
+	return sb.String()
+}
+
+// TestSystemValuesInjectedFromMainService ★ 081x：价格与语种数改取实时值（用户指令
+// 「使用系统配置口径」）。断言的是「客户屏幕上那个数就是从主服务取的」，
+// 而不是「知识文案里抄的那个数」——所以样本值 35/3.2/0.099668 全都不是仓库里出现过的常量。
+func TestSystemValuesInjectedFromMainService(t *testing.T) {
+	base, hits := mainServiceStub(t, stubPricingOK, stubLangsOK(35))
+	e := newTestEngine(t)
+	_ = e.db.SetConfig("main_base_url", base)
+
+	// 带一条知识素材：既测【相关知识】真在，也测现值段与它的相对次序
+	sys := e.buildSystemPrompt(context.Background(), []entry{{key: "kb-epub", title: "格式", content: "支持 epub"}}, "zh")
+	for _, want := range []string{
+		systemValuesHead, "可选目标语言：35 种",
+		"快速模式每 1000 源字符·单语种 3.2 积分，另每次建单固定 3 积分",
+		"专业模式每 1000 源字符·单语种 8.1 积分，另每次建单固定 7.5 积分",
+		"1 积分 ≈ 0.099668 元",
+	} {
+		if !strings.Contains(sys, want) {
+			t.Fatalf("现值段缺 %q：\n%s", want, sys)
+		}
+	}
+	if strings.Contains(sys, "0.09966800000000001") {
+		t.Fatalf("浮点尾巴没削掉，会被当价格念出去：\n%s", sys)
+	}
+	// 现值段必须排在【相关知识】之前：知识文案里可能还有旧数，先给现值再给素材，
+	// 并在段首写明「这里没写的数字就是没取到」。
+	// ⚠️ 定位知识段要用「【相关知识】+换行」这个"真的当段首用"的形态：承诺边界正文里
+	//    也提到了「【相关知识】里写明的事」，只搜那六个字会先命中承诺段（本断言首跑即此假红）。
+	if strings.Index(sys, systemValuesHead) > strings.Index(sys, "【相关知识】\n") {
+		t.Fatalf("现值段排在知识段之后：\n%s", sys)
+	}
+	// 拼装次序还得多一格：承诺边界在前、现值在后（现值是「可引用的数」，边界是「什么数都不许编」）
+	if strings.Index(sys, promiseTestHead) > strings.Index(sys, systemValuesHead) {
+		t.Fatalf("承诺边界没排在现值之前：\n%s", sys)
+	}
+	if !strings.Contains(sys, "支持 epub") {
+		t.Fatalf("知识素材丢了：\n%s", sys)
+	}
+	// TTL 缓存：第二次建 prompt 不许再打主服务（否则每条对话两次 HTTP，挂件首响应被拖慢）
+	before := hits()
+	_ = e.buildSystemPrompt(context.Background(), nil, "zh")
+	if got := hits(); got != before {
+		t.Fatalf("第二次建 prompt 又打了主服务（%d→%d），60s TTL 缓存没生效", before, got)
+	}
+}
+
+// TestSystemValuesFailSoftOmitsBlock ★ 081x 第 2 条硬口径：主服务取不到 ⇒ 整段不出现，
+// 且**一个数字都不许留下**。兜旧值才是真事故——模型会把旧数当事实念给客户（官网定价页
+// 那条「取不到系数就渲染空态，不许兜底旧价」在这里代价更高）。
+// 三臂：两个口全挂 / 只挂价口（语种行还在、价格行整行没）/ 单价为 0（主服务侧汇率脏）。
+func TestSystemValuesFailSoftOmitsBlock(t *testing.T) {
+	// ① 全挂
+	base, _ := mainServiceStub(t, "", "")
+	e := newTestEngine(t)
+	_ = e.db.SetConfig("main_base_url", base)
+	sys := e.buildSystemPrompt(context.Background(), nil, "zh")
+	if strings.Contains(sys, systemValuesHead) {
+		t.Fatalf("主服务两个口都挂了还拼出现值段（承诺段里也提【系统现值】这个名字，判空必须按段首整串）：\n%s", sys)
+	}
+	// 软路径失败后界面照常（本行即「必须管理台露一次面」的理由，见 api/system_values.go）
+	if !strings.Contains(sys, "【承诺边界】") {
+		t.Fatalf("现值取不到时承诺边界也跟着没了（两段应互不依赖）：\n%s", sys)
+	}
+
+	// ② 只挂价口：语种行照常注入，价格相关的行整行不出现
+	base2, _ := mainServiceStub(t, "", stubLangsOK(35))
+	e2 := newTestEngine(t)
+	_ = e2.db.SetConfig("main_base_url", base2)
+	sys2 := e2.buildSystemPrompt(context.Background(), nil, "zh")
+	if !strings.Contains(sys2, "可选目标语言：35 种") {
+		t.Fatalf("语种现值没注入：\n%s", sys2)
+	}
+	for _, gone := range []string{"积分单价", "每 1000 源字符", "3.2"} {
+		if strings.Contains(sys2, gone) {
+			t.Fatalf("价口挂了却留下价格相关的 %q（半截系数比没系数更危险）：\n%s", gone, sys2)
+		}
+	}
+
+	// ③ 单价为 0＝主服务侧汇率/尺子脏（moneyPerPoint 对脏配置刻意回 0），价格段整体不出现
+	base3, _ := mainServiceStub(t, `{"success":true,"modes":[{"code":"fast","points_per_1k_chars":3.2,"points_fixed":3}],"points_price_money":0,"unit":"points"}`, stubLangsOK(35))
+	e3 := newTestEngine(t)
+	_ = e3.db.SetConfig("main_base_url", base3)
+	if sys3 := e3.buildSystemPrompt(context.Background(), nil, "zh"); strings.Contains(sys3, "积分单价") {
+		t.Fatalf("单价为 0 还报价：\n%s", sys3)
+	}
+}
+
+// TestSystemValuesTTLRefreshAndUnknownModeLabel 两小段收尾：
+// ① 缓存过期后必须重取（运营在主后台调了档，最迟 60s 反映到挂件，不许"重启才生效"）；
+// ② 主服务哪天多出一档新模式（code 不是 fast/pro），标签不能编出一个不存在的模式名。
+func TestSystemValuesTTLRefreshAndUnknownModeLabel(t *testing.T) {
+	pricing := stubPricingOK
+	base, hits := mainServiceStub(t, pricing, stubLangsOK(35))
+	e := newTestEngine(t)
+	_ = e.db.SetConfig("main_base_url", base)
+	if !strings.Contains(e.buildSystemPrompt(context.Background(), nil, "zh"), "3.2") {
+		t.Fatalf("首轮未注入现值")
+	}
+	if hits() != 2 {
+		t.Fatalf("首轮应各打一次价口与语种口，实际 %d 次", hits())
+	}
+
+	// 换档：另起一个 stub 冒充"运营把系数调了档"（同一进程里改第一个 stub 的返回值不可靠）
+	base2, _ := mainServiceStub(t, `{"success":true,"modes":[{"code":"fast","points_per_1k_chars":5.5,"points_fixed":3}],"points_price_money":0.2,"unit":"points"}`, stubLangsOK(40))
+	_ = e.db.SetConfig("main_base_url", base2)
+	if strings.Contains(e.buildSystemPrompt(context.Background(), nil, "zh"), "5.5") {
+		t.Fatalf("TTL 内不该重取（缓存没生效）")
+	}
+	old := systemValuesTTL
+	systemValuesTTL = 0 // 把缓存时长压到 0：下一次建 prompt 必须重取
+	t.Cleanup(func() { systemValuesTTL = old })
+	sys := e.buildSystemPrompt(context.Background(), nil, "zh")
+	if !strings.Contains(sys, "5.5") || !strings.Contains(sys, "1 积分 ≈ 0.2 元") || !strings.Contains(sys, "40 种") {
+		t.Fatalf("缓存过期后没按新地址重取现值：\n%s", sys)
+	}
+	// 缓存时间戳必须落上：管理台「现值」读数拿它算「客户正在用的是几秒前的值」
+	if _, at := e.SystemValuesCached(); at.IsZero() || time.Since(at) > time.Minute {
+		t.Fatalf("现值缓存时间戳没落上：%v", at)
+	}
+
+	if got := modeLabel("ultra"); !strings.Contains(got, "ultra") {
+		t.Fatalf("未知模式代码被替换成了猜测的中文名：%s", got)
 	}
 }

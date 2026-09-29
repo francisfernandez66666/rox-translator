@@ -64,6 +64,12 @@ type Engine struct {
 	vecKeys      []string
 	vecMat       [][]float32
 	vecCoolUntil time.Time
+
+	// ★ 081x（2026-09-29）：主服务现值缓存（价格系数/语种数），见 system_values.go。
+	// 与 vec/syn 同一范式：缓存本体由自己的锁保护，失败也占位以防每条对话都超时。
+	sysValMu    sync.Mutex
+	sysValBlock string
+	sysValAt    time.Time
 }
 
 // New 构建引擎
@@ -558,10 +564,24 @@ func parseSteps(js string) ([]FlowStep, error) {
 // Respond 生成回复
 // 优先级：进行中的流程（命中新意图则让位） > 话术直配 > 流程触发 > LLM+知识库
 // ★ 改造 1A：签名加 ctx（HTTP 请求上下文），使 LLM 调用链日志继承 trace_id。
-func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL string, history []store.Row) *Reply {
+// ★ 082x（2026-09-29，用户指令「不能根据用户的前台语言和使用语言来回复，一律用中文」）：
+//
+//	签名加 uiLang（访客界面语言，挂件随请求送进来）。它改变的是**上面前三道能不能走**：
+//	话术直配、流程、以及它们的收尾文案全是中文写死的 canned 文本，不经过任何模型——
+//	英文站访客问「what kind of feature do you have」时，只要关键词撞上「价格/功能」，
+//	第 2 道就把一整段中文话术原样送回，第 4 道那个会跟着访客语言改口的分支根本轮不到。
+//	所以非中文访客一律让位给 LLM+知识库（第 4 道，配 replyLangBlock 用对方语言作答），
+//	判据与口径见 reply_lang.go 文件头。
+func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL, uiLang string, history []store.Row) *Reply {
+	// 访客界面语言是否允许直接吃中文 canned 文案（判据只认中文系，空语言按中文放行，见 reply_lang.go）
+	cannedOK := visitorWantsChinese(uiLang)
 	// 1. 进行中的流程：输入命中其他意图（话术/其他流程）则退出流程让位，否则推进步骤
-	if rep := e.advanceFlow(sessionID, input); rep != nil {
-		return rep
+	//    ★ 082x：非中文访客不进流程——流程的每一步 ask 都是中文写死的多轮引导，
+	//    比单条话术更"缠人"（连问三步中文），让位后访客的诉求由第 4 道按对方语言答。
+	if cannedOK {
+		if rep := e.advanceFlow(sessionID, input); rep != nil {
+			return rep
+		}
 	}
 	// 2. 关键词话术直配（免 LLM，毫秒级）
 	if sc, ok := e.MatchScript(input); ok {
@@ -569,7 +589,9 @@ func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL string, 
 		// 语言能力 + 价格）命中话术时，若知识库还检索到另一领域的条目，直配单话术
 		// 会只答一半——把话术降为素材之一，让位给 LLM 融合应答
 		// （LLM 未接入时 fallback 也会把两侧知识并排拼出）。
-		if scEntry, comp := e.compoundIntent(ctx, input, sc); comp {
+		// ★ 082x 同一手法多一个触发条件：访客界面语言非中文时，**无条件**让位
+		// （话术正文是中文，复合与否都送不出去）。
+		if scEntry, comp := e.compoundIntent(ctx, input, sc); comp || !cannedOK {
 			hits := []entry{scEntry}
 			for _, h := range e.retrieveKB(ctx, input, 3) {
 				if h.key != scEntry.key && h.title != scEntry.title { // 同一内容既配话术又进知识库时不重复注入
@@ -579,7 +601,7 @@ func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL string, 
 			if len(hits) > 4 {
 				hits = hits[:4]
 			}
-			return e.llmReplyWith(ctx, input, history, hits)
+			return e.llmReplyWith(ctx, input, history, hits, uiLang)
 		}
 		content := asStr(sc["content"])
 		if content == "" {
@@ -589,11 +611,13 @@ func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL string, 
 		return &Reply{Content: content, Actions: actions, Source: "rule"}
 	}
 	// 3. 流程触发
-	if key, steps, ok := e.MatchFlow(input); ok {
-		return e.enterFlow(sessionID, key, steps)
+	if cannedOK {
+		if key, steps, ok := e.MatchFlow(input); ok {
+			return e.enterFlow(sessionID, key, steps)
+		}
 	}
 	// 4. LLM + 知识库
-	return e.llmReply(ctx, input, history)
+	return e.llmReply(ctx, input, history, uiLang)
 }
 
 // advanceFlow 推进进行中的流程；不在流程中或被新意图抢占（已退出）时返回 nil
@@ -746,14 +770,16 @@ func kwTokenSet(s string) map[string]bool {
 
 // llmReply 组装 prompt 调 LLM；无 LLM 或失败走规则兜底
 // ★ 改造 1A：签名加 ctx，LLM 调用链日志带 trace_id。
-func (e *Engine) llmReply(ctx context.Context, input string, history []store.Row) *Reply {
-	return e.llmReplyWith(ctx, input, history, e.retrieveKB(ctx, input, 3))
+// ★ 082x：签名加 uiLang（访客界面语言，进 prompt 的【回复语言】段）。
+func (e *Engine) llmReply(ctx context.Context, input string, history []store.Row, uiLang string) *Reply {
+	return e.llmReplyWith(ctx, input, history, e.retrieveKB(ctx, input, 3), uiLang)
 }
 
 // llmReplyWith 同 llmReply，但素材检索结果由调用方给定
-// （★ 复合意图让位时传入「话术素材 + 检索知识」合并表，避免二次检索丢序）
-func (e *Engine) llmReplyWith(ctx context.Context, input string, history []store.Row, hits []entry) *Reply {
-	sys := e.buildSystemPrompt(hits)
+// （★ 复合意图让位时传入「话术素材 + 检索知识」合并表，避免二次检索丢序；
+// ★ 082x 非中文访客让位也走这条，话术作为素材并列、由模型用访客语言转述）
+func (e *Engine) llmReplyWith(ctx context.Context, input string, history []store.Row, hits []entry, uiLang string) *Reply {
+	sys := e.buildSystemPrompt(ctx, hits, uiLang)
 	var msgs []llm.Message
 	msgs = append(msgs, llm.Message{Role: "system", Content: sys})
 	// 历史最近 6 条
@@ -838,14 +864,24 @@ const defaultPersona = "你是「能言」AI翻译平台的销售顾问兼使用
 // 新口径因此按「结构 → 长度 → 措辞禁区 → 反例/正例」重排，并且**默认值不再是硬编码**：
 // 整段挪到 configs.tone_rules，运营在管理台改完下一条对话即生效（不必再发版）。
 // ⚠️ 示例只教方式：9B 级模型会照抄示例句子，所以末尾明确禁止复读示例内容。
+//
+// ★ 080x 增补（上线后现网第一条回复就抓到一条对外错报，同批收口）：
+// 换新语气默认值后的第一条现网回答是
+// 「其实主要看你要翻什么。术语库能自动锁定 10 万+ 高频行业词……需要体验点这里？」
+// —— 打头的口语和收尾的提问都对了（证明这段确实是音色旋钮），但**「10 万+」全库查无出处**
+// （30 条启用知识里 `10万`／`十万` 命中 0 行）。旧规第 6 条只禁了「价格、时长、案例」三类数字，
+// 规模类数字没在里面，模型就自己补了一个。对外报出一个平台没有的规模数比语气冷严重得多，
+// 所以第 6 条改成「数字一律照抄知识里的原文，没出现过的一个都不许补」；
+// 顺带第 2 条明令禁止「①②③」清单式复述——现网这条回答又用了编号列能力，
+// 说明旧知识库条目本身就是编号写法，光限长度拦不住它，得把形态也钉掉。
 const defaultToneRules = `【怎么说话】
 1. 第一句先接住用户这句话：给出你的判断、态度或反问（"能，但得看你要翻什么"），不要一上来念功能清单。
-2. 中间只讲跟他最相关的 1-2 点，落到一个具体场景上（谁在用、拿来干什么、省了哪道工序），别把能力逐条报一遍。
+2. 中间只讲跟他最相关的 1-2 点，落到一个具体场景上（谁在用、拿来干什么、省了哪道工序），别把能力逐条报一遍，也别用「①②③」列清单——那是知识库的写法，不是聊天的写法。
 3. 最后一句留一个具体的下一步：问一个能让对话继续的问题；该带用户去某个页面时直接说去哪个（按后面给的入口标记规则办）。禁止「需要体验→」这种半截话收尾。
 4. 长度 3-6 句、200 字以内。用户问怎么操作时可以写步骤，步骤不受长度限制。
 5. 说「你」不说「您」。口语连接词照常用（说白了、其实、要是、拿你的情况说），但不用客服腔（「亲」「呢」「哦」「哈」），不堆 emoji。
-6. 只说下面【相关知识】里有的事实。拿不准就说「这个我帮你确认下」；不许编价格、时长、案例。
-7. 涉及买/充值/价格：讲清积分口径（用多少扣多少、积分不过期），再引导到对应页面。
+6. 只说下面【相关知识】里有的事实。数字一律照抄知识里的原文：知识里没出现过的数字（规模、语种数、准确率、时长、案例数）一个都不许自己补；拿不准就说「这个我帮你确认下」。
+7. 涉及买/充值/价格：数字只用下面【系统现值】里给的系数和单价；那一段没出现就是没取到，让他看套餐页，不许报任何金额。积分有效期按【承诺边界】的分档口径说，不许一句「积分都永久」。
 8. 正文里不要加括号备注、不要给自己下任务、不要复述用户的问题。
 
 【反面示例】（在背清单，没接住人——别写成这样）
@@ -856,15 +892,36 @@ const defaultToneRules = `【怎么说话】
 
 （上面两段只学**说话方式**，句子和内容不许照抄，按用户实际问的答。）`
 
-// buildSystemPrompt 系统提示词（人设 + 说话方式 + 知识素材 + 收口指令），风格借鉴 ai-scrm prompt_builder
+// buildSystemPrompt 系统提示词（人设 + 说话方式 + 承诺边界 + 系统现值 + 知识素材 + 收口指令），
+// 风格借鉴 ai-scrm prompt_builder
 // ★ 080x：人设与说话方式都改成「库里现值优先、代码默认兜底」——
 // 音色这件事运营会反复调，写死在代码里就等于每次改口气都要发一次版。
-func (e *Engine) buildSystemPrompt(hits []entry) string {
+// ★ 081x（2026-09-29）：承诺边界与系统现值**分两段各自独立**拼在语气之后——
+//
+//	promise_rules 单独一个配置键，故意不塞进 tone_rules：运营在后台改语气是**整段替换**，
+//	事实闸要是住在语气段里，就会被一次改口一起擦掉（同 engine.llmFromEnv 那类
+//	「自建对象把来源判据压住」的形态）。system_values 则根本不做成配置文案，
+//	它是从主服务现取的值，价格和语种数写死在任何一段里都迟早变成对外错报。
+//
+// 现值段取不到就整段不出现（宁可不给数字，也不给旧数字，见 system_values.go 文件头第 2 条）。
+//
+// ★ 082x（2026-09-29，用户指令「不能根据用户的前台语言和使用语言来回复，一律用中文」）：
+// 签名加 uiLang，并在**最末尾**（紧邻「直接回复用户：」）拼【回复语言】段。
+// 位置是刻意的：上面 persona / 语气 / 承诺 / 现值 / 知识五段全是中文写的，
+// 语言口径放在它们**之后**才是模型开口前读到的最后一条指令；放前面会被后面五段中文
+// 素材的语域带跑（现网那条英文提问回中文，就是模型照着素材的语言说的）。
+func (e *Engine) buildSystemPrompt(ctx context.Context, hits []entry, uiLang string) string {
 	var sb strings.Builder
 	sb.WriteString(e.db.GetConfig("persona", defaultPersona))
 	sb.WriteString("\n\n")
 	sb.WriteString(e.db.GetConfig("tone_rules", defaultToneRules))
 	sb.WriteString("\n\n")
+	sb.WriteString(e.db.GetConfig("promise_rules", defaultPromiseRules))
+	sb.WriteString("\n\n")
+	if sv := e.systemValuesBlock(ctx); sv != "" {
+		sb.WriteString(sv)
+		sb.WriteString("\n\n")
+	}
 	if len(hits) > 0 {
 		sb.WriteString("【相关知识】\n")
 		for _, h := range hits {
@@ -876,6 +933,8 @@ func (e *Engine) buildSystemPrompt(hits []entry) string {
 		}
 		sb.WriteString("\n")
 	}
+	sb.WriteString(replyLangBlock(uiLang))
+	sb.WriteString("\n")
 	sb.WriteString("直接回复用户：")
 	return sb.String()
 }

@@ -143,6 +143,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/assist/admin/features", s.guard(s.handleTable("feature_links")))
 	mux.HandleFunc("/api/assist/admin/sessions", s.guard(s.handleSessions))
 	mux.HandleFunc("/api/assist/admin/llm/test", s.guard(s.handleLLMTest)) // ★ R0.4c 测试连通
+	// ★ 081x（2026-09-29）：系统现值接线体检（只读）。价格/语种数改成了「取不到就不说」的软路径，
+	// 软路径失败界面上一模一样，必须有个地方能看见拨的是哪个地址、到底取到没有。
+	mux.HandleFunc("/api/assist/admin/system-values", s.guard(s.handleSystemValues))
 
 	// 健康检查
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -257,10 +260,16 @@ func (s *Server) handleGreeting(w http.ResponseWriter, r *http.Request) {
 		sid = newSessionID()
 	}
 	s.ensureSession(r.Context(), sid, page)
+	// ★ 082x（2026-09-29，用户指令「不能根据用户的前台语言和使用语言来回复，一律用中文」）：
+	// greet 新增 lang（访客界面语言）。欢迎词与 chips 是**不走对话模型**的直出文本，
+	// 英文站访客打开挂件看到的第一口气就是这两行中文，所以它们要单独过一层按需翻译
+	// （见 engine/localize.go；中文界面零开销、翻不到就原样出中文）。
+	uiLang := normalizeUILang(r.URL.Query().Get("lang"))
 	text := s.db.GetConfig("welcome", "")
 	if text == "" {
 		text = s.eng.Greeting()
 	}
+	text = s.eng.LocalizeGreeting(r.Context(), text, uiLang)
 	// ★ 〇-LK（2026-09-22）欢迎语去重：旧实现每次 greeting 都无条件 AddMessage，
 	// 而挂件在同一 sid 上重复 greet 是常态（令牌失效自愈、跨页复用会话），
 	// 于是台账里堆出一串重复欢迎语：既让管理台「消息总数」虚高，也让
@@ -272,7 +281,7 @@ func (s *Server) handleGreeting(w http.ResponseWriter, r *http.Request) {
 		"session":  sid,
 		"tok":      s.sessTok(sid),
 		"greeting": text,
-		"chips":    chipsOf(s.db.GetConfig("quick_chips", "")),
+		"chips":    chipsOf(s.eng.LocalizeChips(r.Context(), s.db.GetConfig("quick_chips", ""), uiLang)),
 	})
 }
 
@@ -301,6 +310,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Tok     string `json:"tok"`
 		Message string `json:"message"`
 		Page    string `json:"page"`
+		// Lang 访客界面语言（★ 082x 新增，见 handleGreeting 同处注释）。
+		// 缺省/未知一律按中文处理，**不返 400**：这是公开挂件面，
+		// 老缓存包和 082x 之前的前端就是不带这个字段（同 F-79「新增防护不拿可用性交押金」口径）。
+		Lang string `json:"lang"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]any{"error": "bad json"})
@@ -321,10 +334,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	sid := req.Session
 	s.ensureSession(r.Context(), sid, req.Page)
 
+	uiLang := normalizeUILang(req.Lang)
 	_ = s.db.AddMessage(sid, "user", req.Message, nil)
 	history, _ := s.db.History(sid, 12)
 
-	rep := s.eng.Respond(r.Context(), sid, req.Message, req.Page, history)
+	rep := s.eng.Respond(r.Context(), sid, req.Message, req.Page, uiLang, history)
 	_ = s.db.AddMessage(sid, "assistant", rep.Content, actionMaps(rep.Actions))
 	_ = s.db.TouchSession(sid)
 
@@ -403,6 +417,11 @@ func (s *Server) handleFeatures(w http.ResponseWriter, r *http.Request) {
 //     env（ASSIST_LLM_*）显式配置优先于 configs 表（见 engine.llmClient）。
 var configKeyWhitelist = map[string]bool{
 	"welcome": true, "persona": true, "tone_rules": true, "temperature": true, "max_tokens": true, "quick_chips": true,
+	// ★ 081x（2026-09-29，用户指令「严格按系统能力和承诺来，不造额外承诺」）：
+	//   promise_rules 与 tone_rules **刻意分成两个键**——管理台改语气是整段替换，
+	//   事实闸要是住在语气段里就会被一次改口一起擦掉（见 engine/promise.go 文件头）。
+	//   main_base_url 是现值注入拨的主服务地址（价格系数/语种数取实时值，不落在知识文案里）。
+	"promise_rules": true, "main_base_url": true,
 	"llm_base_url": true, "llm_api_key": true, "llm_model": true, "llm_model_backup": true,
 	// R0.1 同义词归一表（逗号分隔：词=同义词1|同义词2，多组换行）
 	"synonyms": true,

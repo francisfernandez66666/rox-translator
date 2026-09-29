@@ -244,10 +244,13 @@ const CFG_DEFS = {
   welcome:'欢迎词（会话首次打开时下发）',
   persona:'人设（系统提示词第一段）',
   tone_rules:'说话方式／语气（拼在人设后面；想让它更有人味改这里，不是改温度）',
+  promise_rules:'承诺边界／能说什么（管事实口径，单独一栏：清空＝用代码里那套按系统真实能力核对过的默认口径；改上面的语气不会动到这里）',
   temperature:'采样温度（0-1）：只让用词更多样，不会让语气变热（语气改上面 tone_rules）',
   max_tokens:'回复最大 token',
   quick_chips:'快捷提问 chips（逗号分隔，前端展示）',
 }
+// 长文本框的初始高度（承诺边界默认值两千多字，52px 会滚到看不见自己在改什么）
+const CFG_H = { tone_rules:150, promise_rules:260 }
 async function renderConfig(m){
   const data = await api('config')
   const st = await api('sessions')
@@ -282,9 +285,21 @@ async function renderConfig(m){
   <div class="card"><b>⚙️ 对话配置</b>
     <table><tbody>
     ${Object.keys(CFG_DEFS).map(k=>`<tr><td style="width:220px"><b>${esc(k)}</b><br><span class="hint">${esc(CFG_DEFS[k])}</span></td>
-      <td><textarea data-k="${esc(k)}" style="min-height:52px">${esc(cur[k]||'')}</textarea></td></tr>`).join('')}
+      <td><textarea data-k="${esc(k)}" style="min-height:${CFG_H[k]||52}px">${esc(cur[k]||'')}</textarea></td></tr>`).join('')}
     </tbody></table>
     <div class="row" style="margin-top:12px"><button class="pri" onclick="saveConfigs()">保存全部</button></div>
+  </div>
+  <div class="card"><b>📊 系统现值（价格系数／语种数取实时值）</b> <span id="sv-badge"></span>
+    <p class="hint">回答价格、套餐、支持多少种语言时，挂件用的是<b>这里取到的实时值</b>，不是知识库文案里抄的数字——运营在主后台调了档，这里跟着变，客户才不会被报错价。取不到时挂件会把整段现值丢掉、只说「我发你一份清单」，宁可不报也不报旧数（所以这里空着就是"没取到"，不是"取到 0"）。价格与语种数以外的口径见上面 promise_rules。</p>
+    <table><tbody>
+      <tr><td style="width:220px"><b>main_base_url</b><br><span class="hint">主服务地址（同机部署留空即用默认 http://127.0.0.1:8787）</span></td>
+          <td><input id="cfg-main_base_url" style="width:100%" value="${llmVal('main_base_url')}" placeholder="http://127.0.0.1:8787"></td></tr>
+    </tbody></table>
+    <div class="row" style="margin-top:10px">
+      <button class="pri" onclick="saveMainBase()">保存地址</button>
+      <button onclick="loadSystemValues()">现取一次</button>
+    </div>
+    <pre id="sv-out" class="hint" style="white-space:pre-wrap;margin-top:10px">点「现取一次」看客户此刻真正拿到的那段值。</pre>
   </div>
   <div class="card"><b>📚 同义词归一（R0.1：口语问法对齐知识库关键词）</b>
     <p class="hint">每行一组：「标准词=同义词1|同义词2」。用户输入命中同义词时按标准词计分（如「充钱」命中「充值」类知识）。</p>
@@ -310,6 +325,32 @@ async function testLLM(){
     out.textContent = r.ok ? `✅ 连通：${r.model}（${r.ms}ms）` : `❌ ${r.error}`
   }catch(e){ out.textContent = '❌ '+e.message }
 }
+// ★ 081x（2026-09-29）系统现值两件套：地址可改 + 读数可看。
+// 为什么必须在界面上露出来：现值注入是「取不到就整段丢掉」的软路径，
+// 失败时挂件界面长得和正常一模一样（只是价格/语种数又回到知识文案的旧口径），
+// 运维完全看不出来。这里显示空就是没取到，不是取到 0。
+async function saveMainBase(){
+  const el = document.getElementById('cfg-main_base_url')
+  if (!el) return
+  try{
+    await api('config', {method:'PUT', body: JSON.stringify({key:'main_base_url', value: el.value.trim()})})
+    toast('地址已保存，最迟 60 秒后的对话用上'); render()
+  }catch(e){ toast('保存失败: '+e.message) }
+}
+async function loadSystemValues(){
+  const out = document.getElementById('sv-out'), badge = document.getElementById('sv-badge')
+  if (!out) return
+  out.textContent = '取数中…'
+  try{
+    const r = await api('system-values')
+    badge.innerHTML = r.ok
+      ? '<span class="badge">✅ 现值可用</span>'
+      : '<span class="badge" style="background:rgba(210,153,34,0.10);color:#D29922;border-color:rgba(210,153,34,0.32)">⚠️ 没取到：挂件正按「不报数」口径回答</span>'
+    const age = r.cached_age_sec < 0 ? '（对话链路还没取过一次）' : '（对话链路当前用的是 '+Math.round(r.cached_age_sec)+' 秒前的缓存）'
+    out.textContent = '拨向 '+r.base_url+' · 现取耗时 '+r.ms+'ms '+age+'\n\n现取结果：\n'+(r.fresh||'（空＝两个口都没取到）')
+  }catch(e){ out.textContent = '❌ '+e.message }
+}
+
 async function saveConfigs(){
   for (const ta of document.querySelectorAll('textarea[data-k]')){
     await api('config', {method:'PUT', body: JSON.stringify({key: ta.dataset.k, value: ta.value})})

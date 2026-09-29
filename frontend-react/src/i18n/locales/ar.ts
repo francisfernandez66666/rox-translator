@@ -785,7 +785,7 @@ export const dict: Record<string, string> = {
   "chat.assistPlaceholder": "ما الذي تريد معرفته؟ مثلا: كيف أجعل الترجمة أدق في المصطلحات",
   "chat.assistSendFail": "لم يتم إرسال هذه الرسالة (خطأ في الشبكة أو الخدمة). إعادة المحاولة؟",
   "chat.assistSub": "استقبال · إرشاد · وصول سريع",
-  "chat.assistTitle": "مساعد Nengyan للذكاء الاصطناعي",
+  "chat.assistTitle": "مساعد LangCross للذكاء الاصطناعي",
   "chat.balance": "بقي {n}",
   "chat.balanceTip": "عدد الجمل المتبقية لديك للترجمة (جمل المصدر × عدد اللغات الهدف)",
   "chat.balanceTokens": "الرصيد {n} نقطة ≈ {s} جملة",

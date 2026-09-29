@@ -252,7 +252,7 @@ func TestValueQuestionsAnsweredWithoutLLM(t *testing.T) {
 		{"为什么要用能言", "上传→拿成品"},
 	}
 	for _, c := range cases {
-		rep := e.Respond(ctx, "sess-"+c.q, c.q, "/", nil)
+		rep := e.Respond(ctx, "sess-"+c.q, c.q, "/", "zh", nil)
 		if rep == nil {
 			t.Fatalf("%q 无回复", c.q)
 		}
@@ -276,7 +276,7 @@ func TestValueQuestionsAnsweredWithoutLLM(t *testing.T) {
 		}
 	}
 	// 反向对照：真·无资料问题必须继续走兜底并登记未答清单
-	rep := e.Respond(ctx, "sess-xyz", "xyzzy量子波动速翻布拉布拉", "/", nil)
+	rep := e.Respond(ctx, "sess-xyz", "xyzzy量子波动速翻布拉布拉", "/", "zh", nil)
 	if !strings.Contains(rep.Content, "这个问题我还没学到") {
 		t.Errorf("反向对照失败：乱码问句未走兜底，答案 %q", rep.Content)
 	}

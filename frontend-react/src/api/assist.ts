@@ -4,6 +4,14 @@
 // 服务：ai-assist（默认经同源 /assist-api 反代；可用 VITE_ASSIST_API 覆盖）
 // ============================================================================
 
+// ★ 082x（2026-09-29，用户指令「不能根据用户的前台语言和使用语言来回复，一律用中文」）：
+// 访客界面语言现在随 greet/chat 一起送出去（getLang() 的 12 语种码与后端
+// internal/assist/engine/reply_lang.go 的 langLabels 逐个对齐）。
+// 服务端拿它做两件事：回复口径（【回复语言】段）＋欢迎词/chips 的按需翻译。
+// 这里只负责把值送出去，**不在前端翻译**——欢迎词是运营在管理台改的，
+// 前端词典兜一份等于把「后台改口即生效」这条现网口径吃掉。
+import { getLang } from '@/i18n'
+
 /**
  * 服务基址：默认走同源反代 /assist-api，部署时由 Caddy/nginx 转发到 ai-assist 服务。
  * ★ 2026-09-22：该前缀新增第三条兜底路径——主服务二进制自己转发（internal/api/assist_open_proxy.go，
@@ -144,6 +152,7 @@ export async function assistGreet(page = ''): Promise<AssistGreet> {
   if (sid) q.set('session', sid)
   if (tok) q.set('tok', tok)
   if (page) q.set('page', page)
+  q.set('lang', getLang()) // ★ 082x：欢迎词与 chips 不走对话模型，只能靠这个字段翻成访客语言
   const res = await fetch(`${ASSIST_API}/api/assist/greeting?${q.toString()}`)
   noteAssistAuthFailure(res.status) // 401/403：清本地会话，调用方重走 greet（见上方豁免说明）
   if (!res.ok) throw new Error(`greeting ${res.status}`)
@@ -155,7 +164,7 @@ export async function assistChat(session: string, message: string, page = ''): P
   const res = await fetch(`${ASSIST_API}/api/assist/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session, tok: getAssistTok(), message, page }),
+    body: JSON.stringify({ session, tok: getAssistTok(), message, page, lang: getLang() }),
   })
   if (!res.ok) { noteAssistAuthFailure(res.status); throw new Error(`chat ${res.status}`) }
   return res.json()
