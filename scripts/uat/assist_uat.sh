@@ -13,7 +13,10 @@
 #         管理台 Token 主库桥接（MAIN_DB → system_config.assist_admin_token）与 env 优先级契约
 #   ★ 〇-LK（2026-09-22）G 段：管理 Token 保存即生效（旧值即刻失效）、该键掩码与空值拒绝、
 #         同会话重复 greet 不再堆重复欢迎语、换 Token 重启后老访客 tok 仍可用（sess_key 已持久化）
-# 依赖：无（自起 assist mock 模式，临时 SQLite，端口默认 8793/8794）
+#   ★ 093x（2026-09-30）W 段：真机挂件复问的四条现网漏点（日文正文嵌中文词形／模型自算乘法总额／
+#         品牌名翻成「能与」／括号旁白与裸方括号）——用假上游回放逐字原文，
+#         从 /api/assist/chat 这条 HTTP 面证明出站四道守卫**接在链上**（不只是单测绿）
+# 依赖：无（自起 assist mock 模式，临时 SQLite，端口默认 8793/8794；W 段另起假上游 8796）
 # 用法：bash scripts/uat/assist_uat.sh
 # ============================================================================
 set -u
@@ -203,6 +206,101 @@ ck C7-llmtest 'ok":false|error' "$R"
 # 5e. 管理端 401
 C=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/assist/admin/kb")
 ck C8-admin-401 '^401$' "$C"
+
+# ---------- 5f. ★ 093x（2026-09-30）真机挂件复问四条漏点：出站守卫链的**HTTP 面接线证明** ----------
+# 单测钉的是函数（respond_outbound_test.go / han_residue_reply_test.go / reply_lang_check_test.go），
+# 这一段钉的是「从 /api/assist/chat 打进去真的走到那四道守卫」——本仓出过"机制在、入站没接线"
+# 那一类形态（082x 第九条：挂件没把 lang 送进来，补翻整段轮空），只有真发一次 HTTP 请求才算锁住。
+# 假上游 scripts/uat/mock_assist.py 回放的是 2026-09-30 从现网拿回的**逐字原文**
+# （同一形态另钉一份在 engine/han_residue_reply_test.go 的 leakReply093x，两处改动要同步想）。
+# 三条纪律：
+#   ① 每条负向判据都配正向对照（合法正文必须还在）——否则"整段删空"也能绿灯；
+#   ② 上游调用次数从桩的 /uat/stats 读，「生成 1 次＋补翻 1 次」是硬账，多打一次就是反复重写；
+#   ③ 段落结束把 llm_base_url 写回不可达端点，别让后面的段落意外依赖这个桩。
+MOCK_PORT="${ASSIST_UAT_MOCK_PORT:-8796}"
+MOCKB="http://127.0.0.1:${MOCK_PORT}"
+# 就绪探针认「本次运行的标识」，不认"有没有人应答"：端口被上一轮残留的假上游占着时，
+# 新起的桩 bind 失败即退出，curl 却照样回 200 ——那是上一轮的桩、上一轮的 gen/rewrite 计数，
+# W7 那条次数硬账会跟着失真。标识不匹配就是"这不是我起的"，直接点名端口被占。
+MOCK_RUN="uat093x-$$-$(date +%s)"
+nohup python3 scripts/uat/mock_assist.py "$MOCK_PORT" "$MOCK_RUN" > "$WORK/mockassist.log" 2>&1 < /dev/null &
+MOCK_PID=$!
+OKM=0
+for i in $(seq 1 10); do
+  sleep 1
+  # 冒号后的空格可有可无（`: *true`）：W0 首跑栽在 Python 默认 json.dumps 回 `"ok": true`
+  # 而判据按后端 Go 的字面量写 `"ok":true`，桩明明活着却判"起不来"、整段 W 一条没跑。
+  if curl -s -m 2 "$MOCKB/uat/stats" | grep -qE "\"ok\": *true.*\"run\": *\"${MOCK_RUN}\""; then OKM=1; break; fi
+done
+if [ "${OKM:-0}" != "1" ]; then
+  FAIL=$((FAIL+1))
+  if grep -qiE "address already in use" "$WORK/mockassist.log" 2>/dev/null; then
+    echo "FAIL|W0-mock-llm-start|假上游端口 ${MOCK_PORT} 被上一轮残留的桩占着（kill 掉它或 ASSIST_UAT_MOCK_PORT 换端口）；后面 W 段全部无效"
+  else
+    echo "FAIL|W0-mock-llm-start|假上游起不来（后面 W 段全部无效）：$(tail -3 "$WORK/mockassist.log" 2>/dev/null | tr '\n' ' ')"
+  fi
+else
+  log "假上游 :${MOCK_PORT} 就绪（${i}s）"
+  curl -s -X PUT "$B/api/assist/admin/config" -H "$AH" -H "$J" \
+    -d "{\"key\":\"llm_base_url\",\"value\":\"${MOCKB}/v1\"}" >/dev/null
+  curl -s -X PUT "$B/api/assist/admin/config" -H "$AH" -H "$J" \
+    -d '{"key":"llm_model","value":"uat-assist-model"}' >/dev/null
+
+  RW=$(newgreet ja); SW=$(sidof "$RW"); TW=$(tokof "$RW")
+  R=$(curl -s -m 30 "$B/api/assist/chat" -H "$J" \
+    -d "{\"session\":\"$SW\",\"tok\":\"$TW\",\"message\":\"ドキュメント翻訳の料金はどのくらいですか\",\"lang\":\"ja\",\"page\":\"/\"}")
+  # ② 接线前提：这一条真的是模型答的（rule/flow/fallback 是人写的文案，四道守卫按设计只管 llm 那一路；
+  #    落到 rule 就说明请求没进模型，后面所有判据都成了对着人写文案的空扫）
+  ck W1-source-llm '"source":"llm"' "$R"
+  # ① 正向对照：日文正文里合法的那两句必须原样留着（守卫把正文吃空＝下面所有负向判据假绿）
+  ck W2-keep-body '原文を送信いただければ' "$R"
+  ck W2b-keep-quant '1,000文字' "$R"
+  # 红腿①（判残补翻）：五处中文词形／简体字形／被劈开的假名＋英文，出栈时一个都不许在
+  if echo "$R" | grep -qE '选択|系数|扣费|入力语言|プロfessional'; then
+    FAIL=$((FAIL+1)); echo "FAIL|W3-no-cn-wordform|现网五处词形漏出出栈正文：${R:0:200}"
+  else
+    PASS=$((PASS+1)); echo "PASS|W3-no-cn-wordform"
+  fi
+  # 红腿②（报价守卫）：模型自算的乘法算式与复算不出的总额不许发出去
+  if echo "$R" | grep -qE '2000×400|400\+7\.5'; then
+    FAIL=$((FAIL+1)); echo "FAIL|W4-no-arithmetic|算式/自算总额漏出出栈正文：${R:0:200}"
+  else
+    PASS=$((PASS+1)); echo "PASS|W4-no-arithmetic"
+  fi
+  # 红腿③（品牌归一）：日文轮的品牌错形「能与」不许出栈，正确写法「能言」必须在
+  if echo "$R" | grep -q '能与'; then
+    FAIL=$((FAIL+1)); echo "FAIL|W5-brand-misform|品牌错形漏出出栈正文：${R:0:200}"
+  else
+    PASS=$((PASS+1)); echo "PASS|W5-brand-misform"
+  fi
+  ck W5b-brand-correct '能言' "$R"
+  # #21（括号旁白与裸方括号）：交代"我用什么语言答"的那段括号备注与半截 markdown 链接语法都不许留给客户
+  if echo "$R" | grep -qE 'で回答するため|\[ pricing'; then
+    FAIL=$((FAIL+1)); echo "FAIL|W6-no-aside|旁白括号/裸方括号漏出出栈正文：${R:0:200}"
+  else
+    PASS=$((PASS+1)); echo "PASS|W6-no-aside"
+  fi
+  # ② 次数硬账：生成 1 次＋补翻 1 次；canned 那一路另算（欢迎词本地化），不参与本判据
+  ST=$(curl -s "$MOCKB/uat/stats")
+  GEN=$(echo "$ST" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("gen",0))')
+  RW2=$(echo "$ST" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("rewrite",0))')
+  if [ "$GEN" = "1" ] && [ "$RW2" = "1" ]; then
+    PASS=$((PASS+1)); echo "PASS|W7-upstream-twice(gen=$GEN,rewrite=$RW2)"
+  else
+    FAIL=$((FAIL+1)); echo "FAIL|W7-upstream-twice|want gen=1 rewrite=1 got $ST"
+  fi
+  # 反向对照（假绿的另一半）：把 llm_base_url 指回不可达端点后，同一条问句必须**还能出非空回复**
+  # ——证明 W3~W6 那几条绿不是"上游打不通所以正文空"顶出来的
+  curl -s -X PUT "$B/api/assist/admin/config" -H "$AH" -H "$J" \
+    -d '{"key":"llm_base_url","value":"http://127.0.0.1:9/v1"}' >/dev/null
+  RV=$(newgreet ja); SV=$(sidof "$RV"); TV=$(tokof "$RV")
+  R2=$(curl -s -m 30 "$B/api/assist/chat" -H "$J" \
+    -d "{\"session\":\"$SV\",\"tok\":\"$TV\",\"message\":\"ドキュメント翻訳の料金は\",\"lang\":\"ja\",\"page\":\"/\"}")
+  ck W8-offline-still-replies '"reply":"[^"]' "$R2"
+fi
+# 桩的收尾放在 if 外面：只在成功分支里 kill，那么 W0 失败的那一次会把孤儿留在端口上，
+# 下一次运行就以"端口被占"的形式红一次（本次实跑真留下了一个持着 8796 的假上游，已按 pid 点名清掉）。
+{ kill $MOCK_PID 2>/dev/null; wait $MOCK_PID 2>/dev/null; } 2>/dev/null || true
 
 # ---------- 6. 管理端 CRUD 回归 ----------
 NID=$(curl -s -X POST "$B/api/assist/admin/scripts" -H "$AH" -H "$J" \

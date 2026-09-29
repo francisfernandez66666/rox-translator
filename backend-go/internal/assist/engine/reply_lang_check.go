@@ -27,6 +27,23 @@
 //   - 残破字符与空行：日文轮出现 U+FFFD 替换符（思维链截断的常见残渣）、zh 轮尾部三个空行。
 //
 // 两者都在 sanitizeVisitorText 里收，挂在 postProcess 这一道总口上（历史回放与正文同一出口）。
+//
+// ★ 093x 增补（2026-09-30 真机挂件复问，日文轮正文尾部两条残渣）：
+//
+//	「…ご案内できます。[ pricing ページで詳細を確認]  （※日本語で回答するため、必要に応じて
+//	「ポイント」を用い、入力语言が日本語であることを考慮して翻訳を実施。）」
+//
+// 这一族把本文件原有的三道闸**逐个绕过去**的形态各不相同，各自的修法与误伤对照都在下面：
+//   - 旁白是**日文写的**：internalEchoMarkers／selfNarrationMarkers 收的全是中文指令用词，
+//     而观测腿的语种反差档对日文轮整档豁免 ⇒ 既没剥也没记（本次靠用户截图才发现）。
+//     故删除清单只补**现网逐字实证**的两条日文多字形态，观测腿另开第三条泛化筛子
+//     （点名语种＋交代作答动作，只记日志不改正文，见 mentionsAnsweringInLanguage）；
+//   - 那圈方括号是**模型自己写的 markdown 链接只剩一半**（`(url)` 根本没出）：
+//     新增 unwrapBrokenLinkBrackets，只拆括号留文字，带目标的真链接与未闭合一律不碰。
+//
+// 本文件的卫生函数从这一批起**不只挂在 postProcess 上**：两条补翻腿的产物也过同一道
+// （engine.go 的 rehardenReplyRewrite），因为"补翻会把括号形态再换一次"这条早就写下的事实，
+// 此前在出站那一刻没有任何一条腿接住它。
 // =============================================
 package engine
 
@@ -165,6 +182,20 @@ var selfNarrationMarkers = []string{
 	"引用边界", "自带前提", "期待否定", "期待肯定", "这里肯定", "这里否定",
 	// ↓ 082x 第十条：现网「（注：根据规则…此处需在最后单独输出标记，且 key 必须来自指定列表…用户输入…）」实测漏出
 	"根据规则", "此处需在最后", "单独输出", "输出标记", "指定列表", "用户输入", "本轮输入", "思考过程",
+	// ↓ ★ 093x（2026-09-30 真机挂件复问，日文轮正文尾部整段旁白漏出）：
+	//
+	//	「（※日本語で回答するため、必要に応じて「ポイント」を用い、入力语言が日本語であることを
+	//	  考慮して翻訳を実施。）」
+	//
+	// 这一族此前**两条腿全瞎**：internalEchoMarkers／selfNarrationMarkers 收的都是中文指令用词，
+	// 而这段是**日文写的旁白**；unstrippedAsides 的观测腿又按"语种反差"筛，日文轮整档豁免 ⇒
+	// 既没剥也没记，客户屏幕上直接看到助手在叙述自己的作答策略。
+	// 入删除清单的只有这两条**现网逐字实证**的日文多字形态，不收单字词：
+	// 「で回答するため」（＝"因为要用日语回答"，对客户永远不构成一句人话的补充说明）、
+	// 「翻訳を実施」（＝"实施了翻译"，正文明显是在交代自己的动作而不是交代产品）。
+	// ⚠️ 刻意不收「翻訳」单词：「（翻訳は人間がチェックします）」是正常对外说明，收了就是吃掉内容；
+	// 也不收「するため」：「（ご確認するため）」这类目的状语在正常客服话术里高频。
+	"で回答するため", "翻訳を実施",
 }
 
 // visitorDropMarkers 出站正文「整段括号删掉」的总清单＝提示词段名＋模型旁白形态。
@@ -173,17 +204,62 @@ var selfNarrationMarkers = []string{
 // 两张源表各自保留，是为了让「这段为什么被删」能按形态查回上面两段判据说明。
 var visitorDropMarkers = append(append([]string{}, internalEchoMarkers...), selfNarrationMarkers...)
 
-// sanitizeVisitorText 出站正文的末道卫生：剥内部规则回声、剥模型旁白、剥空括号、去 U+FFFD、收多余空行。
-// 在 postProcess 里、摘完【go:…】控制序列之后调用。
+// sanitizeVisitorText 出站正文的末道卫生：剥内部规则回声、剥模型旁白、剥空括号、拆裸方括号链接文字、
+// 去 U+FFFD、收多余空行。在 postProcess 里、摘完【go:…】控制序列之后调用；
+// ★ 093x 起补翻产物也走这一道（engine.go 的 rehardenReplyRewrite），卫生只有一份。
 func sanitizeVisitorText(text string) string {
 	s := strings.ReplaceAll(text, "\uFFFD", "")
 	s = dropParentheticals(s, visitorDropMarkers)
 	s = strings.NewReplacer("（）", "", "()", "").Replace(s)
+	s = unwrapBrokenLinkBrackets(s)
 	// 连续 3 个及以上换行压成 2 个（模型爱在结尾甩一串空行，气泡里就是一段空白）
 	for strings.Contains(s, "\n\n\n") {
 		s = strings.ReplaceAll(s, "\n\n\n", "\n\n")
 	}
 	return strings.TrimSpace(s)
+}
+
+// unwrapBrokenLinkBrackets 把「[ 文字 ]」这种**没有目标地址**的半截 markdown 链接拆成纯文字
+// （★ 093x，2026-09-30 真机挂件复问实证：日文正文尾部挂着「[ pricing ページで詳細を確認]」——
+// 模型写了链接语法的方括号那一半，`(url)` 那一半根本没出，气泡里就留一圈方括号）。
+//
+// 为什么是"拆括号留文字"而不是"整段删掉"：括号里那句「pricing ページで詳細を確認」是**客户能读的话**，
+// 删掉等于把一条入口提示吃掉；留着括号则是把模型的语法残渣摆给客户。拆成纯文字两个损失都没有。
+//
+// 三条不算残渣、原样送出的形态（都是误伤对照，单测里逐条钉住）：
+//   - 方括号后面紧跟圆括号目标（真 markdown 链接 `[text](url)`）——那是完整语法，不是半截；
+//   - 未闭合的 `[`——按本文件一贯口径当成截断处理，留着现场比悄悄补全好；
+//   - 空括号或内容里还有左括号／超 80 字——不像链接文字，宁可不碰。
+func unwrapBrokenLinkBrackets(s string) string {
+	if !strings.ContainsRune(s, '[') {
+		return s
+	}
+	var sb strings.Builder
+	rest := s
+	for {
+		i := strings.IndexByte(rest, '[')
+		if i < 0 {
+			sb.WriteString(rest)
+			break
+		}
+		rel := strings.IndexByte(rest[i+1:], ']')
+		if rel < 0 {
+			sb.WriteString(rest) // 未闭合：原样留着
+			break
+		}
+		inner := rest[i+1 : i+1+rel]
+		after := rest[i+1+rel+1:] // 右方括号**之后**的内容
+		keep := inner == "" || strings.ContainsRune(inner, '[') || len(inner) > 80 ||
+			strings.HasPrefix(strings.TrimLeft(after, " \t"), "(") // 带目标的 markdown 链接不动
+		if keep {
+			sb.WriteString(rest[:i+1+rel+1])
+		} else {
+			sb.WriteString(rest[:i])
+			sb.WriteString(strings.TrimSpace(inner))
+		}
+		rest = after
+	}
+	return sb.String()
 }
 
 // dropParentheticals 删除**内容命中任一标记**的括号段（全角/半角都管），其余正文一字不动。
@@ -266,6 +342,36 @@ var asideMetaNotePrefixes = []string{"注：", "注:", "备注：", "备注:", "
 // 这里只是"起手是元说明 + 句中有这类名词"两个弱信号叠起来当日志筛子。
 var asideMechanicsNouns = []string{"标记", "提示词", "规则", "系统", "列表", "模型", "输出", "要求"}
 
+// asideLangNames／asideAnswerActWords ★ 093x 观测腿的第三条：**交代"本轮用什么语言作答/翻译"**的括号段。
+//
+// 为什么单独开这一条：日文轮那句「（※日本語で回答するため…翻訳を実施。）」把前两条腿全绕过了
+// ——删除清单收的是中文指令用词，语种反差腿对日文轮整档豁免（日文正文本来就有汉字）。
+// 而"旁白"这一族有个跨语种共性：**它在描述助手自己的作答动作，而不是客户的事**，
+// 所以几乎每次都会点名一种语言＋带上"回答/翻译"这个动作。两个弱信号叠起来当筛子。
+//
+// ⚠️ 这一条**只用于记日志，不参与删正文**（同上面两条腿的口径）：
+// 「（日本語・英語・中国語の12言語に対応）」「（翻訳は人間がチェックします）」都是客户会看到的正文，
+// 单看"点名语言"或单看"提到翻译"都能凑齐误删条件，叠起来也只是**候选**而不是定性。
+// 现网实证过的形态才进上面的删除清单（见 selfNarrationMarkers 末尾那两条日文形态）。
+var asideLangNames = []string{
+	"中文", "简体中文", "繁体中文", "英文", "英语", "日本语", "双语",
+	"日本語", "英語", "中国語", "韓国語", "한국어", "汉语",
+	"Chinese", "English", "Japanese", "Korean", "German", "French", "Spanish", "Russian", "Thai",
+	"Русский", "Deutsch", "Français", "Español", "Português", "العربية", "ภาษาไทย",
+}
+
+// asideAnswerActWords 见 asideLangNames（"回答／翻译"这个动作本身，各语种写法）。
+// 刻意不收「対応」「チェック」：那是产品能力用词，正常对外说明里高频出现。
+var asideAnswerActWords = []string{
+	"回答", "作答", "回复", "翻译", "译文", "応答", "返信",
+	"answering", "we answer", "responding", "reply in", "translat",
+}
+
+// mentionsAnsweringInLanguage 括号段是否在交代"用什么语言作答/翻译"（观测腿第三条，见上面两条表）。
+func mentionsAnsweringInLanguage(inner string) bool {
+	return containsAny(inner, asideLangNames) && containsAny(inner, asideAnswerActWords)
+}
+
 // unstrippedAsides 清单没命中、但形态像旁白的括号段（**只用于记日志，不改正文**）。
 //
 // 为什么需要这条腿：`selfNarrationMarkers` 是按实测形态列的词表，它天然追不上模型的措辞
@@ -279,6 +385,11 @@ var asideMechanicsNouns = []string{"标记", "提示词", "规则", "系统", "�
 //     （3 个以下多半是引用的术语或文件名，「（PDF）」这种，报出来只会淹掉日志）；
 //   - 中文系／日文：没有语种反差可用，改看形态——起手是元说明（注：／备注：／说明：）
 //     且句中含内部名词，才报。
+//
+// ★ 093x 再加**第三条腿，对所有语种生效**（含日文）：点名某种语言＋交代"作答/翻译"这个动作
+// （mentionsAnsweringInLanguage）。前两条腿都按语种反差或中文用词办事，
+// 而现网那条日文轮旁白「（※日本語で回答するため…）」两者都不沾 ⇒ 整档豁免，
+// 连一条 WARN 都没留下，缺陷只能靠用户截图报——第三条腿就是为了让下一族新形态**先出现在日志里**。
 func unstrippedAsides(answerLang, text string) []string {
 	if text == "" {
 		return nil
@@ -304,7 +415,8 @@ func unstrippedAsides(answerLang, text string) []string {
 		}
 		inner := strings.TrimSpace(rest[innerStart : innerStart+rel])
 		if !containsAny(inner, visitorDropMarkers) &&
-			((kanjiShape && hanCountIn(inner) >= asideHanMin) || isMetaNoteAside(inner)) {
+			((kanjiShape && hanCountIn(inner) >= asideHanMin) || isMetaNoteAside(inner) ||
+				mentionsAnsweringInLanguage(inner)) {
 			out = append(out, inner)
 		}
 		rest = rest[innerStart+rel:]

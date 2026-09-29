@@ -21,6 +21,22 @@ func TestReplyHanResidueRunsNeedsNoSource(t *testing.T) {
 		{"ja", "ファイルではなく文件翻訳で対応します", []string{"文件翻訳"}},
 		// 现网形态二：简体独有字形（费）——日文正字法写「費」，这个字形只能是照抄的中文
 		{"ja", "ポイント充费はいつでも可能です", []string{"充费"}},
+		// ★ 093x（2026-09-30 真机复问）：字形档原来缺 选／语，词形档缺 系数——现网那条就是这么漏的
+		{"ja", "か选択が必要です", []string{"选択"}},
+		{"ja", "入力语言が日本語です", []string{"入力语言"}},
+		{"ja", "系数で算出されます", []string{"系数"}},
+		{"ja", "数据は暗号化されます", []string{"数据"}},
+		{"ja", "折扣はいつでも可能です", []string{"折扣"}},
+		// 反向对照：データ／割引 是日文侧的正确写法，进了判残清单就是把好译文送去重写
+		{"ja", "データは暗号化されます。割引はいつでも可能です", nil},
+		// ★ 093x 第三条腿：一个汉字都没有的「假名嵌拉丁」半截词（现网实证形态）
+		{"ja", "プロfessionalモードがあります", []string{"プロfessional"}},
+		// 反向对照：这些是**正常日文**，判残为空＝不许每条回答白打一次上游
+		{"ja", "PDFのファイル形式をそのままに、pricing ページをご確認ください", nil},
+		{"ja", "係数で算出されます。選択してください。", nil},
+		{"ja", "1,000文字で23.5ポイントです。OKです", nil},
+		{"ja", "Word/Excel/PPT/PDF に対応しています", nil},
+		{"ja", "12言語に対応し、英語でも使えます", nil},
 		// 正常日文回答一个都不许判残：翻訳／文書／ポイント／確認 全是日文正常写法
 		{"ja", "文書翻訳・会話翻訳・企業用語ベース・ポイント確認", nil},
 		// 其余语种：有汉字就是残留（跟 canned 那一路同口径）
@@ -120,4 +136,68 @@ func TestRepairReplyHanResidueAdoptsOnlyImprovement(t *testing.T) {
 			t.Fatalf("判残为空时白打了 %d 次上游（每条日文回答多一次往返就是首响应变慢）", st.count())
 		}
 	})
+}
+
+// leakReply093x ★ 093x（2026-09-30）真机挂件复问打现网拿回的**逐字原文**（日文轮问报价）。
+// 上一批的判残尺子对这一段只认得「扣费」一处，其余四处漏到客户屏幕上。
+// 本条用例把原文钉在这里当回归基线：尺子变窄（有人删表里的字、删腿）当场红灯。
+const leakReply093x = "日本語から中国語への翻訳は、源文字数（源語の文字数）で計算されます。" +
+	"例えば1,000文字の日本語を翻訳する場合、**快速モードで150ポイント**か、" +
+	"**プロfessionalモードで400ポイント**か选択が必要です。ポイント数は原文の文字数（日本語は全角文字含む）× 系数で算出されますが、" +
+	"実際の扣费は原文の文字数と言語に応じて変動します。お手数ですが、原文を送信いただければ正確なポイント数をご案内できます。" +
+	"[ pricing ページで詳細を確認]  （※日本語で回答するため、必要に応じて「ポイント」を用い、" +
+	"入力语言が日本語であることを考慮して翻訳を実施。）"
+
+// TestReplyHanResidueRunsOnRealProductionReply 现网原文必须**逐处**进判残清单（不再只抓到一处）。
+func TestReplyHanResidueRunsOnRealProductionReply(t *testing.T) {
+	got := replyHanResidueRuns("ja", leakReply093x)
+	joined := strings.Join(got, "|")
+	for _, want := range []string{"选択", "系数", "扣费", "プロfessional", "入力语言"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("现网漏点 %q 没进判残清单（尺子又变窄了）；实际：%v", want, got)
+		}
+	}
+	// 正常日文词一个都不许进来：翻訳／文字／確認／言語 这些被抓走，补翻提示词就变成"重写整段"，
+	// 三条硬判据里"残片严格变少"会被灌水的好条目顶掉，采用率反而下降。
+	for _, bad := range []string{"翻訳", "文字数", "確認", "言語", "全角"} {
+		if strings.Contains(joined, bad) {
+			t.Errorf("正常日文 %q 被判成残留：%v", bad, got)
+		}
+	}
+}
+
+// TestHanResidueRunsCannedPathAlsoSeesLatinIntrusion ★ 093x 第三条腿对 canned 那一路同样生效。
+// canned 的汉字腿有**中文源文**可比，而「プロfessional」在源文里一个字都对不上——
+// 只接对话正文那一路的话，日文欢迎词里的半截英文照样漏（两条路必须共用同一条尺子）。
+func TestHanResidueRunsCannedPathAlsoSeesLatinIntrusion(t *testing.T) {
+	got := hanResidueRuns("ja", "专业模式按积分计费，快速模式更省", "プロfessionalモードで400ポイントです")
+	if len(got) != 1 || got[0] != "プロfessional" {
+		t.Fatalf("canned 路的假名嵌拉丁腿没接上：%v", got)
+	}
+	// 源文里根本没有这个词形也照样抓到（对照：汉字腿在同样条件下必须为空）
+	if extra := jaLeakSubstrings("专业模式按积分计费", hanRunsOf("プロfessionalモードです")); len(extra) != 0 {
+		t.Fatalf("汉字腿不该在源文对不上时判残：%v", extra)
+	}
+	// 正常日文欢迎词零残留：判残为空＝greet 不白打补翻那一枪
+	if leaks := hanResidueRuns("ja", "支持文档翻译与积分计费", "ドキュメント翻訳に対応しています。1,000文字で23.5ポイントです。"); len(leaks) != 0 {
+		t.Fatalf("正常日文被判残：%v", leaks)
+	}
+}
+
+// TestRepairPromptForbidsCopyingLeaksBack ★ 093x 第三条根因：提示词原来写"其余措辞尽量照抄上一版"，
+// 于是**没进清单的坏词是被要求照抄回来的**——判残尺子修好之前，这一句本身就是漏口。
+// 现在必须逐条点名"每一处都要改掉"，并把"不许加括号备注"写进去（旁白也是重写腿会新造的形态）。
+func TestRepairPromptForbidsCopyingLeaksBack(t *testing.T) {
+	st := newSeqStub(t, "プロフェッショナルモードで400ポイントです。")
+	e := st.engine(t)
+	rep := &Reply{Content: "プロfessionalモードで400ポイントです", Source: "llm"}
+	if got := e.repairReplyHanResidue(context.Background(), "ja", rep).Content; strings.Contains(got, "professional") {
+		t.Fatalf("半截英文没被换掉：%q", got)
+	}
+	p := st.body(0)
+	for _, want := range []string{"每一处", "不许加任何括号备注", "不许改任何数字", "プロfessional"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("补翻提示词缺 %q：\n%s", want, p)
+		}
+	}
 }
