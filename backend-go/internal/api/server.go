@@ -847,6 +847,13 @@ type ChatRequest struct {
 // handleHealth 健康检查接口（/api/health）：返回服务状态、版本与核心模块初始化状态。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。返回 status/version/skills + 核心模块就绪标记。
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	// ★ 2026-09-29（派发第二节）：远端到期日与内存帽状态词要在这个面上**看得见**。
+	//
+	//	原先只有 dispatch 一个三态词，于是"到期那天跑着的进程还报 online"（probe 缓存无 TTL）、
+	//	"内存帽配了但没戴上"（caps.clamped）这两件事在健康面上完全不存在，
+	//	只能靠人 SSH 到体验机翻日志——而这两条本来都是"结果看着对、腿其实没通"的形态。
+	//	口径不变：只出状态词，绝不出远端主机名/IP/绝对路径，也不把 probe 的 JSON 原样透出。
+	disp := fileproc.DispatchReadinessSnapshot()
 	writeJSON(w, 200, map[string]interface{}{
 		"status":  "ok",
 		"version": probeVersion,
@@ -861,7 +868,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"anydoc_ready": fileproc.AnydocAvailable(),
 		// ★ 文档转换远程派发（2026-09-28 §5.2）：off=未开闸；online=远端就绪；degraded=连续失败降级中。
 		//   同 #42 口径：本端点无鉴权，只出状态词，**绝不出远端主机、路径或文件名**。
-		"dispatch": fileproc.DispatchStatus(),
+		"dispatch":          disp.Status,
+		"dispatch_expire":   disp.ExpireDate, // 远端配置的到期日（开闸时才非空）
+		"dispatch_mem_cap":  disp.MemCap,     // on / clamped / off / unknown / 关着时为空
+		"dispatch_selftest": disp.Selftest,   // pass / missing_asset / failed / unknown / 关着时为空
 		// ★ #40（2026-09-21）：分布式能力口径——redis=跨实例聚合可用；
 		//   in-process=未配 REDIS_ADDR（仅单副本安全）；unreachable=配了但探活失败（逐次降级）。
 		//   监控/巡检可直接对该字段做告警，不再依赖翻启动日志；

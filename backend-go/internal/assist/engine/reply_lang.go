@@ -283,9 +283,15 @@ func brandNameFor(uiLang string) string {
 
 // brandNamingLine 品牌名口径那句（进【回复语言】段，也被 localize.go 的翻译提示词复用）。
 // 单一事实源：拼音禁令与语种分档只在这里写一遍，两处各写一份迟早会分叉（同官网报价那条教训）。
+//
+// ★ 092x 红腿三：汉字档这里额外把**字形**写出来（「能」＋「言」），并点名现网真出现过的错形「能与」。
+//
+//	这条只是把请求说得更具体，它本身不是保证——保证在 brand_guard.go 的出站归一那条腿上。
+//	把它写进提示词的理由是成本：模型少犯一次，出站就少改一次、少一条 WARN。
 func brandNamingLine(uiLang string) string {
 	if brandNameFor(uiLang) == "能言" {
 		return "- 品牌名：本轮用中文写法「能言」（该语种界面与挂件标题也是这个写法）；" +
+			"就是「能」＋「言」两个字，**不许写成「能与」**，" +
 			"任何情况下都不许写成 Nengyan、NengYan 之类拼音。\n"
 	}
 	return "- 品牌名：本轮一律写 LangCross；中文原名是「能言」，" +

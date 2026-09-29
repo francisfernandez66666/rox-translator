@@ -68,17 +68,25 @@ const defaultMainBaseURL = "http://127.0.0.1:8787"
 // systemValuesClient 复用的 HTTP 客户端（无凭据、无 Cookie：打的两个口都是匿名公开口）
 var systemValuesClient = &http.Client{Timeout: systemValuesTimeout}
 
+// pricingMode 单个计费模式的现值系数。
+// 做成**具名类型**而不是留在 pricingMetaDoc 里的匿名结构：报价守卫（quote_guard.go）要把
+// "句中能认出的那个模式"交给替换句，匿名结构在函数签名上写不出同型（带 json tag 与不带的两种
+// 匿名结构在 Go 里就不是同一类型），硬套只能多复制一层——那一层迟早跟源结构分叉。
+type pricingMode struct {
+	Code             string  `json:"code"`
+	PointsPer1kChars float64 `json:"points_per_1k_chars"`
+	PointsFixed      float64 `json:"points_fixed"`
+}
+
 // pricingMetaDoc GET /api/pricing/meta 响应结构
 // （字段名与主服务 internal/api/pricing_meta.go 交叉锁：改那边必须同步这里，
 //
 //	否则解出来的 Modes 是空切片，本段静默不出现——所以 system_values_status.go 里给了管理台读数）
 type pricingMetaDoc struct {
-	Success bool `json:"success"`
-	Modes   []struct {
-		Code             string  `json:"code"`
-		PointsPer1kChars float64 `json:"points_per_1k_chars"`
-		PointsFixed      float64 `json:"points_fixed"`
-	} `json:"modes"`
+	Success bool          `json:"success"`
+	Modes   []pricingMode `json:"modes"`
+	// ↑ 2026-09-29 092x：Modes 的元素从匿名 struct 提为具名 pricingMode，
+	//   json tag 在 pricingMode 上一字未改，解析行为与改前等价（别误读成接口口径变了）。
 	PointsPriceMoney float64 `json:"points_price_money"`
 	Unit             string  `json:"unit"`
 }
@@ -91,15 +99,26 @@ type langsDoc struct {
 // systemValuesBlock 返回【系统现值】整段文本；无可用现值时返回空串（调用方据此整段不拼）。
 // 参数 ctx 随对话请求取消。缓存见文件头第 3 条口径。
 func (e *Engine) systemValuesBlock(ctx context.Context) string {
+	block, _ := e.systemValuesWithDoc(ctx)
+	return block
+}
+
+// systemValuesWithDoc 同一条缓存里既给渲染好的那段文本，也给**结构化现值**。
+//
+// ★ 092x 红腿二：出栈的报价核验（quote_guard.go）要按系数复算模型报出的总额，
+// 拿渲染文本去反解数字等于把「present in prose」当成判据——那是最容易被一句文案改动产物失效的锁。
+// 缓存必须一次拿到两份，才能保证「模型看到的数字」与「我们据以核验的数字」同源。
+func (e *Engine) systemValuesWithDoc(ctx context.Context) (string, *pricingMetaDoc) {
 	e.sysValMu.Lock()
 	defer e.sysValMu.Unlock()
 	if time.Since(e.sysValAt) < systemValuesTTL {
-		return e.sysValBlock
+		return e.sysValBlock, e.sysValDoc
 	}
-	block := e.SystemValuesSnapshot(ctx)
-	e.sysValBlock = block
-	e.sysValAt = time.Now()
-	return block
+	base := e.MainBaseURL()
+	doc := e.fetchPricingMeta(ctx, base)
+	block := renderSystemValues(base, doc, e.fetchLangCount(ctx, base))
+	e.sysValBlock, e.sysValDoc, e.sysValAt = block, doc, time.Now()
+	return block, doc
 }
 
 // SystemValuesCached 返回对话链路当前会拼进 prompt 的那段现值与其落盘时间。

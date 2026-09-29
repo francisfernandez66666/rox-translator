@@ -22,6 +22,14 @@
 //
 //	分开放就迟早长出一边修好、另一边照漏的形态（本仓 074x/082x 两批都是这么收尾的）。
 //
+// ★ 092x 红腿一（2026-09-29 现网复问第四条）把判残＋补翻真正接到了**对话正文出站**：
+//
+//	此前"共用"只到 canned 那一路——整段回中文的回答会被 enforceReplyLang 拖去翻译，
+//	顺路就过了这段补翻；而"日文句子嵌两个中文词"这种混排既不触发整段补翻、
+//	又从不经过 translateOnce ⇒ 一路漏到客户屏幕。现在两条路各有一个入口
+//	（repairHanResidue / repairReplyHanResidue），底座与三条硬判据只有一份
+//	（repairHanResidueBase）。
+//
 // =============================================
 package engine
 
@@ -30,6 +38,7 @@ import (
 	"strings"
 
 	"translator/internal/assist/llm"
+	"translator/internal/observability"
 )
 
 // simplifiedOnlyRunes 「简体字独有、日文正字法里不长这样」的常用字（判残用，日文档专用）。
@@ -75,6 +84,45 @@ func hanResidueRuns(uiLang, src, out string) []string {
 		return runs
 	}
 	return jaLeakSubstrings(src, runs)
+}
+
+// replyHanResidueRuns **对话正文**的判残（★ 092x 红腿一）。与上面 hanResidueRuns 的差集只有一处，
+// 但这一处是形态决定的：对话正文没有"中文源文"这个对照面——那条日文回答里的「文件」「費」
+// 不是从哪份源文抄来的，是模型自己把中文词形写进了日文句子，
+// 所以 canned 那条的「必须在源文里原样找到」在这里既无从下手、也不该下手。
+//
+// 剩下的两条判据都只看字形/词形本身：含简体独有字形（费／译／积…），
+// 或含 jaChineseWordForms 里"日文另有写法"的中文词形（文件／邮件／信息…）。
+// 非中文、非日文的作答语种仍按"任何汉字段都是残留"（同 canned 那一路）。
+//
+// 误伤半径：日文正文里「文件」这类词形出现，客户看到的就是半中半日；
+// 唯一真正的例外是**引用访客自己的中文材料**（「您那份《文件清单》里…」）。
+// 这种引用会被判残、白花一次补翻——三条硬判据（未截断／行数一致／残片严格变少）
+// 兜住"改坏"，代价只有一次上游调用。宁可这样，也不留「文件翻訳」在客户屏幕上。
+func replyHanResidueRuns(answerLang, text string) []string {
+	c := canonicalLang(answerLang)
+	if text == "" || c == "" || c == "zh" || c == "zh_hant" {
+		return nil
+	}
+	runs := hanRunsOf(text)
+	if len(runs) == 0 {
+		return nil
+	}
+	if c != "ja" {
+		return runs
+	}
+	out := make([]string, 0, len(runs))
+	seen := make(map[string]bool, len(runs))
+	for _, r := range runs {
+		if !containsSimplifiedOnlyRune(r) && !containsJaChineseWordForm(r) {
+			continue
+		}
+		if !seen[r] {
+			seen[r] = true
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // jaLeakSubstrings 日文档的判残：每个汉字段里，取「**能在中文源文里原样找到**、
@@ -166,8 +214,69 @@ func lineCountOf(s string) int {
 // repairHanResidue 把残片点名，让模型整段重写一次；返回「新稿 + 是否采用」。
 // 采用的三条硬判据：调用成功且没被 max_tokens 截断、行数与上一稿一致、残片数量**严格变少**。
 // 任一不成立就回 false，调用方保留上一稿并记 Warn——这里绝不做的是"拿一份没验过的新稿换掉旧稿"。
+//
+// 这一条是 canned（欢迎词／chips）那一路的入口：它有**中文原文**可比，
+// 所以判残用的是 hanResidueRuns（"必须在源文里原样找到"那一档才成立）。
+// 对话正文走 repairReplyHanResidue，判据换成 replyHanResidueRuns（没有源文，见那里）。
 func (e *Engine) repairHanResidue(ctx context.Context, client *llm.Client, uiLang, src, draft string,
 	leaks []string, maxTokens int) (string, bool) {
+	return e.repairHanResidueBase(ctx, client, uiLang,
+		"\n【中文原文】\n"+src, draft, leaks, maxTokens,
+		func(out string) []string { return hanResidueRuns(uiLang, src, out) })
+}
+
+// repairReplyHanResidue 对话正文出站的汉字残留补翻（★ 092x 红腿一，2026-09-29 现网复问第四条）。
+//
+// 现场：日文轮的回答主体是合格日文，句子里却嵌着「文件翻訳」与「ポイント充費」这类
+// 中文词形／简体字形——既不是"整段回了中文"（enforceReplyLang 按占比判，抓不到几条字），
+// 也不是 canned 文案（那一路的补翻早就接上了）。同一族缺陷第四次靠用户截图发现，
+// 这一条把它接到**对话正文的唯一出站咽喉**上（调用点见 engine.go Respond）。
+//
+// 与 canned 那一路的两处差别，都是"对话正文"这个形态逼出来的：
+//  1. 判残不再要求「能在中文源文里原样找到」——对话正文没有源文，模型是直接用对方语言写的；
+//  2. 额度用 replyLocalizeMaxTokens（一条回答可能二十行，400 会翻出半句，见 reply_lang_check.go）。
+//
+// 补翻只许改善、不许换坏：三条硬判据一条不落（未截断／行数一致／残片严格变少），
+// 不成立就原样留着并记 WARN——让客户看到「文件翻訳」这种半中半日的句子（丑但内容是真的），
+// 也比拿一份可能被改坏额度数字的新稿覆盖旧稿安全。
+func (e *Engine) repairReplyHanResidue(ctx context.Context, answerLang string, rep *Reply) *Reply {
+	if rep == nil || rep.Content == "" {
+		return rep
+	}
+	// **整段回错语言的正文不在这一条的射程**（判据用 replyLangMismatch，与整段补翻同一条尺子）：
+	// 那条由上层的 enforceReplyLang 负责，它翻成功就不会走到这里、翻失败说明上游本来就不通，
+	// 这里再补一次只是把访客的等待时间翻倍（现网踩过：截断那次多打的一枪就是这种重叠）。
+	// 本条只管"主体是对的、句子里嵌着几个中文词"那种混排——那才是整段占比判据抓不到的形态。
+	if replyLangMismatch(answerLang, rep.Content) {
+		return rep
+	}
+	leaks := replyHanResidueRuns(answerLang, rep.Content)
+	if len(leaks) == 0 {
+		return rep
+	}
+	client := e.ensureLLM(ctx)
+	fixed, ok := e.repairHanResidueBase(ctx, client, answerLang, "", rep.Content, leaks,
+		replyLocalizeMaxTokens, func(out string) []string { return replyHanResidueRuns(answerLang, out) })
+	if !ok {
+		observability.Warn(ctx, "assist.engine 对话正文汉字残留补翻未采用，保留原稿",
+			"lang", canonicalLang(answerLang), "source", rep.Source,
+			"count", len(leaks), "leaks", strings.Join(leaks, ","))
+		return rep
+	}
+	observability.Info(ctx, "assist.engine 对话正文汉字残留已出站补翻",
+		"lang", canonicalLang(answerLang), "source", rep.Source,
+		"before", len(leaks), "after", len(replyHanResidueRuns(answerLang, fixed)), "leaks", strings.Join(leaks, ","))
+	rep.Content = fixed
+	return rep
+}
+
+// repairHanResidueBase 两条补翻路共用的底座（canned 与对话正文只差"有没有中文源文"和"残片怎么数"）。
+//
+// 为什么要抽这一层而不是复制一份提示词：同一族缺陷在两处各修一次，
+// 迟早长成「canned 修好了、对话正文照漏」的形态（本仓 074x/082x 两批都是这么收尾的，
+// 见 han_residue.go 文件头）。提示词、三条硬判据、温度与截断口径都必须只有一份。
+func (e *Engine) repairHanResidueBase(ctx context.Context, client *llm.Client, uiLang, srcBlock, draft string,
+	leaks []string, maxTokens int, afterLeaks func(string) []string) (string, bool) {
 	label := langLabel(uiLang)
 	if label == "" || client == nil || !client.Enabled() || len(leaks) == 0 {
 		return "", false
@@ -177,7 +286,7 @@ func (e *Engine) repairHanResidue(ctx context.Context, client *llm.Client, uiLan
 		"其余措辞尽量照抄上一版；行数与上一版完全一致，一行对应一行，" +
 		"不要加解释、不要加引号、不要输出思考过程，也不许改任何数字。\n" +
 		translateContract(uiLang) +
-		"\n【中文原文】\n" + src + "\n【上一版" + label + "译文】\n" + draft + "\n---"
+		srcBlock + "\n【上一版" + label + "译文】\n" + draft + "\n---"
 	out, _, usage, err := client.Chat(ctx, localizeTemperature, maxTokens,
 		[]llm.Message{{Role: "user", Content: prompt}})
 	if err != nil || usage.Truncated {
@@ -187,7 +296,7 @@ func (e *Engine) repairHanResidue(ctx context.Context, client *llm.Client, uiLan
 	if out == "" || lineCountOf(out) != lineCountOf(draft) {
 		return "", false
 	}
-	if len(hanResidueRuns(uiLang, src, out)) >= len(leaks) {
+	if len(afterLeaks(out)) >= len(leaks) {
 		return "", false // 没改善就收手，别拿一份同样带残片的新稿去覆盖
 	}
 	return out, true

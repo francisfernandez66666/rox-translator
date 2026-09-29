@@ -142,17 +142,29 @@ var internalEchoMarkers = []string{
 // 对外永远不出现，误伤面为零）；这一条清的是**说话口吻**——"用户/客户/对方"是第三人称提到访客，
 // 而挂件对访客永远说「你」。两种判据的误伤半径完全不同，混在一张表里以后想收窄其中一类都拆不开。
 //
-// ⚠️ 清单只收「绝不会用来对访客说话」的短语，刻意**不收**这些高风险词：
-//   - 「期待」：「（期待您的文档）」是正常客服话术 → 只收「期待否定／期待肯定」这种旁白搭配；
-//   - 「口径」「边界」：对外文案里真会说「计费口径」「能力边界」 → 只收「引用边界」「自带前提」；
-//   - 「素材」：上传的原文对客户而言就叫素材。
+// 现场二（★ 082x 第十条，2026-09-29 换件后当天又被用户带截图抓到一条）：中文轮问比价，
+// 气泡尾部漏出「（注：根据规则，此处需在最后单独输出标记，且 key 必须来自指定列表。
+// 用户输入"deep"属于延续比较场景，故推荐对比页面入口。）」——
+// 这一整段是模型在**叙述自己对提示词的执行情况**（"输出标记""指定列表"，并把访客那句叫"用户输入"），
+// 而上一版清单里一个词都没命中 ⇒ containsAny 判假、原样送出。
+// 这一批据此补了八条实测形态（见清单末尾那行）。
 //
 // 漏剥的后果只是气泡里多一句难看的中文旁白，误剥的后果是把客户要看的补充说明吃掉——
-// 所以这张表宁可窄，不收单字词。
+// 所以这张表宁可窄，不收单字词；高风险词一律不收：「期待」（「（期待您的文档）」是正常客服话术）、
+// 「口径」「边界」（对外真会说「计费口径」「能力边界」）、「素材」（上传的原文对客户而言就叫素材）、
+// 「此处需」（操作指引里真会说「（此处需填写你的域名）」→ 只收完整形态「此处需在最后」）。
+//
+// ★ 为什么这一批**没有**加「成对判据」那条看起来更能泛化的腿（规则×输出、标记×列表 两词同现即剥）：
+// 逐条想过、逐条被对外文案否掉了——「（输出为 PDF，按套餐规则计费）」「（需要登录后台看标签列表）」
+// 这两类客户真会看到的补充说明都能凑齐那些组合，误剥的代价（吃掉客户要看的说明）大于漏剥。
+// 所以清单追不上模型措辞时，走下面 `chineseAsideRuns` 那条**只记日志不改正文**的观测腿攒证据，
+// 下一批再把确认过的形态写成词条。
 var selfNarrationMarkers = []string{
 	"接住", "提示词", "系统提示", "人设", "复述", "反问", "自检",
 	"用户可能", "用户问", "用户想", "客户问", "客户想", "对方问",
 	"引用边界", "自带前提", "期待否定", "期待肯定", "这里肯定", "这里否定",
+	// ↓ 082x 第十条：现网「（注：根据规则…此处需在最后单独输出标记，且 key 必须来自指定列表…用户输入…）」实测漏出
+	"根据规则", "此处需在最后", "单独输出", "输出标记", "指定列表", "用户输入", "本轮输入", "思考过程",
 }
 
 // visitorDropMarkers 出站正文「整段括号删掉」的总清单＝提示词段名＋模型旁白形态。
@@ -202,7 +214,8 @@ func dropParentheticals(s string, markers []string) string {
 			break
 		}
 		end := innerStart + rel + firstRuneBytes(rest[innerStart+rel:])
-		if containsAny(rest[innerStart:innerStart+rel], markers) {
+		inner := rest[innerStart : innerStart+rel]
+		if containsAny(inner, markers) {
 			// 命中内部段名：整段连括号删掉，顺手收掉括号前悬着的连接符（「……，（系统现值…）」→「……」）
 			sb.WriteString(strings.TrimRight(rest[:open], " ，,、；;"))
 			rest = rest[end:]
@@ -238,4 +251,107 @@ func containsAny(s string, markers []string) bool {
 		}
 	}
 	return false
+}
+
+// asideHanMin 观测腿认定「一句中文旁白」的最小汉字量（与 detectInputLang 那条汉字档同源取 4：
+// 三个以下多半是引用的术语或文件名（「（PDF）」这种），报出来只会淹掉日志）。
+const asideHanMin = 4
+
+// asideMetaNotePrefixes 观测腿认的「元说明起手」：模型写给自己看的备注几乎都以这几个字起头。
+// 只用于挑日志候选，不参与删正文，所以宁可多报（「（注：输出为 PDF）」这类会被报出来但留着）。
+var asideMetaNotePrefixes = []string{"注：", "注:", "备注：", "备注:", "说明：", "说明:"}
+
+// asideMechanicsNouns 观测腿的第二条腿用的名词（中文轮里"旁白"没有语种反差可看，只能看用词）。
+// ⚠️ 这些词**单个都不许进删除清单**（「（按套餐规则计费）」是正常说明），
+// 这里只是"起手是元说明 + 句中有这类名词"两个弱信号叠起来当日志筛子。
+var asideMechanicsNouns = []string{"标记", "提示词", "规则", "系统", "列表", "模型", "输出", "要求"}
+
+// unstrippedAsides 清单没命中、但形态像旁白的括号段（**只用于记日志，不改正文**）。
+//
+// 为什么需要这条腿：`selfNarrationMarkers` 是按实测形态列的词表，它天然追不上模型的措辞
+// ——本批修的就是"第八条的词表漏掉第十条的形态"。词表之外再写一条能泛化的**硬**判据，
+// 上面已经算过一遍：能同时避开「（输出为 PDF，按套餐规则计费）」这种正常说明的成对判据不存在。
+// 所以这里只**报告**，把候选形态原样打进日志，下一批照读数补词条（补进词表才是改正文的动作，
+// 那一步人工看过再做）。日志候选允许过量，误报只花人一眼，误删花的是客户的内容。
+//
+// 两条筛选口径按语种分开：
+//   - 非中文系且非日文：正文里出现一整段汉字备注本身就是反差，≥4 个汉字即报
+//     （3 个以下多半是引用的术语或文件名，「（PDF）」这种，报出来只会淹掉日志）；
+//   - 中文系／日文：没有语种反差可用，改看形态——起手是元说明（注：／备注：／说明：）
+//     且句中含内部名词，才报。
+func unstrippedAsides(answerLang, text string) []string {
+	if text == "" {
+		return nil
+	}
+	kanjiShape := true
+	switch c := canonicalLang(answerLang); c {
+	case "zh", "zh_hant", "ja":
+		kanjiShape = false
+	case "":
+		kanjiShape = false // 没定出语种＝按中文界面处理，别把中文正常文案全报一遍
+	}
+	var out []string
+	rest := text
+	for {
+		open := strings.IndexFunc(rest, isParenOpen)
+		if open < 0 {
+			break
+		}
+		innerStart := open + firstRuneBytes(rest[open:])
+		rel := strings.IndexFunc(rest[innerStart:], isParenClose)
+		if rel < 0 {
+			break // 未闭合：那是截断，有自己的 WARN 与治理口径
+		}
+		inner := strings.TrimSpace(rest[innerStart : innerStart+rel])
+		if !containsAny(inner, visitorDropMarkers) &&
+			((kanjiShape && hanCountIn(inner) >= asideHanMin) || isMetaNoteAside(inner)) {
+			out = append(out, inner)
+		}
+		rest = rest[innerStart+rel:]
+	}
+	return out
+}
+
+// isMetaNoteAside 起手元说明＋句中有内部名词（中文轮的旁白形态，见 unstrippedAsides 第二条口径）。
+func isMetaNoteAside(inner string) bool {
+	hit := false
+	for _, p := range asideMetaNotePrefixes {
+		if strings.HasPrefix(inner, p) {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		return false
+	}
+	return containsAny(inner, asideMechanicsNouns)
+}
+
+// hanCountIn 数串里的汉字个数（U+4E00–U+9FFF 与扩展 A 区，与 countScripts 同档）。
+func hanCountIn(s string) int {
+	n := 0
+	for _, r := range s {
+		if (r >= 0x4E00 && r <= 0x9FFF) || (r >= 0x3400 && r <= 0x4DBF) {
+			n++
+		}
+	}
+	return n
+}
+
+// observeVisitorAsides 出站前的旁白观测（见 unstrippedAsides：只记 WARN，正文一个字都不改）。
+// 挂在 Respond 这个唯一出站咽喉上，四道回复与兜底都过这里，所以不会长成"只有 LLM 那一路有观测"。
+//
+// 为什么值得为一条日志占一个咽喉调用：这一族缺陷（提示词里的规矩只是请求）已经连续四轮靠用户截图发现，
+// 每轮都是一次换件。WARN 里带原文＝下一批补词条有依据，不用等第五次截图。
+func (e *Engine) observeVisitorAsides(ctx context.Context, answerLang string, rep *Reply) {
+	if rep == nil {
+		return
+	}
+	asides := unstrippedAsides(answerLang, rep.Content)
+	if len(asides) == 0 {
+		return
+	}
+	observability.Warn(ctx, "assist.engine 出站正文带出疑似旁白的括号备注，词表未命中（不改正文，只攒词条证据）",
+		"lang", canonicalLang(answerLang), "source", rep.Source, "count", len(asides),
+		"asides", strings.Join(asides, " | "))
 }

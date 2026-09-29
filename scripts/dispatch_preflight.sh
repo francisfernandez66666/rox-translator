@@ -1,29 +1,44 @@
 #!/usr/bin/env bash
 # ============ dispatch_preflight.sh · 职责说明 ============
-# 派发**开闸前的一致性门禁**（改造方案 §10 的 G1～G4，2026-09-28 P6 落地）。
+# 派发**开闸前的一致性门禁**（改造方案 §10 的 G1～G4 ＋ 2026-09-29 补的 G5，P6 落地）。
 #
-# 它回答一个问题：**这台体验机跑出来的 PDF，会不会和主站跑出来的不一样？**
+# 它回答一个问题：**这台体验机跑出来的 PDF，会不会和主站跑出来的不一样，而且送得回来？**
 # 这一问不能用"服务能起来"来答——脚本差一行、库差一个小版本、字体少一族，
 # 两侧照样"成功"，只是客户拿到的版式/字形不一样，而这类差异不会在任何日志里报错。
-# 所以这四项必须**现读现比**，不写死任何版本号与族数（写死就是一装一卸即假红）。
+# 所以这五项必须**现读现比**，不写死任何版本号与族数（写死就是一装一卸即假红）。
 #
-# 四项判据：
+# 五项判据：
 #   G1 脚本指纹等值：转换脚本 + 随包兜底字体，两侧 sha256 逐字相等（缺一即不派）；
 #   G2 库版本等值：PyMuPDF / fpdf2 / pdf2docx 两侧版本串相等（importlib 现读，不写死）；
 #   G3 字体族集合：远端 fc-list :lang=zh 的**族名集合** ⊇ 主站集合（多装不算漂移）；
 #   G4 产物一致性抽验：同一份样张两侧各转一次，比对段数与逐段内容（★ 不比字节 sha——
-#      PDF 内含 CreationDate 与子集字体序号，天然逐次不同，那是恒红锁）。
+#      PDF 内含 CreationDate 与子集字体序号，天然逐次不同，那是恒红锁）；
+#   G5 传输腿全往返：put→run(apply)→stat→get 走**真机**一遍，上传与回拉各比一次 sha256
+#      （★ 这一项必须给 FPD_SAMPLE，无样张即判红，理由见下面 ★★ 段）。
 #
 # ★ 远端数据只走 fpdexec.py 协议（体验机的 sshd 是 ForceCommand=fpd-bridge，
 #   拿不到 shell），所以本脚本不 ssh 任何"命令"，只喂 stdin 上的一行 base64 header。
-#   这与 Go 侧 DispatchRun 走的是**同一条协议**，不存在"脚本能过、线上过不了"的分叉。
+#   这与 Go 侧 DispatchRun 走的是**同一条协议**。
+#
+# ★★ 光有 G1~G4 会漏掉一整类故障，这是 2026-09-29 真踩出来的：
+#   G1~G4 判的是**两侧内容一致性**（脚本指纹／库版本／字体集合／样张产物），
+#   它们从没判过**传输通路本身**：主站当时用的是裸 `ssh 'mkdir -p'` 与 `scp`，
+#   这两条腿在 ForceCommand 下是结构性死路（mkdir 实测退 78、scp 挂墙钟或静默非零），
+#   而本脚本当时照样四项全绿——因为它自己一直走协议，主站却不走。
+#   ⇒ 所以 09-29 把判据补成两条腿：
+#     ① G5（本脚本）＝**真机**把"上传→转换→查尺寸→取回→逐字节等值"整条拨一遍，
+#        并就地打印定档要用的体积/耗时读数；无 FPD_SAMPLE 时 G5 **判红不判跳过**，
+#        因为"跳过还能全绿exit 0"正是上面那次事故的形状。
+#     ② Go 侧单测（fileproc_remote_test.go）＝把同一套协议形状钉进接线：桩只认协议，
+#        裸 mkdir／scp 调用一律照真机一样判红，上传与回拉都比 sha256。
+#   开闸前两边都要绿，缺一边就是把"我编的远端"当成了真远端、或把"我编的脚本通路"当成了主站通路。
 #
 # 用法（在**主站**执行，须为 root 或 translator，且能 BatchMode 拨通体验机）：
 #   FPD_SSH=fpd@1.2.3.4 FPD_KEY=/etc/translator/dispatch_ed25519 \
 #   FPD_SAMPLE=/opt/translator/data/_uploads/sample.pdf \
 #   bash scripts/dispatch_preflight.sh
 #
-# 退出码：0 = 四项全过（可以开闸）；非 0 = 任一不过（**保持派发关闭**）。
+# 退出码：0 = 五项全过（可以开闸）；非 0 = 任一不过（**保持派发关闭**）。
 #   ★ 口径：本脚本失败不修任何东西、不改任何配置，它只是一把尺子。
 # =============================================================================
 set -u
@@ -52,12 +67,33 @@ SSH=(ssh -i "$FPD_KEY" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChe
 if command -v shasum >/dev/null 2>&1; then DIGEST() { shasum -a 256 "$1" | awk '{print $1}'; }
 else DIGEST() { sha256sum "$1" | awk '{print $1}'; }; fi
 
+# now_ms：毫秒时戳。只有 G5 用它，而 G5 的耗时读数正是**定档输入**（09-29 实测：产物膨胀 3.4×、
+#   回传 0.49MB/s，都是小数秒量级的事），所以不能用 bash 的 $SECONDS 整数秒。
+#   又因 macOS 自带 date 没有 %N，统一走脚本已硬依赖的 python3。
+now_ms() { python3 -c 'import time;print(int(time.time()*1000))'; }
+# jf <python 表达式>：从 stdin 的**最后一行**解 JSON 后求值（远端把回执打在 stdout 末尾，
+#   转换脚本可能在前面带 warn 行）。取不到就打印空串而不是抛栈——调用侧全部按"空串＝不合法"判红，
+#   绝不给"解析失败被当成解析成功"留缝。
+jf() {
+  python3 -c 'import sys, json
+raw = sys.stdin.read().strip()
+try:
+    d = json.loads(raw.splitlines()[-1])
+except Exception:
+    print("")
+    sys.exit(0)
+try:
+    print(eval(sys.argv[1], {"d": d}))
+except Exception:
+    print("")' "$1"
+}
+
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/fpd-preflight.XXXXXX")"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
 # ---------------------------------------------------------------- 取远端实测值（唯一入口 = fpdexec 协议）
-log "[0/4] 拨通体验机并取回 probe（远端唯一入口 fpdexec.py）"
+log "[0/5] 拨通体验机并取回 probe（远端唯一入口 fpdexec.py）"
 # ★ 协议修正（2026-09-29）：fpdexec.py 的 header 第一行是 base64(JSON)（见 fpdexec.py:563
 #   `base64.b64decode(head_line)`），此前本脚本发的是裸 JSON ⇒ 远端报
 #   "header 解析失败: Invalid base64-encoded string"、preflight 永远判不过、开不了闸。
@@ -82,7 +118,7 @@ fi
 ok "远端在线 mem=$(rp 'round(d.get("mem_gb",0),1)')G cpu=$(rp 'd.get("cpu")') 到期日 $(rp 'd.get("expire_date")')"
 
 # ---------------------------------------------------------------- G1 脚本指纹等值
-log "[1/4] G1 脚本指纹等值（两侧 sha256 逐字相等）"
+log "[1/5] G1 脚本指纹等值（两侧 sha256 逐字相等）"
 # ★ 比对清单与 Go 侧 DispatchRun 实际会用到的脚本保持一致。
 #   兜底字体**不在这个循环里**：远端 probe 把它单独放在 fonts.fallback_ttf_sha（不在 script_sha 里），
 #   拿脚本那把钥匙去开字体这把锁会恒等失败——它是 D5 那颗雷，下面单独判一次。
@@ -123,7 +159,7 @@ fi
 [ "$G1_FAIL" -eq 0 ] || warn "  G1 不过 ⇒ Go 侧就绪判据会判不就绪，派发自动退回本地（产品不受影响，但也没有收益）"
 
 # ---------------------------------------------------------------- G2 库版本等值
-log "[2/4] G2 库版本等值（现读现比，不写死版本号）"
+log "[2/5] G2 库版本等值（现读现比，不写死版本号）"
 LOCAL_LIBS="$TMP/local_libs.json"
 "$FPD_LOCAL_PY" - <<'PY' >"$LOCAL_LIBS"
 import json, importlib.metadata as md
@@ -141,6 +177,11 @@ for lib in pymupdf fpdf2 pdf2docx; do
   got="$(rp 'd.get("libs",{}).get("'"$lib"'","")')"
   if [ -n "$want" ] && [ "$want" = "$got" ]; then
     ok "G2 $lib 等值 $want"
+  elif [ -z "$want" ] && [ -z "$got" ]; then
+    # ★ 两侧都未装 ＝ **等值成立**（本项判据是"两侧会不会跑出不一样的产物"，不是"装没装齐"）：
+    #   那一型转换在两侧都走同一条本地/降级路径，产物一致。把它判红会让门禁永远开不了闸，
+    #   而真正的风险（一侧有一侧没有）由下一条分支管。
+    ok "G2 $lib 两侧都未装 ⇒ 一致性成立（该型转换两侧同走降级路径，不是漂移）"
   else
     bad "G2 $lib 不等值  主站=${want:-<未装>}  远端=${got:-<未装>}"
     G2_FAIL=1
@@ -157,7 +198,7 @@ else
 fi
 
 # ---------------------------------------------------------------- G3 字体族集合
-log "[3/4] G3 字体族集合（远端 ⊇ 主站，多装不算漂移）"
+log "[3/5] G3 字体族集合（远端 ⊇ 主站，多装不算漂移）"
 LOCAL_FAMS="$TMP/local_fams.txt"
 if command -v fc-list >/dev/null 2>&1; then
   # 只取族名（fc-list 的第二个冒号分段），排序去重用 LC_ALL=C（★ BSD sort 在 UTF-8 下会折叠中文行）
@@ -187,10 +228,11 @@ if [ "$(rp 'd.get("fonts",{}).get("fallback_ttf")')" != "True" ]; then
 fi
 
 # ---------------------------------------------------------------- G4 产物一致性抽验
-log "[4/4] G4 产物一致性抽验（同一份样张两侧各转一次）"
+log "[4/5] G4 产物一致性抽验（同一份样张两侧各转一次）"
 if [ -z "$FPD_SAMPLE" ] || [ ! -s "$FPD_SAMPLE" ]; then
-  warn "  未给 FPD_SAMPLE ⇒ 跳过 G4。**开闸前必须补跑一次**（G1~G3 全过也只能说明环境一致，"
-  warn "  证明不了"两侧产出一样"；这一步不做，就是在用开闸后的第一单真实客户件做实验）。"
+  # ★ 这里只 warn 不 bad：G4 判的是"两侧产出一样"（内容一致性），缺样张时 G1~G3 仍然成立；
+  #   而**传输通路**那一问由下面的 G5 硬判（缺样张 G5 直接红），所以"没样张还能 exit 0"这条路已经堵死。
+  warn "  未给 FPD_SAMPLE ⇒ 跳过 G4（环境一致 ≠ 产出一致，开闸前仍建议补跑一次）"
 else
   SAMPLE_BASENAME="$(basename "$FPD_SAMPLE")"
   # ① 主站侧 extract
@@ -245,13 +287,184 @@ PY
     fi
   fi
   warn "  ⚠️ G4 的另外两小项（产物页数相等 / pdffonts 字体族一致 / 体积比 ±15%）属**写回**对比，"
-  warn "     在本脚本里没做——它需要一次真实译文映射，放到开闸后第一单人工抽验（§9-A3/A4）里判，"
+  warn "     在本脚本里没做——它需要两侧各写回一次再比，放到开闸后第一单人工抽验（§9-A3/A4）里判，"
   warn "     判据是日志里必须出现「原地替换完成」而不是「降级版式重建」。"
+fi
+
+# ---------------------------------------------------------------- G5 传输腿全往返
+log "[5/5] G5 传输腿全往返（上传→转换→查尺寸→取回→逐字节哈希等值）"
+# ★★ 这一项是 2026-09-29 那次事故的直接产物：G1~G4 全绿的那几天，主站派发用的裸 mkdir/scp
+#   在 ForceCommand 下一条都没走通过（客户件从没到过远端，全靠本地兜底在跑）。
+#   一致性判据（内容一样）与传输判据（送得过去、取得回来）是两问，前者永远顶不了后者，
+#   所以这里**必须真拨四条腿**，并且上传与回拉各比一次 sha256：
+#     put  —— 远端回执 size+sha256  vs  本地实测（证明"远端存下来的就是这份"）；
+#     run  —— 恒等译文写回（把 apply 这条**写路径**走一遍，extract 只读不写、证明不了产物能落盘）；
+#     stat —— 产物在不在、多大、什么哈希（排障腿：分清"没做出来"与"做出来没搬回"）；
+#     get  —— 原样字节流回主站，落盘后再比一次（网络中间任何一环节流/截断都在这里红）。
+#   耗时读数一并打印：这三行就是**定档输入**（阈值按产物尺寸算，不是按输入尺寸）。
+if [ -z "$FPD_SAMPLE" ] || [ ! -s "$FPD_SAMPLE" ]; then
+  bad "G5 未给 FPD_SAMPLE ⇒ **判红而非跳过**：G1~G4 全绿也证明不了传输腿（那正是 09-29 的事故形态）。"
+  bad "    给一份真实客户件重跑：FPD_SAMPLE=/opt/translator/data/_uploads/<某单>.pdf bash $0"
+else
+  G5="$TMP/g5"
+  mkdir -p "$G5"
+  # 远端 rel 用固定名，不嵌原始文件名：客户件名里可能有空格/中文/引号，
+  # 让它们穿过 JSON+base64+远端文件系统三层是给自己造排障噪音（哈希等值才是本项判据）。
+  G5_IN_REL="preflight_g5/in.pdf"
+  G5_OUT_REL="preflight_g5/translated.pdf"
+  G5_IN_ABS="$FPD_REMOTE_ROOT/w/$G5_IN_REL"
+  G5_OUT_ABS="$FPD_REMOTE_ROOT/w/$G5_OUT_REL"
+  LOCAL_SHA="$(DIGEST "$FPD_SAMPLE")"
+  LOCAL_SIZE="$(wc -c <"$FPD_SAMPLE" | tr -d '[:space:]')"
+  PUT_MS=0; RUN_MS=0; STAT_MS=0; GET_MS=0
+  G5_PUT_OK=0; G5_RUN_OK=0
+
+  # ① put：上传样张
+  T0="$(now_ms)"
+  H1="$(printf '{"mode":"put","rel":"%s"}' "$G5_IN_REL" | base64 | tr -d '\n')"
+  { printf '%s\n' "$H1"; cat "$FPD_SAMPLE"; } >"$G5/put.in"
+  if ! "${SSH[@]}" >"$G5/put.out" 2>"$G5/put.err" <"$G5/put.in"; then
+    bad "G5① 上传失败：$(tail -3 "$G5/put.err" | tr '\n' ' ')"
+  else
+    PUT_MS=$(( $(now_ms) - T0 ))
+    PUT_SHA="$(jf 'd.get("sha256","")' <"$G5/put.out")"
+    PUT_SIZE="$(jf 'd.get("size",0)' <"$G5/put.out")"
+    [ "$(jf 'd.get("ok") is True' <"$G5/put.out")" = "True" ] && G5_PUT_OK=1
+    if [ "$G5_PUT_OK" = "1" ] && [ -n "$LOCAL_SHA" ] && [ "$PUT_SHA" = "$LOCAL_SHA" ] && [ "$PUT_SIZE" = "$LOCAL_SIZE" ]; then
+      ok "G5① 上传 $LOCAL_SIZE B 用 ${PUT_MS}ms，远端回执 sha256 与本地**逐字节等值**"
+    else
+      bad "G5① 上传后远端回执与本地不等（本地 size=$LOCAL_SIZE sha=${LOCAL_SHA:0:12}… / 远端 size=$PUT_SIZE sha=${PUT_SHA:0:12}…，ok 回执=$G5_PUT_OK）"
+      bad "    ⇒ 这一条不判就等于把客户的原件改坏了还交给客户（上传腿没有哈希比对是 09-29 前的形态）"
+    fi
+  fi
+
+  # ② run(apply)：远端做一次**写回**，译文映射取"原文→原文"的恒等映射。
+  #    为什么用恒等映射：本项要验的是"远端能把产物写到 w/ 之下并搬回来"，
+  #    不是"翻得对不对"（那是 G4 与开闸后第一单的事）。恒等映射让 replaced/requested
+  #    应当相等，顺带还证了一次"提取键与写回键同源"这条不变量。
+  if [ "$G5_PUT_OK" != "1" ]; then
+    warn "  G5②③④ 跳过（上传就没成，后面三条腿无从执行）⇒ 整项判红，先修 ①"
+  else
+    # 取键：优先用 G4 已在远端跑出的 extract 结果，退化到主站侧 extract（两者键应一致，G4 已比过）。
+    KEYS="$G5/keys.json"
+    if [ -s "$TMP/remote_extract.json" ]; then
+      cp "$TMP/remote_extract.json" "$KEYS"
+    elif [ -s "$TMP/local_extract.json" ]; then
+      cp "$TMP/local_extract.json" "$KEYS"
+    else
+      HX="$(printf '{"mode":"run","script":"pdf_overlay.py","argv":["pdf_overlay.py","extract","%s"],"outputs":[]}' "$G5_IN_ABS" | base64 | tr -d '\n')"
+      printf '%s\n' "$HX" >"$G5/extract.in"
+      if "${SSH[@]}" >"$G5/extract.out" 2>"$G5/extract.err" <"$G5/extract.in"; then
+        tail -1 "$G5/extract.out" >"$KEYS"
+      else
+        bad "G5② 远端 extract 取键失败：$(tail -3 "$G5/extract.err" | tr '\n' ' ')"
+      fi
+    fi
+    NSEG=0
+    if [ -s "$KEYS" ]; then
+      NSEG="$(jf 'len(d.get("texts") or [])' <"$KEYS")"
+      python3 - "$KEYS" "$G5/apply.payload" <<'PY' || bad "G5② 恒等译文映射构造失败"
+import json, sys
+d = json.load(open(sys.argv[1]))
+texts = [t for t in (d.get("texts") or []) if isinstance(t, str) and t.strip()]
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    json.dump({"translations": {t: t for t in texts}}, f, ensure_ascii=False)
+PY
+    else
+      bad "G5② 没拿到提取键（$KEYS 为空）⇒ 无法构造写回，产物落盘这条腿没验到"
+    fi
+
+    if [ -s "$G5/apply.payload" ]; then
+      T0="$(now_ms)"
+      # ★ 这一行刻意不折行（虽然丑）：闸门 TestDispatchHeaderProtocolIsBase64 的判据是
+      #   "含 {\"mode\" 的那一行必须同一行出现 base64"，用 `\` 续行会把 base64 甩到下一行，
+      #   于是这条锁会把自己判红——把它"美化"成两行＝让门禁对该 header 失明，不许改回去。
+      HR="$(printf '{"mode":"run","script":"pdf_overlay.py","argv":["pdf_overlay.py","apply","%s","%s","zh"],"outputs":["%s"],"timeout_sec":%d}' "$G5_IN_ABS" "$G5_OUT_ABS" "$G5_OUT_ABS" "${FPD_G5_RUN_TIMEOUT:-300}" | base64 | tr -d '\n')"
+      { printf '%s\n' "$HR"; cat "$G5/apply.payload"; } >"$G5/run.in"
+      if ! "${SSH[@]}" >"$G5/run.out" 2>"$G5/run.err" <"$G5/run.in"; then
+        bad "G5② 远端写回失败：$(tail -3 "$G5/run.err" | tr '\n' ' ')"
+      else
+        RUN_MS=$(( $(now_ms) - T0 ))
+        APPLY_LINE="$(tail -1 "$G5/run.out")"
+        G5_RUN_OK=1
+        case "$APPLY_LINE" in
+          *"replaced="*) ok "G5② 远端写回成功（${RUN_MS}ms，$APPLY_LINE）" ;;
+          *) bad "G5② 远端写回退出码 0 但没吐统计行 ⇒ 「原地替换完成」这条判据在远端侧无从核对（日志：$APPLY_LINE）" ;;
+        esac
+        # 读写闭环判据（G4 只比了"读"，这条比"读出来的键能不能写回去"）：
+        #   ★ 不能拿 replaced 去等**提取段数**——extract 的 texts 是**去重后**的键表
+        #     （同一段跨页重复只翻一次，见 pdf_overlay.py 的 seen 集合），而 apply 的 replaced
+        #     数的是**出现次数**，所以 replaced ≥ 段数是正常形态（本机 harness 实测：1 段 → replaced=2）。
+        #     真正的不变量在回执自己那一行里：恒等映射下每条 requested 都必须被 replaced 命中。
+        REPLACED="$(printf '%s' "$APPLY_LINE" | sed -n 's/.*replaced=\([0-9]*\).*/\1/p')"
+        REQUESTED="$(printf '%s' "$APPLY_LINE" | sed -n 's/.*requested=\([0-9]*\).*/\1/p')"
+        if [ -n "$REQUESTED" ] && [ "$REQUESTED" != "0" ] && [ "$REPLACED" != "$REQUESTED" ]; then
+          bad "G5② 恒等映射下 replaced=$REPLACED ≠ requested=$REQUESTED ⇒ 提取键与写回键不同源，真译文会整段漏嵌"
+        elif [ -z "$REPLACED" ] && [ -n "$NSEG" ] && [ "$NSEG" != "0" ]; then
+          bad "G5② 写回执里读不到 replaced/requested 计数（$APPLY_LINE）⇒ 闭环判据无从执行"
+        fi
+      fi
+    fi
+
+    # ③ stat：产物在不在、多大
+    if [ "$G5_RUN_OK" != "1" ]; then
+      warn "  G5③④ 跳过（远端没产出，查尺寸/取回无从执行）"
+    else
+      T0="$(now_ms)"
+      HS="$(printf '{"mode":"stat","rel":"%s"}' "$G5_OUT_REL" | base64 | tr -d '\n')"
+      printf '%s\n' "$HS" >"$G5/stat.in"
+      if ! "${SSH[@]}" >"$G5/stat.out" 2>"$G5/stat.err" <"$G5/stat.in"; then
+        bad "G5③ 查远端产物尺寸失败（远端没做出来 / 路径不合规都会走到这里）：$(tail -3 "$G5/stat.err" | tr '\n' ' ')"
+      else
+        STAT_MS=$(( $(now_ms) - T0 ))
+        WANT_SIZE="$(jf 'd.get("size",0)' <"$G5/stat.out")"
+        WANT_SHA="$(jf 'd.get("sha256","")' <"$G5/stat.out")"
+        if [ -z "$WANT_SHA" ] || [ "$WANT_SIZE" = "0" ]; then
+          bad "G5③ stat 回执不合法（size=$WANT_SIZE sha=${WANT_SHA:0:12}…）"
+        else
+          ok "G5③ 远端产物 $WANT_SIZE B（sha=${WANT_SHA:0:12}…，查尺寸 ${STAT_MS}ms）"
+
+          # ④ get：原样字节流回主站。★ stdout 只有文件字节，所以**不能**经过任何字符串变量，
+          #    直接重定向落盘；收尾再 Sync 由文件系统保证（这里靠 shell 的重定向顺序）。
+          T0="$(now_ms)"
+          HG="$(printf '{"mode":"get","rel":"%s"}' "$G5_OUT_REL" | base64 | tr -d '\n')"
+          printf '%s\n' "$HG" >"$G5/get.in"
+          if ! "${SSH[@]}" >"$G5/artifact.pdf" 2>"$G5/get.err" <"$G5/get.in"; then
+            bad "G5④ 取回失败：$(tail -3 "$G5/get.err" | tr '\n' ' ')"
+          else
+            GET_MS=$(( $(now_ms) - T0 ))
+            GOT_SIZE="$(wc -c <"$G5/artifact.pdf" | tr -d '[:space:]')"
+            GOT_SHA="$(DIGEST "$G5/artifact.pdf")"
+            MAGIC="$(head -c 4 "$G5/artifact.pdf" | tr -d '[:space:]')"
+            if [ "$GOT_SIZE" = "$WANT_SIZE" ] && [ "$GOT_SHA" = "$WANT_SHA" ] && [ "$MAGIC" = "%PDF" ]; then
+              ok "G5④ 取回 $GOT_SIZE B 用 ${GET_MS}ms，sha256 与远端**逐字节等值**（PDF 魔数在位）"
+            else
+              bad "G5④ 取回件与远端不等（远端 size=$WANT_SIZE sha=${WANT_SHA:0:12}… / 主站 size=$GOT_SIZE sha=${GOT_SHA:0:12}… magic=$MAGIC）"
+              bad "    ⇒ 客户会拿到坏文件；这一条不判就是把『传输被截断』当成上传成功（老实现 4MB 缓冲静默截断的同族）"
+            fi
+            # 定档读数（★ 阈值按**产物尺寸**算：09-29 实测产物可达输入 3.4 倍，按输入定档会低估回传）
+            python3 - "$LOCAL_SIZE" "$PUT_MS" "$WANT_SIZE" "$GET_MS" "$RUN_MS" "$STAT_MS" <<'PY' || warn "  定档读数打印失败（不影响判据）"
+import sys
+in_b, put_ms, out_b, get_ms, run_ms, stat_ms = (float(x or 0) for x in sys.argv[1:7])
+print("  ——— 定档读数（只读不判，供 dispatch_apply.sh 的阈值拍板）———")
+print("    输入 %.2fMB / 产物 %.2fMB ⇒ 膨胀 %.1f×" % (in_b/1048576, out_b/1048576, (out_b/in_b) if in_b else 0))
+print("    上传 %dms（%.2fMB/s）· 远端转换 %dms · 查尺寸 %dms · 取回 %dms（%.2fMB/s）"
+      % (put_ms, (in_b/1048576)/(put_ms/1000) if put_ms else 0, run_ms, stat_ms,
+         get_ms, (out_b/1048576)/(get_ms/1000) if get_ms else 0))
+print("    \u26a0\ufe0f 单账号并发=1（远端 fpd.slice 只放一单）：派发吞吐按『串行 × 转换耗时』估，别按带宽估")
+PY
+            warn "  ℹ️ 本次在远端 w/preflight_g5/ 留了两份文件（in.pdf / translated.pdf），"
+            warn "     fpdexec 没有删除指令，它们会由 fpd-sweep.timer 按 TTL 自动回收，不必手工清。"
+          fi
+        fi
+      fi
+    fi
+  fi
 fi
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then
-  echo "✅ preflight 全过（$PASS 项）：两侧环境一致，可以走 scripts/dispatch_apply.sh 开闸"
+  echo "✅ preflight 全过（$PASS 项）：两侧环境一致 **且传输腿真机往返过一次**，可以走 scripts/dispatch_apply.sh 开闸"
   exit 0
 fi
 echo "❌ preflight 未过（通过 $PASS / 失败 $FAIL）⇒ **保持派发关闭**，先修再开"

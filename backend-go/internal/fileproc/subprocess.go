@@ -11,6 +11,7 @@ package fileproc
 import (
 	"bytes"
 	"context"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -109,8 +110,37 @@ func runSubprocess(ctx context.Context, timeout time.Duration, bin string, args 
 //   - 监控指标：启动/成功/失败/超时/SIGKILL 次数，供 /metrics 导出
 //
 // stdin 非 nil 时经标准输入传入 payload。返回分离后的 stdout/stderr 与错误。
+//
+// ★ 2026-09-29（派发死腿改造）：本函数只是 runSubprocessGatedStream 的**内存缓冲薄委托**
+//
+//	（stdout 收进 4MB 限量缓冲）。远端 fpdexec 的 get 模式要求「stdout 只有产物字节」且动辄
+//	几 MB 到几十 MB，必须边收边落盘，所以那条腿直接用流式版；两条腿共用同一套
+//	超时／整组击杀／指标口径，不分叉（分叉过一次就长出一个"本地有帽、远端没帽"的形态）。
 func runSubprocessGated(ctx context.Context, timeout time.Duration, bin string, args []string, stdin []byte,
 	gate func(context.Context) func()) ([]byte, []byte, error) {
+	var outBuf limitedBuffer
+	outBuf.limit = 4 << 20
+	var stdinR io.Reader
+	if stdin != nil {
+		stdinR = bytes.NewReader(stdin)
+	}
+	stderr, err := runSubprocessGatedStream(ctx, timeout, bin, args, stdinR, &outBuf, gate)
+	return outBuf.b.Bytes(), stderr, err
+}
+
+// runSubprocessGatedStream 流式版受控子进程执行器：stdin 由调用方给 Reader（可为大文件本体），
+// stdout **直接写进调用方的 Writer**（可为临时文件句柄），只有 stderr 留在限量缓冲里给排障用。
+//
+// ★ 为什么必须有这一条而不是复用 runSubprocessGated：它的 stdout 是 4MB 限量缓冲，
+//
+//	超出部分**静默丢弃**（这是当年防 OOM 的设计，对文本输出是对的）。而「远端产物回拉」
+//	拿它当字节源就会得到一份被截断的 PDF，且退出码还是 0 —— 正是本仓反复栽过的
+//	「结果看着对、东西其实是半截」。所以产物一律落文件，并在调用侧按 sha256 逐字节比对。
+//
+// 其余语义与 runSubprocessGated 逐条一致：注入闸（nil=不取闸，见上方死锁说明）、
+// CommandContext＋Setpgid 整组击杀、WaitDelay、指标计数。
+func runSubprocessGatedStream(ctx context.Context, timeout time.Duration, bin string, args []string,
+	stdin io.Reader, stdout io.Writer, gate func(context.Context) func()) ([]byte, error) {
 	if gate != nil {
 		release := gate(ctx)
 		defer release()
@@ -135,12 +165,13 @@ func runSubprocessGated(ctx context.Context, timeout time.Duration, bin string, 
 	}
 	cmd.WaitDelay = 5 * time.Second
 
-	var outBuf, errBuf limitedBuffer
-	outBuf.limit, errBuf.limit = 4<<20, 4<<20
-	cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
-	if stdin != nil {
-		cmd.Stdin = bytes.NewReader(stdin)
+	var errBuf limitedBuffer
+	errBuf.limit = 4 << 20
+	cmd.Stderr = &errBuf
+	if stdout != nil {
+		cmd.Stdout = stdout
 	}
+	cmd.Stdin = stdin
 	err := cmd.Run()
 	duration := time.Since(startTime)
 
@@ -156,7 +187,7 @@ func runSubprocessGated(ctx context.Context, timeout time.Duration, bin string, 
 		RecordSuccess(duration)
 	}
 
-	return outBuf.b.Bytes(), errBuf.b.Bytes(), err
+	return errBuf.b.Bytes(), err
 }
 
 // sweepStalePdfDocxCache 清扫超过 24h 的 pdfdocx_*.docx 崩溃残留。

@@ -76,7 +76,19 @@ const manualMark = "!manual"
 // 抬一档版本号＝让那一份旧译文自动作废、下一次 greet 用新卫生重翻——
 // ⚠️ 这是这条链的通用口径：**凡是改"译文出栈后的处理"，都要顺手抬这个版本号**，
 // 否则改动只对新生成的译文生效，老缓存会一直把修前的形态投给客户（同"换件没修"那一族）。
-const cannedPromptRev = "082x-4"
+//
+// ★ 082x 第十条（2026-09-29 用户第三次带截图报同族症状）**没有抬这一档，理由是射程**：
+// 这一批改的是**对话正文出栈**的词表（`sanitizeVisitorText` 那条链），而对话正文根本不落缓存；
+// canned 欢迎词／chips 的译文文本与契约段一字未动（它们走的是另一张 `translationEchoMarkers`），
+// 缓存里没有需要作废的形态 ⇒ 抬档只会让每台挂件首启现翻一遍，零收益（同《部署指南》〇-AC 那条口径）。
+// ⚠️ 将来若动的是 `translationEchoMarkers`／`translateContract`／`translateOnce` 的出栈处理，
+// 按上面那条通用口径**必须抬**，别拿本段当"这族改动都可以不抬"的先例。
+//
+// ★ 092x 红腿三（2026-09-29）**这一批就属于"必须抬"那一档**：改的是 translateOnce 的出栈处理
+// （品牌名以 ⟦BRAND⟧ 过桥、出栈按语种档还原，见 brand_guard.go）。
+// 库里那份日文欢迎词正是带着「能与」躺着的状态——它指纹匹配、会被原样命中，
+// 只加还原逻辑救不到它，必须抬一档让旧译文自动作废、下一次 greet 用新链路重翻。
+const cannedPromptRev = "092x-1"
 
 // translationEchoMarkers 翻译模型复述**指令本身**时的说法（★ 082x 第八条，现网日文首屏实证）。
 //
@@ -196,6 +208,9 @@ func (e *Engine) translateOnce(ctx context.Context, client *llm.Client, text, ui
 	case strings.TrimSpace(text) == "":
 		return "", errors.New("源文为空")
 	}
+	// ★ 092x 红腿三：品牌名不在翻译途中过桥，出栈就没有保证（现网实证：日文轮把「能言」写成「能与」）。
+	// 送翻前换成不可译占位符，出栈再按语种档还原（机制与判据见 brand_guard.go）。
+	src, srcHasBrand := protectBrandForTranslation(text)
 	prompt := "把下面这段" + purpose + "翻译成 " + label +
 		"，用途：" + scene + "。要求：保持原意、行数与语气，一行输入对应一行输出，" +
 		"不要加解释、不要加引号、不要输出思考过程，也不许补原文没有的信息。\n" +
@@ -204,7 +219,8 @@ func (e *Engine) translateOnce(ctx context.Context, client *llm.Client, text, ui
 		// 一个叫法对不上就是对外错报（判据表与交叉锁见 reply_lang.go 的 pointsTermByLang）。
 		// 这段与品牌名口径一起收进 translateContract：提示词与 canned 缓存指纹共用同一份，不分叉。
 		translateContract(uiLang) +
-		"\n---\n" + text + "\n---"
+		brandTokenRuleLine(srcHasBrand) +
+		"\n---\n" + src + "\n---"
 	out, _, usage, err := client.Chat(ctx, localizeTemperature, maxTokens,
 		[]llm.Message{{Role: "user", Content: prompt}})
 	if err != nil {
@@ -243,6 +259,22 @@ func (e *Engine) translateOnce(ctx context.Context, client *llm.Client, text, ui
 			observability.Warn(ctx, "assist.engine 译文汉字残留补翻未改善，保留上一稿",
 				"lang", uiLang, "count", len(leaks), "leaks", strings.Join(leaks, ","))
 		}
+	}
+	// ★ 092x 红腿三：品牌名还原放在**最后一步**（补翻之后）。
+	// 顺序是刻意的：占位符在译文里时，上面那两条判残/剥括号都把它当普通拉丁串放过，
+	// 不会被误剥；等这些都做完了再还原成该语种档的品牌名，还原出来的字形就不会再经过任何改写。
+	//
+	// 占位符与任何品牌痕迹都不在＝模型把名字整块吃了：这里**只 WARN 不判失败**（口径与理由见
+	// brand_guard.go 的 restoreBrandAfterTranslation）——判失败的后果是让访客退回看中文原文，
+	// 那是拿更重的「语言保证」去换一个字面上的自称缺失，方向反了。
+	// 但占位符残渣必须清掉：那是我们的内部记号，以任何形态出现在客户屏幕上都是机制外露。
+	if srcHasBrand {
+		restored, ok := restoreBrandAfterTranslation(out, uiLang)
+		if !ok {
+			observability.Warn(ctx, "assist.engine 译文里没有品牌名（占位符被模型吃掉），按译文发出并留证据",
+				"kind", purpose, "lang", uiLang, "before", firstRunes(out, 120))
+		}
+		out = stripBrandTokenResidue(restored)
 	}
 	return out, nil
 }
