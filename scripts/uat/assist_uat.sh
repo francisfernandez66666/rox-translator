@@ -119,6 +119,36 @@ ck LG2-reply-not-empty '"reply":"[^"]' "$R"
 C=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$RL\",\"tok\":\"$TL\",\"message\":\"how much\",\"lang\":\"en\"}")
 ck LG3-en-chat-200 '^200$' "$C"
 
+# ---------- 2d. ★ 082x 第九条（2026-09-29 用户实测「中文前台+英文问题，回复的还是中文」）----------
+# 用户定稿口径：**打开词按前台语言，后续回复按访客这句话的语言**。
+# 本段（mock 规则模式、无真 LLM）锁的是接管**是否发生**——用 source 判，因为它不会被兜底文案骗过：
+#   中文话术直配 = 没接管；让位给模型后掉到知识兜底 = 接管发生了。
+# 为什么不在这里断言"英文回复"：真翻译行为由 engine 的假上游单测锁
+# （input_lang_test.go 的 TestWelcomeStaysOnUiLangWhileReplyFollowsInput 抓的是真发出去的补翻请求体），
+# 矩阵没有真模型，硬断言非中文只会得到一条恒红的假判据。
+# 三条腿缺一条都不算锁住：只留①的话，把接管写死成「一律非中文」也能绿。
+newgreet(){ curl -s "$B/api/assist/greeting?page=/&lang=$1"; }
+sidof(){ echo "$1" | python3 -c 'import sys,json;print(json.load(sys.stdin)["session"])'; }
+tokof(){ echo "$1" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tok"])'; }
+
+# ① 中文界面 + 英文提问（句里带话术关键词「价格」）：中文话术必须**让位**（接管前这里是 rule＝缺陷本体）
+RZ=$(newgreet zh); SZ=$(sidof "$RZ"); TZ=$(tokof "$RZ")
+R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SZ\",\"tok\":\"$TZ\",\"message\":\"what is the 价格 like\",\"lang\":\"zh\",\"page\":\"/\"}")
+ck LG4-zhui-enq-yields '"source":"fallback"' "$R"
+ck LG4-zhui-enq-not-empty '"reply":"[^"]' "$R"
+# ② 同一界面 + 纯中文提问：毫秒级话术直配不许被撤（把它一起让位＝把主路径打回慢路，是回退不是修复）
+RZ2=$(newgreet zh); SZ2=$(sidof "$RZ2"); TZ2=$(tokof "$RZ2")
+R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SZ2\",\"tok\":\"$TZ2\",\"message\":\"多少钱\",\"lang\":\"zh\",\"page\":\"/\"}")
+ck LG5-zhui-zhq-rule '"source":"rule"' "$R"
+# ③ 英文界面 + 中文提问：★ 反向接管（09-29 用户定稿「用什么语言问就用什么语言答」）⇒ 中文话术直出
+RZ3=$(newgreet en); SZ3=$(sidof "$RZ3"); TZ3=$(tokof "$RZ3")
+R=$(curl -s "$B/api/assist/chat" -H "$J" -d "{\"session\":\"$SZ3\",\"tok\":\"$TZ3\",\"message\":\"多少钱\",\"lang\":\"en\",\"page\":\"/\"}")
+ck LG6-enui-zhq-rule '"source":"rule"' "$R"
+# ④ 打开词那半边：中文界面的 greet 必须还是中文（接管只作用于对话，不许把 greet 也拖进去——
+#    它没有"访客输入"可比，且缓存键按界面语言落库，跟着输入走会让运营在管理台改的那句永远读不到）。
+HAS_CJK=$(curl -s "$B/api/assist/greeting?page=/&lang=zh" | python3 -c 'import sys,json,re;g=json.load(sys.stdin).get("greeting","");print("CJK" if re.search(r"[一-鿿]",g) else "NONE")')
+ck LG7-greet-zh-stays-chinese '^CJK$' "$HAS_CJK"
+
 # ---------- 3. R0.1 同义词归一：怎么充钱 ----------
 # ★ 修复（2026-09-18 闸门回归）：B1/B2 各用全新会话，不再复用 $SID——
 #   复用会让 B1「怎么充钱」进入的 recharge-guide 流程把 B2 的无意义输入当作流程答案吞掉，

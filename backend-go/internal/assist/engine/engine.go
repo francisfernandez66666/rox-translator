@@ -585,14 +585,28 @@ func parseSteps(js string) ([]FlowStep, error) {
 // 只在 llmReplyWith 里补翻，等于把兜底那一路继续漏着。故四道产物一律过 enforceReplyLang。
 // 为什么不会把合格答案拖去重翻，判据见 reply_lang_check.go 的 replyLangMismatch。
 func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL, uiLang string, history []store.Row) *Reply {
-	return e.enforceReplyLang(ctx, e.respond(ctx, sessionID, input, pageURL, uiLang, history), uiLang)
+	// ★ 082x 第九条（2026-09-29 用户实测「中文前台+英文问题，回复的还是中文」）：
+	// 下游只认一个语种——「本轮作答语言」，它＝界面语言打底、访客这句输入语言接管。
+	// 接管只发生在 Respond 这一处（本函数是回复的唯一出站咽喉），下游四道与补翻自动同步，
+	// 不再出现「提示词教英文、canned 闸门看中文」两套口径分叉。判据见 reply_lang.go。
+	answer := effectiveReplyLang(uiLang, input)
+	if answer != canonicalLang(uiLang) {
+		// INFO 且两条语种都带上：接管率只能靠这条计数看见。
+		// 它掉到 0 说明前端没送 lang 或访客全用中文问；它异常高说明界面语种送错了。
+		observability.Info(ctx, "assist.engine 访客输入语言与界面语言不符，本轮作答语言按输入接管",
+			"ui_lang", canonicalLang(uiLang), "answer_lang", answer, "chars", utf8.RuneCountInString(input))
+	}
+	return e.enforceReplyLang(ctx, e.respond(ctx, sessionID, input, pageURL, answer, history), answer)
 }
 
 // respond Respond 的四道主体（进行中的流程 / 话术直配 / 流程触发 / LLM+知识库＋兜底），
 // 本身不做语言收口——收口只在上层那一个咽喉，新增第五道时也自动被覆盖。
-func (e *Engine) respond(ctx context.Context, sessionID, input, pageURL, uiLang string, history []store.Row) *Reply {
-	// 访客界面语言是否允许直接吃中文 canned 文案（判据只认中文系，空语言按中文放行，见 reply_lang.go）
-	cannedOK := visitorWantsChinese(uiLang)
+// ★ 082x 第九条起，这里的 answerLang 是上层接管后的**本轮作答语言**（不是裸界面语言）：
+// 中文界面里的英文提问会拿到 en，于是下面这三道中文 canned 路全部让位，
+// 且第 4 道的提示词、品牌名、计费单位口径都按英文档走。
+func (e *Engine) respond(ctx context.Context, sessionID, input, pageURL, answerLang string, history []store.Row) *Reply {
+	// 本轮作答语言是否允许直接吃中文 canned 文案（判据只认中文系，空语言按中文放行，见 reply_lang.go）
+	cannedOK := visitorWantsChinese(answerLang)
 	// 1. 进行中的流程：输入命中其他意图（话术/其他流程）则退出流程让位，否则推进步骤
 	//    ★ 082x：非中文访客不进流程——流程的每一步 ask 都是中文写死的多轮引导，
 	//    比单条话术更"缠人"（连问三步中文），让位后访客的诉求由第 4 道按对方语言答。
@@ -619,7 +633,7 @@ func (e *Engine) respond(ctx context.Context, sessionID, input, pageURL, uiLang 
 			if len(hits) > 4 {
 				hits = hits[:4]
 			}
-			return e.llmReplyWith(ctx, input, history, hits, uiLang)
+			return e.llmReplyWith(ctx, input, history, hits, answerLang)
 		}
 		content := asStr(sc["content"])
 		if content == "" {
@@ -635,7 +649,7 @@ func (e *Engine) respond(ctx context.Context, sessionID, input, pageURL, uiLang 
 		}
 	}
 	// 4. LLM + 知识库
-	return e.llmReply(ctx, input, history, uiLang)
+	return e.llmReply(ctx, input, history, answerLang)
 }
 
 // advanceFlow 推进进行中的流程；不在流程中或被新意图抢占（已退出）时返回 nil
