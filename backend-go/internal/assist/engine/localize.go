@@ -70,7 +70,26 @@ const manualMark = "!manual"
 // cannedPromptRev canned 译文所依据的「固定句式」版本号。
 // 改 translateOnce 里那段与语种无关的固定要求（行数/不加解释/温度/max_tokens 口径）时 +1，
 // 它进缓存指纹（见 localizeContract），一改就让全网 canned 译文在下一次 greet 时重翻。
-const cannedPromptRev = "082x-3"
+//
+// ★ 082x 第八条抬到 082x-4 的**不是提示词**，而是译文出栈后的卫生（剥口径复述）：
+// 库里已经躺着一份带脏尾巴的日文欢迎词，它指纹匹配、会被原样命中，光加剥逻辑救不到它。
+// 抬一档版本号＝让那一份旧译文自动作废、下一次 greet 用新卫生重翻——
+// ⚠️ 这是这条链的通用口径：**凡是改"译文出栈后的处理"，都要顺手抬这个版本号**，
+// 否则改动只对新生成的译文生效，老缓存会一直把修前的形态投给客户（同"换件没修"那一族）。
+const cannedPromptRev = "082x-4"
+
+// translationEchoMarkers 翻译模型复述**指令本身**时的说法（★ 082x 第八条，现网日文首屏实证）。
+//
+// 与 internalEchoMarkers 的区别：那张表管"对话模型把提示词段名吐进正文"（【系统现值】这类），
+// 这张表管"翻译模型把我给它的翻译要求当内容写进译文"（"行数一致""不许""翻译成"）。
+// 两类都只在**括号段**里出现才删，且收的都是中文指令用词——
+// 翻成英/俄/泰的正文里不可能自然出现这些字串，误伤面接近零。
+// ⚠️ 刻意不收「品牌名」「计费单位」这两个词本身：它们是**话题**而不是指令，
+// 客户问"你们品牌名怎么来的"时译文里真会出现「品牌名」，收了就是把答案吃掉。
+var translationEchoMarkers = []string{
+	"行数一致", "行数不变", "保持原意", "不要加解释", "不许", "禁止", "按语种",
+	"译文", "翻译成", "译文里", "目标语言", "要求：", "上一版", "界面语言", "原文照抄",
+}
 
 // translateContract 翻译路上那两条**对外口径**（品牌名 + 计费单位），拼提示词和算缓存指纹都用它。
 // 单一事实源仍是 brandNameFor／pointsTranslationLine 那两张表，这里只负责"把它们合成一段文本"。
@@ -197,6 +216,19 @@ func (e *Engine) translateOnce(ctx context.Context, client *llm.Client, text, ui
 	out = cleanTranslated(out)
 	if out == "" {
 		return "", errors.New("译文为空")
+	}
+	// ★ 082x 第八条：译文里混进**对翻译要求的复述**时剥掉那一段（现网实证：日文首屏尾巴上挂着
+	// 「（行数一致、品牌名「能言」保持、ポイント…）」——模型把指令原文当内容写进了译文，
+	// 而这条译文会被 localize 落库缓存，于是脏尾巴在访客屏幕上常驻，直到口径版本号再抬一档）。
+	// 只剥括号段而不是整条判失败：括号外那半句是**好译文**，扔掉它等于让英文/日文访客退回看中文欢迎词。
+	// 剥完什么都不剩才判失败（走调用方的 fail-soft 出中文原文，与「绝不编一份译文」同一条口径）。
+	if stripped := dropParentheticals(out, translationEchoMarkers); stripped != out {
+		observability.Warn(ctx, "assist.engine 译文夹带翻译口径复述，已剥掉该括号段",
+			"kind", purpose, "lang", uiLang, "before", len(out), "after", len(stripped))
+		out = strings.TrimSpace(stripped)
+		if out == "" {
+			return "", errors.New("译文除口径复述外没有内容")
+		}
 	}
 	// ★ 082x 第七条：译文里留着**没翻的中文词**时补翻一次（现网实证：英文首屏 "credits充值"、
 	// 日文首屏「翻訳什么？」——术语翻对了，句子却只翻半句，同一类事故的另一面）。

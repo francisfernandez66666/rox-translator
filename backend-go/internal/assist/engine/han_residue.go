@@ -40,7 +40,19 @@ import (
 // 误报=白花一次调用，漏报=维持现状（跟今天没这条时一样），两种都不会把正文改坏。
 // 逐字核对过日文正字法：值 U+503C 是简体写法，日文用 値 U+5024；「网/页/运/输/费/业/术/优/获/产/
 // 让/说/设/记/远/层/简」同理都是日文不写的字形；「么」是纯简体字（日文「什麼」写作「何」）。
-const simplifiedOnlyRunes = "译积关书询录价运网页输费业术优获产么让说设记远层简值"
+const simplifiedOnlyRunes = "译积关书询录价运网页输费业术优获产么让说设记远层简值对邮们搜"
+
+// jaChineseWordForms 中文词形：每个字**单独看**日文都可能写（文、件、信、息都有日本汉字形态），
+// 但**这一组合**日文不这么写（★ 082x 第八条：现网日文首屏残留「文件翻訳」，
+// 上一档字形判据完全抓不到——文和件都不在简体独有表里，而日文该写「ファイル翻訳」）。
+//
+// 收录门槛比上面那张字表更严：只收「日文另有固定写法、且我们在做的是中→日翻译」的词，
+// 且候选仍必须**能在中文源文里原样找到**才判残（见 jaLeakSubstrings）。
+// 刻意不收「会話／情報」这类日文里确实存在的写法，收了就是把好译文送去重写。
+var jaChineseWordForms = []string{
+	"文件", "邮件", "搜索", "软件", "电脑", "手机号", "为什么", "什么时间",
+	"多少钱", "怎么", "咱们", "信息", "网址", "账号", "网盘",
+}
 
 // hanResidueRuns 找译文里「没翻成的中文片段」，按语种分档；返回去重后的片段列表（空＝干净）。
 //
@@ -84,7 +96,7 @@ func jaLeakSubstrings(src string, runs []string) []string {
 		for i := 0; i < len(rs); i++ {
 			for j := i + 2; j <= len(rs) && j <= i+6; j++ {
 				cand := string(rs[i:j])
-				if !strings.Contains(src, cand) || !containsSimplifiedOnlyRune(cand) {
+				if !strings.Contains(src, cand) || !(containsSimplifiedOnlyRune(cand) || containsJaChineseWordForm(cand)) {
 					continue
 				}
 				if len(cand) > len(best) {
@@ -126,6 +138,17 @@ func hanRunsOf(s string) []string {
 // containsSimplifiedOnlyRune 段里是否含简体字独有的字形（日文档判残用）。
 func containsSimplifiedOnlyRune(s string) bool {
 	return strings.ContainsAny(s, simplifiedOnlyRunes)
+}
+
+// containsJaChineseWordForm 段里是否含「日文不这么写」的中文词形（日文档判残第二档，
+// 管的是字形相同、词形不同的那一批：文件／邮件／信息——见 jaChineseWordForms 的收录门槛）。
+func containsJaChineseWordForm(s string) bool {
+	for _, w := range jaChineseWordForms {
+		if strings.Contains(s, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // lineCountOf 非空行数。补翻前后必须一致——chips 那条路靠行数拆回（LocalizeChips），

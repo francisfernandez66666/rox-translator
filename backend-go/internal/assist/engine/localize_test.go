@@ -162,8 +162,80 @@ func TestHanResidueRunsByLocale(t *testing.T) {
 	}
 }
 
-// TestRepairHanResidueAdoptsOnlyImprovement 补翻三条硬判据：残片变少、行数不变、调用成功。
+// TestHanResidueRunsCatchesChineseWordForms ★ 082x 第八条：字形都对、词形是中文的那一档残留。
+//
+// 现网读数：日文首屏拿到「文件翻訳・会話翻訳」——上一档判残只认「简体独有字形」，
+// 而 文/件 两个字日文都写（文件＝文書/ファイル），于是最典型的中文词形照样放行。
+// 这条断言锁两侧：中文词形要抓到，日文正常汉字词（会話／企業／翻訳／情報系）不许抓。
+func TestHanResidueRunsCatchesChineseWordForms(t *testing.T) {
+	src := "你好，我是能言 AI 助手，文件翻译、对话翻译、企业术语库、积分充值、邮件通知"
+	cases := []struct {
+		out  string
+		want []string
+	}{
+		// 现网形态：中文词形「文件」照抄进日文（日文该写 ファイル／文書）
+		{"ファイル翻訳は元のレイアウトを保持", nil}, // 全假名＋日文汉字形态，一个中文词形都不许抓
+		{"文件翻訳・会話翻訳・企業用語ベース", []string{"文件翻"}},
+		// 日文正常汉字词一律不许判残：这些词里的每一段都能在源文里对上，但日文本来就这么写
+		{"文書翻訳・会話翻訳・企業用語ベース・ポイント", nil},
+		// 「邮件／信息／搜索」同族：单字合法、组合是中文
+		{"メールではなく邮件で連絡ください", []string{"邮件"}},
+	}
+	for _, c := range cases {
+		if got := hanResidueRuns("ja", src, c.out); strings.Join(got, "|") != strings.Join(c.want, "|") {
+			t.Errorf("ja 判残 %q ⇒ %v，期望 %v", c.out, got, c.want)
+		}
+	}
+	// 反向锁：中文词形表**不能**把英文档的判据放宽——en 段里有汉字就判残，跟词形无关
+	if got := hanResidueRuns("en", src, "please upload the 文件"); len(got) == 0 {
+		t.Fatalf("en 档漏判：汉字段必须判残，实际 %v", got)
+	}
+}
+
+// TestTranslateOnceStripsContractEcho ★ 082x 第八条：翻译模型把**翻译要求本身**写进译文时要剥掉，
+// 且剥完不能把整条译文判成空（现网实证：日文首屏尾巴挂着「（行数一致、品牌名「能言」保持…）」，
+// 而这一条被当成功译文**落了库**——脏尾巴从此常驻英文/日文访客的首屏）。
+func TestTranslateOnceStripsContractEcho(t *testing.T) {
+	ctx := context.Background()
+	src := "你好，我是能言 AI 助手"
+
+	t.Run("夹带口径复述：剥括号段、留好译文、落的缓存是干净那份", func(t *testing.T) {
+		st := newSeqStub(t, "こんにちは、能言のAIアシスタントです（行数一致、品牌名「能言」保持、ポイント）")
+		e := st.engine(t)
+		got := e.LocalizeGreeting(ctx, src, "ja")
+		if strings.Contains(got, "行数一致") || strings.Contains(got, "品牌名") {
+			t.Fatalf("译文里的口径复述没剥净：%q", got)
+		}
+		if !strings.Contains(got, "AIアシスタント") {
+			t.Fatalf("剥复述时把好译文一起吃掉了：%q", got)
+		}
+		if cached := e.db.GetConfig("i18n:welcome:ja", ""); strings.Contains(cached, "行数一致") {
+			t.Fatalf("脏译文还是落了库（下次 greet 直接命中它）：%q", cached)
+		}
+	})
+
+	t.Run("整条都是口径复述：判失败出中文原文，不落缓存", func(t *testing.T) {
+		st := newSeqStub(t, "（行数一致、品牌名一律写作能言、不许加解释）")
+		e := st.engine(t)
+		if got := e.LocalizeGreeting(ctx, src, "ja"); got != src {
+			t.Fatalf("译文只剩复述时应按失败处理、原样出中文，实际：%q", got)
+		}
+		if cached := e.db.GetConfig("i18n:welcome:ja", ""); cached != "" {
+			t.Fatalf("失败的译文被写进缓存了：%q", cached)
+		}
+	})
+
+	t.Run("正常带括号的译文不许被剥（负向对照，防止把答案吃掉）", func(t *testing.T) {
+		st := newSeqStub(t, "Hello, I'm LangCross (available 24/7)")
+		e := st.engine(t)
+		if got := e.LocalizeGreeting(ctx, src, "en"); got != "Hello, I'm LangCross (available 24/7)" {
+			t.Fatalf("正常括号说明被误伤：%q", got)
+		}
+	})
+}
+
 // 任一不成立一律保留上一稿——补翻是修饰，不许拿一份没验过的新稿把业务数字改坏。
+// TestRepairHanResidueAdoptsOnlyImprovement 补翻三条硬判据：残片变少、行数不变、调用成功。
 func TestRepairHanResidueAdoptsOnlyImprovement(t *testing.T) {
 	ctx := context.Background()
 	src := "你好，我是能言 AI 助手\n积分充值随时开通"
