@@ -297,6 +297,33 @@
   ⇒ 进矩阵前 `register_device_daily_limit`/`register_global_daily_limit` 开 100000，段内自压、跑完钉回；
   `rate_limits` 的滚动 24h 窗**不清就把下一轮判红**。
 
+### 11. 计费三把尺子与平台承担成本（★ 2026-09-29 〇-AD 立为硬约定）
+
+- **单一事实源**＝`backend-go/internal/store/billing_platform_cost.go` 里的四个常量
+  （`RealDebitPred`／`PlatformTaskTypeExclPred`／`UnattributedTraceExclPred`／`CustomerUsagePred`）
+  加带列前缀的 `CustomerUsagePredWith(prefix)`。**新增或改动任何「消耗量」读腿一律引用常量，禁止再抄字面量、禁止再造第四把尺子**
+  ——这批 bug 的形态从来不是某条腿写错，而是五条腿各拿一把尺子各数各的账。
+- 三把尺子的射程，不许互相顶替：
+  ① `RealDebitPred`（`charge_kind IN ('','charge')`）**只管金钱语义**（退款消耗核算这类「到底扣了多少钱」）；
+  ② `PlatformTaskTypeExclPred`（排 `kb_embed`/`system_task`/`pack_scrape`/`evals` 四个用途标签）**管额度侧**
+  ＝日计数器 `usage_daily`、部门/组织月度预算墙、收银台「今日/本月已用」；
+  ③ `CustomerUsagePred`＝②＋排无归因留痕（`NOT (charge_kind IN ('log','settle') AND COALESCE(user_id,0)=0)`）
+  **管客户面显示**＝个人/组织看板、租户明细页与 CSV、自服务账单的日序列与流水分页、OpenAPI 用量、超管按用户聚合。
+- 三条反证（合并尺子之前先读这三条，都是本批真踩）：
+  拿 ① 当客户面尺子 ⇒ **免费期/策略免扣**（`ops_policy` 的 `mode_rules.<mode>.charge=false`）下客户自己下单的流水也是 `'log'`，
+  「我的用量／明细／CSV」整段抹空（判据现场＝run_uat **T59**，`api_uat.sh` B8 段压的 `uat_promo` 窗口）；
+  拿 ① 当额度尺子 ⇒ `billing_enforced=0` 的租户全部流水都是 `'log'`，日额与部门预算判成「一点没用」，**预算墙形同虚设**
+  （那是拿「防超支」换「防误扣」，方向反了）；
+  只用 ② 排平台行 ⇒ uid=0 的留痕/结算行（现网「系统/后台任务」一行 337,819 积分的形态，真实用户合计只 ≈725）回到客户账单。
+- **平台承担的成本绝不进客户额度**：写点唯一入口 `llm.WithPlatformCost(ctx, reason)`（reason 名单＝`internal/llm/platform_cost.go`
+  的 `Platform*` 常量），`ChargeUsageRealtime` 命中平台分支时**只记留痕行**——既不 `collector.AddBilled`、也不扣租户余额、也不撞预算墙。
+  用途标签名单与 `store.PlatformTaskTypeExclPred` **跨包逐字同步**，锁在
+  `internal/api/platform_cost_charge_test.go` 的 `TestPlatformCost08AD2_LabelListsAgree`（改名式破坏必须当场红）。
+  自己已在别处记过账的平台任务（`engine.RebuildKBIndex`）要带 `llm.WithSelfLedgeredUsage(ctx)` 抑制出站回调，否则同一笔用量出两行。
+- **平台承担这一档只在超管面出栈**：`/api/billing/usage/cost`＝`requireAdminUser`（level≥4）＋`tenant_id==0`，
+  租户管理员 403、匿名 401；客户面任何页面／导出／对外接口**不得出现该字段**。改这块时先确认读点还在这一道闸后面。
+
+
 ---
 
 ## 二、提交前闸门（必须全绿）
