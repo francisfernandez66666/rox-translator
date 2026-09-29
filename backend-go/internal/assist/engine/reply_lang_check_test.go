@@ -559,3 +559,108 @@ func countHan(s string) int {
 	}
 	return n
 }
+
+// TestSanitizeDropsJapaneseNarration ★ 093x（2026-09-30 真机挂件复问）：日文轮正文尾部那句
+// 「（※日本語で回答するため…考慮して翻訳を実施。）」是模型在**交代自己的作答动作**，
+// 而这一族此前两条腿全瞎——删除清单收的是中文指令用词，观测腿对日文轮整档豁免，
+// 于是既没剥也没记，只能靠用户截图发现。本条把现网原文钉成基线。
+func TestSanitizeDropsJapaneseNarration(t *testing.T) {
+	got := sanitizeVisitorText(leakReply093x)
+	for _, want := range []string{"で回答するため", "翻訳を実施", "考慮して"} {
+		if strings.Contains(got, want) {
+			t.Fatalf("日文旁白没剥净（残留 %q）：%q", want, got)
+		}
+	}
+	// 同一份原文里的另一半残渣：那圈没有目标的方括号必须在这一道里一起收掉
+	// （否则"末道卫生"只管圆括号，客户端继续看到 markdown 语法残骸）
+	if strings.ContainsAny(got, "[]") {
+		t.Fatalf("裸方括号没在 sanitize 这一道里收掉（只拆不接＝腿没挂上）：%q", got)
+	}
+	// 正文一个字都不许跟着丢：报价数字与那句"请把原文发我"是客户要看到的全部内容
+	for _, keep := range []string{"150ポイント", "400ポイント", "1,000文字", "原文を送信いただければ"} {
+		if !strings.Contains(got, keep) {
+			t.Fatalf("剥旁白把日文正文一起吃掉了 %q：%q", keep, got)
+		}
+	}
+	// 清单本身要有对照：这两条都是现网逐字形态，缺一条就是又一轮 whack-a-mole
+	for _, mk := range []string{"で回答するため", "翻訳を実施"} {
+		if !containsAny(mk, selfNarrationMarkers) {
+			t.Fatalf("旁白清单缺现网形态 %q", mk)
+		}
+	}
+}
+
+// TestSanitizeKeepsNormalParentheticalsAndBrackets 误伤对照：点名语种／提到"翻译"／方括号链接
+// 这三种**正常对外说明**都不许被动到。没有这一条，上面的绿灯可能只是"逢括号就删"。
+func TestSanitizeKeepsNormalParentheticalsAndBrackets(t *testing.T) {
+	cases := []string{
+		"12言語に対応しています（日本語・英語・中国語の12言語に対応）。",
+		"翻訳は人間がチェックします（翻訳は人間がチェックします）。",
+		"PDFのファイル形式をそのままに（PDFのファイル形式をそのままに）。",
+		"具体以注册页公示为准（具体以注册页公示为准）。",
+		"[料金表](/pricing) をご確認ください。", // 带目标的 markdown 链接：整条语法是完整的，不算残渣
+		"案内はここ [料金表。", // 未闭合的左方括号＝截断，原样留着
+	}
+	for _, in := range cases {
+		if got := sanitizeVisitorText(in); got != strings.TrimSpace(in) {
+			t.Errorf("正常正文被卫生改动了：\n 原：%q\n 出：%q", in, got)
+		}
+		// 这些都不该被观测腿当成旁白**删掉**（观测腿允许报出来攒证据，删除判据一条都不能命中）
+		if drop := dropParentheticals(in, visitorDropMarkers); drop != in {
+			t.Errorf("删除判据误命中：%q → %q", in, drop)
+		}
+	}
+}
+
+// TestUnwrapBrokenLinkBrackets ★ 093x 现网第二条残渣：「[ pricing ページで詳細を確認]」——
+// 模型写了 markdown 链接的方括号那一半，`(url)` 那一半根本没出。拆括号留文字，两种损失都没有。
+func TestUnwrapBrokenLinkBrackets(t *testing.T) {
+	got := unwrapBrokenLinkBrackets("ご案内できます。[ pricing ページで詳細を確認]")
+	if strings.ContainsAny(got, "[]") {
+		t.Fatalf("裸方括号没拆掉：%q", got)
+	}
+	if !strings.Contains(got, "pricing ページで詳細を確認") {
+		t.Fatalf("拆括号把链接文字一起吃掉了：%q", got)
+	}
+	for _, keep := range []string{
+		"[料金表](/pricing)",                   // 带目标＝完整语法
+		"[推奨",                               // 未闭合＝那是截断，留着现场
+		"[]",                                // 空括号
+		"[" + strings.Repeat("長", 60) + "]", // 超长内容不当链接文字处理
+	} {
+		if got := unwrapBrokenLinkBrackets(keep); got != keep {
+			t.Errorf("不该动的方括号被改了：%q → %q", keep, got)
+		}
+	}
+	// 已知的**取舍**（不是缺陷，写死在这里防"以后有人给它加白名单"看不见代价）：
+	// badge 式的「[推奨]」同样会被拆成「推奨」——括号里的话一个字都不丢，只少一圈括号。
+	if got := unwrapBrokenLinkBrackets("角括弧は [推奨] のように書きます"); strings.ContainsAny(got, "[]") ||
+		!strings.Contains(got, "推奨 のように") {
+		t.Errorf("badge 式方括号的取舍形态变了：%q", got)
+	}
+}
+
+// TestUnstrippedAsidesCatchesJapaneseNarrationVariant ★ 093x 观测腿第三条（点名语种＋交代作答动作）：
+// 删除清单只收现网逐字实证的那两条日文形态，**换个说法的同类旁白必须先在日志里露一次面**，
+// 否则下一族形态还是靠用户截图发现（本仓这一族已经连续四轮这么报上来）。
+func TestUnstrippedAsidesCatchesJapaneseNarrationVariant(t *testing.T) {
+	// 同一族但词表未命中的变体：日本語＋回答，却没写「で回答するため」
+	variant := "ご案内できます。（※日本語で回答していますのでご確認ください）"
+	got := unstrippedAsides("ja", variant)
+	if len(got) == 0 {
+		t.Fatalf("日文旁白变体没进观测清单（这条链又不能攒证据了）：%q", variant)
+	}
+	// 反向对照：只点名语种、或只提"翻译"这个动作，都不算旁白候选
+	for _, keep := range []string{
+		"12言語に対応しています（日本語・英語・中国語に対応）。",
+		"人手で確認します（翻訳は人間がチェックします）。",
+	} {
+		if got := unstrippedAsides("ja", keep); len(got) != 0 {
+			t.Errorf("正常说明被判成旁白候选：%q → %v", keep, got)
+		}
+	}
+	// 已被删除清单命中的形态**不再重复报**（报了也只会淹掉那些真正待定性的候选）
+	if got := unstrippedAsides("ja", leakReply093x); len(got) != 0 {
+		t.Errorf("已经会剥掉的旁白又报了一遍候选（日志里就没法只看新形态了）：%v", got)
+	}
+}

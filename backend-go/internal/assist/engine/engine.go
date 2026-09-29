@@ -604,8 +604,12 @@ func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL, uiLang 
 	// 顺序是刻意的——补翻可能整段重写，所以品牌归一必须排在它后面；
 	// 报价核验换的是服务端现算出来的句子，不含品牌名也不含汉字残留，放最后不会再被前两条动到。
 	rep = e.repairReplyHanResidue(ctx, answer, rep) // 红腿一：日文里嵌「文件」「費」这类混排
-	rep = e.guardReplyQuote(ctx, answer, rep)       // 红腿二：剥掉模型自算的算式与复算不出的总额
-	rep = e.guardReplyBrand(ctx, answer, rep)       // 红腿三：品牌名错形（拼音／「能与」）按语种档归一
+	// ★ 093x：上面两道都是"重写腿"，产物从没过末道卫生（见 rehardenReplyRewrite 的漏口说明）。
+	// 位置是刻意的：必须排在报价守卫与品牌归一**之前**——那两条吃的是最终出栈文本，
+	// 让它们对着没收口的稿子做判据，等于把"算式核验"和"控制序列残留"绑成谁先跑谁背锅。
+	rep = e.rehardenReplyRewrite(ctx, answer, rep)
+	rep = e.guardReplyQuote(ctx, answer, rep) // 红腿二：剥掉模型自算的算式与复算不出的总额
+	rep = e.guardReplyBrand(ctx, answer, rep) // 红腿三：品牌名错形（拼音／「能与」）按语种档归一
 	// ★ 082x 第十条：旁白观测（只记 WARN 不改正文）。词表追不上模型措辞是这条链的常态，
 	// 没有这条计数就只能等用户下一次带截图来报——见 reply_lang_check.go 的 unstrippedAsides。
 	e.observeVisitorAsides(ctx, answer, rep)
@@ -1015,6 +1019,63 @@ func (e *Engine) buildSystemPrompt(ctx context.Context, hits []entry, uiLang str
 func (e *Engine) postProcess(text, model string) *Reply {
 	content, keys := extractGoMarkers(e.canonicalizeGoMarkers(text))
 	return &Reply{Content: sanitizeVisitorText(content), Actions: e.FeatureLinksByKey(dedup(keys)), Model: model, Source: "llm"}
+}
+
+// rehardenReplyRewrite 补翻产物重新过一次末道卫生（★ 093x，2026-09-30 真机挂件复问实证）。
+//
+// 漏口在哪：postProcess 那三道（归一控制序列 → 摘控制序列 → sanitizeVisitorText）只作用于
+// **模型自己写的那一稿**。而两条补翻腿（enforceReplyLang 的整段翻译、repairReplyHanResidue 的
+// 带残片重写）都是拿 Chat 的返回直接 `rep.Content = …` 就出栈的——新稿从没再过一遍卫生。
+// 于是 082x 第五条早就写下的那句「补翻那一道还会把括号形态再换一次」在**出站那一刻无人接**：
+// 翻译模型见 ASCII 括号就照 ASCII 出、把【go:pricing】顺手改成一句人话括注，服务端照发。
+// 这一批把这一格补上：重写腿之后统一再过一次同样的三道，语义仍然只有 postProcess 那一份实现。
+//
+// 三条口径：
+//   - **动作只增不减**：新稿里摘出来的 key 并进去重后的 Actions，绝不覆盖已有按钮
+//     （摘不到是补翻把入口写没了，那属于内容问题，由 WARN 露出，不在这里删按钮）；
+//   - **一次都不多打上游**：这一道纯字符串处理，补翻的预算已经花完，这里绝不新增往返；
+//   - **变了才记**：内容与按钮一个都没动时直接返回，日志只在真发生二次收口时出一条 WARN，
+//     这条计数就是"补翻腿产出脏稿"的发生率——它降不下去说明提示词那一段还得再修。
+//     ⚠️ 判"变"必须先把首尾空白归一：sanitizeVisitorText 末尾自带 TrimSpace，
+//     拿逐字节等值去比会把"补翻多带了一个换行"的每条正常回答都报成一次收口（单测当场抓到过一次）。
+func (e *Engine) rehardenReplyRewrite(ctx context.Context, answerLang string, rep *Reply) *Reply {
+	if rep == nil || rep.Content == "" {
+		return rep
+	}
+	content, keys := extractGoMarkers(e.canonicalizeGoMarkers(rep.Content))
+	clean := sanitizeVisitorText(content)
+	// **只有语义变了才留痕**：sanitize 末尾那一次 TrimSpace 会把"补翻多带了个换行"也报成
+	// 一次二次收口，日志里全是这种噪声就再也看不见真正的控制序列泄漏了（现网单测当场抓到）。
+	if strings.TrimSpace(clean) == strings.TrimSpace(rep.Content) && len(keys) == 0 {
+		rep.Content = clean
+		return rep
+	}
+	before := firstRunes(rep.Content, 200)
+	rep.Content = clean
+	if len(keys) > 0 {
+		// 与 postProcess 同口径：未知 key 由 FeatureLinksByKey 出空，宁可不给按钮也不留控制序列
+		rep.Actions = mergeActionsByKey(rep.Actions, e.FeatureLinksByKey(dedup(keys)))
+	}
+	observability.Warn(ctx, "assist.engine 补翻产物带出控制序列或括号备注，已二次收口（重写腿不经过 postProcess）",
+		"lang", canonicalLang(answerLang), "source", rep.Source,
+		"markers", strings.Join(dedup(keys), ","), "before", before)
+	return rep
+}
+
+// mergeActionsByKey 按 Action.Key 去重合并（已有按钮优先，保持原顺序）。
+// 不写这一层而直接 append 的话，同一个入口会在按钮区出现两次——那是把一条卫生问题
+// 换成一条排版问题，不算修好。
+func mergeActionsByKey(existing, added []Action) []Action {
+	seen := make(map[string]bool, len(existing)+len(added))
+	out := make([]Action, 0, len(existing)+len(added))
+	for _, a := range append(append([]Action{}, existing...), added...) {
+		if a.Key == "" || seen[a.Key] {
+			continue
+		}
+		seen[a.Key] = true
+		out = append(out, a)
+	}
+	return out
 }
 
 // goMarkerOpeners / goMarkerClosers 动作标记可能被模型写成的括号形态（★ 082x 第五条）。
