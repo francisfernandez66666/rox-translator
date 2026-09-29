@@ -154,6 +154,13 @@ func (s *Server) handleKBScrapeSourceRun(w http.ResponseWriter, r *http.Request)
 		c.LLM = s.Engine.LLM
 	}
 	c.Probe = func() bool { return s.lowOccupancyForScrape() }
+	// ★ 2026-09-29 〇-AD：这里传的是 r.Context()，而 withTenant 中间件在超管带
+	//   `X-Tenant-ID` 切户时会把那个客户的 tenant_id 放进 ctx（server.go:675），
+	//   crawler 的 llm_gen 数据源又复用全局 `s.Engine.LLM`（挂着实时计费钩子）——
+	//   于是「超管点一次立即采集」会按 markup 扣掉当前被切进客户的积分，
+	//   台账上只留 task_type='translate' 的行，客户与自己账对不上且无从排查。
+	//   修法收在采集器自己的咽喉 crawler.RunDaily（平台承担标记），不换成
+	//   context.Background()：保留请求取消语义（关页面即停采集）。
 	done, err := c.RunDaily(r.Context())
 	if err != nil {
 		// F-64②：RunDaily 返回的 err 只有三类——store 未初始化、启用源列表查询失败、

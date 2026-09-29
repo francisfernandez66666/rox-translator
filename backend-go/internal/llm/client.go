@@ -851,7 +851,17 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 // EmbedBatch 批量嵌入，返回归一化向量列表。
 // 参数：texts=待嵌入文本列表，batchSize=可选分片大小（默认 32）。
 // 返回：归一化向量列表（顺序与输入一致）。
+//
+// ★ 2026-09-29 〇-AD：在本函数的**唯一入口**上打平台承担标记——Embed（单条）内部就
+//
+//	委托到这里（见 Embed），检索侧 engine.go 的逐条回源、file.go 的管线级预取、
+//	索引重建与 CLI 补向量全部共用这一条 HTTP 通路，故一处生效即覆盖全系统嵌入调用。
+//	落点选这里而不是各调用方逐个标：漏标一处就是继续扣客户积分，而这条政策
+//	（知识库 Embedding 对用户免费）是已对外承诺的口径，必须结构性成立而非依赖调用方自觉。
+//	反向风险（把该收费的用量一起免掉）不成立：embed 在本产品里只服务知识库匹配/索引，
+//	没有任何「按嵌入向客户收费」的通路。
 func (c *Client) EmbedBatch(ctx context.Context, texts []string, batchSize ...int) ([][]float32, error) {
+	ctx = WithPlatformCost(ctx, PlatformKBEmbed)
 	bs := 32
 	if len(batchSize) > 0 && batchSize[0] > 0 {
 		bs = batchSize[0]

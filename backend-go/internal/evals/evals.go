@@ -146,7 +146,12 @@ func (e *Evaluator) Evaluate(ctx context.Context, source, translation, targetLan
 		return 0, nil, fmt.Errorf("evals 未启用（Judge Key 缺失或为占位符）")
 	}
 	messages := []map[string]string{{"role": "user", "content": prompt}}
-	content, _, err := e.LLM.CallChat(ctx, base, key, model, messages, 200, false, 0.0)
+	// ★ 2026-09-29 〇-AD：Judge 抽样是**平台自己的质量投入**——客户下单的是翻译，
+	//   没有下单这一步。此前它和翻译共用同一条实时计费钩子（main.go 把 Evals.LLM.OnUsage
+	//   也接到 ChargeUsageRealtime），于是抽样命中的那几笔 Judge token 按 markup 折进
+	//   客户积分里，用量看板只留下 task_type='translate' 的行、无人能解释。
+	//   落点在 Evaluate 内部（唯一 Judge 调用通路）而非两个调用方，漏标即回到扣客户账。
+	content, _, err := e.LLM.CallChat(llm.WithPlatformCost(ctx, llm.PlatformEvals), base, key, model, messages, 200, false, 0.0)
 	if err != nil {
 		return 0, nil, err
 	}

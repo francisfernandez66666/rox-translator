@@ -661,8 +661,11 @@ func (s *Store) ListRateCards() ([]*RateCard, error) {
 
 // UsageStats 租户用量汇总（按任务类型分组统计费用）。
 // 参数：tid=租户 ID；返回 map[任务类型]=总费用 与 全部费用合计。
+// ★ 2026-09-29 〇-AD：加实扣谓词（本函数出栈给租户账单概览与 OpenAPI 用量，
+//
+//	留痕行会让租户看到自己从没被扣过的「消耗」）。
 func (s *Store) UsageStats(tid int64) (map[string]int64, int64, error) {
-	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT task_type, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? GROUP BY task_type", tid)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT task_type, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND "+realDebitPred+" GROUP BY task_type", tid)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -683,9 +686,14 @@ func (s *Store) UsageStats(tid int64) (map[string]int64, int64, error) {
 
 // UsageStatsByProvider 用量按供应商/模型拆分统计（多供应商成本核算）。tid<=0 时统计全平台。
 // 参数：tid=租户 ID（<=0 表示全平台）；返回 map["供应商 / 模型"]=总费用。
+// ★ 2026-09-29 〇-AD：加实扣谓词——本函数的租户分支出栈给客户账单页；
+//
+//	全平台分支（tid<=0，超管「真实成本」视角）读的是模型侧花费，会因此看不到
+//	留痕那部分平台承担成本，该缺口由 PlatformCostSummary 在 /usage/cost 一侧补齐，
+//	两个视角合起来才是全账。
 func (s *Store) UsageStatsByProvider(tid int64) (map[string]int64, error) {
 	// 把空供应商归为 global，空模型归为 ?，拼接成展示键
-	q := "SELECT COALESCE(NULLIF(provider,''),'global') || ' / ' || COALESCE(NULLIF(model,''),'?'), COALESCE(SUM(cost),0) FROM usage_ledger WHERE provider!=''"
+	q := "SELECT COALESCE(NULLIF(provider,''),'global') || ' / ' || COALESCE(NULLIF(model,''),'?'), COALESCE(SUM(cost),0) FROM usage_ledger WHERE provider!='' AND " + realDebitPred
 	args := []interface{}{}
 	if tid > 0 {
 		q += " AND tenant_id=?" // 租户过滤（tid<=0 查全平台）
@@ -712,6 +720,7 @@ func (s *Store) UsageStatsByProvider(tid int64) (map[string]int64, error) {
 // UsageTrend 租户按日用量趋势（最近 N 天）。
 // 参数：tid=租户 ID，days=最近天数（默认 7，最大 90）。
 // 返回：map[日期YYYY-MM-DD]=当日总费用。
+// ★ 2026-09-29 〇-AD：加实扣谓词（租户账单页的日趋势，与 UsageStats 同尺）。
 func (s *Store) UsageTrend(tid int64, days int) (map[string]int64, error) {
 	if days <= 0 || days > 90 {
 		days = 7 // 非法天数收敛到 7
@@ -719,7 +728,7 @@ func (s *Store) UsageTrend(tid int64, days int) (map[string]int64, error) {
 	// 计算起始日期（不含今天，往前 days-1 天）
 	start := time.Now().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
 	rows, err := db.Query(s.db, db.CurrentDialect(),
-		"SELECT substr(created_at,1,10) AS day, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=? GROUP BY day ORDER BY day",
+		"SELECT substr(created_at,1,10) AS day, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND "+realDebitPred+" AND created_at>=? GROUP BY day ORDER BY day",
 		tid, start)
 	if err != nil {
 		return nil, err
@@ -850,13 +859,19 @@ func (s *Store) incrementDailyUsage(tid, amount int64) {
 // 参数：tid=租户 ID，userID=用户 ID，from/to=日期区间（YYYY-MM-DD；均空=累计+当日口径，
 // from 缺省=to、to 缺省=from；from==to 即单日查询）。
 // 返回累计费用、当日费用、记录条数（区间查询时 total 与 today 均为区间值）。
+//
+// ★ 2026-09-29 〇-AD：三条 SUM 一律加实扣谓词 realDebitPred（charge_kind 为历史空串或 'charge'）。
+//
+//	留痕行（'log'）与欠费清零调整（'settle'）**没有扣这个用户的积分**，混进 SUM 就把
+//	「我的消耗」写成了「全系统跑过的量」。同一条尺子退款核算早都在用（见 A3/P1-2 注释），
+//	看板却是唯一没接的地方。
 func (s *Store) UsageByUser(tid, userID int64, from, to string) (int64, int64, int64, error) {
 	var total, today, cnt int64
 	// 区间口径（from/to 任一非空）：total=today=区间值
 	if pred, args := usageDatePred(from, to); args != nil {
 		// 按租户+用户+created_at 区间聚合费用与笔数
 		err := db.QueryRow(s.db, db.CurrentDialect(),
-			"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at "+pred,
+			"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND "+realDebitPred+" AND created_at "+pred,
 			append([]interface{}{tid, userID}, args...)...).Scan(&total, &cnt)
 		if err != nil {
 			return 0, 0, 0, err
@@ -865,14 +880,14 @@ func (s *Store) UsageByUser(tid, userID int64, from, to string) (int64, int64, i
 	}
 	// 全部时间口径：total=全量，today=当日
 	err := db.QueryRow(s.db, db.CurrentDialect(),
-		"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=?", tid, userID).
+		"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND "+realDebitPred, tid, userID).
 		Scan(&total, &cnt)
 	if err != nil {
 		return 0, 0, 0, err
 	}
 	// 当日费用：created_at 前缀匹配今天
 	_ = db.QueryRow(s.db, db.CurrentDialect(),
-		"SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at LIKE ?",
+		"SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND "+realDebitPred+" AND created_at LIKE ?",
 		tid, userID, time.Now().UTC().Format("2006-01-02")+"%").Scan(&today)
 	return total, today, cnt, nil
 }
@@ -909,12 +924,22 @@ func usageDatePred(from, to string) (string, []interface{}) {
 // ★ 2026-09-05 修复：不再过滤 l.user_id>0——系统/未登录任务（user_id=0）的用量也归入区间口径，
 //
 //	否则仅含后台任务的日期（如全站批量 LLM 调用）按日查询恒为 0。user_id=0 由 API 层单独归一行。
+//
+// ★ 2026-09-29 〇-AD（覆盖上面那条的一半语境）：谓词改加 realDebitPred，本层 SUM 只认实扣。
+//
+//	上面「user_id=0 也要归入区间」的动机是**按日 total 不能凭空为 0**，但把留痕行
+//	（'log'：平台承担/推广期免费/欠费批次）一起 SUM 的后果是现网实测的形态——
+//	组织「本层累计 338,544 积分」里 337,819 落在虚构的「系统/后台任务」一行，
+//	而这一行绝大部分**一分都没扣**。留痕金额没有消失，它改由
+//	PlatformCostSummary 单列，只在超管侧出栈（api.handleUsageCost）。
+//	仍保留 user_id=0 不加过滤：真有实扣落在 uid=0（历史 B1 之前的工单计量）时
+//	那是客户实际掉掉的积分，藏起来会让 total 与余额对不上。
 func (s *Store) UsageByOrg(tid int64, orgIDs []int64, from, to string) (map[int64]int64, error) {
 	out := map[int64]int64{}
 	// 基础 FROM：仅 usage_ledger 自身
 	selectFrom := "FROM usage_ledger l"
-	// 条件积累：租户恒等过滤为第一项
-	whereClauses := []string{"l.tenant_id=?"}
+	// 条件积累：租户恒等过滤为第一项，实扣谓词为第二项（单一尺子，见 realDebitPred）
+	whereClauses := []string{"l.tenant_id=?", "l." + realDebitPred}
 	args := []interface{}{tid}
 	// 组织过滤占位符：org_id IN (...)
 	filters := []string{}
@@ -2185,13 +2210,16 @@ func randSuffix(n int) string {
 // UsageAllByUser 跨租户聚合每用户用量（超管平台视角）。
 // 参数：from/to=指定日期区间（YYYY-MM-DD，均空=全部时间，仅给一个视同单日/单边）。
 // 返回：用户 ID → 消耗量。
+// ★ 2026-09-29 〇-AD：加实扣谓词（与 UsageByOrg 同尺），平台视角的「每用户消耗」
+//
+//	同样只数真扣掉的积分；留痕部分由 PlatformCostSummary 单列。
 func (s *Store) UsageAllByUser(from, to string) (map[int64]int64, error) {
 	// 基础聚合：按用户汇总 quantity（平台视角以用量为口径）
-	q := "SELECT user_id, COALESCE(SUM(quantity),0) FROM usage_ledger"
+	q := "SELECT user_id, COALESCE(SUM(quantity),0) FROM usage_ledger WHERE " + realDebitPred
 	args := []interface{}{}
 	// 指定日期区间：追加 created_at 区间谓词（空=全部时间）
 	if pred, cargs := usageDatePred(from, to); cargs != nil {
-		q += " WHERE created_at " + pred
+		q += " AND created_at " + pred
 		args = cargs
 	}
 	q += " GROUP BY user_id"
