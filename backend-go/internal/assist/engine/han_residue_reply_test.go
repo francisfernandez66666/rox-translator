@@ -81,12 +81,22 @@ func TestRepairReplyHanResidueAdoptsOnlyImprovement(t *testing.T) {
 		}
 	})
 
-	t.Run("没改善保留原稿", func(t *testing.T) {
-		st := newSeqStub(t, "邮件翻訳のご案内です")
+	// ★ 094x 口径更新：这一条原来写作「没改善保留原稿」，用的是「文件翻訳」那个夹具——
+	// 而 094x 起「文件」在**确定性正字表**里（补翻被拒后就地换成 ファイル），
+	// 那条断言会被二线防线合法地改写，不再证明"没换稿"。
+	// 于是这里换成**表里没有的形态**（プロfessional 要在 専門／プロフェッショナル 里挑说法，本地猜不了）：
+	// 判据回到它的本体——**补翻没改善就不许拿新稿覆盖客户正文**，
+	// 正字表那一支的验收在 ja_residue_fixup_test.go，两边不互相顶替。
+	t.Run("没改善且正字表兜不住时保留原稿", func(t *testing.T) {
+		dirty := "プロfessionalのご案内です"
+		st := newSeqStub(t, dirty)
 		e := st.engine(t)
-		rep := &Reply{Content: "文件翻訳のご案内です", Source: "llm"}
-		if got := e.repairReplyHanResidue(ctx, "ja", rep).Content; !strings.Contains(got, "文件") {
+		rep := &Reply{Content: dirty, Source: "llm"}
+		if got := e.repairReplyHanResidue(ctx, "ja", rep).Content; got != dirty {
 			t.Fatalf("残片数量没减少时不许换稿（那是拿未验过的新稿覆盖客户正文）：%q", got)
+		}
+		if st.count() != 1 {
+			t.Fatalf("补翻一次就收手，实际打了 %d 次", st.count())
 		}
 	})
 

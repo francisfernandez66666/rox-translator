@@ -258,13 +258,16 @@ func (e *Engine) translateOnce(ctx context.Context, client *llm.Client, text, ui
 	// 补翻只许改善、不许换坏：判残数没减少、或行数变了，一律保留上一稿并记一行 Warn，
 	// 让它在日志里露面（greet 界面看不出"半句没翻"，没有这行就只能等客户截图来报）。
 	if leaks := hanResidueRuns(uiLang, text, out); len(leaks) > 0 {
-		if fixed, ok := e.repairHanResidue(ctx, client, uiLang, text, out, leaks, maxTokens); ok {
+		if fixed, ok, reason := e.repairHanResidue(ctx, client, uiLang, text, out, leaks, maxTokens); ok {
 			observability.Info(ctx, "assist.engine 译文汉字残留补翻生效",
 				"lang", uiLang, "before", len(leaks), "after", len(hanResidueRuns(uiLang, text, fixed)), "leaks", strings.Join(leaks, ","))
 			out = fixed
 		} else {
+			// ★ 094x：reason 分档（见 han_residue.go 的 reject* 常量）——同一行 WARN 现在能分清
+			// 「上游没配／报错／截断」与「稿子本身不合格（行数、残片没变少）」，不用等客户截图来猜。
+			// 这一路**不做**本地正字替换，理由见 han_residue.go 文件头 094x 那一段末尾。
 			observability.Warn(ctx, "assist.engine 译文汉字残留补翻未改善，保留上一稿",
-				"lang", uiLang, "count", len(leaks), "leaks", strings.Join(leaks, ","))
+				"lang", uiLang, "reason", reason, "count", len(leaks), "leaks", strings.Join(leaks, ","))
 		}
 	}
 	// ★ 092x 红腿三：品牌名还原放在**最后一步**（补翻之后）。

@@ -289,6 +289,66 @@ else
   else
     FAIL=$((FAIL+1)); echo "FAIL|W7-upstream-twice|want gen=1 rewrite=1 got $ST"
   fi
+  # ★★ 094x（2026-09-30 换件当天现网复问又抓到 3 条红）W9：补翻被拒之后的**确定性正字表**那一腿。
+  # 现场不是"判残没抓到"，是"抓到了、补翻却被三条硬判据拒用"，而旧日志没有原因字段，
+  # 分不清是上游抖动还是模型改不动。这一条把补翻这条路**真的堵死**：
+  # 第二台桩（mode=echo）在补翻那一枪原样吐回上一稿 ⇒ 残片一个没少 ⇒ 必然 reject(not_improved)，
+  # 于是出栈正文里那些词形只能由本地正字表改写——**换个说法：这一条红＝二线防线没接上**。
+  # 判据两侧同口径（负向必配正向，否则"正文被吃空"也能绿）：
+  #   · 表内词形必须已经换成日文正字（選択／係数／費用／なぜ），且数字档「1,000文字」还留着（前置②的实面）；
+  #   · 表**外**那种要挑说法的形态必须原样留着（扣费／プロfessional 至少一个还在）——
+  #     本地不许猜词，这是 093x 给 jaLatinIntrusions 定下的边界，094x 不许越过去。
+  ECHO_PORT=$((MOCK_PORT + 1))
+  ECHOB="http://127.0.0.1:${ECHO_PORT}"
+  ECHO_RUN="uat094x-$$-$(date +%s)"
+  nohup python3 scripts/uat/mock_assist.py "$ECHO_PORT" "$ECHO_RUN" echo > "$WORK/mockassist_echo.log" 2>&1 < /dev/null &
+  MOCK_PID2=$!
+  OKE=0
+  for i in $(seq 1 10); do
+    sleep 1
+    if curl -s -m 2 "$ECHOB/uat/stats" | grep -qE "\"ok\": *true.*\"run\": *\"${ECHO_RUN}\".*\"mode\": *\"echo\""; then OKE=1; break; fi
+  done
+  if [ "$OKE" != "1" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL|W9-mock-echo-start|补翻必拒桩起不来（:${ECHO_PORT}）：$(tail -3 "$WORK/mockassist_echo.log" 2>/dev/null | tr '\n' ' ')"
+  else
+    curl -s -X PUT "$B/api/assist/admin/config" -H "$AH" -H "$J" \
+      -d "{\"key\":\"llm_base_url\",\"value\":\"${ECHOB}/v1\"}" >/dev/null
+    EW=$(newgreet ja); EW_S=$(sidof "$EW"); EW_T=$(tokof "$EW")
+    ECHO_R=$(curl -s -m 30 "$B/api/assist/chat" -H "$J" \
+      -d "{\"session\":\"$EW_S\",\"tok\":\"$EW_T\",\"message\":\"ドキュメント翻訳の料金はどのくらいですか\",\"lang\":\"ja\",\"page\":\"/\"}")
+    ck W9-source-llm '"source":"llm"' "$ECHO_R"
+    ck W9a-wordform-fixed '選択' "$ECHO_R"
+    ck W9b-wordform-fixed2 '係数' "$ECHO_R"
+    # ⚠️ 这一条锚「費用」，而**两个候选锚都是本轮反证真踩出来的**，别改回去：
+    #   ① 早先只锚「言語」＝恒绿假锁：脏稿里本就有一句合法日文「…の文字数**と言語**に応じて変動します」，
+    #      把出站那条腿整个拆掉后 W9a/b/f 全红、唯独 W9c 照绿（实测读数）。
+    #   ② 改成锚「入力言語」又成**永远达不到**的假红：「入力语言」只在 ※旁白括号里出现，
+    #      出栈前整段被末道卫生剥掉（那正是 093x W6 的功），HTTP 面根本观测不到这个词。
+    #   ⇒ 锚 ECHO_EXTRA 里那两类现网实证词形（括号外、脏稿里没有对应正字），红得动也绿得动。
+    ck W9c-wordform-fixed3 '費用' "$ECHO_R"
+    ck W9d-keep-quant '1,000文字' "$ECHO_R"
+    # 表序那一腿在 HTTP 面的读数：为什么→なぜ；若短词 什么 先动手就打成「为何」（仍不是日文正字）。
+    ck W9g-longword-first 'なぜ' "$ECHO_R"
+    if echo "$ECHO_R" | grep -qE '为何'; then
+      FAIL=$((FAIL+1)); echo "FAIL|W9h-longword-not-broken|表序被改：为什么 被短词拆成 为何 ${ECHO_R:0:200}"
+    else
+      PASS=$((PASS+1)); echo "PASS|W9h-longword-not-broken"
+    fi
+    # 正向对照的另一半（表外的形态必须还在）：三条一起 grep 到任意一条即算"本地没越界猜词"
+    if echo "$ECHO_R" | grep -qE '扣费|プロfessional'; then
+      PASS=$((PASS+1)); echo "PASS|W9e-no-local-guessing"
+    else
+      FAIL=$((FAIL+1)); echo "FAIL|W9e-no-local-guessing|补翻被拒时正字表把需要挑说法的形态也改了（越界）：${ECHO_R:0:200}"
+    fi
+    # 反向对照：表内那些词形一个都不许还在（这才是"就地改写真的落了"而不是"补翻顺手修好了"——
+    # 这一台的补翻那一枪原样吐回，物理上不可能修好，所以命中只能来自正字表）
+    if echo "$ECHO_R" | grep -qE '选択|系数|入力语言|费用|为什么'; then
+      FAIL=$((FAIL+1)); echo "FAIL|W9f-fixup-not-applied|补翻被拒且正字表没生效，中文词形原样出栈：${ECHO_R:0:200}"
+    else
+      PASS=$((PASS+1)); echo "PASS|W9f-fixup-not-applied"
+    fi
+  fi
+
   # 反向对照（假绿的另一半）：把 llm_base_url 指回不可达端点后，同一条问句必须**还能出非空回复**
   # ——证明 W3~W6 那几条绿不是"上游打不通所以正文空"顶出来的
   curl -s -X PUT "$B/api/assist/admin/config" -H "$AH" -H "$J" \
@@ -300,7 +360,11 @@ else
 fi
 # 桩的收尾放在 if 外面：只在成功分支里 kill，那么 W0 失败的那一次会把孤儿留在端口上，
 # 下一次运行就以"端口被占"的形式红一次（本次实跑真留下了一个持着 8796 的假上游，已按 pid 点名清掉）。
+# ★ 094x 起这里有两台桩（seq 默认档＋echo 补翻必拒档），**两台都要在这条外面收**——
+# 同一族坑不会因为多了一台就自己少踩一次；MOCK_PID2 在 W0 红的那条路径下根本没赋值，
+# 所以用 ${MOCK_PID2:-} 兜空，kill 收到空参数只是报个错、不会把脚本带停。
 { kill $MOCK_PID 2>/dev/null; wait $MOCK_PID 2>/dev/null; } 2>/dev/null || true
+{ kill ${MOCK_PID2:-} 2>/dev/null; wait ${MOCK_PID2:-} 2>/dev/null; } 2>/dev/null || true
 
 # ---------- 6. 管理端 CRUD 回归 ----------
 NID=$(curl -s -X POST "$B/api/assist/admin/scripts" -H "$AH" -H "$J" \
