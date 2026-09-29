@@ -141,7 +141,12 @@ func (e *Engine) translateOnce(ctx context.Context, client *llm.Client, text, ui
 		"不要加解释、不要加引号、不要输出思考过程，也不许补原文没有的信息。\n" +
 		"品牌名口径（与对话回复同一张表，见 brandNameFor）：" +
 		"本轮界面语言为 " + label + "，品牌名一律写作「" + brandNameFor(uiLang) + "」，" +
-		"任何情况下都不许写成 Nengyan、NengYan 之类拼音。\n\n---\n" + text + "\n---"
+		"任何情况下都不许写成 Nengyan、NengYan 之类拼音。\n" +
+		// ★ 082x 增补：计费单位也要进翻译口径。现网实测补翻把「积分」写成 "integral"，
+		// 而官网各界面写的是 credits／ポイント／кредитов——客户拿这个词跟账单核对，
+		// 一个叫法对不上就是对外错报（判据表与交叉锁见 reply_lang.go 的 pointsTermByLang）。
+		pointsTranslationLine(uiLang) +
+		"\n---\n" + text + "\n---"
 	out, _, usage, err := client.Chat(ctx, localizeTemperature, maxTokens,
 		[]llm.Message{{Role: "user", Content: prompt}})
 	if err != nil {

@@ -271,6 +271,70 @@ func TestBrandNameFollowsLocaleMatrix(t *testing.T) {
 	}
 }
 
+// TestPointsTermFollowsFrontendDict ★ 082x 增补（2026-09-29 换件后现网复问抓到）：
+// 计费单位「积分」的跨语种写法必须跟**官网界面**同源。现网读数：英文访客问价格，
+// 补翻把「积分」写成 "integral"（"7.5 integral fee" / "400 integral per 1,000 characters"），
+// 而该语种界面上写的是 credits ——客户拿它对账的一句话出现两个名字＝对外错报
+// （与 F-12「报价三口径打架」同族，只是这次分叉发生在语言之间）。
+//
+// 判据三条：① 表内每个语种都在【回复语言】段与翻译提示词里出现（**抓真发出去的请求体**，
+// 不抓内存里的串）；② 中文系不追加（素材本来就是中文）；③ 表里没有的语种**宁可不提**，
+// 也绝不现场编一个词——编出来的词一定跟界面对不上，这一条是负向锁，缺了它第①条形同虚设。
+// 词表本身与前端的等值由 frontend-react/src/i18n/pointsTerm.test.ts 直接读本文件源码核对。
+func TestPointsTermFollowsFrontendDict(t *testing.T) {
+	// ① 表内语种逐个：口径那句必须带上该语种界面里的那个词
+	want := map[string]string{
+		"en": "credits", "zh_hant": "積分", "ja": "ポイント", "ko": "포인트", "de": "Punkte",
+		"fr": "points", "ru": "кредитов", "es": "créditos", "pt": "pontos", "ar": "نقطة", "th": "คะแนน",
+	}
+	for c, term := range want {
+		line := pointsTermLine(c)
+		if !strings.Contains(line, "计费单位") || !strings.Contains(line, "「"+term+"」") {
+			t.Errorf("pointsTermLine(%q) 没把计费单位钉成界面那个词：%q", c, line)
+		}
+		// 大小写／连字符形态不许改变判定（同一访客两次请求被教两个词）
+		if pointsTermLine(strings.ToUpper(c)) != line {
+			t.Errorf("语种码 %q 大写写法与规范写法拿到不同口径", c)
+		}
+		if c == "zh_hant" && pointsTermLine("zh-Hant") != line {
+			t.Errorf("zh-Hant（前端文件名口径）没归一到 zh_hant")
+		}
+		// 模型侧与翻译侧必须同源：两条句式不同，但词面只能有一个
+		prose := pointsTranslationLine(c)
+		if !strings.Contains(prose, "「"+term+"」") {
+			t.Errorf("pointsTranslationLine(%q) 词面与 pointsTermLine 分叉：%q", c, prose)
+		}
+		// 规范形态在两条 prompt 里都得真的落地（不是只存在于表里）
+		e := newTestEngine(t)
+		sys := e.buildSystemPrompt(context.Background(), nil, c)
+		if !strings.Contains(sys, "「"+term+"」") {
+			t.Errorf("%s 界面的系统提示词没有计费单位口径", c)
+		}
+	}
+	// ② 中文系不追加：素材本来就是「积分」，多一句只会把模型带偏
+	for _, c := range []string{"zh", "zh_CN", "  "} {
+		if pointsTermLine(c) != "" || pointsTranslationLine(c) != "" {
+			t.Errorf("%q 是中文系／空语种，不该追加计费单位口径：%q", c, pointsTermLine(c))
+		}
+	}
+	// ③ 表漏档的语种宁可不提（现场编词必与界面对不上）
+	if pointsTermLine("vi") != "" || pointsTranslationLine("vi") != "" {
+		t.Error("表里没有的语种被现场编了个计费单位词")
+	}
+	// ④ 抓真请求体：英文/日文欢迎词的翻译提示词里必须出现该语种界面那个词＋反面禁令
+	enPrompt := captureLocalizePrompt(t, "en")
+	if !strings.Contains(enPrompt, "「credits」") {
+		t.Fatalf("英文欢迎词的翻译提示词没有计费单位口径：\n%s", enPrompt)
+	}
+	if !strings.Contains(enPrompt, "integral") {
+		t.Fatalf("英文提示词没点名禁令 integral（现网就是翻成这个词漏出去的）：\n%s", enPrompt)
+	}
+	jaPrompt := captureLocalizePrompt(t, "ja")
+	if !strings.Contains(jaPrompt, "「ポイント」") {
+		t.Fatalf("日文欢迎词的翻译提示词没把计费单位钉成「ポイント」：\n%s", jaPrompt)
+	}
+}
+
 // captureLocalizePrompt 起一个记下请求体的假上游，翻一次欢迎词，回吐模型真收到的提示词原文。
 // 每个语种各起一个新引擎：翻译缓存按语种落库，复用同一个引擎会让第二个语种命中缓存而根本不发请求。
 func captureLocalizePrompt(t *testing.T, lang string) string {

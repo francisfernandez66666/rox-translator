@@ -23,6 +23,10 @@
 // 品牌写法分两档（见 brandKanjiLocales：简繁中文＋日文用汉字名「能言」，其余一律 LangCross），
 // 既管模型自称，也管挂件标题——前端 i18n 的 chat.assistTitle 此前把品牌名音译成 Nengyan，
 // 已由 082x 一并订正，并由 frontend-react/src/i18n/brandName.test.ts 保证不再复活。
+//
+// ★ 同批还收了一个同级漏口：计费单位「积分」的跨语种写法（见 pointsTermByLang）。
+// 现网补翻把它译成 "integral"，与官网各界面的 credits／ポイント／кредитов 全对不上——
+// 品牌名和**钱的名字**是同一类东西：客户拿它跟账单核对，一处一个叫法就是对外错报。
 // =============================================
 package engine
 
@@ -108,6 +112,64 @@ func brandNamingLine(uiLang string) string {
 		"但除简繁中文与日文外不许用汉字写法，更不许写成 Nengyan、NengYan 之类拼音，也不许两个名字混着叫。\n"
 }
 
+// pointsTermByLang 计费单位「积分」在各语种**官网界面里既有的写法**。
+//
+// ★ 082x 增补（2026-09-29 换件后现网复问读数）：英文访客问价格，补翻把答案里的「积分」写成了
+// "integral"（7.5 integral fee / 400 integral per 1,000 characters）。那是数学课本译法，
+// 官网任何语种都没有这个词——客户在界面上一边看到「credits」一边听到助手说「integral」，
+// 对不上账的一句报价就成了对外错报（同「官网报价三口径打架」F-12 那族的形态，只是这次发生在语言之间）。
+//
+// 事实源不是我挑的词，而是前端词典本身：`frontend-react/src/i18n/locales/<lang>.ts` 的
+// `app.pkgLineFmt` 里 `{points}` 后面那个词（en credits / ja ポイント / ru кредитов / ar نقطة / …），
+// 交叉锁＝`frontend-react/src/i18n/pointsTerm.test.ts`（它直接读这份 Go 表逐语种核对）。
+// ⚠️ 改动任何一侧都会红，这是设计：术语只在一处定义，两处必须同源。
+var pointsTermByLang = map[string]string{
+	"en":      "credits",
+	"zh_hant": "積分",
+	"ru":      "кредитов",
+	"fr":      "points",
+	"ar":      "نقطة",
+	"es":      "créditos",
+	"pt":      "pontos",
+	"de":      "Punkte",
+	"ja":      "ポイント",
+	"ko":      "포인트",
+	"th":      "คะแนน",
+}
+
+// pointsTermLine 计费单位口径那句（进【回复语言】段，也被 localize.go 的翻译提示词复用）。
+// 中文系（zh）不追加——素材本来就是中文；语种未知时也返回空串，让调用方按「没有界面语言」分支走。
+func pointsTermLine(uiLang string) string {
+	c := canonicalLang(uiLang)
+	if c == "" || c == "zh" {
+		return ""
+	}
+	term := pointsTermByLang[c]
+	if term == "" {
+		// 表里没有的语种宁可不提这条，也不要现场编一个词：编出来的词一定跟界面对不上。
+		return ""
+	}
+	return "- 计费单位：中文素材里的「积分」在本轮语言一律写作「" + term +
+		"」（官网该语种界面用的就是这个词），不许换第二种说法、不许直译成 integral 之类对不上账的译名，" +
+		"也不许把中文「积分」两字原样留在对方的正文里。\n"
+}
+
+// pointsTranslationLine 同一条术语口径的**翻译路**形态（prose 而不是 bullet，两处句式本来不同）。
+// 单一事实源仍是 pointsTermByLang 那张表——这里只换措辞，绝不另抄一份词表（同官网报价那条教训）。
+func pointsTranslationLine(uiLang string) string {
+	c := canonicalLang(uiLang)
+	if c == "" || c == "zh" {
+		return ""
+	}
+	term := pointsTermByLang[c]
+	if term == "" {
+		return ""
+	}
+	return "计费单位口径：原文里的「积分」在译文中一律写作「" + term +
+		"」（官网该语种界面用的就是这个词），不许译成 integral 之类对不上账的说法，" +
+		"也不许把中文「积分」两字原样留在译文里。\n"
+}
+
 // replyLangBlock 【回复语言】段：拼在系统提示词最末尾（离「直接回复用户」最近的一段，
 // 优先级最高，且不会被上面任何一段中文素材带跑）。
 //
@@ -127,6 +189,7 @@ func replyLangBlock(uiLang string) string {
 	sb.WriteString("- 访客输入的语言和界面语言不一致时，**跟访客输入走**（他用哪种语言问，就用那种语言答），界面语言只作默认值。\n")
 	sb.WriteString("- 【相关知识】【系统现值】里的素材是中文写的：面向非中文访客时先译成对方的语言再说，不许把中文原句直接贴出去（术语、品牌名、文件后缀这类专有写法除外）。\n")
 	sb.WriteString(brandNamingLine(uiLang))
+	sb.WriteString(pointsTermLine(uiLang))
 	sb.WriteString("- 最后一行的功能入口标记【go:key】保持原样，key 不翻译、不改写。\n")
 	return sb.String()
 }

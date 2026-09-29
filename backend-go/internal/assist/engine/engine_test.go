@@ -214,6 +214,92 @@ func TestPostProcessStripsAllMarkers(t *testing.T) {
 	}
 }
 
+// TestCanonicalizeGoMarkers ★ 082x 增补（2026-09-29 现网复问抓到）：模型把动作标记的
+// 括号／分隔符写歪（「[go editor,packages]」）时，extractGoMarkers 只认规范形态
+// 「【go:…」，畸形标记就整串英文原样留在用户屏幕上——挂件气泡里出现
+// 「You can go to the【…】page. [go editor,packages]」正是这一条。
+// 本锁按「畸形必归一、人话一个字不许动」两侧同时钉：
+//   - 正向：四种括号×两种分隔符的畸形写法都要变出按钮、正文零残留；
+//   - 负向：含 "go" 的正常英文括注必须**逐字节不变**（吃掉用户能读的一句话，
+//     比漏一个控制序列严重得多——这条判据写坏的代价是静默删正文，必须反向钉住）。
+func TestCanonicalizeGoMarkers(t *testing.T) {
+	e := newTestEngine(t) // 夹具里的功能卡：tickets / pricing / billing
+
+	// ① 正向：畸形写法一律归一并出按钮
+	type normCase struct {
+		in      string
+		actions int
+		why     string
+	}
+	norm := []normCase{
+		{"可以看看[go tickets,billing]", 2, "半角括号＋空格分隔（现网原样）"},
+		{"可以看看【go tickets】", 1, "全角括号＋空格分隔"},
+		{"可以看看[go：pricing]", 1, "半角括号＋全角冒号"},
+		{"可以看看（go：tickets）", 1, "圆括号＋全角冒号"},
+		{"可以看看【go: tickets】", 1, "规范括号＋冒号后带空格"},
+		{"混合 [go tickets, 未知东西] 结尾", 1, "夹一段认不出的说明也要归一（未知段不造按钮）"},
+	}
+	for _, c := range norm {
+		rep := e.postProcess(c.in, "m")
+		if len(rep.Actions) != c.actions {
+			t.Fatalf("%s：按钮 %d 个，期望 %d（正文 %q）", c.why, len(rep.Actions), c.actions, rep.Content)
+		}
+		low := strings.ToLower(rep.Content)
+		if strings.Contains(low, "go ") || strings.Contains(low, "go:") || strings.Contains(low, "go：") {
+			t.Fatalf("%s：控制序列漏进正文 %q", c.why, rep.Content)
+		}
+		if !strings.Contains(rep.Content, "可以看看") && !strings.Contains(rep.Content, "混合") {
+			t.Fatalf("%s：归一时把正文删没了 %q", c.why, rep.Content)
+		}
+	}
+
+	// ② 负向：正常人话必须逐字节不变（这是本函数唯一的"误伤"面，必须反向钉死）
+	safe := []string{
+		"See [go to the pricing page] for details.",                 // 整段只有一个逗号分段，认不出任何 key
+		"[go now](/x) is a link label, not a marker.",               // markdown 链接文字
+		"Good pricing here.",                                        // 连括号都没有
+		"[go to the store, please]",                                 // 两段都不是功能卡 key
+		"（gogogo 冲呀）",                                               // 括号里根本不是 go＋分隔符
+		"这是中文括注（说明一下），不含任何标记。",                                      // 无 "go"，走廉价退场
+		"[go to the pricing page and buy tickets or billing today]", // 长句：没有一个分段恰好等于 key
+	}
+	for _, s := range safe {
+		if got := e.canonicalizeGoMarkers(s); got != s {
+			t.Fatalf("正常人话被吃了：\n 输入 %q\n 输出 %q", s, got)
+		}
+	}
+
+	// ③ 未闭合（max_tokens 截断）：带冒号或认得出功能卡 → 删到结尾；正常人话 → 原样留
+	if got := e.canonicalizeGoMarkers("需要体验的话可以看看[go tickets"); strings.Contains(got, "go") {
+		t.Fatalf("未闭合的畸形标记没删净: %q", got)
+	}
+	if !strings.HasSuffix(e.canonicalizeGoMarkers("需要体验的话可以看看【go:pricing"), "看看") {
+		t.Fatal("未闭合分支把正文删多了")
+	}
+	if s := "这句话被截断了 [go to the pricing"; e.canonicalizeGoMarkers(s) != s {
+		t.Fatalf("未闭合的正常人话被误删: %q", e.canonicalizeGoMarkers(s))
+	}
+
+	// ④ 取不到功能卡表（库里没配／DB 故障）时**不做**歧义归一：宁可漏剥不可误伤。
+	// 空表下任何一段都"认不出来"，若判据写成"找不到不认识的就算通过"，
+	// DB 一抖就会把用户正文里的英文括注整段吃掉——所以这里要的是"照原样送出"。
+	{
+		db2, err := store.Open(t.TempDir() + "/empty.db")
+		if err != nil {
+			t.Fatalf("open empty: %v", err)
+		}
+		t.Cleanup(func() { _ = db2.Close() })
+		e2 := New(db2, llm.New(nil, 5)) // 库里零张功能卡
+		if s := "可以看看[go tickets,billing]"; e2.canonicalizeGoMarkers(s) != s {
+			t.Fatalf("功能卡表为空时仍做了歧义归一: %q", e2.canonicalizeGoMarkers(s))
+		}
+		// 对照腿：带冒号的规范意图**不依赖**卡表，全链路照样剥干净（否则卡表为空的库会漏控制序列）
+		if got := e2.postProcess("可以看看【go:whatever】", "m"); strings.Contains(got.Content, "go:") {
+			t.Fatalf("带冒号形态在空卡表下没剥净: %q", got.Content)
+		}
+	}
+}
+
 // TestGoMarkerMenuOffersButtonKeys ★ 074x：送给模型的跳转菜单必须是 feature_links 的 key。
 // 旧口径把 kb_entries 的 key 当菜单（生产实测 30 个知识 key 只有 1 个有按钮映射），
 // 模型「照菜单选」必然选中渲染不出来的东西 ⇒ 界面只剩一串英文。
