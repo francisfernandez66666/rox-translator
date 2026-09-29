@@ -715,7 +715,7 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 		// ★ 2026-09-05 修复：系统/未登录任务（user_id=0，如全站批量 LLM 调用）的用量
 		//   未出现在 users 列表，但不计入 total 会让「全站仅后台任务」的日期按日查询恒为 0。
 		//   单独归一行（沙箱用户）并入 total，保证日期口径连续一致。
-		// ★ 2026-09-29 〇-AD 后的实际形态：UsageAllByUser 已只数实扣，所以这一行现在
+		// ★ 2026-09-29 〇-AD 后的实际形态：UsageAllByUser 已只数客户自己的用量（无归因留痕行被排掉），所以这一行现在
 		//   **只在真有「扣了钱却没归属用户」的流水时**才出现（历史 B1 之前的计量）。
 		//   平台承担部分不再长在这里——它按 task_type 归到 /usage/cost 的 platform 块。
 		if c0 := costByUser[0]; c0 > 0 {
@@ -808,16 +808,18 @@ func usageDateRange(r *http.Request) (from, to string) {
 // 返回: success=true 时携带 costs（map[provider/model]=cost）与 quants（map[provider/model]=quantity），
 // 以及 ★ 2026-09-29 〇-AD 新增的 platform 块（平台承担成本单列）。
 //
-// ★ 可见性口径：个人/组织看板自 〇-AD 起只数**实扣**（store.realDebitPred），
+// ★ 可见性口径：个人/组织看板自 〇-AD 起只数**客户自己的用量**（store.CustomerUsagePred：
 //
-//	被移出的那部分金额不能凭空消失，就在这一只 level-4 专属接口里以 platform 块单列——
-//	「平台替客户垫了多少」只有运营方需要知道，客户侧出现这个字段只会引发
-//	「我没消耗过为什么有这一行」的追问（现网正是反过来：337,819 积分挂在
-//	「系统/后台任务」一行，把 725 积分的真实消费彻底淹掉）。
-//	platform 内部再分两档，因为「平台承担」其实是两件不同的事：
-//	① policy_borne＝按政策本就平台该吃的（知识库 Embedding、行业包采集、Judge 抽样、后台任务）；
-//	② other_log＝历史留痕（推广期免费、非强制计费期、欠费批次落账）；
-//	settled＝欠费清零调整，属坏账口径，单列且绝不并入上面两档。
+//	  排掉平台承担的用途标签行与 uid=0 的留痕/结算行），
+//
+//		被移出的那部分金额不能凭空消失，就在这一只 level-4 专属接口里以 platform 块单列——
+//		「平台替客户垫了多少」只有运营方需要知道，客户侧出现这个字段只会引发
+//		「我没消耗过为什么有这一行」的追问（现网正是反过来：337,819 积分挂在
+//		「系统/后台任务」一行，把 725 积分的真实消费彻底淹掉）。
+//		platform 内部再分两档，因为「平台承担」其实是两件不同的事：
+//		① policy_borne＝按政策本就平台该吃的（知识库 Embedding、行业包采集、Judge 抽样、后台任务）；
+//		② other_log＝历史留痕（推广期免费、非强制计费期、欠费批次落账）；
+//		settled＝欠费清零调整，属坏账口径，单列且绝不并入上面两档。
 func (s *Server) handleUsageCost(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
 		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
