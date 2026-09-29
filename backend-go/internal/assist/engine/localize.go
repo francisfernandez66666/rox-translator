@@ -1,5 +1,10 @@
 // ============ localize.go · 职责说明 ============
-// 挂件「非中文访客看到的中文 canned 文案」的翻译层：欢迎词 + 快捷提问 chips。
+// 挂件「非中文访客看到的中文文本」的翻译层，现下三个消费者：
+//   - greeting：configs.welcome（运营在管理台写的中文欢迎词）或话术表里 stype=greeting 那条；
+//   - chips：configs.quick_chips（逗号分隔的中文快捷提问）；
+//   - reply（★ 082x 增补批）：LocalizeReply —— 模型/兜底已经把中文答案吐出来时，
+//     出站再翻一次兜住。走 translateOnce 这条共用底座，但**不进缓存**：
+//     对话正文每轮都是新句子，缓存键无从下手（欢迎词一年改不了几次，才值得落库）。
 //
 // ★ 082x（2026-09-29，用户指令「不能根据用户的前台语言和使用语言来回复，一律用中文」）：
 //
@@ -32,15 +37,19 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"strings"
 
 	"translator/internal/assist/llm"
 	"translator/internal/observability"
 )
 
-// localizeMaxTokens 译文一次生成的额度上限。欢迎词+chips 合起来也就两三行，
-// 但主模型是思维链模型（GLM-Z1 一类，见 engine.go 074x 那条注释），
-// 思维链要吃掉一部分额度，400 是「正文两行 + 链子」的实测安全档，不是随手取的。
+// localizeMaxTokens **canned 文案**（欢迎词 / chips）译文一次生成的额度上限。两三行足够。
+// 但主模型是思维链模型（GLM-Z1 一类，见 engine.go 074x 那条注释），思维链要吃掉一部分额度，
+// 400 是「正文两行 + 链子」的实测安全档，不是随手取的。
+// ⚠️ 别把这个数拿去过对话正文——那一路用 replyLocalizeMaxTokens（见 reply_lang_check.go），
+// 一份二十行的回答在 400 额度下会被截成半句译文，比整段中文更糟。
 const localizeMaxTokens = 400
 
 // localizeTemperature 翻译用的温度取 0.2（对话用 0.7/1.0）。
@@ -86,15 +95,9 @@ func (e *Engine) localize(ctx context.Context, kind, text, uiLang string) string
 	if !client.Enabled() {
 		return text
 	}
-	prompt := "把下面这段产品欢迎语/短问句翻译成 " + label +
-		"，用于网站右下角的 AI 客服挂件。要求：保持原意与行数，一行输入对应一行输出，" +
-		"不要加解释、不要加引号、不要输出思考过程。\n品牌名口径（与对话回复同一张表，见 brandNameFor）：" +
-		"本轮界面语言为 " + label + "，品牌名一律写作「" + brandNameFor(uiLang) + "」，" +
-		"任何情况下都不许写成 Nengyan、NengYan 之类拼音。\n\n---\n" + text + "\n---"
-	out, _, _, err := client.Chat(ctx, localizeTemperature, localizeMaxTokens,
-		[]llm.Message{{Role: "user", Content: prompt}})
-	out = cleanTranslated(out)
-	if err != nil || out == "" {
+	out, err := e.translateOnce(ctx, client, text, uiLang, localizeMaxTokens,
+		"产品欢迎语/短问句", "网站右下角的 AI 客服挂件的首屏")
+	if err != nil {
 		// 失败原样出中文（见文件头「绝不编一份译文」）。这一行日志是这条软路径唯一的露面机会：
 		// greet 界面看不出「没翻成」，没有它就只能等访客截图来报。
 		observability.Warn(ctx, "assist.engine canned 文案翻译失败，原样出中文",
@@ -103,6 +106,63 @@ func (e *Engine) localize(ctx context.Context, kind, text, uiLang string) string
 	}
 	_ = e.db.SetConfig(key, fp+"\n"+out)
 	return out
+}
+
+// translateOnce 真正打一次「把这段中文翻成目标语言」的上游调用；回 error＝不可用
+// （语种未知 / LLM 未接入 / 上游出错 / 译文空 / **被 max_tokens 截断**），调用方按 fail-soft 出中文。
+//
+// ★ 082x 增补（2026-09-29 现网复问取证）：从 localize 里抽出来是为了**对话正文也能复用同一条翻译路**。
+//
+//	现网实测 lang=en 的访客问价格，模型这一轮直接回了一整段中文（同一会话下一轮又回英文）——
+//	说明【回复语言】段只是「请求」，不是「保证」：思维链模型会被上面五段中文素材的语域带跑。
+//	与其再补一句更凶的提示词（那仍然是请求），不如在出站处按语种判一次、不合格就翻
+//	（判据与调用点见 reply_lang_check.go 的 enforceReplyLang）。
+//
+// purpose/scene 由调用方给，是为了让模型知道该保留多少口语色彩：把一段带温度的回答按
+// 「短问句」翻，很容易被压成一行说明书——那是把修好的东西再弄坏一次。
+//
+// maxTokens 也交给调用方，并且**截断一律判失败**：主模型是思维链模型，思维链吃掉的是
+// 「链子 + 正文」的共用额度（074x 那条现网实证），一句欢迎词两行就够、一条回答却可能二十行，
+// 拿同一个 400 去翻长回答会稳定翻出半句——半句译文比整段中文更接近事故（对外错报）。
+// 所以 finish_reason=length 时不返回那份残缺译文，直接判失败让上层出原文。
+func (e *Engine) translateOnce(ctx context.Context, client *llm.Client, text, uiLang string, maxTokens int,
+	purpose, scene string) (string, error) {
+	label := langLabel(uiLang)
+	switch {
+	case label == "":
+		return "", errors.New("界面语言未知，不猜语种")
+	case !client.Enabled():
+		return "", errors.New("LLM 未接入")
+	case strings.TrimSpace(text) == "":
+		return "", errors.New("源文为空")
+	}
+	prompt := "把下面这段" + purpose + "翻译成 " + label +
+		"，用途：" + scene + "。要求：保持原意、行数与语气，一行输入对应一行输出，" +
+		"不要加解释、不要加引号、不要输出思考过程，也不许补原文没有的信息。\n" +
+		"品牌名口径（与对话回复同一张表，见 brandNameFor）：" +
+		"本轮界面语言为 " + label + "，品牌名一律写作「" + brandNameFor(uiLang) + "」，" +
+		"任何情况下都不许写成 Nengyan、NengYan 之类拼音。\n\n---\n" + text + "\n---"
+	out, _, usage, err := client.Chat(ctx, localizeTemperature, maxTokens,
+		[]llm.Message{{Role: "user", Content: prompt}})
+	if err != nil {
+		return "", err
+	}
+	if usage.Truncated {
+		return "", fmt.Errorf("译文被 max_tokens=%d 截断（completion_tokens=%d），按失败处理", maxTokens, usage.CompletionTokens)
+	}
+	out = cleanTranslated(out)
+	if out == "" {
+		return "", errors.New("译文为空")
+	}
+	return out, nil
+}
+
+// LocalizeReply 把「模型答错了语言」的正文翻成访客语言（★ 082x 增补，见 reply_lang_check.go）。
+// 与 canned 文案那条差两件事：**不落缓存**（欢迎词全网就一份、值得缓存；对话正文每条都不一样，
+// 缓存既永不命中、又会把 configs 表写成垃圾场）、**额度按整条回答给**（replyLocalizeMaxTokens）。
+func (e *Engine) LocalizeReply(ctx context.Context, text, uiLang string) (string, error) {
+	return e.translateOnce(ctx, e.ensureLLM(ctx), text, uiLang, replyLocalizeMaxTokens,
+		"AI 客服的一条回答", "网站右下角 AI 客服挂件的对话气泡")
 }
 
 // LocalizeGreeting 欢迎词按访客语言出（greet 关键路径；见文件头）
