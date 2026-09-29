@@ -349,3 +349,9 @@ bash scripts/build_sdk.sh --check                 # SDK 托管产物漂移闸门
   只修 kb 不够——话术直配与流程步进**不经过模型**，库里那句超承诺文案会原样发给客户（判据见
   `internal/assist/seed/seed_gate_test.go`）。只有 kb 的 UPDATE 带 `updated_at` bump（向量索引指纹），
   另三张按 key/关键词精确直出、刷指纹无意义。`--only kb,scripts` 可分段跑。
+- **★ 改「挂件 canned 译文的最终形态」必须同步抬 `cannedPromptRev`（★ 2026-09-29 〇-AB 立，本批真踩两次）**：
+  欢迎词／chips 的译文按「原文 + 口径指纹」缓存在 `configs` 的 `i18n:<kind>:<lang>`，
+  指纹＝`cannedPromptRev + translateContract(lang)`。射程不只是提示词措辞——**出栈卫生（剥回声／剥残渣）、
+  判残与补翻口径**都算"最终形态"。不抬这一档，新二进制上线后老缓存继续把修前形态投给客户＝换件没修
+  （第一次栽在改提示词口径，第二次栽在改译文出栈处理）。排障先读缓存键头 24 字符对指纹，别先怀疑模型。
+
